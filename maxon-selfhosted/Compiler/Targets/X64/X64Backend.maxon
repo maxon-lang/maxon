@@ -111,7 +111,7 @@ export type X64Backend implements TargetBackend
 			chunks.push(chunk)
 		end 'eachFunc'
 
-		return concatX64FunctionChunks(chunks, targetModule: targetModule, mirModule: module, globalData: globalData, stdlibCache: stdlibCache)
+		return concatX64FunctionChunks(chunks, targetModule: targetModule, mirModule: module, globalData: globalData, stdlibCache: stdlibCache, os: target.os)
 	end 'emitTargetCode'
 
 	function scanOpForFrameInfo(packed OpIndex, state FrameScanState)
@@ -131,8 +131,8 @@ export type X64Backend implements TargetBackend
 		return adjustedStackSize > 0
 	end 'needsPrologue'
 
-	function insertPrologueAtEntry(block IrBlock, stackSize StackSize)
-		x64InsertPrologueAtEntry(targetModule, block: block, stackSize: stackSize)
+	function insertPrologueAtEntry(func IrFunction, block IrBlock, stackSize StackSize)
+		x64InsertPrologueAtEntry(targetModule, func: func, block: block, stackSize: stackSize, os: target.os)
 	end 'insertPrologueAtEntry'
 
 	function insertEpilogueAtReturnBlock(block IrBlock)
@@ -263,7 +263,7 @@ end 'X64Backend'
 // the per-function query cache by `emitBackendIncrementalWith`. The same
 // downstream rdata/IAT/symbol post-process applies — the only thing that
 // changes between the two callers is where the chunks came from.
-export function concatX64FunctionChunks(chunks FunctionCodeChunkArray, targetModule TargetModule, mirModule MirModule, globalData GlobalDataTable, stdlibCache StdlibCacheData) returns CodeResult
+export function concatX64FunctionChunks(chunks FunctionCodeChunkArray, targetModule TargetModule, mirModule MirModule, globalData GlobalDataTable, stdlibCache StdlibCacheData, os Os) returns CodeResult
 	var code = ByteArray.create()
 	code.reserve(1024)
 	var relocations = RelocationArray.create()
@@ -297,9 +297,29 @@ export function concatX64FunctionChunks(chunks FunctionCodeChunkArray, targetMod
 	// Link pre-compiled stdlib functions. Mirrors the old whole-module flow:
 	// stdlib bodies append to `code` after all user/runtime chunks, and their
 	// fixups arrive with already-shifted offsets via `linkX64StdlibFunctions`.
+	// The link pass also pre-seeds `mrt_alloc` / `mm_decref` on Windows so
+	// the soon-to-be-emitted hand-rolled `mrt_win32_*` helpers'
+	// call fixups resolve against linked cache bodies. The cache-off path
+	// gets the same names via `filterRuntimeByReachability`.
 	if stdlibCache.functions.count() > 0 'hasStdlib'
-		linkX64StdlibFunctionsConcat(code, labelNames: funcLabelNames, labelOffsets: funcLabelOffsets, labelOffsetMap: funcLabelOffsetMap, callFixups: callFixups, rdataRelocs: rdataRelocs, relocations: relocations, globalData: globalData, stdlibCache: stdlibCache)
+		linkX64StdlibFunctionsConcat(code, labelNames: funcLabelNames, labelOffsets: funcLabelOffsets, labelOffsetMap: funcLabelOffsetMap, callFixups: callFixups, rdataRelocs: rdataRelocs, relocations: relocations, globalData: globalData, stdlibCache: stdlibCache, os: os)
 	end 'hasStdlib'
+
+	// Phase B1: emit hand-rolled `mrt_win32_*` helpers AFTER the
+	// stdlib cache is linked. Emitting them last keeps the byte layout
+	// identical between cache-off and cache-on: in both paths the helpers
+	// sit at the very tail of `.text`, immediately following the linked
+	// stdlib (cache-on) or the inline-compiled runtime (cache-off).
+	let isWindowsOs = match os 'check'
+		windows gives true
+		linux gives false
+		macos gives false
+		wasi gives false
+	end 'check'
+
+	if isWindowsOs 'emitHelpers'
+		emitX64Win32Helpers(code, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
+	end 'emitHelpers'
 
 	let symdata = buildSymbolTable(funcLabelNames, funcLabelOffsets: funcLabelOffsets)
 
@@ -324,13 +344,24 @@ end 'concatX64FunctionChunks'
 // version is a member on the backend type so it can read `globalData` from
 // the backend; the concat path doesn't have a backend instance handy, so we
 // take `globalData` as an explicit parameter. Body is otherwise identical.
-function linkX64StdlibFunctionsConcat(code ByteArray, labelNames StringArray, labelOffsets CodeOffsetArray, labelOffsetMap CodeLabelOffsetMap, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, relocations RelocationArray, globalData GlobalDataTable, stdlibCache StdlibCacheData)
+function linkX64StdlibFunctionsConcat(code ByteArray, labelNames StringArray, labelOffsets CodeOffsetArray, labelOffsetMap CodeLabelOffsetMap, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, relocations RelocationArray, globalData GlobalDataTable, stdlibCache StdlibCacheData, os Os)
 	var seeds = StringArray.create()
 	for fixup in callFixups 'collectSeeds'
 		seeds.push(fixup.targetName)
 	end 'collectSeeds'
 	appendFuncAbs64Seeds(seeds, relocs: rdataRelocs)
 	appendFuncAbs64Seeds(seeds, relocs: globalData.pendingRdataRelocs)
+
+	// Phase B1: the hand-rolled `mrt_win32_*` helpers (emitted by
+	// `emitX64Win32Helpers` after this link pass) reference `mrt_alloc` and
+	// `mm_decref` via call fixups. Their fixups can't seed the link walk yet
+	// (they're emitted after this pass), so we add the names here explicitly
+	// on Windows targets — this matches the `filterRuntimeByReachability`
+	// seed addition that pulls the same names into the cache-off pipeline.
+	if os == Os.windows 'win32Helpers'
+		seeds.push("mrt_alloc")
+		seeds.push("mm_decref")
+	end 'win32Helpers'
 
 	let needed = computeNeededStdlibFunctions(seeds, stdlibCache: stdlibCache)
 
@@ -1879,6 +1910,12 @@ function relocKindForLabel(label String) returns RdataRelocKind
 	if label.startsWith("__slab_") or label.startsWith("__mm_") 'isAllocatorGlobal'
 		return RdataRelocKind.dataSectionRipRelDisp32
 	end 'isAllocatorGlobal'
+	// Phase B3: the lazy-init argv cache globals used by hand-rolled
+	// `mrt_win32_get_argc` / `mrt_win32_get_argv` are mutable counters and
+	// pointers — they live in writable .data alongside the slab/MM globals.
+	if label.startsWith("__mrt_") 'isMrtGlobal'
+		return RdataRelocKind.dataSectionRipRelDisp32
+	end 'isMrtGlobal'
 	return RdataRelocKind.ripRelDisp32
 end 'relocKindForLabel'
 
@@ -1990,12 +2027,37 @@ function emitLockXaddMemRegOp(code ByteArray, addrReg X64Register, valReg X64Reg
 end 'emitLockXaddMemRegOp'
 
 // --- Global load/store ---
-function emitGlobalLoadOp(code ByteArray, dest X64Register, name String, size MachineWord)
-	panic("emitGlobalLoadOp: global data offset resolution not yet implemented (name={name}, dest={dest}, size={size}, codeLen={code.count()})")
+// Phase D1: emit a `mov dest, [rip+disp32]` / `mov [rip+disp32], src` against
+// the named global, recording an rdata relocation routed via `relocKindForLabel`.
+// The 8-byte form (full quadword load/store) is the only width used today by
+// the Linux/macOS `osGetArgc` / `osGetArgv` lowerings and the hand-rolled
+// `mrt_win32_*` helpers — narrower widths would need a width-specific encoding.
+//
+// Both load and store share the modrm = 0x05 | ((reg & 7) << 3) shape; the
+// only differences are the opcode byte (0x8B vs 0x89) and the prefix's
+// `regField` source. `emitGlobalAccess` centralises the common sequence.
+function emitGlobalAccess(code ByteArray, opcode MachineWord, regField X64Register, name String, rdataRelocs RdataRelocationArray)
+	emitRexWPrefix(code, regField: regField, rmField: X64Register.rbp)
+	code.push(opcode)
+	let regBits = regCode(regField)
+	let modrm = 0x05 or ((regBits and 7) shl 3)
+	code.push(modrm)
+	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: name, kind: relocKindForLabel(name)))
+	writeDword(code, value: 0)
+end 'emitGlobalAccess'
+
+function emitGlobalLoadOp(code ByteArray, dest X64Register, name String, size MachineWord, rdataRelocs RdataRelocationArray)
+	if size != 8 'sizeOk'
+		panic("emitGlobalLoadOp: only 8-byte global loads supported (name={name}, size={size})")
+	end 'sizeOk'
+	emitGlobalAccess(code, opcode: 0x8B, regField: dest, name: name, rdataRelocs: rdataRelocs)
 end 'emitGlobalLoadOp'
 
-function emitGlobalStoreOp(code ByteArray, src X64Register, name String, size MachineWord)
-	panic("emitGlobalStoreOp: global data offset resolution not yet implemented (name={name}, src={src}, size={size}, codeLen={code.count()})")
+function emitGlobalStoreOp(code ByteArray, src X64Register, name String, size MachineWord, rdataRelocs RdataRelocationArray)
+	if size != 8 'sizeOk'
+		panic("emitGlobalStoreOp: only 8-byte global stores supported (name={name}, size={size})")
+	end 'sizeOk'
+	emitGlobalAccess(code, opcode: 0x89, regField: src, name: name, rdataRelocs: rdataRelocs)
 end 'emitGlobalStoreOp'
 
 // --- movXmmRipRel: load float from RIP-relative rdata ---
@@ -2168,8 +2230,8 @@ function emitX64Op(op X64Op, code ByteArray, blockFixups BlockJumpFixupArray, ca
 		loadIndirect(destReg, baseReg, offset, width, signed) then emitLoadIndirectOp(code, destReg: resolveGpr(destReg), baseReg: resolveGpr(baseReg), offset: offset, width: width, signed: signed)
 		storeIndirectXmm(baseReg, offset, src, precision) then emitStoreIndirectXmmOp(code, baseReg: resolveGpr(baseReg), offset: offset, srcReg: resolveFp(src), precision: precision)
 		loadIndirectXmm(dest, baseReg, offset, precision) then emitLoadIndirectXmmOp(code, destReg: resolveFp(dest), baseReg: resolveGpr(baseReg), offset: offset, precision: precision)
-		globalLoad(dest, name, size) then emitGlobalLoadOp(code, dest: resolveGpr(dest), name: name, size: size)
-		globalStore(name, src, size) then emitGlobalStoreOp(code, src: resolveGpr(src), name: name, size: size)
+		globalLoad(dest, name, size) then emitGlobalLoadOp(code, dest: resolveGpr(dest), name: name, size: size, rdataRelocs: rdataRelocs)
+		globalStore(name, src, size) then emitGlobalStoreOp(code, src: resolveGpr(src), name: name, size: size, rdataRelocs: rdataRelocs)
 		globalLoadXmm then panic("X86 globalLoadXmm not yet implemented in binary emitter")
 		globalStoreXmm then panic("X86 globalStoreXmm not yet implemented in binary emitter")
 		leaFromStack(dest, stackOffset) then emitLeaFromStackOp(code, dest: resolveGpr(dest), offset: stackOffset)
@@ -2185,8 +2247,19 @@ function emitX64Op(op X64Op, code ByteArray, blockFixups BlockJumpFixupArray, ca
 		lockIncMemory(addrReg) then emitLockIncMemoryOp(code, addrReg: resolveGpr(addrReg))
 		lockDecMemory(addrReg) then emitLockDecMemoryOp(code, addrReg: resolveGpr(addrReg))
 		lockXaddMemReg(valReg, addrReg) then emitLockXaddMemRegOp(code, addrReg: resolveGpr(addrReg), valReg: resolveGpr(valReg))
+		stashEntryArgv then emitX64StashEntryArgvOp(code, rdataRelocs: rdataRelocs)
 	end 'emit'
 end 'emitX64Op'
+
+// Phase D2: stash the kernel-supplied argc/argv from rdi/rsi (System V x86-64
+// entry-point convention) into the `__mrt_argc` / `__mrt_argv` globals. This
+// runs at the very start of `mrt_start` on Linux/macOS, BEFORE the prologue
+// stomps the registers. The prologue insertion pass only inserts this op on
+// Linux/macOS, so when this emit runs we know we want the two-store sequence.
+function emitX64StashEntryArgvOp(code ByteArray, rdataRelocs RdataRelocationArray)
+	helperStoreGlobal(code, rdataRelocs: rdataRelocs, src: X64Register.rdi, name: "__mrt_argc")
+	helperStoreGlobal(code, rdataRelocs: rdataRelocs, src: X64Register.rsi, name: "__mrt_argv")
+end 'emitX64StashEntryArgvOp'
 
 // --- StdSystemOp emission (x86-64) ---
 
@@ -2354,3 +2427,1947 @@ function emitX64MemcpyOp(code ByteArray, dstSlot VarSlot, srcSlot VarSlot, lenSl
 	// rep movsb
 	code.append(b"\xf3\xa4")
 end 'emitX64MemcpyOp'
+
+// =============================================================================
+// Phase B1+B2: Hand-rolled x86-64 machine code for the twelve `mrt_win32_*`
+// runtime helpers. Each function is a byte-level translation of the original
+// Std-level body that used to live in runtime.std (deleted in Phase B2).
+// The hand-rolled helpers register themselves under the public `mrt_win32_*`
+// label names — `lowerFileIoOp` calls them directly.
+//
+// Calling conventions used by these emitters:
+//   * Internal Maxon ABI (every helper's entry/exit): GPR params in
+//     rcx, rdx, rax (and r9, rsi, rdi, rbx for >3 params); return value in r8.
+//   * Win64 ABI (every IAT call): GPR args in rcx, rdx, r8, r9; remaining
+//     args on the stack starting at [rsp+32]; return value in rax.
+//     Shadow space (32 bytes) is allocated before each IAT call.
+//
+// Frame layout (per helper):
+//   [rbp]                        saved rbp
+//   [rbp + 8]                    return address
+//   [rbp -  8 .. rbp - 8*N]      local slots (slot 0 .. slot N-1)
+//   [rbp - 8*N .. rsp]           outgoing call args (shadow space + extras)
+//
+// Slot N is addressed as `[rbp - (N+1)*8]`. Outgoing args at the bottom of
+// the frame are addressed as `[rsp + 0 .. + outgoingBytes)`.
+// =============================================================================
+
+// Local-block tracker for hand-rolled helpers. We re-use the same `BlockId`
+// + offset-table + fixup-list machinery the regular code emitter uses, but
+// the BlockId values are local to each helper (starting from 0).
+type Win32HelperState
+	export var nextBlockId BlockId
+	export var blockOffsets CodeOffsetArray
+	export var blockFixups BlockJumpFixupArray
+	export var outgoingBytes StackSize
+	export var localBytes StackSize
+
+	static function create(numBlocks BlockId, outgoingBytes StackSize, localBytes StackSize) returns Win32HelperState
+		var offsets = CodeOffsetArray.create()
+		for _ in 0 upto numBlocks 'alloc'
+			offsets.push(0)
+		end 'alloc'
+		return Self{nextBlockId: numBlocks, blockOffsets: offsets, blockFixups: BlockJumpFixupArray.create(), outgoingBytes: outgoingBytes, localBytes: localBytes}
+	end 'create'
+end 'Win32HelperState'
+
+// Stack-frame slot N → byte offset relative to rbp (negative).
+function helperSlotRbpOffset(slotIndex VarSlot) returns StackSize
+	return 0 - ((slotIndex + 1) * 8)
+end 'helperSlotRbpOffset'
+
+// Mark the start of a block at the current code offset.
+function helperMarkBlock(state Win32HelperState, code ByteArray, blockId BlockId)
+	try state.blockOffsets.set(blockId, value: code.count()) otherwise panic("helperMarkBlock: blockId {blockId} out of range")
+end 'helperMarkBlock'
+
+// Prologue: push rbp; mov rbp, rsp; sub rsp, frameSize.
+function helperPrologue(code ByteArray, frameSize StackSize)
+	code.append(b"\x55\x48\x89\xe5")
+	if frameSize > 0 'sub'
+		emitSubRspImm(code, value: frameSize)
+	end 'sub'
+end 'helperPrologue'
+
+// Epilogue: mov rsp, rbp; pop rbp; ret.
+function helperEpilogue(code ByteArray)
+	code.append(b"\x48\x89\xec\x5d\xc3")
+end 'helperEpilogue'
+
+// Load a local slot into a register: mov dest, [rbp - (slot+1)*8].
+function helperLoadSlot(code ByteArray, slotIndex VarSlot, dest X64Register)
+	emitLoadSlotToReg(code, slotIndex: slotIndex, dest: dest)
+end 'helperLoadSlot'
+
+// Store a register into a local slot: mov [rbp - (slot+1)*8], src.
+function helperStoreSlot(code ByteArray, slotIndex VarSlot, src X64Register)
+	emitMovSlot(code, slotIndex: slotIndex, srcReg: src)
+end 'helperStoreSlot'
+
+// LEA stackAddr: lea dest, [rbp - (slot+1)*8].
+function helperLeaStackSlot(code ByteArray, slotIndex VarSlot, dest X64Register)
+	let negOffset = helperSlotRbpOffset(slotIndex)
+	// LEA r64, [rbp + disp]
+	emitRexWPrefix(code, regField: dest, rmField: X64Register.rbp)
+	code.push(0x8D)
+	if negOffset >= -128 and negOffset <= 127 'disp8'
+		// mod=01, reg=dest, rm=rbp
+		let regBits = regCode(dest)
+		code.push((1 shl 6) or ((regBits and 7) shl 3) or 5)
+		code.push(negOffset and 0xFF)
+	end 'disp8' else 'disp32'
+		let regBits = regCode(dest)
+		code.push((2 shl 6) or ((regBits and 7) shl 3) or 5)
+		writeDword(code, value: negOffset)
+	end 'disp32'
+end 'helperLeaStackSlot'
+
+// Load a constant into a register: mov dest, imm.
+function helperMovRegImm(code ByteArray, dest X64Register, value MachineWord)
+	emitMovRegImmGeneric(code, dest: dest, value: value)
+end 'helperMovRegImm'
+
+// Encode the modrm + optional SIB + displacement bytes for `[base + disp]`
+// addressing where `reg` is the register field of the ModR/M byte. Used by
+// every helperLoad*/helperStore* below — extracting the shared encoding keeps
+// each helper to a single REX/opcode preamble plus a call to this routine.
+//
+//   * `regCode(base) != 5` excludes rbp/r13 from the mod=00 short form
+//     because mod=00 + rm=101 means [rip+disp32], not [rbp].
+//   * `regCode(base) == 4` (rsp/r12) requires a SIB byte; we encode it as
+//     `0x24` (scale=00, index=100=none, base=100).
+function emitMemBaseDisp(code ByteArray, reg MachineWord, base X64Register, disp StackSize)
+	let regBits = reg
+	let baseBits = regCode(base)
+	if disp == 0 and baseBits != 5 'mod0'
+		if baseBits == 4 'sib'
+			code.push(((regBits and 7) shl 3) or 4)
+			code.push(0x24)
+		end 'sib' else 'noSib'
+			code.push(((regBits and 7) shl 3) or (baseBits and 7))
+		end 'noSib'
+	end 'mod0' else if disp >= -128 and disp <= 127 'disp8'
+		code.push((1 shl 6) or ((regBits and 7) shl 3) or (baseBits and 7))
+		if baseBits == 4 'sib'
+			code.push(0x24)
+		end 'sib'
+		code.push(disp and 0xFF)
+	end 'disp8' else 'disp32'
+		code.push((2 shl 6) or ((regBits and 7) shl 3) or (baseBits and 7))
+		if baseBits == 4 'sib'
+			code.push(0x24)
+		end 'sib'
+		writeDword(code, value: disp)
+	end 'disp32'
+end 'emitMemBaseDisp'
+
+// Load indirect: mov dest, [base + disp].
+function helperLoadIndirect(code ByteArray, dest X64Register, base X64Register, disp StackSize)
+	// REX.W 8B /r [base+disp]
+	emitRexWPrefix(code, regField: dest, rmField: base)
+	code.push(0x8B)
+	emitMemBaseDisp(code, reg: regCode(dest), base: base, disp: disp)
+end 'helperLoadIndirect'
+
+// Store indirect: mov [base + disp], src.
+function helperStoreIndirect(code ByteArray, base X64Register, disp StackSize, src X64Register)
+	// REX.W 89 /r [base+disp]
+	emitRexWPrefix(code, regField: src, rmField: base)
+	code.push(0x89)
+	emitMemBaseDisp(code, reg: regCode(src), base: base, disp: disp)
+end 'helperStoreIndirect'
+
+// Store byte: mov byte [base + disp], src_low. Requires src to be one of
+// rax/rcx/rdx/rbx (al/cl/dl/bl accessible without REX), or any reg with REX.
+function helperStoreByteRcx(code ByteArray, base X64Register, disp StackSize, src X64Register)
+	// mov [base+disp], src8. Use 0x88 /r with REX as needed.
+	var rex = 0x40
+	if isExtended(base) 'extB'
+		rex = rex or 0x01
+	end 'extB'
+	if isExtended(src) 'extR'
+		rex = rex or 0x04
+	end 'extR'
+	// Force REX even for rax/rcx/rdx/rbx to make the encoding uniform.
+	code.push(rex)
+	code.push(0x88)
+	emitMemBaseDisp(code, reg: regCode(src), base: base, disp: disp)
+end 'helperStoreByteRcx'
+
+// Load byte (zero-extended): movzx dest, byte [base + disp].
+function helperLoadByte(code ByteArray, dest X64Register, base X64Register, disp StackSize)
+	// REX.W 0F B6 /r
+	emitRexWPrefix(code, regField: dest, rmField: base)
+	code.push(0x0F)
+	code.push(0xB6)
+	emitMemBaseDisp(code, reg: regCode(dest), base: base, disp: disp)
+end 'helperLoadByte'
+
+// Emit an IAT-indirect call to the given slot. The caller is responsible
+// for pre-loading args into rcx/rdx/r8/r9 and placing extra args on the
+// stack. Outgoing-arg space (incl. 32-byte shadow region) is already
+// reserved by the prologue.
+function helperEmitIatCall(code ByteArray, relocations RelocationArray, slotIndex MachineWord)
+	code.append(b"\xff\x15")
+	relocations.push(Relocation.create(code.count(), slotIndex: slotIndex))
+	writeDword(code, value: 0)
+end 'helperEmitIatCall'
+
+// Load a global into `dest`: mov dest, [rip+global]. Records an rdata
+// relocation against the named global so the binary writer can resolve
+// the displacement after .data section layout.
+function helperLoadGlobal(code ByteArray, rdataRelocs RdataRelocationArray, dest X64Register, name String)
+	emitGlobalAccess(code, opcode: 0x8B, regField: dest, name: name, rdataRelocs: rdataRelocs)
+end 'helperLoadGlobal'
+
+// Store `src` to a global: mov [rip+global], src.
+function helperStoreGlobal(code ByteArray, rdataRelocs RdataRelocationArray, src X64Register, name String)
+	emitGlobalAccess(code, opcode: 0x89, regField: src, name: name, rdataRelocs: rdataRelocs)
+end 'helperStoreGlobal'
+
+// shl reg, imm8: REX.W C1 /4 reg, imm8.
+function helperShlRegImm(code ByteArray, dest X64Register, value MachineWord)
+	emitRexWSingle(code, rmField: dest)
+	code.push(0xC1)
+	emitModRMExt(code, ext: 4, rmField: dest)
+	code.push(value and 0xFF)
+end 'helperShlRegImm'
+
+// Emit an internal-ABI direct call (call rel32) to another runtime helper.
+// Args are pre-loaded into rcx/rdx/rax (Maxon internal ABI). The callee
+// returns its value in r8; the caller is responsible for moving r8 → rax
+// if it wants the result there.
+function helperEmitDirectCall(code ByteArray, callFixups CallFixupArray, target String)
+	emitCallFixup(code, callFixups: callFixups, target: target)
+end 'helperEmitDirectCall'
+
+// test reg, reg (uses REX.W 85 /r).
+function helperTestReg(code ByteArray, reg X64Register)
+	emitTestRegRegOp(code, reg1: reg, reg2: reg)
+end 'helperTestReg'
+
+// cmp reg, imm
+function helperCmpRegImm(code ByteArray, reg X64Register, value MachineWord)
+	emitCmpRegImmOp(code, lhs: reg, value: value)
+end 'helperCmpRegImm'
+
+// jcc with placeholder, recorded as a BlockJumpFixup.
+function helperEmitCondJump(code ByteArray, state Win32HelperState, opcode CondJumpOpcode, targetBlock BlockId)
+	code.push(0x0F)
+	code.push(opcode)
+	state.blockFixups.push(BlockJumpFixup.create(code.count(), targetBlockId: targetBlock))
+	writeDword(code, value: 0)
+end 'helperEmitCondJump'
+
+// Unconditional jmp rel32 placeholder, recorded as a BlockJumpFixup.
+function helperEmitJmp(code ByteArray, state Win32HelperState, targetBlock BlockId)
+	code.push(0xE9)
+	state.blockFixups.push(BlockJumpFixup.create(code.count(), targetBlockId: targetBlock))
+	writeDword(code, value: 0)
+end 'helperEmitJmp'
+
+// Finalize: resolve all per-helper block fixups.
+function helperFinalize(state Win32HelperState, code ByteArray)
+	resolveBlockFixups(code, blockOffsets: state.blockOffsets, blockFixups: state.blockFixups)
+end 'helperFinalize'
+
+// Return helper: move return value (in src) to r8, then epilogue.
+function helperReturn(code ByteArray, src X64Register)
+	if regCode(src) != regCode(X64Register.r8) or isExtended(src) != isExtended(X64Register.r8) 'mov'
+		emitMovRegRegOp(code, dest: X64Register.r8, src: src)
+	end 'mov'
+	helperEpilogue(code)
+end 'helperReturn'
+
+// Return helper: load value from slot, then epilogue with r8.
+function helperReturnFromSlot(code ByteArray, slotIndex VarSlot)
+	helperLoadSlot(code, slotIndex: slotIndex, dest: X64Register.r8)
+	helperEpilogue(code)
+end 'helperReturnFromSlot'
+
+// Return helper: load imm into r8, then epilogue.
+function helperReturnImm(code ByteArray, value MachineWord)
+	helperMovRegImm(code, dest: X64Register.r8, value: value)
+	helperEpilogue(code)
+end 'helperReturnImm'
+
+// =============================================================================
+// Top-level driver: emit every hand-rolled `mrt_win32_*` helper.
+// =============================================================================
+
+function emitX64Win32Helpers(code ByteArray, relocations RelocationArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, funcLabelNames StringArray, funcLabelOffsets CodeOffsetArray, funcLabelOffsetMap CodeLabelOffsetMap)
+	emitX64Win32TranslateLasterror(code, relocations: relocations, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
+	emitX64Win32Write(code, relocations: relocations, callFixups: callFixups, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
+	emitX64Win32Read(code, relocations: relocations, callFixups: callFixups, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
+	emitX64Win32Close(code, relocations: relocations, callFixups: callFixups, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
+	emitX64Win32Lseek(code, relocations: relocations, callFixups: callFixups, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
+	emitX64Win32Unlink(code, relocations: relocations, callFixups: callFixups, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
+	emitX64Win32Mkdir(code, relocations: relocations, callFixups: callFixups, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
+	emitX64Win32Access(code, relocations: relocations, callFixups: callFixups, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
+	emitX64Win32Stat(code, relocations: relocations, callFixups: callFixups, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
+	emitX64Win32Getcwd(code, relocations: relocations, callFixups: callFixups, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
+	emitX64Win32Open(code, relocations: relocations, callFixups: callFixups, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
+	emitX64Win32Getdents64(code, relocations: relocations, callFixups: callFixups, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
+	// Phase B3: argv / executable-path helpers. These access lazy-init
+	// globals (`__mrt_win32_argv_init_done`, `__mrt_win32_argc`,
+	// `__mrt_win32_argv_cache_ptr`) registered by
+	// `registerSlabAndMmGlobalsForDataSection`, so they need the
+	// `rdataRelocs` array to record .data displacement fixups.
+	emitX64Win32GetArgc(code, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
+	emitX64Win32GetArgv(code, callFixups: callFixups, rdataRelocs: rdataRelocs, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
+	emitX64Win32GetExecutablePath(code, relocations: relocations, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
+end 'emitX64Win32Helpers'
+
+// =============================================================================
+// 1. mrt_win32_translate_lasterror — calls GetLastError (IAT 27),
+// then maps Win32 error codes to POSIX errno-style negative values.
+// Stack layout:
+//   slot 0 = masked Win32 error code
+// Outgoing-arg area: 32 bytes (GetLastError takes 0 args; we still need
+// shadow space).
+// Block plan (ids):
+//   0: entry
+//   1: success                (-> ret 0)
+//   2: check_enoent_2
+//   3: check_enoent_3
+//   4: ret_enoent             (-> ret -2)
+//   5: check_eacces_5
+//   6: check_eacces_32
+//   7: ret_eacces             (-> ret -13)
+//   8: check_eexist_80
+//   9: check_eexist_183
+//  10: ret_eexist             (-> ret -17)
+//  11: ret_eio                (-> ret -5)
+// =============================================================================
+function emitX64Win32TranslateLasterror(code ByteArray, relocations RelocationArray, funcLabelNames StringArray, funcLabelOffsets CodeOffsetArray, funcLabelOffsetMap CodeLabelOffsetMap)
+	let helperStart = code.count()
+	recordLabel(funcLabelNames, labelOffsets: funcLabelOffsets, labelOffsetMap: funcLabelOffsetMap, name: "mrt_win32_translate_lasterror", offset: helperStart)
+
+	// Frame: 1 slot (slot 0) + 32 bytes shadow.
+	// localBytes = 8, outgoingBytes = 32. Total = 40, aligned to 16 = 48.
+	let frameSize = 48
+	var state = Win32HelperState.create(12, outgoingBytes: 32, localBytes: 8)
+
+	helperPrologue(code, frameSize: frameSize)
+
+	// Block 0: entry — GetLastError; mask; storeSlot 0.
+	helperMarkBlock(state, code: code, blockId: 0)
+	helperEmitIatCall(code, relocations: relocations, slotIndex: iatSlotIndex(IatSlot.getLastError))
+	// rax &= 0xFFFFFFFF — use mov eax, eax (zero-extends to 64 bits in 2 bytes).
+	code.append(b"\x89\xc0")
+	helperStoreSlot(code, slotIndex: 0, src: X64Register.rax)
+
+	// if (slot 0 == 0) goto block 1 (success), else block 2.
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.rax)
+	helperTestReg(code, reg: X64Register.rax)
+	// JZ block 1
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 1)
+	// jmp block 2
+	helperEmitJmp(code, state: state, targetBlock: 2)
+
+	// Block 1: success — ret 0.
+	helperMarkBlock(state, code: code, blockId: 1)
+	helperReturnImm(code, value: 0)
+
+	// Block 2: check_enoent_2.
+	helperMarkBlock(state, code: code, blockId: 2)
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.rax)
+	helperCmpRegImm(code, reg: X64Register.rax, value: 2)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 4)
+	helperEmitJmp(code, state: state, targetBlock: 3)
+
+	// Block 3: check_enoent_3.
+	helperMarkBlock(state, code: code, blockId: 3)
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.rax)
+	helperCmpRegImm(code, reg: X64Register.rax, value: 3)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 4)
+	helperEmitJmp(code, state: state, targetBlock: 5)
+
+	// Block 4: ret_enoent — ret -2.
+	helperMarkBlock(state, code: code, blockId: 4)
+	helperReturnImm(code, value: -2)
+
+	// Block 5: check_eacces_5.
+	helperMarkBlock(state, code: code, blockId: 5)
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.rax)
+	helperCmpRegImm(code, reg: X64Register.rax, value: 5)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 7)
+	helperEmitJmp(code, state: state, targetBlock: 6)
+
+	// Block 6: check_eacces_32.
+	helperMarkBlock(state, code: code, blockId: 6)
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.rax)
+	helperCmpRegImm(code, reg: X64Register.rax, value: 32)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 7)
+	helperEmitJmp(code, state: state, targetBlock: 8)
+
+	// Block 7: ret_eacces — ret -13.
+	helperMarkBlock(state, code: code, blockId: 7)
+	helperReturnImm(code, value: -13)
+
+	// Block 8: check_eexist_80.
+	helperMarkBlock(state, code: code, blockId: 8)
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.rax)
+	helperCmpRegImm(code, reg: X64Register.rax, value: 80)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 10)
+	helperEmitJmp(code, state: state, targetBlock: 9)
+
+	// Block 9: check_eexist_183.
+	helperMarkBlock(state, code: code, blockId: 9)
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.rax)
+	helperCmpRegImm(code, reg: X64Register.rax, value: 183)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 10)
+	helperEmitJmp(code, state: state, targetBlock: 11)
+
+	// Block 10: ret_eexist — ret -17.
+	helperMarkBlock(state, code: code, blockId: 10)
+	helperReturnImm(code, value: -17)
+
+	// Block 11: ret_eio — ret -5.
+	helperMarkBlock(state, code: code, blockId: 11)
+	helperReturnImm(code, value: -5)
+
+	helperFinalize(state, code: code)
+end 'emitX64Win32TranslateLasterror'
+
+// =============================================================================
+// 2. mrt_win32_write(wrapperBlock, bufPtr, count)
+// Internal ABI: rcx=wrapper, rdx=bufPtr, rax=count.
+// Stack:
+//   slot 0 = wrapper
+//   slot 1 = HANDLE
+//   slot 2 = bytes-written DWORD (out-param to WriteFile)
+//   slot 3 = WriteFile BOOL
+// Outgoing-arg area: WriteFile takes 5 args → 32 + 8 = 40 → 48 bytes.
+// Block plan:
+//   0: entry
+//   1: fail   (-> tailcall mrt_win32_translate_lasterror)
+//   2: ok     (-> ret slot 2 masked)
+// =============================================================================
+function emitX64Win32Write(code ByteArray, relocations RelocationArray, callFixups CallFixupArray, funcLabelNames StringArray, funcLabelOffsets CodeOffsetArray, funcLabelOffsetMap CodeLabelOffsetMap)
+	let helperStart = code.count()
+	recordLabel(funcLabelNames, labelOffsets: funcLabelOffsets, labelOffsetMap: funcLabelOffsetMap, name: "mrt_win32_write", offset: helperStart)
+
+	// 4 slots × 8 = 32 bytes locals + 48 outgoing = 80, aligned to 16 = 80.
+	let frameSize = 80
+	let outgoingBytes = 48
+	var state = Win32HelperState.create(3, outgoingBytes: outgoingBytes, localBytes: 32)
+
+	helperPrologue(code, frameSize: frameSize)
+
+	// Save wrapper/buf/count into slots 0..(unused-but-keep-in-regs):
+	helperMarkBlock(state, code: code, blockId: 0)
+	helperStoreSlot(code, slotIndex: 0, src: X64Register.rcx)
+	// Save bufPtr (rdx) and count (rax) into a stack home in case we need them
+	// across the IAT call.
+	helperStoreSlot(code, slotIndex: 4, src: X64Register.rdx)
+	helperStoreSlot(code, slotIndex: 5, src: X64Register.rax)
+
+	// HANDLE = wrapper[8].
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.rcx)
+	helperLoadIndirect(code, dest: X64Register.rax, base: X64Register.rcx, disp: 8)
+	helperStoreSlot(code, slotIndex: 1, src: X64Register.rax)
+
+	// slot 2 = 0 (bytesWritten out-param).
+	helperMovRegImm(code, dest: X64Register.rax, value: 0)
+	helperStoreSlot(code, slotIndex: 2, src: X64Register.rax)
+
+	// Call WriteFile(handle, buf, count, &bytesWritten, NULL).
+	// rcx=handle, rdx=buf, r8=count, r9=&bytesWritten, [rsp+32]=NULL.
+	helperLoadSlot(code, slotIndex: 1, dest: X64Register.rcx)
+	helperLoadSlot(code, slotIndex: 4, dest: X64Register.rdx)
+	helperLoadSlot(code, slotIndex: 5, dest: X64Register.r8)
+	helperLeaStackSlot(code, slotIndex: 2, dest: X64Register.r9)
+	helperMovRegImm(code, dest: X64Register.rax, value: 0)
+	emitMovRspOffsetReg(code, offset: 32, srcReg: X64Register.rax)
+	helperEmitIatCall(code, relocations: relocations, slotIndex: iatSlotIndex(IatSlot.writeFile))
+	helperStoreSlot(code, slotIndex: 3, src: X64Register.rax)
+
+	// if (slot 3 == 0) goto fail else ok.
+	helperLoadSlot(code, slotIndex: 3, dest: X64Register.rax)
+	helperTestReg(code, reg: X64Register.rax)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 1)
+	helperEmitJmp(code, state: state, targetBlock: 2)
+
+	// Block 1: fail — tailcall translate_lasterror, return its result.
+	helperMarkBlock(state, code: code, blockId: 1)
+	helperEmitDirectCall(code, callFixups: callFixups, target: "mrt_win32_translate_lasterror")
+	// Callee returns its value in r8 (internal ABI). Use it directly.
+	helperEpilogue(code)
+
+	// Block 2: ok — return slot 2 masked to 32 bits.
+	helperMarkBlock(state, code: code, blockId: 2)
+	helperLoadSlot(code, slotIndex: 2, dest: X64Register.rax)
+	// mov eax, eax — zero-extends.
+	code.append(b"\x89\xc0")
+	emitMovRegRegOp(code, dest: X64Register.r8, src: X64Register.rax)
+	helperEpilogue(code)
+
+	helperFinalize(state, code: code)
+end 'emitX64Win32Write'
+
+// =============================================================================
+// 3. mrt_win32_read — identical structure to write, calls ReadFile.
+// =============================================================================
+function emitX64Win32Read(code ByteArray, relocations RelocationArray, callFixups CallFixupArray, funcLabelNames StringArray, funcLabelOffsets CodeOffsetArray, funcLabelOffsetMap CodeLabelOffsetMap)
+	let helperStart = code.count()
+	recordLabel(funcLabelNames, labelOffsets: funcLabelOffsets, labelOffsetMap: funcLabelOffsetMap, name: "mrt_win32_read", offset: helperStart)
+
+	let frameSize = 80
+	var state = Win32HelperState.create(3, outgoingBytes: 48, localBytes: 32)
+
+	helperPrologue(code, frameSize: frameSize)
+
+	helperMarkBlock(state, code: code, blockId: 0)
+	helperStoreSlot(code, slotIndex: 0, src: X64Register.rcx)
+	helperStoreSlot(code, slotIndex: 4, src: X64Register.rdx)
+	helperStoreSlot(code, slotIndex: 5, src: X64Register.rax)
+
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.rcx)
+	helperLoadIndirect(code, dest: X64Register.rax, base: X64Register.rcx, disp: 8)
+	helperStoreSlot(code, slotIndex: 1, src: X64Register.rax)
+
+	helperMovRegImm(code, dest: X64Register.rax, value: 0)
+	helperStoreSlot(code, slotIndex: 2, src: X64Register.rax)
+
+	helperLoadSlot(code, slotIndex: 1, dest: X64Register.rcx)
+	helperLoadSlot(code, slotIndex: 4, dest: X64Register.rdx)
+	helperLoadSlot(code, slotIndex: 5, dest: X64Register.r8)
+	helperLeaStackSlot(code, slotIndex: 2, dest: X64Register.r9)
+	helperMovRegImm(code, dest: X64Register.rax, value: 0)
+	emitMovRspOffsetReg(code, offset: 32, srcReg: X64Register.rax)
+	helperEmitIatCall(code, relocations: relocations, slotIndex: iatSlotIndex(IatSlot.readFile))
+	helperStoreSlot(code, slotIndex: 3, src: X64Register.rax)
+
+	helperLoadSlot(code, slotIndex: 3, dest: X64Register.rax)
+	helperTestReg(code, reg: X64Register.rax)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 1)
+	helperEmitJmp(code, state: state, targetBlock: 2)
+
+	helperMarkBlock(state, code: code, blockId: 1)
+	helperEmitDirectCall(code, callFixups: callFixups, target: "mrt_win32_translate_lasterror")
+	helperEpilogue(code)
+
+	helperMarkBlock(state, code: code, blockId: 2)
+	helperLoadSlot(code, slotIndex: 2, dest: X64Register.rax)
+	code.append(b"\x89\xc0")
+	emitMovRegRegOp(code, dest: X64Register.r8, src: X64Register.rax)
+	helperEpilogue(code)
+
+	helperFinalize(state, code: code)
+end 'emitX64Win32Read'
+
+// =============================================================================
+// 4. mrt_win32_close(wrapper) — dispatch on wrapper[0]:
+//   kind 0 (file)      → CloseHandle(wrapper[8])
+//   kind 1 (directory) → FindClose(wrapper[8])
+// Always mm_decrefs the wrapper. Skips when wrapper == 0 or wrapper == -1.
+// Block plan:
+//   0: entry
+//   1: check_neg_one
+//   2: load_kind
+//   3: close_find
+//   4: close_handle
+//   5: free_wrapper
+//   6: done
+// =============================================================================
+function emitX64Win32Close(code ByteArray, relocations RelocationArray, callFixups CallFixupArray, funcLabelNames StringArray, funcLabelOffsets CodeOffsetArray, funcLabelOffsetMap CodeLabelOffsetMap)
+	let helperStart = code.count()
+	recordLabel(funcLabelNames, labelOffsets: funcLabelOffsets, labelOffsetMap: funcLabelOffsetMap, name: "mrt_win32_close", offset: helperStart)
+
+	// 2 slots (slot 0 wrapper, slot 1 kind) = 16; outgoing 32. Total 48.
+	let frameSize = 48
+	var state = Win32HelperState.create(7, outgoingBytes: 32, localBytes: 16)
+
+	helperPrologue(code, frameSize: frameSize)
+
+	// Block 0: entry.
+	helperMarkBlock(state, code: code, blockId: 0)
+	helperStoreSlot(code, slotIndex: 0, src: X64Register.rcx)
+	// if (wrapper == 0) goto done else check_neg_one.
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.rax)
+	helperTestReg(code, reg: X64Register.rax)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 6)
+	helperEmitJmp(code, state: state, targetBlock: 1)
+
+	// Block 1: check_neg_one.
+	helperMarkBlock(state, code: code, blockId: 1)
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.rax)
+	helperCmpRegImm(code, reg: X64Register.rax, value: -1)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 6)
+	helperEmitJmp(code, state: state, targetBlock: 2)
+
+	// Block 2: load_kind.
+	helperMarkBlock(state, code: code, blockId: 2)
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.rcx)
+	helperLoadIndirect(code, dest: X64Register.rax, base: X64Register.rcx, disp: 0)
+	helperStoreSlot(code, slotIndex: 1, src: X64Register.rax)
+	helperLoadSlot(code, slotIndex: 1, dest: X64Register.rax)
+	helperCmpRegImm(code, reg: X64Register.rax, value: 1)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 3)
+	helperEmitJmp(code, state: state, targetBlock: 4)
+
+	// Block 3: close_find — FindClose(wrapper[8]).
+	helperMarkBlock(state, code: code, blockId: 3)
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.rcx)
+	helperLoadIndirect(code, dest: X64Register.rcx, base: X64Register.rcx, disp: 8)
+	helperEmitIatCall(code, relocations: relocations, slotIndex: iatSlotIndex(IatSlot.findClose))
+	helperEmitJmp(code, state: state, targetBlock: 5)
+
+	// Block 4: close_handle — CloseHandle(wrapper[8]).
+	helperMarkBlock(state, code: code, blockId: 4)
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.rcx)
+	helperLoadIndirect(code, dest: X64Register.rcx, base: X64Register.rcx, disp: 8)
+	helperEmitIatCall(code, relocations: relocations, slotIndex: iatSlotIndex(IatSlot.closeHandle))
+	helperEmitJmp(code, state: state, targetBlock: 5)
+
+	// Block 5: free_wrapper — call mm_decref(wrapper).
+	helperMarkBlock(state, code: code, blockId: 5)
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.rcx)
+	helperEmitDirectCall(code, callFixups: callFixups, target: "mm_decref")
+	helperEmitJmp(code, state: state, targetBlock: 6)
+
+	// Block 6: done — return 0.
+	helperMarkBlock(state, code: code, blockId: 6)
+	helperReturnImm(code, value: 0)
+
+	helperFinalize(state, code: code)
+end 'emitX64Win32Close'
+
+// =============================================================================
+// 5. mrt_win32_lseek(wrapper, offset, whence)
+// rcx=wrapper, rdx=offset, rax=whence.
+// Stack:
+//   slot 0 = wrapper
+//   slot 1 = offset
+//   slot 2 = whence
+//   slot 3 = HANDLE
+//   slot 4 = new position (LARGE_INTEGER out-param)
+//   slot 5 = SetFilePointerEx BOOL
+// Outgoing-arg area: 4-arg call = 32. Frame: 6*8 + 32 = 80.
+// =============================================================================
+function emitX64Win32Lseek(code ByteArray, relocations RelocationArray, callFixups CallFixupArray, funcLabelNames StringArray, funcLabelOffsets CodeOffsetArray, funcLabelOffsetMap CodeLabelOffsetMap)
+	let helperStart = code.count()
+	recordLabel(funcLabelNames, labelOffsets: funcLabelOffsets, labelOffsetMap: funcLabelOffsetMap, name: "mrt_win32_lseek", offset: helperStart)
+
+	let frameSize = 80
+	var state = Win32HelperState.create(3, outgoingBytes: 32, localBytes: 48)
+
+	helperPrologue(code, frameSize: frameSize)
+
+	helperMarkBlock(state, code: code, blockId: 0)
+	helperStoreSlot(code, slotIndex: 0, src: X64Register.rcx)
+	helperStoreSlot(code, slotIndex: 1, src: X64Register.rdx)
+	helperStoreSlot(code, slotIndex: 2, src: X64Register.rax)
+
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.rcx)
+	helperLoadIndirect(code, dest: X64Register.rax, base: X64Register.rcx, disp: 8)
+	helperStoreSlot(code, slotIndex: 3, src: X64Register.rax)
+
+	helperMovRegImm(code, dest: X64Register.rax, value: 0)
+	helperStoreSlot(code, slotIndex: 4, src: X64Register.rax)
+
+	// SetFilePointerEx(handle, distance, &newPos, moveMethod).
+	helperLoadSlot(code, slotIndex: 3, dest: X64Register.rcx)
+	helperLoadSlot(code, slotIndex: 1, dest: X64Register.rdx)
+	helperLeaStackSlot(code, slotIndex: 4, dest: X64Register.r8)
+	helperLoadSlot(code, slotIndex: 2, dest: X64Register.r9)
+	helperEmitIatCall(code, relocations: relocations, slotIndex: iatSlotIndex(IatSlot.setFilePointerEx))
+	helperStoreSlot(code, slotIndex: 5, src: X64Register.rax)
+
+	helperLoadSlot(code, slotIndex: 5, dest: X64Register.rax)
+	helperTestReg(code, reg: X64Register.rax)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 1)
+	helperEmitJmp(code, state: state, targetBlock: 2)
+
+	helperMarkBlock(state, code: code, blockId: 1)
+	helperEmitDirectCall(code, callFixups: callFixups, target: "mrt_win32_translate_lasterror")
+	helperEpilogue(code)
+
+	helperMarkBlock(state, code: code, blockId: 2)
+	helperLoadSlot(code, slotIndex: 4, dest: X64Register.r8)
+	helperEpilogue(code)
+
+	helperFinalize(state, code: code)
+end 'emitX64Win32Lseek'
+
+// =============================================================================
+// 6. mrt_win32_unlink(cStringPtr)
+// rcx=cstr. Converts UTF-8 → UTF-16 via MultiByteToWideChar, calls DeleteFileW.
+// Stack:
+//   slot 0 = cstr ptr
+//   slot 1 = DeleteFileW BOOL
+//   slots 11..267 = wide path (1024 wchars × 2 = 2048 bytes)
+// Outgoing-arg area for MBTWC = 6 args → 32 + 16 = 48; DeleteFileW = 1 arg → 32.
+// Frame: 268*8 + 48 = 2192, aligned to 16 = 2192.
+// =============================================================================
+function emitX64Win32Unlink(code ByteArray, relocations RelocationArray, callFixups CallFixupArray, funcLabelNames StringArray, funcLabelOffsets CodeOffsetArray, funcLabelOffsetMap CodeLabelOffsetMap)
+	let helperStart = code.count()
+	recordLabel(funcLabelNames, labelOffsets: funcLabelOffsets, labelOffsetMap: funcLabelOffsetMap, name: "mrt_win32_unlink", offset: helperStart)
+
+	let frameSize = 2192
+	var state = Win32HelperState.create(3, outgoingBytes: 48, localBytes: 2144)
+
+	helperPrologue(code, frameSize: frameSize)
+
+	helperMarkBlock(state, code: code, blockId: 0)
+	helperStoreSlot(code, slotIndex: 0, src: X64Register.rcx)
+
+	// MultiByteToWideChar(65001, 0, cstr, -1, &wide, 1024).
+	helperMovRegImm(code, dest: X64Register.rcx, value: 65001)
+	helperMovRegImm(code, dest: X64Register.rdx, value: 0)
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.r8)
+	helperMovRegImm(code, dest: X64Register.r9, value: -1)
+	helperLeaStackSlot(code, slotIndex: 267, dest: X64Register.rax)
+	emitMovRspOffsetReg(code, offset: 32, srcReg: X64Register.rax)
+	helperMovRegImm(code, dest: X64Register.rax, value: 1024)
+	emitMovRspOffsetReg(code, offset: 40, srcReg: X64Register.rax)
+	helperEmitIatCall(code, relocations: relocations, slotIndex: iatSlotIndex(IatSlot.multiByteToWideChar))
+
+	// DeleteFileW(&wide).
+	helperLeaStackSlot(code, slotIndex: 267, dest: X64Register.rcx)
+	helperEmitIatCall(code, relocations: relocations, slotIndex: iatSlotIndex(IatSlot.deleteFileW))
+	helperStoreSlot(code, slotIndex: 1, src: X64Register.rax)
+
+	helperLoadSlot(code, slotIndex: 1, dest: X64Register.rax)
+	helperTestReg(code, reg: X64Register.rax)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 1)
+	helperEmitJmp(code, state: state, targetBlock: 2)
+
+	helperMarkBlock(state, code: code, blockId: 1)
+	helperEmitDirectCall(code, callFixups: callFixups, target: "mrt_win32_translate_lasterror")
+	helperEpilogue(code)
+
+	helperMarkBlock(state, code: code, blockId: 2)
+	helperReturnImm(code, value: 0)
+
+	helperFinalize(state, code: code)
+end 'emitX64Win32Unlink'
+
+// =============================================================================
+// 7. mrt_win32_mkdir(cStringPtr, mode)
+// rcx=cstr, rdx=mode (ignored). CreateDirectoryW(cstr, NULL).
+// =============================================================================
+function emitX64Win32Mkdir(code ByteArray, relocations RelocationArray, callFixups CallFixupArray, funcLabelNames StringArray, funcLabelOffsets CodeOffsetArray, funcLabelOffsetMap CodeLabelOffsetMap)
+	let helperStart = code.count()
+	recordLabel(funcLabelNames, labelOffsets: funcLabelOffsets, labelOffsetMap: funcLabelOffsetMap, name: "mrt_win32_mkdir", offset: helperStart)
+
+	let frameSize = 2192
+	var state = Win32HelperState.create(3, outgoingBytes: 48, localBytes: 2144)
+
+	helperPrologue(code, frameSize: frameSize)
+
+	helperMarkBlock(state, code: code, blockId: 0)
+	helperStoreSlot(code, slotIndex: 0, src: X64Register.rcx)
+
+	// MultiByteToWideChar.
+	helperMovRegImm(code, dest: X64Register.rcx, value: 65001)
+	helperMovRegImm(code, dest: X64Register.rdx, value: 0)
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.r8)
+	helperMovRegImm(code, dest: X64Register.r9, value: -1)
+	helperLeaStackSlot(code, slotIndex: 267, dest: X64Register.rax)
+	emitMovRspOffsetReg(code, offset: 32, srcReg: X64Register.rax)
+	helperMovRegImm(code, dest: X64Register.rax, value: 1024)
+	emitMovRspOffsetReg(code, offset: 40, srcReg: X64Register.rax)
+	helperEmitIatCall(code, relocations: relocations, slotIndex: iatSlotIndex(IatSlot.multiByteToWideChar))
+
+	// CreateDirectoryW(&wide, NULL).
+	helperLeaStackSlot(code, slotIndex: 267, dest: X64Register.rcx)
+	helperMovRegImm(code, dest: X64Register.rdx, value: 0)
+	helperEmitIatCall(code, relocations: relocations, slotIndex: iatSlotIndex(IatSlot.createDirectoryW))
+	helperStoreSlot(code, slotIndex: 1, src: X64Register.rax)
+
+	helperLoadSlot(code, slotIndex: 1, dest: X64Register.rax)
+	helperTestReg(code, reg: X64Register.rax)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 1)
+	helperEmitJmp(code, state: state, targetBlock: 2)
+
+	helperMarkBlock(state, code: code, blockId: 1)
+	helperEmitDirectCall(code, callFixups: callFixups, target: "mrt_win32_translate_lasterror")
+	helperEpilogue(code)
+
+	helperMarkBlock(state, code: code, blockId: 2)
+	helperReturnImm(code, value: 0)
+
+	helperFinalize(state, code: code)
+end 'emitX64Win32Mkdir'
+
+// =============================================================================
+// 8. mrt_win32_access(cStringPtr, mode)
+// rcx=cstr, rdx=mode. Calls GetFileAttributesExW; if W_OK requested, checks
+// FILE_ATTRIBUTE_READONLY.
+// Stack:
+//   slot 0 = cstr
+//   slot 1 = mode
+//   slot 2 = GetFileAttributesExW BOOL
+//   slot 3 = scratch
+//   slots 11..267 = wide path
+//   slots 50..54  = WIN32_FILE_ATTRIBUTE_DATA (5 qwords)
+// Block plan:
+//   0: entry
+//   1: fail
+//   2: check_write
+//   3: verify_writable
+//   4: fail_eacces
+//   5: ok
+// =============================================================================
+function emitX64Win32Access(code ByteArray, relocations RelocationArray, callFixups CallFixupArray, funcLabelNames StringArray, funcLabelOffsets CodeOffsetArray, funcLabelOffsetMap CodeLabelOffsetMap)
+	let helperStart = code.count()
+	recordLabel(funcLabelNames, labelOffsets: funcLabelOffsets, labelOffsetMap: funcLabelOffsetMap, name: "mrt_win32_access", offset: helperStart)
+
+	let frameSize = 2192
+	var state = Win32HelperState.create(6, outgoingBytes: 48, localBytes: 2144)
+
+	helperPrologue(code, frameSize: frameSize)
+
+	helperMarkBlock(state, code: code, blockId: 0)
+	helperStoreSlot(code, slotIndex: 0, src: X64Register.rcx)
+	helperStoreSlot(code, slotIndex: 1, src: X64Register.rdx)
+
+	// MultiByteToWideChar(65001, 0, cstr, -1, &wide, 1024).
+	helperMovRegImm(code, dest: X64Register.rcx, value: 65001)
+	helperMovRegImm(code, dest: X64Register.rdx, value: 0)
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.r8)
+	helperMovRegImm(code, dest: X64Register.r9, value: -1)
+	helperLeaStackSlot(code, slotIndex: 267, dest: X64Register.rax)
+	emitMovRspOffsetReg(code, offset: 32, srcReg: X64Register.rax)
+	helperMovRegImm(code, dest: X64Register.rax, value: 1024)
+	emitMovRspOffsetReg(code, offset: 40, srcReg: X64Register.rax)
+	helperEmitIatCall(code, relocations: relocations, slotIndex: iatSlotIndex(IatSlot.multiByteToWideChar))
+
+	// GetFileAttributesExW(&wide, GetFileExInfoStandard=0, &data).
+	helperLeaStackSlot(code, slotIndex: 267, dest: X64Register.rcx)
+	helperMovRegImm(code, dest: X64Register.rdx, value: 0)
+	helperLeaStackSlot(code, slotIndex: 54, dest: X64Register.r8)
+	helperEmitIatCall(code, relocations: relocations, slotIndex: iatSlotIndex(IatSlot.getFileAttributesExW))
+	helperStoreSlot(code, slotIndex: 2, src: X64Register.rax)
+
+	helperLoadSlot(code, slotIndex: 2, dest: X64Register.rax)
+	helperTestReg(code, reg: X64Register.rax)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 1)
+	helperEmitJmp(code, state: state, targetBlock: 2)
+
+	helperMarkBlock(state, code: code, blockId: 1)
+	helperEmitDirectCall(code, callFixups: callFixups, target: "mrt_win32_translate_lasterror")
+	helperEpilogue(code)
+
+	helperMarkBlock(state, code: code, blockId: 2)
+	// if (mode & 2) goto verify_writable else ok.
+	helperLoadSlot(code, slotIndex: 1, dest: X64Register.rax)
+	helperMovRegImm(code, dest: X64Register.rcx, value: 2)
+	emitAndRegRegParam(code, dest: X64Register.rax, src: X64Register.rcx)
+	helperTestReg(code, reg: X64Register.rax)
+	// JZ goes to block 5 (ok), else fall through to block 3.
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 5)
+	helperEmitJmp(code, state: state, targetBlock: 3)
+
+	helperMarkBlock(state, code: code, blockId: 3)
+	// scratch = data.dwFileAttributes & 0xFFFFFFFF; if (scratch & 1) → eacces else ok.
+	helperLeaStackSlot(code, slotIndex: 54, dest: X64Register.rcx)
+	helperLoadIndirect(code, dest: X64Register.rax, base: X64Register.rcx, disp: 0)
+	// mov eax, eax — zero-extend.
+	code.append(b"\x89\xc0")
+	helperMovRegImm(code, dest: X64Register.rcx, value: 1)
+	emitAndRegRegParam(code, dest: X64Register.rax, src: X64Register.rcx)
+	helperTestReg(code, reg: X64Register.rax)
+	// JZ → ok, JNZ → fail_eacces.
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 5)
+	helperEmitJmp(code, state: state, targetBlock: 4)
+
+	helperMarkBlock(state, code: code, blockId: 4)
+	helperReturnImm(code, value: -13)
+
+	helperMarkBlock(state, code: code, blockId: 5)
+	helperReturnImm(code, value: 0)
+
+	helperFinalize(state, code: code)
+end 'emitX64Win32Access'
+
+// =============================================================================
+// 9. mrt_win32_stat(cStringPtr, statBufPtr)
+// Translates Win32 file attributes to Linux struct stat layout.
+// rcx=cstr, rdx=statBufPtr.
+// Stack:
+//   slot 0 = cstr
+//   slot 1 = statBuf
+//   slot 2 = GetFileAttributesExW BOOL
+//   slot 3 = scratch
+//   slots 11..267 = wide path
+//   slots 50..54  = WIN32_FILE_ATTRIBUTE_DATA
+// Block plan:
+//   0: entry
+//   1: fail
+//   2: ok / mode-decision-prep
+//   3: set_dir
+//   4: set_reg
+//   5: add_writable
+//   6: mark_writable
+//   7: write_mode (final writes + ret 0)
+// =============================================================================
+function emitX64Win32Stat(code ByteArray, relocations RelocationArray, callFixups CallFixupArray, funcLabelNames StringArray, funcLabelOffsets CodeOffsetArray, funcLabelOffsetMap CodeLabelOffsetMap)
+	let helperStart = code.count()
+	recordLabel(funcLabelNames, labelOffsets: funcLabelOffsets, labelOffsetMap: funcLabelOffsetMap, name: "mrt_win32_stat", offset: helperStart)
+
+	let frameSize = 2192
+	var state = Win32HelperState.create(8, outgoingBytes: 48, localBytes: 2144)
+
+	helperPrologue(code, frameSize: frameSize)
+
+	helperMarkBlock(state, code: code, blockId: 0)
+	helperStoreSlot(code, slotIndex: 0, src: X64Register.rcx)
+	helperStoreSlot(code, slotIndex: 1, src: X64Register.rdx)
+
+	// MultiByteToWideChar.
+	helperMovRegImm(code, dest: X64Register.rcx, value: 65001)
+	helperMovRegImm(code, dest: X64Register.rdx, value: 0)
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.r8)
+	helperMovRegImm(code, dest: X64Register.r9, value: -1)
+	helperLeaStackSlot(code, slotIndex: 267, dest: X64Register.rax)
+	emitMovRspOffsetReg(code, offset: 32, srcReg: X64Register.rax)
+	helperMovRegImm(code, dest: X64Register.rax, value: 1024)
+	emitMovRspOffsetReg(code, offset: 40, srcReg: X64Register.rax)
+	helperEmitIatCall(code, relocations: relocations, slotIndex: iatSlotIndex(IatSlot.multiByteToWideChar))
+
+	// GetFileAttributesExW.
+	helperLeaStackSlot(code, slotIndex: 267, dest: X64Register.rcx)
+	helperMovRegImm(code, dest: X64Register.rdx, value: 0)
+	helperLeaStackSlot(code, slotIndex: 54, dest: X64Register.r8)
+	helperEmitIatCall(code, relocations: relocations, slotIndex: iatSlotIndex(IatSlot.getFileAttributesExW))
+	helperStoreSlot(code, slotIndex: 2, src: X64Register.rax)
+
+	helperLoadSlot(code, slotIndex: 2, dest: X64Register.rax)
+	helperTestReg(code, reg: X64Register.rax)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 1)
+	helperEmitJmp(code, state: state, targetBlock: 2)
+
+	helperMarkBlock(state, code: code, blockId: 1)
+	helperEmitDirectCall(code, callFixups: callFixups, target: "mrt_win32_translate_lasterror")
+	helperEpilogue(code)
+
+	helperMarkBlock(state, code: code, blockId: 2)
+	// statBuf[24] = 0 (st_mode zero).
+	helperLoadSlot(code, slotIndex: 1, dest: X64Register.rcx)
+	helperMovRegImm(code, dest: X64Register.rax, value: 0)
+	helperStoreIndirect(code, base: X64Register.rcx, disp: 24, src: X64Register.rax)
+
+	// scratch = data[0] & 0xFFFFFFFF.
+	helperLeaStackSlot(code, slotIndex: 54, dest: X64Register.rcx)
+	helperLoadIndirect(code, dest: X64Register.rax, base: X64Register.rcx, disp: 0)
+	code.append(b"\x89\xc0")
+	helperStoreSlot(code, slotIndex: 3, src: X64Register.rax)
+
+	// if (scratch & 0x10) goto set_dir else set_reg.
+	helperLoadSlot(code, slotIndex: 3, dest: X64Register.rax)
+	helperMovRegImm(code, dest: X64Register.rcx, value: 0x10)
+	emitAndRegRegParam(code, dest: X64Register.rax, src: X64Register.rcx)
+	helperTestReg(code, reg: X64Register.rax)
+	// JZ → set_reg, else set_dir.
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 4)
+	helperEmitJmp(code, state: state, targetBlock: 3)
+
+	helperMarkBlock(state, code: code, blockId: 3)
+	// set_dir: scratch = 16384.
+	helperMovRegImm(code, dest: X64Register.rax, value: 16384)
+	helperStoreSlot(code, slotIndex: 3, src: X64Register.rax)
+	helperEmitJmp(code, state: state, targetBlock: 5)
+
+	helperMarkBlock(state, code: code, blockId: 4)
+	// set_reg: scratch = 32768.
+	helperMovRegImm(code, dest: X64Register.rax, value: 32768)
+	helperStoreSlot(code, slotIndex: 3, src: X64Register.rax)
+	helperEmitJmp(code, state: state, targetBlock: 5)
+
+	helperMarkBlock(state, code: code, blockId: 5)
+	// if ((data[0] & 0xFFFFFFFF) & 1) == 0 goto mark_writable else write_mode.
+	helperLeaStackSlot(code, slotIndex: 54, dest: X64Register.rcx)
+	helperLoadIndirect(code, dest: X64Register.rax, base: X64Register.rcx, disp: 0)
+	code.append(b"\x89\xc0")
+	helperMovRegImm(code, dest: X64Register.rcx, value: 1)
+	emitAndRegRegParam(code, dest: X64Register.rax, src: X64Register.rcx)
+	helperTestReg(code, reg: X64Register.rax)
+	// JZ → mark_writable, JNZ → write_mode.
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 6)
+	helperEmitJmp(code, state: state, targetBlock: 7)
+
+	helperMarkBlock(state, code: code, blockId: 6)
+	helperLoadSlot(code, slotIndex: 3, dest: X64Register.rax)
+	helperMovRegImm(code, dest: X64Register.rcx, value: 128)
+	emitOrRegRegParam(code, dest: X64Register.rax, src: X64Register.rcx)
+	helperStoreSlot(code, slotIndex: 3, src: X64Register.rax)
+	helperEmitJmp(code, state: state, targetBlock: 7)
+
+	helperMarkBlock(state, code: code, blockId: 7)
+	// statBuf[24] = slot 3.
+	helperLoadSlot(code, slotIndex: 1, dest: X64Register.rcx)
+	helperLoadSlot(code, slotIndex: 3, dest: X64Register.rax)
+	helperStoreIndirect(code, base: X64Register.rcx, disp: 24, src: X64Register.rax)
+
+	// size = (data[28]u32 << 32) | (data[32]u32).
+	helperLeaStackSlot(code, slotIndex: 54, dest: X64Register.rcx)
+	helperLoadIndirect(code, dest: X64Register.rax, base: X64Register.rcx, disp: 28)
+	code.append(b"\x89\xc0")
+	helperMovRegImm(code, dest: X64Register.rdx, value: 32)
+	// shl rax, cl (rdx -> cl) — actually we need to mov rcx, rdx then shl rax, cl.
+	emitMovRegRegOp(code, dest: X64Register.rcx, src: X64Register.rdx)
+	emitShlRegClParam(code, reg: X64Register.rax)
+	helperStoreSlot(code, slotIndex: 3, src: X64Register.rax)
+
+	helperLeaStackSlot(code, slotIndex: 54, dest: X64Register.rcx)
+	helperLoadIndirect(code, dest: X64Register.rax, base: X64Register.rcx, disp: 32)
+	code.append(b"\x89\xc0")
+	helperLoadSlot(code, slotIndex: 3, dest: X64Register.rcx)
+	emitOrRegRegParam(code, dest: X64Register.rax, src: X64Register.rcx)
+	helperLoadSlot(code, slotIndex: 1, dest: X64Register.rcx)
+	helperStoreIndirect(code, base: X64Register.rcx, disp: 48, src: X64Register.rax)
+
+	// mtime: data[20] (qword) - 116444736000000000 / 10000000 → statBuf[88].
+	helperLeaStackSlot(code, slotIndex: 54, dest: X64Register.rcx)
+	helperLoadIndirect(code, dest: X64Register.rax, base: X64Register.rcx, disp: 20)
+	helperMovRegImm(code, dest: X64Register.rcx, value: 116444736000000000)
+	emitSubRegRegParam(code, dest: X64Register.rax, src: X64Register.rcx)
+	// Divide by 10000000 — use idiv. Set up: cqo; idiv rcx where rcx=10000000.
+	helperMovRegImm(code, dest: X64Register.rcx, value: 10000000)
+	// cqo: 0x48 0x99.
+	code.append(b"\x48\x99")
+	emitIdivRegOp(code, divisor: X64Register.rcx)
+	helperLoadSlot(code, slotIndex: 1, dest: X64Register.rcx)
+	helperStoreIndirect(code, base: X64Register.rcx, disp: 88, src: X64Register.rax)
+
+	// ctime: data[4] (qword).
+	helperLeaStackSlot(code, slotIndex: 54, dest: X64Register.rcx)
+	helperLoadIndirect(code, dest: X64Register.rax, base: X64Register.rcx, disp: 4)
+	helperMovRegImm(code, dest: X64Register.rcx, value: 116444736000000000)
+	emitSubRegRegParam(code, dest: X64Register.rax, src: X64Register.rcx)
+	helperMovRegImm(code, dest: X64Register.rcx, value: 10000000)
+	code.append(b"\x48\x99")
+	emitIdivRegOp(code, divisor: X64Register.rcx)
+	helperLoadSlot(code, slotIndex: 1, dest: X64Register.rcx)
+	helperStoreIndirect(code, base: X64Register.rcx, disp: 104, src: X64Register.rax)
+
+	// atime: data[12] (qword).
+	helperLeaStackSlot(code, slotIndex: 54, dest: X64Register.rcx)
+	helperLoadIndirect(code, dest: X64Register.rax, base: X64Register.rcx, disp: 12)
+	helperMovRegImm(code, dest: X64Register.rcx, value: 116444736000000000)
+	emitSubRegRegParam(code, dest: X64Register.rax, src: X64Register.rcx)
+	helperMovRegImm(code, dest: X64Register.rcx, value: 10000000)
+	code.append(b"\x48\x99")
+	emitIdivRegOp(code, divisor: X64Register.rcx)
+	helperLoadSlot(code, slotIndex: 1, dest: X64Register.rcx)
+	helperStoreIndirect(code, base: X64Register.rcx, disp: 72, src: X64Register.rax)
+
+	helperReturnImm(code, value: 0)
+
+	helperFinalize(state, code: code)
+end 'emitX64Win32Stat'
+
+// =============================================================================
+// 10. mrt_win32_getcwd(bufPtr, bufSize)
+// Stack:
+//   slot 0 = buf
+//   slot 1 = bufSize
+//   slot 2 = GetCurrentDirectoryW wchar count
+//   slot 3 = WideCharToMultiByte byte count
+//   slots 11..267 = wide buffer
+// Block plan:
+//   0: entry
+//   1: check_too_big
+//   2: fail
+//   3: fail_oversized
+//   4: convert
+//   5: nul_terminate
+// =============================================================================
+function emitX64Win32Getcwd(code ByteArray, relocations RelocationArray, callFixups CallFixupArray, funcLabelNames StringArray, funcLabelOffsets CodeOffsetArray, funcLabelOffsetMap CodeLabelOffsetMap)
+	let helperStart = code.count()
+	recordLabel(funcLabelNames, labelOffsets: funcLabelOffsets, labelOffsetMap: funcLabelOffsetMap, name: "mrt_win32_getcwd", offset: helperStart)
+
+	// WideCharToMultiByte = 8 args → 32 + 4*8 = 64.
+	let frameSize = 2208
+	var state = Win32HelperState.create(6, outgoingBytes: 64, localBytes: 2144)
+
+	helperPrologue(code, frameSize: frameSize)
+
+	helperMarkBlock(state, code: code, blockId: 0)
+	helperStoreSlot(code, slotIndex: 0, src: X64Register.rcx)
+	helperStoreSlot(code, slotIndex: 1, src: X64Register.rdx)
+
+	// GetCurrentDirectoryW(1024, &wide).
+	helperMovRegImm(code, dest: X64Register.rcx, value: 1024)
+	helperLeaStackSlot(code, slotIndex: 267, dest: X64Register.rdx)
+	helperEmitIatCall(code, relocations: relocations, slotIndex: iatSlotIndex(IatSlot.getCurrentDirectoryW))
+	helperStoreSlot(code, slotIndex: 2, src: X64Register.rax)
+
+	helperLoadSlot(code, slotIndex: 2, dest: X64Register.rax)
+	helperTestReg(code, reg: X64Register.rax)
+	// JZ → fail.
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 2)
+	helperEmitJmp(code, state: state, targetBlock: 1)
+
+	helperMarkBlock(state, code: code, blockId: 1)
+	helperLoadSlot(code, slotIndex: 2, dest: X64Register.rax)
+	helperCmpRegImm(code, reg: X64Register.rax, value: 1024)
+	// JG (signed greater) → fail_oversized.
+	helperEmitCondJump(code, state: state, opcode: 0x8F, targetBlock: 3)
+	helperEmitJmp(code, state: state, targetBlock: 4)
+
+	helperMarkBlock(state, code: code, blockId: 2)
+	helperEmitDirectCall(code, callFixups: callFixups, target: "mrt_win32_translate_lasterror")
+	helperEpilogue(code)
+
+	helperMarkBlock(state, code: code, blockId: 3)
+	helperReturnImm(code, value: -36)
+
+	helperMarkBlock(state, code: code, blockId: 4)
+	// WideCharToMultiByte(65001, 0, &wide, wcharLen, buf, bufSize-1, NULL, NULL).
+	helperMovRegImm(code, dest: X64Register.rcx, value: 65001)
+	helperMovRegImm(code, dest: X64Register.rdx, value: 0)
+	helperLeaStackSlot(code, slotIndex: 267, dest: X64Register.r8)
+	helperLoadSlot(code, slotIndex: 2, dest: X64Register.r9)
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.rax)
+	emitMovRspOffsetReg(code, offset: 32, srcReg: X64Register.rax)
+	helperLoadSlot(code, slotIndex: 1, dest: X64Register.rax)
+	emitSubRegImmParam(code, dest: X64Register.rax, value: 1)
+	emitMovRspOffsetReg(code, offset: 40, srcReg: X64Register.rax)
+	helperMovRegImm(code, dest: X64Register.rax, value: 0)
+	emitMovRspOffsetReg(code, offset: 48, srcReg: X64Register.rax)
+	emitMovRspOffsetReg(code, offset: 56, srcReg: X64Register.rax)
+	helperEmitIatCall(code, relocations: relocations, slotIndex: iatSlotIndex(IatSlot.wideCharToMultiByte))
+	helperStoreSlot(code, slotIndex: 3, src: X64Register.rax)
+
+	helperLoadSlot(code, slotIndex: 3, dest: X64Register.rax)
+	helperTestReg(code, reg: X64Register.rax)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 2)
+	helperEmitJmp(code, state: state, targetBlock: 5)
+
+	helperMarkBlock(state, code: code, blockId: 5)
+	// buf[byteCount] = 0.
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.rcx)
+	helperLoadSlot(code, slotIndex: 3, dest: X64Register.rax)
+	emitAddRegRegParam(code, dest: X64Register.rcx, src: X64Register.rax)
+	helperMovRegImm(code, dest: X64Register.rax, value: 0)
+	helperStoreByteRcx(code, base: X64Register.rcx, disp: 0, src: X64Register.rax)
+	// return buf.
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.r8)
+	helperEpilogue(code)
+
+	helperFinalize(state, code: code)
+end 'emitX64Win32Getcwd'
+
+// =============================================================================
+// 11. mrt_win32_open(cstr, flags, fileMode)
+// rcx=cstr, rdx=flags, rax=fileMode (ignored).
+// See runtime.std body for full details. Block plan:
+//   0: entry
+//   1: invalid_path  (-> ret -22)
+//   2: check_dir_flag
+//   3: file_branch
+//   4: file_read
+//   5: file_write
+//   6: after_createfile
+//   7: file_fail
+//   8: file_ok
+//   9: dir_branch
+//  10: dir_fail
+//  11: dir_ok
+// =============================================================================
+function emitX64Win32Open(code ByteArray, relocations RelocationArray, callFixups CallFixupArray, funcLabelNames StringArray, funcLabelOffsets CodeOffsetArray, funcLabelOffsetMap CodeLabelOffsetMap)
+	let helperStart = code.count()
+	recordLabel(funcLabelNames, labelOffsets: funcLabelOffsets, labelOffsetMap: funcLabelOffsetMap, name: "mrt_win32_open", offset: helperStart)
+
+	// CreateFileW = 7 args → 32 + 24 = 56, aligned 64. Outgoing = 64.
+	let frameSize = 2208
+	var state = Win32HelperState.create(12, outgoingBytes: 64, localBytes: 2144)
+
+	helperPrologue(code, frameSize: frameSize)
+
+	helperMarkBlock(state, code: code, blockId: 0)
+	helperStoreSlot(code, slotIndex: 0, src: X64Register.rcx)
+	helperStoreSlot(code, slotIndex: 1, src: X64Register.rdx)
+	// param 2 (rax) is ignored.
+
+	// MultiByteToWideChar(65001, 0, cstr, -1, &wide[267], 1024).
+	helperMovRegImm(code, dest: X64Register.rcx, value: 65001)
+	helperMovRegImm(code, dest: X64Register.rdx, value: 0)
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.r8)
+	helperMovRegImm(code, dest: X64Register.r9, value: -1)
+	helperLeaStackSlot(code, slotIndex: 267, dest: X64Register.rax)
+	emitMovRspOffsetReg(code, offset: 32, srcReg: X64Register.rax)
+	helperMovRegImm(code, dest: X64Register.rax, value: 1024)
+	emitMovRspOffsetReg(code, offset: 40, srcReg: X64Register.rax)
+	helperEmitIatCall(code, relocations: relocations, slotIndex: iatSlotIndex(IatSlot.multiByteToWideChar))
+	helperStoreSlot(code, slotIndex: 5, src: X64Register.rax)
+
+	helperLoadSlot(code, slotIndex: 5, dest: X64Register.rax)
+	helperTestReg(code, reg: X64Register.rax)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 1)
+	helperEmitJmp(code, state: state, targetBlock: 2)
+
+	helperMarkBlock(state, code: code, blockId: 1)
+	helperReturnImm(code, value: -22)
+
+	helperMarkBlock(state, code: code, blockId: 2)
+	// if (flags & 65536) goto dir_branch else file_branch.
+	helperLoadSlot(code, slotIndex: 1, dest: X64Register.rax)
+	helperMovRegImm(code, dest: X64Register.rcx, value: 65536)
+	emitAndRegRegParam(code, dest: X64Register.rax, src: X64Register.rcx)
+	helperTestReg(code, reg: X64Register.rax)
+	// JZ → file_branch, JNZ → dir_branch.
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 3)
+	helperEmitJmp(code, state: state, targetBlock: 9)
+
+	helperMarkBlock(state, code: code, blockId: 3)
+	// if (flags & 1) → file_write, else file_read.
+	helperLoadSlot(code, slotIndex: 1, dest: X64Register.rax)
+	helperMovRegImm(code, dest: X64Register.rcx, value: 1)
+	emitAndRegRegParam(code, dest: X64Register.rax, src: X64Register.rcx)
+	helperTestReg(code, reg: X64Register.rax)
+	// JZ → file_read.
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 4)
+	helperEmitJmp(code, state: state, targetBlock: 5)
+
+	helperMarkBlock(state, code: code, blockId: 4)
+	// CreateFileW(path, GENERIC_READ=0x80000000, FILE_SHARE_READ=1, NULL, OPEN_EXISTING=3, FILE_ATTRIBUTE_NORMAL=0x80, NULL).
+	helperLeaStackSlot(code, slotIndex: 267, dest: X64Register.rcx)
+	helperMovRegImm(code, dest: X64Register.rdx, value: 0x80000000)
+	helperMovRegImm(code, dest: X64Register.r8, value: 1)
+	helperMovRegImm(code, dest: X64Register.r9, value: 0)
+	helperMovRegImm(code, dest: X64Register.rax, value: 3)
+	emitMovRspOffsetReg(code, offset: 32, srcReg: X64Register.rax)
+	helperMovRegImm(code, dest: X64Register.rax, value: 0x80)
+	emitMovRspOffsetReg(code, offset: 40, srcReg: X64Register.rax)
+	helperMovRegImm(code, dest: X64Register.rax, value: 0)
+	emitMovRspOffsetReg(code, offset: 48, srcReg: X64Register.rax)
+	helperEmitIatCall(code, relocations: relocations, slotIndex: iatSlotIndex(IatSlot.createFileW))
+	helperStoreSlot(code, slotIndex: 3, src: X64Register.rax)
+	helperEmitJmp(code, state: state, targetBlock: 6)
+
+	helperMarkBlock(state, code: code, blockId: 5)
+	// CreateFileW(path, GENERIC_WRITE=0x40000000, 0, NULL, CREATE_ALWAYS=2, FILE_ATTRIBUTE_NORMAL=0x80, NULL).
+	helperLeaStackSlot(code, slotIndex: 267, dest: X64Register.rcx)
+	helperMovRegImm(code, dest: X64Register.rdx, value: 0x40000000)
+	helperMovRegImm(code, dest: X64Register.r8, value: 0)
+	helperMovRegImm(code, dest: X64Register.r9, value: 0)
+	helperMovRegImm(code, dest: X64Register.rax, value: 2)
+	emitMovRspOffsetReg(code, offset: 32, srcReg: X64Register.rax)
+	helperMovRegImm(code, dest: X64Register.rax, value: 0x80)
+	emitMovRspOffsetReg(code, offset: 40, srcReg: X64Register.rax)
+	helperMovRegImm(code, dest: X64Register.rax, value: 0)
+	emitMovRspOffsetReg(code, offset: 48, srcReg: X64Register.rax)
+	helperEmitIatCall(code, relocations: relocations, slotIndex: iatSlotIndex(IatSlot.createFileW))
+	helperStoreSlot(code, slotIndex: 3, src: X64Register.rax)
+	helperEmitJmp(code, state: state, targetBlock: 6)
+
+	helperMarkBlock(state, code: code, blockId: 6)
+	// if HANDLE == -1 → file_fail else file_ok.
+	helperLoadSlot(code, slotIndex: 3, dest: X64Register.rax)
+	helperCmpRegImm(code, reg: X64Register.rax, value: -1)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 7)
+	helperEmitJmp(code, state: state, targetBlock: 8)
+
+	helperMarkBlock(state, code: code, blockId: 7)
+	helperEmitDirectCall(code, callFixups: callFixups, target: "mrt_win32_translate_lasterror")
+	helperEpilogue(code)
+
+	helperMarkBlock(state, code: code, blockId: 8)
+	// Allocate 16-byte wrapper: rcx = 16; call mrt_alloc. Result in r8.
+	helperMovRegImm(code, dest: X64Register.rcx, value: 16)
+	helperEmitDirectCall(code, callFixups: callFixups, target: "mrt_alloc")
+	// r8 = wrapper pointer; move to rax for storeSlot 2.
+	emitMovRegRegOp(code, dest: X64Register.rax, src: X64Register.r8)
+	helperStoreSlot(code, slotIndex: 2, src: X64Register.rax)
+	// wrapper[0] = 0, wrapper[8] = HANDLE.
+	helperLoadSlot(code, slotIndex: 2, dest: X64Register.rcx)
+	helperMovRegImm(code, dest: X64Register.rax, value: 0)
+	helperStoreIndirect(code, base: X64Register.rcx, disp: 0, src: X64Register.rax)
+	helperLoadSlot(code, slotIndex: 3, dest: X64Register.rax)
+	helperStoreIndirect(code, base: X64Register.rcx, disp: 8, src: X64Register.rax)
+	helperLoadSlot(code, slotIndex: 2, dest: X64Register.r8)
+	helperEpilogue(code)
+
+	helperMarkBlock(state, code: code, blockId: 9)
+	// Allocate 616-byte wrapper.
+	helperMovRegImm(code, dest: X64Register.rcx, value: 616)
+	helperEmitDirectCall(code, callFixups: callFixups, target: "mrt_alloc")
+	emitMovRegRegOp(code, dest: X64Register.rax, src: X64Register.r8)
+	helperStoreSlot(code, slotIndex: 2, src: X64Register.rax)
+
+	// FindFirstFileW(pattern=&wide[267], &wrapper[24]).
+	helperLeaStackSlot(code, slotIndex: 267, dest: X64Register.rcx)
+	helperLoadSlot(code, slotIndex: 2, dest: X64Register.rdx)
+	emitAddRegImmParam(code, dest: X64Register.rdx, value: 24)
+	helperEmitIatCall(code, relocations: relocations, slotIndex: iatSlotIndex(IatSlot.findFirstFileW))
+	helperStoreSlot(code, slotIndex: 3, src: X64Register.rax)
+
+	helperLoadSlot(code, slotIndex: 3, dest: X64Register.rax)
+	helperCmpRegImm(code, reg: X64Register.rax, value: -1)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 10)
+	helperEmitJmp(code, state: state, targetBlock: 11)
+
+	helperMarkBlock(state, code: code, blockId: 10)
+	// mm_decref(wrapper); return translate_lasterror.
+	helperLoadSlot(code, slotIndex: 2, dest: X64Register.rcx)
+	helperEmitDirectCall(code, callFixups: callFixups, target: "mm_decref")
+	helperEmitDirectCall(code, callFixups: callFixups, target: "mrt_win32_translate_lasterror")
+	helperEpilogue(code)
+
+	helperMarkBlock(state, code: code, blockId: 11)
+	// wrapper[0] = 1, wrapper[8] = HANDLE, wrapper[16] = 1.
+	helperLoadSlot(code, slotIndex: 2, dest: X64Register.rcx)
+	helperMovRegImm(code, dest: X64Register.rax, value: 1)
+	helperStoreIndirect(code, base: X64Register.rcx, disp: 0, src: X64Register.rax)
+	helperLoadSlot(code, slotIndex: 3, dest: X64Register.rax)
+	helperStoreIndirect(code, base: X64Register.rcx, disp: 8, src: X64Register.rax)
+	helperMovRegImm(code, dest: X64Register.rax, value: 1)
+	helperStoreIndirect(code, base: X64Register.rcx, disp: 16, src: X64Register.rax)
+	helperLoadSlot(code, slotIndex: 2, dest: X64Register.r8)
+	helperEpilogue(code)
+
+	helperFinalize(state, code: code)
+end 'emitX64Win32Open'
+
+// =============================================================================
+// 12. mrt_win32_getdents64(wrapper, buf, bufSize)
+// Most complex helper. Iterates FindNextFileW, packs Linux dirent64 entries
+// into caller-supplied buffer.
+// Stack layout per runtime.std:
+//   slot 0 = wrapper
+//   slot 1 = buf
+//   slot 2 = bufSize
+//   slot 3 = cursor
+//   slot 4 = HANDLE
+//   slot 5 = pending flag
+//   slot 6 = FindNextFileW BOOL
+//   slot 7 = utf-8 byte count
+//   slot 8 = reclen
+//   slot 9 = attribute word
+//   slot 10 = name UTF-8 length
+//   slot 11 = entry base (overlaps wide-buffer space but legal — see runtime.std)
+//   stackAddr 267 = UTF-8 scratch buffer
+// Block plan:
+//   0: entry
+//   1: emit_loop
+//   2: call_find_next
+//   3: check_no_more_files
+//   4: end_of_iteration
+//   5: find_next_error
+//   6: mark_pending
+//   7: process_entry
+//   8: maybe_single_dot
+//   9: check_double_dot
+//  10: maybe_double_dot
+//  11: check_second_dot
+//  12: consume_entry
+//  13: emit_entry
+//  14: return_partial
+//  15: write_entry
+//  16: set_dir_type
+//  17: set_reg_type
+//  18: copy_name
+// =============================================================================
+function emitX64Win32Getdents64(code ByteArray, relocations RelocationArray, callFixups CallFixupArray, funcLabelNames StringArray, funcLabelOffsets CodeOffsetArray, funcLabelOffsetMap CodeLabelOffsetMap)
+	let helperStart = code.count()
+	recordLabel(funcLabelNames, labelOffsets: funcLabelOffsets, labelOffsetMap: funcLabelOffsetMap, name: "mrt_win32_getdents64", offset: helperStart)
+
+	// WideCharToMultiByte = 8 args → outgoing 64. Frame: 2144 + 64 = 2208.
+	let frameSize = 2208
+	var state = Win32HelperState.create(19, outgoingBytes: 64, localBytes: 2144)
+
+	helperPrologue(code, frameSize: frameSize)
+
+	helperMarkBlock(state, code: code, blockId: 0)
+	helperStoreSlot(code, slotIndex: 0, src: X64Register.rcx)
+	helperStoreSlot(code, slotIndex: 1, src: X64Register.rdx)
+	helperStoreSlot(code, slotIndex: 2, src: X64Register.rax)
+
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.rcx)
+	helperLoadIndirect(code, dest: X64Register.rax, base: X64Register.rcx, disp: 8)
+	helperStoreSlot(code, slotIndex: 4, src: X64Register.rax)
+
+	helperMovRegImm(code, dest: X64Register.rax, value: 0)
+	helperStoreSlot(code, slotIndex: 3, src: X64Register.rax)
+	helperEmitJmp(code, state: state, targetBlock: 1)
+
+	// Block 1: emit_loop.
+	helperMarkBlock(state, code: code, blockId: 1)
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.rcx)
+	helperLoadIndirect(code, dest: X64Register.rax, base: X64Register.rcx, disp: 16)
+	helperStoreSlot(code, slotIndex: 5, src: X64Register.rax)
+	helperLoadSlot(code, slotIndex: 5, dest: X64Register.rax)
+	helperCmpRegImm(code, reg: X64Register.rax, value: 1)
+	// JE → process_entry (block 7).
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 7)
+	helperEmitJmp(code, state: state, targetBlock: 2)
+
+	// Block 2: call_find_next.
+	helperMarkBlock(state, code: code, blockId: 2)
+	helperLoadSlot(code, slotIndex: 4, dest: X64Register.rcx)
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.rdx)
+	emitAddRegImmParam(code, dest: X64Register.rdx, value: 24)
+	helperEmitIatCall(code, relocations: relocations, slotIndex: iatSlotIndex(IatSlot.findNextFileW))
+	helperStoreSlot(code, slotIndex: 6, src: X64Register.rax)
+
+	helperLoadSlot(code, slotIndex: 6, dest: X64Register.rax)
+	helperTestReg(code, reg: X64Register.rax)
+	// JZ → check_no_more_files, JNZ → mark_pending.
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 3)
+	helperEmitJmp(code, state: state, targetBlock: 6)
+
+	// Block 3: check_no_more_files.
+	helperMarkBlock(state, code: code, blockId: 3)
+	helperEmitIatCall(code, relocations: relocations, slotIndex: iatSlotIndex(IatSlot.getLastError))
+	// mask to 32 bits.
+	code.append(b"\x89\xc0")
+	helperCmpRegImm(code, reg: X64Register.rax, value: 18)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 4)
+	helperEmitJmp(code, state: state, targetBlock: 5)
+
+	// Block 4: end_of_iteration.
+	helperMarkBlock(state, code: code, blockId: 4)
+	helperLoadSlot(code, slotIndex: 3, dest: X64Register.r8)
+	helperEpilogue(code)
+
+	// Block 5: find_next_error.
+	helperMarkBlock(state, code: code, blockId: 5)
+	helperEmitDirectCall(code, callFixups: callFixups, target: "mrt_win32_translate_lasterror")
+	helperEpilogue(code)
+
+	// Block 6: mark_pending.
+	helperMarkBlock(state, code: code, blockId: 6)
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.rcx)
+	helperMovRegImm(code, dest: X64Register.rax, value: 1)
+	helperStoreIndirect(code, base: X64Register.rcx, disp: 16, src: X64Register.rax)
+	helperEmitJmp(code, state: state, targetBlock: 7)
+
+	// Block 7: process_entry.
+	helperMarkBlock(state, code: code, blockId: 7)
+	// WideCharToMultiByte(65001, 0, &wrapper[68], -1, &scratch[267], 1024, 0, 0).
+	helperMovRegImm(code, dest: X64Register.rcx, value: 65001)
+	helperMovRegImm(code, dest: X64Register.rdx, value: 0)
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.r8)
+	emitAddRegImmParam(code, dest: X64Register.r8, value: 68)
+	helperMovRegImm(code, dest: X64Register.r9, value: -1)
+	helperLeaStackSlot(code, slotIndex: 267, dest: X64Register.rax)
+	emitMovRspOffsetReg(code, offset: 32, srcReg: X64Register.rax)
+	helperMovRegImm(code, dest: X64Register.rax, value: 1024)
+	emitMovRspOffsetReg(code, offset: 40, srcReg: X64Register.rax)
+	helperMovRegImm(code, dest: X64Register.rax, value: 0)
+	emitMovRspOffsetReg(code, offset: 48, srcReg: X64Register.rax)
+	emitMovRspOffsetReg(code, offset: 56, srcReg: X64Register.rax)
+	helperEmitIatCall(code, relocations: relocations, slotIndex: iatSlotIndex(IatSlot.wideCharToMultiByte))
+	helperStoreSlot(code, slotIndex: 7, src: X64Register.rax)
+
+	// if slot 7 == 2 → maybe_single_dot else check_double_dot.
+	helperLoadSlot(code, slotIndex: 7, dest: X64Register.rax)
+	helperCmpRegImm(code, reg: X64Register.rax, value: 2)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 8)
+	helperEmitJmp(code, state: state, targetBlock: 9)
+
+	// Block 8: maybe_single_dot.
+	helperMarkBlock(state, code: code, blockId: 8)
+	helperLeaStackSlot(code, slotIndex: 267, dest: X64Register.rcx)
+	helperLoadByte(code, dest: X64Register.rax, base: X64Register.rcx, disp: 0)
+	helperCmpRegImm(code, reg: X64Register.rax, value: 46)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 12)
+	helperEmitJmp(code, state: state, targetBlock: 13)
+
+	// Block 9: check_double_dot.
+	helperMarkBlock(state, code: code, blockId: 9)
+	helperLoadSlot(code, slotIndex: 7, dest: X64Register.rax)
+	helperCmpRegImm(code, reg: X64Register.rax, value: 3)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 10)
+	helperEmitJmp(code, state: state, targetBlock: 13)
+
+	// Block 10: maybe_double_dot.
+	helperMarkBlock(state, code: code, blockId: 10)
+	helperLeaStackSlot(code, slotIndex: 267, dest: X64Register.rcx)
+	helperLoadByte(code, dest: X64Register.rax, base: X64Register.rcx, disp: 0)
+	helperCmpRegImm(code, reg: X64Register.rax, value: 46)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 11)
+	helperEmitJmp(code, state: state, targetBlock: 13)
+
+	// Block 11: check_second_dot.
+	helperMarkBlock(state, code: code, blockId: 11)
+	helperLeaStackSlot(code, slotIndex: 267, dest: X64Register.rcx)
+	helperLoadByte(code, dest: X64Register.rax, base: X64Register.rcx, disp: 1)
+	helperCmpRegImm(code, reg: X64Register.rax, value: 46)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 12)
+	helperEmitJmp(code, state: state, targetBlock: 13)
+
+	// Block 12: consume_entry — wrapper[16] = 0; jump to emit_loop.
+	helperMarkBlock(state, code: code, blockId: 12)
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.rcx)
+	helperMovRegImm(code, dest: X64Register.rax, value: 0)
+	helperStoreIndirect(code, base: X64Register.rcx, disp: 16, src: X64Register.rax)
+	helperEmitJmp(code, state: state, targetBlock: 1)
+
+	// Block 13: emit_entry.
+	helperMarkBlock(state, code: code, blockId: 13)
+	// nameLen = byteCount - 1.
+	helperLoadSlot(code, slotIndex: 7, dest: X64Register.rax)
+	emitSubRegImmParam(code, dest: X64Register.rax, value: 1)
+	helperStoreSlot(code, slotIndex: 10, src: X64Register.rax)
+	// reclen = ((nameLen + 20) + 7) & ~7.
+	helperLoadSlot(code, slotIndex: 10, dest: X64Register.rax)
+	emitAddRegImmParam(code, dest: X64Register.rax, value: 27)
+	helperMovRegImm(code, dest: X64Register.rcx, value: -8)
+	emitAndRegRegParam(code, dest: X64Register.rax, src: X64Register.rcx)
+	helperStoreSlot(code, slotIndex: 8, src: X64Register.rax)
+
+	// if (cursor + reclen > bufSize) → return_partial.
+	helperLoadSlot(code, slotIndex: 3, dest: X64Register.rax)
+	helperLoadSlot(code, slotIndex: 8, dest: X64Register.rcx)
+	emitAddRegRegParam(code, dest: X64Register.rax, src: X64Register.rcx)
+	helperLoadSlot(code, slotIndex: 2, dest: X64Register.rcx)
+	emitCmpRegRegOp(code, lhs: X64Register.rax, rhs: X64Register.rcx)
+	// JG (signed) → return_partial.
+	helperEmitCondJump(code, state: state, opcode: 0x8F, targetBlock: 14)
+	helperEmitJmp(code, state: state, targetBlock: 15)
+
+	// Block 14: return_partial — return cursor.
+	helperMarkBlock(state, code: code, blockId: 14)
+	helperLoadSlot(code, slotIndex: 3, dest: X64Register.r8)
+	helperEpilogue(code)
+
+	// Block 15: write_entry.
+	helperMarkBlock(state, code: code, blockId: 15)
+	// entry = buf + cursor → slot 11.
+	helperLoadSlot(code, slotIndex: 1, dest: X64Register.rax)
+	helperLoadSlot(code, slotIndex: 3, dest: X64Register.rcx)
+	emitAddRegRegParam(code, dest: X64Register.rax, src: X64Register.rcx)
+	helperStoreSlot(code, slotIndex: 11, src: X64Register.rax)
+
+	// entry[0] = 0; entry[8] = 0; entry[16] = reclen.
+	helperLoadSlot(code, slotIndex: 11, dest: X64Register.rcx)
+	helperMovRegImm(code, dest: X64Register.rax, value: 0)
+	helperStoreIndirect(code, base: X64Register.rcx, disp: 0, src: X64Register.rax)
+	helperStoreIndirect(code, base: X64Register.rcx, disp: 8, src: X64Register.rax)
+	helperLoadSlot(code, slotIndex: 8, dest: X64Register.rax)
+	helperStoreIndirect(code, base: X64Register.rcx, disp: 16, src: X64Register.rax)
+
+	// attribute = wrapper[24] & 0xFFFFFFFF.
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.rcx)
+	helperLoadIndirect(code, dest: X64Register.rax, base: X64Register.rcx, disp: 24)
+	code.append(b"\x89\xc0")
+	helperStoreSlot(code, slotIndex: 9, src: X64Register.rax)
+	// if (attribute & 0x10) → set_dir_type else set_reg_type.
+	helperLoadSlot(code, slotIndex: 9, dest: X64Register.rax)
+	helperMovRegImm(code, dest: X64Register.rcx, value: 0x10)
+	emitAndRegRegParam(code, dest: X64Register.rax, src: X64Register.rcx)
+	helperTestReg(code, reg: X64Register.rax)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 17)
+	helperEmitJmp(code, state: state, targetBlock: 16)
+
+	// Block 16: set_dir_type — entry[18] = 4.
+	helperMarkBlock(state, code: code, blockId: 16)
+	helperLoadSlot(code, slotIndex: 11, dest: X64Register.rcx)
+	helperMovRegImm(code, dest: X64Register.rax, value: 4)
+	helperStoreByteRcx(code, base: X64Register.rcx, disp: 18, src: X64Register.rax)
+	helperEmitJmp(code, state: state, targetBlock: 18)
+
+	// Block 17: set_reg_type — entry[18] = 8.
+	helperMarkBlock(state, code: code, blockId: 17)
+	helperLoadSlot(code, slotIndex: 11, dest: X64Register.rcx)
+	helperMovRegImm(code, dest: X64Register.rax, value: 8)
+	helperStoreByteRcx(code, base: X64Register.rcx, disp: 18, src: X64Register.rax)
+	helperEmitJmp(code, state: state, targetBlock: 18)
+
+	// Block 18: copy_name.
+	helperMarkBlock(state, code: code, blockId: 18)
+	// memcpy(entry+19, scratch, nameLen).
+	helperLoadSlot(code, slotIndex: 11, dest: X64Register.rdi)
+	emitAddRegImmParam(code, dest: X64Register.rdi, value: 19)
+	helperLeaStackSlot(code, slotIndex: 267, dest: X64Register.rsi)
+	helperLoadSlot(code, slotIndex: 10, dest: X64Register.rcx)
+	// rep movsb.
+	code.append(b"\xf3\xa4")
+
+	// entry[19+nameLen] = 0.
+	helperLoadSlot(code, slotIndex: 11, dest: X64Register.rcx)
+	emitAddRegImmParam(code, dest: X64Register.rcx, value: 19)
+	helperLoadSlot(code, slotIndex: 10, dest: X64Register.rax)
+	emitAddRegRegParam(code, dest: X64Register.rcx, src: X64Register.rax)
+	helperMovRegImm(code, dest: X64Register.rax, value: 0)
+	helperStoreByteRcx(code, base: X64Register.rcx, disp: 0, src: X64Register.rax)
+
+	// cursor += reclen.
+	helperLoadSlot(code, slotIndex: 3, dest: X64Register.rax)
+	helperLoadSlot(code, slotIndex: 8, dest: X64Register.rcx)
+	emitAddRegRegParam(code, dest: X64Register.rax, src: X64Register.rcx)
+	helperStoreSlot(code, slotIndex: 3, src: X64Register.rax)
+
+	// wrapper[16] = 0.
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.rcx)
+	helperMovRegImm(code, dest: X64Register.rax, value: 0)
+	helperStoreIndirect(code, base: X64Register.rcx, disp: 16, src: X64Register.rax)
+
+	helperEmitJmp(code, state: state, targetBlock: 1)
+
+	helperFinalize(state, code: code)
+end 'emitX64Win32Getdents64'
+
+// =============================================================================
+// 13. mrt_win32_get_argc — 0 args, returns argc.
+//
+// Lazy-initialized cache. First call:
+//   1. GetCommandLineW (IAT 12) → LPCWSTR
+//   2. CommandLineToArgvW(cmdLine, &argc) (IAT 29) → LPWSTR*; argc in out-param
+//   3. Store argc into `__mrt_win32_argc` global.
+//   4. mrt_alloc(argc*8) → store into `__mrt_win32_argv_cache_ptr`.
+//   5. For i in 0..argc:
+//        - wstr = wargv[i]
+//        - byteSize = WideCharToMultiByte(CP_UTF8, 0, wstr, -1, NULL, 0, NULL, NULL) (IAT 14)
+//        - utf8buf = mrt_alloc(byteSize)
+//        - argv_cache_ptr[i*8] = utf8buf
+//        - WideCharToMultiByte(CP_UTF8, 0, wstr, -1, utf8buf, byteSize, NULL, NULL) (IAT 14)
+//   6. LocalFree(wargv) (IAT 13)
+//   7. Set `__mrt_win32_argv_init_done` = 1.
+//
+// Subsequent calls: short-circuit on the init flag and return cached argc.
+//
+// Stack:
+//   slot 0 = cmdLineW       (LPCWSTR from GetCommandLineW)
+//   slot 1 = argc           (out-param for CommandLineToArgvW; also holds final argc)
+//   slot 2 = wargv          (LPWSTR* from CommandLineToArgvW)
+//   slot 3 = i              (loop index)
+//   slot 4 = byteSize       (WideCharToMultiByte query result)
+//   slot 5 = utf8buf        (per-iteration UTF-8 buffer pointer)
+//   slot 6 = wstr           (current wargv[i] pointer)
+//
+// Outgoing: WCTMB has 8 args → 32 shadow + 32 stack = 64 bytes.
+// Frame: 7 slots * 8 = 56 + 64 outgoing = 120, aligned to 16 = 128.
+//
+// Block plan:
+//   0: entry — check init flag; if set, jump to return_cached.
+//   1: do_init — call GetCommandLineW + CommandLineToArgvW + store argc.
+//   2: alloc_argv_array — call mrt_alloc(argc*8).
+//   3: loop_head — if i >= argc, jump to loop_done.
+//   4: loop_body — load wstr, query size, alloc buffer, store in cache, convert.
+//   5: loop_done — LocalFree + set init_done.
+//   6: return_cached — load argc into r8, epilogue.
+// =============================================================================
+function emitX64Win32GetArgc(code ByteArray, relocations RelocationArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, funcLabelNames StringArray, funcLabelOffsets CodeOffsetArray, funcLabelOffsetMap CodeLabelOffsetMap)
+	let helperStart = code.count()
+	recordLabel(funcLabelNames, labelOffsets: funcLabelOffsets, labelOffsetMap: funcLabelOffsetMap, name: "mrt_win32_get_argc", offset: helperStart)
+
+	let frameSize = 128
+	var state = Win32HelperState.create(7, outgoingBytes: 64, localBytes: 56)
+
+	helperPrologue(code, frameSize: frameSize)
+
+	// Block 0: check init flag.
+	helperMarkBlock(state, code: code, blockId: 0)
+	helperLoadGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.rax, name: "__mrt_win32_argv_init_done")
+	helperTestReg(code, reg: X64Register.rax)
+	// JNZ → return_cached.
+	helperEmitCondJump(code, state: state, opcode: 0x85, targetBlock: 6)
+	helperEmitJmp(code, state: state, targetBlock: 1)
+
+	// Block 1: do_init. Call GetCommandLineW (IAT 12) → rax = LPCWSTR.
+	helperMarkBlock(state, code: code, blockId: 1)
+	helperEmitIatCall(code, relocations: relocations, slotIndex: iatSlotIndex(IatSlot.getCommandLineW))
+	helperStoreSlot(code, slotIndex: 0, src: X64Register.rax)
+
+	// CommandLineToArgvW(cmdLine, &argc) (IAT 29 — shell32 slot). rcx=cmdLine, rdx=&argc.
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.rcx)
+	helperLeaStackSlot(code, slotIndex: 1, dest: X64Register.rdx)
+	helperEmitIatCall(code, relocations: relocations, slotIndex: iatSlotIndex(IatSlot.commandLineToArgvW))
+	helperStoreSlot(code, slotIndex: 2, src: X64Register.rax)
+
+	// Store argc to global. CommandLineToArgvW writes a 32-bit int into the
+	// out-param; the upper 32 bits of the 8-byte slot are uninitialized stack
+	// bytes. Mask via `mov eax, eax` (zero-extends 32 → 64) before storing.
+	helperLoadSlot(code, slotIndex: 1, dest: X64Register.rax)
+	code.append(b"\x89\xc0")
+	// Re-write the slot so the rest of the helper can use the 8-byte load
+	// without masking again.
+	helperStoreSlot(code, slotIndex: 1, src: X64Register.rax)
+	helperStoreGlobal(code, rdataRelocs: rdataRelocs, src: X64Register.rax, name: "__mrt_win32_argc")
+	helperEmitJmp(code, state: state, targetBlock: 2)
+
+	// Block 2: alloc argv array (argc * 8 bytes).
+	helperMarkBlock(state, code: code, blockId: 2)
+	helperLoadSlot(code, slotIndex: 1, dest: X64Register.rcx)
+	helperShlRegImm(code, dest: X64Register.rcx, value: 3)
+	helperMovRegImm(code, dest: X64Register.rdx, value: 0)
+	helperMovRegImm(code, dest: X64Register.rax, value: 0)
+	helperEmitDirectCall(code, callFixups: callFixups, target: "mrt_alloc")
+	// r8 = argv array → store as cache_ptr.
+	emitMovRegRegOp(code, dest: X64Register.rax, src: X64Register.r8)
+	helperStoreGlobal(code, rdataRelocs: rdataRelocs, src: X64Register.rax, name: "__mrt_win32_argv_cache_ptr")
+
+	// i = 0.
+	helperMovRegImm(code, dest: X64Register.rax, value: 0)
+	helperStoreSlot(code, slotIndex: 3, src: X64Register.rax)
+	helperEmitJmp(code, state: state, targetBlock: 3)
+
+	// Block 3: loop head — if i >= argc, jump to loop_done.
+	helperMarkBlock(state, code: code, blockId: 3)
+	helperLoadSlot(code, slotIndex: 3, dest: X64Register.rax)
+	helperLoadSlot(code, slotIndex: 1, dest: X64Register.rcx)
+	emitCmpRegRegOp(code, lhs: X64Register.rax, rhs: X64Register.rcx)
+	// JGE (signed greater-or-equal) → loop_done.
+	helperEmitCondJump(code, state: state, opcode: 0x8D, targetBlock: 5)
+	helperEmitJmp(code, state: state, targetBlock: 4)
+
+	// Block 4: loop body.
+	helperMarkBlock(state, code: code, blockId: 4)
+	// wstr = wargv[i] = *(wargv + i*8). Compute address into rcx:
+	helperLoadSlot(code, slotIndex: 3, dest: X64Register.rcx)
+	helperShlRegImm(code, dest: X64Register.rcx, value: 3)
+	helperLoadSlot(code, slotIndex: 2, dest: X64Register.rax)
+	emitAddRegRegParam(code, dest: X64Register.rcx, src: X64Register.rax)
+	// Load *rcx → wstr.
+	helperLoadIndirect(code, dest: X64Register.rax, base: X64Register.rcx, disp: 0)
+	helperStoreSlot(code, slotIndex: 6, src: X64Register.rax)
+
+	// Query UTF-8 byte size:
+	//   WCTMB(CP_UTF8=65001, 0, wstr, -1, NULL, 0, NULL, NULL)
+	helperMovRegImm(code, dest: X64Register.rcx, value: 65001)
+	helperMovRegImm(code, dest: X64Register.rdx, value: 0)
+	helperLoadSlot(code, slotIndex: 6, dest: X64Register.r8)
+	helperMovRegImm(code, dest: X64Register.r9, value: -1)
+	helperMovRegImm(code, dest: X64Register.rax, value: 0)
+	emitMovRspOffsetReg(code, offset: 32, srcReg: X64Register.rax)
+	emitMovRspOffsetReg(code, offset: 40, srcReg: X64Register.rax)
+	emitMovRspOffsetReg(code, offset: 48, srcReg: X64Register.rax)
+	emitMovRspOffsetReg(code, offset: 56, srcReg: X64Register.rax)
+	helperEmitIatCall(code, relocations: relocations, slotIndex: iatSlotIndex(IatSlot.wideCharToMultiByte))
+	// Mask the 32-bit return to a clean 64-bit before stashing.
+	code.append(b"\x89\xc0")
+	helperStoreSlot(code, slotIndex: 4, src: X64Register.rax)
+
+	// Allocate UTF-8 buffer: mrt_alloc(byteSize, 0, 0).
+	helperLoadSlot(code, slotIndex: 4, dest: X64Register.rcx)
+	helperMovRegImm(code, dest: X64Register.rdx, value: 0)
+	helperMovRegImm(code, dest: X64Register.rax, value: 0)
+	helperEmitDirectCall(code, callFixups: callFixups, target: "mrt_alloc")
+	emitMovRegRegOp(code, dest: X64Register.rax, src: X64Register.r8)
+	helperStoreSlot(code, slotIndex: 5, src: X64Register.rax)
+
+	// argv_cache_ptr[i*8] = utf8buf.
+	helperLoadSlot(code, slotIndex: 3, dest: X64Register.rcx)
+	helperShlRegImm(code, dest: X64Register.rcx, value: 3)
+	helperLoadGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.rax, name: "__mrt_win32_argv_cache_ptr")
+	emitAddRegRegParam(code, dest: X64Register.rcx, src: X64Register.rax)
+	helperLoadSlot(code, slotIndex: 5, dest: X64Register.rax)
+	helperStoreIndirect(code, base: X64Register.rcx, disp: 0, src: X64Register.rax)
+
+	// Convert: WCTMB(65001, 0, wstr, -1, utf8buf, byteSize, NULL, NULL).
+	helperMovRegImm(code, dest: X64Register.rcx, value: 65001)
+	helperMovRegImm(code, dest: X64Register.rdx, value: 0)
+	helperLoadSlot(code, slotIndex: 6, dest: X64Register.r8)
+	helperMovRegImm(code, dest: X64Register.r9, value: -1)
+	helperLoadSlot(code, slotIndex: 5, dest: X64Register.rax)
+	emitMovRspOffsetReg(code, offset: 32, srcReg: X64Register.rax)
+	helperLoadSlot(code, slotIndex: 4, dest: X64Register.rax)
+	emitMovRspOffsetReg(code, offset: 40, srcReg: X64Register.rax)
+	helperMovRegImm(code, dest: X64Register.rax, value: 0)
+	emitMovRspOffsetReg(code, offset: 48, srcReg: X64Register.rax)
+	emitMovRspOffsetReg(code, offset: 56, srcReg: X64Register.rax)
+	helperEmitIatCall(code, relocations: relocations, slotIndex: iatSlotIndex(IatSlot.wideCharToMultiByte))
+
+	// i++.
+	helperLoadSlot(code, slotIndex: 3, dest: X64Register.rax)
+	emitAddRegImmParam(code, dest: X64Register.rax, value: 1)
+	helperStoreSlot(code, slotIndex: 3, src: X64Register.rax)
+	helperEmitJmp(code, state: state, targetBlock: 3)
+
+	// Block 5: loop_done — LocalFree(wargv) + set init flag.
+	helperMarkBlock(state, code: code, blockId: 5)
+	helperLoadSlot(code, slotIndex: 2, dest: X64Register.rcx)
+	helperEmitIatCall(code, relocations: relocations, slotIndex: iatSlotIndex(IatSlot.localFree))
+	helperMovRegImm(code, dest: X64Register.rax, value: 1)
+	helperStoreGlobal(code, rdataRelocs: rdataRelocs, src: X64Register.rax, name: "__mrt_win32_argv_init_done")
+	helperEmitJmp(code, state: state, targetBlock: 6)
+
+	// Block 6: return_cached — load argc, move to r8, epilogue.
+	helperMarkBlock(state, code: code, blockId: 6)
+	helperLoadGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.r8, name: "__mrt_win32_argc")
+	helperEpilogue(code)
+
+	helperFinalize(state, code: code)
+end 'emitX64Win32GetArgc'
+
+// =============================================================================
+// 14. mrt_win32_get_argv(index) — returns raw UTF-8 C-string pointer for
+// argv[index], or 0 if index is out of bounds.
+//
+// Lazy-init via direct call to `mrt_win32_get_argc` (which performs the
+// cache build and ignores its return value here). Then:
+//   if (index < 0 || index >= argc) return 0
+//   else return *(argv_cache_ptr + index*8)
+//
+// rcx = index. Returns raw pointer in r8.
+//
+// Stack:
+//   slot 0 = index
+// Outgoing: get_argc has 0 args → 32 shadow.
+// Frame: 1 slot (8) + 32 outgoing = 40, aligned 16 = 48.
+//
+// Block plan:
+//   0: entry — save index, call get_argc.
+//   1: bounds_check — compare index to argc.
+//   2: out_of_bounds (-> ret 0)
+//   3: in_bounds — load argv_cache_ptr[index*8], return.
+// =============================================================================
+function emitX64Win32GetArgv(code ByteArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, funcLabelNames StringArray, funcLabelOffsets CodeOffsetArray, funcLabelOffsetMap CodeLabelOffsetMap)
+	let helperStart = code.count()
+	recordLabel(funcLabelNames, labelOffsets: funcLabelOffsets, labelOffsetMap: funcLabelOffsetMap, name: "mrt_win32_get_argv", offset: helperStart)
+
+	let frameSize = 48
+	var state = Win32HelperState.create(4, outgoingBytes: 32, localBytes: 8)
+
+	helperPrologue(code, frameSize: frameSize)
+
+	// Block 0: save index; call get_argc to ensure cache is built.
+	helperMarkBlock(state, code: code, blockId: 0)
+	helperStoreSlot(code, slotIndex: 0, src: X64Register.rcx)
+	helperEmitDirectCall(code, callFixups: callFixups, target: "mrt_win32_get_argc")
+	helperEmitJmp(code, state: state, targetBlock: 1)
+
+	// Block 1: bounds check. Treat negative index as out-of-bounds; argc is
+	// non-negative, so a signed `index >= argc` comparison covers both
+	// "negative index" and "index >= argc" in one branch (any negative i64
+	// is < 0 <= argc, so the JL below catches negatives too).
+	helperMarkBlock(state, code: code, blockId: 1)
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.rax)
+	helperCmpRegImm(code, reg: X64Register.rax, value: 0)
+	// JL → out_of_bounds.
+	helperEmitCondJump(code, state: state, opcode: 0x8C, targetBlock: 2)
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.rax)
+	helperLoadGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.rcx, name: "__mrt_win32_argc")
+	emitCmpRegRegOp(code, lhs: X64Register.rax, rhs: X64Register.rcx)
+	// JGE → out_of_bounds.
+	helperEmitCondJump(code, state: state, opcode: 0x8D, targetBlock: 2)
+	helperEmitJmp(code, state: state, targetBlock: 3)
+
+	// Block 2: out_of_bounds → return 0.
+	helperMarkBlock(state, code: code, blockId: 2)
+	helperReturnImm(code, value: 0)
+
+	// Block 3: in_bounds — return *(cache_ptr + index*8).
+	helperMarkBlock(state, code: code, blockId: 3)
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.rcx)
+	helperShlRegImm(code, dest: X64Register.rcx, value: 3)
+	helperLoadGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.rax, name: "__mrt_win32_argv_cache_ptr")
+	emitAddRegRegParam(code, dest: X64Register.rcx, src: X64Register.rax)
+	helperLoadIndirect(code, dest: X64Register.r8, base: X64Register.rcx, disp: 0)
+	helperEpilogue(code)
+
+	helperFinalize(state, code: code)
+end 'emitX64Win32GetArgv'
+
+// =============================================================================
+// 15. mrt_win32_get_executable_path(buf, bufSize) — writes UTF-8 path of the
+// running executable into buf; returns bytes written (excluding NUL) or -34
+// (-ERANGE) on truncation.
+//
+// Algorithm:
+//   1. Stack-allocate a 4096-wchar (8192-byte) wide buffer.
+//   2. GetModuleFileNameW(NULL, &wbuf, 4096) (IAT 15) → wcharCount.
+//   3. WCTMB(CP_UTF8, 0, &wbuf, -1, NULL, 0, NULL, NULL) (IAT 14) → utf8ByteSize
+//      (includes trailing NUL).
+//   4. If utf8ByteSize > bufSize, return -34.
+//   5. WCTMB(CP_UTF8, 0, &wbuf, -1, buf, bufSize, NULL, NULL) → bytes written
+//      (including NUL).
+//   6. Return bytesWritten - 1 (excluding the NUL).
+//
+// rcx = buf, rdx = bufSize. Returns count in r8.
+//
+// Stack:
+//   slot 0 = buf
+//   slot 1 = bufSize
+//   slot 2 = utf8ByteSize (size query result)
+//   slots 3..1026 = wide buffer (4096 wchars = 8192 bytes = 1024 slots).
+// Outgoing: WCTMB has 8 args → 64 bytes.
+// Frame: 3*8 + 8192 wide + 64 outgoing = 8280, aligned 16 = 8288.
+//
+// Block plan:
+//   0: entry — save args.
+//   1: get_module — GetModuleFileNameW into wide buf.
+//   2: size_query — WCTMB to learn UTF-8 size.
+//   3: check_fit — if utf8ByteSize > bufSize → too_big.
+//   4: too_big (-> ret -34)
+//   5: convert — WCTMB into caller buf; return bytes-1.
+// =============================================================================
+function emitX64Win32GetExecutablePath(code ByteArray, relocations RelocationArray, funcLabelNames StringArray, funcLabelOffsets CodeOffsetArray, funcLabelOffsetMap CodeLabelOffsetMap)
+	let helperStart = code.count()
+	recordLabel(funcLabelNames, labelOffsets: funcLabelOffsets, labelOffsetMap: funcLabelOffsetMap, name: "mrt_win32_get_executable_path", offset: helperStart)
+
+	// localBytes layout: 3 fixed slots + 1024 wide-buf slots = 1027 * 8 = 8216.
+	let frameSize = 8288
+	let outgoingBytes = 64
+	let localBytes = 8216
+	var state = Win32HelperState.create(6, outgoingBytes: outgoingBytes, localBytes: localBytes)
+
+	helperPrologue(code, frameSize: frameSize)
+
+	// Block 0: save args.
+	helperMarkBlock(state, code: code, blockId: 0)
+	helperStoreSlot(code, slotIndex: 0, src: X64Register.rcx)
+	helperStoreSlot(code, slotIndex: 1, src: X64Register.rdx)
+	helperEmitJmp(code, state: state, targetBlock: 1)
+
+	// Block 1: GetModuleFileNameW(NULL, &wbuf, 4096).
+	helperMarkBlock(state, code: code, blockId: 1)
+	helperMovRegImm(code, dest: X64Register.rcx, value: 0)
+	helperLeaStackSlot(code, slotIndex: 1026, dest: X64Register.rdx)
+	helperMovRegImm(code, dest: X64Register.r8, value: 4096)
+	helperEmitIatCall(code, relocations: relocations, slotIndex: iatSlotIndex(IatSlot.getModuleFileNameW))
+	// We ignore the wide-char count return; WCTMB with cchWideChar=-1 (NUL-
+	// terminated) will measure from the buffer directly.
+	helperEmitJmp(code, state: state, targetBlock: 2)
+
+	// Block 2: query UTF-8 byte size (including trailing NUL).
+	helperMarkBlock(state, code: code, blockId: 2)
+	helperMovRegImm(code, dest: X64Register.rcx, value: 65001)
+	helperMovRegImm(code, dest: X64Register.rdx, value: 0)
+	helperLeaStackSlot(code, slotIndex: 1026, dest: X64Register.r8)
+	helperMovRegImm(code, dest: X64Register.r9, value: -1)
+	helperMovRegImm(code, dest: X64Register.rax, value: 0)
+	emitMovRspOffsetReg(code, offset: 32, srcReg: X64Register.rax)
+	emitMovRspOffsetReg(code, offset: 40, srcReg: X64Register.rax)
+	emitMovRspOffsetReg(code, offset: 48, srcReg: X64Register.rax)
+	emitMovRspOffsetReg(code, offset: 56, srcReg: X64Register.rax)
+	helperEmitIatCall(code, relocations: relocations, slotIndex: iatSlotIndex(IatSlot.wideCharToMultiByte))
+	// WCTMB returns a 32-bit int; mask to a clean 64-bit value before the
+	// signed compare in block 3.
+	code.append(b"\x89\xc0")
+	helperStoreSlot(code, slotIndex: 2, src: X64Register.rax)
+	helperEmitJmp(code, state: state, targetBlock: 3)
+
+	// Block 3: if utf8ByteSize > bufSize → too_big.
+	helperMarkBlock(state, code: code, blockId: 3)
+	helperLoadSlot(code, slotIndex: 2, dest: X64Register.rax)
+	helperLoadSlot(code, slotIndex: 1, dest: X64Register.rcx)
+	emitCmpRegRegOp(code, lhs: X64Register.rax, rhs: X64Register.rcx)
+	// JG (signed greater) → too_big.
+	helperEmitCondJump(code, state: state, opcode: 0x8F, targetBlock: 4)
+	helperEmitJmp(code, state: state, targetBlock: 5)
+
+	// Block 4: too_big.
+	helperMarkBlock(state, code: code, blockId: 4)
+	helperReturnImm(code, value: -34)
+
+	// Block 5: convert into caller buf.
+	helperMarkBlock(state, code: code, blockId: 5)
+	helperMovRegImm(code, dest: X64Register.rcx, value: 65001)
+	helperMovRegImm(code, dest: X64Register.rdx, value: 0)
+	helperLeaStackSlot(code, slotIndex: 1026, dest: X64Register.r8)
+	helperMovRegImm(code, dest: X64Register.r9, value: -1)
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.rax)
+	emitMovRspOffsetReg(code, offset: 32, srcReg: X64Register.rax)
+	helperLoadSlot(code, slotIndex: 1, dest: X64Register.rax)
+	emitMovRspOffsetReg(code, offset: 40, srcReg: X64Register.rax)
+	helperMovRegImm(code, dest: X64Register.rax, value: 0)
+	emitMovRspOffsetReg(code, offset: 48, srcReg: X64Register.rax)
+	emitMovRspOffsetReg(code, offset: 56, srcReg: X64Register.rax)
+	helperEmitIatCall(code, relocations: relocations, slotIndex: iatSlotIndex(IatSlot.wideCharToMultiByte))
+	// WCTMB returns 32-bit; mask to 64-bit clean before subtracting 1.
+	code.append(b"\x89\xc0")
+	// Return bytes written - 1 (excluding the NUL WCTMB appends).
+	emitSubRegImmParam(code, dest: X64Register.rax, value: 1)
+	emitMovRegRegOp(code, dest: X64Register.r8, src: X64Register.rax)
+	helperEpilogue(code)
+
+	helperFinalize(state, code: code)
+end 'emitX64Win32GetExecutablePath'

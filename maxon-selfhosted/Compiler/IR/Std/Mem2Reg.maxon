@@ -263,7 +263,7 @@ end 'analyzeSlotOp'
 function analyzeSlotSysOp(sysOp StdSystemOp, blockId BlockId, info SlotInfo)
 	match sysOp 'check'
 		stackAddr(_, slotId) then markSlotAddressTaken(slotId, blockId: blockId, info: info)
-		syscall to memcpy then return
+		globalAddr to memcpy then return
 		storeByte to osLockRelease then return
 		boxValue then return
 		unboxValue then return
@@ -1856,14 +1856,13 @@ end 'maxValueIdInMemRef'
 
 function maxValueIdInSys(op StdSystemOp) returns ValueId
 	return match op 'scan'
-		syscall(resultId, _, argIds) gives maxOfIdAndArray(resultId, arr: argIds)
-		iatCall(resultId, _, argIds) gives maxOfIdAndArray(resultId, arr: argIds)
 		globalAddr(resultId, _) gives resultId
 		memcpy(dstId, srcId, lenId) gives maxOfThree(dstId, b: srcId, c: lenId)
 		stackAddr(resultId, _) gives resultId
 		storeByte(baseId, offsetId, byteId) gives maxOfThree(baseId, b: offsetId, c: byteId)
 		loadByte(resultId, baseId, offsetId) gives maxOfThree(resultId, b: baseId, c: offsetId)
 		osExit(codeId) gives codeId
+		osSleep(msId) gives msId
 		osWrite(ptrId, lenId) gives maxOfTwo(ptrId, b: lenId)
 		free(ptrId) gives ptrId
 		osWriteErr(ptrId, lenId) gives maxOfTwo(ptrId, b: lenId)
@@ -1872,6 +1871,9 @@ function maxValueIdInSys(op StdSystemOp) returns ValueId
 		osWriteFd(fdId, ptrId, lenId) gives maxOfThree(fdId, b: ptrId, c: lenId)
 		osClose(fdId) gives fdId
 		osGetEnv(resultId, namePtrId, nameLenId, outBufPtrId, outBufLenId) gives maxOfTwo(maxOfThree(resultId, b: namePtrId, c: nameLenId), b: maxOfTwo(outBufPtrId, b: outBufLenId))
+		osGetArgc(resultId) gives resultId
+		osGetArgv(resultId, indexId) gives maxOfTwo(resultId, b: indexId)
+		osGetExecutablePath(resultId, bufPtrId, bufSizeId) gives maxOfThree(resultId, b: bufPtrId, c: bufSizeId)
 		loadFramePtr(resultId) gives resultId
 		loadIndirect(resultId, addrId, _, _, _, _) gives maxOfTwo(resultId, b: addrId)
 		funcAddr(resultId, _) gives resultId
@@ -2021,14 +2023,13 @@ end 'substituteMemRefOp'
 
 function substituteSysOp(op StdSystemOp, remap ValueIdArray) returns StdSystemOp
 	return match op 'subst'
-		syscall(resultId, number, argIds) gives StdSystemOp.syscall(resultId, number: number, argIds: remapValueIds(argIds, remap: remap))
-		iatCall(resultId, slotIndex, argIds) gives StdSystemOp.iatCall(resultId, slotIndex: slotIndex, argIds: remapValueIds(argIds, remap: remap))
 		globalAddr(resultId, name) gives StdSystemOp.globalAddr(resultId, name: name)
 		memcpy(dstId, srcId, lenId) gives StdSystemOp.memcpy(remapValue(dstId, remap: remap), srcId: remapValue(srcId, remap: remap), lenId: remapValue(lenId, remap: remap))
 		stackAddr(resultId, slotId) gives StdSystemOp.stackAddr(resultId, slotId: slotId)
 		storeByte(baseId, offsetId, byteId) gives StdSystemOp.storeByte(remapValue(baseId, remap: remap), offsetId: remapValue(offsetId, remap: remap), byteId: remapValue(byteId, remap: remap))
 		loadByte(resultId, baseId, offsetId) gives StdSystemOp.loadByte(resultId, baseId: remapValue(baseId, remap: remap), offsetId: remapValue(offsetId, remap: remap))
 		osExit(codeId) gives StdSystemOp.osExit(remapValue(codeId, remap: remap))
+		osSleep(msId) gives StdSystemOp.osSleep(remapValue(msId, remap: remap))
 		osWrite(ptrId, lenId) gives StdSystemOp.osWrite(remapValue(ptrId, remap: remap), lenId: remapValue(lenId, remap: remap))
 		free(ptrId) gives StdSystemOp.free(remapValue(ptrId, remap: remap))
 		osWriteErr(ptrId, lenId) gives StdSystemOp.osWriteErr(remapValue(ptrId, remap: remap), lenId: remapValue(lenId, remap: remap))
@@ -2037,6 +2038,9 @@ function substituteSysOp(op StdSystemOp, remap ValueIdArray) returns StdSystemOp
 		osWriteFd(fdId, ptrId, lenId) gives StdSystemOp.osWriteFd(remapValue(fdId, remap: remap), ptrId: remapValue(ptrId, remap: remap), lenId: remapValue(lenId, remap: remap))
 		osClose(fdId) gives StdSystemOp.osClose(remapValue(fdId, remap: remap))
 		osGetEnv(resultId, namePtrId, nameLenId, outBufPtrId, outBufLenId) gives StdSystemOp.osGetEnv(resultId, namePtrId: remapValue(namePtrId, remap: remap), nameLenId: remapValue(nameLenId, remap: remap), outBufPtrId: remapValue(outBufPtrId, remap: remap), outBufLenId: remapValue(outBufLenId, remap: remap))
+		osGetArgc(resultId) gives StdSystemOp.osGetArgc(resultId)
+		osGetArgv(resultId, indexId) gives StdSystemOp.osGetArgv(resultId, indexId: remapValue(indexId, remap: remap))
+		osGetExecutablePath(resultId, bufPtrId, bufSizeId) gives StdSystemOp.osGetExecutablePath(resultId, bufPtrId: remapValue(bufPtrId, remap: remap), bufSizeId: remapValue(bufSizeId, remap: remap))
 		loadFramePtr(resultId) gives StdSystemOp.loadFramePtr(resultId)
 		loadIndirect(resultId, addrId, offset, width, signed, isFloat) gives StdSystemOp.loadIndirect(resultId, addrId: remapValue(addrId, remap: remap), offset: offset, width: width, signed: signed, isFloat: isFloat)
 		funcAddr(resultId, name) gives StdSystemOp.funcAddr(resultId, name: name)

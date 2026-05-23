@@ -1509,1364 +1509,6 @@ func mrt_alloc 1 i64
     std ret v3
 end
 
-// =============================================================================
-// Phase 15b — command-line argument retrieval.
-//
-// `mrt_command_line_count` returns argc as an i64. `mrt_command_line_arg(idx)`
-// returns a fresh `__ManagedMemory` pointer (40-byte struct) whose buffer
-// holds the UTF-8-encoded bytes of `argv[idx]` (length excludes the trailing
-// NUL byte). Both are Windows-specific: the bodies use `iatCall` ops with
-// slot indices defined in `Compiler/Targets/Windows/PeWriter.maxon`. On
-// non-Windows targets these slots don't exist so the functions would be
-// emitted but never called — `augmentWithRuntime` filters them out and
-// substitutes stub bodies (see `filterRuntimeForOs`).
-//
-// IAT slot mapping (must stay in lockstep with PeWriter):
-//   12 = kernel32!GetCommandLineW  () -> LPWSTR
-//   13 = kernel32!LocalFree        (HLOCAL) -> HLOCAL
-//   14 = kernel32!WideCharToMultiByte (codepage, flags, wstr, wlen, buf, bufLen,
-//                                       defChar, usedDefChar) -> int
-//   15 = kernel32!GetModuleFileNameW (hModule, lpFilename, nSize) -> DWORD
-//   16 = shell32!CommandLineToArgvW (LPCWSTR, &argc) -> LPWSTR*
-//
-// Slot usage (function-local stack slots, each 8 bytes):
-//   slot 0 = argc (CommandLineToArgvW out-param; widened by i32-into-i64 store)
-//   slot 1 = wargv pointer (LocalFree input)
-//   slot 2 = wstr (argv[index] LPWSTR)
-//   slot 3 = byte_size_with_nul (WideCharToMultiByte return)
-//   slot 4 = mm pointer (the __ManagedMemory we return)
-//   slot 5 = buffer (mm[0])
-//   slot 6 = index (parameter)
-func mrt_command_line_count 0 i64
-  block entry:
-    // GetCommandLineW() -> RAX
-    v0 = std iatCall 12
-    // CommandLineToArgvW(rax, &argc) -> wargv (slot 28 since Phase 15c moved
-    // CommandLineToArgvW to the end of the IAT so kernel32 stays contiguous).
-    // CommandLineToArgvW writes 4-byte argc through the second arg. Zero the
-    // slot via a constI64 store + stackAddr so the upper 32 bits read clean.
-    v1 = std constI64 0
-    std storeSlot 0 v1
-    v2 = std stackAddr 0
-    v3 = std iatCall 28 v0 v2
-    std storeSlot 1 v3
-    // LocalFree(wargv) — we only wanted the count.
-    v4 = std loadSlot 1
-    v5 = std iatCall 13 v4
-    // Return argc.
-    v6 = std loadSlot 0
-    std ret v6
-end
-
-func mrt_command_line_arg 1 i64
-  block entry:
-    // Stash the index parameter into slot 6 for repeated use across blocks.
-    v0 = std param 0 i64
-    std storeSlot 6 v0
-
-    // GetCommandLineW() -> LPWSTR
-    v1 = std iatCall 12
-    // CommandLineToArgvW(cmdLine, &argc) -> wargv (slot 28; see comment above).
-    v2 = std constI64 0
-    std storeSlot 0 v2
-    v3 = std stackAddr 0
-    v4 = std iatCall 28 v1 v3
-    std storeSlot 1 v4
-
-    // Bounds check: if index < 0 OR index >= argc, jump to oob path.
-    v5 = std loadSlot 6
-    v6 = std constI64 0
-    v7 = std cmpI64Lt v5 v6
-    std condBr v7 oob_path inbounds_check
-
-  block inbounds_check:
-    v8 = std loadSlot 6
-    v9 = std loadSlot 0
-    v10 = std cmpI64Lt v8 v9
-    std condBr v10 in_bounds oob_path
-
-  block in_bounds:
-    // wargv is a pointer to LPWSTR; load wargv[index] (8 bytes per pointer).
-    v11 = std loadSlot 1
-    v12 = std loadSlot 6
-    v13 = std constI64 3
-    v14 = std shlI64 v12 v13
-    v15 = std addI64 v11 v14
-    v16 = std loadIndirect v15 0
-    std storeSlot 2 v16
-
-    // WideCharToMultiByte size query: CP_UTF8=65001, flags=0, wstr, -1,
-    // buf=NULL, bufSize=0, defChar=NULL, usedDefChar=NULL. Returns byte
-    // count INCLUDING the NUL terminator.
-    v17 = std constI64 65001
-    v18 = std constI64 0
-    v19 = std loadSlot 2
-    v20 = std constI64 -1
-    v21 = std constI64 0
-    v22 = std constI64 0
-    v23 = std constI64 0
-    v24 = std constI64 0
-    v25 = std iatCall 14 v17 v18 v19 v20 v21 v22 v23 v24
-    std storeSlot 3 v25
-
-    // Allocate a __ManagedMemory with byte-buffer of capacity = bytesWithNul.
-    // __managed_mem_create(count, elemSize) -> mm pointer.
-    v26 = std loadSlot 3
-    v27 = std constI64 1
-    v28 = std call __managed_mem_create v26 v27
-    std storeSlot 4 v28
-
-    // Load buffer = mm[0].
-    v29 = std loadSlot 4
-    v30 = std loadIndirect v29 0
-    std storeSlot 5 v30
-
-    // WideCharToMultiByte conversion: same args but buf=buffer, bufSize=size.
-    v31 = std constI64 65001
-    v32 = std constI64 0
-    v33 = std loadSlot 2
-    v34 = std constI64 -1
-    v35 = std loadSlot 5
-    v36 = std loadSlot 3
-    v37 = std constI64 0
-    v38 = std constI64 0
-    v39 = std iatCall 14 v31 v32 v33 v34 v35 v36 v37 v38
-
-    // Store length = bytesWithNul - 1 (drop trailing NUL) at mm[8].
-    v40 = std loadSlot 3
-    v41 = std constI64 1
-    v42 = std subI64 v40 v41
-    v43 = std loadSlot 4
-    std storeIndirect v43 8 v42
-
-    // LocalFree(wargv).
-    v44 = std loadSlot 1
-    v45 = std iatCall 13 v44
-
-    // Return mm pointer.
-    v46 = std loadSlot 4
-    std ret v46
-
-  block oob_path:
-    // Out-of-bounds: allocate an empty 1-byte buffer (0x00) and return it.
-    // __managed_mem_create(1, 1) gives a 1-byte buffer; we leave length=0 so
-    // the caller reads an empty String.
-    v47 = std constI64 1
-    v48 = std constI64 1
-    v49 = std call __managed_mem_create v47 v48
-
-    // Still need to LocalFree(wargv) on this path so we don't leak the
-    // CommandLineToArgvW allocation.
-    v50 = std loadSlot 1
-    v51 = std iatCall 13 v50
-
-    std ret v49
-end
-
-// Phase 15b stubs for non-Windows targets. `augmentWithRuntime` renames these
-// to the public `mrt_command_line_count` / `mrt_command_line_arg` names when
-// the target's OS is not Windows, replacing the iatCall-based bodies which
-// reference IAT slots that only exist in PE images. Stubs return argc=1 (just
-// the executable path) and an empty buffer for every argument; spec tests
-// that rely on Args pass through the spec runner's `--args` mechanism, which
-// supplies a synthetic command line — wasm/Linux/macOS implementations of
-// the full path are deferred to a follow-up phase.
-func mrt_command_line_count_stub 0 i64
-  block entry:
-    v0 = std constI64 1
-    std ret v0
-end
-
-func mrt_command_line_arg_stub 1 i64
-  block entry:
-    v0 = std param 0 i64
-    v1 = std constI64 1
-    v2 = std constI64 1
-    v3 = std call __managed_mem_create v1 v2
-    std ret v3
-end
-
-// =============================================================================
-// Phase 15c Stream 4.1b — Win32 wrappers for `osFile*` / `osDir*` ops.
-//
-// The platform-agnostic `mrt_file_*` / `mrt_directory_*` bodies (defined
-// further below) issue `std osFileX` / `std osDirX` ops. On Linux the X64
-// and ARM64 backends lower those to raw syscalls; on Windows the same
-// backends lower them to direct calls into the helpers in this section.
-// One `mrt_win32_X` helper per `osFileX` op, each wrapping the matching
-// Win32 IAT call (see PeWriter.maxon for slot allocation) and translating
-// Win32 results into the POSIX `-errno` convention the platform-agnostic
-// bodies expect.
-//
-// Wrapper layout for `osFileOpen` results:
-//
-//   * Regular file (kind = 0, 16 bytes):
-//       block[0]  = 0 (kind tag)
-//       block[8]  = HANDLE from CreateFileW
-//
-//   * Directory search (kind = 1, 616 bytes; only when flags carries
-//     Linux O_DIRECTORY = 0o200000 = 65536):
-//       block[0]   = 1 (kind tag)
-//       block[8]   = HANDLE from FindFirstFileW
-//       block[16]  = first-entry-pending flag (1 if WIN32_FIND_DATAW at
-//                    block[24..] is unread; 0 once consumed)
-//       block[24..616] = WIN32_FIND_DATAW (592 bytes; cFileName at struct
-//                        offset 44 → block offset 68)
-//
-// Every successful `mrt_win32_open` allocates one of these via `mrt_alloc`
-// and returns the block pointer (always a positive heap address). Failures
-// return `-errno` so the platform-agnostic body's `result < 0` check
-// triggers the error path. Every other `mrt_win32_*` helper (read / write /
-// lseek / close / getdents64) dereferences `block[8]` to recover the
-// HANDLE; `mrt_win32_close` consults `block[0]` to dispatch to CloseHandle
-// or FindClose, then `mm_decref`s the block.
-//
-// Path arguments arrive as NUL-terminated UTF-8 C-strings (the platform-
-// agnostic body's call into `mrt_cstr_from_mm` produces these). Each
-// helper converts to UTF-16 via `MultiByteToWideChar(CP_UTF8, …, -1, …)`,
-// where `-1` makes the source length include the trailing NUL — so the
-// resulting wide buffer is NUL-terminated, which all path-taking Win32
-// APIs require. The wide buffer lives on the stack starting at
-// `stackAddr 267` (the low-address end of a 1024-wchar / 2048-byte
-// region that extends toward `stackAddr 11`).
-
-// mrt_win32_translate_lasterror() returns the POSIX errno (negative)
-// corresponding to the most recent Win32 GetLastError code. Used by every
-// failing Win32 IAT call site below.
-//
-// Mapping rationale: Win32 error codes are a flat numbering with no fixed
-// POSIX equivalent. We translate the codes that the platform-agnostic
-// bodies care about (the `mrt_select_io_error_flag` helper only special-
-// cases ENOENT and EACCES; every other errno collapses to the helper-
-// specific catch-all). `ERROR_NO_MORE_FILES` (18) is NOT translated here
-// — `mrt_win32_getdents64` checks for it directly and returns success
-// rather than an error.
-func mrt_win32_translate_lasterror 0 i64
-  block entry:
-    v0 = std iatCall 27
-    v1 = std constI64 0xFFFFFFFF
-    v2 = std andI64 v0 v1
-    std storeSlot 0 v2
-
-    // 0 → 0 (no error).
-    v3 = std loadSlot 0
-    v4 = std constI64 0
-    v5 = std cmpI64Eq v3 v4
-    std condBr v5 success check_enoent_2
-
-  block success:
-    v6 = std constI64 0
-    std ret v6
-
-  block check_enoent_2:
-    v7 = std loadSlot 0
-    v8 = std constI64 2
-    v9 = std cmpI64Eq v7 v8
-    std condBr v9 ret_enoent check_enoent_3
-
-  block check_enoent_3:
-    v10 = std loadSlot 0
-    v11 = std constI64 3
-    v12 = std cmpI64Eq v10 v11
-    std condBr v12 ret_enoent check_eacces_5
-
-  block ret_enoent:
-    v13 = std constI64 -2
-    std ret v13
-
-  block check_eacces_5:
-    v14 = std loadSlot 0
-    v15 = std constI64 5
-    v16 = std cmpI64Eq v14 v15
-    std condBr v16 ret_eacces check_eacces_32
-
-  block check_eacces_32:
-    v17 = std loadSlot 0
-    v18 = std constI64 32
-    v19 = std cmpI64Eq v17 v18
-    std condBr v19 ret_eacces check_eexist_80
-
-  block ret_eacces:
-    v20 = std constI64 -13
-    std ret v20
-
-  block check_eexist_80:
-    v21 = std loadSlot 0
-    v22 = std constI64 80
-    v23 = std cmpI64Eq v21 v22
-    std condBr v23 ret_eexist check_eexist_183
-
-  block check_eexist_183:
-    v24 = std loadSlot 0
-    v25 = std constI64 183
-    v26 = std cmpI64Eq v24 v25
-    std condBr v26 ret_eexist ret_eio
-
-  block ret_eexist:
-    v27 = std constI64 -17
-    std ret v27
-
-  block ret_eio:
-    // All other Win32 codes fold into EIO. The platform-agnostic
-    // bodies fall back to their catch-all on this path (whatever ordinal
-    // their declared error enum uses for "generic failed").
-    v28 = std constI64 -5
-    std ret v28
-end
-
-// mrt_win32_open(cStringPtr, flags, fileMode) → block_ptr_or_neg_errno.
-// Allocates a 16-byte (regular file) or 616-byte (directory) wrapper. See
-// the section header for the layout. flags carries Linux open(2) bits:
-//   * 65536 (O_DIRECTORY) → FindFirstFileW path.
-//   * 1 (O_WRONLY)        → CreateFileW with GENERIC_WRITE | CREATE_ALWAYS.
-//   * else                → CreateFileW with GENERIC_READ | OPEN_EXISTING.
-// fileMode is ignored on Windows (NTFS has no POSIX permission bits).
-//
-// Stack slots:
-//   slot 0 = cstr ptr
-//   slot 1 = flags
-//   slot 2 = wrapper block ptr
-//   slot 3 = HANDLE
-//   slot 4 = neg-errno from translate_lasterror
-//   slot 5 = scratch (FindFirstFileW pattern buffer length)
-//   slots 11..267 = 1024-wchar wide buffer
-//   (pattern's "\\*" suffix is written within the same buffer, past the
-//    NUL the MultiByteToWideChar produced.)
-func mrt_win32_open 3 i64
-  block entry:
-    v0 = std param 0 i64
-    std storeSlot 0 v0
-    v1 = std param 1 i64
-    std storeSlot 1 v1
-    // param 2 (fileMode) is read solely to satisfy the parser's
-    // "every declared parameter must have a `param` op in the entry
-    // block" invariant; Windows file permissions are NTFS ACLs, not
-    // POSIX mode bits, so the value is discarded.
-    v200 = std param 2 i64
-
-    // MultiByteToWideChar(CP_UTF8=65001, 0, src=cstr, cbMultiByte=-1,
-    //                     dst=&stack[200], cchWideChar=1024).
-    // Passing -1 makes MBTWC process through the NUL and emit a NUL
-    // wchar in the destination. Return value INCLUDES the trailing NUL.
-    v2 = std constI64 65001
-    v3 = std constI64 0
-    v4 = std loadSlot 0
-    v5 = std constI64 -1
-    v6 = std stackAddr 267
-    v7 = std constI64 1024
-    v8 = std iatCall 26 v2 v3 v4 v5 v6 v7
-    std storeSlot 5 v8
-
-    // Bail if MultiByteToWideChar returned 0 (invalid path encoding).
-    v9 = std loadSlot 5
-    v10 = std constI64 0
-    v11 = std cmpI64Eq v9 v10
-    std condBr v11 invalid_path check_dir_flag
-
-  block invalid_path:
-    v12 = std constI64 -22
-    std ret v12
-
-  block check_dir_flag:
-    // (flags & 65536) → directory branch.
-    v13 = std loadSlot 1
-    v14 = std constI64 65536
-    v15 = std andI64 v13 v14
-    v16 = std constI64 0
-    v17 = std cmpI64Ne v15 v16
-    std condBr v17 dir_branch file_branch
-
-  block file_branch:
-    // (flags & 1) → write mode; else → read mode.
-    v18 = std loadSlot 1
-    v19 = std constI64 1
-    v20 = std andI64 v18 v19
-    v21 = std constI64 0
-    v22 = std cmpI64Ne v20 v21
-    std condBr v22 file_write file_read
-
-  block file_read:
-    // CreateFileW(path, GENERIC_READ=0x80000000, FILE_SHARE_READ=1,
-    //             security=NULL, OPEN_EXISTING=3,
-    //             FILE_ATTRIBUTE_NORMAL=0x80, hTemplate=NULL).
-    v23 = std stackAddr 267
-    v24 = std constI64 0x80000000
-    v25 = std constI64 1
-    v26 = std constI64 0
-    v27 = std constI64 3
-    v28 = std constI64 0x80
-    v29 = std constI64 0
-    v30 = std iatCall 16 v23 v24 v25 v26 v27 v28 v29
-    std storeSlot 3 v30
-    std br after_createfile
-
-  block file_write:
-    // CreateFileW(path, GENERIC_WRITE=0x40000000, dwShareMode=0,
-    //             security=NULL, CREATE_ALWAYS=2,
-    //             FILE_ATTRIBUTE_NORMAL=0x80, hTemplate=NULL).
-    v31 = std stackAddr 267
-    v32 = std constI64 0x40000000
-    v33 = std constI64 0
-    v34 = std constI64 0
-    v35 = std constI64 2
-    v36 = std constI64 0x80
-    v37 = std constI64 0
-    v38 = std iatCall 16 v31 v32 v33 v34 v35 v36 v37
-    std storeSlot 3 v38
-    std br after_createfile
-
-  block after_createfile:
-    // INVALID_HANDLE_VALUE = -1 → failure.
-    v39 = std loadSlot 3
-    v40 = std constI64 -1
-    v41 = std cmpI64Eq v39 v40
-    std condBr v41 file_fail file_ok
-
-  block file_fail:
-    v42 = std call mrt_win32_translate_lasterror
-    std ret v42
-
-  block file_ok:
-    // Allocate 16-byte wrapper, kind=0, handle in [8].
-    v43 = std constI64 16
-    v44 = std call mrt_alloc v43
-    std storeSlot 2 v44
-    v45 = std loadSlot 2
-    v46 = std constI64 0
-    std storeIndirect v45 0 v46
-    v47 = std loadSlot 3
-    std storeIndirect v45 8 v47
-    v48 = std loadSlot 2
-    std ret v48
-
-  block dir_branch:
-    // The platform-agnostic `mrt_directory_open_search` always passes a
-    // pattern of the form "<dir>{sep}*" (built by stdlib/Directory.maxon's
-    // `Directory.list` — on Windows the separator is `\\`, so the wide
-    // path coming out of MultiByteToWideChar is already a valid
-    // FindFirstFileW pattern). Pass it through unchanged.
-    //
-    // Allocate 616-byte wrapper (kind=1 [8] + HANDLE [8] + pending [8]
-    // + WIN32_FIND_DATAW [592]).
-    v64 = std constI64 616
-    v65 = std call mrt_alloc v64
-    std storeSlot 2 v65
-
-    // FindFirstFileW(pattern, &wrapper[24]) → HANDLE.
-    v66 = std stackAddr 267
-    v67 = std loadSlot 2
-    v68 = std constI64 24
-    v69 = std addI64 v67 v68
-    v70 = std iatCall 21 v66 v69
-    std storeSlot 3 v70
-
-    v71 = std loadSlot 3
-    v72 = std constI64 -1
-    v73 = std cmpI64Eq v71 v72
-    std condBr v73 dir_fail dir_ok
-
-  block dir_fail:
-    // Free the wrapper before returning the error.
-    v74 = std loadSlot 2
-    v75 = std call mm_decref v74
-    v76 = std call mrt_win32_translate_lasterror
-    std ret v76
-
-  block dir_ok:
-    // Init wrapper: kind=1, HANDLE, first-entry-pending=1.
-    v78 = std loadSlot 2
-    v79 = std constI64 1
-    std storeIndirect v78 0 v79
-    v80 = std loadSlot 3
-    std storeIndirect v78 8 v80
-    v81 = std constI64 1
-    std storeIndirect v78 16 v81
-    v82 = std loadSlot 2
-    std ret v82
-end
-
-// mrt_win32_read(wrapperBlock, bufPtr, count) → bytes_or_neg_errno.
-// HANDLE lives at wrapperBlock[8]. ReadFile (slot 3) writes the byte count
-// into a stack-resident DWORD; we mask to 32 bits on the way out.
-//
-// Stack slots:
-//   slot 0 = wrapper
-//   slot 1 = HANDLE
-//   slot 2 = bytes-read DWORD (initialized to 0)
-//   slot 3 = ReadFile BOOL
-func mrt_win32_read 3 i64
-  block entry:
-    v0 = std param 0 i64
-    std storeSlot 0 v0
-    v1 = std param 1 i64
-    v2 = std param 2 i64
-
-    v3 = std loadIndirect v0 8
-    std storeSlot 1 v3
-
-    // Zero the bytes-read DWORD slot.
-    v4 = std constI64 0
-    std storeSlot 2 v4
-
-    // ReadFile(handle, buf, count, &bytesRead, lpOverlapped=NULL).
-    v5 = std loadSlot 1
-    v6 = std stackAddr 2
-    v7 = std constI64 0
-    v8 = std iatCall 3 v5 v1 v2 v6 v7
-    std storeSlot 3 v8
-
-    v9 = std loadSlot 3
-    v10 = std constI64 0
-    v11 = std cmpI64Eq v9 v10
-    std condBr v11 fail ok
-
-  block fail:
-    v12 = std call mrt_win32_translate_lasterror
-    std ret v12
-
-  block ok:
-    v13 = std loadSlot 2
-    v14 = std constI64 0xFFFFFFFF
-    v15 = std andI64 v13 v14
-    std ret v15
-end
-
-// mrt_win32_write(wrapperBlock, bufPtr, count) → bytes_or_neg_errno.
-func mrt_win32_write 3 i64
-  block entry:
-    v0 = std param 0 i64
-    std storeSlot 0 v0
-    v1 = std param 1 i64
-    v2 = std param 2 i64
-
-    v3 = std loadIndirect v0 8
-    std storeSlot 1 v3
-
-    v4 = std constI64 0
-    std storeSlot 2 v4
-
-    // WriteFile(handle, buf, count, &bytesWritten, lpOverlapped=NULL).
-    v5 = std loadSlot 1
-    v6 = std stackAddr 2
-    v7 = std constI64 0
-    v8 = std iatCall 2 v5 v1 v2 v6 v7
-    std storeSlot 3 v8
-
-    v9 = std loadSlot 3
-    v10 = std constI64 0
-    v11 = std cmpI64Eq v9 v10
-    std condBr v11 fail ok
-
-  block fail:
-    v12 = std call mrt_win32_translate_lasterror
-    std ret v12
-
-  block ok:
-    v13 = std loadSlot 2
-    v14 = std constI64 0xFFFFFFFF
-    v15 = std andI64 v13 v14
-    std ret v15
-end
-
-// mrt_win32_close(wrapperBlock) → 0. Idempotent: a zero or already-closed
-// wrapper is a no-op. Dispatches on wrapper[0] (kind tag): 0 → CloseHandle,
-// 1 → FindClose. Always mm_decrefs the wrapper.
-//
-// Stack slots:
-//   slot 0 = wrapper
-//   slot 1 = kind
-func mrt_win32_close 1 i64
-  block entry:
-    v0 = std param 0 i64
-    std storeSlot 0 v0
-
-    // Skip on null wrapper (uninitialized __ManagedFile / __ManagedDirectory).
-    v1 = std constI64 0
-    v2 = std cmpI64Eq v0 v1
-    std condBr v2 done check_neg_one
-
-  block check_neg_one:
-    // The platform-agnostic body's directory_close also tolerates fd == -1.
-    v3 = std loadSlot 0
-    v4 = std constI64 -1
-    v5 = std cmpI64Eq v3 v4
-    std condBr v5 done load_kind
-
-  block load_kind:
-    v6 = std loadSlot 0
-    v7 = std loadIndirect v6 0
-    std storeSlot 1 v7
-
-    v8 = std loadSlot 1
-    v9 = std constI64 1
-    v10 = std cmpI64Eq v8 v9
-    std condBr v10 close_find close_handle
-
-  block close_find:
-    // FindClose(wrapper[8]).
-    v11 = std loadSlot 0
-    v12 = std loadIndirect v11 8
-    v13 = std iatCall 23 v12
-    std br free_wrapper
-
-  block close_handle:
-    // CloseHandle(wrapper[8]).
-    v14 = std loadSlot 0
-    v15 = std loadIndirect v14 8
-    v16 = std iatCall 5 v15
-    std br free_wrapper
-
-  block free_wrapper:
-    v17 = std loadSlot 0
-    v18 = std call mm_decref v17
-    std br done
-
-  block done:
-    v19 = std constI64 0
-    std ret v19
-end
-
-// mrt_win32_lseek(wrapperBlock, offset, whence) → new_pos_or_neg_errno.
-// SetFilePointerEx writes the new file pointer to a LARGE_INTEGER out-arg.
-// `whence` maps directly: SEEK_SET=0, SEEK_CUR=1, SEEK_END=2 — same on
-// Linux and Win32.
-//
-// Stack slots:
-//   slot 0 = wrapper
-//   slot 1 = offset
-//   slot 2 = whence
-//   slot 3 = HANDLE
-//   slot 4 = new position (LARGE_INTEGER, 8 bytes)
-//   slot 5 = SetFilePointerEx BOOL
-func mrt_win32_lseek 3 i64
-  block entry:
-    v0 = std param 0 i64
-    std storeSlot 0 v0
-    v1 = std param 1 i64
-    std storeSlot 1 v1
-    v2 = std param 2 i64
-    std storeSlot 2 v2
-
-    v3 = std loadIndirect v0 8
-    std storeSlot 3 v3
-
-    v4 = std constI64 0
-    std storeSlot 4 v4
-
-    // SetFilePointerEx(handle, liDistanceToMove, &liNewFilePointer, dwMoveMethod).
-    v5 = std loadSlot 3
-    v6 = std loadSlot 1
-    v7 = std stackAddr 4
-    v8 = std loadSlot 2
-    v9 = std iatCall 20 v5 v6 v7 v8
-    std storeSlot 5 v9
-
-    v10 = std loadSlot 5
-    v11 = std constI64 0
-    v12 = std cmpI64Eq v10 v11
-    std condBr v12 fail ok
-
-  block fail:
-    v13 = std call mrt_win32_translate_lasterror
-    std ret v13
-
-  block ok:
-    v14 = std loadSlot 4
-    std ret v14
-end
-
-// mrt_win32_stat(cStringPtr, statBufPtr) → 0_or_neg_errno.
-// Writes the Linux 144-byte `struct stat` layout at `statBufPtr`. The
-// platform-agnostic body's reads use these fields (see
-// `mrt_file_stat`):
-//   * st_mode  @  24 (u32)
-//   * st_size  @  48 (i64)
-//   * st_atim.tv_sec  @  72 (i64)
-//   * st_mtim.tv_sec  @  88 (i64)
-//   * st_ctim.tv_sec  @ 104 (i64)
-// Other fields are zeroed (`mrt_alloc` already returns zero memory, but
-// the caller passes an arbitrary buffer here, so we zero explicitly).
-//
-// Win32 file times are 100-ns intervals since 1601-01-01 UTC.
-// Unix seconds = (filetime - 116444736000000000) / 10000000.
-//
-// Stack slots:
-//   slot 0 = cstr ptr
-//   slot 1 = statBuf ptr
-//   slot 2 = GetFileAttributesExW BOOL
-//   slot 3 = scratch for FILETIME
-//   slots 11..267 = wide path (1024 wchars)
-//   slots 50..54   = WIN32_FILE_ATTRIBUTE_DATA (36 bytes; 5 qwords with slack)
-func mrt_win32_stat 2 i64
-  block entry:
-    v0 = std param 0 i64
-    std storeSlot 0 v0
-    v1 = std param 1 i64
-    std storeSlot 1 v1
-
-    // UTF-8 → UTF-16 (NUL-terminated, -1 mode).
-    v2 = std constI64 65001
-    v3 = std constI64 0
-    v4 = std loadSlot 0
-    v5 = std constI64 -1
-    v6 = std stackAddr 267
-    v7 = std constI64 1024
-    v8 = std iatCall 26 v2 v3 v4 v5 v6 v7
-
-    // GetFileAttributesExW(path, GetFileExInfoStandard=0, &data).
-    v9 = std stackAddr 267
-    v10 = std constI64 0
-    v11 = std stackAddr 54
-    v12 = std iatCall 19 v9 v10 v11
-    std storeSlot 2 v12
-
-    v13 = std loadSlot 2
-    v14 = std constI64 0
-    v15 = std cmpI64Eq v13 v14
-    std condBr v15 fail ok
-
-  block fail:
-    v16 = std call mrt_win32_translate_lasterror
-    std ret v16
-
-  block ok:
-    // Zero st_mode first (offset 24). Other unused fields remain whatever
-    // the caller's buffer held — the platform-agnostic body only reads the
-    // five fields below, so leaving them undisturbed is safe.
-    v17 = std loadSlot 1
-    v18 = std constI64 0
-    std storeIndirect v17 24 v18
-
-    // dwFileAttributes (offset 0 of WIN32_FILE_ATTRIBUTE_DATA, mapped at
-    // stackAddr 54). Map to Linux st_mode (S_IFDIR=16384 if directory,
-    // S_IFREG=32768 otherwise; OR in S_IWUSR=0o200=128 when not read-only).
-    v19 = std stackAddr 54
-    v20 = std loadIndirect v19 0
-    v21 = std constI64 0xFFFFFFFF
-    v22 = std andI64 v20 v21
-    std storeSlot 3 v22
-
-    v23 = std loadSlot 3
-    v24 = std constI64 0x10
-    v25 = std andI64 v23 v24
-    v26 = std constI64 0
-    v27 = std cmpI64Ne v25 v26
-    std condBr v27 set_dir set_reg
-
-  block set_dir:
-    v28 = std constI64 16384
-    std storeSlot 3 v28
-    std br add_writable
-
-  block set_reg:
-    v29 = std constI64 32768
-    std storeSlot 3 v29
-    std br add_writable
-
-  block add_writable:
-    // Read FILE_ATTRIBUTE_READONLY=0x01 from the original attributes.
-    v30 = std stackAddr 54
-    v31 = std loadIndirect v30 0
-    v32 = std constI64 0xFFFFFFFF
-    v33 = std andI64 v31 v32
-    v34 = std constI64 0x01
-    v35 = std andI64 v33 v34
-    v36 = std constI64 0
-    v37 = std cmpI64Eq v35 v36
-    std condBr v37 mark_writable write_mode
-
-  block mark_writable:
-    // OR in S_IWUSR=128.
-    v38 = std loadSlot 3
-    v39 = std constI64 128
-    v40 = std orI64 v38 v39
-    std storeSlot 3 v40
-    std br write_mode
-
-  block write_mode:
-    v41 = std loadSlot 1
-    v42 = std loadSlot 3
-    std storeIndirect v41 24 v42
-
-    // size = (nFileSizeHigh << 32) | nFileSizeLow (offsets 28/32 in
-    // WIN32_FILE_ATTRIBUTE_DATA).
-    v43 = std stackAddr 54
-    v44 = std loadIndirect v43 28
-    v45 = std constI64 0xFFFFFFFF
-    v46 = std andI64 v44 v45
-    v47 = std constI64 32
-    v48 = std shlI64 v46 v47
-    v49 = std loadIndirect v43 32
-    v50 = std andI64 v49 v45
-    v51 = std orI64 v48 v50
-    v52 = std loadSlot 1
-    std storeIndirect v52 48 v51
-
-    // mtime: ftLastWriteTime @ +20 in WIN32_FILE_ATTRIBUTE_DATA →
-    // st_mtim.tv_sec @ 88 in struct stat.
-    v53 = std loadIndirect v43 20
-    v54 = std constI64 116444736000000000
-    v55 = std subI64 v53 v54
-    v56 = std constI64 10000000
-    v57 = std divI64 v55 v56
-    v58 = std loadSlot 1
-    std storeIndirect v58 88 v57
-
-    // ctime: ftCreationTime @ +4 → st_ctim.tv_sec @ 104.
-    v59 = std loadIndirect v43 4
-    v60 = std subI64 v59 v54
-    v61 = std divI64 v60 v56
-    std storeIndirect v58 104 v61
-
-    // atime: ftLastAccessTime @ +12 → st_atim.tv_sec @ 72.
-    v62 = std loadIndirect v43 12
-    v63 = std subI64 v62 v54
-    v64 = std divI64 v63 v56
-    std storeIndirect v58 72 v64
-
-    v65 = std constI64 0
-    std ret v65
-end
-
-// mrt_win32_access(cStringPtr, mode) → 0_or_neg_errno.
-// `mode` carries POSIX bits: F_OK=0 (existence), R_OK=4, W_OK=2, X_OK=1.
-// The platform-agnostic body's `mrt_file_exists` only uses F_OK, so
-// the read/write/exec bits are mapped only when present:
-//   * Always require the file to exist (GetFileAttributesExW succeeds).
-//   * W_OK (2): require FILE_ATTRIBUTE_READONLY to be clear.
-// R_OK and X_OK always pass on Windows (no per-process ACL check here).
-//
-// Stack slots:
-//   slot 0 = cstr ptr
-//   slot 1 = mode
-//   slot 2 = GetFileAttributesExW BOOL
-//   slot 3 = attributes (masked to 32 bits)
-//   slots 11..267 = wide path
-//   slots 50..54   = WIN32_FILE_ATTRIBUTE_DATA
-func mrt_win32_access 2 i64
-  block entry:
-    v0 = std param 0 i64
-    std storeSlot 0 v0
-    v1 = std param 1 i64
-    std storeSlot 1 v1
-
-    v2 = std constI64 65001
-    v3 = std constI64 0
-    v4 = std loadSlot 0
-    v5 = std constI64 -1
-    v6 = std stackAddr 267
-    v7 = std constI64 1024
-    v8 = std iatCall 26 v2 v3 v4 v5 v6 v7
-
-    v9 = std stackAddr 267
-    v10 = std constI64 0
-    v11 = std stackAddr 54
-    v12 = std iatCall 19 v9 v10 v11
-    std storeSlot 2 v12
-
-    v13 = std loadSlot 2
-    v14 = std constI64 0
-    v15 = std cmpI64Eq v13 v14
-    std condBr v15 fail check_write
-
-  block fail:
-    v16 = std call mrt_win32_translate_lasterror
-    std ret v16
-
-  block check_write:
-    // If W_OK requested, ensure FILE_ATTRIBUTE_READONLY is clear.
-    v17 = std loadSlot 1
-    v18 = std constI64 2
-    v19 = std andI64 v17 v18
-    v20 = std constI64 0
-    v21 = std cmpI64Ne v19 v20
-    std condBr v21 verify_writable ok
-
-  block verify_writable:
-    v22 = std stackAddr 54
-    v23 = std loadIndirect v22 0
-    v24 = std constI64 0xFFFFFFFF
-    v25 = std andI64 v23 v24
-    v26 = std constI64 0x01
-    v27 = std andI64 v25 v26
-    v28 = std constI64 0
-    v29 = std cmpI64Eq v27 v28
-    std condBr v29 ok fail_eacces
-
-  block fail_eacces:
-    v30 = std constI64 -13
-    std ret v30
-
-  block ok:
-    v31 = std constI64 0
-    std ret v31
-end
-
-// mrt_win32_unlink(cStringPtr) → 0_or_neg_errno.
-// DeleteFileW(path). Returns 0 on success.
-//
-// Stack slots:
-//   slot 0 = cstr ptr
-//   slot 1 = DeleteFileW BOOL
-//   slots 11..267 = wide path
-func mrt_win32_unlink 1 i64
-  block entry:
-    v0 = std param 0 i64
-    std storeSlot 0 v0
-
-    v1 = std constI64 65001
-    v2 = std constI64 0
-    v3 = std loadSlot 0
-    v4 = std constI64 -1
-    v5 = std stackAddr 267
-    v6 = std constI64 1024
-    v7 = std iatCall 26 v1 v2 v3 v4 v5 v6
-
-    // DeleteFileW(path).
-    v8 = std stackAddr 267
-    v9 = std iatCall 17 v8
-    std storeSlot 1 v9
-
-    v10 = std loadSlot 1
-    v11 = std constI64 0
-    v12 = std cmpI64Eq v10 v11
-    std condBr v12 fail ok
-
-  block fail:
-    v13 = std call mrt_win32_translate_lasterror
-    std ret v13
-
-  block ok:
-    v14 = std constI64 0
-    std ret v14
-end
-
-// mrt_win32_mkdir(cStringPtr, mode) → 0_or_neg_errno.
-// CreateDirectoryW(path, NULL). `mode` is ignored (NTFS has no POSIX bits).
-//
-// Stack slots:
-//   slot 0 = cstr ptr
-//   slot 1 = CreateDirectoryW BOOL
-//   slots 11..267 = wide path
-func mrt_win32_mkdir 2 i64
-  block entry:
-    v0 = std param 0 i64
-    std storeSlot 0 v0
-    // param 1 (mode) is read solely to satisfy the parser's
-    // "every declared parameter must have a `param` op in the entry
-    // block" invariant; NTFS has no POSIX mode bits, so the value is
-    // discarded.
-    v200 = std param 1 i64
-
-    v1 = std constI64 65001
-    v2 = std constI64 0
-    v3 = std loadSlot 0
-    v4 = std constI64 -1
-    v5 = std stackAddr 267
-    v6 = std constI64 1024
-    v7 = std iatCall 26 v1 v2 v3 v4 v5 v6
-
-    // CreateDirectoryW(path, security=NULL).
-    v8 = std stackAddr 267
-    v9 = std constI64 0
-    v10 = std iatCall 24 v8 v9
-    std storeSlot 1 v10
-
-    v11 = std loadSlot 1
-    v12 = std constI64 0
-    v13 = std cmpI64Eq v11 v12
-    std condBr v13 fail ok
-
-  block fail:
-    v14 = std call mrt_win32_translate_lasterror
-    std ret v14
-
-  block ok:
-    v15 = std constI64 0
-    std ret v15
-end
-
-// mrt_win32_getcwd(bufPtr, bufSize) → buf_addr_or_neg_errno.
-// Writes the current working directory as NUL-terminated UTF-8 into
-// `bufPtr` (up to `bufSize` bytes). Returns `bufPtr` (a positive heap
-// address from the caller's `mrt_alloc`) on success, matching Linux
-// `getcwd`'s "returns the buffer arg" contract. The platform-agnostic
-// body's `mrt_directory_current_path` scans the buffer for a NUL to
-// recover the length.
-//
-// Stack slots:
-//   slot 0 = buf
-//   slot 1 = bufSize
-//   slot 2 = GetCurrentDirectoryW wchar count
-//   slot 3 = WideCharToMultiByte byte count
-//   slots 11..267 = 1024-wchar wide buffer
-func mrt_win32_getcwd 2 i64
-  block entry:
-    v0 = std param 0 i64
-    std storeSlot 0 v0
-    v1 = std param 1 i64
-    std storeSlot 1 v1
-
-    // GetCurrentDirectoryW(1024, &wideBuf). Returns wchar count NOT
-    // including the trailing NUL. Failure returns 0; insufficient buffer
-    // returns the required count > 1024.
-    v2 = std constI64 1024
-    v3 = std stackAddr 267
-    v4 = std iatCall 25 v2 v3
-    std storeSlot 2 v4
-
-    v5 = std loadSlot 2
-    v6 = std constI64 0
-    v7 = std cmpI64Eq v5 v6
-    std condBr v7 fail check_too_big
-
-  block check_too_big:
-    v8 = std loadSlot 2
-    v9 = std constI64 1024
-    v10 = std cmpI64Gt v8 v9
-    std condBr v10 fail_oversized convert
-
-  block fail:
-    v11 = std call mrt_win32_translate_lasterror
-    std ret v11
-
-  block fail_oversized:
-    // Path longer than our internal buffer — treat as ENAMETOOLONG (36).
-    v12 = std constI64 -36
-    std ret v12
-
-  block convert:
-    // WideCharToMultiByte(CP_UTF8, 0, wide, wlen, buf, bufSize, NULL, NULL).
-    v13 = std constI64 65001
-    v14 = std constI64 0
-    v15 = std stackAddr 267
-    v16 = std loadSlot 2
-    v17 = std loadSlot 0
-    v18 = std loadSlot 1
-    v19 = std constI64 1
-    v20 = std subI64 v18 v19
-    v21 = std constI64 0
-    v22 = std constI64 0
-    v23 = std iatCall 14 v13 v14 v15 v16 v17 v20 v21 v22
-    std storeSlot 3 v23
-
-    v24 = std loadSlot 3
-    v25 = std constI64 0
-    v26 = std cmpI64Eq v24 v25
-    std condBr v26 fail nul_terminate
-
-  block nul_terminate:
-    // Write a NUL byte at buf[byteCount] so the platform-agnostic body's
-    // NUL-scan loop terminates.
-    v27 = std loadSlot 0
-    v28 = std loadSlot 3
-    v29 = std addI64 v27 v28
-    v30 = std constI64 0
-    std storeByte v29 v30 v30
-
-    // Return buf (positive heap address) on success.
-    v31 = std loadSlot 0
-    std ret v31
-end
-
-// mrt_win32_getdents64(wrapperBlock, bufPtr, bufSize) → bytes_or_neg_errno.
-// Reads zero or more entries from the FindFirstFileW/FindNextFileW search
-// state stashed in `wrapperBlock` (kind=1, see file header) and packs them
-// into `bufPtr` using the Linux dirent64 layout the platform-agnostic
-// `mrt_directory_next` expects:
-//   d_ino   u64  @  0   (always 0 here; Windows has no equivalent)
-//   d_off   u64  @  8   (always 0; cursor lives in wrapperBlock)
-//   d_reclen u16 @ 16   (entry length aligned up to 8)
-//   d_type  u8   @ 18   (DT_DIR=4 if directory, DT_REG=8 otherwise)
-//   d_name  ...  @ 19   (NUL-terminated UTF-8 filename)
-//
-// The wrapper's pending-flag (block[16]) tracks whether the WIN32_FIND_DATAW
-// at block[24..] is unread. We use the cached entry on the first iteration
-// (set by `mrt_win32_open`), then call FindNextFileW for subsequent ones.
-// On insufficient buffer space we leave the pending flag set so the next
-// call re-emits the same entry; on ERROR_NO_MORE_FILES we return whatever
-// bytes we accumulated.
-//
-// Stack slots (all fall in [0..10], which sit ABOVE the wide-buffer
-// region the slot scanner sees via `stackAddr 267`):
-//   slot 0 = wrapper
-//   slot 1 = buf
-//   slot 2 = bufSize
-//   slot 3 = cursor (output buffer position)
-//   slot 4 = HANDLE
-//   slot 5 = pending flag
-//   slot 6 = FindNextFileW BOOL
-//   slot 7 = utf-8 byte count (incl trailing NUL)
-//   slot 8 = reclen aligned to 8
-//   slot 9 = attribute word from WIN32_FIND_DATAW
-//   slot 10 = name UTF-8 length WITHOUT NUL
-//   stackAddr 267 = base of 2048-byte utf-8 scratch buffer the
-//                   WideCharToMultiByte call below fills (plenty for
-//                   MAX_PATH=260 wchars × 4 = 1040 bytes worst case).
-func mrt_win32_getdents64 3 i64
-  block entry:
-    v0 = std param 0 i64
-    std storeSlot 0 v0
-    v1 = std param 1 i64
-    std storeSlot 1 v1
-    v2 = std param 2 i64
-    std storeSlot 2 v2
-
-    v3 = std loadIndirect v0 8
-    std storeSlot 4 v3
-
-    v4 = std constI64 0
-    std storeSlot 3 v4
-
-    std br emit_loop
-
-  block emit_loop:
-    // Are we resuming from a cached entry or do we need FindNextFileW?
-    v5 = std loadSlot 0
-    v6 = std loadIndirect v5 16
-    std storeSlot 5 v6
-
-    v7 = std loadSlot 5
-    v8 = std constI64 1
-    v9 = std cmpI64Eq v7 v8
-    std condBr v9 process_entry call_find_next
-
-  block call_find_next:
-    // FindNextFileW(HANDLE, &WIN32_FIND_DATAW). FindFirstFileW already
-    // populated [24..] when the wrapper was created, but we consumed
-    // that cached entry on the first pass.
-    v10 = std loadSlot 4
-    v11 = std loadSlot 0
-    v12 = std constI64 24
-    v13 = std addI64 v11 v12
-    v14 = std iatCall 22 v10 v13
-    std storeSlot 6 v14
-
-    v15 = std loadSlot 6
-    v16 = std constI64 0
-    v17 = std cmpI64Eq v15 v16
-    std condBr v17 check_no_more_files mark_pending
-
-  block check_no_more_files:
-    // GetLastError() — ERROR_NO_MORE_FILES (18) is a clean iterator end.
-    v18 = std iatCall 27
-    v19 = std constI64 0xFFFFFFFF
-    v20 = std andI64 v18 v19
-    v21 = std constI64 18
-    v22 = std cmpI64Eq v20 v21
-    std condBr v22 end_of_iteration find_next_error
-
-  block end_of_iteration:
-    // Return whatever bytes we have. Don't touch the pending flag — it's
-    // already 0 (we just tried FindNextFileW), so future calls will retry
-    // and hit ERROR_NO_MORE_FILES again, yielding 0.
-    v23 = std loadSlot 3
-    std ret v23
-
-  block find_next_error:
-    v24 = std call mrt_win32_translate_lasterror
-    std ret v24
-
-  block mark_pending:
-    // FindNextFileW succeeded; we now have a fresh entry in the wrapper.
-    v25 = std loadSlot 0
-    v26 = std constI64 1
-    std storeIndirect v25 16 v26
-    std br process_entry
-
-  block process_entry:
-    // Convert cFileName (UTF-16, NUL-terminated, MAX_PATH=260 wchars)
-    // to UTF-8 in the stack scratch starting at `stackAddr 267`.
-    // cFileName is at WIN32_FIND_DATAW offset 44 → wrapper offset 24+44 = 68.
-    v27 = std constI64 65001
-    v28 = std constI64 0
-    v29 = std loadSlot 0
-    v30 = std constI64 68
-    v31 = std addI64 v29 v30
-    v32 = std constI64 -1
-    v33 = std stackAddr 267
-    v34 = std constI64 1024
-    v35 = std constI64 0
-    v36 = std constI64 0
-    v37 = std iatCall 14 v27 v28 v31 v32 v33 v34 v35 v36
-    std storeSlot 7 v37
-
-    // Skip "." (single dot) and ".." (two dots followed by NUL). These
-    // match the Linux body's behavior.
-    v39 = std loadSlot 7
-    v40 = std constI64 2
-    v41 = std cmpI64Eq v39 v40
-    std condBr v41 maybe_single_dot check_double_dot
-
-  block maybe_single_dot:
-    // "." + NUL has byteCount = 2.
-    v42 = std stackAddr 267
-    v43 = std constI64 0
-    v44 = std loadByte v42 v43
-    v45 = std constI64 46
-    v46 = std cmpI64Eq v44 v45
-    std condBr v46 consume_entry emit_entry
-
-  block check_double_dot:
-    v47 = std loadSlot 7
-    v48 = std constI64 3
-    v49 = std cmpI64Eq v47 v48
-    std condBr v49 maybe_double_dot emit_entry
-
-  block maybe_double_dot:
-    // ".." + NUL has byteCount = 3.
-    v50 = std stackAddr 267
-    v51 = std constI64 0
-    v52 = std loadByte v50 v51
-    v53 = std constI64 46
-    v54 = std cmpI64Eq v52 v53
-    std condBr v54 check_second_dot emit_entry
-
-  block check_second_dot:
-    v55 = std stackAddr 267
-    v56 = std constI64 1
-    v57 = std loadByte v55 v56
-    v58 = std constI64 46
-    v59 = std cmpI64Eq v57 v58
-    std condBr v59 consume_entry emit_entry
-
-  block consume_entry:
-    // Mark cached entry as consumed and loop for the next one.
-    v60 = std loadSlot 0
-    v61 = std constI64 0
-    std storeIndirect v60 16 v61
-    std br emit_loop
-
-  block emit_entry:
-    // reclen = ((19 + nameLen + 1) + 7) & ~7
-    // where nameLen = byteCount - 1 (drop the trailing NUL counted in -1 mode).
-    v62 = std loadSlot 7
-    v63 = std constI64 1
-    v64 = std subI64 v62 v63
-    std storeSlot 10 v64
-
-    v65 = std loadSlot 10
-    v66 = std constI64 20
-    v67 = std addI64 v65 v66
-    v68 = std constI64 7
-    v69 = std addI64 v67 v68
-    v70 = std constI64 -8
-    v71 = std andI64 v69 v70
-    std storeSlot 8 v71
-
-    // Bail out (preserving the cached entry) if it won't fit. Note the
-    // pending flag is still 1 since `mark_pending` set it (or FindFirstFileW
-    // did via `mrt_win32_open`), so the next call re-emits this entry.
-    v72 = std loadSlot 3
-    v73 = std loadSlot 8
-    v74 = std addI64 v72 v73
-    v75 = std loadSlot 2
-    v76 = std cmpI64Gt v74 v75
-    std condBr v76 return_partial write_entry
-
-  block return_partial:
-    v77 = std loadSlot 3
-    std ret v77
-
-  block write_entry:
-    // Entry base = buf + cursor.
-    v78 = std loadSlot 1
-    v79 = std loadSlot 3
-    v80 = std addI64 v78 v79
-    std storeSlot 11 v80
-
-    // d_ino @ 0 = 0.
-    v81 = std loadSlot 11
-    v82 = std constI64 0
-    std storeIndirect v81 0 v82
-    // d_off @ 8 = 0.
-    std storeIndirect v81 8 v82
-    // d_reclen @ 16 (write 8 bytes; only the low u16 is read by the
-    // platform-agnostic body, which masks with 0xFFFF).
-    v83 = std loadSlot 8
-    std storeIndirect v81 16 v83
-
-    // d_type @ 18: DT_DIR (4) if FILE_ATTRIBUTE_DIRECTORY (0x10) is set
-    // in the WIN32_FIND_DATAW's dwFileAttributes (offset 0 inside the
-    // struct → wrapper offset 24), else DT_REG (8). The platform-agnostic
-    // body doesn't consult d_type, but downstream consumers may.
-    v84 = std loadSlot 0
-    v85 = std loadIndirect v84 24
-    v86 = std constI64 0xFFFFFFFF
-    v87 = std andI64 v85 v86
-    std storeSlot 9 v87
-    v88 = std loadSlot 9
-    v89 = std constI64 0x10
-    v90 = std andI64 v88 v89
-    v91 = std constI64 0
-    v92 = std cmpI64Ne v90 v91
-    std condBr v92 set_dir_type set_reg_type
-
-  block set_dir_type:
-    v93 = std loadSlot 11
-    v94 = std constI64 18
-    v95 = std constI64 4
-    std storeByte v93 v94 v95
-    std br copy_name
-
-  block set_reg_type:
-    v96 = std loadSlot 11
-    v97 = std constI64 18
-    v98 = std constI64 8
-    std storeByte v96 v97 v98
-    std br copy_name
-
-  block copy_name:
-    // Copy name UTF-8 bytes (nameLen, no NUL) to entry+19, then store NUL.
-    v99 = std loadSlot 11
-    v100 = std constI64 19
-    v101 = std addI64 v99 v100
-    v102 = std stackAddr 267
-    v103 = std loadSlot 10
-    std memcpy v101 v102 v103
-
-    // NUL terminator at entry+19+nameLen.
-    v104 = std addI64 v101 v103
-    v105 = std constI64 0
-    std storeByte v104 v105 v105
-
-    // Advance cursor by reclen, mark cached entry consumed.
-    v106 = std loadSlot 3
-    v107 = std loadSlot 8
-    v108 = std addI64 v106 v107
-    std storeSlot 3 v108
-
-    v109 = std loadSlot 0
-    v110 = std constI64 0
-    std storeIndirect v109 16 v110
-
-    std br emit_loop
-end
-
-// =============================================================================
-
-// =============================================================================
-// Non-Windows (Linux) file/directory runtime bodies. `filterRuntimeForOs`
-// drops these on Windows (the IAT-based public bodies above remain) and
-// renames each `_stub` → public name on Linux / macOS / WASI targets.
-// Wasm intercepts at MirToWasm with hand-emitted bodies for each helper.
-//
-// Phase 15c Stream 4.1: real Linux implementations using the new
-// std osFile* / std osDir* ops. Each helper:
-//   1. Converts the path __ManagedMemory* to a NUL-terminated C-string in
-//      a freshly mm_alloc'd buffer (`mrt_cstr_from_mm`).
-//   2. Calls the matching std osFile* / std osDir* op, which the backend
-//      lowers to a raw Linux syscall.
-//   3. Frees the temp C-string buffer via mm_decref.
-//   4. Maps negative syscall results (-errno) to the bootstrap's
-//      __ManagedFileError / __ManagedDirectoryError ordinals (handled
-//      uniformly by `mrt_select_io_error_flag`).
-//
-// Slot usage convention (per-helper):
-//   slot 0..N = saved arguments
-//   slot 60   = syscall result (used by error mapping)
-//   slot 61   = path C-string ptr (saved across the syscall for decref)
-
 // mrt_cstr_from_mm(path __ManagedMemory*) -> __ManagedMemory ptr
 // holding the UTF-8 bytes of `path[0..pathLen]` followed by a NUL byte.
 // Caller must mm_decref the returned pointer.
@@ -4030,100 +2672,155 @@ func mrt_directory_exists 1 i64
 end
 
 // =============================================================================
-// Phase 15f — executable-path retrieval.
+// Command-line / executable-path retrieval — platform-independent bodies.
 //
-// `mrt_executable_path()` returns a `__ManagedMemory` pointer whose buffer
-// holds the UTF-8-encoded absolute path of the running module. The body
-// uses GetModuleFileNameW (kernel32 IAT slot 15) to fetch the wide-char
-// path, then WideCharToMultiByte (slot 14) to re-encode as UTF-8. The
-// wide buffer lives in stack slots 10..267 (256 qwords = 2048 bytes,
-// room for ~1023 wchars + NUL — well past PATH_MAX on every supported
-// system, including extended-prefix Windows paths up to 4 KiB if the
-// linker ever enables long-path support).
-//
-// Slot usage (function-local stack slots, each 8 bytes):
-//   slot 0 = wlen (GetModuleFileNameW return; excludes the NUL)
-//   slot 1 = byte_size_with_nul (WideCharToMultiByte size-query return)
-//   slot 2 = mm pointer (the __ManagedMemory we return)
-//   slot 3 = buffer (mm[0])
-//   slots 10..267 = 2048-byte wide buffer (256 qword slots)
-func mrt_executable_path 0 i64
+// Each helper emits one of the new Std-level ops (`osGetArgc` / `osGetArgv` /
+// `osGetExecutablePath`), and the per-backend MIR lowering decides what those
+// mean per OS (Linux/macOS read stashed argv globals; Windows calls hand-
+// rolled IAT helpers in the backend; WASI uses its argv cache). The bodies
+// here are identical across targets — no per-OS stub split remains.
+
+// mrt_command_line_count(): returns the process argument count.
+func mrt_command_line_count 0 i64
   block entry:
-    // GetModuleFileNameW(NULL, &wbuf, 1024). The lowest-address slot of
-    // the wide buffer is slot 267 (stack grows down, slot index grows
-    // up), so passing stackAddr 267 makes the API write FORWARD through
-    // slots 267..10. nSize is in wchars, not bytes.
-    v0 = std constI64 0
-    v1 = std stackAddr 267
-    v2 = std constI64 1024
-    v3 = std iatCall 15 v0 v1 v2
-    std storeSlot 0 v3
-
-    // WideCharToMultiByte size query: CP_UTF8=65001, flags=0, wstr,
-    // wlen=-1 (use the in-buffer NUL terminator), buf=NULL, bufSize=0,
-    // defChar=NULL, usedDefChar=NULL. Returns the byte count INCLUDING
-    // the NUL terminator.
-    v4 = std constI64 65001
-    v5 = std constI64 0
-    v6 = std stackAddr 267
-    v7 = std constI64 -1
-    v8 = std constI64 0
-    v9 = std constI64 0
-    v10 = std constI64 0
-    v11 = std constI64 0
-    v12 = std iatCall 14 v4 v5 v6 v7 v8 v9 v10 v11
-    std storeSlot 1 v12
-
-    // Allocate a __ManagedMemory with a byte buffer sized for the full
-    // UTF-8 encoding plus NUL. __managed_mem_create(count, elemSize).
-    v13 = std loadSlot 1
-    v14 = std constI64 1
-    v15 = std call __managed_mem_create v13 v14
-    std storeSlot 2 v15
-
-    // Load buffer = mm[0].
-    v16 = std loadSlot 2
-    v17 = std loadIndirect v16 0
-    std storeSlot 3 v17
-
-    // WideCharToMultiByte conversion: same flags + source pointer; this
-    // time pass buffer = mm[0], bufSize = byte_size_with_nul.
-    v18 = std constI64 65001
-    v19 = std constI64 0
-    v20 = std stackAddr 267
-    v21 = std constI64 -1
-    v22 = std loadSlot 3
-    v23 = std loadSlot 1
-    v24 = std constI64 0
-    v25 = std constI64 0
-    v26 = std iatCall 14 v18 v19 v20 v21 v22 v23 v24 v25
-
-    // Store length = byte_size_with_nul - 1 (drop trailing NUL) at mm[8].
-    v27 = std loadSlot 1
-    v28 = std constI64 1
-    v29 = std subI64 v27 v28
-    v30 = std loadSlot 2
-    std storeIndirect v30 8 v29
-
-    // Return mm pointer.
-    v31 = std loadSlot 2
-    std ret v31
+    v0 = std osGetArgc
+    std ret v0
 end
 
-// Phase 15f stub for non-Windows targets. `filterRuntimeForOs` renames this
-// to the public `mrt_executable_path` name when the target's OS is not
-// Windows, replacing the iatCall-based body which references IAT slots
-// that only exist in PE images. The stub returns an empty __ManagedMemory
-// (length=0); spec runners on Linux/macOS/WASI that care about the
-// executable path supply it through other channels — a full implementation
-// (readlink("/proc/self/exe") on Linux, _NSGetExecutablePath on macOS,
-// args[0] on WASI) is deferred to a follow-up phase.
-func mrt_executable_path_stub 0 i64
+// mrt_command_line_arg(index): returns a freshly-allocated __ManagedMemory
+// holding the UTF-8 bytes of argv[index]. Out-of-bounds (osGetArgv returned 0)
+// produces an empty MM (length=0). Slot usage:
+//   slot 0 = argv[index] raw C-string pointer
+//   slot 1 = NUL-scan counter (byte length, excluding NUL)
+//   slot 2 = mm pointer
+func mrt_command_line_arg 1 i64
   block entry:
-    v0 = std constI64 1
-    v1 = std constI64 1
-    v2 = std call __managed_mem_create v0 v1
-    std ret v2
+    v0 = std param 0 i64
+    v1 = std osGetArgv v0
+    std storeSlot 0 v1
+    // If osGetArgv returned 0 the index is out of bounds — emit an empty MM.
+    v2 = std constI64 0
+    v3 = std cmpI64Eq v1 v2
+    std condBr v3 oob_path scan_init
+
+  block scan_init:
+    // Initialise the NUL-scan counter to 0; loop reads cstr[counter] until 0.
+    v4 = std constI64 0
+    std storeSlot 1 v4
+    std br scan
+
+  block scan:
+    v5 = std loadSlot 0
+    v6 = std loadSlot 1
+    v7 = std loadByte v5 v6
+    v8 = std constI64 0
+    v9 = std cmpI64Eq v7 v8
+    std condBr v9 alloc scan_next
+
+  block scan_next:
+    v10 = std loadSlot 1
+    v11 = std constI64 1
+    v12 = std addI64 v10 v11
+    std storeSlot 1 v12
+    std br scan
+
+  block alloc:
+    // __managed_mem_create(byteLen + 1, 1). The +1 reserves space for the NUL
+    // terminator so the memcpy below (which copies `byteLen` bytes, no NUL)
+    // can be followed by callers writing a NUL if they want C-string access.
+    v13 = std loadSlot 1
+    v14 = std constI64 1
+    v15 = std addI64 v13 v14
+    v16 = std constI64 1
+    v17 = std call __managed_mem_create v15 v16
+    std storeSlot 2 v17
+
+    // dst = mm[0] (the heap-allocated buffer pointer stored at offset 0).
+    v18 = std loadSlot 2
+    v19 = std loadIndirect v18 0
+
+    // memcpy(dst, src, byteLen). Does not copy the NUL — only the data bytes.
+    v20 = std loadSlot 0
+    v21 = std loadSlot 1
+    std memcpy v19 v20 v21
+
+    // Store length = byteLen at mm[8].
+    v22 = std loadSlot 1
+    v23 = std loadSlot 2
+    std storeIndirect v23 8 v22
+
+    v24 = std loadSlot 2
+    std ret v24
+
+  block oob_path:
+    // Out-of-bounds: empty 1-byte MM (length stays 0). Matches the existing
+    // Windows `mrt_command_line_arg` OOB return shape so callers observe an
+    // empty String regardless of platform.
+    v25 = std constI64 1
+    v26 = std constI64 1
+    v27 = std call __managed_mem_create v25 v26
+    std ret v27
+end
+
+// mrt_executable_path(): returns a __ManagedMemory holding the UTF-8 bytes
+// of the running executable's path. On error (osGetExecutablePath returned a
+// negative errno-style value) produces an empty MM. The stack buffer holds
+// up to 4096 bytes — well past PATH_MAX on every supported system.
+//
+// Slot usage:
+//   slot 0 = osGetExecutablePath return value (bytes written or -errno)
+//   slot 1 = mm pointer
+//   slot 2 = mm[0] buffer pointer
+//   slots 11..522 = 512-qword (4096-byte) UTF-8 path buffer
+func mrt_executable_path 0 i64
+  block entry:
+    // Stack-allocate the path buffer at slot 522 (low-address end of a
+    // 4096-byte region extending toward slot 11; the slot allocator reserves
+    // the frame).
+    v0 = std stackAddr 522
+    v1 = std constI64 4096
+    v2 = std osGetExecutablePath v0 v1
+    std storeSlot 0 v2
+
+    // Error path: result < 0 → return empty MM.
+    v3 = std constI64 0
+    v4 = std cmpI64Lt v2 v3
+    std condBr v4 err_path ok_path
+
+  block ok_path:
+    // __managed_mem_create(bytes + 1, 1). The +1 reserves NUL space; memcpy
+    // below copies only `bytes` data bytes.
+    v5 = std loadSlot 0
+    v6 = std constI64 1
+    v7 = std addI64 v5 v6
+    v8 = std constI64 1
+    v9 = std call __managed_mem_create v7 v8
+    std storeSlot 1 v9
+
+    // dst = mm[0].
+    v10 = std loadSlot 1
+    v11 = std loadIndirect v10 0
+    std storeSlot 2 v11
+
+    // memcpy(dst, stackBuf, bytes).
+    v12 = std loadSlot 2
+    v13 = std stackAddr 522
+    v14 = std loadSlot 0
+    std memcpy v12 v13 v14
+
+    // Store length = bytes at mm[8].
+    v15 = std loadSlot 0
+    v16 = std loadSlot 1
+    std storeIndirect v16 8 v15
+
+    v17 = std loadSlot 1
+    std ret v17
+
+  block err_path:
+    v18 = std constI64 1
+    v19 = std constI64 1
+    v20 = std call __managed_mem_create v18 v19
+    std ret v20
 end
 
 // mrt_cov_hit(siteId): increments __data_cov_counters[siteId].
@@ -7546,6 +6243,21 @@ func maxon_current_time_ms 0 i64
   block entry:
     v0 = std constI64 0
     std ret v0
+end
+
+// maxon_sleep(ms) — suspends the current thread for `ms` milliseconds. The
+// `std osSleep` op is target-neutral: each backend lowers it to the OS's
+// blocking-sleep primitive (kernel32!Sleep on Windows, poll_oneoff with a
+// CLOCK_MONOTONIC subscription on WASI, nanosleep syscall/libcall on
+// Linux/macOS). The body returns 0 because the Maxon-level signature is
+// void; the constI64 is bound to the return slot so the codegen path through
+// `lookupFuncReturnStdType` resolves cleanly.
+func maxon_sleep 1 void
+  block entry:
+    v0 = std param 0 i64
+    std osSleep v0
+    v1 = std constI64 0
+    std ret v1
 end
 
 // maxon_subprocess_resolve_on_path(name_mm) — PATH lookup. Stub returns a

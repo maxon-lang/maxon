@@ -524,6 +524,40 @@ export function registerSlabAndMmGlobalsForDataSection(globalData GlobalDataTabl
 	// MM-layer leak counter. Atomic-tracked count of live allocations;
 	// spec tests assert this reaches zero.
 	addDataSectionEntry(globalData, name: "__mm_alloc_count", initialBytes: zeroBytesOfSize(8))
+
+	// Phase B3: lazy-init cache for the hand-rolled `mrt_win32_get_argc` /
+	// `mrt_win32_get_argv` helpers. First call to either helper populates
+	// `__mrt_win32_argc` (the argument count) and `__mrt_win32_argv_cache_ptr`
+	// (heap-allocated array of UTF-8 NUL-terminated argv strings) and sets
+	// `__mrt_win32_argv_init_done` to 1. Subsequent calls observe the flag and
+	// skip re-initialization. The globals are emitted in every target's data
+	// section (the helpers themselves are only emitted on Windows; on other
+	// targets the slots are unused).
+	addDataSectionEntry(globalData, name: "__mrt_win32_argv_init_done", initialBytes: zeroBytesOfSize(8))
+	addDataSectionEntry(globalData, name: "__mrt_win32_argc", initialBytes: zeroBytesOfSize(8))
+	addDataSectionEntry(globalData, name: "__mrt_win32_argv_cache_ptr", initialBytes: zeroBytesOfSize(8))
+
+	// Phase D2: kernel-supplied argc/argv stashed by `mrt_start`'s prologue on
+	// Linux/macOS. The `stashEntryArgv` backend pseudo-op writes rdi/rsi (x64)
+	// or x0/x1 (arm64) into these slots before any other code in the entry
+	// function runs. The Linux/macOS lowerings of `osGetArgc` / `osGetArgv`
+	// read from these globals. Reserved unconditionally so the .data layout is
+	// uniform across targets — on Windows and WASI these slots are 16 bytes
+	// of unused .data (Win32 uses GetCommandLineW + cache; WASI uses the
+	// argv-cache in scratch memory).
+	addDataSectionEntry(globalData, name: "__mrt_argc", initialBytes: zeroBytesOfSize(8))
+	addDataSectionEntry(globalData, name: "__mrt_argv", initialBytes: zeroBytesOfSize(8))
+
+	// Phase D1: NUL-terminated `/proc/self/exe` path used by the Linux
+	// `osGetExecutablePath` lowering. 15 bytes of payload + 1 NUL = 16 bytes,
+	// rounded for natural 8-byte alignment. Lives in writable .data because
+	// that's the only data section the prelude builder emits today, but it
+	// is never written by anyone.
+	var procSelfExeBytes = ByteArray.create()
+	procSelfExeBytes.append(b"/proc/self/exe")
+	procSelfExeBytes.push(0)
+	procSelfExeBytes.push(0)
+	addDataSectionEntry(globalData, name: "__mrt_proc_self_exe", initialBytes: procSelfExeBytes)
 end 'registerSlabAndMmGlobalsForDataSection'
 
 // Register the allocator-count reader as a callable signature. The
@@ -598,6 +632,10 @@ export function registerBuiltinsIntrinsicSignatures(project Project)
 	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Builtins.subprocessSendSignal", paramNames: mmParamNames2("handle", second: "sig"), paramTypes: mmParamTypes2(MaxonType.integer, second: MaxonType.integer), returnType: intReturn)
 	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Builtins.subprocessReleaseHandle", paramNames: mmParamNames1("handle"), paramTypes: mmParamTypes1(MaxonType.integer), returnType: MaxonReturnType.void)
 	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Builtins.managedIsNull", paramNames: mmParamNames1("m"), paramTypes: mmParamTypes1(mmType), returnType: intReturn)
+	// `sleep(ms)` suspends the current green thread for the given milliseconds.
+	// Lowers to the runtime helper `maxon_sleep`. Matches the C# bootstrap entry
+	// in Compiler/2-Parser.cs:9271 (RuntimeCallIntrinsic "maxon_sleep", arity 1).
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Builtins.sleep", paramNames: mmParamNames1("ms"), paramTypes: mmParamTypes1(MaxonType.integer), returnType: MaxonReturnType.void)
 end 'registerBuiltinsIntrinsicSignatures'
 
 // 14-arg spawn/detach contract: argv (MM), argc (int), cwd (MM), envBlock (MM),
@@ -4553,6 +4591,9 @@ type MaxonToStdLowering
 		if methodName == "currentTimeMs" 'isCurrentTimeMs'
 			return self.lowerBuiltinsCurrentTimeMs(result, args: args, dstBlock: dstBlock)
 		end 'isCurrentTimeMs'
+		if methodName == "sleep" 'isSleep'
+			return self.lowerBuiltinsSleep(result, args: args, dstBlock: dstBlock)
+		end 'isSleep'
 		// Phase 3.4: subprocess builtins each route to a fixed `maxon_subprocess_*`
 		// runtime symbol. `lookupSubprocessBuiltin` keeps the (methodName ->
 		// callee, arity, return-shape) mapping in one place; the actual emit is
@@ -5146,6 +5187,30 @@ type MaxonToStdLowering
 	// helper that returns milliseconds since some fixed-but-platform-defined
 	// epoch — the absolute value is meaningless, but differences are
 	// meaningful (stdlib `Clock.elapsedMs` clamps to 0 on apparent skew).
+	// `__Builtins.sleep(ms)`: suspend the current green thread for `ms`
+	// milliseconds. Lowers to the runtime helper `maxon_sleep`. Mirrors the
+	// C# bootstrap entry in Compiler/2-Parser.cs:9271. The intrinsic is
+	// void-returning, so we bind a synthesized 0-const to the user-visible
+	// result name (matches the void-call convention in
+	// `lowerBuiltinsSubprocessCall`).
+	function lowerBuiltinsSleep(result ByteArray, args ByteArrayArray, dstBlock IrBlock) returns bool
+		if args.count() != 1 'badArity'
+			self.reportLowerError(ErrorCode.semanticWrongArgCount, message: "__Builtins.sleep: expected 1 arg, got {args.count()}")
+			return true
+		end 'badArity'
+		let msName = try args.get(0) otherwise panic("invariant: args.count() == 1 just checked")
+		let msId = self.resolveName(msName)
+		var argIds = ValueIdArray.create()
+		argIds.push(msId)
+		let throwawayId = allocValueId(self.funcIdRef)
+		self.setValueType(throwawayId, t: MaxonType.integer)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(throwawayId, callee: "maxon_sleep", argIds: argIds)))
+		let resultId = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: resultId, value: 0))))
+		self.setValueType(resultId, t: MaxonType.integer)
+		return true
+	end 'lowerBuiltinsSleep'
+
 	function lowerBuiltinsCurrentTimeMs(result ByteArray, args ByteArrayArray, dstBlock IrBlock) returns bool
 		if args.count() != 0 'badArity'
 			self.reportLowerError(ErrorCode.semanticWrongArgCount, message: "__Builtins.currentTimeMs: expected 0 args, got {args.count()}")

@@ -11,10 +11,11 @@ let wasiFdWrite = 1
 // WASI argv discovery: `args_sizes_get(argc_out, buf_size_out) -> errno`
 // followed by `args_get(argv_ptrs_out, buf_out) -> errno`. The first call
 // learns the count + total bytes needed; the second fills the argv pointer
-// array and the data buffer. mrt_command_line_count / mrt_command_line_arg
-// (replaced inline for wasm) call args_sizes_get on the first invocation,
-// allocate a single mm-managed buffer for the pointer table + data area,
-// then call args_get; subsequent invocations hit the cached buffer.
+// array and the data buffer. The WASM lowerings of osGetArgc / osGetArgv /
+// osGetExecutablePath invoke `emitArgvCacheEnsure` which calls
+// args_sizes_get on the first invocation, allocates a single mm-managed
+// buffer for the pointer table + data area, then calls args_get;
+// subsequent invocations hit the cached buffer.
 let wasiArgsSizesGet = 2
 let wasiArgsGet = 3
 
@@ -62,7 +63,12 @@ let wasiFdPrestatGet = 13
 // the directory name (NOT null-terminated) of a preopen.
 let wasiFdPrestatDirName = 14
 
-let wasiImportCount = 15
+// poll_oneoff(in_subs, out_evts, nsubs, nevents_out_ptr) -> errno. Used by
+// `osSleep` to block the current thread for the requested duration via a
+// single CLOCK subscription against the monotonic clock.
+let wasiPollOneoff = 15
+
+let wasiImportCount = 16
 
 // Hardcoded preopen-directory file descriptors used by all path-based
 // operations on wasm32-wasi. The spec runner invokes the test binary
@@ -104,8 +110,8 @@ let wasiRightsAllMask = 0x3FFFFFFF
 // iovec struct at offset 0: { buf_ptr: i32 (offset 0), buf_len: i32 (offset 4) }
 // nwritten at offset 8
 //
-// argv cache (zero-initialized, lazily populated by mrt_command_line_count
-// / mrt_command_line_arg on first call):
+// argv cache (zero-initialized, lazily populated by emitArgvCacheEnsure
+// on the first osGetArgc/osGetArgv/osGetExecutablePath invocation):
 //   16..20 (i32): args_sizes_get out: argc (also serves as cached argc)
 //   20..24 (i32): args_sizes_get out: total bytes in the argv buffer
 //   24..28 (i32): init flag (0 = uninitialized, 1 = wasi calls completed)
@@ -143,6 +149,23 @@ let wasiFileOutFdBase = 64
 let wasiFileBufUsedBase = 68
 let wasiFileNewOffsetBase = 72
 let wasiFileStatBase = 80
+
+// --- osSleep scratch region (poll_oneoff subscription + event) ---
+// WASI subscription struct (48 bytes):
+//   0  userdata        u64
+//   8  u.tag           u8 (0 = CLOCK, 1 = FD_READ, 2 = FD_WRITE)
+//   9..15 pad (subscription_u is 40 bytes after tag+pad; we zero on every call)
+//   16 u.clock.clock_id u32 (0 = realtime, 1 = monotonic)
+//   20 pad             u32
+//   24 u.clock.timeout u64 (ns)
+//   32 u.clock.precision u64 (0 = best-effort)
+//   40 u.clock.flags   u16 (0 = relative, 1 = ABSTIME)
+//   42..47 pad
+// WASI event struct (32 bytes) written by poll_oneoff into wasiSleepEventBase.
+// nevents_out is a single i32 written by poll_oneoff into wasiSleepNeventsBase.
+let wasiSleepSubBase = 144  // 48 bytes [144..192)
+let wasiSleepEventBase = 192  // 32 bytes [192..224)
+let wasiSleepNeventsBase = 224  // 4 bytes  [224..228)
 let scratchEnd = 1024
 
 // Initial memory pages: enough for scratch + global data + reasonable stack.
@@ -751,6 +774,14 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 	writeFuncType(fdPrestatDirNameType, paramTypes: threeI32ParamsD, resultTypes: makeByteArray1(wasmTypeI32))
 	types.push(fdPrestatDirNameType)
 
+	// Type 15: (i32, i32, i32, i32) -> (i32) — poll_oneoff(in_subs, out_evts, nsubs, nevents_out)
+	// Same wire shape as fd_write but kept as a separate type entry; the
+	// dedup map (typeIndexMap) tracks signature uniqueness for indirect
+	// calls only, and direct imports always use a fixed positional index.
+	var pollOneoffType = ByteArray.create()
+	writeFuncType(pollOneoffType, paramTypes: makeByteArray4(wasmTypeI32, b: wasmTypeI32, c: wasmTypeI32, d: wasmTypeI32), resultTypes: makeByteArray1(wasmTypeI32))
+	types.push(pollOneoffType)
+
 	// Types for module functions (type index = wasiImportCount + i for each)
 	for func in module.functions 'buildTypes'
 		let funcThrows = match func.throwsTypeName 'kind'
@@ -863,6 +894,10 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 	// Import 14: fd_prestat_dir_name — read each preopen's host-side
 	// directory path so we can match paths against it.
 	importCount = addFuncImport(imports, moduleName: wasiModule, fieldName: b"fd_prestat_dir_name", typeIndex: 14, countRef: importCount)
+	// Import 15: poll_oneoff — blocks the current thread on one or more
+	// subscriptions. Used by `osSleep` with a single CLOCK subscription
+	// to wait for `ms` milliseconds against the monotonic clock.
+	importCount = addFuncImport(imports, moduleName: wasiModule, fieldName: b"poll_oneoff", typeIndex: 15, countRef: importCount)
 
 	var importSection = ByteArray.create()
 	writeUleb128(importSection, value: importCount)
@@ -1165,6 +1200,18 @@ type WasmFunctionLowering
 	// findFloatValueIds and read by emitIndirectCall when synthesizing
 	// the call-site signature for type-section dedup.
 	var funcFloatSet BoolArray
+	// True iff any of osGetArgc/osGetArgv/osGetExecutablePath appears in
+	// the current function. When set, three additional i32 scratch locals
+	// are reserved at the tail of the locals declaration (after any dispatch
+	// local) and the indices below are populated. The three op lowerings
+	// consume these as the argv-cache scratch register, NUL-scan pointer,
+	// and byte-length counter; reserving them up front avoids per-op local
+	// declarations (which WASM doesn't support — locals must be declared in
+	// the function prelude).
+	var hasArgvOp bool
+	var argvScratchLocal Wasm32Index
+	var argvScanLocal Wasm32Index
+	var argvLenLocal Wasm32Index
 
 	static function create(module MirModule, funcNames StringArray, funcSigs WasmFuncSigs, globalDataOffsets GlobalDataOffsetMap, stackBase Wasm32Offset, fixedCalls bool) returns WasmFunctionLowering
 		return Self{
@@ -1187,7 +1234,11 @@ type WasmFunctionLowering
 			dispatchLocal: 0 as Wasm32Index,
 			loopDepth: 0,
 			blockIndex: BlockIndexMap.create(),
-			funcFloatSet: BoolArray.create()
+			funcFloatSet: BoolArray.create(),
+			hasArgvOp: false,
+			argvScratchLocal: 0 as Wasm32Index,
+			argvScanLocal: 0,
+			argvLenLocal: 0
 		}
 	end 'create'
 
@@ -1205,23 +1256,9 @@ type WasmFunctionLowering
 		if srcFunc.name == "mrt_panic_print_frame" 'isPrintFrame'
 			return emitWasmNopVoidFunc()
 		end 'isPrintFrame'
-		// Replace the Windows IAT-call command-line bodies with WASI-driven
-		// equivalents. filterRuntimeForOs renamed the *_stub helpers into the
-		// public names already; the stubs returned argc=1 + empty argv and
-		// would otherwise leave wasm tests with no argv access at all.
-		if srcFunc.name == "mrt_command_line_count" 'isCmdCount'
-			return emitWasmCommandLineCount(funcSigs)
-		end 'isCmdCount'
-		if srcFunc.name == "mrt_command_line_arg" 'isCmdArg'
-			return emitWasmCommandLineArg(funcSigs)
-		end 'isCmdArg'
-		if srcFunc.name == "mrt_executable_path" 'isExePath'
-			return emitWasmExecutablePath(funcSigs)
-		end 'isExePath'
-		// Phase 15c Stream 3.3: file/directory I/O. The non-Windows
-		// `runtime.std` stubs were renamed to these public names by
-		// `filterRuntimeForOs`; the stub bodies return sentinel errors,
-		// so intercept here and emit the WASI-backed bodies instead.
+		// Phase 15c Stream 3.3: file/directory I/O. The runtime.std bodies
+		// reference Linux-only `osFile*` / `osDir*` ops, so intercept here
+		// and emit the WASI-backed bodies instead.
 		if srcFunc.name == "mrt_file_open_read" 'isFileOpenRead'
 			return emitWasmFileOpenRead()
 		end 'isFileOpenRead'
@@ -1349,6 +1386,28 @@ type WasmFunctionLowering
 			localGroups.push(wasmTypeI32)
 			groupCount = groupCount + 1
 		end 'addDispatch'
+
+		// Reserve three i32 scratch locals when any of osGetArgc / osGetArgv /
+		// osGetExecutablePath appear in this function. They sit at the end of
+		// the locals declaration (after the optional dispatch local) so the
+		// ValueId-to-local-index identity for 0..maxValueId is preserved.
+		// Indices: argvScratchLocal is the next free local; argvScanLocal and
+		// argvLenLocal follow. emitArgvCacheEnsure / the bounds-check + NUL-scan
+		// sequences in the three op lowerings consume them.
+		hasArgvOp = scanForArgvOps()
+		if hasArgvOp 'reserveArgvScratch'
+			var baseIndex = (maxValueId + 1) as Wasm32Index
+			if isMultiBlock 'bumpForDispatch'
+				baseIndex = (maxValueId + 2) as Wasm32Index
+			end 'bumpForDispatch'
+			argvScratchLocal = baseIndex
+			argvScanLocal = baseIndex + 1
+			argvLenLocal = baseIndex + 2
+			writeUleb128(localGroups, value: 3)
+			localGroups.push(wasmTypeI32)
+			groupCount = groupCount + 1
+		end 'reserveArgvScratch'
+
 		writeUleb128(body, value: groupCount)
 		body.append(localGroups)
 
@@ -1650,9 +1709,8 @@ type WasmFunctionLowering
 			globalAddr(resultId, name) then emitGlobalAddr(resultId, name: name)
 			funcAddr(resultId, name) then emitFuncAddr(resultId, name: name)
 			loadFramePtr(resultId) then emitLoadFramePtr(resultId)
-			syscall then panic("wasm: raw syscall not supported")
-			iatCall then panic("wasm: IAT call not supported")
 			osExit(codeId) then emitOsExit(codeId)
+			osSleep(msId) then emitOsSleep(msId)
 			osWrite(ptrId, lenId) then emitOsWrite(ptrId, lenId: lenId, fd: 1)
 			osWriteErr(ptrId, lenId) then emitOsWrite(ptrId, lenId: lenId, fd: 2)
 			osRead(resultId, ptrId, lenId) then emitOsRead(resultId, ptrId: ptrId, lenId: lenId, fd: 0)
@@ -1660,6 +1718,9 @@ type WasmFunctionLowering
 			osWriteFd then panic("wasm: osWriteFd not yet implemented (Phase 3)")
 			osClose then panic("wasm: osClose not yet implemented (Phase 3)")
 			osGetEnv then panic("wasm: osGetEnv not yet implemented (Phase 3)")
+			osGetArgc(resultId) then emitOsGetArgc(resultId)
+			osGetArgv(resultId, indexId) then emitOsGetArgv(resultId, indexId: indexId)
+			osGetExecutablePath(resultId, bufPtrId, bufSizeId) then emitOsGetExecutablePath(resultId, bufPtrId: bufPtrId, bufSizeId: bufSizeId)
 			memcpy(dstId, srcId, lenId) then emitMemcpy(dstId, srcId: srcId, lenId: lenId)
 			storeByte(baseId, offsetId, byteId) then emitStoreByte(baseId, offsetId: offsetId, byteId: byteId)
 			loadByte(resultId, baseId, offsetId) then emitLoadByte(resultId, baseId: baseId, offsetId: offsetId)
@@ -1667,12 +1728,10 @@ type WasmFunctionLowering
 			osAllocPagesLarge(resultId, sizeId) then emitOsAllocPages(resultId, sizeId: sizeId)
 			osFreePages then nop()
 			// Phase 15c Stream 4.1: Linux file-I/O ops are not legal on Wasm.
-			// The per-target runtime filter (BackendDispatch.filterRuntimeForOs)
-			// keeps the IAT-based Windows bodies on Windows; the Linux
-			// stub-renamed bodies emit these ops only on Linux. Wasm bodies
-			// are hand-emitted at this layer (no runtime.std referent) and
-			// never invoke the std osFile*/osDir* ops. Reaching this panic
-			// would mean a Linux body leaked into a Wasm build.
+			// Wasm bodies are hand-emitted at this layer (no runtime.std
+			// referent) and never invoke the std osFile*/osDir* ops.
+			// Reaching this panic would mean a Linux body leaked into a
+			// Wasm build.
 			osFileOpen then panic("wasm: osFileOpen op should not reach MirToWasm — Linux-only")
 			osFileRead then panic("wasm: osFileRead op should not reach MirToWasm — Linux-only")
 			osFileWrite then panic("wasm: osFileWrite op should not reach MirToWasm — Linux-only")
@@ -2035,6 +2094,80 @@ type WasmFunctionLowering
 		writeUleb128(body, value: wasiProcExit as Wasm32Index)
 	end 'emitOsExit'
 
+	// Store an i64 constant at a fixed absolute linear-memory address with
+	// 8-byte alignment. Used by `emitOsSleep` to zero / initialize the
+	// per-subscription fields; centralizes the const-address + i64-store
+	// instruction triple so the subscription layout reads as data rather
+	// than as nine repetitions of the same five-instruction recipe.
+	function emitWasmStoreI64Const(addr MachineWord, value MachineWord)
+		body.push(opI32Const)
+		writeSleb128(body, value: addr as ParsedInt)
+		body.push(opI64Const)
+		writeSleb128(body, value: value as ParsedInt)
+		body.push(opI64Store)
+		body.push(0x03)
+		writeUleb128(body, value: 0)
+	end 'emitWasmStoreI64Const'
+
+	// `osSleep ms` on WASI. Block the current thread for `msId` milliseconds
+	// via `poll_oneoff` with a single CLOCK_MONOTONIC subscription. We build
+	// the 48-byte subscription struct in linear memory at `wasiSleepSubBase`,
+	// populate it with the requested timeout (converted to ns), then call
+	// poll_oneoff(sub_ptr, evt_ptr, nsubs=1, nevents_out_ptr). The errno
+	// return and event-payload bytes are ignored — a runaway timeout / cancel
+	// is the kernel's problem, not the sleep caller's.
+	//
+	// Subscription layout (filled at runtime — every field written explicitly,
+	// no zero-init pass since every byte we care about is overwritten):
+	//   +0  userdata        u64 = 0 (we don't multiplex subscriptions)
+	//   +8  u.tag           u8  = 0 (__WASI_EVENTTYPE_CLOCK)
+	//   +9  pad             7 bytes (subscription_u alignment to 8)
+	//   +16 u.clock.clock_id u32 = 1 (__WASI_CLOCKID_MONOTONIC)
+	//   +20 pad             u32 = 0
+	//   +24 u.clock.timeout u64 = ms * 1_000_000 (nanoseconds, relative)
+	//   +32 u.clock.precision u64 = 0 (best-effort)
+	//   +40 u.clock.flags   u16 = 0 (relative, not absolute)
+	//   +42 pad             6 bytes
+	function emitOsSleep(msId ValueId)
+		emitWasmStoreI64Const(wasiSleepSubBase, value: 0)  // +0: userdata
+		emitWasmStoreI64Const(wasiSleepSubBase + 8, value: 0)  // +8: tag (CLOCK) + 7 bytes pad
+		emitWasmStoreI64Const(wasiSleepSubBase + 16, value: 1)  // +16: clock_id = monotonic (low) + pad (high)
+
+		// +24: timeout u64 = ms * 1_000_000. Computed at runtime so we can't
+		// route through `emitWasmStoreI64Const`; expand the sequence inline.
+		body.push(opI32Const)
+		writeSleb128(body, value: (wasiSleepSubBase + 24) as ParsedInt)
+		body.push(opLocalGet)
+		writeUleb128(body, value: msId as Wasm32Index)
+		body.push(opI64Const)
+		writeSleb128(body, value: 1000000)
+		body.push(opI64Mul)
+		body.push(opI64Store)
+		body.push(0x03)
+		writeUleb128(body, value: 0)
+
+		emitWasmStoreI64Const(wasiSleepSubBase + 32, value: 0)  // +32: precision (best-effort)
+		emitWasmStoreI64Const(wasiSleepSubBase + 40, value: 0)  // +40: flags = relative + pad
+
+		// poll_oneoff(in_subs, out_evts, nsubs, nevents_out)
+		body.push(opI32Const)
+		writeSleb128(body, value: wasiSleepSubBase as ParsedInt)
+		body.push(opI32Const)
+		writeSleb128(body, value: wasiSleepEventBase as ParsedInt)
+		body.push(opI32Const)
+		writeSleb128(body, value: 1)
+		body.push(opI32Const)
+		writeSleb128(body, value: wasiSleepNeventsBase as ParsedInt)
+		body.push(opCall)
+		writeUleb128(body, value: wasiPollOneoff as Wasm32Index)
+
+		// Drop the errno return — we don't surface poll_oneoff failures
+		// through osSleep (a non-zero return here means the host runtime
+		// rejected the subscription, which can't happen with the well-formed
+		// clock subscription we just built).
+		body.push(opDrop)
+	end 'emitOsSleep'
+
 	function emitOsWrite(ptrId ValueId, lenId ValueId, fd MachineWord)
 		// WASI fd_write(fd: i32, iovs: i32, iovs_len: i32, nwritten: i32) -> i32
 		// Build iovec at scratch memory:
@@ -2136,6 +2269,241 @@ type WasmFunctionLowering
 		body.push(opLocalSet)
 		writeUleb128(body, value: resultId as Wasm32Index)
 	end 'emitOsRead'
+
+	// osGetArgc: emits the WASI argv-cache ensure sequence, then loads the
+	// cached argc (i32) and zero-extends to i64 into resultId. Consumes
+	// argvScratchLocal as the cache-init scratch register. The cache is
+	// shared across every osGetArgc/osGetArgv/osGetExecutablePath emission
+	// in the module; first call performs args_sizes_get + mrt_alloc + args_get,
+	// subsequent calls fall through the early-out branch in emitArgvCacheEnsure.
+	function emitOsGetArgc(resultId ValueId)
+		emitArgvCacheEnsure(body, funcSigs: funcSigs, scratchLocal: argvScratchLocal)
+
+		body.push(opI32Const)
+		writeSleb128(body, value: argvCacheArgcBase as ParsedInt)
+		body.push(opI32Load)
+		body.push(0x02)
+		writeUleb128(body, value: 0)
+		body.push(opI64ExtendI32U)
+		body.push(opLocalSet)
+		writeUleb128(body, value: resultId as Wasm32Index)
+	end 'emitOsGetArgc'
+
+	// osGetArgv(indexId): returns the raw C-string pointer to argv[index] as
+	// an i64, or 0 when index is out of bounds. The OOB-returns-0 contract
+	// matches the unified `mrt_command_line_arg` body in runtime.std, which
+	// dispatches on the 0 sentinel to take the empty-MM path. Bounds check
+	// rejects both `index < 0` (signed comparison) and `index >= argc`
+	// (unsigned after i32-wrap so wraparound from a large unsigned i64
+	// can't fool the upper bound).
+	function emitOsGetArgv(resultId ValueId, indexId ValueId)
+		emitArgvCacheEnsure(body, funcSigs: funcSigs, scratchLocal: argvScratchLocal)
+
+		// (block (result i64) ... end) — both branches produce an i64 that
+		// lands in resultId via the local.set after the block end.
+		body.push(opBlock)
+		body.push(wasmTypeI64)
+
+		// Inner void block we br_if into for the OOB path. Falling out of
+		// the inner block lands in the happy path; brIf to label 0 exits
+		// the inner block into the OOB tail of the outer block.
+		body.push(opBlock)
+		body.push(wasmTypeVoid)
+
+		// if index < 0 then OOB
+		body.push(opLocalGet)
+		writeUleb128(body, value: indexId as Wasm32Index)
+		body.push(opI64Const)
+		writeSleb128(body, value: 0)
+		body.push(opI64LtS)
+		body.push(opBrIf)
+		writeUleb128(body, value: 0)
+
+		// if (u32)index >= argc then OOB
+		body.push(opLocalGet)
+		writeUleb128(body, value: indexId as Wasm32Index)
+		body.push(opI32WrapI64)
+		body.push(opI32Const)
+		writeSleb128(body, value: argvCacheArgcBase as ParsedInt)
+		body.push(opI32Load)
+		body.push(0x02)
+		writeUleb128(body, value: 0)
+		body.push(opI32GeU)
+		body.push(opBrIf)
+		writeUleb128(body, value: 0)
+
+		// Happy path: argv[idx] = i32.load(buf_ptr + idx*4). Extend to i64,
+		// br out of the outer (result i64) block.
+		body.push(opI32Const)
+		writeSleb128(body, value: argvCacheBufPtrBase as ParsedInt)
+		body.push(opI32Load)
+		body.push(0x02)
+		writeUleb128(body, value: 0)
+		body.push(opLocalGet)
+		writeUleb128(body, value: indexId as Wasm32Index)
+		body.push(opI32WrapI64)
+		body.push(opI32Const)
+		writeSleb128(body, value: 2)
+		body.push(opI32Shl)
+		body.push(opI32Add)
+		body.push(opI32Load)
+		body.push(0x02)
+		writeUleb128(body, value: 0)
+		body.push(opI64ExtendI32U)
+		body.push(opBr)
+		writeUleb128(body, value: 1)
+
+		// End inner void block. OOB path lands here; push 0 and fall through
+		// out of the outer (result i64) block.
+		body.push(opEnd)
+
+		body.push(opI64Const)
+		writeSleb128(body, value: 0)
+
+		// End outer block. Result (the argv[idx] pointer or 0) is on the stack.
+		body.push(opEnd)
+
+		body.push(opLocalSet)
+		writeUleb128(body, value: resultId as Wasm32Index)
+	end 'emitOsGetArgv'
+
+	// osGetExecutablePath(bufPtrId, bufSizeId): WASI doesn't have an
+	// `executable_path` syscall — POSIX convention is argv[0]. We fetch
+	// argv[0] from the WASI argv cache, NUL-scan to compute the byte length,
+	// then memcpy into the caller-supplied buffer if it fits. Returns the
+	// byte count written on success (NUL excluded), or -34 (-ERANGE) when
+	// argc == 0 or the buffer is too small. argvScanLocal holds the scan
+	// pointer; argvLenLocal accumulates the byte count.
+	function emitOsGetExecutablePath(resultId ValueId, bufPtrId ValueId, bufSizeId ValueId)
+		emitArgvCacheEnsure(body, funcSigs: funcSigs, scratchLocal: argvScratchLocal)
+
+		// (block (result i64) ... end) — every path produces an i64 result.
+		body.push(opBlock)
+		body.push(wasmTypeI64)
+
+		// If argc == 0 then -34 (ERANGE-style sentinel: no executable path
+		// available). br to label 0 — falls into the i64-typed end with the
+		// -34 already on the stack.
+		body.push(opI32Const)
+		writeSleb128(body, value: argvCacheArgcBase as ParsedInt)
+		body.push(opI32Load)
+		body.push(0x02)
+		writeUleb128(body, value: 0)
+		body.push(opI32Eqz)
+		body.push(opIf)
+		body.push(wasmTypeVoid)
+		body.push(opI64Const)
+		writeSleb128(body, value: -34)
+		body.push(opBr)
+		writeUleb128(body, value: 1)
+		body.push(opEnd)
+
+		// argv[0] (i32) = i32.load(buf_ptr + 0*4). Store into argvScanLocal —
+		// the scan pointer that the NUL-scan loop advances.
+		body.push(opI32Const)
+		writeSleb128(body, value: argvCacheBufPtrBase as ParsedInt)
+		body.push(opI32Load)
+		body.push(0x02)
+		writeUleb128(body, value: 0)
+		body.push(opI32Load)
+		body.push(0x02)
+		writeUleb128(body, value: 0)
+		body.push(opLocalSet)
+		writeUleb128(body, value: argvScanLocal)
+
+		// Initialize argvLenLocal = 0
+		body.push(opI32Const)
+		writeSleb128(body, value: 0)
+		body.push(opLocalSet)
+		writeUleb128(body, value: argvLenLocal)
+
+		// NUL-scan loop: while *scan != 0 { scan++; len++; }
+		body.push(opBlock)
+		body.push(wasmTypeVoid)
+		body.push(opLoop)
+		body.push(wasmTypeVoid)
+
+		body.push(opLocalGet)
+		writeUleb128(body, value: argvScanLocal)
+		body.push(opI32Load8U)
+		body.push(0x00)
+		writeUleb128(body, value: 0)
+		body.push(opI32Eqz)
+		body.push(opBrIf)
+		writeUleb128(body, value: 1)
+
+		body.push(opLocalGet)
+		writeUleb128(body, value: argvScanLocal)
+		body.push(opI32Const)
+		writeSleb128(body, value: 1)
+		body.push(opI32Add)
+		body.push(opLocalSet)
+		writeUleb128(body, value: argvScanLocal)
+
+		body.push(opLocalGet)
+		writeUleb128(body, value: argvLenLocal)
+		body.push(opI32Const)
+		writeSleb128(body, value: 1)
+		body.push(opI32Add)
+		body.push(opLocalSet)
+		writeUleb128(body, value: argvLenLocal)
+
+		body.push(opBr)
+		writeUleb128(body, value: 0)
+		body.push(opEnd)
+		body.push(opEnd)
+
+		// Truncation check: if (u64)byteLen > bufSize then -34.
+		body.push(opLocalGet)
+		writeUleb128(body, value: argvLenLocal)
+		body.push(opI64ExtendI32U)
+		body.push(opLocalGet)
+		writeUleb128(body, value: bufSizeId as Wasm32Index)
+		body.push(opI64GtU)
+		body.push(opIf)
+		body.push(wasmTypeVoid)
+		body.push(opI64Const)
+		writeSleb128(body, value: -34)
+		body.push(opBr)
+		writeUleb128(body, value: 1)
+		body.push(opEnd)
+
+		// memory.copy dst=bufPtr src=argv[0] len=byteLen. bufPtr is i64 in
+		// the maxon-side local; wrap to i32 for the wasm address. argv[0]'s
+		// current value lives in the scan pointer's STARTING address — but
+		// the scan loop has advanced argvScanLocal to the NUL. Re-read
+		// argv[0] from the cache instead of stashing it before the scan
+		// to keep the local count low and the source-of-truth single.
+		body.push(opLocalGet)
+		writeUleb128(body, value: bufPtrId as Wasm32Index)
+		body.push(opI32WrapI64)
+
+		body.push(opI32Const)
+		writeSleb128(body, value: argvCacheBufPtrBase as ParsedInt)
+		body.push(opI32Load)
+		body.push(0x02)
+		writeUleb128(body, value: 0)
+		body.push(opI32Load)
+		body.push(0x02)
+		writeUleb128(body, value: 0)
+
+		body.push(opLocalGet)
+		writeUleb128(body, value: argvLenLocal)
+		body.push(0xFC)
+		writeUleb128(body, value: 10)
+		body.push(0x00)
+		body.push(0x00)
+
+		// Push byteLen as i64 — falls through to the outer end.
+		body.push(opLocalGet)
+		writeUleb128(body, value: argvLenLocal)
+		body.push(opI64ExtendI32U)
+
+		body.push(opEnd)
+
+		body.push(opLocalSet)
+		writeUleb128(body, value: resultId as Wasm32Index)
+	end 'emitOsGetExecutablePath'
 
 	function emitMemcpy(dstId ValueId, srcId ValueId, lenId ValueId)
 		// Use WASM memory.copy (bulk memory proposal, supported by wasmtime).
@@ -2522,6 +2890,30 @@ type WasmFunctionLowering
 		return scanMaxMirValueId(module, func: func)
 	end 'findMaxValueId'
 
+	// Returns true iff the current function contains any of osGetArgc,
+	// osGetArgv, or osGetExecutablePath. lowerFunction calls this once to
+	// decide whether to reserve the three i32 scratch locals used by their
+	// lowerings.
+	function scanForArgvOps() returns bool
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
+			for packed in block.opRefs 'eachOp'
+				let op = try module.ops.get(packed) otherwise panic("invariant: opIdx not in module.ops")
+				let found = match op 'check'
+					movImm to osGetEnv gives false
+					osGetArgc gives true
+					osGetArgv gives true
+					osGetExecutablePath gives true
+					memcpy to errorReturn gives false
+				end 'check'
+				if found 'gotIt'
+					return true
+				end 'gotIt'
+			end 'eachOp'
+		end 'eachBlock'
+		return false
+	end 'scanForArgvOps'
+
 	// ============================================================
 	// Float value tracking
 	// ============================================================
@@ -2723,34 +3115,19 @@ function emitWasmNopVoidFunc() returns ByteArray
 	return body
 end 'emitWasmNopVoidFunc'
 
-// mrt_executable_path() on wasm: delegate to mrt_command_line_arg(0). WASI
-// follows the POSIX convention of argv[0] = executable path, so the cache
-// already populated by ensureArgvCache holds the value we want. Wrapping
-// keeps the runtime API surface identical across targets while avoiding a
-// second copy of the cache logic.
-function emitWasmExecutablePath(funcSigs WasmFuncSigs) returns ByteArray
-	var body = ByteArray.create()
-	// No locals.
-	writeUleb128(body, value: 0)
-	body.push(opI64Const)
-	writeSleb128(body, value: 0)
-	body.push(opCall)
-	writeUleb128(body, value: findFunctionIndex(funcSigs, name: "mrt_command_line_arg", importCount: wasiImportCount))
-	body.push(opEnd)
-	return body
-end 'emitWasmExecutablePath'
-
 // Emit the bytecode that ensures the argv cache (scratch slots starting at
-// argvCacheInitFlagBase) is populated. Runs at the top of each public-name
-// command-line helper; the first call performs the two WASI imports and the
-// mrt_alloc, subsequent calls take the early-out branch. `scratchLocal` is
-// the caller-supplied i32 local index used as a scratch register for the
-// mrt_alloc result and the args_get pointer parameters; callers must declare
-// the local with type i32 and ensure it doesn't alias any i64 param/local.
-// Drops the wasm-import errno results — a non-zero return from either WASI
-// import would surface downstream as a malformed argv buffer (length 0 from
-// the scan loop) rather than a panic, matching the spec runner's "treat
-// argv access failures as empty" convention on non-Windows targets.
+// argvCacheInitFlagBase) is populated. Invoked from the WASM op lowerings
+// of osGetArgc / osGetArgv / osGetExecutablePath; the first call performs
+// the two WASI imports and the mrt_alloc, subsequent calls take the
+// early-out branch. `scratchLocal` is the caller-supplied i32 local index
+// used as a scratch register for the mrt_alloc result and the args_get
+// pointer parameters; callers must declare the local with type i32 and
+// ensure it doesn't alias any i64 param/local — see the argvScratchLocal
+// reservation in lowerFunction. Drops the wasm-import errno results — a
+// non-zero return from either WASI import would surface downstream as a
+// malformed argv buffer (length 0 from the scan loop) rather than a panic,
+// matching the spec runner's "treat argv access failures as empty"
+// convention on non-Windows targets.
 function emitArgvCacheEnsure(body ByteArray, funcSigs WasmFuncSigs, scratchLocal MachineWord)
 	// if (load i32 from argvCacheInitFlagBase) != 0: skip everything.
 	body.push(opBlock)
@@ -2839,227 +3216,14 @@ function emitArgvCacheEnsure(body ByteArray, funcSigs WasmFuncSigs, scratchLocal
 	body.push(opEnd)
 end 'emitArgvCacheEnsure'
 
-// mrt_command_line_count() returns the WASI argc as i64. Wasm body: ensure
-// the cache (lazy first-call) then load argvCacheArgcBase and extend to i64.
-// Local 0 (i32) is the scratch register passed to emitArgvCacheEnsure for
-// the freshly-allocated argv-buffer pointer; this function has no params,
-// so local 0 is the first declared local.
-function emitWasmCommandLineCount(funcSigs WasmFuncSigs) returns ByteArray
-	var body = ByteArray.create()
-	// One local group: one i32 (the argv-buf pointer scratch register).
-	writeUleb128(body, value: 1)
-	writeUleb128(body, value: 1)
-	body.push(wasmTypeI32)
-
-	emitArgvCacheEnsure(body, funcSigs: funcSigs, scratchLocal: 0)
-
-	body.push(opI32Const)
-	writeSleb128(body, value: argvCacheArgcBase as ParsedInt)
-	body.push(opI32Load)
-	body.push(0x02)
-	writeUleb128(body, value: 0)
-	body.push(opI64ExtendI32U)
-
-	body.push(opEnd)
-	return body
-end 'emitWasmCommandLineCount'
-
-// mrt_command_line_arg(idx i64) returns a fresh __ManagedMemory whose buffer
-// holds the bytes of argv[idx] (NUL-terminator excluded from the length
-// stored at mm[8]). Out-of-bounds idx yields an empty mm (length 0) without
-// trapping — the spec runner's argv normalization relies on that behaviour.
-//
-// Local layout (param at local 0; explicit i32 locals follow):
-//   local 0 = idx (param, i64)
-//   local 1 = argv-buf scratch (i32) consumed by emitArgvCacheEnsure
-//   local 2 = scan ptr (i32) used while computing strlen
-//   local 3 = len (i32) — argv[idx] byte count
-//   local 4 = mm pointer (i32)
-//   local 5 = argv[idx] (i32)
-function emitWasmCommandLineArg(funcSigs WasmFuncSigs) returns ByteArray
-	var body = ByteArray.create()
-	// Locals: 5 i32 (no i64 locals — the i64 param is local 0).
-	writeUleb128(body, value: 1)
-	writeUleb128(body, value: 5)
-	body.push(wasmTypeI32)
-
-	let localIdx = 0
-	let localScratch = 1
-	let localScan = 2
-	let localLen = 3
-	let localMm = 4
-	let localArgvI = 5
-
-	emitArgvCacheEnsure(body, funcSigs: funcSigs, scratchLocal: localScratch)
-
-	// Bounds check: if idx < 0 OR idx >= argc, jump to the empty-mm path.
-	// Outer block is i64-typed: the OOB fall-through pushes an empty-mm
-	// (i64) which lands as the block result. The happy path uses opReturn
-	// to exit the function directly, bypassing the block's stack contract.
-	body.push(opBlock)
-	body.push(wasmTypeI64)
-	body.push(opBlock)
-	body.push(wasmTypeVoid)
-
-	body.push(opLocalGet)
-	writeUleb128(body, value: localIdx)
-	body.push(opI64Const)
-	writeSleb128(body, value: 0)
-	body.push(opI64LtS)
-	body.push(opBrIf)
-	writeUleb128(body, value: 0)
-
-	body.push(opLocalGet)
-	writeUleb128(body, value: localIdx)
-	body.push(opI32WrapI64)
-	body.push(opI32Const)
-	writeSleb128(body, value: argvCacheArgcBase as ParsedInt)
-	body.push(opI32Load)
-	body.push(0x02)
-	writeUleb128(body, value: 0)
-	body.push(opI32GeU)
-	body.push(opBrIf)
-	writeUleb128(body, value: 0)
-
-	// argv[idx] is an i32 at buf_ptr + idx*4. Load and stash into localArgvI.
-	body.push(opI32Const)
-	writeSleb128(body, value: argvCacheBufPtrBase as ParsedInt)
-	body.push(opI32Load)
-	body.push(0x02)
-	writeUleb128(body, value: 0)
-	body.push(opLocalGet)
-	writeUleb128(body, value: localIdx)
-	body.push(opI32WrapI64)
-	body.push(opI32Const)
-	writeSleb128(body, value: 2)
-	body.push(opI32Shl)
-	body.push(opI32Add)
-	body.push(opI32Load)
-	body.push(0x02)
-	writeUleb128(body, value: 0)
-	body.push(opLocalTee)
-	writeUleb128(body, value: localArgvI)
-	body.push(opLocalSet)
-	writeUleb128(body, value: localScan)
-
-	// Initialize len = 0
-	body.push(opI32Const)
-	writeSleb128(body, value: 0)
-	body.push(opLocalSet)
-	writeUleb128(body, value: localLen)
-
-	// Scan loop: while *scanPtr != 0 { scanPtr++; len++; }
-	body.push(opBlock)
-	body.push(wasmTypeVoid)
-	body.push(opLoop)
-	body.push(wasmTypeVoid)
-
-	body.push(opLocalGet)
-	writeUleb128(body, value: localScan)
-	body.push(opI32Load8U)
-	body.push(0x00)
-	writeUleb128(body, value: 0)
-	body.push(opI32Eqz)
-	body.push(opBrIf)
-	writeUleb128(body, value: 1)
-
-	body.push(opLocalGet)
-	writeUleb128(body, value: localScan)
-	body.push(opI32Const)
-	writeSleb128(body, value: 1)
-	body.push(opI32Add)
-	body.push(opLocalSet)
-	writeUleb128(body, value: localScan)
-
-	body.push(opLocalGet)
-	writeUleb128(body, value: localLen)
-	body.push(opI32Const)
-	writeSleb128(body, value: 1)
-	body.push(opI32Add)
-	body.push(opLocalSet)
-	writeUleb128(body, value: localLen)
-
-	body.push(opBr)
-	writeUleb128(body, value: 0)
-	body.push(opEnd)
-	body.push(opEnd)
-
-	// Allocate __ManagedMemory sized for len + 1 (NUL terminator preserved
-	// to match the Windows path; length stored at mm[8] excludes the NUL).
-	// __managed_mem_create takes (count, elemSize) as i64s.
-	body.push(opLocalGet)
-	writeUleb128(body, value: localLen)
-	body.push(opI32Const)
-	writeSleb128(body, value: 1)
-	body.push(opI32Add)
-	body.push(opI64ExtendI32U)
-	body.push(opI64Const)
-	writeSleb128(body, value: 1)
-	body.push(opCall)
-	writeUleb128(body, value: findFunctionIndex(funcSigs, name: "__managed_mem_create", importCount: wasiImportCount))
-	body.push(opI32WrapI64)
-	body.push(opLocalTee)
-	writeUleb128(body, value: localMm)
-
-	// Copy len bytes from argv[idx] into mm.buffer (mm[0] is the buf ptr).
-	// memory.copy dst src len (all i32). Push dst = mm.buffer.
-	body.push(opI32Load)
-	body.push(0x02)
-	writeUleb128(body, value: 0)
-	body.push(opLocalGet)
-	writeUleb128(body, value: localArgvI)
-	body.push(opLocalGet)
-	writeUleb128(body, value: localLen)
-	body.push(0xFC)
-	writeUleb128(body, value: 10)
-	body.push(0x00)
-	body.push(0x00)
-
-	// mm[8] = len (i64). Wasm i64.store, alignment 3.
-	body.push(opLocalGet)
-	writeUleb128(body, value: localMm)
-	body.push(opLocalGet)
-	writeUleb128(body, value: localLen)
-	body.push(opI64ExtendI32U)
-	body.push(opI64Store)
-	body.push(0x03)
-	writeUleb128(body, value: 8)
-
-	// Return mm pointer as i64.
-	body.push(opLocalGet)
-	writeUleb128(body, value: localMm)
-	body.push(opI64ExtendI32U)
-	body.push(opReturn)
-
-	body.push(opEnd)
-
-	// Out-of-bounds branch lands here. Allocate an empty (count=1, len=0)
-	// __ManagedMemory and return it. Mirrors the Windows path's oob block.
-	body.push(opI64Const)
-	writeSleb128(body, value: 1)
-	body.push(opI64Const)
-	writeSleb128(body, value: 1)
-	body.push(opCall)
-	writeUleb128(body, value: findFunctionIndex(funcSigs, name: "__managed_mem_create", importCount: wasiImportCount))
-
-	body.push(opEnd)
-	// Function-body end. The OOB path leaves [i64] on the stack at this
-	// point; the happy path returned via opReturn above. Both paths must
-	// agree on the stack shape that the function returns (i64).
-	body.push(opEnd)
-	return body
-end 'emitWasmCommandLineArg'
-
 // ============================================================
 // Phase 15c Stream 3.3: WASI file/directory I/O helpers
 // ============================================================
 //
 // Every helper below is invoked from `lowerFunction` for the matching
 // public `mrt_file_*` / `mrt_directory_*` runtime function name. The
-// public names come from `filterRuntimeForOs`, which renamed the
-// `_stub` bodies in `runtime.std` on non-Windows targets. The stubs
-// return sentinel errors, so the bodies emitted here completely
-// replace them for the wasm path.
+// runtime.std bodies reference Linux-only `osFile*` / `osDir*` ops,
+// so the bodies emitted here completely replace them for the wasm path.
 //
 // Common conventions across all helpers:
 //   - Maxon i64 params get wrapped to i32 with `i32.wrap_i64` before

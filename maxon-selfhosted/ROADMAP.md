@@ -1189,9 +1189,16 @@ the C# baseline at the same time the C# infrastructure landed).
 intrinsics, routed to `mrt_command_line_count` / `mrt_command_line_arg` in runtime.std.
 Windows path: PE import directory for shell32.dll (`GetCommandLineW`, `LocalFree`,
 `WideCharToMultiByte`, `CommandLineToArgvW`) added alongside kernel32.dll;
-`iatSlotByteOffset` accounts for per-DLL null terminator. Per-OS runtime filter
-swaps in non-Windows stubs (returning argc=1, empty MM). Wasm32-wasi uses the stub
-(1/10 fragments pass) — real WASI `args_sizes_get`/`args_get` wiring needs future work.
+`iatSlotByteOffset` accounts for per-DLL null terminator.
+
+Subsequently (Phase 16 abstract-crown refactor) the per-OS stub-pair
+shape was retired: the three command-line / executable-path helpers
+now have a single platform-independent body each that calls the new
+`osGetArgc` / `osGetArgv` / `osGetExecutablePath` ops. The Windows
+backend dispatches those ops into hand-rolled `mrt_win32_get_argc` /
+`get_argv` / `get_executable_path` machine-code helpers; wasm32-wasi
+op-lowers via the existing argv cache (`args_sizes_get`/`args_get`).
+Both runtime-tested targets exercise the unified path.
 Cache-decode bug fixed alongside: `GenericInstanceRegistry` writer→project gid
 translation table prevents id-collision when new whitelisted stdlib files introduce
 generic instances that interleave with existing entries
@@ -1328,12 +1335,16 @@ Landed across six streams (2026-05-21 / 2026-05-22):
   also dispatches `if isWindowsTargetArm64(osDesc)` to the same
   `mrt_win32_*` helpers via the ARM64 direct-call shape.
 
-  Per-OS body swap in
-  [`BackendDispatch.maxon::filterRuntimeForOs`](Compiler/Targets/BackendDispatch.maxon)
-  no longer needs the 19 file/directory entries — one body per
-  helper, target-agnostic, the lowering does the rest. The 3
-  command-line / executable-path entries from Phase 15b/15f remain
-  using the old stub-swap shape.
+  The per-OS body-swap mechanism (formerly
+  `BackendDispatch.maxon::filterRuntimeForOs`, with its
+  `isPerOsStubName` / `stripStubSuffix` / `*_stub` rename helpers) is
+  gone entirely — one body per helper, target-agnostic, the lowering
+  does the rest. The 12 `mrt_win32_*` file/directory helpers and the 3
+  command-line / executable-path helpers from Phase 15b/15c/15f no
+  longer use stub-swap; the Windows variants are emitted as raw
+  machine code by the X64/ARM64 backends, and the three command-line
+  helpers each have a single platform-independent body that calls
+  the new `osGetArgc` / `osGetArgv` / `osGetExecutablePath` ops.
 
 Final tally: **1587/1587** on x64-windows + wasm32-wasi (up from 1566
 baseline). Bootstrap **2770/2770** holds. All other targets

@@ -50,7 +50,10 @@ export interface TargetBackend
 	// branch to garbage.
 	function needsPrologue(adjustedStackSize StackSize, hasCalls bool) returns bool
 	// Prepend the target's prologue op at the start of the entry block.
-	function insertPrologueAtEntry(block IrBlock, stackSize StackSize)
+	// `func` lets the backend special-case entry-point functions
+	// (`mrt_start` / `mrt_start_with_coverage`) for argv-stash injection
+	// on System V x86-64 and AArch64.
+	function insertPrologueAtEntry(func IrFunction, block IrBlock, stackSize StackSize)
 	// Emit an epilogue at the end of a return block. x64 appends an epilogue
 	// op to opRefs (the existing ret stays as the terminator). arm64 replaces
 	// the ret terminator with an epilogue op (arm64's epilogue op includes ret).

@@ -1488,13 +1488,12 @@ end 'opTouchesSlot'
 function sysOpTouchesSlot(op StdSystemOp) returns bool
 	return match op 'shape'
 		stackAddr gives true
-		syscall gives false
-		iatCall gives false
 		globalAddr gives false
 		memcpy gives false
 		storeByte gives false
 		loadByte gives false
 		osExit gives false
+		osSleep gives false
 		osWrite gives false
 		free gives false
 		osWriteErr gives false
@@ -1503,6 +1502,9 @@ function sysOpTouchesSlot(op StdSystemOp) returns bool
 		osWriteFd gives false
 		osClose gives false
 		osGetEnv gives false
+		osGetArgc gives false
+		osGetArgv gives false
+		osGetExecutablePath gives false
 		loadFramePtr gives false
 		loadIndirect gives false
 		funcAddr gives false
@@ -1703,14 +1705,13 @@ end 'bindMemoryDefine'
 
 function bindSystemDefine(op StdSystemOp, remap ValueIdArray, nextId ValueId) returns ValueId
 	return match op 's'
-		syscall(resultId, _, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
-		iatCall(resultId, _, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
 		globalAddr(resultId, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
 		memcpy gives nextId
 		stackAddr(resultId, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
 		storeByte gives nextId
 		loadByte(resultId, _, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
 		osExit gives nextId
+		osSleep gives nextId
 		osWrite gives nextId
 		free gives nextId
 		osWriteErr gives nextId
@@ -1719,6 +1720,9 @@ function bindSystemDefine(op StdSystemOp, remap ValueIdArray, nextId ValueId) re
 		osWriteFd gives nextId
 		osClose gives nextId
 		osGetEnv(resultId, _, _, _, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
+		osGetArgc(resultId) gives bindOneDefine(remap, key: resultId, nextId: nextId)
+		osGetArgv(resultId, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
+		osGetExecutablePath(resultId, _, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
 		loadFramePtr(resultId) gives bindOneDefine(remap, key: resultId, nextId: nextId)
 		loadIndirect(resultId, _, _, _, _, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
 		funcAddr(resultId, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
@@ -1880,14 +1884,13 @@ end 'rewriteMemory'
 
 function rewriteSystem(op StdSystemOp, remap ValueIdArray) returns StdSystemOp
 	return match op 's'
-		syscall(resultId, number, argIds) gives StdSystemOp.syscall(lookupRemap(remap, key: resultId), number: number, argIds: rewriteValueIds(argIds, remap: remap))
-		iatCall(resultId, slotIndex, argIds) gives StdSystemOp.iatCall(lookupRemap(remap, key: resultId), slotIndex: slotIndex, argIds: rewriteValueIds(argIds, remap: remap))
 		globalAddr(resultId, name) gives StdSystemOp.globalAddr(lookupRemap(remap, key: resultId), name: name)
 		memcpy(dstId, srcId, lenId) gives StdSystemOp.memcpy(lookupRemap(remap, key: dstId), srcId: lookupRemap(remap, key: srcId), lenId: lookupRemap(remap, key: lenId))
 		stackAddr(resultId, slotId) gives StdSystemOp.stackAddr(lookupRemap(remap, key: resultId), slotId: slotId)
 		storeByte(baseId, offsetId, byteId) gives StdSystemOp.storeByte(lookupRemap(remap, key: baseId), offsetId: lookupRemap(remap, key: offsetId), byteId: lookupRemap(remap, key: byteId))
 		loadByte(resultId, baseId, offsetId) gives StdSystemOp.loadByte(lookupRemap(remap, key: resultId), baseId: lookupRemap(remap, key: baseId), offsetId: lookupRemap(remap, key: offsetId))
 		osExit(codeId) gives StdSystemOp.osExit(lookupRemap(remap, key: codeId))
+		osSleep(msId) gives StdSystemOp.osSleep(lookupRemap(remap, key: msId))
 		osWrite(ptrId, lenId) gives StdSystemOp.osWrite(lookupRemap(remap, key: ptrId), lenId: lookupRemap(remap, key: lenId))
 		free(ptrId) gives StdSystemOp.free(lookupRemap(remap, key: ptrId))
 		osWriteErr(ptrId, lenId) gives StdSystemOp.osWriteErr(lookupRemap(remap, key: ptrId), lenId: lookupRemap(remap, key: lenId))
@@ -1896,6 +1899,9 @@ function rewriteSystem(op StdSystemOp, remap ValueIdArray) returns StdSystemOp
 		osWriteFd(fdId, ptrId, lenId) gives StdSystemOp.osWriteFd(lookupRemap(remap, key: fdId), ptrId: lookupRemap(remap, key: ptrId), lenId: lookupRemap(remap, key: lenId))
 		osClose(fdId) gives StdSystemOp.osClose(lookupRemap(remap, key: fdId))
 		osGetEnv(resultId, namePtrId, nameLenId, outBufPtrId, outBufLenId) gives StdSystemOp.osGetEnv(lookupRemap(remap, key: resultId), namePtrId: lookupRemap(remap, key: namePtrId), nameLenId: lookupRemap(remap, key: nameLenId), outBufPtrId: lookupRemap(remap, key: outBufPtrId), outBufLenId: lookupRemap(remap, key: outBufLenId))
+		osGetArgc(resultId) gives StdSystemOp.osGetArgc(lookupRemap(remap, key: resultId))
+		osGetArgv(resultId, indexId) gives StdSystemOp.osGetArgv(lookupRemap(remap, key: resultId), indexId: lookupRemap(remap, key: indexId))
+		osGetExecutablePath(resultId, bufPtrId, bufSizeId) gives StdSystemOp.osGetExecutablePath(lookupRemap(remap, key: resultId), bufPtrId: lookupRemap(remap, key: bufPtrId), bufSizeId: lookupRemap(remap, key: bufSizeId))
 		loadFramePtr(resultId) gives StdSystemOp.loadFramePtr(lookupRemap(remap, key: resultId))
 		loadIndirect(resultId, addrId, offset, width, signed, isFloat) gives StdSystemOp.loadIndirect(lookupRemap(remap, key: resultId), addrId: lookupRemap(remap, key: addrId), offset: offset, width: width, signed: signed, isFloat: isFloat)
 		funcAddr(resultId, name) gives StdSystemOp.funcAddr(lookupRemap(remap, key: resultId), name: name)

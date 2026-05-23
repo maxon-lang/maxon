@@ -420,10 +420,6 @@ end 'descriptorFieldName'
 // --- StdSystemOp ---
 
 export union StdSystemOp
-	// Linux/ARM64 syscall. argIds passed in syscall ABI registers.
-	syscall(resultId ValueId, number MachineWord, argIds ValueIdArray)
-	// Windows IAT indirect call through an import slot.
-	iatCall(resultId ValueId, slotIndex MachineWord, argIds ValueIdArray)
 	// Load the address of a named data global (string literal in .rdata/.rodata).
 	globalAddr(resultId ValueId, name String)
 	// Copy len bytes from src to dst (rep movsb on x86, ldrb/strb loop on arm64).
@@ -436,6 +432,14 @@ export union StdSystemOp
 	loadByte(resultId ValueId, baseId ValueId, offsetId ValueId)
 	// OS-neutral process exit. Lowered to syscall or iatCall based on OsDescriptor.
 	osExit(codeId ValueId)
+	// OS-neutral green-thread sleep. Suspends the current green thread for
+	// `msId` milliseconds. Lowered per-OS by the backend: Windows uses
+	// kernel32!Sleep via IAT; Linux uses the `nanosleep` syscall (35 on x64,
+	// 101 on arm64); macOS uses libc `nanosleep`; WASI uses the
+	// `poll_oneoff` import. The backend integrates with the green-thread
+	// scheduler (yields the current GT and re-enqueues it when the deadline
+	// expires) so concurrent GTs continue to make progress while one sleeps.
+	osSleep(msId ValueId)
 	// OS-neutral stdout write. Lowered to syscall or iatCall based on OsDescriptor.
 	osWrite(ptrId ValueId, lenId ValueId)
 	// Free a heap-allocated pointer. Used by drop injection to release owned memory.
@@ -456,6 +460,22 @@ export union StdSystemOp
 	// Read an environment variable by name into outBuf. Returns the number of bytes
 	// written (excluding the null terminator) in resultId, or 0 if unset / too long.
 	osGetEnv(resultId ValueId, namePtrId ValueId, nameLenId ValueId, outBufPtrId ValueId, outBufLenId ValueId)
+	// Returns the argument count provided to the process. Each backend
+	// chooses how to obtain it (kernel-stashed globals on Linux/macOS,
+	// GetCommandLineW+CommandLineToArgvW on Windows, WASI args_sizes_get).
+	osGetArgc(resultId ValueId)
+	// Returns a NUL-terminated C-string pointer to argv[index], or 0 if
+	// out of bounds. The pointer is owned by the runtime (kernel-supplied
+	// argv block on Linux/macOS, lazily-allocated UTF-8 cache on Windows,
+	// WASI argv-cache scratch memory); callers must not free it.
+	osGetArgv(resultId ValueId, indexId ValueId)
+	// Writes the UTF-8 path of the running executable into the buffer
+	// [bufPtr..bufPtr+bufSize). Returns the number of bytes written
+	// (excluding any NUL) in resultId, or a negative errno-style value on
+	// error / truncation. Backends pick the underlying mechanism
+	// (/proc/self/exe readlink on Linux, GetModuleFileNameW on Windows,
+	// _NSGetExecutablePath on macOS, WASI argv[0]).
+	osGetExecutablePath(resultId ValueId, bufPtrId ValueId, bufSizeId ValueId)
 	// Load the current frame pointer (RBP on x86, X29 on ARM64) into resultId.
 	loadFramePtr(resultId ValueId)
 	// Load `width` bytes from [addrId + offset] into resultId. `isFloat` selects
@@ -706,14 +726,13 @@ end 'memRefOpToString'
 
 export function sysOpToString(op StdSystemOp) returns String
 	return match op 'print'
-		syscall(resultId, number, argIds) gives "%{resultId} = sys.syscall {number}({formatArgIds(argIds)})"
-		iatCall(resultId, slotIndex, argIds) gives "%{resultId} = sys.iat_call [{slotIndex}]({formatArgIds(argIds)})"
 		globalAddr(resultId, name) gives "%{resultId} = sys.global_addr @{name}"
 		memcpy(dstId, srcId, lenId) gives "sys.memcpy %{dstId}, %{srcId}, %{lenId}"
 		stackAddr(resultId, slotId) gives "%{resultId} = sys.stack_addr slot_{slotId}"
 		storeByte(baseId, offsetId, byteId) gives "sys.store_byte %{baseId}, %{offsetId}, %{byteId}"
 		loadByte(resultId, baseId, offsetId) gives "%{resultId} = sys.load_byte %{baseId}, %{offsetId}"
 		osExit(codeId) gives "sys.os_exit %{codeId}"
+		osSleep(msId) gives "sys.os_sleep %{msId}"
 		osWrite(ptrId, lenId) gives "sys.os_write %{ptrId}, %{lenId}"
 		free(ptrId) gives "sys.free %{ptrId}"
 		osWriteErr(ptrId, lenId) gives "sys.os_write_err %{ptrId}, %{lenId}"
@@ -722,6 +741,9 @@ export function sysOpToString(op StdSystemOp) returns String
 		osWriteFd(fdId, ptrId, lenId) gives "sys.os_write_fd %{fdId}, %{ptrId}, %{lenId}"
 		osClose(fdId) gives "sys.os_close %{fdId}"
 		osGetEnv(resultId, namePtrId, nameLenId, outBufPtrId, outBufLenId) gives "%{resultId} = sys.os_get_env %{namePtrId}, %{nameLenId}, %{outBufPtrId}, %{outBufLenId}"
+		osGetArgc(resultId) gives "%{resultId} = sys.os_get_argc"
+		osGetArgv(resultId, indexId) gives "%{resultId} = sys.os_get_argv %{indexId}"
+		osGetExecutablePath(resultId, bufPtrId, bufSizeId) gives "%{resultId} = sys.os_get_executable_path %{bufPtrId}, %{bufSizeId}"
 		loadFramePtr(resultId) gives "%{resultId} = sys.load_frame_ptr"
 		loadIndirect(resultId, addrId, offset, width, signed, isFloat) gives stdLoadIndirectToString(resultId, addrId: addrId, offset: offset, width: width, signed: signed, isFloat: isFloat)
 		funcAddr(resultId, name) gives "%{resultId} = sys.func_addr @{name}"

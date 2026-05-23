@@ -273,6 +273,7 @@ export function x64OpHasVirtualRegs(op X64Op) returns bool
 		lockIncMemory(addrReg) gives isVirtualGpr(addrReg)
 		lockDecMemory(addrReg) gives isVirtualGpr(addrReg)
 		lockXaddMemReg(valReg, addrReg) gives isVirtualGpr(valReg) or isVirtualGpr(addrReg)
+		stashEntryArgv gives false
 	end 'check'
 end 'x64OpHasVirtualRegs'
 
@@ -367,6 +368,7 @@ export function countX64OpReads(counts RegIntArray, x64Op X64Op)
 		lockIncMemory(addrReg) then incUse(counts, id: x64VRegId(addrReg))
 		lockDecMemory(addrReg) then incUse(counts, id: x64VRegId(addrReg))
 		lockXaddMemReg(valReg, addrReg) then countX64TwoReads(counts, reg1: valReg, reg2: addrReg)
+		stashEntryArgv then break 'scan'
 	end 'scan'
 end 'countX64OpReads'
 
@@ -473,7 +475,7 @@ function noteX64MovRegRegDef(defBlocks RegIntArray, blockIdx RegInt, op X64Op)
 	match op 'extract'
 		movRegReg(destReg, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: destReg)
 		prologue to memcpyOp then break 'extract'
-		cmpRegReg to lockXaddMemReg then break 'extract'
+		cmpRegReg to stashEntryArgv then break 'extract'
 	end 'extract'
 end 'noteX64MovRegRegDef'
 
@@ -506,7 +508,7 @@ function noteX64FpMovDef(defBlocks RegIntArray, blockIdx RegInt, op X64Op)
 	match op 'extract'
 		movXmmXmm(dest, _, _) then noteX64FpDefId(defBlocks, blockIdx: blockIdx, vreg: dest)
 		prologue to xchgRegReg then break 'extract'
-		spillXmmToStack to lockXaddMemReg then break 'extract'
+		spillXmmToStack to stashEntryArgv then break 'extract'
 	end 'extract'
 end 'noteX64FpMovDef'
 
@@ -516,7 +518,7 @@ function noteX64FpToGprDef(defBlocks RegIntArray, blockIdx RegInt, op X64Op)
 		movqXmmToGpr(dest, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
 		prologue to cvtSi2Float then break 'extract'
 		cvtSd2Ss to cvtSs2Sd then break 'extract'
-		movqGprToXmm to lockXaddMemReg then break 'extract'
+		movqGprToXmm to stashEntryArgv then break 'extract'
 	end 'extract'
 end 'noteX64FpToGprDef'
 
@@ -524,7 +526,7 @@ function noteX64BaseUseFpDefDef(defBlocks RegIntArray, blockIdx RegInt, op X64Op
 	match op 'extract'
 		loadIndirectXmm(dest, _, _, _) then noteX64FpDefId(defBlocks, blockIdx: blockIdx, vreg: dest)
 		prologue to storeIndirectXmm then break 'extract'
-		globalLoad to lockXaddMemReg then break 'extract'
+		globalLoad to stashEntryArgv then break 'extract'
 	end 'extract'
 end 'noteX64BaseUseFpDefDef'
 
@@ -632,6 +634,7 @@ export function recordX64OpLastUses(positions RegIntArray, x64Op X64Op, opIdx Re
 		lockIncMemory(addrReg) then recordLastUse(positions, id: x64VRegId(addrReg), opIdx: opIdx)
 		lockDecMemory(addrReg) then recordLastUse(positions, id: x64VRegId(addrReg), opIdx: opIdx)
 		lockXaddMemReg(valReg, addrReg) then recordX64TwoLastUses(positions, reg1: valReg, reg2: addrReg, opIdx: opIdx)
+		stashEntryArgv then break 'scan'
 	end 'scan'
 end 'recordX64OpLastUses'
 
@@ -658,7 +661,7 @@ export function classifyX64OpReads(sinkOnly RegIntArray, usedByNonSink RegIntArr
 		match x64Op 'extractMov'
 			movRegReg(destReg, srcReg) then classifyX64MovRegReg(sinkOnly, usedByNonSink: usedByNonSink, destReg: destReg, srcReg: srcReg)
 			prologue to memcpyOp then break 'extractMov'
-			cmpRegReg to lockXaddMemReg then break 'extractMov'
+			cmpRegReg to stashEntryArgv then break 'extractMov'
 		end 'extractMov'
 	end 'isMov' else 'other'
 		countX64OpReads(usedByNonSink, x64Op: x64Op)
@@ -683,7 +686,7 @@ export function isX64RetTerminator(module TargetModule, packed OpIndex) returns 
 	match x64Op 'checkRet'
 		ret then result = true
 		prologue to epilogue then break 'checkRet'
-		movRegImm to lockXaddMemReg then break 'checkRet'
+		movRegImm to stashEntryArgv then break 'checkRet'
 	end 'checkRet'
 	return result
 end 'isX64RetTerminator'
@@ -713,14 +716,14 @@ function preSeedIfNotDivResult(module TargetModule, state RegState, x64Op X64Op,
 		match x64Op 'extractMov'
 			movRegReg(destReg, srcReg) then preSeedMovIfNotDivResult(module, state: state, destReg: destReg, srcReg: srcReg, opRefs: opRefs, opIdx: opIdx)
 			prologue to memcpyOp then break 'extractMov'
-			cmpRegReg to lockXaddMemReg then break 'extractMov'
+			cmpRegReg to stashEntryArgv then break 'extractMov'
 		end 'extractMov'
 	end 'isMov' else 'checkFp'
 		if x64Op.rawValue.pattern == OpPattern.fpMov 'isFpMov'
 			match x64Op 'extractFpMov'
 				movXmmXmm(dest, src, _) then preSeedFpParam(state, dest: dest, src: src)
 				prologue to xchgRegReg then break 'extractFpMov'
-				spillXmmToStack to lockXaddMemReg then break 'extractFpMov'
+				spillXmmToStack to stashEntryArgv then break 'extractFpMov'
 			end 'extractFpMov'
 		end 'isFpMov'
 	end 'checkFp'
@@ -763,7 +766,7 @@ function isPrevOpIdivOrCall(module TargetModule, opRefs OpIndexList, opIdx RegIn
 		syscall to memcpyOp then break 'checkOp'
 		movRegReg to cqo then break 'checkOp'
 		spillToStack to xorRegRegSelf then break 'checkOp'
-		xchgRegReg to lockXaddMemReg then break 'checkOp'
+		xchgRegReg to stashEntryArgv then break 'checkOp'
 	end 'checkOp'
 	return result
 end 'isPrevOpIdivOrCall'
@@ -815,7 +818,7 @@ function checkBlockArgLoadSlot(state RegState, x64Op X64Op)
 	match x64Op 'check'
 		prologue to movSlot then break 'check'
 		loadSlot(destReg, slotIndex) then recordSlotHomeFromVReg(state, vreg: destReg, slotIndex: slotIndex)
-		addRegReg to lockXaddMemReg then break 'check'
+		addRegReg to stashEntryArgv then break 'check'
 	end 'check'
 end 'checkBlockArgLoadSlot'
 
@@ -1286,7 +1289,7 @@ function isX64OpPanicCall(op X64Op) returns bool
 	match op 'check'
 		callDirect(target) then return target == "mrt_panic"
 		prologue to loadRegRbpOffset then break 'check'
-		syscall to lockXaddMemReg then break 'check'
+		syscall to stashEntryArgv then break 'check'
 	end 'check'
 	return false
 end 'isX64OpPanicCall'
@@ -2045,7 +2048,7 @@ export type X64RegAllocTarget implements RegAllocTarget
 		match x64Op 'pickPhysDest'
 			movRegReg(destReg, _) then mask = mask or x64PhysRegMask(destReg)
 			prologue to memcpyOp then break 'pickPhysDest'
-			cmpRegReg to lockXaddMemReg then break 'pickPhysDest'
+			cmpRegReg to stashEntryArgv then break 'pickPhysDest'
 		end 'pickPhysDest'
 		return mask
 	end 'getImplicitGprDefs'
@@ -2097,7 +2100,7 @@ export type X64RegAllocTarget implements RegAllocTarget
 		return match x64Op 'check'
 			condJump(_, targetBlock) gives targetBlock
 			prologue to testRaxRax gives -1
-			jmp to lockXaddMemReg gives -1
+			jmp to stashEntryArgv gives -1
 		end 'check'
 	end 'getCondBrTarget'
 
@@ -2106,7 +2109,7 @@ export type X64RegAllocTarget implements RegAllocTarget
 		return match x64Op 'check'
 			jmp gives true
 			prologue to condJump gives false
-			movF64Slot to lockXaddMemReg gives false
+			movF64Slot to stashEntryArgv gives false
 		end 'check'
 	end 'isUnconditionalJmp'
 
@@ -2115,7 +2118,7 @@ export type X64RegAllocTarget implements RegAllocTarget
 		return match x64Op 'check'
 			jmp(targetBlock) gives targetBlock
 			prologue to condJump gives -1
-			movF64Slot to lockXaddMemReg gives -1
+			movF64Slot to stashEntryArgv gives -1
 		end 'check'
 	end 'getBranchTarget'
 
@@ -2124,7 +2127,7 @@ export type X64RegAllocTarget implements RegAllocTarget
 		return match x64Op 'check'
 			jmp(targetBlock) gives targetBlock
 			prologue to condJump gives -1
-			movF64Slot to lockXaddMemReg gives -1
+			movF64Slot to stashEntryArgv gives -1
 		end 'check'
 	end 'getUncondJmpTarget'
 
@@ -2133,7 +2136,7 @@ export type X64RegAllocTarget implements RegAllocTarget
 		let newOp = match x64Op 'rewrite'
 			jmp gives X64Op.jmp(newTarget)
 			prologue to condJump gives x64Op
-			movF64Slot to lockXaddMemReg gives x64Op
+			movF64Slot to stashEntryArgv gives x64Op
 		end 'rewrite'
 		let newIdx = module.x64Ops.count()
 		module.x64Ops.push(newOp)
@@ -2145,7 +2148,7 @@ export type X64RegAllocTarget implements RegAllocTarget
 		let newOp = match x64Op 'rewrite'
 			condJump(condition, _) gives X64Op.condJump(condition, targetBlock: newTarget)
 			prologue to testRaxRax gives x64Op
-			jmp to lockXaddMemReg gives x64Op
+			jmp to stashEntryArgv gives x64Op
 		end 'rewrite'
 		let newIdx = module.x64Ops.count()
 		module.x64Ops.push(newOp)

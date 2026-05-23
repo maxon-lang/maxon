@@ -83,7 +83,7 @@ function x64CollectSlotReads(op X64Op, reads VarSlotArray)
 		movF64Slot then break 'check'
 		movF64Rdata to callDirect then break 'check'
 		globalAddr to stackAddrOp then break 'check'
-		movRegReg to lockXaddMemReg then break 'check'
+		movRegReg to stashEntryArgv then break 'check'
 	end 'check'
 end 'x64CollectSlotReads'
 
@@ -117,7 +117,7 @@ function x64CollectSlotWrites(op X64Op, writes VarSlotArray)
 		loadSlot to jmp then break 'check'
 		loadF64Slot to callDirect then break 'check'
 		storeByteOp then break 'check'
-		memcpyOp to lockXaddMemReg then break 'check'
+		memcpyOp to stashEntryArgv then break 'check'
 	end 'check'
 end 'x64CollectSlotWrites'
 
@@ -125,7 +125,7 @@ function x64CollectSlotEscapes(op X64Op, escapes VarSlotArray)
 	match op 'check'
 		stackAddrOp(_, targetSlot) then escapes.push(targetSlot)
 		prologue to globalAddr then break 'check'
-		storeByteOp to lockXaddMemReg then break 'check'
+		storeByteOp to stashEntryArgv then break 'check'
 	end 'check'
 end 'x64CollectSlotEscapes'
 
@@ -254,5 +254,6 @@ function rewriteX64OpSlots(op X64Op, remap RegIntArray) returns X64Op
 		lockIncMemory gives op
 		lockDecMemory gives op
 		lockXaddMemReg gives op
+		stashEntryArgv gives op
 	end 'check'
 end 'rewriteX64OpSlots'

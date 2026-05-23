@@ -473,14 +473,13 @@ end 'licmGetMemoryResultId'
 
 function licmGetSystemResultId(op StdSystemOp) returns ValueId
 	return match op 'get'
-		syscall(resultId, _, _) gives resultId
-		iatCall(resultId, _, _) gives resultId
 		globalAddr(resultId, _) gives resultId
 		memcpy gives LICM_NO_BLOCK
 		stackAddr(resultId, _) gives resultId
 		storeByte gives LICM_NO_BLOCK
 		loadByte(resultId, _, _) gives resultId
 		osExit gives LICM_NO_BLOCK
+		osSleep gives LICM_NO_BLOCK
 		osWrite gives LICM_NO_BLOCK
 		free gives LICM_NO_BLOCK
 		osWriteErr gives LICM_NO_BLOCK
@@ -489,6 +488,12 @@ function licmGetSystemResultId(op StdSystemOp) returns ValueId
 		osWriteFd gives LICM_NO_BLOCK
 		osClose gives LICM_NO_BLOCK
 		osGetEnv(resultId, _, _, _, _) gives resultId
+		// argv / executable-path ops are side-effecting from the optimizer's
+		// perspective (their results depend on process state the IR can't see),
+		// so pin them in place — same treatment as the file-I/O syscalls below.
+		osGetArgc gives LICM_NO_BLOCK
+		osGetArgv gives LICM_NO_BLOCK
+		osGetExecutablePath gives LICM_NO_BLOCK
 		loadFramePtr(resultId) gives resultId
 		loadIndirect(resultId, _, _, _, _, _) gives resultId
 		funcAddr(resultId, _) gives resultId

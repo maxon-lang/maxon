@@ -17,7 +17,7 @@ export function scanX64InstrForFrame(op X64Op, state FrameScanState)
 		callDirect then state.hasCalls = true
 		syscall to xorRegRegSelf then break 'scan'
 		callIndirect then state.hasCalls = true
-		xchgRegReg to lockXaddMemReg then break 'scan'
+		xchgRegReg to stashEntryArgv then break 'scan'
 	end 'scan'
 end 'scanX64InstrForFrame'
 
@@ -27,10 +27,28 @@ end 'scanX64InstrForFrame'
 
 // Prepend the x64 prologue op at the start of the entry block. O(1) via
 // OpIndexList's underlying linked list.
-export function x64InsertPrologueAtEntry(module TargetModule, block IrBlock, stackSize StackSize)
+//
+// Phase D2: when the function is the System V binary entry point
+// (`mrt_start` / `mrt_start_with_coverage`) on Linux or macOS, insert a
+// `stashEntryArgv` op FIRST so the kernel-supplied argc (rdi) and argv
+// (rsi) are saved into the `__mrt_argc` / `__mrt_argv` globals before the
+// prologue clobbers anything. Windows uses GetCommandLineW so no stash is
+// needed; WASI never reaches this pass (MirToWasm handles WASM entry).
+export function x64InsertPrologueAtEntry(module TargetModule, func IrFunction, block IrBlock, stackSize StackSize, os Os)
+	let isEntry = func.name == "mrt_start" or func.name == "mrt_start_with_coverage"
+	let stashNeeded = isEntry and (os == Os.linux or os == Os.macos)
+	if stashNeeded 'stash'
+		let stashIdx = module.x64Ops.count()
+		module.x64Ops.push(X64Op.stashEntryArgv)
+		try block.opRefs.insert(0, value: stashIdx) otherwise panic("x64InsertPrologueAtEntry: insert stash at 0 failed on block '{block.label}'")
+	end 'stash'
 	let idx = module.x64Ops.count()
 	module.x64Ops.push(X64Op.prologue(stackSize))
-	try block.opRefs.insert(0, value: idx) otherwise panic("x64InsertPrologueAtEntry: insert at 0 failed on block '{block.label}'")
+	// If the stash was inserted, the prologue goes at index 1 (after the
+	// stash); otherwise at 0. Inserting at the post-stash index keeps the
+	// stash literally first.
+	let prologueIdx = 1 if stashNeeded else 0
+	try block.opRefs.insert(prologueIdx, value: idx) otherwise panic("x64InsertPrologueAtEntry: insert prologue failed on block '{block.label}'")
 end 'x64InsertPrologueAtEntry'
 
 // Append an epilogue op to the return block's opRefs. x64 keeps the existing
@@ -169,5 +187,6 @@ function x64ScanOpForCalleeSaved(op X64Op, gprSeen RegIntArray)
 		lockIncMemory(addrReg) then x64MarkGprIfCalleeSaved(gprSeen, vreg: addrReg)
 		lockDecMemory(addrReg) then x64MarkGprIfCalleeSaved(gprSeen, vreg: addrReg)
 		lockXaddMemReg(valReg, addrReg) then x64ScanTwoGprs(gprSeen, a: valReg, b: addrReg)
+		stashEntryArgv then break 'scan'
 	end 'scan'
 end 'x64ScanOpForCalleeSaved'

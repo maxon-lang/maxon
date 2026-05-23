@@ -1,0 +1,335 @@
+// =============================================================================
+// ARM64 Windows runtime helpers — hand-rolled machine code emitters.
+//
+// Mirrors `emitX64Win32Helpers` in `X64Backend.maxon`. Each of the fifteen
+// `mrt_win32_*` runtime helpers (twelve file/dir I/O wrappers + three
+// argv/exec-path helpers) is emitted here as raw ARM64 instructions when the
+// target OS is Windows. The hand-rolled bytes replace the panic-stub bodies
+// that previously lived in `runtime.std`.
+//
+// Scope (Phase D4): arm64-windows is compile-verify only on this branch.
+// These helpers exist so the link layer has real targets for the
+// `mrt_win32_*` call fixups emitted by `lowerFileIoOpArm64` and the
+// `osGetArgc` / `osGetArgv` / `osGetExecutablePath` MIR dispatch arms when
+// `target.os == windows`. The bodies follow the same control-flow shape as
+// their x64 counterparts but the precise byte sequence is not exercised by
+// any spec test. Runtime correctness of the produced PE binary is not
+// asserted; the bar is "well-formed ARM64, labels registered, fixups
+// resolve, build succeeds". The one helper translated instruction-by-
+// instruction is `mrt_win32_translate_lasterror` — it has no external
+// dependencies, is the tail-call target of every other helper's error path,
+// and serves as a worked example of the translation strategy. The remaining
+// fourteen helpers share two skeleton bodies (return 0 or return -38 ENOSYS)
+// matched to the previously-deleted runtime.std stub returns.
+//
+// Calling convention (AAPCS64, same as `emitArm64DirectCall`):
+//   * Args:    x0..x7 (GPR), d0..d7 (FP). We use ≤3 GPR args per helper.
+//   * Return:  x0.
+//   * Frame:   x29 frame pointer, x30 link register. We follow the same
+//              frame layout the ARM64 prologue/epilogue pass uses for
+//              normal functions: `STP x29, x30, [sp, #-frameSize]!` then
+//              `MOV x29, sp`, mirrored by `LDP ...; RET` at the epilogue.
+//   * Stack:   slot N at [x29 + 16 + N*8] (matches `arm64EmitStrSlot` /
+//              `arm64EmitLdrSlot`). Win64 ARM64 doesn't reserve shadow
+//              space — that's an x64-only Win64 ABI quirk — but we still
+//              budget outgoing-arg homes when more than 8 args would be
+//              needed (none of these helpers cross that threshold, so the
+//              outgoing area is zero).
+//
+// IAT calls: identical pattern to `arm64EmitIatCallOp` —
+//   `ADRP x16, IAT-slot ; LDR x16, [x16] ; BLR x16`. The relocation is
+//   registered against the same `IatSlot` enum cases (via
+//   `iatSlotIndex(...)`) that the x64 helpers use, so `PeWriter.maxon`
+//   doesn't need any per-CPU branching.
+//
+// Direct calls: `BL <target>` (rel26). The target is recorded as an
+// `Arm64CallFixup` so `arm64ResolveCallFixups` patches it after layout.
+// =============================================================================
+
+// =============================================================================
+// Helper infrastructure.
+// =============================================================================
+
+// Local-block tracker for hand-rolled ARM64 helpers. Each helper owns its
+// own block-offset table keyed by a locally-scoped BlockId starting at 0.
+// Mirrors `Win32HelperState` on the x64 side.
+type Arm64Win32HelperState
+	export var blockOffsets Arm64OffsetArray
+	export var blockFixups BlockIdFixupArray
+
+	static function create(numBlocks BlockId) returns Arm64Win32HelperState
+		var offsets = Arm64OffsetArray.create()
+		for _ in 0 upto numBlocks 'alloc'
+			offsets.push(0)
+		end 'alloc'
+		return Self{blockOffsets: offsets, blockFixups: BlockIdFixupArray.create()}
+	end 'create'
+end 'Arm64Win32HelperState'
+
+// Mark the start of a block at the current code offset (helper-local).
+function arm64Win32MarkBlock(state Arm64Win32HelperState, code ByteArray, blockId BlockId)
+	try state.blockOffsets.set(blockId, value: code.count()) otherwise panic("arm64Win32MarkBlock: blockId {blockId} out of range")
+end 'arm64Win32MarkBlock'
+
+// Emit `STP x29, x30, [sp, #-frameSize]!` + `MOV x29, sp`. `frameSize` must
+// be a multiple of 16 and at least 16 (to hold the saved FP/LR pair). No
+// callee-saved register area — these helpers only use caller-saved temps.
+function arm64Win32Prologue(code ByteArray, frameSize StackSize)
+	arm64EmitStpPreIndex(code, frameSize: frameSize)
+	arm64EmitMovFpSp(code)
+end 'arm64Win32Prologue'
+
+// Mirror epilogue: `LDP x29, x30, [sp], #frameSize ; RET`.
+function arm64Win32Epilogue(code ByteArray, frameSize StackSize)
+	arm64EmitLdpPostIndex(code, frameSize: frameSize)
+	arm64EmitRet(code)
+end 'arm64Win32Epilogue'
+
+// Spill xN into [x29, #16 + slot*8].
+function arm64Win32StoreSlot(code ByteArray, slotIndex VarSlot, src MachineWord)
+	arm64EmitStrSlot(code, rt: src, slotIndex: slotIndex)
+end 'arm64Win32StoreSlot'
+
+// Reload [x29, #16 + slot*8] into xN.
+function arm64Win32LoadSlot(code ByteArray, slotIndex VarSlot, dest MachineWord)
+	arm64EmitLdrSlot(code, rt: dest, slotIndex: slotIndex)
+end 'arm64Win32LoadSlot'
+
+// IAT-indirect call: `ADRP x16, IAT[slot] ; LDR x16, [x16] ; BLR x16`.
+// The relocation is recorded at the ADRP offset; the PE writer patches
+// both ADRP and the immediately-following LDR with the same slot.
+function arm64Win32EmitIatCall(code ByteArray, relocations RelocationArray, slotIndex MachineWord)
+	relocations.push(Relocation.create(code.count(), slotIndex: slotIndex))
+	arm64EmitAdrp(code, rd: 16)
+	arm64EmitLdrImm(code, rt: 16, rn: 16, imm12: 0)
+	arm64EmitBlr(code, rn: 16)
+end 'arm64Win32EmitIatCall'
+
+// Unconditional branch to a block local to the current helper. The
+// instruction encodes a 0 offset placeholder; the BlockIdFixup is resolved
+// when the helper completes.
+function arm64Win32EmitBranch(code ByteArray, state Arm64Win32HelperState, targetBlock BlockId)
+	state.blockFixups.push(BlockIdFixup.create(code.count(), targetBlock: targetBlock, isCond: false))
+	arm64EmitBranch(code)
+end 'arm64Win32EmitBranch'
+
+// B.cond (one of the standard ARM64 condition codes, e.g. 0 = EQ, 1 = NE)
+// to a block local to the current helper.
+function arm64Win32EmitCondBranch(code ByteArray, state Arm64Win32HelperState, cond MachineWord, targetBlock BlockId)
+	state.blockFixups.push(BlockIdFixup.create(code.count(), targetBlock: targetBlock, isCond: true))
+	arm64EmitCondBranch(code, cond: cond)
+end 'arm64Win32EmitCondBranch'
+
+// Finalize: resolve every block-local jump fixup against the recorded
+// block offsets. The block offsets are absolute code offsets (since the
+// helper was emitted in-place), so we can reuse the same patch routine the
+// regular ARM64 code emitter uses.
+function arm64Win32FinalizeHelper(code ByteArray, state Arm64Win32HelperState)
+	for fixup in state.blockFixups 'resolve'
+		let targetOffset = try state.blockOffsets.get(fixup.targetBlock) otherwise panic("arm64Win32FinalizeHelper: fixup target block {fixup.targetBlock} out of range")
+		if fixup.isCond 'cond'
+			arm64Win32PatchCondBranch(code, instrOffset: fixup.instrOffset, targetOffset: targetOffset)
+		end 'cond' else 'uncond'
+			arm64Win32PatchBranch(code, instrOffset: fixup.instrOffset, targetOffset: targetOffset)
+		end 'uncond'
+	end 'resolve'
+end 'arm64Win32FinalizeHelper'
+
+// Patch a B instruction at instrOffset with a PC-relative target. Pure
+// duplicate of the resolver used by `arm64ResolveBlockJumpFixups`, kept
+// local so the helper finalizer doesn't pull in `BlockOffsetMap`.
+function arm64Win32PatchBranch(code ByteArray, instrOffset Arm64Offset, targetOffset Arm64Offset)
+	let relBytes = targetOffset - instrOffset
+	let relInsns = relBytes / 4
+	let origInsn = readDword(code, offset: instrOffset)
+	let patched = (origInsn and 0xFC000000) or (relInsns and 0x3FFFFFF)
+	patchDword(code, offset: instrOffset, value: patched)
+end 'arm64Win32PatchBranch'
+
+// Patch a B.cond instruction at instrOffset with a PC-relative target.
+function arm64Win32PatchCondBranch(code ByteArray, instrOffset Arm64Offset, targetOffset Arm64Offset)
+	let relBytes = targetOffset - instrOffset
+	let relInsns = relBytes / 4
+	let origInsn = readDword(code, offset: instrOffset)
+	let condBits = origInsn and 0xF
+	let patched = 0x54000000 or ((relInsns and 0x7FFFF) shl 5) or condBits
+	patchDword(code, offset: instrOffset, value: patched)
+end 'arm64Win32PatchCondBranch'
+
+// =============================================================================
+// Skeleton bodies shared by the fourteen helpers that don't yet have a
+// full instruction-by-instruction translation. Each:
+//   * Emits a proper prologue / epilogue (well-formed ARM64 function).
+//   * Returns a constant via x0 mirroring the value the deleted
+//     runtime.std stubs returned (-38 ENOSYS for fallible ops, 0 for the
+//     close/argc/argv ops that conventionally don't surface errors).
+// The frame size is 32 bytes (saved FP/LR pair plus 16 bytes of unused
+// padding to keep the SP 16-aligned per AAPCS64).
+// =============================================================================
+function arm64Win32EmitSkeletonReturnZero(code ByteArray, helperName String, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
+	let helperStart = code.count()
+	arm64RecordLabel(labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: helperName, offset: helperStart)
+	let frameSize = 32
+	arm64Win32Prologue(code, frameSize: frameSize)
+	arm64EmitMovImm(code, rd: 0, value: 0)
+	arm64Win32Epilogue(code, frameSize: frameSize)
+end 'arm64Win32EmitSkeletonReturnZero'
+
+function arm64Win32EmitSkeletonReturnEnosys(code ByteArray, helperName String, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
+	let helperStart = code.count()
+	arm64RecordLabel(labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: helperName, offset: helperStart)
+	let frameSize = 32
+	arm64Win32Prologue(code, frameSize: frameSize)
+	// -38 == ENOSYS: function not implemented. Matches the constant the
+	// deleted runtime.std panic stubs returned, so any test that ran far
+	// enough to invoke a Win32 helper on arm64-windows still gets a
+	// recognizable "not implemented" path.
+	arm64EmitMovImm(code, rd: 0, value: -38)
+	arm64Win32Epilogue(code, frameSize: frameSize)
+end 'arm64Win32EmitSkeletonReturnEnosys'
+
+// =============================================================================
+// Top-level driver — emit every hand-rolled `mrt_win32_*` helper.
+//
+// Called from `concatArm64FunctionChunks` after the stdlib link pass, so
+// helper offsets land at the tail of `.text`. Calling-convention args
+// arrive in x0..x2; return value goes into x0.
+// =============================================================================
+export function emitArm64Win32Helpers(code ByteArray, relocations RelocationArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
+	emitArm64Win32TranslateLasterror(code, relocations: relocations, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+	arm64Win32EmitSkeletonReturnEnosys(code, helperName: "mrt_win32_open", labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+	arm64Win32EmitSkeletonReturnEnosys(code, helperName: "mrt_win32_read", labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+	arm64Win32EmitSkeletonReturnEnosys(code, helperName: "mrt_win32_write", labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+	// `mrt_win32_close` is conventionally infallible at the runtime
+	// abstraction layer: the deleted runtime.std stub returned 0.
+	arm64Win32EmitSkeletonReturnZero(code, helperName: "mrt_win32_close", labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+	arm64Win32EmitSkeletonReturnEnosys(code, helperName: "mrt_win32_lseek", labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+	arm64Win32EmitSkeletonReturnEnosys(code, helperName: "mrt_win32_stat", labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+	arm64Win32EmitSkeletonReturnEnosys(code, helperName: "mrt_win32_access", labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+	arm64Win32EmitSkeletonReturnEnosys(code, helperName: "mrt_win32_unlink", labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+	arm64Win32EmitSkeletonReturnEnosys(code, helperName: "mrt_win32_mkdir", labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+	arm64Win32EmitSkeletonReturnEnosys(code, helperName: "mrt_win32_getcwd", labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+	arm64Win32EmitSkeletonReturnEnosys(code, helperName: "mrt_win32_getdents64", labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+	// argv lookups: zero-argv stub returns 0 (matches deleted runtime.std
+	// behavior — caller treats 0 as "no args available").
+	arm64Win32EmitSkeletonReturnZero(code, helperName: "mrt_win32_get_argc", labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+	arm64Win32EmitSkeletonReturnZero(code, helperName: "mrt_win32_get_argv", labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+	arm64Win32EmitSkeletonReturnEnosys(code, helperName: "mrt_win32_get_executable_path", labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+end 'emitArm64Win32Helpers'
+
+// =============================================================================
+// 1. mrt_win32_translate_lasterror() — call GetLastError, translate to
+// negative errno-style result. ARM64 translation of `emitX64Win32TranslateLasterror`.
+//
+// Block layout (mirrors the x64 helper):
+//   0: entry — call GetLastError, store slot 0
+//   1: success — ret 0
+//   2: check ENOENT (err == 2 → block 4)
+//   3: check ENOENT (err == 3 → block 4)
+//   4: ret -2
+//   5: check EACCES (err == 5 → block 7)
+//   6: check EACCES (err == 32 → block 7)
+//   7: ret -13
+//   8: check EEXIST (err == 80 → block 10)
+//   9: check EEXIST (err == 183 → block 10)
+//   10: ret -17
+//   11: ret -5 (EIO default)
+// =============================================================================
+function emitArm64Win32TranslateLasterror(code ByteArray, relocations RelocationArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
+	let helperStart = code.count()
+	arm64RecordLabel(labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "mrt_win32_translate_lasterror", offset: helperStart)
+
+	// 1 slot (slot 0 = lastError) + saved FP/LR pair. Padding to 16-align
+	// the SP: 32 bytes total.
+	let frameSize = 32
+	var state = Arm64Win32HelperState.create(12)
+
+	arm64Win32Prologue(code, frameSize: frameSize)
+
+	// Block 0: GetLastError(); store result in slot 0.
+	arm64Win32MarkBlock(state, code: code, blockId: 0)
+	arm64Win32EmitIatCall(code, relocations: relocations, slotIndex: iatSlotIndex(IatSlot.getLastError))
+	arm64Win32StoreSlot(code, slotIndex: 0, src: 0)
+
+	// if (slot 0 == 0) goto block 1 else block 2.
+	arm64Win32LoadSlot(code, slotIndex: 0, dest: 0)
+	arm64EmitCmpRegZero(code, rn: 0)
+	// B.EQ block 1 (cond 0 = EQ)
+	arm64Win32EmitCondBranch(code, state: state, cond: 0, targetBlock: 1)
+	arm64Win32EmitBranch(code, state: state, targetBlock: 2)
+
+	// Block 1: success → ret 0.
+	arm64Win32MarkBlock(state, code: code, blockId: 1)
+	arm64EmitMovImm(code, rd: 0, value: 0)
+	arm64Win32Epilogue(code, frameSize: frameSize)
+
+	// Block 2: check err == 2.
+	arm64Win32MarkBlock(state, code: code, blockId: 2)
+	arm64Win32LoadSlot(code, slotIndex: 0, dest: 0)
+	arm64EmitMovImm(code, rd: 1, value: 2)
+	arm64EmitCmp(code, rn: 0, rm: 1)
+	arm64Win32EmitCondBranch(code, state: state, cond: 0, targetBlock: 4)
+	arm64Win32EmitBranch(code, state: state, targetBlock: 3)
+
+	// Block 3: check err == 3.
+	arm64Win32MarkBlock(state, code: code, blockId: 3)
+	arm64Win32LoadSlot(code, slotIndex: 0, dest: 0)
+	arm64EmitMovImm(code, rd: 1, value: 3)
+	arm64EmitCmp(code, rn: 0, rm: 1)
+	arm64Win32EmitCondBranch(code, state: state, cond: 0, targetBlock: 4)
+	arm64Win32EmitBranch(code, state: state, targetBlock: 5)
+
+	// Block 4: ret -2 (ENOENT).
+	arm64Win32MarkBlock(state, code: code, blockId: 4)
+	arm64EmitMovImm(code, rd: 0, value: -2)
+	arm64Win32Epilogue(code, frameSize: frameSize)
+
+	// Block 5: check err == 5.
+	arm64Win32MarkBlock(state, code: code, blockId: 5)
+	arm64Win32LoadSlot(code, slotIndex: 0, dest: 0)
+	arm64EmitMovImm(code, rd: 1, value: 5)
+	arm64EmitCmp(code, rn: 0, rm: 1)
+	arm64Win32EmitCondBranch(code, state: state, cond: 0, targetBlock: 7)
+	arm64Win32EmitBranch(code, state: state, targetBlock: 6)
+
+	// Block 6: check err == 32.
+	arm64Win32MarkBlock(state, code: code, blockId: 6)
+	arm64Win32LoadSlot(code, slotIndex: 0, dest: 0)
+	arm64EmitMovImm(code, rd: 1, value: 32)
+	arm64EmitCmp(code, rn: 0, rm: 1)
+	arm64Win32EmitCondBranch(code, state: state, cond: 0, targetBlock: 7)
+	arm64Win32EmitBranch(code, state: state, targetBlock: 8)
+
+	// Block 7: ret -13 (EACCES).
+	arm64Win32MarkBlock(state, code: code, blockId: 7)
+	arm64EmitMovImm(code, rd: 0, value: -13)
+	arm64Win32Epilogue(code, frameSize: frameSize)
+
+	// Block 8: check err == 80.
+	arm64Win32MarkBlock(state, code: code, blockId: 8)
+	arm64Win32LoadSlot(code, slotIndex: 0, dest: 0)
+	arm64EmitMovImm(code, rd: 1, value: 80)
+	arm64EmitCmp(code, rn: 0, rm: 1)
+	arm64Win32EmitCondBranch(code, state: state, cond: 0, targetBlock: 10)
+	arm64Win32EmitBranch(code, state: state, targetBlock: 9)
+
+	// Block 9: check err == 183.
+	arm64Win32MarkBlock(state, code: code, blockId: 9)
+	arm64Win32LoadSlot(code, slotIndex: 0, dest: 0)
+	arm64EmitMovImm(code, rd: 1, value: 183)
+	arm64EmitCmp(code, rn: 0, rm: 1)
+	arm64Win32EmitCondBranch(code, state: state, cond: 0, targetBlock: 10)
+	arm64Win32EmitBranch(code, state: state, targetBlock: 11)
+
+	// Block 10: ret -17 (EEXIST).
+	arm64Win32MarkBlock(state, code: code, blockId: 10)
+	arm64EmitMovImm(code, rd: 0, value: -17)
+	arm64Win32Epilogue(code, frameSize: frameSize)
+
+	// Block 11: ret -5 (EIO default).
+	arm64Win32MarkBlock(state, code: code, blockId: 11)
+	arm64EmitMovImm(code, rd: 0, value: -5)
+	arm64Win32Epilogue(code, frameSize: frameSize)
+
+	arm64Win32FinalizeHelper(code, state: state)
+end 'emitArm64Win32TranslateLasterror'

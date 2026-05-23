@@ -7,18 +7,11 @@
 // the order of hint/name table entries in Compiler/Targets/Windows/PeWriter.maxon.
 // Slots 0-2 match existing constants there; the remaining three were added for
 // file I/O and env-var support.
-let IAT_SLOT_EXIT_PROCESS = 0
-let IAT_SLOT_GET_STD_HANDLE = 1
-let IAT_SLOT_WRITE_FILE = 2
-let IAT_SLOT_READ_FILE = 3
-let IAT_SLOT_CREATE_FILE_A = 4
-let IAT_SLOT_CLOSE_HANDLE = 5
-let IAT_SLOT_GET_ENVIRONMENT_VARIABLE_A = 6
-let IAT_SLOT_VIRTUAL_ALLOC = 7
-let IAT_SLOT_VIRTUAL_FREE = 8
-let IAT_SLOT_INITIALIZE_CRITICAL_SECTION = 9
-let IAT_SLOT_ENTER_CRITICAL_SECTION = 10
-let IAT_SLOT_LEAVE_CRITICAL_SECTION = 11
+// IAT slot ordinals are no longer duplicated here — every call site uses
+// `iatSlotIndex(IatSlot.<case>)` so renumbering only requires editing the
+// `iatSlotIndex` table in PeWriter.maxon. The integer constants that used
+// to live here were a silent-regression hazard whenever the kernel32 run
+// gained a new entry.
 
 // Constant map: tracks valueId -> immediate value for integer movImm ops.
 // Enables addRegImm/subRegImm/cmpRegImm when an operand is a known constant.
@@ -157,9 +150,8 @@ function countMirNonAbsorbUses(op MirOp, uc UseCountMap, constMap ConstMap)
 		loadSlot then break 'count'
 		storeSlot(_, valueId) then ucIncrement(uc, valueId: valueId)
 		stackSlotAddr to loadFramePtr then break 'count'
-		syscall(_, _, argIds) then ucIncrementArray(uc, ids: argIds)
-		iatCall(_, _, argIds) then ucIncrementArray(uc, ids: argIds)
 		osExit(codeId) then ucIncrement(uc, valueId: codeId)
+		osSleep(msId) then ucIncrement(uc, valueId: msId)
 		osWrite(ptrId, lenId) then ucIncrementTwo(uc, a: ptrId, b: lenId)
 		osWriteErr(ptrId, lenId) then ucIncrementTwo(uc, a: ptrId, b: lenId)
 		osRead(_, ptrId, lenId) then ucIncrementTwo(uc, a: ptrId, b: lenId)
@@ -167,6 +159,9 @@ function countMirNonAbsorbUses(op MirOp, uc UseCountMap, constMap ConstMap)
 		osWriteFd(fdId, ptrId, lenId) then ucIncrementThree(uc, a: fdId, b: ptrId, c: lenId)
 		osClose(fdId) then ucIncrement(uc, valueId: fdId)
 		osGetEnv(_, namePtrId, nameLenId, outBufPtrId, outBufLenId) then ucIncrementFour(uc, a: namePtrId, b: nameLenId, c: outBufPtrId, d: outBufLenId)
+		osGetArgc then break 'count'
+		osGetArgv(_, indexId) then ucIncrement(uc, valueId: indexId)
+		osGetExecutablePath(_, bufPtrId, bufSizeId) then ucIncrementTwo(uc, a: bufPtrId, b: bufSizeId)
 		memcpy(dstId, srcId, lenId) then ucIncrementThree(uc, a: dstId, b: srcId, c: lenId)
 		storeByte(baseId, offsetId, byteId) then ucIncrementThree(uc, a: baseId, b: offsetId, c: byteId)
 		loadByte(_, baseId, offsetId) then ucIncrementTwo(uc, a: baseId, b: offsetId)
@@ -324,9 +319,8 @@ function countMirOpUses(op MirOp, uc UseCountMap)
 		loadSlot then break 'count'
 		storeSlot(_, valueId) then ucIncrement(uc, valueId: valueId)
 		stackSlotAddr to loadFramePtr then break 'count'
-		syscall(_, _, argIds) then ucIncrementArray(uc, ids: argIds)
-		iatCall(_, _, argIds) then ucIncrementArray(uc, ids: argIds)
 		osExit(codeId) then ucIncrement(uc, valueId: codeId)
+		osSleep(msId) then ucIncrement(uc, valueId: msId)
 		osWrite(ptrId, lenId) then ucIncrementTwo(uc, a: ptrId, b: lenId)
 		osWriteErr(ptrId, lenId) then ucIncrementTwo(uc, a: ptrId, b: lenId)
 		osRead(_, ptrId, lenId) then ucIncrementTwo(uc, a: ptrId, b: lenId)
@@ -334,6 +328,9 @@ function countMirOpUses(op MirOp, uc UseCountMap)
 		osWriteFd(fdId, ptrId, lenId) then ucIncrementThree(uc, a: fdId, b: ptrId, c: lenId)
 		osClose(fdId) then ucIncrement(uc, valueId: fdId)
 		osGetEnv(_, namePtrId, nameLenId, outBufPtrId, outBufLenId) then ucIncrementFour(uc, a: namePtrId, b: nameLenId, c: outBufPtrId, d: outBufLenId)
+		osGetArgc then break 'count'
+		osGetArgv(_, indexId) then ucIncrement(uc, valueId: indexId)
+		osGetExecutablePath(_, bufPtrId, bufSizeId) then ucIncrementTwo(uc, a: bufPtrId, b: bufSizeId)
 		memcpy(dstId, srcId, lenId) then ucIncrementThree(uc, a: dstId, b: srcId, c: lenId)
 		storeByte(baseId, offsetId, byteId) then ucIncrementThree(uc, a: baseId, b: offsetId, c: byteId)
 		loadByte(_, baseId, offsetId) then ucIncrementTwo(uc, a: baseId, b: offsetId)
@@ -398,8 +395,6 @@ end 'sysOpTempSlotCountPacked'
 
 function mirSysTempCount(op MirOp) returns SlotIndex
 	return match op 'check'
-		syscall gives 1
-		iatCall gives 1
 		globalAddr gives 1
 		funcAddr gives 1
 		loadFramePtr gives 1
@@ -408,6 +403,7 @@ function mirSysTempCount(op MirOp) returns SlotIndex
 		loadByte gives 3
 		memcpy gives 3
 		osExit gives 1
+		osSleep gives 6
 		osWrite gives 6
 		osWriteErr gives 6
 		// osRead: scratch bytesRead slot + 5 iatCall args (ReadFile) on Windows; mirror osWriteFd budget.
@@ -420,6 +416,11 @@ function mirSysTempCount(op MirOp) returns SlotIndex
 		osClose gives 3
 		// osGetEnv: name buffer slot + null-term temps + 3 iatCall args (GetEnvironmentVariableA)
 		osGetEnv gives 10
+		// argv / executable-path ops match the file-I/O budget shape: up to
+		// 4 input arg slots + a result slot fits comfortably within 8.
+		osGetArgc gives 8
+		osGetArgv gives 8
+		osGetExecutablePath gives 8
 		// osAllocPages on Windows: VirtualAlloc(NULL, size, 0x3000, 0x04) — 4 iatCall args + result slot.
 		// On Linux (x64): mmap(NULL, len, 3, 0x22, -1, 0) — 6 syscall args + result slot.
 		osAllocPages gives 8
@@ -837,7 +838,7 @@ type X64FunctionLowering
 		return match x64Op 'check'
 			jmp(targetBlock) gives targetBlock
 			prologue to condJump gives NOT_A_JUMP_X64
-			movF64Slot to lockXaddMemReg gives NOT_A_JUMP_X64
+			movF64Slot to stashEntryArgv gives NOT_A_JUMP_X64
 		end 'check'
 	end 'getX64JumpTarget'
 
@@ -1582,9 +1583,8 @@ type X64FunctionLowering
 			globalAddr(resultId, name) then lowerGlobalAddr(resultId, name: name, dstBlock: dstBlock)
 			funcAddr(resultId, name) then lowerFuncAddr(resultId, name: name, dstBlock: dstBlock)
 			loadFramePtr(resultId) then lowerLoadFramePtr(resultId, dstBlock: dstBlock)
-			syscall(resultId, number, argIds) then lowerSyscall(resultId, number: number, argIds: argIds, dstBlock: dstBlock)
-			iatCall(resultId, slotIndex, argIds) then lowerIatCall(resultId, slotIndex: slotIndex, argIds: argIds, dstBlock: dstBlock)
 			osExit(codeId) then lowerOsExit(codeId, dstBlock: dstBlock)
+			osSleep(msId) then lowerOsSleep(msId, dstBlock: dstBlock)
 			osWrite(ptrId, lenId) then lowerOsWriteWithStrategy(ptrId, lenId: lenId, strategy: osDesc.write, dstBlock: dstBlock)
 			osWriteErr(ptrId, lenId) then lowerOsWriteWithStrategy(ptrId, lenId: lenId, strategy: osDesc.writeErr, dstBlock: dstBlock)
 			osRead(resultId, ptrId, lenId) then lowerOsReadWithStrategy(resultId, ptrId: ptrId, lenId: lenId, strategy: osDesc.read, dstBlock: dstBlock)
@@ -1592,6 +1592,9 @@ type X64FunctionLowering
 			osWriteFd(fdId, ptrId, lenId) then lowerOsWriteFd(fdId, ptrId: ptrId, lenId: lenId, dstBlock: dstBlock)
 			osClose(fdId) then lowerOsClose(fdId, dstBlock: dstBlock)
 			osGetEnv(resultId, namePtrId, nameLenId, outBufPtrId, outBufLenId) then lowerOsGetEnv(resultId, namePtrId: namePtrId, nameLenId: nameLenId, outBufPtrId: outBufPtrId, outBufLenId: outBufLenId, dstBlock: dstBlock)
+			osGetArgc(resultId) then lowerOsGetArgc(resultId, dstBlock: dstBlock)
+			osGetArgv(resultId, indexId) then lowerOsGetArgv(resultId, indexId: indexId, dstBlock: dstBlock)
+			osGetExecutablePath(resultId, bufPtrId, bufSizeId) then lowerOsGetExecutablePath(resultId, bufPtrId: bufPtrId, bufSizeId: bufSizeId, dstBlock: dstBlock)
 			memcpy(dstId, srcId, lenId) then lowerMemcpy(dstId, srcId: srcId, lenId: lenId, dstBlock: dstBlock)
 			storeByte(baseId, offsetId, byteId) then lowerStoreByte(baseId, offsetId: offsetId, byteId: byteId, dstBlock: dstBlock)
 			loadByte(resultId, baseId, offsetId) then lowerLoadByte(resultId, baseId: baseId, offsetId: offsetId, dstBlock: dstBlock)
@@ -1723,7 +1726,7 @@ type X64FunctionLowering
 		let codeSlot = ensureValueInSlot(codeId, dstBlock: dstBlock)
 		match osDesc.exit 'strategy'
 			syscall(num) then lowerOsExitSyscall(codeSlot, num: num, dstBlock: dstBlock)
-			iatCall(slotIdx) then lowerOsExitIat(codeSlot, slotIdx: slotIdx, dstBlock: dstBlock)
+			iatCall(slotIdx) then lowerSingleArgIatCall(codeSlot, slotIdx: slotIdx, dstBlock: dstBlock)
 		end 'strategy'
 	end 'lowerOsExit'
 
@@ -1734,12 +1737,33 @@ type X64FunctionLowering
 		nextTempSlot = nextTempSlot + 1
 	end 'lowerOsExitSyscall'
 
-	function lowerOsExitIat(codeSlot VarSlot, slotIdx MachineWord, dstBlock IrBlock)
+	// Emit a single-arg IAT call into `slotIdx` whose argument is already in
+	// `argSlot`. Used by both osExit and osSleep on Windows since both APIs
+	// — `ExitProcess(code)` and `Sleep(ms)` — take exactly one DWORD/QWORD
+	// argument and ignore the return.
+	function lowerSingleArgIatCall(argSlot VarSlot, slotIdx MachineWord, dstBlock IrBlock)
 		var argSlots = VarSlotArray.create()
-		argSlots.push(codeSlot)
+		argSlots.push(argSlot)
 		appendX64Op(target, block: dstBlock, op: X64Op.iatCall(nextTempSlot, slotIndex: slotIdx, argSlots: argSlots))
 		nextTempSlot = nextTempSlot + 1
-	end 'lowerOsExitIat'
+	end 'lowerSingleArgIatCall'
+
+	// `osSleep ms` lowering. On Windows, this is a single-arg `kernel32!Sleep`
+	// IAT call — the `Sleep` API takes the ms count directly in ecx (RCX on
+	// x64) and returns no value. On Linux/macOS the underlying primitive is
+	// `nanosleep(2)` which needs a `struct timespec*`; that conversion is
+	// non-trivial (split ms into seconds/nanoseconds, allocate two qwords on
+	// the stack, pass a pointer) and isn't yet implemented — panic so the
+	// failure is loud rather than a silent no-op. ARM64 Windows handles its
+	// own `osSleep` lowering in Arm64Backend.maxon.
+	function lowerOsSleep(msId ValueId, dstBlock IrBlock)
+		let msSlot = ensureValueInSlot(msId, dstBlock: dstBlock)
+		match osDesc.sleep 'strategy'
+			syscall then panic("X64 osSleep: nanosleep syscall lowering not yet implemented — needs timespec marshalling on the stack")
+			iatCall(slotIdx) then lowerSingleArgIatCall(msSlot, slotIdx: slotIdx, dstBlock: dstBlock)
+			libcall then panic("X64 osSleep: macOS libcall nanosleep lowering not yet implemented — needs timespec marshalling on the stack")
+		end 'strategy'
+	end 'lowerOsSleep'
 
 	function lowerOsWriteSyscall(ptrSlot VarSlot, lenSlot VarSlot, writeNum MachineWord, fd MachineWord, dstBlock IrBlock)
 		// fd constant -> temp slot (use physReg for the intermediate mov since
@@ -1992,7 +2016,7 @@ type X64FunctionLowering
 		args.push(templateSlot)
 
 		let resultSlot = nextTempSlot
-		appendX64Op(target, block: dstBlock, op: X64Op.iatCall(resultSlot, slotIndex: IAT_SLOT_CREATE_FILE_A, argSlots: args))
+		appendX64Op(target, block: dstBlock, op: X64Op.iatCall(resultSlot, slotIndex: iatSlotIndex(IatSlot.createFileA), argSlots: args))
 		valueSlotMapSet(valueSlots, valueId: resultId, slot: resultSlot)
 		appendX64Op(target, block: dstBlock, op: X64Op.loadSlot(X64VReg.virtual(resultId), slotIndex: resultSlot))
 		nextTempSlot = nextTempSlot + 1
@@ -2025,7 +2049,7 @@ type X64FunctionLowering
 		args.push(nullSlot)
 
 		let resultSlot = nextTempSlot
-		appendX64Op(target, block: dstBlock, op: X64Op.iatCall(resultSlot, slotIndex: IAT_SLOT_WRITE_FILE, argSlots: args))
+		appendX64Op(target, block: dstBlock, op: X64Op.iatCall(resultSlot, slotIndex: iatSlotIndex(IatSlot.writeFile), argSlots: args))
 		nextTempSlot = nextTempSlot + 1
 	end 'lowerOsWriteFdWindows'
 
@@ -2044,7 +2068,7 @@ type X64FunctionLowering
 		var args = VarSlotArray.create()
 		args.push(fdSlot)
 		let resultSlot = nextTempSlot
-		appendX64Op(target, block: dstBlock, op: X64Op.iatCall(resultSlot, slotIndex: IAT_SLOT_CLOSE_HANDLE, argSlots: args))
+		appendX64Op(target, block: dstBlock, op: X64Op.iatCall(resultSlot, slotIndex: iatSlotIndex(IatSlot.closeHandle), argSlots: args))
 		nextTempSlot = nextTempSlot + 1
 	end 'lowerOsCloseWindows'
 
@@ -2073,7 +2097,7 @@ type X64FunctionLowering
 		args.push(outBufLenSlot)
 
 		let resultSlot = nextTempSlot
-		appendX64Op(target, block: dstBlock, op: X64Op.iatCall(resultSlot, slotIndex: IAT_SLOT_GET_ENVIRONMENT_VARIABLE_A, argSlots: args))
+		appendX64Op(target, block: dstBlock, op: X64Op.iatCall(resultSlot, slotIndex: iatSlotIndex(IatSlot.getEnvironmentVariableA), argSlots: args))
 		valueSlotMapSet(valueSlots, valueId: resultId, slot: resultSlot)
 		appendX64Op(target, block: dstBlock, op: X64Op.loadSlot(X64VReg.virtual(resultId), slotIndex: resultSlot))
 		nextTempSlot = nextTempSlot + 1
@@ -2119,7 +2143,7 @@ type X64FunctionLowering
 		args.push(protectSlot)
 
 		let resultSlot = nextTempSlot
-		appendX64Op(target, block: dstBlock, op: X64Op.iatCall(resultSlot, slotIndex: IAT_SLOT_VIRTUAL_ALLOC, argSlots: args))
+		appendX64Op(target, block: dstBlock, op: X64Op.iatCall(resultSlot, slotIndex: iatSlotIndex(IatSlot.virtualAlloc), argSlots: args))
 		valueSlotMapSet(valueSlots, valueId: resultId, slot: resultSlot)
 		appendX64Op(target, block: dstBlock, op: X64Op.loadSlot(X64VReg.virtual(resultId), slotIndex: resultSlot))
 		nextTempSlot = nextTempSlot + 1
@@ -2175,7 +2199,7 @@ type X64FunctionLowering
 		args.push(releaseSlot)
 
 		let resultSlot = nextTempSlot
-		appendX64Op(target, block: dstBlock, op: X64Op.iatCall(resultSlot, slotIndex: IAT_SLOT_VIRTUAL_FREE, argSlots: args))
+		appendX64Op(target, block: dstBlock, op: X64Op.iatCall(resultSlot, slotIndex: iatSlotIndex(IatSlot.virtualFree), argSlots: args))
 		nextTempSlot = nextTempSlot + 1
 	end 'lowerOsFreePagesWindows'
 
@@ -2218,12 +2242,14 @@ type X64FunctionLowering
 
 	// Shared per-op dispatch helper. The Linux path reuses `lowerSyscall`
 	// to convert arg ValueIds into slot-based syscall args; the Windows
-	// path reuses `emitDirectCall` to invoke the wrapper helper via the
-	// X64 internal calling convention.
+	// path uses `emitDirectCallHandRolled` because the `mrt_win32_*`
+	// helpers are hand-rolled machine code emitted by
+	// `emitX64Win32Helpers` and have no IR signature for
+	// `lookupFuncParamTypes` to resolve.
 	function lowerFileIoOp(resultId ValueId, opName String, argIds ValueIdArray, linuxSyscallNum MachineWord, winCallee String, dstBlock IrBlock)
 		match osDesc.os 'os'
 			linux then lowerSyscall(resultId, number: linuxSyscallNum, argIds: argIds, dstBlock: dstBlock)
-			windows then emitDirectCall(resultId, callee: winCallee, argIds: argIds, errorFlagId: 0, captureErrorFlag: false, dstBlock: dstBlock)
+			windows then emitDirectCallHandRolled(resultId, callee: winCallee, argIds: argIds, dstBlock: dstBlock)
 			macos then panic("{opName} not supported on x64 macos target")
 			wasi then panic("{opName} op should not reach the X64 backend on wasi — MirToWasm intercepts")
 		end 'os'
@@ -2312,6 +2338,183 @@ type X64FunctionLowering
 		lowerFileIoOp(resultId, opName: "osDirMkdir", argIds: argIds, linuxSyscallNum: 83, winCallee: "mrt_win32_mkdir", dstBlock: dstBlock)
 	end 'lowerOsDirMkdirOp'
 
+	// ============================================================
+	// Phase B3: argv / executable-path lowerings.
+	//
+	// On Windows, dispatch to the hand-rolled `mrt_win32_get_*` helpers
+	// emitted as raw machine code by `emitX64Win32Helpers` in X64Backend.
+	// Those helpers are NOT parsed runtime.std functions — they have no
+	// IR signature — so we cannot route through `emitDirectCall` (which
+	// calls `lookupFuncParamTypes`). Instead we emit the call sequence
+	// manually, knowing every arg is i64 and fits in the GPR ABI.
+	//
+	// On Linux / macOS / WASI: panic for now. Phases C1 / D1 / D3 add
+	// real lowerings. The MIR ops are produced by the unified
+	// `mrt_command_line_count` / `mrt_command_line_arg` / `mrt_executable_path`
+	// runtime bodies (Phase B4 / C2 promoted them off the `_v2` parallel
+	// names onto the public symbols), so the panic path on non-Windows
+	// targets currently triggers at MIR-dispatch time. C1 and D1 land the
+	// real per-target lowerings.
+	// ============================================================
+
+	// Emit a direct call to a hand-rolled Win32 helper. All helpers take
+	// i64 args (no float), so the GPR-only fast path mirrors `emitDirectCall`
+	// without the param-type lookup that would panic on hand-rolled targets.
+	function emitDirectCallHandRolled(resultId ValueId, callee String, argIds ValueIdArray, dstBlock IrBlock)
+		var argIdx = 0
+		while argIdx < argIds.count() 'moveArgs'
+			let argId = try argIds.get(argIdx) otherwise panic("emitDirectCallHandRolled: argIds.get OOB at {argIdx}")
+			if argIdx >= X64_CALLCONV_GPR_COUNT 'tooMany'
+				panic("emitDirectCallHandRolled: callee '{callee}' has too many args ({argIds.count()}); GPR ABI supports {X64_CALLCONV_GPR_COUNT}")
+			end 'tooMany'
+			let ccReg = getCallConvGpr(argIdx)
+			appendX64Op(target, block: dstBlock, op: X64Op.movRegReg(physReg(ccReg), srcReg: X64VReg.virtual(argId)))
+			argIdx = argIdx + 1
+		end 'moveArgs'
+
+		appendX64Op(target, block: dstBlock, op: X64Op.callDirect(callee))
+
+		// Helpers return i64 in r8 (internal ABI).
+		appendX64Op(target, block: dstBlock, op: X64Op.movRegReg(X64VReg.virtual(resultId), srcReg: physReg(X64Register.r8)))
+	end 'emitDirectCallHandRolled'
+
+	function lowerOsGetArgcWindows(resultId ValueId, dstBlock IrBlock)
+		let argIds = ValueIdArray.create()
+		emitDirectCallHandRolled(resultId, callee: "mrt_win32_get_argc", argIds: argIds, dstBlock: dstBlock)
+	end 'lowerOsGetArgcWindows'
+
+	function lowerOsGetArgvWindows(resultId ValueId, indexId ValueId, dstBlock IrBlock)
+		var argIds = ValueIdArray.create()
+		argIds.push(indexId)
+		emitDirectCallHandRolled(resultId, callee: "mrt_win32_get_argv", argIds: argIds, dstBlock: dstBlock)
+	end 'lowerOsGetArgvWindows'
+
+	function lowerOsGetExecutablePathWindows(resultId ValueId, bufPtrId ValueId, bufSizeId ValueId, dstBlock IrBlock)
+		var argIds = ValueIdArray.create()
+		argIds.push(bufPtrId)
+		argIds.push(bufSizeId)
+		emitDirectCallHandRolled(resultId, callee: "mrt_win32_get_executable_path", argIds: argIds, dstBlock: dstBlock)
+	end 'lowerOsGetExecutablePathWindows'
+
+	// Phase D1 Linux lowerings. The kernel-supplied argc/argv are stashed by
+	// `mrt_start`'s prologue (see X64PrologueEpilogue + the `stashEntryArgv`
+	// pseudo-op) into the platform-independent `__mrt_argc` / `__mrt_argv`
+	// globals. The lowerings below read those globals directly. Skeleton-level
+	// fidelity per Phase D1 — compile-verify only, no runtime test coverage.
+
+	// `osGetArgc` on Linux: a single qword load from the `__mrt_argc` global
+	// into the result's virtual register.
+	function lowerOsGetArgcLinux(resultId ValueId, dstBlock IrBlock)
+		appendX64Op(target, block: dstBlock, op: X64Op.globalLoad(X64VReg.virtual(resultId), name: "__mrt_argc", size: 8))
+	end 'lowerOsGetArgcLinux'
+
+	// `osGetArgv` on Linux: bounds-check the index (treated as unsigned so a
+	// negative value short-circuits to OOB), then load `argv[index]`. The
+	// branchless form lets the compiler stay inside one block — the bound
+	// check is a `cmp` + `cmovae` that clears the result if `index >= argc`.
+	//
+	// CAVEAT: the load itself is unconditional. On a properly populated argv
+	// array this is fine because the array is sized to `argc + 1` slots
+	// (the kernel writes a NUL terminator after argv[argc-1]); for indices
+	// well outside that range the load could fault before the cmov masks it
+	// to 0. This skeleton is acceptable for the Phase D1 compile-verify scope
+	// — runtime correctness on Linux is out of scope and will be hardened
+	// when a Linux test target gets added.
+	function lowerOsGetArgvLinux(resultId ValueId, indexId ValueId, dstBlock IrBlock)
+		let rcx = physReg(X64Register.rcx)
+		let r10 = physReg(X64Register.r10)
+		let r11 = physReg(X64Register.r11)
+		let rax = physReg(X64Register.rax)
+		let rdi = physReg(X64Register.rdi)
+
+		// rcx = index
+		appendX64Op(target, block: dstBlock, op: X64Op.movRegReg(rcx, srcReg: X64VReg.virtual(indexId)))
+		// r10 = argc
+		appendX64Op(target, block: dstBlock, op: X64Op.globalLoad(r10, name: "__mrt_argc", size: 8))
+		// r11 = argv base pointer
+		appendX64Op(target, block: dstBlock, op: X64Op.globalLoad(r11, name: "__mrt_argv", size: 8))
+		// rax = index, then rax = index * 8
+		appendX64Op(target, block: dstBlock, op: X64Op.movRegReg(rax, srcReg: rcx))
+		// Multiply by 8 via three left shifts. `shlRegCl` shifts by `cl`, so
+		// materialize 3 into rcx first — but rcx still holds `index` for the
+		// upcoming compare. Use a chained `add rax, rax` instead: each add
+		// doubles rax and is exempt from the shift-count register requirement.
+		appendX64Op(target, block: dstBlock, op: X64Op.addRegReg(rax, srcReg: rax))
+		appendX64Op(target, block: dstBlock, op: X64Op.addRegReg(rax, srcReg: rax))
+		appendX64Op(target, block: dstBlock, op: X64Op.addRegReg(rax, srcReg: rax))
+		// rax = argv + index*8
+		appendX64Op(target, block: dstBlock, op: X64Op.addRegReg(rax, srcReg: r11))
+		// rax = [rax + 0] = argv[index] (may load garbage if index OOB; cmov
+		// below masks the value, but the load is not actually suppressed).
+		appendX64Op(target, block: dstBlock, op: X64Op.loadIndirect(rax, baseReg: rax, offset: 0, width: StoreWidth.qword, signed: false))
+		// rdi = 0 (OOB replacement value)
+		appendX64Op(target, block: dstBlock, op: X64Op.xorRegRegSelf(rdi))
+		// Compare index vs argc (unsigned). `cmovae` triggers when CF=0,
+		// i.e. index >= argc — also catches the "index < 0" sign-extended
+		// case because a negative i64 is huge when interpreted unsigned.
+		appendX64Op(target, block: dstBlock, op: X64Op.cmpRegReg(rcx, rhsReg: r10))
+		appendX64Op(target, block: dstBlock, op: X64Op.cmov(rax, src: rdi, condition: X64CmovCondition.ae))
+		// Move result into the value's virtual register.
+		appendX64Op(target, block: dstBlock, op: X64Op.movRegReg(X64VReg.virtual(resultId), srcReg: rax))
+	end 'lowerOsGetArgvLinux'
+
+	// `osGetExecutablePath` on Linux: call SYS_readlink (89) with
+	// `/proc/self/exe`, the caller-supplied buffer, and the buffer size.
+	// The kernel returns the number of bytes written, or -errno on failure.
+	// `/proc/self/exe` lives in `__mrt_proc_self_exe` in .data, registered by
+	// `registerSlabAndMmGlobalsForDataSection`.
+	function lowerOsGetExecutablePathLinux(resultId ValueId, bufPtrId ValueId, bufSizeId ValueId, dstBlock IrBlock)
+		// Stage path-ptr into a fresh slot: lea rax, [rip+__mrt_proc_self_exe]; mov [slot], rax.
+		let pathSlot = nextTempSlot
+		appendX64Op(target, block: dstBlock, op: X64Op.globalAddr(pathSlot, name: "__mrt_proc_self_exe"))
+		nextTempSlot = nextTempSlot + 1
+
+		let bufSlot = ensureValueInSlot(bufPtrId, dstBlock: dstBlock)
+		let sizeSlot = ensureValueInSlot(bufSizeId, dstBlock: dstBlock)
+
+		var args = VarSlotArray.create()
+		args.push(pathSlot)
+		args.push(bufSlot)
+		args.push(sizeSlot)
+
+		let resultSlot = nextTempSlot
+		appendX64Op(target, block: dstBlock, op: X64Op.syscall(resultSlot, number: 89, argSlots: args))
+		valueSlotMapSet(valueSlots, valueId: resultId, slot: resultSlot)
+		appendX64Op(target, block: dstBlock, op: X64Op.loadSlot(X64VReg.virtual(resultId), slotIndex: resultSlot))
+		nextTempSlot = nextTempSlot + 1
+	end 'lowerOsGetExecutablePathLinux'
+
+	function lowerOsGetArgc(resultId ValueId, dstBlock IrBlock)
+		match osDesc.os 'os'
+			windows then lowerOsGetArgcWindows(resultId, dstBlock: dstBlock)
+			linux then lowerOsGetArgcLinux(resultId, dstBlock: dstBlock)
+			// x64-macos has no Mach-O x64 writer yet (see MachOWriter.maxon,
+			// which is ARM64-only); the broader toolchain panics earlier in
+			// the binary-emission stage. The op-level panic is preserved as
+			// a clear marker if that pipeline lands.
+			macos then panic("x64-macos osGetArgc not supported: x64 Mach-O writer not implemented")
+			wasi then panic("osGetArgc op should not reach the X64 backend on wasi — MirToWasm intercepts")
+		end 'os'
+	end 'lowerOsGetArgc'
+
+	function lowerOsGetArgv(resultId ValueId, indexId ValueId, dstBlock IrBlock)
+		match osDesc.os 'os'
+			windows then lowerOsGetArgvWindows(resultId, indexId: indexId, dstBlock: dstBlock)
+			linux then lowerOsGetArgvLinux(resultId, indexId: indexId, dstBlock: dstBlock)
+			macos then panic("x64-macos osGetArgv not supported: x64 Mach-O writer not implemented")
+			wasi then panic("osGetArgv op should not reach the X64 backend on wasi — MirToWasm intercepts")
+		end 'os'
+	end 'lowerOsGetArgv'
+
+	function lowerOsGetExecutablePath(resultId ValueId, bufPtrId ValueId, bufSizeId ValueId, dstBlock IrBlock)
+		match osDesc.os 'os'
+			windows then lowerOsGetExecutablePathWindows(resultId, bufPtrId: bufPtrId, bufSizeId: bufSizeId, dstBlock: dstBlock)
+			linux then lowerOsGetExecutablePathLinux(resultId, bufPtrId: bufPtrId, bufSizeId: bufSizeId, dstBlock: dstBlock)
+			macos then panic("x64-macos osGetExecutablePath not supported: x64 Mach-O writer not implemented")
+			wasi then panic("osGetExecutablePath op should not reach the X64 backend on wasi — MirToWasm intercepts")
+		end 'os'
+	end 'lowerOsGetExecutablePath'
+
 	// Atomic increment: `LOCK INC qword [addr]`. The address operand is consumed
 	// directly as a virtual register; the regalloc allocates a physical GPR for
 	// it. Memory at [addr] is the read-modify-written location, so no new
@@ -2355,7 +2558,7 @@ type X64FunctionLowering
 	// 6a.20 spec tests run on x64-windows where the IAT path is exercised.
 	function lowerOsLockInit(addrId ValueId, dstBlock IrBlock)
 		match osDesc.os 'pickOs'
-			windows then lowerOsLockCallWindows(addrId, slotIndex: IAT_SLOT_INITIALIZE_CRITICAL_SECTION, dstBlock: dstBlock)
+			windows then lowerOsLockCallWindows(addrId, slotIndex: iatSlotIndex(IatSlot.initializeCriticalSection), dstBlock: dstBlock)
 			linux then break 'pickOs'  // mmap zero-init memory is already a valid uninit lock
 			macos then panic("osLockInit not supported on x64 macos target")
 			wasi then panic("osLockInit not supported on x64 wasi target")
@@ -2364,7 +2567,7 @@ type X64FunctionLowering
 
 	function lowerOsLockAcquire(addrId ValueId, dstBlock IrBlock)
 		match osDesc.os 'pickOs'
-			windows then lowerOsLockCallWindows(addrId, slotIndex: IAT_SLOT_ENTER_CRITICAL_SECTION, dstBlock: dstBlock)
+			windows then lowerOsLockCallWindows(addrId, slotIndex: iatSlotIndex(IatSlot.enterCriticalSection), dstBlock: dstBlock)
 			linux then break 'pickOs'  // real spinlock lowering deferred to step 6a.23
 			macos then panic("osLockAcquire not supported on x64 macos target")
 			wasi then panic("osLockAcquire not supported on x64 wasi target")
@@ -2373,7 +2576,7 @@ type X64FunctionLowering
 
 	function lowerOsLockRelease(addrId ValueId, dstBlock IrBlock)
 		match osDesc.os 'pickOs'
-			windows then lowerOsLockCallWindows(addrId, slotIndex: IAT_SLOT_LEAVE_CRITICAL_SECTION, dstBlock: dstBlock)
+			windows then lowerOsLockCallWindows(addrId, slotIndex: iatSlotIndex(IatSlot.leaveCriticalSection), dstBlock: dstBlock)
 			linux then break 'pickOs'  // real spinlock lowering deferred to step 6a.23
 			macos then panic("osLockRelease not supported on x64 macos target")
 			wasi then panic("osLockRelease not supported on x64 wasi target")

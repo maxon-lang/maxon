@@ -7,6 +7,23 @@ export union ExitStrategy
 	iatCall(slotIndex MachineWord)
 end 'ExitStrategy'
 
+// How to suspend the current thread for N milliseconds. Each variant maps to
+// the per-OS primitive used by `osSleep`:
+//   * `syscall(nanosleepNumber)` — Linux `nanosleep(2)`. The callee converts ms
+//     to a `struct timespec { tv_sec, tv_nsec }` on the stack and passes its
+//     address as the first argument; the second argument (rem-timespec) is
+//     NULL since we don't support EINTR resume.
+//   * `iatCall(sleepSlot)` — Windows kernel32!Sleep (ms argument is passed
+//     directly in ecx; no return value to consume). Slot index comes from
+//     `iatSlotIndex(IatSlot.sleep)` in PeWriter.maxon.
+//   * `libcall(nanosleepSlot)` — macOS libc `nanosleep`. Same calling
+//     contract as the Linux syscall but routed through the dyld import slot.
+export union SleepStrategy
+	syscall(nanosleepNumber MachineWord)
+	iatCall(sleepSlot MachineWord)
+	libcall(nanosleepSlot MachineWord)
+end 'SleepStrategy'
+
 // How to write to stdout
 export union WriteStrategy
 	syscall(writeNumber MachineWord, fd MachineWord)
@@ -27,15 +44,16 @@ export type OsDescriptor
 	export var write WriteStrategy
 	export var writeErr WriteStrategy
 	export var read ReadStrategy
+	export var sleep SleepStrategy
 	export var startShadowSpace MachineWord
 
-	export static function create(os Os, exit ExitStrategy, write WriteStrategy, writeErr WriteStrategy, read ReadStrategy, startShadowSpace MachineWord) returns OsDescriptor
-		return Self{os: os, exit: exit, write: write, writeErr: writeErr, read: read, startShadowSpace: startShadowSpace}
+	export static function create(os Os, exit ExitStrategy, write WriteStrategy, writeErr WriteStrategy, read ReadStrategy, sleep SleepStrategy, startShadowSpace MachineWord) returns OsDescriptor
+		return Self{os: os, exit: exit, write: write, writeErr: writeErr, read: read, sleep: sleep, startShadowSpace: startShadowSpace}
 	end 'create'
 end 'OsDescriptor'
 
 export function makeOsDescriptor(target Target) returns OsDescriptor
-	var result = OsDescriptor.create(target.os, exit: ExitStrategy.syscall(0), write: WriteStrategy.syscall(0, fd: 0), writeErr: WriteStrategy.syscall(0, fd: 0), read: ReadStrategy.syscall(0, fd: 0), startShadowSpace: 0)
+	var result = OsDescriptor.create(target.os, exit: ExitStrategy.syscall(0), write: WriteStrategy.syscall(0, fd: 0), writeErr: WriteStrategy.syscall(0, fd: 0), read: ReadStrategy.syscall(0, fd: 0), sleep: SleepStrategy.syscall(0), startShadowSpace: 0)
 
 	match target.os 'pickOs'
 		windows then result = makeWindowsDescriptor()
@@ -48,15 +66,23 @@ export function makeOsDescriptor(target Target) returns OsDescriptor
 end 'makeOsDescriptor'
 
 function makeWindowsDescriptor() returns OsDescriptor
-	// Windows IAT slot layout (see PeWriter.maxon):
-	//   slot 0: ExitProcess, slot 1: GetStdHandle, slot 2: WriteFile, slot 3: ReadFile, slot 4: CreateFileA
-	// Handle constants: STD_OUTPUT_HANDLE = -11 (0xFFFFFFF5), STD_ERROR_HANDLE = -12 (0xFFFFFFF4), STD_INPUT_HANDLE = -10 (0xFFFFFFF6)
-	return OsDescriptor.create(Os.windows, exit: ExitStrategy.iatCall(0), write: WriteStrategy.winApi(1, handleConstant: 0xFFFFFFF5, writeFileSlot: 2), writeErr: WriteStrategy.winApi(1, handleConstant: 0xFFFFFFF4, writeFileSlot: 2), read: ReadStrategy.winApi(1, handleConstant: 0xFFFFFFF6, readFileSlot: 3), startShadowSpace: 0x28)
+	// Windows-targeted strategies route through PE IAT slots resolved by
+	// `iatSlotIndex(IatSlot.<case>)` so the per-strategy integers stay in
+	// lockstep with PeWriter's slot ordering. Handle constants are
+	// STD_OUTPUT_HANDLE = -11 (0xFFFFFFF5), STD_ERROR_HANDLE = -12
+	// (0xFFFFFFF4), STD_INPUT_HANDLE = -10 (0xFFFFFFF6).
+	let exitSlot = iatSlotIndex(IatSlot.exitProcess)
+	let getStdHandle = iatSlotIndex(IatSlot.getStdHandle)
+	let writeFile = iatSlotIndex(IatSlot.writeFile)
+	let readFile = iatSlotIndex(IatSlot.readFile)
+	let sleepSlot = iatSlotIndex(IatSlot.sleep)
+	return OsDescriptor.create(Os.windows, exit: ExitStrategy.iatCall(exitSlot), write: WriteStrategy.winApi(getStdHandle, handleConstant: 0xFFFFFFF5, writeFileSlot: writeFile), writeErr: WriteStrategy.winApi(getStdHandle, handleConstant: 0xFFFFFFF4, writeFileSlot: writeFile), read: ReadStrategy.winApi(getStdHandle, handleConstant: 0xFFFFFFF6, readFileSlot: readFile), sleep: SleepStrategy.iatCall(sleepSlot), startShadowSpace: 0x28)
 end 'makeWindowsDescriptor'
 
 function makeMacOsDescriptor() returns OsDescriptor
-	// macOS dyld slot layout: slot 0 = exit, slot 1 = write, slot 2 = read
-	return OsDescriptor.create(Os.macos, exit: ExitStrategy.iatCall(0), write: WriteStrategy.libcall(1, fd: 1), writeErr: WriteStrategy.libcall(1, fd: 2), read: ReadStrategy.libcall(2, fd: 0), startShadowSpace: 0)
+	// macOS dyld slot layout: slot 0 = exit, slot 1 = write, slot 2 = read,
+	// slot 3 = nanosleep (libc).
+	return OsDescriptor.create(Os.macos, exit: ExitStrategy.iatCall(0), write: WriteStrategy.libcall(1, fd: 1), writeErr: WriteStrategy.libcall(1, fd: 2), read: ReadStrategy.libcall(2, fd: 0), sleep: SleepStrategy.libcall(3), startShadowSpace: 0)
 end 'makeMacOsDescriptor'
 
 function makeLinuxDescriptor(target Target) returns OsDescriptor
@@ -75,6 +101,11 @@ function makeLinuxDescriptor(target Target) returns OsDescriptor
 		arm64 gives 63
 		default panic("Linux descriptor not used for WASM targets")
 	end 'cpuRead'
+	let nanosleepNum = match target.cpu 'cpuNanosleep'
+		x64 gives 35
+		arm64 gives 101
+		default panic("Linux descriptor not used for WASM targets")
+	end 'cpuNanosleep'
 
-	return OsDescriptor.create(Os.linux, exit: ExitStrategy.syscall(exitNum), write: WriteStrategy.syscall(writeNum, fd: 1), writeErr: WriteStrategy.syscall(writeNum, fd: 2), read: ReadStrategy.syscall(readNum, fd: 0), startShadowSpace: 0)
+	return OsDescriptor.create(Os.linux, exit: ExitStrategy.syscall(exitNum), write: WriteStrategy.syscall(writeNum, fd: 1), writeErr: WriteStrategy.syscall(writeNum, fd: 2), read: ReadStrategy.syscall(readNum, fd: 0), sleep: SleepStrategy.syscall(nanosleepNum), startShadowSpace: 0)
 end 'makeLinuxDescriptor'

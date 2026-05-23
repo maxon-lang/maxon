@@ -255,3 +255,44 @@ end 'main'
 ```exitcode
 0
 ```
+
+<!-- test: argv-exec-parity -->
+<!-- Args: alpha beta gamma -->
+```maxon
+function main() returns ExitCode
+	// Phase B4 parity check: the unified mrt_command_line_count /
+	// mrt_command_line_arg / mrt_executable_path bodies route through the
+	// new osGetArgc / osGetArgv / osGetExecutablePath ops, which on
+	// x64-windows dispatch into the hand-rolled mrt_win32_get_* helpers
+	// emitted as raw machine code by X64Backend.emitX64Win32Helpers.
+	let args = CommandLine.args()
+	if args.count() < 4 'count-check'
+		return 1
+	end 'count-check'
+
+	let a1 = try args.get(1) otherwise ""
+	if a1 != "alpha" 'a1-check'
+		return 2
+	end 'a1-check'
+
+	let a2 = try args.get(2) otherwise ""
+	if a2 != "beta" 'a2-check'
+		return 3
+	end 'a2-check'
+
+	let a3 = try args.get(3) otherwise ""
+	if a3 != "gamma" 'a3-check'
+		return 4
+	end 'a3-check'
+
+	let exe = try Process.executablePath() otherwise return 5
+	if exe.path.byteLength() == 0 'exe-empty'
+		return 6
+	end 'exe-empty'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```

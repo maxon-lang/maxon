@@ -53,9 +53,14 @@ let CS_PAGE_SIZE_LOG2 = 12
 let DYLD_CHAINED_PTR_64 = 6
 let DYLD_CHAINED_IMPORT = 1
 
-// Import names for macOS
-// Slot 0 = _exit, Slot 1 = write
-let MACHO_IMPORT_COUNT = 2
+// Import names for macOS dyld chained-fixup imports. The Mach-O writer
+// currently targets arm64-macos only; x64-macos has no Mach-O writer yet
+// and remains broken at the link stage. The new `_NSGetExecutablePath`
+// slot is consumed by the ARM64 `osGetExecutablePath` lowering.
+export let MACHO_IMPORT_SLOT_EXIT = 0
+export let MACHO_IMPORT_SLOT_WRITE = 1
+export let MACHO_IMPORT_SLOT_NSGETEXECUTABLEPATH = 2
+export let MACHO_IMPORT_COUNT = 3
 
 // nlist_64 type/sect bits used for debug symbols.
 let N_EXT = 0x01
@@ -124,8 +129,8 @@ function buildChainedFixups(dataSegmentFileOff MachineWord, gotSectionOffsetInSe
 
 	let importsOffset = alignUp(startsOffset + startsSize + dataSegStartsSize, alignment: 4)
 
-	// Symbol pool: \0 + "_" + name + \0 for each import
-	// Slot 0: __exit, Slot 1: _write
+	// Symbol pool: leading \0 byte then each import name as `_name\0`.
+	// See `MACHO_IMPORT_SLOT_*` for the slot-index assignment.
 	let symbolsOffset = importsOffset + (MACHO_IMPORT_COUNT * 4)
 
 	// Header fields
@@ -159,23 +164,30 @@ function buildChainedFixups(dataSegmentFileOff MachineWord, gotSectionOffsetInSe
 		cf.push(0)
 	end 'padToImports'
 
-	// Import entries (4 bytes each): lib_ordinal=1, weak=0, name_offset
-	// Symbol offsets: after the initial \0 byte
-	// _exit starts at offset 1 (6 bytes), _write starts at offset 1 + 6 = 7
+	// Import entries (4 bytes each): lib_ordinal=1, weak=0, name_offset.
+	// Symbol offsets are counted from the start of the symbol pool, which
+	// begins with a leading NUL byte; that's why each name offset starts
+	// at the byte after the previous `_name\0` (6 bytes for `_exit\0`,
+	// 7 bytes for `_write\0`, 21 bytes for `_NSGetExecutablePath\0`).
 	let exitNameOff = 1
 	let writeNameOff = exitNameOff + 6
+	let nsGetExecutablePathNameOff = writeNameOff + 7
 
-	// Import 0: _exit
-	let import0 = 1 or (0 shl 8) or (exitNameOff shl 9)
-	writeDword(cf, value: import0)
-	// Import 1: _write
-	let import1 = 1 or (0 shl 8) or (writeNameOff shl 9)
-	writeDword(cf, value: import1)
+	// Import MACHO_IMPORT_SLOT_EXIT: _exit
+	let importExit = 1 or (0 shl 8) or (exitNameOff shl 9)
+	writeDword(cf, value: importExit)
+	// Import MACHO_IMPORT_SLOT_WRITE: _write
+	let importWrite = 1 or (0 shl 8) or (writeNameOff shl 9)
+	writeDword(cf, value: importWrite)
+	// Import MACHO_IMPORT_SLOT_NSGETEXECUTABLEPATH: _NSGetExecutablePath
+	let importNsGetExecutablePath = 1 or (0 shl 8) or (nsGetExecutablePathNameOff shl 9)
+	writeDword(cf, value: importNsGetExecutablePath)
 
 	// Symbol pool
 	cf.push(0)  // leading null
 	cf.append(b"_exit\x00")
 	cf.append(b"_write\x00")
+	cf.append(b"_NSGetExecutablePath\x00")
 
 	// Align to 8
 	while cf.count() mod 8 != 0 'alignCf'
@@ -189,16 +201,20 @@ end 'buildChainedFixups'
 
 function buildGot() returns ByteArray
 	var got = ByteArray.create()
-	got.reserve(16)
+	got.reserve(MACHO_IMPORT_COUNT * 8)
 
-	// Build chained fixup bind entries for 2 GOT slots
-	// Entry format: bit63=1 (bind), bits 51-62=next (stride in 8-byte units), bits 0-23=ordinal
-	// Entry 0: next=2 (points to entry 1, 16 bytes away / 8 = 2), ordinal=0
-	let entry0 = (1 shl 63) or (2 shl 51) or 0
-	writeQword(got, value: entry0)
-	// Entry 1: next=0 (last entry), ordinal=1
-	let entry1 = (1 shl 63) or (0 shl 51) or 1
-	writeQword(got, value: entry1)
+	// Build chained fixup bind entries for the GOT, one per import slot.
+	// Entry format: bit63=1 (bind), bits 51-62=next (stride in 8-byte
+	// units), bits 0-23=ordinal. Every entry except the last points 2
+	// qwords ahead (16 bytes / 8); the last entry has next=0.
+	var slot = 0
+	while slot < MACHO_IMPORT_COUNT 'eachSlot'
+		let isLast = slot == MACHO_IMPORT_COUNT - 1
+		let nextField = 0 if isLast else 2
+		let entry = (1 shl 63) or (nextField shl 51) or slot
+		writeQword(got, value: entry)
+		slot = slot + 1
+	end 'eachSlot'
 
 	return got
 end 'buildGot'

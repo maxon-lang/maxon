@@ -225,6 +225,7 @@ export function arm64OpHasVirtualRegs(op Arm64Op) returns bool
 		atomicIncMem(addrReg) gives isVirtualArm64Gpr(addrReg)
 		atomicDecMem(addrReg) gives isVirtualArm64Gpr(addrReg)
 		atomicXaddMem(resultReg, addrReg, valReg) gives isVirtualArm64Gpr(resultReg) or isVirtualArm64Gpr(addrReg) or isVirtualArm64Gpr(valReg)
+		stashEntryArgv gives false
 	end 'check'
 end 'arm64OpHasVirtualRegs'
 
@@ -315,6 +316,7 @@ export function countArm64OpReads(counts RegIntArray, a64Op Arm64Op)
 		atomicIncMem(addrReg) then incUse(counts, id: arm64VRegId(addrReg))
 		atomicDecMem(addrReg) then incUse(counts, id: arm64VRegId(addrReg))
 		atomicXaddMem(_, addrReg, valReg) then countArm64TwoReads(counts, reg1: addrReg, reg2: valReg)
+		stashEntryArgv then break 'scan'
 	end 'scan'
 end 'countArm64OpReads'
 
@@ -400,7 +402,7 @@ function noteArm64MovRegRegDef(defBlocks RegIntArray, blockIdx RegInt, op Arm64O
 	match op 'extract'
 		movRegReg(destReg, _) then noteArm64DefId(defBlocks, blockIdx: blockIdx, vreg: destReg)
 		prologue to memcpyOp then break 'extract'
-		spillToStack to atomicXaddMem then break 'extract'
+		spillToStack to stashEntryArgv then break 'extract'
 	end 'extract'
 end 'noteArm64MovRegRegDef'
 
@@ -415,7 +417,7 @@ function noteArm64ConstImm(defBlocks RegIntArray, blockIdx RegInt, op Arm64Op)
 	match op 'extract'
 		movImm(dest, _) then noteArm64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
 		prologue to epilogue then break 'extract'
-		strToSlot to atomicXaddMem then break 'extract'
+		strToSlot to stashEntryArgv then break 'extract'
 	end 'extract'
 end 'noteArm64ConstImm'
 
@@ -571,6 +573,7 @@ export function recordArm64OpLastUses(positions RegIntArray, a64Op Arm64Op, opId
 		atomicIncMem(addrReg) then recordLastUse(positions, id: arm64VRegId(addrReg), opIdx: opIdx)
 		atomicDecMem(addrReg) then recordLastUse(positions, id: arm64VRegId(addrReg), opIdx: opIdx)
 		atomicXaddMem(_, addrReg, valReg) then recordArm64TwoLastUses(positions, reg1: addrReg, reg2: valReg, opIdx: opIdx)
+		stashEntryArgv then break 'scan'
 	end 'scan'
 end 'recordArm64OpLastUses'
 
@@ -595,7 +598,7 @@ export function classifyArm64OpReads(sinkOnly RegIntArray, usedByNonSink RegIntA
 		match a64Op 'extractMov'
 			movRegReg(dest, src) then classifyArm64MovRegReg(sinkOnly, usedByNonSink: usedByNonSink, dest: dest, src: src)
 			prologue to memcpyOp then break 'extractMov'
-			spillToStack to atomicXaddMem then break 'extractMov'
+			spillToStack to stashEntryArgv then break 'extractMov'
 		end 'extractMov'
 	end 'isMov' else 'other'
 		countArm64OpReads(usedByNonSink, a64Op: a64Op)
@@ -619,7 +622,7 @@ export function isArm64RetTerminator(module TargetModule, packed OpIndex) return
 	match a64Op 'checkRet'
 		ret then result = true
 		prologue to branchLink then break 'checkRet'
-		syscall to atomicXaddMem then break 'checkRet'
+		syscall to stashEntryArgv then break 'checkRet'
 	end 'checkRet'
 	return result
 end 'isArm64RetTerminator'
@@ -632,7 +635,7 @@ function isArm64OpPanicCall(op Arm64Op) returns bool
 	match op 'check'
 		branchLink(target) then return target == "mrt_panic"
 		prologue to branch then break 'check'
-		ret to atomicXaddMem then break 'check'
+		ret to stashEntryArgv then break 'check'
 	end 'check'
 	return false
 end 'isArm64OpPanicCall'
@@ -1663,7 +1666,7 @@ export type Arm64RegAllocTarget implements RegAllocTarget
 		return match a64Op 'check'
 			condBranch(_, targetBlock) gives targetBlock
 			prologue to cmpRegZero gives -1
-			branch to atomicXaddMem gives -1
+			branch to stashEntryArgv gives -1
 		end 'check'
 	end 'getCondBrTarget'
 
@@ -1672,7 +1675,7 @@ export type Arm64RegAllocTarget implements RegAllocTarget
 		return match a64Op 'check'
 			branch gives true
 			prologue to condBranch gives false
-			branchLink to atomicXaddMem gives false
+			branchLink to stashEntryArgv gives false
 		end 'check'
 	end 'isUnconditionalJmp'
 
@@ -1681,7 +1684,7 @@ export type Arm64RegAllocTarget implements RegAllocTarget
 		return match a64Op 'check'
 			branch(targetBlock) gives targetBlock
 			prologue to condBranch gives -1
-			branchLink to atomicXaddMem gives -1
+			branchLink to stashEntryArgv gives -1
 		end 'check'
 	end 'getBranchTarget'
 
@@ -1690,7 +1693,7 @@ export type Arm64RegAllocTarget implements RegAllocTarget
 		return match a64Op 'check'
 			branch(targetBlock) gives targetBlock
 			prologue to condBranch gives -1
-			branchLink to atomicXaddMem gives -1
+			branchLink to stashEntryArgv gives -1
 		end 'check'
 	end 'getUncondJmpTarget'
 
@@ -1699,7 +1702,7 @@ export type Arm64RegAllocTarget implements RegAllocTarget
 		let newOp = match a64Op 'rewrite'
 			branch gives Arm64Op.branch(newTarget)
 			prologue to condBranch gives a64Op
-			branchLink to atomicXaddMem gives a64Op
+			branchLink to stashEntryArgv gives a64Op
 		end 'rewrite'
 		let newIdx = module.arm64Ops.count()
 		module.arm64Ops.push(newOp)
@@ -1711,7 +1714,7 @@ export type Arm64RegAllocTarget implements RegAllocTarget
 		let newOp = match a64Op 'rewrite'
 			condBranch(condition, _) gives Arm64Op.condBranch(condition, targetBlock: newTarget)
 			prologue to cmpRegZero gives a64Op
-			branch to atomicXaddMem gives a64Op
+			branch to stashEntryArgv gives a64Op
 		end 'rewrite'
 		let newIdx = module.arm64Ops.count()
 		module.arm64Ops.push(newOp)

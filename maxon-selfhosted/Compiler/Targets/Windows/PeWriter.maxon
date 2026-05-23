@@ -11,53 +11,115 @@ let SECTION_ALIGNMENT = 4096
 let DATA_SECTION_VIRTUAL_SIZE = 65536
 
 // --- Import section builder ---
-// IAT slot indices for kernel32.dll / shell32.dll imports. Must stay in sync
-// with the identically-named constants in
-// Compiler/Targets/X64/MirToX64Conversion.maxon.
-let IAT_SLOT_EXIT_PROCESS = 0
-let IAT_SLOT_GET_STD_HANDLE = 1
-let IAT_SLOT_WRITE_FILE = 2
-let IAT_SLOT_READ_FILE = 3
-let IAT_SLOT_CREATE_FILE_A = 4
-let IAT_SLOT_CLOSE_HANDLE = 5
-let IAT_SLOT_GET_ENVIRONMENT_VARIABLE_A = 6
-let IAT_SLOT_VIRTUAL_ALLOC = 7
-let IAT_SLOT_VIRTUAL_FREE = 8
-let IAT_SLOT_INITIALIZE_CRITICAL_SECTION = 9
-let IAT_SLOT_ENTER_CRITICAL_SECTION = 10
-let IAT_SLOT_LEAVE_CRITICAL_SECTION = 11
+// IAT slot indices for kernel32.dll / shell32.dll imports.
+//
+// Every code site that emits a call into the import table (per-target
+// `iatCall` op, hand-emitted Windows helpers in X64Backend / Arm64Win32Helpers,
+// OsDescriptor strategy variants) names the destination by enum case rather
+// than a raw integer. Renumbering happens in exactly one place — the
+// `iatSlotIndex` table below — and everything else picks the right slot via
+// the typechecker. Prior to the enum, several call sites referred to slots
+// by literal integer (`iatCall 27`, etc.), and inserting a new import in
+// the middle of the table silently broke them; the enum makes that class of
+// bug a compile error instead.
+//
+// Slot ordering still matters for the PE file format (the IAT/ILT byte
+// streams in `buildImportSection` are written in slot-index order), but the
+// ordering is now a single source of truth.
+export union IatSlot
+	// kernel32 — Phase 7 / 8 baseline run.
+	exitProcess
+	getStdHandle
+	writeFile
+	readFile
+	createFileA
+	closeHandle
+	getEnvironmentVariableA
+	virtualAlloc
+	virtualFree
+	initializeCriticalSection
+	enterCriticalSection
+	leaveCriticalSection
 
-// Phase 15b: command-line argument retrieval.
-let IAT_SLOT_GET_COMMAND_LINE_W = 12
-let IAT_SLOT_LOCAL_FREE = 13
-let IAT_SLOT_WIDE_CHAR_TO_MULTI_BYTE = 14
+	// Phase 15b: command-line argument retrieval.
+	getCommandLineW
+	localFree
+	wideCharToMultiByte
 
-// Phase 15f: executable-path retrieval. kernel32!GetModuleFileNameW writes the
-// running module's path into a caller-supplied UTF-16 buffer; the runtime
-// helper then re-encodes via WideCharToMultiByte (slot 13). Kernel32 slot.
-let IAT_SLOT_GET_MODULE_FILE_NAME_W = 15
+	// Phase 15f: executable-path retrieval. `GetModuleFileNameW` writes a
+	// UTF-16 path; the runtime helper re-encodes via WideCharToMultiByte.
+	getModuleFileNameW
 
-// Phase 15c Stream 3.1: Win32 file/directory I/O. All kernel32. Path-taking
-// APIs are the wide-char (W) variants; UTF-8 paths from Maxon strings get
-// converted via MultiByteToWideChar (slot 26).
-let IAT_SLOT_CREATE_FILE_W = 16
-let IAT_SLOT_DELETE_FILE_W = 17
-let IAT_SLOT_GET_FILE_SIZE_EX = 18
-let IAT_SLOT_GET_FILE_ATTRIBUTES_EX_W = 19
-let IAT_SLOT_SET_FILE_POINTER_EX = 20
-let IAT_SLOT_FIND_FIRST_FILE_W = 21
-let IAT_SLOT_FIND_NEXT_FILE_W = 22
-let IAT_SLOT_FIND_CLOSE = 23
-let IAT_SLOT_CREATE_DIRECTORY_W = 24
-let IAT_SLOT_GET_CURRENT_DIRECTORY_W = 25
-let IAT_SLOT_MULTI_BYTE_TO_WIDE_CHAR = 26
-let IAT_SLOT_GET_LAST_ERROR = 27
+	// Phase 15c Stream 3.1: Win32 file/directory I/O. All kernel32. Path-
+	// taking APIs use the wide-char (W) variants; UTF-8 paths from Maxon
+	// strings get converted via MultiByteToWideChar.
+	createFileW
+	deleteFileW
+	getFileSizeEx
+	getFileAttributesExW
+	setFilePointerEx
+	findFirstFileW
+	findNextFileW
+	findClose
+	createDirectoryW
+	getCurrentDirectoryW
+	multiByteToWideChar
+	getLastError
 
-// shell32.dll's CommandLineToArgvW. Lives in a second DLL import directory.
-// Moved to the end of the IAT in Phase 15c so the new kernel32 entries can
-// stay in a single contiguous run.
-let IAT_SLOT_COMMAND_LINE_TO_ARGV_W = 28
-let IAT_SLOT_COUNT = 29
+	// kernel32!Sleep — `osSleep` lowering routes through this slot on
+	// Windows. Appended at the end of the kernel32 run; adding new kernel32
+	// imports here keeps the existing slot ordinals stable, only shifting
+	// the shell32 cases.
+	sleep
+
+	// shell32 — single entry, lives at the end of the IAT in its own
+	// import-directory DLL.
+	commandLineToArgvW
+end 'IatSlot'
+
+// Integer slot index of an `IatSlot`. Mirrors the case order above and is
+// the only place that translates the symbolic enum back to a PE-level
+// integer. `iatSlotByteOffset` (call-site relocation arithmetic), the
+// per-target `iatCall` op emitters, and the PE writer's hint/IAT/ILT
+// builder all funnel through this function.
+export function iatSlotIndex(slot IatSlot) returns MachineWord
+	return match slot 's'
+		exitProcess gives 0
+		getStdHandle gives 1
+		writeFile gives 2
+		readFile gives 3
+		createFileA gives 4
+		closeHandle gives 5
+		getEnvironmentVariableA gives 6
+		virtualAlloc gives 7
+		virtualFree gives 8
+		initializeCriticalSection gives 9
+		enterCriticalSection gives 10
+		leaveCriticalSection gives 11
+		getCommandLineW gives 12
+		localFree gives 13
+		wideCharToMultiByte gives 14
+		getModuleFileNameW gives 15
+		createFileW gives 16
+		deleteFileW gives 17
+		getFileSizeEx gives 18
+		getFileAttributesExW gives 19
+		setFilePointerEx gives 20
+		findFirstFileW gives 21
+		findNextFileW gives 22
+		findClose gives 23
+		createDirectoryW gives 24
+		getCurrentDirectoryW gives 25
+		multiByteToWideChar gives 26
+		getLastError gives 27
+		sleep gives 28
+		commandLineToArgvW gives 29
+	end 's'
+end 'iatSlotIndex'
+
+// Total IAT slot count — kernel32 run + shell32 run. Mirrors the last
+// enum case's index + 1.
+let IAT_SLOT_COUNT = 30
 
 type ImportSection
 	export var data ByteArray
@@ -77,8 +139,8 @@ end 'ImportSection'
 //   IAT  [k32 entries] 0  [s32 entries] 0
 //   ILT  [k32 entries] 0  [s32 entries] 0
 // followed by the Import Directory (3 entries: kernel32, shell32, null).
-let KERNEL32_IAT_END = 28  // exclusive; slots 0..27 are kernel32
-let SHELL32_IAT_START = 28  // slot 28 is shell32 (CommandLineToArgvW)
+let KERNEL32_IAT_END = 29  // exclusive; slots 0..28 are kernel32
+let SHELL32_IAT_START = 29  // slot 29 is shell32 (commandLineToArgvW)
 let IMPORT_DIRECTORY_ENTRIES = 2
 
 function buildImportSection(idataRva Rva) returns ImportSection
@@ -131,10 +193,12 @@ function buildImportSection(idataRva Rva) returns ImportSection
 	let hintGetCurrentDirectoryW = hintCreateDirectoryW + 20  // CreateDirectoryW total 20
 	let hintMultiByteToWideChar = hintGetCurrentDirectoryW + 24  // GetCurrentDirectoryW total 24
 	let hintGetLastError = hintMultiByteToWideChar + 22  // MultiByteToWideChar total 22
+	// "Sleep\0" = 6 bytes; with 2-byte hint prefix → 8 bytes total, already even.
+	let hintSleep = hintGetLastError + 16  // GetLastError total 16
 	// shell32 entry, moved to the END of the IAT/ILT in Phase 15c so the
 	// kernel32 run stays contiguous. "CommandLineToArgvW\0" = 19 → padded
 	// to 20 with leading hint, so total 22.
-	let hintCommandLineToArgvW = hintGetLastError + 16  // GetLastError total 16
+	let hintCommandLineToArgvW = hintSleep + 8  // Sleep total 8
 	let kernel32DllNameOffset = hintCommandLineToArgvW + 22
 	// "kernel32.dll\0" is 13 bytes — no pad needed; the next entry is the
 	// shell32 DLL name string at offset +13.
@@ -169,6 +233,7 @@ function buildImportSection(idataRva Rva) returns ImportSection
 	writeQword(data, value: idataRva + hintGetCurrentDirectoryW)
 	writeQword(data, value: idataRva + hintMultiByteToWideChar)
 	writeQword(data, value: idataRva + hintGetLastError)
+	writeQword(data, value: idataRva + hintSleep)
 	data.append(b"\x00\x00\x00\x00\x00\x00\x00\x00")
 	writeQword(data, value: idataRva + hintCommandLineToArgvW)
 	data.append(b"\x00\x00\x00\x00\x00\x00\x00\x00")
@@ -202,6 +267,7 @@ function buildImportSection(idataRva Rva) returns ImportSection
 	writeQword(data, value: idataRva + hintGetCurrentDirectoryW)
 	writeQword(data, value: idataRva + hintMultiByteToWideChar)
 	writeQword(data, value: idataRva + hintGetLastError)
+	writeQword(data, value: idataRva + hintSleep)
 	data.append(b"\x00\x00\x00\x00\x00\x00\x00\x00")
 	writeQword(data, value: idataRva + hintCommandLineToArgvW)
 	data.append(b"\x00\x00\x00\x00\x00\x00\x00\x00")
@@ -259,6 +325,7 @@ function buildImportSection(idataRva Rva) returns ImportSection
 	data.append(b"\x00\x00GetCurrentDirectoryW\x00\x00")
 	data.append(b"\x00\x00MultiByteToWideChar\x00")
 	data.append(b"\x00\x00GetLastError\x00\x00")
+	data.append(b"\x00\x00Sleep\x00")
 	data.append(b"\x00\x00CommandLineToArgvW\x00\x00")
 	data.append(b"kernel32.dll\x00")
 	data.append(b"shell32.dll\x00\x00")

@@ -609,9 +609,8 @@ function extractMirDef(op MirOp) returns SchedInt
 		globalAddr(resultId, _) gives resultId
 		funcAddr(resultId, _) gives resultId
 		loadFramePtr(resultId) gives resultId
-		syscall(resultId, _, _) gives resultId
-		iatCall(resultId, _, _) gives resultId
 		osExit gives SCHED_NONE
+		osSleep gives SCHED_NONE
 		osWrite gives SCHED_NONE
 		osWriteErr gives SCHED_NONE
 		osRead(resultId, _, _) gives resultId
@@ -619,6 +618,9 @@ function extractMirDef(op MirOp) returns SchedInt
 		osWriteFd gives SCHED_NONE
 		osClose gives SCHED_NONE
 		osGetEnv(resultId, _, _, _, _) gives resultId
+		osGetArgc(resultId) gives resultId
+		osGetArgv(resultId, _) gives resultId
+		osGetExecutablePath(resultId, _, _) gives resultId
 		memcpy gives SCHED_NONE
 		storeByte gives SCHED_NONE
 		loadByte(resultId, _, _) gives resultId
@@ -680,9 +682,8 @@ function extractMirUses(op MirOp) returns ValueIdArray
 		globalAddr then break 'uses'
 		funcAddr then break 'uses'
 		loadFramePtr then break 'uses'
-		syscall(_, _, argIds) then appendAll(result, from: argIds)
-		iatCall(_, _, argIds) then appendAll(result, from: argIds)
 		osExit(codeId) then result.push(codeId)
+		osSleep(msId) then result.push(msId)
 		osWrite(ptrId, lenId) then pushTwo(result, a: ptrId, b: lenId)
 		osWriteErr(ptrId, lenId) then pushTwo(result, a: ptrId, b: lenId)
 		osRead(_, ptrId, lenId) then pushTwo(result, a: ptrId, b: lenId)
@@ -690,6 +691,9 @@ function extractMirUses(op MirOp) returns ValueIdArray
 		osWriteFd(fdId, ptrId, lenId) then pushThree(result, a: fdId, b: ptrId, c: lenId)
 		osClose(fdId) then result.push(fdId)
 		osGetEnv(_, namePtrId, nameLenId, outBufPtrId, outBufLenId) then pushFour(result, a: namePtrId, b: nameLenId, c: outBufPtrId, d: outBufLenId)
+		osGetArgc then break 'uses'
+		osGetArgv(_, indexId) then result.push(indexId)
+		osGetExecutablePath(_, bufPtrId, bufSizeId) then pushTwo(result, a: bufPtrId, b: bufSizeId)
 		memcpy(dstId, srcId, lenId) then pushThree(result, a: dstId, b: srcId, c: lenId)
 		storeByte(baseId, offsetId, byteId) then pushThree(result, a: baseId, b: offsetId, c: byteId)
 		loadByte(_, baseId, offsetId) then pushTwo(result, a: baseId, b: offsetId)
@@ -749,9 +753,8 @@ function isMirMemoryOp(op MirOp) returns bool
 		call gives true
 		indirectCall gives true
 		witnessCall gives true
-		syscall gives true
-		iatCall gives true
 		osExit gives true
+		osSleep gives true
 		osWrite gives true
 		osWriteErr gives true
 		osRead gives true
@@ -759,6 +762,9 @@ function isMirMemoryOp(op MirOp) returns bool
 		osWriteFd gives true
 		osClose gives true
 		osGetEnv gives true
+		osGetArgc gives true
+		osGetArgv gives true
+		osGetExecutablePath gives true
 		memcpy gives true
 		storeByte gives true
 		loadByte gives true
@@ -814,9 +820,15 @@ function isMirStoreOp(op MirOp) returns bool
 		loadSlot gives false
 		stackSlotAddr to funcAddr gives false
 		loadFramePtr gives false
-		syscall to iatCall gives false
 		osExit to osWrite gives false
 		osWriteErr to osGetEnv gives false
+		// osGetArgc is a pure read (returns a process-state integer);
+		// osGetArgv returns a pointer without touching caller memory.
+		// osGetExecutablePath writes into the caller-supplied buffer, so
+		// treat it as a store for scheduling barriers.
+		osGetArgc gives false
+		osGetArgv gives false
+		osGetExecutablePath gives true
 		loadByte gives false
 		osAllocPages gives false
 		osAllocPagesLarge gives false
@@ -848,9 +860,8 @@ function isMirCallOp(op MirOp) returns bool
 		call gives true
 		indirectCall gives true
 		witnessCall gives true
-		syscall gives true
-		iatCall gives true
 		osExit gives true
+		osSleep gives true
 		osWrite gives true
 		osWriteErr gives true
 		osRead gives true
@@ -858,6 +869,9 @@ function isMirCallOp(op MirOp) returns bool
 		osWriteFd gives true
 		osClose gives true
 		osGetEnv gives true
+		osGetArgc gives true
+		osGetArgv gives true
+		osGetExecutablePath gives true
 		osAllocPages gives true
 		osAllocPagesLarge gives true
 		osFreePages gives true
@@ -924,9 +938,8 @@ function isFlagClobberingMirOp(op MirOp) returns bool
 		globalAddr gives false
 		funcAddr gives false
 		loadFramePtr gives false
-		syscall gives false
-		iatCall gives false
 		osExit gives false
+		osSleep gives false
 		osWrite gives false
 		osWriteErr gives false
 		osRead gives false
@@ -934,6 +947,9 @@ function isFlagClobberingMirOp(op MirOp) returns bool
 		osWriteFd gives false
 		osClose gives false
 		osGetEnv gives false
+		osGetArgc gives false
+		osGetArgv gives false
+		osGetExecutablePath gives false
 		memcpy gives false
 		storeByte gives false
 		loadByte gives false

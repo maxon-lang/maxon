@@ -502,14 +502,13 @@ end 'countMemoryUses'
 
 function countSysUses(op StdSystemOp, useCount ValueIdArray)
 	match op 'count'
-		syscall(_, _, argIds) then countArrayUses(argIds, useCount: useCount)
-		iatCall(_, _, argIds) then countArrayUses(argIds, useCount: useCount)
 		globalAddr then break 'count'
 		memcpy(dstId, srcId, lenId) then countThreeUses(dstId, b: srcId, c: lenId, useCount: useCount)
 		stackAddr then break 'count'
 		storeByte(baseId, offsetId, byteId) then countThreeUses(baseId, b: offsetId, c: byteId, useCount: useCount)
 		loadByte(_, baseId, offsetId) then countTwoUses(baseId, b: offsetId, useCount: useCount)
 		osExit(codeId) then incrementUse(useCount, valueId: codeId)
+		osSleep(msId) then incrementUse(useCount, valueId: msId)
 		osWrite(ptrId, lenId) then countTwoUses(ptrId, b: lenId, useCount: useCount)
 		free(ptrId) then incrementUse(useCount, valueId: ptrId)
 		osWriteErr(ptrId, lenId) then countTwoUses(ptrId, b: lenId, useCount: useCount)
@@ -518,6 +517,9 @@ function countSysUses(op StdSystemOp, useCount ValueIdArray)
 		osWriteFd(fdId, ptrId, lenId) then countThreeUses(fdId, b: ptrId, c: lenId, useCount: useCount)
 		osClose(fdId) then incrementUse(useCount, valueId: fdId)
 		osGetEnv(_, namePtrId, nameLenId, outBufPtrId, outBufLenId) then countOsGetEnvUses(namePtrId, nameLenId: nameLenId, outBufPtrId: outBufPtrId, outBufLenId: outBufLenId, useCount: useCount)
+		osGetArgc then break 'count'
+		osGetArgv(_, indexId) then incrementUse(useCount, valueId: indexId)
+		osGetExecutablePath(_, bufPtrId, bufSizeId) then countTwoUses(bufPtrId, b: bufSizeId, useCount: useCount)
 		loadFramePtr then break 'count'
 		loadIndirect(_, addrId, _, _, _, _) then incrementUse(useCount, valueId: addrId)
 		funcAddr then break 'count'
@@ -609,12 +611,12 @@ end 'isDeadPackedOp'
 // `sys.drop` lowers to a no-op at MIR level — the runtime never runs a
 // destructor. With drops carrying no real semantics, every drop is dead IR
 // and can be removed; that in turn lets the producer it was pinning become
-// dead too. Every other system op (syscall, iatCall, free, prints, stores)
-// has observable side effects.
+// dead too. Every other system op (free, prints, stores) has observable
+// side effects.
 function isDeadSysOp(op StdSystemOp, useCount ValueIdArray) returns bool
 	return match op 'check'
 		drop gives true
-		syscall to storeIndirect gives false
+		globalAddr to storeIndirect gives false
 		osAllocPages to osLockRelease gives false
 		boxValue gives false
 		unboxValue gives false

@@ -197,8 +197,14 @@ function classifyByDef(defOp MirOp) returns OperandCategory
 		ret gives OperandCategory.flexible
 		param gives OperandCategory.fixedBound
 		load to loadFramePtr gives OperandCategory.flexible
-		syscall to iatCall gives OperandCategory.fixedBound
-		osExit to loadByte gives OperandCategory.flexible
+		osExit to osGetEnv gives OperandCategory.flexible
+		// Per-platform argv / executable-path lowerings call into fixed-arg
+		// helpers (Windows IAT helpers, Linux syscalls) — classify the same
+		// as the file-I/O band below.
+		osGetArgc gives OperandCategory.fixedBound
+		osGetArgv gives OperandCategory.fixedBound
+		osGetExecutablePath gives OperandCategory.fixedBound
+		memcpy to loadByte gives OperandCategory.flexible
 		osAllocPages to osLockRelease gives OperandCategory.fixedBound
 		// tryCall produces R8 (resultId) and RDX (errorFlagId), both fixed
 		// physical registers — same Cat A treatment as plain `call`.
@@ -294,14 +300,15 @@ function mirDefValueId(op MirOp) returns DefMapIndex
 		globalAddr(resultId, _) gives resultId
 		funcAddr(resultId, _) gives resultId
 		loadFramePtr(resultId) gives resultId
-		syscall(resultId, _, _) gives resultId
-		iatCall(resultId, _, _) gives resultId
 		osExit to osWriteErr gives DEF_NONE
 		osRead(resultId, _, _) gives resultId
 		osOpenWrite(resultId, _, _) gives resultId
 		osWriteFd gives DEF_NONE
 		osClose gives DEF_NONE
 		osGetEnv(resultId, _, _, _, _) gives resultId
+		osGetArgc(resultId) gives resultId
+		osGetArgv(resultId, _) gives resultId
+		osGetExecutablePath(resultId, _, _) gives resultId
 		memcpy to storeByte gives DEF_NONE
 		loadByte(resultId, _, _) gives resultId
 		osAllocPages(resultId, _) gives resultId

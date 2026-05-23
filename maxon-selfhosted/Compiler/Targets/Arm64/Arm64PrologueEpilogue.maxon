@@ -19,7 +19,7 @@ export function scanArm64InstrForFrame(op Arm64Op, state FrameScanState)
 		branchLink then state.hasCalls = true
 		ret to reloadFromStack then break 'scan'
 		branchLinkReg then state.hasCalls = true
-		subSpImm to atomicXaddMem then break 'scan'
+		subSpImm to stashEntryArgv then break 'scan'
 	end 'scan'
 end 'scanArm64InstrForFrame'
 
@@ -39,10 +39,24 @@ export function arm64CalleeSaveAreaBytes(func IrFunction) returns StackSize
 end 'arm64CalleeSaveAreaBytes'
 
 // Prepend the ARM64 prologue op at the start of the entry block.
-export function arm64InsertPrologueAtEntry(module TargetModule, block IrBlock, stackSize StackSize)
+//
+// Phase D2: when the function is the binary entry point (`mrt_start` /
+// `mrt_start_with_coverage`) on Linux or macOS, insert a `stashEntryArgv`
+// op FIRST so the kernel-supplied argc (x0) and argv (x1) are saved into
+// the `__mrt_argc` / `__mrt_argv` globals before the prologue touches
+// anything. Windows uses GetCommandLineW; WASI never reaches this pass.
+export function arm64InsertPrologueAtEntry(module TargetModule, func IrFunction, block IrBlock, stackSize StackSize, os Os)
+	let isEntry = func.name == "mrt_start" or func.name == "mrt_start_with_coverage"
+	let stashNeeded = isEntry and (os == Os.linux or os == Os.macos)
+	if stashNeeded 'stash'
+		let stashIdx = module.arm64Ops.count()
+		module.arm64Ops.push(Arm64Op.stashEntryArgv)
+		try block.opRefs.insert(0, value: stashIdx) otherwise panic("arm64InsertPrologueAtEntry: insert stash at 0 failed on block '{block.label}'")
+	end 'stash'
 	let idx = module.arm64Ops.count()
 	module.arm64Ops.push(Arm64Op.prologue(stackSize))
-	try block.opRefs.insert(0, value: idx) otherwise panic("arm64InsertPrologueAtEntry: insert at 0 failed on block '{block.label}'")
+	let prologueIdx = 1 if stashNeeded else 0
+	try block.opRefs.insert(prologueIdx, value: idx) otherwise panic("arm64InsertPrologueAtEntry: insert prologue failed on block '{block.label}'")
 end 'arm64InsertPrologueAtEntry'
 
 // Replace the return block's terminator (which is Arm64Op.ret after ISel)
@@ -166,6 +180,7 @@ function arm64ScanOpForCalleeSaved(op Arm64Op, gprSeen RegIntArray, fpSeen RegIn
 		atomicIncMem(addrReg) then arm64MarkGprIfCalleeSaved(gprSeen, vreg: addrReg)
 		atomicDecMem(addrReg) then arm64MarkGprIfCalleeSaved(gprSeen, vreg: addrReg)
 		atomicXaddMem(resultReg, addrReg, valReg) then arm64ScanThreeGprs(gprSeen, a: resultReg, b: addrReg, c: valReg)
+		stashEntryArgv then break 'scan'
 	end 'scan'
 end 'arm64ScanOpForCalleeSaved'
 

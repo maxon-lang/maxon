@@ -438,14 +438,13 @@ end 'cseSubstMemRef'
 
 function cseSubstSys(op StdSystemOp, remap ValueIdArray) returns StdSystemOp
 	return match op 'subst'
-		syscall(resultId, number, argIds) gives StdSystemOp.syscall(resultId, number: number, argIds: cseRemapValueIds(argIds, remap: remap))
-		iatCall(resultId, slotIndex, argIds) gives StdSystemOp.iatCall(resultId, slotIndex: slotIndex, argIds: cseRemapValueIds(argIds, remap: remap))
 		globalAddr(resultId, name) gives StdSystemOp.globalAddr(resultId, name: name)
 		memcpy(dstId, srcId, lenId) gives StdSystemOp.memcpy(cseRemapValue(dstId, remap: remap), srcId: cseRemapValue(srcId, remap: remap), lenId: cseRemapValue(lenId, remap: remap))
 		stackAddr(resultId, slotId) gives StdSystemOp.stackAddr(resultId, slotId: slotId)
 		storeByte(baseId, offsetId, byteId) gives StdSystemOp.storeByte(cseRemapValue(baseId, remap: remap), offsetId: cseRemapValue(offsetId, remap: remap), byteId: cseRemapValue(byteId, remap: remap))
 		loadByte(resultId, baseId, offsetId) gives StdSystemOp.loadByte(resultId, baseId: cseRemapValue(baseId, remap: remap), offsetId: cseRemapValue(offsetId, remap: remap))
 		osExit(codeId) gives StdSystemOp.osExit(cseRemapValue(codeId, remap: remap))
+		osSleep(msId) gives StdSystemOp.osSleep(cseRemapValue(msId, remap: remap))
 		osWrite(ptrId, lenId) gives StdSystemOp.osWrite(cseRemapValue(ptrId, remap: remap), lenId: cseRemapValue(lenId, remap: remap))
 		free(ptrId) gives StdSystemOp.free(cseRemapValue(ptrId, remap: remap))
 		osWriteErr(ptrId, lenId) gives StdSystemOp.osWriteErr(cseRemapValue(ptrId, remap: remap), lenId: cseRemapValue(lenId, remap: remap))
@@ -454,6 +453,9 @@ function cseSubstSys(op StdSystemOp, remap ValueIdArray) returns StdSystemOp
 		osWriteFd(fdId, ptrId, lenId) gives StdSystemOp.osWriteFd(cseRemapValue(fdId, remap: remap), ptrId: cseRemapValue(ptrId, remap: remap), lenId: cseRemapValue(lenId, remap: remap))
 		osClose(fdId) gives StdSystemOp.osClose(cseRemapValue(fdId, remap: remap))
 		osGetEnv(resultId, namePtrId, nameLenId, outBufPtrId, outBufLenId) gives StdSystemOp.osGetEnv(resultId, namePtrId: cseRemapValue(namePtrId, remap: remap), nameLenId: cseRemapValue(nameLenId, remap: remap), outBufPtrId: cseRemapValue(outBufPtrId, remap: remap), outBufLenId: cseRemapValue(outBufLenId, remap: remap))
+		osGetArgc(resultId) gives StdSystemOp.osGetArgc(resultId)
+		osGetArgv(resultId, indexId) gives StdSystemOp.osGetArgv(resultId, indexId: cseRemapValue(indexId, remap: remap))
+		osGetExecutablePath(resultId, bufPtrId, bufSizeId) gives StdSystemOp.osGetExecutablePath(resultId, bufPtrId: cseRemapValue(bufPtrId, remap: remap), bufSizeId: cseRemapValue(bufSizeId, remap: remap))
 		loadFramePtr(resultId) gives StdSystemOp.loadFramePtr(resultId)
 		loadIndirect(resultId, addrId, offset, width, signed, isFloat) gives StdSystemOp.loadIndirect(resultId, addrId: cseRemapValue(addrId, remap: remap), offset: offset, width: width, signed: signed, isFloat: isFloat)
 		funcAddr(resultId, name) gives StdSystemOp.funcAddr(resultId, name: name)

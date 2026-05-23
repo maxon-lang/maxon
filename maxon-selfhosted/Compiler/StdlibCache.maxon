@@ -3471,14 +3471,13 @@ end 'readStdMemoryLoad'
 function writeStdSystemOp(buf ByteArray, op StdSystemOp) throws CacheCorruption
 	writeDword(buf, value: op.ordinal)
 	match op 'sys'
-		syscall(resultId, number, argIds) then writeStdSysSyscall(buf, resultId: resultId, number: number, argIds: argIds)
-		iatCall(resultId, slotIndex, argIds) then writeStdSysIatCall(buf, resultId: resultId, slotIndex: slotIndex, argIds: argIds)
 		globalAddr(resultId, name) then try writeStdSysGlobalAddr(buf, resultId: resultId, name: name)
 		memcpy(dstId, srcId, lenId) then writeStdSysMemcpy(buf, dstId: dstId, srcId: srcId, lenId: lenId)
 		stackAddr(resultId, slotId) then writeStdSysStackAddr(buf, resultId: resultId, slotId: slotId)
 		storeByte(baseId, offsetId, byteId) then writeStdSysStoreByte(buf, baseId: baseId, offsetId: offsetId, byteId: byteId)
 		loadByte(resultId, baseId, offsetId) then writeStdSysLoadByte(buf, resultId: resultId, baseId: baseId, offsetId: offsetId)
 		osExit(codeId) then writeQword(buf, value: codeId)
+		osSleep(msId) then writeQword(buf, value: msId)
 		osWrite(ptrId, lenId) then writeStdSysOsWrite(buf, ptrId: ptrId, lenId: lenId)
 		free(ptrId) then writeQword(buf, value: ptrId)
 		osWriteErr(ptrId, lenId) then writeStdSysOsWriteErr(buf, ptrId: ptrId, lenId: lenId)
@@ -3487,6 +3486,9 @@ function writeStdSystemOp(buf ByteArray, op StdSystemOp) throws CacheCorruption
 		osWriteFd(fdId, ptrId, lenId) then writeStdSysOsWriteFd(buf, fdId: fdId, ptrId: ptrId, lenId: lenId)
 		osClose(fdId) then writeQword(buf, value: fdId)
 		osGetEnv(resultId, namePtrId, nameLenId, outBufPtrId, outBufLenId) then writeStdSysOsGetEnv(buf, resultId: resultId, namePtrId: namePtrId, nameLenId: nameLenId, outBufPtrId: outBufPtrId, outBufLenId: outBufLenId)
+		osGetArgc(resultId) then writeQword(buf, value: resultId)
+		osGetArgv(resultId, indexId) then writeStdSysOsGetArgv(buf, resultId: resultId, indexId: indexId)
+		osGetExecutablePath(resultId, bufPtrId, bufSizeId) then writeStdSysOsGetExecutablePath(buf, resultId: resultId, bufPtrId: bufPtrId, bufSizeId: bufSizeId)
 		loadFramePtr(resultId) then writeQword(buf, value: resultId)
 		loadIndirect(resultId, addrId, offset, width, signed, isFloat) then writeStdSysLoadIndirect(buf, resultId: resultId, addrId: addrId, offset: offset, width: width, signed: signed, isFloat: isFloat)
 		funcAddr(resultId, name) then try writeStdSysFuncAddr(buf, resultId: resultId, name: name)
@@ -3521,18 +3523,6 @@ function writeStdSystemOp(buf ByteArray, op StdSystemOp) throws CacheCorruption
 		dropTypeParam(slotValueId, layoutValueId) then writeStdSysDropTypeParam(buf, slotValueId: slotValueId, layoutValueId: layoutValueId)
 	end 'sys'
 end 'writeStdSystemOp'
-
-function writeStdSysSyscall(buf ByteArray, resultId ValueId, number MachineWord, argIds ValueIdArray)
-	writeQword(buf, value: resultId)
-	writeQword(buf, value: number)
-	writeValueIdArrayCodec(buf, arr: argIds)
-end 'writeStdSysSyscall'
-
-function writeStdSysIatCall(buf ByteArray, resultId ValueId, slotIndex MachineWord, argIds ValueIdArray)
-	writeQword(buf, value: resultId)
-	writeQword(buf, value: slotIndex)
-	writeValueIdArrayCodec(buf, arr: argIds)
-end 'writeStdSysIatCall'
 
 function writeStdSysGlobalAddr(buf ByteArray, resultId ValueId, name String) throws CacheCorruption
 	writeQword(buf, value: resultId)
@@ -3597,6 +3587,17 @@ function writeStdSysOsGetEnv(buf ByteArray, resultId ValueId, namePtrId ValueId,
 	writeQword(buf, value: outBufPtrId)
 	writeQword(buf, value: outBufLenId)
 end 'writeStdSysOsGetEnv'
+
+function writeStdSysOsGetArgv(buf ByteArray, resultId ValueId, indexId ValueId)
+	writeQword(buf, value: resultId)
+	writeQword(buf, value: indexId)
+end 'writeStdSysOsGetArgv'
+
+function writeStdSysOsGetExecutablePath(buf ByteArray, resultId ValueId, bufPtrId ValueId, bufSizeId ValueId)
+	writeQword(buf, value: resultId)
+	writeQword(buf, value: bufPtrId)
+	writeQword(buf, value: bufSizeId)
+end 'writeStdSysOsGetExecutablePath'
 
 function writeStdSysLoadIndirect(buf ByteArray, resultId ValueId, addrId ValueId, offset MachineWord, width StoreWidth, signed bool, isFloat bool)
 	writeQword(buf, value: resultId)
@@ -3755,14 +3756,13 @@ function readStdSystemOp(buf ByteArray, offset ByteOffset) returns (StdSystemOp,
 	let kase = try StdSystemOp.unionCases.fromRawValue(raw) otherwise throw CacheCorruption.invalidEncoding
 	let pos = offset + 4
 	return match kase 'sys'
-		syscall gives readStdSysSyscall(buf, offset: pos)
-		iatCall gives readStdSysIatCall(buf, offset: pos)
 		globalAddr gives try readStdSysGlobalAddr(buf, offset: pos)
 		memcpy gives readStdSysMemcpy(buf, offset: pos)
 		stackAddr gives readStdSysStackAddr(buf, offset: pos)
 		storeByte gives readStdSysStoreByte(buf, offset: pos)
 		loadByte gives readStdSysLoadByte(buf, offset: pos)
 		osExit gives readStdSysOsExit(buf, offset: pos)
+		osSleep gives readStdSysOsSleep(buf, offset: pos)
 		osWrite gives readStdSysOsWrite(buf, offset: pos)
 		free gives readStdSysFree(buf, offset: pos)
 		osWriteErr gives readStdSysOsWriteErr(buf, offset: pos)
@@ -3771,6 +3771,9 @@ function readStdSystemOp(buf ByteArray, offset ByteOffset) returns (StdSystemOp,
 		osWriteFd gives readStdSysOsWriteFd(buf, offset: pos)
 		osClose gives readStdSysOsClose(buf, offset: pos)
 		osGetEnv gives readStdSysOsGetEnv(buf, offset: pos)
+		osGetArgc gives readStdSysOsGetArgc(buf, offset: pos)
+		osGetArgv gives readStdSysOsGetArgv(buf, offset: pos)
+		osGetExecutablePath gives readStdSysOsGetExecutablePath(buf, offset: pos)
 		loadFramePtr gives readStdSysLoadFramePtr(buf, offset: pos)
 		loadIndirect gives readStdSysLoadIndirect(buf, offset: pos)
 		funcAddr gives try readStdSysFuncAddr(buf, offset: pos)
@@ -3805,20 +3808,6 @@ function readStdSystemOp(buf ByteArray, offset ByteOffset) returns (StdSystemOp,
 		dropTypeParam gives readStdSysDropTypeParam(buf, offset: pos)
 	end 'sys'
 end 'readStdSystemOp'
-
-function readStdSysSyscall(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
-	let resultId = readQword(buf, offset: offset)
-	let number = readQword(buf, offset: offset + 8)
-	let (argIds, p) = readValueIdArrayCodec(buf, offset: offset + 16)
-	return (StdSystemOp.syscall(resultId, number: number, argIds: argIds), p)
-end 'readStdSysSyscall'
-
-function readStdSysIatCall(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
-	let resultId = readQword(buf, offset: offset)
-	let slotIndex = readQword(buf, offset: offset + 8)
-	let (argIds, p) = readValueIdArrayCodec(buf, offset: offset + 16)
-	return (StdSystemOp.iatCall(resultId, slotIndex: slotIndex, argIds: argIds), p)
-end 'readStdSysIatCall'
 
 function readStdSysGlobalAddr(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset) throws CacheCorruption
 	let resultId = readQword(buf, offset: offset)
@@ -3857,6 +3846,11 @@ function readStdSysOsExit(buf ByteArray, offset ByteOffset) returns (StdSystemOp
 	let codeId = readQword(buf, offset: offset)
 	return (StdSystemOp.osExit(codeId), offset + 8)
 end 'readStdSysOsExit'
+
+function readStdSysOsSleep(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
+	let msId = readQword(buf, offset: offset)
+	return (StdSystemOp.osSleep(msId), offset + 8)
+end 'readStdSysOsSleep'
 
 function readStdSysOsWrite(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
 	let ptrId = readQword(buf, offset: offset)
@@ -3909,6 +3903,24 @@ function readStdSysOsGetEnv(buf ByteArray, offset ByteOffset) returns (StdSystem
 	let outBufLenId = readQword(buf, offset: offset + 32)
 	return (StdSystemOp.osGetEnv(resultId, namePtrId: namePtrId, nameLenId: nameLenId, outBufPtrId: outBufPtrId, outBufLenId: outBufLenId), offset + 40)
 end 'readStdSysOsGetEnv'
+
+function readStdSysOsGetArgc(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
+	let resultId = readQword(buf, offset: offset)
+	return (StdSystemOp.osGetArgc(resultId), offset + 8)
+end 'readStdSysOsGetArgc'
+
+function readStdSysOsGetArgv(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
+	let resultId = readQword(buf, offset: offset)
+	let indexId = readQword(buf, offset: offset + 8)
+	return (StdSystemOp.osGetArgv(resultId, indexId: indexId), offset + 16)
+end 'readStdSysOsGetArgv'
+
+function readStdSysOsGetExecutablePath(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
+	let resultId = readQword(buf, offset: offset)
+	let bufPtrId = readQword(buf, offset: offset + 8)
+	let bufSizeId = readQword(buf, offset: offset + 16)
+	return (StdSystemOp.osGetExecutablePath(resultId, bufPtrId: bufPtrId, bufSizeId: bufSizeId), offset + 24)
+end 'readStdSysOsGetExecutablePath'
 
 function readStdSysLoadFramePtr(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
 	let resultId = readQword(buf, offset: offset)

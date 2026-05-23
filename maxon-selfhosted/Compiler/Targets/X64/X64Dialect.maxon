@@ -292,6 +292,15 @@ export union X64Op
 	// listing the use+def operand (valReg) first and the use-only operand (addrReg)
 	// second, mirroring the existing twoAddr ops (addRegReg, etc.).
 	lockXaddMemReg(valReg X64VReg, addrReg X64VReg) = X64OpMeta{latency: 8, isMemory: true, isStore: true, isCall: false, setsFlags: true, pattern: OpPattern.twoAddr, implicitGprReads: 0, implicitGprDefs: 0}
+	// Phase D2 entry-point bookkeeping: stash kernel-supplied argc/argv from
+	// rdi/rsi into the `__mrt_argc` / `__mrt_argv` globals. Inserted before the
+	// prologue of `mrt_start` (and `mrt_start_with_coverage`) by the prologue
+	// pass. On Linux/macOS x64 the emit body is two `mov [rip+global], reg`
+	// instructions with rdata relocations; on Windows the body is empty
+	// because the Windows entry point uses GetCommandLineW. WASI never sees
+	// this op — MirToWasm handles its own entry. Lives in the same metadata
+	// neighbourhood as `prologue`.
+	stashEntryArgv = X64OpMeta{latency: 1, isMemory: true, isStore: true, isCall: false, setsFlags: false, pattern: OpPattern.passThrough, implicitGprReads: 192, implicitGprDefs: 0}
 end 'X64Op'
 
 export typealias X64OpArray = Array with X64Op
@@ -417,6 +426,7 @@ export function x64OpToString(op X64Op, blocks IrBlockArray) returns String
 		lockIncMemory(addrReg) gives "x64.lock inc qword ptr [{x64VRegToString(addrReg)}]"
 		lockDecMemory(addrReg) gives "x64.lock dec qword ptr [{x64VRegToString(addrReg)}]"
 		lockXaddMemReg(valReg, addrReg) gives "x64.lock xadd qword ptr [{x64VRegToString(addrReg)}], {x64VRegToString(valReg)}"
+		stashEntryArgv gives "x64.stash_entry_argv [__mrt_argc],rdi; [__mrt_argv],rsi"
 	end 'toString'
 end 'x64OpToString'
 

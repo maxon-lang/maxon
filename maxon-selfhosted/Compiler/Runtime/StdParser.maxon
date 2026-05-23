@@ -640,6 +640,12 @@ export type StdParser
 			return
 		end 'oe'
 
+		if opName == "osSleep" 'osl'
+			let msId = try consumeValueRef()
+			module.appendOp(block, op: StdOp.system(StdSystemOp.osSleep(msId)))
+			return
+		end 'osl'
+
 		if opName == "osWrite" 'ow'
 			let ptrId = try consumeValueRef()
 			let lenId = try consumeValueRef()
@@ -690,6 +696,24 @@ export type StdParser
 			module.appendOp(block, op: StdOp.system(StdSystemOp.osGetEnv(resultId, namePtrId: namePtrId, nameLenId: nameLenId, outBufPtrId: outBufPtrId, outBufLenId: outBufLenId)))
 			return
 		end 'oge'
+
+		if opName == "osGetArgc" 'ogac'
+			module.appendOp(block, op: StdOp.system(StdSystemOp.osGetArgc(resultId)))
+			return
+		end 'ogac'
+
+		if opName == "osGetArgv" 'ogav'
+			let indexId = try consumeValueRef()
+			module.appendOp(block, op: StdOp.system(StdSystemOp.osGetArgv(resultId, indexId: indexId)))
+			return
+		end 'ogav'
+
+		if opName == "osGetExecutablePath" 'ogep'
+			let bufPtrId = try consumeValueRef()
+			let bufSizeId = try consumeValueRef()
+			module.appendOp(block, op: StdOp.system(StdSystemOp.osGetExecutablePath(resultId, bufPtrId: bufPtrId, bufSizeId: bufSizeId)))
+			return
+		end 'ogep'
 
 		if opName == "loadByte" 'lb'
 			let baseId = try consumeValueRef()
@@ -750,19 +774,6 @@ export type StdParser
 			module.appendOp(block, op: StdOp.system(StdSystemOp.globalAddr(resultId, name: name)))
 			return
 		end 'ga'
-
-		if opName == "iatCall" 'ic'
-			let slotIndex = try consumeUnsignedInt()
-			var argIds = ValueIdArray.create()
-			for argToken in cursor 'parseArgs'
-				if argToken.kind == TokenKind.newline 'endOfLine'
-					break
-				end 'endOfLine'
-				argIds.push(try lookupValueId(argToken.value))
-			end 'parseArgs'
-			module.appendOp(block, op: StdOp.system(StdSystemOp.iatCall(resultId, slotIndex: slotIndex, argIds: argIds)))
-			return
-		end 'ic'
 
 		if opName == "osAllocPages" 'oap'
 			let sizeId = try consumeValueRef()

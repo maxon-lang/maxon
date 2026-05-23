@@ -232,6 +232,12 @@ export union Arm64Op
 	atomicIncMem(addrReg Arm64VReg) = Arm64OpMeta{latency: 8, isMemory: true, isStore: true, isCall: false, setsFlags: false, pattern: OpPattern.singleUseNodef, implicitGprReads: 0, implicitGprDefs: 0}
 	atomicDecMem(addrReg Arm64VReg) = Arm64OpMeta{latency: 8, isMemory: true, isStore: true, isCall: false, setsFlags: false, pattern: OpPattern.singleUseNodef, implicitGprReads: 0, implicitGprDefs: 0}
 	atomicXaddMem(resultReg Arm64VReg, addrReg Arm64VReg, valReg Arm64VReg) = Arm64OpMeta{latency: 8, isMemory: true, isStore: true, isCall: false, setsFlags: false, pattern: OpPattern.threeAddr, implicitGprReads: 0, implicitGprDefs: 0}
+	// Phase D2 entry-point bookkeeping: stash kernel-supplied argc/argv from
+	// x0/x1 (AArch64 ELF entry convention) into `__mrt_argc` / `__mrt_argv`.
+	// Only emitted on Linux/macOS for `mrt_start` / `mrt_start_with_coverage`
+	// via the prologue pass. On Windows the body is empty; on WASI it is
+	// never inserted. Reads x0/x1, writes to memory; scratches x16.
+	stashEntryArgv = Arm64OpMeta{latency: 2, isMemory: true, isStore: true, isCall: false, setsFlags: false, pattern: OpPattern.passThrough, implicitGprReads: 3, implicitGprDefs: 0}
 end 'Arm64Op'
 
 export typealias Arm64OpArray = Array with Arm64Op
@@ -324,6 +330,7 @@ export function arm64OpToString(op Arm64Op, blocks IrBlockArray) returns String
 		atomicIncMem(addrReg) gives "arm64.atomic_inc [{arm64VRegToString(addrReg)}]"
 		atomicDecMem(addrReg) gives "arm64.atomic_dec [{arm64VRegToString(addrReg)}]"
 		atomicXaddMem(resultReg, addrReg, valReg) gives "arm64.atomic_xadd {arm64VRegToString(resultReg)}, [{arm64VRegToString(addrReg)}], {arm64VRegToString(valReg)}"
+		stashEntryArgv gives "arm64.stash_entry_argv [__mrt_argc],x0; [__mrt_argv],x1"
 	end 'toString'
 end 'arm64OpToString'
 

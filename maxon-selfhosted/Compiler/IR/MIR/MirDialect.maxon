@@ -91,9 +91,9 @@ export union MirOp
 	funcAddr(resultId ValueId, name String)
 	loadFramePtr(resultId ValueId)
 	// System
-	syscall(resultId ValueId, number MachineWord, argIds ValueIdArray)
-	iatCall(resultId ValueId, slotIndex MachineWord, argIds ValueIdArray)
 	osExit(codeId ValueId)
+	// OS-neutral green-thread sleep. See StdSystemOp.osSleep for semantics.
+	osSleep(msId ValueId)
 	osWrite(ptrId ValueId, lenId ValueId)
 	osWriteErr(ptrId ValueId, lenId ValueId)
 	osRead(resultId ValueId, ptrId ValueId, lenId ValueId)
@@ -101,6 +101,12 @@ export union MirOp
 	osWriteFd(fdId ValueId, ptrId ValueId, lenId ValueId)
 	osClose(fdId ValueId)
 	osGetEnv(resultId ValueId, namePtrId ValueId, nameLenId ValueId, outBufPtrId ValueId, outBufLenId ValueId)
+	// Intent-level argv / executable-path ops. Each backend chooses the
+	// underlying mechanism per-OS. Mirror the placement of `osGetEnv` so
+	// the system-ops band stays contiguous for `to`-range matches.
+	osGetArgc(resultId ValueId)
+	osGetArgv(resultId ValueId, indexId ValueId)
+	osGetExecutablePath(resultId ValueId, bufPtrId ValueId, bufSizeId ValueId)
 	memcpy(dstId ValueId, srcId ValueId, lenId ValueId)
 	storeByte(baseId ValueId, offsetId ValueId, byteId ValueId)
 	loadByte(resultId ValueId, baseId ValueId, offsetId ValueId)
@@ -194,9 +200,8 @@ export function mirOpToString(op MirOp, blocks IrBlockArray) returns String
 		funcAddr(resultId, name) gives "%{resultId} = mir.func_addr @{name}"
 		loadFramePtr(resultId) gives "%{resultId} = mir.load_frame_ptr"
 		// System
-		syscall(resultId, number, argIds) gives "%{resultId} = mir.syscall {number}({formatMirArgs(argIds)})"
-		iatCall(resultId, slotIndex, argIds) gives "%{resultId} = mir.iat_call [{slotIndex}]({formatMirArgs(argIds)})"
 		osExit(codeId) gives "mir.os_exit %{codeId}"
+		osSleep(msId) gives "mir.os_sleep %{msId}"
 		osWrite(ptrId, lenId) gives "mir.os_write %{ptrId}, %{lenId}"
 		osWriteErr(ptrId, lenId) gives "mir.os_write_err %{ptrId}, %{lenId}"
 		osRead(resultId, ptrId, lenId) gives "%{resultId} = mir.os_read %{ptrId}, %{lenId}"
@@ -204,6 +209,9 @@ export function mirOpToString(op MirOp, blocks IrBlockArray) returns String
 		osWriteFd(fdId, ptrId, lenId) gives "mir.os_write_fd %{fdId}, %{ptrId}, %{lenId}"
 		osClose(fdId) gives "mir.os_close %{fdId}"
 		osGetEnv(resultId, namePtrId, nameLenId, outBufPtrId, outBufLenId) gives "%{resultId} = mir.os_get_env %{namePtrId}, %{nameLenId}, %{outBufPtrId}, %{outBufLenId}"
+		osGetArgc(resultId) gives "%{resultId} = mir.os_get_argc"
+		osGetArgv(resultId, indexId) gives "%{resultId} = mir.os_get_argv %{indexId}"
+		osGetExecutablePath(resultId, bufPtrId, bufSizeId) gives "%{resultId} = mir.os_get_executable_path %{bufPtrId}, %{bufSizeId}"
 		memcpy(dstId, srcId, lenId) gives "mir.memcpy %{dstId}, %{srcId}, %{lenId}"
 		storeByte(baseId, offsetId, byteId) gives "mir.store_byte %{baseId}, %{offsetId}, %{byteId}"
 		loadByte(resultId, baseId, offsetId) gives "%{resultId} = mir.load_byte %{baseId}, %{offsetId}"

@@ -223,6 +223,7 @@ let stdlibWhitelist = [
 	"stdlib/Clock.maxon",
 	"stdlib/CommandLine.maxon",
 	"stdlib/Process.maxon",
+	"stdlib/Sleep.maxon",
 	// Phase 15c: FilePath must come before File/Directory — both depend on
 	// it (File.readText takes a FilePath; Directory.list returns a
 	// FilePathArray). The minimal FilePath/FilePathError stub previously
@@ -238,6 +239,18 @@ let stdlibWhitelist = [
 	"stdlib/FilePath.maxon",
 	"stdlib/File.maxon",
 	"stdlib/Directory.maxon",
+	// Self-contained leaf modules (no dependencies beyond Character / Array /
+	// __Builtins). Each was vetted to use only constructs already exercised
+	// by the whitelisted set; if a future audit finds an unsupported
+	// construct in one of these, panic-during-parse will surface it cleanly.
+	// `stdlib/Sha256.maxon` is *not* whitelisted yet — its inner round
+	// function trips a "reload vreg cannot be respilled" panic in the
+	// self-hosted register allocator (register pressure unresolvable, needs
+	// live-range splitting / IR-level pressure reduction). Tracked separately.
+	"stdlib/Ascii.maxon",
+	"stdlib/Build.maxon",
+	"stdlib/PrintError.maxon",
+	"stdlib/Unicode.maxon",
 ]
 
 // Synthesized stdlib prelude. Pre-seeds declarations the self-hosted compiler
@@ -685,13 +698,7 @@ function buildAndWriteStdlibCache(project Project, allModule MaxonModule, cacheP
 	// smaller because wasm doesn't go through commuteForCoalescing /
 	// scheduleInstructions / lowerMirToTarget / allocateRegisters.
 	if not isWasm 'spliceRuntime'
-		// Apply the per-OS runtime filter (drops Windows IAT bodies on
-		// Linux/macOS/Wasm, drops Linux/Wasm `_stub` bodies on Windows).
-		// Without this, the Phase 15c Stream 4.1 `_stub` bodies containing
-		// `std osFileOpen` etc. ops would leak into the Windows stdlib
-		// cache and panic at backend lowering.
-		let osFilteredRuntime = filterRuntimeForOs(loadRuntimeModule(), os: project.target.os)
-		let runtimeForCache = buildCacheSideRuntime(osFilteredRuntime)
+		let runtimeForCache = buildCacheSideRuntime(loadRuntimeModule())
 		pipeline.stdModule.merge(runtimeForCache)
 	end 'spliceRuntime'
 
