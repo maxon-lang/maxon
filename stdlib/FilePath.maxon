@@ -130,9 +130,9 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 		if url.scheme() != "file" 'notFile'
 			throw FilePathError.notFileURL
 		end 'notFile'
-		var filePath = url.path()
 		#if os(Windows)
 			// file:///C:/path produces path "/C:/path" — strip leading slash before drive letter
+			var filePath = url.path()
 			let pathLen = filePath.byteLength()
 			if pathLen >= 3 'checkDrive'
 				// Check for /X: pattern (slash + alpha + colon)
@@ -146,8 +146,10 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 					end 'hasColon'
 				end 'leadingSlash'
 			end 'checkDrive'
+			return filePath
+		#else
+			return url.path()
 		#endif
-		return filePath
 	end 'resolveFileURL'
 
 	/// The platform-native path separator string.

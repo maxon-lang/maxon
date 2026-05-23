@@ -8,19 +8,21 @@ Do not use git commands that would change the working directory like stash or ch
 
 ## Building and Testing
 
+Binary names differ by host OS: Windows produces `maxon.exe` / `maxon-selfhosted.exe`, Linux and macOS produce `maxon` / `maxon-selfhosted` (no extension). Commands below show the Windows form; drop the `.exe` on Linux/macOS.
+
 ### C# bootstrap compiler (maxon-sharp)
 
 - **Build:** `dotnet build` (run from `maxon-sharp/`)
 - **Spec tests:** `./bin/maxon.exe spec-test`
 
-The C# compiler binary is at `./bin/maxon.exe`.
+The C# compiler binary is at `./bin/maxon.exe` (Windows) or `./bin/maxon` (Linux/macOS).
 
 ### Self-hosted compiler (maxon-selfhosted)
 
 - **Build:** `./bin/maxon.exe build maxon-selfhosted` (requires C# compiler already built)
 - **Spec tests:** `./maxon-selfhosted/.maxon/maxon-selfhosted.exe spec-test`
 
-The self-hosted compiler binary is at `./maxon-selfhosted/.maxon/maxon-selfhosted.exe`.
+The self-hosted compiler binary is at `./maxon-selfhosted/.maxon/maxon-selfhosted.exe` (Windows) or `./maxon-selfhosted/.maxon/maxon-selfhosted` (Linux/macOS).
 
 ### Common flags
 
@@ -36,7 +38,7 @@ Exit code 101 means a memory leak was detected.
 
 ## Debugging
 
-For assembly-level debugging of a compiled Maxon executable, use `./scripts/lldb.sh <program.exe>`. The wrapper sets the env vars required by the bundled `llvm-project/bin/lldb.exe` (Python 3.10 home and site-packages). Maxon emits COFF symbols, so functions are addressable by name — e.g. `b <module>.main`, `b stdlib.Print.print`, `b __destruct_String`.
+For assembly-level debugging of a compiled Maxon executable, use `./scripts/lldb.sh <program>` (pass `program.exe` on Windows). The wrapper sets the env vars required by the bundled `llvm-project/bin/lldb` (Python 3.10 home and site-packages). On Windows Maxon emits COFF symbols, on Linux/macOS it emits the platform-native object format; functions are addressable by name in either case — e.g. `b <module>.main`, `b stdlib.Print.print`, `b __destruct_String`.
 
 ## Code Quality
 

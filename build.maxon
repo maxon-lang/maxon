@@ -1,5 +1,14 @@
 typealias Timeout = int(0 to u64.max)
 
+// Host-OS executable extension. The compiler produces ".exe"-suffixed binaries
+// on Windows and no suffix on Linux/macOS; this constant keeps the runner's
+// path literals correct on whichever OS built it.
+#if os(Windows)
+	let exeExt = ".exe"
+#else
+	let exeExt = ""
+#endif
+
 // Collect the CLI args forwarded by `maxon run`, skipping argv[0] (the
 // program path itself). These are appended verbatim to each command we
 // invoke, so flags like `--filter=foo` reach the inner spec-test runner.
@@ -57,7 +66,7 @@ export function spec_test_sharp() returns ExitCode
 		return buildResult
 	end 'failed'
 
-	let sharpExe = try FilePath.from("./bin/maxon.exe") otherwise panic("spec_test_sharp: literal path should be valid")
+	let sharpExe = try FilePath.from("./bin/maxon{exeExt}") otherwise panic("spec_test_sharp: literal path should be valid")
 	var argv = StringArray.create()
 	argv.push("spec-test")
 	argv.append(forwardedArgs())
@@ -72,7 +81,7 @@ end 'spec_test_sharp'
 
 /// Compile the self-hosted compiler using the bootstrap compiler.
 export function build_selfhosted() returns ExitCode
-	let sharpExe = try FilePath.from("./bin/maxon.exe") otherwise panic("build_selfhosted: literal path should be valid")
+	let sharpExe = try FilePath.from("./bin/maxon{exeExt}") otherwise panic("build_selfhosted: literal path should be valid")
 	var argv = StringArray.create()
 	argv.push("build")
 	argv.push("maxon-selfhosted")
@@ -91,7 +100,7 @@ export function spec_test_selfhosted() returns ExitCode
 		return compileResult
 	end 'failed'
 
-	let selfExe = try FilePath.from("./maxon-selfhosted/.maxon/maxon-selfhosted.exe") otherwise panic("spec_test_selfhosted: literal path should be valid")
+	let selfExe = try FilePath.from("./maxon-selfhosted/.maxon/maxon-selfhosted{exeExt}") otherwise panic("spec_test_selfhosted: literal path should be valid")
 	var argv = StringArray.create()
 	argv.push("spec-test")
 	argv.append(forwardedArgs())
@@ -113,7 +122,7 @@ export function build_dev_mcp() returns ExitCode
 		return bootstrapResult
 	end 'failed'
 
-	let sharpExe = try FilePath.from("./bin/maxon.exe") otherwise panic("build_dev_mcp: literal path should be valid")
+	let sharpExe = try FilePath.from("./bin/maxon{exeExt}") otherwise panic("build_dev_mcp: literal path should be valid")
 	var argv = StringArray.create()
 	argv.push("build")
 	argv.push("maxon-dev-mcp")
@@ -136,7 +145,7 @@ export function test_dev_mcp() returns ExitCode
 		return mcpResult
 	end 'failed'
 
-	let sharpExe = try FilePath.from("./bin/maxon.exe") otherwise panic("test_dev_mcp: literal path should be valid")
+	let sharpExe = try FilePath.from("./bin/maxon{exeExt}") otherwise panic("test_dev_mcp: literal path should be valid")
 	var buildArgv = StringArray.create()
 	buildArgv.push("build")
 	buildArgv.push("maxon-dev-mcp-test")
@@ -145,7 +154,7 @@ export function test_dev_mcp() returns ExitCode
 		return runnerBuild
 	end 'runnerFail'
 
-	let runnerExe = try FilePath.from("./maxon-dev-mcp-test/.maxon/maxon-dev-mcp-test.exe") otherwise panic("test_dev_mcp: literal runner path should be valid")
+	let runnerExe = try FilePath.from("./maxon-dev-mcp-test/.maxon/maxon-dev-mcp-test{exeExt}") otherwise panic("test_dev_mcp: literal runner path should be valid")
 	let runResult = run("Running MCP tests", exe: Executable.path(runnerExe), argv: StringArray.create(), timeoutMs: 1200000)
 	if runResult != 0 'testFail'
 		return runResult
@@ -162,7 +171,7 @@ export function spec_test_wasm() returns ExitCode
 		return compileResult
 	end 'failed'
 
-	let selfExe = try FilePath.from("./maxon-selfhosted/.maxon/maxon-selfhosted.exe") otherwise panic("spec_test_wasm: literal path should be valid")
+	let selfExe = try FilePath.from("./maxon-selfhosted/.maxon/maxon-selfhosted{exeExt}") otherwise panic("spec_test_wasm: literal path should be valid")
 	var argv = StringArray.create()
 	argv.push("spec-test")
 	argv.push("--target=wasm32-wasi")

@@ -250,9 +250,15 @@ class Program {
           return 1;
         }
 
+        // If build.maxon supplied an output path with no extension, append the
+        // host-target executable extension (".exe" on Windows, none elsewhere)
+        // so the same build.maxon works across platforms.
+        static string AppendExtIfMissing(string p, string ext) =>
+            Path.HasExtension(p) ? p : p + ext;
+
         string outputPath;
         if (!string.IsNullOrEmpty(config.Output)) {
-          outputPath = Path.Combine(path, config.Output);
+          outputPath = Path.Combine(path, AppendExtIfMissing(config.Output, ext));
         } else if (!string.IsNullOrEmpty(config.Name)) {
           outputPath = Path.Combine(path, config.Name + ext);
         } else {
