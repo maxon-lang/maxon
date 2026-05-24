@@ -886,6 +886,65 @@ function emitImulRegRegParam(code ByteArray, dest X64Register, src X64Register)
 	emitModRMReg(code, regField: dest, rmField: src)
 end 'emitImulRegRegParam'
 
+// Phase 2 dialect groundwork: `op dest, [base+disp]` for ADD/SUB/AND/OR/XOR/CMP.
+// All five share REX.W + opcode + ModRM/disp encoding; only the opcode differs.
+// The ModRM reg field is `dest` (or `lhs` for CMP), r/m is `baseReg`. The shared
+// emitMemDisp helper handles disp8 vs disp32 and rsp/r12 SIB requirements (and
+// the rbp/r13 disp0 quirk where mod=01 disp8=0 is required).
+function emitRegMemAluOp(code ByteArray, dest X64Register, baseReg X64Register, offset MachineWord, opcode MachineWord)
+	emitRexWPrefix(code, regField: dest, rmField: baseReg)
+	code.push(opcode)
+	emitMemDisp(code, regField: dest, baseReg: baseReg, offset: offset)
+end 'emitRegMemAluOp'
+
+// `imul dest, [base+disp]` is a two-byte opcode (0F AF) but otherwise mirrors
+// emitRegMemAluOp.
+function emitImulRegMemOp(code ByteArray, dest X64Register, baseReg X64Register, offset MachineWord)
+	emitRexWPrefix(code, regField: dest, rmField: baseReg)
+	code.push(0x0F)
+	code.push(0xAF)
+	emitMemDisp(code, regField: dest, baseReg: baseReg, offset: offset)
+end 'emitImulRegMemOp'
+
+// Phase 2 dialect groundwork: `op dest, imm` for AND/OR/XOR (add/sub/cmp already
+// have dedicated emitters). The shared REX.W + 81/83 /ext encoding picks the
+// shortest immediate that fits — 8-bit imm via opcode 83 + sign-extension when
+// it fits in i8, otherwise 32-bit imm via opcode 81. `ext` selects the operation
+// via ModRM /ext slot: AND=4, OR=1, XOR=6.
+function emitAluRegImmParam(code ByteArray, dest X64Register, value MachineWord, ext MachineWord)
+	emitRexWSingle(code, rmField: dest)
+	// Use the sign-extending imm8 form when the value fits. We must also exclude
+	// the range (i8.max, u8.max] because raw u8 values like 0xFF would encode
+	// as -1 sign-extended — fine for AND/OR/XOR on 64-bit registers in most
+	// cases but ambiguous when callers pass small unsigned masks. Match the
+	// existing emitAddRegImmParam convention (use imm8 only when value <= i8.max).
+	if value <= i8.max 'imm8'
+		code.push(0x83)
+		emitModRMExt(code, ext: ext, rmField: dest)
+		code.push(value and 0xFF)
+	end 'imm8' else 'imm32'
+		code.push(0x81)
+		emitModRMExt(code, ext: ext, rmField: dest)
+		writeDword(code, value: value)
+	end 'imm32'
+end 'emitAluRegImmParam'
+
+// Three-operand `imul dest, src, imm` => REX.W 6B/69 ModRM(dest, src) imm.
+// 6B is the imm8 form, 69 is the imm32 form. Unlike the two-operand imul which
+// writes a 16-bit result, this form yields the low 64 bits in dest.
+function emitImulRegImmOp(code ByteArray, dest X64Register, src X64Register, value MachineWord)
+	emitRexWPrefix(code, regField: dest, rmField: src)
+	if value >= i8.min and value <= i8.max 'imm8'
+		code.push(0x6B)
+		emitModRMReg(code, regField: dest, rmField: src)
+		code.push(value and 0xFF)
+	end 'imm8' else 'imm32'
+		code.push(0x69)
+		emitModRMReg(code, regField: dest, rmField: src)
+		writeDword(code, value: value)
+	end 'imm32'
+end 'emitImulRegImmOp'
+
 function emitNegRegParam(code ByteArray, reg X64Register)
 	// neg reg  =>  REX.W F7 ModRM(/3, reg)
 	emitRexWSingle(code, rmField: reg)
@@ -2248,6 +2307,23 @@ function emitX64Op(op X64Op, code ByteArray, blockFixups BlockJumpFixupArray, ca
 		lockDecMemory(addrReg) then emitLockDecMemoryOp(code, addrReg: resolveGpr(addrReg))
 		lockXaddMemReg(valReg, addrReg) then emitLockXaddMemRegOp(code, addrReg: resolveGpr(addrReg), valReg: resolveGpr(valReg))
 		stashEntryArgv then emitX64StashEntryArgvOp(code, rdataRelocs: rdataRelocs)
+		// Phase 2 dialect groundwork: memory-operand ALU forms `op reg, [base+disp]`.
+		// Each opcode shares the same ModR/M + displacement encoding (delegated to
+		// emitMemDisp). The reg field is `destReg`/`lhsReg`; the r/m field is `baseReg`.
+		addRegMem(destReg, baseReg, offset) then emitRegMemAluOp(code, dest: resolveGpr(destReg), baseReg: resolveGpr(baseReg), offset: offset, opcode: 0x03)
+		subRegMem(destReg, baseReg, offset) then emitRegMemAluOp(code, dest: resolveGpr(destReg), baseReg: resolveGpr(baseReg), offset: offset, opcode: 0x2B)
+		andRegMem(destReg, baseReg, offset) then emitRegMemAluOp(code, dest: resolveGpr(destReg), baseReg: resolveGpr(baseReg), offset: offset, opcode: 0x23)
+		orRegMem(destReg, baseReg, offset) then emitRegMemAluOp(code, dest: resolveGpr(destReg), baseReg: resolveGpr(baseReg), offset: offset, opcode: 0x0B)
+		xorRegMem(destReg, baseReg, offset) then emitRegMemAluOp(code, dest: resolveGpr(destReg), baseReg: resolveGpr(baseReg), offset: offset, opcode: 0x33)
+		cmpRegMem(lhsReg, baseReg, offset) then emitRegMemAluOp(code, dest: resolveGpr(lhsReg), baseReg: resolveGpr(baseReg), offset: offset, opcode: 0x3B)
+		imulRegMem(destReg, baseReg, offset) then emitImulRegMemOp(code, dest: resolveGpr(destReg), baseReg: resolveGpr(baseReg), offset: offset)
+		// Immediate-form ALU `op reg, imm`. and/or/xor share the REX.W + 81/83
+		// /ext, dest encoding — just the ModR/M extension differs.
+		andRegImm(destReg, value) then emitAluRegImmParam(code, dest: resolveGpr(destReg), value: value, ext: 4)
+		orRegImm(destReg, value) then emitAluRegImmParam(code, dest: resolveGpr(destReg), value: value, ext: 1)
+		xorRegImm(destReg, value) then emitAluRegImmParam(code, dest: resolveGpr(destReg), value: value, ext: 6)
+		// Three-operand `imul dest, src, imm`.
+		imulRegImm(destReg, srcReg, value) then emitImulRegImmOp(code, dest: resolveGpr(destReg), src: resolveGpr(srcReg), value: value)
 	end 'emit'
 end 'emitX64Op'
 

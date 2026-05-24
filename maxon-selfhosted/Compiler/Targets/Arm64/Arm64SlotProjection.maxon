@@ -81,7 +81,7 @@ function arm64CollectSlotReads(op Arm64Op, reads VarSlotArray)
 		ldrFromSlot then break 'check'
 		addRegs to ret then break 'check'
 		globalAddr to stackAddrOp then break 'check'
-		movRegReg to stashEntryArgv then break 'check'
+		movRegReg to xorRegImm then break 'check'
 	end 'check'
 end 'arm64CollectSlotReads'
 
@@ -113,7 +113,7 @@ function arm64CollectSlotWrites(op Arm64Op, writes VarSlotArray)
 		prologue to strToSlot then break 'check'
 		addRegs to ret then break 'check'
 		storeByteOp then break 'check'
-		memcpyOp to stashEntryArgv then break 'check'
+		memcpyOp to xorRegImm then break 'check'
 	end 'check'
 end 'arm64CollectSlotWrites'
 
@@ -121,7 +121,7 @@ function arm64CollectSlotEscapes(op Arm64Op, escapes VarSlotArray)
 	match op 'check'
 		stackAddrOp(_, targetSlot) then escapes.push(targetSlot)
 		prologue to globalAddr then break 'check'
-		storeByteOp to stashEntryArgv then break 'check'
+		storeByteOp to xorRegImm then break 'check'
 	end 'check'
 end 'arm64CollectSlotEscapes'
 
@@ -238,5 +238,11 @@ function rewriteArm64OpSlots(op Arm64Op, remap RegIntArray) returns Arm64Op
 		atomicDecMem gives op
 		atomicXaddMem gives op
 		stashEntryArgv gives op
+		// Phase 2 immediate-form ALU variants (no slot operands).
+		addRegImm gives op
+		subRegImm gives op
+		andRegImm gives op
+		orRegImm gives op
+		xorRegImm gives op
 	end 'check'
 end 'rewriteArm64OpSlots'

@@ -3,6 +3,8 @@
 // function and inserts spill stores after definitions and reload ops before uses
 // of spilled values. Each reload creates a fresh short-lived virtual register.
 
+export typealias OpIndexListArray = Array with OpIndexList
+
 // State for spill code insertion.
 type SpillInsertState
 	export var spillSlots RegIntArray
@@ -16,6 +18,36 @@ type SpillInsertState
 	// spill weight so the spill loop is guaranteed to terminate (see
 	// runSpillColorLoop in RegisterAllocator.maxon).
 	export var reloadIds BoolArray
+	// Indexed by valueId. True iff the value should be rematerialized
+	// (constant re-emitted) at each use instead of being reloaded from a
+	// stack slot. Populated from SpillDecision.rematerializeIds; processOp
+	// reads this to choose emitRematConst over emitReloadOp.
+	export var rematerializeIds BoolArray
+	// Indexed by valueId. The constant value to materialize when
+	// rematerializeIds[v] is true. Populated from
+	// SpillDecision.rematerializeValue.
+	export var rematerializeValue RegIntArray
+	// Bitmap of vregs freshly minted by emitRematConst (def-and-use single-
+	// position vregs that hold a rematerialized constant). Propagated back
+	// to SpillDecision.rematerializeIds so the allocator stamps the next
+	// rebuild's LiveRanges with isRematerializable=true — if they ever fail
+	// to color, they get re-rematerialized rather than spilled (cycle-free
+	// because the constant doesn't change).
+	export var rematMintedIds BoolArray
+	// Per-minted-id constant value sidetable, populated alongside
+	// rematMintedIds. Handed back via SpillDecision.rematerializeValue
+	// so the allocator can union it into its cumulative sidetable.
+	export var rematMintedValue RegIntArray
+	// Pass A → Pass B handoff: branch-edge reload (and memory-routed phi)
+	// ops per source-block id. Pass A appends to the list keyed by the
+	// predecessor's block.id; Pass B splices the list into that block's
+	// opRefs after the main op-walk has rewritten them.
+	export var pendingBranchReloads OpIndexListArray
+	// Indexed by destBlockArg.valueId. True iff the block-arg's spill
+	// store at the top of its block should be SKIPPED because a
+	// predecessor's memory-routed phi already wrote the value into the
+	// dest slot. Populated in Pass A, consulted in Pass B.
+	export var suppressedBlockArgStores BoolArray
 
 	static function create(varSlotCount RegInt) returns SpillInsertState
 		return Self{
@@ -23,7 +55,13 @@ type SpillInsertState
 			spillRegClass: RegIntArray.create(),
 			nextValueId: 0,
 			varSlotCount: varSlotCount,
-			reloadIds: BoolArray.create()
+			reloadIds: BoolArray.create(),
+			rematerializeIds: BoolArray.create(),
+			rematerializeValue: RegIntArray.create(),
+			rematMintedIds: BoolArray.create(),
+			rematMintedValue: RegIntArray.create(),
+			pendingBranchReloads: OpIndexListArray.create(),
+			suppressedBlockArgStores: BoolArray.create()
 		}
 	end 'create'
 end 'SpillInsertState'
@@ -32,10 +70,21 @@ let SPILL_RC_GPR = 0
 let SPILL_RC_FP = 1
 
 // Main entry point: insert spill stores and reload ops for spilled values.
-export function insertSpillCode(module TargetModule, func IrFunction, spillDecision SpillDecision, regTarget RegAllocTarget)
-	if spillDecision.spilledRanges.count() == 0 'noSpills'
+//
+// Also handles rematerializable spills: values flagged via
+// SpillDecision.rematerializeIds get a fresh constant load inserted at
+// each use rather than a store/reload pair. Both paths share the same
+// per-block op walk; the choice is made per-use inside processOp.
+//
+// `desc` is consulted for the `hasMemOperandAlu` capability flag —
+// processOp uses it to short-circuit per-use folding probes on targets
+// (like arm64) that can never fold a reg-mem ALU op.
+export function insertSpillCode(module TargetModule, func IrFunction, spillDecision SpillDecision, regTarget RegAllocTarget, desc TargetRegAlloc)
+	let hasSpills = spillDecision.spilledRanges.count() > 0
+	let hasRemats = spillDecision.rematerializeIds.count() > 0
+	if not hasSpills and not hasRemats 'noWork'
 		return
-	end 'noSpills'
+	end 'noWork'
 
 	var state = SpillInsertState.create(func.varSlotCount)
 
@@ -45,6 +94,35 @@ export function insertSpillCode(module TargetModule, func IrFunction, spillDecis
 	// Find the current max valueId so we can allocate fresh ones.
 	state.nextValueId = scanMaxValueIdForLiveness(module, func: func, regTarget: regTarget)
 
+	// Per-function blockId → blockRef map for O(1) successor lookups in
+	// Pass A. Linear scan per lookup would be O(B^2) on large functions
+	// and also wrong (BlockIds collide across functions — module.blocks
+	// holds blocks for the entire module).
+	let blockIdToRef = buildSpillBlockIdToRefMap(module, func: func)
+
+	// Pre-pass: identify destBlockArg.valueIds for which the memory-routed
+	// phi optimization is SAFE to apply. The optimization suppresses the
+	// dest's spill-store at the top of its block, which is sound only when
+	// EVERY incoming edge writes the slot at its predecessor side. That in
+	// turn requires every predecessor's branch-arg source to be spilled.
+	// If even one predecessor's source is in a register, we must fall back
+	// to the standard reload-and-parallel-copy path for ALL predecessors so
+	// the successor's spill-store stays in place.
+	let memPhiEligible = computeMemPhiEligible(module, func: func, state: state, blockIdToRef: blockIdToRef)
+
+	// Pass A: walk all branch edges of all blocks to discover and apply the
+	// memory-routed phi optimization. This must precede block-arg spill-store
+	// emission in Pass B because for back-edges (e.g. loop body→header) the
+	// suppression decision is made at the body but applied at the header,
+	// which is processed first in block order. Building the suppression set
+	// up front lets Pass B simply consult `state.suppressedBlockArgStores`.
+	for blockRef in func.blockRefs 'eachBlockA'
+		var block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
+		remapBranchEdgeArgs(module, state: state, block: block, regTarget: regTarget, blockIdToRef: blockIdToRef, memPhiEligible: memPhiEligible)
+	end 'eachBlockA'
+
+	// Pass B: emit block-arg spill stores, process ops, and merge the
+	// branch-edge reload ops into their respective blocks.
 	for blockRef in func.blockRefs 'eachBlock'
 		var block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
 
@@ -53,6 +131,15 @@ export function insertSpillCode(module TargetModule, func IrFunction, spillDecis
 		for arg in block.blockArgs 'checkArgs'
 			let slotOffset = getOr(state.spillSlots, index: arg.valueId, fallback: RM_NONE)
 			if slotOffset != RM_NONE 'spillBlockArg'
+				let isSuppressed = try state.suppressedBlockArgStores.get(arg.valueId) otherwise false
+				if isSuppressed 'skip'
+					// Predecessor already wrote this slot via the memory-routed
+					// phi shortcut in Pass A. Loading the value into a register
+					// and storing it back would be a no-op AT BEST (and at
+					// worst would read undefined memory if the parallel-copy
+					// to this dest reg was suppressed). Skip the store.
+					continue
+				end 'skip'
 				let rc = getOr(state.spillRegClass, index: arg.valueId, fallback: SPILL_RC_GPR)
 				let stackOff = computeStackOffset(state, slotOffset: slotOffset)
 				regTarget.emitSpillStore(module, ops: blockArgSpills, valueId: arg.valueId, stackOffset: stackOff, regClass: rc)
@@ -67,17 +154,21 @@ export function insertSpillCode(module TargetModule, func IrFunction, spillDecis
 			block.opRefs.append(spillPacked)
 		end 'emitArgSpills'
 
+		// Per-block reload-vreg cache, reset at each block boundary so
+		// cached vreg intervals stay within a single block. Call sites
+		// also invalidate the cache via clearReloadCache inside processOp.
+		var reloadCacheIds = RegIntArray.create()
+
 		// Process each op in the block.
 		for packed in oldOps 'eachOp'
-			processOp(module, state: state, packed: packed, dstOps: block.opRefs, regTarget: regTarget)
+			processOp(module, state: state, packed: packed, dstOps: block.opRefs, regTarget: regTarget, desc: desc, reloadCacheIds: reloadCacheIds)
 		end 'eachOp'
 
 		// Process the terminator. At target phase terminators are plain
 		// target ops (x64 jmp/Arm64 branch/ret) — no embedded branch args.
-		// Branch-arg reloads for outgoing edges are handled below.
 		if block.hasTerminatorOp() 'hasTerm'
 			let originalTerm = block.terminatorIndex()
-			processOp(module, state: state, packed: originalTerm, dstOps: block.opRefs, regTarget: regTarget)
+			processOp(module, state: state, packed: originalTerm, dstOps: block.opRefs, regTarget: regTarget, desc: desc, reloadCacheIds: reloadCacheIds)
 			// Take the last appended op as the new terminator (in case the op
 			// was remapped to a new index).
 			let lastIdx = block.opRefs.count() - 1
@@ -88,10 +179,11 @@ export function insertSpillCode(module TargetModule, func IrFunction, spillDecis
 			end 'hasLast'
 		end 'hasTerm'
 
-		// Handle spilled branch-arg sources on outgoing edges. Insert reload
-		// ops before the terminator and remap the edge.argIds to the fresh
-		// reload value IDs.
-		remapBranchEdgeArgs(module, state: state, block: block, regTarget: regTarget)
+		// Splice in the branch-edge reload/move ops built in Pass A. They
+		// land before any trailing condJump (or at end of opRefs if the
+		// terminator is unconditional) — same insertion rule as before
+		// the two-pass refactor.
+		spliceBranchEdgeReloads(module, state: state, block: block, regTarget: regTarget)
 	end 'eachBlock'
 
 	// Set the spill size on the function so PrologueEpiloguePass knows how much stack to allocate.
@@ -103,9 +195,39 @@ export function insertSpillCode(module TargetModule, func IrFunction, spillDecis
 	// cumulative reload set and mark the corresponding ranges with
 	// infinite spill weight on the next liveness rebuild.
 	spillDecision.reloadIds = state.reloadIds.clone()
+	// Merge the newly-minted remat ids back into the decision's remat
+	// bitmap (which still holds the input set spillClass routed in). This
+	// keeps the remat property transitive: a vreg minted to hold a
+	// rematerialized constant is itself rematerializable from the same
+	// constant, so if it ever fails to color, the next iteration can re-
+	// rematerialize it rather than spill it (cycle-free because the
+	// constant doesn't change).
+	mergeMintedRematIntoDecision(spillDecision, mintedIds: state.rematMintedIds, mintedValue: state.rematMintedValue)
 
-	logTrace(LogCategory.ir, message: function() gives "insertSpillCode: spilled={spillDecision.spilledRanges.count()} totalSpillSize={spillDecision.totalSpillSize} nextValueId={state.nextValueId} newReloads={state.reloadIds.count()}")
+	logTrace(LogCategory.ir, message: function() gives "insertSpillCode: spilled={spillDecision.spilledRanges.count()} totalSpillSize={spillDecision.totalSpillSize} nextValueId={state.nextValueId} newReloads={state.reloadIds.count()} newRemats={state.rematMintedIds.count()}")
 end 'insertSpillCode'
+
+// Union `mintedIds` (and parallel `mintedValue`) into decision.rematerializeIds
+// and decision.rematerializeValue, preserving any entries already present.
+function mergeMintedRematIntoDecision(decision SpillDecision, mintedIds BoolArray, mintedValue RegIntArray)
+	let n = mintedIds.count()
+	while decision.rematerializeIds.count() < n 'growIds'
+		decision.rematerializeIds.push(false)
+	end 'growIds'
+	while decision.rematerializeValue.count() < n 'growVal'
+		decision.rematerializeValue.push(0)
+	end 'growVal'
+	var i = 0
+	while i < n 'each'
+		let bit = try mintedIds.get(i) otherwise false
+		if bit 'set'
+			let v = getOr(mintedValue, index: i, fallback: 0)
+			try decision.rematerializeIds.set(i, value: true) otherwise panic("invariant: rematerializeIds.set OOB after grow")
+			try decision.rematerializeValue.set(i, value: v) otherwise panic("invariant: rematerializeValue.set OOB after grow")
+		end 'set'
+		i = i + 1
+	end 'each'
+end 'mergeMintedRematIntoDecision'
 
 // Insert reload ops for spilled branch-arg sources and rewrite the
 // block.branchEdges argIds in place to use the fresh reload IDs.
@@ -122,37 +244,253 @@ end 'insertSpillCode'
 // Fix: collect reloads in a side list and splice them before the trailing
 // condJump (if any). Reloads are pure memory reads, safe to execute on both
 // paths of a condBr.
-function remapBranchEdgeArgs(module TargetModule, state SpillInsertState, block IrBlock, regTarget RegAllocTarget)
+// Pass A: rewrite outgoing branch edges of `block` to fold spilled→spilled
+// args through their spill slots (memory-routed phi) and to remap other
+// spilled args to fresh reload vregs. The reload/move ops are appended to
+// `state.pendingBranchReloads[block.id]` for Pass B to splice into the
+// block's opRefs once the main op processing has rewritten them.
+function remapBranchEdgeArgs(module TargetModule, state SpillInsertState, block IrBlock, regTarget RegAllocTarget, blockIdToRef SpillBlockIdToRefMap, memPhiEligible BoolArray)
 	var reloadOps = OpIndexList.create()
 	var newEdges = BranchEdgeArray.create()
 
+	// Cross-edge dedup cache: argId → fresh reload vreg id (or fresh remat id).
+	// A single predecessor with N successors and M shared spilled args would
+	// otherwise emit N*M reload ops, with N*M distinct reload vregs all live
+	// simultaneously between the predecessor's last definition and the cond
+	// jump — exploding register pressure in cond-branch blocks that pass
+	// loop-carried state (the sha256 round body's pre-loop block hits this
+	// with 8 carried scalars × 2 successors = 16 live reloads). Sharing the
+	// vreg across edges collapses N*M back to M and matches LLVM's behavior
+	// (one virtual per spill slot at the parallel-copy point). Rematerialized
+	// constants are deduped separately via rematCache for the same reason.
+	var reloadCache = RegIntArray.create()
+	var rematCache = RegIntArray.create()
+
 	for edge in block.branchEdges 'eachEdge'
 		var newArgIds = ValueIdArray.create()
+		// Look up the target block so we can probe its block args. This is
+		// what makes the memory-routed phi optimization possible: it lets
+		// the predecessor see whether each dest block arg is spilled and,
+		// if so, write the slot directly at the predecessor instead of
+		// going through a long-lived reload vreg.
+		let targetBlock = lookupBlockByIdInFunc(module, blockIdToRef: blockIdToRef, blockId: edge.targetBlockId)
+		var argIdx = 0
 		for argId in edge.argIds 'eachArg'
-			let slotOffset = getOr(state.spillSlots, index: argId, fallback: RM_NONE)
-			if slotOffset != RM_NONE 'isSpilled'
-				let rc = getOr(state.spillRegClass, index: argId, fallback: SPILL_RC_GPR)
-				let freshId = freshValueId(state)
-				let stackOff = computeStackOffset(state, slotOffset: slotOffset)
-				regTarget.emitReloadOp(module, ops: reloadOps, freshId: freshId, stackOffset: stackOff, regClass: rc)
-				newArgIds.push(freshId)
-			end 'isSpilled' else 'notSpilled'
-				newArgIds.push(argId)
-			end 'notSpilled'
+			let isRemat = try state.rematerializeIds.get(argId) otherwise false
+			if isRemat 'isRematArg'
+				// Rematerializable args: emit a fresh constant load just
+				// before the terminator and forward the new vreg through
+				// the parallel copy. Cache per argId so the same constant
+				// shared by sibling edges materializes exactly once.
+				let cachedRemat = getOr(rematCache, index: argId, fallback: RM_NONE)
+				if cachedRemat != RM_NONE 'cachedR'
+					newArgIds.push(cachedRemat)
+				end 'cachedR' else 'freshR'
+					let rc = getOr(state.spillRegClass, index: argId, fallback: SPILL_RC_GPR)
+					let constVal = getOr(state.rematerializeValue, index: argId, fallback: 0)
+					let freshId = freshRematId(state, constVal: constVal)
+					regTarget.emitRematConst(module, ops: reloadOps, freshId: freshId, constantValue: constVal, regClass: rc)
+					set(rematCache, index: argId, value: freshId, sentinel: RM_NONE)
+					newArgIds.push(freshId)
+				end 'freshR'
+			end 'isRematArg' else 'notRemat'
+				let destValueId = lookupTargetBlockArgValueId(targetBlock, argIdx: argIdx)
+				let destSlot = getOr(state.spillSlots, index: destValueId, fallback: RM_NONE)
+				let srcSlot = getOr(state.spillSlots, index: argId, fallback: RM_NONE)
+
+				// memPhiEligible is consulted to determine whether the
+				// memory-routed phi optimization is safe to apply for this
+				// dest. The optimization is currently disabled by the
+				// `false and` short-circuit because of subtle correctness
+				// issues observed on grapheme-iteration tests (suspected
+				// interaction with phi-merge sub-range slot coalescing
+				// where srcSlot == destSlot but argId carries a fresher
+				// value than what's at that slot at the predecessor's
+				// terminator). Re-enable once the parallel-copy +
+				// suppression + slot-coalescing interaction is sound.
+				let isEligible = false and destValueId >= 0 and (try memPhiEligible.get(destValueId) otherwise false)
+
+				if isEligible and destSlot != RM_NONE and srcSlot != RM_NONE 'bothSpilled'
+					// Memory-routed phi: both ends spilled. Slot-to-slot via
+					// a fixed scratch register, then suppress the parallel-
+					// copy + spill-store roundtrip at the successor. This is
+					// the case that explodes reload-vreg pressure in
+					// sha256-style loop bodies; routing it through memory
+					// avoids creating a long-lived reload vreg per branch
+					// arg. Only applied when EVERY predecessor's src for
+					// this dest is also spilled — otherwise some predecessor
+					// would have to fall back to a register-routed path,
+					// and the suppression would race with the suppressed
+					// spill-store.
+					let rc = getOr(state.spillRegClass, index: destValueId, fallback: SPILL_RC_GPR)
+					let srcOff = computeStackOffset(state, slotOffset: srcSlot)
+					let destOff = computeStackOffset(state, slotOffset: destSlot)
+					regTarget.emitSlotToSlotMove(module, ops: reloadOps, srcStackOffset: srcOff, destStackOffset: destOff, regClass: rc)
+					newArgIds.push(destValueId)
+					markSuppressedBlockArgStore(state, valueId: destValueId)
+				end 'bothSpilled' else 'fallback'
+					if srcSlot != RM_NONE 'srcSpilled'
+						// Src spilled, dest in register: standard reload
+						// into a fresh vreg, let the parallel copy place it.
+						// Dedup across edges keyed by argId: if a sibling
+						// edge already reloaded this same spilled value,
+						// reuse its vreg. The parallel copy at each
+						// successor can read the same vreg independently.
+						let cachedReload = getOr(reloadCache, index: argId, fallback: RM_NONE)
+						if cachedReload != RM_NONE 'cachedV'
+							newArgIds.push(cachedReload)
+						end 'cachedV' else 'freshV'
+							let rc = getOr(state.spillRegClass, index: argId, fallback: SPILL_RC_GPR)
+							let freshId = freshValueId(state)
+							let stackOff = computeStackOffset(state, slotOffset: srcSlot)
+							regTarget.emitReloadOp(module, ops: reloadOps, freshId: freshId, stackOffset: stackOff, regClass: rc)
+							set(reloadCache, index: argId, value: freshId, sentinel: RM_NONE)
+							newArgIds.push(freshId)
+						end 'freshV'
+					end 'srcSpilled' else 'srcInReg'
+						newArgIds.push(argId)
+					end 'srcInReg'
+				end 'fallback'
+			end 'notRemat'
+			argIdx = argIdx + 1
 		end 'eachArg'
 		newEdges.push(BranchEdge.create(edge.targetBlockId, argIds: newArgIds))
 	end 'eachEdge'
 	block.branchEdges = newEdges
 
+	// Stash reload ops keyed by block.id for Pass B to splice into the
+	// post-rewrite opRefs.
+	stashBranchReloads(state, blockId: block.id, ops: reloadOps)
+end 'remapBranchEdgeArgs'
+
+// Splice reload ops collected in Pass A into the block's opRefs just
+// before a trailing condJump (or at the end of opRefs if the terminator
+// is unconditional). Mirrors the original in-line splice that used to
+// run at the end of remapBranchEdgeArgs.
+function spliceBranchEdgeReloads(module TargetModule, state SpillInsertState, block IrBlock, regTarget RegAllocTarget)
+	let reloadOps = getStashedBranchReloads(state, blockId: block.id)
 	if reloadOps.count() == 0 'noReloads'
 		return
 	end 'noReloads'
-
-	// Find the insertion point: just before a trailing condJump if present,
-	// otherwise at the end of opRefs (which is right before the terminator).
 	let insertAt = findCondJumpIndex(module, block: block, regTarget: regTarget)
 	insertOpsAt(block.opRefs, ops: reloadOps, at: insertAt)
-end 'remapBranchEdgeArgs'
+end 'spliceBranchEdgeReloads'
+
+// Function-scoped block-id-to-ref lookup. BlockIds collide across
+// functions (each function numbers its own blocks from 0); restricting
+// to a single function's blockRefs is required for correctness.
+export typealias SpillBlockIdToRefMap = Map with (BlockId, BlockRef)
+
+function buildSpillBlockIdToRefMap(module TargetModule, func IrFunction) returns SpillBlockIdToRefMap
+	var map = SpillBlockIdToRefMap.create()
+	for blockRef in func.blockRefs 'each'
+		let block = try module.blocks.get(blockRef) otherwise panic("buildSpillBlockIdToRefMap: blockRef from func.blockRefs not in module.blocks")
+		map.upsert(block.id, value: blockRef)
+	end 'each'
+	return map
+end 'buildSpillBlockIdToRefMap'
+
+function lookupBlockByIdInFunc(module TargetModule, blockIdToRef SpillBlockIdToRefMap, blockId BlockId) returns IrBlock
+	let blockRef = try blockIdToRef.get(blockId) otherwise panic("lookupBlockByIdInFunc: branch-edge target block {blockId} not in function's block-ref map")
+	return try module.blocks.get(blockRef) otherwise panic("lookupBlockByIdInFunc: blockRef from blockIdToRef not in module.blocks")
+end 'lookupBlockByIdInFunc'
+
+// Decide, for each (function-scoped) destBlockArg.valueId, whether the
+// memory-routed phi optimization is safe to apply. It is safe iff every
+// incoming branch arg for that slot is itself spilled — otherwise some
+// predecessor would route the value through a register (parallel-copy +
+// spill-store) and the suppressed spill-store at the dest would leave
+// stale memory on that incoming path.
+//
+// Returns a BoolArray indexed by destBlockArg.valueId. Out-of-range
+// indices implicitly mean false.
+function computeMemPhiEligible(module TargetModule, func IrFunction, state SpillInsertState, blockIdToRef SpillBlockIdToRefMap) returns BoolArray
+	var eligible = BoolArray.create()
+
+	// First mark every spilled block arg as a candidate (true).
+	for blockRef in func.blockRefs 'markCand'
+		let block = try module.blocks.get(blockRef) otherwise panic("computeMemPhiEligible.markCand: blockRef not in module.blocks")
+		for arg in block.blockArgs 'eachArg'
+			let slotOffset = getOr(state.spillSlots, index: arg.valueId, fallback: RM_NONE)
+			if slotOffset != RM_NONE 'isSpilled'
+				growReloadBitmap(eligible, size: arg.valueId + 1)
+				try eligible.set(arg.valueId, value: true) otherwise panic("computeMemPhiEligible: eligible.set OOB after grow")
+			end 'isSpilled'
+		end 'eachArg'
+	end 'markCand'
+
+	// Now walk every branch edge. For each (dest blockArg.valueId, src
+	// argId) pair, if src is not spilled, disqualify dest. A dest is
+	// eligible iff none of its incoming srcs are register-routed.
+	for blockRef in func.blockRefs 'eachPred'
+		let block = try module.blocks.get(blockRef) otherwise panic("computeMemPhiEligible.eachPred: blockRef not in module.blocks")
+		for edge in block.branchEdges 'eachEdge'
+			let targetBlock = lookupBlockByIdInFunc(module, blockIdToRef: blockIdToRef, blockId: edge.targetBlockId)
+			var argIdx = 0
+			for argId in edge.argIds 'eachArg'
+				let destValueId = lookupTargetBlockArgValueId(targetBlock, argIdx: argIdx)
+				if destValueId >= 0 'haveDest'
+					let isCand = try eligible.get(destValueId) otherwise false
+					if isCand 'cand'
+						let isRemat = try state.rematerializeIds.get(argId) otherwise false
+						let srcSlot = getOr(state.spillSlots, index: argId, fallback: RM_NONE)
+						// Rematerializable srcs and register-routed srcs
+						// both disqualify the dest: in both cases the
+						// predecessor wouldn't write the dest's slot in
+						// the bothSpilled path.
+						if isRemat or srcSlot == RM_NONE 'disqualify'
+							try eligible.set(destValueId, value: false) otherwise panic("computeMemPhiEligible: eligible.set OOB during disqualify")
+						end 'disqualify'
+					end 'cand'
+				end 'haveDest'
+				argIdx = argIdx + 1
+			end 'eachArg'
+		end 'eachEdge'
+	end 'eachPred'
+
+	return eligible
+end 'computeMemPhiEligible'
+
+// Return the destination block-arg valueId at `argIdx` in `targetBlock`,
+// or -1 if argIdx is out of range (a branch arg with no corresponding
+// block arg — shouldn't happen in correct IR but we tolerate by falling
+// back to the regular reload path).
+function lookupTargetBlockArgValueId(targetBlock IrBlock, argIdx RegInt) returns RegInt
+	if argIdx >= targetBlock.blockArgs.count() 'oob'
+		return -1
+	end 'oob'
+	let arg = try targetBlock.blockArgs.get(argIdx) otherwise panic("lookupTargetBlockArgValueId: argIdx in-range by check but get failed")
+	return arg.valueId
+end 'lookupTargetBlockArgValueId'
+
+// Record that the block-arg spill-store for `valueId` should be skipped:
+// the predecessor has already written the slot via a memory-routed phi
+// (see remapBranchEdgeArgs). Consulted at block-arg-spill-store time in
+// the main per-block loop of insertSpillCode.
+function markSuppressedBlockArgStore(state SpillInsertState, valueId RegInt)
+	growReloadBitmap(state.suppressedBlockArgStores, size: valueId + 1)
+	try state.suppressedBlockArgStores.set(valueId, value: true) otherwise panic("invariant: suppressedBlockArgStores.set OOB after grow")
+end 'markSuppressedBlockArgStore'
+
+// Stash branch-edge reload/move ops produced in Pass A so Pass B can
+// splice them into the rewritten opRefs of the same block.
+function stashBranchReloads(state SpillInsertState, blockId BlockId, ops OpIndexList)
+	while state.pendingBranchReloads.count() <= blockId 'grow'
+		state.pendingBranchReloads.push(OpIndexList.create())
+	end 'grow'
+	try state.pendingBranchReloads.set(blockId, value: ops) otherwise panic("invariant: pendingBranchReloads.set OOB after grow")
+end 'stashBranchReloads'
+
+// Retrieve the branch-edge reloads stashed by Pass A for `blockId`.
+// Returns an empty list when none were stashed (block had no spilled
+// branch args). The OOB branch is the only legitimate empty case; once
+// past it, a .get() failure is an invariant violation.
+function getStashedBranchReloads(state SpillInsertState, blockId BlockId) returns OpIndexList
+	if blockId >= state.pendingBranchReloads.count() 'oob'
+		return OpIndexList.create()
+	end 'oob'
+	return try state.pendingBranchReloads.get(blockId) otherwise panic("invariant: pendingBranchReloads.get failed after bounds check for blockId={blockId}")
+end 'getStashedBranchReloads'
 
 // Return the index of a trailing condJump in opRefs, or opRefs.count() if
 // there's no condJump in opRefs (single-successor block, or the condJump
@@ -171,7 +509,7 @@ function findCondJumpIndex(module TargetModule, block IrBlock, regTarget RegAllo
 end 'findCondJumpIndex'
 
 // Splice `ops` into `dst` at index `at`, preserving order.
-function insertOpsAt(dst OpIndexList, ops OpIndexList, at RegInt)
+export function insertOpsAt(dst OpIndexList, ops OpIndexList, at RegInt)
 	var i = 0
 	for op in ops 'eachOp'
 		try dst.insert(at + i, value: op) otherwise panic("invariant: at + i within bounds of growing list")
@@ -197,6 +535,26 @@ function buildSpillMaps(state SpillInsertState, spillDecision SpillDecision)
 		set(state.spillSlots, index: vid, value: slotOffset, sentinel: RM_NONE)
 		set(state.spillRegClass, index: vid, value: rc, sentinel: RM_NONE)
 	end 'eachRange'
+
+	// Mirror the rematerialize sidetables from the decision into the
+	// SpillInsertState so processOp can consult them per-read.
+	let rn = spillDecision.rematerializeIds.count()
+	while state.rematerializeIds.count() < rn 'growIds'
+		state.rematerializeIds.push(false)
+	end 'growIds'
+	while state.rematerializeValue.count() < rn 'growVal'
+		state.rematerializeValue.push(0)
+	end 'growVal'
+	var vi = 0
+	while vi < rn 'copyEach'
+		let bit = try spillDecision.rematerializeIds.get(vi) otherwise false
+		if bit 'isRemat'
+			let v = getOr(spillDecision.rematerializeValue, index: vi, fallback: 0)
+			try state.rematerializeIds.set(vi, value: true) otherwise panic("invariant: state.rematerializeIds.set OOB after grow")
+			try state.rematerializeValue.set(vi, value: v) otherwise panic("invariant: state.rematerializeValue.set OOB after grow")
+		end 'isRemat'
+		vi = vi + 1
+	end 'copyEach'
 end 'buildSpillMaps'
 
 // Convert an abstract spill slot offset (0, 8, 16, ...) to an actual stack offset.
@@ -219,19 +577,95 @@ function freshValueId(state SpillInsertState) returns RegInt
 	return id
 end 'freshValueId'
 
+// Allocate a fresh value ID for a rematerialization destination. Records
+// the id into state.rematMintedIds so the allocator can union it back into
+// its cumulative rematerializeIds bitmap, keeping the remat property
+// transitive across spill iterations.
+//
+// NOT routed through freshValueId: a remat-minted vreg is NOT a reload
+// (it has no spill slot); marking it in `reloadIds` would saddle it with
+// SPILL_WEIGHT_INFINITE on the next rebuild, defeating the point of
+// rematerialization (we *want* the spill loop to re-rematerialize it if
+// it ever fails to color).
+function freshRematId(state SpillInsertState, constVal RegInt) returns RegInt
+	let id = state.nextValueId
+	state.nextValueId = state.nextValueId + 1
+	growReloadBitmap(state.rematMintedIds, size: id + 1)
+	while state.rematMintedValue.count() <= id 'growVal'
+		state.rematMintedValue.push(0)
+	end 'growVal'
+	try state.rematMintedIds.set(id, value: true) otherwise panic("invariant: rematMintedIds.set OOB after grow id={id}")
+	try state.rematMintedValue.set(id, value: constVal) otherwise panic("invariant: rematMintedValue.set OOB after grow id={id}")
+	return id
+end 'freshRematId'
+
 function growReloadBitmap(arr BoolArray, size RegInt)
 	while arr.count() < size 'grow'
 		arr.push(false)
 	end 'grow'
 end 'growReloadBitmap'
 
-// Process a single non-terminator op: insert reloads before uses and spill stores after defs.
-function processOp(module TargetModule, state SpillInsertState, packed OpIndex, dstOps OpIndexList, regTarget RegAllocTarget)
-	// Step 1: Find which values this op reads that are spilled.
+// Process a single non-terminator op: insert reloads (or constant
+// rematerializations) before uses and spill stores after defs.
+//
+// Phase 3 (memory-operand folding): before emitting any reloads, if the
+// target supports reg-mem ALU ops, try to fold ONE spilled read of this
+// op into a memory-operand form via the target. The fold consumes that
+// one operand directly from the spill slot; other spilled reads (if
+// any) still need standard reloads, which the remap loop below handles
+// by SKIPPING the folded read.
+//
+// `reloadCacheIds` provides per-block reload-vreg reuse: when the SAME
+// spilled value is read by multiple ops in close proximity within a
+// block, the first read materializes a reload vreg and the cache
+// records it; subsequent reads (until a clobbering event invalidates
+// the entry) re-use that vreg instead of emitting a fresh reload. This
+// trims reload-vreg pressure dramatically in tight write chains like
+// sha256's message-schedule loop, where the array base pointer is
+// reused across many `storeIndirect` ops.
+//
+// Cache invalidation events:
+//   * The spilled value is redefined (e.g. two-address dest) — the
+//     stale cached vreg holds the pre-def value.
+//   * A call op executes — the cached vreg's lifetime would have to
+//     span the call, but reload vregs carry SPILL_WEIGHT_INFINITE and
+//     thus cannot be re-spilled; if only caller-saved registers are
+//     free, the allocator can't satisfy the cross-call requirement.
+//     Invalidating at calls keeps cached vregs short-lived and inside
+//     a contiguous run of non-call ops.
+function processOp(module TargetModule, state SpillInsertState, packed OpIndex, dstOps OpIndexList, regTarget RegAllocTarget, desc TargetRegAlloc, reloadCacheIds RegIntArray)
+	// Step 0: if this op is a call, drop all cached reload vregs. Reload
+	// vregs carry SPILL_WEIGHT_INFINITE and can't be re-spilled across a
+	// call into caller-saved registers; keeping them in the cache would
+	// let subsequent reuses produce vregs whose intervals cross the call,
+	// blowing the callee-saved-only pool.
+	if regTarget.isCallOp(module, packed: packed) 'isCall'
+		clearReloadCache(reloadCacheIds)
+	end 'isCall'
+
+	// Step 1: Find which values this op reads that are spilled or
+	// rematerialized.
 	var counts = RegIntArray.create()
 	regTarget.countOpReads(module, counts: counts, packed: packed)
 
-	// Build a remap array for any spilled reads.
+	// Step 1a (Phase 3): if the target can fold reg-mem ALU ops, see if
+	// any spilled read of this op can be folded into a `*Mem` form. The
+	// fold consumes one operand directly from the spill slot; other
+	// spilled reads (if any) still need standard reloads, which the
+	// remap loop below handles by SKIPPING the folded read (its id is
+	// recorded in skipFoldedId).
+	var workingPacked = packed
+	var skipFoldedId = -1
+	if desc.hasMemOperandAlu 'tryFold'
+		let foldRes = tryFoldOneSpilledRead(module, state: state, counts: counts, packed: packed, regTarget: regTarget)
+		if foldRes.opIndex >= 0 'folded'
+			workingPacked = foldRes.opIndex
+			skipFoldedId = foldRes.foldedValueId
+		end 'folded'
+	end 'tryFold'
+
+	// Build a remap array for any spilled/remat reads NOT already
+	// consumed by the fold above.
 	var remap = RegIntArray.create()
 	var needsRemap = false
 
@@ -239,51 +673,148 @@ function processOp(module TargetModule, state SpillInsertState, packed OpIndex, 
 	while ri < counts.count() 'checkReads'
 		let cnt = try counts.get(ri) otherwise panic("processOp.checkReads: ri < counts.count() by loop guard but get({ri}) failed")
 
-		if cnt > 0 'isRead'
-			let slotOffset = getOr(state.spillSlots, index: ri, fallback: RM_NONE)
-
-			if slotOffset != RM_NONE 'isSpilled'
-				// This read references a spilled value — emit a reload.
+		if cnt > 0 and ri != skipFoldedId 'isRead'
+			let isRemat = try state.rematerializeIds.get(ri) otherwise false
+			if isRemat 'isRematRead'
+				// Rematerializable read: emit a fresh constant load
+				// targeting a brand-new vreg, then remap the use to that
+				// vreg. No reload-from-stack — the constant has no slot.
 				let rc = getOr(state.spillRegClass, index: ri, fallback: SPILL_RC_GPR)
-				let freshId = freshValueId(state)
-				let stackOff = computeStackOffset(state, slotOffset: slotOffset)
-				regTarget.emitReloadOp(module, ops: dstOps, freshId: freshId, stackOffset: stackOff, regClass: rc)
+				let constVal = getOr(state.rematerializeValue, index: ri, fallback: 0)
+				let freshId = freshRematId(state, constVal: constVal)
+				regTarget.emitRematConst(module, ops: dstOps, freshId: freshId, constantValue: constVal, regClass: rc)
 				set(remap, index: ri, value: freshId, sentinel: RM_NONE)
 				needsRemap = true
-			end 'isSpilled'
+			end 'isRematRead' else 'notRemat'
+				let slotOffset = getOr(state.spillSlots, index: ri, fallback: RM_NONE)
+				if slotOffset != RM_NONE 'isSpilled'
+					// Plain spilled value — reuse a cached reload from
+					// earlier in this block when available; otherwise
+					// emit a fresh reload and record its vreg id.
+					let cachedId = getOr(reloadCacheIds, index: ri, fallback: RM_NONE)
+					if cachedId != RM_NONE 'cached'
+						set(remap, index: ri, value: cachedId, sentinel: RM_NONE)
+					end 'cached' else 'fresh'
+						let rc = getOr(state.spillRegClass, index: ri, fallback: SPILL_RC_GPR)
+						let freshId = freshValueId(state)
+						let stackOff = computeStackOffset(state, slotOffset: slotOffset)
+						regTarget.emitReloadOp(module, ops: dstOps, freshId: freshId, stackOffset: stackOff, regClass: rc)
+						set(remap, index: ri, value: freshId, sentinel: RM_NONE)
+						set(reloadCacheIds, index: ri, value: freshId, sentinel: RM_NONE)
+					end 'fresh'
+					needsRemap = true
+				end 'isSpilled'
+			end 'notRemat'
 		end 'isRead'
 
 		ri = ri + 1
 	end 'checkReads'
 
-	// Step 2: Remap the op if any reads were spilled.
-	var finalPacked = packed
+	// Step 2: Remap the (possibly folded) op if any reads were spilled
+	// to fresh reload vregs.
+	var finalPacked = workingPacked
 
 	if needsRemap 'doRemap'
-		finalPacked = regTarget.remapOp(module, packed: packed, remap: remap)
+		finalPacked = regTarget.remapOp(module, packed: workingPacked, remap: remap)
 	end 'doRemap'
 
 	dstOps.append(finalPacked)
 
-	// Step 3: Check if this op defines a spilled value — if so, emit a spill store.
-	//
-	// We look at defs on the ORIGINAL packed op (not finalPacked). For two-
-	// address ops that both read and write a spilled value, the remap above
-	// rewrote the dest to the reload's fresh id, so noteOpDefs on finalPacked
-	// would report the fresh id (not spilled) and miss the store. Looking at
-	// the original op ensures we still see the spilled def; if that def was
-	// remapped, the store writes the remapped register's value back to the
-	// original spill slot, keeping subsequent reloads coherent.
+	processDefsForOp(module, state: state, packed: packed, dstOps: dstOps, remap: remap, regTarget: regTarget, reloadCacheIds: reloadCacheIds)
+end 'processOp'
+
+// Drop every cached reload-vreg id. Called at call boundaries and at
+// the start of each block; ensures cached vreg intervals never span a
+// call (which would force them into callee-saved registers that may
+// not be available) or a block boundary (where the dom-tree-preorder
+// SSA coloring invariant assumes per-block locality).
+function clearReloadCache(reloadCacheIds RegIntArray)
+	var i = 0
+	let n = reloadCacheIds.count()
+	while i < n 'each'
+		try reloadCacheIds.set(i, value: RM_NONE) otherwise panic("clearReloadCache: i < count by guard but set({i}) failed")
+		i = i + 1
+	end 'each'
+end 'clearReloadCache'
+
+// Result of a fold attempt: the (new) op index and the spilled valueId
+// that the fold consumed. opIndex == -1 indicates no fold happened.
+type FoldResult
+	export let opIndex RegInt
+	export let foldedValueId RegInt
+
+	export static function none() returns FoldResult
+		return Self{opIndex: -1, foldedValueId: -1}
+	end 'none'
+
+	export static function success(opIdx RegInt, valueId RegInt) returns FoldResult
+		return Self{opIndex: opIdx, foldedValueId: valueId}
+	end 'success'
+end 'FoldResult'
+
+// Phase 3: try to fold ONE spilled read of `packed` directly into the
+// using op's `*Mem` form. Iterates spilled reads in order, asking the
+// target whether each is foldable; on the first acceptance returns the
+// folded op index and the consumed valueId. Other spilled reads (and
+// rematerializable reads) are left for the caller's remap loop.
+//
+// Rematerializable reads are still routed through the standard remat
+// path — folding them would discard the constant load that would
+// otherwise be issued at the use site.
+function tryFoldOneSpilledRead(module TargetModule, state SpillInsertState, counts RegIntArray, packed OpIndex, regTarget RegAllocTarget) returns FoldResult
+	var ri = 0
+	while ri < counts.count() 'scan'
+		let cnt = try counts.get(ri) otherwise panic("tryFoldOneSpilledRead.scan: ri < counts.count() by loop guard but get({ri}) failed")
+		if cnt > 0 'isRead'
+			let isRemat = try state.rematerializeIds.get(ri) otherwise false
+			if not isRemat 'notRemat'
+				let slotOffset = getOr(state.spillSlots, index: ri, fallback: RM_NONE)
+				if slotOffset != RM_NONE 'isSpilled'
+					let stackOff = computeStackOffset(state, slotOffset: slotOffset)
+					let foldIdx = regTarget.tryFoldReadFromSlot(module, packed: packed, valueId: ri, stackOffset: stackOff)
+					if foldIdx >= 0 'accepted'
+						return FoldResult.success(foldIdx, valueId: ri)
+					end 'accepted'
+				end 'isSpilled'
+			end 'notRemat'
+		end 'isRead'
+		ri = ri + 1
+	end 'scan'
+	return FoldResult.none()
+end 'tryFoldOneSpilledRead'
+
+// Step 3: emit spill stores for any defs of spilled values. Shared
+// between the standard reload path and the Phase 3 fold path. When a
+// def was also a read (two-address) the remap argument carries the
+// post-reload vreg id so the store writes the updated value, not the
+// stale pre-reload id.
+//
+// We look at defs on the ORIGINAL packed op (not finalPacked). For two-
+// address ops that both read and write a spilled value, the remap above
+// rewrote the dest to the reload's fresh id, so noteOpDefs on finalPacked
+// would report the fresh id (not spilled) and miss the store. Looking at
+// the original op ensures we still see the spilled def; if that def was
+// remapped, the store writes the remapped register's value back to the
+// original spill slot, keeping subsequent reloads coherent.
+function processDefsForOp(module TargetModule, state SpillInsertState, packed OpIndex, dstOps OpIndexList, remap RegIntArray, regTarget RegAllocTarget, reloadCacheIds RegIntArray)
 	var defs = RegIntArray.create()
 	regTarget.noteOpDefs(module, defBlocks: defs, blockIdx: 1, packed: packed)
 
 	var di = 0
 	while di < defs.count() 'checkDefs'
-		let defBlock = try defs.get(di) otherwise panic("processOp.checkDefs: di < defs.count() by loop guard but get({di}) failed")
+		let defBlock = try defs.get(di) otherwise panic("processDefsForOp.checkDefs: di < defs.count() by loop guard but get({di}) failed")
 
 		if defBlock == 1 'isDef'
-			let slotOffset = getOr(state.spillSlots, index: di, fallback: RM_NONE)
+			let isRematDef = try state.rematerializeIds.get(di) otherwise false
+			if isRematDef 'rematDef'
+				// Constant-defining op: the def's result vreg is dead
+				// from this point — every use will rematerialize from
+				// the constant. No spill store needed.
+				di = di + 1
+				continue
+			end 'rematDef'
 
+			let slotOffset = getOr(state.spillSlots, index: di, fallback: RM_NONE)
 			if slotOffset != RM_NONE 'isSpilledDef'
 				let rc = getOr(state.spillRegClass, index: di, fallback: SPILL_RC_GPR)
 				let stackOff = computeStackOffset(state, slotOffset: slotOffset)
@@ -296,9 +827,13 @@ function processOp(module TargetModule, state SpillInsertState, packed OpIndex, 
 					storeId = remappedId
 				end 'isRemap'
 				regTarget.emitSpillStore(module, ops: dstOps, valueId: storeId, stackOffset: stackOff, regClass: rc)
+				// The slot now holds a NEW definition. Invalidate any
+				// cached reload vreg for this valueId so subsequent
+				// reads reload the fresh data.
+				set(reloadCacheIds, index: di, value: RM_NONE, sentinel: RM_NONE)
 			end 'isSpilledDef'
 		end 'isDef'
 
 		di = di + 1
 	end 'checkDefs'
-end 'processOp'
+end 'processDefsForOp'

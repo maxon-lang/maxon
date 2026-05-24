@@ -17,6 +17,20 @@ let LR_NO_DEF = i64.max
 // Cranelift regalloc2 — both guarantee spill-loop termination.
 export let SPILL_WEIGHT_INFINITE = i64.max
 
+// LiveRangeStage — tracks how many times a range has been split by the
+// call-boundary splitter, mirroring LLVM Greedy's LiveRangeStage. The spill
+// loop reads this to enforce LLVM's RS_Split2 progress rule (each split must
+// produce strictly shorter sub-ranges) so the iteration provably terminates.
+// Phi-merge sub-ranges and reload vregs are stamped RS_DONE so the splitter
+// skips them (they have no useful split point — their def and only use
+// coincide). The stage lives in a sidetable owned by FunctionRegAllocator
+// (stageByValueId) since LiveRange is rebuilt from scratch on every spill
+// iteration; buildLiveRanges loads from the sidetable into range.stage.
+export let RS_NEW = 0
+export let RS_SPLIT1 = 1
+export let RS_SPLIT2 = 2
+export let RS_DONE = 3
+
 export union RegClass
 	gpr
 	fp
@@ -115,6 +129,22 @@ export type LiveRange
 	// callee-save area cost), while ranges that do should land in callee-saved
 	// registers to avoid spill-around-call sequences.
 	export var crossesCall bool
+	// Split-attempt counter for the call-boundary splitter; one of RS_NEW,
+	// RS_SPLIT1, RS_SPLIT2, RS_DONE. Loaded from FunctionRegAllocator's
+	// stageByValueId sidetable on every rebuild. Reload vregs and phi-merge
+	// sub-ranges are RS_DONE; everything else starts RS_NEW and advances on
+	// each split.
+	export var stage RegInt
+	// Eviction counter for the Greedy-style colorer; bounded by MAX_CASCADE.
+	// Loaded from FunctionRegAllocator's cascadeByValueId sidetable on every
+	// rebuild. Each time SSAColoring evicts this range so a higher-priority
+	// range can take its register, the cascade is incremented and persisted
+	// back to the sidetable. The cascade bound guarantees termination of the
+	// PQ-driven coloring loop: an evictee always has strictly-smaller
+	// (weight, cascade) than the evictor, so the lexicographic ordering is
+	// strictly increasing across each eviction. Mirrors LLVM Greedy's
+	// eviction cascade and regalloc2's bundle "weight tier".
+	export var cascade RegInt
 
 	export static function create(valueId ValueId) returns LiveRange
 		return Self{
@@ -132,7 +162,9 @@ export type LiveRange
 			hint: RM_NONE,
 			copyHintValueId: -1,
 			copyEdges: CopyEdgeArray.create(),
-			crossesCall: false
+			crossesCall: false,
+			stage: RS_NEW,
+			cascade: 0
 		}
 	end 'create'
 end 'LiveRange'
@@ -168,7 +200,7 @@ end 'hasCopyEdgeAt'
 // Public entry point
 // ============================================================
 
-export function buildLiveRanges(module TargetModule, func IrFunction, cfg CfgInfo, liveness LivenessInfo, loopDepth RegIntArray, regTarget RegAllocTarget, opQuery TargetOpQuery, reloadIds BoolArray) returns LiveRangeArray
+export function buildLiveRanges(module TargetModule, func IrFunction, cfg CfgInfo, liveness LivenessInfo, loopDepth RegIntArray, regTarget RegAllocTarget, opQuery TargetOpQuery, reloadIds BoolArray, stageByValueId RegIntArray, rematerializeIds BoolArray, rematerializeValueByValueId RegIntArray, cascadeByValueId RegIntArray) returns LiveRangeArray
 	let maxVal = liveness.maxValueId
 
 	// Phase 1: Build definition map — defBlockId[valueId] and defPos[valueId]
@@ -180,6 +212,26 @@ export function buildLiveRanges(module TargetModule, func IrFunction, cfg CfgInf
 
 	initDefArrays(defBlockId, defPos: defPos, defRegClass: defRegClass, isConst: isConst, constVal: constVal, size: maxVal)
 	scanDefinitions(module, func: func, defBlockId: defBlockId, defPos: defPos, defRegClass: defRegClass, isConst: isConst, constVal: constVal, regTarget: regTarget, opQuery: opQuery)
+
+	// Merge in the cumulative remat sidetable from FunctionRegAllocator.
+	// Vregs in `rematerializeIds` were classified rematerializable on a
+	// previous iteration (either originally by detectConstant, or minted
+	// by SpillCodeInsertion as a remat copy). Re-stamping them as
+	// constants here keeps the property transitive across rebuilds:
+	// `isRematerializable=true` causes spillClass to route them away
+	// from the spill set on the next pressure crunch instead of letting
+	// them chain-spill.
+	let nRemat = rematerializeIds.count()
+	var rvi = 0
+	while rvi < nRemat and rvi < maxVal 'mergeRemat'
+		let bit = try rematerializeIds.get(rvi) otherwise false
+		if bit 'isRemat'
+			let v = getOr(rematerializeValueByValueId, index: rvi, fallback: 0)
+			try isConst.set(rvi, value: true) otherwise panic("invariant: isConst.set OOB while merging remat sidetable")
+			try constVal.set(rvi, value: v) otherwise panic("invariant: constVal.set OOB while merging remat sidetable")
+		end 'isRemat'
+		rvi = rvi + 1
+	end 'mergeRemat'
 
 	// Phase 2: Build last-use-in-block map for interval end points
 	let lastUseInBlock = buildRegIntArray(module, func: func, maxVal: maxVal, regTarget: regTarget)
@@ -231,9 +283,20 @@ export function buildLiveRanges(module TargetModule, func IrFunction, cfg CfgInf
 		let isReload = try reloadIds.get(vid) otherwise false
 		if isReload 'reloadInfWeight'
 			range.spillWeight = SPILL_WEIGHT_INFINITE
+			range.stage = RS_DONE
+			set(stageByValueId, index: vid, value: RS_DONE, sentinel: RS_NEW)
 		end 'reloadInfWeight' else 'normalWeight'
 			range.spillWeight = computeSpillWeight(range, loopDepth: loopDepth)
+			range.stage = getOr(stageByValueId, index: vid, fallback: RS_NEW)
 		end 'normalWeight'
+
+		// Persist eviction cascade across liveness rebuilds. The colorer
+		// writes back the bumped cascade to cascadeByValueId after each
+		// eviction so subsequent iterations remember how many times the
+		// range has already been evicted (the eviction rule requires
+		// strictly-smaller evictee cascade, so a range that has been
+		// evicted MAX_CASCADE times can never be evicted again).
+		range.cascade = getOr(cascadeByValueId, index: vid, fallback: 0)
 
 		ranges.push(range)
 		vid = vid + 1
@@ -367,7 +430,7 @@ end 'intervalsContain'
 // a call instruction lives. The position scheme matches buildIntervalsForValue
 // (1-indexed; opIdx + 1). Blocks with no calls get an empty list. The result
 // is keyed by raw blockId, so the array length is maxBlockId + 1.
-function buildCallPositionsPerBlock(module TargetModule, func IrFunction, opQuery TargetOpQuery) returns RegIntArrayArray
+export function buildCallPositionsPerBlock(module TargetModule, func IrFunction, opQuery TargetOpQuery) returns RegIntArrayArray
 	var maxBlockId = 0
 	for blockRef in func.blockRefs 'findMax'
 		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
@@ -548,6 +611,7 @@ function defRegClassForPattern(pat OpPattern) returns RegInt
 		fpToGpr gives 0
 		baseUseFpUse gives 0
 		movRegReg to csel gives 0
+		baseUseUseDef to defUseImm gives 0
 	end 'check'
 end 'defRegClassForPattern'
 

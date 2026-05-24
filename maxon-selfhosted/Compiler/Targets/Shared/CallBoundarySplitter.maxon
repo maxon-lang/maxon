@@ -1,0 +1,337 @@
+// Call-boundary live-range splitter.
+//
+// When a virtual range L is live across a call instruction at position P in
+// block B, the call clobbers every caller-saved register, forcing L to either
+// land in a callee-saved register or be spilled across the call. If the
+// initial coloring fails for L (too many call-crossing values for the
+// callee-saved pool), the spill loop's only previous recourse was to spill L
+// whole — and if the resulting reload at L's first post-call use itself
+// couldn't be colored at that instruction-slot, the allocator panicked at
+// RegisterAllocator.maxon:780.
+//
+// This pass implements LLVM Greedy's tryLocalSplit (and Cranelift regalloc2's
+// single split strategy): break L at the call boundary into a pre-call piece
+// (still named L) and a post-call piece (a fresh vreg L_post). The boundary
+// is an explicit `movRegReg L_post, L` op inserted immediately before the
+// call. Each piece is colored independently; the colorer can put them in
+// different physical registers, or spill just one half, or even keep both in
+// the same callee-saved register (the copy hint collapses the mov to a self-
+// move). The post-call piece is the only one that needs to survive the call
+// clobbers; the pre-call piece is free to land in a caller-saved register.
+//
+// Termination follows LLVM's RS_Split2 progress rule, encoded via the
+// LiveRange.stage field: RS_NEW → RS_SPLIT1 → RS_SPLIT2 → spill. A range that
+// has already been split twice (RS_SPLIT2) is not eligible for further
+// splitting and must go through the normal spill path.
+//
+// The splitter does NOT synthesize a LiveRange for L_post or mutate L's
+// intervals. It rewrites MIR (inserts the mov, remaps uses) and bumps stage
+// in the sidetable; the next iteration of runSpillColorLoop rebuilds
+// liveness from scratch, discovering L_post and computing correct intervals
+// with the shifted op positions baked in.
+
+// Try to split `range` at the first call boundary inside its single block.
+// Returns true if the split succeeded (the caller should skip the normal
+// spill path for this range and trigger a liveness rebuild). Returns false
+// when the range is ineligible (stage too advanced, no interior call,
+// multiple blocks, etc.); the caller falls through to spilling.
+//
+// Mutations on success:
+//   • inserts one virtual movRegReg op into `range.defBlock`'s opRefs
+//   • rewrites every read of range.valueId at or after the call to L_post
+//   • rewrites matching argIds in `range.defBlock`'s branchEdges
+//   • bumps stageByValueId[range.valueId] (RS_NEW → RS_SPLIT1, etc.)
+//   • writes stageByValueId[L_post] = RS_NEW
+//
+// Op positions in the block shift by +1 after the splice; this is absorbed
+// by the next runLivenessAndRanges call, which recomputes positions from
+// scratch. Callers must NOT consume any pre-existing position values from
+// `ranges` after a successful split until liveness is rebuilt.
+
+// Find the source vreg that the predecessor block `predBlockId` passes to the
+// merge `mergeVid` on its outgoing branch edge. The merge lives as a block-arg
+// at index argIdx in some successor block S; the source is whatever the pred's
+// branchEdge to S puts at edge.argIds[argIdx]. Returns -1 on lookup failure
+// (merge not found as block-arg, no edge from pred to S, etc.).
+//
+// This is the key for splitting on behalf of an uncolorable phi-merge: when the
+// merge itself can't be split (its def-block interval has no calls — e.g. it's
+// a loop header), the source value flowing in along the pred's body-block
+// branch IS the call-crossing range that needs splitting. After splitting that
+// source, the body-block branch passes L_post instead of L, the phi-merge
+// receives the post-call value, and pressure at the merge's predecessor copy
+// slot drops because L_post's live range is narrower than L's was.
+export function findPhiSourceVreg(module TargetModule, func IrFunction, mergeVid ValueId, predBlockId BlockId) returns ValueId
+	// Find the block whose blockArgs contains mergeVid, and the arg index.
+	var mergeBlockId = -1
+	var argIdx = -1
+	for blockRef in func.blockRefs 'findMergeBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
+		var i = 0
+		for arg in block.blockArgs 'eachArg'
+			if arg.valueId == mergeVid 'match'
+				mergeBlockId = block.id
+				argIdx = i
+				break 'findMergeBlock'
+			end 'match'
+			i = i + 1
+		end 'eachArg'
+	end 'findMergeBlock'
+
+	if mergeBlockId < 0 'noMergeBlock'
+		return -1
+	end 'noMergeBlock'
+
+	// Find the predecessor block and its branchEdge to mergeBlockId.
+	let predBlock = findBlockById(module, func: func, blockId: predBlockId)
+	for edge in predBlock.branchEdges 'eachEdge'
+		if edge.targetBlockId == mergeBlockId 'match'
+			let srcVid = try edge.argIds.get(argIdx) otherwise -1
+			return srcVid
+		end 'match'
+	end 'eachEdge'
+
+	return -1
+end 'findPhiSourceVreg'
+
+// Encapsulates the next available valueId so the caller can mint multiple
+// L_post ids in the same iteration without re-scanning the (stale) ranges
+// array. Allocator owns one of these per spill loop and seeds it from the
+// per-iteration max once before Pass 1; trySplitAtCall bumps it on each
+// success and the caller hands the same nextId back on the next call.
+export type SplitNextId
+	export var value RegInt
+
+	export static function create(initial RegInt) returns SplitNextId
+		return Self{value: initial}
+	end 'create'
+end 'SplitNextId'
+
+// Compute the initial nextValueId for a Pass 1 by scanning the ranges array
+// for max + 1. Mirrors splitMultiAnchorMerges lines 119-124.
+export function initialNextValueId(ranges LiveRangeArray) returns RegInt
+	var nextValueId = 0
+	for r in ranges 'findMax'
+		if r.valueId >= nextValueId 'higher'
+			nextValueId = r.valueId + 1
+		end 'higher'
+	end 'findMax'
+	return nextValueId
+end 'initialNextValueId'
+
+export function trySplitAtCall(range LiveRange, func IrFunction, module TargetModule, regTarget RegAllocTarget, callPositionsPerBlock RegIntArrayArray, stageByValueId RegIntArray, nextId SplitNextId) returns bool
+	// Eligibility gate 1: stage check (RS_Split2 progress rule).
+	if range.stage >= RS_SPLIT2 'tooManySplits'
+		logTrace(LogCategory.ir, message: function() gives "regalloc.split: reject v{range.valueId} stage={range.stage}")
+		return false
+	end 'tooManySplits'
+
+	// Eligibility gate 2: skip physical pseudo-ranges.
+	if range.fixedReg != RM_NONE 'isFixed'
+		logTrace(LogCategory.ir, message: function() gives "regalloc.split: reject v{range.valueId} fixedReg")
+		return false
+	end 'isFixed'
+
+	// Eligibility gate 3: skip reloads and pre-marked sub-ranges.
+	if range.spillWeight == SPILL_WEIGHT_INFINITE 'isInfinite'
+		logTrace(LogCategory.ir, message: function() gives "regalloc.split: reject v{range.valueId} inf weight")
+		return false
+	end 'isInfinite'
+
+	// Eligibility gate 4: the split must happen in `range.defBlock`, and
+	// that block must contain a call interior to range's def-block interval
+	// (the segment from defPosition to wherever the value dies in that
+	// block). Splits in other blocks would read range.valueId before its
+	// def, which is invalid SSA.
+	//
+	// Multi-block ranges are handled "locally": we only rewrite uses INSIDE
+	// the def block, leaving other-block intervals attached to L. This is
+	// safe because:
+	//   • Branch edges out of the def block at the end of the block are
+	//     rewritten (step 5) — successors receiving L via blockArg copy get
+	//     L_post.
+	//   • Other-block intervals represent successor blocks reading L via
+	//     branchEdge argIds (handled by step 5) or live-in across phi
+	//     merges (where the merge gets L_post via the rewritten argId).
+	//   • If a successor block has a DIRECT op-level read of L (no phi),
+	//     that read would be in violation of SSA scoping anyway because L's
+	//     def is in defBlock; this case shouldn't arise for well-formed
+	//     post-mem2reg IR.
+	let intervalCount = range.intervals.count()
+	if intervalCount == 0 'noIntervals'
+		return false
+	end 'noIntervals'
+
+	let targetBlockId = range.defBlock
+
+	// Find the def-block interval and check for an interior call > defPosition.
+	let bucket = try callPositionsPerBlock.get(targetBlockId) otherwise return false
+	let callCount = bucket.count()
+	if callCount == 0 'noCallsInBlock'
+		return false
+	end 'noCallsInBlock'
+
+	var chosenCallPos = -1
+	var ivScan = 0
+	while ivScan < intervalCount 'findCallInInterval'
+		let iv = try range.intervals.get(ivScan) otherwise panic("trySplitAtCall.findCallInInterval: ivScan < intervalCount but get({ivScan}) failed")
+		if iv.blockId != targetBlockId 'wrongBlock'
+			ivScan = ivScan + 1
+			continue
+		end 'wrongBlock'
+		let lo = iv.startPos + 1
+		let hi = iv.endPos - 1
+		if lo < hi 'wideEnough'
+			var ci = 0
+			while ci < callCount 'eachCallPos'
+				let cp = try bucket.get(ci) otherwise panic("trySplitAtCall.eachCallPos: ci < callCount but get({ci}) failed")
+				if cp >= lo and cp < hi and cp > range.defPosition 'inWindow'
+					chosenCallPos = cp
+					break 'findCallInInterval'
+				end 'inWindow'
+				ci = ci + 1
+			end 'eachCallPos'
+		end 'wideEnough'
+		ivScan = ivScan + 1
+	end 'findCallInInterval'
+
+	if chosenCallPos < 0 'noInteriorCall'
+		logTrace(LogCategory.ir, message: function() gives "regalloc.split: reject v{range.valueId} no interior call in defBlock={targetBlockId} defPos={range.defPosition} (intervals={intervalCount})")
+		return false
+	end 'noInteriorCall'
+
+	// Refuse to split when range.valueId is REDEFINED by some op in the
+	// def-block at or past chosenCallPos. The rewriteUses loop below stops
+	// at a redef but still rewrites the redef itself, which makes lPost
+	// have two defs (boundary mov + the redef) AND leaves downstream uses
+	// of range.valueId reading a stale value (since the redef now writes
+	// to lPost, not range.valueId). The fix is to refuse the split — the
+	// spill loop falls through to the normal spill path for this range.
+	//
+	// In post-MIR x64 IR, 2-address ops surface as `addRegReg(dest, src)`
+	// where dest is BOTH read and written. The preceding `movRegReg dest,
+	// leftId` in lowerIntBinOp makes the dest fresh per op pair, but if a
+	// later op uses the same dest as a 2-addr dest, that constitutes a redef
+	// of the dest's vreg from the SSA-naming perspective.
+	let precheckBlock = findBlockById(module, func: func, blockId: targetBlockId)
+	let precheckOpCount = precheckBlock.opRefs.count()
+	var preOi = chosenCallPos
+	while preOi < precheckOpCount 'redefScan'
+		let packed = try precheckBlock.opRefs.get(preOi) otherwise panic("trySplitAtCall.redefScan: preOi < count but get({preOi}) failed")
+		var defs = RegIntArray.create()
+		regTarget.noteOpDefs(module, defBlocks: defs, blockIdx: 1, packed: packed)
+		let defMark = getOr(defs, index: range.valueId, fallback: -1)
+		if defMark == 1 'isRedef'
+			// Found a redef before any rewrite — bail out cleanly.
+			logTrace(LogCategory.ir, message: function() gives "regalloc.split: reject v{range.valueId} redef at opIdx={preOi} in defBlock={targetBlockId}")
+			return false
+		end 'isRedef'
+		preOi = preOi + 1
+	end 'redefScan'
+
+	// Allocate L_post's valueId from the caller-owned counter. We can't scan
+	// `ranges` for max + 1 here: in the same iteration multiple splits can
+	// succeed, and the splitter does NOT push new entries into `ranges` (it
+	// relies on the next liveness rebuild). So the second call would mint
+	// the same id as the first, causing two distinct values to collide on
+	// one vreg.
+	let lPostId = nextId.value
+	nextId.value = nextId.value + 1
+
+	// Locate the block in the function. findBlockById panics on miss, but
+	// we know targetBlockId came from L's intervals which came from this
+	// function's blocks, so a miss would be a real invariant violation.
+	var block = findBlockById(module, func: func, blockId: targetBlockId)
+
+	// Map regClass to the RegInt encoding used by emitVirtualMov /
+	// emitSpillStore (0 = gpr, 1 = fp). Matches SpillCodeInsertion's
+	// SPILL_RC_GPR / SPILL_RC_FP constants.
+	let rcInt = match range.regClass 'rc'
+		gpr gives 0
+		fp gives 1
+	end 'rc'
+
+	// Insert the boundary mov at opIdx = chosenCallPos - 1. Position P
+	// (1-indexed) corresponds to opIdx P-1; the call op currently lives at
+	// opIdx (chosenCallPos - 1). Inserting at that index shifts the call to
+	// opIdx chosenCallPos and everything after by +1.
+	let insertIdx = chosenCallPos - 1
+	var movOps = OpIndexList.create()
+	regTarget.emitVirtualMov(module, ops: movOps, destValueId: lPostId, srcValueId: range.valueId, regClass: rcInt)
+	insertOpsAt(block.opRefs, ops: movOps, at: insertIdx)
+
+	// Rewrite reads of range.valueId at opIdx >= chosenCallPos (i.e., from
+	// the call onward, post-shift). The call itself may have L as an arg;
+	// if so, that read also moves to L_post. Stop at any op that redefines
+	// range.valueId — uses after the redef read the new def, not L_post.
+	let opCount = block.opRefs.count()
+	var oi = chosenCallPos
+	while oi < opCount 'rewriteUses'
+		let packed = try block.opRefs.get(oi) otherwise panic("trySplitAtCall.rewriteUses: oi < opCount but get({oi}) failed")
+		var remap = RegIntArray.create()
+		set(remap, index: range.valueId, value: lPostId, sentinel: RM_NONE)
+		let newPacked = regTarget.remapOp(module, packed: packed, remap: remap)
+		// OpIndexList is a List (not Array) so there's no `set`; emulate via
+		// remove + insert at the same index.
+		try block.opRefs.remove(oi) otherwise panic("trySplitAtCall.rewriteUses: opRefs.remove({oi}) failed")
+		try block.opRefs.insert(oi, value: newPacked) otherwise panic("trySplitAtCall.rewriteUses: opRefs.insert({oi}) failed")
+
+		// Stop walking if this op redefines range.valueId.
+		var defs = RegIntArray.create()
+		regTarget.noteOpDefs(module, defBlocks: defs, blockIdx: 1, packed: packed)
+		let defMark = getOr(defs, index: range.valueId, fallback: -1)
+		if defMark == 1 'isRedef'
+			break
+		end 'isRedef'
+
+		oi = oi + 1
+	end 'rewriteUses'
+
+	// Rewrite the terminator if it's a separate op (matches the pattern at
+	// SpillCodeInsertion.maxon:78-89).
+	if block.hasTerminatorOp() 'hasTerm'
+		let termPacked = block.terminatorIndex()
+		var remap = RegIntArray.create()
+		set(remap, index: range.valueId, value: lPostId, sentinel: RM_NONE)
+		let newTerm = regTarget.remapOp(module, packed: termPacked, remap: remap)
+		block.terminator = Terminator.opIndex(newTerm)
+	end 'hasTerm'
+
+	// Rewrite branchEdges argIds. Branch args are read at the end of B,
+	// after every op including the call, so they always reference L_post.
+	var newEdges = BranchEdgeArray.create()
+	for edge in block.branchEdges 'eachEdge'
+		var newArgIds = ValueIdArray.create()
+		for argId in edge.argIds 'eachArg'
+			if argId == range.valueId 'isOurArg'
+				newArgIds.push(lPostId)
+			end 'isOurArg' else 'notOurArg'
+				newArgIds.push(argId)
+			end 'notOurArg'
+		end 'eachArg'
+		newEdges.push(BranchEdge.create(edge.targetBlockId, argIds: newArgIds))
+	end 'eachEdge'
+	block.branchEdges = newEdges
+
+	// Bump stage for the parent and seed L_post. The next runLivenessAndRanges
+	// pulls these into the freshly-built LiveRange.stage fields.
+	//
+	// Termination: L_post inherits the parent's POST-split stage, not RS_NEW.
+	// Otherwise each L_post would have a fresh split budget and a chain of
+	// splits (v44 → v191 → v271 → ...) could grow unboundedly with each new
+	// L_post starting fresh. This mirrors LLVM Greedy's RS_Split2 rule: a
+	// sub-range whose parent was already at RS_SPLIT2 must also be RS_SPLIT2,
+	// so the splitter cannot keep chasing the same value across multiple
+	// calls forever. Max chain depth from a single original range is 2 splits
+	// (RS_NEW → RS_SPLIT1 → RS_SPLIT2).
+	var newParentStage = RS_SPLIT1
+	if range.stage != RS_NEW 'alreadySplit'
+		newParentStage = RS_SPLIT2
+	end 'alreadySplit'
+	set(stageByValueId, index: range.valueId, value: newParentStage, sentinel: RS_NEW)
+	set(stageByValueId, index: lPostId, value: newParentStage, sentinel: RS_NEW)
+
+	logTrace(LogCategory.ir, message: function() gives "regalloc: split v{range.valueId} → v{lPostId} at call pos {chosenCallPos} (parent stage {range.stage} → {newParentStage})")
+
+	return true
+end 'trySplitAtCall'

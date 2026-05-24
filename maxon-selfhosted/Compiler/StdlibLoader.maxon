@@ -160,6 +160,100 @@ end 'setCachedBuiltinDictionaryLiteralTypeName'
 // inadvertently warm the disk cache for a subsequent non-bypassed leg.
 var stdlibCacheBypassed = false
 
+// Phase 0b regalloc roadmap: process-wide set of stdlib function names whose
+// source files should be dropped from the whitelist before parsing /
+// compiling the stdlib cache. Used by `spec-test --skip-stdlib-fn=NAME[,...]`
+// to bypass functions the current register allocator cannot compile (notably
+// `sha256`) so the rest of the spec suite can run while the allocator is
+// being fixed. Each entry is a *function name* (e.g. `sha256`) — the filter
+// resolves the name to the corresponding whitelist entry by matching its
+// file basename without the `.maxon` extension, case-insensitively.
+//
+// Stored lowercased so the per-file match in `collectStdlibFiles` is a flat
+// equality check. Removed by Phase 3 of the roadmap once sha256 compiles
+// cleanly; the flag becomes a no-op (no whitelist entry will match) but is
+// not deleted because future allocator phases may rely on it again.
+var skippedStdlibFunctionsLower = StringArray.create()
+
+// Original comma-separated argument as supplied on the CLI, preserved so
+// the parent process can forward it verbatim to its worker subprocesses
+// (each worker re-parses its own CLI args, so the skip set must round-trip
+// through `--skip-stdlib-fn=...` exactly as the user supplied it).
+var skippedStdlibFunctionsRaw = ByteArray.create()
+
+// Setter for the skipped-function list. Called from the spec-test entry
+// point after argument parsing, before any `warmStdlibCache(target)` call.
+// Lowercases each name once so per-file matching during `collectStdlibFiles`
+// stays a flat equality check rather than re-lowering on every call.
+//
+// `rawArg` is the original comma-separated CLI value (or "" if none) — the
+// parent process stashes it here so worker-command builders can read it
+// back via `getSkippedStdlibFunctionsArg()` without a separate plumbing
+// path through every call layer.
+export function setSkippedStdlibFunctions(names StringArray, rawArg String)
+	var lowered = StringArray.create()
+	for name in names 'each'
+		var trimmed = name.trim()
+		if trimmed.isEmpty() 'empty'
+			continue
+		end 'empty'
+		lowered.push(trimmed.toLower())
+	end 'each'
+	skippedStdlibFunctionsLower = lowered
+	skippedStdlibFunctionsRaw = rawArg.toByteArray()
+end 'setSkippedStdlibFunctions'
+
+export function getSkippedStdlibFunctionsArg() returns String
+	return String.from(skippedStdlibFunctionsRaw)
+end 'getSkippedStdlibFunctionsArg'
+
+// Test whether a whitelisted stdlib file should be dropped from the
+// per-process cache build because the user passed its function name via
+// `--skip-stdlib-fn`. Matches against the basename with `.maxon` stripped,
+// case-insensitively — so `--skip-stdlib-fn=sha256` skips
+// `stdlib/Sha256.maxon` (and any future relocations of that file).
+function isStdlibRelativePathSkipped(relPath String) returns bool
+	if skippedStdlibFunctionsLower.count() == 0 'noSkips'
+		return false
+	end 'noSkips'
+	// Extract the filename without leading directories. Whitelist entries
+	// always end in `.maxon`; the stem helper enforces that invariant.
+	let lastSlash = try relPath.findLast("/") otherwise 'noSlash'
+		// No slash → the whole string is the basename.
+		return checkStemAgainstSkipList(relPath)
+	end 'noSlash'
+	let nameStart = try relPath.indexAfter(lastSlash) otherwise 'badSlashIdx'
+		// `lastSlash` was just produced by findLast on the same string, so
+		// indexAfter can only fail if the slash is at the very end — which
+		// would mean an empty basename and a bogus whitelist entry.
+		return false
+	end 'badSlashIdx'
+	let basename = relPath.slice(nameStart, endIndex: relPath.endIndex())
+	return checkStemAgainstSkipList(basename)
+end 'isStdlibRelativePathSkipped'
+
+// Compare `basename` (filename portion of a whitelist entry, no leading
+// directory) against the lowercased skip set. The basename must end in
+// `.maxon`; the extension is stripped before the case-insensitive match.
+function checkStemAgainstSkipList(basename String) returns bool
+	if not basename.endsWith(".maxon") 'notMaxon'
+		return false
+	end 'notMaxon'
+	let dotIdx = try basename.findLast(".") otherwise 'noDot'
+		// Cannot happen: endsWith(".maxon") above guarantees a "." is
+		// present. The type system still requires the throw be handled.
+		return false
+	end 'noDot'
+	var stem = basename.slice(basename.startIndex(), endIndex: dotIdx)
+	stem = stem.toLower()
+	for skipName in skippedStdlibFunctionsLower 'eachSkip'
+		if skipName == stem 'match'
+			return true
+		end 'match'
+	end 'eachSkip'
+	return false
+end 'checkStemAgainstSkipList'
+
 export function setStdlibCacheBypassed(bypassed bool)
 	stdlibCacheBypassed = bypassed
 end 'setStdlibCacheBypassed'
@@ -250,6 +344,7 @@ let stdlibWhitelist = [
 	"stdlib/Ascii.maxon",
 	"stdlib/Build.maxon",
 	"stdlib/PrintError.maxon",
+	"stdlib/Sha256.maxon",
 	"stdlib/Unicode.maxon",
 ]
 
@@ -319,6 +414,12 @@ function collectStdlibFiles() returns FilePathArray
 		return files
 	end 'noRoot'
 	for relPath in stdlibWhitelist 'eachWhitelisted'
+		if isStdlibRelativePathSkipped(relPath) 'skipped'
+			// Phase 0b: `--skip-stdlib-fn` is dropping this file from the
+			// cache build to keep the spec suite runnable while the
+			// register allocator is being fixed.
+			continue
+		end 'skipped'
 		files.push(root.join(relPath))
 	end 'eachWhitelisted'
 	return files

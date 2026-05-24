@@ -1302,6 +1302,19 @@ function emitArm64Instruction(op Arm64Op, code ByteArray, jumpFixups BlockIdFixu
 		atomicDecMem(addrReg) then arm64EmitAtomicDecMem(code, addrReg: addrReg)
 		atomicXaddMem(resultReg, addrReg, valReg) then arm64EmitAtomicXaddMem(code, resultReg: resultReg, addrReg: addrReg, valReg: valReg)
 		stashEntryArgv then arm64EmitStashEntryArgvOp(code, rdataRelocs: rdataRelocs)
+		// Phase 2 dialect groundwork. No codegen path emits these yet — Phase 3's
+		// memory-operand fold capability flag is false on arm64, so the fold pass
+		// never builds these ops. If anything ever does, the encoder panics with a
+		// clear message so the regression is loud rather than silent miscompilation.
+		// The arm64 add/sub-imm encoding uses ADD/SUB (immediate) with a 12-bit imm
+		// (optionally shifted by 12); and/orr/eor use the bitmask-immediate encoder
+		// (N:immr:imms triple), which is non-trivial. Wiring real encoders is
+		// deferred until a phase actually emits these ops on arm64.
+		addRegImm then panic("arm64 addRegImm encoder not yet implemented (Phase 2 dialect-only)")
+		subRegImm then panic("arm64 subRegImm encoder not yet implemented (Phase 2 dialect-only)")
+		andRegImm then panic("arm64 andRegImm encoder not yet implemented (Phase 2 dialect-only)")
+		orRegImm then panic("arm64 orRegImm encoder not yet implemented (Phase 2 dialect-only)")
+		xorRegImm then panic("arm64 xorRegImm encoder not yet implemented (Phase 2 dialect-only)")
 	end 'emit'
 end 'emitArm64Instruction'
 

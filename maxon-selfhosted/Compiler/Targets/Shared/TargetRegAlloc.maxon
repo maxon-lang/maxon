@@ -46,12 +46,17 @@ export type TargetRegAlloc
 	export var hasXchg bool
 	export var spillsGrowDown bool
 	export var hasPreSeed bool
+	// True iff the target's ISA supports ALU ops that read directly from a
+	// memory operand. x64 yes; arm64 no (load-store). Lets the spill code
+	// insertion short-circuit per-use folding probes when the target can't
+	// fold anyway.
+	export var hasMemOperandAlu bool
 
 	// --- Initial spill base offset ---
 	// x64 uses 0 (spills grow down from rbp), arm64 uses 16 (past saved fp/lr).
 	export var initialSpillBase RegInt
 
-	export static function create(gprPool RegIntArray, callerSavedGprs RegIntArray, callConvGprs RegIntArray, returnGprOrd RegOrdinal, errorFlagOrd RegOrdinal, indirectCallScratchOrd RegOrdinal, gprCycleBreakOrd RegOrdinal, fpPool RegIntArray, callerSavedFps RegIntArray, callConvFps RegIntArray, returnFpOrd RegOrdinal, fpCycleBreakOrd RegOrdinal, hasXchg bool, spillsGrowDown bool, hasPreSeed bool, initialSpillBase RegInt) returns TargetRegAlloc
+	export static function create(gprPool RegIntArray, callerSavedGprs RegIntArray, callConvGprs RegIntArray, returnGprOrd RegOrdinal, errorFlagOrd RegOrdinal, indirectCallScratchOrd RegOrdinal, gprCycleBreakOrd RegOrdinal, fpPool RegIntArray, callerSavedFps RegIntArray, callConvFps RegIntArray, returnFpOrd RegOrdinal, fpCycleBreakOrd RegOrdinal, hasXchg bool, spillsGrowDown bool, hasPreSeed bool, hasMemOperandAlu bool, initialSpillBase RegInt) returns TargetRegAlloc
 		return Self{
 			gprPool: gprPool,
 			callerSavedGprs: callerSavedGprs,
@@ -72,6 +77,7 @@ export type TargetRegAlloc
 			hasXchg: hasXchg,
 			spillsGrowDown: spillsGrowDown,
 			hasPreSeed: hasPreSeed,
+			hasMemOperandAlu: hasMemOperandAlu,
 			initialSpillBase: initialSpillBase
 		}
 	end 'create'

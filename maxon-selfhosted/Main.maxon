@@ -65,6 +65,7 @@ function printUsage()
 	print("  --verbose                Show pass/fail per test\n")
 	print("  --profile-passes         Print per-pass wall-clock timings at the end of the run\n")
 	print("  --workers=N              Number of parallel batch workers (default: 12, 1=serial)\n")
+	print("  --skip-stdlib-fn=NAMES   Skip listed stdlib functions (comma-separated, by source-file basename) when warming the stdlib cache\n")
 	print("\n")
 	print("Logging (all commands):\n")
 	print("  --log=LEVEL              Set all log categories to LEVEL\n")
@@ -108,12 +109,46 @@ function runBuild(args MaxonArgs) returns ExitCode
 end 'runBuild'
 
 function runSpecTests(args MaxonArgs) returns ExitCode
+	// Phase 0b regalloc roadmap: install the `--skip-stdlib-fn=...` skip set
+	// process-wide before any spec-test path triggers `warmStdlibCache`. The
+	// per-target dispatch below may spawn worker subprocesses that re-parse
+	// their own CLI args, so each subprocess re-applies the same call to its
+	// own copy of the loader state — this top-level call only configures the
+	// parent.
+	applySkippedStdlibFunctionsFromArgs(args)
 	match args.targetOption 'dispatch'
 		host then return runSpecTestsForTarget(args)
 		all then return runAllTargetTests(args.filter)
 		x64Windows to wasm32Wasi then return runSpecTestsForTarget(args)
 	end 'dispatch'
 end 'runSpecTests'
+
+// Push `args.skipStdlibFns` into the StdlibLoader so subsequent
+// `warmStdlibCache` / `getStdlibModule` calls drop the named files from the
+// whitelist. Prints a one-line notice listing the affected names so the
+// suppression is visible in the spec-test output; silent when no flag is
+// active (default behavior unchanged).
+//
+// Worker-mode processes (those invoked with `--worker-spec=`,
+// `--worker-singles=`, or `--worker-fallback=`) suppress the notice — the
+// parent already printed it once, and printing again from every worker
+// would spam the captured stdout that the parent parses for per-spec
+// results.
+function applySkippedStdlibFunctionsFromArgs(args MaxonArgs)
+	if args.skipStdlibFns.isEmpty() 'noFlag'
+		// Still call the setter so re-runs of `runSpecTests` in the same
+		// process (cache-parity / repeated suites) cleanly reset state.
+		setSkippedStdlibFunctions(StringArray.create(), rawArg: "")
+		return
+	end 'noFlag'
+	let names = args.skipStdlibFns.split(",")
+	setSkippedStdlibFunctions(names, rawArg: args.skipStdlibFns)
+	let isWorker = not args.workerSpec.isEmpty() or not args.workerSingles.isEmpty() or not args.workerFallback.isEmpty()
+	if isWorker 'silent'
+		return
+	end 'silent'
+	print("Skipping stdlib functions due to compile errors: {args.skipStdlibFns}\n")
+end 'applySkippedStdlibFunctionsFromArgs'
 
 function runSpecTestsForTarget(args MaxonArgs) returns ExitCode
 	let target = args.target()

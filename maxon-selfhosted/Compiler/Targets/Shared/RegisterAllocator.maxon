@@ -48,6 +48,16 @@ export enum OpPattern
 	callIndirect
 	exchange
 	csel
+	// Memory-operand ALU (Phase 2 dialect groundwork): dest = dest OP [base+offset].
+	// `dest` is read+written (use+def), `base` is read-only. Used by x64
+	// addRegMem/subRegMem/andRegMem/orRegMem/xorRegMem/imulRegMem.
+	baseUseUseDef
+	// Memory-operand compare (Phase 2): lhs OP [base+offset]; both regs are
+	// read-only and no register is defined (flags only). Used by x64 cmpRegMem.
+	baseTwoUse
+	// Three-operand ALU with one immediate (Phase 2): dest = src OP imm.
+	// `dest` is def-only, `src` is read-only. Used by x64 imulRegImm.
+	defUseImm
 end 'OpPattern'
 
 // Per-value state: consolidates all value-indexed register allocator fields.
@@ -456,7 +466,7 @@ export function terminatorIsCondBrX64(module TargetModule, packed OpIndex) retur
 	return match x64Op 'check'
 		condJump gives true
 		prologue to testRaxRax gives false
-		jmp to stashEntryArgv gives false
+		jmp to imulRegImm gives false
 	end 'check'
 end 'terminatorIsCondBrX64'
 
@@ -465,7 +475,7 @@ export function terminatorIsCondBrArm64(module TargetModule, packed OpIndex) ret
 	return match a64Op 'check'
 		condBranch gives true
 		prologue to cmpRegZero gives false
-		branch to stashEntryArgv gives false
+		branch to xorRegImm gives false
 	end 'check'
 end 'terminatorIsCondBrArm64'
 
@@ -663,12 +673,41 @@ type FunctionRegAllocator
 	// the spill loop terminates: an uncolorable reload triggers a hard
 	// panic instead of being chain-respilled forever.
 	export var reloadIds BoolArray
+	// Cumulative bitmap of vregs the spiller decided to rematerialize at
+	// each use rather than spill to stack. Sibling to `reloadIds`. Each
+	// iteration's SpillDecision.rematerializeIds is unioned into this
+	// set after insertSpillCode; buildLiveRanges reads it back to stamp
+	// `isRematerializable=true` and re-populate `constantValue` on the
+	// freshly-built LiveRange so the property survives rebuilds (each
+	// minted remat vreg is itself rematerializable from the same constant
+	// — no chain-spill, no cycle).
+	export var rematerializeIds BoolArray
+	// Sidetable from valueId to the constant value to rematerialize.
+	// Populated alongside `rematerializeIds`. buildLiveRanges consults
+	// this when stamping `LiveRange.constantValue` on rebuild.
+	export var rematerializeValueByValueId RegIntArray
 	// Phi-merge splitting sidetable produced by splitMultiAnchorMerges.
 	// Empty when no phi-merge needed splitting. destroySSA consults this
 	// to dual-emit (src → sub-range → merge) parallel-copy moves at the
 	// edges that were rewritten; without an entry buildBlockArgCopies
 	// falls back to its original single-move path.
 	export var splitInfo SplitMergeInfoArray
+	// Per-valueId stage from the call-boundary splitter (RS_NEW / RS_SPLIT1 /
+	// RS_SPLIT2 / RS_DONE). Loaded into LiveRange.stage on every rebuild via
+	// buildLiveRanges. trySplitAtCall bumps entries here; phi-merge sub-ranges
+	// and reload vregs are stamped RS_DONE so they're never picked for further
+	// splitting. Default RS_NEW (sentinel 0) when not set.
+	export var stageByValueId RegIntArray
+	// Per-valueId eviction cascade from the Greedy-style colorer
+	// (SSAColoring.colorClass). Loaded into LiveRange.cascade on every
+	// rebuild via buildLiveRanges. Each time the colorer evicts a range
+	// so a higher-priority range can take its register, the cascade is
+	// bumped here. Bounded by MAX_CASCADE (see SSAColoring.maxon) so the
+	// PQ-driven coloring loop provably terminates: every eviction makes
+	// the evictee's (weight, cascade) strictly increase, and a range at
+	// cascade = MAX_CASCADE can never be evicted again. Default 0 when
+	// not set.
+	export var cascadeByValueId RegIntArray
 
 	export static function create(func IrFunction, module TargetModule, desc TargetRegAlloc, regTarget RegAllocTarget, opQuery TargetOpQuery) returns FunctionRegAllocator
 		// Placeholder fields for CFG/dom/coloring are immediately overwritten
@@ -689,7 +728,11 @@ type FunctionRegAllocator
 			ranges: LiveRangeArray.create(),
 			coloring: ColoringResult.create(0),
 			reloadIds: BoolArray.create(),
-			splitInfo: SplitMergeInfoArray.create()
+			rematerializeIds: BoolArray.create(),
+			rematerializeValueByValueId: RegIntArray.create(),
+			splitInfo: SplitMergeInfoArray.create(),
+			stageByValueId: RegIntArray.create(),
+			cascadeByValueId: RegIntArray.create()
 		}
 	end 'create'
 
@@ -711,28 +754,46 @@ type FunctionRegAllocator
 	// sub-ranges enter the interference graph independently.
 	function runLivenessAndRanges()
 		let liveness = computeLiveness(module, func: func, cfg: cfg, rpo: rpo, regTarget: regTarget)
-		ranges = buildLiveRanges(module, func: func, cfg: cfg, liveness: liveness, loopDepth: loopDepth, regTarget: regTarget, opQuery: opQuery, reloadIds: reloadIds)
+		ranges = buildLiveRanges(module, func: func, cfg: cfg, liveness: liveness, loopDepth: loopDepth, regTarget: regTarget, opQuery: opQuery, reloadIds: reloadIds, stageByValueId: stageByValueId, rematerializeIds: rematerializeIds, rematerializeValueByValueId: rematerializeValueByValueId, cascadeByValueId: cascadeByValueId)
 		insertPhysicalConstraints(module, ranges: ranges, func: func, regTarget: regTarget, opQuery: opQuery)
 		coalesceRanges(module, ranges: ranges, func: func, returnGprOrd: state.desc.returnGprOrd, errorFlagOrd: state.desc.errorFlagOrd, opQuery: opQuery)
-		splitInfo = splitMultiAnchorMerges(ranges, func: func, module: module)
+		splitInfo = splitMultiAnchorMerges(ranges, func: func, module: module, stageByValueId: stageByValueId)
 	end 'runLivenessAndRanges'
 
 	function runColoring()
-		coloring = colorSSA(ranges, domPreorder: domPreorder, gprPool: state.desc.gprPool, callerSavedGprs: state.desc.callerSavedGprs, fpPool: state.desc.fpPool, callerSavedFps: state.desc.callerSavedFps)
+		coloring = colorSSA(ranges, domPreorder: domPreorder, gprPool: state.desc.gprPool, callerSavedGprs: state.desc.callerSavedGprs, fpPool: state.desc.fpPool, callerSavedFps: state.desc.callerSavedFps, cascadeByValueId: cascadeByValueId)
 	end 'runColoring'
 
 	// Phases 4-5: iterate spill/re-color until every virtual range is colored.
 	//
-	// Termination is guaranteed by the SPILL_WEIGHT_INFINITE marker on reload
-	// vregs (set in buildLiveRanges via the cumulative `reloadIds` bitmap):
-	// every iteration strictly simplifies the interference graph because a
-	// spilled value's range collapses to def→store + load→use, and reloads
-	// can never be re-spilled. If a reload itself fails to color, the spill
-	// picker panics rather than looping. The iteration cap is therefore a
-	// safety belt; a handful of passes is enough in practice.
+	// Each iteration runs two passes over the uncolored set:
+	//   Pass 1: try to call-boundary-split each uncolored range. Successful
+	//     splits don't add to spillDec — the next iteration's liveness
+	//     rebuild discovers the L_post sub-range and re-attempts coloring.
+	//   Pass 2: for everything still uncolored after Pass 1:
+	//     • If it's a phi-merge sub-range, demote the PARENT MERGE to a
+	//       stack slot (LLVM's memory-only phi).
+	//     • If it's a normal-weight range, route it through the spill picker.
+	//     • If it's a reload (SPILL_WEIGHT_INFINITE) that can't be respilled,
+	//       panic with a rich diagnostic naming the failing value, function,
+	//       block, position, and live set. This is the clean failure mode
+	//       Phase 6 will replace with last-chance recoloring.
+	//
+	// Termination is guaranteed by:
+	//   • SPILL_WEIGHT_INFINITE on reload vregs (set in buildLiveRanges via
+	//     the cumulative `reloadIds` bitmap) — reloads never get re-spilled.
+	//   • LiveRange.stage capped at RS_SPLIT2 — each range splits at most
+	//     twice before the splitter rejects it.
+	// The iteration cap is therefore a safety belt; a handful of passes is
+	// enough in practice.
 	function runSpillColorLoop()
 		var iteration = 0
-		while iteration < 5 'spillColorLoop'
+		// Iteration cap: each spill round insertSpillCode mints reload
+		// vregs with SPILL_WEIGHT_INFINITE, which the spill picker refuses
+		// to re-spill. So the working set strictly shrinks every iteration
+		// (or panics via panicUnresolvableReload). A handful of rounds is
+		// enough in practice; 10 is a safety belt.
+		while iteration < 10 'spillColorLoop'
 			let uncoloredSpills = findUncoloredRanges(ranges, coloring: coloring)
 
 			if uncoloredSpills.count() == 0 'allColored'
@@ -741,13 +802,35 @@ type FunctionRegAllocator
 
 			logTrace(LogCategory.ir, message: function() gives "regalloc: func={state.funcName} iteration={iteration} uncolored={uncoloredSpills.count()}")
 
+			// Pass 1: call-boundary splitting (trySplitAtCall in
+			// CallBoundarySplitter.maxon). DEFERRED — the splitter is kept
+			// in the codebase for later phases but is intentionally not
+			// invoked here in Phase 1. Reasons:
+			//   • When applied broadly (every uncolored range, every
+			//     iteration), the existing splitter's "rewrite uses past
+			//     the call until first redef" rule corrupts SSA: it
+			//     remaps the redef's dest to L_post, giving L_post two
+			//     defs, AND leaves downstream reads of range.valueId
+			//     pointing at a stale value. Easy to trigger with
+			//     closure-capture-style test programs.
+			//   • Even with soundness patched, the splitter alone cannot
+			//     reduce the *total* pressure that sha256-style bodies
+			//     impose — Phase 3 (memory-operand folding) is the
+			//     mechanism that does. Pass 1 here would just shuffle
+			//     pressure around without lowering it.
+			// A later phase reintroduces the splitter once the dialect
+			// supports the right primitives and the rebuild handles the
+			// SSA reconstruction cleanly.
+
+			// Pass 2: spill (or rematerialize) every uncolored range.
 			var spillDec = SpillDecision.create()
 			// Track which parent merges we've already added so we don't push
 			// duplicate spilledRanges entries when multiple sub-ranges of the
 			// same merge are uncolored in the same iteration. RegIntArray
 			// stores 0 (not added) or 1 (added) per valueId, sentinel 0.
 			var addedMerges = RegIntArray.create()
-			for ur in uncoloredSpills 'addSpills'
+			for ur in uncoloredSpills 'pass2'
+
 				if ur.spillWeight == SPILL_WEIGHT_INFINITE 'cannotRespill'
 					// Sub-ranges minted by the LiveRangeSplitter carry
 					// SPILL_WEIGHT_INFINITE because their def and only use
@@ -777,18 +860,49 @@ type FunctionRegAllocator
 						continue
 					end 'isSubRange'
 
-					panic("regalloc: reload vreg %{ur.valueId} cannot be respilled in {state.funcName} — register pressure unresolvable, need live-range splitting or IR-level pressure reduction (class={ur.regClass.name}, iteration={iteration})")
+					// A reload vreg that can't be colored is the genuine
+					// "register pressure unresolvable" case. Future phases
+					// (memory-operand folding, eviction, last-chance
+					// recoloring) will rescue this; until then it's a hard
+					// stop with the richest diagnostic we can produce.
+					panicUnresolvableReload(ranges, ur: ur, funcName: state.funcName, iteration: iteration)
 				end 'cannotRespill'
+
+				// Rematerializable ranges (constants) "spill" by re-emitting
+				// the constant at each use; no stack slot, no spilledRanges
+				// entry. Route them to the remat sidetable and let
+				// insertSpillCode rewrite each use as a fresh movRegImm.
+				if ur.isRematerializable 'isRemat'
+					logTrace(LogCategory.ir, message: function() gives "regalloc: rematerialize %{ur.valueId} const={ur.constantValue}")
+					markRematerialize(spillDec, valueId: ur.valueId, value: ur.constantValue)
+					continue
+				end 'isRemat'
+
 				logTrace(LogCategory.ir, message: function() gives "regalloc: spill %{ur.valueId} class={ur.regClass.name} weight={ur.spillWeight} crossesCall={ur.crossesCall}")
 				spillDec.spilledRanges.push(ur)
-			end 'addSpills'
+			end 'pass2'
+
+			if spillDec.spilledRanges.count() == 0 and spillDec.rematerializeIds.count() == 0 'nothingToSpill'
+				// findUncoloredRanges reported uncolored ranges but Pass 2
+				// found nothing to spill or rematerialize. The only way to
+				// reach here is if every uncolored range hit the
+				// SPILL_WEIGHT_INFINITE branch — which already panics. If
+				// control flows here, an uncolored range slipped past
+				// every arm; treat it as a compiler bug.
+				panic("regalloc: spill loop stalled in {state.funcName} — {uncoloredSpills.count()} uncolored ranges but Pass 2 spilled nothing (iteration={iteration})")
+			end 'nothingToSpill'
+
 			allocateSpillSlots(spillDec)
-			insertSpillCode(module, func: func, spillDecision: spillDec, regTarget: regTarget)
+			insertSpillCode(module, func: func, spillDecision: spillDec, regTarget: regTarget, desc: desc)
 
 			// Union this iteration's reload bitmap into the cumulative set
 			// before rebuilding ranges, so the new reload vregs get
 			// SPILL_WEIGHT_INFINITE on the next pass.
 			unionReloadIds(reloadIds, source: spillDec.reloadIds)
+			// Same for rematerialize-minted vregs — the new minted ids
+			// must keep their rematerializable property across rebuilds.
+			unionReloadIds(rematerializeIds, source: spillDec.rematerializeIds)
+			unionRematValues(rematerializeValueByValueId, source: spillDec.rematerializeValue, ids: spillDec.rematerializeIds)
 
 			self.runLivenessAndRanges()
 			self.runColoring()
@@ -866,6 +980,97 @@ function findUncoloredRanges(ranges LiveRangeArray, coloring ColoringResult) ret
 	end 'check'
 	return uncolored
 end 'findUncoloredRanges'
+
+// Union the per-iteration rematerialize-value sidetable into the cumulative
+// one. Only valueIds set in `ids` are copied — the constant value array can
+// be sparse beyond those indices.
+function unionRematValues(dest RegIntArray, source RegIntArray, ids BoolArray)
+	let n = ids.count()
+	while dest.count() < n 'grow'
+		dest.push(0)
+	end 'grow'
+	var i = 0
+	while i < n 'each'
+		let bit = try ids.get(i) otherwise false
+		if bit 'set'
+			let v = getOr(source, index: i, fallback: 0)
+			try dest.set(i, value: v) otherwise panic("invariant: unionRematValues.dest.set OOB i={i} count={dest.count()}")
+		end 'set'
+		i = i + 1
+	end 'each'
+end 'unionRematValues'
+
+// Build a comma-separated list of every range that is colored at the same
+// program point as `ur` — useful diagnostic context for the "cannot color
+// reload" panic so an operator can see what's actually competing for the
+// register at the failing point.
+function describeLiveSet(ranges LiveRangeArray, ur LiveRange) returns String
+	if ur.intervals.count() == 0 'noIv'
+		return "(no intervals)"
+	end 'noIv'
+	let urIv = try ur.intervals.get(0) otherwise panic("invariant: count > 0 just checked")
+	let urBlock = urIv.blockId
+	let urPos = urIv.startPos
+	var parts = StringArray.create()
+	for cand in ranges 'each'
+		if cand.valueId == ur.valueId 'self'
+			continue
+		end 'self'
+		if cand.fixedReg != RM_NONE 'fixed'
+			continue
+		end 'fixed'
+		for iv in cand.intervals 'eachIv'
+			if iv.blockId == urBlock and iv.startPos <= urPos and urPos < iv.endPos 'hit'
+				parts.push("v{cand.valueId}(w={cand.spillWeight}{rematSuffix(cand)})")
+				break
+			end 'hit'
+		end 'eachIv'
+	end 'each'
+	if parts.count() == 0 'empty'
+		return "(none)"
+	end 'empty'
+	return joinStrings(parts, sep: ", ")
+end 'describeLiveSet'
+
+function rematSuffix(range LiveRange) returns String
+	if range.isRematerializable 'remat'
+		return ",remat"
+	end 'remat'
+	return ""
+end 'rematSuffix'
+
+function joinStrings(parts StringArray, sep String) returns String
+	var out = ""
+	var first = true
+	for p in parts 'each'
+		if first 'isFirst'
+			out = "{p}"
+			first = false
+		end 'isFirst' else 'rest'
+			out = "{out}{sep}{p}"
+		end 'rest'
+	end 'each'
+	return out
+end 'joinStrings'
+
+// Rich panic for the clean Phase 1 failure mode: a reload vreg made it to
+// Pass 2 with SPILL_WEIGHT_INFINITE and no parent-merge to spill instead.
+// Names the value, the function, the block, the program position, and the
+// set of colored values that overlap the failing point so the user knows
+// what's actually competing for the register.
+function panicUnresolvableReload(ranges LiveRangeArray, ur LiveRange, funcName String, iteration RegInt)
+	var blockId = -1
+	var startPos = -1
+	var endPos = -1
+	if ur.intervals.count() > 0 'hasIv'
+		let iv = try ur.intervals.get(0) otherwise panic("invariant: count > 0 just checked")
+		blockId = iv.blockId
+		startPos = iv.startPos
+		endPos = iv.endPos
+	end 'hasIv'
+	let liveSet = describeLiveSet(ranges, ur: ur)
+	panic("regalloc: cannot allocate register for reload vreg v{ur.valueId} in function `{funcName}` (class={ur.regClass.name}, block={blockId}, position={startPos}..{endPos}, iteration={iteration}). Live at this point: {liveSet}. Demand exceeds available registers — even after memory-operand folding and eviction; needs further regalloc work (last-chance recoloring, additional splitting strategies, or IR-level pressure reduction).")
+end 'panicUnresolvableReload'
 
 // ============================================================
 // Phase 7: SSA destruction

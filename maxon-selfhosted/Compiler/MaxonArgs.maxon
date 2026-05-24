@@ -51,6 +51,13 @@ export type MaxonArgs
 	// run via the per-fragment path (used when the batch rewriter rejected
 	// them mid-batch). Subprocess-isolated to contain compile-time panics.
 	export var workerFallback String
+	// Phase 0b regalloc roadmap: comma-separated list of stdlib function
+	// names whose source file should be dropped from the stdlib cache
+	// before warmStdlibCache runs. Used to bypass functions that the
+	// self-hosted register allocator currently mis-compiles (notably
+	// `sha256`) so the rest of the spec suite can run while the allocator
+	// is being fixed. Empty = default strict behavior.
+	export var skipStdlibFns String
 
 	export static function parse() returns MaxonArgs throws ArgError
 		let allArgs = CommandLine.args()
@@ -70,7 +77,8 @@ export type MaxonArgs
 			workers: 12,
 			workerSpec: "",
 			workerSingles: "",
-			workerFallback: ""
+			workerFallback: "",
+			skipStdlibFns: ""
 		}
 
 		if allArgs.count() < 2 'noArgs'
@@ -149,7 +157,10 @@ export type MaxonArgs
 				args.workerSingles = try CommandLine.optionValue(arg) otherwise ""
 			end 'isWorkerSingles' else if arg.startsWith("--worker-fallback=") 'isWorkerFallback'
 				args.workerFallback = try CommandLine.optionValue(arg) otherwise ""
-			end 'isWorkerFallback' else if not arg.startsWith("--") 'isPositional'
+			end 'isWorkerFallback' else if arg.startsWith("--skip-stdlib-fn=") 'isSkipStdlibFn'
+				// Sentinel: empty value means no functions skipped — same as omitting the flag.
+				args.skipStdlibFns = try CommandLine.optionValue(arg) otherwise ""
+			end 'isSkipStdlibFn' else if not arg.startsWith("--") 'isPositional'
 				args.path = arg
 			end 'isPositional'
 		end 'scan'

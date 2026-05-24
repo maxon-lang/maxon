@@ -409,15 +409,6 @@ function applyHoisting(module StdModule, func IrFunction, hoistedOps OpRefListAr
 		let oldOps = block.opRefs
 		block.opRefs = OpIndexList.create()
 
-		// Insert any hoisted ops before the existing ops
-		if block.id < hoistedOps.count() 'inRange'
-			let opsToInsert = try hoistedOps.get(block.id) otherwise panic("invariant: block.id < hoistedOps.count() just checked but get failed")
-
-			for hoistedPacked in opsToInsert 'insertHoisted'
-				block.opRefs.append(hoistedPacked)
-			end 'insertHoisted'
-		end 'inRange'
-
 		// Copy ops, skipping those that were hoisted out
 		for packed in oldOps 'copyOps'
 			let resultId = licmGetPackedResultId(module, opIdx: packed)
@@ -426,6 +417,22 @@ function applyHoisting(module StdModule, func IrFunction, hoistedOps OpRefListAr
 			end 'wasHoisted'
 			block.opRefs.append(packed)
 		end 'copyOps'
+
+		// Insert any hoisted ops AFTER the existing ops. The preheader may
+		// contain SSA defs that the hoisted ops use (e.g. values computed
+		// from the loop's induction-domain inputs that LICM classified as
+		// invariant). Inserting hoisted ops at the top would violate
+		// def-before-use ordering; inserting at the bottom keeps the
+		// preheader's existing def-use chain intact and places the hoisted
+		// ops just before the terminator, where the branch into the loop
+		// header consumes them.
+		if block.id < hoistedOps.count() 'inRange'
+			let opsToInsert = try hoistedOps.get(block.id) otherwise panic("invariant: block.id < hoistedOps.count() just checked but get failed")
+
+			for hoistedPacked in opsToInsert 'insertHoisted'
+				block.opRefs.append(hoistedPacked)
+			end 'insertHoisted'
+		end 'inRange'
 		// Terminators stay in place
 	end 'eachBlock'
 end 'applyHoisting'

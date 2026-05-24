@@ -2214,7 +2214,16 @@ export type Parser
 			return moduleInitName
 		end 'cached'
 		let suffix = project.moduleInitFuncs.count()
-		let name = "__module_init_{suffix}"
+		// Qualify with the namespace prefix so a stdlib file's auto-generated
+		// init (Sha256.maxon's `let sha256KTable = [...]` → `__module_init_0`
+		// under `stdlib`) doesn't collide with a user file's first init at
+		// the same suffix. The inliner's stdlib-snapshot drop step keys off
+		// bare names; collapsing both onto `__module_init_0` causes the
+		// dropFunctionsByName step to wipe the user's init alongside the
+		// stdlib one, and the user's top-level `let xs = [...]` initializer
+		// vanishes from the binary.
+		let nsPrefix = "{namespace}." if not namespace.isEmpty() else ""
+		let name = "{nsPrefix}__module_init_{suffix}"
 		var func = IrFunction.create(name, maxonReturnType: MaxonReturnType.void, paramCount: 0, maxonParamTypes: MaxonTypeArray.create(), returnLine: 0)
 		// Inits run from `mrt_start`, so they need `global` visibility — file
 		// would force visibility filtering against the runtime's empty path.

@@ -101,4 +101,50 @@ export interface RegAllocTarget
 	function emitSpillStore(module TargetModule, ops OpIndexList, valueId RegInt, stackOffset RegInt, regClass RegInt)
 
 	function emitReloadOp(module TargetModule, ops OpIndexList, freshId RegInt, stackOffset RegInt, regClass RegInt)
+
+	// Emit a virtual-to-virtual register move (movRegReg / mov fp). Used by
+	// the call-boundary live-range splitter to insert the boundary copy that
+	// separates a value's pre-call and post-call sub-ranges. After coloring,
+	// if the splitter's color hint succeeded, the resulting `mov rA, rB` has
+	// A == B and can be elided; otherwise it's a legitimate copy between
+	// distinct physical registers chosen by the colorer for the two halves.
+	// regClass: 0 = gpr (SPILL_RC_GPR), 1 = fp (SPILL_RC_FP).
+	function emitVirtualMov(module TargetModule, ops OpIndexList, destValueId RegInt, srcValueId RegInt, regClass RegInt)
+
+	// Emit a constant materialization op (movRegImm or target equivalent)
+	// targeting `freshId` with the given integer `constantValue`. Used by
+	// the spill code insertion phase to rematerialize a constant at each
+	// use site, eliminating the need to keep it register-resident across
+	// the function. regClass: 0 = gpr, 1 = fp. FP rematerialization is not
+	// yet implemented on any target — the impl should panic for regClass=1
+	// until a real use case appears (the only currently-rematerializable
+	// values are integer immediates produced by movRegImm/movRegImm32).
+	function emitRematConst(module TargetModule, ops OpIndexList, freshId RegInt, constantValue RegInt, regClass RegInt)
+
+	// Attempt to rewrite `packed` op to read `valueId` from memory at
+	// [rbp+stackOffset] instead of from a register, eliminating the need to
+	// emit a reload for this use. Returns the new op's index (as RegInt) on
+	// success, or -1 if no memory-operand variant exists for this op shape
+	// (or if the spilled valueId is in a position that isn't fold-eligible —
+	// e.g. it's the dest of a two-address op, or there are multiple memory
+	// operands needed). x64 supports many fold combinations via its
+	// `addRegMem` family; arm64 returns -1 always (load-store architecture).
+	// Returns RegInt rather than OpIndex so -1 (no fold) is representable.
+	function tryFoldReadFromSlot(module TargetModule, packed OpIndex, valueId RegInt, stackOffset RegInt) returns RegInt
+
+	// Emit a slot-to-slot data move at [rbp+destStackOffset] from
+	// [rbp+srcStackOffset] using a fixed scratch register. Used by the
+	// memory-routed-phi optimization in SpillCodeInsertion: when both the
+	// predecessor's branch-arg source and the successor's block-arg dest
+	// are spilled to the stack, the data is moved slot-to-slot instead
+	// of through a long-lived reload vreg, freeing the parallel-copy
+	// slot from accumulating one register per spilled arg.
+	function emitSlotToSlotMove(module TargetModule, ops OpIndexList, srcStackOffset RegInt, destStackOffset RegInt, regClass RegInt)
+
+	// True iff `packed` is a CALL op (callDirect/callIndirect/iatCall/
+	// syscall on x64; bl/blr on arm64). Used by the SpillCodeInsertion
+	// reload-vreg cache to invalidate cached reload vregs at call sites:
+	// reload vregs carry SPILL_WEIGHT_INFINITE so they cannot cross a
+	// call into caller-saved registers without exhausting the pool.
+	function isCallOp(module TargetModule, packed OpIndex) returns bool
 end 'RegAllocTarget'
