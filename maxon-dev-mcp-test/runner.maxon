@@ -27,8 +27,8 @@ let perFixtureTimeoutMs = 600000
 
 function main() returns ExitCode
 	let repoRoot = resolveRepoRoot()
-	let binary = locateBinary(repoRoot: repoRoot)
-	let fixturesDir = locateFixturesDir(repoRoot: repoRoot)
+	let binary = locateBinary(repoRoot)
+	let fixturesDir = locateFixturesDir(repoRoot)
 
 	print("[mcp-test] binary: {binary.path}\n")
 	print("[mcp-test] fixtures: {fixturesDir.path}\n")
@@ -69,7 +69,7 @@ function resolveRepoRoot() returns FilePath
 	let exe = try Process.executablePath() otherwise panic("resolveRepoRoot: Process.executablePath threw — runtime introspection unavailable")
 	var dir = parentDir(exe)
 	for _ in 0 upto 16 'walk'
-		let candidate = joinPath(parent: dir, segment: "bin/maxon.exe")
+		let candidate = joinPath(dir, segment: "bin/maxon.exe")
 		if File.exists(candidate) 'found'
 			return dir
 		end 'found'
@@ -96,7 +96,7 @@ function locateBinary(repoRoot FilePath) returns FilePath
 		end 'missingOverride'
 		return overridePath
 	end 'haveOverride'
-	let path = joinPath(parent: repoRoot, segment: "maxon-dev-mcp/.maxon/maxon-dev-mcp.exe")
+	let path = joinPath(repoRoot, segment: "maxon-dev-mcp/.maxon/maxon-dev-mcp.exe")
 	if not File.exists(path) 'missing'
 		panic("locateBinary: server binary not found at {path.path}. Build it via `build_mcp` in build.maxon first.")
 	end 'missing'
@@ -104,7 +104,7 @@ function locateBinary(repoRoot FilePath) returns FilePath
 end 'locateBinary'
 
 function locateFixturesDir(repoRoot FilePath) returns FilePath
-	return joinPath(parent: repoRoot, segment: "maxon-dev-mcp-test/fixtures")
+	return joinPath(repoRoot, segment: "maxon-dev-mcp-test/fixtures")
 end 'locateFixturesDir'
 
 type Fixture
@@ -131,7 +131,7 @@ function collectFixtures(dir FilePath) returns FixtureArray
 			continue
 		end 'notInput'
 		let name = stripSuffix(lastSegment(entry), suffix: ".in.json")
-		let assertPath = joinPath(parent: dir, segment: "{name}.assert.json")
+		let assertPath = joinPath(dir, segment: "{name}.assert.json")
 		if not File.exists(assertPath) 'noAssert'
 			print("[mcp-test] WARN: skipping {name} (no matching .assert.json)\n")
 			continue
@@ -215,9 +215,9 @@ function runFixture(fixture Fixture, binary FilePath) returns bool
 	end 'readErr'
 
 	var c = Configuration.create(Executable.path(binary))
-	c.standardInput = InputSource.bytes(data: input)
-	c.standardOutput = OutputDestination.collect(limitBytes: 16 * 1024 * 1024)
-	c.standardError = OutputDestination.collect(limitBytes: 1024 * 1024)
+	c.standardInput = InputSource.bytes(input)
+	c.standardOutput = OutputDestination.collect(16 * 1024 * 1024)
+	c.standardError = OutputDestination.collect(1024 * 1024)
 	c.timeoutMs = perFixtureTimeoutMs
 
 	let collected = try c.run() otherwise (err) 'runErr'
@@ -234,7 +234,7 @@ function runFixture(fixture Fixture, binary FilePath) returns bool
 		return false
 	end 'parseAErr'
 
-	return runAssertions(actualStdout: collected.stdout, actualStderr: collected.stderr, exitCode: collected.exitCode(), assertDoc: assertDoc)
+	return runAssertions(collected.stdout, actualStderr: collected.stderr, exitCode: collected.exitCode(), assertDoc: assertDoc)
 end 'runFixture'
 
 // `.assert.json` is either:
@@ -253,7 +253,7 @@ function runAssertions(actualStdout String, actualStderr String, exitCode ExitCo
 			return false
 		end 'noResp'
 		let firstResp = try responses.get(0) otherwise panic("runAssertions: responses.get(0) OOB — just checked")
-		let ok = walkAssertion(actualDoc: firstResp, actualId: firstResp.root, assertDoc: assertDoc, assertId: assertDoc.root, path: "$")
+		let ok = walkAssertion(firstResp, actualId: firstResp.root, assertDoc: assertDoc, assertId: assertDoc.root, path: "$")
 		if ok 'pass'
 			print("OK\n")
 		end 'pass'
@@ -287,7 +287,7 @@ function runAssertions(actualStdout String, actualStderr String, exitCode ExitCo
 	for i in 0 upto expectedCount 'each'
 		let respAssertId = try respNode.children.get(i) otherwise panic("runAssertions: responses children.get OOB")
 		let resp = try responses.get(i) otherwise panic("runAssertions: responses.get OOB after count check")
-		let ok = walkAssertion(actualDoc: resp, actualId: resp.root, assertDoc: assertDoc, assertId: respAssertId, path: "$.responses[{i}]")
+		let ok = walkAssertion(resp, actualId: resp.root, assertDoc: assertDoc, assertId: respAssertId, path: "$.responses[{i}]")
 		if not ok 'fail'
 			return false
 		end 'fail'
@@ -334,7 +334,7 @@ end 'splitJsonLines'
 /// Walk the assertion subtree at `assertId` against the actual subtree at
 /// `actualId`. Returns true on success. On the first mismatch prints a
 /// FAIL line describing the JSON path + reason and returns false.
-/// 
+///
 /// Recognised assertion forms at the leaf:
 ///   {"equals": <any>}, {"isString": true}, {"isNumber": true},
 ///   {"isBool": true}, {"present": true}, {"contains": "..."},
@@ -434,7 +434,7 @@ function walkRecursiveObject(actualDoc JsonDoc, actualId JsonNodeId, assertDoc J
 			return false
 		end 'noKey'
 		let subPath = "{path}.{key}"
-		let ok = walkAssertion(actualDoc: actualDoc, actualId: childActualId, assertDoc: assertDoc, assertId: childAssertId, path: subPath)
+		let ok = walkAssertion(actualDoc, actualId: childActualId, assertDoc: assertDoc, assertId: childAssertId, path: subPath)
 		if not ok 'fail'
 			return false
 		end 'fail'
@@ -456,7 +456,7 @@ function walkArrayAssertion(actualDoc JsonDoc, actualId JsonNodeId, assertDoc Js
 	for i in 0 upto len 'each'
 		let aId = try assertNode.children.get(i) otherwise panic("walkArrayAssertion: assert.children.get OOB")
 		let cId = try actualNode.children.get(i) otherwise panic("walkArrayAssertion: actual.children.get OOB")
-		let ok = walkAssertion(actualDoc: actualDoc, actualId: cId, assertDoc: assertDoc, assertId: aId, path: "{path}[{i}]")
+		let ok = walkAssertion(actualDoc, actualId: cId, assertDoc: assertDoc, assertId: aId, path: "{path}[{i}]")
 		if not ok 'fail'
 			return false
 		end 'fail'
@@ -469,7 +469,7 @@ end 'walkArrayAssertion'
 // =============================================================================
 
 function matchExact(actualDoc JsonDoc, actualId JsonNodeId, assertDoc JsonDoc, assertId JsonNodeId, path String) returns bool
-	if jsonValuesEqual(a: actualDoc, aId: actualId, b: assertDoc, bId: assertId) 'eq'
+	if jsonValuesEqual(actualDoc, aId: actualId, b: assertDoc, bId: assertId) 'eq'
 		return true
 	end 'eq'
 	print("FAIL at {path}: value mismatch\n  expected: {Json.stringify(subDoc(assertDoc, root: assertId))}\n  actual:   {Json.stringify(subDoc(actualDoc, root: actualId))}\n")
@@ -536,7 +536,7 @@ function checkLengthThenMaybeItems(actualDoc JsonDoc, actualId JsonNodeId, asser
 	for i in 0 upto itemsLen 'each'
 		let perItemAssertId = try itemsNode.children.get(i) otherwise panic("checkLength: items.children.get OOB")
 		let perItemActualId = try actualNode.children.get(i) otherwise panic("checkLength: actual.children.get OOB after length match")
-		let ok = walkAssertion(actualDoc: actualDoc, actualId: perItemActualId, assertDoc: assertDoc, assertId: perItemAssertId, path: "{path}[{i}]")
+		let ok = walkAssertion(actualDoc, actualId: perItemActualId, assertDoc: assertDoc, assertId: perItemAssertId, path: "{path}[{i}]")
 		if not ok 'fail'
 			return false
 		end 'fail'
@@ -554,7 +554,7 @@ function checkParseJsonText(actualDoc JsonDoc, actualId JsonNodeId, assertDoc Js
 		return false
 	end 'parseErr'
 	let innerAssertId = try assertDoc.getChild(assertId, key: "parseJsonText") otherwise panic("checkParseJsonText: inner key just confirmed present")
-	return walkAssertion(actualDoc: parsed, actualId: parsed.root, assertDoc: assertDoc, assertId: innerAssertId, path: "{path}(parsed)")
+	return walkAssertion(parsed, actualId: parsed.root, assertDoc: assertDoc, assertId: innerAssertId, path: "{path}(parsed)")
 end 'checkParseJsonText'
 
 // =============================================================================
@@ -600,8 +600,8 @@ function jsonValuesEqual(a JsonDoc, aId JsonNodeId, b JsonDoc, bId JsonNodeId) r
 		jsonBool gives an.boolValue == bn.boolValue
 		jsonNumber gives an.numberValue == bn.numberValue
 		jsonString gives an.stringValue.equals(bn.stringValue)
-		jsonArray gives jsonArraysEqual(a: a, an: an, b: b, bn: bn)
-		jsonObject gives jsonObjectsEqual(a: a, an: an, b: b, bn: bn)
+		jsonArray gives jsonArraysEqual(a, an: an, b: b, bn: bn)
+		jsonObject gives jsonObjectsEqual(a, an: an, b: b, bn: bn)
 	end 'k'
 end 'jsonValuesEqual'
 
@@ -613,7 +613,7 @@ function jsonArraysEqual(a JsonDoc, an JsonNode, b JsonDoc, bn JsonNode) returns
 	for i in 0 upto n 'each'
 		let aChild = try an.children.get(i) otherwise panic("jsonArraysEqual: an.children.get OOB")
 		let bChild = try bn.children.get(i) otherwise panic("jsonArraysEqual: bn.children.get OOB")
-		if not jsonValuesEqual(a: a, aId: aChild, b: b, bId: bChild) 'mismatch'
+		if not jsonValuesEqual(a, aId: aChild, b: b, bId: bChild) 'mismatch'
 			return false
 		end 'mismatch'
 	end 'each'
@@ -633,7 +633,7 @@ function jsonObjectsEqual(a JsonDoc, an JsonNode, b JsonDoc, bn JsonNode) return
 		end 'keyMismatch'
 		let aChild = try an.children.get(i) otherwise panic("jsonObjectsEqual: an.children.get OOB")
 		let bChild = try bn.children.get(i) otherwise panic("jsonObjectsEqual: bn.children.get OOB")
-		if not jsonValuesEqual(a: a, aId: aChild, b: b, bId: bChild) 'valMismatch'
+		if not jsonValuesEqual(a, aId: aChild, b: b, bId: bChild) 'valMismatch'
 			return false
 		end 'valMismatch'
 	end 'each'
@@ -645,7 +645,7 @@ end 'jsonObjectsEqual'
 // diff message without dragging the surrounding arena's root with it.
 function subDoc(src JsonDoc, root JsonNodeId) returns JsonDoc
 	var out = JsonDoc.create()
-	out.root = copyNode(src: src, srcId: root, dst: out)
+	out.root = copyNode(src, srcId: root, dst: out)
 	return out
 end 'subDoc'
 
@@ -656,8 +656,8 @@ function copyNode(src JsonDoc, srcId JsonNodeId, dst JsonDoc) returns JsonNodeId
 		jsonBool then return dst.add(JsonNode.boolNode(node.boolValue))
 		jsonNumber then return dst.add(JsonNode.numberNode(node.numberValue))
 		jsonString then return dst.add(JsonNode.stringNode(node.stringValue))
-		jsonArray then return copyArray(src: src, node: node, dst: dst)
-		jsonObject then return copyObject(src: src, node: node, dst: dst)
+		jsonArray then return copyArray(src, node: node, dst: dst)
+		jsonObject then return copyObject(src, node: node, dst: dst)
 	end 'k'
 end 'copyNode'
 
@@ -666,7 +666,7 @@ function copyArray(src JsonDoc, node JsonNode, dst JsonDoc) returns JsonNodeId
 	let n = node.children.count()
 	for i in 0 upto n 'each'
 		let cId = try node.children.get(i) otherwise panic("copyArray: children.get OOB")
-		ids.push(copyNode(src: src, srcId: cId, dst: dst))
+		ids.push(copyNode(src, srcId: cId, dst: dst))
 	end 'each'
 	return dst.add(JsonNode.arrayNode(ids))
 end 'copyArray'
@@ -679,7 +679,7 @@ function copyObject(src JsonDoc, node JsonNode, dst JsonDoc) returns JsonNodeId
 		let k = try node.keys.get(i) otherwise panic("copyObject: keys.get OOB")
 		let cId = try node.children.get(i) otherwise panic("copyObject: children.get OOB")
 		keys.push(k)
-		children.push(copyNode(src: src, srcId: cId, dst: dst))
+		children.push(copyNode(src, srcId: cId, dst: dst))
 	end 'each'
 	return dst.add(JsonNode.objectNode(keys, children: children))
 end 'copyObject'
