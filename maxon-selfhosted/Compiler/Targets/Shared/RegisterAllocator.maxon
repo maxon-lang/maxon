@@ -1053,11 +1053,21 @@ function joinStrings(parts StringArray, sep String) returns String
 	return out
 end 'joinStrings'
 
-// Rich panic for the clean Phase 1 failure mode: a reload vreg made it to
-// Pass 2 with SPILL_WEIGHT_INFINITE and no parent-merge to spill instead.
-// Names the value, the function, the block, the program position, and the
-// set of colored values that overlap the failing point so the user knows
-// what's actually competing for the register.
+// Rich panic for the genuinely-unrecoverable Phase 6 failure mode: a reload
+// vreg made it to Pass 2 with SPILL_WEIGHT_INFINITE, has no parent-merge to
+// spill instead, AND every demand-reduction technique in the pipeline has
+// already failed on it:
+//   1. Memory-operand folding (Phase 3) — the using op was not fold-eligible.
+//   2. Greedy eviction (Phase 4) — no neighbor was strictly-lower priority.
+//   3. Last-chance recursive recoloring (Phase 6) — no chain of register
+//      reassignments could free a slot of the right class.
+// Reaching this point means the demand structurally exceeds the GPR pool at
+// this program point: e.g. more concurrent fixed-reg constraints than the
+// pool has registers, or a sequence of infinite-weight reloads that all
+// require the same callee-saved subset. The panic names the value, the
+// function, the block, the program position, and the set of colored values
+// that overlap the failing point so the user knows what's actually
+// competing for the register.
 function panicUnresolvableReload(ranges LiveRangeArray, ur LiveRange, funcName String, iteration RegInt)
 	var blockId = -1
 	var startPos = -1
@@ -1069,7 +1079,7 @@ function panicUnresolvableReload(ranges LiveRangeArray, ur LiveRange, funcName S
 		endPos = iv.endPos
 	end 'hasIv'
 	let liveSet = describeLiveSet(ranges, ur: ur)
-	panic("regalloc: cannot allocate register for reload vreg v{ur.valueId} in function `{funcName}` (class={ur.regClass.name}, block={blockId}, position={startPos}..{endPos}, iteration={iteration}). Live at this point: {liveSet}. Demand exceeds available registers — even after memory-operand folding and eviction; needs further regalloc work (last-chance recoloring, additional splitting strategies, or IR-level pressure reduction).")
+	panic("regalloc: cannot allocate register for reload vreg v{ur.valueId} in function `{funcName}` (class={ur.regClass.name}, block={blockId}, position={startPos}..{endPos}, iteration={iteration}). Live at this point: {liveSet}. Even last-chance recoloring couldn't resolve this; demand structurally exceeds the GPR pool at this point (likely more concurrent fixed-reg constraints than the pool has registers, or an unavoidable cluster of call-crossing reloads that all require the same callee-saved subset). Reduce pressure at the source: split the function, decrease simultaneous live-across-call values, or restructure the inner loop body so fewer scalars are alive at the failure site.")
 end 'panicUnresolvableReload'
 
 // ============================================================
