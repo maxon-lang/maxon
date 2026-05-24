@@ -3460,14 +3460,18 @@ export function runAllSpecTestsParallel(filter String, target Target, workerCoun
 		_ = Directory.create(tempDir)
 	end 'noTempDir'
 
-	// `--update-required` compiles fragments in-parent to harvest the new
-	// RequiredLowering blocks, so it needs the parent's stdlib cache warm.
-	// The normal dispatch path delegates every compile to the workers (each
-	// pays its own ~140ms warmup once), so skipping the parent warmup saves
-	// the full cost (5+ seconds on a cold cache) when not updating.
+	// Pre-build the stdlib cache in the parent before fanning out workers.
+	// Workers all read the resulting cache file in their `warmStdlibCache`
+	// call (`getStdlibModule` cache-hit branch in StdlibLoader), so they
+	// never race on writing the same `.maxon/cache/stdlib-{target}.mxc`
+	// file from a cold state. On a warm cache the parent pays only the
+	// read cost (~140ms); on a cold cache it pays the build cost once
+	// instead of every worker independently compiling stdlib and racing
+	// the write.
+	warmStdlibCache(target)
+	markPhase("warmStdlibCache done")
+
 	if updateRequired 'preUpdate'
-		warmStdlibCache(target)
-		markPhase("warmStdlibCache done")
 		updateAllRequiredLowering(specDir, tempDir: tempDir, filter: filter, target: target, targetKey: targetKey)
 	end 'preUpdate'
 
