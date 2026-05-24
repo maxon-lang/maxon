@@ -9243,6 +9243,25 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     ["subprocessDetach"] = RuntimeCallIntrinsic(
       "Spawns a detached subprocess and returns its OS pid as int64 (-1 on error). Same argument layout as subprocessSpawn; the runtime gates detached behaviour through flags bit 2.\n\n`__Builtins.subprocessDetach(argv_mm, argc, cwd_mm, env_mm, envInherit, stdinKind, stdinData_mm, stdoutKind, stdoutData_mm, stdoutLimit, stderrKind, stderrData_mm, stderrLimit, flags) returns int`",
       "maxon_subprocess_detach", 14, true),
+    // === Streaming subprocess API (persistent-worker pool) ===
+    ["subprocessSpawnStreaming"] = RuntimeCallIntrinsic(
+      "Spawns a subprocess wired for streaming stdio (pipes on stdin/stdout/stderr) suitable for long-lived persistent workers. Returns an int64 handle, or -1 on error (callers consult subprocessLastErrorMessage()).\n\n`__Builtins.subprocessSpawnStreaming(argv_mm, argc, cwd_mm, flags) returns int`",
+      "maxon_subprocess_spawn_streaming", 4, true),
+    ["subprocessWriteStdinAll"] = RuntimeCallIntrinsic(
+      "Writes the entire contents of a __ManagedMemory buffer to a streaming subprocess's stdin, blocking until all bytes are flushed. Returns 0 on success, -1 on error.\n\n`__Builtins.subprocessWriteStdinAll(handle, data_mm) returns int`",
+      "maxon_subprocess_write_stdin_all", 2, true),
+    ["subprocessReadStdoutLine"] = RuntimeCallToManaged(
+      "Reads one line (LF-terminated) from a streaming subprocess's stdout, blocking until a line is available or EOF is reached. Returns a fresh __ManagedMemory containing the line (without the trailing newline); a zero-length result signals EOF. Lines longer than maxBytes are truncated and the remainder is delivered on the next call.\n\n`__Builtins.subprocessReadStdoutLine(handle, maxBytes) returns __ManagedMemory`",
+      "maxon_subprocess_read_stdout_line", 2, freeFunc: "mm_raw_free"),
+    ["subprocessReadStderrLine"] = RuntimeCallToManaged(
+      "Reads one line (LF-terminated) from a streaming subprocess's stderr, blocking until a line is available or EOF is reached. Returns a fresh __ManagedMemory containing the line (without the trailing newline); a zero-length result signals EOF. Lines longer than maxBytes are truncated and the remainder is delivered on the next call.\n\n`__Builtins.subprocessReadStderrLine(handle, maxBytes) returns __ManagedMemory`",
+      "maxon_subprocess_read_stderr_line", 2, freeFunc: "mm_raw_free"),
+    ["subprocessCloseStdin"] = RuntimeCallIntrinsic(
+      "Closes the stdin pipe of a streaming subprocess, signalling EOF to the child without terminating it.\n\n`__Builtins.subprocessCloseStdin(handle)`",
+      "maxon_subprocess_close_stdin", 1, false),
+    ["subprocessWaitExit"] = RuntimeCallIntrinsic(
+      "Waits for a streaming subprocess to exit (or until timeoutMs elapses) and returns its exit code. Returns -2 on timeout or -1 on error.\n\n`__Builtins.subprocessWaitExit(handle, timeoutMs) returns int`",
+      "maxon_subprocess_wait_exit", 2, true),
     ["managedIsNull"] = RuntimeCallIntrinsic(
       "Returns 1 when the __ManagedMemory pointer is null, 0 otherwise. Used after MM-returning runtime calls (e.g. subprocessResolveOnPath) to test for the not-found sentinel.\n\n`__Builtins.managedIsNull(mm) returns int`",
       "maxon_managed_is_null", 1, true),
@@ -9271,6 +9290,10 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     ["sleep"] = RuntimeCallIntrinsic(
       "Suspends the current green thread for the given milliseconds.\n\n`__Builtins.sleep(ms)`",
       "maxon_sleep", 1, false),
+    // === Non-blocking promise readiness check ===
+    ["gtIsComplete"] = RuntimeCallIntrinsic(
+      "Returns 1 if the green thread (raw promise inner pointer) has reached completed status, 0 otherwise. Non-blocking peek used by dispatchers that need to find the first-ready promise out of N concurrent ones without head-of-line blocking. Pass `promise.inner` from a `Promise with X`.\n\n`__Builtins.gtIsComplete(gt_ptr) returns int`",
+      "__gt_is_complete", 1, true),
     // === Test-only intrinsic: trigger a CPU access-violation by reading address 0. ===
     // Exists to exercise the runtime fault-handler path (VEH on Windows, signal handler
     // on macOS) and the last-resort UEF on Windows. Never returns.

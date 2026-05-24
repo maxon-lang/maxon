@@ -1634,8 +1634,10 @@ provides a sandbox stdlib parse (once per process) plus
 `translateMaxonTypeAcrossProjects` + `translateFunctionAcross` that
 re-binds Maxon-IR ids across project boundaries (string-key round-trip,
 bypassing the writer/reader id-translation pattern). The sandbox is
-captured by `recordStdlibSandboxSnapshot` on cache-miss warmup and
-constructed lazily by `ensureStdlibSandboxParsed` on cache-hit.
+constructed lazily by `ensureStdlibSandboxParsed` on first demand —
+the cache-miss warmup no longer stashes its in-flight module because
+the stdlib pipeline mutates `blockRefs` in place during DCE, which would
+leave the stashed module's cloned bodies with stale terminator targets.
 
 **Spec runner extension**: new `isSelfHostedKnownBroken(specName, testName)`
 filter in `SpecTestRunner.maxon` for fragments that pass on the C# bootstrap

@@ -128,6 +128,16 @@ public static class SemanticCheckPass {
     "maxon_subprocess_kill",
     "maxon_subprocess_send_signal",
     "maxon_subprocess_detach",
+    // Streaming subprocess builtins (Phase 3.2 persistent-worker support).
+    // Each performs blocking pipe / process I/O on the green thread and yields
+    // via the runtime's overlapped-pipe + IOCP plumbing (see
+    // __subp_create_overlapped_pipe + maxon_pipe_overlapped_read / _write).
+    "maxon_subprocess_spawn_streaming",
+    "maxon_subprocess_write_stdin_all",
+    "maxon_subprocess_read_stdout_line",
+    "maxon_subprocess_read_stderr_line",
+    "maxon_subprocess_close_stdin",
+    "maxon_subprocess_wait_exit",
     // Synthetic __ManagedSocket builtin callees (MaxonCallOp/MaxonTryCallOp names) that
     // ultimately invoke the above runtime stubs. Keep in sync with TryLowerManagedSocketBuiltin.
     "__managed_socket_send", "__managed_socket_recv", "__managed_socket_close",

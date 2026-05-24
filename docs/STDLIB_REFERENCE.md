@@ -966,6 +966,37 @@ let r = try await p otherwise return 1
 
 The same `Subprocess.run` is callable from sync and async contexts. From a green thread, the wait yields to the scheduler; from a plain call, it blocks the OS thread.
 
+### `StreamingSubprocess` — long-lived child with caller-driven stdio
+
+Use when the parent needs interactive request/response with a long-lived child — e.g. a worker pool that handles many jobs over its lifetime. Unlike `Subprocess.run(...)` (which fires the process, drains both output streams via background threads, and returns a `CollectedOutput` when the child exits), `StreamingSubprocess` keeps the pipes open and exposes per-line operations.
+
+**Currently Windows-only** (the runtime drives FILE_FLAG_OVERLAPPED named pipes through IOCP).
+
+```maxon
+let child = try StreamingSubprocess.spawn(Executable.path(p), arguments: argv)
+try child.writeStdinLine("JOB:1")
+let line = try child.readStdoutLine()
+child.closeStdin()
+let code = try child.wait()
+child.release()
+```
+
+| Method | Returns | Throws | Description |
+|--------|---------|--------|-------------|
+| `spawn(executable, arguments)` | `StreamingSubprocess` | `SubprocessError` | Spawn with stdin/stdout/stderr as pipes the caller drives. Inherits parent's cwd. |
+| `spawnWithCwd(executable, arguments, workingDirectory)` | `StreamingSubprocess` | `SubprocessError` | Same as `spawn` with an explicit working directory. |
+| `writeStdinLine(line)` | -- | `SubprocessError` | Write `line + "\n"` to the child's stdin. Throws on broken pipe. |
+| `readStdoutLine()` | `String` | `SubprocessError` | Read one line; returns "" on EOF. Strips trailing CRLF / LF. |
+| `readStdoutLineCapped(maxBytes)` | `String` | `SubprocessError` | Same with an explicit per-line truncation cap. |
+| `readStderrLine()` | `String` | `SubprocessError` | Stderr-side companion to `readStdoutLine`. |
+| `readStderrLineCapped(maxBytes)` | `String` | `SubprocessError` | Same with an explicit cap. |
+| `closeStdin()` | -- | -- | Close the parent's write end so the child sees EOF on stdin. Idempotent. |
+| `wait()` | `ExitInt` | `SubprocessError` | Block until the child exits, return its exit code. |
+| `waitWithTimeout(timeoutMs)` | `ExitInt` | `SubprocessError` | Same with a deadline; throws `timeout` if it elapses (child is terminated). |
+| `release()` | -- | -- | Free the OS handle. Idempotent. Treat like `close()` on a file. |
+
+Forgetting `release()` leaks the handle and an OS process slot. Lines longer than the per-call cap are truncated; the remainder is delivered on the next call. Default cap is 1 MiB.
+
 ---
 
 ## Clock

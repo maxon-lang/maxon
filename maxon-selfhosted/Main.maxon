@@ -122,26 +122,19 @@ function runSpecTestsForTarget(args MaxonArgs) returns ExitCode
 		printError("error: cannot run spec tests for {targetToString(target)} on {targetToString(host)} host (cross-execution not supported; only the host target and wasm32-wasi can be tested)\n")
 		return 1
 	end 'unsupported'
-	// Worker mode: this process was spawned by a parent runner; run only the
-	// comma-separated spec batch it was assigned and emit machine-readable results.
-	if not args.workerSpec.isEmpty() 'isWorker'
-		return runSpecBatchWorker(args.workerSpec, filter: args.filter, target: target, verbose: args.verbose)
-	end 'isWorker'
-	// Singles worker mode: run only the non-batchable tests for the assigned
-	// specs, isolating compile-time panics from the parent runner.
-	if not args.workerSingles.isEmpty() 'isSinglesWorker'
-		return runSpecSinglesWorker(args.workerSingles, filter: args.filter, target: target, verbose: args.verbose)
-	end 'isSinglesWorker'
-	// Fallback worker mode: run a specific list of batchable tests via the
-	// per-fragment path (used after the batch rewriter rejected them mid-batch).
-	if not args.workerFallback.isEmpty() 'isFallbackWorker'
-		return runSpecFallbackWorker(args.workerFallback, filter: args.filter, target: target, verbose: args.verbose)
-	end 'isFallbackWorker'
+	// Persistent worker mode: stay alive for the parent's whole run, reading
+	// one JOB:<kind>:<payload> per line from stdin and emitting WORKER_READY +
+	// result markers on stdout. Spawned by the parallel dispatcher.
+	if args.workerPersistent 'isPersistentWorker'
+		return runPersistentWorker(args.filter, target: target, verbose: args.verbose)
+	end 'isPersistentWorker'
 	logInfo(LogCategory.testing, message: function() gives "Running self-hosted spec tests ({targetToString(target)})...")
 	if args.workers == 1 'isSerial'
 		return runAllSpecTests(args.filter, target: target, updateRequired: args.updateRequired, verbose: args.verbose)
 	end 'isSerial'
-	// Parallel mode: distribute batchable specs across `workers` subprocesses (round-robin).
+	// Parallel mode: spawn `workers` persistent worker subprocesses and
+	// dispatch jobs from a single slowest-first queue, draining whichever
+	// worker has results ready (no head-of-line blocking on slow specs).
 	return runAllSpecTestsParallel(args.filter, target: target, workerCount: args.workers, updateRequired: args.updateRequired, verbose: args.verbose)
 end 'runSpecTestsForTarget'
 

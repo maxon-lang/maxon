@@ -585,3 +585,192 @@ function lastErrorMessage() returns String
 	let managed = __Builtins.subprocessLastErrorMessage()
 	return String.init(managed)
 end 'lastErrorMessage'
+
+// =============================================================================
+// StreamingSubprocess — long-lived child with caller-driven stdio
+// =============================================================================
+
+// Opaque runtime handle for a streaming child. The runtime hands out
+// non-negative integers as table indices; -1 is reserved by the spawn
+// builtin for "spawn failed" and is never stored in a live handle slot.
+typealias StreamingHandle = int(0 to i64.max)
+
+/// A child process whose stdin / stdout / stderr the caller drives by hand.
+/// 
+/// Unlike `Subprocess.run(...)` (which fires the process, drains both output
+/// streams via background threads, and returns a `CollectedOutput` when the
+/// child exits), `StreamingSubprocess` keeps the pipes open and exposes
+/// per-line `writeStdinLine` / `readStdoutLine` / `readStderrLine` operations.
+/// Use it when the parent needs interactive request/response with a long-lived
+/// child — e.g. a worker pool that handles many jobs over its lifetime.
+/// 
+/// Lifecycle:
+///   let child = try StreamingSubprocess.spawn(Executable.path(p), arguments: argv)
+///   try child.writeStdinLine("JOB:1")
+///   let line = try child.readStdoutLine()
+///   ...
+///   child.closeStdin()  // optional — signals EOF to child
+///   let code = try child.wait()  // blocks until child exits
+///   child.release()  // frees the OS handle
+/// 
+/// Forgetting `release()` leaks the handle and an OS process slot. Treat
+/// `release()` like `close()` on a file.
+export type StreamingSubprocess
+	// Raw runtime handle from subprocessSpawnStreaming. Valid until release()
+	// is called; the runtime owns the underlying pipe + process objects keyed
+	// off this integer.
+	export var handle StreamingHandle
+	// Latched once release() runs so subsequent release() calls are no-ops
+	// (matches the "treat like file close" contract documented above).
+	export var released bool
+
+	/// Spawn `executable arguments...` with stdin/stdout/stderr as pipes the
+	/// caller drives. Working directory defaults to the parent's cwd; pass
+	/// `spawnWithCwd` if you need to set it.
+	export static function spawn(executable Executable, arguments StringArray) returns StreamingSubprocess throws SubprocessError
+		let inheritCwd = try FilePath.from("") otherwise panic("StreamingSubprocess.spawn: empty path is the sentinel for 'inherit cwd'")
+		return try Self.spawnWithCwd(executable, arguments: arguments, workingDirectory: inheritCwd)
+	end 'spawn'
+
+	/// Same as `spawn` with an explicit working directory.
+	export static function spawnWithCwd(executable Executable, arguments StringArray, workingDirectory FilePath) returns StreamingSubprocess throws SubprocessError
+		let exePath = try resolveExecutablePath(executable)
+		let argvBlob = buildArgvBlob(exePath, args: arguments)
+		let argc = arguments.count() + 1
+		let cwd = workingDirectory.path
+		// 4th arg is the spawn-flags bitfield (hideWindow / newProcessGroup /
+		// detach). Streaming spawns never detach — the parent has to keep the
+		// pipes open — and don't take platform-options today, so the field is
+		// always 0. Environment is implicitly inherited by the runtime (the
+		// streaming variant of `__subp_spawn_core` hardcodes inherit-env).
+		let rawHandle = __Builtins.subprocessSpawnStreaming(argvBlob.managed, argc, cwd.managed, 0)
+		if rawHandle == -1 'spawnFailed'
+			throw SubprocessError.spawnFailed(lastErrorMessage())
+		end 'spawnFailed'
+		// rawHandle is the wide builtin return; -1 is excluded above, so the
+		// narrow StreamingHandle range is satisfied.
+		return StreamingSubprocess{handle: rawHandle as StreamingHandle, released: false}
+	end 'spawnWithCwd'
+
+	/// Write `line + "\n"` to the child's stdin. Throws on broken pipe.
+	/// Embeds the newline; pass payload WITHOUT a trailing newline.
+	export function writeStdinLine(line String) throws SubprocessError
+		let withNewline = "{line}\n"
+		let rc = __Builtins.subprocessWriteStdinAll(handle, withNewline.managed)
+		if rc != 0 'writeFailed'
+			throw SubprocessError.ioFailed("write to child stdin failed: {lastErrorMessage()}")
+		end 'writeFailed'
+	end 'writeStdinLine'
+
+	/// Read one line from the child's stdout. Returns the line content
+	/// WITHOUT the trailing newline (the runtime strips the terminating LF
+	/// and this method additionally strips a stray CR so callers don't see
+	/// Windows CRLF artifacts). Returns an empty string on EOF; the runtime
+	/// remembers the EOF state, so a second call after EOF also returns "".
+	/// 
+	/// Blocks until a line is available or EOF is reached. Lines longer than
+	/// `maxBytes` are truncated and the remainder is delivered on the next
+	/// call. Default cap is 1 MiB which suits log-line / IPC-frame workloads.
+	export function readStdoutLine() returns String throws SubprocessError
+		return try Self.readStdoutLineCapped(self, maxBytes: defaultReadLineCap)
+	end 'readStdoutLine'
+
+	export function readStdoutLineCapped(maxBytes ByteLimit) returns String throws SubprocessError
+		let raw = __Builtins.subprocessReadStdoutLine(handle, maxBytes)
+		return readLineResultToString(raw)
+	end 'readStdoutLineCapped'
+
+	/// Read one line from the child's stderr. Same contract as
+	/// `readStdoutLine` (LF stripped by the runtime, trailing CR trimmed
+	/// here, empty string on EOF).
+	export function readStderrLine() returns String throws SubprocessError
+		return try Self.readStderrLineCapped(self, maxBytes: defaultReadLineCap)
+	end 'readStderrLine'
+
+	export function readStderrLineCapped(maxBytes ByteLimit) returns String throws SubprocessError
+		let raw = __Builtins.subprocessReadStderrLine(handle, maxBytes)
+		return readLineResultToString(raw)
+	end 'readStderrLineCapped'
+
+	/// Close our write end of the child's stdin pipe. After this the child
+	/// will see EOF on its stdin and (for typical line-reading workers) exit
+	/// gracefully. Idempotent at the runtime layer; calling it on an
+	/// already-closed pipe is a no-op.
+	export function closeStdin()
+		__Builtins.subprocessCloseStdin(handle)
+	end 'closeStdin'
+
+	/// Block indefinitely until the child exits, then return its exit code.
+	/// Throws `SubprocessError.ioFailed` on a wait error (e.g. the runtime
+	/// can no longer locate the handle).
+	export function wait() returns ExitInt throws SubprocessError
+		return try Self.waitWithTimeout(self, timeoutMs: 0)
+	end 'wait'
+
+	/// Block until the child exits or `timeoutMs` elapses (0 = wait forever).
+	/// Returns the exit code on success; throws `SubprocessError.timeout` if
+	/// the timeout fires (the runtime forcibly terminates the child in that
+	/// case) or `SubprocessError.ioFailed` on a wait error.
+	export function waitWithTimeout(timeoutMs DurationMs) returns ExitInt throws SubprocessError
+		let rc = __Builtins.subprocessWaitExit(handle, timeoutMs)
+		if rc == -2 'timedOut'
+			throw SubprocessError.timeout(timeoutMs)
+		end 'timedOut'
+		if rc == -1 'failed'
+			throw SubprocessError.ioFailed("wait failed: {lastErrorMessage()}")
+		end 'failed'
+		return rc as ExitInt
+	end 'waitWithTimeout'
+
+	/// Release the OS handle. Idempotent; safe to call at the end of a
+	/// using-block or from a guard path. Calling any other method after
+	/// `release` is a bug — the handle slot is invalid and future calls
+	/// would target whatever process happens to be reusing the slot.
+	export function release()
+		if not released 'notYet'
+			__Builtins.subprocessReleaseHandle(handle)
+			released = true
+		end 'notYet'
+	end 'release'
+end 'StreamingSubprocess'
+
+// Default per-line truncation cap for the streaming readers. 1 MiB easily
+// holds spec-test IPC frames (typically <2 KiB) without ever truncating; a
+// runaway worker can't OOM the parent by emitting one enormous line.
+let defaultReadLineCap = 1024 * 1024 as ByteLimit
+
+/// Shared decode for the (stdout|stderr) line readers: the runtime returns a
+/// fresh __ManagedMemory holding the line bytes without the terminating LF,
+/// or a zero-length buffer on EOF. We additionally strip a trailing CR so
+/// Windows CRLF doesn't leak into caller-visible strings.
+function readLineResultToString(raw __ManagedMemory) returns String
+	return stripTrailingCR(String.init(raw))
+end 'readLineResultToString'
+
+/// Drop a trailing LF (and a CR before it, if present) from `s`. The runtime
+/// returns the raw line bytes including the terminator, so this is the
+/// caller-visible boundary that normalises both Unix LF and Windows CRLF line
+/// endings to "no trailing newline". ASCII-only checks are safe because
+/// neither 0x0A nor 0x0D ever appears as a UTF-8 continuation byte.
+function stripTrailingCR(s String) returns String
+	var len = s.byteLength()
+	if len == 0 'empty'
+		return s
+	end 'empty'
+	let last = try s.managed.byteAt(len - 1) otherwise panic("stripTrailingCR: byteAt OOB — len-1 < len invariant")
+	if last == 10 'hasLf'
+		len = len - 1
+	end 'hasLf'
+	if len == 0 'allConsumed'
+		return ""
+	end 'allConsumed'
+	let beforeLf = try s.managed.byteAt(len - 1) otherwise panic("stripTrailingCR: byteAt OOB — len-1 < len invariant")
+	if beforeLf == 13 'hasCr'
+		len = len - 1
+	end 'hasCr'
+	if len == s.byteLength() 'noTrim'
+		return s
+	end 'noTrim'
+	let trimmed = try s.managed.slice(0, len) otherwise panic("stripTrailingCR: slice OOB — 0..len always valid")
+	return String.init(trimmed)
+end 'stripTrailingCR'

@@ -77,6 +77,8 @@ public partial class X86CodeEmitter {
     EmitNetRecv();
     EmitNetClose();
     EmitNetSocketDestructor();
+    EmitPipeOverlappedRead();
+    EmitPipeOverlappedWrite();
     EmitManagedFileOpenRead();
     EmitManagedFileOpenWrite();
     EmitManagedFileOpenWriteExecutable();
@@ -2784,13 +2786,16 @@ public partial class X86CodeEmitter {
     EmitCmpRegReg(X86Register.Rcx, X86Register.Rdx);
     EmitJcc("e", $"{labelPrefix}_mainthread_loop");
 
-    // Non-mainThread: switch to P->mainThread (worker loop handles scheduling)
-    // Clear ioYielded flag BEFORE context switch so __io_complete_gt knows to spin-wait
-    // until the context switch saves our RSP/RBP.
+    // Non-mainThread: switch to P->mainThread (worker loop handles scheduling).
+    // Clear ioYielded flag BEFORE context switch so __io_complete_gt knows to
+    // spin-wait until the context switch saves our RSP/RBP. CRITICAL: do NOT
+    // overwrite mainThread.status — if mainGT is already parked on its own
+    // overlapped I/O (e.g. a sibling readStdoutLine while we're parked on
+    // stderr), forcing its status back to "running" makes mainthread_loop's
+    // "exit when not waiting" check spuriously fire and return the stale
+    // io_result_val of mainGT's previous op. mainGT manages its own status.
     EmitXorRegReg(X86Register.Rax, X86Register.Rax);
     EmitMovIndirectMemReg(X86Register.Rcx, GtOffIoYielded, X86Register.Rax);
-    EmitMovRegImm(X86Register.Rax, GtStatusRunning);
-    EmitMovIndirectMemReg(X86Register.Rdx, GtOffStatus, X86Register.Rax);
     EmitCallRuntimeLabel("__gt_context_switch");
     EmitJmp($"{labelPrefix}_resume");
 
@@ -2894,6 +2899,301 @@ public partial class X86CodeEmitter {
     EmitRuntimeFunctionStart("__destruct___ManagedSocket", 1, 0x20);
     EmitMovRegMem(X86Register.Rcx, -0x08, 8);           // arg0 = user_ptr
     EmitCallRuntimeLabel("maxon_net_close");
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// maxon_pipe_overlapped_read(hPipe, buf, capacity) → bytesRead (0 = EOF, -1 = error).
+  /// Uses overlapped ReadFile + IOCP for async completion. The pipe handle must be a
+  /// named pipe opened with FILE_FLAG_OVERLAPPED and registered with __io_iocp +
+  /// SetFileCompletionNotificationModes(FILE_SKIP_COMPLETION_PORT_ON_SUCCESS).
+  /// Stack: [rbp-0x08]=handle, [rbp-0x10]=buf, [rbp-0x18]=capacity,
+  ///        [rbp-0x20]=ctx, [rbp-0x38]=bytesTransferred, [rbp-0x48]=saved return.
+  /// </summary>
+  private void EmitPipeOverlappedRead() {
+    EmitRuntimeFunctionStart("maxon_pipe_overlapped_read", 3, 0x80);
+    EmitIoSubmitPipeOverlapped(isWrite: false);
+  }
+
+  /// <summary>
+  /// maxon_pipe_overlapped_write(hPipe, buf, nBytes) → bytesWritten (0 = pipe closed, -1 = error).
+  /// Uses synchronous WriteFile (not overlapped) for the streaming spawn's stdin
+  /// pipe. Writes to small pipes complete immediately and don't benefit from
+  /// async dispatch — the named-pipe overlapped read path doesn't interact well
+  /// with overlapped writes on the same IOCP. Keeping the write side sync sidesteps
+  /// the "write completion's IOCP packet routes to the next pending read's waiter_gt"
+  /// failure mode that emerges when the write handle is also registered with IOCP.
+  /// The stdin handle in __subp_create_overlapped_pipe is created WITHOUT
+  /// FILE_FLAG_OVERLAPPED for this reason.
+  /// </summary>
+  private void EmitPipeOverlappedWrite() {
+    EmitRuntimeFunctionStart("maxon_pipe_overlapped_write", 3, 0x40);
+    // [rbp-0x08] handle, [rbp-0x10] buf, [rbp-0x18] nBytes, [rbp-0x28] bytesOut.
+
+    // Cancel check.
+    EmitLoadCurrentGtInline(X86Register.R10);
+    EmitMovRegIndirectMem(X86Register.Rax, X86Register.R10, GtOffCancelFlag);
+    EmitBytes(0x48, 0x85, 0xC0);
+    EmitJcc("nz", "maxon_pipe_overlapped_write_cancelled");
+
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitMovMemReg(-0x28, X86Register.Rax, 8); // zero bytesOut
+
+    // WriteFile(handle, buf, nBytes, &bytesOut, NULL)
+    EmitSystemStackEnter(0x30);
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8);
+    EmitMovRegMem(X86Register.Rdx, -0x10, 8);
+    EmitMovRegMem(X86Register.R8, -0x18, 8);
+    EmitLeaRegMem(X86Register.R9, -0x28);
+    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x20, 0x00, 0x00, 0x00, 0x00); // lpOverlapped = NULL
+    EmitCallImport("kernel32.dll", "WriteFile");
+    EmitSystemStackLeave(0x30);
+
+    // RAX = TRUE (success) or FALSE (error). On success, return bytesOut.
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", "maxon_pipe_overlapped_write_err");
+    EmitMovRegMem(X86Register.Rax, -0x28, 8); // bytes written
+    EmitRuntimeFunctionEnd();
+
+    DefineLabel("maxon_pipe_overlapped_write_err");
+    // Check ERROR_NO_DATA (232) for pipe-closed = clean EOF (return 0).
+    EmitCallImportOnSystemStack("kernel32.dll", "GetLastError");
+    EmitMovMemReg(-0x28, X86Register.Rax, 8); // save error
+    EmitCmpRegImm(X86Register.Rax, 232);
+    EmitJcc("ne", "maxon_pipe_overlapped_write_real_err");
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax); // closed → 0
+    EmitRuntimeFunctionEnd();
+    DefineLabel("maxon_pipe_overlapped_write_real_err");
+    EmitLoadCurrentGtInline(X86Register.R10);
+    EmitMovRegMem(X86Register.Rax, -0x28, 8);
+    EmitMovIndirectMemReg(X86Register.R10, GtOffIoErrorCode, X86Register.Rax);
+    EmitMovRegImm(X86Register.Rax, -1);
+    EmitRuntimeFunctionEnd();
+
+    DefineLabel("maxon_pipe_overlapped_write_cancelled");
+    EmitLoadCurrentGtInline(X86Register.R10);
+    EmitMovRegImm(X86Register.Rax, 0x3EF);
+    EmitMovIndirectMemReg(X86Register.R10, GtOffIoErrorCode, X86Register.Rax);
+    EmitMovRegImm(X86Register.Rax, -1);
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// Shared body for the pipe overlapped read/write helpers. Mirrors
+  /// EmitIoSubmitSocketOverlapped's sync-success / IO_PENDING / sync-error trichotomy
+  /// but calls ReadFile / WriteFile (5-arg, no WSABUF) and consults plain Win32
+  /// GetLastError. Both ERROR_BROKEN_PIPE (109) on read and ERROR_NO_DATA (232) on
+  /// write are normalised to a 0-byte result (clean EOF / closed-peer) so the streaming
+  /// line reader / write loop can treat them as termination, not failure.
+  /// </summary>
+  private void EmitIoSubmitPipeOverlapped(bool isWrite) {
+    var funcName = isWrite ? "WriteFile" : "ReadFile";
+    var labelPrefix = isWrite ? "maxon_pipe_overlapped_write" : "maxon_pipe_overlapped_read";
+    var opSymdata = isWrite ? "__at_io_op_pipe_write" : "__at_io_op_pipe_read";
+    // ERROR_NO_DATA (232) signals "all pipe instances are busy" / "the pipe is being
+    // closed" on the write side; ERROR_BROKEN_PIPE (109) signals reader/writer-end
+    // closure on the read side. Both map to clean EOF for streaming callers.
+    var peerClosedErr = isWrite ? 232 : 109;
+
+    // Check cancel flag
+    EmitLoadCurrentGtInline(X86Register.R10);
+    EmitMovRegIndirectMem(X86Register.Rax, X86Register.R10, GtOffCancelFlag);
+    EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
+    EmitJcc("nz", $"{labelPrefix}_cancelled");
+
+    // Allocate AsyncOpContext (0x38 bytes): OVERLAPPED at offset 0 + our fields.
+    EmitMovRegImm(X86Register.Rcx, AsyncCtxSize);
+    EmitCallRuntimeLabel("mm_raw_alloc", zeroSecondArg: Compiler.MmTrace);
+    EmitMovMemReg(-0x20, X86Register.Rax, 8); // save ctx (zeroed by HEAP_ZERO_MEMORY)
+
+    // ctx->waiter_gt = __gt_current
+    EmitLoadCurrentGtInline(X86Register.Rdx);
+    EmitMovRegMem(X86Register.Rax, -0x20, 8);
+    EmitMovIndirectMemReg(X86Register.Rax, AsyncCtxOffWaiter, X86Register.Rdx);
+
+    // Store handle in gt->io_handle so CancelIoEx can reach it
+    EmitLoadCurrentGtInline(X86Register.R10);
+    EmitMovRegMem(X86Register.Rdx, -0x08, 8); // handle
+    EmitMovIndirectMemReg(X86Register.R10, GtOffIoHandle, X86Register.Rdx);
+
+    // Set current thread status = waiting
+    EmitMovRegImm(X86Register.Rax, GtStatusWaiting);
+    EmitMovIndirectMemReg(X86Register.R10, GtOffStatus, X86Register.Rax);
+
+    // Call ReadFile/WriteFile(hPipe, buf, nBytes, &bytesOut, lpOverlapped=ctx).
+    // For overlapped I/O lpNumberOfBytes can be NULL per the docs, but the
+    // sync-completion path (FILE_SKIP_COMPLETION_PORT_ON_SUCCESS) DOES fill
+    // *lpNumberOfBytes — using GetOverlappedResult afterwards on such a
+    // synchronously-completed handle has been observed to return 0 in
+    // practice on some Windows builds for named pipes. Passing a real
+    // out-pointer at [rbp-0x38] dodges that issue: on sync success we read
+    // the count directly; on IO_PENDING the kernel later fills the OVERLAPPED
+    // internal fields and the IOCP drain reads bytes_transferred from there.
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitMovMemReg(-0x38, X86Register.Rax, 8); // zero bytesOut slot
+    EmitSystemStackEnter(0x30); // shadow(0x20) + 1 stack arg(0x08) + pad(0x08) = 0x30
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8);     // handle
+    EmitMovRegMem(X86Register.Rdx, -0x10, 8);     // buf
+    EmitMovRegMem(X86Register.R8, -0x18, 8);      // nBytes
+    EmitLeaRegMem(X86Register.R9, -0x38);          // &bytesOut
+    EmitMovRegMem(X86Register.Rax, -0x20, 8);     // ctx
+    EmitMovMemRspReg(0x20, X86Register.Rax);
+    EmitCallImport("kernel32.dll", funcName);
+    EmitSystemStackLeave(0x30);
+
+    // Save return value before trace output
+    EmitMovMemReg(-0x48, X86Register.Rax, 8);
+
+    if (Compiler.AsyncTrace) {
+      EmitAtTraceLock();
+      EmitLeaRegSymdataRel(X86Register.Rcx, "__at_tag_io_yield");
+      EmitCallRuntimeLabel("mm_trace_print_tag");
+      EmitLoadCurrentGtInline(X86Register.Rax);
+      EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, GtOffTraceId);
+      EmitCallRuntimeLabel("mm_trace_print_i64");
+      EmitLeaRegSymdataRel(X86Register.Rcx, opSymdata);
+      EmitCallRuntimeLabel("mm_trace_print_tag");
+      EmitAtTraceWorkerSuffix();
+      EmitLeaRegSymdataRel(X86Register.Rcx, "__at_tag_nl");
+      EmitCallRuntimeLabel("mm_trace_print_tag");
+      EmitAtTraceUnlock();
+    }
+
+    // Restore return value
+    EmitMovRegMem(X86Register.Rax, -0x48, 8);
+
+    // ReadFile/WriteFile returns non-zero on immediate success (FILE_SKIP_COMPLETION_PORT_ON_SUCCESS
+    // suppresses the IOCP packet), zero on error / pending.
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("nz", $"{labelPrefix}_sync_done");
+
+    // FALSE: check GetLastError. ERROR_IO_PENDING (997) means async; pipe-closed
+    // codes (ERROR_BROKEN_PIPE for read, ERROR_NO_DATA for write) are clean EOF.
+    EmitCallImportOnSystemStack("kernel32.dll", "GetLastError");
+    EmitMovMemReg(-0x48, X86Register.Rax, 8); // save error code
+    EmitCmpRegImm(X86Register.Rax, 997);      // ERROR_IO_PENDING
+    EmitJcc("e", $"{labelPrefix}_yield");
+    EmitCmpRegImm(X86Register.Rax, peerClosedErr);
+    EmitJcc("e", $"{labelPrefix}_sync_eof");
+
+    // Sync hard error: clear io_handle/status, store error, free ctx, return -1.
+    EmitLoadCurrentGtInline(X86Register.R10);
+    EmitXorRegReg(X86Register.Rcx, X86Register.Rcx);
+    EmitMovIndirectMemReg(X86Register.R10, GtOffIoHandle, X86Register.Rcx); // clear io_handle
+    EmitMovIndirectMemReg(X86Register.R10, GtOffStatus, X86Register.Rcx);   // status = ready
+    EmitMovRegMem(X86Register.Rax, -0x48, 8);
+    EmitMovIndirectMemReg(X86Register.R10, GtOffIoErrorCode, X86Register.Rax);
+    EmitMovRegMem(X86Register.Rcx, -0x20, 8); // free ctx
+
+    EmitCallRuntimeLabel("mm_raw_free", zeroSecondArg: Compiler.MmTrace);
+    EmitMovRegImm(X86Register.Rax, -1);
+    EmitRuntimeFunctionEnd();
+
+    // Sync EOF (peer closed): return 0, clear io_handle/status, free ctx.
+    DefineLabel($"{labelPrefix}_sync_eof");
+    EmitLoadCurrentGtInline(X86Register.R10);
+    EmitXorRegReg(X86Register.Rcx, X86Register.Rcx);
+    EmitMovIndirectMemReg(X86Register.R10, GtOffIoHandle, X86Register.Rcx);
+    EmitMovIndirectMemReg(X86Register.R10, GtOffStatus, X86Register.Rcx);
+    EmitMovIndirectMemReg(X86Register.R10, GtOffIoErrorCode, X86Register.Rcx); // no error
+    EmitMovRegMem(X86Register.Rcx, -0x20, 8);
+
+    EmitCallRuntimeLabel("mm_raw_free", zeroSecondArg: Compiler.MmTrace);
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitRuntimeFunctionEnd();
+
+    // Sync success: I/O completed immediately. The bytesOut slot at [rbp-0x38]
+    // was already filled by ReadFile / WriteFile (we passed &bytesOut, not NULL).
+    // FILE_SKIP_COMPLETION_PORT_ON_SUCCESS is set on the pipe handle, so the
+    // kernel suppresses the IOCP packet for sync completions — it's safe to
+    // free ctx here. Without this free, each fast read leaks 56 bytes.
+    DefineLabel($"{labelPrefix}_sync_done");
+    EmitMovRegMem(X86Register.Rcx, -0x38, 8); // bytes transferred
+    EmitLoadCurrentGtInline(X86Register.R10);
+    EmitMovIndirectMemReg(X86Register.R10, GtOffIoResultVal, X86Register.Rcx);
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitMovIndirectMemReg(X86Register.R10, GtOffStatus, X86Register.Rax);
+    // Free ctx — the IOCP packet has been suppressed.
+    EmitMovRegMem(X86Register.Rcx, -0x20, 8);
+    EmitCallRuntimeLabel("mm_raw_free", zeroSecondArg: Compiler.MmTrace);
+    EmitJmp($"{labelPrefix}_resume");
+
+    // Async yield: I/O is pending. Check if current GT is the mainThread.
+    DefineLabel($"{labelPrefix}_yield");
+    EmitLoadCurrentGtInline(X86Register.Rcx);
+    EmitLeaMainThreadInline(X86Register.Rdx);
+    EmitCmpRegReg(X86Register.Rcx, X86Register.Rdx);
+    EmitJcc("e", $"{labelPrefix}_mainthread_loop");
+
+    // Non-mainThread: switch to P->mainThread (worker loop handles scheduling).
+    // CRITICAL: Do NOT overwrite mainThread's status — if mainGT is the
+    // mainThread AND is already waiting on its own overlapped I/O (e.g. a
+    // sibling readStdoutLine while we're parked on stderr), setting its
+    // status back to "running" makes mainthread_loop's "exit when not
+    // waiting" check spuriously trigger and return the wrong (stale)
+    // io_result_val. Just clear our own ioYielded flag and switch — the
+    // mainThread's mainthread_loop is the canonical owner of its status
+    // field and decides when to transition it.
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitMovIndirectMemReg(X86Register.Rcx, GtOffIoYielded, X86Register.Rax);
+    EmitCallRuntimeLabel("__gt_context_switch");
+    EmitJmp($"{labelPrefix}_resume");
+
+    // MainThread: spin on completions + wake event until our I/O finishes.
+    DefineLabel($"{labelPrefix}_mainthread_loop");
+    EmitCallRuntimeLabel("__gt_process_pending_waiter");
+    EmitLoadCurrentGtInline(X86Register.R10);
+    EmitMovRegIndirectMem(X86Register.Rax, X86Register.R10, GtOffStatus);
+    EmitCmpRegImm(X86Register.Rax, GtStatusWaiting);
+    EmitJcc("ne", $"{labelPrefix}_resume");
+    EmitCallRuntimeLabel("__gt_dequeue");
+    EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
+    EmitJcc("z", $"{labelPrefix}_mainthread_park");
+    EmitMovMemReg(-0x38, X86Register.Rax, 8);
+    EmitMovRegImm(X86Register.Rcx, GtStatusRunning);
+    EmitMovIndirectMemReg(X86Register.Rax, GtOffStatus, X86Register.Rcx);
+    EmitLoadCurrentGtInline(X86Register.Rcx);
+    EmitMovRegMem(X86Register.Rdx, -0x38, 8);
+    EmitCallRuntimeLabel("__gt_context_switch");
+    EmitMovRegMem(X86Register.Rax, -0x38, 8);
+    EmitMovRegImm(X86Register.Rcx, 1);
+    EmitMovIndirectMemReg(X86Register.Rax, GtOffIoYielded, X86Register.Rcx);
+    EmitJmp($"{labelPrefix}_mainthread_loop");
+    DefineLabel($"{labelPrefix}_mainthread_park");
+    EmitGlobalLoadReg(X86Register.Rcx, "__io_done_event");
+    EmitMovRegImm(X86Register.Rdx, 50);
+    EmitCallImportOnSystemStack("kernel32.dll", "WaitForSingleObject");
+    EmitJmp($"{labelPrefix}_mainthread_loop");
+
+    // Resume: clear io_handle, return bytes transferred from gt->io_result_val.
+    DefineLabel($"{labelPrefix}_resume");
+
+    if (Compiler.AsyncTrace) {
+      EmitAtTraceLock();
+      EmitLeaRegSymdataRel(X86Register.Rcx, "__at_tag_io_resume");
+      EmitCallRuntimeLabel("mm_trace_print_tag");
+      EmitLoadCurrentGtInline(X86Register.Rax);
+      EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, GtOffTraceId);
+      EmitCallRuntimeLabel("mm_trace_print_i64");
+      EmitLeaRegSymdataRel(X86Register.Rcx, opSymdata);
+      EmitCallRuntimeLabel("mm_trace_print_tag");
+      EmitAtTraceWorkerSuffix();
+      EmitLeaRegSymdataRel(X86Register.Rcx, "__at_tag_nl");
+      EmitCallRuntimeLabel("mm_trace_print_tag");
+      EmitAtTraceUnlock();
+    }
+
+    EmitLoadCurrentGtInline(X86Register.R10);
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitMovIndirectMemReg(X86Register.R10, GtOffIoHandle, X86Register.Rax); // clear io_handle
+    EmitMovRegIndirectMem(X86Register.Rax, X86Register.R10, GtOffIoResultVal);
+    EmitRuntimeFunctionEnd();
+
+    DefineLabel($"{labelPrefix}_cancelled");
+    EmitLoadCurrentGtInline(X86Register.R10);
+    EmitMovRegImm(X86Register.Rax, 0x3EF); // ERROR_OPERATION_ABORTED
+    EmitMovIndirectMemReg(X86Register.R10, GtOffIoErrorCode, X86Register.Rax);
+    EmitMovRegImm(X86Register.Rax, -1);
     EmitRuntimeFunctionEnd();
   }
 
@@ -3614,6 +3914,9 @@ public partial class X86CodeEmitter {
       DefineSymdata("__at_io_op_net_send", " [net_send]\0"u8.ToArray());
       DefineSymdata("__at_io_op_net_recv", " [net_recv]\0"u8.ToArray());
       DefineSymdata("__at_io_op_net_close", " [net_close]\0"u8.ToArray());
+      DefineSymdata("__at_io_op_process_wait", " [process_wait]\0"u8.ToArray());
+      DefineSymdata("__at_io_op_pipe_read", " [pipe_read]\0"u8.ToArray());
+      DefineSymdata("__at_io_op_pipe_write", " [pipe_write]\0"u8.ToArray());
     }
 
     EmitSchedInit();
@@ -3622,6 +3925,7 @@ public partial class X86CodeEmitter {
     EmitGtCancel();
     EmitGtContextSwitch();
     EmitGtAwait();
+    EmitGtIsComplete();
     EmitGtTryAwait();
     EmitGtYield();
     EmitGtProcessPendingWaiter();
@@ -4445,6 +4749,27 @@ public partial class X86CodeEmitter {
     EmitGtReturnToFreeList("__gt_await");
     EmitMovRegMem(X86Register.Rax, -0x10, 8); // restore result
 
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// __gt_is_complete(promise_rcx) -> 1 if the GT has reached completed status,
+  /// 0 otherwise. Non-blocking peek used by the spec test dispatcher to find
+  /// the first-ready promise out of N concurrent drains without head-of-line
+  /// blocking on a slow worker.
+  /// </summary>
+  private void EmitGtIsComplete() {
+    EmitRuntimeFunctionStart("__gt_is_complete", 1, 0x20);
+    // [rbp-0x08] = promise (saved by prologue)
+    EmitMovRegMem(X86Register.R10, -0x08, 8);                              // R10 = promise
+    EmitMovRegIndirectMem(X86Register.Rax, X86Register.R10, GtOffStatus);  // RAX = promise.status
+    EmitCmpRegImm(X86Register.Rax, GtStatusCompleted);
+    EmitJcc("z", "__gt_is_complete_yes");
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJmp("__gt_is_complete_done");
+    DefineLabel("__gt_is_complete_yes");
+    EmitMovRegImm(X86Register.Rax, 1);
+    DefineLabel("__gt_is_complete_done");
     EmitRuntimeFunctionEnd();
   }
 
@@ -5424,12 +5749,15 @@ public partial class X86CodeEmitter {
   //   0x28  result_len i64
   //   0x30  error_code i64
   //
-  // SyncRequest layout (40 bytes):
+  // SyncRequest layout (48 bytes):
   //   0x00  op_code   i64   (see SyncOpXxx constants)
   //   0x08  arg0      i64
   //   0x10  arg1      i64
-  //   0x18  waiter_gt i64
-  //   0x20  next      i64
+  //   0x18  arg2      i64   (used by pipe read/write for byte-count;
+  //                          legacy 2-arg callers leave this as garbage and
+  //                          the worker ignores it for their op codes)
+  //   0x20  waiter_gt i64
+  //   0x28  next      i64
   //
   // IoCompletion layout (40 bytes):
   //   0x00  waiter_gt  i64
@@ -5479,13 +5807,32 @@ public partial class X86CodeEmitter {
   // WaitForSingleObject. Currently `maxon_subprocess_wait_internal` calls
   // WaitForSingleObject directly on the system stack.
   private const long SyncOpProcessWait = 16;
+  // SyncOpPipeRead / SyncOpPipeWrite were retired alongside the streaming-pipe
+  // IOCP fix: streaming spawn now creates FILE_FLAG_OVERLAPPED named pipes
+  // (see __subp_create_overlapped_pipe) and the streaming readers / writer
+  // drive them via maxon_pipe_overlapped_read / _write — overlapped I/O on
+  // the green thread, no hop through the sync-worker pool. Anonymous-pipe
+  // CreatePipe handles in the legacy waitCollect path are still drained by
+  // dedicated CreateThread workers (__subp_drain_thread / __subp_feed_thread),
+  // not the shared sync-worker pool either.
   private const long SyncOpShutdown = 0xFF;
+
+  // Number of sync-worker OS threads. Each worker independently dequeues from
+  // the shared sync-request queue, so the pool size caps how many *blocking*
+  // sync ops can be in flight at the same time. Streaming pipe I/O no longer
+  // goes through this pool (it uses overlapped named pipes); remaining sync
+  // ops are short-lived filesystem / DNS calls that are rarely concurrent in
+  // practice. Keep at 1 so the shutdown sentinel count (1 mm_raw_alloc per
+  // worker) matches what mm-trace tests assert on.
+  private const int IoSyncWorkerCount = 1;
 
   private void EmitIoRuntime() {
     // I/O globals
     DefineGlobal("__io_iocp", 8, 0); // HANDLE: I/O completion port
     DefineGlobal("__io_completion_thread", 8, 0); // HANDLE: IOCP drain thread
-    DefineGlobal("__io_sync_worker", 8, 0); // HANDLE: sync-op worker thread
+    // HANDLE[IoSyncWorkerCount]: sync-op worker threads. All threads execute
+    // __io_sync_worker_loop concurrently and share the request queue.
+    DefineGlobal("__io_sync_workers", 8 * IoSyncWorkerCount, 0);
     DefineGlobal("__io_sync_cs", 40, 0); // CRITICAL_SECTION (40 bytes on x64)
     DefineGlobal("__io_sync_req_event", 8, 0); // manual-reset event: sync work available
     DefineGlobal("__io_sync_req_head", 8, 0); // SyncRequest* head
@@ -5627,17 +5974,25 @@ public partial class X86CodeEmitter {
     EmitCallImport("kernel32.dll", "CreateThread");
     EmitGlobalStoreReg(X86Register.Rax, "__io_completion_thread");
 
-    // CreateThread(NULL, 0, &__io_sync_worker_loop, NULL, 0, NULL) → __io_sync_worker
-    EmitXorRegReg(X86Register.Rcx, X86Register.Rcx);
-    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx);
-    EmitByte(0x4C); EmitByte(0x8D); EmitByte(0x05); // LEA R8, [rip+disp32]
-    _jumpFixups.Add((_code.Count, "__io_sync_worker_loop"));
-    EmitDword(0);
-    EmitXorRegReg(X86Register.R9, X86Register.R9);
-    EmitMovMemRspReg(0x20, X86Register.R9);
-    EmitMovMemRspReg(0x28, X86Register.R9);
-    EmitCallImport("kernel32.dll", "CreateThread");
-    EmitGlobalStoreReg(X86Register.Rax, "__io_sync_worker");
+    // Spawn IoSyncWorkerCount sync-worker OS threads. All threads run
+    // __io_sync_worker_loop and dequeue from the shared sync-request queue,
+    // so up to IoSyncWorkerCount blocking ReadFile/WriteFile ops on different
+    // pipes can be parked at the same time without starving any caller.
+    for (int i = 0; i < IoSyncWorkerCount; i++) {
+      // CreateThread(NULL, 0, &__io_sync_worker_loop, NULL, 0, NULL)
+      EmitXorRegReg(X86Register.Rcx, X86Register.Rcx);
+      EmitXorRegReg(X86Register.Rdx, X86Register.Rdx);
+      EmitByte(0x4C); EmitByte(0x8D); EmitByte(0x05); // LEA R8, [rip+disp32]
+      _jumpFixups.Add((_code.Count, "__io_sync_worker_loop"));
+      EmitDword(0);
+      EmitXorRegReg(X86Register.R9, X86Register.R9);
+      EmitMovMemRspReg(0x20, X86Register.R9);
+      EmitMovMemRspReg(0x28, X86Register.R9);
+      EmitCallImport("kernel32.dll", "CreateThread");
+      // Store the new HANDLE in __io_sync_workers[i].
+      EmitGlobalLeaReg(X86Register.Rcx, "__io_sync_workers");
+      EmitMovIndirectMemReg(X86Register.Rcx, i * 8, X86Register.Rax);
+    }
 
     EmitRuntimeFunctionEnd();
   }
@@ -5647,7 +6002,15 @@ public partial class X86CodeEmitter {
   /// Called from _start after __gt_cleanup.
   /// </summary>
   private void EmitIoShutdown() {
-    EmitRuntimeFunctionStart("__io_shutdown", 0, 0x40);
+    // Frame needs to hold:
+    //   [rbp-0x08]                              scratch (e.g. shutdown req ptr)
+    //   [rbp-(0x10 + IoSyncWorkerCount*8)..rbp-0x08)  handle array for
+    //     WaitForMultipleObjects: handles[0]=completion_thread, then N workers.
+    // Round up to keep RSP 16-aligned.
+    int handleArrayBytes = (1 + IoSyncWorkerCount) * 8; // completion + N workers
+    int frameRaw = 0x10 + handleArrayBytes;             // 0x08 scratch + 0x08 alignment + array
+    int frame = (frameRaw + 0xF) & ~0xF;                // 16-align
+    EmitRuntimeFunctionStart("__io_shutdown", 0, frame);
 
     // PostQueuedCompletionStatus(iocp, 0, 0, NULL) — sentinel to wake completion thread
     EmitGlobalLoadReg(X86Register.Rcx, "__io_iocp");
@@ -5656,39 +6019,49 @@ public partial class X86CodeEmitter {
     EmitXorRegReg(X86Register.R9, X86Register.R9);  // lpOverlapped = NULL
     EmitCallImport("kernel32.dll", "PostQueuedCompletionStatus");
 
-    // Send shutdown SyncRequest to sync worker: op=0xFF, then SetEvent
-    EmitMovRegImm(X86Register.Rcx, SyncReqSize);
-    EmitCallRuntimeLabel("mm_raw_alloc", zeroSecondArg: Compiler.MmTrace); // HEAP_ZERO_MEMORY — already zeroed
-    EmitMovMemReg(-0x08, X86Register.Rax, 8); // save req
-    // req->op = SyncOpShutdown
-    EmitMovRegMem(X86Register.Rax, -0x08, 8);
-    EmitMovRegImm(X86Register.Rcx, SyncOpShutdown);
-    EmitMovIndirectMemReg(X86Register.Rax, SyncReqOffOp, X86Register.Rcx);
-    // Enqueue to sync request queue
-    EmitMovRegMem(X86Register.Rcx, -0x08, 8); // req
-    EmitCallRuntimeLabel("__io_enqueue_sync_req");
-    // SetEvent(__io_sync_req_event)
+    // Enqueue one Shutdown sentinel per sync worker so every blocked
+    // WaitForSingleObject wakes and the worker exits cleanly. Use a loop so
+    // adding workers later doesn't require touching shutdown.
+    for (int i = 0; i < IoSyncWorkerCount; i++) {
+      EmitMovRegImm(X86Register.Rcx, SyncReqSize);
+      EmitCallRuntimeLabel("mm_raw_alloc", zeroSecondArg: Compiler.MmTrace); // HEAP_ZERO_MEMORY
+      EmitMovMemReg(-0x08, X86Register.Rax, 8); // save req
+      EmitMovRegMem(X86Register.Rax, -0x08, 8);
+      EmitMovRegImm(X86Register.Rcx, SyncOpShutdown);
+      EmitMovIndirectMemReg(X86Register.Rax, SyncReqOffOp, X86Register.Rcx);
+      EmitMovRegMem(X86Register.Rcx, -0x08, 8); // req
+      EmitCallRuntimeLabel("__io_enqueue_sync_req");
+    }
+    // SetEvent wakes every worker parked on the (manual-reset) req event.
     EmitGlobalLoadReg(X86Register.Rcx, "__io_sync_req_event");
     EmitCallImport("kernel32.dll", "SetEvent");
 
-    // WaitForMultipleObjects(2, handles_array, TRUE, INFINITE)
-    // Build 2-element handle array on stack: handles[0] at [rbp-0x18], handles[1] at [rbp-0x10]
-    // (contiguous upward: lpHandles[0]=handles[0], lpHandles[1]=handles[0]+8=handles[1])
+    // Build the handle array for WaitForMultipleObjects. Layout grows upward
+    // in memory: handles[0] at [rbp - (handleArrayBytes + 8)], handles[N] at
+    // [rbp - (handleArrayBytes + 8) + N*8]. Slot 0 = completion thread,
+    // slots 1..N = sync workers.
+    int arrBase = -(handleArrayBytes + 0x08); // first qword of the array
     EmitGlobalLoadReg(X86Register.Rax, "__io_completion_thread");
-    EmitMovMemReg(-0x18, X86Register.Rax, 8); // handles[0] = completion_thread
-    EmitGlobalLoadReg(X86Register.Rax, "__io_sync_worker");
-    EmitMovMemReg(-0x10, X86Register.Rax, 8); // handles[1] = sync_worker
-    EmitMovRegImm(X86Register.Rcx, 2);           // nCount
-    EmitLeaRegMem(X86Register.Rdx, -0x18);       // lpHandles = &handles[0]
-    EmitMovRegImm(X86Register.R8, 1);            // bWaitAll = TRUE
-    EmitMovRegImm(X86Register.R9, 0xFFFFFFFF);   // dwMilliseconds = INFINITE
+    EmitMovMemReg(arrBase, X86Register.Rax, 8);
+    for (int i = 0; i < IoSyncWorkerCount; i++) {
+      EmitGlobalLeaReg(X86Register.Rcx, "__io_sync_workers");
+      EmitMovRegIndirectMem(X86Register.Rax, X86Register.Rcx, i * 8);
+      EmitMovMemReg(arrBase + (i + 1) * 8, X86Register.Rax, 8);
+    }
+    EmitMovRegImm(X86Register.Rcx, 1 + IoSyncWorkerCount); // nCount
+    EmitLeaRegMem(X86Register.Rdx, arrBase);               // lpHandles
+    EmitMovRegImm(X86Register.R8, 1);                      // bWaitAll = TRUE
+    EmitMovRegImm(X86Register.R9, 0xFFFFFFFF);             // dwMilliseconds = INFINITE
     EmitCallImport("kernel32.dll", "WaitForMultipleObjects");
 
-    // CloseHandle for both threads and IOCP
+    // CloseHandle for completion thread, every sync worker, and IOCP.
     EmitGlobalLoadReg(X86Register.Rcx, "__io_completion_thread");
     EmitCallImport("kernel32.dll", "CloseHandle");
-    EmitGlobalLoadReg(X86Register.Rcx, "__io_sync_worker");
-    EmitCallImport("kernel32.dll", "CloseHandle");
+    for (int i = 0; i < IoSyncWorkerCount; i++) {
+      EmitGlobalLeaReg(X86Register.Rcx, "__io_sync_workers");
+      EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rcx, i * 8);
+      EmitCallImport("kernel32.dll", "CloseHandle");
+    }
     EmitGlobalLoadReg(X86Register.Rcx, "__io_iocp");
     EmitCallImport("kernel32.dll", "CloseHandle");
 
@@ -5762,9 +6135,8 @@ public partial class X86CodeEmitter {
     EmitMovMemReg(-0x08, X86Register.Rdx, 8);
     DefineLabel("__io_comp_use_bytes");
 
-    // Free ctx
+    // Free ctx (allocated by the issuer of the overlapped op).
     EmitMovRegMem(X86Register.Rcx, -0x20, 8);
-
     EmitCallRuntimeLabel("mm_raw_free", zeroSecondArg: Compiler.MmTrace);
 
     // __io_complete_gt(gt, result, result, 0)
@@ -5807,7 +6179,7 @@ public partial class X86CodeEmitter {
     DefineLabel("__io_sync_worker_loop");
     EmitPushReg(X86Register.Rbp);
     EmitMovRegReg(X86Register.Rbp, X86Register.Rsp);
-    EmitSubRegImm(X86Register.Rsp, 0x270);
+    EmitSubRegImm(X86Register.Rsp, 0x280);
     // Locals: [rbp-0x08]=req ptr, [rbp-0x10]=result, [rbp-0x18]=comp ptr
     // Extended frame for net_connect: WSADATA(408b), hints(48b), sockaddr_in(16b)
     // Phase B errno capture (Step 1a):
@@ -5815,6 +6187,12 @@ public partial class X86CodeEmitter {
     //   [rbp-0x248] = captured Win32 error code, passed as the 4th arg to
     //                 __io_complete_gt so the lowering can map ENOENT/EACCES
     //                 to notFound/accessDenied via __io_get_last_error.
+    // Pipe read/write scratch (frame grew from 0x270 to 0x280):
+    //   [rbp-0x250] = bytesRead/bytesWritten OUT param scratch for ReadFile/WriteFile
+    //                 (sits at [RSP+0x30] which is in the caller-owned stack-arg region,
+    //                 above the 5th-arg slot and the callee's shadow space)
+    //   [rbp-0x260] = 5th-arg lpOverlapped slot (at [RSP+0x20] for the kernel32 call)
+    //   [rbp-0x278..rbp-0x260) = callee shadow space (32 bytes, clobberable)
 
     DefineLabel("__io_sync_worker_top");
     // WaitForSingleObject(__io_sync_req_event, INFINITE)
@@ -6419,11 +6797,19 @@ public partial class X86CodeEmitter {
 
     EmitJmp("__io_sync_worker_top");
 
-    // --- Shutdown: free req, exit thread ---
+    // --- Shutdown: free req, re-signal so peer workers wake up, exit thread ---
     DefineLabel("__io_sync_worker_shutdown");
     EmitMovRegMem(X86Register.Rcx, -0x08, 8);
 
     EmitCallRuntimeLabel("mm_raw_free", zeroSecondArg: Compiler.MmTrace);
+    // The shutdown sentinel just got consumed and the queue may now be empty
+    // (causing __io_dequeue_sync_req to ResetEvent). The other workers in the
+    // pool would then park forever on WaitForSingleObject. Re-SetEvent so the
+    // next worker wakes, finds its own sentinel still in flight (or, if it
+    // dequeues empty, hits this same re-signal path on its next iteration),
+    // and the wake cascade walks the entire pool.
+    EmitGlobalLoadReg(X86Register.Rcx, "__io_sync_req_event");
+    EmitCallImport("kernel32.dll", "SetEvent");
     EmitXorRegReg(X86Register.Rax, X86Register.Rax);
     EmitMovRegReg(X86Register.Rsp, X86Register.Rbp);
     EmitPopReg(X86Register.Rbp);
@@ -6490,13 +6876,18 @@ public partial class X86CodeEmitter {
   }
 
   /// <summary>
-  /// __io_submit_sync(op_rcx, arg0_rdx, arg1_r8): Submit a non-overlappable I/O request.
+  /// __io_submit_sync(op_rcx, arg0_rdx, arg1_r8, arg2_r9): Submit a non-overlappable I/O request.
   /// Yields the current green thread until the sync worker processes the request.
   /// Returns result value in RAX.
+  ///
+  /// arg2 is read from R9 and stored into the SyncReq for ops that need a third
+  /// argument (e.g. pipe-read/write byte count). Legacy 2-arg call sites leave
+  /// R9 as whatever the caller's prior code left there; those op handlers never
+  /// read arg2, so the garbage value is harmless.
   /// </summary>
   private void EmitIoSubmitSync() {
     EmitRuntimeFunctionStart("__io_submit_sync", 3, 0x40);
-    // [rbp-0x08] = op, [rbp-0x10] = arg0, [rbp-0x18] = arg1
+    // [rbp-0x08] = op, [rbp-0x10] = arg0, [rbp-0x18] = arg1, [rbp-0x20] = arg2
 
     // Check cancel flag — abort immediately if cancelled
     EmitLoadCurrentGtInline(X86Register.R10);
@@ -6507,9 +6898,9 @@ public partial class X86CodeEmitter {
     // Allocate SyncRequest
     EmitMovRegImm(X86Register.Rcx, SyncReqSize);
     EmitCallRuntimeLabel("mm_raw_alloc", zeroSecondArg: Compiler.MmTrace);
-    EmitMovMemReg(-0x20, X86Register.Rax, 8); // save req
+    EmitMovMemReg(-0x28, X86Register.Rax, 8); // save req
 
-    // Fill: op, arg0, arg1, waiter_gt, next=0
+    // Fill: op, arg0, arg1, arg2, waiter_gt, next=0
     EmitMovRegMem(X86Register.Rdx, -0x08, 8); // op
     EmitMovIndirectMemReg(X86Register.Rax, SyncReqOffOp, X86Register.Rdx);
     EmitMovRegMem(X86Register.Rdx, -0x10, 8); // arg0
@@ -6532,7 +6923,7 @@ public partial class X86CodeEmitter {
     EmitMovIndirectMemReg(X86Register.R10, GtOffIoYielded, X86Register.Rax);
 
     // Enqueue the request and signal the sync worker
-    EmitMovRegMem(X86Register.Rcx, -0x20, 8);
+    EmitMovRegMem(X86Register.Rcx, -0x28, 8);
     EmitCallRuntimeLabel("__io_enqueue_sync_req");
     EmitGlobalLoadReg(X86Register.Rcx, "__io_sync_req_event");
     EmitCallImportOnSystemStack("kernel32.dll", "SetEvent");
@@ -6582,14 +6973,14 @@ public partial class X86CodeEmitter {
     EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
     EmitJcc("z", "__io_submit_sync_mainthread_park");
     // Got a GT — context-switch to it, come back when someone switches back to us
-    EmitMovMemReg(-0x28, X86Register.Rax, 8); // save dequeued GT
+    EmitMovMemReg(-0x30, X86Register.Rax, 8); // save dequeued GT
     EmitMovRegImm(X86Register.Rcx, GtStatusRunning);
     EmitMovIndirectMemReg(X86Register.Rax, GtOffStatus, X86Register.Rcx);
     EmitLoadCurrentGtInline(X86Register.Rcx);
-    EmitMovRegMem(X86Register.Rdx, -0x28, 8);
+    EmitMovRegMem(X86Register.Rdx, -0x30, 8);
     EmitCallRuntimeLabel("__gt_context_switch");
     // Signal that the GT's context switch is complete so __io_complete_gt can safely enqueue it.
-    EmitMovRegMem(X86Register.Rax, -0x28, 8); // RAX = the GT that just yielded
+    EmitMovRegMem(X86Register.Rax, -0x30, 8); // RAX = the GT that just yielded
     EmitMovRegImm(X86Register.Rcx, 1);
     EmitMovIndirectMemReg(X86Register.Rax, GtOffIoYielded, X86Register.Rcx);
     EmitJmp("__io_submit_sync_mainthread_loop"); // re-check after returning
@@ -6656,7 +7047,7 @@ public partial class X86CodeEmitter {
       (SyncOpNetRecv,       "__at_io_op_net_recv"),
       (SyncOpNetClose,      "__at_io_op_net_close"),
       (SyncOpDnsResolve,    "__at_io_op_net_connect"),
-
+      (SyncOpProcessWait,   "__at_io_op_process_wait"),
     };
 
     foreach (var (opCode, symdata) in ops) {
@@ -7372,7 +7763,18 @@ public partial class X86CodeEmitter {
   //   +0x90  drainCtxStdoutPtr     DrainCtx struct (freed by release_handle)
   //   +0x98  drainCtxStderrPtr
   //   +0xA0  feedCtxStdinPtr
-  // total = 0xA8 (168 bytes)
+  //   +0xA8  hJob                  Job Object owning the descendant tree
+  //   +0xB0  hStdoutLineBufPtr     pushback buffer for read_stdout_line (mm_raw_alloc'd,
+  //                                holds bytes past the last \n from a previous call)
+  //   +0xB8  hStdoutLineBufLen     bytes currently buffered at hStdoutLineBufPtr
+  //   +0xC0  hStderrLineBufPtr     pushback buffer for read_stderr_line
+  //   +0xC8  hStderrLineBufLen
+  // total = 0xD0 (208 bytes)
+  //
+  // The line-buffer fields are populated lazily by the streaming readers in
+  // Phase 3.2's persistent-worker support — they let the parent process
+  // drive a child's stdout/stderr line-by-line while leftover bytes past
+  // the final \n stay parked here until the next call.
   //
   // DrainCtx (mm_raw_alloc'd, lifetime = release_handle):
   //   +0x00  hRead                 the pipe handle to drain
@@ -7430,7 +7832,16 @@ public partial class X86CodeEmitter {
   // JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE so CloseHandle in release_handle is a
   // sufficient cleanup if the caller never explicitly killed the tree.
   private const int SubpOffHJob = 0xA8;
-  private const int SubpHandleStructSize = 0xB0;
+  // Pushback buffers used by the streaming line readers
+  // (read_stdout_line/read_stderr_line). When a ReadFile delivers bytes past
+  // a \n boundary, the surplus is retained here so the next call can return
+  // the next complete line without re-blocking on a slow producer. mm_raw_alloc'd
+  // byte buffers freed at release_handle time.
+  private const int SubpOffHStdoutLineBufPtr = 0xB0;
+  private const int SubpOffHStdoutLineBufLen = 0xB8;
+  private const int SubpOffHStderrLineBufPtr = 0xC0;
+  private const int SubpOffHStderrLineBufLen = 0xC8;
+  private const int SubpHandleStructSize = 0xD0;
 
   // DrainCtx field offsets
   private const int DrainCtxOffHRead = 0x00;
@@ -7491,18 +7902,43 @@ public partial class X86CodeEmitter {
     DefineSymdata("__subp_nul_devname", "NUL\0\0"u8.ToArray()); // ANSI "NUL", padded
     // UTF-16 "NUL\0" for CreateFileW
     DefineSymdata("__subp_nul_devname_w", [(byte)'N', 0, (byte)'U', 0, (byte)'L', 0, 0, 0]);
+    // UTF-16 prefix L"\\\\.\\pipe\\maxon_stream_" — 21 wchars (no trailing null;
+    // the pipe-name builder appends pid_seq_dir + null). Each ASCII char is
+    // followed by a zero byte for the high half of the UTF-16 code unit.
+    DefineSymdata("__subp_pipe_name_prefix_w", [
+      (byte)'\\', 0, (byte)'\\', 0, (byte)'.', 0, (byte)'\\', 0,
+      (byte)'p', 0, (byte)'i', 0, (byte)'p', 0, (byte)'e', 0, (byte)'\\', 0,
+      (byte)'m', 0, (byte)'a', 0, (byte)'x', 0, (byte)'o', 0, (byte)'n', 0,
+      (byte)'_', 0, (byte)'s', 0, (byte)'t', 0, (byte)'r', 0, (byte)'e', 0,
+      (byte)'a', 0, (byte)'m', 0, (byte)'_', 0,
+    ]);
+    // Per-process atomic counter for unique streaming-pipe names. Incremented
+    // via LOCK XADD inside __subp_build_pipe_name_wide so concurrent spawns get
+    // distinct sequence numbers.
+    DefineGlobal("__subp_stream_pipe_seq", 8, 0);
 
     EmitMaxonManagedIsNull();
     EmitMaxonSubprocessLastErrorMessage();
     EmitMaxonSubprocessResolveOnPath();
     EmitMaxonSubprocessBuildCmdlineWide();
+    EmitMaxonSubprocessWideAppendU64();
+    EmitMaxonSubprocessBuildPipeNameWide();
+    EmitMaxonSubprocessCreateOverlappedPipe();
     EmitMaxonSubprocessSpawnCore();
     EmitMaxonSubprocessSpawn();
+    EmitMaxonSubprocessSpawnStreaming();
     EmitMaxonSubprocessDetach();
     EmitMaxonSubprocessGetPid();
     EmitMaxonSubprocessKill();
     EmitMaxonSubprocessSendSignal();
     EmitMaxonSubprocessReleaseHandle();
+    EmitMaxonSubprocessReadLineAppend();
+    EmitMaxonSubprocessReadLineInner();
+    EmitMaxonSubprocessReadStdoutLine();
+    EmitMaxonSubprocessReadStderrLine();
+    EmitMaxonSubprocessWriteStdinAll();
+    EmitMaxonSubprocessCloseStdin();
+    EmitMaxonSubprocessWaitExit();
     EmitMaxonSubprocessDrainThreadEntry();
     EmitMaxonSubprocessFeedThreadEntry();
     EmitMaxonSubprocessWaitInternal();
@@ -7894,6 +8330,12 @@ public partial class X86CodeEmitter {
     EmitSubprocessFreeFieldIfNonZero(SubpOffDrainCtxStdout);
     EmitSubprocessFreeFieldIfNonZero(SubpOffDrainCtxStderr);
     EmitSubprocessFreeFieldIfNonZero(SubpOffFeedCtxStdin);
+    // Streaming line-reader pushback buffers (only populated when callers
+    // use maxon_subprocess_read_{stdout,stderr}_line). Plain mm_raw_alloc'd
+    // byte runs so they share the same free path as the rest of the
+    // mm-allocated fields above.
+    EmitSubprocessFreeFieldIfNonZero(SubpOffHStdoutLineBufPtr);
+    EmitSubprocessFreeFieldIfNonZero(SubpOffHStderrLineBufPtr);
 
     // Free the handle struct itself.
     EmitMovRegMem(X86Register.Rcx, -0x10, 8);
@@ -7955,6 +8397,789 @@ public partial class X86CodeEmitter {
     EmitXorRegReg(X86Register.Rcx, X86Register.Rcx);
     EmitMovIndirectMemReg(X86Register.Rax, fieldOff, X86Register.Rcx);
     DefineLabel(skipLabel);
+  }
+
+  // ============================================================================
+  // Phase 3.2 — Streaming subprocess builtins (Windows X86 backend).
+  //
+  // The original Phase 3.2 builtins (spawn / wait_collect / kill / ...) drive a
+  // child process all-at-once: drain threads slurp stdout and stderr in the
+  // background, a feed thread shoves an entire stdin payload at the child, and
+  // wait_collect blocks until the child exits before returning a single result
+  // struct. That model is perfect for "run cmd, capture output" but useless for
+  // a long-lived worker that must consume jobs over stdin and emit results over
+  // stdout while staying alive — every job would either get buffered until exit
+  // or starve a drain thread.
+  //
+  // These six new builtins give callers raw, blocking access to the child's
+  // stdio pipes so they can drive a persistent worker line-by-line:
+  //
+  //   spawn_streaming(argv, argc, cwd, flags)
+  //       Same CreateProcessW + pipe-setup as spawn, but with kind=Collect
+  //       forced for all three streams and the drain/feed threads suppressed
+  //       via the spawn_core noDrain flag (passed in R12). The returned handle
+  //       owns the parent-side hStdinWrite / hStdoutRead / hStderrRead handles
+  //       directly; the streaming readers and writer touch them in place.
+  //
+  //   write_stdin_all(handle, dataManaged)
+  //       Inline WriteFile loop on the calling thread until the full byte
+  //       payload has gone down the child's stdin pipe.
+  //
+  //   read_stdout_line(handle, maxBytes), read_stderr_line(handle, maxBytes)
+  //       Buffered line reader. ReadFile in chunks into a growing mm_raw_alloc'd
+  //       buffer until '\n', EOF, or maxBytes is hit. Bytes received past the
+  //       newline boundary stick to a per-handle pushback buffer
+  //       (SubpOffH{Stdout,Stderr}LineBuf*) so the next call returns the next
+  //       full line without a fresh ReadFile.
+  //
+  //       Return semantics (all return an mm_raw_alloc'd null-terminated byte
+  //       buffer the caller treats as a __ManagedMemory):
+  //         - len 0 (empty)         → EOF and nothing buffered
+  //         - non-empty, ends '\n'  → normal line
+  //         - non-empty, not '\n'   → final partial line at EOF or hit maxBytes
+  //       Embedded NUL bytes are not supported (strlen-based length).
+  //
+  //   close_stdin(handle)
+  //       CloseHandle on hStdinWrite (so the child sees EOF on its stdin) and
+  //       zero the slot. release_handle's CloseHandle guard makes the second
+  //       close a no-op.
+  //
+  //   wait_exit(handle, timeoutMs)
+  //       WaitForSingleObject + GetExitCodeProcess. Returns the integer exit
+  //       code on success, -2 on timeout (child terminated), -1 on error.
+  //       Does NOT close handles or move pipes into a result struct — the
+  //       caller still owns the handle and must follow up with
+  //       maxon_subprocess_release_handle (which frees the line buffers and
+  //       closes any pipes still open).
+  //
+  // Streaming pipe I/O uses FILE_FLAG_OVERLAPPED named pipes (created by
+  // __subp_create_overlapped_pipe in spawn_core's R12!=0 branches) driven by
+  // maxon_pipe_overlapped_read / _write — true overlapped I/O on the green
+  // thread, completion-routed via the existing IOCP drain. No hop through the
+  // sync-worker pool means N concurrent persistent-worker dispatchers cannot
+  // starve each other behind the pool's fixed worker count.
+  // ============================================================================
+
+  // --------------------------------------------------------------------------
+  // spawn_streaming(argvBlob, argc, cwd, flags) — same CreateProcessW path as
+  // maxon_subprocess_spawn, but with stdio kinds forced to Collect (so all
+  // three pipes are created and the parent-side handles end up in the handle
+  // struct) and the drain/feed threads suppressed via R12 = noDrain flag.
+  //
+  // Stage all 14 spawn_core arguments onto our stack frame, then jump into
+  // spawn_core. Forwarding via the internal CC means the core's existing
+  // register-args + stack-args homing logic does the rest.
+  // --------------------------------------------------------------------------
+  private void EmitMaxonSubprocessSpawnStreaming() {
+    EmitRuntimeFunctionStart("maxon_subprocess_spawn_streaming", 4, 0x40);
+    // After prologue: arg0 (argv) at [rbp-0x08], arg1 (argc) at [rbp-0x10],
+    // arg2 (cwd) at [rbp-0x18], arg3 (flags) at [rbp-0x20].
+
+    // Save the caller's R12 (callee-saved in the Maxon internal CC) before
+    // we overwrite it with our noDrain=1 signal. Two PUSHes maintain
+    // 16-byte stack alignment for the spawn_core CALL.
+    EmitPushReg(X86Register.R12);
+    EmitPushReg(X86Register.R12);
+
+    // Reserve 6 stack-arg slots for the core (args 8..13).
+    EmitSubRegImm(X86Register.Rsp, 0x30);
+
+    // Stack arg slot layout (matches __subp_spawn_core's [rbp+0x10..+0x38]
+    // after its own PUSH RBP):
+    //   [rsp+0x00] stdoutData_managed = 0
+    //   [rsp+0x08] stdoutLimit        = 16 MiB
+    //   [rsp+0x10] stderrKind         = StdioKindCollect
+    //   [rsp+0x18] stderrData_managed = 0
+    //   [rsp+0x20] stderrLimit        = 16 MiB
+    //   [rsp+0x28] flags              = caller's flags
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitMovMemRspReg(0x00, X86Register.Rax);                    // stdoutData = 0
+    EmitMovRegImm(X86Register.Rax, 16 * 1024 * 1024);
+    EmitMovMemRspReg(0x08, X86Register.Rax);                    // stdoutLimit = 16 MiB
+    EmitMovRegImm(X86Register.Rax, StdioKindCollect);
+    EmitMovMemRspReg(0x10, X86Register.Rax);                    // stderrKind = Collect
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitMovMemRspReg(0x18, X86Register.Rax);                    // stderrData = 0
+    EmitMovRegImm(X86Register.Rax, 16 * 1024 * 1024);
+    EmitMovMemRspReg(0x20, X86Register.Rax);                    // stderrLimit = 16 MiB
+    EmitMovRegMem(X86Register.Rax, -0x20, 8);                   // flags
+    EmitMovMemRspReg(0x28, X86Register.Rax);
+
+    // CC registers for args 0..7. The internal CC slots are:
+    //   RCX argv, RDX argc, R8 cwd, R9 env=NULL,
+    //   RSI envInherit=1, RDI stdinKind=Collect,
+    //   RAX stdinData=NULL, RBX stdoutKind=Collect.
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8);                   // argv
+    EmitMovRegMem(X86Register.Rdx, -0x10, 8);                   // argc
+    EmitMovRegMem(X86Register.R8, -0x18, 8);                    // cwd
+    EmitXorRegReg(X86Register.R9, X86Register.R9);              // env = NULL
+    EmitMovRegImm(X86Register.Rsi, 1);                          // envInherit = true
+    EmitMovRegImm(X86Register.Rdi, StdioKindCollect);           // stdinKind
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);            // stdinData = NULL
+    EmitMovRegImm(X86Register.Rbx, StdioKindCollect);           // stdoutKind
+    // R12 = 1 → suppress drain/feed thread setup in spawn_core. The handle
+    // returned will own the parent-side pipe handles directly so the
+    // streaming readers/writer can drive them.
+    EmitMovRegImm(X86Register.R12, 1);
+    EmitCallRuntimeLabel("__subp_spawn_core");
+    EmitAddRegImm(X86Register.Rsp, 0x30);
+
+    EmitPopReg(X86Register.R12);                                 // pop alignment pad
+    EmitPopReg(X86Register.R12);                                 // restore caller's R12
+
+    EmitRuntimeFunctionEnd();
+  }
+
+  // --------------------------------------------------------------------------
+  // write_stdin_all(handle, dataManaged) — blocking WriteFile loop against the
+  // child's stdin pipe. Returns 0 on full write, -1 on error or null handle.
+  //
+  // Stack:
+  //   [rbp-0x08]  handle struct ptr
+  //   [rbp-0x10]  dataManaged buffer ptr (UTF-8 cstring; len via maxon_strlen)
+  //   [rbp-0x18]  cursor (advances as bytes go out)
+  //   [rbp-0x20]  remaining
+  //   [rbp-0x28]  hStdinWrite (cached)
+  //
+  // Pipe writes use maxon_pipe_overlapped_write (FILE_FLAG_OVERLAPPED + IOCP
+  // on the parent-side named-pipe handle, created in __subp_create_overlapped_pipe).
+  // ERROR_IO_PENDING yields the green thread; the IOCP drain re-enqueues us
+  // when WriteFile completes — no sync-worker hop, no pool serialisation.
+  // --------------------------------------------------------------------------
+  private void EmitMaxonSubprocessWriteStdinAll() {
+    EmitRuntimeFunctionStart("maxon_subprocess_write_stdin_all", 2, 0x40);
+
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);                    // handle
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", "rt_subp_wsa_bad");
+
+    // Cache hStdinWrite. If zero (close_stdin already ran), return -1.
+    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, SubpOffHStdinWrite);
+    EmitTestRegReg(X86Register.Rcx, X86Register.Rcx);
+    EmitJcc("z", "rt_subp_wsa_bad");
+    EmitMovMemReg(-0x28, X86Register.Rcx, 8);
+
+    // MaxonCallRuntimeOp hands us the __ManagedMemory's buffer pointer (UTF-8
+    // null-terminated). Use maxon_strlen to recover the byte count — same
+    // shape as the existing subprocess builtins that take managed bytes.
+    EmitMovRegMem(X86Register.Rax, -0x10, 8);
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", "rt_subp_wsa_empty");
+    EmitMovRegReg(X86Register.Rcx, X86Register.Rax);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_strlen")); EmitDword(0);
+    EmitMovMemReg(-0x20, X86Register.Rax, 8);                    // remaining = length
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", "rt_subp_wsa_empty");
+    EmitMovRegMem(X86Register.Rax, -0x10, 8);
+    EmitMovMemReg(-0x18, X86Register.Rax, 8);                    // cursor = buffer
+
+    DefineLabel("rt_subp_wsa_loop");
+    EmitMovRegMem(X86Register.Rax, -0x20, 8);
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", "rt_subp_wsa_ok");
+
+    // maxon_pipe_overlapped_write(hStdinWrite, cursor, remaining)
+    //   → RAX = bytesWritten (positive), 0 (pipe closed), or -1 (real error).
+    // The named-pipe parent-side handle is FILE_FLAG_OVERLAPPED + IOCP-registered
+    // (see __subp_create_overlapped_pipe), so this routes WriteFile through
+    // overlapped I/O and yields the green thread on ERROR_IO_PENDING — no
+    // sync-worker pool involved.
+    EmitMovRegMem(X86Register.Rcx, -0x28, 8);                    // hStdinWrite
+    EmitMovRegMem(X86Register.Rdx, -0x18, 8);                    // cursor
+    EmitMovRegMem(X86Register.R8, -0x20, 8);                     // remaining
+    EmitCallRuntimeLabel("maxon_pipe_overlapped_write");
+    // 0 (pipe closed) and -1 (OS error) both surface as failure to the caller.
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("le", "rt_subp_wsa_bad");
+
+    // cursor += written; remaining -= written
+    EmitMovRegMem(X86Register.Rcx, -0x18, 8);
+    EmitAddRegReg(X86Register.Rcx, X86Register.Rax);
+    EmitMovMemReg(-0x18, X86Register.Rcx, 8);
+    EmitMovRegMem(X86Register.Rcx, -0x20, 8);
+    EmitSubRegReg(X86Register.Rcx, X86Register.Rax);
+    EmitMovMemReg(-0x20, X86Register.Rcx, 8);
+    EmitJmp("rt_subp_wsa_loop");
+
+    DefineLabel("rt_subp_wsa_empty");
+    DefineLabel("rt_subp_wsa_ok");
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJmp("rt_subp_wsa_done");
+
+    DefineLabel("rt_subp_wsa_bad");
+    EmitLeaRegSymdataRel(X86Register.Rax, "__subp_err_invalid_handle");
+    EmitGlobalStoreReg(X86Register.Rax, "__subp_last_error");
+    EmitMovRegImm(X86Register.Rax, -1);
+
+    DefineLabel("rt_subp_wsa_done");
+    EmitRuntimeFunctionEnd();
+  }
+
+  // --------------------------------------------------------------------------
+  // __subp_read_line_inner(handle, hReadFieldOff, lineBufPtrFieldOff,
+  //                        lineBufLenFieldOff, maxBytes)
+  //
+  // Returns an mm_raw_alloc'd null-terminated byte buffer (always non-null;
+  // empty = "\0" = EOF). 5-arg internal helper; both read_stdout_line and
+  // read_stderr_line are thin wrappers that fill the three field-offset
+  // arguments with the matching constants and forward maxBytes through.
+  //
+  // The buffered-reader contract
+  // ----------------------------
+  // The handle struct carries a per-stream pushback buffer
+  // (hStd{out,err}LineBufPtr/Len) holding bytes ReadFile delivered past the
+  // most recent '\n'. On each call we:
+  //   1. Copy bytes from the pushback buffer into the result, scanning for
+  //      a '\n'. If found, split there and stash the tail back into the
+  //      pushback for the next call.
+  //   2. Otherwise loop ReadFile + append-to-result, scanning each new chunk
+  //      for '\n'. The first '\n' is the terminator; any bytes past it stay
+  //      on the pushback. EOF or maxBytes truncation falls out of the loop
+  //      with whatever's accumulated.
+  //
+  // Stack:
+  //   [rbp-0x08]  handle ptr
+  //   [rbp-0x10]  hReadFieldOff
+  //   [rbp-0x18]  lineBufPtrFieldOff
+  //   [rbp-0x20]  lineBufLenFieldOff
+  //   [rbp-0x28]  maxBytes (0 → no cap)
+  //   [rbp-0x30]  result buf (mm_raw_alloc'd; grows as we read)
+  //   [rbp-0x38]  result capacity
+  //   [rbp-0x40]  result length (excludes trailing NUL)
+  //   [rbp-0x48]  hRead (cached from handle struct)
+  //   [rbp-0x50]  pushback buf ptr (loaded from handle, may grow)
+  //   [rbp-0x58]  pushback len
+  //   [rbp-0x60]  bytesRead scratch for ReadFile
+  //   [rbp-0x68]  chunk read buffer (mm_raw_alloc'd, reused across iterations)
+  //   [rbp-0x70]  chunk capacity (constant 4096 bytes)
+  //   [rbp-0x78]  scratch for memcpy / scan loops
+  //
+  // Pipe reads use maxon_pipe_overlapped_read (FILE_FLAG_OVERLAPPED + IOCP on
+  // the parent-side named-pipe handle, created in __subp_create_overlapped_pipe).
+  // The green thread yields on ERROR_IO_PENDING; the IOCP drain re-enqueues us
+  // when the kernel completes the read — bypassing the sync-worker pool that
+  // would otherwise serialise N parallel persistent-worker dispatchers.
+  // --------------------------------------------------------------------------
+  private void EmitMaxonSubprocessReadLineInner() {
+    EmitRuntimeFunctionStart("__subp_read_line_inner", 5, 0xA0);
+
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", "rt_subp_rli_bad");
+
+    // Cache hRead = *(handle + hReadFieldOff). The offset is a runtime arg,
+    // not a constant, so use a MOV via base + index pattern.
+    // RAX = handle, RCX = hReadFieldOff → RDX = [RAX + RCX]
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8);
+    EmitBytes(0x48, 0x8B, 0x14, 0x08);                            // MOV RDX, [RAX + RCX]
+    EmitMovMemReg(-0x48, X86Register.Rdx, 8);
+    EmitTestRegReg(X86Register.Rdx, X86Register.Rdx);
+    EmitJcc("z", "rt_subp_rli_eof_initial");
+
+    // Cache pushback ptr + len from handle.
+    EmitMovRegMem(X86Register.Rcx, -0x18, 8);
+    EmitBytes(0x48, 0x8B, 0x14, 0x08);                            // MOV RDX, [RAX + RCX]  → pushback ptr
+    EmitMovMemReg(-0x50, X86Register.Rdx, 8);
+    EmitMovRegMem(X86Register.Rcx, -0x20, 8);
+    EmitBytes(0x48, 0x8B, 0x14, 0x08);                            // MOV RDX, [RAX + RCX]  → pushback len
+    EmitMovMemReg(-0x58, X86Register.Rdx, 8);
+
+    // Allocate the result buffer (start small — 128 bytes is enough for most
+    // log lines; we'll grow on demand).
+    EmitMovRegImm(X86Register.Rcx, 128);
+    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__rt_tag_cstring");
+    EmitCallRuntimeLabel("mm_raw_alloc", zeroSecondArg: !Compiler.MmTrace);
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", "rt_subp_rli_bad");
+    EmitMovMemReg(-0x30, X86Register.Rax, 8);
+    EmitMovRegImm(X86Register.Rax, 128);
+    EmitMovMemReg(-0x38, X86Register.Rax, 8);
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitMovMemReg(-0x40, X86Register.Rax, 8);
+
+    // Chunk buffer: fixed 4 KiB scratch reused across ReadFile calls. Owned
+    // by us; freed at function exit.
+    EmitMovRegImm(X86Register.Rcx, 4096);
+    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__rt_tag_cstring");
+    EmitCallRuntimeLabel("mm_raw_alloc", zeroSecondArg: !Compiler.MmTrace);
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", "rt_subp_rli_free_result_bad");
+    EmitMovMemReg(-0x68, X86Register.Rax, 8);
+    EmitMovRegImm(X86Register.Rax, 4096);
+    EmitMovMemReg(-0x70, X86Register.Rax, 8);
+
+    // -------- Phase 1: drain pushback into the result --------
+    // Find a '\n' inside [pushback .. pushback+len) and stop there if found.
+    // Otherwise we'll copy the whole pushback into the result and move on
+    // to ReadFile.
+    EmitMovRegMem(X86Register.Rax, -0x58, 8);                     // pushback len
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", "rt_subp_rli_pb_done");
+
+    // Scan pushback for '\n'. RCX = index, RDX = byte. If found at index i,
+    // copy bytes [0..i+1] into the result (which terminates the line), then
+    // move bytes (i+1..len) to the front of the pushback as the new tail.
+    EmitXorRegReg(X86Register.Rcx, X86Register.Rcx);
+    DefineLabel("rt_subp_rli_pb_scan");
+    EmitMovRegMem(X86Register.Rax, -0x58, 8);
+    EmitCmpRegReg(X86Register.Rcx, X86Register.Rax);
+    EmitJcc("ge", "rt_subp_rli_pb_no_nl");
+    // movzx EDX, byte [pushback + RCX]
+    EmitMovRegMem(X86Register.Rax, -0x50, 8);
+    EmitBytes(0x0F, 0xB6, 0x14, 0x08);                            // MOVZX EDX, byte [RAX+RCX]
+    EmitCmpRegImm(X86Register.Rdx, '\n');
+    EmitJcc("e", "rt_subp_rli_pb_nl_at_rcx");
+    EmitAddRegImm(X86Register.Rcx, 1);
+    EmitJmp("rt_subp_rli_pb_scan");
+
+    DefineLabel("rt_subp_rli_pb_nl_at_rcx");
+    // Append pushback[0..RCX+1] to result. Stash RCX (newline index) in scratch.
+    EmitMovMemReg(-0x78, X86Register.Rcx, 8);                     // newline index
+    EmitAddRegImm(X86Register.Rcx, 1);                            // bytesToCopy
+    EmitMovRegMem(X86Register.Rdx, -0x50, 8);                     // src = pushback
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "__subp_rli_append")); EmitDword(0);
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", "rt_subp_rli_oom");
+
+    // Compact the pushback: pushback[0..(newlineIdx+1)] consumed; move bytes
+    // (newlineIdx+1..len) to the start. tail_len = len - (newlineIdx + 1).
+    EmitMovRegMem(X86Register.Rax, -0x58, 8);                     // pushback len
+    EmitMovRegMem(X86Register.Rcx, -0x78, 8);                     // newline index
+    EmitSubRegReg(X86Register.Rax, X86Register.Rcx);
+    EmitSubRegImm(X86Register.Rax, 1);                            // tail_len
+    EmitMovMemReg(-0x58, X86Register.Rax, 8);                     // new pushback len
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", "rt_subp_rli_pb_done_compacted");
+    // memcpy(pushback, pushback + newlineIdx + 1, tail_len)
+    EmitMovRegMem(X86Register.Rcx, -0x50, 8);                     // dst = pushback start
+    EmitMovRegMem(X86Register.Rdx, -0x50, 8);
+    EmitMovRegMem(X86Register.R8, -0x78, 8);
+    EmitAddRegReg(X86Register.Rdx, X86Register.R8);
+    EmitAddRegImm(X86Register.Rdx, 1);                            // src = pushback + newlineIdx + 1
+    EmitMovRegMem(X86Register.R8, -0x58, 8);                      // count = tail_len
+    // maxon_memcpy is REP MOVSB (forward); since dst < src, the overlap is
+    // safe — each destination byte is written before its source slot is read.
+    EmitCallRuntimeLabel("maxon_memcpy");
+    DefineLabel("rt_subp_rli_pb_done_compacted");
+    // We delivered a complete line — flush updated pushback len to the
+    // handle and jump to the success exit.
+    EmitJmp("rt_subp_rli_finish");
+
+    DefineLabel("rt_subp_rli_pb_no_nl");
+    // No newline in pushback. Append the whole pushback to the result, then
+    // empty the pushback and fall through to ReadFile.
+    EmitMovRegMem(X86Register.Rax, -0x58, 8);
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", "rt_subp_rli_pb_done");
+    EmitMovRegReg(X86Register.Rcx, X86Register.Rax);              // bytesToCopy = pushback len
+    EmitMovRegMem(X86Register.Rdx, -0x50, 8);                     // src = pushback
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "__subp_rli_append")); EmitDword(0);
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", "rt_subp_rli_oom");
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitMovMemReg(-0x58, X86Register.Rax, 8);                     // pushback len = 0
+
+    DefineLabel("rt_subp_rli_pb_done");
+
+    // -------- Phase 2: ReadFile loop --------
+    DefineLabel("rt_subp_rli_rf_loop");
+    // If maxBytes > 0 and result length >= maxBytes → stop.
+    EmitMovRegMem(X86Register.Rax, -0x28, 8);                     // maxBytes
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", "rt_subp_rli_rf_no_cap");
+    EmitMovRegMem(X86Register.Rcx, -0x40, 8);
+    EmitCmpRegReg(X86Register.Rcx, X86Register.Rax);
+    EmitJcc("ge", "rt_subp_rli_finish");
+    DefineLabel("rt_subp_rli_rf_no_cap");
+
+    // maxon_pipe_overlapped_read(hRead, chunkBuf, chunkCap)
+    //   → RAX = bytesRead (positive), 0 (EOF / broken pipe), or -1 (real error).
+    // The streaming pipe's parent-side read end is FILE_FLAG_OVERLAPPED +
+    // IOCP-registered (see __subp_create_overlapped_pipe); the green thread
+    // yields on ERROR_IO_PENDING and is resumed by the IOCP drain thread
+    // when the kernel completes the read. This bypasses the sync-worker pool
+    // entirely, so N parallel spec-test workers each draining their own
+    // child's stdout do not serialise through the (capped) sync-worker
+    // queue — the dispatcher-hang fix relies on this property.
+    EmitMovRegMem(X86Register.Rcx, -0x48, 8);                     // hRead
+    EmitMovRegMem(X86Register.Rdx, -0x68, 8);                     // chunk buf
+    EmitMovRegMem(X86Register.R8, -0x70, 8);                      // chunk cap
+    EmitCallRuntimeLabel("maxon_pipe_overlapped_read");
+    // RAX = bytesRead. Negative (-1) is a real OS error; surface it as EOF
+    // for the line reader (last_error remains set by the sync worker so the
+    // caller can inspect it via subprocessLastErrorMessage).
+    EmitMovMemReg(-0x60, X86Register.Rax, 8);
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("le", "rt_subp_rli_finish");                          // 0 = EOF, <0 = error
+
+    // Scan chunk[0..bytesRead) for '\n'. RCX = index, RDX = byte.
+    EmitXorRegReg(X86Register.Rcx, X86Register.Rcx);
+    DefineLabel("rt_subp_rli_chunk_scan");
+    EmitMovRegMem(X86Register.Rax, -0x60, 8);
+    EmitCmpRegReg(X86Register.Rcx, X86Register.Rax);
+    EmitJcc("ge", "rt_subp_rli_chunk_no_nl");
+    EmitMovRegMem(X86Register.Rax, -0x68, 8);
+    EmitBytes(0x0F, 0xB6, 0x14, 0x08);                            // MOVZX EDX, byte [chunkBuf+RCX]
+    EmitCmpRegImm(X86Register.Rdx, '\n');
+    EmitJcc("e", "rt_subp_rli_chunk_nl_at_rcx");
+    EmitAddRegImm(X86Register.Rcx, 1);
+    EmitJmp("rt_subp_rli_chunk_scan");
+
+    DefineLabel("rt_subp_rli_chunk_nl_at_rcx");
+    // Append chunk[0..RCX+1] to result; copy chunk[(RCX+1)..bytesRead) into
+    // pushback (which is currently empty — we drained it in Phase 1).
+    EmitMovMemReg(-0x78, X86Register.Rcx, 8);                     // newline idx
+    EmitAddRegImm(X86Register.Rcx, 1);                            // bytesToCopy
+    EmitMovRegMem(X86Register.Rdx, -0x68, 8);                     // src = chunk
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "__subp_rli_append")); EmitDword(0);
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", "rt_subp_rli_oom");
+
+    // tail_len = bytesRead - (newlineIdx + 1)
+    EmitMovRegMem(X86Register.Rax, -0x60, 8);
+    EmitMovRegMem(X86Register.Rcx, -0x78, 8);
+    EmitSubRegReg(X86Register.Rax, X86Register.Rcx);
+    EmitSubRegImm(X86Register.Rax, 1);
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", "rt_subp_rli_finish");                           // no tail → done
+    // Allocate a new pushback buffer of size tail_len. The previous buffer
+    // (if any) was already freed/zero in Phase 1's compact path. Defensive:
+    // free any non-null current pushback ptr before overwriting.
+    EmitMovMemReg(-0x58, X86Register.Rax, 8);                     // new pushback len = tail_len
+    EmitMovRegMem(X86Register.Rcx, -0x50, 8);                     // old pushback ptr
+    EmitTestRegReg(X86Register.Rcx, X86Register.Rcx);
+    EmitJcc("z", "rt_subp_rli_pb_alloc");
+    EmitCallRuntimeLabel("mm_raw_free", zeroSecondArg: Compiler.MmTrace);
+    DefineLabel("rt_subp_rli_pb_alloc");
+    EmitMovRegMem(X86Register.Rcx, -0x58, 8);
+    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__rt_tag_cstring");
+    EmitCallRuntimeLabel("mm_raw_alloc", zeroSecondArg: !Compiler.MmTrace);
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", "rt_subp_rli_oom");
+    EmitMovMemReg(-0x50, X86Register.Rax, 8);
+    // memcpy(pushback, chunk + newlineIdx + 1, tail_len)
+    EmitMovRegReg(X86Register.Rcx, X86Register.Rax);              // dst = pushback
+    EmitMovRegMem(X86Register.Rdx, -0x68, 8);
+    EmitMovRegMem(X86Register.R8, -0x78, 8);
+    EmitAddRegReg(X86Register.Rdx, X86Register.R8);
+    EmitAddRegImm(X86Register.Rdx, 1);                            // src = chunk + newlineIdx + 1
+    EmitMovRegMem(X86Register.R8, -0x58, 8);                      // count = tail_len
+    EmitCallRuntimeLabel("maxon_memcpy");
+    EmitJmp("rt_subp_rli_finish");
+
+    DefineLabel("rt_subp_rli_chunk_no_nl");
+    // No newline. Append the whole chunk and continue reading.
+    EmitMovRegMem(X86Register.Rcx, -0x60, 8);                     // bytesToCopy = bytesRead
+    EmitMovRegMem(X86Register.Rdx, -0x68, 8);                     // src = chunk
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "__subp_rli_append")); EmitDword(0);
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", "rt_subp_rli_oom");
+    EmitJmp("rt_subp_rli_rf_loop");
+
+    DefineLabel("rt_subp_rli_finish");
+    // Persist pushback ptr/len back to the handle struct.
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);                     // handle
+    EmitMovRegMem(X86Register.Rcx, -0x18, 8);                     // lineBufPtr field off
+    EmitMovRegMem(X86Register.Rdx, -0x50, 8);
+    // MOV [handle + lineBufPtrFieldOff], pushback ptr
+    EmitBytes(0x48, 0x89, 0x14, 0x08);                            // MOV [RAX+RCX], RDX
+    EmitMovRegMem(X86Register.Rcx, -0x20, 8);                     // lineBufLen field off
+    EmitMovRegMem(X86Register.Rdx, -0x58, 8);
+    EmitBytes(0x48, 0x89, 0x14, 0x08);                            // MOV [RAX+RCX], RDX
+
+    // Free the chunk buffer (always allocated; freed once per call).
+    EmitMovRegMem(X86Register.Rcx, -0x68, 8);
+    EmitCallRuntimeLabel("mm_raw_free", zeroSecondArg: Compiler.MmTrace);
+
+    // Null-terminate the result and return.
+    EmitMovRegMem(X86Register.Rax, -0x30, 8);                     // result buf
+    EmitMovRegMem(X86Register.Rcx, -0x40, 8);                     // result len
+    EmitBytes(0xC6, 0x04, 0x08, 0x00);                            // MOV byte [RAX+RCX], 0
+    EmitJmp("rt_subp_rli_done");
+
+    DefineLabel("rt_subp_rli_eof_initial");
+    // No hRead → EOF before we even allocated. Return a fresh 1-byte "\0"
+    // managed buffer (RuntimeCallToManaged frees this; cannot return rdata).
+    EmitMovRegImm(X86Register.Rcx, 1);
+    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__rt_tag_cstring");
+    EmitCallRuntimeLabel("mm_raw_alloc", zeroSecondArg: !Compiler.MmTrace);
+    EmitBytes(0xC6, 0x00, 0x00);                                  // MOV byte [RAX], 0
+    EmitMovMemReg(-0x30, X86Register.Rax, 8);                     // unify return path through -0x30
+    EmitJmp("rt_subp_rli_done");
+
+    DefineLabel("rt_subp_rli_oom");
+    // Allocation failed mid-flight. Free what we've got and return an empty
+    // buffer (caller's expected error signal). Keep last_error set so
+    // last_error_message reports something useful.
+    EmitLeaRegSymdataRel(X86Register.Rax, "__subp_err_alloc");
+    EmitGlobalStoreReg(X86Register.Rax, "__subp_last_error");
+    EmitMovRegMem(X86Register.Rcx, -0x30, 8);
+    EmitTestRegReg(X86Register.Rcx, X86Register.Rcx);
+    EmitJcc("z", "rt_subp_rli_oom_skip_res");
+    EmitCallRuntimeLabel("mm_raw_free", zeroSecondArg: Compiler.MmTrace);
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitMovMemReg(-0x30, X86Register.Rax, 8);                     // null out so done-path skips double-free
+    DefineLabel("rt_subp_rli_oom_skip_res");
+    EmitMovRegMem(X86Register.Rcx, -0x68, 8);
+    EmitTestRegReg(X86Register.Rcx, X86Register.Rcx);
+    EmitJcc("z", "rt_subp_rli_oom_skip_chunk");
+    EmitCallRuntimeLabel("mm_raw_free", zeroSecondArg: Compiler.MmTrace);
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitMovMemReg(-0x68, X86Register.Rax, 8);
+    DefineLabel("rt_subp_rli_oom_skip_chunk");
+    EmitMovRegImm(X86Register.Rcx, 1);
+    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__rt_tag_cstring");
+    EmitCallRuntimeLabel("mm_raw_alloc", zeroSecondArg: !Compiler.MmTrace);
+    EmitBytes(0xC6, 0x00, 0x00);
+    EmitMovMemReg(-0x30, X86Register.Rax, 8);
+    EmitJmp("rt_subp_rli_done");
+
+    DefineLabel("rt_subp_rli_free_result_bad");
+    // mm_raw_alloc of the chunk buffer failed but we already have a result
+    // buf at -0x30. Free it and fall into rli_bad. (rli_bad allocates the
+    // sentinel and persists it to -0x30.)
+    EmitMovRegMem(X86Register.Rcx, -0x30, 8);
+    EmitCallRuntimeLabel("mm_raw_free", zeroSecondArg: Compiler.MmTrace);
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitMovMemReg(-0x30, X86Register.Rax, 8);
+    EmitMovMemReg(-0x68, X86Register.Rax, 8);                     // chunk slot already null
+    EmitJmp("rt_subp_rli_bad");
+
+    DefineLabel("rt_subp_rli_bad");
+    EmitLeaRegSymdataRel(X86Register.Rax, "__subp_err_invalid_handle");
+    EmitGlobalStoreReg(X86Register.Rax, "__subp_last_error");
+    // Even on hard error, return a fresh 1-byte "\0" managed buffer so the
+    // caller has something to mm_raw_free in RuntimeCallToManaged. last_error
+    // signals the failure separately.
+    EmitMovRegImm(X86Register.Rcx, 1);
+    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__rt_tag_cstring");
+    EmitCallRuntimeLabel("mm_raw_alloc", zeroSecondArg: !Compiler.MmTrace);
+    EmitBytes(0xC6, 0x00, 0x00);
+    EmitMovMemReg(-0x30, X86Register.Rax, 8);
+
+    DefineLabel("rt_subp_rli_done");
+    // Every reachable predecessor (success finish + the three error
+    // branches) has parked the result buffer pointer at [rbp-0x30].
+    EmitMovRegMem(X86Register.Rax, -0x30, 8);
+    EmitRuntimeFunctionEnd();
+  }
+
+  // --------------------------------------------------------------------------
+  // __subp_rli_append(bytesToCopy_rcx, src_rdx) — append [src..src+rcx) to
+  // the caller's result buffer at [rbp-0x30]/[rbp-0x38]/[rbp-0x40].
+  // Grows the buffer (alloc + memcpy + free) if needed. Returns 1 on
+  // success, 0 on alloc failure. Caller-saved RBP snapshot lives at
+  // [rbp-0x18] of THIS function (offset 0 == saved caller RBP after our PUSH).
+  //
+  // We stash the caller's RBP into a local slot because every internal
+  // mm_raw_alloc / mm_raw_free / maxon_memcpy clobbers caller-saved regs
+  // including the one we'd otherwise stash RBP in. The structure mirrors
+  // __subp_cmdline_append_byte.
+  // --------------------------------------------------------------------------
+  private void EmitMaxonSubprocessReadLineAppend() {
+    EmitRuntimeFunctionStart("__subp_rli_append", 2, 0x50);
+    // [rbp-0x08]  bytesToCopy (arg)
+    // [rbp-0x10]  src (arg)
+    // [rbp-0x18]  caller's RBP snapshot
+    // [rbp-0x20]  saved bytesToCopy (survives alloc/memcpy clobbers)
+    // [rbp-0x28]  saved src
+    // [rbp-0x30]  old buf (snapshot for free post-grow)
+    // [rbp-0x38]  new buf
+    // [rbp-0x40]  old cap (for grow doubling)
+    EmitMovRegMem(X86Register.Rax, 0, 8);                         // saved caller RBP
+    EmitMovMemReg(-0x18, X86Register.Rax, 8);
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);
+    EmitMovMemReg(-0x20, X86Register.Rax, 8);
+    EmitMovRegMem(X86Register.Rax, -0x10, 8);
+    EmitMovMemReg(-0x28, X86Register.Rax, 8);
+
+    // Grow loop: while (len + bytesToCopy + 1 > cap) cap *= 2.
+    DefineLabel("rt_subp_rla_grow_check");
+    EmitMovRegMem(X86Register.Rax, -0x18, 8);                     // caller RBP
+    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, -0x40); // len
+    EmitMovRegIndirectMem(X86Register.Rdx, X86Register.Rax, -0x38); // cap
+    EmitMovRegMem(X86Register.R8, -0x20, 8);                      // bytesToCopy
+    EmitAddRegReg(X86Register.Rcx, X86Register.R8);
+    EmitAddRegImm(X86Register.Rcx, 1);                            // need = len + bytes + 1 (NUL room)
+    EmitCmpRegReg(X86Register.Rcx, X86Register.Rdx);
+    EmitJcc("le", "rt_subp_rla_have_room");
+
+    // Snapshot old buf + old cap so the post-call regs don't need to
+    // re-walk the caller frame.
+    EmitMovRegMem(X86Register.Rax, -0x18, 8);
+    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, -0x30); // old buf
+    EmitMovMemReg(-0x30, X86Register.Rcx, 8);
+    EmitMovRegIndirectMem(X86Register.Rdx, X86Register.Rax, -0x38); // old cap
+    EmitMovMemReg(-0x40, X86Register.Rdx, 8);
+
+    // New cap = max(old cap * 2, need). We don't track len separately here
+    // (it's still on the caller frame); the doubling loop converges fast.
+    // Allocate doubled cap.
+    EmitMovRegMem(X86Register.Rcx, -0x40, 8);
+    EmitShlRegImm(X86Register.Rcx, 1);
+    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__rt_tag_cstring");
+    EmitCallRuntimeLabel("mm_raw_alloc", zeroSecondArg: !Compiler.MmTrace);
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", "rt_subp_rla_fail");
+    EmitMovMemReg(-0x38, X86Register.Rax, 8);
+
+    // Copy old [0..len) into new.
+    EmitMovRegMem(X86Register.Rax, -0x18, 8);
+    EmitMovRegIndirectMem(X86Register.R8, X86Register.Rax, -0x40); // len = number of bytes to copy
+    EmitMovRegMem(X86Register.Rcx, -0x38, 8);                     // dst = new buf
+    EmitMovRegMem(X86Register.Rdx, -0x30, 8);                     // src = old buf
+    EmitCallRuntimeLabel("maxon_memcpy");
+
+    // Free old buf.
+    EmitMovRegMem(X86Register.Rcx, -0x30, 8);
+    EmitCallRuntimeLabel("mm_raw_free", zeroSecondArg: Compiler.MmTrace);
+
+    // Update caller's buf + cap.
+    EmitMovRegMem(X86Register.Rax, -0x18, 8);                     // caller RBP
+    EmitMovRegMem(X86Register.Rcx, -0x38, 8);                     // new buf
+    EmitMovIndirectMemReg(X86Register.Rax, -0x30, X86Register.Rcx);
+    EmitMovRegMem(X86Register.Rcx, -0x40, 8);                     // old cap
+    EmitShlRegImm(X86Register.Rcx, 1);                            // new cap
+    EmitMovIndirectMemReg(X86Register.Rax, -0x38, X86Register.Rcx);
+    EmitJmp("rt_subp_rla_grow_check");                            // re-check (one more doubling may be needed)
+
+    DefineLabel("rt_subp_rla_have_room");
+    // Copy bytes into buf[len..len+bytes), then advance len.
+    EmitMovRegMem(X86Register.Rax, -0x18, 8);
+    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, -0x30); // buf
+    EmitMovRegIndirectMem(X86Register.Rdx, X86Register.Rax, -0x40); // len
+    EmitAddRegReg(X86Register.Rcx, X86Register.Rdx);              // dst = buf + len
+    EmitMovRegMem(X86Register.Rdx, -0x28, 8);                     // src
+    EmitMovRegMem(X86Register.R8, -0x20, 8);                      // count
+    EmitCallRuntimeLabel("maxon_memcpy");
+    EmitMovRegMem(X86Register.Rax, -0x18, 8);
+    EmitMovRegIndirectMem(X86Register.Rdx, X86Register.Rax, -0x40);
+    EmitMovRegMem(X86Register.Rcx, -0x20, 8);
+    EmitAddRegReg(X86Register.Rdx, X86Register.Rcx);
+    EmitMovIndirectMemReg(X86Register.Rax, -0x40, X86Register.Rdx);
+    EmitMovRegImm(X86Register.Rax, 1);
+    EmitJmp("rt_subp_rla_done");
+
+    DefineLabel("rt_subp_rla_fail");
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+
+    DefineLabel("rt_subp_rla_done");
+    EmitRuntimeFunctionEnd();
+  }
+
+  // --------------------------------------------------------------------------
+  // read_stdout_line(handle, maxBytes) — thin wrapper around the inner
+  // helper. The constants pinned in here select the stdout side of the
+  // handle struct (read handle + line-buffer fields).
+  // --------------------------------------------------------------------------
+  private void EmitMaxonSubprocessReadStdoutLine() {
+    EmitRuntimeFunctionStart("maxon_subprocess_read_stdout_line", 2, 0x30);
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8);                    // handle
+    EmitMovRegImm(X86Register.Rdx, SubpOffHStdoutRead);
+    EmitMovRegImm(X86Register.R8, SubpOffHStdoutLineBufPtr);
+    EmitMovRegImm(X86Register.R9, SubpOffHStdoutLineBufLen);
+    EmitMovRegMem(X86Register.Rsi, -0x10, 8);                    // maxBytes
+    EmitCallRuntimeLabel("__subp_read_line_inner");
+    EmitRuntimeFunctionEnd();
+  }
+
+  // --------------------------------------------------------------------------
+  // read_stderr_line(handle, maxBytes) — stderr-side companion to
+  // read_stdout_line; same shape, different field offsets.
+  // --------------------------------------------------------------------------
+  private void EmitMaxonSubprocessReadStderrLine() {
+    EmitRuntimeFunctionStart("maxon_subprocess_read_stderr_line", 2, 0x30);
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8);
+    EmitMovRegImm(X86Register.Rdx, SubpOffHStderrRead);
+    EmitMovRegImm(X86Register.R8, SubpOffHStderrLineBufPtr);
+    EmitMovRegImm(X86Register.R9, SubpOffHStderrLineBufLen);
+    EmitMovRegMem(X86Register.Rsi, -0x10, 8);
+    EmitCallRuntimeLabel("__subp_read_line_inner");
+    EmitRuntimeFunctionEnd();
+  }
+
+  // --------------------------------------------------------------------------
+  // close_stdin(handle) — close the parent's write end of the child's stdin
+  // pipe so the child sees EOF. Zero the slot so release_handle's later
+  // close is a no-op (and so a re-close from the caller is harmless).
+  // --------------------------------------------------------------------------
+  private void EmitMaxonSubprocessCloseStdin() {
+    EmitRuntimeFunctionStart("maxon_subprocess_close_stdin", 1, 0x30);
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", "rt_subp_csi_done");
+    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, SubpOffHStdinWrite);
+    EmitTestRegReg(X86Register.Rcx, X86Register.Rcx);
+    EmitJcc("z", "rt_subp_csi_done");
+    EmitCallImportOnSystemStack("kernel32.dll", "CloseHandle");
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);
+    EmitXorRegReg(X86Register.Rcx, X86Register.Rcx);
+    EmitMovIndirectMemReg(X86Register.Rax, SubpOffHStdinWrite, X86Register.Rcx);
+    DefineLabel("rt_subp_csi_done");
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitRuntimeFunctionEnd();
+  }
+
+  // --------------------------------------------------------------------------
+  // wait_exit(handle, timeoutMs) — WaitForSingleObject + GetExitCodeProcess.
+  // Unlike wait_collect this does NOT join drain threads, transfer captured
+  // buffers, or close any pipes; the caller still owns the handle and is
+  // expected to call subprocess_release_handle (which frees the streaming
+  // line buffers and closes remaining pipes) when done.
+  //
+  // Returns:
+  //   >= 0  → child's exit code
+  //   -1    → wait error (last_error set)
+  //   -2    → timeout (child has been TerminateProcess'd by wait_internal)
+  //
+  // Stack:
+  //   [rbp-0x08]  handle
+  //   [rbp-0x10]  timeoutMs
+  //   [rbp-0x18]  waitOutcome
+  //   [rbp-0x20]  exitCode scratch (DWORD widened to qword)
+  // --------------------------------------------------------------------------
+  private void EmitMaxonSubprocessWaitExit() {
+    EmitRuntimeFunctionStart("maxon_subprocess_wait_exit", 2, 0x30);
+
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", "rt_subp_we_bad");
+
+    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, SubpOffHProcess);
+    EmitMovRegMem(X86Register.Rdx, -0x10, 8);
+    EmitCallRuntimeLabel("maxon_subprocess_wait_internal");
+    EmitMovMemReg(-0x18, X86Register.Rax, 8);
+
+    // outcome: 0 = completed, 1 = timeout (process already terminated),
+    //          -1 = wait error.
+    EmitCmpRegImm(X86Register.Rax, 1);
+    EmitJcc("e", "rt_subp_we_timeout");
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("s", "rt_subp_we_bad");
+
+    // GetExitCodeProcess(hProcess, &exitCode)
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitMovMemReg(-0x20, X86Register.Rax, 8);
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);
+    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, SubpOffHProcess);
+    EmitLeaRegMem(X86Register.Rdx, -0x20);
+    EmitCallImportOnSystemStack("kernel32.dll", "GetExitCodeProcess");
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", "rt_subp_we_bad");
+    EmitMovRegMem(X86Register.Rax, -0x20, 4);                    // exit code (DWORD, zero-extended)
+    EmitJmp("rt_subp_we_done");
+
+    DefineLabel("rt_subp_we_timeout");
+    EmitMovRegImm(X86Register.Rax, -2);
+    EmitJmp("rt_subp_we_done");
+
+    DefineLabel("rt_subp_we_bad");
+    EmitLeaRegSymdataRel(X86Register.Rax, "__subp_err_wait_failed");
+    EmitGlobalStoreReg(X86Register.Rax, "__subp_last_error");
+    EmitMovRegImm(X86Register.Rax, -1);
+
+    DefineLabel("rt_subp_we_done");
+    EmitRuntimeFunctionEnd();
   }
 
   // --------------------------------------------------------------------------
@@ -8662,7 +9887,19 @@ public partial class X86CodeEmitter {
     //   [rbp-0x1D0]  parent's read end of stdout pipe (transferred to struct after alloc)
     //   [rbp-0x1D8]  parent's read end of stderr pipe (transferred to struct after alloc)
     //   [rbp-0x1E0]  hJob (Job Object owning the spawned process; transferred to struct after alloc)
-    //   [rbp-0x260]  JOBOBJECT_EXTENDED_LIMIT_INFORMATION (112 bytes; pad to 0x80)
+    //   [rbp-0x260]  JOBOBJECT_EXTENDED_LIMIT_INFORMATION (passed as 112 bytes to
+    //                SetInformationJobObject; the actual Win32 struct on x64 is
+    //                larger, and the kernel writes past our 112-byte buffer into
+    //                whatever lives below. We deliberately leave the bottom of
+    //                the frame as scratch and read the noDrain flag directly
+    //                from R12 — see the JCC at the drain-thread section.
+    //
+    // noDrain signal: R12 carries it from the wrapper to spawn_core. R12 is
+    //   - callee-saved in Win64 (kernel32 preserves it across CreateProcessW etc.)
+    //   - callee-saved in the Maxon internal CC (other runtime calls preserve it)
+    // so the value the wrapper sets survives the whole spawn_core body without
+    // needing a stack slot. The wrapper PUSH/POPs its caller's R12 so the
+    // out-of-band reuse here is transparent to the wrapper's caller.
     const int SlotJobExtLimit = -0x260;
     const int SlotHandleStruct = -0x78;
     const int SlotCmdLineWide = -0x80;
@@ -8684,13 +9921,36 @@ public partial class X86CodeEmitter {
     const int SlotHStderrReadParent = -0x1D8;
     const int SlotHJob = -0x1E0;
 
+    // STARTUPINFOEX support: PROC_THREAD_ATTRIBUTE_HANDLE_LIST gives
+    // CreateProcessW an explicit list of handles to inherit, ignoring global
+    // HANDLE_FLAG_INHERIT flags. Without this, concurrent spawns can have
+    // child N inherit child N-1's pipe handles before SetHandleInformation
+    // strips inheritance — see the test runner's earlier "two-phase spawn
+    // flakes" issue.
+    //
+    // SlotAttrListPtr/Size live in the unused 16-byte gap between
+    // STARTUPINFOEX (which now occupies SlotSI -0x180 .. -0x110, 112 bytes
+    // with cb=112) and SlotPI (PROCESS_INFORMATION at -0x100..-0xE8).
+    //
+    // SlotHandleArray (24 bytes for the inheritable HANDLE vector) needs to
+    // sit OUTSIDE the STARTUPINFOEX region — it cannot overlap SI.hStdInput
+    // / SI.hStdOutput / SI.hStdError at SI+0x50/0x58/0x60. We place it below
+    // SlotJobExtLimit by bumping the frame from 0x270 to 0x280 (see
+    // EmitRuntimeFunctionStart below). REP STOSQ at the top of the body
+    // zero-fills only through -0x78, so SlotHandleArray at -0x278 lies
+    // OUTSIDE the zeroed region — but every byte of it is written
+    // explicitly before UpdateProcThreadAttribute consumes it.
+    const int SlotAttrListPtr = -0x108;
+    const int SlotAttrListSize = -0x110;
+    const int SlotHandleArray = -0x278;
+
     // SECURITY_ATTRIBUTES occupies SlotSA..SlotSA+0x18, but we lay it out
     // starting at SlotSA so the base ptr is at SlotSA (24 bytes used).
     // STARTUPINFOW is 104 bytes; we lay it from SlotSI upward.
     // PROCESS_INFORMATION is 24 bytes from SlotPI upward.
     // The padded reservations give us 16-byte alignment.
 
-    EmitRuntimeFunctionStart("__subp_spawn_core", 8, 0x270);
+    EmitRuntimeFunctionStart("__subp_spawn_core", 8, 0x280);
 
     // The caller (subprocess_spawn / subprocess_detach wrapper) places the
     // 14 source args via the internal CC: args 0..7 in RCX/RDX/R8/R9/RSI/
@@ -8703,6 +9963,16 @@ public partial class X86CodeEmitter {
       EmitMovRegMem(X86Register.Rax, 0x10 + i * 8, 8);
       EmitMovMemReg(-0x48 - i * 8, X86Register.Rax, 8);
     }
+
+    // (R12 is the out-of-band noDrain signal from the wrapper. It survives
+    // the full spawn_core body because it's callee-saved in both the Win64
+    // and Maxon internal calling conventions, so we don't snapshot it into
+    // a stack slot — see the JCC further down. An earlier draft did spill
+    // R12 to [rbp-0x268]; that slot got clobbered by something in the
+    // CreateProcessW / SetInformationJobObject path (suspected: the kernel
+    // writing past our 112-byte JOBOBJECT_EXTENDED_LIMIT_INFORMATION buffer
+    // when the documented x64 struct is larger). Reading R12 directly
+    // dodges the issue entirely.)
 
     // Zero locals from SlotHandleStruct (-0x78) down to SlotHJob
     // (-0x1E0). REP STOSQ writes upward from RDI, so we start at the
@@ -8745,8 +10015,13 @@ public partial class X86CodeEmitter {
     EmitMovMemDwordImm(SlotSA, 24);
     EmitMovMemDwordImm(SlotSA + 16, 1);
 
-    // STARTUPINFOW.cb = 104 (size of STARTUPINFOW)
-    EmitMovMemDwordImm(SlotSI, 104);
+    // STARTUPINFOEX.cb = 112 (STARTUPINFOW 104 + lpAttributeList 8). We always
+    // use STARTUPINFOEX because dwCreationFlags below always sets
+    // EXTENDED_STARTUPINFO_PRESENT, so CreateProcessW will read the full
+    // 112-byte struct. lpAttributeList at SlotSI+104 is zeroed by the REP
+    // STOSQ at the top of the body and is filled in below after the attribute
+    // list is constructed.
+    EmitMovMemDwordImm(SlotSI, 112);
     EmitMovMemDwordImm(SlotSI + 0x3C, 0x100);                     // dwFlags = STARTF_USESTDHANDLES
 
     // ===== Configure stdin =====
@@ -8774,6 +10049,32 @@ public partial class X86CodeEmitter {
     EmitJmp("rt_subp_sc_stdin_done");
 
     DefineLabel("rt_subp_sc_stdin_bytes");
+    // Streaming variant (R12 != 0): create a named-pipe pair with the parent
+    // end wired up for FILE_FLAG_OVERLAPPED + IOCP. The streaming readers /
+    // writer drive the parent-side handle through maxon_pipe_overlapped_*,
+    // which yields the calling green thread without serialising through the
+    // sync-worker pool the way the legacy CreatePipe + SyncOpPipeRead path
+    // did. No stdin payload to feed for streaming; we skip straight to
+    // stdin_done after wiring STARTUPINFOW.
+    EmitTestRegReg(X86Register.R12, X86Register.R12);
+    EmitJcc("z", "rt_subp_sc_stdin_bytes_legacy");
+    EmitXorRegReg(X86Register.Rcx, X86Register.Rcx);              // dirCode = 0 (stdin)
+    EmitLeaRegMem(X86Register.Rdx, SlotHStdinWriteParent);
+    EmitLeaRegMem(X86Register.R8, SlotHStdinReadChild);
+    EmitCallRuntimeLabel("__subp_create_overlapped_pipe");
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", "rt_subp_sc_fail_pipe");
+    EmitMovRegMem(X86Register.Rax, SlotHStdinReadChild, 8);
+    EmitMovMemReg(SlotSI + 0x50, X86Register.Rax, 8);             // hStdInput = child read end
+    // Streaming has no synchronous stdin payload — zero out the copy/len
+    // slots so release_handle's free path is a no-op for them.
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitMovMemReg(SlotStdinPayloadLen, X86Register.Rax, 8);
+    EmitMovMemReg(SlotStdinPayloadCopy, X86Register.Rax, 8);
+    EmitJmp("rt_subp_sc_stdin_done");
+
+    DefineLabel("rt_subp_sc_stdin_bytes_legacy");
+    // Non-streaming "send bytes" path: anonymous CreatePipe + feed thread.
     // CreatePipe(&rChild, &wParent, &SA, 0). SA has bInherit=true, so both
     // ends start inheritable; we then clear the parent-side flag.
     EmitLeaRegMem(X86Register.Rcx, SlotHStdinReadChild);
@@ -8860,6 +10161,22 @@ public partial class X86CodeEmitter {
     EmitJmp("rt_subp_sc_stdout_done");
 
     DefineLabel("rt_subp_sc_stdout_collect");
+    // Streaming variant: named-pipe with FILE_FLAG_OVERLAPPED on the parent's
+    // read end (registered with IOCP). See the matching comment under
+    // rt_subp_sc_stdin_bytes for the rationale.
+    EmitTestRegReg(X86Register.R12, X86Register.R12);
+    EmitJcc("z", "rt_subp_sc_stdout_collect_legacy");
+    EmitMovRegImm(X86Register.Rcx, 1);                            // dirCode = 1 (stdout)
+    EmitLeaRegMem(X86Register.Rdx, SlotHStdoutReadParent);
+    EmitLeaRegMem(X86Register.R8, SlotHStdoutWriteChild);
+    EmitCallRuntimeLabel("__subp_create_overlapped_pipe");
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", "rt_subp_sc_fail_pipe");
+    EmitMovRegMem(X86Register.Rax, SlotHStdoutWriteChild, 8);
+    EmitMovMemReg(SlotSI + 0x58, X86Register.Rax, 8);             // hStdOutput = child write end
+    EmitJmp("rt_subp_sc_stdout_done");
+
+    DefineLabel("rt_subp_sc_stdout_collect_legacy");
     // CreatePipe(&rParent, &wChild, &SA, 0). Child inherits the write end;
     // we strip inheritance off the parent's read end.
     EmitLeaRegMem(X86Register.Rcx, SlotHStdoutReadParent);
@@ -8910,6 +10227,20 @@ public partial class X86CodeEmitter {
     EmitJmp("rt_subp_sc_stderr_done");
 
     DefineLabel("rt_subp_sc_stderr_collect");
+    // Streaming variant: named-pipe overlapped + IOCP. Same rationale as stdout.
+    EmitTestRegReg(X86Register.R12, X86Register.R12);
+    EmitJcc("z", "rt_subp_sc_stderr_collect_legacy");
+    EmitMovRegImm(X86Register.Rcx, 2);                            // dirCode = 2 (stderr)
+    EmitLeaRegMem(X86Register.Rdx, SlotHStderrReadParent);
+    EmitLeaRegMem(X86Register.R8, SlotHStderrWriteChild);
+    EmitCallRuntimeLabel("__subp_create_overlapped_pipe");
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", "rt_subp_sc_fail_pipe");
+    EmitMovRegMem(X86Register.Rax, SlotHStderrWriteChild, 8);
+    EmitMovMemReg(SlotSI + 0x60, X86Register.Rax, 8);             // hStdError = child write end
+    EmitJmp("rt_subp_sc_stderr_done");
+
+    DefineLabel("rt_subp_sc_stderr_collect_legacy");
     EmitLeaRegMem(X86Register.Rcx, SlotHStderrReadParent);
     EmitLeaRegMem(X86Register.Rdx, SlotHStderrWriteChild);
     EmitLeaRegMem(X86Register.R8, SlotSA);
@@ -8981,6 +10312,91 @@ public partial class X86CodeEmitter {
     // and TerminateJobObject still works, we just don't get auto-kill on close.
     DefineLabel("rt_subp_sc_job_done");
 
+    // ===== Build PROC_THREAD_ATTRIBUTE_LIST with HANDLE_LIST =====
+    // CreateProcessW with bInheritHandles=TRUE inherits every handle in the
+    // parent that is currently marked HANDLE_FLAG_INHERIT. When two spawns
+    // run concurrently (separate GTs), spawn B's CreateProcessW can fire
+    // while spawn A's pipe handle is still inheritable — child B then
+    // inherits A's pipes and IPC cross-talks. STARTUPINFOEX with
+    // PROC_THREAD_ATTRIBUTE_HANDLE_LIST tells CreateProcessW to inherit
+    // exactly the handles in our explicit list and ignore the global flags,
+    // which closes the race deterministically.
+    //
+    // 1) Probe required size via InitializeProcThreadAttributeList(NULL,...).
+    //    Returns FALSE with ERROR_INSUFFICIENT_BUFFER and writes the size.
+    EmitSystemStackEnter(0x30);
+    EmitXorRegReg(X86Register.Rcx, X86Register.Rcx);             // lpAttributeList = NULL
+    EmitMovRegImm(X86Register.Rdx, 1);                           // dwAttributeCount = 1
+    EmitXorRegReg(X86Register.R8, X86Register.R8);               // dwFlags = 0
+    EmitLeaRegMem(X86Register.R9, SlotAttrListSize);             // &lpSize
+    EmitCallImport("kernel32.dll", "InitializeProcThreadAttributeList");
+    EmitSystemStackLeave(0x30);
+
+    // 2) Allocate the attribute list buffer. mm_raw_alloc returns the buffer
+    //    in RAX (zeroed by HEAP_ZERO_MEMORY). We use a temporary stack slot
+    //    (SlotHandleArray, not yet populated) to hold the raw pointer while
+    //    Initialize runs; SlotAttrListPtr is only set after Initialize
+    //    succeeds, so the unwind path's DeleteProcThreadAttributeList only
+    //    runs on a properly-initialized buffer (it is undefined on raw mem).
+    EmitMovRegMem(X86Register.Rcx, SlotAttrListSize, 8);
+    EmitCallRuntimeLabel("mm_raw_alloc", zeroSecondArg: Compiler.MmTrace);
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", "rt_subp_sc_fail_attr");
+    EmitMovMemReg(SlotHandleArray, X86Register.Rax, 8);          // temp save
+
+    // 3) Initialize the attribute list.
+    EmitSystemStackEnter(0x30);
+    EmitMovRegMem(X86Register.Rcx, SlotHandleArray, 8);          // ptr
+    EmitMovRegImm(X86Register.Rdx, 1);
+    EmitXorRegReg(X86Register.R8, X86Register.R8);
+    EmitLeaRegMem(X86Register.R9, SlotAttrListSize);
+    EmitCallImport("kernel32.dll", "InitializeProcThreadAttributeList");
+    EmitSystemStackLeave(0x30);
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("nz", "rt_subp_sc_attr_init_ok");
+    // Initialize failed — free the raw buffer (no Delete because the buffer
+    // is not in the Initialize'd state DeleteProcThreadAttributeList expects).
+    EmitMovRegMem(X86Register.Rcx, SlotHandleArray, 8);
+    EmitCallRuntimeLabel("mm_raw_free", zeroSecondArg: Compiler.MmTrace);
+    EmitJmp("rt_subp_sc_fail_attr");
+    DefineLabel("rt_subp_sc_attr_init_ok");
+    // Initialize succeeded — record SlotAttrListPtr so cleanup paths (success
+    // and unwind) will Delete + free correctly.
+    EmitMovRegMem(X86Register.Rax, SlotHandleArray, 8);
+    EmitMovMemReg(SlotAttrListPtr, X86Register.Rax, 8);
+
+    // 4) Populate the 3-handle vector at SlotHandleArray. Pulling from
+    //    STARTUPINFOW.hStdInput/hStdOutput/hStdError (SlotSI+0x50/0x58/0x60)
+    //    is correct for every stdio mode (inherit / NUL / file / legacy-pipe
+    //    / streaming) because each per-stdio branch above writes the final
+    //    child-visible handle into that slot.
+    EmitMovRegMem(X86Register.Rax, SlotSI + 0x50, 8);
+    EmitMovMemReg(SlotHandleArray + 0x00, X86Register.Rax, 8);
+    EmitMovRegMem(X86Register.Rax, SlotSI + 0x58, 8);
+    EmitMovMemReg(SlotHandleArray + 0x08, X86Register.Rax, 8);
+    EmitMovRegMem(X86Register.Rax, SlotSI + 0x60, 8);
+    EmitMovMemReg(SlotHandleArray + 0x10, X86Register.Rax, 8);
+
+    // 5) UpdateProcThreadAttribute(list, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+    //                              &handles, 3*sizeof(HANDLE), NULL, NULL).
+    //    PROC_THREAD_ATTRIBUTE_HANDLE_LIST = 0x00020002.
+    EmitSystemStackEnter(0x40);
+    EmitMovRegMem(X86Register.Rcx, SlotAttrListPtr, 8);
+    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx);             // dwFlags = 0
+    EmitMovRegImm(X86Register.R8, 0x00020002);                   // PROC_THREAD_ATTRIBUTE_HANDLE_LIST
+    EmitLeaRegMem(X86Register.R9, SlotHandleArray);              // lpValue
+    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x20, 0x18, 0x00, 0x00, 0x00); // [rsp+0x20] = 24 (cbSize)
+    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x28, 0x00, 0x00, 0x00, 0x00); // [rsp+0x28] = NULL lpPreviousValue
+    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x30, 0x00, 0x00, 0x00, 0x00); // [rsp+0x30] = NULL lpReturnSize
+    EmitCallImport("kernel32.dll", "UpdateProcThreadAttribute");
+    EmitSystemStackLeave(0x40);
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", "rt_subp_sc_fail_attr");
+
+    // 6) Write the list pointer into STARTUPINFOEX.lpAttributeList (SlotSI+104).
+    EmitMovRegMem(X86Register.Rax, SlotAttrListPtr, 8);
+    EmitMovMemReg(SlotSI + 104, X86Register.Rax, 8);
+
     // ===== CreateProcessW =====
     // CRITICAL ORDERING: compute the stack args FIRST (which may clobber
     // RCX/RDX/R8/R9 during the dwCreationFlags branching), then load the
@@ -9008,7 +10424,13 @@ public partial class X86CodeEmitter {
     // bit-test rather than holding it in a register because the four CC
     // arg registers (RCX/RDX/R8/R9) get loaded last and R10/R11 may be
     // used by EmitSystemStackLeave to switch back to the GT stack.
-    EmitMovRegImm(X86Register.Rax, 0x4);                         // CREATE_SUSPENDED
+    //
+    // EXTENDED_STARTUPINFO_PRESENT (0x80000) tells CreateProcessW that
+    // lpStartupInfo points to a STARTUPINFOEX (cb=112) whose lpAttributeList
+    // gives the inheritable-handle vector. Without this flag the kernel
+    // treats the struct as classic STARTUPINFOW and our race fix has no
+    // effect.
+    EmitMovRegImm(X86Register.Rax, 0x4 | 0x80000);               // CREATE_SUSPENDED | EXTENDED_STARTUPINFO_PRESENT
     EmitMovRegMem(X86Register.Rcx, -0x70, 8);
     EmitAndRegImm(X86Register.Rcx, SpawnFlagHideWindow);
     EmitTestRegReg(X86Register.Rcx, X86Register.Rcx);
@@ -9051,8 +10473,15 @@ public partial class X86CodeEmitter {
     EmitCallImport("kernel32.dll", "CreateProcessW");
     EmitSystemStackLeave(0x50);
 
-
-
+    // Tear down the PROC_THREAD_ATTRIBUTE_LIST regardless of CreateProcessW
+    // success/failure. RAX holds CreateProcessW's BOOL return; stash it in
+    // SlotAttrListSize (no longer needed after Initialize completed) so the
+    // teardown helper can freely clobber RAX/RCX, then reload before the
+    // result test. The helper zeroes SlotAttrListPtr after free so the
+    // mirror cleanup in rt_subp_sc_unwind is a no-op when we got here cleanly.
+    EmitMovMemReg(SlotAttrListSize, X86Register.Rax, 8);
+    EmitFreeAttrListIfNonZero(SlotAttrListPtr);
+    EmitMovRegMem(X86Register.Rax, SlotAttrListSize, 8);
 
     EmitTestRegReg(X86Register.Rax, X86Register.Rax);
     EmitJcc("nz", "rt_subp_sc_cp_ok");
@@ -9184,6 +10613,17 @@ public partial class X86CodeEmitter {
     // The parent read ends are now in the handle struct (transferred from
     // SlotH*ReadParent above). Each drain thread gets a DrainCtx that
     // tells it which pipe to read and where to write the resulting buffer.
+    //
+    // noDrain bypass: if R12 is nonzero (set by the streaming-spawn
+    // wrapper), skip every drain/feed thread block. The pipe handles stay
+    // in the handle struct so the streaming readers/writer can drive them
+    // byte-by-byte; the drain-context and feed-context pointers remain
+    // zero so release_handle has nothing extra to free. R12 survives the
+    // full spawn path (callee-saved in both Win64 and the Maxon internal
+    // CC), so a single TEST R12, R12 here is sufficient.
+    EmitTestRegReg(X86Register.R12, X86Register.R12);
+    EmitJcc("nz", "rt_subp_sc_skip_all_threads");
+
     EmitMovRegMem(X86Register.Rax, -0x40, 8);                    // stdoutKind
     EmitCmpRegImm(X86Register.Rax, StdioKindCollect);
     EmitJcc("ne", "rt_subp_sc_stdout_drain_done");
@@ -9312,11 +10752,12 @@ public partial class X86CodeEmitter {
     EmitXorRegReg(X86Register.Rax, X86Register.Rax);
     EmitMovIndirectMemReg(X86Register.Rdi, SubpOffHStdinWrite, X86Register.Rax);
     DefineLabel("rt_subp_sc_stdin_feed_done");
+    DefineLabel("rt_subp_sc_skip_all_threads");
 
     // ===== Free intermediate wide buffers =====
-    EmitFreeWideOrSkip(SlotCmdLineWide);
-    EmitFreeWideOrSkip(SlotCwdWide);
-    EmitFreeWideOrSkip(SlotEnvWide);
+    EmitFreeSlotIfNonZero(SlotCmdLineWide);
+    EmitFreeSlotIfNonZero(SlotCwdWide);
+    EmitFreeSlotIfNonZero(SlotEnvWide);
 
     EmitMovRegMem(X86Register.Rax, SlotHandleStruct, 8);
     EmitJmp("rt_subp_sc_done");
@@ -9366,11 +10807,32 @@ public partial class X86CodeEmitter {
     DefineLabel("rt_subp_sc_fail_skip_t");
     EmitJmp("rt_subp_sc_unwind");
 
+    DefineLabel("rt_subp_sc_fail_attr");
+    // PROC_THREAD_ATTRIBUTE_LIST build failure (alloc, Initialize, or
+    // UpdateProcThreadAttribute returned 0). The unwind path frees the
+    // partially-built list via SlotAttrListPtr, so we only need to label
+    // the error here and fall through.
+    EmitLeaRegSymdataRel(X86Register.Rax, "__subp_err_alloc");
+    EmitGlobalStoreReg(X86Register.Rax, "__subp_last_error");
+    EmitJmp("rt_subp_sc_unwind");
+
     DefineLabel("rt_subp_sc_fail");
     EmitLeaRegSymdataRel(X86Register.Rax, "__subp_err_unsupported");
     EmitGlobalStoreReg(X86Register.Rax, "__subp_last_error");
 
     DefineLabel("rt_subp_sc_unwind");
+    // Free the PROC_THREAD_ATTRIBUTE_LIST if still owned. SlotAttrListPtr is
+    // non-zero only between "Initialize succeeded" and "post-CreateProcessW
+    // inline cleanup ran" (the success path zeroes it after Delete+free).
+    // The failure paths that can reach unwind with the pointer live are:
+    //   - UpdateProcThreadAttribute failed (jump to fail_attr) — list IS
+    //     initialized so Delete is required before mm_raw_free.
+    //   - rt_subp_sc_fail_create / rt_subp_sc_fail_after_create — these
+    //     would only happen if the inline cleanup were skipped, but it
+    //     runs unconditionally after CreateProcessW returns. So normally
+    //     these arrive with SlotAttrListPtr=0 and this block is a no-op.
+    EmitFreeAttrListIfNonZero(SlotAttrListPtr);
+
     // Close any handles we already opened. The child-side handles are in
     // SlotHStdin*/SlotHStdoutWrite/SlotHStderrWrite; the parent-side reads
     // may be in struct fields if the struct was alloc'd. Close them all
@@ -9394,9 +10856,9 @@ public partial class X86CodeEmitter {
     EmitMovRegReg(X86Register.Rcx, X86Register.Rdi);
     EmitCallRuntimeLabel("mm_raw_free", zeroSecondArg: Compiler.MmTrace);
     DefineLabel("rt_subp_sc_unwind_no_struct");
-    EmitFreeWideOrSkip(SlotCmdLineWide);
-    EmitFreeWideOrSkip(SlotCwdWide);
-    EmitFreeWideOrSkip(SlotEnvWide);
+    EmitFreeSlotIfNonZero(SlotCmdLineWide);
+    EmitFreeSlotIfNonZero(SlotCwdWide);
+    EmitFreeSlotIfNonZero(SlotEnvWide);
     EmitFreeSlotIfNonZero(SlotStdinPayloadCopy);
     EmitFreeSlotIfNonZero(SlotDrainCtxStdout);
     EmitFreeSlotIfNonZero(SlotDrainCtxStderr);
@@ -9407,45 +10869,56 @@ public partial class X86CodeEmitter {
     EmitRuntimeFunctionEnd();
   }
 
-  private int _subpCloseSlotCounter;
+  // Shared label-suffix counter for the EmitSlotCleanupIfNonZero variants.
+  // A counter-suffixed skip label lets callers invoke any of these multiple
+  // times for the same slot (e.g. once on the success exit and once on the
+  // unwind path) without label collision. `DefineLabel` would overwrite a
+  // bare slot-only key the second time, which previously caused success-path
+  // JZ jumps for NULL slots to redirect into the unwind cleanup instead of
+  // falling through.
+  private int _subpSlotCleanupCounter;
+
+  /// Common scaffold for "if [rbp+slot] != 0 { <action>; [rbp+slot] = 0 }"
+  /// epilogue helpers. `action` is invoked with the slot value already loaded
+  /// in RCX; it may freely clobber RAX/RCX. The skip label is unique per call
+  /// site so the same slot can be cleaned up on multiple control-flow paths.
+  private void EmitSlotCleanupIfNonZero(string tag, int slot, Action action) {
+    var skipLabel = $"rt_subp_{tag}_{Math.Abs(slot):x4}_{_subpSlotCleanupCounter++}";
+    EmitMovRegMem(X86Register.Rcx, slot, 8);
+    EmitTestRegReg(X86Register.Rcx, X86Register.Rcx);
+    EmitJcc("z", skipLabel);
+    action();
+    EmitXorRegReg(X86Register.Rcx, X86Register.Rcx);
+    EmitMovMemReg(slot, X86Register.Rcx, 8);
+    DefineLabel(skipLabel);
+  }
 
   /// CloseHandle the qword at [rbp+slot] if non-zero. Used in spawn-core
-  /// where SlotHand* live below the regular runtime stack frame. Each call
-  /// site needs a unique skip label — the success-path "close child handles"
-  /// block and the unwind cleanup block both close the same slots, so a
-  /// slot-only key would collide and silently redirect later JZ jumps to
-  /// the wrong cleanup section.
+  /// where SlotHand* live below the regular runtime stack frame.
   private void EmitCloseSlotIfNonZero(int slot) {
-    var skipLabel = $"rt_subp_close_slot_{Math.Abs(slot):x4}_{_subpCloseSlotCounter++}";
-    EmitMovRegMem(X86Register.Rcx, slot, 8);
-    EmitTestRegReg(X86Register.Rcx, X86Register.Rcx);
-    EmitJcc("z", skipLabel);
-    EmitCallImportOnSystemStack("kernel32.dll", "CloseHandle");
-    EmitXorRegReg(X86Register.Rcx, X86Register.Rcx);
-    EmitMovMemReg(slot, X86Register.Rcx, 8);
-    DefineLabel(skipLabel);
+    EmitSlotCleanupIfNonZero("close_slot", slot, () => {
+      EmitCallImportOnSystemStack("kernel32.dll", "CloseHandle");
+    });
   }
 
-  private int _subpFreeSlotCounter;
+  /// Tear down a PROC_THREAD_ATTRIBUTE_LIST whose pointer lives in [rbp+slot]:
+  /// if non-zero, DeleteProcThreadAttributeList + mm_raw_free + zero the slot.
+  /// DeleteProcThreadAttributeList must run before mm_raw_free to release the
+  /// kernel-side internal references. Used by both the post-CreateProcessW
+  /// success path and the rt_subp_sc_unwind path so the teardown sequence is
+  /// authoritative in one place.
+  private void EmitFreeAttrListIfNonZero(int slot) {
+    EmitSlotCleanupIfNonZero("attrlist_free", slot, () => {
+      EmitCallImportOnSystemStack("kernel32.dll", "DeleteProcThreadAttributeList");
+      EmitMovRegMem(X86Register.Rcx, slot, 8);
+      EmitCallRuntimeLabel("mm_raw_free", zeroSecondArg: Compiler.MmTrace);
+    });
+  }
 
   private void EmitFreeSlotIfNonZero(int slot) {
-    // Counter-suffixed label so callers can invoke this multiple times for
-    // the same slot (e.g. once on the success exit and once on the unwind
-    // path) without colliding. `DefineLabel` overwrites the second time,
-    // which previously caused success-path JZ jumps for NULL slots to jump
-    // into the unwind cleanup instead of falling through.
-    var skipLabel = $"rt_subp_free_slot_{Math.Abs(slot):x4}_{_subpFreeSlotCounter++}";
-    EmitMovRegMem(X86Register.Rcx, slot, 8);
-    EmitTestRegReg(X86Register.Rcx, X86Register.Rcx);
-    EmitJcc("z", skipLabel);
-    EmitCallRuntimeLabel("mm_raw_free", zeroSecondArg: Compiler.MmTrace);
-    EmitXorRegReg(X86Register.Rcx, X86Register.Rcx);
-    EmitMovMemReg(slot, X86Register.Rcx, 8);
-    DefineLabel(skipLabel);
-  }
-
-  private void EmitFreeWideOrSkip(int slot) {
-    EmitFreeSlotIfNonZero(slot);
+    EmitSlotCleanupIfNonZero("free_slot", slot, () => {
+      EmitCallRuntimeLabel("mm_raw_free", zeroSecondArg: Compiler.MmTrace);
+    });
   }
 
   private int _subpCloseStructCounter;
@@ -9499,6 +10972,17 @@ public partial class X86CodeEmitter {
     // Args 0..7 are now at [rbp-0x08]..[rbp-0x40]. Args 8..13 are at
     // [rbp+0x10]..[rbp+0x38] from the caller.
 
+    // R12 is callee-saved in the Maxon internal CC (it's outside
+    // _callerSavedRegisters, so any caller of maxon_subprocess_spawn expects
+    // it to round-trip unchanged). We repurpose R12 as the out-of-band
+    // noDrain signal into spawn_core, so we must save and restore the
+    // caller's value around the spawn_core call. Two PUSHes (one real, one
+    // padding) keep RSP 16-aligned for the upcoming spawn_core call. The
+    // PUSHes go BEFORE the stack-arg SUB so they don't perturb [rsp+0..0x28]
+    // — spawn_core reads those at its [rbp+0x10..+0x38].
+    EmitPushReg(X86Register.R12);                                 // save caller's R12
+    EmitPushReg(X86Register.R12);                                 // padding for 16-byte alignment
+
     // Allocate space for forwarding args 8..13 and tail-call the core.
     // Build the core's 14-slot frame on our stack by calling the core
     // with the 8-register CC and pushing the 6 stack args.
@@ -9524,8 +11008,12 @@ public partial class X86CodeEmitter {
     // the call.
     EmitMovRegMem(X86Register.Rax, -0x38, 8);
     EmitMovRegMem(X86Register.Rbx, -0x40, 8);
+    EmitXorRegReg(X86Register.R12, X86Register.R12);              // noDrain = 0 (legacy behavior)
     EmitCallRuntimeLabel("__subp_spawn_core");
-    EmitAddRegImm(X86Register.Rsp, 0x30);
+    EmitAddRegImm(X86Register.Rsp, 0x30);                         // drop stack args
+
+    EmitPopReg(X86Register.R12);                                  // pop padding
+    EmitPopReg(X86Register.R12);                                  // restore caller's R12
 
     EmitRuntimeFunctionEnd();
   }
@@ -9538,6 +11026,13 @@ public partial class X86CodeEmitter {
   // --------------------------------------------------------------------------
   private void EmitMaxonSubprocessDetach() {
     EmitRuntimeFunctionStart("maxon_subprocess_detach", 8, 0x80);
+    // Preserve callee-saved R12 across the spawn_core call: we set R12=0
+    // out-of-band to request the legacy drain/feed-thread setup. Two PUSHes
+    // (one real, one alignment pad) keep RSP 16-aligned for the CALL and
+    // are placed before the stack-arg SUB so they don't shift the slots
+    // spawn_core reads at [rbp+0x10..+0x38].
+    EmitPushReg(X86Register.R12);
+    EmitPushReg(X86Register.R12);
     EmitSubRegImm(X86Register.Rsp, 0x30);
     for (int i = 0; i < 6; i++) {
       EmitMovRegMem(X86Register.Rax, 0x30 + 0x10 + i * 8, 8);
@@ -9551,8 +11046,13 @@ public partial class X86CodeEmitter {
     EmitMovRegMem(X86Register.Rdi, -0x30, 8);
     EmitMovRegMem(X86Register.Rax, -0x38, 8);
     EmitMovRegMem(X86Register.Rbx, -0x40, 8);
+    // Detach paths never want the streaming-pipe setup — keep legacy
+    // drain/feed-thread behavior (release_handle reaps any descendants).
+    EmitXorRegReg(X86Register.R12, X86Register.R12);
     EmitCallRuntimeLabel("__subp_spawn_core");
     EmitAddRegImm(X86Register.Rsp, 0x30);
+    EmitPopReg(X86Register.R12);                                 // pop alignment pad
+    EmitPopReg(X86Register.R12);                                 // restore caller's R12
     EmitMovMemReg(-0x48, X86Register.Rax, 8);                    // handle ptr
     EmitTestRegReg(X86Register.Rax, X86Register.Rax);
     EmitJcc("s", "rt_subp_detach_err");                          // -1
@@ -10034,6 +11534,304 @@ public partial class X86CodeEmitter {
     EmitJcc("ne", "rt_subp_onw_done");
     EmitXorRegReg(X86Register.Rax, X86Register.Rax);
     DefineLabel("rt_subp_onw_done");
+    EmitRuntimeFunctionEnd();
+  }
+
+  // __subp_create_overlapped_pipe(dirCode, parentSlotPtr, childSlotPtr) → 1 on
+  // success, 0 on failure. Used by spawn_core's streaming variant to set up
+  // stdin / stdout / stderr pipes with FILE_FLAG_OVERLAPPED on the parent side
+  // (so reads/writes can dispatch through IOCP without serialising through the
+  // sync-worker pool). The child-side end is opened as a regular inheritable
+  // handle via CreateFileW so the standard CreateProcessW inheritance path
+  // picks it up.
+  //
+  //   dirCode 0 = stdin  (parent writes, child reads)
+  //   dirCode 1 = stdout (parent reads,  child writes)
+  //   dirCode 2 = stderr (parent reads,  child writes)
+  //
+  // Stack layout (0x140 frame):
+  //   [rbp-0x08]   dirCode (arg0)
+  //   [rbp-0x10]   parentSlotPtr (arg1)
+  //   [rbp-0x18]   childSlotPtr (arg2)
+  //   [rbp-0x20]   parent-side handle (overlapped)
+  //   [rbp-0x28]   child-side handle (inheritable)
+  //   [rbp-0x40..-0x28]   SECURITY_ATTRIBUTES (24 bytes, base at -0x40)
+  //   [rbp-0x140..-0x40]  wide pipe name (256 bytes scratch)
+  private void EmitMaxonSubprocessCreateOverlappedPipe() {
+    EmitRuntimeFunctionStart("__subp_create_overlapped_pipe", 3, 0x140);
+
+    const int SlotParentHandle = -0x20;
+    const int SlotChildHandle = -0x28;
+    const int SlotSA = -0x40;
+    const int SlotWideName = -0x140;
+
+    // Build pipe name into [rbp-0x140] via the helper. The helper writes
+    // a null-terminated UTF-16 string and returns void.
+    EmitLeaRegMem(X86Register.Rcx, SlotWideName);
+    EmitMovRegMem(X86Register.Rdx, -0x08, 8);                     // dirCode
+    EmitCallRuntimeLabel("__subp_build_pipe_name_wide");
+
+    // Initialise SECURITY_ATTRIBUTES: nLength=24, lpSD=NULL, bInherit=TRUE.
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitMovMemReg(SlotSA, X86Register.Rax, 8);
+    EmitMovMemReg(SlotSA + 8, X86Register.Rax, 8);
+    EmitMovMemReg(SlotSA + 16, X86Register.Rax, 8);
+    EmitMovMemDwordImm(SlotSA, 24);
+    EmitMovMemDwordImm(SlotSA + 16, 1);
+
+    // Compute pipeAccess: dirCode 0 = stdin uses PIPE_ACCESS_OUTBOUND WITHOUT
+    // OVERLAPPED (sync writes — the write payload is tiny and fits in the
+    // 64KB buffer instantly, no need to yield on it). dirCode 1/2 = stdout/
+    // stderr use PIPE_ACCESS_INBOUND with FILE_FLAG_OVERLAPPED so the green
+    // thread can yield while waiting on the worker's output via IOCP.
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);                     // dirCode
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", "rt_subp_cop_stdin");
+    EmitMovRegImm(X86Register.Rax, 0x40080001L);                  // INBOUND | OVERLAPPED | FIRST_PIPE_INSTANCE
+    EmitJmp("rt_subp_cop_access_done");
+    DefineLabel("rt_subp_cop_stdin");
+    EmitMovRegImm(X86Register.Rax, 0x00080002L);                  // OUTBOUND | FIRST_PIPE_INSTANCE (sync)
+    DefineLabel("rt_subp_cop_access_done");
+
+    // CreateNamedPipeW(name, openMode, pipeMode=PIPE_TYPE_BYTE|PIPE_READMODE_BYTE|PIPE_WAIT (0),
+    //                  nMaxInstances=1, nOutBufSize=0x10000, nInBufSize=0x10000,
+    //                  nDefaultTimeOut=0, lpSecurityAttributes=NULL)
+    EmitSystemStackEnter(0x40);
+    EmitLeaRegMem(X86Register.Rcx, SlotWideName);
+    EmitMovRegReg(X86Register.Rdx, X86Register.Rax);              // openMode
+    EmitXorRegReg(X86Register.R8, X86Register.R8);                // pipeMode = 0 (byte+wait)
+    EmitMovRegImm(X86Register.R9, 1);                             // nMaxInstances
+    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x20, 0x00, 0x00, 0x01, 0x00); // [rsp+0x20] = 0x10000
+    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x28, 0x00, 0x00, 0x01, 0x00); // [rsp+0x28] = 0x10000
+    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x30, 0x00, 0x00, 0x00, 0x00); // [rsp+0x30] = 0 (default timeout = 50ms)
+    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x38, 0x00, 0x00, 0x00, 0x00); // [rsp+0x38] = NULL SA
+    EmitCallImport("kernel32.dll", "CreateNamedPipeW");
+    EmitSystemStackLeave(0x40);
+
+    // INVALID_HANDLE_VALUE = -1
+    EmitMovRegImm(X86Register.Rcx, -1);
+    EmitCmpRegReg(X86Register.Rax, X86Register.Rcx);
+    EmitJcc("e", "rt_subp_cop_fail");
+    EmitMovMemReg(SlotParentHandle, X86Register.Rax, 8);
+
+    // Compute childAccess: dirCode 0 → GENERIC_READ (0x80000000),
+    // dirCode 1/2 → GENERIC_WRITE (0x40000000).
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", "rt_subp_cop_child_read");
+    EmitMovRegImm(X86Register.Rax, 0x40000000L);                  // GENERIC_WRITE
+    EmitJmp("rt_subp_cop_child_access_done");
+    DefineLabel("rt_subp_cop_child_read");
+    EmitMovRegImm(X86Register.Rax, unchecked((long)0x80000000L)); // GENERIC_READ
+    DefineLabel("rt_subp_cop_child_access_done");
+
+    // CreateFileW(name, childAccess, 0, &SA_inherit, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL)
+    EmitSystemStackEnter(0x40);
+    EmitLeaRegMem(X86Register.Rcx, SlotWideName);
+    EmitMovRegReg(X86Register.Rdx, X86Register.Rax);
+    EmitXorRegReg(X86Register.R8, X86Register.R8);                // dwShareMode = 0
+    EmitLeaRegMem(X86Register.R9, SlotSA);                        // lpSecurityAttributes
+    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x20, 0x03, 0x00, 0x00, 0x00);  // OPEN_EXISTING
+    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x28, 0x80, 0x00, 0x00, 0x00);  // FILE_ATTRIBUTE_NORMAL
+    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x30, 0x00, 0x00, 0x00, 0x00);  // template = NULL
+    EmitCallImport("kernel32.dll", "CreateFileW");
+    EmitSystemStackLeave(0x40);
+
+    EmitMovRegImm(X86Register.Rcx, -1);
+    EmitCmpRegReg(X86Register.Rax, X86Register.Rcx);
+    EmitJcc("e", "rt_subp_cop_close_parent_fail");
+    EmitMovMemReg(SlotChildHandle, X86Register.Rax, 8);
+
+    // Strip inheritance from the parent-side handle (the named-pipe server
+    // end). The child should only inherit the CreateFileW handle.
+    EmitMovRegMem(X86Register.Rcx, SlotParentHandle, 8);
+    EmitMovRegImm(X86Register.Rdx, 1);                            // HANDLE_FLAG_INHERIT
+    EmitXorRegReg(X86Register.R8, X86Register.R8);                // clear
+    EmitCallImportOnSystemStack("kernel32.dll", "SetHandleInformation");
+
+    // Register parent-side with IOCP ONLY for READ pipes (stdout/stderr).
+    // STDIN is sync — no IOCP registration needed for writes.
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", "rt_subp_cop_skip_iocp");
+
+    EmitMovRegMem(X86Register.Rcx, SlotParentHandle, 8);
+    EmitGlobalLoadReg(X86Register.Rdx, "__io_iocp");
+    EmitXorRegReg(X86Register.R8, X86Register.R8);                // completionKey = 0
+    EmitXorRegReg(X86Register.R9, X86Register.R9);                // concurrentThreads = 0
+    EmitCallImportOnSystemStack("kernel32.dll", "CreateIoCompletionPort");
+
+    // SetFileCompletionNotificationModes(handle, FILE_SKIP_COMPLETION_PORT_ON_SUCCESS=1)
+    EmitMovRegMem(X86Register.Rcx, SlotParentHandle, 8);
+    EmitMovRegImm(X86Register.Rdx, 1);
+    EmitCallImportOnSystemStack("kernel32.dll", "SetFileCompletionNotificationModes");
+
+    DefineLabel("rt_subp_cop_skip_iocp");
+
+    // Store handles via the out-pointers.
+    EmitMovRegMem(X86Register.Rax, -0x10, 8);                     // parentSlotPtr
+    EmitMovRegMem(X86Register.Rcx, SlotParentHandle, 8);
+    EmitBytes(0x48, 0x89, 0x08);                                   // MOV [RAX], RCX
+    EmitMovRegMem(X86Register.Rax, -0x18, 8);                     // childSlotPtr
+    EmitMovRegMem(X86Register.Rcx, SlotChildHandle, 8);
+    EmitBytes(0x48, 0x89, 0x08);
+
+    EmitMovRegImm(X86Register.Rax, 1);
+    EmitRuntimeFunctionEnd();
+
+    // CreateFileW failed — close the parent-side handle and fall through to fail.
+    DefineLabel("rt_subp_cop_close_parent_fail");
+    EmitMovRegMem(X86Register.Rcx, SlotParentHandle, 8);
+    EmitCallImportOnSystemStack("kernel32.dll", "CloseHandle");
+    DefineLabel("rt_subp_cop_fail");
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitRuntimeFunctionEnd();
+  }
+
+  // __subp_build_pipe_name_wide(buf_rcx, dirCode_rdx) — writes a null-terminated
+  // UTF-16 string of the form L"\\.\pipe\maxon_stream_<pid>_<seq>_<dir>" into the
+  // 256-byte buffer at RCX. The seq counter is incremented atomically so
+  // concurrent spawn_core invocations get distinct pipe names. RCX/RDX may be
+  // clobbered; caller's frame holds the buffer.
+  //
+  // Stack layout (0x40 frame):
+  //   [rbp-0x08]   buf (arg0)
+  //   [rbp-0x10]   dirCode (arg1)
+  //   [rbp-0x18]   cursor (advances as we write wchars)
+  //   [rbp-0x20]   scratch (pid / seq value)
+  private void EmitMaxonSubprocessBuildPipeNameWide() {
+    EmitRuntimeFunctionStart("__subp_build_pipe_name_wide", 2, 0x40);
+
+    // Initialise cursor = buf.
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);
+    EmitMovMemReg(-0x18, X86Register.Rax, 8);
+
+    // Append literal prefix L"\\.\pipe\maxon_stream_" (22 wchars, no null).
+    // Copy 22 wchars = 44 bytes from the symdata.
+    EmitMovRegMem(X86Register.Rcx, -0x18, 8);
+    EmitLeaRegSymdataRel(X86Register.Rdx, "__subp_pipe_name_prefix_w");
+    EmitMovRegImm(X86Register.R8, 44);
+    EmitCallRuntimeLabel("maxon_memcpy");
+    // Advance cursor by 44 bytes (22 wchars).
+    EmitMovRegMem(X86Register.Rax, -0x18, 8);
+    EmitAddRegImm(X86Register.Rax, 44);
+    EmitMovMemReg(-0x18, X86Register.Rax, 8);
+
+    // Append pid as decimal digits.
+    EmitCallRuntimeLabel("maxon_current_process_id");
+    EmitMovMemReg(-0x20, X86Register.Rax, 8);
+    EmitMovRegMem(X86Register.Rcx, -0x18, 8);
+    EmitMovRegMem(X86Register.Rdx, -0x20, 8);
+    EmitCallRuntimeLabel("__subp_wide_append_u64");
+    EmitMovMemReg(-0x18, X86Register.Rax, 8);                     // cursor = new pos
+
+    // Append L"_" separator.
+    EmitMovRegMem(X86Register.Rax, -0x18, 8);
+    EmitBytes(0x66, 0xC7, 0x00, (byte)'_', 0x00);                 // MOV word [RAX], L'_'
+    EmitAddRegImm(X86Register.Rax, 2);
+    EmitMovMemReg(-0x18, X86Register.Rax, 8);
+
+    // Atomically increment __subp_stream_pipe_seq and use the (post-inc) value.
+    EmitGlobalLeaReg(X86Register.Rax, "__subp_stream_pipe_seq");
+    EmitMovRegImm(X86Register.Rcx, 1);
+    EmitBytes(0xF0, 0x48, 0x0F, 0xC1, 0x08);                       // LOCK XADD [RAX], RCX
+    // RCX now holds the previous value; add 1 to get the post-inc value.
+    EmitAddRegImm(X86Register.Rcx, 1);
+    EmitMovMemReg(-0x20, X86Register.Rcx, 8);
+    EmitMovRegMem(X86Register.Rcx, -0x18, 8);
+    EmitMovRegMem(X86Register.Rdx, -0x20, 8);
+    EmitCallRuntimeLabel("__subp_wide_append_u64");
+    EmitMovMemReg(-0x18, X86Register.Rax, 8);
+
+    // Append L"_" separator.
+    EmitMovRegMem(X86Register.Rax, -0x18, 8);
+    EmitBytes(0x66, 0xC7, 0x00, (byte)'_', 0x00);
+    EmitAddRegImm(X86Register.Rax, 2);
+    EmitMovMemReg(-0x18, X86Register.Rax, 8);
+
+    // Append dir digit (0/1/2).
+    EmitMovRegMem(X86Register.Rcx, -0x18, 8);
+    EmitMovRegMem(X86Register.Rdx, -0x10, 8);
+    EmitCallRuntimeLabel("__subp_wide_append_u64");
+    EmitMovMemReg(-0x18, X86Register.Rax, 8);
+
+    // Null-terminate.
+    EmitMovRegMem(X86Register.Rax, -0x18, 8);
+    EmitBytes(0x66, 0xC7, 0x00, 0x00, 0x00);                       // MOV word [RAX], 0
+
+    EmitRuntimeFunctionEnd();
+  }
+
+  // __subp_wide_append_u64(buf_rcx, value_rdx) → new cursor in RAX (one past the
+  // last digit written). Writes decimal digits as UTF-16 code units. Does NOT
+  // null-terminate. Always writes at least one digit (writes '0' for value 0).
+  //
+  // Stack layout (0x40 frame):
+  //   [rbp-0x08]                buf (arg0)
+  //   [rbp-0x10]                value (arg1)
+  //   [rbp-0x40 .. rbp-0x11]    tmpDigits scratch (up to 20 ASCII digit bytes,
+  //                             written ascending from -0x40)
+  private void EmitMaxonSubprocessWideAppendU64() {
+    EmitRuntimeFunctionStart("__subp_wide_append_u64", 2, 0x40);
+
+    // tmpDigits buffer starts at [rbp-0x40] and grows upward; 20 bytes max
+    // (u64 fits in 20 decimal digits) lands at -0x2D, safely above the value
+    // homing slot at -0x10.
+    // R10 = digit count, R11 = value, RDI = tmpDigits write pos.
+    EmitLeaRegMem(X86Register.Rdi, -0x40);                        // tmpDigits start
+    EmitXorRegReg(X86Register.R10, X86Register.R10);              // count = 0
+    EmitMovRegMem(X86Register.R11, -0x10, 8);                     // value
+
+    // Special-case value == 0: write a single '0' digit byte and jump to the
+    // wide-emit phase. tmpDigits stores ASCII digit bytes; the emit phase
+    // widens each to UTF-16 before writing into the caller's buffer.
+    EmitTestRegReg(X86Register.R11, X86Register.R11);
+    EmitJcc("nz", "rt_subp_wau_loop");
+    EmitBytes(0xC6, 0x07, (byte)'0');                             // MOV byte [RDI], '0'
+    EmitAddRegImm(X86Register.Rdi, 1);
+    EmitAddRegImm(X86Register.R10, 1);
+    EmitJmp("rt_subp_wau_write");
+
+    DefineLabel("rt_subp_wau_loop");
+    EmitTestRegReg(X86Register.R11, X86Register.R11);
+    EmitJcc("z", "rt_subp_wau_write");
+    // RDX:RAX = R11 / 10 → digit in RDX, quotient in RAX.
+    EmitMovRegReg(X86Register.Rax, X86Register.R11);
+    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx);
+    EmitMovRegImm(X86Register.Rcx, 10);
+    EmitBytes(0x48, 0xF7, 0xF1);                                  // DIV RCX
+    // RAX = quotient, RDX = remainder (digit).
+    EmitMovRegReg(X86Register.R11, X86Register.Rax);
+    // Write digit (RDX + '0') as a byte (we'll widen to wchar in the write
+    // phase). MOV byte [RDI], DL ; INC RDI ; INC R10.
+    EmitBytes(0x80, 0xC2, (byte)'0');                             // ADD DL, '0'
+    EmitBytes(0x88, 0x17);                                         // MOV byte [RDI], DL
+    EmitAddRegImm(X86Register.Rdi, 1);
+    EmitAddRegImm(X86Register.R10, 1);
+    EmitJmp("rt_subp_wau_loop");
+
+    // Now write digits in reverse to the output buffer as UTF-16. Output cursor
+    // starts at the caller's buf (arg0) and advances by 2 bytes per digit.
+    DefineLabel("rt_subp_wau_write");
+    EmitMovRegMem(X86Register.Rdi, -0x08, 8);                     // output cursor = buf
+    // Source pointer: tmpDigits base + (count - 1), advancing downward.
+    EmitLeaRegMem(X86Register.Rsi, -0x40);                        // tmpDigits start
+    EmitAddRegReg(X86Register.Rsi, X86Register.R10);
+    EmitSubRegImm(X86Register.Rsi, 1);                            // src = last digit byte
+
+    DefineLabel("rt_subp_wau_emit");
+    EmitTestRegReg(X86Register.R10, X86Register.R10);
+    EmitJcc("z", "rt_subp_wau_done");
+    // RAX = zero-extended byte [RSI].
+    EmitBytes(0x48, 0x0F, 0xB6, 0x06);                            // MOVZX RAX, byte [RSI]
+    EmitBytes(0x66, 0x89, 0x07);                                  // MOV word [RDI], AX
+    EmitAddRegImm(X86Register.Rdi, 2);
+    EmitSubRegImm(X86Register.Rsi, 1);
+    EmitSubRegImm(X86Register.R10, 1);
+    EmitJmp("rt_subp_wau_emit");
+
+    DefineLabel("rt_subp_wau_done");
+    EmitMovRegReg(X86Register.Rax, X86Register.Rdi);              // return new cursor
     EmitRuntimeFunctionEnd();
   }
 

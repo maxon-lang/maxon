@@ -25,10 +25,17 @@ end 'forwardedArgs'
 
 // Run a process with a status message, returning its exit code. A non-zero
 // exit propagates; a spawn / timeout / I/O failure prints the reason and
-// returns 1.
+// returns 1. The child's stdout/stderr are inherited so the user sees its
+// output live — `Subprocess.run`'s default `collect` mode would swallow it.
 function run(description String, exe Executable, argv StringArray, timeoutMs Timeout) returns ExitCode
 	print("{description}...\n")
-	let result = try Subprocess.run(exe, arguments: argv, workingDirectory: Directory.currentPath(), timeoutMs: timeoutMs) otherwise (err) 'spawn'
+	var config = Configuration.create(exe)
+	config.arguments = argv
+	config.workingDirectory = Directory.currentPath()
+	config.timeoutMs = timeoutMs
+	config.standardOutput = OutputDestination.inherit
+	config.standardError = OutputDestination.inherit
+	let result = try config.run() otherwise (err) 'spawn'
 		print("{description} failed: {err.displayReason()}\n")
 		return 1
 	end 'spawn'

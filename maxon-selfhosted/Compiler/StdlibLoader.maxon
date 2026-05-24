@@ -99,17 +99,6 @@ function ensureStdlibSandboxParsed(target Target)
 	stdlibParsedModuleArr.push(StdlibParseSnapshot.create(sandbox, module: module))
 end 'ensureStdlibSandboxParsed'
 
-// Stash the sandbox snapshot from an already-parsed MaxonModule + Project
-// pair. Used by the cache-miss / cache-hit warmup paths so the project
-// that's about to be discarded leaves behind a live reference to its
-// stdlib IR + registries.
-function recordStdlibSandboxSnapshot(project Project, module MaxonModule)
-	if stdlibParsedModuleArr.count() > 0 'alreadyDone'
-		return
-	end 'alreadyDone'
-	stdlibParsedModuleArr.push(StdlibParseSnapshot.create(project, module: module))
-end 'recordStdlibSandboxSnapshot'
-
 // Pre-compiled stdlib cache (machine code level, per-target)
 var cachedStdlibCacheData = StdlibCacheData.create()
 var stdlibCacheValid = false
@@ -564,11 +553,23 @@ export function getStdlibModule(project Project) returns MaxonModule
 	end 'eachFile'
 
 	cachedStdlibModule = allModule
-	// J.4e: stash the just-parsed module + its owning project for the
-	// cross-project translator. The warmup project is about to be discarded
-	// (warmStdlibCache returns) but the snapshot keeps it alive so its
-	// registries remain queryable when later spec compiles ask for stdlib IR.
-	recordStdlibSandboxSnapshot(project, module: allModule)
+	// J.4e: do NOT stash the just-parsed module here. The `allModule` we
+	// just produced is about to be mutated in-place by
+	// `buildAndWriteStdlibCache` below — the stdlib pipeline's DCE pass
+	// prunes unreachable blocks from each stdlib function's `blockRefs`
+	// while leaving their `nextBlockId` and the Maxon-form terminator ops
+	// pointing at the pruned ids. If we stashed `allModule` here and a
+	// later user compile in this process asked the monomorphizer to clone
+	// a stdlib extension method (e.g. `Iterable.map` -> `Array.map`), the
+	// cloner would copy the post-DCE `blockRefs` (sparse) but inherit the
+	// pre-DCE Maxon-form terminators (referencing pruned ids), producing a
+	// cloned function whose `cf.br`/`cf.condBr` targets blocks that don't
+	// exist — Mem2Reg's `findBlockById` then panics.
+	//
+	// Instead, let `getStdlibParsedModule` trigger a fresh parse on demand
+	// (see `ensureStdlibSandboxParsed`). The lazy re-parse runs in its own
+	// sandbox project and is invariant against downstream pipeline
+	// mutation.
 
 	// Snapshot stdlib typealiases into separate maps
 	for (name, baseType) in project.typealiases 'cacheAliases'

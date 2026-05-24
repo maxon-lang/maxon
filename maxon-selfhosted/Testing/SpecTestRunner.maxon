@@ -254,12 +254,6 @@ typealias ProcessExitCode = int(i64.min to i64.max)
 
 typealias TestCount = int(0 to u64.max)
 
-// Promise carrying an awaited Subprocess.run result. The worker phases spawn
-// these in parallel by pushing them into a SubprocessPromiseArray, then drain
-// each one with `try await` to recover its CollectedOutput (stdout/stderr/exit).
-typealias SubprocessPromise = Promise with CollectedOutput
-typealias SubprocessPromiseArray = Array with SubprocessPromise
-
 // Per-test-process wall-clock budget. Test fragments hitting this limit are
 // terminated by the runtime's processWait kill-on-timeout path so a runaway
 // child (e.g. an infinite-loop fragment) can't pin the runner. Tuned for
@@ -284,35 +278,6 @@ function markPhase(label String)
 	lastPhaseTimestamp = now
 	printError("[PHASE +{delta}ms] {label}\n")
 end 'markPhase'
-
-// Best-effort delete of any leftover capture files from a prior crashed run.
-// The earlier Process.captureStart path wrote files like `.capture-bw-3.out`
-// under the fragment dir and deleted them on cleanup; the current
-// Subprocess.run path captures stdout/stderr in-process instead, so any
-// surviving files are pre-migration leftovers. We sweep the fragment
-// directory tree and remove any whose name suggests it's a capture leftover:
-//   - top level: ".capture-*.out|.err"  (worker stdout/stderr)
-//   - per-spec subdirs: "*.capture.out|.err" (per-test compiled-binary captures)
-// Errors (missing dir, permission, ...) are silently ignored — this is purely
-// hygienic.
-function cleanupLeftoverCaptureFiles(fragmentDir FilePath)
-	if not Directory.exists(fragmentDir) 'noDir'
-		return
-	end 'noDir'
-	let entries = try Directory.list(fragmentDir) otherwise return
-	for entry in entries 'each'
-		if Directory.isDirectory(entry) 'isDir'
-			cleanupLeftoverCaptureFiles(entry)
-			continue
-		end 'isDir'
-		let name = entry.filename()
-		let isWorkerCapture = name.startsWith(".capture-") and (name.endsWith(".out") or name.endsWith(".err"))
-		let isPerTestCapture = name.endsWith(".capture.out") or name.endsWith(".capture.err")
-		if isWorkerCapture or isPerTestCapture 'isCapture'
-			try File.delete(entry) otherwise ignore
-		end 'isCapture'
-	end 'each'
-end 'cleanupLeftoverCaptureFiles'
 
 function startPhaseTiming()
 	if not passTimingsActive() 'inactive'
@@ -444,15 +409,6 @@ function appendSplitArgs(argv StringArray, testArgs String)
 		argv.push(part)
 	end 'each'
 end 'appendSplitArgs'
-
-// Construct a RunCommand for a worker, given a binary path as a String and
-// a fully-built argv. Used by buildFallbackWorkerCommand /
-// buildSinglesWorkerCommand / buildBatchWorkerCommand to share the
-// String→FilePath conversion in one place.
-function workerRunCommand(exePath String, argv StringArray) returns RunCommand
-	let exeFile = try FilePath.from(exePath) otherwise panic("workerRunCommand: invalid worker exe path '{exePath}'")
-	return RunCommand.create(Executable.path(exeFile), argv: argv)
-end 'workerRunCommand'
 
 // Compile a test and capture its lowering trace log. Returns empty string on failure.
 function captureLoweringLog(source String, testName String, specName String, tempDir FilePath, target Target) returns String
@@ -672,9 +628,6 @@ export function runAllSpecTests(filter String, target Target, updateRequired boo
 	if not Directory.exists(tempDir) 'noTempDir'
 		_ = Directory.create(tempDir)
 	end 'noTempDir'
-
-	// Reap any leftover capture files from a prior crashed run.
-	cleanupLeftoverCaptureFiles(fragmentDir)
 
 	// Warm the stdlib cache before running tests so all tests see consistent
 	// behavior (pre-compiled stdlib via linker, not compiled from source).
@@ -2321,84 +2274,73 @@ function emitWorkerResult(specName String, passed TestCount, compileMs Millis, s
 	print("{workerBatchResultMarker}{specName}:{passed}:compileMs:{compileMs}:skipped:{skippedStr}\n")
 end 'emitWorkerResult'
 
-// Run multiple specs' batches in worker mode. Invoked when --worker-spec= is set;
-// the value is a comma-separated list of spec names assigned to this worker.
-// Warms the stdlib cache once, then runs each spec's batch sequentially, emitting
-// one WORKER_BATCH_RESULT line per spec. All log output goes to stderr so it does
-// not contaminate the result lines the parent needs to parse.
-export function runSpecBatchWorker(workerSpecs String, filter String, target Target, verbose bool) returns ExitCode
-	let root = try findSpecsRoot() otherwise 'noRoot'
-		logError(LogCategory.testing, message: function() gives "Could not find project root (no specs/ directory found)")
-		return 1
-	end 'noRoot'
-
-	// Suppress all log output below ERROR (matches the parent runner's policy)
-	// so the worker's stderr stream is dominated by real failures rather than
-	// "Compiling stdlib cache..." chatter the parent would have to forward.
-	// Re-enable testing INFO so verbose pass/fail lines reach the parent.
-	setLogLevel(LogLevel.ERROR)
-	warmStdlibCache(target)
-	setCategoryLogLevel(LogCategory.testing, level: LogLevel.INFO)
-
-	let targetKey = targetToString(target)
-	let specDir = root.join("specs")
-	let fragmentDir = specDir.join("fragments-{targetKey}")
-	let specCacheDir = fragmentDir.join(".spec-cache")
-
+// Set up the on-disk fragment + spec-cache directories the workers all share.
+// Called once at worker startup; idempotent so a re-spawned worker after a
+// crash doesn't fail on the existing dirs.
+function ensureWorkerCacheDirs(fragmentDir FilePath, specCacheDir FilePath)
 	if not Directory.exists(fragmentDir) 'noFragDir'
 		_ = Directory.create(fragmentDir)
 	end 'noFragDir'
 	if not Directory.exists(specCacheDir) 'noSpecCacheDir'
 		_ = Directory.create(specCacheDir)
 	end 'noSpecCacheDir'
+end 'ensureWorkerCacheDirs'
 
-	let specNames = workerSpecs.split(",")
-	for specName in specNames 'eachSpec'
-		let cacheSpecDir = specCacheDir.join(specName)
-		let fragSpecDir = fragmentDir.join(specName)
-		if not Directory.exists(cacheSpecDir) 'noCacheSpecDir'
-			_ = Directory.create(cacheSpecDir)
-		end 'noCacheSpecDir'
-		if not Directory.exists(fragSpecDir) 'noFragSpecDir'
-			_ = Directory.create(fragSpecDir)
-		end 'noFragSpecDir'
+// Create the per-spec subdirectories under the worker's cache + fragment trees.
+function ensurePerSpecCacheDirs(fragmentDir FilePath, specCacheDir FilePath, specName String)
+	let cacheSpecDir = specCacheDir.join(specName)
+	let fragSpecDir = fragmentDir.join(specName)
+	if not Directory.exists(cacheSpecDir) 'noCacheSpecDir'
+		_ = Directory.create(cacheSpecDir)
+	end 'noCacheSpecDir'
+	if not Directory.exists(fragSpecDir) 'noFragSpecDir'
+		_ = Directory.create(fragSpecDir)
+	end 'noFragSpecDir'
+end 'ensurePerSpecCacheDirs'
 
-		let specPath = specDir.join("{specName}.md")
-		let content = try File.readText(specPath) otherwise 'readErr'
-			logError(LogCategory.testing, message: function() gives "Could not read spec: {specPath}")
-			emitWorkerResult(specName, passed: 0, compileMs: 0, skippedNames: StringArray.create())
-			continue
-		end 'readErr'
+// Read+parse a spec into its raw test list. Returns an empty array when the
+// spec is unreadable or marked draft; the caller treats empty as "skip" and
+// emits its mode-specific empty result line. Logs the read failure on the
+// runner's normal error path.
+function loadSpecTests(root FilePath, specName String, targetKey String) returns SpecTestArray
+	let specPath = root.join("specs").join("{specName}.md")
+	let content = try File.readText(specPath) otherwise 'readErr'
+		logError(LogCategory.testing, message: function() gives "Could not read spec: {specPath}")
+		return SpecTestArray.create()
+	end 'readErr'
+	let fm = parseFrontmatter(content)
+	if fm.status == "draft" 'isDraft'
+		return SpecTestArray.create()
+	end 'isDraft'
+	return parseSpecFile(content, targetKey: targetKey)
+end 'loadSpecTests'
 
-		let fm = parseFrontmatter(content)
-		if fm.status == "draft" 'isDraft'
-			emitWorkerResult(specName, passed: 0, compileMs: 0, skippedNames: StringArray.create())
-			continue
-		end 'isDraft'
+// Process one spec's batch and emit exactly one WORKER_BATCH_RESULT line.
+// Invoked from the persistent worker for each JOB:batch:<spec> line.
+function runOneBatchJob(specName String, root FilePath, fragmentDir FilePath, specCacheDir FilePath, target Target, targetKey String, filter String, verbose bool)
+	ensurePerSpecCacheDirs(fragmentDir, specCacheDir: specCacheDir, specName: specName)
 
-		let tests = parseSpecFile(content, targetKey: targetKey)
-		let unit = partitionSpecTests(tests, specName: specName, filter: filter, targetKey: targetKey)
-		let batchable = unit.batchable
+	let tests = loadSpecTests(root, specName: specName, targetKey: targetKey)
+	let unit = partitionSpecTests(tests, specName: specName, filter: filter, targetKey: targetKey)
+	let batchable = unit.batchable
 
-		if batchable.count() == 0 'noBatch'
-			emitWorkerResult(specName, passed: 0, compileMs: 0, skippedNames: StringArray.create())
-			continue
-		end 'noBatch'
+	if batchable.count() == 0 'noBatch'
+		emitWorkerResult(specName, passed: 0, compileMs: 0, skippedNames: StringArray.create())
+		return
+	end 'noBatch'
 
-		// Reset per-spec so the result line reports this spec's compile time only.
-		totalCompileMs = 0
-		let outcome = runSpecBatch(batchable, specName: specName, fragmentDir: fragmentDir, specCacheDir: specCacheDir, target: target)
+	// Reset per-spec so the result line reports this spec's compile time only.
+	totalCompileMs = 0
+	let outcome = runSpecBatch(batchable, specName: specName, fragmentDir: fragmentDir, specCacheDir: specCacheDir, target: target)
 
-		if verbose 'showBatch'
-			for verboseLine in outcome.verboseLines 'eachVerbose'
-				logInfo(LogCategory.testing, message: function() gives verboseLine)
-			end 'eachVerbose'
-		end 'showBatch'
+	if verbose 'showBatch'
+		for verboseLine in outcome.verboseLines 'eachVerbose'
+			logInfo(LogCategory.testing, message: function() gives verboseLine)
+		end 'eachVerbose'
+	end 'showBatch'
 
-		emitWorkerResult(specName, passed: outcome.passed, compileMs: totalCompileMs, skippedNames: outcome.skippedTestNames)
-	end 'eachSpec'
-	return 0
-end 'runSpecBatchWorker'
+	emitWorkerResult(specName, passed: outcome.passed, compileMs: totalCompileMs, skippedNames: outcome.skippedTestNames)
+end 'runOneBatchJob'
 
 // Markers for the singles worker protocol. The `FAIL` lines carry one fragment-
 // failure message each (verbatim after the prefix); the `RESULT` line summarises
@@ -2562,490 +2504,199 @@ function decodeFailPayload(s String) returns String
 	return String.from(result)
 end 'decodeFailPayload'
 
-// Run the non-batchable (single) tests for a comma-separated list of specs.
-// Mirrors runSpecBatchWorker for the non-batchable path so a panic in compile
-// pipeline code (which would otherwise kill the parent runner) is contained
-// here: the parent observes a missing/short result stream, marks the spec as
-// failed, and continues. Each test is compiled via runTestFromFragment, the
-// same machinery the in-process Phase 3/5 paths use.
-export function runSpecSinglesWorker(workerSpecs String, filter String, target Target, verbose bool) returns ExitCode
-	let root = try findSpecsRoot() otherwise 'noRoot'
-		logError(LogCategory.testing, message: function() gives "Could not find project root (no specs/ directory found)")
-		return 1
-	end 'noRoot'
+// Process one spec's non-batchable (single) tests and emit zero+
+// WORKER_SINGLE_FAIL lines followed by exactly one WORKER_SINGLE_RESULT line.
+// Invoked from the persistent worker for each JOB:singles:<spec> line. A panic
+// in compile-pipeline code is contained to this worker process: the parent
+// observes a missing/short result stream, marks the spec as failed, and
+// continues. Each test is compiled via runTestFromFragment, the same machinery
+// the in-process serial path uses.
+function runOneSinglesJob(specName String, root FilePath, fragmentDir FilePath, specCacheDir FilePath, target Target, targetKey String, filter String, verbose bool)
+	ensurePerSpecCacheDirs(fragmentDir, specCacheDir: specCacheDir, specName: specName)
 
-	setLogLevel(LogLevel.ERROR)
-	warmStdlibCache(target)
-	setCategoryLogLevel(LogCategory.testing, level: LogLevel.INFO)
+	let tests = loadSpecTests(root, specName: specName, targetKey: targetKey)
+	let unit = partitionSpecTests(tests, specName: specName, filter: filter, targetKey: targetKey)
 
-	let targetKey = targetToString(target)
-	let specDir = root.join("specs")
-	let fragmentDir = specDir.join("fragments-{targetKey}")
-	let specCacheDir = fragmentDir.join(".spec-cache")
+	if unit.nonBatchable.count() == 0 and unit.missingLoweringCount == 0 'noSingles'
+		emitWorkerSinglesResult(specName, passed: 0, failed: 0, compileMs: 0)
+		return
+	end 'noSingles'
 
-	if not Directory.exists(fragmentDir) 'noFragDir'
-		_ = Directory.create(fragmentDir)
-	end 'noFragDir'
-	if not Directory.exists(specCacheDir) 'noSpecCacheDir'
-		_ = Directory.create(specCacheDir)
-	end 'noSpecCacheDir'
+	totalCompileMs = 0
+	let (sp, sf, failures) = runSingleTests(unit, root: root, fragmentDir: fragmentDir, specCacheDir: specCacheDir, target: target, verbose: verbose)
 
-	let specNames = workerSpecs.split(",")
-	for specName in specNames 'eachSpec'
-		let cacheSpecDir = specCacheDir.join(specName)
-		let fragSpecDir = fragmentDir.join(specName)
-		if not Directory.exists(cacheSpecDir) 'noCacheSpecDir'
-			_ = Directory.create(cacheSpecDir)
-		end 'noCacheSpecDir'
-		if not Directory.exists(fragSpecDir) 'noFragSpecDir'
-			_ = Directory.create(fragSpecDir)
-		end 'noFragSpecDir'
+	for failLine in failures 'eachFailure'
+		emitWorkerSinglesFail(specName, line: failLine)
+	end 'eachFailure'
 
-		let specPath = specDir.join("{specName}.md")
-		let content = try File.readText(specPath) otherwise 'readErr'
-			logError(LogCategory.testing, message: function() gives "Could not read spec: {specPath}")
+	emitWorkerSinglesResult(specName, passed: sp, failed: sf, compileMs: totalCompileMs)
+end 'runOneSinglesJob'
+
+// Process the given list of test names from one spec via the per-fragment
+// path, emitting zero+ WORKER_SINGLE_FAIL lines and exactly one
+// WORKER_SINGLE_RESULT line. Invoked from the persistent worker for each
+// JOB:fallback:<spec>:<test1>|<test2>|... line. The known-broken list still
+// gates so the parent's crashed-batch retry path doesn't rerun a test we
+// deliberately partitioned out.
+function runOneFallbackJob(specName String, testNames StringArray, root FilePath, fragmentDir FilePath, specCacheDir FilePath, target Target, targetKey String, verbose bool)
+	ensurePerSpecCacheDirs(fragmentDir, specCacheDir: specCacheDir, specName: specName)
+
+	let allTests = loadSpecTests(root, specName: specName, targetKey: targetKey)
+	var selected = SpecTestArray.create()
+	for tn in testNames 'eachName'
+		let trimmedName = trimWhitespace(tn)
+		if trimmedName.isEmpty() 'emptyName'
+			continue
+		end 'emptyName'
+		if isSelfHostedKnownBroken(specName, testName: trimmedName) 'skipKnown'
+			continue
+		end 'skipKnown'
+		for t in allTests 'findTest'
+			if t.name == trimmedName 'matched'
+				selected.push(t)
+				break
+			end 'matched'
+		end 'findTest'
+	end 'eachName'
+
+	if selected.count() == 0 'noSelected'
+		emitWorkerSinglesResult(specName, passed: 0, failed: 0, compileMs: 0)
+		return
+	end 'noSelected'
+
+	let unit = SpecWorkUnit.create(specName, nonBatchable: selected, batchable: SpecTestArray.create(), missingLoweringFailures: TextLineArray.create(), missingLoweringCount: 0 as TestCount)
+	totalCompileMs = 0
+	let (sp, sf, failures) = runSingleTests(unit, root: root, fragmentDir: fragmentDir, specCacheDir: specCacheDir, target: target, verbose: verbose)
+
+	for failLine in failures 'eachFailure'
+		emitWorkerSinglesFail(specName, line: failLine)
+	end 'eachFailure'
+
+	emitWorkerSinglesResult(specName, passed: sp, failed: sf, compileMs: totalCompileMs)
+end 'runOneFallbackJob'
+
+// Marker emitted once at worker startup (after warmStdlibCache) and again after
+// every job completes. The parent dispatcher uses it as the "send me work"
+// signal in the streaming work-stealing protocol.
+let workerReadyMarker = "WORKER_READY"
+
+// Job-line prefixes for the persistent worker protocol. Each prefix is matched
+// by `startsWith` so the remainder of the line is the prefix-stripped payload.
+let persistentJobBatchPrefix = "JOB:batch:"
+let persistentJobSinglesPrefix = "JOB:singles:"
+let persistentJobFallbackPrefix = "JOB:fallback:"
+let persistentExitCommand = "EXIT"
+
+function emitWorkerReady()
+	print("{workerReadyMarker}\n")
+end 'emitWorkerReady'
+
+// Dispatch one parsed job line to the appropriate per-spec helper. Unknown
+// lines surface on stderr so the parent's stderr forwarding shows the bad
+// payload — silently dropping them would deadlock the dispatcher waiting for
+// a WORKER_READY that wouldn't otherwise be paired with a result line.
+//
+// Prefixes (`JOB:batch:`, etc.) are pure ASCII, so byte position equals
+// character position — `sliceFromBytePos` is safe even though the spec name
+// or test names that follow may not be.
+function dispatchPersistentJob(line String, root FilePath, fragmentDir FilePath, specCacheDir FilePath, target Target, targetKey String, filter String, verbose bool)
+	let batchPrefix = persistentJobBatchPrefix
+	let singlesPrefix = persistentJobSinglesPrefix
+	let fallbackPrefix = persistentJobFallbackPrefix
+	if line.startsWith(batchPrefix) 'isBatch'
+		let prefixLen = batchPrefix.count()
+		let specName = sliceFromBytePos(line, bytePos: prefixLen)
+		runOneBatchJob(specName, root: root, fragmentDir: fragmentDir, specCacheDir: specCacheDir, target: target, targetKey: targetKey, filter: filter, verbose: verbose)
+		return
+	end 'isBatch'
+	if line.startsWith(singlesPrefix) 'isSingles'
+		let prefixLen = singlesPrefix.count()
+		let specName = sliceFromBytePos(line, bytePos: prefixLen)
+		runOneSinglesJob(specName, root: root, fragmentDir: fragmentDir, specCacheDir: specCacheDir, target: target, targetKey: targetKey, filter: filter, verbose: verbose)
+		return
+	end 'isSingles'
+	if line.startsWith(fallbackPrefix) 'isFallback'
+		let prefixLen = fallbackPrefix.count()
+		let rest = sliceFromBytePos(line, bytePos: prefixLen)
+		// `rest` is `specName:test1|test2|...`. Test names may contain colons
+		// in principle (spec authors are unconstrained), so split on the FIRST
+		// colon only and treat the rest as the pipe-joined test list.
+		let colonIdx = try rest.findFirst(":") otherwise 'noColon'
+			printError("[PERSISTENT WORKER] malformed fallback job (no colon): {line}\n")
+			emitWorkerSinglesResult("", passed: 0, failed: 0, compileMs: 0)
+			return
+		end 'noColon'
+		let specName = rest.slice(rest.startIndex(), endIndex: colonIdx)
+		let afterColon = try rest.indexAfter(colonIdx) otherwise 'noAfter'
+			printError("[PERSISTENT WORKER] malformed fallback job (truncated): {line}\n")
 			emitWorkerSinglesResult(specName, passed: 0, failed: 0, compileMs: 0)
-			continue
-		end 'readErr'
-
-		let fm = parseFrontmatter(content)
-		if fm.status == "draft" 'isDraft'
-			emitWorkerSinglesResult(specName, passed: 0, failed: 0, compileMs: 0)
-			continue
-		end 'isDraft'
-
-		let tests = parseSpecFile(content, targetKey: targetKey)
-		let unit = partitionSpecTests(tests, specName: specName, filter: filter, targetKey: targetKey)
-
-		if unit.nonBatchable.count() == 0 and unit.missingLoweringCount == 0 'noSingles'
-			emitWorkerSinglesResult(specName, passed: 0, failed: 0, compileMs: 0)
-			continue
-		end 'noSingles'
-
-		totalCompileMs = 0
-		let (sp, sf, failures) = runSingleTests(unit, root: root, fragmentDir: fragmentDir, specCacheDir: specCacheDir, target: target, verbose: verbose)
-
-		for failLine in failures 'eachFailure'
-			emitWorkerSinglesFail(specName, line: failLine)
-		end 'eachFailure'
-
-		emitWorkerSinglesResult(specName, passed: sp, failed: sf, compileMs: totalCompileMs)
-	end 'eachSpec'
-	return 0
-end 'runSpecSinglesWorker'
-
-// Fallback worker mode: run a specified list of test names from each spec via
-// the per-fragment path. Uses the same WORKER_SINGLE_FAIL/WORKER_SINGLE_RESULT
-// protocol as the singles worker so the parent's collection code is shared.
-// `groupsArg` is `spec1:t1|t2;spec2:t3|t4` — semicolons separate spec groups,
-// colons separate the spec name from its pipe-joined test-name list.
-export function runSpecFallbackWorker(groupsArg String, filter String, target Target, verbose bool) returns ExitCode
-	// `filter` is accepted for symmetry with the singles worker; the parent has
-	// already filtered when it built the test-name list. We log it for
-	// debugging when verbose so the unused-variable check is satisfied.
-	if verbose and not filter.isEmpty() 'showFilter'
-		logInfo(LogCategory.testing, message: function() gives "[FALLBACK WORKER] filter (informational, ignored): {filter}")
-	end 'showFilter'
-	let root = try findSpecsRoot() otherwise 'noRoot'
-		logError(LogCategory.testing, message: function() gives "Could not find project root (no specs/ directory found)")
-		return 1
-	end 'noRoot'
-
-	setLogLevel(LogLevel.ERROR)
-	warmStdlibCache(target)
-	setCategoryLogLevel(LogCategory.testing, level: LogLevel.INFO)
-
-	let targetKey = targetToString(target)
-	let specDir = root.join("specs")
-	let fragmentDir = specDir.join("fragments-{targetKey}")
-	let specCacheDir = fragmentDir.join(".spec-cache")
-
-	if not Directory.exists(fragmentDir) 'noFragDir'
-		_ = Directory.create(fragmentDir)
-	end 'noFragDir'
-	if not Directory.exists(specCacheDir) 'noSpecCacheDir'
-		_ = Directory.create(specCacheDir)
-	end 'noSpecCacheDir'
-
-	let groups = groupsArg.split(";")
-	for group in groups 'eachGroup'
-		let trimmedGroup = trimWhitespace(group)
-		if trimmedGroup.isEmpty() 'emptyGroup'
-			continue
-		end 'emptyGroup'
-		let colonIdx = try trimmedGroup.findFirst(":") otherwise 'badGroup'
-			logError(LogCategory.testing, message: function() gives "[FALLBACK WORKER] malformed group (no colon): {trimmedGroup}")
-			continue
-		end 'badGroup'
-		let specName = trimmedGroup.slice(trimmedGroup.startIndex(), endIndex: colonIdx)
-		let afterColon = try trimmedGroup.indexAfter(colonIdx) otherwise 'badGroupAfter'
-			logError(LogCategory.testing, message: function() gives "[FALLBACK WORKER] malformed group (truncated): {trimmedGroup}")
-			continue
-		end 'badGroupAfter'
-		let namesPart = trimmedGroup.slice(afterColon, endIndex: trimmedGroup.endIndex())
+			return
+		end 'noAfter'
+		let namesPart = rest.slice(afterColon, endIndex: rest.endIndex())
 		let testNames = namesPart.split("|")
+		runOneFallbackJob(specName, testNames: testNames, root: root, fragmentDir: fragmentDir, specCacheDir: specCacheDir, target: target, targetKey: targetKey, verbose: verbose)
+		return
+	end 'isFallback'
+	// Unknown line. Surface to the parent via stderr so the diagnostic is
+	// visible; do not emit a fake result line because we don't know which
+	// result shape the parent is expecting.
+	printError("[PERSISTENT WORKER] unknown job line: {line}\n")
+end 'dispatchPersistentJob'
 
-		let cacheSpecDir = specCacheDir.join(specName)
-		let fragSpecDir = fragmentDir.join(specName)
-		if not Directory.exists(cacheSpecDir) 'noCacheSpecDir'
-			_ = Directory.create(cacheSpecDir)
-		end 'noCacheSpecDir'
-		if not Directory.exists(fragSpecDir) 'noFragSpecDir'
-			_ = Directory.create(fragSpecDir)
-		end 'noFragSpecDir'
+// Persistent worker: stays alive for the parent's whole run, processes one
+// JOB line at a time over stdin, emits result markers on stdout. The single
+// warmStdlibCache call amortises across every job this worker handles.
+//
+// Protocol:
+//   in :  JOB:batch:<spec>
+//         JOB:singles:<spec>
+//         JOB:fallback:<spec>:<test1>|<test2>|...
+//         EXIT
+//   out:  WORKER_READY                    (at startup + after every job)
+//         WORKER_BATCH_RESULT:...         (one per batch job)
+//         WORKER_SINGLE_RESULT:...        (one per singles/fallback job)
+//         WORKER_SINGLE_FAIL:...          (zero+ per singles/fallback job, before RESULT)
+//
+// The worker shuts down cleanly on `EXIT` or on stdin EOF. Result-line
+// formats match what `parseBatchWorkerResult`, `parseSinglesResultLine`, and
+// `parseSinglesFailLine` consume on the parent side.
+export function runPersistentWorker(filter String, target Target, verbose bool) returns ExitCode
+	let root = try findSpecsRoot() otherwise 'noRoot'
+		logError(LogCategory.testing, message: function() gives "Could not find project root (no specs/ directory found)")
+		return 1
+	end 'noRoot'
 
-		let specPath = specDir.join("{specName}.md")
-		let content = try File.readText(specPath) otherwise 'readErr'
-			logError(LogCategory.testing, message: function() gives "Could not read spec: {specPath}")
-			emitWorkerSinglesResult(specName, passed: 0, failed: 0, compileMs: 0)
+	setLogLevel(LogLevel.ERROR)
+	warmStdlibCache(target)
+
+	let targetKey = targetToString(target)
+	let specDir = root.join("specs")
+	let fragmentDir = specDir.join("fragments-{targetKey}")
+	let specCacheDir = fragmentDir.join(".spec-cache")
+
+	ensureWorkerCacheDirs(fragmentDir, specCacheDir: specCacheDir)
+
+	var stdin = Console.stdin()
+	emitWorkerReady()
+
+	while true 'jobLoop'
+		let line = try stdin.readLine() otherwise 'eof'
+			break
+		end 'eof'
+		let trimmed = trimWhitespace(line)
+		if trimmed == persistentExitCommand 'isExit'
+			break
+		end 'isExit'
+		if trimmed.isEmpty() 'isEmpty'
 			continue
-		end 'readErr'
+		end 'isEmpty'
 
-		let fm = parseFrontmatter(content)
-		if fm.status == "draft" 'isDraft'
-			emitWorkerSinglesResult(specName, passed: 0, failed: 0, compileMs: 0)
-			continue
-		end 'isDraft'
+		dispatchPersistentJob(trimmed, root: root, fragmentDir: fragmentDir, specCacheDir: specCacheDir, target: target, targetKey: targetKey, filter: filter, verbose: verbose)
+		emitWorkerReady()
+	end 'jobLoop'
 
-		let allTests = parseSpecFile(content, targetKey: targetKey)
-		// Build a synthetic SpecWorkUnit whose nonBatchable list contains exactly
-		// the named tests, so runSingleTests routes them through the per-fragment
-		// path. We do not honour `filter` here — the parent has already filtered
-		// when computing the fallback list. J.4e: still gate on the self-hosted
-		// known-broken list so the parent's "retry crashed batch" path doesn't
-		// rerun a test we deliberately partitioned out at top level.
-		var selected = SpecTestArray.create()
-		for tn in testNames 'eachName'
-			let trimmedName = trimWhitespace(tn)
-			if trimmedName.isEmpty() 'emptyName'
-				continue
-			end 'emptyName'
-			if isSelfHostedKnownBroken(specName, testName: trimmedName) 'skipKnown'
-				continue
-			end 'skipKnown'
-			for t in allTests 'findTest'
-				if t.name == trimmedName 'matched'
-					selected.push(t)
-					break
-				end 'matched'
-			end 'findTest'
-		end 'eachName'
-
-		if selected.count() == 0 'noSelected'
-			emitWorkerSinglesResult(specName, passed: 0, failed: 0, compileMs: 0)
-			continue
-		end 'noSelected'
-
-		let unit = SpecWorkUnit.create(specName, nonBatchable: selected, batchable: SpecTestArray.create(), missingLoweringFailures: TextLineArray.create(), missingLoweringCount: 0 as TestCount)
-		totalCompileMs = 0
-		let (sp, sf, failures) = runSingleTests(unit, root: root, fragmentDir: fragmentDir, specCacheDir: specCacheDir, target: target, verbose: verbose)
-
-		for failLine in failures 'eachFailure'
-			emitWorkerSinglesFail(specName, line: failLine)
-		end 'eachFailure'
-
-		emitWorkerSinglesResult(specName, passed: sp, failed: sf, compileMs: totalCompileMs)
-	end 'eachGroup'
 	return 0
-end 'runSpecFallbackWorker'
-
-// Build the command line for a fallback worker.
-function buildFallbackWorkerCommand(exePath String, groupsArg String, targetStr String, filter String, verbose bool) returns RunCommand
-	var argv = StringArray.create()
-	argv.push("spec-test")
-	argv.push("--worker-fallback={groupsArg}")
-	argv.push("--target={targetStr}")
-	argv.push("--workers=1")
-	if not filter.isEmpty() 'hasFilter'
-		argv.push("--filter={filter}")
-	end 'hasFilter'
-	if verbose 'isVerbose'
-		argv.push("--verbose")
-	end 'isVerbose'
-	return workerRunCommand(exePath, argv: argv)
-end 'buildFallbackWorkerCommand'
-
-// Spawn fallback workers in parallel via `async Subprocess.run`, then drain
-// each one with `try await`. Each worker handles a round-robin chunk of units
-// encoded as a `;`-joined groupsArg. The await yields the parent green thread
-// to the scheduler so the other workers' subprocess waits proceed concurrently
-// through the IOCP-backed subprocessWaitCollect path.
-function runFallbackPhase(fallbackUnits SpecWorkUnitArray, exePath String, targetStr String, filter String, verbose bool, numWorkers TestCount) returns (TestCount, TestCount)
-	if fallbackUnits.count() == 0 'noWork'
-		return (0, 0)
-	end 'noWork'
-
-	// Build a flat list of (specName, testName) pairs so we can round-robin
-	// individual tests across workers — chunking by spec leaves us bottlenecked
-	// on the slowest spec when one fallback unit has many more tests than another.
-	var specForTest = StringArray.create()
-	var testNames = StringArray.create()
-	var seenSpecs = StringArray.create()
-	for unit in fallbackUnits 'buildPairs'
-		if unit.nonBatchable.count() == 0 'empty'
-			continue
-		end 'empty'
-		seenSpecs.push(unit.specName)
-		for t in unit.nonBatchable 'eachTest'
-			specForTest.push(unit.specName)
-			testNames.push(t.name)
-		end 'eachTest'
-	end 'buildPairs'
-
-	let totalTestsInFallback = testNames.count()
-	if totalTestsInFallback == 0 'noTests'
-		return (0 as TestCount, 0)
-	end 'noTests'
-	markPhase("fallback: {seenSpecs.count()} units, {totalTestsInFallback} tests")
-
-	// Use as many workers as we have tests, capped at numWorkers. Round-robin
-	// individual tests so each worker compiles ~total/N tests (one compile per
-	// test). With 36 tests across 8 workers, worst-case worker gets 5 compiles.
-	var fallbackWorkerCount = numWorkers
-	if totalTestsInFallback < fallbackWorkerCount 'fewerTests'
-		fallbackWorkerCount = totalTestsInFallback
-	end 'fewerTests'
-	if fallbackWorkerCount < 1 'tooFew'
-		fallbackWorkerCount = 1 as TestCount
-	end 'tooFew'
-
-	// Phase A: spawn workers in parallel via `async Subprocess.run`. Each worker
-	// receives a round-robin slice of the (spec, test) pairs, regrouped into
-	// the `spec1:t1|t2;spec2:t3` format the worker dispatcher expects. The
-	// chunk-spec list is tracked in a parallel StringArray so Phase B can name
-	// each promise when reporting failures.
-	var promises = SubprocessPromiseArray.create()
-	var chunkSpecLists = StringArray.create()
-	for i in 0 upto fallbackWorkerCount 'spawnChunks'
-		var groupsArg = ""
-		var chunkSpecs = ""
-		var lastSpec = ""
-		var k = i
-		while k < totalTestsInFallback 'collectChunk'
-			let sn = try specForTest.get(k) otherwise break
-			let tn = try testNames.get(k) otherwise break
-			if sn != lastSpec 'newSpec'
-				if groupsArg.isEmpty() 'firstGroup'
-					groupsArg = "{sn}:{tn}"
-					chunkSpecs = sn
-				end 'firstGroup' else 'notFirstGroup'
-					groupsArg = "{groupsArg};{sn}:{tn}"
-					chunkSpecs = "{chunkSpecs},{sn}"
-				end 'notFirstGroup'
-				lastSpec = sn
-			end 'newSpec' else 'sameSpec'
-				groupsArg = "{groupsArg}|{tn}"
-			end 'sameSpec'
-			k = k + fallbackWorkerCount
-		end 'collectChunk'
-		if not groupsArg.isEmpty() 'hasChunk'
-			let cmd = buildFallbackWorkerCommand(exePath, groupsArg: groupsArg, targetStr: targetStr, filter: filter, verbose: verbose)
-			promises.push(async Subprocess.run(cmd.exe, arguments: cmd.argv))
-			chunkSpecLists.push(chunkSpecs)
-		end 'hasChunk'
-	end 'spawnChunks'
-
-	// Phase B: drain each worker by awaiting its promise. The await yields the
-	// parent green thread to the scheduler whenever the subprocess wait would
-	// block, so all spawned children make wall-clock progress in parallel.
-	var workerStdouts = TextLineArray.create()
-	var workerSpecLists = StringArray.create()
-	let promiseCount = promises.count()
-	for i in 0 upto promiseCount 'drainHandles'
-		let specNames = try chunkSpecLists.get(i) otherwise panic("runFallbackPhase: chunkSpecLists.get({i}) OOB (count={promiseCount})")
-		let p = try promises.get(i) otherwise panic("runFallbackPhase: promises.get({i}) OOB (count={promiseCount})")
-		let result = try await p otherwise panic("fallback worker [{specNames}] subprocess spawn/wait failed (see SubprocessError on stderr)")
-		let stdoutStr = result.stdout
-		let stderrStr = result.stderr
-		// Abort if the worker panicked — see batch/singles drain sites for
-		// rationale.
-		if workerStderrIsCompilerPanic(stderrStr) 'panicked'
-			abortOnWorkerCompilerPanic("fallback [{specNames}]", stderr: stderrStr)
-		end 'panicked'
-		let cleanedStderr = stripCompilingBreadcrumbs(stderrStr)
-		if not cleanedStderr.isEmpty() 'hasStderr'
-			printError(cleanedStderr)
-		end 'hasStderr'
-		workerStdouts.push(stdoutStr)
-		workerSpecLists.push(specNames)
-	end 'drainHandles'
-
-	var totalPassed = 0 as TestCount
-	var totalFailed = 0 as TestCount
-
-	// Flat per-line buffers keyed by spec name; we filter by name at print time.
-	// Avoids the borrow-checker contortions of nested-array mutation.
-	var failOwners = StringArray.create()
-	var failPayloads = TextLineArray.create()
-
-	// Walk one worker's output at a time so per-worker `pending` tracking stays
-	// scoped to that worker's assignment; a missing-result spec from worker A
-	// must not be retried inside worker B's output.
-	let workerOutCount = workerStdouts.count()
-	for wi in 0 upto workerOutCount 'eachWorker'
-		let stdout = try workerStdouts.get(wi) otherwise ""
-		let specsStr = try workerSpecLists.get(wi) otherwise ""
-		var pending = specsStr.split(",")
-
-		let lines = stdout.split("\n")
-		for line in lines 'parseLines'
-			let trimmedLine = trimWhitespace(line)
-			if trimmedLine.startsWith(workerSingleFailMarker) 'isFail'
-				var matched = false
-				for pn in pending 'matchSpec'
-					let payload = parseSinglesFailLine(trimmedLine, specName: pn)
-					if not payload.isEmpty() or trimmedLine == "{workerSingleFailMarker}{pn}:" 'isPnMatch'
-						failOwners.push(pn)
-						failPayloads.push(payload)
-						matched = true
-						break
-					end 'isPnMatch'
-				end 'matchSpec'
-				if not matched 'unmatched'
-					logError(LogCategory.testing, message: function() gives "[FALLBACK ERROR] orphan fail line: {trimmedLine}")
-				end 'unmatched'
-				continue
-			end 'isFail'
-			if not trimmedLine.startsWith(workerSingleResultMarker) 'notResult'
-				continue
-			end 'notResult'
-			let result = parseSinglesResultLine(trimmedLine)
-			if not result.valid 'invalidResult'
-				logError(LogCategory.testing, message: function() gives "[FALLBACK ERROR] malformed result line: {trimmedLine}")
-				continue
-			end 'invalidResult'
-
-			var remaining = StringArray.create()
-			for pn in pending 'filterPending'
-				if pn != result.specName 'keep'
-					remaining.push(pn)
-				end 'keep'
-			end 'filterPending'
-			pending = remaining
-
-			totalCompileMs = totalCompileMs + result.compileMs
-			totalPassed = totalPassed + result.passed
-			totalFailed = totalFailed + result.failed
-
-			if result.failed > 0 'hasFail'
-				let specTotal = result.passed + result.failed
-				logError(LogCategory.testing, message: function() gives "[FAIL] {result.specName} fallback ({result.passed}/{specTotal})")
-				logSpecFailuresFor(failOwners, payloads: failPayloads, specName: result.specName)
-			end 'hasFail'
-		end 'parseLines'
-
-		// A worker that crashed mid-batch leaves its remaining specs unreported.
-		// Re-run each missing test in its own subprocess so a single panicking
-		// test only blames itself; everything else in the same batch still gets
-		// a real pass/fail. The retry walks every pending spec → every test in
-		// that spec → one subprocess per test.
-		for pendingName in pending 'handleMissing'
-			let pn = trimWhitespace(pendingName)
-			if pn.isEmpty() 'emptyName'
-				continue
-			end 'emptyName'
-			var crashedTests = SpecTestArray.create()
-			for unit in fallbackUnits 'findUnit'
-				if unit.specName == pn 'matched'
-					crashedTests = cloneSpecTests(unit.nonBatchable)
-					break
-				end 'matched'
-			end 'findUnit'
-			if crashedTests.count() == 0 'noFallback'
-				continue
-			end 'noFallback'
-			markPhase("fallback retrying spec [{pn}] with {crashedTests.count()} tests")
-			let (rp, rf) = retryAndAccountCrashedSpec(pn, tests: crashedTests, exePath: exePath, targetStr: targetStr, verbose: verbose, failOwners: failOwners, failPayloads: failPayloads, phaseLabel: "fallback")
-			totalPassed = totalPassed + rp
-			totalFailed = totalFailed + rf
-		end 'handleMissing'
-	end 'eachWorker'
-
-	return (totalPassed, totalFailed)
-end 'runFallbackPhase'
-
-// Retry crashed tests one-per-subprocess, accumulate the results into the
-// caller's running totals, and log the [FAIL] lines (per-test crashes plus
-// regular failures). `phaseLabel` distinguishes "fallback" vs the singles
-// phase label in log output. Returns (added passed, added failed) so the
-// caller can keep its own running totals in sync.
-function retryAndAccountCrashedSpec(specName String, tests SpecTestArray, exePath String, targetStr String, verbose bool, failOwners StringArray, failPayloads TextLineArray, phaseLabel String) returns (TestCount, TestCount)
-	let (rp, rf, rfMissing) = retryFallbackTestsIndividually(specName, tests: tests, exePath: exePath, targetStr: targetStr, verbose: verbose, failOwners: failOwners, failPayloads: failPayloads)
-	let specTotal = rp + rf
-	if rf > 0 'someFailed'
-		logError(LogCategory.testing, message: function() gives "[FAIL] {specName} {phaseLabel} ({rp}/{specTotal})")
-		logSpecFailuresFor(failOwners, payloads: failPayloads, specName: specName)
-	end 'someFailed'
-	if rfMissing > 0 'someMissing'
-		logError(LogCategory.testing, message: function() gives "[FAIL] {specName} ({rfMissing} {phaseLabel} test(s) crashed individually too)")
-	end 'someMissing'
-	return (rp, rf)
-end 'retryAndAccountCrashedSpec'
-
-// Run each test in `tests` in a fresh fallback-worker subprocess. A panic in
-// one test only kills its own subprocess, leaving the others' results intact.
-// Returns (passed, failed, stillCrashed) — stillCrashed counts subprocesses
-// that produced no result line (worker died before reporting).
-function retryFallbackTestsIndividually(specName String, tests SpecTestArray, exePath String, targetStr String, verbose bool, failOwners StringArray, failPayloads TextLineArray) returns (TestCount, TestCount, TestCount)
-	var passed = 0 as TestCount
-	var failed = 0 as TestCount
-	var crashed = 0 as TestCount
-	for t in tests 'eachTest'
-		let groupsArg = "{specName}:{t.name}"
-		let cmd = buildFallbackWorkerCommand(exePath, groupsArg: groupsArg, targetStr: targetStr, filter: "", verbose: verbose)
-		// Per-test retry: synchronous run is fine — we already serialized down
-		// to one subprocess per test, so there's no parallelism left to gain.
-		// A genuine spawn failure (executable not found, OS pipe exhaustion,
-		// etc.) is a system-level problem the runner can't recover from —
-		// panic so the user sees it immediately.
-		let runResult = try Subprocess.run(cmd.exe, arguments: cmd.argv) otherwise panic("retry [{specName}/{t.name}]: Subprocess.run spawn/wait failed (see SubprocessError on stderr)")
-		let stdoutStr = runResult.stdout
-		let stderrStr = runResult.stderr
-		// A panic during the per-test retry means the compiler is broken for
-		// this test — looping over the rest will just waste time re-panicking.
-		if workerStderrIsCompilerPanic(stderrStr) 'panicked'
-			abortOnWorkerCompilerPanic("retry [{specName}/{t.name}]", stderr: stderrStr)
-		end 'panicked'
-		let cleanedStderr = stripCompilingBreadcrumbs(stderrStr)
-		if not cleanedStderr.isEmpty() 'hasStderr'
-			printError(cleanedStderr)
-		end 'hasStderr'
-		var sawResult = false
-		let lines = stdoutStr.split("\n")
-		for line in lines 'parseLines'
-			let trimmedLine = trimWhitespace(line)
-			if trimmedLine.startsWith(workerSingleFailMarker) 'isFail'
-				let payload = parseSinglesFailLine(trimmedLine, specName: specName)
-				if not payload.isEmpty() or trimmedLine == "{workerSingleFailMarker}{specName}:" 'isPnMatch'
-					failOwners.push(specName)
-					failPayloads.push(payload)
-				end 'isPnMatch'
-				continue
-			end 'isFail'
-			if not trimmedLine.startsWith(workerSingleResultMarker) 'notResult'
-				continue
-			end 'notResult'
-			let result = parseSinglesResultLine(trimmedLine)
-			if not result.valid 'invalidResult'
-				continue
-			end 'invalidResult'
-			totalCompileMs = totalCompileMs + result.compileMs
-			passed = passed + result.passed
-			failed = failed + result.failed
-			sawResult = true
-		end 'parseLines'
-		if not sawResult 'workerCrashed'
-			// One subprocess per test, so a missing result means *this* test's
-			// compile crashed. Charge the failure to it specifically rather
-			// than re-blaming the whole spec.
-			failed = failed + 1
-			crashed = crashed + 1
-			failOwners.push(specName)
-			failPayloads.push("  {specName}/{t.name}: worker crashed (panic, timeout, or non-zero exit)")
-		end 'workerCrashed'
-	end 'eachTest'
-	return (passed, failed, crashed)
-end 'retryFallbackTestsIndividually'
+end 'runPersistentWorker'
 
 // Aggregated outcome for one spec collected from a singles worker's stdout.
 type SinglesWorkerResult
@@ -3106,205 +2757,9 @@ function parseSinglesFailLine(line String, specName String) returns String
 	return decodeFailPayload(line.slice(idx, endIndex: line.endIndex()))
 end 'parseSinglesFailLine'
 
-// Build the command line for a singles worker.
-// --workers=1 prevents the child from spawning its own sub-workers.
-function buildSinglesWorkerCommand(exePath String, workerSpecs String, targetStr String, filter String, verbose bool) returns RunCommand
-	var argv = StringArray.create()
-	argv.push("spec-test")
-	argv.push("--worker-singles={workerSpecs}")
-	argv.push("--target={targetStr}")
-	argv.push("--workers=1")
-	if not filter.isEmpty() 'hasFilter'
-		argv.push("--filter={filter}")
-	end 'hasFilter'
-	if verbose 'isVerbose'
-		argv.push("--verbose")
-	end 'isVerbose'
-	return workerRunCommand(exePath, argv: argv)
-end 'buildSinglesWorkerCommand'
-
-// Per-worker outcome bundled with the spec list for aggregation.
-type SinglesWorkerOutcome
-	export var specNames String
-	export var stdout String
-	export var stderr String
-
-	export static function create(specNames String, stdout String, stderr String) returns SinglesWorkerOutcome
-		return Self{specNames: specNames, stdout: stdout, stderr: stderr}
-	end 'create'
-end 'SinglesWorkerOutcome'
-
-export typealias SinglesWorkerOutcomeArray = Array with SinglesWorkerOutcome
-
-// Spawn singles workers to handle the non-batchable tests of `specNames`,
-// distributing specs round-robin across `numWorkers` subprocesses. Aggregates
-// pass/fail counts and failure messages back into the parent. Specs whose
-// worker crashes (panic, timeout, non-zero exit) have their non-batchable
-// tests counted as failed via the `units` table; we never retry in-process,
-// because a deterministic panic would then take down the parent runner.
-//
-// Spawn singles workers in parallel via `async Subprocess.run`, then drain
-// each one with `try await`. Each worker handles a round-robin chunk of specs.
-// All promises are pushed before any await runs, so the OS launches every
-// child concurrently; the drain loop awaits them in order and the scheduler
-// yields between blocked promises so wall time is gated by the slowest child.
-function runSinglesPhase(specNames StringArray, units SpecWorkUnitArray, exePath String, targetStr String, filter String, verbose bool, numWorkers TestCount, phaseLabel String) returns (TestCount, TestCount)
-	let count = specNames.count()
-	if count == 0 'noWork'
-		return (0 as TestCount, 0)
-	end 'noWork'
-
-	var effectiveWorkers = numWorkers
-	if count < effectiveWorkers 'fewerSpecs'
-		effectiveWorkers = count
-	end 'fewerSpecs'
-	if effectiveWorkers < 1 'tooFew'
-		effectiveWorkers = 1 as TestCount
-	end 'tooFew'
-
-	// Phase A: spawn every worker via `async Subprocess.run` so they all run
-	// in parallel. A parallel StringArray tracks each promise's spec-chunk so
-	// the drain loop can name the worker for failure / panic reporting.
-	var promises = SubprocessPromiseArray.create()
-	var chunkSpecLists = StringArray.create()
-	for i in 0 upto effectiveWorkers 'spawnChunks'
-		var specStr = ""
-		var j = i
-		while j < count 'collectChunk'
-			let sn = try specNames.get(j) otherwise break
-			if specStr.isEmpty() 'firstInChunk'
-				specStr = sn
-			end 'firstInChunk' else 'notFirstInChunk'
-				specStr = "{specStr},{sn}"
-			end 'notFirstInChunk'
-			j = j + effectiveWorkers
-		end 'collectChunk'
-		if not specStr.isEmpty() 'hasChunk'
-			let cmd = buildSinglesWorkerCommand(exePath, workerSpecs: specStr, targetStr: targetStr, filter: filter, verbose: verbose)
-			promises.push(async Subprocess.run(cmd.exe, arguments: cmd.argv))
-			chunkSpecLists.push(specStr)
-		end 'hasChunk'
-	end 'spawnChunks'
-
-	// Phase B: drain each worker by awaiting its promise. The scheduler yields
-	// the parent green thread whenever the subprocess wait would block, so
-	// the other children keep making progress through subprocessWaitCollect.
-	var outcomes = SinglesWorkerOutcomeArray.create()
-	let promiseCount = promises.count()
-	for i in 0 upto promiseCount 'collectHandles'
-		let specNamesChunk = try chunkSpecLists.get(i) otherwise panic("runSinglesPhase: chunkSpecLists.get({i}) OOB (count={promiseCount})")
-		let p = try promises.get(i) otherwise panic("runSinglesPhase: promises.get({i}) OOB (count={promiseCount})")
-		let result = try await p otherwise panic("singles worker [{specNamesChunk}] subprocess spawn/wait failed (see SubprocessError on stderr)")
-		let stdoutStr = result.stdout
-		let stderrStr = result.stderr
-		// Abort early on a compiler panic. Per-test retry of a deterministic
-		// panic just compounds the wait — fail fast so the user sees the
-		// panic now instead of after every other worker has also drained.
-		if workerStderrIsCompilerPanic(stderrStr) 'panicked'
-			abortOnWorkerCompilerPanic("singles [{specNamesChunk}]", stderr: stderrStr)
-		end 'panicked'
-		outcomes.push(SinglesWorkerOutcome.create(specNamesChunk, stdout: stdoutStr, stderr: stderrStr))
-	end 'collectHandles'
-
-	var totalPassed = 0 as TestCount
-	var totalFailed = 0 as TestCount
-
-	for w in outcomes 'collect'
-		let stdout = w.stdout
-		let stderr = stripCompilingBreadcrumbs(w.stderr)
-
-		if not stderr.isEmpty() 'hasStderr'
-			printError(stderr)
-		end 'hasStderr'
-
-		var pendingSpecs = w.specNames.split(",")
-		// Flat per-line buffers keyed by spec name; we filter by name at print
-		// time. Avoids the borrow-checker contortions of nested-array mutation.
-		var failOwners = StringArray.create()
-		var failPayloads = TextLineArray.create()
-
-		let lines = stdout.split("\n")
-		for line in lines 'parseLines'
-			let trimmedLine = trimWhitespace(line)
-			if trimmedLine.startsWith(workerSingleFailMarker) 'isFail'
-				var matched = false
-				for pn in pendingSpecs 'matchSpec'
-					let payload = parseSinglesFailLine(trimmedLine, specName: pn)
-					if not payload.isEmpty() or trimmedLine == "{workerSingleFailMarker}{pn}:" 'isPnMatch'
-						failOwners.push(pn)
-						failPayloads.push(payload)
-						matched = true
-						break
-					end 'isPnMatch'
-				end 'matchSpec'
-				if not matched 'unmatched'
-					logError(LogCategory.testing, message: function() gives "[SINGLES ERROR] orphan fail line: {trimmedLine}")
-				end 'unmatched'
-				continue
-			end 'isFail'
-			if not trimmedLine.startsWith(workerSingleResultMarker) 'notResult'
-				continue
-			end 'notResult'
-			let result = parseSinglesResultLine(trimmedLine)
-			if not result.valid 'invalidResult'
-				logError(LogCategory.testing, message: function() gives "[SINGLES ERROR] malformed result line: {trimmedLine}")
-				continue
-			end 'invalidResult'
-
-			var remaining = StringArray.create()
-			for pn in pendingSpecs 'filterPending'
-				if pn != result.specName 'keep'
-					remaining.push(pn)
-				end 'keep'
-			end 'filterPending'
-			pendingSpecs = remaining
-
-			totalCompileMs = totalCompileMs + result.compileMs
-			totalPassed = totalPassed + result.passed
-			totalFailed = totalFailed + result.failed
-
-			if result.failed > 0 'hasFail'
-				let specTotal = result.passed + result.failed
-				logError(LogCategory.testing, message: function() gives "[FAIL] {result.specName} ({result.passed}/{specTotal})")
-				logSpecFailuresFor(failOwners, payloads: failPayloads, specName: result.specName)
-			end 'hasFail'
-		end 'parseLines'
-
-		// Specs the worker never reported a RESULT for — the worker crashed
-		// (panic, timeout, or non-zero exit). For each, re-run every test in
-		// its own subprocess so a single panicking test doesn't blame its
-		// peers. The missing-lowering tally is structurally inert (it counts
-		// tests excluded by the rewriter, not crashed compiles), so it folds
-		// into `totalFailed` directly.
-		for pendingName in pendingSpecs 'handleMissing'
-			let pn = trimWhitespace(pendingName)
-			if pn.isEmpty() 'emptyName'
-				continue
-			end 'emptyName'
-			let unit = findUnitByName(units, specName: pn)
-			let nonBatchableCount = unit.nonBatchable.count()
-			let crashedCount = nonBatchableCount + unit.missingLoweringCount
-			if crashedCount == 0 'noSingles'
-				continue
-			end 'noSingles'
-			totalFailed = totalFailed + unit.missingLoweringCount
-			if nonBatchableCount > 0 'hasNonBatchable'
-				let (rp, rf) = retryAndAccountCrashedSpec(pn, tests: unit.nonBatchable, exePath: exePath, targetStr: targetStr, verbose: verbose, failOwners: failOwners, failPayloads: failPayloads, phaseLabel: phaseLabel)
-				totalPassed = totalPassed + rp
-				totalFailed = totalFailed + rf
-			end 'hasNonBatchable' else 'onlyMissing'
-				logError(LogCategory.testing, message: function() gives "[FAIL] {pn} ({crashedCount} {phaseLabel} test(s)): worker crashed (panic, timeout, or non-zero exit)")
-				logSpecFailuresFor(failOwners, payloads: failPayloads, specName: pn)
-			end 'onlyMissing'
-		end 'handleMissing'
-	end 'collect'
-
-	return (totalPassed, totalFailed)
-end 'runSinglesPhase'
-
 // Print all failure-lines whose owner equals `specName`, in stream order.
 // Mirrors logSpecFailureMessages but operates on the flat (owners, payloads)
-// parallel-array buffer used by runSinglesPhase / runFallbackPhase.
+// parallel-array buffer the dispatcher uses.
 function logSpecFailuresFor(owners StringArray, payloads TextLineArray, specName String)
 	let count = owners.count()
 	for i in 0 upto count 'each'
@@ -3319,24 +2774,6 @@ function logSpecFailuresFor(owners StringArray, payloads TextLineArray, specName
 		logError(LogCategory.testing, message: function() gives payload)
 	end 'each'
 end 'logSpecFailuresFor'
-
-// Assemble the command to run this executable as a batch worker.
-// `workerSpecs` is a comma-joined list of spec names.
-// --workers=1 prevents the child from spawning its own sub-workers.
-function buildBatchWorkerCommand(exePath String, workerSpecs String, targetStr String, filter String, verbose bool) returns RunCommand
-	var argv = StringArray.create()
-	argv.push("spec-test")
-	argv.push("--worker-spec={workerSpecs}")
-	argv.push("--target={targetStr}")
-	argv.push("--workers=1")
-	if not filter.isEmpty() 'hasFilter'
-		argv.push("--filter={filter}")
-	end 'hasFilter'
-	if verbose 'isVerbose'
-		argv.push("--verbose")
-	end 'isVerbose'
-	return workerRunCommand(exePath, argv: argv)
-end 'buildBatchWorkerCommand'
 
 // Parsed outcome from one spec's WORKER_BATCH_RESULT stdout line.
 type BatchWorkerResult
@@ -3502,26 +2939,6 @@ function partitionSpecTests(tests SpecTestArray, specName String, filter String,
 	return SpecWorkUnit.create(specName, nonBatchable: nonBatchable, batchable: batchable, missingLoweringFailures: missingLoweringFailures, missingLoweringCount: missingLoweringCount)
 end 'partitionSpecTests'
 
-// Build a fallback-only SpecWorkUnit: every supplied test is filed under
-// `nonBatchable` (so the per-fragment retry loop picks them up), batchable
-// is empty, and no missing-lowering tally is carried. Used to convert a
-// crashed batch into a fallback unit whose individual tests get retried
-// in their own subprocesses.
-function makeFallbackOnlyUnit(specName String, tests SpecTestArray) returns SpecWorkUnit
-	return SpecWorkUnit.create(specName, nonBatchable: tests, batchable: SpecTestArray.create(), missingLoweringFailures: TextLineArray.create(), missingLoweringCount: 0 as TestCount)
-end 'makeFallbackOnlyUnit'
-
-// Copy `src` into a fresh SpecTestArray. Used at the boundary where a worker
-// crash hands a unit's test list to the per-test retry loop and we need a
-// freshly-owned vector.
-function cloneSpecTests(src SpecTestArray) returns SpecTestArray
-	var dest = SpecTestArray.create()
-	for t in src 'eachTest'
-		dest.push(t)
-	end 'eachTest'
-	return dest
-end 'cloneSpecTests'
-
 // Look up tests in `batchable` by name and append matches to `dest`. Used to
 // route tests the batch rewriter rejected (or that a batch-wide failure forced
 // off the batched path) onto the per-fragment fallback path.
@@ -3589,12 +3006,430 @@ function runSingleTests(unit SpecWorkUnit, root FilePath, fragmentDir FilePath, 
 	return (specPassed, specFailed, specFailures)
 end 'runSingleTests'
 
-// Run spec tests with batch workers spawned as parallel processes.
-// Single tests (per-fragment path) always run in-process; only batch compilations
-// are offloaded to subprocess workers. Specs with batchable tests are divided via
-// round-robin across `workerCount` workers (or fewer, if there are fewer batchable
-// specs than workers), so each worker amortizes the stdlib-cache warm-up cost
-// across multiple spec batches.
+// ─── Work-stealing dispatcher: types + helpers ───────────────────────────────
+
+// Worker slot identifier in the pool. Practically capped by the OS process
+// table; the upper bound is generous so cast sites don't have to constrain.
+typealias WorkerId = int(0 to u32.max)
+
+// One spec's worth of work assigned to the unified job queue. A spec may
+// generate up to two jobs (one batch + one singles) plus an optional fallback
+// job that's enqueued at runtime when a batch worker reports rewriter-rejected
+// tests. `weight` orders the queue slowest-first so the long-pole tests start
+// early and overlap with the rest of the run instead of gating wall time.
+type SpecJob
+	export var kind String  // "batch" | "singles" | "fallback"
+	export var specName String
+	export var fallbackTests StringArray  // populated only when kind == "fallback"
+	export var weight TestCount  // estimated cost; larger = dispatch first
+
+	export static function createBatch(specName String, weight TestCount) returns SpecJob
+		return Self{kind: "batch", specName: specName, fallbackTests: StringArray.create(), weight: weight}
+	end 'createBatch'
+
+	export static function createSingles(specName String, weight TestCount) returns SpecJob
+		return Self{kind: "singles", specName: specName, fallbackTests: StringArray.create(), weight: weight}
+	end 'createSingles'
+
+	export static function createFallback(specName String, tests StringArray, weight TestCount) returns SpecJob
+		return Self{kind: "fallback", specName: specName, fallbackTests: tests, weight: weight}
+	end 'createFallback'
+
+	// Empty-marker job. Returned by helpers as the "no follow-up needed" or
+	// "queue empty" sentinel. Callers test `kind != ""` before using the value.
+	export static function empty() returns SpecJob
+		return Self{kind: "", specName: "", fallbackTests: StringArray.create(), weight: 0 as TestCount}
+	end 'empty'
+
+	// Deep copy: clones the inner fallbackTests so the result does not borrow
+	// from `self`. Used by popHeaviestJob to materialise a return value before
+	// mutating the source array.
+	export function clone() returns SpecJob
+		var testsCopy = StringArray.create()
+		for t in fallbackTests 'each'
+			testsCopy.push(t)
+		end 'each'
+		return Self{kind: kind, specName: specName, fallbackTests: testsCopy, weight: weight}
+	end 'clone'
+
+	// Render the wire-format job line the persistent worker reads from stdin.
+	export function toJobLine() returns String
+		if kind == "batch" 'isBatch'
+			return "{persistentJobBatchPrefix}{specName}"
+		end 'isBatch'
+		if kind == "singles" 'isSingles'
+			return "{persistentJobSinglesPrefix}{specName}"
+		end 'isSingles'
+		if kind == "fallback" 'isFallback'
+			return "{persistentJobFallbackPrefix}{specName}:{joinPipe(fallbackTests)}"
+		end 'isFallback'
+		panic("SpecJob.toJobLine: unknown kind '{kind}'")
+	end 'toJobLine'
+
+	// Diagnostic label for logs / panic messages.
+	export function label() returns String
+		return "{kind}:{specName}"
+	end 'label'
+end 'SpecJob'
+
+typealias SpecJobArray = Array with SpecJob
+
+// Pop the highest-weight job, replacing the popped slot with the array's last
+// element. Returns the empty-marker job (kind == "") when the queue is empty.
+// Mutates `queue` in place; intended for the dispatch loop only.
+function popHeaviestJob(queue SpecJobArray) returns SpecJob
+	let n = queue.count()
+	if n == 0 'empty'
+		return SpecJob.empty()
+	end 'empty'
+	var bestIdx = 0
+	var bestWeight = 0 as TestCount
+	var first = true
+	for i in 0 upto n 'scan'
+		let candidate = try queue.get(i) otherwise continue
+		if first or candidate.weight > bestWeight 'isBetter'
+			bestIdx = i
+			bestWeight = candidate.weight
+			first = false
+		end 'isBetter'
+	end 'scan'
+	// Swap the heaviest slot with the array's tail, then pop. `.clone()` cuts
+	// the borrow from `queue` so the subsequent `queue.set` is allowed: without
+	// it the borrow checker keeps `chosen` tied to the array's storage.
+	let chosen = (try queue.get(bestIdx) otherwise panic("popHeaviestJob: get({bestIdx}) failed despite earlier scan")).clone()
+	if bestIdx != n - 1 'notLast'
+		let last = (try queue.get(n - 1) otherwise panic("popHeaviestJob: get(last) failed")).clone()
+		try queue.set(bestIdx, value: last) otherwise panic("popHeaviestJob: set({bestIdx}) failed")
+	end 'notLast'
+	_ = try queue.pop() otherwise panic("popHeaviestJob: pop() failed despite non-empty queue")
+	return chosen
+end 'popHeaviestJob'
+
+// Read result lines from `child` until the next WORKER_READY marker. Throws
+// SubprocessError.ioFailed on EOF before READY (worker crashed mid-job).
+//
+// Protocol invariant exploited here: workers never emit empty stdout lines.
+// The only `print(...)` calls in the worker entry points are WORKER_READY,
+// WORKER_BATCH_RESULT, WORKER_SINGLE_RESULT, and WORKER_SINGLE_FAIL — all
+// non-empty. So an empty line from readStdoutLine() reliably means EOF.
+//
+// Lives as a free function (not a method on PersistentWorkerHandle) so the
+// dispatcher can launch it via `async drainResultsThunk(...)`. Calling
+// `async h.drainResults(...)` would bind the GT to the struct instance which
+// the dispatcher needs to keep mutating in the meantime; passing the inner
+// `child` handle by value lets the GT run independently of the slot's struct.
+// StreamingSubprocess copies share the runtime-side pipe handle by refcount,
+// so the GT's copy and the parent's copy reference the same OS object.
+function drainResultsThunk(child StreamingSubprocess, jobLabel String, workerId WorkerId) returns StringArray throws SubprocessError
+	var lines = StringArray.create()
+	while true 'lineLoop'
+		let line = try child.readStdoutLine()
+		if line.isEmpty() 'eof'
+			throw SubprocessError.ioFailed("worker {workerId} exited mid-job '{jobLabel}' before emitting {workerReadyMarker}")
+		end 'eof'
+		let trimmed = trimWhitespace(line)
+		if trimmed == workerReadyMarker 'done'
+			return lines
+		end 'done'
+		lines.push(line)
+	end 'lineLoop'
+	panic("drainResultsThunk: unreachable")
+end 'drainResultsThunk'
+
+// Promise carrying the StringArray result of one async drain. The dispatcher
+// keeps a parallel array of these (one per worker slot) and `try await`s the
+// slot it next wants to read from. Because every drain promise is spawned at
+// dispatch time, the underlying overlapped stdout reads are all issued to the
+// IOCP runtime in parallel — slow workers don't gate fast ones.
+typealias DrainPromise = Promise with StringArray
+typealias DrainPromiseArray = Array with DrainPromise
+
+// One persistent worker subprocess in the work-stealing pool. The struct holds
+// only the OS-side handle + an id for diagnostics; per-job state (which job is
+// currently in flight, whether the slot is busy, accumulated stderr) lives in
+// the dispatcher's parallel arrays so the struct itself is small and copyable.
+type PersistentWorkerHandle
+	export var child StreamingSubprocess
+	export var workerId WorkerId
+
+	// Spawn the child WITHOUT blocking on its WORKER_READY hello. The caller is
+	// responsible for invoking `awaitReady()` before sending jobs. Used by the
+	// two-phase parallel-spawn path so all N workers' CreateProcessW + startup
+	// (cmdline parse, runtime init, stdlib cache warm) run concurrently rather
+	// than each serializing on the previous worker's READY drain. Net win is
+	// ~1.5s wall time over a 12-worker pool because Phase 2 now hides the
+	// ~140ms warmStdlibCache per worker under a single readiness barrier.
+	//
+	// Safety: the underlying runtime emits CreateProcessW with STARTUPINFOEX +
+	// PROC_THREAD_ATTRIBUTE_HANDLE_LIST so each child inherits exactly the 3
+	// std handles in its own STARTUPINFOW, never sibling spawns' pipes. Without
+	// that runtime fix (in X86CodeEmitter.Runtime.cs's __subp_spawn_core), this
+	// pipeline pattern races and corrupts IPC.
+	export static function spawnNoWait(exe String, workerId WorkerId, targetStr String, filter String, verbose bool) returns PersistentWorkerHandle throws SubprocessError
+		let exeFile = try FilePath.from(exe) otherwise 'badExe'
+			throw SubprocessError.spawnFailed("worker {workerId}: invalid exe path '{exe}'")
+		end 'badExe'
+		var argv = StringArray.create()
+		argv.push("spec-test")
+		argv.push("--worker-persistent")
+		argv.push("--target={targetStr}")
+		argv.push("--workers=1")
+		if not filter.isEmpty() 'hasFilter'
+			argv.push("--filter={filter}")
+		end 'hasFilter'
+		if verbose 'isVerbose'
+			argv.push("--verbose")
+		end 'isVerbose'
+		let c = try StreamingSubprocess.spawn(Executable.path(exeFile), arguments: argv)
+		return PersistentWorkerHandle{child: c, workerId: workerId}
+	end 'spawnNoWait'
+
+	// Drain the startup WORKER_READY hello from a handle obtained via
+	// spawnNoWait. Pairs with the two-phase pool startup.
+	export function awaitReady() throws SubprocessError
+		let ready = try child.readStdoutLine()
+		if trimWhitespace(ready) != workerReadyMarker 'badHello'
+			child.release()
+			throw SubprocessError.ioFailed("worker {workerId} startup: expected {workerReadyMarker}, got '{ready}'")
+		end 'badHello'
+	end 'awaitReady'
+
+	// Write one job line; the trailing newline is added by writeStdinLine.
+	export function sendJob(jobLine String) throws SubprocessError
+		try child.writeStdinLine(jobLine)
+	end 'sendJob'
+
+	// Read result lines from the child until the next WORKER_READY marker.
+	// Thin instance-method shim over `drainResultsThunk` (the free function the
+	// dispatcher's `async` calls bind to). Kept as a method for callers that
+	// don't need the async form, e.g. the persistent-smoke binary.
+	export function drainResults(jobLabel String) returns StringArray throws SubprocessError
+		return try drainResultsThunk(child, jobLabel: jobLabel, workerId: workerId)
+	end 'drainResults'
+
+	// Send EXIT, close stdin, await the child, drain whatever it wrote to
+	// stderr while alive, then release the OS handle. Drain is synchronous
+	// after wait() because the child has exited (its stderr write end is
+	// closed by Windows) — the read loop just consumes pipe-buffered bytes
+	// and returns when ReadFile returns 0 (EOF). Forwards any non-breadcrumb
+	// content to the parent's stderr; aborts on detected compiler panic.
+	//
+	// An earlier design used `async drainWorkerStderr(child)` to drain
+	// continuously, but each async GT leaked 1 MM allocation per worker
+	// (Promise box + GT arg buffer not returning to the slab). With workers
+	// suppressed at LogLevel.ERROR, stderr volume per run is negligible
+	// (zero on the success path) so deferring the drain costs nothing.
+	export function shutdownAndDrainStderr() returns ExitInt throws SubprocessError
+		try child.writeStdinLine(persistentExitCommand)
+		child.closeStdin()
+		let code = try child.wait()
+
+		var sb = ""
+		let cap = 65536 as ByteLimit
+		while true 'lineLoop'
+			let line = try child.readStderrLineCapped(cap) otherwise break
+			if line.isEmpty() 'eof'
+				break
+			end 'eof'
+			if sb.isEmpty() 'firstLine'
+				sb = line
+			end 'firstLine' else 'restLine'
+				sb = "{sb}\n{line}"
+			end 'restLine'
+		end 'lineLoop'
+
+		let cleaned = stripCompilingBreadcrumbs(sb)
+		if not cleaned.isEmpty() 'hasContent'
+			if workerStderrIsCompilerPanic(cleaned) 'panicked'
+				abortOnWorkerCompilerPanic("persistent worker {workerId}", stderr: cleaned)
+			end 'panicked'
+			printError(cleaned)
+			if not cleaned.endsWith("\n") 'noNl'
+				printError("\n")
+			end 'noNl'
+		end 'hasContent'
+
+		child.release()
+		return code
+	end 'shutdownAndDrainStderr'
+end 'PersistentWorkerHandle'
+
+typealias PersistentWorkerHandleArray = Array with PersistentWorkerHandle
+
+// Maximum fallback tests packed into a single follow-up job. A batch that
+// the rewriter rejected often produces 60+ tests; running them all in one
+// worker can take 10+ seconds, gating wall time on a single late-arriving
+// long-pole. Splitting into chunks of this size lets several workers crunch
+// the fallback concurrently. 8 is a compromise: small enough that 75 tests
+// fan out across ~10 chunks (covers a 12-worker pool), large enough that
+// the per-job IPC overhead (~5ms send + stdout drain) stays a small
+// fraction of each chunk's actual compile work (~1-2s).
+let maxFallbackChunk = 8 as TestCount
+
+// Fixed weight bonus for tests that re-compile the world. See the comment
+// in `runAllSpecTestsParallel` next to the call site for the rationale.
+let stdlibBurden = 16384 as TestCount
+
+// Sum the weighted source bytes of a list of tests, applying `stdlibBurden`
+// to any test that triggers a re-compile-the-world path. Shared by the
+// batch and singles queue-weight computations so both observe the same
+// scoring model.
+function sumTestWeight(tests SpecTestArray) returns TestCount
+	var total = 0 as TestCount
+	for t in tests 'eachTest'
+		var w = t.source.byteLength()
+		if t.cacheParity or t.includeStdlibIr 'isHeavy'
+			w = w + stdlibBurden
+		end 'isHeavy'
+		total = total + w
+	end 'eachTest'
+	return total
+end 'sumTestWeight'
+
+// Pop-style helper for routing one worker's drained stdout into the dispatcher's
+// accumulators. Mutates the accumulators in place; returns any follow-up
+// SpecJobs that should be re-queued as a result of this job's output — used
+// when a batch job reports rewriter-rejected tests, which are repacked into
+// per-`maxFallbackChunk` fallback jobs for the same spec.
+function processWorkerResults(resultLines StringArray, job SpecJob, units SpecWorkUnitArray, totalPassed_io VarHolder, totalFailed_io VarHolder, failOwners StringArray, failPayloads TextLineArray) returns SpecJobArray
+	// VarHolder dance is a workaround for the runner not having out-params for
+	// primitive locals; the caller boxes its accumulators and we update through
+	// the boxes.
+	var followups = SpecJobArray.create()
+	for line in resultLines 'eachLine'
+		let trimmedLine = trimWhitespace(line)
+		if trimmedLine.startsWith(workerSingleFailMarker) 'isFail'
+			let payload = parseSinglesFailLine(trimmedLine, specName: job.specName)
+			if not payload.isEmpty() or trimmedLine == "{workerSingleFailMarker}{job.specName}:" 'matches'
+				failOwners.push(job.specName)
+				failPayloads.push(payload)
+			end 'matches' else 'orphan'
+				logError(LogCategory.testing, message: function() gives "[DISPATCH ERROR] orphan fail line for {job.label()}: {trimmedLine}")
+			end 'orphan'
+			continue
+		end 'isFail'
+		if trimmedLine.startsWith(workerBatchResultMarker) 'isBatchResult'
+			let parsed = parseBatchWorkerResult(trimmedLine)
+			if not parsed.valid 'invalidBatch'
+				logError(LogCategory.testing, message: function() gives "[DISPATCH ERROR] malformed batch result for {job.label()}: {trimmedLine}")
+				continue
+			end 'invalidBatch'
+			totalCompileMs = totalCompileMs + parsed.compileMs
+			totalPassed_io.value = totalPassed_io.value + parsed.passed
+			if parsed.skippedNames.count() > 0 'hasSkipped'
+				// Filter through the unit's batchable list so test names invented
+				// by the rewriter (none today) don't get re-issued as fallback
+				// work. Pack the surviving names into chunks of `maxFallbackChunk`
+				// each, weighted by their source bytes, so several workers can
+				// process the chunks concurrently instead of one worker
+				// serialising the whole spec's rejected-tests list.
+				let unit = findUnitByName(units, specName: parsed.specName)
+				var chunkNames = StringArray.create()
+				var chunkBytes = 0 as TestCount
+				for skipName in parsed.skippedNames 'eachSkip'
+					for t in unit.batchable 'findTest'
+						if t.name == skipName 'matched'
+							chunkNames.push(skipName)
+							chunkBytes = chunkBytes + t.source.byteLength()
+							break
+						end 'matched'
+					end 'findTest'
+					if chunkNames.count() >= maxFallbackChunk 'flushChunk'
+						followups.push(SpecJob.createFallback(parsed.specName, tests: chunkNames, weight: chunkBytes))
+						chunkNames = StringArray.create()
+						chunkBytes = 0 as TestCount
+					end 'flushChunk'
+				end 'eachSkip'
+				if chunkNames.count() > 0 'tailChunk'
+					followups.push(SpecJob.createFallback(parsed.specName, tests: chunkNames, weight: chunkBytes))
+				end 'tailChunk'
+			end 'hasSkipped'
+			continue
+		end 'isBatchResult'
+		if trimmedLine.startsWith(workerSingleResultMarker) 'isSingleResult'
+			let result = parseSinglesResultLine(trimmedLine)
+			if not result.valid 'invalidSingle'
+				logError(LogCategory.testing, message: function() gives "[DISPATCH ERROR] malformed singles/fallback result for {job.label()}: {trimmedLine}")
+				continue
+			end 'invalidSingle'
+			totalCompileMs = totalCompileMs + result.compileMs
+			totalPassed_io.value = totalPassed_io.value + result.passed
+			totalFailed_io.value = totalFailed_io.value + result.failed
+			if result.failed > 0 'hasFail'
+				let specTotal = result.passed + result.failed
+				logError(LogCategory.testing, message: function() gives "[FAIL] {result.specName} ({result.passed}/{specTotal})")
+				logSpecFailuresFor(failOwners, payloads: failPayloads, specName: result.specName)
+			end 'hasFail'
+			continue
+		end 'isSingleResult'
+		// Anything else is unknown protocol — log it and move on; we don't
+		// throw because the result lines we did parse already updated counters.
+		logError(LogCategory.testing, message: function() gives "[DISPATCH ERROR] unknown result line for {job.label()}: {trimmedLine}")
+	end 'eachLine'
+	return followups
+end 'processWorkerResults'
+
+// Boxed primitive so we can pass mutable accumulators through helper functions
+// without the surrounding boilerplate of returning tuples and threading them
+// through every callsite. Used only by the dispatch loop in this file.
+type VarHolder
+	export var value TestCount
+
+	export static function create(value TestCount) returns VarHolder
+		return Self{value: value}
+	end 'create'
+end 'VarHolder'
+
+// Account for a job whose worker crashed before producing a RESULT line. For
+// batch crashes we re-route every batchable test through the fallback path so
+// per-test isolation kicks in; for singles/fallback crashes we charge every
+// affected test as a failure straight away (singles already runs one compile
+// per test, so retrying within the dispatcher would just compound the wait).
+// Returns the optional follow-up job (a fallback for crashed-batch retries),
+// or the empty-marker job if no retry is needed.
+function recoverFromCrashedJob(job SpecJob, units SpecWorkUnitArray, totalFailed_io VarHolder, failOwners StringArray, failPayloads TextLineArray) returns SpecJob
+	let none = SpecJob.empty()
+	if job.kind == "batch" 'wasBatch'
+		let unit = findUnitByName(units, specName: job.specName)
+		var allNames = StringArray.create()
+		for t in unit.batchable 'eachTest'
+			allNames.push(t.name)
+		end 'eachTest'
+		if allNames.count() == 0 'noTests'
+			return none
+		end 'noTests'
+		logError(LogCategory.testing, message: function() gives "[CRASH] batch worker died on spec '{job.specName}'; rerouting {allNames.count()} test(s) to per-fragment fallback")
+		return SpecJob.createFallback(job.specName, tests: allNames, weight: allNames.count())
+	end 'wasBatch'
+	if job.kind == "singles" 'wasSingles'
+		let unit = findUnitByName(units, specName: job.specName)
+		let crashedCount = unit.nonBatchable.count() + unit.missingLoweringCount
+		totalFailed_io.value = totalFailed_io.value + crashedCount
+		failOwners.push(job.specName)
+		failPayloads.push("  {job.specName}: worker crashed during singles phase (panic, timeout, or non-zero exit); {crashedCount} test(s) charged as failed")
+		logError(LogCategory.testing, message: function() gives "[FAIL] {job.specName} ({crashedCount} test(s)): singles worker crashed")
+		logSpecFailuresFor(failOwners, payloads: failPayloads, specName: job.specName)
+		return none
+	end 'wasSingles'
+	if job.kind == "fallback" 'wasFallback'
+		let crashedCount = job.fallbackTests.count()
+		totalFailed_io.value = totalFailed_io.value + crashedCount
+		failOwners.push(job.specName)
+		failPayloads.push("  {job.specName}: worker crashed during fallback phase (panic, timeout, or non-zero exit); {crashedCount} test(s) charged as failed")
+		logError(LogCategory.testing, message: function() gives "[FAIL] {job.specName} ({crashedCount} test(s)): fallback worker crashed")
+		logSpecFailuresFor(failOwners, payloads: failPayloads, specName: job.specName)
+		return none
+	end 'wasFallback'
+	logError(LogCategory.testing, message: function() gives "[DISPATCH ERROR] unknown job kind '{job.kind}' on crash recovery")
+	return none
+end 'recoverFromCrashedJob'
+
+// Run spec tests with a work-stealing pool of persistent worker subprocesses.
+// Each worker stays alive across many JOB:... lines, amortising its stdlib-cache
+// warmup over every spec it handles. Jobs come off a single slowest-first queue
+// (batch + singles + dynamically-added fallback), so the long-pole tests start
+// first and the OS-level parallelism gates wall time on the heaviest individual
+// compile rather than on a static round-robin chunk.
 export function runAllSpecTestsParallel(filter String, target Target, workerCount WorkerCount, updateRequired bool = false, verbose bool = false) returns ExitCode
 	let root = try findSpecsRoot() otherwise 'noRoot'
 		logError(LogCategory.testing, message: function() gives "Could not find project root (no specs/ directory found)")
@@ -3625,17 +3460,14 @@ export function runAllSpecTestsParallel(filter String, target Target, workerCoun
 		_ = Directory.create(tempDir)
 	end 'noTempDir'
 
-	// Reap any leftover capture files from a prior crashed run that used the
-	// old Process.captureStart code path. The current Subprocess.run path
-	// captures in memory, so the sweep is purely hygienic for older runs.
-	// Best-effort: ignore failures.
-	cleanupLeftoverCaptureFiles(fragmentDir)
-
-	// Warm the stdlib cache for the in-process single-test path.
-	warmStdlibCache(target)
-	markPhase("warmStdlibCache done")
-
+	// `--update-required` compiles fragments in-parent to harvest the new
+	// RequiredLowering blocks, so it needs the parent's stdlib cache warm.
+	// The normal dispatch path delegates every compile to the workers (each
+	// pays its own ~140ms warmup once), so skipping the parent warmup saves
+	// the full cost (5+ seconds on a cold cache) when not updating.
 	if updateRequired 'preUpdate'
+		warmStdlibCache(target)
+		markPhase("warmStdlibCache done")
 		updateAllRequiredLowering(specDir, tempDir: tempDir, filter: filter, target: target, targetKey: targetKey)
 	end 'preUpdate'
 
@@ -3688,167 +3520,358 @@ export function runAllSpecTestsParallel(filter String, target Target, workerCoun
 		return 0
 	end 'noTests'
 
-	// Phase 2: Distribute specs with batchable tests across `workerCount` workers
-	// using round-robin. All workers start before the parent waits for any —
-	// this is what enables OS-level parallelism.
+	// Phase 2: Build the unified slowest-first job queue. A spec contributes up
+	// to two jobs (batch + singles); fallback jobs join the queue dynamically
+	// inside the dispatch loop when a batch result reports rewriter-rejected
+	// tests. Weight orders the queue so the heaviest workloads start first and
+	// overlap with the rest of the run, gating wall time on the long pole
+	// instead of a static round-robin chunk boundary.
 	let exePath = (try Process.executablePath() otherwise panic("runAllSpecTestsParallel: cannot determine executable path")).toString()
 	let targetStr = targetToString(target)
-	var batchPromises = SubprocessPromiseArray.create()
-	var batchChunkSpecLists = StringArray.create()
 
-	// Collect the names of specs that have batchable tests, in whitelist order.
-	var batchableSpecNames = StringArray.create()
-	for unit in units 'collectBatchable'
+	// Weight tests by stdlib-compile burden, not test count. The per-test
+	// `cacheParity` and `includeStdlibIr` flags trigger a re-compile-the-world
+	// path that dwarfs the test's own source bytes — a 30-byte main() can
+	// take 8+s. We assign each such test a hefty fixed bonus (16 KiB ≈ a
+	// large spec body) on top of its own source length. For ordinary tests
+	// the source byte count alone correlates well with parse+typecheck+codegen
+	// work; weight-by-test-count buries 15KLOC specs (register-allocator)
+	// behind 50-test-but-tiny-test specs.
+	var jobQueue = SpecJobArray.create()
+	for unit in units 'enqueueJobs'
+		let batchBytes = sumTestWeight(unit.batchable)
+		let singlesBytes = sumTestWeight(unit.nonBatchable)
 		if unit.batchable.count() > 0 'hasBatch'
-			batchableSpecNames.push(unit.specName)
+			jobQueue.push(SpecJob.createBatch(unit.specName, weight: batchBytes))
 		end 'hasBatch'
-	end 'collectBatchable'
-
-	let batchableCount = batchableSpecNames.count()
-	var numWorkers = workerCount
-	if batchableCount < numWorkers 'fewerSpecsThanWorkers'
-		numWorkers = batchableCount
-	end 'fewerSpecsThanWorkers'
-
-	// Round-robin: worker i gets specs at positions i, i+numWorkers, i+2*numWorkers, ...
-	// Build a comma-joined spec list for each worker, then spawn them all at once
-	// via `async Subprocess.run`. A parallel StringArray tracks each promise's
-	// spec-chunk so Phase 4 can name the worker for failure / panic reporting.
-	for i in 0 upto numWorkers 'spawnWorkers'
-		var specStr = ""
-		var j = i
-		while j < batchableCount 'collectChunk'
-			let sn = try batchableSpecNames.get(j) otherwise break
-			if specStr.isEmpty() 'firstInChunk'
-				specStr = sn
-			end 'firstInChunk' else 'notFirstInChunk'
-				specStr = "{specStr},{sn}"
-			end 'notFirstInChunk'
-			j = j + numWorkers
-		end 'collectChunk'
-		if not specStr.isEmpty() 'hasChunk'
-			let cmd = buildBatchWorkerCommand(exePath, workerSpecs: specStr, targetStr: targetStr, filter: filter, verbose: verbose)
-			batchPromises.push(async Subprocess.run(cmd.exe, arguments: cmd.argv))
-			batchChunkSpecLists.push(specStr)
-		end 'hasChunk'
-	end 'spawnWorkers'
-	markPhase("Phase 2 spawned {batchPromises.count()} batch workers ({batchableCount} specs)")
-
-	// Phase 3: Dispatch single (non-batchable) tests to singles workers so a
-	// compile-time panic in one of them is contained as a failed test rather
-	// than a runner-killing crash.
-	var singlesSpecNames = StringArray.create()
-	for unit in units 'collectSingles'
 		if unit.nonBatchable.count() > 0 or unit.missingLoweringCount > 0 'hasSingles'
-			singlesSpecNames.push(unit.specName)
+			jobQueue.push(SpecJob.createSingles(unit.specName, weight: singlesBytes))
 			totalFragmentsWritten = totalFragmentsWritten + unit.nonBatchable.count()
 		end 'hasSingles'
-	end 'collectSingles'
+	end 'enqueueJobs'
 
-	markPhase("Phase 3 about to call runSinglesPhase ({singlesSpecNames.count()} singles specs)")
-	let (singlesPassed, singlesFailed) = runSinglesPhase(singlesSpecNames, units: units, exePath: exePath, targetStr: targetStr, filter: filter, verbose: verbose, numWorkers: numWorkers, phaseLabel: "non-batchable")
-	totalPassed = totalPassed + singlesPassed
-	totalFailed = totalFailed + singlesFailed
-	markPhase("Phase 3 runSinglesPhase done")
+	let initialJobCount = jobQueue.count()
+	var numWorkers = workerCount
+	if initialJobCount > 0 and initialJobCount < numWorkers 'fewerJobsThanWorkers'
+		numWorkers = initialJobCount as WorkerCount
+	end 'fewerJobsThanWorkers'
 
-	// Phase 4: Collect batch worker results. The await on each promise yields
-	// the parent green thread to the scheduler whenever the subprocess wait
-	// would block, so workers later in the array keep making progress while
-	// we drain the ones earlier in spawn order.
-	// Each worker emits one WORKER_BATCH_RESULT line per spec it was assigned.
-	var fallbackUnits = SpecWorkUnitArray.create()
-	let batchPromiseCount = batchPromises.count()
+	// Two-phase pipelined spawn: Phase A fires all N CreateProcessW back-to-back,
+	// Phase B drains each worker's WORKER_READY hello in order. While the
+	// parent runs the spawn loop, every previously-spawned worker is already
+	// executing its ~140ms warmStdlibCache, so total Phase 2 wall time drops
+	// from N × 150ms (serial) to ~150ms (slowest single warmup). Saves ~1.5s
+	// for a 12-worker pool.
+	//
+	// This pattern requires the runtime's CreateProcessW emission to use
+	// STARTUPINFOEX + PROC_THREAD_ATTRIBUTE_HANDLE_LIST so each child inherits
+	// exactly the handles in its own STARTUPINFOW and not stray pipes from
+	// concurrently-spawning siblings. See maxon-sharp/.../X86CodeEmitter.Runtime.cs
+	// __subp_spawn_core. Earlier two-phase attempts under the legacy
+	// bInheritHandles+SetHandleInformation pattern flaked ~30-50% of runs
+	// with crossed pipes and 30+ stderr-mismatch failures.
+	//
+	// Stderr is drained synchronously at shutdown rather than continuously
+	// via an async GT. The async approach leaks 1 MM per worker because the
+	// drain GT's Promise + arg-buf survive past the await round-trip.
+	// Workers emit zero stderr in the success path (LogLevel.ERROR), so the
+	// only risk of deferring drain is a worker that fills the 64 KiB pipe
+	// before EXIT — the default tests don't, and the shutdown drain catches
+	// whatever's buffered when the child exits.
+	var workers = PersistentWorkerHandleArray.create()
+	for i in 0 upto numWorkers 'spawnLoop'
+		let h = try PersistentWorkerHandle.spawnNoWait(exePath, workerId: i as WorkerId, targetStr: targetStr, filter: filter, verbose: verbose) otherwise panic("worker {i}: PersistentWorkerHandle.spawnNoWait failed (see SubprocessError above)")
+		workers.push(h)
+	end 'spawnLoop'
+	for i in 0 upto numWorkers 'readyLoop'
+		var h = try workers.get(i) otherwise panic("worker {i}: workers.get failed in readyLoop")
+		try h.awaitReady() otherwise panic("worker {i}: awaitReady failed (see SubprocessError above)")
+	end 'readyLoop'
 
-	for i in 0 upto batchPromiseCount 'collectWorkers'
-		let workerSpecs = try batchChunkSpecLists.get(i) otherwise panic("Phase 4: batchChunkSpecLists.get({i}) OOB (count={batchPromiseCount})")
-		let p = try batchPromises.get(i) otherwise panic("Phase 4: batchPromises.get({i}) OOB (count={batchPromiseCount})")
-		let result = try await p otherwise panic("batch worker [{workerSpecs}] subprocess spawn/wait failed (see SubprocessError on stderr)")
-		let stdout = result.stdout
-		let stderr = result.stderr
-		markPhase("batch drained worker [{workerSpecs}] stdoutLen={stdout.count()} stderrLen={stderr.count()}")
+	let liveWorkerCount = workers.count()
+	markPhase("Phase 2 spawned {liveWorkerCount} persistent workers, {initialJobCount} jobs queued")
 
-		// A compiler panic in any batch worker means re-running its tests in
-		// new subprocesses would just re-panic; abort the whole run now so the
-		// user sees the panic immediately rather than waiting for fallback
-		// retries to grind through one process per test.
-		if workerStderrIsCompilerPanic(stderr) 'panicked'
-			abortOnWorkerCompilerPanic("batch [{workerSpecs}]", stderr: stderr)
-		end 'panicked'
+	// Phase 3: dispatch loop. The pool concurrently dispatches the heaviest job
+	// to every idle worker, immediately spawning an `async drainResultsThunk`
+	// per dispatch so the underlying overlapped stdout reads all sit pending in
+	// the IOCP runtime in parallel. The main loop then `try await`s slots in
+	// round-robin order; whichever pipe has bytes ready completes its drain GT
+	// while the parent's await on a slower slot yields. Net effect: 12 worker
+	// reads make progress concurrently instead of serializing on the parent.
+	//
+	// busy[] tracks which slots have an in-flight drain promise; the loop only
+	// `await`s slots flagged busy. drainPromises[] grows lazily: the first
+	// dispatch to slot i `push`es (slot i has never had a promise; initial
+	// dispatch order is 0..N-1 by the round-robin scan so push always lands at
+	// the right index), every subsequent dispatch `set`s (replacing the
+	// already-awaited completed promise). The push/set invariant is asserted
+	// at the dispatch site so an out-of-order initial dispatch panics rather
+	// than silently corrupting the index mapping.
+	var busy = BoolArray.create()
+	var deadSlots = BoolArray.create()
+	var currentJobs = SpecJobArray.create()
+	var drainPromises = DrainPromiseArray.create()
+	let placeholder = SpecJob.empty()
+	for _ in 0 upto liveWorkerCount 'initBusy'
+		busy.push(false)
+		deadSlots.push(false)
+		currentJobs.push(placeholder)
+	end 'initBusy'
 
-		// Forward the worker's log output to our stderr (minus compile-breadcrumb
-		// markers, which are only useful for panic diagnosis).
-		let cleanedStderr = stripCompilingBreadcrumbs(stderr)
-		if not cleanedStderr.isEmpty() 'hasWorkerStderr'
-			printError(cleanedStderr)
-		end 'hasWorkerStderr'
+	var failOwners = StringArray.create()
+	var failPayloads = TextLineArray.create()
+	var passedBox = VarHolder.create(0 as TestCount)
+	var failedBox = VarHolder.create(0 as TestCount)
 
-		// Track which specs this worker was assigned so we can detect missing results.
-		var pendingSpecs = workerSpecs.split(",")
+	// Counters for the post-run invariant check: every job dispatched must be
+	// accounted for either via a result line or via crash recovery. Mismatches
+	// surface as a hard panic so a regression in the dispatcher can't silently
+	// drop a spec from the totals.
+	var jobsDispatched = 0
+	var jobsCompleted = 0
 
-		let lines = stdout.split("\n")
-		for line in lines 'parseResultLines'
-			let trimmedLine = trimWhitespace(line)
-			if not trimmedLine.startsWith(workerBatchResultMarker) 'notResult'
+	// Round-robin cursors keep the dispatch+drain loop from pinning to the
+	// lowest-index worker. Without rotation we always re-dispatch to worker 0
+	// after draining it, then drain it again on the very next iteration —
+	// workers 1..N-1 finish their initial jobs and then sit idle with their
+	// RESULT+READY queued in the pipe, never read. With rotation we visit
+	// every worker once per pool-cycle and read its result before redispatching.
+	var dispatchCursor = 0 as TestCount
+	var drainCursor = 0 as TestCount
+
+	while true 'dispatchLoop'
+		// Prefer dispatching to an idle worker over draining a busy one: the
+		// OS-level parallelism only kicks in once every worker has a job, so we
+		// hold off on the (blocking) drain until the pool is fully fed.
+		var idleIdx = 0 as TestCount
+		var haveIdleFlag = false
+		for offset in 0 upto liveWorkerCount 'findIdle'
+			let raw = dispatchCursor + offset
+			let i = raw - (raw / liveWorkerCount) * liveWorkerCount
+			let isDead = try deadSlots.get(i) otherwise false
+			if isDead 'skipDead'
 				continue
-			end 'notResult'
-			let parsed = parseBatchWorkerResult(trimmedLine)
-			if not parsed.valid 'invalidResult'
-				logError(LogCategory.testing, message: function() gives "[BATCH ERROR] malformed result line from worker: {trimmedLine}")
+			end 'skipDead'
+			let isBusy = try busy.get(i) otherwise panic("dispatch: busy.get({i}) failed")
+			if not isBusy 'isIdle'
+				idleIdx = i
+				haveIdleFlag = true
+				break
+			end 'isIdle'
+		end 'findIdle'
+
+		if haveIdleFlag 'haveIdle'
+			if jobQueue.count() == 0 'noWorkLeft'
+				// Idle worker but no more jobs to dispatch. If every (live)
+				// worker is idle the run is done; otherwise fall through to
+				// the drain path so the still-busy workers get a chance to
+				// report.
+				var anyBusy = false
+				for i in 0 upto liveWorkerCount 'checkBusy'
+					let dead = try deadSlots.get(i) otherwise false
+					if dead 'skipDeadCheck'
+						continue
+					end 'skipDeadCheck'
+					let b = try busy.get(i) otherwise false
+					if b 'wasBusy'
+						anyBusy = true
+						break
+					end 'wasBusy'
+				end 'checkBusy'
+				if not anyBusy 'allIdle'
+					break
+				end 'allIdle'
+			end 'noWorkLeft' else 'haveWork'
+				let job = popHeaviestJob(jobQueue)
+				var h = try workers.get(idleIdx) otherwise panic("dispatch: workers.get({idleIdx}) failed")
+				try h.sendJob(job.toJobLine()) otherwise 'sendFailed'
+					// Treat a write error like a crash: recover the job, mark
+					// the slot dead, and continue. Counting a never-dispatched
+					// failure as a completed job keeps jobsDispatched ==
+					// jobsCompleted simple — the recovery handler has already
+					// charged the spec, and the slot is permanently out.
+					let followup = recoverFromCrashedJob(job, units: units, totalFailed_io: failedBox, failOwners: failOwners, failPayloads: failPayloads)
+					if followup.kind != "" 'hasFollowup'
+						jobQueue.push(followup)
+					end 'hasFollowup'
+					h.child.release()
+					try busy.set(idleIdx, value: false) otherwise panic("dispatch: busy.set after sendJob failure")
+					try deadSlots.set(idleIdx, value: true) otherwise panic("dispatch: deadSlots.set after sendJob failure")
+					jobsDispatched = jobsDispatched + 1
+					jobsCompleted = jobsCompleted + 1
+					continue
+				end 'sendFailed'
+				try currentJobs.set(idleIdx, value: job) otherwise panic("dispatch: currentJobs.set({idleIdx}) failed")
+				try busy.set(idleIdx, value: true) otherwise panic("dispatch: busy.set({idleIdx}) failed")
+				// Spawn the drain GT immediately so the overlapped stdout read
+				// for this worker's READY is in flight in the IOCP runtime
+				// while we go dispatch to the next idle slot. Slots populate
+				// drainPromises in dispatch order — push on first dispatch,
+				// set on every redispatch (overwriting the already-awaited
+				// previous promise). The strict equality / less-than split
+				// catches any future round-robin reorder that violates the
+				// in-order initial dispatch invariant.
+				let pendingDrain = async drainResultsThunk(h.child, jobLabel: job.label(), workerId: h.workerId)
+				if idleIdx == drainPromises.count() 'firstDispatchThisSlot'
+					drainPromises.push(pendingDrain)
+				end 'firstDispatchThisSlot' else if idleIdx < drainPromises.count() 'redispatch'
+					try drainPromises.set(idleIdx, value: pendingDrain) otherwise panic("dispatch: drainPromises.set({idleIdx}) failed")
+				end 'redispatch' else 'outOfOrderInit'
+					panic("dispatch: drainPromises gap at slot {idleIdx} (size {drainPromises.count()}) — initial dispatch out of order")
+				end 'outOfOrderInit'
+				jobsDispatched = jobsDispatched + 1
+				let nextCursor = idleIdx + 1
+				dispatchCursor = nextCursor - (nextCursor / liveWorkerCount) * liveWorkerCount
 				continue
-			end 'invalidResult'
+			end 'haveWork'
+		end 'haveIdle'
 
-			// Remove this spec from the pending list.
-			var remaining = StringArray.create()
-			for pn in pendingSpecs 'filterPending'
-				if pn != parsed.specName 'keep'
-					remaining.push(pn)
-				end 'keep'
-			end 'filterPending'
-			pendingSpecs = remaining
-
-			totalCompileMs = totalCompileMs + parsed.compileMs
-			totalPassed = totalPassed + parsed.passed
-
-			if parsed.skippedNames.count() > 0 'hasSkipped'
-				let unit = findUnitByName(units, specName: parsed.specName)
-				var fallbackTests = SpecTestArray.create()
-				appendSkippedToFallback(fallbackTests, batchable: unit.batchable, skippedNames: parsed.skippedNames)
-				if fallbackTests.count() > 0 'hasFallback'
-					fallbackUnits.push(makeFallbackOnlyUnit(parsed.specName, tests: fallbackTests))
-				end 'hasFallback'
-			end 'hasSkipped'
-		end 'parseResultLines'
-
-		// Any spec still pending produced no result — worker crashed (panic,
-		// timeout, or non-zero exit). Push every batchable test onto the
-		// fallback unit list so the Phase-5 fallback path (and its
-		// per-test retry-on-crash) gets a chance to identify the single
-		// offending test rather than blaming the whole spec.
-		for pendingName in pendingSpecs 'handleMissing'
-			let pn = trimWhitespace(pendingName)
-			if pn.isEmpty() 'emptyName'
+		// No idle worker (or queue empty for the one idle slot while others
+		// are busy). Drain ALL workers whose async stdout-read GT has already
+		// completed (non-blocking poll via __Builtins.gtIsComplete on each
+		// promise's inner GT pointer). Only when NO worker has anything ready
+		// do we sleep(0) to yield to the scheduler so the IOCP completion
+		// thread can re-enqueue drain GTs that just finished. The naive
+		// approach — pick one busy worker and `try await` it — head-of-line
+		// blocks: if we pick a worker running a 5s job while others finish in
+		// 100ms, all the fast workers sit idle for 5s with their READY queued
+		// in the pipe but the parent stuck on the slow one.
+		var drainIdx = 0 as TestCount
+		var haveDrainFlag = false
+		for offset in 0 upto liveWorkerCount 'findReady'
+			let raw = drainCursor + offset
+			let i = raw - (raw / liveWorkerCount) * liveWorkerCount
+			let b = try busy.get(i) otherwise false
+			if not b 'notBusy'
 				continue
-			end 'emptyName'
-			let unit = findUnitByName(units, specName: pn)
-			if unit.batchable.count() == 0 'noBatchable'
-				continue
-			end 'noBatchable'
-			fallbackUnits.push(makeFallbackOnlyUnit(pn, tests: cloneSpecTests(unit.batchable)))
-		end 'handleMissing'
-	end 'collectWorkers'
-	markPhase("Phase 4 batch workers collected ({fallbackUnits.count()} fallback units)")
+			end 'notBusy'
+			let innerPtr = (try drainPromises.get(i) otherwise panic("dispatch: drainPromises.get({i}) in findReady")).inner
+			let ready = __Builtins.gtIsComplete(innerPtr)
+			if ready != 0 'isReady'
+				drainIdx = i
+				haveDrainFlag = true
+				break
+			end 'isReady'
+		end 'findReady'
 
-	// Phase 5: Run fallback tests via a subprocess worker. Tests reach this
-	// path when the batch rewriter rejected them mid-batch; running them
-	// per-fragment from a worker keeps a deterministic compile-time panic from
-	// killing the parent runner.
-	for unit in fallbackUnits 'countFallbackFrags'
-		totalFragmentsWritten = totalFragmentsWritten + unit.nonBatchable.count()
-	end 'countFallbackFrags'
-	let (fallbackPassed, fallbackFailed) = runFallbackPhase(fallbackUnits, exePath: exePath, targetStr: targetStr, filter: filter, verbose: verbose, numWorkers: numWorkers)
-	totalPassed = totalPassed + fallbackPassed
-	totalFailed = totalFailed + fallbackFailed
-	markPhase("Phase 5 runFallbackPhase done")
+		if not haveDrainFlag 'noneReady'
+			// Nothing ready — yield this GT so the scheduler can run other GTs
+			// (the per-worker drain GTs blocked on IOCP completions). When any
+			// drain completes, its status flips to completed; we loop back and
+			// the gtIsComplete poll above will find it. Use sleep(1) rather
+			// than sleep(0) so the timer-check has a clear "deadline passed"
+			// rather than racing with now == deadline edge cases.
+			__Builtins.sleep(1)
+			continue
+		end 'noneReady'
+
+		var h = try workers.get(drainIdx) otherwise panic("dispatch: workers.get({drainIdx}) for drain failed")
+		// Clone the current job out of the array so the borrow doesn't pin
+		// `currentJobs` for the pipelined-dispatch set() below.
+		let job = (try currentJobs.get(drainIdx) otherwise panic("dispatch: currentJobs.get({drainIdx}) failed")).clone()
+		let drainPromise = try drainPromises.get(drainIdx) otherwise panic("dispatch: drainPromises.get({drainIdx}) failed")
+		let lines = try await drainPromise otherwise 'workerDied'
+			// Worker crashed mid-job (the drain GT threw SubprocessError.ioFailed
+			// when readStdoutLine hit EOF before READY). Recover the work it was
+			// holding, then mark the slot dead so the find-idle and find-busy
+			// scans skip it. We don't respawn: surviving workers can absorb
+			// whatever the queue still holds, and one fewer worker just trims
+			// parallelism by 1/N.
+			let followup = recoverFromCrashedJob(job, units: units, totalFailed_io: failedBox, failOwners: failOwners, failPayloads: failPayloads)
+			if followup.kind != "" 'hasFollowup'
+				jobQueue.push(followup)
+			end 'hasFollowup'
+			h.child.release()
+			try busy.set(drainIdx, value: false) otherwise panic("dispatch: busy.set after drain failure")
+			try deadSlots.set(drainIdx, value: true) otherwise panic("dispatch: deadSlots.set after drain failure")
+			jobsCompleted = jobsCompleted + 1
+			continue
+		end 'workerDied'
+
+		// Pipeline the next dispatch BEFORE processing the prior results: the
+		// worker can begin compiling its next job in parallel with the parent
+		// parsing the result lines from the just-completed one. Without this
+		// the worker sits idle (sees no new stdin line) while the parent does
+		// processWorkerResults. The heaviest-job heuristic still picks the
+		// best queued work for this freshly-idle slot.
+		var nextLined = false
+		if jobQueue.count() > 0 'hasMoreWork'
+			let nextJob = popHeaviestJob(jobQueue)
+			try h.sendJob(nextJob.toJobLine()) otherwise 'nextSendFailed'
+				// Send-failed pipelining edge: the worker died between READY and
+				// the next sendJob. Re-queue both the just-completed job's
+				// (already-processed) followup AND the next job, mark slot dead.
+				// We DON'T `continue` here — we still need to process the prior
+				// `lines` so the spec gets its totals; fall through with a flag.
+				let recoverNext = recoverFromCrashedJob(nextJob, units: units, totalFailed_io: failedBox, failOwners: failOwners, failPayloads: failPayloads)
+				if recoverNext.kind != "" 'hasRecoverFollowup'
+					jobQueue.push(recoverNext)
+				end 'hasRecoverFollowup'
+				h.child.release()
+				try deadSlots.set(drainIdx, value: true) otherwise panic("dispatch: deadSlots.set after pipelined sendJob failure")
+				jobsDispatched = jobsDispatched + 1
+				jobsCompleted = jobsCompleted + 1
+				// Fall through to processWorkerResults for the JUST-COMPLETED
+				// `job` — its `lines` are valid; the failed pipelined send is
+				// already accounted for above.
+			end 'nextSendFailed'
+			let slotStillLive = try deadSlots.get(drainIdx) otherwise panic("dispatch: deadSlots.get({drainIdx}) after pipelined send")
+			if not slotStillLive 'pipelinedOk'
+				try currentJobs.set(drainIdx, value: nextJob) otherwise panic("dispatch: currentJobs.set({drainIdx}) (pipelined) failed")
+				// busy[drainIdx] stays true — we keep the slot busy continuously.
+				let pendingDrain = async drainResultsThunk(h.child, jobLabel: nextJob.label(), workerId: h.workerId)
+				try drainPromises.set(drainIdx, value: pendingDrain) otherwise panic("dispatch: drainPromises.set({drainIdx}) (pipelined) failed")
+				jobsDispatched = jobsDispatched + 1
+				nextLined = true
+			end 'pipelinedOk'
+		end 'hasMoreWork'
+		if not nextLined 'slotIdleAfter'
+			// Either queue is empty or the pipelined send failed (and marked the
+			// slot dead). Mark idle so the next iteration's findIdle scan skips
+			// dispatching here when dead, or picks up the slot for the queue's
+			// drain phase when no more work remains.
+			try busy.set(drainIdx, value: false) otherwise panic("dispatch: busy.set after drain")
+		end 'slotIdleAfter'
+
+		let followups = processWorkerResults(lines, job: job, units: units, totalPassed_io: passedBox, totalFailed_io: failedBox, failOwners: failOwners, failPayloads: failPayloads)
+		for fj in followups 'eachFollowup'
+			jobQueue.push(fj)
+		end 'eachFollowup'
+		jobsCompleted = jobsCompleted + 1
+		let nextDrain = drainIdx + 1
+		drainCursor = nextDrain - (nextDrain / liveWorkerCount) * liveWorkerCount
+	end 'dispatchLoop'
+
+	totalPassed = passedBox.value
+	totalFailed = failedBox.value
+	markPhase("Phase 3 dispatch loop done, {totalPassed} passed {totalFailed} failed ({jobsCompleted}/{jobsDispatched} jobs)")
+
+	if jobsDispatched != jobsCompleted 'invariantViolated'
+		panic("runAllSpecTestsParallel: jobsDispatched={jobsDispatched} != jobsCompleted={jobsCompleted} — a job was lost in the dispatch loop")
+	end 'invariantViolated'
+
+	// Phase 4: clean shutdown. For each live worker: write EXIT, await the
+	// child, drain whatever's buffered in its stderr, then release the OS
+	// handle. Dead slots (whose drain threw mid-loop) have already been
+	// released; skip them.
+	for i in 0 upto liveWorkerCount 'shutdownLoop'
+		let isDead = try deadSlots.get(i) otherwise false
+		if isDead 'skipDead'
+			continue
+		end 'skipDead'
+		var h = try workers.get(i) otherwise panic("shutdown: workers.get({i}) failed")
+		// Send EXIT to signal clean shutdown, then drain whatever's left in
+		// the stderr pipe. The drain must precede wait()/release() — once
+		// release closes the parent-side handles, further reads fail.
+		let exitCode = try h.shutdownAndDrainStderr() otherwise 'shutdownFailed'
+			logError(LogCategory.testing, message: function() gives "[SHUTDOWN] worker {i} shutdown failed (likely already exited): see stderr")
+			continue
+		end 'shutdownFailed'
+		if exitCode != 0 'badExit'
+			logError(LogCategory.testing, message: function() gives "[SHUTDOWN] worker {i} exited with code {exitCode}")
+		end 'badExit'
+	end 'shutdownLoop'
+	markPhase("Phase 4 worker shutdown done")
 
 	if totalFragmentsWritten > 0 'showFrags'
 		logInfo(LogCategory.testing, message: function() gives "Wrote {totalFragmentsWritten} fragment(s)")

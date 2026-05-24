@@ -39,18 +39,13 @@ export type MaxonArgs
 	// Print per-pass wall-clock timings at the end of the run. Useful for
 	// understanding where compile time is being spent during spec runs.
 	export var profilePasses bool
-	// Number of parallel batch-worker processes (default 12). 1 = serial.
+	// Number of parallel persistent-worker processes (default 12). 1 = serial.
 	export var workers WorkerCount
-	// Internal flag set by the parent to make this process run one spec's batch only.
-	export var workerSpec String
-	// Internal flag set by the parent to make this process run only the
-	// non-batchable (single) tests for a comma-separated list of specs.
-	export var workerSingles String
-	// Internal flag for fallback mode: a semicolon-separated list of
-	// `specName:testName1|testName2|...` groups. Each group's named tests are
-	// run via the per-fragment path (used when the batch rewriter rejected
-	// them mid-batch). Subprocess-isolated to contain compile-time panics.
-	export var workerFallback String
+	// Internal flag set by the parent dispatcher to launch a long-lived worker
+	// that reads jobs (batch/singles/fallback) line-by-line from stdin and
+	// emits result markers + WORKER_READY on stdout. Amortises stdlib warmup
+	// across every job assigned to this worker for the parent's whole run.
+	export var workerPersistent bool
 
 	export static function parse() returns MaxonArgs throws ArgError
 		let allArgs = CommandLine.args()
@@ -68,9 +63,7 @@ export type MaxonArgs
 			coverage: false,
 			profilePasses: false,
 			workers: 12,
-			workerSpec: "",
-			workerSingles: "",
-			workerFallback: ""
+			workerPersistent: false
 		}
 
 		if allArgs.count() < 2 'noArgs'
@@ -143,13 +136,9 @@ export type MaxonArgs
 					throw ArgError.invalidOption(arg)
 				end 'badWorkers'
 				args.workers = w as WorkerCount
-			end 'isWorkers' else if arg.startsWith("--worker-spec=") 'isWorkerSpec'
-				args.workerSpec = try CommandLine.optionValue(arg) otherwise ""
-			end 'isWorkerSpec' else if arg.startsWith("--worker-singles=") 'isWorkerSingles'
-				args.workerSingles = try CommandLine.optionValue(arg) otherwise ""
-			end 'isWorkerSingles' else if arg.startsWith("--worker-fallback=") 'isWorkerFallback'
-				args.workerFallback = try CommandLine.optionValue(arg) otherwise ""
-			end 'isWorkerFallback' else if not arg.startsWith("--") 'isPositional'
+			end 'isWorkers' else if arg == "--worker-persistent" 'isWorkerPersistent'
+				args.workerPersistent = true
+			end 'isWorkerPersistent' else if not arg.startsWith("--") 'isPositional'
 				args.path = arg
 			end 'isPositional'
 		end 'scan'

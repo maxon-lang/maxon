@@ -631,11 +631,29 @@ export function registerBuiltinsIntrinsicSignatures(project Project)
 	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Builtins.subprocessKill", paramNames: mmParamNames2("handle", second: "force"), paramTypes: mmParamTypes2(MaxonType.integer, second: MaxonType.integer), returnType: intReturn)
 	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Builtins.subprocessSendSignal", paramNames: mmParamNames2("handle", second: "sig"), paramTypes: mmParamTypes2(MaxonType.integer, second: MaxonType.integer), returnType: intReturn)
 	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Builtins.subprocessReleaseHandle", paramNames: mmParamNames1("handle"), paramTypes: mmParamTypes1(MaxonType.integer), returnType: MaxonReturnType.void)
+	// Streaming subprocess API (persistent-worker pool). Same runtime-symbol
+	// mapping as the bootstrap (maxon-sharp/Compiler/2-Parser.cs:9247) so
+	// either compiler resolves to the same `maxon_subprocess_*_streaming/...`
+	// runtime entry. Streaming spawn takes (argv, argc, cwd, flags) — pipes
+	// are wired implicitly by the runtime (always stdin+stdout+stderr collect,
+	// no drain threads). The line readers take (handle, maxBytes) — the
+	// runtime blocks until \n / EOF, and truncates lines longer than maxBytes
+	// across calls. No timeout knob exists at the runtime layer today.
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Builtins.subprocessSpawnStreaming", paramNames: mmParamNames4("argv", second: "argc", third: "cwd", fourth: "flags"), paramTypes: mmParamTypes4(mmType, second: MaxonType.integer, third: mmType, fourth: MaxonType.integer), returnType: intReturn)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Builtins.subprocessWriteStdinAll", paramNames: mmParamNames2("handle", second: "data"), paramTypes: mmParamTypes2(MaxonType.integer, second: mmType), returnType: intReturn)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Builtins.subprocessReadStdoutLine", paramNames: mmParamNames2("handle", second: "maxBytes"), paramTypes: mmParamTypes2(MaxonType.integer, second: MaxonType.integer), returnType: mmReturn)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Builtins.subprocessReadStderrLine", paramNames: mmParamNames2("handle", second: "maxBytes"), paramTypes: mmParamTypes2(MaxonType.integer, second: MaxonType.integer), returnType: mmReturn)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Builtins.subprocessCloseStdin", paramNames: mmParamNames1("handle"), paramTypes: mmParamTypes1(MaxonType.integer), returnType: MaxonReturnType.void)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Builtins.subprocessWaitExit", paramNames: mmParamNames2("handle", second: "timeoutMs"), paramTypes: mmParamTypes2(MaxonType.integer, second: MaxonType.integer), returnType: intReturn)
 	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Builtins.managedIsNull", paramNames: mmParamNames1("m"), paramTypes: mmParamTypes1(mmType), returnType: intReturn)
 	// `sleep(ms)` suspends the current green thread for the given milliseconds.
 	// Lowers to the runtime helper `maxon_sleep`. Matches the C# bootstrap entry
 	// in Compiler/2-Parser.cs:9271 (RuntimeCallIntrinsic "maxon_sleep", arity 1).
 	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Builtins.sleep", paramNames: mmParamNames1("ms"), paramTypes: mmParamTypes1(MaxonType.integer), returnType: MaxonReturnType.void)
+	// Non-blocking promise readiness peek. Returns 1 if the GT (raw promise
+	// inner pointer) is in status=completed, 0 otherwise. Mirrors the
+	// bootstrap entry in 2-Parser.cs (RuntimeCallIntrinsic "__gt_is_complete").
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Builtins.gtIsComplete", paramNames: mmParamNames1("gt"), paramTypes: mmParamTypes1(MaxonType.integer), returnType: intReturn)
 end 'registerBuiltinsIntrinsicSignatures'
 
 // 14-arg spawn/detach contract: argv (MM), argc (int), cwd (MM), envBlock (MM),
@@ -4594,6 +4612,9 @@ type MaxonToStdLowering
 		if methodName == "sleep" 'isSleep'
 			return self.lowerBuiltinsSleep(result, args: args, dstBlock: dstBlock)
 		end 'isSleep'
+		if methodName == "gtIsComplete" 'isGtIsComplete'
+			return self.lowerBuiltinsGtIsComplete(result, args: args, dstBlock: dstBlock)
+		end 'isGtIsComplete'
 		// Phase 3.4: subprocess builtins each route to a fixed `maxon_subprocess_*`
 		// runtime symbol. `lookupSubprocessBuiltin` keeps the (methodName ->
 		// callee, arity, return-shape) mapping in one place; the actual emit is
@@ -5210,6 +5231,21 @@ type MaxonToStdLowering
 		self.setValueType(resultId, t: MaxonType.integer)
 		return true
 	end 'lowerBuiltinsSleep'
+
+	function lowerBuiltinsGtIsComplete(result ByteArray, args ByteArrayArray, dstBlock IrBlock) returns bool
+		if args.count() != 1 'badArity'
+			self.reportLowerError(ErrorCode.semanticWrongArgCount, message: "__Builtins.gtIsComplete: expected 1 arg, got {args.count()}")
+			return true
+		end 'badArity'
+		let gtName = try args.get(0) otherwise panic("invariant: args.count() == 1 just checked")
+		let gtId = self.resolveName(gtName)
+		var argIds = ValueIdArray.create()
+		argIds.push(gtId)
+		let resultId = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: "__gt_is_complete", argIds: argIds)))
+		self.setValueType(resultId, t: MaxonType.integer)
+		return true
+	end 'lowerBuiltinsGtIsComplete'
 
 	function lowerBuiltinsCurrentTimeMs(result ByteArray, args ByteArrayArray, dstBlock IrBlock) returns bool
 		if args.count() != 0 'badArity'
@@ -8770,6 +8806,24 @@ export function lookupSubprocessBuiltin(methodName String) returns SubprocessBui
 	if methodName == "subprocessReleaseHandle" 'a'
 		return SubprocessBuiltinHit.create("maxon_subprocess_release_handle", arity: 1 as VarSlot, returnShape: SubprocessReturnShape.returnsVoid)
 	end 'a'
+	if methodName == "subprocessSpawnStreaming" 'isSubprocessSpawnStreaming'
+		return SubprocessBuiltinHit.create("maxon_subprocess_spawn_streaming", arity: 4 as VarSlot, returnShape: SubprocessReturnShape.returnsInt)
+	end 'isSubprocessSpawnStreaming'
+	if methodName == "subprocessWriteStdinAll" 'isSubprocessWriteStdinAll'
+		return SubprocessBuiltinHit.create("maxon_subprocess_write_stdin_all", arity: 2 as VarSlot, returnShape: SubprocessReturnShape.returnsInt)
+	end 'isSubprocessWriteStdinAll'
+	if methodName == "subprocessReadStdoutLine" 'isSubprocessReadStdoutLine'
+		return SubprocessBuiltinHit.create("maxon_subprocess_read_stdout_line", arity: 2 as VarSlot, returnShape: SubprocessReturnShape.returnsManaged)
+	end 'isSubprocessReadStdoutLine'
+	if methodName == "subprocessReadStderrLine" 'isSubprocessReadStderrLine'
+		return SubprocessBuiltinHit.create("maxon_subprocess_read_stderr_line", arity: 2 as VarSlot, returnShape: SubprocessReturnShape.returnsManaged)
+	end 'isSubprocessReadStderrLine'
+	if methodName == "subprocessCloseStdin" 'isSubprocessCloseStdin'
+		return SubprocessBuiltinHit.create("maxon_subprocess_close_stdin", arity: 1 as VarSlot, returnShape: SubprocessReturnShape.returnsVoid)
+	end 'isSubprocessCloseStdin'
+	if methodName == "subprocessWaitExit" 'isSubprocessWaitExit'
+		return SubprocessBuiltinHit.create("maxon_subprocess_wait_exit", arity: 2 as VarSlot, returnShape: SubprocessReturnShape.returnsInt)
+	end 'isSubprocessWaitExit'
 	if methodName == "managedIsNull" 'a'
 		return SubprocessBuiltinHit.create("maxon_managed_is_null", arity: 1 as VarSlot, returnShape: SubprocessReturnShape.returnsInt)
 	end 'a'

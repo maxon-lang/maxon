@@ -6429,6 +6429,92 @@ func maxon_subprocess_result_release 1 void
     std ret v1
 end
 
+// === Streaming subprocess API (persistent-worker pool) ===
+// Mirrors the bootstrap parser table at maxon-sharp/Compiler/2-Parser.cs:9247.
+// Stubs are never linked into the currently-bootstrapped binary (the C# host
+// supplies the real symbols); they exist so the file stays self-consistent
+// when the self-hosted compiler is used to re-compile itself.
+
+// maxon_subprocess_spawn_streaming(argv, argc, cwd, flags) — spawns a child
+// wired for streaming stdio. Returns handle or -1. Stub returns -1.
+func maxon_subprocess_spawn_streaming 4 i64
+  block entry:
+    v0 = std param 0 i64
+    v1 = std param 1 i64
+    v2 = std param 2 i64
+    v3 = std param 3 i64
+    v4 = std constI64 -1
+    std ret v4
+end
+
+// maxon_subprocess_write_stdin_all(handle, data) — blocks until all bytes
+// have been written. Returns 0 on success, -1 on error. Stub returns -1.
+func maxon_subprocess_write_stdin_all 2 i64
+  block entry:
+    v0 = std param 0 i64
+    v1 = std param 1 i64
+    v2 = std constI64 -1
+    std ret v2
+end
+
+// maxon_subprocess_read_stdout_line(handle, maxBytes) — reads one LF-
+// terminated line from stdout (truncated at maxBytes). Returns a fresh MM
+// (empty on EOF). Stub returns an empty MM (signals EOF to the caller).
+func maxon_subprocess_read_stdout_line 2 i64
+  block entry:
+    v0 = std param 0 i64
+    v1 = std param 1 i64
+    v2 = std constI64 1
+    v3 = std constI64 1
+    v4 = std call __managed_mem_create v2 v3
+    std ret v4
+end
+
+// maxon_subprocess_read_stderr_line(handle, maxBytes) — reads one LF-
+// terminated line from stderr (truncated at maxBytes). Same return shape
+// as the stdout variant.
+func maxon_subprocess_read_stderr_line 2 i64
+  block entry:
+    v0 = std param 0 i64
+    v1 = std param 1 i64
+    v2 = std constI64 1
+    v3 = std constI64 1
+    v4 = std call __managed_mem_create v2 v3
+    std ret v4
+end
+
+// maxon_subprocess_close_stdin(handle) — signals EOF to the child by
+// closing the stdin pipe without terminating it. Void.
+func maxon_subprocess_close_stdin 1 void
+  block entry:
+    v0 = std param 0 i64
+    v1 = std constI64 0
+    std ret v1
+end
+
+// maxon_subprocess_wait_exit(handle, timeoutMs) — waits for the child to
+// exit (or until the timeout elapses) and returns the exit code; -2 on
+// timeout, -1 on error. Stub returns -1.
+func maxon_subprocess_wait_exit 2 i64
+  block entry:
+    v0 = std param 0 i64
+    v1 = std param 1 i64
+    v2 = std constI64 -1
+    std ret v2
+end
+
+// __gt_is_complete(promise_inner_gt_ptr) — non-blocking peek at the GT's
+// status: 1 if completed, 0 otherwise. Stub returns 0 (always "not
+// complete"); any code path that polls would just spin, but the stub is
+// never linked into a real binary — the C# bootstrap supplies the live
+// emitter and the self-hosted compiler is itself bootstrapped through it.
+func __gt_is_complete 1 i64
+  block entry:
+    v0 = std param 0 i64
+    v1 = std constI64 0
+    std ret v1
+end
+
 // maxon_managed_is_null(mm) — 1 when `mm` is the runtime's null sentinel, 0
 // otherwise. Stub treats every non-zero pointer as non-null; the resolver
 // stub above always returns a real allocation, so this always returns 0,
