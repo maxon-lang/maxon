@@ -7,10 +7,10 @@ function main() returns ExitCode
 		2 then result = 200
 		default then result = 0
 	end 'process'
-	return result
+	return result and 125
 end 'main'
 ---
-ExitCode: 200
+ExitCode: 72
 ---
 // CompiledIR
 module {
@@ -19,24 +19,26 @@ module {
     %0 = mir.mov_imm 2 : i64
     mir.br process_0.next0()
   process_0.merge:
-    %12 = mir.mov_imm 255 : i64
-    %13 = mir.cmp ugt, %11, %12
-    mir.cond_br %13 [then: __range_panic_0(), else: __range_ok_0()]
+    %6 = mir.mov_imm 125 : i64
+    %7 = mir.and.i64 %13, %6
+    %14 = mir.mov_imm 125 : i64
+    %15 = mir.cmp ugt, %7, %14
+    mir.cond_br %15 [then: __range_panic_0(), else: __range_ok_0()]
   process_0.next0:
-    %7 = mir.mov_imm 2 : i64
-    %8 = mir.cmp eq, %0, %7
-    mir.cond_br %8 [then: process_0.case1(), else: process_0.case2()]
+    %9 = mir.mov_imm 2 : i64
+    %10 = mir.cmp eq, %0, %9
+    mir.cond_br %10 [then: process_0.case1(), else: process_0.case2()]
   process_0.case1:
-    %9 = mir.mov_imm 200 : i64
-    mir.br process_0.merge(%9)
+    %11 = mir.mov_imm 200 : i64
+    mir.br process_0.merge(%11)
   process_0.case2:
-    %10 = mir.mov_imm 0 : i64
-    mir.br process_0.merge(%10)
+    %12 = mir.mov_imm 0 : i64
+    mir.br process_0.merge(%12)
   __range_panic_0:
-    %14 = mir.global_addr @__panic_msg_0
-    %15 = mir.call @mrt_panic(%14)
+    %16 = mir.global_addr @__panic_msg_0
+    %17 = mir.call @mrt_panic(%16)
   __range_ok_0:
-    mir.ret %11
+    mir.ret %7
   }
 }
 ---

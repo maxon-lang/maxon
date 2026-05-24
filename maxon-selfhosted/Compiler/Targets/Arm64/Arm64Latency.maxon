@@ -2,7 +2,10 @@
 // Per-instruction latency is defined by the Arm64OpMeta backing on each Arm64Op case.
 
 // ARM64 latency table: 26 allocatable GPRs (x0-x15, x19-x28),
-// 32 FP/SIMD regs (d0-d31), pressure threshold at 80%.
+// 32 FP/SIMD regs (d0-d31). pressureThreshold of 22 (~85% of the GPR
+// pool) keeps the scheduler in low-pressure latency-hiding mode for
+// most blocks; arm64's larger register file means pressure-relief
+// scheduling only matters near the upper bound.
 export function createArm64LatencyTable() returns TargetLatencyTable
-	return TargetLatencyTable.create(1, intDivLatency: 12, fpDivLatency: 15, gprCount: 26, fpCount: 32, pressureThreshold: 20)
+	return TargetLatencyTable.create(1, intDivLatency: 12, fpDivLatency: 15, gprCount: 26, fpCount: 32, pressureThreshold: 22)
 end 'createArm64LatencyTable'

@@ -1512,11 +1512,11 @@ function main() returns ExitCode
 	let n = 14
 	let o = 15
 	let p = 16
-	return (a + b + c + d + e + f + g + h + i + j + k + l + m + n + o + p) mod 256
+	return (a + b + c + d + e + f + g + h + i + j + k + l + m + n + o + p) and 125
 end 'main'
 ```
 ```exitcode
-136
+8
 ```
 ```RequiredIR:x64-windows
 === maxon
@@ -1909,11 +1909,11 @@ function main() returns ExitCode
 	let r = 18
 	let s = 19
 	let t = 20
-	return (a + b + c + d + e + f + g + h + i + j + k + l + m + n + o + p + q + r + s + t) mod 256
+	return (a + b + c + d + e + f + g + h + i + j + k + l + m + n + o + p + q + r + s + t) and 125
 end 'main'
 ```
 ```exitcode
-210
+80
 ```
 ```RequiredIR:x64-windows
 === maxon
@@ -2362,11 +2362,11 @@ function main() returns ExitCode
 	let f = 60
 	let ef = e + f
 	let result = ab + cd + ef
-	return result mod 256
+	return result and 125
 end 'main'
 ```
 ```exitcode
-210
+80
 ```
 ```RequiredIR:x64-windows
 === maxon
@@ -3308,11 +3308,11 @@ end 'compute'
 function main() returns ExitCode
 	let a = compute()
 	let b = compute()
-	return (a + b) mod 256
+	return (a + b) and 125
 end 'main'
 ```
 ```exitcode
-200
+72
 ```
 ```RequiredIR:x64-windows
 === maxon
@@ -4863,11 +4863,11 @@ function main() returns ExitCode
 		end 'odd'
 		i = i + 1
 	end 'loop'
-	return (even_sum + odd_sum + count) mod 256
+	return (even_sum + odd_sum + count) and 125
 end 'main'
 ```
 ```exitcode
-200
+72
 ```
 ```RequiredIR:x64-windows
 === maxon
@@ -9203,11 +9203,11 @@ function main() returns ExitCode
 		b = temp
 		i = i + 1
 	end 'loop'
-	return a
+	return a and 125
 end 'main'
 ```
 ```exitcode
-233
+105
 ```
 ```RequiredIR:x64-windows
 === maxon
@@ -9504,11 +9504,11 @@ function main() returns ExitCode
 	let f = 60
 	let g = 70
 	let h = 2
-	return (a + b + c + d + e + f + g) / h
+	return ((a + b + c + d + e + f + g) / h) and 125
 end 'main'
 ```
 ```exitcode
-140
+12
 ```
 
 <!-- test: int-callee-saved-clobber -->
@@ -11175,11 +11175,11 @@ function main() returns ExitCode
 		2 then result = 200
 		default then result = 0
 	end 'process'
-	return result
+	return result and 125
 end 'main'
 ```
 ```exitcode
-200
+72
 ```
 ```RequiredIR:x64-windows
 === maxon
@@ -14908,11 +14908,11 @@ end 'lookup'
 function main() returns ExitCode
 	let a = try lookup(2) otherwise 0
 	let b = try lookup(99) otherwise 42
-	return a + b mod 256
+	return (a + b) and 125
 end 'main'
 ```
 ```exitcode
-242
+112
 ```
 ```RequiredIR:x64-windows
 === maxon
@@ -15476,10 +15476,10 @@ function main() returns ExitCode
 		b = a - 1
 		d = c - 1
 	end 'g3e'
-	return (a + b + c + d) mod 256
+	return (a + b + c + d) and 125
 end 'main'
 ```
 ```exitcode
-216
+88
 ```
 

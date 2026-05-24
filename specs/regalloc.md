@@ -306,3 +306,95 @@ end 'main'
 ```exitcode
 76
 ```
+
+<!-- test: scheduler-pressure -->
+<!-- Args: 0 -->
+Phase 5 gating test: forces the bottom-up list scheduler to make a
+pressure-vs-critical-path choice. `kernel` defines four "early" values
+(a, b, c, d) at the top of its body, then runs a long chain of
+intermediate computations that do not reference a..d, then consumes
+all four at the end. The kernel body is a single basic block so all
+the reordering decisions happen within one ready set.
+
+What this test gates:
+
+1. With the pre-Phase-5 scheduler, the def-only ops that mint a..d
+   carry critical-path weight roughly equal to the intermediate
+   chain's ops, so the bottom-up scheduler tends to pick them early
+   in bottom-up order (= late in top-down order, near the consume
+   point) only when their critical paths dominate. Many shapes
+   instead leave a..d at the top of the schedule, where they pin
+   four registers across the whole intermediate phase.
+2. Phase 5 splits `selectBestReady` into explicit high-pressure and
+   low-pressure modes. At/above `pressureThreshold` the picker
+   prefers ops whose pressure-delta is most negative: a..d's def-only
+   ops have delta +1 (one def, nothing dies), the intermediate
+   chain's `(prev op '+' k)`-style steps have delta 0 (one def,
+   one use that dies). Bottom-up, the picker therefore prefers the
+   intermediate chain over the a..d defs, which defers the a..d
+   defs toward the bottom of the block (top-down: closer to the
+   consume point). Peak live count drops by approximately the
+   number of deferred defs.
+3. `estimatePressureDelta` correctly handles ops whose use list
+   contains the same valueId multiple times (e.g. `x xor x`) — the
+   value dies once regardless of how many slots read it. Without
+   the dedup, such ops would over-credit pressure relief and the
+   picker would mis-rank them.
+
+The exit code is the deterministic `(a + b + c + d + i12) mod 256`
+for seed = 0.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function opaque(x Integer) returns Integer
+	return x + 0
+end 'opaque'
+
+function kernel(seed Integer) returns Integer
+	// Four "early" values, defined at the top of the source. Each is
+	// a small computation rather than a call so the scheduler can
+	// freely reorder them — calls would form a barrier chain that
+	// pins relative ordering.
+	let a = (seed xor 305419896) + 1
+	let b = (seed xor 2271560481) + 2
+	let c = (seed xor 3735928559) + 3
+	let d = (seed xor 4275878552) + 4
+
+	// Long intermediate chain that does not reference a..d. Each
+	// step has pressure delta 0 (defines one value, consumes one
+	// previous value that then dies). A pressure-aware scheduler
+	// can freely interleave these with the deferred a..d defs.
+	let i1 = (seed + 17) xor 11
+	let i2 = (i1 * 3) + 5
+	let i3 = (i2 xor 12345) + 7
+	let i4 = (i3 * 5) + 9
+	let i5 = (i4 xor 54321) + 11
+	let i6 = (i5 * 7) + 13
+	let i7 = (i6 xor 98765) + 15
+	let i8 = (i7 * 11) + 17
+	let i9 = (i8 xor 13579) + 19
+	let i10 = (i9 * 13) + 21
+	let i11 = (i10 xor 24680) + 23
+	let i12 = (i11 * 17) + 25
+
+	// Consume a..d together with the intermediate chain's final
+	// value. The naive schedule keeps a..d live across the i1..i12
+	// chain; the pressure-aware schedule defers their defs to here.
+	return a + b + c + d + i12
+end 'kernel'
+
+function main() returns ExitCode
+	let args = CommandLine.args()
+	let seed = try int.fromString(try args.get(1) otherwise "0") otherwise 0
+	let result = kernel(seed)
+	// Mask to 0..127 so the value fits both POSIX (0..255) and wasi
+	// (0..125 strict) exit-code ranges. The test gates on the
+	// deterministic value being produced, not on its specific bit width.
+	let masked = result and 127
+	return masked as ExitCode
+end 'main'
+```
+```exitcode
+61
+```

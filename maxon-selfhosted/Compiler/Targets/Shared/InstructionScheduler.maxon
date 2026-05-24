@@ -422,57 +422,85 @@ type ScheduleState
 		end 'termCritPath'
 	end 'computeCriticalPaths'
 
-	// Select the best op from the ready set using priority heuristics:
-	// 1. Under high pressure: prefer ops that reduce register pressure
-	// 2. Otherwise: prefer ops on the critical path
-	// 3. Tiebreak: prefer higher latency ops
+	// Select the best op from the ready set. The selection rule splits on
+	// register pressure:
+	//
+	//   - At/above pressureThreshold: pick the op whose pressure-delta is
+	//     most negative (relieves pressure most). Tiebreak by critical-path
+	//     descending (long-latency chains still get priority), then by
+	//     latency descending.
+	//   - Below threshold: pick by critical-path descending (latency
+	//     hiding), tiebreak by latency descending.
+	//
+	// The two modes use distinct, non-comparable score spaces so a single
+	// linear combination would risk one component overwhelming another at
+	// extreme values; an explicit split keeps the heuristic legible and
+	// the pressure-relief priority sharp.
 	function selectBestReady(readySet SchedIntArray) returns SchedInt
 		let highPressure = currentPressure >= latencyTable.pressureThreshold
 
-		var bestIdx = 0
+		var bestIdx = SCHED_NONE
 		var bestScore = i64.min
 
 		for candidateIdx in readySet 'pickBest'
-			let candidateScore = self.computeOpScore(candidateIdx, highPressure: highPressure)
+			var candidateScore = 0
+			if highPressure 'modeScore'
+				candidateScore = self.scoreHighPressure(candidateIdx)
+			end 'modeScore' else 'lowMode'
+				candidateScore = self.scoreLowPressure(candidateIdx)
+			end 'lowMode'
 			if candidateScore > bestScore 'better'
 				bestIdx = candidateIdx
 				bestScore = candidateScore
 			end 'better'
 		end 'pickBest'
 
+		if bestIdx == SCHED_NONE 'empty'
+			panic("selectBestReady: readySet empty — caller must guarantee non-empty")
+		end 'empty'
+
 		return bestIdx
 	end 'selectBestReady'
 
-	// Compute a priority score for an op. Higher score is picked first in
-	// bottom-up order (= placed later in top-down output after reversal).
-	// We negate critPath and latency so that HIGH critical-path ops get LOW
-	// scores, are picked LAST in bottom-up, and end up FIRST after reversal.
-	// Score layout (from most to least significant):
-	//   - pressureReduction * 1000000 (when under high pressure)
-	//   - -criticalPathLen * 1000
-	//   - -latency
-	function computeOpScore(opIdx SchedInt, highPressure bool) returns SchedInt
-		let critPath = try criticalPathLen.get(opIdx) otherwise panic("computeOpScore: opIdx from readySet is a valid op index but criticalPathLen.get({opIdx}) failed")
-		let latency = try latencies.get(opIdx) otherwise panic("computeOpScore: opIdx from readySet is a valid op index but latencies.get({opIdx}) failed")
+	// High-pressure mode score: most-negative pressure delta wins, then
+	// longest critical path, then highest latency. Each component lives in
+	// its own decimal range so a strictly-dominant primary key is preserved.
+	//
+	// Score layout (most to least significant):
+	//   - -pressureDelta * 1000000 — dominant: relieve pressure now
+	//   - -criticalPathLen * 1000  — secondary: keep long chains moving
+	//   - -latency                 — tertiary: prefer expensive ops
+	function scoreHighPressure(opIdx SchedInt) returns SchedInt
+		let packed = try opRefs.get(opIdx) otherwise panic("scoreHighPressure: opIdx from readySet is a valid op index but opRefs.get failed")
+		let pressureDelta = self.estimatePressureDelta(packed)
+		let critPath = try criticalPathLen.get(opIdx) otherwise panic("scoreHighPressure: opIdx from readySet is a valid op index but criticalPathLen.get({opIdx}) failed")
+		let latency = try latencies.get(opIdx) otherwise panic("scoreHighPressure: opIdx from readySet is a valid op index but latencies.get({opIdx}) failed")
+		return (0 - pressureDelta) * 1000000 - critPath * 1000 - latency
+	end 'scoreHighPressure'
 
-		var score = (0 - critPath) * 1000 - latency
-
-		if highPressure 'pressureAware'
-			let packed = try opRefs.get(opIdx) otherwise panic("invariant: opIdx is valid op index but opRefs.get failed")
-			let pressureDelta = self.estimatePressureDelta(packed)
-			score = score + (0 - pressureDelta) * 1000000
-		end 'pressureAware'
-
-		return score
-	end 'computeOpScore'
+	// Low-pressure mode score: longest critical path wins, then highest
+	// latency. Pressure delta is ignored — we have headroom to optimise
+	// for latency hiding.
+	function scoreLowPressure(opIdx SchedInt) returns SchedInt
+		let critPath = try criticalPathLen.get(opIdx) otherwise panic("scoreLowPressure: opIdx from readySet is a valid op index but criticalPathLen.get({opIdx}) failed")
+		let latency = try latencies.get(opIdx) otherwise panic("scoreLowPressure: opIdx from readySet is a valid op index but latencies.get({opIdx}) failed")
+		return (0 - critPath) * 1000 - latency
+	end 'scoreLowPressure'
 
 	// Estimate the register pressure change if this op were scheduled now.
 	// In bottom-up scheduling, "scheduling" means this op executes BEFORE
-	// already-scheduled ops. So:
-	//   - If the op defines a value: that value becomes live (+1)
-	//   - If the op is the last use (in bottom-up terms, the first encounter)
-	//     of an operand: that operand dies (-1)
-	// We return positive for pressure increase, negative for pressure decrease.
+	// already-scheduled ops, so:
+	//   - A definition makes a value live in the prefix being constructed (+1).
+	//   - A use that this op is the LAST unscheduled producer of (in
+	//     bottom-up terms, the FIRST encounter) makes that value die (-1).
+	//
+	// Duplicate uses within the same op (e.g. `xor v, v`) are counted once:
+	// the value dies once regardless of how many slots in this op read it.
+	// We dedup by recording each unique useId in `seenUses` as we walk;
+	// every duplicate after the first contributes 0. The "dies now" check
+	// then compares the global useCount to this op's local use count for
+	// that valueId — if they match (and the terminator doesn't keep it
+	// live), this op is the sole remaining user and the value dies.
 	function estimatePressureDelta(packed OpIndex) returns SchedInt
 		var delta = 0
 
@@ -482,8 +510,22 @@ type ScheduleState
 		end 'hasDef'
 
 		let useIds = extractUseValueIdsPacked(module, packed: packed)
+		var seenUses = ValueIdArray.create()
 		for useId in useIds 'eachUse'
-			if self.isLastUnscheduledUse(useId) 'lastUse'
+			var alreadySeen = false
+			for prior in seenUses 'dupCheck'
+				if prior == useId 'isDup'
+					alreadySeen = true
+					break
+				end 'isDup'
+			end 'dupCheck'
+			if alreadySeen 'skipDup'
+				continue
+			end 'skipDup'
+			seenUses.push(useId)
+
+			let myUses = countUsesOfId(useIds, target: useId)
+			if self.useDiesNow(useId, myUses: myUses) 'lastUse'
 				delta = delta - 1
 			end 'lastUse'
 		end 'eachUse'
@@ -491,19 +533,20 @@ type ScheduleState
 		return delta
 	end 'estimatePressureDelta'
 
-	// Check if this is the last unscheduled op that uses the given valueId.
-	// Uses the pre-built useCount map for O(1) lookup.
-	// useCount tracks unscheduled uses (excluding terminator uses, which are
-	// always live). A count of 1 means this op is the only remaining user.
-	function isLastUnscheduledUse(valueId SchedInt) returns bool
+	// Check whether `valueId` dies when this op is scheduled. The value
+	// dies if (a) the terminator doesn't keep it live as a branch arg and
+	// (b) the current op is the sole remaining unscheduled user — i.e.
+	// the global unscheduled-use count equals the number of times this op
+	// itself uses the value.
+	function useDiesNow(valueId SchedInt, myUses SchedInt) returns bool
 		for termUseId in terminatorUseIds 'checkTerm'
 			if termUseId == valueId 'usedByTerm'
 				return false
 			end 'usedByTerm'
 		end 'checkTerm'
 		let count = schedLookupZero(useCount, index: valueId)
-		return count <= 1
-	end 'isLastUnscheduledUse'
+		return count <= myUses
+	end 'useDiesNow'
 
 	// Build the useCount map: for each unscheduled op, count how many times
 	// each valueId is used as an operand.
@@ -1042,6 +1085,20 @@ function appendAll(dst ValueIdArray, from ValueIdArray)
 		dst.push(v)
 	end 'copy'
 end 'appendAll'
+
+// Count how many times `target` appears in `useIds`. Used by the
+// pressure-delta estimator to handle ops that read the same value in
+// multiple slots (e.g. `xor v, v`). Linear scan is fine — operand lists
+// are tiny (typically 1-4 entries).
+function countUsesOfId(useIds ValueIdArray, target ValueId) returns SchedInt
+	var count = 0
+	for useId in useIds 'count'
+		if useId == target 'match'
+			count = count + 1
+		end 'match'
+	end 'count'
+	return count
+end 'countUsesOfId'
 
 // Look up a value in a SchedIntArray, returning SCHED_NONE if out of bounds.
 // Used for defMap where SCHED_NONE means "no defining op" — the map grows

@@ -1107,12 +1107,12 @@ function main() returns ExitCode
 		sum = sum + elem
 	end 'drain'
 
-	// 10+20+30+40+50 = 150
-	return sum
+	// 10+20+30+40+50 = 150, masked to wasi exit range: 150 and 125 = 20
+	return sum and 125
 end 'main'
 ```
 ```exitcode
-150
+20
 ```
 
 <!-- test: remove-out-of-bounds -->

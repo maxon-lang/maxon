@@ -1,8 +1,12 @@
 // X64-specific latency table for the instruction scheduler.
 // Per-instruction latency is defined by the X64OpMeta backing on each X64Op case.
 
-// X64 latency table: 10 allocatable GPRs (rax,rcx,rdx,rbx,rsi,rdi,r8-r11),
-// 16 XMM regs (xmm0-xmm15), pressure threshold at 80%.
+// X64 latency table: 12 allocatable GPRs (rax, rcx, rdx, rbx, rsi, rdi,
+// r8, r9, r12-r15 — rsp, rbp, r10, r11 are reserved), 16 XMM regs
+// (xmm0-xmm15). pressureThreshold of 9 puts the scheduler in
+// pressure-relief mode at ~75% of the GPR pool, leaving 3 registers of
+// headroom for the colorer's hint/tier preferences before the
+// pressure-delta heuristic starts dominating ordering decisions.
 export function createX64LatencyTable() returns TargetLatencyTable
-	return TargetLatencyTable.create(1, intDivLatency: 40, fpDivLatency: 15, gprCount: 10, fpCount: 16, pressureThreshold: 8)
+	return TargetLatencyTable.create(1, intDivLatency: 40, fpDivLatency: 15, gprCount: 12, fpCount: 16, pressureThreshold: 9)
 end 'createX64LatencyTable'
