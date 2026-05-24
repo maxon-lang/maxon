@@ -17,7 +17,7 @@ Types conforming to `InitableFromStringLiteral` can be initialized from string l
 typealias Score = int(i64.min to i64.max)
 
 type MyString implements InitableFromStringLiteral
-	var value String
+	var value as String
 
 	static function init(value String) returns MyString
 		return MyString{value: value}
@@ -49,7 +49,7 @@ Types conforming to `InitableFromCharLiteral` can be initialized from character 
 typealias Score = int(i64.min to i64.max)
 
 type MyChar implements InitableFromCharLiteral
-	var value Character
+	var value as Character
 
 	static function init(value Character) returns MyChar
 		return MyChar{value: value}
@@ -82,7 +82,7 @@ typealias Integer = int(i64.min to i64.max)
 
 // User-defined type that wraps a String and can be created from string literals
 type Wrapper implements InitableFromStringLiteral
-	var value String
+	var value as String
 
 	static function init(value String) returns Wrapper
 		return Wrapper{value: value}
@@ -109,7 +109,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Wrapper implements InitableFromStringLiteral
-	var value String
+	var value as String
 
 	static function init(value String) returns Wrapper
 		return Wrapper{value: value}
@@ -136,7 +136,7 @@ len: 0
 typealias Integer = int(i64.min to i64.max)
 
 type CharWrapper implements InitableFromCharLiteral
-	var value Character
+	var value as Character
 
 	static function init(value Character) returns CharWrapper
 		return CharWrapper{value: value}

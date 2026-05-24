@@ -1327,7 +1327,7 @@ Insert and remove structs from an array. Exercises shift operations with managed
 typealias Int = int(i64.min to i64.max)
 
 type Item
-	export var id Int
+	export var id as Int
 
 	static function create(id Int) returns Self
 		return Self{id: id}

@@ -280,8 +280,8 @@ A struct literal must supply a value for every field, unless the field:
 ```maxon
 // WRONG — missing field
 type P
-	export var x Integer
-	export var y Integer
+	export var x as Integer
+	export var y as Integer
 end 'P'
 var p = P{x: 1}        // E3086: 'y' not initialized
 
@@ -293,13 +293,13 @@ var c = Counter{}      // OK — value defaults to 0
 
 // CORRECT — declaration default (full form with expression)
 type Bag
-	export var items IntArray = IntArray.create()
+	export var items as IntArray = IntArray.create()
 end 'Bag'
 var b = Bag{}          // OK — items gets a fresh empty array per construction
 
 // CORRECT — self-assignment in static factory
 type Thing
-	export var value Integer
+	export var value as Integer
 
 	export static function make(v Integer) returns Self
 		self.value = v          // proof of initialization
@@ -363,9 +363,9 @@ typealias Coord = float(f64.min to f64.max)
 typealias VisitCount = int(0 to u64.max)
 
 export type Point
-	export var x Coord       // public mutable
-	export let name String   // public immutable
-	var internal VisitCount  // private
+	export var x as Coord       // public mutable
+	export let name as String   // public immutable
+	var internal as VisitCount  // private
 
 	function magnitude() returns Coord
 		return sqrt((self.x * self.x + self.y * self.y) as Coord)

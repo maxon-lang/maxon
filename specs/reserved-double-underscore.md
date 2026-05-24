@@ -101,7 +101,7 @@ error E2051: specs/fragments/reserved-double-underscore/function-parameter.test:
 <!-- test: type-declaration -->
 ```maxon
 type __Hidden
-	export var x int
+	export var x as int
 end '__Hidden'
 
 function main() returns ExitCode
@@ -115,8 +115,8 @@ error E2051: specs/fragments/reserved-double-underscore/type-declaration.test:2:
 <!-- test: type-field -->
 ```maxon
 type Point
-	export var __x int
-	export var y int
+	export var __x as int
+	export var y as int
 end 'Point'
 
 function main() returns ExitCode

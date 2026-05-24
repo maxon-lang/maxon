@@ -48,8 +48,8 @@ Map.get with try-otherwise block form returns correct struct type.
 typealias SmallInt = int(0 to u8.max)
 
 type Entry
-		export var name String
-		export var count SmallInt
+		export var name as String
+		export var count as SmallInt
 
 		static function create(name String, count SmallInt) returns Self
 			return Self{name: name, count: count}

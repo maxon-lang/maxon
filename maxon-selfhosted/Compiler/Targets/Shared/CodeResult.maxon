@@ -5,8 +5,8 @@ typealias RelocSlotIndex = int(0 to u64.max)
 // A relocation records a code location that needs patching after section layout.
 // Used for IAT entries (Windows PE) and GOT entries (Linux ELF).
 export type Relocation
-	export var codeOffset CodeOffset
-	export var slotIndex RelocSlotIndex
+	export var codeOffset as CodeOffset
+	export var slotIndex as RelocSlotIndex
 
 	export static function create(codeOffset CodeOffset, slotIndex RelocSlotIndex) returns Relocation
 		return Self{codeOffset: codeOffset, slotIndex: slotIndex}
@@ -33,8 +33,8 @@ export typealias RelocationArray = Array with Relocation
 // Code that consumes a `CallFixupArray` must know which space the offsets
 // live in; mixing them silently writes to the wrong patch site.
 export type CallFixup
-	export var codeOffset CodeOffset
-	export var targetName String
+	export var codeOffset as CodeOffset
+	export var targetName as String
 
 	export static function create(codeOffset CodeOffset, targetName String) returns CallFixup
 		return Self{codeOffset: codeOffset, targetName: targetName}
@@ -47,8 +47,8 @@ export typealias CallFixupArray = Array with CallFixup
 // Format-neutral: PE writes COFF symbol entries from it, ELF emits Elf64_Sym
 // entries, Mach-O emits nlist_64 entries.
 export type DebugSymbol
-	export var name String
-	export var codeOffset CodeOffset
+	export var name as String
+	export var codeOffset as CodeOffset
 
 	export static function create(name String, codeOffset CodeOffset) returns DebugSymbol
 		return Self{name: name, codeOffset: codeOffset}
@@ -130,10 +130,10 @@ end 'readRdataRelocKind'
 // For symdata kinds: points to the base of the .symtab section (rdataOffset unused).
 // For covdata kinds: rdataLabel names a `__data_cov_*` entry in the .covdata section.
 export type RdataRelocation
-	export var codeOffset CodeOffset
-	export var rdataLabel String
-	export var rdataOffset CodeOffset
-	export var kind RdataRelocKind
+	export var codeOffset as CodeOffset
+	export var rdataLabel as String
+	export var rdataOffset as CodeOffset
+	export var kind as RdataRelocKind
 
 	export static function create(codeOffset CodeOffset, rdataLabel String, kind RdataRelocKind) returns RdataRelocation
 		return Self{codeOffset: codeOffset, rdataLabel: rdataLabel, rdataOffset: 0, kind: kind}
@@ -205,19 +205,19 @@ end 'patchOneFuncAbs64InRdata'
 // gets shifted at concat time. `iatRelocs` mirrors the same convention
 // for Windows IAT entries.
 export type FunctionCodeChunk
-	export var funcName String
-	export var code ByteArray
-	export var entryOffset CodeOffset
-	export var callFixups CallFixupArray
-	export var rdataRelocs RdataRelocationArray
-	export var iatRelocs RelocationArray
+	export var funcName as String
+	export var code as ByteArray
+	export var entryOffset as CodeOffset
+	export var callFixups as CallFixupArray
+	export var rdataRelocs as RdataRelocationArray
+	export var iatRelocs as RelocationArray
 	// ARM64 ADR fixups produced by `Arm64Backend.emitFunctionChunk`. Offsets
 	// are chunk-local and rebased to absolute `.text` offsets by
 	// `concatArm64FunctionChunks` — same shape as the other fixup arrays
 	// above. Stays empty for X64 chunks; the field lives on the shared
 	// type so the per-function cache memo carries every fixup needed to
 	// reconstruct the binary without a parallel per-architecture array.
-	export var arm64AdrFixups Arm64AdrFixupArray
+	export var arm64AdrFixups as Arm64AdrFixupArray
 
 	export static function create(funcName String) returns FunctionCodeChunk
 		return Self{
@@ -248,25 +248,25 @@ export typealias FunctionCodeChunkArray = Array with FunctionCodeChunk
 // then omits the .covdata section entirely so PE/ELF output stays byte-identical
 // to non-instrumented builds.
 export type CodeResult
-	export var code ByteArray
-	export var mainCallFixupOffset CodeOffset
-	export var relocations RelocationArray
-	export var globalData GlobalDataTable
-	export var targetModule TargetModule
-	export var mirModule MirModule
-	export var rdata ByteArray
-	export var rdataRelocations RdataRelocationArray
-	export var symdata ByteArray
-	export var covDataSectionBytes ByteArray
+	export var code as ByteArray
+	export var mainCallFixupOffset as CodeOffset
+	export var relocations as RelocationArray
+	export var globalData as GlobalDataTable
+	export var targetModule as TargetModule
+	export var mirModule as MirModule
+	export var rdata as ByteArray
+	export var rdataRelocations as RdataRelocationArray
+	export var symdata as ByteArray
+	export var covDataSectionBytes as ByteArray
 	// Initial bytes for top-level / static-field globals (`var counter = 0`,
 	// `static var Counter.count = 0`). These bytes sit at the start of the
 	// .data section, before the bump allocator's heap arena. Empty for builds
 	// with no top-level mutable globals.
-	export var dataPrelude ByteArray
+	export var dataPrelude as ByteArray
 	// Function-name → code-offset symbols for debug-symbol emission. Populated
 	// by backends after stdlib linking; consumed by PE/ELF/Mach-O writers to
 	// emit standard symbol tables that debuggers can consume.
-	export var debugSymbols DebugSymbolArray
+	export var debugSymbols as DebugSymbolArray
 
 	export static function create(code ByteArray, mainCallFixupOffset CodeOffset, relocations RelocationArray, globalData GlobalDataTable, targetModule TargetModule, mirModule MirModule, rdata ByteArray, rdataRelocations RdataRelocationArray, symdata ByteArray, covDataSectionBytes ByteArray) returns CodeResult
 		return Self{code: code, mainCallFixupOffset: mainCallFixupOffset, relocations: relocations, globalData: globalData, targetModule: targetModule, mirModule: mirModule, rdata: rdata, rdataRelocations: rdataRelocations, symdata: symdata, covDataSectionBytes: covDataSectionBytes, dataPrelude: ByteArray.create(), debugSymbols: DebugSymbolArray.create()}

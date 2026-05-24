@@ -20,8 +20,8 @@ Simple struct with all-primitive fields, used only locally. Must produce NO mm_a
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-	export var x Integer
-	export var y Integer
+	export var x as Integer
+	export var y as Integer
 
 	static function create(x Integer, y Integer) returns Self
 		return Self{x: x, y: y}
@@ -59,8 +59,8 @@ Stack-promoted struct with field mutation. No heap allocation.
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-	export var x Integer
-	export var y Integer
+	export var x as Integer
+	export var y as Integer
 
 	static function create(x Integer, y Integer) returns Self
 		return Self{x: x, y: y}
@@ -99,8 +99,8 @@ Aliasing (`var b = a`) is safe for stack structs when neither alias escapes.
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-	export var x Integer
-	export var y Integer
+	export var x as Integer
+	export var y as Integer
 
 	static function create(x Integer, y Integer) returns Self
 		return Self{x: x, y: y}
@@ -139,8 +139,8 @@ Struct passed to a function that only reads it remains stack-allocated.
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-	export var x Integer
-	export var y Integer
+	export var x as Integer
+	export var y as Integer
 
 	static function create(x Integer, y Integer) returns Self
 		return Self{x: x, y: y}
@@ -182,7 +182,7 @@ Struct pushed into a container must remain heap-allocated (the container stores 
 typealias Integer = int(i64.min to i64.max)
 
 type Item
-	export var value Integer
+	export var value as Integer
 
 	static function create(value Integer) returns Self
 		return Self{value: value}
@@ -250,8 +250,8 @@ Struct returned from function must remain heap-allocated.
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-	export var x Integer
-	export var y Integer
+	export var x as Integer
+	export var y as Integer
 
 	static function create(x Integer, y Integer) returns Self
 		return Self{x: x, y: y}

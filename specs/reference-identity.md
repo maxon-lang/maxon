@@ -44,8 +44,8 @@ areSame(p, b: p)  // true  — same reference passed twice
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-	export var x Integer
-	export var y Integer
+	export var x as Integer
+	export var y as Integer
 
 	static function create(x Integer, y Integer) returns Self
 		return Self{x: x, y: y}
@@ -69,8 +69,8 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-	export var x Integer
-	export var y Integer
+	export var x as Integer
+	export var y as Integer
 
 	static function create(x Integer, y Integer) returns Self
 		return Self{x: x, y: y}
@@ -95,8 +95,8 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-	export var x Integer
-	export var y Integer
+	export var x as Integer
+	export var y as Integer
 
 	static function create(x Integer, y Integer) returns Self
 		return Self{x: x, y: y}
@@ -121,8 +121,8 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-	export var x Integer
-	export var y Integer
+	export var x as Integer
+	export var y as Integer
 
 	static function create(x Integer, y Integer) returns Self
 		return Self{x: x, y: y}
@@ -147,8 +147,8 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-	export var x Integer
-	export var y Integer
+	export var x as Integer
+	export var y as Integer
 
 	static function create(x Integer, y Integer) returns Self
 		return Self{x: x, y: y}
@@ -173,8 +173,8 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-	export var x Integer
-	export var y Integer
+	export var x as Integer
+	export var y as Integer
 
 	static function create(x Integer, y Integer) returns Self
 		return Self{x: x, y: y}
@@ -198,7 +198,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Box
-	export var value Integer
+	export var value as Integer
 
 	static function create(value Integer) returns Self
 		return Self{value: value}
@@ -250,8 +250,8 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-	export var x Integer
-	export var y Integer
+	export var x as Integer
+	export var y as Integer
 
 	static function create(x Integer, y Integer) returns Self
 		return Self{x: x, y: y}
@@ -275,8 +275,8 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-	export var x Integer
-	export var y Integer
+	export var x as Integer
+	export var y as Integer
 
 	static function create(x Integer, y Integer) returns Self
 		return Self{x: x, y: y}

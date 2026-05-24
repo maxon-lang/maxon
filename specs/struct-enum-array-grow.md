@@ -24,9 +24,9 @@ export union Op
 end 'Op'
 
 export type Block
-		export var id Integer
-		export var ops IntArray
-		export var terminator Op
+		export var id as Integer
+		export var ops as IntArray
+		export var terminator as Op
 
 		static function create(id Integer, ops IntArray, terminator Op) returns Self
 			return Self{id: id, ops: ops, terminator: terminator}
@@ -58,10 +58,10 @@ export union Instruction
 end 'Instruction'
 
 export type Function
-		export var name Integer
-		export var body IntArray
-		export var terminator Instruction
-		export var hasTerminator bool
+		export var name as Integer
+		export var body as IntArray
+		export var terminator as Instruction
+		export var hasTerminator as bool
 
 		static function create(name Integer, body IntArray, terminator Instruction, hasTerminator bool) returns Self
 			return Self{name: name, body: body, terminator: terminator, hasTerminator: hasTerminator}
@@ -93,8 +93,8 @@ export union Tag
 end 'Tag'
 
 export type Entry
-		export var id Integer
-		export var tag Tag
+		export var id as Integer
+		export var tag as Tag
 
 		static function create(id Integer, tag Tag) returns Self
 			return Self{id: id, tag: tag}
@@ -140,10 +140,10 @@ end 'IrOp'
 typealias IrOpArray = Array with IrOp
 
 export type IrBlock
-		export var id Integer
-		export var ops IrOpArray
-		export var terminator IrOp
-		export var hasTerminator bool
+		export var id as Integer
+		export var ops as IrOpArray
+		export var terminator as IrOp
+		export var hasTerminator as bool
 
 		static function create(id Integer, ops IrOpArray, terminator IrOp, hasTerminator bool) returns Self
 			return Self{id: id, ops: ops, terminator: terminator, hasTerminator: hasTerminator}
@@ -153,8 +153,8 @@ end 'IrBlock'
 typealias DepArray = Array with Integer
 
 export type Database
-		export var block IrBlock
-		export var deps DepArray
+		export var block as IrBlock
+		export var deps as DepArray
 
 		static function create(block IrBlock, deps DepArray) returns Self
 			return Self{block: block, deps: deps}
@@ -189,10 +189,10 @@ export union Op
 end 'Op'
 
 export type Inner
-		export var revision Integer
-		export var items IntArray
-		export var names StringArray
-		export var extra IntArray
+		export var revision as Integer
+		export var items as IntArray
+		export var names as StringArray
+		export var extra as IntArray
 
 		static function create(revision Integer, items IntArray, names StringArray, extra IntArray) returns Self
 			return Self{revision: revision, items: items, names: names, extra: extra}
@@ -200,9 +200,9 @@ export type Inner
 end 'Inner'
 
 export type Outer
-		export var inner Inner
-		export var tag Op
-		export var data IntArray
+		export var inner as Inner
+		export var tag as Op
+		export var data as IntArray
 
 		static function create(inner Inner, tag Op, data IntArray) returns Self
 			return Self{inner: inner, tag: tag, data: data}
@@ -230,8 +230,8 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 export type Inner
-		export var data IntArray
-		export var value Integer
+		export var data as IntArray
+		export var value as Integer
 
 		static function create(data IntArray, value Integer) returns Self
 			return Self{data: data, value: value}
@@ -239,9 +239,9 @@ export type Inner
 end 'Inner'
 
 export type Outer
-		export var first Inner
-		export var second Inner
-		export var deps IntArray
+		export var first as Inner
+		export var second as Inner
+		export var deps as IntArray
 
 		static function create(first Inner, second Inner, deps IntArray) returns Self
 			return Self{first: first, second: second, deps: deps}
@@ -283,11 +283,11 @@ end 'IrOp'
 typealias OpArray = Array with IrOp
 
 export type Block
-		export var id Integer
-		export var label String
-		export var ops OpArray
-		export var terminator IrOp
-		export var hasTerminator bool
+		export var id as Integer
+		export var label as String
+		export var ops as OpArray
+		export var terminator as IrOp
+		export var hasTerminator as bool
 
 		static function create(id Integer, label String, ops OpArray, terminator IrOp, hasTerminator bool) returns Self
 			return Self{id: id, label: label, ops: ops, terminator: terminator, hasTerminator: hasTerminator}
@@ -295,8 +295,8 @@ export type Block
 end 'Block'
 
 export type Region
-		export var blocks IntArray
-		export var nextBlockId Integer
+		export var blocks as IntArray
+		export var nextBlockId as Integer
 
 		static function create(blocks IntArray, nextBlockId Integer) returns Self
 			return Self{blocks: blocks, nextBlockId: nextBlockId}
@@ -304,9 +304,9 @@ export type Region
 end 'Region'
 
 export type Func
-		export var name String
-		export var returnType String
-		export var region Region
+		export var name as String
+		export var returnType as String
+		export var region as Region
 
 		static function create(name String, returnType String, region Region) returns Self
 			return Self{name: name, returnType: returnType, region: region}
@@ -316,7 +316,7 @@ end 'Func'
 typealias FuncArray = Array with Func
 
 export type Module
-		export var functions FuncArray
+		export var functions as FuncArray
 
 		static function create(functions FuncArray) returns Self
 			return Self{functions: functions}
@@ -324,9 +324,9 @@ export type Module
 end 'Module'
 
 export type ModuleMemo
-		export var value Module
-		export var computedAt Integer
-		export var verifiedAt Integer
+		export var value as Module
+		export var computedAt as Integer
+		export var verifiedAt as Integer
 
 		static function create(value Module, computedAt Integer, verifiedAt Integer) returns Self
 			return Self{value: value, computedAt: computedAt, verifiedAt: verifiedAt}
@@ -334,8 +334,8 @@ export type ModuleMemo
 end 'ModuleMemo'
 
 export type CodeResult
-		export var code IntArray
-		export var offset Integer
+		export var code as IntArray
+		export var offset as Integer
 
 		static function create(code IntArray, offset Integer) returns Self
 			return Self{code: code, offset: offset}
@@ -343,9 +343,9 @@ export type CodeResult
 end 'CodeResult'
 
 export type CodeMemo
-		export var value CodeResult
-		export var computedAt Integer
-		export var verifiedAt Integer
+		export var value as CodeResult
+		export var computedAt as Integer
+		export var verifiedAt as Integer
 
 		static function create(value CodeResult, computedAt Integer, verifiedAt Integer) returns Self
 			return Self{value: value, computedAt: computedAt, verifiedAt: verifiedAt}
@@ -353,17 +353,17 @@ export type CodeMemo
 end 'CodeMemo'
 
 export type QueryDatabase
-		export var currentRevision Integer
-		export var sourcePaths StringArray
-		export var allModuleCache ModuleMemo
-		export var allMidCache ModuleMemo
-		export var codeCache CodeMemo
-		export var dependencies IntArray
-		export var activeQueryStack IntArray
-		export var tokenHits Integer
-		export var tokenMisses Integer
-		export var parseHits Integer
-		export var parseMisses Integer
+		export var currentRevision as Integer
+		export var sourcePaths as StringArray
+		export var allModuleCache as ModuleMemo
+		export var allMidCache as ModuleMemo
+		export var codeCache as CodeMemo
+		export var dependencies as IntArray
+		export var activeQueryStack as IntArray
+		export var tokenHits as Integer
+		export var tokenMisses as Integer
+		export var parseHits as Integer
+		export var parseMisses as Integer
 
 		static function create(currentRevision Integer, sourcePaths StringArray, allModuleCache ModuleMemo, allMidCache ModuleMemo, codeCache CodeMemo, dependencies IntArray, activeQueryStack IntArray, tokenHits Integer, tokenMisses Integer, parseHits Integer, parseMisses Integer) returns Self
 			return Self{currentRevision: currentRevision, sourcePaths: sourcePaths, allModuleCache: allModuleCache, allMidCache: allMidCache, codeCache: codeCache, dependencies: dependencies, activeQueryStack: activeQueryStack, tokenHits: tokenHits, tokenMisses: tokenMisses, parseHits: parseHits, parseMisses: parseMisses}
@@ -371,17 +371,17 @@ export type QueryDatabase
 end 'QueryDatabase'
 
 export type Project
-		export var db QueryDatabase
-		export var dbInitialized bool
-		export var nextValueId Integer
-		export var parserVarNames StringArray
-		export var parserVarSlots IntArray
-		export var parserNextSlot Integer
-		export var rootPath String
-		export var isSingleFile bool
-		export var currentBlock Block
-		export var currentFunction Func
-		export var currentModule Module
+		export var db as QueryDatabase
+		export var dbInitialized as bool
+		export var nextValueId as Integer
+		export var parserVarNames as StringArray
+		export var parserVarSlots as IntArray
+		export var parserNextSlot as Integer
+		export var rootPath as String
+		export var isSingleFile as bool
+		export var currentBlock as Block
+		export var currentFunction as Func
+		export var currentModule as Module
 
 		static function create(db QueryDatabase, dbInitialized bool, nextValueId Integer, parserVarNames StringArray, parserVarSlots IntArray, parserNextSlot Integer, rootPath String, isSingleFile bool, currentBlock Block, currentFunction Func, currentModule Module) returns Self
 			return Self{db: db, dbInitialized: dbInitialized, nextValueId: nextValueId, parserVarNames: parserVarNames, parserVarSlots: parserVarSlots, parserNextSlot: parserNextSlot, rootPath: rootPath, isSingleFile: isSingleFile, currentBlock: currentBlock, currentFunction: currentFunction, currentModule: currentModule}
@@ -424,8 +424,8 @@ export union QueryKey
 end 'QueryKey'
 
 export type Dependency
-		export var dependent QueryKey
-		export var dependency QueryKey
+		export var dependent as QueryKey
+		export var dependency as QueryKey
 
 		static function create(dependent QueryKey, dependency QueryKey) returns Self
 			return Self{dependent: dependent, dependency: dependency}
@@ -456,8 +456,8 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 export type Inner
-		export var items IntArray
-		export var value Integer
+		export var items as IntArray
+		export var value as Integer
 
 		static function create(items IntArray, value Integer) returns Self
 			return Self{items: items, value: value}
@@ -465,8 +465,8 @@ export type Inner
 end 'Inner'
 
 export type Outer
-		export var inner Inner
-		export var initialized bool
+		export var inner as Inner
+		export var initialized as bool
 
 		static function create(inner Inner, initialized bool) returns Self
 			return Self{inner: inner, initialized: initialized}
@@ -500,7 +500,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 export type Module
-		export var items IntArray
+		export var items as IntArray
 
 		static function create(items IntArray) returns Self
 			return Self{items: items}
@@ -508,8 +508,8 @@ export type Module
 end 'Module'
 
 export type Memo
-		export var value Module
-		export var rev Integer
+		export var value as Module
+		export var rev as Integer
 
 		static function create(value Module, rev Integer) returns Self
 			return Self{value: value, rev: rev}
@@ -517,8 +517,8 @@ export type Memo
 end 'Memo'
 
 export type Database
-		export var memo Memo
-		export var deps IntArray
+		export var memo as Memo
+		export var deps as IntArray
 
 		static function create(memo Memo, deps IntArray) returns Self
 			return Self{memo: memo, deps: deps}
@@ -526,8 +526,8 @@ export type Database
 end 'Database'
 
 export type Project
-		export var db Database
-		export var ready bool
+		export var db as Database
+		export var ready as bool
 
 		static function create(db Database, ready bool) returns Self
 			return Self{db: db, ready: ready}
@@ -578,10 +578,10 @@ end 'IrOp'
 typealias OpArray = Array with IrOp
 
 export type Block
-		export var id Integer
-		export var ops OpArray
-		export var terminator IrOp
-		export var hasTerminator bool
+		export var id as Integer
+		export var ops as OpArray
+		export var terminator as IrOp
+		export var hasTerminator as bool
 
 		static function create(id Integer, ops OpArray, terminator IrOp, hasTerminator bool) returns Self
 			return Self{id: id, ops: ops, terminator: terminator, hasTerminator: hasTerminator}
@@ -591,9 +591,9 @@ end 'Block'
 typealias DepArray = Array with Integer
 
 export type QueryDatabase
-		export var revision Integer
-		export var deps DepArray
-		export var extra DepArray
+		export var revision as Integer
+		export var deps as DepArray
+		export var extra as DepArray
 
 		static function create(revision Integer, deps DepArray, extra DepArray) returns Self
 			return Self{revision: revision, deps: deps, extra: extra}
@@ -601,8 +601,8 @@ export type QueryDatabase
 end 'QueryDatabase'
 
 export type Project
-		export var db QueryDatabase
-		export var block Block
+		export var db as QueryDatabase
+		export var block as Block
 
 		static function create(db QueryDatabase, block Block) returns Self
 			return Self{db: db, block: block}

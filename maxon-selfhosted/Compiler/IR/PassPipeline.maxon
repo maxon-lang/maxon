@@ -108,45 +108,45 @@ end 'PipelinePhase'
 // a new field — no signature changes on any pass method.
 export type PassPipeline
 	// --- IR modules across phases ---
-	export var maxonModule MaxonModule
-	export var stdModule StdModule
-	export var mirModule MirModule
-	export var targetModule TargetModule
+	export var maxonModule as MaxonModule
+	export var stdModule as StdModule
+	export var mirModule as MirModule
+	export var targetModule as TargetModule
 	// Phase 11.6 cross-module inlining: snapshot of `stdModule` taken at
 	// the exit of the `dce` step. The user pipeline never reads this; the
 	// stdlib pipeline run captures it after `pipeline.run()` returns so
 	// the StdlibLoader can preserve it (in-memory + disk cache) for use
 	// at the user inliner step. Empty until the dce pass dispatches.
-	export var stdModulePostDceSnapshot StdModule
+	export var stdModulePostDceSnapshot as StdModule
 
 	// --- Configuration / cross-cutting context ---
-	export var project Project
-	export var globalData GlobalDataTable
-	export var target Target
+	export var project as Project
+	export var globalData as GlobalDataTable
+	export var target as Target
 	// Source basename (e.g. `foo.maxon`) used in runtime panic messages that
 	// already know the file context — InsertRangeChecks embeds this into
 	// `panic at X.maxon:LINE:` strings.
-	export var sourceFileName String
+	export var sourceFileName as String
 	// Full source path for diagnostic messages emitted by passes. The stderr
 	// normalizer in the spec harness strips `path:line:col: ` from error
 	// lines when it sees a `/` in the path — feeding a bare basename defeats
 	// that, which is why this is separate from `sourceFileName`.
-	export var sourcePath FilePath
+	export var sourcePath as FilePath
 	// True when this pipeline is lowering the stdlib (as opposed to user code).
 	// Controls the panic-message label prefix: stdlib panics become
 	// `__stdlib_panic_msg_N`, user panics become `__panic_msg_N`. Without
 	// this split, the two sides would collide at link time because both
 	// counters independently start at zero.
-	export var isStdlib bool
+	export var isStdlib as bool
 	// Monotonic counter for panic-message labels across every pass that
 	// emits a `mrt_panic` call in this pipeline run (today: user panics
 	// from lowerMaxonToStd, range-check panics from insertRangeChecks).
 	// Sharing one counter means every panic in a single compile gets a
 	// unique label — no per-pass prefix gymnastics needed.
-	export var panicLabelCounter ParsedInt
+	export var panicLabelCounter as ParsedInt
 
 	// --- Scheduled passes ---
-	export var passes PassKindArray
+	export var passes as PassKindArray
 
 	export static function create(maxonModule MaxonModule, project Project, globalData GlobalDataTable, target Target, sourceFileName String, sourcePath FilePath = FilePath from "", isStdlib bool = false) returns PassPipeline
 		return Self{

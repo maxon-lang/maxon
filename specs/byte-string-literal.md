@@ -139,7 +139,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Info
-		export var value Integer
+		export var value as Integer
 
 		static function create(value Integer) returns Self
 			return Self{value: value}

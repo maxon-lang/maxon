@@ -83,7 +83,7 @@ function apply(f FnTypeAlias1, x Integer) returns Integer
 end 'apply'
 
 type Level
-	export var rawValue Integer
+	export var rawValue as Integer
 
 	static function create(rawValue Integer) returns Self
 		return Self{rawValue: rawValue}
@@ -106,7 +106,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Level
-	export var rawValue Integer
+	export var rawValue as Integer
 
 	static function create(rawValue Integer) returns Self
 		return Self{rawValue: rawValue}

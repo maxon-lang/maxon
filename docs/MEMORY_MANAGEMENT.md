@@ -357,15 +357,15 @@ Reference cycles are a **compile-time error** (`E4014`). The compiler statically
 ```maxon
 // ERROR: type 'Node' contains a reference cycle (via Node -> next: Node)
 type Node
-	export var next Node
+	export var next as Node
 end 'Node'
 
 // ERROR: mutual recursion A -> B -> A
 type A
-	export var b B
+	export var b as B
 end 'A'
 type B
-	export var a A
+	export var a as A
 end 'B'
 
 // ERROR: indirect via container

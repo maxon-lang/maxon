@@ -129,30 +129,30 @@ end 'promoteFunction'
 // SlotInfo tracks per-slot information gathered during analysis.
 type SlotInfo
 	// Which blocks contain stores for each slot: storeBlocks[slotId] = BlockIdArray
-	export var storeBlocks BlockIdArrayArray
+	export var storeBlocks as BlockIdArrayArray
 	// Whether a slot is float
-	export var slotIsFloat BoolArray
+	export var slotIsFloat as BoolArray
 	// Maps loadResultId -> slotId for float usage detection
-	export var loadResultToSlot ValueIdArray
-	export var maxSlot VarSlot
-	export var hasAnySlot bool
+	export var loadResultToSlot as ValueIdArray
+	export var maxSlot as VarSlot
+	export var hasAnySlot as bool
 	// Track which slots have any stores or loads at all
-	export var slotHasStore BoolArray
-	export var slotHasLoad BoolArray
+	export var slotHasStore as BoolArray
+	export var slotHasLoad as BoolArray
 	// Stage E (closures): slots whose address was taken (by `stackAddr`)
 	// must NOT be promoted. The captured pointer points at the live stack
 	// slot, so the slot has to remain in the frame and have its
 	// initial value materialized via the standard param-store/local-init
 	// path. When this bit is set for a slot, classifyPromotable refuses
 	// promotion regardless of load/store counts.
-	export var slotAddressTaken BoolArray
+	export var slotAddressTaken as BoolArray
 	// Per-value-id float-ness: a value is float when produced by a float
 	// arith op, a float-returning call, an f64 block arg, or a load from a
 	// known-float slot. The store-side pass below propagates float-ness into
 	// the destination slot when any store delivers a float value — handles
 	// the parseTryFallback / parseMatchExpression seeded-with-int-zero slot
 	// whose only "real" stores are the float result/fallback arms.
-	export var valueIsFloat BoolArray
+	export var valueIsFloat as BoolArray
 
 	static function create() returns SlotInfo
 		return Self{
@@ -617,8 +617,8 @@ end 'getValueIsFloat'
 // ============================================================
 
 type PromotableInfo
-	export var isPromotable BoolArray
-	export var anyPromoted bool
+	export var isPromotable as BoolArray
+	export var anyPromoted as bool
 
 	static function create(isPromotable BoolArray, anyPromoted bool) returns PromotableInfo
 		return Self{isPromotable: isPromotable, anyPromoted: anyPromoted}
@@ -816,10 +816,10 @@ end 'setSlotBit'
 // store (upward-exposed); `kill[B]` = slots stored in B. `liveIn[B]` =
 // gen[B] ∪ (liveOut[B] − kill[B]); `liveOut[B]` = ⋃ liveIn[succ].
 type SlotLiveness
-	export var gen BoolArray
-	export var kill BoolArray
-	export var liveIn BoolArray
-	export var liveOut BoolArray
+	export var gen as BoolArray
+	export var kill as BoolArray
+	export var liveIn as BoolArray
+	export var liveOut as BoolArray
 
 	export static function create(gen BoolArray, kill BoolArray, liveIn BoolArray, liveOut BoolArray) returns SlotLiveness
 		return Self{gen: gen, kill: kill, liveIn: liveIn, liveOut: liveOut}
@@ -1070,26 +1070,26 @@ end 'insertBlockArgs'
 // Per-slot definition stack: currentDef[slotId] is a ValueIdArray used as a stack.
 // The top of the stack is the current SSA value for that slot.
 type RenameState
-	export var currentDef DefStackArray
-	export var remap ValueIdArray
-	export var numSlots VarSlot
+	export var currentDef as DefStackArray
+	export var remap as ValueIdArray
+	export var numSlots as VarSlot
 	// Track param ops that need to be emitted in the entry block
-	export var paramValueIds ValueIdArray
-	export var paramSlotIsPromoted BoolArray
+	export var paramValueIds as ValueIdArray
+	export var paramSlotIsPromoted as BoolArray
 	// Stage E (closures): address-taken param slots are NOT promoted, but
 	// the param register's value still has to land in the slot at function
 	// entry. Track which param slots are address-taken so emitParamOps can
 	// emit a `func.param` (to capture the calling-convention register
 	// value) plus a `memref.storeSlot` (to materialize that value into the
 	// stack slot the captured pointer references).
-	export var paramSlotIsAddressTaken BoolArray
+	export var paramSlotIsAddressTaken as BoolArray
 	// True when the function arrived with an explicit `func.param` op
 	// already in the entry block (e.g. functions parsed from runtime.std).
 	// emitParamOps reads this to suppress duplicate emission — the
 	// existing op is preserved by the in-place rewrite walk and its
 	// result valueId is the one createRenameState recorded in
 	// `paramValueIds` for that index.
-	export var paramSlotHasExistingOp BoolArray
+	export var paramSlotHasExistingOp as BoolArray
 
 	static function create(currentDef DefStackArray, numSlots VarSlot, paramValueIds ValueIdArray, paramSlotIsPromoted BoolArray, paramSlotIsAddressTaken BoolArray, paramSlotHasExistingOp BoolArray) returns RenameState
 		return Self{
@@ -1174,8 +1174,8 @@ end 'createRenameState'
 // `createRenameState` can read both with a single index. Empty when no
 // existing ops were found (all hasOp entries default to false).
 type ExistingParamIds
-	export var ids ValueIdArray
-	export var has BoolArray
+	export var ids as ValueIdArray
+	export var has as BoolArray
 
 	export static function create(ids ValueIdArray, has BoolArray) returns ExistingParamIds
 		return Self{ids: ids, has: has}

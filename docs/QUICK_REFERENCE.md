@@ -409,9 +409,9 @@ In a match *expression*, individual arms may also use `pattern panic("message")`
 
 ```maxon
 type Point implements Hashable, Describable   // interface conformance
-		export var x int                   // public mutable field
+		export var x as int                   // public mutable field
 		export let name = "point"   // public immutable with default
-		var internal int                   // private field
+		var internal as int                   // private field
 
 		static var count = 0               // static mutable field
 		static let MAX = 100               // static immutable constant
@@ -444,7 +444,7 @@ default, the literal, or `self.field = expr` on every path of a static factory.
 
 ```maxon
 type Counter
-	export var value Integer      // no default
+	export var value as Integer      // no default
 	export var version = 0         // default
 
 	export static function create(initial Integer) returns Self
@@ -593,8 +593,8 @@ end 'Permission'
 ```maxon
 typealias Cycles = int(0 to 50)
 type OpMeta
-	export let latency Cycles
-	export let isMemory bool
+	export let latency as Cycles
+	export let isMemory as bool
 end 'OpMeta'
 
 enum Instruction
@@ -687,8 +687,8 @@ Like enums, each union variant can be tagged with a compile-time struct. Associa
 
 ```maxon
 type OpMeta
-	export let latency Cycles
-	export let isMemory bool
+	export let latency as Cycles
+	export let isMemory as bool
 end 'OpMeta'
 
 union MirOp

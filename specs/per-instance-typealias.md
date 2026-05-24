@@ -71,8 +71,8 @@ typealias Integer = int(i64.min to i64.max)
 type Wrapper uses T
 	export typealias Idx = int(0 to u64.max)
 
-	export var value T
-	export var tag Idx
+	export var value as T
+	export var tag as Idx
 
 	export static function create(value T) returns Self
 		return Self{value: value, tag: 0}
@@ -112,8 +112,8 @@ typealias Integer = int(i64.min to i64.max)
 type Wrapper uses T
 	export typealias Idx = int(0 to u64.max)
 
-	export var value T
-	export var tag Idx
+	export var value as T
+	export var tag as Idx
 
 	export static function create(value T, tag Idx) returns Self
 		return Self{value: value, tag: tag}
@@ -152,8 +152,8 @@ typealias Integer = int(i64.min to i64.max)
 type Wrapper uses T
 	export typealias Idx = int(0 to u64.max)
 
-	export var value T
-	export var tag Idx
+	export var value as T
+	export var tag as Idx
 
 	export static function create(value T, tag Idx) returns Self
 		return Self{value: value, tag: tag}
@@ -188,8 +188,8 @@ typealias Integer = int(i64.min to i64.max)
 type Wrapper uses T
 	export typealias Idx = int(0 to u64.max)
 
-	export var value T
-	export var tag Idx
+	export var value as T
+	export var tag as Idx
 
 	export static function create(value T, tag Idx) returns Self
 		return Self{value: value, tag: tag}
@@ -227,8 +227,8 @@ typealias Integer = int(i64.min to i64.max)
 type Wrapper uses T
 	export typealias Idx = int(0 to u64.max)
 
-	export var value T
-	export var tag Idx
+	export var value as T
+	export var tag as Idx
 
 	export static function create(value T, tag Idx) returns Self
 		return Self{value: value, tag: tag}

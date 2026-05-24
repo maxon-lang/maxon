@@ -22,7 +22,7 @@ typealias Count = int(0 to u64.max)
 typealias Integer = int(i64.min to i64.max)
 
 export type Item
-	export var value Integer
+	export var value as Integer
 	export static function create(value Integer) returns Self
 		return Self{value: value}
 	end 'create'
@@ -33,8 +33,8 @@ export typealias ItemArray = Array with Item
 export type GenericModule uses Op
 	typealias OpArray = Array with Op
 
-	export var ops OpArray
-	export var items ItemArray
+	export var ops as OpArray
+	export var items as ItemArray
 
 	export static function create() returns Self
 		return Self{
@@ -91,7 +91,7 @@ typealias Count = int(0 to u64.max)
 typealias Integer = int(i64.min to i64.max)
 
 export type Item
-	export var value Integer
+	export var value as Integer
 	export static function create(value Integer) returns Self
 		return Self{value: value}
 	end 'create'
@@ -102,8 +102,8 @@ export typealias ItemArray = Array with Item
 export type GenericModule uses Op
 	typealias OpArray = Array with Op
 
-	export var ops OpArray
-	export var items ItemArray
+	export var ops as OpArray
+	export var items as ItemArray
 
 	export static function create() returns Self
 		return Self{

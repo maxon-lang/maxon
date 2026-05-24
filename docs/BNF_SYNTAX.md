@@ -221,7 +221,7 @@ type_member   = field_decl
               | typealias_decl
 
 field_decl    = visibility_prefix ('var' | 'let') IDENTIFIER
-                ( type_ref [ '=' expression ]
+                ( 'as' type_ref [ '=' expression ]
                 | '=' literal_default )
                 NEWLINE
 

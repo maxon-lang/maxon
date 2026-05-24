@@ -19,8 +19,8 @@ Create a list of custom structs and retrieve elements.
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-	export var x Integer
-	export var y Integer
+	export var x as Integer
+	export var y as Integer
 
 	static function create(x Integer, y Integer) returns Self
 		return Self{x: x, y: y}
@@ -58,8 +58,8 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Entry
-	export var id Integer
-	export var value Integer
+	export var id as Integer
+	export var value as Integer
 
 	static function create(id Integer, value Integer) returns Self
 		return Self{id: id, value: value}
@@ -94,8 +94,8 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Person
-	export var name String
-	export var age Integer
+	export var name as String
+	export var age as Integer
 
 	static function create(name String, age Integer) returns Self
 		return Self{name: name, age: age}
@@ -128,8 +128,8 @@ Alice has a long name for heap
 typealias Integer = int(i64.min to i64.max)
 
 type Pair
-	export var a Integer
-	export var b Integer
+	export var a as Integer
+	export var b as Integer
 
 	static function create(a Integer, b Integer) returns Self
 		return Self{a: a, b: b}
@@ -165,8 +165,8 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Vec2
-	export var x Integer
-	export var y Integer
+	export var x as Integer
+	export var y as Integer
 
 	static function create(x Integer, y Integer) returns Self
 		return Self{x: x, y: y}

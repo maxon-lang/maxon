@@ -2506,6 +2506,13 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
           Advance();
           (fieldType, defaultValue) = ParseFieldDefault();
         } else {
+          if (!Check(TokenType.As)) {
+            var bad = Current();
+            throw new CompileError(ErrorCode.ParserExpectedToken,
+              $"Expected 'as' or '=' after field name '{fieldName}' in type '{typeName}', got '{bad.Value}'",
+              bad.Line, bad.Column);
+          }
+          Advance(); // consume 'as'
           fieldType = ParseTypeRef();
           if (Check(TokenType.With)) {
             throw new CompileError(ErrorCode.SemanticTypeMismatch,
@@ -5222,13 +5229,20 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
       if (Check(TokenType.Var) || Check(TokenType.Let)) {
         Advance(); // consume var/let
-        Expect(TokenType.Identifier); // consume field name
+        var fldNameTok = Expect(TokenType.Identifier); // consume field name
 
         // Advance past type or default value (mirrors the three-form shape in the prescan)
         if (Check(TokenType.Equals)) {
           Advance();
           ParseFieldDefault();
         } else {
+          if (!Check(TokenType.As)) {
+            var bad = Current();
+            throw new CompileError(ErrorCode.ParserExpectedToken,
+              $"Expected 'as' or '=' after field name '{fldNameTok.Value}' in type '{typeName}', got '{bad.Value}'",
+              bad.Line, bad.Column);
+          }
+          Advance(); // consume 'as'
           ParseTypeRef();
           if (Check(TokenType.With)) {
             throw new CompileError(ErrorCode.SemanticTypeMismatch,

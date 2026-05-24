@@ -186,8 +186,8 @@ typealias BlockIndexMap = Map with (BlockId, Wasm32Index)
 // layout pass produces these once so both the offset map and the active
 // data segments use identical addresses without recomputing offsets.
 type WasmDataChunk
-	export var offset Wasm32Offset
-	export var bytes ByteArray
+	export var offset as Wasm32Offset
+	export var bytes as ByteArray
 
 	export static function create(offset Wasm32Offset, bytes ByteArray) returns WasmDataChunk
 		return Self{offset: offset, bytes: bytes}
@@ -212,9 +212,9 @@ enum WasmFuncSigError implements Error
 end 'WasmFuncSigError'
 
 type WasmFuncSigs
-	export var returnTypes StdReturnTypeArray
-	export var throwsTypeNames ThrowsClauseArray
-	export var nameIndex FuncNameIndexMap
+	export var returnTypes as StdReturnTypeArray
+	export var throwsTypeNames as ThrowsClauseArray
+	export var nameIndex as FuncNameIndexMap
 
 	export static function create() returns WasmFuncSigs
 		return Self{returnTypes: StdReturnTypeArray.create(), throwsTypeNames: ThrowsClauseArray.create(), nameIndex: FuncNameIndexMap.create()}
@@ -256,8 +256,8 @@ end 'WasmFuncSigs'
 // A WASM call fixup: offset within function body where a 5-byte fixed-width
 // ULEB128 function index needs to be patched after final function ordering.
 export type WasmCallFixup
-	export var bodyOffset CodeOffset
-	export var targetName String
+	export var bodyOffset as CodeOffset
+	export var targetName as String
 
 	export static function create(bodyOffset CodeOffset, targetName String) returns WasmCallFixup
 		return Self{bodyOffset: bodyOffset, targetName: targetName}
@@ -276,8 +276,8 @@ export typealias WasmCallFixupArray = Array with WasmCallFixup
 // typeIndexMap (or registers it if missing) and writes the resolved
 // index into the body at `bodyOffset` as a fixed-width 5-byte ULEB128.
 export type WasmTypeFixup
-	export var bodyOffset CodeOffset
-	export var signatureBytes ByteArray
+	export var bodyOffset as CodeOffset
+	export var signatureBytes as ByteArray
 
 	export static function create(bodyOffset CodeOffset, signatureBytes ByteArray) returns WasmTypeFixup
 		return Self{bodyOffset: bodyOffset, signatureBytes: signatureBytes}
@@ -294,8 +294,8 @@ export typealias WasmTypeFixupArray = Array with WasmTypeFixup
 // stdlib functions can legally take the address of another stdlib function
 // (e.g. `mm_alloc(40, destructor: funcAddr __destruct___ManagedMemory, 0)`).
 export type WasmFuncAddrFixup
-	export var bodyOffset CodeOffset
-	export var targetName String
+	export var bodyOffset as CodeOffset
+	export var targetName as String
 
 	export static function create(bodyOffset CodeOffset, targetName String) returns WasmFuncAddrFixup
 		return Self{bodyOffset: bodyOffset, targetName: targetName}
@@ -312,8 +312,8 @@ export typealias WasmFuncAddrFixupArray = Array with WasmFuncAddrFixup
 // The cache emits a 5-byte fixed-width sleb128 placeholder; the user-build
 // patches it with the final globalDataOffsets[targetName] value.
 export type WasmGlobalAddrFixup
-	export var bodyOffset CodeOffset
-	export var targetName String
+	export var bodyOffset as CodeOffset
+	export var targetName as String
 
 	export static function create(bodyOffset CodeOffset, targetName String) returns WasmGlobalAddrFixup
 		return Self{bodyOffset: bodyOffset, targetName: targetName}
@@ -328,23 +328,23 @@ export typealias WasmGlobalAddrFixupArray = Array with WasmGlobalAddrFixup
 // append an extra i64 result to their wasm signature (the error flag) and
 // use `errorReturn` rather than plain `return`.
 export type WasmObjectFunction
-	export var name String
-	export var returnType StdReturnType
-	export var paramCount ParamCount
-	export var paramTypes StdTypeArray
-	export var throwsTypeName ThrowsClause
-	export var body ByteArray
-	export var callFixups WasmCallFixupArray
+	export var name as String
+	export var returnType as StdReturnType
+	export var paramCount as ParamCount
+	export var paramTypes as StdTypeArray
+	export var throwsTypeName as ThrowsClause
+	export var body as ByteArray
+	export var callFixups as WasmCallFixupArray
 	// Fixups for inline type-section indices of `call_indirect` ops. The
 	// stdlib-cache wasm path writes a placeholder index at lower time and
 	// patches it at user-build module-assembly time once the type section
 	// is finalized — same shape as `callFixups` for direct calls.
-	export var typeFixups WasmTypeFixupArray
+	export var typeFixups as WasmTypeFixupArray
 	// Fixups for `i32.const <tableIdx>` bytes emitted by funcAddr ops whose
 	// target wasn't in the stdlib-cache function table. The user-build
 	// resolves the table index from its full funcNames list and patches in
 	// place. Empty for stdlib functions that never take a function address.
-	export var funcAddrFixups WasmFuncAddrFixupArray
+	export var funcAddrFixups as WasmFuncAddrFixupArray
 	// Fixups for `i64.const <linMemOffset>` bytes emitted by globalAddr ops.
 	// Stdlib bodies bake stdlib-only data offsets at cache time; the user
 	// pipeline merges its own globalData ahead of the stdlib chunks, so the
@@ -352,7 +352,7 @@ export type WasmObjectFunction
 	// this patch, stdlib functions that take the address of a string literal
 	// (e.g. `__bool_fromString`'s `"true"` constant) load garbage bytes and
 	// report `input == "true"` as false for matching input.
-	export var globalAddrFixups WasmGlobalAddrFixupArray
+	export var globalAddrFixups as WasmGlobalAddrFixupArray
 
 	export static function create(name String, returnType StdReturnType, paramCount ParamCount, paramTypes StdTypeArray, throwsTypeName ThrowsClause = ThrowsClause.none) returns WasmObjectFunction
 		return Self{
@@ -1140,48 +1140,48 @@ typealias WasmFuncTableIndexMap = Map with (String, Wasm32Index)
 
 type WasmFunctionLowering
 	// Module-level state (constant across all functions)
-	var module MirModule
-	var funcNames StringArray
-	var funcSigs WasmFuncSigs
-	var globalDataOffsets GlobalDataOffsetMap
-	var stackBase Wasm32Offset
-	var fixedCalls bool
+	var module as MirModule
+	var funcNames as StringArray
+	var funcSigs as WasmFuncSigs
+	var globalDataOffsets as GlobalDataOffsetMap
+	var stackBase as Wasm32Offset
+	var fixedCalls as bool
 	// Stage F (closures): name → table index map for funcAddr lowering.
 	// Empty in stdlib-cache mode (fixedCalls = true) — stdlib doesn't take
 	// function addresses today, so we save the work. Populated by
 	// emitWasmModule before each user function is lowered.
-	export var funcTableIndices WasmFuncTableIndexMap
+	export var funcTableIndices as WasmFuncTableIndexMap
 	// Stage F (closures): signature-bytes → typeIndex map shared by every
 	// indirect-call site. Pre-populated with the module's own function
 	// types so direct callees and indirect callees with matching shapes
 	// share entries. Pre-populated in emitWasmModule before any function
 	// body is lowered.
-	export var typeIndices WasmTypeIndexMap
+	export var typeIndices as WasmTypeIndexMap
 
 	// Per-function state (re-initialized in lowerFunction)
-	var func IrFunction
-	var body ByteArray
-	var isVoidReturn bool
+	var func as IrFunction
+	var body as ByteArray
+	var isVoidReturn as bool
 	// True iff the current function has a non-empty `throws` clause; the
 	// emitted wasm signature carries an extra trailing i64 result and any
 	// `errorReturn` op pushes that flag before `return`.
-	var funcThrows bool
-	var dispatchLocal Wasm32Index
-	var loopDepth Wasm32Index
+	var funcThrows as bool
+	var dispatchLocal as Wasm32Index
+	var loopDepth as Wasm32Index
 	// Accumulator for call fixups in fixedCalls mode. The caller passes one
 	// in via lowerFunction so each emitted function gets its own array.
-	var callFixups WasmCallFixupArray
+	var callFixups as WasmCallFixupArray
 	// Same pattern for indirect-call type-index fixups. In fixedCalls mode
 	// the type indices a user-build assigns may differ from the ones the
 	// stdlib pipeline used, so we write a placeholder and record the
 	// signature bytes here; emitWasmModule walks these at link time.
-	var typeFixups WasmTypeFixupArray
+	var typeFixups as WasmTypeFixupArray
 	// Same pattern for funcAddr-emitted i32.const bytes whose target
 	// function isn't in the stdlib-cache funcTableIndices map. In fixedCalls
 	// mode emitFuncAddr writes a 5-byte fixed-width sleb128 placeholder and
 	// records the body offset + target name here; the user-build patches
 	// these once the final table layout is known.
-	var funcAddrFixups WasmFuncAddrFixupArray
+	var funcAddrFixups as WasmFuncAddrFixupArray
 	// Same pattern for globalAddr-emitted i64.const bytes that hold a linear-
 	// memory offset. In fixedCalls mode the stdlib cache assigns offsets
 	// against the stdlib-only data layout, but the user pipeline puts its own
@@ -1190,16 +1190,16 @@ type WasmFunctionLowering
 	// fixup, stdlib functions that take the address of a baked string
 	// literal (e.g. `__bool_fromString`'s `"true"`) read whatever bytes
 	// happen to land at the stdlib-relative offset in the merged image.
-	var globalAddrFixups WasmGlobalAddrFixupArray
+	var globalAddrFixups as WasmGlobalAddrFixupArray
 	// Per-function blockId → index map. Populated at the top of
 	// lowerFunction by walking func.blockRefs once, so every emitted
 	// branch resolves its target block index in O(1) instead of scanning
 	// the block list per-branch.
-	var blockIndex BlockIndexMap
+	var blockIndex as BlockIndexMap
 	// Per-function float bitset; populated at lowerFunction entry by
 	// findFloatValueIds and read by emitIndirectCall when synthesizing
 	// the call-site signature for type-section dedup.
-	var funcFloatSet BoolArray
+	var funcFloatSet as BoolArray
 	// True iff any of osGetArgc/osGetArgv/osGetExecutablePath appears in
 	// the current function. When set, three additional i32 scratch locals
 	// are reserved at the tail of the locals declaration (after any dispatch
@@ -1208,10 +1208,10 @@ type WasmFunctionLowering
 	// and byte-length counter; reserving them up front avoids per-op local
 	// declarations (which WASM doesn't support — locals must be declared in
 	// the function prelude).
-	var hasArgvOp bool
-	var argvScratchLocal Wasm32Index
-	var argvScanLocal Wasm32Index
-	var argvLenLocal Wasm32Index
+	var hasArgvOp as bool
+	var argvScratchLocal as Wasm32Index
+	var argvScanLocal as Wasm32Index
+	var argvLenLocal as Wasm32Index
 
 	static function create(module MirModule, funcNames StringArray, funcSigs WasmFuncSigs, globalDataOffsets GlobalDataOffsetMap, stackBase Wasm32Offset, fixedCalls bool) returns WasmFunctionLowering
 		return Self{

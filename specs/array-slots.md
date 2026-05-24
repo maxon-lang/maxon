@@ -21,7 +21,7 @@ Create an array, push one item, resize to 3, then `try arr.get(1) otherwise` sho
 typealias Integer = int(i64.min to i64.max)
 
 type Slot
-	export var value Integer
+	export var value as Integer
 
 	static function create(value Integer) returns Self
 		return Self{value: value}
@@ -49,7 +49,7 @@ Getting an element from a slot that was populated via push should work without e
 typealias Integer = int(i64.min to i64.max)
 
 type Slot
-	export var value Integer
+	export var value as Integer
 
 	static function create(value Integer) returns Self
 		return Self{value: value}
@@ -96,7 +96,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Slot
-	export var value Integer
+	export var value as Integer
 
 	static function create(value Integer) returns Self
 		return Self{value: value}
@@ -123,7 +123,7 @@ Resize to 3 without pushing any elements. `first()` should use the otherwise pat
 typealias Integer = int(i64.min to i64.max)
 
 type Slot
-	export var value Integer
+	export var value as Integer
 
 	static function create(value Integer) returns Self
 		return Self{value: value}
@@ -152,7 +152,7 @@ Resize to 3, only push 1 item. `last()` should use the otherwise path since slot
 typealias Integer = int(i64.min to i64.max)
 
 type Slot
-	export var value Integer
+	export var value as Integer
 
 	static function create(value Integer) returns Self
 		return Self{value: value}
@@ -182,7 +182,7 @@ wrapper.
 typealias Integer = int(i64.min to i64.max)
 
 type Slot
-	export var value Integer
+	export var value as Integer
 end 'Slot'
 
 typealias SlotArray = Array with Slot

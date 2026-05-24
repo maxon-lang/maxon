@@ -40,7 +40,7 @@ enum MoneyParseError implements Error
 end 'MoneyParseError'
 
 type Money implements Parsable
-	var cents Amount
+	var cents as Amount
 
 	static function fromString(input String) returns Self throws MoneyParseError
 		if input.byteLength() == 0 'empty'
@@ -91,7 +91,7 @@ enum ParseError implements Error
 end 'ParseError'
 
 type Value implements Parsable
-	var n Integer
+	var n as Integer
 
 	static function fromString(input String) returns Self throws ParseError
 		return Value{n: input.byteLength()}
@@ -117,7 +117,7 @@ enum ParseError implements Error
 end 'ParseError'
 
 type Value implements Parsable
-	export var n Integer
+	export var n as Integer
 
 	static function fromString(input String) returns Self throws ParseError
 		return Value{n: input.byteLength()}
@@ -146,7 +146,7 @@ enum ParseError implements Error
 end 'ParseError'
 
 type Value implements Parsable
-	export var n Integer
+	export var n as Integer
 
 	static function fromString(input String) returns Self throws ParseError
 		if input.byteLength() == 0 'check'
@@ -179,7 +179,7 @@ enum MoneyParseError implements Error
 end 'MoneyParseError'
 
 type Money implements Parsable
-	export var cents Integer
+	export var cents as Integer
 
 	static function fromString(input String) returns Self throws MoneyParseError
 		if input.byteLength() == 0 'empty'
@@ -216,7 +216,7 @@ enum ParseError implements Error
 end 'ParseError'
 
 type Value implements Parsable
-	export var n Integer
+	export var n as Integer
 
 	static function fromString(input String) returns Self throws ParseError
 		if input.startsWith("x") 'check'
@@ -259,7 +259,7 @@ typealias Integer = int(i64.min to i64.max)
 
 // Implementation must throw if interface requires it
 type Value implements Parsable
-	var n Integer
+	var n as Integer
 
 	static function fromString(input String) returns Self
 		return Value{n: input.byteLength()}
@@ -285,7 +285,7 @@ enum NotAnError
 end 'NotAnError'
 
 type Value implements Parsable
-	var n Integer
+	var n as Integer
 
 	static function fromString(input String) returns Self throws NotAnError
 		return Value{n: input.byteLength()}

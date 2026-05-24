@@ -20,7 +20,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 type Container
-		export var items IntArray
+		export var items as IntArray
 
 		function addItem(value Integer)
 				self.items.push(value)
@@ -53,7 +53,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 type NumberList
-		export var data IntArray
+		export var data as IntArray
 
 		function add(value Integer)
 				self.data.push(value)
@@ -85,7 +85,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 type Inner
-		export var values IntArray
+		export var values as IntArray
 
 		function total() returns Integer
 				return self.values.count()
@@ -97,7 +97,7 @@ type Inner
 end 'Inner'
 
 type Outer
-		export var inner Inner
+		export var inner as Inner
 
 		function getInnerCount() returns Integer
 				return self.inner.values.count()
@@ -125,7 +125,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 type Accumulator
-		export var items IntArray
+		export var items as IntArray
 
 		function addAndCount(value Integer) returns Integer
 				self.items.push(value)

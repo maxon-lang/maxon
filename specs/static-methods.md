@@ -15,7 +15,7 @@ Use the `static` keyword to declare a method that doesn't operate on an instance
 
 ```text
 type Counter
-  var value int
+  var value as int
 
   static function create() returns Counter
     return Counter{value: 0}
@@ -43,7 +43,7 @@ Static methods are commonly used for:
 typealias Integer = int(i64.min to i64.max)
 
 type Box
-	export var value Integer
+	export var value as Integer
 
 	static function make(v Integer) returns Box
 		return Box{value: v}
@@ -65,7 +65,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Math
-	var unused Integer
+	var unused as Integer
 
 	static function add(a Integer, b Integer) returns Integer
 		return a + b
@@ -86,7 +86,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Factory
-	export var id Integer
+	export var id as Integer
 
 	export static function create(val Integer) returns Factory
 		return Factory{id: val}

@@ -152,9 +152,9 @@ let CACHE_FORMAT_VERSION = 54
 // Adr fixup for ARM64: patch an ADR instruction to point at a named function.
 // Stored in the cache so the linker can adjust offsets when linking.
 export type CachedAdrFixup
-	export var instrOffset CodeOffset
-	export var destReg MachineWord
-	export var targetName String
+	export var instrOffset as CodeOffset
+	export var destReg as MachineWord
+	export var targetName as String
 
 	export static function create(instrOffset CodeOffset, destReg MachineWord, targetName String) returns CachedAdrFixup
 		return Self{instrOffset: instrOffset, destReg: destReg, targetName: targetName}
@@ -165,16 +165,16 @@ export typealias CachedAdrFixupArray = Array with CachedAdrFixup
 
 // A single relocatable function: its machine code + unresolved fixups.
 export type ObjectFunction
-	export var name String
-	export var returnType StdReturnType
-	export var paramCount ParamCount
-	export var paramTypes StdTypeArray
-	export var code ByteArray
-	export var callFixups CallFixupArray
-	export var rdataRelocs RdataRelocationArray
-	export var relocations RelocationArray
+	export var name as String
+	export var returnType as StdReturnType
+	export var paramCount as ParamCount
+	export var paramTypes as StdTypeArray
+	export var code as ByteArray
+	export var callFixups as CallFixupArray
+	export var rdataRelocs as RdataRelocationArray
+	export var relocations as RelocationArray
 	// ARM64-specific: ADR fixups for function address loading
-	export var adrFixups CachedAdrFixupArray
+	export var adrFixups as CachedAdrFixupArray
 
 	export static function create(name String, returnType StdReturnType, paramCount ParamCount) returns ObjectFunction
 		return Self{
@@ -215,33 +215,33 @@ end 'BuiltinDictionaryLiteralName'
 
 // All data needed to link pre-compiled stdlib into a user program.
 export type StdlibCacheData
-	export var functions ObjectFunctionArray
-	export var wasmFunctions WasmObjectFunctionArray
-	export var globalData GlobalDataTable
+	export var functions as ObjectFunctionArray
+	export var wasmFunctions as WasmObjectFunctionArray
+	export var globalData as GlobalDataTable
 	// Parser metadata
-	export var typealiases TypealiasMap
+	export var typealiases as TypealiasMap
 	// Cache v17: per-typealias visibility + sourceFilePath sidecar. Each
 	// alias name maps to an array of entries — one per declaring file —
 	// so file-private declarations from multiple stdlib files all survive
 	// a cache round-trip. Without this, file-private aliases collapse to
 	// `(global, stdlib-bootstrap path)` on restore and trip the parser's
 	// E2001 shadowing check.
-	export var typealiasVisibilities TypealiasVisibilityMap
-	export var typealiasRanges TypealiasRangeMap
+	export var typealiasVisibilities as TypealiasVisibilityMap
+	export var typealiasRanges as TypealiasRangeMap
 	// Mirror of `project.typealiasCastCategories` so the cache restore path
 	// re-populates the user-declared cast category for ranged-primitive
 	// aliases (e.g. ExitCode keeps `int` even though it stores as u8).
-	export var typealiasCastCategories TypealiasCastCategoryMap
-	export var funcReturnTypes FuncReturnTypeMap
-	export var funcSignatures FuncSignatureMap
+	export var typealiasCastCategories as TypealiasCastCategoryMap
+	export var funcReturnTypes as FuncReturnTypeMap
+	export var funcSignatures as FuncSignatureMap
 	// Cache v47: persisted throws-clause per qualified function name so
 	// `try X.method() otherwise (e)` can recover the bare-enum / union
 	// throws type at parse time even when stdlib was loaded from cache
 	// instead of re-parsed. Without this, `funcThrowsTypes.get(qualified)`
 	// returns `none` for every stdlib method and the `(e)` binding falls
 	// back to `integer`, breaking the downstream `match e` dispatch (E3005).
-	export var funcThrowsTypes FuncThrowsTypeMap
-	export var structTypes StructTypeMap
+	export var funcThrowsTypes as FuncThrowsTypeMap
+	export var structTypes as StructTypeMap
 	// Cache v47: persisted enum-type registry so cache-hit user code can
 	// match-dispatch on stdlib enum cases (e.g. `match e ... keyAlreadyExists
 	// then ...` against `MapError`). Without this, `project.enumTypes` is
@@ -249,14 +249,14 @@ export type StdlibCacheData
 	// throws scrutinee with E3005 "match scrutinee must be an enum-typed
 	// value". Mirrors the structTypes round-trip — fields decoded against
 	// the destination project's interner via the captured typeNameTable.
-	export var enumTypes EnumTypeMap
-	export var topLevelConstants ConstantMap
+	export var enumTypes as EnumTypeMap
+	export var topLevelConstants as ConstantMap
 	// Snapshot of the source project's type-name interner at capture time.
 	// MaxonType.named(id) values stored in funcReturnTypes / structTypes
 	// embed an interner-local id; the user project's interner has its own
 	// id space, so restoreStdlibMetadata uses this map to translate captured
 	// ids back to names and re-intern them in the destination project.
-	export var typeNameTable StringArray
+	export var typeNameTable as StringArray
 	// Discovery cache for the BuiltinArrayLiteral protocol. The parser writes
 	// `[1, 2, 3]` literals through whichever stdlib type implements
 	// `BuiltinArrayLiteral`; the discovery walk runs once, at parse time, over
@@ -265,20 +265,20 @@ export type StdlibCacheData
 	// here and the loader re-publishes it after restore. The `none` arm means
 	// no implementing type was observed in this stdlib build; `found(name)`
 	// carries the discovered name.
-	export var builtinArrayLiteralTypeName BuiltinArrayLiteralName
+	export var builtinArrayLiteralTypeName as BuiltinArrayLiteralName
 	// Mirror of `builtinArrayLiteralTypeName` for the BuiltinDictionaryLiteral
 	// protocol. Persisted so map literals (`[k: v, ...]`) survive a cache hit.
-	export var builtinDictionaryLiteralTypeName BuiltinDictionaryLiteralName
+	export var builtinDictionaryLiteralTypeName as BuiltinDictionaryLiteralName
 	// Phase 11.4 (cache v8): per-registry snapshots so cached-stdlib user
 	// builds see the same `project.*` state a fresh-from-source build would.
 	// Without these the user-code pipeline can't dispatch through
 	// stdlib-declared conformances (e.g. `extension int implements Comparable`)
 	// because `processExtensions`/`validateConformances` ran during the
 	// cache-build pipeline, not during user-code resolution.
-	export var interfaces IrInterfaceMap
-	export var conformances ConformanceRegistry
-	export var typeParameters TypeParamRegistry
-	export var interfaceRegistry InterfaceTypeRegistry
+	export var interfaces as IrInterfaceMap
+	export var conformances as ConformanceRegistry
+	export var typeParameters as TypeParamRegistry
+	export var interfaceRegistry as InterfaceTypeRegistry
 	// Cache v49: snapshot of the cache-build project's `functionTypes` so the
 	// in-process restore path can translate captured `MaxonType.function(id)`
 	// values into the destination project's id space. The disk-cache decode
@@ -287,20 +287,20 @@ export type StdlibCacheData
 	// `translateMaxonType`'s identity round-trip returns the same id. Required
 	// because `stdlib/Interfaces.maxon` declares `Iterable.map`/`filter`/
 	// `contains` with function-typed parameters.
-	export var functionTypes FunctionTypeRegistry
-	export var genericInstances GenericInstanceRegistry
-	export var genericTypealiases GenericTypealiasMap
-	export var layoutDescriptors LayoutDescriptorRegistry
-	export var witnessTables WitnessTableRegistry
-	export var livenessRoots StringArray
+	export var functionTypes as FunctionTypeRegistry
+	export var genericInstances as GenericInstanceRegistry
+	export var genericTypealiases as GenericTypealiasMap
+	export var layoutDescriptors as LayoutDescriptorRegistry
+	export var witnessTables as WitnessTableRegistry
+	export var livenessRoots as StringArray
 	// Phase 11.4: snapshot of `Project.genericFunctionImplicitArity` so
 	// cached-stdlib user builds see which stdlib functions need synthetic
 	// layout/witness args appended at call sites. Without this, per-function
 	// lowering (where stdlib funcs aren't in the local stdModule) can't
 	// discover the callee's hasImplicitLayoutParam and emits an under-arity
 	// call op — silent ABI corruption on x64, validator rejection on wasm.
-	export var genericFunctionImplicitArity GenericFunctionImplicitArityMap
-	export var staticRdataValues StaticRdataValueMap
+	export var genericFunctionImplicitArity as GenericFunctionImplicitArityMap
+	export var staticRdataValues as StaticRdataValueMap
 	// Cache v50 (J.4c): persisted `project.unresolvedExtensions` so cache-hit
 	// user builds see the stdlib's struct- / interface-extension metadata
 	// (target type name, type-param rebindings, added conformances, where-
@@ -308,20 +308,20 @@ export type StdlibCacheData
 	// conditionalConformanceWhereClauseSatisfied` so a user-code call that
 	// instantiates a stdlib generic (`Array with Int`) gates correctly
 	// against the conditional conformance's where-clauses.
-	export var unresolvedExtensions UnresolvedExtensionArray
+	export var unresolvedExtensions as UnresolvedExtensionArray
 	// Cache v50 (J.4c): parser-recorded `extension <T>.<method>` where-
 	// clause map. Mirrors `project.extensionMethodWhereClauses`. Used by
 	// `unresolvedExtensionWhereClausesSatisfiedForCallee` to surface E4006
 	// when a conditional-extension method's constraints aren't met by the
 	// receiver's bindings.
-	export var extensionMethodWhereClauses WhereClauseMapByName
+	export var extensionMethodWhereClauses as WhereClauseMapByName
 	// Phase 11.6 (cache v10): the stdlib's StdModule at the post-dce
 	// point of its build pipeline. The user-code pipeline merges this
 	// into its own StdModule for the inliner pass so stdlib accessor
 	// bodies are visible at user call sites; merged functions are
 	// dropped after inlining so the linker-side stdlib cache stays the
 	// sole source of stdlib machine code.
-	export var inlinerStdModule StdModule
+	export var inlinerStdModule as StdModule
 	// In-memory only. Maps each writer-side `GenericInstanceId` (the raw
 	// qword serialized in `layoutDescriptors`/`witnessTables` payloads) to
 	// the equivalent destination-`project.genericInstances` id assigned
@@ -332,7 +332,7 @@ export type StdlibCacheData
 	// decode; consumed by `translateWriterGenericInstanceId` in
 	// `restoreRegistries`. Not serialised — recomputable from the on-disk
 	// registry list at every cache load.
-	export var writerGidToProjectGid GenericInstanceIdArray
+	export var writerGidToProjectGid as GenericInstanceIdArray
 
 	export static function create() returns StdlibCacheData
 		return Self{
@@ -374,8 +374,8 @@ end 'StdlibCacheData'
 
 // Result of loading a cache file.
 export type StdlibCacheResult
-	export var data StdlibCacheData
-	export var valid bool
+	export var data as StdlibCacheData
+	export var valid as bool
 
 	export static function create(data StdlibCacheData, valid bool) returns StdlibCacheResult
 		return Self{data: data, valid: valid}

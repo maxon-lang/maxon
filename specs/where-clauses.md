@@ -78,7 +78,7 @@ A user-defined type that implements Hashable can be used as a Map key:
 typealias Integer = int(i64.min to i64.max)
 
 type MyKey implements Hashable, Equatable
-		var value Integer
+		var value as Integer
 
 		function hash() returns HashValue
 				return self.value * 31
@@ -115,7 +115,7 @@ Using a type that doesn't implement Hashable as a Map key should produce a compi
 typealias Integer = int(i64.min to i64.max)
 
 type NotHashable
-		var x Integer
+		var x as Integer
 end 'NotHashable'
 
 typealias BadMap = Map with (NotHashable, Integer)
@@ -142,7 +142,7 @@ interface Valuable
 end 'Valuable'
 
 type Wrapper implements Valuable
-		let n Integer
+		let n as Integer
 
 		function value() returns Integer
 				return self.n
@@ -154,7 +154,7 @@ type Wrapper implements Valuable
 end 'Wrapper'
 
 type Holder uses T where T is Valuable
-		export var item T
+		export var item as T
 
 		static function create(item T) returns Self
 			return Self{item: item}
@@ -191,7 +191,7 @@ interface HasAge
 end 'HasAge'
 
 type Person implements HasName, HasAge
-		let age Integer
+		let age as Integer
 
 		function name() returns Integer
 				return 1
@@ -207,7 +207,7 @@ type Person implements HasName, HasAge
 end 'Person'
 
 type Registry uses T where T is HasName and HasAge
-		export var item T
+		export var item as T
 
 		static function create(item T) returns Self
 			return Self{item: item}
@@ -248,7 +248,7 @@ type OnlyFoo implements Foo
 end 'OnlyFoo'
 
 type NeedsBoth uses T where T is Foo and Bar
-		var item T
+		var item as T
 end 'NeedsBoth'
 
 typealias Bad = NeedsBoth with OnlyFoo
@@ -268,7 +268,7 @@ Using `==` or `!=` on a type parameter that isn't constrained with `where T is E
 <!-- test: where-clauses.eq-requires-equatable -->
 ```maxon
 type Box uses T
-		var item T
+		var item as T
 
 		export function eq(other T) returns bool
 				return item == other
@@ -290,7 +290,7 @@ When the type parameter is properly constrained, `==` should work:
 <!-- test: where-clauses.eq-with-equatable -->
 ```maxon
 type Box uses T where T is Equatable
-		var item T
+		var item as T
 
 		static function create(item T) returns Self
 			return Self{item: item}

@@ -66,7 +66,7 @@ interface Counter
 end 'Counter'
 
 type SimpleCounter implements Counter
-	var value Integer
+	var value as Integer
 
 	function get() returns Integer
 		return value
@@ -106,7 +106,7 @@ interface Writable
 end 'Writable'
 
 type Buffer implements Readable, Writable
-	var data Integer
+	var data as Integer
 
 	function read() returns Integer
 		return data
@@ -142,7 +142,7 @@ interface Counter
 end 'Counter'
 
 type BadCounter implements Counter
-	let value Integer
+	let value as Integer
 
 	function get() returns Integer
 		return value
@@ -218,7 +218,7 @@ interface Simple
 end 'Simple'
 
 type Extended implements Simple
-	let value Integer
+	let value as Integer
 
 	function getValue() returns Integer
 		return value
@@ -248,7 +248,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Standalone
-	var value Integer
+	var value as Integer
 
 	function get() returns Integer
 		return value
@@ -271,7 +271,7 @@ end 'main'
 <!-- test: builtin-interface-user-code -->
 ```maxon
 type MyCollection uses Element implements BuiltinArrayLiteral
-	var managed __ManagedMemory
+	var managed as __ManagedMemory
 
 	static function init(managed __ManagedMemory) returns Self
 		return MyCollection{managed: managed}
@@ -296,7 +296,7 @@ interface Greeter
 end 'Greeter'
 
 type Silent implements Greeter
-	let value Integer
+	let value as Integer
 
 	function greet(volume Integer) returns Integer
 		return value
@@ -335,7 +335,7 @@ interface Extended extends Base
 end 'Extended'
 
 type Impl implements Extended
-	let n Integer
+	let n as Integer
 
 	function ping(payload Integer) returns Integer
 		return n
@@ -374,7 +374,7 @@ interface Greeter
 end 'Greeter'
 
 type Hello implements Greeter
-	let value Integer
+	let value as Integer
 
 	function greet() returns Integer
 		return value
@@ -409,7 +409,7 @@ interface Greeter
 end 'Greeter'
 
 type Silent implements Greeter
-	let value Integer
+	let value as Integer
 
 	function greet(volume Integer) returns Integer
 		let unusedLocal = 99

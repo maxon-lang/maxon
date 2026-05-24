@@ -35,8 +35,8 @@ Types bind concrete types to associated types using `with` after the interface n
 typealias Score = int(i64.min to i64.max)
 
 type ScoreArray implements Container with Score
-	var data array of 100 Score
-	var len Score
+	var data as array of 100 Score
+	var len as Score
 
 	function get(index Index) returns Score
 		return data[index]
@@ -65,8 +65,8 @@ interface Pair uses First, Second
 end 'Pair'
 
 type PersonRecord implements Pair with ID, Weight
-	let a ID
-	let b Weight
+	let a as ID
+	let b as Weight
 
 	function getFirst() returns ID
 		return a
@@ -134,8 +134,8 @@ interface Summable uses Element
 end 'Summable'
 
 type ScorePair implements Summable with Score
-	let a Score
-	let b Score
+	let a as Score
+	let b as Score
 
 	function sum() returns Score
 		return a + b
@@ -176,7 +176,7 @@ interface HasElement uses Element
 end 'HasElement'
 
 type Broken implements HasElement
-	let value Score
+	let value as Score
 
 	function get() returns Score
 		return value
@@ -204,7 +204,7 @@ interface TwoMethods uses Element
 end 'TwoMethods'
 
 type Partial implements TwoMethods with Score
-	let value Score
+	let value as Score
 
 	function first() returns Score
 		return value
@@ -233,7 +233,7 @@ interface Producer uses Output
 end 'Producer'
 
 type WrongReturn implements Producer with Weight
-	let value ID
+	let value as ID
 
 	function produce() returns ID
 		return value
@@ -262,7 +262,7 @@ interface Wrapper uses Inner
 end 'Wrapper'
 
 type IntBox implements Wrapper with Integer
-	let value Integer
+	let value as Integer
 
 	function unwrap() returns Integer
 		return value
@@ -294,7 +294,7 @@ interface Accumulator uses Item
 end 'Accumulator'
 
 type IntSum implements Accumulator with Integer
-	let sum Integer
+	let sum as Integer
 
 	function add(item Integer) returns IntSum
 		return IntSum{sum: sum + item}
@@ -333,8 +333,8 @@ interface Pair uses First, Second
 end 'Pair'
 
 type IntFloat implements Pair with Integer, Float
-	let a Integer
-	let b Float
+	let a as Integer
+	let b as Float
 
 	function getFirst() returns Integer
 		return a
@@ -369,7 +369,7 @@ interface CharSource uses Element
 end 'CharSource'
 
 type SingleChar implements CharSource with Character
-	let ch Character
+	let ch as Character
 
 	function getChar() returns Character
 		return ch
@@ -404,7 +404,7 @@ interface ByteSource uses Element
 end 'ByteSource'
 
 type SingleByte implements ByteSource with Byte
-	let b Byte
+	let b as Byte
 
 	function getByte() returns Byte
 		return b
@@ -436,7 +436,7 @@ interface NeedsElement uses Element
 end 'NeedsElement'
 
 type Missing implements NeedsElement
-	let value Integer
+	let value as Integer
 
 	function get() returns Integer
 		return value
@@ -463,7 +463,7 @@ interface TwoMethods uses Element
 end 'TwoMethods'
 
 type Partial implements TwoMethods with Integer
-	let value Integer
+	let value as Integer
 
 	function first() returns Integer
 		return value
@@ -491,7 +491,7 @@ interface Typed uses Output
 end 'Typed'
 
 type WrongType implements Typed with Float
-	let value Integer
+	let value as Integer
 
 	function make() returns Integer
 		return value
@@ -519,7 +519,7 @@ interface Acceptor uses Input
 end 'Acceptor'
 
 type WrongParam implements Acceptor with Float
-	let value Integer
+	let value as Integer
 
 	function accept(val Integer) returns Integer
 		return value + val
@@ -546,7 +546,7 @@ interface Countable
 end 'Countable'
 
 type Counter implements Countable
-	let count Integer
+	let count as Integer
 
 	function getCount() returns Integer
 		return count
@@ -577,7 +577,7 @@ interface Addable
 end 'Addable'
 
 type Number implements Addable
-	let value Integer
+	let value as Integer
 
 	function addOne() returns Integer
 		return value + 1

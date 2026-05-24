@@ -52,7 +52,7 @@ typealias Count = int(0 to u64.max)
 
 type Config
 	static var value = Config.makeValue()
-	export var n Count
+	export var n as Count
 
 	static function makeValue() returns Config
 		return Config{n: 42}
@@ -81,7 +81,7 @@ typealias Count = int(0 to u64.max)
 type Counter
 	static var initCount = 0
 	static var cached = Counter.createInstance()
-	export var id Count
+	export var id as Count
 
 	static function createInstance() returns Counter
 		Counter.initCount = Counter.initCount + 1
@@ -119,8 +119,8 @@ end 'main'
 typealias Count = int(0 to u64.max)
 
 type Point
-	export var x Count
-	export var y Count
+	export var x as Count
+	export var y as Count
 
 	static function create(x Count, y Count) returns Self
 		return Self{x: x, y: y}
@@ -156,7 +156,7 @@ typealias Count = int(0 to u64.max)
 
 type State
 	static var current = State.makeDefault()
-	export var value Count
+	export var value as Count
 
 	static function makeDefault() returns State
 		return State{value: 0}
@@ -200,7 +200,7 @@ typealias Count = int(0 to u64.max)
 type Cache
 	static var a = Cache.buildA()
 	static var b = Cache.buildB()
-	export var n Count
+	export var n as Count
 
 	static function buildA() returns Cache
 		return Cache{n: 10}
@@ -314,8 +314,8 @@ true false true
 typealias Count = int(0 to u64.max)
 
 type Pair
-	export var x Count
-	export var y Count
+	export var x as Count
+	export var y as Count
 
 	static function create(x Count, y Count) returns Self
 		return Self{x: x, y: y}

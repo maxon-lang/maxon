@@ -62,8 +62,8 @@ Every object is owned by a region (stack frame, struct, or array). When a region
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-	export var x Integer
-	export var y Integer
+	export var x as Integer
+	export var y as Integer
 
 	static function create(x Integer, y Integer) returns Self
 		return Self{x: x, y: y}
@@ -91,8 +91,8 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-	export var x Integer
-	export var y Integer
+	export var x as Integer
+	export var y as Integer
 
 	static function create(x Integer, y Integer) returns Self
 		return Self{x: x, y: y}
@@ -126,8 +126,8 @@ enum Color
 end 'Color'
 
 type Item
-	export var color Color
-	export var value Integer
+	export var color as Color
+	export var value as Integer
 
 	static function create(color Color, value Integer) returns Self
 		return Self{color: color, value: value}
@@ -151,8 +151,8 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-	export var x Integer
-	export var y Integer
+	export var x as Integer
+	export var y as Integer
 
 	static function create(x Integer, y Integer) returns Self
 		return Self{x: x, y: y}
@@ -208,7 +208,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Inner
-	export var value Integer
+	export var value as Integer
 
 	static function create(value Integer) returns Self
 		return Self{value: value}
@@ -216,8 +216,8 @@ type Inner
 end 'Inner'
 
 type Outer
-	export var a Inner
-	export var b Integer
+	export var a as Inner
+	export var b as Integer
 
 	static function create(a Inner, b Integer) returns Self
 		return Self{a: a, b: b}
@@ -248,7 +248,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias FnTypeAlias1 = function() returns Integer
 
 type Callback
-	export var fn FnTypeAlias1
+	export var fn as FnTypeAlias1
 
 	static function create(fn FnTypeAlias1) returns Self
 		return Self{fn: fn}
@@ -273,8 +273,8 @@ error E3069: specs/fragments/memory-safety/eq-requires-equatable.test:16:7: '=='
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-	export var x Integer
-	export var y Integer
+	export var x as Integer
+	export var y as Integer
 
 	static function create(x Integer, y Integer) returns Self
 		return Self{x: x, y: y}
@@ -304,8 +304,8 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-	export var x Integer
-	export var y Integer
+	export var x as Integer
+	export var y as Integer
 
 	static function create(x Integer, y Integer) returns Self
 		return Self{x: x, y: y}
@@ -330,8 +330,8 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-	export var x Integer
-	export var y Integer
+	export var x as Integer
+	export var y as Integer
 
 	static function create(x Integer, y Integer) returns Self
 		return Self{x: x, y: y}
@@ -356,7 +356,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Resource
-	export var id Integer
+	export var id as Integer
 
 	static function create(id Integer) returns Self
 		return Self{id: id}
@@ -381,8 +381,8 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-	export var x Integer
-	export var y Integer
+	export var x as Integer
+	export var y as Integer
 
 	static function create(x Integer, y Integer) returns Self
 		return Self{x: x, y: y}
@@ -412,8 +412,8 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-	export var x Integer
-	export var y Integer
+	export var x as Integer
+	export var y as Integer
 
 	static function create(x Integer, y Integer) returns Self
 		return Self{x: x, y: y}
@@ -766,7 +766,7 @@ module {
 typealias Integer = int(i64.min to i64.max)
 
 type Item
-	export var value Integer
+	export var value as Integer
 
 	static function create(value Integer) returns Self
 		return Self{value: value}
@@ -1613,7 +1613,7 @@ module {
 typealias Integer = int(i64.min to i64.max)
 
 type Counter
-	export var n Integer
+	export var n as Integer
 
 	static function create(n Integer) returns Self
 		return Self{n: n}
@@ -2034,7 +2034,7 @@ module {
 typealias Integer = int(i64.min to i64.max)
 
 type Wrapper
-	export var val Integer
+	export var val as Integer
 
 	static function create(val Integer) returns Self
 		return Self{val: val}
@@ -2434,7 +2434,7 @@ that iteration leaks.
 typealias Integer = int(i64.min to i64.max)
 
 type Counter
-	export var n Integer
+	export var n as Integer
 
 	static function create(n Integer) returns Self
 		return Self{n: n}
@@ -2469,8 +2469,8 @@ loop body scope and the outer loop body scope must be cleaned up.
 typealias Integer = int(i64.min to i64.max)
 
 type Pair
-	export var a Integer
-	export var b Integer
+	export var a as Integer
+	export var b as Integer
 
 	static function create(a Integer, b Integer) returns Self
 		return Self{a: a, b: b}
@@ -2512,7 +2512,7 @@ for-in loop with struct allocations must clean up the loop body scope.
 typealias Integer = int(i64.min to i64.max)
 
 type Item
-	export var val Integer
+	export var val as Integer
 
 	static function create(val Integer) returns Self
 		return Self{val: val}
@@ -2546,7 +2546,7 @@ be exited so that any allocations made before the try call are freed.
 typealias Integer = int(i64.min to i64.max)
 
 type Resource
-	export var id Integer
+	export var id as Integer
 
 	static function create(id Integer) returns Self
 		return Self{id: id}
@@ -2588,7 +2588,7 @@ all intermediate scopes plus the function scope must be cleaned up.
 typealias Integer = int(i64.min to i64.max)
 
 type Wrapper
-	export var val Integer
+	export var val as Integer
 
 	static function create(val Integer) returns Self
 		return Self{val: val}
@@ -2635,7 +2635,7 @@ clone these ops correctly. Missing handlers would crash the compiler.
 typealias Integer = int(i64.min to i64.max)
 
 type Wrapper
-	export var value Integer
+	export var value as Integer
 
 	static function create(value Integer) returns Self
 		return Self{value: value}
@@ -2672,7 +2672,7 @@ monomorphization passes when it appears in generic or cloned functions.
 typealias Integer = int(i64.min to i64.max)
 
 type Box
-	export var value Integer
+	export var value as Integer
 
 	static function create(value Integer) returns Self
 		return Self{value: value}

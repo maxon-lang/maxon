@@ -54,8 +54,8 @@ typealias PointArray = Array with Point
 typealias FnTypeAlias1 = function(Integer) returns Integer
 
 type Point
-	export var x Integer
-	export var y Integer
+	export var x as Integer
+	export var y as Integer
 
 	static function create(x Integer, y Integer) returns Self
 		return Self{x: x, y: y}
@@ -63,8 +63,8 @@ type Point
 end 'Point'
 
 type Person
-	export var name String
-	export var age Integer
+	export var name as String
+	export var age as Integer
 
 	static function create(name String, age Integer) returns Self
 		return Self{name: name, age: age}
@@ -4828,7 +4828,7 @@ this as sibling cleanup and eliminates the alias bracket.
 typealias Integer = int(i64.min to i64.max)
 
 type Box
-	export var value Integer
+	export var value as Integer
 
 	static function create(value Integer) returns Self
 		return Self{value: value}
@@ -4892,7 +4892,7 @@ eliminates the bracket as a group.
 typealias Integer = int(i64.min to i64.max)
 
 type Box
-	export var value Integer
+	export var value as Integer
 
 	static function create(value Integer) returns Self
 		return Self{value: value}
@@ -4946,7 +4946,7 @@ three.
 typealias Integer = int(i64.min to i64.max)
 
 type Box
-	export var value Integer
+	export var value as Integer
 
 	static function create(value Integer) returns Self
 		return Self{value: value}
@@ -5018,7 +5018,7 @@ union BoxError
 end 'BoxError'
 
 type Box
-	export var value Integer
+	export var value as Integer
 
 	static function create(value Integer) returns Self
 		return Self{value: value}
@@ -5075,7 +5075,7 @@ union BoxError
 end 'BoxError'
 
 type Box
-	export var value Integer
+	export var value as Integer
 
 	static function create(value Integer) returns Self
 		return Self{value: value}
@@ -5156,7 +5156,7 @@ union BoxError
 end 'BoxError'
 
 type Box
-	export var value Integer
+	export var value as Integer
 
 	static function create(value Integer) returns Self
 		return Self{value: value}
@@ -5220,7 +5220,7 @@ union BoxError
 end 'BoxError'
 
 type Box
-	export var value Integer
+	export var value as Integer
 
 	static function create(value Integer) returns Self
 		return Self{value: value}
@@ -5284,7 +5284,7 @@ in the trace.
 typealias Integer = int(i64.min to i64.max)
 
 type Config
-	export var threshold Integer
+	export var threshold as Integer
 
 	static function create(threshold Integer) returns Self
 		return Self{threshold: threshold}

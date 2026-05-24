@@ -17,8 +17,8 @@ Types define custom data types with named fields.
 typealias Score = int(i64.min to i64.max)
 
 type Point
-	export var x Score
-	export var y Score
+	export var x as Score
+	export var y as Score
 end 'Point'
 ```
 
@@ -27,9 +27,9 @@ Fields must use `let` (immutable) or `var` (mutable), and can be `export` for ex
 typealias Score = int(i64.min to i64.max)
 
 type Config
-	export let version Score    // Cannot be changed after initialization, accessible externally
-	export var count Score      // Can be modified, accessible externally
-	var internal Score          // Private - only accessible in methods
+	export let version as Score    // Cannot be changed after initialization, accessible externally
+	export var count as Score      // Can be modified, accessible externally
+	var internal as Score          // Private - only accessible in methods
 end 'Config'
 ```
 
@@ -74,8 +74,8 @@ c.count = 5     // OK: field is var
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-	export var x Integer
-	export var y Integer
+	export var x as Integer
+	export var y as Integer
 
 	static function create(x Integer, y Integer) returns Self
 		return Self{x: x, y: y}
@@ -98,8 +98,8 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Config
-	export let version Integer
-	export var count Integer
+	export let version as Integer
+	export var count as Integer
 
 	static function create(version Integer, count Integer) returns Self
 		return Self{version: version, count: count}
@@ -122,8 +122,8 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-	export var x Integer
-	export var y Integer
+	export var x as Integer
+	export var y as Integer
 
 	static function create(x Integer, y Integer) returns Self
 		return Self{x: x, y: y}
@@ -146,8 +146,8 @@ error E2013: specs/fragments/structs/error.let-struct-field-assign.test:16:2: ca
 typealias Integer = int(i64.min to i64.max)
 
 type Config
-	export let version Integer
-	export var count Integer
+	export let version as Integer
+	export var count as Integer
 
 	static function create(version Integer, count Integer) returns Self
 		return Self{version: version, count: count}
@@ -170,8 +170,8 @@ error E2013: specs/fragments/structs/error.let-field-assign.test:16:2: cannot as
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-	export var x Integer
-	export var y Integer
+	export var x as Integer
+	export var y as Integer
 
 	static function create(x Integer, y Integer) returns Self
 		return Self{x: x, y: y}
@@ -193,8 +193,8 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Rect
-	export var width Integer
-	export var height Integer
+	export var width as Integer
+	export var height as Integer
 
 	static function create(width Integer, height Integer) returns Self
 		return Self{width: width, height: height}
@@ -216,8 +216,8 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Vec2
-	export var x Integer
-	export var y Integer
+	export var x as Integer
+	export var y as Integer
 
 	static function create(x Integer, y Integer) returns Self
 		return Self{x: x, y: y}
@@ -244,8 +244,8 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Pair
-	export var first Integer
-	export var second Integer
+	export var first as Integer
+	export var second as Integer
 
 	static function create(first Integer, second Integer) returns Self
 		return Self{first: first, second: second}
@@ -271,8 +271,8 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-	export var x Integer
-	export var y Integer
+	export var x as Integer
+	export var y as Integer
 
 	static function create(x Integer, y Integer) returns Self
 		return Self{x: x, y: y}

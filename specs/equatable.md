@@ -27,8 +27,8 @@ Declare conformance with `implements Equatable` and implement `equals`:
 
 ```text
 type Point implements Equatable
-  var x int
-  var y int
+  var x as int
+  var y as int
 
   function equals(other Point) returns bool
     return x == other.x and y == other.y
@@ -54,8 +54,8 @@ var same = a.equals(b)  // true
 typealias Integer = int(i64.min to i64.max)
 
 type Point implements Equatable
-	export var x Integer
-	export var y Integer
+	export var x as Integer
+	export var y as Integer
 
 	function equals(other Point) returns bool
 		return x == other.x and y == other.y
@@ -85,8 +85,8 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Point implements Equatable
-	export var x Integer
-	export var y Integer
+	export var x as Integer
+	export var y as Integer
 
 	function equals(other Point) returns bool
 		return x == other.x and y == other.y
@@ -116,7 +116,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Wrapper implements Equatable
-	export var value Integer
+	export var value as Integer
 
 	function equals(other Wrapper) returns bool
 		return value == other.value
@@ -150,8 +150,8 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Point implements Equatable
-	export var x Integer
-	export var y Integer
+	export var x as Integer
+	export var y as Integer
 
 	function equals(other Point) returns bool
 		return x == other.x and y == other.y
@@ -181,7 +181,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Box implements Equatable
-	export var value Integer
+	export var value as Integer
 
 	function equals(other Box) returns bool
 		return value == other.value
@@ -210,7 +210,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Id implements Equatable
-	export var n Integer
+	export var n as Integer
 
 	function equals(other Id) returns bool
 		return n == other.n
@@ -248,7 +248,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Token implements Equatable
-	export var id Integer
+	export var id as Integer
 
 	function equals(other Token) returns bool
 		return id == other.id

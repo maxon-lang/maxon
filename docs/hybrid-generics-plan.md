@@ -89,18 +89,18 @@ The work breaks into 7 sub-phases over an estimated 12–20 weeks. Each sub-phas
 **New types in `MaxonDialect.maxon` / `Project.maxon`:**
 ```
 export type InterfaceType
-    var name String
-    var methods InterfaceMethodArray   // signature only
-    var associatedTypes StringArray
+    var name as String
+    var methods as InterfaceMethodArray   // signature only
+    var associatedTypes as StringArray
 end
 
 export type GenericTypeDecl
-    var name String                    // "Array"
-    var typeParams StringArray         // ["Element"]
-    var constraints ConstraintMap      // "Element" -> [Equatable, Hashable]
-    var fields StructFieldArray        // pre-substitution; field types may be type params
-    var methods FunctionDeclArray
-    var conformsTo InterfaceConformanceArray
+    var name as String                    // "Array"
+    var typeParams as StringArray         // ["Element"]
+    var constraints as ConstraintMap      // "Element" -> [Equatable, Hashable]
+    var fields as StructFieldArray        // pre-substitution; field types may be type params
+    var methods as FunctionDeclArray
+    var conformsTo as InterfaceConformanceArray
 end
 
 export type TypeSubstitution
@@ -136,14 +136,14 @@ end
 **New IR concept:**
 ```
 export type LayoutDescriptor
-    var typeName String                // "Array_Int" — only for diagnostics
-    var size MachineWord               // total size in bytes
-    var alignment MachineWord          // alignment requirement
-    var elementSize MachineWord        // for collections: stride between elements
-    var fieldOffsets MachineWordArray  // for structs: per-field byte offset
+    var typeName as String                // "Array_Int" — only for diagnostics
+    var size as MachineWord               // total size in bytes
+    var alignment as MachineWord          // alignment requirement
+    var elementSize as MachineWord        // for collections: stride between elements
+    var fieldOffsets as MachineWordArray  // for structs: per-field byte offset
     var copyFunc String?               // function name to copy, or null = memcpy
     var destroyFunc String?            // function name to destroy/decref, or null = noop
-    var hasHeapRefs bool               // does this type contain managed pointers?
+    var hasHeapRefs as bool               // does this type contain managed pointers?
 end
 ```
 

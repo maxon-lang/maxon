@@ -49,7 +49,7 @@ type Counter
 	static var count = 0       // Mutable static field
 	static let MAX = 100       // Compile-time static constant
 
-	export var value Score       // Instance field
+	export var value as Score       // Instance field
 end 'Counter'
 ```
 
@@ -212,7 +212,7 @@ typealias Integer = int(i64.min to i64.max)
 
 type Thing
 	static var created = 0
-	export var id Integer
+	export var id as Integer
 
 	static function make(n Integer) returns Thing
 		Thing.created = Thing.created + 1
@@ -618,8 +618,8 @@ Reassigning an immutable top-level `let` struct variable should error.
 typealias SmallInt = int(0 to u8.max)
 
 type Point
-		export var x SmallInt
-		export var y SmallInt
+		export var x as SmallInt
+		export var y as SmallInt
 
 		static function create(x SmallInt, y SmallInt) returns Self
 			return Self{x: x, y: y}

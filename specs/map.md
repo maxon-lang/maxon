@@ -322,7 +322,7 @@ end 'main'
 typealias StrMap = Map with (String, String)
 
 type Container
-	export var data StrMap
+	export var data as StrMap
 
 	static function create(data StrMap) returns Self
 		return Self{data: data}

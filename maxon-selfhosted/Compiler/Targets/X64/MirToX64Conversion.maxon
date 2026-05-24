@@ -634,31 +634,31 @@ end 'appendIntImmToReg'
 // ============================================================
 
 type X64FunctionLowering
-	var module MirModule
-	var target TargetModule
-	var osDesc OsDescriptor
-	var allFunctions IrFunctionArray
-	var globalData GlobalDataTable
-	var funcParamTypes StdTypeArray
-	var currentFuncName String
+	var module as MirModule
+	var target as TargetModule
+	var osDesc as OsDescriptor
+	var allFunctions as IrFunctionArray
+	var globalData as GlobalDataTable
+	var funcParamTypes as StdTypeArray
+	var currentFuncName as String
 	// Outgoing-stack-arg budget for the function currently being lowered.
 	// `emitDirectCall` bumps this each time a call site needs more space than
 	// previously seen; `lowerFunction` reads it back at the end and folds it
 	// into the destination `IrFunction`'s `outgoingArgSize` so the prologue/
 	// epilogue lay out callee-save slots above the outgoing-arg block.
-	var currentOutgoingArgSize StackSize
-	var stdlibFunctions ObjectFunctionArray
-	var constMap ConstMap
-	var useCounts UseCountMap
-	var absorbedConsts AbsorbedConstSet
-	var valueSlots ValueSlotMap
-	var nextTempSlot SlotIndex
-	var condBrCondId ValueId
+	var currentOutgoingArgSize as StackSize
+	var stdlibFunctions as ObjectFunctionArray
+	var constMap as ConstMap
+	var useCounts as UseCountMap
+	var absorbedConsts as AbsorbedConstSet
+	var valueSlots as ValueSlotMap
+	var nextTempSlot as SlotIndex
+	var condBrCondId as ValueId
 	// X64-private scratch ValueId allocator. Initialized per-function to
 	// one past the highest MIR ValueId seen in this function so scratch ids
 	// never collide with MIR ones. Used for short-lived helper registers
 	// (e.g. the second setcc result in NaN-aware float compare lowering).
-	var scratchValueIdCursor ValueId
+	var scratchValueIdCursor as ValueId
 
 	static function create(module MirModule, target TargetModule, osDesc OsDescriptor, allFunctions IrFunctionArray, globalData GlobalDataTable, stdlibFunctions ObjectFunctionArray) returns X64FunctionLowering
 		return Self{module: module, target: target, osDesc: osDesc, allFunctions: allFunctions, globalData: globalData, stdlibFunctions: stdlibFunctions, funcParamTypes: StdTypeArray.create(), currentFuncName: "", currentOutgoingArgSize: 0, constMap: ConstMap.create(), useCounts: UseCountMap.create(), absorbedConsts: AbsorbedConstSet.create(), valueSlots: ValueSlotMap.create(), nextTempSlot: 0, condBrCondId: NOT_CONDBR, scratchValueIdCursor: 0}

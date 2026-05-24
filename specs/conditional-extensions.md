@@ -74,8 +74,8 @@ end 'HasItems'
 typealias IntegerArray = Array with Integer
 
 type IntList implements HasItems with Integer
-	let data IntegerArray
-	var idx Integer
+	let data as IntegerArray
+	var idx as Integer
 
 	function current() returns Integer
 		return try data.get(idx) otherwise panic("IntList.current: idx out of bounds")
@@ -128,7 +128,7 @@ extension Holder where Item is Comparable
 end 'Holder'
 
 type NotComparable
-	let x Integer
+	let x as Integer
 
 	static function create(x Integer) returns Self
 		return Self{x: x}
@@ -136,7 +136,7 @@ type NotComparable
 end 'NotComparable'
 
 type MyHolder implements Holder with NotComparable
-	let item NotComparable
+	let item as NotComparable
 
 	function get() returns NotComparable
 		return item
@@ -165,7 +165,7 @@ Extensions can target types directly, not just interfaces. This is useful when t
 <!-- test: conditional-extensions.type-extension -->
 ```maxon
 type Box uses Item
-	export var item Item
+	export var item as Item
 
 	static function create(item Item) returns Self
 		return Self{item: item}
@@ -235,7 +235,7 @@ extension Bucket where Element is Equatable and Hashable
 end 'Bucket'
 
 type HashItem implements Equatable, Hashable
-	export var v Integer
+	export var v as Integer
 
 	function equals(other HashItem) returns bool
 		return v == other.v
@@ -253,8 +253,8 @@ end 'HashItem'
 typealias HashItemArray = Array with HashItem
 
 type HashBucket implements Bucket with HashItem
-	let items HashItemArray
-	var idx Integer
+	let items as HashItemArray
+	var idx as Integer
 
 	function current() returns HashItem
 		return try items.get(idx) otherwise panic("HashBucket.current: idx out of bounds")
@@ -321,7 +321,7 @@ extension Seq where Element is Equatable
 end 'Seq'
 
 type NotEq
-	export var n Integer
+	export var n as Integer
 
 	static function create(n Integer) returns Self
 		return Self{n: n}
@@ -331,8 +331,8 @@ end 'NotEq'
 typealias NotEqArray = Array with NotEq
 
 type NotEqSeq implements Seq with NotEq
-	let items NotEqArray
-	var idx Integer
+	let items as NotEqArray
+	var idx as Integer
 
 	function current() returns NotEq
 		return try items.get(idx) otherwise panic("NotEqSeq.current: idx out of bounds")

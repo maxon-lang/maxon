@@ -28,9 +28,9 @@ export union CallConvSlot
 end 'CallConvSlot'
 
 export type Interval
-	export var blockId BlockId
-	export var startPos RegInt
-	export var endPos RegInt
+	export var blockId as BlockId
+	export var startPos as RegInt
+	export var endPos as RegInt
 
 	export static function create(blockId BlockId, startPos RegInt, endPos RegInt) returns Interval
 		return Self{blockId: blockId, startPos: startPos, endPos: endPos}
@@ -46,9 +46,9 @@ end 'Interval'
 // when a range participates in multiple distinct copy sites (e.g. a
 // block-arg dest receives one edge per predecessor).
 export type CopyEdge
-	export var partnerValueId ValueId
-	export var blockId BlockId
-	export var copyPos RegInt
+	export var partnerValueId as ValueId
+	export var blockId as BlockId
+	export var copyPos as RegInt
 
 	export static function create(partnerValueId ValueId, blockId BlockId, copyPos RegInt) returns CopyEdge
 		return Self{partnerValueId: partnerValueId, blockId: blockId, copyPos: copyPos}
@@ -62,8 +62,8 @@ end 'CopyEdge'
 // buildBlockArgCopies to dual-emit edge moves (src → sub → merge) instead
 // of the original single src → merge move.
 export type SplitPredAnchor
-	export var predBlockId BlockId
-	export var subRangeValueId ValueId
+	export var predBlockId as BlockId
+	export var subRangeValueId as ValueId
 
 	export static function create(predBlockId BlockId, subRangeValueId ValueId) returns SplitPredAnchor
 		return Self{predBlockId: predBlockId, subRangeValueId: subRangeValueId}
@@ -77,8 +77,8 @@ export typealias SplitPredAnchorArray = Array with SplitPredAnchor
 // reference it, so MIR ops are unchanged. `anchors` lists the sub-ranges
 // minted for each predecessor copy slot.
 export type SplitMergeInfo
-	export var mergeValueId ValueId
-	export var anchors SplitPredAnchorArray
+	export var mergeValueId as ValueId
+	export var anchors as SplitPredAnchorArray
 
 	export static function create(mergeValueId ValueId) returns SplitMergeInfo
 		return Self{mergeValueId: mergeValueId, anchors: SplitPredAnchorArray.create()}
@@ -88,19 +88,19 @@ end 'SplitMergeInfo'
 export typealias SplitMergeInfoArray = Array with SplitMergeInfo
 
 export type LiveRange
-	export var valueId ValueId
-	export var defBlock BlockId
-	export var defPosition RegInt
-	export var intervals IntervalArray
-	export var spillWeight RegInt
-	export var regClass RegClass
-	export var fixedReg RegOrdinal
-	export var assignedReg RegOrdinal
-	export var spillSlot RegInt
-	export var isRematerializable bool
-	export var constantValue RegInt
-	export var hint RegOrdinal
-	export var copyHintValueId RegInt
+	export var valueId as ValueId
+	export var defBlock as BlockId
+	export var defPosition as RegInt
+	export var intervals as IntervalArray
+	export var spillWeight as RegInt
+	export var regClass as RegClass
+	export var fixedReg as RegOrdinal
+	export var assignedReg as RegOrdinal
+	export var spillSlot as RegInt
+	export var isRematerializable as bool
+	export var constantValue as RegInt
+	export var hint as RegOrdinal
+	export var copyHintValueId as RegInt
 	// Per-edge copy-link sidetable. Lets the interference graph builder
 	// suppress the 1-position copy-boundary overlap only at the EXACT
 	// (block, position) where a parallel copy or 2-addr move executes.
@@ -108,13 +108,13 @@ export type LiveRange
 	// single-slot last-writer-wins link and over-coalesced block-arg
 	// destinations against values still live through other predecessors.
 	// `copyHintValueId` remains for color-hint propagation only.
-	export var copyEdges CopyEdgeArray
+	export var copyEdges as CopyEdgeArray
 	// True when this range is live across a call instruction. Drives the
 	// caller-saved-vs-callee-saved decision in the coloring fallback: ranges
 	// that don't cross a call should land in caller-saved registers (no
 	// callee-save area cost), while ranges that do should land in callee-saved
 	// registers to avoid spill-around-call sequences.
-	export var crossesCall bool
+	export var crossesCall as bool
 
 	export static function create(valueId ValueId) returns LiveRange
 		return Self{

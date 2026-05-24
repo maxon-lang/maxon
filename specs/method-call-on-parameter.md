@@ -16,7 +16,7 @@ When writing a method, you can call other methods on parameters that have the sa
 typealias Score = int(i64.min to i64.max)
 
 type Counter
-	var value Score
+	var value as Score
 
 	function getValue() returns Score
 		return value
@@ -40,7 +40,7 @@ not on `self`.
 typealias Integer = int(i64.min to i64.max)
 
 type Foo
-	var x Integer
+	var x as Integer
 	
 	function bar() returns Integer
 		return x
@@ -71,7 +71,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Value
-	var n Integer
+	var n as Integer
 	
 	function get() returns Integer
 		return n
@@ -110,7 +110,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Calculator
-	var base Integer
+	var base as Integer
 	
 	function double() returns Integer
 		return base * 2
@@ -141,7 +141,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Adder
-	var value Integer
+	var value as Integer
 	
 	function addTo(n Integer) returns Integer
 		return value + n

@@ -15,7 +15,7 @@ Inside instance methods, `self` refers to the current instance:
 
 ```text
 type Counter
-  var count int
+  var count as int
 
   function increment()
     self.count = self.count + 1
@@ -27,7 +27,7 @@ Field access can omit `self.` when unambiguous:
 
 ```text
 type Counter
-  var count int
+  var count as int
 
   function increment()
     count = count + 1
@@ -41,8 +41,8 @@ end 'Counter'
 
 ```text
 type Point
-  var x int
-  var y int
+  var x as int
+  var y as int
 
   function origin() returns Self
     return Point{x: 0, y: 0}
@@ -58,7 +58,7 @@ end 'Point'
 typealias Integer = int(i64.min to i64.max)
 
 type Counter
-	var count Integer
+	var count as Integer
 
 	function increment()
 		self.count = self.count + 1
@@ -90,7 +90,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Counter
-	var count Integer
+	var count as Integer
 
 	function increment()
 		count = count + 1
@@ -123,7 +123,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Accumulator
-	var total Integer
+	var total as Integer
 
 	function add(value Integer)
 		self.total = self.total + value
@@ -156,8 +156,8 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-	var x Integer
-	var y Integer
+	var x as Integer
+	var y as Integer
 
 	function sum() returns Integer
 		return self.x + self.y
@@ -187,7 +187,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Value
-	var n Integer
+	var n as Integer
 
 	function double()
 		self.n = self.n * 2
@@ -218,8 +218,8 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Rectangle
-	var width Integer
-	var height Integer
+	var width as Integer
+	var height as Integer
 
 	function area() returns Integer
 		return width * height

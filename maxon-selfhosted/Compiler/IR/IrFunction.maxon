@@ -37,19 +37,19 @@ export typealias ThrowsClauseArray = Array with ThrowsClause
 
 export type IrFunction
 	// --- Common fields (all phases) ---
-	export var name String
+	export var name as String
 	// Source-file namespace this function was parsed in (e.g. "stdlib",
 	// "Compiler.Parser", "main"-test fragment basename). Set by the parser
 	// at the point of qualification and consumed by LowerMaxonToStd to
 	// resolve `CallContext.free` callees back to their qualified names —
 	// `name` itself can be bare for entrypoints like `main`, so deriving
 	// the namespace from `name` alone is not reliable.
-	export var namespace String
+	export var namespace as String
 	// Visibility tier from the declaring source. Stamped by the parser at
 	// dispatch time. Stdlib functions restored from the cache get
 	// `Visibility.global`. Read by TypeResolution's call-visibility walk
 	// when filtering candidates against the reading function's file.
-	export var visibility Visibility
+	export var visibility as Visibility
 	// Absolute / virtual path of the file this function was parsed in.
 	// Used as the visibility anchor when cross-file callers look this
 	// function up. Stdlib functions restored from the cache get the
@@ -57,44 +57,44 @@ export type IrFunction
 	// reach them. Empty when the function was synthesized outside the
 	// parser; visibility filtering treats empty paths as the project
 	// root for fall-through reachability.
-	export var sourceFilePath FilePath
-	export var paramCount ParamCount
-	export var blockRefs BlockRefList
-	export var nextBlockId BlockId
-	export var returnLine LineNumber
+	export var sourceFilePath as FilePath
+	export var paramCount as ParamCount
+	export var blockRefs as BlockRefList
+	export var nextBlockId as BlockId
+	export var returnLine as LineNumber
 	// Line and column of the function-name token in the declaring source file.
 	// Set by the parser after IrFunction.create(); zero for synthesized/restored
 	// functions. Used by SemanticCheck to locate function-level diagnostics.
-	export var nameLine LineNumber
-	export var nameColumn ColumnNumber
+	export var nameLine as LineNumber
+	export var nameColumn as ColumnNumber
 
 	// --- Maxon-phase types (populated by parser, consumed by LowerMaxonToStd) ---
-	export var maxonReturnType MaxonReturnType
-	export var maxonParamTypes MaxonTypeArray
+	export var maxonReturnType as MaxonReturnType
+	export var maxonParamTypes as MaxonTypeArray
 	// `throws E` clause from the function declaration. `ThrowsClause.none`
 	// for non-throwing functions; `ThrowsClause.throwing(name)` carries the
 	// bare error-enum name. Recorded by the parser at decl time; Phase 4 of
 	// the interfaces plan reads this to drive error-flag ABI lowering.
 	// Stdlib-restored and synthesized helpers default to `ThrowsClause.none`.
-	export var throwsTypeName ThrowsClause
+	export var throwsTypeName as ThrowsClause
 	// Persistent symbol table for this function. The parser hands this off
 	// when parsing completes. Today it carries the flat declare/lookup state
 	// at end-of-parse; future iterations will grow a nested tree keyed on
 	// source byte ranges so the name-resolution query (used by the Maxon→Std
 	// lowerer and the future LSP) can resolve shadowing at any cursor
 	// position. Std-phase functions leave this empty.
-	export var scope Scope
+	export var scope as Scope
 
 	// --- Std/MIR/Target-phase types (populated by LowerMaxonToStd) ---
-	export var returnType StdReturnType
-	export var paramTypes StdTypeArray
+	export var returnType as StdReturnType
+	export var paramTypes as StdTypeArray
 
 	// --- Phase-specific fields (zero/empty when not applicable) ---
 	// Total number of slot-addressed variables used by the ISel.
 	// The register allocator uses this to place spill slots below the variable area.
-	export var varSlotCount VarSlot
+	export var varSlotCount as VarSlot
 	// Spill area size in bytes, computed by the register allocator.
-	export var spillSize StackSize
+	export var spillSize as StackSize
 	// Running tally of bytes the function needs on the stack for its frame
 	// (locals + spills + callee-save area). Bumped by each pass that allocates
 	// space — ISel when it hands out a temp slot, the spill manager when it
@@ -103,7 +103,7 @@ export type IrFunction
 	// a single `sub rsp, N` (plus the saves). If a later pass proves a slot
 	// or save is unneeded, it should decrement the counter so the prologue
 	// stays accurate without a re-scan.
-	export var stackSize StackSize
+	export var stackSize as StackSize
 	// Bytes the function needs reserved at the bottom of its frame for
 	// outgoing call args that overflow the per-domain register file (i.e.,
 	// args 8+ on the int side, 9+ on the FP side under the internal CC).
@@ -111,10 +111,10 @@ export type IrFunction
 	// function; the prologue/epilogue pass folds that into `stackSize`. The
 	// caller writes overflow args to `[rsp+0..outgoingArgSize)` before each
 	// `call` and the callee reads them at `[rbp + 0x10 + slot*8]`.
-	export var outgoingArgSize StackSize
+	export var outgoingArgSize as StackSize
 	// Callee-saved registers used by this function (set by PrologueEpiloguePass).
-	export var calleeSavedGprs RegIntArray
-	export var calleeSavedFps RegIntArray
+	export var calleeSavedGprs as RegIntArray
+	export var calleeSavedFps as RegIntArray
 
 	// Phase 11.4: trailing-param convention. A generic function carries an
 	// implicit `__layout_param` after user args (and after `__env` for a
@@ -126,15 +126,15 @@ export type IrFunction
 	// generic functions; LowerMaxonToStd populates it as it discovers a
 	// generic body. Each entry's (paramName, requiredTraitName) names the
 	// `(typeParam, interface)` pair its trailing slot witnesses.
-	export var hasImplicitLayoutParam bool
-	export var implicitWitnessConstraints WhereClauseArray
+	export var hasImplicitLayoutParam as bool
+	export var implicitWitnessConstraints as WhereClauseArray
 
 	// Phase 11.5: deterministic content hash over signature + body shape,
 	// computed by computeFunctionContentHash after resolveTypes. Used as the
 	// per-function query cache key — a hit means the cached MIR/code is
 	// reusable, a miss invalidates it. Zero is the "not yet stamped"
 	// sentinel; the query layer stamps it lazily on first reach.
-	export var contentHash ContentHash
+	export var contentHash as ContentHash
 
 	// Phase 11/C1.b: parallel array indexed by VarSlot id, recording the
 	// source-level MaxonType of every slot allocated by the parser/lowering.
@@ -143,7 +143,7 @@ export type IrFunction
 	// type-parameter slot and route its drop through the descriptor's
 	// destroyFunc rather than emitting a no-op `drop`. Empty for restored
 	// stdlib functions (no IR body) and Std-phase synthesized helpers.
-	export var slotMaxonTypes MaxonTypeArray
+	export var slotMaxonTypes as MaxonTypeArray
 
 	// Phase 15a: function purity (no side effects, no global mutation, no
 	// param mutation, transitively pure call graph). Computed by
@@ -154,7 +154,7 @@ export type IrFunction
 	// through the call graph. Not serialized — stdlib functions get their
 	// purity computed at every fresh build, but skipped on the cache-restore
 	// path since `discarded-results` is a user-code lint.
-	export var isPure bool
+	export var isPure as bool
 
 	// Create an IrFunction at the Maxon phase. Maxon-phase type fields are
 	// populated; Std-phase fields are left at defaults. Visibility defaults

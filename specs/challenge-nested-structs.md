@@ -20,8 +20,8 @@ Structs can contain other structs as fields. The compiler must correctly compute
 typealias Integer = int(i64.min to i64.max)
 
 type Inner
-	export var x Integer
-	export var y Integer
+	export var x as Integer
+	export var y as Integer
 
 	static function create(x Integer, y Integer) returns Self
 		return Self{x: x, y: y}
@@ -29,8 +29,8 @@ type Inner
 end 'Inner'
 
 type Outer
-	export var inner Inner
-	export var z Integer
+	export var inner as Inner
+	export var z as Integer
 
 	static function create(inner Inner, z Integer) returns Self
 		return Self{inner: inner, z: z}
@@ -53,7 +53,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Inner
-	export var value Integer
+	export var value as Integer
 
 	static function create(value Integer) returns Self
 		return Self{value: value}
@@ -61,7 +61,7 @@ type Inner
 end 'Inner'
 
 type Outer
-	export var inner Inner
+	export var inner as Inner
 
 	static function create(inner Inner) returns Self
 		return Self{inner: inner}
@@ -88,7 +88,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Level1
-	export var value Integer
+	export var value as Integer
 
 	static function create(value Integer) returns Self
 		return Self{value: value}
@@ -96,7 +96,7 @@ type Level1
 end 'Level1'
 
 type Level2
-	export var inner Level1
+	export var inner as Level1
 
 	static function create(inner Level1) returns Self
 		return Self{inner: inner}
@@ -104,7 +104,7 @@ type Level2
 end 'Level2'
 
 type Level3
-	export var inner Level2
+	export var inner as Level2
 
 	static function create(inner Level2) returns Self
 		return Self{inner: inner}
@@ -128,8 +128,8 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-	export var x Integer
-	export var y Integer
+	export var x as Integer
+	export var y as Integer
 
 	static function create(x Integer, y Integer) returns Self
 		return Self{x: x, y: y}
@@ -137,8 +137,8 @@ type Point
 end 'Point'
 
 type Line
-	export var start Point
-	export var finish Point
+	export var start as Point
+	export var finish as Point
 
 	static function create(start Point, finish Point) returns Self
 		return Self{start: start, finish: finish}

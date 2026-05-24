@@ -30,8 +30,8 @@ export union QueryKey
 end 'QueryKey'
 
 export type Dependency
-		export var dependent QueryKey
-		export var dependency QueryKey
+		export var dependent as QueryKey
+		export var dependency as QueryKey
 
 		static function create(dependent QueryKey, dependency QueryKey) returns Self
 			return Self{dependent: dependent, dependency: dependency}
@@ -41,7 +41,7 @@ end 'Dependency'
 typealias DependencyArray = Array with Dependency
 
 export type Database
-		export var dependencies DependencyArray
+		export var dependencies as DependencyArray
 
 		static function create(dependencies DependencyArray) returns Self
 			return Self{dependencies: dependencies}
@@ -100,7 +100,7 @@ export union Tag
 end 'Tag'
 
 type Entry
-		export var tag Tag
+		export var tag as Tag
 
 		static function create(tag Tag) returns Self
 			return Self{tag: tag}
@@ -110,7 +110,7 @@ end 'Entry'
 typealias EntryArray = Array with Entry
 
 type Store
-		export var entries EntryArray
+		export var entries as EntryArray
 
 		static function create(entries EntryArray) returns Self
 			return Self{entries: entries}
@@ -155,8 +155,8 @@ export union Key
 end 'Key'
 
 type Dep
-		export var source Key
-		export var target Key
+		export var source as Key
+		export var target as Key
 
 		static function create(source Key, target Key) returns Self
 			return Self{source: source, target: target}
@@ -166,7 +166,7 @@ end 'Dep'
 typealias DepArray = Array with Dep
 
 type State
-		export var deps DepArray
+		export var deps as DepArray
 
 		static function create(deps DepArray) returns Self
 			return Self{deps: deps}

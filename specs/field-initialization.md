@@ -26,7 +26,7 @@ non-default, non-self-assigned field is also E3086.
 ```text
 type Counter
 	export var value = 0       // default: rule 1
-	export var version Integer // no default
+	export var version as Integer // no default
 end 'Counter'
 ```
 
@@ -41,8 +41,8 @@ value:
 
 ```text
 type Counter
-	export var value Integer
-	export var version Integer
+	export var value as Integer
+	export var version as Integer
 
 	export static function create(initial Integer) returns Self
 		self.value = initial
@@ -63,8 +63,8 @@ conditional write that reaches the return only on some paths is rejected.
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-	export var x Integer
-	export var y Integer
+	export var x as Integer
+	export var y as Integer
 
 	export static function make(x Integer, y Integer) returns Self
 		return Self{x: x, y: y}
@@ -128,7 +128,7 @@ typealias Integer = int(i64.min to i64.max)
 
 type Mixed
 	export var a = 10
-	export var b Integer
+	export var b as Integer
 
 	export static function make(b Integer) returns Self
 		return Self{b: b}
@@ -150,8 +150,8 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type P
-	export var x Integer
-	export var y Integer
+	export var x as Integer
+	export var y as Integer
 
 	export static function make() returns Self
 		return Self{}
@@ -173,8 +173,8 @@ error E3086: specs/fragments/field-initialization/empty-literal-no-defaults-erro
 typealias Integer = int(i64.min to i64.max)
 
 type P
-	export var x Integer
-	export var y Integer
+	export var x as Integer
+	export var y as Integer
 
 	export static function make(x Integer) returns Self
 		return Self{x: x}
@@ -196,8 +196,8 @@ error E3086: specs/fragments/field-initialization/missing-field-errors.test:10:1
 typealias Integer = int(i64.min to i64.max)
 
 type Q
-	var hidden Integer
-	export var shown Integer
+	var hidden as Integer
+	export var shown as Integer
 
 	export static function make(s Integer) returns Self
 		return Self{shown: s}
@@ -219,8 +219,8 @@ error E3086: specs/fragments/field-initialization/missing-non-exported-errors.te
 typealias Integer = int(i64.min to i64.max)
 
 type Counter
-	export var value Integer
-	export var version Integer
+	export var value as Integer
+	export var version as Integer
 
 	export static function make(initial Integer) returns Self
 		self.value = initial
@@ -244,7 +244,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Branched
-	export var value Integer
+	export var value as Integer
 
 	export static function make(sign bool) returns Self
 		if sign 'br'
@@ -271,7 +271,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Broken
-	export var value Integer
+	export var value as Integer
 
 	export static function make(sign bool) returns Self
 		if sign 'br'
@@ -296,7 +296,7 @@ error E3086: specs/fragments/field-initialization/factory-self-assign-one-branch
 typealias Integer = int(i64.min to i64.max)
 
 type LoopOnly
-	export var value Integer
+	export var value as Integer
 
 	export static function make(limit Integer) returns Self
 		var i = 0
@@ -323,7 +323,7 @@ error E3086: specs/fragments/field-initialization/factory-self-assign-loop-only-
 typealias Integer = int(i64.min to i64.max)
 
 type TwoReturns
-	export var value Integer
+	export var value as Integer
 
 	export static function make(sign bool) returns Self
 		if sign 'br'

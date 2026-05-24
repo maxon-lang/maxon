@@ -27,7 +27,7 @@ The builtin types are:
 typealias Int = int(i64.min to i64.max)
 
 type MyBuffer uses Element
-  var managed __ManagedMemory
+  var managed as __ManagedMemory
 end 'MyBuffer'
 ```
 

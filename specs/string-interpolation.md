@@ -100,8 +100,8 @@ Custom types can be interpolated by implementing the `Stringable` interface:
 typealias Score = int(i64.min to i64.max)
 
 type Point implements Stringable
-	var x Score
-	var y Score
+	var x as Score
+	var y as Score
 
 	function toString() returns String
 		return "({self.x}, {self.y})"
@@ -703,8 +703,8 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Pair implements Stringable
-	var first Integer
-	var second Integer
+	var first as Integer
+	var second as Integer
 
 	function toString() returns String
 		return "[{first}, {second}]"
@@ -736,7 +736,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Counter implements Stringable, FormattedStringable
-	var value Integer
+	var value as Integer
 
 	function toString() returns String
 		return "{value}"
@@ -777,8 +777,8 @@ Counter(value=42)
 typealias Integer = int(i64.min to i64.max)
 
 type Name implements Stringable
-	var first String
-	var last String
+	var first as String
+	var last as String
 
 	function toString() returns String
 		return "{first} {last}"
@@ -790,7 +790,7 @@ type Name implements Stringable
 end 'Name'
 
 type Age implements Stringable
-	var years Integer
+	var years as Integer
 
 	function toString() returns String
 		return "{years} years old"

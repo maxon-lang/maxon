@@ -23,7 +23,7 @@ function double(n Integer) returns Integer
 end 'double'
 
 type Box
-	export var value Integer
+	export var value as Integer
 
 	export static function create(v Integer) returns Box
 		return Box{value: v}

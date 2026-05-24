@@ -57,7 +57,7 @@ interface Greeter
 end 'Greeter'
 
 type Hello implements Greeter
-	let value Integer
+	let value as Integer
 
 	function greet() returns Integer
 		return value + 1
@@ -92,7 +92,7 @@ interface Scorer
 end 'Scorer'
 
 type Alpha implements Scorer
-	let n Integer
+	let n as Integer
 
 	function score() returns Integer
 		return n * 2
@@ -104,7 +104,7 @@ type Alpha implements Scorer
 end 'Alpha'
 
 type Beta implements Scorer
-	let n Integer
+	let n as Integer
 
 	function score() returns Integer
 		return n * 3
@@ -140,7 +140,7 @@ interface Printer
 end 'Printer'
 
 type Thing implements Printer
-	let label Integer
+	let label as Integer
 
 	function show()
 		print("{label}\n")
@@ -179,7 +179,7 @@ interface Adder
 end 'Adder'
 
 type Accumulator implements Adder
-	let total Integer
+	let total as Integer
 
 	function add(n Integer) returns Integer
 		return total + n
@@ -215,8 +215,8 @@ interface Shape
 end 'Shape'
 
 type Rect implements Shape
-	let w Integer
-	let h Integer
+	let w as Integer
+	let h as Integer
 
 	function area() returns Integer
 		return w * h
@@ -255,7 +255,7 @@ interface Describable
 end 'Describable'
 
 type Widget implements Describable
-	let id Integer
+	let id as Integer
 
 	function describe() returns Integer
 		return id
@@ -267,7 +267,7 @@ type Widget implements Describable
 end 'Widget'
 
 type Gadget implements Describable
-	let id Integer
+	let id as Integer
 
 	function describe() returns Integer
 		return id * 10
@@ -309,7 +309,7 @@ interface Runnable
 end 'Runnable'
 
 type NotRunnable
-	let x Integer
+	let x as Integer
 
 	static function create(x Integer) returns Self
 		return Self{x: x}
@@ -344,7 +344,7 @@ interface Derived extends Base
 end 'Derived'
 
 type Impl implements Derived
-	let n Integer
+	let n as Integer
 
 	function base() returns Integer
 		return n
@@ -387,7 +387,7 @@ interface Counter
 end 'Counter'
 
 type SimpleCounter implements Counter
-	let n Integer
+	let n as Integer
 
 	function count() returns Integer
 		return n
@@ -478,7 +478,7 @@ interface Producer
 end 'Producer'
 
 type Widget implements Producer
-	let value Integer
+	let value as Integer
 
 	function produce() returns Integer
 		return value
@@ -490,7 +490,7 @@ type Widget implements Producer
 end 'Widget'
 
 type Factory
-	let seed Integer
+	let seed as Integer
 
 	function make() returns Producer
 		return Widget.create(seed)
@@ -527,7 +527,7 @@ interface Worker
 end 'Worker'
 
 type SumWorker implements Worker
-	let tag Integer
+	let tag as Integer
 
 	function process(values IntArray) returns Integer
 		var total = 0
@@ -584,7 +584,7 @@ interface Tagged
 end 'Tagged'
 
 type Marker implements Tagged
-	let n Integer
+	let n as Integer
 
 	function tag() returns Integer
 		return n
@@ -615,7 +615,7 @@ end 'Marker'
 //      name, so the resolved MaxonStruct came back with an empty
 //      TypeName at the next use.
 type Holder
-	export let t Tagged
+	export let t as Tagged
 
 	static function create(t Tagged) returns Self
 		return Self{t: t}

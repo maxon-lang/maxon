@@ -1327,8 +1327,8 @@ end 'maxonReturnTypeLowersToFloat'
 // have to issue two project lookups. Misses correspond to bare-enum and
 // non-enum scrutinees, which take the existing direct-cmp lowering path.
 type UnionTypeLookup
-	export var hasType bool
-	export var value EnumType
+	export var hasType as bool
+	export var value as EnumType
 
 	export static function miss() returns UnionTypeLookup
 		// `value` is unread on miss; supply a zeroed EnumType so the
@@ -1462,10 +1462,10 @@ end 'ConformanceLayoutLookupError'
 // when the receiver isn't a registered struct or the struct has no field
 // of that name; callers report E3xxx and bail.
 type FieldHit
-	export var offset FieldOffset
-	export var fieldType MaxonType
-	export var isMutable bool
-	export var structName String
+	export var offset as FieldOffset
+	export var fieldType as MaxonType
+	export var isMutable as bool
+	export var structName as String
 
 	export static function create(offset FieldOffset, fieldType MaxonType, isMutable bool, structName String) returns FieldHit
 		return Self{offset: offset, fieldType: fieldType, isMutable: isMutable, structName: structName}
@@ -1481,8 +1481,8 @@ end 'FieldLookupError'
 // mismatch, non-literal label, and missing-blob — each of which has already
 // been reported as a compile-time error before the throw.
 type UcdReady
-	export var label String
-	export var operand ValueId
+	export var label as String
+	export var operand as ValueId
 
 	export static function create(label String, operand ValueId) returns UcdReady
 		return Self{label: label, operand: operand}
@@ -1497,9 +1497,9 @@ end 'UcdLoadError'
 // for the duration of a helper body, then restore it so any future caller
 // sees the original outer-function state.
 type LoweringFuncStateSnapshot
-	export var funcIdRef ValueIdRef
-	export var nameToId NameToValueIdMap
-	export var valueType MaxonTypeArray
+	export var funcIdRef as ValueIdRef
+	export var nameToId as NameToValueIdMap
+	export var valueType as MaxonTypeArray
 
 	export static function create(funcIdRef ValueIdRef, nameToId NameToValueIdMap, valueType MaxonTypeArray) returns LoweringFuncStateSnapshot
 		return Self{funcIdRef: funcIdRef, nameToId: nameToId, valueType: valueType}
@@ -1518,16 +1518,16 @@ end 'NotAStringLiteral'
 // ============================================================
 
 type MaxonToStdLowering
-	var pipeline PassPipeline
-	var maxonModule MaxonModule
-	var project Project
-	var globalData GlobalDataTable
-	var stdModule StdModule
+	var pipeline as PassPipeline
+	var maxonModule as MaxonModule
+	var project as Project
+	var globalData as GlobalDataTable
+	var stdModule as StdModule
 	// Per-function name→id map. Reset at the top of each function's lowering.
-	var nameToId NameToValueIdMap
+	var nameToId as NameToValueIdMap
 	// Per-function ValueId ref. Starts at `paramCount` so that parameter
 	// IDs 0..paramCount-1 remain reserved by Std-ABI convention.
-	var funcIdRef ValueIdRef
+	var funcIdRef as ValueIdRef
 	// Per-function context for resolving cross-declaration name references
 	// the parser now leaves symbolic. `currentNamespace` is the function's
 	// module namespace ("" for free functions before qualification, "stdlib"
@@ -1536,43 +1536,43 @@ type MaxonToStdLowering
 	// name for methods; used by `selfFieldLoad`/`selfFieldStore` to find
 	// the field offset, and as the fallback callee context for any sibling
 	// resolution that isn't already encoded in the op's CallContext.
-	var currentNamespace String
-	var currentTypeName String
+	var currentNamespace as String
+	var currentTypeName as String
 	// Qualified name of the function currently being lowered. Used to build
 	// `project.charByteLiterals` lookup keys at call sites so char-byte
 	// arg coercion (raw int → Character struct) is keyed under the right
 	// per-function value-name space.
-	var currentFuncName String
+	var currentFuncName as String
 	// Source file path of the function currently being lowered, recovered
 	// from its entry block's BlockSourceInfo. Diagnostics emitted from the
 	// lowering pass (E3005 at call sites, etc.) anchor on this so file:line
 	// reporting matches the user's source layout. Reset when a new function
 	// starts lowering.
-	var currentFilePath String
+	var currentFilePath as String
 	// Function-level return type of the function currently being lowered.
 	// Used by `throw` lowering to emit a default primary return value of
 	// the correct family (i64 vs f64) — the caller's `try ... otherwise`
 	// branch ignores the primary value when the error flag is non-zero, so
 	// any in-range default works. Reset per function in `lower()`.
-	var currentReturnType MaxonReturnType
+	var currentReturnType as MaxonReturnType
 	// Phase 6: tracks whether the function currently being lowered is throwing
 	// (non-empty `throwsTypeName`). Drives the `ret` → `errorReturn` rewrite in
 	// `lowerTerminator` so every exit of a throwing function writes both
 	// registers per the multi-value-return ABI.
-	var currentFuncIsThrowing bool
+	var currentFuncIsThrowing as bool
 	// Per-function value-type map: tracks each SSA value's Maxon-level type.
 	// Populated as ops are lowered so that consumers (fieldLoad/Store,
 	// methodCall, mixed-family binops) can resolve receiver types and pick
 	// the right opcode. Reset when a new function starts lowering. The
 	// float-ness predicate (`getIsFloat`) is now a derived helper that
 	// matches on the stored type.
-	var valueType MaxonTypeArray
+	var valueType as MaxonTypeArray
 	// Scratch buffers reused by slotArgsForCall to avoid per-call alloc.
 	// clear()+resize() each call; capacity converges to high-water mark.
 	// The result array is still freshly allocated per call (StdOp.call
 	// retains it), so the scratch is never returned directly.
-	var slotIdsScratch ValueIdArray
-	var slotFilledScratch BoolArray
+	var slotIdsScratch as ValueIdArray
+	var slotFilledScratch as BoolArray
 	// Stage E (closures): per-function map from a function-pointer
 	// ValueId to the matching env-pointer ValueId. Populated when:
 	//   - lowering a function-typed parameter slot (the param's fn-pointer
@@ -1582,58 +1582,58 @@ type MaxonToStdLowering
 	//     (env = the freshly-mrt_alloc'd block).
 	// Read at every `indirectCall` lowering site to recover the env to
 	// pass alongside the callee. Reset per function in `lower()`.
-	var fnEnvVarNames FnEnvMap
+	var fnEnvVarNames as FnEnvMap
 	// Stage E (closures): per-function value-id of the lifted closure's
 	// hidden `__env` parameter. Written once at function-entry lowering
 	// when the function's last param is the synthetic env, read by
 	// every `closureEnvLoad` op the body emits. 0 means "not a lifted
 	// closure body" — `closureEnvLoad` would never appear in such a
 	// function so the unused-zero is fine.
-	var liftedEnvValueId ValueId
+	var liftedEnvValueId as ValueId
 	// Phase 11.4: per-function ValueId of the synthetic `__layout_param`
 	// trailing param. 0 means "function has no implicit layout param" — its
 	// body never references the descriptor so leaving the slot at 0 is
 	// inert. Set when the function is detected as generic at lowering entry.
-	var implicitLayoutValueId ValueId
+	var implicitLayoutValueId as ValueId
 	// Phase 11.4: per-function ValueIds of the synthetic `__witness_*`
 	// trailing params, parallel to `currentMaxonFunc.implicitWitnessConstraints`
 	// (one slot per `(typeParam, interface)` constraint, in declaration order).
 	// Empty when the function has no where-clauses; populated when the
 	// function-body emission resolves the trailing slot ids.
-	var implicitWitnessValueIds ValueIdArray
+	var implicitWitnessValueIds as ValueIdArray
 	// Stage E (closures): the IrFunction currently being lowered. Set at
 	// the top of each function's body walk and read by lowerClosureCreate
 	// to look up the OUTER function's `scope` for capture-slot resolution.
 	// The lowering walks `maxonModule.functions` in order; we can't reach
 	// for "the last function pushed to stdModule" because every function
 	// is pushed upfront in `transferFuncs`.
-	var currentMaxonFunc IrFunction
+	var currentMaxonFunc as IrFunction
 	// C1.c: per-function map from interface-typed slot id to its witness
 	// companion slot id. Populated by `assignInterfaceWitnessSlots` at
 	// transferFuncs time. Reset per function in `lower()` so the map
 	// reflects only the current function's interface slots.
-	var interfaceWitnessSlots InterfaceWitnessSlotMap
+	var interfaceWitnessSlots as InterfaceWitnessSlotMap
 	// C1.d: per-function map from a loaded interface-typed ValueId to the
 	// matching witness ValueId loaded from the companion slot. Populated by
 	// `lowerVarLoad` and consumed by `lowerMethodCall` for fat-pointer
 	// receiver dispatch.
-	var interfaceWitnessValueIds InterfaceWitnessValueIdMap
+	var interfaceWitnessValueIds as InterfaceWitnessValueIdMap
 	// Maps a String-literal ValueId back to its parser-interned StringId so
 	// builtin-lowering can recover the literal bytes for arguments that the
 	// parser would not normally surface (e.g. the label argument of
 	// `__Builtins.ucdByteAt("__ucd_bmp", offset)`). Populated by
 	// `lowerStringConst`; queried by `recoverStringLiteral`.
-	var stringLiteralProvenance StringLiteralProvenanceMap
+	var stringLiteralProvenance as StringLiteralProvenanceMap
 	// Phase 9 Stage 1: set of enum names whose `__name` helper has been
 	// requested by at least one `.name` field-load. Synthesized at the tail
 	// of `lower()` (one helper per enum) — same lazy-synthesis pattern as
 	// `synthesizeWitnessThunks`. Plain string set; duplicates are deduped by
 	// insertion so the synthesis pass walks each enum exactly once.
-	var pendingEnumNameHelpers EnumNameHelperSet
+	var pendingEnumNameHelpers as EnumNameHelperSet
 	// Function-backed enums: set of enum names whose `__fnRaw` helper has
 	// been requested by at least one `.rawValue` lowering. Mirrors the
 	// pendingEnumNameHelpers pattern; emitted at the tail of `lower()`.
-	var pendingEnumFnRawHelpers EnumNameHelperSet
+	var pendingEnumFnRawHelpers as EnumNameHelperSet
 	// Phase 10 (closures): set of synthesized thunk names already scheduled
 	// by `scheduleFnRefThunk`. The thunk for a free function `foo` is
 	// `__fnref_foo` and wraps the target with the indirect-call ABI's
@@ -1641,8 +1641,8 @@ type MaxonToStdLowering
 	// signature. The parallel `pendingFnRefThunkTargets` list records the
 	// original target funcName in insertion order so `synthesizeFnRefThunks`
 	// can rebuild the thunks deterministically at the tail of `lower()`.
-	var pendingFnRefThunks EnumNameHelperSet
-	var pendingFnRefThunkTargets StringArray
+	var pendingFnRefThunks as EnumNameHelperSet
+	var pendingFnRefThunkTargets as StringArray
 
 	export static function create(pipeline PassPipeline, maxonModule MaxonModule, project Project, globalData GlobalDataTable) returns MaxonToStdLowering
 		return Self{
@@ -8491,8 +8491,8 @@ type MaxonToStdLowering
 end 'MaxonToStdLowering'
 
 export type MathIntrinsicHit
-	export var opcode StdArithUnaryOpcode
-	export var resultType MaxonType
+	export var opcode as StdArithUnaryOpcode
+	export var resultType as MaxonType
 
 	export static function create(opcode StdArithUnaryOpcode, resultType MaxonType) returns MathIntrinsicHit
 		return Self{opcode: opcode, resultType: resultType}
@@ -8500,8 +8500,8 @@ export type MathIntrinsicHit
 end 'MathIntrinsicHit'
 
 export type MathBinaryIntrinsicHit
-	export var opcode StdArithBinaryOpcode
-	export var resultType MaxonType
+	export var opcode as StdArithBinaryOpcode
+	export var resultType as MaxonType
 
 	export static function create(opcode StdArithBinaryOpcode, resultType MaxonType) returns MathBinaryIntrinsicHit
 		return Self{opcode: opcode, resultType: resultType}
@@ -8581,8 +8581,8 @@ export enum InternalsBridgeLookupError implements Error
 end 'InternalsBridgeLookupError'
 
 export type InternalsRuntimeCallHit
-	export var callee String
-	export var arity VarSlot
+	export var callee as String
+	export var arity as VarSlot
 
 	export static function create(callee String, arity VarSlot) returns InternalsRuntimeCallHit
 		return Self{callee: callee, arity: arity}
@@ -8739,9 +8739,9 @@ export enum SubprocessReturnShape
 end 'SubprocessReturnShape'
 
 export type SubprocessBuiltinHit
-	export var callee String
-	export var arity VarSlot
-	export var returnShape SubprocessReturnShape
+	export var callee as String
+	export var arity as VarSlot
+	export var returnShape as SubprocessReturnShape
 
 	export static function create(callee String, arity VarSlot, returnShape SubprocessReturnShape) returns SubprocessBuiltinHit
 		return Self{callee: callee, arity: arity, returnShape: returnShape}
@@ -9069,8 +9069,8 @@ end 'ResolvedCalleeParam'
 // `implicitWitnessValueIds` / `implicitWitnessConstraints`; `interfaceName`
 // is the trait the chosen constraint requires.
 type MatchedConstraint
-	export var constraintIndex ParsedInt
-	export var interfaceName String
+	export var constraintIndex as ParsedInt
+	export var interfaceName as String
 
 	export static function create(constraintIndex ParsedInt, interfaceName String) returns MatchedConstraint
 		return Self{constraintIndex: constraintIndex, interfaceName: interfaceName}

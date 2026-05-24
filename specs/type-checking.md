@@ -85,13 +85,13 @@ error E3005: specs/fragments/type-checking/function-call-primitive-where-struct-
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-	export var x Integer
-	export var y Integer
+	export var x as Integer
+	export var y as Integer
 end 'Point'
 
 type Size
-	export var w Integer
-	export var h Integer
+	export var w as Integer
+	export var h as Integer
 
 	static function create(w Integer, h Integer) returns Self
 		return Self{w: w, h: h}
@@ -129,7 +129,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 type Container
-	var items IntArray
+	var items as IntArray
 
 	function addWrong(s String)
 	items.push(s)
@@ -169,7 +169,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias FooArray = Array with Foo
 
 type Foo
-	let value Integer
+	let value as Integer
 
 	static function create(value Integer) returns Self
 		return Self{value: value}
@@ -193,7 +193,7 @@ A typealias defined after the type that uses it as a field should resolve correc
 typealias Integer = int(i64.min to i64.max)
 
 type Container
-	export var items ItemArray
+	export var items as ItemArray
 
 	static function create(items ItemArray) returns Self
 		return Self{items: items}
@@ -203,7 +203,7 @@ end 'Container'
 typealias ItemArray = Array with Item
 
 type Item
-	export let value Integer
+	export let value as Integer
 
 	static function create(value Integer) returns Self
 		return Self{value: value}

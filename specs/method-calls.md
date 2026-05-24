@@ -15,7 +15,7 @@ Methods are called using dot notation on an instance:
 
 ```text
 type Counter
-  var count int
+  var count as int
 
   function increment()
     count = count + 1
@@ -39,7 +39,7 @@ Methods can take parameters in addition to the implicit self:
 
 ```text
 type Adder
-  var value int
+  var value as int
 
   function add(n int)
     value = value + n
@@ -53,7 +53,7 @@ Methods can return values that can be used in expressions:
 
 ```text
 type Box
-  var value int
+  var value as int
 
   function getValue() returns int
     return value
@@ -74,7 +74,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Counter
-	var count Integer
+	var count as Integer
 
 	function increment()
 		count = count + 1
@@ -107,7 +107,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Adder
-	var total Integer
+	var total as Integer
 
 	function add(n Integer)
 		total = total + n
@@ -140,7 +140,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Box
-	var value Integer
+	var value as Integer
 
 	function getValue() returns Integer
 		return value
@@ -166,7 +166,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Calculator
-	var result Integer
+	var result as Integer
 
 	function addTwo(a Integer, b Integer)
 		result = result + a + b
@@ -197,7 +197,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Inner
-	var value Integer
+	var value as Integer
 
 	function get() returns Integer
 		return value
@@ -209,7 +209,7 @@ type Inner
 end 'Inner'
 
 type Outer
-	var inner Inner
+	var inner as Inner
 
 	function getInnerValue() returns Integer
 		return inner.get()
@@ -235,8 +235,8 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-	var x Integer
-	var y Integer
+	var x as Integer
+	var y as Integer
 
 	function moveBy(dx Integer, dy Integer)
 		x = x + dx
@@ -268,7 +268,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Value
-	var n Integer
+	var n as Integer
 
 	function isPositive() returns Integer
 		if n > 0 'positive'
@@ -297,7 +297,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Adder
-	var total Integer
+	var total as Integer
 
 	function addTwo(a Integer, b Integer)
 		total = total + a + b
@@ -324,7 +324,7 @@ error E3005: specs/fragments/method-calls/error-method-unnamed-args.test:19:4: S
 typealias Integer = int(i64.min to i64.max)
 
 type Calculator
-	var result Integer
+	var result as Integer
 
 	function compute(a Integer, b Integer, c Integer)
 		result = a + b * c
@@ -393,7 +393,7 @@ error E3005: specs/fragments/method-calls/error-static-method-unnamed-args.test:
 typealias Integer = int(i64.min to i64.max)
 
 type Counter
-	var count Integer
+	var count as Integer
 
 	function increment()
 		count = count + 1

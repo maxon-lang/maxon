@@ -242,27 +242,27 @@ export enum TokenKind
 end 'TokenKind'
 
 export type Token
-	export let kind TokenKind
+	export let kind as TokenKind
 	// Human-readable identifier text, kept as `String` for the many existing
 	// parser sites that compare against string literals ("if", "return", ...)
 	// and that route through diagnostic formatting. Future work will migrate
 	// those sites to byte-slice comparisons, at which point this field can be
 	// retired in favor of `valueBytes`.
-	export let value String
+	export let value as String
 	// Zero-copy byte slice of the original source span for this token. Future
 	// Maxon-IR ops (after Commit D) reference names as `ByteArray` slices; the
 	// parser plumbs `token.valueBytes` into those fields directly, avoiding
 	// a String-from-bytes round trip on the hot path.
 	//
 	// Note: EOF and synthetic tokens carry an empty `ByteArray`.
-	export let valueBytes ByteArray
-	export let line LineNumber
-	export let column ColumnNumber
+	export let valueBytes as ByteArray
+	export let line as LineNumber
+	export let column as ColumnNumber
 	// Byte offsets into the source buffer bracketing this token's span, used
 	// by the parser to compute op source ranges and by the LSP to map cursor
 	// positions back to ops. Both fields are 0 on EOF and synthetic tokens.
-	export let startByte ByteOffset
-	export let endByte ByteOffset
+	export let startByte as ByteOffset
+	export let endByte as ByteOffset
 
 	export static function create(kind TokenKind, value String, line LineNumber, column ColumnNumber, valueBytes ByteArray = ByteArray.create(), startByte ByteOffset = 0, endByte ByteOffset = 0) returns Token
 		return Self{kind: kind, value: value, valueBytes: valueBytes, line: line, column: column, startByte: startByte, endByte: endByte}
@@ -402,25 +402,25 @@ end 'emitFixedToken'
 // --- Lexer type ---
 
 type Lexer
-	var source String
-	var bytes ByteArray
-	var cursor ByteCursor
-	export var tokens TokenArray
-	var len CharOffset
-	export var line LineNumber
-	export var column ColumnNumber
+	var source as String
+	var bytes as ByteArray
+	var cursor as ByteCursor
+	export var tokens as TokenArray
+	var len as CharOffset
+	export var line as LineNumber
+	export var column as ColumnNumber
 	// Pending lexer error stashed by scanners that hit an unrecoverable
 	// state but still need to emit a partial token before unwinding via the
 	// shared CursorError path. Read by run() after CursorError surfaces;
 	// when set, run() throws the stashed LexerError instead of the generic
 	// unexpectedEof.
-	var pendingError LexerError
-	var hasPendingError bool
+	var pendingError as LexerError
+	var hasPendingError as bool
 	// Set by sub-scanners that complete a token whose final byte happens to
 	// be the last byte of the source (no trailing newline). They unwind via
 	// CursorError because that's the shared "done" channel; the flag lets
 	// run() distinguish "clean completion at EOF" from a truncated token.
-	var emittedAtEof bool
+	var emittedAtEof as bool
 
 	static function create(source String, bytes ByteArray, cursor ByteCursor) returns Lexer
 		return Self{source: source, bytes: bytes, cursor: cursor, tokens: TokenArray.create(), len: bytes.count(), line: 1, column: 1, pendingError: LexerError.unexpectedEof(0, column: 0), hasPendingError: false, emittedAtEof: false}
@@ -1270,9 +1270,9 @@ function isAlphaNum(b Byte) returns bool
 end 'isAlphaNum'
 
 export type KeywordInfo
-	export var kind TokenKind
-	export var helpText String
-	export var canHaveBlockLabel bool
+	export var kind as TokenKind
+	export var helpText as String
+	export var canHaveBlockLabel as bool
 
 	export static function create(kind TokenKind, helpText String, canHaveBlockLabel bool) returns KeywordInfo
 		return Self{kind: kind, helpText: helpText, canHaveBlockLabel: canHaveBlockLabel}

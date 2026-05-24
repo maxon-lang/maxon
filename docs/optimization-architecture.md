@@ -32,7 +32,7 @@ Layer 2: E-Graph Optimization Core
 Use equality saturation as the primary optimization mechanism:
 rust// Pseudocode for the optimizer
 fn optimize(program: SIR) -> SIR {
-    let mut egraph = EGraph::new();
+    let mut as egraph = EGraph::new();
     let root = egraph.add(program);
     
     // Apply ALL rewrite rules to saturation

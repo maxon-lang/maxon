@@ -60,8 +60,8 @@ end 'blk'                     // inner goes out of scope, rc = 1
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 type Point
-		export var x Integer
-		export var y Integer
+		export var x as Integer
+		export var y as Integer
 
 		static function create(x Integer, y Integer) returns Self
 			return Self{x: x, y: y}
@@ -81,7 +81,7 @@ end 'main'
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 type Box
-		export var value Integer
+		export var value as Integer
 
 		static function create(value Integer) returns Self
 			return Self{value: value}
@@ -104,7 +104,7 @@ end 'main'
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 type Item
-		export var val Integer
+		export var val as Integer
 
 		static function create(val Integer) returns Self
 			return Self{val: val}
@@ -124,7 +124,7 @@ end 'main'
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 type Data
-		export var n Integer
+		export var n as Integer
 
 		static function create(n Integer) returns Self
 			return Self{n: n}
@@ -145,8 +145,8 @@ end 'main'
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 type Pair
-		export var a Integer
-		export var b Integer
+		export var a as Integer
+		export var b as Integer
 
 		static function create(a Integer, b Integer) returns Self
 			return Self{a: a, b: b}
@@ -167,14 +167,14 @@ end 'main'
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 type Inner
-		export var val Integer
+		export var val as Integer
 
 		static function create(val Integer) returns Self
 			return Self{val: val}
 		end 'create'
 end 'Inner'
 type Outer
-		export var child Inner
+		export var child as Inner
 		export function setChild(c Inner)
 				child = c
 		end 'setChild'
@@ -198,7 +198,7 @@ end 'main'
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 type Result
-		export var code Integer
+		export var code as Integer
 
 		static function create(code Integer) returns Self
 			return Self{code: code}
@@ -221,7 +221,7 @@ end 'main'
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 type Entry
-		export var id Integer
+		export var id as Integer
 
 		static function create(id Integer) returns Self
 			return Self{id: id}
@@ -244,7 +244,7 @@ end 'main'
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 type Counter
-		export var val Integer
+		export var val as Integer
 
 		static function create(val Integer) returns Self
 			return Self{val: val}
@@ -273,7 +273,7 @@ end 'main'
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 type Wrapper
-		export var n Integer
+		export var n as Integer
 
 		static function create(n Integer) returns Self
 			return Self{n: n}
@@ -299,7 +299,7 @@ end 'main'
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 type Val
-		export var n Integer
+		export var n as Integer
 
 		static function create(n Integer) returns Self
 			return Self{n: n}
@@ -320,7 +320,7 @@ end 'main'
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 type Tag
-		export var id Integer
+		export var id as Integer
 
 		static function create(id Integer) returns Self
 			return Self{id: id}
@@ -341,7 +341,7 @@ end 'main'
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 type Cell
-		export var value Integer
+		export var value as Integer
 
 		static function create(value Integer) returns Self
 			return Self{value: value}
@@ -366,7 +366,7 @@ end 'main'
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 type Token
-		export var kind Integer
+		export var kind as Integer
 
 		static function create(kind Integer) returns Self
 			return Self{kind: kind}
@@ -389,7 +389,7 @@ end 'main'
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 type Fallback
-		export var n Integer
+		export var n as Integer
 
 		static function create(n Integer) returns Self
 			return Self{n: n}
@@ -412,7 +412,7 @@ end 'main'
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 type Score
-		export var points Integer
+		export var points as Integer
 
 		static function create(points Integer) returns Self
 			return Self{points: points}
@@ -439,7 +439,7 @@ end 'main'
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 type Num
-		export var v Integer
+		export var v as Integer
 
 		static function create(v Integer) returns Self
 			return Self{v: v}
@@ -464,7 +464,7 @@ end 'main'
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 type Config
-		export var level Integer
+		export var level as Integer
 
 		static function create(level Integer) returns Self
 			return Self{level: level}
@@ -487,8 +487,8 @@ end 'main'
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 type Item
-		export var name String
-		export var id Integer
+		export var name as String
+		export var id as Integer
 
 		static function create(name String, id Integer) returns Self
 			return Self{name: name, id: id}
@@ -526,14 +526,14 @@ second
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 type Inner
-		export var val Integer
+		export var val as Integer
 
 		static function create(val Integer) returns Self
 			return Self{val: val}
 		end 'create'
 end 'Inner'
 type Outer
-		export var child Inner
+		export var child as Inner
 
 		static function create(child Inner) returns Self
 			return Self{child: child}

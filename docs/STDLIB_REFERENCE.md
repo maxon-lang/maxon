@@ -183,12 +183,12 @@ Metadata about a file, returned by `File.info()`. All fields are obtained from a
 
 ```maxon
 export type FileInfo
-	export let size FileSize
-	export let modifiedTime Timestamp
-	export let createdTime Timestamp
-	export let accessedTime Timestamp
-	export let isDirectory bool
-	export let isReadOnly bool
+	export let size as FileSize
+	export let modifiedTime as Timestamp
+	export let createdTime as Timestamp
+	export let accessedTime as Timestamp
+	export let isDirectory as bool
+	export let isReadOnly as bool
 end 'FileInfo'
 ```
 
@@ -851,15 +851,15 @@ All overloads route through `Configuration.run()`. From an async context (`async
 
 ```maxon
 type Configuration
-	export var executable Executable
-	export var arguments StringArray
-	export var workingDirectory FilePath      // Empty path means "inherit"
-	export var environment Environment
-	export var standardInput InputSource
-	export var standardOutput OutputDestination
-	export var standardError OutputDestination
-	export var timeoutMs DurationMs           // 0 means "wait forever"
-	export var platformOptions PlatformOptions
+	export var executable as Executable
+	export var arguments as StringArray
+	export var workingDirectory as FilePath      // Empty path means "inherit"
+	export var environment as Environment
+	export var standardInput as InputSource
+	export var standardOutput as OutputDestination
+	export var standardError as OutputDestination
+	export var timeoutMs as DurationMs           // 0 means "wait forever"
+	export var platformOptions as PlatformOptions
 end 'Configuration'
 ```
 
@@ -901,11 +901,11 @@ end 'OutputDestination'
 
 ```maxon
 type CollectedOutput
-	export var status TerminationStatus
-	export var stdout String
-	export var stderr String
-	export var pid Pid
-	export var durationMs DurationMs
+	export var status as TerminationStatus
+	export var stdout as String
+	export var stderr as String
+	export var pid as Pid
+	export var durationMs as DurationMs
 end 'CollectedOutput'
 ```
 
@@ -932,8 +932,8 @@ end 'TerminationStatus'
 
 ```maxon
 type PlatformOptions
-	export var windowsHideWindow bool
-	export var windowsCreateNewProcessGroup bool
+	export var windowsHideWindow as bool
+	export var windowsCreateNewProcessGroup as bool
 end 'PlatformOptions'
 ```
 

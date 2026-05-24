@@ -19,8 +19,8 @@ Struct elements retrieved from an array in a loop inside a function must survive
 typealias Integer = int(i64.min to i64.max)
 
 type Node
-		export var value Integer
-		export var next Integer
+		export var value as Integer
+		export var next as Integer
 
 		static function create(value Integer, next Integer) returns Self
 			return Self{value: value, next: next}
@@ -30,8 +30,8 @@ end 'Node'
 typealias NodeArray = Array with Node
 
 type List
-		export var nodes NodeArray
-		export var head Integer
+		export var nodes as NodeArray
+		export var head as Integer
 
 		function pushFront(value Integer)
 				let node = Node.create(value, next: self.head)
@@ -72,8 +72,8 @@ Struct elements in array survive after being read in a loop inside a standalone 
 typealias Integer = int(i64.min to i64.max)
 
 type Pair
-		export var a Integer
-		export var b Integer
+		export var a as Integer
+		export var b as Integer
 
 		static function create(a Integer, b Integer) returns Self
 			return Self{a: a, b: b}
@@ -114,7 +114,7 @@ Multiple reads of the same struct array element in a function don't corrupt data
 typealias Integer = int(i64.min to i64.max)
 
 type Item
-		export var id Integer
+		export var id as Integer
 
 		static function create(id Integer) returns Self
 			return Self{id: id}

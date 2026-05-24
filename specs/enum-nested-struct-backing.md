@@ -13,12 +13,12 @@ Struct-backed enum raw values support nested struct literals. This enables compo
 
 ```text
 type Inner
-	export let value int(0 to 100)
+	export let value as int(0 to 100)
 end 'Inner'
 
 type Outer
-	export let inner Inner
-	export let flag bool
+	export let inner as Inner
+	export let flag as bool
 end 'Outer'
 
 enum Op
@@ -40,7 +40,7 @@ let f = op.rawValue.flag         // true
 typealias Latency = int(0 to 50)
 
 type OpMeta
-	export let latency Latency
+	export let latency as Latency
 
 	static function create(latency Latency) returns Self
 		return Self{latency: latency}
@@ -48,8 +48,8 @@ type OpMeta
 end 'OpMeta'
 
 type X64OpMeta
-	export let meta OpMeta
-	export let setsFlags bool
+	export let meta as OpMeta
+	export let setsFlags as bool
 
 	static function create(meta OpMeta, setsFlags bool) returns Self
 		return Self{meta: meta, setsFlags: setsFlags}
@@ -77,7 +77,7 @@ end 'main'
 typealias Latency = int(0 to 50)
 
 type OpMeta
-	export let latency Latency
+	export let latency as Latency
 
 	static function create(latency Latency) returns Self
 		return Self{latency: latency}
@@ -85,8 +85,8 @@ type OpMeta
 end 'OpMeta'
 
 type TargetMeta
-	export let meta OpMeta
-	export let setsFlags bool
+	export let meta as OpMeta
+	export let setsFlags as bool
 
 	static function create(meta OpMeta, setsFlags bool) returns Self
 		return Self{meta: meta, setsFlags: setsFlags}
@@ -117,9 +117,9 @@ end 'main'
 typealias Latency = int(0 to 50)
 
 type OpMeta
-	export let latency Latency
-	export let isMemory bool
-	export let isCall bool
+	export let latency as Latency
+	export let isMemory as bool
+	export let isCall as bool
 
 	static function create(latency Latency, isMemory bool, isCall bool) returns Self
 		return Self{latency: latency, isMemory: isMemory, isCall: isCall}
@@ -127,8 +127,8 @@ type OpMeta
 end 'OpMeta'
 
 type X64OpMeta
-	export let meta OpMeta
-	export let setsFlags bool
+	export let meta as OpMeta
+	export let setsFlags as bool
 
 	static function create(meta OpMeta, setsFlags bool) returns Self
 		return Self{meta: meta, setsFlags: setsFlags}
@@ -160,7 +160,7 @@ end 'main'
 typealias Latency = int(0 to 50)
 
 type Inner
-	export let latency Latency
+	export let latency as Latency
 
 	static function create(latency Latency) returns Self
 		return Self{latency: latency}
@@ -168,8 +168,8 @@ type Inner
 end 'Inner'
 
 type Outer
-	export let inner Inner
-	export let fast bool
+	export let inner as Inner
+	export let fast as bool
 
 	static function create(inner Inner, fast bool) returns Self
 		return Self{inner: inner, fast: fast}

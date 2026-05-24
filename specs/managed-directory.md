@@ -43,7 +43,7 @@ category: type-system
 
 ```text
 type DirSearch
-  var dir __ManagedDirectory
+  var dir as __ManagedDirectory
 
   static function open(pattern String) returns DirSearch throws SearchError
     let result = try __ManagedDirectory.openSearch(pattern.managed) otherwise throw SearchError.notFound
@@ -165,7 +165,7 @@ export enum TestFileError implements Error
 end 'TestFileError'
 
 type TestFile
-	export var file __ManagedFile
+	export var file as __ManagedFile
 
 	export static function openWrite(path __ManagedMemory) returns TestFile throws TestFileError
 		let wr = try __ManagedFile.openWrite(path) otherwise 'f'
@@ -180,7 +180,7 @@ export enum TestDirError implements Error
 end 'TestDirError'
 
 type TestDir
-	export var dir __ManagedDirectory
+	export var dir as __ManagedDirectory
 
 	export static function search(pattern __ManagedMemory) returns TestDir throws TestDirError
 		let handle = try __ManagedDirectory.openSearch(pattern) otherwise 'fail'

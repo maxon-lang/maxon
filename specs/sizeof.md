@@ -79,8 +79,8 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-	export var x Integer
-	export var y Integer
+	export var x as Integer
+	export var y as Integer
 end 'Point'
 
 function main() returns ExitCode
@@ -96,9 +96,9 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Vec3
-	export var x Integer
-	export var y Integer
-	export var z Integer
+	export var x as Integer
+	export var y as Integer
+	export var z as Integer
 end 'Vec3'
 
 function main() returns ExitCode
@@ -151,7 +151,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Sizer uses T
-	export var dummy T
+	export var dummy as T
 
 	export static function create(dummy T) returns Self
 		return Self{dummy: dummy}
@@ -178,8 +178,8 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Pair
-	export var a Integer
-	export var b Integer
+	export var a as Integer
+	export var b as Integer
 
 	static function create(a Integer, b Integer) returns Self
 		return Self{a: a, b: b}
@@ -187,7 +187,7 @@ type Pair
 end 'Pair'
 
 type Sizer uses T
-	export var dummy T
+	export var dummy as T
 
 	export static function create(dummy T) returns Self
 		return Self{dummy: dummy}

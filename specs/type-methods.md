@@ -17,7 +17,7 @@ Instance methods automatically receive `self` as the current instance:
 
 ```text
 type Counter
-  var count int
+  var count as int
 
   function increment()
     count = count + 1
@@ -68,8 +68,8 @@ Methods can access fields directly without `self.` prefix:
 
 ```text
 type Point
-  var x int
-  var y int
+  var x as int
+  var y as int
 
   function magnitude() returns int
     return x * x + y * y
@@ -85,7 +85,7 @@ end 'Point'
 typealias Integer = int(i64.min to i64.max)
 
 type Counter
-	var count Integer
+	var count as Integer
 
 	function increment()
 		count = count + 1
@@ -116,7 +116,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Adder
-	var total Integer
+	var total as Integer
 
 	function add(value Integer)
 		total = total + value
@@ -148,7 +148,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Calculator
-	var value Integer
+	var value as Integer
 
 	function double() returns Integer
 		return value * 2
@@ -174,7 +174,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Counter
-	var count Integer
+	var count as Integer
 
 	function increment()
 		count = count + 1
@@ -215,7 +215,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Value
-	var n Integer
+	var n as Integer
 
 	function add(x Integer)
 		n = n + x

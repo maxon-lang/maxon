@@ -13,7 +13,7 @@ Enums can use struct literals as backing values. Each case carries compile-time 
 
 ```text
 type Meta
-	export let latency int(0 to 50)
+	export let latency as int(0 to 50)
 end 'Meta'
 
 enum Instruction
@@ -36,7 +36,7 @@ All cases must use the same struct type. Struct field values must be compile-tim
 typealias Latency = int(0 to 50)
 
 type Meta
-	export let value Latency
+	export let value as Latency
 
 	static function create(value Latency) returns Self
 		return Self{value: value}
@@ -65,8 +65,8 @@ typealias Latency = int(0 to 100)
 typealias Throughput = int(0 to 10)
 
 type OpInfo
-	export let latency Latency
-	export let throughput Throughput
+	export let latency as Latency
+	export let throughput as Throughput
 
 	static function create(latency Latency, throughput Throughput) returns Self
 		return Self{latency: latency, throughput: throughput}
@@ -95,7 +95,7 @@ end 'main'
 typealias Weight = int(0 to 100)
 
 type Info
-	export let weight Weight
+	export let weight as Weight
 
 	static function create(weight Weight) returns Self
 		return Self{weight: weight}
@@ -124,7 +124,7 @@ end 'main'
 typealias Cost = int(0 to 100)
 
 type Metadata
-	export let cost Cost
+	export let cost as Cost
 
 	static function create(cost Cost) returns Self
 		return Self{cost: cost}
@@ -155,7 +155,7 @@ end 'main'
 typealias Latency = int(0 to 50)
 
 type Meta
-	export let latency Latency
+	export let latency as Latency
 
 	static function create(latency Latency) returns Self
 		return Self{latency: latency}
@@ -189,8 +189,8 @@ typealias Latency = int(0 to 100)
 typealias Throughput = int(0 to 10)
 
 type OpInfo
-	export let latency Latency
-	export let throughput Throughput
+	export let latency as Latency
+	export let throughput as Throughput
 
 	static function create(latency Latency, throughput Throughput) returns Self
 		return Self{latency: latency, throughput: throughput}
@@ -224,8 +224,8 @@ enum Priority
 end 'Priority'
 
 type TaskInfo
-	export let priority Priority
-	export let cost Cost
+	export let priority as Priority
+	export let cost as Cost
 end 'TaskInfo'
 
 enum Task
@@ -255,8 +255,8 @@ enum Mode
 end 'Mode'
 
 type Config
-	export let mode Mode
-	export let level Level
+	export let mode as Mode
+	export let level as Level
 
 	static function create(mode Mode, level Level) returns Self
 		return Self{mode: mode, level: level}
@@ -284,7 +284,7 @@ end 'main'
 typealias Value = int(0 to 100)
 
 type Meta
-	export let value Value
+	export let value as Value
 
 	static function create(value Value) returns Self
 		return Self{value: value}
@@ -311,7 +311,7 @@ error E3032: specs/fragments/enum-struct-backing/error.struct-backing-mixed.test
 typealias Value = int(0 to 100)
 
 type Meta
-	export let value Value
+	export let value as Value
 
 	static function create(value Value) returns Self
 		return Self{value: value}

@@ -20,8 +20,8 @@ Arrays can contain struct values. Each element is a complete copy of the struct.
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-	export var x Integer
-	export var y Integer
+	export var x as Integer
+	export var y as Integer
 
 	static function create(x Integer, y Integer) returns Self
 		return Self{x: x, y: y}
@@ -47,8 +47,8 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Pair
-	export var first Integer
-	export var second Integer
+	export var first as Integer
+	export var second as Integer
 
 	static function create(first Integer, second Integer) returns Self
 		return Self{first: first, second: second}
@@ -77,7 +77,7 @@ enum Color
 end 'Color'
 
 type Item
-	export var color Color
+	export var color as Color
 
 	static function create(color Color) returns Self
 		return Self{color: color}
@@ -115,7 +115,7 @@ enum Status
 end 'Status'
 
 type Task
-	export var status Status
+	export var status as Status
 
 	static function create(status Status) returns Self
 		return Self{status: status}

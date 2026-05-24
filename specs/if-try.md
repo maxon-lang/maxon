@@ -505,7 +505,7 @@ the same as bare-local receivers.
 typealias StrMap = Map with (String, String)
 
 type Holder
-	export var cache StrMap
+	export var cache as StrMap
 
 	static function create() returns Self
 		return Self{cache: StrMap.create()}
@@ -566,9 +566,9 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 type MultiManaged
-	export var numbers IntArray
-	export var text String
-	export var tag String
+	export var numbers as IntArray
+	export var text as String
+	export var tag as String
 
 	static function create(numbers IntArray, text String, tag String) returns Self
 		return Self{numbers: numbers, text: text, tag: tag}
@@ -614,8 +614,8 @@ typealias IntArray = Array with Int
 typealias StringArray = Array with String
 
 type Inner
-	export var name String
-	export var values IntArray
+	export var name as String
+	export var values as IntArray
 
 	static function create(name String, values IntArray) returns Self
 		return Self{name: name, values: values}
@@ -623,9 +623,9 @@ type Inner
 end 'Inner'
 
 type Outer
-	export var label String
-	export var inner Inner
-	export var tags StringArray
+	export var label as String
+	export var inner as Inner
+	export var tags as StringArray
 
 	static function create(label String, inner Inner, tags StringArray) returns Self
 		return Self{label: label, inner: inner, tags: tags}

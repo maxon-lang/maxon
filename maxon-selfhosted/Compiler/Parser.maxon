@@ -81,9 +81,9 @@ typealias ScanDepth = int(0 to 8)
 // and the lifted body's `closureEnvLoad` reads through env[i] to recover
 // the live value at call time.
 export type CaptureInfo
-	export var name String
-	export var captureType MaxonType
-	export var index ParsedInt
+	export var name as String
+	export var captureType as MaxonType
+	export var index as ParsedInt
 
 	export static function create(name String, captureType MaxonType, index ParsedInt) returns CaptureInfo
 		return Self{name: name, captureType: captureType, index: index}
@@ -93,24 +93,24 @@ end 'CaptureInfo'
 export typealias CaptureInfoArray = Array with CaptureInfo
 
 export type Parser
-	var project Project
+	var project as Project
 	// Original token array kept for absolute-index lookups (e.g. "previous
 	// token"). The cursor drives consumption; this array stays fixed.
-	var tokens TokenArray
-	var cursor TokenIter
-	var filePath FilePath
+	var tokens as TokenArray
+	var cursor as TokenIter
+	var filePath as FilePath
 	// Per-file compile root anchor used to derive this file's namespace from
 	// its on-disk path. User files take their project's rootPath; stdlib files
 	// use the parent of the `stdlib/` install dir; spec-fragment files use the
 	// fragment directory itself. Currently stored only — namespace derivation
 	// still runs off `filePath` alone; a later phase rewires `deriveNamespace`
 	// to relativize against this anchor.
-	var rootPath FilePath
+	var rootPath as FilePath
 	// Module namespace supplied by the caller — used to qualify declarations
 	// and resolve unqualified calls within this module.
-	var namespace String
+	var namespace as String
 	// Current type name when parsing inside a type declaration (for Self resolution)
-	var currentTypeName String
+	var currentTypeName as String
 	// Phase 11.0: bare names of the in-scope type parameters declared by the
 	// enclosing `type X uses A, B` (or `extension`/`function`) header. Set on
 	// type-body entry, cleared on type-body exit. `parseTypeRef` consults
@@ -118,51 +118,51 @@ export type Parser
 	// matching one of the entries lowers to `MaxonType.typeParameter(id)`
 	// instead of falling through to `internMaxonType` (which would treat the
 	// name as a regular `MaxonType.named`).
-	var currentTypeParams StringArray
+	var currentTypeParams as StringArray
 	// Phase 11.7: bare-name conformance list for the enclosing `type` body's
 	// `implements` clause. Set on type-body entry, cleared on body exit.
 	// `checkUnusedParameters` consults it to suppress E3012 on parameters of
 	// methods that satisfy an interface's required signature — those parameter
 	// names are dictated by the interface and may legitimately go unread in a
 	// stub or no-op implementation.
-	var currentTypeConformances ConformanceArray
+	var currentTypeConformances as ConformanceArray
 	// Visibility tier of the type currently being parsed. Set by `parseTypeDecl`
 	// at body-entry, cleared at body-exit. Static decls and instance methods
 	// inside the body inherit this — `module type T { static var f = 0 }`
 	// makes `T.f` module-scoped without a per-member modifier.
-	var currentTypeVisibility Visibility
+	var currentTypeVisibility as Visibility
 	// Visibility tier of the enum currently being parsed. Set by `parseEnumDecl`
 	// at body-entry, cleared at body-exit. Per-case top-level constants and
 	// the auto-injected typealias for the enum inherit this.
-	var currentEnumVisibility Visibility
-	var scope Scope
+	var currentEnumVisibility as Visibility
+	var scope as Scope
 	// Context stacks for break/continue and match
-	var loopStack LoopContextArray
-	var matchStack MatchContextArray
+	var loopStack as LoopContextArray
+	var matchStack as MatchContextArray
 	// Set when an unexpected statement token aborts the enclosing function body,
 	// mirroring the C# bootstrap compiler's throw-to-top-level recovery. Suppresses
 	// cascading E3013 (missing-return) and out-of-place `end` consumption.
-	var abortBody bool
+	var abortBody as bool
 	// Out-mode signal from `parseStatements`: set true once a real statement
 	// is consumed in the current invocation. `parseScopedStatementsRequireBody`
 	// flips it false before the call and reads it after to emit E3082 when no
 	// body was parsed. Nested calls save/restore the flag so an outer empty
 	// check isn't poisoned by an inner non-empty body.
-	var bodyStmtParsed bool
+	var bodyStmtParsed as bool
 	// Per-function unused-parameter and unused-local tracking. paramLocations
 	// records each parameter's declaration site; localVarLocations records
 	// each `let`/`var` declaration's site; referencedVars records every name
 	// read by identifier/assignment/dot-call paths in the body. All three are
 	// reset at the top of parseFunction and consulted by checkUnusedParameters.
-	var paramLocations ParamLocationArray
-	var localVarLocations ParamLocationArray
-	var referencedVars ReferencedVarSet
+	var paramLocations as ParamLocationArray
+	var localVarLocations as ParamLocationArray
+	var referencedVars as ReferencedVarSet
 	// Per-function counter for minting synthetic intermediate names (`$t0`,
 	// `$t1`, …). Reset to 0 at the top of each function parse. Each synthetic
 	// name is the ASCII byte sequence of `$t` + the integer, wrapped in a
 	// ByteArray so it flows as a zero-copy name slice through the Maxon IR.
 	// SSA numbering at the Std level is assigned later (in LowerMaxonToStd).
-	var synthNameCounter ParsedInt
+	var synthNameCounter as ParsedInt
 	// Per-Parser counter for minting unique helper-function names for
 	// parameter defaults (`__paramDefault_0`, `__paramDefault_1`, …). The
 	// parser synthesizes a zero-arg helper for each complex (non-simple-
@@ -170,43 +170,43 @@ export type Parser
 	// call to the helper. Counter is per-Parser-instance, so re-parsing the
 	// same file produces stable names — the stdlib cache relies on the
 	// names being deterministic across runs.
-	var paramDefaultHelperCounter ParsedInt
+	var paramDefaultHelperCounter as ParsedInt
 	// Grow-on-demand cache of synth-name ByteArrays, indexed by the counter
 	// value. Entries 0..K are populated lazily as freshSynthName is called;
 	// subsequent functions within the same Parser reuse the hot entries
 	// without re-allocating. Sub-parsers for string interpolation get their
 	// own small cache — lifetime matches the Parser instance.
-	var synthNameCache ByteArrayArray
+	var synthNameCache as ByteArrayArray
 	// Tracks the block expression-level emission is currently writing into,
 	// and the function that owns it. Bool short-circuit emission for `and`/`or`
 	// switches blocks mid-expression: the cond_br lands in the entry block,
 	// the rhs evaluates in a fresh side block, and we resume in a fresh merge
 	// block. Statement-level callers that emit further ops after parseExpression
 	// must read currentBlock to find the block control flow actually landed on.
-	var currentBlock IrBlock
-	var currentFunc IrFunction
+	var currentBlock as IrBlock
+	var currentFunc as IrFunction
 	// The Maxon module being populated. Initialized empty in `create()` and
 	// returned by `parseModule()`. Lifetime spans this Parser instance — every
 	// helper that emits ops writes into this single module, so it lives as a
 	// field rather than being threaded through every signature.
-	var module MaxonModule
+	var module as MaxonModule
 	// User-facing description of the next token's expected role, set by
 	// the caller of consume()/advance() before invoking. On EOF, the
 	// helper emits "Unexpected end of input, expected <consumeExpectedDisplay>"
 	// instead of a generic message — gives parity with C#'s "expected X"
 	// suffix without threading the kind through every call site.
-	var consumeExpectedDisplay String
+	var consumeExpectedDisplay as String
 	// True while parsing an arm body inside a match statement. Suppresses the
 	// Pratt parser's consumption of `and` when followed by `fallthrough` so
 	// the match-arm helper can see and process the fallthrough marker.
 	// Saved/restored by callers so nested matches behave correctly.
-	var inMatchArmBody bool
+	var inMatchArmBody as bool
 	// Stage E (closures): set true while parsing a closure body. Toggles the
 	// capture-detection branches in `emitSelfLoad` and the bare-name read
 	// path so outer-scope references emit `closureEnvLoad` ops instead of
 	// crashing with "Undefined variable" against the lifted function's
 	// fresh scope. parseClosure saves/restores both this and `closureCaptures`.
-	var inClosure bool
+	var inClosure as bool
 	// Suppress parseTypeRef's `with` consumption when inside a function
 	// parameter list. The C# bootstrap does not parse generic-instance
 	// inline (`Base with Args`) outside typealias-RHS / conformance
@@ -214,45 +214,45 @@ export type Parser
 	// in stdlib's String.maxon) doesn't get gobbled as a generic-instance
 	// arg of the previous param's type. Saved/restored across nested
 	// function declarations.
-	var inFunctionParam bool
+	var inFunctionParam as bool
 	// True while parsing the source expression of a `for X in <expr> to/upto <expr>`
 	// header. Suppresses the Pratt parser's range-as-binary-op consumption of
 	// `to`/`upto` so the for-in parser sees those tokens and uses its
 	// fast-path while-loop desugaring. parseParenExpr saves/clears this so a
 	// parenthesized sub-expression (e.g. `for x in (1 upto 4).createIterator() 'l'`)
 	// still gets a first-class Range/OpenRange value.
-	var inForInHeader bool
+	var inForInHeader as bool
 	// True only while parsing the topmost typeref of a typealias RHS. Inline
 	// `function(...) returns T` types are valid only when this is set.
 	// Cleared on every descent into nested type positions.
-	var atTopOfTypeAliasRhs bool
+	var atTopOfTypeAliasRhs as bool
 	// True while parsing the condition expression of an `if` statement. A
 	// `try EXPR` inside the condition produces an `ExprResult.tryCondition`
 	// (no automatic error propagation / `otherwise`) so the surrounding
 	// `if` emits a condBr branching on the success flag instead. Cleared
 	// before parsing the body so try-expressions inside the then-block
 	// behave normally.
-	var inIfCondition bool
+	var inIfCondition as bool
 	// Inner typealiases currently in scope (set while parsing inside a type
 	// or extension body). Lets `parserChaseFnAlias` resolve a function-type
 	// alias declared earlier in the same body before its merge into the
 	// target's `innerAliases`. Empty between bodies.
-	var currentInnerAliases InnerAliasMap
+	var currentInnerAliases as InnerAliasMap
 	// Stage E (closures): the outer function's scope at the moment we
 	// entered a closure body. Used to discriminate capture references
 	// (declared in the enclosing scope) from genuine undefined names.
 	// `closureCaptures` accumulates a CaptureInfo per distinct outer name
 	// referenced in the body so parseClosure can mint a paired
 	// `closureCreate` op carrying the names + types in env-array order.
-	var closureOuterScope Scope
-	var closureCaptures CaptureInfoArray
+	var closureOuterScope as Scope
+	var closureCaptures as CaptureInfoArray
 	// Outer function's `referencedVars` (the unused-variable tracking set)
 	// while a closure body is being parsed. `emitClosureCapture` inserts the
 	// captured name here so the outer function's `checkUnusedParameters`
 	// scan sees it as referenced — capturing `offset` inside a closure body
 	// keeps the outer `let offset = ...` from tripping E3012. Empty when we
 	// aren't currently inside a closure.
-	var closureOuterReferencedVars ReferencedVarSet
+	var closureOuterReferencedVars as ReferencedVarSet
 
 	// Lazily allocated synthetic `__module_init_<n>` function for this file.
 	// Holds the IR for materializing every top-level array-literal initializer
@@ -262,14 +262,14 @@ export type Parser
 	// not been allocated yet — a fresh-Parser sentinel keyed off Optional<T>'s
 	// absence is unavailable for IrFunction in the current type system, so the
 	// pair (name == "", entry block index) carries the same intent.
-	var moduleInitName String
+	var moduleInitName as String
 	// Captured at allocation time. `moduleInitFunc` is the IrFunction the
 	// parser passes to `module.addBlockAt`; `moduleInitBlock` is the entry
 	// block where every array-literal init's ops are appended. Both are valid
 	// only when `moduleInitName != ""`. The same struct identity flows back
 	// into `finalizeModuleInit` so the closing `ret` lands in the right block.
-	var moduleInitFunc IrFunction
-	var moduleInitBlock IrBlock
+	var moduleInitFunc as IrFunction
+	var moduleInitBlock as IrBlock
 	// Synthetic-name counter dedicated to `__module_init_<n>`. The shared
 	// `synthNameCounter` resets between user functions (see resetSymbolTable),
 	// so a second top-level array literal parsed after an intervening user
@@ -278,7 +278,7 @@ export type Parser
 	// `parseTopLevelArrayLiteralDecl` call so this counter advances
 	// monotonically across every literal in the file regardless of how many
 	// user functions sit between them.
-	var moduleInitSynthCounter ParsedInt
+	var moduleInitSynthCounter as ParsedInt
 	// E3062 (unused typealias) tracking. `localTypealiases` records every
 	// file-private `typealias Name = ...` parsed in this file with its source
 	// location; `usedTypeAliases` accumulates every type-name token that
@@ -286,8 +286,8 @@ export type Parser
 	// `checkUnusedTypeAliases` reports any local alias that wasn't referenced.
 	// Implicit-inferred uses from bare `[...]` array literals don't count —
 	// only literal `Name`-token references do, matching the C# bootstrap.
-	var localTypealiases LocalTypealiasArray
-	var usedTypeAliases ReferencedVarSet
+	var localTypealiases as LocalTypealiasArray
+	var usedTypeAliases as ReferencedVarSet
 	// Phase 9 Stage 5 (struct-backing): per-function let bindings whose
 	// initializer is a known struct-backed enum-case literal. The map keyed
 	// on the let's bare name; value is the qualified `EnumName.caseName`.
@@ -297,7 +297,7 @@ export type Parser
 	// chains to the leaf constant the same way direct
 	// `EnumName.caseName.field` chains do. Cleared by `resetSymbolTable` so
 	// a fresh function starts with no stale bindings.
-	var letStructBackedEnumCases StructBackedEnumCaseBindingMap
+	var letStructBackedEnumCases as StructBackedEnumCaseBindingMap
 
 	export static function create(project Project, tokens TokenArray, filePath FilePath, rootPath FilePath, namespace String) returns Parser throws ParserError
 		// Empty token array (empty or whitespace-only source) is a legitimate
@@ -530,8 +530,7 @@ export type Parser
 				try expect(TokenKind.comma)
 			end 'fnParamTypes'
 			try eat(TokenKind.rightParen)
-			if at(TokenKind.returns) 'fnHasReturn'
-				try eat(TokenKind.returns)
+			if accept(TokenKind.returns) 'fnHasReturn'
 				let retInner = try parseTypeRef()
 				let fnReturn = MaxonReturnType.value(retInner)
 				let id = internFunctionType(project, paramTypes: fnParamTypes, returnType: fnReturn)
@@ -4025,19 +4024,18 @@ export type Parser
 				// that omits the field.
 				var fieldType = MaxonType.unresolved
 				var hasFieldDefault = false
-				if at(TokenKind.equals) 'shorthandForm'
-					try eat(TokenKind.equals)
+				if accept(TokenKind.equals) 'shorthandForm'
 					fieldType = inferShorthandFieldType(cursor.current(), fieldNameToken: fieldNameToken)
 					try parseFieldDefaultInitHelper(currentTypeName, fieldName: fieldNameToken.value, fieldType: fieldType, fieldLine: fieldNameToken.line)
 					hasFieldDefault = true
 				end 'shorthandForm' else 'typedForm'
+					try eat(TokenKind.as)
 					// Phase 11.0 step 3c: route field types through `parseTypeRef`
 					// so `Self`, in-scope type parameters (`Element`), generic
 					// instances (`__ManagedMemory with Element`), and function
 					// types are all handled uniformly.
 					fieldType = try parseTypeRef()
-					if at(TokenKind.equals) 'hasDefault'
-						try eat(TokenKind.equals)
+					if accept(TokenKind.equals) 'hasDefault'
 						try parseFieldDefaultInitHelper(currentTypeName, fieldName: fieldNameToken.value, fieldType: fieldType, fieldLine: fieldNameToken.line)
 						hasFieldDefault = true
 					end 'hasDefault'
@@ -4869,8 +4867,7 @@ export type Parser
 	// commas. On a malformed entry we synchronize past the `)` so the outer
 	// case loop can advance to the next case without losing state.
 	function parseUnionCasePayload(payloadFields EnumPayloadFieldArray) throws ParserError
-		if at(TokenKind.rightParen) 'emptyPayload'
-			try eat(TokenKind.rightParen)
+		if accept(TokenKind.rightParen) 'emptyPayload'
 			return
 		end 'emptyPayload'
 
@@ -4892,8 +4889,7 @@ export type Parser
 
 			payloadFields.push(EnumPayloadField.create(fieldNameToken.value, fieldType: fieldType))
 
-			if at(TokenKind.rightParen) 'doneList'
-				try eat(TokenKind.rightParen)
+			if accept(TokenKind.rightParen) 'doneList'
 				return
 			end 'doneList'
 			try expect(TokenKind.comma)
@@ -6682,8 +6678,7 @@ export type Parser
 		if not at(TokenKind.rightParen) 'hasBindings'
 			while true 'bindingLoop'
 				var isVar = false
-				if at(TokenKind.var) 'consumeVar'
-					try eat(TokenKind.var)
+				if accept(TokenKind.var) 'consumeVar'
 					isVar = true
 				end 'consumeVar'
 
@@ -7921,8 +7916,7 @@ export type Parser
 		var iterName = ""
 		var iterNameLine = forToken.line
 		var iterNameColumn = forToken.column
-		if at(TokenKind.leftParen) 'isDestructure'
-			try eat(TokenKind.leftParen)
+		if accept(TokenKind.leftParen) 'isDestructure'
 			while true 'destructureLoop'
 				if not at(TokenKind.identifier) 'noName2'
 					let tok2 = cursor.current()
@@ -10243,8 +10237,7 @@ export type Parser
 	function parsePostfix(block IrBlock, expr ExprResult) returns ExprResult throws ParserError
 		var result = expr
 
-		while at(TokenKind.dot) 'postfixLoop'
-			try eat(TokenKind.dot)
+		while accept(TokenKind.dot) 'postfixLoop'
 			// Phase 15e: `t.0` / `t.1` / ... is positional tuple-field syntax
 			// sugar; the synthetic `__TupleN` struct names its fields `_0`, `_1`
 			// (see parseParenExpr's tuple-literal lowering), so rewrite the
@@ -10974,9 +10967,7 @@ export type Parser
 		try skipNewlines()
 		var elemNames = ByteArrayArray.create()
 		var elemRanges = SourceRangeArray.create()
-		if at(TokenKind.rightBracket) 'emptyLit'
-			try eat(TokenKind.rightBracket)
-		end 'emptyLit' else 'nonEmpty'
+		if not accept(TokenKind.rightBracket) 'nonEmpty'
 			let firstStartPos = cursor.index()
 			let firstFirstToken = cursor.current()
 			let firstParsed = try parseExpression(block)
@@ -11651,8 +11642,7 @@ export type Parser
 		// an empty array (a `Map.init` call with two empty managed-memory
 		// buffers requires named key/value type info the parser doesn't
 		// have at literal-emission time).
-		if at(TokenKind.rightBracket) 'emptyLit'
-			try eat(TokenKind.rightBracket)
+		if accept(TokenKind.rightBracket) 'emptyLit'
 			let literalRange = SourceRange.between(bracketToken, last: previousToken())
 			return try emitArrayLiteralResult(block, elemNames: ByteArrayArray.create(), elemRanges: SourceRangeArray.create(), literalRange: literalRange, bracketToken: bracketToken)
 		end 'emptyLit'
@@ -11744,8 +11734,7 @@ export type Parser
 		valueRanges.push(firstValueRange)
 
 		try skipNewlines()
-		while at(TokenKind.comma) 'morePairs'
-			try eat(TokenKind.comma)
+		while accept(TokenKind.comma) 'morePairs'
 			try skipNewlines()
 			if at(TokenKind.rightBracket) 'trailing'
 				break
@@ -12285,8 +12274,7 @@ export type Parser
 		end 'noInterp'
 		var parts = StringInterpPartArray.create()
 		parts.push(StringInterpPart.literal(leadStringId))
-		while at(TokenKind.stringInterpStart) 'interpLoop'
-			try eat(TokenKind.stringInterpStart)
+		while accept(TokenKind.stringInterpStart) 'interpLoop'
 			currentBlock = block
 			let interpStartTok = previousToken()
 			let exprResult = try parseExpression(block)
@@ -13150,11 +13138,9 @@ export type Parser
 		end 'isActive'
 		try skipConditionalBranch()
 		try skipNewlines()
-		if at(TokenKind.hashElse) 'hasElse'
-			try eat(TokenKind.hashElse)
+		if accept(TokenKind.hashElse) 'hasElse'
 			try skipNewlines()
-		end 'hasElse' else if at(TokenKind.hashEndif) 'hasEndif'
-			try eat(TokenKind.hashEndif)
+		end 'hasElse' else if accept(TokenKind.hashEndif) 'hasEndif'
 			try skipNewlines()
 		end 'hasEndif'
 	end 'handleConditional'
@@ -13167,8 +13153,7 @@ export type Parser
 		try skipNewlines()
 		try skipConditionalBranch()
 		try skipNewlines()
-		if at(TokenKind.hashEndif) 'hasEndif'
-			try eat(TokenKind.hashEndif)
+		if accept(TokenKind.hashEndif) 'hasEndif'
 			try skipNewlines()
 		end 'hasEndif'
 	end 'handleConditionalElse'
@@ -13226,8 +13211,7 @@ export type Parser
 
 	function evaluateConditionalOr() returns bool throws ParserError
 		var result = try evaluateConditionalAnd()
-		while at(TokenKind.or) 'orLoop'
-			try eat(TokenKind.or)
+		while accept(TokenKind.or) 'orLoop'
 			let rhs = try evaluateConditionalAnd()
 			result = result or rhs
 		end 'orLoop'
@@ -13236,8 +13220,7 @@ export type Parser
 
 	function evaluateConditionalAnd() returns bool throws ParserError
 		var result = try evaluateConditionalUnary()
-		while at(TokenKind.and) 'andLoop'
-			try eat(TokenKind.and)
+		while accept(TokenKind.and) 'andLoop'
 			let rhs = try evaluateConditionalUnary()
 			result = result and rhs
 		end 'andLoop'
@@ -13832,9 +13815,9 @@ end 'Parser'
 // `matched` is true when the varLoad's result name equals the target name;
 // callers must ignore `slot` and `slotType` when `matched` is false.
 type VarLoadSlotInfo
-	export var matched bool
-	export var slot VarSlot
-	export var slotType MaxonType
+	export var matched as bool
+	export var slot as VarSlot
+	export var slotType as MaxonType
 
 	export static function notMatched() returns VarLoadSlotInfo
 		return Self{matched: false, slot: 0 as VarSlot, slotType: MaxonType.unresolved}
@@ -13850,9 +13833,9 @@ end 'VarLoadSlotInfo'
 // result name equals the target name; callers must ignore `callee` and
 // `callContext` when `matched` is false.
 type CallProducerInfo
-	export var matched bool
-	export var callee ByteArray
-	export var callContext CallContext
+	export var matched as bool
+	export var callee as ByteArray
+	export var callContext as CallContext
 
 	export static function notMatched() returns CallProducerInfo
 		return Self{matched: false, callee: ByteArray.create(), callContext: CallContext.qualified}
@@ -13867,8 +13850,8 @@ end 'CallProducerInfo'
 // `matched` is true when a varDecl's slotId equals the target slot; callers
 // must ignore `value` when `matched` is false.
 type VarDeclValueInfo
-	export var matched bool
-	export var value ByteArray
+	export var matched as bool
+	export var value as ByteArray
 
 	export static function notMatched() returns VarDeclValueInfo
 		return Self{matched: false, value: ByteArray.create()}
@@ -14243,8 +14226,8 @@ export typealias BoundValue = int(i64.min to i64.max)
 // expression. The qualifier is empty for plain literals; callers compare
 // the two sides' qualifiers to detect E3005 mismatches.
 type BoundResult
-	export let value BoundValue
-	export let qualifier String
+	export let value as BoundValue
+	export let qualifier as String
 
 	export static function create(value BoundValue, qualifier String) returns BoundResult
 		return Self{value: value, qualifier: qualifier}
@@ -14508,14 +14491,14 @@ end 'exprStringConstId'
 // --- Context stacks for loops and match ---
 
 type LoopContext
-	export var sourceLabel String
-	export var headerBlockId BlockId
-	export var exitBlockId BlockId
+	export var sourceLabel as String
+	export var headerBlockId as BlockId
+	export var exitBlockId as BlockId
 	// Where `continue` jumps. For while-loops this is the cond/header block; for
 	// for-range loops it's a step block that increments the iter then branches
 	// to the header — without that step, `continue` would re-enter the header
 	// with the iter unchanged and spin forever.
-	export var continueBlockId BlockId
+	export var continueBlockId as BlockId
 
 	export static function create(sourceLabel String, headerBlockId BlockId, exitBlockId BlockId, continueBlockId BlockId) returns LoopContext
 		return Self{sourceLabel: sourceLabel, headerBlockId: headerBlockId, exitBlockId: exitBlockId, continueBlockId: continueBlockId}
@@ -14525,8 +14508,8 @@ end 'LoopContext'
 typealias LoopContextArray = Array with LoopContext
 
 type MatchContext
-	export var sourceLabel String
-	export var mergeBlockId BlockId
+	export var sourceLabel as String
+	export var mergeBlockId as BlockId
 
 	export static function create(sourceLabel String, mergeBlockId BlockId) returns MatchContext
 		return Self{sourceLabel: sourceLabel, mergeBlockId: mergeBlockId}
@@ -14541,12 +14524,12 @@ typealias MatchContextArray = Array with MatchContext
 // expression). `mergeBlock` is created up-front so arm bodies can branch to
 // it without each arm rediscovering it.
 type MatchHeader
-	export var scrutineeName ByteArray
-	export var scrutineeType MaxonType
-	export var userLabel String
-	export var baseLabel String
-	export var mergeBlock IrBlock
-	export var failed bool
+	export var scrutineeName as ByteArray
+	export var scrutineeType as MaxonType
+	export var userLabel as String
+	export var baseLabel as String
+	export var mergeBlock as IrBlock
+	export var failed as bool
 	// Phase 9 Stage 4: source-level mutability of the match scrutinee, used
 	// only when the scrutinee is a union value and the match introduces
 	// payload bindings. True when the scrutinee was a bare identifier
@@ -14555,7 +14538,7 @@ type MatchHeader
 	// false — the binding can still be matched against but `value = …` is
 	// rejected with E2013 because there's no source-level slot to write back
 	// to. For bare-let scrutinees the same E2013 fires.
-	export var scrutineeMutable bool
+	export var scrutineeMutable as bool
 
 	export static function create(scrutineeName ByteArray, scrutineeType MaxonType, userLabel String, baseLabel String, mergeBlock IrBlock, scrutineeMutable bool) returns MatchHeader
 		return Self{scrutineeName: scrutineeName, scrutineeType: scrutineeType, userLabel: userLabel, baseLabel: baseLabel, mergeBlock: mergeBlock, failed: false, scrutineeMutable: scrutineeMutable}
@@ -14571,15 +14554,15 @@ end 'MatchHeader'
 // a non-match. `caseToken` is captured so the caller can attach source
 // ranges for varStore / br ops emitted into the body.
 type MatchArmBlocks
-	export var caseToken Token
-	export var body IrBlock
-	export var next IrBlock
+	export var caseToken as Token
+	export var body as IrBlock
+	export var next as IrBlock
 	// True when `buildMatchArmBlocks` already populated the body's
 	// terminator (e.g. for `default panic(...)` / `default throws Err.x`).
 	// The outer loop must NOT call `parseMatchStatementArmBody` /
 	// `parseMatchExpressionArmBody` for these arms because the cursor has
 	// already advanced past the diverging keyword's body.
-	export var bodyAlreadyTerminated bool
+	export var bodyAlreadyTerminated as bool
 
 	export static function create(caseToken Token, body IrBlock, next IrBlock, bodyAlreadyTerminated bool = false) returns MatchArmBlocks
 		return Self{caseToken: caseToken, body: body, next: next, bodyAlreadyTerminated: bodyAlreadyTerminated}
@@ -14614,11 +14597,11 @@ end 'MatchPatternKind'
 // `isVar` distinguishes `var name` (mutable) from `name` (immutable).
 // Location captured for E3035 / E3081 anchoring.
 export type MatchPatternBinding
-	export var name String
-	export var isDiscard bool
-	export var isVar bool
-	export var line LineNumber
-	export var column ColumnNumber
+	export var name as String
+	export var isDiscard as bool
+	export var isVar as bool
+	export var line as LineNumber
+	export var column as ColumnNumber
 
 	export static function create(name String, isDiscard bool, isVar bool, line LineNumber, column ColumnNumber) returns MatchPatternBinding
 		return Self{name: name, isDiscard: isDiscard, isVar: isVar, line: line, column: column}
@@ -14628,34 +14611,34 @@ end 'MatchPatternBinding'
 export typealias MatchPatternBindingArray = Array with MatchPatternBinding
 
 export type MatchPatternSpec
-	export var kind MatchPatternKind
-	export var token Token
-	export var intValue ParsedInt
-	export var caseName String
-	export var displayName String
+	export var kind as MatchPatternKind
+	export var token as Token
+	export var intValue as ParsedInt
+	export var caseName as String
+	export var displayName as String
 	// Range-pattern fields (only meaningful when kind == rangeLiteral).
 	// `loValue` is 0 when `hasMinSentinel` is true; `hiValue` is 0 when
 	// `hasMaxSentinel` is true. `isUpto` selects exclusive upper bound.
-	export var loValue ParsedInt
-	export var hiValue ParsedInt
-	export var isUpto bool
-	export var hasMinSentinel bool
-	export var hasMaxSentinel bool
+	export var loValue as ParsedInt
+	export var hiValue as ParsedInt
+	export var isUpto as bool
+	export var hasMinSentinel as bool
+	export var hasMaxSentinel as bool
 	// True when this pattern is a range whose bounds are enum case names
 	// (e.g. `red to blue`). Bound ordinals live in `loValue` / `hiValue`.
 	// Used by exhaustiveness validation to track ordinal coverage and by
 	// the enum-default check to treat the arm as an enum-case arm.
-	export var isEnumRange bool
+	export var isEnumRange as bool
 	// Owning enum name when `isEnumRange` is true. Empty otherwise.
-	export var enumOwnerName String
+	export var enumOwnerName as String
 	// Phase 9 Stage 2: parsed payload bindings for an enum-case pattern
 	// (`caseName(x, _, var y)`). Empty for bare-case arms and for every
 	// non-enum-case kind. `bindingNames` mirrors the same list as
 	// `ByteArrayArray` so the dialect-level enumMatchArm op (which lives
 	// outside the parser's String/ByteArray boundary) sees the names
 	// in the form its slot expects without a per-arm conversion.
-	export var bindings MatchPatternBindingArray
-	export var bindingNames ByteArrayArray
+	export var bindings as MatchPatternBindingArray
+	export var bindingNames as ByteArrayArray
 
 	export static function defaultPattern(token Token) returns MatchPatternSpec
 		return Self{kind: MatchPatternKind.defaultArm, token: token, intValue: 0, caseName: "", displayName: "default", loValue: 0, hiValue: 0, isUpto: false, hasMinSentinel: false, hasMaxSentinel: false, isEnumRange: false, enumOwnerName: "", bindings: MatchPatternBindingArray.create(), bindingNames: ByteArrayArray.create()}
@@ -14721,7 +14704,7 @@ export typealias MatchPatternSpecArray = Array with MatchPatternSpec
 // `default` — a mix would mean a single arm is matching a heterogeneous set
 // of values, which the language explicitly disallows).
 export type MatchPatternList
-	export var patterns MatchPatternSpecArray
+	export var patterns as MatchPatternSpecArray
 
 	export static function create(patterns MatchPatternSpecArray) returns MatchPatternList
 		return Self{patterns: patterns}
@@ -14754,8 +14737,8 @@ end 'MatchPatternList'
 // statement was a `return` (so the parser can reject `return ... and
 // fallthrough` per E2025).
 export type MatchStmtArmBodyResult
-	export var exitBlock IrBlock
-	export var hadReturn bool
+	export var exitBlock as IrBlock
+	export var hadReturn as bool
 
 	export static function create(exitBlock IrBlock, hadReturn bool) returns MatchStmtArmBodyResult
 		return Self{exitBlock: exitBlock, hadReturn: hadReturn}
@@ -14771,10 +14754,10 @@ end 'MatchStmtArmBodyResult'
 // expression's type so the caller can fall back to it when the success
 // arm's call type is unresolved at parse time.
 type TryFallbackOutcome
-	export let mergesIntoSuccess bool
-	export let fallbackExitBlock IrBlock
-	export let hasFallbackType bool
-	export let fallbackType MaxonType
+	export let mergesIntoSuccess as bool
+	export let fallbackExitBlock as IrBlock
+	export let hasFallbackType as bool
+	export let fallbackType as MaxonType
 
 	// Terminator-shaped fallback: block is already sealed; merge edge
 	// must NOT be added.
@@ -14802,8 +14785,8 @@ end 'TryFallbackOutcome'
 // `lastToken` is the closing `)` so the caller can attach the throw op's
 // source range to the full `throw … (…)` span.
 type ThrowConstructionResult
-	export let resultName ByteArray
-	export let lastToken Token
+	export let resultName as ByteArray
+	export let lastToken as Token
 
 	export static function create(resultName ByteArray, lastToken Token) returns ThrowConstructionResult
 		return Self{resultName: resultName, lastToken: lastToken}
@@ -14813,9 +14796,9 @@ end 'ThrowConstructionResult'
 // Tracks the source location of a parameter so CheckUnusedVariables can pin
 // an E3012 error back to the declaration site rather than the function header.
 type ParamLocation
-	export let name String
-	export let line LineNumber
-	export let column ColumnNumber
+	export let name as String
+	export let line as LineNumber
+	export let column as ColumnNumber
 
 	export static function create(name String, line LineNumber, column ColumnNumber) returns ParamLocation
 		return Self{name: name, line: line, column: column}
@@ -14830,9 +14813,9 @@ typealias ReferencedVarSet = Set with String
 // participate in the unused check — exported / module-visible aliases skip it
 // because cross-file uses aren't observable from a single Parser instance.
 type LocalTypealias
-	export let name String
-	export let line LineNumber
-	export let column ColumnNumber
+	export let name as String
+	export let line as LineNumber
+	export let column as ColumnNumber
 
 	export static function create(name String, line LineNumber, column ColumnNumber) returns LocalTypealias
 		return Self{name: name, line: line, column: column}
@@ -14845,8 +14828,8 @@ typealias LocalTypealiasArray = Array with LocalTypealias
 // optional type, so a small struct with a presence flag keeps the call-site
 // unwrap obvious (hasValue/token) without resorting to sentinel tokens.
 type OptionalToken
-	export let hasValue bool
-	export let token Token
+	export let hasValue as bool
+	export let token as Token
 
 	export static function some(token Token) returns OptionalToken
 		return Self{hasValue: true, token: token}

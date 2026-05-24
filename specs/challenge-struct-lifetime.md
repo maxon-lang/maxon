@@ -20,8 +20,8 @@ Structs returned from functions must have their data survive beyond the function
 typealias Integer = int(i64.min to i64.max)
 
 type Result
-	export var sum Integer
-	export var product Integer
+	export var sum as Integer
+	export var product as Integer
 
 	static function create(sum Integer, product Integer) returns Self
 		return Self{sum: sum, product: product}
@@ -47,7 +47,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Counter
-	export var value Integer
+	export var value as Integer
 
 	static function create(value Integer) returns Self
 		return Self{value: value}
@@ -74,7 +74,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Value
-	export var n Integer
+	export var n as Integer
 
 	static function create(n Integer) returns Self
 		return Self{n: n}

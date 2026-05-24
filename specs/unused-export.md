@@ -99,8 +99,8 @@ error E3094: specs/fragments/unused-export/error.unused-module-function.test/api
 typealias Integer = int(i64.min to i64.max)
 
 export type LocalPoint
-	export var x Integer
-	export var y Integer
+	export var x as Integer
+	export var y as Integer
 
 	export static function origin() returns LocalPoint
 		return LocalPoint{x: 0, y: 0}

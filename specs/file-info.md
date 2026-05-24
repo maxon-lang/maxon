@@ -15,12 +15,12 @@ Retrieve metadata about a file using `File.info()`. Returns a `FileInfo` struct 
 
 ```text
 type FileInfo
-  export let size FileSize              // file size in bytes
-  export let modifiedTime Timestamp     // last modification time (Unix epoch seconds)
-  export let createdTime Timestamp      // creation time (Unix epoch seconds)
-  export let accessedTime Timestamp     // last access time (Unix epoch seconds)
-  export let isDirectory bool           // true if path is a directory
-  export let isReadOnly bool            // true if file is read-only
+  export let size as FileSize              // file size in bytes
+  export let modifiedTime as Timestamp     // last modification time (Unix epoch seconds)
+  export let createdTime as Timestamp      // creation time (Unix epoch seconds)
+  export let accessedTime as Timestamp     // last access time (Unix epoch seconds)
+  export let isDirectory as bool           // true if path is a directory
+  export let isReadOnly as bool            // true if file is read-only
 end 'FileInfo'
 ```
 

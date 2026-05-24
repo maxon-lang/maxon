@@ -141,7 +141,7 @@ error E3012: specs/fragments/unused-parameters/void-function-unused.test:5:20: u
 typealias Integer = int(i64.min to i64.max)
 
 type Plain
-	let value Integer
+	let value as Integer
 
 	function helper(unused Integer) returns Integer
 		return value

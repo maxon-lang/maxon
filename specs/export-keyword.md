@@ -31,8 +31,8 @@ Types can be exported to make them available to other modules. Without `export`,
 
 ```text
 export type Point
-  export var x Integer
-  export var y Integer
+  export var x as Integer
+  export var y as Integer
 end 'Point'
 ```
 
@@ -66,7 +66,7 @@ Methods within types can be individually exported:
 
 ```text
 export type Calculator
-  var result Integer
+  var result as Integer
 
   export function add(n Integer)
     result = result + n
@@ -126,8 +126,8 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 export type Point
-	var x Integer
-	var y Integer
+	var x as Integer
+	var y as Integer
 
 	export function sum() returns Integer
 		return x + y
@@ -213,7 +213,7 @@ typealias Integer = int(i64.min to i64.max)
 export typealias IntArray = Array with Integer
 
 export type Container
-	export var items IntArray
+	export var items as IntArray
 
 	export static function create() returns Self
 		return Container{items: IntArray.create()}
@@ -340,7 +340,7 @@ error E3008: specs/fragments/export-keyword/error.non-exported-function-cross-fi
 typealias BadArray = Array with UnknownType
 
 type Container
-	var items BadArray
+	var items as BadArray
 end 'Container'
 
 function main() returns ExitCode
@@ -357,8 +357,8 @@ error E2003: specs/fragments/export-keyword/error.typealias-with-unknown-element
 typealias Integer = int(i64.min to i64.max)
 
 export type Point
-	export var x Integer
-	export var y Integer
+	export var x as Integer
+	export var y as Integer
 
 	export static function create(x Integer, y Integer) returns Self
 		return Self{x: x, y: y}
@@ -381,7 +381,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type InternalPoint
-	export var x Integer
+	export var x as Integer
 
 	static function create(x Integer) returns Self
 		return Self{x: x}
@@ -489,8 +489,8 @@ error E3061: specs/fragments/export-keyword/error.duplicate-typealias-same-file.
 typealias Integer = int(i64.min to i64.max)
 
 type InternalPoint
-	export var x Integer
-	export var y Integer
+	export var x as Integer
+	export var y as Integer
 
 	static function create(x Integer, y Integer) returns Self
 		return Self{x: x, y: y}
@@ -528,7 +528,7 @@ Cross-file access to an exported module-level struct var.
 typealias SmallInt = int(0 to u8.max)
 
 export type Counter
-		export var value SmallInt
+		export var value as SmallInt
 
 		export static function create(value SmallInt) returns Self
 			return Self{value: value}

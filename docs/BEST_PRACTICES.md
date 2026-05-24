@@ -51,8 +51,8 @@ Define collection type aliases alongside the element type. This keeps type decla
 typealias TaskPriority = int(0 to 10)
 
 type Task
-	export var name String
-	export var priority TaskPriority
+	export var name as String
+	export var priority as TaskPriority
 end 'Task'
 
 typealias TaskArray = Array with Task
@@ -621,9 +621,9 @@ Static methods provide named constructors that are clearer than struct literals 
 
 ```maxon
 type Connection
-	var host String
-	var port Port
-	var timeout Milliseconds
+	var host as String
+	var port as Port
+	var timeout as Milliseconds
 
 	export static function createDefault(host String) returns Connection
 		return Connection{host: host, port: 8080, timeout: 5000}
@@ -661,8 +661,8 @@ Implement `Hashable`, `Equatable`, `Cloneable`, `Stringable`, and `Comparable` w
 typealias Degrees = float(f64.min to f64.max)
 
 type Coordinate implements Hashable, Equatable, Stringable, Cloneable
-	export var lat Degrees
-	export var lon Degrees
+	export var lat as Degrees
+	export var lon as Degrees
 
 	function hash() returns HashValue
 		return (trunc(lat * 1000.0) xor trunc(lon * 1000.0)) as HashValue

@@ -202,11 +202,11 @@ Each target defines its own backing type with shared fields (`latency`, `isMemor
 
 ```maxon
 type X64OpMeta
-  export let latency Latency
-  export let isMemory bool
-  export let isStore bool
-  export let isCall bool
-  export let setsFlags bool
+  export let latency as Latency
+  export let isMemory as bool
+  export let isStore as bool
+  export let isCall as bool
+  export let setsFlags as bool
 end 'X64OpMeta'
 
 export union X64Op

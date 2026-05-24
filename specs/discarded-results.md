@@ -51,7 +51,7 @@ Methods that return their own type (e.g., builder pattern) are chainable — the
 
 ```text
 type Counter
-  var value int(0 to i64.max)
+  var value as int(0 to i64.max)
 
   function increment() returns Counter
     value = value + 1
@@ -198,7 +198,7 @@ end 'main'
 typealias Count = int(i64.min to i64.max)
 
 type Counter
-	export var value Count
+	export var value as Count
 
 	function increment() returns Counter
 		value = value + 1

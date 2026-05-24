@@ -46,7 +46,7 @@ Like `export`, the `module` keyword can be applied to methods and fields inside 
 
 ```text
 export type Counter
-  module var value Integer
+  module var value as Integer
 
   module function increment()
     value = value + 1
@@ -170,8 +170,8 @@ error E3088: specs/fragments/module-keyword/error.module-function-parent-directo
 typealias Integer = int(i64.min to i64.max)
 
 module type Point
-	module var x Integer
-	module var y Integer
+	module var x as Integer
+	module var y as Integer
 
 	module static function create(x Integer, y Integer) returns Self
 		return Self{x: x, y: y}

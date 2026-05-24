@@ -42,7 +42,7 @@ Instance methods are called on variables declared with type `__ManagedFile`:
 
 ```text
 type FileWrapper
-  export var file __ManagedFile
+  export var file as __ManagedFile
 
   static function open(path String) returns FileWrapper throws FileError
     let result = try __ManagedFile.openRead(path.managed) otherwise throw FileError.notFound
@@ -81,7 +81,7 @@ export enum TestFileError implements Error
 end 'TestFileError'
 
 type TestFile
-	export var file __ManagedFile
+	export var file as __ManagedFile
 
 	export static function openWrite(path __ManagedMemory) returns TestFile throws TestFileError
 		let handle = try __ManagedFile.openWrite(path) otherwise 'fail'
@@ -166,7 +166,7 @@ export enum TestFileError implements Error
 end 'TestFileError'
 
 type TestFile
-	export var file __ManagedFile
+	export var file as __ManagedFile
 
 	export static function openWrite(path __ManagedMemory) returns TestFile throws TestFileError
 		let handle = try __ManagedFile.openWrite(path) otherwise 'fail'
@@ -231,7 +231,7 @@ export enum TestFileError implements Error
 end 'TestFileError'
 
 type TestFile
-	export var file __ManagedFile
+	export var file as __ManagedFile
 
 	export static function openWrite(path __ManagedMemory) returns TestFile throws TestFileError
 		let handle = try __ManagedFile.openWrite(path) otherwise 'fail'

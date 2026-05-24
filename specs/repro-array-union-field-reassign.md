@@ -36,7 +36,7 @@ export union Op
 end 'Op'
 
 type Holder
-		export var payload Idx
+		export var payload as Idx
 
 		export static function create() returns Self
 				return Self{payload: 999}
@@ -64,7 +64,7 @@ error E3006: specs/fragments/repro-array-union-field-reassign/match-binding-shad
 typealias Idx = int(0 to 1024)
 
 type Counter
-		export var count Idx
+		export var count as Idx
 
 		export static function create() returns Self
 				return Self{count: 0}
@@ -91,7 +91,7 @@ error E3006: specs/fragments/repro-array-union-field-reassign/param-shadowing-se
 typealias Idx = int(0 to 1024)
 
 type Holder
-		export var value Idx
+		export var value as Idx
 
 		export static function create() returns Self
 				return Self{value: 0}
@@ -118,8 +118,8 @@ typealias Idx = int(0 to 1024)
 typealias IdxArray = Array with Idx
 
 type Holder
-		export var element Idx
-		export var elements IdxArray
+		export var element as Idx
+		export var elements as IdxArray
 
 		export static function create() returns Self
 				return Self{element: 0, elements: IdxArray.create()}

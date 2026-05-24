@@ -7,9 +7,9 @@
 // inside .covdata; `initialBytes` (if non-empty) seed the beginning of that
 // region and the writer zero-fills the rest.
 export type CovDataEntry
-	export var name String
-	export var sizeBytes ByteCount
-	export var initialBytes ByteArray
+	export var name as String
+	export var sizeBytes as ByteCount
+	export var initialBytes as ByteArray
 
 	export static function create(name String, sizeBytes ByteCount, initialBytes ByteArray) returns CovDataEntry
 		return Self{name: name, sizeBytes: sizeBytes, initialBytes: initialBytes}
@@ -23,8 +23,8 @@ export typealias CovDataEntryArray = Array with CovDataEntry
 // raw on-disk bytes. Resolved through the `__data_*` relocation kind;
 // offsets are assigned by buildDataPreludeSection at backend time.
 export type DataSectionEntry
-	export var name String
-	export var initialBytes ByteArray
+	export var name as String
+	export var initialBytes as ByteArray
 
 	export static function create(name String, initialBytes ByteArray) returns DataSectionEntry
 		return Self{name: name, initialBytes: initialBytes}
@@ -36,32 +36,32 @@ export typealias GlobalNameIndexMap = Map with (String, MachineWord)
 export typealias GlobalDedupMap = Map with (ByteArray, String)
 
 export type GlobalDataTable
-	export var names StringArray
-	export var values ByteArrayArray
-	export var nextStringId MachineWord
+	export var names as StringArray
+	export var values as ByteArrayArray
+	export var nextStringId as MachineWord
 	// Coverage-counter entries in the .covdata section. Kept separate from
 	// `names`/`values` (which serve .rdata) because .covdata is writable and
 	// uses its own relocation kinds with an independent base address.
-	export var covDataEntries CovDataEntryArray
+	export var covDataEntries as CovDataEntryArray
 	// Top-level / static-field globals in the .data section, ordered by
 	// declaration. Each entry consumes 8 bytes; `buildDataPreludeSection`
 	// concatenates their `initialBytes` and registers each name's offset in
 	// the rdata offset map so dataSection relocations resolve correctly.
-	export var dataSectionEntries DataSectionEntryArray
+	export var dataSectionEntries as DataSectionEntryArray
 	// O(1) lookup tables maintained in lockstep with `names`/`values`.
 	// `nameIndex` maps a registered global's name to its index in
 	// `names`/`values`; `valueDedup` maps a previously-registered byte
 	// payload to its synthetic name so addGlobalData can dedupe in O(1)
 	// instead of scanning every prior value. Without these, both lookup
 	// helpers were O(N) per call and drove a quadratic build cost.
-	export var nameIndex GlobalNameIndexMap
-	export var valueDedup GlobalDedupMap
+	export var nameIndex as GlobalNameIndexMap
+	export var valueDedup as GlobalDedupMap
 	// Phase 11.2: relocations whose patch site lives inside an rdata blob
 	// (rather than inside code), e.g. layout-descriptor copy/destroy slots.
 	// Emitted by Maxon-level passes (BuildLayoutDescriptors) directly into
 	// the project-level globalData so they survive the per-function backend
 	// emit and get concatenated into the final rdataRelocs array.
-	export var pendingRdataRelocs RdataRelocationArray
+	export var pendingRdataRelocs as RdataRelocationArray
 
 	export static function create() returns GlobalDataTable
 		return Self{names: StringArray.create(), values: ByteArrayArray.create(), nextStringId: 0, covDataEntries: CovDataEntryArray.create(), dataSectionEntries: DataSectionEntryArray.create(), nameIndex: GlobalNameIndexMap.create(), valueDedup: GlobalDedupMap.create(), pendingRdataRelocs: RdataRelocationArray.create()}
@@ -205,9 +205,9 @@ export typealias RdataOffsetIndexMap = Map with (String, CodeOffset)
 // resolver, which fires once per relocation in the function and used to
 // scan every entry per call.
 export type RdataOffsetMap
-	export var names StringArray
-	export var offsets CodeOffsetArray
-	export var index RdataOffsetIndexMap
+	export var names as StringArray
+	export var offsets as CodeOffsetArray
+	export var index as RdataOffsetIndexMap
 
 	export static function create() returns RdataOffsetMap
 		return Self{names: StringArray.create(), offsets: CodeOffsetArray.create(), index: RdataOffsetIndexMap.create()}

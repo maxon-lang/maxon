@@ -20,8 +20,8 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 type Entry
-	export var data ByteArray
-	export var tag SmallInt
+	export var data as ByteArray
+	export var tag as SmallInt
 
 	static function create(data ByteArray, tag SmallInt) returns Self
 		return Self{data: data, tag: tag}
@@ -64,16 +64,16 @@ typealias ByteArray = Array with Byte
 typealias Count = int(0 to u64.max)
 
 type Entry
-	export var data ByteArray
-	export var tag Count
+	export var data as ByteArray
+	export var tag as Count
 end 'Entry'
 
 typealias EntryMap = Map with (String, Entry)
 typealias StringArray = Array with String
 
 type Database
-	export var sourceFiles EntryMap
-	export var sourcePaths StringArray
+	export var sourceFiles as EntryMap
+	export var sourcePaths as StringArray
 
 	static function create(sourceFiles EntryMap, sourcePaths StringArray) returns Self
 		return Self{sourceFiles: sourceFiles, sourcePaths: sourcePaths}
@@ -121,16 +121,16 @@ export typealias EntryBytes = Array with Byte
 export typealias EntryCount = int(0 to u64.max)
 
 export type Entry
-	export var data EntryBytes
-	export var tag EntryCount
+	export var data as EntryBytes
+	export var tag as EntryCount
 end 'Entry'
 
 export typealias EntryMap = Map with (String, Entry)
 export typealias EntryPaths = Array with String
 
 export type Database
-	export var sourceFiles EntryMap
-	export var sourcePaths EntryPaths
+	export var sourceFiles as EntryMap
+	export var sourcePaths as EntryPaths
 
 	export static function create(sourceFiles EntryMap, sourcePaths EntryPaths) returns Self
 		return Self{sourceFiles: sourceFiles, sourcePaths: sourcePaths}

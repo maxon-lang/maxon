@@ -18,7 +18,7 @@ Module-level struct var field assignment.
 typealias SmallInt = int(0 to u8.max)
 
 type Counter
-		export var value SmallInt
+		export var value as SmallInt
 
 		static function create(value SmallInt) returns Self
 			return Self{value: value}
@@ -43,7 +43,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 type State
-		export var items ByteArray
+		export var items as ByteArray
 
 		static function create(items ByteArray) returns Self
 			return Self{items: items}
@@ -68,7 +68,7 @@ Module-level struct var nested field assignment through chain.
 typealias SmallInt = int(0 to u8.max)
 
 type Inner
-		export var x SmallInt
+		export var x as SmallInt
 
 		static function create(x SmallInt) returns Self
 			return Self{x: x}
@@ -76,7 +76,7 @@ type Inner
 end 'Inner'
 
 type Outer
-		export var inner Inner
+		export var inner as Inner
 
 		static function create(inner Inner) returns Self
 			return Self{inner: inner}

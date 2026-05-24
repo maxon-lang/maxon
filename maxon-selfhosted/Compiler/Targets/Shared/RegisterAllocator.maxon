@@ -52,15 +52,15 @@ end 'OpPattern'
 
 // Per-value state: consolidates all value-indexed register allocator fields.
 export type ValueInfo
-	export var gprOrdinal RegOrdinal
-	export var stackHome RegInt
-	export var constantValue RegInt
-	export var isConstant bool
-	export var fpOrdinal RegOrdinal
-	export var fpStackHome RegInt
-	export var previousFp RegOrdinal
-	export var deferred bool
-	export var remainingUses RegInt
+	export var gprOrdinal as RegOrdinal
+	export var stackHome as RegInt
+	export var constantValue as RegInt
+	export var isConstant as bool
+	export var fpOrdinal as RegOrdinal
+	export var fpStackHome as RegInt
+	export var previousFp as RegOrdinal
+	export var deferred as bool
+	export var remainingUses as RegInt
 
 	export static function default() returns ValueInfo
 		return Self{gprOrdinal: RM_NONE, stackHome: RM_NO_STACK_HOME, constantValue: 0, isConstant: false, fpOrdinal: RM_NONE, fpStackHome: RM_NO_STACK_HOME, previousFp: RM_NONE, deferred: false, remainingUses: 0}
@@ -86,34 +86,34 @@ end 'defaultValueInfo'
 // handled by the RegAllocTarget interface.
 export type RegState
 	// Target descriptor — holds pools, call-conv config.
-	export var desc TargetRegAlloc
+	export var desc as TargetRegAlloc
 
 	// registerContents[regOrdinal] = valueId or RM_NONE (empty)
-	export var registerContents RegIntArray
+	export var registerContents as RegIntArray
 	// lastUsed[regOrdinal] = op index of last use
-	export var lastUsed RegIntArray
+	export var lastUsed as RegIntArray
 
 	// Per-value state: values[valueId] = ValueInfo
-	export var values ValueInfoArray
+	export var values as ValueInfoArray
 
 	// Spill management
-	export var spillBaseOffset RegInt
-	export var nextSpillOffset RegInt
-	export var minSpillOffset RegInt
+	export var spillBaseOffset as RegInt
+	export var nextSpillOffset as RegInt
+	export var minSpillOffset as RegInt
 
 	// Per-block counters
-	export var currentOpIndex RegInt
-	export var nextFreshIndex RegInt
+	export var currentOpIndex as RegInt
+	export var nextFreshIndex as RegInt
 
 	// FP register state (mutable)
-	export var nextFreshFpIndex RegInt
+	export var nextFreshFpIndex as RegInt
 	// fpContents[fpOrdinal] = valueId or RM_NONE
-	export var fpContents RegIntArray
+	export var fpContents as RegIntArray
 	// fpLastUsed[fpOrdinal] = op index of last use
-	export var fpLastUsed RegIntArray
+	export var fpLastUsed as RegIntArray
 
 	// Debug: function name for error messages
-	export var funcName String
+	export var funcName as String
 
 	export static function create(desc TargetRegAlloc, registerContents RegIntArray, lastUsed RegIntArray, spillBase RegInt, fpContents RegIntArray, fpLastUsed RegIntArray) returns RegState
 		return Self{
@@ -136,11 +136,11 @@ end 'RegState'
 
 // Snapshot of register allocator state for carrying assignments across diverging blocks.
 export type RegSnapshot
-	export var registerContents RegIntArray
-	export var values ValueInfoArray
-	export var fpContents RegIntArray
-	export var nextSpillOffset RegInt
-	export var minSpillOffset RegInt
+	export var registerContents as RegIntArray
+	export var values as ValueInfoArray
+	export var fpContents as RegIntArray
+	export var nextSpillOffset as RegInt
+	export var minSpillOffset as RegInt
 
 	export static function create(registerContents RegIntArray, values ValueInfoArray, fpContents RegIntArray, nextSpillOffset RegInt, minSpillOffset RegInt) returns RegSnapshot
 		return Self{registerContents: registerContents, values: values, fpContents: fpContents, nextSpillOffset: nextSpillOffset, minSpillOffset: minSpillOffset}
@@ -637,24 +637,24 @@ end 'allocateRegistersForFunc'
 //
 type FunctionRegAllocator
 	// --- Inputs (set in create) ---
-	export var module TargetModule
-	export var func IrFunction
-	export var desc TargetRegAlloc
-	export var regTarget RegAllocTarget
-	export var opQuery TargetOpQuery
+	export var module as TargetModule
+	export var func as IrFunction
+	export var desc as TargetRegAlloc
+	export var regTarget as RegAllocTarget
+	export var opQuery as TargetOpQuery
 
 	// --- Phase 0: CFG analysis outputs ---
-	export var cfg CfgInfo
-	export var rpo RpoInfo
-	export var domInfo DomInfo
-	export var loopDepth RegIntArray
-	export var domPreorder BlockIdArray
-	export var entryBlockId BlockId
+	export var cfg as CfgInfo
+	export var rpo as RpoInfo
+	export var domInfo as DomInfo
+	export var loopDepth as RegIntArray
+	export var domPreorder as BlockIdArray
+	export var entryBlockId as BlockId
 
 	// --- Rolling state across phases 1..7 ---
-	export var state RegState
-	export var ranges LiveRangeArray
-	export var coloring ColoringResult
+	export var state as RegState
+	export var ranges as LiveRangeArray
+	export var coloring as ColoringResult
 	// Cumulative bitmap of reload vregs seen across every spill iteration.
 	// Indexed by valueId. Each pass through runSpillColorLoop unions in
 	// the new reload ids minted by insertSpillCode (carried back via
@@ -662,13 +662,13 @@ type FunctionRegAllocator
 	// SPILL_WEIGHT_INFINITE to reload ranges, which is what guarantees
 	// the spill loop terminates: an uncolorable reload triggers a hard
 	// panic instead of being chain-respilled forever.
-	export var reloadIds BoolArray
+	export var reloadIds as BoolArray
 	// Phi-merge splitting sidetable produced by splitMultiAnchorMerges.
 	// Empty when no phi-merge needed splitting. destroySSA consults this
 	// to dual-emit (src → sub-range → merge) parallel-copy moves at the
 	// edges that were rewritten; without an entry buildBlockArgCopies
 	// falls back to its original single-move path.
-	export var splitInfo SplitMergeInfoArray
+	export var splitInfo as SplitMergeInfoArray
 
 	export static function create(func IrFunction, module TargetModule, desc TargetRegAlloc, regTarget RegAllocTarget, opQuery TargetOpQuery) returns FunctionRegAllocator
 		// Placeholder fields for CFG/dom/coloring are immediately overwritten
@@ -879,10 +879,10 @@ end 'findUncoloredRanges'
 // unconditional jmp was a fall-through and got dropped). In that case the
 // trampoline-rewrite path must update the terminator, not opRefs.
 type CondBrInfo
-	export var hasCondBr bool
-	export var condBrIdx RegInt
-	export var elseTarget RegInt
-	export var inTerminator bool
+	export var hasCondBr as bool
+	export var condBrIdx as RegInt
+	export var elseTarget as RegInt
+	export var inTerminator as bool
 
 	static function none() returns CondBrInfo
 		return Self{hasCondBr: false, condBrIdx: -1, elseTarget: -1, inTerminator: false}

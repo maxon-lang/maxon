@@ -38,7 +38,7 @@ enum Kind
 end 'Kind'
 
 type AlphaBackend implements Backend
-	export let tag Integer
+	export let tag as Integer
 
 	function compute(x Integer) returns Integer
 		return x + 1
@@ -50,7 +50,7 @@ type AlphaBackend implements Backend
 end 'AlphaBackend'
 
 type BetaBackend implements Backend
-	export let tag Integer
+	export let tag as Integer
 
 	function compute(x Integer) returns Integer
 		return x + 2

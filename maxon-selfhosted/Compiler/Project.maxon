@@ -17,14 +17,14 @@ export typealias ClosureCounter = int(0 to u64.max)
 // compiler passes a single value around instead of three loose fields.
 export type IrDumpOptions
 	// True when `--emit-ir` is active.
-	export var emitFinal bool
+	export var emitFinal as bool
 	// Base path for `--dump-stages`. Empty when disabled. When non-empty, the
 	// pipeline writes `{base}.NN-passName.phase.ir` after every pass.
-	export var stagesBasePath String
+	export var stagesBasePath as String
 	// Monotonic counter for `--dump-stages` filenames. Starts at 1 and
 	// increments once per pass dump so filenames are ordered across
 	// queryAllMid, the backend pipeline, and the final target-lowering dump.
-	export var passCounter DumpPassCounter
+	export var passCounter as DumpPassCounter
 
 	export static function disabled() returns IrDumpOptions
 		return Self{emitFinal: false, stagesBasePath: "", passCounter: 1}
@@ -117,17 +117,17 @@ end 'readerFileIsInModuleSubtree'
 
 export type Project
 	// Query database (incremental compilation cache)
-	export var db QueryDatabase
+	export var db as QueryDatabase
 
 	// Type-name interner. MaxonType.named carries a TypeNameId into this table
 	// instead of a raw String, so identical type references (`Count`, `String`,
 	// `Integer`, …) share a single backing allocation.
-	export var typeNames TypeNameInterner
+	export var typeNames as TypeNameInterner
 
 	// Callee-name interner. Every emitted maxon.call op carries the callee name
 	// as a ByteArray; this table caches one ByteArray per name so the parser
 	// stops re-allocating the same bytes for hot stdlib callees on every call.
-	export var calleeNames CalleeNameInterner
+	export var calleeNames as CalleeNameInterner
 
 	// String-literal interner. Every string literal the parser sees is
 	// interned at parse time and the IR carries the resulting StringId
@@ -135,32 +135,32 @@ export type Project
 	// single id; cross-file string-constant references resolve by id at
 	// TypeResolution time. Lowering reads the bytes back via
 	// `strings.get(id)` when emitting the runtime payload.
-	export var strings StringInterner
+	export var strings as StringInterner
 
 	// Typealias registry: maps alias names to their IR base type ("i64", "f64", etc.)
 	// Populated by the TypeResolution pass as it drains unresolvedTypealiases.
 	// Read by lowering and the range-check pass; never written to directly by
 	// the parser.
-	export var typealiases TypealiasMap
+	export var typealiases as TypealiasMap
 
 	// Typealias visibility sidecar: maps alias names to their declared
 	// visibility tier and source file path. Populated alongside
 	// `typealiases` by the TypeResolution drain. Lookups treat a missing
 	// key as `(global, stdlibBootstrapPath)` so stdlib aliases (which
 	// aren't serialized through the cache visibility-side) stay reachable.
-	export var typealiasVisibilities TypealiasVisibilityMap
+	export var typealiasVisibilities as TypealiasVisibilityMap
 
 	// Typealias range bounds: maps alias names to their (lower, upper) bounds.
 	// Used by the parser to emit runtime range checks on return values.
 	// Populated by the TypeResolution pass alongside `typealiases`.
-	export var typealiasRanges TypealiasRangeMap
+	export var typealiasRanges as TypealiasRangeMap
 
 	// Typealias cast category: maps alias names to the user-declared cast
 	// family (int / byte / float). Populated by the TypeResolution pass for
 	// ranged-primitive aliases so storage narrowing (e.g. `int(0 to 255)` →
 	// u8) doesn't flip the alias into a different cast category. Aliases
 	// without an entry derive their category from their resolved StdType.
-	export var typealiasCastCategories TypealiasCastCategoryMap
+	export var typealiasCastCategories as TypealiasCastCategoryMap
 
 	// Unresolved typealias registry: every `typealias Name = ...` the parser
 	// sees lands here first. The TypeResolution pass runs a fixed-point loop
@@ -168,15 +168,15 @@ export type Project
 	// `typealiasRanges` when applicable) once its right-hand side resolves.
 	// Entries that remain after the loop terminates are reported as either
 	// unknown-name or cycle errors and dropped.
-	export var unresolvedTypealiases UnresolvedTypealiasMap
+	export var unresolvedTypealiases as UnresolvedTypealiasMap
 
 	// Function return type registry: maps qualified function names to their return type names
-	export var funcReturnTypes FuncReturnTypeMap
+	export var funcReturnTypes as FuncReturnTypeMap
 
 	// Maps qualified function names to their throws-clause error type name.
 	// Empty string means non-throwing. Populated by the parser at decl time;
 	// read by checkErrorHandlingRules to validate try/otherwise usage.
-	export var funcThrowsTypes FuncThrowsTypeMap
+	export var funcThrowsTypes as FuncThrowsTypeMap
 
 	// Function visibility sidecar: maps qualified function names to their
 	// declared visibility tier and source file path. Populated alongside
@@ -184,7 +184,7 @@ export type Project
 	// key as `(global, stdlib bootstrap path)` so stdlib-cached functions
 	// (which the cache codec doesn't serialize visibility for) stay
 	// reachable from any user file.
-	export var funcVisibilities FuncVisibilityMap
+	export var funcVisibilities as FuncVisibilityMap
 
 	// Method-name index: maps a bare method name (the trailing segment after
 	// the last '.') to the list of qualified function names that end in
@@ -192,13 +192,13 @@ export type Project
 	// methodCall handling can mark every candidate in O(matches) instead of
 	// scanning the full funcReturnTypes map (O(N) per methodCall, O(K*N)
 	// across the function).
-	export var methodNameIndex MethodNameIndex
+	export var methodNameIndex as MethodNameIndex
 
 	// Function signature registry: parameter names and optional integer default
 	// values. Keyed by the same qualified function name as funcReturnTypes.
 	// Default values are currently limited to integer literals; omitted
 	// parameters without a default are a compile error at the call site.
-	export var funcSignatures FuncSignatureMap
+	export var funcSignatures as FuncSignatureMap
 
 	// Per-call-site substituted paramTypes — the FuncSignature's declared
 	// paramTypes resolved against each call's enclosing-struct innerAliases
@@ -207,13 +207,13 @@ export type Project
 	// no `typeParameter` / unresolved arms before lowering runs. Keyed by
 	// the OpIndex of the call/methodCall op. Lowering reads this directly;
 	// no substitution work happens after TypeResolution finishes.
-	export var callParamTypes CallParamTypesMap
+	export var callParamTypes as CallParamTypesMap
 
 	// Per-call-site resolved callee name (post typealias chase + overload
 	// disambiguation). Populated by the same TypeResolution pass that fills
 	// `callParamTypes`; consumed by LowerMaxonToStd to skip the resolver
 	// chain. Missing entries mean the resolver bailed (interface stub path).
-	export var resolvedCallees ResolvedCalleesMap
+	export var resolvedCallees as ResolvedCalleesMap
 
 	// Per-call-site resolved receiver type. Populated by `resolveAllCalls`
 	// alongside `resolvedCallees`; carries the genericInstance shape the
@@ -221,7 +221,7 @@ export type Project
 	// `genericInstance(Array, [Byte])` here so lowering's
 	// `materializeLayoutArg` can pick the right concrete or conditional
 	// layout descriptor). Free non-generic calls don't insert.
-	export var resolvedReceiverTypes ResolvedReceiverTypesMap
+	export var resolvedReceiverTypes as ResolvedReceiverTypesMap
 
 	// Minimal first-param overload registry. When the parser detects a
 	// duplicate qualified function name and the two functions differ in their
@@ -234,10 +234,10 @@ export type Project
 	// matching mangled name. Non-overloaded callees never appear here and
 	// pay nothing on the lookup path. Real duplicates (same first-param-type
 	// suffix) still report E2001.
-	export var overloadedNames OverloadedNameMap
+	export var overloadedNames as OverloadedNameMap
 
 	// Top-level constants (compile-time evaluated string and integer values)
-	export var topLevelConstants ConstantMap
+	export var topLevelConstants as ConstantMap
 
 	// Pending top-level bindings — both immutable `let` constants (which
 	// drain into `topLevelConstants`) and mutable `var` / `static var/let`
@@ -248,12 +248,12 @@ export type Project
 	// Readers that ask "is this name a known let?" need to consult this
 	// map alongside `topLevelConstants` since the resolved value moves out
 	// once it lands in the destination.
-	export var unresolvedTopLevelDecls UnresolvedTopLevelDeclMap
+	export var unresolvedTopLevelDecls as UnresolvedTopLevelDeclMap
 
 	// Flat arena of expression nodes referenced by UnresolvedTopLevelDecl
 	// entries via UnresolvedConstExprId. Shared project-wide because
 	// cross-file `export let` references resolve through the same id space.
-	export var unresolvedConstExprs UnresolvedConstExprArray
+	export var unresolvedConstExprs as UnresolvedConstExprArray
 
 	// Mutable top-level vars (`var` at module scope) and `static var/let`
 	// fields. The map key is the qualified name used at the source level
@@ -261,14 +261,14 @@ export type Project
 	// Writable storage in the .data section is sized one 8-byte slot per
 	// entry. Export visibility is a separate axis tracked elsewhere — this
 	// registry holds entries from every visibility tier.
-	export var topLevelVars TopLevelVarMap
+	export var topLevelVars as TopLevelVarMap
 
 	// Per-file synthetic module-init function names, in file-discovery order.
 	// Empty when no file has a deferred (array-literal) top-level initializer.
 	// `mrt_start` calls these sequentially before `main`. Each parser instance
 	// allocates one `__module_init_<n>` function lazily on the first top-level
 	// array-literal initializer it sees.
-	export var moduleInitFuncs StringArray
+	export var moduleInitFuncs as StringArray
 
 	// Qualified names of top-level `let xs = [...]` bindings whose array-literal
 	// init lands in `topLevelVars` (writable .data slot) rather than in
@@ -276,18 +276,18 @@ export type Project
 	// keep firing E2013 for source-level `xs = ...` writes — without it, the
 	// `topLevelVars` arm would silently rewrite the unresolvedAssign as a
 	// globalStore.
-	export var immutableArrayLitNames StringArray
+	export var immutableArrayLitNames as StringArray
 
 	// Struct type registry: maps type names to field layouts.
 	// Populated by the TypeResolution pass as it drains unresolvedStructTypes.
 	// Read by lowering and downstream validation; never written to directly by
 	// the parser.
-	export var structTypes StructTypeMap
+	export var structTypes as StructTypeMap
 
 	// Unresolved struct registry: every `type Name ... end` the parser sees
 	// lands here first. The TypeResolution pass moves each entry into
 	// `structTypes` before any pass that consumes struct layouts runs.
-	export var unresolvedStructTypes UnresolvedStructTypeMap
+	export var unresolvedStructTypes as UnresolvedStructTypeMap
 
 	// Reverse index of every name that appears as a struct inner-typealias
 	// (e.g. `ElementMemory` declared inside `type Array uses Element`). Lets
@@ -303,7 +303,7 @@ export type Project
 	// (`resolveNamedToStdType` and the unknown-type validity gate) only
 	// treats struct inner aliases as the i64-typed "we know about this name"
 	// bucket.
-	export var structInnerAliasNames InnerAliasNameSet
+	export var structInnerAliasNames as InnerAliasNameSet
 
 	// Phase 11.0 step 4: parser-recorded `extension TargetType ... end`
 	// blocks. Method bodies inside each extension are registered as
@@ -312,24 +312,24 @@ export type Project
 	// where-clauses, type-parameter rebindings) for later resolution.
 	// Multiple extensions may target the same type, so this is an array
 	// rather than a map.
-	export var unresolvedExtensions UnresolvedExtensionArray
+	export var unresolvedExtensions as UnresolvedExtensionArray
 
 	// Enum type registry: maps enum names to their case lists. Populated by
 	// the TypeResolution pass as it drains `unresolvedEnums`. Each enum's
 	// cases are also registered as top-level integer constants
 	// (`{EnumName}.{caseName}`), which is how `EnumName.case` references
 	// resolve through the existing `unresolvedRead → literal` rewrite.
-	export var enumTypes EnumTypeMap
+	export var enumTypes as EnumTypeMap
 
 	// Unresolved enum registry: every `enum Name ... end` the parser sees lands
 	// here first. The TypeResolution pass drains it into `enumTypes` before
 	// passes that consume enum layouts run.
-	export var unresolvedEnums UnresolvedEnumTypeMap
+	export var unresolvedEnums as UnresolvedEnumTypeMap
 
 	// Unresolved interface registry: every `interface Name ... end` the parser
 	// sees lands here first. Phase 3 of the interfaces plan drains it into
 	// `interfaces` once every referenced name is known.
-	export var unresolvedInterfaces UnresolvedInterfaceMap
+	export var unresolvedInterfaces as UnresolvedInterfaceMap
 
 	// Resolved interface registry. Populated by TypeResolution's
 	// `resolveAllInterfaces` drain. Keyed by the source-level interface name.
@@ -337,7 +337,7 @@ export type Project
 	// stores method signatures with `Element`-style type-parameter names
 	// unsubstituted and substitutes at the conformance site, and we mirror
 	// that pattern.
-	export var interfaces IrInterfaceMap
+	export var interfaces as IrInterfaceMap
 
 	// Function-type interner. Every `(P1, P2) returns R` signature the parser
 	// sees in a parameter position lands here as a parallel-array entry; the
@@ -345,7 +345,7 @@ export type Project
 	// Interning by structural identity means two parameters declared with the
 	// same shape share an id, so downstream equality checks on
 	// `MaxonType.function` reduce to integer compare.
-	export var functionTypes FunctionTypeRegistry
+	export var functionTypes as FunctionTypeRegistry
 
 	// Phase 11.0: type-parameter registry. Keyed by the
 	// (declaringTypeName, paramName) pair the parser collected while walking
@@ -353,7 +353,7 @@ export type Project
 	// Stores the constraint set as a list of interface names — initially
 	// empty; populated when a `where` clause names the constraint set. The
 	// `MaxonType.typeParameter(id)` arm is a stable index into this table.
-	export var typeParameters TypeParamRegistry
+	export var typeParameters as TypeParamRegistry
 
 	// Phase 11.0: generic-instance interner. Every distinct `Base with (Args)`
 	// MaxonType the parser produces lands here as a parallel-array entry; the
@@ -362,13 +362,13 @@ export type Project
 	// descriptors, Phase 11.3 witness tables) intern through this registry.
 	// For Phase 11.0 the registry primarily exists so the parser-AST surface
 	// has a place to record observed instances.
-	export var genericInstances GenericInstanceRegistry
+	export var genericInstances as GenericInstanceRegistry
 
 	// Phase 11.0: conformance registry. Keyed by (typeName, interfaceName).
 	// Stores the source-level `with` arguments captured by the parser at the
 	// `implements` clause; later phases will fill in resolved methodImpls and
 	// the witness-table label. Phase 11.0 only seeds the keys.
-	export var conformances ConformanceRegistry
+	export var conformances as ConformanceRegistry
 
 	// Parser → TypeResolution sidecar describing each array literal's
 	// structural pieces. The parser collects only IR-shape information
@@ -379,7 +379,7 @@ export type Project
 	// for `__mm` and `__arr`. Each literal's entry is registered under
 	// both `(funcName, mmResultName)` and `(funcName, initResultName)`
 	// so the create- and init-resolution paths each get an O(1) lookup.
-	export var arrayLiteralProducers ArrayLiteralProducerMap
+	export var arrayLiteralProducers as ArrayLiteralProducerMap
 
 	// Parallel sidecar for map literals (`[k: v, ...]`). The parser emits two
 	// __ManagedMemory.create + setLength sequences (one per axis) and then a
@@ -389,14 +389,14 @@ export type Project
 	// array literals; this map only carries the final init-result entry so
 	// the user-visible map value gets the matching `genericInstance(<mapType>,
 	// [Key, Value])` type binding.
-	export var mapLiteralProducers MapLiteralProducerMap
+	export var mapLiteralProducers as MapLiteralProducerMap
 
 	// Phase 11.0 step 2: project-wide table of resolved generic typealiases.
 	// Generic aliases (`typealias E = Base with (...)`) cannot live in
 	// `typealiases TypealiasMap` (StdType-typed) because their resolved form
 	// is a `MaxonType.genericInstance(...)`. The drain in TypeResolution
 	// promotes `UnresolvedTypeExpr.genericAlias(...)` into entries here.
-	export var genericTypealiases GenericTypealiasMap
+	export var genericTypealiases as GenericTypealiasMap
 
 	// Phase 11.0: parallel registry of interface-typed value identifiers.
 	// `MaxonType.interface(id)` carries an InterfaceTypeId into this table;
@@ -404,21 +404,21 @@ export type Project
 	// from `interfaces IrInterfaceMap` (which is keyed by name and stores the
 	// resolved declaration). Interning by name means two `interface Iterable`
 	// arms share an id so structural equality reduces to integer compare.
-	export var interfaceRegistry InterfaceTypeRegistry
+	export var interfaceRegistry as InterfaceTypeRegistry
 
 	// Stage B (closures): monotonic counter used to mint unique
 	// `_$closure_<N>` names for lifted closure bodies. Per-project rather
 	// than per-module so cross-file uniqueness holds even when closures
 	// from multiple files land in the same merged module. Bumped once per
 	// `parseClosure` invocation; the parser never decrements.
-	export var closureCounter ClosureCounter
+	export var closureCounter as ClosureCounter
 
 	// Per-project counter for cast-site range-check label minting
 	// (`__cast_panic_N`, `__cast_ok_N`, `__cast_check_lo_N`). Bumped once
 	// per expanded `castCheck` op in `expandCastRangeChecks`. Reset is
 	// not needed across compiles — the counter just produces unique
 	// labels per run.
-	export var castCheckCounter ParsedInt
+	export var castCheckCounter as ParsedInt
 
 	// Phase 15e: map each `__TupleN` structAlloc's result name to the
 	// fully-specialised `genericInstance(__TupleN, [T0..TN])` interned by
@@ -428,7 +428,7 @@ export type Project
 	// through to their concrete arg types (essential for mixed int/float
 	// tuples where the field's width / SSE-register-ness depends on the
 	// resolved arg type).
-	export var tupleAllocGids TupleAllocGidMap
+	export var tupleAllocGids as TupleAllocGidMap
 
 	// Phase 15a: per-call-op tags used by `checkDiscardedResults` (E3064/E3065).
 	// Populated by the parser at three positions where a call's result is
@@ -441,8 +441,8 @@ export type Project
 	// functions sharing a synth name (`$t0`) don't collide. Not serialized to
 	// the stdlib cache because stdlib code isn't checked (users can't fix it
 	// anyway, and the C# bootstrap exempts it).
-	export var discardedBareCallResults DiscardedCallResultSet
-	export var discardedLetCallResults DiscardedCallResultSet
+	export var discardedBareCallResults as DiscardedCallResultSet
+	export var discardedLetCallResults as DiscardedCallResultSet
 
 	// Phase 15a: function names whose body mutates one or more parameters
 	// (direct reassignment `param = ...`, or self-field-store inside an
@@ -451,48 +451,48 @@ export type Project
 	// impure regardless of what op pattern it contains otherwise. Mirrors
 	// the C# bootstrap's `IrFunction.MutatedParams` set populated by
 	// ParameterMutationAnalysisPass.
-	export var paramMutatingFunctions DiscardedCallResultSet
+	export var paramMutatingFunctions as DiscardedCallResultSet
 
 	// Project metadata
-	export var rootPath FilePath
+	export var rootPath as FilePath
 	// Compilation target
-	export var target Target
+	export var target as Target
 
 	// Collected diagnostics (errors reported during compilation)
-	export var diagnostics DiagnosticArray
+	export var diagnostics as DiagnosticArray
 
 	// Global data table for string literals and other read-only data.
 	// Populated during Maxon->Mid lowering when string-producing ops are lowered.
-	export var globalData GlobalDataTable
+	export var globalData as GlobalDataTable
 
 	// True when coverage instrumentation should run. Gates the
 	// InstrumentCoverage pass, the coverage-aware runtime augmentation, and
 	// registration of the __data_cov_* globals. Defaults to false so a plain
 	// build of any project is unchanged by the coverage machinery.
-	export var coverageEnabled bool
+	export var coverageEnabled as bool
 
 	// Populated by the InstrumentCoverage pass: one CovSite per instrumented
 	// block. Chunk E serializes this to a .covmap file next to the executable;
 	// Chunk D only builds the in-memory table.
-	export var covSites CovSiteTable
+	export var covSites as CovSiteTable
 
 	// IR dump configuration (`--emit-ir` and `--dump-stages`). The pipeline and
 	// the query layer consult `irDump.enabled()` to bypass cache fast paths so
 	// every pass runs against a freshly-computed module.
-	export var irDump IrDumpOptions
+	export var irDump as IrDumpOptions
 
 	// Phase 11.2: per-`GenericInstanceId` mangled label of the emitted
 	// 56-byte rdata layout descriptor. Filled by BuildLayoutDescriptors;
 	// read by Phase 11.4 lowering when materializing a descriptor at a
 	// generic call site.
-	export var layoutDescriptors LayoutDescriptorRegistry
+	export var layoutDescriptors as LayoutDescriptorRegistry
 
 	// Phase 11.3: per-`(typeName, interfaceName)` resolved witness table
 	// (label, ordered method-impl names, fat-pointer flag, optional
 	// `extends` parent label). Filled by BuildWitnessTables; read by
 	// Phase 11.4 lowering when constructing an interface-typed value or
 	// dispatching through a witness.
-	export var witnessTables WitnessTableRegistry
+	export var witnessTables as WitnessTableRegistry
 
 	// Definite roots — function names the DFE must keep alive even when no
 	// statically-named `call` op reaches them. After Stage K.4, this is
@@ -502,7 +502,7 @@ export type Project
 	// moved to `witnessConditionalRoots` (their liveness is now contingent
 	// on the owning rdata blob's label being demanded by a `loadWitnessTable`
 	// / `loadLayoutDescriptor` op).
-	export var livenessRoots StringArray
+	export var livenessRoots as StringArray
 
 	// Stage K.4: witness-conditional roots — keyed by the rdata label of a
 	// witness table (`__witness_<type>_<iface>` / `__witness_<gid>_<iface>`)
@@ -514,7 +514,7 @@ export type Project
 	// witness-impl bodies and layout copy/destroy thunks stay alive
 	// exactly when the rdata blob they back is actually loaded by user
 	// code.
-	export var witnessConditionalRoots WitnessConditionalRootsMap
+	export var witnessConditionalRoots as WitnessConditionalRootsMap
 
 	// Phase 11.4: per-function shape of synthetic trailing params that the
 	// Maxon→Std lowering injects when the body is a generic — a layout slot
@@ -534,19 +534,19 @@ export type Project
 	// it would have consumed garbage. On wasm the validator surfaced the bug
 	// as `expected i64 but nothing on stack`. The map-based lookup here is
 	// the proper architectural fix.
-	export var genericFunctionImplicitArity GenericFunctionImplicitArityMap
+	export var genericFunctionImplicitArity as GenericFunctionImplicitArityMap
 
 	// Phase 11.2: emitted rdata blob bytes keyed by mangled label. The
 	// canonicalize pass (11.6) folds `descriptorField` reads of a known
 	// label into a constant when this map carries the bytes — that's the
 	// primary mechanism by which inlined generic bodies recover
 	// monomorphization-quality codegen.
-	export var staticRdataValues StaticRdataValueMap
+	export var staticRdataValues as StaticRdataValueMap
 
 	// Constant-array-to-rdata fast path. Populated by the
 	// `runConstantArrayLiteralRdata` pass; consumed by the lowering hook
 	// at `__ManagedMemory.create`. See ConstantArrayRdataInfo for details.
-	export var constantArrayRdata ConstantArrayRdataMap
+	export var constantArrayRdata as ConstantArrayRdataMap
 
 	// Phase 11.4 follow-up: per-instance witness-method thunks that
 	// `BuildWitnessTables` recorded for this pipeline run.
@@ -555,15 +555,15 @@ export type Project
 	// out of the stdlib cache (already compiled into stdlib's object code).
 	// Not cache-persisted: the next pipeline run rebuilds it from its own
 	// gid/conformance walk.
-	export var pendingWitnessThunkGids GenericInstanceIdArray
-	export var pendingWitnessThunkInterfaces StringArray
+	export var pendingWitnessThunkGids as GenericInstanceIdArray
+	export var pendingWitnessThunkInterfaces as StringArray
 
 	// Phase 11.7: deferred where-clause checks for generic typealias
 	// instantiations. Populated during typealias drain (when conformances
 	// haven't been recorded yet) and drained after `validateConformances`
 	// finishes. Each entry pins a (typealiasName, expr, source location)
 	// triple — an E3017 is emitted per failing constraint.
-	export var pendingConstraintChecks PendingConstraintCheckArray
+	export var pendingConstraintChecks as PendingConstraintCheckArray
 
 	// Deferred unused-variable checks (E3012). The parser pushes one entry
 	// per function — capturing parameter and local declarations seen in the
@@ -573,12 +573,12 @@ export type Project
 	// premature E3012. SemanticCheck drains this list and emits one E3012
 	// per function, skipping any function whose source file already carries
 	// a diagnostic.
-	export var pendingUnusedChecks PendingUnusedCheckArray
+	export var pendingUnusedChecks as PendingUnusedCheckArray
 
 	// Deferred unused-typealias checks (E3062). See PendingUnusedTypealias for
 	// the why. Drained after `drainPendingConstraintChecks` so an alias whose
 	// RHS failed constraint validation (E3017) doesn't double-report.
-	export var pendingUnusedTypealiases PendingUnusedTypealiasArray
+	export var pendingUnusedTypealiases as PendingUnusedTypealiasArray
 
 	// Cross-file top-level-constant reads recorded by `rewriteUnresolvedRead`
 	// at the moment a constant reference is folded out of the IR. By the time
@@ -587,13 +587,13 @@ export type Project
 	// be recovered from the resolved IR. We capture (constantName,
 	// readerFilePath) pairs at the rewrite site so the pass can later count
 	// these reads when classifying an `export let`/`module let` as unused.
-	export var crossFileConstReads CrossFileConstReadArray
+	export var crossFileConstReads as CrossFileConstReadArray
 
 	// Names of typealiases that failed constraint validation during
 	// `drainPendingConstraintChecks` (E3017 / E2003). Read by the deferred
 	// unused-typealias drain to suppress E3062 for the same alias, matching
 	// the bootstrap's single-diagnostic shape.
-	export var constraintFailedTypealiases ReferencedNameSet
+	export var constraintFailedTypealiases as ReferencedNameSet
 
 	// Per-file parser-side-effect deltas. Each entry records the keys the
 	// file's parse-and-drain inserted into the various registries on this
@@ -602,7 +602,7 @@ export type Project
 	// re-parse, which rolls back the prior delta — removing the file's
 	// previous contributions so the upcoming parse doesn't collide with
 	// itself. See `Compiler/ParseDelta.maxon` for the full machinery.
-	export var fileParseDeltas FilePathToFileParseDelta
+	export var fileParseDeltas as FilePathToFileParseDelta
 
 	// True after `parseStdlibBootstrap` has populated this project's parser
 	// registries with the synthesized stdlib bootstrap source. Gates the
@@ -614,19 +614,19 @@ export type Project
 	// the bootstrap (unresolvedInterfaces, typealias declarations) persists
 	// across re-resolution because the parser registries are append-only at
 	// the project level — re-parsing produces zero new information.
-	export var stdlibBootstrapParsed bool
+	export var stdlibBootstrapParsed as bool
 
 	// Provenance for char-byte literals — see `CharByteLiteralSet` for the why.
 	// Populated by the parser at every single-byte char-literal site and
 	// expanded by TypeResolution's producer-types walk through varDecl/varLoad
 	// chains so consumers can recover char-ness at use sites.
-	export var charByteLiterals CharByteLiteralSet
+	export var charByteLiterals as CharByteLiteralSet
 
 	// J.4b: per-receiver monomorphization cache for user-declared
 	// interface-extension methods. Keyed by `{receiverType}::{ifaceCallee}`
 	// so a repeated `intList.has(...)` site picks up the already-cloned
 	// `IntList.has` function instead of synthesizing a duplicate.
-	export var monomorphCache MonomorphCache
+	export var monomorphCache as MonomorphCache
 
 	// J.4b: per-method where-clause sidecar. Keyed by `<iface>.<method>`
 	// (the qualified callee name used everywhere else); value is the
@@ -636,7 +636,7 @@ export type Project
 	// Used by `resolveMethodCallSite` to surface E4006 when a conditional
 	// extension's constraints aren't satisfied by the call site's
 	// receiver bindings.
-	export var extensionMethodWhereClauses WhereClauseMapByName
+	export var extensionMethodWhereClauses as WhereClauseMapByName
 
 	// Stage B (closures): hand out the next unique `_$closure_<N>` suffix
 	// and bump the counter. Called by the parser at every closure
@@ -738,8 +738,8 @@ end 'Project'
 // right shape — without it, the call op is under-arity (silent ABI
 // corruption on x64, validator rejection on wasm).
 export type GenericFunctionImplicits
-	export var hasLayout bool
-	export var witnessConstraints WhereClauseArray
+	export var hasLayout as bool
+	export var witnessConstraints as WhereClauseArray
 
 	export static function create(hasLayout bool, witnessConstraints WhereClauseArray) returns GenericFunctionImplicits
 		return Self{hasLayout: hasLayout, witnessConstraints: witnessConstraints}
@@ -756,9 +756,9 @@ export typealias GenericFunctionImplicitArityMap = Map with (String, GenericFunc
 // parser at every parameter and local declaration site; consumed by
 // SemanticCheck's deferred unused-var pass.
 export type UnusedCandidate
-	export let name String
-	export let line LineNumber
-	export let column ColumnNumber
+	export let name as String
+	export let line as LineNumber
+	export let column as ColumnNumber
 
 	export static function create(name String, line LineNumber, column ColumnNumber) returns UnusedCandidate
 		return Self{name: name, line: line, column: column}
@@ -786,13 +786,13 @@ export typealias UnusedCandidateArray = Array with UnusedCandidate
 // must still emit E3012 for the clean function while suppressing the noisy
 // secondary diagnostic for the dirty one.
 export type PendingUnusedCheck
-	export let filePath FilePath
-	export let candidates UnusedCandidateArray
-	export let referenced ReferencedNameSet
-	export let skipParamCheck bool
-	export let paramCount ParsedInt
-	export let startLine LineNumber
-	export let endLine LineNumber
+	export let filePath as FilePath
+	export let candidates as UnusedCandidateArray
+	export let referenced as ReferencedNameSet
+	export let skipParamCheck as bool
+	export let paramCount as ParsedInt
+	export let startLine as LineNumber
+	export let endLine as LineNumber
 
 	export static function create(filePath FilePath, candidates UnusedCandidateArray, referenced ReferencedNameSet, skipParamCheck bool, paramCount ParsedInt, startLine LineNumber, endLine LineNumber) returns PendingUnusedCheck
 		return Self{filePath: filePath, candidates: candidates, referenced: referenced, skipParamCheck: skipParamCheck, paramCount: paramCount, startLine: startLine, endLine: endLine}
@@ -812,10 +812,10 @@ export typealias ReferencedNameSet = Set with String
 // Deferring lets us drop E3062 retroactively for aliases whose RHS failed
 // constraint validation, matching the bootstrap's single-diagnostic shape.
 export type PendingUnusedTypealias
-	export let name String
-	export let line LineNumber
-	export let column ColumnNumber
-	export let filePath FilePath
+	export let name as String
+	export let line as LineNumber
+	export let column as ColumnNumber
+	export let filePath as FilePath
 
 	export static function create(name String, line LineNumber, column ColumnNumber, filePath FilePath) returns PendingUnusedTypealias
 		return Self{name: name, line: line, column: column, filePath: filePath}
@@ -869,13 +869,13 @@ end 'charByteLiteralKey'
 //                    which sees the same shared entry the `__mm.create`
 //                    callsite already errored on) doesn't double-report
 export type ArrayLiteralProducer
-	export var arrayTypeName String
-	export var mmResultName ByteArray
-	export var initResultName ByteArray
-	export var elemNames ByteArrayArray
-	export var elemRanges SourceRangeArray
-	export var sourceFilePath FilePath
-	export var errorReported bool
+	export var arrayTypeName as String
+	export var mmResultName as ByteArray
+	export var initResultName as ByteArray
+	export var elemNames as ByteArrayArray
+	export var elemRanges as SourceRangeArray
+	export var sourceFilePath as FilePath
+	export var errorReported as bool
 
 	export static function create(arrayTypeName String, mmResultName ByteArray, initResultName ByteArray, elemNames ByteArrayArray, elemRanges SourceRangeArray, sourceFilePath FilePath) returns ArrayLiteralProducer
 		return Self{arrayTypeName: arrayTypeName, mmResultName: mmResultName, initResultName: initResultName, elemNames: elemNames, elemRanges: elemRanges, sourceFilePath: sourceFilePath, errorReported: false}
@@ -899,14 +899,14 @@ export typealias ArrayLiteralProducerMap = Map with (String, ArrayLiteralProduce
 // pin the user-visible result's type to `genericInstance(<mapType>, [Key,
 // Value])` after the keys/values axes finish unifying.
 export type MapLiteralProducer
-	export var mapTypeName String
-	export var initResultName ByteArray
+	export var mapTypeName as String
+	export var initResultName as ByteArray
 	// Per-axis __mm result names so TypeResolution can recover the unified
 	// key/value element types from the existing array-literal pipeline.
-	export var keyMmResultName ByteArray
-	export var valueMmResultName ByteArray
-	export var sourceRange SourceRange
-	export var sourceFilePath FilePath
+	export var keyMmResultName as ByteArray
+	export var valueMmResultName as ByteArray
+	export var sourceRange as SourceRange
+	export var sourceFilePath as FilePath
 
 	export static function create(mapTypeName String, initResultName ByteArray, keyMmResultName ByteArray, valueMmResultName ByteArray, sourceRange SourceRange, sourceFilePath FilePath) returns MapLiteralProducer
 		return Self{mapTypeName: mapTypeName, initResultName: initResultName, keyMmResultName: keyMmResultName, valueMmResultName: valueMmResultName, sourceRange: sourceRange, sourceFilePath: sourceFilePath}
@@ -921,11 +921,11 @@ export typealias MapLiteralProducerMap = Map with (String, MapLiteralProducer)
 // Phase 11.7: a single deferred where-clause check, captured during
 // typealias drain.
 export type PendingConstraintCheck
-	export var name String
-	export var expr UnresolvedTypeExpr
-	export var declLine LineNumber
-	export var declColumn ColumnNumber
-	export var declFilePath FilePath
+	export var name as String
+	export var expr as UnresolvedTypeExpr
+	export var declLine as LineNumber
+	export var declColumn as ColumnNumber
+	export var declFilePath as FilePath
 
 	export static function create(name String, expr UnresolvedTypeExpr, declLine LineNumber, declColumn ColumnNumber, declFilePath FilePath) returns PendingConstraintCheck
 		return Self{name: name, expr: expr, declLine: declLine, declColumn: declColumn, declFilePath: declFilePath}
@@ -955,9 +955,9 @@ export typealias WitnessConditionalRootsMap = Map with (String, StringArray)
 // buffer + running per-element set runtime calls. Keyed by the call op's
 // stable `OpIndex` (which is unique per MaxonModule).
 export type ConstantArrayRdataInfo
-	export var rdataLabel String
-	export var count ParsedInt
-	export var elementSize ParsedInt
+	export var rdataLabel as String
+	export var count as ParsedInt
+	export var elementSize as ParsedInt
 
 	export static function create(rdataLabel String, count ParsedInt, elementSize ParsedInt) returns ConstantArrayRdataInfo
 		return Self{rdataLabel: rdataLabel, count: count, elementSize: elementSize}
@@ -984,8 +984,8 @@ export typealias MaxonTypeArrayArray = Array with MaxonTypeArray
 export typealias MaxonReturnTypeArray = Array with MaxonReturnType
 
 export type FunctionTypeRegistry
-	export var paramTypes MaxonTypeArrayArray
-	export var returnTypes MaxonReturnTypeArray
+	export var paramTypes as MaxonTypeArrayArray
+	export var returnTypes as MaxonReturnTypeArray
 
 	export static function create() returns FunctionTypeRegistry
 		return Self{paramTypes: MaxonTypeArrayArray.create(), returnTypes: MaxonReturnTypeArray.create()}
@@ -1056,10 +1056,10 @@ export typealias DeclaringTypeParamListMap = Map with (String, StringArray)
 // otherwise the witness lookup demands the wrong type's interface.
 // Mirrors what `IrInterface.usesParams` does for interfaces.
 export type TypeParamRegistry
-	export var declaringTypeNames StringArray
-	export var paramNames StringArray
-	export var constraints TypeParamConstraintArray
-	export var declaringTypeParamLists DeclaringTypeParamListMap
+	export var declaringTypeNames as StringArray
+	export var paramNames as StringArray
+	export var constraints as TypeParamConstraintArray
+	export var declaringTypeParamLists as DeclaringTypeParamListMap
 
 	export static function create() returns TypeParamRegistry
 		return Self{declaringTypeNames: StringArray.create(), paramNames: StringArray.create(), constraints: TypeParamConstraintArray.create(), declaringTypeParamLists: DeclaringTypeParamListMap.create()}
@@ -1198,8 +1198,8 @@ end 'TypeParamRegistry'
 // genericInstance arms with the same baseId and structurally equal args
 // share an id, so downstream equality checks reduce to integer compare.
 export type GenericInstanceRegistry
-	export var baseIds TypeNameIdArray
-	export var argLists MaxonTypeArrayArray
+	export var baseIds as TypeNameIdArray
+	export var argLists as MaxonTypeArrayArray
 
 	export static function create() returns GenericInstanceRegistry
 		return Self{baseIds: TypeNameIdArray.create(), argLists: MaxonTypeArrayArray.create()}
@@ -1243,9 +1243,9 @@ export typealias TypeNameIdArray = Array with TypeNameId
 // For Phase 11.0 we only need the bare interface name lookup; the
 // (typeName, interfaceName) matrix and method-impl table land in step 5+.
 export type ConformanceRegistry
-	export var typeNames StringArray
-	export var interfaceNames StringArray
-	export var withArgsList ConformanceWithArgsArray
+	export var typeNames as StringArray
+	export var interfaceNames as StringArray
+	export var withArgsList as ConformanceWithArgsArray
 
 	export static function create() returns ConformanceRegistry
 		return Self{typeNames: StringArray.create(), interfaceNames: StringArray.create(), withArgsList: ConformanceWithArgsArray.create()}
@@ -1308,7 +1308,7 @@ export typealias WhereClauseMapByName = Map with (String, WhereClauseArray)
 // id; interns by name so the existential value-type representation collapses
 // to integer compare under structural equality.
 export type InterfaceTypeRegistry
-	export var names StringArray
+	export var names as StringArray
 
 	export static function create() returns InterfaceTypeRegistry
 		return Self{names: StringArray.create()}
@@ -1352,7 +1352,7 @@ export typealias QualifiedNameArray = Array with String
 export typealias MethodNameIndexMap = Map with (String, QualifiedNameArray)
 
 export type MethodNameIndex
-	export var byBareName MethodNameIndexMap
+	export var byBareName as MethodNameIndexMap
 
 	export static function create() returns MethodNameIndex
 		return Self{byBareName: MethodNameIndexMap.create()}
@@ -1465,8 +1465,8 @@ export typealias TypeNameId = int(0 to u64.max)
 export typealias TypeNameIdMap = Map with (String, TypeNameId)
 
 export type TypeNameInterner
-	export var names StringArray
-	export var lookup TypeNameIdMap
+	export var names as StringArray
+	export var lookup as TypeNameIdMap
 
 	export static function create() returns TypeNameInterner
 		return Self{names: StringArray.create(), lookup: TypeNameIdMap.create()}
@@ -1511,7 +1511,7 @@ end 'TypeNameInterner'
 export typealias CalleeNameByteArrayMap = Map with (String, ByteArray)
 
 export type CalleeNameInterner
-	export var lookup CalleeNameByteArrayMap
+	export var lookup as CalleeNameByteArrayMap
 
 	export static function create() returns CalleeNameInterner
 		return Self{lookup: CalleeNameByteArrayMap.create()}
@@ -1542,8 +1542,8 @@ export typealias StringId = int(0 to u64.max)
 export typealias StringIdMap = Map with (String, StringId)
 
 export type StringInterner
-	export var values StringArray
-	export var lookup StringIdMap
+	export var values as StringArray
+	export var lookup as StringIdMap
 
 	export static function create() returns StringInterner
 		return Self{values: StringArray.create(), lookup: StringIdMap.create()}
@@ -1581,17 +1581,17 @@ export typealias VarSlotArray = Array with VarSlot
 // arithmetic promotions are inserted by lowering, not by the parser.
 
 export type VarInfo
-	export var name String
-	export var varType MaxonType
-	export var mutable bool
-	export var slot VarSlot
+	export var name as String
+	export var varType as MaxonType
+	export var mutable as bool
+	export var slot as VarSlot
 	// True when this name is a self-field alias inside an instance method.
 	// Reads emit maxon.fieldLoad via __self + fieldOffset; writes emit
 	// maxon.fieldStore. The local slot is unused in that case — heap is the
 	// single source of truth, so nested method calls that mutate self.field
 	// are observed on return.
-	export var isSelfField bool
-	export var fieldOffset FieldOffset
+	export var isSelfField as bool
+	export var fieldOffset as FieldOffset
 	// Phase 9 Stage 4: true when this name was introduced as a match-arm
 	// binding on a union payload (e.g. `match u 'a' full(value) then …`).
 	// Reads still go through the local slot — `emitUnionArmBindings`
@@ -1601,15 +1601,15 @@ export type VarInfo
 	// heap-resident payload slot updates in place. The `mutable` flag on the
 	// VarInfo follows the scrutinee's mutability so `let u = …` produces an
 	// E2013 on the assignment path.
-	export var isPayloadBinding bool
-	export var payloadScrutineeName String
-	export var payloadFieldIndex CaseOrdinal
+	export var isPayloadBinding as bool
+	export var payloadScrutineeName as String
+	export var payloadFieldIndex as CaseOrdinal
 	// Phase 9 Stage 4 follow-up: the union case this binding belongs to.
 	// Carries through to `enumPayloadStore` so TR can resolve the payload's
 	// field type from the union's case table — different cases of the
 	// same union have independent payload field types, so the case name
 	// is required, not just the union name.
-	export var payloadCaseName String
+	export var payloadCaseName as String
 
 	export static function create(name String, varType MaxonType, mutable bool, slot VarSlot) returns VarInfo
 		return Self{name: name, varType: varType, mutable: mutable, slot: slot, isSelfField: false, fieldOffset: 0, isPayloadBinding: false, payloadScrutineeName: "", payloadFieldIndex: 0 as CaseOrdinal, payloadCaseName: ""}
@@ -1656,8 +1656,8 @@ export typealias TypealiasCastCategoryMap = Map with (String, CastCategory)
 // reachable from anywhere, and we don't serialize visibility through the
 // stdlib cache.
 export type TypealiasVisibilityInfo
-	export var visibility Visibility
-	export var sourceFilePath FilePath
+	export var visibility as Visibility
+	export var sourceFilePath as FilePath
 
 	export static function create(visibility Visibility, sourceFilePath FilePath) returns TypealiasVisibilityInfo
 		return Self{visibility: visibility, sourceFilePath: sourceFilePath}
@@ -1695,9 +1695,9 @@ end 'appendTypealiasVisibility'
 // `reachableTypealiasDefinitions`; callers use the namespace+name pair to
 // render disambiguation candidates in E3063 diagnostics.
 export type ReachableTypealiasInfo
-	export var namespace String
-	export var sourceFilePath FilePath
-	export var visibility Visibility
+	export var namespace as String
+	export var sourceFilePath as FilePath
+	export var visibility as Visibility
 
 	export static function create(namespace String, sourceFilePath FilePath, visibility Visibility) returns ReachableTypealiasInfo
 		return Self{namespace: namespace, sourceFilePath: sourceFilePath, visibility: visibility}
@@ -1798,8 +1798,8 @@ end 'reachableTypealiasDefinitions'
 // are restored without a sidecar entry and stay reachable from
 // everywhere.
 export type FuncVisibilityInfo
-	export var visibility Visibility
-	export var sourceFilePath FilePath
+	export var visibility as Visibility
+	export var sourceFilePath as FilePath
 
 	export static function create(visibility Visibility, sourceFilePath FilePath) returns FuncVisibilityInfo
 		return Self{visibility: visibility, sourceFilePath: sourceFilePath}
@@ -1848,8 +1848,8 @@ export typealias ParamDefaultArray = Array with ParamDefault
 // the parser's call-site default-fill loop so the control-flow between
 // "has a default" and "no default" can stay in an ordinary `if`.
 export type ParamDefaultValue
-	export var hasValue bool
-	export var value IntConstant
+	export var hasValue as bool
+	export var value as IntConstant
 
 	export static function some(value IntConstant) returns ParamDefaultValue
 		return Self{hasValue: true, value: value}
@@ -1966,10 +1966,10 @@ export typealias ParamNameIndexMap = Map with (String, ParsedInt)
 // uses it to validate each argument's MaxonType against the declared parameter
 // MaxonType, and to drive implicit conversions (int↔float, int→byte, etc.).
 export type FuncSignature
-	export var paramNames StringArray
-	export var paramTypes MaxonTypeArray
-	export var paramDefaults ParamDefaultArray
-	export var nameToIndex ParamNameIndexMap
+	export var paramNames as StringArray
+	export var paramTypes as MaxonTypeArray
+	export var paramDefaults as ParamDefaultArray
+	export var nameToIndex as ParamNameIndexMap
 
 	export static function create(paramNames StringArray, paramTypes MaxonTypeArray, paramDefaults ParamDefaultArray) returns FuncSignature
 		if paramTypes.count() != paramNames.count() 'arityMismatch'
@@ -2033,8 +2033,8 @@ export typealias OverloadedNameMap = Map with (String, QualifiedNameArray)
 // should emit E2001" case. The `mangledName` field is meaningful only when
 // `isOverload` is true.
 export type OverloadResolution
-	export var isOverload bool
-	export var mangledName String
+	export var isOverload as bool
+	export var mangledName as String
 
 	export static function overload(mangledName String) returns OverloadResolution
 		return Self{isOverload: true, mangledName: mangledName}
@@ -2103,19 +2103,19 @@ export union UnresolvedTypeExpr
 end 'UnresolvedTypeExpr'
 
 export type UnresolvedTypealias
-	export var name String
-	export var expr UnresolvedTypeExpr
+	export var name as String
+	export var expr as UnresolvedTypeExpr
 	// Visibility tier from the `export` / `module` modifier on the
 	// `typealias` declaration (or `file` if neither was present).
 	// Forwarded into `typealiasVisibilities` at resolution time so
 	// cross-file uses of the alias as a parameter / return type can
 	// be filtered.
-	export var visibility Visibility
+	export var visibility as Visibility
 	// Parse-time source location; carried so resolver-emitted diagnostics
 	// (cycle, unknown-name) can point back at the original declaration.
-	export var line LineNumber
-	export var column ColumnNumber
-	export var filePath FilePath
+	export var line as LineNumber
+	export var column as ColumnNumber
+	export var filePath as FilePath
 
 	export static function create(name String, expr UnresolvedTypeExpr, visibility Visibility, line LineNumber, column ColumnNumber, filePath FilePath) returns UnresolvedTypealias
 		return Self{name: name, expr: expr, visibility: visibility, line: line, column: column, filePath: filePath}
@@ -2143,39 +2143,39 @@ export typealias GenericTypealiasMap = Map with (String, MaxonType)
 // module has been parsed. Field MaxonTypes are kept as the parser saw them;
 // their named-id validation happens during the same resolver pass.
 export type UnresolvedStructType
-	export var name String
-	export var fields StructFieldArray
-	export var byteSize FieldOffset
+	export var name as String
+	export var fields as StructFieldArray
+	export var byteSize as FieldOffset
 	// Visibility tier from the `export` / `module` modifier on the
 	// `type` declaration (or `file` if neither was present). Forwarded
 	// to `StructType` at resolution time and consulted by
 	// TypeResolution's named-type visibility walk.
-	export var visibility Visibility
+	export var visibility as Visibility
 	// Source location of the `type Name` token, for duplicate-type diagnostics.
-	export var line LineNumber
-	export var column ColumnNumber
-	export var filePath FilePath
+	export var line as LineNumber
+	export var column as ColumnNumber
+	export var filePath as FilePath
 	// Phase 1b: the parsed `implements I1, I2 with X, ...` clause, captured
 	// as bare interface and type-parameter names. Empty when no clause was
 	// present. Phase 3 of the interfaces plan validates conformance and
 	// substitutes associated types — for now this is metadata only.
-	export var implementedInterfaces ConformanceArray
+	export var implementedInterfaces as ConformanceArray
 	// Phase 11.0: the parsed `uses T1, T2` clause's bare param names. Empty
 	// when no clause was present. Step 5+ resolves these against
 	// `project.typeParameters` and uses them to substitute generic field /
 	// method types.
-	export var typeParams StringArray
+	export var typeParams as StringArray
 	// Phase 11.0: the parsed `where T is Trait1 and Trait2, ...` clause as
 	// a flat array of (paramName, requiredTraitName) pairs (conjunctions
 	// expanded at parse time). Empty when no clause was present.
-	export var whereClauses WhereClauseArray
+	export var whereClauses as WhereClauseArray
 	// Phase 11.0 step 2: inner `typealias Name = ...` declarations parsed
 	// inside the type body (e.g. `typealias ElementMemory = __ManagedMemory
 	// with Element` in `Array.maxon`). Stored as raw `UnresolvedTypeExpr` —
 	// the resolver promotes these into concrete MaxonTypes alongside the
 	// surrounding struct's resolution. Step 5+ consumes them during
 	// substitution; for now they are recorded only.
-	export var innerAliases InnerAliasMap
+	export var innerAliases as InnerAliasMap
 
 	export static function create(name String, fields StructFieldArray, byteSize FieldOffset, visibility Visibility, line LineNumber, column ColumnNumber, filePath FilePath, implementedInterfaces ConformanceArray, typeParams StringArray, whereClauses WhereClauseArray, innerAliases InnerAliasMap) returns UnresolvedStructType
 		return Self{name: name, fields: fields, byteSize: byteSize, visibility: visibility, line: line, column: column, filePath: filePath, implementedInterfaces: implementedInterfaces, typeParams: typeParams, whereClauses: whereClauses, innerAliases: innerAliases}
@@ -2195,28 +2195,28 @@ export typealias UnresolvedStructTypeMap = Map with (String, UnresolvedStructTyp
 // witness tables.
 export type UnresolvedExtension
 	// Bare name of the type being extended (e.g. "Array").
-	export var targetTypeName String
+	export var targetTypeName as String
 	// Type-parameter rebinding when the extension uses `extension Array
 	// uses E` syntax to give the target's parameters local names. Empty
 	// when the extension inherits the target's parameter names verbatim
 	// (the common case for `extension Array where Element is ...`).
-	export var targetTypeParams StringArray
+	export var targetTypeParams as StringArray
 	// Conformances introduced by this extension's `implements I1, I2`
 	// clause. Empty when the extension only adds methods.
-	export var addedConformances ConformanceArray
+	export var addedConformances as ConformanceArray
 	// Constraints from the `where T is Trait1 and Trait2 ...` clause that
 	// gate when this extension's methods / conformances apply. Empty for
 	// unconditional extensions.
-	export var whereClauses WhereClauseArray
+	export var whereClauses as WhereClauseArray
 	// Visibility tier inherited by every method declared inside the body.
 	// `export extension Array ...` makes added methods cross-file visible;
 	// a bare `extension Array ...` keeps them file-scoped.
-	export var visibility Visibility
+	export var visibility as Visibility
 	// Source location of the target-type token, for any future
 	// per-extension diagnostic.
-	export var line LineNumber
-	export var column ColumnNumber
-	export var filePath FilePath
+	export var line as LineNumber
+	export var column as ColumnNumber
+	export var filePath as FilePath
 
 	export static function create(targetTypeName String, targetTypeParams StringArray, addedConformances ConformanceArray, whereClauses WhereClauseArray, visibility Visibility, line LineNumber, column ColumnNumber, filePath FilePath) returns UnresolvedExtension
 		return Self{targetTypeName: targetTypeName, targetTypeParams: targetTypeParams, addedConformances: addedConformances, whereClauses: whereClauses, visibility: visibility, line: line, column: column, filePath: filePath}
@@ -2241,9 +2241,9 @@ end 'ConstantValue'
 // `exported` entry with the stdlib bootstrap path so user code reading
 // a stdlib constant always sees it.
 export type TopLevelConstant
-	export var value ConstantValue
-	export var visibility Visibility
-	export var sourceFilePath FilePath
+	export var value as ConstantValue
+	export var visibility as Visibility
+	export var sourceFilePath as FilePath
 
 	export static function create(value ConstantValue, visibility Visibility, sourceFilePath FilePath) returns TopLevelConstant
 		return Self{value: value, visibility: visibility, sourceFilePath: sourceFilePath}
@@ -2260,8 +2260,8 @@ export typealias ConstantMap = Map with (String, TopLevelConstant)
 // `unresolvedRead` op with a bare `literal` / `stringConst`, so the
 // reference would otherwise be lost.
 export type CrossFileConstRead
-	export var constantName String
-	export var readerFilePath FilePath
+	export var constantName as String
+	export var readerFilePath as FilePath
 
 	export static function create(constantName String, readerFilePath FilePath) returns CrossFileConstRead
 		return Self{constantName: constantName, readerFilePath: readerFilePath}
@@ -2330,10 +2330,10 @@ export typealias UnresolvedConstExprIdArray = Array with UnresolvedConstExprId
 // parser emits the right `MaxonOp.literal` valueType. `found = false`
 // signals "could not fold" — caller surfaces a clear diagnostic.
 export type StructBackingFoldResult
-	export var found bool
-	export var isFloat bool
-	export var intValue IntConstant
-	export var floatBits IntConstant
+	export var found as bool
+	export var isFloat as bool
+	export var intValue as IntConstant
+	export var floatBits as IntConstant
 
 	export static function notFound() returns StructBackingFoldResult
 		return Self{found: false, isFloat: false, intValue: 0, floatBits: 0}
@@ -2356,8 +2356,8 @@ end 'StructBackingFoldResult'
 // using 0 as a sentinel would collide with the first int literal pushed
 // into the arena.
 export type StructBackingDescendResult
-	export var found bool
-	export var exprId UnresolvedConstExprId
+	export var found as bool
+	export var exprId as UnresolvedConstExprId
 
 	export static function none() returns StructBackingDescendResult
 		return Self{found: false, exprId: 0}
@@ -2456,24 +2456,24 @@ export typealias UnresolvedConstExprArray = Array with UnresolvedConstExpr
 // `mutable` at drain time, so the parser uses one registration path and
 // the resolver does one walk.
 export type UnresolvedTopLevelDecl
-	export var name String
+	export var name as String
 	// Index into project.unresolvedConstExprs for the root of the
 	// initializer expression tree.
-	export var rootExprId UnresolvedConstExprId
+	export var rootExprId as UnresolvedConstExprId
 	// True for `var` / `static var`; false for `let` / `static let`.
 	// Determines whether the resolved value lands in the writable `.data`
 	// section or as an inlined constant the rewriter substitutes at use sites.
-	export var mutable bool
+	export var mutable as bool
 	// Visibility tier. The parser stamps in `exported` when the decl
 	// carries `export`, `module` when preceded by the contextual
 	// `module` keyword, otherwise `file`.
-	export var visibility Visibility
+	export var visibility as Visibility
 	// Parse-time source location for resolver-emitted diagnostics (cycle,
 	// unknown-name). `filePath` doubles as the visibility anchor —
 	// visibility lookups compare against this.
-	export var line LineNumber
-	export var column ColumnNumber
-	export var filePath FilePath
+	export var line as LineNumber
+	export var column as ColumnNumber
+	export var filePath as FilePath
 
 	export static function create(name String, rootExprId UnresolvedConstExprId, mutable bool, visibility Visibility, line LineNumber, column ColumnNumber, filePath FilePath) returns UnresolvedTopLevelDecl
 		return Self{name: name, rootExprId: rootExprId, mutable: mutable, visibility: visibility, line: line, column: column, filePath: filePath}
@@ -2496,11 +2496,11 @@ export typealias UnresolvedTopLevelDeclMap = Map with (String, UnresolvedTopLeve
 // tier and declaring file path so cross-file reads can filter by
 // `isVisibleFrom`.
 export type TopLevelVarInfo
-	export var name String
-	export var slotType MaxonType
-	export var initialValue IntConstant
-	export var visibility Visibility
-	export var sourceFilePath FilePath
+	export var name as String
+	export var slotType as MaxonType
+	export var initialValue as IntConstant
+	export var visibility as Visibility
+	export var sourceFilePath as FilePath
 
 	export static function create(name String, slotType MaxonType, initialValue IntConstant, visibility Visibility, sourceFilePath FilePath) returns TopLevelVarInfo
 		return Self{name: name, slotType: slotType, initialValue: initialValue, visibility: visibility, sourceFilePath: sourceFilePath}
@@ -2520,8 +2520,8 @@ export typealias TupleAllocGidMap = Map with (ByteArray, GenericInstanceId)
 export typealias DiscardedCallResultSet = Set with String
 
 export type TypealiasRange
-	export var lower RangeBound
-	export var upper RangeBound
+	export var lower as RangeBound
+	export var upper as RangeBound
 
 	export static function create(lower RangeBound, upper RangeBound) returns TypealiasRange
 		return Self{lower: lower, upper: upper}
@@ -2681,16 +2681,16 @@ end 'anyStructHasInnerAlias'
 // writes (`receiver.field = value`) can be rejected with E2013 against
 // `let`-declared fields without re-parsing.
 export type StructField
-	export var name String
-	export var fieldType MaxonType
-	export var offset FieldOffset
-	export var isMutable bool
+	export var name as String
+	export var fieldType as MaxonType
+	export var offset as FieldOffset
+	export var isMutable as bool
 	// True when the field declaration carried a `= <expr>` default value.
 	// At parse time, a synthetic helper `<TypeName>.__field_init_<fieldName>`
 	// is generated that evaluates the default expression; this flag tells
 	// the struct-literal lowerer to call that helper for any literal that
 	// omits this field.
-	export var hasDefault bool
+	export var hasDefault as bool
 	// Sentinel that distinguishes "the layout pass has run and stamped a real
 	// offset" from "this field still holds the parser-time zero placeholder".
 	// `FieldOffset` is `int(0 to 65520)`, so the value 0 alone cannot tell a
@@ -2699,7 +2699,7 @@ export type StructField
 	// field it processes; downstream consumers (fieldLoad/fieldStore lowering)
 	// panic on `not offsetResolved` to catch any code path that bypasses the
 	// pass — silent layout corruption would otherwise be possible.
-	export var offsetResolved bool
+	export var offsetResolved as bool
 	// True when the field declaration carried the `export` modifier. Fields
 	// without it are accessible only from inside the type's own methods —
 	// external read/write sites (`v.field` outside `type Value`) emit E3014
@@ -2707,7 +2707,7 @@ export type StructField
 	// (`Value{field: ...}`) is always permitted regardless: the type's own
 	// shape determines what fields exist, and visibility only governs access
 	// after construction.
-	export var isExported bool
+	export var isExported as bool
 
 	export static function create(name String, fieldType MaxonType, offset FieldOffset, isMutable bool, hasDefault bool = false, offsetResolved bool = false, isExported bool = false) returns StructField
 		return Self{name: name, fieldType: fieldType, offset: offset, isMutable: isMutable, hasDefault: hasDefault, offsetResolved: offsetResolved, isExported: isExported}
@@ -2726,25 +2726,25 @@ export typealias FieldNameIndexMap = Map with (String, FieldIndex)
 // selfFieldStore lowering hits an O(1) hash lookup instead of an O(fields)
 // linear scan per field access.
 export type StructType
-	export var name String
-	export var fields StructFieldArray
-	export var byteSize FieldOffset
-	export var fieldByName FieldNameIndexMap
+	export var name as String
+	export var fields as StructFieldArray
+	export var byteSize as FieldOffset
+	export var fieldByName as FieldNameIndexMap
 	// Visibility tier and declaring file path. Cross-file references
 	// (named-type operands, struct-alloc op, dot-prefixed static/method
 	// dispatch) consult these via `isVisibleFrom` against the reader's
 	// path. Stdlib-cached struct types synthesize `(global, stdlib
 	// bootstrap path)` so user code reaching a stdlib struct is always
 	// permitted.
-	export var visibility Visibility
-	export var sourceFilePath FilePath
+	export var visibility as Visibility
+	export var sourceFilePath as FilePath
 	// Source location of the `type Name` token. Used by Phase 3b's
 	// conformance check (E3016) to anchor the diagnostic at the type
 	// declaration rather than the file root. Stdlib-cached struct types
 	// land at (0, 0) — they never carry an `implements` clause, so the
 	// conformance check never reads these fields for them.
-	export var nameLine LineNumber
-	export var nameColumn ColumnNumber
+	export var nameLine as LineNumber
+	export var nameColumn as ColumnNumber
 	// Phase 3a: the method signatures the type is required to provide,
 	// derived from `implementedInterfaces` with each interface's
 	// type-parameter names (`Element`, `Iter`, ...) substituted by the
@@ -2752,14 +2752,14 @@ export type StructType
 	// this list against the type's actual methods to enforce conformance
 	// (E3016). Empty when the type declares no `implements` clause or its
 	// clause was rejected with E3015.
-	export var expectedMethods InterfaceMethodSigArray
+	export var expectedMethods as InterfaceMethodSigArray
 	// Phase 11.0 step 2: resolved inner-typealias table for this type.
 	// Promoted from `UnresolvedStructType.innerAliases` during the struct
 	// drain pass. Empty when the type body declared no inner typealiases.
 	// Step 5+ consults this map during substitution so a method body that
 	// names `ElementMemory` can resolve it back to the concrete generic
 	// instance the parser captured.
-	export var innerAliases ResolvedInnerAliasMap
+	export var innerAliases as ResolvedInnerAliasMap
 
 	export static function create(name String, fields StructFieldArray, byteSize FieldOffset, visibility Visibility, sourceFilePath FilePath, nameLine LineNumber, nameColumn ColumnNumber, expectedMethods InterfaceMethodSigArray, innerAliases ResolvedInnerAliasMap) returns StructType
 		var fieldByName = FieldNameIndexMap.create()
@@ -2799,8 +2799,8 @@ export typealias ResolvedInnerAliasMap = Map with (String, MaxonType)
 // (value-typed alias). The two registries share storage because resolution
 // machinery is identical for both — only lowering diverges.
 export type EnumPayloadField
-	export var name String
-	export var fieldType MaxonType
+	export var name as String
+	export var fieldType as MaxonType
 
 	export static function create(name String, fieldType MaxonType) returns EnumPayloadField
 		return Self{name: name, fieldType: fieldType}
@@ -2810,16 +2810,16 @@ end 'EnumPayloadField'
 export typealias EnumPayloadFieldArray = Array with EnumPayloadField
 
 export type EnumCase
-	export var name String
-	export var ordinal CaseOrdinal
-	export var rawValue IntConstant
-	export var line LineNumber
-	export var column ColumnNumber
+	export var name as String
+	export var ordinal as CaseOrdinal
+	export var rawValue as IntConstant
+	export var line as LineNumber
+	export var column as ColumnNumber
 	// Phase 9 Stage 2: associated-value payload fields for union cases.
 	// Empty for plain enum cases and for bare union cases. Each entry is a
 	// (name, MaxonType) pair captured at parse time; lowering (Stage 3)
 	// resolves the type and emits the appropriate alloc + store sequence.
-	export var payloadFields EnumPayloadFieldArray
+	export var payloadFields as EnumPayloadFieldArray
 	// Phase 9 Stage 5 (struct-backing): when non-empty, the case carries a
 	// struct literal as its compile-time backing (e.g.
 	// `Instruction.add = OpMeta{latency: 1}`). `backingStructName` is the
@@ -2827,8 +2827,8 @@ export type EnumCase
 	// `project.unresolvedConstExprs` at the root of a `structLit` arena
 	// entry whose fields hold the per-case constants. Empty string +
 	// sentinel `0` when the case has no struct backing.
-	export var backingStructName String
-	export var backingStructExprId UnresolvedConstExprId
+	export var backingStructName as String
+	export var backingStructExprId as UnresolvedConstExprId
 	// Phase 9 (string/char-backed enums): decoded text of the raw value
 	// when the case was declared as `caseName = "literal"` or
 	// `caseName = 'literal'`. Empty string when the case has no
@@ -2837,14 +2837,14 @@ export type EnumCase
 	// compile-time literal used by interpolation and `.rawValue` /
 	// `.fromName` lookups. The enclosing `EnumType.isStringBacked` /
 	// `isCharBacked` flag tells consumers how to interpret the bytes.
-	export var rawStringValue String
+	export var rawStringValue as String
 	// Function-backed enums: the function name from the right-hand side of
 	// `case = funcName`. Captured verbatim from the source token at parse time
 	// and rewritten to a fully-qualified callable name by the post-prescan
 	// resolver. Empty string when the case has no function backing; the
 	// enclosing `EnumType.isFunctionBacked` flag tells consumers how to
 	// interpret this field.
-	export var rawFunctionName String
+	export var rawFunctionName as String
 
 	export static function create(name String, ordinal CaseOrdinal, rawValue IntConstant, line LineNumber, column ColumnNumber, payloadFields EnumPayloadFieldArray = EnumPayloadFieldArray.create(), backingStructName String = "", backingStructExprId UnresolvedConstExprId = 0, rawStringValue String = "", rawFunctionName String = "") returns EnumCase
 		return Self{name: name, ordinal: ordinal, rawValue: rawValue, line: line, column: column, payloadFields: payloadFields, backingStructName: backingStructName, backingStructExprId: backingStructExprId, rawStringValue: rawStringValue, rawFunctionName: rawFunctionName}
@@ -2890,9 +2890,9 @@ export function enumHasExplicitBacking(enumDef EnumType) returns bool
 end 'enumHasExplicitBacking'
 
 export type EnumType
-	export var name String
-	export var cases EnumCaseArray
-	export var isFloatBacked bool
+	export var name as String
+	export var cases as EnumCaseArray
+	export var isFloatBacked as bool
 	// Phase 9 (string/char-backed enums): true when raw values were
 	// declared as string/char literals. Mutually exclusive with
 	// `isFloatBacked` (and with each other); the parser enforces the
@@ -2900,43 +2900,43 @@ export type EnumType
 	// these flags only tell interpolation / lookup helpers to read the
 	// declared literal from `EnumCase.rawStringValue` instead of treating
 	// `rawValue` as an int / float bit pattern.
-	export var isStringBacked bool
-	export var isCharBacked bool
+	export var isStringBacked as bool
+	export var isCharBacked as bool
 	// Function-backed enums: true when raw values were declared as function
 	// names (`case = doubleFn`). Mutually exclusive with the other backing
 	// flags. Runtime storage is still the per-case ordinal; the function
 	// pointer is recovered by the `.rawValue` lowering, which emits a chain
 	// of `cmp ordinal == i; if-eq then funcRef(case_i.rawFunctionName)`.
-	export var isFunctionBacked bool
+	export var isFunctionBacked as bool
 	// FunctionTypeId shared by every case of a function-backed enum. Set by
 	// the post-prescan resolver once all top-level functions are known.
 	// Sentinel `0` when the enum is not function-backed or resolution hasn't
 	// run yet — readers check `isFunctionBacked` first.
-	export var functionBackingTypeId FunctionTypeId
-	export var caseByName CaseIndexMap
+	export var functionBackingTypeId as FunctionTypeId
+	export var caseByName as CaseIndexMap
 	// Visibility tier and declaring file path. Cross-file references
 	// (named-type operands, dot-prefixed case reads when no top-level
 	// constant matches) consult these via `isVisibleFrom` against the
 	// reader's path. Stdlib enums get `(global, stdlib bootstrap path)`.
-	export var visibility Visibility
-	export var sourceFilePath FilePath
+	export var visibility as Visibility
+	export var sourceFilePath as FilePath
 	// Source location of the `enum Name` token. Mirrors `StructType.nameLine`
 	// / `nameColumn` — Phase 3b's E3016 anchors at the enum decl when an
 	// enum's conformance check fails. Stdlib-cached enums land at (0, 0)
 	// because they never carry an `implements` clause.
-	export var nameLine LineNumber
-	export var nameColumn ColumnNumber
+	export var nameLine as LineNumber
+	export var nameColumn as ColumnNumber
 	// Phase 3a: substituted method signatures from the enum's
 	// `implements` clause. Mirrors `StructType.expectedMethods`. Enums
 	// can declare regular `function` members in their body, so the
 	// conformance check in Phase 3b is identical to structs.
-	export var expectedMethods InterfaceMethodSigArray
+	export var expectedMethods as InterfaceMethodSigArray
 	// Phase 9 Stage 2: true when the declaration was `union ...` rather
 	// than `enum ...`. Union values are heap pointers with distinct type
 	// identity (typealias injection emits `MaxonType.named`, not a ranged
 	// int alias). Plain enums always have `isUnion: false`; the invariant
 	// `enumCasesAnyPayload(cases) implies isUnion` is enforced in `create`.
-	export var isUnion bool
+	export var isUnion as bool
 
 	export static function create(name String, cases EnumCaseArray, isFloatBacked bool, visibility Visibility, sourceFilePath FilePath, nameLine LineNumber, nameColumn ColumnNumber, expectedMethods InterfaceMethodSigArray, isUnion bool = false, isStringBacked bool = false, isCharBacked bool = false, isFunctionBacked bool = false, functionBackingTypeId FunctionTypeId = 0) returns EnumType
 		var caseByName = CaseIndexMap.create()
@@ -2967,38 +2967,38 @@ export typealias EnumTypeMap = Map with (String, EnumType)
 export typealias EnumTypeArray = Array with EnumType
 
 export type UnresolvedEnumType
-	export var name String
-	export var cases EnumCaseArray
-	export var isFloatBacked bool
+	export var name as String
+	export var cases as EnumCaseArray
+	export var isFloatBacked as bool
 	// Phase 9 (string/char-backed enums): mirror of `EnumType`'s flags.
 	// Promoted unchanged when TypeResolution constructs the resolved
 	// `EnumType`. Mutually exclusive with each other and with
 	// `isFloatBacked`; the parser enforces the invariant.
-	export var isStringBacked bool
-	export var isCharBacked bool
+	export var isStringBacked as bool
+	export var isCharBacked as bool
 	// Phase 9 function-backed enums: mirror of `EnumType.isFunctionBacked`.
 	// Carried through pre-register → TypeResolution so the same flag is set
 	// on the promoted EnumType. The resolved `functionBackingTypeId` is
 	// computed only at the promotion step (function signatures need to be
 	// fully registered first) — UnresolvedEnumType does not carry it.
-	export var isFunctionBacked bool
+	export var isFunctionBacked as bool
 	// Visibility tier from the enum declaration's modifier. Used to
 	// stamp the per-case `TopLevelConstant`s and the implicit typealias
 	// the parser registers for the enum's name. The pre-register entry
 	// (created before the body is walked) reuses this when patched.
-	export var visibility Visibility
-	export var line LineNumber
-	export var column ColumnNumber
-	export var filePath FilePath
+	export var visibility as Visibility
+	export var line as LineNumber
+	export var column as ColumnNumber
+	export var filePath as FilePath
 	// Phase 1b: the parsed `implements I1, I2, ...` clause, captured as
 	// bare interface and type-parameter names. Empty when no clause was
 	// present. Phase 3 will validate conformance — currently metadata only.
-	export var implementedInterfaces ConformanceArray
+	export var implementedInterfaces as ConformanceArray
 	// Phase 9 Stage 2: mirror of `EnumType.isUnion`. The pre-register
 	// stage and post-body promotion (TypeResolution) carry the flag through
 	// so consumers branching on union-vs-plain semantics see the right
 	// answer at both stages.
-	export var isUnion bool
+	export var isUnion as bool
 
 	export static function create(name String, cases EnumCaseArray, isFloatBacked bool, visibility Visibility, line LineNumber, column ColumnNumber, filePath FilePath, implementedInterfaces ConformanceArray, isUnion bool = false, isStringBacked bool = false, isCharBacked bool = false, isFunctionBacked bool = false) returns UnresolvedEnumType
 		if enumCasesAnyPayload(cases) and not isUnion 'invariant'

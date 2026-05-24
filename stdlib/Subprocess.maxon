@@ -243,11 +243,11 @@ end 'SubprocessError'
 
 /// Result of a synchronous (or awaited-async) run that captured its output.
 export type CollectedOutput
-	export var status TerminationStatus
-	export var stdout String
-	export var stderr String
-	export var pid Pid
-	export var durationMs DurationMs
+	export var status as TerminationStatus
+	export var stdout as String
+	export var stderr as String
+	export var pid as Pid
+	export var durationMs as DurationMs
 
 	export static function create(status TerminationStatus, stdout String, stderr String, pid Pid, durationMs DurationMs) returns CollectedOutput
 		return CollectedOutput{status: status, stdout: stdout, stderr: stderr, pid: pid, durationMs: durationMs}
@@ -270,8 +270,8 @@ end 'CollectedOutput'
 
 /// OS-specific knobs that don't fit cleanly into the cross-platform surface.
 export type PlatformOptions
-	export var windowsHideWindow bool
-	export var windowsCreateNewProcessGroup bool
+	export var windowsHideWindow as bool
+	export var windowsCreateNewProcessGroup as bool
 
 	export static function defaults() returns PlatformOptions
 		return PlatformOptions{windowsHideWindow: false, windowsCreateNewProcessGroup: false}
@@ -290,17 +290,17 @@ let defaultCaptureLimit = 16 * 1024 * 1024
 /// because Maxon mutating methods can't return `Self` without forcing a
 /// per-setter struct copy.
 export type Configuration
-	export var executable Executable
-	export var arguments StringArray
+	export var executable as Executable
+	export var arguments as StringArray
 	/// Empty path means "inherit the parent's working directory".
-	export var workingDirectory FilePath
-	export var environment Environment
-	export var standardInput InputSource
-	export var standardOutput OutputDestination
-	export var standardError OutputDestination
+	export var workingDirectory as FilePath
+	export var environment as Environment
+	export var standardInput as InputSource
+	export var standardOutput as OutputDestination
+	export var standardError as OutputDestination
 	/// 0 means "wait forever". Non-zero is the kill-after deadline.
-	export var timeoutMs DurationMs
-	export var platformOptions PlatformOptions
+	export var timeoutMs as DurationMs
+	export var platformOptions as PlatformOptions
 
 	/// Build a Configuration with sensible defaults: empty argv, inherited
 	/// cwd, inherited env, no stdin, both output streams collected up to
@@ -447,9 +447,9 @@ typealias SpawnFlagsValue = int(0 to 7)
 /// dataManaged field is an opaque buffer pointer the runtime interprets as a
 /// NUL-terminated cstring (for paths) or raw byte payload (for stdin bytes).
 type StdioRuntimeTriple
-	export var kind StdioKindValue
-	export var dataManaged __ManagedMemory
-	export var limit ByteLimit
+	export var kind as StdioKindValue
+	export var dataManaged as __ManagedMemory
+	export var limit as ByteLimit
 
 	export static function create(kind StdioKindValue, dataManaged __ManagedMemory, limit ByteLimit) returns StdioRuntimeTriple
 		return StdioRuntimeTriple{kind: kind, dataManaged: dataManaged, limit: limit}
@@ -619,10 +619,10 @@ export type StreamingSubprocess
 	// Raw runtime handle from subprocessSpawnStreaming. Valid until release()
 	// is called; the runtime owns the underlying pipe + process objects keyed
 	// off this integer.
-	export var handle StreamingHandle
+	export var handle as StreamingHandle
 	// Latched once release() runs so subsequent release() calls are no-ops
 	// (matches the "treat like file close" contract documented above).
-	export var released bool
+	export var released as bool
 
 	/// Spawn `executable arguments...` with stdin/stdout/stderr as pipes the
 	/// caller drives. Working directory defaults to the parent's cwd; pass

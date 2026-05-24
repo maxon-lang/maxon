@@ -18,7 +18,7 @@ A type can define both a static method and an instance method with the same name
 
 ```text
 type Counter
-  var count int
+  var count as int
 
   static function reset() returns Counter
     return Counter{count: 0}
@@ -42,7 +42,7 @@ This is useful when the same verb makes sense in both contexts, e.g., a static f
 typealias Integer = int(i64.min to i64.max)
 
 type Box
-	export var value Integer
+	export var value as Integer
 
 	static function create(v Integer) returns Box
 		return Box{value: v}
@@ -73,7 +73,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Calc
-	export var base Integer
+	export var base as Integer
 
 	static function create(base Integer) returns Calc
 		return Calc{base: base}
@@ -104,7 +104,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Counter
-	export var count Integer
+	export var count as Integer
 
 	static function create(count Integer) returns Counter
 		return Counter{count: count}
@@ -136,8 +136,8 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 export type Pair
-	export var a Integer
-	export var b Integer
+	export var a as Integer
+	export var b as Integer
 
 	export static function create(a Integer, b Integer) returns Pair
 		return Pair{a: a, b: b}
@@ -169,7 +169,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Converter
-	export var factor Integer
+	export var factor as Integer
 
 	static function create(factor Integer) returns Converter
 		return Converter{factor: factor}

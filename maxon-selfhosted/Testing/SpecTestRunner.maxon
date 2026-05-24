@@ -336,8 +336,8 @@ end 'findWasmtimePath'
 // argv as an array directly, so there's no shell parsing on the runtime side
 // and nothing else here needs the legacy shell-string form.
 type RunCommand
-	export var exe Executable
-	export var argv StringArray
+	export var exe as Executable
+	export var argv as StringArray
 
 	export static function create(exe Executable, argv StringArray) returns RunCommand
 		return Self{exe: exe, argv: argv}
@@ -488,11 +488,11 @@ end 'warmStdlibCache'
 // and produced 0 tests after filter" — only the former should leave a prior
 // failure entry untouched.
 type SpecRunOutcome
-	export var ran bool
-	export var passed TestCount
-	export var failed TestCount
-	export var totalTests TestCount
-	export var fragmentsWritten TestCount
+	export var ran as bool
+	export var passed as TestCount
+	export var failed as TestCount
+	export var totalTests as TestCount
+	export var fragmentsWritten as TestCount
 
 	export static function notRun() returns SpecRunOutcome
 		return Self{ran: false, passed: 0, failed: 0, totalTests: 0, fragmentsWritten: 0}
@@ -699,13 +699,13 @@ end 'runAllSpecTests'
 // `skippedTestNames`, so the caller — not this type — produces FAIL records
 // for those tests.
 type BatchOutcome
-	export var passed TestCount
-	export var verboseLines TextLineArray
+	export var passed as TestCount
+	export var verboseLines as TextLineArray
 	// Tests that must be re-run via the per-fragment path: those the rewriter
 	// rejected up front, plus (when any batched test fails) every batchable
 	// test in the spec. The batched dispatcher omits the rewriter-rejected
 	// tests entirely; rerouting failures keeps batching invisible in reports.
-	export var skippedTestNames StringArray
+	export var skippedTestNames as StringArray
 
 	export static function create() returns BatchOutcome
 		return Self{passed: 0, verboseLines: TextLineArray.create(), skippedTestNames: StringArray.create()}
@@ -910,9 +910,9 @@ end 'lookupSliceIr'
 
 // Per-test slice of a batched binary's output. Used by parseBatchSlice.
 type BatchSlice
-	export var stdout String
-	export var exitCode ProcessExitCode
-	export var found bool
+	export var stdout as String
+	export var exitCode as ProcessExitCode
+	export var found as bool
 
 	export static function missing() returns BatchSlice
 		return Self{stdout: "", exitCode: 0, found: false}
@@ -1096,11 +1096,11 @@ end 'runTestParityCheck'
 // `loweringLog` is the captured IR trace and `rdataBytes` is the .rdata
 // section bytes (empty on non-Windows targets).
 type ParityLegResult
-	export var compiled bool
-	export var errorMessage String
-	export var loweringLog String
-	export var rdataBytes ByteArray
-	export var textBytes ByteArray
+	export var compiled as bool
+	export var errorMessage as String
+	export var loweringLog as String
+	export var rdataBytes as ByteArray
+	export var textBytes as ByteArray
 
 	static function create(compiled bool, errorMessage String, loweringLog String, rdataBytes ByteArray, textBytes ByteArray) returns ParityLegResult
 		return Self{compiled: compiled, errorMessage: errorMessage, loweringLog: loweringLog, rdataBytes: rdataBytes, textBytes: textBytes}
@@ -1477,8 +1477,8 @@ typealias HexNibble = int(0 to 15)
 typealias UnicodeCodepoint = int(0 to 0x10FFFF)
 
 type RdataCheckResult
-	export var passed bool
-	export var message String
+	export var passed as bool
+	export var message as String
 
 	static function create(passed bool, message String) returns RdataCheckResult
 		return Self{passed: passed, message: message}
@@ -1502,10 +1502,10 @@ enum PeParseError implements Error
 end 'PeParseError'
 
 type PeSectionInfo
-	export var name String
-	export var virtualSize SectionByteCount
-	export var rawSize SectionByteCount
-	export var rawOffset SectionFileOffset
+	export var name as String
+	export var virtualSize as SectionByteCount
+	export var rawSize as SectionByteCount
+	export var rawOffset as SectionFileOffset
 
 	static function create(name String, virtualSize SectionByteCount, rawSize SectionByteCount, rawOffset SectionFileOffset) returns PeSectionInfo
 		return Self{name: name, virtualSize: virtualSize, rawSize: rawSize, rawOffset: rawOffset}
@@ -2026,8 +2026,8 @@ end 'checkRequiredRdataBytes'
 // --- RequiredLowering validation ---
 
 type LoweringCheckResult
-	export var passed bool
-	export var message String
+	export var passed as bool
+	export var message as String
 
 	static function create(passed bool, message String) returns LoweringCheckResult
 		return Self{passed: passed, message: message}
@@ -2700,12 +2700,12 @@ end 'runPersistentWorker'
 
 // Aggregated outcome for one spec collected from a singles worker's stdout.
 type SinglesWorkerResult
-	export var specName String
-	export var passed TestCount
-	export var failed TestCount
-	export var compileMs Millis
-	export var failures TextLineArray
-	export var valid bool
+	export var specName as String
+	export var passed as TestCount
+	export var failed as TestCount
+	export var compileMs as Millis
+	export var failures as TextLineArray
+	export var valid as bool
 
 	export static function invalid() returns SinglesWorkerResult
 		return Self{specName: "", passed: 0, failed: 0, compileMs: 0, failures: TextLineArray.create(), valid: false}
@@ -2777,11 +2777,11 @@ end 'logSpecFailuresFor'
 
 // Parsed outcome from one spec's WORKER_BATCH_RESULT stdout line.
 type BatchWorkerResult
-	export var specName String
-	export var passed TestCount
-	export var compileMs Millis
-	export var skippedNames StringArray
-	export var valid bool
+	export var specName as String
+	export var passed as TestCount
+	export var compileMs as Millis
+	export var skippedNames as StringArray
+	export var valid as bool
 
 	export static function invalid() returns BatchWorkerResult
 		return Self{specName: "", passed: 0, compileMs: 0, skippedNames: StringArray.create(), valid: false}
@@ -2840,12 +2840,12 @@ end 'findUnitByName'
 
 // Per-spec work unit: partitioned tests and pre-computed missing-lowering failures.
 type SpecWorkUnit
-	export var specName String
-	export var nonBatchable SpecTestArray
-	export var batchable SpecTestArray
-	export var missingLoweringFailures TextLineArray
+	export var specName as String
+	export var nonBatchable as SpecTestArray
+	export var batchable as SpecTestArray
+	export var missingLoweringFailures as TextLineArray
 	// Count of tests that failed due to missing RequiredLowering blocks.
-	export var missingLoweringCount TestCount
+	export var missingLoweringCount as TestCount
 
 	export static function create(specName String, nonBatchable SpecTestArray, batchable SpecTestArray, missingLoweringFailures TextLineArray, missingLoweringCount TestCount) returns SpecWorkUnit
 		return Self{specName: specName, nonBatchable: nonBatchable, batchable: batchable, missingLoweringFailures: missingLoweringFailures, missingLoweringCount: missingLoweringCount}
@@ -3018,10 +3018,10 @@ typealias WorkerId = int(0 to u32.max)
 // tests. `weight` orders the queue slowest-first so the long-pole tests start
 // early and overlap with the rest of the run instead of gating wall time.
 type SpecJob
-	export var kind String  // "batch" | "singles" | "fallback"
-	export var specName String
-	export var fallbackTests StringArray  // populated only when kind == "fallback"
-	export var weight TestCount  // estimated cost; larger = dispatch first
+	export var kind as String  // "batch" | "singles" | "fallback"
+	export var specName as String
+	export var fallbackTests as StringArray  // populated only when kind == "fallback"
+	export var weight as TestCount  // estimated cost; larger = dispatch first
 
 	export static function createBatch(specName String, weight TestCount) returns SpecJob
 		return Self{kind: "batch", specName: specName, fallbackTests: StringArray.create(), weight: weight}
@@ -3149,8 +3149,8 @@ typealias DrainPromiseArray = Array with DrainPromise
 // currently in flight, whether the slot is busy, accumulated stderr) lives in
 // the dispatcher's parallel arrays so the struct itself is small and copyable.
 type PersistentWorkerHandle
-	export var child StreamingSubprocess
-	export var workerId WorkerId
+	export var child as StreamingSubprocess
+	export var workerId as WorkerId
 
 	// Spawn the child WITHOUT blocking on its WORKER_READY hello. The caller is
 	// responsible for invoking `awaitReady()` before sending jobs. Used by the
@@ -3373,7 +3373,7 @@ end 'processWorkerResults'
 // without the surrounding boilerplate of returning tuples and threading them
 // through every callsite. Used only by the dispatch loop in this file.
 type VarHolder
-	export var value TestCount
+	export var value as TestCount
 
 	export static function create(value TestCount) returns VarHolder
 		return Self{value: value}

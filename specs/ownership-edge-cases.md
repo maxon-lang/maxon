@@ -19,8 +19,8 @@ Single struct allocated and freed in the same function scope.
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-	export var x Integer
-	export var y Integer
+	export var x as Integer
+	export var y as Integer
 
 	static function create(x Integer, y Integer) returns Self
 		return Self{x: x, y: y}
@@ -58,7 +58,7 @@ Aliasing a struct increfs it; both variables share refcount and object is freed 
 typealias Integer = int(i64.min to i64.max)
 
 type Box
-	export var value Integer
+	export var value as Integer
 
 	static function create(value Integer) returns Self
 		return Self{value: value}
@@ -97,7 +97,7 @@ Reassigning a var decrefs the old object immediately; the old object must be fre
 typealias Integer = int(i64.min to i64.max)
 
 type Tag
-	export var id Integer
+	export var id as Integer
 
 	static function create(id Integer) returns Self
 		return Self{id: id}
@@ -151,7 +151,7 @@ Struct created in an inner if-block is freed when that block exits, before the o
 typealias Integer = int(i64.min to i64.max)
 
 type Widget
-	export var id Integer
+	export var id as Integer
 
 	static function create(id Integer) returns Self
 		return Self{id: id}
@@ -193,7 +193,7 @@ Returning a struct skips its decref; caller receives ownership and frees it at i
 typealias Integer = int(i64.min to i64.max)
 
 type Token
-	export var kind Integer
+	export var kind as Integer
 
 	static function create(kind Integer) returns Self
 		return Self{kind: kind}
@@ -237,7 +237,7 @@ Aliased reference keeps object alive when the original var is reassigned.
 typealias Integer = int(i64.min to i64.max)
 
 type Num
-	export var v Integer
+	export var v as Integer
 
 	static function create(v Integer) returns Self
 		return Self{v: v}
@@ -286,7 +286,7 @@ A struct allocated each loop iteration is freed at loop-block exit before the ne
 typealias Integer = int(i64.min to i64.max)
 
 type Counter
-	export var n Integer
+	export var n as Integer
 
 	static function create(n Integer) returns Self
 		return Self{n: n}
@@ -351,7 +351,7 @@ Struct allocated before a break is decref'd before the loop block is exited.
 typealias Integer = int(i64.min to i64.max)
 
 type Step
-	export var val Integer
+	export var val as Integer
 
 	static function create(val Integer) returns Self
 		return Self{val: val}
@@ -417,7 +417,7 @@ Struct allocated before a continue is decref'd before the loop restarts.
 typealias Integer = int(i64.min to i64.max)
 
 type Item
-	export var v Integer
+	export var v as Integer
 
 	static function create(v Integer) returns Self
 		return Self{v: v}
@@ -492,7 +492,7 @@ When a struct literal is assigned as a field, the field value is incref'd; both 
 typealias Integer = int(i64.min to i64.max)
 
 type Inner
-	export var val Integer
+	export var val as Integer
 
 	static function create(val Integer) returns Self
 		return Self{val: val}
@@ -500,7 +500,7 @@ type Inner
 end 'Inner'
 
 type Outer
-	export var child Inner
+	export var child as Inner
 
 	static function create(child Inner) returns Self
 		return Self{child: child}
@@ -548,7 +548,7 @@ Three-level nested struct: all three levels are freed when the outermost var lea
 typealias Integer = int(i64.min to i64.max)
 
 type A
-	export var n Integer
+	export var n as Integer
 
 	static function create(n Integer) returns Self
 		return Self{n: n}
@@ -556,7 +556,7 @@ type A
 end 'A'
 
 type B
-	export var a A
+	export var a as A
 
 	static function create(a A) returns Self
 		return Self{a: a}
@@ -564,7 +564,7 @@ type B
 end 'B'
 
 type C
-	export var b B
+	export var b as B
 
 	static function create(b B) returns Self
 		return Self{b: b}
@@ -620,7 +620,7 @@ Overwriting a struct field via a method decrefs the old field value and increfs 
 typealias Integer = int(i64.min to i64.max)
 
 type Payload
-	export var data Integer
+	export var data as Integer
 
 	static function create(data Integer) returns Self
 		return Self{data: data}
@@ -628,7 +628,7 @@ type Payload
 end 'Payload'
 
 type Container
-	export var payload Payload
+	export var payload as Payload
 
 	export function setPayload(p Payload)
 		payload = p
@@ -690,7 +690,7 @@ Overwriting a struct field three times; each old value must be freed promptly.
 typealias Integer = int(i64.min to i64.max)
 
 type Val
-	export var n Integer
+	export var n as Integer
 
 	static function create(n Integer) returns Self
 		return Self{n: n}
@@ -698,7 +698,7 @@ type Val
 end 'Val'
 
 type Holder
-	export var v Val
+	export var v as Val
 
 	export function set(newV Val)
 		v = newV
@@ -779,7 +779,7 @@ Pushing a struct into an array increfs it; after the local var leaves scope the 
 typealias Integer = int(i64.min to i64.max)
 
 type Node
-	export var id Integer
+	export var id as Integer
 
 	static function create(id Integer) returns Self
 		return Self{id: id}
@@ -849,7 +849,7 @@ Popping the last element and discarding the result frees the element at scope ex
 typealias Integer = int(i64.min to i64.max)
 
 type Node
-	export var id Integer
+	export var id as Integer
 
 	static function create(id Integer) returns Self
 		return Self{id: id}
@@ -928,7 +928,7 @@ Setting an element at an existing index must decref the old element and incref t
 typealias Integer = int(i64.min to i64.max)
 
 type Item
-	export var value Integer
+	export var value as Integer
 
 	static function create(value Integer) returns Self
 		return Self{value: value}
@@ -1005,7 +1005,7 @@ Clearing an array decrefs every element; all elements freed when rc hits 0.
 typealias Integer = int(i64.min to i64.max)
 
 type Item
-	export var value Integer
+	export var value as Integer
 
 	static function create(value Integer) returns Self
 		return Self{value: value}
@@ -1087,7 +1087,7 @@ When a container holding struct elements goes out of scope, all elements are dec
 typealias Integer = int(i64.min to i64.max)
 
 type Item
-	export var value Integer
+	export var value as Integer
 
 	static function create(value Integer) returns Self
 		return Self{value: value}
@@ -1173,7 +1173,7 @@ Insert many structs then remove them all; zero elements remain in memory.
 typealias Integer = int(i64.min to i64.max)
 
 type Entry
-	export var key Integer
+	export var key as Integer
 
 	static function create(key Integer) returns Self
 		return Self{key: key}
@@ -1301,7 +1301,7 @@ Insert at index 0 into an existing array; shiftRight zeroes the gap so no double
 typealias Integer = int(i64.min to i64.max)
 
 type Val
-	export var n Integer
+	export var n as Integer
 
 	static function create(n Integer) returns Self
 		return Self{n: n}
@@ -1400,7 +1400,7 @@ Removing the middle element from an array; shiftLeft zeroes the trailing slot so
 typealias Integer = int(i64.min to i64.max)
 
 type Val
-	export var n Integer
+	export var n as Integer
 
 	static function create(n Integer) returns Self
 		return Self{n: n}
@@ -1489,7 +1489,7 @@ An array whose element type itself contains a struct field; freeing the outer ar
 typealias Integer = int(i64.min to i64.max)
 
 type Inner
-	export var v Integer
+	export var v as Integer
 
 	static function create(v Integer) returns Self
 		return Self{v: v}
@@ -1497,7 +1497,7 @@ type Inner
 end 'Inner'
 
 type Wrapper
-	export var inner Inner
+	export var inner as Inner
 
 	static function create(inner Inner) returns Self
 		return Self{inner: inner}
@@ -1586,7 +1586,7 @@ Returning from inside a nested block must decref all locals in every enclosing b
 typealias Integer = int(i64.min to i64.max)
 
 type Step
-	export var n Integer
+	export var n as Integer
 
 	static function create(n Integer) returns Self
 		return Self{n: n}
@@ -1639,7 +1639,7 @@ Getting an element from a container and returning it; element rc stays above 0 w
 typealias Integer = int(i64.min to i64.max)
 
 type Item
-	export var value Integer
+	export var value as Integer
 
 	static function create(value Integer) returns Self
 		return Self{value: value}
@@ -1712,7 +1712,7 @@ A global variable holds a struct that outlives the function that created it.
 typealias Integer = int(i64.min to i64.max)
 
 type Cfg
-	export var level Integer
+	export var level as Integer
 
 	static function create(level Integer) returns Self
 		return Self{level: level}
@@ -1767,7 +1767,7 @@ Reassigning a global struct var decrefs the old object and increfs the new one.
 typealias Integer = int(i64.min to i64.max)
 
 type State
-	export var val Integer
+	export var val as Integer
 
 	static function create(val Integer) returns Self
 		return Self{val: val}
@@ -1880,7 +1880,7 @@ A enum case with a struct-typed associated value; when the enum is freed its pay
 typealias Integer = int(i64.min to i64.max)
 
 type Body
-	export var mass Integer
+	export var mass as Integer
 
 	static function create(mass Integer) returns Self
 		return Self{mass: mass}
@@ -1978,7 +1978,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias FnTypeAlias1 = function(Integer) returns Integer
 
 type Config
-	export var level Integer
+	export var level as Integer
 
 	static function create(level Integer) returns Self
 		return Self{level: level}
@@ -2027,7 +2027,7 @@ On the error path of a try expression the locally allocated struct must still be
 typealias Integer = int(i64.min to i64.max)
 
 type Item
-	export var value Integer
+	export var value as Integer
 
 	static function create(value Integer) returns Self
 		return Self{value: value}
@@ -2085,7 +2085,7 @@ Inserting a struct into a managed list increfs the value; the node holds the ref
 typealias Integer = int(i64.min to i64.max)
 
 type Token
-	export var id Integer
+	export var id as Integer
 
 	static function create(id Integer) returns Self
 		return Self{id: id}
@@ -2143,7 +2143,7 @@ Removing a node from a managed list transfers ownership; value is freed when the
 typealias Integer = int(i64.min to i64.max)
 
 type Token
-	export var id Integer
+	export var id as Integer
 
 	static function create(id Integer) returns Self
 		return Self{id: id}
@@ -2201,7 +2201,7 @@ Clearing a managed list decrefs every node value; all values freed when rc hits 
 typealias Integer = int(i64.min to i64.max)
 
 type Token
-	export var id Integer
+	export var id as Integer
 
 	static function create(id Integer) returns Self
 		return Self{id: id}
@@ -2289,7 +2289,7 @@ Calling `setValue` on a managed list node decrefs the old value and increfs the 
 typealias Integer = int(i64.min to i64.max)
 
 type Token
-	export var id Integer
+	export var id as Integer
 
 	static function create(id Integer) returns Self
 		return Self{id: id}
@@ -2356,7 +2356,7 @@ In a for-in loop over a struct array each element reference is decref'd at the e
 typealias Integer = int(i64.min to i64.max)
 
 type Score
-	export var pts Integer
+	export var pts as Integer
 
 	static function create(pts Integer) returns Self
 		return Self{pts: pts}
@@ -2467,7 +2467,7 @@ Three aliases to the same object; the object is freed exactly once when the last
 typealias Integer = int(i64.min to i64.max)
 
 type Data
-	export var n Integer
+	export var n as Integer
 
 	static function create(n Integer) returns Self
 		return Self{n: n}
@@ -2507,7 +2507,7 @@ An array of arrays of structs; freeing the outer array cascades through all leve
 typealias Integer = int(i64.min to i64.max)
 
 type Cell
-	export var val Integer
+	export var val as Integer
 
 	static function create(val Integer) returns Self
 		return Self{val: val}
@@ -2633,7 +2633,7 @@ A struct that owns an array field; when the struct is freed the array (and its e
 typealias Integer = int(i64.min to i64.max)
 
 type Entry
-	export var val Integer
+	export var val as Integer
 
 	static function create(val Integer) returns Self
 		return Self{val: val}
@@ -2643,7 +2643,7 @@ end 'Entry'
 typealias EntryArray = Array with Entry
 
 type Bucket
-	export var items EntryArray
+	export var items as EntryArray
 
 	static function create(items EntryArray) returns Self
 		return Self{items: items}
@@ -2727,8 +2727,8 @@ ownership to the caller via KeepVars. The caller must not incref again.
 typealias Integer = int(i64.min to i64.max)
 
 type Pair
-	export var a Integer
-	export var b Integer
+	export var a as Integer
+	export var b as Integer
 
 	static function create(a Integer, b Integer) returns Self
 		return Self{a: a, b: b}
@@ -2773,7 +2773,7 @@ The caller must decref the outer struct, which cascades to decref the managed fi
 typealias Integer = int(i64.min to i64.max)
 
 type Inner
-	export var value Integer
+	export var value as Integer
 
 	static function create(value Integer) returns Self
 		return Self{value: value}
@@ -2781,7 +2781,7 @@ type Inner
 end 'Inner'
 
 type Wrapper
-	export var inner Inner
+	export var inner as Inner
 
 	static function create(inner Inner) returns Self
 		return Self{inner: inner}
@@ -3322,8 +3322,8 @@ A tuple containing a user-defined struct; the destructor cascades through the tu
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-	export var x Integer
-	export var y Integer
+	export var x as Integer
+	export var y as Integer
 
 	static function create(x Integer, y Integer) returns Self
 		return Self{x: x, y: y}
@@ -3368,8 +3368,8 @@ Passing a struct literal directly as a function argument must still free the str
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-	export var x Integer
-	export var y Integer
+	export var x as Integer
+	export var y as Integer
 
 	static function create(x Integer, y Integer) returns Self
 		return Self{x: x, y: y}
@@ -3491,7 +3491,7 @@ When a self-returning method's result is discarded, the refcount must remain bal
 typealias Count = int(i64.min to i64.max)
 
 type Counter
-	export var value Count
+	export var value as Count
 
 	function increment() returns Counter
 		value = value + 1
@@ -3519,7 +3519,7 @@ Extracting and returning a struct field from a borrowed parameter must not crash
 typealias Integer = int(i64.min to i64.max)
 
 type Data
-	export var value Integer
+	export var value as Integer
 
 	static function create(value Integer) returns Self
 		return Self{value: value}
@@ -3527,7 +3527,7 @@ type Data
 end 'Data'
 
 type Wrapper
-	export var data Data
+	export var data as Data
 
 	static function create(data Data) returns Self
 		return Self{data: data}
@@ -3630,7 +3630,7 @@ Cloning a struct with a nested struct field must not leak the inner clone. Curre
 typealias Integer = int(i64.min to i64.max)
 
 type Inner
-	export var value Integer
+	export var value as Integer
 
 	static function create(value Integer) returns Self
 		return Self{value: value}
@@ -3638,8 +3638,8 @@ type Inner
 end 'Inner'
 
 type Outer
-	export var a Inner
-	export var b Integer
+	export var a as Inner
+	export var b as Integer
 
 	static function create(a Inner, b Integer) returns Self
 		return Self{a: a, b: b}
@@ -3794,8 +3794,8 @@ Getting a struct from an array via try/otherwise must not leak. When the array i
 typealias Integer = int(i64.min to i64.max)
 
 type Pair
-	export var first Integer
-	export var second Integer
+	export var first as Integer
+	export var second as Integer
 
 	static function create(first Integer, second Integer) returns Self
 		return Self{first: first, second: second}
@@ -3819,8 +3819,8 @@ Creating an array literal of structs must not leak. All struct elements must be 
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-	export var x Integer
-	export var y Integer
+	export var x as Integer
+	export var y as Integer
 
 	static function create(x Integer, y Integer) returns Self
 		return Self{x: x, y: y}
@@ -3846,7 +3846,7 @@ Pushing a local struct into a global array must not leak. When the global array 
 typealias Integer = int(i64.min to i64.max)
 
 type Item
-	export var value Integer
+	export var value as Integer
 
 	static function create(value Integer) returns Self
 		return Self{value: value}
@@ -3878,7 +3878,7 @@ Pushing many structs into a global array and then removing them all must not lea
 typealias Integer = int(i64.min to i64.max)
 
 type Item
-	export var value Integer
+	export var value as Integer
 
 	static function create(value Integer) returns Self
 		return Self{value: value}
@@ -3917,8 +3917,8 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 export type Inner
-		export var items IntArray
-		export var value Integer
+		export var items as IntArray
+		export var value as Integer
 
 		static function create(items IntArray, value Integer) returns Self
 			return Self{items: items, value: value}
@@ -3926,8 +3926,8 @@ export type Inner
 end 'Inner'
 
 export type Outer
-		export var inner Inner
-		export var initialized bool
+		export var inner as Inner
+		export var initialized as bool
 
 		static function create(inner Inner, initialized bool) returns Self
 			return Self{inner: inner, initialized: initialized}
@@ -4011,7 +4011,7 @@ Removing a node from a managed list must properly decref the node's value. The m
 typealias Integer = int(i64.min to i64.max)
 
 type Item
-	export var value Integer
+	export var value as Integer
 
 	static function create(value Integer) returns Self
 		return Self{value: value}
@@ -4037,7 +4037,7 @@ Assigning to a nested field of a module-level struct variable must not leak. The
 typealias SmallInt = int(0 to 255)
 
 type Inner
-		export var x SmallInt
+		export var x as SmallInt
 
 		static function create(x SmallInt) returns Self
 			return Self{x: x}
@@ -4045,7 +4045,7 @@ type Inner
 end 'Inner'
 
 type Outer
-		export var inner Inner
+		export var inner as Inner
 
 		static function create(inner Inner) returns Self
 			return Self{inner: inner}
@@ -4108,7 +4108,7 @@ export union QueryKey
 end 'QueryKey'
 
 export type Dependency
-		export var key QueryKey
+		export var key as QueryKey
 
 		static function create(key QueryKey) returns Self
 			return Self{key: key}
@@ -4135,7 +4135,7 @@ A map using a custom Hashable struct as key must not leak. The map's internal ar
 typealias Integer = int(i64.min to i64.max)
 
 type MyKey implements Hashable, Equatable
-		var value Integer
+		var value as Integer
 
 		function hash() returns HashValue
 				return self.value * 31

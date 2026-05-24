@@ -25,8 +25,8 @@ elements in dest are now dangling pointers.
 typealias Integer = int(i64.min to i64.max)
 
 type Item
-		export var name String
-		export var value Integer
+		export var name as String
+		export var value as Integer
 
 		static function create(name String, value Integer) returns Self
 			return Self{name: name, value: value}
@@ -113,8 +113,8 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 type Func
-		export var name String
-		export var body IntArray
+		export var name as String
+		export var body as IntArray
 
 		static function create(name String, body IntArray) returns Self
 			return Self{name: name, body: body}
@@ -124,7 +124,7 @@ end 'Func'
 typealias FuncArray = Array with Func
 
 type Module
-		export var functions FuncArray
+		export var functions as FuncArray
 
 		static function create(functions FuncArray) returns Self
 			return Self{functions: functions}

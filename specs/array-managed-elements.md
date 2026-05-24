@@ -30,8 +30,8 @@ Structs with String fields stored in arrays must have proper refcount management
 typealias Integer = int(i64.min to i64.max)
 
 type Item
-	export var name String
-	export var value Integer
+	export var name as String
+	export var value as Integer
 
 	static function create(name String, value Integer) returns Self
 		return Self{name: name, value: value}
@@ -61,8 +61,8 @@ hello world that needs heap allocation
 When an array is cleaned up, each element's managed fields must be decremented.
 ```maxon
 type Pair
-	export var first String
-	export var second String
+	export var first as String
+	export var second as String
 
 	static function create(first String, second String) returns Self
 		return Self{first: first, second: second}
@@ -89,11 +89,11 @@ Each managed field in a struct needs its own refcount tracking.
 typealias Integer = int(i64.min to i64.max)
 
 type MultiField
-	export var a String
-	export var b Integer
-	export var c String
-	export var d Integer
-	export var e String
+	export var a as String
+	export var b as Integer
+	export var c as String
+	export var d as Integer
+	export var e as String
 
 	static function create(a String, b Integer, c String, d Integer, e String) returns Self
 		return Self{a: a, b: b, c: c, d: d, e: e}

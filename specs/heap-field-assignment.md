@@ -25,7 +25,7 @@ Assign to a struct field on self and verify the new value is stored.
 typealias Integer = int(i64.min to i64.max)
 
 type Inner
-	export var value Integer
+	export var value as Integer
 
 	static function create(value Integer) returns Self
 		return Self{value: value}
@@ -33,8 +33,8 @@ type Inner
 end 'Inner'
 
 type Container
-	export var value Integer
-	export var child Inner
+	export var value as Integer
+	export var child as Inner
 
 	export function replaceChild(newChild Inner)
 		child = newChild
@@ -64,7 +64,7 @@ Assign to a field on a variable via qualified access.
 typealias Integer = int(i64.min to i64.max)
 
 type Right
-	export var left Integer
+	export var left as Integer
 
 	static function create(left Integer) returns Self
 		return Self{left: left}
@@ -72,8 +72,8 @@ type Right
 end 'Right'
 
 type Pair
-	export var left Integer
-	export var right Right
+	export var left as Integer
+	export var right as Right
 
 	static function create(left Integer, right Right) returns Self
 		return Self{left: left, right: right}
@@ -99,7 +99,7 @@ Direct assignment to a scalar (non-heap-pointer) field is allowed.
 typealias Tally = int(0 to u64.max)
 
 type Counter
-	var count Tally
+	var count as Tally
 
 	export function increment()
 		count = count + 1
@@ -132,7 +132,7 @@ Overwrite a self field in a method and verify all allocations are freed properly
 typealias Integer = int(i64.min to i64.max)
 
 type Inner
-	export var value Integer
+	export var value as Integer
 
 	static function create(value Integer) returns Self
 		return Self{value: value}
@@ -140,8 +140,8 @@ type Inner
 end 'Inner'
 
 type Container
-	export var value Integer
-	export var child Inner
+	export var value as Integer
+	export var child as Inner
 
 	export function replaceChild(newChild Inner)
 		child = newChild
@@ -234,7 +234,7 @@ Overwrite a qualified field and verify all allocations are freed properly.
 typealias Integer = int(i64.min to i64.max)
 
 type Right
-	export var left Integer
+	export var left as Integer
 
 	static function create(left Integer) returns Self
 		return Self{left: left}
@@ -242,8 +242,8 @@ type Right
 end 'Right'
 
 type Pair
-	export var left Integer
-	export var right Right
+	export var left as Integer
+	export var right as Right
 
 	static function create(left Integer, right Right) returns Self
 		return Self{left: left, right: right}

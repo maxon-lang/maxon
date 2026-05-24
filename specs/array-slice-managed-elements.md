@@ -22,8 +22,8 @@ slice still references.
 typealias Integer = int(i64.min to i64.max)
 
 type Item
-		export var name String
-		export var value Integer
+		export var name as String
+		export var value as Integer
 
 		static function create(name String, value Integer) returns Self
 			return Self{name: name, value: value}

@@ -31,8 +31,8 @@ Types declare conformance to interfaces using the `implements` keyword:
 typealias Score = int(i64.min to i64.max)
 
 type Point implements Hashable
-	var x Score
-	var y Score
+	var x as Score
+	var y as Score
 end 'Point'
 ```
 
@@ -42,8 +42,8 @@ A type can conform to multiple interfaces:
 typealias Score = int(i64.min to i64.max)
 
 type Point implements Hashable, Equatable
-	var x Score
-	var y Score
+	var x as Score
+	var y as Score
 end 'Point'
 ```
 
@@ -55,8 +55,8 @@ Methods implementing interface requirements are defined **inside the type body**
 typealias Score = int(i64.min to i64.max)
 
 type Point implements Hashable
-	var x Score
-	var y Score
+	var x as Score
+	var y as Score
 
 	function hash() returns HashValue
 		return x + y * 31
@@ -76,8 +76,8 @@ Non-interface methods (methods that don't implement any interface) use simple `f
 typealias Score = int(i64.min to i64.max)
 
 type Point
-	var x Score
-	var y Score
+	var x as Score
+	var y as Score
 
 	export function getX() returns Score
 		return x
@@ -108,8 +108,8 @@ interface Cloneable
 end 'Cloneable'
 
 type Point implements Cloneable
-	let x Score
-	let y Score
+	let x as Score
+	let y as Score
 
 	function clone() returns Point
 		return Point{x: x, y: y}
@@ -132,7 +132,7 @@ typealias Int = int(i64.min to i64.max)
 typealias InternalIntArray = Array with Int
 
 type IntArray implements Container with Score
-	let data InternalIntArray
+	let data as InternalIntArray
 
 	function get(index Score) returns Score
 		return try data.get(index) otherwise 0
@@ -184,8 +184,8 @@ The `Iterator` type in `stdlib/iter/iterator.maxon` conforms to `Iterable` and i
 typealias Score = int(i64.min to i64.max)
 
 type Point implements Hashable
-	var x Score
-	var y Score
+	var x as Score
+	var y as Score
 
 	function hash() returns HashValue
 		return x + y * 31
@@ -219,8 +219,8 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Point implements Hashable
-	var x Integer
-	var y Integer
+	var x as Integer
+	var y as Integer
 
 	function hash() returns HashValue
 		return x + y * 31
@@ -256,7 +256,7 @@ interface Describable
 end 'Describable'
 
 type Counter implements Describable
-	let count Integer
+	let count as Integer
 
 	function describe() returns Integer
 		return 50 + count
@@ -291,7 +291,7 @@ interface Calculator
 end 'Calculator'
 
 type Accumulator implements Calculator
-	let total Integer
+	let total as Integer
 
 	function add(n Integer) returns Integer
 		return total + n
@@ -318,8 +318,8 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Point implements Hashable, Equatable
-	var x Integer
-	var y Integer
+	var x as Integer
+	var y as Integer
 
 	function hash() returns HashValue
 		return x + y
@@ -361,8 +361,8 @@ interface Movable
 end 'Movable'
 
 type Point implements Movable
-	export var x Integer
-	export var y Integer
+	export var x as Integer
+	export var y as Integer
 
 	function move(dx Integer, dy Integer) returns Point
 		return Point{x: x + dx, y: y + dy}
@@ -394,7 +394,7 @@ interface Incrementable
 end 'Incrementable'
 
 type Value implements Incrementable
-	let n Integer
+	let n as Integer
 
 	function inc() returns Integer
 		return n + 1
@@ -427,7 +427,7 @@ interface ThreeMethods
 end 'ThreeMethods'
 
 type Incomplete implements ThreeMethods
-	let value Integer
+	let value as Integer
 
 	function one() returns Integer
 		return 1
@@ -451,7 +451,7 @@ error E3016: specs/fragments/interfaces/partial-implementation-error.test:11:6: 
 typealias Integer = int(i64.min to i64.max)
 
 type Calculator
-	var value Integer
+	var value as Integer
 
 	function double() returns Integer
 		return value * 2
@@ -491,7 +491,7 @@ end 'DerivedInterface'
 
 // IncompleteType is missing baseMethod from BaseInterface
 type IncompleteType implements DerivedInterface
-	let value Integer
+	let value as Integer
 
 	function derivedMethod() returns Integer
 		return value
@@ -523,7 +523,7 @@ end 'DerivedInterface'
 
 // CompleteType implements all methods from both interfaces
 type CompleteType implements DerivedInterface
-	let value Integer
+	let value as Integer
 
 	function baseMethod() returns Integer
 		return value

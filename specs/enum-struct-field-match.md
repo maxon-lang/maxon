@@ -23,8 +23,8 @@ union Color
 end 'Color'
 
 type Palette
-		export var primary Color
-		export var secondary Color
+		export var primary as Color
+		export var secondary as Color
 
 		static function create(primary Color, secondary Color) returns Self
 			return Self{primary: primary, secondary: secondary}
@@ -62,7 +62,7 @@ union Shape
 end 'Shape'
 
 type Drawing
-		export var shape Shape
+		export var shape as Shape
 
 		static function create(shape Shape) returns Self
 			return Self{shape: shape}
@@ -99,7 +99,7 @@ union Value
 end 'Value'
 
 type Container
-		export var item Value
+		export var item as Value
 
 		static function create(item Value) returns Self
 			return Self{item: item}

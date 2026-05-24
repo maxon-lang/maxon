@@ -102,7 +102,7 @@ extension Countable
 end 'Countable'
 
 type IntList implements Countable
-	let data Integer
+	let data as Integer
 
 	function value() returns Integer
 		return data
@@ -139,7 +139,7 @@ extension Summable
 end 'Summable'
 
 type Number implements Summable
-	let n Integer
+	let n as Integer
 
 	function value() returns Integer
 		return n
@@ -176,7 +176,7 @@ extension Valued
 end 'Valued'
 
 type TypeA implements Valued
-	let a Integer
+	let a as Integer
 	function val() returns Integer
 		return a
 	end 'val'
@@ -187,7 +187,7 @@ type TypeA implements Valued
 end 'TypeA'
 
 type TypeB implements Valued
-	var b Integer
+	var b as Integer
 	function val() returns Integer
 		return b * 2
 	end 'val'
@@ -224,7 +224,7 @@ extension Scalable
 end 'Scalable'
 
 type Amount implements Scalable
-	let amount Integer
+	let amount as Integer
 
 	function base() returns Integer
 		return amount
@@ -256,8 +256,8 @@ interface Pointlike
 end 'Pointlike'
 
 type SimplePoint
-	export var x Integer
-	export var y Integer
+	export var x as Integer
+	export var y as Integer
 
 	static function create(x Integer, y Integer) returns Self
 		return Self{x: x, y: y}
@@ -271,8 +271,8 @@ extension Pointlike
 end 'Pointlike'
 
 type Coord implements Pointlike
-	let cx Integer
-	let cy Integer
+	let cx as Integer
+	let cy as Integer
 
 	function getX() returns Integer
 		return cx

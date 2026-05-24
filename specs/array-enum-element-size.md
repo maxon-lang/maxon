@@ -188,9 +188,9 @@ end 'IrOp'
 typealias IrOpArray = Array with IrOp
 
 type Block
-		export var id Integer
-		export var ops IrOpArray
-		export var terminator IrOp
+		export var id as Integer
+		export var ops as IrOpArray
+		export var terminator as IrOp
 
 		static function create(id Integer, ops IrOpArray, terminator IrOp) returns Self
 			return Self{id: id, ops: ops, terminator: terminator}

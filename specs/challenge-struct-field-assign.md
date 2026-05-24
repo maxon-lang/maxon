@@ -20,7 +20,7 @@ Struct fields can be modified after the struct is created.
 typealias Integer = int(i64.min to i64.max)
 
 type Counter
-	export var value Integer
+	export var value as Integer
 
 	static function create(value Integer) returns Self
 		return Self{value: value}
@@ -45,8 +45,8 @@ Assigning to an immutable (`let`) field should be a compile-time error.
 typealias Integer = int(i64.min to i64.max)
 
 type Config
-	export let id Integer
-	export var count Integer
+	export let id as Integer
+	export var count as Integer
 
 	static function create(id Integer, count Integer) returns Self
 		return Self{id: id, count: count}
@@ -69,7 +69,7 @@ error E2013: specs/fragments/challenge-struct-field-assign/immutable-field-assig
 typealias Integer = int(i64.min to i64.max)
 
 type Inner
-	export var x Integer
+	export var x as Integer
 
 	static function create(x Integer) returns Self
 		return Self{x: x}
@@ -77,7 +77,7 @@ type Inner
 end 'Inner'
 
 type Outer
-	export var inner Inner
+	export var inner as Inner
 
 	static function create(inner Inner) returns Self
 		return Self{inner: inner}

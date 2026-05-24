@@ -13,7 +13,7 @@ Unions can use struct literals as backing values, combining associated values (r
 
 ```text
 type OpMeta
-	export let latency int(0 to 50)
+	export let latency as int(0 to 50)
 end 'OpMeta'
 
 typealias ID = int(i64.min to i64.max)
@@ -48,7 +48,7 @@ typealias Latency = int(0 to 50)
 typealias ID = int(i64.min to i64.max)
 
 type OpMeta
-	export let latency Latency
+	export let latency as Latency
 
 	static function create(latency Latency) returns Self
 		return Self{latency: latency}
@@ -82,7 +82,7 @@ typealias Latency = int(0 to 50)
 typealias ID = int(i64.min to i64.max)
 
 type OpMeta
-	export let latency Latency
+	export let latency as Latency
 
 	static function create(latency Latency) returns Self
 		return Self{latency: latency}
@@ -111,7 +111,7 @@ typealias Cost = int(0 to 100)
 typealias ID = int(i64.min to i64.max)
 
 type CostMeta
-	export let cost Cost
+	export let cost as Cost
 
 	static function create(cost Cost) returns Self
 		return Self{cost: cost}
@@ -146,8 +146,8 @@ typealias Latency = int(0 to 50)
 typealias ID = int(i64.min to i64.max)
 
 type DetailMeta
-	export let latency Latency
-	export let isMemory Flag
+	export let latency as Latency
+	export let isMemory as Flag
 
 	static function create(latency Latency, isMemory Flag) returns Self
 		return Self{latency: latency, isMemory: isMemory}

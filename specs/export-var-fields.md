@@ -17,8 +17,8 @@ Type fields can be marked with `export` to make them accessible from outside the
 typealias Score = int(i64.min to i64.max)
 
 type Value
-	export var n Score      // accessible from outside
-	var private Score       // only accessible within methods
+	export var n as Score      // accessible from outside
+	var private as Score       // only accessible within methods
 end 'Value'
 ```
 
@@ -40,8 +40,8 @@ Non-exported fields are only accessible within methods of the same type:
 typealias Score = int(i64.min to i64.max)
 
 type Counter
-	var count Score              // private
-	export var name Score     // public
+	var count as Score              // private
+	export var name as Score     // public
 
 	function increment()
 		count = count + 1      // OK - accessing within method
@@ -79,8 +79,8 @@ All fields (exported or not) can be initialized in struct literals, since the ty
 typealias Integer = int(i64.min to i64.max)
 
 type Value
-	export var n Integer
-	var private Integer
+	export var n as Integer
+	var private as Integer
 
 	static function create() returns Self
 		return Value{n: 42, private: 100}
@@ -102,7 +102,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Value
-	export var n Integer
+	export var n as Integer
 
 	static function create() returns Self
 		return Value{n: 10}
@@ -125,7 +125,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Config
-	export let version Integer
+	export let version as Integer
 
 	static function create() returns Self
 		return Config{version: 42}
@@ -147,7 +147,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Counter
-	var count Integer
+	var count as Integer
 
 	function increment()
 		count = count + 1
@@ -179,8 +179,8 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Box
-	export var value Integer
-	var secret Integer
+	export var value as Integer
+	var secret as Integer
 
 	static function create(v Integer, s Integer) returns Self
 		return Box{value: v, secret: s}
@@ -206,7 +206,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Value
-	var private Integer
+	var private as Integer
 
 	static function create() returns Self
 		return Value{private: 42}
@@ -228,7 +228,7 @@ error E3014: specs/fragments/export-var-fields/error.unexported-field-read.test:
 typealias Integer = int(i64.min to i64.max)
 
 type Value
-	var private Integer
+	var private as Integer
 
 	static function create() returns Self
 		return Value{private: 0}
@@ -251,8 +251,8 @@ error E3014: specs/fragments/export-var-fields/error.unexported-field-write.test
 typealias Integer = int(i64.min to i64.max)
 
 type Simple
-	var x Integer
-	var y Integer
+	var x as Integer
+	var y as Integer
 
 	static function make(a Integer, b Integer) returns Self
 		return Simple{x: a, y: b}

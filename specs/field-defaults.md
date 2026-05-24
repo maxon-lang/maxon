@@ -33,8 +33,8 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 type Container
-	export var items IntArray = IntArray.create()
-	var name String = "default"
+	export var items as IntArray = IntArray.create()
+	var name as String = "default"
 end 'Container'
 ```
 
@@ -51,7 +51,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 type Bag
-	export var items IntArray = IntArray.create()
+	export var items as IntArray = IntArray.create()
 
 	export static function create() returns Self
 		return Self{}
@@ -75,7 +75,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 type Bag
-	export var items IntArray = IntArray.create()
+	export var items as IntArray = IntArray.create()
 
 	export static function createWith(items IntArray) returns Self
 		return Self{items: items}
@@ -100,7 +100,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 type Bag
-	export var items IntArray = IntArray.create()
+	export var items as IntArray = IntArray.create()
 
 	export static function create() returns Self
 		return Self{}
@@ -125,8 +125,8 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-	export var x Integer
-	export var y Integer
+	export var x as Integer
+	export var y as Integer
 
 	export static function create(x Integer, y Integer) returns Self
 		return Self{x: x, y: y}
@@ -134,7 +134,7 @@ type Point
 end 'Point'
 
 type Shape
-	export var origin Point = Point.create(3, y: 4)
+	export var origin as Point = Point.create(3, y: 4)
 
 	export static function create() returns Self
 		return Self{}
@@ -153,7 +153,7 @@ end 'main'
 <!-- test: field-defaults.string-default -->
 ```maxon
 type Person
-	export var name String = "anon"
+	export var name as String = "anon"
 
 	export static function create() returns Self
 		return Self{}
@@ -179,7 +179,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 type Bag
-	export var items IntArray = IntArray.create()
+	export var items as IntArray = IntArray.create()
 	export var total = 0
 
 	export static function createWithTotal(t Integer) returns Self

@@ -584,8 +584,8 @@ Types are user-defined composite types containing named fields. Use `var` for mu
 
 ```maxon
 type Point
-		var x int
-		var y int
+		var x as int
+		var y as int
 end 'Point'
 ```
 
@@ -611,7 +611,7 @@ A `Self{}` literal is only legal when every field has a default or is supplied v
 
 ```maxon
 type Counter
-	export var value Integer
+	export var value as Integer
 	export var version = 0           // default
 
 	export static function create(initial Integer) returns Self
@@ -638,8 +638,8 @@ Methods are defined **inside the type body** and can access fields directly (imp
 
 ```maxon
 type Point
-		var x int
-		var y int
+		var x as int
+		var y as int
 
 		function add(other Point) returns Point
 				return Point{x: x + other.x, y: y + other.y}
@@ -676,7 +676,7 @@ Inside a type body, instance methods can call other instance methods on `self` u
 
 ```maxon
 type Calculator
-	var base Integer
+	var base as Integer
 
 	function double() returns Integer
 		return base * 2
@@ -696,8 +696,8 @@ Static methods belong to a type but don't have access to instance data. They are
 
 ```maxon
 type Point
-		var x int
-		var y int
+		var x as int
+		var y as int
 
 		static function origin() returns Point
 				return Point{x: 0, y: 0}
@@ -745,7 +745,7 @@ type Counter
 		static var count = 0
 		static let MAX_COUNT = 1000
 
-		var id int
+		var id as int
 
 		static function create() returns Counter
 				Counter.count = Counter.count + 1
@@ -795,7 +795,7 @@ type Config
 				return Config{value: 42}
 		end '_create'
 
-		export var value Tally
+		export var value as Tally
 
 		export static function instance() returns Config
 				return Config.instance   // initializer runs on first call only
@@ -828,8 +828,8 @@ Struct literal defaults:
 typealias Coord = int(0 to u64.max)
 
 type Point
-		export var x Coord
-		export var y Coord
+		export var x as Coord
+		export var y as Coord
 end 'Point'
 
 type Defaults
@@ -861,7 +861,7 @@ typealias Tally = int(0 to u64.max)
 type Cache
 		static var a = Cache.buildA()
 		static var b = Cache.buildB()
-		export var n Tally
+		export var n as Tally
 
 		static function _buildA() returns Cache
 				return Cache{n: 10}
@@ -887,8 +887,8 @@ Structs declare conformance using the `implements` keyword:
 
 ```maxon
 type Point implements Hashable
-		var x int
-		var y int
+		var x as int
+		var y as int
 
 		function hash() returns int
 				return x + y * 31
@@ -933,7 +933,7 @@ interface Producer
 end 'Producer'
 
 type Widget implements Producer
-	let value Integer
+	let value as Integer
 	function produce() returns Integer
 		return value
 	end 'produce'
@@ -954,7 +954,7 @@ interface Tagged
 end 'Tagged'
 
 type Holder
-	export let t Tagged
+	export let t as Tagged
 
 	static function create(t Tagged) returns Self
 		return Self{t: t}
@@ -1412,8 +1412,8 @@ Enums can be backed by a struct type, associating compile-time constant metadata
 typealias Latency = int(0 to 50)
 
 type OpMeta
-	export let latency Latency
-	export let isMemory bool
+	export let latency as Latency
+	export let isMemory as bool
 end 'OpMeta'
 
 enum Instruction
@@ -1639,8 +1639,8 @@ Each union variant can be tagged with a compile-time struct value, the same shap
 typealias Latency = int(0 to 50)
 
 type OpMeta
-	export let latency Latency
-	export let isMemory bool
+	export let latency as Latency
+	export let isMemory as bool
 end 'OpMeta'
 
 union MirOp
@@ -1865,8 +1865,8 @@ Struct backing attaches compile-time constant metadata to each case. Field value
 
 ```maxon
 type OpInfo
-		export let latency int(0 to 100)
-		export let throughput int(0 to 10)
+		export let latency as int(0 to 100)
+		export let throughput as int(0 to 10)
 end 'OpInfo'
 
 enum Instruction
@@ -2477,7 +2477,7 @@ Methods that take `self` as their first parameter and return the same type are *
 
 ```maxon
 type Counter
-		var value int
+		var value as int
 
 		function increment() returns Counter
 				value = value + 1
@@ -3774,8 +3774,8 @@ Only `publicAdd` can be called from other files.
 typealias Coord = int(i64.min to i64.max)
 
 export type Point
-	export var x Coord
-	export var y Coord
+	export var x as Coord
+	export var y as Coord
 end 'Point'
 
 export enum Color
@@ -3812,7 +3812,7 @@ Individual methods can be exported independently of the type itself:
 typealias Amount = int(i64.min to i64.max)
 
 export type Calculator
-	var result Amount
+	var result as Amount
 
 	export function add(n Amount)
 		result = result + n
@@ -4127,12 +4127,12 @@ typealias Timestamp = int(0 to u64.max)    // Unix epoch seconds
 **FileInfo Type:**
 ```maxon
 type FileInfo
-	export let size FileSize
-	export let modifiedTime Timestamp
-	export let createdTime Timestamp
-	export let accessedTime Timestamp
-	export let isDirectory bool
-	export let isReadOnly bool
+	export let size as FileSize
+	export let modifiedTime as Timestamp
+	export let createdTime as Timestamp
+	export let accessedTime as Timestamp
+	export let isDirectory as bool
+	export let isReadOnly as bool
 end 'FileInfo'
 ```
 
@@ -4639,8 +4639,8 @@ Assigning a struct-typed variable to another variable copies the **heap pointer*
 
 ```maxon
 type Point
-	export var x int
-	export var y int
+	export var x as int
+	export var y as int
 end 'Point'
 
 var a = Point{x: 1, y: 2}
@@ -4716,8 +4716,8 @@ The compiler also auto-generates `Equatable` conformance for structs whose field
 
 ```maxon
 type Point
-	export var x int
-	export var y int
+	export var x as int
+	export var y as int
 end 'Point'
 
 // Point auto-conforms to Equatable (all fields are primitive)

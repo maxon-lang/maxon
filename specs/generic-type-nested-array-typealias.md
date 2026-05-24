@@ -24,8 +24,8 @@ typealias SmallInt = int(0 to 100)
 type Container uses Element
 	typealias ElementArray = Array with Element
 
-	export var items ElementArray
-	export var name String
+	export var items as ElementArray
+	export var name as String
 
 	export static function create(name String) returns Self
 		return Self{
@@ -70,7 +70,7 @@ typealias Count = int(0 to u64.max)
 type Container uses Element
 	typealias ElementArray = Array with Element
 
-	export var items ElementArray
+	export var items as ElementArray
 
 	export static function create() returns Self
 		return Self{

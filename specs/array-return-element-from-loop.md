@@ -23,7 +23,7 @@ When the body executes `return e`, the scope cleanup must skip BOTH aliases — 
 Returning a for-loop iteration variable whose struct has a managed `String` field must not double-decref the allocation.
 ```maxon
 type Entry
-	export var key String
+	export var key as String
 
 	export static function create(key String) returns Entry
 		return Self{key: key}

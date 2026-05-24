@@ -12,7 +12,7 @@ A closure declared inside an instance method may reference `self` (and therefore
 
 ```text
 type Counter
-    export var value Integer
+    export var value as Integer
 
     function getReader() returns (() returns Integer)
         return function() gives self.value
@@ -37,7 +37,7 @@ function apply(f FnTypeAlias1, x Integer) returns Integer
 end 'apply'
 
 type Holder
-	export var value Integer
+	export var value as Integer
 
 	static function create(value Integer) returns Self
 		return Self{value: value}
@@ -70,7 +70,7 @@ function apply(f FnTypeAlias1, x Integer) returns Integer
 end 'apply'
 
 type Doubler
-	export var base Integer
+	export var base as Integer
 
 	static function create(base Integer) returns Self
 		return Self{base: base}
