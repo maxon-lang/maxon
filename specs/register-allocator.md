@@ -1,6 +1,6 @@
 ---
 feature: register-allocator
-status: experimental
+status: selfhosted
 keywords: [regalloc, registers, spilling, codegen]
 category: dev
 ---
@@ -1570,8 +1570,8 @@ module {
     %28 = maxon.binop %27, %13 {op = add}
     %29 = maxon.binop %28, %14 {op = add}
     %30 = maxon.binop %29, %15 {op = add}
-    %31 = maxon.literal {value = 256 : i64}
-    %32 = maxon.binop %30, %31 {op = mod}
+    %31 = maxon.literal {value = 125 : i64}
+    %32 = maxon.binop %30, %31 {op = bitand}
     %33 = maxon.literal {value = 0 : i64}
     %34 = maxon.binop %32, %33 {op = lt}
     %35 = maxon.literal {value = 4294967295 : i64}
@@ -1620,8 +1620,8 @@ module {
     %28 = arith.addi %27, %13
     %29 = arith.addi %28, %14
     %30 = arith.addi %29, %15
-    %31 = arith.constant {value = 256 : i64}
-    %32 = arith.remsi %30, %31
+    %31 = arith.constant {value = 125 : i64}
+    %32 = arith.andi %30, %31
     %33 = arith.constant {value = 0 : i64}
     %34 = arith.cmpi lt %32, %33
     %35 = arith.constant {value = 4294967295 : i64}
@@ -1682,16 +1682,13 @@ module {
     x64.add rcx, rdi
     x64.add rcx, r8
     x64.add rcx, r9
-    x64.mov rax, 256
-    x64.mov rbx, rax
-    x64.mov rax, rcx
-    x64.cqo
-    x64.idiv rbx
+    x64.mov rax, 125
+    x64.and rcx, rax
     x64.xor eax, eax
-    x64.mov ecx, 4294967295
-    x64.cmp rdx, rcx
+    x64.mov edx, 4294967295
+    x64.cmp rcx, rdx
     x64.jg main.__range_panic_0
-    x64.cmp rdx, rax
+    x64.cmp rcx, rax
     x64.jl main.__range_panic_0
     x64.jmp main.__range_ok_0
   __range_panic_0:
@@ -1699,7 +1696,7 @@ module {
     x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_0:
-    x64.mov rax, rdx
+    x64.mov rax, rcx
     x64.epilogue
     x64.ret
   }
@@ -1979,8 +1976,8 @@ module {
     %36 = maxon.binop %35, %17 {op = add}
     %37 = maxon.binop %36, %18 {op = add}
     %38 = maxon.binop %37, %19 {op = add}
-    %39 = maxon.literal {value = 256 : i64}
-    %40 = maxon.binop %38, %39 {op = mod}
+    %39 = maxon.literal {value = 125 : i64}
+    %40 = maxon.binop %38, %39 {op = bitand}
     %41 = maxon.literal {value = 0 : i64}
     %42 = maxon.binop %40, %41 {op = lt}
     %43 = maxon.literal {value = 4294967295 : i64}
@@ -2037,8 +2034,8 @@ module {
     %36 = arith.addi %35, %17
     %37 = arith.addi %36, %18
     %38 = arith.addi %37, %19
-    %39 = arith.constant {value = 256 : i64}
-    %40 = arith.remsi %38, %39
+    %39 = arith.constant {value = 125 : i64}
+    %40 = arith.andi %38, %39
     %41 = arith.constant {value = 0 : i64}
     %42 = arith.cmpi lt %40, %41
     %43 = arith.constant {value = 4294967295 : i64}
@@ -2111,16 +2108,13 @@ module {
     x64.add rdi, rcx
     x64.add rdi, rdx
     x64.add rdi, rbx
-    x64.mov rax, 256
-    x64.mov rcx, rax
-    x64.mov rax, rdi
-    x64.cqo
-    x64.idiv rcx
+    x64.mov rax, 125
+    x64.and rdi, rax
     x64.xor eax, eax
     x64.mov ecx, 4294967295
-    x64.cmp rdx, rcx
+    x64.cmp rdi, rcx
     x64.jg main.__range_panic_0
-    x64.cmp rdx, rax
+    x64.cmp rdi, rax
     x64.jl main.__range_panic_0
     x64.jmp main.__range_ok_0
   __range_panic_0:
@@ -2128,7 +2122,7 @@ module {
     x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_0:
-    x64.mov rax, rdx
+    x64.mov rax, rdi
     x64.epilogue
     x64.ret
   }
@@ -2394,8 +2388,8 @@ module {
     %9 = maxon.binop %2, %5 {op = add}
     %10 = maxon.binop %9, %8 {op = add}
     maxon.assign %10 {var = result} {kind = i64} {decl = 1 : i1}
-    %11 = maxon.literal {value = 256 : i64}
-    %12 = maxon.binop %10, %11 {op = mod}
+    %11 = maxon.literal {value = 125 : i64}
+    %12 = maxon.binop %10, %11 {op = bitand}
     %13 = maxon.literal {value = 0 : i64}
     %14 = maxon.binop %12, %13 {op = lt}
     %15 = maxon.literal {value = 4294967295 : i64}
@@ -2424,8 +2418,8 @@ module {
     %8 = arith.addi %6, %7
     %9 = arith.addi %2, %5
     %10 = arith.addi %9, %8
-    %11 = arith.constant {value = 256 : i64}
-    %12 = arith.remsi %10, %11
+    %11 = arith.constant {value = 125 : i64}
+    %12 = arith.andi %10, %11
     %13 = arith.constant {value = 0 : i64}
     %14 = arith.cmpi lt %12, %13
     %15 = arith.constant {value = 4294967295 : i64}
@@ -2456,15 +2450,13 @@ module {
     x64.add rsi, rdi
     x64.add rax, rdx
     x64.add rax, rsi
-    x64.mov r8, 256
-    x64.mov [rbp-8], rax
-    x64.cqo
-    x64.idiv r8
+    x64.mov r8, 125
+    x64.and rax, r8
     x64.xor r9d, r9d
-    x64.mov eax, 4294967295
-    x64.cmp rdx, rax
+    x64.mov ecx, 4294967295
+    x64.cmp rax, rcx
     x64.jg main.__range_panic_0
-    x64.cmp rdx, r9
+    x64.cmp rax, r9
     x64.jl main.__range_panic_0
     x64.jmp main.__range_ok_0
   __range_panic_0:
@@ -2472,7 +2464,6 @@ module {
     x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_0:
-    x64.mov rax, rdx
     x64.epilogue
     x64.ret
   }
@@ -3330,8 +3321,8 @@ module {
     %2 = maxon.call @compute
     maxon.assign %2 {var = b} {kind = i64} {decl = 1 : i1}
     %3 = maxon.binop %1, %2 {op = add} {optimalType = i64}
-    %4 = maxon.literal {value = 256 : i64}
-    %5 = maxon.binop %3, %4 {op = mod}
+    %4 = maxon.literal {value = 125 : i64}
+    %5 = maxon.binop %3, %4 {op = bitand}
     %6 = maxon.literal {value = 0 : i64}
     %7 = maxon.binop %5, %6 {op = lt}
     %8 = maxon.literal {value = 4294967295 : i64}
@@ -3357,8 +3348,8 @@ module {
     %1 = func.call @compute
     %2 = func.call @compute
     %3 = arith.addi %1, %2
-    %4 = arith.constant {value = 256 : i64}
-    %5 = arith.remsi %3, %4
+    %4 = arith.constant {value = 125 : i64}
+    %5 = arith.andi %3, %4
     %6 = arith.constant {value = 0 : i64}
     %7 = arith.cmpi lt %5, %6
     %8 = arith.constant {value = 4294967295 : i64}
@@ -3388,16 +3379,13 @@ module {
     x64.call compute
     x64.mov rcx, [rbp-8]
     x64.add rcx, rax
-    x64.mov rax, 256
-    x64.mov rbx, rax
-    x64.mov rax, rcx
-    x64.cqo
-    x64.idiv rbx
-    x64.xor ecx, ecx
-    x64.mov eax, 4294967295
-    x64.cmp rdx, rax
+    x64.mov rax, 125
+    x64.and rcx, rax
+    x64.xor eax, eax
+    x64.mov edx, 4294967295
+    x64.cmp rcx, rdx
     x64.jg main.__range_panic_0
-    x64.cmp rdx, rcx
+    x64.cmp rcx, rax
     x64.jl main.__range_panic_0
     x64.jmp main.__range_ok_0
   __range_panic_0:
@@ -3405,7 +3393,7 @@ module {
     x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_0:
-    x64.mov rax, rdx
+    x64.mov rax, rcx
     x64.epilogue
     x64.ret
   }
@@ -4926,8 +4914,8 @@ module {
     %26 = maxon.binop %24, %25 {op = add}
     %27 = maxon.var_ref {var = count} {type = i64}
     %28 = maxon.binop %26, %27 {op = add}
-    %29 = maxon.literal {value = 256 : i64}
-    %30 = maxon.binop %28, %29 {op = mod}
+    %29 = maxon.literal {value = 125 : i64}
+    %30 = maxon.binop %28, %29 {op = bitand}
     %31 = maxon.literal {value = 0 : i64}
     %32 = maxon.binop %30, %31 {op = lt}
     %33 = maxon.literal {value = 4294967295 : i64}
@@ -4994,8 +4982,8 @@ module {
     %26 = arith.addi %24, %25
     %27 = memref.load count : i64
     %28 = arith.addi %26, %27
-    %29 = arith.constant {value = 256 : i64}
-    %30 = arith.remsi %28, %29
+    %29 = arith.constant {value = 125 : i64}
+    %30 = arith.andi %28, %29
     %31 = arith.constant {value = 0 : i64}
     %32 = arith.cmpi lt %30, %31
     %33 = arith.constant {value = 4294967295 : i64}
@@ -5014,7 +5002,7 @@ module {
 module {
   func @main() -> u32 {
   entry:
-    x64.prologue stack_size=48
+    x64.prologue stack_size=32
     x64.xor eax, eax
     x64.mov [rbp-8], rax
     x64.xor ecx, ecx
@@ -5067,15 +5055,13 @@ module {
     x64.add rax, rcx
     x64.mov rdx, [rbp-24]
     x64.add rax, rdx
-    x64.mov rbx, 256
-    x64.mov [rbp-40], rax
-    x64.cqo
-    x64.idiv rbx
+    x64.mov rbx, 125
+    x64.and rax, rbx
     x64.xor esi, esi
     x64.mov edi, 4294967295
-    x64.cmp rdx, rdi
+    x64.cmp rax, rdi
     x64.jg main.__range_panic_0
-    x64.cmp rdx, rsi
+    x64.cmp rax, rsi
     x64.jl main.__range_panic_0
     x64.jmp main.__range_ok_0
   __range_panic_0:
@@ -5083,7 +5069,6 @@ module {
     x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_0:
-    x64.mov rax, rdx
     x64.epilogue
     x64.ret
   }
@@ -9242,17 +9227,20 @@ module {
     maxon.br loop_0.header
   loop_0.exit:
     %13 = maxon.var_ref {var = a} {type = i64}
-    %14 = maxon.literal {value = 0 : i64}
-    %15 = maxon.binop %13, %14 {op = lt}
-    %16 = maxon.literal {value = 4294967295 : i64}
-    %17 = maxon.binop %13, %16 {op = gt}
-    %18 = maxon.binop %15, %17 {op = or}
-    maxon.cond_br %18 [then: __range_panic_0, else: __range_ok_0]
+    %14 = maxon.literal {value = 125 : i64}
+    %15 = maxon.var_ref {var = a} {type = i64}
+    %16 = maxon.binop %15, %14 {op = bitand}
+    %17 = maxon.literal {value = 0 : i64}
+    %18 = maxon.binop %16, %17 {op = lt}
+    %19 = maxon.literal {value = 4294967295 : i64}
+    %20 = maxon.binop %16, %19 {op = gt}
+    %21 = maxon.binop %18, %20 {op = or}
+    maxon.cond_br %21 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
     maxon.panic "panic at int-fibonacci.test:12: Range check failed: value outside typealias 'ExitCode'"
   __range_ok_0:
     maxon.scope_end [a, b, i]
-    maxon.return %13
+    maxon.return %16
   }
 }
 === standard
@@ -9284,19 +9272,21 @@ module {
     memref.store %12, i
     cf.br loop_0.header
   loop_0.exit:
-    %13 = memref.load a : i64
-    %14 = arith.constant {value = 0 : i64}
-    %15 = arith.cmpi lt %13, %14
-    %16 = arith.constant {value = 4294967295 : i64}
-    %17 = arith.cmpi gt %13, %16
-    %18 = arith.ori1 %15, %17
-    cf.cond_br %18 [then: __range_panic_0, else: __range_ok_0]
+    %14 = arith.constant {value = 125 : i64}
+    %15 = memref.load a : i64
+    %16 = arith.andi %15, %14
+    %17 = arith.constant {value = 0 : i64}
+    %18 = arith.cmpi lt %16, %17
+    %19 = arith.constant {value = 4294967295 : i64}
+    %20 = arith.cmpi gt %16, %19
+    %21 = arith.ori1 %18, %20
+    cf.cond_br %21 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %19 = memref.lea_symdata __panic_msg_0
-    %20 = std.ptr_to_i64 %19
-    std.call_runtime @mrt_panic %20
+    %22 = memref.lea_symdata __panic_msg_0
+    %23 = std.ptr_to_i64 %22
+    std.call_runtime @mrt_panic %23
   __range_ok_0:
-    func.return %13
+    func.return %16
   }
 }
 === x86
@@ -9329,12 +9319,14 @@ module {
     x64.mov [rbp-24], rsi
     x64.jmp main.loop_0.header
   loop_0.exit:
-    x64.mov rax, [rbp-8]
-    x64.xor ecx, ecx
-    x64.mov edx, 4294967295
-    x64.cmp rax, rdx
+    x64.mov rax, 125
+    x64.mov rcx, [rbp-8]
+    x64.and rcx, rax
+    x64.xor edx, edx
+    x64.mov ebx, 4294967295
+    x64.cmp rcx, rbx
     x64.jg main.__range_panic_0
-    x64.cmp rax, rcx
+    x64.cmp rcx, rdx
     x64.jl main.__range_panic_0
     x64.jmp main.__range_ok_0
   __range_panic_0:
@@ -9342,6 +9334,7 @@ module {
     x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_0:
+    x64.mov rax, rcx
     x64.epilogue
     x64.ret
   }
@@ -11219,17 +11212,20 @@ module {
     maxon.br process_0.merge
   process_0.merge:
     %11 = maxon.var_ref {var = result} {type = i64}
-    %12 = maxon.literal {value = 0 : i64}
-    %13 = maxon.binop %11, %12 {op = lt}
-    %14 = maxon.literal {value = 4294967295 : i64}
-    %15 = maxon.binop %11, %14 {op = gt}
-    %16 = maxon.binop %13, %15 {op = or}
-    maxon.cond_br %16 [then: __range_panic_0, else: __range_ok_0]
+    %12 = maxon.literal {value = 125 : i64}
+    %13 = maxon.var_ref {var = result} {type = i64}
+    %14 = maxon.binop %13, %12 {op = bitand}
+    %15 = maxon.literal {value = 0 : i64}
+    %16 = maxon.binop %14, %15 {op = lt}
+    %17 = maxon.literal {value = 4294967295 : i64}
+    %18 = maxon.binop %14, %17 {op = gt}
+    %19 = maxon.binop %16, %18 {op = or}
+    maxon.cond_br %19 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
     maxon.panic "panic at match-statement-assignment.test:10: Range check failed: value outside typealias 'ExitCode'"
   __range_ok_0:
     maxon.scope_end [x, result, __match_process_0]
-    maxon.return %11
+    maxon.return %14
   }
 }
 === standard
@@ -11262,19 +11258,21 @@ module {
     memref.store %10, result
     cf.br process_0.merge
   process_0.merge:
-    %11 = memref.load result : i64
-    %12 = arith.constant {value = 0 : i64}
-    %13 = arith.cmpi lt %11, %12
-    %14 = arith.constant {value = 4294967295 : i64}
-    %15 = arith.cmpi gt %11, %14
-    %16 = arith.ori1 %13, %15
-    cf.cond_br %16 [then: __range_panic_0, else: __range_ok_0]
+    %12 = arith.constant {value = 125 : i64}
+    %13 = memref.load result : i64
+    %14 = arith.andi %13, %12
+    %15 = arith.constant {value = 0 : i64}
+    %16 = arith.cmpi lt %14, %15
+    %17 = arith.constant {value = 4294967295 : i64}
+    %18 = arith.cmpi gt %14, %17
+    %19 = arith.ori1 %16, %18
+    cf.cond_br %19 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %17 = memref.lea_symdata __panic_msg_0
-    %18 = std.ptr_to_i64 %17
-    std.call_runtime @mrt_panic %18
+    %20 = memref.lea_symdata __panic_msg_0
+    %21 = std.ptr_to_i64 %20
+    std.call_runtime @mrt_panic %21
   __range_ok_0:
-    func.return %11
+    func.return %14
   }
 }
 === x86
@@ -11308,12 +11306,14 @@ module {
     x64.mov [rbp-16], rax
     x64.jmp main.process_0.merge
   process_0.merge:
-    x64.mov rax, [rbp-16]
-    x64.xor ecx, ecx
-    x64.mov edx, 4294967295
-    x64.cmp rax, rdx
+    x64.mov rax, 125
+    x64.mov rcx, [rbp-16]
+    x64.and rcx, rax
+    x64.xor edx, edx
+    x64.mov ebx, 4294967295
+    x64.cmp rcx, rbx
     x64.jg main.__range_panic_0
-    x64.cmp rax, rcx
+    x64.cmp rcx, rdx
     x64.jl main.__range_panic_0
     x64.jmp main.__range_ok_0
   __range_panic_0:
@@ -11321,6 +11321,7 @@ module {
     x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_0:
+    x64.mov rax, rcx
     x64.epilogue
     x64.ret
   }
@@ -14978,10 +14979,10 @@ module {
   otherwise_default_continue_1:
     %35 = maxon.var_ref {var = __try_result_1} {type = i64}
     maxon.assign %35 {var = b} {kind = i64} {decl = 1 : i1}
-    %36 = maxon.literal {value = 256 : i64}
-    %37 = maxon.binop %35, %36 {op = mod} {optimalType = i64}
-    %38 = maxon.var_ref {var = a} {type = i64}
-    %39 = maxon.binop %38, %37 {op = add}
+    %36 = maxon.var_ref {var = a} {type = i64}
+    %37 = maxon.binop %36, %35 {op = add} {optimalType = i64}
+    %38 = maxon.literal {value = 125 : i64}
+    %39 = maxon.binop %37, %38 {op = bitand}
     %40 = maxon.literal {value = 0 : i64}
     %41 = maxon.binop %39, %40 {op = lt}
     %42 = maxon.literal {value = 4294967295 : i64}
@@ -15056,10 +15057,10 @@ module {
     cf.br otherwise_default_continue_1
   otherwise_default_continue_1:
     %27 = memref.load __try_result_1 : i64
-    %28 = arith.constant {value = 256 : i64}
-    %29 = arith.remsi %27, %28
-    %30 = memref.load a : i64
-    %31 = arith.addi %30, %29
+    %28 = memref.load a : i64
+    %29 = arith.addi %28, %27
+    %30 = arith.constant {value = 125 : i64}
+    %31 = arith.andi %29, %30
     %32 = arith.constant {value = 0 : i64}
     %33 = arith.cmpi lt %31, %32
     %34 = arith.constant {value = 4294967295 : i64}
@@ -15143,16 +15144,15 @@ module {
     x64.jmp main.otherwise_default_continue_1
   otherwise_default_continue_1:
     x64.mov rax, [rbp-40]
-    x64.mov rcx, 256
-    x64.cqo
-    x64.idiv rcx
-    x64.mov rax, [rbp-24]
-    x64.add rax, rdx
-    x64.xor edx, edx
-    x64.mov ebx, 4294967295
-    x64.cmp rax, rbx
+    x64.mov rcx, [rbp-24]
+    x64.add rcx, rax
+    x64.mov rdx, 125
+    x64.and rcx, rdx
+    x64.xor ebx, ebx
+    x64.mov esi, 4294967295
+    x64.cmp rcx, rsi
     x64.jg main.__range_panic_0
-    x64.cmp rax, rdx
+    x64.cmp rcx, rbx
     x64.jl main.__range_panic_0
     x64.jmp main.__range_ok_0
   __range_panic_0:
@@ -15160,6 +15160,7 @@ module {
     x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_0:
+    x64.mov rax, rcx
     x64.epilogue
     x64.ret
   }
