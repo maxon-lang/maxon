@@ -6,6 +6,26 @@ There are no time constraints. Complexity doesn't matter. If you are fixing an i
 
 Do not use git commands that would change the working directory like stash or checkout
 
+## maxon-dev MCP tools (PREFER THESE)
+
+When working in this repo, prefer the `maxon-dev` MCP tools over raw Bash invocations of the compiler binaries. They are faster (no shell startup), return structured results, and are the canonical way to drive builds, tests, and one-off snippets in this project. Bash invocation of `./bin/maxon.exe` or `./maxon-selfhosted/.maxon/maxon-selfhosted.exe` should only be used when no MCP tool covers the case.
+
+| Task | Use this tool |
+|------|---------------|
+| Build the C# compiler | `mcp__maxon-dev__build` with `target: "csharp"` |
+| Build the self-hosted compiler | `mcp__maxon-dev__build` with `target: "selfhosted"` |
+| Build both, in order | `mcp__maxon-dev__build` with `target: "both"` |
+| Run the full spec-test suite | `mcp__maxon-dev__run_spec_test` (set `compiler: "selfhosted"` for the self-hosted runner) |
+| Run self-hosted spec tests | `mcp__maxon-dev__run_self_hosted_test` |
+| Get per-test PASS/FAIL detail for a filter | `mcp__maxon-dev__spec_test_outcome` (requires `filter`) |
+| Run an inline Maxon snippet or a file | `mcp__maxon-dev__run_program` |
+| Dump IR (optionally per-stage) | `mcp__maxon-dev__dump_ir` (set `dumpStages: true` for stage-by-stage artifacts) |
+| Format a Maxon file or snippet | `mcp__maxon-dev__fmt` |
+| Look up a 4-digit error code | `mcp__maxon-dev__lookup_error_code` |
+| Debug memory-management issues | `mcp__maxon-dev__mm_trace_analyze` |
+
+Flags like `--filter`, `--update-required`, `--log`, `--mm-trace`, and `--target` are exposed as parameters on the relevant tools (`filter`, `updateRequired`, `log`, `mmTrace`, `target`). When iterating on a specific failing test, pass `filter` to `run_spec_test`/`run_self_hosted_test` or use `spec_test_outcome` for per-test verbose output. Cross-compile tests (e.g. wasm) via `target: "wasm32-wasi"` on `run_self_hosted_test`/`spec_test_outcome`.
+
 ## Building and Testing
 
 Binary names differ by host OS: Windows produces `maxon.exe` / `maxon-selfhosted.exe`, Linux and macOS produce `maxon` / `maxon-selfhosted` (no extension). Commands below show the Windows form; drop the `.exe` on Linux/macOS.

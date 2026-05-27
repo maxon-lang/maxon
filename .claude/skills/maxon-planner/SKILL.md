@@ -138,14 +138,15 @@ Flat list of every file path that needs changes, for easy reference.
 
 12. Present the plan to the user for review. Wait for confirmation before proceeding.
 
-13. Once approved, use the `maxon-coder` skill for writing Maxon code and implement the plan:
-    - Rebuild: `./bin/maxon.exe build maxon-selfhosted`
-    - Verify: `./maxon-selfhosted/.maxon/maxon-selfhosted.exe spec-test --filter=<test>`
+13. Once approved, use the `maxon-coder` skill for writing Maxon code and implement the plan. Prefer the `maxon-dev` MCP tools (see CLAUDE.md for the full mapping):
+    - Rebuild: `mcp__maxon-dev__build` with `target: "selfhosted"` (or `"both"` to chain after csharp).
+    - Verify: `mcp__maxon-dev__run_self_hosted_test` with `filter: "<test>"`. Use `mcp__maxon-dev__spec_test_outcome` (compiler: "selfhosted") for per-test PASS/FAIL.
+    - Inspect IR when needed: `mcp__maxon-dev__dump_ir` (with `dumpStages: true`).
+    - Resolve error codes: `mcp__maxon-dev__lookup_error_code`.
 
-14. After all tests pass, run the full spec test suite to check for regressions:
-    `./maxon-selfhosted/.maxon/maxon-selfhosted.exe spec-test`
+14. After all tests pass, run the full spec test suite to check for regressions: `mcp__maxon-dev__run_self_hosted_test` (no filter).
 
-15. Apply the standard code quality checklist from CLAUDE.md to all changed files.
+15. Apply the standard code quality checklist from CLAUDE.md to all changed files. Format modified Maxon files with `mcp__maxon-dev__fmt`.
 
 ## Guidelines
 

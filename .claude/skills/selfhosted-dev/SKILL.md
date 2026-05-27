@@ -7,21 +7,23 @@ We are developing the self hosted maxon compiler by enabling spec tests one by o
 
 Run the spec tests and fix any failures by modifying the compiler code. Use --filter when working on a specific failing test.
 
+Prefer the `maxon-dev` MCP tools for all build/test commands (see CLAUDE.md for the full mapping). They are faster and return structured output. Only fall back to raw Bash when no MCP tool covers the case.
+
 ## Steps
 
 0. Read `docs/WRITING_MAXON_CODE.md`
-1. Run the spec tests: `./maxon-selfhosted/.maxon/maxon-selfhosted.exe spec-test`
-2. Analyze the output to identify which tests are failing and why.
+1. Run the spec tests with `mcp__maxon-dev__run_self_hosted_test`. Use `filter` to narrow to a specific test, and `spec_test_outcome` (with `compiler: "selfhosted"`) for verbose per-test PASS/FAIL.
+2. Analyze the output to identify which tests are failing and why. Use `mcp__maxon-dev__lookup_error_code` for any 4-digit error codes, and `mcp__maxon-dev__dump_ir` when you need to inspect lowered IR.
 3. Fix the compiler code in `maxon-selfhosted/` to make the failing tests pass.
-4. Rebuild and re-run spec tests to verify the fixes (see CLAUDE.md for build commands and flags):
-   - **Build self-hosted compiler:** `./bin/maxon.exe build maxon-selfhosted` (requires C# compiler already built)
-   - **Run self-hosted spec tests:** `./maxon-selfhosted/.maxon/maxon-selfhosted.exe spec-test`
-   - **Run wasm spec tests:** `./maxon-selfhosted/.maxon/maxon-selfhosted.exe spec-test --target=wasm32-wasi`
-   - **Build C# compiler (if needed):** `dotnet build` from `maxon-sharp/`
-   - **Run C# spec tests (if needed):** `./bin/maxon.exe spec-test`
+4. Rebuild and re-run spec tests to verify the fixes:
+   - **Build self-hosted compiler:** `mcp__maxon-dev__build` with `target: "selfhosted"` (requires C# compiler already built; use `target: "both"` to chain).
+   - **Run self-hosted spec tests:** `mcp__maxon-dev__run_self_hosted_test`.
+   - **Run wasm spec tests:** `mcp__maxon-dev__run_self_hosted_test` with `target: "wasm32-wasi"`.
+   - **Build C# compiler (if needed):** `mcp__maxon-dev__build` with `target: "csharp"`.
+   - **Run C# spec tests (if needed):** `mcp__maxon-dev__run_spec_test` (default compiler is `csharp`).
 5. Repeat until all tests pass.
-6. If any changes occurred to the RequiredIR of other tests in register-allocator.md, review them to ensure they are correct.
-7. Apply the standard code quality checklist from CLAUDE.md to all changed files.
+6. If any changes occurred to the RequiredIR of other tests in register-allocator.md, review them to ensure they are correct. Regenerate RequiredIR with `mcp__maxon-dev__run_self_hosted_test` and `updateRequired: true` when needed.
+7. Apply the standard code quality checklist from CLAUDE.md to all changed files. Format modified Maxon files with `mcp__maxon-dev__fmt`.
 8. Refactor all modified files to eliminate duplicated code, regardless if it was pre-existing or introduced by you.
 9. Update the ROADMAP.md file to reflect the current status of the self-hosted compiler and any remaining work.
 10. Write a git commit message

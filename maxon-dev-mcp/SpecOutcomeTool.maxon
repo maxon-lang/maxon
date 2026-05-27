@@ -7,6 +7,7 @@
 // Inputs (JSON):
 //   filter: String          — required; passed to `--filter=<filter>`
 //   compiler?: "csharp" | "selfhosted"   (default "csharp")
+//   target?: String         — passed to `--target=<value>` (self-hosted only)
 //
 // Output (JSON):
 //   compiler, filter, total, passed, failed, durationMs, memoryLeak,
@@ -38,6 +39,10 @@ export function specOutcomeHandler(argsDoc JsonDoc, argsId JsonNodeId) returns T
 	argv.push("spec-test")
 	argv.push("--filter={filter}")
 	argv.push("--verbose")
+	let target = try argsDoc.getString(argsId, key: "target") otherwise ""
+	if not target.isEmpty() 'haveTarget'
+		argv.push("--target={target}")
+	end 'haveTarget'
 
 	let timing = Clock.nowMs()
 	let result = try Subprocess.run(Executable.path(binary), arguments: argv, workingDirectory: repoRoot, timeoutMs: specOutcomeTimeoutMs) otherwise (err) 'spawn'

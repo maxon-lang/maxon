@@ -294,7 +294,7 @@ simultaneous reload vregs without dedup, vs 8 with.
 
 ## Call-Boundary Splitting
 
-`CallBoundarySplitter.maxon` implements LLVM Greedy's `tryLocalSplit`
+`LocalSplitter.maxon` implements LLVM Greedy's `tryLocalSplit`
 equivalent: when a range L lives across a call instruction at position
 P, break L into a pre-call piece (still named L) and a post-call piece
 (a fresh vreg `L_post`). The boundary is a `movRegReg L_post, L` op
@@ -309,12 +309,37 @@ Termination uses LLVM's `RS_Split2` progress rule, encoded via
 - A range that has been split twice (`RS_SPLIT2`) falls through to the
   normal spill path.
 
-The splitter's `trySplitAtCall(range, ...)` is currently dormant in
-`runSpillColorLoop`. The infrastructure is sound and in place but the
-splitter has known SSA-soundness bugs (redef rewrite leaves stale uses
-+ double-defines L_post) that surface in some IR shapes. Re-enabling
-it requires reconciling the SSA rebuild path with the splitter's
-rewrite invariants.
+`runSpillColorLoop` invokes the splitter in two passes before falling
+through to spilling:
+
+- **Pass 1a — `trySplitAtCall`**: anchors the split at a call interior
+  to the range's def-block interval. Reanimates the pressure relief
+  the dormant comment referred to.
+- **Pass 1b — `trySplitAtUse`**: anchors at the median use position for
+  ranges with no interior call (dense pure-arithmetic blocks like
+  `medianOf3Index` / `partition`). Skipped if Pass 1a already split.
+
+Only ONE split fires per spill iteration — `splitAtPosition` splices a
+mov into a block's opRefs and every subsequent position in that block
+shifts by +1, which would invalidate the still-in-scope `ranges` and
+`callPositions` data for a second split in the same iteration. The
+RS_SPLIT2 cap bounds total split iterations to `2 * ranges.count()`
+across the whole function; a dedicated `splitOnlyIterations` counter
+plus a `splittingHelps` no-progress streak (3 consecutive iterations
+where uncolored count fails to shrink) keep the loop bounded even
+under adversarial inputs.
+
+SSA soundness is preserved by `splitAtPosition`'s redef precheck:
+before any rewrite, it scans `opRefs[splitPos..]` for an op that
+redefines `range.valueId`. If found, the split is refused and the
+range falls through to the normal spill path. This is the gate that
+re-enabled the previously-dormant splitter without recreating the
+double-define-L_post / stale-use bugs.
+
+FP ranges are currently rejected by `trySplitAtCall`: the boundary mov
+tangles with FP-class call-arg setup at the same instruction slot and
+miscompiles (`log2.powers-of-two` regression). Re-enable once the
+colorer or memory-operand folding eliminates the conflict.
 
 ## Stage and Cascade Sidetables
 
@@ -432,7 +457,7 @@ Targets/Shared/
     LiveRangeBuilder.maxon        Per-vreg interval construction (1064 lines)
     LiveRangeSplitter.maxon       Phi-merge multi-anchor splitting (416 lines)
     LivenessAnalysis.maxon        Dataflow fixed-point liveness (417 lines)
-    CallBoundarySplitter.maxon    LLVM tryLocalSplit equivalent — dormant (337 lines)
+    LocalSplitter.maxon           LLVM tryLocalSplit equivalent — call + use anchors (504 lines)
     InstructionScheduler.maxon    Bottom-up list scheduler, pressure-aware (1137 lines)
     SpillManager.maxon            Pressure analysis, slot allocation (533 lines)
     SlotLivenessRenumber.maxon    Spill-slot recycling via interval renumbering (587 lines)

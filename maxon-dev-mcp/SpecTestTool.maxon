@@ -9,6 +9,7 @@
 //   updateRequired?: bool                → --update-required
 //   log?: String                         → --log=<value>
 //   mmTrace?: bool                       → --mm-trace
+//   target?: String                      → --target=<value> (self-hosted only)
 //
 // Output (JSON):
 //   compiler, passed, failed, total, durationMs, memoryLeak (exit code 101),
@@ -115,6 +116,10 @@ function buildSpecTestArgv(argsDoc JsonDoc, argsId JsonNodeId) returns StringArr
 	if mmTrace 'haveMM'
 		argv.push("--mm-trace")
 	end 'haveMM'
+	let target = try argsDoc.getString(argsId, key: "target") otherwise ""
+	if not target.isEmpty() 'haveTarget'
+		argv.push("--target={target}")
+	end 'haveTarget'
 	return argv
 end 'buildSpecTestArgv'
 

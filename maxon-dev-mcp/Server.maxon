@@ -240,12 +240,14 @@ function schemaForRunSpecTest(doc JsonDoc) returns JsonNodeId
 	let updateRequiredSchema = schemaBoolean(doc, description: "Pass --update-required to regenerate RequiredIR blocks in place.")
 	let logSchema = schemaString(doc, description: "Optional logging spec passed to --log=<value> (e.g. \"codegen:trace\").")
 	let mmTraceSchema = schemaBoolean(doc, description: "Pass --mm-trace to enable runtime memory-manager trace output.")
+	let targetSchema = schemaString(doc, description: "Optional cross-compile target passed to --target=<value> (self-hosted only). Examples: \"x64-windows\", \"arm64-macos\", \"wasm32-wasi\", \"all\".")
 	var fields = SchemaFieldArray.create()
 	fields.push(SchemaField.create("compiler", schemaId: compilerSchema, required: false))
 	fields.push(SchemaField.create("filter", schemaId: filterSchema, required: false))
 	fields.push(SchemaField.create("updateRequired", schemaId: updateRequiredSchema, required: false))
 	fields.push(SchemaField.create("log", schemaId: logSchema, required: false))
 	fields.push(SchemaField.create("mmTrace", schemaId: mmTraceSchema, required: false))
+	fields.push(SchemaField.create("target", schemaId: targetSchema, required: false))
 	return schemaObject(doc, fields: fields, description: "Run the spec-test suite and return structured pass/fail counts.")
 end 'schemaForRunSpecTest'
 
@@ -255,11 +257,13 @@ function schemaForSelfHostedSpecTest(doc JsonDoc) returns JsonNodeId
 	let updateRequiredSchema = schemaBoolean(doc, description: "Pass --update-required.")
 	let logSchema = schemaString(doc, description: "Optional logging spec.")
 	let mmTraceSchema = schemaBoolean(doc, description: "Pass --mm-trace.")
+	let targetSchema = schemaString(doc, description: "Optional cross-compile target passed to --target=<value>. Examples: \"x64-windows\", \"arm64-macos\", \"wasm32-wasi\", \"all\".")
 	var fields = SchemaFieldArray.create()
 	fields.push(SchemaField.create("filter", schemaId: filterSchema, required: false))
 	fields.push(SchemaField.create("updateRequired", schemaId: updateRequiredSchema, required: false))
 	fields.push(SchemaField.create("log", schemaId: logSchema, required: false))
 	fields.push(SchemaField.create("mmTrace", schemaId: mmTraceSchema, required: false))
+	fields.push(SchemaField.create("target", schemaId: targetSchema, required: false))
 	return schemaObject(doc, fields: fields, description: "Run the self-hosted compiler's spec-test suite.")
 end 'schemaForSelfHostedSpecTest'
 
@@ -272,9 +276,11 @@ function schemaForSpecTestOutcome(doc JsonDoc) returns JsonNodeId
 	compilerChoices.push("csharp")
 	compilerChoices.push("selfhosted")
 	let compilerSchema = schemaStringEnum(doc, choices: compilerChoices, description: "Which compiler. Default csharp.")
+	let targetSchema = schemaString(doc, description: "Optional cross-compile target passed to --target=<value> (self-hosted only). Examples: \"x64-windows\", \"arm64-macos\", \"wasm32-wasi\", \"all\".")
 	var fields = SchemaFieldArray.create()
 	fields.push(SchemaField.create("filter", schemaId: filterSchema, required: true))
 	fields.push(SchemaField.create("compiler", schemaId: compilerSchema, required: false))
+	fields.push(SchemaField.create("target", schemaId: targetSchema, required: false))
 	return schemaObject(doc, fields: fields, description: "Run spec-tests with --verbose and return per-test PASS/FAIL entries.")
 end 'schemaForSpecTestOutcome'
 

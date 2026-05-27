@@ -85,8 +85,8 @@ public static class MonomorphizationPass {
         var clonedFunc = cloner.Clone();
         if (hotSw != null) hot!.Add((spec.SourceFunc.Name, hotSw.ElapsedMilliseconds));
         newFunctions.Add(clonedFunc);
-        foreach (var entry in cloner.ClosureSpecializations) {
-          closureQueue.Add((entry.SourceName, entry.SpecName, entry.SourceFunc, spec.TypeSubstitution, spec.ConcreteTypeName));
+        foreach (var (SourceName, SpecName, SourceFunc) in cloner.ClosureSpecializations) {
+          closureQueue.Add((SourceName, SpecName, SourceFunc, spec.TypeSubstitution, spec.ConcreteTypeName));
         }
       }
 
@@ -109,9 +109,9 @@ public static class MonomorphizationPass {
         var clonedClosure = closureCloner.Clone();
         newFunctions.Add(clonedClosure);
         emittedClosureSpecs.Add(specName);
-        foreach (var entry in closureCloner.ClosureSpecializations) {
-          if (!emittedClosureSpecs.Contains(entry.SpecName)) {
-            closureQueue.Add((entry.SourceName, entry.SpecName, entry.SourceFunc, sub, concrete));
+        foreach (var (SourceName, SpecName, SourceFunc) in closureCloner.ClosureSpecializations) {
+          if (!emittedClosureSpecs.Contains(SpecName)) {
+            closureQueue.Add((SourceName, SpecName, SourceFunc, sub, concrete));
           }
         }
       }

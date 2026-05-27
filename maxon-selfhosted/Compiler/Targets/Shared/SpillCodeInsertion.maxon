@@ -1,7 +1,8 @@
 // Spill code insertion for the SSA register allocation pipeline.
-// After computeSpills decides which live ranges to spill, this pass walks the
-// function and inserts spill stores after definitions and reload ops before uses
-// of spilled values. Each reload creates a fresh short-lived virtual register.
+// After the spill-color loop in RegisterAllocator builds a SpillDecision,
+// this pass walks the function and inserts spill stores after definitions
+// and reload ops before uses of spilled values. Each reload creates a
+// fresh short-lived virtual register.
 
 export typealias OpIndexListArray = Array with OpIndexList
 
@@ -186,8 +187,9 @@ export function insertSpillCode(module TargetModule, func IrFunction, spillDecis
 		spliceBranchEdgeReloads(module, state: state, block: block, regTarget: regTarget)
 	end 'eachBlock'
 
-	// Set the spill size on the function so PrologueEpiloguePass knows how much stack to allocate.
-	func.spillSize = spillDecision.totalSpillSize
+	// Accumulate the spill size on the function so PrologueEpiloguePass knows
+	// the cumulative spill-area size across all spill iterations.
+	func.spillSize = func.spillSize + spillDecision.totalSpillSize
 	// Bump the running stack-size tally for the spill area.
 	func.stackSize = func.stackSize + spillDecision.totalSpillSize
 

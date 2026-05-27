@@ -788,6 +788,34 @@ type FunctionRegAllocator
 	// enough in practice.
 	function runSpillColorLoop()
 		var iteration = 0
+		// Bound split-only iterations independently of the spill iteration
+		// cap. A split iteration `continue`s before reaching Pass 2 (no
+		// spill), so it doesn't count toward `iteration`. RS_SPLIT2 caps
+		// each range at 2 splits, so total split iterations across the
+		// function are bounded by `2 * ranges.count()`. The check below
+		// uses that as a safety belt against runaway split loops if a
+		// future change to gating ever lets a range re-enter the splitter.
+		var splitOnlyIterations = 0
+		// Track whether splitting is making progress. If `noProgressStreak`
+		// consecutive split iterations leave the uncolored count flat or
+		// rising, splitting isn't helping — disable it for this function
+		// and let the spiller take over. Without this gate, dense-pressure
+		// functions like FilePath.changeExtension burn the iteration cap
+		// on fruitless splits and end up still-uncolored at the cap.
+		// `splitProgressBudget` is the streak threshold; small enough that
+		// truly-useless splitting stops quickly, large enough that one or
+		// two transient L_post-also-uncolored iterations don't disable
+		// useful chains.
+		var prevUncolored = -1
+		var noProgressStreak = 0
+		let splitProgressBudget = 3
+		var splittingHelps = true
+		// Running high-water mark of spill-slot offsets across iterations.
+		// Each iteration's allocateSpillSlots starts at this offset and
+		// returns the new watermark. Resetting to 0 every iteration would
+		// reuse the same physical slots for fresh vregs, silently aliasing
+		// reloads from earlier iterations.
+		var spillBaseOffset = 0
 		// Iteration cap: each spill round insertSpillCode mints reload
 		// vregs with SPILL_WEIGHT_INFINITE, which the spill picker refuses
 		// to re-spill. So the working set strictly shrinks every iteration
@@ -800,36 +828,112 @@ type FunctionRegAllocator
 				break
 			end 'allColored'
 
-			logTrace(LogCategory.ir, message: function() gives "regalloc: func={state.funcName} iteration={iteration} uncolored={uncoloredSpills.count()}")
+			// Progress check for splitting. Each successful split iteration
+			// rebuilds liveness; if the new uncolored count doesn't strictly
+			// shrink, that iteration's split likely just shuffled pressure
+			// rather than relieving it. A short streak of no-progress
+			// iterations disables further splitting so the spiller can
+			// take over without burning the iteration cap.
+			if prevUncolored >= 0 'havePrev'
+				if uncoloredSpills.count() >= prevUncolored 'noProgress'
+					noProgressStreak = noProgressStreak + 1
+					if noProgressStreak >= splitProgressBudget 'budgetExhausted'
+						splittingHelps = false
+					end 'budgetExhausted'
+				end 'noProgress' else 'madeProgress'
+					noProgressStreak = 0
+				end 'madeProgress'
+			end 'havePrev'
+			prevUncolored = uncoloredSpills.count()
 
-			// Pass 1: call-boundary splitting (trySplitAtCall in
-			// CallBoundarySplitter.maxon). DEFERRED — the splitter is kept
-			// in the codebase for later phases but is intentionally not
-			// invoked here in Phase 1. Reasons:
-			//   • When applied broadly (every uncolored range, every
-			//     iteration), the existing splitter's "rewrite uses past
-			//     the call until first redef" rule corrupts SSA: it
-			//     remaps the redef's dest to L_post, giving L_post two
-			//     defs, AND leaves downstream reads of range.valueId
-			//     pointing at a stale value. Easy to trigger with
-			//     closure-capture-style test programs.
-			//   • Even with soundness patched, the splitter alone cannot
-			//     reduce the *total* pressure that sha256-style bodies
-			//     impose — Phase 3 (memory-operand folding) is the
-			//     mechanism that does. Pass 1 here would just shuffle
-			//     pressure around without lowering it.
-			// A later phase reintroduces the splitter once the dialect
-			// supports the right primitives and the rebuild handles the
-			// SSA reconstruction cleanly.
+			logTrace(LogCategory.ir, message: function() gives "regalloc: func={state.funcName} iteration={iteration} uncolored={uncoloredSpills.count()} splittingHelps={splittingHelps}")
 
-			// Pass 2: spill (or rematerialize) every uncolored range.
+			// Seed the per-iteration vreg counter from the function's real
+			// vreg max via scanMaxValueIdForLiveness — NOT from a scan of
+			// `ranges`. `ranges` is inflated by physical pseudo-ranges
+			// minted in insertPhysicalConstraints (one per caller-saved
+			// register at each call site) whose valueIds far exceed the
+			// IR's real vreg max. Using that inflated max for L_post ids
+			// would push each split's vreg id upward by hundreds per
+			// iteration, exhausting the iteration cap without making
+			// progress. scanMaxValueIdForLiveness reflects only vregs
+			// actually referenced in the function's MIR.
+			//
+			// At most ONE split per spill-loop iteration: each successful
+			// splitAtPosition splices a mov into a block's opRefs, shifting
+			// every position in that block by +1. The stale `ranges` /
+			// `callPositions` data still in scope would then misidentify
+			// split anchors for any subsequent split in the same block —
+			// producing the multi-def / dropped-def SSA corruption the
+			// original deferral note warned about. The redef precheck in
+			// splitAtPosition rejects redef-overlap but can't reason about
+			// positions that have been silently shifted out from under it.
+			// Rebuilding between splits is cheap (O(n) per function) and the
+			// RS_SPLIT2 cap bounds total split iterations to 2 *
+			// ranges.count() across the whole function.
+			var nextId = SplitNextId.create(scanMaxValueIdForLiveness(module, func: func, regTarget: regTarget))
+			let callPositions = buildCallPositionsPerBlock(module, func: func, opQuery: opQuery)
+			var anySplit = false
+
+			// Pass 1a: call-boundary splitting. The redef-precheck in
+			// splitAtPosition is the SSA-safety guard — the prior deferral
+			// cited closure-capture corruption, which the precheck now
+			// prevents. Ranges that don't fit the call-splitter's anchor
+			// (no interior call, multi-block, etc.) flow to Pass 1b.
+			var afterCallSplit = LiveRangeArray.create()
+			for ur in uncoloredSpills 'pass1a'
+				if anySplit or not splittingHelps 'skip'
+					afterCallSplit.push(ur)
+					continue
+				end 'skip'
+				if ur.spillWeight != SPILL_WEIGHT_INFINITE and trySplitAtCall(ur, func: func, module: module, regTarget: regTarget, callPositionsPerBlock: callPositions, stageByValueId: stageByValueId, nextId: nextId, ranges: ranges, gprPoolSize: desc.gprPoolSize, fpPoolSize: desc.fpPoolSize) 'splitOk'
+					anySplit = true
+				end 'splitOk' else 'noSplit'
+					afterCallSplit.push(ur)
+				end 'noSplit'
+			end 'pass1a'
+
+			// Pass 1b: use-point splitting for ranges Pass 1a didn't help.
+			// The pressure-locality gate inside trySplitAtUse keeps this
+			// from firing on low-pressure code; only dense pure-arithmetic
+			// blocks (medianOf3Index, partition) trigger it in practice.
+			// Skipped entirely once Pass 1a has already split — see the
+			// one-split-per-iteration invariant above.
+			var stillUnsplit = LiveRangeArray.create()
+			for ur in afterCallSplit 'pass1b'
+				if anySplit or not splittingHelps 'skip'
+					stillUnsplit.push(ur)
+					continue
+				end 'skip'
+				if ur.spillWeight != SPILL_WEIGHT_INFINITE and trySplitAtUse(ur, func: func, module: module, regTarget: regTarget, stageByValueId: stageByValueId, nextId: nextId, ranges: ranges, gprPoolSize: desc.gprPoolSize, fpPoolSize: desc.fpPoolSize) 'splitOk'
+					anySplit = true
+				end 'splitOk' else 'noSplit'
+					stillUnsplit.push(ur)
+				end 'noSplit'
+			end 'pass1b'
+
+			if anySplit 'splitMade'
+				// Rebuild liveness with the new L_post vreg visible; re-color.
+				// Skip Pass 2 this iteration — the next pass sees the shorter
+				// ranges and may color them without any spill at all.
+				splitOnlyIterations = splitOnlyIterations + 1
+				if splitOnlyIterations > 2 * ranges.count() 'splitRunaway'
+					panic("regalloc: split loop runaway in {state.funcName} — {splitOnlyIterations} split-only iterations exceeds bound 2 * {ranges.count()}")
+				end 'splitRunaway'
+				self.runLivenessAndRanges()
+				self.runColoring()
+				continue
+			end 'splitMade'
+
+			// Pass 2: spill (or rematerialize) every uncolored range that
+			// neither splitter could handle.
 			var spillDec = SpillDecision.create()
 			// Track which parent merges we've already added so we don't push
 			// duplicate spilledRanges entries when multiple sub-ranges of the
 			// same merge are uncolored in the same iteration. RegIntArray
 			// stores 0 (not added) or 1 (added) per valueId, sentinel 0.
 			var addedMerges = RegIntArray.create()
-			for ur in uncoloredSpills 'pass2'
+			for ur in stillUnsplit 'pass2'
 
 				if ur.spillWeight == SPILL_WEIGHT_INFINITE 'cannotRespill'
 					// Sub-ranges minted by the LiveRangeSplitter carry
@@ -883,16 +987,17 @@ type FunctionRegAllocator
 			end 'pass2'
 
 			if spillDec.spilledRanges.count() == 0 and spillDec.rematerializeIds.count() == 0 'nothingToSpill'
-				// findUncoloredRanges reported uncolored ranges but Pass 2
+				// findUncoloredRanges reported uncolored ranges, neither
+				// splitter consumed any (anySplit was false), but Pass 2
 				// found nothing to spill or rematerialize. The only way to
 				// reach here is if every uncolored range hit the
 				// SPILL_WEIGHT_INFINITE branch — which already panics. If
 				// control flows here, an uncolored range slipped past
 				// every arm; treat it as a compiler bug.
-				panic("regalloc: spill loop stalled in {state.funcName} — {uncoloredSpills.count()} uncolored ranges but Pass 2 spilled nothing (iteration={iteration})")
+				panic("regalloc: spill loop stalled in {state.funcName} — {stillUnsplit.count()} uncolored ranges but Pass 2 spilled nothing (iteration={iteration})")
 			end 'nothingToSpill'
 
-			allocateSpillSlots(spillDec)
+			spillBaseOffset = allocateSpillSlots(spillDec, baseOffset: spillBaseOffset)
 			insertSpillCode(module, func: func, spillDecision: spillDec, regTarget: regTarget, desc: desc)
 
 			// Union this iteration's reload bitmap into the cumulative set

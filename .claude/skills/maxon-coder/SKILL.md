@@ -7,15 +7,22 @@ Read `docs/WRITING_MAXON_CODE.md` before writing any Maxon code. It contains man
 
 ## Building and testing
 
-After writing or modifying Maxon code, verify it compiles and passes tests (see CLAUDE.md for full build commands and flags).
+After writing or modifying Maxon code, verify it compiles and passes tests. Prefer the `maxon-dev` MCP tools — they are faster than shelling out and return structured output. See CLAUDE.md for the full tool mapping.
 
 **C# compiler** (after modifying `maxon-sharp/`):
-- Build: `dotnet build` (run from `maxon-sharp/`). Output binary: `./bin/maxon.exe`
-- Spec tests: `./bin/maxon.exe spec-test`
+- Build: `mcp__maxon-dev__build` with `target: "csharp"`.
+- Spec tests: `mcp__maxon-dev__run_spec_test` (default compiler is `csharp`).
 
 **Self-hosted compiler** (after modifying `maxon-selfhosted/`):
-- Build: `./bin/maxon.exe build maxon-selfhosted`. Output binary: `./maxon-selfhosted/.maxon/maxon-selfhosted.exe`
-- Spec tests: `./maxon-selfhosted/.maxon/maxon-selfhosted.exe spec-test`
+- Build: `mcp__maxon-dev__build` with `target: "selfhosted"` (or `"both"` to chain after csharp).
+- Spec tests: `mcp__maxon-dev__run_self_hosted_test`.
+
+**Quick experiments / verification:**
+- Run a snippet or file end-to-end: `mcp__maxon-dev__run_program`.
+- Inspect lowered IR: `mcp__maxon-dev__dump_ir` (set `dumpStages: true` for per-stage artifacts).
+- Format Maxon source: `mcp__maxon-dev__fmt`.
+- Look up a 4-digit error code: `mcp__maxon-dev__lookup_error_code`.
+- Debug memory leaks: `mcp__maxon-dev__mm_trace_analyze`.
 
 ## Syntax that DOES NOT EXIST (most common mistakes)
 

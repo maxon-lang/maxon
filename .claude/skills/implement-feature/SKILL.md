@@ -9,6 +9,8 @@ The user will describe the feature they want. You will create the spec, write th
 
 Run the spec tests and fix any failures by modifying the compiler code. Use --filter when working on a specific failing test.
 
+Prefer the `maxon-dev` MCP tools for build/test/IR-dump/fmt/error-lookup operations (see CLAUDE.md for the full mapping). Use `mcp__maxon-dev__build`, `mcp__maxon-dev__run_spec_test`, `mcp__maxon-dev__spec_test_outcome`, `mcp__maxon-dev__dump_ir`, `mcp__maxon-dev__lookup_error_code`, `mcp__maxon-dev__fmt`, and `mcp__maxon-dev__run_program` (for ad-hoc snippet experiments) instead of shelling out to the compiler binaries.
+
 ## Steps
 
 ### Phase 1: Research & Design
@@ -33,16 +35,16 @@ Run the spec tests and fix any failures by modifying the compiler code. Use --fi
      - Edge cases
      - Error cases (compile errors with `maxoncstderr` blocks)
    - Start with all tests in the Tests section marked as `disabled-test` (e.g., `<!-- disabled-test: feature.basic -->`)
-7. Run `./bin/maxon.exe spec-test --filter=<feature-name>` to verify the spec file parses correctly and fragments are extracted.
+7. Run `mcp__maxon-dev__run_spec_test` with `filter: "<feature-name>"` to verify the spec file parses correctly and fragments are extracted.
 
 ### Phase 3: Implement Incrementally
 
 Use an agent to implement the feature incrementally, test by test:
 
 8. Enable the first test by removing `disabled-` from its marker comment.
-9. Build the C# compiler: `dotnet build` (run from `maxon-sharp/`). Output binary: `./bin/maxon.exe`.
-10. Run the spec tests: `./bin/maxon.exe spec-test --filter=<feature-name>`
-11. Analyze failures and implement the necessary compiler changes across the pipeline:
+9. Build the C# compiler with `mcp__maxon-dev__build` (`target: "csharp"`).
+10. Run the spec tests with `mcp__maxon-dev__run_spec_test` (`filter: "<feature-name>"`). Use `mcp__maxon-dev__spec_test_outcome` for per-test PASS/FAIL detail.
+11. Analyze failures and implement the necessary compiler changes across the pipeline. Use `mcp__maxon-dev__dump_ir` (with `dumpStages: true`) to inspect IR at each stage, and `mcp__maxon-dev__lookup_error_code` for any 4-digit error codes:
     - **Lexer** (`maxon-sharp/Compiler/Lexer/`) - New tokens if needed
     - **Parser** (`maxon-sharp/Compiler/Parser/`) - New grammar rules
     - **AST** (`maxon-sharp/Compiler/AST/`) - New AST nodes
@@ -56,9 +58,9 @@ Use an agent to implement the feature incrementally, test by test:
 
 ### Phase 4: Validation & Cleanup
 
-14. Run the full spec test suite: `./bin/maxon.exe spec-test` to ensure no regressions. Don't investigate if test failures were pre-existing, just fix them.
+14. Run the full spec test suite with `mcp__maxon-dev__run_spec_test` (no filter) to ensure no regressions. Don't investigate if test failures were pre-existing, just fix them.
 15. If any tests from other specs broke, investigate and fix.
-16. Apply the standard code quality checklist from CLAUDE.md to all changed files.
+16. Apply the standard code quality checklist from CLAUDE.md to all changed files. Format modified Maxon files with `mcp__maxon-dev__fmt`.
 17. Update documentation, including `LANGUAGE_REFERENCE.md` and `STDLIB_REFERENCE.md` and `QUICK_REFERENCE.md` and `BNF_SYNTAX.md` if necessary.
 18. Write a git commit message
 

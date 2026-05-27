@@ -1,121 +1,10 @@
-// Spill manager: decides which live ranges to spill and allocates spill slots.
-// Uses a greedy approach: sort ranges by spill weight, spill lowest-weight
-// ranges until register pressure is within bounds.
-
-export typealias PQEntryArray = Array with PQEntry
+// Spill manager: owns the SpillDecision data type, the spill-slot allocator
+// (allocateSpillSlots / allocateSlotsForClass), the interference query used
+// for slot coalescing, and the markRematerialize helper. The actual
+// spill-vs-keep decisions live in RegisterAllocator's runSpillColorLoop,
+// which constructs a SpillDecision incrementally per spill iteration.
 
 let SPILL_SLOT_SIZE = 8
-
-// ============================================================
-// Priority queue (binary max-heap by weight)
-// ============================================================
-
-export type PQEntry
-	export var valueId as ValueId
-	export var weight as RegInt
-
-	export static function create(valueId ValueId, weight RegInt) returns PQEntry
-		return Self{valueId: valueId, weight: weight}
-	end 'create'
-end 'PQEntry'
-
-export type PriorityQueue
-	export var entries as PQEntryArray
-
-	export static function create() returns PriorityQueue
-		return Self{entries: PQEntryArray.create()}
-	end 'create'
-end 'PriorityQueue'
-
-export function pqInsert(queue PriorityQueue, valueId ValueId, weight RegInt)
-	queue.entries.push(PQEntry.create(valueId, weight: weight))
-	pqBubbleUp(queue, index: queue.entries.count() - 1)
-end 'pqInsert'
-
-export function pqExtractMax(queue PriorityQueue) returns PQEntry
-	let count = queue.entries.count()
-	if count == 0 'empty'
-		return PQEntry.create(0, weight: 0)
-	end 'empty'
-
-	let max = try queue.entries.get(0) otherwise PQEntry.create(0, weight: 0)
-
-	if count == 1 'lastEntry'
-		try queue.entries.pop() otherwise panic("invariant: count == 1 just checked but pop failed")
-		return max
-	end 'lastEntry'
-
-	// Move last entry to root and bubble down
-	let last = try queue.entries.pop() otherwise PQEntry.create(0, weight: 0)
-	try queue.entries.set(0, value: last) otherwise panic("invariant: queue.entries.set OOB")
-	pqBubbleDown(queue, index: 0)
-
-	return max
-end 'pqExtractMax'
-
-export function pqIsEmpty(queue PriorityQueue) returns bool
-	return queue.entries.count() == 0
-end 'pqIsEmpty'
-
-function pqBubbleUp(queue PriorityQueue, index RegInt)
-	var i = index
-
-	while i > 0 'bubbleUp'
-		let parentIdx = (i - 1) / 2
-		let current = try queue.entries.get(i) otherwise break
-		let parent = try queue.entries.get(parentIdx) otherwise break
-
-		if current.weight <= parent.weight 'inPlace'
-			break
-		end 'inPlace'
-
-		// Swap
-		try queue.entries.set(i, value: parent) otherwise panic("invariant: queue.entries.set OOB")
-		try queue.entries.set(parentIdx, value: current) otherwise panic("invariant: queue.entries.set OOB")
-		i = parentIdx
-	end 'bubbleUp'
-end 'pqBubbleUp'
-
-function pqBubbleDown(queue PriorityQueue, index RegInt)
-	let count = queue.entries.count()
-	var i = index
-
-	while true 'bubbleDown'
-		let left = 2 * i + 1
-		let right = 2 * i + 2
-		var largest = i
-
-		if left < count 'checkLeft'
-			let leftEntry = try queue.entries.get(left) otherwise break
-			let largestEntry = try queue.entries.get(largest) otherwise break
-
-			if leftEntry.weight > largestEntry.weight 'leftLarger'
-				largest = left
-			end 'leftLarger'
-		end 'checkLeft'
-
-		if right < count 'checkRight'
-			let rightEntry = try queue.entries.get(right) otherwise break
-			let largestEntry2 = try queue.entries.get(largest) otherwise break
-
-			if rightEntry.weight > largestEntry2.weight 'rightLarger'
-				largest = right
-			end 'rightLarger'
-		end 'checkRight'
-
-		if largest == i 'done'
-			break
-		end 'done'
-
-		// Swap
-		let currentEntry = try queue.entries.get(i) otherwise break
-		let largestSwap = try queue.entries.get(largest) otherwise break
-
-		try queue.entries.set(i, value: largestSwap) otherwise panic("invariant: queue.entries.set OOB")
-		try queue.entries.set(largest, value: currentEntry) otherwise panic("invariant: queue.entries.set OOB")
-		i = largest
-	end 'bubbleDown'
-end 'pqBubbleDown'
 
 // ============================================================
 // Spill decision
@@ -135,8 +24,9 @@ export type SpillDecision
 	export var reloadIds as BoolArray
 	// Bitmap of vregs that should be rematerialized (re-emitted as a
 	// constant load) at each use rather than spilled to a stack slot.
-	// Populated by spillClass for ranges flagged isRematerializable, and
-	// by insertSpillCode for the fresh vregs it mints at each remat use.
+	// Populated by the spill loop's Pass 2 (via markRematerialize) for
+	// ranges flagged isRematerializable, and by insertSpillCode for the
+	// fresh vregs it mints at each remat use.
 	// Indexed by valueId. Consumed by FunctionRegAllocator, which unions
 	// every iteration's remats into a cumulative set so rebuilt
 	// LiveRanges keep isRematerializable=true and constantValue.
@@ -160,113 +50,14 @@ export type SpillDecision
 end 'SpillDecision'
 
 // ============================================================
-// Public entry point
+// Rematerialization marking
 // ============================================================
-
-// Decide which live ranges to spill based on register pressure.
-// Ranges with the lowest spill weight are spilled first.
-export function computeSpills(ranges LiveRangeArray, gprPoolSize RegInt, fpPoolSize RegInt) returns SpillDecision
-	var decision = SpillDecision.create()
-
-	// Separate ranges by register class
-	var gprRanges = LiveRangeArray.create()
-	var fpRanges = LiveRangeArray.create()
-
-	for range in ranges 'classify'
-		match range.regClass 'rc'
-			gpr then gprRanges.push(range)
-			fp then fpRanges.push(range)
-		end 'rc'
-	end 'classify'
-
-	// Process each class independently
-	spillClass(gprRanges, poolSize: gprPoolSize, decision: decision)
-	spillClass(fpRanges, poolSize: fpPoolSize, decision: decision)
-
-	// Allocate spill slots for spilled ranges
-	allocateSpillSlots(decision)
-
-	return decision
-end 'computeSpills'
-
-// ============================================================
-// Per-class spill decisions
-// ============================================================
-
-function spillClass(ranges LiveRangeArray, poolSize RegInt, decision SpillDecision)
-	if ranges.count() == 0 'empty'
-		return
-	end 'empty'
-
-	// Separate fixed-reg ranges (physical register constraints) from virtual ranges.
-	// Fixed-reg ranges are pre-colored and don't compete for registers — they just
-	// exist as interference markers. They go straight to nonSpilledRanges.
-	var virtualRanges = LiveRangeArray.create()
-	for range in ranges 'separateFixed'
-		if range.fixedReg != RM_NONE 'isFixed'
-			decision.nonSpilledRanges.push(range)
-		end 'isFixed' else 'isVirtual'
-			virtualRanges.push(range)
-		end 'isVirtual'
-	end 'separateFixed'
-
-	// Compute max register pressure across all program points (virtual ranges only).
-	let maxPressure = computeMaxPressure(virtualRanges)
-
-	if maxPressure <= poolSize 'noPressure'
-		// No spilling needed — all ranges fit
-		for range in virtualRanges 'keepAll'
-			decision.nonSpilledRanges.push(range)
-		end 'keepAll'
-		return
-	end 'noPressure'
-
-	// Need to spill. Sort ranges by spill weight (ascending) and spill
-	// the lowest-weight ranges until pressure is within bounds.
-	let spillCount = maxPressure - poolSize
-
-	// Build a min-heap: lowest weight gets extracted first for spilling
-	var minQueue = PriorityQueue.create()
-	for range in virtualRanges 'enqueue'
-		// Negate weight so the max-heap acts as a min-heap
-		pqInsert(minQueue, valueId: range.valueId, weight: 0 - range.spillWeight)
-	end 'enqueue'
-
-	// Spill the lowest-weight ranges
-	var spilled = 0
-	while spilled < spillCount and not pqIsEmpty(minQueue) 'spillLoop'
-		let entry = pqExtractMax(minQueue)
-		let range = findRangeByValueId(virtualRanges, valueId: entry.valueId)
-
-		// Rematerializable values "spill" by re-emitting the constant
-		// at each use. No stack slot is allocated; SpillCodeInsertion
-		// reads rematerializeIds and inserts a constant load (e.g.
-		// movRegImm) per use instead of a reload-from-stack. Counts
-		// as one spill toward the pressure budget because the value
-		// no longer occupies a register from def to use.
-		if range.isRematerializable 'remat'
-			markRematerialize(decision, valueId: range.valueId, value: range.constantValue)
-			decision.nonSpilledRanges.push(range)
-		end 'remat' else 'realSpill'
-			decision.spilledRanges.push(range)
-		end 'realSpill'
-		spilled = spilled + 1
-	end 'spillLoop'
-
-	// Remaining ranges in the queue are non-spilled
-	while not pqIsEmpty(minQueue) 'drainQueue'
-		let entry = pqExtractMax(minQueue)
-		let range = findRangeByValueId(virtualRanges, valueId: entry.valueId)
-		decision.nonSpilledRanges.push(range)
-	end 'drainQueue'
-end 'spillClass'
 
 // Mark `valueId` as one that should be rematerialized at each use, and
-// stash the constant value to materialize. Used by the spill loop (and
-// by spillClass) when a range that *would* be spilled is rematerializable
-// — instead of allocating a stack slot, we record "re-emit this constant"
-// so the spill code insertion phase can emit a fresh `movRegImm` at every
-// use.
+// stash the constant value to materialize. Called by the spill loop when
+// a range that *would* be spilled is rematerializable — instead of
+// allocating a stack slot, we record "re-emit this constant" so the
+// spill code insertion phase can emit a fresh `movRegImm` at every use.
 export function markRematerialize(decision SpillDecision, valueId ValueId, value RegInt)
 	while decision.rematerializeIds.count() <= valueId 'growIds'
 		decision.rematerializeIds.push(false)
@@ -277,57 +68,6 @@ export function markRematerialize(decision SpillDecision, valueId ValueId, value
 	try decision.rematerializeIds.set(valueId, value: true) otherwise panic("invariant: rematerializeIds.set OOB after grow")
 	try decision.rematerializeValue.set(valueId, value: value) otherwise panic("invariant: rematerializeValue.set OOB after grow")
 end 'markRematerialize'
-
-// Find a range by valueId (linear scan — fine for now). Panics on miss:
-// callers pass a valueId that came from `ranges` itself (via the priority
-// queue seeded in spillClass), so a miss means the queue and the ranges
-// array fell out of sync — a real invariant violation.
-function findRangeByValueId(ranges LiveRangeArray, valueId ValueId) returns LiveRange
-	for range in ranges 'search'
-		if range.valueId == valueId 'found'
-			return range
-		end 'found'
-	end 'search'
-
-	panic("findRangeByValueId: valueId={valueId} not present in ranges (count={ranges.count()}) — pq/ranges out of sync")
-end 'findRangeByValueId'
-
-// ============================================================
-// Register pressure computation
-// ============================================================
-
-// Compute the maximum number of simultaneously-live ranges at any block boundary.
-// A range is "live" at a block boundary if its intervals span that point.
-// Simple approach: count how many ranges have an interval in each block,
-// then find the max.
-function computeMaxPressure(ranges LiveRangeArray) returns RegInt
-	// Collect all block IDs from intervals
-	var blockPressure = RegIntArray.create()
-
-	for range in ranges 'eachRange'
-		for interval in range.intervals 'eachInterval'
-			let blockId = interval.blockId
-
-			// Grow array if needed
-			while blockPressure.count() <= blockId 'grow'
-				blockPressure.push(0)
-			end 'grow'
-
-			let current = try blockPressure.get(blockId) otherwise panic("blockPressure: grown to include blockId={blockId} but get failed (count={blockPressure.count()})")
-			try blockPressure.set(blockId, value: current + 1) otherwise panic("invariant: blockPressure.set OOB")
-		end 'eachInterval'
-	end 'eachRange'
-
-	// Find max
-	var maxP = 0
-	for pressure in blockPressure 'findMax'
-		if pressure > maxP 'higher'
-			maxP = pressure
-		end 'higher'
-	end 'findMax'
-
-	return maxP
-end 'computeMaxPressure'
 
 // ============================================================
 // Spill slot allocation
@@ -498,7 +238,12 @@ function allocateSlotsForClass(ranges LiveRangeArray, decision SpillDecision, ne
 	return watermark
 end 'allocateSlotsForClass'
 
-export function allocateSpillSlots(decision SpillDecision)
+// Allocate spill slot offsets for the ranges in `decision`. `baseOffset` is
+// the running high-water mark across PREVIOUS spill iterations of the same
+// function — fresh slot offsets start there so iteration N's slots never
+// collide with iteration N-1's. Returns the new high-water mark (caller
+// passes it back as `baseOffset` on the next iteration).
+export function allocateSpillSlots(decision SpillDecision, baseOffset RegInt) returns RegInt
 	// Find max valueId to size the assignment array
 	var maxValueId = 0
 	for range in decision.spilledRanges 'findMax'
@@ -524,10 +269,11 @@ export function allocateSpillSlots(decision SpillDecision)
 		end 'rc'
 	end 'partition'
 
-	var nextSlotOffset = 0
+	var nextSlotOffset = baseOffset
 	nextSlotOffset = allocateSlotsForClass(gprRanges, decision: decision, nextSlotOffset: nextSlotOffset)
 	nextSlotOffset = allocateSlotsForClass(fpRanges, decision: decision, nextSlotOffset: nextSlotOffset)
 
-	decision.totalSpillSize = nextSlotOffset
-	logDebug(LogCategory.ir, message: function() gives "spill-mgr: slots={decision.spilledRanges.count()} totalBytes={nextSlotOffset}")
+	decision.totalSpillSize = nextSlotOffset - baseOffset
+	logDebug(LogCategory.ir, message: function() gives "spill-mgr: slots={decision.spilledRanges.count()} totalBytes={decision.totalSpillSize} base={baseOffset} watermark={nextSlotOffset}")
+	return nextSlotOffset
 end 'allocateSpillSlots'

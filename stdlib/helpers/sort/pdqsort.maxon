@@ -29,38 +29,30 @@ export extension Array
 	// the parser folds extension-time aliases into Array.innerAliases so
 	// this file's body sees them through `chaseTypealiasToFunctionType`.
 
-	// Compare arr[i] vs arr[j] and return true iff arr[i] < arr[j].
-	// Helper to keep `medianOf3Index`'s register pressure low — each call
-	// holds at most two element values live at a time.
-	function lessAt(i SortIndex, j SortIndex, cmp SortComparator) returns bool
-		let vi = try managed.get(i) otherwise panic("lessAt: get OOB at i")
-		let vj = try managed.get(j) otherwise panic("lessAt: get OOB at j")
-		return cmp(vi, vj) == Ordering.lessThan
-	end 'lessAt'
-
 	// Three-element comparator-based median: returns the index (a, b, or c)
 	// whose value is the median of arr[a], arr[b], arr[c]. Doesn't reorder
 	// the array — the partition pass does that with `swap`.
-	// Each branch only needs two element values live across one comparison,
-	// matching what the self-hosted register allocator can color today.
 	function medianOf3Index(a SortIndex, b SortIndex, c SortIndex, cmp SortComparator) returns SortIndex
-		if self.lessAt(a, j: b, cmp: cmp) 'aLessB'
+		let va = try managed.get(a) otherwise panic("medianOf3Index: get OOB at a")
+		let vb = try managed.get(b) otherwise panic("medianOf3Index: get OOB at b")
+		let vc = try managed.get(c) otherwise panic("medianOf3Index: get OOB at c")
+		if cmp(va, vb) == Ordering.lessThan 'aLessB'
 			// a < b
-			if self.lessAt(b, j: c, cmp: cmp) 'bLessC'
+			if cmp(vb, vc) == Ordering.lessThan 'bLessC'
 				return b
 			end 'bLessC'
 			// a < b, b >= c
-			if self.lessAt(a, j: c, cmp: cmp) 'aLessC'
+			if cmp(va, vc) == Ordering.lessThan 'aLessC'
 				return c
 			end 'aLessC'
 			return a
 		end 'aLessB'
 		// a >= b
-		if self.lessAt(a, j: c, cmp: cmp) 'aLessC2'
+		if cmp(va, vc) == Ordering.lessThan 'aLessC2'
 			return a
 		end 'aLessC2'
 		// a >= b, a >= c
-		if self.lessAt(b, j: c, cmp: cmp) 'bLessC2'
+		if cmp(vb, vc) == Ordering.lessThan 'bLessC2'
 			return c
 		end 'bLessC2'
 		return b
@@ -116,43 +108,33 @@ export extension Array
 	// two-pointer sweep. Branchless-ness is a future optimization — today
 	// the comparator-call-then-branch pattern matches insertion sort's
 	// shape, which keeps the inliner happy.
-	// Compare arr[i] vs the value at `pivotPos` and return the Ordering.
-	// Pulls the Element vs Element comparison out of `partition` so the
-	// register allocator only has to color one Element-live span at a time.
-	// Returns the Ordering as an int (lessThan=0, equalTo=1, greaterThan=2)
-	// because the self-hosted compiler doesn't carry the SortComparator's
-	// return-type `Ordering` through the indirect-call result at this site —
-	// `cmp(vi, pv)` widens to a primitive integer. Callers compare against
-	// the raw ordinals. This is a workaround for a deeper compiler bug;
-	// when fixed, restore the `returns Ordering` signature and return the
-	// match-mapped enum value.
+	//
+	// The `as OrdInt` cast pins the indirect-call result to the narrow
+	// Ordering ordinal range: the self-hosted compiler widens `cmp`'s
+	// return to a generic integer, and the cast lets the comparisons
+	// against literal 0 / 2 type-check against the narrow range.
 	typealias OrdInt = int(0 to 2)
-	function cmpAt(i SortIndex, pivotPos SortIndex, cmp SortComparator) returns OrdInt
-		let vi = try managed.get(i) otherwise panic("cmpAt: get OOB at i")
-		let pv = try managed.get(pivotPos) otherwise panic("cmpAt: get OOB at pivot")
-		// Self-hosted widens `cmp`'s indirect-call result to integer; treat
-		// the value as the Ordering ordinal directly. C# bootstrap returns
-		// the enum but its ordinals match (0/1/2).
-		let ord = cmp(vi, pv)
-		return ord as OrdInt
-	end 'cmpAt'
-
 	function partition(lo SortIndex, hi SortIndex, pivotIndex SortIndex, cmp SortComparator) returns (SortIndex, bool)
 		Log.trace("pdq.partition")
 		// Move pivot to the front of the slice (unconditional swap).
 		// After this `lo` holds the pivot value for the rest of the pass.
 		self.swap(lo, j: pivotIndex)
+		// Pivot value is loop-invariant: read once before the sweep.
+		let pv = try managed.get(lo) otherwise panic("partition: get OOB at pivot")
 		var leftAllStrictlyLess = true
 		var i = lo + 1
 		var j = hi - 1
 		while i <= j 'sweep'
 			// Advance i while arr[i] < pivot. (0 = Ordering.lessThan.ordinal)
-			if self.cmpAt(i, pivotPos: lo, cmp: cmp) == 0 'iAdvance'
+			let vi = try managed.get(i) otherwise panic("partition: get OOB at i")
+			let cmpI = cmp(vi, pv) as OrdInt
+			if cmpI == 0 'iAdvance'
 				i = i + 1
 				continue
 			end 'iAdvance'
 			// Retreat j while arr[j] > pivot.
-			let cmpJ = self.cmpAt(j, pivotPos: lo, cmp: cmp)
+			let vj = try managed.get(j) otherwise panic("partition: get OOB at j")
+			let cmpJ = cmp(vj, pv) as OrdInt
 			if cmpJ == 2 'jRetreat'
 				if j == lo 'underflowJ'
 					break
