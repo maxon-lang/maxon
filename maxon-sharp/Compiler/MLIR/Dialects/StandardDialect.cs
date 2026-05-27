@@ -1291,6 +1291,7 @@ public static class StdValueFactory {
     if (type == IrType.U32) return new StdU32(IrContext.Current.NextStdId());
     if (type == IrType.I64) return new StdI64(IrContext.Current.NextStdId());
     if (type == IrType.U64) return new StdI64(IrContext.Current.NextStdId());
+    if (type == IrType.CString) return new StdI64(IrContext.Current.NextStdId());
     if (type is IrEnumType) return new StdI64(IrContext.Current.NextStdId());
     if (type is IrStructType) return new StdI64(IrContext.Current.NextStdId());
     if (type is IrRangedPrimitiveType rpt) return CreateStdValueForType(rpt.OptimalType);

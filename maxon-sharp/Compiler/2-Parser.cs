@@ -1278,14 +1278,14 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     RegisterBuiltinMethod("__ManagedMemory", "slice",
       ["self", "start", "end"], [mm, IrType.I64, IrType.I64], mm, throwsType: mmErr);
     RegisterBuiltinMethod("__ManagedMemory", "toCString",
-      ["self"], [mm], IrType.I64);
+      ["self"], [mm], IrType.CString);
     RegisterBuiltinMethod("__ManagedMemory", "makeCharFromBytes",
       ["self", "pos", "len"], [mm, IrType.I64, IrType.I64], IrType.I64);
     // __ManagedMemory static methods
     RegisterBuiltinMethod("__ManagedMemory", "create",
       ["count", "elementSize"], [IrType.I64, IrType.I64], mm, isStatic: true, throwsType: mmErr);
     RegisterBuiltinMethod("__ManagedMemory", "fromCString",
-      ["cstr"], [IrType.I64], mm, isStatic: true);
+      ["cstr"], [IrType.CString], mm, isStatic: true);
     RegisterBuiltinMethod("__ManagedMemory", "createCursor",
       ["self"], [mm], mc);
 
@@ -6768,7 +6768,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // (handled above before ExpectTypeName runs). `bool` is unranged and
     // stays accepted bare.
     if (TryResolveBarePrimitive(typeName, out var primIrType)) {
-      if (typeName == "bool" || _parsingTypeAliasRhs) return primIrType;
+      if (typeName == "bool" || typeName == "cstring" || _parsingTypeAliasRhs) return primIrType;
       throw new CompileError(ErrorCode.SemanticTypeMismatch,
         BarePrimitiveTypeMessage(typeName),
         _tokens[typeNamePos].Line, _tokens[typeNamePos].Column);
@@ -6821,6 +6821,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       case "float": primIrType = IrType.F64; return true;
       case "byte": primIrType = IrType.I8; return true;
       case "bool": primIrType = IrType.I1; return true;
+      case "cstring": primIrType = IrType.CString; return true;
       default: primIrType = IrType.I64; return false;
     }
   }
@@ -6881,6 +6882,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     if (Check(TokenType.Float)) return Advance().Value;
     if (Check(TokenType.Bool)) return Advance().Value;
     if (Check(TokenType.Byte)) return Advance().Value;
+    if (Check(TokenType.CString)) return Advance().Value;
     if (Check(TokenType.SelfType)) {
       Advance();
       if (_currentTypeName == null) throw new CompileError(ErrorCode.ParserExpectedType, "'Self' can only be used inside a type declaration", Current().Line, Current().Column);
@@ -9202,13 +9204,13 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // === Command Line intrinsics ===
     ["commandLineCount"] = RuntimeCallIntrinsic(
       "Returns the number of command line arguments.\n\n`__Builtins.commandLineCount() returns int`",
-      "maxon_command_line_count", 0, true),
+      "maxon_command_line_count", [], true),
     ["commandLineArg"] = RuntimeCallToManaged(
       "Returns a __ManagedMemory for the command line argument at the given index.\n\n`__Builtins.commandLineArg(index) returns __ManagedMemory`",
-      "maxon_command_line_arg", 1, freeFunc: "mm_raw_free"),
+      "maxon_command_line_arg", ["i64"], freeFunc: "mm_raw_free"),
     ["executablePath"] = RuntimeCallToManaged(
       "Returns the absolute executable path as a __ManagedMemory.\n\n`__Builtins.executablePath() returns __ManagedMemory`",
-      "maxon_executable_path", 0, freeFunc: "mm_raw_free"),
+      "maxon_executable_path", [], freeFunc: "mm_raw_free"),
     // === Subprocess intrinsics ===
     // Each maps directly to a `maxon_subprocess_*` C runtime symbol.
     // `stdlib/Subprocess.maxon` calls these from `runConfiguration` and
@@ -9222,109 +9224,125 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // stubs that fail spawns with -1; real OS-side implementations land
     // alongside the runtime work.
     ["subprocessResolveOnPath"] = RuntimeCallToManaged(
-      "Resolves an executable name against PATH (and PATHEXT on Windows). Returns the absolute path as a fresh __ManagedMemory, or null if not found.\n\n`__Builtins.subprocessResolveOnPath(name_mm) returns __ManagedMemory`",
-      "maxon_subprocess_resolve_on_path", 1, freeFunc: "mm_raw_free"),
-    // 15-arg spawn: argv_mm, argc, cwd_mm, env_mm, envInherit, stdinKind,
-    // stdinData_mm, stdoutKind, stdoutData_mm, stdoutLimit, stderrKind,
-    // stderrData_mm, stderrLimit, flags. Flags bit 0=hide window,
+      "Resolves an executable name against PATH (and PATHEXT on Windows). Returns the absolute path as a fresh __ManagedMemory, or null if not found.\n\n`__Builtins.subprocessResolveOnPath(name_cstr) returns __ManagedMemory`",
+      "maxon_subprocess_resolve_on_path", ["cstring"], freeFunc: "mm_raw_free"),
+    // 14-arg spawn: argv_mm, argc, cwd_cstr, env_mm, envInherit, stdinKind,
+    // stdinData_cstr, stdoutKind, stdoutData_cstr, stdoutLimit, stderrKind,
+    // stderrData_cstr, stderrLimit, flags. Flags bit 0=hide window,
     // bit 1=createNewProcessGroup, bit 2=detach. Returns int64 handle (-1 on
     // error). Verified MaxonCallRuntimeOp + EmitCallShared spill stack args
-    // beyond the register ABI cap, so 15 args lower correctly on both x86 and
+    // beyond the register ABI cap, so 14 args lower correctly on both x86 and
     // arm64.
     ["subprocessSpawn"] = RuntimeCallIntrinsic(
-      "Spawns a subprocess with full stdio/env/cwd control. Returns an int64 handle, or -1 on error (callers consult subprocessLastErrorMessage()).\n\n`__Builtins.subprocessSpawn(argv_mm, argc, cwd_mm, env_mm, envInherit, stdinKind, stdinData_mm, stdoutKind, stdoutData_mm, stdoutLimit, stderrKind, stderrData_mm, stderrLimit, flags) returns int`",
-      "maxon_subprocess_spawn", 14, true),
+      "Spawns a subprocess with full stdio/env/cwd control. Returns an int64 handle, or -1 on error (callers consult subprocessLastErrorMessage()).\n\n`__Builtins.subprocessSpawn(argv_mm, argc, cwd_cstr, env_mm, envInherit, stdinKind, stdinData_cstr, stdoutKind, stdoutData_cstr, stdoutLimit, stderrKind, stderrData_cstr, stderrLimit, flags) returns int`",
+      "maxon_subprocess_spawn",
+      ["__ManagedMemory", "i64",        // argv, argc
+       "cstring",                        // cwd
+       "__ManagedMemory", "i64",         // env_mm, envInherit
+       "i64", "cstring",                 // stdinKind, stdinData
+       "i64", "cstring", "i64",          // stdoutKind, stdoutData, stdoutLimit
+       "i64", "cstring", "i64",          // stderrKind, stderrData, stderrLimit
+       "i64"],                           // flags
+      true),
     ["subprocessLastErrorMessage"] = RuntimeCallToManaged(
       "Returns the most recent subprocess runtime error message as a __ManagedMemory (empty when no error is pending).\n\n`__Builtins.subprocessLastErrorMessage() returns __ManagedMemory`",
-      "maxon_subprocess_last_error_message", 0, freeFunc: "mm_raw_free"),
+      "maxon_subprocess_last_error_message", [], freeFunc: "mm_raw_free"),
     ["subprocessGetPid"] = RuntimeCallIntrinsic(
       "Returns the OS process id of a live subprocess handle, or -1 if unavailable.\n\n`__Builtins.subprocessGetPid(handle) returns int`",
-      "maxon_subprocess_get_pid", 1, true),
+      "maxon_subprocess_get_pid", ["i64"], true),
     ["subprocessWaitCollect"] = RuntimeCallIntrinsic(
       "Waits for a subprocess to exit (or until timeoutMs elapses) and collects stdout/stderr into a result struct. Returns a non-negative pointer to that struct on success, -1 on error.\n\n`__Builtins.subprocessWaitCollect(handle, timeoutMs) returns int`",
-      "maxon_subprocess_wait_collect", 2, true),
+      "maxon_subprocess_wait_collect", ["i64", "i64"], true),
     ["subprocessKill"] = RuntimeCallIntrinsic(
       "Force-terminates a subprocess. Returns 0 on success, -1 on error.\n\n`__Builtins.subprocessKill(handle, signal) returns int`",
-      "maxon_subprocess_kill", 2, true),
+      "maxon_subprocess_kill", ["i64", "i64"], true),
     ["subprocessSendSignal"] = RuntimeCallIntrinsic(
       "Sends a Unix-style signal (or Windows Ctrl event) to a subprocess. Returns 0 on success, -1 on error.\n\n`__Builtins.subprocessSendSignal(handle, signal) returns int`",
-      "maxon_subprocess_send_signal", 2, true),
+      "maxon_subprocess_send_signal", ["i64", "i64"], true),
     ["subprocessReleaseHandle"] = RuntimeCallIntrinsic(
       "Releases all OS resources associated with a subprocess handle.\n\n`__Builtins.subprocessReleaseHandle(handle)`",
-      "maxon_subprocess_release_handle", 1, false),
+      "maxon_subprocess_release_handle", ["i64"], false),
     // Detach uses the same 14-arg contract as spawn; the runtime gates the
     // detached-vs-attached path on flags bit 2.
     ["subprocessDetach"] = RuntimeCallIntrinsic(
-      "Spawns a detached subprocess and returns its OS pid as int64 (-1 on error). Same argument layout as subprocessSpawn; the runtime gates detached behaviour through flags bit 2.\n\n`__Builtins.subprocessDetach(argv_mm, argc, cwd_mm, env_mm, envInherit, stdinKind, stdinData_mm, stdoutKind, stdoutData_mm, stdoutLimit, stderrKind, stderrData_mm, stderrLimit, flags) returns int`",
-      "maxon_subprocess_detach", 14, true),
+      "Spawns a detached subprocess and returns its OS pid as int64 (-1 on error). Same argument layout as subprocessSpawn; the runtime gates detached behaviour through flags bit 2.\n\n`__Builtins.subprocessDetach(argv_mm, argc, cwd_cstr, env_mm, envInherit, stdinKind, stdinData_cstr, stdoutKind, stdoutData_cstr, stdoutLimit, stderrKind, stderrData_cstr, stderrLimit, flags) returns int`",
+      "maxon_subprocess_detach",
+      ["__ManagedMemory", "i64",
+       "cstring",
+       "__ManagedMemory", "i64",
+       "i64", "cstring",
+       "i64", "cstring", "i64",
+       "i64", "cstring", "i64",
+       "i64"],
+      true),
     // === Streaming subprocess API (persistent-worker pool) ===
     ["subprocessSpawnStreaming"] = RuntimeCallIntrinsic(
-      "Spawns a subprocess wired for streaming stdio (pipes on stdin/stdout/stderr) suitable for long-lived persistent workers. Returns an int64 handle, or -1 on error (callers consult subprocessLastErrorMessage()).\n\n`__Builtins.subprocessSpawnStreaming(argv_mm, argc, cwd_mm, flags) returns int`",
-      "maxon_subprocess_spawn_streaming", 4, true),
+      "Spawns a subprocess wired for streaming stdio (pipes on stdin/stdout/stderr) suitable for long-lived persistent workers. Returns an int64 handle, or -1 on error (callers consult subprocessLastErrorMessage()).\n\n`__Builtins.subprocessSpawnStreaming(argv_mm, argc, cwd_cstr, flags) returns int`",
+      "maxon_subprocess_spawn_streaming", ["__ManagedMemory", "i64", "cstring", "i64"], true),
     ["subprocessWriteStdinAll"] = RuntimeCallIntrinsic(
-      "Writes the entire contents of a __ManagedMemory buffer to a streaming subprocess's stdin, blocking until all bytes are flushed. Returns 0 on success, -1 on error.\n\n`__Builtins.subprocessWriteStdinAll(handle, data_mm) returns int`",
-      "maxon_subprocess_write_stdin_all", 2, true),
+      "Writes the entire contents of a cstring to a streaming subprocess's stdin, blocking until all bytes are flushed. Returns 0 on success, -1 on error.\n\n`__Builtins.subprocessWriteStdinAll(handle, data_cstr) returns int`",
+      "maxon_subprocess_write_stdin_all", ["i64", "cstring"], true),
     ["subprocessReadStdoutLine"] = RuntimeCallToManaged(
       "Reads one line (LF-terminated) from a streaming subprocess's stdout, blocking until a line is available or EOF is reached. Returns a fresh __ManagedMemory containing the line (without the trailing newline); a zero-length result signals EOF. Lines longer than maxBytes are truncated and the remainder is delivered on the next call.\n\n`__Builtins.subprocessReadStdoutLine(handle, maxBytes) returns __ManagedMemory`",
-      "maxon_subprocess_read_stdout_line", 2, freeFunc: "mm_raw_free"),
+      "maxon_subprocess_read_stdout_line", ["i64", "i64"], freeFunc: "mm_raw_free"),
     ["subprocessReadStderrLine"] = RuntimeCallToManaged(
       "Reads one line (LF-terminated) from a streaming subprocess's stderr, blocking until a line is available or EOF is reached. Returns a fresh __ManagedMemory containing the line (without the trailing newline); a zero-length result signals EOF. Lines longer than maxBytes are truncated and the remainder is delivered on the next call.\n\n`__Builtins.subprocessReadStderrLine(handle, maxBytes) returns __ManagedMemory`",
-      "maxon_subprocess_read_stderr_line", 2, freeFunc: "mm_raw_free"),
+      "maxon_subprocess_read_stderr_line", ["i64", "i64"], freeFunc: "mm_raw_free"),
     ["subprocessCloseStdin"] = RuntimeCallIntrinsic(
       "Closes the stdin pipe of a streaming subprocess, signalling EOF to the child without terminating it.\n\n`__Builtins.subprocessCloseStdin(handle)`",
-      "maxon_subprocess_close_stdin", 1, false),
+      "maxon_subprocess_close_stdin", ["i64"], false),
     ["subprocessWaitExit"] = RuntimeCallIntrinsic(
       "Waits for a streaming subprocess to exit (or until timeoutMs elapses) and returns its exit code. Returns -2 on timeout or -1 on error.\n\n`__Builtins.subprocessWaitExit(handle, timeoutMs) returns int`",
-      "maxon_subprocess_wait_exit", 2, true),
+      "maxon_subprocess_wait_exit", ["i64", "i64"], true),
     ["managedIsNull"] = RuntimeCallIntrinsic(
       "Returns 1 when the __ManagedMemory pointer is null, 0 otherwise. Used after MM-returning runtime calls (e.g. subprocessResolveOnPath) to test for the not-found sentinel.\n\n`__Builtins.managedIsNull(mm) returns int`",
-      "maxon_managed_is_null", 1, true),
+      "maxon_managed_is_null", ["__ManagedMemory"], true),
     // Result-struct accessors — read individual fields out of the pointer
     // returned by subprocessWaitCollect. Mirrors the layout the runtime
     // produces (described in the parent plan).
     ["subprocessResultStatusKind"] = RuntimeCallIntrinsic(
       "Returns the status kind of a waitCollect result (0=exited, 1=signalled, 2=timedOut).\n\n`__Builtins.subprocessResultStatusKind(resultPtr) returns int`",
-      "maxon_subprocess_result_status_kind", 1, true),
+      "maxon_subprocess_result_status_kind", ["i64"], true),
     ["subprocessResultStatusCode"] = RuntimeCallIntrinsic(
       "Returns the exit code or signal number from a waitCollect result.\n\n`__Builtins.subprocessResultStatusCode(resultPtr) returns int`",
-      "maxon_subprocess_result_status_code", 1, true),
+      "maxon_subprocess_result_status_code", ["i64"], true),
     ["subprocessResultStdout"] = RuntimeCallToManaged(
       "Returns a fresh __ManagedMemory containing captured stdout from a waitCollect result.\n\n`__Builtins.subprocessResultStdout(resultPtr) returns __ManagedMemory`",
-      "maxon_subprocess_result_stdout", 1, freeFunc: "mm_raw_free"),
+      "maxon_subprocess_result_stdout", ["i64"], freeFunc: "mm_raw_free"),
     ["subprocessResultStderr"] = RuntimeCallToManaged(
       "Returns a fresh __ManagedMemory containing captured stderr from a waitCollect result.\n\n`__Builtins.subprocessResultStderr(resultPtr) returns __ManagedMemory`",
-      "maxon_subprocess_result_stderr", 1, freeFunc: "mm_raw_free"),
+      "maxon_subprocess_result_stderr", ["i64"], freeFunc: "mm_raw_free"),
     ["subprocessResultDurationMs"] = RuntimeCallIntrinsic(
       "Returns the subprocess's wall-clock duration in milliseconds from a waitCollect result.\n\n`__Builtins.subprocessResultDurationMs(resultPtr) returns int`",
-      "maxon_subprocess_result_duration_ms", 1, true),
+      "maxon_subprocess_result_duration_ms", ["i64"], true),
     ["subprocessResultRelease"] = RuntimeCallIntrinsic(
       "Frees the result struct returned by subprocessWaitCollect.\n\n`__Builtins.subprocessResultRelease(resultPtr)`",
-      "maxon_subprocess_result_release", 1, false),
+      "maxon_subprocess_result_release", ["i64"], false),
     // === Sleep intrinsic ===
     ["sleep"] = RuntimeCallIntrinsic(
       "Suspends the current green thread for the given milliseconds.\n\n`__Builtins.sleep(ms)`",
-      "maxon_sleep", 1, false),
+      "maxon_sleep", ["i64"], false),
     // === Non-blocking promise readiness check ===
     ["gtIsComplete"] = RuntimeCallIntrinsic(
       "Returns 1 if the green thread (raw promise inner pointer) has reached completed status, 0 otherwise. Non-blocking peek used by dispatchers that need to find the first-ready promise out of N concurrent ones without head-of-line blocking. Pass `promise.inner` from a `Promise with X`.\n\n`__Builtins.gtIsComplete(gt_ptr) returns int`",
-      "__gt_is_complete", 1, true),
+      "__gt_is_complete", ["i64"], true),
     // === Test-only intrinsic: trigger a CPU access-violation by reading address 0. ===
     // Exists to exercise the runtime fault-handler path (VEH on Windows, signal handler
     // on macOS) and the last-resort UEF on Windows. Never returns.
     ["forceSegfault"] = RuntimeCallIntrinsic(
       "Deliberately dereferences address 0 to trigger an access-violation fault.\n\n`__Builtins.forceSegfault()`",
-      "maxon_force_segfault", 0, false),
+      "maxon_force_segfault", [], false),
     // === Time intrinsics ===
     ["currentTimeMs"] = RuntimeCallIntrinsic(
       "Returns monotonic time in milliseconds.\n\n`__Builtins.currentTimeMs() returns int`",
-      "maxon_current_time_ms", 0, true),
+      "maxon_current_time_ms", [], true),
     ["currentProcessId"] = RuntimeCallIntrinsic(
       "Returns the OS-assigned process ID of the currently-running process. "
       + "Stable for the process's lifetime; differs across concurrent processes. "
       + "Used by stdlib helpers that need to disambiguate filesystem temp paths "
       + "or other shared-resource names across sibling subprocesses spawned by a parent.\n\n"
       + "`__Builtins.currentProcessId() returns int`",
-      "maxon_current_process_id", 0, true),
+      "maxon_current_process_id", [], true),
     // === Primitive type intrinsics ===
     ["floatToBits"] = new(
       "Reinterprets a float's IEEE 754 bit pattern as an integer (bitcast).\n\n`__Builtins.floatToBits(value) returns int`",
@@ -9368,6 +9386,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     ["float"] = (IrType.F64, MaxonValueKind.Float),
     ["bool"] = (IrType.I1, MaxonValueKind.Bool),
     ["byte"] = (IrType.I8, MaxonValueKind.Byte),
+    ["cstring"] = (IrType.CString, MaxonValueKind.CString),
   };
 
   private static IrType? TryGetPrimitiveIrType(string typeName) =>
@@ -9450,13 +9469,12 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   }
 
   /// Calls a runtime function returning a cstring, converts to managed, optionally frees the cstring.
-  private static BuiltinInfo RuntimeCallToManaged(string doc, string runtimeName, int argCount, string? freeFunc = null) {
+  /// Each arg is parsed and type-checked against paramTypeNames[i].
+  /// Supported type names: "i64", "cstring", "__ManagedMemory" (extend on demand).
+  private static BuiltinInfo RuntimeCallToManaged(string doc, string runtimeName,
+      List<string> paramTypeNames, string? freeFunc = null) {
     return new(doc, p => {
-      var args = new List<MaxonValue>();
-      for (int i = 0; i < argCount; i++) {
-        if (i > 0) p.Expect(TokenType.Comma);
-        args.Add(p.ResolveExprValue(p.ParseExpression()));
-      }
+      var args = p.ParseTypedRuntimeArgs(runtimeName, paramTypeNames);
       p.Expect(TokenType.RightParen);
       var rtOp = new MaxonCallRuntimeOp(runtimeName, args, true);
       p._currentBlock!.AddOp(rtOp);
@@ -9469,19 +9487,74 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     });
   }
 
-  /// Parses N arguments and emits a MaxonCallRuntimeOp.
-  private static BuiltinInfo RuntimeCallIntrinsic(string doc, string runtimeName, int argCount, bool hasResult) {
+  /// Parses N arguments (typed) and emits a MaxonCallRuntimeOp.
+  private static BuiltinInfo RuntimeCallIntrinsic(string doc, string runtimeName,
+      List<string> paramTypeNames, bool hasResult) {
     return new(doc, p => {
-      var args = new List<MaxonValue>();
-      for (int i = 0; i < argCount; i++) {
-        if (i > 0) p.Expect(TokenType.Comma);
-        args.Add(p.ResolveExprValue(p.ParseExpression()));
-      }
+      var args = p.ParseTypedRuntimeArgs(runtimeName, paramTypeNames);
       p.Expect(TokenType.RightParen);
       var op = new MaxonCallRuntimeOp(runtimeName, args, hasResult);
       p._currentBlock!.AddOp(op);
       return op.Result;
     });
+  }
+
+  private List<MaxonValue> ParseTypedRuntimeArgs(string runtimeName, List<string> paramTypeNames) {
+    var args = new List<MaxonValue>(paramTypeNames.Count);
+    for (int i = 0; i < paramTypeNames.Count; i++) {
+      if (i > 0) Expect(TokenType.Comma);
+      var argToken = Current();
+      var val = ResolveExprValue(ParseExpression());
+      CheckRuntimeArgType(runtimeName, i, paramTypeNames[i], val, argToken);
+      args.Add(val);
+    }
+    return args;
+  }
+
+  private void CheckRuntimeArgType(string runtimeName, int argIndex, string expectedName,
+      MaxonValue actual, Token argToken) {
+    // Integer params: accept any integer-class MaxonValue but NOT MaxonCString.
+    if (expectedName == "i64") {
+      if (actual is MaxonInteger or MaxonByte or MaxonShort) return;
+      FailArgType(runtimeName, argIndex, expectedName, actual, argToken);
+      return;
+    }
+
+    // CString param: require MaxonCString explicitly. Plain integers don't
+    // qualify — caller must produce a real cstring (e.g. via .toCString()).
+    if (expectedName == "cstring") {
+      if (actual is MaxonCString) return;
+      FailArgType(runtimeName, argIndex, expectedName, actual, argToken);
+      return;
+    }
+
+    // Struct param: accept any MaxonStruct whose TypeName resolves to the expected struct
+    // (handles typealiases like `ByteMemory = __ManagedMemory with byte`).
+    if (_typeRegistry.TryGetValue(expectedName, out var expectedIr) && expectedIr is IrStructType) {
+      if (actual is MaxonStruct ms && IsStructTypeCompatible(ms.TypeName, expectedName)) return;
+      FailArgType(runtimeName, argIndex, expectedName, actual, argToken);
+      return;
+    }
+
+    throw new CompileError(ErrorCode.SemanticTypeMismatch,
+      $"internal: __Builtins.{runtimeName} param {argIndex} has unsupported expected type '{expectedName}'",
+      argToken.Line, argToken.Column);
+  }
+
+  private void FailArgType(string runtimeName, int argIndex, string expectedName,
+      MaxonValue actual, Token argToken) {
+    var actualTypeName = actual switch {
+      MaxonStruct ms => ms.TypeName,
+      MaxonCString => "cstring",
+      MaxonInteger => "int",
+      MaxonByte => "byte",
+      MaxonShort => "short",
+      MaxonBool => "bool",
+      _ => actual.GetType().Name.Replace("Maxon", "").ToLowerInvariant(),
+    };
+    throw new CompileError(ErrorCode.SemanticTypeMismatch,
+      $"type mismatch: __Builtins.{runtimeName} argument {argIndex} expects '{expectedName}' but got '{actualTypeName}'",
+      argToken.Line, argToken.Column);
   }
 
   /// Returns the base source type name for a type (e.g., "IntManagedList" -> "__ManagedList").
@@ -12087,6 +12160,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     MaxonValueKind.Struct => "struct",
     MaxonValueKind.Enum => "enum",
     MaxonValueKind.Function => "function",
+    MaxonValueKind.CString => "cstring",
     _ => throw new InvalidOperationException($"Unknown value kind: {kind}")
   };
 
@@ -12098,6 +12172,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     MaxonValueKind.Bool => IrType.I1,
     MaxonValueKind.Byte => IrType.I8,
     MaxonValueKind.Short => IrType.I16,
+    MaxonValueKind.CString => IrType.CString,
     MaxonValueKind.Struct => null,
     MaxonValueKind.Enum => null,
     MaxonValueKind.Function => null,
@@ -16711,6 +16786,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   private MaxonValueKind DetermineValueKind(MaxonValue value) {
     return value switch {
       MaxonInteger => MaxonValueKind.Integer,
+      MaxonCString => MaxonValueKind.CString,
       MaxonFloat => MaxonValueKind.Float,
       MaxonBool => MaxonValueKind.Bool,
       MaxonByte => MaxonValueKind.Byte,
@@ -18232,7 +18308,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       _ when returnType == IrType.I64 || returnType == IrType.F64 || returnType == IrType.F32
           || returnType == IrType.I1 || returnType == IrType.I8 || returnType == IrType.U8
           || returnType == IrType.I16 || returnType == IrType.U16 || returnType == IrType.I32
-          || returnType == IrType.U32 || returnType == IrType.U64 => null,
+          || returnType == IrType.U32 || returnType == IrType.U64 || returnType == IrType.CString => null,
       _ => throw new InvalidOperationException($"ResolveCallResultType: unhandled return type {returnType.GetType().Name} ({returnType.Name})")
     };
     return (kind, typeName);
@@ -19509,7 +19585,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       return false;
     var afterName = _tokens[_pos + lookahead].Type;
     if (afterName == TokenType.Identifier || afterName == TokenType.Int || afterName == TokenType.Float ||
-           afterName == TokenType.Bool || afterName == TokenType.Byte || afterName == TokenType.LeftParen)
+           afterName == TokenType.Bool || afterName == TokenType.Byte || afterName == TokenType.CString || afterName == TokenType.LeftParen)
       return true;
 
     // Untyped closure: (name) gives or (name, name, ...) gives

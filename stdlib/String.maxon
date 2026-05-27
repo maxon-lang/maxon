@@ -49,6 +49,19 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		return ByteArray.init(managed)
 	end 'toByteArray'
 
+	/// Return a NUL-terminated `cstring` view of the UTF-8 bytes. Use this when
+	/// passing the string to a `__Builtins.*` runtime intrinsic whose parameter
+	/// is declared `cstring` (the runtime sizes the buffer via `strlen`).
+	/// 
+	/// The conversion checks `buffer[length] == 0` and copies if not, so the
+	/// returned pointer is always safely NUL-terminated even when the underlying
+	/// `__ManagedMemory` happens to be packed tight against its allocated
+	/// capacity (where `strlen` would otherwise walk past the end into adjacent
+	/// heap).
+	export function cstr() returns cstring
+		return managed.toCString()
+	end 'cstr'
+
 	/// Create a deep copy of this string with independent backing storage
 	export function clone() returns String
 		let len = managed.length()

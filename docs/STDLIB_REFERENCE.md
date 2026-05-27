@@ -481,6 +481,7 @@ print("{s.isAscii()}\n")      // true
 | `byteLength()` | `ByteCount` | Number of UTF-8 bytes |
 | `isEmpty()` | `bool` | True if the string has no content |
 | `isAscii()` | `bool` | True if all bytes are in the ASCII range (< 128). Enables optimized code paths. |
+| `cstr()` | `cstring` | NUL-terminated UTF-8 pointer view of the string. Use when passing the string to a `__Builtins.*` runtime intrinsic whose parameter is declared `cstring`. Copies the buffer only when `buffer[length] != 0` (i.e. when the underlying allocation is packed tight against capacity), so the returned pointer is always safely NUL-terminated. |
 
 ---
 

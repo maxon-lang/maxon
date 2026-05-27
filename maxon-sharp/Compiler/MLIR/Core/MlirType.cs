@@ -35,6 +35,11 @@ public class IrType {
   public static IrType Void { get; } = new("void", 0);
   // Sentinel type for function-typed parameters (higher-order functions)
   public static IrType Fn { get; } = new("fn", 8);
+  // A NUL-terminated UTF-8 byte pointer. Storage is identical to i64; the
+  // distinction exists at the source/type-check layer to prevent confusing
+  // raw integers with cstrings (which is how the Subprocess cwd bug got past
+  // review).
+  public static IrType CString { get; } = new("cstring", 8);
 
   public static IrType? FromSizedName(string name) => name switch {
     "u8" => U8,

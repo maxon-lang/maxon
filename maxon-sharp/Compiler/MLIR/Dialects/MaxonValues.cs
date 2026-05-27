@@ -10,6 +10,7 @@ public abstract class MaxonValue(int id) {
 }
 
 public sealed class MaxonInteger(int id) : MaxonValue(id);
+public sealed class MaxonCString(int id) : MaxonValue(id);
 public sealed class MaxonFloat(int id) : MaxonValue(id);
 public sealed class MaxonBool(int id) : MaxonValue(id);
 public sealed class MaxonByte(int id) : MaxonValue(id);

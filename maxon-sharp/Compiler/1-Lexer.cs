@@ -68,6 +68,7 @@ public enum TokenType {
   Float,
   Bool,
   Byte,
+  CString,
 
   // Literals
   Identifier,
@@ -197,6 +198,7 @@ public class Lexer(string source) {
     { "float", new(TokenType.Float, "Primitive floating-point type (64-bit double precision).", false) },
     { "bool", new(TokenType.Bool, "Primitive boolean type (true or false).", false) },
     { "byte", new(TokenType.Byte, "Primitive byte type (8-bit unsigned integer).", false) },
+    { "cstring", new(TokenType.CString, "NUL-terminated UTF-8 byte pointer. Used to pass strings to `__Builtins.*` runtime intrinsics that strlen their buffers. Produce one with `String.cstr()` or `__ManagedMemory.toCString()`.", false) },
     { "uses", new(TokenType.Uses, "Declares associated types in an interface.", false) },
     { "typealias", new(TokenType.TypeAlias, "Declares a type alias for an existing type or associated type in an interface.", false) },
     { "implements", new(TokenType.Implements, "Specifies that a type conforms to an interface.", false) },

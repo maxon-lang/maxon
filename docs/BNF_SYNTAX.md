@@ -42,7 +42,7 @@ IDENTIFIER    = ( letter | '_' ) { letter | digit | '_' }
 
 ```
 KEYWORD       = 'and' | 'as' | 'async' | 'await' | 'bool' | 'break' | 'byte' | 'continue'
-              | 'default' | 'else' | 'end' | 'enum' | 'export' | 'extends'
+              | 'cstring' | 'default' | 'else' | 'end' | 'enum' | 'export' | 'extends'
               | 'extension' | 'fallthrough' | 'false' | 'float'
               | 'for' | 'from' | 'function' | 'gives' | 'if' | 'ignore'
               | 'implements' | 'in' | 'int' | 'interface' | 'is' | 'let'
@@ -399,6 +399,7 @@ where_clause  = 'where' constraint { ',' constraint }
 constraint    = IDENTIFIER 'is' IDENTIFIER { 'and' IDENTIFIER }
 
 type_ref      = 'bool'
+              | 'cstring'
               | 'Self'
               | IDENTIFIER '.' IDENTIFIER
               | IDENTIFIER

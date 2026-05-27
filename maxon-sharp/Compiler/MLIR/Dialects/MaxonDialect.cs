@@ -3,7 +3,7 @@ using MaxonSharp.Compiler.Ir.Core;
 
 namespace MaxonSharp.Compiler.Ir.Dialects;
 
-public enum MaxonValueKind { Integer, Float, Float32, Bool, Byte, Short, Struct, Enum, Function, TypeParameter, ErrorUnion }
+public enum MaxonValueKind { Integer, Float, Float32, Bool, Byte, Short, Struct, Enum, Function, TypeParameter, ErrorUnion, CString }
 
 public static class MaxonValueKindExtensions {
   public static IrType ToIrType(this MaxonValueKind kind) => kind switch {
@@ -18,6 +18,7 @@ public static class MaxonValueKindExtensions {
     MaxonValueKind.Function => throw new InvalidOperationException("Function kinds require lookup via function type, not ToIrType()"),
     MaxonValueKind.TypeParameter => IrType.I64, // unresolved type parameter stored as i64
     MaxonValueKind.ErrorUnion => IrType.I64, // backed by an i64 (the error flag); the discriminant lives in a sibling slot
+    MaxonValueKind.CString => IrType.CString,
     _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, null),
   };
 
@@ -37,6 +38,7 @@ public static class MaxonValueKindExtensions {
     MaxonValueKind.Function => 8, // Function pointers are 8 bytes
     MaxonValueKind.TypeParameter => 8, // Placeholder size before monomorphization
     MaxonValueKind.ErrorUnion => 8,    // Stored as i64 error-flag slot
+    MaxonValueKind.CString => 8,       // Pointer-sized
     _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, null),
   };
 
@@ -52,10 +54,12 @@ public static class MaxonValueKindExtensions {
     MaxonValueKind.Function => new MaxonFunctionPtr(IrContext.Current.NextId()),
     MaxonValueKind.TypeParameter => new MaxonInteger(IrContext.Current.NextId()),
     MaxonValueKind.ErrorUnion => new MaxonInteger(IrContext.Current.NextId()),
+    MaxonValueKind.CString => new MaxonCString(IrContext.Current.NextId()),
     _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, null),
   };
 
   public static MaxonValueKind ToValueKind(this IrType type) {
+    if (type == IrType.CString) return MaxonValueKind.CString;
     if (type == IrType.I64) return MaxonValueKind.Integer;
     if (type == IrType.F64) return MaxonValueKind.Float;
     if (type == IrType.F32) return MaxonValueKind.Float32;
@@ -85,6 +89,7 @@ public static class MaxonValueKindExtensions {
     MaxonValueKind.Enum => new StdI64(IrContext.Current.NextStdId()),
     MaxonValueKind.Function => new StdPtr(IrContext.Current.NextStdId()),
     MaxonValueKind.TypeParameter => new StdI64(IrContext.Current.NextStdId()),
+    MaxonValueKind.CString => new StdI64(IrContext.Current.NextStdId()),
     _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, null),
   };
 }
@@ -1428,7 +1433,7 @@ public sealed class MaxonManagedToCStringOp(MaxonValue managed) : MaxonOp {
   public override MaxonOpKind Kind => MaxonOpKind.ManagedToCString;
   public override string Mnemonic => "maxon.managed_to_cstring";
   public MaxonValue Managed { get; } = managed;
-  public MaxonInteger Result { get; } = new MaxonInteger(IrContext.Current.NextId());
+  public MaxonCString Result { get; } = new MaxonCString(IrContext.Current.NextId());
   public override IReadOnlyList<string> PrintableOperands => [Managed.ToString()];
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
 }

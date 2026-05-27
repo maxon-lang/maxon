@@ -373,12 +373,12 @@ export type Subprocess
 		let cwd = config.workingDirectory.path
 		let emptyMm = subprocessEmptyManaged()
 		try requireInheritEnv(config.environment)
-		let stdinTriple = stdinTripleFromSource(config.standardInput, emptyManaged: emptyMm)
-		let stdoutTriple = outputTripleFromDestination(config.standardOutput, emptyManaged: emptyMm)
-		let stderrTriple = outputTripleFromDestination(config.standardError, emptyManaged: emptyMm)
+		let stdinTriple = stdinTripleFromSource(config.standardInput)
+		let stdoutTriple = outputTripleFromDestination(config.standardOutput)
+		let stderrTriple = outputTripleFromDestination(config.standardError)
 		let flags = attachedFlagsFor(config.platformOptions)
 
-		let handle = __Builtins.subprocessSpawn(argvBlob.managed, argc, cwd.managed, emptyMm, 1, stdinTriple.kind, stdinTriple.dataManaged, stdoutTriple.kind, stdoutTriple.dataManaged, stdoutTriple.limit, stderrTriple.kind, stderrTriple.dataManaged, stderrTriple.limit, flags)
+		let handle = __Builtins.subprocessSpawn(argvBlob.managed, argc, cwd.cstr(), emptyMm, 1, stdinTriple.kind, stdinTriple.data.cstr(), stdoutTriple.kind, stdoutTriple.data.cstr(), stdoutTriple.limit, stderrTriple.kind, stderrTriple.data.cstr(), stderrTriple.limit, flags)
 		if handle == -1 'spawnFailed'
 			throw SubprocessError.spawnFailed(lastErrorMessage())
 		end 'spawnFailed'
@@ -417,10 +417,11 @@ export type Subprocess
 		let argc = config.arguments.count() + 1
 		let cwd = config.workingDirectory.path
 		let emptyMm = subprocessEmptyManaged()
+		let emptyCStr = subprocessEmptyCString()
 		try requireInheritEnv(config.environment)
 		let flags = attachedFlagsFor(config.platformOptions) or SpawnFlag.detach.rawValue
 
-		let pid = __Builtins.subprocessDetach(argvBlob.managed, argc, cwd.managed, emptyMm, 1, StdinKind.none.rawValue, emptyMm, OutputKind.discard.rawValue, emptyMm, 0, OutputKind.discard.rawValue, emptyMm, 0, flags)
+		let pid = __Builtins.subprocessDetach(argvBlob.managed, argc, cwd.cstr(), emptyMm, 1, StdinKind.none.rawValue, emptyCStr, OutputKind.discard.rawValue, emptyCStr, 0, OutputKind.discard.rawValue, emptyCStr, 0, flags)
 		if pid == -1 'spawnFailed'
 			throw SubprocessError.spawnFailed(lastErrorMessage())
 		end 'spawnFailed'
@@ -444,15 +445,18 @@ typealias SpawnFlagsValue = int(0 to 7)
 /// Carries the (kind, data, limit) triple passed to subprocessSpawn for one
 /// stdio stream. The limit field is meaningful only for `collect`; for other
 /// kinds the runtime ignores it but we still set it to 0 for clarity. The
-/// dataManaged field is an opaque buffer pointer the runtime interprets as a
-/// NUL-terminated cstring (for paths) or raw byte payload (for stdin bytes).
+/// data field stays a `String` here so the rest of the helper chain is
+/// type-checked at the source language level; the conversion to `cstring`
+/// happens at the spawn call site via `.cstr()`. For kinds whose contract
+/// has no payload (e.g. inherit/discard), pass the empty string and the
+/// runtime treats the leading-NUL cstring as "no payload".
 type StdioRuntimeTriple
 	export var kind as StdioKindValue
-	export var dataManaged as __ManagedMemory
+	export var data as String
 	export var limit as ByteLimit
 
-	export static function create(kind StdioKindValue, dataManaged __ManagedMemory, limit ByteLimit) returns StdioRuntimeTriple
-		return StdioRuntimeTriple{kind: kind, dataManaged: dataManaged, limit: limit}
+	export static function create(kind StdioKindValue, data String, limit ByteLimit) returns StdioRuntimeTriple
+		return StdioRuntimeTriple{kind: kind, data: data, limit: limit}
 	end 'create'
 end 'StdioRuntimeTriple'
 
@@ -474,7 +478,7 @@ function resolveExecutablePath(executable Executable) returns String throws Subp
 end 'resolveExecutablePath'
 
 function resolveByName(name String) returns String
-	let resolved = __Builtins.subprocessResolveOnPath(name.managed)
+	let resolved = __Builtins.subprocessResolveOnPath(name.cstr())
 	let isNull = __Builtins.managedIsNull(resolved)
 	if isNull != 0 'missing'
 		// Resolver miss — let the OS spawn primitive try its own lookup.
@@ -522,6 +526,16 @@ function subprocessEmptyManaged() returns __ManagedMemory
 	return empty.managed
 end 'subprocessEmptyManaged'
 
+/// Empty cstring sentinel — paired with `subprocessEmptyManaged()` for slots
+/// whose runtime contract is a cstring but whose value carries no payload
+/// (`StdinKind.none`, `OutputKind.discard`, `OutputKind.inherit`,
+/// `OutputKind.collect`). Hoisted out of the spawn call site so the same
+/// pointer is reused across all empty slots in a single spawn.
+function subprocessEmptyCString() returns cstring
+	let empty = ""
+	return empty.cstr()
+end 'subprocessEmptyCString'
+
 /// Only `Environment.inherit` is supported today. TODO: Phase 3.3+ adds
 /// runtime env-block construction; until the Unix runtime can build a custom
 /// env block, the other two arms throw a clear `spawnFailed`. Tracked in the
@@ -550,21 +564,21 @@ function terminationStatusFromKind(statusKind ResultStatusKind, statusCode ExitI
 	end 's'
 end 'terminationStatusFromKind'
 
-function stdinTripleFromSource(src InputSource, emptyManaged __ManagedMemory) returns StdioRuntimeTriple
+function stdinTripleFromSource(src InputSource) returns StdioRuntimeTriple
 	return match src 's'
-		none gives StdioRuntimeTriple.create(StdinKind.none.rawValue, dataManaged: emptyManaged, limit: 0)
-		inherit gives StdioRuntimeTriple.create(StdinKind.inherit.rawValue, dataManaged: emptyManaged, limit: 0)
-		bytes(data) gives StdioRuntimeTriple.create(StdinKind.bytes.rawValue, dataManaged: data.managed, limit: 0)
-		file(path) gives StdioRuntimeTriple.create(StdinKind.file.rawValue, dataManaged: path.path.managed, limit: 0)
+		none gives StdioRuntimeTriple.create(StdinKind.none.rawValue, data: "", limit: 0)
+		inherit gives StdioRuntimeTriple.create(StdinKind.inherit.rawValue, data: "", limit: 0)
+		bytes(data) gives StdioRuntimeTriple.create(StdinKind.bytes.rawValue, data: data, limit: 0)
+		file(path) gives StdioRuntimeTriple.create(StdinKind.file.rawValue, data: path.path, limit: 0)
 	end 's'
 end 'stdinTripleFromSource'
 
-function outputTripleFromDestination(dst OutputDestination, emptyManaged __ManagedMemory) returns StdioRuntimeTriple
+function outputTripleFromDestination(dst OutputDestination) returns StdioRuntimeTriple
 	return match dst 'o'
-		discard gives StdioRuntimeTriple.create(OutputKind.discard.rawValue, dataManaged: emptyManaged, limit: 0)
-		inherit gives StdioRuntimeTriple.create(OutputKind.inherit.rawValue, dataManaged: emptyManaged, limit: 0)
-		collect(limitBytes) gives StdioRuntimeTriple.create(OutputKind.collect.rawValue, dataManaged: emptyManaged, limit: limitBytes)
-		file(path) gives StdioRuntimeTriple.create(OutputKind.file.rawValue, dataManaged: path.path.managed, limit: 0)
+		discard gives StdioRuntimeTriple.create(OutputKind.discard.rawValue, data: "", limit: 0)
+		inherit gives StdioRuntimeTriple.create(OutputKind.inherit.rawValue, data: "", limit: 0)
+		collect(limitBytes) gives StdioRuntimeTriple.create(OutputKind.collect.rawValue, data: "", limit: limitBytes)
+		file(path) gives StdioRuntimeTriple.create(OutputKind.file.rawValue, data: path.path, limit: 0)
 	end 'o'
 end 'outputTripleFromDestination'
 
@@ -643,7 +657,7 @@ export type StreamingSubprocess
 		// pipes open — and don't take platform-options today, so the field is
 		// always 0. Environment is implicitly inherited by the runtime (the
 		// streaming variant of `__subp_spawn_core` hardcodes inherit-env).
-		let rawHandle = __Builtins.subprocessSpawnStreaming(argvBlob.managed, argc, cwd.managed, 0)
+		let rawHandle = __Builtins.subprocessSpawnStreaming(argvBlob.managed, argc, cwd.cstr(), 0)
 		if rawHandle == -1 'spawnFailed'
 			throw SubprocessError.spawnFailed(lastErrorMessage())
 		end 'spawnFailed'
@@ -656,7 +670,7 @@ export type StreamingSubprocess
 	/// Embeds the newline; pass payload WITHOUT a trailing newline.
 	export function writeStdinLine(line String) throws SubprocessError
 		let withNewline = "{line}\n"
-		let rc = __Builtins.subprocessWriteStdinAll(handle, withNewline.managed)
+		let rc = __Builtins.subprocessWriteStdinAll(handle, withNewline.cstr())
 		if rc != 0 'writeFailed'
 			throw SubprocessError.ioFailed("write to child stdin failed: {lastErrorMessage()}")
 		end 'writeFailed'

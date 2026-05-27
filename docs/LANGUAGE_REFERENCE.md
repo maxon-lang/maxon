@@ -156,7 +156,7 @@ identifier = [a-zA-Z_][a-zA-Z0-9_]*
 
 ### Keywords
 ```
-and, as, bool, break, byte, continue, default, else, end, enum, export,
+and, as, bool, break, byte, continue, cstring, default, else, end, enum, export,
 extends, extension, fallthrough, false, float, for, from, function, gives, if,
 ignore, implements, in, int, interface, is, let, match, not, of, or, otherwise,
 return, returns, self, Self, shl, shr, static, then, throw, throws, to,
@@ -394,7 +394,7 @@ var i4 = ceil(f)   // 4 (up)
 
 ### Ranged Type Aliases
 
-Every use of `int`, `float`, and `byte` in type positions must go through a `typealias` with mandatory range constraints. This creates a stronger type system where every numeric value has a documented domain. `bool` is exempt from this requirement.
+Every use of `int`, `float`, and `byte` in type positions must go through a `typealias` with mandatory range constraints. This creates a stronger type system where every numeric value has a documented domain. `bool` and `cstring` are exempt from this requirement — `bool` is unranged by nature, and `cstring` is a pointer type (a NUL-terminated UTF-8 byte pointer used to interoperate with `__Builtins.*` runtime intrinsics).
 
 **Restriction in `with` clauses:** Bare primitive types (`int`, `float`, `byte`) cannot be used as type arguments in `with` clauses on `typealias` or `type` declarations. You must create a ranged typealias first. `bool`, `String`, and other struct types are not affected.
 

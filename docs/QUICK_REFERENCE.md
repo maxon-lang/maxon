@@ -11,6 +11,7 @@
 | `character literal` | Grapheme cluster | `'A'`, `'é'` |
 | `string literal` | UTF-8 string | `"hello"` |
 | `byte string literal` | ByteArray from string | `b"hello"` |
+| `cstring` | NUL-terminated UTF-8 pointer, used to pass strings to `__Builtins.*` runtime intrinsics | `s.cstr()` |
 
 ## Ranged Type Aliases
 
