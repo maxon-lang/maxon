@@ -3074,6 +3074,16 @@ function methodCallResultType(project Project, receiverType MaxonType, methodNam
 	if let interfaceMethodResult = try interfaceMethodResultType(project, receiverType: normReceiver, methodName: methodName) 'fromInterface'
 		return interfaceMethodResult
 	end 'fromInterface'
+	// typeParameter receivers (e.g. `a.compare(b)` inside a closure where
+	// `a` is typed as the enclosing extension's `Element` type-param): we
+	// don't have a where-clause context inside the lifted closure body, so
+	// fall back to searching every interface for a uniquely-named method.
+	// Comparable.compare, Hashable.hash etc. are unique, so this routes
+	// the closure-body's producer-type to the right return type even
+	// before monomorphization specializes Element to a concrete type.
+	if let typeParamMethodResult = try typeParameterMethodResultType(project, receiverType: normReceiver, methodName: methodName) 'fromTypeParam'
+		return typeParamMethodResult
+	end 'fromTypeParam'
 	// Phase 11.4 / Phase 7: when the receiver is a primitive
 	// (`int`/`float`/`bool`/`byte`), `maxonTypeStructName` throws and we
 	// fall back to the extension type name registered for the primitive
@@ -3409,6 +3419,48 @@ function interfaceMethodResultType(project Project, receiverType MaxonType, meth
 	end 'scan'
 	throw InterfaceMethodLookupError.methodNotFound
 end 'interfaceMethodResultType'
+
+// typeParameter receivers (closure bodies lifted from inside a generic
+// extension): no where-clause context is carried into the lifted body, so
+// fall back to scanning every interface in the project for a uniquely-named
+// method. If multiple interfaces declare the method, return unresolved —
+// downstream monomorphization resolves the call once Element is specialized.
+function typeParameterMethodResultType(project Project, receiverType MaxonType, methodName ByteArray) returns MaxonType throws InterfaceMethodLookupError
+	let isTypeParam = match receiverType 'pick'
+		typeParameter gives true
+		boolean to unresolved gives false
+		genericInstance to opaquePointer gives false
+	end 'pick'
+	if not isTypeParam 'notTypeParam'
+		throw InterfaceMethodLookupError.notInterface
+	end 'notTypeParam'
+	let methodNameStr = String.from(methodName)
+	var foundIface = ""
+	var foundReturn = MaxonType.unresolved
+	var matchCount = 0
+	for (ifaceName, iface) in project.interfaces 'eachIface'
+		for i in 0 upto iface.methods.count() 'scan'
+			let m = try iface.methods.get(i) otherwise panic("typeParameterMethodResultType: methods.get OOB at {i} (interface={ifaceName})")
+			if m.name != methodNameStr 'mismatch'
+				continue
+			end 'mismatch'
+			let raw = match m.returnType 'unwrap'
+				value(inner) gives inner
+				void gives MaxonType.unresolved
+			end 'unwrap'
+			if isUnresolvedType(raw) 'voidReturn'
+				continue
+			end 'voidReturn'
+			foundIface = ifaceName
+			foundReturn = promoteInterfaceUsesParamRef(project, t: raw, interfaceName: ifaceName)
+			matchCount = matchCount + 1
+		end 'scan'
+	end 'eachIface'
+	if matchCount == 1 'unique'
+		return foundReturn
+	end 'unique'
+	throw InterfaceMethodLookupError.methodNotFound
+end 'typeParameterMethodResultType'
 
 // Interface bodies are parsed with `currentTypeParams = []`, so a bare
 // reference to one of the interface's `uses` parameters (e.g. `Element`
@@ -4693,10 +4745,11 @@ function recordOpResult(project Project, producerTypes ProducerTypeMap, slotType
 		// Phase 9 Stage 2: union ops carry concrete types on the op itself.
 		// `enumConstruct` produces a union value (named-type pointer);
 		// `enumTag` produces an integer; `enumPayloadRead` produces the
-		// declared field type. Stage 3 wires the concrete `recordResultType`
-		// calls — Stage 2 leaves the producer-type map unmodified because
-		// no consumer reads these results yet.
-		enumConstruct then return
+		// declared field type.
+		// Record `enumConstruct` so a closure body whose terminator is
+		// `ret <enumConstructResult>` (e.g. `function(...) gives Ordering.greaterThan`)
+		// can resolve the lifted function's return type from the producer map.
+		enumConstruct(result, enumName, _, _, _) then recordResultType(producerTypes, name: result, t: MaxonType.named(project.typeNames.intern(enumName)))
 		enumTag then return
 		enumPayloadRead(result, enumValName, caseName, fieldIndex, fieldType, _) then recordResultType(producerTypes, name: result, t: resolveEnumPayloadFieldType(project, producerTypes: producerTypes, enumValName: enumValName, caseName: caseName, fieldIndex: fieldIndex, fieldType: fieldType))
 		enumPayloadStore then return

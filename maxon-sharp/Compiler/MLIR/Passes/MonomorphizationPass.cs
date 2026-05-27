@@ -72,14 +72,48 @@ public static class MonomorphizationPass {
 
       subSw?.Restart();
       var newFunctions = new List<IrFunction<MaxonOp>>();
+      // (sourceClosureName, specName, sourceClosureFunc, substitution, concreteTypeName)
+      // Closures referenced from a monomorphized parent body are cloned in a
+      // second drain pass below.
+      var closureQueue = new List<(string SourceName, string SpecName, IrFunction<MaxonOp> SourceFunc, TypeSubstitution Sub, string Concrete)>();
       foreach (var spec in specializations) {
         if (spec.SourceFunc.Body.Blocks.Count == 0) {
           continue;
         }
         hotSw?.Restart();
-        var clonedFunc = new FunctionCloner(spec.SourceFunc, spec.ConcreteTypeName, spec.TypeSubstitution, module.TypeAliasSources, module.TypeDefs).Clone();
+        var cloner = new FunctionCloner(spec.SourceFunc, spec.ConcreteTypeName, spec.TypeSubstitution, module.TypeAliasSources, module.TypeDefs, module);
+        var clonedFunc = cloner.Clone();
         if (hotSw != null) hot!.Add((spec.SourceFunc.Name, hotSw.ElapsedMilliseconds));
         newFunctions.Add(clonedFunc);
+        foreach (var entry in cloner.ClosureSpecializations) {
+          closureQueue.Add((entry.SourceName, entry.SpecName, entry.SourceFunc, spec.TypeSubstitution, spec.ConcreteTypeName));
+        }
+      }
+
+      // Drain closure-specialization queue. Each entry may itself reference
+      // further closures, so process iteratively until the queue is empty.
+      // Termination: each closure body has a finite set of referenced closures,
+      // and each (sourceName, concrete) pair is materialized exactly once.
+      var emittedClosureSpecs = new HashSet<string>();
+      foreach (var f in newFunctions) emittedClosureSpecs.Add(f.Name);
+      for (int q = 0; q < closureQueue.Count; q++) {
+        var (srcName, specName, srcFunc, sub, concrete) = closureQueue[q];
+        if (emittedClosureSpecs.Contains(specName)) continue;
+        if (module.FindFunctionByExactName(specName) != null) {
+          emittedClosureSpecs.Add(specName);
+          continue;
+        }
+        var closureCloner = new FunctionCloner(srcFunc, concrete, sub, module.TypeAliasSources, module.TypeDefs, module) {
+          OverrideClonedName = specName
+        };
+        var clonedClosure = closureCloner.Clone();
+        newFunctions.Add(clonedClosure);
+        emittedClosureSpecs.Add(specName);
+        foreach (var entry in closureCloner.ClosureSpecializations) {
+          if (!emittedClosureSpecs.Contains(entry.SpecName)) {
+            closureQueue.Add((entry.SourceName, entry.SpecName, entry.SourceFunc, sub, concrete));
+          }
+        }
       }
       if (subTimings != null) StageTimer.Record(subTimings, "clone", subSw!.ElapsedMilliseconds);
 
@@ -1366,7 +1400,7 @@ public static class MonomorphizationPass {
     var cloneSw = StageTimer.Enabled ? System.Diagnostics.Stopwatch.StartNew() : null;
     foreach (var (specName, (source, subMap)) in newSpecs) {
       var typeSub = new InterfaceAliasTypeSubstitution(subMap, module);
-      var cloned = CloneWithInterfaceAliasSubstitution(source, specName, typeSub);
+      var cloned = CloneIfaceAliasAndEmitClosures(module, source, specName, typeSub);
       module.AddFunction(cloned);
       anyChange = true;
     }
@@ -1687,7 +1721,7 @@ public static class MonomorphizationPass {
           MutateInterfaceAliasTypes(spec.SourceFunc, spec.SpecializedName, typeSub);
           module.InvalidateFunctionIndex();
         } else {
-          var clonedFunc = CloneWithInterfaceAliasSubstitution(spec.SourceFunc, spec.SpecializedName, typeSub);
+          var clonedFunc = CloneIfaceAliasAndEmitClosures(module, spec.SourceFunc, spec.SpecializedName, typeSub);
           module.AddFunction(clonedFunc);
         }
       }
@@ -1853,7 +1887,7 @@ public static class MonomorphizationPass {
           subMap.TryAdd(ownerTypeName, module.TypeDefs.GetValueOrDefault(ownerTypeName) ?? new IrStructType(ownerTypeName, []));
         }
         var typeSub = new InterfaceAliasTypeSubstitution(subMap, module);
-        var clonedFunc = CloneWithInterfaceAliasSubstitution(spec.SourceFunc, spec.SpecializedName, typeSub);
+        var clonedFunc = CloneIfaceAliasAndEmitClosures(module, spec.SourceFunc, spec.SpecializedName, typeSub);
         module.AddFunction(clonedFunc);
         funcLookup[clonedFunc.Name] = clonedFunc; // keep hoisted lookup in sync
         alreadySpecialized.Add(spec.SpecializedName);
@@ -1990,6 +2024,97 @@ public static class MonomorphizationPass {
       var paramName = typeParamName ?? "Element";
       return map.TryGetValue(paramName, out var resolved) && resolved == IrType.I1;
     }
+
+    /// Concrete type names from each alias->concrete binding, sorted by alias
+    /// name so the order is deterministic across compiles. Used to mangle
+    /// per-substitution closure-spec names.
+    public IEnumerable<string> SortedEntryConcreteNames() =>
+      map.OrderBy(kv => kv.Key, StringComparer.Ordinal).Select(kv => kv.Value.Name);
+  }
+
+  /// Clone an interface-alias spec function and emit any specialized
+  /// closure bodies it references. Returns the cloned parent function;
+  /// any newly-emitted closure specializations are already added to the
+  /// module by the time this returns.
+  private static IrFunction<MaxonOp> CloneIfaceAliasAndEmitClosures(
+      IrModule<MaxonOp> module,
+      IrFunction<MaxonOp> source,
+      string newName,
+      InterfaceAliasTypeSubstitution sub) {
+    var queue = new List<(string SourceName, string SpecName, IrFunction<MaxonOp> SourceFunc)>();
+    var cloned = CloneWithInterfaceAliasSubstitution(source, newName, sub, module, queue);
+    var emitted = new HashSet<string>();
+    for (int q = 0; q < queue.Count; q++) {
+      var (_, specName, srcFunc) = queue[q];
+      if (emitted.Contains(specName)) continue;
+      if (module.FindFunctionByExactName(specName) != null) { emitted.Add(specName); continue; }
+      var subClone = CloneWithInterfaceAliasSubstitution(srcFunc, specName, sub, module, queue);
+      module.AddFunction(subClone);
+      emitted.Add(specName);
+    }
+    return cloned;
+  }
+
+  /// Rewrite a closure-name reference encountered during interface-alias
+  /// specialization. If the closure body depends on the interface-alias
+  /// substitution, schedule a specialized clone keyed on the concrete type
+  /// suffix and return the specialized name. Otherwise return unchanged.
+  /// Returning unchanged when out-channels aren't available preserves
+  /// historical behavior for paths that don't yet thread the queue.
+  private static string SpecializeClosureNameForIface(
+      string referencedName,
+      InterfaceAliasTypeSubstitution sub,
+      IrModule<MaxonOp>? module,
+      List<(string SourceName, string SpecName, IrFunction<MaxonOp> SourceFunc)>? closureSpecOut) {
+    if (module == null || closureSpecOut == null) return referencedName;
+    var src = module.FindFunctionByExactName(referencedName);
+    if (src == null) return referencedName;
+    if (!IfaceClosureBodyIsGeneric(src, sub)) return referencedName;
+
+    // Build a stable per-substitution suffix from the substitution's effective
+    // entries (alias name -> concrete name). Sorted for determinism.
+    var suffix = string.Join("_", sub.SortedEntryConcreteNames());
+    var specName = $"{referencedName}${suffix}";
+    if (!closureSpecOut.Any(e => e.SourceName == referencedName && e.SpecName == specName))
+      closureSpecOut.Add((referencedName, specName, src));
+    return specName;
+  }
+
+  // A closure body is generic w.r.t. an interface-alias substitution iff any
+  // op references a type name appearing in the substitution map.
+  private static bool IfaceClosureBodyIsGeneric(IrFunction<MaxonOp> closure, InterfaceAliasTypeSubstitution sub) {
+    foreach (var pt in closure.ParamTypes) {
+      if (pt is IrStructType st && sub.TryGetValue(st.Name, out _)) return true;
+      if (pt is IrInterfaceType it && sub.TryGetValue(it.Name, out _)) return true;
+    }
+    if (closure.ReturnType is IrStructType rst && sub.TryGetValue(rst.Name, out _)) return true;
+    if (closure.ReturnType is IrInterfaceType rit && sub.TryGetValue(rit.Name, out _)) return true;
+
+    foreach (var block in closure.Body.Blocks) {
+      foreach (var op in block.Operations) {
+        switch (op) {
+          case MaxonStructParamOp sp when sub.TryGetValue(sp.StructTypeName, out _): return true;
+          case MaxonStructVarRefOp sv when sub.TryGetValue(sv.StructTypeName, out _): return true;
+          case MaxonFieldAccessOp fa when sub.TryGetValue(fa.TypeName, out _): return true;
+          case MaxonFieldAssignOp fa when sub.TryGetValue(fa.TypeName, out _): return true;
+          case MaxonEnumParamOp ep when sub.TryGetValue(ep.EnumTypeName, out _): return true;
+          case MaxonEnumVarRefOp ev when sub.TryGetValue(ev.EnumTypeName, out _): return true;
+          case MaxonEnumLiteralOp el when sub.TryGetValue(el.EnumTypeName, out _): return true;
+          case MaxonEnumConstructOp ec when sub.TryGetValue(ec.EnumTypeName, out _): return true;
+          case MaxonEnumTagOp et when sub.TryGetValue(et.EnumTypeName, out _): return true;
+          case MaxonCallOp call when CalleeMentionsSubstitutionAlias(call.Callee, sub): return true;
+          case MaxonTryCallOp tryCall when CalleeMentionsSubstitutionAlias(tryCall.Callee, sub): return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  private static bool CalleeMentionsSubstitutionAlias(string callee, InterfaceAliasTypeSubstitution sub) {
+    foreach (var segment in callee.Split('.')) {
+      if (sub.TryGetValue(segment, out _)) return true;
+    }
+    return false;
   }
 
   /// Mutate a function in-place, replacing interface alias types/callees with concrete types.
@@ -2082,8 +2207,15 @@ public static class MonomorphizationPass {
   }
 
   /// Clone a function replacing interface alias types/callees with concrete types.
+  /// If `closureSpecOut` is provided, references to closures whose bodies depend
+  /// on the substitution are rewritten to specialized names and scheduled for
+  /// emission by the caller. If null, encountering such a closure is an internal
+  /// error (use the overload that accepts the queue when interface-alias spec
+  /// runs over a function body that may contain generic closures).
   private static IrFunction<MaxonOp> CloneWithInterfaceAliasSubstitution(
-      IrFunction<MaxonOp> source, string newName, InterfaceAliasTypeSubstitution sub) {
+      IrFunction<MaxonOp> source, string newName, InterfaceAliasTypeSubstitution sub,
+      IrModule<MaxonOp>? module = null,
+      List<(string SourceName, string SpecName, IrFunction<MaxonOp> SourceFunc)>? closureSpecOut = null) {
     // Newly minted MaxonValues here belong to the source function's id namespace
     // (stdlib-bit set vs unset). Without this flip, cloning a stdlib function would
     // draw user-side ids that could later alias real user MaxonValues in valueMap.
@@ -2124,7 +2256,7 @@ public static class MonomorphizationPass {
       foreach (var block in source.Body.Blocks) {
         var newBlock = newFunc.Body.AddBlock(block.Name);
         foreach (var op in block.Operations) {
-          var cloned = CloneOpWithCalleeSub(op, sub, MapValue, valueMap);
+          var cloned = CloneOpWithCalleeSub(op, sub, MapValue, valueMap, module, closureSpecOut);
           newBlock.AddOp(cloned);
         }
       }
@@ -2137,7 +2269,9 @@ public static class MonomorphizationPass {
 
   /// Clone a single op, substituting callees that reference interface alias types.
   private static MaxonOp CloneOpWithCalleeSub(
-      MaxonOp op, InterfaceAliasTypeSubstitution sub, Func<MaxonValue, MaxonValue> mapValue, Dictionary<int, MaxonValue> valueMap) {
+      MaxonOp op, InterfaceAliasTypeSubstitution sub, Func<MaxonValue, MaxonValue> mapValue, Dictionary<int, MaxonValue> valueMap,
+      IrModule<MaxonOp>? module = null,
+      List<(string SourceName, string SpecName, IrFunction<MaxonOp> SourceFunc)>? closureSpecOut = null) {
     switch (op) {
       case MaxonTryCallOp tryCall: {
         var newCallee = sub.SubstituteCallee(tryCall.Callee);
@@ -2280,7 +2414,12 @@ public static class MonomorphizationPass {
       case MaxonGlobalLoadOp gl: { var c = new MaxonGlobalLoadOp(gl.GlobalName, gl.ValueKind); valueMap[gl.Result.Id] = c.Result; return c; }
       case MaxonGlobalStoreOp gs: return new MaxonGlobalStoreOp(gs.GlobalName, mapValue(gs.Value), gs.ValueKind);
       case MaxonFunctionParamOp fp: { var c = new MaxonFunctionParamOp(fp.Index, fp.Name, fp.FunctionType); valueMap[fp.Result.Id] = c.Result; return c; }
-      case MaxonFunctionRefOp fr: { var c = new MaxonFunctionRefOp(fr.FunctionName, fr.FunctionType); valueMap[fr.Result.Id] = c.Result; return c; }
+      case MaxonFunctionRefOp fr: {
+        var specName = SpecializeClosureNameForIface(fr.FunctionName, sub, module, closureSpecOut);
+        var c = new MaxonFunctionRefOp(specName, fr.FunctionType);
+        valueMap[fr.Result.Id] = c.Result;
+        return c;
+      }
       case MaxonFunctionVarRefOp fv: { var c = new MaxonFunctionVarRefOp(fv.VarName, fv.FunctionType); valueMap[fv.Result.Id] = c.Result; return c; }
       case MaxonIndirectCallOp indirect: {
         var newCallee = mapValue(indirect.Callee);
@@ -2338,14 +2477,17 @@ public static class MonomorphizationPass {
       }
 
       case MaxonClosureCreateOp closureCreate: {
+        var specName = SpecializeClosureNameForIface(closureCreate.FunctionName, sub, module, closureSpecOut);
         var newCaptured = closureCreate.CapturedValues.Select(mapValue).ToList();
+        var newCapturedStructTypes = closureCreate.CapturedStructTypes
+          .Select(s => s == null ? null : sub.SubstituteName(s)).ToList();
         var c = new MaxonClosureCreateOp(
-          closureCreate.FunctionName,
+          specName,
           closureCreate.FunctionType,
           newCaptured,
           [.. closureCreate.CapturedNames],
           [.. closureCreate.CapturedKinds],
-          [.. closureCreate.CapturedStructTypes]);
+          newCapturedStructTypes);
         valueMap[closureCreate.Result.Id] = c.Result;
         return c;
       }

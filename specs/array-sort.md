@@ -13,7 +13,7 @@ category: collections
 
 - `sort()` — stable sort using the element's `Comparable.compare` ordering. Requires `Element is Comparable`.
 - `sort(cmp)` — stable sort using a caller-supplied comparator `function(Element, Element) returns Ordering`.
-- `sortUnstable()` — unstable sort via the element's `Comparable.compare` ordering. Requires `Element is Comparable`. Same algorithm as `sort()` until Stage 3 lands pdqsort; the API distinction is reserved so callers can opt out of stability up front.
+- `sortUnstable()` — unstable sort via the element's `Comparable.compare` ordering. Requires `Element is Comparable`. Routed through the same `comparableInsertionSort` helper as `sort()` until the self-hosted compiler implements interface-method dispatch on type-parameter receivers (Phase 11.4); the API distinction is reserved so callers can opt out of stability up front.
 - `sortUnstable(cmp)` — unstable sort using a caller-supplied comparator.
 
 Stage 1: all four entries route to insertion sort. Stage 2 layers in sorting networks for small slices, Stage 3 routes the unstable entries to pdqsort, and Stages 4–7 layer in glidesort for the stable entries.
@@ -553,8 +553,9 @@ no-network insertion 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16
 
 Stage 3 routes the comparator-overload `sortUnstable(cmp)` through pdqsort
 for inputs larger than the small-sort threshold (n > 32). The no-arg
-`sortUnstable()` (Comparable) still uses the insertion-sort path until the
-closure-monomorph path is fixed in both compilers.
+`sortUnstable()` (Comparable) shares the `comparableInsertionSort` helper
+with `sort()` until self-hosted gains interface-method dispatch on
+type-parameter receivers (Phase 11.4).
 
 Dispatch tests assert via Log trace keys:
 - `pdq.partition` — partition pass ran

@@ -335,22 +335,19 @@ end 'Array'
 // Array.maxon doesn't bloat with algorithm bodies. Four entries cover the two
 // orderings (stable vs unstable) × two ergonomics (Comparable default vs
 // explicit comparator).
-//
-// Stage 1: all four entries dispatch to insertion sort via
-// internalInsertionSortRange. Later stages introduce small-sort networks, pdqsort
-// (unstable path), and glidesort (stable path); the public API does not move.
 
 // Default-Comparable overloads. Both `sort()` and `sortUnstable()` here run a
 // Comparable-specialized insertion sort that calls `Element.compare()`
 // directly. The body lives in `comparableInsertionSort` rather than reusing
-// `internalInsertionSortRange` with a `(x, y) => x.compare(y)` lambda: the
-// lambda path runs through the cross-module closure-emission pipeline,
-// which doesn't yet monomorphize stdlib-defined closures whose body
-// invokes interface methods on a generic type parameter (the closure
-// resolves but its monomorph isn't emitted at link time →
-// unresolved-function-address). Sharing one helper keeps the public API
-// working today; Stage 3 will split `sortUnstable` off through pdqsort
-// once the closure path is unblocked.
+// the comparator-overload path with a `(a, b) gives a.compare(b)` lambda:
+// the lambda body would need runtime interface-method dispatch on a
+// type-parameter receiver, which the self-hosted compiler doesn't yet
+// implement (Phase 11.4). Monomorphizing the helper directly avoids the
+// dispatch entirely — each concrete `__Array_<T>.comparableInsertionSort`
+// resolves `prev.compare(pending)` to the concrete `T.compare` at clone
+// time. The C# bootstrap also takes this path so both compilers share the
+// same lowered shape until self-hosted gains witness-table dispatch on
+// type-parameter receivers.
 export extension Array where Element is Comparable
 	// Private body shared by `sort()` and `sortUnstable()`. In-place
 	// insertion sort over the full array using `Element.compare`.
@@ -388,10 +385,6 @@ export extension Array where Element is Comparable
 
 	/// Sort in place using the element's `Comparable.compare` ordering.
 	/// Unstable: relative order of equal elements is not preserved.
-	/// Stage 3: kept on the Comparable-specialized insertion-sort path.
-	/// The pdqsort entry needs a closure-monomorph fix in the C# bootstrap
-	/// before this can route to `pdqsortRange` directly. Until then the
-	/// comparator-overload `sortUnstable(cmp)` provides the fast path.
 	export function sortUnstable()
 		self.comparableInsertionSort()
 	end 'sortUnstable'

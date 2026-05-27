@@ -640,9 +640,11 @@ internal class TypeSubstitution {
         if (_sourceTypeMethodNames != null && typePart == _sourceTypeName
             && !_sourceTypeMethodNames.Contains(methodPart))
           return callee;
-        var resolvedName = newType is IrRangedPrimitiveType rpt
-          ? IrType.FormatAsSourceName(rpt.BaseType)
-          : newType.Name;
+        // Use FormatAsSourceName for primitives (and ranged primitives) so a
+        // type-parameter substituted to bare I64 still routes to `int.compare`
+        // rather than the non-existent `i64.compare`. Non-primitive types pass
+        // through (FormatAsSourceName returns .Name for those).
+        var resolvedName = IrType.FormatAsSourceName(newType);
         // If the resolved name is a type alias (e.g., ArrayIter), resolve it to its source
         // so that RewriteCallSites can find the monomorphized concrete function.
         if (_typeAliasSources != null && _typeAliasSources.TryGetValue(resolvedName, out var aliasInfo)) {

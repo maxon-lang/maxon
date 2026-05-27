@@ -19728,7 +19728,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // Use inferred return type if available, so struct literal syntax works in body
     IrType? inferredReturnType = inferredFnType?.ReturnType;
     var closureFunc = new IrFunction<MaxonOp>(closureName, paramNames, paramTypes, inferredReturnType, null) {
-      IsStdlib = false,
+      IsStdlib = _isStdlib,
     };
 
     _currentFunction = closureFunc;
@@ -19831,7 +19831,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
     // Create the final function with proper return type
     var finalClosureFunc = new IrFunction<MaxonOp>(closureName, finalParamNames, finalParamTypes, returnType, null) {
-      IsStdlib = false,
+      IsStdlib = _isStdlib,
     };
     // Copy the body from the temporary function
     foreach (var block in closureFunc.Body.Blocks) {

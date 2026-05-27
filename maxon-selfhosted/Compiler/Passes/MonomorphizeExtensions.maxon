@@ -501,6 +501,31 @@ function findFieldOnStruct(structType StructType, fieldName String) returns Fiel
 	throw MonomorphFieldLookupError.notFound
 end 'findFieldOnStruct'
 
+// Closure references encountered during interface-extension monomorphization
+// need the same per-substitution specialization the C# bootstrap performs
+// (FunctionCloner.SpecializeClosureName in maxon-sharp). The current
+// self-hosted compiler reaches this path only for user-declared
+// interface-extension methods on a receiver type — stdlib generic
+// extensions on Array<Element> compile once with type-parameter slots and
+// never traverse `substituteOp`. As a result no in-tree user code exercises
+// a closure reference here. Panic on detection so future code that does
+// reach this path surfaces a clean error instead of silently emitting a
+// stale ref, rather than silently miscompiling. Lift the C# design here
+// when an actual call site needs per-substitution closure specialization.
+function rewriteClosureRefOnMonomorph(op MaxonOp, funcName String) returns MaxonOp
+	if funcName.startsWith("_$closure_") 'isClosure'
+		panic("MonomorphizeExtensions: closure '{funcName}' referenced from a monomorphized extension body. Per-substitution closure specialization isn't implemented in the self-hosted compiler yet — port FunctionCloner.SpecializeClosureName from maxon-sharp.")
+	end 'isClosure'
+	return op
+end 'rewriteClosureRefOnMonomorph'
+
+function rewriteClosureCreateOnMonomorph(result ByteArray, funcName String, fnTypeId FunctionTypeId, capturedNames StringArray, capturedTypes MaxonTypeArray, range SourceRange) returns MaxonOp
+	if funcName.startsWith("_$closure_") 'isClosure'
+		panic("MonomorphizeExtensions: closure '{funcName}' referenced from a monomorphized extension body. Per-substitution closure specialization isn't implemented in the self-hosted compiler yet — port FunctionCloner.SpecializeClosureName from maxon-sharp.")
+	end 'isClosure'
+	return MaxonOp.closureCreate(result, funcName: funcName, fnTypeId: fnTypeId, capturedNames: capturedNames, capturedTypes: capturedTypes, range: range)
+end 'rewriteClosureCreateOnMonomorph'
+
 // Clone a MaxonOp with the supplied substitution applied to every
 // embedded MaxonType field. Centralised arm-by-arm transform so every op
 // shape is handled explicitly — a missing arm raises an unhandled-arm
@@ -549,8 +574,8 @@ function substituteOp(project Project, op MaxonOp, subst TypeSubstitution, iface
 		tryCall(result, callee, callContext, args, argLabels, argTypes, argRanges, errorBoundName, range) gives MaxonOp.tryCall(result, callee: callee, callContext: callContext, args: args, argLabels: argLabels, argTypes: substituteTypeArray(project, types: argTypes, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed), argRanges: argRanges, errorBoundName: errorBoundName, range: range)
 		tryMethodCall(result, receiver, methodName, args, argLabels, argTypes, argRanges, errorBoundName, range) gives MaxonOp.tryMethodCall(result, receiver: receiver, methodName: methodName, args: args, argLabels: argLabels, argTypes: substituteTypeArray(project, types: argTypes, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed), argRanges: argRanges, errorBoundName: errorBoundName, range: range)
 		rethrow gives op
-		functionRef gives op
-		closureCreate(result, funcName, fnTypeId, capturedNames, capturedTypes, range) gives MaxonOp.closureCreate(result, funcName: funcName, fnTypeId: fnTypeId, capturedNames: capturedNames, capturedTypes: substituteTypeArray(project, types: capturedTypes, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed), range: range)
+		functionRef(_, funcName, _, _) gives rewriteClosureRefOnMonomorph(op, funcName: funcName)
+		closureCreate(result, funcName, fnTypeId, capturedNames, capturedTypes, range) gives rewriteClosureCreateOnMonomorph(result, funcName: funcName, fnTypeId: fnTypeId, capturedNames: capturedNames, capturedTypes: substituteTypeArray(project, types: capturedTypes, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed), range: range)
 		closureEnvLoad(result, captureIndex, captureName, captureType, range) gives MaxonOp.closureEnvLoad(result, captureIndex: captureIndex, captureName: captureName, captureType: substituteWithIfaceFold(project, t: captureType, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed), range: range)
 		indirectCall(result, callee, fnTypeId, args, argLabels, argTypes, argRanges, range) gives MaxonOp.indirectCall(result, callee: callee, fnTypeId: fnTypeId, args: args, argLabels: argLabels, argTypes: substituteTypeArray(project, types: argTypes, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed), argRanges: argRanges, range: range)
 		forInIterable(iterName, iterSlot, iterType, sourceValue, sourceType, bodyBlockId, exitBlockId, label, range) gives MaxonOp.forInIterable(iterName, iterSlot: slotRemap.resolve(iterSlot), iterType: substituteWithIfaceFold(project, t: iterType, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed), sourceValue: sourceValue, sourceType: substituteWithIfaceFold(project, t: sourceType, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed), bodyBlockId: bodyBlockId, exitBlockId: exitBlockId, label: label, range: range)

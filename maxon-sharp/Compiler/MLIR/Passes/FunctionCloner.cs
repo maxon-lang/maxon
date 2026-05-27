@@ -14,9 +14,21 @@ internal class FunctionCloner {
   private readonly TypeSubstitution _typeSubstitution;
   private readonly Dictionary<string, TypeAliasInfo> _typeAliasSources;
   private readonly Dictionary<string, IrType> _typeDefs;
+  private readonly IrModule<MaxonOp>? _module;
 
   // Resolved return type after substitution (used for tuple name correction)
   private IrType? _resolvedReturnType;
+
+  // When set, Clone() uses this name verbatim instead of "{ConcreteType}.{methodName}".
+  // Used by closure-body specialization where source name has no "Type.method" structure.
+  internal string? OverrideClonedName { get; set; }
+
+  // Side-list of closure-body specializations scheduled while cloning this function.
+  // MonomorphizationPass.Run drains this and emits the specialized closure bodies.
+  internal List<(string SourceName, string SpecName, IrFunction<MaxonOp> SourceFunc)> ClosureSpecializations { get; } = [];
+
+  // Per-cloner cache of (sourceClosureName -> specializedName) so repeated refs collapse.
+  private readonly Dictionary<string, string> _closureSpecCache = [];
 
   // Cloning state
   private readonly Dictionary<int, MaxonValue> _valueMap = [];
@@ -39,12 +51,14 @@ internal class FunctionCloner {
       string concreteTypeName,
       TypeSubstitution typeSubstitution,
       Dictionary<string, TypeAliasInfo> typeAliasSources,
-      Dictionary<string, IrType> typeDefs) {
+      Dictionary<string, IrType> typeDefs,
+      IrModule<MaxonOp>? module = null) {
     _sourceFunc = sourceFunc;
     _concreteTypeName = concreteTypeName;
     _typeSubstitution = typeSubstitution;
     _typeAliasSources = typeAliasSources;
     _typeDefs = typeDefs;
+    _module = module;
     _typeSubstitution.SetTypeAliasSources(typeAliasSources);
 
     // Derive element-polymorphic param indices from function signature types
@@ -103,11 +117,18 @@ internal class FunctionCloner {
     var prevMode = IrContext.Current.StdlibLoweringMode;
     IrContext.Current.StdlibLoweringMode = _sourceFunc.IsStdlib;
     try {
-    // Compute new function name
+    // Compute new function name.
+    // For closure bodies (no Type.method structure) the caller sets
+    // OverrideClonedName to the pre-computed specialized closure name.
     // Use LastIndexOf to handle namespace-qualified names like "stdlib.Array.push"
-    var dotIdx = _sourceFunc.Name.LastIndexOf('.');
-    var methodName = dotIdx >= 0 ? _sourceFunc.Name[(dotIdx + 1)..] : _sourceFunc.Name;
-    var newFuncName = $"{_concreteTypeName}.{methodName}";
+    string newFuncName;
+    if (OverrideClonedName != null) {
+      newFuncName = OverrideClonedName;
+    } else {
+      var dotIdx = _sourceFunc.Name.LastIndexOf('.');
+      var methodName = dotIdx >= 0 ? _sourceFunc.Name[(dotIdx + 1)..] : _sourceFunc.Name;
+      newFuncName = $"{_concreteTypeName}.{methodName}";
+    }
 
     // Clone param types with substitution
     var newParamTypes = new List<IrType>();
@@ -256,6 +277,81 @@ internal class FunctionCloner {
   private bool IsElementPolymorphic(int paramIndex) =>
     _elementPolymorphicIndices.Contains(paramIndex);
 
+  // --- Closure specialization ---
+
+  // If `referencedName` names a closure body that is generic w.r.t. the
+  // active substitution, schedule a specialized clone keyed on the concrete
+  // type and return the specialized name. Otherwise return the name unchanged.
+  // Without _module access (defensive fallback), returns the name unchanged.
+  private string SpecializeClosureName(string referencedName) {
+    if (_module == null) return referencedName;
+    if (_closureSpecCache.TryGetValue(referencedName, out var cached)) return cached;
+    var src = _module.FindFunctionByExactName(referencedName);
+    if (src == null) {
+      _closureSpecCache[referencedName] = referencedName;
+      return referencedName;
+    }
+
+    if (!ClosureBodyIsGenericForSubstitution(src)) {
+      _closureSpecCache[referencedName] = referencedName;
+      return referencedName;
+    }
+
+    var specName = $"{referencedName}${_concreteTypeName}";
+    _closureSpecCache[referencedName] = specName;
+    // Dedup against existing schedule (same source closure referenced twice
+    // in the same parent body should produce only one specialized body).
+    if (!ClosureSpecializations.Any(e => e.SourceName == referencedName)) {
+      ClosureSpecializations.Add((referencedName, specName, src));
+    }
+    return specName;
+  }
+
+  // A closure body is generic w.r.t. this cloner's substitution iff any of:
+  //   - a parameter or return type is IrTypeParameterType,
+  //   - any op has a MaxonValueKind.TypeParameter result,
+  //   - any op references a struct/enum type name appearing in the substitution.
+  private bool ClosureBodyIsGenericForSubstitution(IrFunction<MaxonOp> closure) {
+    foreach (var pt in closure.ParamTypes) {
+      if (pt is IrTypeParameterType) return true;
+    }
+    if (closure.ReturnType is IrTypeParameterType) return true;
+
+    var substKeys = _typeSubstitution.Entries.Select(kv => kv.Key).ToHashSet();
+
+    foreach (var block in closure.Body.Blocks) {
+      foreach (var op in block.Operations) {
+        switch (op) {
+          case MaxonParamOp p when p.ValueKind == MaxonValueKind.TypeParameter: return true;
+          case MaxonStructParamOp sp when substKeys.Contains(sp.StructTypeName): return true;
+          case MaxonStructVarRefOp sv when substKeys.Contains(sv.StructTypeName): return true;
+          case MaxonFieldAccessOp fa when substKeys.Contains(fa.TypeName)
+            || (fa.ResultStructTypeName != null && substKeys.Contains(fa.ResultStructTypeName)): return true;
+          case MaxonFieldAssignOp fa when substKeys.Contains(fa.TypeName): return true;
+          case MaxonEnumParamOp ep when substKeys.Contains(ep.EnumTypeName): return true;
+          case MaxonEnumVarRefOp ev when substKeys.Contains(ev.EnumTypeName): return true;
+          case MaxonEnumLiteralOp el when substKeys.Contains(el.EnumTypeName): return true;
+          case MaxonEnumConstructOp ec when substKeys.Contains(ec.EnumTypeName): return true;
+          case MaxonEnumTagOp et when substKeys.Contains(et.EnumTypeName): return true;
+          case MaxonEnumPayloadOp epo when substKeys.Contains(epo.EnumTypeName): return true;
+          case MaxonCallOp call when CalleeUsesSubstitution(call.Callee, substKeys): return true;
+          case MaxonTryCallOp tryCall when CalleeUsesSubstitution(tryCall.Callee, substKeys): return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  private static bool CalleeUsesSubstitution(string callee, HashSet<string> substKeys) {
+    // Method calls are encoded as "Type.method" or "stdlib.Type.method"; check
+    // each dot-segment so e.g. "Element.compare" is matched when Element is
+    // in the substitution.
+    foreach (var segment in callee.Split('.')) {
+      if (substKeys.Contains(segment)) return true;
+    }
+    return false;
+  }
+
   // --- Op cloning ---
 
   private MaxonOp CloneOp(MaxonOp op, List<MaxonOp> extraOps) {
@@ -393,7 +489,13 @@ internal class FunctionCloner {
       // Runtime and function ops
       case MaxonCallRuntimeOp cr: { var na = cr.Args.Select(MapValue).ToList(); var c = new MaxonCallRuntimeOp(cr.FunctionName, na, cr.Result != null); if (cr.Result != null && c.Result != null) RegisterResult(cr.Result, c.Result); return c; }
       case MaxonFunctionParamOp fp: { var c = new MaxonFunctionParamOp(fp.Index, fp.Name, fp.FunctionType); RegisterResult(fp.Result, c.Result); return c; }
-      case MaxonFunctionRefOp fr: { var c = new MaxonFunctionRefOp(fr.FunctionName, fr.FunctionType); RegisterResult(fr.Result, c.Result); return c; }
+      case MaxonFunctionRefOp fr: {
+        var specName = SpecializeClosureName(fr.FunctionName);
+        var newFnType = (IrFunctionType)_typeSubstitution.SubstituteType(fr.FunctionType);
+        var c = new MaxonFunctionRefOp(specName, newFnType);
+        RegisterResult(fr.Result, c.Result);
+        return c;
+      }
       case MaxonFunctionVarRefOp fv: { var c = new MaxonFunctionVarRefOp(fv.VarName, (IrFunctionType)_typeSubstitution.SubstituteType(fv.FunctionType)); RegisterResult(fv.Result, c.Result); return c; }
 
       // ManagedList (doubly-linked list) ops
@@ -426,6 +528,23 @@ internal class FunctionCloner {
         var newRK = _typeSubstitution.TryGetValue(cpv.ValueKind, out var pvt) ? pvt.ToValueKind() : cpv.ResultKind;
         var c = new MaxonManagedListNodePtrValueOp(MapValue(cpv.CursorPtr), SubName(cpv.ValueKind), newRK);
         RegisterResult(cpv.Result, c.Result); return c;
+      }
+
+      case MaxonClosureCreateOp cc: {
+        var specName = SpecializeClosureName(cc.FunctionName);
+        var newFnType = (IrFunctionType)_typeSubstitution.SubstituteType(cc.FunctionType);
+        var newCaptured = cc.CapturedValues.Select(MapValue).ToList();
+        var newCapturedStructTypes = cc.CapturedStructTypes
+          .Select(s => s == null ? null : SubName(s)).ToList();
+        var c = new MaxonClosureCreateOp(
+          specName,
+          newFnType,
+          newCaptured,
+          [.. cc.CapturedNames],
+          [.. cc.CapturedKinds],
+          newCapturedStructTypes);
+        RegisterResult(cc.Result, c.Result);
+        return c;
       }
 
       default:

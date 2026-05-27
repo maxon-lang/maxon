@@ -1995,6 +1995,13 @@ export type FuncSignature
 		var nameToIndex = ParamNameIndexMap.create()
 		for i in 0 upto paramNames.count() 'buildIndex'
 			let name = try paramNames.get(i) otherwise panic("invariant: paramNames.get OOB at {i}")
+			// `_` is the explicit "don't care" name and may repeat in a signature
+			// (e.g. `function(_ Element, _ Element) gives Ordering.greaterThan`).
+			// Skip the index entry for `_` so subsequent occurrences don't trip
+			// the duplicate-name check.
+			if name == "_" 'skipUnderscore'
+				continue
+			end 'skipUnderscore'
 			try nameToIndex.insert(name, value: i) otherwise panic("FuncSignature.create: duplicate paramName '{name}' (parser should reject earlier)")
 		end 'buildIndex'
 		return Self{paramNames: paramNames, paramTypes: paramTypes, paramDefaults: paramDefaults, nameToIndex: nameToIndex}
