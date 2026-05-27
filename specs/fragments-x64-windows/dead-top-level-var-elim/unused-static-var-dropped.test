@@ -1,0 +1,32 @@
+// Test: unused-static-var-dropped
+var unused = 99
+var used = 42
+
+function main() returns ExitCode
+	return used - 42
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.lea r8, [rip+__data_used]
+    x64.mov r9, [r8+0] (8b)
+    x64.mov esi, 4294967295
+    x64.mov r8, r9
+    x64.sub r8, 42
+    x64.cmp r8, rsi
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea r12, [rip+__panic_msg_0]
+    x64.mov rcx, r12
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

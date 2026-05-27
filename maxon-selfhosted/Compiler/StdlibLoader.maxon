@@ -290,6 +290,9 @@ let stdlibWhitelist = [
 	"stdlib/Math.maxon",
 	"stdlib/Range.maxon",
 	"stdlib/Array.maxon",
+	"stdlib/helpers/sort/insertionSort.maxon",
+	"stdlib/helpers/sort/smallSort.maxon",
+	"stdlib/helpers/sort/pdqsort.maxon",
 	"stdlib/PrimitiveExtensions.maxon",
 	"stdlib/CharacterSet.maxon",
 	"stdlib/Character.maxon",
@@ -331,6 +334,7 @@ let stdlibWhitelist = [
 	"stdlib/PrintError.maxon",
 	"stdlib/Sha256.maxon",
 	"stdlib/Unicode.maxon",
+	"stdlib/Log.maxon",
 ]
 
 // Synthesized stdlib prelude. Pre-seeds declarations the self-hosted compiler
@@ -544,6 +548,7 @@ export function getStdlibModule(project Project) returns MaxonModule
 		// Restore metadata into the new project
 		if stdlibCacheValid 'restoreFromCache'
 			restoreStdlibMetadata(project, data: cachedStdlibCacheData)
+			seedModuleInitFuncsFromLivenessRoots(project)
 		end 'restoreFromCache' else 'restoreFromParse'
 			for (name, baseType) in stdlibTypealiases 'restoreAliases'
 				try project.typealiases.insert(name, value: baseType) otherwise ignore
@@ -618,6 +623,7 @@ export function getStdlibModule(project Project) returns MaxonModule
 		// so the immutable `cacheResult.data` binding isn't passed to a
 		// mutating-parameter function.
 		restoreStdlibMetadata(project, data: cachedStdlibCacheData)
+		seedModuleInitFuncsFromLivenessRoots(project)
 
 		// Phase 11.6 cross-module inlining: republish the stdlib StdModule
 		// snapshot pulled from disk so the user pipeline's inliner pass can
@@ -913,6 +919,39 @@ end 'injectRuntimeSignatures'
 
 // Try to load the stdlib cache for a different target (cross-compilation).
 // The metadata is already loaded; only the target-specific code data changes.
+// Reserve `__module_init_<n>` name slots so the user pipeline's parser
+// allocates fresh names that don't collide with stdlib init names already
+// baked into the cached function table. Without this reservation, a
+// cache-hit user compile starts with `count() == 0`, the user's first
+// init grabs `__module_init_0`, and the linker call from `mrt_start`
+// resolves to either the cached stdlib body or the user body depending on
+// symbol resolution order — silent ABI corruption (the cached stdlib
+// body writes to `__data_<stdlibVar>` slots that don't exist in the user
+// project's `.data` section, scribbling on whatever lives at offset 0).
+//
+// After v55 the cache persists `project.moduleInitFuncs` directly via
+// `restoreStdlibMetadata`, so the names are already present (with their
+// real callable identifiers, not placeholders). This function then
+// becomes a no-op fallback for legacy paths where the cache restore
+// hasn't populated `moduleInitFuncs`. The fallback pushes empty strings
+// — `patchMrtStartWithModuleInits` filters empty entries via the same
+// `name.isEmpty()` guard used elsewhere for inactive runtime helpers.
+function seedModuleInitFuncsFromLivenessRoots(project Project)
+	if project.moduleInitFuncs.count() > 0 'alreadyPopulated'
+		return
+	end 'alreadyPopulated'
+	let prefix = "__module_init_"
+	var stdlibInitCount = 0
+	for root in project.livenessRoots 'eachRoot'
+		if root.startsWith(prefix) 'isInit'
+			stdlibInitCount = stdlibInitCount + 1
+		end 'isInit'
+	end 'eachRoot'
+	for _ in 0 upto stdlibInitCount 'reserveSlots'
+		project.moduleInitFuncs.push("")
+	end 'reserveSlots'
+end 'seedModuleInitFuncsFromLivenessRoots'
+
 function loadCacheForTarget(project Project)
 	let stdlibPath = findStdlibPath()
 	if stdlibPath.isEmpty() 'noStdlib'

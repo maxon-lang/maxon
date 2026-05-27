@@ -1997,7 +1997,7 @@ function validateTypeParamComparisonConstraints(project Project, module MaxonMod
 		if not enclosingType.isEmpty() 'haveRecv'
 			structConstraints = lookupWhereClausesForBase(project, baseName: enclosingType)
 		end 'haveRecv'
-		let extClauses = try project.extensionMethodWhereClauses.get(stripFunctionOverloadSuffix(func.name)) otherwise WhereClauseArray.create()
+		let extClauses = try project.extensionMethodWhereClauses.get(func.name) otherwise WhereClauseArray.create()
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("validateTypeParamComparisonConstraints: blockRef OOB")
 			for opIdx in block.opRefs 'eachOp'
@@ -2811,7 +2811,7 @@ end 'genericInstanceBaseName'
 // `genericInstance(__TupleN, [...])` entry, prefer it so downstream
 // fieldLoad type-flow substitutes the `_T0`/`_T1`/... type-parameter
 // fields against their concrete arg types.
-function recordVarLoad(project Project, producerTypes ProducerTypeMap, slotTypes SlotTypeMap, result ByteArray, slotId VarSlot, slotType MaxonType)
+function recordVarLoad(project Project, producerTypes ProducerTypeMap, slotTypes SlotTypeMap, result ByteArray, slotId VarSlot, slotType MaxonType, enclosingType String)
 	if not isUnresolvedType(slotType) 'haveType'
 		let fromSlot = try slotTypes.get(slotId) otherwise MaxonType.unresolved
 		if maxonTypeIsBareTupleNamed(project, t: slotType) and maxonTypeIsTupleGenericInstance(project, t: fromSlot) 'preferRefined'
@@ -2827,6 +2827,20 @@ function recordVarLoad(project Project, producerTypes ProducerTypeMap, slotTypes
 			recordResultType(producerTypes, name: result, t: fromSlot)
 			return
 		end 'widenInt2Float'
+		// Generic-body seed promotion: parser stamped the merge varLoad
+		// from `try EXPR otherwise FALLBACK` with the seed-int slotType,
+		// but `recordVarStore` upgraded the slot to `typeParameter` once
+		// the success arm wrote a generic-method result owned by the
+		// enclosing type. Prefer the slot-type-map entry so downstream
+		// method dispatch (e.g. `prev.compare(pending)` inside
+		// `extension Array where Element is Comparable`) sees the
+		// typeParameter receiver and routes through the per-Element
+		// witness instead of `int.compare`. Gated on the typeParameter
+		// being in scope — see `recordVarStore`'s sibling guard.
+		if (not maxonTypeIsTypeParameter(slotType)) and typeParamBelongsToEnclosing(project, t: fromSlot, enclosingType: enclosingType) 'promoteTypeParam'
+			recordResultType(producerTypes, name: result, t: fromSlot)
+			return
+		end 'promoteTypeParam'
 		recordResultType(producerTypes, name: result, t: slotType)
 		return
 	end 'haveType'
@@ -2856,7 +2870,7 @@ end 'recordVarLoad'
 //     primitive.
 // Otherwise leave slotTypes alone — the existing entry is at least as
 // specific as the new one.
-function recordVarStore(project Project, producerTypes ProducerTypeMap, slotTypes SlotTypeMap, slotId VarSlot, value ByteArray)
+function recordVarStore(project Project, producerTypes ProducerTypeMap, slotTypes SlotTypeMap, slotId VarSlot, value ByteArray, enclosingType String)
 	let fromValue = lookupProducerType(producerTypes, name: value)
 	if isUnresolvedType(fromValue) 'noType'
 		return
@@ -2876,6 +2890,31 @@ function recordVarStore(project Project, producerTypes ProducerTypeMap, slotType
 		slotTypes.upsert(slotId, value: fromValue)
 		return
 	end 'replaceSeed'
+	// Same seed-replacement rule for generic bodies: inside `extension
+	// Array where Element is Comparable`, `let prev = try managed.get(i)
+	// otherwise panic(...)` registers `prev`'s merge slot with the
+	// literal-zero seed (recordVarDecl pinned it to `int`). The success
+	// arm later writes the real value whose producer type is
+	// `typeParameter(Element)`. Without this branch, the slot stays
+	// `int`, the downstream `prev.compare(pending)` resolves against
+	// `int.compare`, and the stdlib-cached `Array.sort$` body silently
+	// pointer-compares heap pointers instead of calling `Pair.compare`.
+	// Mirrors the C# bootstrap fix in `maxon-sharp/Compiler/2-Parser.cs`
+	// (let-binding registration captures typeParamName from the
+	// MaxonManagedMemGetOp result).
+	//
+	// Gate on the typeParameter belonging to the enclosing type — only
+	// type parameters in scope on the surrounding method's signature
+	// participate in trait-routed dispatch against its `where` clauses.
+	// Out-of-scope type parameters (e.g. raw `__ManagedMemory.get`
+	// called from `main`) fall back to int-category at every use site;
+	// promoting the slot would force `mm.get(i) != 0` to require
+	// `Element is Equatable` and break the managed-memory-builtin
+	// tests.
+	if not currentIsStructLike and typeParamBelongsToEnclosing(project, t: fromValue, enclosingType: enclosingType) 'replaceSeedTypeParam'
+		slotTypes.upsert(slotId, value: fromValue)
+		return
+	end 'replaceSeedTypeParam'
 	// Phase A widening: when an earlier arm pinned the slot to `int` (the
 	// literal-zero seed's category, or a prior arm that produced an int)
 	// and a later arm produces a `float`, upgrade the slot to the value's
@@ -2942,6 +2981,37 @@ export function maxonTypeIsTypeParameter(t MaxonType) returns bool
 		genericInstance to opaquePointer gives false
 	end 'check'
 end 'maxonTypeIsTypeParameter'
+
+// True when `t` is a `typeParameter(id)` owned by `enclosingType` — i.e.
+// a parameter the surrounding struct/extension method itself declares
+// (e.g. `Array.Element` while compiling a method in `extension Array
+// ...`). Used by the seed-promotion guard in `recordVarStore` /
+// `recordVarLoad` / `widenOneVarDecl` / `fillVarLoad`: only
+// in-scope type parameters participate in trait-routed dispatch
+// against the enclosing method's `where` clauses, so promoting a
+// try-fallback merge slot from its literal-zero seed (`int`) to a
+// typeParameter only helps when the downstream dispatch will actually
+// substitute that parameter. Out-of-scope type parameters (e.g. the
+// raw `__ManagedMemory.get` return when called from `main`) fall back
+// to the int-category coercion at every use site, so promoting the
+// slot would force `mm.get(i) != 0` to demand `Element is Equatable`
+// for no semantic benefit and break the managed-memory-builtin tests.
+function typeParamBelongsToEnclosing(project Project, t MaxonType, enclosingType String) returns bool
+	if enclosingType.isEmpty() 'noEnclosing'
+		return false
+	end 'noEnclosing'
+	if not maxonTypeIsTypeParameter(t) 'notTypeParam'
+		return false
+	end 'notTypeParam'
+	let id = match t 'extract'
+		typeParameter(pid) gives pid
+		boolean to string panic("typeParamBelongsToEnclosing: just verified typeParameter shape — unreachable")
+		named panic("typeParamBelongsToEnclosing: just verified typeParameter shape — unreachable")
+		function to unresolved panic("typeParamBelongsToEnclosing: just verified typeParameter shape — unreachable")
+		genericInstance to opaquePointer panic("typeParamBelongsToEnclosing: just verified typeParameter shape — unreachable")
+	end 'extract'
+	return project.typeParameters.getOwner(id) == enclosingType
+end 'typeParamBelongsToEnclosing'
 
 // Promote `named(X)` → `genericInstance(X, [...])` when `candidate`
 // carries the binding `raw` was missing — i.e. their base names match.
@@ -4594,8 +4664,8 @@ function recordOpResult(project Project, producerTypes ProducerTypeMap, slotType
 		byteStringLiteral(result, _, _) then recordResultType(producerTypes, name: result, t: byteStringLiteralResultType(project))
 		stringInterp(result, _, _) then recordResultType(producerTypes, name: result, t: stringConstResultType(project))
 		varDecl(slotId, value, slotType, _) then recordVarDecl(project, producerTypes: producerTypes, slotTypes: slotTypes, slotId: slotId, value: value, slotType: slotType)
-		varLoad(result, slotId, slotType, _) then recordVarLoad(project, producerTypes: producerTypes, slotTypes: slotTypes, result: result, slotId: slotId, slotType: slotType)
-		varStore(slotId, value, _) then recordVarStore(project, producerTypes: producerTypes, slotTypes: slotTypes, slotId: slotId, value: value)
+		varLoad(result, slotId, slotType, _) then recordVarLoad(project, producerTypes: producerTypes, slotTypes: slotTypes, result: result, slotId: slotId, slotType: slotType, enclosingType: enclosingType)
+		varStore(slotId, value, _) then recordVarStore(project, producerTypes: producerTypes, slotTypes: slotTypes, slotId: slotId, value: value, enclosingType: enclosingType)
 		globalLoad(result, _, slotType, _) then recordResultType(producerTypes, name: result, t: slotType)
 		globalStore then return
 		binop(result, left, right, _, operandType, _) then recordResultType(producerTypes, name: result, t: deriveBinopResultType(producerTypes, operandType: operandType, left: left, right: right))
@@ -4964,24 +5034,25 @@ end 'fillUnresolvedTypes'
 // fill has already run) can reuse the same per-op fill discipline without
 // rebuilding the perFunc maps just to dispatch into the inner walk.
 export function runFillUnresolvedTypesForFunc(project Project, module MaxonModule, func IrFunction, producerTypes ProducerTypeMap, slotTypes SlotTypeMap)
+	let enclosingType = try enclosingTypeNameForCallee(project, callee: func.name) otherwise ""
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("runFillUnresolvedTypesForFunc: blockRef OOB")
 		for opIdx in block.opRefs 'eachOp'
 			let op = try module.ops.get(opIdx) otherwise panic("runFillUnresolvedTypesForFunc: opIdx OOB")
-			fillUnresolvedTypesForOp(project, module: module, opIdx: opIdx, op: op, producerTypes: producerTypes, slotTypes: slotTypes)
+			fillUnresolvedTypesForOp(project, module: module, opIdx: opIdx, op: op, producerTypes: producerTypes, slotTypes: slotTypes, enclosingType: enclosingType)
 		end 'eachOp'
 		if block.hasTerminatorOp() 'hasTerm'
 			let termIdx = block.terminatorIndex()
 			let termOp = try module.ops.get(termIdx) otherwise panic("runFillUnresolvedTypesForFunc: terminator OOB")
-			fillUnresolvedTypesForOp(project, module: module, opIdx: termIdx, op: termOp, producerTypes: producerTypes, slotTypes: slotTypes)
+			fillUnresolvedTypesForOp(project, module: module, opIdx: termIdx, op: termOp, producerTypes: producerTypes, slotTypes: slotTypes, enclosingType: enclosingType)
 		end 'hasTerm'
 	end 'eachBlock'
 end 'runFillUnresolvedTypesForFunc'
 
-function fillUnresolvedTypesForOp(project Project, module MaxonModule, opIdx OpIndex, op MaxonOp, producerTypes ProducerTypeMap, slotTypes SlotTypeMap)
+function fillUnresolvedTypesForOp(project Project, module MaxonModule, opIdx OpIndex, op MaxonOp, producerTypes ProducerTypeMap, slotTypes SlotTypeMap, enclosingType String)
 	match op 'fill'
 		varDecl(slotId, value, slotType, range) then fillVarDecl(project, module: module, opIdx: opIdx, slotId: slotId, value: value, slotType: slotType, range: range, producerTypes: producerTypes, slotTypes: slotTypes)
-		varLoad(result, slotId, slotType, range) then fillVarLoad(project, module: module, opIdx: opIdx, result: result, slotId: slotId, slotType: slotType, range: range, producerTypes: producerTypes, slotTypes: slotTypes)
+		varLoad(result, slotId, slotType, range) then fillVarLoad(project, module: module, opIdx: opIdx, result: result, slotId: slotId, slotType: slotType, range: range, producerTypes: producerTypes, slotTypes: slotTypes, enclosingType: enclosingType)
 		globalStore(name, value, slotType, range) then fillGlobalStore(module, opIdx: opIdx, name: name, value: value, slotType: slotType, range: range, producerTypes: producerTypes)
 		convert(result, operand, fromType, toType, implicit, range) then fillConvert(module, opIdx: opIdx, result: result, operand: operand, fromType: fromType, toType: toType, implicit: implicit, range: range, producerTypes: producerTypes)
 		cmp(result, left, right, predicate, leftType, rightType, operandType, range) then fillCmp(project, module: module, opIdx: opIdx, result: result, left: left, right: right, predicate: predicate, leftType: leftType, rightType: rightType, operandType: operandType, range: range, producerTypes: producerTypes)
@@ -5089,6 +5160,7 @@ function widenVarDeclTypesFromSlotTypes(project Project, module MaxonModule, slo
 	for funcIdx in 0 upto module.functions.count() 'eachFunc'
 		let func = try module.functions.get(funcIdx) otherwise panic("widenVarDeclTypesFromSlotTypes: funcIdx OOB")
 		let slotTypes = try slotTypesPerFunc.get(funcIdx) otherwise panic("widenVarDeclTypesFromSlotTypes: slotTypesPerFunc.get({funcIdx}) failed")
+		let enclosingType = try enclosingTypeNameForCallee(project, callee: func.name) otherwise ""
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("widenVarDeclTypesFromSlotTypes: blockRef OOB")
 			for opIdx in block.opRefs 'eachOp'
@@ -5097,7 +5169,7 @@ function widenVarDeclTypesFromSlotTypes(project Project, module MaxonModule, slo
 					continue
 				end 'notVarDecl'
 				match op 'widen'
-					varDecl(slotId, value, slotType, range) then widenOneVarDecl(project, module: module, opIdx: opIdx, slotId: slotId, value: value, slotType: slotType, range: range, slotTypes: slotTypes)
+					varDecl(slotId, value, slotType, range) then widenOneVarDecl(project, module: module, opIdx: opIdx, slotId: slotId, value: value, slotType: slotType, range: range, slotTypes: slotTypes, enclosingType: enclosingType)
 					default panic("widenVarDeclTypesFromSlotTypes: unreachable — op.name == varDecl but match did not extract")
 				end 'widen'
 			end 'eachOp'
@@ -5105,16 +5177,31 @@ function widenVarDeclTypesFromSlotTypes(project Project, module MaxonModule, slo
 	end 'eachFunc'
 end 'widenVarDeclTypesFromSlotTypes'
 
-function widenOneVarDecl(project Project, module MaxonModule, opIdx OpIndex, slotId VarSlot, value ByteArray, slotType MaxonType, range SourceRange, slotTypes SlotTypeMap)
+function widenOneVarDecl(project Project, module MaxonModule, opIdx OpIndex, slotId VarSlot, value ByteArray, slotType MaxonType, range SourceRange, slotTypes SlotTypeMap, enclosingType String)
 	let effective = try slotTypes.get(slotId) otherwise return
 	if maxonTypesStructurallyEqual(effective, b: slotType) 'sameType'
 		return
 	end 'sameType'
-	// Only restamp when the effective type strictly widens the recorded
-	// slotType from CastCategory.int to CastCategory.float. Any other
-	// transition (struct refinement, genericInstance promotion) is owned
-	// by `fillVarDecl` / other passes and shouldn't be touched here.
-	if not isIntToFloatWidening(project, from: slotType, to: effective) 'notWidening'
+	// Two restamp cases:
+	//  (1) int → float widening — when an earlier arm pinned the slot to
+	//      `int` (the literal-zero seed's category, or a prior arm that
+	//      produced an int) and a later arm produced `float`, restamp so
+	//      `lowerVarStore` emits siToFp for the int-typed arms.
+	//  (2) primitive seed → typeParameter — `recordVarStore` promoted the
+	//      slot to a `typeParameter(Element)` from the literal-zero seed
+	//      when a try-success arm wrote a generic-method result owned by
+	//      the enclosing type. The varDecl op's slotType still says
+	//      `int` from `fillVarDecl` (which keys off the seed-zero
+	//      literal's type). Restamp so the seed `varDecl` and every
+	//      downstream `varLoad` agree on the typeParameter type — without
+	//      this, `prev.compare(pending)` inside a generic stdlib body
+	//      silently routes through `int.compare`. Gated on the
+	//      typeParameter being in scope — see `recordVarStore` for the
+	//      rationale. Other transitions (struct refinement,
+	//      genericInstance promotion) are owned by `fillVarDecl`.
+	let widensToFloat = isIntToFloatWidening(project, from: slotType, to: effective)
+	let promotesToTypeParam = (not maxonTypeIsTypeParameter(slotType)) and typeParamBelongsToEnclosing(project, t: effective, enclosingType: enclosingType)
+	if not (widensToFloat or promotesToTypeParam) 'notWidening'
 		return
 	end 'notWidening'
 	try module.ops.set(opIdx, value: MaxonOp.varDecl(slotId, value: value, slotType: effective, range: range)) otherwise panic("widenOneVarDecl: ops.set OOB at idx={opIdx}")
@@ -5310,7 +5397,7 @@ function interpPartsEqual(a StringInterpPart, b StringInterpPart) returns bool
 	end 'mA'
 end 'interpPartsEqual'
 
-function fillVarLoad(project Project, module MaxonModule, opIdx OpIndex, result ByteArray, slotId VarSlot, slotType MaxonType, range SourceRange, producerTypes ProducerTypeMap, slotTypes SlotTypeMap)
+function fillVarLoad(project Project, module MaxonModule, opIdx OpIndex, result ByteArray, slotId VarSlot, slotType MaxonType, range SourceRange, producerTypes ProducerTypeMap, slotTypes SlotTypeMap, enclosingType String)
 	let filled = try slotTypes.get(slotId) otherwise MaxonType.unresolved
 	if isUnresolvedType(slotType) 'fillEmpty'
 		// Slot type was recorded by an earlier varDecl into the slot-type
@@ -5337,6 +5424,21 @@ function fillVarLoad(project Project, module MaxonModule, opIdx OpIndex, result 
 		recordResultType(producerTypes, name: result, t: filled)
 		return
 	end 'widenInt2Float'
+	// Generic-body seed promotion: `recordVarStore` upgraded the slot
+	// from the literal-zero seed's `int` to `typeParameter(Element)`
+	// when a try-success arm wrote a generic-method result owned by
+	// the enclosing type. Restamp the varLoad's `slotType` and
+	// re-publish the load's producer type so downstream method
+	// dispatch on the loaded name sees the typeParameter (and routes
+	// `prev.compare(pending)` to the per-Element witness instead of
+	// `int.compare`). Mirrors the int→float widening above; gated on
+	// the typeParameter being in scope — see `recordVarStore` for the
+	// rationale.
+	if (not maxonTypeIsTypeParameter(slotType)) and typeParamBelongsToEnclosing(project, t: filled, enclosingType: enclosingType) 'promoteTypeParam'
+		try module.ops.set(opIdx, value: MaxonOp.varLoad(result, slotId: slotId, slotType: filled, range: range)) otherwise panic("fillVarLoad: ops.set OOB at idx={opIdx}")
+		recordResultType(producerTypes, name: result, t: filled)
+		return
+	end 'promoteTypeParam'
 	// Refine `named(X)` → `genericInstance(X, [...])` when the slot-type
 	// map carries a more specific entry. The parser stamps the merge
 	// varLoad of `try EXPR otherwise FALLBACK` with the call's declared

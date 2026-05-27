@@ -1,0 +1,239 @@
+// Test: ternary-expression.in-extension-method-before-sibling
+typealias Small = int(0 to 1000)
+
+interface Bounded
+	function lo() returns Small
+	function hi() returns Small
+end 'Bounded'
+
+extension Bounded
+	function pickSmaller() returns Small
+		let smaller = self.lo() if self.lo() < self.hi() else self.hi()
+		return smaller
+	end 'pickSmaller'
+
+	function describe() returns Small
+		return self.hi() - self.lo()
+	end 'describe'
+end 'Bounded'
+
+type Pair implements Bounded
+	let l as Small
+	let h as Small
+
+	function lo() returns Small
+		return l
+	end 'lo'
+
+	function hi() returns Small
+		return h
+	end 'hi'
+
+	static function create(l Small, h Small) returns Self
+		return Self{l: l, h: h}
+	end 'create'
+end 'Pair'
+
+function main() returns ExitCode
+	let p = Pair.create(7, h: 12)
+	let s = p.pickSmaller()
+	let d = p.describe()
+	return s + d
+end 'main'
+---
+ExitCode: 12
+---
+// CompiledIR
+module {
+  func @Pair.pickSmaller(__self_ptr: i64) -> u16 {
+  entry:
+    x64.prologue stack_size=48
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call Pair.lo
+    x64.mov rcx, [rbp-8]
+    x64.mov [rbp-24], rax
+    x64.call Pair.lo
+    x64.mov rdx, [rbp-8]
+    x64.mov [rbp-32], rax
+    x64.mov rcx, [rbp-8]
+    x64.call Pair.hi
+    x64.mov rbx, [rbp-32]
+    x64.cmp rbx, rax
+    x64.setl rsi
+    x64.movzx rsi, rsib
+    x64.mov rdi, [rbp-8]
+    x64.mov [rbp-40], rsi
+    x64.mov rcx, [rbp-8]
+    x64.call Pair.hi
+    x64.mov r8, [rbp-40]
+    x64.test r8, r8
+    x64.mov [rbp-48], rax
+    x64.je Pair.pickSmaller.ternary_0.false
+  ternary_0.true:
+    x64.mov rax, [rbp-24]
+    x64.mov [rbp-16], rax
+    x64.jmp Pair.pickSmaller.ternary_0.merge
+  ternary_0.false:
+    x64.mov rax, [rbp-48]
+    x64.mov [rbp-16], rax
+    x64.jmp Pair.pickSmaller.ternary_0.merge
+  ternary_0.merge:
+    x64.mov rax, [rbp-16]
+    x64.xor ecx, ecx
+    x64.mov rdx, 1000
+    x64.cmp rax, rdx
+    x64.jg Pair.pickSmaller.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl Pair.pickSmaller.__range_panic_0
+    x64.jmp Pair.pickSmaller.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+  func @Pair.describe(__self_ptr: i64) -> u16 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call Pair.hi
+    x64.mov rcx, [rbp-8]
+    x64.mov [rbp-16], rax
+    x64.call Pair.lo
+    x64.mov rdx, [rbp-16]
+    x64.sub rdx, rax
+    x64.xor ebx, ebx
+    x64.mov rsi, 1000
+    x64.cmp rdx, rsi
+    x64.jg Pair.describe.__range_panic_0
+    x64.cmp rdx, rbx
+    x64.jl Pair.describe.__range_panic_0
+    x64.jmp Pair.describe.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_1]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rax, rdx
+    x64.epilogue
+    x64.ret
+  }
+  func @Pair.lo(__self_ptr: i64) -> u16 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rdx, [rax+0]
+    x64.xor eax, eax
+    x64.mov rbx, 1000
+    x64.cmp rdx, rbx
+    x64.jg Pair.lo.__range_panic_0
+    x64.cmp rdx, rax
+    x64.jl Pair.lo.__range_panic_0
+    x64.jmp Pair.lo.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_2]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rax, rdx
+    x64.epilogue
+    x64.ret
+  }
+  func @Pair.hi(__self_ptr: i64) -> u16 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rdx, [rax+8]
+    x64.xor eax, eax
+    x64.mov rbx, 1000
+    x64.cmp rdx, rbx
+    x64.jg Pair.hi.__range_panic_0
+    x64.cmp rdx, rax
+    x64.jl Pair.hi.__range_panic_0
+    x64.jmp Pair.hi.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_3]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rax, rdx
+    x64.epilogue
+    x64.ret
+  }
+  func @Pair.create(l: i64, h: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov [rbp-16], rcx
+    x64.mov [rbp-24], rdx
+    x64.mov rcx, 16
+    x64.xor edx, edx
+    x64.mov r8, 3
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.mov [rax+0], rcx
+    x64.mov rdx, [rbp-8]
+    x64.mov rbx, [rbp-24]
+    x64.mov [rdx+8], rbx
+    x64.mov rsi, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov rcx, 7
+    x64.mov rdx, 12
+    x64.call Pair.create
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call Pair.pickSmaller
+    x64.mov rcx, [rbp-8]
+    x64.mov [rbp-16], rax
+    x64.call Pair.describe
+    x64.mov rdx, [rbp-16]
+    x64.add rdx, rax
+    x64.xor ebx, ebx
+    x64.mov esi, 4294967295
+    x64.cmp rdx, rsi
+    x64.jg main.__range_panic_0
+    x64.cmp rdx, rbx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_4]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rax, [rbp-8]
+    x64.mov [rbp-24], rdx
+    x64.test rax, rax
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rax, [rbp-24]
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Pair(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Pair.done
+  done:
+    x64.ret
+  }
+}
+---

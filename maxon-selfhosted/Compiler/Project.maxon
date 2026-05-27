@@ -270,6 +270,19 @@ export type Project
 	// array-literal initializer it sees.
 	export var moduleInitFuncs as StringArray
 
+	// Map from `__module_init_<n>` name to the set of top-level var
+	// qualified names that init writes (one entry per `globalStore` the
+	// parser emitted into that init's entry block). Populated by
+	// `finalizeTopLevelInitDecl` in lockstep with `moduleInitFuncs`.
+	// Used by the dead-top-level-var prune inside `eliminateDeadStdFunctions`
+	// (`pruneDeadModuleInits`): an init whose entire write-set is dead can be
+	// dropped from `moduleInitFuncs` so `patchMrtStartWithModuleInits` doesn't
+	// insert a call. Without this map the Std-level pass would have to look
+	// up the init function's body and walk its globalStores; the parser
+	// knows the mapping directly and stashing it here keeps the analysis
+	// O(inits).
+	export var initToStoredVars as InitToStoredVarsMap
+
 	// Qualified names of top-level `let xs = [...]` bindings whose array-literal
 	// init lands in `topLevelVars` (writable .data slot) rather than in
 	// `topLevelConstants`. The reassignment-rewrite path keys off this set to
@@ -672,6 +685,7 @@ export type Project
 			unresolvedConstExprs: UnresolvedConstExprArray.create(),
 			topLevelVars: TopLevelVarMap.create(),
 			moduleInitFuncs: StringArray.create(),
+			initToStoredVars: InitToStoredVarsMap.create(),
 			immutableArrayLitNames: StringArray.create(),
 			structTypes: StructTypeMap.create(),
 			unresolvedStructTypes: UnresolvedStructTypeMap.create(),
@@ -2508,6 +2522,9 @@ export type TopLevelVarInfo
 end 'TopLevelVarInfo'
 
 export typealias TopLevelVarMap = Map with (String, TopLevelVarInfo)
+
+export typealias StoredVarNameSet = Set with String
+export typealias InitToStoredVarsMap = Map with (String, StoredVarNameSet)
 
 // Phase 15e: parser-pinned tuple-allocation result name -> generic-instance id.
 // Used by lowerStructAlloc to recover the specialised receiver type that the

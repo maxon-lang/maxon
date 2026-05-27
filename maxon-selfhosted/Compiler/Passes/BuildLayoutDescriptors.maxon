@@ -464,12 +464,25 @@ end 'representativeHeapType'
 
 // Boilerplate: create an IrFunction shell for a thunk, register one
 // entry block, and bind the parameter slots. Returns (func, entryBlock).
-function startThunkFunc(maxonModule MaxonModule, name String, paramCount ParamCount) returns (IrFunction, IrBlock)
+//
+// `returnsInteger=true` declares the thunk with an i64 return so wasm's
+// `call_indirect` sees a `(args...) -> i64` signature — required for the
+// destroy thunk because `lowerDropTypeParam` emits a non-void indirect
+// call (the destructor's "(i64) -> i64" ABI matches `__destruct_<Union>`'s
+// shape and the `mm_alloc` destructor slot's declared type). Copy thunks
+// stay void: they're called directly via `func.call`, not through a
+// fixed-signature call_indirect site, so a void declaration matches the
+// body's `ret 0` getting elided.
+function startThunkFunc(maxonModule MaxonModule, name String, paramCount ParamCount, returnsInteger bool = false) returns (IrFunction, IrBlock)
 	var paramTypes = MaxonTypeArray.create()
 	for _ in 0 upto paramCount 'eachParam'
 		paramTypes.push(MaxonType.integer)
 	end 'eachParam'
-	var func = IrFunction.create(name, maxonReturnType: MaxonReturnType.void, paramCount: paramCount, maxonParamTypes: paramTypes, returnLine: 0)
+	var returnType = MaxonReturnType.void
+	if returnsInteger 'pickReturn'
+		returnType = MaxonReturnType.value(MaxonType.integer)
+	end 'pickReturn'
+	var func = IrFunction.create(name, maxonReturnType: returnType, paramCount: paramCount, maxonParamTypes: paramTypes, returnLine: 0)
 	func.namespace = ""
 	func.visibility = Visibility.global
 	let block = maxonModule.addBlock(func, label: "entry")
@@ -625,7 +638,7 @@ end 'synthesizeCopyThunk'
 // injectDrops' job. C1.a lands the shape; the runtime effect arrives
 // when C1.b lights up the slot-type-driven drop emission.
 function synthesizeDestroyThunk(project Project, maxonModule MaxonModule, gid GenericInstanceId, name String)
-	var (func, block) = startThunkFunc(maxonModule, name: name, paramCount: 1)
+	var (func, block) = startThunkFunc(maxonModule, name: name, paramCount: 1, returnsInteger: true)
 
 	let valueLoad = synthName(name, suffix: "valLoad")
 	maxonModule.appendOp(block, op: MaxonOp.varLoad(valueLoad, slotId: 0, slotType: MaxonType.integer, range: SourceRange.none()))

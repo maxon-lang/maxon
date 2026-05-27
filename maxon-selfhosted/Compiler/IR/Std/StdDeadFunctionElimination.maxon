@@ -25,28 +25,9 @@
 //   - `livenessRoots` is reserved for definite roots that the runtime calls
 //     before `main` (e.g. `__module_init_<namespace>`) and that no Std-level
 //     op names.
-//   - Per-file `__module_init_<n>` functions are treated as CONDITIONAL
-//     roots: each is keyed by the set of globalData labels its body
-//     touches via `globalAddr` (the slots / rdata blobs the init writes
-//     and reads). The init is promoted to a live root iff some *other*
-//     reachable function demands one of those labels. Inits whose data
-//     no live function references are dropped — the init's writes go
-//     into rdata blobs that nothing reads, so the work is dead.
-//
-//     Why deferred: stdlib's `__module_init_0` exists to populate the
-//     `let sha256KTable = [...]` slot. If the user program never calls
-//     `sha256`, sha256 itself is unreachable (and dropped by the
-//     standard worklist walk), so the K-table slot has no consumer and
-//     the init shouldn't run either. Cache-on already gets this for
-//     free (the cache linker only pulls inits the user code references
-//     via `mrt_start` call fixups, and `moduleInitFuncs` doesn't carry
-//     stdlib inits across the cache boundary). The conditional-root
-//     mechanism mirrors that behavior on the cache-off path so both
-//     legs of a cache-parity test produce identical `.text` / `.rdata`.
 
 typealias StdDfeStringSet = Set with String
 typealias StdFuncByName = Map with (String, IrFunction)
-typealias ModuleInitLabelMap = Map with (String, StringArray)
 
 export function eliminateDeadStdFunctions(module StdModule, project Project) returns StdModule
 	var funcMap = StdFuncByName.create()
@@ -54,21 +35,24 @@ export function eliminateDeadStdFunctions(module StdModule, project Project) ret
 		funcMap.upsert(func.name, value: func)
 	end 'buildMap'
 
-	// Build the set of `__module_init_<n>` names that exist in this
-	// module. We defer them out of the initial seed: each one becomes a
-	// conditional root keyed by the labels its body touches via
-	// `globalAddr`, and only gets promoted to live if some *other* live
-	// function demands one of those labels (see promoteEligibleModule-
-	// Inits below).
-	let deferredInits = collectDeferredInits(project, funcMap: funcMap)
-	let initLabels = collectInitLabels(module, deferredInits: deferredInits, funcMap: funcMap)
+	// Pre-DFE: detect `__module_init_<n>` entries whose write-set has no
+	// live readers, and strip them from `livenessRoots` BEFORE the function
+	// walk. Without this pre-pass, DFE would seed the dead inits as roots
+	// and walk their bodies — pulling layout/witness/string dependencies
+	// into `liveLabels` that survive pruning, so cache-off binaries grow
+	// extra rdata for inits that never run. Uses a quick var-only
+	// reachability walk over `main` + `livenessRoots` (excluding the inits
+	// themselves) so the "live var" set doesn't depend on whether the dead
+	// inits get walked.
+	let preWalkLiveVars = computeLiveVarsExcludingInits(module, project: project, funcMap: funcMap)
+	let inertInits = findInertModuleInits(project, liveVars: preWalkLiveVars)
+	if inertInits.count() > 0 'haveInerts'
+		project.livenessRoots = filterStringArrayBySet(project.livenessRoots, drop: inertInits)
+	end 'haveInerts'
 
 	var seen = StdDfeStringSet from ["main"]
 	var worklist = ["main"]
 	for root in project.livenessRoots 'seedRoots'
-		if deferredInits.contains(root) 'isInit'
-			continue
-		end 'isInit'
 		if not seen.contains(root) 'fresh'
 			seen.insert(root)
 			worklist.push(root)
@@ -83,17 +67,14 @@ export function eliminateDeadStdFunctions(module StdModule, project Project) ret
 	// survive.
 	var liveLabels = StdDfeStringSet.create()
 
-	walkWorklistToFixedPoint(module, project: project, funcMap: funcMap, worklist: worklist, seen: seen, liveLabels: liveLabels)
-
-	// Conditional `__module_init_<n>` promotion: each deferred init is
-	// keyed by the labels its body touches. If any live function (other
-	// than a still-deferred init) has demanded one of those labels, the
-	// init's writes have a consumer and the init must run — promote it
-	// and re-drain the worklist. Iterate to fixed point so a newly-
-	// promoted init that touches further labels can cascade.
-	while promoteEligibleModuleInits(deferredInits, initLabels: initLabels, seen: seen, liveLabels: liveLabels, worklist: worklist) 'condIter'
-		walkWorklistToFixedPoint(module, project: project, funcMap: funcMap, worklist: worklist, seen: seen, liveLabels: liveLabels)
-	end 'condIter'
+	var i = 0
+	while i < worklist.count() 'walk'
+		let name = try worklist.get(i) otherwise panic("eliminateDeadStdFunctions: worklist.get OOB at {i}")
+		if let func = try funcMap.get(name) 'found'
+			walkLiveFunction(module, project: project, func: func, worklist: worklist, seen: seen, liveLabels: liveLabels)
+		end 'found'
+		i = i + 1
+	end 'walk'
 
 	var newFunctions = IrFunctionArray.create()
 	for func in module.functions 'filter'
@@ -105,15 +86,14 @@ export function eliminateDeadStdFunctions(module StdModule, project Project) ret
 	end 'filter'
 	module.functions = newFunctions
 
-	// Drop any `__module_init_<n>` that DFE just eliminated from the
-	// project-side init list and livenessRoots so downstream consumers
-	// (`patchMrtStartWithModuleInits`, the cache writer, the link
-	// walker) don't synthesize calls to a function that no longer
-	// exists. Mirrors the .text/.rdata prune so the two artifacts stay
-	// consistent: dropping the init's body without dropping its
-	// `mrt_start` call site would leave a dangling `call` fixup that
-	// `lookupFuncReturnStdType` panics on at lowering time.
-	pruneDroppedModuleInits(project, deferredInits: deferredInits, seen: seen)
+	// Drop `__module_init_<n>` entries whose entire write-set targets
+	// dead vars. After this step, `patchMrtStartWithModuleInits` won't
+	// emit a `call` for the dropped init, and the linker reachability
+	// walk won't pull the init function (in user module OR stdlib cache)
+	// into the final binary. Also drops the dead var entries from
+	// `project.topLevelVars` so `registerGlobalVarsForDataSection` is
+	// consistent on a subsequent re-lowering.
+	module = pruneDeadModuleInits(module, project: project, liveLabels: liveLabels)
 
 	// Stage K.X.D + K.4: prune unreferenced globalData entries and
 	// pendingRdataRelocs whose target labels are dead. Sharing
@@ -123,118 +103,81 @@ export function eliminateDeadStdFunctions(module StdModule, project Project) ret
 	return module
 end 'eliminateDeadStdFunctions'
 
-// Remove dropped `__module_init_<n>` names from `project.moduleInitFuncs`
-// and `project.livenessRoots`. Called after DFE finalizes the kept-
-// function set so any init the conditional-promotion step rejected is
-// also stripped from the runtime patch list (`patchMrtStartWithModule-
-// Inits` reads `moduleInitFuncs` to splice `call` ops into `mrt_start`)
-// and from the cache-side liveness seeds.
-function pruneDroppedModuleInits(project Project, deferredInits StdDfeStringSet, seen StdDfeStringSet)
-	var keptInits = StringArray.create()
-	for name in project.moduleInitFuncs 'eachInit'
-		if not deferredInits.contains(name) or seen.contains(name) 'kept'
-			keptInits.push(name)
-		end 'kept'
-	end 'eachInit'
-	project.moduleInitFuncs = keptInits
+// Walk `project.moduleInitFuncs` and drop any init whose entire write-set
+// (recorded in `project.initToStoredVars` at parse time) targets vars
+// that no live function references. Removes the init from
+// `moduleInitFuncs` so `patchMrtStartWithModuleInits` skips the call,
+// from `livenessRoots` so the function-DFE re-run (if any) can drop the
+// body, and the corresponding entries from `project.topLevelVars` and
+// `globalData.dataSectionEntries` so the `.data` slot isn't reserved.
+// Mini-DFE that walks the same call graph the main DFE will walk, BUT
+// skips `__module_init_<n>` bodies. The returned set contains every
+// `globalAddr` label demanded by a function reachable from `main` /
+// `livenessRoots` without crediting any init for the labels it
+// references. Used by `findInertModuleInits` to detect inits whose vars
+// are never read by anyone outside themselves — those inits can be
+// stripped from `livenessRoots` before the main DFE walks them.
+function computeLiveVarsExcludingInits(module StdModule, project Project, funcMap StdFuncByName) returns StdDfeStringSet
+	var initNames = StdDfeStringSet.create()
+	for n in project.moduleInitFuncs 'collectInits'
+		if not n.isEmpty() 'realName'
+			initNames.insert(n)
+		end 'realName'
+	end 'collectInits'
 
-	var keptRoots = StringArray.create()
-	for root in project.livenessRoots 'eachRoot'
-		if not deferredInits.contains(root) or seen.contains(root) 'rootKept'
-			keptRoots.push(root)
-		end 'rootKept'
-	end 'eachRoot'
-	project.livenessRoots = keptRoots
-end 'pruneDroppedModuleInits'
+	var seen = StdDfeStringSet from ["main"]
+	var worklist = ["main"]
+	for root in project.livenessRoots 'seedRoots'
+		if initNames.contains(root) 'skipInit'
+			continue
+		end 'skipInit'
+		if not seen.contains(root) 'fresh'
+			seen.insert(root)
+			worklist.push(root)
+		end 'fresh'
+	end 'seedRoots'
 
-// Drain the worklist by walking each newly-seeded function's body and
-// transitively marking callees / labels. Used by both the initial pass
-// and each conditional-init promotion cycle.
-function walkWorklistToFixedPoint(module StdModule, project Project, funcMap StdFuncByName, worklist StringArray, seen StdDfeStringSet, liveLabels StdDfeStringSet)
+	var liveVars = StdDfeStringSet.create()
 	var i = 0
 	while i < worklist.count() 'walk'
-		let name = try worklist.get(i) otherwise panic("walkWorklistToFixedPoint: worklist.get OOB at {i}")
-		if let func = try funcMap.get(name) 'found'
-			walkLiveFunction(module, project: project, func: func, worklist: worklist, seen: seen, liveLabels: liveLabels)
-		end 'found'
+		let name = try worklist.get(i) otherwise panic("computeLiveVarsExcludingInits: worklist.get OOB at {i}")
 		i = i + 1
+		if initNames.contains(name) 'isInit'
+			continue
+		end 'isInit'
+		if let func = try funcMap.get(name) 'found'
+			walkFunctionForVarLiveness(module, func: func, initNames: initNames, worklist: worklist, seen: seen, liveVars: liveVars)
+		end 'found'
 	end 'walk'
-end 'walkWorklistToFixedPoint'
+	return liveVars
+end 'computeLiveVarsExcludingInits'
 
-// Collect the set of `__module_init_<n>` function names that exist in
-// this module. The conditional-root path treats these as deferred so
-// they don't unconditionally pin the data they initialize — that's the
-// behavior the cache-on link path already gets via callFixup-driven
-// reachability, and the cache-parity tests demand both legs agree.
-//
-// Only entries that are also IrFunctions in `funcMap` count; the user
-// pipeline's `moduleInitFuncs` may carry stdlib init names that aren't
-// in the local stdModule (cache-on path), and those don't need
-// conditional handling because they live in the stdlib cache.
-function collectDeferredInits(project Project, funcMap StdFuncByName) returns StdDfeStringSet
-	var inits = StdDfeStringSet.create()
-	for name in project.moduleInitFuncs 'eachInit'
-		if funcMap.contains(name) 'present'
-			inits.insert(name)
-		end 'present'
-	end 'eachInit'
-	return inits
-end 'collectDeferredInits'
-
-// For each deferred `__module_init_<n>`, scan every op in its body and
-// collect the labels it touches via `globalAddr`. These labels are the
-// "outputs" the init writes (and any rdata blobs it reads at the same
-// time — at Std level we can't tell load from store, both go through
-// `globalAddr` + indirect access). A non-empty intersection with
-// `liveLabels` later signals that some consumer needs the init's
-// effects.
-function collectInitLabels(module StdModule, deferredInits StdDfeStringSet, funcMap StdFuncByName) returns ModuleInitLabelMap
-	var initLabels = ModuleInitLabelMap.create()
-	for name in deferredInits 'eachInit'
-		var labels = StringArray.create()
-		if let func = try funcMap.get(name) 'haveFunc'
-			collectGlobalAddrLabels(module, func: func, labels: labels)
-		end 'haveFunc'
-		initLabels.upsert(name, value: labels)
-	end 'eachInit'
-	return initLabels
-end 'collectInitLabels'
-
-// Walk every op in `func`'s body and push the name of every
-// `globalAddr` op into `labels`. Mirrors `walkLiveFunction` but skips
-// the worklist-marking side effect — we just need the label list for
-// the conditional-promotion check.
-function collectGlobalAddrLabels(module StdModule, func IrFunction, labels StringArray)
+function walkFunctionForVarLiveness(module StdModule, func IrFunction, initNames StdDfeStringSet, worklist StringArray, seen StdDfeStringSet, liveVars StdDfeStringSet)
 	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise panic("collectGlobalAddrLabels: blockRef {blockRef} not in module.blocks")
+		let block = try module.blocks.get(blockRef) otherwise panic("walkFunctionForVarLiveness: blockRef {blockRef} not in module.blocks")
 		for opIdx in block.opRefs 'eachOp'
-			recordGlobalAddrAtOp(module, opIdx: opIdx, labels: labels)
+			visitOpForVarLiveness(module, opIdx: opIdx, initNames: initNames, worklist: worklist, seen: seen, liveVars: liveVars)
 		end 'eachOp'
 		if block.hasTerminatorOp() 'hasTerm'
-			recordGlobalAddrAtOp(module, opIdx: block.terminatorIndex(), labels: labels)
+			visitOpForVarLiveness(module, opIdx: block.terminatorIndex(), initNames: initNames, worklist: worklist, seen: seen, liveVars: liveVars)
 		end 'hasTerm'
 	end 'eachBlock'
-end 'collectGlobalAddrLabels'
+end 'walkFunctionForVarLiveness'
 
-function recordGlobalAddrAtOp(module StdModule, opIdx OpIndex, labels StringArray)
-	let op = try module.ops.get(opIdx) otherwise panic("recordGlobalAddrAtOp: opIdx {opIdx} not in module.ops")
+function visitOpForVarLiveness(module StdModule, opIdx OpIndex, initNames StdDfeStringSet, worklist StringArray, seen StdDfeStringSet, liveVars StdDfeStringSet)
+	let op = try module.ops.get(opIdx) otherwise panic("visitOpForVarLiveness: opIdx {opIdx} not in module.ops")
 	match op 'shape'
-		system(inner) then recordGlobalAddrFromSystemOp(inner, labels: labels)
-		call then return
+		call(inner) then markCalleeForVarWalk(inner, initNames: initNames, worklist: worklist, seen: seen)
+		system(inner) then recordSystemOpVarRef(inner, liveVars: liveVars)
 		arith then return
 		control then return
 		memory then return
 	end 'shape'
-end 'recordGlobalAddrAtOp'
+end 'visitOpForVarLiveness'
 
-function recordGlobalAddrFromSystemOp(op StdSystemOp, labels StringArray)
+function recordSystemOpVarRef(op StdSystemOp, liveVars StdDfeStringSet)
 	match op 'kind'
-		globalAddr(_, name) then labels.push(name)
-		// Other system ops don't pin a named global data blob.
-		// loadLayoutDescriptor / loadWitnessTable touch witness/layout
-		// labels, but those are managed via `witnessConditionalRoots` and
-		// belong to a different conditional-root mechanism — an init
-		// touching them wouldn't be the right promotion trigger.
+		globalAddr(_, name) then liveVars.insert(name)
 		memcpy to loadIndirect then return
 		funcAddr then return
 		storeIndirect to unboxValue then return
@@ -242,46 +185,190 @@ function recordGlobalAddrFromSystemOp(op StdSystemOp, labels StringArray)
 		loadLayoutDescriptor then return
 		loadWitnessTable then return
 	end 'kind'
-end 'recordGlobalAddrFromSystemOp'
+end 'recordSystemOpVarRef'
 
-// Promote any deferred `__module_init_<n>` whose label set intersects
-// the current `liveLabels` (meaning some other live function demands a
-// slot or rdata blob the init touches). Returns true iff at least one
-// init was promoted in this call — the caller re-drains the worklist
-// and re-invokes to chain promotions through cascading data deps.
-//
-// On promotion: insert the init's name into `seen`, push it onto the
-// worklist, AND eagerly union its labels into `liveLabels`. The label
-// union ensures the next promotion check sees the labels the init also
-// reads from (e.g. an init that loads from rdata A and stores into
-// slot B; if some other live function reads B, we promote — and then
-// A becomes live too, which may unblock yet another init's promotion).
-function promoteEligibleModuleInits(deferredInits StdDfeStringSet, initLabels ModuleInitLabelMap, seen StdDfeStringSet, liveLabels StdDfeStringSet, worklist StringArray) returns bool
-	var promotedAny = false
-	for name in deferredInits 'eachInit'
-		if seen.contains(name) 'alreadyLive'
+function markCalleeForVarWalk(op StdCallOp, initNames StdDfeStringSet, worklist StringArray, seen StdDfeStringSet)
+	match op 'kind'
+		ret then return
+		call(_, callee, _) then markCalleeNameForVarWalk(callee, initNames: initNames, worklist: worklist, seen: seen)
+		tryCall(_, callee, _, _) then markCalleeNameForVarWalk(callee, initNames: initNames, worklist: worklist, seen: seen)
+		tailCall(callee, _) then markCalleeNameForVarWalk(callee, initNames: initNames, worklist: worklist, seen: seen)
+		funcRef(_, funcName) then markCalleeNameForVarWalk(funcName, initNames: initNames, worklist: worklist, seen: seen)
+		indirectCall then return
+		witnessCall then return
+		param then return
+		errorReturn then return
+	end 'kind'
+end 'markCalleeForVarWalk'
+
+function markCalleeNameForVarWalk(name String, initNames StdDfeStringSet, worklist StringArray, seen StdDfeStringSet)
+	if name.isEmpty() 'noName'
+		return
+	end 'noName'
+	if initNames.contains(name) 'skipInit'
+		return
+	end 'skipInit'
+	if seen.contains(name) 'already'
+		return
+	end 'already'
+	seen.insert(name)
+	worklist.push(name)
+end 'markCalleeNameForVarWalk'
+
+// Walk `project.moduleInitFuncs` and return the set of init names whose
+// entire write-set (recorded in `initToStoredVars`) targets vars NOT
+// present in `liveVars`. These inits will never be observed by any live
+// function, so dropping them from `livenessRoots` before the main DFE
+// walk keeps their layout/witness/string dependencies out of `liveLabels`
+// — matching what a cache-on build (which never parses the init in the
+// first place) would emit.
+function findInertModuleInits(project Project, liveVars StdDfeStringSet) returns StdDfeStringSet
+	var inert = StdDfeStringSet.create()
+	for initName in project.moduleInitFuncs 'eachInit'
+		if initName.isEmpty() 'placeholder'
 			continue
-		end 'alreadyLive'
-		let labels = try initLabels.get(name) otherwise panic("invariant: deferred init `{name}` missing from initLabels map — collectInitLabels should have populated every entry in deferredInits")
-		var shouldPromote = false
-		for label in labels 'eachLabel'
-			if liveLabels.contains(label) 'hit'
-				shouldPromote = true
-				break
-			end 'hit'
-		end 'eachLabel'
-		if not shouldPromote 'skip'
+		end 'placeholder'
+		if initWriteSetIsAllDead(project, initName: initName, liveLabels: liveVars) 'allDead'
+			inert.insert(initName)
+		end 'allDead'
+	end 'eachInit'
+	return inert
+end 'findInertModuleInits'
+
+// True when `initName` has a recorded write-set in `project.initToStoredVars`
+// AND none of the `__data_<var>` labels for that write-set appear in
+// `liveLabels`. Returns false if the init has no recorded write-set
+// (unknown — conservative) OR if any var in the write-set is sourced from
+// the stdlib — stdlib bodies live in the pre-compiled cache (not in
+// `module.functions`), so the function-DFE walker can't observe their
+// `globalAddr` reads. Conservatively keeping stdlib-sourced inits matches
+// what a no-DFE build would emit and avoids dropping a `.data` slot the
+// cached stdlib body still references via a baked-in `globalAddr` fixup.
+// Shared by `findInertModuleInits` (pre-DFE roots prune) and
+// `pruneDeadModuleInits` (post-DFE final prune) so they agree on the
+// deadness test.
+function initWriteSetIsAllDead(project Project, initName String, liveLabels StdDfeStringSet) returns bool
+	if let storedSet = try project.initToStoredVars.get(initName) 'haveSet'
+		for varName in storedSet 'eachVar'
+			let dataLabel = "__data_{varName}"
+			if liveLabels.contains(dataLabel) 'isLive'
+				return false
+			end 'isLive'
+		end 'eachVar'
+		return true
+	end 'haveSet'
+	return false
+end 'initWriteSetIsAllDead'
+
+function filterStringArrayBySet(input StringArray, drop StdDfeStringSet) returns StringArray
+	var result = StringArray.create()
+	for name in input 'eachName'
+		if drop.contains(name) 'skip'
 			continue
 		end 'skip'
-		seen.insert(name)
-		worklist.push(name)
-		for label in labels 'pinLabels'
-			liveLabels.insert(label)
-		end 'pinLabels'
-		promotedAny = true
+		result.push(name)
+	end 'eachName'
+	return result
+end 'filterStringArrayBySet'
+
+function pruneDeadModuleInits(module StdModule, project Project, liveLabels StdDfeStringSet) returns StdModule
+	if project.moduleInitFuncs.count() == 0 'noInits'
+		return module
+	end 'noInits'
+
+	var deadInits = StdDfeStringSet.create()
+	var deadVars = StdDfeStringSet.create()
+	for initName in project.moduleInitFuncs 'eachInit'
+		// Empty entries are placeholder slots reserved by
+		// `seedModuleInitFuncsFromLivenessRoots` to keep user-side init
+		// numbering past the stdlib's. They carry no callable function and
+		// no associated vars — nothing to prune.
+		if initName.isEmpty() 'placeholder'
+			continue
+		end 'placeholder'
+		if not initWriteSetIsAllDead(project, initName: initName, liveLabels: liveLabels) 'someLive'
+			continue
+		end 'someLive'
+		deadInits.insert(initName)
+		let storedSet = try project.initToStoredVars.get(initName) otherwise panic("pruneDeadModuleInits: initWriteSetIsAllDead returned true but initToStoredVars.get failed for '{initName}'")
+		// Stdlib var slots stay in `dataSectionEntries` even when their init
+		// is dropped: cached stdlib bodies (e.g. `Log.trace` in
+		// `stdlib/Log.maxon`) bake in `globalAddr __data_<var>` fixups that
+		// must resolve when those bodies get linked into the user binary.
+		// User code can't see the stdlib references during the function-DFE
+		// walk (cached bodies aren't in `module.functions`), so deleting a
+		// stdlib slot risks leaving a fixup unresolved. The slot stays
+		// zero-initialized — equivalent to what a primitive `false`/`0`
+		// initial-value init would write; heap-initialized stdlib vars
+		// (`var x = T.create()`) start as nullptr and are only dereferenced
+		// along paths the cached body guards with explicit non-null checks
+		// (e.g. `if capturing` in `Log.trace`).
+		for varName in storedSet 'eachDeadVar'
+			if let info = try project.topLevelVars.get(varName) 'haveInfo'
+				if isStdlibDecl(info.sourceFilePath) 'stdlibVar'
+					continue
+				end 'stdlibVar'
+			end 'haveInfo'
+			deadVars.insert(varName)
+		end 'eachDeadVar'
 	end 'eachInit'
-	return promotedAny
-end 'promoteEligibleModuleInits'
+
+	if deadInits.count() == 0 'nothingToDrop'
+		return module
+	end 'nothingToDrop'
+
+	// Emit a trace log for each dropped init, then rebuild
+	// `moduleInitFuncs` / `livenessRoots` with a shared filter helper.
+	for initName in project.moduleInitFuncs 'logDrops'
+		if deadInits.contains(initName) 'drop'
+			logTrace(LogCategory.ir, message: function() gives "stddfe: dropping dead module-init '{initName}'")
+		end 'drop'
+	end 'logDrops'
+	project.moduleInitFuncs = filterStringArrayBySet(project.moduleInitFuncs, drop: deadInits)
+	project.livenessRoots = filterStringArrayBySet(project.livenessRoots, drop: deadInits)
+
+	// Drop the dead vars from project.topLevelVars and globalData.dataSectionEntries
+	// so a subsequent re-lowering or backend pass sees consistent state.
+	for varName in deadVars 'eachDeadVar'
+		_ = project.topLevelVars.remove(varName)
+	end 'eachDeadVar'
+	for initName in deadInits 'eachDeadInit'
+		_ = project.initToStoredVars.remove(initName)
+	end 'eachDeadInit'
+
+	// Filter dataSectionEntries to drop the dead slots. Build the
+	// `__data_<var>` label set up front so the per-entry membership check
+	// is O(1) instead of O(deadVars). Their `__data_*` names also need to
+	// stay out of liveLabels so `pruneDeadGlobalData` (running next)
+	// doesn't re-pin them via the dataSectionEntries scan.
+	var deadDataLabels = StdDfeStringSet.create()
+	for varName in deadVars 'eachDeadVarLabel'
+		deadDataLabels.insert("__data_{varName}")
+	end 'eachDeadVarLabel'
+	var newDataEntries = DataSectionEntryArray.create()
+	for entry in project.globalData.dataSectionEntries 'eachData'
+		if deadDataLabels.contains(entry.name) 'dropEntry'
+			logTrace(LogCategory.ir, message: function() gives "stddfe: dropping data-section entry '{entry.name}' (init eliminated)")
+			continue
+		end 'dropEntry'
+		newDataEntries.push(entry)
+	end 'eachData'
+	project.globalData.dataSectionEntries = newDataEntries
+
+	// Drop user-side init function bodies that were kept alive only by
+	// their `livenessRoots` entry. (Stdlib inits live in the cache and
+	// aren't in `module.functions`, so the filter is a no-op for them.)
+	var keptFunctions = IrFunctionArray.create()
+	for func in module.functions 'filterFuncs'
+		if deadInits.contains(func.name) 'dropFunc'
+			logTrace(LogCategory.ir, message: function() gives "stddfe: dropping dead module-init function body '{func.name}'")
+			continue
+		end 'dropFunc'
+		keptFunctions.push(func)
+	end 'filterFuncs'
+	module.functions = keptFunctions
+	return module
+end 'pruneDeadModuleInits'
 
 // Prune unreferenced globalData entries.
 //
@@ -304,32 +391,18 @@ function pruneDeadGlobalData(globalData GlobalDataTable, liveLabels StdDfeString
 	// label any kept function demanded via `globalAddr` /
 	// `loadLayoutDescriptor` / `loadWitnessTable`.
 
-	// `__data_<symbol>` slots back user/stdlib top-level `let`/`var`
-	// initializers (see `registerGlobalVarsForDataSection`). Drop the
-	// entry from `dataSectionEntries` when no live function references
-	// the slot — the per-file `__module_init_<n>` that would have
-	// written into it is itself dead at this point (the conditional-
-	// root step above skipped its promotion), so emitting the slot would
-	// reserve eight bytes of `.data` that no code path ever touches.
-	// Dropping it keeps the cache-off `.data` layout in lockstep with
-	// the cache-on path, where `topLevelVars` aren't restored from the
-	// stdlib cache for these dead slots in the first place.
-	//
-	// Runtime/MM/slab/win32-init slots (`__slab_*`, `__mm_*`, `__mrt_*`,
-	// etc.) don't carry the `__data_` prefix; they're referenced by
-	// runtime helpers that haven't been merged yet (`augmentWithRuntime`
-	// runs after DFE), so no `globalAddr` op for them is visible to the
-	// walker. Keep them by name pattern.
-	var keptDataEntries = DataSectionEntryArray.create()
+	// Explicitly-named globals registered through addNamedGlobalData stay
+	// live — they're addressed by the runtime (panic-stack helpers) or
+	// the loader (.data / .covdata) and have no code-side globalAddr op
+	// until the user actually references them. User top-level vars whose
+	// underlying `project.topLevelVars` entry was already dropped by the
+	// upstream `pruneDeadModuleInits` (running earlier in this same
+	// `eliminateDeadStdFunctions` invocation) have their `__data_*` slots
+	// removed from `dataSectionEntries` there — pinning what does appear
+	// is safe and matches the historical behavior runtime helpers expect.
 	for entry in globalData.dataSectionEntries 'eachData'
-		if isUserDataSlot(entry.name) and not liveLabels.contains(entry.name) 'drop'
-			logTrace(LogCategory.ir, message: function() gives "pruneDeadGlobalData: dropping unused .data slot '{entry.name}'")
-			continue
-		end 'drop'
-		keptDataEntries.push(entry)
 		liveLabels.insert(entry.name)
 	end 'eachData'
-	globalData.dataSectionEntries = keptDataEntries
 	for entry in globalData.covDataEntries 'eachCov'
 		liveLabels.insert(entry.name)
 	end 'eachCov'
@@ -375,18 +448,6 @@ function pruneDeadGlobalData(globalData GlobalDataTable, liveLabels StdDfeString
 	globalData.nameIndex = newNameIndex
 	globalData.valueDedup = newValueDedup
 end 'pruneDeadGlobalData'
-
-// True for `dataSectionEntries` whose lifetime is owned by user/stdlib
-// source-level `let`/`var` declarations rather than the runtime. Runtime
-// helpers (`__slab_*`, `__mm_*`, `__mrt_*`, etc.) get their slots
-// reserved by `lowerMaxonToStd` directly under fixed names, and the
-// helper bodies that reference them haven't been merged into the
-// user module yet at DFE time — so the walker can't see their
-// `globalAddr` ops. Use the `__data_` prefix (mint site:
-// `dataSymbolName` in `LowerMaxonToStd.maxon`) as the discriminator.
-function isUserDataSlot(name String) returns bool
-	return name.startsWith("__data_")
-end 'isUserDataSlot'
 
 // True when a globalData entry must survive pruning regardless of liveness:
 //   - reserved runtime helpers (`__panic_*`, `__symtable`, `__xmmmask_*`) are

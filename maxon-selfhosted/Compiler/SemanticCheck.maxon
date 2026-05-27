@@ -1443,9 +1443,17 @@ function calleeIsVoid(project Project, bareCallee String, callerNamespace String
 	// disagree on return type the conservative answer is "void" — falsely
 	// suppressing a diagnostic is better than firing one spuriously on
 	// idiomatic mutator calls like `arr.push("x")`.
+	//
+	// Overload-mangled keys: when two same-named methods coexist the parser
+	// re-keys both under their mangled forms (`Array.sort$`,
+	// `Array.sort$SortComparator`). The original `.sort` suffix no longer
+	// ends the key, so the bare endsWith match misses both. Accept either
+	// `.{bareCallee}` (unmangled) or `.{bareCallee}$...` (mangled) so the
+	// scan finds every overload.
 	let methodSuffix = ".{bareCallee}"
+	let mangledPrefix = "{methodSuffix}$"
 	for (key, rt) in project.funcReturnTypes 'each'
-		if not key.endsWith(methodSuffix) 'notMethod'
+		if not (key.endsWith(methodSuffix) or key.contains(mangledPrefix)) 'notMethod'
 			continue
 		end 'notMethod'
 		let isVoid = match rt 'rtkind'

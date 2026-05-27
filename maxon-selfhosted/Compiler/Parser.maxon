@@ -732,8 +732,21 @@ export type Parser
 		// indirect-call dispatch). Falls back to the standard named-type
 		// intern when the alias is not a function-type alias or doesn't
 		// exist; the resolver later promotes the named reference.
+		//
+		// Route through `parserChaseFnAlias` rather than calling
+		// `chaseTypealiasToFunctionType` directly: a typealias declared
+		// earlier in the SAME extension/struct body lives in
+		// `currentInnerAliases` and is not merged into
+		// `project.unresolvedStructTypes[T].innerAliases` until
+		// `mergeExtensionInnerAliases` runs at the end of the enclosing
+		// `parseExtension` call. Without the local-first probe, a param like
+		// `cmp SortComparator` defined inside the same extension as the
+		// `typealias SortComparator = function(...)` parses with the bare
+		// `named(SortComparator)` MaxonType, and downstream signature stores
+		// miss the function-type expansion that drives the (fn, env) ABI
+		// pairing in `slotArgsForCall`.
 		let interned = internMaxonType(project, name: typeToken.value)
-		let chased = chaseTypealiasToFunctionType(project, t: interned)
+		let chased = parserChaseFnAlias(interned)
 		return chased
 	end 'parseTypeRef'
 
@@ -2037,6 +2050,23 @@ export type Parser
 				recordFuncThrowsInsert(project, filePath: filePath, key: mangledName)
 			end 'recTh2'
 		end 'haveTh'
+		// Re-key the extension-method where-clause entry too. The map is
+		// per-overload (one entry per registered IrFunction name), so the
+		// existing function's entry — registered under `bareName` while it
+		// was the only overload — must move to the new mangled name now
+		// that a sibling overload has been parsed. Without this, the
+		// existing overload's where-clauses orphan under a dead key and
+		// the only entry the lookup finds is an unrelated overload's.
+		if let extWhere = try project.extensionMethodWhereClauses.get(bareName) 'haveExtWhere'
+			var rekeyedExtWhere = true
+			try project.extensionMethodWhereClauses.insert(mangledName, value: extWhere) otherwise 'dupExtWhere2'
+				rekeyedExtWhere = false
+			end 'dupExtWhere2'
+			_ = project.extensionMethodWhereClauses.remove(bareName)
+			if rekeyedExtWhere 'recExtWhere2'
+				recordExtensionMethodWhereClauseInsert(project, filePath: filePath, key: mangledName)
+			end 'recExtWhere2'
+		end 'haveExtWhere'
 		project.methodNameIndex.record(mangledName)
 		recordMethodNameIndexInsert(project, filePath: filePath, qualifiedName: mangledName)
 		// Walk the current module's functions for an IrFunction whose .name
@@ -2326,6 +2356,15 @@ export type Parser
 		end 'dupResolved'
 
 		module.appendOp(moduleInitBlock, op: MaxonOp.globalStore(qualifiedName, value: exprName(result), slotType: exprType(result), range: initRange))
+
+		// Track that `moduleInitName` writes into `qualifiedName`. Used by
+		// the Std-level dead-top-level-var pass.
+		if not project.initToStoredVars.contains(moduleInitName) 'newInit'
+			project.initToStoredVars.upsert(moduleInitName, value: StoredVarNameSet.create())
+		end 'newInit'
+		var storedSet = try project.initToStoredVars.get(moduleInitName) otherwise panic("finalizeTopLevelInitDecl: initToStoredVars.get failed after upsert for '{moduleInitName}'")
+		storedSet.insert(qualifiedName)
+		project.initToStoredVars.upsert(moduleInitName, value: storedSet)
 
 		let info = TopLevelVarInfo.create(qualifiedName, slotType: exprType(result), initialValue: 0 as IntConstant, visibility: visibility, sourceFilePath: filePath)
 		var insertedTopLevelVar = true
@@ -5555,19 +5594,6 @@ export type Parser
 	//
 	// entry: cursor AT the token AFTER `extension` (the target-type name).
 	// Caller (dispatchInner) has already consumed the `extension` keyword.
-	// J.4b: peek the upcoming `function` body's method-name token without
-	// consuming it. parseFunction will consume the identifier itself; we
-	// just snapshot the bare name so the outer extension can record the
-	// `<targetType>.<methodName>` mapping. Returns "" on a malformed
-	// extension body so the caller can skip the registration silently.
-	function peekIdentifierForExtensionMethod() returns String
-		let tok = cursor.current()
-		if tok.kind == TokenKind.identifier 'isIdent'
-			return tok.value
-		end 'isIdent'
-		return ""
-	end 'peekIdentifierForExtensionMethod'
-
 	function parseExtension(visibility Visibility) throws ParserError
 		let targetNameToken = try consumeExpecting("type name")
 		let targetTypeName = targetNameToken.value
@@ -5668,13 +5694,23 @@ export type Parser
 		currentInnerAliases = extInnerAliases
 
 		// J.4b: collect the qualified names of methods parsed inside this
-		// extension body. parseFunction registers each method's identifier
-		// token; we peek at it before consuming so the captured names are
-		// the same `<targetType>.<methodName>` keys used in funcSignatures
-		// / funcReturnTypes. After the body loop, we walk this list and
-		// stamp the extension's whereClauses into
-		// `project.extensionMethodWhereClauses` for the E4006 lookup.
-		var extensionMethodNames = StringArray.create()
+		// extension body so we can later stamp the extension's whereClauses
+		// into `project.extensionMethodWhereClauses` for the E4006 lookup.
+		//
+		// We snapshot the function count BEFORE the body and read the
+		// freshly-pushed functions' final names AFTER the body completes.
+		// Reading after the body ensures any overload-driven rekey
+		// (`tryRegisterOverload` -> `rekeyExistingFunction` mutates the
+		// existing IrFunction's .name from `Type.method` to
+		// `Type.method$X`) has already settled, so we record the actual
+		// post-mangling key the lookup will hit. Per-overload keying is
+		// what lets two overloaded methods in different extensions with
+		// different where-clauses coexist — without it, the second
+		// extension's clauses silently drop on a bare-name collision and
+		// the non-Comparable `sort(cmp)` overload of `Array.sort` would
+		// inherit the Comparable overload's `where Element is Comparable`
+		// clause and demand a witness table that doesn't exist.
+		let extBodyFunctionStart = module.functions.count()
 
 		while true 'body'
 			let bodyPrevPos = cursor.index()
@@ -5704,19 +5740,11 @@ export type Parser
 			end 'isInnerAlias' else if kindToken.kind == TokenKind.static 'isStatic'
 				try eat(TokenKind.static)
 				try eat(TokenKind.function)
-				let methodName = peekIdentifierForExtensionMethod()
 				try parseFunction(targetTypeName, isInstance: false, fields: fields, visibility: currentTypeVisibility)
-				if not methodName.isEmpty() 'recordStatic'
-					extensionMethodNames.push("{targetTypeName}.{methodName}")
-				end 'recordStatic'
 				try skipNewlines()
 			end 'isStatic' else if kindToken.kind == TokenKind.function 'isFn'
 				try eat(TokenKind.function)
-				let methodName = peekIdentifierForExtensionMethod()
 				try parseFunction(targetTypeName, isInstance: true, fields: fields, visibility: currentTypeVisibility)
-				if not methodName.isEmpty() 'recordFn'
-					extensionMethodNames.push("{targetTypeName}.{methodName}")
-				end 'recordFn'
 				try skipNewlines()
 			end 'isFn' else 'unknown'
 				reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "unexpected token in extension body: '{tokenValueToString(kindToken.value)}' (expected 'function', 'static', or 'typealias')", line: kindToken.line, column: kindToken.column, filePath: filePath)
@@ -5746,13 +5774,28 @@ export type Parser
 		// the extension's whereClauses so resolveMethodCallSite can issue
 		// E4006 for un-satisfied conditional availability without rescanning
 		// the unresolvedExtensions list at every call site.
-		for methodKey in extensionMethodNames 'recordWhere'
+		//
+		// Walk the functions that landed in `module.functions` while this
+		// body was being parsed. Reading the name post-body ensures any
+		// `rekeyExistingFunction` rename triggered by a later overload has
+		// already updated the IrFunction's .name, so we record per the
+		// final mangled key the call-site lookup will hit.
+		let extBodyFunctionEnd = module.functions.count()
+		let targetTypePrefix = "{targetTypeName}."
+		for fi in extBodyFunctionStart upto extBodyFunctionEnd 'recordWhere'
+			let f = try module.functions.get(fi) otherwise continue
+			if not f.name.startsWith(targetTypePrefix) 'wrongType'
+				// Helper functions (parameter-default helpers, etc.) may
+				// also land in `module.functions` during method parsing.
+				// They don't carry the extension's where-clauses.
+				continue
+			end 'wrongType'
 			var insertedExtWhere = true
-			try project.extensionMethodWhereClauses.insert(methodKey, value: whereClauses) otherwise 'dupExtWhere'
+			try project.extensionMethodWhereClauses.insert(f.name, value: whereClauses) otherwise 'dupExtWhere'
 				insertedExtWhere = false
 			end 'dupExtWhere'
 			if insertedExtWhere 'recExtWhere'
-				recordExtensionMethodWhereClauseInsert(project, filePath: filePath, key: methodKey)
+				recordExtensionMethodWhereClauseInsert(project, filePath: filePath, key: f.name)
 			end 'recExtWhere'
 		end 'recordWhere'
 
@@ -8914,33 +8957,41 @@ export type Parser
 	function parseExpression(block IrBlock) returns ExprResult throws ParserError
 		let suppressRangeLowering = inForInHeader
 		inForInHeader = false
-		let result = try parseExpressionBP(block, minBP: 0)
+		var result = try parseExpressionBP(block, minBP: 0)
 		inForInHeader = suppressRangeLowering
 		if suppressRangeLowering 'suppressed'
 			return result
 		end 'suppressed'
 		let nextKind = cursor.current().kind
-		if nextKind != TokenKind.to and nextKind != TokenKind.upto 'noRange'
-			return result
-		end 'noRange'
-		let rangeToken = try consume()
-		let inclusive = rangeToken.kind == TokenKind.to
-		let endResult = try parseExpression(currentBlock)
-		let calleeName = "Range.create" if inclusive else "OpenRange.create"
-		let endLabel = "finish" if inclusive else "endExclusive"
-		var args = ByteArrayArray.create()
-		args.push(exprName(result))
-		args.push(exprName(endResult))
-		var argLabels = StringArray.create()
-		argLabels.push("")
-		argLabels.push(endLabel)
-		var argTypes = MaxonTypeArray.create()
-		argTypes.push(exprType(result))
-		argTypes.push(exprType(endResult))
-		var argRanges = SourceRangeArray.create()
-		argRanges.push(SourceRange.ofToken(rangeToken))
-		argRanges.push(SourceRange.ofToken(rangeToken))
-		return emitCallAndResult(calleeName, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, callContext: CallContext.qualified, range: SourceRange.ofToken(rangeToken))
+		if nextKind == TokenKind.to or nextKind == TokenKind.upto 'isRange'
+			let rangeToken = try consume()
+			let inclusive = rangeToken.kind == TokenKind.to
+			let endResult = try parseExpression(currentBlock)
+			let calleeName = "Range.create" if inclusive else "OpenRange.create"
+			let endLabel = "finish" if inclusive else "endExclusive"
+			var args = ByteArrayArray.create()
+			args.push(exprName(result))
+			args.push(exprName(endResult))
+			var argLabels = StringArray.create()
+			argLabels.push("")
+			argLabels.push(endLabel)
+			var argTypes = MaxonTypeArray.create()
+			argTypes.push(exprType(result))
+			argTypes.push(exprType(endResult))
+			var argRanges = SourceRangeArray.create()
+			argRanges.push(SourceRange.ofToken(rangeToken))
+			argRanges.push(SourceRange.ofToken(rangeToken))
+			result = emitCallAndResult(calleeName, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, callContext: CallContext.qualified, range: SourceRange.ofToken(rangeToken))
+		end 'isRange'
+		// Postfix ternary: `<trueExpr> if <condition> else <falseExpr>`. The
+		// `if` here is mid-expression (the statement-level dispatcher only
+		// fires for `if` at statement start), so we know this is a conditional
+		// expression rather than a block opener. Binds looser than range and
+		// all binary operators, so it sits at the very tail of parseExpression.
+		if cursor.current().kind == TokenKind.if 'isTernary'
+			result = try parseTernaryTail(result)
+		end 'isTernary'
+		return result
 	end 'parseExpression'
 
 	// entry: cursor AT first operand's first token.
@@ -9230,6 +9281,70 @@ export type Parser
 		module.appendOp(mergeBlock, op: MaxonOp.varLoad(resultName, slotId: slot, slotType: MaxonType.boolean, range: opRange))
 		return resultName
 	end 'emitShortCircuit'
+
+	// Postfix ternary expression: `<trueExpr> if <condition> else <falseExpr>`.
+	// Cursor enters AT the `if` token; trueExpr is the already-parsed left-hand
+	// expression. Both arms are eagerly evaluated into the entry block (matching
+	// the C# bootstrap), and a 3-way block diamond (then / else / merge) wires
+	// up the conditional store of the chosen arm into a fresh result slot. The
+	// false-arm parser recurses into `parseExpression`, giving right-association
+	// for chained ternaries (`a if c1 else b if c2 else c` ⇒ `a if c1 else (b if c2 else c)`).
+	function parseTernaryTail(trueExpr ExprResult) returns ExprResult throws ParserError
+		let ifToken = cursor.current()
+		try eat(TokenKind.if)
+		let ifRange = SourceRange.ofToken(ifToken)
+		// Capture the block trueExpr's ops landed in. The slot's varDecl piggy-
+		// backs on it so the declaration dominates both branch arms regardless
+		// of where condition/false-arm parsing moved currentBlock. Held as
+		// `var` because emitLiteral/appendOp consume an IrBlock by mutating
+		// reference; passing a `let` binding fails the E3019 mutation check.
+		var trueExprBlock = currentBlock
+
+		// Pick the result type from the true arm; TypeResolution validates the
+		// arms-match constraint after the registries are populated.
+		let resultType = exprType(trueExpr)
+
+		// Allocate the result slot before parsing condition/false so the slot
+		// is in scope for any sub-expression that might (rarely) reference it.
+		// Seed with a literal zero so the varDecl satisfies the decl-before-
+		// store invariant other passes expect; both arms overwrite the seed.
+		let slot = scope.declare("__ternary_{currentFunc.nextBlockId}", varType: resultType, mutable: true)
+		let seedName = emitLiteral(trueExprBlock, value: 0, valueType: resultType, range: ifRange)
+		module.appendOp(trueExprBlock, op: MaxonOp.varDecl(slot, value: seedName, slotType: resultType, range: ifRange))
+
+		// Condition is a full expression — same as C# bootstrap; this means a
+		// chained `if` in the condition slot binds tighter than the outer `else`.
+		let condResult = try parseExpression(currentBlock)
+		try expect(TokenKind.else)
+		// False arm: full expression so chained ternaries right-associate.
+		let falseResult = try parseExpression(currentBlock)
+		// The block we ended up in after evaluating cond+false is the one that
+		// dispatches into the then/else arms; if either expression had bool
+		// short-circuit emission it will have moved currentBlock away from
+		// trueExprBlock to a fresh merge block, and the condBr belongs there.
+		var dispatchBlock = currentBlock
+
+		let ifFilePath = filePath.toString()
+		var thenBlock = module.addBlockAt(currentFunc, label: "ternary.then", filePath: ifFilePath, firstLine: ifToken.line)
+		let thenBlockId = thenBlock.id
+		var elseBlock = module.addBlockAt(currentFunc, label: "ternary.else", filePath: ifFilePath, firstLine: ifToken.line)
+		let elseBlockId = elseBlock.id
+		var mergeBlock = module.addBlockAt(currentFunc, label: "ternary.merge", filePath: ifFilePath, firstLine: ifToken.line)
+		let mergeBlockId = mergeBlock.id
+
+		module.appendOp(thenBlock, op: MaxonOp.varStore(slot, value: exprName(trueExpr), range: ifRange))
+		module.setTerminator(thenBlock, op: MaxonOp.br(mergeBlockId, range: ifRange))
+
+		module.appendOp(elseBlock, op: MaxonOp.varStore(slot, value: exprName(falseResult), range: ifRange))
+		module.setTerminator(elseBlock, op: MaxonOp.br(mergeBlockId, range: ifRange))
+
+		module.setTerminator(dispatchBlock, op: MaxonOp.condBr(exprName(condResult), thenTarget: thenBlockId, elseTarget: elseBlockId, range: ifRange))
+
+		currentBlock = mergeBlock
+		let resultName = freshSynthName()
+		module.appendOp(mergeBlock, op: MaxonOp.varLoad(resultName, slotId: slot, slotType: resultType, range: ifRange))
+		return ExprResult.direct(resultName, valueType: resultType)
+	end 'parseTernaryTail'
 
 	// Caller guarantees `kind` is one of the infix operators for which
 	// `infixBindingPower` returns a nonzero value (and `is` is intercepted by
@@ -11463,8 +11578,18 @@ export type Parser
 		// through the identifier path when they appear in expression position
 		// AND the local scope binds them. Without the scope check this would
 		// cripple every other expression-context use of these keywords.
+		//
+		// `tokenIsIdentifierLike` peeks at the token's value bytes, so a
+		// literal token whose decoded content happens to be alphabetic
+		// (`"a"` lexes as stringLiteral with value `a`; `'c'` lexes as
+		// charLiteral with value `c`; `1` could in principle, etc.) also
+		// passes the byte check. Excluding the literal kinds here keeps
+		// the keyword-as-var routing scoped to actual keyword tokens —
+		// otherwise `let a = ...` shadowing a variable named `a` makes
+		// the literal `"a"` route through `parseIdentifierExpr` and emit
+		// a varLoad against the array binding instead of a stringConst.
 		let cur = cursor.current()
-		if cur.kind != TokenKind.identifier and tokenIsIdentifierLike(cur) and scope.contains(cur.value) 'isKeywordVar'
+		if cur.kind != TokenKind.identifier and not tokenKindIsLiteral(cur.kind) and tokenIsIdentifierLike(cur) and scope.contains(cur.value) 'isKeywordVar'
 			return try parseIdentifierExpr(block)
 		end 'isKeywordVar'
 		// Primitive-type static method call: `int.method(...)`, `float.method(...)`,
@@ -14156,6 +14281,17 @@ function tokenIsIdentifierLike(token Token) returns bool
 	let isUnderscore = first == '_'
 	return isLower or isUpper or isUnderscore
 end 'tokenIsIdentifierLike'
+
+// True iff `kind` is a literal-producing token (the lexer stripped quoting
+// from string / char / byte-string literals so the raw `value` is the
+// literal content, not the source spelling). `tokenIsIdentifierLike` peeks
+// at the value's first byte to recognize keyword tokens whose spelling
+// looks like an identifier; literal tokens whose content happens to be
+// alphabetic must not satisfy the keyword-as-var routing in
+// `parsePrimaryMatch`, so the literal kinds are filtered out up front.
+function tokenKindIsLiteral(kind TokenKind) returns bool
+	return kind == TokenKind.stringLiteral or kind == TokenKind.charLiteral or kind == TokenKind.byteStringLiteral or kind == TokenKind.intLiteral or kind == TokenKind.floatLiteral
+end 'tokenKindIsLiteral'
 
 // True iff `token` ends a statement at the parser's lookahead level:
 // a newline, the `end` keyword closing the enclosing block, or EOF. The

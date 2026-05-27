@@ -265,6 +265,62 @@ end 'main'
 no
 ```
 
+<!-- test: ternary-expression.in-extension-method-before-sibling -->
+
+Regression: a postfix ternary on a `let` binding inside an extension method
+must not confuse the parser's extension-block scanner. The scanner walks
+tokens at depth 1 to find function declarations; an inline `if ... else`
+must not be counted as a block opener, otherwise sibling methods declared
+later in the same extension block fail to register and become "Undefined
+method" at every call site.
+
+```maxon
+typealias Small = int(0 to 1000)
+
+interface Bounded
+	function lo() returns Small
+	function hi() returns Small
+end 'Bounded'
+
+extension Bounded
+	function pickSmaller() returns Small
+		let smaller = self.lo() if self.lo() < self.hi() else self.hi()
+		return smaller
+	end 'pickSmaller'
+
+	function describe() returns Small
+		return self.hi() - self.lo()
+	end 'describe'
+end 'Bounded'
+
+type Pair implements Bounded
+	let l as Small
+	let h as Small
+
+	function lo() returns Small
+		return l
+	end 'lo'
+
+	function hi() returns Small
+		return h
+	end 'hi'
+
+	static function create(l Small, h Small) returns Self
+		return Self{l: l, h: h}
+	end 'create'
+end 'Pair'
+
+function main() returns ExitCode
+	let p = Pair.create(7, h: 12)
+	let s = p.pickSmaller()
+	let d = p.describe()
+	return s + d
+end 'main'
+```
+```exitcode
+12
+```
+
 <!-- test: ternary-expression.error.type-mismatch -->
 ```maxon
 function main() returns ExitCode

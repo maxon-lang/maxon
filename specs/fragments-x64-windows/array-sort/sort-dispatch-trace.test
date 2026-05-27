@@ -1,0 +1,146 @@
+// Test: sort-dispatch-trace
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function main() returns ExitCode
+	var a = IntArray.create()
+	a.push(3)
+	a.push(1)
+	a.push(2)
+	Log.startCapture()
+	a.sort()
+	let keys = Log.stopCapture()
+	if Log.fired(keys, key: "insertionSort.run") 'k'
+		print("insertion-fired\n")
+	end 'k' else 'nk'
+		print("insertion-MISSING\n")
+	end 'nk'
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+insertion-fired
+```
+---
+// CompiledIR
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov ecx, 8
+    x64.call mrt_alloc
+    x64.mov r12, r8
+    x64.mov ecx, 40
+    x64.call mrt_alloc
+    x64.xor r9d, r9d
+    x64.mov [r8+0], r9 (8b)
+    x64.xor r9d, r9d
+    x64.mov [r8+8], r9 (8b)
+    x64.xor r9d, r9d
+    x64.mov [r8+16], r9 (8b)
+    x64.mov r9d, 8
+    x64.mov [r8+24], r9 (8b)
+    x64.xor r9d, r9d
+    x64.mov [r8+32], r9 (8b)
+    x64.mov [r12+0], r8 (8b)
+    x64.lea rax, [rip+__layout_Array_Integer]
+    x64.mov edx, 3
+    x64.mov rcx, r12
+    x64.call Array.push
+    x64.lea rax, [rip+__layout_Array_Integer]
+    x64.mov r13d, 1
+    x64.mov rcx, r12
+    x64.mov rdx, r13
+    x64.call Array.push
+    x64.lea rax, [rip+__layout_Array_Integer]
+    x64.mov edx, 2
+    x64.mov rcx, r12
+    x64.call Array.push
+    x64.lea r8, [rip+__data_captured]
+    x64.mov r9, [r8+0] (8b)
+    x64.mov r8, [r9+0] (8b)
+    x64.xor r9d, r9d
+    x64.mov [r8+8], r9 (8b)
+    x64.lea r8, [rip+__data_capturing]
+    x64.mov r9d, 1
+    x64.mov [r8+0], r9 (8b)
+    x64.lea rax, [rip+__witness_int_Comparable]
+    x64.lea rdx, [rip+__layout_Array_Integer]
+    x64.mov rcx, r12
+    x64.call Array.comparableInsertionSort
+    x64.call Log.stopCapture
+    x64.mov r12, r8
+    x64.mov ecx, 40
+    x64.call mrt_alloc
+    x64.mov r14, r8
+    x64.lea r8, [rip+__istr_0]
+    x64.mov [r14+0], r8 (8b)
+    x64.mov r8d, 17
+    x64.mov [r14+8], r8 (8b)
+    x64.mov r8, -2
+    x64.mov [r14+16], r8 (8b)
+    x64.mov [r14+24], r13 (8b)
+    x64.xor r8d, r8d
+    x64.mov [r14+32], r8 (8b)
+    x64.mov ecx, 16
+    x64.call mrt_alloc
+    x64.mov [r8+0], r14 (8b)
+    x64.mov [r8+8], r13 (8b)
+    x64.mov rcx, r12
+    x64.mov rdx, r8
+    x64.call Log.fired
+    x64.test r8, r8
+    x64.je nk_0
+  k_0:
+    x64.mov ecx, 40
+    x64.call mrt_alloc
+    x64.mov r12, r8
+    x64.lea r8, [rip+__istr_1]
+    x64.mov [r12+0], r8 (8b)
+    x64.mov r8d, 16
+    x64.mov [r12+8], r8 (8b)
+    x64.mov r8, -2
+    x64.mov [r12+16], r8 (8b)
+    x64.mov [r12+24], r13 (8b)
+    x64.xor r8d, r8d
+    x64.mov [r12+32], r8 (8b)
+    x64.mov ecx, 16
+    x64.call mrt_alloc
+    x64.mov [r8+0], r12 (8b)
+    x64.mov [r8+8], r13 (8b)
+    x64.mov r9, [r8+0] (8b)
+    x64.mov rdx, [r9+8] (8b)
+    x64.mov r12, [r9+0] (8b)
+    x64.mov rcx, r12
+    x64.call mrt_write_stdout
+    x64.jmp k_0.merge
+  nk_0:
+    x64.mov ecx, 40
+    x64.call mrt_alloc
+    x64.mov r12, r8
+    x64.lea r8, [rip+__istr_2]
+    x64.mov [r12+0], r8 (8b)
+    x64.mov r8d, 18
+    x64.mov [r12+8], r8 (8b)
+    x64.mov r8, -2
+    x64.mov [r12+16], r8 (8b)
+    x64.mov [r12+24], r13 (8b)
+    x64.xor r8d, r8d
+    x64.mov [r12+32], r8 (8b)
+    x64.mov ecx, 16
+    x64.call mrt_alloc
+    x64.mov [r8+0], r12 (8b)
+    x64.mov [r8+8], r13 (8b)
+    x64.mov r9, [r8+0] (8b)
+    x64.mov rdx, [r9+8] (8b)
+    x64.mov r12, [r9+0] (8b)
+    x64.mov rcx, r12
+    x64.call mrt_write_stdout
+  k_0.merge:
+    x64.xor r8d, r8d
+    x64.epilogue
+    x64.ret
+  }
+}
+---

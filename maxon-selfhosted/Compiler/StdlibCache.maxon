@@ -143,7 +143,11 @@ let CACHE_MAGIC_3 = 0x00  // '\0'
 // type-erased managed memory can recover the float bits.
 // v53: Phase 15c — whitelisted real FilePath/File/Directory stdlib;
 // registered __ManagedFile/__ManagedDirectory types.
-let CACHE_FORMAT_VERSION = 54
+// v55: dead-top-level-var-elim — persisted `moduleInitFuncs` and
+// `initToStoredVars` so cache-on builds can prune dead inits identically
+// to cache-off builds (matches cache-parity invariant after Log.maxon
+// introduced the first stdlib-side runtime-init top-level var).
+let CACHE_FORMAT_VERSION = 55
 
 // ============================================================
 // Types
@@ -293,6 +297,26 @@ export type StdlibCacheData
 	export var layoutDescriptors as LayoutDescriptorRegistry
 	export var witnessTables as WitnessTableRegistry
 	export var livenessRoots as StringArray
+	// v55: stdlib-side `project.moduleInitFuncs` snapshot. Restored on
+	// cache hit so the user pipeline's parser can numbering past the
+	// stdlib init names baked into the cached function table (avoiding
+	// `__module_init_0` collisions) AND so `pruneDeadModuleInits` sees
+	// the same set of inits as a cache-off build — keeping cache-parity
+	// binaries byte-identical.
+	export var moduleInitFuncs as StringArray
+	// v55: stdlib-side `project.initToStoredVars` snapshot. Pairs with
+	// `moduleInitFuncs` so the Std-level dead-init pass knows which
+	// vars each cached stdlib init writes, and can drop the init when
+	// nothing user-reachable references those vars.
+	export var initToStoredVars as InitToStoredVarsMap
+	// v55: stdlib-side `project.topLevelVars` snapshot. Restored so
+	// `registerGlobalVarsForDataSection` adds the stdlib's `__data_*`
+	// slots into user `globalData.dataSectionEntries` on cache-hit
+	// identically to cache-off — without this, the `.data` section
+	// layout differs (cache-off has extra slots that cache-on lacks),
+	// shifting every subsequent slot's offset and making the
+	// cache-parity check fail on every RIP-relative reference in `.text`.
+	export var topLevelVars as TopLevelVarMap
 	// Phase 11.4: snapshot of `Project.genericFunctionImplicitArity` so
 	// cached-stdlib user builds see which stdlib functions need synthetic
 	// layout/witness args appended at call sites. Without this, per-function
@@ -362,6 +386,9 @@ export type StdlibCacheData
 			layoutDescriptors: LayoutDescriptorRegistry.create(),
 			witnessTables: WitnessTableRegistry.create(),
 			livenessRoots: StringArray.create(),
+			moduleInitFuncs: StringArray.create(),
+			initToStoredVars: InitToStoredVarsMap.create(),
+			topLevelVars: TopLevelVarMap.create(),
 			genericFunctionImplicitArity: GenericFunctionImplicitArityMap.create(),
 			staticRdataValues: StaticRdataValueMap.create(),
 			unresolvedExtensions: UnresolvedExtensionArray.create(),
@@ -870,6 +897,12 @@ function encodeStdlibCacheBody(project Project, buf ByteArray, data StdlibCacheD
 	try writeLayoutDescriptorRegistry(buf, registry: data.layoutDescriptors)
 	try writeWitnessTableRegistry(buf, registry: data.witnessTables)
 	try writeStringArray(buf, arr: data.livenessRoots)
+	// v55: stdlib's `__module_init_<n>` registry + write-set tracking +
+	// top-level var map. Lets cache-on user builds match cache-off byte-
+	// for-byte, both for dead-init pruning AND for `.data` section layout.
+	try writeStringArray(buf, arr: data.moduleInitFuncs)
+	try writeInitToStoredVarsMap(buf, m: data.initToStoredVars)
+	try writeTopLevelVarMap(project, buf: buf, m: data.topLevelVars)
 	try writeGenericFunctionImplicitArityMap(buf, m: data.genericFunctionImplicitArity)
 	try writeStaticRdataValueMap(buf, m: data.staticRdataValues)
 	// Cache v50 (J.4c): stdlib-side extension metadata. Written before the
@@ -1446,6 +1479,16 @@ function decodeStdlibCache(project Project, buf ByteArray, target Target, expect
 	let (lr, pLr) = try readStringArray(buf, offset: pos)
 	pos = pLr
 	data.livenessRoots = lr
+	// v55: moduleInitFuncs + initToStoredVars + topLevelVars
+	let (mif, pMif) = try readStringArray(buf, offset: pos)
+	pos = pMif
+	data.moduleInitFuncs = mif
+	let (itsv, pItsv) = try readInitToStoredVarsMap(buf, offset: pos)
+	pos = pItsv
+	data.initToStoredVars = itsv
+	let (tlv, pTlv) = try readTopLevelVarMap(project, buf: buf, offset: pos)
+	pos = pTlv
+	data.topLevelVars = tlv
 	let (gfia, pGfia) = try readGenericFunctionImplicitArityMap(buf, offset: pos)
 	pos = pGfia
 	data.genericFunctionImplicitArity = gfia
@@ -2030,6 +2073,23 @@ function captureRegistries(project Project, data StdlibCacheData)
 		data.livenessRoots.push(r)
 	end 'eachRoot'
 
+	// v55: stdlib's __module_init_<n> registry + per-init write-set +
+	// top-level var map so cache-on user builds match cache-off behavior
+	// for dead-init pruning AND for `.data` section layout.
+	for n in project.moduleInitFuncs 'eachInit'
+		data.moduleInitFuncs.push(n)
+	end 'eachInit'
+	for (initName, vars) in project.initToStoredVars 'eachInitVars'
+		var copiedVars = StoredVarNameSet.create()
+		for v in vars 'eachVar'
+			copiedVars.insert(v)
+		end 'eachVar'
+		try data.initToStoredVars.insert(initName, value: copiedVars) otherwise ignore
+	end 'eachInitVars'
+	for (varName, info) in project.topLevelVars 'eachTopVar'
+		try data.topLevelVars.insert(varName, value: info) otherwise ignore
+	end 'eachTopVar'
+
 	for (name, arity) in project.genericFunctionImplicitArity 'eachArity'
 		try data.genericFunctionImplicitArity.insert(name, value: arity) otherwise ignore
 	end 'eachArity'
@@ -2317,6 +2377,23 @@ function restoreRegistries(project Project, data StdlibCacheData)
 	for r in data.livenessRoots 'eachRoot'
 		project.livenessRoots.push(r)
 	end 'eachRoot'
+
+	// v55: restore stdlib's __module_init_<n> registry + per-init
+	// write-set + top-level var map so the user pipeline's lowering and
+	// dead-init prune see the same state as a cache-off build.
+	for n in data.moduleInitFuncs 'eachInit'
+		project.moduleInitFuncs.push(n)
+	end 'eachInit'
+	for (initName, vars) in data.initToStoredVars 'eachInitVars'
+		var copiedVars = StoredVarNameSet.create()
+		for v in vars 'eachVar'
+			copiedVars.insert(v)
+		end 'eachVar'
+		try project.initToStoredVars.insert(initName, value: copiedVars) otherwise ignore
+	end 'eachInitVars'
+	for (varName, info) in data.topLevelVars 'eachTopVar'
+		try project.topLevelVars.insert(varName, value: info) otherwise ignore
+	end 'eachTopVar'
 
 	// Phase 11.4: replay the generic-function implicit-arity map so the
 	// per-function lowering can decide synthetic-arg-append at every call
@@ -2983,6 +3060,72 @@ function readGenericFunctionImplicitArityMap(buf ByteArray, offset ByteOffset) r
 	end 'eachEntry'
 	return (m, pos)
 end 'readGenericFunctionImplicitArityMap'
+
+// --- TopLevelVarMap (v55) ---
+
+function writeTopLevelVarMap(project Project, buf ByteArray, m TopLevelVarMap) throws CacheCorruption
+	writeDword(buf, value: m.count())
+	for (name, info) in m 'eachVar'
+		try writeString(buf, s: name)
+		try writeMaxonType(project, buf: buf, t: info.slotType)
+		writeQword(buf, value: info.initialValue)
+		writeVisibility(buf, v: info.visibility)
+		try writeFilePath(buf, p: info.sourceFilePath)
+	end 'eachVar'
+end 'writeTopLevelVarMap'
+
+function readTopLevelVarMap(project Project, buf ByteArray, offset ByteOffset) returns (TopLevelVarMap, ByteOffset) throws CacheCorruption
+	let count = readDword(buf, offset: offset)
+	var pos = offset + 4
+	var m = TopLevelVarMap.create()
+	for _ in 0 upto count 'eachVar'
+		let (name, p1) = try readString(buf, offset: pos)
+		pos = p1
+		let (slotType, p2) = try readMaxonType(project, buf: buf, offset: pos)
+		pos = p2
+		let initialValue = readQword(buf, offset: pos) as IntConstant
+		pos = pos + 8
+		let (visibility, p3) = try readVisibility(buf, offset: pos)
+		pos = p3
+		let (sourceFilePath, p4) = try readFilePath(buf, offset: pos)
+		pos = p4
+		try m.insert(name, value: TopLevelVarInfo.create(name, slotType: slotType, initialValue: initialValue, visibility: visibility, sourceFilePath: sourceFilePath)) otherwise ignore
+	end 'eachVar'
+	return (m, pos)
+end 'readTopLevelVarMap'
+
+// --- InitToStoredVarsMap (v55) ---
+
+function writeInitToStoredVarsMap(buf ByteArray, m InitToStoredVarsMap) throws CacheCorruption
+	writeDword(buf, value: m.count())
+	for (initName, vars) in m 'eachInit'
+		try writeString(buf, s: initName)
+		writeDword(buf, value: vars.count())
+		for varName in vars 'eachVar'
+			try writeString(buf, s: varName)
+		end 'eachVar'
+	end 'eachInit'
+end 'writeInitToStoredVarsMap'
+
+function readInitToStoredVarsMap(buf ByteArray, offset ByteOffset) returns (InitToStoredVarsMap, ByteOffset) throws CacheCorruption
+	let count = readDword(buf, offset: offset)
+	var pos = offset + 4
+	var m = InitToStoredVarsMap.create()
+	for _ in 0 upto count 'eachInit'
+		let (initName, p1) = try readString(buf, offset: pos)
+		pos = p1
+		let varCount = readDword(buf, offset: pos)
+		pos = pos + 4
+		var vars = StoredVarNameSet.create()
+		for _ in 0 upto varCount 'eachVar'
+			let (varName, p2) = try readString(buf, offset: pos)
+			pos = p2
+			vars.insert(varName)
+		end 'eachVar'
+		try m.insert(initName, value: vars) otherwise ignore
+	end 'eachInit'
+	return (m, pos)
+end 'readInitToStoredVarsMap'
 
 // --- StaticRdataValueMap ---
 

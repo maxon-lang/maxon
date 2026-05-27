@@ -569,6 +569,23 @@ function patchMrtStartWithModuleInits(module StdModule, project Project)
 	if project.moduleInitFuncs.count() == 0 'noInits'
 		return
 	end 'noInits'
+	// Skip the whole patch path when every entry is a placeholder reserved
+	// by `seedModuleInitFuncsFromLivenessRoots`. Without this check, the
+	// scan + ValueId allocation in `insertModuleInitCalls` still runs (even
+	// though no `call` op gets inserted), and the heap-allocated ValueIdRef
+	// it constructs perturbs downstream id assignment — making cache-on
+	// binaries byte-diverge from cache-off binaries that filter the same
+	// dead inits out of `moduleInitFuncs` entirely.
+	var hasReal = false
+	for n in project.moduleInitFuncs 'checkAny'
+		if not n.isEmpty() 'real'
+			hasReal = true
+			break
+		end 'real'
+	end 'checkAny'
+	if not hasReal 'allPlaceholders'
+		return
+	end 'allPlaceholders'
 	for func in module.functions 'findStart'
 		if func.name != "mrt_start" 'notStart'
 			continue
@@ -609,6 +626,13 @@ function insertModuleInitCalls(module StdModule, func IrFunction, block IrBlock,
 	let valueIdRef = ValueIdRef.create(scanMaxValueId(func, module: module) + 1)
 	var insertAt = mainCallPos
 	for name in project.moduleInitFuncs 'eachInit'
+		// Placeholder slots reserved by `seedModuleInitFuncsFromLivenessRoots`
+		// to push the user parser's `__module_init_<n>` numbering past the
+		// stdlib init names baked into the cached function table. They carry
+		// no callable function — skip them.
+		if name.isEmpty() 'placeholder'
+			continue
+		end 'placeholder'
 		let resultId = allocValueId(valueIdRef)
 		let opIdx = module.ops.count()
 		module.ops.push(StdOp.call(StdCallOp.call(resultId, callee: name, argIds: ValueIdArray.create())))

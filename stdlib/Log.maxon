@@ -1,0 +1,64 @@
+/// Lightweight trace event capture for stdlib instrumentation.
+/// 
+/// This is not a full logger — there are no severity levels, no categories, no
+/// output streams. It exists so stdlib code (currently: sort algorithms) can
+/// emit stable dotted keys at decision points, and tests can verify that the
+/// correct internal path executed.
+/// 
+/// Usage from stdlib code:
+///   Log.trace("partitionMerge.fire")
+/// 
+/// Usage from tests:
+///   Log.startCapture()
+///   arr.sort()
+///   let captured = Log.stopCapture()
+///   if not Log.fired(captured, key: "partitionMerge.fire") 'missing'
+///     panic("partition-merge path did not engage on random input")
+///   end 'missing'
+/// 
+/// Capture is off by default. When off, trace() is a single bool load + branch
+/// and returns immediately. Programs that never reference any `Log.*` function
+/// pay nothing: the dead-top-level-var pass drops `capturing` and `captured`
+/// along with their initializer's `__module_init` chain.
+/// @category System
+typealias TraceKeyArray = Array with String
+
+var capturing = false
+var captured = TraceKeyArray.create()
+
+export type Log
+	/// Emit a trace key. No-op when capture is off.
+	/// Pass a stable identifier like "partitionMerge.fire" — keys are matched
+	/// literally by tests, so they should not embed run-specific data.
+	export static function trace(key String)
+		if capturing 'on'
+			captured.push(key)
+		end 'on'
+	end 'trace'
+
+	/// Begin recording trace keys. Discards any previously captured keys.
+	export static function startCapture()
+		captured.clear()
+		capturing = true
+	end 'startCapture'
+
+	/// Stop recording and return the captured keys in emission order.
+	export static function stopCapture() returns TraceKeyArray
+		capturing = false
+		let result = captured.clone()
+		captured.clear()
+		return result
+	end 'stopCapture'
+
+	/// Predicate: did `key` appear at least once in `capturedKeys`?
+	/// Tests assert on this — never on counts or payloads — so a refactor that
+	/// legitimately changes how often a path fires does not break the suite.
+	export static function fired(capturedKeys TraceKeyArray, key String) returns bool
+		for emittedKey in capturedKeys 'scan'
+			if emittedKey == key 'match'
+				return true
+			end 'match'
+		end 'scan'
+		return false
+	end 'fired'
+end 'Log'

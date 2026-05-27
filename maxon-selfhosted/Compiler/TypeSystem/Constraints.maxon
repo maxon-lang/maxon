@@ -28,11 +28,17 @@
 // and call into this file.
 
 // Built-in primitive types automatically conform to a small core of
-// universal traits. Hard-coded for now — every built-in is one of (bool,
-// int, float, String) and the trait surface is small enough that a name
-// switch is clearer than a registration table. Step 7+ may grow this when
-// it surfaces additional builtin conformances (e.g. tuple types adopting
-// Hashable when their fields are Hashable).
+// universal traits. Hard-coded for now — the trait surface is small enough
+// that a name switch is clearer than a registration table. Step 7+ may grow
+// this when it surfaces additional builtin conformances (e.g. tuple types
+// adopting Hashable when their fields are Hashable).
+//
+// All numeric/boolean primitives (bool, int, float, byte) implement
+// Equatable, Hashable, Comparable, Cloneable. String is the exception:
+// it implements Equatable, Hashable, Cloneable (declared in
+// `stdlib/String.maxon`) but NOT Comparable — there's no `String.compare`
+// method, and unicode ordering isn't a single well-defined operation.
+// `stringConformsTo` overrides the universal builtin set to reflect this.
 function builtinConformsTo(interfaceName String) returns bool
 	if interfaceName == "Equatable" 'eq'
 		return true
@@ -48,6 +54,18 @@ function builtinConformsTo(interfaceName String) returns bool
 	end 'cloneable'
 	return false
 end 'builtinConformsTo'
+
+// String-specific conformance set. String is Equatable/Hashable/Cloneable
+// but NOT Comparable — see `builtinConformsTo` comment. Without splitting
+// this out, generic helpers constrained by `where T is Comparable` would
+// silently accept String and then trip "no witness table for (String,
+// Comparable)" at lowering time.
+function stringConformsTo(interfaceName String) returns bool
+	if interfaceName == "Comparable" 'noCompare'
+		return false
+	end 'noCompare'
+	return builtinConformsTo(interfaceName)
+end 'stringConformsTo'
 
 // Top-level dispatcher. Every consumer that asks "does this type satisfy
 // this interface" calls through here; the per-arm helpers below specialize
@@ -66,7 +84,7 @@ export function typeConformsTo(project Project, t MaxonType, interfaceName Strin
 		boolean gives builtinConformsTo(interfaceName)
 		integer gives builtinConformsTo(interfaceName)
 		float gives builtinConformsTo(interfaceName)
-		string gives builtinConformsTo(interfaceName)
+		string gives stringConformsTo(interfaceName)
 		named(id) gives namedConformsTo(project, id: id, interfaceName: interfaceName)
 		genericInstance(gid) gives genericInstanceConformsTo(project, gid: gid, interfaceName: interfaceName)
 		typeParameter(id) gives typeParamConformsTo(project, id: id, interfaceName: interfaceName)

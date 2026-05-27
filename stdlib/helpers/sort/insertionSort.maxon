@@ -1,0 +1,45 @@
+// Stage 1 insertion sort: in-place sort of `arr[lo:hi)` using `cmp`.
+//
+// Routed from all four `Array.sort` / `Array.sortUnstable` entries while the
+// higher algorithmic layers (small-sort networks, pdqsort, glidesort) are
+// stood up incrementally. Future stages keep insertion sort for small slices
+// and route bigger inputs to specialized algorithms.
+//
+// Lives in a stand-alone extension so the algorithm bodies stay out of the
+// already-large Array.maxon. Methods are not `export`ed — they are private
+// helpers reachable only from sister extensions defined inside the stdlib.
+//
+// Emits `insertionSort.run` via Log so dispatch tests can confirm the
+// insertion path engaged for a given input.
+
+export extension Array
+	typealias SortIndex = int(0 to u64.max)
+	typealias SortComparator = function(Element, Element) returns Ordering
+
+	// In-place insertion sort over the closed-open range [lo, hi).
+	// Stable: equal elements keep relative order because the shift loop
+	// stops as soon as the predecessor is not strictly greater than the
+	// pending element (cmp returning `equalTo` does not trigger a shift).
+	export function internalInsertionSortRange(lo SortIndex, hi SortIndex, cmp SortComparator)
+		Log.trace("insertionSort.run")
+		if hi <= lo + 1 'trivial'
+			return
+		end 'trivial'
+		var i = lo + 1
+		while i < hi 'outer'
+			let pending = try managed.get(i) otherwise panic("internalInsertionSortRange: pending get OOB; invariant i < hi <= managed.length()")
+			var j = i
+			while j > lo 'inner'
+				let prev = try managed.get(j - 1) otherwise panic("internalInsertionSortRange: prev get OOB; invariant j > lo >= 0")
+				let ord = cmp(prev, pending)
+				if ord != Ordering.greaterThan 'placed'
+					break
+				end 'placed'
+				try managed.set(j, value: prev) otherwise panic("internalInsertionSortRange: shift set OOB; invariant j <= i < hi")
+				j = j - 1
+			end 'inner'
+			try managed.set(j, value: pending) otherwise panic("internalInsertionSortRange: final set OOB; invariant j >= lo")
+			i = i + 1
+		end 'outer'
+	end 'internalInsertionSortRange'
+end 'Array'

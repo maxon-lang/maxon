@@ -3780,9 +3780,15 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     var typealiasPositions = new List<int>();
     var functionPositions = new List<int>();
 
-    // Scan to find top-level typealias and function positions within the block
+    // Scan to find top-level typealias and function positions within the block.
+    // Depth tracking must distinguish block-opener `if`/`else` from inline
+    // ternary (`x if cond else y`); otherwise an extension method whose body
+    // contains a postfix ternary inflates depth and hides every sibling
+    // declaration registered after it. Mirrors the rules in SkipToMatchingEnd.
     int scanPos = _pos;
     int depth = 1;
+    bool prevWasNewline = true; // first scanned token sits at statement start
+    var prevTokenType = TokenType.Newline;
     while (scanPos < _tokens.Count && depth > 0) {
       var tokenType = _tokens[scanPos].Type;
       if (depth == 1) {
@@ -3794,22 +3800,40 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
           functionPositions.Add(scanPos);
         }
       }
+      var next = scanPos + 1 < _tokens.Count ? _tokens[scanPos + 1].Type : TokenType.Eof;
       if (tokenType == TokenType.Function || tokenType == TokenType.If
           || tokenType == TokenType.While || tokenType == TokenType.For
           || tokenType == TokenType.Match) {
         // `function(` (no name between `function` and `(`) is a function-type
         // or lambda literal, not a block-opening declaration — don't bump depth.
-        bool isFunctionLiteral = tokenType == TokenType.Function
-          && scanPos + 1 < _tokens.Count && _tokens[scanPos + 1].Type == TokenType.LeftParen;
-        if (!isFunctionLiteral) depth++;
+        bool isCaseLabel = next is TokenType.Then or TokenType.Gives or TokenType.To or TokenType.Upto;
+        if (tokenType == TokenType.Function && next == TokenType.LeftParen)
+          isCaseLabel = true;
+        // Postfix ternary `if` is mid-expression; block `if` only appears at
+        // statement start (after a newline) or directly after `else`.
+        if (tokenType == TokenType.If && !prevWasNewline && prevTokenType != TokenType.Else)
+          isCaseLabel = true;
+        if (!isCaseLabel) depth++;
       } else if (tokenType == TokenType.Else) {
+        if (next is TokenType.Then or TokenType.Gives or TokenType.To or TokenType.Upto) {
+          // Match case label — not a block opener.
+        } else if (next == TokenType.If) {
+          // `else if` — the upcoming `if` will bump depth.
+        } else if (prevTokenType != TokenType.CharacterLiteral) {
+          // Block `else` always follows `end 'label'`; otherwise this is the
+          // tail of an inline `<true> if <cond> else <false>` ternary.
+        } else {
+          depth++;
+        }
+      } else if (tokenType == TokenType.Otherwise && next is TokenType.CharacterLiteral or TokenType.LeftParen) {
         depth++;
-      } else if (tokenType == TokenType.Otherwise && scanPos + 1 < _tokens.Count
-                 && _tokens[scanPos + 1].Type == TokenType.CharacterLiteral) {
+      } else if (tokenType == TokenType.Try && next == TokenType.CharacterLiteral) {
         depth++;
       } else if (tokenType == TokenType.End) {
         depth--;
       }
+      prevWasNewline = tokenType == TokenType.Newline;
+      prevTokenType = tokenType;
       scanPos++;
     }
     int endPos = scanPos;
@@ -8737,18 +8761,31 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       var kind = DetermineValueKind(initValue);
       var rangedTypeName = _lastRangedTypeName;
       _lastRangedTypeName = null;
+      // For TypeParameter-kinded RHS values, also recover the type-param name
+      // (e.g. "Element") so the let-binding can dispatch interface methods on
+      // the value when the enclosing extension's where-clause makes the
+      // constraining interface available. Without this, `let a = try
+      // arr.get(0) ...` strips type info and `a.compare(b)` fails to resolve
+      // even inside `extension Array where Element is Comparable`.
+      string? typeParamName = null;
       // Preserve TypeParameter kind so monomorphization can resolve the concrete type
       if (kind == MaxonValueKind.Integer) {
         var lastOp = _currentBlock!.Operations.LastOrDefault();
         if (lastOp is MaxonVarRefOp { ValueKind: MaxonValueKind.TypeParameter } varRefOp
             && varRefOp.Result == initValue) {
           kind = MaxonValueKind.TypeParameter;
+          // Recover type-param name from the source var's recorded structTypeName.
+          if (_variables.TryGet(varRefOp.VarName) is { StructTypeName: { } srcParam }) {
+            typeParamName = srcParam;
+          }
         } else if (lastOp is MaxonCallOp { ResultKind: MaxonValueKind.TypeParameter } callOp
             && callOp.Result == initValue) {
           kind = MaxonValueKind.TypeParameter;
+          typeParamName = callOp.ResultStructTypeName;
         } else if (lastOp is MaxonManagedMemGetOp { ResultKind: MaxonValueKind.TypeParameter } memGetOp
             && memGetOp.Result == initValue) {
           kind = MaxonValueKind.TypeParameter;
+          typeParamName = memGetOp.TypeParamName;
         }
       }
       // Use Float32 kind when assigning to an F32-backed ranged type
@@ -8758,7 +8795,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         kind = MaxonValueKind.Float32;
       }
       _currentBlock!.AddOp(new MaxonAssignOp(name, initValue, isDeclaration: true, isMutable: isMutable, kind));
-      _variables.Declare(name, kind, isMutable, initValue, _currentBlock!, structTypeName: rangedTypeName);
+      _variables.Declare(name, kind, isMutable, initValue, _currentBlock!, structTypeName: rangedTypeName ?? typeParamName);
     }
   }
 
@@ -9980,17 +10017,27 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       }
       case "get": {
         var index = args[1];
-        var (elementKind, _) = GetManagedMemElementKind(structTypeName);
+        var (elementKind, elementTypeParamName) = GetManagedMemElementKind(structTypeName);
         // Struct/enum elements are heap-managed; lowering creates and owns the heap object.
         // Use the concrete type name stripped of the "__ManagedMemory_" prefix — the same
         // string the original MaxonManagedMemGetOp.StructElementTypeName carried.
+        // For TypeParameter element kinds, propagate the type-param name (e.g. "Element")
+        // as the result's struct-type-name so downstream `let x = try arr.get(i) otherwise ...`
+        // bindings keep enough type info to dispatch method calls on `x` through the
+        // type-param's where-clause interfaces (e.g., `x.compare(y)` when Element is Comparable).
         var (getKind, getStructName) = ManagedElementCallResultShape(structTypeName, elementKind);
+        if (getKind == MaxonValueKind.TypeParameter && getStructName == null) {
+          getStructName = elementTypeParamName;
+        }
         return (true, EmitBuiltinTryCall("__managed_mem_get", [selfValue, index], getKind, getStructName, mmErr));
       }
       case "remove": {
         var index = args[1];
-        var (elementKind, _) = GetManagedMemElementKind(structTypeName);
+        var (elementKind, elementTypeParamName) = GetManagedMemElementKind(structTypeName);
         var (remKind, remStructName) = ManagedElementCallResultShape(structTypeName, elementKind);
+        if (remKind == MaxonValueKind.TypeParameter && remStructName == null) {
+          remStructName = elementTypeParamName;
+        }
         return (true, EmitBuiltinTryCall("__managed_mem_remove", [selfValue, index], remKind, remStructName, mmErr));
       }
       case "set": {
@@ -19708,6 +19755,14 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         var paramOp = new MaxonParamOp(i, paramNames[i], backingKind);
         _currentBlock.AddOp(paramOp);
         _variables.Declare(paramNames[i], MaxonValueKind.Enum, false, paramOp.Result, _currentBlock, OwnershipFlags.IsParam, structTypeName: enumType.Name);
+      } else if (paramTypes[i] is IrTypeParameterType tpt) {
+        // Closure parameter typed as a generic type parameter (e.g. `function(x Element, y Element) ...`
+        // inside `extension Array where Element is Comparable`). Record the type-param name
+        // so method calls on the parameter inside the closure body can dispatch through
+        // the surrounding extension's where-constraints (e.g. `x.compare(y)` → Comparable).
+        var paramOp = new MaxonParamOp(i, paramNames[i], MaxonValueKind.TypeParameter);
+        _currentBlock.AddOp(paramOp);
+        _variables.Declare(paramNames[i], MaxonValueKind.TypeParameter, false, paramOp.Result, _currentBlock, OwnershipFlags.IsParam, structTypeName: tpt.ParameterName);
       } else {
         var pKind = paramTypes[i].ToValueKind();
         var paramOp = new MaxonParamOp(i, paramNames[i], pKind);

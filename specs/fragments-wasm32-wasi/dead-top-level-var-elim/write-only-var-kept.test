@@ -1,0 +1,33 @@
+// Test: write-only-var-kept
+var writeOnly = 0
+var verifier = 17
+
+function main() returns ExitCode
+	writeOnly = 99
+	return verifier - 17
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 99 : i64
+    %1 = mir.global_addr @__data_writeOnly
+    mir.store %0, %1, 0 width: qword
+    %2 = mir.global_addr @__data_verifier
+    %3 = mir.load %2, 0 width: qword
+    %4 = mir.mov_imm 17 : i64
+    %5 = mir.sub.i64 %3, %4
+    %6 = mir.mov_imm 255 : i64
+    %7 = mir.cmp ugt, %5, %6
+    mir.cond_br %7 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %8 = mir.global_addr @__panic_msg_0
+    %9 = mir.call @mrt_panic(%8)
+  __range_ok_0:
+    mir.ret %5
+  }
+}
+---

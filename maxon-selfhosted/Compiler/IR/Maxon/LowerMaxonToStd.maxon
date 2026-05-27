@@ -9254,14 +9254,19 @@ function collectFunctionWitnessConstraints(project Project, func IrFunction) ret
 	// body using `item == element` would fail witness lookup and (post-Stream
 	// A E3005 emission) report "type parameter not constrained" even though
 	// the user did constrain it.
-	// Overloaded extension methods get a `$<paramTypeName>` suffix in the
-	// IrFunction name (e.g. `Array.contains$Element`, `Array.contains$ElementArray`).
-	// `project.extensionMethodWhereClauses` is keyed by the bare
-	// `<Type>.<method>` form the parser captured during extension-body parsing,
-	// so strip the suffix before lookup. Mirror in TypeResolution's
-	// `stripFunctionOverloadSuffix`.
-	let bareName = stripOverloadSuffix(func.name)
-	if let extClauses = try project.extensionMethodWhereClauses.get(bareName) 'haveExtWhere'
+	//
+	// `extensionMethodWhereClauses` is keyed by the function's actual
+	// registered name (which may be overload-mangled, e.g. `Array.sort$Self`
+	// vs `Array.sort$SortComparator`). The parser inserts under the
+	// post-mangling key and `rekeyExistingFunction` migrates the existing
+	// overload's entry when a sibling forces re-mangling. The lookup uses
+	// the function's exact name so two overloads in different extensions
+	// with different where-clauses don't share an entry — without per-
+	// overload keying, the no-Comparable comparator overload of `Array.sort`
+	// would inherit the Comparable overload's `where Element is Comparable`
+	// clause and demand a `(String, Comparable)` witness that
+	// `BuildWitnessTables` (correctly) never builds.
+	if let extClauses = try project.extensionMethodWhereClauses.get(func.name) 'haveExtWhere'
 		for i in 0 upto extClauses.count() 'eachExtClause'
 			let clause = try extClauses.get(i) otherwise panic("collectFunctionWitnessConstraints: extClauses.get OOB at {i}")
 			if whereClauseArrayContains(out, clause: clause) 'duplicate'
@@ -9272,25 +9277,6 @@ function collectFunctionWitnessConstraints(project Project, func IrFunction) ret
 	end 'haveExtWhere'
 	return out
 end 'collectFunctionWitnessConstraints'
-
-// Strip the `$<overloadDiscriminator>` suffix from a fully-qualified function
-// name. The parser appends this to disambiguate overloads (e.g.
-// `Array.contains$Element` vs `Array.contains$ElementArray`); registries
-// keyed by the unique-suffixed name need this when looked up against keys
-// that were recorded under the bare overload-shared form.
-function stripOverloadSuffix(name String) returns String
-	let bytes = name.toByteArray()
-	let dollarByte = 0x24
-	var i = 0
-	while i < bytes.count() 'scan'
-		let b = try bytes.get(i) otherwise panic("invariant: i < bytes.count() but get failed")
-		if b == dollarByte 'hit'
-			return byteSliceToString(bytes, startIndex: 0, endIndex: i)
-		end 'hit'
-		i = i + 1
-	end 'scan'
-	return name
-end 'stripOverloadSuffix'
 
 // J.4a prereq.5: append structurally-implied constraints that the source
 // doesn't write down explicitly but the language semantics guarantee.

@@ -847,6 +847,10 @@ arr.resize(50)                         // set length
 arr.clear()                            // remove all
 arr.first()                            // first element (throws)
 arr.last()                             // last element (throws)
+arr.sort()                             // in-place stable sort (Element is Comparable)
+arr.sortUnstable()                     // in-place unstable sort (Element is Comparable)
+arr.sort(cmp)                          // sort with comparator: function(Element, Element) returns Ordering
+arr.sortUnstable(cmp)                  // unstable sort with comparator
 ```
 
 ## Strings

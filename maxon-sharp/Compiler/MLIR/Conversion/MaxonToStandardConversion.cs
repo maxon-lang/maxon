@@ -295,7 +295,17 @@ public static partial class MaxonToStandardConversion {
             && block.Operations[oi + 1] is MaxonAssignOp assign
             && assign.Value.Id == resultId
             && assign.IsDeclaration
-            && !module.StackEligibleStructs.Contains(resultId.Value)) {
+            && !module.StackEligibleStructs.Contains(resultId.Value)
+            // Array-literal element slots (`__arr_<tag>.<i>`) must end up at
+            // contiguous stack offsets so `lea` + `memcpy` over `[rbp-N..rbp-N+count*8)`
+            // hits every element. Inlining a literal directly into one of these
+            // slots only works for the assign that fires last in source order
+            // (its slot is allocated AFTER all the in-between literal temps);
+            // for any earlier assign in the reversed `__arr_<tag>.<i--..0>` loop,
+            // the slot would land before the other temps, leaving a hole in
+            // the buffer. Skip inlining for `__arr_*` targets entirely so the
+            // copy path lays slots out contiguously.
+            && !assign.VarName.StartsWith("__arr_")) {
             inlineTargets[resultId.Value] = assign.VarName;
           }
         }

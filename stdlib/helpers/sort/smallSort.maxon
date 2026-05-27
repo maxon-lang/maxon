@@ -1,0 +1,121 @@
+// Stage 2 small-sort primitives.
+//
+// For very small slices (n ∈ {2, 4, 8}) a hardcoded sorting network beats
+// insertion sort because the comparator-shift loop has more branches and
+// memory traffic than a flat sequence of compare-and-swap pairs. Networks
+// of size 2, 4, and 8 are the standard cutoffs used by glidesort and
+// pdqsort; sizes between 9 and 32 fall through to insertion sort because
+// optimal networks for those sizes grow quickly without proportional gain.
+//
+// Public surface (called from `internalInsertionSortRange` once dispatched):
+//   - `smallSortRange(lo, hi, cmp)` — entry point that picks the right
+//     network or falls through to insertion sort.
+//
+// Trace keys emitted (Stage 1 dispatch tests assert on these):
+//   - `smallSort.network` — a fixed-size network ran (size 2, 4, or 8)
+//   - `smallSort.insertion` — insertion sort ran (n ∈ {3, 5, 6, 7, 9..32})
+
+export extension Array
+	// Unconditional swap of elements at positions i and j. Used by pdqsort's
+	// pivot-shuffle and heapsort extraction step where the swap is mandatory
+	// (no comparator needed). Avoids constructing a constant-returning
+	// closure as a workaround.
+	export function swap(i SortIndex, j SortIndex)
+		if i == j 'noOp'
+			return
+		end 'noOp'
+		let a = try managed.get(i) otherwise panic("swap: get OOB at i; caller must pre-bound i,j")
+		let b = try managed.get(j) otherwise panic("swap: get OOB at j; caller must pre-bound i,j")
+		try managed.set(i, value: b) otherwise panic("swap: set OOB at i")
+		try managed.set(j, value: a) otherwise panic("swap: set OOB at j")
+	end 'swap'
+
+	// Compare elements at positions i and j; if managed[i] > managed[j],
+	// swap them. The "branchless" property is a future optimization (would
+	// require a swap primitive on __ManagedMemory that bypasses the typed
+	// get/set refcount machinery); today this is a straight compare-and-swap
+	// built from get/set, which still has the right memory traffic profile
+	// for tiny slices.
+	export function compareAndSwap(i SortIndex, j SortIndex, cmp SortComparator)
+		let a = try managed.get(i) otherwise panic("compareAndSwap: get OOB at i; caller must pre-bound i,j")
+		let b = try managed.get(j) otherwise panic("compareAndSwap: get OOB at j; caller must pre-bound i,j")
+		let ord = cmp(a, b)
+		if ord != Ordering.greaterThan 'inOrder'
+			return
+		end 'inOrder'
+		try managed.set(i, value: b) otherwise panic("compareAndSwap: set OOB at i")
+		try managed.set(j, value: a) otherwise panic("compareAndSwap: set OOB at j")
+	end 'compareAndSwap'
+
+	// 2-element network: a single compare-and-swap.
+	function sortNetwork2(lo SortIndex, cmp SortComparator)
+		self.compareAndSwap(lo, j: lo + 1, cmp: cmp)
+	end 'sortNetwork2'
+
+	// 4-element sorting network: 5 compare-and-swap pairs, optimal depth 3.
+	// Sequence from Knuth's TAOCP Vol 3 §5.3.4 (Batcher's odd-even merge).
+	function sortNetwork4(lo SortIndex, cmp SortComparator)
+		self.compareAndSwap(lo + 0, j: lo + 1, cmp: cmp)
+		self.compareAndSwap(lo + 2, j: lo + 3, cmp: cmp)
+		self.compareAndSwap(lo + 0, j: lo + 2, cmp: cmp)
+		self.compareAndSwap(lo + 1, j: lo + 3, cmp: cmp)
+		self.compareAndSwap(lo + 1, j: lo + 2, cmp: cmp)
+	end 'sortNetwork4'
+
+	// 8-element sorting network: 19 compare-and-swap pairs, optimal depth 6.
+	// Sequence from Knuth's TAOCP Vol 3 §5.3.4 (Batcher's odd-even merge for
+	// n=8). Hardcoded layer-by-layer so a future codegen pass could lift
+	// independent pairs into SIMD.
+	function sortNetwork8(lo SortIndex, cmp SortComparator)
+		// Layer 1: adjacent pairs
+		self.compareAndSwap(lo + 0, j: lo + 1, cmp: cmp)
+		self.compareAndSwap(lo + 2, j: lo + 3, cmp: cmp)
+		self.compareAndSwap(lo + 4, j: lo + 5, cmp: cmp)
+		self.compareAndSwap(lo + 6, j: lo + 7, cmp: cmp)
+		// Layer 2: even-positioned pairs
+		self.compareAndSwap(lo + 0, j: lo + 2, cmp: cmp)
+		self.compareAndSwap(lo + 1, j: lo + 3, cmp: cmp)
+		self.compareAndSwap(lo + 4, j: lo + 6, cmp: cmp)
+		self.compareAndSwap(lo + 5, j: lo + 7, cmp: cmp)
+		// Layer 3: medians within each half
+		self.compareAndSwap(lo + 1, j: lo + 2, cmp: cmp)
+		self.compareAndSwap(lo + 5, j: lo + 6, cmp: cmp)
+		// Layer 4: cross-half corners
+		self.compareAndSwap(lo + 0, j: lo + 4, cmp: cmp)
+		self.compareAndSwap(lo + 3, j: lo + 7, cmp: cmp)
+		// Layer 5: cross-half inner
+		self.compareAndSwap(lo + 1, j: lo + 5, cmp: cmp)
+		self.compareAndSwap(lo + 2, j: lo + 6, cmp: cmp)
+		// Layer 6: final ordering
+		self.compareAndSwap(lo + 1, j: lo + 4, cmp: cmp)
+		self.compareAndSwap(lo + 3, j: lo + 6, cmp: cmp)
+		self.compareAndSwap(lo + 2, j: lo + 4, cmp: cmp)
+		self.compareAndSwap(lo + 3, j: lo + 5, cmp: cmp)
+		self.compareAndSwap(lo + 3, j: lo + 4, cmp: cmp)
+	end 'sortNetwork8'
+
+	// Entry: pick the right network or fall through to insertion sort.
+	// The 9..32 cutoff comes from glidesort/pdqsort — beyond 8 elements
+	// the network's hardcoded comparison count outpaces insertion sort's
+	// adaptive shifts on already-mostly-sorted input.
+	export function smallSortRange(lo SortIndex, hi SortIndex, cmp SortComparator)
+		let n = hi - lo
+		if n == 2 'n2'
+			Log.trace("smallSort.network")
+			self.sortNetwork2(lo, cmp: cmp)
+			return
+		end 'n2'
+		if n == 4 'n4'
+			Log.trace("smallSort.network")
+			self.sortNetwork4(lo, cmp: cmp)
+			return
+		end 'n4'
+		if n == 8 'n8'
+			Log.trace("smallSort.network")
+			self.sortNetwork8(lo, cmp: cmp)
+			return
+		end 'n8'
+		Log.trace("smallSort.insertion")
+		self.internalInsertionSortRange(lo, hi: hi, cmp: cmp)
+	end 'smallSortRange'
+end 'Array'

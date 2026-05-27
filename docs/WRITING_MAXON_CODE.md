@@ -683,6 +683,10 @@ arr.pop()                                 // remove last (throws)
 arr.insert(0, value: 99)                  // insert at index
 arr.remove(at: 0)                         // remove at index (throws)
 arr.clear()                               // remove all
+arr.sort()                                // in-place stable sort (Element is Comparable)
+arr.sortUnstable()                        // in-place unstable sort (Element is Comparable)
+arr.sort(cmp)                             // sort with comparator: function(Element, Element) returns Ordering
+arr.sortUnstable(cmp)                     // unstable sort with comparator
 ```
 
 ### Maps

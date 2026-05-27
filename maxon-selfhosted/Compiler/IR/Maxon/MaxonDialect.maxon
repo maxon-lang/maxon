@@ -243,6 +243,30 @@ export function chaseTypealiasToFunctionType(project Project, t MaxonType) retur
 			end 'structInnerIsFn'
 		end 'structInnerHit'
 	end 'eachStruct'
+	// Parse-time fallback: extension bodies merge their inner typealiases
+	// into `project.unresolvedStructTypes[target].innerAliases` immediately
+	// (see `mergeExtensionInnerAliases`), but the parsed entries land as
+	// `UnresolvedTypeExpr.functionAlias(target)` rather than a fully-
+	// resolved MaxonType. Probing unresolved entries here lets a sibling
+	// file's `cmp(a, b)` call recognize `cmp` as a function value before
+	// the type-resolution pass runs to promote the alias.
+	for (_, unresolvedStruct) in project.unresolvedStructTypes 'eachUnresolved'
+		if let expr = try unresolvedStruct.innerAliases.get(aliasName) 'unresolvedHit'
+			let chased = match expr 'extract'
+				functionAlias(target) gives target
+				rangedInt gives t
+				rangedFloat gives t
+				boolPrim gives t
+				aliasName gives t
+				genericAlias gives t
+				sizedGenericAlias gives t
+				invalid gives t
+			end 'extract'
+			if isFunctionMaxonType(chased) 'isFn'
+				return chased
+			end 'isFn'
+		end 'unresolvedHit'
+	end 'eachUnresolved'
 	return t
 end 'chaseTypealiasToFunctionType'
 
@@ -2447,10 +2471,24 @@ export function resolveOverloadedCallee(project Project, bareQualifiedName Strin
 		let userParamIdx = signatureFirstUserParamIndex(sig)
 		let rawParamType = try sig.paramTypes.get(userParamIdx) otherwise continue
 		let paramType = chaseParamTypeThroughInnerAlias(project, t: rawParamType, enclosingType: enclosingForChase)
-		if not paramTypeMentionsTypeParam(project, t: paramType) 'concreteOnly'
+		let variantShape = paramTypeShape(paramType)
+		// Two acceptance paths:
+		//   1. The variant's first param mentions a type parameter (`Element`,
+		//      `Array with Element`, etc.). Accept when shapes match, fall
+		//      back to first-such variant otherwise.
+		//   2. The chased param is a function type that matches the call's
+		//      function-typed argument. This catches `function sort(cmp
+		//      SortComparator)` where `SortComparator = function(Element,
+		//      Element) returns Ordering` — the typealias chases to a
+		//      function type, but `paramTypeMentionsTypeParam` doesn't peek
+		//      inside function shapes. Without this arm, a literal function
+		//      passed as `arr.sort(myCmp)` mangles to `$_` while the variant
+		//      registered as `Array.sort$SortComparator` never matches.
+		let isGenericMatch = paramTypeMentionsTypeParam(project, t: paramType)
+		let isFunctionMatch = variantShape == 6 and argShape == 6
+		if not (isGenericMatch or isFunctionMatch) 'concreteOnly'
 			continue
 		end 'concreteOnly'
-		let variantShape = paramTypeShape(paramType)
 		if variantShape == argShape 'shapeMatch'
 			return v
 		end 'shapeMatch'
