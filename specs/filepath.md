@@ -595,7 +595,7 @@ test.txt
 <!-- test: filepath-from-throws-invalid -->
 ```maxon
 function main() returns ExitCode
-	let p = try FilePath.from("https://example.com/path") otherwise (e) 'err'
+	let p = try FilePath.from("https://example.com/path") otherwise 'err'
 		print("caught error\n")
 		return 0
 	end 'err'

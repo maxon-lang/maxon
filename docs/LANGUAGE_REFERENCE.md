@@ -3491,11 +3491,16 @@ The error is bound to the variable `e` as a typed enum value, allowing you to ma
 ```maxon
 function processFile(path String)
 		try readFile(path) otherwise (err) 'handler'
-				// err contains the FileError value
-				print("Failed to read file")
+				match err 'kind'
+						notFound then print("File not found")
+						permissionDenied then print("Permission denied")
+						alreadyExists then print("Already exists")
+				end 'kind'
 		end 'handler'
 end 'processFile'
 ```
+
+The `(e)` binding is a regular local variable, so the standard unused-variable check (E3012) rejects a binding that is declared but never read inside the handler. If you only need to detect failure and have no use for the typed error value, drop the binding and use the bare block form `try expr otherwise 'handler' ... end 'handler'` instead.
 
 ### Error Propagation
 
@@ -3730,7 +3735,10 @@ function main() returns ExitCode
 		
 		// Handle with error binding
 		try parseNumber("") otherwise (e) 'handler'
-				print("Parse error occurred")
+				match e 'kind'
+						invalidSyntax then print("Invalid syntax")
+						unexpectedEnd then print("Unexpected end of input")
+				end 'kind'
 		end 'handler'
 		
 		return num1

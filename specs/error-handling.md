@@ -404,7 +404,9 @@ end 'mayFail'
 function main() returns ExitCode
 	var caught = 0
 	try mayFail() otherwise (e) 'handler'
-		caught = 42
+		match e 'kind'
+			failed then caught = 42
+		end 'kind'
 	end 'handler'
 	return caught
 end 'main'
@@ -693,7 +695,9 @@ end 'mayFail'
 function main() returns ExitCode
 	var result = 0
 	try mayFail(false) otherwise (e) 'handler'
-		result = 99
+		match e 'kind'
+			failed then result = 99
+		end 'kind'
 	end 'handler'
 	return result
 end 'main'

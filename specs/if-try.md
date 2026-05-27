@@ -402,7 +402,10 @@ function main() returns ExitCode
 	if try mayFail(1) 'check'
 		result = 100
 	end 'check' else (e) 'err'
-		result = 50
+		match e 'kind'
+			first then result = 50
+			second then result = 60
+		end 'kind'
 	end 'err'
 	return result
 end 'main'

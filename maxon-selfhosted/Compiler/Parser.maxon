@@ -5101,7 +5101,7 @@ export type Parser
 	// union pointer; bind `e` directly to it). Pushes a fresh scope so the
 	// binding is local to the handler body — the caller must `scope.popScope()`
 	// at handler-end.
-	function declareErrorBindingInBlock(targetBlock IrBlock, errorFlagName ByteArray, bindingName String, calleeThrowsTypeName ThrowsClause, range SourceRange) throws ParserError
+	function declareErrorBindingInBlock(targetBlock IrBlock, errorFlagName ByteArray, bindingName String, bindingLine LineNumber, bindingColumn ColumnNumber, calleeThrowsTypeName ThrowsClause, range SourceRange) throws ParserError
 		var bindingType = MaxonType.integer
 		var throwsIsUnion = false
 		if let throwsName = try throwsClauseName(calleeThrowsTypeName) 'haveThrowsName'
@@ -5110,6 +5110,7 @@ export type Parser
 		end 'haveThrowsName'
 		scope.pushScope()
 		let bindingSlot = scope.declare(bindingName, varType: bindingType, mutable: false)
+		localVarLocations.push(ParamLocation.create(bindingName, line: bindingLine, column: bindingColumn))
 		var bindingValueName = ByteArray.create()
 		if throwsIsUnion 'isUnion'
 			bindingValueName = errorFlagName
@@ -6465,6 +6466,8 @@ export type Parser
 				// try-condition branch, since bool conditions have no error
 				// value to bind.
 				var elseBindingName = ""
+				var elseBindingLine = 0 as LineNumber
+				var elseBindingColumn = 0 as ColumnNumber
 				var hasElseBinding = false
 				if at(TokenKind.leftParen) 'hasErrorBinding'
 					if not isTryCondition 'noErrToBind'
@@ -6481,6 +6484,8 @@ export type Parser
 					end 'badBindingName'
 					try eat(TokenKind.rightParen)
 					elseBindingName = bindingToken.value
+					elseBindingLine = bindingToken.line
+					elseBindingColumn = bindingToken.column
 					hasElseBinding = true
 				end 'hasErrorBinding'
 				if at(TokenKind.charLiteral) 'hasElseLabel'
@@ -6500,7 +6505,7 @@ export type Parser
 				// hasElseBinding guard above requires isTryCondition, so the
 				// flag/throws helpers below return non-empty values.
 				if hasElseBinding 'declareErrorBinding'
-					try declareErrorBindingInBlock(elseBlock, errorFlagName: exprTryConditionErrorFlag(condResult), bindingName: elseBindingName, calleeThrowsTypeName: exprTryConditionThrows(condResult), range: SourceRange.ofToken(elseToken))
+					try declareErrorBindingInBlock(elseBlock, errorFlagName: exprTryConditionErrorFlag(condResult), bindingName: elseBindingName, bindingLine: elseBindingLine, bindingColumn: elseBindingColumn, calleeThrowsTypeName: exprTryConditionThrows(condResult), range: SourceRange.ofToken(elseToken))
 				end 'declareErrorBinding'
 				let elseExit = try parseScopedStatementsRequireBody(func, block: elseBlock, blockLabel: elseUserLabel)
 				if hasElseBinding 'popBindingScope'
@@ -9953,7 +9958,7 @@ export type Parser
 			let bindingToken = try consume()  // identifier: the binding name
 			try eat(TokenKind.rightParen)
 			_ = try consume()  // charLiteral: the block label
-			try declareErrorBindingInBlock(fallbackBlock, errorFlagName: errorFlagName, bindingName: bindingToken.value, calleeThrowsTypeName: calleeThrowsTypeName, range: SourceRange.ofToken(tryToken))
+			try declareErrorBindingInBlock(fallbackBlock, errorFlagName: errorFlagName, bindingName: bindingToken.value, bindingLine: bindingToken.line, bindingColumn: bindingToken.column, calleeThrowsTypeName: calleeThrowsTypeName, range: SourceRange.ofToken(tryToken))
 			var handlerExitBlock = try parseStatements(currentFunc, block: fallbackBlock, lastWasReturn: false)
 			scope.popScope()
 			try skipEndAndLabel()

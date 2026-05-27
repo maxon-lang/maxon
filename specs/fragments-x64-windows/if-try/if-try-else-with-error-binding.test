@@ -22,7 +22,10 @@ function main() returns ExitCode
 	if try mayFail(1) 'check'
 		result = 100
 	end 'check' else (e) 'err'
-		result = 50
+		match e 'kind'
+			first then result = 50
+			second then result = 60
+		end 'kind'
 	end 'err'
 	return result
 end 'main'
@@ -35,6 +38,7 @@ module {
   entry:
     x64.prologue stack_size=16
     x64.mov r8d, 1
+    x64.xor r9d, r9d
   inlined_mayFail_0:
     x64.cmp r8, 1
     x64.jne inlined_mayFail_2
@@ -59,7 +63,21 @@ module {
     x64.mov r8d, 100
     x64.jmp check_0.merge
   err_0:
+    x64.sub rdx, 1
+    x64.test rdx, rdx
+    x64.jne kind_0.next0
+    x64.jmp kind_0.case0
+  kind_0.merge:
+    x64.jmp check_0.merge
+  kind_0.case0:
     x64.mov r8d, 50
+    x64.jmp kind_0.merge
+  kind_0.next0:
+    x64.cmp rdx, 1
+    x64.jne __phi_trampoline_5_0
+  kind_0.case1:
+    x64.mov r8d, 60
+    x64.jmp kind_0.merge
   check_0.merge:
     x64.mov r9d, 4294967295
     x64.cmp r8, r9
@@ -71,6 +89,9 @@ module {
   __range_ok_0:
     x64.epilogue
     x64.ret
+  __phi_trampoline_5_0:
+    x64.mov r8, r9
+    x64.jmp kind_0.merge
   }
 }
 ---

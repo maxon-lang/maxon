@@ -7944,6 +7944,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       var handlerOuterScope = _variables.SnapshotKeys();
       PushScope();
       EmitTryBlockBindingDeclaration(bindingName, errorFlagVar, bindingType, isUnion, discriminantVar);
+      _localVarLocations.Add((bindingName, bindingToken.Line, bindingToken.Column));
 
       // 12. Parse the handler body. Track whether a `match` on the binding was encountered.
       var savedMatchedBinding = _tryBlockMatchedBinding;
@@ -8378,6 +8379,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     if (errorBindingToken != null) {
       CheckNoSelfFieldShadow(errorBindingToken.Value, errorBindingToken.Line, errorBindingToken.Column);
       EmitErrorBinding(errorBindingToken.Value, errorFlagVar, errorType);
+      _localVarLocations.Add((errorBindingToken.Value, errorBindingToken.Line, errorBindingToken.Column));
     } else {
       EmitImplicitErrorCleanupIfNeeded(errorFlagVar, errorType);
     }
@@ -10967,6 +10969,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         if (errorBindingToken != null) {
           CheckNoSelfFieldShadow(errorBindingToken.Value, errorBindingToken.Line, errorBindingToken.Column);
           EmitErrorBinding(errorBindingToken.Value, errorFlagVar, callee?.ThrowsType);
+          _localVarLocations.Add((errorBindingToken.Value, errorBindingToken.Line, errorBindingToken.Column));
         } else {
           EmitImplicitErrorCleanupIfNeeded(errorFlagVar, callee?.ThrowsType);
         }

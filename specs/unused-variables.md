@@ -334,3 +334,58 @@ end 'main'
 ```exitcode
 42
 ```
+
+<!-- test: unused-otherwise-binding -->
+The `(e)` binding on `try expr otherwise (e) 'h' ... end 'h'` is a local variable.
+Declaring it without referencing it inside the handler body is a compile error.
+```maxon
+
+typealias Score = int(0 to 100)
+
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function mayFail() returns Score throws MyError
+	throw MyError.failed
+end 'mayFail'
+
+function main() returns ExitCode
+	var x = 0
+	try mayFail() otherwise (e) 'handler'
+		x = 42
+	end 'handler'
+	return x
+end 'main'
+```
+```maxoncstderr
+error E3012: specs/fragments/unused-variables/unused-otherwise-binding.test:15:27: unused variable: 'e'
+```
+
+<!-- test: used-otherwise-binding -->
+A `try expr otherwise (e) 'h' ... end 'h'` handler that matches on the binding is allowed.
+```maxon
+
+typealias Score = int(0 to 100)
+
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function mayFail() returns Score throws MyError
+	throw MyError.failed
+end 'mayFail'
+
+function main() returns ExitCode
+	var x = 0
+	try mayFail() otherwise (e) 'handler'
+		match e 'kind'
+			failed then x = 42
+		end 'kind'
+	end 'handler'
+	return x
+end 'main'
+```
+```exitcode
+42
+```
