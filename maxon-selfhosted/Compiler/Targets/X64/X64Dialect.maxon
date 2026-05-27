@@ -301,6 +301,28 @@ export union X64Op
 	// this op — MirToWasm handles its own entry. Lives in the same metadata
 	// neighbourhood as `prologue`.
 	stashEntryArgv = X64OpMeta{latency: 1, isMemory: true, isStore: true, isCall: false, setsFlags: false, pattern: OpPattern.passThrough, implicitGprReads: 192, implicitGprDefs: 0}
+	// --- Phase 2 dialect groundwork: memory-operand ALU forms ---
+	// `destReg = destReg OP qword [baseReg + offset]` (no codegen path emits these yet;
+	// Phase 3 will fold spilled-source reads into these forms). Latency 4 captures
+	// the implicit load. `pattern: baseUseUseDef` — dest is use+def, base is use.
+	addRegMem(destReg X64VReg, baseReg X64VReg, offset MachineWord) = X64OpMeta{latency: 4, isMemory: true, isStore: false, isCall: false, setsFlags: true, pattern: OpPattern.baseUseUseDef, implicitGprReads: 0, implicitGprDefs: 0}
+	subRegMem(destReg X64VReg, baseReg X64VReg, offset MachineWord) = X64OpMeta{latency: 4, isMemory: true, isStore: false, isCall: false, setsFlags: true, pattern: OpPattern.baseUseUseDef, implicitGprReads: 0, implicitGprDefs: 0}
+	andRegMem(destReg X64VReg, baseReg X64VReg, offset MachineWord) = X64OpMeta{latency: 4, isMemory: true, isStore: false, isCall: false, setsFlags: true, pattern: OpPattern.baseUseUseDef, implicitGprReads: 0, implicitGprDefs: 0}
+	orRegMem(destReg X64VReg, baseReg X64VReg, offset MachineWord) = X64OpMeta{latency: 4, isMemory: true, isStore: false, isCall: false, setsFlags: true, pattern: OpPattern.baseUseUseDef, implicitGprReads: 0, implicitGprDefs: 0}
+	xorRegMem(destReg X64VReg, baseReg X64VReg, offset MachineWord) = X64OpMeta{latency: 4, isMemory: true, isStore: false, isCall: false, setsFlags: true, pattern: OpPattern.baseUseUseDef, implicitGprReads: 0, implicitGprDefs: 0}
+	imulRegMem(destReg X64VReg, baseReg X64VReg, offset MachineWord) = X64OpMeta{latency: 5, isMemory: true, isStore: false, isCall: false, setsFlags: true, pattern: OpPattern.baseUseUseDef, implicitGprReads: 0, implicitGprDefs: 0}
+	// `cmp lhsReg, qword [baseReg + offset]` — flag-setting compare, no register def.
+	// Pattern `baseTwoUse` — both lhs and base are read-only.
+	cmpRegMem(lhsReg X64VReg, baseReg X64VReg, offset MachineWord) = X64OpMeta{latency: 4, isMemory: true, isStore: false, isCall: false, setsFlags: true, pattern: OpPattern.baseTwoUse, implicitGprReads: 0, implicitGprDefs: 0}
+	// --- Phase 2 dialect groundwork: immediate-form ALU forms ---
+	// `destReg = destReg OP imm` for and/or/xor (add/sub/cmp already exist above).
+	// Pattern `useDefImm` — dest is use+def, imm rides along.
+	andRegImm(destReg X64VReg, value MachineWord) = X64OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false, setsFlags: true, pattern: OpPattern.useDefImm, implicitGprReads: 0, implicitGprDefs: 0}
+	orRegImm(destReg X64VReg, value MachineWord) = X64OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false, setsFlags: true, pattern: OpPattern.useDefImm, implicitGprReads: 0, implicitGprDefs: 0}
+	xorRegImm(destReg X64VReg, value MachineWord) = X64OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false, setsFlags: true, pattern: OpPattern.useDefImm, implicitGprReads: 0, implicitGprDefs: 0}
+	// Three-operand `imul destReg, srcReg, imm32` — dest is def-only, src is use.
+	// Pattern `defUseImm` — distinguishes from two-address imulRegReg.
+	imulRegImm(destReg X64VReg, srcReg X64VReg, value MachineWord) = X64OpMeta{latency: 3, isMemory: false, isStore: false, isCall: false, setsFlags: true, pattern: OpPattern.defUseImm, implicitGprReads: 0, implicitGprDefs: 0}
 end 'X64Op'
 
 export typealias X64OpArray = Array with X64Op
@@ -427,6 +449,17 @@ export function x64OpToString(op X64Op, blocks IrBlockArray) returns String
 		lockDecMemory(addrReg) gives "x64.lock dec qword ptr [{x64VRegToString(addrReg)}]"
 		lockXaddMemReg(valReg, addrReg) gives "x64.lock xadd qword ptr [{x64VRegToString(addrReg)}], {x64VRegToString(valReg)}"
 		stashEntryArgv gives "x64.stash_entry_argv [__mrt_argc],rdi; [__mrt_argv],rsi"
+		addRegMem(destReg, baseReg, offset) gives "x64.add {x64VRegToString(destReg)}, [{x64VRegToString(baseReg)}{formatSignedOffset(offset)}]"
+		subRegMem(destReg, baseReg, offset) gives "x64.sub {x64VRegToString(destReg)}, [{x64VRegToString(baseReg)}{formatSignedOffset(offset)}]"
+		andRegMem(destReg, baseReg, offset) gives "x64.and {x64VRegToString(destReg)}, [{x64VRegToString(baseReg)}{formatSignedOffset(offset)}]"
+		orRegMem(destReg, baseReg, offset) gives "x64.or {x64VRegToString(destReg)}, [{x64VRegToString(baseReg)}{formatSignedOffset(offset)}]"
+		xorRegMem(destReg, baseReg, offset) gives "x64.xor {x64VRegToString(destReg)}, [{x64VRegToString(baseReg)}{formatSignedOffset(offset)}]"
+		imulRegMem(destReg, baseReg, offset) gives "x64.imul {x64VRegToString(destReg)}, [{x64VRegToString(baseReg)}{formatSignedOffset(offset)}]"
+		cmpRegMem(lhsReg, baseReg, offset) gives "x64.cmp {x64VRegToString(lhsReg)}, [{x64VRegToString(baseReg)}{formatSignedOffset(offset)}]"
+		andRegImm(destReg, value) gives "x64.and {x64VRegToString(destReg)}, {value}"
+		orRegImm(destReg, value) gives "x64.or {x64VRegToString(destReg)}, {value}"
+		xorRegImm(destReg, value) gives "x64.xor {x64VRegToString(destReg)}, {value}"
+		imulRegImm(destReg, srcReg, value) gives "x64.imul {x64VRegToString(destReg)}, {x64VRegToString(srcReg)}, {value}"
 	end 'toString'
 end 'x64OpToString'
 

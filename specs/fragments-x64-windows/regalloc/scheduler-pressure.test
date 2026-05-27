@@ -1,0 +1,194 @@
+// Test: scheduler-pressure
+typealias Integer = int(i64.min to i64.max)
+
+function opaque(x Integer) returns Integer
+	return x + 0
+end 'opaque'
+
+function kernel(seed Integer) returns Integer
+	// Four "early" values, defined at the top of the source. Each is
+	// a small computation rather than a call so the scheduler can
+	// freely reorder them — calls would form a barrier chain that
+	// pins relative ordering.
+	let a = (seed xor 305419896) + 1
+	let b = (seed xor 2271560481) + 2
+	let c = (seed xor 3735928559) + 3
+	let d = (seed xor 4275878552) + 4
+
+	// Long intermediate chain that does not reference a..d. Each
+	// step has pressure delta 0 (defines one value, consumes one
+	// previous value that then dies). A pressure-aware scheduler
+	// can freely interleave these with the deferred a..d defs.
+	let i1 = (seed + 17) xor 11
+	let i2 = (i1 * 3) + 5
+	let i3 = (i2 xor 12345) + 7
+	let i4 = (i3 * 5) + 9
+	let i5 = (i4 xor 54321) + 11
+	let i6 = (i5 * 7) + 13
+	let i7 = (i6 xor 98765) + 15
+	let i8 = (i7 * 11) + 17
+	let i9 = (i8 xor 13579) + 19
+	let i10 = (i9 * 13) + 21
+	let i11 = (i10 xor 24680) + 23
+	let i12 = (i11 * 17) + 25
+
+	// Consume a..d together with the intermediate chain's final
+	// value. The naive schedule keeps a..d live across the i1..i12
+	// chain; the pressure-aware schedule defers their defs to here.
+	return a + b + c + d + i12
+end 'kernel'
+
+function main() returns ExitCode
+	let args = CommandLine.args()
+	let seed = try int.fromString(try args.get(1) otherwise "0") otherwise 0
+	let result = kernel(seed)
+	// Mask to 0..127 so the value fits both POSIX (0..255) and wasi
+	// (0..125 strict) exit-code ranges. The test gates on the
+	// deterministic value being produced, not on its specific bit width.
+	let masked = result and 127
+	return masked as ExitCode
+end 'main'
+---
+Args: 0
+ExitCode: 61
+---
+// CompiledIR
+module {
+  func @kernel(rcx: i64) -> i64 {
+  entry:
+    x64.mov r8d, 11
+    x64.mov r9, rcx
+    x64.add r9, 17
+    x64.mov esi, 3
+    x64.xor r9, r8
+    x64.imul r9, rsi
+    x64.mov r8d, 12345
+    x64.add r9, 5
+    x64.xor r9, r8
+    x64.mov r8d, 5
+    x64.add r9, 7
+    x64.imul r9, r8
+    x64.mov r8d, 54321
+    x64.add r9, 9
+    x64.xor r9, r8
+    x64.mov r8d, 7
+    x64.add r9, 11
+    x64.imul r9, r8
+    x64.mov r8d, 98765
+    x64.add r9, 13
+    x64.xor r9, r8
+    x64.mov r8d, 11
+    x64.add r9, 15
+    x64.imul r9, r8
+    x64.mov r8d, 13579
+    x64.add r9, 17
+    x64.xor r9, r8
+    x64.mov r8d, 13
+    x64.add r9, 19
+    x64.imul r9, r8
+    x64.mov r8d, 24680
+    x64.add r9, 21
+    x64.xor r9, r8
+    x64.mov r8d, 2271560481
+    x64.mov esi, 305419896
+    x64.mov edi, 17
+    x64.add r9, 23
+    x64.mov eax, 3735928559
+    x64.xor r8, rcx
+    x64.mov rdx, rcx
+    x64.xor rdx, rsi
+    x64.imul r9, rdi
+    x64.mov esi, 4275878552
+    x64.xor rax, rcx
+    x64.add r8, 2
+    x64.add rdx, 1
+    x64.xor rsi, rcx
+    x64.add rax, 3
+    x64.add rdx, r8
+    x64.add rsi, 4
+    x64.add rdx, rax
+    x64.add r9, 25
+    x64.add rdx, rsi
+    x64.mov r8, rdx
+    x64.add r8, r9
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.call CommandLine.args
+    x64.mov edx, 1
+  inlined_Array.get_0:
+    x64.mov rcx, [r8+0] (8b)
+    x64.call stdlib.__managed_mem_get
+    x64.test rdx, rdx
+    x64.je inlined_Array.get_2
+  inlined_Array.get_1:
+    x64.mov edx, 1
+    x64.xor r8d, r8d
+    x64.jmp inline_cont_main_0
+  inlined_Array.get_2:
+    x64.xor edx, edx
+  inline_cont_main_0:
+    x64.xor r12d, r12d
+    x64.test rdx, rdx
+    x64.je __phi_trampoline_13_0
+  try_0.otherwise:
+    x64.mov ecx, 40
+    x64.call mrt_alloc
+    x64.mov r13, r8
+    x64.lea r8, [rip+__istr_0]
+    x64.mov [r13+0], r8 (8b)
+    x64.mov r8d, 1
+    x64.mov [r13+8], r8 (8b)
+    x64.mov r8, -2
+    x64.mov [r13+16], r8 (8b)
+    x64.mov r8d, 1
+    x64.mov [r13+24], r8 (8b)
+    x64.mov [r13+32], r12 (8b)
+    x64.mov ecx, 16
+    x64.call mrt_alloc
+    x64.mov [r8+0], r13 (8b)
+    x64.mov r9d, 1
+    x64.mov [r8+8], r9 (8b)
+    x64.mov rcx, r8
+  try_0.merge:
+    x64.call stdlib.__int_fromString
+    x64.test rdx, rdx
+    x64.je try_1.ok
+    x64.mov rcx, r12
+    x64.jmp try_1.merge
+  try_1.ok:
+    x64.mov rcx, r8
+  try_1.merge:
+    x64.call kernel
+    x64.mov r9d, 127
+    x64.mov esi, 4294967295
+    x64.and r8, r9
+    x64.cmp r8, rsi
+    x64.jle __cast_check_lo_0
+    x64.jmp __cast_panic_0
+  __cast_check_lo_0:
+    x64.test r8, r8
+    x64.jge __cast_ok_0
+  __cast_panic_0:
+    x64.lea r12, [rip+__panic_msg_0]
+    x64.mov rcx, r12
+    x64.call mrt_panic
+  __cast_ok_0:
+    x64.mov r9d, 4294967295
+    x64.cmp r8, r9
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea r12, [rip+__panic_msg_1]
+    x64.mov rcx, r12
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  __phi_trampoline_13_0:
+    x64.mov rcx, r8
+    x64.jmp try_0.merge
+  }
+}
+---

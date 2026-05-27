@@ -133,6 +133,18 @@ export type SpillDecision
 	// reload ranges get infinite spill weight on every subsequent
 	// rebuild of liveness/ranges.
 	export var reloadIds as BoolArray
+	// Bitmap of vregs that should be rematerialized (re-emitted as a
+	// constant load) at each use rather than spilled to a stack slot.
+	// Populated by spillClass for ranges flagged isRematerializable, and
+	// by insertSpillCode for the fresh vregs it mints at each remat use.
+	// Indexed by valueId. Consumed by FunctionRegAllocator, which unions
+	// every iteration's remats into a cumulative set so rebuilt
+	// LiveRanges keep isRematerializable=true and constantValue.
+	export var rematerializeIds as BoolArray
+	// Sidetable from valueId to the constant value to materialize at each
+	// use. Populated alongside rematerializeIds. Sparse: entries past the
+	// last rematerializable valueId default to 0 via getOr.
+	export var rematerializeValue as RegIntArray
 
 	export static function create() returns SpillDecision
 		return Self{
@@ -140,7 +152,9 @@ export type SpillDecision
 			nonSpilledRanges: LiveRangeArray.create(),
 			spillSlotAssignment: RegIntArray.create(),
 			totalSpillSize: 0,
-			reloadIds: BoolArray.create()
+			reloadIds: BoolArray.create(),
+			rematerializeIds: BoolArray.create(),
+			rematerializeValue: RegIntArray.create()
 		}
 	end 'create'
 end 'SpillDecision'
@@ -222,34 +236,52 @@ function spillClass(ranges LiveRangeArray, poolSize RegInt, decision SpillDecisi
 	var spilled = 0
 	while spilled < spillCount and not pqIsEmpty(minQueue) 'spillLoop'
 		let entry = pqExtractMax(minQueue)
-
-		// Find the range for this valueId
 		let range = findRangeByValueId(virtualRanges, valueId: entry.valueId)
 
-		if range.valueId == entry.valueId 'found'
-			// Skip rematerializable values — they're free to "spill"
-			// (just re-emit the constant), so they don't count toward pressure
-			if range.isRematerializable 'remat'
-				decision.nonSpilledRanges.push(range)
-			end 'remat' else 'realSpill'
-				decision.spilledRanges.push(range)
-				spilled = spilled + 1
-			end 'realSpill'
-		end 'found'
+		// Rematerializable values "spill" by re-emitting the constant
+		// at each use. No stack slot is allocated; SpillCodeInsertion
+		// reads rematerializeIds and inserts a constant load (e.g.
+		// movRegImm) per use instead of a reload-from-stack. Counts
+		// as one spill toward the pressure budget because the value
+		// no longer occupies a register from def to use.
+		if range.isRematerializable 'remat'
+			markRematerialize(decision, valueId: range.valueId, value: range.constantValue)
+			decision.nonSpilledRanges.push(range)
+		end 'remat' else 'realSpill'
+			decision.spilledRanges.push(range)
+		end 'realSpill'
+		spilled = spilled + 1
 	end 'spillLoop'
 
 	// Remaining ranges in the queue are non-spilled
 	while not pqIsEmpty(minQueue) 'drainQueue'
 		let entry = pqExtractMax(minQueue)
 		let range = findRangeByValueId(virtualRanges, valueId: entry.valueId)
-
-		if range.valueId == entry.valueId 'found2'
-			decision.nonSpilledRanges.push(range)
-		end 'found2'
+		decision.nonSpilledRanges.push(range)
 	end 'drainQueue'
 end 'spillClass'
 
-// Find a range by valueId (linear scan — fine for now)
+// Mark `valueId` as one that should be rematerialized at each use, and
+// stash the constant value to materialize. Used by the spill loop (and
+// by spillClass) when a range that *would* be spilled is rematerializable
+// — instead of allocating a stack slot, we record "re-emit this constant"
+// so the spill code insertion phase can emit a fresh `movRegImm` at every
+// use.
+export function markRematerialize(decision SpillDecision, valueId ValueId, value RegInt)
+	while decision.rematerializeIds.count() <= valueId 'growIds'
+		decision.rematerializeIds.push(false)
+	end 'growIds'
+	while decision.rematerializeValue.count() <= valueId 'growVal'
+		decision.rematerializeValue.push(0)
+	end 'growVal'
+	try decision.rematerializeIds.set(valueId, value: true) otherwise panic("invariant: rematerializeIds.set OOB after grow")
+	try decision.rematerializeValue.set(valueId, value: value) otherwise panic("invariant: rematerializeValue.set OOB after grow")
+end 'markRematerialize'
+
+// Find a range by valueId (linear scan — fine for now). Panics on miss:
+// callers pass a valueId that came from `ranges` itself (via the priority
+// queue seeded in spillClass), so a miss means the queue and the ranges
+// array fell out of sync — a real invariant violation.
 function findRangeByValueId(ranges LiveRangeArray, valueId ValueId) returns LiveRange
 	for range in ranges 'search'
 		if range.valueId == valueId 'found'
@@ -257,8 +289,7 @@ function findRangeByValueId(ranges LiveRangeArray, valueId ValueId) returns Live
 		end 'found'
 	end 'search'
 
-	// Return a dummy range if not found
-	return LiveRange.create(valueId)
+	panic("findRangeByValueId: valueId={valueId} not present in ranges (count={ranges.count()}) — pq/ranges out of sync")
 end 'findRangeByValueId'
 
 // ============================================================

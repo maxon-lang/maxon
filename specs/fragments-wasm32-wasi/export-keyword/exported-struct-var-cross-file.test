@@ -23,6 +23,16 @@ ExitCode: 42
 ---
 // CompiledIR
 module {
+  func @api.__module_init_0() {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %4 = mir.mov_imm 8 : i64
+    %5 = mir.call @mrt_alloc(%4)
+    mir.store %0, %5, 0 width: byte
+    %2 = mir.global_addr @__data_shared
+    mir.store %5, %2, 0 width: qword
+    mir.ret %3
+  }
   func @main() -> u8 {
   entry:
     %0 = mir.mov_imm 1 : i64
@@ -40,7 +50,7 @@ module {
     %11 = mir.global_addr @__data_shared
     %12 = mir.load %11, 0 width: qword
     %13 = mir.load %12, 0 width: byte
-    %16 = mir.mov_imm 255 : i64
+    %16 = mir.mov_imm 125 : i64
     %17 = mir.cmp ugt, %13, %16
     mir.cond_br %17 [then: __range_panic_0(), else: __range_ok_0()]
   __range_panic_0:

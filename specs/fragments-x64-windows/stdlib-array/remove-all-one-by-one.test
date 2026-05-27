@@ -18,11 +18,11 @@ function main() returns ExitCode
 		sum = sum + elem
 	end 'drain'
 
-	// 10+20+30+40+50 = 150
-	return sum
+	// 10+20+30+40+50 = 150, masked to wasi exit range: 150 and 125 = 20
+	return sum and 125
 end 'main'
 ---
-ExitCode: 150
+ExitCode: 20
 ---
 // CompiledIR
 module {
@@ -93,8 +93,11 @@ module {
     x64.je try_0.merge
     x64.jmp try_0.otherwise
   drain_0.exit:
-    x64.mov r8d, 4294967295
-    x64.cmp r13, r8
+    x64.mov r9d, 125
+    x64.mov esi, 4294967295
+    x64.mov r8, r13
+    x64.and r8, r9
+    x64.cmp r8, rsi
     x64.jbe __range_ok_0
     x64.jmp __range_panic_0
   try_0.otherwise:
@@ -109,7 +112,6 @@ module {
     x64.mov rcx, r12
     x64.call mrt_panic
   __range_ok_0:
-    x64.mov r8, r13
     x64.epilogue
     x64.ret
   }

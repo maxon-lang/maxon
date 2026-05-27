@@ -46,6 +46,23 @@ export type MaxonArgs
 	// emits result markers + WORKER_READY on stdout. Amortises stdlib warmup
 	// across every job assigned to this worker for the parent's whole run.
 	export var workerPersistent as bool
+	// Internal flag set by the parent to make this process run one spec's batch only.
+	export var workerSpec as String
+	// Internal flag set by the parent to make this process run only the
+	// non-batchable (single) tests for a comma-separated list of specs.
+	export var workerSingles as String
+	// Internal flag for fallback mode: a semicolon-separated list of
+	// `specName:testName1|testName2|...` groups. Each group's named tests are
+	// run via the per-fragment path (used when the batch rewriter rejected
+	// them mid-batch). Subprocess-isolated to contain compile-time panics.
+	export var workerFallback as String
+	// Phase 0b regalloc roadmap: comma-separated list of stdlib function
+	// names whose source file should be dropped from the stdlib cache
+	// before warmStdlibCache runs. Used to bypass functions that the
+	// self-hosted register allocator currently mis-compiles (notably
+	// `sha256`) so the rest of the spec suite can run while the allocator
+	// is being fixed. Empty = default strict behavior.
+	export var skipStdlibFns as String
 
 	export static function parse() returns MaxonArgs throws ArgError
 		let allArgs = CommandLine.args()
@@ -64,6 +81,10 @@ export type MaxonArgs
 			profilePasses: false,
 			workers: 12,
 			workerPersistent: false
+			workerSpec: "",
+			workerSingles: "",
+			workerFallback: "",
+			skipStdlibFns: ""
 		}
 
 		if allArgs.count() < 2 'noArgs'
@@ -139,6 +160,16 @@ export type MaxonArgs
 			end 'isWorkers' else if arg == "--worker-persistent" 'isWorkerPersistent'
 				args.workerPersistent = true
 			end 'isWorkerPersistent' else if not arg.startsWith("--") 'isPositional'
+			end 'isWorkers' else if arg.startsWith("--worker-spec=") 'isWorkerSpec'
+				args.workerSpec = try CommandLine.optionValue(arg) otherwise ""
+			end 'isWorkerSpec' else if arg.startsWith("--worker-singles=") 'isWorkerSingles'
+				args.workerSingles = try CommandLine.optionValue(arg) otherwise ""
+			end 'isWorkerSingles' else if arg.startsWith("--worker-fallback=") 'isWorkerFallback'
+				args.workerFallback = try CommandLine.optionValue(arg) otherwise ""
+			end 'isWorkerFallback' else if arg.startsWith("--skip-stdlib-fn=") 'isSkipStdlibFn'
+				// Sentinel: empty value means no functions skipped — same as omitting the flag.
+				args.skipStdlibFns = try CommandLine.optionValue(arg) otherwise ""
+			end 'isSkipStdlibFn' else if not arg.startsWith("--") 'isPositional'
 				args.path = arg
 			end 'isPositional'
 		end 'scan'

@@ -1,0 +1,189 @@
+// Test: many-constants
+typealias Integer = int(i64.min to i64.max)
+
+function ident(x Integer) returns Integer
+	return x
+end 'ident'
+
+function main() returns ExitCode
+	let args = CommandLine.args()
+	let seed = try int.fromString(try args.get(1) otherwise "0") otherwise 0
+
+	// 4 working values that live across the body — opaque w.r.t. the
+	// constant folder thanks to the runtime seed. The body below uses
+	// each one with many distinct constants; pre-Phase-1 each constant
+	// would compete with the working values for a register slot,
+	// inflating pressure. Post-Phase-1 each constant rematerializes at
+	// its use site, so v1..v4 + a couple of scratch reg are enough.
+	let v1 = ident(seed + 11)
+	let v2 = ident(seed + 22)
+	let v3 = ident(seed + 33)
+	let v4 = ident(seed + 44)
+
+	// Many distinct constants combined with the working values.
+	var total = 0
+	total = total + (v1 and 255)
+	total = total + (v2 and 61680)
+	total = total + (v3 and 1193046)
+	total = total + (v4 and 286265908)
+	total = total + (v1 or 256)
+	total = total + (v2 or 8192)
+	total = total + (v3 or 196608)
+	total = total + (v4 or 4194304)
+	total = total + (v1 xor 21930)
+	total = total + (v2 xor 2147483647)
+	total = total + (v3 + 65536)
+	total = total + (v4 + 131072)
+	total = total + (v1 + 1234567)
+	total = total + (v2 + 7654321)
+	total = total + (v3 - 1048576)
+	total = total + (v4 - 2097152)
+
+	let masked = total and 255
+	return masked as ExitCode
+end 'main'
+---
+Args: 4
+ExitCode: 102
+---
+// CompiledIR
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.call CommandLine.args
+    x64.mov edx, 1
+  inlined_Array.get_0:
+    x64.mov rcx, [r8+0] (8b)
+    x64.call stdlib.__managed_mem_get
+    x64.test rdx, rdx
+    x64.je inlined_Array.get_2
+  inlined_Array.get_1:
+    x64.mov edx, 1
+    x64.xor r8d, r8d
+    x64.jmp inline_cont_main_0
+  inlined_Array.get_2:
+    x64.xor edx, edx
+  inline_cont_main_0:
+    x64.xor r12d, r12d
+    x64.test rdx, rdx
+    x64.je __phi_trampoline_13_0
+  try_0.otherwise:
+    x64.mov ecx, 40
+    x64.call mrt_alloc
+    x64.mov r13, r8
+    x64.lea r8, [rip+__istr_0]
+    x64.mov [r13+0], r8 (8b)
+    x64.mov r8d, 1
+    x64.mov [r13+8], r8 (8b)
+    x64.mov r8, -2
+    x64.mov [r13+16], r8 (8b)
+    x64.mov r8d, 1
+    x64.mov [r13+24], r8 (8b)
+    x64.mov [r13+32], r12 (8b)
+    x64.mov ecx, 16
+    x64.call mrt_alloc
+    x64.mov [r8+0], r13 (8b)
+    x64.mov r9d, 1
+    x64.mov [r8+8], r9 (8b)
+    x64.mov rcx, r8
+  try_0.merge:
+    x64.call stdlib.__int_fromString
+    x64.test rdx, rdx
+    x64.je try_1.ok
+    x64.jmp try_1.merge
+  try_1.ok:
+    x64.mov r12, r8
+  try_1.merge:
+    x64.mov r8d, 255
+    x64.mov r9, r12
+    x64.add r9, 11
+    x64.mov esi, 61680
+    x64.mov rdi, r12
+    x64.add rdi, 22
+    x64.mov rax, r9
+    x64.and rax, r8
+    x64.mov r8d, 1193046
+    x64.mov rcx, r12
+    x64.add rcx, 33
+    x64.mov rdx, rdi
+    x64.and rdx, rsi
+    x64.add rax, 0
+    x64.mov esi, 286265908
+    x64.add r12, 44
+    x64.mov rbx, rcx
+    x64.and rbx, r8
+    x64.add rax, rdx
+    x64.mov r8d, 256
+    x64.mov rdx, r12
+    x64.and rdx, rsi
+    x64.add rax, rbx
+    x64.mov esi, 8192
+    x64.mov rbx, r9
+    x64.or rbx, r8
+    x64.add rax, rdx
+    x64.mov r8d, 196608
+    x64.mov rdx, rdi
+    x64.or rdx, rsi
+    x64.add rax, rbx
+    x64.mov esi, 4194304
+    x64.mov rbx, rcx
+    x64.or rbx, r8
+    x64.add rax, rdx
+    x64.mov r8d, 21930
+    x64.mov rdx, r12
+    x64.or rdx, rsi
+    x64.add rax, rbx
+    x64.mov esi, 2147483647
+    x64.mov rbx, r9
+    x64.xor rbx, r8
+    x64.add rax, rdx
+    x64.mov r8, rdi
+    x64.xor r8, rsi
+    x64.add rax, rbx
+    x64.mov rsi, rcx
+    x64.add rsi, 65536
+    x64.add rax, r8
+    x64.mov r8, r12
+    x64.add r8, 131072
+    x64.add rax, rsi
+    x64.add r9, 1234567
+    x64.add rax, r8
+    x64.add rdi, 7654321
+    x64.add rax, r9
+    x64.sub rcx, 1048576
+    x64.add rax, rdi
+    x64.sub r12, 2097152
+    x64.add rax, rcx
+    x64.mov r9d, 255
+    x64.add rax, r12
+    x64.mov esi, 4294967295
+    x64.mov r8, rax
+    x64.and r8, r9
+    x64.cmp r8, rsi
+    x64.jle __cast_check_lo_0
+    x64.jmp __cast_panic_0
+  __cast_check_lo_0:
+    x64.test r8, r8
+    x64.jge __cast_ok_0
+  __cast_panic_0:
+    x64.lea r12, [rip+__panic_msg_0]
+    x64.mov rcx, r12
+    x64.call mrt_panic
+  __cast_ok_0:
+    x64.mov r9d, 4294967295
+    x64.cmp r8, r9
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea r12, [rip+__panic_msg_1]
+    x64.mov rcx, r12
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  __phi_trampoline_13_0:
+    x64.mov rcx, r8
+    x64.jmp try_0.merge
+  }
+}
+---

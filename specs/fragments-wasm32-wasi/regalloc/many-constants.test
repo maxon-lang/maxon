@@ -1,0 +1,176 @@
+// Test: many-constants
+typealias Integer = int(i64.min to i64.max)
+
+function ident(x Integer) returns Integer
+	return x
+end 'ident'
+
+function main() returns ExitCode
+	let args = CommandLine.args()
+	let seed = try int.fromString(try args.get(1) otherwise "0") otherwise 0
+
+	// 4 working values that live across the body — opaque w.r.t. the
+	// constant folder thanks to the runtime seed. The body below uses
+	// each one with many distinct constants; pre-Phase-1 each constant
+	// would compete with the working values for a register slot,
+	// inflating pressure. Post-Phase-1 each constant rematerializes at
+	// its use site, so v1..v4 + a couple of scratch reg are enough.
+	let v1 = ident(seed + 11)
+	let v2 = ident(seed + 22)
+	let v3 = ident(seed + 33)
+	let v4 = ident(seed + 44)
+
+	// Many distinct constants combined with the working values.
+	var total = 0
+	total = total + (v1 and 255)
+	total = total + (v2 and 61680)
+	total = total + (v3 and 1193046)
+	total = total + (v4 and 286265908)
+	total = total + (v1 or 256)
+	total = total + (v2 or 8192)
+	total = total + (v3 or 196608)
+	total = total + (v4 or 4194304)
+	total = total + (v1 xor 21930)
+	total = total + (v2 xor 2147483647)
+	total = total + (v3 + 65536)
+	total = total + (v4 + 131072)
+	total = total + (v1 + 1234567)
+	total = total + (v2 + 7654321)
+	total = total + (v3 - 1048576)
+	total = total + (v4 - 2097152)
+
+	let masked = total and 255
+	return masked as ExitCode
+end 'main'
+---
+Args: 4
+ExitCode: 102
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.call @CommandLine.args()
+    %2 = mir.mov_imm 1 : i64
+    mir.br inlined_Array.get_0()
+  inlined_Array.get_0:
+    %136 = mir.load %0, 0 width: qword
+    %137, %138 = mir.try_call @stdlib.__managed_mem_get(%136, %2)
+    %139 = mir.mov_imm 0 : i64
+    %140 = mir.cmp ne, %138, %139
+    mir.cond_br %140 [then: inlined_Array.get_1(), else: inlined_Array.get_2()]
+  inlined_Array.get_1:
+    %141 = mir.mov_imm 0 : i64
+    %142 = mir.mov_imm 1 : i64
+    mir.br inline_cont_main_0(%141, %142)
+  inlined_Array.get_2:
+    %143 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%137, %143)
+  inline_cont_main_0:
+    %6 = mir.mov_imm 0 : i64
+    %7 = mir.cmp ne, %145, %6
+    mir.cond_br %7 [then: try_0.otherwise(), else: try_0.merge(%144)]
+  try_0.otherwise:
+    %9 = mir.global_addr @__istr_0
+    %10 = mir.mov_imm 40 : i64
+    %11 = mir.call @mrt_alloc(%10)
+    mir.store %9, %11, 0 width: qword
+    %12 = mir.mov_imm 1 : i64
+    mir.store %12, %11, 8 width: qword
+    %13 = mir.mov_imm -2 : i64
+    mir.store %13, %11, 16 width: qword
+    %14 = mir.mov_imm 1 : i64
+    mir.store %14, %11, 24 width: qword
+    mir.store %6, %11, 32 width: qword
+    %16 = mir.mov_imm 16 : i64
+    %17 = mir.call @mrt_alloc(%16)
+    mir.store %11, %17, 0 width: qword
+    %18 = mir.mov_imm 1 : i64
+    mir.store %18, %17, 8 width: qword
+    mir.br try_0.merge(%17)
+  try_0.merge:
+    %20, %21 = mir.try_call @stdlib.__int_fromString(%134)
+    %23 = mir.cmp ne, %21, %6
+    mir.cond_br %23 [then: try_1.merge(%6), else: try_1.ok()]
+  try_1.ok:
+    mir.br try_1.merge(%20)
+  try_1.merge:
+    %28 = mir.mov_imm 11 : i64
+    %29 = mir.add.i64 %135, %28
+    %32 = mir.mov_imm 22 : i64
+    %33 = mir.add.i64 %135, %32
+    %36 = mir.mov_imm 33 : i64
+    %37 = mir.add.i64 %135, %36
+    %40 = mir.mov_imm 44 : i64
+    %41 = mir.add.i64 %135, %40
+    %46 = mir.mov_imm 255 : i64
+    %47 = mir.and.i64 %29, %46
+    %48 = mir.add.i64 %6, %47
+    %51 = mir.mov_imm 61680 : i64
+    %52 = mir.and.i64 %33, %51
+    %53 = mir.add.i64 %48, %52
+    %56 = mir.mov_imm 1193046 : i64
+    %57 = mir.and.i64 %37, %56
+    %58 = mir.add.i64 %53, %57
+    %61 = mir.mov_imm 286265908 : i64
+    %62 = mir.and.i64 %41, %61
+    %63 = mir.add.i64 %58, %62
+    %66 = mir.mov_imm 256 : i64
+    %67 = mir.or.i64 %29, %66
+    %68 = mir.add.i64 %63, %67
+    %71 = mir.mov_imm 8192 : i64
+    %72 = mir.or.i64 %33, %71
+    %73 = mir.add.i64 %68, %72
+    %76 = mir.mov_imm 196608 : i64
+    %77 = mir.or.i64 %37, %76
+    %78 = mir.add.i64 %73, %77
+    %81 = mir.mov_imm 4194304 : i64
+    %82 = mir.or.i64 %41, %81
+    %83 = mir.add.i64 %78, %82
+    %86 = mir.mov_imm 21930 : i64
+    %87 = mir.xor.i64 %29, %86
+    %88 = mir.add.i64 %83, %87
+    %91 = mir.mov_imm 2147483647 : i64
+    %92 = mir.xor.i64 %33, %91
+    %93 = mir.add.i64 %88, %92
+    %96 = mir.mov_imm 65536 : i64
+    %97 = mir.add.i64 %37, %96
+    %98 = mir.add.i64 %93, %97
+    %101 = mir.mov_imm 131072 : i64
+    %102 = mir.add.i64 %41, %101
+    %103 = mir.add.i64 %98, %102
+    %106 = mir.mov_imm 1234567 : i64
+    %107 = mir.add.i64 %29, %106
+    %108 = mir.add.i64 %103, %107
+    %111 = mir.mov_imm 7654321 : i64
+    %112 = mir.add.i64 %33, %111
+    %113 = mir.add.i64 %108, %112
+    %116 = mir.mov_imm 1048576 : i64
+    %117 = mir.sub.i64 %37, %116
+    %118 = mir.add.i64 %113, %117
+    %121 = mir.mov_imm 2097152 : i64
+    %122 = mir.sub.i64 %41, %121
+    %123 = mir.add.i64 %118, %122
+    %125 = mir.mov_imm 255 : i64
+    %126 = mir.and.i64 %123, %125
+    %128 = mir.mov_imm 125 : i64
+    %129 = mir.cmp gt, %126, %128
+    mir.cond_br %129 [then: __cast_panic_0(), else: __cast_check_lo_0()]
+  __cast_check_lo_0:
+    %131 = mir.cmp lt, %126, %6
+    mir.cond_br %131 [then: __cast_panic_0(), else: __cast_ok_0()]
+  __cast_panic_0:
+    %132 = mir.global_addr @__panic_msg_0
+    %133 = mir.call @mrt_panic(%132)
+  __cast_ok_0:
+    %146 = mir.mov_imm 125 : i64
+    %147 = mir.cmp ugt, %126, %146
+    mir.cond_br %147 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %148 = mir.global_addr @__panic_msg_1
+    %149 = mir.call @mrt_panic(%148)
+  __range_ok_0:
+    mir.ret %126
+  }
+}
+---

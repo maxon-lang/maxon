@@ -127,7 +127,24 @@ end 'colorLookupFp'
 // Public entry point
 // ============================================================
 
-export function colorSSA(ranges LiveRangeArray, domPreorder BlockIdArray, gprPool RegIntArray, callerSavedGprs RegIntArray, fpPool RegIntArray, callerSavedFps RegIntArray) returns ColoringResult
+// Maximum cascade depth for the Greedy-style eviction picker. Once a range
+// has been evicted MAX_CASCADE times, it can no longer be evicted (the
+// eviction rule requires strictly-smaller evictee cascade). This bounds the
+// number of evictions to `n * MAX_CASCADE` per coloring pass, guaranteeing
+// termination. Matches LLVM Greedy's cascade limit.
+export let MAX_CASCADE = 8
+
+// Maximum recursion depth for Phase 6's last-chance recoloring. When simple
+// eviction (Phase 4) cannot find a register for an infinite-weight reload,
+// the colorer tries to recursively re-color each interferer to a different
+// register, freeing up a slot. Depth 3 matches LLVM Greedy's bound and keeps
+// worst-case work proportional to `depth * fanout * pool_size`. Recursion
+// terminates either by finding a placement (success), by exhausting all
+// register candidates at every level (failure → spill loop / panic), or by
+// hitting the depth cap.
+export let MAX_RECOLOR_DEPTH = 3
+
+export function colorSSA(ranges LiveRangeArray, domPreorder BlockIdArray, gprPool RegIntArray, callerSavedGprs RegIntArray, fpPool RegIntArray, callerSavedFps RegIntArray, cascadeByValueId RegIntArray) returns ColoringResult
 	// Find max valueId for result sizing
 	var maxValueId = 0
 	for range in ranges 'findMax'
@@ -150,8 +167,8 @@ export function colorSSA(ranges LiveRangeArray, domPreorder BlockIdArray, gprPoo
 	end 'classify'
 
 	// Color each class independently
-	colorClass(gprRanges, pool: gprPool, callerSaved: callerSavedGprs, domPreorder: domPreorder, result: result)
-	colorClass(fpRanges, pool: fpPool, callerSaved: callerSavedFps, domPreorder: domPreorder, result: result)
+	colorClass(gprRanges, pool: gprPool, callerSaved: callerSavedGprs, domPreorder: domPreorder, result: result, cascadeByValueId: cascadeByValueId)
+	colorClass(fpRanges, pool: fpPool, callerSaved: callerSavedFps, domPreorder: domPreorder, result: result, cascadeByValueId: cascadeByValueId)
 
 	logDebug(LogCategory.ir, message: function() gives "ssa-color: gpr={gprRanges.count()} fp={fpRanges.count()} maxVal={maxValueId}")
 	return result
@@ -161,7 +178,7 @@ end 'colorSSA'
 // Per-class coloring
 // ============================================================
 
-function colorClass(ranges LiveRangeArray, pool RegIntArray, callerSaved RegIntArray, domPreorder BlockIdArray, result ColoringResult)
+function colorClass(ranges LiveRangeArray, pool RegIntArray, callerSaved RegIntArray, domPreorder BlockIdArray, result ColoringResult, cascadeByValueId RegIntArray)
 	let numRanges = ranges.count()
 	if numRanges == 0 'empty'
 		return
@@ -222,6 +239,13 @@ function colorClass(ranges LiveRangeArray, pool RegIntArray, callerSaved RegIntA
 		ri = ri + 1
 	end 'initColors'
 
+	// First-fit pass in dominance-tree preorder. This pass is optimal under
+	// SSA-chordal interference (no eviction needed when register pressure is
+	// within bounds), and the dom-preorder ordering preserves the
+	// scheduling-friendly hint propagation downstream tools rely on. Phase 4's
+	// eviction logic runs as a SECOND pass below, touching only the ranges
+	// this first pass left uncolored — so a successful first-fit produces
+	// IDENTICAL coloring to the pre-Phase-4 allocator.
 	for sortedIdx in sortedOrder 'colorEach'
 		let range = try ranges.get(sortedIdx) otherwise panic("invariant: sortedIdx from sortedOrder out of bounds in ranges")
 
@@ -318,7 +342,691 @@ function colorClass(ranges LiveRangeArray, pool RegIntArray, callerSaved RegIntA
 			end 'inBounds'
 		end 'hasColor'
 	end 'colorEach'
+
+	// Phase 4: Greedy-style eviction fixup. For every virtual range still
+	// uncolored after the first-fit pass, try to evict a lower-priority
+	// colored neighbor to make room. The eviction rule (strictly-smaller
+	// evictee weight or smaller cascade at equal weight) plus the
+	// MAX_CASCADE bound guarantees termination — see the LiveRange.cascade
+	// comment for the proof sketch.
+	runEvictionFixup(ranges, ig: ig, rangeColors: rangeColors, vidToRangeIdx: vidToRangeIdx, pool: pool, callerSavedMask: callerSavedMask, poolIndexOf: poolIndexOf, poolSize: poolSize, result: result, cascadeByValueId: cascadeByValueId)
 end 'colorClass'
+
+// Attempt to color a single range, writing the assignment to `rangeColors` and
+// `result` if successful. Computes the used-register set from currently-colored
+// neighbors plus fixed-reg neighbors (whose color is inevitable), then runs the
+// hint → fallback picker pipeline. Pulled out of the main first-fit loop so the
+// eviction fixup can reuse the exact same picker logic — guaranteeing the two
+// passes never disagree on what counts as a valid color for a range.
+function tryColorRange(sortedIdx RegInt, ranges LiveRangeArray, ig InterferenceGraph, rangeColors RegIntArray, vidToRangeIdx RegIntArray, pool RegIntArray, callerSavedMask BoolArray, poolIndexOf RegIntArray, poolSize RegInt, result ColoringResult) returns RegOrdinal
+	let range = try ranges.get(sortedIdx) otherwise panic("invariant: sortedIdx out of bounds in ranges")
+
+	// Collect registers used by already-colored neighbors
+	var usedRegs = BoolArray.create()
+	growColorBoolArray(usedRegs, size: poolSize)
+	// Track registers strongly preferred by uncolored interfering
+	// neighbors (their range.hint). The fallback picker defers these
+	// in its first pass so a "scratch" range doesn't burn a register
+	// some interfering neighbor has a specific reason to want.
+	var hintReservedRegs = BoolArray.create()
+	growColorBoolArray(hintReservedRegs, size: poolSize)
+
+	let nbrs = try ig.neighbors.get(sortedIdx) otherwise panic("invariant: sortedIdx out of bounds in ig.neighbors (sized to numRanges)")
+
+	for nbrIdx in nbrs 'eachNbr'
+		let nbrColor = getOr(rangeColors, index: nbrIdx, fallback: RM_NONE)
+		if nbrColor != RM_NONE 'colored'
+			// Find which pool index this register ordinal maps to
+			markRegUsed(usedRegs, regOrd: nbrColor, poolIndexOf: poolIndexOf)
+		end 'colored' else 'uncoloredNbr'
+			let nbrRange = try ranges.get(nbrIdx) otherwise panic("invariant: nbrIdx from ig.neighbors out of bounds in ranges")
+			// A fixed-reg neighbor will inevitably take its fixed register
+			// when it's colored — that decision isn't optional. Treat
+			// that reg as already taken even while the neighbor is
+			// uncolored; otherwise a virtual that interferes with the
+			// neighbor can grab the same color and the two ranges share
+			// a register, with the downstream codegen silently
+			// overwriting one. Hints are still soft (hintReservedRegs)
+			// and fall through to the picker's tiered fallback.
+			if nbrRange.fixedReg != RM_NONE 'hasFixed'
+				markRegUsed(usedRegs, regOrd: nbrRange.fixedReg, poolIndexOf: poolIndexOf)
+			end 'hasFixed' else 'noFixed'
+				if nbrRange.hint != RM_NONE 'hasHint'
+					markRegUsed(hintReservedRegs, regOrd: nbrRange.hint, poolIndexOf: poolIndexOf)
+				end 'hasHint'
+			end 'noFixed'
+		end 'uncoloredNbr'
+	end 'eachNbr'
+
+	// Choose a register
+	var chosenReg = RM_NONE
+
+	// Hard constraint: fixed register
+	if range.fixedReg != RM_NONE 'hasFixed'
+		chosenReg = range.fixedReg
+	end 'hasFixed' else 'pickReg'
+
+		// Soft constraint: register hint.
+		// Check both already-colored neighbors AND uncolored fixed-reg
+		// neighbors (which will inevitably get their fixed register).
+		var effectiveHint = range.hint
+
+		// Resolve copy-link hint: if no physical hint but a copy partner
+		// has been colored, use the partner's color as the hint.
+		// If the partner isn't colored yet, check its static hint (e.g.,
+		// from the loop body's two-address coalescing) and use that.
+		if effectiveHint == RM_NONE and range.copyHintValueId >= 0 'resolveCopyHint'
+			effectiveHint = resolveCopyLinkHint(range.copyHintValueId, vidToRangeIdx: vidToRangeIdx, rangeColors: rangeColors, ranges: ranges)
+		end 'resolveCopyHint'
+
+		if effectiveHint != RM_NONE 'hasHint'
+			let hintConflictsFixed = hintConflictsWithFixedNeighbor(effectiveHint, nbrs: nbrs, ranges: ranges, rangeColors: rangeColors)
+
+			// Honor the hint only when its class is safe for this range.
+			// A call-crossing range cannot live in a caller-saved hint;
+			// the call would clobber it silently.
+			let hintIsCallerSaved = regIsCallerSaved(effectiveHint, pool: pool, callerSavedMask: callerSavedMask)
+			let hintClassSafe = range.crossesCall == false or not hintIsCallerSaved
+
+			if not isRegUsed(usedRegs, regOrd: effectiveHint, poolIndexOf: poolIndexOf) and not hintConflictsFixed and hintClassSafe 'hintAvail'
+				chosenReg = effectiveHint
+			end 'hintAvail'
+		end 'hasHint'
+
+		// Fallback: walk the pool, preferring caller-saved or callee-saved
+		// based on whether the range survives across a call. The picker
+		// also defers registers that an uncolored interfering neighbor
+		// has explicitly hinted, falling back to them only when nothing
+		// else of the right class is free.
+		if chosenReg == RM_NONE 'needFallback'
+			let preferCallerSaved = not range.crossesCall
+			chosenReg = pickRegFromPool(pool, callerSavedMask: callerSavedMask, usedRegs: usedRegs, hintReservedRegs: hintReservedRegs, preferCallerSaved: preferCallerSaved)
+		end 'needFallback'
+	end 'pickReg'
+
+	// Store the assignment
+	try rangeColors.set(sortedIdx, value: chosenReg) otherwise panic("invariant: rangeColors.set OOB")
+
+	if chosenReg != RM_NONE 'hasColor'
+		let vid = range.valueId
+		if vid < result.assignment.count() 'inBounds'
+			try result.assignment.set(vid, value: chosenReg) otherwise panic("invariant: result.assignment.set OOB")
+		end 'inBounds'
+	end 'hasColor'
+
+	return chosenReg
+end 'tryColorRange'
+
+// Greedy-style eviction fixup. After the first-fit pass leaves some virtual
+// ranges uncolored, iteratively try to find a colored neighbor with strictly
+// lower (weight, cascade) that the uncolored range can evict. The freed
+// register goes to the uncolored range; the evictee is re-queued for
+// recoloring with cascade bumped by one.
+//
+// Termination: each eviction strictly increases the evictee's
+// (weight, cascade) lexicographic key (weight unchanged, cascade += 1). The
+// MAX_CASCADE bound means any individual range can be evicted at most
+// MAX_CASCADE times. So the total work across the fixup is O(n * MAX_CASCADE)
+// pops.
+//
+// Ranges left uncolored after this pass fall through to the spill loop
+// (RegisterAllocator.runSpillColorLoop) just as before — the fixup never
+// makes the picker fail where the first-fit pass succeeded.
+function runEvictionFixup(ranges LiveRangeArray, ig InterferenceGraph, rangeColors RegIntArray, vidToRangeIdx RegIntArray, pool RegIntArray, callerSavedMask BoolArray, poolIndexOf RegIntArray, poolSize RegInt, result ColoringResult, cascadeByValueId RegIntArray)
+	let numRanges = ranges.count()
+	// Worklist of range indices to (re-)try coloring. Initialized from
+	// the set of virtual ranges still uncolored after first-fit.
+	var pending = RegIntArray.create()
+	var ri = 0
+	while ri < numRanges 'collect'
+		let range = try ranges.get(ri) otherwise panic("invariant: ri < numRanges but ranges.get OOB")
+		if range.fixedReg == RM_NONE 'isVirtual'
+			let color = try rangeColors.get(ri) otherwise panic("invariant: rangeColors sized to numRanges but get OOB")
+			if color == RM_NONE 'uncolored'
+				pending.push(ri)
+			end 'uncolored'
+		end 'isVirtual'
+		ri = ri + 1
+	end 'collect'
+
+	if pending.count() == 0 'allColored'
+		return
+	end 'allColored'
+
+	// Safety belt: hard cap on total pops. With proper cascade discipline
+	// the cap is `numRanges * (MAX_CASCADE + 1)`; the extra headroom catches
+	// any subtle ordering bug without masking a real infinite loop.
+	let popCap = numRanges * (MAX_CASCADE + 2) + 32
+	var popCount = 0
+	// Track whether any eviction has freed a register so far in this pass.
+	// If not, calling tryColorRange a SECOND time on a range that first-fit
+	// already failed to color is wasted work AND can produce a different
+	// (still-valid but observably distinct) coloring because the picker
+	// has a hint-deferral tiebreaker that depends on whether interfering
+	// neighbors are colored or uncolored — and fixup sees more neighbors
+	// colored than first-fit did. Skipping the re-color preserves the
+	// pre-Phase-4 coloring on the no-eviction-needed path.
+	var anyEvicted = false
+
+	while pending.count() > 0 and popCount < popCap 'evictLoop'
+		popCount = popCount + 1
+
+		// Pop the highest-priority pending range: highest spill weight first
+		// (so reload vregs with SPILL_WEIGHT_INFINITE go before normal-weight
+		// ranges), tiebreak by lowest cascade (a freshly-pending range goes
+		// before a range that has already cycled through eviction).
+		let pickPos = pickHighestPriority(pending, ranges: ranges)
+		let sortedIdx = try pending.get(pickPos) otherwise panic("invariant: pickPos in pending bounds")
+		swapPopAt(pending, idx: pickPos)
+
+		// Skip if this range was already colored in a previous eviction step
+		// (e.g. an evictee may have been re-queued and then colored on a
+		// fresh attempt). Defensive — the cascade discipline should prevent
+		// the same range from being colored twice, but cheap to verify.
+		let curColor = try rangeColors.get(sortedIdx) otherwise panic("invariant: rangeColors sized to numRanges")
+		if curColor != RM_NONE 'alreadyColored'
+			continue
+		end 'alreadyColored'
+
+		// Only retry coloring if an earlier eviction in THIS pass has freed
+		// some register. Otherwise the picker sees the same constraints as
+		// first-fit and would produce the same uncolored result — except
+		// the hint-deferral tiebreaker can flip if a previously-uncolored
+		// neighbor is now colored, which silently shifts the picker's
+		// choice for THIS range. That shift is sound but not bit-identical
+		// to the pre-Phase-4 baseline, which breaks the "no-eviction
+		// inputs produce identical coloring" invariant.
+		if anyEvicted 'evictedRecolor'
+			let recolor = tryColorRange(sortedIdx, ranges: ranges, ig: ig, rangeColors: rangeColors, vidToRangeIdx: vidToRangeIdx, pool: pool, callerSavedMask: callerSavedMask, poolIndexOf: poolIndexOf, poolSize: poolSize, result: result)
+			if recolor != RM_NONE 'gotColor'
+				continue
+			end 'gotColor'
+		end 'evictedRecolor'
+
+		// Still no register. Try eviction.
+		let range = try ranges.get(sortedIdx) otherwise panic("invariant: sortedIdx in ranges bounds")
+
+		// Restrict eviction to high-priority ranges: reload vregs
+		// (SPILL_WEIGHT_INFINITE). For normal-weight ranges, evicting a
+		// colored neighbor would just trade one spill for another — the
+		// spill picker already does that calculus better, and the resulting
+		// reload chain may grow pressure at downstream points rather than
+		// reduce it (sha256 case). Reloads MUST be colored or the allocator
+		// panics, so they alone justify the cost of cascading evictions.
+		if range.spillWeight != SPILL_WEIGHT_INFINITE 'normalWeight'
+			continue
+		end 'normalWeight'
+
+		if range.cascade >= MAX_CASCADE 'cascadeExhausted'
+			// Cannot evict any neighbor — the eviction rule requires the
+			// evictee's (weight, cascade) be STRICTLY smaller than the
+			// evictor's, and a range at MAX_CASCADE has the maximum possible
+			// cascade. Leave uncolored; the spill loop handles it.
+			logTrace(LogCategory.ir, message: function() gives "ssa-color: cascade-exhausted v{range.valueId} (cascade={range.cascade})")
+			continue
+		end 'cascadeExhausted'
+
+		let evicteeIdx = pickEvictionVictim(sortedIdx, ranges: ranges, ig: ig, rangeColors: rangeColors, pool: pool, callerSavedMask: callerSavedMask)
+		if evicteeIdx < 0 'noVictim'
+			// Phase 6 backstop: try last-chance recursive recoloring before
+			// giving up on this reload. Eviction failed because every
+			// colored neighbor is either fixed-reg (cannot be moved) or
+			// another infinite-weight reload (we never displace one reload
+			// for another). Recursive recoloring can still succeed by
+			// moving an interferer to a different register — even one held
+			// by yet another colored neighbor — provided the cascading
+			// moves bottom out within MAX_RECOLOR_DEPTH steps.
+			var fixed = BoolArray.create()
+			let recolored = tryLastChanceRecolor(sortedIdx, depth: MAX_RECOLOR_DEPTH, fixed: fixed, ranges: ranges, ig: ig, rangeColors: rangeColors, vidToRangeIdx: vidToRangeIdx, pool: pool, callerSavedMask: callerSavedMask, poolIndexOf: poolIndexOf, poolSize: poolSize, result: result)
+			if recolored 'recolorOk'
+				logTrace(LogCategory.ir, message: function() gives "ssa-color: last-chance-recolor v{range.valueId} (weight={range.spillWeight}, cascade={range.cascade})")
+				continue
+			end 'recolorOk'
+			// No eligible victim AND last-chance recoloring failed — fall
+			// through to spill loop. If this range is an infinite-weight
+			// reload, the spill loop will panic via panicUnresolvableReload.
+			logTrace(LogCategory.ir, message: function() gives "ssa-color: no-evictee v{range.valueId} (weight={range.spillWeight}, cascade={range.cascade})")
+			continue
+		end 'noVictim'
+
+		// Evict the victim: clear its color, bump its cascade, persist the
+		// new cascade to the sidetable so it survives the next liveness
+		// rebuild, and push it back onto the pending list.
+		let evictedReg = try rangeColors.get(evicteeIdx) otherwise panic("invariant: evicteeIdx is colored neighbor (just selected)")
+		try rangeColors.set(evicteeIdx, value: RM_NONE) otherwise panic("invariant: rangeColors.set OOB")
+		// Mutate the evictee's cascade and clear its color in result.
+		// Pulled into a helper so the `var evictee` borrow of `ranges`
+		// is released before the next iteration tries to scan it.
+		let evicteeVid = bumpEvicteeCascade(ranges, evicteeIdx: evicteeIdx, cascadeByValueId: cascadeByValueId, result: result)
+		pending.push(evicteeIdx)
+		anyEvicted = true
+
+		logTrace(LogCategory.ir, message: function() gives "ssa-color: evict v{evicteeVid} reg={evictedReg} for v{range.valueId}(w={range.spillWeight},c={range.cascade})")
+
+		// Now retry coloring the evictor. With the evictee's register freed,
+		// the picker should succeed — unless another neighbor also occupies
+		// every register acceptable for this range's class. In that
+		// pathological case the picker returns RM_NONE again, and we leave
+		// the range pending for another round (a different victim may be
+		// eligible next time).
+		let postEvictColor = tryColorRange(sortedIdx, ranges: ranges, ig: ig, rangeColors: rangeColors, vidToRangeIdx: vidToRangeIdx, pool: pool, callerSavedMask: callerSavedMask, poolIndexOf: poolIndexOf, poolSize: poolSize, result: result)
+		if postEvictColor == RM_NONE 'stillUncolored'
+			// Re-queue for another eviction attempt. Cascade unchanged for
+			// the evictor — only the evictee's cascade was bumped. The next
+			// pop will try a different victim (or fall through if none).
+			pending.push(sortedIdx)
+		end 'stillUncolored'
+	end 'evictLoop'
+
+	if popCount >= popCap 'capHit'
+		// Safety belt — should never fire if the cascade discipline is
+		// correct. If it does, the spill loop still recovers (uncolored
+		// ranges are spilled), but the bug needs investigating.
+		logError(LogCategory.ir, message: function() gives "ssa-color: eviction-fixup pop-cap hit ({popCount} pops, {pending.count()} still pending) — possible cascade-bookkeeping bug")
+	end 'capHit'
+end 'runEvictionFixup'
+
+// ============================================================
+// Phase 6: Last-Chance Recoloring (Formal Backstop)
+// ============================================================
+
+// Mirrors LLVM Greedy's `tryLastChanceRecoloring`. When simple eviction
+// (Phase 4) cannot find a register for `rangeIdx`, walk every register r in
+// the pool and ask: "if I were to take r, can I recursively re-place all
+// the neighbors currently holding r?" An interferer can move if it has
+// some other register available, possibly after itself displacing one of
+// its own neighbors at the next recursion depth.
+//
+// The `fixed` set tracks ranges that have *tentatively* been pinned to
+// their current color higher up in the recursion stack; the recursion is
+// not allowed to unfix those (otherwise the caller's choice would be
+// undone underneath it). On success, the assignments stick; on failure,
+// every tentative change made by this invocation is rolled back so the
+// caller sees the colored state unchanged.
+//
+// Depth is bounded by MAX_RECOLOR_DEPTH so the worst-case work is
+// `O(depth * fanout * pool_size)`. At depth 0 the helper degrades to
+// "find a literally-free register" — no further recursion is permitted.
+function tryLastChanceRecolor(rangeIdx RegInt, depth RegInt, fixed BoolArray, ranges LiveRangeArray, ig InterferenceGraph, rangeColors RegIntArray, vidToRangeIdx RegIntArray, pool RegIntArray, callerSavedMask BoolArray, poolIndexOf RegIntArray, poolSize RegInt, result ColoringResult) returns bool
+	if depth <= 0 'noDepth'
+		return false
+	end 'noDepth'
+
+	let range = try ranges.get(rangeIdx) otherwise panic("tryLastChanceRecolor: rangeIdx out of bounds in ranges")
+	// A fixed-reg range never enters last-chance recoloring — its color is
+	// hardwired and cannot be chosen. (The eviction-fixup worklist only
+	// holds virtual ranges, so this is a defensive check.)
+	if range.fixedReg != RM_NONE 'isFixed'
+		return false
+	end 'isFixed'
+
+	let nbrs = try ig.neighbors.get(rangeIdx) otherwise panic("tryLastChanceRecolor: rangeIdx out of bounds in ig.neighbors")
+	let preferCallerSaved = not range.crossesCall
+
+	// Walk the pool in fallback-picker order (caller-saved bias for non-call-
+	// crossing ranges, callee-saved bias otherwise). The two-pass order
+	// mirrors `pickRegFromPool`: preferred class first, then the off-class
+	// fallback for non-call-crossing ranges. Call-crossing ranges never
+	// accept a caller-saved register (would be silently clobbered).
+	if tryRecolorPass(rangeIdx, depth: depth, fixed: fixed, ranges: ranges, ig: ig, rangeColors: rangeColors, vidToRangeIdx: vidToRangeIdx, pool: pool, callerSavedMask: callerSavedMask, poolIndexOf: poolIndexOf, poolSize: poolSize, result: result, nbrs: nbrs, range: range, preferClass: preferCallerSaved) 'preferOk'
+		return true
+	end 'preferOk'
+	if preferCallerSaved 'tryOffClass'
+		// Tier-3 fallback for non-call-crossing ranges: callee-saved is
+		// acceptable but costs an extra prologue save.
+		if tryRecolorPass(rangeIdx, depth: depth, fixed: fixed, ranges: ranges, ig: ig, rangeColors: rangeColors, vidToRangeIdx: vidToRangeIdx, pool: pool, callerSavedMask: callerSavedMask, poolIndexOf: poolIndexOf, poolSize: poolSize, result: result, nbrs: nbrs, range: range, preferClass: false) 'offClassOk'
+			return true
+		end 'offClassOk'
+	end 'tryOffClass'
+	return false
+end 'tryLastChanceRecolor'
+
+// One sweep of the pool at a fixed preferred class. Used by
+// tryLastChanceRecolor to split the two-tier walk (preferred class first,
+// then off-class fallback) without duplicating the per-register attempt
+// logic.
+function tryRecolorPass(rangeIdx RegInt, depth RegInt, fixed BoolArray, ranges LiveRangeArray, ig InterferenceGraph, rangeColors RegIntArray, vidToRangeIdx RegIntArray, pool RegIntArray, callerSavedMask BoolArray, poolIndexOf RegIntArray, poolSize RegInt, result ColoringResult, nbrs RegIntArray, range LiveRange, preferClass bool) returns bool
+	var pi = 0
+	while pi < poolSize 'eachReg'
+		let isCallerSaved = try callerSavedMask.get(pi) otherwise panic("tryRecolorPass: callerSavedMask must be parallel to pool but get({pi}) failed")
+		if isCallerSaved != preferClass 'wrongClass'
+			pi = pi + 1
+			continue
+		end 'wrongClass'
+
+		let reg = try pool.get(pi) otherwise panic("tryRecolorPass: pi < poolSize just succeeded but pool.get({pi}) failed")
+		if tryRecolorAtReg(rangeIdx, targetReg: reg, depth: depth, fixed: fixed, ranges: ranges, ig: ig, rangeColors: rangeColors, vidToRangeIdx: vidToRangeIdx, pool: pool, callerSavedMask: callerSavedMask, poolIndexOf: poolIndexOf, poolSize: poolSize, result: result, nbrs: nbrs, range: range) 'tookIt'
+			return true
+		end 'tookIt'
+		pi = pi + 1
+	end 'eachReg'
+	return false
+end 'tryRecolorPass'
+
+// Attempt to give `range` the specific register `targetReg` by recursively
+// re-placing every colored neighbor currently holding `targetReg`. Returns
+// true on success (the assignment sticks), false on failure (state is
+// rolled back exactly as it was on entry).
+//
+// Pre-conditions: `range` is virtual (fixedReg == RM_NONE) and currently
+// uncolored. `targetReg` is in `pool`.
+function tryRecolorAtReg(rangeIdx RegInt, targetReg RegOrdinal, depth RegInt, fixed BoolArray, ranges LiveRangeArray, ig InterferenceGraph, rangeColors RegIntArray, vidToRangeIdx RegIntArray, pool RegIntArray, callerSavedMask BoolArray, poolIndexOf RegIntArray, poolSize RegInt, result ColoringResult, nbrs RegIntArray, range LiveRange) returns bool
+	// Collect every colored neighbor currently holding `targetReg`. If any
+	// of them is unmovable (fixed-reg, already pinned by an outer recursion
+	// via `fixed`, or has been evicted to cascade exhaustion), `targetReg`
+	// is unreachable for `range` — try the next register.
+	//
+	// Same-register check on a fixed-reg uncolored neighbor: a virtual
+	// neighbor with fixedReg == targetReg is also unmovable — when it gets
+	// colored later it will inevitably take targetReg, so handing targetReg
+	// to `range` now would create a conflict.
+	var interferers = RegIntArray.create()
+	for nbrIdx in nbrs 'eachNbr'
+		let nbrColor = getOr(rangeColors, index: nbrIdx, fallback: RM_NONE)
+		let nbrRange = try ranges.get(nbrIdx) otherwise panic("tryRecolorAtReg: nbrIdx from ig.neighbors out of bounds in ranges")
+		if nbrColor == targetReg 'matchColor'
+			// Cannot displace a fixed-reg neighbor.
+			if nbrRange.fixedReg != RM_NONE 'nbrFixed'
+				return false
+			end 'nbrFixed'
+			// Cannot displace a neighbor the outer recursion has frozen.
+			if isFixedInRecolor(fixed, idx: nbrIdx) 'pinned'
+				return false
+			end 'pinned'
+			// Cannot displace a neighbor that has exhausted its eviction
+			// cascade — the eviction picker already determined no further
+			// movement is allowed for it. (Identical to the
+			// runEvictionFixup `cascadeExhausted` guard.)
+			if nbrRange.cascade >= MAX_CASCADE 'cascadeOut'
+				return false
+			end 'cascadeOut'
+			interferers.push(nbrIdx)
+		end 'matchColor' else 'noMatch'
+			// An uncolored fixed-reg neighbor will later take its fixed
+			// register; if that fixed register is `targetReg`, picking it
+			// for `range` would conflict once the neighbor is colored.
+			if nbrColor == RM_NONE and nbrRange.fixedReg == targetReg 'futureFixed'
+				return false
+			end 'futureFixed'
+		end 'noMatch'
+	end 'eachNbr'
+
+	// Class-safety check for `range` itself: a call-crossing range cannot
+	// land in a caller-saved register (the intervening call would clobber
+	// it silently). Same guard as `pickRegFromPool`.
+	if range.crossesCall 'mustBeCalleeSaved'
+		let regIsCS = regIsCallerSaved(targetReg, pool: pool, callerSavedMask: callerSavedMask)
+		if regIsCS 'wouldClobber'
+			return false
+		end 'wouldClobber'
+	end 'mustBeCalleeSaved'
+
+	// Save the original colors of every interferer so we can roll back on
+	// failure. The parallel index lists let the rollback loop touch exactly
+	// the slots we mutated.
+	var savedColors = RegIntArray.create()
+	var savedAssignments = RegIntArray.create()
+	for n in interferers 'snap'
+		let c = try rangeColors.get(n) otherwise panic("tryRecolorAtReg: interferer index out of bounds in rangeColors")
+		savedColors.push(c)
+		let nr = try ranges.get(n) otherwise panic("tryRecolorAtReg: interferer index out of bounds in ranges")
+		let a = getOr(result.assignment, index: nr.valueId, fallback: RM_NONE)
+		savedAssignments.push(a)
+	end 'snap'
+
+	// Tentatively clear each interferer's color and assign `targetReg` to
+	// `range`. The `fixed` set is extended with `range`'s index so the
+	// recursion below cannot pick `range` as an interferer and undo this
+	// decision.
+	for n in interferers 'unassign'
+		try rangeColors.set(n, value: RM_NONE) otherwise panic("tryRecolorAtReg: rangeColors.set OOB on interferer clear")
+		let nr = try ranges.get(n) otherwise panic("tryRecolorAtReg: interferer index out of bounds in ranges (clear assignment)")
+		if nr.valueId < result.assignment.count() 'inBounds'
+			try result.assignment.set(nr.valueId, value: RM_NONE) otherwise panic("tryRecolorAtReg: result.assignment.set OOB on interferer clear")
+		end 'inBounds'
+	end 'unassign'
+	try rangeColors.set(rangeIdx, value: targetReg) otherwise panic("tryRecolorAtReg: rangeColors.set OOB on tentative assign")
+	if range.valueId < result.assignment.count() 'inBoundsSelf'
+		try result.assignment.set(range.valueId, value: targetReg) otherwise panic("tryRecolorAtReg: result.assignment.set OOB on tentative assign")
+	end 'inBoundsSelf'
+	addFixedInRecolor(fixed, idx: rangeIdx)
+
+	// Attempt to re-place every interferer. First try a simple pick (some
+	// other register is now free thanks to chains of recoloring higher up);
+	// then fall back to recursive last-chance recoloring at depth-1.
+	var placedCount = 0
+	var allOk = true
+	for n in interferers 'replace'
+		let pickColor = tryColorRange(n, ranges: ranges, ig: ig, rangeColors: rangeColors, vidToRangeIdx: vidToRangeIdx, pool: pool, callerSavedMask: callerSavedMask, poolIndexOf: poolIndexOf, poolSize: poolSize, result: result)
+		if pickColor != RM_NONE 'simplePick'
+			placedCount = placedCount + 1
+			continue
+		end 'simplePick'
+		// Recursive recolor at depth-1. The shared `fixed` set carries the
+		// outer frame's pinned assignments so the recursion cannot disturb
+		// them.
+		if tryLastChanceRecolor(n, depth: depth - 1, fixed: fixed, ranges: ranges, ig: ig, rangeColors: rangeColors, vidToRangeIdx: vidToRangeIdx, pool: pool, callerSavedMask: callerSavedMask, poolIndexOf: poolIndexOf, poolSize: poolSize, result: result) 'recursiveOk'
+			placedCount = placedCount + 1
+			continue
+		end 'recursiveOk'
+		allOk = false
+		break
+	end 'replace'
+
+	if allOk 'success'
+		removeFixedInRecolor(fixed, idx: rangeIdx)
+		logTrace(LogCategory.ir, message: function() gives "ssa-color: recolor v{range.valueId} -> reg={targetReg} depth={depth} interferers={interferers.count()}")
+		return true
+	end 'success'
+
+	// Roll back: undo any successful interferer placements first (so their
+	// freed registers don't poison the simple-pick path on a future try),
+	// then restore the saved colors. Restoring overwrites whatever the
+	// successful recursive recolorings tentatively wrote — that's the whole
+	// point of saving the snapshot before the tentative assignment.
+	var ri = 0
+	while ri < placedCount 'undoPlaced'
+		let n = try interferers.get(ri) otherwise panic("tryRecolorAtReg: interferer index out of bounds during rollback")
+		let nr = try ranges.get(n) otherwise panic("tryRecolorAtReg: interferer index out of bounds in ranges during rollback")
+		try rangeColors.set(n, value: RM_NONE) otherwise panic("tryRecolorAtReg: rangeColors.set OOB during rollback clear")
+		if nr.valueId < result.assignment.count() 'inBoundsR'
+			try result.assignment.set(nr.valueId, value: RM_NONE) otherwise panic("tryRecolorAtReg: result.assignment.set OOB during rollback clear")
+		end 'inBoundsR'
+		ri = ri + 1
+	end 'undoPlaced'
+	// Restore the original interferer colors. The shared `rangeColors`
+	// array sees the same pre-tentative state regardless of how the
+	// recursion fared.
+	var si = 0
+	let interferersCount = interferers.count()
+	while si < interferersCount 'restore'
+		let n = try interferers.get(si) otherwise panic("tryRecolorAtReg: interferer index out of bounds during restore")
+		let nr = try ranges.get(n) otherwise panic("tryRecolorAtReg: interferer index out of bounds in ranges during restore")
+		let c = try savedColors.get(si) otherwise panic("tryRecolorAtReg: savedColors index out of bounds during restore")
+		let a = try savedAssignments.get(si) otherwise panic("tryRecolorAtReg: savedAssignments index out of bounds during restore")
+		try rangeColors.set(n, value: c) otherwise panic("tryRecolorAtReg: rangeColors.set OOB during restore")
+		if nr.valueId < result.assignment.count() 'inBoundsRR'
+			try result.assignment.set(nr.valueId, value: a) otherwise panic("tryRecolorAtReg: result.assignment.set OOB during restore")
+		end 'inBoundsRR'
+		si = si + 1
+	end 'restore'
+	// Un-tentatively-assign `range` itself.
+	try rangeColors.set(rangeIdx, value: RM_NONE) otherwise panic("tryRecolorAtReg: rangeColors.set OOB on unassign self")
+	if range.valueId < result.assignment.count() 'inBoundsSelfR'
+		try result.assignment.set(range.valueId, value: RM_NONE) otherwise panic("tryRecolorAtReg: result.assignment.set OOB on unassign self")
+	end 'inBoundsSelfR'
+	removeFixedInRecolor(fixed, idx: rangeIdx)
+	return false
+end 'tryRecolorAtReg'
+
+// Mark `idx` as frozen for the duration of an outer last-chance recolor
+// frame. The BoolArray grows on demand; absent slots default to `false`.
+function addFixedInRecolor(fixed BoolArray, idx RegInt)
+	while fixed.count() <= idx 'grow'
+		fixed.push(false)
+	end 'grow'
+	try fixed.set(idx, value: true) otherwise panic("addFixedInRecolor: fixed.set OOB after grow")
+end 'addFixedInRecolor'
+
+// Unmark `idx` once the outer frame's attempt has resolved (either by
+// committing or rolling back). The slot is guaranteed to exist because
+// `addFixedInRecolor` was paired with this call.
+function removeFixedInRecolor(fixed BoolArray, idx RegInt)
+	if idx < fixed.count() 'inBounds'
+		try fixed.set(idx, value: false) otherwise panic("removeFixedInRecolor: fixed.set OOB inside count")
+	end 'inBounds'
+end 'removeFixedInRecolor'
+
+// Read the frozen-flag for `idx`. Indices past the end default to `false`
+// (the BoolArray is grown lazily by addFixedInRecolor as ranges enter the
+// recursion stack).
+function isFixedInRecolor(fixed BoolArray, idx RegInt) returns bool
+	if idx >= fixed.count() 'outOfBounds'
+		return false
+	end 'outOfBounds'
+	return try fixed.get(idx) otherwise false
+end 'isFixedInRecolor'
+
+// Bump the evictee's cascade by 1 and clear its `result.assignment` entry.
+// The `var evictee = ranges.get(...)` borrow is scoped to this function so
+// the caller can immediately resume mutating `ranges` (or do another
+// `ranges.get(...)`-and-mutate cycle) without tripping the borrow checker.
+// Returns the evictee's valueId so the caller can fold it into a log
+// message without re-borrowing `ranges`.
+function bumpEvicteeCascade(ranges LiveRangeArray, evicteeIdx RegInt, cascadeByValueId RegIntArray, result ColoringResult) returns RegInt
+	var evictee = try ranges.get(evicteeIdx) otherwise panic("invariant: evicteeIdx in ranges bounds")
+	let vid = evictee.valueId
+	if vid < result.assignment.count() 'inBounds'
+		try result.assignment.set(vid, value: RM_NONE) otherwise panic("invariant: result.assignment.set OOB")
+	end 'inBounds'
+	evictee.cascade = evictee.cascade + 1
+	set(cascadeByValueId, index: vid, value: evictee.cascade, sentinel: 0)
+	return vid
+end 'bumpEvicteeCascade'
+
+// Find the position in `pending` of the highest-priority range. Higher spill
+// weight wins; equal weight tiebreaks on lower cascade (a fresher range goes
+// before a stale one). Linear scan — `pending` is bounded by the count of
+// uncolored ranges, which is small in practice (the first-fit pass colors
+// the vast majority).
+function pickHighestPriority(pending RegIntArray, ranges LiveRangeArray) returns RegInt
+	let n = pending.count()
+	if n == 0 'empty'
+		panic("pickHighestPriority: pending list empty (caller must check before calling)")
+	end 'empty'
+	var bestPos = 0
+	var bestIdx = try pending.get(0) otherwise panic("invariant: n > 0 but pending.get(0) failed")
+	var bestRange = try ranges.get(bestIdx) otherwise panic("invariant: bestIdx in ranges bounds")
+	var i = 1
+	while i < n 'scan'
+		let candIdx = try pending.get(i) otherwise panic("invariant: i < n but pending.get failed")
+		let cand = try ranges.get(candIdx) otherwise panic("invariant: candIdx in ranges bounds")
+		// Higher weight wins; equal-weight tiebreak: lower cascade wins.
+		if cand.spillWeight > bestRange.spillWeight 'higherWeight'
+			bestPos = i
+			bestIdx = candIdx
+			bestRange = cand
+		end 'higherWeight' else 'sameOrLower'
+			if cand.spillWeight == bestRange.spillWeight and cand.cascade < bestRange.cascade 'lowerCascade'
+				bestPos = i
+				bestIdx = candIdx
+				bestRange = cand
+			end 'lowerCascade'
+		end 'sameOrLower'
+		i = i + 1
+	end 'scan'
+	return bestPos
+end 'pickHighestPriority'
+
+// Remove the entry at position `idx` from `list` by swapping the last entry
+// into its slot and popping. O(1); does not preserve list order — fine for
+// the worklist semantics of the eviction fixup.
+function swapPopAt(list RegIntArray, idx RegInt)
+	let last = list.count() - 1
+	if idx < last 'notLast'
+		let tail = try list.get(last) otherwise panic("invariant: list non-empty before swap")
+		try list.set(idx, value: tail) otherwise panic("invariant: list.set OOB during swap-pop")
+	end 'notLast'
+	try list.pop() otherwise panic("invariant: list non-empty before pop")
+end 'swapPopAt'
+
+// Find the best eviction victim for `evictorIdx` from among its colored
+// neighbors. The victim's (weight, cascade) must be strictly less than the
+// evictor's under lexicographic ordering. Among all eligible victims, we
+// pick the one with the LOWEST weight (cheapest to displace); ties on weight
+// break to the lowest cascade (a freshly-evicted candidate has more "room"
+// for the cascade bump that eviction will inflict).
+//
+// Fixed-reg ranges are excluded — their assignment is hardwired and cannot
+// be moved. Returns -1 if no eligible victim exists; in that case the
+// evictor must remain uncolored and fall through to the spill loop.
+function pickEvictionVictim(evictorIdx RegInt, ranges LiveRangeArray, ig InterferenceGraph, rangeColors RegIntArray, pool RegIntArray, callerSavedMask BoolArray) returns RegInt
+	let evictor = try ranges.get(evictorIdx) otherwise panic("invariant: evictorIdx in ranges bounds")
+	let nbrs = try ig.neighbors.get(evictorIdx) otherwise panic("invariant: evictorIdx in ig.neighbors bounds")
+
+	// The evictor must be able to USE the evictee's register after the swap.
+	// Otherwise the eviction is pointless: the freed register is one the
+	// evictor's class-safety constraint (e.g. crossesCall + caller-saved)
+	// would reject. We probe this per-victim by checking whether the
+	// candidate register would be acceptable for the evictor.
+	let evictorPrefersCallerSaved = not evictor.crossesCall
+
+	var bestNbr = -1
+	var bestWeight = i64.max
+	var bestCascade = i64.max
+	for nbrIdx in nbrs 'each'
+		let nbrColor = getOr(rangeColors, index: nbrIdx, fallback: RM_NONE)
+		if nbrColor == RM_NONE 'uncolored'
+			continue
+		end 'uncolored'
+
+		let nbr = try ranges.get(nbrIdx) otherwise panic("invariant: nbrIdx in ranges bounds")
+		// Fixed-reg ranges and infinite-weight reload ranges cannot be
+		// evicted — the former because their assignment is hardwired, the
+		// latter because the spill loop already considers them
+		// unspillable (any attempt to "respill" loops indefinitely).
+		if nbr.fixedReg != RM_NONE 'fixed'
+			continue
+		end 'fixed'
+		if nbr.spillWeight == SPILL_WEIGHT_INFINITE 'unspillable'
+			continue
+		end 'unspillable'
+
+		// Strict lexicographic priority: evictee MUST have either lower
+		// weight, or equal weight with lower cascade. Equal (weight, cascade)
+		// is NOT allowed — that would enable cycles where two same-priority
+		// ranges trade the same register forever.
+		let weightLower = nbr.spillWeight < evictor.spillWeight
+		let weightEqualCascadeLower = nbr.spillWeight == evictor.spillWeight and nbr.cascade < evictor.cascade
+		if not weightLower and not weightEqualCascadeLower 'notEligible'
+			continue
+		end 'notEligible'
+
+		// The evictor must be able to take the freed register. A
+		// non-crossesCall evictor accepts any register; a crossesCall
+		// evictor only accepts a callee-saved register (a caller-saved
+		// freed reg would be silently clobbered by the intervening call).
+		let regIsCS = regIsCallerSaved(nbrColor, pool: pool, callerSavedMask: callerSavedMask)
+		if not evictorPrefersCallerSaved and regIsCS 'wrongClass'
+			continue
+		end 'wrongClass'
+
+		// Among eligible victims, pick the cheapest (lowest weight); break
+		// ties on lowest cascade.
+		if nbr.spillWeight < bestWeight 'newBest'
+			bestNbr = nbrIdx
+			bestWeight = nbr.spillWeight
+			bestCascade = nbr.cascade
+		end 'newBest' else 'sameOrHigher'
+			if nbr.spillWeight == bestWeight and nbr.cascade < bestCascade 'tiebreak'
+				bestNbr = nbrIdx
+				bestCascade = nbr.cascade
+			end 'tiebreak'
+		end 'sameOrHigher'
+	end 'each'
+
+	return bestNbr
+end 'pickEvictionVictim'
 
 // Build a parallel BoolArray indexed by pool position: true if the register
 // at that pool position is caller-saved. Computed once per coloring pass and

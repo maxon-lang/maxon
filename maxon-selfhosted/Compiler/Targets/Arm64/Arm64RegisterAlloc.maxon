@@ -116,7 +116,7 @@ end 'createArm64CallConvFps'
 // Build the arm64 register-allocator descriptor. All target config lives here;
 // RegState is built from this descriptor once per function.
 export function createArm64TargetRegAlloc() returns TargetRegAlloc
-	return TargetRegAlloc.create(createArm64GprPool(), callerSavedGprs: createArm64CallerSavedGprs(), callConvGprs: createArm64CallConvGprs(), returnGprOrd: arm64RegToOrdinal(Arm64Register.x0), errorFlagOrd: arm64RegToOrdinal(Arm64Register.x1), indirectCallScratchOrd: arm64RegToOrdinal(Arm64Register.x16), gprCycleBreakOrd: arm64RegToOrdinal(Arm64Register.x16), fpPool: createArm64FpPool(), callerSavedFps: createArm64CallerSavedFps(), callConvFps: createArm64CallConvFps(), returnFpOrd: 0, fpCycleBreakOrd: 31, hasXchg: false, spillsGrowDown: false, hasPreSeed: false, initialSpillBase: 16)
+	return TargetRegAlloc.create(createArm64GprPool(), callerSavedGprs: createArm64CallerSavedGprs(), callConvGprs: createArm64CallConvGprs(), returnGprOrd: arm64RegToOrdinal(Arm64Register.x0), errorFlagOrd: arm64RegToOrdinal(Arm64Register.x1), indirectCallScratchOrd: arm64RegToOrdinal(Arm64Register.x16), gprCycleBreakOrd: arm64RegToOrdinal(Arm64Register.x16), fpPool: createArm64FpPool(), callerSavedFps: createArm64CallerSavedFps(), callConvFps: createArm64CallConvFps(), returnFpOrd: 0, fpCycleBreakOrd: 31, hasXchg: false, spillsGrowDown: false, hasPreSeed: false, hasMemOperandAlu: false, initialSpillBase: 16)
 end 'createArm64TargetRegAlloc'
 
 // --- State creation ---
@@ -226,6 +226,11 @@ export function arm64OpHasVirtualRegs(op Arm64Op) returns bool
 		atomicDecMem(addrReg) gives isVirtualArm64Gpr(addrReg)
 		atomicXaddMem(resultReg, addrReg, valReg) gives isVirtualArm64Gpr(resultReg) or isVirtualArm64Gpr(addrReg) or isVirtualArm64Gpr(valReg)
 		stashEntryArgv gives false
+		addRegImm(destReg, _) gives isVirtualArm64Gpr(destReg)
+		subRegImm(destReg, _) gives isVirtualArm64Gpr(destReg)
+		andRegImm(destReg, _) gives isVirtualArm64Gpr(destReg)
+		orRegImm(destReg, _) gives isVirtualArm64Gpr(destReg)
+		xorRegImm(destReg, _) gives isVirtualArm64Gpr(destReg)
 	end 'check'
 end 'arm64OpHasVirtualRegs'
 
@@ -317,6 +322,12 @@ export function countArm64OpReads(counts RegIntArray, a64Op Arm64Op)
 		atomicDecMem(addrReg) then incUse(counts, id: arm64VRegId(addrReg))
 		atomicXaddMem(_, addrReg, valReg) then countArm64TwoReads(counts, reg1: addrReg, reg2: valReg)
 		stashEntryArgv then break 'scan'
+		// Phase 2: immediate-form ALU — dest is both read and written.
+		addRegImm(destReg, _) then incUse(counts, id: arm64VRegId(destReg))
+		subRegImm(destReg, _) then incUse(counts, id: arm64VRegId(destReg))
+		andRegImm(destReg, _) then incUse(counts, id: arm64VRegId(destReg))
+		orRegImm(destReg, _) then incUse(counts, id: arm64VRegId(destReg))
+		xorRegImm(destReg, _) then incUse(counts, id: arm64VRegId(destReg))
 	end 'scan'
 end 'countArm64OpReads'
 
@@ -328,7 +339,9 @@ export function noteArm64OpDefs(defBlocks RegIntArray, blockIdx RegInt, a64Op Ar
 		singleDef then noteArm64SingleDef(defBlocks, blockIdx: blockIdx, op: a64Op)
 		singleUse then break 'patDef'
 		defUse then noteArm64DefUse(defBlocks, blockIdx: blockIdx, op: a64Op)
-		twoAddr to unaryInPlace then break 'patDef'
+		twoAddr then break 'patDef'
+		useDefImm then noteArm64UseDefImm(defBlocks, blockIdx: blockIdx, op: a64Op)
+		unaryInPlace then break 'patDef'
 		threeAddr then noteArm64ThreeAddr(defBlocks, blockIdx: blockIdx, op: a64Op)
 		twoUse to baseUseSrcUse then break 'patDef'
 		baseUseDest then noteArm64BaseUseDest(defBlocks, blockIdx: blockIdx, op: a64Op)
@@ -347,6 +360,9 @@ export function noteArm64OpDefs(defBlocks RegIntArray, blockIdx RegInt, a64Op Ar
 		constImm then noteArm64ConstImm(defBlocks, blockIdx: blockIdx, op: a64Op)
 		shift to exchange then break 'patDef'
 		csel then noteArm64Csel(defBlocks, blockIdx: blockIdx, op: a64Op)
+		// Phase 2 (x64-only) patterns — never appear on arm64 but the match must
+		// cover them for exhaustiveness.
+		baseUseUseDef to defUseImm then break 'patDef'
 	end 'patDef'
 end 'noteArm64OpDefs'
 
@@ -373,6 +389,7 @@ function noteArm64FpDef(defBlocks RegIntArray, blockIdx RegInt, op Arm64Op, pat 
 		baseUseFpUse then break 'which'
 		fpTwoAddr then break 'which'
 		movRegReg to csel then break 'which'
+		baseUseUseDef to defUseImm then break 'which'
 	end 'which'
 end 'noteArm64FpDef'
 
@@ -402,7 +419,7 @@ function noteArm64MovRegRegDef(defBlocks RegIntArray, blockIdx RegInt, op Arm64O
 	match op 'extract'
 		movRegReg(destReg, _) then noteArm64DefId(defBlocks, blockIdx: blockIdx, vreg: destReg)
 		prologue to memcpyOp then break 'extract'
-		spillToStack to stashEntryArgv then break 'extract'
+		spillToStack to xorRegImm then break 'extract'
 	end 'extract'
 end 'noteArm64MovRegRegDef'
 
@@ -417,7 +434,7 @@ function noteArm64ConstImm(defBlocks RegIntArray, blockIdx RegInt, op Arm64Op)
 	match op 'extract'
 		movImm(dest, _) then noteArm64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
 		prologue to epilogue then break 'extract'
-		strToSlot to stashEntryArgv then break 'extract'
+		strToSlot to xorRegImm then break 'extract'
 	end 'extract'
 end 'noteArm64ConstImm'
 
@@ -463,6 +480,18 @@ function noteArm64DefUse(defBlocks RegIntArray, blockIdx RegInt, op Arm64Op)
 		default panic("noteArm64: unexpected op for pattern")
 	end 'extract'
 end 'noteArm64DefUse'
+
+// Phase 2: arm64 immediate-form ALU. Dest is both used and (re)defined.
+function noteArm64UseDefImm(defBlocks RegIntArray, blockIdx RegInt, op Arm64Op)
+	match op 'extract'
+		addRegImm(dest, _) then noteArm64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		subRegImm(dest, _) then noteArm64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		andRegImm(dest, _) then noteArm64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		orRegImm(dest, _) then noteArm64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		xorRegImm(dest, _) then noteArm64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		default panic("noteArm64: unexpected op for pattern")
+	end 'extract'
+end 'noteArm64UseDefImm'
 
 function noteArm64BaseUseDest(defBlocks RegIntArray, blockIdx RegInt, op Arm64Op)
 	match op 'extract'
@@ -574,6 +603,12 @@ export function recordArm64OpLastUses(positions RegIntArray, a64Op Arm64Op, opId
 		atomicDecMem(addrReg) then recordLastUse(positions, id: arm64VRegId(addrReg), opIdx: opIdx)
 		atomicXaddMem(_, addrReg, valReg) then recordArm64TwoLastUses(positions, reg1: addrReg, reg2: valReg, opIdx: opIdx)
 		stashEntryArgv then break 'scan'
+		// Phase 2: immediate-form ALU — dest is both read and written.
+		addRegImm(destReg, _) then recordLastUse(positions, id: arm64VRegId(destReg), opIdx: opIdx)
+		subRegImm(destReg, _) then recordLastUse(positions, id: arm64VRegId(destReg), opIdx: opIdx)
+		andRegImm(destReg, _) then recordLastUse(positions, id: arm64VRegId(destReg), opIdx: opIdx)
+		orRegImm(destReg, _) then recordLastUse(positions, id: arm64VRegId(destReg), opIdx: opIdx)
+		xorRegImm(destReg, _) then recordLastUse(positions, id: arm64VRegId(destReg), opIdx: opIdx)
 	end 'scan'
 end 'recordArm64OpLastUses'
 
@@ -598,7 +633,7 @@ export function classifyArm64OpReads(sinkOnly RegIntArray, usedByNonSink RegIntA
 		match a64Op 'extractMov'
 			movRegReg(dest, src) then classifyArm64MovRegReg(sinkOnly, usedByNonSink: usedByNonSink, dest: dest, src: src)
 			prologue to memcpyOp then break 'extractMov'
-			spillToStack to stashEntryArgv then break 'extractMov'
+			spillToStack to xorRegImm then break 'extractMov'
 		end 'extractMov'
 	end 'isMov' else 'other'
 		countArm64OpReads(usedByNonSink, a64Op: a64Op)
@@ -622,7 +657,7 @@ export function isArm64RetTerminator(module TargetModule, packed OpIndex) return
 	match a64Op 'checkRet'
 		ret then result = true
 		prologue to branchLink then break 'checkRet'
-		syscall to stashEntryArgv then break 'checkRet'
+		syscall to xorRegImm then break 'checkRet'
 	end 'checkRet'
 	return result
 end 'isArm64RetTerminator'
@@ -635,7 +670,7 @@ function isArm64OpPanicCall(op Arm64Op) returns bool
 	match op 'check'
 		branchLink(target) then return target == "mrt_panic"
 		prologue to branch then break 'check'
-		ret to stashEntryArgv then break 'check'
+		ret to xorRegImm then break 'check'
 	end 'check'
 	return false
 end 'isArm64OpPanicCall'
@@ -926,12 +961,17 @@ export function colorArm64Op(module TargetModule, a64Op Arm64Op, coloring Colori
 		baseUseFpDef then colorA64BaseUseFpDef(module, a64Op: a64Op, coloring: coloring, opRefs: opRefs)
 		// Patterns not used by ARM64
 		twoAddr then panic("colorArm64Op: unsupported pattern twoAddr")
-		useDefImm then panic("colorArm64Op: unsupported pattern useDefImm")
+		// Phase 2: arm64 immediate-form ALU shares the useDefImm pattern with x64.
+		useDefImm then colorA64UseDefImm(module, a64Op: a64Op, coloring: coloring, opRefs: opRefs)
 		unaryInPlace then panic("colorArm64Op: unsupported pattern unaryInPlace")
 		fpTwoAddr then panic("colorArm64Op: unsupported pattern fpTwoAddr")
 		shift then panic("colorArm64Op: unsupported pattern shift")
 		divReg then panic("colorArm64Op: unsupported pattern divReg")
 		exchange then panic("colorArm64Op: unsupported pattern exchange")
+		// Phase 2 x64-only patterns (no ARM64 op uses these — load-store ISA).
+		baseUseUseDef then panic("colorArm64Op: unsupported pattern baseUseUseDef")
+		baseTwoUse then panic("colorArm64Op: unsupported pattern baseTwoUse")
+		defUseImm then panic("colorArm64Op: unsupported pattern defUseImm")
 	end 'dispatch'
 end 'colorArm64Op'
 
@@ -975,6 +1015,18 @@ function colorA64DefUse(module TargetModule, a64Op Arm64Op, coloring ColoringRes
 	let s = colorArm64Gpr(src, coloring: coloring)
 	pushArm64ToList(module, opRefs: opRefs, op: arm64OpWithPhysDefUse(a64Op, d: d, s: s))
 end 'colorA64DefUse'
+
+// Phase 2: color an arm64 immediate-form ALU op. Dest is use+def, value rides along.
+function colorA64UseDefImm(module TargetModule, a64Op Arm64Op, coloring ColoringResult, opRefs OpIndexList)
+	match a64Op 'extract'
+		addRegImm(dest, value) then pushArm64ToList(module, opRefs: opRefs, op: Arm64Op.addRegImm(arm64PhysFromOrd(colorArm64Gpr(dest, coloring: coloring)), value: value))
+		subRegImm(dest, value) then pushArm64ToList(module, opRefs: opRefs, op: Arm64Op.subRegImm(arm64PhysFromOrd(colorArm64Gpr(dest, coloring: coloring)), value: value))
+		andRegImm(dest, value) then pushArm64ToList(module, opRefs: opRefs, op: Arm64Op.andRegImm(arm64PhysFromOrd(colorArm64Gpr(dest, coloring: coloring)), value: value))
+		orRegImm(dest, value) then pushArm64ToList(module, opRefs: opRefs, op: Arm64Op.orRegImm(arm64PhysFromOrd(colorArm64Gpr(dest, coloring: coloring)), value: value))
+		xorRegImm(dest, value) then pushArm64ToList(module, opRefs: opRefs, op: Arm64Op.xorRegImm(arm64PhysFromOrd(colorArm64Gpr(dest, coloring: coloring)), value: value))
+		default panic("colorA64UseDefImm: unexpected op")
+	end 'extract'
+end 'colorA64UseDefImm'
 
 function colorA64TwoUse(module TargetModule, a64Op Arm64Op, coloring ColoringResult, opRefs OpIndexList)
 	match a64Op 'extract'
@@ -1305,12 +1357,17 @@ export function remapArm64Op(a64Op Arm64Op, remap RegIntArray) returns Arm64Op
 
 		// Patterns not used by ARM64
 		twoAddr gives a64Op
-		useDefImm gives a64Op
+		// Phase 2: arm64 immediate-form ALU uses useDefImm.
+		useDefImm gives remapA64UseDefImm(a64Op, remap: remap)
 		unaryInPlace gives a64Op
 		fpTwoAddr gives a64Op
 		shift gives a64Op
 		divReg gives a64Op
 		exchange gives a64Op
+		// Phase 2 x64-only patterns.
+		baseUseUseDef gives a64Op
+		baseTwoUse gives a64Op
+		defUseImm gives a64Op
 	end 'dispatch'
 end 'remapArm64Op'
 
@@ -1375,6 +1432,18 @@ function remapA64DefUse(a64Op Arm64Op, remap RegIntArray) returns Arm64Op
 		default panic("remapArm64: unexpected op for pattern")
 	end 'remap'
 end 'remapA64DefUse'
+
+// Phase 2: remap virtual regs in an arm64 immediate-form ALU op.
+function remapA64UseDefImm(a64Op Arm64Op, remap RegIntArray) returns Arm64Op
+	return match a64Op 'remap'
+		addRegImm(dest, value) gives Arm64Op.addRegImm(remapArm64Gpr(dest, remap: remap), value: value)
+		subRegImm(dest, value) gives Arm64Op.subRegImm(remapArm64Gpr(dest, remap: remap), value: value)
+		andRegImm(dest, value) gives Arm64Op.andRegImm(remapArm64Gpr(dest, remap: remap), value: value)
+		orRegImm(dest, value) gives Arm64Op.orRegImm(remapArm64Gpr(dest, remap: remap), value: value)
+		xorRegImm(dest, value) gives Arm64Op.xorRegImm(remapArm64Gpr(dest, remap: remap), value: value)
+		default panic("remapArm64: unexpected op for pattern")
+	end 'remap'
+end 'remapA64UseDefImm'
 
 function remapA64TwoUse(a64Op Arm64Op, remap RegIntArray) returns Arm64Op
 	return match a64Op 'remap'
@@ -1666,7 +1735,7 @@ export type Arm64RegAllocTarget implements RegAllocTarget
 		return match a64Op 'check'
 			condBranch(_, targetBlock) gives targetBlock
 			prologue to cmpRegZero gives -1
-			branch to stashEntryArgv gives -1
+			branch to xorRegImm gives -1
 		end 'check'
 	end 'getCondBrTarget'
 
@@ -1675,7 +1744,7 @@ export type Arm64RegAllocTarget implements RegAllocTarget
 		return match a64Op 'check'
 			branch gives true
 			prologue to condBranch gives false
-			branchLink to stashEntryArgv gives false
+			branchLink to xorRegImm gives false
 		end 'check'
 	end 'isUnconditionalJmp'
 
@@ -1684,7 +1753,7 @@ export type Arm64RegAllocTarget implements RegAllocTarget
 		return match a64Op 'check'
 			branch(targetBlock) gives targetBlock
 			prologue to condBranch gives -1
-			branchLink to stashEntryArgv gives -1
+			branchLink to xorRegImm gives -1
 		end 'check'
 	end 'getBranchTarget'
 
@@ -1693,7 +1762,7 @@ export type Arm64RegAllocTarget implements RegAllocTarget
 		return match a64Op 'check'
 			branch(targetBlock) gives targetBlock
 			prologue to condBranch gives -1
-			branchLink to stashEntryArgv gives -1
+			branchLink to xorRegImm gives -1
 		end 'check'
 	end 'getUncondJmpTarget'
 
@@ -1702,7 +1771,7 @@ export type Arm64RegAllocTarget implements RegAllocTarget
 		let newOp = match a64Op 'rewrite'
 			branch gives Arm64Op.branch(newTarget)
 			prologue to condBranch gives a64Op
-			branchLink to stashEntryArgv gives a64Op
+			branchLink to xorRegImm gives a64Op
 		end 'rewrite'
 		let newIdx = module.arm64Ops.count()
 		module.arm64Ops.push(newOp)
@@ -1714,7 +1783,7 @@ export type Arm64RegAllocTarget implements RegAllocTarget
 		let newOp = match a64Op 'rewrite'
 			condBranch(condition, _) gives Arm64Op.condBranch(condition, targetBlock: newTarget)
 			prologue to cmpRegZero gives a64Op
-			branch to stashEntryArgv gives a64Op
+			branch to xorRegImm gives a64Op
 		end 'rewrite'
 		let newIdx = module.arm64Ops.count()
 		module.arm64Ops.push(newOp)
@@ -1752,6 +1821,58 @@ export type Arm64RegAllocTarget implements RegAllocTarget
 			ops.append(idx)
 		end 'gpr'
 	end 'emitReloadOp'
+
+	function emitVirtualMov(module TargetModule, ops OpIndexList, destValueId RegInt, srcValueId RegInt, regClass RegInt)
+		if regClass == 1 'fp'
+			let idx = module.arm64Ops.count()
+			module.arm64Ops.push(Arm64Op.fmovRegReg(Arm64FpVReg.virtual(destValueId), src: Arm64FpVReg.virtual(srcValueId), precision: FloatPrecision.f64))
+			ops.append(idx)
+		end 'fp' else 'gpr'
+			let idx = module.arm64Ops.count()
+			module.arm64Ops.push(Arm64Op.movRegReg(Arm64VReg.virtual(destValueId), src: Arm64VReg.virtual(srcValueId)))
+			ops.append(idx)
+		end 'gpr'
+	end 'emitVirtualMov'
+
+	function emitRematConst(module TargetModule, ops OpIndexList, freshId RegInt, constantValue RegInt, regClass RegInt)
+		if regClass == 1 'fp'
+			// See X64 impl: no current case needs FP rematerialization.
+			panic("emitRematConst: FP rematerialization not yet implemented (freshId={freshId}, value={constantValue})")
+		end 'fp'
+		// Arm64 movImm encodes mov/movz/movk sequences internally as needed
+		// for arbitrary i64 constants; the encoder picks the right form.
+		let idx = module.arm64Ops.count()
+		module.arm64Ops.push(Arm64Op.movImm(Arm64VReg.virtual(freshId), value: constantValue))
+		ops.append(idx)
+	end 'emitRematConst'
+
+	// Arm64 is a load-store architecture: no ALU op reads directly from
+	// memory. The capability flag `hasMemOperandAlu` is false on arm64,
+	// so SpillCodeInsertion will short-circuit before even calling this —
+	// it's implemented purely to satisfy the RegAllocTarget interface.
+	function tryFoldReadFromSlot(module TargetModule, packed OpIndex, valueId RegInt, stackOffset RegInt) returns RegInt
+		return -1
+	end 'tryFoldReadFromSlot'
+
+	function isCallOp(module TargetModule, packed OpIndex) returns bool
+		let arm64Op = try module.arm64Ops.get(packed) otherwise panic("invariant: packed opIdx not in module.arm64Ops")
+		return arm64Op.rawValue.isCall
+	end 'isCallOp'
+
+	// Slot-to-slot move via x16, the arm64 indirect-call scratch register
+	// (also reserved for register-allocator use). Mirrors the x64 impl.
+	function emitSlotToSlotMove(module TargetModule, ops OpIndexList, srcStackOffset RegInt, destStackOffset RegInt, regClass RegInt)
+		if regClass == 1 'fp'
+			panic("emitSlotToSlotMove: FP slot-to-slot move not yet implemented (srcOff={srcStackOffset}, destOff={destStackOffset})")
+		end 'fp'
+		let scratch = Arm64VReg.physical(Arm64Register.x16)
+		let loadIdx = module.arm64Ops.count()
+		module.arm64Ops.push(Arm64Op.reloadFromStack(scratch, offset: srcStackOffset))
+		ops.append(loadIdx)
+		let storeIdx = module.arm64Ops.count()
+		module.arm64Ops.push(Arm64Op.spillToStack(destStackOffset, src: scratch))
+		ops.append(storeIdx)
+	end 'emitSlotToSlotMove'
 
 	// --- Factory ---
 

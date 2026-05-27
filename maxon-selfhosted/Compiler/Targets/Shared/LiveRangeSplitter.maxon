@@ -44,7 +44,7 @@ let SPLIT_MIN_INTERVALS = 3
 // edge moves. Safe to call repeatedly across spill iterations — each call
 // starts from the current `ranges` state and re-splits any merges that
 // liveness rebuild re-fused.
-export function splitMultiAnchorMerges(ranges LiveRangeArray, func IrFunction, module TargetModule) returns SplitMergeInfoArray
+export function splitMultiAnchorMerges(ranges LiveRangeArray, func IrFunction, module TargetModule, stageByValueId RegIntArray) returns SplitMergeInfoArray
 	var result = SplitMergeInfoArray.create()
 
 	// Collect (valueId, defBlockId, predIds, copyPosPerPred) for every
@@ -235,6 +235,8 @@ export function splitMultiAnchorMerges(ranges LiveRangeArray, func IrFunction, m
 			// store directly to the merge's slot; uses of the merge become
 			// reloads. This is LLVM Greedy's memory-only phi spilling.
 			subRange.spillWeight = SPILL_WEIGHT_INFINITE
+			subRange.stage = RS_DONE
+			set(stageByValueId, index: subId, value: RS_DONE, sentinel: RS_NEW)
 			subRange.copyHintValueId = mergeVid
 			// Hint-link the sub-range to the merge so coloring prefers the
 			// same color (collapses the merge-side parallel-copy move to an

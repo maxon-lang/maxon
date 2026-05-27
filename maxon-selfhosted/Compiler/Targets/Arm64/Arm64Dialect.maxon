@@ -238,6 +238,18 @@ export union Arm64Op
 	// via the prologue pass. On Windows the body is empty; on WASI it is
 	// never inserted. Reads x0/x1, writes to memory; scratches x16.
 	stashEntryArgv = Arm64OpMeta{latency: 2, isMemory: true, isStore: true, isCall: false, setsFlags: false, pattern: OpPattern.passThrough, implicitGprReads: 3, implicitGprDefs: 0}
+	// --- Phase 2 dialect groundwork: immediate-form ALU forms ---
+	// `dest = dest OP imm`. ARM64 lacks reg-mem ALU forms (load-store ISA), so
+	// only immediate-form variants are mirrored here. No codegen path emits these
+	// yet; they exist so Phase 3 has dialect ops to reference for its capability
+	// hook (which returns false on ARM64 per the locked decision in the plan).
+	// `pattern: useDefImm` matches the x64 dispatch; the regalloc useDefImm
+	// handler is now wired up on arm64.
+	addRegImm(destReg Arm64VReg, value MachineWord) = Arm64OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false, setsFlags: false, pattern: OpPattern.useDefImm, implicitGprReads: 0, implicitGprDefs: 0}
+	subRegImm(destReg Arm64VReg, value MachineWord) = Arm64OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false, setsFlags: false, pattern: OpPattern.useDefImm, implicitGprReads: 0, implicitGprDefs: 0}
+	andRegImm(destReg Arm64VReg, value MachineWord) = Arm64OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false, setsFlags: false, pattern: OpPattern.useDefImm, implicitGprReads: 0, implicitGprDefs: 0}
+	orRegImm(destReg Arm64VReg, value MachineWord) = Arm64OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false, setsFlags: false, pattern: OpPattern.useDefImm, implicitGprReads: 0, implicitGprDefs: 0}
+	xorRegImm(destReg Arm64VReg, value MachineWord) = Arm64OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false, setsFlags: false, pattern: OpPattern.useDefImm, implicitGprReads: 0, implicitGprDefs: 0}
 end 'Arm64Op'
 
 export typealias Arm64OpArray = Array with Arm64Op
@@ -331,6 +343,11 @@ export function arm64OpToString(op Arm64Op, blocks IrBlockArray) returns String
 		atomicDecMem(addrReg) gives "arm64.atomic_dec [{arm64VRegToString(addrReg)}]"
 		atomicXaddMem(resultReg, addrReg, valReg) gives "arm64.atomic_xadd {arm64VRegToString(resultReg)}, [{arm64VRegToString(addrReg)}], {arm64VRegToString(valReg)}"
 		stashEntryArgv gives "arm64.stash_entry_argv [__mrt_argc],x0; [__mrt_argv],x1"
+		addRegImm(destReg, value) gives "arm64.add {arm64VRegToString(destReg)}, {arm64VRegToString(destReg)}, #{value}"
+		subRegImm(destReg, value) gives "arm64.sub {arm64VRegToString(destReg)}, {arm64VRegToString(destReg)}, #{value}"
+		andRegImm(destReg, value) gives "arm64.and {arm64VRegToString(destReg)}, {arm64VRegToString(destReg)}, #{value}"
+		orRegImm(destReg, value) gives "arm64.orr {arm64VRegToString(destReg)}, {arm64VRegToString(destReg)}, #{value}"
+		xorRegImm(destReg, value) gives "arm64.eor {arm64VRegToString(destReg)}, {arm64VRegToString(destReg)}, #{value}"
 	end 'toString'
 end 'arm64OpToString'
 

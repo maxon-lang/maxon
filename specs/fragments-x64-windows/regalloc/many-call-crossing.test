@@ -1,0 +1,160 @@
+// Test: many-call-crossing
+typealias Integer = int(i64.min to i64.max)
+
+function ident(x Integer) returns Integer
+	return x
+end 'ident'
+
+function add2(a Integer, b Integer) returns Integer
+	return a + b
+end 'add2'
+
+function main() returns ExitCode
+	let args = CommandLine.args()
+	let seed = try int.fromString(try args.get(1) otherwise "0") otherwise 0
+
+	// 6 working values live across the loop body. Each `ident`-produced
+	// value is opaque to the constant folder, so all 6 land in the live
+	// set crossing the helper calls below. The body's reg-reg ALU mix
+	// is the fold-eligible shape that Phase 3's tryFoldReadFromSlot
+	// rewrites into `*Mem` variants when its source operand spills.
+	let v1 = ident(seed + 1)
+	let v2 = ident(seed + 2)
+	let v3 = ident(seed + 3)
+	let v4 = ident(seed + 4)
+	let v5 = ident(seed + 5)
+	let v6 = ident(seed + 6)
+
+	var total = 0
+	var i = 0
+	while i < 4 'loop'
+		// Each iteration's ALU mix uses every v_i. Spilled-source uses
+		// of these reg-reg forms are exactly the fold-eligible shape for
+		// Phase 3.
+		total = total + add2(v1, b: v2)
+		total = total + (v3 xor v4)
+		total = total + (v5 and v6)
+		total = total + (v1 + v3 + v5)
+		total = total + (v2 or v4 or v6)
+		i = i + 1
+	end 'loop'
+
+	let masked = total and 255
+	return masked as ExitCode
+end 'main'
+---
+Args: 0
+ExitCode: 116
+---
+// CompiledIR
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.call CommandLine.args
+    x64.mov r12d, 1
+  inlined_Array.get_0:
+    x64.mov rcx, [r8+0] (8b)
+    x64.mov rdx, r12
+    x64.call stdlib.__managed_mem_get
+    x64.test rdx, rdx
+    x64.je inlined_Array.get_2
+  inlined_Array.get_1:
+    x64.mov edx, 1
+    x64.xor r8d, r8d
+    x64.jmp inline_cont_main_0
+  inlined_Array.get_2:
+    x64.xor edx, edx
+  inline_cont_main_0:
+    x64.xor r13d, r13d
+    x64.test rdx, rdx
+    x64.je __phi_trampoline_16_0
+  try_0.otherwise:
+    x64.mov ecx, 40
+    x64.call mrt_alloc
+    x64.mov r14, r8
+    x64.lea r8, [rip+__istr_0]
+    x64.mov [r14+0], r8 (8b)
+    x64.mov [r14+8], r12 (8b)
+    x64.mov r8, -2
+    x64.mov [r14+16], r8 (8b)
+    x64.mov [r14+24], r12 (8b)
+    x64.mov [r14+32], r13 (8b)
+    x64.mov ecx, 16
+    x64.call mrt_alloc
+    x64.mov [r8+0], r14 (8b)
+    x64.mov [r8+8], r12 (8b)
+    x64.mov rcx, r8
+  try_0.merge:
+    x64.call stdlib.__int_fromString
+    x64.test rdx, rdx
+    x64.je try_1.ok
+    x64.mov r8, r13
+    x64.jmp try_1.merge
+  try_1.ok:
+  try_1.merge:
+    x64.mov r9, r8
+    x64.add r9, 4
+    x64.mov rsi, r8
+    x64.add rsi, 2
+    x64.mov rdi, r8
+    x64.add rdi, 3
+    x64.mov rax, r8
+    x64.add rax, 1
+    x64.mov rcx, r8
+    x64.add rcx, 6
+    x64.mov rdx, rsi
+    x64.or rdx, r9
+    x64.add r8, 5
+    x64.mov rbx, rax
+    x64.add rbx, rdi
+    x64.or rdx, rcx
+    x64.add rbx, r8
+    x64.and r8, rcx
+    x64.xor rdi, r9
+    x64.mov r9, r13
+  loop_0.header:
+    x64.cmp r9, 4
+    x64.jge loop_0.exit
+  loop_0:
+    x64.mov rcx, rax
+    x64.add rcx, rsi
+    x64.add r13, rcx
+    x64.add r13, rdi
+    x64.add r13, r8
+    x64.add r13, rbx
+    x64.add r9, 1
+    x64.add r13, rdx
+    x64.jmp loop_0.header
+  loop_0.exit:
+    x64.mov r9d, 255
+    x64.mov esi, 4294967295
+    x64.mov r8, r13
+    x64.and r8, r9
+    x64.cmp r8, rsi
+    x64.jle __cast_check_lo_0
+    x64.jmp __cast_panic_0
+  __cast_check_lo_0:
+    x64.test r8, r8
+    x64.jge __cast_ok_0
+  __cast_panic_0:
+    x64.lea r12, [rip+__panic_msg_0]
+    x64.mov rcx, r12
+    x64.call mrt_panic
+  __cast_ok_0:
+    x64.mov r9d, 4294967295
+    x64.cmp r8, r9
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea r12, [rip+__panic_msg_1]
+    x64.mov rcx, r12
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  __phi_trampoline_16_0:
+    x64.mov rcx, r8
+    x64.jmp try_0.merge
+  }
+}
+---

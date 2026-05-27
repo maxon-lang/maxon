@@ -166,7 +166,7 @@ export type Arm64Backend implements TargetBackend
 	end 'createOpQuery'
 
 	export static function createLatencyTable() returns TargetLatencyTable
-		return TargetLatencyTable.create(1, intDivLatency: 12, fpDivLatency: 15, gprCount: 26, fpCount: 32, pressureThreshold: 20)
+		return createArm64LatencyTable()
 	end 'createLatencyTable'
 
 	function emitPerFunction() returns ObjectFunctionArray
@@ -337,7 +337,7 @@ export type Arm64Backend implements TargetBackend
 			let targetId = match termOp 'check'
 				branch(blk) gives blk
 				prologue to condBranch gives -1
-				branchLink to stashEntryArgv gives -1
+				branchLink to xorRegImm gives -1
 			end 'check'
 
 			if targetId >= 0 and targetId == nextBlock.id 'isFallthrough'
@@ -600,7 +600,7 @@ export type Arm64Backend implements TargetBackend
 			addsRegs gives false
 			subsRegs to remRegs gives false
 			negReg to mvnReg gives false
-			andsRegs to stashEntryArgv gives false
+			andsRegs to xorRegImm gives false
 		end 'replace'
 	end 'tryReplaceArm64OpWithFlagSetting'
 

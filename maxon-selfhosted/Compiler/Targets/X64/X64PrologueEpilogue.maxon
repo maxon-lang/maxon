@@ -17,7 +17,7 @@ export function scanX64InstrForFrame(op X64Op, state FrameScanState)
 		callDirect then state.hasCalls = true
 		syscall to xorRegRegSelf then break 'scan'
 		callIndirect then state.hasCalls = true
-		xchgRegReg to stashEntryArgv then break 'scan'
+		xchgRegReg to imulRegImm then break 'scan'
 	end 'scan'
 end 'scanX64InstrForFrame'
 
@@ -188,5 +188,19 @@ function x64ScanOpForCalleeSaved(op X64Op, gprSeen RegIntArray)
 		lockDecMemory(addrReg) then x64MarkGprIfCalleeSaved(gprSeen, vreg: addrReg)
 		lockXaddMemReg(valReg, addrReg) then x64ScanTwoGprs(gprSeen, a: valReg, b: addrReg)
 		stashEntryArgv then break 'scan'
+		// Phase 2 memory-operand ALU / immediate-form variants. These only ever
+		// take GPRs the regalloc may have promoted to callee-saved registers, so
+		// they need to participate in the callee-saved frame scan.
+		addRegMem(dest, base, _) then x64ScanTwoGprs(gprSeen, a: dest, b: base)
+		subRegMem(dest, base, _) then x64ScanTwoGprs(gprSeen, a: dest, b: base)
+		andRegMem(dest, base, _) then x64ScanTwoGprs(gprSeen, a: dest, b: base)
+		orRegMem(dest, base, _) then x64ScanTwoGprs(gprSeen, a: dest, b: base)
+		xorRegMem(dest, base, _) then x64ScanTwoGprs(gprSeen, a: dest, b: base)
+		imulRegMem(dest, base, _) then x64ScanTwoGprs(gprSeen, a: dest, b: base)
+		cmpRegMem(lhs, base, _) then x64ScanTwoGprs(gprSeen, a: lhs, b: base)
+		andRegImm(dest, _) then x64MarkGprIfCalleeSaved(gprSeen, vreg: dest)
+		orRegImm(dest, _) then x64MarkGprIfCalleeSaved(gprSeen, vreg: dest)
+		xorRegImm(dest, _) then x64MarkGprIfCalleeSaved(gprSeen, vreg: dest)
+		imulRegImm(dest, src, _) then x64ScanTwoGprs(gprSeen, a: dest, b: src)
 	end 'scan'
 end 'x64ScanOpForCalleeSaved'
