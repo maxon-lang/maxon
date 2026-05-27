@@ -136,10 +136,10 @@ export function sequentializeParallelCopy(module TargetModule, moves CopyMoveArr
 	end 'partition'
 
 	if gprMoves.count() > 0 'hasGpr'
-		sequentializeMovesForClass(module, moves: gprMoves, dstBlock: dstBlock, state: state, regTarget: regTarget)
+		sequentializeMovesForClass(module, moves: gprMoves, isFloat: false, dstBlock: dstBlock, state: state, regTarget: regTarget)
 	end 'hasGpr'
 	if fpMoves.count() > 0 'hasFp'
-		sequentializeMovesForClass(module, moves: fpMoves, dstBlock: dstBlock, state: state, regTarget: regTarget)
+		sequentializeMovesForClass(module, moves: fpMoves, isFloat: true, dstBlock: dstBlock, state: state, regTarget: regTarget)
 	end 'hasFp'
 end 'sequentializeParallelCopy'
 
@@ -147,61 +147,92 @@ end 'sequentializeParallelCopy'
 // (all GPR or all FP). Each move's ordinal is a unique key in that class's
 // ordinal space, so the per-dest needsMove / moveFrom / pendingReaders
 // scratch arrays can be addressed by raw ordinal without collisions.
-function sequentializeMovesForClass(module TargetModule, moves CopyMoveArray, dstBlock IrBlock, state RegState, regTarget RegAllocTarget)
-	// Build move map: needsMove[dstOrd] = 1, moveFrom[dstOrd] = srcOrd.
-	// pendingReaders[ord] tracks how many still-pending moves read from
-	// `ord`; a destination is "blocked" iff some other pending move still
-	// reads it. Maintaining this counter replaces an inner O(M) scan with
-	// an O(1) lookup, dropping Phase 1 from O(M^2) per iteration to O(M).
+function sequentializeMovesForClass(module TargetModule, moves CopyMoveArray, isFloat bool, dstBlock IrBlock, state RegState, regTarget RegAllocTarget)
+	// needsMove[dstOrd] = 1 while the move targeting that ordinal is still
+	// pending, 0 once emitted. moveFrom[dstOrd] = srcOrd (RM_NONE sentinel
+	// for unset). pendingReaders[ord] tracks how many still-pending moves
+	// read from `ord`; a destination is "blocked" iff some other pending
+	// move still reads it. Maintaining this counter replaces an inner O(M)
+	// scan with an O(1) lookup, dropping Phase 1 from O(M^2) per iteration
+	// to O(M).
 	var needsMove = RegIntArray.create()
 	var moveFrom = RegIntArray.create()
 	var pendingReaders = RegIntArray.create()
+	buildMoveScratch(moves, needsMove: needsMove, moveFrom: moveFrom, pendingReaders: pendingReaders)
 
+	resolveNonConflictingMoves(module, moves: moves, needsMove: needsMove, moveFrom: moveFrom, pendingReaders: pendingReaders, isFloat: isFloat, dstBlock: dstBlock, regTarget: regTarget)
+
+	breakMoveCycles(module, moves: moves, needsMove: needsMove, moveFrom: moveFrom, isFloat: isFloat, dstBlock: dstBlock, state: state, regTarget: regTarget)
+end 'sequentializeMovesForClass'
+
+// Populate `needsMove`, `moveFrom`, and `pendingReaders` from `moves` so
+// the resolver / cycle-break phases can address them by raw ordinal.
+//
+// needsMove[dstOrd] = 1 while still pending. moveFrom[dstOrd] = srcOrd.
+// pendingReaders[ord] = count of still-pending moves reading from `ord`.
+function buildMoveScratch(moves CopyMoveArray, needsMove RegIntArray, moveFrom RegIntArray, pendingReaders RegIntArray)
 	for move in moves 'buildMap'
 		set(needsMove, index: move.dstOrd, value: 1, sentinel: 0)
 		set(moveFrom, index: move.dstOrd, value: move.srcOrd, sentinel: RM_NONE)
 		let prev = getOr(pendingReaders, index: move.srcOrd, fallback: 0)
 		set(pendingReaders, index: move.srcOrd, value: prev + 1, sentinel: 0)
 	end 'buildMap'
+end 'buildMoveScratch'
 
-	// Phase 1: Resolve non-conflicting moves iteratively
+// Phase 1: iterate over `moves`, committing any whose destination is no
+// longer the source of another pending move. Each commit decrements the
+// pendingReaders count of the source ordinal, potentially unblocking
+// other moves. Iterates until a full pass commits nothing; remaining
+// pending moves must participate in a cycle and are handled by Phase 2.
+function resolveNonConflictingMoves(module TargetModule, moves CopyMoveArray, needsMove RegIntArray, moveFrom RegIntArray, pendingReaders RegIntArray, isFloat bool, dstBlock IrBlock, regTarget RegAllocTarget)
 	var progress = true
 	while progress 'resolveMoves'
 		progress = false
 
 		for move in moves 'tryMoves'
-			let dstOrd = move.dstOrd
-
-			if getOr(needsMove, index: dstOrd, fallback: 0) != 1 'alreadyDone'
-				continue
-			end 'alreadyDone'
-
-			let srcOrd = getOr(moveFrom, index: dstOrd, fallback: RM_NONE)
-			if srcOrd == RM_NONE 'noSrc'
-				continue
-			end 'noSrc'
-
-			// `dstOrd` is blocked iff some other still-pending move reads
-			// from it. buildBlockArgCopies filters identity copies, so
-			// this move itself cannot be a reader of `dstOrd` here.
-			let blocked = getOr(pendingReaders, index: dstOrd, fallback: 0) > 0
-
-			if not blocked 'safe'
-				emitClassMov(regTarget, module: module, dstBlock: dstBlock, destOrd: dstOrd, srcOrd: srcOrd, isFloat: move.isFloat)
-				try needsMove.set(dstOrd, value: 0) otherwise panic("invariant: needsMove.set OOB")
-				// This move is now committed — drop its contribution from
-				// the reader count so a downstream move whose destination
-				// equals `srcOrd` becomes unblocked.
-				let prevReaders = getOr(pendingReaders, index: srcOrd, fallback: 0)
-				if prevReaders > 0 'dec'
-					try pendingReaders.set(srcOrd, value: prevReaders - 1) otherwise panic("invariant: pendingReaders.set OOB")
-				end 'dec'
+			if tryCommitMove(module, dstOrd: move.dstOrd, needsMove: needsMove, moveFrom: moveFrom, pendingReaders: pendingReaders, isFloat: isFloat, dstBlock: dstBlock, regTarget: regTarget) 'fired'
 				progress = true
-			end 'safe'
+			end 'fired'
 		end 'tryMoves'
 	end 'resolveMoves'
+end 'resolveNonConflictingMoves'
 
-	// Phase 2: Break remaining cycles
+// Commit a single move if its destination is unblocked (no other pending
+// move reads from it). Returns true iff the move fired.
+//
+// `dstOrd` is blocked iff some still-pending move reads from it.
+// buildBlockArgCopies / partitionRegMove filter identity copies, so the
+// move itself cannot be a reader of `dstOrd` here.
+function tryCommitMove(module TargetModule, dstOrd RegOrdinal, needsMove RegIntArray, moveFrom RegIntArray, pendingReaders RegIntArray, isFloat bool, dstBlock IrBlock, regTarget RegAllocTarget) returns bool
+	if getOr(needsMove, index: dstOrd, fallback: 0) != 1 'alreadyDone'
+		return false
+	end 'alreadyDone'
+
+	let srcOrd = getOr(moveFrom, index: dstOrd, fallback: RM_NONE)
+	if srcOrd == RM_NONE 'noSrc'
+		return false
+	end 'noSrc'
+
+	let blocked = getOr(pendingReaders, index: dstOrd, fallback: 0) > 0
+	if blocked 'cantFire'
+		return false
+	end 'cantFire'
+
+	emitClassMov(regTarget, module: module, dstBlock: dstBlock, destOrd: dstOrd, srcOrd: srcOrd, isFloat: isFloat)
+	try needsMove.set(dstOrd, value: 0) otherwise panic("invariant: needsMove.set OOB")
+	let prevReaders = getOr(pendingReaders, index: srcOrd, fallback: 0)
+	if prevReaders > 0 'dec'
+		try pendingReaders.set(srcOrd, value: prevReaders - 1) otherwise panic("invariant: pendingReaders.set OOB")
+	end 'dec'
+	return true
+end 'tryCommitMove'
+
+// Phase 2: break remaining reg-to-reg cycles. Any move still flagged in
+// `needsMove` after Phase 1 participates in a cycle (two-way swap or
+// longer). Two-way swaps use xchg on GPR / a 3-mov on FP; longer cycles
+// stage one ordinal in the class's cycle-break scratch register and
+// chase the moveFrom chain back to the start.
+function breakMoveCycles(module TargetModule, moves CopyMoveArray, needsMove RegIntArray, moveFrom RegIntArray, isFloat bool, dstBlock IrBlock, state RegState, regTarget RegAllocTarget)
 	for move in moves 'breakCycles'
 		let dstOrd = move.dstOrd
 
@@ -214,23 +245,21 @@ function sequentializeMovesForClass(module TargetModule, moves CopyMoveArray, ds
 			continue
 		end 'noSrc2'
 
-		// Check for two-way swap
 		let otherSrc = getOr(moveFrom, index: srcOrd, fallback: RM_NONE)
 		if getOr(needsMove, index: srcOrd, fallback: 0) == 1 and otherSrc == dstOrd 'twoWaySwap'
 			logTrace(LogCategory.ir, message: function() gives "copy-resolve: block {dstBlock.id} swap r{dstOrd}<->r{srcOrd}")
-			emitClassSwap(regTarget, module: module, state: state, dstBlock: dstBlock, ord1: dstOrd, ord2: srcOrd, isFloat: move.isFloat)
+			emitClassSwap(regTarget, module: module, state: state, dstBlock: dstBlock, ord1: dstOrd, ord2: srcOrd, isFloat: isFloat)
 			try needsMove.set(dstOrd, value: 0) otherwise panic("invariant: needsMove.set OOB")
 			try needsMove.set(srcOrd, value: 0) otherwise panic("invariant: needsMove.set OOB")
 		end 'twoWaySwap' else 'longerCycle'
 			logTrace(LogCategory.ir, message: function() gives "copy-resolve: block {dstBlock.id} cycle via scratch r{dstOrd}")
-			// Use scratch register matching the move's class to break the cycle
-			let scratch = scratchOrdForClass(state, isFloat: move.isFloat)
-			emitClassMov(regTarget, module: module, dstBlock: dstBlock, destOrd: scratch, srcOrd: dstOrd, isFloat: move.isFloat)
+			let scratchOrd = scratchOrdForClass(state, isFloat: isFloat)
+			emitClassMov(regTarget, module: module, dstBlock: dstBlock, destOrd: scratchOrd, srcOrd: dstOrd, isFloat: isFloat)
 
 			var cur = dstOrd
 			var curSrc = srcOrd
 			while curSrc != dstOrd 'walkCycle'
-				emitClassMov(regTarget, module: module, dstBlock: dstBlock, destOrd: cur, srcOrd: curSrc, isFloat: move.isFloat)
+				emitClassMov(regTarget, module: module, dstBlock: dstBlock, destOrd: cur, srcOrd: curSrc, isFloat: isFloat)
 				try needsMove.set(cur, value: 0) otherwise panic("invariant: needsMove.set OOB")
 				cur = curSrc
 				curSrc = getOr(moveFrom, index: cur, fallback: RM_NONE)
@@ -240,11 +269,11 @@ function sequentializeMovesForClass(module TargetModule, moves CopyMoveArray, ds
 				end 'broken'
 			end 'walkCycle'
 
-			emitClassMov(regTarget, module: module, dstBlock: dstBlock, destOrd: cur, srcOrd: scratch, isFloat: move.isFloat)
+			emitClassMov(regTarget, module: module, dstBlock: dstBlock, destOrd: cur, srcOrd: scratchOrd, isFloat: isFloat)
 			try needsMove.set(cur, value: 0) otherwise panic("invariant: needsMove.set OOB")
 		end 'longerCycle'
 	end 'breakCycles'
-end 'sequentializeMovesForClass'
+end 'breakMoveCycles'
 
 // Dispatch a single move to GPR or FP emit based on the move's class. The
 // register-class flag rides on each CopyMove because GPR and FP share the
@@ -277,6 +306,265 @@ function scratchOrdForClass(state RegState, isFloat bool) returns RegOrdinal
 	end 'fp'
 	return state.desc.gprCycleBreakOrd
 end 'scratchOrdForClass'
+
+// ============================================================
+// Call-arg setup sequencing
+// ============================================================
+
+// CallArgKind describes a single op in a call-arg setup region. The walker
+// in ApplyColoring buffers ops whose kind is not `none` until it reaches
+// the terminating call op, then hands the buffer to sequentializeCallArgSetup.
+//
+// Why this split exists: emitDirectCall / lowerIndirectCall / lowerWitnessCall
+// place each ABI argument with a separate `mov physArg, virtual(srcId)` (or a
+// folded `reloadFromStack physArg, offset` when the source was spilled). After
+// coloring each mov independently, an earlier mov's destination can clobber a
+// physical register that a later mov still reads — silent miscompile.
+//
+// Each variant captures only what the sequencer needs:
+//   * regToReg: src and dst already known as physical ordinals, plus the
+//     class flag (xmm vs gpr share an ordinal space).
+//   * spillReload: dst is the ABI slot; the source is a memory slot at
+//     [framePtr + stackOffset]. No register dependency — reload contributes
+//     to no `pendingReaders` count.
+//   * stackWrite: writes a GPR value to [sp + rspOffset]. No register
+//     destination — contributes no `needsMove` entry but its src IS still a
+//     register read, scheduled before the parallel copy clobbers it. Both
+//     targets only ever route GPR overflow args through stack slots, so no
+//     class flag is needed here.
+export union CallArgKind
+	regToReg(srcOrd RegOrdinal, dstOrd RegOrdinal, isFloat bool)
+	spillReload(dstOrd RegOrdinal, stackOffset RegInt, isFloat bool)
+	stackWrite(rspOffset RegInt, srcOrd RegOrdinal)
+	none
+end 'CallArgKind'
+
+export typealias CallArgKindArray = Array with CallArgKind
+
+// Emit a sequentialized call-arg setup region. `kinds` is a list of the
+// buffered call-arg ops in original (unsafe) emission order. The sequencer:
+//   1. Emits every stackWrite first — they read physical registers but those
+//      registers are still holding their original values (no reg-to-reg mov
+//      has clobbered them yet).
+//   2. Builds a CopyMoveArray from regToReg moves where srcOrd != dstOrd
+//      (identity moves drop) and feeds it through the existing
+//      sequentializeParallelCopy.
+//   3. Emits spillReloads either inside Phase 1 of the parallel-copy walk
+//      (when their dstOrd is no longer being read by a pending reg-to-reg
+//      move) or after Phase 2 (cycle-break) completes — by which point no
+//      reg-to-reg move references the reload's dst as a source any more.
+//
+// Stack-writes scheduled first is safe: each source ordinal is a register
+// whose contents are the original colored value (the regalloc assigned that
+// value to that register before any call-arg-setup mov ran). The parallel
+// copy hasn't run yet, so reading it now picks up the correct value. Later
+// reg-to-reg movs may clobber it, but that's fine — the value has already
+// been stored to memory.
+export function sequentializeCallArgSetup(module TargetModule, kinds CallArgKindArray, dstBlock IrBlock, state RegState, regTarget RegAllocTarget)
+	if kinds.count() == 0 'empty'
+		return
+	end 'empty'
+
+	logTrace(LogCategory.ir, message: function() gives "call-arg-resolve: block {dstBlock.id} kinds={kinds.count()}")
+
+	// Phase 0: emit all stack-writes first.
+	for kind in kinds 'eachStackWrite'
+		match kind 'check'
+			stackWrite(rspOffset, srcOrd) then regTarget.emitStoreToSpOffset(module, dstBlock: dstBlock, regOrd: srcOrd, offset: rspOffset)
+			regToReg to spillReload then break 'check'
+			none then break 'check'
+		end 'check'
+	end 'eachStackWrite'
+
+	// Partition reg-to-reg moves into GPR / FP. Each class has its own
+	// disjoint ordinal space (GPR ordinal N is unrelated to FP ordinal N),
+	// so cycle detection must be per-class.
+	var gprMoves = CopyMoveArray.create()
+	var fpMoves = CopyMoveArray.create()
+	for kind in kinds 'partitionRegToReg'
+		match kind 'check'
+			regToReg(srcOrd, dstOrd, kindIsFloat) then partitionRegMove(gprMoves, fpMoves: fpMoves, srcOrd: srcOrd, dstOrd: dstOrd, isFloat: kindIsFloat)
+			spillReload to none then break 'check'
+		end 'check'
+	end 'partitionRegToReg'
+
+	// Sequentialize reg-to-reg moves per class, interleaving spillReloads of
+	// matching class as their destinations become unblocked.
+	if gprMoves.count() > 0 or hasSpillReload(kinds, isFloat: false) 'hasGpr'
+		sequentializeCallArgClass(module, regMoves: gprMoves, kinds: kinds, isFloat: false, dstBlock: dstBlock, state: state, regTarget: regTarget)
+	end 'hasGpr'
+	if fpMoves.count() > 0 or hasSpillReload(kinds, isFloat: true) 'hasFp'
+		sequentializeCallArgClass(module, regMoves: fpMoves, kinds: kinds, isFloat: true, dstBlock: dstBlock, state: state, regTarget: regTarget)
+	end 'hasFp'
+end 'sequentializeCallArgSetup'
+
+function partitionRegMove(gprMoves CopyMoveArray, fpMoves CopyMoveArray, srcOrd RegOrdinal, dstOrd RegOrdinal, isFloat bool)
+	// Drop identity moves — sequencer assumes a dst with pendingReaders > 0
+	// is blocked by some OTHER move, so a self-cycle would deadlock Phase 1.
+	if srcOrd == dstOrd 'identity'
+		return
+	end 'identity'
+	let move = CopyMove.create(srcOrd, dstOrd: dstOrd, isFloat: isFloat)
+	if isFloat 'fp'
+		fpMoves.push(move)
+	end 'fp' else 'gpr'
+		gprMoves.push(move)
+	end 'gpr'
+end 'partitionRegMove'
+
+// True iff any `spillReload(_, _, kif)` arm of `kinds` has `kif == isFloat`.
+function hasSpillReload(kinds CallArgKindArray, isFloat bool) returns bool
+	for kind in kinds 'each'
+		if isSpillReloadOfClass(kind, isFloat: isFloat) 'match'
+			return true
+		end 'match'
+	end 'each'
+	return false
+end 'hasSpillReload'
+
+// True iff `kind` is a spillReload whose class matches `isFloat`.
+function isSpillReloadOfClass(kind CallArgKind, isFloat bool) returns bool
+	return match kind 'check'
+		spillReload(_, _, kindIsFloat) gives kindIsFloat == isFloat
+		regToReg gives false
+		stackWrite gives false
+		none gives false
+	end 'check'
+end 'isSpillReloadOfClass'
+
+// Sequentialize one register-class's worth of call-arg moves. Mirrors
+// sequentializeMovesForClass but with spillReload interleaving: a reload
+// writes a physical register but reads memory, so it has no entry in
+// `moveFrom` / `pendingReaders`. It can fire as soon as no other pending
+// reg-to-reg move still reads its dst.
+function sequentializeCallArgClass(module TargetModule, regMoves CopyMoveArray, kinds CallArgKindArray, isFloat bool, dstBlock IrBlock, state RegState, regTarget RegAllocTarget)
+	var needsMove = RegIntArray.create()
+	var moveFrom = RegIntArray.create()
+	var pendingReaders = RegIntArray.create()
+	buildMoveScratch(regMoves, needsMove: needsMove, moveFrom: moveFrom, pendingReaders: pendingReaders)
+
+	// Track which spillReloads of this class still need emission. A reload
+	// commits when no pending reg-to-reg move reads its dst (pendingReaders
+	// at dst is zero) AND the reload's dst is not itself a destination of a
+	// pending reg-to-reg move targeting the same ordinal (i.e., needsMove
+	// at dst is zero — otherwise the reg-to-reg mov would clobber the
+	// reloaded value).
+	var reloadPending = buildReloadPendingArray(kinds, isFloat: isFloat)
+
+	// Phase 1: iterate, committing any reg-to-reg whose dst is unblocked
+	// and any spillReload whose dst has no pending reader and no pending
+	// reg-to-reg targeting it. The two checks matter independently: a
+	// reload into a register that a reg-to-reg will subsequently *write*
+	// must happen second, or the reload value gets overwritten; a reload
+	// into a register that a reg-to-reg still *reads* must happen second,
+	// or the reload's write destroys the source.
+	var progress = true
+	while progress 'resolveMoves'
+		progress = false
+
+		for move in regMoves 'tryRegMoves'
+			if tryCommitMove(module, dstOrd: move.dstOrd, needsMove: needsMove, moveFrom: moveFrom, pendingReaders: pendingReaders, isFloat: isFloat, dstBlock: dstBlock, regTarget: regTarget) 'fired'
+				progress = true
+			end 'fired'
+		end 'tryRegMoves'
+
+		if tryCommitPendingReloads(module, kinds: kinds, reloadPending: reloadPending, needsMove: needsMove, pendingReaders: pendingReaders, isFloat: isFloat, dstBlock: dstBlock, regTarget: regTarget) 'reloadFired'
+			progress = true
+		end 'reloadFired'
+	end 'resolveMoves'
+
+	// Phase 2: break remaining reg-to-reg cycles. Shared with the block-arg
+	// resolver; reload state is independent of cycle-break decisions.
+	breakMoveCycles(module, moves: regMoves, needsMove: needsMove, moveFrom: moveFrom, isFloat: isFloat, dstBlock: dstBlock, state: state, regTarget: regTarget)
+
+	// Phase 3: emit any spillReloads that were blocked through both Phase 1
+	// and Phase 2. By now no reg-to-reg move references their dst, so they
+	// can fire unconditionally.
+	flushBlockedReloads(module, kinds: kinds, reloadPending: reloadPending, isFloat: isFloat, dstBlock: dstBlock, regTarget: regTarget)
+end 'sequentializeCallArgClass'
+
+// Build a parallel-indexed BoolArray of "this kind is still a pending
+// spillReload of class `isFloat`" flags. Non-spillReload kinds and
+// other-class spillReloads start as false.
+function buildReloadPendingArray(kinds CallArgKindArray, isFloat bool) returns BoolArray
+	var reloadPending = BoolArray.create()
+	for kind in kinds 'each'
+		reloadPending.push(isSpillReloadOfClass(kind, isFloat: isFloat))
+	end 'each'
+	return reloadPending
+end 'buildReloadPendingArray'
+
+// Try to commit any pending spillReload of this class. Returns true iff
+// at least one reload fired.
+function tryCommitPendingReloads(module TargetModule, kinds CallArgKindArray, reloadPending BoolArray, needsMove RegIntArray, pendingReaders RegIntArray, isFloat bool, dstBlock IrBlock, regTarget RegAllocTarget) returns bool
+	var firedAny = false
+	var ri = 0
+	while ri < kinds.count() 'tryReloads'
+		let stillPending = try reloadPending.get(ri) otherwise false
+		if stillPending 'isPending'
+			let kind = try kinds.get(ri) otherwise panic("invariant: ri < kinds.count() but get({ri}) failed")
+			if tryEmitSpillReload(module, kind: kind, ri: ri, needsMove: needsMove, pendingReaders: pendingReaders, reloadPending: reloadPending, isFloat: isFloat, dstBlock: dstBlock, regTarget: regTarget) 'fired'
+				firedAny = true
+			end 'fired'
+		end 'isPending'
+		ri = ri + 1
+	end 'tryReloads'
+	return firedAny
+end 'tryCommitPendingReloads'
+
+// Phase 3: drain any spillReloads still pending after Phase 1 + Phase 2.
+// By this point no reg-to-reg move targets the reload's destination, so
+// the eligibility check would always pass — emit unconditionally.
+function flushBlockedReloads(module TargetModule, kinds CallArgKindArray, reloadPending BoolArray, isFloat bool, dstBlock IrBlock, regTarget RegAllocTarget)
+	var ri = 0
+	while ri < kinds.count() 'flushReloads'
+		if (try reloadPending.get(ri) otherwise false) 'pending'
+			let kind = try kinds.get(ri) otherwise panic("invariant: ri < kinds.count() but get({ri}) failed")
+			match kind 'emit'
+				spillReload(dstOrd, stackOffset, _) then emitClassReload(regTarget, module: module, dstBlock: dstBlock, destOrd: dstOrd, stackOffset: stackOffset, isFloat: isFloat)
+				regToReg then break 'emit'
+				stackWrite then break 'emit'
+				none then break 'emit'
+			end 'emit'
+		end 'pending'
+		ri = ri + 1
+	end 'flushReloads'
+end 'flushBlockedReloads'
+
+// Dispatch a reload-from-stack to the matching class emitter on the target.
+function emitClassReload(regTarget RegAllocTarget, module TargetModule, dstBlock IrBlock, destOrd RegOrdinal, stackOffset RegInt, isFloat bool)
+	if isFloat 'fp'
+		regTarget.emitReloadFp(module, dstBlock: dstBlock, fpOrdinal: destOrd, stackOffset: stackOffset)
+	end 'fp' else 'gpr'
+		regTarget.emitReload(module, dstBlock: dstBlock, regOrdinal: destOrd, stackOffset: stackOffset)
+	end 'gpr'
+end 'emitClassReload'
+
+// Try to emit a single pending spillReload at index `ri`. Returns true iff
+// the reload fired (dst was unblocked and no pending reg-to-reg targeted
+// the same dst). Marks the index as no-longer-pending on success.
+//
+// Extracted so the caller's match arm only needs to gate on the variant
+// tag, not duplicate the eligibility predicate.
+function tryEmitSpillReload(module TargetModule, kind CallArgKind, ri RegInt, needsMove RegIntArray, pendingReaders RegIntArray, reloadPending BoolArray, isFloat bool, dstBlock IrBlock, regTarget RegAllocTarget) returns bool
+	return match kind 'emit'
+		spillReload(dstOrd, stackOffset, _) gives tryEmitSpillReloadInner(module, dstOrd: dstOrd, stackOffset: stackOffset, ri: ri, needsMove: needsMove, pendingReaders: pendingReaders, reloadPending: reloadPending, isFloat: isFloat, dstBlock: dstBlock, regTarget: regTarget)
+		regToReg gives false
+		stackWrite gives false
+		none gives false
+	end 'emit'
+end 'tryEmitSpillReload'
+
+function tryEmitSpillReloadInner(module TargetModule, dstOrd RegOrdinal, stackOffset RegInt, ri RegInt, needsMove RegIntArray, pendingReaders RegIntArray, reloadPending BoolArray, isFloat bool, dstBlock IrBlock, regTarget RegAllocTarget) returns bool
+	let readers = getOr(pendingReaders, index: dstOrd, fallback: 0)
+	let writers = getOr(needsMove, index: dstOrd, fallback: 0)
+	if readers != 0 or writers != 0 'blocked'
+		return false
+	end 'blocked'
+	emitClassReload(regTarget, module: module, dstBlock: dstBlock, destOrd: dstOrd, stackOffset: stackOffset, isFloat: isFloat)
+	try reloadPending.set(ri, value: false) otherwise panic("invariant: reloadPending.set OOB at ri={ri}")
+	return true
+end 'tryEmitSpillReloadInner'
 
 // ============================================================
 // Helpers

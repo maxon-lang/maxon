@@ -9578,7 +9578,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       argToken.Line, argToken.Column);
   }
 
-  private void FailArgType(string runtimeName, int argIndex, string expectedName,
+  private static void FailArgType(string runtimeName, int argIndex, string expectedName,
       MaxonValue actual, Token argToken) {
     var actualTypeName = actual switch {
       MaxonStruct ms => ms.TypeName,

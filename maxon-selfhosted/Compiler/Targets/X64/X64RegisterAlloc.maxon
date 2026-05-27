@@ -289,6 +289,135 @@ export function x64OpHasVirtualRegs(op X64Op) returns bool
 	end 'check'
 end 'x64OpHasVirtualRegs'
 
+// True iff `reg` is an x64 internal-calling-convention GPR slot. Derived
+// from getCallConvGpr in MirToX64Conversion.maxon — that array is the
+// single source of truth; this is a membership test against it.
+function isX64CallConvGpr(reg X64Register) returns bool
+	var i = 0
+	while i < X64_CALLCONV_GPR_COUNT 'each'
+		if x64RegToOrdinal(getCallConvGpr(i)) == x64RegToOrdinal(reg) 'match'
+			return true
+		end 'match'
+		i = i + 1
+	end 'each'
+	return false
+end 'isX64CallConvGpr'
+
+// True iff `reg` is one of the x64 internal-calling-convention FP arg
+// slots. Derived from getCallConvXmm in MirToX64Conversion.maxon.
+function isX64CallConvXmm(reg X64XmmRegister) returns bool
+	var i = 0
+	while i < X64_CALLCONV_FP_COUNT 'each'
+		if getCallConvXmm(i).rawValue == reg.rawValue 'match'
+			return true
+		end 'match'
+		i = i + 1
+	end 'each'
+	return false
+end 'isX64CallConvXmm'
+
+// Classify a single X64Op for the call-arg-setup buffered walk. Returns
+// CallArgKind.none for anything that doesn't match one of the shapes
+// emitDirectCall / lowerIndirectCall / lowerWitnessCall can produce ahead of
+// a call op.
+//
+// Recognized shapes (all source/dest combinations resolve to physical
+// ordinals after coloring lookup):
+//   * movRegReg(physArg, virtual(srcId))   → regToReg (src colored)
+//   * movRegReg(physArg, physical(srcReg)) → regToReg (src already physical)
+//   * movXmmXmm(physFpArg, _)              → regToReg FP
+//   * reloadFromStack(physArg, offset)     → spillReload (folded reload path)
+//   * reloadXmmFromStack(physFpArg, off,_) → spillReload FP
+//   * movRspOffsetReg(rspOff, src)         → stackWrite
+//
+// A "physArg" destination must be in the call-conv set for that class —
+// otherwise the op is incidental (e.g. a load into the witness-call's R10
+// fn-ptr) and returns CallArgKind.none so the walker drains the buffer and
+// emits the op raw.
+function classifyX64CallArgSetup(x64Op X64Op, coloring ColoringResult) returns CallArgKind
+	return match x64Op 'classify'
+		movRspOffsetReg(offset, srcReg) gives classifyX64StackWrite(offset, srcReg: srcReg, coloring: coloring)
+		movRegReg(destReg, srcReg) gives classifyX64MovForCall(destReg, srcReg: srcReg, coloring: coloring)
+		reloadFromStack(destReg, offset) gives classifyX64Reload(destReg, offset: offset)
+		movXmmXmm(dest, src, _) gives classifyX64FpMovForCall(dest, src: src, coloring: coloring)
+		reloadXmmFromStack(dest, offset, _) gives classifyX64FpReload(dest, offset: offset)
+		prologue to addRspImm gives CallArgKind.none
+		loadRegRbpOffset to memcpyOp gives CallArgKind.none
+		cmpRegReg to spillToStack gives CallArgKind.none
+		xorRegRegSelf to xchgRegReg gives CallArgKind.none
+		spillXmmToStack gives CallArgKind.none
+		movXmmRipRel to imulRegImm gives CallArgKind.none
+	end 'classify'
+end 'classifyX64CallArgSetup'
+
+// Classify movRegReg with a physical destination. The dest must be in the
+// call-conv set; otherwise return none and let the walker flush the buffer
+// before this op (e.g. movRegReg into r10 for indirect calls).
+function classifyX64MovForCall(destReg X64VReg, srcReg X64VReg, coloring ColoringResult) returns CallArgKind
+	return match destReg 'pickDest'
+		virtual gives CallArgKind.none
+		physical(reg) gives buildX64CallArgRegToReg(reg, srcReg: srcReg, coloring: coloring)
+	end 'pickDest'
+end 'classifyX64MovForCall'
+
+function buildX64CallArgRegToReg(destPhys X64Register, srcReg X64VReg, coloring ColoringResult) returns CallArgKind
+	if not isX64CallConvGpr(destPhys) 'notArgSlot'
+		return CallArgKind.none
+	end 'notArgSlot'
+	let dstOrd = x64RegToOrdinal(destPhys)
+	let srcOrd = colorGpr(srcReg, coloring: coloring)
+	return CallArgKind.regToReg(srcOrd, dstOrd: dstOrd, isFloat: false)
+end 'buildX64CallArgRegToReg'
+
+function classifyX64FpMovForCall(dest X64FpVReg, src X64FpVReg, coloring ColoringResult) returns CallArgKind
+	return match dest 'pickDest'
+		virtual gives CallArgKind.none
+		physical(reg) gives buildX64CallArgFpRegToReg(reg, src: src, coloring: coloring)
+	end 'pickDest'
+end 'classifyX64FpMovForCall'
+
+function buildX64CallArgFpRegToReg(destPhys X64XmmRegister, src X64FpVReg, coloring ColoringResult) returns CallArgKind
+	if not isX64CallConvXmm(destPhys) 'notArgSlot'
+		return CallArgKind.none
+	end 'notArgSlot'
+	let dstOrd = destPhys.rawValue
+	let srcOrd = colorFp(src, coloring: coloring)
+	return CallArgKind.regToReg(srcOrd, dstOrd: dstOrd, isFloat: true)
+end 'buildX64CallArgFpRegToReg'
+
+function classifyX64Reload(destReg X64VReg, offset RegInt) returns CallArgKind
+	return match destReg 'pick'
+		virtual gives CallArgKind.none
+		physical(reg) gives buildX64CallArgReload(reg, offset: offset)
+	end 'pick'
+end 'classifyX64Reload'
+
+function buildX64CallArgReload(destPhys X64Register, offset RegInt) returns CallArgKind
+	if not isX64CallConvGpr(destPhys) 'notArgSlot'
+		return CallArgKind.none
+	end 'notArgSlot'
+	return CallArgKind.spillReload(x64RegToOrdinal(destPhys), stackOffset: offset, isFloat: false)
+end 'buildX64CallArgReload'
+
+function classifyX64FpReload(dest X64FpVReg, offset RegInt) returns CallArgKind
+	return match dest 'pick'
+		virtual gives CallArgKind.none
+		physical(reg) gives buildX64CallArgFpReload(reg, offset: offset)
+	end 'pick'
+end 'classifyX64FpReload'
+
+function buildX64CallArgFpReload(destPhys X64XmmRegister, offset RegInt) returns CallArgKind
+	if not isX64CallConvXmm(destPhys) 'notArgSlot'
+		return CallArgKind.none
+	end 'notArgSlot'
+	return CallArgKind.spillReload(destPhys.rawValue, stackOffset: offset, isFloat: true)
+end 'buildX64CallArgFpReload'
+
+function classifyX64StackWrite(offset RegInt, srcReg X64VReg, coloring ColoringResult) returns CallArgKind
+	let srcOrd = colorGpr(srcReg, coloring: coloring)
+	return CallArgKind.stackWrite(offset, srcOrd: srcOrd)
+end 'classifyX64StackWrite'
+
 // Extract virtual value ID from an X64VReg, or -1 if physical.
 function x64VRegId(vreg X64VReg) returns RegInt
 	return match vreg 'getId'
@@ -2548,6 +2677,11 @@ export type X64RegAllocTarget implements RegAllocTarget
 		let x64Op = try module.x64Ops.get(packed) otherwise panic("invariant: packed opIdx not in module.x64Ops")
 		return x64Op.rawValue.isCall
 	end 'isCallOp'
+
+	function classifyCallArgSetup(module TargetModule, packed OpIndex, coloring ColoringResult) returns CallArgKind
+		let x64Op = try module.x64Ops.get(packed) otherwise panic("invariant: packed opIdx not in module.x64Ops")
+		return classifyX64CallArgSetup(x64Op, coloring: coloring)
+	end 'classifyCallArgSetup'
 
 	function emitSlotToSlotMove(module TargetModule, ops OpIndexList, srcStackOffset RegInt, destStackOffset RegInt, regClass RegInt)
 		if regClass == 1 'fp'

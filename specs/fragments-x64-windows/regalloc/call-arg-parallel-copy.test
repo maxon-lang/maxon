@@ -1,0 +1,189 @@
+// Test: call-arg-parallel-copy
+typealias Integer = int(i64.min to i64.max)
+
+function opaque(x Integer) returns Integer
+	return x + 0
+end 'opaque'
+
+function combine6(a Integer, b Integer, c Integer, d Integer, e Integer, f Integer) returns Integer
+	return ((a xor b) + (c xor d)) + ((e xor f) + 1)
+end 'combine6'
+
+function main() returns ExitCode
+	let args = CommandLine.args()
+	let seed = try int.fromString(try args.get(1) otherwise "0") otherwise 0
+
+	// Six values live across the helper call. Each comes from an opaque
+	// helper so the constant folder cannot fold them out. They are all
+	// used after the call (the final `total` consumes each), forcing
+	// them into long live ranges that cross the call boundary.
+	let v1 = opaque(seed + 11)
+	let v2 = opaque(seed + 22)
+	let v3 = opaque(seed + 33)
+	let v4 = opaque(seed + 44)
+	let v5 = opaque(seed + 55)
+	let v6 = opaque(seed + 66)
+
+	// Call with six args in a permuted order — combine6(v6, v5, v4,
+	// v3, v2, v1) forces a reverse mapping at the ABI boundary, which
+	// is exactly the shape that pre-sequentialization emitDirectCall
+	// could miscompile when the colorer aligned several of v1..v6 to
+	// ABI parameter registers. The args are also reused after the
+	// call so the colorer cannot collapse them into the ABI slots
+	// permanently.
+	let reversed = combine6(v6, b: v5, c: v4, d: v3, e: v2, f: v1)
+
+	// Second call in a different rotation. With two calls back-to-back
+	// the colorer's choices get exercised again under different live
+	// sets — catches a fix that happens to work for the first call
+	// but not when the post-call values land in different colorings.
+	let rotated = combine6(v3, b: v1, c: v2, d: v6, e: v4, f: v5)
+
+	let total = reversed + rotated + v1 + v2 + v3 + v4 + v5 + v6
+	let masked = total and 127
+	return masked as ExitCode
+end 'main'
+---
+Args: 0
+ExitCode: 33
+---
+// CompiledIR
+module {
+  func @combine6(rcx: i64, rdx: i64, rax: i64, r9: i64, rsi: i64, rdi: i64) -> i64 {
+  entry:
+    x64.xor rsi, rdi
+    x64.xor rax, r9
+    x64.xor rcx, rdx
+    x64.add rsi, 1
+    x64.add rcx, rax
+    x64.mov r8, rcx
+    x64.add r8, rsi
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=64
+    x64.call CommandLine.args
+    x64.mov edx, 1
+  inlined_Array.get_0:
+    x64.mov rcx, [r8+0] (8b)
+    x64.call stdlib.__managed_mem_get
+    x64.test rdx, rdx
+    x64.je inlined_Array.get_2
+  inlined_Array.get_1:
+    x64.mov edx, 1
+    x64.xor r8d, r8d
+    x64.jmp inline_cont_main_0
+  inlined_Array.get_2:
+    x64.xor edx, edx
+  inline_cont_main_0:
+    x64.xor r12d, r12d
+    x64.test rdx, rdx
+    x64.je __phi_trampoline_13_0
+  try_0.otherwise:
+    x64.mov ecx, 40
+    x64.call mrt_alloc
+    x64.mov r13, r8
+    x64.lea r8, [rip+__istr_0]
+    x64.mov [r13+0], r8 (8b)
+    x64.mov r8d, 1
+    x64.mov [r13+8], r8 (8b)
+    x64.mov r8, -2
+    x64.mov [r13+16], r8 (8b)
+    x64.mov r8d, 1
+    x64.mov [r13+24], r8 (8b)
+    x64.mov [r13+32], r12 (8b)
+    x64.mov ecx, 16
+    x64.call mrt_alloc
+    x64.mov [r8+0], r13 (8b)
+    x64.mov r9d, 1
+    x64.mov [r8+8], r9 (8b)
+    x64.mov rcx, r8
+  try_0.merge:
+    x64.call stdlib.__int_fromString
+    x64.test rdx, rdx
+    x64.je try_1.ok
+    x64.jmp try_1.merge
+  try_1.ok:
+    x64.mov r12, r8
+  try_1.merge:
+    x64.mov r8, r12
+    x64.add r8, 11
+    x64.mov r9, r12
+    x64.add r9, 22
+    x64.mov rax, r12
+    x64.add rax, 33
+    x64.mov rcx, r12
+    x64.add rcx, 44
+    x64.mov rdx, r12
+    x64.add rdx, 55
+    x64.add r12, 66
+    x64.mov r13, r8
+    x64.add r13, 0
+    x64.mov r14, r9
+    x64.add r14, 0
+    x64.mov r15, rax
+    x64.add r15, 0
+    x64.mov [rbp+-8], rcx
+    x64.mov r8, [rbp+-8]
+    x64.add r8, 0
+    x64.mov [rbp+-8], r8
+    x64.mov [rbp+-16], rdx
+    x64.mov r8, [rbp+-16]
+    x64.add r8, 0
+    x64.mov [rbp+-16], r8
+    x64.add r12, 0
+    x64.mov rcx, r12
+    x64.mov r9, r15
+    x64.mov rsi, r14
+    x64.mov rdi, r13
+    x64.mov rdx, [rbp+-16]
+    x64.mov rax, [rbp+-8]
+    x64.call combine6
+    x64.mov [rbp+-24], r8
+    x64.mov rcx, r15
+    x64.mov rdx, r13
+    x64.mov rax, r14
+    x64.mov r9, r12
+    x64.mov rsi, [rbp+-8]
+    x64.mov rdi, [rbp+-16]
+    x64.call combine6
+    x64.mov r9, [rbp+-24]
+    x64.add r9, r8
+    x64.add r9, r13
+    x64.add r9, r14
+    x64.add r9, r15
+    x64.add r9, [rbp+-8]
+    x64.add r9, [rbp+-16]
+    x64.mov esi, 127
+    x64.add r9, r12
+    x64.mov edi, 4294967295
+    x64.mov r8, r9
+    x64.and r8, rsi
+    x64.cmp r8, rdi
+    x64.jle __cast_check_lo_0
+    x64.jmp __cast_panic_0
+  __cast_check_lo_0:
+    x64.test r8, r8
+    x64.jge __cast_ok_0
+  __cast_panic_0:
+    x64.lea r12, [rip+__panic_msg_0]
+    x64.mov rcx, r12
+    x64.call mrt_panic
+  __cast_ok_0:
+    x64.mov r9d, 4294967295
+    x64.cmp r8, r9
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea r12, [rip+__panic_msg_1]
+    x64.mov rcx, r12
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  __phi_trampoline_13_0:
+    x64.mov rcx, r8
+    x64.jmp try_0.merge
+  }
+}
+---

@@ -398,3 +398,95 @@ end 'main'
 ```exitcode
 61
 ```
+
+<!-- test: call-arg-parallel-copy -->
+<!-- Args: 0 -->
+Sequentialized call-arg setup test. Each ABI parameter slot is moved
+into one-by-one by `emitDirectCall`; before sequentialization, an
+earlier-arg `mov physArg, virtual(srcId)` could clobber a register that
+a later-arg mov still needed to read from. The exact coloring layout
+that triggers the miscompile depends on the regalloc's pressure
+heuristics, so this test pushes the allocator into a shape where:
+
+1. Several live values cross a call that takes many args.
+2. The args' source-virtuals tend to live in caller-saved registers
+   that overlap the ABI parameter slots, so the colorer's choice
+   for the arg's source landed naturally in the parameter set —
+   exactly the shape where the next arg's mov would clobber it
+   under the pre-sequentialization emission.
+
+After the fix, `ApplyColoring`'s buffered walk recognizes the run of
+`mov physArg, virtual(_)` ops preceding the `callDirect`, hands them
+to `sequentializeCallArgSetup`, and either topologically orders the
+moves (no conflict) or inserts an `xchg` / cycle-break-via-scratch
+when the move graph has a cycle.
+
+What this test gates:
+
+1. `RegAllocTarget.classifyCallArgSetup` recognizes
+   `movRegReg(physArg, virtual)` and `reloadFromStack(physArg, ...)`
+   patterns ahead of `callDirect` / `callIndirect`.
+2. `sequentializeCallArgSetup` partitions GPR / FP moves and runs
+   the existing two-phase (topo + cycle-break) sequencer from
+   `CopyResolution.maxon` on each class.
+3. Spill-source reloads (where an arg's source was spilled and the
+   target's `tryFoldReadFromSlot` rewrote it to
+   `reloadFromStack(physArg, offset)`) are deferred until no pending
+   reg-to-reg move sources from the reload's destination — a reload
+   doesn't write into a register the parallel copy still reads from.
+4. Stack-write args (`movRspOffsetReg(slot, src)`) are emitted before
+   any reg-to-reg moves clobber the source register holding the
+   outgoing value.
+
+The exit code is the deterministic sum-mod-256 of the helper outputs
+plus the post-call uses of the live values.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function opaque(x Integer) returns Integer
+	return x + 0
+end 'opaque'
+
+function combine6(a Integer, b Integer, c Integer, d Integer, e Integer, f Integer) returns Integer
+	return ((a xor b) + (c xor d)) + ((e xor f) + 1)
+end 'combine6'
+
+function main() returns ExitCode
+	let args = CommandLine.args()
+	let seed = try int.fromString(try args.get(1) otherwise "0") otherwise 0
+
+	// Six values live across the helper call. Each comes from an opaque
+	// helper so the constant folder cannot fold them out. They are all
+	// used after the call (the final `total` consumes each), forcing
+	// them into long live ranges that cross the call boundary.
+	let v1 = opaque(seed + 11)
+	let v2 = opaque(seed + 22)
+	let v3 = opaque(seed + 33)
+	let v4 = opaque(seed + 44)
+	let v5 = opaque(seed + 55)
+	let v6 = opaque(seed + 66)
+
+	// Call with six args in a permuted order — combine6(v6, v5, v4,
+	// v3, v2, v1) forces a reverse mapping at the ABI boundary, which
+	// is exactly the shape that pre-sequentialization emitDirectCall
+	// could miscompile when the colorer aligned several of v1..v6 to
+	// ABI parameter registers. The args are also reused after the
+	// call so the colorer cannot collapse them into the ABI slots
+	// permanently.
+	let reversed = combine6(v6, b: v5, c: v4, d: v3, e: v2, f: v1)
+
+	// Second call in a different rotation. With two calls back-to-back
+	// the colorer's choices get exercised again under different live
+	// sets — catches a fix that happens to work for the first call
+	// but not when the post-call values land in different colorings.
+	let rotated = combine6(v3, b: v1, c: v2, d: v6, e: v4, f: v5)
+
+	let total = reversed + rotated + v1 + v2 + v3 + v4 + v5 + v6
+	let masked = total and 127
+	return masked as ExitCode
+end 'main'
+```
+```exitcode
+33
+```

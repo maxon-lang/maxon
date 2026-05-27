@@ -341,6 +341,17 @@ each virtual operand to its assigned physical register. Identity moves
 (virtual1 → physical1, virtual2 → physical1 where both got the same
 color) are elided by the per-target `substituteOp` implementation.
 
+A parallel buffered walk recognises call-arg setup runs (consecutive
+`mov physArg, virtual(srcId)` / `reloadFromStack(physArg, off)` /
+`store [sp+off], src` ops preceding a `callDirect` or `callIndirect`)
+via `regTarget.classifyCallArgSetup`. The buffer is handed to
+`sequentializeCallArgSetup` (CopyResolution.maxon), which emits stack
+writes first, then runs the standard topological-order +
+cycle-break sequencer on the GPR / FP reg-to-reg moves, interleaving
+spill reloads as their destinations become unblocked. Without this,
+chains like "arg0 lives in rcx, arg1's destination is rcx" miscompile
+to a read-after-clobber.
+
 ## SSA Destruction
 
 `destroySSA` in `RegisterAllocator.maxon` runs after coloring. It
@@ -373,6 +384,7 @@ RegAllocTarget:
     tryFoldReadFromSlot                        -- Phase 3 fold probe
     getImplicitGprDefs / getImplicitGprReads   -- call clobbers, idiv RAX/RDX
     getCallConvGprOrd                          -- calling convention
+    classifyCallArgSetup                       -- call-arg parallel-copy sequencing
     isCallOp / isReturnTerminator / ...        -- op classification
 
 TargetOpQuery:

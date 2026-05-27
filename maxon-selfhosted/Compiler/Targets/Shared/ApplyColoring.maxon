@@ -4,8 +4,14 @@
 //
 // Per-op substitution is dispatched via the RegAllocTarget interface —
 // this file contains no target-specific knowledge.
+//
+// A separate buffered walk recognises call-arg setup regions and routes
+// them through sequentializeCallArgSetup so the parallel copy is emitted
+// in a dependency-respecting order. Without this, two args whose source
+// and destination physical registers form a chain (e.g. one arg lives in
+// rcx, another arg's dest is rcx) miscompile to a read-after-clobber.
 
-export function applyColoring(module TargetModule, func IrFunction, coloring ColoringResult, ranges LiveRangeArray, regTarget RegAllocTarget)
+export function applyColoring(module TargetModule, func IrFunction, coloring ColoringResult, ranges LiveRangeArray, state RegState, regTarget RegAllocTarget)
 	setColoringDiagnosticContext(func.name, ranges: ranges)
 	var blockCount = 0
 	for blockRef in func.blockRefs 'eachBlock'
@@ -15,10 +21,7 @@ export function applyColoring(module TargetModule, func IrFunction, coloring Col
 		let oldOps = block.opRefs
 		block.opRefs = OpIndexList.create()
 
-		// Substitute each op
-		for packed in oldOps 'eachOp'
-			regTarget.substituteOp(module, packed: packed, coloring: coloring, opRefs: block.opRefs)
-		end 'eachOp'
+		walkBlockWithCallArgBuffer(module, oldOps: oldOps, block: block, coloring: coloring, state: state, regTarget: regTarget)
 
 		// Substitute the terminator
 		if block.hasTerminatorOp() 'hasTerm'
@@ -41,3 +44,52 @@ export function applyColoring(module TargetModule, func IrFunction, coloring Col
 	end 'eachBlock'
 	logDebug(LogCategory.ir, message: function() gives "apply-coloring: func={func.name} blocks={blockCount} assigned={coloring.assignment.count()}")
 end 'applyColoring'
+
+// Walk one block's ops, buffering any call-arg-setup ops until we hit
+// the terminating call. Non-call non-arg-setup ops drain the buffer and
+// then get substituted normally — this keeps witness-call's intermediate
+// loadIndirect-into-R10 op in its correct position between args and call.
+function walkBlockWithCallArgBuffer(module TargetModule, oldOps OpIndexList, block IrBlock, coloring ColoringResult, state RegState, regTarget RegAllocTarget)
+	var buffer = CallArgKindArray.create()
+
+	for packed in oldOps 'eachOp'
+		let kind = regTarget.classifyCallArgSetup(module, packed: packed, coloring: coloring)
+
+		if regTarget.isCallOp(module, packed: packed) 'isCall'
+			// Sequence the buffered arg setup, then emit the call itself.
+			// classifyCallArgSetup returns `none` for the call op so it
+			// never lands in the buffer; both call kinds (direct and
+			// indirect) need normal substitution.
+			if buffer.count() > 0 'flush'
+				sequentializeCallArgSetup(module, kinds: buffer, dstBlock: block, state: state, regTarget: regTarget)
+				buffer.clear()
+			end 'flush'
+			regTarget.substituteOp(module, packed: packed, coloring: coloring, opRefs: block.opRefs)
+			continue
+		end 'isCall'
+
+		match kind 'classify'
+			regToReg to stackWrite then buffer.push(kind)
+			none then drainAndSubstitute(module, buffer: buffer, packed: packed, block: block, coloring: coloring, state: state, regTarget: regTarget)
+		end 'classify'
+	end 'eachOp'
+
+	// Block ends without a call op — flush any remaining buffered ops.
+	// Block-ends-with-call already drained above; this only matters if a
+	// classifier misclassifies something and a buffer accumulates without
+	// a terminating call.
+	if buffer.count() > 0 'tailFlush'
+		sequentializeCallArgSetup(module, kinds: buffer, dstBlock: block, state: state, regTarget: regTarget)
+	end 'tailFlush'
+end 'walkBlockWithCallArgBuffer'
+
+// A non-classified, non-call op landed mid-buffer. Drain the call-arg
+// buffer first (so the parallel copy completes before the interloper
+// reads any registers) and then substitute the interloper normally.
+function drainAndSubstitute(module TargetModule, buffer CallArgKindArray, packed OpIndex, block IrBlock, coloring ColoringResult, state RegState, regTarget RegAllocTarget)
+	if buffer.count() > 0 'flush'
+		sequentializeCallArgSetup(module, kinds: buffer, dstBlock: block, state: state, regTarget: regTarget)
+		buffer.clear()
+	end 'flush'
+	regTarget.substituteOp(module, packed: packed, coloring: coloring, opRefs: block.opRefs)
+end 'drainAndSubstitute'

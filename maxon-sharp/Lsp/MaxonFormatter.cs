@@ -206,6 +206,7 @@ private record SourceComment(string Text, bool WholeLine);
     int consecutiveNewlines = 0;
     bool pendingIndentIncrease = false;
     TokenType prevNonNewline = TokenType.Eof;
+    string? prevNonNewlineValue = null;
     bool prevWasDot = false;
     bool prevWasUnary = false; // true when prev '-' or '+' was unary (no space after)
     int braceDepth = 0;
@@ -538,6 +539,7 @@ private record SourceComment(string Text, bool WholeLine);
             && scan < tokens.Count && tokens[scan].Type == TokenType.RightParen) {
           i = scan; // skip past ')'
           prevNonNewline = TokenType.Identifier;
+          prevNonNewlineValue = null;
           continue;
         }
       }
@@ -572,6 +574,7 @@ private record SourceComment(string Text, bool WholeLine);
         if (j < tokens.Count && (tokens[j].Type == TokenType.Else || tokens[j].Type == TokenType.Otherwise)) {
           i = j - 1;
           prevNonNewline = tok.Type;
+          prevNonNewlineValue = tok.Value;
           lineStartedWithEnd = false;
           lineHasLabeledOpener = true; // else/otherwise is a labeled opener on the new line
           continue;
@@ -591,7 +594,9 @@ private record SourceComment(string Text, bool WholeLine);
       prevWasUnary = (tok.Type == TokenType.Minus || tok.Type == TokenType.Plus) &&
         (wasAtLineStart || (!IsExpressionEnder(prevNonNewline) && prevNonNewline != TokenType.Eof));
       var prevToken = prevNonNewline;
+      var prevTokenValue = prevNonNewlineValue;
       prevNonNewline = tok.Type;
+      prevNonNewlineValue = tok.Value;
 
       // Inside an enum/union body the same keyword token can be either a bare case name
       // (e.g. `function`, `type`, `match` as TokenKind variants) or a real nested declaration
@@ -612,9 +617,12 @@ private record SourceComment(string Text, bool WholeLine);
       }
 
       // Labelless block openers push a block and indent the next line.
-      // Only trigger when at line start (or after 'export'/'static') — not as enum case values (handled above).
+      // Only trigger when at line start (or after 'export'/'static'/'module') — not as enum case values (handled above).
+      // `module` is a contextual keyword (lexed as Identifier) so it's matched
+      // by value rather than token type.
       // Skip if the next non-newline token is 'end' (bodyless declaration, e.g. interface method signature).
-      if (LabellessBlockOpeners.Contains(tok.Type) && (wasAtLineStart || prevToken == TokenType.Export || prevToken == TokenType.Static) && !InMatchBlock()) {
+      bool prevWasModuleKeyword = prevToken == TokenType.Identifier && prevTokenValue == "module";
+      if (LabellessBlockOpeners.Contains(tok.Type) && (wasAtLineStart || prevToken == TokenType.Export || prevToken == TokenType.Static || prevWasModuleKeyword) && !InMatchBlock()) {
         // Inside an interface block, function/type declarations are bodyless signatures — don't open a block.
         bool bodylessDecl = InInterfaceBlock() && tok.Type == TokenType.Function;
         if (!bodylessDecl) {

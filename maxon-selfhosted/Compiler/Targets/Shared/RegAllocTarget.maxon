@@ -147,4 +147,19 @@ export interface RegAllocTarget
 	// reload vregs carry SPILL_WEIGHT_INFINITE so they cannot cross a
 	// call into caller-saved registers without exhausting the pool.
 	function isCallOp(module TargetModule, packed OpIndex) returns bool
+
+	// Classify `packed` as a call-arg-setup op for the buffered walk in
+	// ApplyColoring. Returns CallArgKind.none when the op is anything else
+	// (compute, control flow, post-call result capture, …). Recognized
+	// forms are the four shapes emitDirectCall / lowerIndirectCall /
+	// lowerWitnessCall can produce that need parallel-copy sequencing:
+	//   * mov physArgReg, virtual(srcId) — regToReg with src resolved
+	//     via the target's GPR coloring lookup.
+	//   * fp mov physFpArgReg, virtual(srcId) — regToReg FP variant.
+	//   * reloadFromStack(physArgReg, offset) — spillReload (x64 fold path);
+	//     dst lands directly in the ABI slot, no register source dep.
+	//   * stack-write to [sp + offset] of a virtual/phys source — stackWrite.
+	// Source virtuals are resolved through the target's coloring helpers,
+	// so the result is fully physical-ordinal and ready for the sequencer.
+	function classifyCallArgSetup(module TargetModule, packed OpIndex, coloring ColoringResult) returns CallArgKind
 end 'RegAllocTarget'

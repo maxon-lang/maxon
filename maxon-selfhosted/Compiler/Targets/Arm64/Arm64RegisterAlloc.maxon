@@ -153,6 +153,107 @@ function isVirtualArm64FpReg(vreg Arm64FpVReg) returns bool
 	return result
 end 'isVirtualArm64FpReg'
 
+// True iff `reg` is an ARM64 AAPCS64 GPR argument slot (x0..x7).
+function isArm64CallConvGpr(reg Arm64Register) returns bool
+	let ord = arm64RegToOrdinal(reg)
+	return ord >= 0 and ord <= 7
+end 'isArm64CallConvGpr'
+
+// True iff `reg` is an ARM64 AAPCS64 FP argument slot (d0..d7).
+function isArm64CallConvFp(reg Arm64FloatRegister) returns bool
+	let ord = reg.rawValue
+	return ord >= 0 and ord <= 7
+end 'isArm64CallConvFp'
+
+// Classify a single Arm64Op for the call-arg-setup buffered walk. Returns
+// CallArgKind.none for anything outside the recognized call-arg shapes.
+// Recognized shapes mirror the X64 classifier (see classifyX64CallArgSetup);
+// ARM64-specific differences:
+//   * Reload-into-physical-reg arises only via the spill code insertion
+//     remap fence (tryFoldReadFromSlot returns -1 on ARM64, so the folded
+//     reload-into-phys shape from x64 doesn't appear here in practice — but
+//     we recognize it for safety in case a future ARM64 fold path lands).
+//   * strToSpOffset is the ARM64 analogue of x64's movRspOffsetReg.
+function classifyArm64CallArgSetup(a64Op Arm64Op, coloring ColoringResult) returns CallArgKind
+	return match a64Op 'classify'
+		movRegReg(dest, src) gives classifyArm64MovForCall(dest, src: src, coloring: coloring)
+		reloadFromStack(dest, offset) gives classifyArm64Reload(dest, offset: offset)
+		strToSpOffset(offset, src) gives classifyArm64StackWrite(offset, src: src, coloring: coloring)
+		fmovRegReg(dest, src, _) gives classifyArm64FpMovForCall(dest, src: src, coloring: coloring)
+		reloadFpFromStack(dest, offset, _) gives classifyArm64FpReload(dest, offset: offset)
+		prologue to memcpyOp gives CallArgKind.none
+		spillToStack gives CallArgKind.none
+		branchLinkReg to addSpImm gives CallArgKind.none
+		spillFpToStack gives CallArgKind.none
+		fmovToFloat to xorRegImm gives CallArgKind.none
+	end 'classify'
+end 'classifyArm64CallArgSetup'
+
+function classifyArm64MovForCall(dest Arm64VReg, src Arm64VReg, coloring ColoringResult) returns CallArgKind
+	return match dest 'pickDest'
+		virtual gives CallArgKind.none
+		physical(reg) gives buildArm64CallArgRegToReg(reg, src: src, coloring: coloring)
+	end 'pickDest'
+end 'classifyArm64MovForCall'
+
+function buildArm64CallArgRegToReg(destPhys Arm64Register, src Arm64VReg, coloring ColoringResult) returns CallArgKind
+	if not isArm64CallConvGpr(destPhys) 'notArgSlot'
+		return CallArgKind.none
+	end 'notArgSlot'
+	let dstOrd = arm64RegToOrdinal(destPhys)
+	let srcOrd = colorArm64Gpr(src, coloring: coloring)
+	return CallArgKind.regToReg(srcOrd, dstOrd: dstOrd, isFloat: false)
+end 'buildArm64CallArgRegToReg'
+
+function classifyArm64FpMovForCall(dest Arm64FpVReg, src Arm64FpVReg, coloring ColoringResult) returns CallArgKind
+	return match dest 'pickDest'
+		virtual gives CallArgKind.none
+		physical(reg) gives buildArm64CallArgFpRegToReg(reg, src: src, coloring: coloring)
+	end 'pickDest'
+end 'classifyArm64FpMovForCall'
+
+function buildArm64CallArgFpRegToReg(destPhys Arm64FloatRegister, src Arm64FpVReg, coloring ColoringResult) returns CallArgKind
+	if not isArm64CallConvFp(destPhys) 'notArgSlot'
+		return CallArgKind.none
+	end 'notArgSlot'
+	let dstOrd = destPhys.rawValue
+	let srcOrd = colorArm64Fp(src, coloring: coloring)
+	return CallArgKind.regToReg(srcOrd, dstOrd: dstOrd, isFloat: true)
+end 'buildArm64CallArgFpRegToReg'
+
+function classifyArm64Reload(dest Arm64VReg, offset RegInt) returns CallArgKind
+	return match dest 'pick'
+		virtual gives CallArgKind.none
+		physical(reg) gives buildArm64CallArgReload(reg, offset: offset)
+	end 'pick'
+end 'classifyArm64Reload'
+
+function buildArm64CallArgReload(destPhys Arm64Register, offset RegInt) returns CallArgKind
+	if not isArm64CallConvGpr(destPhys) 'notArgSlot'
+		return CallArgKind.none
+	end 'notArgSlot'
+	return CallArgKind.spillReload(arm64RegToOrdinal(destPhys), stackOffset: offset, isFloat: false)
+end 'buildArm64CallArgReload'
+
+function classifyArm64FpReload(dest Arm64FpVReg, offset RegInt) returns CallArgKind
+	return match dest 'pick'
+		virtual gives CallArgKind.none
+		physical(reg) gives buildArm64CallArgFpReload(reg, offset: offset)
+	end 'pick'
+end 'classifyArm64FpReload'
+
+function buildArm64CallArgFpReload(destPhys Arm64FloatRegister, offset RegInt) returns CallArgKind
+	if not isArm64CallConvFp(destPhys) 'notArgSlot'
+		return CallArgKind.none
+	end 'notArgSlot'
+	return CallArgKind.spillReload(destPhys.rawValue, stackOffset: offset, isFloat: true)
+end 'buildArm64CallArgFpReload'
+
+function classifyArm64StackWrite(offset RegInt, src Arm64VReg, coloring ColoringResult) returns CallArgKind
+	let srcOrd = colorArm64Gpr(src, coloring: coloring)
+	return CallArgKind.stackWrite(offset, srcOrd: srcOrd)
+end 'classifyArm64StackWrite'
+
 export function arm64OpHasVirtualRegs(op Arm64Op) returns bool
 	return match op 'check'
 		prologue to epilogue gives false
@@ -1858,6 +1959,11 @@ export type Arm64RegAllocTarget implements RegAllocTarget
 		let arm64Op = try module.arm64Ops.get(packed) otherwise panic("invariant: packed opIdx not in module.arm64Ops")
 		return arm64Op.rawValue.isCall
 	end 'isCallOp'
+
+	function classifyCallArgSetup(module TargetModule, packed OpIndex, coloring ColoringResult) returns CallArgKind
+		let arm64Op = try module.arm64Ops.get(packed) otherwise panic("invariant: packed opIdx not in module.arm64Ops")
+		return classifyArm64CallArgSetup(arm64Op, coloring: coloring)
+	end 'classifyCallArgSetup'
 
 	// Slot-to-slot move via x16, the arm64 indirect-call scratch register
 	// (also reserved for register-allocator use). Mirrors the x64 impl.

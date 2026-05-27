@@ -1,0 +1,171 @@
+// Test: call-arg-parallel-copy
+typealias Integer = int(i64.min to i64.max)
+
+function opaque(x Integer) returns Integer
+	return x + 0
+end 'opaque'
+
+function combine6(a Integer, b Integer, c Integer, d Integer, e Integer, f Integer) returns Integer
+	return ((a xor b) + (c xor d)) + ((e xor f) + 1)
+end 'combine6'
+
+function main() returns ExitCode
+	let args = CommandLine.args()
+	let seed = try int.fromString(try args.get(1) otherwise "0") otherwise 0
+
+	// Six values live across the helper call. Each comes from an opaque
+	// helper so the constant folder cannot fold them out. They are all
+	// used after the call (the final `total` consumes each), forcing
+	// them into long live ranges that cross the call boundary.
+	let v1 = opaque(seed + 11)
+	let v2 = opaque(seed + 22)
+	let v3 = opaque(seed + 33)
+	let v4 = opaque(seed + 44)
+	let v5 = opaque(seed + 55)
+	let v6 = opaque(seed + 66)
+
+	// Call with six args in a permuted order — combine6(v6, v5, v4,
+	// v3, v2, v1) forces a reverse mapping at the ABI boundary, which
+	// is exactly the shape that pre-sequentialization emitDirectCall
+	// could miscompile when the colorer aligned several of v1..v6 to
+	// ABI parameter registers. The args are also reused after the
+	// call so the colorer cannot collapse them into the ABI slots
+	// permanently.
+	let reversed = combine6(v6, b: v5, c: v4, d: v3, e: v2, f: v1)
+
+	// Second call in a different rotation. With two calls back-to-back
+	// the colorer's choices get exercised again under different live
+	// sets — catches a fix that happens to work for the first call
+	// but not when the post-call values land in different colorings.
+	let rotated = combine6(v3, b: v1, c: v2, d: v6, e: v4, f: v5)
+
+	let total = reversed + rotated + v1 + v2 + v3 + v4 + v5 + v6
+	let masked = total and 127
+	return masked as ExitCode
+end 'main'
+---
+Args: 0
+ExitCode: 33
+---
+// CompiledIR
+module {
+  func @combine6(local0: i64, local1: i64, local2: i64, local3: i64, local4: i64, local5: i64) -> i64 {
+  entry:
+    %19 = mir.param local0 : i64
+    %20 = mir.param local1 : i64
+    %21 = mir.param local2 : i64
+    %22 = mir.param local3 : i64
+    %23 = mir.param local4 : i64
+    %24 = mir.param local5 : i64
+    %8 = mir.xor.i64 %19, %20
+    %11 = mir.xor.i64 %21, %22
+    %12 = mir.add.i64 %8, %11
+    %15 = mir.xor.i64 %23, %24
+    %16 = mir.mov_imm 1 : i64
+    %17 = mir.add.i64 %15, %16
+    %18 = mir.add.i64 %12, %17
+    mir.ret %18
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.call @CommandLine.args()
+    %2 = mir.mov_imm 1 : i64
+    mir.br inlined_Array.get_0()
+  inlined_Array.get_0:
+    %92 = mir.load %0, 0 width: qword
+    %93, %94 = mir.try_call @stdlib.__managed_mem_get(%92, %2)
+    %95 = mir.mov_imm 0 : i64
+    %96 = mir.cmp ne, %94, %95
+    mir.cond_br %96 [then: inlined_Array.get_1(), else: inlined_Array.get_2()]
+  inlined_Array.get_1:
+    %97 = mir.mov_imm 0 : i64
+    %98 = mir.mov_imm 1 : i64
+    mir.br inline_cont_main_0(%97, %98)
+  inlined_Array.get_2:
+    %99 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%93, %99)
+  inline_cont_main_0:
+    %6 = mir.mov_imm 0 : i64
+    %7 = mir.cmp ne, %101, %6
+    mir.cond_br %7 [then: try_0.otherwise(), else: try_0.merge(%100)]
+  try_0.otherwise:
+    %9 = mir.global_addr @__istr_0
+    %10 = mir.mov_imm 40 : i64
+    %11 = mir.call @mrt_alloc(%10)
+    mir.store %9, %11, 0 width: qword
+    %12 = mir.mov_imm 1 : i64
+    mir.store %12, %11, 8 width: qword
+    %13 = mir.mov_imm -2 : i64
+    mir.store %13, %11, 16 width: qword
+    %14 = mir.mov_imm 1 : i64
+    mir.store %14, %11, 24 width: qword
+    mir.store %6, %11, 32 width: qword
+    %16 = mir.mov_imm 16 : i64
+    %17 = mir.call @mrt_alloc(%16)
+    mir.store %11, %17, 0 width: qword
+    %18 = mir.mov_imm 1 : i64
+    mir.store %18, %17, 8 width: qword
+    mir.br try_0.merge(%17)
+  try_0.merge:
+    %20, %21 = mir.try_call @stdlib.__int_fromString(%90)
+    %23 = mir.cmp ne, %21, %6
+    mir.cond_br %23 [then: try_1.merge(%6), else: try_1.ok()]
+  try_1.ok:
+    mir.br try_1.merge(%20)
+  try_1.merge:
+    %28 = mir.mov_imm 11 : i64
+    %29 = mir.add.i64 %91, %28
+    %102 = mir.mov_imm 0 : i64
+    %103 = mir.add.i64 %29, %102
+    %32 = mir.mov_imm 22 : i64
+    %33 = mir.add.i64 %91, %32
+    %104 = mir.mov_imm 0 : i64
+    %105 = mir.add.i64 %33, %104
+    %36 = mir.mov_imm 33 : i64
+    %37 = mir.add.i64 %91, %36
+    %106 = mir.mov_imm 0 : i64
+    %107 = mir.add.i64 %37, %106
+    %40 = mir.mov_imm 44 : i64
+    %41 = mir.add.i64 %91, %40
+    %108 = mir.mov_imm 0 : i64
+    %109 = mir.add.i64 %41, %108
+    %44 = mir.mov_imm 55 : i64
+    %45 = mir.add.i64 %91, %44
+    %110 = mir.mov_imm 0 : i64
+    %111 = mir.add.i64 %45, %110
+    %48 = mir.mov_imm 66 : i64
+    %49 = mir.add.i64 %91, %48
+    %112 = mir.mov_imm 0 : i64
+    %113 = mir.add.i64 %49, %112
+    %57 = mir.call @combine6(%113, %111, %109, %107, %105, %103)
+    %64 = mir.call @combine6(%107, %103, %105, %113, %109, %111)
+    %67 = mir.add.i64 %57, %64
+    %69 = mir.add.i64 %67, %103
+    %71 = mir.add.i64 %69, %105
+    %73 = mir.add.i64 %71, %107
+    %75 = mir.add.i64 %73, %109
+    %77 = mir.add.i64 %75, %111
+    %79 = mir.add.i64 %77, %113
+    %81 = mir.mov_imm 127 : i64
+    %82 = mir.and.i64 %79, %81
+    %84 = mir.mov_imm 125 : i64
+    %85 = mir.cmp gt, %82, %84
+    mir.cond_br %85 [then: __cast_panic_0(), else: __cast_check_lo_0()]
+  __cast_check_lo_0:
+    %87 = mir.cmp lt, %82, %6
+    mir.cond_br %87 [then: __cast_panic_0(), else: __cast_ok_0()]
+  __cast_panic_0:
+    %88 = mir.global_addr @__panic_msg_0
+    %89 = mir.call @mrt_panic(%88)
+  __cast_ok_0:
+    %114 = mir.mov_imm 125 : i64
+    %115 = mir.cmp ugt, %82, %114
+    mir.cond_br %115 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %116 = mir.global_addr @__panic_msg_1
+    %117 = mir.call @mrt_panic(%116)
+  __range_ok_0:
+    mir.ret %82
+  }
+}
+---
