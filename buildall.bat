@@ -27,6 +27,7 @@ if errorlevel 1 exit /b 1
 
 echo.
 echo === Building maxon-dev MCP Server ===
+taskkill /F /IM maxon-dev-mcp.exe >nul 2>&1
 maxon-sharp\bin\Debug\net8.0\win-x64\maxon.exe build maxon-dev-mcp
 if errorlevel 1 exit /b 1
 

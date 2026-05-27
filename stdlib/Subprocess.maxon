@@ -377,7 +377,7 @@ export type Subprocess
 		let stderrTriple = outputTripleFromDestination(config.standardError)
 		let flags = attachedFlagsFor(config.platformOptions)
 
-		let handle = __Builtins.subprocessSpawn(argvBlob.managed, argc, cwd.cstr(), emptyMm, 1, stdinTriple.kind, stdinTriple.data.cstr(), stdoutTriple.kind, stdoutTriple.data.cstr(), stdoutTriple.limit, stderrTriple.kind, stderrTriple.data.cstr(), stderrTriple.limit, flags)
+		let handle = __Builtins.subprocessSpawn(argvBlob.managed, argc, config.workingDirectory.toString().cstr(), emptyMm, 1, stdinTriple.kind, stdinTriple.data.cstr(), stdoutTriple.kind, stdoutTriple.data.cstr(), stdoutTriple.limit, stderrTriple.kind, stderrTriple.data.cstr(), stderrTriple.limit, flags)
 		if handle == -1 'spawnFailed'
 			throw SubprocessError.spawnFailed(lastErrorMessage())
 		end 'spawnFailed'
@@ -419,7 +419,7 @@ export type Subprocess
 		try requireInheritEnv(config.environment)
 		let flags = attachedFlagsFor(config.platformOptions) or SpawnFlag.detach.rawValue
 
-		let pid = __Builtins.subprocessDetach(argvBlob.managed, argc, cwd.cstr(), emptyMm, 1, StdinKind.none.rawValue, emptyCStr, OutputKind.discard.rawValue, emptyCStr, 0, OutputKind.discard.rawValue, emptyCStr, 0, flags)
+		let pid = __Builtins.subprocessDetach(argvBlob.managed, argc, config.workingDirectory.toString().cstr(), emptyMm, 1, StdinKind.none.rawValue, emptyCStr, OutputKind.discard.rawValue, emptyCStr, 0, OutputKind.discard.rawValue, emptyCStr, 0, flags)
 		if pid == -1 'spawnFailed'
 			throw SubprocessError.spawnFailed(lastErrorMessage())
 		end 'spawnFailed'
@@ -654,7 +654,7 @@ export type StreamingSubprocess
 		// pipes open — and don't take platform-options today, so the field is
 		// always 0. Environment is implicitly inherited by the runtime (the
 		// streaming variant of `__subp_spawn_core` hardcodes inherit-env).
-		let rawHandle = __Builtins.subprocessSpawnStreaming(argvBlob.managed, argc, cwd.cstr(), 0)
+		let rawHandle = __Builtins.subprocessSpawnStreaming(argvBlob.managed, argc, workingDirectory.toString().cstr(), 0)
 		if rawHandle == -1 'spawnFailed'
 			throw SubprocessError.spawnFailed(lastErrorMessage())
 		end 'spawnFailed'
