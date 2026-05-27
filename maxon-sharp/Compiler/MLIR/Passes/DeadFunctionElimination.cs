@@ -88,12 +88,25 @@ public static class DeadFunctionElimination {
       foreach (var name in deadGlobals)
         module.GlobalVarInfos.Remove(name);
 
-      // Remove dead init code from __module_init and cleanup functions
+      // Strip stores to dead globals from every reachable function.
+      // __module_init / __maxon_global_cleanup get the full EliminateDeadOps
+      // sweep (which also removes the unused initializer literals that fed
+      // those stores — safe because those bodies are pure inits).
+      // User functions only get the dead store_op removed; their producer ops
+      // may be side-effecting (e.g. `rawArg.toByteArray()` in a setter) so we
+      // leave them in place. Without this, a global with no surviving readers
+      // would still have stores referencing a name with no data-section
+      // definition — emitter fails with "Unresolved global: <name>".
       foreach (var func in module.Functions) {
-        if (func.Name != "__module_init" && func.Name != "__maxon_global_cleanup")
-          continue;
-        foreach (var block in func.Body.Blocks)
-          EliminateDeadOps(block, deadGlobals);
+        var isInit = func.Name == "__module_init" || func.Name == "__maxon_global_cleanup";
+        foreach (var block in func.Body.Blocks) {
+          if (isInit) {
+            EliminateDeadOps(block, deadGlobals);
+          } else {
+            block.Operations.RemoveAll(op =>
+              op is MaxonGlobalStoreOp store && deadGlobals.Contains(store.GlobalName));
+          }
+        }
       }
     }
 
