@@ -2465,6 +2465,57 @@ specific workaround.
   pure addition to one file, while direct-memory phis touch four;
   eviction likely lands first.
 
+## Phase 16 closure (2026-05-27) — full stdlib whitelist parity
+
+Every file under `stdlib/` is now whitelisted in
+[`StdlibLoader.maxon::stdlibWhitelist`](Compiler/StdlibLoader.maxon)
+— **42 files / 42 whitelist entries, zero exclusions**. The synthesized
+bootstrap prelude (`stdlibBootstrapSourceForTarget`) shrunk from ~110
+inlined declarations down to just `__Tuple2` / `__Tuple3` (215 bytes),
+the parser's tuple-desugar targets that have no on-disk stdlib home.
+Every other declaration that used to live in the synth now lives in a
+real stdlib file: marker interfaces, `Parsable`, `Error` / `Iterator`
+family, `ExitCode`, `Process`, the `__*_fromString` helpers, and the
+`FilePath` / `String` / `Character` placeholders all moved out across
+Phases A–E of this push.
+
+Phase-by-phase landing:
+
+- **Phase A**: `stdlib/Subprocess.maxon` whitelisted (no new runtime
+  work — `__Builtins.subprocess*` intrinsics were already registered).
+- **Phase B**: `stdlib/Builtins.maxon` whitelisted; bootstrap synth
+  trimmed of the marker-interface family / `Parsable` / `ParsedInt` /
+  `ParsedFloat` / `__*_fromString` helpers. Required a fix to
+  `synthesizeOneWitnessThunk` to skip the receiver slot for `static`
+  interface requirements (Builtins' marker interfaces declare
+  `static function init(...)` shapes that would otherwise add a
+  spurious leading arg to the thunk's tail call into `Array.init`).
+- **Phase C**: wired `__ManagedList` / `__ManagedListNode` builtin
+  types (`registerManagedListType` / `registerManagedListNodeType` in
+  `LowerMaxonToStd.maxon`, ~19 instance methods routed through
+  `lowerManagedListBuiltin` to new `mrt_managed_list_*` helpers in
+  `runtime.std`); whitelisted `stdlib/List.maxon`.
+- **Phase D**: wired `__ManagedSocket` builtin type
+  (`registerManagedSocketType` + `lowerManagedSocketBuiltin`);
+  whitelisted `stdlib/TcpClient.maxon`. `mrt_managed_socket_*` helpers
+  ship as sentinel-erroring stubs in `runtime.std` — full Winsock /
+  BSD-socket runtime translation is deferred to a future phase; tcp-
+  client spec tests stay off the self-hosted spec whitelist for now.
+- **Phase E**: whitelisted `stdlib/HttpClient.maxon` +
+  `stdlib/helpers/http/httpHelpers.maxon`. The two files form a mutual
+  reference pair; HttpClient is listed first so `StatusCode` is
+  registered before httpHelpers parses its `StatusCode.fromRawValue(...)`
+  call (the parser's `.fromRawValue` rewrite gates on
+  `prefixIsEnumName`).
+
+`CACHE_FORMAT_VERSION` ended this push at **v63**.
+
+**Final state**: **1615/1615 self-hosted fragments** on both
+x64-windows and wasm32-wasi; **2713/2713** on the C# bootstrap. No
+stdlib file is excluded; the `isStdlibRelativePathSkipped` filter is
+still wired up but only fires when a user passes
+`--skip-stdlib-fn=NAME` (the Phase 0b register-allocator escape hatch).
+
 ## Verification
 
 After each phase:

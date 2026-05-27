@@ -84,10 +84,21 @@ function ensureStdlibSandboxParsed(target Target)
 	registerManagedMemoryType(sandbox)
 	registerManagedFileType(sandbox)
 	registerManagedDirectoryType(sandbox)
+	// Phase C: register the `__ManagedList` / `__ManagedListNode` builtin
+	// structs and the `__ManagedListError` enum so `stdlib/List.maxon`
+	// parses + type-resolves. Bodies are intercepted by
+	// `lowerManagedListBuiltin` / `lowerManagedListNodeBuiltin` and routed
+	// to `mrt_managed_list_*` runtime helpers.
+	registerManagedListType(sandbox)
+	registerManagedListNodeType(sandbox)
+	// Phase D: register the `__ManagedSocket` builtin struct and the
+	// `__ManagedSocketError` enum so `stdlib/TcpClient.maxon` parses +
+	// type-resolves. Bodies are intercepted by `lowerManagedSocketBuiltin`
+	// and routed to `mrt_managed_socket_*` runtime helpers.
+	registerManagedSocketType(sandbox)
 	registerBuiltinsIntrinsicSignatures(sandbox)
 	registerInternalsIntrinsicSignatures(sandbox)
 	var module = MaxonModule.create()
-	parseStdlibBootstrapInto(sandbox, allModule: module)
 	for fp in collectStdlibFiles() 'eachFile'
 		if File.exists(fp) 'exists'
 			let content = try File.readText(fp) otherwise 'readErr'
@@ -96,8 +107,31 @@ function ensureStdlibSandboxParsed(target Target)
 			parseStdlibSource(sandbox, allModule: module, filePath: fp, rootPath: projectRoot, content: content)
 		end 'exists'
 	end 'eachFile'
+	// Drain pending cross-file function renames produced when a late-parsed
+	// file overloaded a function declared in an earlier-parsed sibling. The
+	// per-file parser's in-module rekey couldn't reach the IrFunction once
+	// it had been merged into `allModule`; we now apply each rename here so
+	// the unified IrFunction.name matches the project-level mangled key.
+	applyPendingFuncRenames(sandbox, allModule: module)
 	stdlibParsedModuleArr.push(StdlibParseSnapshot.create(sandbox, module: module))
 end 'ensureStdlibSandboxParsed'
+
+// Walk `allModule.functions` and rename any IrFunction whose `.name` matches
+// a pending rename entry. The map is cleared after the walk so a follow-up
+// parse (user project) starts with a fresh state.
+function applyPendingFuncRenames(project Project, allModule MaxonModule)
+	if project.pendingFuncRenames.count() == 0 'noRenames'
+		return
+	end 'noRenames'
+	for i in 0 upto allModule.functions.count() 'eachFunc'
+		var f = try allModule.functions.get(i) otherwise continue
+		if let newName = try project.pendingFuncRenames.get(f.name) 'haveRename'
+			f.name = newName
+			try allModule.functions.set(i, value: f) otherwise ignore
+		end 'haveRename'
+	end 'eachFunc'
+	project.pendingFuncRenames = FuncRenameMap.create()
+end 'applyPendingFuncRenames'
 
 // Pre-compiled stdlib cache (machine code level, per-target)
 var cachedStdlibCacheData = StdlibCacheData.create()
@@ -285,6 +319,7 @@ end 'resetStdlibLoaderState'
 // `stdlib/`).
 let stdlibWhitelist = [
 	"stdlib/Internals.maxon",
+	"stdlib/Builtins.maxon",
 	"stdlib/Interfaces.maxon",
 	"stdlib/helpers/itertools/withIterator.maxon",
 	"stdlib/Math.maxon",
@@ -293,10 +328,17 @@ let stdlibWhitelist = [
 	"stdlib/helpers/sort/insertionSort.maxon",
 	"stdlib/helpers/sort/smallSort.maxon",
 	"stdlib/helpers/sort/pdqsort.maxon",
+	// Phase C: List depends on Array (throws ArrayError on out-of-bounds /
+	// empty queries), Interfaces (Iterable / Cloneable / IterationError),
+	// and the `__ManagedList` / `__ManagedListNode` / `__ManagedListError`
+	// types wired via `registerManagedListType`. Positioned right after
+	// Array.maxon so ArrayError is in scope when List.maxon is parsed.
+	"stdlib/List.maxon",
 	"stdlib/PrimitiveExtensions.maxon",
 	"stdlib/CharacterSet.maxon",
 	"stdlib/Character.maxon",
 	"stdlib/String.maxon",
+	"stdlib/Print.maxon",
 	"stdlib/helpers/string/utf8.maxon",
 	"stdlib/helpers/string/utf16.maxon",
 	"stdlib/helpers/string/hash.maxon",
@@ -310,6 +352,32 @@ let stdlibWhitelist = [
 	"stdlib/CommandLine.maxon",
 	"stdlib/Process.maxon",
 	"stdlib/Sleep.maxon",
+	"stdlib/Subprocess.maxon",
+	// Phase D: TcpClient depends on String (host/data parameters) and the
+	// `__ManagedSocket` / `__ManagedSocketError` types wired via
+	// `registerManagedSocketType`. The `mrt_managed_socket_*` runtime
+	// helpers ship as sentinel-erroring stubs in runtime.std until per-
+	// target socket implementations land; tcp-client spec tests are not
+	// on the self-hosted spec whitelist yet, so the stub behavior doesn't
+	// affect the green baseline.
+	"stdlib/TcpClient.maxon",
+	// Phase E: HttpClient depends on TcpClient (for raw socket I/O) and on
+	// `stdlib/helpers/http/httpHelpers.maxon` for request-building /
+	// response-parsing helpers. The two files form a mutual reference pair
+	// (httpHelpers references HttpClient's nominal types — HttpMethod /
+	// HttpRequest / HttpResponse / HttpHeaders / StatusCode — and
+	// HttpClient calls `httpBuildRequest` / `httpParseResponse`).
+	// HttpClient.maxon is listed FIRST so that StatusCode (an int-backed
+	// enum) is registered in `project.unresolvedEnums` before
+	// httpHelpers.maxon parses its `StatusCode.fromRawValue(...)` call —
+	// the parser's `.fromRawValue` rewrite (see Parser.maxon's
+	// `prefixIsEnumName` guard around line 10727) only fires when the
+	// receiver name is already known to be an enum. The reverse direction
+	// (HttpClient's plain calls to `httpBuildRequest` /
+	// `httpParseResponse`) resolves via the regular forward-function
+	// machinery after both files are parsed.
+	"stdlib/HttpClient.maxon",
+	"stdlib/helpers/http/httpHelpers.maxon",
 	// Phase 15c: FilePath must come before File/Directory — both depend on
 	// it (File.readText takes a FilePath; Directory.list returns a
 	// FilePathArray). The minimal FilePath/FilePathError stub previously
@@ -331,46 +399,13 @@ let stdlibWhitelist = [
 	// construct in one of these, panic-during-parse will surface it cleanly.
 	"stdlib/Ascii.maxon",
 	"stdlib/Build.maxon",
+	"stdlib/Console.maxon",
+	"stdlib/Json.maxon",
 	"stdlib/PrintError.maxon",
 	"stdlib/Sha256.maxon",
 	"stdlib/Unicode.maxon",
 	"stdlib/Log.maxon",
 ]
-
-// Synthesized stdlib prelude. Pre-seeds declarations the self-hosted compiler
-// still can't parse out of the real stdlib sources:
-//   • `Parsable`, `__BuiltinParseError`, `ParsedInt`, `ParsedFloat`, and the
-//     four `__*_fromString` helpers mirror declarations in
-//     `stdlib/Builtins.maxon`. We can't whitelist `Builtins.maxon` directly
-//     yet — the file declares `InitableFromArrayLiteral.init(value
-//     ElementArray)` whose generic-shape interaction with the parser's
-//     `BuiltinArrayLiteral` discovery confuses `Array.init` paramTypes during
-//     stdlib cache lowering. Once the parser handles those interfaces,
-//     switch to whitelisting the file and drop the inline copies here.
-//   • The `BuiltinArrayLiteral` / `BuiltinDictionaryLiteral` / `Initable*` /
-//     `BuiltinStringLiteral` / `BuiltinCharLiteral` interface family must
-//     exist before any other stdlib file is parsed.
-//   • `__Tuple2` / `__Tuple3`, `print`, and the `FilePath` type, which
-//     `stdlib/Process.maxon` depends on. The real `stdlib/FilePath.maxon`
-//     is not yet whitelisted (it depends on string/byte-array machinery the
-//     self-hosted lowering doesn't fully support).
-//
-// The cross-cutting interface family (`Error`, `Iterator`,
-// `BidirectionalIterator`, `Iterable`, `Hashable`, `Equatable`,
-// `Cloneable`, `Stringable`, `FormattedStringable`, `Comparable`) plus
-// `Ordering`, `IterationError`, `HashValue`, and `IterStep` are provided by
-// the whitelisted `stdlib/Interfaces.maxon` and must NOT be synthesized
-// here — duplicating them would trigger E2001 duplicate-name errors.
-//
-// `ExitCode`, `ProcessIntrospectionError`, and `Process` are now provided by
-// the whitelisted `stdlib/Process.maxon`; its `#if os(...)` gating works now
-// that the parser handles the directive.
-
-function stdlibBootstrapSourceForTarget(_ Target) returns String
-	return "export interface BuiltinArrayLiteral\nend 'BuiltinArrayLiteral'\nexport interface BuiltinDictionaryLiteral\nend 'BuiltinDictionaryLiteral'\nexport interface InitableFromArrayLiteral uses Element\nend 'InitableFromArrayLiteral'\nexport interface InitableFromStringLiteral\nend 'InitableFromStringLiteral'\nexport interface InitableFromCharLiteral\nend 'InitableFromCharLiteral'\nexport interface BuiltinStringLiteral\nend 'BuiltinStringLiteral'\nexport interface BuiltinCharLiteral\nend 'BuiltinCharLiteral'\nexport interface Parsable\n\tstatic function fromString(input String) returns Self throws Error\nend 'Parsable'\nexport enum __BuiltinParseError implements Error\n\tinvalidFormat\nend '__BuiltinParseError'\nexport typealias ParsedInt = int(i64.min to i64.max)\nexport typealias ParsedFloat = float(f64.min to f64.max)\nexport function __int_fromString(input String) returns ParsedInt throws __BuiltinParseError\n\tvar result = 0\n\tvar negative = false\n\tvar hasDigits = false\n\tfor cp in input.codepoints() 'chars'\n\t\tif cp == '-' 'minus'\n\t\t\tif hasDigits 'minus_after_digits'\n\t\t\t\tthrow __BuiltinParseError.invalidFormat\n\t\t\tend 'minus_after_digits'\n\t\t\tnegative = true\n\t\tend 'minus' else 'not_minus'\n\t\t\tif cp >= '0' 'maybe_digit'\n\t\t\t\tif cp <= '9' 'is_digit'\n\t\t\t\t\thasDigits = true\n\t\t\t\t\tresult = result * 10 + (cp - '0')\n\t\t\t\tend 'is_digit' else 'not_digit'\n\t\t\t\t\tthrow __BuiltinParseError.invalidFormat\n\t\t\t\tend 'not_digit'\n\t\t\tend 'maybe_digit' else 'below_zero'\n\t\t\t\tthrow __BuiltinParseError.invalidFormat\n\t\t\tend 'below_zero'\n\t\tend 'not_minus'\n\tend 'chars'\n\tif not hasDigits 'empty'\n\t\tthrow __BuiltinParseError.invalidFormat\n\tend 'empty'\n\tif negative 'negate'\n\t\tresult = 0 - result\n\tend 'negate'\n\treturn result\nend '__int_fromString'\nexport function __float_fromString(input String) returns ParsedFloat throws __BuiltinParseError\n\tvar intPart = 0\n\tvar fracPart = 0.0\n\tvar fracDiv = 1.0\n\tvar pastDot = false\n\tvar negative = false\n\tvar hasDigits = false\n\tfor cp in input.codepoints() 'chars'\n\t\tif cp == '.' 'dot'\n\t\t\tif pastDot 'double_dot'\n\t\t\t\tthrow __BuiltinParseError.invalidFormat\n\t\t\tend 'double_dot'\n\t\t\tpastDot = true\n\t\tend 'dot' else 'not_dot'\n\t\t\tif cp == '-' 'minus'\n\t\t\t\tif hasDigits 'minus_after_digits'\n\t\t\t\t\tthrow __BuiltinParseError.invalidFormat\n\t\t\t\tend 'minus_after_digits'\n\t\t\t\tif pastDot 'minus_after_dot'\n\t\t\t\t\tthrow __BuiltinParseError.invalidFormat\n\t\t\t\tend 'minus_after_dot'\n\t\t\t\tnegative = true\n\t\t\tend 'minus' else 'not_minus'\n\t\t\t\tif cp >= '0' 'maybe_digit'\n\t\t\t\t\tif cp <= '9' 'is_digit'\n\t\t\t\t\t\thasDigits = true\n\t\t\t\t\t\tlet digit = cp - '0'\n\t\t\t\t\t\tif pastDot 'after_dot'\n\t\t\t\t\t\t\tfracDiv = fracDiv * 10.0\n\t\t\t\t\t\t\tfracPart = fracPart + digit / fracDiv\n\t\t\t\t\t\tend 'after_dot' else 'before_dot'\n\t\t\t\t\t\t\tintPart = intPart * 10 + digit\n\t\t\t\t\t\tend 'before_dot'\n\t\t\t\t\tend 'is_digit' else 'not_digit'\n\t\t\t\t\t\tthrow __BuiltinParseError.invalidFormat\n\t\t\t\t\tend 'not_digit'\n\t\t\t\tend 'maybe_digit' else 'below_zero'\n\t\t\t\t\tthrow __BuiltinParseError.invalidFormat\n\t\t\t\tend 'below_zero'\n\t\t\tend 'not_minus'\n\t\tend 'not_dot'\n\tend 'chars'\n\tif not hasDigits 'empty'\n\t\tthrow __BuiltinParseError.invalidFormat\n\tend 'empty'\n\tvar result = intPart + fracPart\n\tif negative 'negate'\n\t\tresult = 0.0 - result\n\tend 'negate'\n\treturn result\nend '__float_fromString'\nexport function __bool_fromString(input String) returns bool throws __BuiltinParseError\n\tif input == \"true\" 'is_true'\n\t\treturn true\n\tend 'is_true'\n\tif input == \"false\" 'is_false'\n\t\treturn false\n\tend 'is_false'\n\tthrow __BuiltinParseError.invalidFormat\nend '__bool_fromString'\nexport function __byte_fromString(input String) returns ParsedInt throws __BuiltinParseError\n\tlet result = try __int_fromString(input) otherwise 'err'\n\t\tthrow __BuiltinParseError.invalidFormat\n\tend 'err'\n\tif result < 0 'too_low'\n\t\tthrow __BuiltinParseError.invalidFormat\n\tend 'too_low'\n\tif result > 255 'too_high'\n\t\tthrow __BuiltinParseError.invalidFormat\n\tend 'too_high'\n\treturn result\nend '__byte_fromString'\nexport type __Tuple2 uses _T0, _T1\n\texport var _0 as _T0\n\texport var _1 as _T1\nend '__Tuple2'\nexport type __Tuple3 uses _T0, _T1, _T2\n\texport var _0 as _T0\n\texport var _1 as _T1\n\texport var _2 as _T2\nend '__Tuple3'\nexport function print(value String)\n\t__Builtins.writeStdout(value.managed)\nend 'print'\n"
-end 'stdlibBootstrapSourceForTarget'
-
-let stdlibBootstrapVirtualPath = "stdlib-bootstrap.maxon"
 
 export function findStdlibPath() returns FilePath
 	var dir = Directory.currentPath()
@@ -414,11 +449,11 @@ function collectStdlibFiles() returns FilePathArray
 	return files
 end 'collectStdlibFiles'
 
-// Cache key for the currently-discoverable stdlib: whitelist file contents,
-// the synthesized bootstrap, and runtime.std (the latter affects compiled
-// output, so the on-disk cache must invalidate when runtime.std changes).
-function currentStdlibChecksum(target Target) returns CacheChecksum
-	return computeStdlibChecksum(collectStdlibFiles(), bootstrap: stdlibBootstrapSourceForTarget(target), runtimePath: findRuntimePath())
+// Cache key for the currently-discoverable stdlib: whitelist file contents
+// plus runtime.std (the latter affects compiled output, so the on-disk
+// cache must invalidate when runtime.std changes).
+function currentStdlibChecksum(_ Target) returns CacheChecksum
+	return computeStdlibChecksum(collectStdlibFiles(), runtimePath: findRuntimePath())
 end 'currentStdlibChecksum'
 
 // Parse a single stdlib source string and merge its module into `allModule`.
@@ -438,62 +473,20 @@ end 'currentStdlibChecksum'
 function parseStdlibSource(project Project, allModule MaxonModule, filePath FilePath, rootPath FilePath, content String)
 	logDebug(LogCategory.compiler, message: function() gives "  Parsing {filePath}")
 	let tokens = try tokenize(content) otherwise panic("StdlibLoader: lexer error in bundled stdlib file {filePath}")
-	// The synthesized stdlib bootstrap has no on-disk parent directory; its
-	// virtual filename (`stdlib-bootstrap.maxon`) does not relativize against
-	// the stdlib project root, so `deriveNamespace` would fall through to its
-	// "notUnderRoot" branch and return the empty parent. The bootstrap's
-	// synthesized decls (Parsable, FilePath, __Tuple2/3, etc.) belong in the
-	// flat `stdlib` namespace alongside files like `stdlib/Array.maxon`, so
-	// short-circuit the derivation for that one virtual path.
-	var ns = ""
-	if filePath.filename() == stdlibBootstrapVirtualPath 'isBootstrap'
-		ns = "stdlib"
-	end 'isBootstrap' else 'fromPath'
-		ns = deriveNamespace(filePath, rootPath: rootPath)
-	end 'fromPath'
+	let ns = deriveNamespace(filePath, rootPath: rootPath)
 	var parser = try Parser.create(project, tokens: tokens, filePath: filePath, rootPath: rootPath, namespace: ns) otherwise panic("StdlibLoader: empty or malformed stdlib file {filePath}")
 	let parsed = try parser.parseModule() otherwise panic("StdlibLoader: parse failed for stdlib file {filePath}")
+	// Whitelist-grade stdlib content must parse without diagnostics. The
+	// downstream pipeline assumes well-formed IR; running on a broken parse
+	// risks an infinite loop in one of the passes that walks unterminated
+	// CFGs. Surface the parser diagnostics here rather than rolling forward
+	// into a hang.
+	if hasErrors(project) 'parseErrors'
+		panic("StdlibLoader: parse errors in stdlib file — see diagnostics above")
+	end 'parseErrors'
 	parsed.assertAllBlocksTerminated()
 	allModule.merge(parsed)
 end 'parseStdlibSource'
-
-// Parse the synthesized stdlib bootstrap source into the project. Both cache
-// fast-paths in getStdlibModule call this so unresolvedInterfaces (Error,
-// Iterator, etc.) is populated before typealiases are restored. The merged
-// module is discarded — the bootstrap exists purely to seed parser registries.
-//
-// Idempotent per-project: a second call against the same `project` is a no-op.
-// `getStdlibModule` runs on every `queryAllModule` call, so after a source-file
-// edit invalidates `codeCache` the cached fast-path re-enters here. Without
-// this guard the parser's `project.typealiases.insert` collides on the names
-// (`ExitCode`, `ParsedInt`, ...) the first parse already laid down (E3061).
-// The parser registries the bootstrap populates are append-only at the project
-// level, so re-parsing produces zero new information.
-function parseStdlibBootstrap(project Project)
-	if project.stdlibBootstrapParsed 'alreadyParsed'
-		return
-	end 'alreadyParsed'
-	parseStdlibBootstrapInto(project, allModule: MaxonModule.create())
-end 'parseStdlibBootstrap'
-
-// Bootstrap-parse helper shared by the three from-source entry points
-// (`ensureStdlibSandboxParsed`, `getStdlibModule` cache-miss, and
-// `loadCacheForTarget` cache-miss). Each path needs the bootstrap parsed
-// into `project` AND the `stdlibBootstrapParsed` flag set so the cached
-// fast-path's idempotency guard (`parseStdlibBootstrap`) doesn't double-
-// register the bootstrap typealiases on the next `queryAllModule`.
-function parseStdlibBootstrapInto(project Project, allModule MaxonModule)
-	let bootstrapFp = try FilePath.from(stdlibBootstrapVirtualPath) otherwise panic("parseStdlibBootstrapInto: bootstrap virtual path rejected")
-	// The bootstrap is virtual and has no parent directory on disk. We pass
-	// the stdlib project root for symmetry with every other stdlib file, but
-	// `parseStdlibSource` special-cases this virtual filename to force the
-	// flat `stdlib` namespace — `deriveNamespace`'s "notUnderRoot" fallback
-	// would otherwise produce the empty string and the bootstrap's synth
-	// decls (Parsable, FilePath, __Tuple2/3, etc.) would land in the
-	// global namespace.
-	parseStdlibSource(project, allModule: allModule, filePath: bootstrapFp, rootPath: findStdlibProjectRoot(), content: stdlibBootstrapSourceForTarget(project.target))
-	project.stdlibBootstrapParsed = true
-end 'parseStdlibBootstrapInto'
 
 export function getStdlibModule(project Project) returns MaxonModule
 	// Register the allocator-runtime intrinsics (`__mm_alloc`,
@@ -520,6 +513,15 @@ export function getStdlibModule(project Project) returns MaxonModule
 	// `__ManagedMemory` registration above.
 	registerManagedFileType(project)
 	registerManagedDirectoryType(project)
+	// Phase C: register the `__ManagedList` / `__ManagedListNode` builtin
+	// structs and the `__ManagedListError` enum so `stdlib/List.maxon`
+	// parses + type-resolves. Same idempotency rationale as above.
+	registerManagedListType(project)
+	registerManagedListNodeType(project)
+	// Phase D: register the `__ManagedSocket` builtin struct and the
+	// `__ManagedSocketError` enum so `stdlib/TcpClient.maxon` parses +
+	// type-resolves. Same idempotency rationale as above.
+	registerManagedSocketType(project)
 	// Phase 7: register `__Builtins.writeStdout` / `__Builtins.writeStderr`
 	// as qualified static intrinsic signatures so stdlib `Print.maxon`
 	// (`__Builtins.writeStdout(value.managed)`) parses + type-resolves.
@@ -532,18 +534,6 @@ export function getStdlibModule(project Project) returns MaxonModule
 	// rejects callers outside the designated internals file.
 	registerInternalsIntrinsicSignatures(project)
 	if stdlibLoaded and not stdlibCacheBypassed 'cached'
-		let bootstrapStart = passTimerStart()
-		// Parse the synthesized bootstrap first so unresolvedInterfaces
-		// (Error, Iterator, etc.) is populated for this project before
-		// typealiases are restored. runTypeResolution drains it into
-		// project.interfaces, which conformance checks rely on.
-		// Parsing first (before the restore below) avoids a duplicate-typealias
-		// error: the parser's duplicate check fires against project.typealiases,
-		// which is still empty here. After parsing, the restore paths use
-		// `otherwise ignore` so they silently skip names already registered.
-		parseStdlibBootstrap(project)
-		recordPassSince("__parseStdlibBootstrap", startMs: bootstrapStart)
-
 		let restoreStart = passTimerStart()
 		// Restore metadata into the new project
 		if stdlibCacheValid 'restoreFromCache'
@@ -611,11 +601,6 @@ export function getStdlibModule(project Project) returns MaxonModule
 		logInfo(LogCategory.compiler, message: function() gives "Stdlib cache hit: loaded {cacheResult.data.functions.count()} pre-compiled functions")
 		activateStdlibCache(cacheResult.data, target: project.target)
 
-		// Parse the synthesized bootstrap first so unresolvedInterfaces is
-		// populated before typealiases are restored — same ordering rationale
-		// as the in-process fast path above.
-		parseStdlibBootstrap(project)
-
 		// Restore parser metadata so user code can reference stdlib types.
 		// Route through the global `cachedStdlibCacheData` (just populated by
 		// `activateStdlibCache`) so `restoreStdlibMetadata`'s rebuild of
@@ -643,7 +628,6 @@ export function getStdlibModule(project Project) returns MaxonModule
 	let stdlibFiles = collectStdlibFiles()
 
 	var allModule = MaxonModule.create()
-	parseStdlibBootstrapInto(project, allModule: allModule)
 	let stdlibRoot = findStdlibProjectRoot()
 	for fp in stdlibFiles 'eachFile'
 		if File.exists(fp) 'exists'
@@ -654,6 +638,12 @@ export function getStdlibModule(project Project) returns MaxonModule
 			parseStdlibSource(project, allModule: allModule, filePath: fp, rootPath: stdlibRoot, content: content)
 		end 'exists'
 	end 'eachFile'
+	// Drain cross-file overload renames produced by `rekeyExistingFunction`
+	// when a late-parsed file overloaded a sibling's function name. The
+	// per-file parser couldn't reach the IrFunction sitting in `allModule`,
+	// so the rename was queued; apply it now before the cache build keys
+	// off `.name`.
+	applyPendingFuncRenames(project, allModule: allModule)
 
 	cachedStdlibModule = allModule
 	// J.4e: do NOT stash the just-parsed module here. The `allModule` we
@@ -714,9 +704,9 @@ export function getStdlibModule(project Project) returns MaxonModule
 		return cachedStdlibModule
 	end 'switchToCached'
 
-	// Cache build failed: keep the parsed module in flight so the user
-	// pipeline still has stdlib bodies to call into, even though there's no
-	// cache for next time.
+	// Cache write was bypassed (cache-parity test harness): return the
+	// parsed module so the user pipeline has stdlib bodies to call into,
+	// since there's no cache for it to consume.
 	return allModule
 end 'getStdlibModule'
 
@@ -765,10 +755,13 @@ function buildAndWriteStdlibCache(project Project, allModule MaxonModule, cacheP
 	// Run Phase 4 passes first; runtime bodies (already-Std, post-mem2reg
 	// from loadRuntimeModule) get spliced in next so they ride through
 	// lowerStdToMir + backend phases the same way stdlib bodies do.
-	try pipeline.run() otherwise 'midErr'
-		logInfo(LogCategory.compiler, message: function() gives "Stdlib cache build failed during mid pipeline")
-		return
-	end 'midErr'
+	//
+	// Stdlib content is trusted: a pipeline failure here is a compiler bug
+	// (an unsupported language feature reached lowering, or a pass crashed
+	// on a stdlib-only shape). Surfacing it as a panic prevents the cache
+	// from silently rolling forward in a half-built state where downstream
+	// user code dispatches to phantom witnesses or missing builtin methods.
+	try pipeline.run() otherwise panic("Stdlib cache build failed during mid pipeline; see error diagnostics above")
 
 	// Detach the post-dce snapshot before merging runtime bodies. The
 	// snapshot and `pipeline.stdModule` share array references — mutating
@@ -818,10 +811,7 @@ function buildAndWriteStdlibCache(project Project, allModule MaxonModule, cacheP
 		pipeline.addPass(PassKind.scheduleInstructions)
 	end 'nativePasses'
 
-	try pipeline.run() otherwise 'pipelineErr'
-		logInfo(LogCategory.compiler, message: function() gives "Stdlib cache build failed during pipeline")
-		return
-	end 'pipelineErr'
+	try pipeline.run() otherwise panic("Stdlib cache build failed during late pipeline; see error diagnostics above")
 
 	// On wasm, restore the old `injectRuntimeSignatures` post-MIR fixup so
 	// stdlib calls into runtime resolve at backend lowering time. The
@@ -980,7 +970,6 @@ function loadCacheForTarget(project Project)
 	// id-space with `project`'s.
 	let stdlibFiles = collectStdlibFiles()
 	var allModule = MaxonModule.create()
-	parseStdlibBootstrapInto(project, allModule: allModule)
 	let stdlibRoot = findStdlibProjectRoot()
 	for fp in stdlibFiles 'iter'
 		if File.exists(fp) 'exists'
@@ -988,6 +977,10 @@ function loadCacheForTarget(project Project)
 			parseStdlibSource(project, allModule: allModule, filePath: fp, rootPath: stdlibRoot, content: content)
 		end 'exists'
 	end 'iter'
+	// Drain cross-file overload renames (see comments in the cache-miss path
+	// in `getStdlibModule`). Same rationale: the per-file parser rekey can't
+	// reach the merged IrFunction in `allModule`.
+	applyPendingFuncRenames(project, allModule: allModule)
 
 	logInfo(LogCategory.compiler, message: function() gives "Stdlib cache miss for {targetToString(project.target)}: building")
 	buildAndWriteStdlibCache(project, allModule: allModule, cachePath: cachePath, contentChecksum: contentChecksum)

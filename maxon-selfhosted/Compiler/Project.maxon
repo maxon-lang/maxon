@@ -236,6 +236,19 @@ export type Project
 	// suffix) still report E2001.
 	export var overloadedNames as OverloadedNameMap
 
+	// Pending function renames produced by `rekeyExistingFunction` when a
+	// late-parsed file introduces an overload of a function declared in an
+	// already-merged sibling file. The per-file parser only sees its own
+	// `module.functions`, so the rekey loop cannot update the IrFunction
+	// already merged into the multi-file `allModule`. This map records every
+	// `(oldBareName -> newMangledName)` pair; the multi-file orchestrator
+	// (`ensureStdlibSandboxParsed`) drains it after all files finish parsing
+	// to rename matching IrFunctions in the unified module. Same-file
+	// overloads don't appear here — their rekey hits the in-module loop and
+	// returns early. The map is cleared after the drain so subsequent
+	// reparses (e.g. user-project parse after stdlib parse) start clean.
+	export var pendingFuncRenames as FuncRenameMap
+
 	// Top-level constants (compile-time evaluated string and integer values)
 	export var topLevelConstants as ConstantMap
 
@@ -617,18 +630,6 @@ export type Project
 	// itself. See `Compiler/ParseDelta.maxon` for the full machinery.
 	export var fileParseDeltas as FilePathToFileParseDelta
 
-	// True after `parseStdlibBootstrap` has populated this project's parser
-	// registries with the synthesized stdlib bootstrap source. Gates the
-	// re-parse on a second `getStdlibModule` call against the same project
-	// (which fires whenever `queryAllModule` runs after a source-file edit
-	// invalidates the codeCache). Without this guard the second parse hits
-	// E3061 "Duplicate typealias 'ExitCode'" against the registrations the
-	// first parse already laid down. The transient parser state populated by
-	// the bootstrap (unresolvedInterfaces, typealias declarations) persists
-	// across re-resolution because the parser registries are append-only at
-	// the project level — re-parsing produces zero new information.
-	export var stdlibBootstrapParsed as bool
-
 	// Provenance for char-byte literals — see `CharByteLiteralSet` for the why.
 	// Populated by the parser at every single-byte char-literal site and
 	// expanded by TypeResolution's producer-types walk through varDecl/varLoad
@@ -680,6 +681,7 @@ export type Project
 			resolvedCallees: ResolvedCalleesMap.create(),
 			resolvedReceiverTypes: ResolvedReceiverTypesMap.create(),
 			overloadedNames: OverloadedNameMap.create(),
+			pendingFuncRenames: FuncRenameMap.create(),
 			topLevelConstants: ConstantMap.create(),
 			unresolvedTopLevelDecls: UnresolvedTopLevelDeclMap.create(),
 			unresolvedConstExprs: UnresolvedConstExprArray.create(),
@@ -730,7 +732,6 @@ export type Project
 			pendingUnusedTypealiases: PendingUnusedTypealiasArray.create(),
 			crossFileConstReads: CrossFileConstReadArray.create(),
 			constraintFailedTypealiases: ReferencedNameSet.create(),
-			stdlibBootstrapParsed: false,
 			charByteLiterals: CharByteLiteralSet.create(),
 			monomorphCache: MonomorphCache.create(),
 			extensionMethodWhereClauses: WhereClauseMapByName.create(),
@@ -1828,6 +1829,8 @@ export typealias FuncVisibilityMap = Map with (String, FuncVisibilityInfo)
 export typealias FuncReturnTypeMap = Map with (String, MaxonReturnType)
 
 export typealias FuncThrowsTypeMap = Map with (String, ThrowsClause)
+
+export typealias FuncRenameMap = Map with (String, String)
 
 // Per-parameter default value. `none` means the argument is mandatory; the
 // other arms each carry a compile-time constant the call-site default-fill

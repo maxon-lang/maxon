@@ -143,11 +143,32 @@ let CACHE_MAGIC_3 = 0x00  // '\0'
 // type-erased managed memory can recover the float bits.
 // v53: Phase 15c — whitelisted real FilePath/File/Directory stdlib;
 // registered __ManagedFile/__ManagedDirectory types.
-// v55: dead-top-level-var-elim — persisted `moduleInitFuncs` and
-// `initToStoredVars` so cache-on builds can prune dead inits identically
-// to cache-off builds (matches cache-parity invariant after Log.maxon
-// introduced the first stdlib-side runtime-init top-level var).
-let CACHE_FORMAT_VERSION = 55
+// v55: whitelisted stdlib/Print.maxon; dropped the synthesized `print(value
+// String)` from the stdlib bootstrap source.
+// v56: whitelisted stdlib/Console.maxon (buffered Stdin reader on top of
+// __Builtins.readStdin).
+// v57: implemented panic-message interpolation lowering (MaxonOp.panicDynamic).
+// No new whitelist entries, but the cache encodes the new op variant.
+// v58: whitelisted stdlib/Json.maxon. Three parser fixes were required to
+// admit it: (a) parseFloatBits's normalization loop no longer overflows on
+// `i64.max`-magnitude float literals, (b) panic-at-function-end is treated
+// as terminating (suppresses E3013), and (c) `__field_init_*` helpers
+// materialize string-const default values, (d) parseLocalFieldAssignment
+// routes `selfField.x = ...` through selfFieldLoad instead of the unmapped
+// local-var slot.
+// v59: whitelisted stdlib/Subprocess.maxon.
+// v60: whitelisted stdlib/Builtins.maxon. Trimmed marker-interface family,
+// Parsable, ParsedInt/ParsedFloat, and __*_fromString helpers from the
+// synthesized bootstrap — Builtins.maxon now supplies them. __Tuple2/3
+// stay synthesized. Required a fix to synthesizeOneWitnessThunk to skip the
+// receiver slot for static interface requirements (Builtins.maxon's marker
+// interfaces declare `static function init(...)`, which would otherwise add
+// a spurious leading arg to the thunk's tail call into Array.init).
+// v61: wired __ManagedList / __ManagedListNode builtin types and whitelisted
+// stdlib/List.maxon.
+// v62: wired __ManagedSocket builtin type and whitelisted stdlib/TcpClient.maxon.
+// v63: whitelisted stdlib/HttpClient.maxon + helpers/http/httpHelpers.maxon.
+let CACHE_FORMAT_VERSION = 63
 
 // ============================================================
 // Types
@@ -432,7 +453,7 @@ function fnvUpdate(state CacheChecksum, b MachineWord) returns CacheChecksum
 	return (mixed * FNV_PRIME) and 0xFFFFFFFF
 end 'fnvUpdate'
 
-export function computeStdlibChecksum(files FilePathArray, bootstrap String, runtimePath FilePath) returns CacheChecksum
+export function computeStdlibChecksum(files FilePathArray, runtimePath FilePath) returns CacheChecksum
 	var checksum = FNV_OFFSET_BASIS
 	for filePath in files 'eachFile'
 		let bytes = try File.readBinary(filePath) otherwise continue
@@ -443,10 +464,6 @@ export function computeStdlibChecksum(files FilePathArray, bootstrap String, run
 		// next doesn't produce the same hash as the original split.
 		checksum = fnvUpdate(checksum, b: 0)
 	end 'eachFile'
-	for bb in bootstrap.bytes() 'eachBootstrapByte'
-		checksum = fnvUpdate(checksum, b: bb)
-	end 'eachBootstrapByte'
-	checksum = fnvUpdate(checksum, b: 0)
 	if not runtimePath.isEmpty() 'hasRuntime'
 		let rtBytes = try File.readBinary(runtimePath) otherwise ByteArray.create()
 		for rb in rtBytes 'eachRuntimeByte'

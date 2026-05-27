@@ -1,0 +1,58 @@
+// Test: append.single
+typealias Integer = int(i64.min to i64.max)
+typealias IntList = List with Integer
+
+function main() returns ExitCode
+	var list = IntList.create()
+	list.append(42)
+	let f = try list.first() otherwise 0
+	return f
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %17 = mir.mov_imm 8 : i64
+    %18 = mir.call @mrt_alloc(%17)
+    %19 = mir.call @mrt_managed_list_create()
+    mir.store %19, %18, 0 width: qword
+    %3 = mir.mov_imm 42 : i64
+    %20 = mir.load %18, 0 width: qword
+    %21 = mir.call @mrt_managed_list_insert_last_value(%20, %3)
+    mir.br inlined_List.first_0()
+  inlined_List.first_0:
+    %22 = mir.load %18, 0 width: qword
+    %23, %24 = mir.try_call @mrt_managed_list_head(%22)
+    %25 = mir.mov_imm 0 : i64
+    %26 = mir.cmp ne, %24, %25
+    mir.cond_br %26 [then: inlined_List.first_1(), else: inlined_List.first_2()]
+  inlined_List.first_1:
+    %27 = mir.mov_imm 0 : i64
+    %28 = mir.mov_imm 1 : i64
+    mir.br inline_cont_main_0(%27, %28)
+  inlined_List.first_2:
+    %29 = mir.call @mrt_managed_list_node_value(%23)
+    %30 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%29, %30)
+  inline_cont_main_0:
+    %10 = mir.mov_imm 0 : i64
+    %11 = mir.cmp ne, %32, %10
+    mir.cond_br %11 [then: try_0.otherwise(), else: try_0.merge(%31)]
+  try_0.otherwise:
+    %13 = mir.mov_imm 0 : i64
+    mir.br try_0.merge(%13)
+  try_0.merge:
+    %33 = mir.mov_imm 125 : i64
+    %34 = mir.cmp ugt, %16, %33
+    mir.cond_br %34 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %35 = mir.global_addr @__panic_msg_0
+    %36 = mir.call @mrt_panic(%35)
+  __range_ok_0:
+    mir.ret %16
+  }
+}
+---

@@ -566,6 +566,7 @@ export type Parser
 				synchronize()
 				return MaxonType.unresolved
 			end 'badParenType'
+			ensureTupleStructRegistered(project, arity: innerTypes.count())
 			let baseName = "__Tuple{innerTypes.count()}"
 			let baseId = project.typeNames.intern(baseName)
 			let giid = project.genericInstances.intern(baseId, args: innerTypes)
@@ -1495,9 +1496,22 @@ export type Parser
 		if not block.isTerminated() 'needsImplicitRet'
 			if returnIsVoid 'emitVoid'
 				emitImplicitReturn(block)
-			end 'emitVoid' else 'reportMissing'
-				reportCompileError(project, code: ErrorCode.semanticMissingReturn, message: "missing return statement: '{nameToken.value}'", line: nameToken.line, column: nameToken.column, filePath: filePath)
-			end 'reportMissing'
+			end 'emitVoid' else 'maybeReportMissing'
+				// `panic(...)` at function end aborts the process — no
+				// return value is ever produced or needed. Treat the
+				// block's tail panic op as the implicit terminator and
+				// mark it `dead` so downstream consumers (lowering, the
+				// verifier) recognize the unreachable post-panic edge.
+				// Without this branch, every stdlib helper that ends in
+				// an unconditional `panic(...)` (e.g. JSON's `parseArray`
+				// post-infinite-loop sentinel, `encodeCodepoint` past
+				// U+10FFFF) trips E3013 at parse time.
+				if blockEndsWithPanic(block) 'panicSeal'
+					markBlockDeadIfUnset(block)
+				end 'panicSeal' else 'reportMissing'
+					reportCompileError(project, code: ErrorCode.semanticMissingReturn, message: "missing return statement: '{nameToken.value}'", line: nameToken.line, column: nameToken.column, filePath: filePath)
+				end 'reportMissing'
+			end 'maybeReportMissing'
 		end 'needsImplicitRet'
 
 		// Hand the parser's per-function scope state off to the IrFunction so
@@ -1819,10 +1833,22 @@ export type Parser
 		// (kind, value) pair matches, fire the diagnostic before consuming.
 		checkSelfAssignmentForFieldChain(nameToken, chainLen: chainLen)
 		_ = try consume()
-		let slot = lookupVariable(nameToken.value, token: nameToken)
 		let nameRange = SourceRange.ofToken(nameToken)
 		var receiverName = freshSynthName()
-		module.appendOp(block, op: MaxonOp.varLoad(receiverName, slotId: slot, slotType: MaxonType.unresolved, range: nameRange))
+		// Self-fields are aliased through `__self` rather than backed by a
+		// real local-var slot. Emitting `varLoad(slot)` would produce a
+		// load of an unmapped slot — TypeResolution then leaves the
+		// receiver typed as `<unresolved>`, and lowerFieldStore fails
+		// with "unknown field X on type <unresolved>". Route the leading
+		// receiver through `selfFieldLoad` so the chain's first read has
+		// the correct self-relative semantics and the recorded producer
+		// type matches the enclosing struct's field.
+		if scope.isSelfField(nameToken.value) 'selfFieldReceiver'
+			module.appendOp(block, op: MaxonOp.selfFieldLoad(receiverName, fieldName: nameToken.value.toByteArray(), range: nameRange))
+		end 'selfFieldReceiver' else 'localReceiver'
+			let slot = lookupVariable(nameToken.value, token: nameToken)
+			module.appendOp(block, op: MaxonOp.varLoad(receiverName, slotId: slot, slotType: MaxonType.unresolved, range: nameRange))
+		end 'localReceiver'
 
 		// Walk the first chainLen-1 dots as field reads to materialize the
 		// innermost struct receiver, leaving the final dot for the store.
@@ -2070,10 +2096,7 @@ export type Parser
 		project.methodNameIndex.record(mangledName)
 		recordMethodNameIndexInsert(project, filePath: filePath, qualifiedName: mangledName)
 		// Walk the current module's functions for an IrFunction whose .name
-		// matches the bare key and rewrite it. Cross-file overloads aren't
-		// supported in this minimal pass — the existing function is expected
-		// to live in the same module being parsed (Array.maxon's two
-		// `contains` overloads sit in one extension block, satisfying this).
+		// matches the bare key and rewrite it.
 		for i in 0 upto module.functions.count() 'eachFunc'
 			var f = try module.functions.get(i) otherwise continue
 			if f.name == bareName 'match'
@@ -2082,6 +2105,22 @@ export type Parser
 				return
 			end 'match'
 		end 'eachFunc'
+		// Cross-file overload: the existing function lives in a sibling
+		// file's already-merged IrModule (e.g. stdlib's `allModule`), so the
+		// loop above can't see it. Record the rename in the project's
+		// pending-renames map; the multi-file orchestrator drains it after
+		// every file finishes parsing and applies the rename to the unified
+		// module's IrFunction. Project-level registries (funcReturnTypes,
+		// funcSignatures, funcVisibilities, funcThrowsTypes) were already
+		// rekeyed above and are not affected by this branch.
+		try project.pendingFuncRenames.insert(bareName, value: mangledName) otherwise 'dupRename'
+			// Multiple rekeys for the same bareName during one parse pass
+			// are not expected — the first rekey vacates the bare key from
+			// `funcReturnTypes`, so a later same-name rekey would have gone
+			// through the type-suffix or name-suffix path against the
+			// already-mangled existing entry, never re-emitting the bare key.
+			panic("rekeyExistingFunction: duplicate pendingFuncRenames entry for '{bareName}' -> '{mangledName}'")
+		end 'dupRename'
 	end 'rekeyExistingFunction'
 
 	// Reports a literal-overflow error at `token` with the fully-formatted
@@ -2443,8 +2482,17 @@ export type Parser
 		synthNameCounter = 0
 
 		let result = try parseExpression(helperBlock)
-		let retName = exprName(result)
-		module.setTerminator(helperBlock, op: MaxonOp.ret(retName, range: SourceRange.none()))
+		// parseStringLiteral's fast-path emits no backing op for a non-
+		// interpolated string constant — its returned name is a synth slot
+		// that lowering can't resolve. Materialize the op here so the ret
+		// below references a real bound value, matching what
+		// parseReturnStatement does. We route through `currentBlock` (which
+		// parseExpression already syncs to the post-parse block) since
+		// `helperBlock` is `let`-bound and parser type rules forbid passing
+		// it to a mutating-parameter callee.
+		let materializedResult = materializeStringConstIfNeeded(currentBlock, expr: result, range: SourceRange.none())
+		let retName = exprName(materializedResult)
+		module.setTerminator(currentBlock, op: MaxonOp.ret(retName, range: SourceRange.none()))
 
 		currentFunc = savedFunc
 		currentBlock = savedBlock
@@ -3735,6 +3783,7 @@ export type Parser
 					reportCompileError(project, code: ErrorCode.parserExpectedType, message: "typealias '{nameToken.value}' tuple must have at least 2 elements", line: baseToken.line, column: baseToken.column, filePath: filePath)
 					throw ParserError.unhandledToken
 				end 'badArity'
+				ensureTupleStructRegistered(project, arity: elemNames.count())
 				let baseName = "__Tuple{elemNames.count()}"
 				expr = UnresolvedTypeExpr.genericAlias(baseName, args: elemNames)
 				sawValidBase = true
@@ -6189,6 +6238,10 @@ export type Parser
 	end 'parseReturnStatement'
 
 	// Emits MaxonOp.panic with a location-prefixed message for the stack trace.
+	// For an interpolated message (`panic("...{expr}...")`), the parser builds
+	// a stringInterp op whose leading literal carries the `panic at FILE:LINE:`
+	// prefix and whose trailing literal carries the `\n` newline, then emits a
+	// MaxonOp.panicDynamic referencing the resulting `String` SSA value.
 	function parsePanicStatement(block IrBlock) throws ParserError
 		let panicToken = try consume()  // caller has already dispatched on 'panic'
 		try expect(TokenKind.leftParen)
@@ -6198,21 +6251,47 @@ export type Parser
 			synchronize()
 			return
 		end 'notString'
-		// Runtime panic interpolation isn't implemented in the self-hosted
-		// compiler yet. Report an error rather than silently dropping the
-		// interpolation (which would print the pre-`{` fragment only).
-		if at(TokenKind.stringInterpStart) 'hasInterp'
-			reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "panic interpolation is not supported in the self-hosted compiler", line: msgToken.line, column: msgToken.column, filePath: filePath)
-			synchronize()
-			return
-		end 'hasInterp'
-		let rparenToken = cursor.current()
-		try expect(TokenKind.rightParen)
 
 		let fileName = filePath.filename()
-		let fullMsg = "panic at {fileName}:{panicToken.line}: {msgToken.value}"
-		let stringId = project.strings.intern(fullMsg)
-		module.appendOp(block, op: MaxonOp.panic(stringId, range: SourceRange.between(panicToken, last: rparenToken)))
+		let prefix = "panic at {fileName}:{panicToken.line}: "
+
+		// Static message (no interpolation): keep the original fast path —
+		// intern the full message once and emit MaxonOp.panic with a label
+		// resolved at lowering time.
+		if not at(TokenKind.stringInterpStart) 'staticMsg'
+			let rparenToken = cursor.current()
+			try expect(TokenKind.rightParen)
+			let fullMsg = "{prefix}{msgToken.value}"
+			let stringId = project.strings.intern(fullMsg)
+			module.appendOp(block, op: MaxonOp.panic(stringId, range: SourceRange.between(panicToken, last: rparenToken)))
+			return
+		end 'staticMsg'
+
+		// Interpolated message: synthesize a stringInterp op spanning the
+		// prefix literal, every original fragment + interpolation, and a
+		// trailing `\n` literal. The result is a `String` value whose
+		// underlying __ManagedMemory buffer is already null-terminated by
+		// LowerStringInterp, which is exactly the shape mrt_panic expects.
+		validateEscapes(msgToken, kind: "panic interpolation")
+		let leadDecoded = decodeStringEscapes(msgToken.value)
+		let prefixedLead = "{prefix}{String.from(leadDecoded)}"
+		let leadStringId = project.strings.intern(prefixedLead)
+		var parts = StringInterpPartArray.create()
+		parts.push(StringInterpPart.literal(leadStringId))
+
+		try parseInterpFragmentsInto(block, parts: parts, errorContext: "panic interpolation")
+
+		// Trailing newline so the panic line ends with `\n` like the static
+		// path's `mrt_panic` payload does.
+		let newlineId = project.strings.intern("\n")
+		parts.push(StringInterpPart.literal(newlineId))
+
+		let rparenToken = cursor.current()
+		try expect(TokenKind.rightParen)
+		let interpRange = SourceRange.between(panicToken, last: rparenToken)
+		let resultName = freshSynthName()
+		module.appendOp(currentBlock, op: MaxonOp.stringInterp(resultName, parts: parts, range: interpRange))
+		module.appendOp(currentBlock, op: MaxonOp.panicDynamic(resultName, range: interpRange))
 	end 'parsePanicStatement'
 
 	// Parse: throw EnumName.variantName [(arg, ...)]
@@ -7074,7 +7153,17 @@ export type Parser
 	// (StringError, FileError, ...) and a pure case-name search returns the
 	// first one that hits — misrouting the diagnostic when a user enum reuses
 	// the same case name.
-	function validateEnumExhaustiveness(hasEnumArm bool, hasDefault bool, lastEnumCaseName String, scrutineeEnumName String, seenKeys ReferencedVarSet, errorLine LineNumber, errorColumn ColumnNumber)
+	//
+	// `scrutineeIsKnownNonEnum` is the static signal that the scrutinee's
+	// MaxonType resolves to a non-enum (e.g. a `union`/`type` named type or
+	// a primitive). When that's true the case-name fallback is unsafe — the
+	// match's bare-identifier patterns are union-case names, not enum cases,
+	// and the case-search would misroute to whichever enum happens to share
+	// the name (E2026 against `__ManagedListError.empty` for a union match
+	// whose `empty` arm names the union case). Skip exhaustiveness entirely
+	// in that case; union exhaustiveness is a separate concern handled
+	// downstream.
+	function validateEnumExhaustiveness(hasEnumArm bool, hasDefault bool, lastEnumCaseName String, scrutineeEnumName String, scrutineeIsKnownNonEnum bool, seenKeys ReferencedVarSet, errorLine LineNumber, errorColumn ColumnNumber)
 		if not hasEnumArm 'noEnum'
 			return
 		end 'noEnum'
@@ -7082,22 +7171,71 @@ export type Parser
 			return
 		end 'hasDefault'
 		var enumName = scrutineeEnumName
+		var usedFallback = false
 		if enumName.isEmpty() 'fallbackToCaseSearch'
+			if scrutineeIsKnownNonEnum 'nonEnumScrutinee'
+				// Bare-name arms on a non-enum scrutinee are union cases (or
+				// pattern parser catch-alls) — not enum cases. Don't search
+				// the enum registry; that would pick the first enum that
+				// happens to declare a same-named case and emit a misrouted
+				// E2026 against an unrelated type.
+				return
+			end 'nonEnumScrutinee'
 			enumName = enumScrutineeDisplayNameFromCase(lastEnumCaseName)
+			usedFallback = true
 		end 'fallbackToCaseSearch'
 		var missing = ""
+		var enumCases = EnumCaseArray.create()
+		var enumKnown = false
 		if let resolvedEnum = try project.enumTypes.get(enumName) 'isResolved'
-			missing = enumMissingCases(resolvedEnum.cases, seenKeys: seenKeys)
+			enumCases = resolvedEnum.cases
+			enumKnown = true
 		end 'isResolved' else 'tryUnresolved'
 			if let unresolvedEnum = try project.unresolvedEnums.get(enumName) 'isUnresolved'
-				missing = enumMissingCases(unresolvedEnum.cases, seenKeys: seenKeys)
+				enumCases = unresolvedEnum.cases
+				enumKnown = true
 			end 'isUnresolved'
 		end 'tryUnresolved'
+		if not enumKnown 'noEnumDecl'
+			return
+		end 'noEnumDecl'
+		// When the enum was picked by case-name fallback (scrutinee type
+		// unresolved), confirm every seenKey is a case of THIS enum. A
+		// mismatch means the fallback misrouted to a same-case-name enum
+		// (e.g. `empty` is a case of both `__ManagedListError` and the user's
+		// union arm); deferring to TypeResolution avoids E2026 against the
+		// wrong type.
+		if usedFallback and not allSeenKeysAreCasesOf(enumCases, seenKeys: seenKeys) 'misrouted'
+			return
+		end 'misrouted'
+		missing = enumMissingCases(enumCases, seenKeys: seenKeys)
 		if missing.isEmpty() 'allCovered'
 			return
 		end 'allCovered'
 		reportCompileError(project, code: ErrorCode.parserMatchNotExhaustive, message: "match on enum '{enumName}' is not exhaustive, missing: {missing}", line: errorLine, column: errorColumn, filePath: filePath)
 	end 'validateEnumExhaustiveness'
+
+	// True when every name in `seenKeys` (set during arm parsing) is declared
+	// as a case of `enumCases`. Used by `validateEnumExhaustiveness` to reject
+	// a misrouted case-name fallback when the picked enum doesn't actually own
+	// the arms' patterns. Default arms (`__default`) and payload binding rows
+	// don't participate — they're already filtered out of the missing-set
+	// computation; the same shape works here.
+	function allSeenKeysAreCasesOf(enumCases EnumCaseArray, seenKeys ReferencedVarSet) returns bool
+		for key in seenKeys 'eachKey'
+			var found = false
+			for c in enumCases 'eachCase'
+				if c.name == key 'hit'
+					found = true
+					break
+				end 'hit'
+			end 'eachCase'
+			if not found 'miss'
+				return false
+			end 'miss'
+		end 'eachKey'
+		return true
+	end 'allSeenKeysAreCasesOf'
 
 	// Return the scrutinee's enum name when its MaxonType resolves to a
 	// known enum at parse time. Empty string for unresolved types or non-enum
@@ -7260,6 +7398,19 @@ export type Parser
 			try parseThrowStatement(block)
 			return MatchStmtArmBodyResult.create(currentBlock, hadReturn: false)
 		end 'isThrow'
+		if stmtToken.kind == TokenKind.panic 'isPanic'
+			// `panic("msg")` after `then` in a match-statement arm body. Like
+			// `throw`, it terminates the arm in-place; the panic op never
+			// returns, so the arm contributes no fall-through to the merge
+			// block. Used by stdlib `TcpClient.send` to assert a loop
+			// invariant on the bufferOutOfBounds variant.
+			// Route through `currentBlock` (already aliased to `block` above)
+			// because parsePanicStatement mutates its block argument via
+			// module.appendOp; the function parameter is `let`-bound by
+			// callers (see `parseMatchStatement` line 7767).
+			try parsePanicStatement(currentBlock)
+			return MatchStmtArmBodyResult.create(currentBlock, hadReturn: false)
+		end 'isPanic'
 		if stmtToken.kind == TokenKind.identifier 'maybeAssign'
 			let peekTok = try cursor.peek(1) otherwise throw ParserError.unexpectedEof
 			if peekTok.kind == TokenKind.equals 'isAssign'
@@ -7323,6 +7474,28 @@ export type Parser
 			b.terminator = Terminator.dead
 		end 'unset'
 	end 'markBlockDeadIfUnset'
+
+	// True iff the block's last op is a `panic` / `panic_dynamic`. Used by
+	// the function-end check (parseFunction) so a function whose final
+	// statement is a bare `panic(...)` is accepted as terminating on every
+	// path without emitting E3013 (missing return). The runtime never falls
+	// through panic, so the absence of a real terminator op is safe.
+	function blockEndsWithPanic(block IrBlock) returns bool
+		let opCount = block.opRefs.count()
+		if opCount == 0 'empty'
+			return false
+		end 'empty'
+		let lastOpRef = try block.opRefs.get(opCount - 1) otherwise return false
+		let lastOp = try module.ops.get(lastOpRef) otherwise return false
+		return isPanicOp(lastOp)
+	end 'blockEndsWithPanic'
+
+	// True for the two panic-shaped MaxonOp variants (static and
+	// runtime-interpolated). Pulled out as a free predicate so callers
+	// stay short.
+	function isPanicOp(op MaxonOp) returns bool
+		return op.name == "panic" or op.name == "panicDynamic"
+	end 'isPanicOp'
 
 	// Allocate the per-arm body and "next" (cmp-or-fallback) blocks and emit
 	// the arm's dispatch into `currentBlock` (the shared cmp block for this
@@ -7697,7 +7870,7 @@ export type Parser
 		// `notFound` in both StringError and a user enum) don't misroute the
 		// diagnostic to the wrong enum.
 		let scrutineeEnumName = enumScrutineeDisplayNameFromType(header.scrutineeType)
-		validateEnumExhaustiveness(hasEnumArm, hasDefault: hasDefault, lastEnumCaseName: lastEnumCaseName, scrutineeEnumName: scrutineeEnumName, seenKeys: seenKeys, errorLine: cursor.current().line, errorColumn: cursor.current().column)
+		validateEnumExhaustiveness(hasEnumArm, hasDefault: hasDefault, lastEnumCaseName: lastEnumCaseName, scrutineeEnumName: scrutineeEnumName, scrutineeIsKnownNonEnum: scrutineeIsKnownNonEnum, seenKeys: seenKeys, errorLine: cursor.current().line, errorColumn: cursor.current().column)
 		// Non-enum match: every match needs an explicit `default` arm
 		// because integer / string / float / char scrutinees can't be
 		// enumerated.
@@ -7914,7 +8087,7 @@ export type Parser
 		end 'noDefault'
 
 		let scrutineeEnumNameExpr = enumScrutineeDisplayNameFromType(header.scrutineeType)
-		validateEnumExhaustiveness(hasEnumArm, hasDefault: hasDefault, lastEnumCaseName: lastEnumCaseName, scrutineeEnumName: scrutineeEnumNameExpr, seenKeys: seenKeys, errorLine: cursor.current().line, errorColumn: cursor.current().column)
+		validateEnumExhaustiveness(hasEnumArm, hasDefault: hasDefault, lastEnumCaseName: lastEnumCaseName, scrutineeEnumName: scrutineeEnumNameExpr, scrutineeIsKnownNonEnum: scrutineeIsKnownNonEnum, seenKeys: seenKeys, errorLine: cursor.current().line, errorColumn: cursor.current().column)
 		// Non-enum match expression: requires an explicit `default` arm
 		// because integer / string / float / char scrutinees can't be
 		// enumerated and the expression must produce a value on every
@@ -8681,13 +8854,37 @@ export type Parser
 		// file-scope top-level constant — the only let-vs-var difference.
 		// `var` bindings are mutable so they skip the const-table entry.
 		// Both shapes share the producer-emission path below.
-		if isLet and exprIsStringConst(exprResult) 'registerLetConst'
+		//
+		// Collision rule: the entry is `Visibility.file`, so a same-named
+		// file-private entry already registered by a sibling file is unreachable
+		// from this file's reads anyway (the read-site visibility filter
+		// rejects the cross-file lookup). Treat that as a benign skip rather
+		// than E2001 — same semantics as the C# bootstrap's `TryAdd`. A real
+		// same-file duplicate is caught upstream by scope tracking; a cross-
+		// file file-private clash silently keeps the first-parsed entry.
+		// Collision with a `module`-or-`global` entry remains a hard error
+		// because the new file-private would shadow a visible decl.
+		// Empty-string lets (`let X = ""`) carry no folding benefit — a read
+		// of `X` would fold to the same `""` literal the parser would have
+		// emitted directly — so skip registration. This also keeps the
+		// stdlib-cache `ConstantValue` codec on its mandatory-non-empty
+		// fast path; persisting an empty `stringValue` payload would trip
+		// `Serialize.writeString`'s length-0 guard.
+		if isLet and exprIsStringConst(exprResult) and not project.strings.get(exprStringConstId(exprResult)).isEmpty() 'registerLetConst'
 			let stringId = exprStringConstId(exprResult)
 			let localStrEntry = TopLevelConstant.create(ConstantValue.stringValue(stringId), visibility: Visibility.file, sourceFilePath: filePath)
 			var insertedLocalStr = true
 			try project.topLevelConstants.insert(nameToken.value, value: localStrEntry) otherwise 'dupConst3'
 				insertedLocalStr = false
-				reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Duplicate constant '{nameToken.value}'", line: nameToken.line, column: nameToken.column, filePath: filePath)
+				let existing = try project.topLevelConstants.get(nameToken.value) otherwise panic("parseVarDecl: topLevelConstants.insert reported dup for '{nameToken.value}' but get failed")
+				let existingIsFilePrivate = match existing.visibility 'kind'
+					global gives false
+					module gives false
+					file gives true
+				end 'kind'
+				if not existingIsFilePrivate 'realDup'
+					reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Duplicate constant '{nameToken.value}'", line: nameToken.line, column: nameToken.column, filePath: filePath)
+				end 'realDup'
 			end 'dupConst3'
 			if insertedLocalStr 'recLocalStr'
 				recordTopLevelConstantInsert(project, filePath: filePath, key: nameToken.value)
@@ -10122,8 +10319,40 @@ export type Parser
 				default panic("producerTypeIfNameMatches: op.name == 'globalLoad' but match did not extract")
 			end 'shape'
 		end 'isGlobalLoad'
+		// Phase D: `self.field.method() otherwise (e)` — the receiver `field`
+		// is loaded via selfFieldLoad before the methodCall, so producer-type
+		// scanning must walk the enclosing struct's field list to recover the
+		// receiver MaxonType. Without this, `(e)` falls back to integer and
+		// the subsequent match on a typed-error variant trips E3005.
+		if op.name == "selfFieldLoad" 'isSelfFieldLoad'
+			return match op 'shape'
+				selfFieldLoad(result, fieldName, _) gives selfFieldTypeIfNamesEqual(result, target: targetName, fieldName: fieldName)
+				default panic("producerTypeIfNameMatches: op.name == 'selfFieldLoad' but match did not extract")
+			end 'shape'
+		end 'isSelfFieldLoad'
 		return MaxonType.unresolved
 	end 'producerTypeIfNameMatches'
+
+	// Resolve a selfFieldLoad's result to its field's declared MaxonType by
+	// asking the parser scope for the field's type. Scope is populated with
+	// each declared self-field at type-body parse start (well before any
+	// method body runs), so this lookup succeeds for fields belonging to
+	// the type whose method we're currently parsing. Returns `unresolved`
+	// when the names don't match, the scope doesn't know the field (e.g.
+	// the parser is between methods or in a non-method context), or the
+	// recorded type is itself unresolved. The caller treats `unresolved`
+	// as a miss and falls back to the bare-method-name path for
+	// funcThrowsTypes lookup.
+	function selfFieldTypeIfNamesEqual(name ByteArray, target ByteArray, fieldName ByteArray) returns MaxonType
+		if not name.equals(target) 'noMatch'
+			return MaxonType.unresolved
+		end 'noMatch'
+		let fieldNameStr = String.from(fieldName)
+		if not scope.isSelfField(fieldNameStr) 'notSelfField'
+			return MaxonType.unresolved
+		end 'notSelfField'
+		return scope.getType(fieldNameStr)
+	end 'selfFieldTypeIfNamesEqual'
 
 	function typeIfNamesEqual(name ByteArray, target ByteArray, t MaxonType) returns MaxonType
 		if name.equals(target) 'match'
@@ -11432,6 +11661,25 @@ export type Parser
 				return chased
 			end 'isFn'
 		end 'fromBare'
+		// Union case construction: `UnionName.caseName(args)` parses as a
+		// qualified call with literal callee `UnionName.caseName`. The
+		// constructor is registered as `__construct_UnionName_caseName` by
+		// `synthesizeUnionConstructor`, so the direct funcReturnTypes lookups
+		// above miss. Detect the shape here and return the union's named
+		// type so the binding's slot picks up the right `match` scrutinee
+		// type — without this, scrutinees fall back to a case-name search
+		// that picks the first enum with a matching case (e.g. `none` finds
+		// stdlib's `InputSource` before a user-declared `Wrapper`).
+		let calleeBytesUnion = calleeName.toByteArray()
+		let dotIdxUnion = lastIndexOfDotByte(calleeBytesUnion)
+		if dotIdxUnion < calleeBytesUnion.count() 'isDottedUnion'
+			let unionHead = byteSliceToString(calleeBytesUnion, startIndex: 0, endIndex: dotIdxUnion)
+			let unionTail = byteSliceToString(calleeBytesUnion, startIndex: dotIdxUnion + 1, endIndex: calleeBytesUnion.count())
+			let unionRewrite = tryRewriteUnionCaseCall(project, unionName: unionHead, caseName: unionTail)
+			if unionRewrite.hit 'isUnionCtor'
+				return unionRewrite.receiverType
+			end 'isUnionCtor'
+		end 'isDottedUnion'
 		// Static-factory promotion for function-valued generics only:
 		// `HandlerMap.create()` where `HandlerMap = Map with (String, UnaryOp)`
 		// — without this, the binding's slot type stays `unresolved` and
@@ -11543,23 +11791,145 @@ export type Parser
 		// literals work the same way provided the declaring file was
 		// parsed first — the parser walks files in user-declared order,
 		// matching `project.unresolvedStructTypes` population timing.
+		//
+		// Phase C: for fields whose type is a builtin managed compiler-internal
+		// type (`__ManagedList`, `__ManagedListNode`), and which the user
+		// didn't provide, auto-init by emitting a static call to the type's
+		// `create` factory. This mirrors the C# bootstrap's
+		// `EmitEmptyBuiltinManagedLiteral` behavior: a fresh `Self{}` for a
+		// type that wraps a `__ManagedList` field (e.g. `List`'s `chain`)
+		// gets a usable empty list rather than a null pointer. `__ManagedMemory`
+		// is not included here because its existing usage either supplies the
+		// field explicitly (`Self{managed: ...}` in `Array.init`) or relies on
+		// the lifecycle paths in `__Builtins` to defer allocation until a real
+		// `length()` / `set()` call wants it.
 		if let unresolved = try project.unresolvedStructTypes.get(typeName) 'haveDecl'
 			for declField in unresolved.fields 'eachField'
-				if not declField.hasDefault 'noDefault'
-					continue
-				end 'noDefault'
 				if stringArrayContains(providedFieldNames, name: declField.name) 'userProvided'
 					continue
 				end 'userProvided'
-				let helperName = "{typeName}.__field_init_{declField.name}"
-				let initCallName = freshSynthName()
-				module.appendOp(currentBlock, op: MaxonOp.call(initCallName, callee: project.calleeNames.intern(helperName), callContext: CallContext.qualified, args: ByteArrayArray.create(), argLabels: StringArray.create(), argTypes: MaxonTypeArray.create(), argRanges: SourceRangeArray.create(), range: SourceRange.ofToken(typeToken)))
-				module.appendOp(currentBlock, op: MaxonOp.fieldStore(ptrName, fieldName: declField.name.toByteArray(), value: initCallName, isInit: true, range: SourceRange.ofToken(typeToken)))
+				if declField.hasDefault 'hasUserDefault'
+					let helperName = "{typeName}.__field_init_{declField.name}"
+					let initCallName = freshSynthName()
+					module.appendOp(currentBlock, op: MaxonOp.call(initCallName, callee: project.calleeNames.intern(helperName), callContext: CallContext.qualified, args: ByteArrayArray.create(), argLabels: StringArray.create(), argTypes: MaxonTypeArray.create(), argRanges: SourceRangeArray.create(), range: SourceRange.ofToken(typeToken)))
+					module.appendOp(currentBlock, op: MaxonOp.fieldStore(ptrName, fieldName: declField.name.toByteArray(), value: initCallName, isInit: true, range: SourceRange.ofToken(typeToken)))
+					continue
+				end 'hasUserDefault'
+				let fieldBaseName = managedBuiltinBaseName(project, fieldType: declField.fieldType)
+				if fieldBaseName == "__ManagedList" 'isManagedList'
+					let factoryName = "__ManagedList.create"
+					let initCallName = freshSynthName()
+					module.appendOp(currentBlock, op: MaxonOp.call(initCallName, callee: project.calleeNames.intern(factoryName), callContext: CallContext.qualified, args: ByteArrayArray.create(), argLabels: StringArray.create(), argTypes: MaxonTypeArray.create(), argRanges: SourceRangeArray.create(), range: SourceRange.ofToken(typeToken)))
+					module.appendOp(currentBlock, op: MaxonOp.fieldStore(ptrName, fieldName: declField.name.toByteArray(), value: initCallName, isInit: true, range: SourceRange.ofToken(typeToken)))
+				end 'isManagedList'
 			end 'eachField'
 		end 'haveDecl'
 
 		return ExprResult.direct(ptrName, valueType: internMaxonType(project, name: typeName))
 	end 'parseStructLiteral'
+
+	// Phase C: walk through typealiases (and one level of generic-instance
+	// indirection) to recover the base struct name of a field's declared
+	// MaxonType. Used by `parseStructLiteral` to detect when an
+	// auto-supplied default for a `__Managed*` field is needed.
+	// Returns "" when the type doesn't resolve to a builtin managed struct.
+	//
+	// Probes `currentInnerAliases` first so a field typed as an
+	// inner alias (e.g. `var chain as EManagedList` inside `List`, where
+	// `typealias EManagedList = __ManagedList with Element`) is correctly
+	// identified as wrapping a builtin managed type. Inner aliases never
+	// land in `project.unresolvedTypealiases` / `project.genericTypealiases`
+	// (they're scoped to the enclosing type body and resolved later), so the
+	// pure project-level chase below cannot see them at struct-literal
+	// parse time. Without the inner-alias probe, every `Self{}` inside a
+	// generic collection type that wraps a `__ManagedList` (List, future
+	// LinkedQueue, ...) would skip the auto-init and leave `chain` null.
+	function managedBuiltinBaseName(proj Project, fieldType MaxonType) returns String
+		var t = fieldType
+		// Bound the chase: typealiases ultimately resolve to a non-alias
+		// `named` / `genericInstance` / etc. — five hops is more than
+		// enough for any current stdlib alias chain.
+		for _ in 0 upto 5 'chase'
+			let name = t.nameOrEmpty(proj)
+			if name.isEmpty() 'noName'
+				return ""
+			end 'noName'
+			if name == "__ManagedList" or name == "__ManagedListNode" or name == "__ManagedMemory" 'isBuiltin'
+				return name
+			end 'isBuiltin'
+			// Inner alias probe (must precede the project-level chase — the
+			// alias name may shadow a same-named project alias, and inner
+			// scope wins).
+			if let entry = try currentInnerAliases.get(name) 'isInnerAlias'
+				let baseFromInner = innerAliasBuiltinBase(entry)
+				if baseFromInner.isEmpty() 'noInnerHit'
+					// Either the inner alias isn't a managed-builtin
+					// generic, or it's an `aliasName` indirection — re-loop
+					// with the chased target name.
+					let chased = innerAliasChase(entry, proj: proj)
+					if chased.namedAliasNameOrEmpty(proj).isEmpty() 'noChase'
+						return ""
+					end 'noChase'
+					t = chased
+					continue
+				end 'noInnerHit'
+				return baseFromInner
+			end 'isInnerAlias'
+			if let aliased = try proj.genericTypealiases.get(name) 'isAlias'
+				t = aliased
+				continue
+			end 'isAlias'
+			return ""
+		end 'chase'
+		return ""
+	end 'managedBuiltinBaseName'
+
+	// Phase C: classify an inner-typealias entry as one of the three builtin
+	// managed base types. Returns the base name ("__ManagedList" /
+	// "__ManagedListNode" / "__ManagedMemory") or "" when the entry does
+	// not name a managed-builtin generic instance. `aliasName` arms return
+	// "" too — the caller chases them via `innerAliasChase` and re-probes
+	// on the next loop iteration.
+	function innerAliasBuiltinBase(entry UnresolvedTypeExpr) returns String
+		return match entry 'classify'
+			genericAlias(baseName, _) gives innerBuiltinBaseOrEmpty(baseName)
+			sizedGenericAlias(baseName, _, _) gives innerBuiltinBaseOrEmpty(baseName)
+			aliasName gives ""
+			rangedInt gives ""
+			rangedFloat gives ""
+			boolPrim gives ""
+			functionAlias gives ""
+			invalid gives ""
+		end 'classify'
+	end 'innerAliasBuiltinBase'
+
+	// Helper: returns `name` iff it is one of the three managed-builtin
+	// base types, otherwise "". Centralizes the matching set so both the
+	// project-level and inner-alias probes stay in sync.
+	function innerBuiltinBaseOrEmpty(name String) returns String
+		if name == "__ManagedList" or name == "__ManagedListNode" or name == "__ManagedMemory" 'isBuiltin'
+			return name
+		end 'isBuiltin'
+		return ""
+	end 'innerBuiltinBaseOrEmpty'
+
+	// Phase C: when an inner alias points at another alias by name
+	// (e.g. `typealias ENode = __ManagedListNode with Element` indirected
+	// via an intermediate inner alias), return a `MaxonType.named` of the
+	// target so the outer chase can probe the next layer. Non-aliasName
+	// shapes return `unresolved` (caller treats that as "stop chasing").
+	function innerAliasChase(entry UnresolvedTypeExpr, proj Project) returns MaxonType
+		return match entry 'chase'
+			aliasName(target) gives MaxonType.named(proj.typeNames.intern(target))
+			genericAlias gives MaxonType.unresolved
+			sizedGenericAlias gives MaxonType.unresolved
+			rangedInt gives MaxonType.unresolved
+			rangedFloat gives MaxonType.unresolved
+			boolPrim gives MaxonType.unresolved
+			functionAlias gives MaxonType.unresolved
+			invalid gives MaxonType.unresolved
+		end 'chase'
+	end 'innerAliasChase'
 
 	function stringArrayContains(arr StringArray, name String) returns bool
 		for item in arr 'scan'
@@ -12306,6 +12676,26 @@ export type Parser
 		if at(TokenKind.leftBrace) 'isStructLiteral'
 			return try parseStructLiteral(block, typeName: currentTypeName, typeToken: selfToken, typeNameConsumed: true)
 		end 'isStructLiteral'
+		// `Self.method(...)` — qualified static call rewritten to
+		// `<currentTypeName>.method(...)`. The C# bootstrap handles this by
+		// substituting the SelfType token with an Identifier carrying the
+		// enclosing type's name and re-entering the identifier dispatch.
+		// We inline the equivalent qualified-call emission here so the parser
+		// doesn't need to mutate its token stream.
+		if at(TokenKind.dot) 'maybeSelfDot'
+			let memberToken = try cursor.peek(1) otherwise Token.eof()
+			let afterMember = try cursor.peek(2) otherwise Token.eof()
+			if tokenIsIdentifierLike(memberToken) and afterMember.kind == TokenKind.leftParen 'isSelfDotCall'
+				usedTypeAliases.insert(currentTypeName)
+				let calleeName = "{currentTypeName}.{memberToken.value}"
+				try eat(TokenKind.dot)
+				_ = try consume()
+				try eat(TokenKind.leftParen)
+				let (argNames, argLabels, argTypes, argRanges) = try parseCallArgsRaw(block, requireNamed: false)
+				let rparenToken = previousToken()
+				return emitCallAndResult(calleeName, args: argNames, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, callContext: CallContext.qualified, range: SourceRange.between(selfToken, last: rparenToken))
+			end 'isSelfDotCall'
+		end 'maybeSelfDot'
 		reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "Expected '\{' after Self", line: selfToken.line, column: selfToken.column, filePath: filePath)
 		return ExprResult.direct(ByteArray.create(), valueType: MaxonType.integer)
 	end 'parseSelfExpr'
@@ -12408,6 +12798,26 @@ export type Parser
 		end 'noInterp'
 		var parts = StringInterpPartArray.create()
 		parts.push(StringInterpPart.literal(leadStringId))
+		try parseInterpFragmentsInto(block, parts: parts, errorContext: "string interpolation")
+		let lastTok = previousToken()
+		let interpRange = SourceRange.between(leadToken, last: lastTok)
+		let resultName = freshSynthName()
+		// Emit into `currentBlock` — an inner interp expression with short-
+		// circuit `and`/`or` or a nested `try ... otherwise` moves control
+		// flow, and the stringInterp op must reference its parts from the
+		// block where they were defined.
+		module.appendOp(currentBlock, op: MaxonOp.stringInterp(resultName, parts: parts, range: interpRange))
+		return ExprResult.direct(resultName, valueType: MaxonType.named(project.typeNames.intern("String")))
+	end 'parseStringLiteral'
+
+	// Drive the `stringInterpStart <expr> stringInterpEnd stringLiteral(frag)*`
+	// loop, appending each interpolation expr and following literal fragment
+	// onto `parts`. Caller is responsible for pushing the leading literal
+	// before invoking. Shared by `parseStringLiteral` and `parsePanicStatement`
+	// so panic interpolation matches expression-position interpolation
+	// (escape validation, nested-stringConst materialization, format specs,
+	// and recovery-on-malformed-input behavior) byte-for-byte.
+	function parseInterpFragmentsInto(block IrBlock, parts StringInterpPartArray, errorContext String) throws ParserError
 		while accept(TokenKind.stringInterpStart) 'interpLoop'
 			currentBlock = block
 			let interpStartTok = previousToken()
@@ -12432,21 +12842,12 @@ export type Parser
 				break
 			end 'recoveredFromInterp'
 			let fragToken = try consume()
-			validateEscapes(fragToken, kind: "string interpolation")
+			validateEscapes(fragToken, kind: errorContext)
 			let fragDecoded = decodeStringEscapes(fragToken.value)
 			let fragStringId = project.strings.intern(String.from(fragDecoded))
 			parts.push(StringInterpPart.literal(fragStringId))
 		end 'interpLoop'
-		let lastTok = previousToken()
-		let interpRange = SourceRange.between(leadToken, last: lastTok)
-		let resultName = freshSynthName()
-		// Emit into `currentBlock` — an inner interp expression with short-
-		// circuit `and`/`or` or a nested `try ... otherwise` moves control
-		// flow, and the stringInterp op must reference its parts from the
-		// block where they were defined.
-		module.appendOp(currentBlock, op: MaxonOp.stringInterp(resultName, parts: parts, range: interpRange))
-		return ExprResult.direct(resultName, valueType: MaxonType.named(project.typeNames.intern("String")))
-	end 'parseStringLiteral'
+	end 'parseInterpFragmentsInto'
 
 	// Phase 7 step 5 — format-spec capture. Called immediately after the
 	// interpolation subexpression has parsed; cursor is on either `:` (format
@@ -12677,6 +13078,7 @@ export type Parser
 		end 'tupleLoop'
 		try expect(TokenKind.rightParen)
 		let arity = elemNames.count()
+		ensureTupleStructRegistered(project, arity: arity)
 		let baseName = "__Tuple{arity}"
 		let typeNameBytes = baseName.toByteArray()
 		let ptrName = freshSynthName()

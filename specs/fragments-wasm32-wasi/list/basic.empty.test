@@ -1,0 +1,34 @@
+// Test: basic.empty
+typealias Integer = int(i64.min to i64.max)
+typealias IntList = List with Integer
+
+function main() returns ExitCode
+	var list = IntList.create()
+	if list.isEmpty() 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %7 = mir.mov_imm 8 : i64
+    %8 = mir.call @mrt_alloc(%7)
+    %9 = mir.call @mrt_managed_list_create()
+    mir.store %9, %8, 0 width: qword
+    %10 = mir.load %8, 0 width: qword
+    %11 = mir.call @mrt_managed_list_is_empty(%10)
+    mir.cond_br %11 [then: check_0(), else: check_0.after()]
+  check_0:
+    %5 = mir.mov_imm 0 : i64
+    mir.ret %5
+  check_0.after:
+    %6 = mir.mov_imm 1 : i64
+    mir.ret %6
+  }
+}
+---

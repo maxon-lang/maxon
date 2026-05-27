@@ -6526,3 +6526,1143 @@ func maxon_managed_is_null 1 i64
     v2 = std cmpI64Eq v0 v1
     std ret v2
 end
+
+// =============================================================================
+// Phase C — __ManagedList / __ManagedListNode runtime helpers.
+//
+// Backs every `__ManagedList.*` and `__ManagedListNode.*` method registered in
+// `registerManagedListMethods` / `registerManagedListNodeMethods`.
+//
+// Layouts mirror the C# bootstrap:
+//   __ManagedList (32 bytes via mm_alloc):
+//     offset  0  head    i64 (first __ManagedListNode pointer, or 0)
+//     offset  8  tail    i64 (last __ManagedListNode pointer, or 0)
+//     offset 16  count   i64 (number of nodes)
+//     offset 24  cursor  i64 (current iteration cursor node pointer, or 0)
+//
+//   __ManagedListNode (32 bytes via mm_alloc):
+//     offset  0  next    i64 (next __ManagedListNode pointer, or 0)
+//     offset  8  prev    i64 (previous __ManagedListNode pointer, or 0)
+//     offset 16  list    i64 (back-pointer to owning __ManagedList, or 0 when detached)
+//     offset 24  value   i64 (element slot, ABI matches __ManagedMemory.set/get)
+//
+// __ManagedListError ordinal map (mirrors stdlib/Builtins.maxon):
+//   ordinal | name              | wire
+//   0       | empty             | 1
+//   1       | endOfList         | 2
+//   2       | nodeNotInList     | 3
+//   3       | nodeAlreadyInList | 4
+//
+// Element-managed lifecycle: the runtime helpers operate on raw i64 values.
+// Reference counting for managed-element values (incref on insert, decref on
+// remove/clear) is the responsibility of the Maxon-level lowering layer,
+// matching the discipline used by __ManagedMemory.set/get. For Phase C we
+// keep the simpler primitive-element pattern; managed-element decref on
+// clear() / list destruction is left as a follow-up — it requires either an
+// element-aware destructor pointer chosen at allocation time or a separate
+// `__mrt_managed_list_clear_managed` variant selected at the dispatch site.
+// =============================================================================
+
+// __destruct___ManagedList(self): destructor for a __ManagedList instance.
+// Walks every node, clears its links, and mm_decref's it. The "managed
+// values inside nodes" case is not yet decref'd here — see the section
+// header above for the rationale.
+//
+// Slot usage:
+//   slot 0 = self    (arg, list_ptr)
+//   slot 1 = current (current node pointer during walk)
+//   slot 2 = next    (next node pointer, saved before current is freed)
+func __destruct___ManagedList 1 i64
+  block entry:
+    v0 = std param 0 i64
+    std storeSlot 0 v0
+
+    // current = self.head
+    v1 = std loadIndirect v0 0
+    std storeSlot 1 v1
+    std br loop
+
+  block loop:
+    v2 = std loadSlot 1
+    v3 = std constI64 0
+    v4 = std cmpI64Eq v2 v3
+    std condBr v4 done body
+
+  block body:
+    // next = current.next
+    v5 = std loadSlot 1
+    v6 = std loadIndirect v5 0
+    std storeSlot 2 v6
+    // Zero the node's link fields so the freed node looks detached if
+    // anything still has a stray pointer to it.
+    v7 = std loadSlot 1
+    v8 = std constI64 0
+    std storeIndirect v7 0 v8
+    std storeIndirect v7 8 v8
+    std storeIndirect v7 16 v8
+    // Drop the list's owned reference to this node.
+    v9 = std loadSlot 1
+    v10 = std call mm_decref v9
+    // current = next
+    v11 = std loadSlot 2
+    std storeSlot 1 v11
+    std br loop
+
+  block done:
+    v12 = std constI64 0
+    std ret v12
+end
+
+// __destruct___ManagedListNode(self): destructor for a __ManagedListNode.
+// No-op for primitive-value nodes. Managed-value decref is performed at the
+// Maxon-level lowering site (mirrors __ManagedMemory's pattern), so the
+// destructor body has nothing to do today. The destructor must still exist
+// because `mm_decref` reads the slot from `[ptr - 24]` and invokes it via
+// `indirectCall`; a zero slot bypasses the call, so wiring an explicit no-op
+// keeps the type's lifecycle path symmetric with __ManagedList / __ManagedMemory.
+func __destruct___ManagedListNode 1 i64
+  block entry:
+    v0 = std param 0 i64
+    v1 = std constI64 0
+    std ret v1
+end
+
+// mrt_managed_list_create() -> ptr to fresh empty __ManagedList.
+// All four fields (head, tail, count, cursor) zero-initialized.
+func mrt_managed_list_create 0 i64
+  block entry:
+    v0 = std constI64 32
+    v1 = std funcAddr __destruct___ManagedList
+    v2 = std constI64 0
+    v3 = std call mm_alloc v0 v1 v2
+    std storeSlot 0 v3
+    // Zero head/tail/count/cursor.
+    v4 = std loadSlot 0
+    v5 = std constI64 0
+    std storeIndirect v4 0 v5
+    std storeIndirect v4 8 v5
+    std storeIndirect v4 16 v5
+    std storeIndirect v4 24 v5
+    v6 = std loadSlot 0
+    std ret v6
+end
+
+// mrt_managed_list_alloc_node(value) -> ptr to fresh __ManagedListNode.
+// Internal helper: allocates a node with refcount 1, stores `value` at
+// offset 24, zero-initializes next/prev/list. The node is owned by the
+// caller's stack until reinsertFirst/Last/etc. links it into a list (the
+// list takes an mm_incref reference, see the insert helpers below).
+func mrt_managed_list_alloc_node 1 i64
+  block entry:
+    v0 = std param 0 i64
+    std storeSlot 0 v0
+
+    v1 = std constI64 32
+    v2 = std funcAddr __destruct___ManagedListNode
+    v3 = std constI64 0
+    v4 = std call mm_alloc v1 v2 v3
+    std storeSlot 1 v4
+
+    // Zero next/prev/list.
+    v5 = std loadSlot 1
+    v6 = std constI64 0
+    std storeIndirect v5 0 v6
+    std storeIndirect v5 8 v6
+    std storeIndirect v5 16 v6
+    // Store value at offset 24.
+    v7 = std loadSlot 0
+    std storeIndirect v5 24 v7
+
+    v8 = std loadSlot 1
+    std ret v8
+end
+
+// mrt_managed_list_unlink(list, node): internal helper. Removes the node from
+// the list's doubly-linked chain, clears the node's next/prev/list fields,
+// and decrements the list's count. Does NOT decref the node — the caller is
+// responsible for that (the node's reference count tracks whether ANY pointer
+// holds it; the list's "owned" reference is dropped by the caller).
+//
+// Slot usage:
+//   slot 0 = list_ptr (arg)
+//   slot 1 = node_ptr (arg)
+//   slot 2 = prev
+//   slot 3 = next
+func mrt_managed_list_unlink 2 void
+  block entry:
+    v0 = std param 0 i64
+    std storeSlot 0 v0
+    v1 = std param 1 i64
+    std storeSlot 1 v1
+
+    // Check node.list — 0 means already detached; nothing to do.
+    v2 = std loadSlot 1
+    v3 = std loadIndirect v2 16
+    v4 = std constI64 0
+    v5 = std cmpI64Eq v3 v4
+    std condBr v5 done relink
+
+  block relink:
+    // prev = node.prev; next = node.next
+    v6 = std loadSlot 1
+    v7 = std loadIndirect v6 8
+    std storeSlot 2 v7
+    v8 = std loadIndirect v6 0
+    std storeSlot 3 v8
+
+    // If prev != 0: prev.next = next; else: list.head = next.
+    v9 = std loadSlot 2
+    v10 = std constI64 0
+    v11 = std cmpI64Eq v9 v10
+    std condBr v11 list_head_path prev_link
+
+  block prev_link:
+    v12 = std loadSlot 2
+    v13 = std loadSlot 3
+    std storeIndirect v12 0 v13
+    std br after_prev
+
+  block list_head_path:
+    v14 = std loadSlot 0
+    v15 = std loadSlot 3
+    std storeIndirect v14 0 v15
+    std br after_prev
+
+  block after_prev:
+    // If next != 0: next.prev = prev; else: list.tail = prev.
+    v16 = std loadSlot 3
+    v17 = std constI64 0
+    v18 = std cmpI64Eq v16 v17
+    std condBr v18 list_tail_path next_link
+
+  block next_link:
+    v19 = std loadSlot 3
+    v20 = std loadSlot 2
+    std storeIndirect v19 8 v20
+    std br after_next
+
+  block list_tail_path:
+    v21 = std loadSlot 0
+    v22 = std loadSlot 2
+    std storeIndirect v21 8 v22
+    std br after_next
+
+  block after_next:
+    // If list.cursor == node, advance cursor to next so a subsequent
+    // cursorValue/cursorAdvance doesn't dereference the freed slot.
+    v23 = std loadSlot 0
+    v24 = std loadIndirect v23 24
+    v25 = std loadSlot 1
+    v26 = std cmpI64Eq v24 v25
+    std condBr v26 cursor_advance after_cursor
+
+  block cursor_advance:
+    v27 = std loadSlot 0
+    v28 = std loadSlot 3
+    std storeIndirect v27 24 v28
+    std br after_cursor
+
+  block after_cursor:
+    // Clear node links.
+    v29 = std loadSlot 1
+    v30 = std constI64 0
+    std storeIndirect v29 0 v30
+    std storeIndirect v29 8 v30
+    std storeIndirect v29 16 v30
+
+    // list.count -= 1
+    v31 = std loadSlot 0
+    v32 = std loadIndirect v31 16
+    v33 = std constI64 1
+    v34 = std subI64 v32 v33
+    std storeIndirect v31 16 v34
+    std br done
+
+  block done:
+    v35 = std constI64 0
+    std ret v35
+end
+
+// mrt_managed_list_link_first(list, node): internal helper. Links a freshly
+// alloc'd (or already-detached) node at the head of the list. Caller has
+// already populated node.value; this helper sets up next/prev/list and
+// updates head/tail/count.
+//
+// Slot usage:
+//   slot 0 = list_ptr (arg)
+//   slot 1 = node_ptr (arg)
+//   slot 2 = old_head
+func mrt_managed_list_link_first 2 void
+  block entry:
+    v0 = std param 0 i64
+    std storeSlot 0 v0
+    v1 = std param 1 i64
+    std storeSlot 1 v1
+
+    // old_head = list.head
+    v2 = std loadIndirect v0 0
+    std storeSlot 2 v2
+
+    // node.next = old_head; node.prev = 0; node.list = list_ptr
+    v3 = std loadSlot 2
+    std storeIndirect v1 0 v3
+    v4 = std constI64 0
+    std storeIndirect v1 8 v4
+    std storeIndirect v1 16 v0
+
+    // If old_head != 0: old_head.prev = node.
+    v5 = std loadSlot 2
+    v6 = std constI64 0
+    v7 = std cmpI64Eq v5 v6
+    std condBr v7 no_old_head set_old_prev
+
+  block set_old_prev:
+    v8 = std loadSlot 2
+    v9 = std loadSlot 1
+    std storeIndirect v8 8 v9
+    std br after_old_head
+
+  block no_old_head:
+    // list.tail = node when list was empty.
+    v10 = std loadSlot 0
+    v11 = std loadSlot 1
+    std storeIndirect v10 8 v11
+    std br after_old_head
+
+  block after_old_head:
+    // list.head = node
+    v12 = std loadSlot 0
+    v13 = std loadSlot 1
+    std storeIndirect v12 0 v13
+
+    // list.count += 1
+    v14 = std loadIndirect v12 16
+    v15 = std constI64 1
+    v16 = std addI64 v14 v15
+    std storeIndirect v12 16 v16
+
+    // Bump the node's refcount — the list now owns a reference.
+    v17 = std loadSlot 1
+    v18 = std call mm_incref v17
+    v19 = std constI64 0
+    std ret v19
+end
+
+// mrt_managed_list_link_last(list, node): internal helper. Sibling of
+// mrt_managed_list_link_first — links at the tail instead of the head.
+//
+// Slot usage:
+//   slot 0 = list_ptr (arg)
+//   slot 1 = node_ptr (arg)
+//   slot 2 = old_tail
+func mrt_managed_list_link_last 2 void
+  block entry:
+    v0 = std param 0 i64
+    std storeSlot 0 v0
+    v1 = std param 1 i64
+    std storeSlot 1 v1
+
+    // old_tail = list.tail
+    v2 = std loadIndirect v0 8
+    std storeSlot 2 v2
+
+    // node.next = 0; node.prev = old_tail; node.list = list_ptr
+    v3 = std constI64 0
+    std storeIndirect v1 0 v3
+    v4 = std loadSlot 2
+    std storeIndirect v1 8 v4
+    std storeIndirect v1 16 v0
+
+    // If old_tail != 0: old_tail.next = node.
+    v5 = std loadSlot 2
+    v6 = std constI64 0
+    v7 = std cmpI64Eq v5 v6
+    std condBr v7 no_old_tail set_old_next
+
+  block set_old_next:
+    v8 = std loadSlot 2
+    v9 = std loadSlot 1
+    std storeIndirect v8 0 v9
+    std br after_old_tail
+
+  block no_old_tail:
+    v10 = std loadSlot 0
+    v11 = std loadSlot 1
+    std storeIndirect v10 0 v11
+    std br after_old_tail
+
+  block after_old_tail:
+    // list.tail = node
+    v12 = std loadSlot 0
+    v13 = std loadSlot 1
+    std storeIndirect v12 8 v13
+
+    // list.count += 1
+    v14 = std loadIndirect v12 16
+    v15 = std constI64 1
+    v16 = std addI64 v14 v15
+    std storeIndirect v12 16 v16
+
+    v17 = std loadSlot 1
+    v18 = std call mm_incref v17
+    v19 = std constI64 0
+    std ret v19
+end
+
+// mrt_managed_list_link_after(list, target, node): link `node` right after
+// `target`. Caller has validated target.list == list and has populated
+// node.value.
+//
+// Slot usage:
+//   slot 0 = list_ptr   (arg)
+//   slot 1 = target_ptr (arg)
+//   slot 2 = node_ptr   (arg)
+//   slot 3 = after      (target.next, may be 0)
+func mrt_managed_list_link_after 3 void
+  block entry:
+    v0 = std param 0 i64
+    std storeSlot 0 v0
+    v1 = std param 1 i64
+    std storeSlot 1 v1
+    v2 = std param 2 i64
+    std storeSlot 2 v2
+
+    // after = target.next
+    v3 = std loadIndirect v1 0
+    std storeSlot 3 v3
+
+    // node.next = after; node.prev = target; node.list = list
+    std storeIndirect v2 0 v3
+    std storeIndirect v2 8 v1
+    std storeIndirect v2 16 v0
+
+    // target.next = node
+    std storeIndirect v1 0 v2
+
+    // If after != 0: after.prev = node; else: list.tail = node.
+    v4 = std loadSlot 3
+    v5 = std constI64 0
+    v6 = std cmpI64Eq v4 v5
+    std condBr v6 was_tail set_after_prev
+
+  block set_after_prev:
+    v7 = std loadSlot 3
+    std storeIndirect v7 8 v2
+    std br linked
+
+  block was_tail:
+    std storeIndirect v0 8 v2
+    std br linked
+
+  block linked:
+    // list.count += 1
+    v8 = std loadIndirect v0 16
+    v9 = std constI64 1
+    v10 = std addI64 v8 v9
+    std storeIndirect v0 16 v10
+
+    v11 = std call mm_incref v2
+    v12 = std constI64 0
+    std ret v12
+end
+
+// mrt_managed_list_link_before(list, target, node): sibling of link_after.
+//
+// Slot usage:
+//   slot 0 = list_ptr
+//   slot 1 = target_ptr
+//   slot 2 = node_ptr
+//   slot 3 = before (target.prev)
+func mrt_managed_list_link_before 3 void
+  block entry:
+    v0 = std param 0 i64
+    std storeSlot 0 v0
+    v1 = std param 1 i64
+    std storeSlot 1 v1
+    v2 = std param 2 i64
+    std storeSlot 2 v2
+
+    v3 = std loadIndirect v1 8
+    std storeSlot 3 v3
+
+    // node.next = target; node.prev = before; node.list = list
+    std storeIndirect v2 0 v1
+    std storeIndirect v2 8 v3
+    std storeIndirect v2 16 v0
+
+    // target.prev = node
+    std storeIndirect v1 8 v2
+
+    // If before != 0: before.next = node; else: list.head = node.
+    v4 = std loadSlot 3
+    v5 = std constI64 0
+    v6 = std cmpI64Eq v4 v5
+    std condBr v6 was_head set_before_next
+
+  block set_before_next:
+    v7 = std loadSlot 3
+    std storeIndirect v7 0 v2
+    std br linked
+
+  block was_head:
+    std storeIndirect v0 0 v2
+    std br linked
+
+  block linked:
+    v8 = std loadIndirect v0 16
+    v9 = std constI64 1
+    v10 = std addI64 v8 v9
+    std storeIndirect v0 16 v10
+
+    v11 = std call mm_incref v2
+    v12 = std constI64 0
+    std ret v12
+end
+
+// mrt_managed_list_insert_first_value(list, value) -> __ManagedListNode.
+// Allocates a fresh node holding `value`, links at head, returns the node.
+// Caller holds a borrowed pointer; the list owns the long-term reference.
+//
+// Slot usage:
+//   slot 0 = list_ptr (arg)
+//   slot 1 = value    (arg)
+//   slot 2 = node_ptr
+func mrt_managed_list_insert_first_value 2 i64
+  block entry:
+    v0 = std param 0 i64
+    std storeSlot 0 v0
+    v1 = std param 1 i64
+    std storeSlot 1 v1
+
+    v2 = std call mrt_managed_list_alloc_node v1
+    std storeSlot 2 v2
+
+    v3 = std loadSlot 0
+    v4 = std loadSlot 2
+    v5 = std call mrt_managed_list_link_first v3 v4
+
+    v6 = std loadSlot 2
+    std ret v6
+end
+
+// mrt_managed_list_insert_last_value(list, value) -> __ManagedListNode.
+func mrt_managed_list_insert_last_value 2 i64
+  block entry:
+    v0 = std param 0 i64
+    std storeSlot 0 v0
+    v1 = std param 1 i64
+    std storeSlot 1 v1
+
+    v2 = std call mrt_managed_list_alloc_node v1
+    std storeSlot 2 v2
+
+    v3 = std loadSlot 0
+    v4 = std loadSlot 2
+    v5 = std call mrt_managed_list_link_last v3 v4
+
+    v6 = std loadSlot 2
+    std ret v6
+end
+
+// mrt_managed_list_insert_after_value(list, target, value) -> __ManagedListNode.
+func mrt_managed_list_insert_after_value 3 i64
+  block entry:
+    v0 = std param 0 i64
+    std storeSlot 0 v0
+    v1 = std param 1 i64
+    std storeSlot 1 v1
+    v2 = std param 2 i64
+    std storeSlot 2 v2
+
+    v3 = std call mrt_managed_list_alloc_node v2
+    std storeSlot 3 v3
+
+    v4 = std loadSlot 0
+    v5 = std loadSlot 1
+    v6 = std loadSlot 3
+    v7 = std call mrt_managed_list_link_after v4 v5 v6
+
+    v8 = std loadSlot 3
+    std ret v8
+end
+
+// mrt_managed_list_insert_before_value(list, target, value) -> __ManagedListNode.
+func mrt_managed_list_insert_before_value 3 i64
+  block entry:
+    v0 = std param 0 i64
+    std storeSlot 0 v0
+    v1 = std param 1 i64
+    std storeSlot 1 v1
+    v2 = std param 2 i64
+    std storeSlot 2 v2
+
+    v3 = std call mrt_managed_list_alloc_node v2
+    std storeSlot 3 v3
+
+    v4 = std loadSlot 0
+    v5 = std loadSlot 1
+    v6 = std loadSlot 3
+    v7 = std call mrt_managed_list_link_before v4 v5 v6
+
+    v8 = std loadSlot 3
+    std ret v8
+end
+
+// mrt_managed_list_reinsert_first(list, node): move an existing node to the
+// head of `list`. Auto-detaches from any current list first. Per the C# C#
+// bootstrap pattern, these methods are non-throwing — the runtime simply
+// unlinks before relinking.
+//
+// Slot usage:
+//   slot 0 = list_ptr (arg)
+//   slot 1 = node_ptr (arg)
+//   slot 2 = old_list (node.list before detach)
+func mrt_managed_list_reinsert_first 2 void
+  block entry:
+    v0 = std param 0 i64
+    std storeSlot 0 v0
+    v1 = std param 1 i64
+    std storeSlot 1 v1
+
+    // Auto-detach: if node.list != 0, unlink and drop the old list's ref.
+    v2 = std loadIndirect v1 16
+    std storeSlot 2 v2
+    v3 = std constI64 0
+    v4 = std cmpI64Eq v2 v3
+    std condBr v4 no_detach do_detach
+
+  block do_detach:
+    v5 = std loadSlot 2
+    v6 = std loadSlot 1
+    v7 = std call mrt_managed_list_unlink v5 v6
+    v8 = std loadSlot 1
+    v9 = std call mm_decref v8
+    std br no_detach
+
+  block no_detach:
+    v10 = std loadSlot 0
+    v11 = std loadSlot 1
+    v12 = std call mrt_managed_list_link_first v10 v11
+    v13 = std constI64 0
+    std ret v13
+end
+
+// mrt_managed_list_reinsert_last(list, node).
+func mrt_managed_list_reinsert_last 2 void
+  block entry:
+    v0 = std param 0 i64
+    std storeSlot 0 v0
+    v1 = std param 1 i64
+    std storeSlot 1 v1
+
+    v2 = std loadIndirect v1 16
+    std storeSlot 2 v2
+    v3 = std constI64 0
+    v4 = std cmpI64Eq v2 v3
+    std condBr v4 no_detach do_detach
+
+  block do_detach:
+    v5 = std loadSlot 2
+    v6 = std loadSlot 1
+    v7 = std call mrt_managed_list_unlink v5 v6
+    v8 = std loadSlot 1
+    v9 = std call mm_decref v8
+    std br no_detach
+
+  block no_detach:
+    v10 = std loadSlot 0
+    v11 = std loadSlot 1
+    v12 = std call mrt_managed_list_link_last v10 v11
+    v13 = std constI64 0
+    std ret v13
+end
+
+// mrt_managed_list_reinsert_after(list, target, node).
+func mrt_managed_list_reinsert_after 3 void
+  block entry:
+    v0 = std param 0 i64
+    std storeSlot 0 v0
+    v1 = std param 1 i64
+    std storeSlot 1 v1
+    v2 = std param 2 i64
+    std storeSlot 2 v2
+
+    v3 = std loadIndirect v2 16
+    std storeSlot 3 v3
+    v4 = std constI64 0
+    v5 = std cmpI64Eq v3 v4
+    std condBr v5 no_detach do_detach
+
+  block do_detach:
+    v6 = std loadSlot 3
+    v7 = std loadSlot 2
+    v8 = std call mrt_managed_list_unlink v6 v7
+    v9 = std loadSlot 2
+    v10 = std call mm_decref v9
+    std br no_detach
+
+  block no_detach:
+    v11 = std loadSlot 0
+    v12 = std loadSlot 1
+    v13 = std loadSlot 2
+    v14 = std call mrt_managed_list_link_after v11 v12 v13
+    v15 = std constI64 0
+    std ret v15
+end
+
+// mrt_managed_list_reinsert_before(list, target, node).
+func mrt_managed_list_reinsert_before 3 void
+  block entry:
+    v0 = std param 0 i64
+    std storeSlot 0 v0
+    v1 = std param 1 i64
+    std storeSlot 1 v1
+    v2 = std param 2 i64
+    std storeSlot 2 v2
+
+    v3 = std loadIndirect v2 16
+    std storeSlot 3 v3
+    v4 = std constI64 0
+    v5 = std cmpI64Eq v3 v4
+    std condBr v5 no_detach do_detach
+
+  block do_detach:
+    v6 = std loadSlot 3
+    v7 = std loadSlot 2
+    v8 = std call mrt_managed_list_unlink v6 v7
+    v9 = std loadSlot 2
+    v10 = std call mm_decref v9
+    std br no_detach
+
+  block no_detach:
+    v11 = std loadSlot 0
+    v12 = std loadSlot 1
+    v13 = std loadSlot 2
+    v14 = std call mrt_managed_list_link_before v11 v12 v13
+    v15 = std constI64 0
+    std ret v15
+end
+
+// mrt_managed_list_detach(list, node): unlink `node` from `list`. The node
+// itself is not freed — its reference count is decremented, and the node
+// survives as long as some other pointer holds it.
+//
+// Slot usage:
+//   slot 0 = list_ptr (arg)
+//   slot 1 = node_ptr (arg)
+func mrt_managed_list_detach 2 void
+  block entry:
+    v0 = std param 0 i64
+    std storeSlot 0 v0
+    v1 = std param 1 i64
+    std storeSlot 1 v1
+
+    v2 = std call mrt_managed_list_unlink v0 v1
+    v3 = std call mm_decref v1
+    v4 = std constI64 0
+    std ret v4
+end
+
+// mrt_managed_list_remove(list, node) -> value. Unlinks `node` from `list`,
+// reads its value field, drops the list's reference, and returns the value.
+// Caller takes ownership of the value (for managed elements the Maxon-level
+// lowering must decref it at scope end).
+//
+// Slot usage:
+//   slot 0 = list_ptr (arg)
+//   slot 1 = node_ptr (arg)
+//   slot 2 = value
+func mrt_managed_list_remove 2 i64
+  block entry:
+    v0 = std param 0 i64
+    std storeSlot 0 v0
+    v1 = std param 1 i64
+    std storeSlot 1 v1
+
+    // Read the value BEFORE unlinking — the slab may not zero a freed node's
+    // value slot, but defensive callers might. Reading first is the safe
+    // ordering and matches the C# bootstrap's LowerManagedListRemove.
+    v2 = std loadIndirect v1 24
+    std storeSlot 2 v2
+
+    v3 = std call mrt_managed_list_unlink v0 v1
+    v4 = std call mm_decref v1
+
+    v5 = std loadSlot 2
+    std ret v5
+end
+
+// mrt_managed_list_head(list) -> first node OR set error flag when empty.
+//
+// Slot usage:
+//   slot 0 = list_ptr (arg)
+func mrt_managed_list_head 1 i64
+  block entry:
+    v0 = std param 0 i64
+    v1 = std loadIndirect v0 0
+    v2 = std constI64 0
+    v3 = std cmpI64Eq v1 v2
+    std condBr v3 empty ok
+
+  block empty:
+    v4 = std constI64 0
+    v5 = std constI64 1
+    std errorReturn v4 v5
+
+  block ok:
+    v6 = std constI64 0
+    std errorReturn v1 v6
+end
+
+// mrt_managed_list_tail(list) -> last node OR error flag when empty.
+func mrt_managed_list_tail 1 i64
+  block entry:
+    v0 = std param 0 i64
+    v1 = std loadIndirect v0 8
+    v2 = std constI64 0
+    v3 = std cmpI64Eq v1 v2
+    std condBr v3 empty ok
+
+  block empty:
+    v4 = std constI64 0
+    v5 = std constI64 1
+    std errorReturn v4 v5
+
+  block ok:
+    v6 = std constI64 0
+    std errorReturn v1 v6
+end
+
+// mrt_managed_list_count(list) -> i64. Simple field read at offset 16.
+func mrt_managed_list_count 1 i64
+  block entry:
+    v0 = std param 0 i64
+    v1 = std loadIndirect v0 16
+    std ret v1
+end
+
+// mrt_managed_list_is_empty(list) -> i1. (count == 0)
+func mrt_managed_list_is_empty 1 i64
+  block entry:
+    v0 = std param 0 i64
+    v1 = std loadIndirect v0 16
+    v2 = std constI64 0
+    v3 = std cmpI64Eq v1 v2
+    std ret v3
+end
+
+// mrt_managed_list_clear(list): unlinks and frees every node. Managed-value
+// decref on each node is not performed today — see the section header above.
+//
+// Slot usage:
+//   slot 0 = list_ptr (arg)
+//   slot 1 = current  (walk pointer)
+//   slot 2 = next     (preserved before current is freed)
+func mrt_managed_list_clear 1 void
+  block entry:
+    v0 = std param 0 i64
+    std storeSlot 0 v0
+
+    v1 = std loadIndirect v0 0
+    std storeSlot 1 v1
+    std br loop
+
+  block loop:
+    v2 = std loadSlot 1
+    v3 = std constI64 0
+    v4 = std cmpI64Eq v2 v3
+    std condBr v4 done body
+
+  block body:
+    // Save next.
+    v5 = std loadSlot 1
+    v6 = std loadIndirect v5 0
+    std storeSlot 2 v6
+
+    // Clear node links so a stray pointer sees a detached node.
+    v7 = std constI64 0
+    std storeIndirect v5 0 v7
+    std storeIndirect v5 8 v7
+    std storeIndirect v5 16 v7
+
+    // Drop the list's owned reference.
+    v8 = std call mm_decref v5
+
+    // current = next
+    v9 = std loadSlot 2
+    std storeSlot 1 v9
+    std br loop
+
+  block done:
+    // Zero head/tail/count/cursor.
+    v10 = std loadSlot 0
+    v11 = std constI64 0
+    std storeIndirect v10 0 v11
+    std storeIndirect v10 8 v11
+    std storeIndirect v10 16 v11
+    std storeIndirect v10 24 v11
+    v12 = std constI64 0
+    std ret v12
+end
+
+// mrt_managed_list_cursor_reset(list): cursor = 0. Subsequent cursorStart
+// (re-)anchors at head; cursorAdvance from a 0 cursor panics — stdlib's
+// iterator always calls cursorStart before cursorAdvance.
+func mrt_managed_list_cursor_reset 1 void
+  block entry:
+    v0 = std param 0 i64
+    v1 = std constI64 0
+    std storeIndirect v0 24 v1
+    v2 = std constI64 0
+    std ret v2
+end
+
+// mrt_managed_list_cursor_value(list) -> value at the current cursor node.
+// Cursor must be non-null (stdlib invariant); panic if violated to catch
+// misuse of the raw builtin.
+func mrt_managed_list_cursor_value 1 i64
+  block entry:
+    v0 = std param 0 i64
+    v1 = std loadIndirect v0 24
+    v2 = std constI64 0
+    v3 = std cmpI64Eq v1 v2
+    std condBr v3 fail ok
+
+  block fail:
+    v4 = std call __mm_panic_list_empty
+    v5 = std constI64 0
+    std ret v5
+
+  block ok:
+    v6 = std loadIndirect v1 24
+    std ret v6
+end
+
+// mrt_managed_list_cursor_start(list): set cursor to list.head, error-flag
+// the empty case so the surrounding `try chain.cursorStart() otherwise ...`
+// re-throws `__ManagedListError.empty`.
+func mrt_managed_list_cursor_start 1 i64
+  block entry:
+    v0 = std param 0 i64
+    v1 = std loadIndirect v0 0
+    std storeIndirect v0 24 v1
+    v2 = std constI64 0
+    v3 = std cmpI64Eq v1 v2
+    std condBr v3 empty ok
+
+  block empty:
+    v4 = std constI64 0
+    v5 = std constI64 1
+    std errorReturn v4 v5
+
+  block ok:
+    v6 = std constI64 0
+    std errorReturn v2 v6
+end
+
+// mrt_managed_list_cursor_advance(list): cursor = cursor.next; error-flag
+// when the new cursor is null (end of list).
+func mrt_managed_list_cursor_advance 1 i64
+  block entry:
+    v0 = std param 0 i64
+    v1 = std loadIndirect v0 24
+    v2 = std constI64 0
+    v3 = std cmpI64Eq v1 v2
+    std condBr v3 cursor_null advance
+
+  block cursor_null:
+    // Treat advancing a null cursor as endOfList (wire 2) — stdlib's
+    // ListIterator never calls advance from a null cursor, but defensive.
+    v4 = std constI64 0
+    v5 = std constI64 2
+    std errorReturn v4 v5
+
+  block advance:
+    v6 = std loadIndirect v1 0
+    std storeIndirect v0 24 v6
+    v7 = std constI64 0
+    v8 = std cmpI64Eq v6 v7
+    std condBr v8 end_of_list ok
+
+  block end_of_list:
+    v9 = std constI64 0
+    v10 = std constI64 2
+    std errorReturn v9 v10
+
+  block ok:
+    v11 = std constI64 0
+    std errorReturn v7 v11
+end
+
+// mrt_managed_list_node_next(node) -> next node OR error flag (endOfList=2)
+// when at tail. Mirrors the C# bootstrap's "__managed_list_node_next" inline
+// null-check pattern.
+func mrt_managed_list_node_next 1 i64
+  block entry:
+    v0 = std param 0 i64
+    v1 = std loadIndirect v0 0
+    v2 = std constI64 0
+    v3 = std cmpI64Eq v1 v2
+    std condBr v3 at_end ok
+
+  block at_end:
+    v4 = std constI64 0
+    v5 = std constI64 2
+    std errorReturn v4 v5
+
+  block ok:
+    v6 = std constI64 0
+    std errorReturn v1 v6
+end
+
+// mrt_managed_list_node_prev(node) -> prev node OR error flag when at head.
+func mrt_managed_list_node_prev 1 i64
+  block entry:
+    v0 = std param 0 i64
+    v1 = std loadIndirect v0 8
+    v2 = std constI64 0
+    v3 = std cmpI64Eq v1 v2
+    std condBr v3 at_start ok
+
+  block at_start:
+    v4 = std constI64 0
+    v5 = std constI64 2
+    std errorReturn v4 v5
+
+  block ok:
+    v6 = std constI64 0
+    std errorReturn v1 v6
+end
+
+// mrt_managed_list_node_value(node) -> raw value at offset 24. Non-throwing.
+// Stdlib's ListIterator positioning invariant guarantees that `current()` is
+// only called on a non-null cursor / node, so this helper has no bounds
+// check (mirrors __ManagedMemory.get for the inner loop).
+func mrt_managed_list_node_value 1 i64
+  block entry:
+    v0 = std param 0 i64
+    v1 = std loadIndirect v0 24
+    std ret v1
+end
+
+// mrt_managed_list_node_set_value(node, v): stores v at node.value (offset 24).
+// Managed-value reference counting (incref new, decref old) is performed by
+// the Maxon-level lowering — see the section header above.
+func mrt_managed_list_node_set_value 2 void
+  block entry:
+    v0 = std param 0 i64
+    v1 = std param 1 i64
+    std storeIndirect v0 24 v1
+    v2 = std constI64 0
+    std ret v2
+end
+
+// __mm_panic_list_empty: panic when a stdlib invariant ("cursor is non-null
+// before cursorValue") is violated. Triggers the standard panic path so the
+// fragment exits with a clear runtime error.
+func __mm_panic_list_empty 0 void
+  block entry:
+    v0 = std globalAddr __mm_panic_list_empty_msg
+    v1 = std call mrt_panic v0
+    v2 = std constI64 0
+    std ret v2
+end
+
+// =====================================================================
+// Phase D: __ManagedSocket runtime helpers (mrt_managed_socket_*)
+// =====================================================================
+//
+// These helpers wrap the OS-level socket APIs used by stdlib/TcpClient.maxon:
+//   • Windows: Winsock (WSAStartup + ConnectEx/WSASend/WSARecv via IOCP)
+//   • Linux / macOS: BSD sockets (socket/connect/send/recv/close)
+//   • WASI: not supported (TcpClient.maxon is `#if os(Wasi)`-gated out)
+//
+// The self-hosted compiler does NOT yet have an `osNetSocket` /
+// `osNetConnect` / etc. StdSystemOp family, nor the IOCP/green-thread
+// integration the C# bootstrap uses on Windows. Implementing those is a
+// significant cross-target effort (every new StdSystemOp needs lowering in
+// X64, ARM64, and Wasm backends, plus runtime threading machinery on
+// Windows). For now these helpers ship as well-defined sentinel-erroring
+// stubs: any actual call returns an error code mapping to the closest
+// `__ManagedSocketError` variant, with the success path never taken. This
+// matches the "Stream 2.3 sentinel-erroring stubs" pattern used for the
+// file/directory helpers when they were first wired before the real
+// per-target syscall lowerings landed (see mrt_file_open_read header).
+//
+// Whitelisting stdlib/TcpClient.maxon needs these symbols to exist so the
+// stdlib cache builds and links; tcp-client spec tests are NOT on the
+// self-hosted whitelist yet (see Testing/SpecTestRunner.maxon), so the
+// stubs' runtime behavior doesn't affect the 1615/1615 baseline. Stream X
+// (future) replaces each stub body with the real per-target implementation.
+//
+// __ManagedSocketError ordinals (must match registerManagedSocketErrorEnum
+// in LowerMaxonToStd.maxon and stdlib/Builtins.maxon):
+//   0 bufferOutOfBounds  -> flag 1
+//   1 resolveFailed      -> flag 2
+//   2 connectFailed      -> flag 3
+//   3 sendFailed         -> flag 4
+//   4 recvFailed         -> flag 5
+//   5 connectionClosed   -> flag 6
+//   6 closed             -> flag 7
+//
+// =====================================================================
+
+// mrt_managed_socket_tcp_connect(host_mm, port) throws -> ptr to fresh
+// __ManagedSocket. Currently returns resolveFailed (flag 2) sentinel —
+// the real per-target implementations will replace this body.
+func mrt_managed_socket_tcp_connect 2 i64
+  block entry:
+    v0 = std param 0 i64
+    v1 = std param 1 i64
+    // Sentinel: report __ManagedSocketError.resolveFailed (ordinal 1 → flag 2)
+    // until a real DNS+socket+connect path lands. The result slot returns 0
+    // (caller never reads it on the error path).
+    v2 = std constI64 0
+    v3 = std constI64 2
+    std errorReturn v2 v3
+end
+
+// mrt_managed_socket_send(self, managed, offset, length) throws -> bytes
+// sent. Currently returns sendFailed (flag 4) sentinel. Real impl will
+// pre-check offset+length against managed.capacity() (bufferOutOfBounds
+// → flag 1), then call send(2) / WSASend.
+func mrt_managed_socket_send 4 i64
+  block entry:
+    v0 = std param 0 i64
+    v1 = std param 1 i64
+    v2 = std param 2 i64
+    v3 = std param 3 i64
+    // Sentinel: report __ManagedSocketError.sendFailed (ordinal 3 → flag 4).
+    v4 = std constI64 0
+    v5 = std constI64 4
+    std errorReturn v4 v5
+end
+
+// mrt_managed_socket_recv(self, managed) throws -> bytes received.
+// Currently returns recvFailed (flag 5) sentinel. Real impl will call
+// recv(2) / WSARecv on the socket handle into managed.buffer up to
+// managed.capacity bytes.
+func mrt_managed_socket_recv 2 i64
+  block entry:
+    v0 = std param 0 i64
+    v1 = std param 1 i64
+    // Sentinel: report __ManagedSocketError.recvFailed (ordinal 4 → flag 5).
+    v2 = std constI64 0
+    v3 = std constI64 5
+    std errorReturn v2 v3
+end
+
+// mrt_managed_socket_close(self) -> void. Idempotent: zeroes the _handle
+// field so the destructor's call doesn't double-close. The stub body
+// performs the field-zero (which is the user-visible state change); the
+// real implementation will additionally call closesocket / close(2) on
+// the OS handle before zeroing it.
+func mrt_managed_socket_close 1 void
+  block entry:
+    v0 = std param 0 i64
+    // self._handle = 0
+    v1 = std constI64 0
+    std storeIndirect v0 0 v1
+    v2 = std constI64 0
+    std ret v2
+end

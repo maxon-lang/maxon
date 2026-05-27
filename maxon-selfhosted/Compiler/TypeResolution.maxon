@@ -1385,6 +1385,7 @@ function resolveConformanceWithArgs(project Project, conf Conformance, usesCount
 			let argName = try conf.withArgs.get(i) otherwise panic("resolveConformanceWithArgs: withArgs.get OOB at {i}")
 			tupleArgs.push(internMaxonType(project, name: argName))
 		end 'eachTupleArg'
+		ensureTupleStructRegistered(project, arity: conf.withArgs.count())
 		let baseName = "__Tuple{conf.withArgs.count()}"
 		let baseId = project.typeNames.intern(baseName)
 		let giid = project.genericInstances.intern(baseId, args: tupleArgs)
@@ -4679,6 +4680,7 @@ function recordOpResult(project Project, producerTypes ProducerTypeMap, slotType
 		methodCall(result, receiver, methodName, args, _, argTypes, _, _) then recordResultType(producerTypes, name: result, t: methodCallResultType(project, receiverType: retypeCharByteReceiver(project, receiver: receiver, receiverType: lookupProducerType(producerTypes, name: receiver), funcName: funcName), methodName: methodName, argTypes: argTypes, producerTypes: producerTypes, args: args, enclosingType: enclosingType))
 		ret then return
 		panic then return
+		panicDynamic then return
 		structAlloc(result, structName, _) then recordResultType(producerTypes, name: result, t: MaxonType.named(project.typeNames.intern(String.from(structName))))
 		fieldLoad(result, receiver, fieldName, _) then recordResultType(producerTypes, name: result, t: fieldLoadResultType(project, receiverType: normalizeReceiverInContext(project, t: lookupProducerType(producerTypes, name: receiver), enclosingType: enclosingType), fieldName: fieldName))
 		fieldStore(receiver, fieldName, value, _, _) then refineTupleStructAlloc(project, producerTypes: producerTypes, tuplePartialArgs: tuplePartialArgs, currentNamespace: currentNamespace, receiver: receiver, fieldName: fieldName, value: value)
@@ -4990,6 +4992,7 @@ function retValueTypeFromProducers(op MaxonOp, producerTypes ProducerTypeMap) re
 		call gives MaxonType.unresolved
 		methodCall gives MaxonType.unresolved
 		panic gives MaxonType.unresolved
+		panicDynamic gives MaxonType.unresolved
 		structAlloc gives MaxonType.unresolved
 		fieldLoad gives MaxonType.unresolved
 		fieldStore gives MaxonType.unresolved
@@ -5073,6 +5076,7 @@ function fillUnresolvedTypesForOp(project Project, module MaxonModule, opIdx OpI
 		br then return
 		ret then return
 		panic then return
+		panicDynamic then return
 		structAlloc then return
 		fieldLoad then return
 		fieldStore then return
@@ -5667,6 +5671,7 @@ function specializeOp(module MaxonModule, opIdx OpIndex, op MaxonOp, nameStringI
 		tryMethodCall then return
 		ret then return
 		panic then return
+		panicDynamic then return
 		structAlloc then return
 		fieldLoad then return
 		fieldStore then return
@@ -6299,7 +6304,19 @@ function validateCastInRange(project Project, value ConstantValue, range Typeali
 end 'validateCastInRange'
 
 function validateIntInRange(project Project, value IntConstant, range TypealiasRange, typeName String)
-	if value < range.lower or value > range.upper 'oor'
+	// Unsigned-wrapped upper: `0 to u64.max` stores `range.upper` as the
+	// wrapped value -1; with `range.lower >= 0` this represents the full
+	// unsigned span, so any non-negative `value` is in range. (Mirrors the
+	// parser's `isInvalidIntRange` unsigned-aware check.)
+	let unsignedUpper = range.lower >= 0 and range.upper < 0
+	let belowLower = value < range.lower
+	var aboveUpper = false
+	if unsignedUpper 'unsigned'
+		aboveUpper = value < 0
+	end 'unsigned' else 'signed'
+		aboveUpper = value > range.upper
+	end 'signed'
+	if belowLower or aboveUpper 'oor'
 		// No exact token span is available here — the cast was folded from
 		// an UnresolvedConstExpr arena that doesn't carry source positions.
 		// Anchor the diagnostic at a synthetic `__const_eval__` virtual path
@@ -7484,25 +7501,46 @@ function checkCallVisibility(project Project, callee ByteArray, callContext Call
 		end 'haveInternalsCandidate'
 	end 'rejectInternalsRef'
 	// Bare call: resolved name doesn't exist; check whether a hidden
-	// candidate would have matched if visibility allowed it.
+	// candidate would have matched if visibility allowed it. Two file-private
+	// overloads of the same bare name (e.g. two sibling files each declaring
+	// `stripTrailingCR` with a different first-param type) get mangled into
+	// the overload bucket — at the call site, ONE of them is the visible
+	// match for the reader. If any candidate is visible we must not report
+	// any hidden sibling: overload resolution will dispatch to the visible
+	// match. Only when EVERY candidate is hidden do we surface the diagnostic.
+	//
+	// Phase C: skip `__`-prefixed candidates for non-internals readers.
+	// Symmetric with the filter in `qualifyCalleeForContextWithType` — a
+	// user-side bare name like `count` must not be considered as bound to
+	// `__ManagedList.count` (which would surface a "not exported"
+	// diagnostic when the bare reference is actually a top-level var,
+	// not a callee at all).
+	let readerInternals = readerCanCallStdlibInternals(readerFilePath)
 	let candidates = project.methodNameIndex.get(bareCallee)
+	var hiddenInfo = FuncVisibilityInfo.create(Visibility.file, sourceFilePath: readerFilePath)
+	var sawHidden = false
 	for candidate in candidates 'eachCandidate'
 		if not project.funcReturnTypes.contains(candidate) 'notFunc'
 			continue
 		end 'notFunc'
+		if candidate.startsWith("__") and not readerInternals 'rejectInternalsCandidate'
+			continue
+		end 'rejectInternalsCandidate'
 		let info = funcVisibilityOrDefault(project, qualifiedName: candidate)
 		if isVisibleFrom(info.visibility, declFilePath: info.sourceFilePath, readerFilePath: readerFilePath) 'wouldBeVisible'
-			// Visible candidate exists but `qualifyCalleeForContext` didn't
-			// pick it — call resolution found something else first. Nothing
-			// to report here.
-			continue
+			// Visible candidate exists — overload dispatch will pick it
+			// (or a sibling visible one). Suppress any hidden-sibling
+			// diagnostic this site might otherwise raise.
+			return
 		end 'wouldBeVisible'
-		// Hidden candidate. Emit the diagnostic that matches its tier
-		// and stop scanning — multiple hidden candidates collapse to one
-		// error per call site so the user gets a focused message.
-		reportHiddenCalleeError(project, displayName: bareCallee, tier: info.visibility, range: range, filePath: readerFilePath)
-		return
+		if not sawHidden 'firstHidden'
+			hiddenInfo = info
+			sawHidden = true
+		end 'firstHidden'
 	end 'eachCandidate'
+	if sawHidden 'reportHidden'
+		reportHiddenCalleeError(project, displayName: bareCallee, tier: hiddenInfo.visibility, range: range, filePath: readerFilePath)
+	end 'reportHidden'
 end 'checkCallVisibility'
 
 // Emit the hidden-callee diagnostic for `displayName` with wording that

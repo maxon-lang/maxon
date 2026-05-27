@@ -74,6 +74,11 @@ let whitelist = ["basics",
 	//             for-range (`character-range-print`) and interface-extension
 	//             method monomorphization (`with-iterator` — Phase 11).
 	"arrays",
+	// `list` (16/23) — 7 fragments under `memory.*` / `value-survives-clear*`
+	// exercise features the self-hosted compiler doesn't have yet: E3070
+	// borrow-check diagnostics (3 fragments) and runtime mm-trace stderr
+	// instrumentation (4 fragments). Re-enable once those land.
+	"list-custom-types",
 	"export-keyword",
 	"unused-export",
 	"static-variables",
@@ -245,6 +250,14 @@ let whitelist = ["basics",
 	// "panic-interpolation" — separate spec; blocks block-scoping +
 	//   match-expr-arm-divergent + optimizer-refcount; needs a runtime
 	//   helper that formats interpolated values into a panic message buffer.
+	// "http-client" — HttpClient.maxon + httpHelpers.maxon are now in the
+	//   stdlib whitelist (Phase E), so the spec compiles end-to-end, but
+	//   most fragments need real socket runtime (Phase D landed
+	//   sentinel-erroring `mrt_managed_socket_*` stubs only). The two
+	//   network-free fragments (`invalid-url`, `build-request`) also use
+	//   `async`/`await` for unrelated fragments in the same spec file,
+	//   which the self-hosted compiler doesn't surface yet. Re-enable
+	//   once real socket helpers land.
 ]
 
 // Signed elapsed time in milliseconds (deltas between Clock.nowMs() reads).

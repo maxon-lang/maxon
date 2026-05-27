@@ -1166,6 +1166,16 @@ export union MaxonOp
 	// pass-local counter, not from an SSA ValueId — the Maxon op itself just
 	// carries the interned id of the message text via `project.strings`.
 	panic(stringId StringId, range SourceRange)
+	// Runtime-formatted panic message. `stringValue` is a ByteArray name
+	// referring to the SSA value of a `String` struct produced by an upstream
+	// `stringInterp` op (the heap-allocated message + null terminator). The
+	// lowering walks the String's `.managed` field then the inner
+	// `__ManagedMemory.buffer` field to recover the C-string pointer it
+	// passes to `mrt_panic`. The interp lowering already null-terminates and
+	// already includes the location prefix and trailing newline (those are
+	// baked into the leading/trailing fragments of the interpolation by the
+	// parser), so this lowering does no further mutation of the buffer.
+	panicDynamic(stringValue ByteArray, range SourceRange)
 	// Struct operations. All carry source-level *names*, not pre-computed
 	// offsets/sizes — lowering walks `project.structTypes` to resolve.
 	//   - structAlloc: `structName` is the source-level type name. Lowering
@@ -1416,6 +1426,7 @@ export function maxonOpToString(project Project, op MaxonOp, blocks IrBlockArray
 		methodCall(result, receiver, methodName, args, argLabels, _, _, _) gives "%{String.from(result)} = maxon.method_call %{String.from(receiver)}.{String.from(methodName)}({formatArgNamesWithLabels(args, argLabels: argLabels)})"
 		ret(retVal, _) gives "maxon.return %{String.from(retVal)}"
 		panic(stringId, _) gives "maxon.panic \"{project.strings.get(stringId)}\" #{stringId}"
+		panicDynamic(stringValue, _) gives "maxon.panic_dynamic %{String.from(stringValue)}"
 		structAlloc(result, structName, _) gives "%{String.from(result)} = maxon.struct_alloc {lb}type = {String.from(structName)}{rb}"
 		fieldLoad(result, receiver, fieldName, _) gives "%{String.from(result)} = maxon.field_load %{String.from(receiver)}.{String.from(fieldName)}"
 		fieldStore(receiver, fieldName, value, _, _) gives "maxon.field_store %{String.from(receiver)}.{String.from(fieldName)}, %{String.from(value)}"
@@ -1781,11 +1792,25 @@ export function qualifyCalleeForContextWithType(project Project, bare String, ca
 	// stays intact. A future TypeResolution pass that has a SourceRange in
 	// hand can re-walk this same set and surface E3095 when more than one
 	// distinct definition was reachable — see ErrorCode.maxon.
+	//
+	// Phase C: skip `__`-prefixed candidates for non-internals readers. The
+	// gate above only catches references whose BARE name starts with `__`;
+	// a bare `count` in user code reaches the cross-file fallback and the
+	// method-name index returns `__ManagedList.count` as a candidate.
+	// Without this filter the parser binds `count` to the builtin method
+	// and synthesizes an `__fnref___ManagedList.count` thunk whose body
+	// calls a body-less compiler-internal name, which then panics at the
+	// codegen lookup phase. Symmetric with the `bare.startsWith("__")` gate
+	// just above for the same reason.
+	let readerInternals = readerCanCallStdlibInternals(readerFilePath)
 	let candidates = project.methodNameIndex.get(bare)
 	for candidate in candidates 'each'
 		if not project.funcReturnTypes.contains(candidate) 'notFunc'
 			continue
 		end 'notFunc'
+		if candidate.startsWith("__") and not readerInternals 'rejectInternalsCandidate'
+			continue
+		end 'rejectInternalsCandidate'
 		let info = funcVisibilityOrDefault(project, qualifiedName: candidate)
 		if isVisibleFrom(info.visibility, declFilePath: info.sourceFilePath, readerFilePath: readerFilePath) 'visible'
 			return (candidate, MaxonType.unresolved)
@@ -1815,11 +1840,19 @@ export function visibleCrossFileCandidates(project Project, bare String, readerF
 	if bare.startsWith("__") and not readerCanCallStdlibInternals(readerFilePath) 'rejectInternals'
 		return results
 	end 'rejectInternals'
+	let readerInternals = readerCanCallStdlibInternals(readerFilePath)
 	let candidates = project.methodNameIndex.get(bare)
 	for candidate in candidates 'each'
 		if not project.funcReturnTypes.contains(candidate) 'notFunc'
 			continue
 		end 'notFunc'
+		// Phase C: mirror the `__`-candidate filter from
+		// `qualifyCalleeForContextWithType` — user files must not see
+		// compiler-internal methods (e.g. `__ManagedList.count`) as candidates
+		// when probing a bare name like `count`.
+		if candidate.startsWith("__") and not readerInternals 'rejectInternalsCandidate'
+			continue
+		end 'rejectInternalsCandidate'
 		let info = funcVisibilityOrDefault(project, qualifiedName: candidate)
 		if isVisibleFrom(info.visibility, declFilePath: info.sourceFilePath, readerFilePath: readerFilePath) 'visible'
 			results.push(candidate)

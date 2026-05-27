@@ -1,0 +1,276 @@
+// Test: memory.remove-frees-strings
+typealias StringList = List with String
+
+function testRemove()
+	var list = StringList.create()
+	list.append("hello world!!!!!!!!!!!!!!")
+	list.append("goodbye world!!!!!!!!!!!!!")
+	let removed = try list.removeFirst() otherwise "none"
+	print("{removed}\n")
+	print("{list.count()}\n")
+end 'testRemove'
+
+function main() returns ExitCode
+	testRemove()
+	return 0
+end 'main'
+---
+MmTrace: true
+ExitCode: 0
+Stdout: ```
+hello world!!!!!!!!!!!!!!
+1
+```
+Stderr: ```
+sl_init
+  os_alloc size=67108864
+mm_alloc __ManagedList_String #1 size=32 [StringList.create]
+  sl_alloc __ManagedList_String #1 size=64 class=5
+mm_alloc StringList #2 size=8 [StringList.create]
+  sl_alloc StringList #2 size=40 class=4
+mm_incref __ManagedList_String #1 rc=1 [StringList.create]
+mm_incref StringList #2 rc=1 [StringList.create]
+mm_transfer StringList #2 rc=1 [StringList.create]
+mm_alloc String #3 size=16 [testRemove]
+  sl_alloc String #3 size=48 class=4
+mm_alloc __ManagedMemory #4 size=40 [testRemove]
+  sl_alloc __ManagedMemory #4 size=72 class=6
+mm_incref __ManagedMemory #4 rc=1 [testRemove]
+mm_incref String #3 rc=1 [testRemove]
+mm_alloc __ManagedListNode #5 size=32 [StringList.append]
+  sl_alloc __ManagedListNode #5 size=64 class=5
+mm_incref String #3 rc=2 [StringList.append]
+mm_incref __ManagedListNode #5 rc=1 [managed_list_insert]
+mm_alloc String #6 size=16 [testRemove]
+  sl_alloc String #6 size=48 class=4
+mm_alloc __ManagedMemory #7 size=40 [testRemove]
+  sl_alloc __ManagedMemory #7 size=72 class=6
+mm_incref __ManagedMemory #7 rc=1 [testRemove]
+mm_incref String #6 rc=1 [testRemove]
+mm_alloc __ManagedListNode #8 size=32 [StringList.append]
+  sl_alloc __ManagedListNode #8 size=64 class=5
+mm_incref String #6 rc=2 [StringList.append]
+mm_incref __ManagedListNode #8 rc=1 [managed_list_insert]
+mm_incref __ManagedListNode #5 rc=2 [StringList.removeFirst]
+mm_decref __ManagedListNode #5 rc=1 [StringList.removeFirst]
+mm_decref String #3 rc=1 [StringList.removeFirst]
+mm_decref __ManagedListNode #5 rc=0 [StringList.removeFirst]
+  mm_free __ManagedListNode #5
+    sl_free __ManagedListNode #5 size=64 class=5
+mm_incref String #3 rc=2 [StringList.removeFirst]
+mm_transfer String #3 rc=2 [StringList.removeFirst]
+mm_incref String #3 rc=3 [testRemove]
+mm_alloc String #9 size=16 [testRemove]
+  sl_alloc String #9 size=48 class=4
+mm_alloc __ManagedMemory #10 size=40 [testRemove]
+  sl_alloc __ManagedMemory #10 size=72 class=6
+mm_raw_alloc #R1 size=27 [interp.buf [testRemove]]
+  sl_alloc size=27 class=3
+mm_incref __ManagedMemory #10 rc=1 [testRemove]
+mm_incref String #9 rc=1 [testRemove]
+mm_raw_alloc #R2 size=21 [toStr.buf [testRemove]]
+  sl_alloc size=21 class=2
+mm_alloc String #11 size=16 [testRemove]
+  sl_alloc String #11 size=48 class=4
+mm_alloc __ManagedMemory #12 size=40 [testRemove]
+  sl_alloc __ManagedMemory #12 size=72 class=6
+mm_raw_alloc #R3 size=3 [interp.buf [testRemove]]
+  sl_alloc size=3 class=0
+mm_raw_free #R2
+  sl_free size=24 class=2
+mm_incref __ManagedMemory #12 rc=1 [testRemove]
+mm_incref String #11 rc=1 [testRemove]
+mm_decref String #11 rc=0 [testRemove]
+  mm_decref __ManagedMemory #12 rc=0 [~String]
+    mm_raw_free #R3
+      sl_free size=8 class=0
+    mm_free __ManagedMemory #12
+      sl_free __ManagedMemory #12 size=96 class=6
+  mm_free String #11
+    sl_free String #11 size=48 class=4
+mm_decref String #9 rc=0 [testRemove]
+  mm_decref __ManagedMemory #10 rc=0 [~String]
+    mm_raw_free #R1
+      sl_free size=32 class=3
+    mm_free __ManagedMemory #10
+      sl_free __ManagedMemory #10 size=96 class=6
+  mm_free String #9
+    sl_free String #9 size=48 class=4
+mm_decref String #3 rc=2 [testRemove]
+mm_decref String #6 rc=1 [testRemove]
+mm_decref String #3 rc=1 [testRemove]
+mm_decref String #3 rc=0 [testRemove]
+  mm_decref __ManagedMemory #4 rc=0 [~String]
+    mm_free __ManagedMemory #4
+      sl_free __ManagedMemory #4 size=96 class=6
+  mm_free String #3
+    sl_free String #3 size=48 class=4
+mm_decref StringList #2 rc=0 [testRemove]
+  mm_decref __ManagedList_String #1 rc=0 [~StringList]
+    mm_decref String #6 rc=0 [managed_list_clear]
+      mm_decref __ManagedMemory #7 rc=0 [~String]
+        mm_free __ManagedMemory #7
+          sl_free __ManagedMemory #7 size=96 class=6
+      mm_free String #6
+        sl_free String #6 size=48 class=4
+    mm_decref __ManagedListNode #8 rc=0 [managed_list_clear]
+      mm_free __ManagedListNode #8
+        sl_free __ManagedListNode #8 size=64 class=5
+    mm_free __ManagedList_String #1
+      sl_free __ManagedList_String #1 size=64 class=5
+  mm_free StringList #2
+    sl_free StringList #2 size=48 class=4
+mm_raw_alloc #R4 size=40
+  sl_alloc size=40 class=4
+mm_raw_free #R4
+  sl_free size=48 class=4
+```
+---
+// CompiledIR
+module {
+  func @testRemove() {
+  entry:
+    %102 = mir.mov_imm 8 : i64
+    %103 = mir.call @mrt_alloc(%102)
+    %104 = mir.call @mrt_managed_list_create()
+    mir.store %104, %103, 0 width: qword
+    %3 = mir.global_addr @__istr_0
+    %4 = mir.mov_imm 40 : i64
+    %5 = mir.call @mrt_alloc(%4)
+    mir.store %3, %5, 0 width: qword
+    %6 = mir.mov_imm 25 : i64
+    mir.store %6, %5, 8 width: qword
+    %7 = mir.mov_imm -2 : i64
+    mir.store %7, %5, 16 width: qword
+    %8 = mir.mov_imm 1 : i64
+    mir.store %8, %5, 24 width: qword
+    %9 = mir.mov_imm 0 : i64
+    mir.store %9, %5, 32 width: qword
+    %10 = mir.mov_imm 16 : i64
+    %11 = mir.call @mrt_alloc(%10)
+    mir.store %5, %11, 0 width: qword
+    mir.store %8, %11, 8 width: qword
+    %105 = mir.load %103, 0 width: qword
+    %106 = mir.call @mrt_managed_list_insert_last_value(%105, %11)
+    %16 = mir.global_addr @__istr_1
+    %17 = mir.mov_imm 40 : i64
+    %18 = mir.call @mrt_alloc(%17)
+    mir.store %16, %18, 0 width: qword
+    %19 = mir.mov_imm 26 : i64
+    mir.store %19, %18, 8 width: qword
+    %20 = mir.mov_imm -2 : i64
+    mir.store %20, %18, 16 width: qword
+    mir.store %8, %18, 24 width: qword
+    mir.store %9, %18, 32 width: qword
+    %23 = mir.mov_imm 16 : i64
+    %24 = mir.call @mrt_alloc(%23)
+    mir.store %18, %24, 0 width: qword
+    mir.store %8, %24, 8 width: qword
+    %107 = mir.load %103, 0 width: qword
+    %108 = mir.call @mrt_managed_list_insert_last_value(%107, %24)
+    mir.br inlined_List.removeFirst_0()
+  inlined_List.removeFirst_0:
+    %109 = mir.load %103, 0 width: qword
+    %110, %111 = mir.try_call @mrt_managed_list_head(%109)
+    %112 = mir.mov_imm 0 : i64
+    %113 = mir.cmp ne, %111, %112
+    mir.cond_br %113 [then: inlined_List.removeFirst_1(), else: inlined_List.removeFirst_2()]
+  inlined_List.removeFirst_1:
+    %114 = mir.mov_imm 0 : i64
+    %115 = mir.mov_imm 1 : i64
+    mir.br inline_cont_testRemove_0(%114, %115)
+  inlined_List.removeFirst_2:
+    %116 = mir.load %103, 0 width: qword
+    %117 = mir.call @mrt_managed_list_remove(%116, %110)
+    %118 = mir.mov_imm 0 : i64
+    mir.br inline_cont_testRemove_0(%117, %118)
+  inline_cont_testRemove_0:
+    %33 = mir.cmp ne, %120, %9
+    mir.cond_br %33 [then: try_0.otherwise(), else: try_0.merge(%119)]
+  try_0.otherwise:
+    %35 = mir.global_addr @__istr_2
+    %36 = mir.mov_imm 40 : i64
+    %37 = mir.call @mrt_alloc(%36)
+    mir.store %35, %37, 0 width: qword
+    %38 = mir.mov_imm 4 : i64
+    mir.store %38, %37, 8 width: qword
+    %39 = mir.mov_imm -2 : i64
+    mir.store %39, %37, 16 width: qword
+    mir.store %8, %37, 24 width: qword
+    mir.store %9, %37, 32 width: qword
+    %42 = mir.mov_imm 16 : i64
+    %43 = mir.call @mrt_alloc(%42)
+    mir.store %37, %43, 0 width: qword
+    mir.store %8, %43, 8 width: qword
+    mir.br try_0.merge(%43)
+  try_0.merge:
+    %47 = mir.global_addr @__istr_3
+    %49 = mir.load %101, 0 width: qword
+    %50 = mir.load %49, 0 width: qword
+    %51 = mir.load %49, 8 width: qword
+    %52 = mir.global_addr @__istr_4
+    %56 = mir.add.i64 %9, %51
+    %57 = mir.add.i64 %56, %8
+    %59 = mir.add.i64 %57, %8
+    %60 = mir.call @mrt_alloc(%59)
+    mir.memcpy %60, %47, %9
+    %61 = mir.add.i64 %60, %9
+    mir.memcpy %61, %50, %51
+    %62 = mir.add.i64 %61, %51
+    mir.memcpy %62, %52, %8
+    %64 = mir.mov_imm 40 : i64
+    %65 = mir.call @mrt_alloc(%64)
+    mir.store %60, %65, 0 width: qword
+    mir.store %57, %65, 8 width: qword
+    mir.store %57, %65, 16 width: qword
+    mir.store %8, %65, 24 width: qword
+    mir.store %9, %65, 32 width: qword
+    %68 = mir.mov_imm 16 : i64
+    %69 = mir.call @mrt_alloc(%68)
+    mir.store %65, %69, 0 width: qword
+    mir.store %9, %69, 8 width: qword
+    %121 = mir.load %69, 0 width: qword
+    %122 = mir.load %121, 0 width: qword
+    %123 = mir.load %121, 8 width: qword
+    %124 = mir.call @mrt_write_stdout(%122, %123)
+    %73 = mir.global_addr @__layout_List_String
+    %74 = mir.call @List.count(%103, %73)
+    %75 = mir.global_addr @__istr_3
+    %77 = mir.mov_imm 21 : i64
+    %78 = mir.call @mrt_alloc(%77)
+    %79 = mir.call @mrt_i64_to_string(%74, %78)
+    %80 = mir.global_addr @__istr_4
+    %84 = mir.add.i64 %9, %79
+    %85 = mir.add.i64 %84, %8
+    %87 = mir.add.i64 %85, %8
+    %88 = mir.call @mrt_alloc(%87)
+    mir.memcpy %88, %75, %9
+    %89 = mir.add.i64 %88, %9
+    mir.memcpy %89, %78, %79
+    %90 = mir.add.i64 %89, %79
+    mir.memcpy %90, %80, %8
+    %92 = mir.mov_imm 40 : i64
+    %93 = mir.call @mrt_alloc(%92)
+    mir.store %88, %93, 0 width: qword
+    mir.store %85, %93, 8 width: qword
+    mir.store %85, %93, 16 width: qword
+    mir.store %8, %93, 24 width: qword
+    mir.store %9, %93, 32 width: qword
+    %96 = mir.mov_imm 16 : i64
+    %97 = mir.call @mrt_alloc(%96)
+    mir.store %93, %97, 0 width: qword
+    mir.store %9, %97, 8 width: qword
+    %125 = mir.load %97, 0 width: qword
+    %126 = mir.load %125, 0 width: qword
+    %127 = mir.load %125, 8 width: qword
+    %128 = mir.call @mrt_write_stdout(%126, %127)
+    mir.ret %9
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.call @testRemove()
+    %1 = mir.mov_imm 0 : i64
+    mir.ret %1
+  }
+}
+---

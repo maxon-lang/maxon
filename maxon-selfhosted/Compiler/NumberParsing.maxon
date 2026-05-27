@@ -145,15 +145,46 @@ export function parseFloatBits(s String) returns ParsedInt throws ParserError
 		return 0
 	end 'isZero'
 
+	// Normalize so numerator / denominator falls in [1, 2). i64 gives only
+	// ~63 bits of headroom: once a side passes HALF_MAX, doubling it would
+	// wrap to negative, so we halve the *other* side instead — each step
+	// still bumps `exponent` by the same amount and preserves the ratio.
+	// The loop condition is `denominator <= halfNum` rather than the
+	// natural `numerator >= 2 * denominator` because the latter computes
+	// `2 * denominator` first and overflows on the very last step (e.g.
+	// for `9223372036854775807.0`, the exact i64.max-magnitude case).
+	// The mantissa-extraction loop further down doubles `numerator` once
+	// per iteration, so after normalizing we scale both sides down enough
+	// that the loop's doublings stay in-range.
+	let HALF_MAX = 4611686018427387904  // i64.max / 2 + 1, the largest value safe to double
 	var exponent = 0
-	while numerator >= 2 * denominator 'shiftDown'
-		denominator = denominator * 2
+	var halfNum = numerator / 2
+	while denominator <= halfNum 'shiftDown'
+		if denominator >= HALF_MAX 'denomNearMax'
+			numerator = numerator / 2
+			halfNum = numerator / 2
+		end 'denomNearMax' else 'safeDoubleDenom'
+			denominator = denominator * 2
+		end 'safeDoubleDenom'
 		exponent = exponent + 1
 	end 'shiftDown'
 	while numerator < denominator 'shiftUp'
-		numerator = numerator * 2
+		if numerator < HALF_MAX 'numSafeToDouble'
+			numerator = numerator * 2
+		end 'numSafeToDouble' else 'shrinkDenom'
+			denominator = denominator / 2
+		end 'shrinkDenom'
 		exponent = exponent - 1
 	end 'shiftUp'
+	// Headroom for the mantissa loop below — it doubles numerator each iter
+	// and `numerator < denominator` already holds, so we need denominator
+	// <= HALF_MAX for the doubling to stay in-range. Scaling both sides
+	// down by the same power of 2 preserves the ratio that drives the
+	// mantissa-bit extraction.
+	while denominator >= HALF_MAX 'mantissaHeadroom'
+		numerator = numerator / 2
+		denominator = denominator / 2
+	end 'mantissaHeadroom'
 
 	numerator = numerator - denominator
 	var mantissa = 0

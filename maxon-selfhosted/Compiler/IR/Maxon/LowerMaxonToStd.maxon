@@ -982,7 +982,7 @@ end 'registerManagedMemoryErrorEnum'
 // type. Populates `funcReturnTypes`/`funcSignatures`/`methodNameIndex` with
 // a synthesized signature carrying no defaults; throws metadata is captured
 // by the future lowering pass rather than the signature itself.
-function registerManagedBuiltinMethod(project Project, receiverName String, methodName String, paramNames StringArray, paramTypes MaxonTypeArray, returnType MaxonReturnType)
+function registerManagedBuiltinMethod(project Project, receiverName String, methodName String, paramNames StringArray, paramTypes MaxonTypeArray, returnType MaxonReturnType, throwsTypeName ThrowsClause = ThrowsClause.none)
 	let qualifiedName = "{receiverName}.{methodName}"
 	var paramDefaults = ParamDefaultArray.create()
 	for _ in 0 upto paramNames.count() 'fillDefaults'
@@ -990,6 +990,18 @@ function registerManagedBuiltinMethod(project Project, receiverName String, meth
 	end 'fillDefaults'
 	try project.funcReturnTypes.insert(qualifiedName, value: returnType) otherwise ignore
 	try project.funcSignatures.insert(qualifiedName, value: FuncSignature.create(paramNames, paramTypes: paramTypes, paramDefaults: paramDefaults)) otherwise ignore
+	// Record the throws-clause so `try receiver.method() otherwise (e)`
+	// resolves `e` to the right error-enum MaxonType. Without this, the
+	// parser's `parseTryExpression` falls back to `ThrowsClause.none` and
+	// the bound `e` ends up typed as `integer`, which then trips E3005
+	// when matched against enum cases.
+	let hasThrows = match throwsTypeName 'kind'
+		none gives false
+		throwing gives true
+	end 'kind'
+	if hasThrows 'recordThrows'
+		try project.funcThrowsTypes.insert(qualifiedName, value: throwsTypeName) otherwise ignore
+	end 'recordThrows'
 	project.methodNameIndex.record(qualifiedName)
 end 'registerManagedBuiltinMethod'
 
@@ -1093,6 +1105,52 @@ function registerManagedHandleStruct(project Project, typeName String, fieldName
 	try project.structTypes.insert(typeName, value: st) otherwise ignore
 	_ = project.typeNames.intern(typeName)
 end 'registerManagedHandleStruct'
+
+// Lazily register the `__Tuple{arity}` builtin struct. The parser mints
+// these names on demand whenever it sees an N-tuple type expression
+// (`(int, float)`) or an N-tuple literal (`(a, b)`); rather than reserving
+// a fixed range up-front, each mint site calls through here first so the
+// declaration shows up in `project.structTypes` before any consumer reads
+// it. Idempotent: subsequent calls for the same arity return immediately.
+//
+// Field shape mirrors the original source-level decl that lived in the
+// synthesized bootstrap prelude before Phase 16 closure:
+//   type __TupleN uses _T0, _T1, ..., _T{N-1}
+//       export var _0 as _T0  // offset 0
+//       export var _1 as _T1  // offset 8
+//       ...
+//   end '__TupleN'
+//
+// All tuple fields are typeParameter-typed so substitution at use-site
+// (e.g. `genericInstance(__Tuple2, [int, float])`) recovers the concrete
+// element types. `byteSize = arity * 8` because each typeParameter slot
+// lowers to one 64-bit machine word.
+export function ensureTupleStructRegistered(project Project, arity ParsedInt)
+	if arity < 2 'badArity'
+		panic("ensureTupleStructRegistered: arity must be >= 2 (got {arity})")
+	end 'badArity'
+	let typeName = "__Tuple{arity}"
+	if project.structTypes.contains(typeName) 'alreadyDone'
+		return
+	end 'alreadyDone'
+	var fields = StructFieldArray.create()
+	for i in 0 upto arity 'eachField'
+		let paramName = "_T{i}"
+		let paramId = project.typeParameters.intern(typeName, paramName: paramName)
+		let fieldType = MaxonType.typeParameter(paramId)
+		let fieldName = "_{i}"
+		let offset = (i * 8) as FieldOffset
+		// `isExported: true` mirrors the original source decl's `export var _N as _TN`.
+		// Cross-file consumers (e.g. helpers/http/httpHelpers.maxon's `for (k, v)
+		// in headers` destructure of a `__Tuple2`) need to access the fields.
+		fields.push(StructField.create(fieldName, fieldType: fieldType, offset: offset, isMutable: true, offsetResolved: true, isExported: true))
+	end 'eachField'
+	let bootstrapPath = try FilePath.from("stdlib-bootstrap.maxon") otherwise panic("ensureTupleStructRegistered: stdlib bootstrap path rejected")
+	let byteSize = (arity * 8) as FieldOffset
+	let st = StructType.create(typeName, fields: fields, byteSize: byteSize, visibility: Visibility.global, sourceFilePath: bootstrapPath, nameLine: 0, nameColumn: 0, expectedMethods: InterfaceMethodSigArray.create(), innerAliases: ResolvedInnerAliasMap.create())
+	try project.structTypes.insert(typeName, value: st) otherwise ignore
+	_ = project.typeNames.intern(typeName)
+end 'ensureTupleStructRegistered'
 
 function registerManagedFileStruct(project Project)
 	// `_handle` matches the bootstrap field name so destructor lowering
@@ -1241,6 +1299,241 @@ function registerManagedDirectoryMethods(project Project)
 	// static currentPath() returns __ManagedMemory throws __ManagedDirectoryError
 	registerManagedDirectoryMethod(project, methodName: "currentPath", paramNames: StringArray.create(), paramTypes: MaxonTypeArray.create(), returnType: mmReturn)
 end 'registerManagedDirectoryMethods'
+
+// Phase C: register the `__ManagedList` builtin struct, the `__ManagedListError`
+// enum, and the `__ManagedList.*` method signatures so user Maxon code in
+// `stdlib/List.maxon` parses and type-resolves. Bodies are absent — the
+// shared `lowerManagedHandleBuiltin` dispatch intercepts these calls and
+// routes to `mrt_managed_list_*` runtime helpers.
+//
+// Field layout matches the C# bootstrap (maxon-sharp Compiler/2-Parser.cs:1049-1058):
+//   offset  0  head    i64 (first __ManagedListNode pointer, or null)
+//   offset  8  tail    i64 (last __ManagedListNode pointer, or null)
+//   offset 16  count   i64 (number of nodes)
+//   offset 24  cursor  i64 (current iteration cursor, or null)
+// Total byteSize = 32.
+//
+// Enum case ordinals mirror Builtins.maxon (`empty`, `endOfList`,
+// `nodeNotInList`, `nodeAlreadyInList`) so the runtime helpers' error-flag
+// ordinals match the user-visible enum cases at runtime.
+export function registerManagedListType(project Project)
+	registerManagedListStruct(project)
+	registerManagedListErrorEnum(project)
+	registerManagedListMethods(project)
+end 'registerManagedListType'
+
+function registerManagedListStruct(project Project)
+	if project.structTypes.contains("__ManagedList") 'alreadyDone'
+		return
+	end 'alreadyDone'
+	var fields = StructFieldArray.create()
+	fields.push(StructField.create("head", fieldType: MaxonType.integer, offset: 0, isMutable: true, offsetResolved: true))
+	fields.push(StructField.create("tail", fieldType: MaxonType.integer, offset: 8, isMutable: true, offsetResolved: true))
+	fields.push(StructField.create("count", fieldType: MaxonType.integer, offset: 16, isMutable: true, offsetResolved: true))
+	fields.push(StructField.create("cursor", fieldType: MaxonType.integer, offset: 24, isMutable: true, offsetResolved: true))
+	let bootstrapPath = try FilePath.from("stdlib-bootstrap.maxon") otherwise panic("registerManagedListStruct: stdlib bootstrap path rejected")
+	let st = StructType.create("__ManagedList", fields: fields, byteSize: 32, visibility: Visibility.global, sourceFilePath: bootstrapPath, nameLine: 0, nameColumn: 0, expectedMethods: InterfaceMethodSigArray.create(), innerAliases: ResolvedInnerAliasMap.create())
+	try project.structTypes.insert("__ManagedList", value: st) otherwise ignore
+	_ = project.typeNames.intern("__ManagedList")
+end 'registerManagedListStruct'
+
+function registerManagedListErrorEnum(project Project)
+	var names = StringArray.create()
+	names.push("empty")
+	names.push("endOfList")
+	names.push("nodeNotInList")
+	names.push("nodeAlreadyInList")
+	registerManagedErrorEnum(project, typeName: "__ManagedListError", caseNames: names)
+end 'registerManagedListErrorEnum'
+
+function registerManagedListMethod(project Project, methodName String, paramNames StringArray, paramTypes MaxonTypeArray, returnType MaxonReturnType)
+	registerManagedBuiltinMethod(project, receiverName: "__ManagedList", methodName: methodName, paramNames: paramNames, paramTypes: paramTypes, returnType: returnType)
+end 'registerManagedListMethod'
+
+function registerManagedListMethods(project Project)
+	let mlType = MaxonType.named(project.typeNames.intern("__ManagedList"))
+	let mlnType = MaxonType.named(project.typeNames.intern("__ManagedListNode"))
+	let intType = MaxonType.integer
+	let boolType = MaxonType.boolean
+	let intReturn = MaxonReturnType.value(intType)
+	let boolReturn = MaxonReturnType.value(boolType)
+	let mlReturn = MaxonReturnType.value(mlType)
+	let mlnReturn = MaxonReturnType.value(mlnType)
+	// Element-typed slot for value-carrying methods. As with __ManagedMemory,
+	// the IR slot is a single 8-byte word regardless of element type; the
+	// substitution pass binds Element to the concrete type at call sites where
+	// the receiver is fully specialized.
+	let elementParamId = project.typeParameters.intern("__ManagedList", paramName: "Element")
+	let elementType = MaxonType.typeParameter(elementParamId)
+	let elementReturn = MaxonReturnType.value(elementType)
+
+	// Instance methods (signatures mirror maxon-sharp Compiler/2-Parser.cs:1307-1347).
+	// insertFirst(self, value Element) returns __ManagedListNode
+	registerManagedListMethod(project, methodName: "insertFirst", paramNames: mmParamNames2("self", second: "value"), paramTypes: mmParamTypes2(mlType, second: elementType), returnType: mlnReturn)
+	// insertLast(self, value Element) returns __ManagedListNode
+	registerManagedListMethod(project, methodName: "insertLast", paramNames: mmParamNames2("self", second: "value"), paramTypes: mmParamTypes2(mlType, second: elementType), returnType: mlnReturn)
+	// insertAfter(self, target __ManagedListNode, value Element) returns __ManagedListNode
+	registerManagedListMethod(project, methodName: "insertAfter", paramNames: mmParamNames3("self", second: "target", third: "value"), paramTypes: mmParamTypes3(mlType, second: mlnType, third: elementType), returnType: mlnReturn)
+	// insertBefore(self, target __ManagedListNode, value Element) returns __ManagedListNode
+	registerManagedListMethod(project, methodName: "insertBefore", paramNames: mmParamNames3("self", second: "target", third: "value"), paramTypes: mmParamTypes3(mlType, second: mlnType, third: elementType), returnType: mlnReturn)
+	// reinsertFirst(self, node __ManagedListNode) returns void
+	registerManagedListMethod(project, methodName: "reinsertFirst", paramNames: mmParamNames2("self", second: "node"), paramTypes: mmParamTypes2(mlType, second: mlnType), returnType: MaxonReturnType.void)
+	// reinsertLast(self, node __ManagedListNode) returns void
+	registerManagedListMethod(project, methodName: "reinsertLast", paramNames: mmParamNames2("self", second: "node"), paramTypes: mmParamTypes2(mlType, second: mlnType), returnType: MaxonReturnType.void)
+	// reinsertAfter(self, target __ManagedListNode, node __ManagedListNode) returns void
+	registerManagedListMethod(project, methodName: "reinsertAfter", paramNames: mmParamNames3("self", second: "target", third: "node"), paramTypes: mmParamTypes3(mlType, second: mlnType, third: mlnType), returnType: MaxonReturnType.void)
+	// reinsertBefore(self, target __ManagedListNode, node __ManagedListNode) returns void
+	registerManagedListMethod(project, methodName: "reinsertBefore", paramNames: mmParamNames3("self", second: "target", third: "node"), paramTypes: mmParamTypes3(mlType, second: mlnType, third: mlnType), returnType: MaxonReturnType.void)
+	// detach(self, node __ManagedListNode) returns void
+	registerManagedListMethod(project, methodName: "detach", paramNames: mmParamNames2("self", second: "node"), paramTypes: mmParamTypes2(mlType, second: mlnType), returnType: MaxonReturnType.void)
+	// remove(self, node __ManagedListNode) returns Element
+	registerManagedListMethod(project, methodName: "remove", paramNames: mmParamNames2("self", second: "node"), paramTypes: mmParamTypes2(mlType, second: mlnType), returnType: elementReturn)
+	// head(self) returns __ManagedListNode throws __ManagedListError
+	registerManagedListMethod(project, methodName: "head", paramNames: mmParamNames1("self"), paramTypes: mmParamTypes1(mlType), returnType: mlnReturn)
+	// tail(self) returns __ManagedListNode throws __ManagedListError
+	registerManagedListMethod(project, methodName: "tail", paramNames: mmParamNames1("self"), paramTypes: mmParamTypes1(mlType), returnType: mlnReturn)
+	// count(self) returns i64
+	registerManagedListMethod(project, methodName: "count", paramNames: mmParamNames1("self"), paramTypes: mmParamTypes1(mlType), returnType: intReturn)
+	// isEmpty(self) returns bool
+	registerManagedListMethod(project, methodName: "isEmpty", paramNames: mmParamNames1("self"), paramTypes: mmParamTypes1(mlType), returnType: boolReturn)
+	// clear(self) returns void
+	registerManagedListMethod(project, methodName: "clear", paramNames: mmParamNames1("self"), paramTypes: mmParamTypes1(mlType), returnType: MaxonReturnType.void)
+	// cursorReset(self) returns void
+	registerManagedListMethod(project, methodName: "cursorReset", paramNames: mmParamNames1("self"), paramTypes: mmParamTypes1(mlType), returnType: MaxonReturnType.void)
+	// cursorValue(self) returns Element
+	registerManagedListMethod(project, methodName: "cursorValue", paramNames: mmParamNames1("self"), paramTypes: mmParamTypes1(mlType), returnType: elementReturn)
+	// cursorAdvance(self) returns void throws __ManagedListError
+	registerManagedListMethod(project, methodName: "cursorAdvance", paramNames: mmParamNames1("self"), paramTypes: mmParamTypes1(mlType), returnType: MaxonReturnType.void)
+	// cursorStart(self) returns void throws __ManagedListError
+	registerManagedListMethod(project, methodName: "cursorStart", paramNames: mmParamNames1("self"), paramTypes: mmParamTypes1(mlType), returnType: MaxonReturnType.void)
+	// Static methods (signatures mirror maxon-sharp Compiler/2-Parser.cs:1349-1350).
+	// static create() returns __ManagedList
+	registerManagedListMethod(project, methodName: "create", paramNames: StringArray.create(), paramTypes: MaxonTypeArray.create(), returnType: mlReturn)
+end 'registerManagedListMethods'
+
+// Phase C: register the `__ManagedListNode` builtin struct and its 4 instance
+// methods. The node struct mirrors the C# bootstrap layout
+// (maxon-sharp Compiler/2-Parser.cs:1060-1069):
+//   offset  0  next   i64 (next __ManagedListNode pointer, or null)
+//   offset  8  prev   i64 (previous __ManagedListNode pointer, or null)
+//   offset 16  list   i64 (back-pointer to owning __ManagedList, or null when detached)
+//   offset 24  value  i64 (element slot, ABI matches __ManagedMemory.set/get)
+// Total byteSize = 32.
+export function registerManagedListNodeType(project Project)
+	registerManagedListNodeStruct(project)
+	registerManagedListNodeMethods(project)
+end 'registerManagedListNodeType'
+
+function registerManagedListNodeStruct(project Project)
+	if project.structTypes.contains("__ManagedListNode") 'alreadyDone'
+		return
+	end 'alreadyDone'
+	var fields = StructFieldArray.create()
+	fields.push(StructField.create("next", fieldType: MaxonType.integer, offset: 0, isMutable: true, offsetResolved: true))
+	fields.push(StructField.create("prev", fieldType: MaxonType.integer, offset: 8, isMutable: true, offsetResolved: true))
+	fields.push(StructField.create("list", fieldType: MaxonType.integer, offset: 16, isMutable: true, offsetResolved: true))
+	fields.push(StructField.create("value", fieldType: MaxonType.integer, offset: 24, isMutable: true, offsetResolved: true))
+	let bootstrapPath = try FilePath.from("stdlib-bootstrap.maxon") otherwise panic("registerManagedListNodeStruct: stdlib bootstrap path rejected")
+	let st = StructType.create("__ManagedListNode", fields: fields, byteSize: 32, visibility: Visibility.global, sourceFilePath: bootstrapPath, nameLine: 0, nameColumn: 0, expectedMethods: InterfaceMethodSigArray.create(), innerAliases: ResolvedInnerAliasMap.create())
+	try project.structTypes.insert("__ManagedListNode", value: st) otherwise ignore
+	_ = project.typeNames.intern("__ManagedListNode")
+end 'registerManagedListNodeStruct'
+
+function registerManagedListNodeMethod(project Project, methodName String, paramNames StringArray, paramTypes MaxonTypeArray, returnType MaxonReturnType)
+	registerManagedBuiltinMethod(project, receiverName: "__ManagedListNode", methodName: methodName, paramNames: paramNames, paramTypes: paramTypes, returnType: returnType)
+end 'registerManagedListNodeMethod'
+
+function registerManagedListNodeMethods(project Project)
+	let mlnType = MaxonType.named(project.typeNames.intern("__ManagedListNode"))
+	let mlnReturn = MaxonReturnType.value(mlnType)
+	// __ManagedListNode shares the `Element` type-parameter family with
+	// __ManagedList so a substituted instance binding (e.g. `Array with int`)
+	// reaches both call sites with the same concrete Element. The intern key
+	// uses the node's own type-name so the parameter registry stays scoped.
+	let elementParamId = project.typeParameters.intern("__ManagedListNode", paramName: "Element")
+	let elementType = MaxonType.typeParameter(elementParamId)
+	let elementReturn = MaxonReturnType.value(elementType)
+
+	// Instance methods (signatures mirror maxon-sharp Compiler/2-Parser.cs:1353-1360).
+	// next(self) returns __ManagedListNode throws __ManagedListError
+	registerManagedListNodeMethod(project, methodName: "next", paramNames: mmParamNames1("self"), paramTypes: mmParamTypes1(mlnType), returnType: mlnReturn)
+	// prev(self) returns __ManagedListNode throws __ManagedListError
+	registerManagedListNodeMethod(project, methodName: "prev", paramNames: mmParamNames1("self"), paramTypes: mmParamTypes1(mlnType), returnType: mlnReturn)
+	// value(self) returns Element
+	registerManagedListNodeMethod(project, methodName: "value", paramNames: mmParamNames1("self"), paramTypes: mmParamTypes1(mlnType), returnType: elementReturn)
+	// setValue(self, v Element) returns void
+	registerManagedListNodeMethod(project, methodName: "setValue", paramNames: mmParamNames2("self", second: "v"), paramTypes: mmParamTypes2(mlnType, second: elementType), returnType: MaxonReturnType.void)
+end 'registerManagedListNodeMethods'
+
+// Phase D: register the `__ManagedSocket` builtin struct, the
+// `__ManagedSocketError` enum, and the 4 `__ManagedSocket.*` method
+// signatures so user Maxon code in `stdlib/TcpClient.maxon` parses and
+// type-resolves. Bodies are absent — the shared `lowerManagedHandleBuiltin`
+// dispatch intercepts these calls and routes them to `mrt_managed_socket_*`
+// runtime helpers.
+//
+// `__ManagedSocket` is a single-i64-handle struct (BSD socket fd on POSIX,
+// SOCKET HANDLE on Windows). Layout matches the C# bootstrap
+// (maxon-sharp Compiler/2-Parser.cs:1083-1091): `_handle` at offset 0,
+// total byteSize = 8.
+//
+// Enum case ordinals mirror Builtins.maxon (`bufferOutOfBounds`,
+// `resolveFailed`, `connectFailed`, `sendFailed`, `recvFailed`,
+// `connectionClosed`, `closed`) so the runtime helpers' error-flag ordinals
+// match the user-visible enum cases at runtime.
+export function registerManagedSocketType(project Project)
+	registerManagedSocketStruct(project)
+	registerManagedSocketErrorEnum(project)
+	registerManagedSocketMethods(project)
+end 'registerManagedSocketType'
+
+function registerManagedSocketStruct(project Project)
+	// `_handle` matches the bootstrap field name so the destructor can pull
+	// the raw socket handle out by name when the surrounding scope decrefs
+	// its last reference.
+	registerManagedHandleStruct(project, typeName: "__ManagedSocket", fieldName: "_handle")
+end 'registerManagedSocketStruct'
+
+function registerManagedSocketErrorEnum(project Project)
+	var names = StringArray.create()
+	names.push("bufferOutOfBounds")
+	names.push("resolveFailed")
+	names.push("connectFailed")
+	names.push("sendFailed")
+	names.push("recvFailed")
+	names.push("connectionClosed")
+	names.push("closed")
+	registerManagedErrorEnum(project, typeName: "__ManagedSocketError", caseNames: names)
+end 'registerManagedSocketErrorEnum'
+
+function registerManagedSocketMethod(project Project, methodName String, paramNames StringArray, paramTypes MaxonTypeArray, returnType MaxonReturnType, throwsTypeName ThrowsClause = ThrowsClause.none)
+	registerManagedBuiltinMethod(project, receiverName: "__ManagedSocket", methodName: methodName, paramNames: paramNames, paramTypes: paramTypes, returnType: returnType, throwsTypeName: throwsTypeName)
+end 'registerManagedSocketMethod'
+
+function registerManagedSocketMethods(project Project)
+	let msType = MaxonType.named(project.typeNames.intern("__ManagedSocket"))
+	let mmType = MaxonType.named(project.typeNames.intern("__ManagedMemory"))
+	let intType = MaxonType.integer
+	let intReturn = MaxonReturnType.value(intType)
+	let msReturn = MaxonReturnType.value(msType)
+	// Throws clause shared by the three throwing methods. The string name
+	// matches the enum registered via `registerManagedSocketErrorEnum`; the
+	// type resolver maps it to the `__ManagedSocketError` MaxonType when a
+	// `try X otherwise (e)` site asks for `e`'s type.
+	let throwsMsError = ThrowsClause.throwing("__ManagedSocketError")
+
+	// Instance methods (signatures mirror maxon-sharp Compiler/2-Parser.cs:1180-1188).
+	// sendFrom(self, managed, offset, length) returns i64 throws __ManagedSocketError
+	registerManagedSocketMethod(project, methodName: "sendFrom", paramNames: mmParamNames4("self", second: "managed", third: "offset", fourth: "length"), paramTypes: mmParamTypes4(msType, second: mmType, third: intType, fourth: intType), returnType: intReturn, throwsTypeName: throwsMsError)
+	// recv(self, managed) returns i64 throws __ManagedSocketError
+	registerManagedSocketMethod(project, methodName: "recv", paramNames: mmParamNames2("self", second: "managed"), paramTypes: mmParamTypes2(msType, second: mmType), returnType: intReturn, throwsTypeName: throwsMsError)
+	// close(self) returns void
+	registerManagedSocketMethod(project, methodName: "close", paramNames: mmParamNames1("self"), paramTypes: mmParamTypes1(msType), returnType: MaxonReturnType.void)
+
+	// Static methods (signatures mirror maxon-sharp Compiler/2-Parser.cs:1186-1188).
+	// static tcpConnect(host, port) returns __ManagedSocket throws __ManagedSocketError
+	registerManagedSocketMethod(project, methodName: "tcpConnect", paramNames: mmParamNames2("host", second: "port"), paramTypes: mmParamTypes2(mmType, second: intType), returnType: msReturn, throwsTypeName: throwsMsError)
+end 'registerManagedSocketMethods'
 
 function mmParamNames1(first String) returns StringArray
 	var names = StringArray.create()
@@ -1750,7 +2043,7 @@ type MaxonToStdLowering
 	// SSA module (`hasErrors(project)` will short-circuit before codegen).
 	function resolveName(name ByteArray) returns ValueId
 		let found = try self.nameToId.get(name) otherwise 'missed'
-			self.reportLowerError(ErrorCode.semanticMissingReturn, message: "lowerMaxonToStd: unresolved value name '{String.from(name)}' (parser did not bind this name)")
+			self.reportLowerError(ErrorCode.semanticMissingReturn, message: "lowerMaxonToStd: unresolved value name '{String.from(name)}' in func '{self.currentFuncName}' (parser did not bind this name)")
 			let placeholder = allocValueId(self.funcIdRef)
 			self.nameToId.upsert(name, value: placeholder)
 			return placeholder
@@ -2107,6 +2400,7 @@ type MaxonToStdLowering
 			methodCall(result, receiver, methodName, args, argLabels, argTypes, argRanges, _) then self.lowerMethodCall(result, receiver: receiver, methodName: methodName, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, opIdx: opIdx, dstBlock: dstBlock)
 			ret(retVal, _) then self.lowerRetAsBodyOp(retVal, dstBlock: dstBlock)
 			panic(stringId, _) then self.lowerPanicToSys(stringId, dstBlock: dstBlock)
+			panicDynamic(stringValue, _) then self.lowerPanicDynamic(stringValue, dstBlock: dstBlock)
 			structAlloc(result, structName, _) then self.lowerStructAlloc(result, structName: structName, dstBlock: dstBlock)
 			fieldLoad(result, receiver, fieldName, _) then self.lowerFieldLoad(result, receiver: receiver, fieldName: fieldName, dstBlock: dstBlock)
 			fieldStore(receiver, fieldName, value, isInit, range) then self.lowerFieldStore(receiver, fieldName: fieldName, value: value, isInit: isInit, range: range, dstBlock: dstBlock)
@@ -3445,23 +3739,18 @@ type MaxonToStdLowering
 				return
 			end 'handled'
 		end 'didLowerMmStatic'
-		// Phase 15c Stream 2.3: dispatch `__ManagedFile.*` static calls to
-		// the `mrt_file_*` runtime helpers. Mirrors the `__ManagedMemory.`
-		// static dispatch a few lines up.
-		if bareCallee.startsWith("__ManagedFile.") 'didLowerMfStatic'
-			let methodName = try stripPrefix(bareCallee, prefix: "__ManagedFile.") otherwise panic("invariant: startsWith just checked but stripPrefix threw")
-			if self.lowerManagedFileBuiltin(result, methodName: methodName, receiverId: 0, hasReceiver: false, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, opIdx: opIdx, dstBlock: dstBlock, errorBoundName: errorBoundName) 'handled'
+		// Dispatch `__ManagedFile.*` / `__ManagedDirectory.*` / `__ManagedList.*` /
+		// `__ManagedListNode.*` / `__ManagedSocket.*` static calls through the
+		// shared `lowerManagedHandleBuiltin` helper. Mirrors the
+		// `__ManagedMemory.` static dispatch a few lines up — see that helper's
+		// header comment for the rationale of routing every method through a
+		// runtime helper.
+		if let receiverName = try managedHandleReceiverPrefix(bareCallee) 'didLowerHandleStatic'
+			let methodName = try stripPrefix(bareCallee, prefix: "{receiverName}.") otherwise panic("invariant: managedHandleReceiverPrefix succeeded but stripPrefix threw")
+			if self.lowerManagedHandleBuiltin(receiverName, result: result, methodName: methodName, receiverId: 0, hasReceiver: false, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, opIdx: opIdx, dstBlock: dstBlock, errorBoundName: errorBoundName) 'handled'
 				return
 			end 'handled'
-		end 'didLowerMfStatic'
-		// Phase 15c Stream 2.3: dispatch `__ManagedDirectory.*` static calls
-		// to the `mrt_directory_*` runtime helpers.
-		if bareCallee.startsWith("__ManagedDirectory.") 'didLowerMdStatic'
-			let methodName = try stripPrefix(bareCallee, prefix: "__ManagedDirectory.") otherwise panic("invariant: startsWith just checked but stripPrefix threw")
-			if self.lowerManagedDirectoryBuiltin(result, methodName: methodName, receiverId: 0, hasReceiver: false, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, opIdx: opIdx, dstBlock: dstBlock, errorBoundName: errorBoundName) 'handled'
-				return
-			end 'handled'
-		end 'didLowerMdStatic'
+		end 'didLowerHandleStatic'
 		// Phase 7: `__Builtins.writeStdout(managed)` and friends — Phase 7
 		// stdlib intrinsics. Expand to a load of buffer (off 0) + length
 		// (off 8) from the MM, then a single call into `mrt_write_stdout`
@@ -3501,21 +3790,18 @@ type MaxonToStdLowering
 				return
 			end 'handled'
 		end 'reRouteMm'
-		// Phase 15c Stream 2.3: re-route `__ManagedFile.*` /
-		// `__ManagedDirectory.*` to their dispatchers after typealias
-		// resolution, matching the `__ManagedMemory` re-route just above.
-		if qualifiedCallee.startsWith("__ManagedFile.") 'reRouteMf'
-			let methodName = try stripPrefix(qualifiedCallee, prefix: "__ManagedFile.") otherwise panic("invariant: startsWith just checked but stripPrefix threw")
-			if self.lowerManagedFileBuiltin(result, methodName: methodName, receiverId: 0, hasReceiver: false, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, opIdx: opIdx, dstBlock: dstBlock, errorBoundName: errorBoundName) 'handled'
+		// Re-route the `__Managed{File,Directory,List,ListNode,Socket}.*`
+		// families to the shared `lowerManagedHandleBuiltin` dispatcher after
+		// typealias resolution, matching the `__ManagedMemory` re-route just
+		// above. User-facing typealiases (e.g.
+		// `EManagedList = __ManagedList with Element`) resolve through
+		// `qualifiedCallee` here even when the bare callee was a typealias.
+		if let receiverName = try managedHandleReceiverPrefix(qualifiedCallee) 'reRouteHandle'
+			let methodName = try stripPrefix(qualifiedCallee, prefix: "{receiverName}.") otherwise panic("invariant: managedHandleReceiverPrefix succeeded but stripPrefix threw")
+			if self.lowerManagedHandleBuiltin(receiverName, result: result, methodName: methodName, receiverId: 0, hasReceiver: false, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, opIdx: opIdx, dstBlock: dstBlock, errorBoundName: errorBoundName) 'handled'
 				return
 			end 'handled'
-		end 'reRouteMf'
-		if qualifiedCallee.startsWith("__ManagedDirectory.") 'reRouteMd'
-			let methodName = try stripPrefix(qualifiedCallee, prefix: "__ManagedDirectory.") otherwise panic("invariant: startsWith just checked but stripPrefix threw")
-			if self.lowerManagedDirectoryBuiltin(result, methodName: methodName, receiverId: 0, hasReceiver: false, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, opIdx: opIdx, dstBlock: dstBlock, errorBoundName: errorBoundName) 'handled'
-				return
-			end 'handled'
-		end 'reRouteMd'
+		end 'reRouteHandle'
 		if qualifiedCallee.startsWith("__Builtins.") 'reRouteBuiltins'
 			let methodName = try stripPrefix(qualifiedCallee, prefix: "__Builtins.") otherwise panic("invariant: startsWith just checked but stripPrefix threw")
 			if self.lowerBuiltinsIntrinsic(result, methodName: methodName, args: args, dstBlock: dstBlock) 'handled'
@@ -3813,22 +4099,18 @@ type MaxonToStdLowering
 				return
 			end 'handled'
 		end 'didLowerMmMethod'
-		// Phase 15c Stream 2.3: dispatch `__ManagedFile.*` / `__ManagedDirectory.*`
-		// instance methods (`file.size()`, `file.read(...)`, `dir.next()`, etc.)
-		// to their `mrt_file_*` / `mrt_directory_*` runtime helpers. Mirrors
-		// the `__ManagedMemory` instance dispatch above.
-		if receiverStructName == "__ManagedFile" 'didLowerMfMethod'
+		// Dispatch instance methods on the
+		// `__Managed{File,Directory,List,ListNode,Socket}` families to the
+		// shared `lowerManagedHandleBuiltin` helper (`file.size()`,
+		// `file.read(...)`, `dir.next()`, `list.head()`, `node.next()`,
+		// `sock.sendFrom`, etc.). Mirrors the `__ManagedMemory` instance
+		// dispatch above.
+		if isManagedHandleReceiver(receiverStructName) 'didLowerHandleMethod'
 			let bareMethodName = String.from(methodName)
-			if self.lowerManagedFileBuiltin(result, methodName: bareMethodName, receiverId: receiverId, hasReceiver: true, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, opIdx: opIdx, dstBlock: dstBlock, errorBoundName: errorBoundName) 'handled'
+			if self.lowerManagedHandleBuiltin(receiverStructName, result: result, methodName: bareMethodName, receiverId: receiverId, hasReceiver: true, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, opIdx: opIdx, dstBlock: dstBlock, errorBoundName: errorBoundName) 'handled'
 				return
 			end 'handled'
-		end 'didLowerMfMethod'
-		if receiverStructName == "__ManagedDirectory" 'didLowerMdMethod'
-			let bareMethodName = String.from(methodName)
-			if self.lowerManagedDirectoryBuiltin(result, methodName: bareMethodName, receiverId: receiverId, hasReceiver: true, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, opIdx: opIdx, dstBlock: dstBlock, errorBoundName: errorBoundName) 'handled'
-				return
-			end 'handled'
-		end 'didLowerMdMethod'
+		end 'didLowerHandleMethod'
 		// Phase 11.4: __ManagedMemoryCursor methods (current/advance/index/etc.)
 		// lower inline to a sequence of loadIndirect/storeIndirect/arith ops
 		// against the 40-byte cursor heap struct allocated by createCursor.
@@ -4301,10 +4583,15 @@ type MaxonToStdLowering
 	function synthesizeOneWitnessThunk(gid GenericInstanceId, baseName String, method InterfaceMethodSig, thunkName String)
 		let implName = "{baseName}.{method.name}"
 		// The user-visible param count for the thunk is
-		// `1 (receiver) + method.paramNames.count()`. Stage-zero
-		// (closures/witness-receiver pairing) isn't relevant for a thunk
-		// — these params are plain pointer-shaped values.
-		let userParamCount = 1 + method.paramNames.count()
+		// `<receiverSlots> + method.paramNames.count()`. Instance methods
+		// reserve one leading slot for the receiver fat-pointer; `static`
+		// interface requirements (e.g. `BuiltinArrayLiteral.init`) have no
+		// receiver, so the thunk forwards only the declared params plus the
+		// implicit-arg tail. Stage-zero (closures/witness-receiver pairing)
+		// isn't relevant for a thunk — these params are plain pointer-shaped
+		// values.
+		let receiverSlots = 0 if method.isStatic else 1
+		let userParamCount = receiverSlots + method.paramNames.count()
 		var paramTypes = StdTypeArray.create()
 		for _ in 0 upto userParamCount 'fillParams'
 			paramTypes.push(StdType.i64)
@@ -5573,24 +5860,26 @@ type MaxonToStdLowering
 		return true
 	end 'lowerManagedMemBuiltin'
 
-	// Phase 15c Stream 2.3: dispatch `__ManagedFile.METHOD(...)` to the
-	// corresponding `mrt_file_*` runtime helper. Modeled exactly on
-	// `lowerManagedMemBuiltin` above — see its header comment for the shared
-	// machinery (signature lookup, argument slotting, throwing-vs-non-throwing
-	// emit, result-type re-stamping). The only file-specific bits are the
-	// helper-name map (`managedFileHelperFor`) and the throws-set
-	// (`managedFileHelperThrows`).
+	// Shared dispatcher for `__ManagedFile.*`, `__ManagedDirectory.*`,
+	// `__ManagedList.*`, `__ManagedListNode.*`, and `__ManagedSocket.*` method
+	// calls. Modeled exactly on `lowerManagedMemBuiltin` above — see its header
+	// comment for the shared machinery (signature lookup, argument slotting,
+	// throwing-vs-non-throwing emit, result-type re-stamping). The only
+	// per-receiver bits are the helper-name map and the throws-set, both keyed
+	// on `receiverName` inside `managedHandleHelperFor` /
+	// `managedHandleHelperThrows`.
 	//
-	// The runtime helpers themselves live in `runtime.std`. Stream 2.3 ships
-	// sentinel-erroring stubs (return -1 with error flag set for throwing
-	// helpers; return 0 / sentinel for non-throwing); Streams 3.1/3.2/3.3
-	// replace each stub body with the real Win32 / Linux-syscall / WASI
-	// implementation.
+	// The runtime helpers live in `runtime.std`. The file/directory helpers
+	// (Phase 15c Stream 2.3) and the socket helpers (Phase D) currently ship
+	// sentinel-erroring stubs that return -1 with the error flag set for
+	// throwing helpers (return 0 / sentinel for non-throwing); the real
+	// per-target implementations replace each stub body in later streams. The
+	// list helpers (Phase C) ship the full implementation now.
 	//
-	// No inline fast paths exist for file methods — every method flows
-	// through a runtime helper.
-	function lowerManagedFileBuiltin(result ByteArray, methodName String, receiverId ValueId, hasReceiver bool, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, opIdx OpIndex, dstBlock IrBlock, errorBoundName ByteArray = ByteArray.create()) returns bool
-		let qualifiedName = "__ManagedFile.{methodName}"
+	// No inline fast paths exist for any of these receivers — every method
+	// flows through a runtime helper.
+	function lowerManagedHandleBuiltin(receiverName String, result ByteArray, methodName String, receiverId ValueId, hasReceiver bool, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, opIdx OpIndex, dstBlock IrBlock, errorBoundName ByteArray = ByteArray.create()) returns bool
+		let qualifiedName = "{receiverName}.{methodName}"
 		let sigLookup = try self.project.funcSignatures.get(qualifiedName) otherwise 'noSig'
 			return false
 		end 'noSig'
@@ -5600,54 +5889,22 @@ type MaxonToStdLowering
 		end 'instance'
 		let allArgIds = self.slotArgsForCall(sigLookup, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, paramStartIndex: paramStartIndex, opIdx: opIdx, dstBlock: dstBlock, leadingReceiverId: receiverId, hasLeadingReceiver: hasReceiver)
 
-		let helperName = try managedFileHelperFor(methodName) otherwise 'noHelper'
+		let helperName = try managedHandleHelperFor(receiverName, methodName: methodName) otherwise 'noHelper'
 			self.reportUnknownManagedHandleMethod(result, qualifiedName: qualifiedName, dstBlock: dstBlock)
 			return true
 		end 'noHelper'
 
-		let isThrowingHelper = managedFileHelperThrows(methodName)
+		let isThrowingHelper = managedHandleHelperThrows(receiverName, methodName: methodName)
 		let helperBoundName = errorBoundName if isThrowingHelper else ByteArray.create()
 		let lowered = self.lowerManagedMemRuntimeCall(result, helperName: helperName, argIds: allArgIds, dstBlock: dstBlock, errorBoundName: helperBoundName)
 		if not isThrowingHelper 'bindZeroForNonThrowing'
 			self.bindErrorFlagToZero(errorBoundName, dstBlock: dstBlock)
 		end 'bindZeroForNonThrowing'
 		if lowered 'refineType'
-			self.refineBuiltinCallResultType(result, receiverName: "__ManagedFile", methodName: methodName)
+			self.refineBuiltinCallResultType(result, receiverName: receiverName, methodName: methodName)
 		end 'refineType'
 		return lowered
-	end 'lowerManagedFileBuiltin'
-
-	// Phase 15c Stream 2.3: dispatch `__ManagedDirectory.METHOD(...)` to the
-	// corresponding `mrt_directory_*` runtime helper. See
-	// `lowerManagedFileBuiltin`'s header comment for the shared rationale
-	// and the stream's stub-body strategy.
-	function lowerManagedDirectoryBuiltin(result ByteArray, methodName String, receiverId ValueId, hasReceiver bool, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, opIdx OpIndex, dstBlock IrBlock, errorBoundName ByteArray = ByteArray.create()) returns bool
-		let qualifiedName = "__ManagedDirectory.{methodName}"
-		let sigLookup = try self.project.funcSignatures.get(qualifiedName) otherwise 'noSig'
-			return false
-		end 'noSig'
-		var paramStartIndex = 0
-		if hasReceiver 'instance'
-			paramStartIndex = 1
-		end 'instance'
-		let allArgIds = self.slotArgsForCall(sigLookup, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, paramStartIndex: paramStartIndex, opIdx: opIdx, dstBlock: dstBlock, leadingReceiverId: receiverId, hasLeadingReceiver: hasReceiver)
-
-		let helperName = try managedDirectoryHelperFor(methodName) otherwise 'noHelper'
-			self.reportUnknownManagedHandleMethod(result, qualifiedName: qualifiedName, dstBlock: dstBlock)
-			return true
-		end 'noHelper'
-
-		let isThrowingHelper = managedDirectoryHelperThrows(methodName)
-		let helperBoundName = errorBoundName if isThrowingHelper else ByteArray.create()
-		let lowered = self.lowerManagedMemRuntimeCall(result, helperName: helperName, argIds: allArgIds, dstBlock: dstBlock, errorBoundName: helperBoundName)
-		if not isThrowingHelper 'bindZeroForNonThrowing'
-			self.bindErrorFlagToZero(errorBoundName, dstBlock: dstBlock)
-		end 'bindZeroForNonThrowing'
-		if lowered 'refineType'
-			self.refineBuiltinCallResultType(result, receiverName: "__ManagedDirectory", methodName: methodName)
-		end 'refineType'
-		return lowered
-	end 'lowerManagedDirectoryBuiltin'
+	end 'lowerManagedHandleBuiltin'
 
 	// Shared "unknown method" reporter for the `__ManagedFile.*` /
 	// `__ManagedDirectory.*` dispatch tail. Mirrors the equivalent fallback
@@ -6878,7 +7135,7 @@ type MaxonToStdLowering
 		end 'maybeEnum'
 		let resultId = self.defineName(result)
 		let hit = try self.lookupFieldByReceiver(receiverType, fieldName: fieldNameStr) otherwise 'notFound'
-			self.reportLowerError(ErrorCode.parserExpectedExpression, message: "lowerMaxonToStd: unknown field '{fieldNameStr}' on type '{receiverType.toString(self.project)}'")
+			self.reportLowerError(ErrorCode.parserExpectedExpression, message: "lowerMaxonToStd: unknown field '{fieldNameStr}' on type '{receiverType.toString(self.project)}' in func '{self.currentFuncName}'")
 			self.setValueType(resultId, t: MaxonType.integer)
 			return
 		end 'notFound'
@@ -7379,7 +7636,7 @@ type MaxonToStdLowering
 		let receiverType = self.getValueType(receiverId)
 		let fieldNameStr = String.from(fieldName)
 		let hit = try self.lookupFieldByReceiver(receiverType, fieldName: fieldNameStr) otherwise 'notFound'
-			self.reportLowerError(ErrorCode.parserExpectedExpression, message: "lowerMaxonToStd: unknown field '{fieldNameStr}' on type '{receiverType.toString(self.project)}'")
+			self.reportLowerError(ErrorCode.parserExpectedExpression, message: "lowerMaxonToStd: unknown field '{fieldNameStr}' on type '{receiverType.toString(self.project)}' in func '{self.currentFuncName}'")
 			return
 		end 'notFound'
 		// `let` fields are immutable post-construction, but writable when the
@@ -8153,16 +8410,18 @@ type MaxonToStdLowering
 			// Chase named/inner-aliases on the field type so a declared
 			// `var managed ElementMemory` (where `ElementMemory` is the
 			// inner alias `__ManagedMemory with Element`) resolves to
-			// the underlying `__ManagedMemory` builtin.
+			// the underlying `__ManagedMemory` builtin. Same chase covers
+			// `var chain as EManagedList` where `EManagedList` aliases
+			// `__ManagedList with Element`.
 			let directBase = try baseNameOfMaxonType(self.project, t: field.fieldType) otherwise continue
 			var fieldBaseName = ""
 			fieldBaseName = directBase
-			if directBase != "__ManagedMemory" 'tryChase'
+			if directBase != "__ManagedMemory" and directBase != "__ManagedList" 'tryChase'
 				if let chased = try chaseTypealiasNameToStruct(self.project, name: directBase, enclosingType: structType.name) 'didChase'
 					fieldBaseName = chased
 				end 'didChase'
 			end 'tryChase'
-			if fieldBaseName != "__ManagedMemory" 'notManaged'
+			if fieldBaseName != "__ManagedMemory" and fieldBaseName != "__ManagedList" 'notManaged'
 				continue
 			end 'notManaged'
 			// Same sentinel check as `lookupFieldByStructName` — see the
@@ -8171,6 +8430,18 @@ type MaxonToStdLowering
 			if not field.offsetResolved 'unresolved'
 				panic("synthesizeManagedFieldInits: field '{field.name}' on struct '{structType.name}' has unresolved offset — layoutAllStructs pass did not run")
 			end 'unresolved'
+			if fieldBaseName == "__ManagedList" 'isManagedList'
+				// Allocate a fresh `__ManagedList` via the runtime helper.
+				// `mrt_managed_list_create` calls `mm_alloc(32, dtor=__destruct___ManagedList)`
+				// with refcount=1 so the list survives until the parent
+				// struct's destructor decrefs the chain pointer.
+				let mlArgIds = ValueIdArray.create()
+				let mlId = allocValueId(self.funcIdRef)
+				self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(mlId, callee: "mrt_managed_list_create", argIds: mlArgIds)))
+				self.setValueType(mlId, t: MaxonType.named(self.project.typeNames.intern("__ManagedList")))
+				self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(parentId, offset: field.offset, valueId: mlId, width: StoreWidth.qword, isFloat: false)))
+				continue
+			end 'isManagedList'
 			// Allocate 40 bytes for the inner __ManagedMemory record.
 			let mmSizeId = allocValueId(self.funcIdRef)
 			self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: mmSizeId, value: 40))))
@@ -8459,6 +8730,36 @@ type MaxonToStdLowering
 		argIds.push(addrId)
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(callResultId, callee: "mrt_panic", argIds: argIds)))
 	end 'lowerPanicToSys'
+
+	// Lower maxon.panic_dynamic — the message argument is an SSA `String` value
+	// produced by an upstream `stringInterp` op. The String layout is
+	// `{ managed __ManagedMemory@0, isAsciiFlag bool@8 }`, and __ManagedMemory's
+	// own layout starts with `buffer i64@0` (a raw byte pointer into a
+	// null-terminated heap allocation owned by the String). Two indirect
+	// loads recover the C-string pointer; we pass that directly to mrt_panic.
+	// stringInterp already null-terminates its buffer (LowerStringInterp's
+	// `Allocate raw buffer (totalLen + 1 for null terminator)` step), and the
+	// parser prepends the location prefix + appends `\n` into the leading /
+	// trailing literal fragments, so this lowering does no further fixup.
+	function lowerPanicDynamic(stringValue ByteArray, dstBlock IrBlock)
+		let stringPtrId = self.resolveName(stringValue)
+
+		// Load managed __ManagedMemory pointer from String's field 0.
+		let managedPtrId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(managedPtrId, addrId: stringPtrId, offset: 0, width: StoreWidth.qword, signed: false, isFloat: false)))
+		self.setValueType(managedPtrId, t: MaxonType.integer)
+
+		// Load buffer pointer from __ManagedMemory's field 0.
+		let bufferId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(bufferId, addrId: managedPtrId, offset: 0, width: StoreWidth.qword, signed: false, isFloat: false)))
+		self.setValueType(bufferId, t: MaxonType.integer)
+
+		// call mrt_panic(buffer)
+		let callResultId = allocValueId(self.funcIdRef)
+		var argIds = ValueIdArray.create()
+		argIds.push(bufferId)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(callResultId, callee: "mrt_panic", argIds: argIds)))
+	end 'lowerPanicDynamic'
 
 	// Lower maxon.convert.
 	//
@@ -9597,6 +9898,274 @@ function managedDirectoryHelperThrows(methodName String) returns bool
 	end 'mExists'
 	return true
 end 'managedDirectoryHelperThrows'
+
+// Phase C: helper-name map for `__ManagedList.*` methods. Maps the camelCase
+// Maxon method name on `__ManagedList` to the snake_case `mrt_managed_list_*`
+// runtime helper that implements it. The helpers live in runtime.std (NOT
+// stdlib.-prefixed) and operate directly on the 32-byte list struct + the
+// 32-byte node structs allocated by `mm_alloc` from the slab allocator.
+// Throws `ManagedListHelperError.noHelper` when the method isn't routed.
+function managedListHelperFor(methodName String) returns String throws ManagedListHelperError
+	if methodName == "create" 'mCreate'
+		return "mrt_managed_list_create"
+	end 'mCreate'
+	if methodName == "insertFirst" 'mInsertFirst'
+		return "mrt_managed_list_insert_first_value"
+	end 'mInsertFirst'
+	if methodName == "insertLast" 'mInsertLast'
+		return "mrt_managed_list_insert_last_value"
+	end 'mInsertLast'
+	if methodName == "insertAfter" 'mInsertAfter'
+		return "mrt_managed_list_insert_after_value"
+	end 'mInsertAfter'
+	if methodName == "insertBefore" 'mInsertBefore'
+		return "mrt_managed_list_insert_before_value"
+	end 'mInsertBefore'
+	if methodName == "reinsertFirst" 'mReinsertFirst'
+		return "mrt_managed_list_reinsert_first"
+	end 'mReinsertFirst'
+	if methodName == "reinsertLast" 'mReinsertLast'
+		return "mrt_managed_list_reinsert_last"
+	end 'mReinsertLast'
+	if methodName == "reinsertAfter" 'mReinsertAfter'
+		return "mrt_managed_list_reinsert_after"
+	end 'mReinsertAfter'
+	if methodName == "reinsertBefore" 'mReinsertBefore'
+		return "mrt_managed_list_reinsert_before"
+	end 'mReinsertBefore'
+	if methodName == "detach" 'mDetach'
+		return "mrt_managed_list_detach"
+	end 'mDetach'
+	if methodName == "remove" 'mRemove'
+		return "mrt_managed_list_remove"
+	end 'mRemove'
+	if methodName == "head" 'mHead'
+		return "mrt_managed_list_head"
+	end 'mHead'
+	if methodName == "tail" 'mTail'
+		return "mrt_managed_list_tail"
+	end 'mTail'
+	if methodName == "count" 'mCount'
+		return "mrt_managed_list_count"
+	end 'mCount'
+	if methodName == "isEmpty" 'mIsEmpty'
+		return "mrt_managed_list_is_empty"
+	end 'mIsEmpty'
+	if methodName == "clear" 'mClear'
+		return "mrt_managed_list_clear"
+	end 'mClear'
+	if methodName == "cursorReset" 'mCursorReset'
+		return "mrt_managed_list_cursor_reset"
+	end 'mCursorReset'
+	if methodName == "cursorValue" 'mCursorValue'
+		return "mrt_managed_list_cursor_value"
+	end 'mCursorValue'
+	if methodName == "cursorAdvance" 'mCursorAdvance'
+		return "mrt_managed_list_cursor_advance"
+	end 'mCursorAdvance'
+	if methodName == "cursorStart" 'mCursorStart'
+		return "mrt_managed_list_cursor_start"
+	end 'mCursorStart'
+	throw ManagedListHelperError.noHelper
+end 'managedListHelperFor'
+
+enum ManagedListHelperError implements Error
+	noHelper
+end 'ManagedListHelperError'
+
+// Which `__ManagedList.*` methods invoke a runtime helper that writes the
+// multi-value-return error flag. Throwing helpers must be invoked via
+// `StdCallOp.tryCall`; non-throwing helpers via plain `StdCallOp.call`.
+//
+// Throwing: head/tail (null when empty -> __ManagedListError.empty),
+// cursorStart (null when empty -> empty), cursorAdvance (null when past
+// tail -> endOfList).
+function managedListHelperThrows(methodName String) returns bool
+	if methodName == "head" 'mHead'
+		return true
+	end 'mHead'
+	if methodName == "tail" 'mTail'
+		return true
+	end 'mTail'
+	if methodName == "cursorStart" 'mCursorStart'
+		return true
+	end 'mCursorStart'
+	if methodName == "cursorAdvance" 'mCursorAdvance'
+		return true
+	end 'mCursorAdvance'
+	return false
+end 'managedListHelperThrows'
+
+// Phase C: helper-name map for `__ManagedListNode.*` methods. Maps the
+// camelCase Maxon method name on `__ManagedListNode` to the snake_case
+// `mrt_managed_list_node_*` runtime helper that implements it.
+function managedListNodeHelperFor(methodName String) returns String throws ManagedListNodeHelperError
+	if methodName == "next" 'mNext'
+		return "mrt_managed_list_node_next"
+	end 'mNext'
+	if methodName == "prev" 'mPrev'
+		return "mrt_managed_list_node_prev"
+	end 'mPrev'
+	if methodName == "value" 'mValue'
+		return "mrt_managed_list_node_value"
+	end 'mValue'
+	if methodName == "setValue" 'mSetValue'
+		return "mrt_managed_list_node_set_value"
+	end 'mSetValue'
+	throw ManagedListNodeHelperError.noHelper
+end 'managedListNodeHelperFor'
+
+enum ManagedListNodeHelperError implements Error
+	noHelper
+end 'ManagedListNodeHelperError'
+
+// Which `__ManagedListNode.*` methods invoke a runtime helper that writes
+// the multi-value-return error flag.
+//
+// Throwing: next/prev (null at end/start of list -> __ManagedListError.endOfList).
+// Non-throwing: value (raw value read), setValue (raw value write).
+function managedListNodeHelperThrows(methodName String) returns bool
+	if methodName == "next" 'mNext'
+		return true
+	end 'mNext'
+	if methodName == "prev" 'mPrev'
+		return true
+	end 'mPrev'
+	return false
+end 'managedListNodeHelperThrows'
+
+// Phase D: helper-name map for `__ManagedSocket.*` methods. Maps the
+// camelCase Maxon method name on `__ManagedSocket` to the snake_case
+// `mrt_managed_socket_*` runtime helper that implements it. The helpers
+// live in runtime.std (NOT `stdlib.`-prefixed) and wrap the OS-level
+// socket APIs (Winsock on Windows, BSD sockets on Linux/macOS).
+// Throws `ManagedSocketHelperError.noHelper` when the method isn't routed.
+function managedSocketHelperFor(methodName String) returns String throws ManagedSocketHelperError
+	if methodName == "sendFrom" 'mSendFrom'
+		return "mrt_managed_socket_send"
+	end 'mSendFrom'
+	if methodName == "recv" 'mRecv'
+		return "mrt_managed_socket_recv"
+	end 'mRecv'
+	if methodName == "close" 'mClose'
+		return "mrt_managed_socket_close"
+	end 'mClose'
+	if methodName == "tcpConnect" 'mTcpConnect'
+		return "mrt_managed_socket_tcp_connect"
+	end 'mTcpConnect'
+	throw ManagedSocketHelperError.noHelper
+end 'managedSocketHelperFor'
+
+enum ManagedSocketHelperError implements Error
+	noHelper
+end 'ManagedSocketHelperError'
+
+// Which `__ManagedSocket.*` methods invoke a runtime helper that writes
+// the multi-value-return error flag. Throwing helpers must be invoked via
+// `StdCallOp.tryCall`; non-throwing via plain `StdCallOp.call`.
+//
+// Throwing: sendFrom (bufferOutOfBounds / sendFailed), recv (recvFailed),
+// tcpConnect (resolveFailed / connectFailed).
+// Non-throwing: close (idempotent cleanup; the destructor also calls it
+// after explicit close()s zero out the handle).
+function managedSocketHelperThrows(methodName String) returns bool
+	if methodName == "close" 'mClose'
+		return false
+	end 'mClose'
+	return true
+end 'managedSocketHelperThrows'
+
+// The set of builtin "handle" type names whose method calls dispatch
+// through `lowerManagedHandleBuiltin`. Single source of truth for
+// `isManagedHandleReceiver` / `managedHandleReceiverPrefix` /
+// `managedHandleHelperFor` / `managedHandleHelperThrows` — the previous
+// per-function open-coded cases drifted as new types were added (List,
+// ListNode, Socket).
+//
+// Excludes `__ManagedMemory` (it has its own dispatcher with inline fast
+// paths) and `__ManagedMemoryCursor` (it lowers inline to load/store
+// sequences).
+function managedHandleReceiverNames() returns StringArray
+	var names = StringArray.create()
+	names.push("__ManagedFile")
+	names.push("__ManagedDirectory")
+	names.push("__ManagedList")
+	names.push("__ManagedListNode")
+	names.push("__ManagedSocket")
+	return names
+end 'managedHandleReceiverNames'
+
+// True iff `name` is the type name of a builtin "handle" type whose method
+// calls dispatch through `lowerManagedHandleBuiltin`.
+function isManagedHandleReceiver(name String) returns bool
+	for h in managedHandleReceiverNames() 'each'
+		if name == h 'hit'
+			return true
+		end 'hit'
+	end 'each'
+	return false
+end 'isManagedHandleReceiver'
+
+// Look up the receiver name in a `Receiver.method` callee string. Returns the
+// receiver name when it is one handled by `lowerManagedHandleBuiltin`;
+// throws otherwise. Used by the static- and re-route dispatch sites that
+// scan a callee string for a known handle prefix.
+function managedHandleReceiverPrefix(callee String) returns String throws ManagedHandleHelperError
+	for h in managedHandleReceiverNames() 'each'
+		if callee.startsWith("{h}.") 'hit'
+			return h
+		end 'hit'
+	end 'each'
+	throw ManagedHandleHelperError.noHelper
+end 'managedHandleReceiverPrefix'
+
+// Dispatch table keyed on `(receiverName, methodName)`. Routes to the
+// per-receiver `managed{X}HelperFor` map and rewraps the error so a single
+// `otherwise 'noHelper'` arm at the call site covers every receiver.
+function managedHandleHelperFor(receiverName String, methodName String) returns String throws ManagedHandleHelperError
+	if receiverName == "__ManagedFile" 'mf'
+		return try managedFileHelperFor(methodName) otherwise throw ManagedHandleHelperError.noHelper
+	end 'mf'
+	if receiverName == "__ManagedDirectory" 'md'
+		return try managedDirectoryHelperFor(methodName) otherwise throw ManagedHandleHelperError.noHelper
+	end 'md'
+	if receiverName == "__ManagedList" 'ml'
+		return try managedListHelperFor(methodName) otherwise throw ManagedHandleHelperError.noHelper
+	end 'ml'
+	if receiverName == "__ManagedListNode" 'mln'
+		return try managedListNodeHelperFor(methodName) otherwise throw ManagedHandleHelperError.noHelper
+	end 'mln'
+	if receiverName == "__ManagedSocket" 'ms'
+		return try managedSocketHelperFor(methodName) otherwise throw ManagedHandleHelperError.noHelper
+	end 'ms'
+	throw ManagedHandleHelperError.noHelper
+end 'managedHandleHelperFor'
+
+enum ManagedHandleHelperError implements Error
+	noHelper
+end 'ManagedHandleHelperError'
+
+// Dispatch table for the throws-set, keyed on `(receiverName, methodName)`.
+// Returns false for any unknown receiver (defensive — the call site only
+// reaches here after `managedHandleHelperFor` succeeded).
+function managedHandleHelperThrows(receiverName String, methodName String) returns bool
+	if receiverName == "__ManagedFile" 'mf'
+		return managedFileHelperThrows(methodName)
+	end 'mf'
+	if receiverName == "__ManagedDirectory" 'md'
+		return managedDirectoryHelperThrows(methodName)
+	end 'md'
+	if receiverName == "__ManagedList" 'ml'
+		return managedListHelperThrows(methodName)
+	end 'ml'
+	if receiverName == "__ManagedListNode" 'mln'
+		return managedListNodeHelperThrows(methodName)
+	end 'mln'
+	if receiverName == "__ManagedSocket" 'ms'
+		return managedSocketHelperThrows(methodName)
+	end 'ms'
+	return false
+end 'managedHandleHelperThrows'
 
 // Strip a leading `prefix` from `s` and return the remainder. Throws
 // `StripPrefixError.noMatch` when the string doesn't begin with prefix.

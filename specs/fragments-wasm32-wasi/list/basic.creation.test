@@ -1,0 +1,146 @@
+// Test: basic.creation
+function main() returns ExitCode
+	let list = List from [10, 20, 30]
+	return list.count()
+end 'main'
+---
+ExitCode: 3
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %5 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %6 = mir.mov_imm 40 : i64
+    %7 = mir.mov_imm 0 : i64
+    %8 = mir.call @stdlib.__mm_alloc(%6, %5, %7)
+    %9 = mir.global_addr @__rdata_arr_main_0
+    mir.store %9, %8, 0 width: qword
+    %10 = mir.mov_imm 3 : i64
+    mir.store %10, %8, 8 width: qword
+    %11 = mir.mov_imm -2 : i64
+    mir.store %11, %8, 16 width: qword
+    %12 = mir.mov_imm 8 : i64
+    mir.store %12, %8, 24 width: qword
+    %13 = mir.mov_imm -2 : i64
+    mir.store %13, %8, 32 width: qword
+    %26 = mir.mov_imm 8 : i64
+    %27 = mir.call @mrt_alloc(%26)
+    %28 = mir.mov_imm 40 : i64
+    %29 = mir.call @mrt_alloc(%28)
+    %30 = mir.mov_imm 0 : i64
+    mir.store %30, %29, 0 width: qword
+    %31 = mir.mov_imm 0 : i64
+    mir.store %31, %29, 8 width: qword
+    %32 = mir.mov_imm 0 : i64
+    mir.store %32, %29, 16 width: qword
+    %33 = mir.mov_imm 8 : i64
+    mir.store %33, %29, 24 width: qword
+    %34 = mir.mov_imm 0 : i64
+    mir.store %34, %29, 32 width: qword
+    mir.store %29, %27, 0 width: qword
+    mir.store %8, %27, 0 width: qword
+    %21 = mir.global_addr @__layout_List_Int
+    mir.br inlined_List.init_0()
+  inlined_List.init_0:
+    %35 = mir.mov_imm 8 : i64
+    %36 = mir.call @mrt_alloc(%35)
+    %37 = mir.call @mrt_managed_list_create()
+    mir.store %37, %36, 0 width: qword
+    mir.br inlined_Array.createIterator_0()
+  inlined_Array.createIterator_0:
+    %49 = mir.load %27, 0 width: qword
+    %50, %51 = mir.try_call @ArrayIterator.create(%49, %21)
+    %52 = mir.mov_imm 0 : i64
+    %53 = mir.cmp ne, %51, %52
+    mir.cond_br %53 [then: inlined_Array.createIterator_1(), else: inlined_Array.createIterator_2()]
+  inlined_Array.createIterator_1:
+    %54 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%54, %51)
+  inlined_Array.createIterator_2:
+    %55 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%50, %55)
+  inline_cont_main_0:
+    %40 = mir.mov_imm 0 : i64
+    %41 = mir.cmp ne, %57, %40
+    mir.cond_br %41 [then: inline_cont_main_3(%36), else: inlined_List.init_1()]
+  inlined_ArrayIterator.advance_0:
+    %58 = mir.load %56, 0 width: qword
+    %59 = mir.load %58, 8 width: qword
+    %60 = mir.load %58, 16 width: qword
+    %61 = mir.mov_imm 1 : i64
+    %62 = mir.add.i64 %59, %61
+    %63 = mir.cmp lt, %62, %60
+    %64 = mir.sub.i64 %62, %59
+    %65 = mir.mul.i64 %63, %64
+    %66 = mir.add.i64 %59, %65
+    mir.store %66, %58, 8 width: qword
+    %67 = mir.mov_imm 1 : i64
+    %68 = mir.sub.i64 %67, %63
+    %69 = mir.mov_imm 1 : i64
+    %70 = mir.mul.i64 %68, %69
+    %71 = mir.mov_imm 0 : i64
+    %72 = mir.cmp ne, %70, %71
+    mir.cond_br %72 [then: inlined_ArrayIterator.advance_1(), else: inline_cont_main_1(%71, %71)]
+  inlined_ArrayIterator.advance_1:
+    %73 = mir.mov_imm 1 : i64
+    mir.br inline_cont_main_1(%71, %73)
+  inline_cont_main_1:
+    %44 = mir.mov_imm 0 : i64
+    %45 = mir.cmp ne, %75, %44
+    mir.cond_br %45 [then: inline_cont_main_3(%36), else: inlined_List.init_1()]
+  inlined_List.init_1:
+    %76 = mir.load %56, 0 width: qword
+    mir.br inlined_stdlib.__managed_mem_cursor_current_0()
+  inlined_stdlib.__managed_mem_cursor_current_0:
+    %80 = mir.load %76, 0 width: qword
+    %81 = mir.mov_imm 8 : i64
+    %82 = mir.add.i64 %76, %81
+    %83 = mir.load %82, 0 width: qword
+    %84 = mir.mov_imm 24 : i64
+    %85 = mir.add.i64 %76, %84
+    %86 = mir.load %85, 0 width: qword
+    %87 = mir.mul.i64 %83, %86
+    %88 = mir.add.i64 %80, %87
+    %89 = mir.mov_imm 1 : i64
+    %90 = mir.cmp eq, %86, %89
+    mir.cond_br %90 [then: inlined_stdlib.__managed_mem_cursor_current_1(), else: inlined_stdlib.__managed_mem_cursor_current_2()]
+  inlined_stdlib.__managed_mem_cursor_current_1:
+    %91 = mir.mov_imm 0 : i64
+    %92 = mir.load_byte %88, %91
+    mir.br inline_cont_main_2(%92)
+  inlined_stdlib.__managed_mem_cursor_current_2:
+    %93 = mir.mov_imm 2 : i64
+    %94 = mir.cmp eq, %86, %93
+    mir.cond_br %94 [then: inlined_stdlib.__managed_mem_cursor_current_3(), else: inlined_stdlib.__managed_mem_cursor_current_4()]
+  inlined_stdlib.__managed_mem_cursor_current_3:
+    %95 = mir.load %88, 0 width: halfword
+    mir.br inline_cont_main_2(%95)
+  inlined_stdlib.__managed_mem_cursor_current_4:
+    %96 = mir.mov_imm 4 : i64
+    %97 = mir.cmp eq, %86, %96
+    mir.cond_br %97 [then: inlined_stdlib.__managed_mem_cursor_current_5(), else: inlined_stdlib.__managed_mem_cursor_current_6()]
+  inlined_stdlib.__managed_mem_cursor_current_5:
+    %98 = mir.load %88, 0 width: word
+    mir.br inline_cont_main_2(%98)
+  inlined_stdlib.__managed_mem_cursor_current_6:
+    %99 = mir.load %88, 0 width: qword
+    mir.br inline_cont_main_2(%99)
+  inline_cont_main_2:
+    %78 = mir.load %36, 0 width: qword
+    %79 = mir.call @mrt_managed_list_insert_last_value(%78, %100)
+    mir.br inlined_ArrayIterator.advance_0()
+  inline_cont_main_3:
+    %24 = mir.global_addr @__layout_List_Int
+    %25 = mir.call @List.count(%48, %24)
+    %101 = mir.mov_imm 125 : i64
+    %102 = mir.cmp ugt, %25, %101
+    mir.cond_br %102 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %103 = mir.global_addr @__panic_msg_0
+    %104 = mir.call @mrt_panic(%103)
+  __range_ok_0:
+    mir.ret %25
+  }
+}
+---
