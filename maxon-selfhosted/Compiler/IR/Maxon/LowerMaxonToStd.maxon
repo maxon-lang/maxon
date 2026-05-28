@@ -2140,19 +2140,38 @@ type MaxonToStdLowering
 			for paramType in func.maxonParamTypes 'eachParam'
 				stdParams.push(maxonTypeToStdType(self.project, ref: paramType))
 			end 'eachParam'
-			if needsLayout 'addLayout'
+			// Phase 11.4 closure-inheritance: lifted closures (`_$closure_N`)
+			// that inherit implicit args from a generic enclosing extension
+			// don't grow positional layout/witness params — the closure is
+			// reached via `indirectCall` and ABI-uniform with every other
+			// function-typed slot. Instead, the args ride in env (see
+			// `lowerClosureCreate` for the producer side and the per-function
+			// reset below for the consumer-side env-loads). We still mark
+			// `hasImplicitLayoutParam = true` and stamp the constraints so
+			// `tryLowerConstrainedTypeParamDispatch` finds them, but the
+			// Std-level paramCount stays at its existing user_args + __env
+			// shape, and we skip `genericFunctionImplicitArity` (the direct-
+			// call path that consumes it is never reached for closures).
+			let inheritsImplicitsViaEnv = isLiftedClosureName(func.name) and needsLayout
+			if needsLayout and not inheritsImplicitsViaEnv 'addLayout'
 				stdParams.push(StdType.i64)
 				func.paramCount = func.paramCount + 1
 				func.hasImplicitLayoutParam = true
 			end 'addLayout'
+			if inheritsImplicitsViaEnv 'closureFlagsOnly'
+				func.hasImplicitLayoutParam = true
+			end 'closureFlagsOnly'
 			// Phase 11.4: one trailing `__witness_*` slot per where-clause
 			// constraint, in declaration order. Multiple constraints on a
 			// single type-param (e.g. `Key is Hashable and Equatable`)
 			// produce parallel slots so each `(typeParam, interface)` pair
-			// has its own witness pointer.
-			for _ in 0 upto witnessConstraints.count() 'addWitness'
-				stdParams.push(StdType.i64)
-				func.paramCount = func.paramCount + 1
+			// has its own witness pointer. Skipped for closures inheriting
+			// via env (see the comment above `addLayout`).
+			if not inheritsImplicitsViaEnv 'addWitness'
+				for _ in 0 upto witnessConstraints.count() 'addWitnessLoop'
+					stdParams.push(StdType.i64)
+					func.paramCount = func.paramCount + 1
+				end 'addWitnessLoop'
 			end 'addWitness'
 			func.implicitWitnessConstraints = witnessConstraints
 			// Phase 11.4: record the implicit shape in a project-wide map so
@@ -2160,7 +2179,7 @@ type MaxonToStdLowering
 			// stdModule.functions) can still discover whether a callsite needs
 			// the synthetic layout/witness args appended. See the field comment
 			// in Project.maxon for the architectural rationale.
-			if needsLayout 'recordArity'
+			if needsLayout and not inheritsImplicitsViaEnv 'recordArity'
 				self.project.genericFunctionImplicitArity.upsert(func.name, value: GenericFunctionImplicits.create(true, witnessConstraints: witnessConstraints))
 			end 'recordArity'
 			func.returnType = maxonReturnTypeToStdReturnType(self.project, ref: func.maxonReturnType)
@@ -2250,7 +2269,16 @@ type MaxonToStdLowering
 			// derive their env arg from the original liftedEnvValueId. Witness
 			// slots, in declaration order, sit one-by-one past the layout
 			// slot so per-(typeParam, interface) dispatch can index directly.
-			if srcFunc.hasImplicitLayoutParam 'stampLayout'
+			// Phase 11.4 closure-inheritance: lifted closures that inherit
+			// implicits from their enclosing generic extension don't have
+			// positional layout/witness params — the args ride in env. We
+			// still need `implicitLayoutValueId` / `implicitWitnessValueIds`
+			// populated so `tryLowerConstrainedTypeParamDispatch` can index
+			// them; the env-load emission below allocates fresh ValueIds
+			// and emits one `loadIndirect` per slot AFTER all positional
+			// `param` ops are emitted in the entry block.
+			let closureBodyInheritsImplicits = isLiftedClosureName(srcFunc.name) and srcFunc.hasImplicitLayoutParam
+			if srcFunc.hasImplicitLayoutParam and not closureBodyInheritsImplicits 'stampLayout'
 				let constraintCount = srcFunc.implicitWitnessConstraints.count()
 				let firstWitnessIdx = (srcFunc.paramCount - constraintCount) as ValueId
 				for wIdx in 0 upto constraintCount 'eachWitness'
@@ -2312,13 +2340,43 @@ type MaxonToStdLowering
 			// into nested calls) but never defined — which is exactly the
 			// "v1 has no coloring assignment" crash.
 			let entryRef = try srcFunc.blockRefs.get(0) otherwise -1
-			if entryRef >= 0 and srcFunc.hasImplicitLayoutParam 'emitSyntheticParams'
+			if entryRef >= 0 and srcFunc.hasImplicitLayoutParam and not closureBodyInheritsImplicits 'emitSyntheticParams'
 				var entryBlock = try self.stdModule.blocks.get(entryRef) otherwise panic("invariant: entryRef from blockRefs not in stdModule.blocks")
 				self.stdModule.appendOp(entryBlock, op: StdOp.call(StdCallOp.param(self.implicitLayoutValueId, paramIndex: self.implicitLayoutValueId as VarSlot, paramType: StdType.i64)))
 				for witnessId in self.implicitWitnessValueIds 'witnessParam'
 					self.stdModule.appendOp(entryBlock, op: StdOp.call(StdCallOp.param(witnessId, paramIndex: witnessId as VarSlot, paramType: StdType.i64)))
 				end 'witnessParam'
 			end 'emitSyntheticParams'
+
+			// Phase 11.4 closure-inheritance: a lifted closure with
+			// env-encoded implicits recovers them at the entry block. The
+			// env block holds the layout pointer at offset
+			// (captureCount * 8), then per-constraint witness pointers
+			// starting at offset (captureCount + 1) * 8. We allocate fresh
+			// ValueIds for each slot, emit one `loadIndirect` per slot
+			// against the env-base (recovered from the `__env` param via
+			// `loadSlot`), and stamp the ids into `implicitLayoutValueId` /
+			// `implicitWitnessValueIds` so the existing dispatch site at
+			// `tryLowerConstrainedTypeParamDispatch` works unchanged. The
+			// captureCount is recovered from `project.closureCaptureCounts`
+			// (the parser stamps it at `parseClosure` time and the stdlib
+			// cache persists it across builds).
+			if entryRef >= 0 and closureBodyInheritsImplicits 'emitClosureImplicitLoads'
+				var entryBlock = try self.stdModule.blocks.get(entryRef) otherwise panic("invariant: entryRef from blockRefs not in stdModule.blocks")
+				let envSlot = self.liftedEnvValueId as VarSlot
+				let envBaseId = allocValueId(self.funcIdRef)
+				self.stdModule.appendOp(entryBlock, op: StdOp.memory(StdMemoryOp.loadSlot(envBaseId, slotId: envSlot)))
+				let captureCount = countClosureCaptures(srcFunc)
+				let layoutId = allocValueId(self.funcIdRef)
+				self.stdModule.appendOp(entryBlock, op: StdOp.system(StdSystemOp.loadIndirect(layoutId, addrId: envBaseId, offset: captureCount * 8, width: StoreWidth.qword, signed: false, isFloat: false)))
+				self.implicitLayoutValueId = layoutId
+				let constraintCount = srcFunc.implicitWitnessConstraints.count()
+				for wIdx in 0 upto constraintCount 'eachWitness'
+					let witnessId = allocValueId(self.funcIdRef)
+					self.stdModule.appendOp(entryBlock, op: StdOp.system(StdSystemOp.loadIndirect(witnessId, addrId: envBaseId, offset: (captureCount + 1 + wIdx) * 8, width: StoreWidth.qword, signed: false, isFloat: false)))
+					self.implicitWitnessValueIds.push(witnessId)
+				end 'eachWitness'
+			end 'emitClosureImplicitLoads'
 
 			for blockRef in srcFunc.blockRefs 'eachBlock'
 				let srcBlock = try self.maxonModule.blocks.get(blockRef) otherwise panic("invariant: blockRef from srcFunc.blockRefs not in maxonModule.blocks")
@@ -8185,6 +8243,20 @@ type MaxonToStdLowering
 			refTarget = self.scheduleFnRefThunk(funcName)
 		end 'isFreeFunc'
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.funcRef(resultId, funcName: refTarget)))
+		// Phase 11.4 closure-inheritance: a zero-capture closure inside a
+		// generic enclosing extension reaches lowering through `functionRef`
+		// (the parser only emits `closureCreate` when there's at least one
+		// outer-name capture). Its body still needs the enclosing's layout
+		// + per-constraint witness pointers, which travel through env. We
+		// allocate a small env block here with implicitCount slots and
+		// store the enclosing's `implicitLayoutValueId` /
+		// `implicitWitnessValueIds` into env[0..implicitCount].
+		if self.liftedClosureInheritsImplicits(funcName) 'allocImplicitsEnv'
+			let implicitValueIds = self.collectInheritedImplicits()
+			let envBaseId = self.allocEnvAndStoreImplicits(dstBlock, captureCount: 0, implicitValueIds: implicitValueIds)
+			self.fnEnvVarNames.upsert(resultId, value: envBaseId)
+			return
+		end 'allocImplicitsEnv'
 		// Free-function refs carry env=0. Materialize a real `const 0` op
 		// so the env binding has a defining SSA op — bare ValueId `0` is a
 		// dangling sentinel in any function whose v0 has no local definition.
@@ -8236,13 +8308,22 @@ type MaxonToStdLowering
 			captureAddrs.push(addrId)
 		end 'eachCap'
 
-		// Allocate the env block: N i64-pointers wide.
-		let envSizeId = allocValueId(self.funcIdRef)
-		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: envSizeId, value: captureCount * 8))))
-		var allocArgs = ValueIdArray.create()
-		allocArgs.push(envSizeId)
-		let envBaseId = allocValueId(self.funcIdRef)
-		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(envBaseId, callee: "mrt_alloc", argIds: allocArgs)))
+		// Phase 11.4 closure-inheritance: when the lifted closure inherits
+		// implicit args from a generic enclosing extension, the env block
+		// also carries the enclosing's layout pointer + per-constraint
+		// witness pointers (in that order, past the user captures). The
+		// closure body recovers them at its entry block via a single
+		// indirect load each — see the per-function reset in `lower()`.
+		// The outer function (this call's host) reads its OWN
+		// `self.implicitLayoutValueId` / `self.implicitWitnessValueIds` —
+		// which `tryLowerConstrainedTypeParamDispatch` would also consume
+		// — so the forwarded values match what the closure body needs.
+		var implicitValueIds = ValueIdArray.create()
+		if self.liftedClosureInheritsImplicits(funcName) 'collectImplicits'
+			implicitValueIds = self.collectInheritedImplicits()
+		end 'collectImplicits'
+
+		let envBaseId = self.allocEnvAndStoreImplicits(dstBlock, captureCount: captureCount, implicitValueIds: implicitValueIds)
 
 		// Store each capture address into env[i*8].
 		for i in 0 upto captureCount 'eachStore'
@@ -8252,6 +8333,82 @@ type MaxonToStdLowering
 
 		self.fnEnvVarNames.upsert(fnRefId, value: envBaseId)
 	end 'lowerClosureCreate'
+
+	// Phase 11.4 closure-inheritance: snapshot the outer function's
+	// implicit layout/witness ValueIds into a fresh array, in the order
+	// the closure body expects them (layout first, then witnesses in
+	// declaration order). Producers (`lowerFunctionRef` zero-capture +
+	// `lowerClosureCreate`) feed this into `allocEnvAndStoreImplicits`.
+	function collectInheritedImplicits() returns ValueIdArray
+		var implicitValueIds = ValueIdArray.create()
+		implicitValueIds.push(self.implicitLayoutValueId)
+		for wId in self.implicitWitnessValueIds 'eachWitness'
+			implicitValueIds.push(wId)
+		end 'eachWitness'
+		return implicitValueIds
+	end 'collectInheritedImplicits'
+
+	// Phase 11.4 closure-inheritance: allocate an env block sized for
+	// `captureCount` user captures plus `implicitValueIds.count()`
+	// trailing layout/witness slots, then store the implicits at
+	// env[captureCount..]. Returns the env-base ValueId; the caller is
+	// responsible for filling env[0..captureCount] with capture
+	// addresses (capturing path) or nothing (zero-capture path).
+	function allocEnvAndStoreImplicits(dstBlock IrBlock, captureCount ParsedInt, implicitValueIds ValueIdArray) returns ValueId
+		let implicitCount = implicitValueIds.count()
+		let totalSlots = captureCount + implicitCount
+		let envSizeId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: envSizeId, value: totalSlots * 8))))
+		var allocArgs = ValueIdArray.create()
+		allocArgs.push(envSizeId)
+		let envBaseId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(envBaseId, callee: "mrt_alloc", argIds: allocArgs)))
+		// Implicits are single-deref slots — the closure body's entry-
+		// block load issues one `loadIndirect` per slot, not the double-
+		// deref the by-reference capture path uses, because
+		// layout/witness pointers are immutable for the lifetime of the
+		// closure.
+		for i in 0 upto implicitCount 'eachImplicit'
+			let valId = try implicitValueIds.get(i) otherwise panic("allocEnvAndStoreImplicits: implicitValueIds.get OOB at {i}")
+			self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(envBaseId, offset: (captureCount + i) * 8, valueId: valId, width: StoreWidth.qword, isFloat: false)))
+		end 'eachImplicit'
+		return envBaseId
+	end 'allocEnvAndStoreImplicits'
+
+	// Phase 11.4 closure-inheritance: true iff a lifted closure body
+	// receives its layout/witness args through env (via the producer side
+	// of `lowerClosureCreate`) rather than as positional params. Read by
+	// `lowerClosureCreate` to decide whether to extend the env block.
+	// Mirrors the check in `transferFuncs` and ultimately defers to the
+	// closure's own `hasImplicitLayoutParam` flag — which only flips for
+	// closures whose enclosing chain reaches a generic extension. Linear
+	// scan over `stdModule.functions`; closures are rare in real flow.
+	function liftedClosureInheritsImplicits(funcName String) returns bool
+		if not isLiftedClosureName(funcName) 'notClosure'
+			return false
+		end 'notClosure'
+		for i in 0 upto self.stdModule.functions.count() 'scan'
+			let f = try self.stdModule.functions.get(i) otherwise panic("liftedClosureInheritsImplicits: stdModule.functions.get OOB at {i}")
+			if f.name == funcName 'hit'
+				return f.hasImplicitLayoutParam
+			end 'hit'
+		end 'scan'
+		return false
+	end 'liftedClosureInheritsImplicits'
+
+	// Phase 11.4 closure-inheritance: capture count for a lifted closure.
+	// The parser stamps `project.closureCaptureCounts[closureName]` at
+	// `parseClosure` time and the stdlib cache replays it on cache-hit.
+	// The captureCount drives the env-block layout — implicit
+	// layout/witness slots live AFTER all user captures so a 0-capture
+	// closure parks its layout at env[0]. Missing entries return 0 (no
+	// captures), which matches a closure with empty `capturedNames`.
+	function countClosureCaptures(srcFunc IrFunction) returns ParsedInt
+		if let count = try self.project.closureCaptureCounts.get(srcFunc.name) 'haveCount'
+			return count
+		end 'haveCount'
+		return 0
+	end 'countClosureCaptures'
 
 	// Stage E (closures): recover the outer slot id for a captured name.
 	// Captures are by reference — the `stackAddr` op needs the original
@@ -9324,8 +9481,55 @@ function functionIsGenericForLowering(project Project, func IrFunction) returns 
 		let params = project.typeParameters.getParamNames(recvType)
 		return params.count() > 0
 	end 'haveRecv'
+	// Phase 11.4 closure-inheritance: lifted closure bodies (`_$closure_N`)
+	// carry no enclosing receiver of their own. Chase the parser's
+	// `closureEnclosingFunc` back-pointer up to the outermost real
+	// function, then re-ask the question against that name. If the
+	// enclosing function lives in a generic extension (or itself is a
+	// generic body), the closure inherits its layout/witness slots through
+	// env (see `lowerClosureCreate`).
+	if isLiftedClosureName(func.name) 'isClosure'
+		if let enclosingName = try chaseClosureEnclosingFunc(project, name: func.name) 'haveEnc'
+			return enclosingNameIsGenericForLowering(project, name: enclosingName)
+		end 'haveEnc'
+	end 'isClosure'
 	return false
 end 'functionIsGenericForLowering'
+
+// Walk `project.closureEnclosingFunc` from a lifted-closure name through
+// any chain of nested-closure parents until reaching a non-closure
+// (real) function name. Returns the final non-closure name. Throws when
+// the input isn't a lifted closure or no entry is registered.
+function chaseClosureEnclosingFunc(project Project, name String) returns String throws ClosureEnclosingLookupError
+	var cur = name
+	for _ in 0 upto 32 'chase'
+		let parent = try project.closureEnclosingFunc.get(cur) otherwise throw ClosureEnclosingLookupError.notFound
+		if not isLiftedClosureName(parent) 'reachedReal'
+			return parent
+		end 'reachedReal'
+		cur = parent
+	end 'chase'
+	panic("chaseClosureEnclosingFunc: pathological depth >= 32 for '{name}' — closureEnclosingFunc cycle?")
+end 'chaseClosureEnclosingFunc'
+
+export enum ClosureEnclosingLookupError implements Error
+	notFound
+end 'ClosureEnclosingLookupError'
+
+// Mirror of `functionIsGenericForLowering`'s enclosing-type lookup keyed
+// by a name string (rather than an IrFunction). Used by closure
+// inheritance to ask "is this name's enclosing extension generic?"
+// without re-finding the IrFunction record.
+function enclosingNameIsGenericForLowering(project Project, name String) returns bool
+	if let recvType = try enclosingTypeName(project, name: name) 'haveRecv'
+		if let iface = try project.interfaces.get(recvType) 'ifaceParams'
+			return iface.usesParams.count() > 0
+		end 'ifaceParams'
+		let params = project.typeParameters.getParamNames(recvType)
+		return params.count() > 0
+	end 'haveRecv'
+	return false
+end 'enclosingNameIsGenericForLowering'
 
 // True iff a `MaxonType` mentions `typeParameter` anywhere in its tree.
 // We only need a one-level walk for now: `genericInstance(gid)` arms
@@ -9533,7 +9737,19 @@ end 'thunkBoundFatal'
 // when indexing witness slots.
 function collectFunctionWitnessConstraints(project Project, func IrFunction) returns WhereClauseArray
 	var out = WhereClauseArray.create()
-	if let recvType = try enclosingTypeName(project, name: func.name) 'haveRecv'
+	// Phase 11.4 closure-inheritance: lifted closure bodies have no
+	// enclosing receiver of their own — chase the back-pointer to the
+	// outermost real function and read its receiver / extension where-
+	// clauses instead. Closures whose enclosing chain doesn't reach a
+	// generic context fall through to the empty array (the closure
+	// stays non-generic at lowering).
+	var lookupName = func.name
+	if isLiftedClosureName(func.name) 'isClosure'
+		if let enclosingName = try chaseClosureEnclosingFunc(project, name: func.name) 'haveEnc'
+			lookupName = enclosingName
+		end 'haveEnc'
+	end 'isClosure'
+	if let recvType = try enclosingTypeName(project, name: lookupName) 'haveRecv'
 		for i in 0 upto project.typeParameters.declaringTypeNames.count() 'scan'
 			let d = try project.typeParameters.declaringTypeNames.get(i) otherwise panic("collectFunctionWitnessConstraints: declaringTypeNames.get OOB at {i}")
 			if d == recvType 'match'
@@ -9567,7 +9783,7 @@ function collectFunctionWitnessConstraints(project Project, func IrFunction) ret
 	// would inherit the Comparable overload's `where Element is Comparable`
 	// clause and demand a `(String, Comparable)` witness that
 	// `BuildWitnessTables` (correctly) never builds.
-	if let extClauses = try project.extensionMethodWhereClauses.get(func.name) 'haveExtWhere'
+	if let extClauses = try project.extensionMethodWhereClauses.get(lookupName) 'haveExtWhere'
 		for i in 0 upto extClauses.count() 'eachExtClause'
 			let clause = try extClauses.get(i) otherwise panic("collectFunctionWitnessConstraints: extClauses.get OOB at {i}")
 			if whereClauseArrayContains(out, clause: clause) 'duplicate'

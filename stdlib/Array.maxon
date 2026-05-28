@@ -336,57 +336,29 @@ end 'Array'
 // orderings (stable vs unstable) × two ergonomics (Comparable default vs
 // explicit comparator).
 
-// Default-Comparable overloads. Both `sort()` and `sortUnstable()` here run a
-// Comparable-specialized insertion sort that calls `Element.compare()`
-// directly. The body lives in `comparableInsertionSort` rather than reusing
-// the comparator-overload path with a `(a, b) gives a.compare(b)` lambda:
-// the lambda body would need runtime interface-method dispatch on a
-// type-parameter receiver, which the self-hosted compiler doesn't yet
-// implement (Phase 11.4). Monomorphizing the helper directly avoids the
-// dispatch entirely — each concrete `__Array_<T>.comparableInsertionSort`
-// resolves `prev.compare(pending)` to the concrete `T.compare` at clone
-// time. The C# bootstrap also takes this path so both compilers share the
-// same lowered shape until self-hosted gains witness-table dispatch on
-// type-parameter receivers.
+// Default-Comparable overloads. `sort()` routes to `smallSortRange` and
+// `sortUnstable()` routes to `pdqsortRange`, both with an inline closure
+// `function(x Element, y Element) gives x.compare(y)`. The closure body
+// dispatches `x.compare(y)` through the enclosing extension's
+// `where Element is Comparable` witness slot — see Phase 11.4
+// closure-inheritance in [`LowerMaxonToStd`](../maxon-selfhosted/Compiler/IR/Maxon/LowerMaxonToStd.maxon),
+// which inherits the layout/witness pointers into the lifted closure
+// body via env so dispatch resolves at runtime.
 export extension Array where Element is Comparable
-	// Private body shared by `sort()` and `sortUnstable()`. In-place
-	// insertion sort over the full array using `Element.compare`.
-	// Stable: equal elements keep relative order because the shift loop
-	// stops as soon as `compare` returns anything other than `greaterThan`.
-	function comparableInsertionSort()
-		Log.trace("insertionSort.run")
-		let hi = managed.length()
-		if hi <= 1 'trivial'
-			return
-		end 'trivial'
-		var i = 1 as SortIndex
-		while i < hi 'outer'
-			let pending = try managed.get(i) otherwise panic("comparableInsertionSort: pending get OOB; i < hi <= length")
-			var j = i
-			while j > 0 'inner'
-				let prev = try managed.get(j - 1) otherwise panic("comparableInsertionSort: prev get OOB; j > 0")
-				let ord = prev.compare(pending)
-				if ord != Ordering.greaterThan 'placed'
-					break
-				end 'placed'
-				try managed.set(j, value: prev) otherwise panic("comparableInsertionSort: shift set OOB; j <= i < hi")
-				j = j - 1
-			end 'inner'
-			try managed.set(j, value: pending) otherwise panic("comparableInsertionSort: final set OOB; j >= 0")
-			i = i + 1
-		end 'outer'
-	end 'comparableInsertionSort'
-
 	/// Sort in place using the element's `Comparable.compare` ordering.
 	/// Stable: equal elements keep their relative order.
 	export function sort()
-		self.comparableInsertionSort()
+		let lo = 0 as SortIndex
+		let hi = managed.length()
+		self.smallSortRange(lo, hi: hi, cmp: function(x Element, y Element) gives x.compare(y))
 	end 'sort'
 
 	/// Sort in place using the element's `Comparable.compare` ordering.
 	/// Unstable: relative order of equal elements is not preserved.
 	export function sortUnstable()
-		self.comparableInsertionSort()
+		let lo = 0 as SortIndex
+		let hi = managed.length()
+		self.pdqsortRange(lo, hi: hi, cmp: function(x Element, y Element) gives x.compare(y))
 	end 'sortUnstable'
 end 'Array'
 

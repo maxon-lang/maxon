@@ -168,7 +168,7 @@ let CACHE_MAGIC_3 = 0x00  // '\0'
 // stdlib/List.maxon.
 // v62: wired __ManagedSocket builtin type and whitelisted stdlib/TcpClient.maxon.
 // v63: whitelisted stdlib/HttpClient.maxon + helpers/http/httpHelpers.maxon.
-let CACHE_FORMAT_VERSION = 63
+let CACHE_FORMAT_VERSION = 64
 
 // ============================================================
 // Types
@@ -345,6 +345,17 @@ export type StdlibCacheData
 	// discover the callee's hasImplicitLayoutParam and emits an under-arity
 	// call op — silent ABI corruption on x64, validator rejection on wasm.
 	export var genericFunctionImplicitArity as GenericFunctionImplicitArityMap
+	// Phase 11.4 closure-inheritance: persisted back-pointer from each
+	// lifted stdlib closure (`_$closure_<N>`) to its enclosing function
+	// name. Needed because the closure body's where-clause inheritance
+	// walk runs in the user pipeline against the restored stdlib
+	// registries — without the back-pointer the closure shows up as
+	// enclosing-less and its layout/witness slots never get stamped.
+	export var closureEnclosingFunc as ClosureEnclosingFuncMap
+	// Phase 11.4 closure-inheritance: persisted capture count per lifted
+	// stdlib closure. Drives the env-block layout (implicit-arg offsets
+	// land at `captureCount * 8` and beyond). See `closureEnclosingFunc`.
+	export var closureCaptureCounts as ClosureCaptureCountMap
 	export var staticRdataValues as StaticRdataValueMap
 	// Cache v50 (J.4c): persisted `project.unresolvedExtensions` so cache-hit
 	// user builds see the stdlib's struct- / interface-extension metadata
@@ -411,6 +422,8 @@ export type StdlibCacheData
 			initToStoredVars: InitToStoredVarsMap.create(),
 			topLevelVars: TopLevelVarMap.create(),
 			genericFunctionImplicitArity: GenericFunctionImplicitArityMap.create(),
+			closureEnclosingFunc: ClosureEnclosingFuncMap.create(),
+			closureCaptureCounts: ClosureCaptureCountMap.create(),
 			staticRdataValues: StaticRdataValueMap.create(),
 			unresolvedExtensions: UnresolvedExtensionArray.create(),
 			extensionMethodWhereClauses: WhereClauseMapByName.create(),
@@ -814,6 +827,23 @@ function encodeStdlibCacheBody(project Project, buf ByteArray, data StdlibCacheD
 		try writeString(buf, s: name)
 		try writeThrowsClauseField(buf, clause: throwsClause)
 	end 'eachThrows'
+
+	// Phase 11.4 closure-inheritance: lifted-closure → enclosing-function
+	// back-pointer map. String key (closure name) + string value
+	// (enclosing's qualified name).
+	writeDword(buf, value: data.closureEnclosingFunc.count())
+	for (closureName, encName) in data.closureEnclosingFunc 'eachClosureEnc'
+		try writeString(buf, s: closureName)
+		try writeString(buf, s: encName)
+	end 'eachClosureEnc'
+
+	// Phase 11.4 closure-inheritance: per-closure capture count, used to
+	// compute env-block implicit-arg offsets in the closure body.
+	writeDword(buf, value: data.closureCaptureCounts.count())
+	for (closureName, count) in data.closureCaptureCounts 'eachClosureCap'
+		try writeString(buf, s: closureName)
+		writeDword(buf, value: count)
+	end 'eachClosureCap'
 
 	// Struct types
 	writeDword(buf, value: data.structTypes.count())
@@ -1332,6 +1362,28 @@ function decodeStdlibCache(project Project, buf ByteArray, target Target, expect
 		pos = pTh1
 		try data.funcThrowsTypes.insert(throwsName, value: clause) otherwise ignore
 	end 'eachThrows'
+
+	// Phase 11.4 closure-inheritance: lifted-closure → enclosing-function
+	// back-pointer map (paired with closureCaptureCounts below).
+	let closureEncCount = readDword(buf, offset: pos)
+	pos = pos + 4
+	for _ in 0 upto closureEncCount 'eachClosureEnc'
+		let (closureName, pCe0) = try readString(buf, offset: pos)
+		pos = pCe0
+		let (encName, pCe1) = try readString(buf, offset: pos)
+		pos = pCe1
+		try data.closureEnclosingFunc.insert(closureName, value: encName) otherwise ignore
+	end 'eachClosureEnc'
+
+	let closureCapCntCount = readDword(buf, offset: pos)
+	pos = pos + 4
+	for _ in 0 upto closureCapCntCount 'eachClosureCap'
+		let (closureName, pCc0) = try readString(buf, offset: pos)
+		pos = pCc0
+		let count = readDword(buf, offset: pos)
+		pos = pos + 4
+		try data.closureCaptureCounts.insert(closureName, value: count) otherwise ignore
+	end 'eachClosureCap'
 
 	// Stdlib decls don't carry visibility / sourceFilePath in the cache
 	// codec — every entry is implicitly `global` and originates at the
@@ -1961,6 +2013,18 @@ export function captureStdlibMetadata(project Project, data StdlibCacheData)
 		try data.funcThrowsTypes.insert(name, value: throwsClause) otherwise ignore
 	end 'copyThrows'
 
+	// Phase 11.4 closure-inheritance: snapshot the per-closure back-pointer
+	// and capture-count maps so user-pipeline LowerMaxonToStd can resolve
+	// the enclosing generic extension's where-clauses for stdlib closures
+	// (e.g. the `function(x Element, y Element) gives x.compare(y)` lifted
+	// from `extension Array where Element is Comparable.sortUnstable`).
+	for (closureName, encName) in project.closureEnclosingFunc 'copyClosureEnc'
+		try data.closureEnclosingFunc.insert(closureName, value: encName) otherwise ignore
+	end 'copyClosureEnc'
+	for (closureName, count) in project.closureCaptureCounts 'copyClosureCap'
+		try data.closureCaptureCounts.insert(closureName, value: count) otherwise ignore
+	end 'copyClosureCap'
+
 	for (name, st) in project.structTypes 'copyStructs'
 		try data.structTypes.insert(name, value: st) otherwise ignore
 	end 'copyStructs'
@@ -2185,6 +2249,33 @@ export function restoreStdlibMetadata(project Project, data StdlibCacheData)
 		try project.funcThrowsTypes.insert(name, value: throwsClause) otherwise ignore
 	end 'restoreThrows'
 
+	// Phase 11.4 closure-inheritance: replay lifted-closure back-pointers
+	// + capture counts so user-pipeline LowerMaxonToStd can chase the
+	// closure's enclosing generic extension method without re-parsing
+	// stdlib. Without these, every cache-hit user build that pulls in a
+	// stdlib generic-extension closure would fall back to the
+	// `lowerInterfaceMethodCallStub` panic at runtime. Also seed the
+	// user project's closureCounter past stdlib's highest-numbered
+	// closure so the user-pipeline parser mints unique `_$closure_N`
+	// names without colliding with the restored stdlib ones in
+	// `funcReturnTypes` / `funcSignatures` / `closureEnclosingFunc`.
+	var maxClosureId = -1 as ParsedInt
+	for (closureName, encName) in data.closureEnclosingFunc 'restoreClosureEnc'
+		try project.closureEnclosingFunc.insert(closureName, value: encName) otherwise ignore
+		let n = try parseClosureSuffix(closureName) otherwise -1
+		if n > maxClosureId 'updMax'
+			maxClosureId = n
+		end 'updMax'
+	end 'restoreClosureEnc'
+	for (closureName, count) in data.closureCaptureCounts 'restoreClosureCap'
+		try project.closureCaptureCounts.insert(closureName, value: count) otherwise ignore
+	end 'restoreClosureCap'
+	if maxClosureId >= 0 'bumpCounter'
+		if (maxClosureId + 1) > project.closureCounter 'needsBump'
+			project.closureCounter = (maxClosureId + 1) as ClosureCounter
+		end 'needsBump'
+	end 'bumpCounter'
+
 	// Rebuild `overloadedNames` from the restored signature names.
 	// The overload bucket is populated by the parser when a second `function
 	// foo` registers under the same qualified name — rekeyExistingFunction
@@ -2241,6 +2332,37 @@ export function restoreStdlibMetadata(project Project, data StdlibCacheData)
 	// them onto `project` is a direct merge.
 	restoreRegistries(project, data: data)
 end 'restoreStdlibMetadata'
+
+// Parse the numeric suffix N out of a `_$closure_N` name. Returns the
+// integer on success; throws when the prefix doesn't match or the
+// suffix isn't a non-negative integer. Caller uses this only to seed
+// `project.closureCounter` past the stdlib's max, so a parse failure is
+// recovered via `otherwise -1` and the counter stays untouched.
+export enum ClosureSuffixError implements Error
+	notClosurePrefix
+	suffixNotInteger
+end 'ClosureSuffixError'
+
+export function parseClosureSuffix(name String) returns ParsedInt throws ClosureSuffixError
+	let prefix = "_$closure_"
+	if not name.startsWith(prefix) 'noPrefix'
+		throw ClosureSuffixError.notClosurePrefix
+	end 'noPrefix'
+	let bytes = name.toByteArray()
+	let prefixBytes = prefix.toByteArray()
+	if bytes.count() <= prefixBytes.count() 'emptySuffix'
+		throw ClosureSuffixError.suffixNotInteger
+	end 'emptySuffix'
+	var n = 0 as ParsedInt
+	for i in prefixBytes.count() upto bytes.count() 'eachByte'
+		let b = try bytes.get(i) otherwise panic("parseClosureSuffix: byte get OOB at {i}")
+		if b < 0x30 or b > 0x39 'notDigit'
+			throw ClosureSuffixError.suffixNotInteger
+		end 'notDigit'
+		n = n * 10 + (b - 0x30) as ParsedInt
+	end 'eachByte'
+	return n
+end 'parseClosureSuffix'
 
 // Walk every signature name now in `project.funcSignatures` and rebuild
 // `project.overloadedNames` by grouping mangled names under their bare

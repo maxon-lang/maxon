@@ -2093,6 +2093,21 @@ export type Parser
 				recordExtensionMethodWhereClauseInsert(project, filePath: filePath, key: mangledName)
 			end 'recExtWhere2'
 		end 'haveExtWhere'
+		// Phase 11.4 closure-inheritance: closures whose enclosing function
+		// is now being renamed must update their back-pointer value so the
+		// LowerMaxonToStd-side chase resolves to the live name. The map is
+		// keyed by closure name (small set), so a linear scan of values is
+		// cheap. Mutating during iteration is safe — we only update values,
+		// not keys.
+		var closureKeysToRewrite = StringArray.create()
+		for (closureKey, encName) in project.closureEnclosingFunc 'scanClosureEnc'
+			if encName == bareName 'matchEnc'
+				closureKeysToRewrite.push(closureKey)
+			end 'matchEnc'
+		end 'scanClosureEnc'
+		for cKey in closureKeysToRewrite 'rewriteClosureEnc'
+			project.closureEnclosingFunc.upsert(cKey, value: mangledName)
+		end 'rewriteClosureEnc'
 		project.methodNameIndex.record(mangledName)
 		recordMethodNameIndexInsert(project, filePath: filePath, qualifiedName: mangledName)
 		// Walk the current module's functions for an IrFunction whose .name
@@ -13388,6 +13403,25 @@ export type Parser
 		if insertedClosureVis 'recClosureVis'
 			recordFuncVisibilityInsert(project, filePath: filePath, key: closureName)
 		end 'recClosureVis'
+
+		// Phase 11.4 closure-inheritance: stamp the back-pointer from the
+		// lifted body to its enclosing function so LowerMaxonToStd can
+		// chase up to a generic extension method whose where-clause
+		// witnesses the closure needs to inherit. `savedFunc` is the
+		// outer IrFunction captured before the parser switched context
+		// into the lifted body. Skip when the enclosing function is
+		// anonymous (defensive — shouldn't occur for any normal parse).
+		if not savedFunc.name.isEmpty() 'recClosureEncFunc'
+			try project.closureEnclosingFunc.insert(closureName, value: savedFunc.name) otherwise panic("parseClosure: duplicate closureEnclosingFunc entry for '{closureName}'")
+			recordClosureEnclosingFuncInsert(project, filePath: filePath, key: closureName)
+		end 'recClosureEncFunc'
+
+		// Phase 11.4 closure-inheritance: record the captureCount so
+		// LowerMaxonToStd can compute the env layout's implicit-arg
+		// offset (captures land at env[0..captureCount-1], implicit
+		// layout/witness ptrs at env[captureCount..]).
+		try project.closureCaptureCounts.insert(closureName, value: captureCount) otherwise panic("parseClosure: duplicate closureCaptureCounts entry for '{closureName}'")
+		recordClosureCaptureCountInsert(project, filePath: filePath, key: closureName)
 
 		let resultName = freshSynthName()
 		if captureCount > 0 'emitCreate'

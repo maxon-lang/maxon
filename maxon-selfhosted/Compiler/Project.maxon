@@ -200,6 +200,26 @@ export type Project
 	// parameters without a default are a compile error at the call site.
 	export var funcSignatures as FuncSignatureMap
 
+	// Closure→enclosing-function back-pointer. Keyed by lifted closure name
+	// (`_$closure_<N>`), valued by the qualified name of the function that
+	// parsed the closure literal. Populated by `parseClosure` so later
+	// pipeline stages (Phase 11.4 generic-detection in `LowerMaxonToStd`)
+	// can chase from a lifted body up to the enclosing generic extension
+	// method whose where-clause witness slots the closure needs to inherit.
+	// Nested closures chain through additional entries — `_$closure_3 ->
+	// _$closure_1 -> Array.sortUnstable` — and callers walk the chain
+	// until they hit a real method name. Survives the stdlib cache via
+	// `closureEnclosingFuncKeys` in FileParseDelta + dedicated codec slot.
+	export var closureEnclosingFunc as ClosureEnclosingFuncMap
+
+	// Lifted-closure capture count, keyed by `_$closure_<N>`. The closure
+	// body's env layout puts user captures at offsets 0..captureCount-1
+	// and Phase 11.4-inherited layout/witness pointers immediately after;
+	// the closure body's per-function reset reads this map to locate the
+	// implicit slots. Set by the parser at `parseClosure` time alongside
+	// `closureEnclosingFunc`.
+	export var closureCaptureCounts as ClosureCaptureCountMap
+
 	// Per-call-site substituted paramTypes — the FuncSignature's declared
 	// paramTypes resolved against each call's enclosing-struct innerAliases
 	// + receiver's genericInstance arg bindings. Populated by TypeResolution
@@ -677,6 +697,8 @@ export type Project
 			funcVisibilities: FuncVisibilityMap.create(),
 			methodNameIndex: MethodNameIndex.create(),
 			funcSignatures: FuncSignatureMap.create(),
+			closureEnclosingFunc: ClosureEnclosingFuncMap.create(),
+			closureCaptureCounts: ClosureCaptureCountMap.create(),
 			callParamTypes: CallParamTypesMap.create(),
 			resolvedCallees: ResolvedCalleesMap.create(),
 			resolvedReceiverTypes: ResolvedReceiverTypesMap.create(),
@@ -1831,6 +1853,14 @@ export typealias FuncReturnTypeMap = Map with (String, MaxonReturnType)
 export typealias FuncThrowsTypeMap = Map with (String, ThrowsClause)
 
 export typealias FuncRenameMap = Map with (String, String)
+
+// Phase 11.4 closure-inheritance: `_$closure_<N>` → enclosing-function
+// qualified name. See `Project.closureEnclosingFunc`.
+export typealias ClosureEnclosingFuncMap = Map with (String, String)
+
+// Phase 11.4 closure-inheritance: `_$closure_<N>` → user-capture count.
+// See `Project.closureCaptureCounts`.
+export typealias ClosureCaptureCountMap = Map with (String, ParsedInt)
 
 // Per-parameter default value. `none` means the argument is mandatory; the
 // other arms each carry a compile-time constant the call-site default-fill

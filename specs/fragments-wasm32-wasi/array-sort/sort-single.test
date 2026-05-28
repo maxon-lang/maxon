@@ -40,24 +40,32 @@ module {
     %5 = mir.call @Array.push(%47, %3, %4)
     %7 = mir.global_addr @__layout_Array_Integer
     %8 = mir.global_addr @__witness_int_Comparable
-    %55 = mir.call @Array.comparableInsertionSort(%47, %7, %8)
+    %55 = mir.mov_imm 0 : i64
+    %56 = mir.load %47, 0 width: qword
+    %57 = mir.load %56, 8 width: qword
+    %58 = mir.func_addr @_$closure_0
+    %59 = mir.mov_imm 16 : i64
+    %60 = mir.call @mrt_alloc(%59)
+    mir.store %7, %60, 0 width: qword
+    mir.store %8, %60, 8 width: qword
+    %61 = mir.call @Array.smallSortRange(%47, %55, %57, %58, %60, %7)
     %11 = mir.mov_imm 0 : i64
     mir.br inlined_Array.get_0()
   inlined_Array.get_0:
-    %56 = mir.load %47, 0 width: qword
-    %57, %58 = mir.try_call @stdlib.__managed_mem_get(%56, %11)
-    %59 = mir.mov_imm 0 : i64
-    %60 = mir.cmp ne, %58, %59
-    mir.cond_br %60 [then: inlined_Array.get_1(), else: inlined_Array.get_2()]
+    %62 = mir.load %47, 0 width: qword
+    %63, %64 = mir.try_call @stdlib.__managed_mem_get(%62, %11)
+    %65 = mir.mov_imm 0 : i64
+    %66 = mir.cmp ne, %64, %65
+    mir.cond_br %66 [then: inlined_Array.get_1(), else: inlined_Array.get_2()]
   inlined_Array.get_1:
-    %61 = mir.mov_imm 0 : i64
-    %62 = mir.mov_imm 1 : i64
-    mir.br inline_cont_main_0(%61, %62)
+    %67 = mir.mov_imm 0 : i64
+    %68 = mir.mov_imm 1 : i64
+    mir.br inline_cont_main_0(%67, %68)
   inlined_Array.get_2:
-    %63 = mir.mov_imm 0 : i64
-    mir.br inline_cont_main_0(%57, %63)
+    %69 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%63, %69)
   inline_cont_main_0:
-    %16 = mir.cmp ne, %65, %11
+    %16 = mir.cmp ne, %71, %11
     mir.cond_br %16 [then: try_0.otherwise(), else: try_0.merge()]
   try_0.otherwise:
     %18 = mir.mov_imm 99 : i64
@@ -66,7 +74,7 @@ module {
     %21 = mir.global_addr @__istr_0
     %23 = mir.mov_imm 21 : i64
     %24 = mir.call @mrt_alloc(%23)
-    %25 = mir.call @mrt_i64_to_string(%64, %24)
+    %25 = mir.call @mrt_i64_to_string(%70, %24)
     %26 = mir.global_addr @__istr_1
     %27 = mir.mov_imm 1 : i64
     %30 = mir.add.i64 %11, %25
@@ -91,10 +99,10 @@ module {
     %43 = mir.call @mrt_alloc(%42)
     mir.store %39, %43, 0 width: qword
     mir.store %11, %43, 8 width: qword
-    %66 = mir.load %43, 0 width: qword
-    %67 = mir.load %66, 0 width: qword
-    %68 = mir.load %66, 8 width: qword
-    %69 = mir.call @mrt_write_stdout(%67, %68)
+    %72 = mir.load %43, 0 width: qword
+    %73 = mir.load %72, 0 width: qword
+    %74 = mir.load %72, 8 width: qword
+    %75 = mir.call @mrt_write_stdout(%73, %74)
     mir.ret %11
   }
 }

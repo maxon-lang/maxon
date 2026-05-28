@@ -451,7 +451,9 @@ function computeNeededWasmStdlibFunctions(module MirModule, globalData GlobalDat
 				match op 'extractCallee'
 					call(_, callee, _) then seeds.push(callee)
 					movImm to branch then break 'extractCallee'
-					indirectCall to loadByte then break 'extractCallee'
+					indirectCall to globalAddr then break 'extractCallee'
+					funcAddr(_, name) then seeds.push(name)
+					loadFramePtr to loadByte then break 'extractCallee'
 					osAllocPages to osLockRelease then break 'extractCallee'
 					tryCall(_, callee, _, _) then seeds.push(callee)
 					errorReturn then break 'extractCallee'
