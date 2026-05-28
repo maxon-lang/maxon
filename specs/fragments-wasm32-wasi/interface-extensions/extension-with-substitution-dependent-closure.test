@@ -1,0 +1,67 @@
+// Test: extension-with-substitution-dependent-closure
+typealias Integer = int(i64.min to i64.max)
+
+interface Tagger
+	function tag() returns Integer
+end 'Tagger'
+
+extension Tagger
+	export function callTag() returns Integer
+		let inner = function() gives tag() * 2
+		return inner()
+	end 'callTag'
+end 'Tagger'
+
+type Three implements Tagger
+	export static function make() returns Self
+		return Self{}
+	end 'make'
+	export function tag() returns Integer
+		return 3
+	end 'tag'
+end 'Three'
+
+type Seven implements Tagger
+	export static function make() returns Self
+		return Self{}
+	end 'make'
+	export function tag() returns Integer
+		return 7
+	end 'tag'
+end 'Seven'
+
+function main() returns ExitCode
+	let a = Three.make()
+	let b = Seven.make()
+	let sum = a.callTag() + b.callTag()
+	return sum
+end 'main'
+---
+ExitCode: 20
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %7 = mir.mov_imm 0 : i64
+    %8 = mir.call @mrt_alloc(%7)
+    %9 = mir.mov_imm 0 : i64
+    %10 = mir.call @mrt_alloc(%9)
+    %11 = mir.func_addr @_$closure_6$Three
+    %12 = mir.mov_imm 0 : i64
+    %13 = mir.indirect_call %11(%12)
+    %14 = mir.func_addr @_$closure_6$Seven
+    %15 = mir.mov_imm 0 : i64
+    %16 = mir.indirect_call %14(%15)
+    %6 = mir.add.i64 %13, %16
+    %17 = mir.mov_imm 125 : i64
+    %18 = mir.cmp ugt, %6, %17
+    mir.cond_br %18 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %19 = mir.global_addr @__panic_msg_0
+    %20 = mir.call @mrt_panic(%19)
+  __range_ok_0:
+    mir.ret %6
+  }
+}
+---

@@ -810,6 +810,17 @@ type FunctionRegAllocator
 		var noProgressStreak = 0
 		let splitProgressBudget = 3
 		var splittingHelps = true
+		// Track whether remat-only iterations make progress. Without this,
+		// a constant `2` that fails to color at its (high-pressure) use
+		// re-rematerializes every iteration: the fresh `movRegImm`-defined
+		// vreg is auto-detected as rematerializable by scanDefinitions, has
+		// identical pressure at the same use site, fails to color again, and
+		// the loop cycles until the iteration cap silently leaves the fresh
+		// vid uncolored. After K no-progress iterations, demote remat-eligible
+		// ranges to real spills: a stack slot + a `SPILL_WEIGHT_INFINITE`
+		// reload, which the colorer's eviction fixup is empowered to drive.
+		let rematProgressBudget = 2
+		var rematHelps = true
 		// Running high-water mark of spill-slot offsets across iterations.
 		// Each iteration's allocateSpillSlots starts at this offset and
 		// returns the new watermark. Resetting to 0 every iteration would
@@ -845,6 +856,34 @@ type FunctionRegAllocator
 				end 'madeProgress'
 			end 'havePrev'
 			prevUncolored = uncoloredSpills.count()
+
+			// Detect the remat cycle: if the uncolored set consists ENTIRELY of
+			// rematerializable ranges and the count hasn't shrunk since the
+			// previous iteration, re-emitting the constant won't help — same
+			// constant, same use site, same pressure. Demote those ranges to
+			// real spill on this iteration so the next round's reloads carry
+			// SPILL_WEIGHT_INFINITE (eviction-eligible). Without this check,
+			// the loop spins to its iteration cap silently leaving the last
+			// fresh remat vreg uncolored (the original colorLookupGpr panic).
+			//
+			// Gated on "all-remat AND no progress" rather than a generic
+			// no-progress streak so functions like stdlib.sha256 that mix
+			// rematerializable constants with high-pressure reloads keep
+			// using remat across normal iterations — only the pure-remat
+			// cycle pattern flips the switch.
+			var allRematAndStuck = false
+			if noProgressStreak >= rematProgressBudget and uncoloredSpills.count() > 0 'stuckCheck'
+				allRematAndStuck = true
+				for ur in uncoloredSpills 'eachUr'
+					if not ur.isRematerializable 'notRemat'
+						allRematAndStuck = false
+						break
+					end 'notRemat'
+				end 'eachUr'
+			end 'stuckCheck'
+			if allRematAndStuck 'cycleDetected'
+				rematHelps = false
+			end 'cycleDetected'
 
 			logTrace(LogCategory.ir, message: function() gives "regalloc: func={state.funcName} iteration={iteration} uncolored={uncoloredSpills.count()} splittingHelps={splittingHelps}")
 
@@ -976,7 +1015,17 @@ type FunctionRegAllocator
 				// the constant at each use; no stack slot, no spilledRanges
 				// entry. Route them to the remat sidetable and let
 				// insertSpillCode rewrite each use as a fresh movRegImm.
-				if ur.isRematerializable 'isRemat'
+				//
+				// `rematHelps` falls to false after a streak of remat-only
+				// iterations that don't shrink the uncolored set. The fresh
+				// `movRegImm`-defined vreg auto-rematerializes on every
+				// rebuild (scanDefinitions detects it as constant), so an
+				// over-pressured use site spins through the iteration cap
+				// emitting fresh constant loads that each fail to color in
+				// turn. When that happens, fall through to the real spill
+				// path: the stack slot + reload produces an infinite-weight
+				// reload that the eviction fixup can drive.
+				if ur.isRematerializable and rematHelps 'isRemat'
 					logTrace(LogCategory.ir, message: function() gives "regalloc: rematerialize %{ur.valueId} const={ur.constantValue}")
 					markRematerialize(spillDec, valueId: ur.valueId, value: ur.constantValue)
 					continue

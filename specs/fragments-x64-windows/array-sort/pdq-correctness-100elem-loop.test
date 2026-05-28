@@ -1,0 +1,309 @@
+// Test: pdq-correctness-100elem-loop
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function ascending(x Integer, y Integer) returns Ordering
+	return x.compare(y)
+end 'ascending'
+
+function main() returns ExitCode
+	var a = IntArray.create()
+	for i in 0 upto 100 'fill'
+		a.push((i * 31) + 7)
+	end 'fill'
+	a.sortUnstable(ascending)
+	for x in a 'p'
+		print("{x} ")
+	end 'p'
+	print("\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+7 38 69 100 131 162 193 224 255 286 317 348 379 410 441 472 503 534 565 596 627 658 689 720 751 782 813 844 875 906 937 968 999 1030 1061 1092 1123 1154 1185 1216 1247 1278 1309 1340 1371 1402 1433 1464 1495 1526 1557 1588 1619 1650 1681 1712 1743 1774 1805 1836 1867 1898 1929 1960 1991 2022 2053 2084 2115 2146 2177 2208 2239 2270 2301 2332 2363 2394 2425 2456 2487 2518 2549 2580 2611 2642 2673 2704 2735 2766 2797 2828 2859 2890 2921 2952 2983 3014 3045 3076 
+```
+---
+// CompiledIR
+module {
+  func @ascending(rcx: i64, rdx: i64) -> u8 {
+  entry:
+    x64.prologue stack_size=16
+    x64.call int.compare
+    x64.cmp r8, 2
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea r12, [rip+__panic_msg_0]
+    x64.mov rcx, r12
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=112
+    x64.mov ecx, 8
+    x64.call mrt_alloc
+    x64.mov r12, r8
+    x64.mov ecx, 40
+    x64.call mrt_alloc
+    x64.xor r9d, r9d
+    x64.mov [r8+0], r9 (8b)
+    x64.xor r9d, r9d
+    x64.mov [r8+8], r9 (8b)
+    x64.xor r9d, r9d
+    x64.mov [r8+16], r9 (8b)
+    x64.mov r9d, 8
+    x64.mov [r8+24], r9 (8b)
+    x64.xor r9d, r9d
+    x64.mov [r8+32], r9 (8b)
+    x64.mov [r12+0], r8 (8b)
+    x64.xor r8d, r8d
+    x64.mov [rbp+-64], r8
+    x64.mov r13d, 1
+    x64.mov r8, [rbp+-64]
+    x64.mov r14, r8
+  fill_0.header:
+    x64.cmp r14, 100
+    x64.jge fill_0.exit
+  fill_0:
+    x64.mov r8d, 31
+    x64.mov r9, r14
+    x64.imul r9, r8
+    x64.lea rax, [rip+__layout_Array_Integer]
+    x64.mov rdx, r9
+    x64.add rdx, 7
+    x64.mov rcx, r12
+    x64.call Array.push
+  fill_0.step:
+    x64.add r14, 1
+    x64.jmp fill_0.header
+  fill_0.exit:
+    x64.mov r8, [r12+0] (8b)
+    x64.mov r9, [r8+8] (8b)
+    x64.xor r8d, r8d
+    x64.xor esi, esi
+    x64.lea r14, [rip+__layout_Array_Integer]
+    x64.lea rdi, [rip+__fnref_ascending]
+  inlined_Array.pdqsortRange_0:
+    x64.mov rax, r9
+    x64.sub rax, 0
+    x64.xor ebx, ebx
+    x64.cmp rax, 32
+    x64.jg __phi_trampoline_17_0
+  inlined_Array.pdqsortRange_1:
+    x64.mov rcx, r12
+    x64.mov rdx, rsi
+    x64.mov rax, r9
+    x64.mov r9, rdi
+    x64.mov rsi, r8
+    x64.mov rdi, r14
+    x64.call Array.smallSortRange
+    x64.jmp inline_cont_main_0
+  inlined_Array.pdqsortRange_2:
+    x64.cmp rax, 1
+    x64.jle inlined_Array.pdqsortRange_4
+  inlined_Array.pdqsortRange_3:
+    x64.mov edx, 2
+    x64.cqo
+    x64.mov rax, 2
+    x64.mov rax, 2
+    x64.mov rax, 2
+    x64.mov [rbp+-56], rax
+    x64.mov r15, [rbp+-56]
+    x64.idiv r15
+    x64.add rcx, 1
+    x64.jmp inlined_Array.pdqsortRange_2
+  inlined_Array.pdqsortRange_4:
+    x64.mov eax, 2
+    x64.mov [rbp+-32], rcx
+    x64.mov rcx, [rbp+-32]
+    x64.imul rcx, rax
+    x64.mov [rbp+-32], rcx
+    x64.mov [rsp+0], r14
+    x64.mov rcx, r12
+    x64.mov rdx, rsi
+    x64.mov rax, r9
+    x64.mov rsi, rbx
+    x64.mov rbx, r8
+    x64.mov r9, [rbp+-32]
+    x64.call Array.pdqsortRecurse
+  inline_cont_main_0:
+    x64.lea rdx, [rip+__layout_Array_Integer]
+  inlined_Array.createIterator_0:
+    x64.mov rcx, [r12+0] (8b)
+    x64.call ArrayIterator.create
+    x64.test rdx, rdx
+    x64.je inlined_Array.createIterator_2
+  inlined_Array.createIterator_1:
+    x64.xor r8d, r8d
+    x64.mov r12, r8
+    x64.jmp inline_cont_main_0
+  inlined_Array.createIterator_2:
+    x64.xor r9d, r9d
+    x64.mov r12, r8
+    x64.mov rdx, r9
+  inline_cont_main_0:
+    x64.test rdx, rdx
+    x64.je p_0
+    x64.jmp p_0.exit
+  inlined_ArrayIterator.advance_0:
+    x64.mov r8, [r12+0] (8b)
+    x64.mov r9, [r8+8] (8b)
+    x64.mov rsi, [r8+16] (8b)
+    x64.mov rdi, r9
+    x64.add rdi, 1
+    x64.mov rax, rdi
+    x64.sub rax, r9
+    x64.cmp rdi, rsi
+    x64.setl rsi
+    x64.mov rdi, rsi
+    x64.imul rdi, rax
+    x64.mov eax, 1
+    x64.mov ecx, 1
+    x64.sub rax, rsi
+    x64.imul rax, rcx
+    x64.add r9, rdi
+    x64.mov [r8+8], r9 (8b)
+    x64.xor r8d, r8d
+    x64.test rax, rax
+    x64.je __phi_trampoline_13_0
+  inlined_ArrayIterator.advance_1:
+    x64.mov edx, 1
+  inline_cont_main_1:
+    x64.test rdx, rdx
+    x64.je p_0
+    x64.jmp p_0.exit
+  p_0:
+    x64.mov r8, [r12+0] (8b)
+  inlined_stdlib.__managed_mem_cursor_current_0:
+    x64.mov r9, r8
+    x64.add r9, 24
+    x64.mov rsi, r8
+    x64.add rsi, 8
+    x64.mov rdi, [r9+0] (8b)
+    x64.mov r9, [rsi+0] (8b)
+    x64.mov rsi, [r8+0] (8b)
+    x64.imul r9, rdi
+    x64.add rsi, r9
+    x64.cmp rdi, 1
+    x64.jne inlined_stdlib.__managed_mem_cursor_current_2
+  inlined_stdlib.__managed_mem_cursor_current_1:
+    x64.xor r8d, r8d
+    x64.mov [rbp-8], rsi
+    x64.mov [rbp-16], r8
+    x64.movzx rax, byte ptr [rax+0]
+    x64.mov rcx, [rbp-24]
+    x64.mov r14, rcx
+    x64.jmp inline_cont_main_2
+  inlined_stdlib.__managed_mem_cursor_current_2:
+    x64.cmp rdi, 2
+    x64.jne inlined_stdlib.__managed_mem_cursor_current_4
+  inlined_stdlib.__managed_mem_cursor_current_3:
+    x64.movzx rcx, [rsi+0] (2b)
+    x64.mov r14, rcx
+    x64.jmp inline_cont_main_2
+  inlined_stdlib.__managed_mem_cursor_current_4:
+    x64.cmp rdi, 4
+    x64.jne inlined_stdlib.__managed_mem_cursor_current_6
+  inlined_stdlib.__managed_mem_cursor_current_5:
+    x64.mov rcx, [rsi+0] (4b)
+    x64.mov r14, rcx
+    x64.jmp inline_cont_main_2
+  inlined_stdlib.__managed_mem_cursor_current_6:
+    x64.mov rcx, [rsi+0] (8b)
+    x64.mov r14, rcx
+  inline_cont_main_2:
+    x64.mov ecx, 21
+    x64.call mrt_alloc
+    x64.mov [rbp+-32], r8
+    x64.mov rcx, r14
+    x64.mov rdx, [rbp+-32]
+    x64.call mrt_i64_to_string
+    x64.mov r14, r8
+    x64.mov r8, r14
+    x64.add r8, 0
+    x64.mov [rbp+-40], r8
+    x64.mov r8, [rbp+-40]
+    x64.add r8, 1
+    x64.mov [rbp+-40], r8
+    x64.mov rcx, [rbp+-40]
+    x64.add rcx, 1
+    x64.call mrt_alloc
+    x64.mov [rbp+-48], r8
+    x64.lea r8, [rip+__istr_0]
+    x64.mov r9, [rbp+-48]
+    x64.mov [rbp-8], r9
+    x64.mov [rbp-16], r8
+    x64.mov r8, [rbp+-64]
+    x64.mov [rbp-24], r8
+    x64.rep_movsb
+    x64.mov r8, [rbp+-48]
+    x64.add r8, 0
+    x64.mov [rbp-8], r8
+    x64.mov r9, [rbp+-32]
+    x64.mov [rbp-16], r9
+    x64.mov [rbp-24], r14
+    x64.rep_movsb
+    x64.lea r9, [rip+__istr_1]
+    x64.add r8, r14
+    x64.mov [rbp-8], r8
+    x64.mov [rbp-16], r9
+    x64.mov [rbp-24], r13
+    x64.rep_movsb
+    x64.mov ecx, 40
+    x64.call mrt_alloc
+    x64.mov r14, r8
+    x64.mov r8, [rbp+-48]
+    x64.mov [r14+0], r8 (8b)
+    x64.mov r8, [rbp+-40]
+    x64.mov [r14+8], r8 (8b)
+    x64.mov [r14+16], r8 (8b)
+    x64.mov [r14+24], r13 (8b)
+    x64.mov r8, [rbp+-64]
+    x64.mov [r14+32], r8 (8b)
+    x64.mov ecx, 16
+    x64.call mrt_alloc
+    x64.mov [r8+0], r14 (8b)
+    x64.mov r9, [rbp+-64]
+    x64.mov [r8+8], r9 (8b)
+    x64.mov r9, [r8+0] (8b)
+    x64.mov rdx, [r9+8] (8b)
+    x64.mov r14, [r9+0] (8b)
+    x64.mov rcx, r14
+    x64.call mrt_write_stdout
+    x64.jmp inlined_ArrayIterator.advance_0
+  p_0.exit:
+    x64.mov ecx, 40
+    x64.call mrt_alloc
+    x64.mov r12, r8
+    x64.lea r8, [rip+__istr_2]
+    x64.mov [r12+0], r8 (8b)
+    x64.mov [r12+8], r13 (8b)
+    x64.mov r8, -2
+    x64.mov [r12+16], r8 (8b)
+    x64.mov [r12+24], r13 (8b)
+    x64.mov r8, [rbp+-64]
+    x64.mov [r12+32], r8 (8b)
+    x64.mov ecx, 16
+    x64.call mrt_alloc
+    x64.mov [r8+0], r12 (8b)
+    x64.mov [r8+8], r13 (8b)
+    x64.mov r9, [r8+0] (8b)
+    x64.mov rdx, [r9+8] (8b)
+    x64.mov r12, [r9+0] (8b)
+    x64.mov rcx, r12
+    x64.call mrt_write_stdout
+    x64.mov r8, [rbp+-64]
+    x64.epilogue
+    x64.ret
+  __phi_trampoline_17_0:
+    x64.mov rcx, rbx
+    x64.jmp inlined_Array.pdqsortRange_2
+  __phi_trampoline_13_0:
+    x64.mov rdx, r8
+    x64.jmp inline_cont_main_1
+  }
+}
+---

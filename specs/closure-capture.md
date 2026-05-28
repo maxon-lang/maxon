@@ -187,3 +187,46 @@ end 'main'
 ```stdout
 hello
 ```
+
+
+<!-- test: closure-capture.interface-method-with-captured-field -->
+A closure declared inside an interface-conforming method body that captures
+a `let`-bound copy of a self-field. The method `Box.greet()` is the
+interface-witness target for `Greeter.greet`, so the call ABI carries the
+boxed self pointer; the inner closure receives an env containing the
+captured local `myv` (a copy of `self.v`). Historically the self-hosted
+x64 backend's regalloc panicked here with
+`colorLookupGpr: vreg v0 in func=Box.greet … NO live range was built for v0`
+— a `mov-arg` for the closure's call-arg setup referenced a value the
+backend hadn't defined, because the env-pointer arg slot wasn't being
+registered alongside the captured-value arg. Compiling at all confirms
+the regalloc allocates a live range for the env pointer's arg setup.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Greeter
+	function greet() returns Integer
+end 'Greeter'
+
+type Box implements Greeter
+	var v as Integer
+
+	static function make(v Integer) returns Self
+		return Self{v: v}
+	end 'make'
+
+	function greet() returns Integer
+		let myv = v
+		let adder = function(x Integer) gives x + myv
+		return adder(10)
+	end 'greet'
+end 'Box'
+
+function main() returns ExitCode
+	let m = Box.make(5)
+	return m.greet()
+end 'main'
+```
+```exitcode
+15
+```

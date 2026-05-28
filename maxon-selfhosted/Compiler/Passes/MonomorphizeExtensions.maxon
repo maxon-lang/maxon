@@ -181,6 +181,17 @@ function cloneAndAppendMonomorph(project Project, dstModule MaxonModule, srcModu
 	let ifaceType = MaxonType.interface(ifaceTypeId)
 	let receiverNamed = MaxonType.named(project.typeNames.intern(receiverTypeName))
 
+	// Closure-specialization queue. Filled by the `closureCreate` /
+	// `functionRef` arms in `substituteOp` as they walk the parent body's
+	// ops; drained after the parent's blocks are cloned to emit per-receiver
+	// clones of each referenced closure body. The queue is local to this
+	// monomorphization so the same closure body referenced from a second
+	// monomorphization (for a different receiver) gets a fresh entry +
+	// fresh per-receiver clone, while same-receiver-same-closure references
+	// from multiple call sites in this parent collapse to one clone via
+	// `specializeClosureName`'s in-queue dedup.
+	var closureQueue = ClosureSpecArray.create()
+
 	// Build the slot-id remap. The source function may have hidden
 	// `__witness_<param>` slots that the parser pre-allocated for
 	// interface-typed params (the parser's ABI expansion). After
@@ -247,33 +258,11 @@ function cloneAndAppendMonomorph(project Project, dstModule MaxonModule, srcModu
 	let newScope = cloneScopeWithSubst(project, srcScope: srcFunc.scope, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed, receiverTypeName: receiverTypeName, slotRemap: slotRemap)
 	newFunc.scope = newScope
 
-	// Clone blocks + ops. The clone walks the source function's blockRefs
-	// in order; for each block we allocate a brand-new IrBlock and append
-	// substituted clones of every op onto `module.ops`. The new
-	// blockRefs index into `module.blocks` at the freshly appended slots.
-	for blockRefIdx in 0 upto srcFunc.blockRefs.count() 'eachBlockRef'
-		let srcBlockIdx = try srcFunc.blockRefs.get(blockRefIdx) otherwise panic("cloneAndAppendMonomorph: blockRefs.get OOB at {blockRefIdx}")
-		let srcBlock = try srcModule.blocks.get(srcBlockIdx) otherwise panic("cloneAndAppendMonomorph: blocks.get OOB at {srcBlockIdx}")
-		var newBlock = IrBlock.create(srcBlock.id, label: srcBlock.label)
-		// Clone each op with substitution and append it to module.ops.
-		for srcOpIdx in srcBlock.opRefs 'eachOp'
-			let srcOp = try srcModule.ops.get(srcOpIdx) otherwise panic("cloneAndAppendMonomorph: ops.get OOB at {srcOpIdx}")
-			let clonedOp = substituteOp(project, op: srcOp, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed, slotRemap: slotRemap)
-			let newOpIdx = dstModule.ops.count()
-			dstModule.ops.push(clonedOp)
-			newBlock.opRefs.append(newOpIdx)
-		end 'eachOp'
-		newBlock.terminator = match srcBlock.terminator 'relocate'
-			unset gives Terminator.unset
-			dead gives Terminator.dead
-			fallthrough gives Terminator.fallthrough
-			opIndex gives relocateTerminator(project, srcModule: srcModule, dstModule: dstModule, srcOpIdx: srcBlock.terminatorIndex(), subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed, slotRemap: slotRemap)
-		end 'relocate'
-		let newBlockIdx = dstModule.blocks.count()
-		dstModule.blocks.push(newBlock)
-		dstModule.blockSourceInfo.push(BlockSourceInfo.empty())
-		newFunc.blockRefs.append(newBlockIdx)
-	end 'eachBlockRef'
+	// Clone blocks + ops onto `dstModule` and register them on `newFunc`.
+	// The parent-body clone discards the (srcOpIdx, newOpIdx) call-op
+	// pairing — only closure-body clones need it for downstream
+	// resolvedCallees rewriting.
+	_ = cloneBlocksWithSubst(project, srcModule: srcModule, srcFunc: srcFunc, dstModule: dstModule, newFunc: newFunc, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed, slotRemap: slotRemap, queue: closureQueue, receiverTypeName: receiverTypeName, ifaceName: ifaceName)
 
 	// Register the new function's signature so resolver / lowering /
 	// inliner can look it up via the same path a parser-declared method
@@ -286,14 +275,180 @@ function cloneAndAppendMonomorph(project Project, dstModule MaxonModule, srcModu
 	try project.funcThrowsTypes.insert(monoQualified, value: srcFunc.throwsTypeName) otherwise ignore
 
 	dstModule.functions.push(newFunc)
+
+	// Drain the closure-specialization queue: for every closure referenced
+	// from the parent body's `closureCreate`/`functionRef` ops, emit a
+	// per-receiver clone of the closure body under the specialized name.
+	// Each recursive clone walks its source body through `substituteOp`,
+	// which may push further entries onto the queue for nested closure
+	// refs; the loop processes those until the queue is empty.
+	drainClosureSpecQueue(project, dstModule: dstModule, queue: closureQueue, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed, receiverTypeName: receiverTypeName, ifaceName: ifaceName)
 end 'cloneAndAppendMonomorph'
+
+// Process every queued ClosureSpecEntry by cloning the source closure body
+// under its receiver-specialized name. The clone walks the source body's
+// blocks/ops the same way `cloneAndAppendMonomorph` walks the parent's,
+// passing the same substitution + the same queue (so nested closure refs
+// cascade naturally) down through `substituteOp`. The destination is
+// always `dstModule` — even when the source closure body lived in
+// `stdlibParsedModule`, the specialized clone lands alongside the user
+// monomorphizations so codegen sees one module.
+function drainClosureSpecQueue(project Project, dstModule MaxonModule, queue ClosureSpecArray, subst TypeSubstitution, ifaceType MaxonType, receiverNamed MaxonType, receiverTypeName String, ifaceName String)
+	// FIFO drain. Process by index instead of `for entry in queue` so
+	// entries pushed during the body of the loop (nested closure refs)
+	// get processed in the same drain.
+	var i = 0
+	while i < queue.count() 'drain'
+		let entry = try queue.get(i) otherwise panic("drainClosureSpecQueue: queue.get OOB at {i}")
+		i = i + 1
+
+		// Idempotency: another monomorphization in the same compile run
+		// may have already specialized this closure for this receiver
+		// type via a separate `cloneAndAppendMonomorph` call (e.g.
+		// recursive monomorphization). If so, skip — the
+		// receiver-qualified name uniquely identifies the clone.
+		if let _ = try findFunctionIndexByName(dstModule, name: entry.specName) 'alreadyEmitted'
+			continue
+		end 'alreadyEmitted'
+
+		emitSpecializedClosure(project, dstModule: dstModule, srcModule: entry.srcModule, srcFunc: entry.srcFunc, specName: entry.specName, queue: queue, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed, receiverTypeName: receiverTypeName, ifaceName: ifaceName)
+	end 'drain'
+end 'drainClosureSpecQueue'
+
+// Clone `srcFunc` (a lifted closure body) into a fresh IrFunction named
+// `specName`, applying the active substitution and appending the cloned
+// blocks/ops onto `dstModule`. Mirrors `cloneAndAppendMonomorph`'s block
+// walk minus the witness-slot / signature-paramType massaging — closure
+// bodies don't carry `__witness_<param>` slots and their signatures are
+// already in the user-facing shape. The hidden `__env i64` trailing param
+// flows through verbatim.
+function emitSpecializedClosure(project Project, dstModule MaxonModule, srcModule MaxonModule, srcFunc IrFunction, specName String, queue ClosureSpecArray, subst TypeSubstitution, ifaceType MaxonType, receiverNamed MaxonType, receiverTypeName String, ifaceName String)
+	// Build the slot remap for the closure body. Closures don't have
+	// `__witness___self` slots (they're not interface-extension method
+	// bodies in their own right), but `buildSlotRemap` still produces
+	// a dense renumbering — for a closure that's effectively an
+	// identity map. Reusing the helper keeps slot-id handling
+	// consistent across all monomorphized bodies.
+	let slotRemap = buildSlotRemap(srcFunc)
+
+	// Substitute the return type. Closures lifted from generic extensions
+	// can return a type-parameter-typed value (e.g. `function() gives
+	// self.something()` with a Self-typed receiver); the substitution
+	// rewrites those just like parent-body return types.
+	let newReturnType = substituteReturnType(project, raw: srcFunc.maxonReturnType, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed)
+
+	// Substitute each entry in maxonParamTypes. The hidden `__env i64`
+	// trailing param is MaxonType.opaquePointer (parser stamps it at
+	// Parser.maxon:13348) — substitution leaves it alone. User params
+	// may carry type-parameter or interface-typed slots; we rewrite
+	// them through the same fold.
+	var newParamTypes = MaxonTypeArray.create()
+	for i in 0 upto srcFunc.maxonParamTypes.count() 'eachParam'
+		let pt = try srcFunc.maxonParamTypes.get(i) otherwise panic("emitSpecializedClosure: maxonParamTypes.get OOB at {i}")
+		newParamTypes.push(substituteWithIfaceFold(project, t: pt, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed))
+	end 'eachParam'
+
+	var newFunc = IrFunction.create(specName, maxonReturnType: newReturnType, paramCount: srcFunc.paramCount, maxonParamTypes: newParamTypes, returnLine: srcFunc.returnLine, throwsTypeName: srcFunc.throwsTypeName)
+	newFunc.namespace = srcFunc.namespace
+	newFunc.visibility = srcFunc.visibility
+	newFunc.sourceFilePath = srcFunc.sourceFilePath
+	newFunc.nameLine = srcFunc.nameLine
+	newFunc.nameColumn = srcFunc.nameColumn
+	newFunc.nextBlockId = srcFunc.nextBlockId
+
+	// Rebuild the closure body's Scope with substituted varTypes. Closure
+	// bodies don't have self-field aliases, so the receiverTypeName +
+	// receiverStruct lookup at `cloneScopeWithSubst` is a no-op for them
+	// — but the rest of the helper (slot remap, payload bindings, regular
+	// vars) applies identically. Pass the receiver type name even though
+	// it won't be consulted for closure scopes; the helper handles missing
+	// struct entries by dropping the alias, which is the desired behavior
+	// for closure bodies that happen to have a self-field-shaped binding
+	// from a captured outer scope (none in practice today).
+	let newScope = cloneScopeWithSubst(project, srcScope: srcFunc.scope, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed, receiverTypeName: receiverTypeName, slotRemap: slotRemap)
+	newFunc.scope = newScope
+
+	// Walk blocks/ops the same way `cloneAndAppendMonomorph` does, capturing
+	// the (srcOpIdx, newOpIdx) pairing for every cloned call-shaped op.
+	// Translate `project.resolvedCallees` afterwards so every cloned `call`/
+	// `methodCall`/`tryCall`/`tryMethodCall` whose original resolution
+	// pointed at the abstract `{ifaceName}.method` points at the concrete
+	// `{receiverTypeName}.method` for THIS specialization. Without this,
+	// lowering sees the cloned op's new opIdx with no `resolvedCallees`
+	// entry and either panics (`lowerCall` invariant) or — worse — finds a
+	// stale entry from the source op's opIdx that resolves to whichever
+	// concrete receiver the original closure was first resolved against.
+	let clonedCallOps = cloneBlocksWithSubst(project, srcModule: srcModule, srcFunc: srcFunc, dstModule: dstModule, newFunc: newFunc, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed, slotRemap: slotRemap, queue: queue, receiverTypeName: receiverTypeName, ifaceName: ifaceName)
+	rewriteClonedResolvedCallees(project, dstModule: dstModule, pairs: clonedCallOps, ifaceName: ifaceName, receiverTypeName: receiverTypeName)
+
+	// Register the specialized closure's signature. The source closure has
+	// an entry in `project.funcSignatures` from parse time; we substitute
+	// its paramTypes and re-register under the specialized name. The user
+	// arity is the source signature's count (does not include the hidden
+	// __env), so the resulting FuncSignature matches what callers built
+	// at call-construction time. `paramDefaults` carry through — closure
+	// params don't have defaults today but the field is present.
+	let srcSig = try project.funcSignatures.get(srcFunc.name) otherwise panic("emitSpecializedClosure: source closure signature '{srcFunc.name}' missing")
+	var newSigParamTypes = MaxonTypeArray.create()
+	for i in 0 upto srcSig.paramTypes.count() 'eachSigParam'
+		let pt = try srcSig.paramTypes.get(i) otherwise panic("emitSpecializedClosure: srcSig.paramTypes.get OOB at {i}")
+		newSigParamTypes.push(substituteWithIfaceFold(project, t: pt, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed))
+	end 'eachSigParam'
+	let newSig = FuncSignature.create(srcSig.paramNames, paramTypes: newSigParamTypes, paramDefaults: srcSig.paramDefaults)
+	try project.funcReturnTypes.insert(specName, value: newReturnType) otherwise ignore
+	try project.funcSignatures.insert(specName, value: newSig) otherwise ignore
+	project.methodNameIndex.record(specName)
+	try project.funcVisibilities.insert(specName, value: FuncVisibilityInfo.create(srcFunc.visibility, sourceFilePath: srcFunc.sourceFilePath)) otherwise ignore
+	try project.funcThrowsTypes.insert(specName, value: srcFunc.throwsTypeName) otherwise ignore
+
+	dstModule.functions.push(newFunc)
+end 'emitSpecializedClosure'
+
+// Clone `srcFunc`'s blocks + ops onto `dstModule` and register them on
+// `newFunc.blockRefs`. Walks the source function's blockRefs in order; for
+// each block allocates a fresh IrBlock, clones every op through
+// `substituteOp`, materializes the cloned terminator via `relocateTerminator`,
+// and appends the new block to `dstModule.blocks`. Returns the (srcOpIdx,
+// newOpIdx) pairs for every cloned call-shaped op (per
+// `opNeedsResolvedCalleeRewrite`) so callers that need to translate
+// `project.resolvedCallees` can do so afterwards. Parent-body callers that
+// don't care about the pairing discard the return value.
+function cloneBlocksWithSubst(project Project, srcModule MaxonModule, srcFunc IrFunction, dstModule MaxonModule, newFunc IrFunction, subst TypeSubstitution, ifaceType MaxonType, receiverNamed MaxonType, slotRemap SlotRemap, queue ClosureSpecArray, receiverTypeName String, ifaceName String) returns OpIndexPairArray
+	var clonedCallOps = OpIndexPairArray.create()
+	for blockRefIdx in 0 upto srcFunc.blockRefs.count() 'eachBlockRef'
+		let srcBlockIdx = try srcFunc.blockRefs.get(blockRefIdx) otherwise panic("cloneBlocksWithSubst: blockRefs.get OOB at {blockRefIdx}")
+		let srcBlock = try srcModule.blocks.get(srcBlockIdx) otherwise panic("cloneBlocksWithSubst: blocks.get OOB at {srcBlockIdx}")
+		var newBlock = IrBlock.create(srcBlock.id, label: srcBlock.label)
+		for srcOpIdx in srcBlock.opRefs 'eachOp'
+			let srcOp = try srcModule.ops.get(srcOpIdx) otherwise panic("cloneBlocksWithSubst: ops.get OOB at {srcOpIdx}")
+			let clonedOp = substituteOp(project, op: srcOp, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed, slotRemap: slotRemap, queue: queue, parentSrcModule: srcModule, dstModule: dstModule, receiverTypeName: receiverTypeName, ifaceName: ifaceName)
+			let newOpIdx = dstModule.ops.count()
+			dstModule.ops.push(clonedOp)
+			newBlock.opRefs.append(newOpIdx)
+			if opNeedsResolvedCalleeRewrite(srcOp) 'isCall'
+				clonedCallOps.push(OpIndexPair.create(srcOpIdx, dstOpIdx: newOpIdx))
+			end 'isCall'
+		end 'eachOp'
+		newBlock.terminator = match srcBlock.terminator 'relocate'
+			unset gives Terminator.unset
+			dead gives Terminator.dead
+			fallthrough gives Terminator.fallthrough
+			opIndex gives relocateTerminator(project, srcModule: srcModule, dstModule: dstModule, srcOpIdx: srcBlock.terminatorIndex(), subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed, slotRemap: slotRemap, queue: queue, receiverTypeName: receiverTypeName, ifaceName: ifaceName)
+		end 'relocate'
+		let newBlockIdx = dstModule.blocks.count()
+		dstModule.blocks.push(newBlock)
+		dstModule.blockSourceInfo.push(BlockSourceInfo.empty())
+		newFunc.blockRefs.append(newBlockIdx)
+	end 'eachBlockRef'
+	return clonedCallOps
+end 'cloneBlocksWithSubst'
 
 // Materialize the cloned terminator op AFTER cloning the block's regular
 // ops so the source terminator's op index has already been visited by
 // the regular `eachOp` loop above. Returns the relocated Terminator.
 // The src terminator's op was already pushed into module.ops during the
 // op walk; this helper just computes the new op-index for that position.
-function relocateTerminator(project Project, srcModule MaxonModule, dstModule MaxonModule, srcOpIdx OpIndex, subst TypeSubstitution, ifaceType MaxonType, receiverNamed MaxonType, slotRemap SlotRemap) returns Terminator
+function relocateTerminator(project Project, srcModule MaxonModule, dstModule MaxonModule, srcOpIdx OpIndex, subst TypeSubstitution, ifaceType MaxonType, receiverNamed MaxonType, slotRemap SlotRemap, queue ClosureSpecArray, receiverTypeName String, ifaceName String) returns Terminator
 	// The block's terminator op index points at a position in `srcModule.ops`
 	// that we already processed in the op walk: each op gets a brand-new
 	// trailing entry in `dstModule.ops`. Clone+append the terminator op afresh
@@ -301,7 +456,7 @@ function relocateTerminator(project Project, srcModule MaxonModule, dstModule Ma
 	// terminator referent inside the destination's op-table even when the
 	// source body came from `stdlibParsedModule`.
 	let srcOp = try srcModule.ops.get(srcOpIdx) otherwise panic("relocateTerminator: ops.get OOB at {srcOpIdx}")
-	let clonedOp = substituteOp(project, op: srcOp, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed, slotRemap: slotRemap)
+	let clonedOp = substituteOp(project, op: srcOp, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed, slotRemap: slotRemap, queue: queue, parentSrcModule: srcModule, dstModule: dstModule, receiverTypeName: receiverTypeName, ifaceName: ifaceName)
 	let newOpIdx = dstModule.ops.count()
 	dstModule.ops.push(clonedOp)
 	return Terminator.opIndex(newOpIdx)
@@ -501,29 +656,281 @@ function findFieldOnStruct(structType StructType, fieldName String) returns Fiel
 	throw MonomorphFieldLookupError.notFound
 end 'findFieldOnStruct'
 
-// Closure references encountered during interface-extension monomorphization
-// need the same per-substitution specialization the C# bootstrap performs
-// (FunctionCloner.SpecializeClosureName in maxon-sharp). The current
-// self-hosted compiler reaches this path only for user-declared
-// interface-extension methods on a receiver type — stdlib generic
-// extensions on Array<Element> compile once with type-parameter slots and
-// never traverse `substituteOp`. As a result no in-tree user code exercises
-// a closure reference here. Panic on detection so future code that does
-// reach this path surfaces a clean error instead of silently emitting a
-// stale ref, rather than silently miscompiling. Lift the C# design here
-// when an actual call site needs per-substitution closure specialization.
-function rewriteClosureRefOnMonomorph(op MaxonOp, funcName String) returns MaxonOp
-	if funcName.startsWith("_$closure_") 'isClosure'
-		panic("MonomorphizeExtensions: closure '{funcName}' referenced from a monomorphized extension body. Per-substitution closure specialization isn't implemented in the self-hosted compiler yet — port FunctionCloner.SpecializeClosureName from maxon-sharp.")
-	end 'isClosure'
-	return op
+// One queued per-receiver closure specialization. Produced when the cloner
+// walks a `closureCreate` or `functionRef` op inside a monomorphized
+// extension body; consumed by `drainClosureSpecQueue` which clones the
+// closure body under the specialized name and re-runs substitution against
+// the same (receiver, interface) pair so the body's interface-typed calls
+// re-resolve through the concrete receiver.
+//
+// `srcModule` is the module that owns `srcFunc`'s blocks/ops (user module
+// or `stdlibParsedModule`). Captured separately because the source closure
+// body may live in a different module than the parent it was discovered in
+// — same fallback the parent uses at monomorphizeInterfaceExtension's
+// `tryStdlib` branch.
+export type ClosureSpecEntry
+	export var srcName as String
+	export var specName as String
+	export var srcFunc as IrFunction
+	export var srcModule as MaxonModule
+
+	export static function create(srcName String, specName String, srcFunc IrFunction, srcModule MaxonModule) returns ClosureSpecEntry
+		return Self{srcName: srcName, specName: specName, srcFunc: srcFunc, srcModule: srcModule}
+	end 'create'
+end 'ClosureSpecEntry'
+
+export typealias ClosureSpecArray = Array with ClosureSpecEntry
+
+// (src, dst) opIdx pair for cloned call ops that need their
+// `project.resolvedCallees` entry re-keyed under the new opIdx with the
+// receiver-substituted callee. Collected during the op-clone walk;
+// drained by `rewriteClonedResolvedCallees` once the walk completes.
+export type OpIndexPair
+	export var srcOpIdx as OpIndex
+	export var dstOpIdx as OpIndex
+
+	export static function create(srcOpIdx OpIndex, dstOpIdx OpIndex) returns OpIndexPair
+		return Self{srcOpIdx: srcOpIdx, dstOpIdx: dstOpIdx}
+	end 'create'
+end 'OpIndexPair'
+
+export typealias OpIndexPairArray = Array with OpIndexPair
+
+// Rewrite a `call`/`tryCall` op's callee bytes when the original callee
+// is a sibling-qualified interface method (e.g. `Tagger.tag`) — the
+// monomorphized body must call the concrete receiver's method
+// (`Three.tag`). Bare unqualified callees (e.g. `tag` before resolution
+// stamped a qualifier) and concrete-qualified callees that already point
+// at non-interface methods pass through unchanged.
+//
+// We intern the rewritten name through `project.calleeNames` so identity
+// comparisons elsewhere in the pipeline keep working — the interner is
+// the canonical source of stable ByteArray pointers.
+function substituteCalleeBytes(project Project, callee ByteArray, ifaceName String, receiverTypeName String) returns ByteArray
+	let calleeStr = String.from(callee)
+	let ifacePrefix = "{ifaceName}."
+	if not calleeStr.startsWith(ifacePrefix) 'noMatch'
+		return callee
+	end 'noMatch'
+	let bytes = calleeStr.toByteArray()
+	let prefixLen = ifacePrefix.toByteArray().count()
+	let methodSuffix = byteSliceToString(bytes, startIndex: prefixLen, endIndex: bytes.count())
+	let rewritten = "{receiverTypeName}.{methodSuffix}"
+	return project.calleeNames.intern(rewritten)
+end 'substituteCalleeBytes'
+
+// Rewrite a `call`/`tryCall` op's CallContext for a monomorphized body.
+// The parser stamps unqualified callees inside a `type/extension Foo`
+// block with `sibling(Foo)`; after monomorphization the body is logically
+// inside a `type/extension Bar` (the concrete receiver), so the sibling
+// context must follow. Without this, type resolution would re-qualify a
+// bare `tag()` call to the still-abstract `Tagger.tag` and lowering
+// would either dispatch via interface (when the resolver populates a
+// receiver type) or call the interface-method symbol directly (when it
+// doesn't), neither of which gives us per-receiver dispatch.
+//
+// `free` and `qualified` contexts pass through unchanged: they don't
+// depend on a type namespace at resolution time.
+//
+// `sibling(name)` only re-targets when `name == ifaceName`. Closures
+// nested inside the lifted body may have their own type-namespace from
+// some other source (e.g. a struct constructor that happens to live in
+// the closure body); rewriting unrelated sibling contexts would break
+// their resolution.
+function substituteCallContext(callContext CallContext, ifaceName String, receiverTypeName String) returns CallContext
+	return match callContext 'k'
+		free gives CallContext.free
+		qualified gives CallContext.qualified
+		sibling(typeName) gives CallContext.sibling(receiverTypeName) if typeName == ifaceName else CallContext.sibling(typeName)
+	end 'k'
+end 'substituteCallContext'
+
+// Predicate: does this op need its `resolvedCallees` translation when its
+// containing function is cloned for a specific receiver? True for every
+// `call` / `methodCall` shape; false for everything else.
+function opNeedsResolvedCalleeRewrite(op MaxonOp) returns bool
+	let n = op.name
+	return n == "call" or n == "methodCall" or n == "tryCall" or n == "tryMethodCall"
+end 'opNeedsResolvedCalleeRewrite'
+
+// For every cloned call op, copy `project.resolvedCallees[srcOpIdx]` to
+// the new opIdx — substituting `{ifaceName}.method` with
+// `{receiverTypeName}.method` when the original resolution pointed at an
+// interface method. The substitution is what makes the per-receiver
+// closure clone call the concrete `Three.tag` / `Seven.tag` instead of
+// sharing whatever resolution the source op happened to land on.
+//
+// Source ops without an entry in `resolvedCallees` (e.g. an ambiguous
+// call site that already emitted E3007) are skipped: lowering would
+// have panicked on the original too, so the cloned op's missing entry
+// surfaces the same problem in the same place.
+function rewriteClonedResolvedCallees(project Project, dstModule MaxonModule, pairs OpIndexPairArray, ifaceName String, receiverTypeName String)
+	for pair in pairs 'each'
+		// Compute the desired qualified callee from the cloned op's callee
+		// + callContext. We've already rewritten `sibling(ifaceName)` to
+		// `sibling(receiverTypeName)` in `substituteCallContext`, so the
+		// op's stored context drives the correct resolution.
+		let clonedOp = try dstModule.ops.get(pair.dstOpIdx) otherwise continue
+		let qualifiedTarget = qualifiedCalleeFromClonedCall(project, op: clonedOp, ifaceName: ifaceName, receiverTypeName: receiverTypeName)
+		if qualifiedTarget.isEmpty() 'noTarget'
+			// Not a call shape we can pre-resolve; leave resolvedCallees
+			// to the post-clone walker.
+			continue
+		end 'noTarget'
+		try project.resolvedCallees.insert(pair.dstOpIdx, value: qualifiedTarget) otherwise ignore
+		// Mirror `resolvedReceiverTypes` from src when present — call ops
+		// usually don't carry one (free-call shape), but methodCall does.
+		if let srcReceiverType = try project.resolvedReceiverTypes.get(pair.srcOpIdx) 'haveRecvType'
+			try project.resolvedReceiverTypes.insert(pair.dstOpIdx, value: srcReceiverType) otherwise ignore
+		end 'haveRecvType'
+		if let srcParamTypes = try project.callParamTypes.get(pair.srcOpIdx) 'haveParamTypes'
+			try project.callParamTypes.insert(pair.dstOpIdx, value: srcParamTypes) otherwise ignore
+		end 'haveParamTypes'
+	end 'each'
+end 'rewriteClonedResolvedCallees'
+
+// Compute the qualified callee that a cloned call op should resolve to,
+// given its callee bytes and substituted callContext. Returns "" when the
+// op is not a call-shape or when we don't have enough info to pre-resolve.
+function qualifiedCalleeFromClonedCall(project Project, op MaxonOp, ifaceName String, receiverTypeName String) returns String
+	let extracted = extractCalleeAndContext(op)
+	if extracted.calleeStr.isEmpty() 'notACall'
+		return ""
+	end 'notACall'
+	let bare = extracted.calleeStr
+	// Already-qualified callee with the interface prefix: rewrite to receiver.
+	let ifacePrefix = "{ifaceName}."
+	if bare.startsWith(ifacePrefix) 'qualifiedIface'
+		let bareBytes = bare.toByteArray()
+		let prefixLen = ifacePrefix.toByteArray().count()
+		let methodSuffix = byteSliceToString(bareBytes, startIndex: prefixLen, endIndex: bareBytes.count())
+		return "{receiverTypeName}.{methodSuffix}"
+	end 'qualifiedIface'
+	// Bare callee inside a `sibling(receiverTypeName)` context: qualify to receiver.
+	let siblingTypeName = siblingTypeNameOfContext(extracted.context)
+	if siblingTypeName == receiverTypeName 'siblingMatch'
+		let candidate = "{receiverTypeName}.{bare}"
+		if project.funcReturnTypes.contains(candidate) 'isRegistered'
+			return candidate
+		end 'isRegistered'
+		if project.overloadedNames.contains(candidate) 'isOverloaded'
+			return candidate
+		end 'isOverloaded'
+	end 'siblingMatch'
+	return ""
+end 'qualifiedCalleeFromClonedCall'
+
+// Carrier for extractCalleeAndContext output. `calleeStr` is empty when
+// the op isn't a call shape.
+type CalleeAndContext
+	export var calleeStr as String
+	export var context as CallContext
+
+	export static function create(calleeStr String, context CallContext) returns CalleeAndContext
+		return Self{calleeStr: calleeStr, context: context}
+	end 'create'
+
+	export static function none() returns CalleeAndContext
+		return Self{calleeStr: "", context: CallContext.free}
+	end 'none'
+end 'CalleeAndContext'
+
+function extractCalleeAndContext(op MaxonOp) returns CalleeAndContext
+	let n = op.name
+	if n == "call" 'isCall'
+		match op 'm'
+			call(_, callee, callContext, _, _, _, _, _) then return CalleeAndContext.create(String.from(callee), context: callContext)
+			default panic("extractCalleeAndContext: name=call but match failed")
+		end 'm'
+	end 'isCall'
+	if n == "tryCall" 'isTryCall'
+		match op 'm'
+			tryCall(_, callee, callContext, _, _, _, _, _, _) then return CalleeAndContext.create(String.from(callee), context: callContext)
+			default panic("extractCalleeAndContext: name=tryCall but match failed")
+		end 'm'
+	end 'isTryCall'
+	return CalleeAndContext.none()
+end 'extractCalleeAndContext'
+
+// Compute the receiver-specialized name for a closure and, if not already
+// queued or already emitted, push a ClosureSpecEntry so the drain loop
+// produces the cloned body. Returns the specialized name (which the caller
+// stamps onto the outgoing `closureCreate`/`functionRef` op's funcName).
+//
+// Dedup is by `specName`: the same closure referenced from multiple call
+// sites in one parent body, OR a closure already specialized in a prior
+// monomorphization for the same receiver, both short-circuit to a single
+// emission. The dedup walks `dstModule.functions` linearly because the
+// monomorphization cache works at the (receiver, calleeQualified) level
+// — not the closure level — so we have no Map to consult.
+function specializeClosureName(srcName String, receiverTypeName String, queue ClosureSpecArray, parentSrcModule MaxonModule, dstModule MaxonModule, project Project) returns String
+	let specName = "{srcName}${receiverTypeName}"
+
+	// Dedup against the in-flight queue.
+	for entry in queue 'eachQueued'
+		if entry.specName == specName 'hit'
+			return specName
+		end 'hit'
+	end 'eachQueued'
+
+	// Dedup against already-emitted functions (e.g. a second
+	// monomorphization for the same receiver type encounters the
+	// already-cloned closure).
+	if let _ = try findFunctionIndexByName(dstModule, name: specName) 'alreadyEmitted'
+		return specName
+	end 'alreadyEmitted'
+
+	// Locate the source closure body. Try the destination user module
+	// first (closures lifted from user code live there), then the
+	// parent's owning module (covers stdlib-defined closures when the
+	// parent monomorphization sourced from `stdlibParsedModule`), then
+	// `stdlibParsedModule` outright. This mirrors the parent-lookup
+	// order in `monomorphizeInterfaceExtension`.
+	if let userIdx = try findFunctionIndexByName(dstModule, name: srcName) 'userHit'
+		let srcFunc = try dstModule.functions.get(userIdx) otherwise panic("specializeClosureName: dstModule.functions.get OOB after findFunctionIndexByName")
+		queue.push(ClosureSpecEntry.create(srcName, specName: specName, srcFunc: srcFunc, srcModule: dstModule))
+		return specName
+	end 'userHit' else 'tryParent'
+		if let parentIdx = try findFunctionIndexByName(parentSrcModule, name: srcName) 'parentHit'
+			let srcFunc = try parentSrcModule.functions.get(parentIdx) otherwise panic("specializeClosureName: parentSrcModule.functions.get OOB after findFunctionIndexByName")
+			queue.push(ClosureSpecEntry.create(srcName, specName: specName, srcFunc: srcFunc, srcModule: parentSrcModule))
+			return specName
+		end 'parentHit' else 'tryStdlib'
+			let stdlibModule = getStdlibParsedModule(project)
+			let stdlibIdx = try findFunctionIndexByName(stdlibModule, name: srcName) otherwise panic("specializeClosureName: closure body '{srcName}' not found in user module, parent source module, or stdlib parsed module")
+			let srcFunc = try stdlibModule.functions.get(stdlibIdx) otherwise panic("specializeClosureName: stdlibModule.functions.get OOB after findFunctionIndexByName")
+			queue.push(ClosureSpecEntry.create(srcName, specName: specName, srcFunc: srcFunc, srcModule: stdlibModule))
+			return specName
+		end 'tryStdlib'
+	end 'tryParent'
+end 'specializeClosureName'
+
+// Closure references encountered during interface-extension monomorphization.
+//
+// Each `closureCreate` / `functionRef` arm rewrites the op's `funcName` to
+// the receiver-specialized form and queues a ClosureSpecEntry on the
+// cloner-local `queue`. The post-clone `drainClosureSpecQueue` walks the
+// queue and clones each closure body under its specialized name, applying
+// the same substitution. Nested closure refs encountered during a recursive
+// clone cascade naturally — `specializeClosureName` pushes them onto the
+// same queue, which the drain loop processes until empty.
+//
+// Why always-specialize (no "is the closure body generic?" gate): the
+// receiver-qualified name `_$closure_N$Receiver` can't collide with any
+// other receiver's clone or with the original unspecialized body, so we
+// avoid every counter-coordination edge case the C# bootstrap's gated
+// version had to worry about. Lifted closure bodies are tiny; one extra
+// clone per (closure, receiver) pair is negligible compile cost. Byte-
+// identical clones can be deduped by a later DCE pass if it becomes a
+// concern; it isn't today.
+function rewriteClosureRefOnMonomorph(result ByteArray, funcName String, fnTypeId FunctionTypeId, range SourceRange, receiverTypeName String, queue ClosureSpecArray, parentSrcModule MaxonModule, dstModule MaxonModule, project Project) returns MaxonOp
+	let specName = specializeClosureName(funcName, receiverTypeName: receiverTypeName, queue: queue, parentSrcModule: parentSrcModule, dstModule: dstModule, project: project)
+	return MaxonOp.functionRef(result, funcName: specName, fnTypeId: fnTypeId, range: range)
 end 'rewriteClosureRefOnMonomorph'
 
-function rewriteClosureCreateOnMonomorph(result ByteArray, funcName String, fnTypeId FunctionTypeId, capturedNames StringArray, capturedTypes MaxonTypeArray, range SourceRange) returns MaxonOp
-	if funcName.startsWith("_$closure_") 'isClosure'
-		panic("MonomorphizeExtensions: closure '{funcName}' referenced from a monomorphized extension body. Per-substitution closure specialization isn't implemented in the self-hosted compiler yet — port FunctionCloner.SpecializeClosureName from maxon-sharp.")
-	end 'isClosure'
-	return MaxonOp.closureCreate(result, funcName: funcName, fnTypeId: fnTypeId, capturedNames: capturedNames, capturedTypes: capturedTypes, range: range)
+function rewriteClosureCreateOnMonomorph(result ByteArray, funcName String, fnTypeId FunctionTypeId, capturedNames StringArray, capturedTypes MaxonTypeArray, range SourceRange, receiverTypeName String, queue ClosureSpecArray, parentSrcModule MaxonModule, dstModule MaxonModule, project Project) returns MaxonOp
+	let specName = specializeClosureName(funcName, receiverTypeName: receiverTypeName, queue: queue, parentSrcModule: parentSrcModule, dstModule: dstModule, project: project)
+	return MaxonOp.closureCreate(result, funcName: specName, fnTypeId: fnTypeId, capturedNames: capturedNames, capturedTypes: capturedTypes, range: range)
 end 'rewriteClosureCreateOnMonomorph'
 
 // Clone a MaxonOp with the supplied substitution applied to every
@@ -531,7 +938,15 @@ end 'rewriteClosureCreateOnMonomorph'
 // shape is handled explicitly — a missing arm raises an unhandled-arm
 // compiler error rather than silently passing through an op with stale
 // generic types.
-function substituteOp(project Project, op MaxonOp, subst TypeSubstitution, ifaceType MaxonType, receiverNamed MaxonType, slotRemap SlotRemap) returns MaxonOp
+//
+// `queue` accumulates ClosureSpecEntry records as `closureCreate` and
+// `functionRef` arms encounter closure references that must be specialized
+// per receiver. `parentSrcModule` is the module that owned the parent body
+// being cloned (used by `specializeClosureName` as the second lookup
+// fallback when the closure body isn't in `dstModule`). `dstModule` is the
+// user module where the specialized clone will be emitted. `receiverTypeName`
+// is the concrete type's name, used as the per-receiver suffix.
+function substituteOp(project Project, op MaxonOp, subst TypeSubstitution, ifaceType MaxonType, receiverNamed MaxonType, slotRemap SlotRemap, queue ClosureSpecArray, parentSrcModule MaxonModule, dstModule MaxonModule, receiverTypeName String, ifaceName String) returns MaxonOp
 	return match op 'k'
 		literal(result, value, valueType, range) gives MaxonOp.literal(result, value: value, valueType: substituteWithIfaceFold(project, t: valueType, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed), range: range)
 		stringConst gives op
@@ -551,7 +966,7 @@ function substituteOp(project Project, op MaxonOp, subst TypeSubstitution, iface
 		refEq gives op
 		condBr gives op
 		br gives op
-		call(result, callee, callContext, args, argLabels, argTypes, argRanges, range) gives MaxonOp.call(result, callee: callee, callContext: callContext, args: args, argLabels: argLabels, argTypes: substituteTypeArray(project, types: argTypes, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed), argRanges: argRanges, range: range)
+		call(result, callee, callContext, args, argLabels, argTypes, argRanges, range) gives MaxonOp.call(result, callee: substituteCalleeBytes(project, callee: callee, ifaceName: ifaceName, receiverTypeName: receiverTypeName), callContext: substituteCallContext(callContext, ifaceName: ifaceName, receiverTypeName: receiverTypeName), args: args, argLabels: argLabels, argTypes: substituteTypeArray(project, types: argTypes, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed), argRanges: argRanges, range: range)
 		methodCall(result, receiver, methodName, args, argLabels, argTypes, argRanges, range) gives MaxonOp.methodCall(result, receiver: receiver, methodName: methodName, args: args, argLabels: argLabels, argTypes: substituteTypeArray(project, types: argTypes, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed), argRanges: argRanges, range: range)
 		ret gives op
 		panic gives op
@@ -571,11 +986,11 @@ function substituteOp(project Project, op MaxonOp, subst TypeSubstitution, iface
 		rangeMatchArm gives op
 		error gives op
 		throw gives op
-		tryCall(result, callee, callContext, args, argLabels, argTypes, argRanges, errorBoundName, range) gives MaxonOp.tryCall(result, callee: callee, callContext: callContext, args: args, argLabels: argLabels, argTypes: substituteTypeArray(project, types: argTypes, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed), argRanges: argRanges, errorBoundName: errorBoundName, range: range)
+		tryCall(result, callee, callContext, args, argLabels, argTypes, argRanges, errorBoundName, range) gives MaxonOp.tryCall(result, callee: substituteCalleeBytes(project, callee: callee, ifaceName: ifaceName, receiverTypeName: receiverTypeName), callContext: substituteCallContext(callContext, ifaceName: ifaceName, receiverTypeName: receiverTypeName), args: args, argLabels: argLabels, argTypes: substituteTypeArray(project, types: argTypes, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed), argRanges: argRanges, errorBoundName: errorBoundName, range: range)
 		tryMethodCall(result, receiver, methodName, args, argLabels, argTypes, argRanges, errorBoundName, range) gives MaxonOp.tryMethodCall(result, receiver: receiver, methodName: methodName, args: args, argLabels: argLabels, argTypes: substituteTypeArray(project, types: argTypes, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed), argRanges: argRanges, errorBoundName: errorBoundName, range: range)
 		rethrow gives op
-		functionRef(_, funcName, _, _) gives rewriteClosureRefOnMonomorph(op, funcName: funcName)
-		closureCreate(result, funcName, fnTypeId, capturedNames, capturedTypes, range) gives rewriteClosureCreateOnMonomorph(result, funcName: funcName, fnTypeId: fnTypeId, capturedNames: capturedNames, capturedTypes: substituteTypeArray(project, types: capturedTypes, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed), range: range)
+		functionRef(result, funcName, fnTypeId, range) gives rewriteClosureRefOnMonomorph(result, funcName: funcName, fnTypeId: fnTypeId, range: range, receiverTypeName: receiverTypeName, queue: queue, parentSrcModule: parentSrcModule, dstModule: dstModule, project: project)
+		closureCreate(result, funcName, fnTypeId, capturedNames, capturedTypes, range) gives rewriteClosureCreateOnMonomorph(result, funcName: funcName, fnTypeId: fnTypeId, capturedNames: capturedNames, capturedTypes: substituteTypeArray(project, types: capturedTypes, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed), range: range, receiverTypeName: receiverTypeName, queue: queue, parentSrcModule: parentSrcModule, dstModule: dstModule, project: project)
 		closureEnvLoad(result, captureIndex, captureName, captureType, range) gives MaxonOp.closureEnvLoad(result, captureIndex: captureIndex, captureName: captureName, captureType: substituteWithIfaceFold(project, t: captureType, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed), range: range)
 		indirectCall(result, callee, fnTypeId, args, argLabels, argTypes, argRanges, range) gives MaxonOp.indirectCall(result, callee: callee, fnTypeId: fnTypeId, args: args, argLabels: argLabels, argTypes: substituteTypeArray(project, types: argTypes, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed), argRanges: argRanges, range: range)
 		forInIterable(iterName, iterSlot, iterType, sourceValue, sourceType, bodyBlockId, exitBlockId, label, range) gives MaxonOp.forInIterable(iterName, iterSlot: slotRemap.resolve(iterSlot), iterType: substituteWithIfaceFold(project, t: iterType, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed), sourceValue: sourceValue, sourceType: substituteWithIfaceFold(project, t: sourceType, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed), bodyBlockId: bodyBlockId, exitBlockId: exitBlockId, label: label, range: range)

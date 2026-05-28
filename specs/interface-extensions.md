@@ -377,3 +377,110 @@ end 'main'
 ```exitcode
 6
 ```
+
+
+<!-- test: extension-with-internal-closure -->
+A closure declared inside an interface-extension body. When `t.bump()` is
+called on a concrete `Three implements Tagger`, MonomorphizeExtensions
+clones `Tagger.bump` as `Three.bump` and walks the cloned body's ops with
+the `Self → Three` substitution. The walk encounters a `closureCreate` op
+for the inline `function(x Integer) gives x + one` literal, which without
+per-substitution closure specialization panics with "closure '_$closure_N'
+referenced from a monomorphized extension body". The closure body's
+`x + one` is a plain `Integer` binop so the closure itself needs no
+type-parameter dispatch; only the outer `tag()` call exercises the
+substitution. Compiling at all confirms the panic doesn't fire.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Tagger
+	function tag() returns Integer
+end 'Tagger'
+
+extension Tagger
+	export function bump() returns Integer
+		let one = 1 as Integer
+		let inc = function(x Integer) gives x + one
+		return inc(tag())
+	end 'bump'
+end 'Tagger'
+
+type Three implements Tagger
+	export static function make() returns Self
+		return Self{}
+	end 'make'
+	export function tag() returns Integer
+		return 3
+	end 'tag'
+end 'Three'
+
+function main() returns ExitCode
+	let t = Three.make()
+	print("{t.bump()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+4
+```
+
+
+<!-- test: extension-with-substitution-dependent-closure -->
+A closure declared inside an interface-extension body whose body IS
+substitution-dependent — it calls `tag()`, which resolves through the
+concrete `implements Tagger` receiver type. With multiple conformers,
+MonomorphizeExtensions must produce DISTINCT closure bodies per
+substitution: `_$closure_0$Three`'s body must call `Three.tag` while
+`_$closure_0$Seven`'s body must call `Seven.tag`. Without per-
+substitution closure cloning (mirroring C# bootstrap's
+`FunctionCloner.SpecializeClosureName` + `ClosureSpecializations`
+drain) both monomorphized `callTag` methods would share a single
+closure body that resolves `tag()` to the first-cloned receiver,
+silently miscompiling: `Seven.callTag` would compute `3*2` instead of
+`7*2`. The expected result of `a.callTag() + b.callTag()` is
+`3*2 + 7*2 = 20`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Tagger
+	function tag() returns Integer
+end 'Tagger'
+
+extension Tagger
+	export function callTag() returns Integer
+		let inner = function() gives tag() * 2
+		return inner()
+	end 'callTag'
+end 'Tagger'
+
+type Three implements Tagger
+	export static function make() returns Self
+		return Self{}
+	end 'make'
+	export function tag() returns Integer
+		return 3
+	end 'tag'
+end 'Three'
+
+type Seven implements Tagger
+	export static function make() returns Self
+		return Self{}
+	end 'make'
+	export function tag() returns Integer
+		return 7
+	end 'tag'
+end 'Seven'
+
+function main() returns ExitCode
+	let a = Three.make()
+	let b = Seven.make()
+	let sum = a.callTag() + b.callTag()
+	return sum
+end 'main'
+```
+```exitcode
+20
+```

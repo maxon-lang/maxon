@@ -1,0 +1,73 @@
+// Test: extension-with-substitution-dependent-closure
+typealias Integer = int(i64.min to i64.max)
+
+interface Tagger
+	function tag() returns Integer
+end 'Tagger'
+
+extension Tagger
+	export function callTag() returns Integer
+		let inner = function() gives tag() * 2
+		return inner()
+	end 'callTag'
+end 'Tagger'
+
+type Three implements Tagger
+	export static function make() returns Self
+		return Self{}
+	end 'make'
+	export function tag() returns Integer
+		return 3
+	end 'tag'
+end 'Three'
+
+type Seven implements Tagger
+	export static function make() returns Self
+		return Self{}
+	end 'make'
+	export function tag() returns Integer
+		return 7
+	end 'tag'
+end 'Seven'
+
+function main() returns ExitCode
+	let a = Three.make()
+	let b = Seven.make()
+	let sum = a.callTag() + b.callTag()
+	return sum
+end 'main'
+---
+ExitCode: 20
+---
+// CompiledIR
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.xor ecx, ecx
+    x64.call mrt_alloc
+    x64.xor ecx, ecx
+    x64.call mrt_alloc
+    x64.xor ecx, ecx
+    x64.lea r12, [rip+_$closure_0$Three]
+    x64.call r12
+    x64.mov r12, r8
+    x64.xor ecx, ecx
+    x64.lea r13, [rip+_$closure_0$Seven]
+    x64.call r13
+    x64.mov r9d, 4294967295
+    x64.mov rsi, r12
+    x64.add rsi, r8
+    x64.cmp rsi, r9
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea r12, [rip+__panic_msg_0]
+    x64.mov rcx, r12
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov r8, rsi
+    x64.epilogue
+    x64.ret
+  }
+}
+---

@@ -1346,7 +1346,9 @@ type X64FunctionLowering
 			panic("lowerIndirectCall: more than 8 arguments not yet supported (got {argIds.count()})")
 		end 'tooManyArgs'
 
-		// Move callee address to a scratch register for indirect call
+		// Indirect call through the callee virtual register. The regalloc
+		// preserves the callee's value across this op via its `indirectCallScratchOrd`
+		// target descriptor (X64 = R10), spilling/reloading as needed.
 		appendX64Op(target, block: dstBlock, op: X64Op.callIndirect(X64VReg.virtual(calleeId)))
 
 		// Move return value from R8

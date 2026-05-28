@@ -1709,6 +1709,7 @@ end 'namedTypeIsManagedRef'
 // taken bookkeeping here because the closure ABI is uniform: every
 // indirect call has exactly one env in flight at a time.
 typealias FnEnvMap = Map with (ValueId, ValueId)
+typealias SlotToValueIdMap = Map with (VarSlot, ValueId)
 
 // C1.c: per-function map from an interface-typed slot id to its witness
 // companion slot id. Populated by `assignInterfaceWitnessSlots` after
@@ -1876,6 +1877,16 @@ type MaxonToStdLowering
 	// Read at every `indirectCall` lowering site to recover the env to
 	// pass alongside the callee. Reset per function in `lower()`.
 	var fnEnvVarNames as FnEnvMap
+	// Stage E (closures): per-function map from a LOCAL SLOT id to the
+	// env's SSA ValueId, populated when a `varDecl`/`varStore` writes a
+	// function-typed value whose env was already bound in `fnEnvVarNames`.
+	// Read by `lowerVarLoad` to propagate the env across the slot rather
+	// than emitting a spurious `loadSlot` (the slot id can collide with
+	// an unrelated `fnEnvVarNames` ValueId-keyed entry from `closureCreate`,
+	// which would otherwise route through the 'hasEnv' branch and load
+	// from a phantom slot — see closure-capture.interface-method-with-
+	// captured-field for the reproducer). Reset per function in `lower()`.
+	var closureSlotToEnvValueId as SlotToValueIdMap
 	// Stage E (closures): per-function value-id of the lifted closure's
 	// hidden `__env` parameter. Written once at function-entry lowering
 	// when the function's last param is the synthetic env, read by
@@ -1956,6 +1967,7 @@ type MaxonToStdLowering
 			slotIdsScratch: ValueIdArray.create(),
 			slotFilledScratch: BoolArray.create(),
 			fnEnvVarNames: FnEnvMap.create(),
+			closureSlotToEnvValueId: SlotToValueIdMap.create(),
 			liftedEnvValueId: 0,
 			implicitLayoutValueId: 0,
 			implicitWitnessValueIds: ValueIdArray.create(),
@@ -2250,6 +2262,7 @@ type MaxonToStdLowering
 			// default and overwritten below if the function's last param
 			// is a synthetic `__env` (closure with captures).
 			self.fnEnvVarNames = FnEnvMap.create()
+			self.closureSlotToEnvValueId = SlotToValueIdMap.create()
 			self.liftedEnvValueId = 0
 			self.implicitLayoutValueId = 0
 			self.implicitWitnessValueIds = ValueIdArray.create()
@@ -3313,8 +3326,27 @@ type MaxonToStdLowering
 			self.lowerInterfaceSlotStore(slotId, value: value, slotType: slotType, dstBlock: dstBlock)
 			return
 		end 'fat'
-		self.stdModule.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.storeSlot(slotId, valueId: self.resolveName(value))))
+		let valueId = self.resolveName(value)
+		self.captureClosureEnvIfFunctionTyped(slotId, valueId: valueId, slotType: slotType)
+		self.stdModule.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.storeSlot(slotId, valueId: valueId)))
 	end 'lowerVarDeclOrStore'
+
+	// Propagate function-value env binding across a slot store. When the
+	// RHS is a `closureCreate` / `functionRef` result, its env was recorded
+	// in `fnEnvVarNames` keyed by the value id. Park the env id under the
+	// destination slot so `lowerVarLoad`'s pairEnv path can recover it
+	// without confusing the slot id with an unrelated `fnEnvVarNames`
+	// ValueId-keyed entry. No-op for non-function slot types and for stores
+	// whose RHS has no recorded env (top-level functionRef, plain call
+	// return, etc. — those flow `env=0` through `noEnvSlot` at load time).
+	function captureClosureEnvIfFunctionTyped(slotId VarSlot, valueId ValueId, slotType MaxonType)
+		if not isFunctionMaxonType(slotType) 'notFunction'
+			return
+		end 'notFunction'
+		if let envValueId = try self.fnEnvVarNames.get(valueId) 'capturedEnv'
+			self.closureSlotToEnvValueId.upsert(slotId, value: envValueId)
+		end 'capturedEnv'
+	end 'captureClosureEnvIfFunctionTyped'
 
 	// C1.c: dispatch the varStore op. The op itself doesn't carry a
 	// slotType — recover it from `currentMaxonFunc.slotMaxonTypes` so we
@@ -3339,6 +3371,7 @@ type MaxonToStdLowering
 		let storedValueId = self.resolveName(value)
 		let storedValueType = self.getValueType(storedValueId)
 		let widenedValueId = self.widenValueToType(storedValueId, fromType: storedValueType, toType: slotType, dstBlock: dstBlock)
+		self.captureClosureEnvIfFunctionTyped(slotId, valueId: storedValueId, slotType: slotType)
 		self.stdModule.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.storeSlot(slotId, valueId: widenedValueId)))
 	end 'lowerVarStore'
 
@@ -3492,11 +3525,30 @@ type MaxonToStdLowering
 		// var copies, struct-field stores, etc. — every load resolves to
 		// a fresh env binding rooted at the original param.
 		if isFunctionMaxonType(slotType) 'pairEnv'
-			if let envSlot = try self.fnEnvVarNames.get(slotId) 'hasEnv'
-				let envLoadId = allocValueId(self.funcIdRef)
-				self.stdModule.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.loadSlot(envLoadId, slotId: envSlot as VarSlot)))
-				self.fnEnvVarNames.upsert(resultId, value: envLoadId)
-			end 'hasEnv' else 'noEnvSlot'
+			// The 'hasEnv' lookup is only valid for PARAM slots, where seedParams
+			// upserted `fnEnvVarNames[paramSlotId] = envParamSlotId` (the param
+			// index doubles as both slot id and value id, so the as-VarSlot cast
+			// is safe). For LOCAL slots that hold a function value flowed in
+			// from a `closureCreate` or `functionRef`, the closureSlotToEnvValueId
+			// side-map records the env's SSA ValueId (no slot involved) — read
+			// from there and just pair `resultId → envValueId` so the
+			// indirect-call site sees the same env without a spurious loadSlot.
+			let paramCount = self.currentMaxonFunc.maxonParamTypes.count()
+			if slotId < paramCount 'paramSlot'
+				if let envSlot = try self.fnEnvVarNames.get(slotId) 'paramHasEnv'
+					let envLoadId = allocValueId(self.funcIdRef)
+					self.stdModule.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.loadSlot(envLoadId, slotId: envSlot as VarSlot)))
+					self.fnEnvVarNames.upsert(resultId, value: envLoadId)
+				end 'paramHasEnv' else 'paramNoEnv'
+					let envZeroId = self.emitConstI64(0, dstBlock: dstBlock)
+					self.fnEnvVarNames.upsert(resultId, value: envZeroId)
+				end 'paramNoEnv'
+			end 'paramSlot' else if let envValueId = try self.closureSlotToEnvValueId.get(slotId) 'closureLocalHasEnv'
+				// Local slot was last stored from a closureCreate / functionRef
+				// whose env binding is already a real SSA value. Reuse it
+				// directly — no loadSlot needed, and no new const-0 sentinel.
+				self.fnEnvVarNames.upsert(resultId, value: envValueId)
+			end 'closureLocalHasEnv' else 'noEnvSlot'
 				// Function-typed local that wasn't bound to a paired env slot:
 				// the value flowed in from a top-level function reference
 				// (functionRef) or a non-closure call return, both of which

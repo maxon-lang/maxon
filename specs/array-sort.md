@@ -577,46 +577,9 @@ end 'ascending'
 
 function main() returns ExitCode
 	var a = IntArray.create()
-	a.push(50)
-	a.push(40)
-	a.push(30)
-	a.push(20)
-	a.push(10)
-	a.push(45)
-	a.push(35)
-	a.push(25)
-	a.push(15)
-	a.push(5)
-	a.push(48)
-	a.push(38)
-	a.push(28)
-	a.push(18)
-	a.push(8)
-	a.push(46)
-	a.push(36)
-	a.push(26)
-	a.push(16)
-	a.push(6)
-	a.push(44)
-	a.push(34)
-	a.push(24)
-	a.push(14)
-	a.push(4)
-	a.push(42)
-	a.push(32)
-	a.push(22)
-	a.push(12)
-	a.push(2)
-	a.push(49)
-	a.push(39)
-	a.push(29)
-	a.push(19)
-	a.push(9)
-	a.push(47)
-	a.push(37)
-	a.push(27)
-	a.push(17)
-	a.push(7)
+	for v in [50, 40, 30, 20, 10, 45, 35, 25, 15, 5, 48, 38, 28, 18, 8, 46, 36, 26, 16, 6, 44, 34, 24, 14, 4, 42, 32, 22, 12, 2, 49, 39, 29, 19, 9, 47, 37, 27, 17, 7] 'fill'
+		a.push(v)
+	end 'fill'
 	Log.startCapture()
 	a.sortUnstable(ascending)
 	let keys = Log.stopCapture()
@@ -692,56 +655,9 @@ end 'ascending'
 
 function main() returns ExitCode
 	var a = IntArray.create()
-	a.push(50)
-	a.push(40)
-	a.push(30)
-	a.push(20)
-	a.push(10)
-	a.push(45)
-	a.push(35)
-	a.push(25)
-	a.push(15)
-	a.push(5)
-	a.push(48)
-	a.push(38)
-	a.push(28)
-	a.push(18)
-	a.push(8)
-	a.push(46)
-	a.push(36)
-	a.push(26)
-	a.push(16)
-	a.push(6)
-	a.push(44)
-	a.push(34)
-	a.push(24)
-	a.push(14)
-	a.push(4)
-	a.push(42)
-	a.push(32)
-	a.push(22)
-	a.push(12)
-	a.push(2)
-	a.push(49)
-	a.push(39)
-	a.push(29)
-	a.push(19)
-	a.push(9)
-	a.push(47)
-	a.push(37)
-	a.push(27)
-	a.push(17)
-	a.push(7)
-	a.push(43)
-	a.push(33)
-	a.push(23)
-	a.push(13)
-	a.push(3)
-	a.push(41)
-	a.push(31)
-	a.push(21)
-	a.push(11)
-	a.push(1)
+	for v in [50, 40, 30, 20, 10, 45, 35, 25, 15, 5, 48, 38, 28, 18, 8, 46, 36, 26, 16, 6, 44, 34, 24, 14, 4, 42, 32, 22, 12, 2, 49, 39, 29, 19, 9, 47, 37, 27, 17, 7, 43, 33, 23, 13, 3, 41, 31, 21, 11, 1] 'fill'
+		a.push(v)
+	end 'fill'
 	a.sortUnstable(ascending)
 	for x in a 'p'
 		print("{x} ")
@@ -757,6 +673,45 @@ end 'main'
 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 
 ```
 
+<!-- test: pdq-correctness-100elem-loop -->
+A 100-element fill via `for i in 0 upto 100 { a.push(formula(i)) }` followed by
+`sortUnstable` exercises the register allocator's remat-cycle handling: every
+iteration of the spill/color loop the pre-sort fill leaves a constant `2`
+(from the loop's increment after a multiplication) un-rematerializable at
+its use site inside pdqsort's inlined partition body. Before the
+`all-remat-stuck` detection landed in `runSpillColorLoop`, this pattern spun
+the spill loop to its iteration cap silently leaving a fresh `movRegImm`-defined
+vreg uncolored — `applyColoring` then panicked downstream in `colorLookupGpr`.
+The test compiles only when the cycle detector demotes the rematerializable
+to a real spill on the next-to-last iteration.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function ascending(x Integer, y Integer) returns Ordering
+	return x.compare(y)
+end 'ascending'
+
+function main() returns ExitCode
+	var a = IntArray.create()
+	for i in 0 upto 100 'fill'
+		a.push((i * 31) + 7)
+	end 'fill'
+	a.sortUnstable(ascending)
+	for x in a 'p'
+		print("{x} ")
+	end 'p'
+	print("\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7 38 69 100 131 162 193 224 255 286 317 348 379 410 441 472 503 534 565 596 627 658 689 720 751 782 813 844 875 906 937 968 999 1030 1061 1092 1123 1154 1185 1216 1247 1278 1309 1340 1371 1402 1433 1464 1495 1526 1557 1588 1619 1650 1681 1712 1743 1774 1805 1836 1867 1898 1929 1960 1991 2022 2053 2084 2115 2146 2177 2208 2239 2270 2301 2332 2363 2394 2425 2456 2487 2518 2549 2580 2611 2642 2673 2704 2735 2766 2797 2828 2859 2890 2921 2952 2983 3014 3045 3076 
+```
+
 <!-- test: pdq-already-sorted -->
 Already-sorted input still produces a sorted result.
 ```maxon
@@ -769,41 +724,9 @@ end 'ascending'
 
 function main() returns ExitCode
 	var a = IntArray.create()
-	a.push(1)
-	a.push(2)
-	a.push(3)
-	a.push(4)
-	a.push(5)
-	a.push(6)
-	a.push(7)
-	a.push(8)
-	a.push(9)
-	a.push(10)
-	a.push(11)
-	a.push(12)
-	a.push(13)
-	a.push(14)
-	a.push(15)
-	a.push(16)
-	a.push(17)
-	a.push(18)
-	a.push(19)
-	a.push(20)
-	a.push(21)
-	a.push(22)
-	a.push(23)
-	a.push(24)
-	a.push(25)
-	a.push(26)
-	a.push(27)
-	a.push(28)
-	a.push(29)
-	a.push(30)
-	a.push(31)
-	a.push(32)
-	a.push(33)
-	a.push(34)
-	a.push(35)
+	for i in 0 upto 35 'fill'
+		a.push(i + 1)
+	end 'fill'
 	a.sortUnstable(ascending)
 	for x in a 'p'
 		print("{x} ")
@@ -831,41 +754,9 @@ end 'ascending'
 
 function main() returns ExitCode
 	var a = IntArray.create()
-	a.push(7)
-	a.push(7)
-	a.push(7)
-	a.push(7)
-	a.push(7)
-	a.push(7)
-	a.push(7)
-	a.push(7)
-	a.push(7)
-	a.push(7)
-	a.push(7)
-	a.push(7)
-	a.push(7)
-	a.push(7)
-	a.push(7)
-	a.push(7)
-	a.push(7)
-	a.push(7)
-	a.push(7)
-	a.push(7)
-	a.push(7)
-	a.push(7)
-	a.push(7)
-	a.push(7)
-	a.push(7)
-	a.push(7)
-	a.push(7)
-	a.push(7)
-	a.push(7)
-	a.push(7)
-	a.push(7)
-	a.push(7)
-	a.push(7)
-	a.push(7)
-	a.push(7)
+	for _ in 0 upto 35 'fill'
+		a.push(7)
+	end 'fill'
 	Log.startCapture()
 	a.sortUnstable(ascending)
 	let keys = Log.stopCapture()

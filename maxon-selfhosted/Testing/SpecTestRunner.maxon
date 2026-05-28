@@ -276,6 +276,14 @@ typealias TestCount = int(0 to u64.max)
 // fast feedback on local runs; raise if a legitimately heavy test trips it.
 let testProcessTimeoutMs = 2000
 
+// Per-worker-job wall-clock budget. If a worker doesn't emit WORKER_READY
+// within this many ms of receiving a JOB line, the dispatcher force-kills it
+// via subprocessKill; the resulting EOF makes the drain GT throw, which
+// routes through recoverFromCrashedJob just like a panic does. Sized for the
+// heaviest spec (stdlib-array singles) plus headroom; raise if a legitimately
+// heavy spec starts tripping it.
+let workerJobTimeoutMs = 60000 as Millis
+
 var totalCompileMs = 0
 
 // Phase timestamp helper: emits "[PHASE +<deltaMs>ms] <label>" lines to
@@ -3136,29 +3144,67 @@ end 'popHeaviestJob'
 // `child` handle by value lets the GT run independently of the slot's struct.
 // StreamingSubprocess copies share the runtime-side pipe handle by refcount,
 // so the GT's copy and the parent's copy reference the same OS object.
-function drainResultsThunk(child StreamingSubprocess, jobLabel String, workerId WorkerId) returns StringArray throws SubprocessError
+// Outcome of one async drain. The dispatcher inspects `crashed` to decide
+// between processing `lines` and routing through recoverFromCrashedJob.
+//
+// Returning a result struct rather than throwing avoids a known compiler
+// leak: in `try await promise otherwise ...` against a Promise reconstructed
+// from struct storage (the array path the dispatcher uses), the awaited
+// promise carries no compile-time error-type info, so the otherwise branch's
+// implicit cleanup can't decref the thrown associated-value enum. The thrown
+// SubprocessError + its String payload + payload buffer leaked per crash.
+// The drain GT now signals failure via the struct's `crashed` flag and the
+// dispatcher's `'workerDied` recovery path stays the same.
+type DrainOutcome
+	export var lines as StringArray
+	export var crashed as bool
+
+	export static function success(lines StringArray) returns DrainOutcome
+		return Self{lines: lines, crashed: false}
+	end 'success'
+
+	export static function failure() returns DrainOutcome
+		return Self{lines: StringArray.create(), crashed: true}
+	end 'failure'
+end 'DrainOutcome'
+
+function drainResultsThunk(child StreamingSubprocess) returns DrainOutcome
 	var lines = StringArray.create()
 	while true 'lineLoop'
-		let line = try child.readStdoutLine()
+		let line = try child.readStdoutLine() otherwise 'readFailed'
+			// Inner readStdoutLine threw (pipe broken / handle invalid). The
+			// thrown SubprocessError is consumed by `otherwise 'readFailed'`
+			// here so no error allocation escapes this scope.
+			return DrainOutcome.failure()
+		end 'readFailed'
 		if line.isEmpty() 'eof'
-			throw SubprocessError.ioFailed("worker {workerId} exited mid-job '{jobLabel}' before emitting {workerReadyMarker}")
+			// EOF before WORKER_READY = worker exited mid-job (panic, crash,
+			// or watchdog kill). Surface as a structural failure rather than
+			// throwing so no SubprocessError allocation escapes.
+			return DrainOutcome.failure()
 		end 'eof'
 		let trimmed = trimWhitespace(line)
 		if trimmed == workerReadyMarker 'done'
-			return lines
+			return DrainOutcome.success(lines)
 		end 'done'
 		lines.push(line)
 	end 'lineLoop'
 	panic("drainResultsThunk: unreachable")
 end 'drainResultsThunk'
 
-// Promise carrying the StringArray result of one async drain. The dispatcher
-// keeps a parallel array of these (one per worker slot) and `try await`s the
-// slot it next wants to read from. Because every drain promise is spawned at
-// dispatch time, the underlying overlapped stdout reads are all issued to the
-// IOCP runtime in parallel — slow workers don't gate fast ones.
-typealias DrainPromise = Promise with StringArray
+// Promise carrying the DrainOutcome of one async drain. The dispatcher keeps
+// a parallel array of these (one per worker slot) and `await`s the slot it
+// next wants to read from. Because every drain promise is spawned at dispatch
+// time, the underlying overlapped stdout reads are all issued to the IOCP
+// runtime in parallel — slow workers don't gate fast ones.
+typealias DrainPromise = Promise with DrainOutcome
 typealias DrainPromiseArray = Array with DrainPromise
+
+// Per-slot dispatch timestamps (Clock.nowMs() at the moment the drain GT was
+// spawned). Used by the dispatcher's idle-tick watchdog to detect a worker
+// that hasn't emitted WORKER_READY within workerJobTimeoutMs and force-kill
+// it. Entry is 0 for never-dispatched slots; never read on a non-busy slot.
+typealias MillisArray = Array with Millis
 
 // One persistent worker subprocess in the work-stealing pool. The struct holds
 // only the OS-side handle + an id for diagnostics; per-job state (which job is
@@ -3214,14 +3260,6 @@ type PersistentWorkerHandle
 	export function sendJob(jobLine String) throws SubprocessError
 		try child.writeStdinLine(jobLine)
 	end 'sendJob'
-
-	// Read result lines from the child until the next WORKER_READY marker.
-	// Thin instance-method shim over `drainResultsThunk` (the free function the
-	// dispatcher's `async` calls bind to). Kept as a method for callers that
-	// don't need the async form, e.g. the persistent-smoke binary.
-	export function drainResults(jobLabel String) returns StringArray throws SubprocessError
-		return try drainResultsThunk(child, jobLabel: jobLabel, workerId: workerId)
-	end 'drainResults'
 
 	// Send EXIT, close stdin, await the child, drain whatever it wrote to
 	// stderr while alive, then release the OS handle. Drain is synchronous
@@ -3631,6 +3669,12 @@ export function runAllSpecTestsParallel(filter String, target Target, workerCoun
 	var deadSlots = BoolArray.create()
 	var currentJobs = SpecJobArray.create()
 	var drainPromises = DrainPromiseArray.create()
+	// Wall-clock timestamp (Clock.nowMs()) of the last `sendJob` per slot.
+	// Read by the watchdog in the no-drain-ready branch to detect a worker
+	// that's been silent for > workerJobTimeoutMs. Index parity with the
+	// other parallel arrays is maintained by the same push-on-first / set-on-
+	// redispatch pattern as drainPromises.
+	var dispatchStartMs = MillisArray.create()
 	let placeholder = SpecJob.empty()
 	for _ in 0 upto liveWorkerCount 'initBusy'
 		busy.push(false)
@@ -3731,11 +3775,14 @@ export function runAllSpecTestsParallel(filter String, target Target, workerCoun
 				// previous promise). The strict equality / less-than split
 				// catches any future round-robin reorder that violates the
 				// in-order initial dispatch invariant.
-				let pendingDrain = async drainResultsThunk(h.child, jobLabel: job.label(), workerId: h.workerId)
+				let pendingDrain = async drainResultsThunk(h.child)
+				let dispatchNow = Clock.nowMs() as Millis
 				if idleIdx == drainPromises.count() 'firstDispatchThisSlot'
 					drainPromises.push(pendingDrain)
+					dispatchStartMs.push(dispatchNow)
 				end 'firstDispatchThisSlot' else if idleIdx < drainPromises.count() 'redispatch'
 					try drainPromises.set(idleIdx, value: pendingDrain) otherwise panic("dispatch: drainPromises.set({idleIdx}) failed")
+					try dispatchStartMs.set(idleIdx, value: dispatchNow) otherwise panic("dispatch: dispatchStartMs.set({idleIdx}) failed")
 				end 'redispatch' else 'outOfOrderInit'
 					panic("dispatch: drainPromises gap at slot {idleIdx} (size {drainPromises.count()}) — initial dispatch out of order")
 				end 'outOfOrderInit'
@@ -3775,6 +3822,40 @@ export function runAllSpecTestsParallel(filter String, target Target, workerCoun
 		end 'findReady'
 
 		if not haveDrainFlag 'noneReady'
+			// Watchdog: before sleeping, scan every busy/non-dead slot for one
+			// that's been silent past workerJobTimeoutMs. A hung worker (e.g.
+			// stuck in a compiler infinite loop, or panicked into a frame the
+			// runtime catches without writing back WORKER_READY) never EOFs
+			// its stdout pipe on its own, so the drain GT would block forever.
+			// Killing the process closes the pipe; the next iteration's
+			// gtIsComplete poll finds the drain GT done, the `try await` at
+			// the drain site throws ioFailed (EOF), and the existing
+			// 'workerDied recovery branch handles cleanup and accounting.
+			let watchdogNow = Clock.nowMs() as Millis
+			for wi in 0 upto liveWorkerCount 'watchdog'
+				let wDead = try deadSlots.get(wi) otherwise false
+				if wDead 'wSkipDead'
+					continue
+				end 'wSkipDead'
+				let wBusy = try busy.get(wi) otherwise false
+				if not wBusy 'wSkipIdle'
+					continue
+				end 'wSkipIdle'
+				let started = try dispatchStartMs.get(wi) otherwise panic("watchdog: dispatchStartMs.get({wi}) failed on busy slot")
+				let elapsed = watchdogNow - started
+				if elapsed <= workerJobTimeoutMs 'wWithinBudget'
+					continue
+				end 'wWithinBudget'
+				// Re-stamp BEFORE killing so we don't re-kill the same slot on
+				// every iteration while the EOF propagates through the IOCP
+				// runtime back to gtIsComplete. The slot will be marked dead
+				// in the 'workerDied branch as soon as we await its drain.
+				try dispatchStartMs.set(wi, value: watchdogNow) otherwise panic("watchdog: dispatchStartMs.set({wi}) failed")
+				let wh = try workers.get(wi) otherwise panic("watchdog: workers.get({wi}) failed")
+				let wJob = try currentJobs.get(wi) otherwise panic("watchdog: currentJobs.get({wi}) failed")
+				logError(LogCategory.testing, message: function() gives "[TIMEOUT] worker {wh.workerId} exceeded {workerJobTimeoutMs}ms on '{wJob.label()}' — killing")
+				__Builtins.subprocessKill(wh.child.handle, 1)
+			end 'watchdog'
 			// Nothing ready — yield this GT so the scheduler can run other GTs
 			// (the per-worker drain GTs blocked on IOCP completions). When any
 			// drain completes, its status flips to completed; we loop back and
@@ -3790,13 +3871,21 @@ export function runAllSpecTestsParallel(filter String, target Target, workerCoun
 		// `currentJobs` for the pipelined-dispatch set() below.
 		let job = (try currentJobs.get(drainIdx) otherwise panic("dispatch: currentJobs.get({drainIdx}) failed")).clone()
 		let drainPromise = try drainPromises.get(drainIdx) otherwise panic("dispatch: drainPromises.get({drainIdx}) failed")
-		let lines = try await drainPromise otherwise 'workerDied'
-			// Worker crashed mid-job (the drain GT threw SubprocessError.ioFailed
-			// when readStdoutLine hit EOF before READY). Recover the work it was
-			// holding, then mark the slot dead so the find-idle and find-busy
-			// scans skip it. We don't respawn: surviving workers can absorb
-			// whatever the queue still holds, and one fewer worker just trims
-			// parallelism by 1/N.
+		let outcome = await drainPromise
+		if outcome.crashed 'workerDied'
+			// Worker crashed mid-job (the drain GT hit EOF on readStdoutLine
+			// before WORKER_READY, or readStdoutLine itself raised an I/O
+			// error). Recover the work it was holding, then mark the slot
+			// dead so the find-idle and find-busy scans skip it. We don't
+			// respawn: surviving workers can absorb whatever the queue still
+			// holds, and one fewer worker just trims parallelism by 1/N.
+			//
+			// The drain GT signals failure via DrainOutcome.crashed rather
+			// than throwing SubprocessError so the dispatcher doesn't have
+			// to use `try await ... otherwise` against a Promise reconstructed
+			// from struct storage — see the DrainOutcome comment above for
+			// the underlying compiler-leak rationale.
+			logError(LogCategory.testing, message: function() gives "[CRASH] worker {h.workerId} died on '{job.label()}' (EOF or I/O error before WORKER_READY)")
 			let followup = recoverFromCrashedJob(job, units: units, totalFailed_io: failedBox, failOwners: failOwners, failPayloads: failPayloads)
 			if followup.kind != "" 'hasFollowup'
 				jobQueue.push(followup)
@@ -3807,6 +3896,7 @@ export function runAllSpecTestsParallel(filter String, target Target, workerCoun
 			jobsCompleted = jobsCompleted + 1
 			continue
 		end 'workerDied'
+		let lines = outcome.lines
 
 		// Pipeline the next dispatch BEFORE processing the prior results: the
 		// worker can begin compiling its next job in parallel with the parent
@@ -3839,8 +3929,9 @@ export function runAllSpecTestsParallel(filter String, target Target, workerCoun
 			if not slotStillLive 'pipelinedOk'
 				try currentJobs.set(drainIdx, value: nextJob) otherwise panic("dispatch: currentJobs.set({drainIdx}) (pipelined) failed")
 				// busy[drainIdx] stays true — we keep the slot busy continuously.
-				let pendingDrain = async drainResultsThunk(h.child, jobLabel: nextJob.label(), workerId: h.workerId)
+				let pendingDrain = async drainResultsThunk(h.child)
 				try drainPromises.set(drainIdx, value: pendingDrain) otherwise panic("dispatch: drainPromises.set({drainIdx}) (pipelined) failed")
+				try dispatchStartMs.set(drainIdx, value: Clock.nowMs() as Millis) otherwise panic("dispatch: dispatchStartMs.set({drainIdx}) (pipelined) failed")
 				jobsDispatched = jobsDispatched + 1
 				nextLined = true
 			end 'pipelinedOk'

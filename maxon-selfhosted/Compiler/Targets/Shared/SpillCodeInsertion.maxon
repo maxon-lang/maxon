@@ -32,12 +32,16 @@ type SpillInsertState
 	// position vregs that hold a rematerialized constant). Propagated back
 	// to SpillDecision.rematerializeIds so the allocator stamps the next
 	// rebuild's LiveRanges with isRematerializable=true — if they ever fail
-	// to color, they get re-rematerialized rather than spilled (cycle-free
-	// because the constant doesn't change).
+	// to color, they get re-rematerialized rather than spilled.
+	//
+	// Note: the property is also recoverable from the IR alone (scanDefinitions
+	// auto-detects `movRegImm` defs as constant), so this sidetable is mostly
+	// belt-and-suspenders. It remains useful because the SpillDecision-driven
+	// path runs BEFORE the next liveness rebuild and is the canonical record
+	// of "this vid is a remat copy" if other passes want to consult it.
 	export var rematMintedIds as BoolArray
 	// Per-minted-id constant value sidetable, populated alongside
-	// rematMintedIds. Handed back via SpillDecision.rematerializeValue
-	// so the allocator can union it into its cumulative sidetable.
+	// rematMintedIds.
 	export var rematMintedValue as RegIntArray
 	// Pass A → Pass B handoff: branch-edge reload (and memory-routed phi)
 	// ops per source-block id. Pass A appends to the list keyed by the
@@ -201,9 +205,10 @@ export function insertSpillCode(module TargetModule, func IrFunction, spillDecis
 	// bitmap (which still holds the input set spillClass routed in). This
 	// keeps the remat property transitive: a vreg minted to hold a
 	// rematerialized constant is itself rematerializable from the same
-	// constant, so if it ever fails to color, the next iteration can re-
-	// rematerialize it rather than spill it (cycle-free because the
-	// constant doesn't change).
+	// constant. (Cycle prevention lives in runSpillColorLoop's `rematHelps`
+	// progress tracker, not here — the constant value is preserved across
+	// rebuilds for fast Pass 2 routing, and rematHelps disables remat once
+	// the loop detects pressure-driven non-progress.)
 	mergeMintedRematIntoDecision(spillDecision, mintedIds: state.rematMintedIds, mintedValue: state.rematMintedValue)
 
 	logTrace(LogCategory.ir, message: function() gives "insertSpillCode: spilled={spillDecision.spilledRanges.count()} totalSpillSize={spillDecision.totalSpillSize} nextValueId={state.nextValueId} newReloads={state.reloadIds.count()} newRemats={state.rematMintedIds.count()}")
@@ -587,8 +592,8 @@ end 'freshValueId'
 // NOT routed through freshValueId: a remat-minted vreg is NOT a reload
 // (it has no spill slot); marking it in `reloadIds` would saddle it with
 // SPILL_WEIGHT_INFINITE on the next rebuild, defeating the point of
-// rematerialization (we *want* the spill loop to re-rematerialize it if
-// it ever fails to color).
+// rematerialization. Cycle prevention is the spill loop's responsibility
+// (via `rematHelps`).
 function freshRematId(state SpillInsertState, constVal RegInt) returns RegInt
 	let id = state.nextValueId
 	state.nextValueId = state.nextValueId + 1
