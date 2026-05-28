@@ -3144,60 +3144,32 @@ end 'popHeaviestJob'
 // `child` handle by value lets the GT run independently of the slot's struct.
 // StreamingSubprocess copies share the runtime-side pipe handle by refcount,
 // so the GT's copy and the parent's copy reference the same OS object.
-// Outcome of one async drain. The dispatcher inspects `crashed` to decide
-// between processing `lines` and routing through recoverFromCrashedJob.
-//
-// Returning a result struct rather than throwing avoids a known compiler
-// leak: in `try await promise otherwise ...` against a Promise reconstructed
-// from struct storage (the array path the dispatcher uses), the awaited
-// promise carries no compile-time error-type info, so the otherwise branch's
-// implicit cleanup can't decref the thrown associated-value enum. The thrown
-// SubprocessError + its String payload + payload buffer leaked per crash.
-// The drain GT now signals failure via the struct's `crashed` flag and the
-// dispatcher's `'workerDied` recovery path stays the same.
-type DrainOutcome
-	export var lines as StringArray
-	export var crashed as bool
-
-	export static function success(lines StringArray) returns DrainOutcome
-		return Self{lines: lines, crashed: false}
-	end 'success'
-
-	export static function failure() returns DrainOutcome
-		return Self{lines: StringArray.create(), crashed: true}
-	end 'failure'
-end 'DrainOutcome'
-
-function drainResultsThunk(child StreamingSubprocess) returns DrainOutcome
+function drainResultsThunk(child StreamingSubprocess) returns StringArray throws SubprocessError
 	var lines = StringArray.create()
 	while true 'lineLoop'
-		let line = try child.readStdoutLine() otherwise 'readFailed'
-			// Inner readStdoutLine threw (pipe broken / handle invalid). The
-			// thrown SubprocessError is consumed by `otherwise 'readFailed'`
-			// here so no error allocation escapes this scope.
-			return DrainOutcome.failure()
-		end 'readFailed'
+		let line = try child.readStdoutLine()
 		if line.isEmpty() 'eof'
 			// EOF before WORKER_READY = worker exited mid-job (panic, crash,
-			// or watchdog kill). Surface as a structural failure rather than
-			// throwing so no SubprocessError allocation escapes.
-			return DrainOutcome.failure()
+			// or watchdog kill). Surface as an ioFailed so the dispatcher's
+			// `try await ... otherwise 'workerDied` routes through
+			// recoverFromCrashedJob the same way an I/O error does.
+			throw SubprocessError.ioFailed("EOF before WORKER_READY")
 		end 'eof'
 		let trimmed = trimWhitespace(line)
 		if trimmed == workerReadyMarker 'done'
-			return DrainOutcome.success(lines)
+			return lines
 		end 'done'
 		lines.push(line)
 	end 'lineLoop'
 	panic("drainResultsThunk: unreachable")
 end 'drainResultsThunk'
 
-// Promise carrying the DrainOutcome of one async drain. The dispatcher keeps
+// Promise carrying the drained lines of one async drain. The dispatcher keeps
 // a parallel array of these (one per worker slot) and `await`s the slot it
 // next wants to read from. Because every drain promise is spawned at dispatch
 // time, the underlying overlapped stdout reads are all issued to the IOCP
 // runtime in parallel — slow workers don't gate fast ones.
-typealias DrainPromise = Promise with DrainOutcome
+typealias DrainPromise = Promise with StringArray
 typealias DrainPromiseArray = Array with DrainPromise
 
 // Per-slot dispatch timestamps (Clock.nowMs() at the moment the drain GT was
@@ -3871,20 +3843,13 @@ export function runAllSpecTestsParallel(filter String, target Target, workerCoun
 		// `currentJobs` for the pipelined-dispatch set() below.
 		let job = (try currentJobs.get(drainIdx) otherwise panic("dispatch: currentJobs.get({drainIdx}) failed")).clone()
 		let drainPromise = try drainPromises.get(drainIdx) otherwise panic("dispatch: drainPromises.get({drainIdx}) failed")
-		let outcome = await drainPromise
-		if outcome.crashed 'workerDied'
+		let lines = try await drainPromise otherwise 'workerDied'
 			// Worker crashed mid-job (the drain GT hit EOF on readStdoutLine
 			// before WORKER_READY, or readStdoutLine itself raised an I/O
 			// error). Recover the work it was holding, then mark the slot
 			// dead so the find-idle and find-busy scans skip it. We don't
 			// respawn: surviving workers can absorb whatever the queue still
 			// holds, and one fewer worker just trims parallelism by 1/N.
-			//
-			// The drain GT signals failure via DrainOutcome.crashed rather
-			// than throwing SubprocessError so the dispatcher doesn't have
-			// to use `try await ... otherwise` against a Promise reconstructed
-			// from struct storage — see the DrainOutcome comment above for
-			// the underlying compiler-leak rationale.
 			logError(LogCategory.testing, message: function() gives "[CRASH] worker {h.workerId} died on '{job.label()}' (EOF or I/O error before WORKER_READY)")
 			let followup = recoverFromCrashedJob(job, units: units, totalFailed_io: failedBox, failOwners: failOwners, failPayloads: failPayloads)
 			if followup.kind != "" 'hasFollowup'
@@ -3896,7 +3861,6 @@ export function runAllSpecTestsParallel(filter String, target Target, workerCoun
 			jobsCompleted = jobsCompleted + 1
 			continue
 		end 'workerDied'
-		let lines = outcome.lines
 
 		// Pipeline the next dispatch BEFORE processing the prior results: the
 		// worker can begin compiling its next job in parallel with the parent
