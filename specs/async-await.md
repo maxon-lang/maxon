@@ -426,6 +426,47 @@ end 'main'
 30
 ```
 
+<!-- test: async-await.promise-array-throwing-assoc-value -->
+Stored Promise<T> where the async function throws an associated-value
+enum: the heap-allocated error payload must be released on the
+`otherwise` path. Without this, the third element's `WorkError.failed`
+allocation leaks and shows up under `--mm-trace`. Exercises the
+runtime-bit `errorIsHeapPtr` field on the boxed Promise struct: the
+compile-time error type is lost across array storage, so the otherwise
+emitter has to branch on the loaded bit to decide whether to decref.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+union WorkError implements Error
+		failed(reason String)
+end 'WorkError'
+
+function work(n Integer) returns Integer throws WorkError
+		_ = File.exists(FilePath from "noyield.txt")
+		if n < 0 'neg'
+				throw WorkError.failed("negative input")
+		end 'neg'
+		return n
+end 'work'
+
+function main() returns ExitCode
+		var arr = IntPromiseArray.create()
+		arr.push(async work(10))
+		arr.push(async work(20))
+		arr.push(async work(-1))
+		var sum = 0
+		for p in arr 'each'
+				sum = sum + try await p otherwise 0
+		end 'each'
+		return sum
+end 'main'
+```
+```exitcode
+30
+```
+
 <!-- test: async-await.managed-args-many -->
 A regression guard for the spawn-site incref of managed (Struct/Enum)
 async arguments: spawn eight green threads in a row, each receiving a

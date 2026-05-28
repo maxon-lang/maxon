@@ -98,6 +98,13 @@ export type Promise uses Element
 	// stability through await.
 	export let inner = 0
 	let throws_ = false
+	// Compiler-managed: true iff the spawned function's error type is an
+	// associated-value enum. The await/otherwise path reads this bit to
+	// decide whether the error flag carries a heap pointer that needs to be
+	// released via mm_decref. Written by BoxPromiseIntoStruct from the
+	// callee's static ThrowsType; read at try-await sites whose static
+	// error type has been lost across storage.
+	let errorIsHeapPtr = false
 end 'Promise'
 
 // Parsable - types that can be initialized from a string representation.

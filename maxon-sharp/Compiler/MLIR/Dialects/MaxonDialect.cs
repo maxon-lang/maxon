@@ -1699,17 +1699,20 @@ public sealed class MaxonManagedListNodePtrValueOp(MaxonValue cursorPtr, string 
 
 /// Spawns a green thread to execute a function call.
 /// The result is a MaxonPromise that can be awaited.
-public sealed class MaxonAsyncCallOp(string callee, List<MaxonValue> args, MaxonValueKind? innerResultKind, string? innerStructTypeName, bool throws = false) : MaxonOp {
+public sealed class MaxonAsyncCallOp(string callee, List<MaxonValue> args, MaxonValueKind? innerResultKind, string? innerStructTypeName, bool throws = false, bool errorIsHeapPtr = false) : MaxonOp {
   public override MaxonOpKind Kind => MaxonOpKind.AsyncCall;
   public override string Mnemonic => $"maxon.async_call @{Callee}";
   public string Callee { get; } = callee;
   public List<MaxonValue> Args { get; } = args;
-  public MaxonPromise Result { get; } = new MaxonPromise(IrContext.Current.NextId(), innerResultKind, innerStructTypeName, throws);
+  public MaxonPromise Result { get; } = new MaxonPromise(IrContext.Current.NextId(), innerResultKind, innerStructTypeName, throws, errorIsHeapPtr);
   /// The return type of the spawned function (what await will produce)
   public MaxonValueKind? InnerResultKind { get; } = innerResultKind;
   public string? InnerStructTypeName { get; } = innerStructTypeName;
   /// Whether the spawned function is a throwing function.
   public bool Throws { get; } = throws;
+  /// True iff the spawned callee's ThrowsType is an associated-value enum.
+  /// Used to decide whether the otherwise path must mm_decref the error flag.
+  public bool ErrorIsHeapPtr { get; } = errorIsHeapPtr;
   public List<bool>? ArgMutabilities { get; set; }
   public List<string?>? ArgVarNames { get; set; }
   /// Source location for error reporting (line of the 'async' keyword)
@@ -1754,13 +1757,23 @@ public sealed class MaxonTryAwaitOp : MaxonOp {
   public MaxonInteger ErrorFlag { get; }
   public MaxonValueKind? ResultKind { get; }
   public string? ResultStructTypeName { get; }
+  /// Compile-time-known: true iff the spawned callee's ThrowsType is an
+  /// associated-value enum. Direct-await path.
+  public bool ErrorIsHeapPtr { get; }
+  /// Runtime SSA bool loaded from the boxed Promise struct's `errorIsHeapPtr`
+  /// field. Non-null only on the storage-sourced path. When non-null,
+  /// ErrorIsHeapPtr is ignored.
+  public MaxonValue? ErrorIsHeapPtrRuntime { get; }
   public override IReadOnlyList<string> PrintableResults => Result != null ? [Result.ToString(), ErrorFlag.ToString()] : [ErrorFlag.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [Promise.ToString()];
 
-  public MaxonTryAwaitOp(MaxonValue promise, MaxonValueKind? resultKind, string? resultStructTypeName) {
+  public MaxonTryAwaitOp(MaxonValue promise, MaxonValueKind? resultKind, string? resultStructTypeName,
+      bool errorIsHeapPtr = false, MaxonValue? errorIsHeapPtrRuntime = null) {
     Promise = promise;
     ResultKind = resultKind;
     ResultStructTypeName = resultStructTypeName;
+    ErrorIsHeapPtr = errorIsHeapPtr;
+    ErrorIsHeapPtrRuntime = errorIsHeapPtrRuntime;
     ErrorFlag = new MaxonInteger(IrContext.Current.NextId());
     if (resultKind != null) {
       Result = resultKind == MaxonValueKind.Struct

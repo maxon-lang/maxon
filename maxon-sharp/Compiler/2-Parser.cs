@@ -633,9 +633,12 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   private MaxonStruct BoxPromiseIntoStruct(MaxonPromise promise, IrStructType promiseStructType) {
     var throwsLit = new MaxonLiteralOp(promise.Throws);
     _currentBlock!.AddOp(throwsLit);
+    var errorIsHeapPtrLit = new MaxonLiteralOp(promise.ErrorIsHeapPtr);
+    _currentBlock!.AddOp(errorIsHeapPtrLit);
     var fields = new List<(string, MaxonValue)> {
       ("inner", new MaxonInteger(promise.Id)),
-      ("throws_", throwsLit.Result)
+      ("throws_", throwsLit.Result),
+      ("errorIsHeapPtr", errorIsHeapPtrLit.Result)
     };
     var structLit = new MaxonStructLiteralOp(promiseStructType.Name, fields);
     _currentBlock!.AddOp(structLit);
@@ -8035,6 +8038,13 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
     TryResultInfo tryInfo;
     IrType? calleeThrowsType = null;
+    // Runtime SSA bool: when non-null, the otherwise emitters branch on this
+    // at runtime to decide whether the error flag is a heap pointer (assoc-
+    // value enum) that needs mm_decref. Set only on the storage-sourced
+    // try-await path, where the static error type is lost across the
+    // Promise<T> struct boundary. Direct-await and try-call leave this null
+    // and continue to rely on the static `calleeThrowsType` check.
+    MaxonValue? runtimeErrorIsHeapPtr = null;
 
     // Check if this is a try-await expression (the inner parsed an await op)
     var lastOp = _currentBlock!.Operations[^1];
@@ -8052,12 +8062,20 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
       // Replace the MaxonAwaitOp with a MaxonTryAwaitOp
       _currentBlock!.Operations.RemoveAt(_currentBlock!.Operations.Count - 1);
-      var tryAwaitOp = new MaxonTryAwaitOp(promise, promiseVal.InnerKind, promiseVal.InnerStructTypeName);
+      var tryAwaitOp = new MaxonTryAwaitOp(promise, promiseVal.InnerKind, promiseVal.InnerStructTypeName,
+          errorIsHeapPtr: promiseVal.ErrorIsHeapPtr,
+          errorIsHeapPtrRuntime: promiseVal.ErrorIsHeapPtrRuntime);
       _currentBlock!.AddOp(tryAwaitOp);
       InvalidateCachedSelfFields();
       _lastExprCallOp = null;
 
       tryInfo = new TryResultInfo(tryAwaitOp.ErrorFlag, tryAwaitOp.Result, tryAwaitOp.ResultKind, tryAwaitOp.ResultStructTypeName);
+      // Propagate the storage-path runtime bit so otherwise emitters can
+      // gate the mm_decref. ErrorIsHeapPtr (compile-time bit from a direct
+      // async-call) and ErrorIsHeapPtrRuntime (runtime field load from a
+      // reconstructed Promise) are mutually exclusive — only the runtime
+      // bit needs threading; the direct-await path stays unchanged.
+      runtimeErrorIsHeapPtr = promiseVal.ErrorIsHeapPtrRuntime;
 
       // Void-returning async functions can't be used as values in assignments
       if (!isStatementContext && tryAwaitOp.Result == null) {
@@ -8164,16 +8182,16 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
           tryToken.Line, tryToken.Column);
       }
       Advance(); // consume 'ignore'
-      // For associated-value enum throws, the error flag carries a heap pointer
-      // that nobody else will decref. Synthesize a one-block branch that frees it.
-      if (calleeThrowsType is IrEnumType iet && iet.HasAssociatedValues) {
+      // The error flag may carry a heap pointer that nobody else will decref.
+      // Synthesize a one-block branch that frees it.
+      if (ErrorPathNeedsCleanup(calleeThrowsType, runtimeErrorIsHeapPtr)) {
         var errorBlock = UniqueLabel("otherwise_ignore_error");
         var continueBlock = UniqueLabel("otherwise_ignore_continue");
         var errorFlagVar = StoreErrorFlagForCrossBlockAccess(tryInfo.ErrorFlag);
         EmitErrorFlagCheck(tryInfo.ErrorFlag, errorBlock, continueBlock);
         var errBlock = _currentFunction!.Body.AddBlock(errorBlock);
         _currentBlock = errBlock;
-        EmitImplicitErrorCleanupIfNeeded(errorFlagVar, calleeThrowsType);
+        EmitImplicitErrorCleanupIfNeeded(errorFlagVar, calleeThrowsType, runtimeErrorIsHeapPtr);
         _currentBlock!.AddOp(new MaxonBrOp(continueBlock));
         var contBlock = _currentFunction!.Body.AddBlock(continueBlock);
         _currentBlock = contBlock;
@@ -8188,7 +8206,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
     // Check for block handler form: otherwise 'label' ... end 'label'
     if (Check(TokenType.CharacterLiteral)) {
-      return EmitTryOtherwiseBlock(tryInfo, null, calleeThrowsType);
+      return EmitTryOtherwiseBlock(tryInfo, null, calleeThrowsType, runtimeErrorIsHeapPtr);
     }
 
     // Check for '(e)' error binding before block label
@@ -8197,21 +8215,21 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       var errorBindingToken = Expect(TokenType.Identifier);
       CheckReservedDeclName(errorBindingToken);
       Expect(TokenType.RightParen);
-      return EmitTryOtherwiseBlock(tryInfo, errorBindingToken, calleeThrowsType);
+      return EmitTryOtherwiseBlock(tryInfo, errorBindingToken, calleeThrowsType, runtimeErrorIsHeapPtr);
     }
 
     // Single-statement form: otherwise return/break/continue/throw <...>
     // None of these keywords can start an expression, so there is no ambiguity
     // with the default-value form below.
     if (Check(TokenType.Return) || Check(TokenType.Break) || Check(TokenType.Continue) || Check(TokenType.Throw)) {
-      return EmitTryOtherwiseStatement(tryInfo, calleeThrowsType);
+      return EmitTryOtherwiseStatement(tryInfo, calleeThrowsType, runtimeErrorIsHeapPtr);
     }
 
     // Default value form: otherwise <expression>
-    return EmitTryOtherwiseDefault(tryInfo, tryToken, calleeThrowsType);
+    return EmitTryOtherwiseDefault(tryInfo, tryToken, calleeThrowsType, runtimeErrorIsHeapPtr);
   }
 
-  private ExprResult.Direct EmitTryOtherwiseStatement(TryResultInfo tryInfo, IrType? errorType = null) {
+  private ExprResult.Direct EmitTryOtherwiseStatement(TryResultInfo tryInfo, IrType? errorType = null, MaxonValue? runtimeErrorIsHeapPtr = null) {
     var errorBlock = UniqueLabel("otherwise_stmt");
     var continueBlock = UniqueLabel("otherwise_continue");
 
@@ -8220,7 +8238,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
     var errBlock = _currentFunction!.Body.AddBlock(errorBlock);
     _currentBlock = errBlock;
-    EmitImplicitErrorCleanupIfNeeded(errorFlagVar, errorType);
+    EmitImplicitErrorCleanupIfNeeded(errorFlagVar, errorType, runtimeErrorIsHeapPtr);
     ParseStatement();
     if (!BlockEndsWithTerminator(errBlock)) {
       _currentBlock!.AddOp(new MaxonBrOp(continueBlock));
@@ -8347,7 +8365,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     return EmitTryContinueBlock(continueBlock, resultVar, tryInfo);
   }
 
-  private ExprResult.Direct EmitTryOtherwiseBlock(TryResultInfo tryInfo, Token? errorBindingToken, IrType? errorType = null) {
+  private ExprResult.Direct EmitTryOtherwiseBlock(TryResultInfo tryInfo, Token? errorBindingToken, IrType? errorType = null, MaxonValue? runtimeErrorIsHeapPtr = null) {
     if (_inMatchArmBody) {
       var hereToken = Current();
       throw new CompileError(ErrorCode.ParserMatchBlockStatement,
@@ -8378,10 +8396,12 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
     if (errorBindingToken != null) {
       CheckNoSelfFieldShadow(errorBindingToken.Value, errorBindingToken.Line, errorBindingToken.Column);
+      // The binding takes ownership of the error flag (rc=1 on delivery) and
+      // the scope-end machinery decrefs it — no runtime-bit cleanup needed here.
       EmitErrorBinding(errorBindingToken.Value, errorFlagVar, errorType);
       _localVarLocations.Add((errorBindingToken.Value, errorBindingToken.Line, errorBindingToken.Column));
     } else {
-      EmitImplicitErrorCleanupIfNeeded(errorFlagVar, errorType);
+      EmitImplicitErrorCleanupIfNeeded(errorFlagVar, errorType, runtimeErrorIsHeapPtr);
     }
 
     ExpectNewline();
@@ -8442,6 +8462,21 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   }
 
   /// <summary>
+  /// True when the otherwise path needs to decref the error flag because it
+  /// may carry a heap-allocated assoc-value enum payload. Two sources:
+  ///   - Static: the callee's throws-type is a known associated-value enum
+  ///     (unconditional decref).
+  ///   - Runtime: a storage-sourced try-await loaded the boxed Promise's
+  ///     `errorIsHeapPtr` bit; the decref is gated on that bit at runtime.
+  /// Other throws (unit enums, non-enum errors) skip the cleanup and keep the
+  /// IR shape unchanged.
+  /// </summary>
+  private static bool ErrorPathNeedsCleanup(IrType? errorType, MaxonValue? runtimeErrorIsHeapPtr) {
+    return (errorType is IrEnumType iet && iet.HasAssociatedValues)
+        || runtimeErrorIsHeapPtr != null;
+  }
+
+  /// <summary>
   /// When an otherwise handler has no explicit error binding and the callee's
   /// throws type is an associated-value enum, the throw transfers an owned
   /// reference (rc>=1) to the caller via the error-return ABI. Without a
@@ -8452,16 +8487,39 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// `throw self.field` — without the parent's destructor freeing the value
   /// before the caller sees it.)
   /// </summary>
-  private void EmitImplicitErrorCleanupIfNeeded(string errorFlagVar, IrType? errorType) {
+  private void EmitImplicitErrorCleanupIfNeeded(string errorFlagVar, IrType? errorType, MaxonValue? runtimeErrorIsHeapPtr = null) {
+    // Static path: the callee's throws-type is a known associated-value enum,
+    // so the error flag is unconditionally a heap pointer. Emit a bare decref.
     if (errorType is IrEnumType enumType && enumType.HasAssociatedValues) {
       var loadForDecref = new MaxonVarRefOp(errorFlagVar, MaxonValueKind.Integer);
       _currentBlock!.AddOp(loadForDecref);
       var decrefOp = new MaxonCallRuntimeOp("mm_decref", [loadForDecref.Result], hasResult: false);
       _currentBlock!.AddOp(decrefOp);
+      return;
+    }
+    // Runtime path (storage-sourced try-await): the static error type was
+    // lost across the Promise<T> struct boundary, so we have a runtime bool
+    // SSA value that says whether the error flag is a heap pointer. Branch
+    // on it and only decref on the heap-pointer arm. Reached only on the
+    // storage-sourced path; direct-await and try-call pass null here.
+    if (runtimeErrorIsHeapPtr != null) {
+      var decrefLabel = UniqueLabel("err_decref");
+      var afterLabel = UniqueLabel("err_after_decref");
+      _currentBlock!.AddOp(new MaxonCondBrOp(runtimeErrorIsHeapPtr, decrefLabel, afterLabel));
+
+      var decrefBlock = _currentFunction!.Body.AddBlock(decrefLabel);
+      _currentBlock = decrefBlock;
+      var loadForDecref = new MaxonVarRefOp(errorFlagVar, MaxonValueKind.Integer);
+      _currentBlock!.AddOp(loadForDecref);
+      _currentBlock!.AddOp(new MaxonCallRuntimeOp("mm_decref", [loadForDecref.Result], hasResult: false));
+      _currentBlock!.AddOp(new MaxonBrOp(afterLabel));
+
+      var afterBlock = _currentFunction!.Body.AddBlock(afterLabel);
+      _currentBlock = afterBlock;
     }
   }
 
-  private ExprResult.Direct EmitTryOtherwiseDefault(TryResultInfo tryInfo, Token tryToken, IrType? errorType = null) {
+  private ExprResult.Direct EmitTryOtherwiseDefault(TryResultInfo tryInfo, Token tryToken, IrType? errorType = null, MaxonValue? runtimeErrorIsHeapPtr = null) {
     var defaultExpr = ParseExpression();
     var defaultValue = ResolveExprValue(defaultExpr);
 
@@ -8517,7 +8575,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       // For struct results: lazy evaluation — default is only created on error path,
       // try result is only stored on success path. This avoids incref'ing the invalid
       // error code on the error path and avoids allocating the default on the success path.
-      return EmitTryOtherwiseDefaultStruct(tryInfo, resultVarName, defaultValue, resultKind, structTypeName!, errorType);
+      return EmitTryOtherwiseDefaultStruct(tryInfo, resultVarName, defaultValue, resultKind, structTypeName!, errorType, runtimeErrorIsHeapPtr);
     }
 
     // For non-struct results: the original eager pattern is fine (no refcounting involved)
@@ -8525,10 +8583,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     _currentBlock!.AddOp(new MaxonAssignOp(defaultVarName, defaultValue, true, true, resultKind));
     _variables.Declare(defaultVarName, resultKind, true, defaultValue, _currentBlock!, structTypeName: structTypeName);
 
-    // Only spill the error flag for associated-value enum throws — that's the
-    // only case where the error-path cleanup needs to read the heap pointer.
-    // Keeps IR unchanged for the common non-associated-value path.
-    bool needsErrorCleanup = errorType is IrEnumType iet && iet.HasAssociatedValues;
+    bool needsErrorCleanup = ErrorPathNeedsCleanup(errorType, runtimeErrorIsHeapPtr);
     string? errorFlagVar = null;
     if (needsErrorCleanup) {
       errorFlagVar = StoreErrorFlagForCrossBlockAccess(tryInfo.ErrorFlag);
@@ -8547,7 +8602,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // Error block: adopt default value as the result
     var errBlock = _currentFunction!.Body.AddBlock(errorBlock);
     _currentBlock = errBlock;
-    if (needsErrorCleanup) EmitImplicitErrorCleanupIfNeeded(errorFlagVar!, errorType);
+    if (needsErrorCleanup) EmitImplicitErrorCleanupIfNeeded(errorFlagVar!, errorType, runtimeErrorIsHeapPtr);
     var loadedDefault = EmitVarRefOp(defaultVarName, resultKind, structTypeName);
     _currentBlock!.AddOp(new MaxonAssignOp(resultVarName, loadedDefault, false, true, resultKind));
     _currentBlock!.AddOp(new MaxonBrOp(continueBlock));
@@ -8568,7 +8623,8 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// </summary>
   private ExprResult.Direct EmitTryOtherwiseDefaultStruct(
     TryResultInfo tryInfo, string resultVarName, MaxonValue defaultValue,
-    MaxonValueKind resultKind, string structTypeName, IrType? errorType = null) {
+    MaxonValueKind resultKind, string structTypeName, IrType? errorType = null,
+    MaxonValue? runtimeErrorIsHeapPtr = null) {
 
     // Move the default expression ops from the current block to the error block.
     // The default expression was parsed into _currentBlock — we need to extract those ops.
@@ -8595,9 +8651,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       entryBlock.Operations.RemoveRange(tryOpIndex + 1, defaultOps.Count);
     }
 
-    // Only spill the error flag for associated-value enum throws — that's the
-    // only case where the error-path cleanup needs to read the heap pointer.
-    bool needsErrorCleanup = errorType is IrEnumType iet && iet.HasAssociatedValues;
+    bool needsErrorCleanup = ErrorPathNeedsCleanup(errorType, runtimeErrorIsHeapPtr);
     string? errorFlagVar = null;
     if (needsErrorCleanup) {
       errorFlagVar = StoreErrorFlagForCrossBlockAccess(tryInfo.ErrorFlag);
@@ -8613,7 +8667,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // Error block: replay default expression ops, then assign to result var
     var errBlock = _currentFunction!.Body.AddBlock(errorBlockLabel);
     _currentBlock = errBlock;
-    if (needsErrorCleanup) EmitImplicitErrorCleanupIfNeeded(errorFlagVar!, errorType);
+    if (needsErrorCleanup) EmitImplicitErrorCleanupIfNeeded(errorFlagVar!, errorType, runtimeErrorIsHeapPtr);
     foreach (var op in defaultOps) {
       _currentBlock!.AddOp(op);
     }
@@ -19143,7 +19197,8 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       needSep = true;
     }
     var sourceText = $"async {nameToken.Value}({argParts})";
-    var asyncOp = new MaxonAsyncCallOp(callee.Name, args, resultKind, resultStructTypeName, throws: callee.ThrowsType != null) {
+    var calleeErrorIsHeapPtr = callee.ThrowsType is IrEnumType calleeThrowsEnum && calleeThrowsEnum.HasAssociatedValues;
+    var asyncOp = new MaxonAsyncCallOp(callee.Name, args, resultKind, resultStructTypeName, throws: callee.ThrowsType != null, errorIsHeapPtr: calleeErrorIsHeapPtr) {
       ArgMutabilities = _lastArgMutabilities,
       ArgVarNames = _lastArgVarNames,
       CallLine = asyncToken.Line,
@@ -19215,6 +19270,14 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     }
     var loadInner = new MaxonFieldAccessOp(structVal, structType.Name, "inner", MaxonValueKind.Integer, null);
     _currentBlock!.AddOp(loadInner);
+    // Load the `errorIsHeapPtr` bit from the boxed struct so the otherwise
+    // emitters can decide at runtime whether the error flag is a heap pointer
+    // (assoc-value enum, needs mm_decref) or a plain tag (unit enum). The
+    // static error type is lost across storage, but this one bit — written
+    // by BoxPromiseIntoStruct from the original callee's ThrowsType — is
+    // enough to drive a conditional decref.
+    var loadErrIsHeapPtr = new MaxonFieldAccessOp(structVal, structType.Name, "errorIsHeapPtr", MaxonValueKind.Bool, null);
+    _currentBlock!.AddOp(loadErrIsHeapPtr);
     // Treat every reconstructed Promise<T> as throwing at the type level.
     // The `throws_` field IS stored in the struct (so the runtime can branch
     // on it) but its concrete value is only known at the boxing site — we
@@ -19225,7 +19288,9 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // so `try await ... otherwise X` on a non-throwing promise still
     // succeeds — it just adds an ignored error-handler the runtime never
     // triggers.
-    return new MaxonPromise(loadInner.Result.Id, innerKind, innerStructTypeName, throws: true);
+    return new MaxonPromise(loadInner.Result.Id, innerKind, innerStructTypeName,
+        throws: true, errorIsHeapPtr: false,
+        errorIsHeapPtrRuntime: loadErrIsHeapPtr.Result);
   }
 
   /// <summary>
