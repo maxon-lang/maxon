@@ -6,10 +6,19 @@
 // the full native pipeline runs ~20 passes today.
 export typealias DumpPassCounter = int(0 to 1024)
 
-// Stage B (closures): unbounded counter for the `_$closure_<N>` name
-// suffix. There is no concrete upper bound on the number of closures a
-// project may declare, so the wide `0 to u64.max` range is appropriate.
-export typealias ClosureCounter = int(0 to u64.max)
+// Per-enclosing-function counter for the `{outer}$closure_<k>` name
+// suffix. Lives on `IrFunction` so each parsed function carries its own
+// monotonic counter; the parser increments it inside `parseClosure` to
+// mint a fresh suffix per encountered closure literal. Unbounded range
+// — no concrete upper bound on closures per function.
+export typealias ClosureSubCounter = int(0 to u64.max)
+
+// Phase 2 closure-capture-count localization: capture count for a single
+// lifted closure body, stored on its `IrFunction`. Used by
+// LowerMaxonToStd to compute env-block layout for the closure (user
+// captures at `env[0..captureCount-1]`, implicit Phase 11.4 slots at
+// `env[captureCount..]`). Mirrors the user-arity range — same wide bound.
+export typealias ClosureCaptureCount = int(0 to u64.max)
 
 // Configuration for `--emit-ir` / `--dump-stages`. Disables query-cache fast
 // paths when active so every compile observes the full pipeline, and carries
@@ -199,26 +208,6 @@ export type Project
 	// Default values are currently limited to integer literals; omitted
 	// parameters without a default are a compile error at the call site.
 	export var funcSignatures as FuncSignatureMap
-
-	// Closure→enclosing-function back-pointer. Keyed by lifted closure name
-	// (`_$closure_<N>`), valued by the qualified name of the function that
-	// parsed the closure literal. Populated by `parseClosure` so later
-	// pipeline stages (Phase 11.4 generic-detection in `LowerMaxonToStd`)
-	// can chase from a lifted body up to the enclosing generic extension
-	// method whose where-clause witness slots the closure needs to inherit.
-	// Nested closures chain through additional entries — `_$closure_3 ->
-	// _$closure_1 -> Array.sortUnstable` — and callers walk the chain
-	// until they hit a real method name. Survives the stdlib cache via
-	// `closureEnclosingFuncKeys` in FileParseDelta + dedicated codec slot.
-	export var closureEnclosingFunc as ClosureEnclosingFuncMap
-
-	// Lifted-closure capture count, keyed by `_$closure_<N>`. The closure
-	// body's env layout puts user captures at offsets 0..captureCount-1
-	// and Phase 11.4-inherited layout/witness pointers immediately after;
-	// the closure body's per-function reset reads this map to locate the
-	// implicit slots. Set by the parser at `parseClosure` time alongside
-	// `closureEnclosingFunc`.
-	export var closureCaptureCounts as ClosureCaptureCountMap
 
 	// Per-call-site substituted paramTypes — the FuncSignature's declared
 	// paramTypes resolved against each call's enclosing-struct innerAliases
@@ -452,13 +441,6 @@ export type Project
 	// arms share an id so structural equality reduces to integer compare.
 	export var interfaceRegistry as InterfaceTypeRegistry
 
-	// Stage B (closures): monotonic counter used to mint unique
-	// `_$closure_<N>` names for lifted closure bodies. Per-project rather
-	// than per-module so cross-file uniqueness holds even when closures
-	// from multiple files land in the same merged module. Bumped once per
-	// `parseClosure` invocation; the parser never decrements.
-	export var closureCounter as ClosureCounter
-
 	// Per-project counter for cast-site range-check label minting
 	// (`__cast_panic_N`, `__cast_ok_N`, `__cast_check_lo_N`). Bumped once
 	// per expanded `castCheck` op in `expandCastRangeChecks`. Reset is
@@ -672,15 +654,6 @@ export type Project
 	// receiver bindings.
 	export var extensionMethodWhereClauses as WhereClauseMapByName
 
-	// Stage B (closures): hand out the next unique `_$closure_<N>` suffix
-	// and bump the counter. Called by the parser at every closure
-	// expression to keep lifted-function names disjoint.
-	export function nextClosureId() returns ClosureCounter
-		let id = closureCounter
-		closureCounter = closureCounter + 1
-		return id
-	end 'nextClosureId'
-
 	export static function create(db QueryDatabase, rootPath FilePath, target Target) returns Project
 		return Self{
 			db: db,
@@ -697,8 +670,6 @@ export type Project
 			funcVisibilities: FuncVisibilityMap.create(),
 			methodNameIndex: MethodNameIndex.create(),
 			funcSignatures: FuncSignatureMap.create(),
-			closureEnclosingFunc: ClosureEnclosingFuncMap.create(),
-			closureCaptureCounts: ClosureCaptureCountMap.create(),
 			callParamTypes: CallParamTypesMap.create(),
 			resolvedCallees: ResolvedCalleesMap.create(),
 			resolvedReceiverTypes: ResolvedReceiverTypesMap.create(),
@@ -727,7 +698,6 @@ export type Project
 			mapLiteralProducers: MapLiteralProducerMap.create(),
 			genericTypealiases: GenericTypealiasMap.create(),
 			interfaceRegistry: InterfaceTypeRegistry.create(),
-			closureCounter: 0,
 			castCheckCounter: 0,
 			tupleAllocGids: TupleAllocGidMap.create(),
 			discardedBareCallResults: DiscardedCallResultSet.create(),
@@ -1853,14 +1823,6 @@ export typealias FuncReturnTypeMap = Map with (String, MaxonReturnType)
 export typealias FuncThrowsTypeMap = Map with (String, ThrowsClause)
 
 export typealias FuncRenameMap = Map with (String, String)
-
-// Phase 11.4 closure-inheritance: `_$closure_<N>` → enclosing-function
-// qualified name. See `Project.closureEnclosingFunc`.
-export typealias ClosureEnclosingFuncMap = Map with (String, String)
-
-// Phase 11.4 closure-inheritance: `_$closure_<N>` → user-capture count.
-// See `Project.closureCaptureCounts`.
-export typealias ClosureCaptureCountMap = Map with (String, ParsedInt)
 
 // Per-parameter default value. `none` means the argument is mandatory; the
 // other arms each carry a compile-time constant the call-site default-fill
@@ -3066,3 +3028,24 @@ export type UnresolvedEnumType
 end 'UnresolvedEnumType'
 
 export typealias UnresolvedEnumTypeMap = Map with (String, UnresolvedEnumType)
+
+// Recover the enclosing-function name from a lifted closure's qualified
+// name. After Phase 2's parser rename, every lifted closure is named
+// `{outerFuncName}$closure_<k>` (with the receiver-specialized variant
+// `{outerFuncName}$closure_<k>$<ReceiverType>` appearing after
+// MonomorphizeExtensions). The enclosing name is the prefix up to the
+// first `$closure_` marker — split there and return everything to the
+// left. Returns an empty String when the input does NOT contain
+// `$closure_` (callers treat empty as "not a lifted closure" and fall
+// through to their original lookup-miss path).
+//
+// Replaces the project-wide `closureEnclosingFunc` map: under the old
+// naming scheme closures were named `_$closure_<N>` with no embedded
+// outer-function reference, so the map was the only way to chase from a
+// lifted body up to its enclosing context. The new naming makes the
+// outer name self-describing, so the map (and its cache serialization,
+// and its `project.closureCounter` ordinal source) all drop out.
+export function enclosingFuncOfClosure(closureName String) returns String
+	let markerIdx = try closureName.findFirst("$closure_") otherwise return ""
+	return closureName.slice(closureName.startIndex(), endIndex: markerIdx)
+end 'enclosingFuncOfClosure'

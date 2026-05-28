@@ -68,6 +68,24 @@ export type IrFunction
 	export var nameLine as LineNumber
 	export var nameColumn as ColumnNumber
 
+	// Phase 2 closure rename: per-function counter the parser increments for
+	// each closure literal encountered while parsing THIS function's body.
+	// The lifted closure name is `{thisFunc.name}$closure_{k}` where `k` is
+	// this counter post-increment. Per-function scoping (vs. the previous
+	// project-wide `closureCounter`) makes lifted closure names
+	// source-deterministic: the same source produces the same closure name
+	// regardless of how many sibling functions parsed before it.
+	export var closureSubCounter as ClosureSubCounter
+
+	// Phase 2 closure-capture-count localization: for a lifted closure body,
+	// the number of user-level captures in its env block. Layout-inheriting
+	// implicit slots (Phase 11.4) follow at offsets `[captureCount..]`. Zero
+	// for non-closure functions (they have no env block) and for closures
+	// without captures. Replaces the project-wide `closureCaptureCounts` map
+	// keyed by closure name — the field travels with the IrFunction through
+	// every clone/rename without needing a separate sidetable to follow.
+	export var closureCaptureCount as ClosureCaptureCount
+
 	// --- Maxon-phase types (populated by parser, consumed by LowerMaxonToStd) ---
 	export var maxonReturnType as MaxonReturnType
 	export var maxonParamTypes as MaxonTypeArray
@@ -174,6 +192,8 @@ export type IrFunction
 			returnLine: returnLine,
 			nameLine: 0,
 			nameColumn: 0,
+			closureSubCounter: 0,
+			closureCaptureCount: 0,
 			maxonReturnType: maxonReturnType,
 			maxonParamTypes: maxonParamTypes,
 			throwsTypeName: throwsTypeName,
@@ -211,6 +231,8 @@ export type IrFunction
 			returnLine: returnLine,
 			nameLine: 0,
 			nameColumn: 0,
+			closureSubCounter: 0,
+			closureCaptureCount: 0,
 			maxonReturnType: MaxonReturnType.void,
 			maxonParamTypes: MaxonTypeArray.create(),
 			throwsTypeName: throwsTypeName,
@@ -250,6 +272,8 @@ export type IrFunction
 			returnLine: src.returnLine,
 			nameLine: src.nameLine,
 			nameColumn: src.nameColumn,
+			closureSubCounter: src.closureSubCounter,
+			closureCaptureCount: src.closureCaptureCount,
 			maxonReturnType: src.maxonReturnType,
 			maxonParamTypes: src.maxonParamTypes,
 			throwsTypeName: src.throwsTypeName,

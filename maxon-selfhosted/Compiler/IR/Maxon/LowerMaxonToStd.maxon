@@ -1596,12 +1596,13 @@ function mmParamTypes4(first MaxonType, second MaxonType, third MaxonType, fourt
 end 'mmParamTypes4'
 
 // Stage E (closures): predicate distinguishing parser-lifted closure
-// bodies (`_$closure_N`) from ordinary user functions. The parser uses a
-// fixed prefix when minting closure names via `Project.nextClosureId`.
-// `$` is rejected by the Maxon lexer so user code can never declare a
-// function named `_$closure_N`; the prefix match is unambiguous.
+// bodies (`{outer}$closure_<k>` post-Phase-2; `_$closure_<N>` pre-Phase-2
+// fallback for the anonymous-outer edge case) from ordinary user
+// functions. The parser embeds `$closure_` in every lifted name; `$` is
+// rejected by the Maxon lexer so user code can never produce that
+// substring in a function name, making the test unambiguous.
 function isLiftedClosureName(name String) returns bool
-	return name.startsWith("_$closure_")
+	return name.contains("$closure_")
 end 'isLiftedClosureName'
 
 // True when the given Maxon return type lowers to a floating-point Std
@@ -2371,9 +2372,9 @@ type MaxonToStdLowering
 			// `loadSlot`), and stamp the ids into `implicitLayoutValueId` /
 			// `implicitWitnessValueIds` so the existing dispatch site at
 			// `tryLowerConstrainedTypeParamDispatch` works unchanged. The
-			// captureCount is recovered from `project.closureCaptureCounts`
-			// (the parser stamps it at `parseClosure` time and the stdlib
-			// cache persists it across builds).
+			// captureCount lives on `srcFunc.closureCaptureCount` (the
+			// parser stamps it at `parseClosure` time and the stdlib
+			// cache persists it across builds via the IrFunction codec).
 			if entryRef >= 0 and closureBodyInheritsImplicits 'emitClosureImplicitLoads'
 				var entryBlock = try self.stdModule.blocks.get(entryRef) otherwise panic("invariant: entryRef from blockRefs not in stdModule.blocks")
 				let envSlot = self.liftedEnvValueId as VarSlot
@@ -8281,7 +8282,7 @@ type MaxonToStdLowering
 	// pointer ABI shape that lifted closures and user free functions both
 	// satisfy.
 	//
-	// Free-function refs (everything not starting with `_$closure_`) get
+	// Free-function refs (everything that is NOT a lifted closure body) get
 	// routed through a synthesized thunk `__fnref_<funcName>` whose
 	// signature includes the trailing `__env i64` param the indirect-call
 	// ABI requires. The thunk body discards env and tail-calls the original
@@ -8291,7 +8292,7 @@ type MaxonToStdLowering
 	function lowerFunctionRef(result ByteArray, funcName String, dstBlock IrBlock)
 		let resultId = self.defineName(result)
 		var refTarget = funcName
-		if not funcName.startsWith("_$closure_") 'isFreeFunc'
+		if not isLiftedClosureName(funcName) 'isFreeFunc'
 			refTarget = self.scheduleFnRefThunk(funcName)
 		end 'isFreeFunc'
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.funcRef(resultId, funcName: refTarget)))
@@ -8449,17 +8450,14 @@ type MaxonToStdLowering
 	end 'liftedClosureInheritsImplicits'
 
 	// Phase 11.4 closure-inheritance: capture count for a lifted closure.
-	// The parser stamps `project.closureCaptureCounts[closureName]` at
-	// `parseClosure` time and the stdlib cache replays it on cache-hit.
-	// The captureCount drives the env-block layout — implicit
-	// layout/witness slots live AFTER all user captures so a 0-capture
-	// closure parks its layout at env[0]. Missing entries return 0 (no
-	// captures), which matches a closure with empty `capturedNames`.
+	// The parser stamps `liftedFunc.closureCaptureCount` at `parseClosure`
+	// time and the stdlib cache restores the field via the regular
+	// IrFunction codec. The captureCount drives the env-block layout —
+	// implicit layout/witness slots live AFTER all user captures so a
+	// 0-capture closure parks its layout at env[0]. Zero for non-closure
+	// IrFunctions and for closures without captures.
 	function countClosureCaptures(srcFunc IrFunction) returns ParsedInt
-		if let count = try self.project.closureCaptureCounts.get(srcFunc.name) 'haveCount'
-			return count
-		end 'haveCount'
-		return 0
+		return srcFunc.closureCaptureCount as ParsedInt
 	end 'countClosureCaptures'
 
 	// Stage E (closures): recover the outer slot id for a captured name.
@@ -9533,40 +9531,21 @@ function functionIsGenericForLowering(project Project, func IrFunction) returns 
 		let params = project.typeParameters.getParamNames(recvType)
 		return params.count() > 0
 	end 'haveRecv'
-	// Phase 11.4 closure-inheritance: lifted closure bodies (`_$closure_N`)
-	// carry no enclosing receiver of their own. Chase the parser's
-	// `closureEnclosingFunc` back-pointer up to the outermost real
-	// function, then re-ask the question against that name. If the
-	// enclosing function lives in a generic extension (or itself is a
-	// generic body), the closure inherits its layout/witness slots through
-	// env (see `lowerClosureCreate`).
+	// Phase 11.4 closure-inheritance: lifted closure bodies carry no
+	// enclosing receiver of their own. Recover the enclosing function
+	// name from the closure's embedded prefix (`{outer}$closure_<k>`)
+	// and re-ask the question against that name. If the enclosing
+	// function lives in a generic extension (or itself is a generic
+	// body), the closure inherits its layout/witness slots through env
+	// (see `lowerClosureCreate`).
 	if isLiftedClosureName(func.name) 'isClosure'
-		if let enclosingName = try chaseClosureEnclosingFunc(project, name: func.name) 'haveEnc'
+		let enclosingName = enclosingFuncOfClosure(func.name)
+		if not enclosingName.isEmpty() 'haveEnc'
 			return enclosingNameIsGenericForLowering(project, name: enclosingName)
 		end 'haveEnc'
 	end 'isClosure'
 	return false
 end 'functionIsGenericForLowering'
-
-// Walk `project.closureEnclosingFunc` from a lifted-closure name through
-// any chain of nested-closure parents until reaching a non-closure
-// (real) function name. Returns the final non-closure name. Throws when
-// the input isn't a lifted closure or no entry is registered.
-function chaseClosureEnclosingFunc(project Project, name String) returns String throws ClosureEnclosingLookupError
-	var cur = name
-	for _ in 0 upto 32 'chase'
-		let parent = try project.closureEnclosingFunc.get(cur) otherwise throw ClosureEnclosingLookupError.notFound
-		if not isLiftedClosureName(parent) 'reachedReal'
-			return parent
-		end 'reachedReal'
-		cur = parent
-	end 'chase'
-	panic("chaseClosureEnclosingFunc: pathological depth >= 32 for '{name}' — closureEnclosingFunc cycle?")
-end 'chaseClosureEnclosingFunc'
-
-export enum ClosureEnclosingLookupError implements Error
-	notFound
-end 'ClosureEnclosingLookupError'
 
 // Mirror of `functionIsGenericForLowering`'s enclosing-type lookup keyed
 // by a name string (rather than an IrFunction). Used by closure
@@ -9797,7 +9776,8 @@ function collectFunctionWitnessConstraints(project Project, func IrFunction) ret
 	// stays non-generic at lowering).
 	var lookupName = func.name
 	if isLiftedClosureName(func.name) 'isClosure'
-		if let enclosingName = try chaseClosureEnclosingFunc(project, name: func.name) 'haveEnc'
+		let enclosingName = enclosingFuncOfClosure(func.name)
+		if not enclosingName.isEmpty() 'haveEnc'
 			lookupName = enclosingName
 		end 'haveEnc'
 	end 'isClosure'

@@ -92,6 +92,66 @@ end 'CaptureInfo'
 
 export typealias CaptureInfoArray = Array with CaptureInfo
 
+// Phase 2 closure rename: one (oldName, newName) pair for a closure whose
+// embedded enclosing-function prefix needs to follow an overload-mangling
+// rename of its parent. Used by `rekeyExistingFunction` to collect every
+// rename before walking `module.ops` to update `closureCreate`/`functionRef`
+// references that still point at the now-vacated old name.
+export type ClosureRename
+	export var oldName as String
+	export var newName as String
+
+	export static function create(oldName String, newName String) returns ClosureRename
+		return Self{oldName: oldName, newName: newName}
+	end 'create'
+end 'ClosureRename'
+
+export typealias ClosureRenameArray = Array with ClosureRename
+
+// Walk every op in `module.ops` and rewrite the `funcName` of any
+// `closureCreate`/`functionRef` that references one of the renamed
+// closures. Linear in op count and rename count, but both are small
+// per-overload-pair and this only runs when the parser actually
+// rekeyed at least one closure.
+export function rewriteClosureNameOpRefs(module MaxonModule, renames ClosureRenameArray)
+	for i in 0 upto module.ops.count() 'eachOp'
+		let op = try module.ops.get(i) otherwise continue
+		let n = op.name
+		if n == "closureCreate" 'isCC'
+			let rewritten = rewriteClosureCreateRef(op, renames: renames)
+			try module.ops.set(i, value: rewritten) otherwise ignore
+			continue
+		end 'isCC'
+		if n == "functionRef" 'isFR'
+			let rewritten = rewriteFunctionRefRef(op, renames: renames)
+			try module.ops.set(i, value: rewritten) otherwise ignore
+		end 'isFR'
+	end 'eachOp'
+end 'rewriteClosureNameOpRefs'
+
+function rewriteClosureCreateRef(op MaxonOp, renames ClosureRenameArray) returns MaxonOp
+	return match op 'k'
+		closureCreate(result, funcName, fnTypeId, capturedNames, capturedTypes, range) gives MaxonOp.closureCreate(result, funcName: lookupClosureRename(renames, funcName: funcName), fnTypeId: fnTypeId, capturedNames: capturedNames, capturedTypes: capturedTypes, range: range)
+		default panic("rewriteClosureCreateRef: expected closureCreate but got '{op.name}'")
+	end 'k'
+end 'rewriteClosureCreateRef'
+
+function rewriteFunctionRefRef(op MaxonOp, renames ClosureRenameArray) returns MaxonOp
+	return match op 'k'
+		functionRef(result, funcName, fnTypeId, range) gives MaxonOp.functionRef(result, funcName: lookupClosureRename(renames, funcName: funcName), fnTypeId: fnTypeId, range: range)
+		default panic("rewriteFunctionRefRef: expected functionRef but got '{op.name}'")
+	end 'k'
+end 'rewriteFunctionRefRef'
+
+function lookupClosureRename(renames ClosureRenameArray, funcName String) returns String
+	for r in renames 'each'
+		if r.oldName == funcName 'hit'
+			return r.newName
+		end 'hit'
+	end 'each'
+	return funcName
+end 'lookupClosureRename'
+
 export type Parser
 	var project as Project
 	// Original token array kept for absolute-index lookups (e.g. "previous
@@ -2029,6 +2089,57 @@ export type Parser
 		return OverloadResolution.overload(newMangled)
 	end 'tryRegisterOverload'
 
+	// Move the per-function entry in `funcReturnTypes` / `funcSignatures` /
+	// `funcVisibilities` / `funcThrowsTypes` keyed by `oldName` to
+	// `newName`. Each map is independent: only present entries are moved,
+	// and an `insert` collision at the destination skips the
+	// `recordFunc*Insert` delta entry so rollback doesn't double-remove.
+	// Shared between `rekeyExistingFunction` (for the outer function being
+	// overload-mangled) and the closure-rename pass (for every lifted
+	// closure whose name embeds the outer's old prefix).
+	function rekeyFunctionSidetables(oldName String, newName String)
+		if let rt = try project.funcReturnTypes.get(oldName) 'haveRt'
+			var rekRt = true
+			try project.funcReturnTypes.insert(newName, value: rt) otherwise 'dupRt'
+				rekRt = false
+			end 'dupRt'
+			_ = project.funcReturnTypes.remove(oldName)
+			if rekRt 'recRt'
+				recordFuncReturnTypeInsert(project, filePath: filePath, key: newName)
+			end 'recRt'
+		end 'haveRt'
+		if let sig = try project.funcSignatures.get(oldName) 'haveSig'
+			var rekSig = true
+			try project.funcSignatures.insert(newName, value: sig) otherwise 'dupSig'
+				rekSig = false
+			end 'dupSig'
+			_ = project.funcSignatures.remove(oldName)
+			if rekSig 'recSig'
+				recordFuncSignatureInsert(project, filePath: filePath, key: newName)
+			end 'recSig'
+		end 'haveSig'
+		if let vis = try project.funcVisibilities.get(oldName) 'haveVis'
+			var rekVis = true
+			try project.funcVisibilities.insert(newName, value: vis) otherwise 'dupVis'
+				rekVis = false
+			end 'dupVis'
+			_ = project.funcVisibilities.remove(oldName)
+			if rekVis 'recVis'
+				recordFuncVisibilityInsert(project, filePath: filePath, key: newName)
+			end 'recVis'
+		end 'haveVis'
+		if let th = try project.funcThrowsTypes.get(oldName) 'haveTh'
+			var rekTh = true
+			try project.funcThrowsTypes.insert(newName, value: th) otherwise 'dupTh'
+				rekTh = false
+			end 'dupTh'
+			_ = project.funcThrowsTypes.remove(oldName)
+			if rekTh 'recTh'
+				recordFuncThrowsInsert(project, filePath: filePath, key: newName)
+			end 'recTh'
+		end 'haveTh'
+	end 'rekeyFunctionSidetables'
+
 	// Re-key an existing funcReturnTypes / funcSignatures / funcVisibilities /
 	// funcThrowsTypes / IrFunction.name entry from `bareName` to `mangledName`.
 	// methodNameIndex receives an additional bucket entry for `mangledName`;
@@ -2036,46 +2147,7 @@ export type Parser
 	// Array (no remove API) — call-site lookups filter out stale entries
 	// when funcReturnTypes.contains returns false.
 	function rekeyExistingFunction(bareName String, mangledName String)
-		if let rt = try project.funcReturnTypes.get(bareName) 'haveRt'
-			var rekeyedRt = true
-			try project.funcReturnTypes.insert(mangledName, value: rt) otherwise 'dupRt'
-				rekeyedRt = false
-			end 'dupRt'
-			_ = project.funcReturnTypes.remove(bareName)
-			if rekeyedRt 'recRt'
-				recordFuncReturnTypeInsert(project, filePath: filePath, key: mangledName)
-			end 'recRt'
-		end 'haveRt'
-		if let sig = try project.funcSignatures.get(bareName) 'haveSig'
-			var rekeyedSig = true
-			try project.funcSignatures.insert(mangledName, value: sig) otherwise 'dupSig'
-				rekeyedSig = false
-			end 'dupSig'
-			_ = project.funcSignatures.remove(bareName)
-			if rekeyedSig 'recSig'
-				recordFuncSignatureInsert(project, filePath: filePath, key: mangledName)
-			end 'recSig'
-		end 'haveSig'
-		if let vis = try project.funcVisibilities.get(bareName) 'haveVis'
-			var rekeyedVis = true
-			try project.funcVisibilities.insert(mangledName, value: vis) otherwise 'dupVis2'
-				rekeyedVis = false
-			end 'dupVis2'
-			_ = project.funcVisibilities.remove(bareName)
-			if rekeyedVis 'recVis2'
-				recordFuncVisibilityInsert(project, filePath: filePath, key: mangledName)
-			end 'recVis2'
-		end 'haveVis'
-		if let th = try project.funcThrowsTypes.get(bareName) 'haveTh'
-			var rekeyedTh = true
-			try project.funcThrowsTypes.insert(mangledName, value: th) otherwise 'dupTh2'
-				rekeyedTh = false
-			end 'dupTh2'
-			_ = project.funcThrowsTypes.remove(bareName)
-			if rekeyedTh 'recTh2'
-				recordFuncThrowsInsert(project, filePath: filePath, key: mangledName)
-			end 'recTh2'
-		end 'haveTh'
+		rekeyFunctionSidetables(bareName, newName: mangledName)
 		// Re-key the extension-method where-clause entry too. The map is
 		// per-overload (one entry per registered IrFunction name), so the
 		// existing function's entry — registered under `bareName` while it
@@ -2093,23 +2165,42 @@ export type Parser
 				recordExtensionMethodWhereClauseInsert(project, filePath: filePath, key: mangledName)
 			end 'recExtWhere2'
 		end 'haveExtWhere'
-		// Phase 11.4 closure-inheritance: closures whose enclosing function
-		// is now being renamed must update their back-pointer value so the
-		// LowerMaxonToStd-side chase resolves to the live name. The map is
-		// keyed by closure name (small set), so a linear scan of values is
-		// cheap. Mutating during iteration is safe — we only update values,
-		// not keys.
-		var closureKeysToRewrite = StringArray.create()
-		for (closureKey, encName) in project.closureEnclosingFunc 'scanClosureEnc'
-			if encName == bareName 'matchEnc'
-				closureKeysToRewrite.push(closureKey)
-			end 'matchEnc'
-		end 'scanClosureEnc'
-		for cKey in closureKeysToRewrite 'rewriteClosureEnc'
-			project.closureEnclosingFunc.upsert(cKey, value: mangledName)
-		end 'rewriteClosureEnc'
 		project.methodNameIndex.record(mangledName)
 		recordMethodNameIndexInsert(project, filePath: filePath, qualifiedName: mangledName)
+		// Phase 2 closure rename: lifted closures embed their enclosing
+		// function's name as a prefix (`{bareName}$closure_<k>`). When the
+		// enclosing function gets rekeyed to the mangled overload form, the
+		// closure names that derived from the old bare prefix must follow —
+		// otherwise the closure's own name is stale and downstream readers
+		// (`enclosingFuncOfClosure`) recover the now-gone bare name instead
+		// of the live mangled name. Rewrite the closure's IrFunction name
+		// AND its sidetable entries to use the mangled prefix.
+		let oldClosurePrefix = "{bareName}$closure_"
+		let newClosurePrefix = "{mangledName}$closure_"
+		var closureRenames = ClosureRenameArray.create()
+		for i in 0 upto module.functions.count() 'eachClosureFn'
+			var cf = try module.functions.get(i) otherwise continue
+			if cf.name.startsWith(oldClosurePrefix) 'isOurClosure'
+				let suffixBytes = cf.name.toByteArray()
+				let prefixLen = oldClosurePrefix.toByteArray().count()
+				let suffixSlice = try suffixBytes.slice(prefixLen, endIndex: suffixBytes.count()) otherwise panic("rekeyExistingFunction: closure-suffix slice OOB for '{cf.name}'")
+				let suffix = String.from(suffixSlice)
+				let newClosureName = "{newClosurePrefix}{suffix}"
+				let oldClosureName = cf.name
+				cf.name = newClosureName
+				try module.functions.set(i, value: cf) otherwise ignore
+				rekeyFunctionSidetables(oldClosureName, newName: newClosureName)
+				closureRenames.push(ClosureRename.create(oldClosureName, newName: newClosureName))
+			end 'isOurClosure'
+		end 'eachClosureFn'
+		// Rewrite every `closureCreate` / `functionRef` op anywhere in the
+		// module whose `funcName` matches a renamed closure. The body of the
+		// outer function being renamed always references its own lifted
+		// closures — without this pass the cloned references stay pointed at
+		// the now-vacated old name and lowering emits a broken func ref.
+		if closureRenames.count() > 0 'haveRenames'
+			rewriteClosureNameOpRefs(module, renames: closureRenames)
+		end 'haveRenames'
 		// Walk the current module's functions for an IrFunction whose .name
 		// matches the bare key and rewrite it.
 		for i in 0 upto module.functions.count() 'eachFunc'
@@ -13220,12 +13311,27 @@ export type Parser
 		try expect(TokenKind.rightParen)
 		try eat(TokenKind.gives)
 
-		// Mint the lifted-function name. Per-project counter — see
-		// Project.nextClosureId. Two closures in the same module always
-		// get distinct ids, and two closures in different modules can
-		// safely co-exist when their modules merge.
-		let closureNum = project.nextClosureId()
-		let closureName = "_$closure_{closureNum}"
+		// Mint the lifted-function name. Per-outer-function counter on
+		// `IrFunction.closureSubCounter`: the name is
+		// `{outerFunc.name}$closure_{k}` where `k` is the post-increment
+		// counter value. Source-deterministic — the same source produces
+		// the same closure name regardless of how many sibling functions
+		// parsed before it. For nested closures, the immediately-enclosing
+		// lifted function provides the prefix (so a closure inside another
+		// closure becomes `{outer}$closure_3$closure_0`).
+		//
+		// An anonymous enclosing function indicates a parser placeholder
+		// for unparsed content reached `parseClosure` — there is no valid
+		// prefix to embed in the lifted name. Panic rather than mint an
+		// ambiguous name; this path is unreachable from any well-formed
+		// program.
+		let outerName = currentFunc.name
+		if outerName.isEmpty() 'noName'
+			panic("parseClosure: enclosing function has no name — closure literal in untyped context (placeholder parser function?)")
+		end 'noName'
+		let k = currentFunc.closureSubCounter
+		currentFunc.closureSubCounter = k + 1
+		let closureName = "{outerName}$closure_{k}"
 
 		// We don't yet know the body's return type — it falls out of the
 		// body expression once parsed. Construct the IrFunction with an
@@ -13327,6 +13433,7 @@ export type Parser
 		// must see the un-augmented param list.
 		let captures = closureCaptures
 		let captureCount = captures.count()
+		liftedFunc.closureCaptureCount = captureCount
 		var userParamTypes = MaxonTypeArray.create()
 		var userParamNames = StringArray.create()
 		for i in 0 upto paramCount 'snapshotUserParams'
@@ -13404,24 +13511,13 @@ export type Parser
 			recordFuncVisibilityInsert(project, filePath: filePath, key: closureName)
 		end 'recClosureVis'
 
-		// Phase 11.4 closure-inheritance: stamp the back-pointer from the
-		// lifted body to its enclosing function so LowerMaxonToStd can
-		// chase up to a generic extension method whose where-clause
-		// witnesses the closure needs to inherit. `savedFunc` is the
-		// outer IrFunction captured before the parser switched context
-		// into the lifted body. Skip when the enclosing function is
-		// anonymous (defensive — shouldn't occur for any normal parse).
-		if not savedFunc.name.isEmpty() 'recClosureEncFunc'
-			try project.closureEnclosingFunc.insert(closureName, value: savedFunc.name) otherwise panic("parseClosure: duplicate closureEnclosingFunc entry for '{closureName}'")
-			recordClosureEnclosingFuncInsert(project, filePath: filePath, key: closureName)
-		end 'recClosureEncFunc'
-
-		// Phase 11.4 closure-inheritance: record the captureCount so
-		// LowerMaxonToStd can compute the env layout's implicit-arg
-		// offset (captures land at env[0..captureCount-1], implicit
-		// layout/witness ptrs at env[captureCount..]).
-		try project.closureCaptureCounts.insert(closureName, value: captureCount) otherwise panic("parseClosure: duplicate closureCaptureCounts entry for '{closureName}'")
-		recordClosureCaptureCountInsert(project, filePath: filePath, key: closureName)
+		// Phase 2 closure rename: the closure name embeds the enclosing
+		// function name as a prefix (`{savedFunc.name}$closure_<k>`), so
+		// the back-pointer that the old `project.closureEnclosingFunc`
+		// map maintained is now derivable directly from the closure's
+		// own name via `enclosingFuncOfClosure`. Same for the captureCount:
+		// it lives on `liftedFunc.closureCaptureCount` (set above), no
+		// project-wide sidetable.
 
 		let resultName = freshSynthName()
 		if captureCount > 0 'emitCreate'

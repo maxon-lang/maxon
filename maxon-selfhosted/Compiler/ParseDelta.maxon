@@ -28,8 +28,6 @@ export type FileParseDelta
 	export var funcSignaturesKeys as StringArray
 	export var funcVisibilitiesKeys as StringArray
 	export var funcThrowsTypesKeys as StringArray
-	export var closureEnclosingFuncKeys as StringArray
-	export var closureCaptureCountKeys as StringArray
 	// Qualified names recorded via MethodNameIndex.record (also dual-indexed
 	// under bare names; rollback uses methodNameIndexRemove which handles
 	// both buckets).
@@ -68,8 +66,6 @@ export type FileParseDelta
 			funcSignaturesKeys: StringArray.create(),
 			funcVisibilitiesKeys: StringArray.create(),
 			funcThrowsTypesKeys: StringArray.create(),
-			closureEnclosingFuncKeys: StringArray.create(),
-			closureCaptureCountKeys: StringArray.create(),
 			methodNameIndexKeys: StringArray.create(),
 			overloadedNamesKeys: StringArray.create(),
 			topLevelConstantsKeys: StringArray.create(),
@@ -200,12 +196,6 @@ export function rollbackFileParseDelta(project Project, filePath FilePath)
 	for key in delta.funcThrowsTypesKeys 'eachFuncThrows'
 		_ = project.funcThrowsTypes.remove(key)
 	end 'eachFuncThrows'
-	for key in delta.closureEnclosingFuncKeys 'eachClosureEnc'
-		_ = project.closureEnclosingFunc.remove(key)
-	end 'eachClosureEnc'
-	for key in delta.closureCaptureCountKeys 'eachClosureCapCnt'
-		_ = project.closureCaptureCounts.remove(key)
-	end 'eachClosureCapCnt'
 	for key in delta.methodNameIndexKeys 'eachMethodName'
 		methodNameIndexRemove(project.methodNameIndex, qualifiedName: key)
 	end 'eachMethodName'
@@ -394,16 +384,6 @@ export function recordFuncThrowsInsert(project Project, filePath FilePath, key S
 	var delta = ensureDelta(project, filePath: filePath)
 	delta.funcThrowsTypesKeys.push(key)
 end 'recordFuncThrowsInsert'
-
-export function recordClosureEnclosingFuncInsert(project Project, filePath FilePath, key String)
-	var delta = ensureDelta(project, filePath: filePath)
-	delta.closureEnclosingFuncKeys.push(key)
-end 'recordClosureEnclosingFuncInsert'
-
-export function recordClosureCaptureCountInsert(project Project, filePath FilePath, key String)
-	var delta = ensureDelta(project, filePath: filePath)
-	delta.closureCaptureCountKeys.push(key)
-end 'recordClosureCaptureCountInsert'
 
 export function recordMethodNameIndexInsert(project Project, filePath FilePath, qualifiedName String)
 	var delta = ensureDelta(project, filePath: filePath)
