@@ -108,12 +108,6 @@ export extension Array
 	// two-pointer sweep. Branchless-ness is a future optimization — today
 	// the comparator-call-then-branch pattern matches insertion sort's
 	// shape, which keeps the inliner happy.
-	//
-	// The `as OrdInt` cast pins the indirect-call result to the narrow
-	// Ordering ordinal range: the self-hosted compiler widens `cmp`'s
-	// return to a generic integer, and the cast lets the comparisons
-	// against literal 0 / 2 type-check against the narrow range.
-	typealias OrdInt = int(0 to 2)
 	function partition(lo SortIndex, hi SortIndex, pivotIndex SortIndex, cmp SortComparator) returns (SortIndex, bool)
 		Log.trace("pdq.partition")
 		// Move pivot to the front of the slice (unconditional swap).
@@ -125,17 +119,17 @@ export extension Array
 		var i = lo + 1
 		var j = hi - 1
 		while i <= j 'sweep'
-			// Advance i while arr[i] < pivot. (0 = Ordering.lessThan.ordinal)
+			// Advance i while arr[i] < pivot.
 			let vi = try managed.get(i) otherwise panic("partition: get OOB at i")
-			let cmpI = cmp(vi, pv) as OrdInt
-			if cmpI == 0 'iAdvance'
+			let cmpI = cmp(vi, pv)
+			if cmpI == Ordering.lessThan 'iAdvance'
 				i = i + 1
 				continue
 			end 'iAdvance'
 			// Retreat j while arr[j] > pivot.
 			let vj = try managed.get(j) otherwise panic("partition: get OOB at j")
-			let cmpJ = cmp(vj, pv) as OrdInt
-			if cmpJ == 2 'jRetreat'
+			let cmpJ = cmp(vj, pv)
+			if cmpJ == Ordering.greaterThan 'jRetreat'
 				if j == lo 'underflowJ'
 					break
 				end 'underflowJ'
@@ -149,7 +143,7 @@ export extension Array
 			self.swap(i, j: j)
 			// Element placed at i was the old arr[j]. It was <= pivot;
 			// if it was equal (not strictly less), record that.
-			if cmpJ != 0 'rightWasEqual'
+			if cmpJ != Ordering.lessThan 'rightWasEqual'
 				leftAllStrictlyLess = false
 			end 'rightWasEqual'
 			i = i + 1

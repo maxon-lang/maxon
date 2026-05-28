@@ -388,6 +388,22 @@ export function maxonReturnTypeValueOrUnresolved(rt MaxonReturnType) returns Max
 	end 'pick'
 end 'maxonReturnTypeValueOrUnresolved'
 
+// Resolve an indirect-call return type the same way direct calls do: unwrap
+// the value(...) wrapper, then chase through a function-typed typealias so
+// `function(...) returns SomeFnAlias` is observed identically whether the
+// callee was reached by name or through a function-valued local. Enum and
+// struct typealias names (e.g. `Ordering`, `SortIndex`) pass through
+// untouched — they stay as `named(...)` so downstream enum lookups
+// (`.ordinal`, `== EnumCase`) and struct dispatch still hit. Without this,
+// `let r = cmp(a, b)` on a `cmp SortComparator` left the slot typed as the
+// raw `named("Ordering")` from the registry without the chase symmetry the
+// direct-call path applies — which silently mis-shaped the value when the
+// alias's RHS was itself a function type.
+export function indirectCallResultType(project Project, returnType MaxonReturnType) returns MaxonType
+	let raw = maxonReturnTypeValueOrUnresolved(returnType)
+	return chaseTypealiasToFunctionType(project, t: raw)
+end 'indirectCallResultType'
+
 // Render a function type as `(P1, P2) returns R` (or `() returns void` for
 // the no-arg / void-return shape). Lives outside `MaxonType` so the union's
 // `toString` arm stays a one-liner; called from there and from anywhere else
