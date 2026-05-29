@@ -1,18 +1,22 @@
-// Stage 2 small-sort primitives.
+// Small-sort primitives: hardcoded sorting networks for n ∈ {2, 4, 8}, with
+// insertion sort as the fallback for everything else.
 //
-// For very small slices (n ∈ {2, 4, 8}) a hardcoded sorting network beats
-// insertion sort because the comparator-shift loop has more branches and
-// memory traffic than a flat sequence of compare-and-swap pairs. Networks
-// of size 2, 4, and 8 are the standard cutoffs used by glidesort and
-// pdqsort; sizes between 9 and 32 fall through to insertion sort because
-// optimal networks for those sizes grow quickly without proportional gain.
+// For very small slices (n ∈ {2, 4, 8}) a hardcoded network beats insertion
+// sort because the comparator-shift loop has more branches and memory traffic
+// than a flat sequence of compare-and-swap pairs. These three sizes are the
+// standard cutoffs used by driftsort and pdqsort. Sizes between 9 and 32
+// fall through to insertion sort because optimal networks for those sizes
+// grow quickly without proportional gain.
 //
-// Public surface (called from `internalInsertionSortRange` once dispatched):
-//   - `smallSortRange(lo, hi, cmp)` — entry point that picks the right
-//     network or falls through to insertion sort.
+// Public surface (called from the four public sort entries via the small-n
+// short-circuit, and from inside pdqsort / merge sort at recursion leaves):
+//   - `smallSortRange(lo, hi, cmp)` — entry that picks the right network
+//     or falls through to insertion sort.
+//   - `swap(i, j)` — unconditional swap helper, also used by pdqsort.
+//   - `compareAndSwap(i, j, cmp)` — the network primitive.
 //
-// Trace keys emitted (Stage 1 dispatch tests assert on these):
-//   - `smallSort.network` — a fixed-size network ran (size 2, 4, or 8)
+// Trace keys emitted:
+//   - `smallSort.network`   — a fixed-size network ran (size 2, 4, or 8)
 //   - `smallSort.insertion` — insertion sort ran (n ∈ {3, 5, 6, 7, 9..32})
 
 export extension Array
@@ -29,6 +33,24 @@ export extension Array
 		try managed.set(i, value: b) otherwise panic("swap: set OOB at i")
 		try managed.set(j, value: a) otherwise panic("swap: set OOB at j")
 	end 'swap'
+
+	// Reverse the slice [lo, hi) in place by swapping from both ends inward.
+	// Shared by driftsort's run detection (flipping a strictly-descending run
+	// into ascending) and merge sort's three-reverse rotation. Reversing a
+	// strictly-descending run is stability-preserving because it contains no
+	// equal elements — `<` is strict.
+	export function reverseRange(lo SortIndex, hi SortIndex)
+		if hi <= lo + 1 'trivial'
+			return
+		end 'trivial'
+		var i = lo
+		var j = hi - 1
+		while i < j 'loop'
+			self.swap(i, j: j)
+			i = i + 1
+			j = j - 1
+		end 'loop'
+	end 'reverseRange'
 
 	// Compare elements at positions i and j; if managed[i] > managed[j],
 	// swap them. The "branchless" property is a future optimization (would
@@ -95,7 +117,7 @@ export extension Array
 	end 'sortNetwork8'
 
 	// Entry: pick the right network or fall through to insertion sort.
-	// The 9..32 cutoff comes from glidesort/pdqsort — beyond 8 elements
+	// The 9..32 cutoff comes from driftsort/pdqsort — beyond 8 elements
 	// the network's hardcoded comparison count outpaces insertion sort's
 	// adaptive shifts on already-mostly-sorted input.
 	export function smallSortRange(lo SortIndex, hi SortIndex, cmp SortComparator)

@@ -1,25 +1,22 @@
-// Stage 3: Pattern-Defeating Quicksort (pdqsort).
-//
-// Routed from `Array.sortUnstable` and `Array.sortUnstable(cmp)` for inputs
-// larger than the small-sort threshold (n > 32). Smaller inputs continue
-// through smallSortRange (sorting networks for n ∈ {2,4,8}, insertion
-// sort for the rest).
+// Pattern-Defeating Quicksort (pdqsort) — the engine behind every
+// `Array.sortUnstable` call for inputs larger than the small-sort threshold
+// (n > 32). Smaller inputs short-circuit through smallSortRange.
 //
 // Reference: Orson Peters, "Pattern-defeating Quicksort", arXiv:2106.05123.
-// The original pdqsort proves O(n log n) worst case via a heapsort fallback
-// when the "bad allowance" counter is exhausted, and beats traditional
-// quicksort on common adversarial patterns (ascending, descending, equal,
-// pipe-organ, sawtooth) via:
+// pdqsort proves O(n log n) worst case via a heapsort fallback when the
+// "bad allowance" counter is exhausted, and beats traditional quicksort on
+// common adversarial patterns (ascending, descending, equal, pipe-organ,
+// sawtooth) via:
 //   - Median-of-3 pivot selection (median-of-medians for n > 128).
 //   - "Common prefix" skip when the left half from the previous partition
 //     matches the new pivot — fast path for runs of duplicates.
 //   - Equal-elements fast path: when partition produces a left half that
 //     contains only values equal to the pivot, skip recursing on it.
 //
-// Stage 3 emits these trace keys:
+// Trace keys emitted:
 //   - `pdq.partition`         — a partition pass ran on a slice
 //   - `pdq.medianOf3`         — median-of-3 pivot selection ran
-//   - `pdq.medianOfMedians`   — median-of-medians ran (large slice)
+//   - `pdq.medianOfMedians`   — median-of-medians ran (n > 128)
 //   - `pdq.heapsortFallback`  — bad-allowance exhausted; fell back to heapsort
 //   - `pdq.commonPrefix`      — already-partitioned-prefix optimization engaged
 //   - `pdq.equalElements`     — equal-elements fast path engaged
@@ -32,7 +29,7 @@ export extension Array
 	// Three-element comparator-based median: returns the index (a, b, or c)
 	// whose value is the median of arr[a], arr[b], arr[c]. Doesn't reorder
 	// the array — the partition pass does that with `swap`.
-	function medianOf3Index(a SortIndex, b SortIndex, c SortIndex, cmp SortComparator) returns SortIndex
+	export function medianOf3Index(a SortIndex, b SortIndex, c SortIndex, cmp SortComparator) returns SortIndex
 		let va = try managed.get(a) otherwise panic("medianOf3Index: get OOB at a")
 		let vb = try managed.get(b) otherwise panic("medianOf3Index: get OOB at b")
 		let vc = try managed.get(c) otherwise panic("medianOf3Index: get OOB at c")
@@ -84,7 +81,7 @@ export extension Array
 	// Pick a pivot index for [lo, hi). Uses median-of-3 for small slices,
 	// median-of-medians for large ones. Returns the index of the pivot
 	// element; partition swaps it into its sorted position.
-	function choosePivot(lo SortIndex, hi SortIndex, cmp SortComparator) returns SortIndex
+	export function choosePivot(lo SortIndex, hi SortIndex, cmp SortComparator) returns SortIndex
 		let n = hi - lo
 		if n > 128 'large'
 			return self.medianOfMediansIndex(lo, hi: hi, cmp: cmp)
@@ -223,15 +220,16 @@ export extension Array
 	// on runs of duplicates.
 	function pdqsortRecurse(lo SortIndex, hi SortIndex, badAllowance SortIndex, prevPivotSame bool, cmp SortComparator)
 		var curLo = lo
+		var curHi = hi
 		var allowance = badAllowance
 		var prevSame = prevPivotSame
-		while hi - curLo > 32 'loop'
-			let n = hi - curLo
+		while curHi - curLo > 32 'loop'
+			let n = curHi - curLo
 			if allowance == 0 'fallback'
-				self.heapsort(curLo, hi: hi, cmp: cmp)
+				self.heapsort(curLo, hi: curHi, cmp: cmp)
 				return
 			end 'fallback'
-			let pivotIndex = self.choosePivot(curLo, hi: hi, cmp: cmp)
+			let pivotIndex = self.choosePivot(curLo, hi: curHi, cmp: cmp)
 			// Common-prefix skip: if the new pivot equals the element just
 			// before the slice, the partition would put every element of
 			// the slice on the right of that pivot — i.e. all are == pivot.
@@ -243,14 +241,14 @@ export extension Array
 					Log.trace("pdq.commonPrefix")
 					// Partition into [<pivot] (empty per the anchor invariant)
 					// and [>=pivot]; only need to recurse on the right half.
-					let (p, _) = self.partition(curLo, hi: hi, pivotIndex: pivotIndex, cmp: cmp)
+					let (p, _) = self.partition(curLo, hi: curHi, pivotIndex: pivotIndex, cmp: cmp)
 					curLo = p + 1
 					continue
 				end 'commonHit'
 			end 'tryCommonPrefix'
-			let (pivotPos, leftAllStrictlyLess) = self.partition(curLo, hi: hi, pivotIndex: pivotIndex, cmp: cmp)
+			let (pivotPos, leftAllStrictlyLess) = self.partition(curLo, hi: curHi, pivotIndex: pivotIndex, cmp: cmp)
 			let leftSize = pivotPos - curLo
-			let rightSize = hi - pivotPos - 1
+			let rightSize = curHi - pivotPos - 1
 			let smaller = leftSize if leftSize < rightSize else rightSize
 			// Decrement allowance when partition was highly skewed.
 			if smaller < n / 8 'skewed'
@@ -267,25 +265,22 @@ export extension Array
 				prevSame = true
 				continue
 			end 'equalLeft'
-			// Sort the smaller side recursively (better worst-case stack
-			// depth) and loop on the larger side.
+			// Sort the smaller side recursively (bounded stack depth) and
+			// loop on the larger side. The mutable `curHi` lets the loop
+			// shrink the working range on the right just like `curLo`
+			// shrinks it on the left.
 			if leftSize < rightSize 'recurseLeft'
 				self.pdqsortRecurse(curLo, hi: pivotPos, badAllowance: allowance, prevPivotSame: prevSame, cmp: cmp)
 				curLo = pivotPos + 1
 				prevSame = true
 			end 'recurseLeft' else 'recurseRight'
-				// rightSize is the smaller; recurse on it and loop on the
-				// larger left. We can't rewrite `hi` (it's a param), so the
-				// "loop on the larger side" optimization degenerates into
-				// recursion on the larger side too — fine for v1; Stage 8
-				// could pass `hi` through a mutable local.
-				self.pdqsortRecurse(pivotPos + 1, hi: hi, badAllowance: allowance, prevPivotSame: true, cmp: cmp)
-				self.pdqsortRecurse(curLo, hi: pivotPos, badAllowance: allowance, prevPivotSame: prevSame, cmp: cmp)
-				return
+				self.pdqsortRecurse(pivotPos + 1, hi: curHi, badAllowance: allowance, prevPivotSame: true, cmp: cmp)
+				curHi = pivotPos
+				// prevSame for the next iteration's left half is unchanged.
 			end 'recurseRight'
 		end 'loop'
 		// Slice fell below the small-sort threshold; finish with the small-sort.
-		self.smallSortRange(curLo, hi: hi, cmp: cmp)
+		self.smallSortRange(curLo, hi: curHi, cmp: cmp)
 	end 'pdqsortRecurse'
 
 	// Public entry into pdqsort. Computes an initial badAllowance budget

@@ -2402,6 +2402,23 @@ function rewriteToLiteral(module MaxonModule, opIdx OpIndex, result ByteArray, v
 	try module.ops.set(opIdx, value: MaxonOp.literal(result, value: value, valueType: valueType, range: range)) otherwise panic("rewriteToLiteral: ops.set OOB at idx={opIdx} (count={module.ops.count()})")
 end 'rewriteToLiteral'
 
+// Fill pass for a `literal` op: repair an `unresolved` valueType to a bare
+// integer so it can lower. A resolved valueType is left untouched. This is the
+// safety net for synthetic literals that were born unresolved (e.g. a ternary
+// seed whose true-arm type was unresolved at parse time) — see parseTernaryTail.
+function fillLiteral(module MaxonModule, opIdx OpIndex, op MaxonOp)
+	match op 'lit'
+		literal(result, value, valueType, range) then repairLiteralType(module, opIdx: opIdx, result: result, value: value, valueType: valueType, range: range)
+		default panic("fillLiteral: called on a non-literal op")
+	end 'lit'
+end 'fillLiteral'
+
+function repairLiteralType(module MaxonModule, opIdx OpIndex, result ByteArray, value IntConstant, valueType MaxonType, range SourceRange)
+	if isUnresolvedType(valueType) 'repair'
+		rewriteToLiteral(module, opIdx: opIdx, result: result, value: value, range: range)
+	end 'repair'
+end 'repairLiteralType'
+
 // Recover the named MaxonType for an enum-case constant. `qualifiedName`
 // looks like `EnumName.case`; if `EnumName` is a registered enum the result
 // carries that named type so downstream type-tracking sees `Direction.north`
@@ -5148,7 +5165,15 @@ function fillUnresolvedTypesForOp(project Project, module MaxonModule, opIdx OpI
 		call(result, callee, callContext, args, argLabels, argTypes, argRanges, range) then fillCall(module, opIdx: opIdx, result: result, callee: callee, callContext: callContext, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, range: range, producerTypes: producerTypes)
 		methodCall(result, receiver, methodName, args, argLabels, argTypes, argRanges, range) then fillMethodCall(module, opIdx: opIdx, result: result, receiver: receiver, methodName: methodName, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, range: range, producerTypes: producerTypes)
 		tryMethodCall(result, receiver, methodName, args, argLabels, argTypes, argRanges, errorBoundName, range) then fillTryMethodCall(module, opIdx: opIdx, result: result, receiver: receiver, methodName: methodName, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, errorBoundName: errorBoundName, range: range, producerTypes: producerTypes)
-		literal then return
+		// A literal carries its type in `valueType` with no upstream producer to
+		// source from, so the fill pass normally leaves it alone. But a literal
+		// must never reach lowering still `unresolved` — there is no later pass
+		// that repairs literals, so it would panic in resolveMaxonTypeToStd. A
+		// numeric literal's natural type is a bare integer, so fall back to that.
+		// Pass the whole op (not destructured fields) so the rewrite's owned
+		// `result`/`value` come from a single re-match inside `fillLiteral`,
+		// avoiding a double-decref of fields aliased across the match boundary.
+		literal then fillLiteral(module, opIdx: opIdx, op: op)
 		stringConst then return
 		charLiteral then return
 		byteStringLiteral then return

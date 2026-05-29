@@ -1,13 +1,11 @@
-// Stage 1 insertion sort: in-place sort of `arr[lo:hi)` using `cmp`.
+// In-place insertion sort over a half-open range `arr[lo:hi)` using a
+// caller-supplied comparator. Called from `smallSortRange` (in smallSort.maxon)
+// as the fallback for sizes outside the sorting-network cutoffs (3, 5, 6, 7,
+// 9..32) and as the bottom of every recursive sort's recursion.
 //
-// Routed from all four `Array.sort` / `Array.sortUnstable` entries while the
-// higher algorithmic layers (small-sort networks, pdqsort, glidesort) are
-// stood up incrementally. Future stages keep insertion sort for small slices
-// and route bigger inputs to specialized algorithms.
-//
-// Lives in a stand-alone extension so the algorithm bodies stay out of the
-// already-large Array.maxon. Methods are not `export`ed — they are private
-// helpers reachable only from sister extensions defined inside the stdlib.
+// Lives in a stand-alone extension so the algorithm body stays out of the
+// already-large Array.maxon. Also declares the shared `SortIndex` and
+// `SortComparator` aliases used by every sort helper file.
 //
 // Emits `insertionSort.run` via Log so dispatch tests can confirm the
 // insertion path engaged for a given input.

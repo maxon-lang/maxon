@@ -1,0 +1,171 @@
+// Stable quicksort — driftsort's run builder. When a natural run is shorter
+// than `minGoodRunLen`, driftsort manufactures a run of that length by sorting
+// the block here, then the powersort merge stack (driftsort.maxon) combines the
+// runs. This is the "top-down partition" half of driftsort's bottom-up-merge +
+// top-down-partition hybrid.
+//
+// Unlike `pdqsort` (the UNSTABLE sortUnstable engine), this quicksort is STABLE:
+// equal-keyed elements keep their input order. Stability comes from the
+// partition (below): the two classes (`< pivot` and `>= pivot`) are each laid
+// down in their original relative order, and every `< pivot` element precedes
+// every `>= pivot` element — so no two equal-keyed elements ever swap.
+//
+// The partition buffers the SMALLER of the two classes into the auxiliary
+// buffer, so it needs only `min(|<|, |>=|) <= sliceLen/2 <= scratchCap` slots —
+// the same budget the merge buffer already guarantees.
+//
+// Loads after mergeSort.maxon (uses MergeScratchArray + smallSortRange) and
+// before driftsort.maxon (which calls stableQuicksortRange). See StdlibLoader.
+//
+// Trace keys emitted:
+//   - `driftQuicksort.partition` — a stable partition pass ran on a slice
+export extension Array
+	// Stable partition of [lo, hi) around the value at `pivotIndex`. Returns
+	// the final pivot-boundary index `p` such that:
+	//   * [lo, p)  holds every element `< pivot`, in original relative order
+	//   * [p, hi)  holds every element `>= pivot`, in original relative order
+	// (the pivot element itself lands somewhere in [p, hi), as the first of its
+	// equal-key group, since equal-to-pivot belongs to the `>=` class).
+	//
+	// Buffers whichever class is smaller, so `scratch` need only hold
+	// `min(lessCount, geCount) <= (hi - lo) / 2` elements.
+	function stablePartition(lo SortIndex, hi SortIndex, pivotIndex SortIndex, scratch MergeScratchArray, cmp SortComparator) returns SortIndex
+		Log.trace("driftQuicksort.partition")
+		let pv = try managed.get(pivotIndex) otherwise panic("stablePartition: get OOB at pivot")
+		// Count the `< pivot` class so we can pick the smaller class to buffer.
+		var lessCount = 0 as SortIndex
+		var scan = lo
+		while scan < hi 'count'
+			let v = try managed.get(scan) otherwise panic("stablePartition: get OOB during count")
+			if cmp(v, pv) == Ordering.lessThan 'isLess'
+				lessCount = lessCount + 1
+			end 'isLess'
+			scan = scan + 1
+		end 'count'
+		let total = hi - lo
+		let geCount = total - lessCount
+
+		if geCount <= lessCount 'bufferGe'
+			// Buffer the `>=` class. Single left-to-right pass: compact the
+			// `< pivot` class in place toward `lo` (cursor `w`, always <= the
+			// read cursor so nothing live is clobbered), push the `>= pivot`
+			// class into scratch. Both stay in original order. Then copy the
+			// buffered `>=` class back, right after the in-place `<` class — no
+			// shift, because the `<` class already sits at its final [lo, p).
+			var w = lo
+			var k = 0 as SortIndex
+			var i = lo
+			while i < hi 'splitGe'
+				let v = try managed.get(i) otherwise panic("stablePartition: get OOB at i (ge)")
+				if cmp(v, pv) == Ordering.lessThan 'keepLeft'
+					try managed.set(w, value: v) otherwise panic("stablePartition: set OOB at w (ge)")
+					w = w + 1
+				end 'keepLeft' else 'toScratch'
+					try scratch.set(k, value: v) otherwise panic("stablePartition: scratch.set OOB (ge)")
+					k = k + 1
+				end 'toScratch'
+				i = i + 1
+			end 'splitGe'
+			var out = lo + lessCount
+			var s = 0 as SortIndex
+			while s < geCount 'writeGe'
+				let v = try scratch.get(s) otherwise panic("stablePartition: scratch.get OOB (ge)")
+				try managed.set(out, value: v) otherwise panic("stablePartition: set OOB at out (ge)")
+				out = out + 1
+				s = s + 1
+			end 'writeGe'
+			return lo + lessCount
+		end 'bufferGe' else 'bufferLess'
+			// Buffer the `<` class. Single left-to-right pass: compact the
+			// `>= pivot` class in place toward `lo`, push the `< pivot` class
+			// into scratch (both in original order). The in-place `>=` class
+			// now sits at [lo, lo+geCount); shift it right by `lessCount` (a
+			// backward copy, to handle the overlap) so it ends at [p, hi), then
+			// drop the buffered `<` class into [lo, p).
+			var w = lo
+			var k = 0 as SortIndex
+			var i = lo
+			while i < hi 'splitLess'
+				let v = try managed.get(i) otherwise panic("stablePartition: get OOB at i (less)")
+				if cmp(v, pv) == Ordering.lessThan 'toScratch2'
+					try scratch.set(k, value: v) otherwise panic("stablePartition: scratch.set OOB (less)")
+					k = k + 1
+				end 'toScratch2' else 'keepRight'
+					try managed.set(w, value: v) otherwise panic("stablePartition: set OOB at w (less)")
+					w = w + 1
+				end 'keepRight'
+				i = i + 1
+			end 'splitLess'
+			// Shift the in-place `>=` block [lo, lo+geCount) right by lessCount,
+			// copying from the high end down so we never overwrite an unread slot.
+			var src = lo + geCount
+			while src > lo 'shiftGe'
+				let v = try managed.get(src - 1) otherwise panic("stablePartition: get OOB during shift")
+				try managed.set(src - 1 + lessCount, value: v) otherwise panic("stablePartition: set OOB during shift")
+				src = src - 1
+			end 'shiftGe'
+			var out = lo
+			var s = 0 as SortIndex
+			while s < lessCount 'writeLess'
+				let v = try scratch.get(s) otherwise panic("stablePartition: scratch.get OOB (less)")
+				try managed.set(out, value: v) otherwise panic("stablePartition: set OOB at out (less)")
+				out = out + 1
+				s = s + 1
+			end 'writeLess'
+			return lo + lessCount
+		end 'bufferLess'
+	end 'stablePartition'
+
+	// Stable quicksort of [lo, hi). Base case routes to the (stable)
+	// small-sort. Recurses into the smaller partition and loops on the larger
+	// (bounded recursion depth, like pdqsort). Progress is guaranteed: the
+	// boundary `p` splits off at least the `< pivot` class on the left and the
+	// pivot's own equal-group on the right, so each side is strictly smaller
+	// than the whole unless everything is `>= pivot` AND nothing equals the
+	// pivot — impossible, since the pivot is drawn from the slice (so at least
+	// one element equals it and sits in the right class), making the left side
+	// shrink whenever it is non-empty and the right side shrink otherwise.
+	export function stableQuicksortRange(lo SortIndex, hi SortIndex, scratch MergeScratchArray, scratchCap SortIndex, cmp SortComparator)
+		var curLo = lo
+		var curHi = hi
+		while curHi - curLo > 32 'loop'
+			let pivotIndex = self.choosePivot(curLo, hi: curHi, cmp: cmp)
+			let p = self.stablePartition(curLo, hi: curHi, pivotIndex: pivotIndex, scratch: scratch, cmp: cmp)
+			// [curLo, p) is the `< pivot` class; [p, curHi) is `>= pivot`.
+			// If the left class is empty, every element is `>= pivot`; sorting
+			// the right class alone makes progress because the pivot's group is
+			// already in place at the front of it — advance past the leading
+			// equal-to-pivot run to guarantee the window shrinks.
+			let leftLen = p - curLo
+			let rightLen = curHi - p
+			if leftLen == 0 'allGe'
+				// Skip the leading run of elements equal to the pivot (they are
+				// already in their final relative position) so we don't loop
+				// forever on an all-equal slice.
+				let pv = try managed.get(p) otherwise panic("stableQuicksortRange: get OOB at p")
+				var skip = p
+				while skip < curHi 'skipEq'
+					let v = try managed.get(skip) otherwise panic("stableQuicksortRange: get OOB during skipEq")
+					if cmp(pv, v) == Ordering.lessThan 'past'
+						break
+					end 'past'
+					skip = skip + 1
+				end 'skipEq'
+				if skip >= curHi 'doneEqual'
+					return
+				end 'doneEqual'
+				curLo = skip
+				continue
+			end 'allGe'
+
+			if leftLen <= rightLen 'leftSmaller'
+				self.stableQuicksortRange(curLo, hi: p, scratch: scratch, scratchCap: scratchCap, cmp: cmp)
+				curLo = p
+			end 'leftSmaller' else 'rightSmaller'
+				self.stableQuicksortRange(p, hi: curHi, scratch: scratch, scratchCap: scratchCap, cmp: cmp)
+				curHi = p
+			end 'rightSmaller'
+		end 'loop'
+		self.smallSortRange(curLo, hi: curHi, cmp: cmp)
+	end 'stableQuicksortRange'
+end 'Array'

@@ -379,8 +379,8 @@ connect("example.com", port: 443, timeout: 10000)  ' override both
 Closures work well for sort comparators, map transforms, and filter predicates. Keep them short.
 
 ```maxon
-items.sort((a, b) gives a.priority - b.priority)
-let names = users.map((u) gives u.name)
+items.sort(function(a, b) gives a.priority - b.priority)
+let names = users.map(function(u) gives u.name)
 ```
 
 ### Handle Pure vs Impure Return Values Correctly

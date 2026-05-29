@@ -330,27 +330,35 @@ export extension Array where Element is Equatable
 	end 'contains'
 end 'Array'
 
-// Sort entry points. Routed through private helpers in
-// stdlib/helpers/sort/*.maxon; this block carries only the public surface so
-// Array.maxon doesn't bloat with algorithm bodies. Four entries cover the two
-// orderings (stable vs unstable) × two ergonomics (Comparable default vs
-// explicit comparator).
-
-// Default-Comparable overloads. `sort()` routes to `smallSortRange` and
-// `sortUnstable()` routes to `pdqsortRange`, both with an inline closure
+// Sort entry points. Four overloads cover (stable vs unstable) × (Comparable
+// default vs explicit comparator). All bodies live in this file as thin
+// dispatchers; the algorithms themselves are in stdlib/helpers/sort/*.maxon.
+//
+// Algorithm routing:
+//   sort()      / sort(cmp)      → driftsort (adaptive stable sort with
+//                                  bidirectional run detection + powersort
+//                                  merge policy over a bounded buffer).
+//                                  Reference bottom-up merge sort stays
+//                                  callable as `referenceMergeSort` for
+//                                  cross-check tests.
+//   sortUnstable() / sortUnstable(cmp) → pdqsort (pattern-defeating quicksort).
+//
+// All four delegate to algorithm-specific entries that short-circuit to
+// `smallSortRange` for n ≤ 32, avoiding the per-call setup cost of
+// driftsort's run stack / scratch buffer or pdqsort's pivot machinery on
+// tiny slices.
+//
+// The Comparable overloads pass an inline closure
 // `function(x Element, y Element) gives x.compare(y)`. The closure body
 // dispatches `x.compare(y)` through the enclosing extension's
-// `where Element is Comparable` witness slot — see Phase 11.4
-// closure-inheritance in [`LowerMaxonToStd`](../maxon-selfhosted/Compiler/IR/Maxon/LowerMaxonToStd.maxon),
-// which inherits the layout/witness pointers into the lifted closure
-// body via env so dispatch resolves at runtime.
+// `where Element is Comparable` witness slot via closure-env inheritance.
 export extension Array where Element is Comparable
 	/// Sort in place using the element's `Comparable.compare` ordering.
 	/// Stable: equal elements keep their relative order.
 	export function sort()
 		let lo = 0 as SortIndex
 		let hi = managed.length()
-		self.smallSortRange(lo, hi: hi, cmp: function(x Element, y Element) gives x.compare(y))
+		self.driftsortRange(lo, hi: hi, cmp: function(x Element, y Element) gives x.compare(y))
 	end 'sort'
 
 	/// Sort in place using the element's `Comparable.compare` ordering.
@@ -365,22 +373,15 @@ end 'Array'
 // Comparator overloads. No Comparable constraint — the caller provides the
 // ordering. Useful for sorting by a derived key, descending order, or
 // element types that don't implement Comparable.
-//
-// Stage 2: both entries route through `smallSortRange`, which dispatches
-// to hardcoded sorting networks for n ∈ {2, 4, 8} and insertion sort
-// otherwise. Stage 3 will split `sortUnstable` off through pdqsort for
-// larger inputs; Stages 4–7 will route `sort` through glidesort.
 export extension Array
 	/// Sort in place using the supplied comparator. Stable.
 	export function sort(cmp SortComparator)
 		let lo = 0 as SortIndex
 		let hi = managed.length()
-		self.smallSortRange(lo, hi: hi, cmp: cmp)
+		self.driftsortRange(lo, hi: hi, cmp: cmp)
 	end 'sort'
 
 	/// Sort in place using the supplied comparator. Unstable.
-	/// Stage 3: routes through pdqsort (pattern-defeating quicksort), which
-	/// internally short-circuits to smallSortRange for n ≤ 32.
 	export function sortUnstable(cmp SortComparator)
 		let lo = 0 as SortIndex
 		let hi = managed.length()

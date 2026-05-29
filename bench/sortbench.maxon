@@ -1,0 +1,168 @@
+// Sort throughput benchmark for Maxon's stable Array.sort (driftsort).
+//
+// Measures wall-clock per pattern x element-type at a fixed N, over R timed
+// iterations (each iteration rebuilds a fresh array from a deterministic LCG so
+// every run sorts identical data). Prints CSV lines:
+//   lang,type,pattern,n,iters,total_ms
+// The companion Rust program (bench/sortbench.rs) sorts the SAME LCG data with
+// slice::sort (also driftsort) so the two are directly comparable on this host.
+
+typealias I64 = int(i64.min to i64.max)
+typealias I64Array = Array with I64
+typealias StrArray = Array with String
+typealias Count = int(0 to u64.max)
+typealias ByteIdx = int(0 to u64.max)
+
+function ascI64(x I64, y I64) returns Ordering
+	return x.compare(y)
+end 'ascI64'
+
+// Lexicographic byte comparison — matches Rust's default `String: Ord`, so the
+// comparator cost is the same shape in both benchmarks and the remaining gap is
+// element-movement cost.
+function ascStr(x String, y String) returns Ordering
+	let xb = x.toByteArray()
+	let yb = y.toByteArray()
+	let xn = xb.count()
+	let yn = yb.count()
+	let lim = xn if xn < yn else yn
+	var i = 0 as ByteIdx
+	while i < lim 'scan'
+		let a = try xb.get(i) otherwise panic("ascStr: xb.get OOB")
+		let b = try yb.get(i) otherwise panic("ascStr: yb.get OOB")
+		if a < b 'less'
+			return Ordering.lessThan
+		end 'less'
+		if a > b 'greater'
+			return Ordering.greaterThan
+		end 'greater'
+		i = i + 1
+	end 'scan'
+	return xn.compare(yn)
+end 'ascStr'
+
+function lcg(state I64) returns I64
+	let next = (state * 1103515245 + 12345) and 0x7FFFFFFF
+	return next
+end 'lcg'
+
+// pattern: 0=random, 1=ascending, 2=descending.
+function buildI64(n Count, pattern I64) returns I64Array
+	var a = I64Array.create()
+	var r = 2463534242
+	for i in 0 upto n 'fill'
+		if pattern == 1 'asc'
+			a.push(i)
+		end 'asc' else 'notAsc'
+			if pattern == 2 'desc'
+				a.push(n - i)
+			end 'desc' else 'rand'
+				r = lcg(r)
+				a.push(r and 0xFFFF)
+			end 'rand'
+		end 'notAsc'
+	end 'fill'
+	return a
+end 'buildI64'
+
+function cloneI64(src I64Array) returns I64Array
+	var c = I64Array.create()
+	for x in src 'cp'
+		c.push(x)
+	end 'cp'
+	return c
+end 'cloneI64'
+
+function buildStr(n Count, pattern I64) returns StrArray
+	var a = StrArray.create()
+	var r = 2463534242
+	for i in 0 upto n 'fill'
+		var v = 0
+		if pattern == 1 'asc'
+			v = i
+		end 'asc' else 'notAsc'
+			if pattern == 2 'desc'
+				v = n - i
+			end 'desc' else 'rand'
+				r = lcg(r)
+				v = r and 0xFFFF
+			end 'rand'
+		end 'notAsc'
+		a.push("{v}")
+	end 'fill'
+	return a
+end 'buildStr'
+
+function cloneStr(src StrArray) returns StrArray
+	var c = StrArray.create()
+	for x in src 'cp'
+		c.push(x)
+	end 'cp'
+	return c
+end 'cloneStr'
+
+function benchI64(pattern I64, patName String, n Count, iters I64)
+	let master = buildI64(n, pattern: pattern)
+	// Clone-only baseline, subtracted so we report sort time alone.
+	var sink = 0 as Count
+	let cloneStart = Clock.nowMs()
+	var ci = 0
+	while ci < iters 'cloneLoop'
+		var c = cloneI64(master)
+		sink = sink + c.count()
+		ci = ci + 1
+	end 'cloneLoop'
+	let cloneMs = Clock.elapsedMs(cloneStart)
+	if sink == 0 'guard'
+		print("")
+	end 'guard'
+	let start = Clock.nowMs()
+	var it = 0
+	while it < iters 'loop'
+		var work = cloneI64(master)
+		work.sort(ascI64)
+		it = it + 1
+	end 'loop'
+	let ms = Clock.elapsedMs(start)
+	let sortMs = ms - cloneMs if ms > cloneMs else 0
+	print("maxon,i64,{patName},{n},{iters},{sortMs}\n")
+end 'benchI64'
+
+function benchStr(pattern I64, patName String, n Count, iters I64)
+	let master = buildStr(n, pattern: pattern)
+	var sink = 0 as Count
+	let cloneStart = Clock.nowMs()
+	var ci = 0
+	while ci < iters 'cloneLoop'
+		var c = cloneStr(master)
+		sink = sink + c.count()
+		ci = ci + 1
+	end 'cloneLoop'
+	let cloneMs = Clock.elapsedMs(cloneStart)
+	if sink == 0 'guard'
+		print("")
+	end 'guard'
+	let start = Clock.nowMs()
+	var it = 0
+	while it < iters 'loop'
+		var work = cloneStr(master)
+		work.sort(ascStr)
+		it = it + 1
+	end 'loop'
+	let ms = Clock.elapsedMs(start)
+	let sortMs = ms - cloneMs if ms > cloneMs else 0
+	print("maxon,str,{patName},{n},{iters},{sortMs}\n")
+end 'benchStr'
+
+function main() returns ExitCode
+	let n = 20000 as Count
+	let iters = 100
+	print("lang,type,pattern,n,iters,total_ms\n")
+	benchI64(0, patName: "random", n: n, iters: iters)
+	benchI64(1, patName: "ascending", n: n, iters: iters)
+	benchI64(2, patName: "descending", n: n, iters: iters)
+	benchStr(0, patName: "random", n: n, iters: iters)
+	benchStr(1, patName: "ascending", n: n, iters: iters)
+	benchStr(2, patName: "descending", n: n, iters: iters)
+	return 0
+end 'main'

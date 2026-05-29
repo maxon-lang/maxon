@@ -1,0 +1,255 @@
+// Test: driftsort-dispatch-small-no-driftsort
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function ascending(x Integer, y Integer) returns Ordering
+	return x.compare(y)
+end 'ascending'
+
+function main() returns ExitCode
+	var a = IntArray.create()
+	a.push(8)
+	a.push(3)
+	a.push(1)
+	a.push(7)
+	a.push(2)
+	a.push(6)
+	a.push(4)
+	a.push(5)
+	Log.startCapture()
+	a.sort(ascending)
+	let keys = Log.stopCapture()
+	if not Log.fired(keys, key: "driftsort.push") 'np'
+		print("no-driftsort ")
+	end 'np'
+	if Log.fired(keys, key: "smallSort.network") 'sn'
+		print("network")
+	end 'sn'
+	print("\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+no-driftsort network
+```
+---
+// CompiledIR
+module {
+  func @ascending(rcx: i64, rdx: i64) -> u8 {
+  entry:
+    x64.prologue stack_size=16
+    x64.call int.compare
+    x64.cmp r8, 2
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea r12, [rip+__panic_msg_0]
+    x64.mov rcx, r12
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=80
+    x64.mov ecx, 8
+    x64.mov r12d, 40
+    x64.xor r13d, r13d
+    x64.xor r14d, r14d
+    x64.xor r15d, r15d
+    x64.mov r8d, 8
+    x64.xor r8d, r8d
+    x64.mov [rbp+-8], r8
+    x64.lea r8, [rip+__layout_Array_Integer]
+    x64.mov r9d, 8
+    x64.lea rsi, [rip+__layout_Array_Integer]
+    x64.mov [rbp+-16], rsi
+    x64.mov esi, 3
+    x64.mov [rbp+-24], r9
+    x64.mov [rbp+-32], r8
+    x64.mov [rbp+-40], rsi
+    x64.call mrt_alloc
+    x64.mov [rbp+-48], r8
+    x64.mov rcx, r12
+    x64.call mrt_alloc
+    x64.mov [r8+0], r13 (8b)
+    x64.mov [r8+8], r14 (8b)
+    x64.mov [r8+16], r15 (8b)
+    x64.mov r9, 8
+    x64.mov [r8+24], r9 (8b)
+    x64.mov r9, [rbp+-8]
+    x64.mov [r8+32], r9 (8b)
+    x64.mov r9, [rbp+-48]
+    x64.mov [r9+0], r8 (8b)
+    x64.mov rcx, [rbp+-48]
+    x64.mov rdx, [rbp+-24]
+    x64.mov rax, [rbp+-32]
+    x64.call Array.push
+    x64.mov r8, [rbp+-48]
+    x64.mov rcx, [rbp+-48]
+    x64.mov rdx, [rbp+-40]
+    x64.mov rax, [rbp+-16]
+    x64.call Array.push
+    x64.mov r8, [rbp+-48]
+    x64.lea rax, [rip+__layout_Array_Integer]
+    x64.mov r12d, 1
+    x64.mov rdx, r12
+    x64.mov rcx, [rbp+-48]
+    x64.call Array.push
+    x64.mov r8, [rbp+-48]
+    x64.lea rax, [rip+__layout_Array_Integer]
+    x64.mov edx, 7
+    x64.mov rcx, [rbp+-48]
+    x64.call Array.push
+    x64.mov r8, [rbp+-48]
+    x64.lea rax, [rip+__layout_Array_Integer]
+    x64.mov edx, 2
+    x64.mov rcx, [rbp+-48]
+    x64.call Array.push
+    x64.mov r8, [rbp+-48]
+    x64.lea rax, [rip+__layout_Array_Integer]
+    x64.mov edx, 6
+    x64.mov rcx, [rbp+-48]
+    x64.call Array.push
+    x64.mov r8, [rbp+-48]
+    x64.lea rax, [rip+__layout_Array_Integer]
+    x64.mov edx, 4
+    x64.mov rcx, [rbp+-48]
+    x64.call Array.push
+    x64.mov r8, [rbp+-48]
+    x64.lea rax, [rip+__layout_Array_Integer]
+    x64.mov edx, 5
+    x64.mov rcx, [rbp+-48]
+    x64.call Array.push
+    x64.mov r8, [rbp+-48]
+    x64.lea r8, [rip+__data_captured]
+    x64.mov r9, [r8+0] (8b)
+    x64.mov r8, [r9+0] (8b)
+    x64.xor r9d, r9d
+    x64.mov [r8+8], r9 (8b)
+    x64.lea r8, [rip+__data_capturing]
+    x64.mov r9d, 1
+    x64.mov [r8+0], r9 (8b)
+    x64.mov r8, [rbp+-48]
+    x64.mov r9, [r8+0] (8b)
+    x64.mov rax, [r9+8] (8b)
+    x64.lea rdi, [rip+__layout_Array_Integer]
+    x64.xor esi, esi
+    x64.lea r9, [rip+__fnref_ascending]
+    x64.xor edx, edx
+    x64.mov rcx, [rbp+-48]
+    x64.call Array.driftsortRange
+    x64.mov r8, [rbp+-48]
+    x64.call Log.stopCapture
+    x64.mov r13, r8
+    x64.mov ecx, 40
+    x64.call mrt_alloc
+    x64.mov r14, r8
+    x64.lea r8, [rip+__istr_0]
+    x64.mov [r14+0], r8 (8b)
+    x64.mov r8d, 14
+    x64.mov [r14+8], r8 (8b)
+    x64.mov r8, -2
+    x64.mov [r14+16], r8 (8b)
+    x64.mov [r14+24], r12 (8b)
+    x64.xor r15d, r15d
+    x64.mov [r14+32], r15 (8b)
+    x64.mov ecx, 16
+    x64.call mrt_alloc
+    x64.mov [r8+0], r14 (8b)
+    x64.mov [r8+8], r12 (8b)
+    x64.mov rcx, r13
+    x64.mov rdx, r8
+    x64.call Log.fired
+    x64.xor r8, r12
+    x64.je np_0.after
+  np_0:
+    x64.mov ecx, 40
+    x64.call mrt_alloc
+    x64.mov r14, r8
+    x64.lea r8, [rip+__istr_1]
+    x64.mov [r14+0], r8 (8b)
+    x64.mov r8d, 13
+    x64.mov [r14+8], r8 (8b)
+    x64.mov r8, -2
+    x64.mov [r14+16], r8 (8b)
+    x64.mov [r14+24], r12 (8b)
+    x64.mov [r14+32], r15 (8b)
+    x64.mov ecx, 16
+    x64.call mrt_alloc
+    x64.mov [r8+0], r14 (8b)
+    x64.mov [r8+8], r12 (8b)
+    x64.mov r9, [r8+0] (8b)
+    x64.mov rdx, [r9+8] (8b)
+    x64.mov r14, [r9+0] (8b)
+    x64.mov rcx, r14
+    x64.call mrt_write_stdout
+  np_0.after:
+    x64.mov ecx, 40
+    x64.call mrt_alloc
+    x64.mov r14, r8
+    x64.lea r8, [rip+__istr_2]
+    x64.mov [r14+0], r8 (8b)
+    x64.mov r8d, 17
+    x64.mov [r14+8], r8 (8b)
+    x64.mov r8, -2
+    x64.mov [r14+16], r8 (8b)
+    x64.mov [r14+24], r12 (8b)
+    x64.mov [r14+32], r15 (8b)
+    x64.mov ecx, 16
+    x64.call mrt_alloc
+    x64.mov [r8+0], r14 (8b)
+    x64.mov [r8+8], r12 (8b)
+    x64.mov rcx, r13
+    x64.mov rdx, r8
+    x64.call Log.fired
+    x64.test r8, r8
+    x64.je sn_0.after
+  sn_0:
+    x64.mov ecx, 40
+    x64.call mrt_alloc
+    x64.mov r13, r8
+    x64.lea r8, [rip+__istr_3]
+    x64.mov [r13+0], r8 (8b)
+    x64.mov r8d, 7
+    x64.mov [r13+8], r8 (8b)
+    x64.mov r8, -2
+    x64.mov [r13+16], r8 (8b)
+    x64.mov [r13+24], r12 (8b)
+    x64.mov [r13+32], r15 (8b)
+    x64.mov ecx, 16
+    x64.call mrt_alloc
+    x64.mov [r8+0], r13 (8b)
+    x64.mov [r8+8], r12 (8b)
+    x64.mov r9, [r8+0] (8b)
+    x64.mov rdx, [r9+8] (8b)
+    x64.mov r13, [r9+0] (8b)
+    x64.mov rcx, r13
+    x64.call mrt_write_stdout
+  sn_0.after:
+    x64.mov ecx, 40
+    x64.call mrt_alloc
+    x64.mov r13, r8
+    x64.lea r8, [rip+__istr_4]
+    x64.mov [r13+0], r8 (8b)
+    x64.mov [r13+8], r12 (8b)
+    x64.mov r8, -2
+    x64.mov [r13+16], r8 (8b)
+    x64.mov [r13+24], r12 (8b)
+    x64.mov [r13+32], r15 (8b)
+    x64.mov ecx, 16
+    x64.call mrt_alloc
+    x64.mov [r8+0], r13 (8b)
+    x64.mov [r8+8], r12 (8b)
+    x64.mov r9, [r8+0] (8b)
+    x64.mov rdx, [r9+8] (8b)
+    x64.mov r12, [r9+0] (8b)
+    x64.mov rcx, r12
+    x64.call mrt_write_stdout
+    x64.mov r8, r15
+    x64.epilogue
+    x64.ret
+  }
+}
+---

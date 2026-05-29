@@ -771,7 +771,7 @@ internal class FunctionCloner {
       }
     }
     var newArgs = call.Args.Select(MapValue).ToList();
-    var (resultKind, resultStructTypeName) = ResolveCallResultType(call.ResultKind, call.ResultStructTypeName, newArgs);
+    var (resultKind, resultStructTypeName) = ResolveCallResultType(call.ResultKind, call.ResultStructTypeName, newArgs, call.Result);
     // Synthetic __ManagedMemory builtins keep the same concrete managed type as the source arg.
     // Mirror the cloning behavior from the old dedicated-op paths.
     if ((call.Callee is "__managed_mem_slice" or "__managed_mem_get" or "__managed_mem_remove")
@@ -848,7 +848,28 @@ internal class FunctionCloner {
   }
 
   private (MaxonValueKind?, string?) ResolveCallResultType(
-      MaxonValueKind? originalResultKind, string? originalStructTypeName, List<MaxonValue> newArgs) {
+      MaxonValueKind? originalResultKind, string? originalStructTypeName, List<MaxonValue> newArgs,
+      MaxonValue? originalResult = null) {
+    // The call op's ResultStructTypeName can be the bare generic source type (e.g. "Array")
+    // even when the call actually returns a distinct concrete alias of that source. A static
+    // factory like `RunArrayStack.create()` (RunArrayStack = Array with SortRun) called inside a
+    // method being specialized for a *different* alias (e.g. IntArray = Array with Integer) records
+    // ResultStructTypeName="Array", which SubName would map to the wrong Self instantiation
+    // ("IntArray") — silently retyping the result and routing later method calls on it to the wrong
+    // monomorphization. The result MaxonStruct's own TypeName carries the correct concrete alias
+    // ("RunArrayStack"), so prefer it whenever it is a distinct concrete alias that is NOT a type
+    // parameter being substituted (those still route through originalStructTypeName/SubName).
+    if (originalResult is MaxonStruct resultStruct
+        && !string.IsNullOrEmpty(resultStruct.TypeName)
+        && resultStruct.TypeName != originalStructTypeName
+        && !_typeSubstitution.TryGetValue(resultStruct.TypeName, out _)
+        && _typeAliasSources.TryGetValue(resultStruct.TypeName, out var resultAliasInfo)
+        && resultAliasInfo.TypeParams != null
+        && resultAliasInfo.TypeParams.Count > 0
+        && resultAliasInfo.TypeParams.Values.All(t => t is not IrTypeParameterType)) {
+      originalStructTypeName = resultStruct.TypeName;
+    }
+
     var resultStructTypeName = originalStructTypeName != null ? SubName(originalStructTypeName) : null;
     var resultKind = originalResultKind.HasValue ? _typeSubstitution.SubstituteValueKind(originalResultKind.Value) : originalResultKind;
     if (resultKind == MaxonValueKind.Struct && resultStructTypeName == null && _concreteElementType is IrStructType st)

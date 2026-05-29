@@ -870,7 +870,7 @@ export type Parser
 			// `at(rightParen)` test below short-circuits the loop in that
 			// case so we don't push half-consumed state.
 			let paramMaxonType = try parseTypeRef()
-			if at(TokenKind.rightParen) and isUnresolvedMaxonType(paramMaxonType) 'recovered'
+			if at(TokenKind.rightParen) and isUnresolvedType(paramMaxonType) 'recovered'
 				return
 			end 'recovered'
 
@@ -5089,7 +5089,7 @@ export type Parser
 			checkReservedDeclName(fieldNameToken)
 
 			let fieldType = try parseTypeRef()
-			if at(TokenKind.rightParen) and isUnresolvedMaxonType(fieldType) 'recovered'
+			if at(TokenKind.rightParen) and isUnresolvedType(fieldType) 'recovered'
 				try eat(TokenKind.rightParen)
 				return
 			end 'recovered'
@@ -5445,7 +5445,7 @@ export type Parser
 			// parsing (below) stays single-token for now — Stage A's tests
 			// don't exercise function-typed interface return positions.
 			let paramType = try parseTypeRef()
-			if at(TokenKind.rightParen) and isUnresolvedMaxonType(paramType) 'recovered'
+			if at(TokenKind.rightParen) and isUnresolvedType(paramType) 'recovered'
 				return InterfaceMethodSig.create(nameToken.value, paramNames: paramNames, paramTypes: paramTypes, returnType: MaxonReturnType.void, throwsTypeName: ThrowsClause.none, isStatic: isStatic, line: nameToken.line, column: nameToken.column)
 			end 'recovered'
 			paramNames.push(paramNameToken.value)
@@ -7923,7 +7923,7 @@ export type Parser
 			module.appendOp(currentBlock, op: MaxonOp.varStore(resultSlot, value: exprName(materializedArmResult), range: SourceRange.ofToken(arm.caseToken)))
 			module.setTerminator(currentBlock, op: MaxonOp.br(mergeBlockId, range: SourceRange.none()))
 
-			if isUnresolvedMaxonType(resultType) 'firstArmType'
+			if isUnresolvedType(resultType) 'firstArmType'
 				resultType = exprType(materializedArmResult)
 			end 'firstArmType'
 
@@ -7969,14 +7969,6 @@ export type Parser
 		module.appendOp(currentBlock, op: MaxonOp.varLoad(resultName, slotId: resultSlot, slotType: resultType, range: SourceRange.none()))
 		return ExprResult.direct(resultName, valueType: resultType)
 	end 'parseMatchExpression'
-
-	function isUnresolvedMaxonType(t MaxonType) returns bool
-		return match t 'check'
-			unresolved gives true
-			boolean to function gives false
-			typeParameter to opaquePointer gives false
-		end 'check'
-	end 'isUnresolvedMaxonType'
 
 	// --- For statement ---
 	//
@@ -9236,7 +9228,7 @@ export type Parser
 		// producer-type map. Without this hook a downstream
 		// `existing == key` on a type-parameter operand would lose the
 		// dispatch trigger.
-		if isUnresolvedMaxonType(leftType) or isUnresolvedMaxonType(rightType) 'eitherUnresolved'
+		if isUnresolvedType(leftType) or isUnresolvedType(rightType) 'eitherUnresolved'
 			return MaxonType.unresolved
 		end 'eitherUnresolved'
 		// Both sides are primitive (integer / boolean) — integer is the
@@ -9414,7 +9406,7 @@ export type Parser
 		// hard-codes integer for parser cmp results. Accept integer here so
 		// `<bool> and <cmp>` doesn't false-positive.
 		let rhsT = exprType(rhsResult)
-		if not maxonTypeIsBool(rhsT) and not isUnresolvedMaxonType(rhsT) and not maxonTypeIsInt(rhsT) 'rhsTypeMismatch'
+		if not maxonTypeIsBool(rhsT) and not isUnresolvedType(rhsT) and not maxonTypeIsInt(rhsT) 'rhsTypeMismatch'
 			reportCompileError(project, code: ErrorCode.semanticTypeMismatch, message: "operator '{opName}' requires both operands to be the same type (both bool or both int)", line: opLine, column: opToken.column, filePath: filePath)
 		end 'rhsTypeMismatch'
 
@@ -9459,8 +9451,18 @@ export type Parser
 		// is in scope for any sub-expression that might (rarely) reference it.
 		// Seed with a literal zero so the varDecl satisfies the decl-before-
 		// store invariant other passes expect; both arms overwrite the seed.
+		//
+		// The seed literal's own type must be lowerable on its own — unlike the
+		// slot/varDecl (whose `resultType` TypeResolution repairs from the two
+		// arms' varStores), a `literal` op is never repaired by the fill pass,
+		// so a seed stamped with an unresolved `resultType` (e.g. when the true
+		// arm derives from a method-call result that is unresolved at parse
+		// time) would survive to lowering and panic. The seed is a throwaway 0
+		// that both arms overwrite, so stamping it bare `MaxonType.integer` when
+		// `resultType` is unresolved is sound and never affects the real result.
+		let seedType = MaxonType.integer if isUnresolvedType(resultType) else resultType
 		let slot = scope.declare("__ternary_{currentFunc.nextBlockId}", varType: resultType, mutable: true)
-		let seedName = emitLiteral(trueExprBlock, value: 0, valueType: resultType, range: ifRange)
+		let seedName = emitLiteral(trueExprBlock, value: 0, valueType: seedType, range: ifRange)
 		module.appendOp(trueExprBlock, op: MaxonOp.varDecl(slot, value: seedName, slotType: resultType, range: ifRange))
 
 		// Condition is a full expression — same as C# bootstrap; this means a
@@ -9826,7 +9828,7 @@ export type Parser
 		// type when present. Either side may be `unresolved` at parse time —
 		// TypeResolution fills both.
 		var resultType = callResultType
-		if isUnresolvedMaxonType(resultType) and dispatched.hasFallbackType 'callUnresolved'
+		if isUnresolvedType(resultType) and dispatched.hasFallbackType 'callUnresolved'
 			resultType = dispatched.fallbackType
 		end 'callUnresolved'
 
@@ -9945,7 +9947,7 @@ export type Parser
 		// TypeResolution; calling convertCastCategory on an unknown name
 		// panics). TypeResolution's validateTryOtherwiseTypes re-runs this
 		// check after resolution completes.
-		if not isUnresolvedMaxonType(callResultType) and not isUnresolvedMaxonType(fallbackType) and maxonTypeIsKnown(project, t: callResultType) and maxonTypeIsKnown(project, t: fallbackType) 'doTypeCheck'
+		if not isUnresolvedType(callResultType) and not isUnresolvedType(fallbackType) and maxonTypeIsKnown(project, t: callResultType) and maxonTypeIsKnown(project, t: fallbackType) 'doTypeCheck'
 			let expectedCategory = convertCastCategory(project, t: callResultType)
 			let actualCategory = convertCastCategory(project, t: fallbackType)
 			// Allow numeric coercions: int literals coerce to byte-sized named types (e.g. ExitCode).
@@ -9972,7 +9974,7 @@ export type Parser
 	// backfill pass, so leaving this `unresolved` would survive past
 	// TypeResolution and trip the lowering invariant.
 	function defaultIgnoreLiteralType(callResultType MaxonType) returns MaxonType
-		if isUnresolvedMaxonType(callResultType) 'unresolved'
+		if isUnresolvedType(callResultType) 'unresolved'
 			return MaxonType.integer
 		end 'unresolved'
 		return defaultLiteralTypeOfInner(callResultType)
@@ -10065,7 +10067,7 @@ export type Parser
 	function qualifyMethodCalleeFromReceiver(receiver ByteArray, methodName String, scanFrom OpIndex) returns String
 		let receiverType = scanProducerTypeForName(receiver, scanFrom: scanFrom)
 		logTrace(LogCategory.parser, message: function() gives "qualifyMethodCalleeFromReceiver: receiver='{String.from(receiver)}' methodName='{methodName}' scanFrom={scanFrom} receiverType.kind='{receiverType.name}'")
-		if isUnresolvedMaxonType(receiverType) 'unresolved'
+		if isUnresolvedType(receiverType) 'unresolved'
 			return methodName
 		end 'unresolved'
 		let structName = try maxonTypeStructName(project, t: receiverType) otherwise return methodName
@@ -10111,18 +10113,18 @@ export type Parser
 		while true 'scan'
 			let op = try module.ops.get(idx) otherwise return MaxonType.unresolved
 			let producerType = producerTypeIfNameMatches(op, targetName: targetName)
-			if not isUnresolvedMaxonType(producerType) 'haveType'
+			if not isUnresolvedType(producerType) 'haveType'
 				return producerType
 			end 'haveType'
 			if op.name == "varLoad" 'isVarLoadMatch'
 				let chainedType = chaseVarLoadProducerType(op, targetName: targetName, scanFrom: idx, depth: depth)
-				if not isUnresolvedMaxonType(chainedType) 'chained'
+				if not isUnresolvedType(chainedType) 'chained'
 					return chainedType
 				end 'chained'
 			end 'isVarLoadMatch'
 			if op.name == "call" or op.name == "tryCall" 'isCallMatch'
 				let callType = callResultTypeIfNameMatches(op, targetName: targetName)
-				if not isUnresolvedMaxonType(callType) 'haveCallType'
+				if not isUnresolvedType(callType) 'haveCallType'
 					return callType
 				end 'haveCallType'
 			end 'isCallMatch'
@@ -10144,7 +10146,7 @@ export type Parser
 		if not slotInfo.matched 'noMatch'
 			return MaxonType.unresolved
 		end 'noMatch'
-		if not isUnresolvedMaxonType(slotInfo.slotType) 'haveSlotType'
+		if not isUnresolvedType(slotInfo.slotType) 'haveSlotType'
 			return slotInfo.slotType
 		end 'haveSlotType'
 		if scanFrom == 0 'noPrev'
@@ -11502,7 +11504,7 @@ export type Parser
 		// later rewrites those via the resolved signature, so an over-eager
 		// `function(id)` fill is harmless (it'd be overridden if wrong).
 		let lastArg = extractGenericInstanceLastArg(receiverType)
-		if isUnresolvedMaxonType(lastArg) 'noLast'
+		if isUnresolvedType(lastArg) 'noLast'
 			return MaxonType.unresolved
 		end 'noLast'
 		let chased = chaseTypealiasToFunctionType(project, t: lastArg)

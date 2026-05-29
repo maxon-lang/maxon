@@ -1,0 +1,915 @@
+// Test: driftsort-stability
+typealias Integer = int(i64.min to i64.max)
+
+type KeyTag implements Comparable
+	export var key as Integer
+	export var tag as Integer
+
+	export static function init(key Integer, tag Integer) returns Self
+		return Self{key: key, tag: tag}
+	end 'init'
+
+	export function compare(other Self) returns Ordering
+		return key.compare(other.key)
+	end 'compare'
+end 'KeyTag'
+
+typealias KeyTagArray = Array with KeyTag
+
+function byKey(a KeyTag, b KeyTag) returns Ordering
+	let ak = a.key
+	let bk = b.key
+	return ak.compare(bk)
+end 'byKey'
+
+function main() returns ExitCode
+	var a = KeyTagArray.create()
+	a.push(KeyTag.init(2, tag: 0))
+	a.push(KeyTag.init(1, tag: 1))
+	a.push(KeyTag.init(2, tag: 2))
+	a.push(KeyTag.init(1, tag: 3))
+	a.push(KeyTag.init(2, tag: 4))
+	a.push(KeyTag.init(1, tag: 5))
+	a.push(KeyTag.init(3, tag: 6))
+	a.push(KeyTag.init(2, tag: 7))
+	a.push(KeyTag.init(3, tag: 8))
+	a.push(KeyTag.init(1, tag: 9))
+	a.push(KeyTag.init(2, tag: 10))
+	a.push(KeyTag.init(1, tag: 11))
+	a.push(KeyTag.init(3, tag: 12))
+	a.push(KeyTag.init(2, tag: 13))
+	a.push(KeyTag.init(1, tag: 14))
+	a.push(KeyTag.init(3, tag: 15))
+	a.push(KeyTag.init(2, tag: 16))
+	a.push(KeyTag.init(1, tag: 17))
+	a.push(KeyTag.init(2, tag: 18))
+	a.push(KeyTag.init(1, tag: 19))
+	a.push(KeyTag.init(3, tag: 20))
+	a.push(KeyTag.init(2, tag: 21))
+	a.push(KeyTag.init(1, tag: 22))
+	a.push(KeyTag.init(3, tag: 23))
+	a.push(KeyTag.init(2, tag: 24))
+	a.push(KeyTag.init(1, tag: 25))
+	a.push(KeyTag.init(2, tag: 26))
+	a.push(KeyTag.init(1, tag: 27))
+	a.push(KeyTag.init(3, tag: 28))
+	a.push(KeyTag.init(2, tag: 29))
+	a.push(KeyTag.init(1, tag: 30))
+	a.push(KeyTag.init(3, tag: 31))
+	a.push(KeyTag.init(2, tag: 32))
+	a.push(KeyTag.init(1, tag: 33))
+	a.push(KeyTag.init(2, tag: 34))
+	a.sort(byKey)
+	// Walk the sorted output: within each equal-key run the tag sequence
+	// must be non-decreasing for stability. Print the first violator if any.
+	var ok = true
+	var i = 1
+	while i < a.count() 'check'
+		let prev = try a.get(i - 1) otherwise return 99
+		let curr = try a.get(i) otherwise return 99
+		if prev.key == curr.key 'sameKey'
+			if prev.tag > curr.tag 'outOfOrder'
+				ok = false
+				print("instability at i={i}: ({prev.key},{prev.tag}) before ({curr.key},{curr.tag})\n")
+			end 'outOfOrder'
+		end 'sameKey'
+		i = i + 1
+	end 'check'
+	if ok 'stable'
+		print("stable\n")
+	end 'stable'
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+stable
+```
+---
+// CompiledIR
+module {
+  func @byKey(rcx: i64, rdx: i64) -> u8 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov r8, [rdx+0] (8b)
+    x64.mov r9, [rcx+0] (8b)
+    x64.mov rcx, r9
+    x64.mov rdx, r8
+    x64.call int.compare
+    x64.cmp r8, 2
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea r12, [rip+__panic_msg_0]
+    x64.mov rcx, r12
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=336
+    x64.mov ecx, 8
+    x64.mov r12d, 40
+    x64.xor r13d, r13d
+    x64.xor r14d, r14d
+    x64.xor r15d, r15d
+    x64.mov r8d, 8
+    x64.xor r8d, r8d
+    x64.mov [rbp+-56], r8
+    x64.mov r8d, 16
+    x64.mov r8d, 2
+    x64.xor r8d, r8d
+    x64.mov [rbp+-40], r8
+    x64.lea r8, [rip+__layout_Array_KeyTag]
+    x64.mov [rbp+-64], r8
+    x64.mov r8d, 16
+    x64.mov r8d, 1
+    x64.lea r8, [rip+__layout_Array_KeyTag]
+    x64.mov [rbp+-72], r8
+    x64.mov r8d, 16
+    x64.lea r8, [rip+__layout_Array_KeyTag]
+    x64.mov [rbp+-80], r8
+    x64.mov r8d, 16
+    x64.mov r8d, 3
+    x64.lea r8, [rip+__layout_Array_KeyTag]
+    x64.mov [rbp+-88], r8
+    x64.mov r8d, 16
+    x64.mov r8d, 4
+    x64.lea r8, [rip+__layout_Array_KeyTag]
+    x64.mov [rbp+-96], r8
+    x64.mov r8d, 16
+    x64.mov r8d, 5
+    x64.lea r8, [rip+__layout_Array_KeyTag]
+    x64.mov [rbp+-104], r8
+    x64.mov r8d, 16
+    x64.mov r8d, 6
+    x64.lea r8, [rip+__layout_Array_KeyTag]
+    x64.mov [rbp+-112], r8
+    x64.mov r8d, 16
+    x64.mov r8d, 7
+    x64.lea r8, [rip+__layout_Array_KeyTag]
+    x64.mov [rbp+-120], r8
+    x64.mov r8d, 16
+    x64.mov r8d, 8
+    x64.lea r8, [rip+__layout_Array_KeyTag]
+    x64.mov [rbp+-128], r8
+    x64.mov r8d, 16
+    x64.mov r8d, 9
+    x64.lea r8, [rip+__layout_Array_KeyTag]
+    x64.mov [rbp+-136], r8
+    x64.mov r8d, 16
+    x64.mov r8d, 10
+    x64.lea r8, [rip+__layout_Array_KeyTag]
+    x64.mov [rbp+-144], r8
+    x64.mov r8d, 16
+    x64.mov r8d, 11
+    x64.lea r8, [rip+__layout_Array_KeyTag]
+    x64.mov [rbp+-152], r8
+    x64.mov r8d, 16
+    x64.mov r8d, 12
+    x64.lea r8, [rip+__layout_Array_KeyTag]
+    x64.mov [rbp+-160], r8
+    x64.mov r8d, 16
+    x64.mov r8d, 13
+    x64.lea r8, [rip+__layout_Array_KeyTag]
+    x64.mov [rbp+-168], r8
+    x64.mov r8d, 16
+    x64.mov r8d, 14
+    x64.lea r8, [rip+__layout_Array_KeyTag]
+    x64.mov [rbp+-176], r8
+    x64.mov r8d, 16
+    x64.mov r8d, 15
+    x64.lea r8, [rip+__layout_Array_KeyTag]
+    x64.mov [rbp+-184], r8
+    x64.mov r8d, 16
+    x64.mov r8d, 16
+    x64.lea r8, [rip+__layout_Array_KeyTag]
+    x64.mov [rbp+-192], r8
+    x64.mov r8d, 16
+    x64.mov r8d, 17
+    x64.lea r8, [rip+__layout_Array_KeyTag]
+    x64.mov [rbp+-200], r8
+    x64.mov r8d, 16
+    x64.mov r8d, 18
+    x64.lea r8, [rip+__layout_Array_KeyTag]
+    x64.mov [rbp+-208], r8
+    x64.mov r8d, 16
+    x64.mov r8d, 19
+    x64.lea r8, [rip+__layout_Array_KeyTag]
+    x64.mov [rbp+-216], r8
+    x64.mov r8d, 16
+    x64.mov r8d, 20
+    x64.lea r8, [rip+__layout_Array_KeyTag]
+    x64.mov [rbp+-224], r8
+    x64.mov r8d, 16
+    x64.mov r8d, 21
+    x64.lea r8, [rip+__layout_Array_KeyTag]
+    x64.mov [rbp+-232], r8
+    x64.mov r8d, 16
+    x64.mov r8d, 22
+    x64.lea r8, [rip+__layout_Array_KeyTag]
+    x64.mov [rbp+-240], r8
+    x64.mov r8d, 16
+    x64.mov r8d, 23
+    x64.lea r8, [rip+__layout_Array_KeyTag]
+    x64.mov [rbp+-248], r8
+    x64.mov r8d, 16
+    x64.mov r8d, 24
+    x64.lea r8, [rip+__layout_Array_KeyTag]
+    x64.mov [rbp+-256], r8
+    x64.mov r8d, 16
+    x64.mov r8d, 25
+    x64.lea r8, [rip+__layout_Array_KeyTag]
+    x64.mov [rbp+-264], r8
+    x64.mov r8d, 16
+    x64.mov r8d, 26
+    x64.lea r8, [rip+__layout_Array_KeyTag]
+    x64.mov [rbp+-272], r8
+    x64.mov r8d, 16
+    x64.mov r8d, 27
+    x64.lea r8, [rip+__layout_Array_KeyTag]
+    x64.mov [rbp+-280], r8
+    x64.mov r8, 2
+    x64.mov [rbp+-288], r8
+    x64.mov r8, 2
+    x64.mov r8, [rbp+-40]
+    x64.mov [rbp+-296], r8
+    x64.call mrt_alloc
+    x64.mov [rbp+-48], r8
+    x64.mov rcx, r12
+    x64.call mrt_alloc
+    x64.mov [r8+0], r13 (8b)
+    x64.mov [r8+8], r14 (8b)
+    x64.mov [r8+16], r15 (8b)
+    x64.mov r9, 8
+    x64.mov [r8+24], r9 (8b)
+    x64.mov r9, [rbp+-56]
+    x64.mov [r8+32], r9 (8b)
+    x64.mov r9, [rbp+-48]
+    x64.mov [r9+0], r8 (8b)
+    x64.mov rcx, 16
+    x64.call mrt_alloc
+    x64.mov r9, [rbp+-288]
+    x64.mov [r8+0], r9 (8b)
+    x64.mov r9, [rbp+-296]
+    x64.mov [r8+8], r9 (8b)
+    x64.mov rdx, r8
+    x64.mov rcx, [rbp+-48]
+    x64.mov rax, [rbp+-64]
+    x64.call Array.push
+    x64.mov r8, [rbp+-48]
+    x64.mov rcx, 16
+    x64.call mrt_alloc
+    x64.mov r9, 1
+    x64.mov [r8+0], r9 (8b)
+    x64.mov r9, 1
+    x64.mov [r8+8], r9 (8b)
+    x64.mov rdx, r8
+    x64.mov rcx, [rbp+-48]
+    x64.mov rax, [rbp+-72]
+    x64.call Array.push
+    x64.mov r8, [rbp+-48]
+    x64.mov rcx, 16
+    x64.call mrt_alloc
+    x64.mov r9, [rbp+-288]
+    x64.mov [r8+0], r9 (8b)
+    x64.mov [r8+8], r9 (8b)
+    x64.mov rdx, r8
+    x64.mov rcx, [rbp+-48]
+    x64.mov rax, [rbp+-80]
+    x64.call Array.push
+    x64.mov r8, [rbp+-48]
+    x64.mov rcx, 16
+    x64.call mrt_alloc
+    x64.mov r9, 1
+    x64.mov [r8+0], r9 (8b)
+    x64.mov r9, 3
+    x64.mov [r8+8], r9 (8b)
+    x64.mov rdx, r8
+    x64.mov rcx, [rbp+-48]
+    x64.mov rax, [rbp+-88]
+    x64.call Array.push
+    x64.mov r8, [rbp+-48]
+    x64.mov rcx, 16
+    x64.call mrt_alloc
+    x64.mov r9, [rbp+-288]
+    x64.mov [r8+0], r9 (8b)
+    x64.mov r9, 4
+    x64.mov [r8+8], r9 (8b)
+    x64.mov rdx, r8
+    x64.mov rcx, [rbp+-48]
+    x64.mov rax, [rbp+-96]
+    x64.call Array.push
+    x64.mov r8, [rbp+-48]
+    x64.mov rcx, 16
+    x64.call mrt_alloc
+    x64.mov r9, 1
+    x64.mov [r8+0], r9 (8b)
+    x64.mov r9, 5
+    x64.mov [r8+8], r9 (8b)
+    x64.mov rdx, r8
+    x64.mov rcx, [rbp+-48]
+    x64.mov rax, [rbp+-104]
+    x64.call Array.push
+    x64.mov r8, [rbp+-48]
+    x64.mov rcx, 16
+    x64.call mrt_alloc
+    x64.mov r9, 3
+    x64.mov [r8+0], r9 (8b)
+    x64.mov r9, 6
+    x64.mov [r8+8], r9 (8b)
+    x64.mov rdx, r8
+    x64.mov rcx, [rbp+-48]
+    x64.mov rax, [rbp+-112]
+    x64.call Array.push
+    x64.mov r8, [rbp+-48]
+    x64.mov rcx, 16
+    x64.call mrt_alloc
+    x64.mov r9, [rbp+-288]
+    x64.mov [r8+0], r9 (8b)
+    x64.mov r9, 7
+    x64.mov [r8+8], r9 (8b)
+    x64.mov rdx, r8
+    x64.mov rcx, [rbp+-48]
+    x64.mov rax, [rbp+-120]
+    x64.call Array.push
+    x64.mov r8, [rbp+-48]
+    x64.mov rcx, 16
+    x64.call mrt_alloc
+    x64.mov r9, 3
+    x64.mov [r8+0], r9 (8b)
+    x64.mov r9, 8
+    x64.mov [r8+8], r9 (8b)
+    x64.mov rdx, r8
+    x64.mov rcx, [rbp+-48]
+    x64.mov rax, [rbp+-128]
+    x64.call Array.push
+    x64.mov r8, [rbp+-48]
+    x64.mov rcx, 16
+    x64.call mrt_alloc
+    x64.mov r9, 1
+    x64.mov [r8+0], r9 (8b)
+    x64.mov r9, 9
+    x64.mov [r8+8], r9 (8b)
+    x64.mov rdx, r8
+    x64.mov rcx, [rbp+-48]
+    x64.mov rax, [rbp+-136]
+    x64.call Array.push
+    x64.mov r8, [rbp+-48]
+    x64.mov rcx, 16
+    x64.call mrt_alloc
+    x64.mov r9, [rbp+-288]
+    x64.mov [r8+0], r9 (8b)
+    x64.mov r9, 10
+    x64.mov [r8+8], r9 (8b)
+    x64.mov rdx, r8
+    x64.mov rcx, [rbp+-48]
+    x64.mov rax, [rbp+-144]
+    x64.call Array.push
+    x64.mov r8, [rbp+-48]
+    x64.mov rcx, 16
+    x64.call mrt_alloc
+    x64.mov r9, 1
+    x64.mov [r8+0], r9 (8b)
+    x64.mov r9, 11
+    x64.mov [r8+8], r9 (8b)
+    x64.mov rdx, r8
+    x64.mov rcx, [rbp+-48]
+    x64.mov rax, [rbp+-152]
+    x64.call Array.push
+    x64.mov r8, [rbp+-48]
+    x64.mov rcx, 16
+    x64.call mrt_alloc
+    x64.mov r9, 3
+    x64.mov [r8+0], r9 (8b)
+    x64.mov r9, 12
+    x64.mov [r8+8], r9 (8b)
+    x64.mov rdx, r8
+    x64.mov rcx, [rbp+-48]
+    x64.mov rax, [rbp+-160]
+    x64.call Array.push
+    x64.mov r8, [rbp+-48]
+    x64.mov rcx, 16
+    x64.call mrt_alloc
+    x64.mov r9, [rbp+-288]
+    x64.mov [r8+0], r9 (8b)
+    x64.mov r9, 13
+    x64.mov [r8+8], r9 (8b)
+    x64.mov rdx, r8
+    x64.mov rcx, [rbp+-48]
+    x64.mov rax, [rbp+-168]
+    x64.call Array.push
+    x64.mov r8, [rbp+-48]
+    x64.mov rcx, 16
+    x64.call mrt_alloc
+    x64.mov r9, 1
+    x64.mov [r8+0], r9 (8b)
+    x64.mov r9, 14
+    x64.mov [r8+8], r9 (8b)
+    x64.mov rdx, r8
+    x64.mov rcx, [rbp+-48]
+    x64.mov rax, [rbp+-176]
+    x64.call Array.push
+    x64.mov r8, [rbp+-48]
+    x64.mov rcx, 16
+    x64.call mrt_alloc
+    x64.mov r9, 3
+    x64.mov [r8+0], r9 (8b)
+    x64.mov r9, 15
+    x64.mov [r8+8], r9 (8b)
+    x64.mov rdx, r8
+    x64.mov rcx, [rbp+-48]
+    x64.mov rax, [rbp+-184]
+    x64.call Array.push
+    x64.mov r8, [rbp+-48]
+    x64.mov rcx, 16
+    x64.call mrt_alloc
+    x64.mov r9, [rbp+-288]
+    x64.mov [r8+0], r9 (8b)
+    x64.mov r9, 16
+    x64.mov [r8+8], r9 (8b)
+    x64.mov rdx, r8
+    x64.mov rcx, [rbp+-48]
+    x64.mov rax, [rbp+-192]
+    x64.call Array.push
+    x64.mov r8, [rbp+-48]
+    x64.mov rcx, 16
+    x64.call mrt_alloc
+    x64.mov r9, 1
+    x64.mov [r8+0], r9 (8b)
+    x64.mov r9, 17
+    x64.mov [r8+8], r9 (8b)
+    x64.mov rdx, r8
+    x64.mov rcx, [rbp+-48]
+    x64.mov rax, [rbp+-200]
+    x64.call Array.push
+    x64.mov r8, [rbp+-48]
+    x64.mov rcx, 16
+    x64.call mrt_alloc
+    x64.mov r9, [rbp+-288]
+    x64.mov [r8+0], r9 (8b)
+    x64.mov r9, 18
+    x64.mov [r8+8], r9 (8b)
+    x64.mov rdx, r8
+    x64.mov rcx, [rbp+-48]
+    x64.mov rax, [rbp+-208]
+    x64.call Array.push
+    x64.mov r8, [rbp+-48]
+    x64.mov rcx, 16
+    x64.call mrt_alloc
+    x64.mov r9, 1
+    x64.mov [r8+0], r9 (8b)
+    x64.mov r9, 19
+    x64.mov [r8+8], r9 (8b)
+    x64.mov rdx, r8
+    x64.mov rcx, [rbp+-48]
+    x64.mov rax, [rbp+-216]
+    x64.call Array.push
+    x64.mov r8, [rbp+-48]
+    x64.mov rcx, 16
+    x64.call mrt_alloc
+    x64.mov r9, 3
+    x64.mov [r8+0], r9 (8b)
+    x64.mov r9, 20
+    x64.mov [r8+8], r9 (8b)
+    x64.mov rdx, r8
+    x64.mov rcx, [rbp+-48]
+    x64.mov rax, [rbp+-224]
+    x64.call Array.push
+    x64.mov r8, [rbp+-48]
+    x64.mov rcx, 16
+    x64.call mrt_alloc
+    x64.mov r9, [rbp+-288]
+    x64.mov [r8+0], r9 (8b)
+    x64.mov r9, 21
+    x64.mov [r8+8], r9 (8b)
+    x64.mov rdx, r8
+    x64.mov rcx, [rbp+-48]
+    x64.mov rax, [rbp+-232]
+    x64.call Array.push
+    x64.mov r8, [rbp+-48]
+    x64.mov rcx, 16
+    x64.call mrt_alloc
+    x64.mov r9, 1
+    x64.mov [r8+0], r9 (8b)
+    x64.mov r9, 22
+    x64.mov [r8+8], r9 (8b)
+    x64.mov rdx, r8
+    x64.mov rcx, [rbp+-48]
+    x64.mov rax, [rbp+-240]
+    x64.call Array.push
+    x64.mov r8, [rbp+-48]
+    x64.mov rcx, 16
+    x64.call mrt_alloc
+    x64.mov r9, 3
+    x64.mov [r8+0], r9 (8b)
+    x64.mov r9, 23
+    x64.mov [r8+8], r9 (8b)
+    x64.mov rdx, r8
+    x64.mov rcx, [rbp+-48]
+    x64.mov rax, [rbp+-248]
+    x64.call Array.push
+    x64.mov r8, [rbp+-48]
+    x64.mov rcx, 16
+    x64.call mrt_alloc
+    x64.mov r9, [rbp+-288]
+    x64.mov [r8+0], r9 (8b)
+    x64.mov r9, 24
+    x64.mov [r8+8], r9 (8b)
+    x64.mov rdx, r8
+    x64.mov rcx, [rbp+-48]
+    x64.mov rax, [rbp+-256]
+    x64.call Array.push
+    x64.mov r8, [rbp+-48]
+    x64.mov rcx, 16
+    x64.call mrt_alloc
+    x64.mov r9, 1
+    x64.mov [r8+0], r9 (8b)
+    x64.mov r9, 25
+    x64.mov [r8+8], r9 (8b)
+    x64.mov rdx, r8
+    x64.mov rcx, [rbp+-48]
+    x64.mov rax, [rbp+-264]
+    x64.call Array.push
+    x64.mov r8, [rbp+-48]
+    x64.mov rcx, 16
+    x64.call mrt_alloc
+    x64.mov r9, [rbp+-288]
+    x64.mov [r8+0], r9 (8b)
+    x64.mov r9, 26
+    x64.mov [r8+8], r9 (8b)
+    x64.mov rdx, r8
+    x64.mov rcx, [rbp+-48]
+    x64.mov rax, [rbp+-272]
+    x64.call Array.push
+    x64.mov r8, [rbp+-48]
+    x64.mov rcx, 16
+    x64.call mrt_alloc
+    x64.mov r9, 1
+    x64.mov [r8+0], r9 (8b)
+    x64.mov r9, 27
+    x64.mov [r8+8], r9 (8b)
+    x64.mov rdx, r8
+    x64.mov rcx, [rbp+-48]
+    x64.mov rax, [rbp+-280]
+    x64.call Array.push
+    x64.mov r8, [rbp+-48]
+    x64.mov ecx, 16
+    x64.call mrt_alloc
+    x64.mov r9, 3
+    x64.mov [r8+0], r9 (8b)
+    x64.mov r9d, 28
+    x64.mov [r8+8], r9 (8b)
+    x64.lea rax, [rip+__layout_Array_KeyTag]
+    x64.mov rdx, r8
+    x64.mov rcx, [rbp+-48]
+    x64.call Array.push
+    x64.mov r8, [rbp+-48]
+    x64.mov ecx, 16
+    x64.call mrt_alloc
+    x64.mov r9, [rbp+-288]
+    x64.mov [r8+0], r9 (8b)
+    x64.mov r9d, 29
+    x64.mov [r8+8], r9 (8b)
+    x64.lea rax, [rip+__layout_Array_KeyTag]
+    x64.mov rdx, r8
+    x64.mov rcx, [rbp+-48]
+    x64.call Array.push
+    x64.mov r8, [rbp+-48]
+    x64.mov ecx, 16
+    x64.call mrt_alloc
+    x64.mov r9, 1
+    x64.mov [r8+0], r9 (8b)
+    x64.mov r9d, 30
+    x64.mov [r8+8], r9 (8b)
+    x64.lea rax, [rip+__layout_Array_KeyTag]
+    x64.mov rdx, r8
+    x64.mov rcx, [rbp+-48]
+    x64.call Array.push
+    x64.mov r8, [rbp+-48]
+    x64.mov ecx, 16
+    x64.call mrt_alloc
+    x64.mov r9, 3
+    x64.mov [r8+0], r9 (8b)
+    x64.mov r9d, 31
+    x64.mov [r8+8], r9 (8b)
+    x64.lea rax, [rip+__layout_Array_KeyTag]
+    x64.mov rdx, r8
+    x64.mov rcx, [rbp+-48]
+    x64.call Array.push
+    x64.mov r8, [rbp+-48]
+    x64.mov ecx, 16
+    x64.call mrt_alloc
+    x64.mov r9, [rbp+-288]
+    x64.mov [r8+0], r9 (8b)
+    x64.mov r9d, 32
+    x64.mov [r8+8], r9 (8b)
+    x64.lea rax, [rip+__layout_Array_KeyTag]
+    x64.mov rdx, r8
+    x64.mov rcx, [rbp+-48]
+    x64.call Array.push
+    x64.mov r8, [rbp+-48]
+    x64.mov ecx, 16
+    x64.call mrt_alloc
+    x64.mov r9, 1
+    x64.mov [r8+0], r9 (8b)
+    x64.mov r9d, 33
+    x64.mov [r8+8], r9 (8b)
+    x64.lea rax, [rip+__layout_Array_KeyTag]
+    x64.mov rdx, r8
+    x64.mov rcx, [rbp+-48]
+    x64.call Array.push
+    x64.mov r8, [rbp+-48]
+    x64.mov ecx, 16
+    x64.call mrt_alloc
+    x64.mov r9, [rbp+-288]
+    x64.mov [r8+0], r9 (8b)
+    x64.mov r9d, 34
+    x64.mov [r8+8], r9 (8b)
+    x64.lea rax, [rip+__layout_Array_KeyTag]
+    x64.mov rdx, r8
+    x64.mov rcx, [rbp+-48]
+    x64.call Array.push
+    x64.mov r8, [rbp+-48]
+    x64.mov r8, [rbp+-48]
+    x64.mov r9, [r8+0] (8b)
+    x64.mov rax, [r9+8] (8b)
+    x64.lea rdi, [rip+__layout_Array_KeyTag]
+    x64.xor esi, esi
+    x64.lea r9, [rip+__fnref_byKey]
+    x64.xor edx, edx
+    x64.mov rcx, [rbp+-48]
+    x64.call Array.driftsortRange
+    x64.mov r8, [rbp+-48]
+    x64.mov r8, 1
+    x64.mov r12, r8
+    x64.mov r13, r8
+  check_0.header:
+    x64.lea rdx, [rip+__layout_Array_KeyTag]
+    x64.mov rcx, [rbp+-48]
+    x64.call Array.count
+    x64.cmp r13, r8
+    x64.jge check_0.exit
+  check_0:
+    x64.mov rdx, r13
+    x64.sub rdx, 1
+  inlined_Array.get_0:
+    x64.mov r8, [rbp+-48]
+    x64.mov rcx, [r8+0] (8b)
+    x64.call stdlib.__managed_mem_get
+    x64.test rdx, rdx
+    x64.je inlined_Array.get_2
+  inlined_Array.get_1:
+    x64.mov edx, 1
+    x64.xor r8d, r8d
+    x64.mov r14, r8
+    x64.jmp inline_cont_main_0
+  inlined_Array.get_2:
+    x64.xor edx, edx
+    x64.mov r14, r8
+  inline_cont_main_0:
+    x64.test rdx, rdx
+    x64.je inlined_Array.get_0
+    x64.jmp try_0.otherwise
+  check_0.exit:
+    x64.test r12, r12
+    x64.je stable_0.after
+    x64.jmp stable_0
+  try_0.otherwise:
+    x64.mov r8d, 99
+    x64.epilogue
+    x64.ret
+  inlined_Array.get_0:
+    x64.mov r8, [rbp+-48]
+    x64.mov rcx, [r8+0] (8b)
+    x64.mov rdx, r13
+    x64.call stdlib.__managed_mem_get
+    x64.test rdx, rdx
+    x64.je inlined_Array.get_2
+  inlined_Array.get_1:
+    x64.mov edx, 1
+    x64.xor r8d, r8d
+    x64.mov r9, r8
+    x64.jmp inline_cont_main_1
+  inlined_Array.get_2:
+    x64.xor edx, edx
+    x64.mov r9, r8
+  inline_cont_main_1:
+    x64.test rdx, rdx
+    x64.je try_1.merge
+  try_1.otherwise:
+    x64.mov r8d, 99
+    x64.epilogue
+    x64.ret
+  try_1.merge:
+    x64.mov r8, [r9+0] (8b)
+    x64.mov rsi, [r14+0] (8b)
+    x64.cmp rsi, r8
+    x64.jne sameKey_0.after
+  sameKey_0:
+    x64.mov r8, [r9+8] (8b)
+    x64.mov rsi, [r14+8] (8b)
+    x64.cmp rsi, r8
+    x64.jle outOfOrder_0.after
+  outOfOrder_0:
+    x64.mov r12, [r9+8] (8b)
+    x64.mov r15, [r9+0] (8b)
+    x64.mov r8, [r14+8] (8b)
+    x64.mov [rbp+-56], r8
+    x64.mov r8, [r14+0] (8b)
+    x64.mov [rbp+-64], r8
+    x64.mov rcx, 21
+    x64.call mrt_alloc
+    x64.mov r14, r8
+    x64.mov rcx, r13
+    x64.mov rdx, r14
+    x64.call mrt_i64_to_string
+    x64.mov [rbp+-72], r8
+    x64.mov rcx, 21
+    x64.call mrt_alloc
+    x64.mov [rbp+-80], r8
+    x64.mov rcx, [rbp+-64]
+    x64.mov rdx, [rbp+-80]
+    x64.call mrt_i64_to_string
+    x64.mov [rbp+-64], r8
+    x64.mov rcx, 21
+    x64.call mrt_alloc
+    x64.mov [rbp+-88], r8
+    x64.mov rcx, [rbp+-56]
+    x64.mov rdx, [rbp+-88]
+    x64.call mrt_i64_to_string
+    x64.mov [rbp+-56], r8
+    x64.mov rcx, 21
+    x64.call mrt_alloc
+    x64.mov [rbp+-96], r8
+    x64.mov rcx, r15
+    x64.mov rdx, [rbp+-96]
+    x64.call mrt_i64_to_string
+    x64.mov r15, r8
+    x64.mov rcx, 21
+    x64.call mrt_alloc
+    x64.mov [rbp+-104], r8
+    x64.mov r8, [rbp+-72]
+    x64.add r8, 17
+    x64.add r8, 3
+    x64.mov [rbp+-112], r8
+    x64.mov r8, [rbp+-112]
+    x64.add r8, [rbp+-64]
+    x64.mov [rbp+-112], r8
+    x64.mov rcx, r12
+    x64.mov rdx, [rbp+-104]
+    x64.call mrt_i64_to_string
+    x64.mov r12, r8
+    x64.mov r8, [rbp+-112]
+    x64.add r8, 1
+    x64.mov r9d, 10
+    x64.add r8, [rbp+-56]
+    x64.add r8, 10
+    x64.add r8, r15
+    x64.add r8, 1
+    x64.add r8, r12
+    x64.mov [rbp+-112], r8
+    x64.mov r8, [rbp+-112]
+    x64.add r8, 2
+    x64.mov [rbp+-112], r8
+    x64.mov rcx, [rbp+-112]
+    x64.add rcx, 1
+    x64.call mrt_alloc
+    x64.mov [rbp+-120], r8
+    x64.mov r8d, 17
+    x64.lea r9, [rip+__istr_0]
+    x64.mov rsi, [rbp+-120]
+    x64.mov [rbp-8], rsi
+    x64.mov [rbp-16], r9
+    x64.mov [rbp-24], r8
+    x64.rep_movsb
+    x64.mov r8, [rbp+-120]
+    x64.add r8, 17
+    x64.mov [rbp-8], r8
+    x64.mov [rbp-16], r14
+    x64.mov r9, [rbp+-72]
+    x64.mov [rbp-24], r9
+    x64.rep_movsb
+    x64.lea r9, [rip+__istr_1]
+    x64.add r8, [rbp+-72]
+    x64.mov [rbp-8], r8
+    x64.mov [rbp-16], r9
+    x64.mov r9, 3
+    x64.mov [rbp-24], r9
+    x64.rep_movsb
+    x64.add r8, 3
+    x64.mov [rbp-8], r8
+    x64.mov r9, [rbp+-80]
+    x64.mov [rbp-16], r9
+    x64.mov r9, [rbp+-64]
+    x64.mov [rbp-24], r9
+    x64.rep_movsb
+    x64.lea r9, [rip+__istr_2]
+    x64.add r8, [rbp+-64]
+    x64.mov [rbp-8], r8
+    x64.mov [rbp-16], r9
+    x64.mov r9, 1
+    x64.mov [rbp-24], r9
+    x64.rep_movsb
+    x64.add r8, 1
+    x64.mov [rbp-8], r8
+    x64.mov r9, [rbp+-88]
+    x64.mov [rbp-16], r9
+    x64.mov r9, [rbp+-56]
+    x64.mov [rbp-32], r9
+    x64.rep_movsb
+    x64.lea r9, [rip+__istr_3]
+    x64.add r8, [rbp+-56]
+    x64.mov [rbp-8], r8
+    x64.mov [rbp-16], r9
+    x64.mov r9, 10
+    x64.mov [rbp-32], r9
+    x64.rep_movsb
+    x64.add r8, 10
+    x64.mov [rbp-8], r8
+    x64.mov r9, [rbp+-96]
+    x64.mov [rbp-16], r9
+    x64.mov [rbp-32], r15
+    x64.rep_movsb
+    x64.lea r9, [rip+__istr_2]
+    x64.add r8, r15
+    x64.mov [rbp-8], r8
+    x64.mov [rbp-16], r9
+    x64.mov r9, 1
+    x64.mov [rbp-24], r9
+    x64.rep_movsb
+    x64.add r8, 1
+    x64.mov [rbp-8], r8
+    x64.mov r9, [rbp+-104]
+    x64.mov [rbp-16], r9
+    x64.mov [rbp-24], r12
+    x64.rep_movsb
+    x64.lea r9, [rip+__istr_4]
+    x64.add r8, r12
+    x64.mov [rbp-8], r8
+    x64.mov [rbp-16], r9
+    x64.mov r8, 2
+    x64.mov [rbp-24], r8
+    x64.rep_movsb
+    x64.mov ecx, 40
+    x64.call mrt_alloc
+    x64.mov r12, r8
+    x64.mov r8, [rbp+-120]
+    x64.mov [r12+0], r8 (8b)
+    x64.mov r8, [rbp+-112]
+    x64.mov [r12+8], r8 (8b)
+    x64.mov [r12+16], r8 (8b)
+    x64.mov r8, 1
+    x64.mov [r12+24], r8 (8b)
+    x64.mov r8, [rbp+-40]
+    x64.mov [r12+32], r8 (8b)
+    x64.mov ecx, 16
+    x64.call mrt_alloc
+    x64.mov [r8+0], r12 (8b)
+    x64.mov r9, [rbp+-40]
+    x64.mov [r8+8], r9 (8b)
+    x64.mov r9, [r8+0] (8b)
+    x64.mov rdx, [r9+8] (8b)
+    x64.mov r12, [r9+0] (8b)
+    x64.mov rcx, r12
+    x64.call mrt_write_stdout
+    x64.mov r8, [rbp+-40]
+    x64.mov r12, r8
+  outOfOrder_0.after:
+  sameKey_0.after:
+    x64.mov rdx, r13
+    x64.add rdx, 1
+    x64.mov r13, rdx
+    x64.jmp check_0.header
+  stable_0:
+    x64.mov ecx, 40
+    x64.call mrt_alloc
+    x64.mov r12, r8
+    x64.lea r8, [rip+__istr_5]
+    x64.mov [r12+0], r8 (8b)
+    x64.mov r8d, 7
+    x64.mov [r12+8], r8 (8b)
+    x64.mov r8, -2
+    x64.mov [r12+16], r8 (8b)
+    x64.mov r8, 1
+    x64.mov [r12+24], r8 (8b)
+    x64.mov r8, [rbp+-40]
+    x64.mov [r12+32], r8 (8b)
+    x64.mov ecx, 16
+    x64.call mrt_alloc
+    x64.mov [r8+0], r12 (8b)
+    x64.mov r9, 1
+    x64.mov [r8+8], r9 (8b)
+    x64.mov r9, [r8+0] (8b)
+    x64.mov rdx, [r9+8] (8b)
+    x64.mov r12, [r9+0] (8b)
+    x64.mov rcx, r12
+    x64.call mrt_write_stdout
+  stable_0.after:
+    x64.mov r8, [rbp+-40]
+    x64.epilogue
+    x64.ret
+  }
+}
+---

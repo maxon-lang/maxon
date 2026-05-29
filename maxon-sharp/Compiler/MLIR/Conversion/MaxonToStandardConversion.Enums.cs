@@ -323,6 +323,20 @@ public static partial class MaxonToStandardConversion {
   /// Struct args are passed as heap pointers (i64) directly.
   /// Associated-value enum args are packed into heap blocks and passed as pointers.
   /// </summary>
+  // Materialize a stack-resident struct/interface argument as an i64 pointer:
+  // LEA the variable's stack region, then convert the pointer to i64 so the
+  // StdCallOp receives a real producer. `varName` may be null (no recorded
+  // tag), in which case the conventional `__stk_<name>` tag is synthesized.
+  private static StdValue MaterializeStackPtrArg(IrBlock<StandardOp> block, string? varName) {
+    var stackTag = _stackVarTags != null && varName != null && _stackVarTags.TryGetValue(varName, out var tag)
+      ? tag : $"__stk_{varName}";
+    var leaOp = new StdLeaOp(stackTag);
+    block.AddOp(leaOp);
+    var ptrOp = new StdPtrToI64Op(leaOp.Result);
+    block.AddOp(ptrOp);
+    return ptrOp.Result;
+  }
+
   private static void FlattenCallArgs(
     List<MaxonValue> args,
     IrFunction<MaxonOp> calleeFunc,
@@ -415,15 +429,20 @@ public static partial class MaxonToStandardConversion {
         } else {
           throw new InvalidOperationException($"Enum arg %{arg.Id} not found in valueMap as StdHeapPtr for call to '{calleeName}'");
         }
+      } else if (valueMap.TryGetValue(arg, out var deferredSv) && deferredSv is StdStackPtr deferredSp && deferredSp.VarName != null) {
+        // Deferred stack-struct var-ref. ParamTypes[i] may be a stale IrTypeParameterType
+        // stub after monomorphization + stdlib-cache round-trip (e.g. Array<SortRun>.push(value Element)),
+        // so trust the runtime StdValue shape over the cached static type — the same reasoning used
+        // for enum receivers above. Materialize via LEA so the StdCallOp gets a real producer instead
+        // of an orphan deferred-ref id. (StdStackPtr precedes StdHeapPtr: it is a subclass.)
+        newArgs.Add(MaterializeStackPtrArg(block, deferredSp.VarName));
+      } else if (valueMap.TryGetValue(arg, out var deferredHpSv) && deferredHpSv is StdHeapPtr deferredHp && deferredHp.VarName != null) {
+        // Deferred heap-struct var-ref (the glidesort stack.push(newRun) crash case). Same rationale
+        // as the stack branch above; materialize via EmitLoad like the struct heap branch below.
+        newArgs.Add(EmitLoad(block, deferredHp.VarName, varTypes));
       } else if (calleeFunc.ParamTypes[i] is IrStructType or IrInterfaceType && valueMap.TryGetValue(arg, out var asSv) && asSv is StdStackPtr asSp) {
         // Stack struct/interface arg: emit LEA to get pointer to the stack region
-        var stackTag = _stackVarTags != null && asSp.VarName != null && _stackVarTags.TryGetValue(asSp.VarName, out var tag)
-          ? tag : $"__stk_{asSp.VarName}";
-        var leaOp = new StdLeaOp(stackTag);
-        block.AddOp(leaOp);
-        var ptrOp = new StdPtrToI64Op(leaOp.Result);
-        block.AddOp(ptrOp);
-        newArgs.Add(ptrOp.Result);
+        newArgs.Add(MaterializeStackPtrArg(block, asSp.VarName));
       } else if (calleeFunc.ParamTypes[i] is IrStructType or IrInterfaceType && valueMap.TryGetValue(arg, out var asHpSv) && asHpSv is StdHeapPtr asHp) {
         // Struct/interface arg: pass the heap pointer directly
         if (asHp.VarName == null)
