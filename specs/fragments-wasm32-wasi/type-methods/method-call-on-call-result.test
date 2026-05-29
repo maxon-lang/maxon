@@ -1,0 +1,71 @@
+// Test: method-call-on-call-result
+
+typealias Integer = int(i64.min to i64.max)
+
+type Value
+	var n as Integer
+
+	function get() returns Integer
+		return n
+	end 'get'
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Value'
+
+function main() returns ExitCode
+	let a = Value.create(3)
+	let b = Value.create(5)
+	match a.get().compare(b.get()) 'check'
+		lessThan then return 0
+		equalTo then return 1
+		greaterThan then return 2
+	end 'check'
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 3 : i64
+    %21 = mir.mov_imm 8 : i64
+    %22 = mir.call @mrt_alloc(%21)
+    mir.store %0, %22, 0 width: qword
+    %2 = mir.mov_imm 5 : i64
+    %23 = mir.mov_imm 8 : i64
+    %24 = mir.call @mrt_alloc(%23)
+    mir.store %2, %24, 0 width: qword
+    %25 = mir.load %22, 0 width: qword
+    %26 = mir.load %24, 0 width: qword
+    %8 = mir.call @int.compare(%25, %26)
+    %9 = mir.mov_imm 0 : i64
+    %10 = mir.cmp eq, %8, %9
+    mir.cond_br %10 [then: check_0.case0(), else: check_0.next0()]
+  check_0.case0:
+    %11 = mir.mov_imm 0 : i64
+    mir.ret %11
+  check_0.next0:
+    %12 = mir.mov_imm 1 : i64
+    %13 = mir.cmp eq, %8, %12
+    mir.cond_br %13 [then: check_0.case1(), else: check_0.next1()]
+  check_0.case1:
+    %14 = mir.mov_imm 1 : i64
+    mir.ret %14
+  check_0.next1:
+    %15 = mir.mov_imm 2 : i64
+    %16 = mir.cmp eq, %8, %15
+    mir.cond_br %16 [then: check_0.case2(), else: check_0.next2()]
+  check_0.case2:
+    %17 = mir.mov_imm 2 : i64
+    mir.ret %17
+  check_0.next2:
+    %18 = mir.global_addr @__panic_msg_96c7daeb3f9a871f
+    %19 = mir.call @mrt_panic(%18)
+    %20 = mir.mov_imm 0 : i64
+    mir.ret %20
+  }
+}
+---

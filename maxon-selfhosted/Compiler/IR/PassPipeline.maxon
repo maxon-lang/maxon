@@ -134,16 +134,9 @@ export type PassPipeline
 	export var sourcePath as FilePath
 	// True when this pipeline is lowering the stdlib (as opposed to user code).
 	// Controls the panic-message label prefix: stdlib panics become
-	// `__stdlib_panic_msg_N`, user panics become `__panic_msg_N`. Without
-	// this split, the two sides would collide at link time because both
-	// counters independently start at zero.
+	// `__stdlib_panic_msg_<hash>`, user panics become `__panic_msg_<hash>`.
+	// Without this split, the two sides would collide at link time.
 	export var isStdlib as bool
-	// Monotonic counter for panic-message labels across every pass that
-	// emits a `mrt_panic` call in this pipeline run (today: user panics
-	// from lowerMaxonToStd, range-check panics from insertRangeChecks).
-	// Sharing one counter means every panic in a single compile gets a
-	// unique label — no per-pass prefix gymnastics needed.
-	export var panicLabelCounter as ParsedInt
 
 	// --- Scheduled passes ---
 	export var passes as PassKindArray
@@ -161,22 +154,43 @@ export type PassPipeline
 			sourceFileName: sourceFileName,
 			sourcePath: sourcePath,
 			isStdlib: isStdlib,
-			panicLabelCounter: 0,
 			passes: PassKindArray.create()
 		}
 	end 'create'
 
-	// Mint the next panic-message label for this pipeline run. Used by
-	// lowerMaxonToStd (for `panic("...")` ops) and insertRangeChecks (for
-	// range-check panics). The prefix is determined by isStdlib.
-	export function nextPanicLabel() returns String
-		let idx = panicLabelCounter
-		panicLabelCounter = panicLabelCounter + 1
+	// Mint the panic-message label for `message`. Used by lowerMaxonToStd (for
+	// `panic("...")` ops and the interface-dispatch stub) and insertRangeChecks
+	// (for range-check panics). The prefix is determined by isStdlib.
+	//
+	// The label is **content-derived** — a 64-bit FNV-1a hash of the message
+	// bytes, not a monotonic counter. This makes the label independent of how
+	// many panics were lowered before it, so a function lowered in isolation
+	// (the demand-driven stdlib cache path) produces the exact same label it
+	// would in a whole-module compile. `addNamedGlobalData` dedupes by name, so
+	// identical messages share one label and one rdata entry. Distinct messages
+	// colliding on a 64-bit hash is the same negligible, untracked risk the
+	// `__istr_<id>` / `__float_<bits>` content-keyed labels already accept.
+	export function panicLabelFor(message String) returns String
+		let h = hashString64(message)
 		if isStdlib 'stdlib'
-			return "__stdlib_panic_msg_{idx}"
+			return "__stdlib_panic_msg_{h:016x}"
 		end 'stdlib'
-		return "__panic_msg_{idx}"
-	end 'nextPanicLabel'
+		return "__panic_msg_{h:016x}"
+	end 'panicLabelFor'
+
+	// Register `message` as a `panicMessageCString` rdata entry under its
+	// content-derived `panicLabelFor` label and return that label. Every panic
+	// emitter — lowerMaxonToStd's `panic("...")` and interface-dispatch stub, and
+	// insertRangeChecks' range-check panics — routes through here. The entry
+	// lands in the pipeline's own `globalData` (the same table every panic
+	// emitter writes through). Because the label is content-derived and
+	// `addNamedGlobalData` dedupes by name, identical messages collapse to a
+	// single rdata entry across all callers.
+	export function registerPanicMessage(message String) returns String
+		let label = panicLabelFor(message)
+		addNamedGlobalData(globalData, name: label, data: panicMessageCString(message))
+		return label
+	end 'registerPanicMessage'
 
 	export function addPass(pass PassKind)
 		passes.push(pass)
@@ -243,13 +257,12 @@ export type PassPipeline
 			expandCastRangeChecks then expandCastRangeChecks(project, module: maxonModule, sourceFileName: sourceFileName, sourcePath: sourcePath)
 			constantArrayLiteralRdata then runConstantArrayLiteralRdata(project, module: maxonModule, globalData: globalData)
 
-			// Phase 3: Maxon → Std. The lowerer reads `self.panicLabelCounter`
-			// through `nextPanicLabel` so panic labels across lowerMaxonToStd
-			// and insertRangeChecks all number monotonically from one counter.
-			// The lowering itself stays whole-module — it synthesizes enum-name
-			// / union-destructor helpers post-loop and the panic-label counter
-			// is monotonic across all functions, so a singleton-wrap-per-
-			// function would emit divergent helpers.
+			// Phase 3: Maxon → Std. Panic-message labels are content-derived
+			// via `panicLabelFor` (a hash of the message), so they're
+			// order-independent across lowerMaxonToStd and insertRangeChecks.
+			// The lowering still stays whole-module because it synthesizes
+			// enum-name / union-destructor helpers post-loop — a
+			// singleton-wrap-per-function would emit divergent helpers.
 			lowerMaxonToStd then stdModule = lowerMaxonToStd(self, maxonModule: maxonModule, project: project, globalData: globalData)
 
 			// Phase 4: Std passes — each `perFunction`-classified pass runs through
@@ -465,8 +478,9 @@ end 'unpackSingletonMirModule'
 // `insertRangeChecks` is dispatched here through the whole-module entry on
 // the singleton (rather than calling an inner per-function helper) because
 // the entry creates one inserter per call and the loop runs exactly once on
-// `func`. `pipeline.panicLabelCounter` lives on the pipeline so panic-label
-// uniqueness is preserved across functions.
+// `func`. Panic-message labels it emits are content-derived via
+// `pipeline.panicLabelFor`, so they're stable regardless of per-function vs.
+// whole-module dispatch.
 // `kind` selects the pass body via a `match` inside the loop. After the
 // loop, callers that need a whole-module post-pass side effect (today: the
 // `dce` → `stdModulePostDceSnapshot` capture for the cross-module inliner)
@@ -485,7 +499,7 @@ export function runStdPassPerFunction(pipeline PassPipeline, kind PassKind)
 			cse then _ = eliminateCommonSubexpressions(singleton)
 			licm then _ = hoistLoopInvariants(singleton)
 			dce then _ = eliminateDeadCode(singleton)
-			insertRangeChecks then _ = insertRangeChecks(pipeline, module: singleton, project: pipeline.project, funcReturnTypes: pipeline.project.funcReturnTypes, typealiasRanges: pipeline.project.typealiasRanges, sourceFileName: pipeline.sourceFileName, globalData: pipeline.globalData)
+			insertRangeChecks then _ = insertRangeChecks(pipeline, module: singleton, project: pipeline.project, funcReturnTypes: pipeline.project.funcReturnTypes, typealiasRanges: pipeline.project.typealiasRanges, sourceFileName: pipeline.sourceFileName)
 			lowerABI then _ = lowerABI(singleton, target: pipeline.target)
 			default panic("runStdPassPerFunction: unsupported pass {passKindToString(kind)}")
 		end 'invoke'

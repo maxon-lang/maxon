@@ -327,7 +327,7 @@ public static partial class MaxonToStandardConversion {
   // LEA the variable's stack region, then convert the pointer to i64 so the
   // StdCallOp receives a real producer. `varName` may be null (no recorded
   // tag), in which case the conventional `__stk_<name>` tag is synthesized.
-  private static StdValue MaterializeStackPtrArg(IrBlock<StandardOp> block, string? varName) {
+  private static StdI64 MaterializeStackPtrArg(IrBlock<StandardOp> block, string? varName) {
     var stackTag = _stackVarTags != null && varName != null && _stackVarTags.TryGetValue(varName, out var tag)
       ? tag : $"__stk_{varName}";
     var leaOp = new StdLeaOp(stackTag);

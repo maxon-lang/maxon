@@ -122,6 +122,19 @@ export function addInternedString(table GlobalDataTable, stringId StringId, data
 	return name
 end 'addInternedString'
 
+// Convert a panic message into the C-string byte image stored in rdata: the
+// message bytes, a trailing newline, then a NUL terminator. mrt_panic reads
+// the pointer as a C string and the fixed panic strings (see
+// `registerPanicStrings`) use the same `...\n\0` shape via `b"..."` literals;
+// this builds the same image for messages whose text is only known at compile
+// time, so the two pushes aren't open-coded at every panic emitter.
+export function panicMessageCString(message String) returns ByteArray
+	var bytes = message.toByteArray()
+	bytes.push(0x0A)  // newline
+	bytes.push(0)  // NUL terminator
+	return bytes
+end 'panicMessageCString'
+
 // Register global data with an explicit name (no auto-generated __str_N prefix).
 // Idempotent on `name`: a second call with the same name is a no-op, so
 // stdlib-cache hydration (which re-emits previously-interned __istr_N and

@@ -56,6 +56,15 @@ function mixString(state ContentHash, s String) returns ContentHash
 	return mix(h, value: n)
 end 'mixString'
 
+// Standalone 64-bit FNV-1a hash of a string's bytes. Exported so other passes
+// that need a deterministic, order-independent content hash of a string (e.g.
+// `PassPipeline.panicLabelFor`, which derives panic-message rdata labels from
+// the message text) share this implementation rather than duplicating the
+// FNV constants and byte loop.
+export function hashString64(s String) returns ContentHash
+	return mixString(fnvOffsetBasis(), s: s)
+end 'hashString64'
+
 // Mix a MaxonType into the hash. Uses the mangled string form so that
 // equivalent types hash identically across compiles.
 function mixMaxonType(state ContentHash, project Project, t MaxonType) returns ContentHash

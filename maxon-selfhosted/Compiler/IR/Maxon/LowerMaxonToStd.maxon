@@ -41,10 +41,11 @@
 // Each function produces a fresh per-function `ValueIdRef` inside `lower()`,
 // so this entry point takes no shared counter — SSA numbering is born here.
 //
-// Panic-label minting happens through `pipeline.nextPanicLabel()`, which
-// hands out unique `__panic_msg_N` / `__stdlib_panic_msg_N` names and is
-// shared with insertRangeChecks so every panic in a compile is numbered
-// from one monotonic counter.
+// Panic-label minting happens through `pipeline.panicLabelFor(message)`, which
+// returns a content-derived `__panic_msg_<hash>` / `__stdlib_panic_msg_<hash>`
+// name (a hash of the message bytes), shared with insertRangeChecks. Being
+// content-derived rather than counter-derived makes the label independent of
+// lowering order — required for the demand-driven stdlib cache.
 export function lowerMaxonToStd(pipeline PassPipeline, maxonModule MaxonModule, project Project, globalData GlobalDataTable) returns StdModule
 	return MaxonToStdLowering.create(pipeline, maxonModule: maxonModule, project: project, globalData: globalData).lower()
 end 'lowerMaxonToStd'
@@ -2343,13 +2344,17 @@ type MaxonToStdLowering
 				// abiParamIndexToScopeSlot. This is the slot<->abi decoupling: the ABI
 				// vector still interleaves (param, companion), but scope slot ids no longer
 				// equal ABI indices.
-				// Chase function-type aliases (e.g. `SortComparator`) before the
-				// fn-type test. `buildAbiParamMaps` chases the alias when it inserts
-				// the env companion, so the ABI vector already carries the pair —
-				// this pairing must use the same resolution or it skips the env slot
-				// for an aliased function param, leaving the indirect-call site to
-				// forward env=0 and crash on the closure dispatch.
-				if isFunctionMaxonType(chaseTypealiasToFunctionType(self.project, t: pType)) 'pairEnv'
+				// A function-typed param needs its env companion paired. The
+				// param type may still be a `named(alias)` (e.g. `SortComparator`)
+				// that resolves to a function type — chase the alias before
+				// deciding, mirroring `slotArgsForCall`'s env-expansion gate.
+				// Without the chase, a generic helper whose comparator param is
+				// declared via the alias (as `driftsortRange(cmp SortComparator)`
+				// is) skips the pairing entirely, so its `cmp` forwards with a
+				// stale/zero env and the eventual indirect call faults on a null
+				// environment.
+				let chasedSeedType = chaseTypealiasToFunctionType(self.project, t: pType)
+				if isFunctionMaxonType(chasedSeedType) 'pairEnv'
 					let envParamIdx = pIdx + 1
 					if envParamIdx < srcFunc.abiParamIndexToScopeSlot.count() 'inRange'
 						let paramScopeSlot = try srcFunc.abiParamIndexToScopeSlot.get(pIdx) otherwise panic("seedParams: abiParamIndexToScopeSlot.get OOB at {pIdx} for fn-param in {srcFunc.name}")
@@ -3567,11 +3572,12 @@ type MaxonToStdLowering
 		// fn-pointer-flow well-formed even when the value passes through
 		// var copies, struct-field stores, etc. — every load resolves to
 		// a fresh env binding rooted at the original param.
-		// Chase function-type aliases (e.g. `SortComparator`) so an aliased
-		// function param/local still pairs its env slot — mirrors the chase in
-		// `seedParams` and `slotArgsForCall`. Without it the env binding is
-		// never recorded and the indirect call forwards env=0.
-		if isFunctionMaxonType(chaseTypealiasToFunctionType(self.project, t: slotType)) 'pairEnv'
+		// Chase `named(alias)` to its underlying function type before deciding
+		// — a param/local declared via a function-type alias (e.g. `cmp
+		// SortComparator`) must still pair its env companion. Mirrors the
+		// alias-chase gate in `slotArgsForCall` and `seedParams`.
+		let chasedSlotType = chaseTypealiasToFunctionType(self.project, t: slotType)
+		if isFunctionMaxonType(chasedSlotType) 'pairEnv'
 			// slot<->abi decoupling: a PARAM scope slot is a key in
 			// scopeSlotToAbiParamIndex (body locals are absent), and its
 			// env-companion scope slot is recorded in `paramSlotToEnvSlot`
@@ -6792,17 +6798,9 @@ type MaxonToStdLowering
 	// pin down. Lower to `mrt_panic` so the build completes and any
 	// actual runtime invocation surfaces a clear error.
 	function lowerInterfaceMethodCallStub(result ByteArray, methodName ByteArray, dstBlock IrBlock)
-		let panicLabel = self.pipeline.nextPanicLabel()
 		let methodNameStr = String.from(methodName)
-		var nullTermMsg = ByteArray.create()
 		let panicMsg = "interface dispatch for method '{methodNameStr}' is unimplemented (Phase 11.4)"
-		let msgRaw = panicMsg.toByteArray()
-		for b in msgRaw 'each'
-			nullTermMsg.push(b)
-		end 'each'
-		nullTermMsg.push(0x0A)
-		nullTermMsg.push(0)
-		addNamedGlobalData(self.globalData, name: panicLabel, data: nullTermMsg)
+		let panicLabel = self.pipeline.registerPanicMessage(panicMsg)
 		let addrId = allocValueId(self.funcIdRef)
 		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.globalAddr(addrId, name: panicLabel)))
 		var argIds = ValueIdArray.create()
@@ -8962,26 +8960,18 @@ type MaxonToStdLowering
 	end 'lowerRethrow'
 
 	// Lower maxon.panic(message) to:
-	//   std.system.globalAddr(addrId, "__panic_msg_N")
+	//   std.system.globalAddr(addrId, "__panic_msg_<hash>")
 	//   std.call.call mrt_panic(addrId)
 	//
-	// The label name comes from `pipeline.nextPanicLabel()`, a monotonic
-	// counter shared across every pass in this pipeline run that emits a
-	// panic call (today: this pass and `insertRangeChecks`). A single
-	// counter means every panic in a compile gets a unique label without
-	// per-pass prefix gymnastics. The prefix (`__panic_msg_` vs
-	// `__stdlib_panic_msg_`) is still picked from `pipeline.isStdlib` so
-	// stdlib and user-code compiles stay in disjoint link-time namespaces.
+	// The label comes from `pipeline.panicLabelFor(message)` — a content hash
+	// of the message, shared with `insertRangeChecks`. Identical messages
+	// dedupe to one label/rdata entry; the label is independent of lowering
+	// order. The prefix (`__panic_msg_` vs `__stdlib_panic_msg_`) is picked
+	// from `pipeline.isStdlib` so stdlib and user-code compiles stay in
+	// disjoint link-time namespaces.
 	function lowerPanicToSys(stringId StringId, dstBlock IrBlock)
-		let nameStr = self.pipeline.nextPanicLabel()
-
-		// Build null-terminated message for global data
 		let message = self.project.strings.get(stringId)
-		var nullTermMsg = message.toByteArray()
-		nullTermMsg.push(0x0A)  // newline
-		nullTermMsg.push(0)  // null terminator
-
-		addNamedGlobalData(self.globalData, name: nameStr, data: nullTermMsg)
+		let nameStr = self.pipeline.registerPanicMessage(message)
 
 		// globalAddr -> addrId
 		let addrId = allocValueId(self.funcIdRef)

@@ -64,9 +64,13 @@ end 'formatStdFuncHeader'
 // label-def ops, `{var = NAME}` attributes, branch targets, memref var
 // refs, scope-end lists, and symdata/rdata operands in `[NAME]` brackets —
 // then renumber any identifier that ends in `_<digits>`. This captures
-// both compiler-internal names (`__panic_msg_N`, `__range_panic_N`, ...)
-// and user-given block labels that were uniquified with a counter, without
-// needing to enumerate every prefix.
+// both compiler-internal names (`__range_panic_N`, ...) and user-given
+// block labels that were uniquified with a counter, without needing to
+// enumerate every prefix. Panic-message labels carry a content hash
+// (`__panic_msg_<hex>` / `__stdlib_panic_msg_<hex>`) whose suffix isn't pure
+// digits, so `trailingDigitsHead` leaves them untouched — and that's correct:
+// the hash is already stable across unrelated edits, so renumbering would add
+// nothing.
 
 typealias StableLabelIndex = int(0 to u64.max)
 typealias LabelRenameMap = Map with (String, String)
@@ -273,20 +277,17 @@ end 'extractBlockHeader'
 // decide whether it's a label-introducing context. This handles every
 // non-block-header context in one pass.
 function scanLineForContextualLabels(line String, currentFunc String, renames LabelRenameMap, nextNum NextIndexMap)
-	// We accumulate a moving window: the last ~40 characters before the
-	// current position. When we hit the start of an identifier-run we
-	// classify the run by inspecting the window's suffix.
-	//
-	// Stage K.X.B: the window must be wide enough to retain the leading
-	// `x64.lea` / `x64.mov` marker even when the in-progress token is a
-	// 3+ digit counter-suffixed name (e.g. `__panic_msg_136` = 15 chars,
-	// plus the `    x64.lea rcx, [rip+` lead = 22 chars, total 37). 40
-	// leaves headroom for longer register names without affecting the
-	// per-line cost meaningfully — most lines short-circuit via the
-	// underscore fast path.
+	// We accumulate a moving window: the last ~40 characters consumed
+	// before the current position (the token's own chars are appended as
+	// they accumulate, so by the time a token flushes the window's tail is
+	// the token itself). When a token flushes we classify it by inspecting
+	// the window for a preceding marker like `x64.lea`. 40 chars is enough
+	// to retain that marker for the short, order-dependent labels we
+	// actually renumber. Most lines short-circuit via the underscore fast
+	// path before reaching here.
 	//
 	// We also track whether we're inside `[...]` brackets so that
-	// identifiers like `[__panic_msg_0]` get classified as data labels.
+	// identifiers like `[__str_0]` get classified as data labels.
 	var bracketDepth = 0
 	var token = ""
 	var precedingWindow = ""
@@ -324,7 +325,7 @@ end 'scanLineForContextualLabels'
 function classifyAndRegister(token String, precedingWindow String, bracketDepth BracketDepth, currentFunc String, renames LabelRenameMap, nextNum NextIndexMap)
 	// Data label context: identifier inside `[...]` brackets after a
 	// `lea_symdata`/`lea_rdata` op (MIR dialect) or an `x64.lea` instruction
-	// (x64 dialect, e.g. `x64.lea rcx, [rip+__panic_msg_N]`). The op +
+	// (x64 dialect, e.g. `x64.lea rcx, [rip+__str_N]`). The op +
 	// register precedes the `[`, so we check the window for those markers.
 	if bracketDepth > 0 'inBrackets'
 		if precedingWindow.contains("lea_symdata") or precedingWindow.contains("lea_rdata") or precedingWindow.contains("x64.lea") 'isDataLabel'
@@ -498,7 +499,7 @@ end 'appendRewrittenLine'
 // at module scope. Counter-suffixed labels are scoped per-function (each
 // function has its own `try_N` / `block_N` counters), so we look up
 // scope-qualified keys first and only fall back to the bare key for
-// module-scope tokens like `__panic_msg_47` (registered under MODULE_SCOPE).
+// module-scope tokens like `__str_47` (registered under MODULE_SCOPE).
 // Without the scope qualifier two functions' identical `try_4` labels
 // collide and the second function's references rewrite to the first
 // function's stable number.
@@ -542,7 +543,7 @@ end 'rewriteToken'
 
 // Look up `token` using the scope-qualified key first (so per-function
 // counters resolve against their own scope), falling back to the bare key
-// for tokens registered at module scope (e.g. `__panic_msg_47`).
+// for tokens registered at module scope (e.g. `__str_47`).
 function lookupRename(renames LabelRenameMap, token String, currentFunc String) returns String
 	if not currentFunc.isEmpty() 'haveFunc'
 		let scopedKey = "{currentFunc}|{token}"
@@ -601,6 +602,12 @@ function registerCandidate(token String, currentFunc String, renames LabelRename
 end 'registerCandidate'
 
 // Register a token already known to be in module scope (a data label).
+//
+// Panic-message labels (`__panic_msg_<hex>` / `__stdlib_panic_msg_<hex>`) are
+// intentionally NOT renumbered: their content hash already makes them stable
+// across unrelated edits and lowering-order changes, which is the only property
+// renumbering provides. `trailingDigitsHead` leaves them alone (the hex suffix
+// isn't pure digits), so they pass through with their stable name.
 function registerCandidateInScope(token String, scope String, renames LabelRenameMap, nextNum NextIndexMap)
 	// Whole-token form first.
 	let head = trailingDigitsHead(token)
@@ -691,8 +698,10 @@ end 'assignRename'
 
 // If `token` ends in `_<digits>` (at least one digit), return everything
 // before the underscore that starts the suffix. Otherwise return "".
+// Counter-suffixed labels only — a hash-suffixed panic label (`__panic_msg_<hex>`)
+// carries letters in its suffix, so it returns "" and is left as-is.
 // Examples:
-//   "__panic_msg_47"     → "__panic_msg"
+//   "main.__range_panic_3" → "main.__range_panic"
 //   "main.__range_ok_0"  → "main.__range_ok"
 //   "main"               → ""
 //   "skip_buf_0_x"       → "" (does not end in digits)

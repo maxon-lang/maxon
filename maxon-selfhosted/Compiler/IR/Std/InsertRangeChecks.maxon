@@ -9,8 +9,8 @@
 // Entry point. Constructs a RangeCheckInserter and runs it over every function
 // in the module. Returns the mutated module (mutation is in place; return
 // echoes the input for symmetry with the other std-phase passes).
-export function insertRangeChecks(pipeline PassPipeline, module StdModule, project Project, funcReturnTypes FuncReturnTypeMap, typealiasRanges TypealiasRangeMap, sourceFileName String, globalData GlobalDataTable) returns StdModule
-	var inserter = RangeCheckInserter.create(pipeline, module: module, project: project, funcReturnTypes: funcReturnTypes, typealiasRanges: typealiasRanges, sourceFileName: sourceFileName, globalData: globalData)
+export function insertRangeChecks(pipeline PassPipeline, module StdModule, project Project, funcReturnTypes FuncReturnTypeMap, typealiasRanges TypealiasRangeMap, sourceFileName String) returns StdModule
+	var inserter = RangeCheckInserter.create(pipeline, module: module, project: project, funcReturnTypes: funcReturnTypes, typealiasRanges: typealiasRanges, sourceFileName: sourceFileName)
 	inserter.run()
 	return module
 end 'insertRangeChecks'
@@ -18,7 +18,7 @@ end 'insertRangeChecks'
 // Stateful range-check inserter.
 //
 // Groups the cross-cutting inputs (pipeline, module, project, lookup tables,
-// sourceFileName, globalData) with the evolving state (rangeCheckCounter used
+// sourceFileName) with the evolving state (rangeCheckCounter used
 // for block labels, and nextValueIdRef reset per function). Helpers that
 // previously took `(module, …, nextValueIdRef)` become methods that read
 // module/nextValueIdRef off `self` — adding a new cross-cutting concern
@@ -34,17 +34,17 @@ type RangeCheckInserter
 	export var funcReturnTypes as FuncReturnTypeMap
 	export var typealiasRanges as TypealiasRangeMap
 	export var sourceFileName as String
-	export var globalData as GlobalDataTable
-	// Monotonic counter for __range_panic_N / __range_ok_N block labels. Runs
-	// in parallel with the pipeline's panicLabelCounter: each emitted check
-	// produces one block-label pair and one panic-message label.
+	// Monotonic counter for __range_panic_N / __range_ok_N block labels. These
+	// are function-internal CFG block labels (not rdata symbols), so a
+	// per-function counter is fine; the panic-message rdata label itself is
+	// content-derived via `pipeline.panicLabelFor`.
 	export var rangeCheckCounter as ParsedInt
 	// Per-function fresh-id allocator, reset by runFunction. StdModule id
 	// scopes are per-function, so sharing one counter across the whole module
 	// would over-allocate.
 	export var nextValueIdRef as ValueIdRef
 
-	export static function create(pipeline PassPipeline, module StdModule, project Project, funcReturnTypes FuncReturnTypeMap, typealiasRanges TypealiasRangeMap, sourceFileName String, globalData GlobalDataTable) returns RangeCheckInserter
+	export static function create(pipeline PassPipeline, module StdModule, project Project, funcReturnTypes FuncReturnTypeMap, typealiasRanges TypealiasRangeMap, sourceFileName String) returns RangeCheckInserter
 		return Self{
 			pipeline: pipeline,
 			module: module,
@@ -52,7 +52,6 @@ type RangeCheckInserter
 			funcReturnTypes: funcReturnTypes,
 			typealiasRanges: typealiasRanges,
 			sourceFileName: sourceFileName,
-			globalData: globalData,
 			rangeCheckCounter: 0,
 			nextValueIdRef: ValueIdRef.create(0)
 		}
@@ -151,8 +150,7 @@ type RangeCheckInserter
 		end 'singleCheck'
 
 		let panicMsg = buildPanicMessage(aliasName, sourceFileName: sourceFileName, sourceLine: func.returnLine)
-		let panicLabelName = pipeline.nextPanicLabel()
-		self.emitStdPanicCall(panicBlock, message: panicMsg, labelName: panicLabelName)
+		self.emitStdPanicCall(panicBlock, message: panicMsg)
 		module.setTerminator(continueBlock, op: StdOp.call(StdCallOp.ret(retValId)))
 	end 'checkRetValue'
 
@@ -193,18 +191,12 @@ type RangeCheckInserter
 	//   std.system.globalAddr(addrId, labelName)
 	//   std.call.call mrt_panic(addrId)
 	// Mirrors LowerMaxonToStd.lowerPanicToSys but runs post-lowering since
-	// insertRangeChecks is a Std-level pass. The label name is minted by the
-	// caller (via `pipeline.nextPanicLabel()`) so range-check panics share
-	// the same monotonic counter as user `panic("...")` statements — every
-	// panic in a compile gets a unique label without per-pass prefix
-	// gymnastics.
-	function emitStdPanicCall(block IrBlock, message String, labelName String)
-		// Build null-terminated message for global data
-		var nullTermMsg = message.toByteArray()
-		nullTermMsg.push(0x0A)  // newline
-		nullTermMsg.push(0)  // null terminator
-
-		addNamedGlobalData(globalData, name: labelName, data: nullTermMsg)
+	// insertRangeChecks is a Std-level pass. `registerPanicMessage` builds the
+	// null-terminated rdata payload and returns the content-derived label, so it
+	// dedupes with any identical user `panic("...")` message — see
+	// `panicLabelFor` / `registerPanicMessage`.
+	function emitStdPanicCall(block IrBlock, message String)
+		let labelName = self.pipeline.registerPanicMessage(message)
 
 		// globalAddr -> addrId
 		let addrId = allocValueId(nextValueIdRef)
