@@ -188,9 +188,7 @@ This exercises the refcount-on-swap path through `__ManagedMemory.set/get`.
 typealias StringArray = Array with String
 
 function byLength(a String, b String) returns Ordering
-	let la = a.count()
-	let lb = b.count()
-	return la.compare(lb)
+	return a.count().compare(b.count())
 end 'byLength'
 
 function main() returns ExitCode
@@ -1073,9 +1071,7 @@ end 'KeyTag'
 typealias KeyTagArray = Array with KeyTag
 
 function byKey(a KeyTag, b KeyTag) returns Ordering
-	let ak = a.key
-	let bk = b.key
-	return ak.compare(bk)
+	return a.key.compare(b.key)
 end 'byKey'
 
 function main() returns ExitCode
@@ -1787,9 +1783,7 @@ typealias TaggedArr = Array with Tagged
 typealias ScratchArr = Array with Tagged
 
 function byKey(a Tagged, b Tagged) returns Ordering
-	let ak = a.key
-	let bk = b.key
-	return ak.compare(bk)
+	return a.key.compare(b.key)
 end 'byKey'
 
 function main() returns ExitCode

@@ -241,3 +241,38 @@ end 'main'
 ```exitcode
 42
 ```
+
+<!-- test: method-call-on-call-result -->
+A method call whose receiver is the primitive result of a prior call
+(`a.get().compare(b.get())`). The receiver of `.compare` is the `Integer`
+returned by `get()`, not a variable — the parser must resolve the primitive
+type from the call result rather than rejecting it as a non-struct value.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+type Value
+	var n as Integer
+
+	function get() returns Integer
+		return n
+	end 'get'
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Value'
+
+function main() returns ExitCode
+	let a = Value.create(3)
+	let b = Value.create(5)
+	match a.get().compare(b.get()) 'check'
+		lessThan then return 0
+		equalTo then return 1
+		greaterThan then return 2
+	end 'check'
+end 'main'
+```
+```exitcode
+0
+```

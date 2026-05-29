@@ -15155,6 +15155,14 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         userTypeName = ms.TypeName;
       } else if (result is ExprResult.Direct d2 && d2.Value is MaxonEnum me) {
         userTypeName = me.TypeName;
+      } else if (result is ExprResult.Direct dp
+                 && dp.Value is MaxonInteger or MaxonFloat or MaxonBool or MaxonByte or MaxonShort) {
+        // Method call on the result of a prior call/expression that produced a
+        // primitive value (e.g. `a.getKey().compare(b)` where getKey() returns
+        // an int). The Direct value has no variable to carry a kind, so derive
+        // the primitive type name from the value itself; only method calls are
+        // legal on it, enforced by the PrimitiveTypes branch below.
+        userTypeName = KindToTypeName(DetermineValueKind(dp.Value));
       } else {
         throw new CompileError(ErrorCode.IrInvalidFieldAccess, "Cannot access field on non-struct value", fieldToken.Line, fieldToken.Column);
       }

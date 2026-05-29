@@ -10605,12 +10605,16 @@ export type Parser
 			end 'isMethodCall'
 
 			// Field access on a primitive value (e.g. `(5).a`) is statically
-			// invalid — primitives have no fields. Report E4006 and bail out
-			// of the chain so any trailing `.` in a long chain doesn't
-			// cascade into a follow-up "Expected identifier" diagnostic.
-			// Mirrors the C# bootstrap's E4006 check at the same parse site.
+			// invalid — primitives have no fields, only methods (which take the
+			// `(`-prefixed method-call arm above). Report E4006 and bail out of
+			// the chain so any trailing `.` in a long chain doesn't cascade into
+			// a follow-up "Expected identifier" diagnostic. The message names
+			// the primitive type and rejected member to match the C# bootstrap's
+			// "Primitive type 'int' has no method named 'a'" diagnostic at the
+			// same parse site.
 			if maxonTypeIsPrimitive(exprType(result)) 'primitiveReceiver'
-				reportCompileError(project, code: ErrorCode.irInvalidFieldAccess, message: "Cannot access field on non-struct value", line: memberToken.line, column: memberToken.column, filePath: filePath)
+				let primitiveName = exprType(result).toString(project)
+				reportCompileError(project, code: ErrorCode.irInvalidFieldAccess, message: "Primitive type '{primitiveName}' has no method named '{memberName}'", line: memberToken.line, column: memberToken.column, filePath: filePath)
 				skipToNextLine()
 				return result
 			end 'primitiveReceiver'

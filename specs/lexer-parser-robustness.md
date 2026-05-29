@@ -535,7 +535,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E4006: specs/fragments/lexer-parser-robustness/long-method-chain-truncated.test:3:14: Cannot access field on non-struct value
+error E4006: specs/fragments/lexer-parser-robustness/long-method-chain-truncated.test:3:14: Primitive type 'int' has no method named 'a'
 ```
 
 <!-- test: interpolation-nesting-deep -->
