@@ -552,7 +552,9 @@ export function getStdlibModule(project Project) returns MaxonModule
 	end 'firstSet'
 	let cacheDir = projectDir.join(".maxon").join("cache")
 	let cachePath = cacheDir.join("stdlib-{targetToString(project.target)}.mxc")
+	let checksumStart = passTimerStart()
 	let contentChecksum = currentStdlibChecksum(project.target)
+	recordPassSince("__stdlib-checksum", startMs: checksumStart)
 	// Cache-parity test harness: skip the read entirely when bypassed so the
 	// expensive decode + restore work doesn't even fire. Falls through to the
 	// parse-from-source path below.
@@ -590,6 +592,7 @@ export function getStdlibModule(project Project) returns MaxonModule
 
 	var allModule = MaxonModule.create()
 	let stdlibRoot = findStdlibProjectRoot()
+	let parseStart = passTimerStart()
 	for fp in stdlibFiles 'eachFile'
 		if File.exists(fp) 'exists'
 			let content = try File.readText(fp) otherwise 'readErr'
@@ -599,6 +602,7 @@ export function getStdlibModule(project Project) returns MaxonModule
 			parseStdlibSource(project, allModule: allModule, filePath: fp, rootPath: stdlibRoot, content: content)
 		end 'exists'
 	end 'eachFile'
+	recordPassSince("__stdlib-parse", startMs: parseStart)
 	// Drain cross-file overload renames produced by `rekeyExistingFunction`
 	// when a late-parsed file overloaded a sibling's function name. The
 	// per-file parser couldn't reach the IrFunction sitting in `allModule`,
@@ -798,10 +802,12 @@ function buildAndWriteStdlibCache(project Project, allModule MaxonModule, cacheP
 	cachedStdlibStdModule = pipeline.stdModulePostDceSnapshot
 
 	// Build cache data
+	let metaStart = passTimerStart()
 	var cacheData = StdlibCacheData.create()
 	cacheData.globalData = pipeline.globalData
 	captureStdlibMetadata(project, data: cacheData)
 	cacheData.inlinerStdModule = pipeline.stdModulePostDceSnapshot
+	recordPassSince("__stdlib-captureMetadata", startMs: metaStart)
 
 	// Emit per-function bytecode (dispatched by target).
 	// Native: the merged stdModule contains runtime bodies (excluding
@@ -814,7 +820,9 @@ function buildAndWriteStdlibCache(project Project, allModule MaxonModule, cacheP
 	// every runtime function from the cache so the empty stubs the wasm
 	// emitter produces for runtime signatures don't shadow real bodies.
 	if isWasm 'emitWasm'
+		let wasmEmitStart = passTimerStart()
 		cacheData.wasmFunctions = emitWasmPerFunction(pipeline.mirModule, globalData: pipeline.globalData).filter(function(func) gives not isRuntimeFunctionName(func.name))
+		recordPassSince("__stdlib-emitWasm", startMs: wasmEmitStart)
 		logInfo(LogCategory.compiler, message: function() gives "Wrote stdlib cache: {cacheData.wasmFunctions.count()} WASM functions to {cachePath}")
 	end 'emitWasm' else 'emitNative'
 		// Create backend, run target lowering + regalloc + prologue/epilogue + emit
@@ -828,15 +836,33 @@ function buildAndWriteStdlibCache(project Project, allModule MaxonModule, cacheP
 	end 'emitNative'
 
 	// Write to disk and activate cache for subsequent compilations in this process
+	let writeStart = passTimerStart()
 	writeStdlibCache(project, path: cachePath, data: cacheData, target: project.target, contentChecksum: contentChecksum)
+	recordPassSince("__stdlib-writeCache", startMs: writeStart)
 	activateStdlibCache(cacheData, target: project.target)
 end 'buildAndWriteStdlibCache'
 
 function buildStdlibNativeWith(pipeline PassPipeline, backend TargetBackend) returns ObjectFunctionArray
+	// The cache-build backend bypasses BackendDispatch, so its phases aren't
+	// timed by the dispatch-side instrumentation. Wrap them with the same
+	// `passTimerStart()/recordPassSince()` helpers (no-ops unless
+	// `--profile-passes`) so `dumpPassTimings()` accounts for the cache build.
+	// `allocateRegisters` is timed internally (per-func buckets), so it's not
+	// wrapped again here.
+	let lmtStart = passTimerStart()
 	pipeline.targetModule = backend.lowerMirToTarget()
+	recordPassSince("__stdlib-lowerMirToTarget", startMs: lmtStart)
+
 	pipeline.targetModule = allocateRegisters(pipeline.targetModule, target: pipeline.target)
+
+	let peStart = passTimerStart()
 	insertPrologueEpilogueWith(pipeline.targetModule, backend: backend)
-	return backend.emitPerFunction()
+	recordPassSince("__stdlib-prologueEpilogue", startMs: peStart)
+
+	let emitStart = passTimerStart()
+	let emitted = backend.emitPerFunction()
+	recordPassSince("__stdlib-emitPerFunction", startMs: emitStart)
+	return emitted
 end 'buildStdlibNativeWith'
 
 // Load `runtime.std` and push signature-only entries (name, paramCount,
