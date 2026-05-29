@@ -170,7 +170,24 @@ let CACHE_MAGIC_3 = 0x00  // '\0'
 // v63: whitelisted stdlib/HttpClient.maxon + helpers/http/httpHelpers.maxon.
 // v64: extended IrFunction codec to include `closureCaptureCount` (Phase 2
 // closure-capture-count localization).
-let CACHE_FORMAT_VERSION = 65
+// v66: G.2 stdlib whitelist removal — parser unconditionally rewrites
+// `<TypeName>.fromRawValue(...)` / `.fromName(...)` to the per-enum
+// helper symbol, and a new post-parse pass (`validateEnumLookupCalls`)
+// synthesizes the helper / emits E3034 / restores the natural callee
+// after every file has been parsed. Cache contents are structurally
+// unchanged but the bump forces a rebuild so older caches built under
+// the pre-G.2 ordering (where the rewrite required the enum's
+// declaration file to parse first) get invalidated even if the source
+// checksum matches by coincidence.
+// v67: H.2 indirect-call label validation moved to post-parse pass.
+// Parser emits `indirectCall` with sentinel `fnTypeId = 0` when the
+// callee's typealias hasn't yet resolved at parse time; new
+// `validateIndirectCallLabels` pass re-chases the alias against the
+// fully-populated typealias registry, patches the indirectCall +
+// producer varLoad, or emits a diagnostic. Cache contents structurally
+// unchanged; bump invalidates older caches that may have stored an
+// indirectCall with the previous (eager) parse-time fnTypeId.
+let CACHE_FORMAT_VERSION = 67
 
 // ============================================================
 // Types

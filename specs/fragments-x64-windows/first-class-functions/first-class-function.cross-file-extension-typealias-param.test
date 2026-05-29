@@ -1,0 +1,70 @@
+// Test: first-class-function.cross-file-extension-typealias-param
+// --- file: aaa_alias.maxon
+module extension Sorter
+	typealias Comparator = function(Element, Element) returns Element
+end 'Sorter'
+
+// --- file: zzz_consumer.maxon
+typealias Integer = int(i64.min to i64.max)
+
+module type Sorter uses Element
+	module var stub as Integer
+
+	module static function create() returns Self
+		return Self{stub: 0}
+	end 'create'
+
+	module function compareAndSwap(a Element, b Element, cmp Comparator) returns Element
+		return cmp(a, b)
+	end 'compareAndSwap'
+end 'Sorter'
+
+// --- file: main.maxon
+typealias Number = int(i64.min to i64.max)
+typealias NumberSorter = Sorter with Number
+
+function pickLarger(a Number, b Number) returns Number
+	if a > b 'aBig'
+		return a
+	end 'aBig'
+	return b
+end 'pickLarger'
+
+function main() returns ExitCode
+	var s = NumberSorter.create()
+	let winner = s.compareAndSwap(10, b: 25, cmp: pickLarger)
+	if winner == 25 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov ecx, 8
+    x64.call mrt_alloc
+    x64.xor r9d, r9d
+    x64.mov [r8+0], r9 (8b)
+    x64.xor eax, eax
+    x64.mov edx, 25
+    x64.mov ecx, 10
+    x64.lea r12, [rip+__fnref_pickLarger]
+    x64.call r12
+    x64.cmp r8, 25
+    x64.jne check_0.after
+  check_0:
+    x64.xor r8d, r8d
+    x64.epilogue
+    x64.ret
+  check_0.after:
+    x64.mov r8d, 1
+    x64.epilogue
+    x64.ret
+  }
+}
+---

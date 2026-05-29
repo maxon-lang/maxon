@@ -220,6 +220,21 @@ export function queryAllModule(project Project) returns MaxonModule throws Compi
 		allModule.merge(module)
 	end 'eachFile'
 
+	// G.2: user-code `<TypeName>.fromRawValue(...)` / `.fromName(...)`
+	// calls also go through the parser's optimistic rewrite, so a
+	// cross-file forward reference (user-defined enum declared in file
+	// B referenced by a call in file A) needs the same post-parse
+	// validation pass to synthesize the helper / emit E3034 / restore
+	// the natural form. Runs after every user file has been parsed and
+	// after `getStdlibModule` populated the stdlib enum tables, so
+	// `project.enumTypes` / `project.unresolvedEnums` carry both stdlib
+	// and user enums by this point.
+	validateEnumLookupCalls(project, allModule: allModule)
+	// NB: indirect-call sentinel patching (fnTypeId=0) is NOT done here.
+	// It moved into `runTypeResolution` (`validateIndirectCallLabels`),
+	// which runs after alias resolution so it can see cross-file typealiases
+	// the pre-TypeResolution pass at this site could not.
+
 	popQuery(project)
 
 	// Store
@@ -711,7 +726,25 @@ end 'stampChunkMemo'
 // revision, so it bypasses the wrapper's `verifiedAt`/dep arms entirely
 // and writes the freshly-computed hash straight into the memo.
 export function refreshMidContentHashForFunction(project Project, funcName String) throws CompileError
-	let module = try queryAllMid(project)
+	// Reuse the already-computed mid module from `allMidCache` rather than
+	// re-invoking `queryAllMid`. By the time the incremental backend's
+	// per-function precheck loop calls this, `queryCodeResult` -> `queryAllMid`
+	// has already run once and populated the cache (the memo is stored
+	// unconditionally, even under --emit-ir / --dump-stages). Re-running
+	// `queryAllMid` per function would be O(functions) full mid-pipeline runs;
+	// worse, under IR-dump (which bypasses the allMid cache) it would re-run the
+	// pipeline over the SAME merged module the first run already mutated in place
+	// (TypeResolution rewrites ops + expands the ABI param vector; DCE prunes
+	// blockRefs), so the re-run walks pruned blockRefs and panics
+	// ("blockRef OOB"). Reading the cached result sidesteps both: one
+	// computation, no re-mutation. Fall back to `queryAllMid` only if the cache
+	// isn't populated yet (defensive — shouldn't happen on this path).
+	var module = StdModule.create()
+	if project.db.allMidCache.computedAt > 0 'haveCache'
+		module = project.db.allMidCache.value
+	end 'haveCache' else 'noCache'
+		module = try queryAllMid(project)
+	end 'noCache'
 	let idx = findStdFunctionIndex(module, name: funcName)
 	if idx == u64.max as StdFuncIndexResult 'missing'
 		return

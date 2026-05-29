@@ -229,6 +229,17 @@ function translateFunctionAcross(sandbox Project, user Project, src IrFunction) 
 	dst.nextBlockId = src.nextBlockId
 	dst.scope = translateScopeAcross(sandbox, user: user, srcScope: src.scope)
 	dst.slotMaxonTypes = translateMaxonTypeArrayAcross(sandbox, user: user, src: src.slotMaxonTypes)
+	// slot<->abi decoupling: the sandbox parse populated `paramReservations`
+	// (parser-built, project-independent ints + a kind enum) but NOT the
+	// slot<->abi maps (the sandbox never ran runTypeResolution/buildAbiParamMaps).
+	// Carry the reservations across verbatim so the monomorphizer can rebuild
+	// the clone's maps from them; the empty maps are rebuilt downstream.
+	var destReservations = ParamReservationArray.create()
+	for ri in 0 upto src.paramReservations.count() 'eachReservation'
+		let r = try src.paramReservations.get(ri) otherwise continue
+		destReservations.push(ParamReservation.create(r.paramSlot, hasCompanion: r.hasCompanion, companionSlot: r.companionSlot, companionKind: r.companionKind))
+	end 'eachReservation'
+	dst.paramReservations = destReservations
 	// blockRefs are filled by `translateStdlibParsedModule` once the
 	// destination module's block offsets are known.
 	return dst

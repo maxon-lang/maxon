@@ -86,7 +86,7 @@ function promoteFunction(func IrFunction, module StdModule)
 	// C1.d: ditto for fat-pointer interface params — the pass needs to
 	// emit the same param+storeSlot pair so the dispatch site's two slot
 	// loads see the value/witness pair the caller passed via the ABI.
-	let hasAddressTakenParam = anyParamSlotAddressTaken(slotInfo, paramCount: paramCount)
+	let hasAddressTakenParam = anyParamSlotAddressTaken(slotInfo, paramCount: paramCount, func: func)
 	let hasFatPointerParam = anyParamSlotIsInterfaceFatPointer(func, paramCount: paramCount)
 	if not promotable.anyPromoted and not hasAddressTakenParam and not hasFatPointerParam 'nothingToPromote'
 		return
@@ -631,10 +631,12 @@ end 'PromotableInfo'
 // it can keep running for `Holder.readViaClosure` / similar functions
 // that have no other promotable slots but DO need a param-to-slot store
 // emitted at entry.
-function anyParamSlotAddressTaken(slotInfo SlotInfo, paramCount ParamCount) returns bool
+function anyParamSlotAddressTaken(slotInfo SlotInfo, paramCount ParamCount, func IrFunction) returns bool
 	var pI = 0
 	while pI < paramCount 'scan'
-		if getSlotBool(slotInfo.slotAddressTaken, slotId: pI) 'addressTaken'
+		// pI is the ABI index; slotAddressTaken is scope-slot-keyed.
+		let scopeSlot = paramAbiToScopeSlot(func, abiIdx: pI as VarSlot)
+		if getSlotBool(slotInfo.slotAddressTaken, slotId: scopeSlot) 'addressTaken'
 			return true
 		end 'addressTaken'
 		pI = pI + 1
@@ -649,7 +651,8 @@ end 'anyParamSlotAddressTaken'
 function anyParamSlotIsInterfaceFatPointer(func IrFunction, paramCount ParamCount) returns bool
 	var pI = 0
 	while pI < paramCount 'scan'
-		if slotIsInterfaceFatPointer(func, slotId: pI) 'fatPointer'
+		let scopeSlot = paramAbiToScopeSlot(func, abiIdx: pI as VarSlot)
+		if slotIsInterfaceFatPointer(func, slotId: scopeSlot) 'fatPointer'
 			return true
 		end 'fatPointer'
 		pI = pI + 1
@@ -657,13 +660,60 @@ function anyParamSlotIsInterfaceFatPointer(func IrFunction, paramCount ParamCoun
 	return false
 end 'anyParamSlotIsInterfaceFatPointer'
 
-// C1.c/d: detect whether `slotId` is one half of a fat-pointer pair —
-// the value half (slotMaxonTypes[slotId] is interface) or a witness
-// companion. PARAM interface slots have their companion at slotId+1
-// (parser pre-allocated `__witness_<paramName>`); LOCAL interface slots
-// have their companion appended after the original-slot range. Both
-// kinds need to stay memory-backed so the dispatch path (C1.d) can
-// reconstruct the pair via two slot loads.
+// slot<->abi decoupling helpers. After buildAbiParamMaps, a function's parser
+// scope-slot id is NO LONGER equal to its ABI parameter index. These translate
+// between the two spaces. Functions with empty maps (synthesized helpers,
+// lifted closures, any pre-decoupling path) fall back to the identity slot==abi.
+
+// ABI parameter index -> param scope slot id.
+//
+// For mapped indices (user params + their companions), return the recorded
+// scope slot. For TRAILING synthetic params (implicit layout / witness, which
+// transferFuncs appends to the ABI vector AFTER maxonParamTypes and which have
+// NO reserved scope slot), the abi index lies beyond the map. The OLD identity
+// fallback (`return abiIdx`) was correct only when slot==abi held (no companion
+// gaps). With the slot<->abi decoupling, companion reservations push real param
+// scope slots PAST their abi indices (e.g. cmp at abi 3 -> scope slot 5), so an
+// identity fallback for a trailing synthetic at abi 5 would COLLIDE with cmp's
+// real slot 5. Instead map trailing synthetics to fresh scope slots beyond the
+// max mapped slot, preserving the invariant that distinct abi params get
+// distinct scope slots.
+function paramAbiToScopeSlot(func IrFunction, abiIdx VarSlot) returns VarSlot
+	let mapCount = func.abiParamIndexToScopeSlot.count()
+	if mapCount == 0 'noMap'
+		// Synthesized / pre-decoupling functions: slot==abi identity holds.
+		return abiIdx
+	end 'noMap'
+	if abiIdx < mapCount 'mapped'
+		return try func.abiParamIndexToScopeSlot.get(abiIdx) otherwise abiIdx
+	end 'mapped'
+	// Trailing synthetic (layout/witness): allocate beyond the max mapped slot.
+	var maxMapped = 0 as VarSlot
+	for mi in 0 upto mapCount 'findMax'
+		let s = try func.abiParamIndexToScopeSlot.get(mi) otherwise continue
+		if s > maxMapped 'gt'
+			maxMapped = s
+		end 'gt'
+	end 'findMax'
+	return maxMapped + 1 + (abiIdx - mapCount)
+end 'paramAbiToScopeSlot'
+
+// True iff `slotId` is a param-region scope slot (a param or its companion).
+// Body locals are absent from the map. When the map is empty, fall back to
+// `slotId < func.paramCount` (the old identity).
+function isParamRegionScopeSlot(func IrFunction, slotId VarSlot) returns bool
+	if func.scopeSlotToAbiParamIndex.count() == 0 'noMap'
+		return slotId < func.paramCount
+	end 'noMap'
+	return func.scopeSlotToAbiParamIndex.contains(slotId)
+end 'isParamRegionScopeSlot'
+
+// C1.c/d: detect whether `slotId` is one half of a fat-pointer pair: the value
+// half (slotMaxonTypes[slotId] is interface) or a witness companion. After the
+// slot<->abi decoupling a PARAM witness companion is the reservation's recorded
+// `companionSlot` (kind == witness), not slotId+1; LOCAL interface slots have
+// their companion appended after the original-slot range. Both kinds stay
+// memory-backed so the dispatch path (C1.d) can reconstruct the pair.
 function slotIsInterfaceFatPointer(func IrFunction, slotId VarSlot) returns bool
 	let totalSlots = func.slotMaxonTypes.count()
 	if totalSlots == 0 'noSlots'
@@ -684,27 +734,20 @@ function slotIsInterfaceFatPointer(func IrFunction, slotId VarSlot) returns bool
 	if isInterface 'valueHalf'
 		return true
 	end 'valueHalf'
-	let paramCount = func.paramCount as VarSlot
-	// Param-witness slot: sits immediately after a param interface slot.
-	if slotId < paramCount and slotId > 0 'maybeParamWitness'
-		let prevType = try func.slotMaxonTypes.get(slotId - 1) otherwise MaxonType.integer
-		let prevIsInterface = match prevType 'check'
-			interface gives true
-			boolean to function gives false
-			unresolved gives false
-			typeParameter gives false
-			genericInstance gives false
-			constInt to opaquePointer gives false
-		end 'check'
-		if prevIsInterface 'isParamWitness'
+	// Param-witness slot: a param's reserved witness companion (companionKind
+	// == witness). No longer slotId+1 after the slot<->abi decoupling.
+	for ri in 0 upto func.paramReservations.count() 'eachReservation'
+		let reservation = try func.paramReservations.get(ri) otherwise continue
+		if reservation.hasWitnessCompanion() and reservation.companionSlot == slotId 'isParamWitness'
 			return true
 		end 'isParamWitness'
-	end 'maybeParamWitness'
-	// Local-witness slot: count only LOCAL interface slots (not params)
-	// and check whether `slotId` lies in the trailing companion region.
+	end 'eachReservation'
+	// Local-witness slot: count only LOCAL interface slots (absent from the
+	// param region) and check whether `slotId` lies in the trailing companion
+	// region appended by extendSlotsForInterfaceWitnesses.
 	var localInterfaceCount = 0 as VarSlot
 	for sId in 0 upto totalSlots 'count'
-		if sId < paramCount 'skipParam'
+		if isParamRegionScopeSlot(func, slotId: sId) 'skipParam'
 			continue
 		end 'skipParam'
 		let st = try func.slotMaxonTypes.get(sId) otherwise continue
@@ -1144,18 +1187,24 @@ function createRenameState(func IrFunction, module StdModule, slotInfo SlotInfo,
 			paramId = allocValueId(funcIdRef)
 		end 'allocFresh'
 		try paramSlotHasExistingOp.set(pIdx, value: hasExisting) otherwise panic("invariant: paramSlotHasExistingOp.set OOB")
-		if getSlotBool(promotable.isPromotable, slotId: pIdx) 'promoted'
+		// slot<->abi decoupling: pIdx is the ABI param index. The per-param
+		// renameState arrays (paramValueIds, paramSlot*) are ABI-indexed and
+		// consumed by emitParamOps by ABI index, but the slot-keyed structures
+		// (promotable.isPromotable, slotAddressTaken, defStacks,
+		// slotIsInterfaceFatPointer) are scope-slot-indexed, so translate.
+		let scopeSlot = paramAbiToScopeSlot(func, abiIdx: pIdx as VarSlot)
+		if getSlotBool(promotable.isPromotable, slotId: scopeSlot) 'promoted'
 			try paramValueIds.set(pIdx, value: paramId) otherwise panic("invariant: paramValueIds.set OOB")
 			try paramSlotIsPromoted.set(pIdx, value: true) otherwise panic("invariant: paramSlotIsPromoted.set OOB")
 			// Push the param valueId as the initial definition for this slot
-			var stack = try defStacks.get(pIdx) otherwise panic("invariant: defStacks sized to numSlots >= paramCount but get({pIdx}) failed")
+			var stack = try defStacks.get(scopeSlot) otherwise panic("invariant: defStacks sized to numSlots >= scopeSlot but get({scopeSlot}) failed")
 			stack.push(paramId)
-		end 'promoted' else if getSlotBool(slotInfo.slotAddressTaken, slotId: pIdx) 'addressTaken'
+		end 'promoted' else if getSlotBool(slotInfo.slotAddressTaken, slotId: scopeSlot) 'addressTaken'
 			try paramValueIds.set(pIdx, value: paramId) otherwise panic("invariant: paramValueIds.set OOB")
 			try paramSlotIsAddressTaken.set(pIdx, value: true) otherwise panic("invariant: paramSlotIsAddressTaken.set OOB")
 			// Don't push to defStacks — slot stays memory-backed; uses go
 			// through `memref.loadSlot` which we leave intact.
-		end 'addressTaken' else if slotIsInterfaceFatPointer(func, slotId: pIdx) 'fatPointer'
+		end 'addressTaken' else if slotIsInterfaceFatPointer(func, slotId: scopeSlot) 'fatPointer'
 			// C1.d: fat-pointer param slot. Stays memory-backed for the
 			// dispatch path's two slot-loads, but still needs a fresh
 			// ValueId so emitParamOps can emit `func.param + storeSlot`
@@ -1750,7 +1799,11 @@ function emitParamOps(module StdModule, dstBlock IrBlock, renameState RenameStat
 		// them so the dispatch site can reload both halves. Treat them
 		// like address-taken: emit `func.param` and a `storeSlot` to seed
 		// the slot from the param ABI value at function entry.
-		let isFatPointer = slotIsInterfaceFatPointer(func, slotId: pI)
+		// slot<->abi decoupling: pI is the ABI param index used for
+		// param(paramIndex:) and the ABI-indexed renameState arrays; storeSlot
+		// targets a SCOPE slot and slotIsInterfaceFatPointer is scope-keyed.
+		let scopeSlot = paramAbiToScopeSlot(func, abiIdx: pI as VarSlot)
+		let isFatPointer = slotIsInterfaceFatPointer(func, slotId: scopeSlot)
 		if isProm and not hasExisting 'emitParam'
 			let paramId = try renameState.paramValueIds.get(pI) otherwise panic("invariant: paramValueIds sized to paramCount but get({pI}) failed")
 			let pt = try paramTypes.get(pI) otherwise panic("unreachable: param index out of bounds")
@@ -1761,14 +1814,14 @@ function emitParamOps(module StdModule, dstBlock IrBlock, renameState RenameStat
 			if not hasExisting 'noExistingParam'
 				module.appendOp(dstBlock, op: StdOp.call(StdCallOp.param(paramId, paramIndex: pI, paramType: pt)))
 			end 'noExistingParam'
-			module.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.storeSlot(pI, valueId: paramId)))
+			module.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.storeSlot(scopeSlot, valueId: paramId)))
 		end 'emitAddrTakenParam' else if isFatPointer 'emitFatPointerParam'
 			let paramId = try renameState.paramValueIds.get(pI) otherwise panic("invariant: paramValueIds sized to paramCount but get({pI}) failed")
 			let pt = try paramTypes.get(pI) otherwise panic("unreachable: param index out of bounds")
 			if not hasExisting 'noExistingParam'
 				module.appendOp(dstBlock, op: StdOp.call(StdCallOp.param(paramId, paramIndex: pI, paramType: pt)))
 			end 'noExistingParam'
-			module.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.storeSlot(pI, valueId: paramId)))
+			module.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.storeSlot(scopeSlot, valueId: paramId)))
 		end 'emitFatPointerParam'
 		pI = pI + 1
 	end 'insertParams'

@@ -35,6 +35,73 @@ end 'throwsClauseName'
 
 export typealias ThrowsClauseArray = Array with ThrowsClause
 
+// Kind of ABI companion slot a parameter carries. A function-typed param
+// expands to a (fn-pointer, env-pointer) pair; an interface-fat param expands
+// to a (value, witness) pair; a plain param carries no companion. The parser
+// reserves a scope slot for a companion of any `named(alias)` param (it can't
+// know the resolved type), but the KIND is decided by TypeResolution once the
+// alias resolves — `none` means the reserved slot turned out to back a plain
+// alias and gets no ABI entry.
+export union ParamCompanionKind
+	none
+	env
+	witness
+end 'ParamCompanionKind'
+
+// Classifiers for `ParamCompanionKind`. Lifted out so the placement /
+// pairing gates across TypeResolution, LowerMaxonToStd, and Mem2Reg read
+// clearly and share one bare-match-free decision instead of re-spelling the
+// three-arm `match` at each site.
+export function isParamCompanionNone(kind ParamCompanionKind) returns bool
+	return match kind 'k'
+		none gives true
+		env gives false
+		witness gives false
+	end 'k'
+end 'isParamCompanionNone'
+
+export function isParamCompanionWitness(kind ParamCompanionKind) returns bool
+	return match kind 'k'
+		witness gives true
+		none gives false
+		env gives false
+	end 'k'
+end 'isParamCompanionWitness'
+
+// Per-declared-parameter record bridging the parser (which mints scope slot
+// ids) and TypeResolution (which decides ABI shape). The parser records the
+// param's own scope slot and, when the param's declared type is a
+// `named(alias)` that MIGHT resolve to a function/interface type, the scope
+// slot it reserved for the companion. `companionKind` starts as a placeholder
+// and is finalized by `buildAbiParamMap` from the resolved type. `hasCompanion`
+// is false for primitive-typed params (no reservation was made).
+//
+// `slotId == abiParamIndex` is NO LONGER assumed: the parser owns scope-slot
+// numbering, TypeResolution owns the ABI param vector + the slot<->abi maps.
+export type ParamReservation
+	export var paramSlot as VarSlot
+	export var hasCompanion as bool
+	export var companionSlot as VarSlot
+	export var companionKind as ParamCompanionKind
+
+	export static function create(paramSlot VarSlot, hasCompanion bool, companionSlot VarSlot, companionKind ParamCompanionKind) returns ParamReservation
+		return Self{paramSlot: paramSlot, hasCompanion: hasCompanion, companionSlot: companionSlot, companionKind: companionKind}
+	end 'create'
+
+	// True iff this reservation backs a live witness companion (interface-fat
+	// param). Used by the witness slot-map / fat-pointer detection paths.
+	export function hasWitnessCompanion() returns bool
+		return self.hasCompanion and isParamCompanionWitness(self.companionKind)
+	end 'hasWitnessCompanion'
+end 'ParamReservation'
+
+export typealias ParamReservationArray = Array with ParamReservation
+
+// Forward map: parser scope-slot id -> ABI parameter index. Sparse — only
+// param-region scope slots (params + their companions) have entries; body
+// locals are absent. Built by `buildAbiParamMap` in TypeResolution.
+export typealias ScopeSlotToAbiIndexMap = Map with (VarSlot, ParamCount)
+
 export type IrFunction
 	// --- Common fields (all phases) ---
 	export var name as String
@@ -163,6 +230,24 @@ export type IrFunction
 	// stdlib functions (no IR body) and Std-phase synthesized helpers.
 	export var slotMaxonTypes as MaxonTypeArray
 
+	// Decoupling of scope-slot id from ABI parameter index (function/interface
+	// companion ABI expansion). The parser populates `paramReservations` (one
+	// per declared user param, recording its scope slot + any reserved
+	// companion scope slot) and leaves `maxonParamTypes` at the user-facing
+	// shape. `buildAbiParamMap` (TypeResolution) then expands `maxonParamTypes`
+	// with env/witness companions for params that RESOLVE to function/interface
+	// types and fills the two maps below:
+	//   - `scopeSlotToAbiParamIndex`: param-region scope slot -> ABI index
+	//   - `abiParamIndexToScopeSlot`: ABI index -> param-region scope slot
+	//       (dense over [0, abiParamCount); synthetic trailing ABI slots with
+	//        no scope slot — implicit layout/witness — are not represented here)
+	// Body-local scope slots are NOT in either map; they are addressed directly
+	// by slot id (storeSlot/loadSlot) and never participate in the ABI vector.
+	// Lowering / Mem2Reg consult these maps instead of assuming slot == abi.
+	export var paramReservations as ParamReservationArray
+	export var scopeSlotToAbiParamIndex as ScopeSlotToAbiIndexMap
+	export var abiParamIndexToScopeSlot as VarSlotArray
+
 	// Phase 15a: function purity (no side effects, no global mutation, no
 	// param mutation, transitively pure call graph). Computed by
 	// `computePurity` in SemanticCheck.maxon; read by `checkDiscardedResults`
@@ -210,6 +295,9 @@ export type IrFunction
 			implicitWitnessConstraints: WhereClauseArray.create(),
 			contentHash: 0,
 			slotMaxonTypes: MaxonTypeArray.create(),
+			paramReservations: ParamReservationArray.create(),
+			scopeSlotToAbiParamIndex: ScopeSlotToAbiIndexMap.create(),
+			abiParamIndexToScopeSlot: VarSlotArray.create(),
 			isPure: true
 		}
 	end 'create'
@@ -249,6 +337,9 @@ export type IrFunction
 			implicitWitnessConstraints: WhereClauseArray.create(),
 			contentHash: 0,
 			slotMaxonTypes: MaxonTypeArray.create(),
+			paramReservations: ParamReservationArray.create(),
+			scopeSlotToAbiParamIndex: ScopeSlotToAbiIndexMap.create(),
+			abiParamIndexToScopeSlot: VarSlotArray.create(),
 			isPure: true
 		}
 	end 'createFromStd'
@@ -290,6 +381,14 @@ export type IrFunction
 			implicitWitnessConstraints: src.implicitWitnessConstraints,
 			contentHash: src.contentHash,
 			slotMaxonTypes: src.slotMaxonTypes,
+			// Layout (scope slot ids + ABI vector) is preserved verbatim by
+			// clone, so the slot<->abi maps and reservations copy directly.
+			// The monomorphizer, which renumbers slots and substitutes types,
+			// uses IrFunction.create (not clone) and rebuilds these via
+			// buildAbiParamMap.
+			paramReservations: src.paramReservations,
+			scopeSlotToAbiParamIndex: src.scopeSlotToAbiParamIndex,
+			abiParamIndexToScopeSlot: src.abiParamIndexToScopeSlot,
 			isPure: src.isPure
 		}
 	end 'clone'

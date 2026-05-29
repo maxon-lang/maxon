@@ -177,16 +177,25 @@ function collectSlotMaxonTypes(func IrFunction, maxonModule MaxonModule) returns
 	// hit the no-companion panic. Restricted to interface arms only so
 	// no existing pass (InjectDrops keys off `typeParameter`) inherits a
 	// new behavior for non-interface params.
+	// slot<->abi decoupling: maxonParamTypes is the ABI vector indexed by ABI
+	// index, but `result` is indexed by SCOPE slot id. Translate each interface
+	// param's ABI index to its scope slot via abiParamIndexToScopeSlot before
+	// seeding. Functions with empty maps (closures / synthesized) fall through
+	// the count guard.
 	let paramSlotCount = func.maxonParamTypes.count()
 	for pIdx in 0 upto paramSlotCount 'eachParam'
-		if pIdx >= nextSlot 'beyondAllocated'
-			break
-		end 'beyondAllocated'
 		let pType = try func.maxonParamTypes.get(pIdx) otherwise continue
 		if not interfaceTypeIsFat(pType) 'notInterface'
 			continue
 		end 'notInterface'
-		try result.set(pIdx, value: pType) otherwise panic("collectSlotMaxonTypes: result.set OOB at param slot {pIdx} (nextSlot={nextSlot})")
+		if pIdx >= func.abiParamIndexToScopeSlot.count() 'noMapEntry'
+			continue
+		end 'noMapEntry'
+		let scopeSlot = try func.abiParamIndexToScopeSlot.get(pIdx) otherwise continue
+		if scopeSlot >= nextSlot 'beyondAllocated'
+			continue
+		end 'beyondAllocated'
+		try result.set(scopeSlot, value: pType) otherwise panic("collectSlotMaxonTypes: result.set OOB at scope slot {scopeSlot} (nextSlot={nextSlot})")
 	end 'eachParam'
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try maxonModule.blocks.get(blockRef) otherwise panic("collectSlotMaxonTypes: blockRef {blockRef} OOB (count={maxonModule.blocks.count()})")
@@ -218,37 +227,35 @@ end 'recordSlotType'
 // C1.c/d: walk the function's recorded slot MaxonTypes and, for every
 // interface-typed slot, ensure a witness-pointer companion slot exists.
 //
-// PARAM slots (slotId < paramCount): the parser pre-allocated a hidden
-// `__witness_<paramName>` slot at `slotId+1` so the Std-level ABI vector
-// passes (value, witness) as adjacent args. Nothing to append — just
-// rely on the existing slot.
+// PARAM slots (those present in `scopeSlotToAbiParamIndex`): the parser
+// reserved their witness companion scope slot (recorded in paramReservations);
+// nothing to append — rely on the existing reserved slot.
 //
-// LOCAL slots (slotId >= paramCount): append a fresh trailing slot.
-// Bumps `func.scope.nextSlot` and pushes a `MaxonType.integer` filler.
+// LOCAL slots (absent from `scopeSlotToAbiParamIndex`): append a fresh trailing
+// slot. Bumps `func.scope.nextSlot` and pushes a `MaxonType.integer` filler.
 //
-// Stage K.X.C: `paramCount` here means the PARSER's user-visible param
-// count (`maxonParamTypes.count()`), not the Std-level ABI count that
-// `transferFuncs` augmented with implicit layout/witness slots. A local
-// interface slot whose id happens to land below the augmented count would
-// otherwise reuse a parser-emitted local slot as its "witness companion" —
-// e.g. `for item in self` allocates slot_3 (iter) + slot_4 (item) on top
-// of slot_0/1/2 params; once `paramCount += 1` for the layout shifts the
-// boundary to 4, slot_3 looks like a param and its companion lookup
-// returns slot_4 (the `item` binding), corrupting both the witness and
-// the loop variable at the first `current()` store.
+// slot<->abi decoupling: param classification is by map membership, not a
+// `slotId < paramCount` boundary. The old boundary test mis-classified a local
+// interface slot whose id happened to fall below the `transferFuncs`-augmented
+// ABI count as a param (e.g. a `for item in self` loop slot once an implicit
+// layout param shifted the boundary); membership in the parser-built map is
+// exact and immune to those later ABI augmentations.
 function extendSlotsForInterfaceWitnesses(func IrFunction)
 	let originalSlotCount = func.slotMaxonTypes.count()
 	if originalSlotCount == 0 'noSlots'
 		return
 	end 'noSlots'
-	let paramCount = func.maxonParamTypes.count()
+	// slot<->abi decoupling: a PARAM scope slot is a key in
+	// scopeSlotToAbiParamIndex (its witness companion was reserved by the
+	// parser and recorded in paramReservations). Only LOCAL interface slots
+	// (absent from the map) need a fresh trailing companion appended here.
 	for slotId in 0 upto originalSlotCount 'eachSlot'
 		let slotType = try func.slotMaxonTypes.get(slotId) otherwise continue
 		if not interfaceTypeIsFat(slotType) 'notInterface'
 			continue
 		end 'notInterface'
-		if slotId < paramCount 'isParam'
-			logTrace(LogCategory.ir, message: function() gives "extendSlotsForInterfaceWitnesses: param slot_{slotId} interface — using pre-allocated witness slot_{slotId + 1}")
+		if func.scopeSlotToAbiParamIndex.contains(slotId) 'isParam'
+			logTrace(LogCategory.ir, message: function() gives "extendSlotsForInterfaceWitnesses: param slot_{slotId} interface — using reserved witness companion")
 			continue
 		end 'isParam'
 		logTrace(LogCategory.ir, message: function() gives "extendSlotsForInterfaceWitnesses: local slot_{slotId} interface — appending witness companion at slot_{func.scope.nextSlot}")
@@ -257,28 +264,35 @@ function extendSlotsForInterfaceWitnesses(func IrFunction)
 	end 'eachSlot'
 end 'extendSlotsForInterfaceWitnesses'
 
-// C1.c/d: rebuild the per-function `interfaceWitnessSlots` side map by
-// walking `slotMaxonTypes` and pairing each interface-typed slot with
-// its witness companion. For PARAM slots the companion is the
-// immediate-next slot (parser pre-allocated `__witness_<name>`); for
-// LOCAL slots the companion is appended at the end by
-// `extendSlotsForInterfaceWitnesses`, walked here in iteration order.
-// `paramCount` is the parser-level count; see the matching comment on
-// `extendSlotsForInterfaceWitnesses` for why post-`transferFuncs`
-// `paramCount` would mis-classify a local slot as a param.
+// C1.c/d: rebuild the per-function `interfaceWitnessSlots` side map
+// (interface scope slot -> witness companion scope slot).
+//
+// slot<->abi decoupling: PARAM interface slots take their witness companion
+// from the parser's paramReservations (companionKind == witness), NOT slotId+1.
+// LOCAL interface slots (absent from scopeSlotToAbiParamIndex) get a trailing
+// companion appended by extendSlotsForInterfaceWitnesses, walked here in the
+// same iteration order so the ids line up.
 function buildInterfaceWitnessSlotMap(func IrFunction) returns InterfaceWitnessSlotMap
 	var map = InterfaceWitnessSlotMap.create()
 	let totalSlots = func.slotMaxonTypes.count()
 	if totalSlots == 0 'noSlots'
 		return map
 	end 'noSlots'
-	let paramCount = func.maxonParamTypes.count()
-	// Count only LOCAL interface slots — those are the ones that grew
-	// trailing companions. Param interface slots use their pre-allocated
-	// `slotId+1` and don't shift the original-slot boundary.
+
+	// Param interface slots: pair from reservations.
+	for ri in 0 upto func.paramReservations.count() 'eachReservation'
+		let reservation = try func.paramReservations.get(ri) otherwise continue
+		if reservation.hasWitnessCompanion() 'paramWitness'
+			map.upsert(reservation.paramSlot, value: reservation.companionSlot)
+		end 'paramWitness'
+	end 'eachReservation'
+
+	// Count LOCAL interface slots so the trailing-companion ids match what
+	// extendSlotsForInterfaceWitnesses appended (it appends one opaquePointer
+	// per local interface slot, at the end, in slot-id order).
 	var localInterfaceCount = 0 as VarSlot
 	for slotId in 0 upto totalSlots 'count'
-		if slotId < paramCount 'skipParam'
+		if func.scopeSlotToAbiParamIndex.contains(slotId) 'skipParam'
 			continue
 		end 'skipParam'
 		let slotType = try func.slotMaxonTypes.get(slotId) otherwise continue
@@ -289,16 +303,15 @@ function buildInterfaceWitnessSlotMap(func IrFunction) returns InterfaceWitnessS
 	let originalSlotCount = totalSlots - localInterfaceCount
 	var nextCompanion = originalSlotCount as VarSlot
 	for slotId in 0 upto originalSlotCount 'pair'
+		if func.scopeSlotToAbiParamIndex.contains(slotId) 'skipParamPair'
+			continue
+		end 'skipParamPair'
 		let slotType = try func.slotMaxonTypes.get(slotId) otherwise continue
 		if not interfaceTypeIsFat(slotType) 'notInterface'
 			continue
 		end 'notInterface'
-		if slotId < paramCount 'isParam'
-			map.upsert(slotId as VarSlot, value: (slotId + 1))
-		end 'isParam' else 'isLocal'
-			map.upsert(slotId as VarSlot, value: nextCompanion)
-			nextCompanion = nextCompanion + 1
-		end 'isLocal'
+		map.upsert(slotId as VarSlot, value: nextCompanion)
+		nextCompanion = nextCompanion + 1
 	end 'pair'
 	return map
 end 'buildInterfaceWitnessSlotMap'
@@ -1712,6 +1725,10 @@ end 'namedTypeIsManagedRef'
 typealias FnEnvMap = Map with (ValueId, ValueId)
 typealias SlotToValueIdMap = Map with (VarSlot, ValueId)
 
+// slot<->abi decoupling: function-typed PARAM scope slot -> env-companion
+// scope slot. See `paramSlotToEnvSlot`.
+typealias SlotToSlotMap = Map with (VarSlot, VarSlot)
+
 // C1.c: per-function map from an interface-typed slot id to its witness
 // companion slot id. Populated by `assignInterfaceWitnessSlots` after
 // `collectSlotMaxonTypes` allocates fresh trailing slots for each
@@ -1878,6 +1895,16 @@ type MaxonToStdLowering
 	// Read at every `indirectCall` lowering site to recover the env to
 	// pass alongside the callee. Reset per function in `lower()`.
 	var fnEnvVarNames as FnEnvMap
+	// slot<->abi decoupling: per-function map from a function-typed PARAM's
+	// scope slot id to its env-companion's scope slot id. Kept SEPARATE from
+	// `fnEnvVarNames` (which is ValueId-keyed) because after the slot<->abi
+	// decoupling a param scope slot id no longer equals a ValueId, so storing
+	// it in the ValueId-keyed map would collide with a real ValueId entry (the
+	// same hazard documented on `closureSlotToEnvValueId`). Populated by
+	// `seedParams`; read by `lowerVarLoad` for param-slot loads. Both keys and
+	// values are scope slot ids, used directly as `loadSlot` targets. Reset
+	// per function in `lower()`.
+	var paramSlotToEnvSlot as SlotToSlotMap
 	// Stage E (closures): per-function map from a LOCAL SLOT id to the
 	// env's SSA ValueId, populated when a `varDecl`/`varStore` writes a
 	// function-typed value whose env was already bound in `fnEnvVarNames`.
@@ -1968,6 +1995,7 @@ type MaxonToStdLowering
 			slotIdsScratch: ValueIdArray.create(),
 			slotFilledScratch: BoolArray.create(),
 			fnEnvVarNames: FnEnvMap.create(),
+			paramSlotToEnvSlot: SlotToSlotMap.create(),
 			closureSlotToEnvValueId: SlotToValueIdMap.create(),
 			liftedEnvValueId: 0,
 			implicitLayoutValueId: 0,
@@ -2263,6 +2291,7 @@ type MaxonToStdLowering
 			// default and overwritten below if the function's last param
 			// is a synthetic `__env` (closure with captures).
 			self.fnEnvVarNames = FnEnvMap.create()
+			self.paramSlotToEnvSlot = SlotToSlotMap.create()
 			self.closureSlotToEnvValueId = SlotToValueIdMap.create()
 			self.liftedEnvValueId = 0
 			self.implicitLayoutValueId = 0
@@ -2303,24 +2332,28 @@ type MaxonToStdLowering
 			for pIdx in 0 upto srcFunc.maxonParamTypes.count() 'seedParams'
 				let pType = try srcFunc.maxonParamTypes.get(pIdx) otherwise MaxonType.integer
 				self.setValueType(pIdx, t: pType)
-				// Stage E (closures): pair every function-typed param at
-				// slot i with its env-pointer at slot i+1. The Std-level
-				// param ABI sees them as two consecutive i64 slots; the
-				// lowering's `indirectCall` site reads the env back via
-				// `fnEnvVarNames`.
+				// Param companion pairing. After buildAbiParamMaps, maxonParamTypes is the
+				// ABI vector with each companion inserted immediately after its param, so
+				// pIdx / pIdx+1 here are ABI indices (== ValueIds, since ValueIds restart
+				// at paramCount). interfaceWitnessValueIds is ValueId-keyed, so its pIdx ->
+				// pIdx+1 pairing stays in ABI/ValueId space. fnEnvVarNames, however, is read
+				// in lowerVarLoad keyed by the producer varLoad's SCOPE slot id (and its
+				// value is used as a loadSlot scope slot), so its key/value must be the
+				// param's and companion's SCOPE slots — translated from the ABI index via
+				// abiParamIndexToScopeSlot. This is the slot<->abi decoupling: the ABI
+				// vector still interleaves (param, companion), but scope slot ids no longer
+				// equal ABI indices.
 				if isFunctionMaxonType(pType) 'pairEnv'
 					let envParamIdx = pIdx + 1
-					if envParamIdx < srcFunc.maxonParamTypes.count() 'inRange'
-						self.fnEnvVarNames.upsert(pIdx, value: envParamIdx)
+					if envParamIdx < srcFunc.abiParamIndexToScopeSlot.count() 'inRange'
+						let paramScopeSlot = try srcFunc.abiParamIndexToScopeSlot.get(pIdx) otherwise panic("seedParams: abiParamIndexToScopeSlot.get OOB at {pIdx} for fn-param in {srcFunc.name}")
+						let envScopeSlot = try srcFunc.abiParamIndexToScopeSlot.get(envParamIdx) otherwise panic("seedParams: abiParamIndexToScopeSlot.get OOB at {envParamIdx} for env companion in {srcFunc.name}")
+						self.paramSlotToEnvSlot.upsert(paramScopeSlot, value: envScopeSlot)
 					end 'inRange'
 				end 'pairEnv'
-				// C1.d: interface-typed param ABI is (value, witness). Pair
-				// the value ValueId with the next ValueId so a downstream
-				// dispatch site that references the param value directly
-				// (not through a varLoad) can recover the witness via
-				// `interfaceWitnessValueIds`. The varLoad path also seeds
-				// the loaded ValueId — both pairings coexist for the same
-				// underlying slot.
+				// C1.d: interface-typed param ABI is (value, witness). The dispatch-by-
+				// ValueId path keys interfaceWitnessValueIds by ValueId == ABI index, so
+				// pIdx -> pIdx+1 is correct here without translation.
 				if interfaceTypeIsFat(pType) 'pairWitness'
 					let witnessParamIdx = pIdx + 1
 					if witnessParamIdx < srcFunc.maxonParamTypes.count() 'inRange'
@@ -3526,19 +3559,20 @@ type MaxonToStdLowering
 		// var copies, struct-field stores, etc. — every load resolves to
 		// a fresh env binding rooted at the original param.
 		if isFunctionMaxonType(slotType) 'pairEnv'
-			// The 'hasEnv' lookup is only valid for PARAM slots, where seedParams
-			// upserted `fnEnvVarNames[paramSlotId] = envParamSlotId` (the param
-			// index doubles as both slot id and value id, so the as-VarSlot cast
-			// is safe). For LOCAL slots that hold a function value flowed in
-			// from a `closureCreate` or `functionRef`, the closureSlotToEnvValueId
-			// side-map records the env's SSA ValueId (no slot involved) — read
-			// from there and just pair `resultId → envValueId` so the
-			// indirect-call site sees the same env without a spurious loadSlot.
-			let paramCount = self.currentMaxonFunc.maxonParamTypes.count()
-			if slotId < paramCount 'paramSlot'
-				if let envSlot = try self.fnEnvVarNames.get(slotId) 'paramHasEnv'
+			// slot<->abi decoupling: a PARAM scope slot is a key in
+			// scopeSlotToAbiParamIndex (body locals are absent), and its
+			// env-companion scope slot is recorded in `paramSlotToEnvSlot`
+			// (scope-slot keyed — kept SEPARATE from the ValueId-keyed
+			// fnEnvVarNames to avoid key-space collisions). Load the env from
+			// that companion slot and bind (resultId -> envLoadId) into
+			// fnEnvVarNames (ValueId-keyed) for the indirect-call site. For
+			// LOCAL slots holding a function value flowed in from a
+			// closureCreate / functionRef, closureSlotToEnvValueId records the
+			// env's SSA ValueId — reuse it without a loadSlot.
+			if self.currentMaxonFunc.scopeSlotToAbiParamIndex.contains(slotId) 'paramSlot'
+				if let envSlot = try self.paramSlotToEnvSlot.get(slotId) 'paramHasEnv'
 					let envLoadId = allocValueId(self.funcIdRef)
-					self.stdModule.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.loadSlot(envLoadId, slotId: envSlot as VarSlot)))
+					self.stdModule.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.loadSlot(envLoadId, slotId: envSlot)))
 					self.fnEnvVarNames.upsert(resultId, value: envLoadId)
 				end 'paramHasEnv' else 'paramNoEnv'
 					let envZeroId = self.emitConstI64(0, dstBlock: dstBlock)
@@ -6917,7 +6951,15 @@ type MaxonToStdLowering
 			let v = try self.slotIdsScratch.get(i) otherwise panic("invariant: slotIdsScratch.get OOB at {i} (size {userParamCount})")
 			result.push(v)
 			let paramType = try signature.paramTypes.get(i + paramStartIndex) otherwise MaxonType.integer
-			if isFunctionMaxonType(paramType) 'expandEnv'
+			// slot<->abi decoupling: the callee's ABI (built by buildAbiParamMaps
+			// / the monomorphizer) inserts an env companion for any param that
+			// RESOLVES to a function type — including a `named(alias)` that chases
+			// to one. The caller's arg expansion MUST use the same resolution, or
+			// it pushes one fewer arg than the callee declares (a stale
+			// `isFunctionMaxonType(named(alias))` returns false) and every
+			// subsequent arg/register desyncs. Chase the alias before deciding.
+			let chasedParamType = chaseTypealiasToFunctionType(self.project, t: paramType)
+			if isFunctionMaxonType(chasedParamType) 'expandEnv'
 				// Fallback path: when the parser-side capture analysis didn't
 				// tag this value with an env binding, treat it as a free-function
 				// reference (env=0). Materialize a real `const 0` op rather
@@ -6933,8 +6975,9 @@ type MaxonToStdLowering
 			// comes from `interfaceWitnessValueIds` when the arg is itself
 			// interface-typed (forward of an existing fat pointer); when
 			// the arg is concrete, materialize the witness via the
-			// (concreteType, interfaceName) registry lookup.
-			if interfaceTypeIsFat(paramType) 'expandWitness'
+			// (concreteType, interfaceName) registry lookup. Use the resolved
+			// type so an aliased interface param expands consistently too.
+			if interfaceTypeIsFat(paramType) or interfaceTypeIsFat(chasedParamType) 'expandWitness'
 				let witnessForArg = self.witnessForInterfaceArg(v, paramType: paramType, dstBlock: dstBlock)
 				result.push(witnessForArg)
 			end 'expandWitness'

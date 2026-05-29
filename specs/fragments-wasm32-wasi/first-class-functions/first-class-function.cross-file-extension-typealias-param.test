@@ -1,0 +1,68 @@
+// Test: first-class-function.cross-file-extension-typealias-param
+// --- file: aaa_alias.maxon
+module extension Sorter
+	typealias Comparator = function(Element, Element) returns Element
+end 'Sorter'
+
+// --- file: zzz_consumer.maxon
+typealias Integer = int(i64.min to i64.max)
+
+module type Sorter uses Element
+	module var stub as Integer
+
+	module static function create() returns Self
+		return Self{stub: 0}
+	end 'create'
+
+	module function compareAndSwap(a Element, b Element, cmp Comparator) returns Element
+		return cmp(a, b)
+	end 'compareAndSwap'
+end 'Sorter'
+
+// --- file: main.maxon
+typealias Number = int(i64.min to i64.max)
+typealias NumberSorter = Sorter with Number
+
+function pickLarger(a Number, b Number) returns Number
+	if a > b 'aBig'
+		return a
+	end 'aBig'
+	return b
+end 'pickLarger'
+
+function main() returns ExitCode
+	var s = NumberSorter.create()
+	let winner = s.compareAndSwap(10, b: 25, cmp: pickLarger)
+	if winner == 25 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %15 = mir.mov_imm 8 : i64
+    %16 = mir.call @mrt_alloc(%15)
+    %17 = mir.mov_imm 0 : i64
+    mir.store %17, %16, 0 width: qword
+    %3 = mir.mov_imm 10 : i64
+    %4 = mir.mov_imm 25 : i64
+    %5 = mir.func_addr @__fnref_pickLarger
+    %18 = mir.mov_imm 0 : i64
+    %19 = mir.indirect_call %5(%3, %4, %18)
+    %11 = mir.mov_imm 25 : i64
+    %12 = mir.cmp eq, %19, %11
+    mir.cond_br %12 [then: check_0(), else: check_0.after()]
+  check_0:
+    %13 = mir.mov_imm 0 : i64
+    mir.ret %13
+  check_0.after:
+    %14 = mir.mov_imm 1 : i64
+    mir.ret %14
+  }
+}
+---

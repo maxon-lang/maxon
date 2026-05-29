@@ -342,3 +342,72 @@ end 'main'
 ```exitcode
 42
 ```
+
+<!-- test: first-class-function.cross-file-extension-typealias-param -->
+A function-typed parameter must work even when its typealias is declared
+inside an `extension` block in a SEPARATE file that the loader hasn't reached
+yet. The stdlib loader walks `stdlib/` in whatever order the OS returns from
+`Directory.list`, so the consumer file may parse before the file that
+declares the typealias — exactly the shape that bit
+`helpers/sort/smallSort.maxon` (which uses `cmp SortComparator`) when
+`helpers/sort/insertionSort.maxon` (which declares `SortComparator` inside
+`extension Array`) parses later.
+
+The original parser bug: `parseFunctionParametersInner` eagerly stamped the
+parameter type as `MaxonType.named("SortComparator")` at parse time because
+the inner typealias wasn't yet drained into `unresolvedStructTypes["Array"]
+.innerAliases`. Downstream `slotArgsForCall` and the indirect-call lowering
+both consult that stamped type — once it's wrong, the function's ABI shape
+is permanently wrong, the call site fails the H.2 `validateIndirectCallLabels`
+check with E3005, and codegen rejects the call.
+
+The fix should keep the parameter type opaque until after every file in the
+project has been parsed, then let TypeResolution drain the typealias and
+re-stamp the resolved function type. The parser should not be type-aware at
+parameter-declaration time.
+```maxon
+// --- file: aaa_alias.maxon
+module extension Sorter
+	typealias Comparator = function(Element, Element) returns Element
+end 'Sorter'
+
+// --- file: zzz_consumer.maxon
+typealias Integer = int(i64.min to i64.max)
+
+module type Sorter uses Element
+	module var stub as Integer
+
+	module static function create() returns Self
+		return Self{stub: 0}
+	end 'create'
+
+	module function compareAndSwap(a Element, b Element, cmp Comparator) returns Element
+		return cmp(a, b)
+	end 'compareAndSwap'
+end 'Sorter'
+
+// --- file: main.maxon
+typealias Number = int(i64.min to i64.max)
+typealias NumberSorter = Sorter with Number
+
+function pickLarger(a Number, b Number) returns Number
+	if a > b 'aBig'
+		return a
+	end 'aBig'
+	return b
+end 'pickLarger'
+
+function main() returns ExitCode
+	var s = NumberSorter.create()
+	let winner = s.compareAndSwap(10, b: 25, cmp: pickLarger)
+	if winner == 25 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+

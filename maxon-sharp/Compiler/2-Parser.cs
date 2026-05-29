@@ -4139,6 +4139,14 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       // Function-type alias: `typealias UnaryOp = function(Integer) returns Integer`.
       if (Check(TokenType.Function) && PeekNext().Type == TokenType.LeftParen) {
         _typeRegistry[aliasName] = ParseTypeRef();
+        // Record the alias in _typeAliasSources so CopyTypeAliasesToModule emits a
+        // TypeAliasInfo for it (keyed off _typeAliasSources). Without this entry the
+        // alias never reaches module.TypeAliasSources and so never propagates to other
+        // files via SeedFromModule — which is what kept an inner function-type alias
+        // declared inside an `extension` block invisible to a consumer file. The
+        // resolved IrFunctionType lives in module.TypeDefs[aliasName] (copied from
+        // _typeRegistry), so the source name is the alias itself.
+        _typeAliasSources[aliasName] = aliasName;
         return;
       }
 

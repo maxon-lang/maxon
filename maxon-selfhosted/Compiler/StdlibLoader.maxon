@@ -113,6 +113,14 @@ function ensureStdlibSandboxParsed(target Target)
 	// it had been merged into `allModule`; we now apply each rename here so
 	// the unified IrFunction.name matches the project-level mangled key.
 	applyPendingFuncRenames(sandbox, allModule: module)
+	// G.2: now that every stdlib file is parsed, the parser's optimistic
+	// `<TypeName>.fromRawValue` / `<TypeName>.fromName` rewrite gets
+	// validated against the now-fully-populated enum tables. Bare-case
+	// enums get their per-enum lookup helper synthesized into `module`;
+	// struct- / alt-backed enums and associated-value unions get E3034
+	// diagnostics; non-enum receivers get the callee rewritten back to
+	// the natural form so the standard unknown-callee diagnostic fires.
+	validateEnumLookupCalls(sandbox, allModule: module)
 	stdlibParsedModuleArr.push(StdlibParseSnapshot.create(sandbox, module: module))
 end 'ensureStdlibSandboxParsed'
 
@@ -311,102 +319,6 @@ export function resetStdlibLoaderState()
 	cachedBuiltinDictionaryLiteralTypeName = ByteArray.create()
 end 'resetStdlibLoaderState'
 
-// The self-hosted compiler isn't yet feature-complete enough to compile every
-// file under `stdlib/` — many use language features (generics, interface
-// dispatch, error handling) that are still unimplemented. We start from a
-// curated whitelist and grow it as more features come online. Each entry is a
-// path relative to the project root (i.e. the directory that contains
-// `stdlib/`).
-let stdlibWhitelist = [
-	"stdlib/Internals.maxon",
-	"stdlib/Builtins.maxon",
-	"stdlib/Interfaces.maxon",
-	"stdlib/helpers/itertools/withIterator.maxon",
-	"stdlib/Math.maxon",
-	"stdlib/Range.maxon",
-	"stdlib/Array.maxon",
-	"stdlib/helpers/sort/insertionSort.maxon",
-	"stdlib/helpers/sort/smallSort.maxon",
-	"stdlib/helpers/sort/pdqsort.maxon",
-	// Phase C: List depends on Array (throws ArrayError on out-of-bounds /
-	// empty queries), Interfaces (Iterable / Cloneable / IterationError),
-	// and the `__ManagedList` / `__ManagedListNode` / `__ManagedListError`
-	// types wired via `registerManagedListType`. Positioned right after
-	// Array.maxon so ArrayError is in scope when List.maxon is parsed.
-	"stdlib/List.maxon",
-	"stdlib/PrimitiveExtensions.maxon",
-	"stdlib/CharacterSet.maxon",
-	"stdlib/Character.maxon",
-	"stdlib/String.maxon",
-	"stdlib/Print.maxon",
-	"stdlib/helpers/string/utf8.maxon",
-	"stdlib/helpers/string/utf16.maxon",
-	"stdlib/helpers/string/hash.maxon",
-	"stdlib/helpers/string/unicodeCategory.maxon",
-	"stdlib/helpers/string/grapheme.maxon",
-	"stdlib/helpers/string/views.maxon",
-	"stdlib/Map.maxon",
-	"stdlib/Set.maxon",
-	"stdlib/Vector.maxon",
-	"stdlib/Clock.maxon",
-	"stdlib/CommandLine.maxon",
-	"stdlib/Process.maxon",
-	"stdlib/Sleep.maxon",
-	"stdlib/Subprocess.maxon",
-	// Phase D: TcpClient depends on String (host/data parameters) and the
-	// `__ManagedSocket` / `__ManagedSocketError` types wired via
-	// `registerManagedSocketType`. The `mrt_managed_socket_*` runtime
-	// helpers ship as sentinel-erroring stubs in runtime.std until per-
-	// target socket implementations land; tcp-client spec tests are not
-	// on the self-hosted spec whitelist yet, so the stub behavior doesn't
-	// affect the green baseline.
-	"stdlib/TcpClient.maxon",
-	// Phase E: HttpClient depends on TcpClient (for raw socket I/O) and on
-	// `stdlib/helpers/http/httpHelpers.maxon` for request-building /
-	// response-parsing helpers. The two files form a mutual reference pair
-	// (httpHelpers references HttpClient's nominal types — HttpMethod /
-	// HttpRequest / HttpResponse / HttpHeaders / StatusCode — and
-	// HttpClient calls `httpBuildRequest` / `httpParseResponse`).
-	// HttpClient.maxon is listed FIRST so that StatusCode (an int-backed
-	// enum) is registered in `project.unresolvedEnums` before
-	// httpHelpers.maxon parses its `StatusCode.fromRawValue(...)` call —
-	// the parser's `.fromRawValue` rewrite (see Parser.maxon's
-	// `prefixIsEnumName` guard around line 10727) only fires when the
-	// receiver name is already known to be an enum. The reverse direction
-	// (HttpClient's plain calls to `httpBuildRequest` /
-	// `httpParseResponse`) resolves via the regular forward-function
-	// machinery after both files are parsed.
-	"stdlib/HttpClient.maxon",
-	"stdlib/helpers/http/httpHelpers.maxon",
-	// Phase 15c: FilePath must come before File/Directory — both depend on
-	// it (File.readText takes a FilePath; Directory.list returns a
-	// FilePathArray). The minimal FilePath/FilePathError stub previously
-	// in `stdlibBootstrapSourceForTarget` has been removed; the real
-	// `stdlib/FilePath.maxon` supersedes it.
-	//
-	// URL must come before FilePath: `FilePath.from` calls `URL.parse`
-	// to interpret `file://...` URIs. The url helpers (`urlIsAlpha`,
-	// `urlValidatePercentEncoding`, etc.) come before URL.maxon since
-	// URL.parse uses them.
-	"stdlib/helpers/url/urlHelpers.maxon",
-	"stdlib/URL.maxon",
-	"stdlib/FilePath.maxon",
-	"stdlib/File.maxon",
-	"stdlib/Directory.maxon",
-	// Self-contained leaf modules (no dependencies beyond Character / Array /
-	// __Builtins). Each was vetted to use only constructs already exercised
-	// by the whitelisted set; if a future audit finds an unsupported
-	// construct in one of these, panic-during-parse will surface it cleanly.
-	"stdlib/Ascii.maxon",
-	"stdlib/Build.maxon",
-	"stdlib/Console.maxon",
-	"stdlib/Json.maxon",
-	"stdlib/PrintError.maxon",
-	"stdlib/Sha256.maxon",
-	"stdlib/Unicode.maxon",
-	"stdlib/Log.maxon",
-]
-
 export function findStdlibPath() returns FilePath
 	var dir = Directory.currentPath()
 	for _ in 0 upto 10 'search'
@@ -431,27 +343,76 @@ function findStdlibProjectRoot() returns FilePath
 	return try stdlibPath.parent() otherwise FilePath from ""
 end 'findStdlibProjectRoot'
 
+// Recursively collect every `.maxon` file under `stdlib/`. Load order is
+// whatever order the filesystem returns — the type / conformance resolver
+// is order-independent, so the cache build does not depend on which file
+// parses first. Files individually skipped via `--skip-stdlib-fn=NAME`
+// are filtered here (Phase 0b runner-side workaround for the register
+// allocator); the rest are returned for parsing.
 function collectStdlibFiles() returns FilePathArray
 	var files = FilePathArray.create()
-	let root = findStdlibProjectRoot()
-	if root.isEmpty() 'noRoot'
+	let stdlibPath = findStdlibPath()
+	if stdlibPath.isEmpty() 'noStdlib'
 		return files
-	end 'noRoot'
-	for relPath in stdlibWhitelist 'eachWhitelisted'
-		if isStdlibRelativePathSkipped(relPath) 'skipped'
-			// Phase 0b: `--skip-stdlib-fn` is dropping this file from the
-			// cache build to keep the spec suite runnable while the
-			// register allocator is being fixed.
-			continue
-		end 'skipped'
-		files.push(root.join(relPath))
-	end 'eachWhitelisted'
+	end 'noStdlib'
+	collectMaxonFilesUnder(stdlibPath, into: files)
 	return files
 end 'collectStdlibFiles'
 
-// Cache key for the currently-discoverable stdlib: whitelist file contents
-// plus runtime.std (the latter affects compiled output, so the on-disk
-// cache must invalidate when runtime.std changes).
+// Walk `dir` recursively and push every `.maxon` file into `out`. Honours
+// the `--skip-stdlib-fn=NAME[,...]` runtime opt-in by skipping files whose
+// basename (with `.maxon` stripped) matches a skipped name. Hidden entries
+// (`.something`) and non-existent / unreadable directories are silently
+// ignored — the stdlib tree is trusted content, so a missing subdirectory
+// is treated as "nothing to add" rather than a fatal error.
+function collectMaxonFilesUnder(dir FilePath, into FilePathArray)
+	let entries = try Directory.list(dir) otherwise return
+	let projectRoot = findStdlibProjectRoot()
+	for entry in entries 'eachEntry'
+		if Directory.exists(entry) 'isDir'
+			collectMaxonFilesUnder(entry, into: into)
+		end 'isDir' else 'isFile'
+			let name = entry.filename()
+			if not name.endsWith(".maxon") 'notMaxon'
+				continue
+			end 'notMaxon'
+			// `isStdlibRelativePathSkipped` matches case-insensitively on the
+			// basename minus `.maxon`, so we pass the entry's relative path
+			// for symmetry with the original whitelist-driven shape.
+			let rel = relativePathString(entry, root: projectRoot)
+			if isStdlibRelativePathSkipped(rel) 'skipped'
+				continue
+			end 'skipped'
+			into.push(entry)
+		end 'isFile'
+	end 'eachEntry'
+end 'collectMaxonFilesUnder'
+
+// Render `path` relative to `root` with forward slashes. Used by
+// `collectMaxonFilesUnder` so the value passed to `isStdlibRelativePathSkipped`
+// matches what the old whitelist-driven path produced (e.g.
+// "stdlib/helpers/string/utf8.maxon" rather than the absolute system path).
+function relativePathString(path FilePath, root FilePath) returns String
+	let pathStr = path.toString()
+	let rootStr = root.toString()
+	if rootStr.isEmpty() 'noRoot'
+		return pathStr
+	end 'noRoot'
+	let prefix = "{rootStr}{FilePath.separator()}"
+	if not pathStr.startsWith(prefix) 'noPrefix'
+		return pathStr
+	end 'noPrefix'
+	let prefixLen = prefix.byteLength()
+	let suffixManaged = try pathStr.managed.slice(prefixLen, pathStr.byteLength()) otherwise return pathStr
+	let suffix = String.init(suffixManaged)
+	// Normalise path separators to forward slashes so the value matches the
+	// form the legacy whitelist used ("stdlib/X.maxon" on every OS).
+	return suffix.replace(FilePath.separator(), with: "/")
+end 'relativePathString'
+
+// Cache key for the currently-discoverable stdlib: every file the recursive
+// walk surfaces plus runtime.std (the latter affects compiled output, so
+// the on-disk cache must invalidate when runtime.std changes).
 function currentStdlibChecksum(_ Target) returns CacheChecksum
 	return computeStdlibChecksum(collectStdlibFiles(), runtimePath: findRuntimePath())
 end 'currentStdlibChecksum'
@@ -644,7 +605,13 @@ export function getStdlibModule(project Project) returns MaxonModule
 	// so the rename was queued; apply it now before the cache build keys
 	// off `.name`.
 	applyPendingFuncRenames(project, allModule: allModule)
-
+	// G.2: validate every `<TypeName>.fromRawValue(...)` /
+	// `<TypeName>.fromName(...)` call the parser optimistically rewrote
+	// to `__enum_<TypeName>_fromRawValue` / `__enum_<TypeName>_fromName`.
+	// See `validateEnumLookupCalls` for the synth-/diagnose-/restore
+	// contract; this must run before the cache build because codegen
+	// would otherwise panic on an unrewritten callee.
+	validateEnumLookupCalls(project, allModule: allModule)
 	cachedStdlibModule = allModule
 	// J.4e: do NOT stash the just-parsed module here. The `allModule` we
 	// just produced is about to be mutated in-place by
@@ -981,6 +948,10 @@ function loadCacheForTarget(project Project)
 	// in `getStdlibModule`). Same rationale: the per-file parser rekey can't
 	// reach the merged IrFunction in `allModule`.
 	applyPendingFuncRenames(project, allModule: allModule)
+	// G.2: same post-parse validation as in `getStdlibModule`. See there
+	// for the contract; required here too because `loadCacheForTarget`
+	// reparses from source on a per-target cache miss.
+	validateEnumLookupCalls(project, allModule: allModule)
 
 	logInfo(LogCategory.compiler, message: function() gives "Stdlib cache miss for {targetToString(project.target)}: building")
 	buildAndWriteStdlibCache(project, allModule: allModule, cachePath: cachePath, contentChecksum: contentChecksum)

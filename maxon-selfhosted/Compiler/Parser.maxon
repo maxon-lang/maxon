@@ -217,6 +217,14 @@ export type Parser
 	var paramLocations as ParamLocationArray
 	var localVarLocations as ParamLocationArray
 	var referencedVars as ReferencedVarSet
+	// Per-declared-param ABI reservation markers for the function currently
+	// being parsed: each entry records the param's scope slot and any
+	// companion scope slot the parser reserved (for a `named(alias)` param
+	// that MIGHT resolve to a function/interface type). TypeResolution's
+	// `buildAbiParamMap` consumes these to build the ABI vector + slot<->abi
+	// maps once the alias resolves. Reset per function in `resetSymbolTable`;
+	// handed to the IrFunction at `IrFunction.create` time in parseFunction.
+	var paramReservations as ParamReservationArray
 	// Per-function counter for minting synthetic intermediate names (`$t0`,
 	// `$t1`, …). Reset to 0 at the top of each function parse. Each synthetic
 	// name is the ASCII byte sequence of `$t` + the integer, wrapped in a
@@ -368,7 +376,7 @@ export type Parser
 		// before any expression is parsed.
 		let placeholderFunc = IrFunction.create("", maxonReturnType: MaxonReturnType.void, paramCount: 0, maxonParamTypes: MaxonTypeArray.create(), returnLine: 0)
 		let placeholderBlock = IrBlock.create(0, label: "")
-		return Self{project: project, tokens: tokens, cursor: cursor, filePath: filePath, rootPath: rootPath, namespace: namespace, currentTypeName: "", currentTypeParams: StringArray.create(), currentTypeConformances: ConformanceArray.create(), currentTypeVisibility: Visibility.file, currentEnumVisibility: Visibility.file, scope: Scope.create(), loopStack: LoopContextArray.create(), matchStack: MatchContextArray.create(), abortBody: false, bodyStmtParsed: false, paramLocations: ParamLocationArray.create(), localVarLocations: ParamLocationArray.create(), referencedVars: ReferencedVarSet.create(), synthNameCounter: 0, paramDefaultHelperCounter: 0, synthNameCache: ByteArrayArray.create(), currentBlock: placeholderBlock, currentFunc: placeholderFunc, module: MaxonModule.create(), consumeExpectedDisplay: "more input", inMatchArmBody: false, inClosure: false, inFunctionParam: false, inForInHeader: false, atTopOfTypeAliasRhs: false, inIfCondition: false, currentInnerAliases: InnerAliasMap.create(), closureOuterScope: Scope.create(), closureCaptures: CaptureInfoArray.create(), closureOuterReferencedVars: ReferencedVarSet.create(), moduleInitName: "", moduleInitFunc: placeholderFunc, moduleInitBlock: placeholderBlock, moduleInitSynthCounter: 0, localTypealiases: LocalTypealiasArray.create(), usedTypeAliases: ReferencedVarSet.create(), letStructBackedEnumCases: StructBackedEnumCaseBindingMap.create()}
+		return Self{project: project, tokens: tokens, cursor: cursor, filePath: filePath, rootPath: rootPath, namespace: namespace, currentTypeName: "", currentTypeParams: StringArray.create(), currentTypeConformances: ConformanceArray.create(), currentTypeVisibility: Visibility.file, currentEnumVisibility: Visibility.file, scope: Scope.create(), loopStack: LoopContextArray.create(), matchStack: MatchContextArray.create(), abortBody: false, bodyStmtParsed: false, paramLocations: ParamLocationArray.create(), localVarLocations: ParamLocationArray.create(), referencedVars: ReferencedVarSet.create(), paramReservations: ParamReservationArray.create(), synthNameCounter: 0, paramDefaultHelperCounter: 0, synthNameCache: ByteArrayArray.create(), currentBlock: placeholderBlock, currentFunc: placeholderFunc, module: MaxonModule.create(), consumeExpectedDisplay: "more input", inMatchArmBody: false, inClosure: false, inFunctionParam: false, inForInHeader: false, atTopOfTypeAliasRhs: false, inIfCondition: false, currentInnerAliases: InnerAliasMap.create(), closureOuterScope: Scope.create(), closureCaptures: CaptureInfoArray.create(), closureOuterReferencedVars: ReferencedVarSet.create(), moduleInitName: "", moduleInitFunc: placeholderFunc, moduleInitBlock: placeholderBlock, moduleInitSynthCounter: 0, localTypealiases: LocalTypealiasArray.create(), usedTypeAliases: ReferencedVarSet.create(), letStructBackedEnumCases: StructBackedEnumCaseBindingMap.create()}
 	end 'create'
 
 	export function parseModule() returns MaxonModule throws ParserError
@@ -867,43 +875,43 @@ export type Parser
 			end 'recovered'
 
 			// Define the parameter as a variable so it's accessible in the body
-			_ = defineVariableWithType(paramNameToken.value, varType: paramMaxonType)
+			let paramSlot = defineVariableWithType(paramNameToken.value, varType: paramMaxonType)
 			paramLocations.push(ParamLocation.create(paramNameToken.value, line: paramNameToken.line, column: paramNameToken.column))
 			paramTypes.push(paramMaxonType)
 			paramNames.push(paramNameToken.value)
 			paramDefaults.push(try parseOptionalParamDefault(paramMaxonType))
 			paramCount = paramCount + 1
-			// Stage E (closures): a function-typed parameter `f UnaryOp`
-			// expands at the ABI level to a (fn-pointer, env-pointer) pair.
-			// Allocate the hidden env slot in the parser's scope here — that
-			// way the slot-id counter and any follow-on `defineVariableWithType`
-			// (later params, locals in the body) automatically pick up the
-			// +1 offset. The env slot has a reserved `__env_<paramName>`
-			// name that user code can't shadow (`__`-prefix is rejected by
-			// `checkReservedDeclName`). The matching paramTypes / paramNames
-			// entry is appended later by parseFunction's caller-side
-			// expansion step so the user-facing FuncSignature stays at the
-			// declared param count.
+
+			// ABI companion reservation (collect-only — NO type decision here).
+			// A function-typed param ABI-expands to a (fn-pointer, env-pointer)
+			// pair; an interface-fat param to a (value, witness) pair. Whether a
+			// param needs a companion depends on its RESOLVED type, which the
+			// parser cannot know for a `named(alias)` declared in an un-parsed
+			// file. Inline `function(...)` types are illegal in param position
+			// (parseTypeRef enforces this), so the only undecidable case is a
+			// `named(alias)` param.
 			//
-			// The param type may be `MaxonType.named(alias)` referencing a
-			// function-type alias declared earlier in this same file — chase
-			// through pending typealiases so the env slot is still reserved
-			// even when the user writes `f UnaryOp` instead of an inline
-			// `function(T) returns R`. Cross-file aliases remain invisible at
-			// parse time and fall back to the later monomorphization passes.
-			let chasedParam = parserChaseFnAlias(paramMaxonType)
-			if isFunctionMaxonType(chasedParam) 'expandEnv'
-				let envName = "__env_{paramNameToken.value}"
-				_ = scope.declare(envName, varType: MaxonType.opaquePointer, mutable: true)
-			end 'expandEnv'
-			// C1.d: an interface-typed param ABI-expands to (value,
-			// witness). Reserve a hidden slot for the witness here so
-			// the next param (or local) lands at slot+2, keeping
-			// VarSlot ids contiguous with `abiParamTypes` indexing.
-			if interfaceTypeIsFat(paramMaxonType) 'expandWitness'
-				let witnessName = "__witness_{paramNameToken.value}"
-				_ = scope.declare(witnessName, varType: MaxonType.opaquePointer, mutable: true)
-			end 'expandWitness'
+			// So: reserve ONE companion scope slot for any param that COULD
+			// resolve to a function or interface type — `named(alias)` (the
+			// undecidable cross-file case), or an already-resolved `function`/
+			// `interface` arm (a same-file alias that `parseTypeRef` chased to
+			// its function/interface shape, e.g. an inner typealias already
+			// merged into the enclosing type). Reserving advances the slot-id
+			// counter so later params and body locals keep stable ids; the
+			// reserved `__companion_<paramName>` name can't be shadowed
+			// (`__`-prefix). TypeResolution's `buildAbiParamMap` later inspects
+			// the resolved type and decides whether the slot becomes an env
+			// pointer, a witness pointer, or stays unused — only then is the ABI
+			// `maxonParamTypes` companion entry inserted. The parser does not
+			// touch the ABI vector: scope-slot numbering is the parser's job,
+			// ABI shape is TypeResolution's.
+			if paramTypeMayCarryCompanion(paramMaxonType) 'reserveCompanion'
+				let companionName = "__companion_{paramNameToken.value}"
+				let companionSlot = scope.declare(companionName, varType: MaxonType.opaquePointer, mutable: true)
+				paramReservations.push(ParamReservation.create(paramSlot, hasCompanion: true, companionSlot: companionSlot, companionKind: ParamCompanionKind.none))
+			end 'reserveCompanion' else 'noCompanion'
+				paramReservations.push(ParamReservation.create(paramSlot, hasCompanion: false, companionSlot: 0, companionKind: ParamCompanionKind.none))
+			end 'noCompanion'
 
 			if cursor.current().kind == TokenKind.rightParen 'endParams'
 				break
@@ -1350,21 +1358,26 @@ export type Parser
 		// enclosing type; lowerMaxonToStd resolves it to i64 (pointer width).
 		if isInstance 'addSelfParam'
 			let selfMaxonType = internMaxonType(project, name: typeName)
-			_ = defineVariableWithType("__self", varType: selfMaxonType)
+			let selfSlot = defineVariableWithType("__self", varType: selfMaxonType)
 			paramTypes.push(selfMaxonType)
 			paramNames.push("__self")
 			paramDefaults.push(ParamDefault.none)
 			paramCount = paramCount + 1
-			// C1.d: when the implicit `__self` is interface-typed (an extension
-			// method declared on an interface), the ABI expands to (value,
-			// witness). Reserve a hidden scope slot for the witness right after
-			// `__self` so subsequent param/local slot ids stay aligned with the
-			// expanded `abiParamTypes` indexing — without this, the first
-			// user-visible param shadows the witness slot and the body reads
-			// the witness pointer when it intends to read its first argument.
-			if interfaceTypeIsFat(selfMaxonType) 'expandSelfWitness'
-				_ = scope.declare("__witness___self", varType: MaxonType.opaquePointer, mutable: true)
-			end 'expandSelfWitness'
+			// C1.d: `__self`'s type is the ENCLOSING type, fully known at parse
+			// time (unlike a cross-file `named(alias)` user param), so the
+			// parser CAN decide its companion here without deferring. Only an
+			// interface-typed self (an extension method declared on an
+			// interface) is fat and needs a witness companion; a struct/
+			// primitive self needs none. Reserving a companion slot
+			// unconditionally would shift every subsequent param/local slot id
+			// for ALL methods, colliding with the implicit-layout param's
+			// slot — so reserve ONLY for the genuinely-fat interface-self case.
+			if interfaceTypeIsFat(selfMaxonType) 'fatSelf'
+				let selfWitnessSlot = scope.declare("__companion___self", varType: MaxonType.opaquePointer, mutable: true)
+				paramReservations.push(ParamReservation.create(selfSlot, hasCompanion: true, companionSlot: selfWitnessSlot, companionKind: ParamCompanionKind.witness))
+			end 'fatSelf' else 'thinSelf'
+				paramReservations.push(ParamReservation.create(selfSlot, hasCompanion: false, companionSlot: 0, companionKind: ParamCompanionKind.none))
+			end 'thinSelf'
 		end 'addSelfParam'
 
 		try parseFunctionParameters(paramCount, paramTypes: paramTypes, paramNames: paramNames, paramDefaults: paramDefaults)
@@ -1377,30 +1390,16 @@ export type Parser
 		// lands on `IrFunction.maxonParamTypes` and gives Std lowering
 		// the expanded ABI shape. parseFunctionParameters already
 		// allocated the env slot in `scope`, so slot ids here naturally
-		// align with `abiParamTypes` indexing.
-		var abiParamTypes = MaxonTypeArray.create()
-		for i in 0 upto paramTypes.count() 'expandAbi'
-			let pt = try paramTypes.get(i) otherwise panic("parseFunction: paramTypes.get OOB at {i} during ABI expansion")
-			abiParamTypes.push(pt)
-			// Chase through pending typealiases so a `named(alias)` resolving to
-			// a function type still gets its env-pointer slot. Same rationale as
-			// the scope-level allocation in parseFunctionParametersInner.
-			let chasedAbi = parserChaseFnAlias(pt)
-			if isFunctionMaxonType(chasedAbi) 'addEnv'
-				abiParamTypes.push(MaxonType.opaquePointer)
-			end 'addEnv'
-			// C1.d: an interface-typed param is a fat pointer (value,
-			// witness) — append the witness slot after the value slot so
-			// the Std-level paramCount and ABI vector both grow in
-			// lockstep. The matching parser scope slot for the witness is
-			// declared in parseFunctionParameters via a synthetic
-			// `__witness_<paramName>` so the witness slot has a stable
-			// VarSlot id that lowering can resolve via interfaceWitnessSlots.
-			if interfaceTypeIsFat(pt) 'addWitnessSlot'
-				abiParamTypes.push(MaxonType.opaquePointer)
-			end 'addWitnessSlot'
-		end 'expandAbi'
-		let abiParamCount = abiParamTypes.count()
+		// ABI param-vector expansion has MOVED to TypeResolution's
+		// buildAbiParamMap. The parser hands IrFunction the USER-FACING
+		// param types (no env/witness companions) plus the per-param
+		// paramReservations it collected; buildAbiParamMap resolves each
+		// named-alias param and, driven by those reservations, inserts
+		// companion ABI entries and builds the scope-slot<->abi-index maps
+		// once types are known. FuncSignature (registered below) uses the
+		// user-facing shape, so nothing downstream of the parser indexes
+		// the un-expanded maxonParamTypes positionally.
+		let abiParamCount = paramTypes.count()
 
 		let returnType = try parseOptionalReturnType()
 		// Capture the void-ness up front so we can release the `returnType`
@@ -1423,10 +1422,15 @@ export type Parser
 		// instead of throwing through to queryParseOps' generic EOF fallback.
 		_ = skipOptionalNewlines()
 
-		var func = IrFunction.create(qualifiedName, maxonReturnType: returnType, paramCount: abiParamCount, maxonParamTypes: abiParamTypes, returnLine: 0, throwsTypeName: throwsTypeName)
+		var func = IrFunction.create(qualifiedName, maxonReturnType: returnType, paramCount: abiParamCount, maxonParamTypes: paramTypes, returnLine: 0, throwsTypeName: throwsTypeName)
 		// Carry the source-file namespace forward so LowerMaxonToStd can
 		// resolve `CallContext.free` callees against `{namespace}.callee`
 		// even when the function's own name is bare (e.g. main entrypoint).
+		// Hand the parser's per-param ABI reservation markers to the
+		// IrFunction. TypeResolution.buildAbiParamMap consumes these to
+		// expand maxonParamTypes with env/witness companions and build the
+		// scope-slot<->abi-index maps once the param types resolve.
+		func.paramReservations = paramReservations
 		func.namespace = namespace
 		// Stamp visibility + declaring file so cross-file call resolution
 		// can filter via `isVisibleFrom` against the reader's path.
@@ -5229,28 +5233,6 @@ export type Parser
 		module.appendOp(targetBlock, op: MaxonOp.varDecl(bindingSlot, value: bindingValueName, slotType: bindingType, range: range))
 	end 'declareErrorBindingInBlock'
 
-	// Phase 9 Stage 5: true when at least one case on `enumName` carries a
-	// `= StructType{...}` / `= StructType.create(...)` backing literal. Used
-	// to suppress `.fromRawValue(...)` rewrite (the struct rawValue can't
-	// be reconstructed from an int) per `error.struct-backing-fromRawValue`.
-	function enumIsStructBacked(enumName String) returns bool
-		if let resolved = try project.enumTypes.get(enumName) 'isResolved'
-			for c in resolved.cases 'scan'
-				if not c.backingStructName.isEmpty() 'hit'
-					return true
-				end 'hit'
-			end 'scan'
-		end 'isResolved'
-		if let unresolved = try project.unresolvedEnums.get(enumName) 'isUnresolved'
-			for c in unresolved.cases 'scan2'
-				if not c.backingStructName.isEmpty() 'hit2'
-					return true
-				end 'hit2'
-			end 'scan2'
-		end 'isUnresolved'
-		return false
-	end 'enumIsStructBacked'
-
 	// Phase 9 Stage 5: synthesize the `__enum_<EnumName>_fromRawValue(raw)`
 	// and `__enum_<EnumName>_fromName(name)` lookup helpers for a bare-enum
 	// type (or a union's `.unionCases` companion, which is itself a bare
@@ -5273,269 +5255,25 @@ export type Parser
 	// 3 enum-full `fromName-associated-*` fragments stay non-whitelisted
 	// for the same reason.
 	function synthesizeEnumLookupHelpers(enumName String, cases EnumCaseArray, isFloatBacked bool, visibility Visibility, line LineNumber, column ColumnNumber, skipFromRawValue bool = false)
-		if cases.count() == 0 'noCases'
-			// Degenerate enum: skip helper synthesis. The empty-case enum is
-			// already an E3030 / E2004 violation surfaced upstream; emitting
-			// helpers here would create a one-block function with a single
-			// `throw` and no return, which Verifier flags as unreachable.
-			return
-		end 'noCases'
-		if not skipFromRawValue 'emitFromRaw'
-			synthesizeEnumFromRawValueHelper(enumName, cases: cases, isFloatBacked: isFloatBacked, visibility: visibility, line: line, column: column)
-		end 'emitFromRaw'
-		synthesizeEnumFromNameHelper(enumName, cases: cases, isFloatBacked: isFloatBacked, visibility: visibility, line: line, column: column)
+		synthesizeEnumLookupHelpersImpl(project, module: module, namespace: namespace, filePath: filePath, enumName: enumName, cases: cases, isFloatBacked: isFloatBacked, visibility: visibility, line: line, column: column, skipFromRawValue: skipFromRawValue)
 	end 'synthesizeEnumLookupHelpers'
 
 	// Synthesize `__enum_<EnumName>_fromRawValue(raw <RawType>) returns
-	// <EnumName> throws <EnumName>`. The body is a linear chain of cmp +
-	// condBr blocks, one per case. On a hit, return the matched rawValue
-	// (which for bare enums IS the runtime representation). On full
-	// fall-through, throw the enum's first case as a sentinel.
+	// <EnumName> throws <EnumName>`. Body shape and ABI live in the
+	// top-level `synthesizeEnumFromRawValueHelperImpl` so the post-parse
+	// validation pass (`validateEnumLookupCalls`) can call them from
+	// outside a parser instance — the parse-time call-site rewrite no
+	// longer waits for the enum's declaration file to parse first (G.2).
 	function synthesizeEnumFromRawValueHelper(enumName String, cases EnumCaseArray, isFloatBacked bool, visibility Visibility, line LineNumber, column ColumnNumber)
-		let funcName = enumFromRawValueSymbolName(enumName)
-		if project.funcReturnTypes.contains(funcName) 'alreadyRegistered'
-			return
-		end 'alreadyRegistered'
-
-		let rawType = MaxonType.float if isFloatBacked else MaxonType.integer
-		let enumMaxonType = internMaxonType(project, name: enumName)
-		var paramNames = StringArray.create()
-		paramNames.push("raw")
-		var paramTypes = MaxonTypeArray.create()
-		paramTypes.push(rawType)
-		var paramDefaults = ParamDefaultArray.create()
-		paramDefaults.push(ParamDefault.none)
-
-		let returnType = MaxonReturnType.value(enumMaxonType)
-		let throwsClause = ThrowsClause.throwing(enumName)
-
-		try project.funcReturnTypes.insert(funcName, value: returnType) otherwise panic("synthesizeEnumFromRawValueHelper: funcReturnTypes collision on '{funcName}'")
-		recordFuncReturnTypeInsert(project, filePath: filePath, key: funcName)
-		try project.funcSignatures.insert(funcName, value: FuncSignature.create(paramNames, paramTypes: paramTypes, paramDefaults: paramDefaults)) otherwise panic("synthesizeEnumFromRawValueHelper: funcSignatures collision on '{funcName}'")
-		recordFuncSignatureInsert(project, filePath: filePath, key: funcName)
-		project.methodNameIndex.record(funcName)
-		recordMethodNameIndexInsert(project, filePath: filePath, qualifiedName: funcName)
-		var insertedRawVis = true
-		try project.funcVisibilities.insert(funcName, value: FuncVisibilityInfo.create(visibility, sourceFilePath: filePath)) otherwise 'dupRawVis'
-			insertedRawVis = false
-		end 'dupRawVis'
-		if insertedRawVis 'recRawVis'
-			recordFuncVisibilityInsert(project, filePath: filePath, key: funcName)
-		end 'recRawVis'
-		var insertedRawTh = true
-		try project.funcThrowsTypes.insert(funcName, value: throwsClause) otherwise 'dupRawTh'
-			insertedRawTh = false
-		end 'dupRawTh'
-		if insertedRawTh 'recRawTh'
-			recordFuncThrowsInsert(project, filePath: filePath, key: funcName)
-		end 'recRawTh'
-
-		var func = IrFunction.create(funcName, maxonReturnType: returnType, paramCount: 1 as ParamCount, maxonParamTypes: paramTypes, returnLine: line, throwsTypeName: throwsClause)
-		func.namespace = namespace
-		func.visibility = visibility
-		func.sourceFilePath = filePath
-		func.nameLine = line
-		func.nameColumn = column
-
-		// Swap in a clean synth-counter so names minted for this helper
-		// don't collide with the caller's parser state. The helper has no
-		// user-written body so the saved counter restores back to the
-		// caller's stream unchanged.
-		let savedFunc = currentFunc
-		let savedBlock = currentBlock
-		let savedSynth = synthNameCounter
-		currentFunc = func
-		synthNameCounter = 0
-
-		// Declare the `raw` parameter as the function's first slot. The
-		// `varLoad` that follows reads its value into an SSA name we can
-		// compare against each case's raw value.
-		let rawSlot = func.scope.declare("raw", varType: rawType, mutable: false)
-		var entryBlock = module.addBlockAt(func, label: "entry", filePath: filePath.toString(), firstLine: line)
-		currentBlock = entryBlock
-		let rawName = freshSynthName()
-		module.appendOp(entryBlock, op: MaxonOp.varLoad(rawName, slotId: rawSlot, slotType: rawType, range: SourceRange.none()))
-
-		// Chain of comparisons: for each case, emit a cmp + condBr to the
-		// per-case return block, threading the else-target through the next
-		// check block. The final miss falls through to a throw block.
-		// The throw-on-miss block is created once and shared by every
-		// per-case `else` target on the last iteration. The remaining
-		// non-last iterations branch into a fresh `check_{i+1}` block.
-		var throwBlock = module.addBlockAt(func, label: "no_match_throw", filePath: filePath.toString(), firstLine: line)
-		var currentCheck = entryBlock
-		let caseCount = cases.count()
-		for i in 0 upto caseCount 'eachCase'
-			let c = try cases.get(i) otherwise panic("synthesizeEnumFromRawValueHelper: cases.get OOB at {i}")
-			var returnBlock = module.addBlockAt(func, label: "case_{i}_return", filePath: filePath.toString(), firstLine: line)
-			let isLast = i == caseCount - 1
-			// Pre-allocate the next-check block for non-last iterations. On the
-			// last iteration the miss falls into `throwBlock` directly, so no
-			// further check block is needed.
-			var nextCheck = currentCheck
-			if not isLast 'allocNext'
-				nextCheck = module.addBlockAt(func, label: "check_{i + 1}", filePath: filePath.toString(), firstLine: line)
-			end 'allocNext'
-
-			// cmp raw == case.rawValue
-			let litValueType = MaxonType.float if isFloatBacked else MaxonType.integer
-			let litName = freshSynthName()
-			module.appendOp(currentCheck, op: MaxonOp.literal(litName, value: c.rawValue, valueType: litValueType, range: SourceRange.none()))
-			let cmpName = freshSynthName()
-			module.appendOp(currentCheck, op: MaxonOp.cmp(cmpName, left: rawName, right: litName, predicate: CmpPredicate.eq, leftType: rawType, rightType: rawType, operandType: rawType, range: SourceRange.none()))
-			let elseTarget = throwBlock.id if isLast else nextCheck.id
-			module.setTerminator(currentCheck, op: MaxonOp.condBr(cmpName, thenTarget: returnBlock.id, elseTarget: elseTarget, range: SourceRange.none()))
-
-			// Per-case return body: emit the case's rawValue and return it.
-			currentBlock = returnBlock
-			let resultLitName = freshSynthName()
-			module.appendOp(returnBlock, op: MaxonOp.literal(resultLitName, value: c.rawValue, valueType: litValueType, range: SourceRange.none()))
-			module.setTerminator(returnBlock, op: MaxonOp.ret(resultLitName, range: SourceRange.none()))
-
-			currentCheck = nextCheck
-		end 'eachCase'
-
-		// Final miss: throw the enum's first case as a sentinel value. The
-		// throws ABI carries (value: 0, flag: ordinal+1); callers' `try /
-		// otherwise` only inspect the flag's nonzeroness in today's specs,
-		// so the variant choice is purely a placeholder. Using the first
-		// case (ordinal 0) keeps the flag a stable `1` across every helper.
-		let firstCase = try cases.get(0) otherwise panic("synthesizeEnumFromRawValueHelper: cases.get(0) failed despite count check")
-		// Empty payload-value name: `fromRawValue` is only synthesized for
-		// bare-case enums (Phase 9 Stage 5 gates struct-backed / union enums
-		// out), so the throw never needs to carry a union pointer.
-		module.setTerminator(throwBlock, op: MaxonOp.throw(enumName, variantName: firstCase.name, payloadValueName: ByteArray.create(), range: SourceRange.none()))
-
-		// Stage K.4: no livenessRoot push. `EnumName.fromRawValue(...)`
-		// user calls are rewritten to `call __enum_<EnumName>_fromRawValue`
-		// ops via `enumFromRawValueSymbolName` (MaxonDialect.maxon), so
-		// the DFE call-edge walk reaches the helper when needed.
-		module.functions.push(func)
-
-		currentFunc = savedFunc
-		currentBlock = savedBlock
-		synthNameCounter = savedSynth
+		synthesizeEnumFromRawValueHelperImpl(project, module: module, namespace: namespace, filePath: filePath, enumName: enumName, cases: cases, isFloatBacked: isFloatBacked, visibility: visibility, line: line, column: column)
 	end 'synthesizeEnumFromRawValueHelper'
 
 	// Synthesize `__enum_<EnumName>_fromName(name String) returns <EnumName>
-	// throws <EnumName>`. Body shape mirrors `fromRawValue` but the
-	// per-case comparison is `name.equals("<caseName>")` (a methodCall the
-	// String extension intercepts at lowering) instead of a primitive cmp.
-	// Returns the case's rawValue on a hit.
+	// throws <EnumName>`. Body shape and ABI live in the top-level
+	// `synthesizeEnumFromNameHelperImpl` so the post-parse validation pass
+	// can call them after every file has been parsed.
 	function synthesizeEnumFromNameHelper(enumName String, cases EnumCaseArray, isFloatBacked bool, visibility Visibility, line LineNumber, column ColumnNumber)
-		let funcName = enumFromNameSymbolName(enumName)
-		if project.funcReturnTypes.contains(funcName) 'alreadyRegistered'
-			return
-		end 'alreadyRegistered'
-
-		let stringMaxonType = MaxonType.named(project.typeNames.intern("String"))
-		let enumMaxonType = internMaxonType(project, name: enumName)
-		var paramNames = StringArray.create()
-		paramNames.push("name")
-		var paramTypes = MaxonTypeArray.create()
-		paramTypes.push(stringMaxonType)
-		var paramDefaults = ParamDefaultArray.create()
-		paramDefaults.push(ParamDefault.none)
-
-		let returnType = MaxonReturnType.value(enumMaxonType)
-		let throwsClause = ThrowsClause.throwing(enumName)
-
-		try project.funcReturnTypes.insert(funcName, value: returnType) otherwise panic("synthesizeEnumFromNameHelper: funcReturnTypes collision on '{funcName}'")
-		recordFuncReturnTypeInsert(project, filePath: filePath, key: funcName)
-		try project.funcSignatures.insert(funcName, value: FuncSignature.create(paramNames, paramTypes: paramTypes, paramDefaults: paramDefaults)) otherwise panic("synthesizeEnumFromNameHelper: funcSignatures collision on '{funcName}'")
-		recordFuncSignatureInsert(project, filePath: filePath, key: funcName)
-		project.methodNameIndex.record(funcName)
-		recordMethodNameIndexInsert(project, filePath: filePath, qualifiedName: funcName)
-		var insertedNameVis = true
-		try project.funcVisibilities.insert(funcName, value: FuncVisibilityInfo.create(visibility, sourceFilePath: filePath)) otherwise 'dupNameVis'
-			insertedNameVis = false
-		end 'dupNameVis'
-		if insertedNameVis 'recNameVis'
-			recordFuncVisibilityInsert(project, filePath: filePath, key: funcName)
-		end 'recNameVis'
-		var insertedNameTh = true
-		try project.funcThrowsTypes.insert(funcName, value: throwsClause) otherwise 'dupNameTh'
-			insertedNameTh = false
-		end 'dupNameTh'
-		if insertedNameTh 'recNameTh'
-			recordFuncThrowsInsert(project, filePath: filePath, key: funcName)
-		end 'recNameTh'
-
-		var func = IrFunction.create(funcName, maxonReturnType: returnType, paramCount: 1 as ParamCount, maxonParamTypes: paramTypes, returnLine: line, throwsTypeName: throwsClause)
-		func.namespace = namespace
-		func.visibility = visibility
-		func.sourceFilePath = filePath
-		func.nameLine = line
-		func.nameColumn = column
-
-		let savedFunc = currentFunc
-		let savedBlock = currentBlock
-		let savedSynth = synthNameCounter
-		currentFunc = func
-		synthNameCounter = 0
-
-		let nameSlot = func.scope.declare("name", varType: stringMaxonType, mutable: false)
-		var entryBlock = module.addBlockAt(func, label: "entry", filePath: filePath.toString(), firstLine: line)
-		currentBlock = entryBlock
-		let receiverName = freshSynthName()
-		module.appendOp(entryBlock, op: MaxonOp.varLoad(receiverName, slotId: nameSlot, slotType: stringMaxonType, range: SourceRange.none()))
-
-		let litValueType = MaxonType.float if isFloatBacked else MaxonType.integer
-		// Shared throw-on-miss block — see the fromRawValue helper for the
-		// rationale on a single shared sink.
-		var throwBlock = module.addBlockAt(func, label: "no_match_throw", filePath: filePath.toString(), firstLine: line)
-		var currentCheck = entryBlock
-		let caseCount = cases.count()
-		for i in 0 upto caseCount 'eachCase'
-			let c = try cases.get(i) otherwise panic("synthesizeEnumFromNameHelper: cases.get OOB at {i}")
-			var returnBlock = module.addBlockAt(func, label: "case_{i}_return", filePath: filePath.toString(), firstLine: line)
-			let isLast = i == caseCount - 1
-			var nextCheck = currentCheck
-			if not isLast 'allocNext'
-				nextCheck = module.addBlockAt(func, label: "check_{i + 1}", filePath: filePath.toString(), firstLine: line)
-			end 'allocNext'
-
-			// Build a string literal for the case name and call
-			// `name.equals(<caseName>)`. The methodCall result type is
-			// pinned by TypeResolution from the receiver's String type.
-			let caseNameStringId = project.strings.intern(c.name)
-			let caseNameLitName = freshSynthName()
-			module.appendOp(currentCheck, op: MaxonOp.stringConst(caseNameLitName, stringId: caseNameStringId, range: SourceRange.none()))
-			var equalsArgs = ByteArrayArray.create()
-			equalsArgs.push(caseNameLitName)
-			var equalsArgLabels = StringArray.create()
-			equalsArgLabels.push("")
-			var equalsArgTypes = MaxonTypeArray.create()
-			equalsArgTypes.push(stringMaxonType)
-			var equalsArgRanges = SourceRangeArray.create()
-			equalsArgRanges.push(SourceRange.none())
-			let cmpName = freshSynthName()
-			module.appendOp(currentCheck, op: MaxonOp.methodCall(cmpName, receiver: receiverName, methodName: "equals".toByteArray(), args: equalsArgs, argLabels: equalsArgLabels, argTypes: equalsArgTypes, argRanges: equalsArgRanges, range: SourceRange.none()))
-			let elseTarget = throwBlock.id if isLast else nextCheck.id
-			module.setTerminator(currentCheck, op: MaxonOp.condBr(cmpName, thenTarget: returnBlock.id, elseTarget: elseTarget, range: SourceRange.none()))
-
-			currentBlock = returnBlock
-			let resultLitName = freshSynthName()
-			module.appendOp(returnBlock, op: MaxonOp.literal(resultLitName, value: c.rawValue, valueType: litValueType, range: SourceRange.none()))
-			module.setTerminator(returnBlock, op: MaxonOp.ret(resultLitName, range: SourceRange.none()))
-
-			currentCheck = nextCheck
-		end 'eachCase'
-
-		let firstCase = try cases.get(0) otherwise panic("synthesizeEnumFromNameHelper: cases.get(0) failed despite count check")
-		// Empty payload-value name: `fromName` is only synthesized for
-		// bare-case enums; the throw carries no union pointer.
-		module.setTerminator(throwBlock, op: MaxonOp.throw(enumName, variantName: firstCase.name, payloadValueName: ByteArray.create(), range: SourceRange.none()))
-
-		// Stage K.4: no livenessRoot push. `EnumName.fromName(...)` user
-		// calls are rewritten to `call __enum_<EnumName>_fromName` ops via
-		// `enumFromNameSymbolName` (MaxonDialect.maxon), so the DFE
-		// call-edge walk reaches the helper when needed.
-		module.functions.push(func)
-
-		currentFunc = savedFunc
-		currentBlock = savedBlock
-		synthNameCounter = savedSynth
+		synthesizeEnumFromNameHelperImpl(project, module: module, namespace: namespace, filePath: filePath, enumName: enumName, cases: cases, isFloatBacked: isFloatBacked, visibility: visibility, line: line, column: column)
 	end 'synthesizeEnumFromNameHelper'
 
 	// --- Interface declaration parsing ---
@@ -6008,6 +5746,22 @@ export type Parser
 			recordUnresolvedInterfaceUpsert(project, filePath: filePath, key: targetTypeName)
 			return
 		end 'ifaceTarget'
+
+		// Neither the struct nor the interface target has been parsed yet —
+		// this `extension` block precedes its target type's declaration in
+		// load order (e.g. `extension Sorter { typealias Comparator = ... }`
+		// parsed before `type Sorter`). Queue the inner aliases keyed by target
+		// name; `drainPendingExtensionInnerAliases` (top of runTypeResolution,
+		// before resolveAllStructTypes) re-merges them once every type
+		// declaration exists. A target that NEVER appears stays harmlessly
+		// queued — the extension's own methods surface the missing-target error.
+		var pending = try project.pendingExtensionInnerAliases.get(targetTypeName) otherwise InnerAliasMap.create()
+		for (aliasName, aliasExpr) in extInnerAliases 'eachPending'
+			if not pending.contains(aliasName) 'novelPending'
+				pending.upsert(aliasName, value: aliasExpr)
+			end 'novelPending'
+		end 'eachPending'
+		project.pendingExtensionInnerAliases.upsert(targetTypeName, value: pending)
 	end 'mergeExtensionInnerAliases'
 
 	// True when the cursor is positioned on `end` *followed by* the
@@ -9511,6 +9265,95 @@ export type Parser
 		end 'check'
 	end 'isNamedMaxonType'
 
+	// True iff a parameter of this type MIGHT need an ABI companion slot
+	// (env for a function-typed param, witness for an interface-fat param).
+	// The parser reserves a companion scope slot for these without deciding
+	// which kind — TypeResolution's buildAbiParamMap finalizes it.
+	//
+	// CRITICAL: reserving a companion advances the scope-slot counter, which
+	// shifts every subsequent param/local slot id. So we must NOT reserve for
+	// the overwhelmingly common case of a `named(alias)` that resolves to a
+	// plain value type (ranged int/float, struct, enum, generic instance) —
+	// e.g. `MachineWord = int(...)`, `Integer`, a struct name. Reserving for
+	// those poisons the slot layout of nearly every function (see the map/set
+	// regression). Only reserve when the param is genuinely (or possibly) a
+	// function or interface type:
+	//   - resolved `function`/`interface` arms (inline-illegal, but a same-file
+	//     alias parseTypeRef chased to one lands here),
+	//   - a `named(alias)` whose alias is KNOWN to be a function alias, an
+	//     interface, or is genuinely UNRESOLVABLE at parse time (a cross-file
+	//     alias we can't yet classify — conservatively reserve; the original
+	//     cross-file-function-param bug needs this).
+	function paramTypeMayCarryCompanion(t MaxonType) returns bool
+		return match t 'check'
+			function gives true
+			interface gives true
+			named(id) gives namedAliasMayCarryCompanion(project.typeNames.get(id))
+			boolean gives false
+			integer gives false
+			float gives false
+			string gives false
+			unresolved gives false
+			typeParameter gives false
+			genericInstance gives false
+			constInt gives false
+			opaquePointer gives false
+		end 'check'
+	end 'paramTypeMayCarryCompanion'
+
+	// Classify a `named(alias)` param type for companion reservation. Returns
+	// false (no reservation) when the alias is provably a plain value type at
+	// parse time; true when it is a function/interface alias or genuinely
+	// unresolvable (cross-file). Recurses through `aliasName` chains.
+	function namedAliasMayCarryCompanion(aliasName String) returns bool
+		// Interface name -> fat -> witness companion.
+		if project.interfaces.contains(aliasName) or project.unresolvedInterfaces.contains(aliasName) 'isIface'
+			return true
+		end 'isIface'
+		// Same-file inner alias declared earlier in this type/extension body.
+		if let innerExpr = try currentInnerAliases.get(aliasName) 'haveInner'
+			return unresolvedTypeExprMayCarryCompanion(innerExpr)
+		end 'haveInner'
+		// Project-wide unresolved typealias registry (same-file or earlier-
+		// parsed). Classify by its RHS expr.
+		if let entry = try project.unresolvedTypealiases.get(aliasName) 'haveEntry'
+			return unresolvedTypeExprMayCarryCompanion(entry.expr)
+		end 'haveEntry'
+		// A resolved generic typealias is a concrete generic instance — never
+		// a function/interface companion.
+		if project.genericTypealiases.contains(aliasName) 'genericResolved'
+			return false
+		end 'genericResolved'
+		// Known struct / enum names are plain value types.
+		if project.unresolvedStructTypes.contains(aliasName) or project.structTypes.contains(aliasName) 'knownStruct'
+			return false
+		end 'knownStruct'
+		if project.unresolvedEnums.contains(aliasName) or project.enumTypes.contains(aliasName) 'knownEnum'
+			return false
+		end 'knownEnum'
+		// Genuinely unresolvable at parse time (likely a cross-file alias the
+		// loader hasn't reached). Conservatively reserve — it MIGHT resolve to
+		// a function type; TypeResolution's buildAbiParamMap makes the final
+		// call and leaves the reserved slot unused if it doesn't.
+		return true
+	end 'namedAliasMayCarryCompanion'
+
+	// Classify a typealias RHS expr for companion reservation: only a
+	// `functionAlias` carries a companion; ranged/bool/generic/invalid are
+	// plain values; an `aliasName` chain recurses.
+	function unresolvedTypeExprMayCarryCompanion(expr UnresolvedTypeExpr) returns bool
+		return match expr 'classify'
+			functionAlias gives true
+			rangedInt gives false
+			rangedFloat gives false
+			boolPrim gives false
+			genericAlias gives false
+			sizedGenericAlias gives false
+			invalid gives false
+			aliasName(name) gives namedAliasMayCarryCompanion(name)
+		end 'classify'
+	end 'unresolvedTypeExprMayCarryCompanion'
+
 	// Lower a bool `and`/`or` to short-circuit IR. Allocates a varSlot seeded
 	// with the short-circuit value (false for `and`, true for `or`), branches
 	// on the lhs to either skip the rhs (preserving the seed) or evaluate the
@@ -10936,40 +10779,31 @@ export type Parser
 				// most common explicit use of an `Array with X` typealias
 				// (`IntArray.create()`).
 				usedTypeAliases.insert(token.value)
-				// Phase 9 Stage 5: redirect `<EnumName>.fromRawValue(...)` /
-				// `<EnumName>.fromName(...)` to the per-enum synthesized lookup
-				// helpers. The synthesis runs during `parseEnumDecl` /
-				// `registerUnionCasesCompanion`, so any reachable enum or
-				// `.unionCases` companion already has these helpers registered
-				// in `funcSignatures` by the time a call site is parsed —
-				// preserving forward-reference resolution (cross-file calls hit
-				// the helpers once their declaration file finishes parsing).
-				// Unions themselves are excluded from `.fromRawValue` per the
-				// spec (E3034 surfaces in TypeResolution); `.fromName` on
-				// associated-value unions is not yet supported and falls
-				// through to the regular dispatch, where it will fail to
-				// resolve until Stage 5's union-`fromName` work lands.
+				// G.2: redirect `<TypeName>.fromRawValue(...)` /
+				// `<TypeName>.fromName(...)` to the per-enum synthesized lookup
+				// helpers unconditionally — without consulting the enum
+				// registries — when `<TypeName>` looks like a type name
+				// (capitalized first letter). The earlier gate keyed on
+				// `project.unresolvedEnums.contains(token.value)` only worked
+				// when the receiver enum's declaration had been parsed before
+				// the call site, which silently broke for cross-file forward
+				// references once stdlib load order became filesystem-driven.
+				// The post-parse pass `validateEnumLookupCalls` walks the
+				// merged module after every file has parsed, validates each
+				// rewritten callee against the now-fully-populated enum
+				// tables, synthesizes the helper if the enum is bare-case-
+				// only, emits E3034 for struct-backed enums and
+				// associated-value unions, and rewrites the callee back to
+				// the natural qualified form when the prefix isn't actually a
+				// known enum (so the standard unknown-callee diagnostic
+				// surfaces rather than a codegen-time "not registered" panic).
 				var calleeName = "{token.value}.{memberToken.value}"
 				let memberStr = memberToken.value
-				let prefixIsEnumName = project.unresolvedEnums.contains(token.value) or project.enumTypes.contains(token.value)
-				if prefixIsEnumName and memberStr == "fromRawValue" 'redirectFromRawValue'
-					if enumIsStructBacked(token.value) 'isStructBacked'
-						// Struct-backed enums can't reconstruct their raw
-						// value from an integer (`= StructType{...}`); per
-						// `enum-struct-backing.md`'s
-						// `error.struct-backing-fromRawValue` test we
-						// surface E3034 at the call site rather than letting
-						// the call fall through to an unresolved callee.
-						reportCompileError(project, code: ErrorCode.semanticEnumUnknownCase, message: "unknown enum case: 'fromRawValue'", line: memberToken.line, column: memberToken.column, filePath: filePath)
-					end 'isStructBacked'
-					if not enumIsAssociatedValueUnion(token.value) and not enumIsStructBacked(token.value) 'notAssocUnion'
-						calleeName = enumFromRawValueSymbolName(token.value)
-					end 'notAssocUnion'
+				if memberStr == "fromRawValue" and isCapitalizedIdent(token.value) 'redirectFromRawValue'
+					calleeName = enumFromRawValueSymbolName(token.value)
 				end 'redirectFromRawValue'
-				if prefixIsEnumName and memberStr == "fromName" 'redirectFromName'
-					if not enumIsAssociatedValueUnion(token.value) 'notAssocUnionFn'
-						calleeName = enumFromNameSymbolName(token.value)
-					end 'notAssocUnionFn'
+				if memberStr == "fromName" and isCapitalizedIdent(token.value) 'redirectFromName'
+					calleeName = enumFromNameSymbolName(token.value)
 				end 'redirectFromName'
 				try eat(TokenKind.dot)
 				_ = try consume()
@@ -11218,11 +11052,26 @@ export type Parser
 			let bareCallee = token.value
 			var calleeIsFn = false
 			var calleeChased = MaxonType.unresolved
+			var calleeBoundUnresolvedAlias = false
 			if scope.contains(bareCallee) 'checkScope'
 				calleeChased = parserChaseFnAlias(scope.getType(bareCallee))
 				calleeIsFn = isFunctionMaxonType(calleeChased)
+				// H: when the in-scope binding's type chase landed on a
+				// `named(X)` reference, `X` may be a function-type alias
+				// declared in a sibling file that hasn't been parsed yet.
+				// Take the indirect-call path optimistically with a sentinel
+				// `fnTypeId = 0`; the post-parse `validateIndirectCallLabels`
+				// pass re-chases against the now-fully-populated typealias
+				// registry and either patches the fnTypeId or emits a
+				// diagnostic. Without this, the call falls through to the
+				// regular `call` path where `requireNamed: true` rejects
+				// positional args (E3005) — surfacing as a load-order
+				// dependency between the call site and the alias declaration.
+				if not calleeIsFn and not calleeChased.namedAliasNameOrEmpty(project).isEmpty() 'maybeUnresolvedAlias'
+					calleeBoundUnresolvedAlias = true
+				end 'maybeUnresolvedAlias'
 			end 'checkScope'
-			if calleeIsFn 'isIndirect'
+			if calleeIsFn or calleeBoundUnresolvedAlias 'isIndirect'
 				let calleeSlot = lookupVariable(bareCallee, token: token)
 				let calleeType = calleeChased
 				let calleeLoadName = freshSynthName()
@@ -11232,12 +11081,24 @@ export type Parser
 				// so the named-arg-required check (E3005) doesn't apply.
 				let (argNames, argLabels, argTypes, argRanges) = try parseCallArgsRaw(block, requireNamed: false)
 				let rparenToken = previousToken()
-				let fnTypeId = functionMaxonTypeId(calleeType)
+				// H: when the callee's type is still an unresolved `named(X)`
+				// alias, emit `fnTypeId = 0` as a sentinel and result type
+				// `unresolved`; the post-parse `validateIndirectCallLabels`
+				// pass re-chases the alias against the now-fully-populated
+				// typealias registry and either patches the indirectCall +
+				// varLoad ops with the resolved fnTypeId / function-type or
+				// emits a diagnostic. TypeResolution stamps the result type
+				// after the patch via `functionTypes.get(fnTypeId)`.
+				var fnTypeId = 0 as FunctionTypeId
+				var resultType = MaxonType.unresolved
+				if calleeIsFn 'haveSig'
+					fnTypeId = functionMaxonTypeId(calleeType)
+					resultType = indirectCallResultType(project, returnType: functionMaxonReturnType(project, t: calleeType))
+				end 'haveSig'
 				let resultName = freshSynthName()
-				let returnType = functionMaxonReturnType(project, t: calleeType)
 				// Emit into `currentBlock` — see emitCallAndResult for rationale.
 				module.appendOp(currentBlock, op: MaxonOp.indirectCall(resultName, callee: calleeLoadName, fnTypeId: fnTypeId, args: argNames, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, range: SourceRange.between(token, last: rparenToken)))
-				return ExprResult.direct(resultName, valueType: indirectCallResultType(project, returnType: returnType))
+				return ExprResult.direct(resultName, valueType: resultType)
 			end 'isIndirect'
 			// Math intrinsics (`min(a, b)`, `max(a, b)`, plus the unary ones)
 			// accept positional args by design — they're built into the
@@ -13360,6 +13221,7 @@ export type Parser
 		let savedParamLocations = paramLocations
 		let savedLocalVarLocations = localVarLocations
 		let savedReferencedVars = referencedVars
+		let savedParamReservations = paramReservations
 		let savedSynthCounter = synthNameCounter
 		// Stage E (closures): save outer closure-state so nested closures
 		// don't leak captures into one another. The body parses with
@@ -13383,6 +13245,7 @@ export type Parser
 		paramLocations = ParamLocationArray.create()
 		localVarLocations = ParamLocationArray.create()
 		referencedVars = ReferencedVarSet.create()
+		paramReservations = ParamReservationArray.create()
 		synthNameCounter = 0
 		inClosure = true
 		closureOuterScope = savedScope
@@ -13404,6 +13267,15 @@ export type Parser
 				paramLocations.push(ParamLocation.create(pName, line: pLoc.line, column: pLoc.column))
 			end 'realName'
 		end 'pushParam'
+
+		// Lifted closures intentionally carry NO paramReservations: their
+		// trailing `__env` slot (appended below) is the capture-env pointer,
+		// derived by position at lowering (liftedEnvValueId), not via the
+		// scope-slot<->abi maps. buildAbiParamMap skips functions with empty
+		// paramReservations, leaving the closure's user-params + trailing env
+		// ABI shape exactly as built here. (Function/interface-typed closure
+		// params with their own companions are a separate, unimplemented
+		// feature.)
 
 		// Parse the body expression into the lifted function's entry block.
 		let bodyResult = try parseExpression(currentBlock)
@@ -13481,6 +13353,7 @@ export type Parser
 		paramLocations = savedParamLocations
 		localVarLocations = savedLocalVarLocations
 		referencedVars = savedReferencedVars
+		paramReservations = savedParamReservations
 		synthNameCounter = savedSynthCounter
 		inClosure = savedInClosure
 		closureOuterScope = savedOuterScope
@@ -14232,6 +14105,7 @@ export type Parser
 		paramLocations = ParamLocationArray.create()
 		localVarLocations = ParamLocationArray.create()
 		referencedVars = ReferencedVarSet.create()
+		paramReservations = ParamReservationArray.create()
 		synthNameCounter = 0
 		// Phase 9 Stage 5: reset the per-function struct-backed enum-case
 		// bindings so a fresh function doesn't see stale `let op = Op.mul`
@@ -14481,6 +14355,759 @@ export type Parser
 		return exitBlock
 	end 'parseScopedStatementsRequireBody'
 end 'Parser'
+
+// G.2: top-level helper that fronts both `synthesizeEnumFromRawValueHelperImpl`
+// and `synthesizeEnumFromNameHelperImpl`. Called from the parser type's
+// `synthesizeEnumLookupHelpers` and the post-parse validation pass
+// (`validateEnumLookupCalls`) so the call-site rewrite can defer helper
+// synthesis until after every stdlib / user file has been parsed.
+//
+// Skips the `fromRawValue` half when `skipFromRawValue` is true — used by
+// struct / string / char / function-backed enums whose raw-value
+// representation can't be reconstructed from an integer at runtime; per
+// the spec they reject `.fromRawValue(...)` outright (E3034) and the
+// validation pass emits that diagnostic when it finds a call site.
+export function synthesizeEnumLookupHelpersImpl(project Project, module MaxonModule, namespace String, filePath FilePath, enumName String, cases EnumCaseArray, isFloatBacked bool, visibility Visibility, line LineNumber, column ColumnNumber, skipFromRawValue bool = false)
+	if cases.count() == 0 'noCases'
+		// Degenerate enum: skip helper synthesis. The empty-case enum is
+		// already an E3030 / E2004 violation surfaced upstream; emitting
+		// helpers here would create a one-block function with a single
+		// `throw` and no return, which Verifier flags as unreachable.
+		return
+	end 'noCases'
+	if not skipFromRawValue 'emitFromRaw'
+		synthesizeEnumFromRawValueHelperImpl(project, module: module, namespace: namespace, filePath: filePath, enumName: enumName, cases: cases, isFloatBacked: isFloatBacked, visibility: visibility, line: line, column: column)
+	end 'emitFromRaw'
+	synthesizeEnumFromNameHelperImpl(project, module: module, namespace: namespace, filePath: filePath, enumName: enumName, cases: cases, isFloatBacked: isFloatBacked, visibility: visibility, line: line, column: column)
+end 'synthesizeEnumLookupHelpersImpl'
+
+// Synthesize `__enum_<EnumName>_fromRawValue(raw <RawType>) returns
+// <EnumName> throws <EnumName>`. The body is a linear chain of cmp +
+// condBr blocks, one per case. On a hit, return the matched rawValue
+// (which for bare enums IS the runtime representation). On full
+// fall-through, throw the enum's first case as a sentinel.
+//
+// Top-level form (no parser instance required) so the post-parse
+// validation pass can call it after every file has been merged. Uses a
+// local synth-name counter — the helper is self-contained (its names
+// only reference values within the synthesized function body), so there
+// is no need to thread the parser's process-wide counter through.
+export function synthesizeEnumFromRawValueHelperImpl(project Project, module MaxonModule, namespace String, filePath FilePath, enumName String, cases EnumCaseArray, isFloatBacked bool, visibility Visibility, line LineNumber, column ColumnNumber)
+	let funcName = enumFromRawValueSymbolName(enumName)
+	if project.funcReturnTypes.contains(funcName) 'alreadyRegistered'
+		return
+	end 'alreadyRegistered'
+
+	let rawType = MaxonType.float if isFloatBacked else MaxonType.integer
+	let enumMaxonType = internMaxonType(project, name: enumName)
+	var paramNames = StringArray.create()
+	paramNames.push("raw")
+	var paramTypes = MaxonTypeArray.create()
+	paramTypes.push(rawType)
+	var paramDefaults = ParamDefaultArray.create()
+	paramDefaults.push(ParamDefault.none)
+
+	let returnType = MaxonReturnType.value(enumMaxonType)
+	let throwsClause = ThrowsClause.throwing(enumName)
+
+	try project.funcReturnTypes.insert(funcName, value: returnType) otherwise panic("synthesizeEnumFromRawValueHelperImpl: funcReturnTypes collision on '{funcName}'")
+	recordFuncReturnTypeInsert(project, filePath: filePath, key: funcName)
+	try project.funcSignatures.insert(funcName, value: FuncSignature.create(paramNames, paramTypes: paramTypes, paramDefaults: paramDefaults)) otherwise panic("synthesizeEnumFromRawValueHelperImpl: funcSignatures collision on '{funcName}'")
+	recordFuncSignatureInsert(project, filePath: filePath, key: funcName)
+	project.methodNameIndex.record(funcName)
+	recordMethodNameIndexInsert(project, filePath: filePath, qualifiedName: funcName)
+	var insertedRawVis = true
+	try project.funcVisibilities.insert(funcName, value: FuncVisibilityInfo.create(visibility, sourceFilePath: filePath)) otherwise 'dupRawVis'
+		insertedRawVis = false
+	end 'dupRawVis'
+	if insertedRawVis 'recRawVis'
+		recordFuncVisibilityInsert(project, filePath: filePath, key: funcName)
+	end 'recRawVis'
+	var insertedRawTh = true
+	try project.funcThrowsTypes.insert(funcName, value: throwsClause) otherwise 'dupRawTh'
+		insertedRawTh = false
+	end 'dupRawTh'
+	if insertedRawTh 'recRawTh'
+		recordFuncThrowsInsert(project, filePath: filePath, key: funcName)
+	end 'recRawTh'
+
+	var func = IrFunction.create(funcName, maxonReturnType: returnType, paramCount: 1 as ParamCount, maxonParamTypes: paramTypes, returnLine: line, throwsTypeName: throwsClause)
+	func.namespace = namespace
+	func.visibility = visibility
+	func.sourceFilePath = filePath
+	func.nameLine = line
+	func.nameColumn = column
+
+	var synthCounter = 0 as ParsedInt
+	// Declare the `raw` parameter as the function's first slot. The
+	// `varLoad` that follows reads its value into an SSA name we can
+	// compare against each case's raw value.
+	let rawSlot = func.scope.declare("raw", varType: rawType, mutable: false)
+	var entryBlock = module.addBlockAt(func, label: "entry", filePath: filePath.toString(), firstLine: line)
+	let rawName = mintSynthName(synthCounter)
+	synthCounter = synthCounter + 1
+	module.appendOp(entryBlock, op: MaxonOp.varLoad(rawName, slotId: rawSlot, slotType: rawType, range: SourceRange.none()))
+
+	// Chain of comparisons: for each case, emit a cmp + condBr to the
+	// per-case return block, threading the else-target through the next
+	// check block. The final miss falls through to a throw block.
+	// The throw-on-miss block is created once and shared by every
+	// per-case `else` target on the last iteration. The remaining
+	// non-last iterations branch into a fresh `check_{i+1}` block.
+	var throwBlock = module.addBlockAt(func, label: "no_match_throw", filePath: filePath.toString(), firstLine: line)
+	var currentCheck = entryBlock
+	let caseCount = cases.count()
+	for i in 0 upto caseCount 'eachCase'
+		let c = try cases.get(i) otherwise panic("synthesizeEnumFromRawValueHelperImpl: cases.get OOB at {i}")
+		var returnBlock = module.addBlockAt(func, label: "case_{i}_return", filePath: filePath.toString(), firstLine: line)
+		let isLast = i == caseCount - 1
+		// Pre-allocate the next-check block for non-last iterations. On the
+		// last iteration the miss falls into `throwBlock` directly, so no
+		// further check block is needed.
+		var nextCheck = currentCheck
+		if not isLast 'allocNext'
+			nextCheck = module.addBlockAt(func, label: "check_{i + 1}", filePath: filePath.toString(), firstLine: line)
+		end 'allocNext'
+
+		// cmp raw == case.rawValue
+		let litValueType = MaxonType.float if isFloatBacked else MaxonType.integer
+		let litName = mintSynthName(synthCounter)
+		synthCounter = synthCounter + 1
+		module.appendOp(currentCheck, op: MaxonOp.literal(litName, value: c.rawValue, valueType: litValueType, range: SourceRange.none()))
+		let cmpName = mintSynthName(synthCounter)
+		synthCounter = synthCounter + 1
+		module.appendOp(currentCheck, op: MaxonOp.cmp(cmpName, left: rawName, right: litName, predicate: CmpPredicate.eq, leftType: rawType, rightType: rawType, operandType: rawType, range: SourceRange.none()))
+		let elseTarget = throwBlock.id if isLast else nextCheck.id
+		module.setTerminator(currentCheck, op: MaxonOp.condBr(cmpName, thenTarget: returnBlock.id, elseTarget: elseTarget, range: SourceRange.none()))
+
+		// Per-case return body: emit the case's rawValue and return it.
+		let resultLitName = mintSynthName(synthCounter)
+		synthCounter = synthCounter + 1
+		module.appendOp(returnBlock, op: MaxonOp.literal(resultLitName, value: c.rawValue, valueType: litValueType, range: SourceRange.none()))
+		module.setTerminator(returnBlock, op: MaxonOp.ret(resultLitName, range: SourceRange.none()))
+
+		currentCheck = nextCheck
+	end 'eachCase'
+
+	// Final miss: throw the enum's first case as a sentinel value. The
+	// throws ABI carries (value: 0, flag: ordinal+1); callers' `try /
+	// otherwise` only inspect the flag's nonzeroness in today's specs,
+	// so the variant choice is purely a placeholder. Using the first
+	// case (ordinal 0) keeps the flag a stable `1` across every helper.
+	let firstCase = try cases.get(0) otherwise panic("synthesizeEnumFromRawValueHelperImpl: cases.get(0) failed despite count check")
+	// Empty payload-value name: `fromRawValue` is only synthesized for
+	// bare-case enums (G.2 gates struct-backed / union enums out via
+	// `validateEnumLookupCalls`), so the throw never needs to carry a
+	// union pointer.
+	module.setTerminator(throwBlock, op: MaxonOp.throw(enumName, variantName: firstCase.name, payloadValueName: ByteArray.create(), range: SourceRange.none()))
+
+	// Stage K.4: no livenessRoot push. `EnumName.fromRawValue(...)`
+	// user calls are rewritten to `call __enum_<EnumName>_fromRawValue`
+	// ops via `enumFromRawValueSymbolName` (MaxonDialect.maxon), so
+	// the DFE call-edge walk reaches the helper when needed.
+	module.functions.push(func)
+end 'synthesizeEnumFromRawValueHelperImpl'
+
+// Synthesize `__enum_<EnumName>_fromName(name String) returns <EnumName>
+// throws <EnumName>`. Body shape mirrors `fromRawValue` but the per-case
+// comparison is `name.equals("<caseName>")` (a methodCall the String
+// extension intercepts at lowering) instead of a primitive cmp.
+// Returns the case's rawValue on a hit.
+export function synthesizeEnumFromNameHelperImpl(project Project, module MaxonModule, namespace String, filePath FilePath, enumName String, cases EnumCaseArray, isFloatBacked bool, visibility Visibility, line LineNumber, column ColumnNumber)
+	let funcName = enumFromNameSymbolName(enumName)
+	if project.funcReturnTypes.contains(funcName) 'alreadyRegistered'
+		return
+	end 'alreadyRegistered'
+
+	let stringMaxonType = MaxonType.named(project.typeNames.intern("String"))
+	let enumMaxonType = internMaxonType(project, name: enumName)
+	var paramNames = StringArray.create()
+	paramNames.push("name")
+	var paramTypes = MaxonTypeArray.create()
+	paramTypes.push(stringMaxonType)
+	var paramDefaults = ParamDefaultArray.create()
+	paramDefaults.push(ParamDefault.none)
+
+	let returnType = MaxonReturnType.value(enumMaxonType)
+	let throwsClause = ThrowsClause.throwing(enumName)
+
+	try project.funcReturnTypes.insert(funcName, value: returnType) otherwise panic("synthesizeEnumFromNameHelperImpl: funcReturnTypes collision on '{funcName}'")
+	recordFuncReturnTypeInsert(project, filePath: filePath, key: funcName)
+	try project.funcSignatures.insert(funcName, value: FuncSignature.create(paramNames, paramTypes: paramTypes, paramDefaults: paramDefaults)) otherwise panic("synthesizeEnumFromNameHelperImpl: funcSignatures collision on '{funcName}'")
+	recordFuncSignatureInsert(project, filePath: filePath, key: funcName)
+	project.methodNameIndex.record(funcName)
+	recordMethodNameIndexInsert(project, filePath: filePath, qualifiedName: funcName)
+	var insertedNameVis = true
+	try project.funcVisibilities.insert(funcName, value: FuncVisibilityInfo.create(visibility, sourceFilePath: filePath)) otherwise 'dupNameVis'
+		insertedNameVis = false
+	end 'dupNameVis'
+	if insertedNameVis 'recNameVis'
+		recordFuncVisibilityInsert(project, filePath: filePath, key: funcName)
+	end 'recNameVis'
+	var insertedNameTh = true
+	try project.funcThrowsTypes.insert(funcName, value: throwsClause) otherwise 'dupNameTh'
+		insertedNameTh = false
+	end 'dupNameTh'
+	if insertedNameTh 'recNameTh'
+		recordFuncThrowsInsert(project, filePath: filePath, key: funcName)
+	end 'recNameTh'
+
+	var func = IrFunction.create(funcName, maxonReturnType: returnType, paramCount: 1 as ParamCount, maxonParamTypes: paramTypes, returnLine: line, throwsTypeName: throwsClause)
+	func.namespace = namespace
+	func.visibility = visibility
+	func.sourceFilePath = filePath
+	func.nameLine = line
+	func.nameColumn = column
+
+	var synthCounter = 0 as ParsedInt
+	let nameSlot = func.scope.declare("name", varType: stringMaxonType, mutable: false)
+	var entryBlock = module.addBlockAt(func, label: "entry", filePath: filePath.toString(), firstLine: line)
+	let receiverName = mintSynthName(synthCounter)
+	synthCounter = synthCounter + 1
+	module.appendOp(entryBlock, op: MaxonOp.varLoad(receiverName, slotId: nameSlot, slotType: stringMaxonType, range: SourceRange.none()))
+
+	let litValueType = MaxonType.float if isFloatBacked else MaxonType.integer
+	// Shared throw-on-miss block — see the fromRawValue helper for the
+	// rationale on a single shared sink.
+	var throwBlock = module.addBlockAt(func, label: "no_match_throw", filePath: filePath.toString(), firstLine: line)
+	var currentCheck = entryBlock
+	let caseCount = cases.count()
+	for i in 0 upto caseCount 'eachCase'
+		let c = try cases.get(i) otherwise panic("synthesizeEnumFromNameHelperImpl: cases.get OOB at {i}")
+		var returnBlock = module.addBlockAt(func, label: "case_{i}_return", filePath: filePath.toString(), firstLine: line)
+		let isLast = i == caseCount - 1
+		var nextCheck = currentCheck
+		if not isLast 'allocNext'
+			nextCheck = module.addBlockAt(func, label: "check_{i + 1}", filePath: filePath.toString(), firstLine: line)
+		end 'allocNext'
+
+		// Build a string literal for the case name and call
+		// `name.equals(<caseName>)`. The methodCall result type is
+		// pinned by TypeResolution from the receiver's String type.
+		let caseNameStringId = project.strings.intern(c.name)
+		let caseNameLitName = mintSynthName(synthCounter)
+		synthCounter = synthCounter + 1
+		module.appendOp(currentCheck, op: MaxonOp.stringConst(caseNameLitName, stringId: caseNameStringId, range: SourceRange.none()))
+		var equalsArgs = ByteArrayArray.create()
+		equalsArgs.push(caseNameLitName)
+		var equalsArgLabels = StringArray.create()
+		equalsArgLabels.push("")
+		var equalsArgTypes = MaxonTypeArray.create()
+		equalsArgTypes.push(stringMaxonType)
+		var equalsArgRanges = SourceRangeArray.create()
+		equalsArgRanges.push(SourceRange.none())
+		let cmpName = mintSynthName(synthCounter)
+		synthCounter = synthCounter + 1
+		module.appendOp(currentCheck, op: MaxonOp.methodCall(cmpName, receiver: receiverName, methodName: "equals".toByteArray(), args: equalsArgs, argLabels: equalsArgLabels, argTypes: equalsArgTypes, argRanges: equalsArgRanges, range: SourceRange.none()))
+		let elseTarget = throwBlock.id if isLast else nextCheck.id
+		module.setTerminator(currentCheck, op: MaxonOp.condBr(cmpName, thenTarget: returnBlock.id, elseTarget: elseTarget, range: SourceRange.none()))
+
+		let resultLitName = mintSynthName(synthCounter)
+		synthCounter = synthCounter + 1
+		module.appendOp(returnBlock, op: MaxonOp.literal(resultLitName, value: c.rawValue, valueType: litValueType, range: SourceRange.none()))
+		module.setTerminator(returnBlock, op: MaxonOp.ret(resultLitName, range: SourceRange.none()))
+
+		currentCheck = nextCheck
+	end 'eachCase'
+
+	let firstCase = try cases.get(0) otherwise panic("synthesizeEnumFromNameHelperImpl: cases.get(0) failed despite count check")
+	// Empty payload-value name: `fromName` is only synthesized for
+	// bare-case enums; the throw carries no union pointer.
+	module.setTerminator(throwBlock, op: MaxonOp.throw(enumName, variantName: firstCase.name, payloadValueName: ByteArray.create(), range: SourceRange.none()))
+
+	// Stage K.4: no livenessRoot push. `EnumName.fromName(...)` user
+	// calls are rewritten to `call __enum_<EnumName>_fromName` ops via
+	// `enumFromNameSymbolName` (MaxonDialect.maxon), so the DFE
+	// call-edge walk reaches the helper when needed.
+	module.functions.push(func)
+end 'synthesizeEnumFromNameHelperImpl'
+
+// Mint a fresh synthetic SSA name for an externally-driven helper
+// synthesis. Uses the same `$t<n>` shape the parser's per-instance
+// `freshSynthName` produces but with a caller-managed counter (the
+// helper is self-contained — its names only refer to values within the
+// synthesized function body — so no parser-process-wide counter is
+// needed).
+function mintSynthName(counter ParsedInt) returns ByteArray
+	return "$t{counter}".toByteArray()
+end 'mintSynthName'
+
+// G.2: classification of an `__enum_<X>_fromRawValue` / `_fromName` call
+// target after the post-parse validation pass inspects `project`'s enum
+// tables. Drives whether `validateEnumLookupCalls` synthesizes the helper,
+// emits an E3034 diagnostic, or rewrites the callee back to the natural
+// `X.method` form so the standard unknown-callee diagnostic fires.
+type EnumLookupTarget
+	// Receiver isn't a known enum at all (or known struct/typealias name).
+	// The validation pass rewrites the callee back to `X.fromRawValue` /
+	// `X.fromName` so downstream resolution emits the natural diagnostic.
+	export var unknown as bool
+	// Receiver IS a known enum (or struct/typealias) but the helper kind
+	// is rejected by spec: struct-backed / string-backed / char-backed /
+	// function-backed enums reject `.fromRawValue`; associated-value
+	// unions reject both `.fromRawValue` and `.fromName`. The validation
+	// pass emits an E3034 diagnostic and leaves the call op alone (the
+	// diagnostic prevents codegen from ever running).
+	export var rejectKind as EnumLookupRejectKind
+	// Receiver IS a known bare-case enum compatible with the requested
+	// helper. The validation pass calls
+	// `synthesizeEnumLookupHelpersImpl` if the helper isn't already
+	// registered, then leaves the call op alone.
+	export var validBareEnum as bool
+	// Cases / metadata used when the target is a valid bare enum and the
+	// helper still needs to be synthesized. Empty when not applicable.
+	export var cases as EnumCaseArray
+	export var isFloatBacked as bool
+	export var visibility as Visibility
+	export var sourceFilePath as FilePath
+	export var line as LineNumber
+	export var column as ColumnNumber
+
+	export static function notAnEnum() returns EnumLookupTarget
+		return Self{unknown: true, rejectKind: EnumLookupRejectKind.none, validBareEnum: false, cases: EnumCaseArray.create(), isFloatBacked: false, visibility: Visibility.file, sourceFilePath: FilePath from "", line: 0 as LineNumber, column: 0}
+	end 'notAnEnum'
+
+	export static function rejected(kind EnumLookupRejectKind) returns EnumLookupTarget
+		return Self{unknown: false, rejectKind: kind, validBareEnum: false, cases: EnumCaseArray.create(), isFloatBacked: false, visibility: Visibility.file, sourceFilePath: FilePath from "", line: 0 as LineNumber, column: 0}
+	end 'rejected'
+
+	export static function bareEnum(cases EnumCaseArray, isFloatBacked bool, visibility Visibility, sourceFilePath FilePath, line LineNumber, column ColumnNumber) returns EnumLookupTarget
+		return Self{unknown: false, rejectKind: EnumLookupRejectKind.none, validBareEnum: true, cases: cases, isFloatBacked: isFloatBacked, visibility: visibility, sourceFilePath: sourceFilePath, line: line, column: column}
+	end 'bareEnum'
+end 'EnumLookupTarget'
+
+// G.2: discriminator for the spec-rejected enum shapes. Carries the
+// "enum" vs "union" label so the diagnostic message at the call site
+// matches the C# bootstrap's wording (`unknown enum case` vs `unknown
+// union case`).
+enum EnumLookupRejectKind
+	none
+	structOrAltBackedEnum
+	associatedValueUnion
+end 'EnumLookupRejectKind'
+
+// G.2: classify the receiver of an `__enum_<X>_fromRawValue` call against
+// the now-fully-populated enum tables. Mirrors the parse-time gates
+// `enumIsStructBacked` / `enumIsAssociatedValueUnion` but runs after every
+// file has been parsed so it sees cross-file forward references.
+function classifyEnumLookupForFromRawValue(project Project, enumName String) returns EnumLookupTarget
+	if let resolved = try project.enumTypes.get(enumName) 'fromResolved'
+		if resolved.isUnion 'isUnion'
+			return EnumLookupTarget.rejected(EnumLookupRejectKind.associatedValueUnion)
+		end 'isUnion'
+		if enumCasesAnyStructBacked(resolved.cases) or resolved.isStringBacked or resolved.isCharBacked or resolved.isFunctionBacked 'rejectKind'
+			return EnumLookupTarget.rejected(EnumLookupRejectKind.structOrAltBackedEnum)
+		end 'rejectKind'
+		return EnumLookupTarget.bareEnum(resolved.cases, isFloatBacked: resolved.isFloatBacked, visibility: resolved.visibility, sourceFilePath: resolved.sourceFilePath, line: resolved.nameLine, column: resolved.nameColumn)
+	end 'fromResolved'
+	if let unresolved = try project.unresolvedEnums.get(enumName) 'fromUnresolved'
+		if unresolved.isUnion 'isUnion2'
+			return EnumLookupTarget.rejected(EnumLookupRejectKind.associatedValueUnion)
+		end 'isUnion2'
+		if enumCasesAnyStructBacked(unresolved.cases) or unresolved.isStringBacked or unresolved.isCharBacked or unresolved.isFunctionBacked 'rejectKind2'
+			return EnumLookupTarget.rejected(EnumLookupRejectKind.structOrAltBackedEnum)
+		end 'rejectKind2'
+		return EnumLookupTarget.bareEnum(unresolved.cases, isFloatBacked: unresolved.isFloatBacked, visibility: unresolved.visibility, sourceFilePath: unresolved.filePath, line: unresolved.line, column: unresolved.column)
+	end 'fromUnresolved'
+	return EnumLookupTarget.notAnEnum()
+end 'classifyEnumLookupForFromRawValue'
+
+// G.2: classify the receiver of an `__enum_<X>_fromName` call. Mirrors
+// `classifyEnumLookupForFromRawValue` but the only spec-rejected shape is
+// the associated-value union (struct- / string- / char- / function-backed
+// enums all keep `.fromName` because the per-case name lookup doesn't
+// depend on the runtime raw-value representation).
+function classifyEnumLookupForFromName(project Project, enumName String) returns EnumLookupTarget
+	if let resolved = try project.enumTypes.get(enumName) 'fromResolved'
+		if resolved.isUnion 'isUnion'
+			return EnumLookupTarget.rejected(EnumLookupRejectKind.associatedValueUnion)
+		end 'isUnion'
+		return EnumLookupTarget.bareEnum(resolved.cases, isFloatBacked: resolved.isFloatBacked, visibility: resolved.visibility, sourceFilePath: resolved.sourceFilePath, line: resolved.nameLine, column: resolved.nameColumn)
+	end 'fromResolved'
+	if let unresolved = try project.unresolvedEnums.get(enumName) 'fromUnresolved'
+		if unresolved.isUnion 'isUnion2'
+			return EnumLookupTarget.rejected(EnumLookupRejectKind.associatedValueUnion)
+		end 'isUnion2'
+		return EnumLookupTarget.bareEnum(unresolved.cases, isFloatBacked: unresolved.isFloatBacked, visibility: unresolved.visibility, sourceFilePath: unresolved.filePath, line: unresolved.line, column: unresolved.column)
+	end 'fromUnresolved'
+	return EnumLookupTarget.notAnEnum()
+end 'classifyEnumLookupForFromName'
+
+// G.2: true when any case in `cases` carries a `= StructType{...}` /
+// `= StructType.create(...)` backing literal. Lifted out of the per-
+// instance `enumIsStructBacked` so the post-parse classifier can use it
+// without a Parser context.
+function enumCasesAnyStructBacked(cases EnumCaseArray) returns bool
+	for c in cases 'scan'
+		if not c.backingStructName.isEmpty() 'hit'
+			return true
+		end 'hit'
+	end 'scan'
+	return false
+end 'enumCasesAnyStructBacked'
+
+// G.2: walk every `MaxonOp.call` op in the merged `allModule`, find calls
+// whose callee was parse-time rewritten to `__enum_<X>_fromRawValue` or
+// `__enum_<X>_fromName`, and either synthesize the per-enum lookup helper
+// (when `X` exists and is bare-case), emit an E3034 diagnostic (when `X`
+// exists but is struct-backed or an associated-value union), or rewrite
+// the callee back to the natural `X.fromRawValue` form (when `X` isn't a
+// known enum at all — preserving the standard unknown-callee
+// diagnostic). Runs once per project after every stdlib / user file has
+// finished parsing.
+export function validateEnumLookupCalls(project Project, allModule MaxonModule)
+	let rawValuePrefix = "__enum_"
+	let rawValueSuffix = "_fromRawValue"
+	let fromNameSuffix = "_fromName"
+	let opCount = allModule.ops.count()
+	// Walk every function so we can attribute each rewritten call to its
+	// declaring file path — needed because `reportCompileError` keys
+	// diagnostics by `filePath` for the LSP / TST line filter and the
+	// call op itself only carries a SourceRange (no file path).
+	for funcIdx in 0 upto allModule.functions.count() 'eachFunc'
+		let func = try allModule.functions.get(funcIdx) otherwise panic("validateEnumLookupCalls: functions.get OOB at {funcIdx}")
+		let callerFilePath = func.sourceFilePath
+		for blockRef in func.blockRefs 'eachBlockRef'
+			let block = try allModule.blocks.get(blockRef) otherwise panic("validateEnumLookupCalls: blocks.get OOB at blockRef={blockRef}")
+			for opIdx in block.opRefs 'eachOp'
+				if opIdx >= opCount 'oobOp'
+					panic("validateEnumLookupCalls: opIdx={opIdx} out of bounds (opCount={opCount})")
+				end 'oobOp'
+				let op = try allModule.ops.get(opIdx) otherwise panic("validateEnumLookupCalls: ops.get OOB at {opIdx}")
+				// `try TestOp.fromRawValue(...)` lands as a `tryCall` after
+				// `parseTryExpression`'s in-place rewrite of the inner
+				// `call`. Both ops carry the same callee/args shape; the
+				// validation contract is identical. `tryCall` also carries
+				// an `errorBoundName` that gets preserved across the
+				// "callee restored to natural form" branch via
+				// `maybeValidateOneEnumLookupTryCall`.
+				if op.name == "call" 'isCall'
+					match op 'extractCall'
+						call(result, callee, callContext, args, argLabels, argTypes, argRanges, range) then maybeValidateOneEnumLookupCall(project, module: allModule, opIdx: opIdx, result: result, callee: callee, callContext: callContext, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, range: range, callerFilePath: callerFilePath, rawValuePrefix: rawValuePrefix, rawValueSuffix: rawValueSuffix, fromNameSuffix: fromNameSuffix)
+						default panic("validateEnumLookupCalls: op.name == 'call' but match fell through")
+					end 'extractCall'
+				end 'isCall'
+				if op.name == "tryCall" 'isTryCall'
+					match op 'extractTry'
+						tryCall(result, callee, callContext, args, argLabels, argTypes, argRanges, errorBoundName, range) then maybeValidateOneEnumLookupTryCall(project, module: allModule, opIdx: opIdx, result: result, callee: callee, callContext: callContext, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, errorBoundName: errorBoundName, range: range, callerFilePath: callerFilePath, rawValuePrefix: rawValuePrefix, rawValueSuffix: rawValueSuffix, fromNameSuffix: fromNameSuffix)
+						default panic("validateEnumLookupCalls: op.name == 'tryCall' but match fell through")
+					end 'extractTry'
+				end 'isTryCall'
+			end 'eachOp'
+		end 'eachBlockRef'
+	end 'eachFunc'
+end 'validateEnumLookupCalls'
+
+// H: per-function name-keyed map from a `varLoad`'s result name to the
+// op index where that varLoad lives in `MaxonModule.ops`. Built during
+// `validateIndirectCallLabels`'s first sub-pass and consulted during
+// the second sub-pass so the producer varLoad gets patched in the same
+// function as the consuming indirectCall — varLoad result names
+// (`$t<n>`) are only per-function-unique (`synthNameCounter` resets
+// across functions), so a project-wide scan would mis-match across
+// IrFunction boundaries.
+typealias VarLoadOpIndexMap = Map with (ByteArray, OpIndex)
+
+// H: walk every `indirectCall` op in the merged `allModule` and patch
+// those the parser emitted with `fnTypeId == 0` — the sentinel for
+// "callee was a `named(X)` reference at parse time and the typealias
+// hadn't yet resolved". For each such op, look up the producer
+// `varLoad`'s `slotType`, re-chase via `chaseTypealiasToFunctionType`
+// against the now-populated typealias registry, and either patch the
+// indirectCall (+ producer varLoad) with the resolved function type, or
+// emit a diagnostic when the callee's type isn't actually a function.
+// Mirrors G.2's `validateEnumLookupCalls` shape: one pass to gather
+// per-function metadata, a second pass to walk ops and act.
+export function validateIndirectCallLabels(project Project, allModule MaxonModule)
+	let opCount = allModule.ops.count()
+	for funcIdx in 0 upto allModule.functions.count() 'eachFunc'
+		let func = try allModule.functions.get(funcIdx) otherwise panic("validateIndirectCallLabels: functions.get OOB at {funcIdx}")
+		let callerFilePath = func.sourceFilePath
+		// First sub-pass: collect every varLoad's result→opIdx so the
+		// second sub-pass can patch the producer's slotType in the same
+		// function as the consuming indirectCall.
+		var varLoadOpIdx = VarLoadOpIndexMap.create()
+		for blockRef in func.blockRefs 'collectBlocks'
+			let block = try allModule.blocks.get(blockRef) otherwise panic("validateIndirectCallLabels: blocks.get OOB at blockRef={blockRef} (collect)")
+			for opIdx in block.opRefs 'collectOps'
+				if opIdx >= opCount 'oobCollect'
+					panic("validateIndirectCallLabels: opIdx={opIdx} out of bounds (opCount={opCount}) during collect")
+				end 'oobCollect'
+				let op = try allModule.ops.get(opIdx) otherwise panic("validateIndirectCallLabels: ops.get OOB at {opIdx} during collect")
+				if op.name == "varLoad" 'isVarLoad'
+					match op 'extractVarLoad'
+						varLoad(result, _, _, _) then varLoadOpIdx.upsert(result, value: opIdx)
+						default panic("validateIndirectCallLabels: op.name == 'varLoad' but match fell through")
+					end 'extractVarLoad'
+				end 'isVarLoad'
+			end 'collectOps'
+		end 'collectBlocks'
+		// Second sub-pass: act on indirectCall ops with the sentinel
+		// `fnTypeId == 0`. Patches both the indirectCall and the
+		// matching producer varLoad in place so lowering sees a
+		// well-formed function-typed value chain.
+		for blockRef in func.blockRefs 'patchBlocks'
+			let block = try allModule.blocks.get(blockRef) otherwise panic("validateIndirectCallLabels: blocks.get OOB at blockRef={blockRef} (patch)")
+			for opIdx in block.opRefs 'patchOps'
+				if opIdx >= opCount 'oobPatch'
+					panic("validateIndirectCallLabels: opIdx={opIdx} out of bounds (opCount={opCount}) during patch")
+				end 'oobPatch'
+				let op = try allModule.ops.get(opIdx) otherwise panic("validateIndirectCallLabels: ops.get OOB at {opIdx} during patch")
+				if op.name == "indirectCall" 'isIndirect'
+					match op 'extractIndirect'
+						indirectCall(result, callee, fnTypeId, args, argLabels, argTypes, argRanges, range) then maybePatchOneIndirectCall(project, module: allModule, opIdx: opIdx, result: result, callee: callee, fnTypeId: fnTypeId, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, range: range, callerFilePath: callerFilePath, varLoadOpIdx: varLoadOpIdx)
+						default panic("validateIndirectCallLabels: op.name == 'indirectCall' but match fell through")
+					end 'extractIndirect'
+				end 'isIndirect'
+			end 'patchOps'
+		end 'patchBlocks'
+	end 'eachFunc'
+end 'validateIndirectCallLabels'
+
+// H: per-op visitor for the second sub-pass. Skips ops whose
+// `fnTypeId` is already resolved (the parser stamped the real id at
+// parse time because the typealias was already in scope). For sentinel
+// ops, looks up the callee's varLoad opIdx, reads its slotType, re-
+// chases the alias, and either patches the indirectCall + producer
+// varLoad with the resolved function type or emits a diagnostic when
+// the chase doesn't land on a function type.
+function maybePatchOneIndirectCall(project Project, module MaxonModule, opIdx OpIndex, result ByteArray, callee ByteArray, fnTypeId FunctionTypeId, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, range SourceRange, callerFilePath FilePath, varLoadOpIdx VarLoadOpIndexMap)
+	if fnTypeId != 0 'alreadyResolved'
+		// Parser already had the function type when the call was emitted
+		// — nothing to defer.
+		return
+	end 'alreadyResolved'
+	let producerOpIdx = try varLoadOpIdx.get(callee) otherwise panic("maybePatchOneIndirectCall: no varLoad producer found for callee '{String.from(callee)}' in this IrFunction — parser emitted indirectCall without a matching varLoad")
+	let slotType = readVarLoadSlotType(module, opIdx: producerOpIdx)
+	let chased = chaseTypealiasToFunctionType(project, t: slotType)
+	if not isFunctionMaxonType(chased) 'notFunction'
+		// Receiver's declared type isn't a function (and isn't a
+		// typealias to one). Report at the call op's SourceRange,
+		// mirroring the parse-time E3005 wording so user-facing
+		// diagnostics stay consistent regardless of load order.
+		let receiverName = slotType.namedAliasNameOrEmpty(project)
+		let receiverDesc = "'{receiverName}'" if not receiverName.isEmpty() else "non-function value"
+		reportCompileError(project, code: ErrorCode.semanticTypeMismatch, message: "indirect call: callee receiver {receiverDesc} does not resolve to a function type", line: range.line, column: range.column, filePath: callerFilePath)
+		return
+	end 'notFunction'
+	let resolvedFnTypeId = functionMaxonTypeId(chased)
+	// Patch the indirectCall in place with the now-known fnTypeId.
+	try module.ops.set(opIdx, value: MaxonOp.indirectCall(result, callee: callee, fnTypeId: resolvedFnTypeId, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, range: range)) otherwise panic("maybePatchOneIndirectCall: ops.set OOB at idx={opIdx} (count={module.ops.count()})")
+	// Patch the producer varLoad's slotType too so `lowerVarLoad`'s
+	// `isFunctionMaxonType(slotType)` gate fires and binds the matching
+	// `__env_<paramName>` pair into `fnEnvVarNames`. Without this, the
+	// downstream `lowerIndirectCall` panics on a missing env entry.
+	patchVarLoadSlotType(module, opIdx: producerOpIdx, resolvedType: chased)
+end 'maybePatchOneIndirectCall'
+
+// H: read the `slotType` field of the varLoad op at `opIdx`. Panics if
+// the op isn't a varLoad — caller must guard.
+function readVarLoadSlotType(module MaxonModule, opIdx OpIndex) returns MaxonType
+	let op = try module.ops.get(opIdx) otherwise panic("readVarLoadSlotType: ops.get OOB at {opIdx}")
+	return match op 'extract'
+		varLoad(_, _, slotType, _) gives slotType
+		default panic("readVarLoadSlotType: op at idx={opIdx} is not a varLoad")
+	end 'extract'
+end 'readVarLoadSlotType'
+
+// H: replace the varLoad at `opIdx` in place, swapping its `slotType`
+// for `resolvedType`. Panics on a non-varLoad op — caller looked up
+// `opIdx` via the `varLoadOpIdx` map which only carries varLoad results.
+function patchVarLoadSlotType(module MaxonModule, opIdx OpIndex, resolvedType MaxonType)
+	let op = try module.ops.get(opIdx) otherwise panic("patchVarLoadSlotType: ops.get OOB at {opIdx}")
+	match op 'extract'
+		varLoad(result, slotId, _, range) then try module.ops.set(opIdx, value: MaxonOp.varLoad(result, slotId: slotId, slotType: resolvedType, range: range)) otherwise panic("patchVarLoadSlotType: ops.set OOB at {opIdx}")
+		default panic("patchVarLoadSlotType: op at idx={opIdx} is not a varLoad")
+	end 'extract'
+end 'patchVarLoadSlotType'
+
+// G.2: discriminate an enum-lookup callee. Returns (variant=none, "")
+// when the callee was not a `__enum_<X>_fromRawValue` / `__enum_<X>_fromName`
+// rewrite — caller skips the op.
+enum EnumLookupVariant
+	noneVariant
+	fromRawValueVariant
+	fromNameVariant
+end 'EnumLookupVariant'
+
+// G.2: true when `variant` is one of the two real lookup kinds (not the
+// `noneVariant` sentinel). The single decode point for "did the callee
+// match the rewrite shape" shared by both `call` and `tryCall` gates.
+function enumLookupVariantIsLookup(variant EnumLookupVariant) returns bool
+	return match variant 'isLookup'
+		fromRawValueVariant gives true
+		fromNameVariant gives true
+		noneVariant gives false
+	end 'isLookup'
+end 'enumLookupVariantIsLookup'
+
+// G.2: true when `variant` selects the `fromRawValue` helper (false for
+// `fromName` and the `noneVariant` sentinel). Centralizes the branch that
+// chooses the suffix length, classifier, and synthesized helper.
+function enumLookupVariantIsFromRawValue(variant EnumLookupVariant) returns bool
+	return match variant 'isFRV'
+		fromRawValueVariant gives true
+		fromNameVariant gives false
+		noneVariant gives false
+	end 'isFRV'
+end 'enumLookupVariantIsFromRawValue'
+
+type EnumLookupCalleeSplit
+	export var variant as EnumLookupVariant
+	export var enumName as String
+
+	export static function notALookup() returns EnumLookupCalleeSplit
+		return Self{variant: EnumLookupVariant.noneVariant, enumName: ""}
+	end 'notALookup'
+
+	export static function lookup(variant EnumLookupVariant, enumName String) returns EnumLookupCalleeSplit
+		return Self{variant: variant, enumName: enumName}
+	end 'lookup'
+end 'EnumLookupCalleeSplit'
+
+// G.2: shared callee-shape decoder for both `call` and `tryCall`
+// validation paths. Returns the embedded enum name and the lookup
+// variant when the callee matches `__enum_<X>_fromRawValue` /
+// `__enum_<X>_fromName`; otherwise returns `notALookup()` so the caller
+// short-circuits.
+function splitEnumLookupCallee(callee ByteArray, rawValuePrefix String, rawValueSuffix String, fromNameSuffix String) returns EnumLookupCalleeSplit
+	let calleeStr = String.from(callee)
+	if not calleeStr.startsWith(rawValuePrefix) 'notRewritten'
+		return EnumLookupCalleeSplit.notALookup()
+	end 'notRewritten'
+	var variant = EnumLookupVariant.noneVariant
+	if calleeStr.endsWith(rawValueSuffix) 'isFRV'
+		variant = EnumLookupVariant.fromRawValueVariant
+	end 'isFRV' else 'maybeFN'
+		if calleeStr.endsWith(fromNameSuffix) 'isFN'
+			variant = EnumLookupVariant.fromNameVariant
+		end 'isFN'
+	end 'maybeFN'
+	let isFromRawValue = enumLookupVariantIsFromRawValue(variant)
+	if not enumLookupVariantIsLookup(variant) 'unknownVariant'
+		return EnumLookupCalleeSplit.notALookup()
+	end 'unknownVariant'
+	let prefixLen = rawValuePrefix.byteLength()
+	let suffixLen = (rawValueSuffix.byteLength()) if isFromRawValue else fromNameSuffix.byteLength()
+	let totalLen = calleeStr.byteLength()
+	if totalLen <= prefixLen + suffixLen 'tooShort'
+		// `__enum__fromRawValue` (no enum name) shouldn't ever be
+		// emitted; if it were the safe action is to skip so a
+		// downstream diagnostic surfaces the malformed callee.
+		return EnumLookupCalleeSplit.notALookup()
+	end 'tooShort'
+	let enumName = sliceCalleeStringMid(calleeStr, prefixLen: prefixLen, suffixLen: suffixLen)
+	if enumName.isEmpty() 'emptyName'
+		return EnumLookupCalleeSplit.notALookup()
+	end 'emptyName'
+	return EnumLookupCalleeSplit.lookup(variant, enumName: enumName)
+end 'splitEnumLookupCallee'
+
+// G.2: shared synthesize / diagnose dispatch for both `call` and
+// `tryCall`. Returns the natural-form ByteArray callee when the receiver
+// isn't actually an enum and the op must be rewritten; returns an empty
+// ByteArray when the op should be left alone (helper was synthesized or
+// an E3034 diagnostic was emitted). Centralizes the spec-rejected
+// "enum"/"union" wording so the two op kinds stay in lockstep.
+function dispatchEnumLookupValidation(project Project, module MaxonModule, variant EnumLookupVariant, enumName String, range SourceRange, callerFilePath FilePath) returns ByteArray
+	let isFromRawValue = enumLookupVariantIsFromRawValue(variant)
+	let classification = classifyEnumLookupForFromRawValue(project, enumName: enumName) if isFromRawValue else classifyEnumLookupForFromName(project, enumName: enumName)
+	if classification.unknown 'isUnknown'
+		// Receiver isn't an enum at all: restore the natural qualified
+		// callee shape so the downstream unknown-callee diagnostic
+		// surfaces with a clean message instead of the codegen-time
+		// "callee not registered in funcSignatures" panic. We re-intern
+		// the natural name into `project.calleeNames` so the rewritten
+		// op carries the same ByteArray-encoded interning the parser
+		// would have produced.
+		let memberName = "fromRawValue" if isFromRawValue else "fromName"
+		let naturalCalleeStr = "{enumName}.{memberName}"
+		return project.calleeNames.intern(naturalCalleeStr)
+	end 'isUnknown'
+	if classification.validBareEnum 'isBare'
+		// Synthesize the helper if not already present. The synthesis
+		// helpers themselves guard against duplicates so calling them
+		// for an already-registered helper is a no-op.
+		let synthNamespace = deriveNamespace(classification.sourceFilePath, rootPath: project.rootPath)
+		if isFromRawValue 'synthFRV'
+			synthesizeEnumFromRawValueHelperImpl(project, module: module, namespace: synthNamespace, filePath: classification.sourceFilePath, enumName: enumName, cases: classification.cases, isFloatBacked: classification.isFloatBacked, visibility: classification.visibility, line: classification.line, column: classification.column)
+		end 'synthFRV' else 'synthFN'
+			synthesizeEnumFromNameHelperImpl(project, module: module, namespace: synthNamespace, filePath: classification.sourceFilePath, enumName: enumName, cases: classification.cases, isFloatBacked: classification.isFloatBacked, visibility: classification.visibility, line: classification.line, column: classification.column)
+		end 'synthFN'
+		return ByteArray.create()
+	end 'isBare'
+	// Spec-rejected helper kind (struct-backed enum, alt-backed enum,
+	// or associated-value union). Emit E3034 mirroring the C# bootstrap
+	// wording — `unknown enum case: '<method>'` for enum shapes,
+	// `unknown union case: '<method>'` for associated-value unions.
+	let methodName = "fromRawValue" if isFromRawValue else "fromName"
+	let kindLabel = match classification.rejectKind 'label'
+		associatedValueUnion gives "union"
+		structOrAltBackedEnum gives "enum"
+		none panic("dispatchEnumLookupValidation: rejection branch reached with rejectKind=none")
+	end 'label'
+	reportCompileError(project, code: ErrorCode.semanticEnumUnknownCase, message: "unknown {kindLabel} case: '{methodName}'", line: range.line, column: range.column, filePath: callerFilePath)
+	return ByteArray.create()
+end 'dispatchEnumLookupValidation'
+
+// G.2: validate one parser-emitted `call` op against the enum-lookup
+// rewrite contract. See `dispatchEnumLookupValidation` for the
+// per-classification action; on the "natural form restored" branch we
+// replace the call op in place with the natural-form callee so the
+// downstream unknown-callee diagnostic anchors at the call op's
+// original SourceRange.
+function maybeValidateOneEnumLookupCall(project Project, module MaxonModule, opIdx OpIndex, result ByteArray, callee ByteArray, callContext CallContext, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, range SourceRange, callerFilePath FilePath, rawValuePrefix String, rawValueSuffix String, fromNameSuffix String)
+	let naturalCallee = enumLookupNaturalCalleeOrEmpty(project, module: module, callee: callee, range: range, callerFilePath: callerFilePath, rawValuePrefix: rawValuePrefix, rawValueSuffix: rawValueSuffix, fromNameSuffix: fromNameSuffix)
+	if naturalCallee.isEmpty() 'leaveAlone'
+		return
+	end 'leaveAlone'
+	try module.ops.set(opIdx, value: MaxonOp.call(result, callee: naturalCallee, callContext: callContext, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, range: range)) otherwise panic("maybeValidateOneEnumLookupCall: ops.set OOB at idx={opIdx} (count={module.ops.count()})")
+end 'maybeValidateOneEnumLookupCall'
+
+// G.2: validate one parser-emitted `tryCall` op. Mirrors
+// `maybeValidateOneEnumLookupCall` but preserves the `errorBoundName`
+// across the natural-form restoration path so the downstream
+// `try ... otherwise` machinery still binds the error flag to the same
+// SSA name.
+function maybeValidateOneEnumLookupTryCall(project Project, module MaxonModule, opIdx OpIndex, result ByteArray, callee ByteArray, callContext CallContext, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, errorBoundName ByteArray, range SourceRange, callerFilePath FilePath, rawValuePrefix String, rawValueSuffix String, fromNameSuffix String)
+	let naturalCallee = enumLookupNaturalCalleeOrEmpty(project, module: module, callee: callee, range: range, callerFilePath: callerFilePath, rawValuePrefix: rawValuePrefix, rawValueSuffix: rawValueSuffix, fromNameSuffix: fromNameSuffix)
+	if naturalCallee.isEmpty() 'leaveAlone'
+		return
+	end 'leaveAlone'
+	try module.ops.set(opIdx, value: MaxonOp.tryCall(result, callee: naturalCallee, callContext: callContext, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, errorBoundName: errorBoundName, range: range)) otherwise panic("maybeValidateOneEnumLookupTryCall: ops.set OOB at idx={opIdx} (count={module.ops.count()})")
+end 'maybeValidateOneEnumLookupTryCall'
+
+// G.2: shared split / gate / dispatch for both the `call` and `tryCall`
+// enum-lookup validation paths. Returns the natural-form callee ByteArray
+// when the op must be rewritten back to `X.fromRawValue` / `X.fromName`,
+// or an empty ByteArray when the op should be left alone — either because
+// the callee wasn't an enum-lookup rewrite at all, or because the helper
+// was synthesized / an E3034 diagnostic was emitted. The caller is the
+// only part that differs between the two op kinds (the `ops.set`
+// constructor), so everything up to that point lives here.
+function enumLookupNaturalCalleeOrEmpty(project Project, module MaxonModule, callee ByteArray, range SourceRange, callerFilePath FilePath, rawValuePrefix String, rawValueSuffix String, fromNameSuffix String) returns ByteArray
+	let split = splitEnumLookupCallee(callee, rawValuePrefix: rawValuePrefix, rawValueSuffix: rawValueSuffix, fromNameSuffix: fromNameSuffix)
+	if not enumLookupVariantIsLookup(split.variant) 'skip'
+		return ByteArray.create()
+	end 'skip'
+	return dispatchEnumLookupValidation(project, module: module, variant: split.variant, enumName: split.enumName, range: range, callerFilePath: callerFilePath)
+end 'enumLookupNaturalCalleeOrEmpty'
+
+// G.2: slice the middle of a callee string — given the byte lengths of
+// the leading `__enum_` prefix and the trailing `_fromRawValue` /
+// `_fromName` suffix, return the embedded enum name. Returns an empty
+// string when the slice would be empty or fails (defensive; callers
+// already gated on total length, so the slice always succeeds in
+// practice).
+function sliceCalleeStringMid(calleeStr String, prefixLen ByteCount, suffixLen ByteCount) returns String
+	let totalLen = calleeStr.byteLength()
+	let endIdx = totalLen - suffixLen
+	if endIdx <= prefixLen 'empty'
+		return ""
+	end 'empty'
+	let suffixManaged = try calleeStr.managed.slice(prefixLen, endIdx) otherwise return ""
+	return String.init(suffixManaged)
+end 'sliceCalleeStringMid'
 
 // Result for the parser-time varLoad lookup in `chaseVarLoadProducerType`.
 // `matched` is true when the varLoad's result name equals the target name;
@@ -14818,6 +15445,23 @@ function tokenIsIdentifierLike(token Token) returns bool
 	let isUnderscore = first == '_'
 	return isLower or isUpper or isUnderscore
 end 'tokenIsIdentifierLike'
+
+// True iff `name`'s first byte is an ASCII capital letter — the syntactic
+// discriminator for "this could plausibly be a type / enum name". Used by
+// the parse-time `<TypeName>.fromRawValue` / `<TypeName>.fromName` rewrite
+// (G.2) to decide when to optimistically rewrite the callee to the per-enum
+// helper symbol. The post-parse `validateEnumLookupCalls` pass then
+// validates the rewrite against the fully-populated enum tables and either
+// keeps it, synthesizes the helper, emits an E3034 diagnostic, or reverts
+// the rewrite to the natural `T.method` form for a non-enum prefix.
+function isCapitalizedIdent(name String) returns bool
+	let bytes = name.toByteArray()
+	if bytes.count() == 0 'empty'
+		return false
+	end 'empty'
+	let first = try bytes.get(0) otherwise return false
+	return first >= 'A' and first <= 'Z'
+end 'isCapitalizedIdent'
 
 // True iff `kind` is a literal-producing token (the lexer stripped quoting
 // from string / char / byte-string literals so the raw `value` is the

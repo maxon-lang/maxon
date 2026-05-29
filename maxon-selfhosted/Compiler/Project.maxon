@@ -349,6 +349,17 @@ export type Project
 	// rather than a map.
 	export var unresolvedExtensions as UnresolvedExtensionArray
 
+	// Cross-file forward-reference queue for extension inner typealiases whose
+	// target struct/interface had NOT been parsed yet when the `extension`
+	// block was parsed (e.g. `extension Sorter { typealias Comparator = ... }`
+	// in a file that parses before `type Sorter`). Keyed by target type name;
+	// the value accumulates the extension's inner aliases. Drained at the top
+	// of runTypeResolution (drainPendingExtensionInnerAliases) BEFORE
+	// resolveAllStructTypes, by which point every type declaration has been
+	// parsed, so the aliases land in the target's innerAliases and get promoted
+	// into the resolved struct/interface inner-alias maps.
+	export var pendingExtensionInnerAliases as PendingExtensionInnerAliasMap
+
 	// Enum type registry: maps enum names to their case lists. Populated by
 	// the TypeResolution pass as it drains `unresolvedEnums`. Each enum's
 	// cases are also registered as top-level integer constants
@@ -686,6 +697,7 @@ export type Project
 			unresolvedStructTypes: UnresolvedStructTypeMap.create(),
 			structInnerAliasNames: InnerAliasNameSet.create(),
 			unresolvedExtensions: UnresolvedExtensionArray.create(),
+			pendingExtensionInnerAliases: PendingExtensionInnerAliasMap.create(),
 			enumTypes: EnumTypeMap.create(),
 			unresolvedEnums: UnresolvedEnumTypeMap.create(),
 			unresolvedInterfaces: UnresolvedInterfaceMap.create(),
@@ -2240,6 +2252,10 @@ export type UnresolvedExtension
 end 'UnresolvedExtension'
 
 export typealias UnresolvedExtensionArray = Array with UnresolvedExtension
+
+// Target-type-name -> accumulated extension inner aliases queued for a target
+// that wasn't parsed yet. See `Project.pendingExtensionInnerAliases`.
+export typealias PendingExtensionInnerAliasMap = Map with (String, InnerAliasMap)
 
 export union ConstantValue
 	// String-typed constants store an interned StringId (not raw bytes) so

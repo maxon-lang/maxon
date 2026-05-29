@@ -214,7 +214,19 @@ function cloneAndAppendMonomorph(project Project, dstModule MaxonModule, srcModu
 	var newAbiParamTypes = MaxonTypeArray.create()
 	var newParamNamesForSig = StringArray.create()
 	var newParamDefaults = ParamDefaultArray.create()
+	// slot<->abi decoupling: build the clone's reservations + slot<->abi maps
+	// here, in lockstep with the ABI vector. The clone runs AFTER the
+	// module-wide buildAbiParamMaps pass, so it must produce these itself.
+	// Source scope slots come from the source's paramReservations (1:1 with
+	// srcSig.paramTypes, __self included); resolve them through slotRemap into
+	// the clone's dense slot space. The companion KIND is decided from the
+	// SUBSTITUTED type (an interface param may fold to a plain type -> no
+	// companion), matching the ABI-vector decision below exactly.
+	var newReservations = ParamReservationArray.create()
+	var slotToAbi = ScopeSlotToAbiIndexMap.create()
+	var abiToSlot = VarSlotArray.create()
 	let srcSig = try project.funcSignatures.get(srcFunc.name) otherwise panic("cloneAndAppendMonomorph: source signature '{srcFunc.name}' missing")
+	let haveSrcReservations = srcFunc.paramReservations.count() == srcSig.paramTypes.count()
 	for i in 0 upto srcSig.paramTypes.count() 'eachUserParam'
 		let pt = try srcSig.paramTypes.get(i) otherwise panic("cloneAndAppendMonomorph: srcSig.paramTypes.get OOB at {i}")
 		let pn = try srcSig.paramNames.get(i) otherwise panic("cloneAndAppendMonomorph: srcSig.paramNames.get OOB at {i}")
@@ -223,15 +235,49 @@ function cloneAndAppendMonomorph(project Project, dstModule MaxonModule, srcModu
 		newSigParamTypes.push(substituted)
 		newParamNamesForSig.push(pn)
 		newParamDefaults.push(pd)
+
+		// Resolve this param's clone scope slot from the source reservation.
+		var paramCloneSlot = i as VarSlot
+		var hasCompanion = false
+		var companionCloneSlot = 0 as VarSlot
+		if haveSrcReservations 'haveRes'
+			let srcRes = try srcFunc.paramReservations.get(i) otherwise panic("cloneAndAppendMonomorph: paramReservations.get OOB at {i}")
+			paramCloneSlot = slotRemap.resolve(srcRes.paramSlot)
+			hasCompanion = srcRes.hasCompanion
+			if srcRes.hasCompanion 'resolveCompanion'
+				companionCloneSlot = slotRemap.resolve(srcRes.companionSlot)
+			end 'resolveCompanion'
+		end 'haveRes'
+
+		// Place the user param at the next ABI index + map it to its clone slot.
+		let paramAbiIdx = newAbiParamTypes.count()
 		newAbiParamTypes.push(substituted)
-		// Mirror parser ABI expansion: function-typed param expands to
-		// (fn, env-i64) and fat interface-typed param to (value, witness-i64).
+		slotToAbi.upsert(paramCloneSlot, value: paramAbiIdx)
+		abiToSlot.push(paramCloneSlot)
+
+		// Mirror parser ABI expansion / buildAbiParamMaps: function-typed param
+		// -> env companion, fat interface-typed param -> witness companion.
+		var kind = ParamCompanionKind.none
 		if isFunctionMaxonType(substituted) 'addEnv'
-			newAbiParamTypes.push(MaxonType.integer)
-		end 'addEnv'
-		if interfaceTypeIsFat(substituted) 'addWitnessSlot'
-			newAbiParamTypes.push(MaxonType.integer)
+			kind = ParamCompanionKind.env
+		end 'addEnv' else if interfaceTypeIsFat(substituted) 'addWitnessSlot'
+			kind = ParamCompanionKind.witness
 		end 'addWitnessSlot'
+		if not isParamCompanionNone(kind) 'placeCompanion'
+			let companionAbiIdx = newAbiParamTypes.count()
+			newAbiParamTypes.push(MaxonType.integer)
+			// Use the reserved companion clone slot when the source carried one;
+			// otherwise the companion has no scope slot (shouldn't happen for a
+			// named-alias param that resolved to fn/interface, but stays safe).
+			if hasCompanion 'mapCompanion'
+				slotToAbi.upsert(companionCloneSlot, value: companionAbiIdx)
+				abiToSlot.push(companionCloneSlot)
+			end 'mapCompanion' else 'noCompanionSlot'
+				abiToSlot.push(companionCloneSlot)
+			end 'noCompanionSlot'
+		end 'placeCompanion'
+
+		newReservations.push(ParamReservation.create(paramCloneSlot, hasCompanion: hasCompanion, companionSlot: companionCloneSlot, companionKind: kind))
 	end 'eachUserParam'
 
 	// Substitute the return type.
@@ -248,6 +294,10 @@ function cloneAndAppendMonomorph(project Project, dstModule MaxonModule, srcModu
 	newFunc.nameLine = srcFunc.nameLine
 	newFunc.nameColumn = srcFunc.nameColumn
 	newFunc.nextBlockId = srcFunc.nextBlockId
+	// slot<->abi decoupling: stamp the clone's reservations + maps built above.
+	newFunc.paramReservations = newReservations
+	newFunc.scopeSlotToAbiParamIndex = slotToAbi
+	newFunc.abiParamIndexToScopeSlot = abiToSlot
 
 	// Rebuild Scope with substituted varTypes. Slot ids are remapped
 	// through `slotRemap` so the cloned scope's slots are dense (no
@@ -537,17 +587,14 @@ function buildSlotRemap(srcFunc IrFunction) returns SlotRemap
 		if foundName.isEmpty() 'unmapped'
 			continue
 		end 'unmapped'
-		if foundName == "__witness___self" 'dropWitness'
-			continue
-		end 'dropWitness'
-		// Also drop any `__witness_<otherParam>` slot the parser added
-		// for interface-typed user params (Phase 11.4 ABI expansion).
-		// Today only `__self` ever ends up interface-typed inside a
-		// monomorphizable extension, but the prefix check keeps the
-		// drop conservative against future shapes.
-		if foundName.startsWith("__witness_") 'dropWitnessGeneric'
-			continue
-		end 'dropWitnessGeneric'
+		// slot<->abi decoupling: the parser reserves ONE `__companion_<param>`
+		// scope slot per named-alias param (env OR witness, decided later).
+		// KEEP these in the remap so the clone scope retains the param+companion
+		// structure that lowering's fnEnvVarNames / interfaceWitnessSlots load
+		// via the rebuilt slot<->abi maps (see the map-build loop below). The
+		// companion may turn out unused after substitution (param folds to a
+		// plain type) — an unused remapped scope slot is harmless (no body op
+		// and no map entry reference it).
 		remap.add(srcSlot, dstId: dstSlot)
 		dstSlot = dstSlot + 1
 	end 'eachSlot'

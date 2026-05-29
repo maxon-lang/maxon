@@ -1053,6 +1053,37 @@ end 'substituteThrowsName'
 // the now-fully-populated registries). The expected method set from any
 // `implements` clause is computed here so the resolved `StructType` carries
 // it; Phase 3b consumes the field for E3016 enforcement.
+// Drain the cross-file extension-inner-alias queue. The parser queues an
+// extension's inner typealiases here when the target struct/interface hadn't
+// been parsed yet (`mergeExtensionInnerAliases`). By the time runTypeResolution
+// runs, every type declaration exists, so merge each queued alias into its
+// target's `innerAliases` (unresolved struct or interface). resolveAllStructTypes
+// / resolveAllInterfaces then promote them into the resolved inner-alias maps
+// so `chaseTypealiasToFunctionType` (used by buildAbiParamMaps and the indirect-
+// call resolver) finds them. A target still absent here stays unmerged — the
+// extension's methods surface the missing-target diagnostic on their own.
+function drainPendingExtensionInnerAliases(project Project)
+	for (targetTypeName, extInnerAliases) in project.pendingExtensionInnerAliases 'eachTarget'
+		if var structTarget = try project.unresolvedStructTypes.get(targetTypeName) 'structHit'
+			for (aliasName, aliasExpr) in extInnerAliases 'eachStructAlias'
+				if not structTarget.innerAliases.contains(aliasName) 'novelStruct'
+					structTarget.innerAliases.upsert(aliasName, value: aliasExpr)
+				end 'novelStruct'
+				project.structInnerAliasNames.insert(aliasName)
+			end 'eachStructAlias'
+			project.unresolvedStructTypes.upsert(targetTypeName, value: structTarget)
+		end 'structHit' else if var ifaceTarget = try project.unresolvedInterfaces.get(targetTypeName) 'ifaceHit'
+			for (aliasName, aliasExpr) in extInnerAliases 'eachIfaceAlias'
+				if not ifaceTarget.innerAliases.contains(aliasName) 'novelIface'
+					ifaceTarget.innerAliases.upsert(aliasName, value: aliasExpr)
+				end 'novelIface'
+			end 'eachIfaceAlias'
+			project.unresolvedInterfaces.upsert(targetTypeName, value: ifaceTarget)
+		end 'ifaceHit'
+	end 'eachTarget'
+	project.pendingExtensionInnerAliases = PendingExtensionInnerAliasMap.create()
+end 'drainPendingExtensionInnerAliases'
+
 //
 // The interface drain (`resolveAllInterfaces`) MUST run before this so the
 // expected-method computation can look up named interfaces.
@@ -6785,6 +6816,123 @@ function maxonTypeIsRefinementOf(project Project, existing MaxonType, refined Ma
 	end 'pickExisting'
 end 'maxonTypeIsRefinementOf'
 
+// --- ABI param-vector expansion (function/interface companion slots) ---
+//
+// Decoupling of scope-slot id from ABI parameter index. The parser records a
+// `ParamReservation` per user param (including `__self`), reserving one
+// companion scope slot for every `named(alias)` param without deciding its
+// type. Once aliases resolve, this pass walks each function's reservations in
+// lockstep with its user-facing `maxonParamTypes`, decides — from the RESOLVED
+// type — whether each param needs an env (function-typed) or witness
+// (interface-fat) companion, and:
+//   - rebuilds `maxonParamTypes` as the ABI vector (user param, then its
+//     companion opaquePointer when present), updating `paramCount`;
+//   - records `scopeSlotToAbiParamIndex` / `abiParamIndexToScopeSlot` so
+//     lowering/Mem2Reg can translate between the parser's scope-slot space and
+//     the ABI parameter index (which == param ValueId) without assuming they
+//     are equal;
+//   - finalizes each reservation's `companionKind`.
+// Must run after alias resolution (`resolveAllStructTypes` et al.) and before
+// `buildProducerTypes` / lowering / the content-hash stamp.
+//
+// Functions with empty `paramReservations` (synthesized helpers, lifted
+// closures — whose trailing `__env` is position-derived) are left untouched:
+// their `maxonParamTypes` already carries whatever ABI shape they need.
+
+// Decide the companion a resolved parameter type requires. `named(alias)`
+// params chase through the typealias registries: a function-type alias yields
+// `env`, an interface(-fat) alias yields `witness`, anything else `none`.
+function resolveParamCompanionKind(project Project, paramType MaxonType) returns ParamCompanionKind
+	// Function-typed (directly, or via a typealias) -> env companion.
+	let chasedFn = chaseTypealiasToFunctionType(project, t: paramType)
+	if isFunctionMaxonType(chasedFn) 'isFn'
+		return ParamCompanionKind.env
+	end 'isFn'
+	// Interface-fat (directly, or the alias resolves to an interface) ->
+	// witness companion. `interfaceTypeIsFat` only matches the resolved
+	// `MaxonType.interface(_)` arm, so resolve a `named(alias)` to its base
+	// type name and re-intern (internMaxonType promotes interface names to
+	// the `interface(_)` arm).
+	if interfaceTypeIsFat(paramType) 'directIface'
+		return ParamCompanionKind.witness
+	end 'directIface'
+	let aliasName = paramType.namedAliasNameOrEmpty(project)
+	if not aliasName.isEmpty() 'namedParam'
+		let baseName = try baseNameOfMaxonType(project, t: paramType) otherwise aliasName
+		let reInterned = internMaxonType(project, name: baseName)
+		if interfaceTypeIsFat(reInterned) 'aliasIface'
+			return ParamCompanionKind.witness
+		end 'aliasIface'
+	end 'namedParam'
+	return ParamCompanionKind.none
+end 'resolveParamCompanionKind'
+
+// Expand one function's ABI param vector and build its slot<->abi maps from
+// the parser's reservations. See the section comment above.
+function buildAbiParamMapForFunc(project Project, func IrFunction)
+	if func.paramReservations.count() == 0 'noReservations'
+		// Lifted closures / synthesized functions: keep maxonParamTypes as-is.
+		return
+	end 'noReservations'
+	// Idempotency guard: runTypeResolution can run more than once over the
+	// same module (e.g. stdlib then user, or re-entrant query paths), and
+	// expanding an already-expanded maxonParamTypes would double-insert
+	// companions and misalign every index. A populated scopeSlotToAbiParamIndex
+	// means this function was already expanded; skip.
+	if func.scopeSlotToAbiParamIndex.count() > 0 'alreadyExpanded'
+		return
+	end 'alreadyExpanded'
+
+	// The reservations are 1:1 with the user-facing param types the parser
+	// stored in maxonParamTypes (one per declared user param, __self included).
+	let userParamCount = func.paramReservations.count()
+	var abiTypes = MaxonTypeArray.create()
+	var slotToAbi = ScopeSlotToAbiIndexMap.create()
+	var abiToSlot = VarSlotArray.create()
+	var updatedReservations = ParamReservationArray.create()
+
+	for pi in 0 upto userParamCount 'eachParam'
+		let reservation = try func.paramReservations.get(pi) otherwise panic("buildAbiParamMapForFunc: paramReservations.get OOB at {pi} in {func.name}")
+		let paramType = try func.maxonParamTypes.get(pi) otherwise panic("buildAbiParamMapForFunc: maxonParamTypes.get OOB at {pi} in {func.name} (reservations/types length mismatch)")
+
+		// Place the user param at the next ABI index.
+		let paramAbiIdx = abiTypes.count()
+		abiTypes.push(paramType)
+		slotToAbi.upsert(reservation.paramSlot, value: paramAbiIdx)
+		abiToSlot.push(reservation.paramSlot)
+
+		// Decide the companion from the resolved type. A reservation only
+		// carries a companion slot for `named(alias)` params; primitive
+		// params never need one, so skip the decision when none was reserved.
+		var kind = ParamCompanionKind.none
+		if reservation.hasCompanion 'maybeCompanion'
+			kind = resolveParamCompanionKind(project, paramType: paramType)
+			if not isParamCompanionNone(kind) 'hasReal'
+				let companionAbiIdx = abiTypes.count()
+				abiTypes.push(MaxonType.opaquePointer)
+				slotToAbi.upsert(reservation.companionSlot, value: companionAbiIdx)
+				abiToSlot.push(reservation.companionSlot)
+			end 'hasReal'
+		end 'maybeCompanion'
+
+		updatedReservations.push(ParamReservation.create(reservation.paramSlot, hasCompanion: reservation.hasCompanion, companionSlot: reservation.companionSlot, companionKind: kind))
+	end 'eachParam'
+
+	func.maxonParamTypes = abiTypes
+	func.paramCount = abiTypes.count()
+	func.scopeSlotToAbiParamIndex = slotToAbi
+	func.abiParamIndexToScopeSlot = abiToSlot
+	func.paramReservations = updatedReservations
+end 'buildAbiParamMapForFunc'
+
+// Module-level driver: expand every function's ABI param vector + maps.
+function buildAbiParamMaps(project Project, module MaxonModule)
+	for funcIdx in 0 upto module.functions.count() 'eachFunc'
+		var func = try module.functions.get(funcIdx) otherwise panic("buildAbiParamMaps: functions.get OOB at {funcIdx}")
+		buildAbiParamMapForFunc(project, func: func)
+	end 'eachFunc'
+end 'buildAbiParamMaps'
+
 // --- Pass entry ---
 
 // Drains the project-wide unresolved-typealias registry, then walks the
@@ -6810,6 +6958,11 @@ export function runTypeResolution(project Project, module MaxonModule, filePath 
 	project.resolvedCallees = ResolvedCalleesMap.create()
 	project.resolvedReceiverTypes = ResolvedReceiverTypesMap.create()
 	project.callParamTypes = CallParamTypesMap.create()
+	// Merge cross-file extension inner typealiases that the parser queued
+	// because their target type hadn't been parsed yet. Must run before the
+	// interface/struct drains so the aliases promote into the resolved
+	// inner-alias maps. See drainPendingExtensionInnerAliases.
+	drainPendingExtensionInnerAliases(project)
 	resolveAllTypealiases(project)
 	// Interfaces drain before structs/enums so the conformance walk in
 	// `resolveAllStructTypes` / `resolveAllEnumTypes` can look up named
@@ -6877,6 +7030,24 @@ export function runTypeResolution(project Project, module MaxonModule, filePath 
 	// names the first source. Ops from other files would visibility-
 	// check against the wrong path otherwise.
 	rewriteUnresolvedOpsPerFunction(project, module: module, fallbackFilePath: filePath)
+
+	// Now that every named-alias param type has resolved, expand each
+	// function's ABI param vector with env/witness companions (driven by
+	// the parser's per-param reservations) and build the scope-slot<->abi
+	// maps. Runs before buildProducerTypes (the first fnTypeId/param
+	// consumer) and before lowering, so every consumer sees the final
+	// ABI shape + maps. See buildAbiParamMaps.
+	buildAbiParamMaps(project, module: module)
+
+	// Resolve indirect-call sites the parser emitted with the sentinel
+	// fnTypeId=0 (callee was a `named(alias)` whose typealias hadn't
+	// resolved at parse time). Runs here — after alias resolution and ABI
+	// expansion, before buildProducerTypes (the first fnTypeId consumer,
+	// which panics on functionTypes.get(0)). Patches each indirectCall +
+	// its producer varLoad with the resolved function type, or emits E3005
+	// when the callee doesn't resolve to a function. Replaces the former
+	// pre-TypeResolution pass that could not see cross-file aliases.
+	validateIndirectCallLabels(project, allModule: module)
 
 	// Now that every unresolvedRead/Assign has been replaced with its concrete
 	// op shape (globalLoad/globalStore/literal), build per-function producer-

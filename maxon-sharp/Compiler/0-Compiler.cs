@@ -604,8 +604,65 @@ public class Compiler {
 
   private static void PreRegisterTypeNames(IrModule<MaxonOp> module, SourceFile source, List<Token> tokens, bool isStdlib = false) {
     int parenDepth = 0;
+    // Visibility of the `extension` block currently being scanned (if any), so
+    // that a typealias declared directly inside `module extension X` / `export
+    // extension X` inherits that block's cross-file visibility. Without this an
+    // inner alias would be recorded as file-scoped and a consumer file that
+    // parses before the extension's full PreScan would reject it as an unknown
+    // cross-file type. -1 means "not inside an extension block".
+    int extensionBlockEndDepth = -1;
+    bool extensionIsExported = false;
+    bool extensionIsModuleVisible = false;
+    int blockDepth = 0;
+    bool prevWasNewline = true; // first scanned token sits at statement start
+    var prevTokenType = TokenType.Newline;
     for (int i = 0; i < tokens.Count - 1; i++) {
       var t = tokens[i];
+
+      // Block-structure tracking (mirrors ProcessExtensionBlock's scanner) so we
+      // know when the current `extension` block closes. Done before the
+      // paren-depth gate because openers/`end` are statement-level tokens.
+      {
+        var next = i + 1 < tokens.Count ? tokens[i + 1].Type : TokenType.Eof;
+        // `extension` is intentionally excluded here: its opener may be preceded
+        // by a `module`/`export` modifier that the loop body consumes (advancing
+        // past the `extension` token), so the increment is done in the extension
+        // branch below where the token is seen regardless of any modifier.
+        if (t.Type is TokenType.Function or TokenType.If or TokenType.While
+            or TokenType.For or TokenType.Match or TokenType.Type
+            or TokenType.Enum or TokenType.Union or TokenType.Interface) {
+          bool opensBlock = true;
+          // `function(` (no name) is a function-type / lambda literal, not a block.
+          if (t.Type == TokenType.Function && next == TokenType.LeftParen) opensBlock = false;
+          // Match case labels reuse these keywords (`if ... then`, `for ... to`).
+          if (next is TokenType.Then or TokenType.Gives or TokenType.To or TokenType.Upto) opensBlock = false;
+          // Postfix ternary `if` is mid-expression; block `if` only appears at
+          // statement start (after a newline) or directly after `else`.
+          if (t.Type == TokenType.If && !prevWasNewline && prevTokenType != TokenType.Else) opensBlock = false;
+          if (opensBlock) blockDepth++;
+        } else if (t.Type == TokenType.Else) {
+          if (next is TokenType.Then or TokenType.Gives or TokenType.To or TokenType.Upto) {
+            // Match case label — not a block opener.
+          } else if (next == TokenType.If) {
+            // `else if` — the upcoming `if` will bump depth.
+          } else if (prevTokenType == TokenType.CharacterLiteral) {
+            blockDepth++;
+          }
+        } else if ((t.Type == TokenType.Otherwise && next is TokenType.CharacterLiteral or TokenType.LeftParen)
+                   || (t.Type == TokenType.Try && next == TokenType.CharacterLiteral)) {
+          blockDepth++;
+        } else if (t.Type == TokenType.End) {
+          blockDepth--;
+          if (extensionBlockEndDepth >= 0 && blockDepth < extensionBlockEndDepth) {
+            extensionBlockEndDepth = -1;
+            extensionIsExported = false;
+            extensionIsModuleVisible = false;
+          }
+        }
+        prevWasNewline = t.Type == TokenType.Newline;
+        prevTokenType = t.Type;
+      }
+
       // Track parenthesis nesting so we only recognize type declarations at
       // top level. Without this, a parameter pair like `type StdType` inside
       // a function signature gets misread as a top-level `type StdType`
@@ -627,6 +684,25 @@ public class Compiler {
         isModuleVisible = true;
         i++;
         t = tokens[i];
+      }
+
+      // Entering an `extension` block: count the opener here (block-tracking
+      // skips it) and remember its visibility for inner aliases. The matching
+      // `end` brings blockDepth back below this level, clearing the context.
+      if (t.Type == TokenType.Extension) {
+        blockDepth++;
+        extensionBlockEndDepth = blockDepth;
+        extensionIsExported = isExported;
+        extensionIsModuleVisible = isModuleVisible;
+      }
+
+      // An inner typealias of a `module`/`export` extension inherits the block's
+      // visibility so it propagates across files (matching the parser's
+      // PreScanExtensionBlock behavior, but recorded early enough that a
+      // consumer file parsing first can still see it).
+      if (extensionBlockEndDepth >= 0 && t.Type == TokenType.TypeAlias) {
+        isExported = isExported || extensionIsExported;
+        isModuleVisible = isModuleVisible || extensionIsModuleVisible;
       }
 
       if (t.Type == TokenType.Type && i + 1 < tokens.Count && tokens[i + 1].Type == TokenType.Identifier) {
