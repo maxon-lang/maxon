@@ -428,6 +428,25 @@ export function interfaceMethodReturnType(project Project, interfaceName String,
 	panic("interfaceMethodReturnType: method '{methodName}' not found on interface '{interfaceName}'")
 end 'interfaceMethodReturnType'
 
+// True when the interface method declares a `throws` clause. Witness-table
+// dispatch of a throwing method must capture the error flag (RDX/X1), so the
+// caller's `try` can observe the throw; non-throwing methods drop straight to
+// the single-result witnessCall path. Same lookup rules as
+// `interfaceMethodReturnType`; missing names are an upstream bug.
+export function interfaceMethodThrows(project Project, interfaceName String, methodName String) returns bool
+	let iface = try project.interfaces.get(interfaceName) otherwise panic("interfaceMethodThrows: interface '{interfaceName}' not in project.interfaces")
+	for i in 0 upto iface.methods.count() 'scan'
+		let m = try iface.methods.get(i) otherwise panic("interfaceMethodThrows: methods.get OOB at {i}")
+		if m.name == methodName 'hit'
+			return match m.throwsTypeName 'check'
+				none gives false
+				throwing gives true
+			end 'check'
+		end 'hit'
+	end 'scan'
+	panic("interfaceMethodThrows: method '{methodName}' not found on interface '{interfaceName}'")
+end 'interfaceMethodThrows'
+
 // Unwrap a MaxonReturnType to the bare interface name when it represents an
 // interface-typed return. Empty string means "not an interface return"
 // (void, primitive, struct, generic-instance, etc.). Used by the return-site
@@ -4194,8 +4213,7 @@ type MaxonToStdLowering
 						return
 					end 'isIteratorShape'
 				end 'maybeInterfacePassthrough'
-				self.lowerInterfaceMethodCall(result, receiverId: receiverId, receiverType: receiverType, methodName: methodName, args: args, dstBlock: dstBlock)
-				self.bindErrorFlagToZero(errorBoundName, dstBlock: dstBlock)
+				self.lowerInterfaceMethodCall(result, receiverId: receiverId, receiverType: receiverType, methodName: methodName, args: args, dstBlock: dstBlock, errorBoundName: errorBoundName)
 				return
 			end 'ifaceDispatch'
 			// Phase 11.4: a method call on a primitive receiver (`int.hash()`,
@@ -4244,8 +4262,7 @@ type MaxonToStdLowering
 			// receiver is a plain value (8 bytes or fewer, same inline-fits
 			// invariant the fat-pointer path relies on).
 			if maxonTypeMentionsTypeParam(receiverType) 'typeParamDispatch'
-				if self.tryLowerConstrainedTypeParamDispatch(result, receiverId: receiverId, receiverType: receiverType, methodName: methodName, args: args, dstBlock: dstBlock) 'didDispatch'
-					self.bindErrorFlagToZero(errorBoundName, dstBlock: dstBlock)
+				if self.tryLowerConstrainedTypeParamDispatch(result, receiverId: receiverId, receiverType: receiverType, methodName: methodName, args: args, dstBlock: dstBlock, errorBoundName: errorBoundName) 'didDispatch'
 					return
 				end 'didDispatch'
 			end 'typeParamDispatch'
@@ -4764,7 +4781,18 @@ type MaxonToStdLowering
 			void gives StdReturnType.void
 			value gives StdReturnType.value(StdType.i64)
 		end 'mapRet'
-		var func = IrFunction.createFromStd(thunkName, returnType: returnType, paramCount: userParamCount, paramTypes: paramTypes, returnLine: 0)
+		// A throwing interface method (e.g. `Iterator.advance() throws
+		// IterationError`) uses the multi-value error-return ABI: callers
+		// `try_call` it and read a trailing error flag. The thunk must inherit
+		// that throws-clause so LowerABI expands its signature the same way and
+		// so the body below propagates the impl's error flag via `error_return`
+		// instead of dropping it (which would make `for`-loop termination — a
+		// `try advance()` whose thrown `exhausted` ends the loop — never fire).
+		let thunkThrows = match method.throwsTypeName 'throwsCheck'
+			none gives false
+			throwing gives true
+		end 'throwsCheck'
+		var func = IrFunction.createFromStd(thunkName, returnType: returnType, paramCount: userParamCount, paramTypes: paramTypes, returnLine: 0, throwsTypeName: method.throwsTypeName)
 		// `funcIdRef` reserves ValueIds 0..userParamCount-1 for the
 		// declared params; SSA numbering for ops appended below picks up
 		// at that index.
@@ -4809,10 +4837,18 @@ type MaxonToStdLowering
 		// Emit the tail call and return its result. Void-returning methods
 		// don't carry a primary value — Std's `ret` still names a ValueId
 		// so we allocate one and let the backend treat it as unused (the
-		// existing void-return pattern in transferFuncs).
+		// existing void-return pattern in transferFuncs). A throwing impl
+		// returns `(value, errorFlag)`: call it via `tryCall` and forward both
+		// through `errorReturn` so the thrown error reaches the dispatch site.
 		let resultId = allocValueId(idRef)
-		self.stdModule.appendOp(entryBlock, op: StdOp.call(StdCallOp.call(resultId, callee: implName, argIds: allArgIds)))
-		self.stdModule.setTerminator(entryBlock, op: StdOp.call(StdCallOp.ret(resultId)))
+		if thunkThrows 'throwingTail'
+			let errorFlagId = allocValueId(idRef)
+			self.stdModule.appendOp(entryBlock, op: StdOp.call(StdCallOp.tryCall(resultId, callee: implName, argIds: allArgIds, errorFlagId: errorFlagId)))
+			self.stdModule.setTerminator(entryBlock, op: StdOp.call(StdCallOp.errorReturn(resultId, errorFlagId: errorFlagId)))
+		end 'throwingTail' else 'plainTail'
+			self.stdModule.appendOp(entryBlock, op: StdOp.call(StdCallOp.call(resultId, callee: implName, argIds: allArgIds)))
+			self.stdModule.setTerminator(entryBlock, op: StdOp.call(StdCallOp.ret(resultId)))
+		end 'plainTail'
 
 		// Stamp the function-level slot count so the backend's register
 		// allocator and spill-slot accounting see the right number of
@@ -6684,7 +6720,7 @@ type MaxonToStdLowering
 	// fits in 8 bytes, which covers the practical cases. The unbox path
 	// (read flags, conditionally `unboxValue`) is a follow-up; today's
 	// specs reach interface dispatch only with inline-fitting payloads.
-	function lowerInterfaceMethodCall(result ByteArray, receiverId ValueId, receiverType MaxonType, methodName ByteArray, args ByteArrayArray, dstBlock IrBlock)
+	function lowerInterfaceMethodCall(result ByteArray, receiverId ValueId, receiverType MaxonType, methodName ByteArray, args ByteArrayArray, dstBlock IrBlock, errorBoundName ByteArray = ByteArray.create())
 		let interfaceName = match receiverType 'iface'
 			interface(id) gives self.project.interfaceRegistry.getName(id)
 			default panic("lowerInterfaceMethodCall: receiverType is not interface despite the dispatch guard")
@@ -6693,7 +6729,7 @@ type MaxonToStdLowering
 		let methodNameStr = String.from(methodName)
 		let argIds = self.buildDispatchArgIds(receiverId, args: args)
 		let resultId = self.defineName(result)
-		self.emitWitnessDispatch(resultId, witnessAddrId: witnessAddrId, interfaceName: interfaceName, methodName: methodNameStr, argIds: argIds, dstBlock: dstBlock)
+		self.emitWitnessDispatch(resultId, witnessAddrId: witnessAddrId, interfaceName: interfaceName, methodName: methodNameStr, argIds: argIds, dstBlock: dstBlock, errorBoundName: errorBoundName)
 	end 'lowerInterfaceMethodCall'
 
 	// Phase 11.4: dispatch a method call on a constrained type-parameter
@@ -6708,7 +6744,7 @@ type MaxonToStdLowering
 	// Returns false if no constraint covers this method. The caller falls
 	// back to `lowerInterfaceMethodCallStub` which keeps the runtime panic
 	// for genuinely unconstrained type parameters.
-	function tryLowerConstrainedTypeParamDispatch(result ByteArray, receiverId ValueId, receiverType MaxonType, methodName ByteArray, args ByteArrayArray, dstBlock IrBlock) returns bool
+	function tryLowerConstrainedTypeParamDispatch(result ByteArray, receiverId ValueId, receiverType MaxonType, methodName ByteArray, args ByteArrayArray, dstBlock IrBlock, errorBoundName ByteArray = ByteArray.create()) returns bool
 		let pid = match receiverType 'extractPid'
 			typeParameter(id) gives id
 			default panic("tryLowerConstrainedTypeParamDispatch: receiver type isn't typeParameter despite the dispatch guard")
@@ -6719,7 +6755,7 @@ type MaxonToStdLowering
 			let witnessAddrId = try self.implicitWitnessValueIds.get(matched.constraintIndex) otherwise panic("tryLowerConstrainedTypeParamDispatch: implicitWitnessValueIds desync at idx {matched.constraintIndex}")
 			let argIds = self.buildDispatchArgIds(receiverId, args: args)
 			let resultId = self.defineName(result)
-			self.emitWitnessDispatch(resultId, witnessAddrId: witnessAddrId, interfaceName: matched.interfaceName, methodName: methodNameStr, argIds: argIds, dstBlock: dstBlock)
+			self.emitWitnessDispatch(resultId, witnessAddrId: witnessAddrId, interfaceName: matched.interfaceName, methodName: methodNameStr, argIds: argIds, dstBlock: dstBlock, errorBoundName: errorBoundName)
 			return true
 		end 'hit' else 'noMatch'
 			return false
@@ -6758,7 +6794,7 @@ type MaxonToStdLowering
 	//   3. Stamp `resultId`'s MaxonType from the interface method's
 	//      declared return so chained access can resolve. Void returns
 	//      leave the integer default (the result slot is unused).
-	function emitWitnessDispatch(resultId ValueId, witnessAddrId ValueId, interfaceName String, methodName String, argIds ValueIdArray, dstBlock IrBlock)
+	function emitWitnessDispatch(resultId ValueId, witnessAddrId ValueId, interfaceName String, methodName String, argIds ValueIdArray, dstBlock IrBlock, errorBoundName ByteArray = ByteArray.create())
 		let methodIdx = methodIndexInInterface(self.project, interfaceName: interfaceName, methodName: methodName)
 		let returnType = interfaceMethodReturnType(self.project, interfaceName: interfaceName, methodName: methodName)
 		let isVoid = match returnType 'voidCheck'
@@ -6773,7 +6809,30 @@ type MaxonToStdLowering
 		// chain-spilling. See StdCallOp.witnessCall. `isVoid` is plumbed
 		// so backends with strictly-typed indirect calls (wasm) can emit
 		// a no-result signature; native backends ignore it.
-		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.witnessCall(resultId, witnessAddrId: witnessAddrId, methodIndex: methodIdx, isVoid: isVoid, argIds: argIds)))
+		//
+		// A throwing interface method writes the error flag (RDX/X1) through
+		// the witness thunk, so it must lower to `witnessTryCall` (the dual-
+		// define error-ABI variant) and bind `errorBoundName` to the captured
+		// flag. Using the plain single-result `witnessCall` + bind-zero here
+		// would silently drop the throw — the original bug, where
+		// `for (iter, v) in (10 upto 13).withIterator()` infinite-looped
+		// because the witness-dispatched `source.advance()` throw never
+		// reached the caller's `try`.
+		if interfaceMethodThrows(self.project, interfaceName: interfaceName, methodName: methodName) 'throwingMethod'
+			// The thunk always writes the error flag, so we always capture it.
+			// Bind it to the caller's observer name when there is a `try`
+			// site; otherwise capture into a throwaway SSA id (an empty
+			// errorBoundName means no observer — same sentinel emitFlagBind
+			// uses). A throwing method reached without `try` is rejected
+			// upstream (E3057), so the no-observer arm is defensive.
+			let flagId = allocValueId(self.funcIdRef)
+			self.setValueType(flagId, t: MaxonType.integer)
+			self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.witnessTryCall(resultId, witnessAddrId: witnessAddrId, methodIndex: methodIdx, isVoid: isVoid, argIds: argIds, errorFlagId: flagId)))
+			self.emitFlagBind(errorBoundName, codeValueId: flagId)
+		end 'throwingMethod' else 'nonThrowingMethod'
+			self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.witnessCall(resultId, witnessAddrId: witnessAddrId, methodIndex: methodIdx, isVoid: isVoid, argIds: argIds)))
+			self.bindErrorFlagToZero(errorBoundName, dstBlock: dstBlock)
+		end 'nonThrowingMethod'
 		match returnType 'stamp'
 			void then break 'stamp'
 			value(inner) then self.setValueType(resultId, t: inner)

@@ -1,0 +1,42 @@
+// Test: ranges.negative-bounds
+function main() returns ExitCode
+		var sum = 0
+		for i in -2 to 2 'loop'
+				sum = sum + i
+		end 'loop'
+		return sum
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %1 = mir.mov_imm 2 : i64
+    %2 = mir.neg.i64 %1
+    %3 = mir.mov_imm 2 : i64
+    mir.br loop_0.header(%0, %2)
+  loop_0.header:
+    %6 = mir.cmp le, %15, %3
+    mir.cond_br %6 [then: loop_0(), else: loop_0.exit()]
+  loop_0:
+    %9 = mir.add.i64 %14, %15
+    mir.br loop_0.step()
+  loop_0.step:
+    %11 = mir.mov_imm 1 : i64
+    %12 = mir.add.i64 %15, %11
+    mir.br loop_0.header(%9, %12)
+  loop_0.exit:
+    %16 = mir.mov_imm 125 : i64
+    %17 = mir.cmp ugt, %14, %16
+    mir.cond_br %17 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %18 = mir.global_addr @__panic_msg_0
+    %19 = mir.call @mrt_panic(%18)
+  __range_ok_0:
+    mir.ret %14
+  }
+}
+---

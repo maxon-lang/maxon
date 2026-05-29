@@ -1,0 +1,38 @@
+// Test: ranges.empty-inclusive-create-iterator-throws
+function main() returns ExitCode
+		let it = try (5 to 3).createIterator() otherwise return 7
+		return it.current()
+end 'main'
+---
+ExitCode: 7
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 5 : i64
+    %1 = mir.mov_imm 3 : i64
+    %12 = mir.mov_imm 16 : i64
+    %13 = mir.call @mrt_alloc(%12)
+    mir.store %0, %13, 0 width: qword
+    mir.store %1, %13, 8 width: qword
+    %3, %4 = mir.try_call @Range.createIterator(%13)
+    %5 = mir.mov_imm 0 : i64
+    %6 = mir.cmp ne, %4, %5
+    mir.cond_br %6 [then: try_0.otherwise(), else: try_0.merge()]
+  try_0.otherwise:
+    %8 = mir.mov_imm 7 : i64
+    mir.ret %8
+  try_0.merge:
+    %14 = mir.load %3, 16 width: qword
+    %15 = mir.mov_imm 125 : i64
+    %16 = mir.cmp ugt, %14, %15
+    mir.cond_br %16 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %17 = mir.global_addr @__panic_msg_0
+    %18 = mir.call @mrt_panic(%17)
+  __range_ok_0:
+    mir.ret %14
+  }
+}
+---

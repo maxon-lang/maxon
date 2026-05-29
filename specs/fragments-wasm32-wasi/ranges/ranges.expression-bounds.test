@@ -1,0 +1,52 @@
+// Test: ranges.expression-bounds
+
+typealias Integer = int(i64.min to i64.max)
+
+function getStart() returns Integer
+		return 1
+end 'getStart'
+
+function getEnd() returns Integer
+		return 4
+end 'getEnd'
+
+function main() returns ExitCode
+		var sum = 0
+		for i in getStart() to getEnd() 'loop'
+				sum = sum + i
+		end 'loop'
+		return sum
+end 'main'
+---
+ExitCode: 10
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %15 = mir.mov_imm 1 : i64
+    %16 = mir.mov_imm 4 : i64
+    mir.br loop_0.header(%0, %15)
+  loop_0.header:
+    %5 = mir.cmp le, %14, %16
+    mir.cond_br %5 [then: loop_0(), else: loop_0.exit()]
+  loop_0:
+    %8 = mir.add.i64 %13, %14
+    mir.br loop_0.step()
+  loop_0.step:
+    %10 = mir.mov_imm 1 : i64
+    %11 = mir.add.i64 %14, %10
+    mir.br loop_0.header(%8, %11)
+  loop_0.exit:
+    %17 = mir.mov_imm 125 : i64
+    %18 = mir.cmp ugt, %13, %17
+    mir.cond_br %18 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %19 = mir.global_addr @__panic_msg_0
+    %20 = mir.call @mrt_panic(%19)
+  __range_ok_0:
+    mir.ret %13
+  }
+}
+---

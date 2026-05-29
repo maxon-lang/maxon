@@ -186,6 +186,7 @@ function countMirNonAbsorbUses(op MirOp, uc UseCountMap, constMap ConstMap)
 		osLockAcquire(addrId) then ucIncrement(uc, valueId: addrId)
 		osLockRelease(addrId) then ucIncrement(uc, valueId: addrId)
 		tryCall(_, _, argIds, _) then ucIncrementArray(uc, ids: argIds)
+		witnessTryCall(_, witnessAddrId, _, _, argIds, _) then ucIncrementIdAndArray(uc, id: witnessAddrId, arr: argIds)
 		errorReturn(retValId, errorFlagId) then ucIncrementTwo(uc, a: retValId, b: errorFlagId)
 	end 'count'
 end 'countMirNonAbsorbUses'
@@ -355,6 +356,7 @@ function countMirOpUses(op MirOp, uc UseCountMap)
 		osLockAcquire(addrId) then ucIncrement(uc, valueId: addrId)
 		osLockRelease(addrId) then ucIncrement(uc, valueId: addrId)
 		tryCall(_, _, argIds, _) then ucIncrementArray(uc, ids: argIds)
+		witnessTryCall(_, witnessAddrId, _, _, argIds, _) then ucIncrementIdAndArray(uc, id: witnessAddrId, arr: argIds)
 		errorReturn(retValId, errorFlagId) then ucIncrementTwo(uc, a: retValId, b: errorFlagId)
 	end 'count'
 end 'countMirOpUses'
@@ -453,6 +455,7 @@ function mirSysTempCount(op MirOp) returns SlotIndex
 		osLockRelease gives 2
 		movImm to storeSlot gives 0
 		tryCall gives 0
+		witnessTryCall gives 0
 		errorReturn gives 0
 	end 'check'
 end 'mirSysTempCount'
@@ -926,6 +929,7 @@ type X64FunctionLowering
 			// lowerMirTerminator; reaching it here would mean the .Std layer
 			// emitted it as a non-terminator op (a phase-ordering bug).
 			tryCall(resultId, callee, argIds, errorFlagId) then lowerTryCall(resultId, callee: callee, argIds: argIds, errorFlagId: errorFlagId, dstBlock: dstBlock)
+			witnessTryCall(resultId, witnessAddrId, methodIndex, _, argIds, errorFlagId) then lowerWitnessTryCall(resultId, witnessAddrId: witnessAddrId, methodIndex: methodIndex, argIds: argIds, errorFlagId: errorFlagId, dstBlock: dstBlock)
 			errorReturn then panic("MirOp.errorReturn must be lowered as a terminator, not a body op")
 		end 'dispatch'
 	end 'lowerMirOp'
@@ -1363,6 +1367,23 @@ type X64FunctionLowering
 	// across the call site, which is what was making stdlib Map.findSlot
 	// uncolorable.
 	function lowerWitnessCall(resultId ValueId, witnessAddrId ValueId, methodIndex MachineWord, argIds ValueIdArray, dstBlock IrBlock)
+		emitWitnessCall(resultId, witnessAddrId: witnessAddrId, methodIndex: methodIndex, argIds: argIds, errorFlagId: 0, captureErrorFlag: false, dstBlock: dstBlock)
+	end 'lowerWitnessCall'
+
+	// witnessTryCall = witnessCall through the witness table PLUS the tryCall
+	// error-flag capture. The dispatched interface method is `throws`, so it
+	// writes RDX (the error flag) like any throwing call; capturing it into
+	// virtual(errorFlagId) is what lets the caller's `try` observe the throw.
+	function lowerWitnessTryCall(resultId ValueId, witnessAddrId ValueId, methodIndex MachineWord, argIds ValueIdArray, errorFlagId ValueId, dstBlock IrBlock)
+		emitWitnessCall(resultId, witnessAddrId: witnessAddrId, methodIndex: methodIndex, argIds: argIds, errorFlagId: errorFlagId, captureErrorFlag: true, dstBlock: dstBlock)
+	end 'lowerWitnessTryCall'
+
+	// Shared body for `lowerWitnessCall` and `lowerWitnessTryCall`. Routes args
+	// to ABI registers, loads the witness-table fn-ptr straight into R10 (no
+	// virtual reg, to minimize pressure — see the original witnessCall note),
+	// emits the indirect call, captures R8 into the result, and (when
+	// captureErrorFlag is set) captures the RDX error flag into errorFlagId.
+	function emitWitnessCall(resultId ValueId, witnessAddrId ValueId, methodIndex MachineWord, argIds ValueIdArray, errorFlagId ValueId, captureErrorFlag bool, dstBlock IrBlock)
 		// Move args to calling convention registers FIRST. Doing the load
 		// after (right before the call) keeps R10's live range as short as
 		// possible — it's only live across the single callIndirect op.
@@ -1377,7 +1398,7 @@ type X64FunctionLowering
 			argIdx = argIdx + 1
 		end 'moveArgs'
 		if argIds.count() > 8 'tooManyArgs'
-			panic("lowerWitnessCall: more than 8 arguments not yet supported (got {argIds.count()})")
+			panic("emitWitnessCall: more than 8 arguments not yet supported (got {argIds.count()})")
 		end 'tooManyArgs'
 
 		// Load fn-ptr from witness table directly into R10. No virtual reg.
@@ -1389,7 +1410,11 @@ type X64FunctionLowering
 
 		// Move return value from R8.
 		appendX64Op(target, block: dstBlock, op: X64Op.movRegReg(X64VReg.virtual(resultId), srcReg: physReg(X64Register.r8)))
-	end 'lowerWitnessCall'
+
+		if captureErrorFlag 'errFlag'
+			appendX64Op(target, block: dstBlock, op: X64Op.movRegReg(X64VReg.virtual(errorFlagId), srcReg: physReg(X64Register.rdx)))
+		end 'errFlag'
+	end 'emitWitnessCall'
 
 	// ============================================================
 	// Param
@@ -1454,6 +1479,7 @@ type X64FunctionLowering
 			// the same way as in the body — the terminator slot just means the
 			// regalloc treats it as the block's exit op.
 			tryCall(resultId, callee, argIds, errorFlagId) then lowerTryCall(resultId, callee: callee, argIds: argIds, errorFlagId: errorFlagId, dstBlock: dstBlock)
+			witnessTryCall(resultId, witnessAddrId, methodIndex, _, argIds, errorFlagId) then lowerWitnessTryCall(resultId, witnessAddrId: witnessAddrId, methodIndex: methodIndex, argIds: argIds, errorFlagId: errorFlagId, dstBlock: dstBlock)
 			errorReturn(retValId, errorFlagId) then lowerErrorReturn(retValId, errorFlagId: errorFlagId, dstBlock: dstBlock, returnType: returnType)
 		end 'lower'
 	end 'lowerMirTerminator'

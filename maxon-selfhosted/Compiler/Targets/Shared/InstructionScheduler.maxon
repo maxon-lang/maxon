@@ -699,6 +699,8 @@ function extractMirDef(op MirOp) returns SchedInt
 		// sequence that surfaces the second def. Scheduling-wise the primary
 		// is what subsequent ops typically read.
 		tryCall(resultId, _, _, _) gives resultId
+		// witnessTryCall: same primary-resultId reporting as tryCall.
+		witnessTryCall(resultId, _, _, _, _, _) gives resultId
 		errorReturn gives SCHED_NONE
 	end 'def'
 end 'extractMirDef'
@@ -768,6 +770,7 @@ function extractMirUses(op MirOp) returns ValueIdArray
 		osLockAcquire(addrId) then result.push(addrId)
 		osLockRelease(addrId) then result.push(addrId)
 		tryCall(_, _, argIds, _) then appendAll(result, from: argIds)
+		witnessTryCall(_, witnessAddrId, _, _, argIds, _) then extractMirIndirectCallUses(result, calleeId: witnessAddrId, argIds: argIds)
 		errorReturn(retValId, errorFlagId) then pushTwo(result, a: retValId, b: errorFlagId)
 	end 'uses'
 	return result

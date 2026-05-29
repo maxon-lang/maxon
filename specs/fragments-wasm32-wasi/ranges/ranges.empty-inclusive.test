@@ -1,0 +1,42 @@
+// Test: ranges.empty-inclusive
+function main() returns ExitCode
+		var count = 0
+		for _ in 5 to 3 'loop'
+				count = count + 1
+		end 'loop'
+		return count
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %1 = mir.mov_imm 5 : i64
+    %2 = mir.mov_imm 3 : i64
+    mir.br loop_0.header(%0, %1)
+  loop_0.header:
+    %5 = mir.cmp le, %14, %2
+    mir.cond_br %5 [then: loop_0(), else: loop_0.exit()]
+  loop_0:
+    %7 = mir.mov_imm 1 : i64
+    %8 = mir.add.i64 %13, %7
+    mir.br loop_0.step()
+  loop_0.step:
+    %10 = mir.mov_imm 1 : i64
+    %11 = mir.add.i64 %14, %10
+    mir.br loop_0.header(%8, %11)
+  loop_0.exit:
+    %15 = mir.mov_imm 125 : i64
+    %16 = mir.cmp ugt, %13, %15
+    mir.cond_br %16 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %17 = mir.global_addr @__panic_msg_0
+    %18 = mir.call @mrt_panic(%17)
+  __range_ok_0:
+    mir.ret %13
+  }
+}
+---

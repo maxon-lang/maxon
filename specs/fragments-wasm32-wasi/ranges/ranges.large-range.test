@@ -1,0 +1,70 @@
+// Test: ranges.large-range
+function main() returns ExitCode
+		var sum = 0
+		for _ in 1 to 1000 'loop'
+				sum = sum + 1
+		end 'loop'
+		print("{sum}")
+		return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+1000
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %1 = mir.mov_imm 1 : i64
+    %2 = mir.mov_imm 1000 : i64
+    mir.br loop_0.header(%0, %1)
+  loop_0.header:
+    %5 = mir.cmp le, %40, %2
+    mir.cond_br %5 [then: loop_0(), else: loop_0.exit()]
+  loop_0:
+    %7 = mir.mov_imm 1 : i64
+    %8 = mir.add.i64 %39, %7
+    mir.br loop_0.step()
+  loop_0.step:
+    %10 = mir.mov_imm 1 : i64
+    %11 = mir.add.i64 %40, %10
+    mir.br loop_0.header(%8, %11)
+  loop_0.exit:
+    %13 = mir.global_addr @__istr_0
+    %15 = mir.mov_imm 21 : i64
+    %16 = mir.call @mrt_alloc(%15)
+    %17 = mir.call @mrt_i64_to_string(%39, %16)
+    %18 = mir.global_addr @__istr_0
+    %22 = mir.add.i64 %0, %17
+    %23 = mir.add.i64 %22, %0
+    %24 = mir.mov_imm 1 : i64
+    %25 = mir.add.i64 %23, %24
+    %26 = mir.call @mrt_alloc(%25)
+    mir.memcpy %26, %13, %0
+    %27 = mir.add.i64 %26, %0
+    mir.memcpy %27, %16, %17
+    %28 = mir.add.i64 %27, %17
+    mir.memcpy %28, %18, %0
+    %30 = mir.mov_imm 40 : i64
+    %31 = mir.call @mrt_alloc(%30)
+    mir.store %26, %31, 0 width: qword
+    mir.store %23, %31, 8 width: qword
+    mir.store %23, %31, 16 width: qword
+    %32 = mir.mov_imm 1 : i64
+    mir.store %32, %31, 24 width: qword
+    mir.store %0, %31, 32 width: qword
+    %34 = mir.mov_imm 16 : i64
+    %35 = mir.call @mrt_alloc(%34)
+    mir.store %31, %35, 0 width: qword
+    mir.store %0, %35, 8 width: qword
+    %41 = mir.load %35, 0 width: qword
+    %42 = mir.load %41, 0 width: qword
+    %43 = mir.load %41, 8 width: qword
+    %44 = mir.call @mrt_write_stdout(%42, %43)
+    mir.ret %0
+  }
+}
+---

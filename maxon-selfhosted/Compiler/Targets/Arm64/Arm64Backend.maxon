@@ -297,6 +297,7 @@ export type Arm64Backend implements TargetBackend
 			// tryCall as a terminator: lower the same way as a body op.
 			// errorReturn: dual-register epilogue (X0 + X1, or just X1 for void).
 			tryCall(resultId, callee, argIds, errorFlagId) then lowerTryCallArm64(resultId, callee: callee, argIds: argIds, errorFlagId: errorFlagId, dstBlock: dstBlock, allFunctions: allFunctions)
+			witnessTryCall(resultId, witnessAddrId, methodIndex, _, argIds, errorFlagId) then lowerWitnessTryCallArm64(resultId, witnessAddrId: witnessAddrId, methodIndex: methodIndex, argIds: argIds, errorFlagId: errorFlagId, dstBlock: dstBlock)
 			errorReturn(retValId, errorFlagId) then lowerErrorReturnArm64(retValId, errorFlagId: errorFlagId, dstBlock: dstBlock, returnType: returnType)
 		end 'lower'
 	end 'lowerMirTerminatorArm64'
@@ -418,6 +419,7 @@ export type Arm64Backend implements TargetBackend
 			osLockRelease gives 2
 			movImm to storeSlot gives 0
 			tryCall gives 0
+			witnessTryCall gives 0
 			errorReturn gives 0
 		end 'check'
 	end 'mirTempCountArm64'
@@ -464,6 +466,7 @@ export type Arm64Backend implements TargetBackend
 			// void-returning throwing callees write X1. errorReturn is a terminator
 			// and is dispatched in lowerMirTerminatorArm64.
 			tryCall(resultId, callee, argIds, errorFlagId) then lowerTryCallArm64(resultId, callee: callee, argIds: argIds, errorFlagId: errorFlagId, dstBlock: dstBlock, allFunctions: allFunctions)
+			witnessTryCall(resultId, witnessAddrId, methodIndex, _, argIds, errorFlagId) then lowerWitnessTryCallArm64(resultId, witnessAddrId: witnessAddrId, methodIndex: methodIndex, argIds: argIds, errorFlagId: errorFlagId, dstBlock: dstBlock)
 			errorReturn then panic("Arm64: MirOp.errorReturn must be lowered as a terminator, not a body op")
 		end 'dispatch'
 		return result
@@ -884,6 +887,21 @@ export type Arm64Backend implements TargetBackend
 	// pressure-reduction motive as the X64 lowering — see lowerWitnessCall
 	// in MirToX64Conversion.
 	function lowerWitnessCallArm64(resultId ValueId, witnessAddrId ValueId, methodIndex MachineWord, argIds ValueIdArray, dstBlock IrBlock)
+		emitWitnessCallArm64(resultId, witnessAddrId: witnessAddrId, methodIndex: methodIndex, argIds: argIds, errorFlagId: 0, captureErrorFlag: false, dstBlock: dstBlock)
+	end 'lowerWitnessCallArm64'
+
+	// witnessTryCall = witnessCall through the witness table PLUS the tryCall
+	// error-flag capture (X1). The dispatched interface method is `throws`, so
+	// it writes X1; capturing it into virtual(errorFlagId) is what lets the
+	// caller's `try` observe the throw — mirrors lowerWitnessTryCall on x64.
+	function lowerWitnessTryCallArm64(resultId ValueId, witnessAddrId ValueId, methodIndex MachineWord, argIds ValueIdArray, errorFlagId ValueId, dstBlock IrBlock)
+		emitWitnessCallArm64(resultId, witnessAddrId: witnessAddrId, methodIndex: methodIndex, argIds: argIds, errorFlagId: errorFlagId, captureErrorFlag: true, dstBlock: dstBlock)
+	end 'lowerWitnessTryCallArm64'
+
+	// Shared body for the two witness-dispatch lowerings. Loads the fn-ptr
+	// into X16 (IP0, outside the regalloc pool), branches through it, captures
+	// X0 into the result, and (when captureErrorFlag is set) X1 into errorFlagId.
+	function emitWitnessCallArm64(resultId ValueId, witnessAddrId ValueId, methodIndex MachineWord, argIds ValueIdArray, errorFlagId ValueId, captureErrorFlag bool, dstBlock IrBlock)
 		var argIdx = 0
 		while argIdx < argIds.count() and argIdx < 8 'moveArgs'
 			let argId = try argIds.get(argIdx) otherwise 'skipArg'
@@ -895,14 +913,18 @@ export type Arm64Backend implements TargetBackend
 			argIdx = argIdx + 1
 		end 'moveArgs'
 		if argIds.count() > 8 'tooManyArgs'
-			panic("lowerWitnessCallArm64: more than 8 arguments not yet supported (got {argIds.count()})")
+			panic("emitWitnessCallArm64: more than 8 arguments not yet supported (got {argIds.count()})")
 		end 'tooManyArgs'
 
 		let offset = WITNESS_OFFSET_METHODS + 8 * methodIndex
 		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.loadIndirect(arm64PhysReg(Arm64Register.x16), baseReg: Arm64VReg.virtual(witnessAddrId), offset: offset, width: StoreWidth.qword, signed: false))
 		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.branchLinkReg(arm64PhysReg(Arm64Register.x16)))
 		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movRegReg(Arm64VReg.virtual(resultId), src: arm64PhysReg(Arm64Register.x0)))
-	end 'lowerWitnessCallArm64'
+
+		if captureErrorFlag 'errFlag'
+			appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movRegReg(Arm64VReg.virtual(errorFlagId), src: arm64PhysReg(Arm64Register.x1)))
+		end 'errFlag'
+	end 'emitWitnessCallArm64'
 
 	// Move from calling convention register to virtual register.
 	// Float params arrive in D registers, int params in X registers.

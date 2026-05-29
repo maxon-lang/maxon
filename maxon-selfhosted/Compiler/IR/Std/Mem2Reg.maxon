@@ -504,6 +504,7 @@ function propagateFloatForCall(op StdCallOp, module StdModule, info SlotInfo) re
 		// pointer (funcRef), neither of which is float.
 		indirectCall gives false
 		witnessCall gives false
+		witnessTryCall gives false
 		funcRef gives false
 		tailCall gives false
 		ret gives false
@@ -1276,6 +1277,7 @@ function recordExistingParam(callOp StdCallOp, paramCount ParamCount, ids ValueI
 		funcRef then break 'kind'
 		indirectCall then break 'kind'
 		witnessCall then break 'kind'
+		witnessTryCall then break 'kind'
 		tailCall then break 'kind'
 		errorReturn then break 'kind'
 	end 'kind'
@@ -1893,6 +1895,7 @@ function maxValueIdInFunc(op StdCallOp) returns ValueId
 		tryCall(resultId, _, argIds, errorFlagId) gives maxOfThree(resultId, b: maxOfArray(argIds), c: errorFlagId)
 		indirectCall(resultId, calleeId, argIds) gives maxOfThree(resultId, b: calleeId, c: maxOfArray(argIds))
 		witnessCall(resultId, witnessAddrId, _, _, argIds) gives maxOfThree(resultId, b: witnessAddrId, c: maxOfArray(argIds))
+		witnessTryCall(resultId, witnessAddrId, _, _, argIds, errorFlagId) gives maxOfTwo(maxOfThree(resultId, b: witnessAddrId, c: maxOfArray(argIds)), b: errorFlagId)
 		funcRef(resultId, _) gives resultId
 		tailCall(_, argIds) gives maxOfArray(argIds)
 		errorReturn(retValId, errorFlagId) gives maxOfTwo(retValId, b: errorFlagId)
@@ -2060,6 +2063,7 @@ function substituteFuncOp(op StdCallOp, remap ValueIdArray) returns StdCallOp
 		tryCall(resultId, callee, argIds, errorFlagId) gives StdCallOp.tryCall(resultId, callee: callee, argIds: remapValueIds(argIds, remap: remap), errorFlagId: errorFlagId)
 		indirectCall(resultId, calleeId, argIds) gives StdCallOp.indirectCall(resultId, calleeId: remapValue(calleeId, remap: remap), argIds: remapValueIds(argIds, remap: remap))
 		witnessCall(resultId, witnessAddrId, methodIndex, isVoid, argIds) gives StdCallOp.witnessCall(resultId, witnessAddrId: remapValue(witnessAddrId, remap: remap), methodIndex: methodIndex, isVoid: isVoid, argIds: remapValueIds(argIds, remap: remap))
+		witnessTryCall(resultId, witnessAddrId, methodIndex, isVoid, argIds, errorFlagId) gives StdCallOp.witnessTryCall(resultId, witnessAddrId: remapValue(witnessAddrId, remap: remap), methodIndex: methodIndex, isVoid: isVoid, argIds: remapValueIds(argIds, remap: remap), errorFlagId: errorFlagId)
 		funcRef(resultId, funcName) gives StdCallOp.funcRef(resultId, funcName: funcName)
 		tailCall(callee, argIds) gives StdCallOp.tailCall(callee, argIds: remapValueIds(argIds, remap: remap))
 		param(resultId, paramIndex, paramType) gives StdCallOp.param(resultId, paramIndex: paramIndex, paramType: paramType)

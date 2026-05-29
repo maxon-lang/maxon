@@ -378,6 +378,14 @@ export union StdCallOp
 	// emit a no-result signature; native backends (x64/arm64) ignore it
 	// since RAX/X0 is always a return slot.
 	witnessCall(resultId ValueId, witnessAddrId ValueId, methodIndex MachineWord, isVoid bool, argIds ValueIdArray) = StdCallOpMeta{isRet: false, isErrorReturn: false, isParam: false, isPureForInlining: false, isUnsupportedInInlineBody: true}
+	// Throwing witness-table dispatch: the union of `witnessCall` (indirect
+	// through the witness table at methodIndex) and `tryCall` (multi-value
+	// error ABI — defines BOTH `resultId` and `errorFlagId`). Emitted when a
+	// witness-dispatched interface method is declared `throws`, so the thrown
+	// error flag in the error register (RDX / X1) is captured instead of
+	// silently dropped. Without this op a `try receiver.method()` through a
+	// constrained type-parameter / fat-pointer receiver always saw success.
+	witnessTryCall(resultId ValueId, witnessAddrId ValueId, methodIndex MachineWord, isVoid bool, argIds ValueIdArray, errorFlagId ValueId) = StdCallOpMeta{isRet: false, isErrorReturn: false, isParam: false, isPureForInlining: false, isUnsupportedInInlineBody: true}
 	funcRef(resultId ValueId, funcName String) = StdCallOpMeta{isRet: false, isErrorReturn: false, isParam: false, isPureForInlining: false, isUnsupportedInInlineBody: false}
 	tailCall(callee String, argIds ValueIdArray) = StdCallOpMeta{isRet: false, isErrorReturn: false, isParam: false, isPureForInlining: false, isUnsupportedInInlineBody: true}
 	param(resultId ValueId, paramIndex VarSlot, paramType StdType) = StdCallOpMeta{isRet: false, isErrorReturn: false, isParam: true, isPureForInlining: true, isUnsupportedInInlineBody: false}
@@ -726,6 +734,13 @@ function funcOpWitnessCallToString(resultId ValueId, witnessAddrId ValueId, meth
 	return "%{resultId} = func.witness_call %{witnessAddrId}, [{methodIndex}]({formatArgIds(argIds)})"
 end 'funcOpWitnessCallToString'
 
+function funcOpWitnessTryCallToString(resultId ValueId, witnessAddrId ValueId, methodIndex MachineWord, isVoid bool, argIds ValueIdArray, errorFlagId ValueId) returns String
+	if isVoid 'voidFmt'
+		return "%{errorFlagId} = func.witness_try_call %{witnessAddrId}, [{methodIndex}]({formatArgIds(argIds)})"
+	end 'voidFmt'
+	return "%{resultId}, %{errorFlagId} = func.witness_try_call %{witnessAddrId}, [{methodIndex}]({formatArgIds(argIds)})"
+end 'funcOpWitnessTryCallToString'
+
 export function funcOpToString(op StdCallOp) returns String
 	return match op 'print'
 		ret(retValId) gives "func.return %{retValId}"
@@ -733,6 +748,7 @@ export function funcOpToString(op StdCallOp) returns String
 		tryCall(resultId, callee, argIds, errorFlagId) gives "%{resultId}, %{errorFlagId} = func.try_call @{callee}({formatArgIds(argIds)})"
 		indirectCall(resultId, calleeId, argIds) gives "%{resultId} = func.indirect_call %{calleeId}({formatArgIds(argIds)})"
 		witnessCall(resultId, witnessAddrId, methodIndex, isVoid, argIds) gives funcOpWitnessCallToString(resultId, witnessAddrId: witnessAddrId, methodIndex: methodIndex, isVoid: isVoid, argIds: argIds)
+		witnessTryCall(resultId, witnessAddrId, methodIndex, isVoid, argIds, errorFlagId) gives funcOpWitnessTryCallToString(resultId, witnessAddrId: witnessAddrId, methodIndex: methodIndex, isVoid: isVoid, argIds: argIds, errorFlagId: errorFlagId)
 		funcRef(resultId, funcName) gives "%{resultId} = func.ref @{funcName}"
 		tailCall(callee, argIds) gives "func.tail_call @{callee}({formatArgIds(argIds)})"
 		param(resultId, paramIndex, paramType) gives "%{resultId} = func.param {paramIndex} : {paramType.name}"

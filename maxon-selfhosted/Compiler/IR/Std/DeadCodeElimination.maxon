@@ -465,6 +465,8 @@ function countFuncUses(op StdCallOp, useCount ValueIdArray, isVoidFunc bool)
 		// same shape as indirectCall (helper takes the "callee-like"
 		// pointer and the args).
 		witnessCall(_, witnessAddrId, _, _, argIds) then countIndirectCallUses(witnessAddrId, argIds: argIds, useCount: useCount)
+		// witnessTryCall: same uses as witnessCall (errorFlagId is a def).
+		witnessTryCall(_, witnessAddrId, _, _, argIds, _) then countIndirectCallUses(witnessAddrId, argIds: argIds, useCount: useCount)
 		funcRef then break 'count'
 		tailCall(_, argIds) then countArrayUses(argIds, useCount: useCount)
 		param then break 'count'
@@ -663,6 +665,8 @@ function isDeadFuncOp(op StdCallOp, useCount ValueIdArray) returns bool
 		// function pointer — same side effects as indirectCall, never
 		// dead even when the result is unused.
 		witnessCall gives false
+		// witnessTryCall — indirect witness call with error side effect.
+		witnessTryCall gives false
 		tailCall gives false
 		// funcRef and param are pure value-producing ops
 		funcRef(resultId, _) gives getUseCount(useCount, valueId: resultId) == 0
@@ -709,6 +713,7 @@ function getFuncResultId(op StdCallOp) returns ValueId
 		tryCall(resultId, _, _, _) gives resultId
 		indirectCall(resultId, _, _) gives resultId
 		witnessCall(resultId, _, _, _, _) gives resultId
+		witnessTryCall(resultId, _, _, _, _, _) gives resultId
 		funcRef(resultId, _) gives resultId
 		tailCall gives 0
 		param(resultId, _, _) gives resultId

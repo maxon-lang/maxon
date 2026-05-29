@@ -2078,6 +2078,17 @@ export function chaseTypealiasNameToType(project Project, name String, enclosing
 				return resolveInterfaceInnerAliasExpr(project, declaringTypeName: enclosingType, aliasName: name, expr: expr)
 			end 'haveExpr'
 		end 'haveUnresolvedIface'
+		// J.4f.2 (MaxonType view): when the enclosingType is a conformer struct
+		// and the alias lives in one of the interfaces it implements rather than
+		// its own body, recover it via the conformance set. Mirrors
+		// `chaseTypealiasNameToStruct`. The canonical case is the monomorphized
+		// `OpenRange.withIterator` body calling `WithIterSelf.create`, where
+		// `WithIterSelf` is an inner alias of `Iterable` (which OpenRange
+		// conforms to) — without this walk the literal `WithIterSelf.create`
+		// callee leaks to the backend and panics in `lookupFuncParamTypes`.
+		if let viaIface = try chaseTypealiasTypeViaConformingInterfaces(project, name: name, structName: enclosingType) 'viaIface'
+			return viaIface
+		end 'viaIface'
 	end 'tryInner'
 	return try project.genericTypealiases.get(name) otherwise throw TypealiasChaseError.unresolved
 end 'chaseTypealiasNameToType'
@@ -2180,34 +2191,104 @@ export function chaseTypealiasNameToStruct(project Project, name String, enclosi
 	return try chaseTypealiasNameThroughGeneric(project, name: name)
 end 'chaseTypealiasNameToStruct'
 
-// J.4f.2: walk every conformance registry entry for `structName` and
-// probe each implemented interface's `innerAliases` for `name`. Returns
-// the underlying struct base name on hit; otherwise propagates
-// `TypealiasChaseError.notFound` so the caller can fall through to the
+// Substitute an interface inner-alias type's type-parameter args with the
+// concrete `with` args from a specific conformance. The inner alias is
+// declared in the interface's own scope, so a generic instance like
+// `WithIterIterator with Iter, Element` carries the interface's `usesParams`
+// (`Iter`, `Element`) as its args. When chased for a concrete conformer
+// (e.g. `OpenRange implements Iterable with (RangeIterator, RangeBound)`),
+// those params must be bound to the conformance args so the result is a
+// fully-concrete `genericInstance(WithIterIterator, [RangeIterator,
+// RangeBound])` — otherwise the call site's layout/witness materialization
+// sees a conditional gid and tries to forward a layout from a caller that
+// has none. Non-generic-instance inner aliases (and args that aren't
+// interface params) pass through unchanged.
+function bindInterfaceParamsToConformanceArgs(project Project, t MaxonType, usesParams StringArray, confArgs MaxonTypeArray) returns MaxonType
+	if usesParams.count() == 0 or usesParams.count() != confArgs.count() 'noBinding'
+		return t
+	end 'noBinding'
+	return match t 'kind'
+		genericInstance(gid) gives bindGenericInstanceArgs(project, gid: gid, usesParams: usesParams, confArgs: confArgs)
+		typeParameter(id) gives substituteInterfaceParamArgByName(t, argName: project.typeParameters.getName(id), usesParams: usesParams, confArgs: confArgs)
+		named(id) gives substituteInterfaceParamArgByName(t, argName: project.typeNames.get(id), usesParams: usesParams, confArgs: confArgs)
+		boolean to string gives t
+		function gives t
+		unresolved gives t
+		interface gives t
+		constInt to opaquePointer gives t
+	end 'kind'
+end 'bindInterfaceParamsToConformanceArgs'
+
+// Rebuild a generic instance with each type-parameter arg bound to its
+// conformance arg. Recurses through nested generic instances so a deeper
+// `Foo with Bar with Element` still binds `Element`.
+function bindGenericInstanceArgs(project Project, gid GenericInstanceId, usesParams StringArray, confArgs MaxonTypeArray) returns MaxonType
+	let (baseId, args) = project.genericInstances.get(gid)
+	var newArgs = MaxonTypeArray.create()
+	for i in 0 upto args.count() 'eachArg'
+		let a = try args.get(i) otherwise panic("bindGenericInstanceArgs: args.get OOB at {i}")
+		newArgs.push(bindInterfaceParamsToConformanceArgs(project, t: a, usesParams: usesParams, confArgs: confArgs))
+	end 'eachArg'
+	let newGid = project.genericInstances.intern(baseId, args: newArgs)
+	return MaxonType.genericInstance(newGid)
+end 'bindGenericInstanceArgs'
+
+// Map a single arg (already reduced to its `argName`) to its conformance
+// binding when it names one of the interface's `usesParams`. Both
+// `typeParameter(Element)` and the pre-drain `named(Element)` placeholder
+// shapes feed in via their name. A non-param name (concrete struct, etc.)
+// passes through as the original `t`.
+function substituteInterfaceParamArgByName(t MaxonType, argName String, usesParams StringArray, confArgs MaxonTypeArray) returns MaxonType
+	for i in 0 upto usesParams.count() 'findParam'
+		let p = try usesParams.get(i) otherwise panic("substituteInterfaceParamArgByName: usesParams.get OOB at {i}")
+		if p == argName 'matched'
+			return try confArgs.get(i) otherwise panic("substituteInterfaceParamArgByName: confArgs.get OOB at {i}")
+		end 'matched'
+	end 'findParam'
+	return t
+end 'substituteInterfaceParamArgByName'
+
+// J.4f.2: walk every conformance registry entry for `structName` and probe
+// each implemented interface's `innerAliases` for `name`. Returns the
+// resolved `MaxonType` on hit (so generic instances keep their `with` arg
+// list for receiver-context plumbing), with the interface's type params
+// bound to the conformance args; otherwise propagates
+// `TypealiasChaseError.unresolved` so the caller can fall through to the
 // top-level generic-typealias chase. Used to recover stdlib interface-
-// declared aliases like `Iterable.ElementArray` for conformer struct
-// receivers (Map / Set / List) that don't re-declare the alias in their
-// own body.
-function chaseTypealiasViaConformingInterfaces(project Project, name String, structName String) returns String throws TypealiasChaseError
+// declared aliases like `Iterable.ElementArray` / `Iterable.WithIterSelf`
+// for conformer struct receivers (Map / Set / List / OpenRange) that don't
+// re-declare the alias in their own body.
+function chaseTypealiasTypeViaConformingInterfaces(project Project, name String, structName String) returns MaxonType throws TypealiasChaseError
 	for confId in 0 upto project.conformances.typeNames.count() 'scan'
-		let implName = try project.conformances.typeNames.get(confId) otherwise panic("chaseTypealiasViaConformingInterfaces: typeNames.get OOB at {confId}")
+		let implName = try project.conformances.typeNames.get(confId) otherwise panic("chaseTypealiasTypeViaConformingInterfaces: typeNames.get OOB at {confId}")
 		if implName != structName 'skip'
 			continue
 		end 'skip'
-		let ifaceName = try project.conformances.interfaceNames.get(confId) otherwise panic("chaseTypealiasViaConformingInterfaces: interfaceNames.get OOB at {confId}")
+		let ifaceName = try project.conformances.interfaceNames.get(confId) otherwise panic("chaseTypealiasTypeViaConformingInterfaces: interfaceNames.get OOB at {confId}")
+		let confArgs = try project.conformances.withArgsList.get(confId) otherwise panic("chaseTypealiasTypeViaConformingInterfaces: withArgsList.get OOB at {confId}")
 		if let iface = try project.interfaces.get(ifaceName) 'haveIface'
 			if let inner = try iface.innerAliases.get(name) 'hit'
-				return try baseNameOfMaxonType(project, t: inner) otherwise throw TypealiasChaseError.unresolved
+				return bindInterfaceParamsToConformanceArgs(project, t: inner, usesParams: iface.usesParams, confArgs: confArgs)
 			end 'hit'
 		end 'haveIface'
 		if let unresolvedIface = try project.unresolvedInterfaces.get(ifaceName) 'haveUnresolvedIface'
 			if let expr = try unresolvedIface.innerAliases.get(name) 'hitU'
 				let resolved = resolveInterfaceInnerAliasExpr(project, declaringTypeName: ifaceName, aliasName: name, expr: expr)
-				return try baseNameOfMaxonType(project, t: resolved) otherwise throw TypealiasChaseError.unresolved
+				return bindInterfaceParamsToConformanceArgs(project, t: resolved, usesParams: unresolvedIface.usesParams, confArgs: confArgs)
 			end 'hitU'
 		end 'haveUnresolvedIface'
 	end 'scan'
 	throw TypealiasChaseError.unresolved
+end 'chaseTypealiasTypeViaConformingInterfaces'
+
+// Base-name view of `chaseTypealiasTypeViaConformingInterfaces` — chases the
+// conformance set and collapses the resolved `MaxonType` to its underlying
+// struct base name for callers that only need the name (struct allocation,
+// element-array sizing). Generic-instance-aware callers use the MaxonType
+// helper directly.
+function chaseTypealiasViaConformingInterfaces(project Project, name String, structName String) returns String throws TypealiasChaseError
+	let resolved = try chaseTypealiasTypeViaConformingInterfaces(project, name: name, structName: structName)
+	return try baseNameOfMaxonType(project, t: resolved) otherwise throw TypealiasChaseError.unresolved
 end 'chaseTypealiasViaConformingInterfaces'
 
 function chaseTypealiasNameThroughGeneric(project Project, name String) returns String throws TypealiasChaseError

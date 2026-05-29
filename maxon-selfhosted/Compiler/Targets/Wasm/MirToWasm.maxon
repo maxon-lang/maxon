@@ -238,15 +238,16 @@ type WasmFuncSigs
 	end 'indexOf'
 
 	// O(1) check: does the named callee throw? Unknown callees (imports,
-	// not-yet-registered) are treated as non-throwing.
-	export function throws (name String) returns bool
+	// not-yet-registered) are treated as non-throwing. Named `calleeThrows`
+	// rather than `throws` so it can be invoked — `throws` is a keyword.
+	export function calleeThrows(name String) returns bool
 		let idx = try self.indexOf(name) otherwise return false
 		let tn = try self.throwsTypeNames.get(idx) otherwise ThrowsClause.none
 		return match tn 'kind'
 			none gives false
 			throwing gives true
 		end 'kind'
-	end 'throws'
+	end 'calleeThrows'
 end 'WasmFuncSigs'
 
 // ============================================================
@@ -456,6 +457,7 @@ function computeNeededWasmStdlibFunctions(module MirModule, globalData GlobalDat
 					loadFramePtr to loadByte then break 'extractCallee'
 					osAllocPages to osLockRelease then break 'extractCallee'
 					tryCall(_, callee, _, _) then seeds.push(callee)
+					witnessTryCall then break 'extractCallee'
 					errorReturn then break 'extractCallee'
 				end 'extractCallee'
 			end 'eachOp'
@@ -1752,6 +1754,7 @@ type WasmFunctionLowering
 			osLockAcquire then nop()
 			osLockRelease then nop()
 			tryCall(resultId, callee, argIds, errorFlagId) then emitTryCall(resultId, callee: callee, argIds: argIds, errorFlagId: errorFlagId)
+			witnessTryCall(resultId, witnessAddrId, methodIndex, isVoid, argIds, errorFlagId) then emitWitnessTryCall(resultId, witnessAddrId: witnessAddrId, methodIndex: methodIndex, isVoid: isVoid, argIds: argIds, errorFlagId: errorFlagId)
 			errorReturn(retValId, errorFlagId) then emitErrorReturn(retValId, errorFlagId: errorFlagId)
 		end 'dispatch'
 	end 'emitMirOp'
@@ -1878,9 +1881,22 @@ type WasmFunctionLowering
 
 	function emitCall(resultId ValueId, callee String, argIds ValueIdArray)
 		emitDirectCall(callee, argIds: argIds)
-		// Store result only if the callee returns a value. Plain `call` is
-		// only used for non-throwing callees, so there is no error flag to
-		// pop.
+		// A plain `call` (as opposed to `tryCall`) ignores any error the
+		// callee raises — mirroring the native ABI where the error flag lands
+		// in a dedicated register (RDX/X1) that a non-`try` caller simply
+		// never reads. On wasm the dual-value error ABI returns BOTH the
+		// primary value AND the error flag on the operand stack (primary
+		// first, error flag last/top), so a throwing callee reached through a
+		// plain `call` leaves the error flag on top. Drop it here so the
+		// primary value is what gets stored — without this the `local.set`
+		// below would capture the error flag and leave the real value
+		// dangling, corrupting the result. The for-loop desugaring of
+		// `for ... in x.withIterator()` is the canonical case: `withIterator`
+		// is `throws` but the loop reaches it through a plain `call`.
+		if funcSigs.calleeThrows(callee) 'discardErrorFlag'
+			body.push(opDrop)
+		end 'discardErrorFlag'
+		// Store result only if the callee returns a value.
 		if not lookupReturnsVoid(callee) 'hasReturnValue'
 			body.push(opLocalSet)
 			writeUleb128(body, value: resultId as Wasm32Index)
@@ -2754,7 +2770,7 @@ type WasmFunctionLowering
 		return s
 	end 'describeIndirectCallShape'
 
-	function buildIndirectCallTypeBytes(resultId ValueId, isVoid bool, argIds ValueIdArray) returns ByteArray
+	function buildIndirectCallTypeBytes(resultId ValueId, isVoid bool, argIds ValueIdArray, throws bool) returns ByteArray
 		var params = ByteArray.create()
 		for argId in argIds 'eachArg'
 			if isFloatLocal(funcFloatSet, localIdx: argId as MachineWord) 'isFloat'
@@ -2777,6 +2793,11 @@ type WasmFunctionLowering
 				results.push(wasmTypeI64)
 			end 'intRes'
 		end 'hasResult'
+		// Throwing witness methods append a trailing i64 error flag, matching
+		// the dual-value-return error ABI encoded by buildFuncTypeEntry.
+		if throws 'errorFlagResult'
+			results.push(wasmTypeI64)
+		end 'errorFlagResult'
 		var funcType = ByteArray.create()
 		writeFuncType(funcType, paramTypes: params, resultTypes: results)
 		return funcType
@@ -2793,38 +2814,8 @@ type WasmFunctionLowering
 	// which pushes nothing onto the stack, so a phantom i64 result would
 	// trap with "indirect call type mismatch".
 	function emitWitnessCall(resultId ValueId, witnessAddrId ValueId, methodIndex MachineWord, isVoid bool, argIds ValueIdArray)
-		// Push args first (matches call_indirect stack order: args before
-		// callee index).
-		for argId in argIds 'pushArgs'
-			body.push(opLocalGet)
-			writeUleb128(body, value: argId as Wasm32Index)
-		end 'pushArgs'
-
-		// Load fn-ptr from witness table directly onto the Wasm stack
-		// (no intermediate local). The closure ABI carries function
-		// pointers as i64 (table index extended); narrow to the i32 that
-		// call_indirect expects.
-		let offset = WITNESS_OFFSET_METHODS + 8 * methodIndex
-		body.push(opLocalGet)
-		writeUleb128(body, value: witnessAddrId as Wasm32Index)
-		body.push(opI32WrapI64)
-		body.push(opI64Load)
-		body.push(0x03)
-		writeUleb128(body, value: offset)
-		body.push(opI32WrapI64)
-
-		// Look up the type-section index for this call signature. Same
-		// shape resolution as emitIndirectCall.
-		let typeBytes = buildIndirectCallTypeBytes(resultId, isVoid: isVoid, argIds: argIds)
-		body.push(opCallIndirect)
-		if fixedCalls 'useFixed'
-			typeFixups.push(WasmTypeFixup.create(body.count(), signatureBytes: typeBytes))
-			writeUleb128Fixed5(body, value: 0)
-		end 'useFixed' else 'useVariable'
-			let typeIdx = try typeIndices.get(typeBytes) otherwise panic("emitWitnessCall: type not pre-registered for indirect call in '{func.name}' (resultId={resultId} argCount={argIds.count()} shape={describeIndirectCallShape(resultId, argIds: argIds)}); emitWasmModule must walk every MirOp.witnessCall in advance and seed typeIndices for the (params,result) shape. See `collectIndirectCallTypes`")
-			writeUleb128(body, value: typeIdx)
-		end 'useVariable'
-		writeUleb128(body, value: 0)
+		emitWitnessCallStackSetup(witnessAddrId, methodIndex: methodIndex, argIds: argIds)
+		emitWitnessCallIndirect(resultId, isVoid: isVoid, argIds: argIds, throws: false)
 
 		// Void method bodies push nothing; skip the local.set so the
 		// stack stays balanced. The dead resultId still has a wasm local
@@ -2834,6 +2825,62 @@ type WasmFunctionLowering
 			writeUleb128(body, value: resultId as Wasm32Index)
 		end 'storeResult'
 	end 'emitWitnessCall'
+
+	// Lower MirOp.witnessTryCall: same fused witness-table load + call_indirect
+	// as emitWitnessCall, but the dispatched method is `throws`, so its wasm
+	// signature appends a trailing i64 (error flag). Wasm pushes results in
+	// declared order (primary first, error flag last), so pop the error flag
+	// first into errorFlagId, then the primary result (if non-void) into
+	// resultId. Mirrors emitTryCall's pop order on the direct-call path.
+	function emitWitnessTryCall(resultId ValueId, witnessAddrId ValueId, methodIndex MachineWord, isVoid bool, argIds ValueIdArray, errorFlagId ValueId)
+		emitWitnessCallStackSetup(witnessAddrId, methodIndex: methodIndex, argIds: argIds)
+		emitWitnessCallIndirect(resultId, isVoid: isVoid, argIds: argIds, throws: true)
+
+		// Error flag is on top of stack (declared last); pop it first.
+		body.push(opLocalSet)
+		writeUleb128(body, value: errorFlagId as Wasm32Index)
+		if not isVoid 'storeResult'
+			body.push(opLocalSet)
+			writeUleb128(body, value: resultId as Wasm32Index)
+		end 'storeResult'
+	end 'emitWitnessTryCall'
+
+	// Push call_indirect operands for a witness dispatch: args first (stack
+	// order: args before callee index), then the fn-ptr loaded from the
+	// witness table straight onto the stack (no intermediate local).
+	function emitWitnessCallStackSetup(witnessAddrId ValueId, methodIndex MachineWord, argIds ValueIdArray)
+		for argId in argIds 'pushArgs'
+			body.push(opLocalGet)
+			writeUleb128(body, value: argId as Wasm32Index)
+		end 'pushArgs'
+
+		// The closure ABI carries function pointers as i64 (table index
+		// extended); narrow to the i32 that call_indirect expects.
+		let offset = WITNESS_OFFSET_METHODS + 8 * methodIndex
+		body.push(opLocalGet)
+		writeUleb128(body, value: witnessAddrId as Wasm32Index)
+		body.push(opI32WrapI64)
+		body.push(opI64Load)
+		body.push(0x03)
+		writeUleb128(body, value: offset)
+		body.push(opI32WrapI64)
+	end 'emitWitnessCallStackSetup'
+
+	// Shared call_indirect type-resolution + opcode emission for the two
+	// witness-dispatch emitters. The witness-table load + args must already
+	// be on the wasm stack (see emitWitnessCallStackSetup).
+	function emitWitnessCallIndirect(resultId ValueId, isVoid bool, argIds ValueIdArray, throws bool)
+		let typeBytes = buildIndirectCallTypeBytes(resultId, isVoid: isVoid, argIds: argIds, throws: throws)
+		body.push(opCallIndirect)
+		if fixedCalls 'useFixed'
+			typeFixups.push(WasmTypeFixup.create(body.count(), signatureBytes: typeBytes))
+			writeUleb128Fixed5(body, value: 0)
+		end 'useFixed' else 'useVariable'
+			let typeIdx = try typeIndices.get(typeBytes) otherwise panic("emitWitnessCallIndirect: type not pre-registered for indirect call in '{func.name}' (resultId={resultId} argCount={argIds.count()} shape={describeIndirectCallShape(resultId, argIds: argIds)}); emitWasmModule must walk every MirOp.witnessCall/witnessTryCall in advance and seed typeIndices for the (params,result) shape. See `collectIndirectCallTypes`")
+			writeUleb128(body, value: typeIdx)
+		end 'useVariable'
+		writeUleb128(body, value: 0)
+	end 'emitWitnessCallIndirect'
 
 	function emitIndirectCall(resultId ValueId, calleeId ValueId, argIds ValueIdArray)
 		// Push args first (matches the wasm call_indirect stack order:
@@ -2856,7 +2903,7 @@ type WasmFunctionLowering
 		// own the final type-section layout; we record a typeFixup and
 		// write a 5-byte placeholder that gets patched at module-assembly
 		// time.
-		let typeBytes = buildIndirectCallTypeBytes(resultId, isVoid: false, argIds: argIds)
+		let typeBytes = buildIndirectCallTypeBytes(resultId, isVoid: false, argIds: argIds, throws: false)
 		body.push(opCallIndirect)
 		if fixedCalls 'useFixed'
 			typeFixups.push(WasmTypeFixup.create(body.count(), signatureBytes: typeBytes))
@@ -2979,6 +3026,9 @@ type WasmFunctionLowering
 			store to loadByte then break 'dispatch'
 			osAllocPages to osLockRelease then break 'dispatch'
 			tryCall(resultId, callee, _, _) then markIfFloatCall(floatSet, id: resultId as MachineWord, callee: callee)
+			// witnessTryCall dispatches through a witness table, so the result
+			// float-ness isn't derivable from a callee name (like witnessCall).
+			witnessTryCall then break 'dispatch'
 			errorReturn then break 'dispatch'
 		end 'dispatch'
 	end 'markFloatMirOp'
@@ -5360,23 +5410,32 @@ function collectIndirectCallTypes(module MirModule, types ByteArrayArray, typeIn
 			for opIdx in block.opRefs 'eachOp'
 				let op = try module.ops.get(opIdx) otherwise panic("invariant: opIdx from block.opRefs not in module.ops")
 				match op 'check'
-					indirectCall(resultId, _, argIds) then registerIndirectCallType(types, typeIndexMap: typeIndexMap, floatSet: floatSet, resultId: resultId, isVoid: false, argIds: argIds)
-					witnessCall(resultId, _, _, isVoid, argIds) then registerIndirectCallType(types, typeIndexMap: typeIndexMap, floatSet: floatSet, resultId: resultId, isVoid: isVoid, argIds: argIds)
+					indirectCall(resultId, _, argIds) then registerIndirectCallType(types, typeIndexMap: typeIndexMap, floatSet: floatSet, resultId: resultId, isVoid: false, argIds: argIds, throws: false)
+					witnessCall(resultId, _, _, isVoid, argIds) then registerIndirectCallType(types, typeIndexMap: typeIndexMap, floatSet: floatSet, resultId: resultId, isVoid: isVoid, argIds: argIds, throws: false)
+					witnessTryCall(resultId, _, _, isVoid, argIds, _) then registerIndirectCallType(types, typeIndexMap: typeIndexMap, floatSet: floatSet, resultId: resultId, isVoid: isVoid, argIds: argIds, throws: true)
 					movImm to call then break 'check'
 					ret to loadByte then break 'check'
 					osAllocPages to osLockRelease then break 'check'
-					tryCall to errorReturn then break 'check'
+					// tryCall / errorReturn are not indirect calls (no signature to
+					// register); witnessTryCall sits between them in the MirOp union
+					// and is handled explicitly above, so the band is split here.
+					tryCall then break 'check'
+					errorReturn then break 'check'
 				end 'check'
 			end 'eachOp'
 			if block.hasTerminatorOp() 'hasTerm'
 				let termOp = try module.ops.get(block.terminatorIndex()) otherwise panic("invariant: terminatorIndex not in module.ops")
 				match termOp 'checkTerm'
-					indirectCall(resultId, _, argIds) then registerIndirectCallType(types, typeIndexMap: typeIndexMap, floatSet: floatSet, resultId: resultId, isVoid: false, argIds: argIds)
-					witnessCall(resultId, _, _, isVoid, argIds) then registerIndirectCallType(types, typeIndexMap: typeIndexMap, floatSet: floatSet, resultId: resultId, isVoid: isVoid, argIds: argIds)
+					indirectCall(resultId, _, argIds) then registerIndirectCallType(types, typeIndexMap: typeIndexMap, floatSet: floatSet, resultId: resultId, isVoid: false, argIds: argIds, throws: false)
+					witnessCall(resultId, _, _, isVoid, argIds) then registerIndirectCallType(types, typeIndexMap: typeIndexMap, floatSet: floatSet, resultId: resultId, isVoid: isVoid, argIds: argIds, throws: false)
+					witnessTryCall(resultId, _, _, isVoid, argIds, _) then registerIndirectCallType(types, typeIndexMap: typeIndexMap, floatSet: floatSet, resultId: resultId, isVoid: isVoid, argIds: argIds, throws: true)
 					movImm to call then break 'checkTerm'
 					ret to loadByte then break 'checkTerm'
 					osAllocPages to osLockRelease then break 'checkTerm'
-					tryCall to errorReturn then break 'checkTerm'
+					// See the body-loop note: split the tryCall..errorReturn band so
+					// the explicit witnessTryCall arm doesn't overlap a range.
+					tryCall then break 'checkTerm'
+					errorReturn then break 'checkTerm'
 				end 'checkTerm'
 			end 'hasTerm'
 		end 'eachBlock'
@@ -5398,7 +5457,7 @@ function lookupOrRegisterIndirectType(types ByteArrayArray, typeIndexMap WasmTyp
 	return existing as Wasm32Index
 end 'lookupOrRegisterIndirectType'
 
-function registerIndirectCallType(types ByteArrayArray, typeIndexMap WasmTypeIndexMap, floatSet BoolArray, resultId ValueId, isVoid bool, argIds ValueIdArray)
+function registerIndirectCallType(types ByteArrayArray, typeIndexMap WasmTypeIndexMap, floatSet BoolArray, resultId ValueId, isVoid bool, argIds ValueIdArray, throws bool)
 	var params = ByteArray.create()
 	for argId in argIds 'eachArg'
 		if isFloatLocal(floatSet, localIdx: argId as MachineWord) 'isFloat'
@@ -5419,6 +5478,12 @@ function registerIndirectCallType(types ByteArrayArray, typeIndexMap WasmTypeInd
 			results.push(wasmTypeI64)
 		end 'intRes'
 	end 'hasResult'
+	// Throwing witness dispatch appends a trailing i64 error flag — the
+	// signature must match buildIndirectCallTypeBytes(throws: true) emitted
+	// at the witnessTryCall site, or call_indirect traps on a type mismatch.
+	if throws 'errorFlagResult'
+		results.push(wasmTypeI64)
+	end 'errorFlagResult'
 	var funcType = ByteArray.create()
 	writeFuncType(funcType, paramTypes: params, resultTypes: results)
 	if typeIndexMap.contains(funcType) 'alreadyInterned'

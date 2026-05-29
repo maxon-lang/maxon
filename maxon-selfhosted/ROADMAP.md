@@ -1,6 +1,6 @@
 # Self-Hosted Compiler Roadmap
 
-The self-hosted Maxon compiler (`maxon-selfhosted/`) currently has **144 specs whitelisted** in [`Testing/SpecTestRunner.maxon`](Testing/SpecTestRunner.maxon), with **1587 fragment tests passing** on both x64-windows and wasm32-wasi. C# bootstrap holds at 2770/2770 (modulo one pre-existing flaky network test, `http-client.response-headers`, that depends on `httpbin.org` reachability). The pipeline is fully built out: lexer → parser → Maxon dialect → Std dialect → MIR (SSA) → Target dialect → code emitter → PE/ELF/Mach-O/Wasm writers, with SSA register allocation (Stage Q: LLVM-Greedy-style phi-merge splitting + memory-only spill fallback), a real optimization pass suite, and (as of Phase 6) a Go-style three-tier slab allocator with refcount-aware managed memory. Since Stage P (2026-05-20) the chunk-driven per-function emit path is the default and a single-function edit triggers a true incremental rebuild via `db.codePerFunc`.
+The self-hosted Maxon compiler (`maxon-selfhosted/`) currently has **117 specs whitelisted** in [`Testing/SpecTestRunner.maxon`](Testing/SpecTestRunner.maxon), with **1688 fragment tests passing** on both x64-windows and wasm32-wasi. C# bootstrap holds at 2770/2770 (modulo one pre-existing flaky network test, `http-client.response-headers`, that depends on `httpbin.org` reachability). The pipeline is fully built out: lexer → parser → Maxon dialect → Std dialect → MIR (SSA) → Target dialect → code emitter → PE/ELF/Mach-O/Wasm writers, with SSA register allocation (Stage Q: LLVM-Greedy-style phi-merge splitting + memory-only spill fallback), a real optimization pass suite, and (as of Phase 6) a Go-style three-tier slab allocator with refcount-aware managed memory. Since Stage P (2026-05-20) the chunk-driven per-function emit path is the default and a single-function edit triggers a true incremental rebuild via `db.codePerFunc`.
 
 Each phase brings X64 + ARM64 backends and PE + ELF output formats to parity together. WASM and Mach-O writers exist but are not the primary correctness target. All targets (`x64-windows`, `arm64-windows`, `x64-linux`, `arm64-linux`) are kept in lockstep within each phase.
 
@@ -81,7 +81,7 @@ Phase 11:  Interfaces & Generics  [x] hybrid model — 11.0–11.6 spine, C1.a�
                                       closing that gap is scoped to a future stage. The
                                       `--per-function-dispatch` diagnostic flag was deleted
                                       end-of-Stage-P along with the PerFunctionParity byte-parity
-                                      harness — the spec test matrix at 1379/1379 is now the
+                                      harness — the spec test matrix at 1688/1688 is now the
                                       canonical correctness gate.
 Phase 12:  Global Variables       [x] top-level-let (16/16, 1 tagged for Phase 15c FilePath),
                                       module-level-struct-var (3/3), static-variables (28/28),
@@ -2510,11 +2510,89 @@ Phase-by-phase landing:
 
 `CACHE_FORMAT_VERSION` ended this push at **v63**.
 
-**Final state**: **1615/1615 self-hosted fragments** on both
+**State at Phase 16 closeout**: **1615/1615 self-hosted fragments** on both
 x64-windows and wasm32-wasi; **2713/2713** on the C# bootstrap. No
 stdlib file is excluded; the `isStdlibRelativePathSkipped` filter is
 still wired up but only fires when a user passes
 `--skip-stdlib-fn=NAME` (the Phase 0b register-allocator escape hatch).
+
+## Chained calls + array-sort closeout (2026-05-28)
+
+Two follow-on streams brought the self-hosted matrix to **1666/1666**
+fragments on both x64-windows and wasm32-wasi (C# bootstrap at
+**2770/2770**):
+
+- **Chained method calls** (`feat: chained-calls`): the parser now
+  threads a chained-call receiver through successive `.method(...)`
+  applications, so expressions like `arr.filter(...).map(...).sort()`
+  parse and lower correctly. Landed in both
+  [`Parser.maxon`](Compiler/Parser.maxon) and the C# bootstrap
+  [`2-Parser.cs`](../maxon-sharp/Compiler/2-Parser.cs); `array-sort`,
+  `type-methods`, and `lexer-parser-robustness` specs gained coverage.
+- **Sort tests** (`fixed sort tests`): closed a function-type-alias gap
+  in closure-env pairing inside
+  [`LowerMaxonToStd.maxon`](Compiler/IR/Maxon/LowerMaxonToStd.maxon).
+  `seedParams`, `captureClosureEnvIfFunctionTyped`, and
+  `slotArgsForCall` now chase typealiases (e.g. a `SortComparator =
+  function(...) returns Ordering` param) through
+  `chaseTypealiasToFunctionType` before the fn-type test, matching the
+  resolution `buildAbiParamMaps` already uses when it inserts the env
+  companion. Without the chase an aliased function param skipped its env
+  slot and the indirect-call site forwarded `env=0`, crashing closure
+  dispatch. With the fix the full `array-sort` suite (driftsort, pdq,
+  small-sort networks, custom/unstable comparators, string elements)
+  passes on both targets.
+
+## Ranges + iterator-adapter closeout (2026-05-29)
+
+Whitelisted the `ranges` spec (**25/25** on x64-windows and wasm32-wasi),
+taking the matrix to **1688/1688**. Enabling it surfaced and fixed a chain
+of five distinct bugs in the generic interface-dispatch / iterator path,
+all of which gated the `(start upto end).withIterator()` adapter (an
+`Iterable` extension method whose inner alias `WithIterSelf =
+WithIterIterator with Iter, Element` instantiates a generic, witness-
+constrained iterator wrapper):
+
+1. **Inner-alias resolution via conformance** ([`MaxonDialect.maxon`](Compiler/IR/Maxon/MaxonDialect.maxon)):
+   `chaseTypealiasNameToType` couldn't resolve `WithIterSelf.create` in the
+   monomorphized `OpenRange.withIterator` body (the alias lives on the
+   `Iterable` interface, reachable only through OpenRange's conformance),
+   so the literal callee leaked to the backend and panicked in
+   `lookupFuncParamTypes`. Added a conforming-interface walk mirroring
+   `chaseTypealiasNameToStruct`, plus `bindInterfaceParamsToConformanceArgs`
+   to bind the interface's `usesParams` to the conformance's concrete
+   `with` args (so the result is a fully-concrete
+   `genericInstance(WithIterIterator, [RangeIterator, RangeBound])` rather
+   than a conditional gid that tries to forward a layout from a caller that
+   has none).
+2. **User-scope inner-alias resolution** ([`TypeResolution.maxon`](Compiler/TypeResolution.maxon)):
+   `tryAnyStructInnerAlias` scanned only struct inner aliases, so a value
+   typed `WithIterSelf` escaping into user scope (the for-loop's
+   `createIterator` receiver) never resolved. Extended it to also scan
+   interface inner aliases.
+3. **Unsigned range-check guard** ([`ExpandCastRangeChecks.maxon`](Compiler/Passes/ExpandCastRangeChecks.maxon)):
+   `RangeIterator.index()` returns `(pos - first) as IterPos` where
+   `IterPos = int(0 to u64.max)`. The runtime guard emitted a *signed*
+   `value > u64.max` test, but `u64.max` stores as -1, so every
+   non-negative index spuriously panicked. `emitCastCheckGuard` now treats
+   the full-width unsigned range as vacuous (no guard) and panics on the
+   not-yet-supported partial-unsigned cases instead of miscompiling.
+4. **Throwing witness thunks** ([`LowerMaxonToStd.maxon`](Compiler/IR/Maxon/LowerMaxonToStd.maxon)):
+   `synthesizeOneWitnessThunk` mapped a thunk's return type from the
+   method's declared return only, ignoring `throws`. A throwing void
+   method like `Iterator.advance()` returns `(void, errorFlag)`; the thunk
+   dropped the flag. Now branches on the method's `throwsTypeName` and
+   emits `tryCall` + `errorReturn` so the thrown `exhausted` survives.
+5. **Error-returning witness dispatch** (StdDialect / MIR / all three
+   backends): added a dual-define `witnessTryCall` op (the union of
+   `witnessCall` and `tryCall`) so a `throws` interface method dispatched
+   through a witness table propagates its error flag instead of binding it
+   to zero; `emitWitnessDispatch` now emits it (and binds the real flag)
+   when the dispatched method throws. Lowered in X64, ARM64, and Wasm
+   (the Wasm path threads the trailing-i64 error result through the
+   `call_indirect` type signature). Without it, `WithIterIterator.advance`
+   discarded the loop-terminating error and the for-loop ran forever (x64)
+   or corrupted the value stack (wasm).
 
 ## Verification
 

@@ -1,0 +1,64 @@
+// Test: ranges.let-binding
+function main() returns ExitCode
+		let r = 1 upto 5
+		var sum = 0
+		for x in r 'loop'
+				sum = sum + x
+		end 'loop'
+		return sum
+end 'main'
+---
+ExitCode: 10
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 1 : i64
+    %1 = mir.mov_imm 5 : i64
+    %22 = mir.mov_imm 16 : i64
+    %23 = mir.call @mrt_alloc(%22)
+    mir.store %0, %23, 0 width: qword
+    mir.store %1, %23, 8 width: qword
+    %3 = mir.mov_imm 0 : i64
+    %5, %6 = mir.try_call @OpenRange.createIterator(%23)
+    %7 = mir.mov_imm 0 : i64
+    %8 = mir.cmp ne, %6, %7
+    mir.cond_br %8 [then: loop_0.exit(%3), else: loop_0(%3)]
+  inlined_RangeIterator.advance_0:
+    %24 = mir.load %5, 16 width: qword
+    %25 = mir.load %5, 8 width: qword
+    %26 = mir.cmp eq, %24, %25
+    mir.cond_br %26 [then: inlined_RangeIterator.advance_1(), else: inlined_RangeIterator.advance_2()]
+  inlined_RangeIterator.advance_1:
+    %27 = mir.mov_imm 0 : i64
+    %28 = mir.mov_imm 1 : i64
+    mir.br inline_cont_main_0(%27, %28)
+  inlined_RangeIterator.advance_2:
+    %29 = mir.load %5, 16 width: qword
+    %30 = mir.mov_imm 1 : i64
+    %31 = mir.add.i64 %29, %30
+    mir.store %31, %5, 16 width: qword
+    %32 = mir.mov_imm 0 : i64
+    %33 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%32, %33)
+  inline_cont_main_0:
+    %12 = mir.mov_imm 0 : i64
+    %13 = mir.cmp ne, %35, %12
+    mir.cond_br %13 [then: loop_0.exit(%18), else: loop_0(%18)]
+  loop_0:
+    %36 = mir.load %5, 16 width: qword
+    %18 = mir.add.i64 %20, %36
+    mir.br inlined_RangeIterator.advance_0()
+  loop_0.exit:
+    %37 = mir.mov_imm 125 : i64
+    %38 = mir.cmp ugt, %21, %37
+    mir.cond_br %38 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %39 = mir.global_addr @__panic_msg_0
+    %40 = mir.call @mrt_panic(%39)
+  __range_ok_0:
+    mir.ret %21
+  }
+}
+---

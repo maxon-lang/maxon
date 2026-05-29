@@ -3678,6 +3678,18 @@ function tryAnyStructInnerAlias(project Project, name String, fallbackId TypeNam
 		let resolved = try st.innerAliases.get(name) otherwise continue
 		return resolved
 	end 'eachStruct'
+	// Interface inner aliases (e.g. `Iterable.WithIterSelf = WithIterIterator
+	// with Iter, Element`) surface in user-scope receivers when a value of the
+	// alias type escapes the interface body — `for (i, v) in r.withIterator()`
+	// binds the loop expr to `WithIterSelf`, then the desugared
+	// `createIterator` call resolves the receiver here. Scan interface bodies
+	// after structs so the alias unwraps to its underlying generic instance
+	// (`WithIterIterator`) and `maxonTypeStructName` returns a real receiver.
+	// Inner-alias names are unique across the stdlib, so the first match wins.
+	for (_, iface) in project.interfaces 'eachIface'
+		let resolved = try iface.innerAliases.get(name) otherwise continue
+		return resolved
+	end 'eachIface'
 	return MaxonType.named(fallbackId)
 end 'tryAnyStructInnerAlias'
 

@@ -1,0 +1,45 @@
+// Test: ranges.break-in-range
+function main() returns ExitCode
+		var last = 0
+		for i in 1 to 100 'loop'
+				last = i
+				if i == 5 'done'
+						break
+				end 'done'
+		end 'loop'
+		return last
+end 'main'
+---
+ExitCode: 5
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %1 = mir.mov_imm 1 : i64
+    %2 = mir.mov_imm 100 : i64
+    mir.br loop_0.header(%0, %1)
+  loop_0.header:
+    %5 = mir.cmp le, %16, %2
+    mir.cond_br %5 [then: loop_0(), else: loop_0.exit(%14)]
+  loop_0:
+    %8 = mir.mov_imm 5 : i64
+    %9 = mir.cmp eq, %16, %8
+    mir.cond_br %9 [then: loop_0.exit(%16), else: loop_0.step()]
+  loop_0.step:
+    %11 = mir.mov_imm 1 : i64
+    %12 = mir.add.i64 %16, %11
+    mir.br loop_0.header(%16, %12)
+  loop_0.exit:
+    %17 = mir.mov_imm 125 : i64
+    %18 = mir.cmp ugt, %15, %17
+    mir.cond_br %18 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %19 = mir.global_addr @__panic_msg_0
+    %20 = mir.call @mrt_panic(%19)
+  __range_ok_0:
+    mir.ret %15
+  }
+}
+---

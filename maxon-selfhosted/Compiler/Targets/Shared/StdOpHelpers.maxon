@@ -308,6 +308,9 @@ function isMirOpPanicCall(op MirOp) returns bool
 		indirectCall to loadByte then break 'check'
 		osAllocPages to osLockRelease then break 'check'
 		tryCall(_, callee, _, _) then return callee == "mrt_panic"
+		// witnessTryCall dispatches through a witness table, never the static
+		// mrt_panic helper.
+		witnessTryCall then break 'check'
 		errorReturn then break 'check'
 	end 'check'
 	return false
@@ -455,6 +458,7 @@ export function mirOpMaxValueId(op MirOp) returns ValueId
 		osLockAcquire(addrId) gives addrId
 		osLockRelease(addrId) gives addrId
 		tryCall(resultId, _, argIds, errorFlagId) gives maxOfThreeValueIds(resultId, b: maxValueIdInArray(argIds), c: errorFlagId)
+		witnessTryCall(resultId, witnessAddrId, _, _, argIds, errorFlagId) gives maxOfTwoValueIds(maxOfThreeValueIds(resultId, b: witnessAddrId, c: maxValueIdInArray(argIds)), b: errorFlagId)
 		errorReturn(retValId, errorFlagId) gives maxOfTwoValueIds(retValId, b: errorFlagId)
 	end 'pick'
 end 'mirOpMaxValueId'

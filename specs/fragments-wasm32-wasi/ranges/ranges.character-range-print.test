@@ -1,0 +1,66 @@
+// Test: ranges.character-range-print
+function main() returns ExitCode
+		for c in 'a' to 'e' 'loop'
+				print("{c}\n")
+		end 'loop'
+		return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+a
+b
+c
+d
+e
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %36 = mir.mov_imm 0 : i64
+    %37 = mir.mov_imm 1 : i64
+    %0 = mir.mov_imm 97 : i64
+    %1 = mir.mov_imm 101 : i64
+    mir.br loop_0.header(%0)
+  loop_0.header:
+    %4 = mir.cmp le, %35, %1
+    mir.cond_br %4 [then: loop_0(), else: loop_0.exit()]
+  loop_0:
+    %6 = mir.global_addr @__istr_0
+    %9 = mir.call @mrt_alloc(%37)
+    mir.store %35, %9, 0 width: byte
+    %11 = mir.global_addr @__istr_1
+    %16 = mir.mov_imm 2 : i64
+    %18 = mir.mov_imm 3 : i64
+    %19 = mir.call @mrt_alloc(%18)
+    mir.memcpy %19, %6, %36
+    %20 = mir.add.i64 %19, %36
+    mir.memcpy %20, %9, %37
+    %21 = mir.add.i64 %20, %37
+    mir.memcpy %21, %11, %37
+    %23 = mir.mov_imm 40 : i64
+    %24 = mir.call @mrt_alloc(%23)
+    mir.store %19, %24, 0 width: qword
+    mir.store %16, %24, 8 width: qword
+    mir.store %16, %24, 16 width: qword
+    mir.store %37, %24, 24 width: qword
+    mir.store %36, %24, 32 width: qword
+    %27 = mir.mov_imm 16 : i64
+    %28 = mir.call @mrt_alloc(%27)
+    mir.store %24, %28, 0 width: qword
+    mir.store %36, %28, 8 width: qword
+    %38 = mir.load %28, 0 width: qword
+    %39 = mir.load %38, 0 width: qword
+    %40 = mir.load %38, 8 width: qword
+    %41 = mir.call @mrt_write_stdout(%39, %40)
+    mir.br loop_0.step()
+  loop_0.step:
+    %33 = mir.add.i64 %35, %37
+    mir.br loop_0.header(%33)
+  loop_0.exit:
+    mir.ret %36
+  }
+}
+---

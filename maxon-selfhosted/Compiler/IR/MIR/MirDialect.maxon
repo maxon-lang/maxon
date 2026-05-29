@@ -190,6 +190,13 @@ export union MirOp
 	// no body-side effect on subsequent ops in this block (control falls
 	// off the function), so it doesn't need barrier treatment.
 	tryCall(resultId ValueId, callee String, argIds ValueIdArray, errorFlagId ValueId) = MirOpMeta{isMemory: true, isStore: false, isCall: true, clobbersFlags: false, isParam: false, isCmp: false}
+	// Throwing witness-table dispatch: union of `witnessCall` (load fn ptr
+	// from witnessAddr at WITNESS_OFFSET_METHODS + 8*methodIndex, then
+	// memory-indirect call) and `tryCall` (defines BOTH `resultId` AND
+	// `errorFlagId` — the error flag in RDX / X1). Emitted for `throws`
+	// interface methods reached through a witness so the thrown error
+	// propagates to the caller's `try`.
+	witnessTryCall(resultId ValueId, witnessAddrId ValueId, methodIndex MachineWord, isVoid bool, argIds ValueIdArray, errorFlagId ValueId) = MirOpMeta{isMemory: true, isStore: false, isCall: true, clobbersFlags: false, isParam: false, isCmp: false}
 	errorReturn(retValId ValueId, errorFlagId ValueId) = MirOpMeta{isMemory: false, isStore: false, isCall: false, clobbersFlags: false, isParam: false, isCmp: false}
 end 'MirOp'
 
@@ -214,6 +221,13 @@ function mirOpWitnessCallToString(resultId ValueId, witnessAddrId ValueId, metho
 	end 'voidFmt'
 	return "%{resultId} = mir.witness_call %{witnessAddrId}, [{methodIndex}]({formatMirArgs(argIds)})"
 end 'mirOpWitnessCallToString'
+
+function mirOpWitnessTryCallToString(resultId ValueId, witnessAddrId ValueId, methodIndex MachineWord, isVoid bool, argIds ValueIdArray, errorFlagId ValueId) returns String
+	if isVoid 'voidFmt'
+		return "%{errorFlagId} = mir.witness_try_call %{witnessAddrId}, [{methodIndex}]({formatMirArgs(argIds)})"
+	end 'voidFmt'
+	return "%{resultId}, %{errorFlagId} = mir.witness_try_call %{witnessAddrId}, [{methodIndex}]({formatMirArgs(argIds)})"
+end 'mirOpWitnessTryCallToString'
 
 export function mirOpToString(op MirOp, blocks IrBlockArray) returns String
 	return match op 'dispatch'
@@ -279,6 +293,7 @@ export function mirOpToString(op MirOp, blocks IrBlockArray) returns String
 		osLockAcquire(addrId) gives "mir.os_lock_acquire %{addrId}"
 		osLockRelease(addrId) gives "mir.os_lock_release %{addrId}"
 		tryCall(resultId, callee, argIds, errorFlagId) gives "%{resultId}, %{errorFlagId} = mir.try_call @{callee}({formatMirArgs(argIds)})"
+		witnessTryCall(resultId, witnessAddrId, methodIndex, isVoid, argIds, errorFlagId) gives mirOpWitnessTryCallToString(resultId, witnessAddrId: witnessAddrId, methodIndex: methodIndex, isVoid: isVoid, argIds: argIds, errorFlagId: errorFlagId)
 		errorReturn(retValId, errorFlagId) gives "mir.error_return %{retValId}, %{errorFlagId}"
 	end 'dispatch'
 end 'mirOpToString'

@@ -303,6 +303,30 @@ end 'truncateOpRefsTo'
 // float comparison predicates.
 function emitCastCheckGuard(project Project, module MaxonModule, func IrFunction, hostBlockRef BlockRef, hostBlock IrBlock, info CastCheckInfo, panicBlockId BlockId, continueBlockId BlockId, checkId ParsedInt)
 	let typealiasRange = info.range
+	let aliasIsFloat = aliasIsFloatType(project, name: info.aliasName)
+	// Unsigned-style integer ranges (`int(0 to u64.max)`) store their upper
+	// bound as a two's-complement-wrapped negative i64. A plain signed
+	// `value > upper` guard would treat upper = u64.max (-1) as smaller than
+	// every non-negative value and panic spuriously. The synthesized `cmp`
+	// only has signed predicates, so we can't emit an unsigned compare; the
+	// only unsigned upper bound that round-trips through a signed guard is the
+	// full-width u64.max, which is vacuous (every i64 bit pattern is <= it).
+	// Treat such bounds as "no check needed". A lower bound of 0 is likewise
+	// vacuous for an unsigned range. Any other unsigned-style bound has no
+	// correct signed-guard lowering today — panic so the gap surfaces rather
+	// than miscompiling.
+	let isUnsignedRange = not aliasIsFloat and typealiasRange.lower >= 0 and typealiasRange.upper < 0
+	if isUnsignedRange 'unsignedGuard'
+		if typealiasRange.upper != -1 'unsupportedUpper'
+			panic("emitCastCheckGuard: unsigned-style alias '{info.aliasName}' has upper bound above i64.max but below u64.max — needs an unsigned range-check lowering that CmpPredicate doesn't support yet")
+		end 'unsupportedUpper'
+		if typealiasRange.lower > 0 'unsupportedLower'
+			panic("emitCastCheckGuard: unsigned-style alias '{info.aliasName}' has a positive lower bound — needs an unsigned range-check lowering that CmpPredicate doesn't support yet")
+		end 'unsupportedLower'
+		// lower == 0 and upper == u64.max: both bounds vacuous, no guard.
+		module.setTerminator(hostBlock, op: MaxonOp.br(continueBlockId, range: info.sourceRange))
+		return
+	end 'unsignedGuard'
 	let needsLower = typealiasRange.lower > i64.min
 	let needsUpper = typealiasRange.upper < i64.max
 	if not needsLower and not needsUpper 'noCheck'
@@ -311,7 +335,6 @@ function emitCastCheckGuard(project Project, module MaxonModule, func IrFunction
 		module.setTerminator(hostBlock, op: MaxonOp.br(continueBlockId, range: info.sourceRange))
 		return
 	end 'noCheck'
-	let aliasIsFloat = aliasIsFloatType(project, name: info.aliasName)
 	let operandType = MaxonType.float if aliasIsFloat else MaxonType.integer
 	if needsLower and needsUpper 'both'
 		let loLabel = "__cast_check_lo_{checkId}"

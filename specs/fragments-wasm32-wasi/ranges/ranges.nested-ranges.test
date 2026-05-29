@@ -1,0 +1,55 @@
+// Test: ranges.nested-ranges
+function main() returns ExitCode
+		var sum = 0
+		for i in 1 to 3 'outer'
+				for j in 1 to 3 'inner'
+						sum = sum + i * j
+				end 'inner'
+		end 'outer'
+		return sum
+end 'main'
+---
+ExitCode: 36
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %1 = mir.mov_imm 1 : i64
+    %2 = mir.mov_imm 3 : i64
+    mir.br outer_0.header(%0, %1)
+  outer_0.header:
+    %5 = mir.cmp le, %25, %2
+    mir.cond_br %5 [then: outer_0(), else: outer_0.exit()]
+  outer_0:
+    %6 = mir.mov_imm 1 : i64
+    %7 = mir.mov_imm 3 : i64
+    mir.br inner_0.header(%24, %6)
+  outer_0.step:
+    %9 = mir.mov_imm 1 : i64
+    %10 = mir.add.i64 %25, %9
+    mir.br outer_0.header(%23, %10)
+  outer_0.exit:
+    %27 = mir.mov_imm 125 : i64
+    %28 = mir.cmp ugt, %24, %27
+    mir.cond_br %28 [then: __range_panic_0(), else: __range_ok_0()]
+  inner_0.header:
+    %14 = mir.cmp le, %26, %7
+    mir.cond_br %14 [then: inner_0(), else: outer_0.step()]
+  inner_0:
+    %18 = mir.mul.i64 %25, %26
+    %19 = mir.add.i64 %23, %18
+    mir.br inner_0.step()
+  inner_0.step:
+    %21 = mir.mov_imm 1 : i64
+    %22 = mir.add.i64 %26, %21
+    mir.br inner_0.header(%19, %22)
+  __range_panic_0:
+    %29 = mir.global_addr @__panic_msg_0
+    %30 = mir.call @mrt_panic(%29)
+  __range_ok_0:
+    mir.ret %24
+  }
+}
+---

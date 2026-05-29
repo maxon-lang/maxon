@@ -209,6 +209,8 @@ function classifyByDef(defOp MirOp) returns OperandCategory
 		// tryCall produces R8 (resultId) and RDX (errorFlagId), both fixed
 		// physical registers — same Cat A treatment as plain `call`.
 		tryCall gives OperandCategory.fixedBound
+		// witnessTryCall: same fixed result+error registers as tryCall.
+		witnessTryCall gives OperandCategory.fixedBound
 		// errorReturn is a terminator with no def; classification only runs on
 		// def-producing ops, so reaching here is unreachable in practice. Mark
 		// as flexible to keep the match exhaustive without affecting decisions.
@@ -336,6 +338,8 @@ function mirDefValueId(op MirOp) returns DefMapIndex
 		// here. Phase 2's backend lowering surfaces both via post-call mov
 		// from R8/RDX into the respective virtuals.
 		tryCall(resultId, _, _, _) gives resultId
+		// witnessTryCall: same primary-resultId reporting as tryCall.
+		witnessTryCall(resultId, _, _, _, _, _) gives resultId
 		errorReturn gives DEF_NONE
 	end 'def'
 end 'mirDefValueId'

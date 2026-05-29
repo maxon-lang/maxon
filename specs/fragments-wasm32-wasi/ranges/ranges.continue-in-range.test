@@ -1,0 +1,50 @@
+// Test: ranges.continue-in-range
+function main() returns ExitCode
+		var sum = 0
+		for i in 1 to 10 'loop'
+				if i mod 2 == 0 'skip'
+						continue
+				end 'skip'
+				sum = sum + i
+		end 'loop'
+		return sum
+end 'main'
+---
+ExitCode: 25
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %1 = mir.mov_imm 1 : i64
+    %2 = mir.mov_imm 10 : i64
+    mir.br loop_0.header(%0, %1)
+  loop_0.header:
+    %5 = mir.cmp le, %20, %2
+    mir.cond_br %5 [then: loop_0(), else: loop_0.exit()]
+  loop_0:
+    %7 = mir.mov_imm 2 : i64
+    %8 = mir.rem.i64 %20, %7
+    %9 = mir.mov_imm 0 : i64
+    %10 = mir.cmp eq, %8, %9
+    mir.cond_br %10 [then: loop_0.step(%19), else: skip_0.after()]
+  loop_0.step:
+    %12 = mir.mov_imm 1 : i64
+    %13 = mir.add.i64 %20, %12
+    mir.br loop_0.header(%18, %13)
+  loop_0.exit:
+    %21 = mir.mov_imm 125 : i64
+    %22 = mir.cmp ugt, %19, %21
+    mir.cond_br %22 [then: __range_panic_0(), else: __range_ok_0()]
+  skip_0.after:
+    %17 = mir.add.i64 %19, %20
+    mir.br loop_0.step(%17)
+  __range_panic_0:
+    %23 = mir.global_addr @__panic_msg_0
+    %24 = mir.call @mrt_panic(%23)
+  __range_ok_0:
+    mir.ret %19
+  }
+}
+---

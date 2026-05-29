@@ -172,6 +172,9 @@ function recordFuncLifetimes(op StdCallOp, blockId BlockId, opIndex OpIndex, sta
 		// witnessAddrId in the calleeId slot — the helper just records
 		// it as a use.
 		witnessCall(resultId, witnessAddrId, _, _, argIds) then recordIndirectCallLifetimes(resultId, calleeId: witnessAddrId, argIds: argIds, blockId: blockId, opIndex: opIndex, state: state)
+		// witnessTryCall: witnessCall's def-resultId / use-witnessAddrId+args
+		// PLUS tryCall's second errorFlagId def.
+		witnessTryCall(resultId, witnessAddrId, _, _, argIds, errorFlagId) then recordWitnessTryCallLifetimes(resultId, witnessAddrId: witnessAddrId, argIds: argIds, errorFlagId: errorFlagId, blockId: blockId, opIndex: opIndex, state: state)
 		funcRef(resultId, _) then recordDef(resultId, blockId: blockId, opIndex: opIndex, state: state)
 		tailCall(_, argIds) then recordArrayUses(argIds, blockId: blockId, opIndex: opIndex, state: state)
 		param(resultId, _, _) then recordDef(resultId, blockId: blockId, opIndex: opIndex, state: state)
@@ -195,6 +198,11 @@ function recordIndirectCallLifetimes(resultId ValueId, calleeId ValueId, argIds 
 	recordDefAndArrayUses(resultId, usedIds: argIds, blockId: blockId, opIndex: opIndex, state: state)
 	recordUse(calleeId, blockId: blockId, opIndex: opIndex, state: state)
 end 'recordIndirectCallLifetimes'
+
+function recordWitnessTryCallLifetimes(resultId ValueId, witnessAddrId ValueId, argIds ValueIdArray, errorFlagId ValueId, blockId BlockId, opIndex OpIndex, state BorrowAnalysisState)
+	recordIndirectCallLifetimes(resultId, calleeId: witnessAddrId, argIds: argIds, blockId: blockId, opIndex: opIndex, state: state)
+	recordDef(errorFlagId, blockId: blockId, opIndex: opIndex, state: state)
+end 'recordWitnessTryCallLifetimes'
 
 function recordMemRefLifetimes(op StdMemoryOp, blockId BlockId, opIndex OpIndex, state BorrowAnalysisState)
 	match op 'rec'

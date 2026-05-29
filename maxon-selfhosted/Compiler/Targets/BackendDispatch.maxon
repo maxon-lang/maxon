@@ -423,6 +423,7 @@ function appendCalleeFromStdCallOp(op StdCallOp, seeds StringArray)
 		funcRef(_, funcName) then seeds.push(funcName)
 		indirectCall then return
 		witnessCall then return
+		witnessTryCall then return
 		param then return
 		errorReturn then return
 	end 'kind'
@@ -658,6 +659,7 @@ function stdCallOpIsCallTo(inner StdCallOp, name String) returns bool
 		tryCall gives false
 		indirectCall gives false
 		witnessCall gives false
+		witnessTryCall gives false
 		funcRef gives false
 		tailCall gives false
 		param gives false
@@ -1109,6 +1111,9 @@ function getMirLatency(op MirOp, table TargetLatencyTable) returns Latency
 		// direct call followed by a single mov of RDX/X1 into a virtual.
 		// errorReturn is a terminator (epilogue+ret), modelled like `ret` (1).
 		tryCall gives 5
+		// witnessTryCall: memory-indirect witness dispatch (like witnessCall, 9)
+		// plus the post-call error-flag mov.
+		witnessTryCall gives 9
 		errorReturn gives 1
 	end 'dispatch'
 end 'getMirLatency'
