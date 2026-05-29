@@ -2343,7 +2343,13 @@ type MaxonToStdLowering
 				// abiParamIndexToScopeSlot. This is the slot<->abi decoupling: the ABI
 				// vector still interleaves (param, companion), but scope slot ids no longer
 				// equal ABI indices.
-				if isFunctionMaxonType(pType) 'pairEnv'
+				// Chase function-type aliases (e.g. `SortComparator`) before the
+				// fn-type test. `buildAbiParamMaps` chases the alias when it inserts
+				// the env companion, so the ABI vector already carries the pair —
+				// this pairing must use the same resolution or it skips the env slot
+				// for an aliased function param, leaving the indirect-call site to
+				// forward env=0 and crash on the closure dispatch.
+				if isFunctionMaxonType(chaseTypealiasToFunctionType(self.project, t: pType)) 'pairEnv'
 					let envParamIdx = pIdx + 1
 					if envParamIdx < srcFunc.abiParamIndexToScopeSlot.count() 'inRange'
 						let paramScopeSlot = try srcFunc.abiParamIndexToScopeSlot.get(pIdx) otherwise panic("seedParams: abiParamIndexToScopeSlot.get OOB at {pIdx} for fn-param in {srcFunc.name}")
@@ -3374,7 +3380,10 @@ type MaxonToStdLowering
 	// whose RHS has no recorded env (top-level functionRef, plain call
 	// return, etc. — those flow `env=0` through `noEnvSlot` at load time).
 	function captureClosureEnvIfFunctionTyped(slotId VarSlot, valueId ValueId, slotType MaxonType)
-		if not isFunctionMaxonType(slotType) 'notFunction'
+		// Chase function-type aliases so a store into an aliased function-typed
+		// slot (e.g. `let c = cmp` where cmp is `SortComparator`) still parks
+		// the env binding for the subsequent load.
+		if not isFunctionMaxonType(chaseTypealiasToFunctionType(self.project, t: slotType)) 'notFunction'
 			return
 		end 'notFunction'
 		if let envValueId = try self.fnEnvVarNames.get(valueId) 'capturedEnv'
@@ -3558,7 +3567,11 @@ type MaxonToStdLowering
 		// fn-pointer-flow well-formed even when the value passes through
 		// var copies, struct-field stores, etc. — every load resolves to
 		// a fresh env binding rooted at the original param.
-		if isFunctionMaxonType(slotType) 'pairEnv'
+		// Chase function-type aliases (e.g. `SortComparator`) so an aliased
+		// function param/local still pairs its env slot — mirrors the chase in
+		// `seedParams` and `slotArgsForCall`. Without it the env binding is
+		// never recorded and the indirect call forwards env=0.
+		if isFunctionMaxonType(chaseTypealiasToFunctionType(self.project, t: slotType)) 'pairEnv'
 			// slot<->abi decoupling: a PARAM scope slot is a key in
 			// scopeSlotToAbiParamIndex (body locals are absent), and its
 			// env-companion scope slot is recorded in `paramSlotToEnvSlot`
