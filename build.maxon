@@ -132,7 +132,7 @@ export function build_dev_mcp() returns ExitCode
 	let sharpExe = try FilePath.from("./bin/maxon{exeExt}") otherwise panic("build_dev_mcp: literal path should be valid")
 	var argv = StringArray.create()
 	argv.push("build")
-	argv.push("maxon-dev-mcp")
+	argv.push("maxon-dev-mcp/mcp")
 	let buildResult = run("Building maxon-dev MCP server", exe: Executable.path(sharpExe), argv: argv, timeoutMs: 120000)
 	if buildResult != 0 'failed2'
 		return buildResult
@@ -155,13 +155,13 @@ export function test_dev_mcp() returns ExitCode
 	let sharpExe = try FilePath.from("./bin/maxon{exeExt}") otherwise panic("test_dev_mcp: literal path should be valid")
 	var buildArgv = StringArray.create()
 	buildArgv.push("build")
-	buildArgv.push("maxon-dev-mcp-test")
+	buildArgv.push("maxon-dev-mcp/test")
 	let runnerBuild = run("Building MCP test runner", exe: Executable.path(sharpExe), argv: buildArgv, timeoutMs: 60000)
 	if runnerBuild != 0 'runnerFail'
 		return runnerBuild
 	end 'runnerFail'
 
-	let runnerExe = try FilePath.from("./maxon-dev-mcp-test/.maxon/maxon-dev-mcp-test{exeExt}") otherwise panic("test_dev_mcp: literal runner path should be valid")
+	let runnerExe = try FilePath.from("./maxon-dev-mcp/test/.maxon/maxon-dev-mcp-test{exeExt}") otherwise panic("test_dev_mcp: literal runner path should be valid")
 	let runResult = run("Running MCP tests", exe: Executable.path(runnerExe), argv: StringArray.create(), timeoutMs: 1200000)
 	if runResult != 0 'testFail'
 		return runResult

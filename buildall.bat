@@ -28,17 +28,17 @@ if errorlevel 1 exit /b 1
 echo.
 echo === Building maxon-dev MCP Server ===
 taskkill /F /IM maxon-dev-mcp.exe >nul 2>&1
-maxon-sharp\bin\Debug\net8.0\win-x64\maxon.exe build maxon-dev-mcp
+maxon-sharp\bin\Debug\net8.0\win-x64\maxon.exe build maxon-dev-mcp\mcp
 if errorlevel 1 exit /b 1
 
 echo.
 echo === Building maxon-dev MCP Test Runner ===
-maxon-sharp\bin\Debug\net8.0\win-x64\maxon.exe build maxon-dev-mcp-test
+maxon-sharp\bin\Debug\net8.0\win-x64\maxon.exe build maxon-dev-mcp\test
 if errorlevel 1 exit /b 1
 
 echo.
 echo === Running maxon-dev MCP Tests ===
-maxon-dev-mcp-test\.maxon\maxon-dev-mcp-test.exe
+maxon-dev-mcp\test\.maxon\maxon-dev-mcp-test.exe
 if errorlevel 1 exit /b 1
 
 echo.
