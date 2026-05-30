@@ -18152,7 +18152,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
             argLocations[i] = (_currentBlock!, _currentBlock!.Operations.Count);
       } else if (allowAllPositional && nextPositionalIndex < args.Length) {
         args[nextPositionalIndex] = ParseCallArgValue(callee.ParamTypes[nextPositionalIndex], typeParams);
-        if (argMutabilities != null) argMutabilities[nextPositionalIndex] = _lastExprWasMutableVar;
+        argMutabilities?[nextPositionalIndex] = _lastExprWasMutableVar;
         if (argVarNames != null) argVarNames[nextPositionalIndex] = _lastExprVarName;
         if (_lastExprWasMutableVar && _lastExprVarName != null) _reassignedVars.Add(_lastExprVarName);
         argLocations[nextPositionalIndex] = (_currentBlock!, _currentBlock!.Operations.Count);
