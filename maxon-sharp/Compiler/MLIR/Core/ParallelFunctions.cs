@@ -31,22 +31,51 @@ internal static class ParallelFunctions {
       return;
     }
 
-    ConcurrentBag<Exception>? errors = null;
-    Parallel.ForEach(funcs, f => {
+    ParallelForCapture(funcs.Count, i => body(funcs[i]));
+  }
+
+  /// Parallel order-preserving map: runs <paramref name="body"/> over every
+  /// item and returns the results indexed by input position. Used by passes
+  /// whose per-item work is independent and produces a value (e.g. lowering a
+  /// function into a new dialect) — the caller then assembles the results
+  /// sequentially in input order, keeping output deterministic regardless of
+  /// thread scheduling. Shares the sequential-threshold and deterministic
+  /// error-rethrow semantics with <see cref="Run"/>.
+  public static TOut[] Map<TIn, TOut>(IReadOnlyList<TIn> items, Func<TIn, TOut> body) {
+    var results = new TOut[items.Count];
+    if (items.Count < SequentialThreshold) {
+      for (int i = 0; i < items.Count; i++) results[i] = body(items[i]);
+      return results;
+    }
+
+    ParallelForCapture(items.Count, i => results[i] = body(items[i]));
+    return results;
+  }
+
+  /// Runs <paramref name="body"/> over indices [0, count) in parallel, capturing
+  /// any thrown exception per index rather than tearing down the whole partition,
+  /// then re-throwing the lexicographically-first one (see
+  /// <see cref="ThrowFirstDeterministic"/>). Shared by Run and Map; callers own
+  /// the sequential small-input fast path.
+  private static void ParallelForCapture(int count, Action<int> body) {
+    var errors = new ConcurrentBag<Exception>();
+    Parallel.For(0, count, i => {
       try {
-        body(f);
+        body(i);
       } catch (Exception ex) {
         // Capture, don't crash the whole partition; we re-throw deterministically below.
-        (errors ??= []).Add(ex);
+        errors.Add(ex);
       }
     });
 
-    if (errors == null || errors.IsEmpty) return;
+    ThrowFirstDeterministic(errors);
+  }
 
-    // Pick the error with the smallest sort-key (file path then line then
-    // column then message) so parallel runs are reproducible. CompileErrors
-    // sort by their string form; non-CompileError exceptions are surfaced
-    // first to make crashes loud.
+  /// Re-throws the lexicographically-first captured exception so parallel runs
+  /// surface a stable error. CompileErrors sort by their string form; non-
+  /// CompileError exceptions are surfaced first to make crashes loud.
+  private static void ThrowFirstDeterministic(ConcurrentBag<Exception> errors) {
+    if (errors.IsEmpty) return;
     var list = errors.ToArray();
     Array.Sort(list, (a, b) => {
       bool ac = a is CompileError, bc = b is CompileError;

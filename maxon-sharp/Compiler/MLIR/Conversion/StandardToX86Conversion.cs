@@ -7,11 +7,28 @@ namespace MaxonSharp.Compiler.Ir.Conversion;
 enum ComparisonKind { Integer, UnsignedInteger, Float }
 
 public static class StandardToX86Conversion {
-  [ThreadStatic] private static int _floatBranchCounter;
-  [ThreadStatic] private static int _labelCounter;
-  [ThreadStatic] private static int _nonnullSkipCounter;
+  // Module-global label counters. Functions are lowered in parallel (see Run),
+  // so these are incremented atomically and never reset: that guarantees every
+  // inline label (resolved by raw name in the emitter's single global table —
+  // e.g. __nonnull_skip_N, __nsload_N) gets a process-unique number, hence no
+  // cross-function collision regardless of thread scheduling. The specific
+  // numbers are non-deterministic across runs, but they never appear in the
+  // emitted bytes (labels resolve to code offsets), so machine output is
+  // byte-identical; and IrPrinter.StabilizeLabels renumbers them per-function
+  // for stable IR snapshots.
+  private static int _floatBranchCounter;
+  private static int _labelCounter;
+  private static int _nonnullSkipCounter;
   [ThreadStatic] private static bool _inStdlib;
-  public static int NextLabelId() => _labelCounter++;
+  public static int NextLabelId() => System.Threading.Interlocked.Increment(ref _labelCounter);
+
+  // The single module-scoped rdata label: GetOrCreateAbsMask dedups it across
+  // the whole module. Every other rdata label is content-addressed
+  // (__float_<value>, __abs_mask_f32) or function-unique (__jt_<func>_<n>), so
+  // the deterministic merge below dedups only this one to reproduce the exact
+  // sequential rdata layout.
+  private const string AbsMaskLabel = "__abs_mask";
+
   public static IrModule<X86Op> Run(IrModule<StandardOp> module) {
     var result = new IrModule<X86Op> {
       EntryFunctionName = module.EntryFunctionName
@@ -24,27 +41,43 @@ public static class StandardToX86Conversion {
     result.TagNames = module.TagNames;
     foreach (var (k, v) in module.TypeDefs) result.TypeDefs[k] = v;
 
-    _labelCounter = 0;
-    _floatBranchCounter = 0;
-    _nonnullSkipCounter = 0;
-    _inStdlib = true;
-    foreach (var func in module.Functions) {
-      if (_inStdlib && !func.IsStdlib) {
-        _inStdlib = false;
-        _nonnullSkipCounter = 0;
-      }
+    // Convert functions in parallel — each lowering is independent and writes
+    // its rdata into a private buffer — then merge sequentially in input order.
+    // The merge preserves deterministic output: functions are added in order and
+    // rdata is appended in order, replicating the only cross-function dedup
+    // (AbsMaskLabel). ConvertFunction itself touches no shared module state.
+    var converted = ParallelFunctions.Map(module.Functions, func => {
       try {
-        var newFunc = ConvertFunction(func, result);
-        result.AddFunction(newFunc);
+        return ConvertFunction(func);
       } catch (Exception ex) {
         throw new InvalidOperationException($"Error converting function '{func.Name}': {ex.Message}", ex);
+      }
+    });
+
+    bool absMaskAdded = false;
+    foreach (var (newFunc, rdata) in converted) {
+      result.AddFunction(newFunc);
+      foreach (var entry in rdata) {
+        if (entry.label == AbsMaskLabel) {
+          if (absMaskAdded) continue;
+          absMaskAdded = true;
+        }
+        result.RdataEntries.Add(entry);
       }
     }
 
     return result;
   }
 
-  private static IrFunction<X86Op> ConvertFunction(IrFunction<StandardOp> func, IrModule<X86Op> outputModule) {
+  private static (IrFunction<X86Op> Func, List<(string label, byte[] bytes, int alignment)> Rdata) ConvertFunction(IrFunction<StandardOp> func) {
+    // Per-function rdata buffer — merged into the output module sequentially by
+    // Run so parallel conversion never races on the shared rdata list.
+    var rdataEntries = new List<(string label, byte[] bytes, int alignment)>();
+
+    // Derive the stdlib flag from this function alone (thread-static, set per
+    // function) — it selects the null-skip label prefix. Label counters are
+    // module-global and atomic (see field declarations); they are not reset.
+    _inStdlib = func.IsStdlib;
     var newFunc = new IrFunction<X86Op>(func.Name, func.ParamNames, func.ParamTypes, func.ReturnType, func.ThrowsType) { IsStdlib = func.IsStdlib };
 
     // Pre-scan: find which variables are actually loaded (read back from stack).
@@ -176,7 +209,7 @@ public static class StandardToX86Conversion {
     // F32 abs mask (created on demand when StdAbsF32Op is present)
     var absF32MaskLabel = "__abs_mask_f32";
     if (func.Body.Blocks.SelectMany(b => b.Operations).Any(op => op is StdAbsF32Op)) {
-      outputModule.RdataEntries.Add((absF32MaskLabel, [0xFF, 0xFF, 0xFF, 0x7F], 1));
+      rdataEntries.Add((absF32MaskLabel, [0xFF, 0xFF, 0xFF, 0x7F], 1));
     }
 
     // Track pending comparison for flag-based branching
@@ -678,7 +711,7 @@ public static class StandardToX86Conversion {
             break;
 
           case StdAbsF64Op absOp: {
-            var maskLabel = GetOrCreateAbsMask(outputModule);
+            var maskLabel = GetOrCreateAbsMask(rdataEntries);
             regManager.EmitAbsF64(absOp.Input, absOp.Result, maskLabel, x86Block);
             break;
           }
@@ -730,13 +763,13 @@ public static class StandardToX86Conversion {
             break;
 
           case StdConstF64Op floatOp: {
-            var label = GetOrCreateFloatLabel(floatOp.Value, outputModule, floatConstants);
+            var label = GetOrCreateFloatLabel(floatOp.Value, rdataEntries, floatConstants);
             regManager.EmitXmmLoadFromRipRelative(floatOp.Result, label, x86Block);
             break;
           }
 
           case StdConstF32Op floatF32Op: {
-            var label = GetOrCreateFloat32Label(floatF32Op.Value, outputModule, float32Constants);
+            var label = GetOrCreateFloat32Label(floatF32Op.Value, rdataEntries, float32Constants);
             regManager.EmitXmmLoadFromRipRelativeF32(floatF32Op.Result, label, x86Block);
             break;
           }
@@ -887,7 +920,7 @@ public static class StandardToX86Conversion {
             x86Block.AddOp(new X86JumpTableOp(indexReg, switchOp.CaseTargets.Length,
                 tableLabel, scopedDefault, scopedTargets));
 
-            outputModule.RdataEntries.Add((tableLabel, new byte[switchOp.CaseTargets.Length * 4], 4));
+            rdataEntries.Add((tableLabel, new byte[switchOp.CaseTargets.Length * 4], 4));
             break;
           }
 
@@ -1042,7 +1075,7 @@ public static class StandardToX86Conversion {
             // remain accessible when the branch skips the call body.
             regManager.SpillAllLiveRegisters(x86Block);
             var skipPrefix = _inStdlib ? "__stdlib_nn_skip" : "__nonnull_skip";
-            var skipLabel = $"{skipPrefix}_{_nonnullSkipCounter++}";
+            var skipLabel = $"{skipPrefix}_{System.Threading.Interlocked.Increment(ref _nonnullSkipCounter)}";
             regManager.EmitBoolTest(guardedCallOp.Args[0], x86Block);
             x86Block.AddOp(new X86JccOp("z", skipLabel));
             regManager.EmitCall(guardedCallOp.Callee, guardedCallOp.Args, guardedCallOp.Result, x86Block,
@@ -1110,7 +1143,7 @@ public static class StandardToX86Conversion {
       }
     }
 
-    return newFunc;
+    return (newFunc, rdataEntries);
   }
 
   private static bool IsLastUse(Dictionary<StdValue, int> lastUseOfValue, StdValue value, int currentOpIndex) {
@@ -1222,7 +1255,7 @@ public static class StandardToX86Conversion {
       case "ne": {
         // true when ZF=0 (not-equal) or PF=1 (NaN). false only when ZF=1 and PF=0.
         // jp skip; je else; skip: — PF=1 (NaN) skips the je, so NaN != x is true
-        var skipBlockName = $"__fcmp_ne_skip_{_floatBranchCounter++}";
+        var skipBlockName = $"__fcmp_ne_skip_{System.Threading.Interlocked.Increment(ref _floatBranchCounter)}";
         var scopedSkip = $"{func.Name}.{skipBlockName}";
         block.AddOp(new X86JccOp("p", scopedSkip));
         block.AddOp(new X86JccOp("e", elseLabel));
@@ -1252,11 +1285,11 @@ public static class StandardToX86Conversion {
     }
   }
 
-  private static string GetOrCreateFloatLabel(double value, IrModule<X86Op> module, Dictionary<double, string> floatConstants) {
+  private static string GetOrCreateFloatLabel(double value, List<(string label, byte[] bytes, int alignment)> rdataEntries, Dictionary<double, string> floatConstants) {
     if (!floatConstants.TryGetValue(value, out var label)) {
       label = $"__float_{value.ToString(CultureInfo.InvariantCulture)}";
       floatConstants[value] = label;
-      module.RdataEntries.Add((label, BitConverter.GetBytes(value), 1));
+      rdataEntries.Add((label, BitConverter.GetBytes(value), 1));
     }
     return label;
   }
@@ -1286,26 +1319,27 @@ public static class StandardToX86Conversion {
     return lowestOffset.Value;
   }
 
-  private static string GetOrCreateFloat32Label(float value, IrModule<X86Op> module, Dictionary<float, string> float32Constants) {
+  private static string GetOrCreateFloat32Label(float value, List<(string label, byte[] bytes, int alignment)> rdataEntries, Dictionary<float, string> float32Constants) {
     if (!float32Constants.TryGetValue(value, out var label)) {
       label = $"__float32_{value.ToString(CultureInfo.InvariantCulture)}";
       float32Constants[value] = label;
-      module.RdataEntries.Add((label, BitConverter.GetBytes(value), 1));
+      rdataEntries.Add((label, BitConverter.GetBytes(value), 1));
     }
     return label;
   }
 
-  private static string GetOrCreateAbsMask(IrModule<X86Op> module) {
-    const string label = "__abs_mask";
-    if (module.RdataEntries.All(e => e.label != label)) {
+  private static string GetOrCreateAbsMask(List<(string label, byte[] bytes, int alignment)> rdataEntries) {
+    // Add to this function's buffer once; Run dedups AbsMaskLabel across all
+    // functions during the merge, so the module ends up with a single entry.
+    if (rdataEntries.All(e => e.label != AbsMaskLabel)) {
       // 128-bit mask: clear sign bit of each 64-bit double lane
       var mask = new byte[16];
       var laneMask = BitConverter.GetBytes(0x7FFFFFFFFFFFFFFFL);
       Array.Copy(laneMask, 0, mask, 0, 8);
       Array.Copy(laneMask, 0, mask, 8, 8);
-      module.RdataEntries.Add((label, mask, 16));
+      rdataEntries.Add((AbsMaskLabel, mask, 16));
     }
-    return label;
+    return AbsMaskLabel;
   }
 
 }
