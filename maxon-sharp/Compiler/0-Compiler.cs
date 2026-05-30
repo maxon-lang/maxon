@@ -797,7 +797,7 @@ public static class StdlibLoader {
   private static IrModule<MaxonOp>? _cachedStdlibModule;
   private static int _cachedStdlibMaxValueId;
   private static int _cachedStdlibMaxStdValueId;
-  private static readonly object _stdlibLock = new();
+  private static readonly Lock _stdlibLock = new();
 
   /// Highest stdlib MaxonValue id (low-bits, without StdlibIdBit) minted during the
   /// cached stdlib parse. User compiles must seed their IrContext past this so

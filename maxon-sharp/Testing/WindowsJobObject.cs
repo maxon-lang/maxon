@@ -27,7 +27,7 @@ internal sealed class WindowsJobObject : IDisposable {
       }
     };
 
-    int size = Marshal.SizeOf(typeof(JOBOBJECT_EXTENDED_LIMIT_INFORMATION));
+    int size = Marshal.SizeOf<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>();
     IntPtr infoPtr = Marshal.AllocHGlobal(size);
     try {
       Marshal.StructureToPtr(info, infoPtr, false);

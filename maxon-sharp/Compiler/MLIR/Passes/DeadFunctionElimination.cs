@@ -120,17 +120,18 @@ public static class DeadFunctionElimination {
       if (!reachable.Add(callee)) return;
       queue.Enqueue(callee);
       if (!funcByName.ContainsKey(callee)) {
-        if (callee.IndexOf('.') < 0) {
-          foreach (var candidate in module.FindFunctionsByShortName(callee)) {
-            if (reachable.Add(candidate.Name))
-              queue.Enqueue(candidate.Name);
-          }
-        } else {
-          var suffix = $".{callee}";
-          foreach (var candidate in funcByName.Keys) {
-            if (candidate.EndsWith(suffix) && reachable.Add(candidate))
-              queue.Enqueue(candidate);
-          }
+        // Resolve unqualified / partially-qualified callee names through the
+        // module's name indices rather than scanning every function. The
+        // single-segment case goes through the short-name index; a qualified
+        // suffix (e.g. `Array.push` → `stdlib.Array.push`) through the suffix
+        // index. The hand-rolled `EndsWith` scan this replaces was O(functions)
+        // per such callee, i.e. O(functions²) across the reachability walk.
+        var candidates = callee.IndexOf('.') < 0
+          ? module.FindFunctionsByShortName(callee)
+          : module.FindFunctionsByQualifiedSuffix(callee);
+        foreach (var candidate in candidates) {
+          if (reachable.Add(candidate.Name))
+            queue.Enqueue(candidate.Name);
         }
       }
     }

@@ -552,14 +552,17 @@ public class IrModule<TOp> where TOp : IPrintableOp {
   }
 
   public void Merge(IrModule<TOp> other) {
-    // Add or replace functions - replace stubs (no body) with full functions (with body)
-    var existingByName = Functions.ToDictionary(f => f.Name);
+    // Add or replace functions - replace stubs (no body) with full functions
+    // (with body). Look up via the module's exact-name index (maintained
+    // incrementally by Add/RemoveFunction) rather than rebuilding a dictionary
+    // of all functions on every merge — the latter made parse O(files ×
+    // accumulated-functions), i.e. quadratic in the project size.
     foreach (var func in other.Functions) {
-      if (existingByName.TryGetValue(func.Name, out var existing)) {
+      var existing = FindFunctionByExactName(func.Name);
+      if (existing != null) {
         if (func.Body.Blocks.Count > 0 && existing.Body.Blocks.Count == 0) {
           RemoveFunction(existing);
           AddFunction(func);
-          existingByName[func.Name] = func;
         } else if (func.Body.Blocks.Count > 0 && existing.Body.Blocks.Count > 0
                    && !ReferenceEquals(func, existing)) {
           throw new CompileError(ErrorCode.SemanticDuplicateDefinition,
@@ -567,7 +570,6 @@ public class IrModule<TOp> where TOp : IPrintableOp {
         }
       } else {
         AddFunction(func);
-        existingByName[func.Name] = func;
       }
     }
     RdataEntries.AddRange(other.RdataEntries);

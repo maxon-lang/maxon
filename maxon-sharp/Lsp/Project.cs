@@ -19,7 +19,7 @@ public class Project(
   private readonly ConcurrentDictionary<string, List<CompileError>> _diagnostics = new();
 
   private CancellationTokenSource? _debounceCts;
-  private readonly object _debounceLock = new();
+  private readonly Lock _debounceLock = new();
   private volatile bool _closed;
 
   private readonly Action<DocumentUri, Container<Diagnostic>> _publishDiagnostics = publishDiagnostics;

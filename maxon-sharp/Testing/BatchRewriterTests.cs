@@ -171,7 +171,7 @@ public static partial class BatchRewriterTests {
       AssertContains(r.RewrittenSource, "type _b_multiline_Point", "Test_MultiLineTypeBlock: header renamed");
       AssertContains(r.RewrittenSource, "\tx _b_multiline_Integer", "Test_MultiLineTypeBlock: field type ref renamed");
       // Only one typealias decl line; `\tx Integer` should not have been registered as a top-level decl.
-      Assert(MyRegex().Matches(r.RewrittenSource).Count == 1,
+      Assert(MyRegex().Count(r.RewrittenSource) == 1,
              "Test_MultiLineTypeBlock: only one typealias rename");
     }
   }
