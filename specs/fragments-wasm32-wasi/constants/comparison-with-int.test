@@ -1,0 +1,38 @@
+// Test: comparison-with-int
+enum State
+	idle
+	running
+	done
+end 'State'
+
+function main() returns ExitCode
+	let s = State.running
+	if s >= State.idle and s <= State.done 'inRange'
+		return 1
+	end 'inRange'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 1 : i64
+    mir.br shortAnd.rhs()
+  shortAnd.rhs:
+    %6 = mir.mov_imm 2 : i64
+    %7 = mir.cmp le, %0, %6
+    mir.br shortAnd.merge(%7)
+  shortAnd.merge:
+    mir.cond_br %11 [then: inRange_0(), else: inRange_0.after()]
+  inRange_0:
+    %9 = mir.mov_imm 1 : i64
+    mir.ret %9
+  inRange_0.after:
+    %10 = mir.mov_imm 0 : i64
+    mir.ret %10
+  }
+}
+---

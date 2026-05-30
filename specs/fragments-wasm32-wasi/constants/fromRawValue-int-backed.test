@@ -1,0 +1,42 @@
+// Test: fromRawValue-int-backed
+enum HttpStatus
+	ok = 200
+	notFound = 404
+	serverError = 500
+end 'HttpStatus'
+
+function main() returns ExitCode
+	let status = try HttpStatus.fromRawValue(404) otherwise HttpStatus.ok
+	if status == HttpStatus.notFound 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 404 : i64
+    %1, %2 = mir.try_call @__enum_HttpStatus_fromRawValue(%0)
+    %3 = mir.mov_imm 0 : i64
+    %4 = mir.cmp ne, %2, %3
+    mir.cond_br %4 [then: try_0.otherwise(), else: try_0.merge(%1)]
+  try_0.otherwise:
+    %6 = mir.mov_imm 200 : i64
+    mir.br try_0.merge(%6)
+  try_0.merge:
+    %9 = mir.mov_imm 404 : i64
+    %10 = mir.cmp eq, %13, %9
+    mir.cond_br %10 [then: check_0(), else: check_0.after()]
+  check_0:
+    %11 = mir.mov_imm 1 : i64
+    mir.ret %11
+  check_0.after:
+    %12 = mir.mov_imm 0 : i64
+    mir.ret %12
+  }
+}
+---

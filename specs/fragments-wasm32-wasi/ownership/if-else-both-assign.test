@@ -1,0 +1,132 @@
+// Test: if-else-both-assign
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Box'
+
+function choose(flag bool) returns Integer
+	var result = Box.create(0)
+	if flag 'branch'
+		result = Box.create(1)
+	end 'branch'
+	if flag == false 'branch2'
+		result = Box.create(2)
+	end 'branch2'
+	return result.value
+end 'choose'
+
+function main() returns ExitCode
+	print("{choose(true)}\n")
+	print("{choose(false)}\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+1
+2
+```
+---
+// CompiledIR
+module {
+  func @choose(local0: i1) -> i64 {
+  entry:
+    %15 = mir.param local0 : i1
+    %1 = mir.mov_imm 0 : i64
+    %16 = mir.mov_imm 8 : i64
+    %17 = mir.call @mrt_alloc(%16)
+    mir.store %1, %17, 0 width: qword
+    mir.cond_br %15 [then: branch_0(), else: branch_0.after(%17)]
+  branch_0:
+    %4 = mir.mov_imm 1 : i64
+    %18 = mir.mov_imm 8 : i64
+    %19 = mir.call @mrt_alloc(%18)
+    mir.store %4, %19, 0 width: qword
+    mir.br branch_0.after(%19)
+  branch_0.after:
+    %7 = mir.mov_imm 0 : i64
+    %8 = mir.cmp eq, %15, %7
+    mir.cond_br %8 [then: branch2_0(), else: branch2_0.after(%14)]
+  branch2_0:
+    %9 = mir.mov_imm 2 : i64
+    %20 = mir.mov_imm 8 : i64
+    %21 = mir.call @mrt_alloc(%20)
+    mir.store %9, %21, 0 width: qword
+    mir.br branch2_0.after(%21)
+  branch2_0.after:
+    %12 = mir.load %13, 0 width: qword
+    mir.ret %12
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 1 : i64
+    %1 = mir.call @choose(%0)
+    %2 = mir.global_addr @__istr_0
+    %3 = mir.mov_imm 0 : i64
+    %4 = mir.mov_imm 21 : i64
+    %5 = mir.call @mrt_alloc(%4)
+    %6 = mir.call @mrt_i64_to_string(%1, %5)
+    %7 = mir.global_addr @__istr_1
+    %11 = mir.add.i64 %3, %6
+    %12 = mir.add.i64 %11, %0
+    %14 = mir.add.i64 %12, %0
+    %15 = mir.call @mrt_alloc(%14)
+    mir.memcpy %15, %2, %3
+    %16 = mir.add.i64 %15, %3
+    mir.memcpy %16, %5, %6
+    %17 = mir.add.i64 %16, %6
+    mir.memcpy %17, %7, %0
+    %19 = mir.mov_imm 40 : i64
+    %20 = mir.call @mrt_alloc(%19)
+    mir.store %15, %20, 0 width: qword
+    mir.store %12, %20, 8 width: qword
+    mir.store %12, %20, 16 width: qword
+    mir.store %0, %20, 24 width: qword
+    mir.store %3, %20, 32 width: qword
+    %23 = mir.mov_imm 16 : i64
+    %24 = mir.call @mrt_alloc(%23)
+    mir.store %20, %24, 0 width: qword
+    mir.store %3, %24, 8 width: qword
+    %54 = mir.load %24, 0 width: qword
+    %55 = mir.load %54, 0 width: qword
+    %56 = mir.load %54, 8 width: qword
+    %57 = mir.call @mrt_write_stdout(%55, %56)
+    %28 = mir.call @choose(%3)
+    %29 = mir.global_addr @__istr_0
+    %31 = mir.mov_imm 21 : i64
+    %32 = mir.call @mrt_alloc(%31)
+    %33 = mir.call @mrt_i64_to_string(%28, %32)
+    %34 = mir.global_addr @__istr_1
+    %38 = mir.add.i64 %3, %33
+    %39 = mir.add.i64 %38, %0
+    %41 = mir.add.i64 %39, %0
+    %42 = mir.call @mrt_alloc(%41)
+    mir.memcpy %42, %29, %3
+    %43 = mir.add.i64 %42, %3
+    mir.memcpy %43, %32, %33
+    %44 = mir.add.i64 %43, %33
+    mir.memcpy %44, %34, %0
+    %46 = mir.mov_imm 40 : i64
+    %47 = mir.call @mrt_alloc(%46)
+    mir.store %42, %47, 0 width: qword
+    mir.store %39, %47, 8 width: qword
+    mir.store %39, %47, 16 width: qword
+    mir.store %0, %47, 24 width: qword
+    mir.store %3, %47, 32 width: qword
+    %50 = mir.mov_imm 16 : i64
+    %51 = mir.call @mrt_alloc(%50)
+    mir.store %47, %51, 0 width: qword
+    mir.store %3, %51, 8 width: qword
+    %58 = mir.load %51, 0 width: qword
+    %59 = mir.load %58, 0 width: qword
+    %60 = mir.load %58, 8 width: qword
+    %61 = mir.call @mrt_write_stdout(%59, %60)
+    mir.ret %3
+  }
+}
+---

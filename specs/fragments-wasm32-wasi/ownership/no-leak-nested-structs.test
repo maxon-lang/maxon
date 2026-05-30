@@ -1,0 +1,80 @@
+// Test: no-leak-nested-structs
+typealias Integer = int(i64.min to i64.max)
+
+type Inner
+	export var val as Integer
+
+	static function create(val Integer) returns Self
+		return Self{val: val}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export var child as Inner
+
+	static function create(child Inner) returns Self
+		return Self{child: child}
+	end 'create'
+end 'Outer'
+
+function main() returns ExitCode
+	let o = Outer.create(Inner.create(42))
+	print("{o.child.val}\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+42
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 42 : i64
+    %31 = mir.mov_imm 8 : i64
+    %32 = mir.call @mrt_alloc(%31)
+    mir.store %0, %32, 0 width: qword
+    %33 = mir.mov_imm 8 : i64
+    %34 = mir.call @mrt_alloc(%33)
+    mir.store %32, %34, 0 width: qword
+    %4 = mir.load %34, 0 width: qword
+    %5 = mir.load %4, 0 width: qword
+    %6 = mir.global_addr @__istr_0
+    %7 = mir.mov_imm 0 : i64
+    %8 = mir.mov_imm 21 : i64
+    %9 = mir.call @mrt_alloc(%8)
+    %10 = mir.call @mrt_i64_to_string(%5, %9)
+    %11 = mir.global_addr @__istr_1
+    %12 = mir.mov_imm 1 : i64
+    %15 = mir.add.i64 %7, %10
+    %16 = mir.add.i64 %15, %12
+    %17 = mir.mov_imm 1 : i64
+    %18 = mir.add.i64 %16, %17
+    %19 = mir.call @mrt_alloc(%18)
+    mir.memcpy %19, %6, %7
+    %20 = mir.add.i64 %19, %7
+    mir.memcpy %20, %9, %10
+    %21 = mir.add.i64 %20, %10
+    mir.memcpy %21, %11, %12
+    %23 = mir.mov_imm 40 : i64
+    %24 = mir.call @mrt_alloc(%23)
+    mir.store %19, %24, 0 width: qword
+    mir.store %16, %24, 8 width: qword
+    mir.store %16, %24, 16 width: qword
+    %25 = mir.mov_imm 1 : i64
+    mir.store %25, %24, 24 width: qword
+    mir.store %7, %24, 32 width: qword
+    %27 = mir.mov_imm 16 : i64
+    %28 = mir.call @mrt_alloc(%27)
+    mir.store %24, %28, 0 width: qword
+    mir.store %7, %28, 8 width: qword
+    %35 = mir.load %28, 0 width: qword
+    %36 = mir.load %35, 0 width: qword
+    %37 = mir.load %35, 8 width: qword
+    %38 = mir.call @mrt_write_stdout(%36, %37)
+    mir.ret %7
+  }
+}
+---

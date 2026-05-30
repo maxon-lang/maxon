@@ -589,6 +589,24 @@ export enum Permission
 end 'Permission'
 ```
 
+### String- and Char-Backed Enums
+
+```maxon
+enum Status
+	active = "ACTIVE"
+	closed = "CLOSED"
+end 'Status'
+
+var st = Status.active
+var raw = st.rawValue                 // "ACTIVE" (String; Character for char-backed)
+if st.rawValue == "ACTIVE" 'check'    // == / != compares against the String/Character peer
+	// ...
+end 'check'
+var s4 = try Status.fromRawValue("CLOSED") otherwise Status.active  // Status.closed
+```
+
+`.rawValue` reconstructs the declared backing literal from the runtime ordinal; `fromRawValue` takes the backing literal type (`String` / `Character`).
+
 ### Struct-Backed Enums
 
 ```maxon

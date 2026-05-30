@@ -1,0 +1,46 @@
+// Test: unicode-escape.char-basic
+function main() returns ExitCode
+	let excl = '\u0021'
+	if excl == '!' 'check'
+		print("PASS")
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+PASS
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %4 = mir.global_addr @__istr_0
+    %5 = mir.mov_imm 40 : i64
+    %6 = mir.call @mrt_alloc(%5)
+    mir.store %4, %6, 0 width: qword
+    %7 = mir.mov_imm 4 : i64
+    mir.store %7, %6, 8 width: qword
+    %8 = mir.mov_imm -2 : i64
+    mir.store %8, %6, 16 width: qword
+    %9 = mir.mov_imm 1 : i64
+    mir.store %9, %6, 24 width: qword
+    %10 = mir.mov_imm 0 : i64
+    mir.store %10, %6, 32 width: qword
+    %11 = mir.mov_imm 16 : i64
+    %12 = mir.call @mrt_alloc(%11)
+    mir.store %6, %12, 0 width: qword
+    %13 = mir.mov_imm 1 : i64
+    mir.store %13, %12, 8 width: qword
+    %16 = mir.load %12, 0 width: qword
+    %17 = mir.load %16, 0 width: qword
+    %18 = mir.load %16, 8 width: qword
+    %19 = mir.call @mrt_write_stdout(%17, %18)
+    mir.br check_0.after()
+  check_0.after:
+    %15 = mir.mov_imm 0 : i64
+    mir.ret %15
+  }
+}
+---

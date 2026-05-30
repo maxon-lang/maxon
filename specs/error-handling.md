@@ -534,6 +534,40 @@ end 'main'
 error E3055: specs/fragments/error-handling/error.try-on-non-throwing-method.test:10:12: try requires a throwing function: 'foo' does not throw'
 ```
 
+<!-- test: error.try-on-non-throwing-instance-method -->
+
+Regression: `try recv.method()` on a non-throwing **instance method** must also
+report E3055. The error-handling check originally inspected only `call` /
+`tryCall` ops, so a `tryMethodCall` (the op a method receiver produces) slipped
+through and the spurious `try` was silently accepted — diverging from the C#
+bootstrap. The check now resolves the method's qualified callee via
+`resolvedCallees` and reports E3055 when it is registered non-throwing.
+
+```maxon
+typealias Int = int(i64.min to i64.max)
+
+type Counter
+	export var value = 0
+
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function bump() returns Int
+		return self.value + 1
+	end 'bump'
+end 'Counter'
+
+function main() returns ExitCode
+	var c = Counter.create()
+	let v = try c.bump() otherwise 0
+	return v
+end 'main'
+```
+```maxoncstderr
+error E3055: specs/fragments/error-handling/error.try-on-non-throwing-instance-method.test:18:10: try requires a throwing function: 'Counter.bump' does not throw'
+```
+
 <!-- test: error.otherwise-without-try -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)

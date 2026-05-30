@@ -1,0 +1,152 @@
+// Test: array-of-struct-with-string-enum
+export union QueryKey
+		sourceFile(path String)
+		tokens(path String)
+		allModule
+		codeResult
+end 'QueryKey'
+
+export type Dependency
+		export var dependent as QueryKey
+		export var dependency as QueryKey
+
+		static function create(dependent QueryKey, dependency QueryKey) returns Self
+			return Self{dependent: dependent, dependency: dependency}
+		end 'create'
+end 'Dependency'
+
+typealias DependencyArray = Array with Dependency
+
+function main() returns ExitCode
+		var deps = DependencyArray.create()
+		let d1 = Dependency.create(QueryKey.allModule, dependency: QueryKey.sourceFile("test.maxon"))
+		deps.push(d1)
+		let d2 = Dependency.create(QueryKey.codeResult, dependency: QueryKey.tokens("test.maxon"))
+		deps.push(d2)
+		let d3 = Dependency.create(QueryKey.allModule, dependency: QueryKey.sourceFile("other.maxon"))
+		deps.push(d3)
+		return deps.count()
+end 'main'
+---
+ExitCode: 3
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %56 = mir.mov_imm 8 : i64
+    %57 = mir.call @mrt_alloc(%56)
+    %58 = mir.mov_imm 40 : i64
+    %59 = mir.call @mrt_alloc(%58)
+    %60 = mir.mov_imm 0 : i64
+    mir.store %60, %59, 0 width: qword
+    %61 = mir.mov_imm 0 : i64
+    mir.store %61, %59, 8 width: qword
+    %62 = mir.mov_imm 0 : i64
+    mir.store %62, %59, 16 width: qword
+    %63 = mir.mov_imm 8 : i64
+    mir.store %63, %59, 24 width: qword
+    %64 = mir.mov_imm 0 : i64
+    mir.store %64, %59, 32 width: qword
+    mir.store %59, %57, 0 width: qword
+    %65 = mir.mov_imm 16 : i64
+    %66 = mir.func_addr @__destruct_QueryKey
+    %67 = mir.mov_imm 2 : i64
+    %68 = mir.call @stdlib.__mm_alloc(%65, %66, %67)
+    mir.store %67, %68, 0 width: qword
+    %69 = mir.mov_imm 0 : i64
+    mir.store %69, %68, 8 width: qword
+    %3 = mir.global_addr @__istr_0
+    %4 = mir.mov_imm 40 : i64
+    %5 = mir.call @mrt_alloc(%4)
+    mir.store %3, %5, 0 width: qword
+    %6 = mir.mov_imm 10 : i64
+    mir.store %6, %5, 8 width: qword
+    %7 = mir.mov_imm -2 : i64
+    mir.store %7, %5, 16 width: qword
+    %8 = mir.mov_imm 1 : i64
+    mir.store %8, %5, 24 width: qword
+    %9 = mir.mov_imm 0 : i64
+    mir.store %9, %5, 32 width: qword
+    %10 = mir.mov_imm 16 : i64
+    %11 = mir.call @mrt_alloc(%10)
+    mir.store %5, %11, 0 width: qword
+    mir.store %8, %11, 8 width: qword
+    %13 = mir.call @__construct_QueryKey_sourceFile(%11)
+    %70 = mir.mov_imm 16 : i64
+    %71 = mir.call @mrt_alloc(%70)
+    mir.store %68, %71, 0 width: qword
+    mir.store %13, %71, 8 width: qword
+    %17 = mir.global_addr @__layout_Array_Dependency
+    %18 = mir.call @Array.push(%57, %71, %17)
+    %72 = mir.mov_imm 16 : i64
+    %73 = mir.func_addr @__destruct_QueryKey
+    %74 = mir.mov_imm 3 : i64
+    %75 = mir.call @stdlib.__mm_alloc(%72, %73, %74)
+    mir.store %74, %75, 0 width: qword
+    %76 = mir.mov_imm 0 : i64
+    mir.store %76, %75, 8 width: qword
+    %20 = mir.global_addr @__istr_0
+    %21 = mir.mov_imm 40 : i64
+    %22 = mir.call @mrt_alloc(%21)
+    mir.store %20, %22, 0 width: qword
+    %23 = mir.mov_imm 10 : i64
+    mir.store %23, %22, 8 width: qword
+    %24 = mir.mov_imm -2 : i64
+    mir.store %24, %22, 16 width: qword
+    mir.store %8, %22, 24 width: qword
+    %26 = mir.mov_imm 0 : i64
+    mir.store %26, %22, 32 width: qword
+    %27 = mir.mov_imm 16 : i64
+    %28 = mir.call @mrt_alloc(%27)
+    mir.store %22, %28, 0 width: qword
+    mir.store %8, %28, 8 width: qword
+    %30 = mir.call @__construct_QueryKey_tokens(%28)
+    %77 = mir.mov_imm 16 : i64
+    %78 = mir.call @mrt_alloc(%77)
+    mir.store %75, %78, 0 width: qword
+    mir.store %30, %78, 8 width: qword
+    %34 = mir.global_addr @__layout_Array_Dependency
+    %35 = mir.call @Array.push(%57, %78, %34)
+    %79 = mir.mov_imm 16 : i64
+    %80 = mir.func_addr @__destruct_QueryKey
+    %81 = mir.mov_imm 2 : i64
+    %82 = mir.call @stdlib.__mm_alloc(%79, %80, %81)
+    mir.store %81, %82, 0 width: qword
+    %83 = mir.mov_imm 0 : i64
+    mir.store %83, %82, 8 width: qword
+    %37 = mir.global_addr @__istr_1
+    %38 = mir.mov_imm 40 : i64
+    %39 = mir.call @mrt_alloc(%38)
+    mir.store %37, %39, 0 width: qword
+    %40 = mir.mov_imm 11 : i64
+    mir.store %40, %39, 8 width: qword
+    %41 = mir.mov_imm -2 : i64
+    mir.store %41, %39, 16 width: qword
+    mir.store %8, %39, 24 width: qword
+    %43 = mir.mov_imm 0 : i64
+    mir.store %43, %39, 32 width: qword
+    %44 = mir.mov_imm 16 : i64
+    %45 = mir.call @mrt_alloc(%44)
+    mir.store %39, %45, 0 width: qword
+    mir.store %8, %45, 8 width: qword
+    %47 = mir.call @__construct_QueryKey_sourceFile(%45)
+    %84 = mir.mov_imm 16 : i64
+    %85 = mir.call @mrt_alloc(%84)
+    mir.store %82, %85, 0 width: qword
+    mir.store %47, %85, 8 width: qword
+    %51 = mir.global_addr @__layout_Array_Dependency
+    %52 = mir.call @Array.push(%57, %85, %51)
+    %54 = mir.global_addr @__layout_Array_Dependency
+    %55 = mir.call @Array.count(%57, %54)
+    %86 = mir.mov_imm 125 : i64
+    %87 = mir.cmp ugt, %55, %86
+    mir.cond_br %87 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %88 = mir.global_addr @__panic_msg_1331e5401a00cbdd
+    %89 = mir.call @mrt_panic(%88)
+  __range_ok_0:
+    mir.ret %55
+  }
+}
+---

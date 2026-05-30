@@ -1,0 +1,38 @@
+// Test: var-from-immutable-value-field-ok
+
+typealias Integer = int(i64.min to i64.max)
+
+type Point
+	export var x as Integer
+	export var y as Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
+end 'Point'
+
+function main() returns ExitCode
+	let p = Point.create(1, y: 2)
+	var x = p.x
+	x = 99
+	return x
+end 'main'
+---
+ExitCode: 99
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 1 : i64
+    %1 = mir.mov_imm 2 : i64
+    %6 = mir.mov_imm 16 : i64
+    %7 = mir.call @mrt_alloc(%6)
+    mir.store %0, %7, 0 width: qword
+    mir.store %1, %7, 8 width: qword
+    %4 = mir.load %7, 0 width: qword
+    %5 = mir.mov_imm 99 : i64
+    mir.ret %5
+  }
+}
+---

@@ -1,0 +1,40 @@
+// Test: float-comparison
+enum Threshold
+	low = 0.1
+	high = 0.9
+end 'Threshold'
+
+function main() returns ExitCode
+	let val = 0.5
+	if val > Threshold.low and val < Threshold.high 'inRange'
+		return 1
+	end 'inRange'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 4602678819172646912 : f64
+    %2 = mir.mov_imm 4591870180066957722 : f64
+    %3 = mir.cmp fgt, %0, %2
+    %4 = mir.mov_imm 0 : i64
+    mir.cond_br %3 [then: shortAnd.rhs(), else: shortAnd.merge(%4)]
+  shortAnd.rhs:
+    %6 = mir.mov_imm 4606281698874543309 : f64
+    %7 = mir.cmp flt, %0, %6
+    mir.br shortAnd.merge(%7)
+  shortAnd.merge:
+    mir.cond_br %11 [then: inRange_0(), else: inRange_0.after()]
+  inRange_0:
+    %9 = mir.mov_imm 1 : i64
+    mir.ret %9
+  inRange_0.after:
+    %10 = mir.mov_imm 0 : i64
+    mir.ret %10
+  }
+}
+---

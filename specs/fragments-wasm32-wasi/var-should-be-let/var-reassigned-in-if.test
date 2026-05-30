@@ -1,0 +1,30 @@
+// Test: var-reassigned-in-if
+
+function main() returns ExitCode
+	var x = 0
+	if x == 0 'check'
+		x = 42
+	end 'check'
+	return x
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %4 = mir.mov_imm 42 : i64
+    mir.br check_0.after(%4)
+  check_0.after:
+    %7 = mir.mov_imm 125 : i64
+    %8 = mir.cmp ugt, %6, %7
+    mir.cond_br %8 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %9 = mir.global_addr @__panic_msg_5d7bfc66beade456
+    %10 = mir.call @mrt_panic(%9)
+  __range_ok_0:
+    mir.ret %6
+  }
+}
+---

@@ -1,0 +1,26 @@
+// Test: error.try-on-non-throwing-instance-method
+typealias Int = int(i64.min to i64.max)
+
+type Counter
+	export var value = 0
+
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function bump() returns Int
+		return self.value + 1
+	end 'bump'
+end 'Counter'
+
+function main() returns ExitCode
+	var c = Counter.create()
+	let v = try c.bump() otherwise 0
+	return v
+end 'main'
+---
+MaxoncStderr: ```
+error E3055: specs/fragments/error-handling/error.try-on-non-throwing-instance-method.test:18:10: try requires a throwing function: 'Counter.bump' does not throw'
+```
+---
+---

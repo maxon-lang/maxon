@@ -483,6 +483,13 @@ export type Project
 	export var discardedBareCallResults as DiscardedCallResultSet
 	export var discardedLetCallResults as DiscardedCallResultSet
 
+	// Keyed `{callerName}::{resultName}` for each call whose argument types
+	// `checkCallArgumentTypes` flagged as a mismatch (E3005). The discarded-
+	// result lint consults this to suppress its E3064/E3065 on the same call —
+	// a call with a bad argument is already broken, so re-reporting that its
+	// result is unused is noise.
+	export var callsWithArgErrors as DiscardedCallResultSet
+
 	// Phase 15a: function names whose body mutates one or more parameters
 	// (direct reassignment `param = ...`, or self-field-store inside an
 	// instance method). The parser tags these at the mutation site and
@@ -614,6 +621,11 @@ export type Project
 	// a diagnostic.
 	export var pendingUnusedChecks as PendingUnusedCheckArray
 
+	// E2028 deferred ternary arms-match checks (postfix `if`/`else` whose arms
+	// produce deferred-type values). See PendingTernaryArmCheck. Drained by
+	// TypeResolution once the arms' `varStore` value types are resolved.
+	export var pendingTernaryArmChecks as PendingTernaryArmCheckArray
+
 	// Deferred unused-typealias checks (E3062). See PendingUnusedTypealias for
 	// the why. Drained after `drainPendingConstraintChecks` so an alias whose
 	// RHS failed constraint validation (E3017) doesn't double-report.
@@ -714,6 +726,7 @@ export type Project
 			tupleAllocGids: TupleAllocGidMap.create(),
 			discardedBareCallResults: DiscardedCallResultSet.create(),
 			discardedLetCallResults: DiscardedCallResultSet.create(),
+			callsWithArgErrors: DiscardedCallResultSet.create(),
 			paramMutatingFunctions: DiscardedCallResultSet.create(),
 			rootPath: rootPath,
 			target: target,
@@ -733,6 +746,7 @@ export type Project
 			pendingWitnessThunkInterfaces: StringArray.create(),
 			pendingConstraintChecks: PendingConstraintCheckArray.create(),
 			pendingUnusedChecks: PendingUnusedCheckArray.create(),
+			pendingTernaryArmChecks: PendingTernaryArmCheckArray.create(),
 			pendingUnusedTypealiases: PendingUnusedTypealiasArray.create(),
 			crossFileConstReads: CrossFileConstReadArray.create(),
 			constraintFailedTypealiases: ReferencedNameSet.create(),
@@ -786,6 +800,31 @@ end 'UnusedCandidate'
 
 export typealias UnusedCandidateArray = Array with UnusedCandidate
 
+// One deferred E3078 (var-from-immutable) candidate: a `var b = <source>`
+// declaration whose initializer copied an immutable (`let`) binding. The
+// parser records the binding's name + declaration site, the resolved-type
+// probe (function name + slot id, so the consumer can read the now-resolved
+// `varDecl` slotType), and which message variant applies. The actual
+// reference-type check (struct / enum / function — value types are excluded)
+// runs after type resolution. `sourceVarName` is the source binding's name for
+// the "...immutable variable 'X' to..." variant; empty for the "...from
+// immutable variable to..." (field-chain) variant.
+export type VarFromImmutableCandidate
+	export let bindingName as String
+	export let line as LineNumber
+	export let column as ColumnNumber
+	export let funcName as String
+	export let slotId as VarSlot
+	export let sourceVarName as String
+	export let fromImmutableRoot as bool
+
+	export static function create(bindingName String, line LineNumber, column ColumnNumber, funcName String, slotId VarSlot, sourceVarName String, fromImmutableRoot bool) returns VarFromImmutableCandidate
+		return Self{bindingName: bindingName, line: line, column: column, funcName: funcName, slotId: slotId, sourceVarName: sourceVarName, fromImmutableRoot: fromImmutableRoot}
+	end 'create'
+end 'VarFromImmutableCandidate'
+
+export typealias VarFromImmutableCandidateArray = Array with VarFromImmutableCandidate
+
 // One deferred unused-variable check: the parser captures every parameter
 // and local declaration in a function body along with the names referenced
 // from it, then defers the actual cross-check to SemanticCheck. Deferring
@@ -804,6 +843,14 @@ export typealias UnusedCandidateArray = Array with UnusedCandidate
 // erroneous functions (e.g. spec `unused-parameters/void-function-unused`)
 // must still emit E3012 for the clean function while suppressing the noisy
 // secondary diagnostic for the dirty one.
+// `mutableCandidates` lists every `var` (mutable) local in declaration order
+// for the deferred E3077 (var-should-be-let) check; `reassigned` is the set of
+// names that exercised their mutability (reassigned, field-written, passed to
+// a callee, mutating-method receiver, or mutable match scrutinee). A
+// `mutableCandidate` absent from `reassigned` is should-be-let — but only when
+// it is also referenced (an unused `var` reports E3012 instead, which the
+// consumer checks first to preserve that precedence). `varFromImmutable` holds
+// the E3078 candidates collected in the same body.
 export type PendingUnusedCheck
 	export let filePath as FilePath
 	export let candidates as UnusedCandidateArray
@@ -812,9 +859,12 @@ export type PendingUnusedCheck
 	export let paramCount as ParsedInt
 	export let startLine as LineNumber
 	export let endLine as LineNumber
+	export let mutableCandidates as UnusedCandidateArray
+	export let reassigned as ReferencedNameSet
+	export let varFromImmutable as VarFromImmutableCandidateArray
 
-	export static function create(filePath FilePath, candidates UnusedCandidateArray, referenced ReferencedNameSet, skipParamCheck bool, paramCount ParsedInt, startLine LineNumber, endLine LineNumber) returns PendingUnusedCheck
-		return Self{filePath: filePath, candidates: candidates, referenced: referenced, skipParamCheck: skipParamCheck, paramCount: paramCount, startLine: startLine, endLine: endLine}
+	export static function create(filePath FilePath, candidates UnusedCandidateArray, referenced ReferencedNameSet, skipParamCheck bool, paramCount ParsedInt, startLine LineNumber, endLine LineNumber, mutableCandidates UnusedCandidateArray, reassigned ReferencedNameSet, varFromImmutable VarFromImmutableCandidateArray) returns PendingUnusedCheck
+		return Self{filePath: filePath, candidates: candidates, referenced: referenced, skipParamCheck: skipParamCheck, paramCount: paramCount, startLine: startLine, endLine: endLine, mutableCandidates: mutableCandidates, reassigned: reassigned, varFromImmutable: varFromImmutable}
 	end 'create'
 end 'PendingUnusedCheck'
 
@@ -952,6 +1002,30 @@ export type PendingConstraintCheck
 end 'PendingConstraintCheck'
 
 export typealias PendingConstraintCheckArray = Array with PendingConstraintCheck
+
+// E2028 (ParserMatchTypeMismatch): deferred arms-match check for postfix
+// ternaries (`<true> if <cond> else <false>`) whose two arms produce
+// deferred-type values (static factory calls, method results, etc.). At
+// parse time both arm types are still `MaxonType.unresolved`, so the
+// parser-side kind comparison in `parseTernaryTail` can't see a struct/enum
+// mismatch. The parser records one entry per such ternary — pinning the
+// result slot, the owning function, and the `if`-token location — and
+// TypeResolution (after the two arms' `varStore` value types are resolved)
+// compares the stored types, emitting E2028 when the two arms resolve to
+// distinct registered reference types (e.g. `Cat` vs `Dog`).
+export type PendingTernaryArmCheck
+	export let funcName as String
+	export let slot as VarSlot
+	export let ifLine as LineNumber
+	export let ifColumn as ColumnNumber
+	export let filePath as FilePath
+
+	export static function create(funcName String, slot VarSlot, ifLine LineNumber, ifColumn ColumnNumber, filePath FilePath) returns PendingTernaryArmCheck
+		return Self{funcName: funcName, slot: slot, ifLine: ifLine, ifColumn: ifColumn, filePath: filePath}
+	end 'create'
+end 'PendingTernaryArmCheck'
+
+export typealias PendingTernaryArmCheckArray = Array with PendingTernaryArmCheck
 
 // Phase 11.2: lookup table for emitted layout-descriptor bytes. Used by
 // the canonicalize pass to fold `descriptorField` reads into constants
@@ -1472,6 +1546,29 @@ function bareMethodName(s String) returns String throws NameSplitError
 	let tailBytes = try bytes.slice(lastDot + 1, endIndex: bytes.count()) otherwise panic("invariant: lastDot < bytes.count() but slice failed")
 	return String.from(tailBytes)
 end 'bareMethodName'
+
+// Byte-wise lexicographic strict `<` for two strings. `String` deliberately
+// does not implement `Comparable`, but several passes need a deterministic
+// tiebreak over ASCII-ish strings (file paths, type names) for stable,
+// reproducible output. Shared so the cycle-check and coverage-report sorts
+// don't each carry their own copy. For a non-strict `a <= b`, use
+// `not stringLexLess(b, a)`.
+export function stringLexLess(a String, b String) returns bool
+	let ba = a.toByteArray()
+	let bb = b.toByteArray()
+	var n = ba.count()
+	if bb.count() < n 'bShorter'
+		n = bb.count()
+	end 'bShorter'
+	for i in 0 upto n 'eachByte'
+		let x = try ba.get(i) otherwise panic("stringLexLess: ba.get OOB at {i}")
+		let y = try bb.get(i) otherwise panic("stringLexLess: bb.get OOB at {i}")
+		if x != y 'differ'
+			return x < y
+		end 'differ'
+	end 'eachByte'
+	return ba.count() < bb.count()
+end 'stringLexLess'
 
 // --- Type name interning ---
 // MaxonType.named carries a TypeNameId that indexes the project's interner so

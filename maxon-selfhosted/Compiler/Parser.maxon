@@ -217,6 +217,50 @@ export type Parser
 	var paramLocations as ParamLocationArray
 	var localVarLocations as ParamLocationArray
 	var referencedVars as ReferencedVarSet
+	// E3077 (var-should-be-let) tracking. `mutableVarLocations` records the
+	// declaration site of every local declared with `var` (mutable); a `var`
+	// whose name never lands in `reassignedVars` should have been a `let`.
+	// `reassignedVars` records every name that is reassigned (`x = …`), has a
+	// field written (`x.f = …`), or is passed to a callee / matched as a
+	// mutable scrutinee — all the sites the C# bootstrap counts as a "use of
+	// mutability". Both are reset per function in `resetSymbolTable`, saved/
+	// restored around closure bodies, and handed to the deferred check via
+	// `checkUnusedParameters`. The check itself runs after type resolution
+	// (see `checkVarShouldBeLetForEntry`, drained by `checkPendingUnusedVars`)
+	// so E3012 (reported earlier in the same pass) takes precedence.
+	var mutableVarLocations as ParamLocationArray
+	var reassignedVars as ReferencedVarSet
+	// E3078 (var-from-immutable) leaf-expression tracking. Set by the
+	// primary/postfix parsers as they emit a value, read immediately after the
+	// initializer expression in `parseVarDecl`. `lastExprImmutableVarRefName`
+	// is the source variable name when the just-parsed expression was EXACTLY a
+	// bare read of an immutable (`let`) local (empty otherwise);
+	// `lastExprFromImmutableRoot` is true when the just-parsed expression was a
+	// field access / call rooted at an immutable local. These mirror the C#
+	// bootstrap's `_lastExprVarName` + `_lastExprFromImmutableRoot` signals.
+	var lastExprImmutableVarRefName as String
+	var lastExprFromImmutableRoot as bool
+	// E3077 reassignment tracking helper: the name of the local read by the
+	// most-recently-parsed bare-identifier leaf (empty when the last leaf was
+	// not a bare local read). Used by the call-argument loop and match-
+	// scrutinee parser to mark a `var` passed/matched as "mutability used", so
+	// it isn't flagged should-be-let. Mirrors the C# bootstrap's
+	// `_lastExprVarName` (last-leaf-wins). Reset per arg by the call-arg loop.
+	var lastExprVarRefName as String
+	// E3078 disambiguation: the SSA result name produced by the leaf / postfix
+	// step that set `lastExprImmutableVarRefName` / `lastExprFromImmutableRoot`.
+	// The var-decl path only treats the initializer as an immutable-source copy
+	// when this equals the initializer's own result name — that rules out
+	// `var b = a + c` (whose result is an `add`, not the `varLoad`/`fieldLoad`
+	// the tracking fields describe), matching the C# bootstrap's reliance on
+	// the initializer being exactly a `VarRef` / immutable field chain.
+	var lastExprProducerName as ByteArray
+	// E3078 candidates collected while parsing the current function body. Each
+	// `var b = <immutable source>` declaration pushes one entry; the list is
+	// handed to the deferred check via `checkUnusedParameters` so the
+	// reference-type kind probe runs after type resolution. Reset per function
+	// in `resetSymbolTable`, saved/restored around closure bodies.
+	var pendingVarFromImmutable as VarFromImmutableCandidateArray
 	// Per-declared-param ABI reservation markers for the function currently
 	// being parsed: each entry records the param's scope slot and any
 	// companion scope slot the parser reserved (for a `named(alias)` param
@@ -376,7 +420,7 @@ export type Parser
 		// before any expression is parsed.
 		let placeholderFunc = IrFunction.create("", maxonReturnType: MaxonReturnType.void, paramCount: 0, maxonParamTypes: MaxonTypeArray.create(), returnLine: 0)
 		let placeholderBlock = IrBlock.create(0, label: "")
-		return Self{project: project, tokens: tokens, cursor: cursor, filePath: filePath, rootPath: rootPath, namespace: namespace, currentTypeName: "", currentTypeParams: StringArray.create(), currentTypeConformances: ConformanceArray.create(), currentTypeVisibility: Visibility.file, currentEnumVisibility: Visibility.file, scope: Scope.create(), loopStack: LoopContextArray.create(), matchStack: MatchContextArray.create(), abortBody: false, bodyStmtParsed: false, paramLocations: ParamLocationArray.create(), localVarLocations: ParamLocationArray.create(), referencedVars: ReferencedVarSet.create(), paramReservations: ParamReservationArray.create(), synthNameCounter: 0, paramDefaultHelperCounter: 0, synthNameCache: ByteArrayArray.create(), currentBlock: placeholderBlock, currentFunc: placeholderFunc, module: MaxonModule.create(), consumeExpectedDisplay: "more input", inMatchArmBody: false, inClosure: false, inFunctionParam: false, inForInHeader: false, atTopOfTypeAliasRhs: false, inIfCondition: false, currentInnerAliases: InnerAliasMap.create(), closureOuterScope: Scope.create(), closureCaptures: CaptureInfoArray.create(), closureOuterReferencedVars: ReferencedVarSet.create(), moduleInitName: "", moduleInitFunc: placeholderFunc, moduleInitBlock: placeholderBlock, moduleInitSynthCounter: 0, localTypealiases: LocalTypealiasArray.create(), usedTypeAliases: ReferencedVarSet.create(), letStructBackedEnumCases: StructBackedEnumCaseBindingMap.create()}
+		return Self{project: project, tokens: tokens, cursor: cursor, filePath: filePath, rootPath: rootPath, namespace: namespace, currentTypeName: "", currentTypeParams: StringArray.create(), currentTypeConformances: ConformanceArray.create(), currentTypeVisibility: Visibility.file, currentEnumVisibility: Visibility.file, scope: Scope.create(), loopStack: LoopContextArray.create(), matchStack: MatchContextArray.create(), abortBody: false, bodyStmtParsed: false, paramLocations: ParamLocationArray.create(), localVarLocations: ParamLocationArray.create(), referencedVars: ReferencedVarSet.create(), mutableVarLocations: ParamLocationArray.create(), reassignedVars: ReferencedVarSet.create(), lastExprImmutableVarRefName: "", lastExprFromImmutableRoot: false, lastExprVarRefName: "", lastExprProducerName: ByteArray.create(), pendingVarFromImmutable: VarFromImmutableCandidateArray.create(), paramReservations: ParamReservationArray.create(), synthNameCounter: 0, paramDefaultHelperCounter: 0, synthNameCache: ByteArrayArray.create(), currentBlock: placeholderBlock, currentFunc: placeholderFunc, module: MaxonModule.create(), consumeExpectedDisplay: "more input", inMatchArmBody: false, inClosure: false, inFunctionParam: false, inForInHeader: false, atTopOfTypeAliasRhs: false, inIfCondition: false, currentInnerAliases: InnerAliasMap.create(), closureOuterScope: Scope.create(), closureCaptures: CaptureInfoArray.create(), closureOuterReferencedVars: ReferencedVarSet.create(), moduleInitName: "", moduleInitFunc: placeholderFunc, moduleInitBlock: placeholderBlock, moduleInitSynthCounter: 0, localTypealiases: LocalTypealiasArray.create(), usedTypeAliases: ReferencedVarSet.create(), letStructBackedEnumCases: StructBackedEnumCaseBindingMap.create()}
 	end 'create'
 
 	export function parseModule() returns MaxonModule throws ParserError
@@ -907,7 +951,7 @@ export type Parser
 			// ABI shape is TypeResolution's.
 			if paramTypeMayCarryCompanion(paramMaxonType) 'reserveCompanion'
 				let companionName = "__companion_{paramNameToken.value}"
-				let companionSlot = scope.declare(companionName, varType: MaxonType.opaquePointer, mutable: true)
+				let companionSlot = scope.declareShadowing(companionName, varType: MaxonType.opaquePointer, mutable: true)
 				paramReservations.push(ParamReservation.create(paramSlot, hasCompanion: true, companionSlot: companionSlot, companionKind: ParamCompanionKind.none))
 			end 'reserveCompanion' else 'noCompanion'
 				paramReservations.push(ParamReservation.create(paramSlot, hasCompanion: false, companionSlot: 0, companionKind: ParamCompanionKind.none))
@@ -1373,7 +1417,7 @@ export type Parser
 			// for ALL methods, colliding with the implicit-layout param's
 			// slot — so reserve ONLY for the genuinely-fat interface-self case.
 			if interfaceTypeIsFat(selfMaxonType) 'fatSelf'
-				let selfWitnessSlot = scope.declare("__companion___self", varType: MaxonType.opaquePointer, mutable: true)
+				let selfWitnessSlot = scope.declareShadowing("__companion___self", varType: MaxonType.opaquePointer, mutable: true)
 				paramReservations.push(ParamReservation.create(selfSlot, hasCompanion: true, companionSlot: selfWitnessSlot, companionKind: ParamCompanionKind.witness))
 			end 'fatSelf' else 'thinSelf'
 				paramReservations.push(ParamReservation.create(selfSlot, hasCompanion: false, companionSlot: 0, companionKind: ParamCompanionKind.none))
@@ -1515,7 +1559,7 @@ export type Parser
 		// the new value on return (and the caller sees callee's mutations).
 		if isInstance 'emitFieldAccess'
 			for field in fields 'eachField'
-				_ = scope.declareSelfField(field.name, varType: field.fieldType, offset: field.offset)
+				declareSelfFieldChecked(field)
 			end 'eachField'
 		end 'emitFieldAccess'
 
@@ -1634,7 +1678,10 @@ export type Parser
 				end 'noRetLine'
 				try parseReturnStatement(block)
 				lastWasReturn = true
-			end 'isReturn' else if stmtToken.kind == TokenKind.var or stmtToken.kind == TokenKind.let 'isVarDecl'
+			end 'isReturn' else if stmtToken.kind == TokenKind.at 'isAnnotated'
+				try parseAnnotatedDecl(block)
+				block = currentBlock
+			end 'isAnnotated' else if stmtToken.kind == TokenKind.var or stmtToken.kind == TokenKind.let 'isVarDecl'
 				try parseVarDecl(block)
 				block = currentBlock
 			end 'isVarDecl' else if stmtToken.kind == TokenKind.panic 'isPanic'
@@ -1911,7 +1958,14 @@ export type Parser
 			module.appendOp(block, op: MaxonOp.selfFieldLoad(receiverName, fieldName: nameToken.value.toByteArray(), range: nameRange))
 		end 'selfFieldReceiver' else 'localReceiver'
 			let slot = lookupVariable(nameToken.value, token: nameToken)
-			module.appendOp(block, op: MaxonOp.varLoad(receiverName, slotId: slot, slotType: MaxonType.unresolved, range: nameRange))
+			// Stamp the receiver's declared type (like the plain-read path at
+			// `parseIdentifierExpr`). A parameter slot is never reached by
+			// `recordVarDecl`/`recordVarStore`, so the slot-type map has no
+			// entry to recover from — leaving this `unresolved` made
+			// `lowerFieldStore` fail with "unknown field X on type
+			// <unresolved>" for `param.field = expr`.
+			let receiverVarType = scope.getType(nameToken.value)
+			module.appendOp(block, op: MaxonOp.varLoad(receiverName, slotId: slot, slotType: receiverVarType, range: nameRange))
 		end 'localReceiver'
 
 		// Walk the first chainLen-1 dots as field reads to materialize the
@@ -1934,6 +1988,9 @@ export type Parser
 		var emitBlock = currentBlock
 		let stmtRange = SourceRange.between(nameToken, last: previousToken())
 		module.appendOp(emitBlock, op: MaxonOp.fieldStore(receiverName, fieldName: computeFieldNameForMemberToken(lastFieldTok).toByteArray(), value: exprName(exprResult), isInit: false, range: stmtRange))
+		// E3077: writing through `x.f = …` mutates the base binding `x`, so the
+		// base `var` exercised its mutability (mirrors the C# field-assign site).
+		markVarReassigned(nameToken.value)
 	end 'parseLocalFieldAssignment'
 
 	// Parse `globalVar.field1.field2(.fieldN)* = <expr>` where `globalVar`
@@ -2307,27 +2364,18 @@ export type Parser
 			return
 		end 'isMethodCall'
 
-		// `NAME = TypeName{field: ..., ...}` — deferred struct-literal
-		// initializer. The self-hosted compiler doesn't yet evaluate struct
-		// literals at compile time; we recognize the shape and skip past
-		// the matching `}`, registering a placeholder so the binding exists
-		// for name resolution. The static `let`s in `stdlib/CharacterSet`
-		// (e.g. `static let cachedWhitespaces = CharacterSet{...}`) hit
-		// this path. The unresolved value is harmless as long as nothing
-		// reachable from `main` reads it; DCE drops unreferenced static
-		// lets along with their owning type's unused methods.
+		// `NAME = TypeName{field: ..., ...}` — lazy static struct-literal
+		// initializer. The static `let`s in `stdlib/CharacterSet`
+		// (e.g. `static let cachedWhitespaces = CharacterSet{...}`) hit this
+		// path. We mirror the C# bootstrap's lazy scheme: the field gets a
+		// writable .data slot plus a boolean guard slot, and a synthesized
+		// `<qualifiedName>.__lazy_init` function builds the struct literal on
+		// first read (guard-checked so it runs exactly once). `lowerGlobalLoad`
+		// injects a call to `__lazy_init` ahead of every read of the field, and
+		// DFE roots `__lazy_init` from the read site — so an unread static let
+		// drops along with its owning type's unused methods.
 		if isStructLiteralInitializer(valueToken) 'isStructLit'
-			try skipPastStructLiteralInitializer()
-			skipToNextLine()
-			let placeholder = TopLevelConstant.create(ConstantValue.intValue(0), visibility: visibility, sourceFilePath: filePath)
-			var insertedPlaceholder = true
-			try project.topLevelConstants.insert(qualifiedName, value: placeholder) otherwise 'dupPlaceholder'
-				insertedPlaceholder = false
-			end 'dupPlaceholder'
-			if insertedPlaceholder 'recPlaceholder'
-				recordTopLevelConstantInsert(project, filePath: filePath, key: qualifiedName)
-			end 'recPlaceholder'
-			logTrace(LogCategory.parser, message: function() gives "parser: deferred struct-literal decl '{qualifiedName}' (no init emitted)")
+			try parseLazyStaticStructDecl(nameToken, qualifiedName: qualifiedName, typeName: typeName, mutable: mutable, visibility: visibility)
 			return
 		end 'isStructLit'
 
@@ -2608,38 +2656,12 @@ export type Parser
 		currentBlock = savedBlock
 		synthNameCounter = savedSynth
 
-		// Register the helper. Skip funcReturnTypes / funcSignatures
-		// registration when a duplicate exists (shouldn't happen — the
-		// `<TypeName>.__field_init_<fieldName>` key is unique by
-		// construction — but the insert API is contract-checked).
-		var insertedHelperRt = true
-		try project.funcReturnTypes.insert(helperName, value: returnType) otherwise 'dupHelperRt'
-			insertedHelperRt = false
-		end 'dupHelperRt'
-		if insertedHelperRt 'recHelperRt'
-			recordFuncReturnTypeInsert(project, filePath: filePath, key: helperName)
-		end 'recHelperRt'
-		var insertedHelperSig = true
-		try project.funcSignatures.insert(helperName, value: FuncSignature.create(StringArray.create(), paramTypes: MaxonTypeArray.create(), paramDefaults: ParamDefaultArray.create())) otherwise 'dupHelperSig'
-			insertedHelperSig = false
-		end 'dupHelperSig'
-		if insertedHelperSig 'recHelperSig'
-			recordFuncSignatureInsert(project, filePath: filePath, key: helperName)
-		end 'recHelperSig'
-		var insertedHelperVis = true
-		try project.funcVisibilities.insert(helperName, value: FuncVisibilityInfo.create(Visibility.file, sourceFilePath: filePath)) otherwise 'dupHelperVis'
-			insertedHelperVis = false
-		end 'dupHelperVis'
-		if insertedHelperVis 'recHelperVis'
-			recordFuncVisibilityInsert(project, filePath: filePath, key: helperName)
-		end 'recHelperVis'
-		var insertedHelperTh = true
-		try project.funcThrowsTypes.insert(helperName, value: ThrowsClause.none) otherwise 'dupHelperTh'
-			insertedHelperTh = false
-		end 'dupHelperTh'
-		if insertedHelperTh 'recHelperTh'
-			recordFuncThrowsInsert(project, filePath: filePath, key: helperName)
-		end 'recHelperTh'
+		// Register the helper. The `<TypeName>.__field_init_<fieldName>` key is
+		// unique by construction, but the insert API is contract-checked so the
+		// shared registrar skips any already-present entry. These helpers stay
+		// file-private — cross-file users go through their own lowerer copy.
+		registerSynthHelperSignature(helperName, returnType: returnType, visibility: Visibility.file)
+
 		// Stage K.4: no livenessRoot push. Every `Self{}` literal that
 		// omits a defaulted field emits a `MaxonOp.call(__field_init_<name>)`
 		// op in `parseStructLiteral`, so the regular DFE call-edge walk
@@ -2729,11 +2751,183 @@ export type Parser
 		return braceTok.kind == TokenKind.leftBrace
 	end 'isStructLiteralInitializer'
 
-	// Skip past the entire `TypeName{...}` initializer — including any
-	// nested braces inside the field initializers. Stops just past the
-	// matching `}`. The cursor is left at the next token (typically the
-	// trailing newline).
-	function skipPastStructLiteralInitializer() throws ParserError
+	// `static let X = TypeName{...}` — lazy static struct-literal field.
+	// Reserve a writable .data slot for the field value and a boolean guard
+	// slot (both initialized to 0), then synthesize `<qualifiedName>.__lazy_init`
+	// whose guarded body builds the struct literal on first read and stores it
+	// into the field slot. The read side (lowerGlobalLoad) injects a call to
+	// `__lazy_init` ahead of every globalLoad of the field, and DFE roots
+	// `__lazy_init` from that read site — so the whole apparatus drops cleanly
+	// when the field is never read.
+	//
+	// The struct literal is parsed NOW, directly into the __lazy_init function's
+	// body, rather than via a token-replay mechanism: the cursor is already
+	// positioned at the `TypeName{` token, so we point currentBlock/currentFunc
+	// at the init function and let parseStructLiteral emit its ops there. This
+	// avoids the eager `__module_init_<n>` path (which runs every init from
+	// `mrt_start` and overwhelmed process startup) — laziness comes from the
+	// init being invoked only at read sites.
+	function parseLazyStaticStructDecl(nameToken Token, qualifiedName String, typeName String, mutable bool, visibility Visibility) throws ParserError
+		// Duplicate guard: a second decl of the same qualified name is E2001.
+		if project.topLevelVars.contains(qualifiedName) or project.topLevelConstants.contains(qualifiedName) 'dupResolved'
+			reportDuplicateConstant(nameToken)
+			try skipStructLiteralTokens()
+			skipToNextLine()
+			return
+		end 'dupResolved'
+
+		let guardName = "{qualifiedName}.__initialized"
+		let initFuncName = "{qualifiedName}.__lazy_init"
+
+		// Save parser state; the init function gets a clean per-function synth
+		// counter (its value names live in its own namespace) and we restore
+		// currentFunc/currentBlock on the way out so the top-level parse loop
+		// resumes unaffected.
+		let savedFunc = currentFunc
+		let savedBlock = currentBlock
+		let savedSynth = synthNameCounter
+
+		let returnType = MaxonReturnType.void
+		var initFunc = IrFunction.create(initFuncName, maxonReturnType: returnType, paramCount: 0, maxonParamTypes: MaxonTypeArray.create(), returnLine: nameToken.line)
+		initFunc.namespace = namespace
+		// Global visibility: the only callers are the read-site calls injected
+		// during lowering, which name the function directly. A `file`-scoped
+		// init in the stdlib (compiled separately and linked by name) would be
+		// filtered against the runtime's empty path.
+		initFunc.visibility = Visibility.global
+		initFunc.sourceFilePath = filePath
+		initFunc.nameLine = nameToken.line
+		initFunc.nameColumn = nameToken.column
+
+		var entryBlock = module.addBlockAt(initFunc, label: "entry", filePath: filePath.toString(), firstLine: nameToken.line)
+
+		currentFunc = initFunc
+		currentBlock = entryBlock
+		synthNameCounter = 0
+
+		// Guard check: load the boolean guard; branch to the already-initialized
+		// exit when it is non-zero, otherwise fall through to the init block.
+		let guardLoadName = freshSynthName()
+		module.appendOp(entryBlock, op: MaxonOp.globalLoad(guardLoadName, name: guardName, slotType: MaxonType.boolean, range: SourceRange.ofToken(nameToken)))
+		let zeroName = emitLiteral(entryBlock, value: 0, valueType: MaxonType.integer)
+		let guardCmpName = freshSynthName()
+		module.appendOp(entryBlock, op: MaxonOp.cmp(guardCmpName, left: guardLoadName, right: zeroName, predicate: CmpPredicate.ne, leftType: MaxonType.integer, rightType: MaxonType.integer, operandType: MaxonType.integer, range: SourceRange.ofToken(nameToken)))
+
+		// Already-initialized: void return.
+		var doneBlock = module.addBlockAt(initFunc, label: "already_init", filePath: filePath.toString(), firstLine: nameToken.line)
+		let doneBlockId = doneBlock.id
+		module.setTerminator(doneBlock, op: MaxonOp.ret(emitLiteral(doneBlock, value: 0, valueType: MaxonType.integer), range: SourceRange.none()))
+
+		// Init block: set guard true FIRST (so a transitive read of this same
+		// field during literal construction sees the guard and short-circuits,
+		// preventing infinite recursion), then build the struct literal.
+		var initBlock = module.addBlockAt(initFunc, label: "do_init", filePath: filePath.toString(), firstLine: nameToken.line)
+		let initBlockId = initBlock.id
+		// Terminate the entry block with the guard branch now that both
+		// successor block ids exist (guard set → already-init exit; otherwise
+		// fall through to do_init).
+		module.setTerminator(entryBlock, op: MaxonOp.condBr(guardCmpName, thenTarget: doneBlockId, elseTarget: initBlockId, range: SourceRange.none()))
+
+		let trueName = emitLiteral(initBlock, value: 1, valueType: MaxonType.boolean)
+		module.appendOp(initBlock, op: MaxonOp.globalStore(guardName, value: trueName, slotType: MaxonType.boolean, range: SourceRange.ofToken(nameToken)))
+
+		// Parse the struct literal into the init block. `currentTypeName` is
+		// already the enclosing type (we are parsing inside its body), which is
+		// what struct-literal construction of `Self`-relative types needs; set
+		// it explicitly to match the C# bootstrap and stay robust if this path
+		// is ever reached outside a type body. parseStructLiteral may shift
+		// `currentBlock` to a control-flow merge block, so we read it back for
+		// the trailing globalStore + return.
+		let savedTypeName = currentTypeName
+		currentTypeName = typeName
+		let typeToken = cursor.current()
+		currentBlock = initBlock
+		let structResult = try parseStructLiteral(currentBlock, typeName: typeName, typeToken: typeToken)
+		currentTypeName = savedTypeName
+
+		let fieldType = exprType(structResult)
+		module.appendOp(currentBlock, op: MaxonOp.globalStore(qualifiedName, value: exprName(structResult), slotType: fieldType, range: SourceRange.ofToken(typeToken)))
+		module.setTerminator(currentBlock, op: MaxonOp.ret(emitLiteral(currentBlock, value: 0, valueType: MaxonType.integer), range: SourceRange.none()))
+
+		currentFunc = savedFunc
+		currentBlock = savedBlock
+		synthNameCounter = savedSynth
+
+		// Register the init function so callee resolution / DFE / lowering can
+		// find it by name. Mirrors parseFieldDefaultInitHelper's registration.
+		module.functions.push(initFunc)
+		registerSynthHelperSignature(initFuncName, returnType: returnType, visibility: Visibility.global)
+
+		// Reserve the field's writable .data slot (struct pointer, init 0) and
+		// the guard's slot (bool, init 0). Both land in topLevelVars so
+		// globalLoad/globalStore resolve against them and
+		// registerGlobalVarsForDataSection emits their .data entries.
+		registerLazyStaticSlot(qualifiedName, slotType: fieldType, visibility: visibility, nameToken: nameToken)
+		registerLazyStaticSlot(guardName, slotType: MaxonType.boolean, visibility: visibility, nameToken: nameToken)
+
+		// `let`-bound: keep firing E2013 on subsequent source-level reassignment
+		// (the slot is physically writable, but the source binding is immutable).
+		if not mutable 'isLet'
+			project.immutableArrayLitNames.push(qualifiedName)
+			recordImmutableArrayLitNamePush(project, filePath: filePath, name: qualifiedName)
+		end 'isLet'
+
+		skipToNextLine()
+		logTrace(LogCategory.parser, message: function() gives "parser: lazy static struct-literal decl '{qualifiedName}' → {initFuncName}")
+	end 'parseLazyStaticStructDecl'
+
+	// Reserve a writable .data slot for a lazy static field (or its guard).
+	function registerLazyStaticSlot(slotName String, slotType MaxonType, visibility Visibility, nameToken Token)
+		let info = TopLevelVarInfo.create(slotName, slotType: slotType, initialValue: 0 as IntConstant, visibility: visibility, sourceFilePath: filePath)
+		var inserted = true
+		try project.topLevelVars.insert(slotName, value: info) otherwise 'dup'
+			inserted = false
+			reportDuplicateConstant(nameToken)
+		end 'dup'
+		if inserted 'rec'
+			recordTopLevelVarInsert(project, filePath: filePath, key: slotName)
+		end 'rec'
+	end 'registerLazyStaticSlot'
+
+	// Register a synthesized zero-arg helper's signature in the project
+	// registries so callee resolution / DFE / lowering can find it by name.
+	// `visibility` selects the helper's link scope: `file` for per-file
+	// struct-field init helpers, `global` for stdlib-linked lazy-static inits.
+	function registerSynthHelperSignature(helperName String, returnType MaxonReturnType, visibility Visibility)
+		var insertedRt = true
+		try project.funcReturnTypes.insert(helperName, value: returnType) otherwise 'dupRt'
+			insertedRt = false
+		end 'dupRt'
+		if insertedRt 'recRt'
+			recordFuncReturnTypeInsert(project, filePath: filePath, key: helperName)
+		end 'recRt'
+		var insertedSig = true
+		try project.funcSignatures.insert(helperName, value: FuncSignature.create(StringArray.create(), paramTypes: MaxonTypeArray.create(), paramDefaults: ParamDefaultArray.create())) otherwise 'dupSig'
+			insertedSig = false
+		end 'dupSig'
+		if insertedSig 'recSig'
+			recordFuncSignatureInsert(project, filePath: filePath, key: helperName)
+		end 'recSig'
+		var insertedVis = true
+		try project.funcVisibilities.insert(helperName, value: FuncVisibilityInfo.create(visibility, sourceFilePath: filePath)) otherwise 'dupVis'
+			insertedVis = false
+		end 'dupVis'
+		if insertedVis 'recVis'
+			recordFuncVisibilityInsert(project, filePath: filePath, key: helperName)
+		end 'recVis'
+		var insertedTh = true
+		try project.funcThrowsTypes.insert(helperName, value: ThrowsClause.none) otherwise 'dupTh'
+			insertedTh = false
+		end 'dupTh'
+		if insertedTh 'recTh'
+			recordFuncThrowsInsert(project, filePath: filePath, key: helperName)
+		end 'recTh'
+	end 'registerSynthHelperSignature'
+
+	// Skip past the entire `TypeName{...}` initializer — including any nested
+	// braces. Used on the error path when a duplicate lazy-static decl is
+	// detected and the literal must be consumed without emitting init ops.
+	function skipStructLiteralTokens() throws ParserError
 		try cursor.advance() otherwise return  // past TypeName
 		try eat(TokenKind.leftBrace)
 		var depth = 1
@@ -2749,7 +2943,7 @@ export type Parser
 			end 'close'
 			try cursor.advance() otherwise return
 		end 'scan'
-	end 'skipPastStructLiteralInitializer'
+	end 'skipStructLiteralTokens'
 
 	// Append a node to the project-wide expression arena and return its
 	// arena id. Callers use the returned id when building parent nodes
@@ -4633,10 +4827,10 @@ export type Parser
 						if isCharBacked 'asChar'
 							priorBacking = "char"
 						end 'asChar'
-						reportCompileError(project, code: ErrorCode.semanticEnumRawValueTypeMismatch, message: "raw value type mismatch: 'expected {priorBacking}, got string'", line: caseToken.line, column: caseToken.column, filePath: filePath)
+						reportCompileError(project, code: ErrorCode.semanticEnumRawValueTypeMismatch, message: "raw value type mismatch: 'expected {priorBacking}, got String'", line: caseToken.line, column: caseToken.column, filePath: filePath)
 					end 'stringMismatch'
 					if not enumStructBackingTypeName.isEmpty() 'structVsStringMix'
-						reportCompileError(project, code: ErrorCode.semanticEnumRawValueTypeMismatch, message: "raw value type mismatch: 'expected {enumStructBackingTypeName}, got string'", line: caseToken.line, column: caseToken.column, filePath: filePath)
+						reportCompileError(project, code: ErrorCode.semanticEnumRawValueTypeMismatch, message: "raw value type mismatch: 'expected {enumStructBackingTypeName}, got String'", line: caseToken.line, column: caseToken.column, filePath: filePath)
 					end 'structVsStringMix'
 					hasExplicitBacking = true
 					isStringBacked = true
@@ -4801,14 +4995,16 @@ export type Parser
 		// test (E3034 unknown enum case). `.fromName` stays synthesized so
 		// the user-facing `Name → Case` mapping still works on struct-
 		// backed enums (the spec doesn't forbid it).
-		// String / char backings keep the runtime rawValue at the ordinal
-		// so the synthesized `int(ordinal) -> EnumName` lookup we use for
-		// int-backed enums would always succeed but for the wrong reason.
-		// `.fromRawValue("Active")` is a separate user-facing surface — to
-		// be added when a spec demands it — so skip the helper for now in
-		// the same way struct-backed enums skip it.
-		let skipFromRawHelper = (not enumStructBackingTypeName.isEmpty()) or isStringBacked or isCharBacked
-		synthesizeEnumLookupHelpers(currentTypeName, cases: cases, isFloatBacked: isFloatBacked, visibility: visibility, line: enumNameToken.line, column: enumNameToken.column, skipFromRawValue: skipFromRawHelper)
+		// Struct-backed enums skip the int `.fromRawValue` helper (their raw
+		// value is a struct literal, not an int — the lookup form is rejected
+		// per `enum-struct-backing.md`). String / char backings keep their
+		// runtime rawValue at the ordinal, so they get a DEDICATED
+		// `.fromRawValue(<String/Character>)` helper that compares the argument
+		// against each case's declared backing literal (see
+		// `synthesizeEnumFromRawStringHelperImpl`), routed by the
+		// `isStringBacked` / `isCharBacked` flags below.
+		let skipIntFromRawHelper = (not enumStructBackingTypeName.isEmpty()) or isStringBacked or isCharBacked
+		synthesizeEnumLookupHelpers(currentTypeName, cases: cases, isFloatBacked: isFloatBacked, isStringBacked: isStringBacked, isCharBacked: isCharBacked, visibility: visibility, line: enumNameToken.line, column: enumNameToken.column, skipFromRawValue: skipIntFromRawHelper)
 
 		currentTypeName = ""
 		currentEnumVisibility = Visibility.file
@@ -5066,7 +5262,7 @@ export type Parser
 		// the same `.fromRawValue` / `.fromName` lookup helpers a
 		// standalone enum would. `Shape.unionCases.fromRawValue(0)` then
 		// dispatches through `__enum_Shape.unionCases_fromRawValue`.
-		synthesizeEnumLookupHelpers(companionName, cases: companionCases, isFloatBacked: false, visibility: visibility, line: line, column: column)
+		synthesizeEnumLookupHelpers(companionName, cases: companionCases, isFloatBacked: false, isStringBacked: false, isCharBacked: false, visibility: visibility, line: line, column: column)
 	end 'registerUnionCasesCompanion'
 
 	// Parse the parenthesized payload-field list for a union case after the
@@ -5173,7 +5369,7 @@ export type Parser
 		var payloadValueNames = ByteArrayArray.create()
 		for i in 0 upto payloadFields.count() 'eachField'
 			let field = try payloadFields.get(i) otherwise panic("synthesizeUnionConstructor: payloadFields.get OOB at {i}")
-			let slot = func.scope.declare(field.name, varType: field.fieldType, mutable: false)
+			let slot = func.scope.declareShadowing(field.name, varType: field.fieldType, mutable: false)
 			let loadedName = "__ctor_arg_{i}".toByteArray()
 			module.appendOp(bodyBlock, op: MaxonOp.varLoad(loadedName, slotId: slot, slotType: field.fieldType, range: SourceRange.none()))
 			payloadValueNames.push(loadedName)
@@ -5219,7 +5415,7 @@ export type Parser
 			throwsIsUnion = enumIsAssociatedValueUnion(throwsName)
 		end 'haveThrowsName'
 		scope.pushScope()
-		let bindingSlot = scope.declare(bindingName, varType: bindingType, mutable: false)
+		let bindingSlot = declareCheckedLocal(bindingName, varType: bindingType, mutable: false, line: bindingLine, column: bindingColumn)
 		localVarLocations.push(ParamLocation.create(bindingName, line: bindingLine, column: bindingColumn))
 		var bindingValueName = ByteArray.create()
 		if throwsIsUnion 'isUnion'
@@ -5254,8 +5450,8 @@ export type Parser
 	// That richer form is deferred until a downstream spec demands it; the
 	// 3 enum-full `fromName-associated-*` fragments stay non-whitelisted
 	// for the same reason.
-	function synthesizeEnumLookupHelpers(enumName String, cases EnumCaseArray, isFloatBacked bool, visibility Visibility, line LineNumber, column ColumnNumber, skipFromRawValue bool = false)
-		synthesizeEnumLookupHelpersImpl(project, module: module, namespace: namespace, filePath: filePath, enumName: enumName, cases: cases, isFloatBacked: isFloatBacked, visibility: visibility, line: line, column: column, skipFromRawValue: skipFromRawValue)
+	function synthesizeEnumLookupHelpers(enumName String, cases EnumCaseArray, isFloatBacked bool, isStringBacked bool, isCharBacked bool, visibility Visibility, line LineNumber, column ColumnNumber, skipFromRawValue bool = false)
+		synthesizeEnumLookupHelpersImpl(project, module: module, namespace: namespace, filePath: filePath, enumName: enumName, cases: cases, isFloatBacked: isFloatBacked, isStringBacked: isStringBacked, isCharBacked: isCharBacked, visibility: visibility, line: line, column: column, skipFromRawValue: skipFromRawValue)
 	end 'synthesizeEnumLookupHelpers'
 
 	// Synthesize `__enum_<EnumName>_fromRawValue(raw <RawType>) returns
@@ -6235,6 +6431,8 @@ export type Parser
 		var bindingName = ""
 		var bindingMutable = false
 		var hasBinding = false
+		var bindingLine = 0 as LineNumber
+		var bindingColumn = 0 as ColumnNumber
 		if at(TokenKind.let) or at(TokenKind.var) 'isBinding'
 			bindingMutable = at(TokenKind.var)
 			_ = try consume()
@@ -6246,6 +6444,8 @@ export type Parser
 			end 'badName'
 			checkReservedDeclName(nameTok)
 			bindingName = nameTok.value
+			bindingLine = nameTok.line
+			bindingColumn = nameTok.column
 			hasBinding = true
 			try expect(TokenKind.equals)
 		end 'isBinding'
@@ -6296,7 +6496,7 @@ export type Parser
 		// For the binding form, declare the bound name in the then-block
 		// scope and seed it with the call's success value.
 		if hasBinding 'declareBinding'
-			let bindingSlot = scope.declare(bindingName, varType: bindingValueType, mutable: bindingMutable)
+			let bindingSlot = declareCheckedLocal(bindingName, varType: bindingValueType, mutable: bindingMutable, line: bindingLine, column: bindingColumn)
 			module.appendOp(thenBlock, op: MaxonOp.varDecl(bindingSlot, value: exprName(condResult), slotType: bindingValueType, range: SourceRange.ofToken(ifToken)))
 		end 'declareBinding'
 
@@ -6497,6 +6697,12 @@ export type Parser
 		if cur.kind == TokenKind.identifier and nxt.kind == TokenKind.charLiteral and scope.contains(cur.value) 'isBareLocal'
 			let info = scope.getInfo(cur.value)
 			scrutineeMutable = info.mutable
+			// E3077: matching on a mutable local can rebind its payload through
+			// the arm bindings, so the `var` scrutinee exercised its mutability.
+			// Mirrors the C# bootstrap's match-on-mutable-scrutinee reassign site.
+			if info.mutable 'mutableScrutinee'
+				markVarReassigned(cur.value)
+			end 'mutableScrutinee'
 		end 'isBareLocal'
 		let scrutineeResult = try parseExpression(currentBlock)
 		if not at(TokenKind.charLiteral) 'noLabel'
@@ -7458,7 +7664,7 @@ export type Parser
 			// but does NOT override the scrutinee's immutability — `let u`
 			// + `var v = …` still surfaces E2013.
 			let bindingMutable = scrutineeMutable
-			let bindingSlot = scope.declarePayloadBinding(binding.name, varType: MaxonType.unresolved, mutable: bindingMutable, scrutineeName: String.from(scrutineeName), fieldIndex: i as CaseOrdinal, caseName: pattern.caseName)
+			let bindingSlot = declareCheckedPayloadBinding(binding.name, mutable: bindingMutable, scrutineeName: String.from(scrutineeName), fieldIndex: i as CaseOrdinal, caseName: pattern.caseName, line: binding.line, column: binding.column)
 			// Track the payload-binding declaration site for the unused-
 			// variable check. The binding behaves like a `let` scoped to the
 			// arm body; if it's never referenced, the user wrote
@@ -7828,7 +8034,7 @@ export type Parser
 		// result via a slot). Seed with a zero literal so the unreachable
 		// fallback's varLoad reads a well-typed value under wasm's stricter
 		// validation.
-		let resultSlot = scope.declare("__match_{header.userLabel}_{currentFunc.nextBlockId}", varType: MaxonType.unresolved, mutable: true)
+		let resultSlot = scope.declareShadowing("__match_{header.userLabel}_{currentFunc.nextBlockId}", varType: MaxonType.unresolved, mutable: true)
 		let seedZero = emitLiteral(currentBlock, value: 0, valueType: MaxonType.integer)
 		module.appendOp(currentBlock, op: MaxonOp.varDecl(resultSlot, value: seedZero, slotType: MaxonType.unresolved, range: SourceRange.none()))
 
@@ -8091,9 +8297,9 @@ export type Parser
 		scope.pushScope()
 		var iterSlot = 0
 		if iterName == "_" 'discardIter'
-			iterSlot = scope.declare("__forrange_iter_{forToken.line}_{forToken.column}", varType: MaxonType.integer, mutable: true)
+			iterSlot = scope.declareShadowing("__forrange_iter_{forToken.line}_{forToken.column}", varType: MaxonType.integer, mutable: true)
 		end 'discardIter' else 'namedIter'
-			iterSlot = defineVariableWithType(iterName, varType: MaxonType.integer)
+			iterSlot = declareCheckedLocal(iterName, varType: MaxonType.integer, mutable: true, line: iterNameLine, column: iterNameColumn)
 			// Track the iter-var declaration site so checkUnusedParameters can
 			// emit E3012 if the body never references it. Mirrors the
 			// `let`/`var` path at parseVarDecl; the for-range header treats the
@@ -8103,7 +8309,7 @@ export type Parser
 
 		// Snapshot END once into a fresh slot so mutating END's source after
 		// loop entry doesn't change the bound.
-		let endSlot = scope.declare("__forrange_end_{forToken.line}_{forToken.column}", varType: MaxonType.integer, mutable: true)
+		let endSlot = scope.declareShadowing("__forrange_end_{forToken.line}_{forToken.column}", varType: MaxonType.integer, mutable: true)
 
 		// ENTRY: store START into iterSlot, END into endSlot, branch to header.
 		module.appendOp(block, op: MaxonOp.varDecl(iterSlot, value: exprName(startResult), slotType: MaxonType.integer, range: stmtRange))
@@ -8223,7 +8429,7 @@ export type Parser
 		// the loop variable's binding scope so the user can't shadow it.
 		scope.pushScope()
 		let iterStorageName = "__forin_iter_{forToken.line}_{forToken.column}"
-		let iterStorageSlot = scope.declare(iterStorageName, varType: MaxonType.unresolved, mutable: true)
+		let iterStorageSlot = scope.declareShadowing(iterStorageName, varType: MaxonType.unresolved, mutable: true)
 
 		// ENTRY: %iter = source.createIterator(); bind err flag; check.
 		let createIterResultName = freshSynthName()
@@ -8302,19 +8508,21 @@ export type Parser
 		let isDestructure = destructureNames.count() > 0
 		let effectiveIterName = "__forin_tuple_{forToken.line}_{forToken.column}" if isDestructure else iterName
 		if effectiveIterName == "_" 'discardIter'
-			loopVarSlot = scope.declare("__forin_var_{forToken.line}_{forToken.column}", varType: MaxonType.unresolved, mutable: false)
+			loopVarSlot = scope.declareShadowing("__forin_var_{forToken.line}_{forToken.column}", varType: MaxonType.unresolved, mutable: false)
 		end 'discardIter' else 'namedIter'
 			// E2013 expects the loop variable to be immutable — `for x in arr`
 			// binds a fresh `let` per iteration in the C# bootstrap. Destructured
-			// fields below follow the same rule.
-			loopVarSlot = scope.declare(effectiveIterName, varType: MaxonType.unresolved, mutable: false)
-			// Track the loop-var declaration site for the unused-variable
-			// check. Skipped for the destructure path because the user-visible
-			// names live on the destructure fields below; the synthetic tuple
-			// holder isn't a user-facing binding.
-			if not isDestructure 'recordLoopVar'
+			// fields below follow the same rule. The destructure path binds the
+			// synthetic `__forin_tuple_*` holder (no shadow check); the plain
+			// path binds the user-written loop variable, so route it through the
+			// checked `declare` and surface E3006 on a self-field collision.
+			if isDestructure 'tupleHolder'
+				loopVarSlot = scope.declareShadowing(effectiveIterName, varType: MaxonType.unresolved, mutable: false)
+			end 'tupleHolder' else 'userLoopVar'
+				loopVarSlot = declareCheckedLocal(effectiveIterName, varType: MaxonType.unresolved, mutable: false, line: iterNameLine, column: iterNameColumn)
+				// Track the loop-var declaration site for the unused-variable check.
 				localVarLocations.push(ParamLocation.create(iterName, line: iterNameLine, column: iterNameColumn))
-			end 'recordLoopVar'
+			end 'userLoopVar'
 		end 'namedIter'
 		module.appendOp(bodyBlock, op: MaxonOp.varDecl(loopVarSlot, value: currentResultName, slotType: MaxonType.unresolved, range: stmtRange))
 		if isDestructure 'emitFieldBindings'
@@ -8325,9 +8533,9 @@ export type Parser
 				module.appendOp(bodyBlock, op: MaxonOp.fieldLoad(fieldLoadName, receiver: currentResultName, fieldName: fieldName, range: stmtRange))
 				var destSlot = 0
 				if destName == "_" 'discardField'
-					destSlot = scope.declare("__forin_destfield_{forToken.line}_{forToken.column}_{i}", varType: MaxonType.unresolved, mutable: false)
+					destSlot = scope.declareShadowing("__forin_destfield_{forToken.line}_{forToken.column}_{i}", varType: MaxonType.unresolved, mutable: false)
 				end 'discardField' else 'namedField'
-					destSlot = scope.declare(destName, varType: MaxonType.unresolved, mutable: false)
+					destSlot = declareCheckedLocal(destName, varType: MaxonType.unresolved, mutable: false, line: forToken.line, column: forToken.column)
 				end 'namedField'
 				module.appendOp(bodyBlock, op: MaxonOp.varDecl(destSlot, value: fieldLoadName, slotType: MaxonType.unresolved, range: stmtRange))
 			end 'eachDestructure'
@@ -8648,10 +8856,41 @@ export type Parser
 				return
 			end 'immutableLocal'
 			module.appendOp(emitBlock, op: MaxonOp.varStore(slot, value: exprName(materializedResult), range: stmtRange))
+			// E3077: a direct reassignment is the canonical "var was needed".
+			markVarReassigned(nameToken.value)
 		end 'localWrite'
 	end 'parseVarAssignment'
 
 	// --- Variable declaration ---
+
+	// Parse `@heap var/let ...`. The `@heap` annotation forces heap allocation
+	// of the decorated struct local. In the self-hosted compiler structs are
+	// always heap-allocated (there is no stack-promotion pass to opt out of),
+	// so `@heap` is accepted and validated for shape but otherwise lowers
+	// identically to a plain `var`/`let` declaration. Caller dispatched on the
+	// `@` token.
+	//
+	// The C# bootstrap additionally rejects `@heap` on a non-struct initializer
+	// ("@heap can only be used with struct literals"); that check is intentionally
+	// dropped here because `@heap` is a no-op for the self-hosted backend — there
+	// is no stack-promotion decision to gate, so a stray `@heap let x = 5` just
+	// lowers as a plain `let`. Re-add the check if a stack-promotion pass ever
+	// lands.
+	function parseAnnotatedDecl(block IrBlock) throws ParserError
+		let atToken = try consume()  // consume '@'
+		let annotation = try consumeExpecting("annotation name")
+		if annotation.kind != TokenKind.identifier or annotation.value != "heap" 'badAnnotation'
+			reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Unknown annotation '@{tokenValueToString(annotation.value)}' (expected '@heap')", line: atToken.line, column: atToken.column, filePath: filePath)
+			synchronize()
+			return
+		end 'badAnnotation'
+		if not at(TokenKind.var) and not at(TokenKind.let) 'needsDecl'
+			reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "@heap must be followed by 'var' or 'let'", line: atToken.line, column: atToken.column, filePath: filePath)
+			synchronize()
+			return
+		end 'needsDecl'
+		try parseVarDecl(block)
+	end 'parseAnnotatedDecl'
 
 	function parseVarDecl(block IrBlock) throws ParserError
 		// Caller dispatched on `var`/`let`; consume the keyword.
@@ -8682,6 +8921,12 @@ export type Parser
 		// always referenced.
 		if nameToken.value != "_" 'recordLocal'
 			localVarLocations.push(ParamLocation.create(nameToken.value, line: nameToken.line, column: nameToken.column))
+			// E3077: a `var` (mutable) binding that is never reassigned should
+			// be a `let`. Record the declaration site so the deferred check can
+			// pin the diagnostic to the `var` keyword's name token.
+			if not isLet 'recordMutable'
+				mutableVarLocations.push(ParamLocation.create(nameToken.value, line: nameToken.line, column: nameToken.column))
+			end 'recordMutable'
 		end 'recordLocal'
 
 		try expect(TokenKind.equals)
@@ -8700,6 +8945,12 @@ export type Parser
 			initBackedCaseFound = true
 			initBackedCaseQualified = qualified
 		end 'haveBackedCase'
+		// E3078: reset the immutable-source leaf trackers so they reflect ONLY
+		// this initializer (mirrors the C# bootstrap clearing
+		// `_lastExprFromImmutableRoot` before parsing a var/let initializer).
+		lastExprImmutableVarRefName = ""
+		lastExprFromImmutableRoot = false
+		lastExprProducerName = ByteArray.create()
 		let exprResult = try parseExpression(block)
 		// Emit the varDecl into the block control flow landed on — bool
 		// short-circuit may have moved it off `block` to a merge block.
@@ -8771,8 +9022,25 @@ export type Parser
 		// slot stores — but the payload-binding path now consults the
 		// recorded mutability and surfaces E2013 on `value = …` against a
 		// `let b` scrutinee.
-		let slot = scope.declare(nameToken.value, varType: exprType(materializedResult), mutable: not isLet)
+		let slot = declareCheckedLocal(nameToken.value, varType: exprType(materializedResult), mutable: not isLet, line: nameToken.line, column: nameToken.column)
 		module.appendOp(emitBlock, op: MaxonOp.varDecl(slot, value: exprName(materializedResult), slotType: exprType(materializedResult), range: stmtRange))
+		// E3078: a `var b = <immutable source>` decl may copy an immutable
+		// (`let`) reference-type binding into a mutable one. We can only confirm
+		// the source is a reference type (struct / enum / function — value types
+		// are independent copies and allowed) after type resolution, so record a
+		// deferred candidate. The leaf / postfix trackers describe the
+		// initializer ONLY when its producer name equals the varDecl value name
+		// (rules out `var b = a + c`, whose value is an `add`). Discards (`_`) and
+		// `let` bindings are never E3078 sources.
+		if not isLet and nameToken.value != "_" and exprName(materializedResult) == lastExprProducerName 'maybeVarFromImmutable'
+			if not lastExprImmutableVarRefName.isEmpty() 'variant1DirectRef'
+				// `var b = a` — a is an immutable local of a reference type.
+				pendingVarFromImmutable.push(VarFromImmutableCandidate.create(nameToken.value, line: nameToken.line, column: nameToken.column, funcName: currentFunc.name, slotId: slot, sourceVarName: lastExprImmutableVarRefName, fromImmutableRoot: false))
+			end 'variant1DirectRef' else if lastExprFromImmutableRoot 'variant2FieldChain'
+				// `var i = o.field` — field of an immutable struct.
+				pendingVarFromImmutable.push(VarFromImmutableCandidate.create(nameToken.value, line: nameToken.line, column: nameToken.column, funcName: currentFunc.name, slotId: slot, sourceVarName: "", fromImmutableRoot: true))
+			end 'variant2FieldChain'
+		end 'maybeVarFromImmutable'
 	end 'parseVarDecl'
 
 	// Phase 15e: parse `let (x, y, ...) = expr` / `var (x, y, ...) = expr`.
@@ -8816,7 +9084,7 @@ export type Parser
 		// later element-binding `var` reassignment can read updated fields.
 		let tmpName = "__destructure_{kwToken.line}_{kwToken.column}"
 		let tmpType = exprType(exprResult)
-		let tmpSlot = scope.declare(tmpName, varType: tmpType, mutable: not isLet)
+		let tmpSlot = scope.declareShadowing(tmpName, varType: tmpType, mutable: not isLet)
 		module.appendOp(currentBlock, op: MaxonOp.varDecl(tmpSlot, value: exprName(exprResult), slotType: tmpType, range: stmtRange))
 		// Emit one `let/var <name> = tmp._N` binding per element. Each binding
 		// goes through the regular scope.declare path so unused-var diagnostics
@@ -8826,13 +9094,18 @@ export type Parser
 			let elemTok = try elemNameTokens.get(i) otherwise panic("parseTupleDestructureVarDecl: elemNameTokens.get OOB at {i}")
 			if elemName != "_" 'recordLocal'
 				localVarLocations.push(ParamLocation.create(elemName, line: elemTok.line, column: elemTok.column))
+				// E3077: record a `var (…)` destructure element as a mutable
+				// local so a never-reassigned element reports should-be-let.
+				if not isLet 'recordMutable'
+					mutableVarLocations.push(ParamLocation.create(elemName, line: elemTok.line, column: elemTok.column))
+				end 'recordMutable'
 			end 'recordLocal'
 			let tmpLoadName = freshSynthName()
 			module.appendOp(currentBlock, op: MaxonOp.varLoad(tmpLoadName, slotId: tmpSlot, slotType: MaxonType.unresolved, range: stmtRange))
 			let fieldLoadName = freshSynthName()
 			let fieldBytes = "_{i}".toByteArray()
 			module.appendOp(currentBlock, op: MaxonOp.fieldLoad(fieldLoadName, receiver: tmpLoadName, fieldName: fieldBytes, range: stmtRange))
-			let elemSlot = scope.declare(elemName, varType: MaxonType.unresolved, mutable: not isLet)
+			let elemSlot = declareCheckedLocal(elemName, varType: MaxonType.unresolved, mutable: not isLet, line: elemTok.line, column: elemTok.column)
 			module.appendOp(currentBlock, op: MaxonOp.varDecl(elemSlot, value: fieldLoadName, slotType: MaxonType.unresolved, range: stmtRange))
 		end 'eachBinding'
 	end 'parseTupleDestructureVarDecl'
@@ -9369,7 +9642,7 @@ export type Parser
 
 		// Allocate the slot via the parser scope so subsequent varLoad/varStore
 		// ops resolve correctly through the existing slot machinery.
-		let slot = scope.declare("__{label}_{currentFunc.nextBlockId}", varType: MaxonType.boolean, mutable: true)
+		let slot = scope.declareShadowing("__{label}_{currentFunc.nextBlockId}", varType: MaxonType.boolean, mutable: true)
 
 		// Seed with the short-circuit value: `and` seeds false, `or` seeds true.
 		let seedName = emitLiteral(entryBlock, value: seedValue, valueType: MaxonType.boolean)
@@ -9443,9 +9716,20 @@ export type Parser
 		// reference; passing a `let` binding fails the E3019 mutation check.
 		var trueExprBlock = currentBlock
 
-		// Pick the result type from the true arm; TypeResolution validates the
-		// arms-match constraint after the registries are populated.
-		let resultType = exprType(trueExpr)
+		// Phase 7: a bare string-literal true arm (`"yes" if ...`) is an
+		// `ExprResult.stringConst` carrying the legacy `MaxonType.string`
+		// primitive tag and no backing IR op. Materialize it now — into the
+		// block the true arm's ops landed in — so (a) the slot/varStore can
+		// reference a bound name, and (b) its type becomes the canonical
+		// `MaxonType.named("String")` that arg-type checks (E3005) recognise.
+		// Without this the result slot is typed `MaxonType.string`, which is
+		// NOT identity-equal to a `String`-typed parameter and the ternary's
+		// value is rejected as "expected 'String', got 'String'".
+		let materializedTrue = materializeStringConstIfNeeded(trueExprBlock, expr: trueExpr, range: ifRange)
+
+		// Pick the result type from the (materialized) true arm; TypeResolution
+		// validates the arms-match constraint after the registries are populated.
+		let resultType = exprType(materializedTrue)
 
 		// Allocate the result slot before parsing condition/false so the slot
 		// is in scope for any sub-expression that might (rarely) reference it.
@@ -9461,7 +9745,7 @@ export type Parser
 		// that both arms overwrite, so stamping it bare `MaxonType.integer` when
 		// `resultType` is unresolved is sound and never affects the real result.
 		let seedType = MaxonType.integer if isUnresolvedType(resultType) else resultType
-		let slot = scope.declare("__ternary_{currentFunc.nextBlockId}", varType: resultType, mutable: true)
+		let slot = scope.declareShadowing("__ternary_{currentFunc.nextBlockId}", varType: resultType, mutable: true)
 		let seedName = emitLiteral(trueExprBlock, value: 0, valueType: seedType, range: ifRange)
 		module.appendOp(trueExprBlock, op: MaxonOp.varDecl(slot, value: seedName, slotType: resultType, range: ifRange))
 
@@ -9470,12 +9754,58 @@ export type Parser
 		let condResult = try parseExpression(currentBlock)
 		try expect(TokenKind.else)
 		// False arm: full expression so chained ternaries right-associate.
-		let falseResult = try parseExpression(currentBlock)
+		let falseResultRaw = try parseExpression(currentBlock)
 		// The block we ended up in after evaluating cond+false is the one that
 		// dispatches into the then/else arms; if either expression had bool
 		// short-circuit emission it will have moved currentBlock away from
 		// trueExprBlock to a fresh merge block, and the condBr belongs there.
 		var dispatchBlock = currentBlock
+
+		// Materialize a bare string-literal false arm into the dispatch block —
+		// the block its varStore reads from — for the same reason as the true
+		// arm above.
+		let falseResult = materializeStringConstIfNeeded(dispatchBlock, expr: falseResultRaw, range: ifRange)
+
+		// E2028 (ParserMatchTypeMismatch): mirror the C# bootstrap's parse-time
+		// validation. Reporting here — before the body-finish unused-variable
+		// pass runs — makes E2028 win over E3012, because `reportCompileError`'s
+		// first-error gate suppresses later semantic diagnostics in the same
+		// file and `functionHasPriorDiagnostic` skips the unused check for a
+		// function that already carries a diagnostic in its line range. The
+		// arm/condition types are only known here for literal operands (exactly
+		// the cases these error tests exercise); when a type is still
+		// `unresolved` (a method-call result, etc.) the kind name is "" and the
+		// check defers to TypeResolution, so a well-typed ternary never
+		// suppresses a legitimate E3012.
+		let condKindName = ternaryArmKindName(exprType(condResult))
+		if not condKindName.isEmpty() and condKindName != "Bool" 'condNotBool'
+			reportCompileError(project, code: ErrorCode.parserMatchTypeMismatch, message: "ternary expression requires a bool condition, got '{condKindName}'", line: ifToken.line, column: ifToken.column, filePath: filePath)
+		end 'condNotBool'
+
+		// Classify arm kinds from the pre-materialization expressions: a string
+		// literal reads as the legacy `MaxonType.string` ("Struct") here, whereas
+		// the materialized arm carries `MaxonType.named("String")` whose kind name
+		// is "" (a named type is not parse-time classifiable). `resultType` is the
+		// materialized true type, so derive the true kind from `trueExpr` directly.
+		let trueKindName = ternaryArmKindName(exprType(trueExpr))
+		let falseKindName = ternaryArmKindName(exprType(falseResultRaw))
+		if not trueKindName.isEmpty() and not falseKindName.isEmpty() and trueKindName != falseKindName 'armsMismatch'
+			reportCompileError(project, code: ErrorCode.parserMatchTypeMismatch, message: "ternary expression type mismatch: true branch is '{trueKindName}' but false branch is '{falseKindName}'", line: ifToken.line, column: ifToken.column, filePath: filePath)
+		end 'armsMismatch'
+
+		// When at least one arm's type is not parse-time-classifiable (a
+		// static factory / method-call result, etc. — its kind name is ""),
+		// the comparison above can't see a struct/enum mismatch like
+		// `Cat.create() if c else Dog.create()`. Defer that case to
+		// TypeResolution: record the result slot, owning function, and the
+		// `if`-token location so it can compare the two arms' resolved
+		// `varStore` value types and emit E2028 on a distinct-ref-type
+		// mismatch. Pinned slots whose arms agree (or aren't reference types)
+		// are simply skipped there, so recording every deferred ternary is
+		// safe — the resolved-type comparison is the real gate.
+		if trueKindName.isEmpty() or falseKindName.isEmpty() 'deferArmsCheck'
+			project.pendingTernaryArmChecks.push(PendingTernaryArmCheck.create(currentFunc.name, slot: slot, ifLine: ifToken.line, ifColumn: ifToken.column, filePath: filePath))
+		end 'deferArmsCheck'
 
 		let ifFilePath = filePath.toString()
 		var thenBlock = module.addBlockAt(currentFunc, label: "ternary.then", filePath: ifFilePath, firstLine: ifToken.line)
@@ -9485,7 +9815,7 @@ export type Parser
 		var mergeBlock = module.addBlockAt(currentFunc, label: "ternary.merge", filePath: ifFilePath, firstLine: ifToken.line)
 		let mergeBlockId = mergeBlock.id
 
-		module.appendOp(thenBlock, op: MaxonOp.varStore(slot, value: exprName(trueExpr), range: ifRange))
+		module.appendOp(thenBlock, op: MaxonOp.varStore(slot, value: exprName(materializedTrue), range: ifRange))
 		module.setTerminator(thenBlock, op: MaxonOp.br(mergeBlockId, range: ifRange))
 
 		module.appendOp(elseBlock, op: MaxonOp.varStore(slot, value: exprName(falseResult), range: ifRange))
@@ -9780,7 +10110,7 @@ export type Parser
 		try eat(TokenKind.otherwise)
 		// Result slot. Type is `unresolved` until the success arm stores —
 		// TypeResolution propagates the concrete type from there.
-		let resultSlot = scope.declare("__try_{baseLabel}_result", varType: MaxonType.unresolved, mutable: true)
+		let resultSlot = scope.declareShadowing("__try_{baseLabel}_result", varType: MaxonType.unresolved, mutable: true)
 		// Seed with a zero literal so the merge block's varLoad reads a
 		// well-typed value under wasm's stricter validation, mirroring how
 		// `parseMatchExpression` seeds its result slot.
@@ -10546,6 +10876,17 @@ export type Parser
 	function parsePostfix(block IrBlock, expr ExprResult) returns ExprResult throws ParserError
 		var result = expr
 
+		// E3077 / E3078 root tracking. `rootVarName` is the local that the
+		// primary leaf read (empty when the primary wasn't a bare local read);
+		// `rootWasImmutable` records whether that root was an immutable (`let`)
+		// local. The leaf already stamped `lastExprImmutableVarRefName`/
+		// `lastExprVarRefName`; capture them now because the first chain step
+		// rewrites those fields to describe the chained value. Mirrors the C#
+		// bootstrap's `rootVarName` / `rootVarMutable` capture at the head of
+		// `ParseFieldAccessChain`.
+		let rootVarName = lastExprVarRefName
+		let rootWasImmutable = not lastExprImmutableVarRefName.isEmpty()
+
 		while accept(TokenKind.dot) 'postfixLoop'
 			// Phase 15e: `t.0` / `t.1` / ... is positional tuple-field syntax
 			// sugar; the synthetic `__TupleN` struct names its fields `_0`, `_1`
@@ -10601,6 +10942,20 @@ export type Parser
 				// gets mis-routed as a regular call and trips fillBinop on
 				// unresolved operands.
 				result = ExprResult.direct(methodResultName, valueType: parseTimeMethodReturnTypeForFn(exprType(result)))
+				// E3077: a method call on a local receiver may mutate it
+				// (`items.push(x)`, `b.set(...)`). Mark the root binding so a
+				// `var` receiver isn't flagged should-be-let. More permissive
+				// than the C# bootstrap's mutating-builtin allow-list, but an
+				// immutable receiver is not an E3077 candidate anyway and no
+				// spec expects E3077 on a method-receiver var.
+				if not rootVarName.isEmpty() 'markReceiver'
+					markVarReassigned(rootVarName)
+				end 'markReceiver'
+				// A method-call result is a fresh value, never an immutable-copy
+				// source — clear the E3078 leaf tracking.
+				lastExprImmutableVarRefName = ""
+				lastExprFromImmutableRoot = false
+				lastExprVarRefName = ""
 				continue
 			end 'isMethodCall'
 
@@ -10621,6 +10976,16 @@ export type Parser
 
 			let fieldLoadName = freshSynthName()
 			module.appendOp(block, op: MaxonOp.fieldLoad(fieldLoadName, receiver: receiverName, fieldName: memberNameBytes, range: SourceRange.ofToken(memberToken)))
+			// E3078 variant 2: `var i = o.field` where `o` is an immutable
+			// (`let`) local copies a field of an immutable struct into a mutable
+			// binding. Flag the chain as immutable-rooted and stamp the producer
+			// SSA name so the var-decl path can confirm the initializer IS this
+			// field chain (not a sub-expression of a larger binop). A bare-ref
+			// leaf no longer describes the value, so clear variant-1 tracking.
+			lastExprImmutableVarRefName = ""
+			lastExprFromImmutableRoot = rootWasImmutable
+			lastExprVarRefName = rootVarName
+			lastExprProducerName = fieldLoadName
 			// Field-load result type is filled in by TypeResolution from
 			// the receiver's resolved struct-field layout — the parser
 			// doesn't peek into `project.structTypes`. Exception:
@@ -10768,6 +11133,13 @@ export type Parser
 					let methodResultName = freshSynthName()
 					// Emit into `currentBlock` — see emitCallAndResult for rationale.
 					module.appendOp(currentBlock, op: MaxonOp.methodCall(methodResultName, receiver: receiverLoadName, methodName: memberNameBytes, args: argNames, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, range: SourceRange.between(token, last: rparenToken)))
+					// E3077: a method call on a local receiver may mutate it
+					// (`items.push(x)`, `b.append(...)`), so the receiver `var`
+					// exercised its mutability and isn't should-be-let. See the
+					// parsePostfix method-call arm for why this is intentionally
+					// more permissive than the C# bootstrap's mutating-builtin
+					// allow-list.
+					markVarReassigned(token.value)
 					// Eager parse-time fill ONLY for the function-valued return
 					// case — see parseTimeMethodReturnTypeForFn for rationale.
 					// Other method-call result types remain `unresolved` for
@@ -11207,6 +11579,21 @@ export type Parser
 			module.appendOp(block, op: MaxonOp.selfFieldLoad(name, fieldName: token.value.toByteArray(), range: tokRange))
 		end 'selfFieldRead' else 'localRead'
 			module.appendOp(block, op: MaxonOp.varLoad(name, slotId: slot, slotType: varType, range: tokRange))
+			// E3077 / E3078 leaf tracking: this expression is EXACTLY a bare
+			// read of local `token.value`. Record the name (any mutability) for
+			// the call-arg / scrutinee reassignment marking, and — when the
+			// source is an immutable (`let`) local — the immutable-source name
+			// so a `var b = a` decl can fire E3078. `self` is never a should-be-
+			// let or immutable-copy source. The field-from-immutable-root flag
+			// is cleared here because a bare ref has no chained root.
+			lastExprVarRefName = token.value
+			lastExprFromImmutableRoot = false
+			lastExprProducerName = name
+			if not scope.getInfo(token.value).mutable and token.value != "self" 'immutableSource'
+				lastExprImmutableVarRefName = token.value
+			end 'immutableSource' else 'mutableSource'
+				lastExprImmutableVarRefName = ""
+			end 'mutableSource'
 		end 'localRead'
 		return ExprResult.direct(name, valueType: varType)
 	end 'parseIdentifierExpr'
@@ -11390,7 +11777,15 @@ export type Parser
 					end 'firstArgNamed'
 				end 'hasLabel'
 				let argFirstToken = cursor.current()
+				// E3077: clear the bare-var-read tracker so it reflects ONLY this
+				// argument's expression; after the parse, a non-empty name means
+				// the arg was (or ended in) a local read — mark it as having
+				// exercised its mutability, since the callee may mutate it.
+				lastExprVarRefName = ""
 				let argResult = try parseExpression(currentBlock)
+				if not lastExprVarRefName.isEmpty() 'argIsVarRead'
+					markVarReassigned(lastExprVarRefName)
+				end 'argIsVarRead'
 				let argLastToken = previousToken()
 				let argRange = SourceRange.between(argFirstToken, last: argLastToken)
 				// Phase 7: a bare stringConst arg (`f("hello")`) carries
@@ -12796,10 +13191,22 @@ export type Parser
 	// (escape validation, nested-stringConst materialization, format specs,
 	// and recovery-on-malformed-input behavior) byte-for-byte.
 	function parseInterpFragmentsInto(block IrBlock, parts StringInterpPartArray, errorContext String) throws ParserError
+		// `curBlock` tracks the block control flow currently lands in. A fragment
+		// whose expression opens blocks (e.g. `{try x.get(i) otherwise -1}`)
+		// leaves `currentBlock` at its merge block; the next fragment — and the
+		// trailing literal parts — must emit into that merge block, not the
+		// original `block`. Resetting to `block` every iteration would orphan
+		// the previous fragment's merge block (left without a terminator → trips
+		// `assertAllBlocksTerminated`).
+		var curBlock = block
 		while accept(TokenKind.stringInterpStart) 'interpLoop'
-			currentBlock = block
+			currentBlock = curBlock
 			let interpStartTok = previousToken()
-			let exprResult = try parseExpression(block)
+			let exprResult = try parseExpression(curBlock)
+			// An expression that opened control flow (try / ternary / bool
+			// short-circuit) moved `currentBlock` to its merge block; carry that
+			// forward so subsequent fragments chain off it.
+			curBlock = currentBlock
 			// Inner expressions that came back as `stringConst` (e.g. a nested
 			// `"..."` literal with no interp markers of its own) carry a
 			// parser-internal synth name that has no backing op. Force the op
@@ -12807,7 +13214,7 @@ export type Parser
 			// reference resolves during lowering. Without this, deeply-nested
 			// interp like `"{ "inner" }"` errors with E3013 'unresolved value
 			// name'.
-			let materializedExpr = materializeStringConstIfNeeded(block, expr: exprResult, range: SourceRange.ofToken(interpStartTok))
+			let materializedExpr = materializeStringConstIfNeeded(curBlock, expr: exprResult, range: SourceRange.ofToken(interpStartTok))
 			let exprNameSlice = exprName(materializedExpr)
 			let kind = inferInterpKind(exprType(materializedExpr))
 			let formatSpecId = try parseInterpFormatSpec()
@@ -13227,6 +13634,9 @@ export type Parser
 		let savedParamLocations = paramLocations
 		let savedLocalVarLocations = localVarLocations
 		let savedReferencedVars = referencedVars
+		let savedMutableVarLocations = mutableVarLocations
+		let savedReassignedVars = reassignedVars
+		let savedPendingVarFromImmutable = pendingVarFromImmutable
 		let savedParamReservations = paramReservations
 		let savedSynthCounter = synthNameCounter
 		// Stage E (closures): save outer closure-state so nested closures
@@ -13251,6 +13661,9 @@ export type Parser
 		paramLocations = ParamLocationArray.create()
 		localVarLocations = ParamLocationArray.create()
 		referencedVars = ReferencedVarSet.create()
+		mutableVarLocations = ParamLocationArray.create()
+		reassignedVars = ReferencedVarSet.create()
+		pendingVarFromImmutable = VarFromImmutableCandidateArray.create()
 		paramReservations = ParamReservationArray.create()
 		synthNameCounter = 0
 		inClosure = true
@@ -13359,6 +13772,9 @@ export type Parser
 		paramLocations = savedParamLocations
 		localVarLocations = savedLocalVarLocations
 		referencedVars = savedReferencedVars
+		mutableVarLocations = savedMutableVarLocations
+		reassignedVars = savedReassignedVars
+		pendingVarFromImmutable = savedPendingVarFromImmutable
 		paramReservations = savedParamReservations
 		synthNameCounter = savedSynthCounter
 		inClosure = savedInClosure
@@ -14055,6 +14471,70 @@ export type Parser
 		module.appendOp(block, op: MaxonOp.selfFieldStore(fieldName.toByteArray(), value: valueName, range: range))
 	end 'emitSelfFieldStore'
 
+	// E3006: convert a `Scope` shadow-collision throw into a diagnostic at the
+	// declaration site. `scope.declare` / `declarePayloadBinding` throw
+	// `ScopeError.shadowsSelfField` when the name being bound would overwrite a
+	// self-field alias — the codegen's name-keyed `isSelfField` paths would
+	// then silently route every read/write of that local through `self`'s heap
+	// pointer, corrupting the field when the types differ. Mirrors the C#
+	// bootstrap's `CheckNoSelfFieldShadow`, but the detection lives in `Scope`
+	// (the one place that sees both the alias and the colliding declaration).
+	//
+	// The single entry point every user-named declaration site funnels through:
+	// on a collision it reports E3006 at the declaration's source location and
+	// recovers by binding the name anyway (`declareShadowing`) so the rest of
+	// the body still parses and type-checks.
+	function declareCheckedLocal(name String, varType MaxonType, mutable bool, line LineNumber, column ColumnNumber) returns VarSlot
+		return try scope.declare(name, varType: varType, mutable: mutable) otherwise (e) 'shadow'
+			reportSelfFieldShadow(e, line: line, column: column)
+			return scope.declareShadowing(name, varType: varType, mutable: mutable)
+		end 'shadow'
+	end 'declareCheckedLocal'
+
+	// Payload-binding counterpart to `declareCheckedLocal` for union match-arm
+	// bindings (`case(x) then …`), which carry the scrutinee + field index for
+	// write-back lowering. Same report-and-recover-on-shadow policy.
+	function declareCheckedPayloadBinding(name String, mutable bool, scrutineeName String, fieldIndex CaseOrdinal, caseName String, line LineNumber, column ColumnNumber) returns VarSlot
+		return try scope.declarePayloadBinding(name, varType: MaxonType.unresolved, mutable: mutable, scrutineeName: scrutineeName, fieldIndex: fieldIndex, caseName: caseName) otherwise (e) 'shadow'
+			reportSelfFieldShadow(e, line: line, column: column)
+			return scope.declarePayloadBindingShadowing(name, varType: MaxonType.unresolved, mutable: mutable, scrutineeName: scrutineeName, fieldIndex: fieldIndex, caseName: caseName)
+		end 'shadow'
+	end 'declareCheckedPayloadBinding'
+
+	function reportSelfFieldShadow(err ScopeError, line LineNumber, column ColumnNumber)
+		match err 'kind'
+			shadowsSelfField(name) then reportCompileError(project, code: ErrorCode.semanticDuplicateDefinition, message: "local '{name}' shadows self field '{currentTypeName}.{name}' — rename the local to avoid silent type confusion at every read/write keyed on the name", line: line, column: column, filePath: filePath)
+		end 'kind'
+	end 'reportSelfFieldShadow'
+
+	// Register one self-field alias at instance-method entry. A throw means a
+	// parameter already bound this name — the param shadows the field (E3006).
+	// Report at the param's site, then install the alias anyway so the field
+	// still routes through `self` for the rest of the body.
+	function declareSelfFieldChecked(field StructField)
+		try scope.declareSelfField(field.name, varType: field.fieldType, offset: field.offset) otherwise (e) 'paramShadow'
+			reportSelfFieldShadowAtParam(e, paramName: field.name)
+			_ = scope.installSelfField(field.name, varType: field.fieldType, offset: field.offset)
+		end 'paramShadow'
+	end 'declareSelfFieldChecked'
+
+	// Same E3006 diagnostic for the parameter-shadow case. The throw originates
+	// from `declareSelfField` (not the param's own declare, since params are
+	// bound before the self-field aliases exist), so recover the param's source
+	// location from `paramLocations` by name.
+	function reportSelfFieldShadowAtParam(err ScopeError, paramName String)
+		var line = 0 as LineNumber
+		var column = 0 as ColumnNumber
+		for loc in paramLocations 'findParam'
+			if loc.name == paramName 'match'
+				line = loc.line
+				column = loc.column
+				break
+			end 'match'
+		end 'findParam'
+		reportSelfFieldShadow(err, line: line, column: column)
+	end 'reportSelfFieldShadowAtParam'
+
 	// Diagnose bare `self` outside any type body. Returns true when we are
 	// NOT inside a type (caller should return early). Keeps the error message
 	// consistent between statement- and expression-context `self`.
@@ -14111,6 +14591,13 @@ export type Parser
 		paramLocations = ParamLocationArray.create()
 		localVarLocations = ParamLocationArray.create()
 		referencedVars = ReferencedVarSet.create()
+		mutableVarLocations = ParamLocationArray.create()
+		reassignedVars = ReferencedVarSet.create()
+		lastExprImmutableVarRefName = ""
+		lastExprFromImmutableRoot = false
+		lastExprVarRefName = ""
+		lastExprProducerName = ByteArray.create()
+		pendingVarFromImmutable = VarFromImmutableCandidateArray.create()
 		paramReservations = ParamReservationArray.create()
 		synthNameCounter = 0
 		// Phase 9 Stage 5: reset the per-function struct-backed enum-case
@@ -14145,7 +14632,17 @@ export type Parser
 			candidates.push(UnusedCandidate.create(local.name, line: local.line, column: local.column))
 		end 'eachLocal'
 
-		if candidates.count() == 0 'nothingToCheck'
+		// E3077 candidates: every `var` (mutable) local in declaration order,
+		// carried so the deferred check can flag a never-reassigned one. The
+		// reassigned set records names that exercised their mutability.
+		var mutableCandidates = UnusedCandidateArray.create()
+		for mv in mutableVarLocations 'eachMutable'
+			mutableCandidates.push(UnusedCandidate.create(mv.name, line: mv.line, column: mv.column))
+		end 'eachMutable'
+
+		// Nothing deferred when there are no params/locals AND no var-should-be-
+		// let / var-from-immutable candidates for this body.
+		if candidates.count() == 0 and mutableCandidates.count() == 0 and pendingVarFromImmutable.count() == 0 'nothingToCheck'
 			return
 		end 'nothingToCheck'
 
@@ -14154,7 +14651,12 @@ export type Parser
 			referenced.insert(name)
 		end 'eachRef'
 
-		project.pendingUnusedChecks.push(PendingUnusedCheck.create(filePath, candidates: candidates, referenced: referenced, skipParamCheck: skipParamCheck, paramCount: paramCount, startLine: startLine, endLine: endLine))
+		var reassigned = ReferencedNameSet.create()
+		for name in reassignedVars 'eachReassign'
+			reassigned.insert(name)
+		end 'eachReassign'
+
+		project.pendingUnusedChecks.push(PendingUnusedCheck.create(filePath, candidates: candidates, referenced: referenced, skipParamCheck: skipParamCheck, paramCount: paramCount, startLine: startLine, endLine: endLine, mutableCandidates: mutableCandidates, reassigned: reassigned, varFromImmutable: pendingVarFromImmutable))
 	end 'checkUnusedParameters'
 
 	// Phase 11.7: does the enclosing type's `implements` list (transitively
@@ -14218,8 +14720,12 @@ export type Parser
 	// Declare a variable carrying the given source-level MaxonType. Slot
 	// width is NOT picked here — lowerMaxonToStd resolves MaxonType via the
 	// typealias registry after TypeResolution has run.
+	// Non-throwing slot allocator for compiler-internal and already-checked
+	// names. Routes through `declareShadowing` so it never trips the
+	// self-field-shadow guard — user-named declarations that need the E3006
+	// check call `scope.declare` directly (with `try`) instead.
 	function defineVariableWithType(name String, varType MaxonType) returns VarSlot
-		return scope.declare(name, varType: varType, mutable: true)
+		return scope.declareShadowing(name, varType: varType, mutable: true)
 	end 'defineVariableWithType'
 
 	// Phase 15a: record a call result name as discarded so
@@ -14317,6 +14823,18 @@ export type Parser
 		return 0
 	end 'lookupVariable'
 
+	// E3077: record that `name` exercised its mutability — it was reassigned
+	// (`x = …`), had a field written (`x.f = …`), was passed to a callee
+	// (which may mutate it), was the receiver of a mutating builtin method, or
+	// was a mutable match scrutinee. A `var` whose name lands here is NOT a
+	// should-be-let candidate. Only meaningful for locals declared in this
+	// function; recording an unrelated name (parameter, global) is harmless
+	// because the deferred check only consults `mutableVarLocations`. Mirrors
+	// the C# bootstrap's many `_reassignedVars.Add` sites.
+	function markVarReassigned(name String)
+		reassignedVars.insert(name)
+	end 'markVarReassigned'
+
 	function parseScopedStatements(func IrFunction, block IrBlock) returns IrBlock throws ParserError
 		scope.pushScope()
 		var lastWasReturn = false
@@ -14373,7 +14891,7 @@ end 'Parser'
 // representation can't be reconstructed from an integer at runtime; per
 // the spec they reject `.fromRawValue(...)` outright (E3034) and the
 // validation pass emits that diagnostic when it finds a call site.
-export function synthesizeEnumLookupHelpersImpl(project Project, module MaxonModule, namespace String, filePath FilePath, enumName String, cases EnumCaseArray, isFloatBacked bool, visibility Visibility, line LineNumber, column ColumnNumber, skipFromRawValue bool = false)
+export function synthesizeEnumLookupHelpersImpl(project Project, module MaxonModule, namespace String, filePath FilePath, enumName String, cases EnumCaseArray, isFloatBacked bool, isStringBacked bool, isCharBacked bool, visibility Visibility, line LineNumber, column ColumnNumber, skipFromRawValue bool = false)
 	if cases.count() == 0 'noCases'
 		// Degenerate enum: skip helper synthesis. The empty-case enum is
 		// already an E3030 / E2004 violation surfaced upstream; emitting
@@ -14381,7 +14899,14 @@ export function synthesizeEnumLookupHelpersImpl(project Project, module MaxonMod
 		// `throw` and no return, which Verifier flags as unreachable.
 		return
 	end 'noCases'
-	if not skipFromRawValue 'emitFromRaw'
+	if isStringBacked or isCharBacked 'stringCharFromRaw'
+		// String / char backings get a dedicated `.fromRawValue(<String /
+		// Character>)` helper: it compares the argument against each case's
+		// declared backing literal and returns the matched case's ordinal
+		// (the runtime representation). `skipFromRawValue` (set true for these
+		// backings by the caller) suppresses the int helper above.
+		synthesizeEnumFromRawStringHelperImpl(project, module: module, namespace: namespace, filePath: filePath, enumName: enumName, cases: cases, isCharBacked: isCharBacked, visibility: visibility, line: line, column: column)
+	end 'stringCharFromRaw' else if not skipFromRawValue 'emitFromRaw'
 		synthesizeEnumFromRawValueHelperImpl(project, module: module, namespace: namespace, filePath: filePath, enumName: enumName, cases: cases, isFloatBacked: isFloatBacked, visibility: visibility, line: line, column: column)
 	end 'emitFromRaw'
 	synthesizeEnumFromNameHelperImpl(project, module: module, namespace: namespace, filePath: filePath, enumName: enumName, cases: cases, isFloatBacked: isFloatBacked, visibility: visibility, line: line, column: column)
@@ -14448,7 +14973,7 @@ export function synthesizeEnumFromRawValueHelperImpl(project Project, module Max
 	// Declare the `raw` parameter as the function's first slot. The
 	// `varLoad` that follows reads its value into an SSA name we can
 	// compare against each case's raw value.
-	let rawSlot = func.scope.declare("raw", varType: rawType, mutable: false)
+	let rawSlot = func.scope.declareShadowing("raw", varType: rawType, mutable: false)
 	var entryBlock = module.addBlockAt(func, label: "entry", filePath: filePath.toString(), firstLine: line)
 	let rawName = mintSynthName(synthCounter)
 	synthCounter = synthCounter + 1
@@ -14566,7 +15091,7 @@ export function synthesizeEnumFromNameHelperImpl(project Project, module MaxonMo
 	func.nameColumn = column
 
 	var synthCounter = 0 as ParsedInt
-	let nameSlot = func.scope.declare("name", varType: stringMaxonType, mutable: false)
+	let nameSlot = func.scope.declareShadowing("name", varType: stringMaxonType, mutable: false)
 	var entryBlock = module.addBlockAt(func, label: "entry", filePath: filePath.toString(), firstLine: line)
 	let receiverName = mintSynthName(synthCounter)
 	synthCounter = synthCounter + 1
@@ -14627,6 +15152,119 @@ export function synthesizeEnumFromNameHelperImpl(project Project, module MaxonMo
 	// call-edge walk reaches the helper when needed.
 	module.functions.push(func)
 end 'synthesizeEnumFromNameHelperImpl'
+
+// Synthesize `__enum_<EnumName>_fromRawValue(raw <String|Character>) returns
+// <EnumName> throws <EnumName>` for a string- or char-backed enum. Body shape
+// mirrors `fromName`, but each per-case comparison tests the argument against
+// the case's declared backing literal (`rawStringValue`) via
+// `raw.equals(<literal>)`, and the match returns the case's ordinal (the
+// runtime representation of a string/char-backed enum value). For char-backed
+// enums the param is `Character` and the per-case literal is a `charLiteral`;
+// for string-backed it is `String` and a `stringConst`.
+export function synthesizeEnumFromRawStringHelperImpl(project Project, module MaxonModule, namespace String, filePath FilePath, enumName String, cases EnumCaseArray, isCharBacked bool, visibility Visibility, line LineNumber, column ColumnNumber)
+	let funcName = enumFromRawValueSymbolName(enumName)
+	if project.funcReturnTypes.contains(funcName) 'alreadyRegistered'
+		return
+	end 'alreadyRegistered'
+
+	let rawTypeName = "Character" if isCharBacked else "String"
+	let rawMaxonType = MaxonType.named(project.typeNames.intern(rawTypeName))
+	let enumMaxonType = internMaxonType(project, name: enumName)
+	var paramNames = StringArray.create()
+	paramNames.push("raw")
+	var paramTypes = MaxonTypeArray.create()
+	paramTypes.push(rawMaxonType)
+	var paramDefaults = ParamDefaultArray.create()
+	paramDefaults.push(ParamDefault.none)
+
+	let returnType = MaxonReturnType.value(enumMaxonType)
+	let throwsClause = ThrowsClause.throwing(enumName)
+
+	try project.funcReturnTypes.insert(funcName, value: returnType) otherwise panic("synthesizeEnumFromRawStringHelperImpl: funcReturnTypes collision on '{funcName}'")
+	recordFuncReturnTypeInsert(project, filePath: filePath, key: funcName)
+	try project.funcSignatures.insert(funcName, value: FuncSignature.create(paramNames, paramTypes: paramTypes, paramDefaults: paramDefaults)) otherwise panic("synthesizeEnumFromRawStringHelperImpl: funcSignatures collision on '{funcName}'")
+	recordFuncSignatureInsert(project, filePath: filePath, key: funcName)
+	project.methodNameIndex.record(funcName)
+	recordMethodNameIndexInsert(project, filePath: filePath, qualifiedName: funcName)
+	var insertedRawVis = true
+	try project.funcVisibilities.insert(funcName, value: FuncVisibilityInfo.create(visibility, sourceFilePath: filePath)) otherwise 'dupRawVis'
+		insertedRawVis = false
+	end 'dupRawVis'
+	if insertedRawVis 'recRawVis'
+		recordFuncVisibilityInsert(project, filePath: filePath, key: funcName)
+	end 'recRawVis'
+	var insertedRawTh = true
+	try project.funcThrowsTypes.insert(funcName, value: throwsClause) otherwise 'dupRawTh'
+		insertedRawTh = false
+	end 'dupRawTh'
+	if insertedRawTh 'recRawTh'
+		recordFuncThrowsInsert(project, filePath: filePath, key: funcName)
+	end 'recRawTh'
+
+	var func = IrFunction.create(funcName, maxonReturnType: returnType, paramCount: 1 as ParamCount, maxonParamTypes: paramTypes, returnLine: line, throwsTypeName: throwsClause)
+	func.namespace = namespace
+	func.visibility = visibility
+	func.sourceFilePath = filePath
+	func.nameLine = line
+	func.nameColumn = column
+
+	var synthCounter = 0 as ParsedInt
+	let rawSlot = func.scope.declareShadowing("raw", varType: rawMaxonType, mutable: false)
+	var entryBlock = module.addBlockAt(func, label: "entry", filePath: filePath.toString(), firstLine: line)
+	let receiverName = mintSynthName(synthCounter)
+	synthCounter = synthCounter + 1
+	module.appendOp(entryBlock, op: MaxonOp.varLoad(receiverName, slotId: rawSlot, slotType: rawMaxonType, range: SourceRange.none()))
+
+	var throwBlock = module.addBlockAt(func, label: "no_match_throw", filePath: filePath.toString(), firstLine: line)
+	var currentCheck = entryBlock
+	let caseCount = cases.count()
+	for i in 0 upto caseCount 'eachCase'
+		let c = try cases.get(i) otherwise panic("synthesizeEnumFromRawStringHelperImpl: cases.get OOB at {i}")
+		var returnBlock = module.addBlockAt(func, label: "case_{i}_return", filePath: filePath.toString(), firstLine: line)
+		let isLast = i == caseCount - 1
+		var nextCheck = currentCheck
+		if not isLast 'allocNext'
+			nextCheck = module.addBlockAt(func, label: "check_{i + 1}", filePath: filePath.toString(), firstLine: line)
+		end 'allocNext'
+
+		// Build the case's backing literal and call `raw.equals(<literal>)`.
+		let backingStringId = project.strings.intern(c.rawStringValue)
+		let backingLitName = mintSynthName(synthCounter)
+		synthCounter = synthCounter + 1
+		if isCharBacked 'charLit'
+			module.appendOp(currentCheck, op: MaxonOp.charLiteral(backingLitName, stringId: backingStringId, range: SourceRange.none()))
+		end 'charLit' else 'stringLit'
+			module.appendOp(currentCheck, op: MaxonOp.stringConst(backingLitName, stringId: backingStringId, range: SourceRange.none()))
+		end 'stringLit'
+		var equalsArgs = ByteArrayArray.create()
+		equalsArgs.push(backingLitName)
+		var equalsArgLabels = StringArray.create()
+		equalsArgLabels.push("")
+		var equalsArgTypes = MaxonTypeArray.create()
+		equalsArgTypes.push(rawMaxonType)
+		var equalsArgRanges = SourceRangeArray.create()
+		equalsArgRanges.push(SourceRange.none())
+		let cmpName = mintSynthName(synthCounter)
+		synthCounter = synthCounter + 1
+		module.appendOp(currentCheck, op: MaxonOp.methodCall(cmpName, receiver: receiverName, methodName: "equals".toByteArray(), args: equalsArgs, argLabels: equalsArgLabels, argTypes: equalsArgTypes, argRanges: equalsArgRanges, range: SourceRange.none()))
+		let elseTarget = throwBlock.id if isLast else nextCheck.id
+		module.setTerminator(currentCheck, op: MaxonOp.condBr(cmpName, thenTarget: returnBlock.id, elseTarget: elseTarget, range: SourceRange.none()))
+
+		// Match: return the case's ordinal — the runtime representation of a
+		// string/char-backed enum value.
+		let resultLitName = mintSynthName(synthCounter)
+		synthCounter = synthCounter + 1
+		module.appendOp(returnBlock, op: MaxonOp.literal(resultLitName, value: c.rawValue, valueType: MaxonType.integer, range: SourceRange.none()))
+		module.setTerminator(returnBlock, op: MaxonOp.ret(resultLitName, range: SourceRange.none()))
+
+		currentCheck = nextCheck
+	end 'eachCase'
+
+	let firstCase = try cases.get(0) otherwise panic("synthesizeEnumFromRawStringHelperImpl: cases.get(0) failed despite count check")
+	module.setTerminator(throwBlock, op: MaxonOp.throw(enumName, variantName: firstCase.name, payloadValueName: ByteArray.create(), range: SourceRange.none()))
+
+	module.functions.push(func)
+end 'synthesizeEnumFromRawStringHelperImpl'
 
 // Mint a fresh synthetic SSA name for an externally-driven helper
 // synthesis. Uses the same `$t<n>` shape the parser's per-instance
@@ -14701,7 +15339,12 @@ function classifyEnumLookupForFromRawValue(project Project, enumName String) ret
 		if resolved.isUnion 'isUnion'
 			return EnumLookupTarget.rejected(EnumLookupRejectKind.associatedValueUnion)
 		end 'isUnion'
-		if enumCasesAnyStructBacked(resolved.cases) or resolved.isStringBacked or resolved.isCharBacked or resolved.isFunctionBacked 'rejectKind'
+		// Struct- and function-backed enums reject `.fromRawValue(...)` (their
+		// raw value can't be reconstructed from a literal lookup). String- and
+		// char-backed enums DO support it via the dedicated string helper, so
+		// they classify as valid here — the synthesis dispatch picks the right
+		// helper from the enum's backing flags.
+		if enumCasesAnyStructBacked(resolved.cases) or resolved.isFunctionBacked 'rejectKind'
 			return EnumLookupTarget.rejected(EnumLookupRejectKind.structOrAltBackedEnum)
 		end 'rejectKind'
 		return EnumLookupTarget.bareEnum(resolved.cases, isFloatBacked: resolved.isFloatBacked, visibility: resolved.visibility, sourceFilePath: resolved.sourceFilePath, line: resolved.nameLine, column: resolved.nameColumn)
@@ -14710,13 +15353,26 @@ function classifyEnumLookupForFromRawValue(project Project, enumName String) ret
 		if unresolved.isUnion 'isUnion2'
 			return EnumLookupTarget.rejected(EnumLookupRejectKind.associatedValueUnion)
 		end 'isUnion2'
-		if enumCasesAnyStructBacked(unresolved.cases) or unresolved.isStringBacked or unresolved.isCharBacked or unresolved.isFunctionBacked 'rejectKind2'
+		if enumCasesAnyStructBacked(unresolved.cases) or unresolved.isFunctionBacked 'rejectKind2'
 			return EnumLookupTarget.rejected(EnumLookupRejectKind.structOrAltBackedEnum)
 		end 'rejectKind2'
 		return EnumLookupTarget.bareEnum(unresolved.cases, isFloatBacked: unresolved.isFloatBacked, visibility: unresolved.visibility, sourceFilePath: unresolved.filePath, line: unresolved.line, column: unresolved.column)
 	end 'fromUnresolved'
 	return EnumLookupTarget.notAnEnum()
 end 'classifyEnumLookupForFromRawValue'
+
+// Look up an enum's string/char backing flags by name (resolved or unresolved
+// registry). Returns (isStringBacked, isCharBacked). Used by the lookup-helper
+// synthesis dispatch to pick the `fromRawValue` helper variant.
+function enumStringCharBacking(project Project, enumName String) returns (bool, bool)
+	if let resolved = try project.enumTypes.get(enumName) 'fromResolved'
+		return (resolved.isStringBacked, resolved.isCharBacked)
+	end 'fromResolved'
+	if let unresolved = try project.unresolvedEnums.get(enumName) 'fromUnresolved'
+		return (unresolved.isStringBacked, unresolved.isCharBacked)
+	end 'fromUnresolved'
+	return (false, false)
+end 'enumStringCharBacking'
 
 // G.2: classify the receiver of an `__enum_<X>_fromName` call. Mirrors
 // `classifyEnumLookupForFromRawValue` but the only spec-rejected shape is
@@ -14773,6 +15429,38 @@ export function validateEnumLookupCalls(project Project, allModule MaxonModule)
 	for funcIdx in 0 upto allModule.functions.count() 'eachFunc'
 		let func = try allModule.functions.get(funcIdx) otherwise panic("validateEnumLookupCalls: functions.get OOB at {funcIdx}")
 		let callerFilePath = func.sourceFilePath
+		// First sub-pass: index every compile-time literal producer's result
+		// name → opIdx so the call-validation walk can tell a literal
+		// argument (eligible for E3034/E3005 value validation) from a dynamic
+		// one (left alone). Function-local, mirroring `validateIndirectCallLabels`.
+		var litProducerMap = LiteralOpIndexMap.create()
+		for blockRef in func.blockRefs 'collectBlocks'
+			let block = try allModule.blocks.get(blockRef) otherwise panic("validateEnumLookupCalls: blocks.get OOB at blockRef={blockRef} (collect)")
+			for opIdx in block.opRefs 'collectOps'
+				if opIdx >= opCount 'oobCollect'
+					panic("validateEnumLookupCalls: opIdx={opIdx} out of bounds (opCount={opCount}) during collect")
+				end 'oobCollect'
+				let op = try allModule.ops.get(opIdx) otherwise panic("validateEnumLookupCalls: ops.get OOB at {opIdx} during collect")
+				if op.name == "literal" 'isLiteral'
+					match op 'extractLiteral'
+						literal(litResult, _, _, _) then litProducerMap.upsert(litResult, value: opIdx)
+						default panic("validateEnumLookupCalls: op.name == 'literal' but match fell through")
+					end 'extractLiteral'
+				end 'isLiteral'
+				if op.name == "stringConst" 'isStringConst'
+					match op 'extractStringConst'
+						stringConst(strResult, _, _) then litProducerMap.upsert(strResult, value: opIdx)
+						default panic("validateEnumLookupCalls: op.name == 'stringConst' but match fell through")
+					end 'extractStringConst'
+				end 'isStringConst'
+				if op.name == "charLiteral" 'isCharLiteral'
+					match op 'extractCharLiteral'
+						charLiteral(chResult, _, _) then litProducerMap.upsert(chResult, value: opIdx)
+						default panic("validateEnumLookupCalls: op.name == 'charLiteral' but match fell through")
+					end 'extractCharLiteral'
+				end 'isCharLiteral'
+			end 'collectOps'
+		end 'collectBlocks'
 		for blockRef in func.blockRefs 'eachBlockRef'
 			let block = try allModule.blocks.get(blockRef) otherwise panic("validateEnumLookupCalls: blocks.get OOB at blockRef={blockRef}")
 			for opIdx in block.opRefs 'eachOp'
@@ -14789,13 +15477,13 @@ export function validateEnumLookupCalls(project Project, allModule MaxonModule)
 				// `maybeValidateOneEnumLookupTryCall`.
 				if op.name == "call" 'isCall'
 					match op 'extractCall'
-						call(result, callee, callContext, args, argLabels, argTypes, argRanges, range) then maybeValidateOneEnumLookupCall(project, module: allModule, opIdx: opIdx, result: result, callee: callee, callContext: callContext, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, range: range, callerFilePath: callerFilePath, rawValuePrefix: rawValuePrefix, rawValueSuffix: rawValueSuffix, fromNameSuffix: fromNameSuffix)
+						call(result, callee, callContext, args, argLabels, argTypes, argRanges, range) then maybeValidateOneEnumLookupCall(project, module: allModule, opIdx: opIdx, result: result, callee: callee, callContext: callContext, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, range: range, callerFilePath: callerFilePath, callerFuncName: func.name, rawValuePrefix: rawValuePrefix, rawValueSuffix: rawValueSuffix, fromNameSuffix: fromNameSuffix, litProducerMap: litProducerMap)
 						default panic("validateEnumLookupCalls: op.name == 'call' but match fell through")
 					end 'extractCall'
 				end 'isCall'
 				if op.name == "tryCall" 'isTryCall'
 					match op 'extractTry'
-						tryCall(result, callee, callContext, args, argLabels, argTypes, argRanges, errorBoundName, range) then maybeValidateOneEnumLookupTryCall(project, module: allModule, opIdx: opIdx, result: result, callee: callee, callContext: callContext, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, errorBoundName: errorBoundName, range: range, callerFilePath: callerFilePath, rawValuePrefix: rawValuePrefix, rawValueSuffix: rawValueSuffix, fromNameSuffix: fromNameSuffix)
+						tryCall(result, callee, callContext, args, argLabels, argTypes, argRanges, errorBoundName, range) then maybeValidateOneEnumLookupTryCall(project, module: allModule, opIdx: opIdx, result: result, callee: callee, callContext: callContext, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, errorBoundName: errorBoundName, range: range, callerFilePath: callerFilePath, callerFuncName: func.name, rawValuePrefix: rawValuePrefix, rawValueSuffix: rawValueSuffix, fromNameSuffix: fromNameSuffix, litProducerMap: litProducerMap)
 						default panic("validateEnumLookupCalls: op.name == 'tryCall' but match fell through")
 					end 'extractTry'
 				end 'isTryCall'
@@ -14813,6 +15501,76 @@ end 'validateEnumLookupCalls'
 // across functions), so a project-wide scan would mis-match across
 // IrFunction boundaries.
 typealias VarLoadOpIndexMap = Map with (ByteArray, OpIndex)
+
+// G.2 literal-argument validation: per-function name-keyed map from a
+// compile-time literal producer's result name to the op index where that
+// `literal` / `stringConst` / `charLiteral` op lives in `MaxonModule.ops`.
+// Built during `validateEnumLookupCalls`'s first sub-pass and consulted in
+// the second sub-pass to decide whether a `fromRawValue` / `fromName`
+// argument is a compile-time literal (eligible for value validation) or a
+// dynamic value (left alone). Per-function for the same `$t<n>` reuse
+// reason as `VarLoadOpIndexMap` above.
+typealias LiteralOpIndexMap = Map with (ByteArray, OpIndex)
+
+// G.2: the decoded form of a compile-time literal argument to
+// `fromRawValue` / `fromName`. `kind` discriminates int-literal vs string vs
+// char so the validator can both type-check (E3005) and value-check (E3034).
+// `intValue` carries the literal for `intLiteral`; `text` carries the decoded
+// string/char bytes for `stringLiteral` / `charLiteral`.
+enum LiteralArgKind
+	intLiteral
+	stringLiteral
+	charLiteral
+end 'LiteralArgKind'
+
+type LiteralArgInfo
+	export var kind as LiteralArgKind
+	export var intValue as ParsedInt
+	export var text as String
+
+	export static function fromInt(value ParsedInt) returns LiteralArgInfo
+		return Self{kind: LiteralArgKind.intLiteral, intValue: value, text: ""}
+	end 'fromInt'
+
+	export static function fromString(text String) returns LiteralArgInfo
+		return Self{kind: LiteralArgKind.stringLiteral, intValue: 0, text: text}
+	end 'fromString'
+
+	export static function fromChar(text String) returns LiteralArgInfo
+		return Self{kind: LiteralArgKind.charLiteral, intValue: 0, text: text}
+	end 'fromChar'
+end 'LiteralArgInfo'
+
+// G.2: decode the literal producer op at `opIdx` into a `LiteralArgInfo`.
+// The caller has already confirmed `opIdx` came from the `LiteralOpIndexMap`,
+// so the op is one of the three literal producers; any other shape is an
+// invariant break. A single-byte char literal (`'B'`) takes the int-literal
+// fast path (`parseCharLiteralExpr`), so an `int` literal whose result name is
+// recorded in `project.charByteLiterals` is reclassified as a char and its
+// byte value re-decoded to the 1-byte text — matching how char-backed enum
+// cases store their declared char in `rawStringValue`.
+function readLiteralArgInfo(project Project, module MaxonModule, opIdx OpIndex, callerFuncName String, argName ByteArray) returns LiteralArgInfo
+	let op = try module.ops.get(opIdx) otherwise panic("readLiteralArgInfo: ops.get OOB at {opIdx}")
+	return match op 'extract'
+		literal(_, value, _, _) gives intLiteralArgInfo(project, value: value, callerFuncName: callerFuncName, argName: argName)
+		stringConst(_, stringId, _) gives LiteralArgInfo.fromString(project.strings.get(stringId))
+		charLiteral(_, stringId, _) gives LiteralArgInfo.fromChar(project.strings.get(stringId))
+		default panic("readLiteralArgInfo: op at idx={opIdx} is not a literal producer")
+	end 'extract'
+end 'readLiteralArgInfo'
+
+// G.2: classify an int `literal` producer as either a plain int or a single-
+// byte char literal (the char-byte fast path). For the char-byte case, rebuild
+// the 1-byte text so char-backed `fromRawValue` validation can string-compare
+// it against the case's `rawStringValue`.
+function intLiteralArgInfo(project Project, value ParsedInt, callerFuncName String, argName ByteArray) returns LiteralArgInfo
+	if project.charByteLiterals.contains(charByteLiteralKey(callerFuncName, valueName: argName)) 'isCharByte'
+		var bytes = ByteArray.create()
+		bytes.push(value as Byte)
+		return LiteralArgInfo.fromChar(String.from(bytes))
+	end 'isCharByte'
+	return LiteralArgInfo.fromInt(value)
+end 'intLiteralArgInfo'
 
 // H: walk every `indirectCall` op in the merged `allModule` and patch
 // those the parser emitted with `fnTypeId == 0` — the sentinel for
@@ -15009,13 +15767,103 @@ function splitEnumLookupCallee(callee ByteArray, rawValuePrefix String, rawValue
 	return EnumLookupCalleeSplit.lookup(variant, enumName: enumName)
 end 'splitEnumLookupCallee'
 
+// G.2: compile-time validation of a `fromRawValue` / `fromName` literal
+// argument against the enum's declared cases. Returns true when a diagnostic
+// was emitted (the caller then leaves the op alone and skips helper synthesis),
+// false when the argument is absent, dynamic, or valid (synthesis proceeds).
+//
+//   - fromRawValue, wrong-typed literal → E3005 (`expected <raw>, got <T>`).
+//   - fromRawValue, in-range type but no case with that raw value → E3034.
+//   - fromName, no case with that name → E3034.
+//
+// Only literal arguments are validated: a dynamic value (variable, call
+// result) has no entry in `litProducerMap` and is left to the runtime helper.
+function validateEnumLookupLiteralArg(project Project, module MaxonModule, isFromRawValue bool, enumName String, classification EnumLookupTarget, args ByteArrayArray, argRanges SourceRangeArray, callerFilePath FilePath, callerFuncName String, litProducerMap LiteralOpIndexMap) returns bool
+	if args.count() == 0 'noArg'
+		return false
+	end 'noArg'
+
+	let argName = try args.get(0) otherwise panic("validateEnumLookupLiteralArg: args.get(0) failed despite count check")
+	let producerOpIdx = try litProducerMap.get(argName) otherwise return false
+	let argRange = try argRanges.get(0) otherwise SourceRange.none()
+	let lit = readLiteralArgInfo(project, module: module, opIdx: producerOpIdx, callerFuncName: callerFuncName, argName: argName)
+
+	if isFromRawValue 'validateRawValue'
+		return validateFromRawValueLiteral(project, enumName: enumName, classification: classification, lit: lit, argRange: argRange, callerFilePath: callerFilePath)
+	end 'validateRawValue' else 'validateName'
+		return validateFromNameLiteral(project, enumName: enumName, classification: classification, lit: lit, argRange: argRange, callerFilePath: callerFilePath)
+	end 'validateName'
+end 'validateEnumLookupLiteralArg'
+
+// G.2: validate a literal `fromRawValue` argument. String/char-backed enums
+// match the literal text against each case's `rawStringValue`; int/float-
+// backed enums expect an integer literal and match against `rawValue`.
+function validateFromRawValueLiteral(project Project, enumName String, classification EnumLookupTarget, lit LiteralArgInfo, argRange SourceRange, callerFilePath FilePath) returns bool
+	let (isStringBacked, isCharBacked) = enumStringCharBacking(project, enumName: enumName)
+	if isStringBacked or isCharBacked 'stringCharBacked'
+		// String/char-backed: the raw value is the case's declared literal.
+		let expectedKind = LiteralArgKind.charLiteral if isCharBacked else LiteralArgKind.stringLiteral
+		if lit.kind != expectedKind 'typeMismatch'
+			let expectedName = "Character" if isCharBacked else "String"
+			reportCompileError(project, code: ErrorCode.semanticTypeMismatch, message: "type mismatch: 'expected {expectedName}, got {literalArgTypeName(lit)}'", line: argRange.line, column: argRange.column, filePath: callerFilePath)
+			return true
+		end 'typeMismatch'
+		for c in classification.cases 'scanCases'
+			if c.rawStringValue == lit.text 'found'
+				return false
+			end 'found'
+		end 'scanCases'
+		reportCompileError(project, code: ErrorCode.semanticEnumUnknownCase, message: "no enum case with raw value '{lit.text}': '{enumName}'", line: argRange.line, column: argRange.column, filePath: callerFilePath)
+		return true
+	end 'stringCharBacked' else 'numericBacked'
+		// int / float / ordinal backing: the raw value is an integer literal.
+		let expectedName = "float" if classification.isFloatBacked else "int"
+		if lit.kind != LiteralArgKind.intLiteral 'typeMismatch'
+			reportCompileError(project, code: ErrorCode.semanticTypeMismatch, message: "type mismatch: 'expected {expectedName}, got {literalArgTypeName(lit)}'", line: argRange.line, column: argRange.column, filePath: callerFilePath)
+			return true
+		end 'typeMismatch'
+		for c in classification.cases 'scanCases'
+			if c.rawValue == lit.intValue 'found'
+				return false
+			end 'found'
+		end 'scanCases'
+		reportCompileError(project, code: ErrorCode.semanticEnumUnknownCase, message: "no enum case with raw value '{lit.intValue}': '{enumName}'", line: argRange.line, column: argRange.column, filePath: callerFilePath)
+		return true
+	end 'numericBacked'
+end 'validateFromRawValueLiteral'
+
+// G.2: validate a literal `fromName` argument — it must be a string literal
+// naming one of the enum's cases.
+function validateFromNameLiteral(project Project, enumName String, classification EnumLookupTarget, lit LiteralArgInfo, argRange SourceRange, callerFilePath FilePath) returns bool
+	if lit.kind != LiteralArgKind.stringLiteral 'typeMismatch'
+		reportCompileError(project, code: ErrorCode.semanticTypeMismatch, message: "type mismatch: 'expected String, got {literalArgTypeName(lit)}'", line: argRange.line, column: argRange.column, filePath: callerFilePath)
+		return true
+	end 'typeMismatch'
+	for c in classification.cases 'scanCases'
+		if c.name == lit.text 'found'
+			return false
+		end 'found'
+	end 'scanCases'
+	reportCompileError(project, code: ErrorCode.semanticEnumUnknownCase, message: "no enum case named '{lit.text}': '{enumName}'", line: argRange.line, column: argRange.column, filePath: callerFilePath)
+	return true
+end 'validateFromNameLiteral'
+
+// G.2: source-level type name of a literal argument, for E3005 messages.
+function literalArgTypeName(lit LiteralArgInfo) returns String
+	return match lit.kind 'name'
+		intLiteral gives "int"
+		stringLiteral gives "String"
+		charLiteral gives "Character"
+	end 'name'
+end 'literalArgTypeName'
+
 // G.2: shared synthesize / diagnose dispatch for both `call` and
 // `tryCall`. Returns the natural-form ByteArray callee when the receiver
 // isn't actually an enum and the op must be rewritten; returns an empty
 // ByteArray when the op should be left alone (helper was synthesized or
 // an E3034 diagnostic was emitted). Centralizes the spec-rejected
 // "enum"/"union" wording so the two op kinds stay in lockstep.
-function dispatchEnumLookupValidation(project Project, module MaxonModule, variant EnumLookupVariant, enumName String, range SourceRange, callerFilePath FilePath) returns ByteArray
+function dispatchEnumLookupValidation(project Project, module MaxonModule, variant EnumLookupVariant, enumName String, args ByteArrayArray, argRanges SourceRangeArray, range SourceRange, callerFilePath FilePath, callerFuncName String, litProducerMap LiteralOpIndexMap) returns ByteArray
 	let isFromRawValue = enumLookupVariantIsFromRawValue(variant)
 	let classification = classifyEnumLookupForFromRawValue(project, enumName: enumName) if isFromRawValue else classifyEnumLookupForFromName(project, enumName: enumName)
 	if classification.unknown 'isUnknown'
@@ -15031,12 +15879,26 @@ function dispatchEnumLookupValidation(project Project, module MaxonModule, varia
 		return project.calleeNames.intern(naturalCalleeStr)
 	end 'isUnknown'
 	if classification.validBareEnum 'isBare'
+		// Compile-time literal validation: when the argument is a literal,
+		// reject an out-of-domain raw value / unknown case name (E3034) or a
+		// wrong-typed argument (E3005) here, before the helper is synthesized.
+		// A dynamic (non-literal) argument is left to the runtime helper.
+		// Emitting the diagnostic at the call's line also suppresses the
+		// deferred E3012 (`_x` unused) via `functionHasPriorDiagnostic`.
+		if validateEnumLookupLiteralArg(project, module: module, isFromRawValue: isFromRawValue, enumName: enumName, classification: classification, args: args, argRanges: argRanges, callerFilePath: callerFilePath, callerFuncName: callerFuncName, litProducerMap: litProducerMap) 'rejectedLiteral'
+			return ByteArray.create()
+		end 'rejectedLiteral'
 		// Synthesize the helper if not already present. The synthesis
 		// helpers themselves guard against duplicates so calling them
 		// for an already-registered helper is a no-op.
 		let synthNamespace = deriveNamespace(classification.sourceFilePath, rootPath: project.rootPath)
 		if isFromRawValue 'synthFRV'
-			synthesizeEnumFromRawValueHelperImpl(project, module: module, namespace: synthNamespace, filePath: classification.sourceFilePath, enumName: enumName, cases: classification.cases, isFloatBacked: classification.isFloatBacked, visibility: classification.visibility, line: classification.line, column: classification.column)
+			let (isStringBacked, isCharBacked) = enumStringCharBacking(project, enumName: enumName)
+			if isStringBacked or isCharBacked 'stringCharFRV'
+				synthesizeEnumFromRawStringHelperImpl(project, module: module, namespace: synthNamespace, filePath: classification.sourceFilePath, enumName: enumName, cases: classification.cases, isCharBacked: isCharBacked, visibility: classification.visibility, line: classification.line, column: classification.column)
+			end 'stringCharFRV' else 'intFRV'
+				synthesizeEnumFromRawValueHelperImpl(project, module: module, namespace: synthNamespace, filePath: classification.sourceFilePath, enumName: enumName, cases: classification.cases, isFloatBacked: classification.isFloatBacked, visibility: classification.visibility, line: classification.line, column: classification.column)
+			end 'intFRV'
 		end 'synthFRV' else 'synthFN'
 			synthesizeEnumFromNameHelperImpl(project, module: module, namespace: synthNamespace, filePath: classification.sourceFilePath, enumName: enumName, cases: classification.cases, isFloatBacked: classification.isFloatBacked, visibility: classification.visibility, line: classification.line, column: classification.column)
 		end 'synthFN'
@@ -15062,8 +15924,8 @@ end 'dispatchEnumLookupValidation'
 // replace the call op in place with the natural-form callee so the
 // downstream unknown-callee diagnostic anchors at the call op's
 // original SourceRange.
-function maybeValidateOneEnumLookupCall(project Project, module MaxonModule, opIdx OpIndex, result ByteArray, callee ByteArray, callContext CallContext, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, range SourceRange, callerFilePath FilePath, rawValuePrefix String, rawValueSuffix String, fromNameSuffix String)
-	let naturalCallee = enumLookupNaturalCalleeOrEmpty(project, module: module, callee: callee, range: range, callerFilePath: callerFilePath, rawValuePrefix: rawValuePrefix, rawValueSuffix: rawValueSuffix, fromNameSuffix: fromNameSuffix)
+function maybeValidateOneEnumLookupCall(project Project, module MaxonModule, opIdx OpIndex, result ByteArray, callee ByteArray, callContext CallContext, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, range SourceRange, callerFilePath FilePath, callerFuncName String, rawValuePrefix String, rawValueSuffix String, fromNameSuffix String, litProducerMap LiteralOpIndexMap)
+	let naturalCallee = enumLookupNaturalCalleeOrEmpty(project, module: module, callee: callee, args: args, argRanges: argRanges, range: range, callerFilePath: callerFilePath, callerFuncName: callerFuncName, rawValuePrefix: rawValuePrefix, rawValueSuffix: rawValueSuffix, fromNameSuffix: fromNameSuffix, litProducerMap: litProducerMap)
 	if naturalCallee.isEmpty() 'leaveAlone'
 		return
 	end 'leaveAlone'
@@ -15075,8 +15937,8 @@ end 'maybeValidateOneEnumLookupCall'
 // across the natural-form restoration path so the downstream
 // `try ... otherwise` machinery still binds the error flag to the same
 // SSA name.
-function maybeValidateOneEnumLookupTryCall(project Project, module MaxonModule, opIdx OpIndex, result ByteArray, callee ByteArray, callContext CallContext, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, errorBoundName ByteArray, range SourceRange, callerFilePath FilePath, rawValuePrefix String, rawValueSuffix String, fromNameSuffix String)
-	let naturalCallee = enumLookupNaturalCalleeOrEmpty(project, module: module, callee: callee, range: range, callerFilePath: callerFilePath, rawValuePrefix: rawValuePrefix, rawValueSuffix: rawValueSuffix, fromNameSuffix: fromNameSuffix)
+function maybeValidateOneEnumLookupTryCall(project Project, module MaxonModule, opIdx OpIndex, result ByteArray, callee ByteArray, callContext CallContext, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, errorBoundName ByteArray, range SourceRange, callerFilePath FilePath, callerFuncName String, rawValuePrefix String, rawValueSuffix String, fromNameSuffix String, litProducerMap LiteralOpIndexMap)
+	let naturalCallee = enumLookupNaturalCalleeOrEmpty(project, module: module, callee: callee, args: args, argRanges: argRanges, range: range, callerFilePath: callerFilePath, callerFuncName: callerFuncName, rawValuePrefix: rawValuePrefix, rawValueSuffix: rawValueSuffix, fromNameSuffix: fromNameSuffix, litProducerMap: litProducerMap)
 	if naturalCallee.isEmpty() 'leaveAlone'
 		return
 	end 'leaveAlone'
@@ -15091,12 +15953,12 @@ end 'maybeValidateOneEnumLookupTryCall'
 // was synthesized / an E3034 diagnostic was emitted. The caller is the
 // only part that differs between the two op kinds (the `ops.set`
 // constructor), so everything up to that point lives here.
-function enumLookupNaturalCalleeOrEmpty(project Project, module MaxonModule, callee ByteArray, range SourceRange, callerFilePath FilePath, rawValuePrefix String, rawValueSuffix String, fromNameSuffix String) returns ByteArray
+function enumLookupNaturalCalleeOrEmpty(project Project, module MaxonModule, callee ByteArray, args ByteArrayArray, argRanges SourceRangeArray, range SourceRange, callerFilePath FilePath, callerFuncName String, rawValuePrefix String, rawValueSuffix String, fromNameSuffix String, litProducerMap LiteralOpIndexMap) returns ByteArray
 	let split = splitEnumLookupCallee(callee, rawValuePrefix: rawValuePrefix, rawValueSuffix: rawValueSuffix, fromNameSuffix: fromNameSuffix)
 	if not enumLookupVariantIsLookup(split.variant) 'skip'
 		return ByteArray.create()
 	end 'skip'
-	return dispatchEnumLookupValidation(project, module: module, variant: split.variant, enumName: split.enumName, range: range, callerFilePath: callerFilePath)
+	return dispatchEnumLookupValidation(project, module: module, variant: split.variant, enumName: split.enumName, args: args, argRanges: argRanges, range: range, callerFilePath: callerFilePath, callerFuncName: callerFuncName, litProducerMap: litProducerMap)
 end 'enumLookupNaturalCalleeOrEmpty'
 
 // G.2: slice the middle of a callee string — given the byte lengths of
@@ -15296,6 +16158,24 @@ function maxonTypeIsInt(t MaxonType) returns bool
 	end 'check'
 end 'maxonTypeIsInt'
 
+// Display name for a type's value-kind, matching the C# bootstrap's
+// `MaxonValueKind` enum-case spelling used in E2028 ternary diagnostics
+// ("true branch is 'Integer'", "got 'Bool'", etc.). Only the kinds that
+// can be determined at parse time are mapped; managed/string values render
+// as 'Struct' to mirror the bootstrap's `MaxonStruct => MaxonValueKind.Struct`
+// classification of a String literal. Returns "" for kinds that are not
+// resolvable at parse time (unresolved / type-parameter / generic / etc.),
+// signalling the caller to defer the arms-match check to TypeResolution.
+function ternaryArmKindName(t MaxonType) returns String
+	return match t 'kind'
+		boolean gives "Bool"
+		integer gives "Integer"
+		float gives "Float"
+		string gives "Struct"
+		named to opaquePointer gives ""
+	end 'kind'
+end 'ternaryArmKindName'
+
 // A named type is a "reference" (heap-allocated struct/enum/function) when
 // the project knows about it in the corresponding registry. For named types
 // that aren't yet registered (forward references across files), we
@@ -15452,20 +16332,37 @@ function tokenIsIdentifierLike(token Token) returns bool
 	return isLower or isUpper or isUnderscore
 end 'tokenIsIdentifierLike'
 
-// True iff `name`'s first byte is an ASCII capital letter — the syntactic
-// discriminator for "this could plausibly be a type / enum name". Used by
-// the parse-time `<TypeName>.fromRawValue` / `<TypeName>.fromName` rewrite
-// (G.2) to decide when to optimistically rewrite the callee to the per-enum
-// helper symbol. The post-parse `validateEnumLookupCalls` pass then
-// validates the rewrite against the fully-populated enum tables and either
-// keeps it, synthesizes the helper, emits an E3034 diagnostic, or reverts
-// the rewrite to the natural `T.method` form for a non-enum prefix.
+// True iff `name`'s base segment (the substring after the last `_`) begins
+// with an ASCII capital letter — the syntactic discriminator for "this could
+// plausibly be a type / enum name". Used by the parse-time
+// `<TypeName>.fromRawValue` / `<TypeName>.fromName` rewrite (G.2) to decide
+// when to optimistically rewrite the callee to the per-enum helper symbol.
+// The post-parse `validateEnumLookupCalls` pass then validates the rewrite
+// against the fully-populated enum tables and either keeps it, synthesizes
+// the helper, emits an E3034 diagnostic, or reverts the rewrite to the
+// natural `T.method` form for a non-enum prefix.
+//
+// Inspecting the base segment (rather than byte 0) lets underscore-prefixed
+// type names through — most importantly the spec-test batch rewriter's
+// `_b_<test>_<TypeName>` mangling, where the leading `_b_` would otherwise
+// mask the capitalized type name and leave `<mangled>.fromRawValue` an
+// unregistered callee that panics at codegen.
 function isCapitalizedIdent(name String) returns bool
 	let bytes = name.toByteArray()
 	if bytes.count() == 0 'empty'
 		return false
 	end 'empty'
-	let first = try bytes.get(0) otherwise return false
+	var baseStart = 0
+	for i in 0 upto bytes.count() 'scanUnderscore'
+		let b = try bytes.get(i) otherwise break
+		if b == '_' 'isUnderscore'
+			baseStart = i + 1
+		end 'isUnderscore'
+	end 'scanUnderscore'
+	if baseStart >= bytes.count() 'allUnderscores'
+		return false
+	end 'allUnderscores'
+	let first = try bytes.get(baseStart) otherwise return false
 	return first >= 'A' and first <= 'Z'
 end 'isCapitalizedIdent'
 

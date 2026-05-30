@@ -3717,10 +3717,15 @@ function emitX64Win32Open(code ByteArray, relocations RelocationArray, callFixup
 	helperEmitJmp(code, state: state, targetBlock: 6)
 
 	helperMarkBlock(state, code: code, blockId: 5)
-	// CreateFileW(path, GENERIC_WRITE=0x40000000, 0, NULL, CREATE_ALWAYS=2, FILE_ATTRIBUTE_NORMAL=0x80, NULL).
+	// CreateFileW(path, GENERIC_WRITE=0x40000000, FILE_SHARE_READ|FILE_SHARE_WRITE=3, NULL, CREATE_ALWAYS=2, FILE_ATTRIBUTE_NORMAL=0x80, NULL).
+	// dwShareMode must allow concurrent readers: an editor (e.g. VS Code) holding
+	// the target file open keeps a read handle on it, and dwShareMode=0 would make
+	// CreateFileW fail with ERROR_SHARING_VIOLATION whenever such a handle exists.
+	// Sharing read+write matches the read path's FILE_SHARE_READ and lets the
+	// overwrite succeed regardless of an open editor.
 	helperLeaStackSlot(code, slotIndex: 267, dest: X64Register.rcx)
 	helperMovRegImm(code, dest: X64Register.rdx, value: 0x40000000)
-	helperMovRegImm(code, dest: X64Register.r8, value: 0)
+	helperMovRegImm(code, dest: X64Register.r8, value: 3)
 	helperMovRegImm(code, dest: X64Register.r9, value: 0)
 	helperMovRegImm(code, dest: X64Register.rax, value: 2)
 	emitMovRspOffsetReg(code, offset: 32, srcReg: X64Register.rax)

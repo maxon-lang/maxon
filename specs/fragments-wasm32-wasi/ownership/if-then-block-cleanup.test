@@ -1,0 +1,76 @@
+// Test: if-then-block-cleanup
+typealias Integer = int(i64.min to i64.max)
+
+type Widget
+	export var id as Integer
+
+	static function create(id Integer) returns Self
+		return Self{id: id}
+	end 'create'
+end 'Widget'
+
+function main() returns ExitCode
+	var result = 0
+	if true 'check'
+		@heap let w = Widget.create(5)
+		result = w.id
+	end 'check'
+	print("{result}\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+5
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    mir.br check_0()
+  check_0:
+    %2 = mir.mov_imm 5 : i64
+    %34 = mir.mov_imm 8 : i64
+    %35 = mir.call @mrt_alloc(%34)
+    mir.store %2, %35, 0 width: qword
+    %5 = mir.load %35, 0 width: qword
+    mir.br check_0.after(%5)
+  check_0.after:
+    %7 = mir.global_addr @__istr_0
+    %9 = mir.mov_imm 21 : i64
+    %10 = mir.call @mrt_alloc(%9)
+    %11 = mir.call @mrt_i64_to_string(%33, %10)
+    %12 = mir.global_addr @__istr_1
+    %13 = mir.mov_imm 1 : i64
+    %16 = mir.add.i64 %0, %11
+    %17 = mir.add.i64 %16, %13
+    %18 = mir.mov_imm 1 : i64
+    %19 = mir.add.i64 %17, %18
+    %20 = mir.call @mrt_alloc(%19)
+    mir.memcpy %20, %7, %0
+    %21 = mir.add.i64 %20, %0
+    mir.memcpy %21, %10, %11
+    %22 = mir.add.i64 %21, %11
+    mir.memcpy %22, %12, %13
+    %24 = mir.mov_imm 40 : i64
+    %25 = mir.call @mrt_alloc(%24)
+    mir.store %20, %25, 0 width: qword
+    mir.store %17, %25, 8 width: qword
+    mir.store %17, %25, 16 width: qword
+    %26 = mir.mov_imm 1 : i64
+    mir.store %26, %25, 24 width: qword
+    mir.store %0, %25, 32 width: qword
+    %28 = mir.mov_imm 16 : i64
+    %29 = mir.call @mrt_alloc(%28)
+    mir.store %25, %29, 0 width: qword
+    mir.store %0, %29, 8 width: qword
+    %36 = mir.load %29, 0 width: qword
+    %37 = mir.load %36, 0 width: qword
+    %38 = mir.load %36, 8 width: qword
+    %39 = mir.call @mrt_write_stdout(%37, %38)
+    mir.ret %0
+  }
+}
+---

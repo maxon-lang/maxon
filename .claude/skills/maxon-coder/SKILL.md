@@ -18,7 +18,7 @@ After writing or modifying Maxon code, verify it compiles and passes tests. Pref
 - Spec tests: `mcp__maxon-dev__run_self_hosted_test`.
 
 **Quick experiments / verification:**
-- Run a snippet or file end-to-end: `mcp__maxon-dev__run_program`.
+- Run a snippet or file end-to-end: `mcp__maxon-dev__run_program` (pass `compiler: "csharp"` or `"selfhosted"` — it is required).
 - Inspect lowered IR: `mcp__maxon-dev__dump_ir` (set `dumpStages: true` for per-stage artifacts).
 - Format Maxon source: `mcp__maxon-dev__fmt`.
 - Look up a 4-digit error code: `mcp__maxon-dev__lookup_error_code`.

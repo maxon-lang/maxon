@@ -2021,7 +2021,7 @@ type X64FunctionLowering
 		end 'pickOs'
 	end 'lowerOsOpenWrite'
 
-	// Windows: CreateFileA(lpFileName, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL)
+	// Windows: CreateFileA(lpFileName, GENERIC_WRITE, FILE_SHARE_READ|FILE_SHARE_WRITE, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL)
 	// Returns the HANDLE in the result virtual register.
 	function lowerOsOpenWriteWindows(resultId ValueId, pathPtrId ValueId, pathLenId ValueId, dstBlock IrBlock)
 		let pathPtrSlot = ensureValueInSlot(pathPtrId, dstBlock: dstBlock)
@@ -2029,7 +2029,11 @@ type X64FunctionLowering
 		let cStrAddrSlot = copyWithNullTerminator(pathPtrSlot, srcLenSlot: pathLenSlot, dstBlock: dstBlock)
 
 		let accessSlot = materializeConstSlot(0x40000000, dstBlock: dstBlock)
-		let shareSlot = materializeConstSlot(0, dstBlock: dstBlock)
+		// dwShareMode = FILE_SHARE_READ|FILE_SHARE_WRITE (3): an editor (e.g. VS
+		// Code) holding the target file open keeps a read handle on it, and
+		// dwShareMode=0 would make CreateFileA fail with ERROR_SHARING_VIOLATION
+		// whenever such a handle exists.
+		let shareSlot = materializeConstSlot(3, dstBlock: dstBlock)
 		let securitySlot = materializeConstSlot(0, dstBlock: dstBlock)
 		let creationSlot = materializeConstSlot(2, dstBlock: dstBlock)
 		let attrSlot = materializeConstSlot(0x80, dstBlock: dstBlock)

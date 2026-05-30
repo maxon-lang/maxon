@@ -216,9 +216,15 @@ function recordRead(scope UseScope, readerFilePath FilePath) returns UseScope
 	updated.sawOutsideFile = true
 	let readerDir = try readerFilePath.parent() otherwise return updated
 	let readerDirStr = readerDir.toString()
-	if readerDirStr == updated.declDirStr 'sameDir'
-		return updated
-	end 'sameDir'
+	// E3093 ("could be `module`") fires only when every cross-file read is
+	// genuinely *nested below* the declaring file's directory — the shape the
+	// `unused-export` spec exercises (`api/lib.maxon` read only within `api/`).
+	// A same-directory sibling read does NOT keep the symbol module-downgradable
+	// in a meaningful way: a flat multi-file program at one directory level
+	// would still need the symbol visible to its siblings, and `module` vs
+	// `export` are indistinguishable there. Treat a same-directory reader as
+	// "outside the module subtree" so E3093 doesn't misfire on flat two-file
+	// programs (e.g. `constants/export`'s sibling `defs.maxon` + `main.maxon`).
 	let prefix = "{updated.declDirStr}{FilePath.separator()}"
 	if readerDirStr.startsWith(prefix) 'inSubtree'
 		return updated
@@ -780,6 +786,16 @@ export function runCheckUnusedExports(project Project, module MaxonModule)
 	if projectHasStructuralErrors(project) 'gated'
 		return
 	end 'gated'
+	// E3092/E3093/E3094 are purely cross-file lints: they ask whether an
+	// `export`/`module` decl is read from another file. In a single-file
+	// compilation no decl can have out-of-file readers by construction, so
+	// every `export` would be flagged as "unused" — pure noise. A one-file
+	// program legitimately exports types/functions as its public surface
+	// (and the C# bootstrap has no such lint at all), so skip the audit
+	// unless the project actually spans multiple files.
+	if project.db.sourcePaths.count() < 2 'singleFile'
+		return
+	end 'singleFile'
 	var scopes = UseScopeMap.create()
 	seedDecls(project, scopes: scopes)
 	recordRefsFromModule(project, module: module, scopes: scopes)

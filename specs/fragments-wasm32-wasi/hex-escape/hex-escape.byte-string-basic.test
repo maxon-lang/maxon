@@ -1,0 +1,129 @@
+// Test: hex-escape.byte-string-basic
+function main() returns ExitCode
+		let bytes = b"\x41\x42"
+		let a = try bytes.get(0) otherwise 0
+		let b = try bytes.get(1) otherwise 0
+		print("{a} {b}")
+		return bytes.count()
+end 'main'
+---
+ExitCode: 2
+Stdout: ```
+65 66
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.global_addr @__istr_0
+    %1 = mir.mov_imm 40 : i64
+    %2 = mir.call @mrt_alloc(%1)
+    mir.store %0, %2, 0 width: qword
+    %3 = mir.mov_imm 2 : i64
+    mir.store %3, %2, 8 width: qword
+    %4 = mir.mov_imm -2 : i64
+    mir.store %4, %2, 16 width: qword
+    %5 = mir.mov_imm 1 : i64
+    mir.store %5, %2, 24 width: qword
+    %6 = mir.mov_imm 0 : i64
+    mir.store %6, %2, 32 width: qword
+    %7 = mir.mov_imm 8 : i64
+    %8 = mir.call @mrt_alloc(%7)
+    mir.store %2, %8, 0 width: qword
+    mir.br inlined_Array.get_0()
+  inlined_Array.get_0:
+    %70 = mir.load %8, 0 width: qword
+    %71, %72 = mir.try_call @stdlib.__managed_mem_get(%70, %6)
+    %73 = mir.mov_imm 0 : i64
+    %74 = mir.cmp ne, %72, %73
+    mir.cond_br %74 [then: inlined_Array.get_1(), else: inlined_Array.get_2()]
+  inlined_Array.get_1:
+    %75 = mir.mov_imm 0 : i64
+    %76 = mir.mov_imm 1 : i64
+    mir.br inline_cont_main_0(%75, %76)
+  inlined_Array.get_2:
+    %77 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%71, %77)
+  inline_cont_main_0:
+    %15 = mir.cmp ne, %79, %6
+    mir.cond_br %15 [then: try_0.merge(%6), else: try_0.ok()]
+  try_0.ok:
+    mir.br try_0.merge(%78)
+  try_0.merge:
+    %20 = mir.mov_imm 1 : i64
+    mir.br inlined_Array.get_0()
+  inlined_Array.get_0:
+    %80 = mir.load %8, 0 width: qword
+    %81, %82 = mir.try_call @stdlib.__managed_mem_get(%80, %20)
+    %83 = mir.mov_imm 0 : i64
+    %84 = mir.cmp ne, %82, %83
+    mir.cond_br %84 [then: inlined_Array.get_1(), else: inlined_Array.get_2()]
+  inlined_Array.get_1:
+    %85 = mir.mov_imm 0 : i64
+    %86 = mir.mov_imm 1 : i64
+    mir.br inline_cont_main_1(%85, %86)
+  inlined_Array.get_2:
+    %87 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_1(%81, %87)
+  inline_cont_main_1:
+    %25 = mir.cmp ne, %89, %6
+    mir.cond_br %25 [then: try_1.merge(%6), else: try_1.ok()]
+  try_1.ok:
+    mir.br try_1.merge(%88)
+  try_1.merge:
+    %31 = mir.global_addr @__istr_1
+    %33 = mir.mov_imm 21 : i64
+    %34 = mir.call @mrt_alloc(%33)
+    %35 = mir.call @mrt_i64_to_string(%68, %34)
+    %36 = mir.global_addr @__istr_2
+    %37 = mir.mov_imm 1 : i64
+    %38 = mir.mov_imm 21 : i64
+    %39 = mir.call @mrt_alloc(%38)
+    %40 = mir.call @mrt_i64_to_string(%69, %39)
+    %41 = mir.global_addr @__istr_1
+    %45 = mir.add.i64 %6, %35
+    %46 = mir.add.i64 %45, %37
+    %47 = mir.add.i64 %46, %40
+    %48 = mir.add.i64 %47, %6
+    %49 = mir.mov_imm 1 : i64
+    %50 = mir.add.i64 %48, %49
+    %51 = mir.call @mrt_alloc(%50)
+    mir.memcpy %51, %31, %6
+    %52 = mir.add.i64 %51, %6
+    mir.memcpy %52, %34, %35
+    %53 = mir.add.i64 %52, %35
+    mir.memcpy %53, %36, %37
+    %54 = mir.add.i64 %53, %37
+    mir.memcpy %54, %39, %40
+    %55 = mir.add.i64 %54, %40
+    mir.memcpy %55, %41, %6
+    %57 = mir.mov_imm 40 : i64
+    %58 = mir.call @mrt_alloc(%57)
+    mir.store %51, %58, 0 width: qword
+    mir.store %48, %58, 8 width: qword
+    mir.store %48, %58, 16 width: qword
+    %59 = mir.mov_imm 1 : i64
+    mir.store %59, %58, 24 width: qword
+    mir.store %6, %58, 32 width: qword
+    %61 = mir.mov_imm 16 : i64
+    %62 = mir.call @mrt_alloc(%61)
+    mir.store %58, %62, 0 width: qword
+    mir.store %6, %62, 8 width: qword
+    %90 = mir.load %62, 0 width: qword
+    %91 = mir.load %90, 0 width: qword
+    %92 = mir.load %90, 8 width: qword
+    %93 = mir.call @mrt_write_stdout(%91, %92)
+    %66 = mir.global_addr @__layout_Array_Int
+    %67 = mir.call @Array.count(%8, %66)
+    %94 = mir.mov_imm 125 : i64
+    %95 = mir.cmp ugt, %67, %94
+    mir.cond_br %95 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %96 = mir.global_addr @__panic_msg_285bc91a18a67f84
+    %97 = mir.call @mrt_panic(%96)
+  __range_ok_0:
+    mir.ret %67
+  }
+}
+---

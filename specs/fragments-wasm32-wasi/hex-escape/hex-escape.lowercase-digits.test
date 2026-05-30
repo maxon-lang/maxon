@@ -1,0 +1,87 @@
+// Test: hex-escape.lowercase-digits
+function main() returns ExitCode
+		let bytes = b"\x0a"
+		let v = try bytes.get(0) otherwise 0
+		print("{v}")
+		return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+10
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.global_addr @__istr_0
+    %1 = mir.mov_imm 40 : i64
+    %2 = mir.call @mrt_alloc(%1)
+    mir.store %0, %2, 0 width: qword
+    %3 = mir.mov_imm 1 : i64
+    mir.store %3, %2, 8 width: qword
+    %4 = mir.mov_imm -2 : i64
+    mir.store %4, %2, 16 width: qword
+    %5 = mir.mov_imm 1 : i64
+    mir.store %5, %2, 24 width: qword
+    %6 = mir.mov_imm 0 : i64
+    mir.store %6, %2, 32 width: qword
+    %7 = mir.mov_imm 8 : i64
+    %8 = mir.call @mrt_alloc(%7)
+    mir.store %2, %8, 0 width: qword
+    mir.br inlined_Array.get_0()
+  inlined_Array.get_0:
+    %47 = mir.load %8, 0 width: qword
+    %48, %49 = mir.try_call @stdlib.__managed_mem_get(%47, %6)
+    %50 = mir.mov_imm 0 : i64
+    %51 = mir.cmp ne, %49, %50
+    mir.cond_br %51 [then: inlined_Array.get_1(), else: inlined_Array.get_2()]
+  inlined_Array.get_1:
+    %52 = mir.mov_imm 0 : i64
+    %53 = mir.mov_imm 1 : i64
+    mir.br inline_cont_main_0(%52, %53)
+  inlined_Array.get_2:
+    %54 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%48, %54)
+  inline_cont_main_0:
+    %15 = mir.cmp ne, %56, %6
+    mir.cond_br %15 [then: try_0.merge(%6), else: try_0.ok()]
+  try_0.ok:
+    mir.br try_0.merge(%55)
+  try_0.merge:
+    %20 = mir.global_addr @__istr_1
+    %22 = mir.mov_imm 21 : i64
+    %23 = mir.call @mrt_alloc(%22)
+    %24 = mir.call @mrt_i64_to_string(%46, %23)
+    %25 = mir.global_addr @__istr_1
+    %29 = mir.add.i64 %6, %24
+    %30 = mir.add.i64 %29, %6
+    %31 = mir.mov_imm 1 : i64
+    %32 = mir.add.i64 %30, %31
+    %33 = mir.call @mrt_alloc(%32)
+    mir.memcpy %33, %20, %6
+    %34 = mir.add.i64 %33, %6
+    mir.memcpy %34, %23, %24
+    %35 = mir.add.i64 %34, %24
+    mir.memcpy %35, %25, %6
+    %37 = mir.mov_imm 40 : i64
+    %38 = mir.call @mrt_alloc(%37)
+    mir.store %33, %38, 0 width: qword
+    mir.store %30, %38, 8 width: qword
+    mir.store %30, %38, 16 width: qword
+    %39 = mir.mov_imm 1 : i64
+    mir.store %39, %38, 24 width: qword
+    mir.store %6, %38, 32 width: qword
+    %41 = mir.mov_imm 16 : i64
+    %42 = mir.call @mrt_alloc(%41)
+    mir.store %38, %42, 0 width: qword
+    mir.store %6, %42, 8 width: qword
+    %57 = mir.load %42, 0 width: qword
+    %58 = mir.load %57, 0 width: qword
+    %59 = mir.load %57, 8 width: qword
+    %60 = mir.call @mrt_write_stdout(%58, %59)
+    mir.ret %6
+  }
+}
+---

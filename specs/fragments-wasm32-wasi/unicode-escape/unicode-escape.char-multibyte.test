@@ -1,0 +1,66 @@
+// Test: unicode-escape.char-multibyte
+function main() returns ExitCode
+	let sigma = '\u03A3'
+	print("{sigma}")
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+Σ
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.global_addr @__istr_0
+    %1 = mir.mov_imm 40 : i64
+    %2 = mir.call @mrt_alloc(%1)
+    mir.store %0, %2, 0 width: qword
+    %3 = mir.mov_imm 2 : i64
+    mir.store %3, %2, 8 width: qword
+    %4 = mir.mov_imm -2 : i64
+    mir.store %4, %2, 16 width: qword
+    %5 = mir.mov_imm 1 : i64
+    mir.store %5, %2, 24 width: qword
+    %6 = mir.mov_imm 0 : i64
+    mir.store %6, %2, 32 width: qword
+    %7 = mir.mov_imm 8 : i64
+    %8 = mir.call @mrt_alloc(%7)
+    mir.store %2, %8, 0 width: qword
+    %10 = mir.global_addr @__istr_1
+    %12 = mir.load %8, 0 width: qword
+    %13 = mir.load %12, 0 width: qword
+    %14 = mir.load %12, 8 width: qword
+    %15 = mir.global_addr @__istr_1
+    %19 = mir.add.i64 %6, %14
+    %20 = mir.add.i64 %19, %6
+    %21 = mir.mov_imm 1 : i64
+    %22 = mir.add.i64 %20, %21
+    %23 = mir.call @mrt_alloc(%22)
+    mir.memcpy %23, %10, %6
+    %24 = mir.add.i64 %23, %6
+    mir.memcpy %24, %13, %14
+    %25 = mir.add.i64 %24, %14
+    mir.memcpy %25, %15, %6
+    %27 = mir.mov_imm 40 : i64
+    %28 = mir.call @mrt_alloc(%27)
+    mir.store %23, %28, 0 width: qword
+    mir.store %20, %28, 8 width: qword
+    mir.store %20, %28, 16 width: qword
+    %29 = mir.mov_imm 1 : i64
+    mir.store %29, %28, 24 width: qword
+    mir.store %6, %28, 32 width: qword
+    %31 = mir.mov_imm 16 : i64
+    %32 = mir.call @mrt_alloc(%31)
+    mir.store %28, %32, 0 width: qword
+    mir.store %6, %32, 8 width: qword
+    %35 = mir.load %32, 0 width: qword
+    %36 = mir.load %35, 0 width: qword
+    %37 = mir.load %35, 8 width: qword
+    %38 = mir.call @mrt_write_stdout(%36, %37)
+    mir.ret %6
+  }
+}
+---

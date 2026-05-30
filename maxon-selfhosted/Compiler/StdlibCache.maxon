@@ -187,7 +187,13 @@ let CACHE_MAGIC_3 = 0x00  // '\0'
 // producer varLoad, or emits a diagnostic. Cache contents structurally
 // unchanged; bump invalidates older caches that may have stored an
 // indirectCall with the previous (eager) parse-time fnTypeId.
-let CACHE_FORMAT_VERSION = 67
+// v68: precomputed per-function Std-DFE edge table (`stdFuncEdges`). The
+// cache build extracts each cached function's call edges + witness/layout
+// label demands once (a pure function of the body), so the load-time
+// Std-DFE consults a flat table instead of re-walking the cached Std-IR
+// snapshot to re-derive reachability. New trailing blob; bump invalidates
+// older caches that lack the table.
+let CACHE_FORMAT_VERSION = 68
 
 // ============================================================
 // Types
@@ -236,6 +242,39 @@ export type ObjectFunction
 end 'ObjectFunction'
 
 export typealias ObjectFunctionArray = Array with ObjectFunction
+
+// Precomputed Std-DFE reachability edges for one cached stdlib function.
+// On a cache-hit compile the stdlib bodies are served from the cache and
+// dropped from the user Std module before Std-DFE runs, so Std-DFE can't
+// see the call edges / witness-layout demands inside them by walking IR.
+// The set of edges each function contributes is a pure function of its body
+// (it does not depend on the user program), so the cache build computes it
+// once (via `extractFuncEdges`) and serializes it here; Std-DFE consults
+// this flat table at load time instead of re-walking the cached Std-IR
+// snapshot. The three lists mirror the two promotion paths in Std-DFE's
+// `promoteLabelsFromSystemOp`:
+//   - `callees`            — names pushed by `markFromStdCallOp` (direct
+//                            call / tryCall / tailCall callee, funcRef name).
+//   - `conditionalRootLabels` — `loadWitnessTable` / `loadLayoutDescriptor`
+//                            labels, which pin the label AND promote every
+//                            `witnessConditionalRoots[label]` impl.
+//   - `plainLabels`        — `globalAddr` names, which only pin the label.
+export type CachedFuncEdges
+	export var callees as StringArray
+	export var conditionalRootLabels as StringArray
+	export var plainLabels as StringArray
+
+	export static function create() returns CachedFuncEdges
+		return Self{
+			callees: StringArray.create(),
+			conditionalRootLabels: StringArray.create(),
+			plainLabels: StringArray.create()
+		}
+	end 'create'
+end 'CachedFuncEdges'
+
+// Name → precomputed Std-DFE edge record for every cached stdlib function.
+export typealias CachedFuncEdgeMap = Map with (String, CachedFuncEdges)
 
 // Discovery cache for the BuiltinArrayLiteral protocol. The `none` arm
 // records "no implementing type was observed in this stdlib build" without
@@ -386,6 +425,11 @@ export type StdlibCacheData
 	// dropped after inlining so the linker-side stdlib cache stays the
 	// sole source of stdlib machine code.
 	export var inlinerStdModule as StdModule
+	// Precomputed Std-DFE reachability edges, one record per function in
+	// `inlinerStdModule`. Extracted once at cache-build time (so the
+	// load-time Std-DFE consults this flat table instead of re-walking the
+	// cached Std-IR snapshot to re-derive reachability). See `CachedFuncEdges`.
+	export var stdFuncEdges as CachedFuncEdgeMap
 	// In-memory only. Maps each writer-side `GenericInstanceId` (the raw
 	// qword serialized in `layoutDescriptors`/`witnessTables` payloads) to
 	// the equivalent destination-`project.genericInstances` id assigned
@@ -434,6 +478,7 @@ export type StdlibCacheData
 			unresolvedExtensions: UnresolvedExtensionArray.create(),
 			extensionMethodWhereClauses: WhereClauseMapByName.create(),
 			inlinerStdModule: StdModule.create(),
+			stdFuncEdges: CachedFuncEdgeMap.create(),
 			writerGidToProjectGid: GenericInstanceIdArray.create()
 		}
 	end 'create'
@@ -946,6 +991,10 @@ function encodeStdlibCacheBody(project Project, buf ByteArray, data StdlibCacheD
 	// expensive StdModule decode happens last.
 	try writeUnresolvedExtensionArray(buf, arr: data.unresolvedExtensions)
 	try writeWhereClauseMapByName(buf, m: data.extensionMethodWhereClauses)
+	// Cache v68: precomputed Std-DFE edge table. A flat string map (cheap to
+	// decode), written before the StdModule blob so the expensive StdModule
+	// decode still happens last and the decoder's pos chain stays linear.
+	try writeStdFuncEdgeMap(buf, m: data.stdFuncEdges)
 	// Cache v10: the stdlib's post-dce StdModule snapshot for cross-
 	// module inlining at user pipeline time.
 	try writeStdModule(buf, module: data.inlinerStdModule)
@@ -1539,6 +1588,11 @@ function decodeStdlibCache(project Project, buf ByteArray, target Target, expect
 	let (emwc, pEmwc) = try readWhereClauseMapByName(buf, offset: pos)
 	pos = pEmwc
 	data.extensionMethodWhereClauses = emwc
+	// Cache v68: read the precomputed Std-DFE edge table before the
+	// StdModule blob — mirrors the encode order above.
+	let (sfe, pSfe) = try readStdFuncEdgeMap(buf, offset: pos)
+	pos = pSfe
+	data.stdFuncEdges = sfe
 	// Cache v10: read the stdlib's post-dce StdModule for the user
 	// pipeline's inliner pass.
 	let (inlinerMod, pIm2) = try readStdModule(buf, offset: pos)
@@ -3170,6 +3224,44 @@ function readInitToStoredVarsMap(buf ByteArray, offset ByteOffset) returns (Init
 	end 'eachInit'
 	return (m, pos)
 end 'readInitToStoredVarsMap'
+
+// --- CachedFuncEdgeMap (v68) ---
+//
+// Same `name -> lists-of-strings` shape as `writeInitToStoredVarsMap`, but
+// each entry carries three string lists (callees / conditionalRootLabels /
+// plainLabels). Per entry: name, then each list as (count + strings).
+
+function writeStdFuncEdgeMap(buf ByteArray, m CachedFuncEdgeMap) throws CacheCorruption
+	writeDword(buf, value: m.count())
+	for (funcName, edges) in m 'eachFunc'
+		try writeString(buf, s: funcName)
+		try writeStringArray(buf, arr: edges.callees)
+		try writeStringArray(buf, arr: edges.conditionalRootLabels)
+		try writeStringArray(buf, arr: edges.plainLabels)
+	end 'eachFunc'
+end 'writeStdFuncEdgeMap'
+
+function readStdFuncEdgeMap(buf ByteArray, offset ByteOffset) returns (CachedFuncEdgeMap, ByteOffset) throws CacheCorruption
+	let count = readDword(buf, offset: offset)
+	var pos = offset + 4
+	var m = CachedFuncEdgeMap.create()
+	for _ in 0 upto count 'eachFunc'
+		let (funcName, p1) = try readString(buf, offset: pos)
+		pos = p1
+		let (callees, p2) = try readStringArray(buf, offset: pos)
+		pos = p2
+		let (conditionalRootLabels, p3) = try readStringArray(buf, offset: pos)
+		pos = p3
+		let (plainLabels, p4) = try readStringArray(buf, offset: pos)
+		pos = p4
+		var edges = CachedFuncEdges.create()
+		edges.callees = callees
+		edges.conditionalRootLabels = conditionalRootLabels
+		edges.plainLabels = plainLabels
+		try m.insert(funcName, value: edges) otherwise ignore
+	end 'eachFunc'
+	return (m, pos)
+end 'readStdFuncEdgeMap'
 
 // --- StaticRdataValueMap ---
 

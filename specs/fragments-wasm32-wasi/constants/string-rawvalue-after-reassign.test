@@ -1,0 +1,52 @@
+// Test: string-rawvalue-after-reassign
+enum Planet
+	earth = "Earth"
+	mars = "Mars"
+end 'Planet'
+
+function main() returns ExitCode
+	var p = Planet.earth
+	p = Planet.mars
+	let name = p.rawValue
+	if name == "Mars" 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %1 = mir.mov_imm 1 : i64
+    %3 = mir.call @__enum_Planet_rawString(%1)
+    %5 = mir.global_addr @__istr_0
+    %6 = mir.mov_imm 40 : i64
+    %7 = mir.call @mrt_alloc(%6)
+    mir.store %5, %7, 0 width: qword
+    %8 = mir.mov_imm 4 : i64
+    mir.store %8, %7, 8 width: qword
+    %9 = mir.mov_imm -2 : i64
+    mir.store %9, %7, 16 width: qword
+    %10 = mir.mov_imm 1 : i64
+    mir.store %10, %7, 24 width: qword
+    %11 = mir.mov_imm 0 : i64
+    mir.store %11, %7, 32 width: qword
+    %12 = mir.mov_imm 16 : i64
+    %13 = mir.call @mrt_alloc(%12)
+    mir.store %7, %13, 0 width: qword
+    %14 = mir.mov_imm 1 : i64
+    mir.store %14, %13, 8 width: qword
+    %15 = mir.call @String.equals(%3, %13)
+    mir.cond_br %15 [then: check_0(), else: check_0.after()]
+  check_0:
+    %16 = mir.mov_imm 1 : i64
+    mir.ret %16
+  check_0.after:
+    %17 = mir.mov_imm 0 : i64
+    mir.ret %17
+  }
+}
+---

@@ -129,7 +129,17 @@ function addCalleesFromOpIndex(project Project, module MaxonModule, opIdx OpInde
 		// narrow for DFE). The multi-value-return ABI carries the flag in
 		// RDX/X1 with no runtime-helper drain.
 		tryMethodCall(_, _, methodName, _, _, _, _, _, _) then markEveryMethodNamed(project, methodName: String.from(methodName), worklist: worklist, seen: seen)
-		literal to refEq then return
+		// A read of a lazy static struct-literal field demands its
+		// `<name>.__lazy_init` function: lowering injects a call to it
+		// ahead of every globalLoad, but that call is synthesized after DFE
+		// runs, so the call edge isn't visible here. Root the init from the
+		// read site instead — liveness flows from the read just as the
+		// injected call will. Detected by the init function's existence in
+		// `funcSignatures` (registered at parse time). Unread fields leave
+		// no globalLoad, so the init stays correctly dead.
+		globalLoad(_, name, _, _) then markLazyStaticInit(project, fieldName: name, worklist: worklist, seen: seen)
+		literal to varStore then return
+		globalStore to refEq then return
 		condBr to br then return
 		ret then return
 		panic then return
@@ -186,6 +196,17 @@ function markCalleeFromCall(project Project, callee ByteArray, callContext CallC
 	end 'isOverloaded'
 	markCallee(qualified, worklist: worklist, seen: seen)
 end 'markCalleeFromCall'
+
+// Root a lazy static field's `<fieldName>.__lazy_init` when one exists. The
+// init's signature is registered at parse time (parseLazyStaticStructDecl), so
+// its presence in `funcSignatures` distinguishes a lazy static field read from
+// an ordinary top-level var read. Non-lazy globalLoads no-op here.
+function markLazyStaticInit(project Project, fieldName String, worklist StringArray, seen StringSet)
+	let initName = "{fieldName}.__lazy_init"
+	if project.funcSignatures.contains(initName) 'isLazy'
+		markCallee(initName, worklist: worklist, seen: seen)
+	end 'isLazy'
+end 'markLazyStaticInit'
 
 function markCallee(callee String, worklist StringArray, seen StringSet)
 	if callee.isEmpty() 'noName'

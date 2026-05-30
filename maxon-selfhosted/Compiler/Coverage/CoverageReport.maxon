@@ -430,32 +430,6 @@ function loadSourceText(filePath String) returns String
 	return try File.readText(fp) otherwise "(source not available)\n"
 end 'loadSourceText'
 
-// Byte-lexicographic "a <= b" for path strings. String doesn't implement
-// Comparable, but we only need a deterministic tie-breaker for the index
-// page's sort order, so a raw byte compare is fine — file paths are ASCII
-// or close enough that lexicographic collation matches what users expect.
-function stringLessOrEqual(a String, b String) returns bool
-	let aLen = a.byteLength()
-	let bLen = b.byteLength()
-	var minLen = aLen
-	if bLen < aLen 'useB'
-		minLen = bLen
-	end 'useB'
-	var i = 0
-	while i < minLen 'scan'
-		let ab = try a.managed.byteAt(i) otherwise panic("stringLessOrEqual: index out of range")
-		let bb = try b.managed.byteAt(i) otherwise panic("stringLessOrEqual: index out of range")
-		if ab < bb 'less'
-			return true
-		end 'less'
-		if ab > bb 'greater'
-			return false
-		end 'greater'
-		i = i + 1
-	end 'scan'
-	return aLen <= bLen
-end 'stringLessOrEqual'
-
 // Sort index rows by file path so reports are deterministic across runs.
 // Coverage reports cover maybe a few dozen files in practice, so the
 // O(n^2) insertion sort is well within budget and keeps us allocation-free.
@@ -478,7 +452,8 @@ function sortCoverageRows(src FileCoverageRowArray) returns FileCoverageRowArray
 			let bHit = b.hitLines
 			let bTot = b.totalLines
 			let bHtml = b.htmlName
-			if stringLessOrEqual(aPath, b: bPath) 'done'
+			// `not (bPath < aPath)` == `aPath <= bPath`: already in order, stop.
+			if not stringLexLess(bPath, b: aPath) 'done'
 				break
 			end 'done'
 			try result.set(j - 1, value: FileCoverageRow.create(bPath, hitLines: bHit, totalLines: bTot, htmlName: bHtml)) otherwise panic("invariant: result.set OOB")

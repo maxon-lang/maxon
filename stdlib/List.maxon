@@ -86,13 +86,20 @@ export type List uses Element implements InitableFromArrayLiteral with Element, 
 	end 'append'
 
 	/// Insert an element at the given index. O(n).
+	/// Valid range is `[0, count]` — `count` appends at the end. An index
+	/// past `count` is out of bounds and throws `ArrayError.indexOutOfBounds`
+	/// rather than silently clamping to the tail.
 	export function insert(at NodeIndex, value Element) throws ArrayError
+		if at > chain.count() 'oob'
+			throw ArrayError.indexOutOfBounds
+		end 'oob'
+
 		if at == 0 'front'
 			chain.insertFirst(value)
 			return
 		end 'front'
 
-		if at >= chain.count() 'back'
+		if at == chain.count() 'back'
 			chain.insertLast(value)
 			return
 		end 'back'

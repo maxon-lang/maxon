@@ -1,0 +1,95 @@
+// Test: no-leak-returned-managed-list
+typealias Integer = int(i64.min to i64.max)
+
+type Item
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Item'
+
+typealias ItemManagedList = __ManagedList with Item
+
+function buildManagedList() returns ItemManagedList
+	var managedList = ItemManagedList.create()
+	managedList.insertLast(Item.create(10))
+	managedList.insertLast(Item.create(20))
+	managedList.insertLast(Item.create(30))
+	return managedList
+end 'buildManagedList'
+
+function main() returns ExitCode
+	let managedList = buildManagedList()
+	print("{managedList.count()}\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+3
+```
+---
+// CompiledIR
+module {
+  func @buildManagedList() -> i64 {
+  entry:
+    %0 = mir.call @mrt_managed_list_create()
+    %2 = mir.mov_imm 10 : i64
+    %13 = mir.mov_imm 8 : i64
+    %14 = mir.call @mrt_alloc(%13)
+    mir.store %2, %14, 0 width: qword
+    %4 = mir.call @mrt_managed_list_insert_last_value(%0, %14)
+    %6 = mir.mov_imm 20 : i64
+    %15 = mir.mov_imm 8 : i64
+    %16 = mir.call @mrt_alloc(%15)
+    mir.store %6, %16, 0 width: qword
+    %8 = mir.call @mrt_managed_list_insert_last_value(%0, %16)
+    %10 = mir.mov_imm 30 : i64
+    %17 = mir.mov_imm 8 : i64
+    %18 = mir.call @mrt_alloc(%17)
+    mir.store %10, %18, 0 width: qword
+    %12 = mir.call @mrt_managed_list_insert_last_value(%0, %18)
+    mir.ret %0
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.call @buildManagedList()
+    %2 = mir.call @mrt_managed_list_count(%0)
+    %3 = mir.global_addr @__istr_0
+    %4 = mir.mov_imm 0 : i64
+    %5 = mir.mov_imm 21 : i64
+    %6 = mir.call @mrt_alloc(%5)
+    %7 = mir.call @mrt_i64_to_string(%2, %6)
+    %8 = mir.global_addr @__istr_1
+    %9 = mir.mov_imm 1 : i64
+    %12 = mir.add.i64 %4, %7
+    %13 = mir.add.i64 %12, %9
+    %14 = mir.mov_imm 1 : i64
+    %15 = mir.add.i64 %13, %14
+    %16 = mir.call @mrt_alloc(%15)
+    mir.memcpy %16, %3, %4
+    %17 = mir.add.i64 %16, %4
+    mir.memcpy %17, %6, %7
+    %18 = mir.add.i64 %17, %7
+    mir.memcpy %18, %8, %9
+    %20 = mir.mov_imm 40 : i64
+    %21 = mir.call @mrt_alloc(%20)
+    mir.store %16, %21, 0 width: qword
+    mir.store %13, %21, 8 width: qword
+    mir.store %13, %21, 16 width: qword
+    %22 = mir.mov_imm 1 : i64
+    mir.store %22, %21, 24 width: qword
+    mir.store %4, %21, 32 width: qword
+    %24 = mir.mov_imm 16 : i64
+    %25 = mir.call @mrt_alloc(%24)
+    mir.store %21, %25, 0 width: qword
+    mir.store %4, %25, 8 width: qword
+    %28 = mir.load %25, 0 width: qword
+    %29 = mir.load %28, 0 width: qword
+    %30 = mir.load %28, 8 width: qword
+    %31 = mir.call @mrt_write_stdout(%29, %30)
+    mir.ret %4
+  }
+}
+---

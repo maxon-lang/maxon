@@ -1,0 +1,50 @@
+// Test: function-param
+enum Status
+	on
+	off
+end 'Status'
+
+function isOn(s Status) returns bool
+	if s == Status.on 'check'
+		return true
+	end 'check'
+	return false
+end 'isOn'
+
+function main() returns ExitCode
+	let status = Status.on
+	if isOn(status) 'test'
+		return 1
+	end 'test'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    mir.br inlined_isOn_0()
+  inlined_isOn_0:
+    %5 = mir.mov_imm 0 : i64
+    %6 = mir.cmp eq, %0, %5
+    mir.cond_br %6 [then: inlined_isOn_1(), else: inlined_isOn_2()]
+  inlined_isOn_1:
+    %7 = mir.mov_imm 1 : i64
+    mir.br inline_cont_main_0(%7)
+  inlined_isOn_2:
+    %8 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%8)
+  inline_cont_main_0:
+    mir.cond_br %9 [then: test_0(), else: test_0.after()]
+  test_0:
+    %3 = mir.mov_imm 1 : i64
+    mir.ret %3
+  test_0.after:
+    %4 = mir.mov_imm 0 : i64
+    mir.ret %4
+  }
+}
+---

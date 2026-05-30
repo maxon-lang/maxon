@@ -79,7 +79,7 @@ function processFunction(project Project, module MaxonModule, globalData GlobalD
 	// pass over the function builds the per-function lookup table —
 	// linear in op count.
 	var litValues = LiteralValueMap.create()
-	collectLiteralValues(module, func: func, litValues: litValues)
+	collectLiteralValues(project, module: module, func: func, litValues: litValues)
 
 	// Step 2: scan blocks for `__ManagedMemory.create` tryCalls. Each
 	// match consults `arrayLiteralProducers` (parser-side sidecar) for
@@ -93,7 +93,7 @@ end 'processFunction'
 // includes literal ops whose `valueType` was already pinned to either
 // an integer MaxonType or a named MaxonType (resolved enum cases). Bool
 // literals lower to an integer 0/1, which is also accepted.
-function collectLiteralValues(module MaxonModule, func IrFunction, litValues LiteralValueMap)
+function collectLiteralValues(project Project, module MaxonModule, func IrFunction, litValues LiteralValueMap)
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("collectLiteralValues: blockRef OOB")
 		for opIdx in block.opRefs 'eachOp'
@@ -102,7 +102,7 @@ function collectLiteralValues(module MaxonModule, func IrFunction, litValues Lit
 				continue
 			end 'notLit'
 			match op 'pickShape'
-				literal(result, value, valueType, _) then maybeRecordLiteral(litValues, result: result, value: value, valueType: valueType)
+				literal(result, value, valueType, _) then maybeRecordLiteral(project, funcName: func.name, litValues: litValues, result: result, value: value, valueType: valueType)
 				default panic("collectLiteralValues: op.name == literal but match did not extract")
 			end 'pickShape'
 		end 'eachOp'
@@ -113,10 +113,21 @@ end 'collectLiteralValues'
 // literals are eligible for rdata encoding; float/struct/string literals
 // are ignored (their result names simply won't appear in the map, which
 // the array-literal scanner treats as "not a known constant").
-function maybeRecordLiteral(litValues LiteralValueMap, result ByteArray, value ParsedInt, valueType MaxonType)
+function maybeRecordLiteral(project Project, funcName String, litValues LiteralValueMap, result ByteArray, value ParsedInt, valueType MaxonType)
 	if not literalValueTypeIsRdataEligible(valueType) 'skipKind'
 		return
 	end 'skipKind'
+	// Char-byte literals (`'a'`) take the single-byte fast path and emit a
+	// `MaxonType.integer` literal op tagged in `project.charByteLiterals`,
+	// but their true element type is the managed `Character` struct. Encoding
+	// the raw codepoint into rdata would produce an array of bare ints where
+	// `Character` managed pointers are expected — iterating it (e.g.
+	// `Set.init`'s `for elem in arr`) then dereferences a codepoint as a
+	// pointer and crashes. Exclude them so the array takes the runtime
+	// `__mm.set` path, which materializes real `Character` structs.
+	if project.charByteLiterals.contains(charByteLiteralKey(funcName, valueName: result)) 'isCharByte'
+		return
+	end 'isCharByte'
 	let key = String.from(result)
 	litValues.upsert(key, value: value)
 end 'maybeRecordLiteral'

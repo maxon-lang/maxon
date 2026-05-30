@@ -1,0 +1,35 @@
+// Test: char-backed
+enum Escape
+	newline = '\n'
+	tab = '\t'
+end 'Escape'
+
+function main() returns ExitCode
+	let e = Escape.newline
+	if e == Escape.newline 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %2 = mir.mov_imm 0 : i64
+    %3 = mir.call @__enum_Escape_rawString(%0)
+    %4 = mir.call @__enum_Escape_rawString(%2)
+    %5 = mir.call @Character.equals(%3, %4)
+    mir.cond_br %5 [then: check_0(), else: check_0.after()]
+  check_0:
+    %6 = mir.mov_imm 1 : i64
+    mir.ret %6
+  check_0.after:
+    %7 = mir.mov_imm 0 : i64
+    mir.ret %7
+  }
+}
+---

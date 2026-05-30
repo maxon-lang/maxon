@@ -1,0 +1,60 @@
+// Test: mixed-values
+enum Priority
+	low
+	medium
+	high = 10
+	critical
+end 'Priority'
+
+function main() returns ExitCode
+	let result = match Priority.critical 'check'
+		low gives 0
+		medium gives 1
+		high gives 10
+		critical gives 11
+	end 'check'
+	return result
+end 'main'
+---
+ExitCode: 11
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 11 : i64
+    %1 = mir.mov_imm 0 : i64
+    mir.br check_0.next0()
+  check_0.merge:
+    %17 = mir.mov_imm 125 : i64
+    %18 = mir.cmp ugt, %16, %17
+    mir.cond_br %18 [then: __range_panic_0(), else: __range_ok_0()]
+  check_0.next0:
+    %7 = mir.mov_imm 1 : i64
+    %8 = mir.cmp eq, %0, %7
+    mir.cond_br %8 [then: check_0.case1(), else: check_0.next1()]
+  check_0.case1:
+    %9 = mir.mov_imm 1 : i64
+    mir.br check_0.merge(%9)
+  check_0.next1:
+    %10 = mir.mov_imm 10 : i64
+    %11 = mir.cmp eq, %0, %10
+    mir.cond_br %11 [then: check_0.case2(), else: check_0.next2()]
+  check_0.case2:
+    %12 = mir.mov_imm 10 : i64
+    mir.br check_0.merge(%12)
+  check_0.next2:
+    %13 = mir.mov_imm 11 : i64
+    %14 = mir.cmp eq, %0, %13
+    mir.cond_br %14 [then: check_0.case3(), else: check_0.merge(%1)]
+  check_0.case3:
+    %15 = mir.mov_imm 11 : i64
+    mir.br check_0.merge(%15)
+  __range_panic_0:
+    %19 = mir.global_addr @__panic_msg_c84abec65cc9a0cc
+    %20 = mir.call @mrt_panic(%19)
+  __range_ok_0:
+    mir.ret %16
+  }
+}
+---

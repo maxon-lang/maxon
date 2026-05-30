@@ -1,0 +1,112 @@
+// Test: local-alias
+typealias Integer = int(i64.min to i64.max)
+
+type Point
+	export var x as Integer
+	export var y as Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
+end 'Point'
+
+function testAlias()
+	let p = Point.create(3, y: 4)
+	let q = p
+	print("{q.x}\n")
+	print("{p.y}\n")
+end 'testAlias'
+
+function main() returns ExitCode
+	testAlias()
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+3
+4
+```
+---
+// CompiledIR
+module {
+  func @testAlias() {
+  entry:
+    %0 = mir.mov_imm 3 : i64
+    %1 = mir.mov_imm 4 : i64
+    %58 = mir.mov_imm 16 : i64
+    %59 = mir.call @mrt_alloc(%58)
+    mir.store %0, %59, 0 width: qword
+    mir.store %1, %59, 8 width: qword
+    %5 = mir.load %59, 0 width: qword
+    %6 = mir.global_addr @__istr_0
+    %7 = mir.mov_imm 0 : i64
+    %8 = mir.mov_imm 21 : i64
+    %9 = mir.call @mrt_alloc(%8)
+    %10 = mir.call @mrt_i64_to_string(%5, %9)
+    %11 = mir.global_addr @__istr_1
+    %12 = mir.mov_imm 1 : i64
+    %15 = mir.add.i64 %7, %10
+    %16 = mir.add.i64 %15, %12
+    %18 = mir.add.i64 %16, %12
+    %19 = mir.call @mrt_alloc(%18)
+    mir.memcpy %19, %6, %7
+    %20 = mir.add.i64 %19, %7
+    mir.memcpy %20, %9, %10
+    %21 = mir.add.i64 %20, %10
+    mir.memcpy %21, %11, %12
+    %23 = mir.mov_imm 40 : i64
+    %24 = mir.call @mrt_alloc(%23)
+    mir.store %19, %24, 0 width: qword
+    mir.store %16, %24, 8 width: qword
+    mir.store %16, %24, 16 width: qword
+    mir.store %12, %24, 24 width: qword
+    mir.store %7, %24, 32 width: qword
+    %27 = mir.mov_imm 16 : i64
+    %28 = mir.call @mrt_alloc(%27)
+    mir.store %24, %28, 0 width: qword
+    mir.store %7, %28, 8 width: qword
+    %60 = mir.load %28, 0 width: qword
+    %61 = mir.load %60, 0 width: qword
+    %62 = mir.load %60, 8 width: qword
+    %63 = mir.call @mrt_write_stdout(%61, %62)
+    %32 = mir.load %59, 8 width: qword
+    %33 = mir.global_addr @__istr_0
+    %35 = mir.mov_imm 21 : i64
+    %36 = mir.call @mrt_alloc(%35)
+    %37 = mir.call @mrt_i64_to_string(%32, %36)
+    %38 = mir.global_addr @__istr_1
+    %42 = mir.add.i64 %7, %37
+    %43 = mir.add.i64 %42, %12
+    %45 = mir.add.i64 %43, %12
+    %46 = mir.call @mrt_alloc(%45)
+    mir.memcpy %46, %33, %7
+    %47 = mir.add.i64 %46, %7
+    mir.memcpy %47, %36, %37
+    %48 = mir.add.i64 %47, %37
+    mir.memcpy %48, %38, %12
+    %50 = mir.mov_imm 40 : i64
+    %51 = mir.call @mrt_alloc(%50)
+    mir.store %46, %51, 0 width: qword
+    mir.store %43, %51, 8 width: qword
+    mir.store %43, %51, 16 width: qword
+    mir.store %12, %51, 24 width: qword
+    mir.store %7, %51, 32 width: qword
+    %54 = mir.mov_imm 16 : i64
+    %55 = mir.call @mrt_alloc(%54)
+    mir.store %51, %55, 0 width: qword
+    mir.store %7, %55, 8 width: qword
+    %64 = mir.load %55, 0 width: qword
+    %65 = mir.load %64, 0 width: qword
+    %66 = mir.load %64, 8 width: qword
+    %67 = mir.call @mrt_write_stdout(%65, %66)
+    mir.ret %7
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.call @testAlias()
+    %1 = mir.mov_imm 0 : i64
+    mir.ret %1
+  }
+}
+---

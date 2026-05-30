@@ -292,6 +292,7 @@ export function rollbackFileParseDelta(project Project, filePath FilePath)
 	filterUnresolvedExtensionsByFilePath(project, filePath: filePath)
 	filterPendingUnusedTypealiasesByFilePath(project, filePath: filePath)
 	filterPendingUnusedChecksByFilePath(project, filePath: filePath)
+	filterPendingTernaryArmChecksByFilePath(project, filePath: filePath)
 
 	// Reset the delta to empty so the upcoming re-parse starts fresh.
 	_ = project.fileParseDeltas.remove(filePath)
@@ -332,6 +333,17 @@ function filterPendingUnusedChecksByFilePath(project Project, filePath FilePath)
 		i = i - 1
 	end 'scan'
 end 'filterPendingUnusedChecksByFilePath'
+
+function filterPendingTernaryArmChecksByFilePath(project Project, filePath FilePath)
+	var i = project.pendingTernaryArmChecks.count() - 1
+	while i >= 0 'scan'
+		let entry = try project.pendingTernaryArmChecks.get(i) otherwise panic("filterPendingTernaryArmChecksByFilePath: get OOB at {i}")
+		if entry.filePath.toString() == filePath.toString() 'match'
+			_ = try project.pendingTernaryArmChecks.remove(i) otherwise panic("filterPendingTernaryArmChecksByFilePath: remove failed at {i}")
+		end 'match'
+		i = i - 1
+	end 'scan'
+end 'filterPendingTernaryArmChecksByFilePath'
 
 // Marker called by `queryParseOps` at the start of every parse (whether the
 // file is new or being re-parsed after invalidation). Rolls back any prior

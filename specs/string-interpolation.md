@@ -1058,6 +1058,37 @@ E0404
 E0000
 ```
 
+### Multiple control-flow-opening interpolations in one string
+
+Regression: each `{...}` fragment is parsed into the block control flow
+currently lands in, not the string's original entry block. A fragment whose
+expression opens blocks (a `try ... otherwise` here) leaves control in its
+merge block; the next fragment and the trailing literal parts must chain off
+that merge block. Resetting to the entry block per fragment orphaned the first
+fragment's `try` merge block — leaving it without a terminator, which tripped
+`assertAllBlocksTerminated` (a parser-internal panic) before any user
+diagnostic could be reported.
+
+<!-- test: multiple-try-fragments -->
+```maxon
+typealias Idx = int(i64.min to i64.max)
+typealias IdxList = List with Idx
+
+function main() returns ExitCode
+	var a = IdxList.create()
+	a.append(10)
+	a.append(20)
+	print("a={try a.get(0) otherwise -1} b={try a.get(1) otherwise -1}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+a=10 b=20
+```
+
 ### Error: Unescaped Brace in String
 
 An unescaped `{` in a string literal that is not part of an interpolation expression produces a clear error. Use `\{` for literal braces.

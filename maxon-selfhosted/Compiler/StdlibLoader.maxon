@@ -39,6 +39,20 @@ export function getCachedStdlibStdModule() returns StdModule
 	return cachedStdlibStdModule
 end 'getCachedStdlibStdModule'
 
+// Precomputed Std-DFE reachability edges for the cached stdlib functions
+// (call edges + witness/layout/globalAddr label demands), one record per
+// function. Populated either by the cache-build path (via `extractFuncEdges`
+// over the post-dce snapshot) or by the cache-hit path (from the disk
+// cache's `stdFuncEdges` field). Std-DFE reads this via `cachedStdFuncEdges`
+// to follow cached call edges + witness/layout demands without re-walking
+// the cached Std-IR snapshot. Empty on a cache-miss compile, where the
+// bodies are still in the user Std module and the in-module walk covers them.
+var cachedStdlibFuncEdges = CachedFuncEdgeMap.create()
+
+export function cachedStdFuncEdges() returns CachedFuncEdgeMap
+	return cachedStdlibFuncEdges
+end 'cachedStdFuncEdges'
+
 // Process-wide accessor for the parsed stdlib MaxonModule (the Maxon-IR
 // shape of every stdlib function body whitelisted by `stdlibWhitelist`).
 // Consumers — today only `MonomorphizeExtensions` falling back when a
@@ -310,6 +324,7 @@ export function resetStdlibLoaderState()
 	stdlibTypealiasRanges = TypealiasRangeMap.create()
 	stdlibTypealiasCastCategories = TypealiasCastCategoryMap.create()
 	cachedStdlibStdModule = StdModule.create()
+	cachedStdlibFuncEdges = CachedFuncEdgeMap.create()
 	cachedStdlibCacheData = StdlibCacheData.create()
 	stdlibCacheValid = false
 	stdlibCacheTargetSet = false
@@ -578,6 +593,11 @@ export function getStdlibModule(project Project) returns MaxonModule
 		// see stdlib accessor bodies.
 		cachedStdlibStdModule = cacheResult.data.inlinerStdModule
 
+		// v68: republish the precomputed Std-DFE edge table so the load-time
+		// Std-DFE follows the cached call graph + witness/layout demands
+		// without re-walking the snapshot IR.
+		cachedStdlibFuncEdges = cacheResult.data.stdFuncEdges
+
 		// Return empty module — stdlib is pre-compiled to machine code
 		cachedStdlibModule = MaxonModule.create()
 		stdlibLoaded = true
@@ -712,7 +732,8 @@ function buildAndWriteStdlibCache(project Project, allModule MaxonModule, cacheP
 	pipeline.addPass(PassKind.expandCastRangeChecks)
 	pipeline.addPass(PassKind.constantArrayLiteralRdata)
 	pipeline.addPass(PassKind.lowerMaxonToStd)
-	pipeline.addPass(PassKind.borrowCheck)
+	// No maxonBorrowCheck in the stdlib sandbox — stdlib is exempt from the
+	// E3070 borrow check (user code can't fix it, and the bootstrap skips it).
 	pipeline.addPass(PassKind.injectDrops)
 	pipeline.addPass(PassKind.mem2reg)
 	pipeline.addPass(PassKind.canonicalize)
@@ -807,6 +828,13 @@ function buildAndWriteStdlibCache(project Project, allModule MaxonModule, cacheP
 	cacheData.globalData = pipeline.globalData
 	captureStdlibMetadata(project, data: cacheData)
 	cacheData.inlinerStdModule = pipeline.stdModulePostDceSnapshot
+	// v68: extract each snapshot function's Std-DFE edges once (a pure
+	// function of the body) so the load-time Std-DFE consults a flat table
+	// instead of re-walking the snapshot. Populated both in-process (for the
+	// immediately-following user pipeline run) and into the cache buffer (for
+	// next-run cache hits).
+	cachedStdlibFuncEdges = buildStdFuncEdgeMap(pipeline.stdModulePostDceSnapshot)
+	cacheData.stdFuncEdges = cachedStdlibFuncEdges
 	recordPassSince("__stdlib-captureMetadata", startMs: metaStart)
 
 	// Emit per-function bytecode (dispatched by target).
@@ -998,3 +1026,21 @@ end 'activateStdlibCache'
 export function isStdlibCacheValid() returns bool
 	return stdlibCacheValid
 end 'isStdlibCacheValid'
+
+// v68: extract the precomputed Std-DFE edge table from a post-dce Std-IR
+// snapshot — one record per function, each a pure function of the body
+// (call edges + witness/layout/globalAddr label demands). Built once at
+// cache-build time so the load-time Std-DFE follows the cached call graph +
+// witness/layout demands by consulting a flat table instead of re-walking
+// the snapshot IR. This keeps the witness-method impls
+// (`Character.hash`/`equals`) and their funcAbs64 slot relocs alive for
+// generics built only inside a cached `<Type>.<field>.__lazy_init`.
+// Target-independent (works for x64 and wasm alike) because it names only
+// callees + rdata labels.
+function buildStdFuncEdgeMap(snapshot StdModule) returns CachedFuncEdgeMap
+	var edgeMap = CachedFuncEdgeMap.create()
+	for func in snapshot.functions 'eachFunc'
+		edgeMap.upsert(func.name, value: extractFuncEdges(snapshot, func: func))
+	end 'eachFunc'
+	return edgeMap
+end 'buildStdFuncEdgeMap'

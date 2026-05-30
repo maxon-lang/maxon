@@ -90,9 +90,29 @@ export function writeFragment(fragmentDir FilePath, specName String, test SpecTe
 	// Normalize line endings to LF
 	let normalized = content.replace("\r\n", with: "\n")
 
-	try File.writeText(fragmentPath, content: normalized) otherwise 'writeErr'
-		logError(LogCategory.testing, message: function() gives "Failed to write fragment: {fragmentPath}")
-	end 'writeErr'
+	// Retry on transient write failures. A failed write must NOT be swallowed:
+	// when it was, an open editor handle or an antivirus/indexer scan holding
+	// the file would silently leave a stale fragment on disk (e.g. the previous
+	// compiler's IR), and the suite would still report PASS — the on-disk
+	// fragment is captured output, not an assertion, so the test never notices.
+	// The CreateFile share-mode fix (FILE_SHARE_READ|WRITE) removes the common
+	// editor case; the bounded retry rides out a momentary exclusive lock from a
+	// scanner. If every attempt fails, the file genuinely can't be written and
+	// that's an unexpected IO fault, so we panic rather than continue silently.
+	let maxAttempts = 5
+	var attempt = 0
+	while attempt < maxAttempts 'writeRetry'
+		try File.writeText(fragmentPath, content: normalized) otherwise 'writeErr'
+			attempt = attempt + 1
+			if attempt >= maxAttempts 'exhausted'
+				panic("Failed to write fragment after {maxAttempts} attempts: {fragmentPath} (file locked by another process?)")
+			end 'exhausted'
+			logError(LogCategory.testing, message: function() gives "Failed to write fragment (attempt {attempt}/{maxAttempts}), retrying: {fragmentPath}")
+			__Builtins.sleep(20)
+			continue
+		end 'writeErr'
+		return
+	end 'writeRetry'
 end 'writeFragment'
 
 // Parse a fragment file back into a Fragment struct.

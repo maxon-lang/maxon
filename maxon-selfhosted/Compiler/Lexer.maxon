@@ -231,6 +231,10 @@ export enum TokenKind
 	dot = "."
 	colon = ":"
 	comma = ","
+	// `@` prefixes a compiler annotation (currently only `@heap`). Emitted as a
+	// standalone token; the parser consumes it together with the following
+	// annotation identifier (e.g. `heap`) and the `var`/`let` it decorates.
+	at = "@"
 	// Conditional-compilation directives. Emitted as standalone tokens by the
 	// lexer; the parser consults the build target to decide which branch to
 	// keep and skips the others at the token-stream level.
@@ -575,6 +579,19 @@ type Lexer
 		if ch == Ascii.hash 'isDirective'
 			return try scanDirective(startLine, startCol: startCol)
 		end 'isDirective'
+		// `@` opens a compiler annotation (e.g. `@heap`). Like `#`, it sits
+		// outside the table-driven DFA: emit a standalone `at` token and let the
+		// table-driven scanner pick up the following annotation identifier on the
+		// next step. The byte at 64 (`@`) classifies as `other` in the DFA table,
+		// so without this special case it would be silently skipped.
+		if ch == Ascii.at 'isAt'
+			emit(TokenKind.at, value: "@", startLine: startLine, startCol: startCol)
+			var atEof = false
+			try advance() otherwise 'atEofAfter'
+				atEof = true
+			end 'atEofAfter'
+			return atEof
+		end 'isAt'
 		let charClass = try charClassTable.get(ch) otherwise panic("Lexer: charClassTable lookup failed for byte {ch}")
 		var atEnd = false
 		try advance() otherwise 'lastChar'
@@ -1374,6 +1391,7 @@ enum Ascii
 	dot = 46
 	slash = 47
 	zero = 48
+	at = 64
 	upperB = 66
 	upperE = 69
 	upperO = 79

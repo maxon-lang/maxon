@@ -59,6 +59,24 @@ export function eliminateDeadStdFunctions(module StdModule, project Project) ret
 		end 'fresh'
 	end 'seedRoots'
 
+	// Stage K.4 (cache-hit cross-pipeline): on a cache-hit compile the stdlib
+	// bodies are served from the cache and dropped from this module before the
+	// walk, so the `loadWitnessTable` / `loadLayoutDescriptor` demands inside
+	// them are invisible to the function-by-function walk below. A
+	// `Set with Character` (or any witnessed generic) built only inside a
+	// cached `<Type>.<field>.__lazy_init` would then have its witness-method
+	// impls (`Character.hash`/`equals`) pruned and its funcAbs64 slot relocs
+	// dropped, leaving a null witness pointer at runtime. The cache build
+	// already extracted each cached function's reachability edges (call edges
+	// + witness/layout/globalAddr demands) into a flat `stdFuncEdges` table —
+	// a pure function of the body, target-independent — so for any referenced
+	// name absent from this module we apply that precomputed record directly,
+	// reproducing exactly the reachability the cache-off leg sees with those
+	// bodies in-module without re-walking IR. Empty on a cache-miss compile,
+	// where the bodies are still in `module.functions` and the in-module walk
+	// covers them.
+	let cachedFuncEdges = cachedStdFuncEdges()
+
 	// Stage K.4: shared with `pruneDeadGlobalData` below — every rdata
 	// label that any live function demands via `loadWitnessTable` /
 	// `loadLayoutDescriptor` / `globalAddr`. Function-DFE writes into it
@@ -69,10 +87,20 @@ export function eliminateDeadStdFunctions(module StdModule, project Project) ret
 
 	var i = 0
 	while i < worklist.count() 'walk'
-		let name = try worklist.get(i) otherwise panic("eliminateDeadStdFunctions: worklist.get OOB at {i}")
+		// Copy out of the worklist: the walk helpers below mutate `worklist`
+		// (pushing newly-reached callees), which the borrow checker forbids
+		// while a `let` binding still aliases a worklist slot.
+		let name = "{try worklist.get(i) otherwise panic("eliminateDeadStdFunctions: worklist.get OOB at {i}")}"
 		if let func = try funcMap.get(name) 'found'
 			walkLiveFunction(module, project: project, func: func, worklist: worklist, seen: seen, liveLabels: liveLabels)
-		end 'found'
+		end 'found' else 'maybeCached'
+			// Not an in-module function — it may be a cached stdlib body
+			// served from the cache and absent from this module. Apply its
+			// precomputed edge record so the cached call graph contributes to
+			// reachability exactly as the in-module (cache-off) leg would.
+			// No-op when the name isn't a cached function.
+			applyCachedFuncEdges(project, edgeMap: cachedFuncEdges, name: name, worklist: worklist, seen: seen, liveLabels: liveLabels)
+		end 'maybeCached'
 		i = i + 1
 	end 'walk'
 
@@ -505,6 +533,80 @@ function walkLiveFunction(module StdModule, project Project, func IrFunction, wo
 	end 'eachBlock'
 end 'walkLiveFunction'
 
+// Cache-build extraction: compute the Std-DFE reachability edges a single
+// cached function contributes, as a pure function of its body. Walks the
+// function's ops once using the SAME classifiers the in-module / load-time
+// walk uses (`extractStdCalleeName`, `classifySystemOpLabelDemand`), so the
+// extracted record can never drift from `visitStdOp`'s edge semantics. The
+// cache serializes the result; the load-time `applyCachedFuncEdges` consumes
+// it instead of re-walking IR. Target-independent (works for x64 and wasm
+// alike) because it names only callees + rdata labels.
+export function extractFuncEdges(module StdModule, func IrFunction) returns CachedFuncEdges
+	var edges = CachedFuncEdges.create()
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("extractFuncEdges: blockRef {blockRef} not in module.blocks")
+		for opIdx in block.opRefs 'eachOp'
+			recordOpEdges(module, opIdx: opIdx, edges: edges)
+		end 'eachOp'
+		if block.hasTerminatorOp() 'hasTerm'
+			recordOpEdges(module, opIdx: block.terminatorIndex(), edges: edges)
+		end 'hasTerm'
+	end 'eachBlock'
+	return edges
+end 'extractFuncEdges'
+
+function recordOpEdges(module StdModule, opIdx OpIndex, edges CachedFuncEdges)
+	let op = try module.ops.get(opIdx) otherwise panic("recordOpEdges: opIdx {opIdx} not in module.ops")
+	match op 'shape'
+		call(inner) then recordCallEdge(inner, edges: edges)
+		system(inner) then recordSystemEdge(inner, edges: edges)
+		arith then return
+		control then return
+		memory then return
+	end 'shape'
+end 'recordOpEdges'
+
+function recordCallEdge(op StdCallOp, edges CachedFuncEdges)
+	let callee = extractStdCalleeName(op)
+	if callee.isEmpty() 'noEdge'
+		return
+	end 'noEdge'
+	edges.callees.push(callee)
+end 'recordCallEdge'
+
+function recordSystemEdge(op StdSystemOp, edges CachedFuncEdges)
+	let (kind, name) = classifySystemOpLabelDemand(op)
+	match kind 'demand'
+		none then return
+		plain then edges.plainLabels.push(name)
+		conditionalRoot then edges.conditionalRootLabels.push(name)
+	end 'demand'
+end 'recordSystemEdge'
+
+// Load-time consumer (cache-hit cross-pipeline): apply a cached stdlib
+// function's precomputed edge record when it's referenced but absent from
+// this module. Reproduces the exact reachability `walkCachedFunction` used
+// to derive by re-walking the cached Std-IR snapshot — callees go through
+// the same `markStdCallee` discipline (respecting `seen`), conditional-root
+// labels promote the matching `witnessConditionalRoots` impls and pin the
+// label, and plain (`globalAddr`) labels pin the blob via `liveLabels`. So
+// the cache-on and cache-off `.text` stay byte-identical (cache-parity)
+// while keeping witness impls (`Character.hash`/`equals`) alive for generics
+// built only inside a cached `__lazy_init`. A no-op when `name` isn't a
+// cached function (an ordinary missing name).
+function applyCachedFuncEdges(project Project, edgeMap CachedFuncEdgeMap, name String, worklist StringArray, seen StdDfeStringSet, liveLabels StdDfeStringSet)
+	let edges = try edgeMap.get(name) otherwise return
+	for callee in edges.callees 'eachCallee'
+		markStdCallee(callee, worklist: worklist, seen: seen)
+	end 'eachCallee'
+	for label in edges.conditionalRootLabels 'eachCondRoot'
+		promoteConditionalRoots(project, label: label, worklist: worklist, seen: seen, liveLabels: liveLabels)
+	end 'eachCondRoot'
+	for label in edges.plainLabels 'eachPlain'
+		liveLabels.insert(label)
+	end 'eachPlain'
+end 'applyCachedFuncEdges'
+
 function visitStdOp(module StdModule, project Project, opIdx OpIndex, worklist StringArray, seen StdDfeStringSet, liveLabels StdDfeStringSet)
 	let op = try module.ops.get(opIdx) otherwise panic("visitStdOp: opIdx {opIdx} not in module.ops")
 	match op 'shape'
@@ -516,30 +618,59 @@ function visitStdOp(module StdModule, project Project, opIdx OpIndex, worklist S
 	end 'shape'
 end 'visitStdOp'
 
-function promoteLabelsFromSystemOp(project Project, op StdSystemOp, worklist StringArray, seen StdDfeStringSet, liveLabels StdDfeStringSet)
-	match op 'kind'
+// How a system op pins an rdata label, if at all. Shared classification
+// between `promoteLabelsFromSystemOp` (load-time / in-module worklist
+// promotion) and `extractFuncEdges` (cache-build extraction) so the two
+// promotion paths agree on exactly which arm maps to which label kind.
+enum StdLabelDemandKind
+	// No label demand (op patches register state, does OS work, etc.).
+	none
+	// `globalAddr` — pins the named blob only (no conditional roots).
+	plain
+	// `loadWitnessTable` / `loadLayoutDescriptor` — pins the label AND
+	// promotes every `witnessConditionalRoots[label]` impl.
+	conditionalRoot
+end 'StdLabelDemandKind'
+
+typealias StdLabelDemand = (StdLabelDemandKind, String)
+
+// Single classifier for a system op's rdata-label demand. Returns the
+// demand kind and the demanded label/name (empty for `none`). Keeping this
+// in one place means the load-time promotion and the cache-build extraction
+// can never drift apart on the witness/layout-vs-globalAddr distinction.
+function classifySystemOpLabelDemand(op StdSystemOp) returns StdLabelDemand
+	return match op 'kind'
 		// `globalAddr` pins a generic globalData entry (string / float
 		// constants). It doesn't carry witness-conditional roots — those
-		// only key off witness/layout labels — but recording the name
-		// into `liveLabels` lets `pruneDeadGlobalData` keep the blob
-		// alive via `shouldKeepGlobal`.
-		globalAddr(_, name) then liveLabels.insert(name)
-		// `loadLayoutDescriptor` / `loadWitnessTable` pin both the blob
-		// AND its conditional-root impls. First-touch on a label
-		// promotes every `witnessConditionalRoots[label]` entry onto
-		// the worklist.
-		loadLayoutDescriptor(_, label) then promoteConditionalRoots(project, label: label, worklist: worklist, seen: seen, liveLabels: liveLabels)
-		loadWitnessTable(_, label) then promoteConditionalRoots(project, label: label, worklist: worklist, seen: seen, liveLabels: liveLabels)
+		// only key off witness/layout labels.
+		globalAddr(_, name) gives (StdLabelDemandKind.plain, name)
+		// `loadLayoutDescriptor` / `loadWitnessTable` pin both the blob AND
+		// its conditional-root impls.
+		loadLayoutDescriptor(_, label) gives (StdLabelDemandKind.conditionalRoot, label)
+		loadWitnessTable(_, label) gives (StdLabelDemandKind.conditionalRoot, label)
 		// `funcAddr` resolves through the link-time symbol table, not
-		// globalData, and any function it names is already rooted by
-		// the `funcRef` op that produced its value. Other variants
-		// either patch register state or perform OS-level work — none can
-		// pin a witness/layout label.
-		memcpy to loadIndirect then return
-		funcAddr then return
-		storeIndirect to unboxValue then return
-		descriptorField to dropTypeParam then return
+		// globalData, and any function it names is already rooted by the
+		// `funcRef` op that produced its value. Other variants either patch
+		// register state or perform OS-level work — none can pin a
+		// witness/layout label.
+		memcpy to loadIndirect gives (StdLabelDemandKind.none, "")
+		funcAddr gives (StdLabelDemandKind.none, "")
+		storeIndirect to unboxValue gives (StdLabelDemandKind.none, "")
+		descriptorField to dropTypeParam gives (StdLabelDemandKind.none, "")
 	end 'kind'
+end 'classifySystemOpLabelDemand'
+
+function promoteLabelsFromSystemOp(project Project, op StdSystemOp, worklist StringArray, seen StdDfeStringSet, liveLabels StdDfeStringSet)
+	let (kind, name) = classifySystemOpLabelDemand(op)
+	match kind 'demand'
+		none then return
+		// Recording the name into `liveLabels` lets `pruneDeadGlobalData`
+		// keep the blob alive via `shouldKeepGlobal`.
+		plain then liveLabels.insert(name)
+		// First-touch on a label promotes every `witnessConditionalRoots`
+		// entry onto the worklist.
+		conditionalRoot then promoteConditionalRoots(project, label: name, worklist: worklist, seen: seen, liveLabels: liveLabels)
+	end 'demand'
 end 'promoteLabelsFromSystemOp'
 
 function promoteConditionalRoots(project Project, label String, worklist StringArray, seen StdDfeStringSet, liveLabels StdDfeStringSet)
@@ -556,27 +687,39 @@ function promoteConditionalRoots(project Project, label String, worklist StringA
 end 'promoteConditionalRoots'
 
 function markFromStdCallOp(op StdCallOp, worklist StringArray, seen StdDfeStringSet)
-	match op 'kind'
-		ret then return
-		call(_, callee, _) then markStdCallee(callee, worklist: worklist, seen: seen)
-		tryCall(_, callee, _, _) then markStdCallee(callee, worklist: worklist, seen: seen)
-		tailCall(callee, _) then markStdCallee(callee, worklist: worklist, seen: seen)
-		funcRef(_, funcName) then markStdCallee(funcName, worklist: worklist, seen: seen)
+	// `markStdCallee` early-returns on the empty name `extractStdCalleeName`
+	// yields for the non-edge variants, so no extra guard is needed here.
+	markStdCallee(extractStdCalleeName(op), worklist: worklist, seen: seen)
+end 'markFromStdCallOp'
+
+// Single classifier for a call op's static reachability edge. Returns the
+// named callee for the direct-call variants (call / tryCall / tailCall /
+// funcRef) and the empty string for variants that name no static callee.
+// Shared by `markFromStdCallOp` (the in-module / load-time worklist push)
+// and `extractFuncEdges` (the cache-build extraction) so the edge
+// classification lives in exactly one place.
+function extractStdCalleeName(op StdCallOp) returns String
+	return match op 'kind'
+		ret gives ""
+		call(_, callee, _) gives callee
+		tryCall(_, callee, _, _) gives callee
+		tailCall(callee, _) gives callee
+		funcRef(_, funcName) gives funcName
 		// indirectCall flows through a runtime pointer; the callee was
 		// already rooted by whatever produced the funcRef / closureCreate
-		// upstream, so this op alone needs no fresh marking.
-		indirectCall then return
+		// upstream, so this op alone names no static callee.
+		indirectCall gives ""
 		// witnessCall flows through a witness table; the callee was rooted
 		// when the table was built (BuildWitnessTables emits funcRef for
-		// every method address), so no fresh marking is needed here either.
-		witnessCall then return
+		// every method address), so it names no static callee here either.
+		witnessCall gives ""
 		// witnessTryCall: same witness-table dispatch as witnessCall.
-		witnessTryCall then return
-		param then return
+		witnessTryCall gives ""
+		param gives ""
 		// errorReturn names no callee — both operands are local virtuals.
-		errorReturn then return
+		errorReturn gives ""
 	end 'kind'
-end 'markFromStdCallOp'
+end 'extractStdCalleeName'
 
 function markStdCallee(name String, worklist StringArray, seen StdDfeStringSet)
 	if name.isEmpty() 'noName'

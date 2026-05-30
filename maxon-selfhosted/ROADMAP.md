@@ -11,7 +11,7 @@ Phase 1:   Core Arithmetic        [x] arithmetic, comparison, unary, parentheses
 Phase 2:   Control Flow           [x] if/else, while, break/continue (with for-range step block), return, match (statement+expression), for-range over integers, for-range over ASCII char literals
 Phase 3:   Function Params        [x] parameters, parameter-labels, assignment, method calls
 Phase 4:   Basic Types            [x] byte/float/type-casting, implicit-type-conversion, bool-type,
-                                      byte-enum-comparison all pass; bool-bit-packing edge cases pending
+                                      byte-enum-comparison, bool-bit-packing (15/15) all pass
 Phase 5:   Structs                [x] struct literals, methods, self, type/static methods,
                                       all challenge-* specs (field-assign, nested-structs,
                                       struct-lifetime, array-of-structs) pass; module-level-struct-var
@@ -142,8 +142,8 @@ Legend: `[x]` complete, `[~]` partially done, `[ ]` not started.
 - **Parser** ([`Parser.maxon`](Compiler/Parser.maxon), 5851 lines): function declarations with parameters and parameter labels, `var`/`let`, type annotations, `return`, `print()`, full `if`/`else if`/`else`, `while`/`break`/`continue`, `for VAR in N to/upto M 'label'` (integer or single-byte char-literal bounds; dedicated step block so `continue` advances the iter), `match` (statement and expression), `try ... otherwise ...` in seven dispatch shapes including labeled-block and binding-block forms, `throws` clause and `throw EnumName.case`, variable reassignment, block scoping, integer/float/bool/single-byte char literals, full operator precedence with all arithmetic/bitwise/comparison/logical/unary operators, parenthesized expressions, function calls with arguments, string interpolation in print, type casting (`int(x)`, `float(x)`, `byte(x)`), struct literals + field access, instance/static/type methods, `self`, `enum` declarations with int and float raw values, function-type annotations on parameters and closure literals (`(x T) gives <expr>`) with `self`-capture support.
 
 ### Mid end
-- **Maxon Dialect** ([`Compiler/IR/Maxon/`](Compiler/IR/Maxon/)): MaxonDialect, MaxonPrinter, scope tracking, source ranges, dead-function-elimination, `LowerMaxonToStd`.
-- **Std Dialect** ([`Compiler/IR/Std/`](Compiler/IR/Std/), 16 files): StdDialect/Module/Printer plus passes — `BorrowCheck`, `Canonicalize`, `CfgAnalysis`, `CommonSubexpressionElimination`, `DeadCodeElimination`, `InjectDrops`, `InsertRangeChecks`, `InstrumentCoverage`, `LoopInvariantCodeMotion`, `LowerABI`, `LowerStdToMir`, `Mem2Reg`.
+- **Maxon Dialect** ([`Compiler/IR/Maxon/`](Compiler/IR/Maxon/)): MaxonDialect, MaxonPrinter, scope tracking, source ranges, dead-function-elimination, `MaxonBorrowCheck` (E3070), `LowerMaxonToStd`.
+- **Std Dialect** ([`Compiler/IR/Std/`](Compiler/IR/Std/)): StdDialect/Module/Printer plus passes — `Canonicalize`, `CfgAnalysis`, `CommonSubexpressionElimination`, `DeadCodeElimination`, `InjectDrops`, `InsertRangeChecks`, `InstrumentCoverage`, `LoopInvariantCodeMotion`, `LowerABI`, `LowerStdToMir`, `Mem2Reg`.
 - **MIR** ([`Compiler/IR/MIR/`](Compiler/IR/MIR/)): SSA-form MIR dialect, printer, copy-coalescing pass.
 - **Type resolution** ([`TypeResolution.maxon`](Compiler/TypeResolution.maxon)) — name lookup, cast / compare validation between Maxon and Std lowering, plus `validateTryOtherwiseTypes` for the post-typealias-resolution E3059 check on `__try_*_result` slots.
 - **Query system** ([`Queries.maxon`](Compiler/Queries.maxon), [`QueryDatabase.maxon`](Compiler/QueryDatabase.maxon), [`QueryEngine.maxon`](Compiler/QueryEngine.maxon)) — query-based incremental pipeline.
@@ -234,12 +234,13 @@ Implicit conversion in argument passing is wired through
 covering int↔float, parameter promotion, and the math-intrinsic int→float
 path. Type-checker now rejects bool↔int and string→int at call sites.
 
-**Still pending in this area**:
-- `bool-bit-packing` (11/15 pass) — last 4 need bool/int implicit-cast
-  conversion in `Vector.push` plus Vector.insert/Vector.remove fixes for
-  the bool-bit-packed path.
-- `char-literal-to-int` (7/8 pass) — `char-literal-codepoint-iteration`
-  hits an unresolved-name parser bug.
+**Specs passing (added 2026-05-29)**: `bool-bit-packing` (15/15) — the
+bool/int implicit-cast conversion in `Vector.push` and the bit-packed
+`Vector.insert`/`Vector.remove` paths now work via intervening implicit-cast
+and iterator-adapter work, so all 15 fragments are green on x64-windows and
+wasm32-wasi. `char-literal-to-int` (8/8) — the previously-blocking
+`char-literal-codepoint-iteration` fragment (codepoints-iteration + char-literal
+`==` comparison) now resolves and passes on both targets.
 
 ---
 
@@ -327,17 +328,116 @@ the user-facing array specs unlocked progressively:
 - **2026-05-12**: `array-managed-elements` (3/3) and
   `array-return-element-from-loop` (1/1) added to the whitelist.
 
+- **2026-05-29**: `borrow-checker` (4/4) and `array-realloc-dangling-ref`
+  (3/3) re-enabled. Added a Maxon-tier `runMaxonBorrowCheck` pass
+  ([`Compiler/IR/Maxon/MaxonBorrowCheck.maxon`](Compiler/IR/Maxon/MaxonBorrowCheck.maxon))
+  emitting **E3070** — mutating a collection (`arr.push`/`set`/…) while a
+  `.get()`/slice-yielded reference into its backing buffer is still live.
+  Ported from the C# bootstrap's `BorrowCheckPass`; uses NLL (borrow expires
+  at the borrowing variable's last use) and follows the
+  `try EXPR otherwise default` store→load→decl chain to find the user
+  binding. Retired the old slot-level `Std/BorrowCheck.maxon` (codes
+  4001/4002), which ran at the wrong layer and never fired.
+- **2026-05-29**: `array-managed-field-reassign` (4/4) and
+  `array-managed-multi-call-lifecycle` (3/3) re-enabled. Two fixes:
+  (1) `parseLocalFieldAssignment` now stamps the receiver `varLoad` with the
+  variable's declared type instead of `unresolved` — a parameter slot is
+  never reached by `recordVarDecl`/`recordVarStore`, so the slot-type map had
+  no entry to recover from, and `lowerFieldStore` failed with "unknown field
+  X on type <unresolved>" for `param.field = expr`.
+  (2) The cross-file unused-export audit (E3092/E3093/E3094) now skips
+  single-file compilations — those lints ask whether an `export` is read from
+  another file, which is vacuously false in a one-file program, so every
+  `export type`/`function` was wrongly flagged. The C# bootstrap has no such
+  lint at all.
+- **2026-05-29**: `repro-array-union-field-reassign` (4/4) re-enabled.
+  Implemented the **E3006 self-field-shadow** diagnostic the self-hosted
+  parser was missing (the C# bootstrap had it; the self-hosted compiler
+  silently routed a shadowing local through `self`'s heap pointer via the
+  name-keyed `isSelfField` codegen paths, corrupting the field on a type
+  mismatch). Detection lives in `Scope.declare` / `declarePayloadBinding` /
+  `declareSelfField` — the one layer that sees both the self-field alias and
+  the colliding declaration — which now throw `ScopeError.shadowsSelfField`.
+  User-named declaration sites (let/var, param, match binding, for-in/for-range
+  var, error/if-let binding, tuple/destructure element) funnel through
+  `declareCheckedLocal` and report E3006 + recover; compiler-internal names
+  opt out via `declareShadowing`.
+- **2026-05-29**: `struct-enum-array-grow` (11/11) re-enabled. The
+  "backend panic on large returned struct with many arrays" the whitelist
+  noted no longer reproduces — the `large-returned-struct-many-arrays`
+  fragment's deep nested-field pushes (`p.db.dependencies.push(...)`) compile
+  via the parameter-receiver-type-stamp fix from the field-reassign work.
+  No further changes needed.
+- **2026-05-29**: `init-from-literal` (5/5) re-enabled — the
+  `InitableFromStringLiteral` / `InitableFromCharLiteral` cast-init interfaces
+  (`MyType from "literal"` / `from 'c'`) already lowered correctly; only a
+  whitelist entry was needed. (Removed a redundant commented `interfaces`
+  duplicate from the whitelist; that spec was already active.)
+- **2026-05-29**: `type-checking` (12/12) re-enabled. Four fixes:
+  1. **E2012 circular-typealias detection** (`detectCircularTypealiases` in
+     TypeResolution). The generic-alias drain interns `A = Array with B` into
+     `genericTypealiases` without requiring its args to resolve, so self-
+     (`A = Array with A`) and mutual- (`A`/`B`) reference cycles slipped past
+     the `aliasName` cycle check. A DFS over each alias's generic-instance args
+     now emits `Circular typealias dependency: A` (self) / `A -> B -> A`
+     (mutual), matching the C# bootstrap.
+  2. **`checkCallArgumentTypes`** — a new semantic-check pass that validates
+     each call's argument types against `callParamTypes` *before* the
+     discarded-result lint, so E3005 fires ahead of E3064 on a bad-arg discarded
+     call and covers dead code DFE would drop before lowering's own arg check.
+  3. The compatibility predicate mirrors lowering for primitives (cast-category
+     + implicit conversion) and ADDS recursive, category-aware generic-element
+     comparison — so `IntArray.append(StringArray)` is rejected while
+     `Map with (Integer, Integer)` ≈ `Map with (int, int)` is accepted.
+     Carve-outs match lowering's char-byte→`Character` coercion and skip
+     synthesized `.unionCases` companion types.
+  4. **Self-param refinement**: a `Self`-typed parameter collapses to the bare
+     base collection (`Array`) when substitution drops the element. The method-
+     call resolver now records the full receiver type in `resolvedReceiverTypes`
+     for every resolved method call, and the check refines the param back to the
+     receiver's concrete type — recovering both the element mismatch and the
+     `StringArray`/`IntArray` diagnostic naming.
+- **2026-05-29**: `ownership` (38/38) re-enabled. Five fixes:
+  1. **`@heap` annotation** — the lexer now emits a dedicated `at` token for
+     `@` (special-cased in `stepDfa` like `#`, since `@` classifies as `other`
+     and was silently skipped), and `parseAnnotatedDecl` consumes `@heap var/let`.
+     Self-hosted structs are always heap-allocated (no stack-promotion pass to
+     opt out of), so `@heap` validates shape and lowers identically to a plain
+     declaration.
+  2. **Global-receiver method-result propagation** — `backfillTopLevelVarSlotTypes`
+     resolves a top-level array var's element type *after* the first
+     `fillUnresolvedTypes` pass, so a method call on a global receiver
+     (`globalArr.remove(0)`) saw an `<unresolved>` receiver and recorded an
+     unresolved result, leaving a `let removed = ... otherwise panic(...)`
+     binding's `.field` access on `int` (E2004). TypeResolution now rebuilds the
+     producer/slot maps and re-runs the fill after the backfill, and `fillVarDecl`
+     / `fillVarLoad` gained int-seed→struct re-stamping so the merge slot picks up
+     the resolved element type.
+  3. **Builtin-method discard exemption** — `checkDiscardedResults` no longer
+     fires E3065 on a statement-position method call whose receiver is a builtin
+     managed type (`__ManagedList`/`__ManagedListNode`/`__ManagedMemory`),
+     mirroring the C# bootstrap's "builtin type methods skip discard tracking"
+     carve-out (so `managedList.insertFirst(x)` as a statement is accepted).
+  4. **Managed-list node element binding** — node-returning methods
+     (`insertFirst`/`head`/…) keep their bare `__ManagedListNode` registered
+     return (cache-stable), and the call site binds the list receiver's element
+     into the node type via `promoteManagedNodeReturnFromReceiver`, so
+     `node.value()` resolves to the real element. `refineBuiltinCallResultType`
+     now substitutes the value-method return against the receiver instance, and
+     `argTypesCompatible` accepts a `__ManagedListNode with Item` argument for a
+     bare `__ManagedListNode` parameter.
+  5. **E4014 reference-cycle detection** (`checkTypeReferenceCycles` in
+     SemanticCheck) — builds a reachability graph over user struct fields, union
+     associated values, and container element types, then reports the
+     earliest-declared type that transitively contains itself (matching the C#
+     bootstrap's `TypeCycleCheckPass` message + the "throw on first cycle"
+     single-diagnostic behaviour for mutual recursion).
+
 Still deferred:
 
-- `array-realloc-dangling-ref` — needs the E3070 mutable-borrow-while-
-  read borrow-check diagnostic.
 - `array-slice-managed-elements` / `array-append-managed-elements` /
-  `array-managed-field-reassign` / `array-managed-multi-call-lifecycle`
-  / `array-enum-element-size` — every fragment uses `union` types
+  `array-enum-element-size` — every fragment uses `union` types
   (Phase 9 associated-value enums) which the parser doesn't yet accept.
-  `array-managed-field-reassign/reassign-array-field-simple-managed`
-  also surfaces a separate TypeResolution gap (parameter-typed
-  `c.items` reports `unresolved` at fieldLoad time).
 - `array-of-bytearray` / `array-hashable` / `array-contains` / etc. —
   Phase 11.x cleanup; revisit alongside the remaining
   `where-clauses` / `associated-types` work.

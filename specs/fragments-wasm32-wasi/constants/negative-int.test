@@ -1,0 +1,52 @@
+// Test: negative-int
+enum Temperature
+	freezing = 0
+	cold = -10
+	warm = 25
+end 'Temperature'
+
+function main() returns ExitCode
+	let result = match Temperature.warm 'check'
+		freezing gives 0
+		cold gives -10
+		warm gives 25
+	end 'check'
+	return result
+end 'main'
+---
+ExitCode: 25
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 25 : i64
+    %1 = mir.mov_imm 0 : i64
+    mir.br check_0.next0()
+  check_0.merge:
+    %15 = mir.mov_imm 125 : i64
+    %16 = mir.cmp ugt, %14, %15
+    mir.cond_br %16 [then: __range_panic_0(), else: __range_ok_0()]
+  check_0.next0:
+    %7 = mir.mov_imm -10 : i64
+    %8 = mir.cmp eq, %0, %7
+    mir.cond_br %8 [then: check_0.case1(), else: check_0.next1()]
+  check_0.case1:
+    %9 = mir.mov_imm 10 : i64
+    %10 = mir.neg.i64 %9
+    mir.br check_0.merge(%10)
+  check_0.next1:
+    %11 = mir.mov_imm 25 : i64
+    %12 = mir.cmp eq, %0, %11
+    mir.cond_br %12 [then: check_0.case2(), else: check_0.merge(%1)]
+  check_0.case2:
+    %13 = mir.mov_imm 25 : i64
+    mir.br check_0.merge(%13)
+  __range_panic_0:
+    %17 = mir.global_addr @__panic_msg_6dade46602addba9
+    %18 = mir.call @mrt_panic(%17)
+  __range_ok_0:
+    mir.ret %14
+  }
+}
+---

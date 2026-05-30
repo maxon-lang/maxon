@@ -1,0 +1,233 @@
+// Test: multiple-try-fragments
+typealias Idx = int(i64.min to i64.max)
+typealias IdxList = List with Idx
+
+function main() returns ExitCode
+	var a = IdxList.create()
+	a.append(10)
+	a.append(20)
+	print("a={try a.get(0) otherwise -1} b={try a.get(1) otherwise -1}\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+a=10 b=20
+```
+---
+// CompiledIR
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=96
+    x64.mov ecx, 8
+    x64.call mrt_alloc
+    x64.mov r12, r8
+    x64.call mrt_managed_list_create
+    x64.mov [r12+0], r8 (8b)
+    x64.mov rcx, [r12+0] (8b)
+    x64.mov edx, 10
+    x64.call mrt_managed_list_insert_last_value
+    x64.mov rcx, [r12+0] (8b)
+    x64.mov edx, 20
+    x64.call mrt_managed_list_insert_last_value
+    x64.xor r13d, r13d
+    x64.mov r14d, 1
+  inlined_List.walkTo_0:
+    x64.mov rcx, [r12+0] (8b)
+    x64.call mrt_managed_list_head
+    x64.xor r15d, r15d
+    x64.test rdx, rdx
+    x64.je __phi_trampoline_15_0
+  inlined_List.walkTo_1:
+    x64.mov edx, 1
+    x64.mov rcx, r15
+    x64.jmp inline_cont_main_0
+  inlined_List.walkTo_2:
+    x64.mov [rbp+-32], r8
+    x64.mov r8, [rbp+-32]
+    x64.test r8, r8
+    x64.jge __phi_trampoline_17_0
+  inlined_List.walkTo_3:
+    x64.call mrt_managed_list_node_next
+    x64.test rdx, rdx
+    x64.je inlined_List.walkTo_4
+    x64.jmp inlined_List.walkTo_5
+  inlined_List.walkTo_4:
+    x64.mov r9, [rbp+-32]
+    x64.add r9, 1
+    x64.mov rcx, r8
+    x64.mov r8, r9
+    x64.jmp inlined_List.walkTo_2
+  inlined_List.walkTo_5:
+    x64.mov edx, 1
+    x64.mov rcx, r15
+  inline_cont_main_0:
+    x64.test rdx, rdx
+    x64.je inlined_List.get_1
+  inlined_List.get_0:
+    x64.xor r8d, r8d
+    x64.jmp inline_cont_main_1
+  inlined_List.get_1:
+    x64.call mrt_managed_list_node_value
+    x64.xor r9d, r9d
+    x64.mov rdx, r9
+  inline_cont_main_1:
+    x64.test rdx, rdx
+    x64.je __phi_trampoline_10_0
+  try_0.otherwise:
+    x64.mov r8, r14
+    x64.neg r8
+    x64.mov r15, r8
+  try_0.merge:
+  inlined_List.walkTo_0:
+    x64.mov rcx, [r12+0] (8b)
+    x64.call mrt_managed_list_head
+    x64.xor r12d, r12d
+    x64.test rdx, rdx
+    x64.je __phi_trampoline_23_0
+  inlined_List.walkTo_1:
+    x64.mov edx, 1
+    x64.mov rcx, r12
+    x64.jmp inline_cont_main_2
+  inlined_List.walkTo_2:
+    x64.mov [rbp+-32], r8
+    x64.mov r8, [rbp+-32]
+    x64.cmp r8, 1
+    x64.jge __phi_trampoline_25_0
+  inlined_List.walkTo_3:
+    x64.call mrt_managed_list_node_next
+    x64.test rdx, rdx
+    x64.je inlined_List.walkTo_4
+    x64.jmp inlined_List.walkTo_5
+  inlined_List.walkTo_4:
+    x64.mov r9, [rbp+-32]
+    x64.add r9, 1
+    x64.mov rcx, r8
+    x64.mov r8, r9
+    x64.jmp inlined_List.walkTo_2
+  inlined_List.walkTo_5:
+    x64.mov edx, 1
+    x64.mov rcx, r12
+  inline_cont_main_2:
+    x64.test rdx, rdx
+    x64.je inlined_List.get_1
+  inlined_List.get_0:
+    x64.xor r8d, r8d
+    x64.jmp inline_cont_main_3
+  inlined_List.get_1:
+    x64.call mrt_managed_list_node_value
+    x64.xor r9d, r9d
+    x64.mov rdx, r9
+  inline_cont_main_3:
+    x64.test rdx, rdx
+    x64.je __phi_trampoline_14_0
+  try_1.otherwise:
+    x64.mov r8, r14
+    x64.neg r8
+    x64.mov r12, r8
+  try_1.merge:
+    x64.mov ecx, 21
+    x64.call mrt_alloc
+    x64.mov [rbp+-32], r8
+    x64.mov rcx, r15
+    x64.mov rdx, [rbp+-32]
+    x64.call mrt_i64_to_string
+    x64.mov r15, r8
+    x64.mov ecx, 21
+    x64.call mrt_alloc
+    x64.mov [rbp+-40], r8
+    x64.mov rcx, r12
+    x64.mov rdx, [rbp+-40]
+    x64.call mrt_i64_to_string
+    x64.mov r12, r8
+    x64.mov r8d, 3
+    x64.mov r8, r15
+    x64.add r8, 2
+    x64.add r8, 3
+    x64.add r8, r12
+    x64.mov [rbp+-48], r8
+    x64.mov r8, [rbp+-48]
+    x64.add r8, 1
+    x64.mov [rbp+-48], r8
+    x64.mov rcx, [rbp+-48]
+    x64.add rcx, 1
+    x64.call mrt_alloc
+    x64.mov r9d, 2
+    x64.lea rsi, [rip+__istr_0]
+    x64.mov [rbp-8], r8
+    x64.mov [rbp-16], rsi
+    x64.mov [rbp-24], r9
+    x64.rep_movsb
+    x64.mov [rbp+-56], r8
+    x64.mov r8, [rbp+-56]
+    x64.add r8, 2
+    x64.mov [rbp-8], r8
+    x64.mov r9, [rbp+-32]
+    x64.mov [rbp-16], r9
+    x64.mov [rbp-24], r15
+    x64.rep_movsb
+    x64.lea r9, [rip+__istr_1]
+    x64.add r8, r15
+    x64.mov [rbp-8], r8
+    x64.mov [rbp-16], r9
+    x64.mov r9, 3
+    x64.mov [rbp-24], r9
+    x64.rep_movsb
+    x64.add r8, 3
+    x64.mov [rbp-8], r8
+    x64.mov r9, [rbp+-40]
+    x64.mov [rbp-16], r9
+    x64.mov [rbp-24], r12
+    x64.rep_movsb
+    x64.lea r9, [rip+__istr_2]
+    x64.add r8, r12
+    x64.mov [rbp-8], r8
+    x64.mov [rbp-16], r9
+    x64.mov [rbp-24], r14
+    x64.rep_movsb
+    x64.mov ecx, 40
+    x64.call mrt_alloc
+    x64.mov r12, r8
+    x64.mov r8, [rbp+-56]
+    x64.mov [r12+0], r8 (8b)
+    x64.mov r8, [rbp+-48]
+    x64.mov [r12+8], r8 (8b)
+    x64.mov [r12+16], r8 (8b)
+    x64.mov [r12+24], r14 (8b)
+    x64.mov [r12+32], r13 (8b)
+    x64.mov ecx, 16
+    x64.call mrt_alloc
+    x64.mov [r8+0], r12 (8b)
+    x64.mov [r8+8], r13 (8b)
+    x64.mov r9, [r8+0] (8b)
+    x64.mov rdx, [r9+8] (8b)
+    x64.mov r12, [r9+0] (8b)
+    x64.mov rcx, r12
+    x64.call mrt_write_stdout
+    x64.mov r8, r13
+    x64.epilogue
+    x64.ret
+  __phi_trampoline_15_0:
+    x64.mov rcx, r8
+    x64.mov r8, r15
+    x64.jmp inlined_List.walkTo_2
+  __phi_trampoline_17_0:
+    x64.mov rdx, r15
+    x64.jmp inline_cont_main_0
+  __phi_trampoline_10_0:
+    x64.mov r15, r8
+    x64.jmp try_0.merge
+  __phi_trampoline_23_0:
+    x64.mov rcx, r8
+    x64.mov r8, r12
+    x64.jmp inlined_List.walkTo_2
+  __phi_trampoline_25_0:
+    x64.mov rdx, r12
+    x64.jmp inline_cont_main_2
+  __phi_trampoline_14_0:
+    x64.mov r12, r8
+    x64.jmp try_1.merge
+  }
+}
+---

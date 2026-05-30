@@ -1,0 +1,28 @@
+// Test: docs-example-2
+function main() returns ExitCode
+	let a = 5
+	let b = 3
+	let max = a if a > b else b
+	return max
+end 'main'
+---
+ExitCode: 5
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 5 : i64
+    mir.br ternary.merge(%0)
+  ternary.merge:
+    %11 = mir.mov_imm 125 : i64
+    %12 = mir.cmp ugt, %10, %11
+    mir.cond_br %12 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %13 = mir.global_addr @__panic_msg_6942f54a996871de
+    %14 = mir.call @mrt_panic(%13)
+  __range_ok_0:
+    mir.ret %10
+  }
+}
+---

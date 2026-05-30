@@ -1,0 +1,42 @@
+// Test: fromRawValue-float-backed
+enum Weights
+	light = 1.5
+	medium = 2.5
+	heavy = 3.5
+end 'Weights'
+
+function main() returns ExitCode
+	let w = try Weights.fromRawValue(2.5) otherwise Weights.light
+	if w == Weights.medium 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 4612811918334230528 : f64
+    %1, %2 = mir.try_call @__enum_Weights_fromRawValue(%0)
+    %3 = mir.mov_imm 0 : i64
+    %4 = mir.cmp ne, %2, %3
+    mir.cond_br %4 [then: try_0.otherwise(), else: try_0.merge(%1)]
+  try_0.otherwise:
+    %6 = mir.mov_imm 4609434218613702656 : f64
+    mir.br try_0.merge(%6)
+  try_0.merge:
+    %9 = mir.mov_imm 4612811918334230528 : f64
+    %10 = mir.cmp feq, %13, %9
+    mir.cond_br %10 [then: check_0(), else: check_0.after()]
+  check_0:
+    %11 = mir.mov_imm 1 : i64
+    mir.ret %11
+  check_0.after:
+    %12 = mir.mov_imm 0 : i64
+    mir.ret %12
+  }
+}
+---

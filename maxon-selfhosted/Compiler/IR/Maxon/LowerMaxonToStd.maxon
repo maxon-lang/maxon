@@ -71,6 +71,13 @@ function enumNameHelperSymbol(enumName String) returns String
 	return "__enum_{enumName}_name"
 end 'enumNameHelperSymbol'
 
+// Linker symbol for the synthesized `.rawValue` helper of a string/char-backed
+// enum. Maps the receiver's runtime ordinal to the case's declared backing
+// String / Character literal. Mirrors `enumNameHelperSymbol`'s naming.
+function enumRawStringHelperSymbol(enumName String) returns String
+	return "__enum_{enumName}_rawString"
+end 'enumRawStringHelperSymbol'
+
 // Linker symbol for the synthesized function-backed-enum `.rawValue` helper.
 // One per fn-backed enum: takes the ordinal i64 and returns a function
 // pointer (i64). Body is the cmp/condBr chain over case ordinals; each leaf
@@ -1391,7 +1398,6 @@ function registerManagedListMethods(project Project)
 	let intReturn = MaxonReturnType.value(intType)
 	let boolReturn = MaxonReturnType.value(boolType)
 	let mlReturn = MaxonReturnType.value(mlType)
-	let mlnReturn = MaxonReturnType.value(mlnType)
 	// Element-typed slot for value-carrying methods. As with __ManagedMemory,
 	// the IR slot is a single 8-byte word regardless of element type; the
 	// substitution pass binds Element to the concrete type at call sites where
@@ -1399,6 +1405,16 @@ function registerManagedListMethods(project Project)
 	let elementParamId = project.typeParameters.intern("__ManagedList", paramName: "Element")
 	let elementType = MaxonType.typeParameter(elementParamId)
 	let elementReturn = MaxonReturnType.value(elementType)
+	// Node-returning methods (`insertFirst`, `head`, …) keep their declared
+	// return as the bare `__ManagedListNode`. The element binding is recovered
+	// at the call site by `methodCallResultType`'s receiver-driven node
+	// promotion (`promoteManagedNodeReturnFromReceiver`), which pairs the bare
+	// node type with the list receiver's concrete element so a downstream
+	// `node.value()` resolves to the real element type rather than a raw
+	// `Element`. Carrying the binding in the registered return type instead
+	// would require serializing a `genericInstance(__ManagedListNode, …)` whose
+	// id wouldn't round-trip cleanly through the stdlib cache.
+	let mlnReturn = MaxonReturnType.value(mlnType)
 
 	// Instance methods (signatures mirror maxon-sharp Compiler/2-Parser.cs:1307-1347).
 	// insertFirst(self, value Element) returns __ManagedListNode
@@ -1986,6 +2002,11 @@ type MaxonToStdLowering
 	// been requested by at least one `.rawValue` lowering. Mirrors the
 	// pendingEnumNameHelpers pattern; emitted at the tail of `lower()`.
 	var pendingEnumFnRawHelpers as EnumNameHelperSet
+	// String/char-backed enums: set of enum names whose `__rawString` helper
+	// has been requested by at least one `.rawValue` field-load. The helper
+	// maps the receiver's ordinal to the case's declared backing literal.
+	// Same lazy-synthesis pattern as the `.name` / `.fnRaw` helpers.
+	var pendingEnumRawStringHelpers as EnumNameHelperSet
 	// Phase 10 (closures): set of synthesized thunk names already scheduled
 	// by `scheduleFnRefThunk`. The thunk for a free function `foo` is
 	// `__fnref_foo` and wraps the target with the indirect-call ABI's
@@ -2026,6 +2047,7 @@ type MaxonToStdLowering
 			stringLiteralProvenance: StringLiteralProvenanceMap.create(),
 			pendingEnumNameHelpers: EnumNameHelperSet.create(),
 			pendingEnumFnRawHelpers: EnumNameHelperSet.create(),
+			pendingEnumRawStringHelpers: EnumNameHelperSet.create(),
 			pendingFnRefThunks: EnumNameHelperSet.create(),
 			pendingFnRefThunkTargets: StringArray.create()
 		}
@@ -2491,6 +2513,10 @@ type MaxonToStdLowering
 		// per enum that participated in a `.rawValue` field-load earlier in
 		// this pass. Same lazy-synthesis pattern as the `.name` helpers.
 		self.synthesizeEnumFnRawHelpers()
+
+		// String/char-backed enums: emit one `__enum_<EnumName>_rawString`
+		// helper per enum whose `.rawValue` was read earlier in this pass.
+		self.synthesizeEnumRawStringHelpers()
 
 		// Phase 9 Stage 4: emit one `__destruct_<UnionName>(self i64) returns i64`
 		// per union type with at least one managed payload field. Synthesized
@@ -3640,6 +3666,19 @@ type MaxonToStdLowering
 	// offset 0. Backend handles the RIP-relative encoding via the existing
 	// dataSection relocation kinds keyed off the `__data_` label prefix.
 	function lowerGlobalLoad(result ByteArray, name String, slotType MaxonType, dstBlock IrBlock)
+		// Lazy static struct-literal field: ensure the field is initialized
+		// before reading it. `<name>.__lazy_init` (registered at parse time,
+		// see Parser.parseLazyStaticStructDecl) is guard-checked internally so
+		// the call is a no-op after the first read. Emitting the call here —
+		// rather than a guarded branch at the read site — keeps the streaming
+		// lowerer's single-`dstBlock` invariant intact while still deferring
+		// construction to first read. The void return value is discarded.
+		let lazyInitName = "{name}.__lazy_init"
+		if self.project.funcSignatures.contains(lazyInitName) 'isLazyStatic'
+			let initResultId = allocValueId(self.funcIdRef)
+			self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(initResultId, callee: lazyInitName, argIds: ValueIdArray.create())))
+		end 'isLazyStatic'
+
 		let addrId = allocValueId(self.funcIdRef)
 		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.globalAddr(addrId, name: dataSymbolName(name))))
 		let resultId = self.defineName(result)
@@ -3855,8 +3894,14 @@ type MaxonToStdLowering
 			return false
 		end 'noEquals'
 		var argIds = ValueIdArray.create()
-		argIds.push(self.resolveName(left))
-		argIds.push(self.resolveName(right))
+		// Char-byte literal operands need promotion to a real Character before
+		// they reach `Character.equals`, which dereferences both args as struct
+		// pointers. A single-byte char literal (`'D'`) lowers to a raw int on
+		// the fast path; passing it through verbatim would have `equals` read
+		// memory at the codepoint value (segfault). `materializeCharByteOperand`
+		// is a no-op for any operand that is already a real Character SSA value.
+		argIds.push(self.materializeCharByteOperand(left, structName: typeName, dstBlock: dstBlock))
+		argIds.push(self.materializeCharByteOperand(right, structName: typeName, dstBlock: dstBlock))
 		let isNe = predicateIsNe(predicate)
 		if isNe 'negate'
 			let eqResultId = allocValueId(self.funcIdRef)
@@ -4288,7 +4333,7 @@ type MaxonToStdLowering
 		// dispatch above.
 		if isManagedHandleReceiver(receiverStructName) 'didLowerHandleMethod'
 			let bareMethodName = String.from(methodName)
-			if self.lowerManagedHandleBuiltin(receiverStructName, result: result, methodName: bareMethodName, receiverId: receiverId, hasReceiver: true, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, opIdx: opIdx, dstBlock: dstBlock, errorBoundName: errorBoundName) 'handled'
+			if self.lowerManagedHandleBuiltin(receiverStructName, result: result, methodName: bareMethodName, receiverId: receiverId, hasReceiver: true, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, opIdx: opIdx, dstBlock: dstBlock, receiverType: receiverType, errorBoundName: errorBoundName) 'handled'
 				return
 			end 'handled'
 		end 'didLowerHandleMethod'
@@ -6078,7 +6123,7 @@ type MaxonToStdLowering
 	//
 	// No inline fast paths exist for any of these receivers — every method
 	// flows through a runtime helper.
-	function lowerManagedHandleBuiltin(receiverName String, result ByteArray, methodName String, receiverId ValueId, hasReceiver bool, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, opIdx OpIndex, dstBlock IrBlock, errorBoundName ByteArray = ByteArray.create()) returns bool
+	function lowerManagedHandleBuiltin(receiverName String, result ByteArray, methodName String, receiverId ValueId, hasReceiver bool, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, opIdx OpIndex, dstBlock IrBlock, receiverType MaxonType = MaxonType.unresolved, errorBoundName ByteArray = ByteArray.create()) returns bool
 		let qualifiedName = "{receiverName}.{methodName}"
 		let sigLookup = try self.project.funcSignatures.get(qualifiedName) otherwise 'noSig'
 			return false
@@ -6101,7 +6146,7 @@ type MaxonToStdLowering
 			self.bindErrorFlagToZero(errorBoundName, dstBlock: dstBlock)
 		end 'bindZeroForNonThrowing'
 		if lowered 'refineType'
-			self.refineBuiltinCallResultType(result, receiverName: receiverName, methodName: methodName)
+			self.refineBuiltinCallResultType(result, receiverName: receiverName, methodName: methodName, receiverType: receiverType)
 		end 'refineType'
 		return lowered
 	end 'lowerManagedHandleBuiltin'
@@ -6671,7 +6716,12 @@ type MaxonToStdLowering
 	// a typed `var` first — without this, lowerMethodCall sees integer and
 	// can't pick the `__ManagedMemory` method-table arm.
 	function refineMmCallResultType(result ByteArray, methodName String)
-		self.refineBuiltinCallResultType(result, receiverName: "__ManagedMemory", methodName: methodName)
+		// Chained-call context (`__ManagedMemory.create(...).set(...)`): the
+		// receiver's element type isn't recoverable here, so pass an unresolved
+		// receiver — `buildSubstitutionForInstance` then yields an empty
+		// substitution and the declared return type is stamped verbatim, exactly
+		// as before this path learned to substitute.
+		self.refineBuiltinCallResultType(result, receiverName: "__ManagedMemory", methodName: methodName, receiverType: MaxonType.unresolved)
 	end 'refineMmCallResultType'
 
 	// Generalized form of refineMmCallResultType used by every `__ManagedX.method`
@@ -6680,14 +6730,23 @@ type MaxonToStdLowering
 	// the generic helper-call stamp uses integer, but methods that return a
 	// non-integer (managed handles, managed memory) need re-stamping so
 	// downstream method dispatch picks the correct method-table arm.
-	function refineBuiltinCallResultType(result ByteArray, receiverName String, methodName String)
+	function refineBuiltinCallResultType(result ByteArray, receiverName String, methodName String, receiverType MaxonType)
 		let qualifiedName = "{receiverName}.{methodName}"
 		let returnType = try self.project.funcReturnTypes.get(qualifiedName) otherwise return
-		let resultType = match returnType 'unwrap'
+		let declaredType = match returnType 'unwrap'
 			void gives MaxonType.integer
 			value(inner) gives inner
 		end 'unwrap'
-		// Skip the re-stamp when the declared type is integer — the generic
+		// The declared return for value-carrying builtins (e.g.
+		// `__ManagedListNode.value` / `__ManagedMemory.get`) is the bare
+		// `Element` type-parameter. Substitute it against the receiver's
+		// generic instantiation so a `node.value()` whose receiver is
+		// `__ManagedListNode with Item` stamps `Item`, not a raw `Element`
+		// (which would trip E2004 at a downstream `.field` access). Non-generic
+		// receivers yield an empty substitution and `resultType` == `declaredType`.
+		let subst = buildSubstitutionForInstance(self.project, t: receiverType)
+		let resultType = substituteType(self.project, t: declaredType, subst: subst)
+		// Skip the re-stamp when the resolved type is integer — the generic
 		// helper-call stamp already covered it.
 		let isInteger = match resultType 'isInt'
 			integer gives true
@@ -7067,6 +7126,21 @@ type MaxonToStdLowering
 	// would stack a spurious E3013 ("unresolved value name") on top of the
 	// real E3005 diagnostic. Reporting the type error first is also more
 	// useful: it points at the actual problem.
+	// Promote a char-byte literal operand to a transient Character struct when
+	// the comparison's struct type is `Character`; otherwise resolve the name
+	// verbatim. Used by `tryLowerNamedEqualityViaEquals` so a `Character == 'x'`
+	// cmp (which never routes through `coerceArgToParam`) doesn't hand the raw
+	// codepoint int to `Character.equals` as a pointer. The registry check
+	// guarantees we only promote actual char-byte int literals, never a real
+	// Character SSA value.
+	function materializeCharByteOperand(operandName ByteArray, structName String, dstBlock IrBlock) returns ValueId
+		if structName == "Character" and self.project.charByteLiterals.contains(charByteLiteralKey(self.currentFuncName, valueName: operandName)) 'isCharByte'
+			let byteId = self.resolveName(operandName)
+			return self.materializeCharacterFromByte(byteId, dstBlock: dstBlock)
+		end 'isCharByte'
+		return self.resolveName(operandName)
+	end 'materializeCharByteOperand'
+
 	function coerceArgToParam(argName ByteArray, argType MaxonType, paramType MaxonType, paramName String, range SourceRange, dstBlock IrBlock) returns ValueId
 		// paramType comes from `project.callParamTypes` — substitution has
 		// already run during TypeResolution. The one defensive short-circuit
@@ -7079,10 +7153,17 @@ type MaxonToStdLowering
 		// path emits a raw int so `b == 'a'` byte comparisons keep
 		// type-checking; here we recover the original char-ness and synthesize
 		// a transient Character struct so a `contains(character Character)`
-		// overload doesn't dereference the raw codepoint as a pointer. Limited
-		// to integer-typed args whose value name is in `charByteLiterals`,
-		// targeting a named-Character param.
-		if isCharByteToCharacterCoercion(self.project, argType: argType, paramType: paramType) 'charByteCoerce'
+		// overload doesn't dereference the raw codepoint as a pointer.
+		//
+		// The decisive signal is the registry: an arg whose value name is in
+		// `charByteLiterals` IS a raw-int char literal regardless of its
+		// recorded `argType`. We must not gate on `argType == integer` here:
+		// the `==` → `.equals()` rewrite retypes such an operand to `Character`
+		// to pass the ref-vs-ref dispatch gate, which would otherwise skip this
+		// materialization and feed the raw codepoint to `Character.equals` as a
+		// pointer (segfault). Targeting a named-`Character` param is the other
+		// half of the signal.
+		if paramTypeIsNamedCharacter(self.project, t: paramType) 'charByteCoerce'
 			if self.project.charByteLiterals.contains(charByteLiteralKey(self.currentFuncName, valueName: argName)) 'isCharByteArg'
 				let byteId = self.resolveName(argName)
 				return self.materializeCharacterFromByte(byteId, dstBlock: dstBlock)
@@ -7340,6 +7421,16 @@ type MaxonToStdLowering
 						self.lowerFunctionBackedEnumRawValue(result, receiverId: receiverId, enumType: enumType, dstBlock: dstBlock)
 						return
 					end 'isFnBacked'
+					if enumType.isStringBacked or enumType.isCharBacked 'isStringChar'
+						// String/char-backed enums store the ordinal at runtime,
+						// so `.rawValue` must materialize the case's declared
+						// backing literal (String / Character) from the ordinal
+						// via a synthesized helper — analogous to `.name`.
+						self.lowerStringBackedEnumRawValue(result, receiverId: receiverId, enumType: enumType, dstBlock: dstBlock)
+						return
+					end 'isStringChar'
+					// int / float / ordinal / struct backings: the receiver's
+					// SSA value already carries the raw bits.
 					self.aliasName(result, toId: receiverId)
 					return
 				end 'isRaw'
@@ -7446,20 +7537,29 @@ type MaxonToStdLowering
 	end 'synthesizeEnumNameHelpers'
 
 	// Emit the body for one enum's `.name` helper. The function takes a
-	// single i64 param (the receiver's rawValue) and returns a String. For
-	// each case i, the entry → next_1 → ... → next_{N-1} chain compares the
-	// param against `case_i.rawValue` and branches into a per-case block
-	// that emits the lowerStringConst layout for `case_i.name` and rets.
-	// The final tail block runs unconditionally for the last case — equivalent
-	// to "if all earlier cases missed, it must be the last one" — so there
-	// is no panic-on-no-match path. Invariant: any caller has already
-	// validated the receiver as a real enum value (the type system guarantees
-	// this; out-of-band raw values are undefined behavior).
+	// single param (the receiver's rawValue — f64 for float-backed enums, i64
+	// otherwise) and returns a String. For each case i, the entry → next_1 →
+	// ... → next_{N-1} chain compares the param against `case_i.rawValue` and
+	// branches into a per-case block that emits the lowerStringConst layout for
+	// `case_i.name` and rets. The final tail block runs unconditionally for the
+	// last case — equivalent to "if all earlier cases missed, it must be the
+	// last one" — so there is no panic-on-no-match path. Invariant: any caller
+	// has already validated the receiver as a real enum value (the type system
+	// guarantees this; out-of-band raw values are undefined behavior).
+	//
+	// A float-backed enum's receiver carries the IEEE-754 rawValue, so the
+	// param (and the cmp chain) must be f64 — otherwise the caller hands an f64
+	// into an i64 param and wasm validation rejects the type mismatch (x64
+	// tolerates it because registers are untyped).
 	function synthesizeOneEnumNameHelper(enumType EnumType)
 		let helperName = enumNameHelperSymbol(enumType.name)
+		var paramStdType = StdType.i64
+		if enumType.isFloatBacked 'floatParam'
+			paramStdType = StdType.f64
+		end 'floatParam'
 		let returnType = StdReturnType.value(StdType.i64)
 		var paramTypes = StdTypeArray.create()
-		paramTypes.push(StdType.i64)
+		paramTypes.push(paramStdType)
 		var func = IrFunction.createFromStd(helperName, returnType: returnType, paramCount: 1, paramTypes: paramTypes, returnLine: 0)
 		let snapshot = self.beginSynthesizedFunc(1)
 
@@ -7467,8 +7567,8 @@ type MaxonToStdLowering
 		// Param op anchors the receiver-rawValue slot for the backend's
 		// register allocator. The param's ValueId is 0 by construction
 		// (ValueIdRef.create(1) reserves id 0 for the single param).
-		self.stdModule.appendOp(entryBlock, op: StdOp.call(StdCallOp.param(0 as ValueId, paramIndex: 0, paramType: StdType.i64)))
-		self.setValueType(0 as ValueId, t: MaxonType.integer)
+		self.stdModule.appendOp(entryBlock, op: StdOp.call(StdCallOp.param(0 as ValueId, paramIndex: 0, paramType: paramStdType)))
+		self.setIsFloat(0 as ValueId, isFloat: enumType.isFloatBacked)
 
 		let caseCount = enumType.cases.count()
 		let constOpcode = StdArithConstOpcode.constF64 if enumType.isFloatBacked else StdArithConstOpcode.constI64
@@ -7505,6 +7605,67 @@ type MaxonToStdLowering
 
 		self.endSynthesizedFunc(func, snapshot: snapshot)
 	end 'synthesizeOneEnumNameHelper'
+
+	// Emit one `__enum_<EnumName>_rawString(ordinal)` helper per string/char-
+	// backed enum recorded in `pendingEnumRawStringHelpers`. Structurally
+	// identical to `synthesizeOneEnumNameHelper`, except each per-case leaf
+	// materializes the case's declared backing literal (`rawStringValue`)
+	// instead of its name — as a String for string-backed enums, or a
+	// Character for char-backed enums.
+	function synthesizeEnumRawStringHelpers()
+		for enumName in self.pendingEnumRawStringHelpers 'eachEnum'
+			let enumType = try self.project.enumTypes.get(enumName) otherwise panic("synthesizeEnumRawStringHelpers: enumTypes lookup failed for registered enum '{enumName}'")
+			self.synthesizeOneEnumRawStringHelper(enumType)
+		end 'eachEnum'
+	end 'synthesizeEnumRawStringHelpers'
+
+	function synthesizeOneEnumRawStringHelper(enumType EnumType)
+		let helperName = enumRawStringHelperSymbol(enumType.name)
+		let returnType = StdReturnType.value(StdType.i64)
+		var paramTypes = StdTypeArray.create()
+		paramTypes.push(StdType.i64)
+		var func = IrFunction.createFromStd(helperName, returnType: returnType, paramCount: 1, paramTypes: paramTypes, returnLine: 0)
+		let snapshot = self.beginSynthesizedFunc(1)
+
+		var entryBlock = self.stdModule.addBlock(func, label: "entry")
+		// Param op anchors the receiver-ordinal slot; its ValueId is 0 by
+		// construction (the single param reserves id 0).
+		self.stdModule.appendOp(entryBlock, op: StdOp.call(StdCallOp.param(0 as ValueId, paramIndex: 0, paramType: StdType.i64)))
+		self.setValueType(0 as ValueId, t: MaxonType.integer)
+
+		let caseCount = enumType.cases.count()
+		var currentEntry = entryBlock
+		for i in 0 upto caseCount 'eachCase'
+			let c = try enumType.cases.get(i) otherwise panic("synthesizeOneEnumRawStringHelper: cases.get OOB at {i}")
+			var caseBlock = self.stdModule.addBlock(func, label: "case_{i}")
+			let isLast = i == caseCount - 1
+			if isLast 'noMoreCmps'
+				// Last case runs unconditionally — the cmp chain already
+				// eliminated every other ordinal (equivalent to the no-match
+				// fallthrough; an out-of-band ordinal is undefined behavior).
+				self.stdModule.setTerminator(currentEntry, op: StdOp.control(StdControlOp.br(caseBlock.id, argIds: ValueIdArray.create())))
+			end 'noMoreCmps' else 'emitCmp'
+				let caseLitId = allocValueId(self.funcIdRef)
+				self.stdModule.appendOp(currentEntry, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: caseLitId, value: c.rawValue))))
+				let cmpId = self.emitBinaryI64(StdArithBinaryOpcode.cmpI64Eq, leftId: 0 as ValueId, rightId: caseLitId, dstBlock: currentEntry)
+				let nextEntry = self.stdModule.addBlock(func, label: "rawstr_check_{i + 1}")
+				self.stdModule.setTerminator(currentEntry, op: StdOp.control(StdControlOp.condBr(cmpId, thenTarget: caseBlock.id, thenArgIds: ValueIdArray.create(), elseTarget: nextEntry.id, elseArgIds: ValueIdArray.create())))
+				currentEntry = nextEntry
+			end 'emitCmp'
+			// Per-case leaf materializes the declared backing literal and rets.
+			let resultName = "__rawstr_result_{i}".toByteArray()
+			let backingStringId = self.project.strings.intern(c.rawStringValue)
+			if enumType.isCharBacked 'charLeaf'
+				self.lowerCharLiteral(resultName, stringId: backingStringId, dstBlock: caseBlock)
+			end 'charLeaf' else 'stringLeaf'
+				self.lowerStringConst(resultName, stringId: backingStringId, dstBlock: caseBlock)
+			end 'stringLeaf'
+			let resultId = self.resolveName(resultName)
+			self.stdModule.setTerminator(caseBlock, op: StdOp.call(StdCallOp.ret(resultId)))
+		end 'eachCase'
+
+		self.endSynthesizedFunc(func, snapshot: snapshot)
+	end 'synthesizeOneEnumRawStringHelper'
 
 	// Phase 9 Stage 4: walk every resolved enum type and synthesize a
 	// `__destruct_<UnionName>(self i64) returns i64` per union with managed
@@ -7746,6 +7907,22 @@ type MaxonToStdLowering
 		argIds.push(receiverId)
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: helperName, argIds: argIds)))
 	end 'lowerEnumNameLookup'
+
+	// String/char-backed `.rawValue`: call the synthesized helper
+	// `__enum_<EnumName>_rawString(ordinal)` that maps the receiver's runtime
+	// ordinal to the case's declared backing literal. String-backed enums
+	// return a `String`; char-backed enums return a `Character`. Mirrors
+	// `lowerEnumNameLookup`.
+	function lowerStringBackedEnumRawValue(result ByteArray, receiverId ValueId, enumType EnumType, dstBlock IrBlock)
+		let resultId = self.defineName(result)
+		let resultTypeName = "Character" if enumType.isCharBacked else "String"
+		self.setValueType(resultId, t: MaxonType.named(self.project.typeNames.intern(resultTypeName)))
+		let helperName = enumRawStringHelperSymbol(enumType.name)
+		self.pendingEnumRawStringHelpers.insert(enumType.name)
+		var argIds = ValueIdArray.create()
+		argIds.push(receiverId)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: helperName, argIds: argIds)))
+	end 'lowerStringBackedEnumRawValue'
 
 	// Phase 9 Stage 1: branchless `rawValue → ordinal` lookup for int/float-
 	// backed enums. Each case contributes `i * (receiverRaw == case_i.raw)` —
@@ -9552,26 +9729,18 @@ function isPrimitiveCategory(c CastCategory) returns bool
 	return c == CastCategory.int or c == CastCategory.float or c == CastCategory.bool
 end 'isPrimitiveCategory'
 
-// True iff the (argType, paramType) pair is the char-byte → Character
-// coercion: an `integer` source flowing into a `named("Character")` sink.
-// Lifted out of `coerceArgToParam` so the inner match doesn't need its own
-// arm coverage for every MaxonType shape.
-function isCharByteToCharacterCoercion(project Project, argType MaxonType, paramType MaxonType) returns bool
-	let argIsInteger = match argType 'check'
-		integer gives true
-		boolean gives false
-		float to opaquePointer gives false
-	end 'check'
-	if not argIsInteger 'noInt'
-		return false
-	end 'noInt'
-	let paramName = match paramType 'name'
+// True iff `paramType` is `named("Character")`. The char-byte → Character
+// coercion in `coerceArgToParam` keys off this (plus the `charByteLiterals`
+// registry) rather than the arg's recorded type, because the `==` → `.equals()`
+// rewrite can retype a char-byte operand to `Character` before lowering runs.
+function paramTypeIsNamedCharacter(project Project, t MaxonType) returns bool
+	let name = match t 'name'
 		named(id) gives project.typeNames.get(id)
 		boolean to string gives ""
 		function to opaquePointer gives ""
 	end 'name'
-	return paramName == "Character"
-end 'isCharByteToCharacterCoercion'
+	return name == "Character"
+end 'paramTypeIsNamedCharacter'
 
 // Categorical predicate: does `from` admit an implicit conversion to `to`
 // at a call site? The only cross-category conversions the language permits

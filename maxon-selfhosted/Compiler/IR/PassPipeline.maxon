@@ -7,10 +7,11 @@
 // PassPipeline, push the passes they want via `addPass`, and call `run()`.
 //
 // Pipeline phases (4-level IR: Maxon, Std, MIR, Target):
-//   Phase 2: Memory Safety  — semantic checks, DFE (operate on MaxonModule)
+//   Phase 2: Memory Safety  — semantic checks, maxonBorrowCheck (E3070), DFE
+//                             (operate on MaxonModule)
 //   Phase 3: Maxon → Std    — lowerMaxonToStd (MaxonModule → StdModule)
-//   Phase 4: Std passes     — borrowCheck, injectDrops, mem2reg, canonicalize,
-//                             CSE, LICM, DCE, insertRangeChecks, lowerABI
+//   Phase 4: Std passes     — injectDrops, mem2reg, canonicalize, CSE, LICM,
+//                             DCE, insertRangeChecks, lowerABI
 //                             (all operate on StdModule)
 //   Phase 5: Std → MIR      — augmentWithRuntime (StdModule → StdModule),
 //                             lowerStdToMir (StdModule → MirModule)
@@ -46,6 +47,12 @@ export union PassKind
 	// known) but before lowering (which would otherwise panic on the
 	// placeholder).
 	expandCastRangeChecks
+	// E3070 borrow check. Runs at the Maxon level (after type resolution so
+	// receiver types are concrete; before lowering, which discards source-
+	// level names/lines). Detects mutating a collection while a reference
+	// into its backing buffer is still live. Pure analysis — reports
+	// diagnostics, leaves the module unchanged.
+	maxonBorrowCheck
 	// Detect array literals whose elements are all compile-time integer
 	// constants (enum cases, int literals, bool literals) and lower them
 	// to a `.rdata` byte sequence rather than the runtime
@@ -56,7 +63,6 @@ export union PassKind
 	// Phase 3: Maxon → Std
 	lowerMaxonToStd
 	// Phase 4: Std passes
-	borrowCheck
 	injectDrops
 	mem2reg
 	canonicalize
@@ -255,6 +261,7 @@ export type PassPipeline
 			buildLayoutDescriptors then buildLayoutDescriptors(project, maxonModule: maxonModule, globalData: globalData)
 			buildWitnessTables then buildWitnessTables(project, maxonModule: maxonModule, globalData: globalData)
 			expandCastRangeChecks then expandCastRangeChecks(project, module: maxonModule, sourceFileName: sourceFileName, sourcePath: sourcePath)
+			maxonBorrowCheck then maxonModule = runMaxonBorrowCheck(project, module: maxonModule)
 			constantArrayLiteralRdata then runConstantArrayLiteralRdata(project, module: maxonModule, globalData: globalData)
 
 			// Phase 3: Maxon → Std. Panic-message labels are content-derived
@@ -268,7 +275,6 @@ export type PassPipeline
 			// Phase 4: Std passes — each `perFunction`-classified pass runs through
 			// the shared singleton-wrap loop; `inliner` and `dceFunctions` stay
 			// whole-module.
-			borrowCheck then runStdPassPerFunction(self, kind: pass)
 			injectDrops then runStdPassPerFunction(self, kind: pass)
 			mem2reg then runStdPassPerFunction(self, kind: pass)
 			canonicalize then runStdPassPerFunction(self, kind: pass)
@@ -354,7 +360,7 @@ function runResolveTypesAndStamp(project Project, module MaxonModule, filePath F
 	// "primary-error-suppresses-secondary" ordering the C# bootstrap relies
 	// on while still emitting E3012 for cleanly-resolved functions in
 	// otherwise-noisy files (the void-function-unused spec).
-	checkPendingUnusedVars(project)
+	checkPendingUnusedVars(project, module: module)
 	stampFunctionContentHashes(project, module: module)
 end 'runResolveTypesAndStamp'
 
@@ -492,7 +498,6 @@ export function runStdPassPerFunction(pipeline PassPipeline, kind PassKind)
 		let func = try pipeline.stdModule.functions.get(funcIdx) otherwise panic("runStdPassPerFunction: functions.get OOB at {funcIdx}")
 		var singleton = packSingletonStdModule(pipeline.stdModule, func: func)
 		match kind 'invoke'
-			borrowCheck then _ = runBorrowCheck(pipeline.project, module: singleton)
 			injectDrops then _ = injectDrops(singleton)
 			mem2reg then _ = promoteMem2Reg(singleton)
 			canonicalize then _ = canonicalize(singleton, project: pipeline.project)
@@ -570,7 +575,7 @@ export enum PassClassification
 end 'PassClassification'
 
 // Map a PassKind to its 11.5 classification. Verified intra-function
-// today: lowerMaxonToStd, borrowCheck, injectDrops, mem2reg, canonicalize,
+// today: lowerMaxonToStd, injectDrops, mem2reg, canonicalize,
 // cse, licm, dce, insertRangeChecks, lowerABI, lowerStdToMir,
 // commuteForCoalescing, scheduleInstructions. Whole-module: resolveTypes,
 // semanticCheck, deadFunctionElimination, buildLayoutDescriptors,
@@ -585,11 +590,11 @@ export function classifyPass(pass PassKind) returns PassClassification
 		buildLayoutDescriptors gives PassClassification.wholeModule
 		buildWitnessTables gives PassClassification.wholeModule
 		expandCastRangeChecks gives PassClassification.wholeModule
+		maxonBorrowCheck gives PassClassification.wholeModule
 		constantArrayLiteralRdata gives PassClassification.wholeModule
 		augmentWithRuntime gives PassClassification.wholeModule
 		instrumentCoverage gives PassClassification.wholeModule
 		lowerMaxonToStd gives PassClassification.perFunction
-		borrowCheck gives PassClassification.perFunction
 		injectDrops gives PassClassification.perFunction
 		mem2reg gives PassClassification.perFunction
 		canonicalize gives PassClassification.perFunction
@@ -649,6 +654,11 @@ export function buildMidPipeline(project Project) returns PassKindArray
 	// part of the live op set, and before lowerMaxonToStd because the
 	// placeholder has no Std lowering.
 	passes.push(PassKind.expandCastRangeChecks)
+	// Phase 4a moved to the Maxon level: E3070 borrow check. Runs after type
+	// resolution (receiver types concrete) and before DFE/lowering, which
+	// discard the source-level names and line/column ranges the diagnostic
+	// needs. Pure analysis — emits diagnostics only.
+	passes.push(PassKind.maxonBorrowCheck)
 	passes.push(PassKind.deadFunctionElimination)
 	// Constant-array-to-rdata fast path. Runs after type resolution so
 	// element types are concrete, after DFE so unreferenced array literals
@@ -659,8 +669,7 @@ export function buildMidPipeline(project Project) returns PassKindArray
 	passes.push(PassKind.constantArrayLiteralRdata)
 	// Phase 3: Maxon → Std
 	passes.push(PassKind.lowerMaxonToStd)
-	// Phase 4a: Memory safety (Std-level)
-	passes.push(PassKind.borrowCheck)
+	// Phase 4a: drop injection (Std-level)
 	passes.push(PassKind.injectDrops)
 	// Phase 4b: Std passes
 	passes.push(PassKind.mem2reg)
@@ -761,9 +770,9 @@ function classifyPhase(pass PassKind) returns PipelinePhase
 		buildLayoutDescriptors gives PipelinePhase.maxon
 		buildWitnessTables gives PipelinePhase.maxon
 		expandCastRangeChecks gives PipelinePhase.maxon
+		maxonBorrowCheck gives PipelinePhase.maxon
 		constantArrayLiteralRdata gives PipelinePhase.maxon
 		lowerMaxonToStd gives PipelinePhase.std
-		borrowCheck gives PipelinePhase.std
 		injectDrops gives PipelinePhase.std
 		mem2reg gives PipelinePhase.std
 		canonicalize gives PipelinePhase.std
@@ -887,7 +896,7 @@ export function passKindToString(pass PassKind) returns String
 		buildWitnessTables gives "build-witness-tables"
 		expandCastRangeChecks gives "expand-cast-range-checks"
 		constantArrayLiteralRdata gives "constant-array-literal-rdata"
-		borrowCheck gives "borrow-check"
+		maxonBorrowCheck gives "maxon-borrow-check"
 		injectDrops gives "inject-drops"
 		insertRangeChecks gives "insert-range-checks"
 		lowerMaxonToStd gives "lower-maxon-to-std"

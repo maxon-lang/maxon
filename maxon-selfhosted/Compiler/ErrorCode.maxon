@@ -25,6 +25,11 @@ export union ErrorCode
 	parserMatchFallthroughWithReturn = 2025
 	parserMatchNotExhaustive = 2026
 	parserMatchDuplicatePattern = 2027
+	// E2028: a match arm or postfix-ternary's two arms produce different types,
+	// or a ternary condition is not bool. Mirrors the C# bootstrap's
+	// ParserMatchTypeMismatch — thrown at parse time so it wins over the
+	// body-finish unused-variable check (E3012).
+	parserMatchTypeMismatch = 2028
 	parserMatchDefaultNotLast = 2029
 	parserMatchMissingBlockId = 2042
 	parserMatchMismatchedBlockId = 2043
@@ -159,9 +164,38 @@ export union ErrorCode
 	// the cross-file fallback in `qualifyCalleeForContextWithType` when
 	// `methodNameIndex` returns multiple distinct visible candidates.
 	semanticAmbiguousCrossFileCall = 3095
-	borrowMutateWhileBorrowed = 4001
-	borrowMultipleMutable = 4002
+	// E3070: borrow conflict — a collection was mutated (e.g. `arr.push(x)`)
+	// while a reference into its backing buffer is still live (e.g.
+	// `let s = try arr.get(0) ...`). A growth could reallocate the buffer
+	// and dangle the outstanding reference. Emitted by the Maxon-tier
+	// `runMaxonBorrowCheck` pass. Mirrors the C# bootstrap's
+	// `SemanticBorrowConflict` (same code, same message format).
+	semanticBorrowConflict = 3070
+	// E3077: a local declared with `var` is never reassigned, so it should
+	// be a `let`. Detected after type resolution by
+	// `checkVarShouldBeLetForEntry` (a `var` whose name never appears in the
+	// per-function reassigned-var set). E3012 (unused variable) takes
+	// precedence — an unused `var` reports as unused, not as should-be-let.
+	// Mirrors the C# bootstrap's `SemanticVarShouldBeLet`.
+	semanticVarShouldBeLet = 3077
+	// E3078: `var b = a` (or `var b = a.field`) where the source `a` is an
+	// immutable (`let`) binding of a reference type (struct / enum /
+	// function). Copying an immutable reference-type binding into a mutable
+	// one would alias the same heap value through a writable name; the user
+	// must either keep `b` immutable (`let`) or take an independent copy via
+	// `clone()`. Value-typed sources (int/float/bool/byte) are independent
+	// copies and are allowed. Detected after type resolution by
+	// `checkVarFromImmutableForEntry`. Mirrors the C# bootstrap's
+	// `SemanticVarFromImmutable`.
+	semanticVarFromImmutable = 3078
 	irInvalidFieldAccess = 4006
+	// E4014: a type definition contains a reference cycle — it transitively
+	// contains itself through struct fields, union associated values, or
+	// container element types. Maxon's ownership model requires acyclic type
+	// graphs for deterministic destruction, so recursive type references are
+	// rejected. Emitted by the type-cycle check after type resolution. Mirrors
+	// the C# bootstrap's `IrTypeCycle` (same code, same message format).
+	irTypeCycle = 4014
 	// E4099: internal compiler-invariant violation — a `call` / `methodCall`
 	// / `tryCall` / `tryMethodCall` op survived past TypeResolution without an
 	// entry in `project.resolvedCallees` and without an "intentionally dynamic"

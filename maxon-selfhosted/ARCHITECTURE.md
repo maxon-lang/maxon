@@ -50,7 +50,7 @@ maxon-selfhosted/
         LowerToMir.maxon               Mid-level dialects -> MirOp lowering
         LowerABI.maxon                 ABI lowering (calling conventions)
         Mem2Reg.maxon                  Promote memref slots to SSA values
-        BorrowCheck.maxon              Borrow checking pass
+        MaxonBorrowCheck.maxon         Maxon-tier borrow check (E3070); detects mutating a collection while a .get() reference is live
         InjectDrops.maxon              Insert destructor calls for owned values
         InsertRangeChecks.maxon        Insert runtime range checks for typed integers
         Canonicalize.maxon             Algebraic simplification pass

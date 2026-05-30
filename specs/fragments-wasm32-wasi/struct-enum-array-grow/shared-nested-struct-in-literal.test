@@ -1,0 +1,113 @@
+// Test: shared-nested-struct-in-literal
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+export type Inner
+		export var data as IntArray
+		export var value as Integer
+
+		static function create(data IntArray, value Integer) returns Self
+			return Self{data: data, value: value}
+		end 'create'
+end 'Inner'
+
+export type Outer
+		export var first as Inner
+		export var second as Inner
+		export var deps as IntArray
+
+		static function create(first Inner, second Inner, deps IntArray) returns Self
+			return Self{first: first, second: second, deps: deps}
+		end 'create'
+end 'Outer'
+
+function makeOuter() returns Outer
+		let shared = Inner.create(IntArray.create(), value: 42)
+		return Outer.create(shared, second: shared, deps: IntArray.create())
+end 'makeOuter'
+
+function main() returns ExitCode
+		var o = makeOuter()
+		o.deps.push(1)
+		o.deps.push(2)
+		o.deps.push(3)
+		return o.deps.count()
+end 'main'
+---
+ExitCode: 3
+---
+// CompiledIR
+module {
+  func @makeOuter() -> i64 {
+  entry:
+    %9 = mir.mov_imm 8 : i64
+    %10 = mir.call @mrt_alloc(%9)
+    %11 = mir.mov_imm 40 : i64
+    %12 = mir.call @mrt_alloc(%11)
+    %13 = mir.mov_imm 0 : i64
+    mir.store %13, %12, 0 width: qword
+    %14 = mir.mov_imm 0 : i64
+    mir.store %14, %12, 8 width: qword
+    %15 = mir.mov_imm 0 : i64
+    mir.store %15, %12, 16 width: qword
+    %16 = mir.mov_imm 8 : i64
+    mir.store %16, %12, 24 width: qword
+    %17 = mir.mov_imm 0 : i64
+    mir.store %17, %12, 32 width: qword
+    mir.store %12, %10, 0 width: qword
+    %2 = mir.mov_imm 42 : i64
+    %18 = mir.mov_imm 16 : i64
+    %19 = mir.call @mrt_alloc(%18)
+    mir.store %10, %19, 0 width: qword
+    mir.store %2, %19, 8 width: qword
+    %20 = mir.mov_imm 8 : i64
+    %21 = mir.call @mrt_alloc(%20)
+    %22 = mir.mov_imm 40 : i64
+    %23 = mir.call @mrt_alloc(%22)
+    %24 = mir.mov_imm 0 : i64
+    mir.store %24, %23, 0 width: qword
+    %25 = mir.mov_imm 0 : i64
+    mir.store %25, %23, 8 width: qword
+    %26 = mir.mov_imm 0 : i64
+    mir.store %26, %23, 16 width: qword
+    %27 = mir.mov_imm 8 : i64
+    mir.store %27, %23, 24 width: qword
+    %28 = mir.mov_imm 0 : i64
+    mir.store %28, %23, 32 width: qword
+    mir.store %23, %21, 0 width: qword
+    %29 = mir.mov_imm 24 : i64
+    %30 = mir.call @mrt_alloc(%29)
+    mir.store %19, %30, 0 width: qword
+    mir.store %19, %30, 8 width: qword
+    mir.store %21, %30, 16 width: qword
+    mir.ret %30
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.call @makeOuter()
+    %2 = mir.load %0, 16 width: qword
+    %3 = mir.mov_imm 1 : i64
+    %4 = mir.global_addr @__layout_Array_Integer
+    %5 = mir.call @Array.push(%2, %3, %4)
+    %7 = mir.load %0, 16 width: qword
+    %8 = mir.mov_imm 2 : i64
+    %9 = mir.global_addr @__layout_Array_Integer
+    %10 = mir.call @Array.push(%7, %8, %9)
+    %12 = mir.load %0, 16 width: qword
+    %13 = mir.mov_imm 3 : i64
+    %14 = mir.global_addr @__layout_Array_Integer
+    %15 = mir.call @Array.push(%12, %13, %14)
+    %17 = mir.load %0, 16 width: qword
+    %18 = mir.global_addr @__layout_Array_Integer
+    %19 = mir.call @Array.count(%17, %18)
+    %20 = mir.mov_imm 125 : i64
+    %21 = mir.cmp ugt, %19, %20
+    mir.cond_br %21 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %22 = mir.global_addr @__panic_msg_470d3b809585db9d
+    %23 = mir.call @mrt_panic(%22)
+  __range_ok_0:
+    mir.ret %19
+  }
+}
+---

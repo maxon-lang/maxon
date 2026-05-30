@@ -1,0 +1,84 @@
+// Test: ternary-expression.string-interp-nested-strings
+function main() returns ExitCode
+	let flag = true
+	let msg = "status: {"on" if flag else "off"}"
+	print(msg)
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+status: on
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 1 : i64
+    %1 = mir.global_addr @__istr_0
+    %2 = mir.mov_imm 40 : i64
+    %3 = mir.call @mrt_alloc(%2)
+    mir.store %1, %3, 0 width: qword
+    %4 = mir.mov_imm 2 : i64
+    mir.store %4, %3, 8 width: qword
+    %5 = mir.mov_imm -2 : i64
+    mir.store %5, %3, 16 width: qword
+    mir.store %0, %3, 24 width: qword
+    %7 = mir.mov_imm 0 : i64
+    mir.store %7, %3, 32 width: qword
+    %8 = mir.mov_imm 16 : i64
+    %9 = mir.call @mrt_alloc(%8)
+    mir.store %3, %9, 0 width: qword
+    mir.store %0, %9, 8 width: qword
+    %13 = mir.global_addr @__istr_1
+    %14 = mir.mov_imm 40 : i64
+    %15 = mir.call @mrt_alloc(%14)
+    mir.store %13, %15, 0 width: qword
+    %16 = mir.mov_imm 3 : i64
+    mir.store %16, %15, 8 width: qword
+    %17 = mir.mov_imm -2 : i64
+    mir.store %17, %15, 16 width: qword
+    mir.store %0, %15, 24 width: qword
+    mir.store %7, %15, 32 width: qword
+    %20 = mir.mov_imm 16 : i64
+    %21 = mir.call @mrt_alloc(%20)
+    mir.store %15, %21, 0 width: qword
+    mir.store %0, %21, 8 width: qword
+    mir.br ternary.merge(%9)
+  ternary.merge:
+    %24 = mir.global_addr @__istr_2
+    %25 = mir.mov_imm 8 : i64
+    %26 = mir.load %51, 0 width: qword
+    %27 = mir.load %26, 0 width: qword
+    %28 = mir.load %26, 8 width: qword
+    %29 = mir.global_addr @__istr_3
+    %32 = mir.mov_imm 8 : i64
+    %33 = mir.add.i64 %32, %28
+    %34 = mir.add.i64 %33, %7
+    %36 = mir.add.i64 %34, %0
+    %37 = mir.call @mrt_alloc(%36)
+    mir.memcpy %37, %24, %25
+    %38 = mir.add.i64 %37, %25
+    mir.memcpy %38, %27, %28
+    %39 = mir.add.i64 %38, %28
+    mir.memcpy %39, %29, %7
+    %41 = mir.mov_imm 40 : i64
+    %42 = mir.call @mrt_alloc(%41)
+    mir.store %37, %42, 0 width: qword
+    mir.store %34, %42, 8 width: qword
+    mir.store %34, %42, 16 width: qword
+    mir.store %0, %42, 24 width: qword
+    mir.store %7, %42, 32 width: qword
+    %45 = mir.mov_imm 16 : i64
+    %46 = mir.call @mrt_alloc(%45)
+    mir.store %42, %46, 0 width: qword
+    mir.store %7, %46, 8 width: qword
+    %52 = mir.load %46, 0 width: qword
+    %53 = mir.load %52, 0 width: qword
+    %54 = mir.load %52, 8 width: qword
+    %55 = mir.call @mrt_write_stdout(%53, %54)
+    mir.ret %7
+  }
+}
+---

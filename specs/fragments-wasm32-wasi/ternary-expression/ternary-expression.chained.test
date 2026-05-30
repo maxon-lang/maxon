@@ -1,0 +1,34 @@
+// Test: ternary-expression.chained
+function main() returns ExitCode
+	let a = false
+	let b = true
+	let x = 1 if a else 2 if b else 3
+	return x
+end 'main'
+---
+ExitCode: 2
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %2 = mir.mov_imm 1 : i64
+    %5 = mir.mov_imm 2 : i64
+    mir.br ternary.merge(%5)
+  ternary.merge:
+    mir.cond_br %0 [then: ternary.merge(%2), else: ternary.else()]
+  ternary.else:
+    mir.br ternary.merge(%13)
+  ternary.merge:
+    %14 = mir.mov_imm 125 : i64
+    %15 = mir.cmp ugt, %12, %14
+    mir.cond_br %15 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %16 = mir.global_addr @__panic_msg_0fb08625d74c3e87
+    %17 = mir.call @mrt_panic(%16)
+  __range_ok_0:
+    mir.ret %12
+  }
+}
+---

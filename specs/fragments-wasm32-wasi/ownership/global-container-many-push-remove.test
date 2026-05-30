@@ -1,0 +1,129 @@
+// Test: global-container-many-push-remove
+typealias Integer = int(i64.min to i64.max)
+
+type Item
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Item'
+
+typealias ItemArray = Array with Item
+
+var globalArr = ItemArray.create()
+
+function main() returns ExitCode
+	var i = 0
+	while i < 20 'push'
+		globalArr.push(Item.create(i))
+		i = i + 1
+	end 'push'
+	var total = 0
+	while globalArr.count() > 0 'remove'
+		let elem = try globalArr.remove(0) otherwise 'err'
+			return 99
+		end 'err'
+		total = total + elem.value
+	end 'remove'
+	print("{total}\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+190
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    mir.br push_0.header(%0)
+  push_0.header:
+    %2 = mir.mov_imm 20 : i64
+    %3 = mir.cmp lt, %62, %2
+    mir.cond_br %3 [then: push_0(), else: remove_0.header(%0)]
+  push_0:
+    %4 = mir.global_addr @__data_globalArr
+    %5 = mir.load %4, 0 width: qword
+    %64 = mir.mov_imm 8 : i64
+    %65 = mir.call @mrt_alloc(%64)
+    mir.store %62, %65, 0 width: qword
+    %8 = mir.global_addr @__layout_Array_Item
+    %9 = mir.call @Array.push(%5, %65, %8)
+    %11 = mir.mov_imm 1 : i64
+    %12 = mir.add.i64 %62, %11
+    mir.br push_0.header(%12)
+  remove_0.header:
+    %14 = mir.global_addr @__data_globalArr
+    %15 = mir.load %14, 0 width: qword
+    %16 = mir.global_addr @__layout_Array_Item
+    %17 = mir.call @Array.count(%15, %16)
+    %19 = mir.cmp gt, %17, %0
+    mir.cond_br %19 [then: remove_0(), else: remove_0.exit()]
+  remove_0:
+    %20 = mir.global_addr @__data_globalArr
+    %21 = mir.load %20, 0 width: qword
+    mir.br inlined_Array.remove_0()
+  inlined_Array.remove_0:
+    %66 = mir.load %21, 0 width: qword
+    %67, %68 = mir.try_call @stdlib.__managed_mem_remove(%66, %0)
+    %69 = mir.mov_imm 0 : i64
+    %70 = mir.cmp ne, %68, %69
+    mir.cond_br %70 [then: inlined_Array.remove_1(), else: inlined_Array.remove_2()]
+  inlined_Array.remove_1:
+    %71 = mir.mov_imm 0 : i64
+    %72 = mir.mov_imm 1 : i64
+    mir.br inline_cont_main_0(%71, %72)
+  inlined_Array.remove_2:
+    %73 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%67, %73)
+  inline_cont_main_0:
+    %27 = mir.cmp ne, %75, %0
+    mir.cond_br %27 [then: try_0.otherwise(), else: try_0.merge()]
+  remove_0.exit:
+    %30 = mir.global_addr @__istr_0
+    %32 = mir.mov_imm 21 : i64
+    %33 = mir.call @mrt_alloc(%32)
+    %34 = mir.call @mrt_i64_to_string(%63, %33)
+    %35 = mir.global_addr @__istr_1
+    %36 = mir.mov_imm 1 : i64
+    %39 = mir.add.i64 %0, %34
+    %40 = mir.add.i64 %39, %36
+    %41 = mir.mov_imm 1 : i64
+    %42 = mir.add.i64 %40, %41
+    %43 = mir.call @mrt_alloc(%42)
+    mir.memcpy %43, %30, %0
+    %44 = mir.add.i64 %43, %0
+    mir.memcpy %44, %33, %34
+    %45 = mir.add.i64 %44, %34
+    mir.memcpy %45, %35, %36
+    %47 = mir.mov_imm 40 : i64
+    %48 = mir.call @mrt_alloc(%47)
+    mir.store %43, %48, 0 width: qword
+    mir.store %40, %48, 8 width: qword
+    mir.store %40, %48, 16 width: qword
+    %49 = mir.mov_imm 1 : i64
+    mir.store %49, %48, 24 width: qword
+    mir.store %0, %48, 32 width: qword
+    %51 = mir.mov_imm 16 : i64
+    %52 = mir.call @mrt_alloc(%51)
+    mir.store %48, %52, 0 width: qword
+    mir.store %0, %52, 8 width: qword
+    %76 = mir.load %52, 0 width: qword
+    %77 = mir.load %76, 0 width: qword
+    %78 = mir.load %76, 8 width: qword
+    %79 = mir.call @mrt_write_stdout(%77, %78)
+    mir.ret %0
+  try_0.otherwise:
+    %56 = mir.mov_imm 99 : i64
+    mir.ret %56
+  try_0.merge:
+    %60 = mir.load %74, 0 width: qword
+    %61 = mir.add.i64 %63, %60
+    mir.br remove_0.header(%61)
+  }
+}
+---

@@ -321,6 +321,55 @@ end 'main'
 12
 ```
 
+<!-- test: ternary-expression.error.unused-loopvar-before-ternary -->
+
+Regression: a postfix ternary appearing downstream of an inner-loop
+`try ... otherwise` (which allocates a `try_N.merge` block) inside an
+outer loop whose induction variable is **unused** must still surface the
+unused-variable diagnostic (E3012), not crash. The self-hosted parser
+previously left the inner `try_N.merge` block without a terminator in this
+exact CFG shape and tripped `assertAllBlocksTerminated` before E3012 could
+be reported. The block-terminator wiring must remain well-formed regardless
+of how many `if ... else` merge blocks are allocated later in the same
+function body.
+
+```maxon
+typealias Idx = int(i64.min to i64.max)
+typealias IdxList = List with Idx
+
+function splice(lst IdxList, anchor Idx, after bool)
+	for outer in 0 upto 2 'eachBlock'
+		var insertPos = -1 as Idx
+		for posIdx in 0 upto lst.count() 'eachOpRef'
+			let ref = try lst.get(posIdx) otherwise panic("oob")
+			if ref == anchor 'foundAnchor'
+				insertPos = posIdx
+				break
+			end 'foundAnchor'
+		end 'eachOpRef'
+		if insertPos >= 0 'doInsert'
+			let target = insertPos + 1 if after else insertPos
+			try lst.insert(target, value: 99) otherwise panic("insert oob")
+			return
+		end 'doInsert'
+	end 'eachBlock'
+	panic("not found")
+end 'splice'
+
+function main() returns ExitCode
+	var a = IdxList.create()
+	a.append(10)
+	a.append(20)
+	a.append(30)
+	splice(a, anchor: 20, after: false)
+	print("pos1={try a.get(1) otherwise -1} pos2={try a.get(2) otherwise -1}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3012: specs/fragments/ternary-expression/ternary-expression.error.unused-loopvar-before-ternary.test:6:6: unused variable: 'outer'
+```
+
 <!-- test: ternary-expression.error.type-mismatch -->
 ```maxon
 function main() returns ExitCode
@@ -341,4 +390,40 @@ end 'main'
 ```
 ```maxoncstderr
 error E2028: specs/fragments/ternary-expression/ternary-expression.error.non-bool-condition.test:3:13: ternary expression requires a bool condition, got 'Integer'
+```
+
+<!-- test: ternary-expression.error.struct-type-mismatch -->
+
+Both arms are managed (struct) types, so a coarse Bool/Integer/Float/Struct
+kind check sees them as equal. The arm-match check must compare the concrete
+type names, otherwise `Cat if c else Dog` slips through and crashes in lowering
+when the merged result is read with the wrong field set.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Cat
+	export var legs as Integer
+
+	static function create() returns Self
+		return Self{legs: 4}
+	end 'create'
+end 'Cat'
+
+type Dog
+	export var tails as Integer
+
+	static function create() returns Self
+		return Self{tails: 1}
+	end 'create'
+end 'Dog'
+
+function main() returns ExitCode
+	let flag = true
+	let x = Cat.create() if flag else Dog.create()
+	return x.legs
+end 'main'
+```
+```maxoncstderr
+error E2028: specs/fragments/ternary-expression/ternary-expression.error.struct-type-mismatch.test:22:23: ternary expression type mismatch: true branch is 'Cat' but false branch is 'Dog'
 ```

@@ -516,9 +516,9 @@ var list = IntList.create()             // Empty list
 
 **Adding Elements**
 ```maxon
-list.prepend(1)                  // Add to front — O(1)
-list.append(2)                   // Add to back — O(1)
-list.insert(1, value: 99)       // Insert at index — O(n)
+list.prepend(1)                              // Add to front — O(1)
+list.append(2)                               // Add to back — O(1)
+try list.insert(1, value: 99) otherwise ignore  // Insert at index [0, count] — O(n), throws ArrayError if at > count
 ```
 
 **Accessing Elements**

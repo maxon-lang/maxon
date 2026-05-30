@@ -1,0 +1,27 @@
+// Test: ternary-expression.with-variable-condition
+function main() returns ExitCode
+	let flag = true
+	let x = 1 if flag else 0
+	return x
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %1 = mir.mov_imm 1 : i64
+    mir.br ternary.merge(%1)
+  ternary.merge:
+    %8 = mir.mov_imm 125 : i64
+    %9 = mir.cmp ugt, %7, %8
+    mir.cond_br %9 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %10 = mir.global_addr @__panic_msg_ffbb349560125a4f
+    %11 = mir.call @mrt_panic(%10)
+  __range_ok_0:
+    mir.ret %7
+  }
+}
+---

@@ -14383,6 +14383,17 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // Determine struct/enum type name for managed types
     string? resultStructTypeName = GetManagedTypeName(trueVal);
 
+    // Kind equality alone treats every struct (and every enum) as the same
+    // type, so a `Cat if c else Dog` slips through the check above and later
+    // crashes in lowering when the merged result is read with the wrong
+    // field set. For managed arms, require the concrete type names to match.
+    var falseStructTypeName = GetManagedTypeName(falseVal);
+    if (resultStructTypeName != null && falseStructTypeName != null && resultStructTypeName != falseStructTypeName) {
+      throw new CompileError(ErrorCode.ParserMatchTypeMismatch,
+        $"ternary expression type mismatch: true branch is '{resultStructTypeName}' but false branch is '{falseStructTypeName}'",
+        ifToken.Line, ifToken.Column);
+    }
+
     var entryBlock = _currentBlock!;
     var ternaryLabel = UniqueLabel("ternary");
 

@@ -1,0 +1,26 @@
+// Test: docs-example-1
+function main() returns ExitCode
+	let x = 10 if true else 20
+	return x
+end 'main'
+---
+ExitCode: 10
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 10 : i64
+    mir.br ternary.merge(%0)
+  ternary.merge:
+    %7 = mir.mov_imm 125 : i64
+    %8 = mir.cmp ugt, %6, %7
+    mir.cond_br %8 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %9 = mir.global_addr @__panic_msg_dc316ce1c2228a77
+    %10 = mir.call @mrt_panic(%9)
+  __range_ok_0:
+    mir.ret %6
+  }
+}
+---

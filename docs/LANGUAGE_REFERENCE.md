@@ -1956,15 +1956,32 @@ Overlapping patterns (ranges that cover the same case, or an explicit case withi
 
 ### Raw Value Access
 
-All enums support `.rawValue`. Simple enums return the case ordinal (0, 1, 2…); backed enums return the explicit value:
+All enums support `.rawValue`. Simple enums return the case ordinal (0, 1, 2…); backed enums return the explicit value, typed by the backing kind — `int` for int-backed, `float` for float-backed, `String` for string-backed, and `Character` for char-backed:
 
 ```maxon
 var c = Color.green
 var ordinal = c.rawValue   // 1
 
 var s = HttpStatus.notFound
-var code = s.rawValue      // 404
+var code = s.rawValue      // 404 (int)
 ```
+
+For string- and char-backed enums, `.rawValue` returns the declared backing literal as a `String` / `Character` (the value is reconstructed from the ordinal at runtime):
+
+```maxon
+enum Status
+	active = "ACTIVE"
+	closed = "CLOSED"
+end 'Status'
+
+var st = Status.active
+var raw = st.rawValue          // "ACTIVE" (String)
+if st.rawValue == "ACTIVE" 'check'   // String/char-backed enums compare against their scalar peer
+	// ...
+end 'check'
+```
+
+A string-backed enum value compares with `==` / `!=` against a `String` (and a char-backed value against a `Character`) by comparing the declared backing literal; both sides may also be the same enum type.
 
 ### Name Access
 
@@ -2029,6 +2046,14 @@ The `fromRawValue` static method converts a raw value to an enum case. It throws
 ```maxon
 var s = try HttpStatus.fromRawValue(404) otherwise HttpStatus.ok  // HttpStatus.notFound
 ```
+
+For string- and char-backed enums, `fromRawValue` takes the backing literal type (`String` / `Character`) and matches against each case's declared backing literal:
+
+```maxon
+var st = try Status.fromRawValue("CLOSED") otherwise Status.active  // Status.closed
+```
+
+`fromRawValue` is not available for struct-backed or function-backed enums (their raw value can't be reconstructed from a literal lookup).
 
 ### Converting from Name (`fromName`)
 

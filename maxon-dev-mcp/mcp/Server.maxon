@@ -318,17 +318,22 @@ end 'schemaForSourceOnly'
 // run_program
 // -----------------------------------------------------------------------------
 function schemaForRunProgram(doc JsonDoc) returns JsonNodeId
+	var compilerChoices = StringArray.create()
+	compilerChoices.push("csharp")
+	compilerChoices.push("selfhosted")
+	let compilerSchema = schemaStringEnum(doc, choices: compilerChoices, description: "Which compiler to build the program with. Required — there is no default.")
 	let sourceSchema = schemaSource(doc)
 	let argvItemSchema = schemaString(doc, description: "One argv entry.")
 	let argsSchema = schemaArrayOf(doc, itemSchema: argvItemSchema, description: "Optional argv to pass to the compiled program.")
 	let stdinSchema = schemaString(doc, description: "Optional bytes piped to the program's stdin.")
 	let timeoutSchema = schemaInteger(doc, description: "Per-run timeout in milliseconds. Default 30000.")
 	var fields = SchemaFieldArray.create()
+	fields.push(SchemaField.create("compiler", schemaId: compilerSchema, required: true))
 	fields.push(SchemaField.create("source", schemaId: sourceSchema, required: true))
 	fields.push(SchemaField.create("args", schemaId: argsSchema, required: false))
 	fields.push(SchemaField.create("stdin", schemaId: stdinSchema, required: false))
 	fields.push(SchemaField.create("timeoutMs", schemaId: timeoutSchema, required: false))
-	return schemaObject(doc, fields: fields, description: "Compile and execute a Maxon snippet or file; returns build+run exit codes, durations, and stdout/stderr.")
+	return schemaObject(doc, fields: fields, description: "Compile (with the chosen compiler) and execute a Maxon snippet or file; returns build+run exit codes, durations, and stdout/stderr.")
 end 'schemaForRunProgram'
 
 // -----------------------------------------------------------------------------
@@ -362,7 +367,7 @@ function toolDescription(name String) returns String
 		return "Compile a snippet or file with --emit-ir and return the resulting .ir text (optionally per-stage when dumpStages=true)."
 	end 'di'
 	if name.equals("run_program") 'rp'
-		return "Compile and execute a Maxon snippet or file, returning build + run exit codes, durations, and stdout/stderr."
+		return "Compile and execute a Maxon snippet or file with the chosen compiler (csharp | selfhosted), returning build + run exit codes, durations, and stdout/stderr."
 	end 'rp'
 	if name.equals("fmt") 'fm'
 		return "Format a Maxon snippet or file via `maxon fmt`. Files are formatted in-place; snippets return the formatted text."

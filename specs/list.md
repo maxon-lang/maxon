@@ -58,9 +58,11 @@ Add an element to the front of the list. O(1).
 
 Add an element to the back of the list. O(1).
 
-#### insert(at Index, value Element)
+#### insert(at Index, value Element) throws ArrayError
 
-Insert an element at the given index. O(n).
+Insert an element at the given index. O(n). Valid range is `[0, count]` —
+passing `count` appends at the end. An index greater than `count` is out of
+bounds and throws `ArrayError.indexOutOfBounds`.
 
 #### removeFirst() returns Element throws ArrayError
 
@@ -365,6 +367,34 @@ end 'main'
 10
 20
 30
+```
+
+<!-- test: insert.out-of-bounds -->
+
+An index past `count` is out of bounds and throws `ArrayError.indexOutOfBounds`.
+Regression: `insert` previously took the append branch for any `at >= count`,
+silently clamping an out-of-bounds index to the tail (growing the list) instead
+of throwing. Only `at == count` may append; `at > count` must throw and leave
+the list unchanged.
+
+```maxon
+function main() returns ExitCode
+	var list = List from [10]
+	try list.insert(5, value: 99) otherwise 'oob'
+		print("threw\n")
+		print("{list.count()}\n")
+		return 0
+	end 'oob'
+	print("no throw\n")
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+threw
+1
 ```
 
 <!-- test: remove-first -->

@@ -1,0 +1,492 @@
+// Maxon-tier Borrow Check Pass — NLL-style borrow analysis (E3070).
+//
+// Pure analysis pass: reports errors via `reportCompileError` but does NOT
+// modify the module. Runs at the Maxon phase (after TypeResolution, before
+// lowering) so every op carries source-level names, line/column ranges, and
+// resolved receiver types — the layer the C# bootstrap's BorrowCheckPass
+// operates on.
+//
+// It detects the dangling-reference hazard: obtaining a reference into a
+// collection's backing buffer (`let s = try arr.get(0) ...`) and then mutating
+// that collection (`arr.push(...)`). A growth could reallocate the buffer and
+// dangle the outstanding reference. The check uses non-lexical lifetimes: the
+// borrow expires at the borrowing variable's last use, so using the reference
+// and then mutating the source is allowed.
+//
+// Ported from maxon-sharp/Compiler/MLIR/Passes/BorrowCheckPass.cs. The C# pass
+// works over MaxonAssignOp/MaxonCallOp with variable names; the self-hosted
+// Maxon IR is slot-addressed (varLoad/varDecl carry a VarSlot, method calls
+// carry SSA value names), so this port adds two reverse maps:
+//   - ssaToSlot: an SSA value name (a method-call receiver) -> the VarSlot it
+//     loaded from, built by scanning `varLoad` ops.
+//   - slotToVarInfo: a VarSlot -> the source VarInfo (name, type), built by
+//     inverting the function's `scope`.
+// With those, the algorithm mirrors the C# three-pass structure exactly.
+
+// Op index within a function under a single global counter spanning all blocks
+// (matches the C# pass — borrows flow across blocks through try-result
+// branching, so a per-block index would mis-expire them).
+typealias GlobalOpIndex = int(0 to u64.max)
+
+typealias MethodNameSet = Set with String
+
+// Mutating collection method names. A method call whose receiver is a borrowed
+// collection and whose name is in this set conflicts with the borrow. Mirrors
+// C# ParameterMutationAnalysisPass.IsMutatingMethodName — for a collection
+// receiver these are exactly the methods whose `MutatedParamIndices` include
+// the self slot, which is what BorrowCheckPass.DoesMutateArg(call, 0) tests.
+function mutatingMethodNames() returns MethodNameSet
+	return MethodNameSet from ["push", "pop", "insert", "remove", "set", "clear", "resize", "reserve", "append", "ensureCapacity"]
+end 'mutatingMethodNames'
+
+// A pending or active borrow: the borrowing variable's slot borrows from the
+// source collection's slot. `borrowLine` is the source line of the `.get()`
+// call, embedded verbatim into the E3070 message.
+type MbcBorrow
+	export var borrowingSlot as VarSlot
+	export var sourceSlot as VarSlot
+	export var borrowingName as String
+	export var sourceName as String
+	export var borrowLine as LineNumber
+	// Global op index at which the borrow becomes active (the varDecl that
+	// binds the .get() result into the borrowing variable). Borrows activate
+	// at their binding, not at the call, so a borrow bound inside a
+	// try-otherwise continuation does not exist on the failure path.
+	export var activationIndex as GlobalOpIndex
+
+	export static function create(borrowingSlot VarSlot, sourceSlot VarSlot, borrowingName String, sourceName String, borrowLine LineNumber, activationIndex GlobalOpIndex) returns MbcBorrow
+		return Self{borrowingSlot: borrowingSlot, sourceSlot: sourceSlot, borrowingName: borrowingName, sourceName: sourceName, borrowLine: borrowLine, activationIndex: activationIndex}
+	end 'create'
+end 'MbcBorrow'
+
+typealias MbcBorrowArray = Array with MbcBorrow
+typealias SsaToSlotMap = Map with (String, VarSlot)
+typealias SlotToVarInfoMap = Map with (VarSlot, VarInfo)
+typealias SlotLastUseMap = Map with (VarSlot, GlobalOpIndex)
+
+// Slot -> resolved MaxonType, captured from `varLoad` ops. The scope's
+// VarInfo.varType keeps the parser's pre-resolution type (often `unresolved`
+// for inferred `var arr = [...]`), but TypeResolution stamps the concrete type
+// onto each `varLoad.slotType`, so the load sites are the reliable source.
+typealias SlotTypeMap = Map with (VarSlot, MaxonType)
+
+// SSA value name -> the slot a `var_decl`/`var_store` binds it into, plus the
+// reverse: a slot -> the SSA value name a `var_load` produces from it. Together
+// these follow the store→load→decl chain a `try EXPR otherwise default` lowers
+// to: the call result is stored into a temp slot, reloaded in the merge block,
+// then bound to the user variable's slot.
+typealias ValueToSlotMap = Map with (String, VarSlot)
+typealias SlotToValueMap = Map with (VarSlot, String)
+typealias ValueToIndexMap = Map with (String, GlobalOpIndex)
+
+// A method-call site flattened to the fields the borrow check consumes.
+typealias MethodCallSiteArray = Array with MethodCallSite
+
+// All per-function facts the borrow analysis collects in one linear pass,
+// gathered into a struct so the recorders share one parameter instead of a
+// long positional list. Mirrors the C# pass's per-function analysis state.
+type BorrowFacts
+	// SSA value name -> source slot it was loaded from (var_load).
+	export var ssaToSlot as SsaToSlotMap
+	// Slot -> resolved type, from var_load.slotType.
+	export var slotTypes as SlotTypeMap
+	// Slot -> last global op index that uses it (NLL expiry).
+	export var lastUse as SlotLastUseMap
+	// SSA value -> slot it is bound into by var_decl, and that decl's index.
+	export var declSlotByValue as ValueToSlotMap
+	export var declIndexByValue as ValueToIndexMap
+	// SSA value -> slot it is stored into by var_store.
+	export var storeSlotByValue as ValueToSlotMap
+	// Slot -> SSA value name a var_load produces from it (last writer wins;
+	// the merge-block reload is the only load of a try-temp slot).
+	export var loadValueBySlot as SlotToValueMap
+	// Every method-call / try-method-call site in program order.
+	export var callSites as MethodCallSiteArray
+
+	export static function create() returns BorrowFacts
+		return Self{
+			ssaToSlot: SsaToSlotMap.create(),
+			slotTypes: SlotTypeMap.create(),
+			lastUse: SlotLastUseMap.create(),
+			declSlotByValue: ValueToSlotMap.create(),
+			declIndexByValue: ValueToIndexMap.create(),
+			storeSlotByValue: ValueToSlotMap.create(),
+			loadValueBySlot: SlotToValueMap.create(),
+			callSites: MethodCallSiteArray.create()
+		}
+	end 'create'
+end 'BorrowFacts'
+
+// One method-call op, recovered from `methodCall` / `tryMethodCall`, paired
+// with its global op index. `receiverName` is the SSA value name of the
+// receiver; `resultName` is the SSA value name the call binds.
+type MethodCallSite
+	export var globalIndex as GlobalOpIndex
+	export var receiverName as String
+	export var methodName as String
+	export var resultName as String
+	export var line as LineNumber
+	export var column as ColumnNumber
+
+	export static function create(globalIndex GlobalOpIndex, receiverName String, methodName String, resultName String, line LineNumber, column ColumnNumber) returns MethodCallSite
+		return Self{globalIndex: globalIndex, receiverName: receiverName, methodName: methodName, resultName: resultName, line: line, column: column}
+	end 'create'
+end 'MethodCallSite'
+
+// ============================================================
+// Entry point
+// ============================================================
+
+export function runMaxonBorrowCheck(project Project, module MaxonModule) returns MaxonModule
+	for func in module.functions 'eachFunc'
+		checkFunction(project, func: func, module: module)
+	end 'eachFunc'
+
+	// Analysis-only pass: return the module unchanged.
+	return module
+end 'runMaxonBorrowCheck'
+
+// ============================================================
+// Per-function analysis
+// ============================================================
+
+function checkFunction(project Project, func IrFunction, module MaxonModule)
+	// Build slot -> VarInfo by inverting the function's symbol table. Empty
+	// for stdlib-restored / synthesized functions (no scope), which makes the
+	// borrow scan a no-op there — exactly right, since user code can't fix
+	// stdlib and the C# pass exempts IsStdlib functions.
+	var slotToVarInfo = SlotToVarInfoMap.create()
+	for (_, info) in func.scope.allVars() 'eachVar'
+		slotToVarInfo.upsert(info.slot, value: info)
+	end 'eachVar'
+	if slotToVarInfo.count() == 0 'noLocals'
+		return
+	end 'noLocals'
+
+	let mutators = mutatingMethodNames()
+
+	// Pass 1: one linear walk collects every fact the analysis needs.
+	var facts = BorrowFacts.create()
+	collectFacts(module, func: func, facts: facts)
+
+	// Pass 2: detect pending borrows (a .get()-style call on a generic
+	// collection whose result binds into a user slot).
+	var pending = detectBorrows(project, facts: facts, slotToVarInfo: slotToVarInfo, mutators: mutators)
+	if pending.count() == 0 'noBorrows'
+		return
+	end 'noBorrows'
+
+	// Pass 3: walk call sites in order; activate borrows at their binding
+	// index, expire them past last use, and flag mutating calls on a still-
+	// borrowed source.
+	checkConflicts(project, func: func, facts: facts, pending: pending, mutators: mutators)
+end 'checkFunction'
+
+// ============================================================
+// Pass 1: fact collection (ssaToSlot, call sites, last-use)
+// ============================================================
+
+function collectFacts(module MaxonModule, func IrFunction, facts BorrowFacts)
+	var gi = 0 as GlobalOpIndex
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("collectFacts: blockRef {blockRef} OOB in module.blocks")
+		for opIdx in block.opRefs 'eachOp'
+			let op = try module.ops.get(opIdx) otherwise panic("collectFacts: opIdx {opIdx} OOB in module.ops")
+			recordOpFacts(op, gi: gi, facts: facts)
+			gi = gi + 1
+		end 'eachOp'
+		if block.hasTerminatorOp() 'hasTerm'
+			let termOp = try module.ops.get(block.terminatorIndex()) otherwise panic("collectFacts: terminator opIdx OOB in module.ops")
+			recordOpFacts(termOp, gi: gi, facts: facts)
+			gi = gi + 1
+		end 'hasTerm'
+	end 'eachBlock'
+end 'collectFacts'
+
+// Dispatch on op name (not a full-enum match) so unrelated ops contribute no
+// facts without an enum `default` arm. Each guarded match destructures exactly
+// the one op variant its name selects.
+function recordOpFacts(op MaxonOp, gi GlobalOpIndex, facts BorrowFacts)
+	if op.name == "varLoad" 'isVarLoad'
+		match op 'vl'
+			varLoad(result, slotId, slotType, _) then recordVarLoad(result, slotId: slotId, slotType: slotType, gi: gi, facts: facts)
+			default panic("recordOpFacts: op.name == varLoad but match failed")
+		end 'vl'
+		return
+	end 'isVarLoad'
+
+	if op.name == "varDecl" 'isVarDecl'
+		match op 'vd'
+			varDecl(slotId, value, _, _) then recordVarDecl(slotId, value: value, gi: gi, facts: facts)
+			default panic("recordOpFacts: op.name == varDecl but match failed")
+		end 'vd'
+		return
+	end 'isVarDecl'
+
+	if op.name == "varStore" 'isVarStore'
+		match op 'vs'
+			varStore(slotId, value, _) then facts.storeSlotByValue.upsert(String.from(value), value: slotId)
+			default panic("recordOpFacts: op.name == varStore but match failed")
+		end 'vs'
+		return
+	end 'isVarStore'
+
+	if op.name == "methodCall" 'isMethodCall'
+		match op 'mc'
+			methodCall(result, receiver, methodName, _, _, _, _, range) then recordCallSite(facts, gi: gi, receiver: receiver, methodName: methodName, result: result, range: range)
+			default panic("recordOpFacts: op.name == methodCall but match failed")
+		end 'mc'
+		return
+	end 'isMethodCall'
+
+	if op.name == "tryMethodCall" 'isTryMethodCall'
+		match op 'tmc'
+			tryMethodCall(result, receiver, methodName, _, _, _, _, _, range) then recordCallSite(facts, gi: gi, receiver: receiver, methodName: methodName, result: result, range: range)
+			default panic("recordOpFacts: op.name == tryMethodCall but match failed")
+		end 'tmc'
+	end 'isTryMethodCall'
+end 'recordOpFacts'
+
+// Append a method-call site. Shared by the methodCall / tryMethodCall arms,
+// which carry identical receiver/method/result/range shapes for our purposes.
+function recordCallSite(facts BorrowFacts, gi GlobalOpIndex, receiver ByteArray, methodName ByteArray, result ByteArray, range SourceRange)
+	facts.callSites.push(MethodCallSite.create(gi, receiverName: String.from(receiver), methodName: String.from(methodName), resultName: String.from(result), line: range.line, column: range.column))
+end 'recordCallSite'
+
+// A varLoad binds an SSA name to its source slot, records the slot's load-site
+// SSA name (for the store→load→decl chain), captures the TypeResolution-stamped
+// `slotType`, and marks a use of the slot (NLL last-use).
+function recordVarLoad(result ByteArray, slotId VarSlot, slotType MaxonType, gi GlobalOpIndex, facts BorrowFacts)
+	let resultName = String.from(result)
+	facts.ssaToSlot.upsert(resultName, value: slotId)
+	facts.loadValueBySlot.upsert(slotId, value: resultName)
+	facts.slotTypes.upsert(slotId, value: slotType)
+	facts.lastUse.upsert(slotId, value: gi)
+end 'recordVarLoad'
+
+// A varDecl binds an SSA value into a slot — the activation point of a borrow
+// whose ultimate user variable is that slot.
+function recordVarDecl(slotId VarSlot, value ByteArray, gi GlobalOpIndex, facts BorrowFacts)
+	let valueName = String.from(value)
+	facts.declSlotByValue.upsert(valueName, value: slotId)
+	facts.declIndexByValue.upsert(valueName, value: gi)
+end 'recordVarDecl'
+
+// ============================================================
+// Pass 2: borrow detection
+// ============================================================
+
+function detectBorrows(project Project, facts BorrowFacts, slotToVarInfo SlotToVarInfoMap, mutators MethodNameSet) returns MbcBorrowArray
+	var pending = MbcBorrowArray.create()
+	for site in facts.callSites 'eachSite'
+		// The receiver must resolve to a user variable slot with a known name.
+		let sourceSlot = try facts.ssaToSlot.get(site.receiverName) otherwise 'noSlot'
+			continue
+		end 'noSlot'
+		let sourceInfo = try slotToVarInfo.get(sourceSlot) otherwise 'noInfo'
+			continue
+		end 'noInfo'
+
+		// Only generic/parameterized receivers (Array, Map, ...) hand out
+		// references into a movable backing buffer. Plain structs return value
+		// copies from method calls and cannot dangle. Use the TypeResolution-
+		// stamped varLoad type, not the scope's pre-resolution VarInfo type.
+		let sourceType = try facts.slotTypes.get(sourceSlot) otherwise 'noType'
+			continue
+		end 'noType'
+		if not isGenericCollectionType(sourceType) 'notCollection'
+			continue
+		end 'notCollection'
+
+		// Mutating extractors (pop, remove) return a value that has left the
+		// collection — not a borrow into it.
+		if mutators.contains(site.methodName) 'isMutator'
+			continue
+		end 'isMutator'
+
+		// Resolve the borrowing variable: follow the call result through the
+		// store→load chain a `try EXPR otherwise default` emits to the user
+		// `varDecl`. Returns the user slot + the binding's global op index.
+		let activation = try resolveActivation(facts, resultName: site.resultName) otherwise 'noActivation'
+			continue
+		end 'noActivation'
+		let borrowingInfo = try slotToVarInfo.get(activation.boundSlot) otherwise 'noBorrowInfo'
+			continue
+		end 'noBorrowInfo'
+
+		// The borrow must produce a heap-allocated value (a pointer into the
+		// buffer); primitive/value returns are copies. Use the resolved load
+		// type of the borrowing slot, falling back to its declared type.
+		let borrowingType = try facts.slotTypes.get(activation.boundSlot) otherwise borrowingInfo.varType
+		if not typeIsHeapAllocated(project, t: borrowingType) 'valueCopy'
+			continue
+		end 'valueCopy'
+
+		// Skip methods that return the same collection type as the receiver
+		// (`.slice()`, `.clone()`, builder-pattern chains). Those produce a new,
+		// independent collection — not a reference into the receiver's buffer —
+		// so mutating the receiver afterwards cannot dangle. `.get()` returns the
+		// Element type, which differs from the `Array with Element` receiver.
+		if maxonTypesStructurallyEqual(borrowingType, b: sourceType) 'returnsSelf'
+			continue
+		end 'returnsSelf'
+
+		pending.push(MbcBorrow.create(activation.boundSlot, sourceSlot: sourceSlot, borrowingName: borrowingInfo.name, sourceName: sourceInfo.name, borrowLine: site.line, activationIndex: activation.index))
+	end 'eachSite'
+	return pending
+end 'detectBorrows'
+
+// The binding site of a call result: the user slot it lands in and the global
+// op index of the `varDecl` that binds it.
+type MbcActivation
+	export var boundSlot as VarSlot
+	export var index as GlobalOpIndex
+
+	export static function create(boundSlot VarSlot, index GlobalOpIndex) returns MbcActivation
+		return Self{boundSlot: boundSlot, index: index}
+	end 'create'
+end 'MbcActivation'
+
+union MbcActivationLookup implements Error
+	notFound
+end 'MbcActivationLookup'
+
+// Follow a call result to the `varDecl` that binds it into a user variable.
+//
+// A `let s = arr.get(0)` binds the call result directly: `var_decl slot_s,
+// %result`. A `let s = try arr.get(0) otherwise default` instead routes through
+// a try-temp slot: the result is `var_store`d into slot_tmp (success path), the
+// default into the same slot (otherwise path), then the merge block reloads it
+// (`%v = var_load slot_tmp`) and binds the user var (`var_decl slot_s, %v`).
+// So we follow value → var_decl (done) | var_store slot → var_load slot → value
+// (repeat), bounded to a few hops to stay loop-free on malformed IR.
+function resolveActivation(facts BorrowFacts, resultName String) returns MbcActivation throws MbcActivationLookup
+	var currentValue = resultName
+	for _ in 0 upto 5 'follow'
+		if let boundSlot = try facts.declSlotByValue.get(currentValue) 'directDecl'
+			let index = try facts.declIndexByValue.get(currentValue) otherwise throw MbcActivationLookup.notFound
+			return MbcActivation.create(boundSlot, index: index)
+		end 'directDecl'
+		let storeSlot = try facts.storeSlotByValue.get(currentValue) otherwise throw MbcActivationLookup.notFound
+		currentValue = try facts.loadValueBySlot.get(storeSlot) otherwise throw MbcActivationLookup.notFound
+	end 'follow'
+	throw MbcActivationLookup.notFound
+end 'resolveActivation'
+
+// True when a type is a generic collection (Array / Map / Set / List / Vector)
+// — a parameterized type whose method calls can return interior references.
+function isGenericCollectionType(t MaxonType) returns bool
+	return match t 'gc'
+		boolean to typeParameter gives false
+		genericInstance gives true
+		interface to opaquePointer gives false
+	end 'gc'
+end 'isGenericCollectionType'
+
+// True when a value of type `t` is heap-allocated (a reference into managed
+// memory) rather than a copied primitive. Strings and struct/collection types
+// are heap-allocated; bool/int/float/byte/enum are value copies.
+function typeIsHeapAllocated(project Project, t MaxonType) returns bool
+	return match t 'heap'
+		boolean gives false
+		integer gives false
+		float gives false
+		string gives true
+		named(id) gives namedTypeIsHeapAllocated(project, id: id)
+		function gives false
+		unresolved gives false
+		typeParameter gives true
+		genericInstance gives true
+		interface gives true
+		constInt gives false
+		opaquePointer gives false
+	end 'heap'
+end 'typeIsHeapAllocated'
+
+// A `named(id)` type is heap-allocated when it resolves to a struct type.
+// Enums and primitive typealiases are value copies.
+function namedTypeIsHeapAllocated(project Project, id TypeNameId) returns bool
+	let name = project.typeNames.get(id)
+	return project.structTypes.contains(name)
+end 'namedTypeIsHeapAllocated'
+
+// ============================================================
+// Pass 3: conflict checking
+// ============================================================
+
+function checkConflicts(project Project, func IrFunction, facts BorrowFacts, pending MbcBorrowArray, mutators MethodNameSet)
+	var active = MbcBorrowArray.create()
+	// Tracks which pending borrows have already moved into `active`, so each
+	// borrow activates exactly once even though the walk only visits call
+	// sites (the activation index — a varDecl — is not itself a call site, so
+	// we activate at the first call site at or past it).
+	var activated = BoolArray.create()
+	for _ in 0 upto pending.count() 'seedActivated'
+		activated.push(false)
+	end 'seedActivated'
+
+	for site in facts.callSites 'eachSite'
+		// Activate any pending borrow bound at or before this call's index.
+		activatePendingUpTo(pending, active: active, activated: activated, currentIndex: site.globalIndex)
+
+		// Expire borrows whose borrowing variable's last use is before this op.
+		expireDeadBorrows(active, lastUse: facts.lastUse, currentIndex: site.globalIndex)
+
+		// A mutating method on a still-borrowed source is a conflict.
+		if mutators.contains(site.methodName) 'isMutating'
+			let mutatedSlot = try facts.ssaToSlot.get(site.receiverName) otherwise 'noSlot'
+				continue
+			end 'noSlot'
+			reportConflictIfBorrowed(project, func: func, active: active, mutatedSlot: mutatedSlot, methodName: site.methodName, line: site.line, column: site.column)
+		end 'isMutating'
+	end 'eachSite'
+end 'checkConflicts'
+
+// Move every not-yet-activated pending borrow whose binding index is at or
+// before `currentIndex` into the active set. A borrow becomes live once its
+// `let s = ...` binding has executed; the conflict walk only stops at call
+// sites, so we activate lazily at the first call site that reaches the
+// binding's index.
+function activatePendingUpTo(pending MbcBorrowArray, active MbcBorrowArray, activated BoolArray, currentIndex GlobalOpIndex)
+	for i in 0 upto pending.count() 'eachPending'
+		let already = try activated.get(i) otherwise panic("activatePendingUpTo: activated.get OOB at {i}")
+		if already 'skipActivated'
+			continue
+		end 'skipActivated'
+		let borrow = try pending.get(i) otherwise panic("activatePendingUpTo: pending.get OOB at {i}")
+		if borrow.activationIndex <= currentIndex 'activate'
+			active.push(borrow)
+			try activated.set(i, value: true) otherwise panic("activatePendingUpTo: activated.set OOB at {i}")
+		end 'activate'
+	end 'eachPending'
+end 'activatePendingUpTo'
+
+// Drop borrows whose borrowing variable's last use is strictly before the
+// current op — the reference is no longer live (NLL).
+function expireDeadBorrows(active MbcBorrowArray, lastUse SlotLastUseMap, currentIndex GlobalOpIndex)
+	var live = MbcBorrowArray.create()
+	for borrow in active 'eachActive'
+		let last = try lastUse.get(borrow.borrowingSlot) otherwise 'noUse'
+			// No recorded use after binding — treat as already expired.
+			continue
+		end 'noUse'
+		if last >= currentIndex 'stillLive'
+			live.push(borrow)
+		end 'stillLive'
+	end 'eachActive'
+	active.clear()
+	for borrow in live 'refill'
+		active.push(borrow)
+	end 'refill'
+end 'expireDeadBorrows'
+
+// Report E3070 for the first active borrow of `mutatedSlot`, if any.
+function reportConflictIfBorrowed(project Project, func IrFunction, active MbcBorrowArray, mutatedSlot VarSlot, methodName String, line LineNumber, column ColumnNumber)
+	for borrow in active 'eachActive'
+		if borrow.sourceSlot == mutatedSlot 'conflict'
+			let message = "cannot mutate '{borrow.sourceName}' via '{methodName}' while it is borrowed by '{borrow.borrowingName}' (borrowed at line {borrow.borrowLine})"
+			reportCompileError(project, code: ErrorCode.semanticBorrowConflict, message: message, line: line, column: column, filePath: func.sourceFilePath)
+			return
+		end 'conflict'
+	end 'eachActive'
+end 'reportConflictIfBorrowed'

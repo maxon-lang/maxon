@@ -1,0 +1,32 @@
+// Test: char-literal-ge-le-codepoint
+function main() returns ExitCode
+	let cp = 53
+	if cp >= '0' 'ge'
+		if cp <= '9' 'le'
+			return 0
+		end 'le'
+	end 'ge'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 53 : i64
+    mir.br ge_0()
+  ge_0:
+    %5 = mir.mov_imm 57 : i64
+    %6 = mir.cmp le, %0, %5
+    mir.cond_br %6 [then: le_0(), else: ge_0.after()]
+  le_0:
+    %7 = mir.mov_imm 0 : i64
+    mir.ret %7
+  ge_0.after:
+    %8 = mir.mov_imm 1 : i64
+    mir.ret %8
+  }
+}
+---

@@ -16,6 +16,19 @@ export union ScopeLookupError implements Error
 	notFound(name String)
 end 'ScopeLookupError'
 
+// Raised by `declare` / `declarePayloadBinding` when the name being bound
+// would overwrite a self-field alias registered at instance-method entry.
+// Such a local silently shadows the field — the codegen's name-keyed
+// `isSelfField` paths route every read/write of the name through `self`'s
+// heap pointer, corrupting the field when the local's type differs. The
+// declaration site catches this and reports E3006 with its source location;
+// `Scope` is the only layer that sees both the alias and the colliding
+// declaration, so detection lives here (the `vars` map keeps one entry per
+// name, so the collision is invisible once the local has overwritten it).
+export union ScopeError implements Error
+	shadowsSelfField(name String)
+end 'ScopeError'
+
 // Each scope frame tracks the names declared since the last pushScope so
 // popScope can remove them in O(decls) instead of re-snapshotting the
 // whole vars map. pushScope is O(1) under this scheme.
@@ -45,28 +58,70 @@ export type Scope
 
 	// Declare a variable and return its slot. Records the declared name in
 	// the current scope frame (when one is open) so popScope can delete it.
-	export function declare(name String, varType MaxonType, mutable bool) returns VarSlot
+	//
+	// Throws `ScopeError.shadowsSelfField` when `name` currently maps to a
+	// self-field alias: binding a local of the same name would overwrite the
+	// alias and silently reroute the field through the local (E3006). Callers
+	// that bind a user-written name catch this and report the diagnostic;
+	// after reporting they use `declareShadowing` to still allocate a slot so
+	// the rest of the body parses. Synthetic compiler names (`__*`) can never
+	// collide with a user field, so their call sites treat the throw as
+	// unreachable.
+	export function declare(name String, varType MaxonType, mutable bool) returns VarSlot throws ScopeError
+		if self.wouldShadowSelfField(name) 'shadow'
+			throw ScopeError.shadowsSelfField(name)
+		end 'shadow'
+		return self.declareShadowing(name, varType: varType, mutable: mutable)
+	end 'declare'
+
+	// True when `name` currently resolves to a self-field alias. Used by
+	// `declare` to detect a shadowing collision before it overwrites the alias.
+	function wouldShadowSelfField(name String) returns bool
+		let info = try vars.get(name) otherwise return false
+		return info.isSelfField
+	end 'wouldShadowSelfField'
+
+	// Allocate a slot for `name` without the self-field-shadow guard. Used as
+	// the error-recovery path after a caller has already reported E3006, and
+	// as the shared slot-allocating core for `declare`.
+	export function declareShadowing(name String, varType MaxonType, mutable bool) returns VarSlot
 		let slot = nextSlot
 		nextSlot = nextSlot + 1
 		let info = VarInfo.create(name, varType: varType, mutable: mutable, slot: slot)
 		vars.upsert(name, value: info)
 		self.recordInCurrentFrame(name)
 		return slot
-	end 'declare'
+	end 'declareShadowing'
 
 	// Declare a self-field alias. No local backing slot is materialized —
 	// reads and writes lower to maxon.fieldLoad/fieldStore through __self so
 	// nested method calls that mutate self.field are visible on return.
 	// The returned slot is only used to keep VarInfo.slot well-formed and
 	// must not be used to emit memref ops against self-field names.
-	export function declareSelfField(name String, varType MaxonType, offset FieldOffset) returns VarSlot
+	// Throws `ScopeError.shadowsSelfField` when `name` is already bound — at
+	// instance-method entry the only prior bindings are the method's
+	// parameters, so a collision here means a parameter shadows this field
+	// (the symmetric case to a body local shadowing it via `declare`). The
+	// caller reports E3006 and re-registers the alias via `installSelfField`
+	// so the field still routes through `self` for the rest of the body.
+	export function declareSelfField(name String, varType MaxonType, offset FieldOffset) returns VarSlot throws ScopeError
+		if vars.contains(name) 'paramShadow'
+			throw ScopeError.shadowsSelfField(name)
+		end 'paramShadow'
+		return self.installSelfField(name, varType: varType, offset: offset)
+	end 'declareSelfField'
+
+	// Register a self-field alias unconditionally (no param-shadow guard).
+	// Shared core for `declareSelfField`; also the recovery path a caller uses
+	// after reporting E3006 so the alias wins and the body still type-checks.
+	export function installSelfField(name String, varType MaxonType, offset FieldOffset) returns VarSlot
 		let slot = nextSlot
 		nextSlot = nextSlot + 1
 		let info = VarInfo.createSelfField(name, varType: varType, slot: slot, offset: offset)
 		vars.upsert(name, value: info)
 		self.recordInCurrentFrame(name)
 		return slot
-	end 'declareSelfField'
+	end 'installSelfField'
 
 	// Phase 9 Stage 4: declare a match-arm payload binding. Reads work like a
 	// normal local (the parser seeds the slot from `enumPayloadRead` at the
@@ -75,14 +130,23 @@ export type Scope
 	// declaration; assignment to an immutable binding emits E2013. `caseName`
 	// is threaded through to `enumPayloadStore` so TR can resolve the
 	// payload field type from the union's case table.
-	export function declarePayloadBinding(name String, varType MaxonType, mutable bool, scrutineeName String, fieldIndex CaseOrdinal, caseName String) returns VarSlot
+	export function declarePayloadBinding(name String, varType MaxonType, mutable bool, scrutineeName String, fieldIndex CaseOrdinal, caseName String) returns VarSlot throws ScopeError
+		if self.wouldShadowSelfField(name) 'shadow'
+			throw ScopeError.shadowsSelfField(name)
+		end 'shadow'
+		return self.declarePayloadBindingShadowing(name, varType: varType, mutable: mutable, scrutineeName: scrutineeName, fieldIndex: fieldIndex, caseName: caseName)
+	end 'declarePayloadBinding'
+
+	// Non-guarded payload-binding declaration: the error-recovery path after a
+	// caller has reported E3006, and the shared core for `declarePayloadBinding`.
+	export function declarePayloadBindingShadowing(name String, varType MaxonType, mutable bool, scrutineeName String, fieldIndex CaseOrdinal, caseName String) returns VarSlot
 		let slot = nextSlot
 		nextSlot = nextSlot + 1
 		let info = VarInfo.createPayloadBinding(name, varType: varType, mutable: mutable, slot: slot, scrutineeName: scrutineeName, fieldIndex: fieldIndex, caseName: caseName)
 		vars.upsert(name, value: info)
 		self.recordInCurrentFrame(name)
 		return slot
-	end 'declarePayloadBinding'
+	end 'declarePayloadBindingShadowing'
 
 	function recordInCurrentFrame(name String)
 		let depth = frameStack.count()

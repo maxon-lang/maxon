@@ -1,0 +1,27 @@
+// Test: ternary-expression.with-floats
+function main() returns ExitCode
+	let x = 1.5 if true else 2.5
+	return trunc(x)
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 4609434218613702656 : f64
+    mir.br ternary.merge(%0)
+  ternary.merge:
+    %6 = mir.fptosi.i64 %7
+    %8 = mir.mov_imm 125 : i64
+    %9 = mir.cmp ugt, %6, %8
+    mir.cond_br %9 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %10 = mir.global_addr @__panic_msg_0f4f96e7c152b91e
+    %11 = mir.call @mrt_panic(%10)
+  __range_ok_0:
+    mir.ret %6
+  }
+}
+---

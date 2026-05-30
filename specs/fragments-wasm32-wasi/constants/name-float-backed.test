@@ -1,0 +1,51 @@
+// Test: name-float-backed
+enum Weights
+	light = 1.5
+	medium = 2.5
+	heavy = 3.5
+end 'Weights'
+
+function main() returns ExitCode
+	let w = Weights.heavy
+	if w.name == "heavy" 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 4615063718147915776 : f64
+    %2 = mir.call @__enum_Weights_name(%0)
+    %3 = mir.global_addr @__istr_0
+    %4 = mir.mov_imm 40 : i64
+    %5 = mir.call @mrt_alloc(%4)
+    mir.store %3, %5, 0 width: qword
+    %6 = mir.mov_imm 5 : i64
+    mir.store %6, %5, 8 width: qword
+    %7 = mir.mov_imm -2 : i64
+    mir.store %7, %5, 16 width: qword
+    %8 = mir.mov_imm 1 : i64
+    mir.store %8, %5, 24 width: qword
+    %9 = mir.mov_imm 0 : i64
+    mir.store %9, %5, 32 width: qword
+    %10 = mir.mov_imm 16 : i64
+    %11 = mir.call @mrt_alloc(%10)
+    mir.store %5, %11, 0 width: qword
+    %12 = mir.mov_imm 1 : i64
+    mir.store %12, %11, 8 width: qword
+    %13 = mir.call @String.equals(%2, %11)
+    mir.cond_br %13 [then: check_0(), else: check_0.after()]
+  check_0:
+    %14 = mir.mov_imm 1 : i64
+    mir.ret %14
+  check_0.after:
+    %15 = mir.mov_imm 0 : i64
+    mir.ret %15
+  }
+}
+---

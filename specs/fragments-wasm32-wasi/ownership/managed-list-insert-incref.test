@@ -1,0 +1,105 @@
+// Test: managed-list-insert-incref
+typealias Integer = int(i64.min to i64.max)
+
+type Item
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Item'
+
+typealias ItemManagedList = __ManagedList with Item
+
+function main() returns ExitCode
+	var managedList = ItemManagedList.create()
+	let item = Item.create(99)
+	let node = managedList.insertFirst(item)
+	print("{node.value().value}\n")
+	print("{managedList.count()}\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+99
+1
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.call @mrt_managed_list_create()
+    %1 = mir.mov_imm 99 : i64
+    %61 = mir.mov_imm 8 : i64
+    %62 = mir.call @mrt_alloc(%61)
+    mir.store %1, %62, 0 width: qword
+    %5 = mir.call @mrt_managed_list_insert_first_value(%0, %62)
+    %7 = mir.call @mrt_managed_list_node_value(%5)
+    %8 = mir.load %7, 0 width: qword
+    %9 = mir.global_addr @__istr_0
+    %10 = mir.mov_imm 0 : i64
+    %11 = mir.mov_imm 21 : i64
+    %12 = mir.call @mrt_alloc(%11)
+    %13 = mir.call @mrt_i64_to_string(%8, %12)
+    %14 = mir.global_addr @__istr_1
+    %15 = mir.mov_imm 1 : i64
+    %18 = mir.add.i64 %10, %13
+    %19 = mir.add.i64 %18, %15
+    %21 = mir.add.i64 %19, %15
+    %22 = mir.call @mrt_alloc(%21)
+    mir.memcpy %22, %9, %10
+    %23 = mir.add.i64 %22, %10
+    mir.memcpy %23, %12, %13
+    %24 = mir.add.i64 %23, %13
+    mir.memcpy %24, %14, %15
+    %26 = mir.mov_imm 40 : i64
+    %27 = mir.call @mrt_alloc(%26)
+    mir.store %22, %27, 0 width: qword
+    mir.store %19, %27, 8 width: qword
+    mir.store %19, %27, 16 width: qword
+    mir.store %15, %27, 24 width: qword
+    mir.store %10, %27, 32 width: qword
+    %30 = mir.mov_imm 16 : i64
+    %31 = mir.call @mrt_alloc(%30)
+    mir.store %27, %31, 0 width: qword
+    mir.store %10, %31, 8 width: qword
+    %63 = mir.load %31, 0 width: qword
+    %64 = mir.load %63, 0 width: qword
+    %65 = mir.load %63, 8 width: qword
+    %66 = mir.call @mrt_write_stdout(%64, %65)
+    %35 = mir.call @mrt_managed_list_count(%0)
+    %36 = mir.global_addr @__istr_0
+    %38 = mir.mov_imm 21 : i64
+    %39 = mir.call @mrt_alloc(%38)
+    %40 = mir.call @mrt_i64_to_string(%35, %39)
+    %41 = mir.global_addr @__istr_1
+    %45 = mir.add.i64 %10, %40
+    %46 = mir.add.i64 %45, %15
+    %48 = mir.add.i64 %46, %15
+    %49 = mir.call @mrt_alloc(%48)
+    mir.memcpy %49, %36, %10
+    %50 = mir.add.i64 %49, %10
+    mir.memcpy %50, %39, %40
+    %51 = mir.add.i64 %50, %40
+    mir.memcpy %51, %41, %15
+    %53 = mir.mov_imm 40 : i64
+    %54 = mir.call @mrt_alloc(%53)
+    mir.store %49, %54, 0 width: qword
+    mir.store %46, %54, 8 width: qword
+    mir.store %46, %54, 16 width: qword
+    mir.store %15, %54, 24 width: qword
+    mir.store %10, %54, 32 width: qword
+    %57 = mir.mov_imm 16 : i64
+    %58 = mir.call @mrt_alloc(%57)
+    mir.store %54, %58, 0 width: qword
+    mir.store %10, %58, 8 width: qword
+    %67 = mir.load %58, 0 width: qword
+    %68 = mir.load %67, 0 width: qword
+    %69 = mir.load %67, 8 width: qword
+    %70 = mir.call @mrt_write_stdout(%68, %69)
+    mir.ret %10
+  }
+}
+---

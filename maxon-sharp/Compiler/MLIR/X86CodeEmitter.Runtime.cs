@@ -6417,7 +6417,10 @@ public partial class X86CodeEmitter {
     EmitMovRegMem(X86Register.Rax, -0x08, 8);
     EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, SyncReqOffArg0); // path
     EmitMovRegImm(X86Register.Rdx, 0x40000000);         // GENERIC_WRITE
-    EmitXorRegReg(X86Register.R8, X86Register.R8);      // dwShareMode = 0
+    // dwShareMode = FILE_SHARE_READ|FILE_SHARE_WRITE (3): an editor (e.g. VS Code)
+    // holding the target file open keeps a read handle on it; dwShareMode=0 would
+    // make CreateFileA fail with ERROR_SHARING_VIOLATION whenever such a handle exists.
+    EmitMovRegImm(X86Register.R8, 3);                  // dwShareMode = FILE_SHARE_READ|FILE_SHARE_WRITE
     EmitXorRegReg(X86Register.R9, X86Register.R9);      // lpSecurityAttributes = NULL
     EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x20, 0x02, 0x00, 0x00, 0x00); // [rsp+0x20] = CREATE_ALWAYS (2)
     EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x28, 0x00, 0x00, 0x00, 0x40); // [rsp+0x28] = FILE_FLAG_OVERLAPPED (0x40000000)
@@ -6451,7 +6454,8 @@ public partial class X86CodeEmitter {
     EmitMovRegMem(X86Register.Rax, -0x08, 8);
     EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, SyncReqOffArg0); // path
     EmitMovRegImm(X86Register.Rdx, 0x40000000);         // GENERIC_WRITE
-    EmitXorRegReg(X86Register.R8, X86Register.R8);      // dwShareMode = 0
+    // dwShareMode = FILE_SHARE_READ|FILE_SHARE_WRITE (3): see __io_sync_op_file_open_write.
+    EmitMovRegImm(X86Register.R8, 3);                  // dwShareMode = FILE_SHARE_READ|FILE_SHARE_WRITE
     EmitXorRegReg(X86Register.R9, X86Register.R9);      // lpSecurityAttributes = NULL
     EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x20, 0x02, 0x00, 0x00, 0x00); // [rsp+0x20] = CREATE_ALWAYS (2)
     EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x28, 0x00, 0x00, 0x00, 0x40); // [rsp+0x28] = FILE_FLAG_OVERLAPPED (0x40000000)

@@ -13,6 +13,9 @@ typealias StringSet = Set with String
 // in InstructionScheduler and CommuteForCoalescing.
 typealias OpIndexOrMissing = int(i64.min to i64.max)
 
+// Argument / parameter position index for the E3005 arg-type check.
+typealias ArgIndex = int(0 to u64.max)
+
 export function runSemanticChecks(project Project, module MaxonModule, isStdlib bool = false)
 	logDebug(LogCategory.semantic, message: function() gives "semcheck: functions={module.functions.count()}")
 
@@ -22,6 +25,26 @@ export function runSemanticChecks(project Project, module MaxonModule, isStdlib 
 	// matching is deferred to a follow-up; missing-name detection is enough
 	// to surface the "Partial interface implementation" diagnostic.
 	checkInterfaceConformance(project)
+
+	// E4014: reject recursive type-reference cycles. Maxon's refcount ownership
+	// model needs acyclic type graphs for deterministic destruction, so a type
+	// may not transitively contain itself through struct fields, union
+	// associated values, or container element types. User types only (stdlib
+	// types are acyclic by construction and re-checking them would break
+	// cache-parity).
+	//
+	// Placement differs deliberately from the C# bootstrap's `TypeCycleCheckPass`,
+	// which runs as an MLIR pass AFTER monomorphization and reads container edges
+	// off each monomorphized `Array<E>` struct's TypeParams. The self-hosted
+	// check runs here, in semantic-check (pre-monomorphization), and reconstructs
+	// container edges by resolving a field's alias to its generic instance and
+	// reading the element args (`containerElementUserTypes`). This keeps the
+	// check independent of the monomorphizer having run; `structTypes` /
+	// `enumTypes` / `genericInstances` are already fully populated by the
+	// preceding `resolveTypes` pass.
+	if not isStdlib 'cycleCheckUserOnly'
+		checkTypeReferenceCycles(project)
+	end 'cycleCheckUserOnly'
 
 	// Phase 4e error-handling rules: E3054 (main cannot throw),
 	// E3055 (try on non-throwing function), E3057 (missing try on throwing call).
@@ -44,6 +67,12 @@ export function runSemanticChecks(project Project, module MaxonModule, isStdlib 
 	// stdlib callees via `project.funcReturnTypes` so E3065/E3064 still fire
 	// correctly when a user discards a stdlib call result.
 	if not isStdlib 'userOnly'
+		// E3005: validate every call's argument types before the discarded-
+		// result lint, so a bad-argument discarded call surfaces the type error
+		// (not just "result unused"), and so dead code DFE would drop before
+		// lowering is covered. Runs first so the discard lint can suppress
+		// E3064/E3065 on calls flagged here.
+		checkCallArgumentTypes(project, module: module)
 		computePurity(project, module: module)
 		checkDiscardedResults(project, module: module)
 	end 'userOnly'
@@ -84,6 +113,273 @@ function checkInterfaceConformance(project Project)
 		checkConformanceForType(project, typeName: et.name, expected: et.expectedMethods, line: et.nameLine, column: et.nameColumn, filePath: et.sourceFilePath)
 	end 'eachEnum'
 end 'checkInterfaceConformance'
+
+// One reference edge in the type-cycle graph: `label` is the user-facing path
+// segment (e.g. `next: Node`, or a bare element name `Folder`) and `target` is
+// the type name the edge points at.
+type TypeRefEdge
+	export var label as String
+	export var target as String
+
+	export static function create(label String, target String) returns TypeRefEdge
+		return Self{label: label, target: target}
+	end 'create'
+end 'TypeRefEdge'
+
+typealias TypeRefEdgeArray = Array with TypeRefEdge
+typealias TypeRefGraph = Map with (String, TypeRefEdgeArray)
+
+// A type found to participate in a reference cycle, with its formatted path and
+// declaration site. Collected so the check can report only the earliest-declared
+// cyclic type (mutual recursion forms one cycle reachable from either end).
+type CycleCandidate
+	export var typeName as String
+	export var path as String
+	export var line as LineNumber
+	export var column as ColumnNumber
+	export var filePath as FilePath
+
+	export static function create(typeName String, path String, line LineNumber, column ColumnNumber, filePath FilePath) returns CycleCandidate
+		return Self{typeName: typeName, path: path, line: line, column: column, filePath: filePath}
+	end 'create'
+end 'CycleCandidate'
+
+typealias CycleCandidateArray = Array with CycleCandidate
+
+// E4014 cycle check: build a directed reachability graph over user-defined
+// types (struct fields, union associated values, container element types), then
+// for every user type look for a cycle back to itself and report the shortest
+// path. Mirrors the C# bootstrap's `TypeCycleCheckPass`.
+function checkTypeReferenceCycles(project Project)
+	var graph = TypeRefGraph.create()
+	buildTypeReferenceGraph(project, graph: graph)
+
+	// Collect every user type that participates in a cycle, then report only
+	// the one declared earliest in source (mutually-recursive `A`/`B` form one
+	// cycle reachable from either end — reporting both would double-diagnose a
+	// single error). The C# bootstrap throws on the first cycle it finds; the
+	// earliest-declaration rule makes that deterministic regardless of the
+	// type-registry map's iteration order.
+	var candidates = CycleCandidateArray.create()
+	for (_, st) in project.structTypes 'eachStruct'
+		collectCycleCandidate(graph, candidates: candidates, typeName: st.name, line: st.nameLine, column: st.nameColumn, filePath: st.sourceFilePath)
+	end 'eachStruct'
+	for (_, et) in project.enumTypes 'eachEnum'
+		collectCycleCandidate(graph, candidates: candidates, typeName: et.name, line: et.nameLine, column: et.nameColumn, filePath: et.sourceFilePath)
+	end 'eachEnum'
+
+	if candidates.count() == 0 'noCycles'
+		return
+	end 'noCycles'
+
+	var best = try candidates.get(0) otherwise panic("checkTypeReferenceCycles: candidates.get(0) failed after count check")
+	for i in 1 upto candidates.count() 'pickEarliest'
+		let cand = try candidates.get(i) otherwise panic("checkTypeReferenceCycles: candidates.get OOB at {i}")
+		if cycleCandidateEarlier(cand, other: best) 'earlier'
+			best = cand
+		end 'earlier'
+	end 'pickEarliest'
+	reportCompileError(project, code: ErrorCode.irTypeCycle, message: "type '{best.typeName}' contains a reference cycle (via {best.path}); recursive type references are not allowed", line: best.line, column: best.column, filePath: best.filePath)
+end 'checkTypeReferenceCycles'
+
+// True when `a` is declared before `b` (lower file path, then line, then column).
+function cycleCandidateEarlier(a CycleCandidate, other CycleCandidate) returns bool
+	let pa = a.filePath.toString()
+	let pb = other.filePath.toString()
+	if pa != pb 'differentFile'
+		return stringLexLess(pa, b: pb)
+	end 'differentFile'
+	if a.line != other.line 'differentLine'
+		return a.line < other.line
+	end 'differentLine'
+	return a.column < other.column
+end 'cycleCandidateEarlier'
+
+// Record `typeName` as a cycle candidate when it reaches itself in the graph.
+function collectCycleCandidate(graph TypeRefGraph, candidates CycleCandidateArray, typeName String, line LineNumber, column ColumnNumber, filePath FilePath)
+	if isStdlibFunctionPath(filePath) 'skipStdlib'
+		return
+	end 'skipStdlib'
+	let cycle = findShortestTypeCycle(graph, startType: typeName)
+	if cycle.count() == 0 'noCycle'
+		return
+	end 'noCycle'
+	var path = ""
+	for i in 0 upto cycle.count() 'joinPath'
+		let seg = try cycle.get(i) otherwise panic("collectCycleCandidate: cycle.get OOB at {i}")
+		if i > 0 'sep'
+			path.append(" → ")
+		end 'sep'
+		path.append(seg)
+	end 'joinPath'
+	candidates.push(CycleCandidate.create(typeName, path: path, line: line, column: column, filePath: filePath))
+end 'collectCycleCandidate'
+
+// Populate `graph` with one entry per user struct/enum that has outgoing type
+// references. Container fields contribute a synthetic node for the container
+// (keyed by its alias display name) with edges to each user-type element.
+function buildTypeReferenceGraph(project Project, graph TypeRefGraph)
+	for (_, st) in project.structTypes 'eachStruct'
+		if isStdlibFunctionPath(st.sourceFilePath) 'skipStdlibStruct'
+			continue
+		end 'skipStdlibStruct'
+		var edges = TypeRefEdgeArray.create()
+		for field in st.fields 'eachField'
+			addTypeReferenceEdges(project, graph: graph, edges: edges, fieldLabel: field.name, fieldType: field.fieldType)
+		end 'eachField'
+		if edges.count() > 0 'hasEdges'
+			try graph.insert(st.name, value: edges) otherwise ignore
+		end 'hasEdges'
+	end 'eachStruct'
+
+	for (_, et) in project.enumTypes 'eachEnum'
+		if isStdlibFunctionPath(et.sourceFilePath) 'skipStdlibEnum'
+			continue
+		end 'skipStdlibEnum'
+		var edges = TypeRefEdgeArray.create()
+		for enumCase in et.cases 'eachCase'
+			for payload in enumCase.payloadFields 'eachPayload'
+				let fieldPath = "{enumCase.name}.{payload.name}"
+				addTypeReferenceEdges(project, graph: graph, edges: edges, fieldLabel: fieldPath, fieldType: payload.fieldType)
+			end 'eachPayload'
+		end 'eachCase'
+		if edges.count() > 0 'hasEnumEdges'
+			try graph.insert(et.name, value: edges) otherwise ignore
+		end 'hasEnumEdges'
+	end 'eachEnum'
+end 'buildTypeReferenceGraph'
+
+// Add the ownership edges a single field/payload of type `fieldType` contributes:
+//   - a direct `named(UserType)` field → one edge `label: UserType` → UserType.
+//   - a container field (alias or generic instance of Array/Map/Set/etc) → an
+//     edge `label: <aliasDisplay>` to a synthetic container node, plus that
+//     container node's edges to each user-type element (labeled by the element
+//     name). The container node is keyed by its display name so the same alias
+//     used by several fields shares one node.
+function addTypeReferenceEdges(project Project, graph TypeRefGraph, edges TypeRefEdgeArray, fieldLabel String, fieldType MaxonType)
+	let directName = userTypeNameOrEmpty(project, t: fieldType)
+	if not directName.isEmpty() 'isDirect'
+		edges.push(TypeRefEdge.create("{fieldLabel}: {directName}", target: directName))
+		return
+	end 'isDirect'
+	let elements = containerElementUserTypes(project, t: fieldType)
+	if elements.count() == 0 'noContainer'
+		return
+	end 'noContainer'
+	let containerDisplay = fieldType.toString(project)
+	edges.push(TypeRefEdge.create("{fieldLabel}: {containerDisplay}", target: containerDisplay))
+	var containerEdges = TypeRefEdgeArray.create()
+	if let existing = try graph.get(containerDisplay) 'hasExisting'
+		containerEdges = existing
+	end 'hasExisting'
+	for i in 0 upto elements.count() 'eachElem'
+		let elem = try elements.get(i) otherwise panic("addTypeReferenceEdges: elements.get OOB at {i}")
+		if not containerEdgeExists(containerEdges, target: elem) 'newEdge'
+			containerEdges.push(TypeRefEdge.create(elem, target: elem))
+		end 'newEdge'
+	end 'eachElem'
+	try graph.insert(containerDisplay, value: containerEdges) otherwise ignore
+end 'addTypeReferenceEdges'
+
+function containerEdgeExists(edges TypeRefEdgeArray, target String) returns bool
+	for e in edges 'scan'
+		if e.target == target 'hit'
+			return true
+		end 'hit'
+	end 'scan'
+	return false
+end 'containerEdgeExists'
+
+// The user struct/enum name `t` directly names, or "" when `t` is not a bare
+// reference to a user-defined struct/enum (primitive, container, alias-to-
+// container, type-parameter, …).
+function userTypeNameOrEmpty(project Project, t MaxonType) returns String
+	let name = t.namedAliasNameOrEmpty(project)
+	if name.isEmpty() 'notNamed'
+		return ""
+	end 'notNamed'
+	if project.structTypes.contains(name) or project.enumTypes.contains(name) 'isUserType'
+		return name
+	end 'isUserType'
+	return ""
+end 'userTypeNameOrEmpty'
+
+// Element user-type names referenced by a container-typed field. Resolves a
+// type-alias to its underlying generic instance, then returns each generic
+// argument that names a user struct/enum.
+function containerElementUserTypes(project Project, t MaxonType) returns StringArray
+	var result = StringArray.create()
+	let resolved = resolveAliasForCompare(project, t: t)
+	if not maxonTypeIsGenericInstance(resolved) 'notGeneric'
+		return result
+	end 'notGeneric'
+	let args = genericInstanceArgsOf(project, t: resolved)
+	for i in 0 upto args.count() 'eachArg'
+		let arg = try args.get(i) otherwise panic("containerElementUserTypes: args.get OOB at {i}")
+		let elemName = arg.namedAliasNameOrEmpty(project)
+		if not elemName.isEmpty() 'hasName'
+			if project.structTypes.contains(elemName) or project.enumTypes.contains(elemName) 'isUserElem'
+				result.push(elemName)
+			end 'isUserElem'
+		end 'hasName'
+	end 'eachArg'
+	return result
+end 'containerElementUserTypes'
+
+// BFS for the shortest cycle from `startType` back to itself. Returns the path
+// segments (`[startType, "next: Node"]` for a direct self-ref) or an empty
+// array when `startType` cannot reach itself.
+function findShortestTypeCycle(graph TypeRefGraph, startType String) returns StringArray
+	let startEdges = try graph.get(startType) otherwise return StringArray.create()
+
+	// Seed the queue from each direct neighbour, returning immediately on a
+	// direct self-reference.
+	var queueTargets = StringArray.create()
+	var queuePaths = TypeRefPathArray.create()
+	for edge in startEdges 'seed'
+		if edge.target == startType 'directSelf'
+			var direct = StringArray.create()
+			direct.push(startType)
+			direct.push(edge.label)
+			return direct
+		end 'directSelf'
+		var seedPath = StringArray.create()
+		seedPath.push(startType)
+		seedPath.push(edge.label)
+		queueTargets.push(edge.target)
+		queuePaths.push(seedPath)
+	end 'seed'
+
+	var visited = StringSet.create()
+	var head = 0
+	while head < queueTargets.count() 'bfs'
+		let current = try queueTargets.get(head) otherwise panic("findShortestTypeCycle: queueTargets.get OOB")
+		let currentPath = try queuePaths.get(head) otherwise panic("findShortestTypeCycle: queuePaths.get OOB")
+		head = head + 1
+		if visited.contains(current) 'seen'
+			continue
+		end 'seen'
+		visited.insert(current)
+		let edges = try graph.get(current) otherwise TypeRefEdgeArray.create()
+		for edge in edges 'eachEdge'
+			if edge.target == startType 'foundCycle'
+				var found = currentPath.clone()
+				found.push(edge.label)
+				return found
+			end 'foundCycle'
+			if not visited.contains(edge.target) 'enqueue'
+				var nextPath = currentPath.clone()
+				nextPath.push(edge.label)
+				queueTargets.push(edge.target)
+				queuePaths.push(nextPath)
+			end 'enqueue'
+		end 'eachEdge'
+	end 'bfs'
+
+	return StringArray.create()
+end 'findShortestTypeCycle'
+
+typealias TypeRefPathArray = Array with StringArray
 
 // Compare each expected signature against the type's declared methods.
 // Existence is checked via `project.funcReturnTypes.contains` since the parser
@@ -464,25 +760,128 @@ end 'buildWrongSignatureMessage'
 //      the first unreferenced name encountered. Reporting every unused
 //      candidate would add noise that isn't in the spec; the bootstrap
 //      throws on the first.
-export function checkPendingUnusedVars(project Project)
+export function checkPendingUnusedVars(project Project, module MaxonModule)
 	for entry in project.pendingUnusedChecks 'eachEntry'
 		if functionHasPriorDiagnostic(project, entry: entry) 'skipFn'
 			continue
 		end 'skipFn'
 
+		// Precedence within one function body mirrors the C# bootstrap's
+		// throw-on-first-error ordering: E3012 (unused) is reported at body
+		// finish before E3078 (var-from-immutable, thrown at the var-decl site
+		// in C#) and E3077 (var-should-be-let, the last body-finish check). The
+		// self-hosted pipeline defers all three to here, so we emit at most one
+		// per entry and stop at the first that fires.
 		let startIndex = entry.paramCount if entry.skipParamCheck else 0
 		let endIndex = entry.candidates.count()
+		var reported = false
 		var i = startIndex
-		while i < endIndex 'scan'
+		while i < endIndex and not reported 'scan'
 			let candidate = try entry.candidates.get(i) otherwise panic("checkPendingUnusedVars: candidates.get OOB at {i}")
 			if not entry.referenced.contains(candidate.name) 'unused'
 				reportCompileError(project, code: ErrorCode.semanticUnusedVariable, message: "unused variable: '{candidate.name}'", line: candidate.line, column: candidate.column, filePath: entry.filePath)
-				break
+				reported = true
 			end 'unused'
 			i = i + 1
 		end 'scan'
+
+		if not reported 'tryVarFromImmutable'
+			reported = checkVarFromImmutableForEntry(project, module: module, entry: entry)
+		end 'tryVarFromImmutable'
+
+		if not reported 'tryVarShouldBeLet'
+			reported = checkVarShouldBeLetForEntry(project, entry: entry)
+		end 'tryVarShouldBeLet'
 	end 'eachEntry'
 end 'checkPendingUnusedVars'
+
+// E3078 (var-from-immutable) for one deferred entry. Emits at most one
+// diagnostic and returns true when it fired. A candidate fires when its
+// resolved binding type is a reference type (struct / enum / function); value
+// types (int/float/bool/byte) are independent copies and skip the check. The
+// resolved type is read from the binding's now-filled `varDecl` slotType.
+function checkVarFromImmutableForEntry(project Project, module MaxonModule, entry PendingUnusedCheck) returns bool
+	for cand in entry.varFromImmutable 'eachCand'
+		if not bindingSlotTypeIsReferenceType(project, module: module, funcName: cand.funcName, slotId: cand.slotId) 'notReference'
+			continue
+		end 'notReference'
+		let message = "cannot assign immutable variable '{cand.sourceVarName}' to mutable binding '{cand.bindingName}'; use 'let' instead of 'var', or use clone()" if not cand.fromImmutableRoot else "cannot assign from immutable variable to mutable binding '{cand.bindingName}'; use 'let' instead of 'var', or use clone()"
+		reportCompileError(project, code: ErrorCode.semanticVarFromImmutable, message: message, line: cand.line, column: cand.column, filePath: entry.filePath)
+		return true
+	end 'eachCand'
+	return false
+end 'checkVarFromImmutableForEntry'
+
+// E3077 (var-should-be-let) for one deferred entry. Walks the mutable-var
+// candidates in declaration order; the first one that is referenced (so it
+// isn't an E3012 unused case) yet never reassigned reports should-be-let.
+// Returns true when it fired. The referenced check preserves E3012 precedence:
+// an unused `var` was already handled by the unused scan above, but a `var`
+// that the unused scan skipped (because it IS referenced) is the should-be-let
+// candidate here.
+function checkVarShouldBeLetForEntry(project Project, entry PendingUnusedCheck) returns bool
+	for cand in entry.mutableCandidates 'eachCand'
+		if not entry.referenced.contains(cand.name) 'unusedHandledElsewhere'
+			continue
+		end 'unusedHandledElsewhere'
+		if entry.reassigned.contains(cand.name) 'wasReassigned'
+			continue
+		end 'wasReassigned'
+		reportCompileError(project, code: ErrorCode.semanticVarShouldBeLet, message: "variable '{cand.name}' is never reassigned; use 'let' instead of 'var'", line: cand.line, column: cand.column, filePath: entry.filePath)
+		return true
+	end 'eachCand'
+	return false
+end 'checkVarShouldBeLetForEntry'
+
+// True when the binding declared at `slotId` in `funcName` has a resolved
+// reference type — a named struct or enum, or a function type. Reads the
+// (now type-resolved) `varDecl` op's slotType. Value primitives, unresolved
+// types, and named typealiases that resolve to primitives all return false so
+// E3078 only fires for genuine reference-type copies.
+function bindingSlotTypeIsReferenceType(project Project, module MaxonModule, funcName String, slotId VarSlot) returns bool
+	for func in module.functions 'eachFunc'
+		if func.name != funcName 'differentFunc'
+			continue
+		end 'differentFunc'
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("bindingSlotTypeIsReferenceType: blockRef OOB")
+			for opIdx in block.opRefs 'eachOp'
+				let op = try module.ops.get(opIdx) otherwise panic("bindingSlotTypeIsReferenceType: opIdx OOB")
+				if op.name == "varDecl" 'isVarDecl'
+					let isMatch = match op 'declShape'
+						varDecl(declSlot, _, slotType, _) gives declSlot == slotId and maxonTypeIsReferenceType(project, t: slotType)
+						default panic("bindingSlotTypeIsReferenceType: op.name == varDecl but match failed")
+					end 'declShape'
+					if isMatch 'found'
+						return true
+					end 'found'
+				end 'isVarDecl'
+			end 'eachOp'
+		end 'eachBlock'
+		return false
+	end 'eachFunc'
+	return false
+end 'bindingSlotTypeIsReferenceType'
+
+// True when `t` is a reference type for E3078 purposes: a function type, or a
+// `named(...)` type that resolves (through typealiases) to a user struct or
+// enum. Primitives, generic instances, interfaces, type parameters, and
+// unresolved types are not reference-copy sources here.
+function maxonTypeIsReferenceType(project Project, t MaxonType) returns bool
+	if isFunctionMaxonType(t) 'fnType'
+		return true
+	end 'fnType'
+	let name = t.namedAliasNameOrEmpty(project)
+	if name.isEmpty() 'notNamed'
+		return false
+	end 'notNamed'
+	// A `named(...)` slotType that resolves to a user struct or enum is a
+	// reference type. A named typealias to a primitive (e.g. `Integer`,
+	// `ExitCode`) is not in either registry, so value-typed copies (the
+	// `var-from-immutable-integer-ok` / `var-from-immutable-value-field-ok`
+	// specs) correctly skip the check.
+	return project.structTypes.contains(name) or project.enumTypes.contains(name)
+end 'maxonTypeIsReferenceType'
 
 // True when `project.diagnostics` carries any entry whose filePath matches
 // the pending entry's path AND whose line falls within the entry's source
@@ -547,6 +946,12 @@ function checkErrorHandlingRules(project Project, module MaxonModule)
 						default panic("checkErrorHandlingRules: op.name == tryCall but match failed")
 					end 'checkTryCallOp'
 				end 'isTryCall'
+				if op.name == "tryMethodCall" 'isTryMethodCall'
+					match op 'checkTryMethodCallOp'
+						tryMethodCall(_, _, _, _, _, _, _, _, range) then checkTryMethodCallForNonThrowingViolation(project, opIdx: opIdx, readerFilePath: readerFilePath, range: range)
+						default panic("checkErrorHandlingRules: op.name == tryMethodCall but match failed")
+					end 'checkTryMethodCallOp'
+				end 'isTryMethodCall'
 			end 'eachOp'
 		end 'eachBlock'
 	end 'eachFunc'
@@ -584,6 +989,26 @@ function checkTryCallForNonThrowingViolation(project Project, callee ByteArray, 
 	end 'isThrowing'
 	reportCompileError(project, code: ErrorCode.semanticTryRequiresThrowingFunction, message: "try requires a throwing function: '{qualifiedCallee}' does not throw'", line: range.line, column: range.column, filePath: readerFilePath)
 end 'checkTryCallForNonThrowingViolation'
+
+// E3055 for method calls: `try recv.method()` where `method` does not throw.
+// A method call's qualified callee is resolved by TypeResolution into
+// `resolvedCallees[opIdx]` (the `tryCall` path can qualify from the bare name
+// + context, but a method receiver's owning type is only known after
+// resolution, so we key off the resolved name here). A site with no resolved
+// callee (unresolved receiver — already an upstream error) is left alone.
+function checkTryMethodCallForNonThrowingViolation(project Project, opIdx OpIndex, readerFilePath FilePath, range SourceRange)
+	let resolved = try project.resolvedCallees.get(opIdx) otherwise return
+	let qualifiedCallee = stripCalleeMangling(resolved)
+	let throwsType = try project.funcThrowsTypes.get(qualifiedCallee) otherwise return
+	let throwing = match throwsType 'kind'
+		none gives false
+		throwing gives true
+	end 'kind'
+	if throwing 'isThrowing'
+		return
+	end 'isThrowing'
+	reportCompileError(project, code: ErrorCode.semanticTryRequiresThrowingFunction, message: "try requires a throwing function: '{qualifiedCallee}' does not throw'", line: range.line, column: range.column, filePath: readerFilePath)
+end 'checkTryMethodCallForNonThrowingViolation'
 
 // E3087: walks every function and reports `if x.contains(k) ... try x.get(k)
 // otherwise ...` patterns as redundant. The lint targets the double-lookup
@@ -1309,6 +1734,434 @@ end 'lookupCalleePurityImpl'
 // exempt from both diagnostics — builder-pattern discards are valid.
 // --------------------------------------------------------------------------
 
+// ============================================================
+// E3005 argument-type validation
+// ============================================================
+//
+// Walks every user-function call op and checks each argument's parser-inferred
+// type against the resolved parameter type stashed in `project.callParamTypes`.
+// Runs at semantic-check time (before DFE, before the discarded-result lint) so
+// type errors in dead/unreached code are caught and the E3005 surfaces ahead of
+// the E3064/E3065 discarded-result lint on the same call.
+//
+// The compatibility predicate mirrors lowering's `coerceArgToParam` for
+// primitives (cast-category equality + implicit conversions) and ADDS the
+// element-type comparison lowering lacks: two generic collections of the same
+// base are compatible only when their element args are pairwise compatible, so
+// `IntArray.append(StringArray)` is rejected. Conservative everywhere a type is
+// unresolved / a type parameter / an interface / a bare base collection (a
+// `Self` param whose substitution dropped the element) — those defer to
+// lowering and never produce a false E3005.
+export function checkCallArgumentTypes(project Project, module MaxonModule)
+	for func in module.functions 'eachFunc'
+		if isStdlibFunctionPath(func.sourceFilePath) 'isStdlib'
+			continue
+		end 'isStdlib'
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("checkCallArgumentTypes: blockRef OOB")
+			for opIdx in block.opRefs 'eachOp'
+				let op = try module.ops.get(opIdx) otherwise panic("checkCallArgumentTypes: opIdx OOB")
+				checkOneCallArgs(project, op: op, opIdx: opIdx, callerName: func.name, readerFilePath: func.sourceFilePath)
+			end 'eachOp'
+		end 'eachBlock'
+	end 'eachFunc'
+end 'checkCallArgumentTypes'
+
+// One call op. The receiver offset is 1 for method calls (param 0 is the
+// implicit receiver, which has no user-arg) and 0 for plain calls.
+function checkOneCallArgs(project Project, op MaxonOp, opIdx OpIndex, callerName String, readerFilePath FilePath)
+	if op.name == "call" 'isCall'
+		match op 'c'
+			call(result, _, _, args, _, argTypes, argRanges, _) then validateCallArgs(project, opIdx: opIdx, result: result, args: args, argTypes: argTypes, argRanges: argRanges, paramOffset: 0, callerName: callerName, readerFilePath: readerFilePath)
+			default panic("checkOneCallArgs: op.name == call but match failed")
+		end 'c'
+		return
+	end 'isCall'
+	if op.name == "tryCall" 'isTryCall'
+		match op 'tc'
+			tryCall(result, _, _, args, _, argTypes, argRanges, _, _) then validateCallArgs(project, opIdx: opIdx, result: result, args: args, argTypes: argTypes, argRanges: argRanges, paramOffset: 0, callerName: callerName, readerFilePath: readerFilePath)
+			default panic("checkOneCallArgs: op.name == tryCall but match failed")
+		end 'tc'
+		return
+	end 'isTryCall'
+	if op.name == "methodCall" 'isMethodCall'
+		match op 'mc'
+			methodCall(result, _, _, args, _, argTypes, argRanges, _) then validateCallArgs(project, opIdx: opIdx, result: result, args: args, argTypes: argTypes, argRanges: argRanges, paramOffset: 1, callerName: callerName, readerFilePath: readerFilePath)
+			default panic("checkOneCallArgs: op.name == methodCall but match failed")
+		end 'mc'
+		return
+	end 'isMethodCall'
+	if op.name == "tryMethodCall" 'isTryMethodCall'
+		match op 'tmc'
+			tryMethodCall(result, _, _, args, _, argTypes, argRanges, _, _) then validateCallArgs(project, opIdx: opIdx, result: result, args: args, argTypes: argTypes, argRanges: argRanges, paramOffset: 1, callerName: callerName, readerFilePath: readerFilePath)
+			default panic("checkOneCallArgs: op.name == tryMethodCall but match failed")
+		end 'tmc'
+	end 'isTryMethodCall'
+end 'checkOneCallArgs'
+
+function validateCallArgs(project Project, opIdx OpIndex, result ByteArray, args ByteArrayArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, paramOffset ArgIndex, callerName String, readerFilePath FilePath)
+	let paramTypes = try project.callParamTypes.get(opIdx) otherwise return
+	let paramNames = paramNamesForCall(project, opIdx: opIdx)
+	for i in 0 upto args.count() 'eachArg'
+		let pIdx = i + paramOffset
+		if pIdx >= paramTypes.count() 'paramOob'
+			continue
+		end 'paramOob'
+		let rawParamType = try paramTypes.get(pIdx) otherwise continue
+		let paramType = refineSelfParam(project, opIdx: opIdx, paramType: rawParamType, paramOffset: paramOffset)
+		let argType = try argTypes.get(i) otherwise continue
+		if argTypesCompatible(project, argType: argType, paramType: paramType) 'ok'
+			continue
+		end 'ok'
+		let paramName = paramNameAt(paramNames, index: pIdx)
+		let range = try argRanges.get(i) otherwise SourceRange.none()
+		let expectedName = endpointName(project, t: paramType, other: argType)
+		let gotName = endpointName(project, t: argType, other: paramType)
+		reportCompileError(project, code: ErrorCode.semanticTypeMismatch, message: "argument type mismatch for '{paramName}': expected '{expectedName}', got '{gotName}'", line: range.line, column: range.column, filePath: readerFilePath)
+		if result.count() > 0 'haveResult'
+			project.callsWithArgErrors.insert("{callerName}::{String.from(result)}")
+		end 'haveResult'
+	end 'eachArg'
+end 'validateCallArgs'
+
+// A `Self`-typed parameter substitutes to the bare base collection (`Array`)
+// when the receiver's element type is dropped during substitution. Refine it
+// back to the receiver's concrete type (`Array with Int`) so element mismatches
+// are caught and the diagnostic names the receiver's alias. Only applies to
+// method calls whose param is a bare base collection and whose recorded
+// receiver type is a generic instance of the same base.
+function refineSelfParam(project Project, opIdx OpIndex, paramType MaxonType, paramOffset ArgIndex) returns MaxonType
+	if paramOffset == 0 'notMethodCall'
+		return paramType
+	end 'notMethodCall'
+	if not isBaseCollectionNamed(project, t: paramType) 'notBareBase'
+		return paramType
+	end 'notBareBase'
+	let receiverType = try project.resolvedReceiverTypes.get(opIdx) otherwise return paramType
+	let recv = resolveAliasForCompare(project, t: receiverType)
+	if not maxonTypeIsGenericInstance(recv) 'recvNotGeneric'
+		return paramType
+	end 'recvNotGeneric'
+	let paramBase = paramType.namedAliasNameOrEmpty(project)
+	if collectionBaseName(project, t: recv) != paramBase 'baseMismatch'
+		return paramType
+	end 'baseMismatch'
+	return recv
+end 'refineSelfParam'
+
+function paramNamesForCall(project Project, opIdx OpIndex) returns StringArray
+	let callee = try project.resolvedCallees.get(opIdx) otherwise return StringArray.create()
+	let sig = try project.funcSignatures.get(callee) otherwise return StringArray.create()
+	return sig.paramNames
+end 'paramNamesForCall'
+
+function paramNameAt(paramNames StringArray, index ArgIndex) returns String
+	return try paramNames.get(index) otherwise ""
+end 'paramNameAt'
+
+// True when an argument of `argType` may flow into a parameter of `paramType`.
+// Returns true (compatible) for everything not provably wrong, so the check
+// never adds a false E3005.
+function argTypesCompatible(project Project, argType MaxonType, paramType MaxonType) returns bool
+	if isUnresolvedType(argType) or isUnresolvedType(paramType) 'unresolved'
+		return true
+	end 'unresolved'
+	if argEndpointIsDynamic(argType) or argEndpointIsDynamic(paramType) 'dynamic'
+		return true
+	end 'dynamic'
+	let arg = resolveAliasForCompare(project, t: argType)
+	let param = resolveAliasForCompare(project, t: paramType)
+	if argEndpointIsDynamic(arg) or argEndpointIsDynamic(param) 'dynamicResolved'
+		return true
+	end 'dynamicResolved'
+	// Lowering's char-byte → Character coercion: a single-byte char literal is
+	// typed `int` on the fast path but legitimately initializes a `Character`
+	// param. `coerceArgToParam` accepts it via a runtime materialization.
+	if isIntType(arg) and namedTypeIs(project, t: param, name: "Character") 'charByte'
+		return true
+	end 'charByte'
+	// Synthesized union companion types (`<Union>.unionCases`) interact with
+	// their union in compiler-generated code in ways the surface type check
+	// shouldn't second-guess. Defer to lowering.
+	if isUnionCasesCompanion(project, t: arg) or isUnionCasesCompanion(project, t: param) 'unionCases'
+		return true
+	end 'unionCases'
+
+	let argGeneric = maxonTypeIsGenericInstance(arg)
+	let paramGeneric = maxonTypeIsGenericInstance(param)
+	let argBaseColl = isBaseCollectionNamed(project, t: arg)
+	let paramBaseColl = isBaseCollectionNamed(project, t: param)
+
+	// Bare-named-vs-generic of the same base: a parameter declared as a bare
+	// non-collection type (`node __ManagedListNode`) accepts an argument that is
+	// a generic instance of that same base (`__ManagedListNode with Item`), and
+	// vice versa. The bare side carries no element binding to compare against,
+	// so this admits ANY same-base bare↔generic pair without element checking —
+	// the conservative (compatible) choice consistent with the rest of this
+	// predicate, since a bare param that dropped its element legitimately cannot
+	// constrain the element. The motivating case is node-returning managed-list
+	// methods (`insertFirst` → `__ManagedListNode with Item`) flowing into
+	// `remove(node __ManagedListNode)`. Gated to non-collection bases so genuine
+	// collections (Array/Map/Set/List/Vector) keep their element-arg checking in
+	// `collectionEndpointsCompatible` below.
+	if not argBaseColl and not paramBaseColl 'maybeBareGenericPair'
+		if argGeneric and isNamedNonCollection(project, t: param) and collectionBaseName(project, t: arg) == param.namedAliasNameOrEmpty(project) 'argGenericParamBare'
+			return true
+		end 'argGenericParamBare'
+		if paramGeneric and isNamedNonCollection(project, t: arg) and collectionBaseName(project, t: param) == arg.namedAliasNameOrEmpty(project) 'paramGenericArgBare'
+			return true
+		end 'paramGenericArgBare'
+	end 'maybeBareGenericPair'
+
+	// Collection endpoints (a generic instance, or a bare base-collection name
+	// from a `Self` param whose substitution dropped the element type).
+	if argGeneric or paramGeneric or argBaseColl or paramBaseColl 'collectionInvolved'
+		return collectionEndpointsCompatible(project, arg: arg, param: param, argGeneric: argGeneric, paramGeneric: paramGeneric, argBaseColl: argBaseColl, paramBaseColl: paramBaseColl)
+	end 'collectionInvolved'
+
+	// Two named struct / enum types: compatible only when their names match.
+	let argStruct = namedStructOrEnumName(project, t: arg)
+	let paramStruct = namedStructOrEnumName(project, t: param)
+	if not argStruct.isEmpty() and not paramStruct.isEmpty() 'bothNamed'
+		return argStruct == paramStruct
+	end 'bothNamed'
+	if argStruct.isEmpty() != paramStruct.isEmpty() 'oneNamed'
+		return false
+	end 'oneNamed'
+
+	// Primitives: lowering's rule — same cast category, or an implicit
+	// conversion bridges them.
+	let argCat = convertCastCategory(project, t: arg)
+	let paramCat = convertCastCategory(project, t: param)
+	if argCat == paramCat 'sameCat'
+		return true
+	end 'sameCat'
+	return implicitlyConvertible(argCat, to: paramCat)
+end 'argTypesCompatible'
+
+// Compatibility for a pair where at least one side is a collection (generic
+// instance or bare base-collection name).
+function collectionEndpointsCompatible(project Project, arg MaxonType, param MaxonType, argGeneric bool, paramGeneric bool, argBaseColl bool, paramBaseColl bool) returns bool
+	// A non-collection on the other side is always incompatible (e.g. passing
+	// an `int` where an `Array` is expected).
+	if not (argGeneric or argBaseColl) 'argNotColl'
+		return false
+	end 'argNotColl'
+	if not (paramGeneric or paramBaseColl) 'paramNotColl'
+		return false
+	end 'paramNotColl'
+	// A bare base-collection on either side carries no element to compare —
+	// a `Self` param that lost its element accepts any same-base collection.
+	// Compare base names when both are concrete generic instances; treat a
+	// bare base as a wildcard for its base.
+	let argBase = collectionBaseName(project, t: arg)
+	let paramBase = collectionBaseName(project, t: param)
+	if argBase != paramBase 'differentBase'
+		return false
+	end 'differentBase'
+	if argBaseColl or paramBaseColl 'eitherBare'
+		return true
+	end 'eitherBare'
+	// Both concrete generic instances of the same base: element args must be
+	// pairwise compatible (recursive — so `Integer` ≈ `int` inside a `Map`).
+	return genericArgsCompatible(project, arg: arg, param: param)
+end 'collectionEndpointsCompatible'
+
+// Pairwise-compatible element args of two same-base generic instances.
+function genericArgsCompatible(project Project, arg MaxonType, param MaxonType) returns bool
+	let argArgs = genericInstanceArgsOf(project, t: arg)
+	let paramArgs = genericInstanceArgsOf(project, t: param)
+	if argArgs.count() != paramArgs.count() 'arity'
+		return false
+	end 'arity'
+	for i in 0 upto argArgs.count() 'eachElem'
+		let a = try argArgs.get(i) otherwise panic("genericArgsCompatible: argArgs.get OOB after arity check")
+		let p = try paramArgs.get(i) otherwise panic("genericArgsCompatible: paramArgs.get OOB after arity check")
+		if not argTypesCompatible(project, argType: a, paramType: p) 'mismatch'
+			return false
+		end 'mismatch'
+	end 'eachElem'
+	return true
+end 'genericArgsCompatible'
+
+function genericInstanceArgsOf(project Project, t MaxonType) returns MaxonTypeArray
+	return match t 'k'
+		genericInstance(id) gives genericInstanceArgsById(project, id: id)
+		boolean to typeParameter gives MaxonTypeArray.create()
+		interface to opaquePointer gives MaxonTypeArray.create()
+	end 'k'
+end 'genericInstanceArgsOf'
+
+function genericInstanceArgsById(project Project, id GenericInstanceId) returns MaxonTypeArray
+	let (_, args) = project.genericInstances.get(id)
+	return args
+end 'genericInstanceArgsById'
+
+// Base name of a collection endpoint: the generic instance's base, or the bare
+// collection name itself.
+function collectionBaseName(project Project, t MaxonType) returns String
+	return match t 'k'
+		boolean to string gives ""
+		named(id) gives project.typeNames.get(id)
+		function to typeParameter gives ""
+		genericInstance(id) gives genericInstanceIdBaseName(project, id: id)
+		interface to opaquePointer gives ""
+	end 'k'
+end 'collectionBaseName'
+
+// True when `t` is a bare `named(...)` whose name is a known collection base
+// (`Array`/`Map`/…) — the shape a `Self` param collapses to when substitution
+// dropped the element type. Distinct from a struct/enum named type.
+function isBaseCollectionNamed(project Project, t MaxonType) returns bool
+	let name = t.namedAliasNameOrEmpty(project)
+	if name.isEmpty() 'notNamed'
+		return false
+	end 'notNamed'
+	return name == "Array" or name == "Map" or name == "Set" or name == "List" or name == "Vector"
+end 'isBaseCollectionNamed'
+
+// True when `t` is a bare `named(X)` that is not one of the base collection
+// names — i.e. a plain builtin / user struct name carrying no element binding,
+// such as `__ManagedListNode`. Used by `argTypesCompatible` to accept a
+// generic instance of the same base flowing into a bare-named parameter.
+function isNamedNonCollection(project Project, t MaxonType) returns bool
+	if not maxonTypeIsNamed(t) 'notNamed'
+		return false
+	end 'notNamed'
+	if isBaseCollectionNamed(project, t: t) 'isCollection'
+		return false
+	end 'isCollection'
+	return not t.namedAliasNameOrEmpty(project).isEmpty()
+end 'isNamedNonCollection'
+
+function isIntType(t MaxonType) returns bool
+	return match t 'k'
+		integer gives true
+		boolean gives false
+		float to opaquePointer gives false
+	end 'k'
+end 'isIntType'
+
+// True when `t` is a `named(...)` whose source name is `name`.
+function namedTypeIs(project Project, t MaxonType, name String) returns bool
+	return t.namedAliasNameOrEmpty(project) == name
+end 'namedTypeIs'
+
+// True for a synthesized `<Union>.unionCases` companion type the parser emits
+// for every union; comparisons involving it are compiler bookkeeping.
+function isUnionCasesCompanion(project Project, t MaxonType) returns bool
+	return t.namedAliasNameOrEmpty(project).endsWith(".unionCases")
+end 'isUnionCasesCompanion'
+
+// True for type-parameter or interface endpoints — dynamic shapes deferred to
+// lowering. Reuses the exported `maxonTypeIsTypeParameter`.
+function argEndpointIsDynamic(t MaxonType) returns bool
+	if maxonTypeIsTypeParameter(t) 'isParam'
+		return true
+	end 'isParam'
+	return match t 'k'
+		interface gives true
+		boolean to genericInstance gives false
+		constInt to opaquePointer gives false
+	end 'k'
+end 'argEndpointIsDynamic'
+
+// Chase a `named(alias)` to its resolved generic-instance form when the alias
+// is a registered generic typealias (`ItemArray = Array with Item`), so an
+// alias-spelled arg and a resolved param of the same type don't look different.
+function resolveAliasForCompare(project Project, t MaxonType) returns MaxonType
+	let name = t.namedAliasNameOrEmpty(project)
+	if name.isEmpty() 'notNamed'
+		return t
+	end 'notNamed'
+	return try project.genericTypealiases.get(name) otherwise t
+end 'resolveAliasForCompare'
+
+// The struct/enum name a `named(...)` type refers to, or "" for a primitive
+// (ranged-int / float / bool) alias, a collection base, or a non-named type.
+function namedStructOrEnumName(project Project, t MaxonType) returns String
+	let name = t.namedAliasNameOrEmpty(project)
+	if name.isEmpty() 'notNamed'
+		return ""
+	end 'notNamed'
+	if project.structTypes.contains(name) or project.enumTypes.contains(name) 'isStructOrEnum'
+		return name
+	end 'isStructOrEnum'
+	return ""
+end 'namedStructOrEnumName'
+
+// Display name for one E3005 endpoint, matching lowering's `mismatchTypeName`
+// rule: when BOTH endpoints are primitive numeric/bool families, print the base
+// category name (`int`/`float`/`bool`) so the message doesn't restate a
+// typealias the caller didn't write; otherwise print the source-level name —
+// preferring a user typealias for a resolved generic instance (`StringArray`
+// for `Array with String`) over the structural spelling.
+function endpointName(project Project, t MaxonType, other MaxonType) returns String
+	if isGenuinePrimitive(project, t: t) and isGenuinePrimitive(project, t: other) 'bothPrimitive'
+		return castCategoryName(convertCastCategory(project, t: t))
+	end 'bothPrimitive'
+	return sourceTypeDisplay(project, t: t)
+end 'endpointName'
+
+// True for a genuine scalar primitive — a bare `boolean`/`integer`/`float`/
+// `string` MaxonType, or a `named(...)` alias that resolves to a ranged
+// numeric/bool primitive (`Integer = int(...)`). NOT a struct, enum, or
+// collection (those collapse to `CastCategory.int` at the Std level but must
+// keep their source name in diagnostics).
+function isGenuinePrimitive(project Project, t MaxonType) returns bool
+	return match t 'k'
+		boolean gives true
+		integer gives true
+		float gives true
+		string gives true
+		named(id) gives namedIsPrimitiveAlias(project, name: project.typeNames.get(id))
+		function to opaquePointer gives false
+	end 'k'
+end 'isGenuinePrimitive'
+
+// A `named(name)` is a primitive alias when it's a registered typealias that is
+// neither a struct/enum nor a generic (collection) alias — i.e. a ranged
+// numeric / bool alias like `Integer` or `Score`.
+function namedIsPrimitiveAlias(project Project, name String) returns bool
+	if project.structTypes.contains(name) or project.enumTypes.contains(name) 'isStructEnum'
+		return false
+	end 'isStructEnum'
+	if project.genericTypealiases.contains(name) 'isGeneric'
+		return false
+	end 'isGeneric'
+	return project.typealiases.contains(name)
+end 'namedIsPrimitiveAlias'
+
+// Source-level display: a resolved generic instance maps back to a user alias
+// when one exists; everything else prints its own `toString`.
+function sourceTypeDisplay(project Project, t MaxonType) returns String
+	if maxonTypeIsGenericInstance(t) 'generic'
+		let alias = aliasNameForGenericType(project, t: t)
+		if not alias.isEmpty() 'haveAlias'
+			return alias
+		end 'haveAlias'
+	end 'generic'
+	return t.toString(project)
+end 'sourceTypeDisplay'
+
+// A user typealias whose resolved type is structurally `t`. Prefers a bare,
+// non-namespaced name (`StringArray`) over a stdlib-qualified one. Empty when
+// no alias matches (e.g. an inline `Array with X`).
+function aliasNameForGenericType(project Project, t MaxonType) returns String
+	var fallback = ""
+	for (name, resolved) in project.genericTypealiases 'eachAlias'
+		if maxonTypesStructurallyEqual(resolved, b: t) 'match'
+			if not name.contains(".") 'bareName'
+				return name
+			end 'bareName'
+			if fallback.isEmpty() 'recordFallback'
+				fallback = name
+			end 'recordFallback'
+		end 'match'
+	end 'eachAlias'
+	return fallback
+end 'aliasNameForGenericType'
+
 export function checkDiscardedResults(project Project, module MaxonModule)
 	// Short-circuit if the parser never tagged any discards. Avoids the
 	// per-function walk on the common all-results-used case.
@@ -1331,7 +2184,7 @@ export function checkDiscardedResults(project Project, module MaxonModule)
 			let block = try module.blocks.get(blockRef) otherwise panic("checkDiscardedResults: blockRef OOB")
 			for opIdx in block.opRefs 'eachOp'
 				let op = try module.ops.get(opIdx) otherwise panic("checkDiscardedResults: opIdx OOB")
-				checkOneCallForDiscard(project, module: module, op: op, callerName: func.name, callerNamespace: func.namespace, readerFilePath: readerFilePath, impureCallees: impureCallees)
+				checkOneCallForDiscard(project, module: module, opIdx: opIdx, op: op, callerName: func.name, callerNamespace: func.namespace, readerFilePath: readerFilePath, impureCallees: impureCallees)
 			end 'eachOp'
 		end 'eachBlock'
 	end 'eachFunc'
@@ -1349,7 +2202,7 @@ function isStdlibFunctionPath(path FilePath) returns bool
 	return s.contains("stdlib/") or s.contains("stdlib\\")
 end 'isStdlibFunctionPath'
 
-function checkOneCallForDiscard(project Project, module MaxonModule, op MaxonOp, callerName String, callerNamespace String, readerFilePath FilePath, impureCallees ImpureCalleeSet)
+function checkOneCallForDiscard(project Project, module MaxonModule, opIdx OpIndex, op MaxonOp, callerName String, callerNamespace String, readerFilePath FilePath, impureCallees ImpureCalleeSet)
 	if op.name == "call" 'isCall'
 		match op 'callShape'
 			call(result, callee, _, _, _, _, _, range) then maybeReportDiscarded(project, module: module, result: result, callee: callee, callerName: callerName, callerNamespace: callerNamespace, range: range, readerFilePath: readerFilePath, impureCallees: impureCallees)
@@ -1364,17 +2217,59 @@ function checkOneCallForDiscard(project Project, module MaxonModule, op MaxonOp,
 	end 'isTryCall'
 	if op.name == "methodCall" 'isMethodCall'
 		match op 'methodCallShape'
-			methodCall(result, _, methodName, _, _, _, _, range) then maybeReportDiscarded(project, module: module, result: result, callee: methodName, callerName: callerName, callerNamespace: callerNamespace, range: range, readerFilePath: readerFilePath, impureCallees: impureCallees)
+			methodCall(result, _, methodName, _, _, _, _, range) then maybeReportDiscardedMethodCall(project, module: module, opIdx: opIdx, result: result, methodName: methodName, callerName: callerName, callerNamespace: callerNamespace, range: range, readerFilePath: readerFilePath, impureCallees: impureCallees)
 			default panic("checkOneCallForDiscard: op.name == methodCall but match failed")
 		end 'methodCallShape'
 	end 'isMethodCall'
 	if op.name == "tryMethodCall" 'isTryMethodCall'
 		match op 'tryMethodCallShape'
-			tryMethodCall(result, _, methodName, _, _, _, _, _, range) then maybeReportDiscarded(project, module: module, result: result, callee: methodName, callerName: callerName, callerNamespace: callerNamespace, range: range, readerFilePath: readerFilePath, impureCallees: impureCallees)
+			tryMethodCall(result, _, methodName, _, _, _, _, _, range) then maybeReportDiscardedMethodCall(project, module: module, opIdx: opIdx, result: result, methodName: methodName, callerName: callerName, callerNamespace: callerNamespace, range: range, readerFilePath: readerFilePath, impureCallees: impureCallees)
 			default panic("checkOneCallForDiscard: op.name == tryMethodCall but match failed")
 		end 'tryMethodCallShape'
 	end 'isTryMethodCall'
 end 'checkOneCallForDiscard'
+
+// Method-call variant of `maybeReportDiscarded` that first exempts calls whose
+// receiver is a builtin managed type (`__ManagedList`, `__ManagedListNode`,
+// `__ManagedMemory`). Mirrors the C# bootstrap, which returns early after
+// `TryEmitBuiltinTypeMethod` without discarded-result tracking: builtin methods
+// like `__ManagedList.insertFirst` return a node/value the caller routinely
+// ignores (the list holds the reference), so a bare statement-position call is
+// the canonical usage, not a forgotten result. The receiver type comes from
+// `resolvedReceiverTypes` (keyed by the call's opIdx, populated by
+// `resolveMethodCallSite`), which covers every receiver shape — not just direct
+// var/global loads.
+function maybeReportDiscardedMethodCall(project Project, module MaxonModule, opIdx OpIndex, result ByteArray, methodName ByteArray, callerName String, callerNamespace String, range SourceRange, readerFilePath FilePath, impureCallees ImpureCalleeSet)
+	if let receiverType = try project.resolvedReceiverTypes.get(opIdx) 'haveReceiver'
+		if maxonTypeIsBuiltinManagedBase(project, t: receiverType) 'builtinReceiver'
+			return
+		end 'builtinReceiver'
+	end 'haveReceiver'
+	maybeReportDiscarded(project, module: module, result: result, callee: methodName, callerName: callerName, callerNamespace: callerNamespace, range: range, readerFilePath: readerFilePath, impureCallees: impureCallees)
+end 'maybeReportDiscardedMethodCall'
+
+// True when `t` (after chasing typealiases) is one of the builtin managed base
+// types: `__ManagedList`, `__ManagedListNode`, `__ManagedMemory`. Mirrors the
+// chase in `managedBuiltinBaseName` but without the parser-only inner-alias
+// state, which top-level / function-scope receivers never need.
+function maxonTypeIsBuiltinManagedBase(project Project, t MaxonType) returns bool
+	var cur = t
+	for _ in 0 upto 5 'chase'
+		let name = cur.nameOrEmpty(project)
+		if name.isEmpty() 'noName'
+			return false
+		end 'noName'
+		if name == "__ManagedList" or name == "__ManagedListNode" or name == "__ManagedMemory" 'isBuiltin'
+			return true
+		end 'isBuiltin'
+		if let aliased = try project.genericTypealiases.get(name) 'isAlias'
+			cur = aliased
+		end 'isAlias' else 'notAlias'
+			return false
+		end 'notAlias'
+	end 'chase'
+	return false
+end 'maxonTypeIsBuiltinManagedBase'
 
 function maybeReportDiscarded(project Project, module MaxonModule, result ByteArray, callee ByteArray, callerName String, callerNamespace String, range SourceRange, readerFilePath FilePath, impureCallees ImpureCalleeSet)
 	if result.count() == 0 'noResult'
@@ -1382,6 +2277,11 @@ function maybeReportDiscarded(project Project, module MaxonModule, result ByteAr
 	end 'noResult'
 	let resultStr = String.from(result)
 	let key = "{callerName}::{resultStr}"
+	// A call already flagged with an argument-type error (E3005) shouldn't also
+	// be reported as a discarded result — that's noise on a broken call.
+	if project.callsWithArgErrors.contains(key) 'hasArgError'
+		return
+	end 'hasArgError'
 	let isBare = project.discardedBareCallResults.contains(key)
 	let isLet = project.discardedLetCallResults.contains(key)
 	if not (isBare or isLet) 'notDiscarded'

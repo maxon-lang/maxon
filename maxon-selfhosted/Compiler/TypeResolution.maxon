@@ -640,6 +640,137 @@ function resolveAllTypealiases(project Project)
 	end 'dropLeftover'
 end 'resolveAllTypealiases'
 
+// E2012 detection for generic-typealias cycles. The drain interns every
+// generic alias (`A = Array with B`) into `genericTypealiases` regardless of
+// whether its args resolve, so a self- or mutual-reference cycle never gets
+// stuck in `unresolvedTypealiases` and the `aliasName` cycle check never sees
+// it. Walk each alias's generic-instance args; an arg whose name is itself a
+// generic typealias is an edge. A back-edge to a name already on the current
+// DFS path is a cycle. Mirrors the C# bootstrap's `DetectCircularTypeAliases`
+// (message `A -> B -> A`) plus its inline self-reference case (message `A`).
+function detectCircularTypealiases(project Project)
+	var reported = StringSet.create()
+	for (name, _) in project.genericTypealiases 'eachAlias'
+		if reported.contains(name) 'alreadyDone'
+			continue
+		end 'alreadyDone'
+		var path = StringArray.create()
+		walkTypealiasCycle(project, name: name, path: path, reported: reported)
+	end 'eachAlias'
+end 'detectCircularTypealiases'
+
+// DFS one alias. `path` is the chain of alias names from a root to `name`
+// (exclusive of `name` on entry). On reaching a name already on `path`, emit
+// E2012 and mark every node on the cycle as reported so we don't re-emit it
+// from a different root.
+function walkTypealiasCycle(project Project, name String, path StringArray, reported StringSet)
+	// Self-reference (`A = Array with A`): the alias's own args mention it.
+	if typealiasArgNames(project, name: name).contains(name) 'selfRef'
+		if not reported.contains(name) 'fresh'
+			reported.insert(name)
+			emitCircularTypealias(project, name: name, cyclePath: name)
+		end 'fresh'
+		return
+	end 'selfRef'
+
+	path.push(name)
+	for argName in typealiasArgNames(project, name: name) 'eachArg'
+		if pathContains(path, target: argName) 'backEdge'
+			// The cycle is the suffix of `path` from `argName`'s first
+			// occurrence; both the message and the reported-set marking
+			// operate on it.
+			let cycle = cycleSuffix(path, backTo: argName)
+			let cyclePath = formatTypealiasCyclePath(cycle, backTo: argName)
+			for cycleName in cycle 'mark'
+				reported.insert(cycleName)
+			end 'mark'
+			emitCircularTypealias(project, name: argName, cyclePath: cyclePath)
+		end 'backEdge' else 'descend'
+			if project.genericTypealiases.contains(argName) and not reported.contains(argName) 'recurse'
+				walkTypealiasCycle(project, name: argName, path: path, reported: reported)
+			end 'recurse'
+		end 'descend'
+	end 'eachArg'
+	_ = try path.pop() otherwise panic("walkTypealiasCycle: path.pop on the name just pushed cannot fail")
+end 'walkTypealiasCycle'
+
+// The set of generic-typealias arg names referenced by `name`'s RHS. Only
+// `named(...)` args contribute an edge; primitive / constInt args don't.
+function typealiasArgNames(project Project, name String) returns StringArray
+	var names = StringArray.create()
+	let t = try project.genericTypealiases.get(name) otherwise return names
+	match t 'kind'
+		boolean to typeParameter then break 'kind'
+		genericInstance(id) then collectGenericArgNames(project, id: id, out: names)
+		interface to opaquePointer then break 'kind'
+	end 'kind'
+	return names
+end 'typealiasArgNames'
+
+function collectGenericArgNames(project Project, id GenericInstanceId, out StringArray)
+	let (_, args) = project.genericInstances.get(id)
+	for arg in args 'eachArg'
+		let argName = arg.namedAliasNameOrEmpty(project)
+		if not argName.isEmpty() 'isNamed'
+			out.push(argName)
+		end 'isNamed'
+	end 'eachArg'
+end 'collectGenericArgNames'
+
+function pathContains(path StringArray, target String) returns bool
+	for p in path 'each'
+		if p == target 'hit'
+			return true
+		end 'hit'
+	end 'each'
+	return false
+end 'pathContains'
+
+// The suffix of `path` starting at the first occurrence of `backTo` — the
+// nodes that form the detected cycle. Used both to render the diagnostic and
+// to mark every cycle node as reported.
+function cycleSuffix(path StringArray, backTo String) returns StringArray
+	var suffix = StringArray.create()
+	var inCycle = false
+	for p in path 'each'
+		if p == backTo 'startCycle'
+			inCycle = true
+		end 'startCycle'
+		if inCycle 'append'
+			suffix.push(p)
+		end 'append'
+	end 'each'
+	return suffix
+end 'cycleSuffix'
+
+// Render `cycle[0] -> ... -> cycle[n] -> backTo`: the cycle nodes joined with
+// arrows, then `backTo` again to close the loop.
+function formatTypealiasCyclePath(cycle StringArray, backTo String) returns String
+	var result = ""
+	for p in cycle 'each'
+		if result.isEmpty() 'first'
+			result = p
+		end 'first' else 'more'
+			result = "{result} -> {p}"
+		end 'more'
+	end 'each'
+	return "{result} -> {backTo}"
+end 'formatTypealiasCyclePath'
+
+function emitCircularTypealias(project Project, name String, cyclePath String)
+	let filePath = typealiasDeclFilePath(project, name: name)
+	reportCompileError(project, code: ErrorCode.parserCircularDependency, message: "Circular typealias dependency: {cyclePath}", line: 0, column: 0, filePath: filePath)
+end 'emitCircularTypealias'
+
+// Best-effort source file for an alias decl, used only for diagnostic
+// grouping (the spec strips file:line:col before comparing). Empty when the
+// alias has no recorded visibility entry (e.g. synthesized aliases).
+function typealiasDeclFilePath(project Project, name String) returns FilePath
+	let infos = try project.typealiasVisibilities.get(name) otherwise return FilePath from ""
+	let first = try infos.get(0) otherwise return FilePath from ""
+	return first.sourceFilePath
+end 'typealiasDeclFilePath'
+
 function reportUnresolvedTypealias(project Project, entry UnresolvedTypealias)
 	match entry.expr 'classify'
 		aliasName(target) then reportAliasNameUnresolved(project, entry: entry, target: target)
@@ -2688,27 +2819,148 @@ function resolveDottedTopLevelReceiver(project Project, name String, filePath Fi
 end 'resolveDottedTopLevelReceiver'
 
 // Splice `newOpIdx` into whichever block's opRefs currently holds
-// `anchorOpIdx`, immediately after that anchor. Mirrors `insertBitNotAfter`
-// — every op produced during type-resolution rewrites lives in exactly
-// one block, so the linear scan is bounded by the block's own length.
-function insertOpAfter(module MaxonModule, anchorOpIdx OpIndex, newOpIdx OpIndex)
+// `anchorOpIdx`. `afterAnchor` selects placement immediately after the anchor
+// (the `.rawValue`/`.fieldStore` rewrites) versus immediately before it (the
+// `coerceEnumRawValueCompareOperands` fieldLoad that the cmp consumes). Every
+// op produced during type-resolution rewrites lives in exactly one block, so
+// the linear scan is bounded by that block's own length.
+function spliceOpAtAnchor(module MaxonModule, anchorOpIdx OpIndex, newOpIdx OpIndex, afterAnchor bool)
 	for blockRef in 0 upto module.blocks.count() 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise panic("insertOpAfter: blockRef OOB")
+		let block = try module.blocks.get(blockRef) otherwise panic("spliceOpAtAnchor: blockRef OOB")
 		var insertPos = -1 as ParsedInt
 		for posIdx in 0 upto block.opRefs.count() 'eachOpRef'
-			let ref = try block.opRefs.get(posIdx) otherwise panic("insertOpAfter: posIdx OOB")
+			let ref = try block.opRefs.get(posIdx) otherwise panic("spliceOpAtAnchor: posIdx OOB")
 			if ref == anchorOpIdx 'foundAnchor'
 				insertPos = posIdx
 				break
 			end 'foundAnchor'
 		end 'eachOpRef'
 		if insertPos >= 0 'doInsert'
-			try block.opRefs.insert(insertPos + 1, value: newOpIdx) otherwise panic("insertOpAfter: opRefs.insert OOB")
+			// Explicit `if` rather than `insertPos + 1 if afterAnchor else
+			// insertPos`: the inline conditional miscompiles here in the
+			// self-hosted compiler (the consuming op is emitted before the
+			// inserted producer → E3013 on string/char enum comparisons). Pinned
+			// by `specs/ternary-expression.md::error.arith-ternary-as-index`.
+			var target = insertPos
+			if afterAnchor 'after'
+				target = insertPos + 1
+			end 'after'
+			try block.opRefs.insert(target, value: newOpIdx) otherwise panic("spliceOpAtAnchor: opRefs.insert OOB")
 			return
 		end 'doInsert'
 	end 'eachBlock'
-	panic("insertOpAfter: anchor op at idx={anchorOpIdx} not registered in any block")
+	panic("spliceOpAtAnchor: anchor op at idx={anchorOpIdx} not registered in any block")
+end 'spliceOpAtAnchor'
+
+// Splice `newOpIdx` immediately after `anchorOpIdx` in its block's opRefs.
+function insertOpAfter(module MaxonModule, anchorOpIdx OpIndex, newOpIdx OpIndex)
+	spliceOpAtAnchor(module, anchorOpIdx: anchorOpIdx, newOpIdx: newOpIdx, afterAnchor: true)
 end 'insertOpAfter'
+
+// Splice `newOpIdx` immediately before `anchorOpIdx` in its block's opRefs —
+// used by `coerceEnumRawValueCompareOperands` to place a `.rawValue` fieldLoad
+// ahead of the cmp that consumes it.
+function insertOpBefore(module MaxonModule, anchorOpIdx OpIndex, newOpIdx OpIndex)
+	spliceOpAtAnchor(module, anchorOpIdx: anchorOpIdx, newOpIdx: newOpIdx, afterAnchor: false)
+end 'insertOpBefore'
+
+// Phase 11.65: classify a comparison operand's type for the string/char-
+// backed enum rewrite. Returns the scalar peer type name (`String` /
+// `Character`) when `t` is a string/char-backed enum, "" otherwise.
+function stringCharEnumScalarPeerName(project Project, t MaxonType) returns String
+	let name = t.namedAliasNameOrEmpty(project)
+	if name.isEmpty() 'notNamed'
+		return ""
+	end 'notNamed'
+	if let enumDef = try project.enumTypes.get(name) 'isEnum'
+		if enumDef.isStringBacked 'string'
+			return "String"
+		end 'string'
+		if enumDef.isCharBacked 'char'
+			return "Character"
+		end 'char'
+	end 'isEnum'
+	return ""
+end 'stringCharEnumScalarPeerName'
+
+// Phase 11.65: fresh SSA name for an inserted enum `.rawValue` fieldLoad.
+// Suffixed with the cmp's result name so the receiver ↔ field pairing stays
+// scannable in IR dumps; prefixed to distinguish from user-emitted names.
+function freshEnumRawValueName(related ByteArray, side String) returns ByteArray
+	let s = "$enumraw_{side}_{String.from(related)}"
+	return s.toByteArray()
+end 'freshEnumRawValueName'
+
+// Phase 11.65: rewrite every `==`/`!=` cmp whose operand is a string/char-
+// backed enum compared against the matching scalar (`String`/`Character`) or
+// another string/char-backed enum. Insert a `.rawValue` fieldLoad ahead of
+// the cmp for each enum operand and restamp the operand types to the scalar
+// peer, so `validateCompareOp` accepts the op and lowering routes it through
+// `String.equals` / `Character.equals`. Walks `module.ops` by index; inserted
+// fieldLoads are appended (existing indices stay valid).
+function coerceEnumRawValueCompareOperands(project Project, module MaxonModule)
+	let opCountBefore = module.ops.count()
+	for opIdx in 0 upto opCountBefore 'eachOp'
+		let op = try module.ops.get(opIdx) otherwise panic("coerceEnumRawValueCompareOperands: ops.get OOB at {opIdx}")
+		if op.name != "cmp" 'notCmp'
+			continue
+		end 'notCmp'
+		match op 'extractCmp'
+			cmp(result, left, right, predicate, leftType, rightType, _, range) then maybeCoerceOneCmp(project, module: module, opIdx: opIdx, result: result, left: left, right: right, predicate: predicate, leftType: leftType, rightType: rightType, range: range)
+			default panic("coerceEnumRawValueCompareOperands: op.name == 'cmp' but match fell through")
+		end 'extractCmp'
+	end 'eachOp'
+end 'coerceEnumRawValueCompareOperands'
+
+// Phase 11.65: per-cmp rewrite. Gates to eq/ne and to at least one string/
+// char-backed enum operand; inserts `.rawValue` fieldLoads and restamps the
+// cmp in place.
+function maybeCoerceOneCmp(project Project, module MaxonModule, opIdx OpIndex, result ByteArray, left ByteArray, right ByteArray, predicate CmpPredicate, leftType MaxonType, rightType MaxonType, range SourceRange)
+	let isEquality = match predicate 'eqNe'
+		eq gives true
+		ne gives true
+		lt to ge gives false
+	end 'eqNe'
+	if not isEquality 'notEquality'
+		return
+	end 'notEquality'
+
+	let leftPeer = stringCharEnumScalarPeerName(project, t: leftType)
+	let rightPeer = stringCharEnumScalarPeerName(project, t: rightType)
+	let leftIsEnum = not leftPeer.isEmpty()
+	let rightIsEnum = not rightPeer.isEmpty()
+	if not leftIsEnum and not rightIsEnum 'neitherEnum'
+		return
+	end 'neitherEnum'
+
+	// The scalar peer for the whole comparison. Both sides agree (a string-
+	// backed enum is only ever compared against String, a char-backed enum
+	// against Character) — pick whichever side is the enum.
+	let peerName = leftPeer if leftIsEnum else rightPeer
+	let peerType = MaxonType.named(project.typeNames.intern(peerName))
+
+	var newLeft = left
+	if leftIsEnum 'coerceLeft'
+		newLeft = insertRawValueLoad(module, anchorOpIdx: opIdx, operand: left, side: "l", range: range)
+	end 'coerceLeft'
+
+	var newRight = right
+	if rightIsEnum 'coerceRight'
+		newRight = insertRawValueLoad(module, anchorOpIdx: opIdx, operand: right, side: "r", range: range)
+	end 'coerceRight'
+
+	try module.ops.set(opIdx, value: MaxonOp.cmp(result, left: newLeft, right: newRight, predicate: predicate, leftType: peerType, rightType: peerType, operandType: peerType, range: range)) otherwise panic("maybeCoerceOneCmp: ops.set OOB at idx={opIdx}")
+end 'maybeCoerceOneCmp'
+
+// Phase 11.65: append a `.rawValue` fieldLoad on `operand` and splice it
+// before the cmp at `anchorOpIdx`. Returns the fresh result name.
+function insertRawValueLoad(module MaxonModule, anchorOpIdx OpIndex, operand ByteArray, side String, range SourceRange) returns ByteArray
+	let rawName = freshEnumRawValueName(operand, side: side)
+	let newOpIdx = module.ops.count()
+	module.ops.push(MaxonOp.fieldLoad(rawName, receiver: operand, fieldName: "rawValue".toByteArray(), range: range))
+	insertOpBefore(module, anchorOpIdx: anchorOpIdx, newOpIdx: newOpIdx)
+	return rawName
+end 'insertRawValueLoad'
 
 // Synthesize a name for the inserted globalLoad. Prefixed so IR dumps
 // distinguish it from user-emitted names; suffixed with the related
@@ -3211,6 +3463,17 @@ function methodCallResultType(project Project, receiverType MaxonType, methodNam
 	// `iter.advance()` on a non-generic caller (e.g. `main`) hits
 	// `forwardCallerLayout` with nothing to forward.
 	let scopeResolved = promoteBareGenericReturnToScope(project, t: selfResolved, enclosingStructName: structName)
+	// Managed-list node promotion: `__ManagedList.insertFirst` / `head` / … are
+	// registered as returning the bare `__ManagedListNode` (so the type round-
+	// trips through the stdlib cache without a fragile genericInstance id). When
+	// the receiver is a concrete `__ManagedList with E`, bind the node return to
+	// that element so a downstream `node.value()` resolves to `E` rather than a
+	// raw `Element`. Done here, against the live receiver, instead of in the
+	// registered signature.
+	let nodePromoted = promoteManagedNodeReturnFromReceiver(project, t: scopeResolved, receiverType: normReceiver, receiverStructName: structName)
+	if not maxonTypesStructurallyEqual(nodePromoted, b: scopeResolved) 'didNodePromote'
+		return nodePromoted
+	end 'didNodePromote'
 	// J.4f.2: when the method is declared on an interface extension
 	// (`extension Iterable ... function map(...) returns ElementArray`),
 	// the return type references the interface's own typeParameter
@@ -3378,6 +3641,52 @@ function promoteBareGenericReturnToScope(project Project, t MaxonType, enclosing
 	let gid = project.genericInstances.intern(baseId, args: args)
 	return MaxonType.genericInstance(gid)
 end 'promoteBareGenericReturnToScope'
+
+// Bind a bare `named(__ManagedListNode)` method return to the element type
+// carried by a `__ManagedList with E` receiver, yielding
+// `genericInstance(__ManagedListNode, [E])`. Returns `t` unchanged when it is
+// not the bare node type or the receiver is not a concrete managed-list
+// instance. Lets `node.value()` (whose own return is `__ManagedListNode.Element`)
+// resolve to `E` via its receiver substitution at the next call site.
+function promoteManagedNodeReturnFromReceiver(project Project, t MaxonType, receiverType MaxonType, receiverStructName String) returns MaxonType
+	if not maxonTypeIsNamed(t) 'notNamed'
+		return t
+	end 'notNamed'
+	if t.nameOrEmpty(project) != "__ManagedListNode" 'notNode'
+		return t
+	end 'notNode'
+	if receiverStructName != "__ManagedList" 'notListReceiver'
+		return t
+	end 'notListReceiver'
+	let elementType = singleGenericArgOrUnresolved(project, t: receiverType)
+	if isUnresolvedType(elementType) 'noElement'
+		return t
+	end 'noElement'
+	let baseId = project.typeNames.intern("__ManagedListNode")
+	var args = MaxonTypeArray.create()
+	args.push(elementType)
+	let gid = project.genericInstances.intern(baseId, args: args)
+	return MaxonType.genericInstance(gid)
+end 'promoteManagedNodeReturnFromReceiver'
+
+// Returns the sole generic argument of `t` when `t` is a single-arg
+// `genericInstance`, else `unresolved`. Used to pull the element type out of a
+// `__ManagedList with E` receiver.
+function singleGenericArgOrUnresolved(project Project, t MaxonType) returns MaxonType
+	return match t 'pick'
+		genericInstance(gid) gives singleGenericArgFromGid(project, gid: gid)
+		boolean to typeParameter gives MaxonType.unresolved
+		interface to opaquePointer gives MaxonType.unresolved
+	end 'pick'
+end 'singleGenericArgOrUnresolved'
+
+function singleGenericArgFromGid(project Project, gid GenericInstanceId) returns MaxonType
+	let (_, args) = project.genericInstances.get(gid)
+	if args.count() != 1 'notSingleArg'
+		return MaxonType.unresolved
+	end 'notSingleArg'
+	return try args.get(0) otherwise MaxonType.unresolved
+end 'singleGenericArgFromGid'
 
 // True when `t` is an interface receiver whose interface declares both
 // `current()` and `advance()` but no `createIterator` — the user's "this
@@ -3795,13 +4104,26 @@ function fieldLoadResultType(project Project, receiverType MaxonType, fieldName 
 			return MaxonType.named(project.typeNames.intern("String"))
 		end 'isName'
 		if fieldNameStr == "rawValue" 'isRaw'
-			// Function-backed enums return a function pointer of the enum's
-			// shared signature; all other backings (int/float/string/char/struct/ordinal)
-			// surface as int at the producer-type level.
+			// `.rawValue` surfaces the case's declared backing value, so its type
+			// follows the enum's backing kind:
+			//   - function-backed → a function pointer of the enum's shared signature
+			//   - float-backed    → float (the IEEE-754 backing literal)
+			//   - string-backed   → String (the declared string literal)
+			//   - char-backed     → Character (the declared char literal)
+			//   - int / ordinal / struct → int (the runtime SSA already carries it)
 			let enumDef = try project.enumTypes.get(structName) otherwise return MaxonType.integer
 			if enumDef.isFunctionBacked and enumDef.functionBackingTypeId != 0 'asFn'
 				return MaxonType.function(enumDef.functionBackingTypeId)
 			end 'asFn'
+			if enumDef.isFloatBacked 'asFloat'
+				return MaxonType.float
+			end 'asFloat'
+			if enumDef.isStringBacked 'asString'
+				return MaxonType.named(project.typeNames.intern("String"))
+			end 'asString'
+			if enumDef.isCharBacked 'asChar'
+				return MaxonType.named(project.typeNames.intern("Character"))
+			end 'asChar'
 			return MaxonType.integer
 		end 'isRaw'
 		if fieldNameStr == "ordinal" 'isOrdinal'
@@ -4089,7 +4411,85 @@ function recordFuncOpResults(project Project, module MaxonModule, func IrFunctio
 			recordOpResult(project, producerTypes: producerTypes, slotTypes: slotTypes, tuplePartialArgs: tuplePartialArgs, currentNamespace: func.namespace, enclosingType: enclosingType, readerFilePath: func.sourceFilePath, funcName: func.name, op: termOp)
 		end 'hasTerm'
 	end 'eachBlock'
+
+	// E2028 deferred ternary arms-match check: the producer-type map is now
+	// fully populated for this function, so each pinned ternary slot's two
+	// arm `varStore`s carry resolved value types. Compare them.
+	checkPendingTernaryArmTypes(project, module: module, func: func, producerTypes: producerTypes)
 end 'recordFuncOpResults'
+
+// Drain the parser-recorded ternary arm-match entries that belong to `func`.
+// For each pinned result slot we collect the resolved value type of every
+// `varStore` targeting that slot (the two ternary arms write exactly one
+// each), then emit E2028 if the two arms resolve to distinct *registered
+// reference* types (struct/enum). Same-name arms (two `String`s, two `Cat`s),
+// primitive-aliased arms (two distinct `int(...)` typealiases), and arms whose
+// type never resolved to a registered struct/enum are all skipped — the
+// reference-name comparison is the gate that prevents false positives.
+function checkPendingTernaryArmTypes(project Project, module MaxonModule, func IrFunction, producerTypes ProducerTypeMap)
+	for entryIdx in 0 upto project.pendingTernaryArmChecks.count() 'eachEntry'
+		let entry = try project.pendingTernaryArmChecks.get(entryIdx) otherwise panic("checkPendingTernaryArmTypes: entryIdx OOB")
+		if entry.funcName != func.name 'otherFunc'
+			continue
+		end 'otherFunc'
+
+		// Collect the (up to two) arm store types for this slot in arm order.
+		var trueArmName = ""
+		var falseArmName = ""
+		var seen = 0
+		for blockRef in func.blockRefs 'scanBlocks'
+			let block = try module.blocks.get(blockRef) otherwise panic("checkPendingTernaryArmTypes: blockRef OOB")
+			for opIdx in block.opRefs 'scanOps'
+				let op = try module.ops.get(opIdx) otherwise panic("checkPendingTernaryArmTypes: opIdx OOB")
+				if op.name != "varStore" 'notStore'
+					continue
+				end 'notStore'
+				let (storeSlot, value) = match op 'storeMatch'
+					varStore(slotId, val, _) gives(slotId, val)
+					default panic("checkPendingTernaryArmTypes: op.name == varStore but match failed")
+				end 'storeMatch'
+				if storeSlot != entry.slot 'otherSlot'
+					continue
+				end 'otherSlot'
+				let armName = registeredRefNameOrEmpty(project, t: lookupProducerType(producerTypes, name: value))
+				if seen == 0 'firstArm'
+					trueArmName = armName
+				end 'firstArm' else 'secondArm'
+					falseArmName = armName
+				end 'secondArm'
+				seen = seen + 1
+			end 'scanOps'
+		end 'scanBlocks'
+
+		if seen < 2 'haveBothArms'
+			continue
+		end 'haveBothArms'
+		if trueArmName.isEmpty() or falseArmName.isEmpty() 'bothAreRefs'
+			continue
+		end 'bothAreRefs'
+		if trueArmName == falseArmName 'sameType'
+			continue
+		end 'sameType'
+
+		reportCompileError(project, code: ErrorCode.parserMatchTypeMismatch, message: "ternary expression type mismatch: true branch is '{trueArmName}' but false branch is '{falseArmName}'", line: entry.ifLine, column: entry.ifColumn, filePath: entry.filePath)
+	end 'eachEntry'
+end 'checkPendingTernaryArmTypes'
+
+// Source-level name of `t` iff it resolves to a registered reference type
+// (a struct in `structTypes` or an enum in `enumTypes`); "" otherwise. A
+// `named(id)` typealias to a primitive (e.g. `Integer = int(...)`) returns
+// "" because the name isn't in either reference registry, so two distinct
+// primitive aliases never trip the ternary arms-match check.
+function registeredRefNameOrEmpty(project Project, t MaxonType) returns String
+	let name = t.nameOrEmpty(project)
+	if name.isEmpty() 'noName'
+		return ""
+	end 'noName'
+	if project.structTypes.contains(name) or project.enumTypes.contains(name) 'isRef'
+		return name
+	end 'isRef'
+	return ""
+end 'registeredRefNameOrEmpty'
 
 // Phase 7: stringConst / stringInterp produce a real `String` struct value
 // once stdlib/String.maxon is whitelisted. When that struct is registered,
@@ -4349,7 +4749,7 @@ end 'unifyGenericInstanceArgs'
 function arrayLiteralResultType(project Project, funcName String, name ByteArray, producerTypes ProducerTypeMap) returns MaxonType
 	let key = arrayLiteralProducerKey(funcName, valueName: name)
 	let entry = try project.arrayLiteralProducers.get(key) otherwise return MaxonType.unresolved
-	let element = unifyArrayLiteralElementTypes(project, entry: entry, producerTypes: producerTypes)
+	let element = unifyArrayLiteralElementTypes(project, funcName: funcName, entry: entry, producerTypes: producerTypes)
 	if isUnresolvedType(element) 'noUnify'
 		return MaxonType.unresolved
 	end 'noUnify'
@@ -4384,11 +4784,11 @@ end 'arrayLiteralBaseTypeName'
 // shared entry as the earlier `__ManagedMemory.create`) doesn't re-fire
 // the diagnostic. Returns `unresolved` for empty literals and after
 // reporting an error.
-function unifyArrayLiteralElementTypes(project Project, entry ArrayLiteralProducer, producerTypes ProducerTypeMap) returns MaxonType
+function unifyArrayLiteralElementTypes(project Project, funcName String, entry ArrayLiteralProducer, producerTypes ProducerTypeMap) returns MaxonType
 	var unified = MaxonType.unresolved
 	for i in 0 upto entry.elemNames.count() 'walk'
 		let elemName = try entry.elemNames.get(i) otherwise panic("unifyArrayLiteralElementTypes: elemNames.get OOB at {i}")
-		let t = lookupProducerType(producerTypes, name: elemName)
+		let t = retypeCharByteElement(project, elemName: elemName, elemType: lookupProducerType(producerTypes, name: elemName), funcName: funcName)
 		if isUnresolvedType(t) 'skipUnresolved'
 			continue
 		end 'skipUnresolved'
@@ -4462,7 +4862,7 @@ end 'mapLiteralResultType'
 function unifyMapLiteralAxisFromProducer(project Project, funcName String, mmResultName ByteArray, producerTypes ProducerTypeMap) returns MaxonType
 	let key = arrayLiteralProducerKey(funcName, valueName: mmResultName)
 	let entry = try project.arrayLiteralProducers.get(key) otherwise return MaxonType.unresolved
-	return unifyArrayLiteralElementTypes(project, entry: entry, producerTypes: producerTypes)
+	return unifyArrayLiteralElementTypes(project, funcName: funcName, entry: entry, producerTypes: producerTypes)
 end 'unifyMapLiteralAxisFromProducer'
 
 // Compose the `mapLiteralProducers` key. Mirrors `arrayLiteralProducerKey`:
@@ -4534,7 +4934,8 @@ function unifyArrayLiteralElementsFromModule(project Project, module MaxonModule
 	var unified = MaxonType.unresolved
 	for i in 0 upto entry.elemNames.count() 'walk'
 		let elemName = try entry.elemNames.get(i) otherwise panic("unifyArrayLiteralElementsFromModule: elemNames.get OOB at {i}")
-		let t = try staticTypeOfValueInFunction(project, module: module, func: func, name: elemName) otherwise throw ArrayLiteralLookupError.cannotUnify
+		let rawT = try staticTypeOfValueInFunction(project, module: module, func: func, name: elemName) otherwise throw ArrayLiteralLookupError.cannotUnify
+		let t = retypeCharByteElement(project, elemName: elemName, elemType: rawT, funcName: func.name)
 		if isUnresolvedType(unified) 'firstConcrete'
 			unified = t
 			continue
@@ -5270,6 +5671,20 @@ function fillVarDecl(project Project, module MaxonModule, opIdx OpIndex, slotId 
 			slotTypes.upsert(slotId, value: fromValue)
 			return
 		end 'widenInt2Float'
+		// Seed-replacement: a `let removed = try ... otherwise panic(...)` binding
+		// reads a merge varLoad that was stamped to the literal-zero seed's `int`
+		// on an earlier fill pass. Once the success arm's struct-typed value
+		// resolves (e.g. on the second pass after a global receiver's element
+		// type is backfilled), the initializer's producer type becomes
+		// struct-like — re-stamp this varDecl + its slot-type entry so the
+		// binding's `.field` access lowers against the struct, not `int`.
+		let slotIsStructLike = maxonTypeIsNamed(slotType) or maxonTypeIsGenericInstance(slotType)
+		let fromIsStructLike = maxonTypeIsNamed(fromValue) or maxonTypeIsGenericInstance(fromValue)
+		if not slotIsStructLike and fromIsStructLike 'replaceSeedDecl'
+			try module.ops.set(opIdx, value: MaxonOp.varDecl(slotId, value: value, slotType: fromValue, range: range)) otherwise panic("fillVarDecl: ops.set OOB at idx={opIdx}")
+			slotTypes.upsert(slotId, value: fromValue)
+			return
+		end 'replaceSeedDecl'
 		return
 	end 'noChange'
 	try module.ops.set(opIdx, value: MaxonOp.varDecl(slotId, value: value, slotType: filled, range: range)) otherwise panic("fillVarDecl: ops.set OOB at idx={opIdx}")
@@ -5564,6 +5979,24 @@ function fillVarLoad(project Project, module MaxonModule, opIdx OpIndex, result 
 		recordResultType(producerTypes, name: result, t: filled)
 		return
 	end 'promoteTypeParam'
+	// Seed-replacement: when this varLoad reads a try-fallback / match-expr
+	// merge slot whose op `slotType` was stamped to the literal-zero seed's
+	// `int` on an earlier fill pass (because the success arm's value type was
+	// still unresolved then), but `recordVarStore` has since upgraded the
+	// slot-type map to a struct-like type, re-stamp the load to that type and
+	// re-publish its producer entry. Mirrors the int→struct seed-replacement in
+	// `recordVarStore`; without it the merge varLoad stays `int` and a
+	// downstream `removed.field` access lowers against `int` (E2004) — exactly
+	// the case `let removed = try globalArr.remove(0) otherwise panic(...)`
+	// hits once the global receiver's element type only resolves on a second
+	// fill pass.
+	let slotTypeIsStructLike = maxonTypeIsNamed(slotType) or maxonTypeIsGenericInstance(slotType)
+	let filledIsStructLike = maxonTypeIsNamed(filled) or maxonTypeIsGenericInstance(filled)
+	if not slotTypeIsStructLike and filledIsStructLike 'replaceSeed'
+		try module.ops.set(opIdx, value: MaxonOp.varLoad(result, slotId: slotId, slotType: filled, range: range)) otherwise panic("fillVarLoad: ops.set OOB at idx={opIdx}")
+		recordResultType(producerTypes, name: result, t: filled)
+		return
+	end 'replaceSeed'
 	// Refine `named(X)` → `genericInstance(X, [...])` when the slot-type
 	// map carries a more specific entry. The parser stamps the merge
 	// varLoad of `try EXPR otherwise FALLBACK` with the call's declared
@@ -6734,7 +7167,8 @@ function unifyArrayLiteralElementsFromTypedOps(project Project, module MaxonModu
 	var unified = MaxonType.unresolved
 	for i in 0 upto entry.elemNames.count() 'walk'
 		let elemName = try entry.elemNames.get(i) otherwise panic("unifyArrayLiteralElementsFromTypedOps: elemNames.get OOB at {i}")
-		let t = try typedResultOfValueInFunction(project, module: module, func: func, name: elemName) otherwise throw ArrayLiteralLookupError.cannotUnify
+		let rawT = try typedResultOfValueInFunction(project, module: module, func: func, name: elemName) otherwise throw ArrayLiteralLookupError.cannotUnify
+		let t = retypeCharByteElement(project, elemName: elemName, elemType: rawT, funcName: func.name)
 		if isUnresolvedType(unified) 'firstConcrete'
 			unified = t
 			continue
@@ -7001,6 +7435,13 @@ export function runTypeResolution(project Project, module MaxonModule, filePath 
 	// inner-alias maps. See drainPendingExtensionInnerAliases.
 	drainPendingExtensionInnerAliases(project)
 	resolveAllTypealiases(project)
+	// E2012: a generic typealias that references itself directly
+	// (`A = Array with A`) or through a chain (`A = Array with B; B = Array
+	// with A`) describes an infinitely-sized type. The drain above
+	// unconditionally interns generic aliases into `genericTypealiases`
+	// (it doesn't require the args to be resolvable), so such cycles slip
+	// past the `aliasName` cycle check — detect them with a dedicated DFS.
+	detectCircularTypealiases(project)
 	// Interfaces drain before structs/enums so the conformance walk in
 	// `resolveAllStructTypes` / `resolveAllEnumTypes` can look up named
 	// interfaces and compute substituted expected-method sets.
@@ -7126,6 +7567,27 @@ export function runTypeResolution(project Project, module MaxonModule, filePath 
 	// `resolveMaxonTypeToStd` invariant guard in lowering.
 	backfillTopLevelVarSlotTypes(project, module: module)
 
+	// `backfillTopLevelVarSlotTypes` patched the slotType of every `globalLoad`
+	// reading a top-level var whose initializer's element type only became
+	// concrete after the first `fillUnresolvedTypes` pass (e.g.
+	// `var globalArr = ItemArray.create()`). The first producer-type build +
+	// fill therefore saw those globalLoads as `<unresolved>`, so a method call
+	// on such a global receiver (`globalArr.remove(0)`) recorded an unresolved
+	// result type, leaving the consuming `let removed = ...` slot and its
+	// `removed.field` access untyped — lowering then defaulted the field
+	// receiver to `int` (E2004). Rebuild the producer/slot maps now that the
+	// globalLoad slotTypes are concrete and re-run the fill so the method-call
+	// result types and their downstream slots/fields resolve. The second pass
+	// converges rather than oscillates: every re-stamp `fillUnresolvedTypes`
+	// performs is a monotonic refinement — `unresolved` → concrete, or an int
+	// seed → the struct-like / float type a later store revealed, never the
+	// reverse — so running it twice can only improve types, never undo the
+	// first pass's work.
+	producerTypesPerFunc.clear()
+	slotTypesPerFunc.clear()
+	buildProducerTypes(project, module: module, producerTypesPerFunc: producerTypesPerFunc, slotTypesPerFunc: slotTypesPerFunc)
+	fillUnresolvedTypes(project, module: module, producerTypesPerFunc: producerTypesPerFunc, slotTypesPerFunc: slotTypesPerFunc)
+
 	// Stage E (closures): the parser stamps lifted closure functions with
 	// MaxonReturnType.value(MaxonType.unresolved) when the body's expression
 	// type can't be derived without struct-field / function-return lookups.
@@ -7228,6 +7690,15 @@ export function runTypeResolution(project Project, module MaxonModule, filePath 
 	// lowering would see `varLoad(slotType: unresolved)` inside the lifted
 	// body and trip the `resolveMaxonTypeToStd` sentinel guard.
 	propagateClosureArgTypesFromCalls(project, module: module, producerTypesPerFunc: producerTypesPerFunc, slotTypesPerFunc: slotTypesPerFunc)
+
+	// Phase 11.65: an `==`/`!=` comparison between a string/char-backed enum
+	// value and a `String`/`Character` (or another such enum) must compare the
+	// enum's declared backing literal, not its runtime ordinal. Rewrite each
+	// such cmp to load the enum operand's `.rawValue` and restamp the operand
+	// types to the scalar peer, so `validateCompareOp` below sees matching
+	// categories and lowering reuses the existing String/Character equality
+	// dispatch. Must run before the cmp-validation walk.
+	coerceEnumRawValueCompareOperands(project, module: module)
 
 	for opIdx in 0 upto module.ops.count() 'validateOps'
 		let op = try module.ops.get(opIdx) otherwise panic("invariant: opIdx < module.ops.count() but get failed")
@@ -8112,25 +8583,49 @@ type CharByteRetypedArgs
 	end 'create'
 end 'CharByteRetypedArgs'
 
-// Char-byte receiver retype: when a method-call receiver value name is
-// tagged as a char-byte literal (the single-byte char-literal fast path
-// emits `MaxonType.integer` for `'x'`), treat its receiver type as
-// `Character` for method-resolution purposes. Without this, calls like
-// `c.asciiValue()` on a char-byte-typed `c` route through `int`'s
-// extension table (where `asciiValue` doesn't exist) and the call's
-// result type stays `<unresolved>`. Mirrors `retypeCharByteArgsToCharacter`
-// but operates on the receiver slot instead of the arg list.
-function retypeCharByteReceiver(project Project, receiver ByteArray, receiverType MaxonType, funcName String) returns MaxonType
-	let isCharByte = match receiverType 'check'
-		boolean gives false
-		integer gives project.charByteLiterals.contains(charByteLiteralKey(funcName, valueName: receiver))
-		float to opaquePointer gives false
-	end 'check'
-	if not isCharByte 'pass'
-		return receiverType
+// Core char-byte retype predicate+substitution, shared by the receiver,
+// element, and argument retype paths. The single-byte char-literal fast path
+// emits `MaxonType.integer` for `'x'` and tags the value name in
+// `project.charByteLiterals`; an `integer` value so tagged is reclassified to
+// `Character`, everything else passes through unchanged. Centralizing this
+// keeps the receiver / element / arg paths from drifting on the
+// `integer`-vs-everything-else discrimination.
+function charByteRetyped(project Project, valueName ByteArray, valueType MaxonType, funcName String) returns MaxonType
+	if not isCharByteValue(project, valueName: valueName, valueType: valueType, funcName: funcName) 'pass'
+		return valueType
 	end 'pass'
 	return MaxonType.named(project.typeNames.intern("Character"))
+end 'charByteRetyped'
+
+// True when `valueName` has type `integer` AND is tagged as a char-byte
+// literal in `project.charByteLiterals`. Only `integer`-typed values can be
+// char-byte literals (the fast path emits `MaxonType.integer`).
+function isCharByteValue(project Project, valueName ByteArray, valueType MaxonType, funcName String) returns bool
+	return match valueType 'check'
+		boolean gives false
+		integer gives project.charByteLiterals.contains(charByteLiteralKey(funcName, valueName: valueName))
+		float to opaquePointer gives false
+	end 'check'
+end 'isCharByteValue'
+
+// Char-byte receiver retype: when a method-call receiver value name is
+// tagged as a char-byte literal, treat its receiver type as `Character` for
+// method-resolution purposes. Without this, calls like `c.asciiValue()` on a
+// char-byte-typed `c` route through `int`'s extension table (where
+// `asciiValue` doesn't exist) and the call's result type stays
+// `<unresolved>`.
+function retypeCharByteReceiver(project Project, receiver ByteArray, receiverType MaxonType, funcName String) returns MaxonType
+	return charByteRetyped(project, valueName: receiver, valueType: receiverType, funcName: funcName)
 end 'retypeCharByteReceiver'
+
+// Char-byte element retype for container literals. An array / set / map
+// literal of char-byte elements would otherwise unify to `int` instead of
+// `Character` — the layout mismatch (`Character` is an 8-byte managed
+// pointer, raw `int` is a non-managed scalar) then crashes at runtime when
+// the container's destructor walks managed elements.
+function retypeCharByteElement(project Project, elemName ByteArray, elemType MaxonType, funcName String) returns MaxonType
+	return charByteRetyped(project, valueName: elemName, valueType: elemType, funcName: funcName)
+end 'retypeCharByteElement'
 
 function retypeCharByteArgsToCharacter(project Project, args ByteArrayArray, argTypes MaxonTypeArray, hasSelf bool, funcName String) returns CharByteRetypedArgs
 	var startIdx = 0
@@ -8151,12 +8646,7 @@ function retypeCharByteArgsToCharacter(project Project, args ByteArrayArray, arg
 			newTypes.push(t)
 			continue
 		end 'noName'
-		let isCharByte = match t 'check'
-			boolean gives false
-			integer gives project.charByteLiterals.contains(charByteLiteralKey(funcName, valueName: argName))
-			float to opaquePointer gives false
-		end 'check'
-		if isCharByte 'retype'
+		if isCharByteValue(project, valueName: argName, valueType: t, funcName: funcName) 'retype'
 			newTypes.push(characterType)
 			didSubstitute = true
 			continue
@@ -8382,6 +8872,16 @@ function resolveMethodCallSite(project Project, module MaxonModule, opIdx OpInde
 	let monoCallee = try maybeMonomorphizeUserExtension(project, module: module, calleeQualified: resolved, receiverType: receiverType) otherwise resolved
 	resolved = monoCallee
 	try project.resolvedCallees.insert(opIdx, value: resolved) otherwise ignore
+	// Record the full (pre-Self-substitution) receiver type so the E3005
+	// argument-type check can refine a `Self`-typed parameter that
+	// substitution collapsed to the bare base collection (`Array`) back to the
+	// receiver's concrete element (`Array with Int`). Harmless for non-Self
+	// params; only `insert` (first-write-wins) so a re-resolve doesn't clobber.
+	// Guarded against an unresolved receiver to match `resolveCallSite` — an
+	// `unresolved` entry is never useful to the consumer.
+	if not isUnresolvedType(receiverType) 'haveReceiver'
+		try project.resolvedReceiverTypes.insert(opIdx, value: receiverType) otherwise ignore
+	end 'haveReceiver'
 	let signature = try project.funcSignatures.get(resolved) otherwise return
 	let substituted = substituteParamTypes(project, signature: signature, qualifiedCallee: resolved, receiverType: receiverType)
 	try project.callParamTypes.insert(opIdx, value: substituted) otherwise ignore

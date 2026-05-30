@@ -1,0 +1,56 @@
+// Test: fromRawValue-char-backed
+enum Grade
+	excellent = 'A'
+	good = 'B'
+	average = 'C'
+end 'Grade'
+
+function main() returns ExitCode
+	let g = try Grade.fromRawValue('B') otherwise Grade.average
+	if g == Grade.good 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 66 : i64
+    %1 = mir.mov_imm 1 : i64
+    %2 = mir.call @mrt_alloc(%1)
+    mir.store %0, %2, 0 width: byte
+    %3 = mir.mov_imm 40 : i64
+    %4 = mir.call @mrt_alloc(%3)
+    mir.store %2, %4, 0 width: qword
+    mir.store %1, %4, 8 width: qword
+    mir.store %1, %4, 16 width: qword
+    mir.store %1, %4, 24 width: qword
+    %8 = mir.mov_imm 0 : i64
+    mir.store %8, %4, 32 width: qword
+    %9 = mir.mov_imm 8 : i64
+    %10 = mir.call @mrt_alloc(%9)
+    mir.store %4, %10, 0 width: qword
+    %11, %12 = mir.try_call @__enum_Grade_fromRawValue(%10)
+    %13 = mir.mov_imm 0 : i64
+    %14 = mir.cmp ne, %12, %13
+    mir.cond_br %14 [then: try_0.otherwise(), else: try_0.merge(%11)]
+  try_0.otherwise:
+    %16 = mir.mov_imm 2 : i64
+    mir.br try_0.merge(%16)
+  try_0.merge:
+    %20 = mir.call @__enum_Grade_rawString(%25)
+    %21 = mir.call @__enum_Grade_rawString(%1)
+    %22 = mir.call @Character.equals(%20, %21)
+    mir.cond_br %22 [then: check_0(), else: check_0.after()]
+  check_0:
+    mir.ret %1
+  check_0.after:
+    %24 = mir.mov_imm 0 : i64
+    mir.ret %24
+  }
+}
+---

@@ -1,0 +1,192 @@
+// Test: returned-struct-with-enum-and-arrays
+typealias Integer = int(i64.min to i64.max)
+
+export union CfOp
+		br(target Integer)
+end 'CfOp'
+
+export union IrOp
+		cf(op CfOp)
+end 'IrOp'
+
+typealias OpArray = Array with IrOp
+
+export type Block
+		export var id as Integer
+		export var ops as OpArray
+		export var terminator as IrOp
+		export var hasTerminator as bool
+
+		static function create(id Integer, ops OpArray, terminator IrOp, hasTerminator bool) returns Self
+			return Self{id: id, ops: ops, terminator: terminator, hasTerminator: hasTerminator}
+		end 'create'
+end 'Block'
+
+typealias DepArray = Array with Integer
+
+export type QueryDatabase
+		export var revision as Integer
+		export var deps as DepArray
+		export var extra as DepArray
+
+		static function create(revision Integer, deps DepArray, extra DepArray) returns Self
+			return Self{revision: revision, deps: deps, extra: extra}
+		end 'create'
+end 'QueryDatabase'
+
+export type Project
+		export var db as QueryDatabase
+		export var block as Block
+
+		static function create(db QueryDatabase, block Block) returns Self
+			return Self{db: db, block: block}
+		end 'create'
+end 'Project'
+
+function createProject() returns Project
+		let block = Block.create(0, ops: OpArray.create(), terminator: IrOp.cf(CfOp.br(0)), hasTerminator: false)
+		let db = QueryDatabase.create(0, deps: DepArray.create(), extra: DepArray.create())
+		return Project.create(db, block: block)
+end 'createProject'
+
+function main() returns ExitCode
+		var p = createProject()
+		p.db.deps.push(1)
+		p.db.deps.push(2)
+		p.db.deps.push(3)
+		p.db.deps.push(4)
+		p.db.deps.push(5)
+		return p.db.deps.count()
+end 'main'
+---
+ExitCode: 5
+---
+// CompiledIR
+module {
+  func @Block.create(local0: i64, local1: i64, local2: i64, local3: i1) -> i64 {
+  entry:
+    %10 = mir.param local0 : i64
+    %11 = mir.param local1 : i64
+    %12 = mir.param local2 : i64
+    %13 = mir.param local3 : i1
+    %4 = mir.mov_imm 32 : i64
+    %5 = mir.call @mrt_alloc(%4)
+    mir.store %10, %5, 0 width: qword
+    mir.store %11, %5, 8 width: qword
+    mir.store %12, %5, 16 width: qword
+    mir.store %13, %5, 24 width: byte
+    mir.ret %5
+  }
+  func @createProject() -> i64 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %17 = mir.mov_imm 8 : i64
+    %18 = mir.call @mrt_alloc(%17)
+    %19 = mir.mov_imm 40 : i64
+    %20 = mir.call @mrt_alloc(%19)
+    %21 = mir.mov_imm 0 : i64
+    mir.store %21, %20, 0 width: qword
+    %22 = mir.mov_imm 0 : i64
+    mir.store %22, %20, 8 width: qword
+    %23 = mir.mov_imm 0 : i64
+    mir.store %23, %20, 16 width: qword
+    %24 = mir.mov_imm 8 : i64
+    mir.store %24, %20, 24 width: qword
+    %25 = mir.mov_imm 0 : i64
+    mir.store %25, %20, 32 width: qword
+    mir.store %20, %18, 0 width: qword
+    %3 = mir.mov_imm 0 : i64
+    %26 = mir.mov_imm 16 : i64
+    %27 = mir.mov_imm 0 : i64
+    %28 = mir.mov_imm 0 : i64
+    %29 = mir.call @stdlib.__mm_alloc(%26, %27, %28)
+    mir.store %28, %29, 0 width: qword
+    mir.store %3, %29, 8 width: qword
+    %5 = mir.call @__construct_IrOp_cf(%29)
+    %6 = mir.mov_imm 0 : i64
+    %7 = mir.call @Block.create(%0, %18, %5, %6)
+    %8 = mir.mov_imm 0 : i64
+    %30 = mir.mov_imm 8 : i64
+    %31 = mir.call @mrt_alloc(%30)
+    %32 = mir.mov_imm 40 : i64
+    %33 = mir.call @mrt_alloc(%32)
+    %34 = mir.mov_imm 0 : i64
+    mir.store %34, %33, 0 width: qword
+    %35 = mir.mov_imm 0 : i64
+    mir.store %35, %33, 8 width: qword
+    %36 = mir.mov_imm 0 : i64
+    mir.store %36, %33, 16 width: qword
+    %37 = mir.mov_imm 8 : i64
+    mir.store %37, %33, 24 width: qword
+    %38 = mir.mov_imm 0 : i64
+    mir.store %38, %33, 32 width: qword
+    mir.store %33, %31, 0 width: qword
+    %39 = mir.mov_imm 8 : i64
+    %40 = mir.call @mrt_alloc(%39)
+    %41 = mir.mov_imm 40 : i64
+    %42 = mir.call @mrt_alloc(%41)
+    %43 = mir.mov_imm 0 : i64
+    mir.store %43, %42, 0 width: qword
+    %44 = mir.mov_imm 0 : i64
+    mir.store %44, %42, 8 width: qword
+    %45 = mir.mov_imm 0 : i64
+    mir.store %45, %42, 16 width: qword
+    %46 = mir.mov_imm 8 : i64
+    mir.store %46, %42, 24 width: qword
+    %47 = mir.mov_imm 0 : i64
+    mir.store %47, %42, 32 width: qword
+    mir.store %42, %40, 0 width: qword
+    %48 = mir.mov_imm 24 : i64
+    %49 = mir.call @mrt_alloc(%48)
+    mir.store %8, %49, 0 width: qword
+    mir.store %31, %49, 8 width: qword
+    mir.store %40, %49, 16 width: qword
+    %50 = mir.mov_imm 16 : i64
+    %51 = mir.call @mrt_alloc(%50)
+    mir.store %49, %51, 0 width: qword
+    mir.store %7, %51, 8 width: qword
+    mir.ret %51
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.call @createProject()
+    %2 = mir.load %0, 0 width: qword
+    %3 = mir.load %2, 8 width: qword
+    %4 = mir.mov_imm 1 : i64
+    %5 = mir.global_addr @__layout_Array_Integer
+    %6 = mir.call @Array.push(%3, %4, %5)
+    %8 = mir.load %0, 0 width: qword
+    %9 = mir.load %8, 8 width: qword
+    %10 = mir.mov_imm 2 : i64
+    %11 = mir.global_addr @__layout_Array_Integer
+    %12 = mir.call @Array.push(%9, %10, %11)
+    %14 = mir.load %0, 0 width: qword
+    %15 = mir.load %14, 8 width: qword
+    %16 = mir.mov_imm 3 : i64
+    %17 = mir.global_addr @__layout_Array_Integer
+    %18 = mir.call @Array.push(%15, %16, %17)
+    %20 = mir.load %0, 0 width: qword
+    %21 = mir.load %20, 8 width: qword
+    %22 = mir.mov_imm 4 : i64
+    %23 = mir.global_addr @__layout_Array_Integer
+    %24 = mir.call @Array.push(%21, %22, %23)
+    %26 = mir.load %0, 0 width: qword
+    %27 = mir.load %26, 8 width: qword
+    %28 = mir.mov_imm 5 : i64
+    %29 = mir.global_addr @__layout_Array_Integer
+    %30 = mir.call @Array.push(%27, %28, %29)
+    %32 = mir.load %0, 0 width: qword
+    %33 = mir.load %32, 8 width: qword
+    %34 = mir.global_addr @__layout_Array_Integer
+    %35 = mir.call @Array.count(%33, %34)
+    %36 = mir.mov_imm 125 : i64
+    %37 = mir.cmp ugt, %35, %36
+    mir.cond_br %37 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %38 = mir.global_addr @__panic_msg_99df3e513667fe11
+    %39 = mir.call @mrt_panic(%38)
+  __range_ok_0:
+    mir.ret %35
+  }
+}
+---

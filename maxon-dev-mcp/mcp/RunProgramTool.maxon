@@ -1,9 +1,10 @@
-// `run_program` MCP tool. Compiles a snippet or file with the C# bootstrap,
-// runs the resulting executable, and returns the structured result so an
-// MCP client can ask "does this Maxon code do what I think it does?" in a
-// single call instead of building + locating the binary + spawning.
+// `run_program` MCP tool. Compiles a snippet or file with the requested
+// compiler, runs the resulting executable, and returns the structured result
+// so an MCP client can ask "does this Maxon code do what I think it does?" in
+// a single call instead of building + locating the binary + spawning.
 //
 // Inputs (JSON):
+//   compiler: "csharp" | "selfhosted"  — which compiler to build with (required)
 //   source: { kind: "file", path } | { kind: "snippet", code }
 //   args?: [String]    — argv to pass to the compiled program
 //   stdin?: String     — bytes piped to the program's stdin
@@ -25,21 +26,27 @@ let outputMaxBytes = 65536
 
 /// Entry point called by Server.maxon's dispatch table.
 export function runProgramHandler(argsDoc JsonDoc, argsId JsonNodeId) returns ToolOutcome
+	// `compiler` is required: building a snippet against the C# bootstrap vs.
+	// the self-hosted compiler can surface real behavioral differences, so the
+	// caller must say which one they mean rather than getting a silent default.
+	let compiler = try resolveRequiredCompiler(argsDoc, argsId: argsId) otherwise (err) 'badCompiler'
+		return ToolOutcome.error(RpcStandardErrorCode.invalidParams.rawValue, message: "run_program: {compilerArgErrorReason(err)}")
+	end 'badCompiler'
+
 	let mainFile = try resolveProjectSource(argsDoc, argsId: argsId, snippetPrefix: "run-program") otherwise (err) 'badSrc'
 		return ToolOutcome.error(RpcStandardErrorCode.invalidParams.rawValue, message: "run_program: {sourceArgErrorReason(err)}")
 	end 'badSrc'
 
 	let repoRoot = repoRootPath()
-	let csharpBinary = childPath(repoRoot, segment: "bin/maxon.exe")
-	if not File.exists(csharpBinary) 'noCsharp'
+	let buildBinary = try compilerBinary(repoRoot, compiler: compiler) otherwise (err) 'noBin'
 		cleanupResolvedSource(mainFile)
-		return ToolOutcome.error(RpcStandardErrorCode.invalidRequest.rawValue, message: "run_program: `{csharpBinary.path}` does not exist. Build the C# bootstrap first via the `build` tool.")
-	end 'noCsharp'
+		return ToolOutcome.error(RpcStandardErrorCode.invalidRequest.rawValue, message: "run_program: the {compiler} compiler binary does not exist. Build it first via the `build` tool (target: \"{compiler}\").")
+	end 'noBin'
 
 	var buildArgv = StringArray.create()
 	buildArgv.push("build")
 	buildArgv.push(mainFile.projectDir.path)
-	let buildResult = runBuild(csharpBinary, argv: buildArgv, workingDirectory: repoRoot, timeoutMs: buildTimeoutMs)
+	let buildResult = runBuild(buildBinary, argv: buildArgv, workingDirectory: repoRoot, timeoutMs: buildTimeoutMs)
 	if not buildResult.succeeded() 'buildFailed'
 		let outcome = buildOutcomeBuildOnly(buildResult)
 		cleanupResolvedSource(mainFile)
@@ -74,6 +81,41 @@ export function runProgramHandler(argsDoc JsonDoc, argsId JsonNodeId) returns To
 	cleanupResolvedSource(mainFile)
 	return outcome
 end 'runProgramHandler'
+
+// =============================================================================
+// Compiler argument
+// =============================================================================
+
+// Why the `compiler` argument was rejected. `missing` => the key was absent
+// entirely; `unrecognized` => a value was given but it isn't one we accept.
+// Kept distinct so the error message can point the caller at the right fix.
+export union CompilerArgError
+	missing
+	unrecognized(value String)
+end 'CompilerArgError'
+
+/// Read and validate the required `compiler` argument. Unlike spec-test's
+/// `compilerFromArgs` (which silently defaults to csharp), `run_program`
+/// forces an explicit choice: builds against the C# bootstrap and the
+/// self-hosted compiler can differ, so the caller must say which they mean.
+export function resolveRequiredCompiler(argsDoc JsonDoc, argsId JsonNodeId) returns String throws CompilerArgError
+	let raw = try argsDoc.getString(argsId, key: "compiler") otherwise 'absent'
+		throw CompilerArgError.missing
+	end 'absent'
+	if raw.equals("csharp") or raw.equals("selfhosted") 'ok'
+		return raw
+	end 'ok'
+	throw CompilerArgError.unrecognized(raw)
+end 'resolveRequiredCompiler'
+
+/// Human-readable explanation for a `CompilerArgError`, spliced into the
+/// `invalidParams` message returned to the MCP client.
+export function compilerArgErrorReason(err CompilerArgError) returns String
+	return match err 'e'
+		missing gives "`compiler` is required — pass \"csharp\" or \"selfhosted\"."
+		unrecognized(value) gives "`compiler` must be \"csharp\" or \"selfhosted\", got \"{value}\"."
+	end 'e'
+end 'compilerArgErrorReason'
 
 // =============================================================================
 // Outcome construction

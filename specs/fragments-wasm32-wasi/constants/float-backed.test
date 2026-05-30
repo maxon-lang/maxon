@@ -1,0 +1,34 @@
+// Test: float-backed
+enum Threshold
+	low = 0.1
+	medium = 0.5
+	high = 0.9
+end 'Threshold'
+
+function main() returns ExitCode
+	let t = Threshold.medium
+	if t == Threshold.medium 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 4602678819172646912 : f64
+    %2 = mir.mov_imm 4602678819172646912 : f64
+    %3 = mir.cmp feq, %0, %2
+    mir.cond_br %3 [then: check_0(), else: check_0.after()]
+  check_0:
+    %4 = mir.mov_imm 1 : i64
+    mir.ret %4
+  check_0.after:
+    %5 = mir.mov_imm 0 : i64
+    mir.ret %5
+  }
+}
+---
