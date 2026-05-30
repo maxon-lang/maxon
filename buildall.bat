@@ -7,12 +7,12 @@ if errorlevel 1 exit /b 1
 
 echo.
 echo === Running C# Spec Tests ===
-maxon-sharp\bin\Debug\net8.0\win-x64\maxon.exe spec-test
+bin\maxon.exe spec-test
 if errorlevel 1 exit /b 1
 
 echo.
 echo === Building Self-Hosted Compiler ===
-maxon-sharp\bin\Debug\net8.0\win-x64\maxon.exe build maxon-selfhosted
+bin\maxon.exe build maxon-selfhosted
 if errorlevel 1 exit /b 1
 
 echo.
@@ -28,12 +28,12 @@ if errorlevel 1 exit /b 1
 echo.
 echo === Building maxon-dev MCP Server ===
 taskkill /F /IM maxon-dev-mcp.exe >nul 2>&1
-maxon-sharp\bin\Debug\net8.0\win-x64\maxon.exe build maxon-dev-mcp\mcp
+bin\maxon.exe build maxon-dev-mcp\mcp
 if errorlevel 1 exit /b 1
 
 echo.
 echo === Building maxon-dev MCP Test Runner ===
-maxon-sharp\bin\Debug\net8.0\win-x64\maxon.exe build maxon-dev-mcp\test
+bin\maxon.exe build maxon-dev-mcp\test
 if errorlevel 1 exit /b 1
 
 echo.
