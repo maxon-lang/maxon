@@ -108,6 +108,19 @@ public class IrModule<TOp> where TOp : IPrintableOp {
     _callGraph?.Invalidate();
   }
 
+  /// Marks only the Functions name-index stale, leaving the call graph as-is.
+  /// Use when a function was renamed in place (its body, and therefore its
+  /// outgoing call edges, are unchanged) and any accompanying call-site
+  /// rewrites are tolerated by the consumer as a stale superset — e.g. the
+  /// monomorphization interface-alias loop, whose only in-loop graph reader
+  /// (the transitive GetCallers scan) re-reads ops to confirm matches and is
+  /// followed by an unconditional InvalidateCallGraph before any other pass.
+  /// Renaming in place does not corrupt the graph: callers are keyed by object
+  /// reference and callee names embedded in ops are unchanged by the rename.
+  public void InvalidateFunctionIndexOnly() {
+    _indexDirty = true;
+  }
+
   /// <summary>
   /// Renames an existing function in place while keeping the Functions index
   /// consistent. Callers that mutate `func.Name = ...` directly must invalidate

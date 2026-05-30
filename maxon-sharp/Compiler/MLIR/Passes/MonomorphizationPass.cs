@@ -1430,8 +1430,17 @@ public static class MonomorphizationPass {
     }
 
     if (anyChange) {
-      module.InvalidateFunctionIndex();
-      module.InvalidateCallGraph();
+      // Function-index-only: these rewrites retarget call sites from a generic
+      // method to its field-specialized clone (a concrete callee) and register
+      // the clones via AddFunction (incremental NoteAdded). They can only
+      // *remove* interface-function call edges, never add them, so the sole
+      // in-loop call-graph consumer (the alias transitive GetCallers scan,
+      // which re-reads ops to confirm matches) is safe with a stale superset.
+      // The unconditional InvalidateCallGraph at the end of Run() gives
+      // downstream passes a clean graph. Using the call-graph-invalidating
+      // InvalidateFunctionIndex here forced a full ~25k-function rebuild on the
+      // next interface-alias round, every round.
+      module.InvalidateFunctionIndexOnly();
     }
     return anyChange;
   }
@@ -1717,9 +1726,15 @@ public static class MonomorphizationPass {
         bool isLast = si == sourceSpecs.Count - 1;
         if (isLast && !hasDirectIfaceParam) {
           // Mutate the source function in-place instead of cloning.
-          // Renaming the function invalidates IrModule's lookup indices.
+          // Renaming the function invalidates IrModule's name-lookup index.
+          // The call graph need not be rebuilt here: the rename leaves the
+          // function's body (and thus its outgoing edges) intact, and the type
+          // substitution only concretizes interface-alias types — it can remove
+          // interface-function call edges but never add them. The in-loop
+          // transitive GetCallers scan tolerates that stale superset, and Run()
+          // unconditionally invalidates the call graph before any later pass.
           MutateInterfaceAliasTypes(spec.SourceFunc, spec.SpecializedName, typeSub);
-          module.InvalidateFunctionIndex();
+          module.InvalidateFunctionIndexOnly();
         } else {
           var clonedFunc = CloneIfaceAliasAndEmitClosures(module, spec.SourceFunc, spec.SpecializedName, typeSub);
           module.AddFunction(clonedFunc);
