@@ -1,0 +1,86 @@
+// Test: field-defaults.fresh-per-construction
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+type Bag
+	export var items as IntArray = IntArray.create()
+
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Bag'
+
+function main() returns ExitCode
+	var a = Bag.create()
+	var b = Bag.create()
+	a.items.push(1)
+	a.items.push(2)
+	b.items.push(9)
+	return a.items.count() * 10 + b.items.count()
+end 'main'
+---
+ExitCode: 21
+---
+// CompiledIR
+module {
+  func @Bag.__field_init_items() -> i64 {
+  entry:
+    %2 = mir.mov_imm 8 : i64
+    %3 = mir.call @mrt_alloc(%2)
+    %4 = mir.mov_imm 40 : i64
+    %5 = mir.call @mrt_alloc(%4)
+    %6 = mir.mov_imm 0 : i64
+    mir.store %6, %5, 0 width: qword
+    %7 = mir.mov_imm 0 : i64
+    mir.store %7, %5, 8 width: qword
+    %8 = mir.mov_imm 0 : i64
+    mir.store %8, %5, 16 width: qword
+    %9 = mir.mov_imm 8 : i64
+    mir.store %9, %5, 24 width: qword
+    %10 = mir.mov_imm 0 : i64
+    mir.store %10, %5, 32 width: qword
+    mir.store %5, %3, 0 width: qword
+    mir.ret %3
+  }
+  func @main() -> u8 {
+  entry:
+    %28 = mir.mov_imm 8 : i64
+    %29 = mir.call @mrt_alloc(%28)
+    %30 = mir.call @Bag.__field_init_items()
+    mir.store %30, %29, 0 width: qword
+    %31 = mir.mov_imm 8 : i64
+    %32 = mir.call @mrt_alloc(%31)
+    %33 = mir.call @Bag.__field_init_items()
+    mir.store %33, %32, 0 width: qword
+    %3 = mir.load %29, 0 width: qword
+    %4 = mir.mov_imm 1 : i64
+    %5 = mir.global_addr @__layout_Array_Integer
+    %6 = mir.call @Array.push(%3, %4, %5)
+    %8 = mir.load %29, 0 width: qword
+    %9 = mir.mov_imm 2 : i64
+    %10 = mir.global_addr @__layout_Array_Integer
+    %11 = mir.call @Array.push(%8, %9, %10)
+    %13 = mir.load %32, 0 width: qword
+    %14 = mir.mov_imm 9 : i64
+    %15 = mir.global_addr @__layout_Array_Integer
+    %16 = mir.call @Array.push(%13, %14, %15)
+    %18 = mir.load %29, 0 width: qword
+    %19 = mir.global_addr @__layout_Array_Integer
+    %20 = mir.call @Array.count(%18, %19)
+    %21 = mir.mov_imm 10 : i64
+    %22 = mir.mul.i64 %20, %21
+    %24 = mir.load %32, 0 width: qword
+    %25 = mir.global_addr @__layout_Array_Integer
+    %26 = mir.call @Array.count(%24, %25)
+    %27 = mir.add.i64 %22, %26
+    %34 = mir.mov_imm 125 : i64
+    %35 = mir.cmp ugt, %27, %34
+    mir.cond_br %35 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %36 = mir.global_addr @__panic_msg_43c8ee76d64a3200
+    %37 = mir.call @mrt_panic(%36)
+  __range_ok_0:
+    mir.ret %27
+  }
+}
+---

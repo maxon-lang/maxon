@@ -1,0 +1,56 @@
+// Test: field-defaults.struct-literal-default
+typealias Integer = int(i64.min to i64.max)
+
+type Point
+	export var x as Integer
+	export var y as Integer
+
+	export static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
+end 'Point'
+
+type Shape
+	export var origin as Point = Point.create(3, y: 4)
+
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Shape'
+
+function main() returns ExitCode
+	let s = Shape.create()
+	return s.origin.x + s.origin.y
+end 'main'
+---
+ExitCode: 7
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %8 = mir.mov_imm 8 : i64
+    %9 = mir.call @mrt_alloc(%8)
+    %10 = mir.mov_imm 3 : i64
+    %11 = mir.mov_imm 4 : i64
+    %12 = mir.mov_imm 16 : i64
+    %13 = mir.call @mrt_alloc(%12)
+    mir.store %10, %13, 0 width: qword
+    mir.store %11, %13, 8 width: qword
+    mir.store %13, %9, 0 width: qword
+    %2 = mir.load %9, 0 width: qword
+    %3 = mir.load %2, 0 width: qword
+    %5 = mir.load %9, 0 width: qword
+    %6 = mir.load %5, 8 width: qword
+    %7 = mir.add.i64 %3, %6
+    %14 = mir.mov_imm 125 : i64
+    %15 = mir.cmp ugt, %7, %14
+    mir.cond_br %15 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %16 = mir.global_addr @__panic_msg_4c925234baca74c8
+    %17 = mir.call @mrt_panic(%16)
+  __range_ok_0:
+    mir.ret %7
+  }
+}
+---

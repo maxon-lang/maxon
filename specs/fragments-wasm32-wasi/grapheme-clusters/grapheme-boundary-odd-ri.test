@@ -1,0 +1,69 @@
+// Test: grapheme-boundary-odd-ri
+function main() returns ExitCode
+	let s = "🇺🇸🇬"  // US flag (2 RIs) + standalone G (1 RI) = 2 graphemes
+	print("{s.count()}\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+2
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.global_addr @__istr_0
+    %1 = mir.mov_imm 40 : i64
+    %2 = mir.call @mrt_alloc(%1)
+    mir.store %0, %2, 0 width: qword
+    %3 = mir.mov_imm 12 : i64
+    mir.store %3, %2, 8 width: qword
+    %4 = mir.mov_imm -2 : i64
+    mir.store %4, %2, 16 width: qword
+    %5 = mir.mov_imm 1 : i64
+    mir.store %5, %2, 24 width: qword
+    %6 = mir.mov_imm 0 : i64
+    mir.store %6, %2, 32 width: qword
+    %7 = mir.mov_imm 16 : i64
+    %8 = mir.call @mrt_alloc(%7)
+    mir.store %2, %8, 0 width: qword
+    mir.store %6, %8, 8 width: qword
+    %11 = mir.call @String.count(%8)
+    %12 = mir.global_addr @__istr_1
+    %14 = mir.mov_imm 21 : i64
+    %15 = mir.call @mrt_alloc(%14)
+    %16 = mir.call @mrt_i64_to_string(%11, %15)
+    %17 = mir.global_addr @__istr_2
+    %18 = mir.mov_imm 1 : i64
+    %21 = mir.add.i64 %6, %16
+    %22 = mir.add.i64 %21, %18
+    %23 = mir.mov_imm 1 : i64
+    %24 = mir.add.i64 %22, %23
+    %25 = mir.call @mrt_alloc(%24)
+    mir.memcpy %25, %12, %6
+    %26 = mir.add.i64 %25, %6
+    mir.memcpy %26, %15, %16
+    %27 = mir.add.i64 %26, %16
+    mir.memcpy %27, %17, %18
+    %29 = mir.mov_imm 40 : i64
+    %30 = mir.call @mrt_alloc(%29)
+    mir.store %25, %30, 0 width: qword
+    mir.store %22, %30, 8 width: qword
+    mir.store %22, %30, 16 width: qword
+    %31 = mir.mov_imm 1 : i64
+    mir.store %31, %30, 24 width: qword
+    mir.store %6, %30, 32 width: qword
+    %33 = mir.mov_imm 16 : i64
+    %34 = mir.call @mrt_alloc(%33)
+    mir.store %30, %34, 0 width: qword
+    mir.store %6, %34, 8 width: qword
+    %37 = mir.load %34, 0 width: qword
+    %38 = mir.load %37, 0 width: qword
+    %39 = mir.load %37, 8 width: qword
+    %40 = mir.call @mrt_write_stdout(%38, %39)
+    mir.ret %6
+  }
+}
+---

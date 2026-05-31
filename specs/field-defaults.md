@@ -69,6 +69,35 @@ end 'main'
 42
 ```
 
+<!-- test: field-defaults.method-before-field -->
+
+A `Self{}` literal in a method declared *above* the defaulted field must still
+initialize the field. Field/method declaration order inside the type body must
+not affect which defaults are applied.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+type Bag
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export var items as IntArray = IntArray.create()
+end 'Bag'
+
+function main() returns ExitCode
+	var b = Bag.create()
+	b.items.push(42)
+	let v = try b.items.get(0) otherwise 0
+	return v
+end 'main'
+```
+```exitcode
+42
+```
+
 <!-- test: field-defaults.literal-overrides-default -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)

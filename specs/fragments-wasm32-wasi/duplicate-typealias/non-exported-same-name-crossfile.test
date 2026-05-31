@@ -1,0 +1,71 @@
+// Test: non-exported-same-name-crossfile
+// --- file: a.maxon
+typealias MyInt = int(0 to 1000)
+
+export function doubleIt(x MyInt) returns MyInt
+	return x + x
+end 'doubleIt'
+
+// --- file: b.maxon
+typealias MyInt = int(0 to 1000)
+
+export function tripleIt(x MyInt) returns MyInt
+	return x + x + x
+end 'tripleIt'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let a = doubleIt(5)
+	let b = tripleIt(3)
+	return a + b
+end 'main'
+---
+ExitCode: 19
+---
+// CompiledIR
+module {
+  func @doubleIt(local0: u16) -> u16 {
+  entry:
+    %4 = mir.param local0 : u16
+    %3 = mir.add.i64 %4, %4
+    %5 = mir.mov_imm 1000 : i64
+    %6 = mir.cmp ugt, %3, %5
+    mir.cond_br %6 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %7 = mir.global_addr @__panic_msg_bea75af19ae4c2f3
+    %8 = mir.call @mrt_panic(%7)
+  __range_ok_0:
+    mir.ret %3
+  }
+  func @tripleIt(local0: u16) -> u16 {
+  entry:
+    %6 = mir.param local0 : u16
+    %3 = mir.add.i64 %6, %6
+    %5 = mir.add.i64 %3, %6
+    %7 = mir.mov_imm 1000 : i64
+    %8 = mir.cmp ugt, %5, %7
+    mir.cond_br %8 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %9 = mir.global_addr @__panic_msg_bea75af19ae4c2f3
+    %10 = mir.call @mrt_panic(%9)
+  __range_ok_0:
+    mir.ret %5
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 5 : i64
+    %1 = mir.call @doubleIt(%0)
+    %2 = mir.mov_imm 3 : i64
+    %3 = mir.call @tripleIt(%2)
+    %6 = mir.add.i64 %1, %3
+    %7 = mir.mov_imm 125 : i64
+    %8 = mir.cmp ugt, %6, %7
+    mir.cond_br %8 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %9 = mir.global_addr @__panic_msg_81579191394750be
+    %10 = mir.call @mrt_panic(%9)
+  __range_ok_0:
+    mir.ret %6
+  }
+}
+---

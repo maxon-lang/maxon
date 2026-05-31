@@ -1,0 +1,70 @@
+// Test: field-defaults.mixed-with-literal-field
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+type Bag
+	export var items as IntArray = IntArray.create()
+	export var total = 0
+
+	export static function createWithTotal(t Integer) returns Self
+		return Self{total: t}
+	end 'createWithTotal'
+end 'Bag'
+
+function main() returns ExitCode
+	var b = Bag.createWithTotal(5)
+	b.items.push(10)
+	return b.total + b.items.count()
+end 'main'
+---
+ExitCode: 6
+---
+// CompiledIR
+module {
+  func @Bag.__field_init_items() -> i64 {
+  entry:
+    %2 = mir.mov_imm 8 : i64
+    %3 = mir.call @mrt_alloc(%2)
+    %4 = mir.mov_imm 40 : i64
+    %5 = mir.call @mrt_alloc(%4)
+    %6 = mir.mov_imm 0 : i64
+    mir.store %6, %5, 0 width: qword
+    %7 = mir.mov_imm 0 : i64
+    mir.store %7, %5, 8 width: qword
+    %8 = mir.mov_imm 0 : i64
+    mir.store %8, %5, 16 width: qword
+    %9 = mir.mov_imm 8 : i64
+    mir.store %9, %5, 24 width: qword
+    %10 = mir.mov_imm 0 : i64
+    mir.store %10, %5, 32 width: qword
+    mir.store %5, %3, 0 width: qword
+    mir.ret %3
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 5 : i64
+    %14 = mir.mov_imm 16 : i64
+    %15 = mir.call @mrt_alloc(%14)
+    %16 = mir.call @Bag.__field_init_items()
+    mir.store %16, %15, 0 width: qword
+    mir.store %0, %15, 8 width: qword
+    %3 = mir.load %15, 0 width: qword
+    %4 = mir.mov_imm 10 : i64
+    %5 = mir.global_addr @__layout_Array_Integer
+    %6 = mir.call @Array.push(%3, %4, %5)
+    %8 = mir.load %15, 8 width: qword
+    %10 = mir.load %15, 0 width: qword
+    %11 = mir.global_addr @__layout_Array_Integer
+    %12 = mir.call @Array.count(%10, %11)
+    %13 = mir.add.i64 %8, %12
+    %17 = mir.mov_imm 125 : i64
+    %18 = mir.cmp ugt, %13, %17
+    mir.cond_br %18 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %19 = mir.global_addr @__panic_msg_569190a2add0d805
+    %20 = mir.call @mrt_panic(%19)
+  __range_ok_0:
+    mir.ret %13
+  }
+}
+---

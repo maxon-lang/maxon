@@ -1,0 +1,70 @@
+// Test: trim-end-only-multibyte
+function main() returns ExitCode
+	let s = "中文日本語"
+	let result = s.trimEnd()
+	print("[{result}]")
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+[中文日本語]
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.global_addr @__istr_0
+    %1 = mir.mov_imm 40 : i64
+    %2 = mir.call @mrt_alloc(%1)
+    mir.store %0, %2, 0 width: qword
+    %3 = mir.mov_imm 15 : i64
+    mir.store %3, %2, 8 width: qword
+    %4 = mir.mov_imm -2 : i64
+    mir.store %4, %2, 16 width: qword
+    %5 = mir.mov_imm 1 : i64
+    mir.store %5, %2, 24 width: qword
+    %6 = mir.mov_imm 0 : i64
+    mir.store %6, %2, 32 width: qword
+    %7 = mir.mov_imm 16 : i64
+    %8 = mir.call @mrt_alloc(%7)
+    mir.store %2, %8, 0 width: qword
+    mir.store %6, %8, 8 width: qword
+    %44 = mir.call @CharacterSet.cachedWhitespacesAndNewlines.__lazy_init()
+    %45 = mir.global_addr @__data_CharacterSet.cachedWhitespacesAndNewlines
+    %46 = mir.load %45, 0 width: qword
+    %39 = mir.call @String.trimEnd$CharacterSet(%8, %46)
+    %13 = mir.global_addr @__istr_1
+    %15 = mir.load %39, 0 width: qword
+    %16 = mir.load %15, 0 width: qword
+    %17 = mir.load %15, 8 width: qword
+    %18 = mir.global_addr @__istr_2
+    %22 = mir.add.i64 %5, %17
+    %23 = mir.add.i64 %22, %5
+    %25 = mir.add.i64 %23, %5
+    %26 = mir.call @mrt_alloc(%25)
+    mir.memcpy %26, %13, %5
+    %27 = mir.add.i64 %26, %5
+    mir.memcpy %27, %16, %17
+    %28 = mir.add.i64 %27, %17
+    mir.memcpy %28, %18, %5
+    %30 = mir.mov_imm 40 : i64
+    %31 = mir.call @mrt_alloc(%30)
+    mir.store %26, %31, 0 width: qword
+    mir.store %23, %31, 8 width: qword
+    mir.store %23, %31, 16 width: qword
+    mir.store %5, %31, 24 width: qword
+    mir.store %6, %31, 32 width: qword
+    %34 = mir.mov_imm 16 : i64
+    %35 = mir.call @mrt_alloc(%34)
+    mir.store %31, %35, 0 width: qword
+    mir.store %6, %35, 8 width: qword
+    %40 = mir.load %35, 0 width: qword
+    %41 = mir.load %40, 0 width: qword
+    %42 = mir.load %40, 8 width: qword
+    %43 = mir.call @mrt_write_stdout(%41, %42)
+    mir.ret %6
+  }
+}
+---

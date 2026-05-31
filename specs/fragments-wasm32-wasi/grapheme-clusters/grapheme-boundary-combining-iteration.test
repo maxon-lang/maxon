@@ -1,0 +1,109 @@
+// Test: grapheme-boundary-combining-iteration
+function main() returns ExitCode
+	let s = "caf\u0065\u0301"  // c, a, f, e+combining accent = 4 graphemes
+	var count = 0
+	for _ in s 'loop'
+		count = count + 1
+	end 'loop'
+	print("{count}\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+4
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.global_addr @__istr_0
+    %1 = mir.mov_imm 40 : i64
+    %2 = mir.call @mrt_alloc(%1)
+    mir.store %0, %2, 0 width: qword
+    %3 = mir.mov_imm 6 : i64
+    mir.store %3, %2, 8 width: qword
+    %4 = mir.mov_imm -2 : i64
+    mir.store %4, %2, 16 width: qword
+    %5 = mir.mov_imm 1 : i64
+    mir.store %5, %2, 24 width: qword
+    %6 = mir.mov_imm 0 : i64
+    mir.store %6, %2, 32 width: qword
+    %7 = mir.mov_imm 16 : i64
+    %8 = mir.call @mrt_alloc(%7)
+    mir.store %2, %8, 0 width: qword
+    mir.store %6, %8, 8 width: qword
+    %12, %13 = mir.try_call @String.createIterator(%8)
+    %15 = mir.cmp ne, %13, %6
+    mir.cond_br %15 [then: loop_0.exit(%6), else: loop_0(%6)]
+  inlined_StringIterator.advance_0:
+    %55 = mir.load %12, 8 width: qword
+    %56 = mir.load %12, 16 width: qword
+    %57 = mir.add.i64 %55, %56
+    %58 = mir.load %12, 0 width: qword
+    %59 = mir.load %58, 8 width: qword
+    %60 = mir.cmp ge, %57, %59
+    mir.cond_br %60 [then: inlined_StringIterator.advance_1(), else: inlined_StringIterator.advance_2()]
+  inlined_StringIterator.advance_1:
+    %61 = mir.mov_imm 0 : i64
+    %62 = mir.mov_imm 1 : i64
+    mir.br inline_cont_main_0(%61, %62)
+  inlined_StringIterator.advance_2:
+    mir.store %57, %12, 8 width: qword
+    %63 = mir.load %12, 0 width: qword
+    %64 = mir.load %12, 8 width: qword
+    %65 = mir.load %12, 24 width: byte signed
+    %66 = mir.call @stdlib.computeGraphemeLen(%63, %64, %65)
+    mir.store %66, %12, 16 width: qword
+    %67 = mir.mov_imm 0 : i64
+    %68 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%67, %68)
+  inline_cont_main_0:
+    %20 = mir.cmp ne, %70, %6
+    mir.cond_br %20 [then: loop_0.exit(%25), else: loop_0(%25)]
+  loop_0:
+    %71 = mir.load %12, 0 width: qword
+    %72 = mir.load %12, 8 width: qword
+    %73 = mir.load %12, 16 width: qword
+    %74 = mir.call @stdlib.helpers.string.makeCharacterFromManagedRange(%71, %72, %73)
+    %24 = mir.mov_imm 1 : i64
+    %25 = mir.add.i64 %53, %24
+    mir.br inlined_StringIterator.advance_0()
+  loop_0.exit:
+    %27 = mir.global_addr @__istr_1
+    %29 = mir.mov_imm 21 : i64
+    %30 = mir.call @mrt_alloc(%29)
+    %31 = mir.call @mrt_i64_to_string(%54, %30)
+    %32 = mir.global_addr @__istr_2
+    %33 = mir.mov_imm 1 : i64
+    %36 = mir.add.i64 %6, %31
+    %37 = mir.add.i64 %36, %33
+    %38 = mir.mov_imm 1 : i64
+    %39 = mir.add.i64 %37, %38
+    %40 = mir.call @mrt_alloc(%39)
+    mir.memcpy %40, %27, %6
+    %41 = mir.add.i64 %40, %6
+    mir.memcpy %41, %30, %31
+    %42 = mir.add.i64 %41, %31
+    mir.memcpy %42, %32, %33
+    %44 = mir.mov_imm 40 : i64
+    %45 = mir.call @mrt_alloc(%44)
+    mir.store %40, %45, 0 width: qword
+    mir.store %37, %45, 8 width: qword
+    mir.store %37, %45, 16 width: qword
+    %46 = mir.mov_imm 1 : i64
+    mir.store %46, %45, 24 width: qword
+    mir.store %6, %45, 32 width: qword
+    %48 = mir.mov_imm 16 : i64
+    %49 = mir.call @mrt_alloc(%48)
+    mir.store %45, %49, 0 width: qword
+    mir.store %6, %49, 8 width: qword
+    %75 = mir.load %49, 0 width: qword
+    %76 = mir.load %75, 0 width: qword
+    %77 = mir.load %75, 8 width: qword
+    %78 = mir.call @mrt_write_stdout(%76, %77)
+    mir.ret %6
+  }
+}
+---

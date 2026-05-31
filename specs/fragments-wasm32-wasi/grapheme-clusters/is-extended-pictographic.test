@@ -1,0 +1,96 @@
+// Test: is-extended-pictographic
+function main() returns ExitCode
+	if isExtendedPictographic(128512) 'c1'
+		print("{1}\n")  // 😀
+	end 'c1'
+	if isExtendedPictographic(65) 'c2'
+		print("{0}\n")      // 'A'
+	end 'c2'
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+1
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %57 = mir.mov_imm 1 : i64
+    %58 = mir.mov_imm 0 : i64
+    %0 = mir.mov_imm 128512 : i64
+    %1 = mir.call @stdlib.helpers.string.isExtendedPictographic(%0)
+    mir.cond_br %1 [then: c1_0(), else: c1_0.after()]
+  c1_0:
+    %3 = mir.global_addr @__istr_0
+    %5 = mir.mov_imm 21 : i64
+    %6 = mir.call @mrt_alloc(%5)
+    %7 = mir.call @mrt_i64_to_string(%57, %6)
+    %8 = mir.global_addr @__istr_1
+    %12 = mir.add.i64 %58, %7
+    %13 = mir.add.i64 %12, %57
+    %15 = mir.add.i64 %13, %57
+    %16 = mir.call @mrt_alloc(%15)
+    mir.memcpy %16, %3, %58
+    %17 = mir.add.i64 %16, %58
+    mir.memcpy %17, %6, %7
+    %18 = mir.add.i64 %17, %7
+    mir.memcpy %18, %8, %57
+    %20 = mir.mov_imm 40 : i64
+    %21 = mir.call @mrt_alloc(%20)
+    mir.store %16, %21, 0 width: qword
+    mir.store %13, %21, 8 width: qword
+    mir.store %13, %21, 16 width: qword
+    mir.store %57, %21, 24 width: qword
+    mir.store %58, %21, 32 width: qword
+    %24 = mir.mov_imm 16 : i64
+    %25 = mir.call @mrt_alloc(%24)
+    mir.store %21, %25, 0 width: qword
+    mir.store %58, %25, 8 width: qword
+    %59 = mir.load %25, 0 width: qword
+    %60 = mir.load %59, 0 width: qword
+    %61 = mir.load %59, 8 width: qword
+    %62 = mir.call @mrt_write_stdout(%60, %61)
+    mir.br c1_0.after()
+  c1_0.after:
+    %28 = mir.mov_imm 65 : i64
+    %29 = mir.call @stdlib.helpers.string.isExtendedPictographic(%28)
+    mir.cond_br %29 [then: c2_0(), else: c2_0.after()]
+  c2_0:
+    %31 = mir.global_addr @__istr_0
+    %33 = mir.mov_imm 21 : i64
+    %34 = mir.call @mrt_alloc(%33)
+    %35 = mir.call @mrt_i64_to_string(%58, %34)
+    %36 = mir.global_addr @__istr_1
+    %40 = mir.add.i64 %58, %35
+    %41 = mir.add.i64 %40, %57
+    %43 = mir.add.i64 %41, %57
+    %44 = mir.call @mrt_alloc(%43)
+    mir.memcpy %44, %31, %58
+    %45 = mir.add.i64 %44, %58
+    mir.memcpy %45, %34, %35
+    %46 = mir.add.i64 %45, %35
+    mir.memcpy %46, %36, %57
+    %48 = mir.mov_imm 40 : i64
+    %49 = mir.call @mrt_alloc(%48)
+    mir.store %44, %49, 0 width: qword
+    mir.store %41, %49, 8 width: qword
+    mir.store %41, %49, 16 width: qword
+    mir.store %57, %49, 24 width: qword
+    mir.store %58, %49, 32 width: qword
+    %52 = mir.mov_imm 16 : i64
+    %53 = mir.call @mrt_alloc(%52)
+    mir.store %49, %53, 0 width: qword
+    mir.store %58, %53, 8 width: qword
+    %63 = mir.load %53, 0 width: qword
+    %64 = mir.load %63, 0 width: qword
+    %65 = mir.load %63, 8 width: qword
+    %66 = mir.call @mrt_write_stdout(%64, %65)
+    mir.br c2_0.after()
+  c2_0.after:
+    mir.ret %58
+  }
+}
+---

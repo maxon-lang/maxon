@@ -60,11 +60,11 @@ end 'clampB'
 
 // --- file: main.maxon
 function main() returns ExitCode
-	let a = clampA(100)
-	let b = clampB(200)
+	let a = clampA(40)
+	let b = clampB(60)
 	return a + b
 end 'main'
 ```
 ```exitcode
-300
+100
 ```

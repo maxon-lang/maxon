@@ -108,6 +108,42 @@ end 'ClosureRename'
 
 export typealias ClosureRenameArray = Array with ClosureRename
 
+// A `Self{...}` struct literal that appeared inside its own declaring type's
+// body, where the type was not yet registered in `unresolvedStructTypes` (the
+// insert happens only after the whole body is parsed) AND the complete field
+// list was not yet known at literal-parse time (e.g. a constructing method
+// declared above a defaulted field). The omitted-field default-init emission is
+// deferred to the end of `parseTypeDecl`, when the field list is complete,
+// and spliced into `block` immediately after the `structAlloc` at
+// `structAllocOpIdx`. Without this, declaration order inside the body would
+// decide which defaults are applied — fields declared after the literal's
+// method would be left uninitialized and dereference as null at runtime.
+type PendingSelfLiteralDefault
+	export var block as IrBlock
+	export var structAllocOpIdx as OpIndex
+	export var ptrName as ByteArray
+	export var providedFieldNames as StringArray
+	export var typeToken as Token
+
+	export static function create(block IrBlock, structAllocOpIdx OpIndex, ptrName ByteArray, providedFieldNames StringArray, typeToken Token) returns PendingSelfLiteralDefault
+		return Self{block: block, structAllocOpIdx: structAllocOpIdx, ptrName: ptrName, providedFieldNames: providedFieldNames, typeToken: typeToken}
+	end 'create'
+end 'PendingSelfLiteralDefault'
+
+typealias PendingSelfLiteralDefaultArray = Array with PendingSelfLiteralDefault
+
+// The default-init decision for one omitted struct-literal field. `skip` means
+// the field needs no synthesized init (it is not defaulted and not a managed
+// builtin). `emit` carries the callee name whose `()` produces the field's
+// value — either the field's `<Type>.__field_init_<name>` helper (user
+// default) or `__ManagedList.create` (managed builtin without a user default).
+// Both `parseStructLiteral` emission paths share this decision; they differ
+// only in where the resulting call + fieldStore ops are placed.
+union OmittedFieldInit
+	skip
+	emit(callee String)
+end 'OmittedFieldInit'
+
 // Walk every op in `module.ops` and rewrite the `funcName` of any
 // `closureCreate`/`functionRef` that references one of the renamed
 // closures. Linear in op count and rename count, but both are small
@@ -283,6 +319,13 @@ export type Parser
 	// same file produces stable names — the stdlib cache relies on the
 	// names being deterministic across runs.
 	var paramDefaultHelperCounter as ParsedInt
+	// Per-Parser counter minting unique value names for deferred in-body
+	// field-default inits (`$fd0`, `$fd1`, …). These are spliced into a method
+	// body after the whole type is parsed, at which point the per-function
+	// `synthNameCounter` no longer reflects that method's context — a distinct
+	// monotonic counter with a `$fd`-prefixed scheme guarantees the names never
+	// collide with the regular per-function `$t{n}` names.
+	var deferredFieldDefaultCounter as ParsedInt
 	// Grow-on-demand cache of synth-name ByteArrays, indexed by the counter
 	// value. Entries 0..K are populated lazily as freshSynthName is called;
 	// subsequent functions within the same Parser reuse the hot entries
@@ -350,6 +393,14 @@ export type Parser
 	// alias declared earlier in the same body before its merge into the
 	// target's `innerAliases`. Empty between bodies.
 	var currentInnerAliases as InnerAliasMap
+	// In-body `Self{...}` literals whose omitted-field defaults could not be
+	// emitted at parse time because the complete field list of the enclosing
+	// type was not yet known (e.g. a constructing method declared above a
+	// defaulted field, or any `Self{}` while the type is still being parsed and
+	// thus not yet registered in `project.unresolvedStructTypes`). Drained at
+	// the end of `parseTypeDecl`, when the field list is complete, by
+	// `drainPendingSelfLiteralDefaults`. Empty between type bodies.
+	var pendingSelfLiteralDefaults as PendingSelfLiteralDefaultArray
 	// Stage E (closures): the outer function's scope at the moment we
 	// entered a closure body. Used to discriminate capture references
 	// (declared in the enclosing scope) from genuine undefined names.
@@ -420,7 +471,7 @@ export type Parser
 		// before any expression is parsed.
 		let placeholderFunc = IrFunction.create("", maxonReturnType: MaxonReturnType.void, paramCount: 0, maxonParamTypes: MaxonTypeArray.create(), returnLine: 0)
 		let placeholderBlock = IrBlock.create(0, label: "")
-		return Self{project: project, tokens: tokens, cursor: cursor, filePath: filePath, rootPath: rootPath, namespace: namespace, currentTypeName: "", currentTypeParams: StringArray.create(), currentTypeConformances: ConformanceArray.create(), currentTypeVisibility: Visibility.file, currentEnumVisibility: Visibility.file, scope: Scope.create(), loopStack: LoopContextArray.create(), matchStack: MatchContextArray.create(), abortBody: false, bodyStmtParsed: false, paramLocations: ParamLocationArray.create(), localVarLocations: ParamLocationArray.create(), referencedVars: ReferencedVarSet.create(), mutableVarLocations: ParamLocationArray.create(), reassignedVars: ReferencedVarSet.create(), lastExprImmutableVarRefName: "", lastExprFromImmutableRoot: false, lastExprVarRefName: "", lastExprProducerName: ByteArray.create(), pendingVarFromImmutable: VarFromImmutableCandidateArray.create(), paramReservations: ParamReservationArray.create(), synthNameCounter: 0, paramDefaultHelperCounter: 0, synthNameCache: ByteArrayArray.create(), currentBlock: placeholderBlock, currentFunc: placeholderFunc, module: MaxonModule.create(), consumeExpectedDisplay: "more input", inMatchArmBody: false, inClosure: false, inFunctionParam: false, inForInHeader: false, atTopOfTypeAliasRhs: false, inIfCondition: false, currentInnerAliases: InnerAliasMap.create(), closureOuterScope: Scope.create(), closureCaptures: CaptureInfoArray.create(), closureOuterReferencedVars: ReferencedVarSet.create(), moduleInitName: "", moduleInitFunc: placeholderFunc, moduleInitBlock: placeholderBlock, moduleInitSynthCounter: 0, localTypealiases: LocalTypealiasArray.create(), usedTypeAliases: ReferencedVarSet.create(), letStructBackedEnumCases: StructBackedEnumCaseBindingMap.create()}
+		return Self{project: project, tokens: tokens, cursor: cursor, filePath: filePath, rootPath: rootPath, namespace: namespace, currentTypeName: "", currentTypeParams: StringArray.create(), currentTypeConformances: ConformanceArray.create(), currentTypeVisibility: Visibility.file, currentEnumVisibility: Visibility.file, scope: Scope.create(), loopStack: LoopContextArray.create(), matchStack: MatchContextArray.create(), abortBody: false, bodyStmtParsed: false, paramLocations: ParamLocationArray.create(), localVarLocations: ParamLocationArray.create(), referencedVars: ReferencedVarSet.create(), mutableVarLocations: ParamLocationArray.create(), reassignedVars: ReferencedVarSet.create(), lastExprImmutableVarRefName: "", lastExprFromImmutableRoot: false, lastExprVarRefName: "", lastExprProducerName: ByteArray.create(), pendingVarFromImmutable: VarFromImmutableCandidateArray.create(), paramReservations: ParamReservationArray.create(), synthNameCounter: 0, paramDefaultHelperCounter: 0, deferredFieldDefaultCounter: 0, synthNameCache: ByteArrayArray.create(), currentBlock: placeholderBlock, currentFunc: placeholderFunc, module: MaxonModule.create(), consumeExpectedDisplay: "more input", inMatchArmBody: false, inClosure: false, inFunctionParam: false, inForInHeader: false, atTopOfTypeAliasRhs: false, inIfCondition: false, currentInnerAliases: InnerAliasMap.create(), pendingSelfLiteralDefaults: PendingSelfLiteralDefaultArray.create(), closureOuterScope: Scope.create(), closureCaptures: CaptureInfoArray.create(), closureOuterReferencedVars: ReferencedVarSet.create(), moduleInitName: "", moduleInitFunc: placeholderFunc, moduleInitBlock: placeholderBlock, moduleInitSynthCounter: 0, localTypealiases: LocalTypealiasArray.create(), usedTypeAliases: ReferencedVarSet.create(), letStructBackedEnumCases: StructBackedEnumCaseBindingMap.create()}
 	end 'create'
 
 	export function parseModule() returns MaxonModule throws ParserError
@@ -2675,9 +2726,10 @@ export type Parser
 	// string/char/bool literals plus a leading `-` for negative numerics.
 	// Enum-case shorthand (`var f = Color.red`) needs cross-decl lookup to
 	// resolve `Color` to its enum type, so it lands as `unresolved` and
-	// TypeResolution finishes the job. Anything else is a programming
-	// error in the shorthand — the full `var f T = expr` form should be
-	// used for non-literal defaults.
+	// TypeResolution finishes the job. Callers MUST gate on
+	// `shorthandDefaultIsLiteralLike` first — a non-literal-like default
+	// (call, struct literal, interpolation, ...) is rejected with E2004 there
+	// and never reaches this inference, which panics on the unreachable path.
 	function inferShorthandFieldType(leadToken Token, fieldNameToken Token) returns MaxonType
 		// Negative numeric literal: peek past the unary `-` to the digit
 		// token so the kind check sees the literal, not the operator.
@@ -2705,8 +2757,10 @@ export type Parser
 		if litKind == TokenKind.identifier 'isIdent'
 			return MaxonType.unresolved
 		end 'isIdent'
-		reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "field '{fieldNameToken.value}' shorthand default must be a literal (int, float, bool, string, char, or enum case); use full form 'var {fieldNameToken.value} Type = expr' for arbitrary expressions", line: leadToken.line, column: leadToken.column, filePath: filePath)
-		return MaxonType.unresolved
+		// Unreachable: the sole caller gates on `shorthandDefaultIsLiteralLike`,
+		// which admits exactly the kinds handled above. A non-literal-like
+		// default is rejected with E2004 before this runs.
+		panic("inferShorthandFieldType: non-literal-like default for field '{fieldNameToken.value}' reached type inference (caller must gate on shorthandDefaultIsLiteralLike)")
 	end 'inferShorthandFieldType'
 
 	function inferShorthandLitKind(leadToken Token) returns TokenKind
@@ -2716,6 +2770,44 @@ export type Parser
 		let next = try cursor.peek(1) otherwise return leadToken.kind
 		return next.kind
 	end 'inferShorthandLitKind'
+
+	// True when the shorthand field default at the cursor is one of the forms
+	// the inferred-type shorthand accepts: a numeric / bool / string / char
+	// literal (optionally negated) or a bare enum-case member access like
+	// `Color.red`. An identifier-led value that continues into a call
+	// (`IntArray.create()`) or any other arbitrary expression is NOT literal-
+	// like — it requires the full `var f Type = expr` form, mirroring the C#
+	// bootstrap which rejects it with E2004. Cursor is positioned at the first
+	// token of the default expression and is left unmoved (lookahead only).
+	function shorthandDefaultIsLiteralLike(leadToken Token) returns bool
+		let litKind = inferShorthandLitKind(leadToken)
+		if litKind == TokenKind.intLiteral or litKind == TokenKind.floatLiteral 'isNumeric'
+			return true
+		end 'isNumeric'
+		if litKind == TokenKind.true or litKind == TokenKind.false 'isBool'
+			return true
+		end 'isBool'
+		if litKind == TokenKind.stringLiteral or litKind == TokenKind.charLiteral 'isText'
+			return true
+		end 'isText'
+		// Identifier-led: accept only a bare enum-case member access
+		// (`Identifier.identifier` not followed by `(`). A trailing `(` makes it
+		// a call, and a bare `Identifier` alone (no `.`) is not a valid case
+		// reference — both fall through to the full-form requirement.
+		if litKind == TokenKind.identifier 'isIdent'
+			let dotTok = try cursor.peek(1) otherwise Token.eof()
+			if dotTok.kind != TokenKind.dot 'noDot'
+				return false
+			end 'noDot'
+			let memberTok = try cursor.peek(2) otherwise Token.eof()
+			if memberTok.kind != TokenKind.identifier 'noMember'
+				return false
+			end 'noMember'
+			let afterMemberTok = try cursor.peek(3) otherwise Token.eof()
+			return afterMemberTok.kind != TokenKind.leftParen
+		end 'isIdent'
+		return false
+	end 'shorthandDefaultIsLiteralLike'
 
 	// True when the initializer is shaped like `Identifier . identifier (`
 	// (a deferred struct-factory call, e.g. `Outer.create(...)`) OR like
@@ -4426,9 +4518,24 @@ export type Parser
 				var fieldType = MaxonType.unresolved
 				var hasFieldDefault = false
 				if accept(TokenKind.equals) 'shorthandForm'
-					fieldType = inferShorthandFieldType(cursor.current(), fieldNameToken: fieldNameToken)
-					try parseFieldDefaultInitHelper(currentTypeName, fieldName: fieldNameToken.value, fieldType: fieldType, fieldLine: fieldNameToken.line)
-					hasFieldDefault = true
+					let defaultLeadToken = cursor.current()
+					if not shorthandDefaultIsLiteralLike(defaultLeadToken) 'notLiteralLike'
+						// The inferred-type shorthand only accepts literals and
+						// bare enum-case references. An arbitrary expression
+						// (call, struct literal, interpolation, ...) cannot have
+						// its type inferred from the raw tokens — it needs the
+						// full `var f Type = expr` form. Match the C# bootstrap's
+						// E2004 and skip past the default so parsing recovers;
+						// the field keeps `hasDefault = false` so no broken
+						// `__field_init_*` (returning an unresolved type) is
+						// synthesized.
+						reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "Expected default value: literal (int, float, bool, or enum case). For other expressions, add a type annotation: 'var name Type = expr'.", line: defaultLeadToken.line, column: defaultLeadToken.column, filePath: filePath)
+						skipToNextLine()
+					end 'notLiteralLike' else 'literalLikeShorthand'
+						fieldType = inferShorthandFieldType(cursor.current(), fieldNameToken: fieldNameToken)
+						try parseFieldDefaultInitHelper(currentTypeName, fieldName: fieldNameToken.value, fieldType: fieldType, fieldLine: fieldNameToken.line)
+						hasFieldDefault = true
+					end 'literalLikeShorthand'
 				end 'shorthandForm' else 'typedForm'
 					try eat(TokenKind.as)
 					// Phase 11.0 step 3c: route field types through `parseTypeRef`
@@ -4482,6 +4589,12 @@ export type Parser
 				try cursor.advance() otherwise break
 			end 'stuck'
 		end 'body'
+
+		// The complete field list is now known. Splice deferred field-default
+		// inits into any in-body `Self{...}` literal recorded during the body
+		// parse (e.g. a constructing method declared above a defaulted field).
+		// Done while `currentTypeName` is still set — the helper names embed it.
+		try drainPendingSelfLiteralDefaults(fields)
 
 		// byteSize is a placeholder; `layoutAllStructs` in TypeResolution
 		// overwrites it once every field's width is known.
@@ -12125,6 +12238,12 @@ export type Parser
 
 		let typeNameBytes = typeName.toByteArray()
 		let ptrName = freshSynthName()
+		// Capture the structAlloc's op index and its host block so a deferred
+		// field-default pass (for an in-body `Self{}` whose type isn't fully
+		// parsed yet) can splice the `__field_init_*` calls in immediately
+		// after the allocation.
+		let structAllocOpIdx = module.ops.count()
+		let structAllocBlock = currentBlock
 		module.appendOp(currentBlock, op: MaxonOp.structAlloc(ptrName, structName: typeNameBytes, range: SourceRange.ofToken(typeToken)))
 
 		// Track user-provided field names so we can synthesize calls to
@@ -12156,50 +12275,136 @@ export type Parser
 		end 'fields'
 		try eat(TokenKind.rightBrace)
 
-		// Phase 11.x: for every defaulted field the literal didn't supply,
-		// emit a call to its `__field_init_*` helper followed by a
-		// fieldStore. The helper was synthesized during `parseTypeDecl`,
-		// so it's registered in `project.funcReturnTypes` by the time any
-		// `Self{...}` (or cross-method literal) parses. Cross-file struct
-		// literals work the same way provided the declaring file was
-		// parsed first — the parser walks files in user-declared order,
-		// matching `project.unresolvedStructTypes` population timing.
-		//
-		// Phase C: for fields whose type is a builtin managed compiler-internal
-		// type (`__ManagedList`, `__ManagedListNode`), and which the user
-		// didn't provide, auto-init by emitting a static call to the type's
-		// `create` factory. This mirrors the C# bootstrap's
-		// `EmitEmptyBuiltinManagedLiteral` behavior: a fresh `Self{}` for a
-		// type that wraps a `__ManagedList` field (e.g. `List`'s `chain`)
-		// gets a usable empty list rather than a null pointer. `__ManagedMemory`
-		// is not included here because its existing usage either supplies the
-		// field explicitly (`Self{managed: ...}` in `Array.init`) or relies on
-		// the lifecycle paths in `__Builtins` to defer allocation until a real
-		// `length()` / `set()` call wants it.
+		// Emit the omitted-field default inits. When the type is already
+		// registered in `unresolvedStructTypes` its full field list is known,
+		// so emit inline now. For a `Self{...}` inside the declaring type's own
+		// body the type is NOT yet registered (the insert happens only after
+		// the whole body is parsed) and the field list may still be incomplete
+		// — a constructing method declared above a defaulted field would miss
+		// it — so defer to the end of `parseTypeDecl`. See
+		// `emitOmittedFieldDefaultsInline` / `drainPendingSelfLiteralDefaults`.
 		if let unresolved = try project.unresolvedStructTypes.get(typeName) 'haveDecl'
-			for declField in unresolved.fields 'eachField'
-				if stringArrayContains(providedFieldNames, name: declField.name) 'userProvided'
-					continue
-				end 'userProvided'
-				if declField.hasDefault 'hasUserDefault'
-					let helperName = "{typeName}.__field_init_{declField.name}"
-					let initCallName = freshSynthName()
-					module.appendOp(currentBlock, op: MaxonOp.call(initCallName, callee: project.calleeNames.intern(helperName), callContext: CallContext.qualified, args: ByteArrayArray.create(), argLabels: StringArray.create(), argTypes: MaxonTypeArray.create(), argRanges: SourceRangeArray.create(), range: SourceRange.ofToken(typeToken)))
-					module.appendOp(currentBlock, op: MaxonOp.fieldStore(ptrName, fieldName: declField.name.toByteArray(), value: initCallName, isInit: true, range: SourceRange.ofToken(typeToken)))
-					continue
-				end 'hasUserDefault'
-				let fieldBaseName = managedBuiltinBaseName(project, fieldType: declField.fieldType)
-				if fieldBaseName == "__ManagedList" 'isManagedList'
-					let factoryName = "__ManagedList.create"
-					let initCallName = freshSynthName()
-					module.appendOp(currentBlock, op: MaxonOp.call(initCallName, callee: project.calleeNames.intern(factoryName), callContext: CallContext.qualified, args: ByteArrayArray.create(), argLabels: StringArray.create(), argTypes: MaxonTypeArray.create(), argRanges: SourceRangeArray.create(), range: SourceRange.ofToken(typeToken)))
-					module.appendOp(currentBlock, op: MaxonOp.fieldStore(ptrName, fieldName: declField.name.toByteArray(), value: initCallName, isInit: true, range: SourceRange.ofToken(typeToken)))
-				end 'isManagedList'
-			end 'eachField'
-		end 'haveDecl'
+			emitOmittedFieldDefaultsInline(currentBlock, ptrName: ptrName, typeName: typeName, declFields: unresolved.fields, providedFieldNames: providedFieldNames, typeToken: typeToken)
+		end 'haveDecl' else 'deferInBody'
+			if typeName == currentTypeName 'isCurrentType'
+				pendingSelfLiteralDefaults.push(PendingSelfLiteralDefault.create(structAllocBlock, structAllocOpIdx: structAllocOpIdx, ptrName: ptrName, providedFieldNames: providedFieldNames, typeToken: typeToken))
+			end 'isCurrentType'
+		end 'deferInBody'
 
 		return ExprResult.direct(ptrName, valueType: internMaxonType(project, name: typeName))
 	end 'parseStructLiteral'
+
+	// Decide how an omitted struct-literal field is initialized. A user-defaulted
+	// field calls its `<typeName>.__field_init_<name>` helper; a managed-builtin
+	// field (`__ManagedList`) without a user default gets an auto-`create()`,
+	// mirroring the C# bootstrap's `EmitEmptyBuiltinManagedLiteral`. Any other
+	// field needs no synthesized init. Shared by both emission paths so the
+	// "which callee, if any" logic lives in exactly one place.
+	function omittedFieldInit(declField StructField, typeName String) returns OmittedFieldInit
+		if declField.hasDefault 'hasUserDefault'
+			return OmittedFieldInit.emit("{typeName}.__field_init_{declField.name}")
+		end 'hasUserDefault'
+		if managedBuiltinBaseName(project, fieldType: declField.fieldType) == "__ManagedList" 'isManagedList'
+			return OmittedFieldInit.emit("__ManagedList.create")
+		end 'isManagedList'
+		return OmittedFieldInit.skip
+	end 'omittedFieldInit'
+
+	// Append `__field_init_*` call + fieldStore ops for every defaulted field
+	// the literal omitted, writing into `block` at its current tail. Used when
+	// the struct type's full field list is already known (registered in
+	// `unresolvedStructTypes`). `__ManagedList`-typed fields without a user
+	// default get an auto-`create()`; see the C# bootstrap's
+	// `EmitEmptyBuiltinManagedLiteral`.
+	function emitOmittedFieldDefaultsInline(block IrBlock, ptrName ByteArray, typeName String, declFields StructFieldArray, providedFieldNames StringArray, typeToken Token)
+		for declField in declFields 'eachField'
+			if stringArrayContains(providedFieldNames, name: declField.name) 'userProvided'
+				continue
+			end 'userProvided'
+			match omittedFieldInit(declField, typeName: typeName) 'decide'
+				skip then continue
+				emit(callee) then emitFieldDefaultAtTail(block, ptrName: ptrName, fieldName: declField.name, callee: callee, typeToken: typeToken)
+			end 'decide'
+		end 'eachField'
+	end 'emitOmittedFieldDefaultsInline'
+
+	// Emit `init = callee()` then `ptrName.fieldName = init` at `block`'s tail,
+	// minting a fresh per-function synth name for the call result.
+	function emitFieldDefaultAtTail(block IrBlock, ptrName ByteArray, fieldName String, callee String, typeToken Token)
+		let initCallName = freshSynthName()
+		module.appendOp(block, op: MaxonOp.call(initCallName, callee: project.calleeNames.intern(callee), callContext: CallContext.qualified, args: ByteArrayArray.create(), argLabels: StringArray.create(), argTypes: MaxonTypeArray.create(), argRanges: SourceRangeArray.create(), range: SourceRange.ofToken(typeToken)))
+		module.appendOp(block, op: MaxonOp.fieldStore(ptrName, fieldName: fieldName.toByteArray(), value: initCallName, isInit: true, range: SourceRange.ofToken(typeToken)))
+	end 'emitFieldDefaultAtTail'
+
+	// Mint a value name for a deferred field-default init. Deferred inits are
+	// spliced into a method body after the whole type is parsed, so the regular
+	// per-function `synthNameCounter` no longer reflects that method — a
+	// distinct monotonic `$fd{k}` scheme guarantees no collision with the
+	// per-function `$t{n}` names.
+	function freshDeferredFieldDefaultName() returns ByteArray
+		let k = deferredFieldDefaultCounter
+		deferredFieldDefaultCounter = deferredFieldDefaultCounter + 1
+		return "$fd{k}".toByteArray()
+	end 'freshDeferredFieldDefaultName'
+
+	// Drain every in-body `Self{...}` literal recorded during this type's body
+	// parse. The `declFields` parameter is the complete field list, so we know
+	// exactly which defaulted fields each literal omitted. For each, append the
+	// `__field_init_*` call + fieldStore ops to the module op pool and splice
+	// their indices into the literal's block immediately after the structAlloc,
+	// preserving def-before-use order. Clears the pending list.
+	function drainPendingSelfLiteralDefaults(declFields StructFieldArray) throws ParserError
+		for pending in pendingSelfLiteralDefaults 'eachPending'
+			// Position of the structAlloc within its block's opRef list — the
+			// inits splice in right after it. The structAlloc must be present
+			// (it was emitted into this exact block at literal-parse time).
+			var anchorPos = 0 as OpIndex
+			var anchorFound = false
+			for i in 0 upto pending.block.opRefs.count() 'findAnchor'
+				let opRef = try pending.block.opRefs.get(i) otherwise continue
+				if opRef == pending.structAllocOpIdx 'isAnchor'
+					anchorPos = i
+					anchorFound = true
+					break
+				end 'isAnchor'
+			end 'findAnchor'
+			if not anchorFound 'anchorMissing'
+				panic("drainPendingSelfLiteralDefaults: structAlloc op {pending.structAllocOpIdx} not found in its recorded block")
+			end 'anchorMissing'
+
+			// Splice cursor advances past each inserted op so the call lands
+			// before its consuming fieldStore and successive fields keep source
+			// order.
+			var spliceAt = anchorPos + 1
+			for declField in declFields 'eachField'
+				if stringArrayContains(pending.providedFieldNames, name: declField.name) 'userProvided'
+					continue
+				end 'userProvided'
+				match omittedFieldInit(declField, typeName: currentTypeName) 'decide'
+					skip then continue
+					emit(callee) then spliceAt = spliceFieldDefault(pending, fieldName: declField.name, callee: callee, spliceAt: spliceAt)
+				end 'decide'
+			end 'eachField'
+		end 'eachPending'
+		pendingSelfLiteralDefaults = PendingSelfLiteralDefaultArray.create()
+	end 'drainPendingSelfLiteralDefaults'
+
+	// Splice an `init = callee()` call and its `ptrName.fieldName = init`
+	// fieldStore into `pending.block` at `spliceAt`, returning the cursor
+	// advanced past both inserted opRefs. The ops themselves go to the module
+	// op pool; only their indices are spliced, so source order is preserved.
+	function spliceFieldDefault(pending PendingSelfLiteralDefault, fieldName String, callee String, spliceAt OpIndex) returns OpIndex
+		let initCallName = freshDeferredFieldDefaultName()
+		let callIdx = module.ops.count()
+		module.ops.push(MaxonOp.call(initCallName, callee: project.calleeNames.intern(callee), callContext: CallContext.qualified, args: ByteArrayArray.create(), argLabels: StringArray.create(), argTypes: MaxonTypeArray.create(), argRanges: SourceRangeArray.create(), range: SourceRange.ofToken(pending.typeToken)))
+		try pending.block.opRefs.insert(spliceAt, value: callIdx) otherwise panic("spliceFieldDefault: opRefs.insert OOB (call)")
+
+		let storeIdx = module.ops.count()
+		module.ops.push(MaxonOp.fieldStore(pending.ptrName, fieldName: fieldName.toByteArray(), value: initCallName, isInit: true, range: SourceRange.ofToken(pending.typeToken)))
+		try pending.block.opRefs.insert(spliceAt + 1, value: storeIdx) otherwise panic("spliceFieldDefault: opRefs.insert OOB (store)")
+
+		return spliceAt + 2
+	end 'spliceFieldDefault'
 
 	// Phase C: walk through typealiases (and one level of generic-instance
 	// indirection) to recover the base struct name of a field's declared

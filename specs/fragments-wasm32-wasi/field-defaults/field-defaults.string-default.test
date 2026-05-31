@@ -1,0 +1,86 @@
+// Test: field-defaults.string-default
+type Person
+	export var name as String = "anon"
+
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Person'
+
+function main() returns ExitCode
+	let p = Person.create()
+	print("{p.name}")
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+anon
+```
+---
+// CompiledIR
+module {
+  func @Person.__field_init_name() -> i64 {
+  entry:
+    %0 = mir.global_addr @__istr_0
+    %1 = mir.mov_imm 40 : i64
+    %2 = mir.call @mrt_alloc(%1)
+    mir.store %0, %2, 0 width: qword
+    %3 = mir.mov_imm 4 : i64
+    mir.store %3, %2, 8 width: qword
+    %4 = mir.mov_imm -2 : i64
+    mir.store %4, %2, 16 width: qword
+    %5 = mir.mov_imm 1 : i64
+    mir.store %5, %2, 24 width: qword
+    %6 = mir.mov_imm 0 : i64
+    mir.store %6, %2, 32 width: qword
+    %7 = mir.mov_imm 16 : i64
+    %8 = mir.call @mrt_alloc(%7)
+    mir.store %2, %8, 0 width: qword
+    %9 = mir.mov_imm 1 : i64
+    mir.store %9, %8, 8 width: qword
+    mir.ret %8
+  }
+  func @main() -> u8 {
+  entry:
+    %28 = mir.mov_imm 8 : i64
+    %29 = mir.call @mrt_alloc(%28)
+    %30 = mir.call @Person.__field_init_name()
+    mir.store %30, %29, 0 width: qword
+    %2 = mir.load %29, 0 width: qword
+    %3 = mir.global_addr @__istr_1
+    %4 = mir.mov_imm 0 : i64
+    %5 = mir.load %2, 0 width: qword
+    %6 = mir.load %5, 0 width: qword
+    %7 = mir.load %5, 8 width: qword
+    %8 = mir.global_addr @__istr_1
+    %12 = mir.add.i64 %4, %7
+    %13 = mir.add.i64 %12, %4
+    %14 = mir.mov_imm 1 : i64
+    %15 = mir.add.i64 %13, %14
+    %16 = mir.call @mrt_alloc(%15)
+    mir.memcpy %16, %3, %4
+    %17 = mir.add.i64 %16, %4
+    mir.memcpy %17, %6, %7
+    %18 = mir.add.i64 %17, %7
+    mir.memcpy %18, %8, %4
+    %20 = mir.mov_imm 40 : i64
+    %21 = mir.call @mrt_alloc(%20)
+    mir.store %16, %21, 0 width: qword
+    mir.store %13, %21, 8 width: qword
+    mir.store %13, %21, 16 width: qword
+    %22 = mir.mov_imm 1 : i64
+    mir.store %22, %21, 24 width: qword
+    mir.store %4, %21, 32 width: qword
+    %24 = mir.mov_imm 16 : i64
+    %25 = mir.call @mrt_alloc(%24)
+    mir.store %21, %25, 0 width: qword
+    mir.store %4, %25, 8 width: qword
+    %31 = mir.load %25, 0 width: qword
+    %32 = mir.load %31, 0 width: qword
+    %33 = mir.load %31, 8 width: qword
+    %34 = mir.call @mrt_write_stdout(%32, %33)
+    mir.ret %4
+  }
+}
+---
