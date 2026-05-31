@@ -1,90 +1,72 @@
 # Maxon Programming Language
 
-Maxon is a statically-typed programming language with a custom native x86-64 backend, designed for clear syntax and robust IDE support.
+Maxon is a statically-typed programming language with a custom native x86-64 backend, designed
+so that AI writes the code and humans read it — explicit, unambiguous, with no null and
+constraints encoded in the type system.
 
-## Project Components
+## Project components
 
-- **Compiler (`maxon`)**: C++ compiler with native x86-64 backend
-- **Language Server (LSP)**: C++ implementation for IDE integration
-- **VS Code Extension**: Syntax highlighting and language features
+- **Compiler (`maxon`)** — the C# compiler (`maxon-sharp`), which builds to `bin/maxon.exe`. It
+  has a native x86-64 backend and emits standalone PE/ELF executables with no external runtime.
+  This is the compiler the toolchain currently ships with.
+- **Self-hosted compiler (`maxon-selfhosted`)** — the Maxon compiler written in Maxon, built by
+  the C# compiler and continuously tested for parity against it. Work in progress.
+- **Language Server (LSP)** — part of the C# implementation, for IDE integration.
+- **VS Code extension** — syntax highlighting and language features.
+
+See [docs/COMPILER_ARCHITECTURE.md](docs/COMPILER_ARCHITECTURE.md) for the full pipeline.
 
 ## Prerequisites
 
-### Windows
-- Git for Windows (Git Bash required)
-- Visual Studio 2022 with C++ development tools
-- CMake 3.13+
-- Ninja build system
-
-### Linux
-- Use the provided dev container (recommended)
-- Or install: build-essential, cmake, ninja-build, Node.js 20+
+- [.NET 10 SDK](https://dotnet.microsoft.com/download) (the C# compiler targets `net10.0`)
+- Git
+- Node.js 20+ (only needed to build the VS Code extension)
 
 ## Building
 
+The C# compiler builds with `dotnet` and copies the resulting binary to `bin/maxon.exe`:
+
 ```bash
-make all              # Build everything
-make compiler         # Build only the compiler
-make lsp              # Build LSP server and extension
-make extension        # Build VS Code extension
-make test             # Run all tests
-make clean            # Clean build artifacts
+dotnet build maxon-sharp        # build the compiler -> bin/maxon.exe
 ```
 
-**Note:** All commands must be run in Git Bash on Windows or bash on Linux.
+On Windows, `buildall.bat` builds and tests the full toolchain end to end — the C# compiler,
+the self-hosted compiler, the dev MCP server, and their spec tests:
 
-## Quick Start
-
-### Windows (Git Bash)
-```bash
-# Build everything
-make all
-
-# Compile a Maxon program
-./bin/maxon examples/hello-world.maxon
-
-# Run tests
-make test
+```bat
+buildall.bat
 ```
 
-### Linux (Dev Container)
+## Quick start
+
 ```bash
-# Open project in VS Code with dev container
+# build the compiler
+dotnet build maxon-sharp
 
-# Build everything
-make all
+# compile and run an example
+bin/maxon build examples/basic.maxon
 
-# Compile a Maxon program
-./bin/maxon examples/hello-world.maxon
-
-# Run tests
-make test
+# run the spec-test suite
+bin/maxon spec-test
 ```
 
-## Development with VS Code
+See [docs/CLI_REFERENCE.md](docs/CLI_REFERENCE.md) for every command and flag.
 
-### Windows
-1. Install Git for Windows (includes Git Bash)
-2. Install required extensions
-3. Run all Make commands in Git Bash terminal
+## Tests
 
-### Linux
-1. Open folder in container (VS Code will prompt)
-2. Container automatically sets up environment
-3. Run Make commands in integrated terminal
+Tests are organized as **spec files** in [`specs/`](specs/): each language feature has a single
+source of truth holding its documentation and its executable test cases together (see
+[docs/SPECS.md](docs/SPECS.md)). Run them with:
 
-See [docs/CROSS_PLATFORM_PLAN.md](docs/CROSS_PLATFORM_PLAN.md) for detailed cross-platform setup information.
-
-## Line Endings
-
-This project enforces **LF (Unix-style)** line endings for all source files, including on Windows. The repository includes `.gitattributes` and `.editorconfig` files that handle this automatically.
-
-**Windows developers:** Run this once after cloning:
 ```bash
-git config --global core.autocrlf input
+bin/maxon spec-test
 ```
 
-See [docs/LINE_ENDINGS.md](docs/LINE_ENDINGS.md) for complete details.
+When you change behavior, update or add the relevant spec and make sure the suite passes.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
@@ -97,4 +79,6 @@ at your option.
 
 ### Contribution
 
-Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in the work by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without any additional terms or conditions.
+Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in
+the work by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without
+any additional terms or conditions.
