@@ -946,6 +946,12 @@ function checkErrorHandlingRules(project Project, module MaxonModule)
 						default panic("checkErrorHandlingRules: op.name == tryCall but match failed")
 					end 'checkTryCallOp'
 				end 'isTryCall'
+				if op.name == "methodCall" 'isMethodCall'
+					match op 'checkMethodCallOp'
+						methodCall(result, _, methodName, _, _, _, _, range) then checkMethodCallForThrowsViolation(project, opIdx: opIdx, result: result, methodName: methodName, readerFilePath: readerFilePath, range: range)
+						default panic("checkErrorHandlingRules: op.name == methodCall but match failed")
+					end 'checkMethodCallOp'
+				end 'isMethodCall'
 				if op.name == "tryMethodCall" 'isTryMethodCall'
 					match op 'checkTryMethodCallOp'
 						tryMethodCall(_, _, _, _, _, _, _, _, range) then checkTryMethodCallForNonThrowingViolation(project, opIdx: opIdx, readerFilePath: readerFilePath, range: range)
@@ -963,11 +969,7 @@ function checkCallForThrowsViolation(project Project, callee ByteArray, callCont
 	let bareCallee = String.from(callee)
 	let qualifiedCallee = qualifyCalleeForContext(project, bare: bareCallee, callContext: callContext, currentNamespace: funcNamespace, readerFilePath: readerFilePath)
 	let throwsType = try project.funcThrowsTypes.get(qualifiedCallee) otherwise return
-	let throwing = match throwsType 'kind'
-		none gives false
-		throwing gives true
-	end 'kind'
-	if not throwing 'nonThrowing'
+	if not throwsClauseIsThrowing(throwsType) 'nonThrowing'
 		return
 	end 'nonThrowing'
 	// Surface the unqualified call-site name so cross-namespace diagnostics
@@ -975,16 +977,34 @@ function checkCallForThrowsViolation(project Project, callee ByteArray, callCont
 	reportCompileError(project, code: ErrorCode.semanticThrowingFunctionRequiresTry, message: "throwing function requires try: '{bareCallee}'", line: range.line, column: range.column, filePath: readerFilePath)
 end 'checkCallForThrowsViolation'
 
+// E3057 for method calls: `recv.method()` where `method` throws but the call
+// site has no `try`. Like `checkTryMethodCallForNonThrowingViolation`, the
+// receiver's owning type is only known after resolution, so we key the throws
+// lookup off `resolvedCallees[opIdx]`. A site with no resolved callee
+// (unresolved receiver — already an upstream error) is left alone. The
+// diagnostic surfaces the bare method name the user typed.
+function checkMethodCallForThrowsViolation(project Project, opIdx OpIndex, result ByteArray, methodName ByteArray, readerFilePath FilePath, range SourceRange)
+	// The iterator-producing source of a `for ... in <expr>` loop is an
+	// implicit-try position (the loop routes its errors to loop exit), so skip
+	// it — mirrors the C# bootstrap's `_inTryContext` for-in silencing.
+	if project.forInSourceCallResults.contains(String.from(result)) 'forInSource'
+		return
+	end 'forInSource'
+	let resolved = try project.resolvedCallees.get(opIdx) otherwise return
+	let qualifiedCallee = stripCalleeMangling(resolved)
+	let throwsType = try project.funcThrowsTypes.get(qualifiedCallee) otherwise return
+	if not throwsClauseIsThrowing(throwsType) 'nonThrowing'
+		return
+	end 'nonThrowing'
+	reportCompileError(project, code: ErrorCode.semanticThrowingFunctionRequiresTry, message: "throwing function requires try: '{String.from(methodName)}'", line: range.line, column: range.column, filePath: readerFilePath)
+end 'checkMethodCallForThrowsViolation'
+
 // E3055: using `try` on a non-throwing function.
 // Only fires when the qualified callee is explicitly registered with an empty throws type.
 function checkTryCallForNonThrowingViolation(project Project, callee ByteArray, callContext CallContext, funcNamespace String, readerFilePath FilePath, range SourceRange)
 	let qualifiedCallee = qualifyCalleeForContext(project, bare: String.from(callee), callContext: callContext, currentNamespace: funcNamespace, readerFilePath: readerFilePath)
 	let throwsType = try project.funcThrowsTypes.get(qualifiedCallee) otherwise return
-	let throwing = match throwsType 'kind'
-		none gives false
-		throwing gives true
-	end 'kind'
-	if throwing 'isThrowing'
+	if throwsClauseIsThrowing(throwsType) 'isThrowing'
 		return
 	end 'isThrowing'
 	reportCompileError(project, code: ErrorCode.semanticTryRequiresThrowingFunction, message: "try requires a throwing function: '{qualifiedCallee}' does not throw'", line: range.line, column: range.column, filePath: readerFilePath)
@@ -1000,11 +1020,7 @@ function checkTryMethodCallForNonThrowingViolation(project Project, opIdx OpInde
 	let resolved = try project.resolvedCallees.get(opIdx) otherwise return
 	let qualifiedCallee = stripCalleeMangling(resolved)
 	let throwsType = try project.funcThrowsTypes.get(qualifiedCallee) otherwise return
-	let throwing = match throwsType 'kind'
-		none gives false
-		throwing gives true
-	end 'kind'
-	if throwing 'isThrowing'
+	if throwsClauseIsThrowing(throwsType) 'isThrowing'
 		return
 	end 'isThrowing'
 	reportCompileError(project, code: ErrorCode.semanticTryRequiresThrowingFunction, message: "try requires a throwing function: '{qualifiedCallee}' does not throw'", line: range.line, column: range.column, filePath: readerFilePath)

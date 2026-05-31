@@ -1,0 +1,46 @@
+// Test: managed-directory.not-exists
+function main() returns ExitCode
+	let exists = __ManagedDirectory.exists("nonexistent_dir_xyz_99999".managed)
+	if not exists 'check'
+		return 42
+	end 'check'
+	return 1
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.global_addr @__istr_0
+    %1 = mir.mov_imm 40 : i64
+    %2 = mir.call @mrt_alloc(%1)
+    mir.store %0, %2, 0 width: qword
+    %3 = mir.mov_imm 25 : i64
+    mir.store %3, %2, 8 width: qword
+    %4 = mir.mov_imm -2 : i64
+    mir.store %4, %2, 16 width: qword
+    %5 = mir.mov_imm 1 : i64
+    mir.store %5, %2, 24 width: qword
+    %6 = mir.mov_imm 0 : i64
+    mir.store %6, %2, 32 width: qword
+    %7 = mir.mov_imm 16 : i64
+    %8 = mir.call @mrt_alloc(%7)
+    mir.store %2, %8, 0 width: qword
+    %9 = mir.mov_imm 1 : i64
+    mir.store %9, %8, 8 width: qword
+    %10 = mir.load %8, 0 width: qword
+    %11 = mir.call @mrt_directory_exists(%10)
+    %13 = mir.mov_imm 1 : i64
+    %14 = mir.xor.i64 %11, %13
+    mir.cond_br %14 [then: check_0(), else: check_0.after()]
+  check_0:
+    %15 = mir.mov_imm 42 : i64
+    mir.ret %15
+  check_0.after:
+    %16 = mir.mov_imm 1 : i64
+    mir.ret %16
+  }
+}
+---

@@ -1,0 +1,45 @@
+// Test: managed-directory.open-search-throws
+function main() returns ExitCode
+	try __ManagedDirectory.openSearch("nonexistent_dir_xyz_88888_throws/*".managed) otherwise 'err'
+		return 42
+	end 'err'
+	return 0
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.global_addr @__istr_0
+    %1 = mir.mov_imm 40 : i64
+    %2 = mir.call @mrt_alloc(%1)
+    mir.store %0, %2, 0 width: qword
+    %3 = mir.mov_imm 34 : i64
+    mir.store %3, %2, 8 width: qword
+    %4 = mir.mov_imm -2 : i64
+    mir.store %4, %2, 16 width: qword
+    %5 = mir.mov_imm 1 : i64
+    mir.store %5, %2, 24 width: qword
+    %6 = mir.mov_imm 0 : i64
+    mir.store %6, %2, 32 width: qword
+    %7 = mir.mov_imm 16 : i64
+    %8 = mir.call @mrt_alloc(%7)
+    mir.store %2, %8, 0 width: qword
+    %9 = mir.mov_imm 1 : i64
+    mir.store %9, %8, 8 width: qword
+    %10 = mir.load %8, 0 width: qword
+    %11, %12 = mir.try_call @mrt_directory_open_search(%10)
+    %13 = mir.mov_imm 0 : i64
+    %14 = mir.cmp ne, %12, %13
+    mir.cond_br %14 [then: try_0.otherwise(), else: try_0.merge()]
+  try_0.otherwise:
+    %16 = mir.mov_imm 42 : i64
+    mir.ret %16
+  try_0.merge:
+    %18 = mir.mov_imm 0 : i64
+    mir.ret %18
+  }
+}
+---

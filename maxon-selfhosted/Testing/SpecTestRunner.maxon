@@ -268,12 +268,23 @@ let whitelist = ["basics",
 	// pure string computation — no async / socket / subprocess runtime — so it
 	// belongs with the enabled Tier 3 specs.
 	"url",
+	// "managed-directory" is categorized Tier 4, but the `__ManagedDirectory`
+	// builtin is a synchronous RAII search handle — its lowering + `mrt_directory_*`
+	// runtime are fully implemented (no async / socket runtime needed).
+	"managed-directory",
+	// "managed-file" is categorized Tier 4, but the `__ManagedFile` builtin is a
+	// synchronous RAII file handle (no async runtime needed). `__ManagedFile` is
+	// now a refcounted `mm_alloc` handle whose `__destruct___ManagedFile` closes
+	// its fd on the final decref, and the Maxon→Std lowering emits scope-exit
+	// `mm_decref` for drop-tracked locals + a synthesized destructor for structs
+	// holding one — so `managed-file.auto-close` (RAII close-on-drop) passes.
+	// See `maxonTypeIsDropTracked` / `synthesizeStructDestructors` in
+	// LowerMaxonToStd and `__managed_file_wrap` in runtime.std.
+	"managed-file",
 
 	// --- Tier 4: async / IO / network / subprocess (need real runtime) ---
 	// "sleep",
 	// "subprocess",
-	// "managed-file",
-	// "managed-directory",
 	// "managed-socket",
 	// "tcp-client",
 	// "async-await",

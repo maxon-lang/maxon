@@ -33,6 +33,17 @@ export function throwsClauseName(clause ThrowsClause) returns String throws Thro
 	end 'k'
 end 'throwsClauseName'
 
+// True when the clause carries an error type (`throwing(name)`), false for
+// `none`. Lifted out so the throws/non-throws decision across SemanticCheck's
+// E3057/E3055 lints and LowerMaxonToStd's builtin-method registration shares
+// one classifier instead of re-spelling the two-arm `match` at each site.
+export function throwsClauseIsThrowing(clause ThrowsClause) returns bool
+	return match clause 'k'
+		none gives false
+		throwing gives true
+	end 'k'
+end 'throwsClauseIsThrowing'
+
 export typealias ThrowsClauseArray = Array with ThrowsClause
 
 // Kind of ABI companion slot a parameter carries. A function-typed param

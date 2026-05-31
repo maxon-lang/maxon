@@ -1,0 +1,72 @@
+// Test: managed-file.open-read-not-found-variant
+function main() returns ExitCode
+	var result = 0
+	try __ManagedFile.openRead("nonexistent_phaseB_open_xyz.txt".managed) otherwise (e) 'h'
+		match e 'k'
+			notFound then result = 42
+			default panic("expected notFound")
+		end 'k'
+	end 'h'
+	return result
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %2 = mir.global_addr @__istr_0
+    %3 = mir.mov_imm 40 : i64
+    %4 = mir.call @mrt_alloc(%3)
+    mir.store %2, %4, 0 width: qword
+    %5 = mir.mov_imm 31 : i64
+    mir.store %5, %4, 8 width: qword
+    %6 = mir.mov_imm -2 : i64
+    mir.store %6, %4, 16 width: qword
+    %7 = mir.mov_imm 1 : i64
+    mir.store %7, %4, 24 width: qword
+    mir.store %0, %4, 32 width: qword
+    %9 = mir.mov_imm 16 : i64
+    %10 = mir.call @mrt_alloc(%9)
+    mir.store %4, %10, 0 width: qword
+    %11 = mir.mov_imm 1 : i64
+    mir.store %11, %10, 8 width: qword
+    %12 = mir.load %10, 0 width: qword
+    %13, %14 = mir.try_call @mrt_file_open_read(%12)
+    %15 = mir.call @__managed_file_wrap(%13)
+    %17 = mir.cmp ne, %14, %0
+    mir.cond_br %17 [then: try_0.otherwise(), else: try_0.ok()]
+  try_0.otherwise:
+    %19 = mir.mov_imm 1 : i64
+    %20 = mir.sub.i64 %14, %19
+    %23 = mir.cmp eq, %20, %0
+    mir.cond_br %23 [then: k_0.case0(), else: k_0.case1()]
+  try_0.ok:
+    %25 = mir.call @mrt_decref_if_nonnull(%0)
+    mir.br try_0.merge(%0, %15)
+  k_0.merge:
+    %28 = mir.call @mrt_decref_if_nonnull(%0)
+    mir.br try_0.merge(%29, %0)
+  k_0.case0:
+    %29 = mir.mov_imm 42 : i64
+    mir.br k_0.merge()
+  k_0.case1:
+    %30 = mir.global_addr @__panic_msg_f1959eff4cdd24d3
+    %31 = mir.call @mrt_panic(%30)
+    %34 = mir.call @mrt_decref_if_nonnull(%0)
+    mir.ret %0
+  try_0.merge:
+    %38 = mir.call @mrt_decref_if_nonnull(%40)
+    %41 = mir.mov_imm 125 : i64
+    %42 = mir.cmp ugt, %39, %41
+    mir.cond_br %42 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %43 = mir.global_addr @__panic_msg_b96fe6332f3d63bb
+    %44 = mir.call @mrt_panic(%43)
+  __range_ok_0:
+    mir.ret %39
+  }
+}
+---

@@ -8536,6 +8536,14 @@ export type Parser
 
 		let sourceValue = exprName(sourceExpr)
 
+		// The source expression is an implicit-try position: if it ends in a
+		// throwing iterator-producing call (e.g. `(0 upto 3).withIterator()`),
+		// the loop owns that call's error context, so E3057 must not fire for
+		// it. Record its result name for `checkMethodCallForThrowsViolation` to
+		// skip. (Matches the C# bootstrap silencing the for-in iterable via
+		// `_inTryContext`.)
+		project.forInSourceCallResults.insert(String.from(sourceValue))
+
 		// Allocate fresh scope. The iter slot holds the iterator value
 		// (returned by createIterator); the loop variable holds each
 		// element (returned by current()). The iter slot lives outside
@@ -12217,12 +12225,29 @@ export type Parser
 	// op carrying the type name and per-field fieldStore ops carrying the
 	// field name. Lowering looks up the byte size, validates field names,
 	// and computes offsets.
+	// Names of the compiler builtin managed-handle types that user code may not
+	// construct with a struct literal (E3072). Mirrors the set guarded in the
+	// C# bootstrap (maxon-sharp Compiler/2-Parser.cs:16302-16303).
+	function isBuiltinManagedTypeName(typeName String) returns bool
+		return typeName == "__ManagedMemory" or typeName == "__ManagedMemoryCursor" or typeName == "__ManagedFile" or typeName == "__ManagedDirectory" or typeName == "__ManagedSocket" or typeName == "__ManagedList" or typeName == "__ManagedListNode"
+	end 'isBuiltinManagedTypeName'
+
 	function parseStructLiteral(block IrBlock, typeName String, typeToken Token, typeNameConsumed bool = false) returns ExprResult throws ParserError
 		if not typeNameConsumed 'consumeTypeName'
 			try eat(TokenKind.identifier)
 		end 'consumeTypeName'
 		try eat(TokenKind.leftBrace)
 		try skipNewlines()
+
+		// Compiler builtin managed types carry an opaque runtime handle and must
+		// be obtained through their static factories (`__ManagedFile.openRead`,
+		// `__ManagedMemory.create`, ...), never constructed directly. Report
+		// E3072 but keep parsing the brace body so the rest of the file still
+		// type-resolves (mirrors the C# bootstrap's check). See
+		// `isBuiltinManagedTypeName`.
+		if isBuiltinManagedTypeName(typeName) 'builtinConstruction'
+			reportCompileError(project, code: ErrorCode.semanticBuiltinTypeConstruction, message: "'{typeName}' is a compiler builtin type and cannot be constructed directly", line: typeToken.line, column: typeToken.column, filePath: filePath)
+		end 'builtinConstruction'
 
 		// Per-field expressions may shift `currentBlock` to a fresh merge
 		// block — e.g. when a field value is `try f() otherwise panic(...)`,

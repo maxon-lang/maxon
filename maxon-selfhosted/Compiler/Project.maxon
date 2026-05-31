@@ -483,6 +483,16 @@ export type Project
 	export var discardedBareCallResults as DiscardedCallResultSet
 	export var discardedLetCallResults as DiscardedCallResultSet
 
+	// Result names of methodCall ops that are the source expression of a
+	// `for ... in <expr> 'label'` loop. The for-in construct is an implicit-try
+	// position for its iterator-producing source (it already routes the loop's
+	// createIterator/advance errors to loop exit), so calling a throwing
+	// iterator method there — e.g. `for (i, v) in (0 upto 3).withIterator()` —
+	// must NOT trip E3057. Populated by `parseForInIterable`; read by
+	// `checkMethodCallForThrowsViolation`. Mirrors the C# bootstrap's
+	// `_inTryContext` silencing of the for-in iterable expression.
+	export var forInSourceCallResults as DiscardedCallResultSet
+
 	// Keyed `{callerName}::{resultName}` for each call whose argument types
 	// `checkCallArgumentTypes` flagged as a mismatch (E3005). The discarded-
 	// result lint consults this to suppress its E3064/E3065 on the same call —
@@ -726,6 +736,7 @@ export type Project
 			tupleAllocGids: TupleAllocGidMap.create(),
 			discardedBareCallResults: DiscardedCallResultSet.create(),
 			discardedLetCallResults: DiscardedCallResultSet.create(),
+			forInSourceCallResults: DiscardedCallResultSet.create(),
 			callsWithArgErrors: DiscardedCallResultSet.create(),
 			paramMutatingFunctions: DiscardedCallResultSet.create(),
 			rootPath: rootPath,

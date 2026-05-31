@@ -168,7 +168,7 @@ end 'registerGlobalVarsForDataSection'
 // aliases) get MaxonType.integer as a benign filler — consumers
 // (InjectDrops C1.b) only key off MaxonType.typeParameter, which never
 // appears for those slots.
-function collectSlotMaxonTypes(func IrFunction, maxonModule MaxonModule) returns MaxonTypeArray
+function collectSlotMaxonTypes(func IrFunction, maxonModule MaxonModule, project Project) returns MaxonTypeArray
 	var result = MaxonTypeArray.create()
 	let nextSlot = func.scope.nextSlot
 	if nextSlot == 0 'noSlots'
@@ -209,20 +209,33 @@ function collectSlotMaxonTypes(func IrFunction, maxonModule MaxonModule) returns
 		let block = try maxonModule.blocks.get(blockRef) otherwise panic("collectSlotMaxonTypes: blockRef {blockRef} OOB (count={maxonModule.blocks.count()})")
 		for opIdx in block.opRefs 'eachOp'
 			let op = try maxonModule.ops.get(opIdx) otherwise continue
-			recordSlotTypeFromOp(op, slotMaxonTypes: result, nextSlot: nextSlot)
+			recordSlotTypeFromOp(op, slotMaxonTypes: result, nextSlot: nextSlot, project: project)
 		end 'eachOp'
 	end 'eachBlock'
 	return result
 end 'collectSlotMaxonTypes'
 
-function recordSlotTypeFromOp(op MaxonOp, slotMaxonTypes MaxonTypeArray, nextSlot VarSlot)
-	if op.name != "varDecl" 'notVarDecl'
+function recordSlotTypeFromOp(op MaxonOp, slotMaxonTypes MaxonTypeArray, nextSlot VarSlot, project Project)
+	if op.name == "varDecl" 'isVarDecl'
+		match op 'd'
+			varDecl(slotId, _, slotType, _) then recordSlotType(slotMaxonTypes, slotId: slotId, slotType: slotType, nextSlot: nextSlot)
+			default panic("recordSlotTypeFromOp: op.name == varDecl but match did not extract")
+		end 'd'
 		return
-	end 'notVarDecl'
-	match op 'check'
-		varDecl(slotId, _, slotType, _) then recordSlotType(slotMaxonTypes, slotId: slotId, slotType: slotType, nextSlot: nextSlot)
-		default panic("recordSlotTypeFromOp: op.name == varDecl but match did not extract")
-	end 'check'
+	end 'isVarDecl'
+	// Drop-tracking: a `varDecl` may declare a slot with a placeholder type
+	// (the try-result temp is declared `int` but actually holds a
+	// __ManagedFile). A `varLoad` carries the slot's real value type, so
+	// upgrade the recorded type to a drop-tracked one whenever a load reveals
+	// it — this is what makes the temp get zero-init'd and decref'd at scope
+	// exit, releasing the producer reference the let-binding copied from.
+	if op.name == "varLoad" 'isVarLoad'
+		match op 'l'
+			varLoad(_, slotId, slotType, _) then upgradeSlotTypeIfDropTracked(slotMaxonTypes, slotId: slotId, slotType: slotType, nextSlot: nextSlot, project: project)
+			default panic("recordSlotTypeFromOp: op.name == varLoad but match did not extract")
+		end 'l'
+		return
+	end 'isVarLoad'
 end 'recordSlotTypeFromOp'
 
 function recordSlotType(slotMaxonTypes MaxonTypeArray, slotId VarSlot, slotType MaxonType, nextSlot VarSlot)
@@ -231,6 +244,25 @@ function recordSlotType(slotMaxonTypes MaxonTypeArray, slotId VarSlot, slotType 
 	end 'oob'
 	try slotMaxonTypes.set(slotId, value: slotType) otherwise panic("recordSlotType: slotMaxonTypes.set OOB despite slotId < nextSlot")
 end 'recordSlotType'
+
+// Upgrade a slot's recorded type to `slotType` only when `slotType` is
+// drop-tracked and the slot is not already recorded as drop-tracked. Never
+// downgrades — a slot legitimately declared with a drop-tracked type keeps
+// it, and a placeholder (`int`) declaration is promoted the first time a load
+// reveals the slot holds a __ManagedFile (or a struct containing one).
+function upgradeSlotTypeIfDropTracked(slotMaxonTypes MaxonTypeArray, slotId VarSlot, slotType MaxonType, nextSlot VarSlot, project Project)
+	if slotId >= nextSlot 'oob'
+		return
+	end 'oob'
+	if not maxonTypeIsDropTracked(project, t: slotType) 'notTracked'
+		return
+	end 'notTracked'
+	let current = try slotMaxonTypes.get(slotId) otherwise return
+	if maxonTypeIsDropTracked(project, t: current) 'alreadyTracked'
+		return
+	end 'alreadyTracked'
+	try slotMaxonTypes.set(slotId, value: slotType) otherwise panic("upgradeSlotTypeIfDropTracked: slotMaxonTypes.set OOB despite slotId < nextSlot")
+end 'upgradeSlotTypeIfDropTracked'
 
 // C1.c/d: walk the function's recorded slot MaxonTypes and, for every
 // interface-typed slot, ensure a witness-pointer companion slot exists.
@@ -1035,11 +1067,7 @@ function registerManagedBuiltinMethod(project Project, receiverName String, meth
 	// parser's `parseTryExpression` falls back to `ThrowsClause.none` and
 	// the bound `e` ends up typed as `integer`, which then trips E3005
 	// when matched against enum cases.
-	let hasThrows = match throwsTypeName 'kind'
-		none gives false
-		throwing gives true
-	end 'kind'
-	if hasThrows 'recordThrows'
+	if throwsClauseIsThrowing(throwsTypeName) 'recordThrows'
 		try project.funcThrowsTypes.insert(qualifiedName, value: throwsTypeName) otherwise ignore
 	end 'recordThrows'
 	project.methodNameIndex.record(qualifiedName)
@@ -1234,8 +1262,8 @@ function registerManagedFileErrorEnum(project Project)
 	registerManagedErrorEnum(project, typeName: "__ManagedFileError", caseNames: names)
 end 'registerManagedFileErrorEnum'
 
-function registerManagedFileMethod(project Project, methodName String, paramNames StringArray, paramTypes MaxonTypeArray, returnType MaxonReturnType)
-	registerManagedBuiltinMethod(project, receiverName: "__ManagedFile", methodName: methodName, paramNames: paramNames, paramTypes: paramTypes, returnType: returnType)
+function registerManagedFileMethod(project Project, methodName String, paramNames StringArray, paramTypes MaxonTypeArray, returnType MaxonReturnType, throwsTypeName ThrowsClause = ThrowsClause.none)
+	registerManagedBuiltinMethod(project, receiverName: "__ManagedFile", methodName: methodName, paramNames: paramNames, paramTypes: paramTypes, returnType: returnType, throwsTypeName: throwsTypeName)
 end 'registerManagedFileMethod'
 
 function registerManagedFileMethods(project Project)
@@ -1244,30 +1272,35 @@ function registerManagedFileMethods(project Project)
 	let intType = MaxonType.integer
 	let intReturn = MaxonReturnType.value(intType)
 	let mfReturn = MaxonReturnType.value(mfType)
+	// Throwing `__ManagedFile.*` methods report `__ManagedFileError`. Recording
+	// this on the signature is what lets `try file.size() otherwise (e)` resolve
+	// `e` to the enum type (without it the bound `e` is typed `integer` and a
+	// `match e` against the error cases trips E3005).
+	let fileThrows = ThrowsClause.throwing("__ManagedFileError")
 
 	// Instance methods (signatures mirror maxon-sharp Compiler/2-Parser.cs:1152-1159).
 	// size(self) returns i64 throws __ManagedFileError
-	registerManagedFileMethod(project, methodName: "size", paramNames: mmParamNames1("self"), paramTypes: mmParamTypes1(mfType), returnType: intReturn)
+	registerManagedFileMethod(project, methodName: "size", paramNames: mmParamNames1("self"), paramTypes: mmParamTypes1(mfType), returnType: intReturn, throwsTypeName: fileThrows)
 	// read(self, managed, size) returns i64 throws __ManagedFileError
-	registerManagedFileMethod(project, methodName: "read", paramNames: mmParamNames3("self", second: "managed", third: "size"), paramTypes: mmParamTypes3(mfType, second: mmType, third: intType), returnType: intReturn)
+	registerManagedFileMethod(project, methodName: "read", paramNames: mmParamNames3("self", second: "managed", third: "size"), paramTypes: mmParamTypes3(mfType, second: mmType, third: intType), returnType: intReturn, throwsTypeName: fileThrows)
 	// write(self, managed) returns i64 throws __ManagedFileError
-	registerManagedFileMethod(project, methodName: "write", paramNames: mmParamNames2("self", second: "managed"), paramTypes: mmParamTypes2(mfType, second: mmType), returnType: intReturn)
+	registerManagedFileMethod(project, methodName: "write", paramNames: mmParamNames2("self", second: "managed"), paramTypes: mmParamTypes2(mfType, second: mmType), returnType: intReturn, throwsTypeName: fileThrows)
 	// close(self) returns void
 	registerManagedFileMethod(project, methodName: "close", paramNames: mmParamNames1("self"), paramTypes: mmParamTypes1(mfType), returnType: MaxonReturnType.void)
 
 	// Static methods (signatures mirror maxon-sharp Compiler/2-Parser.cs:1161-1176).
 	// static openRead(path) returns __ManagedFile throws __ManagedFileError
-	registerManagedFileMethod(project, methodName: "openRead", paramNames: mmParamNames1("path"), paramTypes: mmParamTypes1(mmType), returnType: mfReturn)
+	registerManagedFileMethod(project, methodName: "openRead", paramNames: mmParamNames1("path"), paramTypes: mmParamTypes1(mmType), returnType: mfReturn, throwsTypeName: fileThrows)
 	// static openWrite(path) returns __ManagedFile throws __ManagedFileError
-	registerManagedFileMethod(project, methodName: "openWrite", paramNames: mmParamNames1("path"), paramTypes: mmParamTypes1(mmType), returnType: mfReturn)
+	registerManagedFileMethod(project, methodName: "openWrite", paramNames: mmParamNames1("path"), paramTypes: mmParamTypes1(mmType), returnType: mfReturn, throwsTypeName: fileThrows)
 	// static openWriteExecutable(path) returns __ManagedFile throws __ManagedFileError
-	registerManagedFileMethod(project, methodName: "openWriteExecutable", paramNames: mmParamNames1("path"), paramTypes: mmParamTypes1(mmType), returnType: mfReturn)
+	registerManagedFileMethod(project, methodName: "openWriteExecutable", paramNames: mmParamNames1("path"), paramTypes: mmParamTypes1(mmType), returnType: mfReturn, throwsTypeName: fileThrows)
 	// static exists(path) returns i64
 	registerManagedFileMethod(project, methodName: "exists", paramNames: mmParamNames1("path"), paramTypes: mmParamTypes1(mmType), returnType: intReturn)
 	// static delete(path) returns void throws __ManagedFileError
-	registerManagedFileMethod(project, methodName: "delete", paramNames: mmParamNames1("path"), paramTypes: mmParamTypes1(mmType), returnType: MaxonReturnType.void)
+	registerManagedFileMethod(project, methodName: "delete", paramNames: mmParamNames1("path"), paramTypes: mmParamTypes1(mmType), returnType: MaxonReturnType.void, throwsTypeName: fileThrows)
 	// static stat(path) returns i64 (buffer ptr) throws __ManagedFileError
-	registerManagedFileMethod(project, methodName: "stat", paramNames: mmParamNames1("path"), paramTypes: mmParamTypes1(mmType), returnType: intReturn)
+	registerManagedFileMethod(project, methodName: "stat", paramNames: mmParamNames1("path"), paramTypes: mmParamTypes1(mmType), returnType: intReturn, throwsTypeName: fileThrows)
 	// static statField(buffer, index) returns i64
 	registerManagedFileMethod(project, methodName: "statField", paramNames: mmParamNames2("buffer", second: "index"), paramTypes: mmParamTypes2(intType, second: intType), returnType: intReturn)
 	// static statFree(buffer) returns void
@@ -1309,8 +1342,8 @@ function registerManagedDirectoryErrorEnum(project Project)
 	registerManagedErrorEnum(project, typeName: "__ManagedDirectoryError", caseNames: names)
 end 'registerManagedDirectoryErrorEnum'
 
-function registerManagedDirectoryMethod(project Project, methodName String, paramNames StringArray, paramTypes MaxonTypeArray, returnType MaxonReturnType)
-	registerManagedBuiltinMethod(project, receiverName: "__ManagedDirectory", methodName: methodName, paramNames: paramNames, paramTypes: paramTypes, returnType: returnType)
+function registerManagedDirectoryMethod(project Project, methodName String, paramNames StringArray, paramTypes MaxonTypeArray, returnType MaxonReturnType, throwsTypeName ThrowsClause = ThrowsClause.none)
+	registerManagedBuiltinMethod(project, receiverName: "__ManagedDirectory", methodName: methodName, paramNames: paramNames, paramTypes: paramTypes, returnType: returnType, throwsTypeName: throwsTypeName)
 end 'registerManagedDirectoryMethod'
 
 function registerManagedDirectoryMethods(project Project)
@@ -1320,24 +1353,36 @@ function registerManagedDirectoryMethods(project Project)
 	let intReturn = MaxonReturnType.value(intType)
 	let mdReturn = MaxonReturnType.value(mdType)
 	let mmReturn = MaxonReturnType.value(mmType)
+	// `exists` answers a yes/no question — its documented contract is "returns
+	// true if the path is an existing directory". Typing it `bool` (rather than
+	// the raw i64 the runtime returns) makes `if not Directory.exists(...)`
+	// apply *logical* negation. `not` on a plain int is bitwise complement
+	// (`not 1` == -2, always truthy — see `bitwise-operators`), which would make
+	// the common `if not exists ... create` guard attempt the create even when
+	// the directory already exists.
+	let boolReturn = MaxonReturnType.value(MaxonType.boolean)
+	// Throwing `__ManagedDirectory.*` methods report `__ManagedDirectoryError`;
+	// recording it lets `try ... otherwise (e)` resolve `e` to the enum (see the
+	// `__ManagedFileError` note above).
+	let dirThrows = ThrowsClause.throwing("__ManagedDirectoryError")
 
 	// Instance methods (signatures mirror maxon-sharp Compiler/2-Parser.cs:1185-1190).
 	// filename(self) returns __ManagedMemory
 	registerManagedDirectoryMethod(project, methodName: "filename", paramNames: mmParamNames1("self"), paramTypes: mmParamTypes1(mdType), returnType: mmReturn)
 	// next(self) returns i64 throws __ManagedDirectoryError
-	registerManagedDirectoryMethod(project, methodName: "next", paramNames: mmParamNames1("self"), paramTypes: mmParamTypes1(mdType), returnType: intReturn)
+	registerManagedDirectoryMethod(project, methodName: "next", paramNames: mmParamNames1("self"), paramTypes: mmParamTypes1(mdType), returnType: intReturn, throwsTypeName: dirThrows)
 	// close(self) returns void
 	registerManagedDirectoryMethod(project, methodName: "close", paramNames: mmParamNames1("self"), paramTypes: mmParamTypes1(mdType), returnType: MaxonReturnType.void)
 
 	// Static methods (signatures mirror maxon-sharp Compiler/2-Parser.cs:1192-1199).
 	// static openSearch(path) returns __ManagedDirectory throws __ManagedDirectoryError
-	registerManagedDirectoryMethod(project, methodName: "openSearch", paramNames: mmParamNames1("path"), paramTypes: mmParamTypes1(mmType), returnType: mdReturn)
-	// static exists(path) returns i64
-	registerManagedDirectoryMethod(project, methodName: "exists", paramNames: mmParamNames1("path"), paramTypes: mmParamTypes1(mmType), returnType: intReturn)
+	registerManagedDirectoryMethod(project, methodName: "openSearch", paramNames: mmParamNames1("path"), paramTypes: mmParamTypes1(mmType), returnType: mdReturn, throwsTypeName: dirThrows)
+	// static exists(path) returns bool
+	registerManagedDirectoryMethod(project, methodName: "exists", paramNames: mmParamNames1("path"), paramTypes: mmParamTypes1(mmType), returnType: boolReturn)
 	// static create(path) returns void throws __ManagedDirectoryError
-	registerManagedDirectoryMethod(project, methodName: "create", paramNames: mmParamNames1("path"), paramTypes: mmParamTypes1(mmType), returnType: MaxonReturnType.void)
+	registerManagedDirectoryMethod(project, methodName: "create", paramNames: mmParamNames1("path"), paramTypes: mmParamTypes1(mmType), returnType: MaxonReturnType.void, throwsTypeName: dirThrows)
 	// static currentPath() returns __ManagedMemory throws __ManagedDirectoryError
-	registerManagedDirectoryMethod(project, methodName: "currentPath", paramNames: StringArray.create(), paramTypes: MaxonTypeArray.create(), returnType: mmReturn)
+	registerManagedDirectoryMethod(project, methodName: "currentPath", paramNames: StringArray.create(), paramTypes: MaxonTypeArray.create(), returnType: mmReturn, throwsTypeName: dirThrows)
 end 'registerManagedDirectoryMethods'
 
 // Phase C: register the `__ManagedList` builtin struct, the `__ManagedListError`
@@ -1751,6 +1796,64 @@ function namedTypeIsManagedRef(project Project, id TypeNameId) returns bool
 	return false
 end 'namedTypeIsManagedRef'
 
+// A type is "drop-tracked" when the lowering must emit refcount cleanup
+// (incref-on-copy, decref-at-scope-exit, a synthesized destructor) for it.
+// Deliberately narrow: the `__ManagedFile` builtin handle (an mm_alloc'd
+// 8-byte block whose `__destruct___ManagedFile` closes its fd on the final
+// decref — see runtime.std) and any user struct that transitively holds a
+// drop-tracked field. String/Array/__ManagedMemory and unions keep their
+// existing paths (unions already carry their own destructor machinery; the
+// rest currently leak), so widening this predicate is the lever for bringing
+// more types under RAII later. Mirrors `maxonTypeIsManagedRef`'s arm shape.
+function maxonTypeIsDropTracked(project Project, t MaxonType) returns bool
+	var visiting = DropTrackVisitSet.create()
+	return maxonTypeIsDropTrackedRec(project, t: t, visiting: visiting)
+end 'maxonTypeIsDropTracked'
+
+// True for `__ManagedFile` itself and for any user struct that transitively
+// holds a drop-tracked field. The `visiting` set breaks self-referential
+// struct cycles (a node holding a pointer to its own type returns false on
+// the recursive visit rather than looping forever).
+export function structNameIsDropTracked(project Project, structName String) returns bool
+	var visiting = DropTrackVisitSet.create()
+	return structNameIsDropTrackedRec(project, structName: structName, visiting: visiting)
+end 'structNameIsDropTracked'
+
+typealias DropTrackVisitSet = Set with String
+
+function structNameIsDropTrackedRec(project Project, structName String, visiting DropTrackVisitSet) returns bool
+	if structName == "__ManagedFile" 'isHandle'
+		return true
+	end 'isHandle'
+	if visiting.contains(structName) 'cycle'
+		return false
+	end 'cycle'
+	let structType = try project.structTypes.get(structName) otherwise return false
+	visiting.insert(structName)
+	for field in structType.fields 'eachField'
+		if maxonTypeIsDropTrackedRec(project, t: field.fieldType, visiting: visiting) 'fieldTracked'
+			return true
+		end 'fieldTracked'
+	end 'eachField'
+	return false
+end 'structNameIsDropTrackedRec'
+
+function maxonTypeIsDropTrackedRec(project Project, t MaxonType, visiting DropTrackVisitSet) returns bool
+	return match t 'classify'
+		boolean gives false
+		integer gives false
+		float gives false
+		string gives false
+		function gives false
+		unresolved gives false
+		typeParameter gives false
+		interface gives false
+		named(id) gives structNameIsDropTrackedRec(project, structName: project.typeNames.get(id), visiting: visiting)
+		genericInstance gives false
+		constInt to opaquePointer gives false
+	end 'classify'
+end 'maxonTypeIsDropTrackedRec'
+
 // Stage E (closures): per-function map keyed on a function-pointer
 // ValueId, returning the matching env-pointer ValueId (or 0 for "no env"
 // — the indirectCall lowering still emits the env arg, with 0 standing in
@@ -2016,6 +2119,14 @@ type MaxonToStdLowering
 	// can rebuild the thunks deterministically at the tail of `lower()`.
 	var pendingFnRefThunks as EnumNameHelperSet
 	var pendingFnRefThunkTargets as StringArray
+	// Drop-tracking (RAII for the __ManagedFile handle family + structs that
+	// hold one): per-ValueId flag marking a value as an "alias" — produced by
+	// a slot/field load rather than freshly minted by a call/constructor. A
+	// store of an alias into a drop-tracked slot or field must `mm_incref`
+	// (the destination becomes an additional owner); a store of a fresh value
+	// is a move (the producer's reference transfers, no incref). Reset per
+	// function in `lower()`. See `maxonTypeIsDropTracked`.
+	var aliasValues as BoolArray
 
 	export static function create(pipeline PassPipeline, maxonModule MaxonModule, project Project, globalData GlobalDataTable) returns MaxonToStdLowering
 		return Self{
@@ -2049,7 +2160,8 @@ type MaxonToStdLowering
 			pendingEnumFnRawHelpers: EnumNameHelperSet.create(),
 			pendingEnumRawStringHelpers: EnumNameHelperSet.create(),
 			pendingFnRefThunks: EnumNameHelperSet.create(),
-			pendingFnRefThunkTargets: StringArray.create()
+			pendingFnRefThunkTargets: StringArray.create(),
+			aliasValues: BoolArray.create()
 		}
 	end 'create'
 
@@ -2095,6 +2207,128 @@ type MaxonToStdLowering
 		self.setIsFloat(promId, isFloat: true)
 		return promId
 	end 'promoteToFloat'
+
+	// --- Drop-tracking (RAII for __ManagedFile + containing structs) -------
+
+	// Mark `id` as an alias (it was produced by a slot/field load, so a store
+	// of it into a drop-tracked slot/field must incref). Fresh values (call /
+	// constructor results) are NOT marked, so they move on store.
+	function markAliasValue(id ValueId)
+		while self.aliasValues.count() <= id 'grow'
+			self.aliasValues.push(false)
+		end 'grow'
+		try self.aliasValues.set(id, value: true) otherwise panic("invariant: aliasValues.set OOB")
+	end 'markAliasValue'
+
+	function isAliasValue(id ValueId) returns bool
+		return try self.aliasValues.get(id) otherwise false
+	end 'isAliasValue'
+
+	// `__destruct_<StructName>` — the per-struct destructor synthesized by
+	// `synthesizeStructDestructors`. Same `__destruct_*` shape as the union
+	// and runtime destructors so `mm_alloc`/`mm_free`'s indirect-call ABI and
+	// the wasm funcAddr fixups treat every destructor uniformly.
+	function structDestructorSymbol(structName String) returns String
+		return "__destruct_{structName}"
+	end 'structDestructorSymbol'
+
+	// Emit `mm_incref(valueId)` when `valueType` is drop-tracked AND `valueId`
+	// is an alias (a loaded copy). The destination of the surrounding store
+	// thereby owns its own reference, balanced by the destination's
+	// scope-exit decref (locals) or its struct destructor (fields). Fresh
+	// values move instead — their producer reference transfers to the
+	// destination — so no incref is emitted and they are not double-counted.
+	function increfIfDropTrackedAlias(valueId ValueId, refType MaxonType, dstBlock IrBlock)
+		if not maxonTypeIsDropTracked(self.project, t: refType) 'notTracked'
+			return
+		end 'notTracked'
+		if not self.isAliasValue(valueId) 'isFresh'
+			return
+		end 'isFresh'
+		var argIds = ValueIdArray.create()
+		argIds.push(valueId)
+		let increfRetId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(increfRetId, callee: "stdlib.__mm_incref", argIds: argIds)))
+		self.setValueType(increfRetId, t: MaxonType.integer)
+	end 'increfIfDropTrackedAlias'
+
+	// Emit `mrt_decref_if_nonnull(valueId)` — used to release the value a
+	// drop-tracked slot previously owned before it is overwritten.
+	function emitDecrefIfNonnull(valueId ValueId, dstBlock IrBlock)
+		var argIds = ValueIdArray.create()
+		argIds.push(valueId)
+		let decrefRetId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(decrefRetId, callee: "mrt_decref_if_nonnull", argIds: argIds)))
+		self.setValueType(decrefRetId, t: MaxonType.integer)
+	end 'emitDecrefIfNonnull'
+
+	// Store `valueId` into `slotId`, emitting RAII refcount maintenance when
+	// the slot's declared type is drop-tracked: incref an aliased new value
+	// (it gains a new owner — the slot), store it, then decref whatever the
+	// slot previously owned. Zero-initialized slots decref a null (no-op).
+	// incref-new precedes decref-old so a self-assign never observes the live
+	// target at refcount zero — mirrors the union payload-store protocol.
+	// Non-drop-tracked slots emit a plain store (unchanged behavior).
+	function emitSlotStore(slotId VarSlot, valueId ValueId, slotType MaxonType, dstBlock IrBlock)
+		if not maxonTypeIsDropTracked(self.project, t: slotType) 'plain'
+			self.stdModule.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.storeSlot(slotId, valueId: valueId)))
+			return
+		end 'plain'
+		let oldId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.loadSlot(oldId, slotId: slotId)))
+		self.setValueType(oldId, t: slotType)
+		self.increfIfDropTrackedAlias(valueId, refType: slotType, dstBlock: dstBlock)
+		self.stdModule.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.storeSlot(slotId, valueId: valueId)))
+		self.emitDecrefIfNonnull(oldId, dstBlock: dstBlock)
+	end 'emitSlotStore'
+
+	// Decref every drop-tracked LOCAL slot of the current function before a
+	// return/throw. Local slots are zero-initialized at entry
+	// (`zeroInitDropTrackedSlots`) and decref'd through the null-guarded
+	// `mrt_decref_if_nonnull`, so slots not assigned on this exit path are
+	// safely skipped. Param slots (indices < paramCount) are borrowed from
+	// the caller and never dropped here. A returned alias value is incref'd
+	// by the caller (`emitRetOrErrorReturn`) before these drops run, so
+	// decreffing the slot that still holds it nets out to "ownership
+	// transferred to the caller".
+	function emitScopeExitDrops(dstBlock IrBlock)
+		let slotCount = self.currentMaxonFunc.slotMaxonTypes.count()
+		let paramCount = self.currentMaxonFunc.paramCount
+		for slotId in paramCount upto slotCount 'eachSlot'
+			let slotType = try self.currentMaxonFunc.slotMaxonTypes.get(slotId) otherwise continue
+			if not maxonTypeIsDropTracked(self.project, t: slotType) 'notTracked'
+				continue
+			end 'notTracked'
+			let loadId = allocValueId(self.funcIdRef)
+			self.stdModule.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.loadSlot(loadId, slotId: slotId as VarSlot)))
+			self.setValueType(loadId, t: slotType)
+			var argIds = ValueIdArray.create()
+			argIds.push(loadId)
+			let decrefRetId = allocValueId(self.funcIdRef)
+			self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(decrefRetId, callee: "mrt_decref_if_nonnull", argIds: argIds)))
+			self.setValueType(decrefRetId, t: MaxonType.integer)
+		end 'eachSlot'
+	end 'emitScopeExitDrops'
+
+	// Zero-initialize every drop-tracked LOCAL slot at function entry so the
+	// null-guarded scope-exit decref safely skips any slot not assigned on a
+	// given exit path (e.g. a handle local in a function block that threw
+	// before the handle was opened). Emitted into the entry block ahead of
+	// the body so it precedes every real assignment.
+	function zeroInitDropTrackedSlots(func IrFunction, entryBlock IrBlock)
+		let slotCount = func.slotMaxonTypes.count()
+		let paramCount = func.paramCount
+		for slotId in paramCount upto slotCount 'eachSlot'
+			let slotType = try func.slotMaxonTypes.get(slotId) otherwise continue
+			if not maxonTypeIsDropTracked(self.project, t: slotType) 'notTracked'
+				continue
+			end 'notTracked'
+			let zeroId = allocValueId(self.funcIdRef)
+			self.stdModule.appendOp(entryBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: zeroId, value: 0))))
+			self.setValueType(zeroId, t: MaxonType.integer)
+			self.stdModule.appendOp(entryBlock, op: StdOp.memory(StdMemoryOp.storeSlot(slotId as VarSlot, valueId: zeroId)))
+		end 'eachSlot'
+	end 'zeroInitDropTrackedSlots'
 
 	// --- Name→ValueId translation ----------------------------------------
 
@@ -2274,7 +2508,7 @@ type MaxonToStdLowering
 			// number even though they never back a real frame slot — so we
 			// stamp them into the array (consumers ignore them via
 			// isSelfField on the original VarInfo if they care).
-			func.slotMaxonTypes = collectSlotMaxonTypes(func, maxonModule: self.maxonModule)
+			func.slotMaxonTypes = collectSlotMaxonTypes(func, maxonModule: self.maxonModule, project: self.project)
 			// C1.c: every interface-typed slot is a fat pointer
 			// `{value, witness}` — allocate a fresh trailing slot for the
 			// witness companion of each interface-typed slot. Bumps
@@ -2339,6 +2573,8 @@ type MaxonToStdLowering
 			self.implicitLayoutValueId = 0
 			self.implicitWitnessValueIds = ValueIdArray.create()
 			self.currentMaxonFunc = srcFunc
+			// Drop-tracking: clear the per-function alias flags (see aliasValues).
+			self.aliasValues = BoolArray.create()
 			// C1.c: rebuild the interface-witness-slot side map for this
 			// function. Cheap walk over slotMaxonTypes; runs once per
 			// function and only pays for itself when the function actually
@@ -2477,6 +2713,14 @@ type MaxonToStdLowering
 				end 'eachWitness'
 			end 'emitClosureImplicitLoads'
 
+			// Drop-tracking: zero-init every drop-tracked local slot at entry so
+			// the null-guarded scope-exit decref safely skips slots not assigned
+			// on a given exit path. No-op for functions without such slots.
+			if entryRef >= 0 'zeroInitDrops'
+				var dropEntryBlock = try self.stdModule.blocks.get(entryRef) otherwise panic("invariant: entryRef from blockRefs not in stdModule.blocks")
+				self.zeroInitDropTrackedSlots(srcFunc, entryBlock: dropEntryBlock)
+			end 'zeroInitDrops'
+
 			for blockRef in srcFunc.blockRefs 'eachBlock'
 				let srcBlock = try self.maxonModule.blocks.get(blockRef) otherwise panic("invariant: blockRef from srcFunc.blockRefs not in maxonModule.blocks")
 				var dstBlock = try self.stdModule.blocks.get(blockRef) otherwise panic("invariant: stdModule.blocks 1:1 with maxonModule.blocks but get({blockRef}) failed")
@@ -2528,6 +2772,12 @@ type MaxonToStdLowering
 		// pass drops any destructor for a union whose constructors are also
 		// unreached.
 		self.synthesizeUnionDestructors()
+
+		// Drop-tracking: emit one `__destruct_<StructName>` per drop-tracked
+		// user struct (one holding a __ManagedFile, transitively). Wired as the
+		// struct's `mm_alloc` destructor by `lowerStructAlloc`; the reachability
+		// pass drops any whose struct is never constructed.
+		self.synthesizeStructDestructors()
 
 		// Phase 10 (closures): emit one `__fnref_<funcName>` thunk per
 		// free function referenced via `MaxonOp.functionRef`. Each thunk
@@ -3418,7 +3668,7 @@ type MaxonToStdLowering
 		end 'fat'
 		let valueId = self.resolveName(value)
 		self.captureClosureEnvIfFunctionTyped(slotId, valueId: valueId, slotType: slotType)
-		self.stdModule.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.storeSlot(slotId, valueId: valueId)))
+		self.emitSlotStore(slotId, valueId: valueId, slotType: slotType, dstBlock: dstBlock)
 	end 'lowerVarDeclOrStore'
 
 	// Propagate function-value env binding across a slot store. When the
@@ -3465,7 +3715,7 @@ type MaxonToStdLowering
 		let storedValueType = self.getValueType(storedValueId)
 		let widenedValueId = self.widenValueToType(storedValueId, fromType: storedValueType, toType: slotType, dstBlock: dstBlock)
 		self.captureClosureEnvIfFunctionTyped(slotId, valueId: storedValueId, slotType: slotType)
-		self.stdModule.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.storeSlot(slotId, valueId: widenedValueId)))
+		self.emitSlotStore(slotId, valueId: widenedValueId, slotType: slotType, dstBlock: dstBlock)
 	end 'lowerVarStore'
 
 	function lookupSlotMaxonType(slotId VarSlot) returns MaxonType
@@ -3588,6 +3838,9 @@ type MaxonToStdLowering
 	function lowerVarLoad(result ByteArray, slotId VarSlot, slotType MaxonType, dstBlock IrBlock)
 		let resultId = self.defineName(result)
 		self.stdModule.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.loadSlot(resultId, slotId: slotId)))
+		// Drop-tracking: a loaded value is an alias of whatever the slot owns,
+		// so storing it into another drop-tracked slot/field must incref.
+		self.markAliasValue(resultId)
 		// Carry the slot's full type (named/struct, not just int-vs-float) into
 		// the value-type map so downstream consumers (fieldLoad/Store, methodCall)
 		// can resolve the receiver type.
@@ -3747,7 +4000,8 @@ type MaxonToStdLowering
 		// MaxonType comes from the per-value type map populated by the
 		// parser / TypeResolution; bool produces the 1-flipping semantics
 		// `not` expects, int produces `~` (bitwise complement) semantics
-		// for the only other path the source-level `not` keyword reaches.
+		// for the only other path the source-level `not` keyword reaches
+		// (the `bitwise-operators` spec asserts `not 0` == -1).
 		let isLogicalNot = match opKind 'isLogNot'
 			logicalNot gives true
 			neg gives false
@@ -6132,7 +6386,18 @@ type MaxonToStdLowering
 		if hasReceiver 'instance'
 			paramStartIndex = 1
 		end 'instance'
-		let allArgIds = self.slotArgsForCall(sigLookup, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, paramStartIndex: paramStartIndex, opIdx: opIdx, dstBlock: dstBlock, leadingReceiverId: receiverId, hasLeadingReceiver: hasReceiver)
+		// Drop-tracking: a `__ManagedFile` is a refcounted handle — an
+		// mm_alloc'd 8-byte block holding the raw OS fd at offset 0. The runtime
+		// file helpers (`mrt_file_*`) operate on the RAW fd, so the instance
+		// methods deref it out of the handle here, before the call. This
+		// wrap/deref lives in the target-neutral lowering rather than the runtime
+		// because the wasm backend hand-emits the `mrt_file_*` bodies and would
+		// otherwise need a parallel handle implementation.
+		var effectiveReceiverId = receiverId
+		if receiverName == "__ManagedFile" and managedFileInstanceTakesFd(methodName) 'derefFd'
+			effectiveReceiverId = self.emitLoadFieldI64(receiverId, offset: 0, dstBlock: dstBlock)
+		end 'derefFd'
+		let allArgIds = self.slotArgsForCall(sigLookup, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, paramStartIndex: paramStartIndex, opIdx: opIdx, dstBlock: dstBlock, leadingReceiverId: effectiveReceiverId, hasLeadingReceiver: hasReceiver)
 
 		let helperName = try managedHandleHelperFor(receiverName, methodName: methodName) otherwise 'noHelper'
 			self.reportUnknownManagedHandleMethod(result, qualifiedName: qualifiedName, dstBlock: dstBlock)
@@ -6145,11 +6410,56 @@ type MaxonToStdLowering
 		if not isThrowingHelper 'bindZeroForNonThrowing'
 			self.bindErrorFlagToZero(errorBoundName, dstBlock: dstBlock)
 		end 'bindZeroForNonThrowing'
+		// `__ManagedFile.close()` writes the -1 sentinel back into the handle so
+		// the handle's eventual destructor decref doesn't re-close the fd.
+		if receiverName == "__ManagedFile" and methodName == "close" 'closeSentinel'
+			let negOneId = self.emitConstI64(-1, dstBlock: dstBlock)
+			self.setValueType(negOneId, t: MaxonType.integer)
+			self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(receiverId, offset: 0 as FieldOffset, valueId: negOneId, width: StoreWidth.qword, isFloat: false)))
+		end 'closeSentinel'
+		// `__ManagedFile.open*` returns a raw fd — box it into a refcounted
+		// handle (`__managed_file_wrap`) so the result behaves like every other
+		// drop-tracked value (scope-exit decref runs `__destruct___ManagedFile`,
+		// which closes the fd).
+		if receiverName == "__ManagedFile" and managedFileReturnsHandle(methodName) 'wrapHandle'
+			self.wrapManagedFileOpenResult(result, dstBlock: dstBlock)
+		end 'wrapHandle'
 		if lowered 'refineType'
 			self.refineBuiltinCallResultType(result, receiverName: receiverName, methodName: methodName, receiverType: receiverType)
 		end 'refineType'
 		return lowered
 	end 'lowerManagedHandleBuiltin'
+
+	// `__ManagedFile` instance methods that receive the raw fd as their first
+	// argument (so the lowering derefs it out of the handle). The static
+	// methods (open*/exists/delete/stat*) take a path or buffer, not the fd.
+	function managedFileInstanceTakesFd(methodName String) returns bool
+		return methodName == "read" or methodName == "write" or methodName == "size" or methodName == "close"
+	end 'managedFileInstanceTakesFd'
+
+	// `__ManagedFile` static methods that return a freshly opened raw fd to be
+	// boxed into a handle.
+	function managedFileReturnsHandle(methodName String) returns bool
+		return methodName == "openRead" or methodName == "openWrite" or methodName == "openWriteExecutable"
+	end 'managedFileReturnsHandle'
+
+	// Box the raw fd just bound to `result` into a refcounted __ManagedFile
+	// handle via `__managed_file_wrap`, then re-point `result` at the handle.
+	// The wrap runs unconditionally (even on the error path, where the fd is
+	// the -1 sentinel) — the resulting handle is drop-tracked, so a failed
+	// open's handle is decref'd at scope exit and `__destruct___ManagedFile`
+	// closes the -1 sentinel as a no-op, leaving no leak. The wrap result is a
+	// fresh value (a call result, not a load), so storing it into a slot moves
+	// rather than increfs.
+	function wrapManagedFileOpenResult(result ByteArray, dstBlock IrBlock)
+		let fdId = self.resolveName(result)
+		var argIds = ValueIdArray.create()
+		argIds.push(fdId)
+		let wrappedId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(wrappedId, callee: "__managed_file_wrap", argIds: argIds)))
+		self.setValueType(wrappedId, t: MaxonType.named(self.project.typeNames.intern("__ManagedFile")))
+		self.nameToId.upsert(result, value: wrappedId)
+	end 'wrapManagedFileOpenResult'
 
 	// Shared "unknown method" reporter for the `__ManagedFile.*` /
 	// `__ManagedDirectory.*` dispatch tail. Mirrors the equivalent fallback
@@ -7476,6 +7786,9 @@ type MaxonToStdLowering
 		let isFloat = stdTypeIsFloat(fieldStdType)
 		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(resultId, addrId: receiverId, offset: hit.offset, width: fieldWidth, signed: fieldSigned, isFloat: isFloat)))
 		self.setValueType(resultId, t: resolvedFieldType)
+		// Drop-tracking: a field read is an alias of the field's owner, so
+		// copying it into another drop-tracked slot/field must incref.
+		self.markAliasValue(resultId)
 		// Interface-typed fields are fat pointers — emit a sibling load at
 		// `offset + 8` for the witness half and pair the (resultId →
 		// witnessId) so a downstream call site that passes this field to a
@@ -7855,6 +8168,60 @@ type MaxonToStdLowering
 		self.endSynthesizedFunc(func, snapshot: snapshot)
 	end 'synthesizeOneUnionDestructor'
 
+	// Drop-tracking: emit one `__destruct_<StructName>(self) returns i64` per
+	// user struct that transitively holds a drop-tracked field. Mirrors
+	// `synthesizeUnionDestructors` but a struct has a single fixed layout (no
+	// tag switch): the body loads each drop-tracked field at its offset and
+	// `mrt_decref_if_nonnull`s it, then rets 0. `__ManagedFile` itself is
+	// skipped — runtime.std already provides its `__destruct___ManagedFile`
+	// (which closes the fd). `lowerStructAlloc` wires these as the
+	// `mm_alloc` destructor for every drop-tracked struct, so the linker's
+	// reachability pass keeps the destructor exactly when the struct is built.
+	function synthesizeStructDestructors()
+		for (structName, structType) in self.project.structTypes 'eachStruct'
+			if structName == "__ManagedFile" 'builtinHandle'
+				continue
+			end 'builtinHandle'
+			if not structNameIsDropTracked(self.project, structName: structName) 'notTracked'
+				continue
+			end 'notTracked'
+			self.synthesizeOneStructDestructor(structName, structType: structType)
+		end 'eachStruct'
+	end 'synthesizeStructDestructors'
+
+	function synthesizeOneStructDestructor(structName String, structType StructType)
+		let helperName = self.structDestructorSymbol(structName)
+		let returnType = StdReturnType.value(StdType.i64)
+		var paramTypes = StdTypeArray.create()
+		paramTypes.push(StdType.i64)
+		var func = IrFunction.createFromStd(helperName, returnType: returnType, paramCount: 1, paramTypes: paramTypes, returnLine: 0)
+		let snapshot = self.beginSynthesizedFunc(1)
+
+		var entryBlock = self.stdModule.addBlock(func, label: "entry")
+		self.stdModule.appendOp(entryBlock, op: StdOp.call(StdCallOp.param(0 as ValueId, paramIndex: 0, paramType: StdType.i64)))
+		self.setValueType(0 as ValueId, t: MaxonType.named(self.project.typeNames.intern(structName)))
+		let selfId = 0 as ValueId
+
+		for field in structType.fields 'eachField'
+			if not maxonTypeIsDropTracked(self.project, t: field.fieldType) 'notTracked'
+				continue
+			end 'notTracked'
+			if not field.offsetResolved 'unresolved'
+				panic("synthesizeOneStructDestructor: field '{field.name}' on struct '{structName}' has unresolved offset — layoutAllStructs did not run")
+			end 'unresolved'
+			let fieldId = self.emitLoadFieldI64(selfId, offset: field.offset as ParsedInt, dstBlock: entryBlock)
+			var argIds = ValueIdArray.create()
+			argIds.push(fieldId)
+			let decrefRetId = allocValueId(self.funcIdRef)
+			self.stdModule.appendOp(entryBlock, op: StdOp.call(StdCallOp.call(decrefRetId, callee: "mrt_decref_if_nonnull", argIds: argIds)))
+			self.setValueType(decrefRetId, t: MaxonType.integer)
+		end 'eachField'
+
+		let zeroId = self.emitConstI64(0, dstBlock: entryBlock)
+		self.stdModule.setTerminator(entryBlock, op: StdOp.call(StdCallOp.ret(zeroId)))
+		self.endSynthesizedFunc(func, snapshot: snapshot)
+	end 'synthesizeOneStructDestructor'
+
 	// Phase 9 Stage 4: emit a tag-dispatch chain.
 	//
 	// Given a tag SSA value, a parallel `(ordinals, caseBlockIds)` pair, and
@@ -8075,7 +8442,28 @@ type MaxonToStdLowering
 		let storedValueId = self.resolveName(value)
 		let storedValueType = self.getValueType(storedValueId)
 		let widenedValueId = self.widenValueToType(storedValueId, fromType: storedValueType, toType: resolvedFieldType, dstBlock: dstBlock)
+		// Drop-tracking: a drop-tracked field owns a reference. Incref an
+		// aliased incoming value (the field becomes an additional owner); on a
+		// mutating (non-init) store also decref whatever the field previously
+		// owned. Construction stores (isInit) skip the decref — the struct's
+		// user region is freshly allocated and uninitialized, so there is no
+		// valid prior value to release. incref-new precedes decref-old so a
+		// self-assign never observes the live target at refcount zero.
+		let fieldIsDropTracked = maxonTypeIsDropTracked(self.project, t: resolvedFieldType)
+		let needOldDecref = fieldIsDropTracked and not isInit
+		var oldFieldId = 0 as ValueId
+		if needOldDecref 'loadOld'
+			oldFieldId = allocValueId(self.funcIdRef)
+			self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(oldFieldId, addrId: receiverId, offset: hit.offset, width: StoreWidth.qword, signed: false, isFloat: false)))
+			self.setValueType(oldFieldId, t: resolvedFieldType)
+		end 'loadOld'
+		if fieldIsDropTracked 'increfNew'
+			self.increfIfDropTrackedAlias(storedValueId, refType: resolvedFieldType, dstBlock: dstBlock)
+		end 'increfNew'
 		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(receiverId, offset: hit.offset, valueId: widenedValueId, width: fieldWidth, isFloat: isFloat)))
+		if needOldDecref 'decrefOld'
+			self.emitDecrefIfNonnull(oldFieldId, dstBlock: dstBlock)
+		end 'decrefOld'
 	end 'lowerFieldStore'
 
 	// Emit a fat-pointer store into an interface-typed struct field. The
@@ -8131,6 +8519,8 @@ type MaxonToStdLowering
 		let isFloat = stdTypeIsFloat(fieldStdType)
 		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(resultId, addrId: selfId, offset: hit.offset, width: fieldWidth, signed: fieldSigned, isFloat: isFloat)))
 		self.setValueType(resultId, t: hit.fieldType)
+		// Drop-tracking: a self-field read is an alias of the field's owner.
+		self.markAliasValue(resultId)
 	end 'lowerSelfFieldLoad'
 
 	function lowerSelfFieldStore(fieldName ByteArray, value ByteArray, dstBlock IrBlock)
@@ -8855,10 +9245,28 @@ type MaxonToStdLowering
 		let sizeId = allocValueId(self.funcIdRef)
 		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: sizeId, value: byteSize))))
 		self.setValueType(sizeId, t: MaxonType.integer)
-		var argIds = ValueIdArray.create()
-		argIds.push(sizeId)
 		let resultId = self.defineName(result)
-		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: "mrt_alloc", argIds: argIds)))
+		// Drop-tracking: a struct holding a drop-tracked field is allocated
+		// via `mm_alloc(size, &__destruct_<Struct>, tag)` so that when its
+		// refcount reaches zero `mm_free` runs the synthesized destructor,
+		// which decrefs each drop-tracked field (e.g. closing a __ManagedFile).
+		// Plain structs keep the lighter `mrt_alloc(size)` path.
+		if structNameIsDropTracked(self.project, structName: structNameStr) 'dropTracked'
+			let dtorRefId = allocValueId(self.funcIdRef)
+			self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.funcRef(dtorRefId, funcName: self.structDestructorSymbol(structNameStr))))
+			self.setValueType(dtorRefId, t: MaxonType.integer)
+			let tagId = self.emitConstI64(0, dstBlock: dstBlock)
+			self.setValueType(tagId, t: MaxonType.integer)
+			var allocArgIds = ValueIdArray.create()
+			allocArgIds.push(sizeId)
+			allocArgIds.push(dtorRefId)
+			allocArgIds.push(tagId)
+			self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: "stdlib.__mm_alloc", argIds: allocArgIds)))
+		end 'dropTracked' else 'plainAlloc'
+			var argIds = ValueIdArray.create()
+			argIds.push(sizeId)
+			self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: "mrt_alloc", argIds: argIds)))
+		end 'plainAlloc'
 		// Phase 15e: a `__TupleN` allocation whose element types were
 		// concrete at parse time has its specialised `genericInstance` gid
 		// pinned in `project.tupleAllocGids` (keyed by the structAlloc op's
@@ -8999,6 +9407,13 @@ type MaxonToStdLowering
 	// `tryCall`/`witnessCall` path in `emitCallWithArgs`.
 	function emitRetOrErrorReturn(retVal ByteArray, dstBlock IrBlock, asTerminator bool)
 		let retValId = self.resolveName(retVal)
+		// Drop-tracking: hand a returned drop-tracked ALIAS to the caller with
+		// its own reference so the scope-exit decrefs below — which decref the
+		// slot still holding it — net out to an ownership transfer. A freshly
+		// produced return value already carries the producer's reference and is
+		// not in a slot, so it needs neither the incref nor a drop.
+		self.increfIfDropTrackedAlias(retValId, refType: self.getValueType(retValId), dstBlock: dstBlock)
+		self.emitScopeExitDrops(dstBlock)
 		let returnInterfaceName = returnTypeInterfaceName(self.project, ref: self.currentReturnType)
 		if not returnInterfaceName.isEmpty() and not self.currentFuncIsThrowing 'fatRet'
 			let witnessId = self.materializeReturnWitness(retValId, interfaceName: returnInterfaceName, dstBlock: dstBlock)
@@ -9069,6 +9484,10 @@ type MaxonToStdLowering
 	// at `[union_ptr + 0]`, so `match e` lowers exactly the same way it
 	// does for any other union-typed scrutinee.
 	function lowerThrow(enumName String, variantName String, payloadValueName ByteArray, dstBlock IrBlock)
+		// Drop-tracking: a `throw` is a function exit — release every
+		// drop-tracked local before leaving. The thrown union payload (when
+		// present) lives in an SSA value, not a slot, so it is untouched here.
+		self.emitScopeExitDrops(dstBlock)
 		let isFloat = maxonReturnTypeLowersToFloat(self.project, ref: self.currentReturnType)
 		let zeroOpcode = StdArithConstOpcode.constF64 if isFloat else StdArithConstOpcode.constI64
 		let zeroId = allocValueId(self.funcIdRef)
@@ -9187,6 +9606,9 @@ type MaxonToStdLowering
 	// value-return ABI (RDX/X1) just as it does for lowerThrow / lowerTryCall.
 	function lowerRethrow(flagName ByteArray, dstBlock IrBlock)
 		let flagId = self.resolveName(flagName)
+		// Drop-tracking: a rethrow is a function exit — release every
+		// drop-tracked local before propagating the error.
+		self.emitScopeExitDrops(dstBlock)
 		let isFloat = maxonReturnTypeLowersToFloat(self.project, ref: self.currentReturnType)
 		let opcode = StdArithConstOpcode.constF64 if isFloat else StdArithConstOpcode.constI64
 		let zeroId = allocValueId(self.funcIdRef)

@@ -1,0 +1,63 @@
+// Test: managed-directory.open-search-not-found-variant
+function main() returns ExitCode
+	var result = 0
+	try __ManagedDirectory.openSearch("nonexistent_phaseB_search_xyz/*".managed) otherwise (e) 'h'
+		match e 'k'
+			notFound then result = 42
+			default panic("expected notFound")
+		end 'k'
+	end 'h'
+	return result
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %1 = mir.global_addr @__istr_0
+    %2 = mir.mov_imm 40 : i64
+    %3 = mir.call @mrt_alloc(%2)
+    mir.store %1, %3, 0 width: qword
+    %4 = mir.mov_imm 31 : i64
+    mir.store %4, %3, 8 width: qword
+    %5 = mir.mov_imm -2 : i64
+    mir.store %5, %3, 16 width: qword
+    %6 = mir.mov_imm 1 : i64
+    mir.store %6, %3, 24 width: qword
+    mir.store %0, %3, 32 width: qword
+    %8 = mir.mov_imm 16 : i64
+    %9 = mir.call @mrt_alloc(%8)
+    mir.store %3, %9, 0 width: qword
+    %10 = mir.mov_imm 1 : i64
+    mir.store %10, %9, 8 width: qword
+    %11 = mir.load %9, 0 width: qword
+    %12, %13 = mir.try_call @mrt_directory_open_search(%11)
+    %15 = mir.cmp ne, %13, %0
+    mir.cond_br %15 [then: try_0.otherwise(), else: try_0.merge(%0, %12)]
+  try_0.otherwise:
+    %17 = mir.mov_imm 1 : i64
+    %18 = mir.sub.i64 %13, %17
+    %21 = mir.cmp eq, %18, %0
+    mir.cond_br %21 [then: k_0.case0(), else: k_0.case1()]
+  k_0.case0:
+    %23 = mir.mov_imm 42 : i64
+    mir.br try_0.merge(%23, %0)
+  k_0.case1:
+    %24 = mir.global_addr @__panic_msg_a3c4e1e4d818e272
+    %25 = mir.call @mrt_panic(%24)
+    mir.ret %0
+  try_0.merge:
+    %31 = mir.mov_imm 125 : i64
+    %32 = mir.cmp ugt, %29, %31
+    mir.cond_br %32 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %33 = mir.global_addr @__panic_msg_32f02d1c8ab93762
+    %34 = mir.call @mrt_panic(%33)
+  __range_ok_0:
+    mir.ret %29
+  }
+}
+---

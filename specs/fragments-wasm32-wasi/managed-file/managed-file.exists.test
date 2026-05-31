@@ -1,0 +1,171 @@
+// Test: managed-file.exists
+export enum TestFileError implements Error
+	openFailed
+end 'TestFileError'
+
+type TestFile
+	export var file as __ManagedFile
+
+	export static function openWrite(path __ManagedMemory) returns TestFile throws TestFileError
+		let handle = try __ManagedFile.openWrite(path) otherwise 'fail'
+			throw TestFileError.openFailed
+		end 'fail'
+		return TestFile{file: handle}
+	end 'openWrite'
+end 'TestFile'
+
+function createEmptyFile(path String) throws TestFileError
+	var f = try TestFile.openWrite(path.managed)
+	f.file.close()
+end 'createEmptyFile'
+
+function main() returns ExitCode
+	// Non-existent file
+	let e1 = __ManagedFile.exists("nonexistent_xyz_managed_12345.txt".managed)
+	if e1 != 0 'check1'
+		return 1
+	end 'check1'
+
+	// Create a file, check exists, delete it
+	let path = "test_managed_exists.txt"
+	try createEmptyFile(path) otherwise 'createFail'
+		return 10
+	end 'createFail'
+	let e2 = __ManagedFile.exists(path.managed)
+	if e2 != 1 'check2'
+		return 2
+	end 'check2'
+	try __ManagedFile.delete(path.managed) otherwise 'delErr'
+		return 4
+	end 'delErr'
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @TestFile.openWrite(local0: i64) -> i64 {
+  entry:
+    %33 = mir.param local0 : i64
+    %1 = mir.mov_imm 0 : i64
+    %4, %5 = mir.try_call @mrt_file_open_write(%33)
+    %6 = mir.call @__managed_file_wrap(%4)
+    %8 = mir.cmp ne, %5, %1
+    mir.cond_br %8 [then: try_0.otherwise(), else: try_0.ok()]
+  try_0.otherwise:
+    %11 = mir.call @mrt_decref_if_nonnull(%1)
+    %13 = mir.call @mrt_decref_if_nonnull(%1)
+    %15 = mir.mov_imm 1 : i64
+    mir.error_return %1, %15
+  try_0.ok:
+    %17 = mir.call @mrt_decref_if_nonnull(%1)
+    mir.br try_0.merge()
+  try_0.merge:
+    %34 = mir.mov_imm 8 : i64
+    %35 = mir.sub.i64 %6, %34
+    mir.atomic_inc %35
+    %21 = mir.call @mrt_decref_if_nonnull(%1)
+    %22 = mir.mov_imm 8 : i64
+    %24 = mir.func_addr @__destruct_TestFile
+    %23 = mir.call @stdlib.__mm_alloc(%22, %24, %1)
+    %36 = mir.mov_imm 8 : i64
+    %37 = mir.sub.i64 %6, %36
+    mir.atomic_inc %37
+    mir.store %6, %23, 0 width: qword
+    %29 = mir.call @mrt_decref_if_nonnull(%6)
+    %31 = mir.call @mrt_decref_if_nonnull(%6)
+    mir.error_return %23, %1
+  }
+  func @createEmptyFile(local0: i64) {
+  entry:
+    %22 = mir.param local0 : i64
+    %1 = mir.mov_imm 0 : i64
+    %3 = mir.load %22, 0 width: qword
+    %4, %5 = mir.try_call @TestFile.openWrite(%3)
+    %6 = mir.mov_imm 0 : i64
+    %7 = mir.cmp ne, %5, %6
+    mir.cond_br %7 [then: try_0.err(), else: try_0.cont()]
+  try_0.err:
+    %9 = mir.call @mrt_decref_if_nonnull(%1)
+    %10 = mir.mov_imm 0 : i64
+    mir.error_return %10, %5
+  try_0.cont:
+    %12 = mir.call @mrt_decref_if_nonnull(%1)
+    %14 = mir.load %4, 0 width: qword
+    %15 = mir.load %14, 0 width: qword
+    %16 = mir.call @mrt_file_close(%15)
+    %17 = mir.mov_imm -1 : i64
+    mir.store %17, %14, 0 width: qword
+    %18 = mir.mov_imm 0 : i64
+    %20 = mir.call @mrt_decref_if_nonnull(%4)
+    %21 = mir.mov_imm 0 : i64
+    mir.error_return %18, %21
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.global_addr @__istr_0
+    %1 = mir.mov_imm 40 : i64
+    %2 = mir.call @mrt_alloc(%1)
+    mir.store %0, %2, 0 width: qword
+    %3 = mir.mov_imm 33 : i64
+    mir.store %3, %2, 8 width: qword
+    %4 = mir.mov_imm -2 : i64
+    mir.store %4, %2, 16 width: qword
+    %5 = mir.mov_imm 1 : i64
+    mir.store %5, %2, 24 width: qword
+    %6 = mir.mov_imm 0 : i64
+    mir.store %6, %2, 32 width: qword
+    %7 = mir.mov_imm 16 : i64
+    %8 = mir.call @mrt_alloc(%7)
+    mir.store %2, %8, 0 width: qword
+    mir.store %5, %8, 8 width: qword
+    %10 = mir.load %8, 0 width: qword
+    %11 = mir.call @mrt_file_exists(%10)
+    %14 = mir.cmp ne, %11, %6
+    mir.cond_br %14 [then: check1_0(), else: check1_0.after()]
+  check1_0:
+    mir.ret %5
+  check1_0.after:
+    %16 = mir.global_addr @__istr_1
+    %17 = mir.mov_imm 40 : i64
+    %18 = mir.call @mrt_alloc(%17)
+    mir.store %16, %18, 0 width: qword
+    %19 = mir.mov_imm 23 : i64
+    mir.store %19, %18, 8 width: qword
+    %20 = mir.mov_imm -2 : i64
+    mir.store %20, %18, 16 width: qword
+    mir.store %5, %18, 24 width: qword
+    mir.store %6, %18, 32 width: qword
+    %23 = mir.mov_imm 16 : i64
+    %24 = mir.call @mrt_alloc(%23)
+    mir.store %18, %24, 0 width: qword
+    mir.store %5, %24, 8 width: qword
+    %27, %28 = mir.try_call @createEmptyFile(%24)
+    %30 = mir.cmp ne, %28, %6
+    mir.cond_br %30 [then: try_0.otherwise(), else: try_0.merge()]
+  try_0.otherwise:
+    %32 = mir.mov_imm 10 : i64
+    mir.ret %32
+  try_0.merge:
+    %35 = mir.load %24, 0 width: qword
+    %36 = mir.call @mrt_file_exists(%35)
+    %39 = mir.cmp ne, %36, %5
+    mir.cond_br %39 [then: check2_0(), else: check2_0.after()]
+  check2_0:
+    %40 = mir.mov_imm 2 : i64
+    mir.ret %40
+  check2_0.after:
+    %42 = mir.load %24, 0 width: qword
+    %43, %44 = mir.try_call @mrt_file_delete(%42)
+    %46 = mir.cmp ne, %44, %6
+    mir.cond_br %46 [then: try_1.otherwise(), else: try_1.merge()]
+  try_1.otherwise:
+    %48 = mir.mov_imm 4 : i64
+    mir.ret %48
+  try_1.merge:
+    %50 = mir.mov_imm 42 : i64
+    mir.ret %50
+  }
+}
+---

@@ -1731,8 +1731,9 @@ func mrt_file_open_write_executable 1 i64
     std errorReturn v15 v16
 end
 
-// mrt_file_read(self, managed, count) throws -> bytes read.
-// self is the fd (single-i64 __ManagedFile). managed[0]=buffer, managed[16]=capacity.
+// mrt_file_read(fd, managed, count) throws -> bytes read.
+// `fd` is the raw file descriptor — the lowering derefs it out of the
+// __ManagedFile handle before the call. managed[0]=buffer, managed[16]=capacity.
 // Clamps count to capacity and calls Linux read(fd, buf, n).
 //
 // Slot usage:
@@ -1800,8 +1801,9 @@ func mrt_file_read 3 i64
     std errorReturn v21 v22
 end
 
-// mrt_file_write(self, managed) throws -> bytes written.
-// managed[0] = buffer, managed[8] = length.
+// mrt_file_write(fd, managed) throws -> bytes written.
+// `fd` is the raw file descriptor (the lowering derefs it out of the
+// __ManagedFile handle before the call). managed[0] = buffer, managed[8] = length.
 func mrt_file_write 2 i64
   block entry:
     v0 = std param 0 i64
@@ -1839,7 +1841,10 @@ func mrt_file_write 2 i64
     std errorReturn v15 v16
 end
 
-// mrt_file_close: Linux close(fd). Non-throwing — ignore errors.
+// mrt_file_close(fd): raw close of a file descriptor. `fd` is the raw
+// descriptor (the lowering derefs it out of the __ManagedFile handle before
+// the call, and __destruct___ManagedFile passes the fd it loaded out of the
+// handle). Skips the 0 and -1 sentinels. Non-throwing — ignore errors.
 func mrt_file_close 1 i64
   block entry:
     v0 = std param 0 i64
@@ -2124,8 +2129,9 @@ func mrt_file_stat_free 1 i64
     std ret v4
 end
 
-// mrt_file_size(fd) throws -> file size. lseek(fd, 0, SEEK_END), then
-// lseek(fd, 0, SEEK_SET) to restore cursor.
+// mrt_file_size(fd) throws -> file size. `fd` is the raw file descriptor
+// (the lowering derefs it out of the __ManagedFile handle before the call).
+// lseek(fd, 0, SEEK_END), then lseek(fd, 0, SEEK_SET) to restore cursor.
 //
 // Slot usage:
 //   slot 0 = fd
@@ -2240,6 +2246,16 @@ func mrt_directory_open_search 1 i64
     std storeIndirect v19 32 v22
 
     v23 = std loadSlot 4
+    // Pre-load the first real directory entry into block[32] so `filename()`
+    // returns it before the first `next()` call. This makes the builtin obey
+    // the filename-first iteration contract that stdlib `Directory.list`, the
+    // `managed-directory` spec, and the C# bootstrap all assume (without it the
+    // initial `filename()` is empty and gets miscounted as a real entry).
+    // `mrt_directory_next` only mutates the handle block and always reports a
+    // zero error flag, so this call is purely for its side effect. An empty
+    // directory leaves block[32] = 0 (an empty name), identical to reaching
+    // end-of-iteration.
+    v25 = std call mrt_directory_next v23
     v24 = std constI64 0
     std errorReturn v23 v24
 end
@@ -5205,6 +5221,100 @@ func __destruct___ManagedMemory 1 i64
   block done:
     v21 = std constI64 0
     std ret v21
+end
+
+// __destruct___ManagedFile(self): destructor for a refcounted __ManagedFile
+// handle. The handle is an 8-byte mm_alloc'd block holding the OS file
+// descriptor at offset 0. When mm_decref drives the handle's refcount to
+// zero, mm_free reads this destructor from the mm header and invokes it
+// (via indirectCall) before slab-freeing — so a __ManagedFile local closes
+// its fd automatically when it goes out of scope. The fd is loaded out of
+// the handle and closed via mrt_file_close, which no-ops on the -1 sentinel
+// an explicit `.close()` stored back, so an explicitly closed handle is not
+// double-closed here. `mrt_file_close` is the per-target raw-fd close (the
+// wasm backend hand-emits a WASI `fd_close` body), keeping this destructor
+// target-neutral — it only loads a field and makes a call.
+//
+// Returns i64 (always 0) to match the indirect-call destructor ABI — see
+// the __destruct___ManagedMemory header for why destructors return a value.
+//
+// Slot usage:
+//   slot 0 = self (handle ptr)
+func __destruct___ManagedFile 1 i64
+  block entry:
+    v0 = std param 0 i64
+    std storeSlot 0 v0
+    v1 = std loadIndirect v0 0
+    v2 = std call mrt_file_close v1
+    v3 = std constI64 0
+    std ret v3
+end
+
+// __managed_file_wrap(fd) -> handle: box a raw file descriptor into a
+// refcounted __ManagedFile handle. Allocates an 8-byte mm block whose
+// destructor is __destruct___ManagedFile (closes the fd on final decref)
+// and stores the fd at offset 0. Refcount starts at 1; the caller owns
+// that reference. Mirrors how a struct allocation carries its destructor.
+//
+// The lowering calls this unconditionally on every open, including the
+// error path where the open returned the -1 sentinel. An invalid fd
+// (negative) is passed straight through WITHOUT allocating, so a failed
+// open does not leak a handle — the caller's `try ... otherwise` diverts
+// before the sentinel is ever bound to a drop-tracked slot.
+//
+// Slot usage:
+//   slot 0 = fd
+//   slot 1 = handle (returned)
+func __managed_file_wrap 1 i64
+  block entry:
+    v0 = std param 0 i64
+    std storeSlot 0 v0
+    // Pass an invalid (negative) fd straight through — no allocation.
+    v8 = std constI64 0
+    v9 = std cmpI64Lt v0 v8
+    std condBr v9 invalid do_wrap
+
+  block invalid:
+    v10 = std loadSlot 0
+    std ret v10
+
+  block do_wrap:
+    v1 = std constI64 8
+    v2 = std funcAddr __destruct___ManagedFile
+    v3 = std constI64 0
+    v4 = std call mm_alloc v1 v2 v3
+    std storeSlot 1 v4
+    v5 = std loadSlot 1
+    v6 = std loadSlot 0
+    std storeIndirect v5 0 v6
+    v7 = std loadSlot 1
+    std ret v7
+end
+
+// mrt_decref_if_nonnull(ptr): mm_decref the pointer when it is non-null.
+// mm_decref dereferences [ptr-8] without a null check, so this guard makes
+// it safe to call on a slot that may still hold the zero-initialized
+// sentinel (an unassigned managed local, or a moved-out handle). Reused by
+// the scope-exit drop lowering and the synthesized struct destructors.
+//
+// Slot usage:
+//   slot 0 = ptr
+func mrt_decref_if_nonnull 1 i64
+  block entry:
+    v0 = std param 0 i64
+    std storeSlot 0 v0
+    v1 = std constI64 0
+    v2 = std cmpI64Eq v0 v1
+    std condBr v2 done do_decref
+
+  block do_decref:
+    v3 = std loadSlot 0
+    v4 = std call mm_decref v3
+    std br done
+
+  block done:
+    v5 = std constI64 0
+    std ret v5
 end
 
 // =============================================================================

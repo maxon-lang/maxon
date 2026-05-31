@@ -4198,19 +4198,21 @@ function emitWasmFileStat(funcSigs WasmFuncSigs) returns ByteArray
 	body.push(opReturn)
 	body.push(opEnd)
 
-	// Success path. Allocate 48-byte managed memory.
+	// Success path. Allocate a raw 48-byte buffer — the same representation as
+	// the Linux runtime.std mrt_file_stat (mrt_file_stat_field reads it at
+	// [buf+idx*8] and mrt_file_stat_free mm_decref's it). Using mrt_alloc here
+	// rather than __managed_mem_create keeps the stat path from depending on a
+	// function the MIR-level reachability never records: the runtime.std
+	// mrt_file_stat body this replaces uses mrt_alloc, so __managed_mem_create
+	// would be absent from the module for a stat-only program and trip
+	// findFunctionIndex at emit time. (mrt_alloc is already pervasively
+	// reachable, so it is always in the module.)
 	body.push(opI64Const)
 	writeSleb128(body, value: 48)
-	body.push(opI64Const)
-	writeSleb128(body, value: 1)
 	body.push(opCall)
-	writeUleb128(body, value: findFunctionIndex(funcSigs, name: "__managed_mem_create", importCount: wasiImportCount))
+	writeUleb128(body, value: findFunctionIndex(funcSigs, name: "mrt_alloc", importCount: wasiImportCount))
 	body.push(opLocalTee)
 	writeUleb128(body, value: localMm)
-	body.push(opI32WrapI64)
-	body.push(opI64Load)
-	body.push(0x03)
-	writeUleb128(body, value: 0)
 	body.push(opI32WrapI64)
 	body.push(opLocalSet)
 	writeUleb128(body, value: localBuf)

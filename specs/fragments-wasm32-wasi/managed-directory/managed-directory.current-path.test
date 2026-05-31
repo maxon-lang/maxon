@@ -1,0 +1,38 @@
+// Test: managed-directory.current-path
+function main() returns ExitCode
+	let cwd = try __ManagedDirectory.currentPath() otherwise return 1
+	let cwdStr = String.init(cwd)
+	if cwdStr.count() > 0 'hasPath'
+		return 42
+	end 'hasPath'
+	return 0
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0, %1 = mir.try_call @mrt_directory_current_path()
+    %2 = mir.mov_imm 0 : i64
+    %3 = mir.cmp ne, %1, %2
+    mir.cond_br %3 [then: try_0.otherwise(), else: try_0.merge()]
+  try_0.otherwise:
+    %5 = mir.mov_imm 1 : i64
+    mir.ret %5
+  try_0.merge:
+    %8 = mir.call @String.init(%0)
+    %10 = mir.call @String.count(%8)
+    %11 = mir.mov_imm 0 : i64
+    %12 = mir.cmp gt, %10, %11
+    mir.cond_br %12 [then: hasPath_0(), else: hasPath_0.after()]
+  hasPath_0:
+    %13 = mir.mov_imm 42 : i64
+    mir.ret %13
+  hasPath_0.after:
+    %14 = mir.mov_imm 0 : i64
+    mir.ret %14
+  }
+}
+---
