@@ -1,0 +1,59 @@
+// Test: array-int-not-found
+function main() returns ExitCode
+	let arr = [10, 20, 30]
+	if arr.contains(99) 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %5 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %6 = mir.mov_imm 40 : i64
+    %7 = mir.mov_imm 0 : i64
+    %8 = mir.call @stdlib.__mm_alloc(%6, %5, %7)
+    %9 = mir.global_addr @__rdata_arr_main_0
+    mir.store %9, %8, 0 width: qword
+    %10 = mir.mov_imm 3 : i64
+    mir.store %10, %8, 8 width: qword
+    %11 = mir.mov_imm -2 : i64
+    mir.store %11, %8, 16 width: qword
+    %12 = mir.mov_imm 8 : i64
+    mir.store %12, %8, 24 width: qword
+    %13 = mir.mov_imm -2 : i64
+    mir.store %13, %8, 32 width: qword
+    %28 = mir.mov_imm 8 : i64
+    %29 = mir.call @mrt_alloc(%28)
+    %30 = mir.mov_imm 40 : i64
+    %31 = mir.call @mrt_alloc(%30)
+    %32 = mir.mov_imm 0 : i64
+    mir.store %32, %31, 0 width: qword
+    %33 = mir.mov_imm 0 : i64
+    mir.store %33, %31, 8 width: qword
+    %34 = mir.mov_imm 0 : i64
+    mir.store %34, %31, 16 width: qword
+    %35 = mir.mov_imm 8 : i64
+    mir.store %35, %31, 24 width: qword
+    %36 = mir.mov_imm 0 : i64
+    mir.store %36, %31, 32 width: qword
+    mir.store %31, %29, 0 width: qword
+    mir.store %8, %29, 0 width: qword
+    %22 = mir.mov_imm 99 : i64
+    %23 = mir.global_addr @__layout_Array_Int
+    %24 = mir.global_addr @__witness_int_Equatable
+    %25 = mir.call @Array.contains$Element(%29, %22, %23, %24)
+    mir.cond_br %25 [then: check_0(), else: check_0.after()]
+  check_0:
+    %26 = mir.mov_imm 1 : i64
+    mir.ret %26
+  check_0.after:
+    %27 = mir.mov_imm 0 : i64
+    mir.ret %27
+  }
+}
+---

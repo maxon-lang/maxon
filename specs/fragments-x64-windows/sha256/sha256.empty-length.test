@@ -10,40 +10,36 @@ ExitCode: 32
 module {
   func @main() -> u32 {
   entry:
-    x64.prologue stack_size=32
-    x64.call ByteArray.create
-    x64.mov [rbp-8], rax
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rbp-8]
+    x64.prologue stack_size=16
+    x64.mov ecx, 8
+    x64.call mrt_alloc
+    x64.mov r12, r8
+    x64.mov ecx, 40
+    x64.call mrt_alloc
+    x64.xor r9d, r9d
+    x64.mov [r8+0], r9 (8b)
+    x64.xor r9d, r9d
+    x64.mov [r8+8], r9 (8b)
+    x64.xor r9d, r9d
+    x64.mov [r8+16], r9 (8b)
+    x64.mov r9d, 8
+    x64.mov [r8+24], r9 (8b)
+    x64.xor r9d, r9d
+    x64.mov [r8+32], r9 (8b)
+    x64.mov [r12+0], r8 (8b)
+    x64.mov rcx, r12
     x64.call stdlib.sha256
-    x64.mov [rbp-16], rax
-    x64.mov rcx, [rbp-16]
-    x64.call ByteArray.count
-    x64.xor edx, edx
-    x64.mov ebx, 4294967295
-    x64.cmp rax, rbx
-    x64.jg main.__range_panic_0
-    x64.cmp rax, rdx
-    x64.jl main.__range_panic_0
-    x64.jmp main.__range_ok_0
+    x64.lea rdx, [rip+__layout_Array_Byte]
+    x64.mov rcx, r8
+    x64.call Array.count
+    x64.mov r9d, 4294967295
+    x64.cmp r8, r9
+    x64.jbe __range_ok_0
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_0]
-    x64.mov rcx, rax
+    x64.lea r12, [rip+__panic_msg_e6cef440e2e60729]
+    x64.mov rcx, r12
     x64.call mrt_panic
   __range_ok_0:
-    x64.mov rcx, [rbp-8]
-    x64.mov [rbp-24], rax
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_0
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.mov rax, [rbp-16]
-    x64.test rax, rax
-    x64.jz __nonnull_skip_1
-    x64.mov rcx, [rbp-16]
-    x64.call mm_decref
-    x64.label __nonnull_skip_1
-    x64.mov rax, [rbp-24]
     x64.epilogue
     x64.ret
   }

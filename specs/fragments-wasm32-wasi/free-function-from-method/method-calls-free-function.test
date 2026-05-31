@@ -1,0 +1,49 @@
+// Test: method-calls-free-function
+
+typealias Integer = int(i64.min to i64.max)
+
+function double(n Integer) returns Integer
+	return n * 2
+end 'double'
+
+type Box
+	export var value as Integer
+
+	export static function create(v Integer) returns Box
+		return Box{value: v}
+	end 'create'
+
+	export function doubled() returns Integer
+		return double(self.value)
+	end 'doubled'
+end 'Box'
+
+function main() returns ExitCode
+	let b = Box.create(21)
+	return b.doubled()
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 21 : i64
+    %4 = mir.mov_imm 8 : i64
+    %5 = mir.call @mrt_alloc(%4)
+    mir.store %0, %5, 0 width: qword
+    %6 = mir.load %5, 0 width: qword
+    %7 = mir.mov_imm 2 : i64
+    %8 = mir.mul.i64 %6, %7
+    %9 = mir.mov_imm 125 : i64
+    %10 = mir.cmp ugt, %8, %9
+    mir.cond_br %10 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %11 = mir.global_addr @__panic_msg_d77273978b543d93
+    %12 = mir.call @mrt_panic(%11)
+  __range_ok_0:
+    mir.ret %8
+  }
+}
+---

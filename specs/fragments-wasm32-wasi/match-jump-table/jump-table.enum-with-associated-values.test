@@ -1,0 +1,185 @@
+// Test: jump-table.enum-with-associated-values
+typealias ID = int(i64.min to i64.max)
+
+union Shape
+		circle(r ID)
+		square(s ID)
+		triangle(b ID, h ID)
+		rectangle(w ID, h ID)
+end 'Shape'
+
+function describe(s Shape) returns String
+		return match s 'sh'
+				circle gives "circle"
+				square gives "square"
+				triangle gives "triangle"
+				rectangle gives "rectangle"
+		end 'sh'
+end 'describe'
+
+function main() returns ExitCode
+		print(describe(Shape.triangle(3, h: 4)))
+		print(describe(Shape.circle(5)))
+		print(describe(Shape.rectangle(2, h: 3)))
+		print(describe(Shape.square(4)))
+		return 0
+end 'main'
+---
+Stdout: ```
+trianglecirclerectanglesquare
+```
+---
+// CompiledIR
+module {
+  func @describe(local0: i64) -> i64 {
+  entry:
+    %57 = mir.param local0 : i64
+    %58 = mir.mov_imm 1 : i64
+    %2 = mir.mov_imm 0 : i64
+    %3 = mir.load %57, 0 width: qword
+    %5 = mir.cmp eq, %3, %2
+    mir.cond_br %5 [then: sh_0.case0(), else: sh_0.next0()]
+  sh_0.merge:
+    mir.ret %56
+  sh_0.case0:
+    %7 = mir.global_addr @__istr_0
+    %8 = mir.mov_imm 40 : i64
+    %9 = mir.call @mrt_alloc(%8)
+    mir.store %7, %9, 0 width: qword
+    %10 = mir.mov_imm 6 : i64
+    mir.store %10, %9, 8 width: qword
+    %11 = mir.mov_imm -2 : i64
+    mir.store %11, %9, 16 width: qword
+    mir.store %58, %9, 24 width: qword
+    mir.store %2, %9, 32 width: qword
+    %14 = mir.mov_imm 16 : i64
+    %15 = mir.call @mrt_alloc(%14)
+    mir.store %9, %15, 0 width: qword
+    mir.store %58, %15, 8 width: qword
+    mir.br sh_0.merge(%15)
+  sh_0.next0:
+    %17 = mir.load %57, 0 width: qword
+    %19 = mir.cmp eq, %17, %58
+    mir.cond_br %19 [then: sh_0.case1(), else: sh_0.next1()]
+  sh_0.case1:
+    %20 = mir.global_addr @__istr_1
+    %21 = mir.mov_imm 40 : i64
+    %22 = mir.call @mrt_alloc(%21)
+    mir.store %20, %22, 0 width: qword
+    %23 = mir.mov_imm 6 : i64
+    mir.store %23, %22, 8 width: qword
+    %24 = mir.mov_imm -2 : i64
+    mir.store %24, %22, 16 width: qword
+    mir.store %58, %22, 24 width: qword
+    mir.store %2, %22, 32 width: qword
+    %27 = mir.mov_imm 16 : i64
+    %28 = mir.call @mrt_alloc(%27)
+    mir.store %22, %28, 0 width: qword
+    mir.store %58, %28, 8 width: qword
+    mir.br sh_0.merge(%28)
+  sh_0.next1:
+    %30 = mir.load %57, 0 width: qword
+    %31 = mir.mov_imm 2 : i64
+    %32 = mir.cmp eq, %30, %31
+    mir.cond_br %32 [then: sh_0.case2(), else: sh_0.next2()]
+  sh_0.case2:
+    %33 = mir.global_addr @__istr_2
+    %34 = mir.mov_imm 40 : i64
+    %35 = mir.call @mrt_alloc(%34)
+    mir.store %33, %35, 0 width: qword
+    %36 = mir.mov_imm 8 : i64
+    mir.store %36, %35, 8 width: qword
+    %37 = mir.mov_imm -2 : i64
+    mir.store %37, %35, 16 width: qword
+    mir.store %58, %35, 24 width: qword
+    mir.store %2, %35, 32 width: qword
+    %40 = mir.mov_imm 16 : i64
+    %41 = mir.call @mrt_alloc(%40)
+    mir.store %35, %41, 0 width: qword
+    mir.store %58, %41, 8 width: qword
+    mir.br sh_0.merge(%41)
+  sh_0.next2:
+    %43 = mir.load %57, 0 width: qword
+    %44 = mir.mov_imm 3 : i64
+    %45 = mir.cmp eq, %43, %44
+    mir.cond_br %45 [then: sh_0.case3(), else: sh_0.merge(%2)]
+  sh_0.case3:
+    %46 = mir.global_addr @__istr_3
+    %47 = mir.mov_imm 40 : i64
+    %48 = mir.call @mrt_alloc(%47)
+    mir.store %46, %48, 0 width: qword
+    %49 = mir.mov_imm 9 : i64
+    mir.store %49, %48, 8 width: qword
+    %50 = mir.mov_imm -2 : i64
+    mir.store %50, %48, 16 width: qword
+    mir.store %58, %48, 24 width: qword
+    mir.store %2, %48, 32 width: qword
+    %53 = mir.mov_imm 16 : i64
+    %54 = mir.call @mrt_alloc(%53)
+    mir.store %48, %54, 0 width: qword
+    mir.store %58, %54, 8 width: qword
+    mir.br sh_0.merge(%54)
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 3 : i64
+    %1 = mir.mov_imm 4 : i64
+    %19 = mir.mov_imm 24 : i64
+    %20 = mir.mov_imm 0 : i64
+    %21 = mir.mov_imm 2 : i64
+    %22 = mir.call @stdlib.__mm_alloc(%19, %20, %21)
+    mir.store %21, %22, 0 width: qword
+    mir.store %0, %22, 8 width: qword
+    mir.store %1, %22, 16 width: qword
+    %3 = mir.call @describe(%22)
+    %23 = mir.load %3, 0 width: qword
+    %24 = mir.load %23, 0 width: qword
+    %25 = mir.load %23, 8 width: qword
+    %26 = mir.call @mrt_write_stdout(%24, %25)
+    %5 = mir.mov_imm 5 : i64
+    %27 = mir.mov_imm 24 : i64
+    %28 = mir.mov_imm 0 : i64
+    %29 = mir.mov_imm 0 : i64
+    %30 = mir.call @stdlib.__mm_alloc(%27, %28, %29)
+    mir.store %29, %30, 0 width: qword
+    mir.store %5, %30, 8 width: qword
+    %31 = mir.mov_imm 0 : i64
+    mir.store %31, %30, 16 width: qword
+    %7 = mir.call @describe(%30)
+    %32 = mir.load %7, 0 width: qword
+    %33 = mir.load %32, 0 width: qword
+    %34 = mir.load %32, 8 width: qword
+    %35 = mir.call @mrt_write_stdout(%33, %34)
+    %9 = mir.mov_imm 2 : i64
+    %10 = mir.mov_imm 3 : i64
+    %36 = mir.mov_imm 24 : i64
+    %37 = mir.mov_imm 0 : i64
+    %38 = mir.mov_imm 3 : i64
+    %39 = mir.call @stdlib.__mm_alloc(%36, %37, %38)
+    mir.store %38, %39, 0 width: qword
+    mir.store %9, %39, 8 width: qword
+    mir.store %10, %39, 16 width: qword
+    %12 = mir.call @describe(%39)
+    %40 = mir.load %12, 0 width: qword
+    %41 = mir.load %40, 0 width: qword
+    %42 = mir.load %40, 8 width: qword
+    %43 = mir.call @mrt_write_stdout(%41, %42)
+    %14 = mir.mov_imm 4 : i64
+    %44 = mir.mov_imm 24 : i64
+    %45 = mir.mov_imm 0 : i64
+    %46 = mir.mov_imm 1 : i64
+    %47 = mir.call @stdlib.__mm_alloc(%44, %45, %46)
+    mir.store %46, %47, 0 width: qword
+    mir.store %14, %47, 8 width: qword
+    %48 = mir.mov_imm 0 : i64
+    mir.store %48, %47, 16 width: qword
+    %16 = mir.call @describe(%47)
+    %49 = mir.load %16, 0 width: qword
+    %50 = mir.load %49, 0 width: qword
+    %51 = mir.load %49, 8 width: qword
+    %52 = mir.call @mrt_write_stdout(%50, %51)
+    %18 = mir.mov_imm 0 : i64
+    mir.ret %18
+  }
+}
+---

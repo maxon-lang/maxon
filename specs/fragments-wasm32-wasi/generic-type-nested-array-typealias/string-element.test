@@ -1,0 +1,130 @@
+// Test: string-element
+typealias ExitCode = int(0 to 125)
+typealias Count = int(0 to u64.max)
+
+type Container uses Element
+	typealias ElementArray = Array with Element
+
+	export var items as ElementArray
+
+	export static function create() returns Self
+		return Self{
+			items: ElementArray.create()
+		}
+	end 'create'
+
+	export function count() returns Count
+		return self.items.count()
+	end 'count'
+
+	export function push(item Element)
+		self.items.push(item)
+	end 'push'
+end 'Container'
+
+typealias StringContainer = Container with String
+
+function main() returns ExitCode
+	var sc = StringContainer.create()
+	sc.push("hello")
+	sc.push("world")
+	let c = sc.count()
+	if c == 2 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @Container.count(local0: i64, local1: i64) -> u64 {
+  entry:
+    %5 = mir.param local0 : i64
+    %1 = mir.param local1 : i64
+    %3 = mir.load %5, 0 width: qword
+    %4 = mir.call @Array.count(%3, %1)
+    %6 = mir.mov_imm -1 : i64
+    %7 = mir.cmp ugt, %4, %6
+    mir.cond_br %7 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %8 = mir.global_addr @__panic_msg_79c2a0d732e3c065
+    %9 = mir.call @mrt_panic(%8)
+  __range_ok_0:
+    mir.ret %4
+  }
+  func @main() -> u8 {
+  entry:
+    %36 = mir.mov_imm 8 : i64
+    %37 = mir.call @mrt_alloc(%36)
+    %43 = mir.mov_imm 8 : i64
+    %44 = mir.call @mrt_alloc(%43)
+    %45 = mir.mov_imm 40 : i64
+    %46 = mir.call @mrt_alloc(%45)
+    %47 = mir.mov_imm 0 : i64
+    mir.store %47, %46, 0 width: qword
+    %48 = mir.mov_imm 0 : i64
+    mir.store %48, %46, 8 width: qword
+    %49 = mir.mov_imm 0 : i64
+    mir.store %49, %46, 16 width: qword
+    %50 = mir.mov_imm 8 : i64
+    mir.store %50, %46, 24 width: qword
+    %51 = mir.mov_imm 0 : i64
+    mir.store %51, %46, 32 width: qword
+    mir.store %46, %44, 0 width: qword
+    mir.store %44, %37, 0 width: qword
+    %3 = mir.global_addr @__istr_0
+    %4 = mir.mov_imm 40 : i64
+    %5 = mir.call @mrt_alloc(%4)
+    mir.store %3, %5, 0 width: qword
+    %6 = mir.mov_imm 5 : i64
+    mir.store %6, %5, 8 width: qword
+    %7 = mir.mov_imm -2 : i64
+    mir.store %7, %5, 16 width: qword
+    %8 = mir.mov_imm 1 : i64
+    mir.store %8, %5, 24 width: qword
+    %9 = mir.mov_imm 0 : i64
+    mir.store %9, %5, 32 width: qword
+    %10 = mir.mov_imm 16 : i64
+    %11 = mir.call @mrt_alloc(%10)
+    mir.store %5, %11, 0 width: qword
+    %12 = mir.mov_imm 1 : i64
+    mir.store %12, %11, 8 width: qword
+    %13 = mir.global_addr @__layout_Container_String
+    %39 = mir.load %37, 0 width: qword
+    %40 = mir.call @Array.push(%39, %11, %13)
+    %16 = mir.global_addr @__istr_1
+    %17 = mir.mov_imm 40 : i64
+    %18 = mir.call @mrt_alloc(%17)
+    mir.store %16, %18, 0 width: qword
+    %19 = mir.mov_imm 5 : i64
+    mir.store %19, %18, 8 width: qword
+    %20 = mir.mov_imm -2 : i64
+    mir.store %20, %18, 16 width: qword
+    %21 = mir.mov_imm 1 : i64
+    mir.store %21, %18, 24 width: qword
+    %22 = mir.mov_imm 0 : i64
+    mir.store %22, %18, 32 width: qword
+    %23 = mir.mov_imm 16 : i64
+    %24 = mir.call @mrt_alloc(%23)
+    mir.store %18, %24, 0 width: qword
+    %25 = mir.mov_imm 1 : i64
+    mir.store %25, %24, 8 width: qword
+    %26 = mir.global_addr @__layout_Container_String
+    %41 = mir.load %37, 0 width: qword
+    %42 = mir.call @Array.push(%41, %24, %26)
+    %29 = mir.global_addr @__layout_Container_String
+    %30 = mir.call @Container.count(%37, %29)
+    %32 = mir.mov_imm 2 : i64
+    %33 = mir.cmp eq, %30, %32
+    mir.cond_br %33 [then: check_0(), else: check_0.after()]
+  check_0:
+    %34 = mir.mov_imm 0 : i64
+    mir.ret %34
+  check_0.after:
+    %35 = mir.mov_imm 1 : i64
+    mir.ret %35
+  }
+}
+---

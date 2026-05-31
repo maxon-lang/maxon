@@ -1,0 +1,101 @@
+// Test: static-string-slice
+function main() returns ExitCode
+	let s = "hello world"
+	let start = s.startIndex()
+	let idx = try s.findFirst(" ") otherwise s.endIndex()
+	let sub = s.slice(start, endIndex: idx)
+	print("{sub}\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+hello
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.global_addr @__istr_0
+    %1 = mir.mov_imm 40 : i64
+    %2 = mir.call @mrt_alloc(%1)
+    mir.store %0, %2, 0 width: qword
+    %3 = mir.mov_imm 11 : i64
+    mir.store %3, %2, 8 width: qword
+    %4 = mir.mov_imm -2 : i64
+    mir.store %4, %2, 16 width: qword
+    %5 = mir.mov_imm 1 : i64
+    mir.store %5, %2, 24 width: qword
+    %6 = mir.mov_imm 0 : i64
+    mir.store %6, %2, 32 width: qword
+    %7 = mir.mov_imm 16 : i64
+    %8 = mir.call @mrt_alloc(%7)
+    mir.store %2, %8, 0 width: qword
+    mir.store %5, %8, 8 width: qword
+    %63 = mir.mov_imm 0 : i64
+    %64 = mir.mov_imm 0 : i64
+    %74 = mir.mov_imm 16 : i64
+    %75 = mir.call @mrt_alloc(%74)
+    mir.store %63, %75, 0 width: qword
+    mir.store %64, %75, 8 width: qword
+    %13 = mir.global_addr @__istr_1
+    %14 = mir.mov_imm 40 : i64
+    %15 = mir.call @mrt_alloc(%14)
+    mir.store %13, %15, 0 width: qword
+    mir.store %5, %15, 8 width: qword
+    %17 = mir.mov_imm -2 : i64
+    mir.store %17, %15, 16 width: qword
+    mir.store %5, %15, 24 width: qword
+    mir.store %6, %15, 32 width: qword
+    %20 = mir.mov_imm 16 : i64
+    %21 = mir.call @mrt_alloc(%20)
+    mir.store %15, %21, 0 width: qword
+    mir.store %5, %21, 8 width: qword
+    %23, %24 = mir.try_call @String.findFirst(%8, %21)
+    %26 = mir.cmp ne, %24, %6
+    mir.cond_br %26 [then: try_0.otherwise(), else: try_0.merge(%23)]
+  try_0.otherwise:
+    %66 = mir.call @String.count(%8)
+    %67 = mir.load %8, 0 width: qword
+    %68 = mir.load %67, 8 width: qword
+    %76 = mir.mov_imm 16 : i64
+    %77 = mir.call @mrt_alloc(%76)
+    mir.store %66, %77, 0 width: qword
+    mir.store %68, %77, 8 width: qword
+    mir.br try_0.merge(%77)
+  try_0.merge:
+    %34 = mir.call @String.slice$StringIndex$StringIndex(%8, %75, %62)
+    %36 = mir.global_addr @__istr_2
+    %38 = mir.load %34, 0 width: qword
+    %39 = mir.load %38, 0 width: qword
+    %40 = mir.load %38, 8 width: qword
+    %41 = mir.global_addr @__istr_3
+    %45 = mir.add.i64 %6, %40
+    %46 = mir.add.i64 %45, %5
+    %48 = mir.add.i64 %46, %5
+    %49 = mir.call @mrt_alloc(%48)
+    mir.memcpy %49, %36, %6
+    %50 = mir.add.i64 %49, %6
+    mir.memcpy %50, %39, %40
+    %51 = mir.add.i64 %50, %40
+    mir.memcpy %51, %41, %5
+    %53 = mir.mov_imm 40 : i64
+    %54 = mir.call @mrt_alloc(%53)
+    mir.store %49, %54, 0 width: qword
+    mir.store %46, %54, 8 width: qword
+    mir.store %46, %54, 16 width: qword
+    mir.store %5, %54, 24 width: qword
+    mir.store %6, %54, 32 width: qword
+    %57 = mir.mov_imm 16 : i64
+    %58 = mir.call @mrt_alloc(%57)
+    mir.store %54, %58, 0 width: qword
+    mir.store %6, %58, 8 width: qword
+    %70 = mir.load %58, 0 width: qword
+    %71 = mir.load %70, 0 width: qword
+    %72 = mir.load %70, 8 width: qword
+    %73 = mir.call @mrt_write_stdout(%71, %72)
+    mir.ret %6
+  }
+}
+---

@@ -185,41 +185,42 @@ let whitelist = ["basics",
 	// "string-split",
 	// "duplicate-typealias",
 	// "field-defaults",
-	// "field-initialization",
-	// "immutable-method-call",
-	// "reserved-self",
-	// "structs",
-	// "builtins-type",
-	// "builtin-type-checking",
-	// "internal-types",
-	// "codegen-internals",
+	// "field-initialization" — E3086 definite-init diagnostic not enforced.
+	// "immutable-method-call" — let-binding mutation not rejected.
+	// "reserved-self" — `for self` diagnostic wording mismatch (E2010).
+	// "structs" (28/30) — let-field-assign not rejected; inferred-field-type.
+	// "builtins-type" — subprocess overload/writeStdout discard gaps.
+	// "builtin-type-checking" — managed-builtin arg-type diagnostics differ.
+	"internal-types",
+	// "codegen-internals" (26/32) — rdata/cow + panic-string rdata gaps.
 
 	// --- Tier 2: moderate semantics / known small gaps ---
 	// "short-circuit-evaluation" (4/11) — needs investigation.
 	// "same-name-methods" (2/5) — needs investigation.
-	// "enum-match-range",
+	// "enum-match-range" (8/9) — range-covers-all-associated non-exhaustive.
 	// "enum-allcases" — `error-enum` fragment needs a Hashable witness for a
 	//   primitive-conforming enum (the same Phase-5 gap as enum-hashable below).
-	// "collection-contains",
+	"collection-contains",
 	// "array-contains" — stdlib `Array.contains` routes `item == element`
 	//   through stdlib-extension machinery (J.4c).
-	// "array-of-bytearray",
-	// "array-slots",
-	// "array-cursor",
-	// "with-iterator",
-	// "struct-array-get-refcount",
-	// "free-function-from-method",
-	// "self-field-method-chain",
-	// "rethrow-stashed-self-field",
-	// "heap-field-assignment",
-	// "pass-by-reference",
-	// "reference-identity",
-	// "throw-transfers-ownership",
-	// "try-block",
-	// "try-block-otherwise-divergent",
-	// "lazy-static",
-	// "filepath",
-	// "file-info",
+	"array-of-bytearray",
+	// "array-slots" (2/7) — empty-slot get crashes; non-enum match scrutinee.
+	// "array-cursor" — x64 passes, but wasm fragments expect exit 210/1101
+	//   (> wasm ExitCode max of 125 → range-check panic).
+	// "with-iterator" — HANGS the runner (worker never returns).
+	"struct-array-get-refcount",
+	"free-function-from-method",
+	"self-field-method-chain",
+	// "rethrow-stashed-self-field" — parser: `Expected '.'` on self union field.
+	// "heap-field-assignment" (3/5) — mm-trace stderr for field-overwrite frees.
+	// "pass-by-reference" (8/14) — primitive/struct ref mutation not propagated.
+	// "reference-identity" (1/11) — `is` diagnostic code + clone codegen crash.
+	// "throw-transfers-ownership" (1/2) — parser: `Expected '.'` on self field.
+	// "try-block" — HANGS the runner (worker never returns).
+	// "try-block-otherwise-divergent" — HANGS the runner (worker never returns).
+	// "lazy-static" (7/9) — `from`-collection initializer + global call init.
+	// "filepath" (38/43) — join doubles the path separator.
+	// "file-info" — x64 passes, but wasm worker crashes on the fragment batch.
 
 	// --- Tier 3: larger features / runtime / multi-file ---
 	// "tuple-assign" (0/10) — parser doesn't accept `(x, y) = expr` LHS shape.
@@ -235,33 +236,34 @@ let whitelist = ["basics",
 	//   match-expr-arm-divergent, optimizer-refcount.
 	// "match-statements" (11/12) — 1 residual fragment uses non-enum scrutinee
 	//   patterns (string-literal match).
-	// "match-jump-table",
+	"match-jump-table",
 	// "match-expr-arm-divergent" (1/2) — needs panic-string interpolation.
 	// "optimizer-refcount" — needs panic-string interpolation.
 	// "enum-hashable" / "enum-match-only" / "enum-full" — bare-enum-as-map-key
 	//   needs a Hashable witness BuildWitnessTables doesn't emit (Phase-5
 	//   witness-table registration for primitive-conforming enums).
-	// "per-instance-typealias",
-	// "generic-type-inner-alias-multifile",
-	// "generic-type-nested-array-typealias",
-	// "generic-module-merge-pattern",
-	// "generic-module-merge-crash",
-	// "monomorphization-recursive-type",
-	// "stack-promotion",
-	// "slice-memory",
-	// "managed-memory-element-size",
-	// "managed-memory-methods",
+	// "per-instance-typealias" (3/5) — wrong-instance diag + `as` parse error.
+	"generic-type-inner-alias-multifile",
+	"generic-type-nested-array-typealias",
+	// "generic-module-merge-pattern" — HANGS the runner (worker never returns).
+	// "generic-module-merge-crash" — HANGS the runner (worker never returns).
+	"monomorphization-recursive-type",
+	// "stack-promotion" (0/6) — mm-trace stack-promotion stderr not emitted.
+	"slice-memory",
+	// "managed-memory-element-size" — x64 passes, but wasm fragment expects
+	//   exit 150 (> wasm ExitCode max of 125 → range-check panic).
+	"managed-memory-methods",
 	// "list" (16/23) — `memory.*` / `value-survives-clear*` fragments need
 	//   E3070 borrow-check diagnostics + runtime mm-trace stderr instrumentation.
-	// "managed-list",
-	// "ownership-edge-cases",
-	// "memory-safety",
-	// "safety",
-	// "leak-checker",
-	// "refcount",
-	// "sha256",
-	// "code-review-timings",
-	// "advent",
+	// "managed-list" (25/34) — borrow-check / mm-trace fragments.
+	// "ownership-edge-cases" (32/88) — extensive mm-trace stderr fragments.
+	// "memory-safety" — HANGS/slow (heavy mm-trace fragment set).
+	// "safety" (0/3) — `result not used` discard diagnostic on forceSegfault.
+	"leak-checker",
+	// "refcount" — HANGS/slow (heavy mm-trace fragment set).
+	"sha256",
+	// "code-review-timings" — docs-only spec, generates no test fragments.
+	"advent",
 
 	// --- Tier 4: async / IO / network / subprocess (need real runtime) ---
 	// "sleep",

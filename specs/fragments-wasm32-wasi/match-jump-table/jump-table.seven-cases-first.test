@@ -1,0 +1,62 @@
+// Test: jump-table.seven-cases-first
+enum Weekday
+		mon
+		tue
+		wed
+		thu
+		fri
+		sat
+		sun
+end 'Weekday'
+
+function main() returns ExitCode
+		let w = Weekday.mon
+		let name = match w 'w'
+				mon gives "Monday"
+				tue gives "Tuesday"
+				wed gives "Wednesday"
+				thu gives "Thursday"
+				fri gives "Friday"
+				sat gives "Saturday"
+				sun gives "Sunday"
+		end 'w'
+		print(name)
+		return 0
+end 'main'
+---
+Stdout: ```
+Monday
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %92 = mir.mov_imm -2 : i64
+    %93 = mir.mov_imm 40 : i64
+    %94 = mir.mov_imm 16 : i64
+    %0 = mir.mov_imm 0 : i64
+    %4 = mir.mov_imm 1 : i64
+    mir.br w_0.case0()
+  w_0.merge:
+    %95 = mir.load %91, 0 width: qword
+    %96 = mir.load %95, 0 width: qword
+    %97 = mir.load %95, 8 width: qword
+    %98 = mir.call @mrt_write_stdout(%96, %97)
+    mir.ret %0
+  w_0.case0:
+    %9 = mir.global_addr @__istr_0
+    %11 = mir.call @mrt_alloc(%93)
+    mir.store %9, %11, 0 width: qword
+    %12 = mir.mov_imm 6 : i64
+    mir.store %12, %11, 8 width: qword
+    mir.store %92, %11, 16 width: qword
+    mir.store %4, %11, 24 width: qword
+    mir.store %0, %11, 32 width: qword
+    %17 = mir.call @mrt_alloc(%94)
+    mir.store %11, %17, 0 width: qword
+    mir.store %4, %17, 8 width: qword
+    mir.br w_0.merge(%17)
+  }
+}
+---
