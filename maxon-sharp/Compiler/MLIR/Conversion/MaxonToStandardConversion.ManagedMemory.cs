@@ -1126,8 +1126,11 @@ public static partial class MaxonToStandardConversion {
     EmitStructFieldStore(block, newBuffer, managedVarName, ManagedFieldBuffer, IrType.I64, varTypes);
 
     // If COW actually happened (buffer changed), update capacity and parentPtr.
-    // cow_check skips COW when byteLen=0, returning the old buffer unchanged.
-    // In that case, capacity must stay as-is (rdata/slice sentinel).
+    // cow_check always detaches a non-owned (capacity < 0) buffer, even when
+    // byteLen == 0 — an empty rdata/slice promotes to a fresh owned buffer
+    // (NULL for byteLen 0), so the new buffer differs from the old and capacity
+    // is reset to the length here. (Owned buffers, capacity >= 0, return the
+    // same pointer and keep their capacity.)
     var origCap = (StdI64)EmitLoad(block, cowCapVar, varTypes);
     var cowOldBuf = (StdI64)EmitLoad(block, cowBufVar, varTypes);
     var cowDidCopy = new StdCmpI64Op("ne", cowOldBuf, newBuffer);

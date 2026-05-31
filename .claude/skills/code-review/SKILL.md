@@ -33,4 +33,4 @@ us to track performance regressions.
 - running the self-hosted compiler spec tests
 - running the self-hosted wasm target spec tests
 
-7. Write a git commit message that summaries the changes in this commit, not what happened in the code review.
+7. Give me a git commit message that summaries the changes in this commit, not what happened in the code review.

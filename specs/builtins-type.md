@@ -156,10 +156,13 @@ end 'main'
 ```
 
 <!-- test: builtins-type.direct-write-stdout -->
+`__Builtins.writeStdout` returns the byte count written — an impure result like
+any other function's, so a bare statement-position call is rejected and the
+result must be explicitly discarded with `_ =`.
 ```maxon
 function main() returns ExitCode
 	let s = "direct\n"
-	__Builtins.writeStdout(s.managed)
+	_ = __Builtins.writeStdout(s.managed)
 	return 0
 end 'main'
 ```

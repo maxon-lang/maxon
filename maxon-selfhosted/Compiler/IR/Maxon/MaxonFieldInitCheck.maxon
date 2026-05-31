@@ -1,0 +1,725 @@
+// Maxon-tier Field-Initialization Pass — E3086 + static-factory lowering.
+//
+// Runs after TypeResolution (types + struct field lists are known) and before
+// LowerMaxonToStd (so `selfFieldStore` ops still exist). Does two jobs:
+//
+//  1. **E3086 (SemanticFieldNotInitialized)** — every `Self{...}` /
+//     `TypeName{...}` struct literal must initialize every non-default,
+//     non-builtin-managed field, either by providing it in the literal, by a
+//     declaration default (the parser already splices those as `fieldStore`
+//     ops), or — for a return-site literal in a static factory — by a
+//     `self.field = expr` write that reaches the literal on EVERY control-flow
+//     path (definite assignment, intersection at joins).
+//
+//  2. **Static-factory lowering** — a static factory has no live `self`
+//     instance, so its `self.field = expr` writes are emitted by the parser as
+//     `selfFieldStore` ops that would lower to a store through a non-existent
+//     `__self` pointer (slot 0 holds the first real parameter) and crash. This
+//     pass rewrites each such `selfFieldStore` into a write to a synthetic
+//     `__self_<field>` local slot, and splices `varLoad(__self_<field>) +
+//     fieldStore(returnedStruct, field)` after each return literal's
+//     `structAlloc`, so the returned struct receives the deferred values.
+//     Instance-method `selfFieldStore`s (real `self`) are left untouched.
+//
+// Ported from the C# bootstrap's parse-time field-init logic
+// (maxon-sharp/Compiler/2-Parser.cs: `_nascentSelfAssignedFields`,
+// `ValidatePendingFieldInitChecks`, `FormatFieldInitError`), moved here to the
+// post-TypeResolution layer where the self-hosted compiler has resolved types —
+// the parser is intentionally pure-record and cannot see field lists or the
+// resolved return type.
+
+typealias FieldNameSet = Set with String
+typealias FieldNameSetArray = Array with FieldNameSet
+
+// 0-based position into a function's `blockRefs` (entry is position 0).
+typealias BlockPos = int(0 to u64.max)
+typealias BlockPosArray = Array with BlockPos
+typealias BlockPosArrayArray = Array with BlockPosArray
+typealias BlockIdToPosMap = Map with (BlockId, BlockPos)
+
+// Field name -> the synthetic `__self_<field>` slot minted for it in a factory.
+typealias FieldSlotMap = Map with (String, VarSlot)
+
+// ============================================================
+// Entry point
+// ============================================================
+
+// Per-function diagnostics anchor at the function's own `sourceFilePath`, so
+// the pass needs no module-level file argument (the pipeline runs whole-module
+// over functions from every file).
+export function runMaxonFieldInitCheck(project Project, module MaxonModule) returns MaxonModule
+	for funcIdx in 0 upto module.functions.count() 'eachFunc'
+		let func = try module.functions.get(funcIdx) otherwise panic("runMaxonFieldInitCheck: funcIdx OOB")
+		checkFunction(project, module: module, func: func)
+	end 'eachFunc'
+	return module
+end 'runMaxonFieldInitCheck'
+
+// ============================================================
+// Per-function processing
+// ============================================================
+
+function checkFunction(project Project, module MaxonModule, func IrFunction)
+	// Skip stdlib functions. With the stdlib cache ON they arrive pre-lowered
+	// and are never re-checked at the Maxon tier; with the cache OFF they are
+	// compiled from source and WOULD reach this pass.
+	//
+	// We treat stdlib functions specially rather than skipping them wholesale:
+	//  * default / managed-builtin field-init EMISSION still runs (stdlib types
+	//    with a defaulted field need their `__field_init_*` call spliced into
+	//    every `Self{}` that omits it — exactly as the parser used to emit);
+	//  * E3086 REPORTING and the static-factory self-assignment rewrite are
+	//    skipped for stdlib (stdlib factories never use the `self.field = expr`
+	//    pattern, and reporting E3086 there would both be spurious and diverge
+	//    from the cache-on path where stdlib arrives pre-lowered — the
+	//    cache-parity spec).
+	let isStdlib = isStdlibFunctionPath(func.sourceFilePath)
+
+	// Determine if this function is a static factory returning its enclosing
+	// type: a method whose first parameter is NOT `__self` and whose return type
+	// names the enclosing struct. Only such functions get the self-assignment
+	// lowering.
+	var enclosingType = ""
+	var isFactory = false
+	if not isStdlib 'classifyKind'
+		if let typeName = try enclosingTypeName(func.name) 'isMethod'
+			enclosingType = typeName
+			if let sig = try project.funcSignatures.get(func.name) 'haveSig'
+				let isStatic = not signatureFirstParamIsSelf(sig)
+				isFactory = isStatic and returnTypeNamesType(project, returnType: func.maxonReturnType, typeName: typeName)
+			end 'haveSig'
+		end 'isMethod'
+	end 'classifyKind'
+
+	// Compute, per return-site structAlloc, the set of fields definitely
+	// assigned via `self.field = expr` on every path reaching it. Empty map for
+	// non-factories (no self-assignment lowering applies).
+	let reachability = computeFieldReachability(module, func: func, isFactory: isFactory)
+
+	// Walk every struct literal: splice default / managed-builtin inits for
+	// omitted fields, and (for non-stdlib) report E3086 for genuinely-missing or
+	// not-definitely-assigned fields. Diagnostics anchor at the function's own
+	// source file (a literal in file B constructing a type from file A must
+	// report against B, not the pipeline's first file).
+	processLiterals(project, module: module, func: func, isStdlib: isStdlib, isFactory: isFactory, reachability: reachability, filePath: func.sourceFilePath)
+
+	// Lower the factory's self-assignments into slot writes + per-literal reads.
+	if isFactory 'lowerFactory'
+		lowerStaticFactory(project, module: module, func: func, enclosingType: enclosingType, reachability: reachability)
+	end 'lowerFactory'
+end 'checkFunction'
+
+// True when `returnType` names struct `typeName` — i.e. `returns Self` or
+// `returns <typeName>` (the parser already resolved `Self` to `named(typeName)`).
+function returnTypeNamesType(project Project, returnType MaxonReturnType, typeName String) returns bool
+	return match returnType 'rt'
+		void gives false
+		value(inner) gives inner.nameOrEmpty(project) == typeName
+	end 'rt'
+end 'returnTypeNamesType'
+
+// ============================================================
+// Definite-assignment dataflow over selfFieldStore writes
+// ============================================================
+
+// Per-return-literal reaching sets. `byStructAllocOp` maps a return literal's
+// structAlloc op index to the set of fields self-assigned on every path to it.
+// `allAssigned` is the union of every field self-assigned anywhere in the body
+// (used to tell "assigned-but-not-reaching" from "never assigned").
+type FieldReachability
+	export var byStructAllocOp as ReachByOpMap
+	export var allAssigned as FieldNameSet
+
+	export static function create() returns FieldReachability
+		return Self{byStructAllocOp: ReachByOpMap.create(), allAssigned: FieldNameSet.create()}
+	end 'create'
+end 'FieldReachability'
+
+typealias ReachByOpMap = Map with (OpIndex, FieldNameSet)
+
+// Forward intersection dataflow: a block's entry set is the intersection of its
+// predecessors' exit sets (empty for the entry block); its exit set is the entry
+// set plus the fields self-assigned in the block. Iterated to a fixed point so
+// loop-only and single-branch writes are excluded. The reaching set at a return
+// literal is its block's entry set plus the fields self-assigned before the
+// structAlloc within that block.
+function computeFieldReachability(module MaxonModule, func IrFunction, isFactory bool) returns FieldReachability
+	var result = FieldReachability.create()
+	if not isFactory 'notFactory'
+		return result
+	end 'notFactory'
+
+	let blockCount = func.blockRefs.count()
+	if blockCount == 0 'noBlocks'
+		return result
+	end 'noBlocks'
+
+	var blockIdToPos = BlockIdToPosMap.create()
+	for pos in 0 upto blockCount 'mapBlocks'
+		let blockRef = try func.blockRefs.get(pos) otherwise continue
+		let block = try module.blocks.get(blockRef) otherwise panic("computeFieldReachability: blockRef OOB")
+		blockIdToPos.upsert(block.id, value: pos)
+	end 'mapBlocks'
+
+	var writesByBlock = FieldNameSetArray.create()
+	var predsByBlock = BlockPosArrayArray.create()
+	for _ in 0 upto blockCount 'initArrays'
+		writesByBlock.push(FieldNameSet.create())
+		predsByBlock.push(BlockPosArray.create())
+	end 'initArrays'
+
+	for pos in 0 upto blockCount 'collectWrites'
+		let blockRef = try func.blockRefs.get(pos) otherwise continue
+		let block = try module.blocks.get(blockRef) otherwise continue
+		var writeSet = try writesByBlock.get(pos) otherwise continue
+		for opIdx in block.opRefs 'eachOp'
+			let op = try module.ops.get(opIdx) otherwise continue
+			let field = selfFieldStoreField(op)
+			if not field.isEmpty() 'isWrite'
+				writeSet.insert(field)
+				result.allAssigned.insert(field)
+			end 'isWrite'
+		end 'eachOp'
+		for succId in blockSuccessors(module, block: block) 'eachSucc'
+			let succPos = try blockIdToPos.get(succId) otherwise continue
+			var succPreds = try predsByBlock.get(succPos) otherwise continue
+			succPreds.push(pos)
+		end 'eachSucc'
+	end 'collectWrites'
+
+	var entryIn = FieldNameSetArray.create()
+	for _ in 0 upto blockCount 'initEntry'
+		entryIn.push(FieldNameSet.create())
+	end 'initEntry'
+
+	var changed = true
+	while changed 'fixpoint'
+		changed = false
+		for pos in 0 upto blockCount 'eachBlockPos'
+			let preds = try predsByBlock.get(pos) otherwise continue
+			if pos == 0 or preds.count() == 0 'entryOrUnreachable'
+				continue
+			end 'entryOrUnreachable'
+			let newIn = intersectExitSets(preds, writesByBlock: writesByBlock, entryIn: entryIn)
+			let oldIn = try entryIn.get(pos) otherwise continue
+			if not fieldSetsEqual(oldIn, b: newIn) 'didChange'
+				try entryIn.set(pos, value: newIn) otherwise panic("computeFieldReachability: entryIn.set OOB")
+				changed = true
+			end 'didChange'
+		end 'eachBlockPos'
+	end 'fixpoint'
+
+	// For each return literal (a `ret(ptr)` where `ptr` is produced by a
+	// structAlloc in the same block), record reaching = entry[block] ∪ writes
+	// before the structAlloc in that block.
+	for pos in 0 upto blockCount 'eachReturn'
+		let blockRef = try func.blockRefs.get(pos) otherwise continue
+		let block = try module.blocks.get(blockRef) otherwise continue
+		let allocOpIdx = try returnLiteralStructAllocOp(module, block: block) otherwise continue
+		var reaching = FieldNameSet.create()
+		let entry = try entryIn.get(pos) otherwise FieldNameSet.create()
+		for f in entry 'copyEntry'
+			reaching.insert(f)
+		end 'copyEntry'
+		for opIdx in block.opRefs 'beforeAlloc'
+			if opIdx == allocOpIdx 'atAlloc'
+				break
+			end 'atAlloc'
+			let op = try module.ops.get(opIdx) otherwise continue
+			let field = selfFieldStoreField(op)
+			if not field.isEmpty() 'isWrite'
+				reaching.insert(field)
+			end 'isWrite'
+		end 'beforeAlloc'
+		result.byStructAllocOp.upsert(allocOpIdx, value: reaching)
+	end 'eachReturn'
+
+	return result
+end 'computeFieldReachability'
+
+// The structAlloc op index of a return-site `Self{...}` literal in `block`: the
+// terminator is `ret(operand)` and `operand` is produced by a `structAlloc` in
+// the same block. Throws when the block doesn't end in a struct-returning ret.
+function returnLiteralStructAllocOp(module MaxonModule, block IrBlock) returns OpIndex throws ReturnLiteralError
+	if not block.hasTerminatorOp() 'noTerm'
+		throw ReturnLiteralError.notReturnLiteral
+	end 'noTerm'
+	let termOp = try module.ops.get(block.terminatorIndex()) otherwise throw ReturnLiteralError.notReturnLiteral
+	if termOp.name != "ret" 'notRet'
+		throw ReturnLiteralError.notReturnLiteral
+	end 'notRet'
+	let retOperand = match termOp 'r'
+		ret(operand, _) gives operand
+		default panic("returnLiteralStructAllocOp: op.name == ret but match failed")
+	end 'r'
+	for opIdx in block.opRefs 'findAlloc'
+		let op = try module.ops.get(opIdx) otherwise continue
+		if op.name != "structAlloc" 'notAlloc'
+			continue
+		end 'notAlloc'
+		let allocResult = match op 'a'
+			structAlloc(allocRes, _, _) gives allocRes
+			default panic("returnLiteralStructAllocOp: op.name == structAlloc but match failed")
+		end 'a'
+		if byteArraysEqual(allocResult, b: retOperand) 'isReturnAlloc'
+			return opIdx
+		end 'isReturnAlloc'
+	end 'findAlloc'
+	throw ReturnLiteralError.notReturnLiteral
+end 'returnLiteralStructAllocOp'
+
+union ReturnLiteralError implements Error
+	notReturnLiteral
+end 'ReturnLiteralError'
+
+function intersectExitSets(preds BlockPosArray, writesByBlock FieldNameSetArray, entryIn FieldNameSetArray) returns FieldNameSet
+	var result = FieldNameSet.create()
+	for (iter, predPos) in preds.withIterator() 'eachPred'
+		let predExit = blockExitSet(predPos, writesByBlock: writesByBlock, entryIn: entryIn)
+		if iter.index() == 0 'first'
+			result = predExit
+		end 'first' else 'narrow'
+			result = fieldSetIntersection(result, b: predExit)
+		end 'narrow'
+	end 'eachPred'
+	return result
+end 'intersectExitSets'
+
+function blockExitSet(pos BlockPos, writesByBlock FieldNameSetArray, entryIn FieldNameSetArray) returns FieldNameSet
+	var out = FieldNameSet.create()
+	let entry = try entryIn.get(pos) otherwise FieldNameSet.create()
+	for f in entry 'copyEntry'
+		out.insert(f)
+	end 'copyEntry'
+	let writes = try writesByBlock.get(pos) otherwise FieldNameSet.create()
+	for f in writes 'copyWrites'
+		out.insert(f)
+	end 'copyWrites'
+	return out
+end 'blockExitSet'
+
+// Successor BlockIds of a block from its terminator op.
+function blockSuccessors(module MaxonModule, block IrBlock) returns BlockIdArray
+	var out = BlockIdArray.create()
+	if not block.hasTerminatorOp() 'noTerm'
+		return out
+	end 'noTerm'
+	let termOp = try module.ops.get(block.terminatorIndex()) otherwise return out
+	if termOp.name == "br" 'isBr'
+		match termOp 'b'
+			br(target, _) then out.push(target)
+			default panic("blockSuccessors: op.name == br but match failed")
+		end 'b'
+	end 'isBr' else if termOp.name == "condBr" 'isCondBr'
+		match termOp 'cb'
+			condBr(_, thenTarget, elseTarget, _) then appendTwoTargets(out, a: thenTarget, b: elseTarget)
+			default panic("blockSuccessors: op.name == condBr but match failed")
+		end 'cb'
+	end 'isCondBr'
+	return out
+end 'blockSuccessors'
+
+function appendTwoTargets(out BlockIdArray, a BlockId, b BlockId)
+	out.push(a)
+	out.push(b)
+end 'appendTwoTargets'
+
+// ============================================================
+// Per-literal processing: default/managed init emission + E3086
+// ============================================================
+
+function processLiterals(project Project, module MaxonModule, func IrFunction, isStdlib bool, isFactory bool, reachability FieldReachability, filePath FilePath)
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("processLiterals: blockRef OOB")
+		// Snapshot the opRef count: splicing default inits mutates opRefs, so we
+		// iterate a fixed index range over the original structAllocs. Each
+		// structAlloc is processed once; splices insert AFTER it so they don't
+		// shift earlier indices we've already visited.
+		var i = 0
+		while i < block.opRefs.count() 'eachOp'
+			let opIdx = try block.opRefs.get(i) otherwise 'skip'
+				i = i + 1
+				continue
+			end 'skip'
+			let op = try module.ops.get(opIdx) otherwise 'next'
+				i = i + 1
+				continue
+			end 'next'
+			if op.name == "structAlloc" 'isAlloc'
+				processOneLiteral(project, module: module, block: block, allocOpIdx: opIdx, allocOp: op, isStdlib: isStdlib, isFactory: isFactory, reachability: reachability, filePath: filePath)
+			end 'isAlloc'
+			i = i + 1
+		end 'eachOp'
+	end 'eachBlock'
+end 'processLiterals'
+
+function processOneLiteral(project Project, module MaxonModule, block IrBlock, allocOpIdx OpIndex, allocOp MaxonOp, isStdlib bool, isFactory bool, reachability FieldReachability, filePath FilePath)
+	let typeName = match allocOp 'a'
+		structAlloc(_, structName, _) gives String.from(structName)
+		default panic("processOneLiteral: op.name == structAlloc but match failed")
+	end 'a'
+	let allocRange = match allocOp 'r'
+		structAlloc(_, _, range) gives range
+		default panic("processOneLiteral: structAlloc range extract failed")
+	end 'r'
+	let allocResult = match allocOp 'res'
+		structAlloc(allocRes, _, _) gives allocRes
+		default panic("processOneLiteral: structAlloc result extract failed")
+	end 'res'
+
+	// Builtin compiler-internal structs (`__ManagedMemory`, tuples, etc.) are
+	// not user-declared and carry no defaultable/E3086-checkable fields.
+	let structType = try project.structTypes.get(typeName) otherwise return
+
+	// Fields the literal provides explicitly (an `isInit` fieldStore on the
+	// struct pointer after the structAlloc).
+	let provided = providedFieldsAfterAlloc(module, block: block, allocOpIdx: allocOpIdx, ptrName: allocResult)
+
+	// Is this the return literal of the enclosing factory? If so, consult its
+	// reaching set; otherwise no self-assignment can cover a field.
+	let reaching = try reachability.byStructAllocOp.get(allocOpIdx) otherwise FieldNameSet.create()
+	let isFactoryReturnLiteral = isFactory and reachability.byStructAllocOp.contains(allocOpIdx)
+
+	// Splice cursor: position just after the structAlloc op in the block.
+	var spliceAt = structAllocPosition(block, allocOpIdx: allocOpIdx) + 1
+
+	var missingFields = StringArray.create()
+	var definiteAssignmentFields = StringArray.create()
+
+	for field in structType.fields 'eachField'
+		if provided.contains(field.name) 'isProvided'
+			continue
+		end 'isProvided'
+
+		// A user-defaulted field: splice `init = <Type>.__field_init_<field>()`
+		// + `ptr.field = init`. A `__ManagedList` field without a default: splice
+		// `init = __ManagedList.create()` + store. Other builtin managed handles
+		// (`__ManagedMemory`, `__ManagedListNode`) are zero-initialized by
+		// structAlloc lowering — no splice, no E3086.
+		if field.hasDefault 'hasDefault'
+			spliceAt = spliceFieldInit(project, module: module, block: block, ptrName: allocResult, fieldName: field.name, callee: "{typeName}.__field_init_{field.name}", spliceAt: spliceAt, range: allocRange)
+			continue
+		end 'hasDefault'
+		let managedBase = managedBuiltinBase(project, fieldType: field.fieldType, enclosingType: typeName)
+		if managedBase == "__ManagedList" 'isManagedList'
+			spliceAt = spliceFieldInit(project, module: module, block: block, ptrName: allocResult, fieldName: field.name, callee: "__ManagedList.create", spliceAt: spliceAt, range: allocRange)
+			continue
+		end 'isManagedList'
+		if not managedBase.isEmpty() 'otherManaged'
+			continue
+		end 'otherManaged'
+
+		// Not provided, not defaulted, not managed — an E3086 candidate. A
+		// factory return literal can still cover it via a reaching `self.field`
+		// write; otherwise it is missing (or assigned-but-not-reaching).
+		if isFactoryReturnLiteral and reachability.allAssigned.contains(field.name) 'selfAssigned'
+			if reaching.contains(field.name) 'reaches'
+				continue
+			end 'reaches'
+			definiteAssignmentFields.push(field.name)
+			continue
+		end 'selfAssigned'
+
+		missingFields.push(field.name)
+	end 'eachField'
+
+	// Stdlib literals are not E3086-reported (cache-parity + stdlib internals
+	// rely on compiler-synthesized inits this pass doesn't model). Their default
+	// / managed inits were still spliced above.
+	if isStdlib 'noReport'
+		return
+	end 'noReport'
+
+	reportFieldInitErrors(project, typeName: typeName, missingFields: missingFields, definiteAssignmentFields: definiteAssignmentFields, range: allocRange, filePath: filePath)
+end 'processOneLiteral'
+
+// Position of the structAlloc op within its block's opRefs.
+function structAllocPosition(block IrBlock, allocOpIdx OpIndex) returns OpIndex
+	for i in 0 upto block.opRefs.count() 'find'
+		let opRef = try block.opRefs.get(i) otherwise continue
+		if opRef == allocOpIdx 'isIt'
+			return i
+		end 'isIt'
+	end 'find'
+	panic("structAllocPosition: structAlloc op {allocOpIdx} not in its block")
+end 'structAllocPosition'
+
+// Splice `init = callee()` + `ptr.fieldName = init` into `block` at `spliceAt`,
+// returning the cursor advanced past both inserted opRefs. The ops go to the
+// module op pool; only their indices are spliced, preserving order.
+function spliceFieldInit(project Project, module MaxonModule, block IrBlock, ptrName ByteArray, fieldName String, callee String, spliceAt OpIndex, range SourceRange) returns OpIndex
+	let callIdx = module.ops.count()
+	let initName = "$fi{callIdx}".toByteArray()
+	module.ops.push(MaxonOp.call(initName, callee: project.calleeNames.intern(callee), callContext: CallContext.qualified, args: ByteArrayArray.create(), argLabels: StringArray.create(), argTypes: MaxonTypeArray.create(), argRanges: SourceRangeArray.create(), range: range))
+	// `resolveAllCalls` ran during TypeResolution, before this pass, so a call
+	// spliced now has no `resolvedCallees` entry — register it directly (keyed by
+	// the call's global op index) so lowerMaxonToStd's "every call op is
+	// resolved" invariant holds. Same pattern as BuildLayoutDescriptors'
+	// `emitRuntimeCall`. The `__field_init_*` / `__ManagedList.create` callee has
+	// a `funcSignatures` entry, so lowering takes the signatured-call path.
+	try project.resolvedCallees.insert(callIdx, value: callee) otherwise ignore
+	try block.opRefs.insert(spliceAt, value: callIdx) otherwise panic("spliceFieldInit: opRefs.insert OOB (call)")
+
+	let storeIdx = module.ops.count()
+	module.ops.push(MaxonOp.fieldStore(ptrName, fieldName: fieldName.toByteArray(), value: initName, isInit: true, range: range))
+	try block.opRefs.insert(spliceAt + 1, value: storeIdx) otherwise panic("spliceFieldInit: opRefs.insert OOB (store)")
+
+	return spliceAt + 2
+end 'spliceFieldInit'
+
+// The set of field names written by an `isInit` fieldStore on `ptrName` after
+// the structAlloc within the same block.
+function providedFieldsAfterAlloc(module MaxonModule, block IrBlock, allocOpIdx OpIndex, ptrName ByteArray) returns FieldNameSet
+	var provided = FieldNameSet.create()
+	var seenAlloc = false
+	for opIdx in block.opRefs 'eachOp'
+		if opIdx == allocOpIdx 'atAlloc'
+			seenAlloc = true
+			continue
+		end 'atAlloc'
+		if not seenAlloc 'beforeAlloc'
+			continue
+		end 'beforeAlloc'
+		let op = try module.ops.get(opIdx) otherwise continue
+		if op.name != "fieldStore" 'notStore'
+			continue
+		end 'notStore'
+		match op 'fs'
+			fieldStore(receiver, fieldName, _, _, _) then recordIfReceiverMatches(provided, receiver: receiver, fieldName: fieldName, ptrName: ptrName)
+			default panic("providedFieldsAfterAlloc: op.name == fieldStore but match failed")
+		end 'fs'
+	end 'eachOp'
+	return provided
+end 'providedFieldsAfterAlloc'
+
+function recordIfReceiverMatches(provided FieldNameSet, receiver ByteArray, fieldName ByteArray, ptrName ByteArray)
+	if byteArraysEqual(receiver, b: ptrName) 'match'
+		provided.insert(String.from(fieldName))
+	end 'match'
+end 'recordIfReceiverMatches'
+
+// Report E3086 for collected field lists. Definite-assignment failure takes
+// precedence over the plain missing-field phrasing.
+function reportFieldInitErrors(project Project, typeName String, missingFields StringArray, definiteAssignmentFields StringArray, range SourceRange, filePath FilePath)
+	if definiteAssignmentFields.count() > 0 'hasDefinite'
+		reportCompileError(project, code: ErrorCode.semanticFieldNotInitialized, message: formatFieldInitError(typeName, fields: definiteAssignmentFields, definiteAssignmentFailure: true), line: range.line, column: range.column, filePath: filePath)
+		return
+	end 'hasDefinite'
+	if missingFields.count() > 0 'hasMissing'
+		reportCompileError(project, code: ErrorCode.semanticFieldNotInitialized, message: formatFieldInitError(typeName, fields: missingFields, definiteAssignmentFailure: false), line: range.line, column: range.column, filePath: filePath)
+	end 'hasMissing'
+end 'reportFieldInitErrors'
+
+// E3086 message text, byte-matched to the C# bootstrap / spec stderr fixtures.
+function formatFieldInitError(typeName String, fields StringArray, definiteAssignmentFailure bool) returns String
+	let plural = fields.count() > 1
+	let list = quotedFieldList(fields)
+	if definiteAssignmentFailure 'defAssign'
+		let firstField = try fields.get(0) otherwise panic("formatFieldInitError: empty fields list")
+		let suffix = "are" if plural else "is"
+		let pluralS = "s" if plural else ""
+		return "field{pluralS} {list} of type '{typeName}' {suffix} not definitely assigned: the 'self.{firstField} = ...' assignment does not reach this Self\{...\} literal on all control-flow paths"
+	end 'defAssign'
+	let suffix2 = "are" if plural else "is"
+	let pluralS2 = "s" if plural else ""
+	return "Field{pluralS2} {list} of type '{typeName}' {suffix2} not initialized (provide in literal, add a default value on the declaration, or assign via self.field in a static factory)"
+end 'formatFieldInitError'
+
+function quotedFieldList(fields StringArray) returns String
+	var out = ""
+	for (iter, field) in fields.withIterator() 'each'
+		if iter.index() > 0 'notFirst'
+			out.append(", ")
+		end 'notFirst'
+		out.append("'{field}'")
+	end 'each'
+	return out
+end 'quotedFieldList'
+
+// The builtin managed base type a field resolves to (`__ManagedMemory`,
+// `__ManagedList`, `__ManagedListNode`), or "" if the field is not a managed
+// handle. Mirrors `synthesizeManagedFieldInits`' resolution exactly: take the
+// field type's direct base name, and if that's a typealias (e.g. a declared
+// `var managed ElementMemory` where `ElementMemory = __ManagedMemory with
+// Element`), chase it through `chaseTypealiasNameToStruct` against the enclosing
+// type. A managed field is zero-initialized (`__ManagedMemory`/`__ManagedListNode`)
+// or `create()`-initialized (`__ManagedList`) — never an E3086 candidate.
+function managedBuiltinBase(project Project, fieldType MaxonType, enclosingType String) returns String
+	let directBase = try baseNameOfMaxonType(project, t: fieldType) otherwise return ""
+	if isBuiltinManagedTypeName(directBase) 'isDirect'
+		return directBase
+	end 'isDirect'
+	let chased = try chaseTypealiasNameToStruct(project, name: directBase, enclosingType: enclosingType) otherwise return ""
+	if isBuiltinManagedTypeName(chased) 'isChased'
+		return chased
+	end 'isChased'
+	return ""
+end 'managedBuiltinBase'
+
+// ============================================================
+// Static-factory lowering: selfFieldStore -> slot writes + literal reads
+// ============================================================
+
+function lowerStaticFactory(project Project, module MaxonModule, func IrFunction, enclosingType String, reachability FieldReachability)
+	let structType = try project.structTypes.get(enclosingType) otherwise return
+	if reachability.allAssigned.count() == 0 'noSelfAssign'
+		return
+	end 'noSelfAssign'
+
+	// Mint one `__self_<field>` slot per self-assigned field, typed from the
+	// resolved struct field. Slot ids are permanent (scope.nextSlot only grows),
+	// so the lowering's `func.scope.nextSlot`-driven slot array picks them up.
+	var fieldSlots = FieldSlotMap.create()
+	for field in reachability.allAssigned 'mintSlots'
+		let resolvedType = fieldTypeOf(structType, fieldName: field)
+		let slot = func.scope.declareShadowing(slotName(field), varType: resolvedType, mutable: true)
+		fieldSlots.upsert(field, value: slot)
+	end 'mintSlots'
+
+	// Rewrite each `selfFieldStore(field, value)` op into a `varStore`/`varDecl`
+	// into the field's slot. The first write per field declares it. Done by
+	// replacing the op at its module.ops index, so opRefs stay valid.
+	var declared = FieldNameSet.create()
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise continue
+		for opIdx in block.opRefs 'eachOp'
+			let op = try module.ops.get(opIdx) otherwise continue
+			let field = selfFieldStoreField(op)
+			if field.isEmpty() 'notSelfStore'
+				continue
+			end 'notSelfStore'
+			let value = selfFieldStoreValue(op)
+			let range = selfFieldStoreRange(op)
+			let slot = try fieldSlots.get(field) otherwise panic("lowerStaticFactory: slot missing for self-assigned field '{field}'")
+			let resolvedType = fieldTypeOf(structType, fieldName: field)
+			if declared.contains(field) 'alreadyDeclared'
+				try module.ops.set(opIdx, value: MaxonOp.varStore(slot, value: value, range: range)) otherwise panic("lowerStaticFactory: ops.set OOB (store)")
+			end 'alreadyDeclared' else 'firstWrite'
+				try module.ops.set(opIdx, value: MaxonOp.varDecl(slot, value: value, slotType: resolvedType, range: range)) otherwise panic("lowerStaticFactory: ops.set OOB (decl)")
+				declared.insert(field)
+			end 'firstWrite'
+		end 'eachOp'
+	end 'eachBlock'
+
+	// At each return literal, splice `read = __self_<field>` + `ptr.field = read`
+	// after the structAlloc for every reaching field not already provided.
+	for blockRef in func.blockRefs 'eachReturnBlock'
+		let block = try module.blocks.get(blockRef) otherwise continue
+		let allocOpIdx = try returnLiteralStructAllocOp(module, block: block) otherwise continue
+		let reaching = try reachability.byStructAllocOp.get(allocOpIdx) otherwise continue
+		spliceFactoryFieldReads(module, block: block, allocOpIdx: allocOpIdx, reaching: reaching, fieldSlots: fieldSlots, structType: structType)
+	end 'eachReturnBlock'
+end 'lowerStaticFactory'
+
+function spliceFactoryFieldReads(module MaxonModule, block IrBlock, allocOpIdx OpIndex, reaching FieldNameSet, fieldSlots FieldSlotMap, structType StructType)
+	let allocResult = allocResultName(module, allocOpIdx: allocOpIdx)
+	let provided = providedFieldsAfterAlloc(module, block: block, allocOpIdx: allocOpIdx, ptrName: allocResult)
+
+	// Position of the structAlloc within the block's opRefs; splice reads right
+	// after it (and after any default-init fieldStores keep source order via the
+	// advancing cursor).
+	var anchorPos = 0 as OpIndex
+	var found = false
+	for i in 0 upto block.opRefs.count() 'findAnchor'
+		let opRef = try block.opRefs.get(i) otherwise continue
+		if opRef == allocOpIdx 'isAnchor'
+			anchorPos = i
+			found = true
+			break
+		end 'isAnchor'
+	end 'findAnchor'
+	if not found 'noAnchor'
+		panic("spliceFactoryFieldReads: structAlloc op {allocOpIdx} not in its block")
+	end 'noAnchor'
+
+	var spliceAt = anchorPos + 1
+	for field in reaching 'eachReaching'
+		if provided.contains(field) 'alreadyProvided'
+			continue
+		end 'alreadyProvided'
+		let slot = try fieldSlots.get(field) otherwise continue
+		let resolvedType = fieldTypeOf(structType, fieldName: field)
+		let loadIdx = module.ops.count()
+		// The load op's module-global index is unique, so it doubles as a
+		// collision-free SSA name suffix for the spliced read.
+		let readName = "$fi{loadIdx}".toByteArray()
+		module.ops.push(MaxonOp.varLoad(readName, slotId: slot, slotType: resolvedType, range: SourceRange.none()))
+		try block.opRefs.insert(spliceAt, value: loadIdx) otherwise panic("spliceFactoryFieldReads: opRefs.insert OOB (load)")
+		let storeIdx = module.ops.count()
+		module.ops.push(MaxonOp.fieldStore(allocResult, fieldName: field.toByteArray(), value: readName, isInit: true, range: SourceRange.none()))
+		try block.opRefs.insert(spliceAt + 1, value: storeIdx) otherwise panic("spliceFactoryFieldReads: opRefs.insert OOB (store)")
+		spliceAt = spliceAt + 2
+	end 'eachReaching'
+end 'spliceFactoryFieldReads'
+
+// ============================================================
+// Op accessors + set helpers
+// ============================================================
+
+// The field name a `selfFieldStore` op writes, or "" for any other op.
+function selfFieldStoreField(op MaxonOp) returns String
+	if op.name != "selfFieldStore" 'notStore'
+		return ""
+	end 'notStore'
+	return match op 's'
+		selfFieldStore(fieldName, _, _) gives String.from(fieldName)
+		default panic("selfFieldStoreField: op.name == selfFieldStore but match failed")
+	end 's'
+end 'selfFieldStoreField'
+
+function selfFieldStoreValue(op MaxonOp) returns ByteArray
+	return match op 's'
+		selfFieldStore(_, value, _) gives value
+		default panic("selfFieldStoreValue: not a selfFieldStore")
+	end 's'
+end 'selfFieldStoreValue'
+
+function selfFieldStoreRange(op MaxonOp) returns SourceRange
+	return match op 's'
+		selfFieldStore(_, _, range) gives range
+		default panic("selfFieldStoreRange: not a selfFieldStore")
+	end 's'
+end 'selfFieldStoreRange'
+
+function allocResultName(module MaxonModule, allocOpIdx OpIndex) returns ByteArray
+	let op = try module.ops.get(allocOpIdx) otherwise panic("allocResultName: allocOpIdx OOB")
+	return match op 'a'
+		structAlloc(allocRes, _, _) gives allocRes
+		default panic("allocResultName: not a structAlloc")
+	end 'a'
+end 'allocResultName'
+
+function fieldTypeOf(structType StructType, fieldName String) returns MaxonType
+	for field in structType.fields 'each'
+		if field.name == fieldName 'match'
+			return field.fieldType
+		end 'match'
+	end 'each'
+	return MaxonType.unresolved
+end 'fieldTypeOf'
+
+function slotName(fieldName String) returns String
+	return "__self_{fieldName}"
+end 'slotName'
+
+function fieldSetIntersection(a FieldNameSet, b FieldNameSet) returns FieldNameSet
+	var out = FieldNameSet.create()
+	for f in a 'each'
+		if b.contains(f) 'common'
+			out.insert(f)
+		end 'common'
+	end 'each'
+	return out
+end 'fieldSetIntersection'
+
+function fieldSetsEqual(a FieldNameSet, b FieldNameSet) returns bool
+	if a.count() != b.count() 'sizeDiff'
+		return false
+	end 'sizeDiff'
+	for f in a 'each'
+		if not b.contains(f) 'missing'
+			return false
+		end 'missing'
+	end 'each'
+	return true
+end 'fieldSetsEqual'

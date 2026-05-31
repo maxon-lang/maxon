@@ -1183,3 +1183,58 @@ function __managed_mem_create(count MachineWord, elemSize MachineWord) returns M
 	__Internals.storeIndirect(newStruct + 32, value: -1)
 	return newStruct
 end '__managed_mem_create'
+
+// toCString(self) — return a NUL-terminated byte pointer into self's buffer.
+// A zero-copy slice or rdata-backed literal often has `buffer[length] != 0`
+// (the byte there belongs to the next element / the next constant), so a bare
+// `loadIndirect(self)` would hand back a pointer that `strlen` walks off the
+// end of — a buffer overrun (and a hard out-of-bounds trap on wasm's
+// bounds-checked memory). Mirror the bootstrap's `MaxonManagedToCStringOp`:
+// when the terminator slot is already `\0`, return the buffer as-is; otherwise
+// COW to an owned buffer, grow capacity to `length + 1`, write the terminator,
+// and return the (possibly reallocated) buffer. Non-throwing — the grow path's
+// `newCap = length + 1 > capacity` can never trip `invalidCapacity`.
+function __managed_mem_to_cstring(self MachineWord) returns MachineWord
+	let buffer = __Internals.loadIndirect(self)
+	let length = __Internals.loadIndirect(self + 8)
+	if __Internals.loadByte(buffer, offset: length) == 0 'alreadyTerminated'
+		return buffer
+	end 'alreadyTerminated'
+	// A capacity that already fits `length + 1` is always a positive (owned)
+	// value — the rdata/shared sentinels are negative and so are < length + 1,
+	// routing through `grow`, which COWs then reallocs. So reaching the
+	// terminator write below always means we own the buffer.
+	let capacity = __Internals.loadIndirect(self + 16)
+	if capacity < length + 1 'needRoom'
+		_ = try __managed_mem_grow(self, newCap: length + 1) otherwise panic("__managed_mem_to_cstring: grow to length+1 cannot shrink")
+	end 'needRoom'
+	let ownedBuf = __Internals.loadIndirect(self)
+	__Internals.storeByte(ownedBuf, offset: length, value: 0)
+	return ownedBuf
+end '__managed_mem_to_cstring'
+
+// fromCString(cstr) — static `__ManagedMemory.fromCString`. Convert a
+// NUL-terminated byte pointer into a fresh byte-element __ManagedMemory.
+// Walks the pointer to find its length (the byte before the terminating
+// `\0`), allocates a root header plus a buffer of `length + 1` bytes, and
+// copies the bytes *including* the terminator so the result is itself a valid
+// cstring (`toCString` on it returns the same shape). length=len,
+// capacity=len+1, element_size=1, parent_ptr=-1 (root). Non-throwing.
+// Mirrors the bootstrap's `LowerCStringToManagedCore`.
+function __managed_mem_from_cstring(cstr MachineWord) returns MachineWord
+	var len = 0
+	while __Internals.loadByte(cstr, offset: len) != 0 'scan'
+		len = len + 1
+	end 'scan'
+	let bufSize = len + 1
+	let destructor = __Internals.destructManagedMemoryAddr()
+	let newStruct = __mm_alloc(40, destructor: destructor, tag: 0)
+	let newBuf = __mm_alloc(bufSize, destructor: 0, tag: 0)
+	__Internals.memcpy(newBuf, src: cstr, size: bufSize)
+	__Internals.storeIndirect(newStruct, value: newBuf)
+	__Internals.storeIndirect(newStruct + 8, value: len)
+	__Internals.storeIndirect(newStruct + 16, value: bufSize)
+	__Internals.storeIndirect(newStruct + 24, value: 1)
+	__Internals.storeIndirect(newStruct + 32, value: -1)
+	return newStruct
+end '__managed_mem_from_cstring'

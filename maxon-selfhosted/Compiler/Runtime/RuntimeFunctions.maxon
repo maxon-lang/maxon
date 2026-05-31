@@ -115,9 +115,22 @@ export function addInternedString(table GlobalDataTable, stringId StringId, data
 	if table.nameIndex.contains(name) 'alreadyRegistered'
 		return name
 	end 'alreadyRegistered'
+	// Emit the payload PLUS one trailing NUL (matching the C# bootstrap's
+	// `new byte[bytes.Length + 1]`). Every consumer records the logical content
+	// `length` separately (the __ManagedMemory header's length field / an
+	// Array's element count), so the terminator at `buffer[length]` is invisible
+	// to length-bounded reads but guarantees the always-NUL-terminated buffer
+	// invariant — letting `__ManagedMemory.toCString()` return the pointer
+	// directly for a literal-backed buffer instead of copying.
+	var terminated = ByteArray.create()
+	terminated.reserve(data.count() + 1)
+	for b in data 'copyBytes'
+		terminated.push(b)
+	end 'copyBytes'
+	terminated.push(0)
 	let newIdx = table.names.count()
 	table.names.push(name)
-	table.values.push(data)
+	table.values.push(terminated)
 	table.nameIndex.upsert(name, value: newIdx)
 	return name
 end 'addInternedString'

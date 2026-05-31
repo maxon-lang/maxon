@@ -1,0 +1,44 @@
+// Test: struct-field-access
+
+typealias Integer = int(i64.min to i64.max)
+
+type Rect
+	export var width as Integer
+	export var height as Integer
+
+	static function create(width Integer, height Integer) returns Self
+		return Self{width: width, height: height}
+	end 'create'
+end 'Rect'
+
+function main() returns ExitCode
+	let r = Rect.create(5, height: 10)
+	return r.width * r.height
+end 'main'
+---
+ExitCode: 50
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 5 : i64
+    %1 = mir.mov_imm 10 : i64
+    %8 = mir.mov_imm 16 : i64
+    %9 = mir.call @mrt_alloc(%8)
+    mir.store %0, %9, 0 width: qword
+    mir.store %1, %9, 8 width: qword
+    %4 = mir.load %9, 0 width: qword
+    %6 = mir.load %9, 8 width: qword
+    %7 = mir.mul.i64 %4, %6
+    %10 = mir.mov_imm 125 : i64
+    %11 = mir.cmp ugt, %7, %10
+    mir.cond_br %11 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %12 = mir.global_addr @__panic_msg_8c69602cc84d005f
+    %13 = mir.call @mrt_panic(%12)
+  __range_ok_0:
+    mir.ret %7
+  }
+}
+---

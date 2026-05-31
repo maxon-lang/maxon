@@ -26,6 +26,11 @@ export enum CastCategory
 	// collapsing into a numeric/bool family. The call-site type checker
 	// detects string→non-string mismatches and rejects them with E3005.
 	string
+	// `cstring` lowers to an i64 pointer at the Std level, but it is a distinct
+	// user-visible type: the call-site checker must reject an `int` argument
+	// where a `cstring` is expected (and vice versa), so it gets its own cast
+	// family rather than collapsing into `int`. See MaxonType.cstring.
+	cstring
 end 'CastCategory'
 
 export function castCategoryName(cat CastCategory) returns String
@@ -40,6 +45,7 @@ export function castCategoryIsIntegerFamily(cat CastCategory) returns bool
 		float gives false
 		bool gives false
 		string gives false
+		cstring gives false
 	end 'check'
 end 'castCategoryIsIntegerFamily'
 

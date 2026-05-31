@@ -1,0 +1,45 @@
+// Test: var-struct-field-assign
+
+typealias Integer = int(i64.min to i64.max)
+
+type Point
+	export var x as Integer
+	export var y as Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
+end 'Point'
+
+function main() returns ExitCode
+	var p = Point.create(10, y: 20)
+	p.x = 30
+	return p.x
+end 'main'
+---
+ExitCode: 30
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 10 : i64
+    %1 = mir.mov_imm 20 : i64
+    %7 = mir.mov_imm 16 : i64
+    %8 = mir.call @mrt_alloc(%7)
+    mir.store %0, %8, 0 width: qword
+    mir.store %1, %8, 8 width: qword
+    %4 = mir.mov_imm 30 : i64
+    mir.store %4, %8, 0 width: qword
+    %6 = mir.load %8, 0 width: qword
+    %9 = mir.mov_imm 125 : i64
+    %10 = mir.cmp ugt, %6, %9
+    mir.cond_br %10 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %11 = mir.global_addr @__panic_msg_46335df89bdd20cc
+    %12 = mir.call @mrt_panic(%11)
+  __range_ok_0:
+    mir.ret %6
+  }
+}
+---

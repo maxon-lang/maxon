@@ -1,0 +1,46 @@
+// Test: factory-self-assign-straight-line
+
+typealias Integer = int(i64.min to i64.max)
+
+type Counter
+	export var value as Integer
+	export var version as Integer
+
+	export static function make(initial Integer) returns Self
+		self.value = initial
+		self.version = 1
+		return Self{}
+	end 'make'
+end 'Counter'
+
+function main() returns ExitCode
+	let c = Counter.make(41)
+	return c.value + c.version
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 41 : i64
+    %7 = mir.mov_imm 1 : i64
+    %8 = mir.mov_imm 16 : i64
+    %9 = mir.call @mrt_alloc(%8)
+    mir.store %0, %9, 0 width: qword
+    mir.store %7, %9, 8 width: qword
+    %3 = mir.load %9, 0 width: qword
+    %5 = mir.load %9, 8 width: qword
+    %6 = mir.add.i64 %3, %5
+    %10 = mir.mov_imm 125 : i64
+    %11 = mir.cmp ugt, %6, %10
+    mir.cond_br %11 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %12 = mir.global_addr @__panic_msg_f50d8e944cdcec03
+    %13 = mir.call @mrt_panic(%12)
+  __range_ok_0:
+    mir.ret %6
+  }
+}
+---

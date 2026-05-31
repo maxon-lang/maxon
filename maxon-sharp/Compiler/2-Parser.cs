@@ -131,6 +131,12 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   // its fast-path while-loop desugaring.
   private bool _inForInIterable;
   private MaxonCallOp? _lastExprCallOp;
+  // True when the most recently parsed expression was a `__Builtins.*` static
+  // intrinsic call. These emit specialized ops (MaxonManagedWriteStdoutOp,
+  // runtime-call ops, …) rather than a MaxonCallOp, so the `_ = expr` discard
+  // validation — which otherwise only recognizes MaxonCallOp / MaxonTryCallOp —
+  // needs this signal to treat a builtin call as the function call it is.
+  private bool _lastExprWasBuiltinCall;
   private bool _parsingTypeAliasRhs;
   // True only while parsing the topmost typeref of a typealias RHS. Inline
   // `function(...) returns T` types are only valid when this flag is set.
@@ -8762,6 +8768,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     Expect(TokenType.Equals);
 
     _lastExprCallOp = null;
+    _lastExprWasBuiltinCall = false;
     _lastExprFromImmutableRoot = false;
     var initExpr = ParseExpression();
 
@@ -8789,7 +8796,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // Validate discard: RHS must be a function call
     if (isDiscard) {
       var lastOp = _currentBlock!.Operations.Count > 0 ? _currentBlock!.Operations[^1] : null;
-      var hasCall = lastOp is MaxonCallOp || _lastExprCallOp is MaxonTryCallOp;
+      var hasCall = lastOp is MaxonCallOp || _lastExprCallOp is MaxonTryCallOp || _lastExprWasBuiltinCall;
       var hasCallTmp = lastOp is MaxonAssignOp { VarName: var tmpName } && tmpName.StartsWith("__call_tmp_")
         && _currentBlock!.Operations.Count > 1 && _currentBlock!.Operations[^2] is MaxonCallOp;
       if (!hasCall && !hasCallTmp) {
@@ -10588,8 +10595,14 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// Called after consuming '('. Returns the result value (or null for void builtins).
   /// </summary>
   private MaxonValue? EmitBuiltinsStaticMethod(Token token) {
-    if (CompilerBuiltins.TryGetValue(token.Value, out var info))
-      return info.Handler(this);
+    if (CompilerBuiltins.TryGetValue(token.Value, out var info)) {
+      var result = info.Handler(this);
+      // Record that this expression was a builtin call so a `_ = __Builtins.X(...)`
+      // discard is accepted: these handlers emit specialized ops, not a
+      // MaxonCallOp, which the discard validator checks for directly.
+      _lastExprWasBuiltinCall = true;
+      return result;
+    }
     throw new CompileError(ErrorCode.ParserExpectedExpression, $"Unknown builtin '{token.Value}'", token.Line, token.Column);
   }
 

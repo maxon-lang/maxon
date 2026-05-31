@@ -108,42 +108,6 @@ end 'ClosureRename'
 
 export typealias ClosureRenameArray = Array with ClosureRename
 
-// A `Self{...}` struct literal that appeared inside its own declaring type's
-// body, where the type was not yet registered in `unresolvedStructTypes` (the
-// insert happens only after the whole body is parsed) AND the complete field
-// list was not yet known at literal-parse time (e.g. a constructing method
-// declared above a defaulted field). The omitted-field default-init emission is
-// deferred to the end of `parseTypeDecl`, when the field list is complete,
-// and spliced into `block` immediately after the `structAlloc` at
-// `structAllocOpIdx`. Without this, declaration order inside the body would
-// decide which defaults are applied — fields declared after the literal's
-// method would be left uninitialized and dereference as null at runtime.
-type PendingSelfLiteralDefault
-	export var block as IrBlock
-	export var structAllocOpIdx as OpIndex
-	export var ptrName as ByteArray
-	export var providedFieldNames as StringArray
-	export var typeToken as Token
-
-	export static function create(block IrBlock, structAllocOpIdx OpIndex, ptrName ByteArray, providedFieldNames StringArray, typeToken Token) returns PendingSelfLiteralDefault
-		return Self{block: block, structAllocOpIdx: structAllocOpIdx, ptrName: ptrName, providedFieldNames: providedFieldNames, typeToken: typeToken}
-	end 'create'
-end 'PendingSelfLiteralDefault'
-
-typealias PendingSelfLiteralDefaultArray = Array with PendingSelfLiteralDefault
-
-// The default-init decision for one omitted struct-literal field. `skip` means
-// the field needs no synthesized init (it is not defaulted and not a managed
-// builtin). `emit` carries the callee name whose `()` produces the field's
-// value — either the field's `<Type>.__field_init_<name>` helper (user
-// default) or `__ManagedList.create` (managed builtin without a user default).
-// Both `parseStructLiteral` emission paths share this decision; they differ
-// only in where the resulting call + fieldStore ops are placed.
-union OmittedFieldInit
-	skip
-	emit(callee String)
-end 'OmittedFieldInit'
-
 // Walk every op in `module.ops` and rewrite the `funcName` of any
 // `closureCreate`/`functionRef` that references one of the renamed
 // closures. Linear in op count and rename count, but both are small
@@ -319,13 +283,6 @@ export type Parser
 	// same file produces stable names — the stdlib cache relies on the
 	// names being deterministic across runs.
 	var paramDefaultHelperCounter as ParsedInt
-	// Per-Parser counter minting unique value names for deferred in-body
-	// field-default inits (`$fd0`, `$fd1`, …). These are spliced into a method
-	// body after the whole type is parsed, at which point the per-function
-	// `synthNameCounter` no longer reflects that method's context — a distinct
-	// monotonic counter with a `$fd`-prefixed scheme guarantees the names never
-	// collide with the regular per-function `$t{n}` names.
-	var deferredFieldDefaultCounter as ParsedInt
 	// Grow-on-demand cache of synth-name ByteArrays, indexed by the counter
 	// value. Entries 0..K are populated lazily as freshSynthName is called;
 	// subsequent functions within the same Parser reuse the hot entries
@@ -393,14 +350,6 @@ export type Parser
 	// alias declared earlier in the same body before its merge into the
 	// target's `innerAliases`. Empty between bodies.
 	var currentInnerAliases as InnerAliasMap
-	// In-body `Self{...}` literals whose omitted-field defaults could not be
-	// emitted at parse time because the complete field list of the enclosing
-	// type was not yet known (e.g. a constructing method declared above a
-	// defaulted field, or any `Self{}` while the type is still being parsed and
-	// thus not yet registered in `project.unresolvedStructTypes`). Drained at
-	// the end of `parseTypeDecl`, when the field list is complete, by
-	// `drainPendingSelfLiteralDefaults`. Empty between type bodies.
-	var pendingSelfLiteralDefaults as PendingSelfLiteralDefaultArray
 	// Stage E (closures): the outer function's scope at the moment we
 	// entered a closure body. Used to discriminate capture references
 	// (declared in the enclosing scope) from genuine undefined names.
@@ -471,7 +420,7 @@ export type Parser
 		// before any expression is parsed.
 		let placeholderFunc = IrFunction.create("", maxonReturnType: MaxonReturnType.void, paramCount: 0, maxonParamTypes: MaxonTypeArray.create(), returnLine: 0)
 		let placeholderBlock = IrBlock.create(0, label: "")
-		return Self{project: project, tokens: tokens, cursor: cursor, filePath: filePath, rootPath: rootPath, namespace: namespace, currentTypeName: "", currentTypeParams: StringArray.create(), currentTypeConformances: ConformanceArray.create(), currentTypeVisibility: Visibility.file, currentEnumVisibility: Visibility.file, scope: Scope.create(), loopStack: LoopContextArray.create(), matchStack: MatchContextArray.create(), abortBody: false, bodyStmtParsed: false, paramLocations: ParamLocationArray.create(), localVarLocations: ParamLocationArray.create(), referencedVars: ReferencedVarSet.create(), mutableVarLocations: ParamLocationArray.create(), reassignedVars: ReferencedVarSet.create(), lastExprImmutableVarRefName: "", lastExprFromImmutableRoot: false, lastExprVarRefName: "", lastExprProducerName: ByteArray.create(), pendingVarFromImmutable: VarFromImmutableCandidateArray.create(), paramReservations: ParamReservationArray.create(), synthNameCounter: 0, paramDefaultHelperCounter: 0, deferredFieldDefaultCounter: 0, synthNameCache: ByteArrayArray.create(), currentBlock: placeholderBlock, currentFunc: placeholderFunc, module: MaxonModule.create(), consumeExpectedDisplay: "more input", inMatchArmBody: false, inClosure: false, inFunctionParam: false, inForInHeader: false, atTopOfTypeAliasRhs: false, inIfCondition: false, currentInnerAliases: InnerAliasMap.create(), pendingSelfLiteralDefaults: PendingSelfLiteralDefaultArray.create(), closureOuterScope: Scope.create(), closureCaptures: CaptureInfoArray.create(), closureOuterReferencedVars: ReferencedVarSet.create(), moduleInitName: "", moduleInitFunc: placeholderFunc, moduleInitBlock: placeholderBlock, moduleInitSynthCounter: 0, localTypealiases: LocalTypealiasArray.create(), usedTypeAliases: ReferencedVarSet.create(), letStructBackedEnumCases: StructBackedEnumCaseBindingMap.create()}
+		return Self{project: project, tokens: tokens, cursor: cursor, filePath: filePath, rootPath: rootPath, namespace: namespace, currentTypeName: "", currentTypeParams: StringArray.create(), currentTypeConformances: ConformanceArray.create(), currentTypeVisibility: Visibility.file, currentEnumVisibility: Visibility.file, scope: Scope.create(), loopStack: LoopContextArray.create(), matchStack: MatchContextArray.create(), abortBody: false, bodyStmtParsed: false, paramLocations: ParamLocationArray.create(), localVarLocations: ParamLocationArray.create(), referencedVars: ReferencedVarSet.create(), mutableVarLocations: ParamLocationArray.create(), reassignedVars: ReferencedVarSet.create(), lastExprImmutableVarRefName: "", lastExprFromImmutableRoot: false, lastExprVarRefName: "", lastExprProducerName: ByteArray.create(), pendingVarFromImmutable: VarFromImmutableCandidateArray.create(), paramReservations: ParamReservationArray.create(), synthNameCounter: 0, paramDefaultHelperCounter: 0, synthNameCache: ByteArrayArray.create(), currentBlock: placeholderBlock, currentFunc: placeholderFunc, module: MaxonModule.create(), consumeExpectedDisplay: "more input", inMatchArmBody: false, inClosure: false, inFunctionParam: false, inForInHeader: false, atTopOfTypeAliasRhs: false, inIfCondition: false, currentInnerAliases: InnerAliasMap.create(), closureOuterScope: Scope.create(), closureCaptures: CaptureInfoArray.create(), closureOuterReferencedVars: ReferencedVarSet.create(), moduleInitName: "", moduleInitFunc: placeholderFunc, moduleInitBlock: placeholderBlock, moduleInitSynthCounter: 0, localTypealiases: LocalTypealiasArray.create(), usedTypeAliases: ReferencedVarSet.create(), letStructBackedEnumCases: StructBackedEnumCaseBindingMap.create()}
 	end 'create'
 
 	export function parseModule() returns MaxonModule throws ParserError
@@ -779,6 +728,16 @@ export type Parser
 			synchronize()
 			return MaxonType.unresolved
 		end 'isBareFloat'
+
+		// `cstring` is a built-in primitive keyword (a NUL-terminated byte
+		// pointer), distinct from `__ManagedMemory` — it is the declared return
+		// type of `String.cstr()` / `__ManagedMemory.toCString()` and the param
+		// type of `__Builtins.*` intrinsics that strlen their argument. Like
+		// `bool` it is accepted bare (it has no range), so resolve the keyword
+		// token to the dedicated MaxonType arm here.
+		if typeToken.kind == TokenKind.cstring 'isCstring'
+			return MaxonType.cstring
+		end 'isCstring'
 
 		// Phase 11.0: a bare identifier matching one of the in-scope type
 		// parameters lowers to `MaxonType.typeParameter(id)`. The lookup
@@ -1547,9 +1506,29 @@ export type Parser
 		// Same suffixes still report E2001 — that's a real duplicate.
 		var funcIsDuplicate = false
 		var registrationName = qualifiedName
-		var insertedFuncReturnType = true
-		try project.funcReturnTypes.insert(qualifiedName, value: returnType) otherwise 'dupFunc'
-			insertedFuncReturnType = false
+		var insertedFuncReturnType = false
+		// Decide whether this declaration must go through overload registration.
+		// Two triggers:
+		//   1. The bare name already has an overload bucket. A third-and-later
+		//      overload no longer collides on the bare name, because the second
+		//      registration re-keyed the original bare entry to a mangled name
+		//      (`rekeyExistingFunction`) and left `funcReturnTypes[qualifiedName]`
+		//      vacant. A plain bare insert would silently take over the bare name
+		//      and never join the bucket, so the call-site resolver would only
+		//      ever see the first two variants.
+		//   2. The bare insert collides with an already-registered function (the
+		//      first time a second overload of the same name appears).
+		// Otherwise the bare insert succeeds and this is the sole definition.
+		var needsOverloadRegistration = project.overloadedNames.contains(qualifiedName)
+		if not needsOverloadRegistration 'tryBareInsert'
+			try project.funcReturnTypes.insert(qualifiedName, value: returnType) otherwise 'dupFunc'
+				needsOverloadRegistration = true
+			end 'dupFunc'
+			if not needsOverloadRegistration 'bareInsertOk'
+				insertedFuncReturnType = true
+			end 'bareInsertOk'
+		end 'tryBareInsert'
+		if needsOverloadRegistration 'registerOverload'
 			let resolution = tryRegisterOverload(qualifiedName, paramTypes: paramTypes, paramNames: paramNames, hasSelf: isInstance, returnType: returnType)
 			if resolution.isOverload 'isOverload'
 				registrationName = resolution.mangledName
@@ -1561,7 +1540,7 @@ export type Parser
 				// `qualifiedName` is already just "main" for the entry function.
 				reportDuplicateFunction(qualifiedName, nameToken: nameToken)
 			end 'realDup'
-		end 'dupFunc'
+		end 'registerOverload'
 		if insertedFuncReturnType 'recordRt'
 			recordFuncReturnTypeInsert(project, filePath: filePath, key: qualifiedName)
 		end 'recordRt'
@@ -2008,6 +1987,17 @@ export type Parser
 		if scope.isSelfField(nameToken.value) 'selfFieldReceiver'
 			module.appendOp(block, op: MaxonOp.selfFieldLoad(receiverName, fieldName: nameToken.value.toByteArray(), range: nameRange))
 		end 'selfFieldReceiver' else 'localReceiver'
+			// E2013: writing through `x.field = …` mutates the base binding `x`,
+			// so a `let`-bound (or for-in loop variable) base is rejected — the
+			// same requireMutable check the C# bootstrap's ResolveStructVariable
+			// applies for field assignment. Self-fields take the branch above and
+			// carry their own mutability semantics.
+			let baseInfo = scope.getInfo(nameToken.value)
+			if not baseInfo.mutable 'immutableBase'
+				reportCompileError(project, code: ErrorCode.parserImmutableVariable, message: "cannot assign to immutable variable: '{nameToken.value}'", line: nameToken.line, column: nameToken.column, filePath: filePath)
+				synchronize()
+				return
+			end 'immutableBase'
 			let slot = lookupVariable(nameToken.value, token: nameToken)
 			// Stamp the receiver's declared type (like the plain-read path at
 			// `parseIdentifierExpr`). A parameter slot is never reached by
@@ -2156,6 +2146,14 @@ export type Parser
 	// when isInstance; `hasSelf` controls the slot-0 skip when computing the
 	// first-param suffix.
 	function tryRegisterOverload(qualifiedName String, paramTypes MaxonTypeArray, paramNames StringArray, hasSelf bool, returnType MaxonReturnType) returns OverloadResolution
+		// Third-and-later overload: the bucket already exists (the original
+		// bare entry was re-keyed away by overload #2), so there is no bare
+		// signature to compare against. Extend the bucket by comparing the new
+		// function's mangled suffix against every member already in it.
+		if project.overloadedNames.contains(qualifiedName) 'bucketExists'
+			return tryExtendOverloadBucket(qualifiedName, paramTypes: paramTypes, paramNames: paramNames, hasSelf: hasSelf, returnType: returnType)
+		end 'bucketExists'
+
 		var newSuffix = mangleSuffixForFirstParam(project, paramTypes: paramTypes, hasSelf: hasSelf)
 		// Existing function's first-param type comes from its registered
 		// FuncSignature. If we don't find one, we can't compute its suffix
@@ -2190,16 +2188,61 @@ export type Parser
 		if bucket.count() == 0 'fresh'
 			bucket.push(existingMangled)
 		end 'fresh'
-		bucket.push(newMangled)
-		project.overloadedNames.upsert(qualifiedName, value: bucket)
-		recordOverloadedNamesUpsert(project, filePath: filePath, key: qualifiedName)
 		// Insert the new function's funcReturnTypes entry under its mangled
 		// name; the caller handles funcSignatures / funcVisibilities /
 		// funcThrowsTypes / methodNameIndex inserts under `registrationName`.
-		try project.funcReturnTypes.insert(newMangled, value: returnType) otherwise panic("tryRegisterOverload: funcReturnTypes.insert collision on freshly-mangled name '{newMangled}'")
+		return commitOverloadMember(qualifiedName, bucket: bucket, newMangled: newMangled, returnType: returnType)
+	end 'tryRegisterOverload'
+
+	// Add a third-or-later overload to an existing bucket. The new function's
+	// mangled name is computed the same way the first two were (type-suffix,
+	// falling back to a name-suffix on collision). It is compared against every
+	// member already in the bucket: an exact mangled-name collision is a real
+	// duplicate (E2001); otherwise the new mangled name joins the bucket. No
+	// re-keying happens here — the bucket members are already mangled.
+	function tryExtendOverloadBucket(qualifiedName String, paramTypes MaxonTypeArray, paramNames StringArray, hasSelf bool, returnType MaxonReturnType) returns OverloadResolution
+		let typeSuffix = mangleSuffixForFirstParam(project, paramTypes: paramTypes, hasSelf: hasSelf)
+		// The caller (`tryRegisterOverload`) only reaches here after confirming
+		// `overloadedNames.contains(qualifiedName)`, so the bucket is always present.
+		var bucket = try project.overloadedNames.get(qualifiedName) otherwise panic("tryExtendOverloadBucket: overload bucket for '{qualifiedName}' vanished after contains() check")
+		// Prefer the type-suffix mangling; fall back to the name-suffix form if
+		// it collides with an existing member but the param names differ (the
+		// same `slice(start, endIndex)` vs `slice(start, length)` rule the
+		// two-overload path applies).
+		let typeMangled = "{qualifiedName}{typeSuffix}"
+		let nameMangled = "{qualifiedName}{mangleSuffixForParamNames(paramNames, hasSelf: hasSelf)}"
+		let typeCollides = bucketContainsMangled(bucket, mangled: typeMangled)
+		let newMangled = nameMangled if typeCollides else typeMangled
+		// A name-suffix fallback that ALSO collides means the two are a real
+		// duplicate (identical types and identical param names).
+		if typeCollides and bucketContainsMangled(bucket, mangled: nameMangled) 'nameCollision'
+			return OverloadResolution.duplicate()
+		end 'nameCollision'
+		return commitOverloadMember(qualifiedName, bucket: bucket, newMangled: newMangled, returnType: returnType)
+	end 'tryExtendOverloadBucket'
+
+	// Push `newMangled` onto the overload `bucket`, persist the updated bucket,
+	// and register the new function's return type under its mangled name. Shared
+	// tail of the two-overload (`tryRegisterOverload`) and third-or-later
+	// (`tryExtendOverloadBucket`) paths.
+	function commitOverloadMember(qualifiedName String, bucket QualifiedNameArray, newMangled String, returnType MaxonReturnType) returns OverloadResolution
+		bucket.push(newMangled)
+		project.overloadedNames.upsert(qualifiedName, value: bucket)
+		recordOverloadedNamesUpsert(project, filePath: filePath, key: qualifiedName)
+		try project.funcReturnTypes.insert(newMangled, value: returnType) otherwise panic("commitOverloadMember: funcReturnTypes.insert collision on freshly-mangled name '{newMangled}'")
 		recordFuncReturnTypeInsert(project, filePath: filePath, key: newMangled)
 		return OverloadResolution.overload(newMangled)
-	end 'tryRegisterOverload'
+	end 'commitOverloadMember'
+
+	// True when `mangled` is already a member of the overload `bucket`.
+	function bucketContainsMangled(bucket QualifiedNameArray, mangled String) returns bool
+		for v in bucket 'scan'
+			if v == mangled 'hit'
+				return true
+			end 'hit'
+		end 'scan'
+		return false
+	end 'bucketContainsMangled'
 
 	// Move the per-function entry in `funcReturnTypes` / `funcSignatures` /
 	// `funcVisibilities` / `funcThrowsTypes` keyed by `oldName` to
@@ -2713,11 +2756,12 @@ export type Parser
 		// file-private — cross-file users go through their own lowerer copy.
 		registerSynthHelperSignature(helperName, returnType: returnType, visibility: Visibility.file)
 
-		// Stage K.4: no livenessRoot push. Every `Self{}` literal that
-		// omits a defaulted field emits a `MaxonOp.call(__field_init_<name>)`
-		// op in `parseStructLiteral`, so the regular DFE call-edge walk
-		// reaches the helper when the struct is actually constructed. If no
-		// user code constructs the struct, the helper is correctly dead.
+		// Stage K.4: no livenessRoot push. The post-TypeResolution
+		// `MaxonFieldInitCheck` pass splices a `MaxonOp.call(__field_init_<name>)`
+		// op into every `Self{}` literal that omits a defaulted field, so the
+		// regular DFE call-edge walk reaches the helper when the struct is
+		// actually constructed. If no user code constructs the struct, the
+		// helper is correctly dead.
 		module.functions.push(helperFunc)
 	end 'parseFieldDefaultInitHelper'
 
@@ -4589,12 +4633,6 @@ export type Parser
 				try cursor.advance() otherwise break
 			end 'stuck'
 		end 'body'
-
-		// The complete field list is now known. Splice deferred field-default
-		// inits into any in-body `Self{...}` literal recorded during the body
-		// parse (e.g. a constructing method declared above a defaulted field).
-		// Done while `currentTypeName` is still set — the helper names embed it.
-		try drainPendingSelfLiteralDefaults(fields)
 
 		// byteSize is a placeholder; `layoutAllStructs` in TypeResolution
 		// overwrites it once every field's width is known.
@@ -7292,7 +7330,7 @@ export type Parser
 			genericInstance gives true
 			interface gives true
 			constInt gives false
-			opaquePointer gives true
+			opaquePointer to cstring gives true
 		end 'check'
 	end 'matchScrutineeIsKnownNonEnum'
 
@@ -8335,8 +8373,12 @@ export type Parser
 			try expect(TokenKind.rightParen)
 		end 'isDestructure' else 'singleName'
 			if not at(TokenKind.identifier) 'noName'
+				// Keyword-shaped tokens (e.g. `self`) and genuine non-name tokens
+				// alike are rejected here with the same "Expected identifier but
+				// got 'X'" phrasing the let/var binding path uses, matching the
+				// C# bootstrap's `Expect(Identifier)` for the loop variable.
 				let tok = cursor.current()
-				reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "expected loop variable name after 'for'", line: tok.line, column: tok.column, filePath: filePath)
+				reportTokenMismatch(tok, expectedDisplay: "identifier")
 				synchronize()
 				return block
 			end 'noName'
@@ -9639,7 +9681,7 @@ export type Parser
 			boolean to string gives false
 			function gives false
 			unresolved gives false
-			genericInstance to opaquePointer gives false
+			genericInstance to cstring gives false
 		end 'check'
 	end 'shouldCarryAsBinopOperandType'
 
@@ -9647,7 +9689,7 @@ export type Parser
 		return match t 'check'
 			named gives true
 			boolean to string gives false
-			function to opaquePointer gives false
+			function to cstring gives false
 		end 'check'
 	end 'isNamedMaxonType'
 
@@ -9683,7 +9725,7 @@ export type Parser
 			typeParameter gives false
 			genericInstance gives false
 			constInt gives false
-			opaquePointer gives false
+			opaquePointer to cstring gives false
 		end 'check'
 	end 'paramTypeMayCarryCompanion'
 
@@ -10804,7 +10846,7 @@ export type Parser
 			float gives MaxonType.float
 			boolean gives MaxonType.integer
 			integer gives MaxonType.integer
-			string to opaquePointer gives MaxonType.integer
+			string to cstring gives MaxonType.integer
 		end 'pick'
 	end 'defaultLiteralTypeOfInner'
 
@@ -10872,6 +10914,13 @@ export type Parser
 		if typeToken.kind == TokenKind.bool 'isBool'
 			return MaxonType.boolean
 		end 'isBool'
+		// `cstring` is deliberately NOT handled here: it is not a castable type
+		// (a `cstring` only ever comes from `String.cstr()` /
+		// `__ManagedMemory.toCString()`, never an `as` cast, and nothing casts
+		// away from it). It falls through to the "Expected type name after 'as'"
+		// rejection below, mirroring the bootstrap, which also refuses `cstring`
+		// as a cast target. Casts FROM a cstring are caught separately by
+		// `validateConvert` (E3009 "Cannot cast from cstring to ...").
 		if typeToken.kind == TokenKind.identifier 'isIdent'
 			// Namespace-qualified typealias names (`api.Score`, `lib.fmt.Score`)
 			// land here as `ident . ident (. ident)*`. Walk the dotted chain
@@ -10957,7 +11006,7 @@ export type Parser
 			let ok = match t 'check'
 				boolean to string gives true
 				named gives true
-				function to opaquePointer gives false
+				function to cstring gives false
 			end 'check'
 			if not ok 'reject'
 				return false
@@ -12060,7 +12109,7 @@ export type Parser
 			function gives 0
 			unresolved gives 0
 			typeParameter gives 0
-			interface to opaquePointer gives 0
+			interface to cstring gives 0
 		end 'extract'
 		if nameId == 0 'noEnumName'
 			return MaxonType.unresolved
@@ -12112,7 +12161,7 @@ export type Parser
 			function gives MaxonType.unresolved
 			unresolved gives MaxonType.unresolved
 			typeParameter gives MaxonType.unresolved
-			interface to opaquePointer gives MaxonType.unresolved
+			interface to cstring gives MaxonType.unresolved
 		end 'extract'
 	end 'extractGenericInstanceLastArg'
 
@@ -12263,20 +12312,7 @@ export type Parser
 
 		let typeNameBytes = typeName.toByteArray()
 		let ptrName = freshSynthName()
-		// Capture the structAlloc's op index and its host block so a deferred
-		// field-default pass (for an in-body `Self{}` whose type isn't fully
-		// parsed yet) can splice the `__field_init_*` calls in immediately
-		// after the allocation.
-		let structAllocOpIdx = module.ops.count()
-		let structAllocBlock = currentBlock
 		module.appendOp(currentBlock, op: MaxonOp.structAlloc(ptrName, structName: typeNameBytes, range: SourceRange.ofToken(typeToken)))
-
-		// Track user-provided field names so we can synthesize calls to
-		// `<TypeName>.__field_init_<fieldName>` for any defaulted fields
-		// the literal omits. Lookup goes through `unresolvedStructTypes`
-		// — at parse time this is the only place fields land (the resolved
-		// `structTypes` registry is populated later by TypeResolution).
-		var providedFieldNames = StringArray.create()
 
 		// Parse field: value pairs and emit one fieldStore per field. Pairs
 		// may be separated by commas, newlines, or both. Field values that
@@ -12284,6 +12320,16 @@ export type Parser
 		// to a real `const_string` op first — the field-store reads its
 		// `value` name through the value-id map, and a non-materialized
 		// stringConst has no defining op for the lowerer to bind.
+		//
+		// Omitted fields are NOT handled here: the parser is pure-record and
+		// can't see the type's field list (the resolved `structTypes` registry
+		// is populated later by TypeResolution). The post-TypeResolution
+		// `MaxonFieldInitCheck` pass walks every literal with the resolved field
+		// list and either splices a default/managed-builtin init for an omitted
+		// defaulted field or raises E3086 for a genuinely-missing one. The
+		// per-field default-value IR itself is still synthesized at parse time
+		// as a `<TypeName>.__field_init_<field>` helper (see
+		// `parseFieldDefaultInitHelper`) — that's parsing, not resolution.
 		while not at(TokenKind.rightBrace) 'fields'
 			let fieldNameToken = try consume()
 			try eat(TokenKind.colon)
@@ -12294,254 +12340,13 @@ export type Parser
 			let materializedFieldValue = materializeStringConstIfNeeded(currentBlock, expr: fieldValue, range: fieldRange)
 
 			module.appendOp(currentBlock, op: MaxonOp.fieldStore(ptrName, fieldName: fieldNameToken.value.toByteArray(), value: exprName(materializedFieldValue), isInit: true, range: SourceRange.between(fieldNameToken, last: fieldLastToken)))
-			providedFieldNames.push(fieldNameToken.value)
 
 			try expectListSeparator(TokenKind.rightBrace)
 		end 'fields'
 		try eat(TokenKind.rightBrace)
 
-		// Emit the omitted-field default inits. When the type is already
-		// registered in `unresolvedStructTypes` its full field list is known,
-		// so emit inline now. For a `Self{...}` inside the declaring type's own
-		// body the type is NOT yet registered (the insert happens only after
-		// the whole body is parsed) and the field list may still be incomplete
-		// — a constructing method declared above a defaulted field would miss
-		// it — so defer to the end of `parseTypeDecl`. See
-		// `emitOmittedFieldDefaultsInline` / `drainPendingSelfLiteralDefaults`.
-		if let unresolved = try project.unresolvedStructTypes.get(typeName) 'haveDecl'
-			emitOmittedFieldDefaultsInline(currentBlock, ptrName: ptrName, typeName: typeName, declFields: unresolved.fields, providedFieldNames: providedFieldNames, typeToken: typeToken)
-		end 'haveDecl' else 'deferInBody'
-			if typeName == currentTypeName 'isCurrentType'
-				pendingSelfLiteralDefaults.push(PendingSelfLiteralDefault.create(structAllocBlock, structAllocOpIdx: structAllocOpIdx, ptrName: ptrName, providedFieldNames: providedFieldNames, typeToken: typeToken))
-			end 'isCurrentType'
-		end 'deferInBody'
-
 		return ExprResult.direct(ptrName, valueType: internMaxonType(project, name: typeName))
 	end 'parseStructLiteral'
-
-	// Decide how an omitted struct-literal field is initialized. A user-defaulted
-	// field calls its `<typeName>.__field_init_<name>` helper; a managed-builtin
-	// field (`__ManagedList`) without a user default gets an auto-`create()`,
-	// mirroring the C# bootstrap's `EmitEmptyBuiltinManagedLiteral`. Any other
-	// field needs no synthesized init. Shared by both emission paths so the
-	// "which callee, if any" logic lives in exactly one place.
-	function omittedFieldInit(declField StructField, typeName String) returns OmittedFieldInit
-		if declField.hasDefault 'hasUserDefault'
-			return OmittedFieldInit.emit("{typeName}.__field_init_{declField.name}")
-		end 'hasUserDefault'
-		if managedBuiltinBaseName(project, fieldType: declField.fieldType) == "__ManagedList" 'isManagedList'
-			return OmittedFieldInit.emit("__ManagedList.create")
-		end 'isManagedList'
-		return OmittedFieldInit.skip
-	end 'omittedFieldInit'
-
-	// Append `__field_init_*` call + fieldStore ops for every defaulted field
-	// the literal omitted, writing into `block` at its current tail. Used when
-	// the struct type's full field list is already known (registered in
-	// `unresolvedStructTypes`). `__ManagedList`-typed fields without a user
-	// default get an auto-`create()`; see the C# bootstrap's
-	// `EmitEmptyBuiltinManagedLiteral`.
-	function emitOmittedFieldDefaultsInline(block IrBlock, ptrName ByteArray, typeName String, declFields StructFieldArray, providedFieldNames StringArray, typeToken Token)
-		for declField in declFields 'eachField'
-			if stringArrayContains(providedFieldNames, name: declField.name) 'userProvided'
-				continue
-			end 'userProvided'
-			match omittedFieldInit(declField, typeName: typeName) 'decide'
-				skip then continue
-				emit(callee) then emitFieldDefaultAtTail(block, ptrName: ptrName, fieldName: declField.name, callee: callee, typeToken: typeToken)
-			end 'decide'
-		end 'eachField'
-	end 'emitOmittedFieldDefaultsInline'
-
-	// Emit `init = callee()` then `ptrName.fieldName = init` at `block`'s tail,
-	// minting a fresh per-function synth name for the call result.
-	function emitFieldDefaultAtTail(block IrBlock, ptrName ByteArray, fieldName String, callee String, typeToken Token)
-		let initCallName = freshSynthName()
-		module.appendOp(block, op: MaxonOp.call(initCallName, callee: project.calleeNames.intern(callee), callContext: CallContext.qualified, args: ByteArrayArray.create(), argLabels: StringArray.create(), argTypes: MaxonTypeArray.create(), argRanges: SourceRangeArray.create(), range: SourceRange.ofToken(typeToken)))
-		module.appendOp(block, op: MaxonOp.fieldStore(ptrName, fieldName: fieldName.toByteArray(), value: initCallName, isInit: true, range: SourceRange.ofToken(typeToken)))
-	end 'emitFieldDefaultAtTail'
-
-	// Mint a value name for a deferred field-default init. Deferred inits are
-	// spliced into a method body after the whole type is parsed, so the regular
-	// per-function `synthNameCounter` no longer reflects that method — a
-	// distinct monotonic `$fd{k}` scheme guarantees no collision with the
-	// per-function `$t{n}` names.
-	function freshDeferredFieldDefaultName() returns ByteArray
-		let k = deferredFieldDefaultCounter
-		deferredFieldDefaultCounter = deferredFieldDefaultCounter + 1
-		return "$fd{k}".toByteArray()
-	end 'freshDeferredFieldDefaultName'
-
-	// Drain every in-body `Self{...}` literal recorded during this type's body
-	// parse. The `declFields` parameter is the complete field list, so we know
-	// exactly which defaulted fields each literal omitted. For each, append the
-	// `__field_init_*` call + fieldStore ops to the module op pool and splice
-	// their indices into the literal's block immediately after the structAlloc,
-	// preserving def-before-use order. Clears the pending list.
-	function drainPendingSelfLiteralDefaults(declFields StructFieldArray) throws ParserError
-		for pending in pendingSelfLiteralDefaults 'eachPending'
-			// Position of the structAlloc within its block's opRef list — the
-			// inits splice in right after it. The structAlloc must be present
-			// (it was emitted into this exact block at literal-parse time).
-			var anchorPos = 0 as OpIndex
-			var anchorFound = false
-			for i in 0 upto pending.block.opRefs.count() 'findAnchor'
-				let opRef = try pending.block.opRefs.get(i) otherwise continue
-				if opRef == pending.structAllocOpIdx 'isAnchor'
-					anchorPos = i
-					anchorFound = true
-					break
-				end 'isAnchor'
-			end 'findAnchor'
-			if not anchorFound 'anchorMissing'
-				panic("drainPendingSelfLiteralDefaults: structAlloc op {pending.structAllocOpIdx} not found in its recorded block")
-			end 'anchorMissing'
-
-			// Splice cursor advances past each inserted op so the call lands
-			// before its consuming fieldStore and successive fields keep source
-			// order.
-			var spliceAt = anchorPos + 1
-			for declField in declFields 'eachField'
-				if stringArrayContains(pending.providedFieldNames, name: declField.name) 'userProvided'
-					continue
-				end 'userProvided'
-				match omittedFieldInit(declField, typeName: currentTypeName) 'decide'
-					skip then continue
-					emit(callee) then spliceAt = spliceFieldDefault(pending, fieldName: declField.name, callee: callee, spliceAt: spliceAt)
-				end 'decide'
-			end 'eachField'
-		end 'eachPending'
-		pendingSelfLiteralDefaults = PendingSelfLiteralDefaultArray.create()
-	end 'drainPendingSelfLiteralDefaults'
-
-	// Splice an `init = callee()` call and its `ptrName.fieldName = init`
-	// fieldStore into `pending.block` at `spliceAt`, returning the cursor
-	// advanced past both inserted opRefs. The ops themselves go to the module
-	// op pool; only their indices are spliced, so source order is preserved.
-	function spliceFieldDefault(pending PendingSelfLiteralDefault, fieldName String, callee String, spliceAt OpIndex) returns OpIndex
-		let initCallName = freshDeferredFieldDefaultName()
-		let callIdx = module.ops.count()
-		module.ops.push(MaxonOp.call(initCallName, callee: project.calleeNames.intern(callee), callContext: CallContext.qualified, args: ByteArrayArray.create(), argLabels: StringArray.create(), argTypes: MaxonTypeArray.create(), argRanges: SourceRangeArray.create(), range: SourceRange.ofToken(pending.typeToken)))
-		try pending.block.opRefs.insert(spliceAt, value: callIdx) otherwise panic("spliceFieldDefault: opRefs.insert OOB (call)")
-
-		let storeIdx = module.ops.count()
-		module.ops.push(MaxonOp.fieldStore(pending.ptrName, fieldName: fieldName.toByteArray(), value: initCallName, isInit: true, range: SourceRange.ofToken(pending.typeToken)))
-		try pending.block.opRefs.insert(spliceAt + 1, value: storeIdx) otherwise panic("spliceFieldDefault: opRefs.insert OOB (store)")
-
-		return spliceAt + 2
-	end 'spliceFieldDefault'
-
-	// Phase C: walk through typealiases (and one level of generic-instance
-	// indirection) to recover the base struct name of a field's declared
-	// MaxonType. Used by `parseStructLiteral` to detect when an
-	// auto-supplied default for a `__Managed*` field is needed.
-	// Returns "" when the type doesn't resolve to a builtin managed struct.
-	//
-	// Probes `currentInnerAliases` first so a field typed as an
-	// inner alias (e.g. `var chain as EManagedList` inside `List`, where
-	// `typealias EManagedList = __ManagedList with Element`) is correctly
-	// identified as wrapping a builtin managed type. Inner aliases never
-	// land in `project.unresolvedTypealiases` / `project.genericTypealiases`
-	// (they're scoped to the enclosing type body and resolved later), so the
-	// pure project-level chase below cannot see them at struct-literal
-	// parse time. Without the inner-alias probe, every `Self{}` inside a
-	// generic collection type that wraps a `__ManagedList` (List, future
-	// LinkedQueue, ...) would skip the auto-init and leave `chain` null.
-	function managedBuiltinBaseName(proj Project, fieldType MaxonType) returns String
-		var t = fieldType
-		// Bound the chase: typealiases ultimately resolve to a non-alias
-		// `named` / `genericInstance` / etc. — five hops is more than
-		// enough for any current stdlib alias chain.
-		for _ in 0 upto 5 'chase'
-			let name = t.nameOrEmpty(proj)
-			if name.isEmpty() 'noName'
-				return ""
-			end 'noName'
-			if name == "__ManagedList" or name == "__ManagedListNode" or name == "__ManagedMemory" 'isBuiltin'
-				return name
-			end 'isBuiltin'
-			// Inner alias probe (must precede the project-level chase — the
-			// alias name may shadow a same-named project alias, and inner
-			// scope wins).
-			if let entry = try currentInnerAliases.get(name) 'isInnerAlias'
-				let baseFromInner = innerAliasBuiltinBase(entry)
-				if baseFromInner.isEmpty() 'noInnerHit'
-					// Either the inner alias isn't a managed-builtin
-					// generic, or it's an `aliasName` indirection — re-loop
-					// with the chased target name.
-					let chased = innerAliasChase(entry, proj: proj)
-					if chased.namedAliasNameOrEmpty(proj).isEmpty() 'noChase'
-						return ""
-					end 'noChase'
-					t = chased
-					continue
-				end 'noInnerHit'
-				return baseFromInner
-			end 'isInnerAlias'
-			if let aliased = try proj.genericTypealiases.get(name) 'isAlias'
-				t = aliased
-				continue
-			end 'isAlias'
-			return ""
-		end 'chase'
-		return ""
-	end 'managedBuiltinBaseName'
-
-	// Phase C: classify an inner-typealias entry as one of the three builtin
-	// managed base types. Returns the base name ("__ManagedList" /
-	// "__ManagedListNode" / "__ManagedMemory") or "" when the entry does
-	// not name a managed-builtin generic instance. `aliasName` arms return
-	// "" too — the caller chases them via `innerAliasChase` and re-probes
-	// on the next loop iteration.
-	function innerAliasBuiltinBase(entry UnresolvedTypeExpr) returns String
-		return match entry 'classify'
-			genericAlias(baseName, _) gives innerBuiltinBaseOrEmpty(baseName)
-			sizedGenericAlias(baseName, _, _) gives innerBuiltinBaseOrEmpty(baseName)
-			aliasName gives ""
-			rangedInt gives ""
-			rangedFloat gives ""
-			boolPrim gives ""
-			functionAlias gives ""
-			invalid gives ""
-		end 'classify'
-	end 'innerAliasBuiltinBase'
-
-	// Helper: returns `name` iff it is one of the three managed-builtin
-	// base types, otherwise "". Centralizes the matching set so both the
-	// project-level and inner-alias probes stay in sync.
-	function innerBuiltinBaseOrEmpty(name String) returns String
-		if name == "__ManagedList" or name == "__ManagedListNode" or name == "__ManagedMemory" 'isBuiltin'
-			return name
-		end 'isBuiltin'
-		return ""
-	end 'innerBuiltinBaseOrEmpty'
-
-	// Phase C: when an inner alias points at another alias by name
-	// (e.g. `typealias ENode = __ManagedListNode with Element` indirected
-	// via an intermediate inner alias), return a `MaxonType.named` of the
-	// target so the outer chase can probe the next layer. Non-aliasName
-	// shapes return `unresolved` (caller treats that as "stop chasing").
-	function innerAliasChase(entry UnresolvedTypeExpr, proj Project) returns MaxonType
-		return match entry 'chase'
-			aliasName(target) gives MaxonType.named(proj.typeNames.intern(target))
-			genericAlias gives MaxonType.unresolved
-			sizedGenericAlias gives MaxonType.unresolved
-			rangedInt gives MaxonType.unresolved
-			rangedFloat gives MaxonType.unresolved
-			boolPrim gives MaxonType.unresolved
-			functionAlias gives MaxonType.unresolved
-			invalid gives MaxonType.unresolved
-		end 'chase'
-	end 'innerAliasChase'
-
-	function stringArrayContains(arr StringArray, name String) returns bool
-		for item in arr 'scan'
-			if item == name 'hit'
-				return true
-			end 'hit'
-		end 'scan'
-		return false
-	end 'stringArrayContains'
 
 	function parsePrimaryMatch(block IrBlock) returns ExprResult throws ParserError
 		// Each leaf consumes its first token itself (stream-style) and exits
@@ -13511,7 +13316,7 @@ export type Parser
 			float gives InterpExprKind.f64
 			string gives InterpExprKind.string
 			named(id) gives interpKindForNamed(project.typeNames.get(id))
-			function to opaquePointer gives InterpExprKind.i64
+			function to cstring gives InterpExprKind.i64
 		end 'k'
 	end 'inferInterpKind'
 
@@ -13616,7 +13421,7 @@ export type Parser
 	// keyword-like primitive types (`int`, `float`, `bool`) are
 	// also valid type-name tokens.
 	function isTypeNameToken(token Token) returns bool
-		return token.kind == TokenKind.identifier or token.kind == TokenKind.int or token.kind == TokenKind.float or token.kind == TokenKind.bool or token.kind == TokenKind.array
+		return token.kind == TokenKind.identifier or token.kind == TokenKind.int or token.kind == TokenKind.float or token.kind == TokenKind.bool or token.kind == TokenKind.cstring or token.kind == TokenKind.array
 	end 'isTypeNameToken'
 
 	// Consume tokens from a composite interpolated string. Used by
@@ -16351,7 +16156,7 @@ function maxonTypeIsFloat(t MaxonType) returns bool
 	return match t 'check'
 		float gives true
 		boolean to integer gives false
-		string to opaquePointer gives false
+		string to cstring gives false
 	end 'check'
 end 'maxonTypeIsFloat'
 
@@ -16369,14 +16174,14 @@ function maxonTypeIsPrimitive(t MaxonType) returns bool
 	// at parse time.
 	return match t 'check'
 		boolean to float gives true
-		string to opaquePointer gives false
+		string to cstring gives false
 	end 'check'
 end 'maxonTypeIsPrimitive'
 
 function maxonTypeIsBool(t MaxonType) returns bool
 	return match t 'check'
 		boolean gives true
-		integer to opaquePointer gives false
+		integer to cstring gives false
 	end 'check'
 end 'maxonTypeIsBool'
 
@@ -16384,7 +16189,7 @@ function maxonTypeIsInt(t MaxonType) returns bool
 	return match t 'check'
 		integer gives true
 		boolean gives false
-		float to opaquePointer gives false
+		float to cstring gives false
 	end 'check'
 end 'maxonTypeIsInt'
 
@@ -16402,7 +16207,7 @@ function ternaryArmKindName(t MaxonType) returns String
 		integer gives "Integer"
 		float gives "Float"
 		string gives "Struct"
-		named to opaquePointer gives ""
+		named to cstring gives ""
 	end 'kind'
 end 'ternaryArmKindName'
 

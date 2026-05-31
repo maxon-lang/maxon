@@ -1,0 +1,70 @@
+// Test: push-on-var-array-ok
+
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function main() returns ExitCode
+	var arr = IntArray.create()
+	arr.push(42)
+	let x = try arr.get(0) otherwise 0
+	return x
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %18 = mir.mov_imm 8 : i64
+    %19 = mir.call @mrt_alloc(%18)
+    %20 = mir.mov_imm 40 : i64
+    %21 = mir.call @mrt_alloc(%20)
+    %22 = mir.mov_imm 0 : i64
+    mir.store %22, %21, 0 width: qword
+    %23 = mir.mov_imm 0 : i64
+    mir.store %23, %21, 8 width: qword
+    %24 = mir.mov_imm 0 : i64
+    mir.store %24, %21, 16 width: qword
+    %25 = mir.mov_imm 8 : i64
+    mir.store %25, %21, 24 width: qword
+    %26 = mir.mov_imm 0 : i64
+    mir.store %26, %21, 32 width: qword
+    mir.store %21, %19, 0 width: qword
+    %3 = mir.mov_imm 42 : i64
+    %4 = mir.global_addr @__layout_Array_Integer
+    %5 = mir.call @Array.push(%19, %3, %4)
+    %7 = mir.mov_imm 0 : i64
+    mir.br inlined_Array.get_0()
+  inlined_Array.get_0:
+    %27 = mir.load %19, 0 width: qword
+    %28, %29 = mir.try_call @stdlib.__managed_mem_get(%27, %7)
+    %30 = mir.mov_imm 0 : i64
+    %31 = mir.cmp ne, %29, %30
+    mir.cond_br %31 [then: inlined_Array.get_1(), else: inlined_Array.get_2()]
+  inlined_Array.get_1:
+    %32 = mir.mov_imm 0 : i64
+    %33 = mir.mov_imm 1 : i64
+    mir.br inline_cont_main_0(%32, %33)
+  inlined_Array.get_2:
+    %34 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%28, %34)
+  inline_cont_main_0:
+    %11 = mir.mov_imm 0 : i64
+    %12 = mir.cmp ne, %36, %11
+    mir.cond_br %12 [then: try_0.otherwise(), else: try_0.merge(%35)]
+  try_0.otherwise:
+    %14 = mir.mov_imm 0 : i64
+    mir.br try_0.merge(%14)
+  try_0.merge:
+    %37 = mir.mov_imm 125 : i64
+    %38 = mir.cmp ugt, %17, %37
+    mir.cond_br %38 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %39 = mir.global_addr @__panic_msg_0f8ed3b8838474f2
+    %40 = mir.call @mrt_panic(%39)
+  __range_ok_0:
+    mir.ret %17
+  }
+}
+---

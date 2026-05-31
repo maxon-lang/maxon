@@ -1,0 +1,42 @@
+// Test: struct-field-inferred-type
+type Settings
+	export let maxRetries = 5
+	export var timeout = 50.0
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Settings'
+
+function main() returns ExitCode
+	let s = Settings.create()
+	return s.maxRetries + trunc(s.timeout)
+end 'main'
+---
+ExitCode: 55
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %7 = mir.mov_imm 16 : i64
+    %8 = mir.call @mrt_alloc(%7)
+    %9 = mir.mov_imm 5 : i64
+    mir.store %9, %8, 0 width: qword
+    %10 = mir.mov_imm 4632233691727265792 : f64
+    mir.store %10, %8, 8 width: qword : f64
+    %2 = mir.load %8, 0 width: qword
+    %4 = mir.load %8, 8 width: qword : f64
+    %5 = mir.fptosi.i64 %4
+    %6 = mir.add.i64 %2, %5
+    %11 = mir.mov_imm 125 : i64
+    %12 = mir.cmp ugt, %6, %11
+    mir.cond_br %12 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %13 = mir.global_addr @__panic_msg_929a4ef9a5fd198e
+    %14 = mir.call @mrt_panic(%13)
+  __range_ok_0:
+    mir.ret %6
+  }
+}
+---

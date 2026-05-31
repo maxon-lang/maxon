@@ -1,0 +1,56 @@
+// Test: builtin-type-checking.subprocess-resolve-on-path-cstring
+function main() returns ExitCode
+	// Routing the path through `String.cstr()` satisfies the cstring type
+	// check for `subprocessResolveOnPath`; the call itself may or may not
+	// resolve a real binary depending on the host PATH, which is irrelevant
+	// to this test.
+	let s = "__nonexistent_binary_for_type_check__"
+	let result = __Builtins.subprocessResolveOnPath(s.cstr())
+	let isNull = __Builtins.managedIsNull(result)
+	// Convert isNull (0 or 1) into 0 regardless — the test just verifies the
+	// call compiles and runs once `.cstr()` is in the path.
+	if isNull == 0 'zero'
+		return 0
+	end 'zero'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.global_addr @__istr_0
+    %1 = mir.mov_imm 40 : i64
+    %2 = mir.call @mrt_alloc(%1)
+    mir.store %0, %2, 0 width: qword
+    %3 = mir.mov_imm 37 : i64
+    mir.store %3, %2, 8 width: qword
+    %4 = mir.mov_imm -2 : i64
+    mir.store %4, %2, 16 width: qword
+    %5 = mir.mov_imm 1 : i64
+    mir.store %5, %2, 24 width: qword
+    %6 = mir.mov_imm 0 : i64
+    mir.store %6, %2, 32 width: qword
+    %7 = mir.mov_imm 16 : i64
+    %8 = mir.call @mrt_alloc(%7)
+    mir.store %2, %8, 0 width: qword
+    %9 = mir.mov_imm 1 : i64
+    mir.store %9, %8, 8 width: qword
+    %20 = mir.load %8, 0 width: qword
+    %21 = mir.call @stdlib.__managed_mem_to_cstring(%20)
+    %12 = mir.call @maxon_subprocess_resolve_on_path(%21)
+    %14 = mir.call @maxon_managed_is_null(%12)
+    %16 = mir.mov_imm 0 : i64
+    %17 = mir.cmp eq, %14, %16
+    mir.cond_br %17 [then: zero_0(), else: zero_0.after()]
+  zero_0:
+    %18 = mir.mov_imm 0 : i64
+    mir.ret %18
+  zero_0.after:
+    %19 = mir.mov_imm 0 : i64
+    mir.ret %19
+  }
+}
+---

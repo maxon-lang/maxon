@@ -1,0 +1,61 @@
+// Test: factory-multiple-returns
+
+typealias Integer = int(i64.min to i64.max)
+
+type TwoReturns
+	export var value as Integer
+
+	export static function make(sign bool) returns Self
+		if sign 'br'
+			self.value = 42
+			return Self{}
+		end 'br' else 'other'
+			self.value = -42
+			return Self{}
+		end 'other'
+	end 'make'
+end 'TwoReturns'
+
+function main() returns ExitCode
+	let t = TwoReturns.make(true)
+	return t.value
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @TwoReturns.make(local0: i1) -> i64 {
+  entry:
+    %11 = mir.param local0 : i1
+    mir.cond_br %11 [then: br_0(), else: other_0()]
+  br_0:
+    %2 = mir.mov_imm 42 : i64
+    %3 = mir.mov_imm 8 : i64
+    %4 = mir.call @mrt_alloc(%3)
+    mir.store %2, %4, 0 width: qword
+    mir.ret %4
+  other_0:
+    %6 = mir.mov_imm 42 : i64
+    %7 = mir.neg.i64 %6
+    %8 = mir.mov_imm 8 : i64
+    %9 = mir.call @mrt_alloc(%8)
+    mir.store %7, %9, 0 width: qword
+    mir.ret %9
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 1 : i64
+    %1 = mir.call @TwoReturns.make(%0)
+    %3 = mir.load %1, 0 width: qword
+    %4 = mir.mov_imm 125 : i64
+    %5 = mir.cmp ugt, %3, %4
+    mir.cond_br %5 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %6 = mir.global_addr @__panic_msg_85b1005d287f841b
+    %7 = mir.call @mrt_panic(%6)
+  __range_ok_0:
+    mir.ret %3
+  }
+}
+---

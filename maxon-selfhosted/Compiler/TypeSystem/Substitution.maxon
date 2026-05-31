@@ -109,7 +109,7 @@ export function substituteType(project Project, t MaxonType, subst TypeSubstitut
 		genericInstance(gid) gives substituteGenericInstance(project, gid: gid, subst: subst)
 		// `constInt` arm appears only inside a genericInstance's arg list
 		// (sized typealiases); it is never substituted as a top-level type.
-		constInt to opaquePointer gives t
+		constInt to cstring gives t
 	end 'sub'
 end 'substituteType'
 
@@ -230,7 +230,7 @@ export function buildSubstitution(project Project, declaringTypeName String, arg
 		let isConst = match a 'check'
 			constInt gives true
 			boolean to interface gives false
-			opaquePointer gives false
+			opaquePointer to cstring gives false
 		end 'check'
 		if isConst 'skip'
 			argOffset = argOffset + 1
@@ -261,7 +261,7 @@ export function buildSubstitutionForInstance(project Project, t MaxonType) retur
 	return match t 'pick'
 		genericInstance(gid) gives buildSubstitutionFromGenericInstance(project, gid: gid)
 		boolean to typeParameter gives TypeSubstitution.create()
-		interface to opaquePointer gives TypeSubstitution.create()
+		interface to cstring gives TypeSubstitution.create()
 	end 'pick'
 end 'buildSubstitutionForInstance'
 
@@ -423,7 +423,7 @@ export function baseNameOfReceiverType(project Project, selfType MaxonType) retu
 		interface gives ""
 		function gives ""
 		unresolved gives ""
-		constInt to opaquePointer gives ""
+		constInt to cstring gives ""
 	end 'pick'
 end 'baseNameOfReceiverType'
 

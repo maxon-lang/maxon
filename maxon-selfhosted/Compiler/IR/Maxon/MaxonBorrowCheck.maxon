@@ -169,6 +169,11 @@ function checkFunction(project Project, func IrFunction, module MaxonModule)
 	var facts = BorrowFacts.create()
 	collectFacts(module, func: func, facts: facts)
 
+	// E3019: a mutating method (`push`/`set`/`append`/…) called on an immutable
+	// (`let`-bound) receiver. Shares the call-site + slot facts the borrow scan
+	// already collected. Runs unconditionally (independent of pending borrows).
+	checkImmutableReceiverMutation(project, func: func, facts: facts, slotToVarInfo: slotToVarInfo, mutators: mutators)
+
 	// Pass 2: detect pending borrows (a .get()-style call on a generic
 	// collection whose result binds into a user slot).
 	var pending = detectBorrows(project, facts: facts, slotToVarInfo: slotToVarInfo, mutators: mutators)
@@ -181,6 +186,58 @@ function checkFunction(project Project, func IrFunction, module MaxonModule)
 	// borrowed source.
 	checkConflicts(project, func: func, facts: facts, pending: pending, mutators: mutators)
 end 'checkFunction'
+
+// E3019 (SemanticImmutableRefToMutatingParam): report a mutating method call
+// whose receiver is a `let`-bound local. The receiver SSA name traces back
+// through `facts.ssaToSlot` to its source slot; the inverted symbol table
+// (`slotToVarInfo`) gives the slot's `VarInfo`, whose `mutable` flag is false
+// for `let`. Self-field receivers are exempt — a struct `self` is passed by
+// reference, so its fields are mutable through the receiver even when the
+// enclosing binding is a `let` (mirrors the C# pass's `argName == "self"` skip).
+// `var` locals, parameters declared mutable, and non-local receivers pass.
+function checkImmutableReceiverMutation(project Project, func IrFunction, facts BorrowFacts, slotToVarInfo SlotToVarInfoMap, mutators MethodNameSet)
+	for site in facts.callSites 'eachSite'
+		if not mutators.contains(site.methodName) 'notMutating'
+			continue
+		end 'notMutating'
+		let slot = try facts.ssaToSlot.get(site.receiverName) otherwise continue
+		let info = try slotToVarInfo.get(slot) otherwise continue
+		if info.isSelfField 'selfFieldReceiver'
+			continue
+		end 'selfFieldReceiver'
+		if info.mutable 'mutableReceiver'
+			continue
+		end 'mutableReceiver'
+		// Only user-facing collections (Array / Map / String) route their
+		// mutating methods through real `self`-mutating functions that the C#
+		// bootstrap's E3019 check sees. Compiler-internal builtin handles
+		// (`__ManagedMemory`, `__ManagedList`) intercept their mutating methods
+		// before callee resolution, so the bootstrap never fires E3019 on them
+		// even through a `let` binding — exempt them here to match.
+		let receiverType = try facts.slotTypes.get(slot) otherwise info.varType
+		if not receiverTypeIsMutationChecked(project, t: receiverType) 'notUserCollection'
+			continue
+		end 'notUserCollection'
+		let inFunc = "" if func.name.isEmpty() else " (in {func.name})"
+		reportCompileError(project, code: ErrorCode.semanticImmutableRefToMutatingParam, message: "cannot pass '{info.name}' to function that mutates parameter 'self'{inFunc}", line: site.line, column: site.column, filePath: func.sourceFilePath)
+	end 'eachSite'
+end 'checkImmutableReceiverMutation'
+
+// True when a mutating method on a `let` receiver of type `t` should fire
+// E3019: user-facing collections (`String`, or a generic instance whose base is
+// not a `__Managed*` builtin handle). Builtin managed handles are exempt — their
+// mutating methods are intercepted before callee resolution in the bootstrap,
+// so it never raises E3019 on a `let` handle.
+function receiverTypeIsMutationChecked(project Project, t MaxonType) returns bool
+	return match t 'check'
+		boolean to float gives false
+		string gives true
+		named(id) gives project.typeNames.get(id) == "String"
+		function to typeParameter gives false
+		genericInstance(id) gives not isBuiltinManagedTypeName(genericInstanceIdBaseName(project, id: id))
+		interface to cstring gives false
+	end 'check'
+end 'receiverTypeIsMutationChecked'
 
 // ============================================================
 // Pass 1: fact collection (ssaToSlot, call sites, last-use)
@@ -379,7 +436,7 @@ function isGenericCollectionType(t MaxonType) returns bool
 	return match t 'gc'
 		boolean to typeParameter gives false
 		genericInstance gives true
-		interface to opaquePointer gives false
+		interface to cstring gives false
 	end 'gc'
 end 'isGenericCollectionType'
 
@@ -399,7 +456,7 @@ function typeIsHeapAllocated(project Project, t MaxonType) returns bool
 		genericInstance gives true
 		interface gives true
 		constInt gives false
-		opaquePointer gives false
+		opaquePointer to cstring gives false
 	end 'heap'
 end 'typeIsHeapAllocated'
 

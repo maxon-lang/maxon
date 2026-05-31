@@ -26,13 +26,13 @@ category: dev
 - `setByte(index, value)` (panics if index >= length * elementSize)
 - `append(other)` — append another buffer's data in-place
 - `slice(start, end)` returns __ManagedMemory (panics if end > length or start > end)
-- `toCString()` returns int
+- `toCString()` returns cstring — a NUL-terminated byte pointer view of the buffer
 - `makeCharFromBytes(pos, len)` returns int
 
 ### Static Methods
 
 - `__ManagedMemory.create(capacity, elementSize)` returns __ManagedMemory
-- `__ManagedMemory.fromCString(ptr)` returns __ManagedMemory
+- `__ManagedMemory.fromCString(cstr)` returns __ManagedMemory — copy a NUL-terminated `cstring` (including its terminator) into a fresh byte-element buffer
 
 ## Tests
 
@@ -137,6 +137,45 @@ end 'main'
 ```
 ```exitcode
 11
+```
+
+<!-- test: cstring-round-trip -->
+```maxon
+function main() returns ExitCode
+	let s = "hello world"
+	let mm = __ManagedMemory.fromCString(s.cstr())
+	let back = String.init(mm)
+	return back.byteLength()
+end 'main'
+```
+```exitcode
+11
+```
+
+<!-- test: empty-bstring-push -->
+```maxon
+function main() returns ExitCode
+	var v = b""
+	v.push(7)
+	v.push(8)
+	return v.count() as ExitCode
+end 'main'
+```
+```exitcode
+2
+```
+
+<!-- test: empty-string-bytes-push -->
+```maxon
+function main() returns ExitCode
+	let s = ""
+	var v = s.toByteArray()
+	v.push(65)
+	return v.count() as ExitCode
+end 'main'
+```
+```exitcode
+1
 ```
 
 <!-- test: array-literal -->

@@ -1,0 +1,45 @@
+// Test: var-field-assign
+
+typealias Integer = int(i64.min to i64.max)
+
+type Config
+	export let version as Integer
+	export var count as Integer
+
+	static function create(version Integer, count Integer) returns Self
+		return Self{version: version, count: count}
+	end 'create'
+end 'Config'
+
+function main() returns ExitCode
+	var c = Config.create(1, count: 0)
+	c.count = 5
+	return c.count
+end 'main'
+---
+ExitCode: 5
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 1 : i64
+    %1 = mir.mov_imm 0 : i64
+    %7 = mir.mov_imm 16 : i64
+    %8 = mir.call @mrt_alloc(%7)
+    mir.store %0, %8, 0 width: qword
+    mir.store %1, %8, 8 width: qword
+    %4 = mir.mov_imm 5 : i64
+    mir.store %4, %8, 8 width: qword
+    %6 = mir.load %8, 8 width: qword
+    %9 = mir.mov_imm 125 : i64
+    %10 = mir.cmp ugt, %6, %9
+    mir.cond_br %10 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %11 = mir.global_addr @__panic_msg_8490533aed185997
+    %12 = mir.call @mrt_panic(%11)
+  __range_ok_0:
+    mir.ret %6
+  }
+}
+---

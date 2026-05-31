@@ -1,0 +1,41 @@
+// Test: all-defaults
+type Defaults
+	export var a = 10
+	export var b = 32
+
+	export static function make() returns Self
+		return Self{}
+	end 'make'
+end 'Defaults'
+
+function main() returns ExitCode
+	let d = Defaults.make()
+	return d.a + d.b
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %6 = mir.mov_imm 16 : i64
+    %7 = mir.call @mrt_alloc(%6)
+    %8 = mir.mov_imm 10 : i64
+    mir.store %8, %7, 0 width: qword
+    %9 = mir.mov_imm 32 : i64
+    mir.store %9, %7, 8 width: qword
+    %2 = mir.load %7, 0 width: qword
+    %4 = mir.load %7, 8 width: qword
+    %5 = mir.add.i64 %2, %4
+    %10 = mir.mov_imm 125 : i64
+    %11 = mir.cmp ugt, %5, %10
+    mir.cond_br %11 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %12 = mir.global_addr @__panic_msg_764448d40b2a5426
+    %13 = mir.call @mrt_panic(%12)
+  __range_ok_0:
+    mir.ret %5
+  }
+}
+---

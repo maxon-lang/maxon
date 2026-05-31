@@ -1,0 +1,47 @@
+// Test: cstring-round-trip
+function main() returns ExitCode
+	let s = "hello world"
+	let mm = __ManagedMemory.fromCString(s.cstr())
+	let back = String.init(mm)
+	return back.byteLength()
+end 'main'
+---
+ExitCode: 11
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.global_addr @__istr_0
+    %1 = mir.mov_imm 40 : i64
+    %2 = mir.call @mrt_alloc(%1)
+    mir.store %0, %2, 0 width: qword
+    %3 = mir.mov_imm 11 : i64
+    mir.store %3, %2, 8 width: qword
+    %4 = mir.mov_imm -2 : i64
+    mir.store %4, %2, 16 width: qword
+    %5 = mir.mov_imm 1 : i64
+    mir.store %5, %2, 24 width: qword
+    %6 = mir.mov_imm 0 : i64
+    mir.store %6, %2, 32 width: qword
+    %7 = mir.mov_imm 16 : i64
+    %8 = mir.call @mrt_alloc(%7)
+    mir.store %2, %8, 0 width: qword
+    %9 = mir.mov_imm 1 : i64
+    mir.store %9, %8, 8 width: qword
+    %17 = mir.load %8, 0 width: qword
+    %18 = mir.call @stdlib.__managed_mem_to_cstring(%17)
+    %12 = mir.call @stdlib.__managed_mem_from_cstring(%18)
+    %14 = mir.call @String.init(%12)
+    %16 = mir.call @String.byteLength(%14)
+    %19 = mir.mov_imm 125 : i64
+    %20 = mir.cmp ugt, %16, %19
+    mir.cond_br %20 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %21 = mir.global_addr @__panic_msg_53f73030e2c4bde3
+    %22 = mir.call @mrt_panic(%21)
+  __range_ok_0:
+    mir.ret %16
+  }
+}
+---

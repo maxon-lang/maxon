@@ -67,12 +67,13 @@ export function runSemanticChecks(project Project, module MaxonModule, isStdlib 
 	// stdlib callees via `project.funcReturnTypes` so E3065/E3064 still fire
 	// correctly when a user discards a stdlib call result.
 	if not isStdlib 'userOnly'
-		// E3005: validate every call's argument types before the discarded-
-		// result lint, so a bad-argument discarded call surfaces the type error
-		// (not just "result unused"), and so dead code DFE would drop before
-		// lowering is covered. Runs first so the discard lint can suppress
-		// E3064/E3065 on calls flagged here.
-		checkCallArgumentTypes(project, module: module)
+		// E3005 (argument type mismatch) ran at the tail of the resolveTypes
+		// pass (see `runResolveTypesAndStamp`), before the E3012 unused-var
+		// drain, so a bad-argument call bound to an unused `let` surfaces the
+		// type error rather than "unused variable". That pass also populated
+		// `project.callsWithArgErrors`, which the discard lint below reads to
+		// suppress E3064/E3065 on calls already flagged with a type error.
+		// Purity is required by the discard check, so it runs first.
 		computePurity(project, module: module)
 		checkDiscardedResults(project, module: module)
 	end 'userOnly'
@@ -567,7 +568,7 @@ function maxonTypesMatchForConformance(project Project, expected MaxonType, actu
 	let expName = match expected 'expCase'
 		named(id) gives project.typeNames.get(id)
 		boolean to string gives ""
-		function to opaquePointer gives ""
+		function to cstring gives ""
 	end 'expCase'
 	if expName.isEmpty() 'noExpName'
 		return false
@@ -578,7 +579,7 @@ function maxonTypesMatchForConformance(project Project, expected MaxonType, actu
 		named gives ""
 		function gives ""
 		unresolved gives ""
-		genericInstance to opaquePointer gives ""
+		genericInstance to cstring gives ""
 	end 'actCase'
 	return not actParamName.isEmpty() and actParamName == expName
 end 'maxonTypesMatchForConformance'
@@ -636,7 +637,7 @@ function extractGenericInstanceGid(t MaxonType) returns OptionalGenericInstanceI
 		genericInstance(id) gives OptionalGenericInstanceId.some(id)
 		boolean to unresolved gives OptionalGenericInstanceId.none()
 		typeParameter gives OptionalGenericInstanceId.none()
-		interface to opaquePointer gives OptionalGenericInstanceId.none()
+		interface to cstring gives OptionalGenericInstanceId.none()
 	end 'arm'
 end 'extractGenericInstanceGid'
 
@@ -1818,6 +1819,17 @@ end 'checkOneCallArgs'
 function validateCallArgs(project Project, opIdx OpIndex, result ByteArray, args ByteArrayArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, paramOffset ArgIndex, callerName String, readerFilePath FilePath)
 	let paramTypes = try project.callParamTypes.get(opIdx) otherwise return
 	let paramNames = paramNamesForCall(project, opIdx: opIdx)
+
+	// `__Builtins.*` runtime intrinsics report argument mismatches in the
+	// runtime-symbol form ("type mismatch: __Builtins.maxon_x argument N
+	// expects 'cstring' but got 'ByteMemory'") rather than the param-name
+	// form — the runtime, not a Maxon signature, owns the contract. Route
+	// these through the dedicated checker and skip the generic loop so we
+	// don't emit both messages for one bad argument.
+	if validateBuiltinsIntrinsicArgs(project, opIdx: opIdx, result: result, args: args, argTypes: argTypes, argRanges: argRanges, paramOffset: paramOffset, paramTypes: paramTypes, callerName: callerName, readerFilePath: readerFilePath) 'wasBuiltins'
+		return
+	end 'wasBuiltins'
+
 	for i in 0 upto args.count() 'eachArg'
 		let pIdx = i + paramOffset
 		if pIdx >= paramTypes.count() 'paramOob'
@@ -1833,12 +1845,89 @@ function validateCallArgs(project Project, opIdx OpIndex, result ByteArray, args
 		let range = try argRanges.get(i) otherwise SourceRange.none()
 		let expectedName = endpointName(project, t: paramType, other: argType)
 		let gotName = endpointName(project, t: argType, other: paramType)
-		reportCompileError(project, code: ErrorCode.semanticTypeMismatch, message: "argument type mismatch for '{paramName}': expected '{expectedName}', got '{gotName}'", line: range.line, column: range.column, filePath: readerFilePath)
-		if result.count() > 0 'haveResult'
-			project.callsWithArgErrors.insert("{callerName}::{String.from(result)}")
-		end 'haveResult'
+		reportArgTypeMismatch(project, message: "argument type mismatch for '{paramName}': expected '{expectedName}', got '{gotName}'", range: range, result: result, callerName: callerName, readerFilePath: readerFilePath)
 	end 'eachArg'
 end 'validateCallArgs'
+
+// Record an E3005 for one bad call argument and flag the enclosing call so the
+// discard lint suppresses E3064/E3065 on it. A more specific checker (e.g. the
+// parser's `fromRawValue` literal-arg validation) may already have reported an
+// E3005 at this exact location — in that case skip the message but still record
+// the arg error so the call is recognized as already-flagged.
+function reportArgTypeMismatch(project Project, message String, range SourceRange, result ByteArray, callerName String, readerFilePath FilePath)
+	if not hasTypeMismatchDiagnosticAt(project, filePath: readerFilePath, line: range.line, column: range.column) 'notYetReported'
+		reportCompileError(project, code: ErrorCode.semanticTypeMismatch, message: message, line: range.line, column: range.column, filePath: readerFilePath)
+	end 'notYetReported'
+	if result.count() > 0 'haveResult'
+		project.callsWithArgErrors.insert("{callerName}::{String.from(result)}")
+	end 'haveResult'
+end 'reportArgTypeMismatch'
+
+// True when an E3005 (type-mismatch) diagnostic has already been recorded at
+// this exact file/line/column — used to suppress a redundant generic E3005 on
+// an argument a more specific checker already flagged.
+function hasTypeMismatchDiagnosticAt(project Project, filePath FilePath, line LineNumber, column ColumnNumber) returns bool
+	for d in project.diagnostics 'each'
+		if d.code.rawValue == ErrorCode.semanticTypeMismatch.rawValue and d.line == line and d.column == column and d.filePath == filePath 'hit'
+			return true
+		end 'hit'
+	end 'each'
+	return false
+end 'hasTypeMismatchDiagnosticAt'
+
+// E3005 for `__Builtins.*` runtime intrinsics, in the runtime-symbol message
+// form the bootstrap uses (`CheckRuntimeArgType`/`FailArgType` in
+// maxon-sharp/Compiler/2-Parser.cs). Returns true iff the resolved callee is a
+// `__Builtins.*` intrinsic with a runtime symbol — the generic checker then
+// skips the call. The expected type is named at the runtime level (`i64` for an
+// `integer` param, `cstring`, or the bare `__ManagedMemory` struct name); the
+// actual type uses its source display (so a `ByteMemory` arg reads "ByteMemory",
+// an int reads "int", a cstring reads "cstring").
+function validateBuiltinsIntrinsicArgs(project Project, opIdx OpIndex, result ByteArray, args ByteArrayArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, paramOffset ArgIndex, paramTypes MaxonTypeArray, callerName String, readerFilePath FilePath) returns bool
+	let callee = try project.resolvedCallees.get(opIdx) otherwise return false
+	if not callee.startsWith("__Builtins.") 'notBuiltins'
+		return false
+	end 'notBuiltins'
+	let dotIdx = try callee.findFirst(".") otherwise return false
+	let afterDot = try callee.indexAfter(dotIdx) otherwise return false
+	let methodName = callee.slice(afterDot, endIndex: callee.endIndex())
+	// Reuse lowering's authoritative method→runtime-symbol table so the error
+	// message and the emitted runtime call name agree. Intrinsics with no
+	// runtime symbol (e.g. the bespoke `writeStdout`) miss here and fall back
+	// to the generic param-name diagnostic.
+	let hit = try lookupSubprocessBuiltin(methodName) otherwise return false
+	let runtimeName = hit.callee
+
+	for i in 0 upto args.count() 'eachArg'
+		let pIdx = i + paramOffset
+		if pIdx >= paramTypes.count() 'paramOob'
+			continue
+		end 'paramOob'
+		let paramType = try paramTypes.get(pIdx) otherwise continue
+		let argType = try argTypes.get(i) otherwise continue
+		if argTypesCompatible(project, argType: argType, paramType: paramType) 'ok'
+			continue
+		end 'ok'
+		let range = try argRanges.get(i) otherwise SourceRange.none()
+		let expectedName = builtinsExpectedTypeName(project, t: paramType)
+		let gotName = sourceTypeDisplay(project, t: argType)
+		reportArgTypeMismatch(project, message: "type mismatch: __Builtins.{runtimeName} argument {i} expects '{expectedName}' but got '{gotName}'", range: range, result: result, callerName: callerName, readerFilePath: readerFilePath)
+	end 'eachArg'
+	return true
+end 'validateBuiltinsIntrinsicArgs'
+
+// Runtime-level name for a `__Builtins.*` intrinsic param type, matching the
+// strings the bootstrap declares in its `CompilerBuiltins` table: an `integer`
+// param is `i64`, `cstring` stays `cstring`, and a managed-memory param keeps
+// its bare `__ManagedMemory` name. Anything else falls back to its source name.
+function builtinsExpectedTypeName(project Project, t MaxonType) returns String
+	return match t 'k'
+		integer gives "i64"
+		cstring gives "cstring"
+		boolean gives sourceTypeDisplay(project, t: t)
+		float to opaquePointer gives sourceTypeDisplay(project, t: t)
+	end 'k'
+end 'builtinsExpectedTypeName'
 
 // A `Self`-typed parameter substitutes to the bare base collection (`Array`)
 // when the receiver's element type is dropped during substitution. Refine it
@@ -2004,7 +2093,7 @@ function genericInstanceArgsOf(project Project, t MaxonType) returns MaxonTypeAr
 	return match t 'k'
 		genericInstance(id) gives genericInstanceArgsById(project, id: id)
 		boolean to typeParameter gives MaxonTypeArray.create()
-		interface to opaquePointer gives MaxonTypeArray.create()
+		interface to cstring gives MaxonTypeArray.create()
 	end 'k'
 end 'genericInstanceArgsOf'
 
@@ -2021,7 +2110,7 @@ function collectionBaseName(project Project, t MaxonType) returns String
 		named(id) gives project.typeNames.get(id)
 		function to typeParameter gives ""
 		genericInstance(id) gives genericInstanceIdBaseName(project, id: id)
-		interface to opaquePointer gives ""
+		interface to cstring gives ""
 	end 'k'
 end 'collectionBaseName'
 
@@ -2054,7 +2143,7 @@ function isIntType(t MaxonType) returns bool
 	return match t 'k'
 		integer gives true
 		boolean gives false
-		float to opaquePointer gives false
+		float to cstring gives false
 	end 'k'
 end 'isIntType'
 
@@ -2078,7 +2167,7 @@ function argEndpointIsDynamic(t MaxonType) returns bool
 	return match t 'k'
 		interface gives true
 		boolean to genericInstance gives false
-		constInt to opaquePointer gives false
+		constInt to cstring gives false
 	end 'k'
 end 'argEndpointIsDynamic'
 
@@ -2131,7 +2220,7 @@ function isGenuinePrimitive(project Project, t MaxonType) returns bool
 		float gives true
 		string gives true
 		named(id) gives namedIsPrimitiveAlias(project, name: project.typeNames.get(id))
-		function to opaquePointer gives false
+		function to cstring gives false
 	end 'k'
 end 'isGenuinePrimitive'
 
@@ -2175,7 +2264,22 @@ function aliasNameForGenericType(project Project, t MaxonType) returns String
 			end 'recordFallback'
 		end 'match'
 	end 'eachAlias'
-	return fallback
+	if not fallback.isEmpty() 'haveGlobal'
+		return fallback
+	end 'haveGlobal'
+	// Type-scoped aliases (e.g. `ByteMemory = __ManagedMemory with Byte`
+	// declared inside `String`) live in their owner's `innerAliases`, not the
+	// global map. Probe those so a field of such a type names its alias
+	// (`ByteMemory`) in diagnostics rather than the expanded `__ManagedMemory
+	// with Byte`. Prefer the alias's bare name — inner aliases are keyed by it.
+	for (_, structEntry) in project.structTypes 'eachStruct'
+		for (aliasName, resolved) in structEntry.innerAliases 'eachInner'
+			if maxonTypesStructurallyEqual(resolved, b: t) 'innerMatch'
+				return aliasName
+			end 'innerMatch'
+		end 'eachInner'
+	end 'eachStruct'
+	return ""
 end 'aliasNameForGenericType'
 
 export function checkDiscardedResults(project Project, module MaxonModule)
@@ -2209,7 +2313,7 @@ end 'checkDiscardedResults'
 // True when `path` points at a stdlib source file (bootstrap or any of the
 // whitelisted `stdlib/*.maxon` files). Used to keep the discarded-results
 // check (and other user-only diagnostics) from firing on stdlib internals.
-function isStdlibFunctionPath(path FilePath) returns bool
+export function isStdlibFunctionPath(path FilePath) returns bool
 	let s = path.toString()
 	if s == "stdlib-bootstrap.maxon" 'isBootstrap'
 		return true

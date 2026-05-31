@@ -1,0 +1,38 @@
+// Test: literal-overrides-default
+type Thing
+	export var value = 7
+
+	export static function make(value Integer) returns Self
+		return Self{value: value}
+	end 'make'
+end 'Thing'
+
+typealias Integer = int(i64.min to i64.max)
+
+function main() returns ExitCode
+	let t = Thing.make(42)
+	return t.value
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 42 : i64
+    %4 = mir.mov_imm 8 : i64
+    %5 = mir.call @mrt_alloc(%4)
+    mir.store %0, %5, 0 width: qword
+    %3 = mir.load %5, 0 width: qword
+    %6 = mir.mov_imm 125 : i64
+    %7 = mir.cmp ugt, %3, %6
+    mir.cond_br %7 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %8 = mir.global_addr @__panic_msg_97361226e3bd958d
+    %9 = mir.call @mrt_panic(%8)
+  __range_ok_0:
+    mir.ret %3
+  }
+}
+---

@@ -129,10 +129,15 @@ public partial class X86CodeEmitter {
     // capacity == -2 (rdata) or capacity == -1 (slice) falls through to COW path
     EmitBytes(0x48, 0x83, 0xFA, 0x00); // CMP rdx, 0
     EmitJcc("ge", "rt_cow_writable"); // JGE: jump if greater-or-equal (signed)
-    // If byteLen == 0, nothing to copy — skip COW (e.g. empty slice)
-    EmitMovRegMem(X86Register.Rax, -0x18, 8); // RAX = byteLen
-    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
-    EmitJcc("z", "rt_cow_writable");
+    // NOTE: do NOT skip COW when byteLen == 0. An empty rdata/slice buffer
+    // (capacity < 0) must still be detached from the static/borrowed buffer so
+    // the caller (`__managed_mem_grow`) reallocs an OWNED heap pointer. Skipping
+    // here left the rdata pointer in place with capacity still -2, and the
+    // subsequent `mm_realloc` of that static pointer read a nonexistent header
+    // and faulted (e.g. pushing to `b""` / `"".toByteArray()`). With byteLen==0
+    // the COW path below allocates nothing (mm_raw_alloc(0) -> NULL) and copies
+    // nothing, but cow returns a non-rdata buffer so capacity is reset to the
+    // length and grow's realloc starts from a clean owned/NULL pointer.
     // COW path: allocate byteLen bytes, copy old buffer
     EmitMovRegMem(X86Register.Rcx, -0x18, 8); // RCX = byteLen
     if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__mm_scope_cow_copy");

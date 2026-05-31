@@ -125,6 +125,16 @@ export union MaxonType
 	// time from slot adjacency + the paired user-visible slot's type, not
 	// from this tag — see `interfaceWitnessSlots` / `fnEnvVarNames`.
 	opaquePointer
+	// A NUL-terminated UTF-8 byte pointer, distinct from `__ManagedMemory`
+	// (which is sized by a length header and is NOT guaranteed to have a `\0`
+	// at `buffer[length]`). Used for `__Builtins.*` runtime intrinsic params
+	// whose underlying runtime `strlen`s the pointer (subprocess cwd / argv
+	// entries / stdio data, PATH resolution) and for the result of
+	// `String.cstr()` / `__ManagedMemory.toCString()`. The type check is what
+	// makes the `.cstr()` / `.toCString()` conversion mandatory at the source
+	// level, closing the buffer-overrun gap a bare `__ManagedMemory` would
+	// leave. Lowers to `StdType.i64` (a raw pointer) like `opaquePointer`.
+	cstring
 
 	// Render the source-level spelling of this type, or its display name
 	// for primitives. Used by diagnostic messages and IR printers — the
@@ -143,6 +153,7 @@ export union MaxonType
 			interface(id) gives project.interfaceRegistry.getName(id)
 			constInt(value) gives "{value}"
 			opaquePointer gives "<opaquePtr>"
+			cstring gives "cstring"
 		end 'str'
 	end 'toString'
 
@@ -161,7 +172,7 @@ export union MaxonType
 			typeParameter(id) gives project.typeParameters.getName(id)
 			genericInstance(id) gives genericInstanceIdBaseName(project, id: id)
 			interface(id) gives project.interfaceRegistry.getName(id)
-			constInt to opaquePointer gives ""
+			constInt to cstring gives ""
 		end 'name'
 	end 'nameOrEmpty'
 
@@ -174,7 +185,7 @@ export union MaxonType
 		return match self 'name'
 			named(id) gives project.typeNames.get(id)
 			boolean to string gives ""
-			function to opaquePointer gives ""
+			function to cstring gives ""
 		end 'name'
 	end 'namedAliasNameOrEmpty'
 end 'MaxonType'
@@ -187,7 +198,7 @@ export function isFunctionMaxonType(t MaxonType) returns bool
 	return match t 'check'
 		function gives true
 		boolean to named gives false
-		unresolved to opaquePointer gives false
+		unresolved to cstring gives false
 	end 'check'
 end 'isFunctionMaxonType'
 
@@ -281,7 +292,7 @@ export function interfaceTypeIsFat(t MaxonType) returns bool
 		unresolved gives false
 		typeParameter gives false
 		genericInstance gives false
-		constInt to opaquePointer gives false
+		constInt to cstring gives false
 	end 'check'
 end 'interfaceTypeIsFat'
 
@@ -293,6 +304,7 @@ export function isOpaquePointerMaxonType(t MaxonType) returns bool
 	return match t 'check'
 		opaquePointer gives true
 		boolean to constInt gives false
+		cstring gives false
 	end 'check'
 end 'isOpaquePointerMaxonType'
 
@@ -315,7 +327,7 @@ export function maxonTypeWidthBytes(project Project, t MaxonType) returns Machin
 		unresolved gives 8
 		typeParameter gives 8
 		genericInstance(gid) gives genericInstanceWidthBytes(project, gid: gid)
-		interface to opaquePointer gives 8
+		interface to cstring gives 8
 	end 'w'
 end 'maxonTypeWidthBytes'
 
@@ -440,6 +452,15 @@ export function genericInstanceIdBaseName(project Project, id GenericInstanceId)
 	return project.typeNames.get(baseId)
 end 'genericInstanceIdBaseName'
 
+// True when `name` is one of the three compiler-internal managed builtin base
+// types. These handles are zero-/`create()`-initialized by structAlloc lowering
+// and intercept their mutating methods before callee resolution, so the
+// field-init (E3086) and immutable-receiver (E3019) passes both exempt them.
+// Single source of truth for the set so those passes stay in sync.
+export function isBuiltinManagedTypeName(name String) returns bool
+	return name == "__ManagedMemory" or name == "__ManagedList" or name == "__ManagedListNode"
+end 'isBuiltinManagedTypeName'
+
 export function genericInstanceToString(project Project, baseId TypeNameId, args MaxonTypeArray) returns String
 	let baseName = project.typeNames.get(baseId)
 	if args.count() == 0 'noArgs'
@@ -483,7 +504,7 @@ export function walkInstantiations(project Project, t MaxonType, out GenericInst
 		boolean to function then return
 		unresolved then return
 		typeParameter then return
-		interface to opaquePointer then return
+		interface to cstring then return
 	end 'walk'
 end 'walkInstantiations'
 
@@ -555,13 +576,23 @@ export function maxonTypesStructurallyEqual(a MaxonType, b MaxonType) returns bo
 		interface(idA) gives matchesInterfaceArm(b, idA: idA)
 		constInt(valueA) gives matchesConstIntArm(b, valueA: valueA)
 		opaquePointer gives isOpaquePointerMaxonType(b)
+		cstring gives matchesCstringArm(b)
 	end 'lhs'
 end 'maxonTypesStructurallyEqual'
+
+// `cstring` is a distinct user-visible type — structurally equal only to
+// another `cstring`, never to the synthetic `opaquePointer` ABI slot.
+function matchesCstringArm(b MaxonType) returns bool
+	return match b 'm'
+		cstring gives true
+		boolean to opaquePointer gives false
+	end 'm'
+end 'matchesCstringArm'
 
 function matchesBooleanArm(b MaxonType) returns bool
 	return match b 'm'
 		boolean gives true
-		integer to opaquePointer gives false
+		integer to cstring gives false
 	end 'm'
 end 'matchesBooleanArm'
 
@@ -569,7 +600,7 @@ function matchesIntegerArm(b MaxonType) returns bool
 	return match b 'm'
 		integer gives true
 		boolean gives false
-		float to opaquePointer gives false
+		float to cstring gives false
 	end 'm'
 end 'matchesIntegerArm'
 
@@ -577,7 +608,7 @@ function matchesFloatArm(b MaxonType) returns bool
 	return match b 'm'
 		float gives true
 		boolean to integer gives false
-		string to opaquePointer gives false
+		string to cstring gives false
 	end 'm'
 end 'matchesFloatArm'
 
@@ -585,7 +616,7 @@ function matchesStringArm(b MaxonType) returns bool
 	return match b 'm'
 		string gives true
 		boolean to float gives false
-		named to opaquePointer gives false
+		named to cstring gives false
 	end 'm'
 end 'matchesStringArm'
 
@@ -593,7 +624,7 @@ function matchesNamedArm(b MaxonType, idA TypeNameId) returns bool
 	return match b 'm'
 		named(idB) gives idA == idB
 		boolean to string gives false
-		function to opaquePointer gives false
+		function to cstring gives false
 	end 'm'
 end 'matchesNamedArm'
 
@@ -601,7 +632,7 @@ function matchesFunctionArm(b MaxonType, idA FunctionTypeId) returns bool
 	return match b 'm'
 		function(idB) gives idA == idB
 		boolean to named gives false
-		unresolved to opaquePointer gives false
+		unresolved to cstring gives false
 	end 'm'
 end 'matchesFunctionArm'
 
@@ -609,7 +640,7 @@ function matchesUnresolvedArm(b MaxonType) returns bool
 	return match b 'm'
 		unresolved gives true
 		boolean to function gives false
-		typeParameter to opaquePointer gives false
+		typeParameter to cstring gives false
 	end 'm'
 end 'matchesUnresolvedArm'
 
@@ -617,7 +648,7 @@ function matchesTypeParameterArm(b MaxonType, idA TypeParamId) returns bool
 	return match b 'm'
 		typeParameter(idB) gives idA == idB
 		boolean to unresolved gives false
-		genericInstance to opaquePointer gives false
+		genericInstance to cstring gives false
 	end 'm'
 end 'matchesTypeParameterArm'
 
@@ -626,7 +657,7 @@ function matchesGenericInstanceArm(b MaxonType, idA GenericInstanceId) returns b
 		genericInstance(idB) gives idA == idB
 		boolean to unresolved gives false
 		typeParameter gives false
-		interface to opaquePointer gives false
+		interface to cstring gives false
 	end 'm'
 end 'matchesGenericInstanceArm'
 
@@ -635,7 +666,7 @@ function matchesInterfaceArm(b MaxonType, idA InterfaceTypeId) returns bool
 		interface(idB) gives idA == idB
 		boolean to unresolved gives false
 		typeParameter to genericInstance gives false
-		constInt to opaquePointer gives false
+		constInt to cstring gives false
 	end 'm'
 end 'matchesInterfaceArm'
 
@@ -643,7 +674,7 @@ function matchesConstIntArm(b MaxonType, valueA IntConstant) returns bool
 	return match b 'm'
 		constInt(valueB) gives valueA == valueB
 		boolean to interface gives false
-		opaquePointer gives false
+		opaquePointer to cstring gives false
 	end 'm'
 end 'matchesConstIntArm'
 
@@ -798,7 +829,7 @@ export function writeMaxonType(project Project, buf ByteArray, t MaxonType) thro
 		constInt(value) then writeQword(buf, value: value)
 		// Synthetic ABI-bookkeeping slot. No payload — the tag itself carries
 		// the entire signal. Reader rebuilds via `MaxonType.opaquePointer`.
-		opaquePointer then break
+		opaquePointer to cstring then break
 	end 'payload'
 end 'writeMaxonType'
 
@@ -933,6 +964,7 @@ export function readMaxonType(project Project, buf ByteArray, offset ByteOffset)
 		constInt then return (MaxonType.constInt(readQword(buf, offset: pos)), pos + 8)
 		// Synthetic ABI-bookkeeping slot. No payload; mirror writer.
 		opaquePointer then return (MaxonType.opaquePointer, pos)
+		cstring then return (MaxonType.cstring, pos)
 	end 'tag'
 end 'readMaxonType'
 
@@ -2215,7 +2247,7 @@ function bindInterfaceParamsToConformanceArgs(project Project, t MaxonType, uses
 		function gives t
 		unresolved gives t
 		interface gives t
-		constInt to opaquePointer gives t
+		constInt to cstring gives t
 	end 'kind'
 end 'bindInterfaceParamsToConformanceArgs'
 
@@ -2352,6 +2384,7 @@ export function mangleSuffixForMaxonType(project Project, t MaxonType) returns S
 		unresolved gives "$_"
 		constInt(value) gives "${value}"
 		opaquePointer gives "$_"
+		cstring gives "$cstring"
 	end 'mangle'
 end 'mangleSuffixForMaxonType'
 
@@ -2373,6 +2406,7 @@ function namedTypeMangleSuffix(project Project, name String) returns String
 			float gives "$float"
 			bool gives "$bool"
 			string gives "$String"
+			cstring gives "$cstring"
 		end 'cat'
 	end 'isPrimAlias'
 	if let unresolved = try project.unresolvedTypealiases.get(name) 'isUnresolvedPrim'
@@ -2382,6 +2416,7 @@ function namedTypeMangleSuffix(project Project, name String) returns String
 				float gives "$float"
 				bool gives "$bool"
 				string gives "$String"
+				cstring gives "$cstring"
 			end 'cat'
 		end 'haveCat'
 	end 'isUnresolvedPrim'
@@ -2462,6 +2497,7 @@ function mangleTokenForMaxonType(project Project, t MaxonType) returns String
 		unresolved gives "_"
 		constInt(value) gives "{value}"
 		opaquePointer gives "_"
+		cstring gives "cstring"
 	end 'token'
 end 'mangleTokenForMaxonType'
 
@@ -2749,7 +2785,7 @@ function chaseParamTypeThroughInnerAlias(project Project, t MaxonType, enclosing
 		function gives t
 		interface gives t
 		unresolved gives t
-		constInt to opaquePointer gives t
+		constInt to cstring gives t
 	end 'check'
 end 'chaseParamTypeThroughInnerAlias'
 
@@ -2765,7 +2801,7 @@ function paramTypeMentionsTypeParam(project Project, t MaxonType) returns bool
 		function gives false
 		interface gives false
 		unresolved gives false
-		constInt to opaquePointer gives false
+		constInt to cstring gives false
 	end 'check'
 end 'paramTypeMentionsTypeParam'
 
@@ -2802,5 +2838,6 @@ function paramTypeShape(t MaxonType) returns ParsedInt
 		unresolved gives 0
 		constInt gives 10
 		opaquePointer gives 11
+		cstring gives 12
 	end 'shape'
 end 'paramTypeShape'

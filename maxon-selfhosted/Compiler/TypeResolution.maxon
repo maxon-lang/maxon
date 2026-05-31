@@ -702,7 +702,7 @@ function typealiasArgNames(project Project, name String) returns StringArray
 	match t 'kind'
 		boolean to typeParameter then break 'kind'
 		genericInstance(id) then collectGenericArgNames(project, id: id, out: names)
-		interface to opaquePointer then break 'kind'
+		interface to cstring then break 'kind'
 	end 'kind'
 	return names
 end 'typealiasArgNames'
@@ -1141,7 +1141,7 @@ function substituteMaxonType(project Project, t MaxonType, bindings TypeBindingM
 		// typeParameter against the binding tables — until then, every
 		// caller of substituteMaxonType only sees parser-AST inputs that
 		// don't yet carry these arms in conformance-derived signatures.
-		typeParameter to opaquePointer then return t
+		typeParameter to cstring then return t
 	end 'kind'
 end 'substituteMaxonType'
 
@@ -1680,6 +1680,9 @@ export function convertCastCategory(project Project, t MaxonType) returns CastCa
 		constInt then return CastCategory.int
 		// `opaquePointer` is i64-shaped at the ABI layer; treat like int.
 		opaquePointer then return CastCategory.int
+		// `cstring` is i64-shaped too, but a distinct cast family so the
+		// call-site checker rejects int↔cstring (see CastCategory.cstring).
+		cstring then return CastCategory.cstring
 	end 'unresolvedGuard'
 end 'convertCastCategory'
 
@@ -1749,7 +1752,7 @@ export function maxonTypeIsKnown(project Project, t MaxonType) returns bool
 		// and `interface` are similarly stamped at parse time — Phase 11
 		// step 5+ adds the deeper validation pass. Treat as known for now so
 		// the post-resolution validator doesn't trip on Array.maxon's headers.
-		typeParameter to opaquePointer then return true
+		typeParameter to cstring then return true
 	end 'check'
 end 'maxonTypeIsKnown'
 
@@ -1975,7 +1978,7 @@ function numericKindOf(project Project, t MaxonType) returns NumericKind
 		named(id) gives namedIdNumericKind(project, id: id)
 		boolean gives NumericKind.notNumeric
 		string gives NumericKind.notNumeric
-		function to opaquePointer gives NumericKind.notNumeric
+		function to cstring gives NumericKind.notNumeric
 	end 'check'
 end 'numericKindOf'
 
@@ -2004,6 +2007,7 @@ function castCategoryNumericKind(category CastCategory) returns NumericKind
 		float gives NumericKind.floating
 		bool gives NumericKind.notNumeric
 		string gives NumericKind.notNumeric
+		cstring gives NumericKind.notNumeric
 	end 'pick'
 end 'castCategoryNumericKind'
 
@@ -2116,6 +2120,7 @@ function formatTypealiasRange(project Project, aliasName String, range Typealias
 		int then return "int({range.lower} to {range.upper})"
 		bool then panic("formatTypealiasRange: alias '{aliasName}' has bool category — typealiasCastCategories should only carry int/float")
 		string then panic("formatTypealiasRange: alias '{aliasName}' has string category — typealiasCastCategories should only carry int/float")
+		cstring then panic("formatTypealiasRange: alias '{aliasName}' has cstring category — typealiasCastCategories should only carry int/float")
 	end 'pick'
 end 'formatTypealiasRange'
 
@@ -2228,7 +2233,7 @@ function checkTypeParamComparison(project Project, predicate CmpPredicate, opera
 		named gives ""
 		function gives ""
 		unresolved gives ""
-		genericInstance to opaquePointer gives ""
+		genericInstance to cstring gives ""
 	end 'extract'
 	if paramName.isEmpty() 'notTypeParam'
 		return
@@ -3079,7 +3084,7 @@ function maxonTypeIsBareTupleNamed(project Project, t MaxonType) returns bool
 	let name = match t 'getName'
 		named(id) gives project.typeNames.get(id)
 		boolean to string gives ""
-		function to opaquePointer gives ""
+		function to cstring gives ""
 	end 'getName'
 	return isTupleStructName(name)
 end 'maxonTypeIsBareTupleNamed'
@@ -3092,7 +3097,7 @@ function maxonTypeIsTupleGenericInstance(project Project, t MaxonType) returns b
 		named gives ""
 		unresolved gives ""
 		typeParameter gives ""
-		interface to opaquePointer gives ""
+		interface to cstring gives ""
 	end 'getName'
 	return isTupleStructName(name)
 end 'maxonTypeIsTupleGenericInstance'
@@ -3252,7 +3257,7 @@ export function maxonTypeIsNamed(t MaxonType) returns bool
 	return match t 'check'
 		named gives true
 		boolean to string gives false
-		function to opaquePointer gives false
+		function to cstring gives false
 	end 'check'
 end 'maxonTypeIsNamed'
 
@@ -3263,7 +3268,7 @@ export function maxonTypeIsGenericInstance(t MaxonType) returns bool
 		named gives false
 		function to unresolved gives false
 		typeParameter gives false
-		interface to opaquePointer gives false
+		interface to cstring gives false
 	end 'check'
 end 'maxonTypeIsGenericInstance'
 
@@ -3279,7 +3284,7 @@ export function maxonTypeIsTypeParameter(t MaxonType) returns bool
 		boolean to string gives false
 		named gives false
 		function to unresolved gives false
-		genericInstance to opaquePointer gives false
+		genericInstance to cstring gives false
 	end 'check'
 end 'maxonTypeIsTypeParameter'
 
@@ -3309,7 +3314,7 @@ function typeParamBelongsToEnclosing(project Project, t MaxonType, enclosingType
 		boolean to string panic("typeParamBelongsToEnclosing: just verified typeParameter shape — unreachable")
 		named panic("typeParamBelongsToEnclosing: just verified typeParameter shape — unreachable")
 		function to unresolved panic("typeParamBelongsToEnclosing: just verified typeParameter shape — unreachable")
-		genericInstance to opaquePointer panic("typeParamBelongsToEnclosing: just verified typeParameter shape — unreachable")
+		genericInstance to cstring panic("typeParamBelongsToEnclosing: just verified typeParameter shape — unreachable")
 	end 'extract'
 	return project.typeParameters.getOwner(id) == enclosingType
 end 'typeParamBelongsToEnclosing'
@@ -3507,7 +3512,7 @@ function resolveInterfaceTypeParamsViaConformance(project Project, t MaxonType, 
 		unresolved gives t
 		typeParameter(id) gives resolveSingleInterfaceTypeParam(project, paramId: id, receiverType: receiverType, fallback: t)
 		genericInstance(gid) gives resolveInterfaceTypeParamsInGenericInstance(project, gid: gid, receiverType: receiverType)
-		interface to opaquePointer gives t
+		interface to cstring gives t
 	end 'walk'
 end 'resolveInterfaceTypeParamsViaConformance'
 
@@ -3676,7 +3681,7 @@ function singleGenericArgOrUnresolved(project Project, t MaxonType) returns Maxo
 	return match t 'pick'
 		genericInstance(gid) gives singleGenericArgFromGid(project, gid: gid)
 		boolean to typeParameter gives MaxonType.unresolved
-		interface to opaquePointer gives MaxonType.unresolved
+		interface to cstring gives MaxonType.unresolved
 	end 'pick'
 end 'singleGenericArgOrUnresolved'
 
@@ -3705,7 +3710,7 @@ function interfaceReceiverIsIteratorShape(project Project, t MaxonType) returns 
 		typeParameter gives ""
 		named gives ""
 		genericInstance gives ""
-		constInt to opaquePointer gives ""
+		constInt to cstring gives ""
 	end 'pick'
 	if interfaceName.isEmpty() 'notIface'
 		return false
@@ -3786,7 +3791,7 @@ function typeParameterMethodResultType(project Project, receiverType MaxonType, 
 	let isTypeParam = match receiverType 'pick'
 		typeParameter gives true
 		boolean to unresolved gives false
-		genericInstance to opaquePointer gives false
+		genericInstance to cstring gives false
 	end 'pick'
 	if not isTypeParam 'notTypeParam'
 		throw InterfaceMethodLookupError.notInterface
@@ -3832,7 +3837,7 @@ function promoteInterfaceUsesParamRef(project Project, t MaxonType, interfaceNam
 	let name = match t 'pick'
 		named(id) gives project.typeNames.get(id)
 		boolean to string gives ""
-		function to opaquePointer gives ""
+		function to cstring gives ""
 	end 'pick'
 	if name.isEmpty() 'notNamed'
 		return t
@@ -3928,7 +3933,7 @@ export function normalizeReceiverInContext(project Project, t MaxonType, enclosi
 	return match t 'norm'
 		named(id) gives normalizeNamedReceiver(project, id: id, enclosingType: enclosingType)
 		boolean to string gives t
-		function to opaquePointer gives t
+		function to cstring gives t
 	end 'norm'
 end 'normalizeReceiverInContext'
 
@@ -4183,7 +4188,7 @@ function elementTypeForIterable(project Project, t MaxonType) returns MaxonType
 		boolean to function gives MaxonType.unresolved
 		unresolved gives MaxonType.unresolved
 		typeParameter gives MaxonType.unresolved
-		interface to opaquePointer gives MaxonType.unresolved
+		interface to cstring gives MaxonType.unresolved
 	end 'pick'
 end 'elementTypeForIterable'
 
@@ -4245,7 +4250,7 @@ export function applyInnerAliasIfNamed(project Project, t MaxonType, innerAliase
 		unresolved gives t
 		typeParameter gives t
 		genericInstance(gid) gives applyInnerAliasInGenericInstance(project, gid: gid, innerAliases: innerAliases)
-		interface to opaquePointer gives t
+		interface to cstring gives t
 	end 'check'
 end 'applyInnerAliasIfNamed'
 
@@ -4685,7 +4690,7 @@ function unifyParamWithArg(project Project, declaringTypeName String, paramType 
 		named then return
 		function then return
 		unresolved then return
-		interface to opaquePointer then return
+		interface to cstring then return
 	end 'paramShape'
 end 'unifyParamWithArg'
 
@@ -4715,7 +4720,7 @@ function unifyGenericInstance(project Project, declaringTypeName String, paramGi
 		function then return
 		unresolved then return
 		typeParameter then return
-		interface to opaquePointer then return
+		interface to cstring then return
 	end 'argShape'
 end 'unifyGenericInstance'
 
@@ -5053,7 +5058,7 @@ function refineTupleStructAlloc(project Project, producerTypes ProducerTypeMap, 
 	let receiverName = match receiverType 'extractBase'
 		named(id) gives project.typeNames.get(id)
 		boolean to string gives ""
-		function to opaquePointer gives ""
+		function to cstring gives ""
 	end 'extractBase'
 	if not isTupleStructName(receiverName) 'notTuple'
 		return
@@ -5112,7 +5117,7 @@ function isConcreteTupleArgType(t MaxonType) returns bool
 		interface gives true
 		unresolved gives false
 		typeParameter gives false
-		constInt to opaquePointer gives true
+		constInt to cstring gives true
 	end 'check'
 end 'isConcreteTupleArgType'
 
@@ -5871,7 +5876,7 @@ function interpKindForType(project Project, t MaxonType, fallback InterpExprKind
 		float gives InterpExprKind.f64
 		string gives InterpExprKind.string
 		named(id) gives interpKindForNamedTypeName(project, name: project.typeNames.get(id), fallback: fallback)
-		function to opaquePointer gives fallback
+		function to cstring gives fallback
 	end 'k'
 end 'interpKindForType'
 
@@ -6154,7 +6159,7 @@ export function isUnresolvedType(t MaxonType) returns bool
 	return match t 'check'
 		unresolved gives true
 		boolean to function gives false
-		typeParameter to opaquePointer gives false
+		typeParameter to cstring gives false
 	end 'check'
 end 'isUnresolvedType'
 
@@ -6520,7 +6525,7 @@ function blameStructTypeName(project Project, t MaxonType) returns String
 		boolean gives ""
 		integer gives ""
 		float gives ""
-		function to opaquePointer gives ""
+		function to cstring gives ""
 	end 'check'
 end 'blameStructTypeName'
 
@@ -6569,7 +6574,7 @@ end 'validateSelfFields'
 
 // Throws when the function name has no `.` (free function rather than a
 // method). Caller uses `if let` to take the method-on-struct path.
-function enclosingTypeName(funcName String) returns String throws EnclosingTypeError
+export function enclosingTypeName(funcName String) returns String throws EnclosingTypeError
 	let dotIdx = try funcName.findLast(".") otherwise throw EnclosingTypeError.notAMethod
 	return funcName.slice(funcName.startIndex(), endIndex: dotIdx)
 end 'enclosingTypeName'
@@ -7280,10 +7285,10 @@ function maxonTypeIsRefinementOf(project Project, existing MaxonType, refined Ma
 			named gives false
 			function to unresolved gives false
 			typeParameter gives false
-			interface to opaquePointer gives false
+			interface to cstring gives false
 		end 'pickRefined'
 		boolean to string gives false
-		function to opaquePointer gives false
+		function to cstring gives false
 	end 'pickExisting'
 end 'maxonTypeIsRefinementOf'
 
@@ -7999,7 +8004,7 @@ function maxonTypeIsDynamicDispatch(project Project, t MaxonType) returns bool
 		boolean to string gives false
 		function gives false
 		named gives false
-		constInt to opaquePointer gives false
+		constInt to cstring gives false
 	end 'pick'
 end 'maxonTypeIsDynamicDispatch'
 
@@ -8031,7 +8036,7 @@ function maxonTypeContainsTypeParameter(project Project, t MaxonType) returns bo
 		named gives false
 		interface gives false
 		unresolved gives false
-		constInt to opaquePointer gives false
+		constInt to cstring gives false
 	end 'pick'
 end 'maxonTypeContainsTypeParameter'
 
@@ -8604,7 +8609,7 @@ function isCharByteValue(project Project, valueName ByteArray, valueType MaxonTy
 	return match valueType 'check'
 		boolean gives false
 		integer gives project.charByteLiterals.contains(charByteLiteralKey(funcName, valueName: valueName))
-		float to opaquePointer gives false
+		float to cstring gives false
 	end 'check'
 end 'isCharByteValue'
 

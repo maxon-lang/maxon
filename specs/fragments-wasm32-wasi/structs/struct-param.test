@@ -1,0 +1,59 @@
+// Test: struct-param
+
+typealias Integer = int(i64.min to i64.max)
+
+type Vec2
+	export var x as Integer
+	export var y as Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
+end 'Vec2'
+
+function dot(a Vec2, b Vec2) returns Integer
+	return a.x * b.x + a.y * b.y
+end 'dot'
+
+function main() returns ExitCode
+	let v1 = Vec2.create(3, y: 4)
+	let v2 = Vec2.create(2, y: 1)
+	return dot(v1, b: v2)
+end 'main'
+---
+ExitCode: 10
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 3 : i64
+    %1 = mir.mov_imm 4 : i64
+    %9 = mir.mov_imm 16 : i64
+    %10 = mir.call @mrt_alloc(%9)
+    mir.store %0, %10, 0 width: qword
+    mir.store %1, %10, 8 width: qword
+    %3 = mir.mov_imm 2 : i64
+    %4 = mir.mov_imm 1 : i64
+    %11 = mir.mov_imm 16 : i64
+    %12 = mir.call @mrt_alloc(%11)
+    mir.store %3, %12, 0 width: qword
+    mir.store %4, %12, 8 width: qword
+    %13 = mir.load %10, 0 width: qword
+    %14 = mir.load %12, 0 width: qword
+    %15 = mir.mul.i64 %13, %14
+    %16 = mir.load %10, 8 width: qword
+    %17 = mir.load %12, 8 width: qword
+    %18 = mir.mul.i64 %16, %17
+    %19 = mir.add.i64 %15, %18
+    %20 = mir.mov_imm 125 : i64
+    %21 = mir.cmp ugt, %19, %20
+    mir.cond_br %21 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %22 = mir.global_addr @__panic_msg_8c94c4ae8dec10f2
+    %23 = mir.call @mrt_panic(%22)
+  __range_ok_0:
+    mir.ret %19
+  }
+}
+---

@@ -1,0 +1,44 @@
+// Test: mixed-default-and-literal
+
+typealias Integer = int(i64.min to i64.max)
+
+type Mixed
+	export var a = 10
+	export var b as Integer
+
+	export static function make(b Integer) returns Self
+		return Self{b: b}
+	end 'make'
+end 'Mixed'
+
+function main() returns ExitCode
+	let m = Mixed.make(32)
+	return m.a + m.b
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 32 : i64
+    %7 = mir.mov_imm 16 : i64
+    %8 = mir.call @mrt_alloc(%7)
+    %9 = mir.mov_imm 10 : i64
+    mir.store %9, %8, 0 width: qword
+    mir.store %0, %8, 8 width: qword
+    %3 = mir.load %8, 0 width: qword
+    %5 = mir.load %8, 8 width: qword
+    %6 = mir.add.i64 %3, %5
+    %10 = mir.mov_imm 125 : i64
+    %11 = mir.cmp ugt, %6, %10
+    mir.cond_br %11 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %12 = mir.global_addr @__panic_msg_82bfd94b33c027a5
+    %13 = mir.call @mrt_panic(%12)
+  __range_ok_0:
+    mir.ret %6
+  }
+}
+---

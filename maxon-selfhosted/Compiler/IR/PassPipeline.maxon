@@ -47,6 +47,14 @@ export union PassKind
 	// known) but before lowering (which would otherwise panic on the
 	// placeholder).
 	expandCastRangeChecks
+	// E3086 field-initialization + static-factory lowering. Runs after type
+	// resolution (struct field lists + the resolved return type are known) and
+	// before lowering (which consumes `selfFieldStore`). Reports E3086 for
+	// uninitialized struct-literal fields and rewrites a static factory's
+	// `self.field = expr` writes into `__self_<field>` slot writes + per-return-
+	// literal field stores, so the returned struct receives the values without a
+	// (non-existent) static-method `self` pointer.
+	fieldInitCheck
 	// E3070 borrow check. Runs at the Maxon level (after type resolution so
 	// receiver types are concrete; before lowering, which discards source-
 	// level names/lines). Detects mutating a collection while a reference
@@ -249,7 +257,7 @@ export type PassPipeline
 	function dispatch(pass PassKind)
 		match pass 'dispatch'
 			// Phase 2: Maxon-level passes
-			resolveTypes then runResolveTypesAndStamp(project, module: maxonModule, filePath: sourcePath)
+			resolveTypes then runResolveTypesAndStamp(project, module: maxonModule, filePath: sourcePath, isStdlib: isStdlib)
 			semanticCheck then runSemanticChecks(project, module: maxonModule, isStdlib: isStdlib)
 			// Stdlib pipeline skips the cross-file unused-export audit. Every
 			// stdlib API is reachable from user code only via `import`/visibility
@@ -261,6 +269,7 @@ export type PassPipeline
 			buildLayoutDescriptors then buildLayoutDescriptors(project, maxonModule: maxonModule, globalData: globalData)
 			buildWitnessTables then buildWitnessTables(project, maxonModule: maxonModule, globalData: globalData)
 			expandCastRangeChecks then expandCastRangeChecks(project, module: maxonModule, sourceFileName: sourceFileName, sourcePath: sourcePath)
+			fieldInitCheck then maxonModule = runMaxonFieldInitCheck(project, module: maxonModule)
 			maxonBorrowCheck then maxonModule = runMaxonBorrowCheck(project, module: maxonModule)
 			constantArrayLiteralRdata then runConstantArrayLiteralRdata(project, module: maxonModule, globalData: globalData)
 
@@ -349,8 +358,19 @@ end 'PassPipeline'
 // earliest moment a function's signature is fully concrete; the query
 // layer needs that to seed `(funcName, contentHash)` cache keys.
 // Idempotent — re-stamping later passes' shape is safe.
-function runResolveTypesAndStamp(project Project, module MaxonModule, filePath FilePath)
+function runResolveTypesAndStamp(project Project, module MaxonModule, filePath FilePath, isStdlib bool)
 	runTypeResolution(project, module: module, filePath: filePath)
+	// E3005 (argument type mismatch) must run before the E3012 unused-var
+	// drain below: a bad-argument call bound to an otherwise-unused `let`
+	// (e.g. `let result = __ManagedFile.openRead(0)`) should surface the type
+	// error, not "unused variable". Reporting E3005 here lands a diagnostic
+	// inside the function's line range, so `functionHasPriorDiagnostic` then
+	// suppresses E3012 for that function — the same "primary-error-suppresses-
+	// secondary" precedence the C# bootstrap gets from throw-on-first-error.
+	// Skipped for stdlib modules (matches the gate in `runSemanticChecks`).
+	if not isStdlib 'userOnly'
+		checkCallArgumentTypes(project, module: module)
+	end 'userOnly'
 	// Drain the parser's deferred E3012 (unused variable) checks here,
 	// at the tail of the resolveTypes pass, rather than from semanticCheck.
 	// resolveTypes emits primary diagnostics like E3009 (cast errors), and
@@ -590,6 +610,7 @@ export function classifyPass(pass PassKind) returns PassClassification
 		buildLayoutDescriptors gives PassClassification.wholeModule
 		buildWitnessTables gives PassClassification.wholeModule
 		expandCastRangeChecks gives PassClassification.wholeModule
+		fieldInitCheck gives PassClassification.wholeModule
 		maxonBorrowCheck gives PassClassification.wholeModule
 		constantArrayLiteralRdata gives PassClassification.wholeModule
 		augmentWithRuntime gives PassClassification.wholeModule
@@ -631,6 +652,14 @@ export function buildMidPipeline(project Project) returns PassKindArray
 	// structTypes, …) and cast widening/narrowing has been checked. All
 	// downstream passes can then rely on lookups succeeding.
 	passes.push(PassKind.resolveTypes)
+	// E3086 field-init + static-factory lowering. Runs right after type
+	// resolution (field lists + resolved return types known) and BEFORE
+	// semanticCheck so that an uninitialized-field error takes precedence over
+	// the discarded-result diagnostics (E3064/E3065) semanticCheck would
+	// otherwise raise first for a factory whose result is discarded. Also
+	// before lowerMaxonToStd, which consumes the `selfFieldStore` ops this pass
+	// rewrites into `__self_<field>` slot writes.
+	passes.push(PassKind.fieldInitCheck)
 	passes.push(PassKind.semanticCheck)
 	// Runs after semanticCheck so cross-file resolution has stabilized:
 	// every reference site has been rewritten to a resolved op carrying the
@@ -770,6 +799,7 @@ function classifyPhase(pass PassKind) returns PipelinePhase
 		buildLayoutDescriptors gives PipelinePhase.maxon
 		buildWitnessTables gives PipelinePhase.maxon
 		expandCastRangeChecks gives PipelinePhase.maxon
+		fieldInitCheck gives PipelinePhase.maxon
 		maxonBorrowCheck gives PipelinePhase.maxon
 		constantArrayLiteralRdata gives PipelinePhase.maxon
 		lowerMaxonToStd gives PipelinePhase.std
@@ -895,6 +925,7 @@ export function passKindToString(pass PassKind) returns String
 		buildLayoutDescriptors gives "build-layout-descriptors"
 		buildWitnessTables gives "build-witness-tables"
 		expandCastRangeChecks gives "expand-cast-range-checks"
+		fieldInitCheck gives "field-init-check"
 		constantArrayLiteralRdata gives "constant-array-literal-rdata"
 		maxonBorrowCheck gives "maxon-borrow-check"
 		injectDrops gives "inject-drops"

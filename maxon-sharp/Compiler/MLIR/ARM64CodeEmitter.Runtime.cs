@@ -1907,12 +1907,16 @@ public partial class ARM64CodeEmitter {
     _condBranchFixups.Add((_code.Count, "rt_cow_writable"));
     EmitWord(0x5400000A); // B.GE <fixup>
 
-    // Check byteLen == 0 → nothing to copy, skip COW
-    EmitReloadArg(2); // X2 = byteLen
-    // CBZ X2, rt_cow_writable
-    _condBranchFixups.Add((_code.Count, "rt_cow_writable"));
-    EmitWord(0xB4000002); // CBZ X2, <fixup>
-
+    // NOTE: do NOT skip COW when byteLen == 0. An empty rdata/slice buffer
+    // (capacity < 0) must still be detached from the static/borrowed buffer so
+    // the caller (`__managed_mem_grow`) reallocs an OWNED heap pointer. Skipping
+    // here left the rdata pointer in place with capacity still -2, and the
+    // subsequent `mm_realloc` of that static pointer read a nonexistent header
+    // and faulted (e.g. pushing to `b""` / `"".toByteArray()`). With byteLen==0
+    // the COW path allocates nothing (mm_raw_alloc(0) -> NULL) and copies
+    // nothing, but cow returns a non-rdata buffer so capacity is reset to the
+    // length and grow's realloc starts from a clean owned/NULL pointer.
+    // Mirrors the x86 emitter's maxon_cow_check.
     // COW path: allocate byteLen bytes, copy old buffer
     EmitReloadArg(2); // X2 = byteLen
     EmitMovRegReg(ARM64Register.X0, ARM64Register.X2); // X0 = byteLen (arg for mm_raw_alloc)
