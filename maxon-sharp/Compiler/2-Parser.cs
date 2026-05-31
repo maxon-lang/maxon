@@ -18148,8 +18148,8 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
           callToken.Line, callToken.Column);
       }
       args[firstPositionalIndex] = ParseCallArgValue(callee.ParamTypes[firstPositionalIndex], typeParams);
-      if (argMutabilities != null) argMutabilities[firstPositionalIndex] = _lastExprWasMutableVar;
-      if (argVarNames != null) argVarNames[firstPositionalIndex] = _lastExprVarName;
+      argMutabilities?[firstPositionalIndex] = _lastExprWasMutableVar;
+      argVarNames?[firstPositionalIndex] = _lastExprVarName;
       if (_lastExprWasMutableVar && _lastExprVarName != null) _reassignedVars.Add(_lastExprVarName);
       argLocations[firstPositionalIndex] = (_currentBlock!, _currentBlock!.Operations.Count);
     }
@@ -18164,7 +18164,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       } else if (allowAllPositional && nextPositionalIndex < args.Length) {
         args[nextPositionalIndex] = ParseCallArgValue(callee.ParamTypes[nextPositionalIndex], typeParams);
         argMutabilities?[nextPositionalIndex] = _lastExprWasMutableVar;
-        if (argVarNames != null) argVarNames[nextPositionalIndex] = _lastExprVarName;
+        argVarNames?[nextPositionalIndex] = _lastExprVarName;
         if (_lastExprWasMutableVar && _lastExprVarName != null) _reassignedVars.Add(_lastExprVarName);
         argLocations[nextPositionalIndex] = (_currentBlock!, _currentBlock!.Operations.Count);
         nextPositionalIndex++;
@@ -18204,8 +18204,8 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     if (args[idx] != null)
       throw new CompileError(ErrorCode.SemanticTypeMismatch, $"parameter '{nameToken.Value}' already has a value (passed positionally)", nameToken.Line, nameToken.Column);
     args[idx] = ParseCallArgValue(callee.ParamTypes[idx], typeParams);
-    if (argMutabilities != null) argMutabilities[idx] = _lastExprWasMutableVar;
-    if (argVarNames != null) argVarNames[idx] = _lastExprVarName;
+    argMutabilities?[idx] = _lastExprWasMutableVar;
+    argVarNames?[idx] = _lastExprVarName;
     if (_lastExprWasMutableVar && _lastExprVarName != null) _reassignedVars.Add(_lastExprVarName);
   }
 

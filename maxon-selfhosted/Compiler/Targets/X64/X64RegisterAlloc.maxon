@@ -2365,6 +2365,47 @@ function foldCmpToMem(module TargetModule, lhsReg X64VReg, rhsReg X64VReg, value
 end 'foldCmpToMem'
 
 // ============================================================
+// X64 CopyEmitter implementation
+// ============================================================
+
+// Concrete CopyEmitter for x64 phi / call-arg parallel-copy resolution. Stores
+// concrete module/block/desc (no interface field) and calls the free x64 emit
+// functions, appending movRegReg / movXmmXmm / xchg ops into `dstBlock`.
+export type X64CopyEmitter implements CopyEmitter
+	export var module as TargetModule
+	export var dstBlock as IrBlock
+	export var desc as TargetRegAlloc
+
+	export static function create(module TargetModule, dstBlock IrBlock, desc TargetRegAlloc) returns X64CopyEmitter
+		return Self{module: module, dstBlock: dstBlock, desc: desc}
+	end 'create'
+
+	function emitMovReg(destOrd RegOrdinal, srcOrd RegOrdinal)
+		emitMovRegX64(self.module, dstBlock: self.dstBlock, destOrd: destOrd, srcOrd: srcOrd)
+	end 'emitMovReg'
+
+	function emitMovFp(destOrd RegOrdinal, srcOrd RegOrdinal)
+		emitMovFpX64(self.module, dstBlock: self.dstBlock, destOrd: destOrd, srcOrd: srcOrd)
+	end 'emitMovFp'
+
+	function emitXchg(ord1 RegOrdinal, ord2 RegOrdinal)
+		emitXchgX64(self.module, dstBlock: self.dstBlock, ord1: ord1, ord2: ord2)
+	end 'emitXchg'
+
+	function gprCycleBreakOrd() returns RegOrdinal
+		return self.desc.gprCycleBreakOrd
+	end 'gprCycleBreakOrd'
+
+	function fpCycleBreakOrd() returns RegOrdinal
+		return self.desc.fpCycleBreakOrd
+	end 'fpCycleBreakOrd'
+
+	function hasXchg() returns bool
+		return self.desc.hasXchg
+	end 'hasXchg'
+end 'X64CopyEmitter'
+
+// ============================================================
 // X64 RegAllocTarget implementation
 // ============================================================
 
@@ -2432,6 +2473,10 @@ export type X64RegAllocTarget implements RegAllocTarget
 	function emitXchg(module TargetModule, dstBlock IrBlock, ord1 RegOrdinal, ord2 RegOrdinal)
 		emitXchgX64(module, dstBlock: dstBlock, ord1: ord1, ord2: ord2)
 	end 'emitXchg'
+
+	function makeCopyEmitter(module TargetModule, dstBlock IrBlock, desc TargetRegAlloc) returns CopyEmitter
+		return X64CopyEmitter.create(module, dstBlock: dstBlock, desc: desc)
+	end 'makeCopyEmitter'
 
 	function emitEpilogue(module TargetModule, dstBlock IrBlock)
 		emitEpilogueX64(module, dstBlock: dstBlock)

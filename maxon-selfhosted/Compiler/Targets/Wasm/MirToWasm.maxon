@@ -1142,6 +1142,61 @@ typealias WasmTypeIndexMap = Map with (ByteArray, Wasm32Index)
 // emission time.
 typealias WasmFuncTableIndexMap = Map with (String, Wasm32Index)
 
+// CopyEmitter implementation for the wasm backend. Wasm has a single location
+// kind (locals), value id == local index, and no register allocation — so the
+// "ordinals" the shared sequencer manipulates are wasm local indices directly.
+// A move is `local.get src; local.set dst`; the local.get/local.set opcodes are
+// type-agnostic (the declared local type fixes i64 vs f64), so the GPR and FP
+// move emitters are identical. Wasm has no exchange instruction, so hasXchg is
+// false and emitXchg is never reached (swaps route through the 3-mov scratch
+// path). The two scratch ordinals are the reserved i64/f64 cycle-break locals.
+//
+// Captures `body` by reference (ByteArray is a reference type — it is the same
+// buffer the lowering emits into), so copies interleave correctly with the
+// surrounding dispatch/branch bytes.
+type WasmCopyEmitter implements CopyEmitter
+	var body as ByteArray
+	var gprScratch as Wasm32Index
+	var fpScratch as Wasm32Index
+
+	static function create(body ByteArray, gprScratch Wasm32Index, fpScratch Wasm32Index) returns WasmCopyEmitter
+		return Self{body: body, gprScratch: gprScratch, fpScratch: fpScratch}
+	end 'create'
+
+	function emitMovReg(destOrd RegOrdinal, srcOrd RegOrdinal)
+		emitWasmLocalCopy(self.body, destOrd: destOrd, srcOrd: srcOrd)
+	end 'emitMovReg'
+
+	function emitMovFp(destOrd RegOrdinal, srcOrd RegOrdinal)
+		emitWasmLocalCopy(self.body, destOrd: destOrd, srcOrd: srcOrd)
+	end 'emitMovFp'
+
+	function emitXchg(ord1 RegOrdinal, ord2 RegOrdinal)
+		panic("wasm: emitXchg unreachable (hasXchg=false)")
+	end 'emitXchg'
+
+	function gprCycleBreakOrd() returns RegOrdinal
+		return self.gprScratch
+	end 'gprCycleBreakOrd'
+
+	function fpCycleBreakOrd() returns RegOrdinal
+		return self.fpScratch
+	end 'fpCycleBreakOrd'
+
+	function hasXchg() returns bool
+		return false
+	end 'hasXchg'
+end 'WasmCopyEmitter'
+
+// Emit `local.get srcOrd; local.set destOrd` into a wasm function body — the
+// wasm move primitive shared by both register classes.
+function emitWasmLocalCopy(body ByteArray, destOrd RegOrdinal, srcOrd RegOrdinal)
+	body.push(opLocalGet)
+	writeUleb128(body, value: srcOrd as Wasm32Index)
+	body.push(opLocalSet)
+	writeUleb128(body, value: destOrd as Wasm32Index)
+end 'emitWasmLocalCopy'
+
 type WasmFunctionLowering
 	// Module-level state (constant across all functions)
 	var module as MirModule
@@ -1216,6 +1271,23 @@ type WasmFunctionLowering
 	var argvScratchLocal as Wasm32Index
 	var argvScanLocal as Wasm32Index
 	var argvLenLocal as Wasm32Index
+	// Two cycle-break scratch locals reserved at the very tail of the locals
+	// declaration (after dispatch + argv scratch) for multi-block functions,
+	// so value-id↔local identity for 0..maxValueId is preserved. The shared
+	// parallel-copy sequencer stages a value here when breaking a phi-move
+	// cycle. They must be separately typed: a float cycle staged through an
+	// i64-typed local is a wasm validation error, so one local is i64 (used
+	// for GPR-class / integer phis) and one is f64 (FP-class / float phis).
+	// The class partition in sequentializeParallelCopy guarantees a class
+	// only ever touches its own scratch. Zero for single-block functions
+	// (which never branch and so have no phi edges).
+	var gprCycleScratchLocal as Wasm32Index
+	var fpCycleScratchLocal as Wasm32Index
+	// Identity register coloring (assignment[i] == i), sized maxValueId+1 and
+	// rebuilt per function. Lets the wasm backend feed buildEdgeMoves the same
+	// way the native backends do, except getAssignedReg returns the value id
+	// itself — which is exactly the wasm local index for that value.
+	var identityColoring as ColoringResult
 
 	static function create(module MirModule, funcNames StringArray, funcSigs WasmFuncSigs, globalDataOffsets GlobalDataOffsetMap, stackBase Wasm32Offset, fixedCalls bool) returns WasmFunctionLowering
 		return Self{
@@ -1242,7 +1314,10 @@ type WasmFunctionLowering
 			hasArgvOp: false,
 			argvScratchLocal: 0 as Wasm32Index,
 			argvScanLocal: 0,
-			argvLenLocal: 0
+			argvLenLocal: 0,
+			gprCycleScratchLocal: 0,
+			fpCycleScratchLocal: 0,
+			identityColoring: ColoringResult.create(0)
 		}
 	end 'create'
 
@@ -1385,35 +1460,57 @@ type WasmFunctionLowering
 			localGroups.push(currentType)
 			groupCount = groupCount + 1
 		end 'flushLast'
+		// Reserved locals live past the value-local region (0..maxValueId), in
+		// a fixed order so each block's index stays stable: dispatch, then the
+		// argv scratch trio, then the two phi cycle-break scratch locals. A
+		// single running cursor assigns them, so adding a region never requires
+		// recomputing the others' offsets.
+		var nextLocal = (maxValueId + 1) as Wasm32Index
+
 		if isMultiBlock 'addDispatch'
+			dispatchLocal = nextLocal
+			nextLocal = nextLocal + 1
 			writeUleb128(localGroups, value: 1)
 			localGroups.push(wasmTypeI32)
 			groupCount = groupCount + 1
 		end 'addDispatch'
 
 		// Reserve three i32 scratch locals when any of osGetArgc / osGetArgv /
-		// osGetExecutablePath appear in this function. They sit at the end of
-		// the locals declaration (after the optional dispatch local) so the
-		// ValueId-to-local-index identity for 0..maxValueId is preserved.
-		// Indices: argvScratchLocal is the next free local; argvScanLocal and
-		// argvLenLocal follow. emitArgvCacheEnsure / the bounds-check + NUL-scan
-		// sequences in the three op lowerings consume them.
+		// osGetExecutablePath appear in this function. emitArgvCacheEnsure /
+		// the bounds-check + NUL-scan sequences in the three op lowerings
+		// consume them as the argv-cache scratch register, NUL-scan pointer,
+		// and byte-length counter.
 		hasArgvOp = scanForArgvOps()
 		if hasArgvOp 'reserveArgvScratch'
-			var baseIndex = (maxValueId + 1) as Wasm32Index
-			if isMultiBlock 'bumpForDispatch'
-				baseIndex = (maxValueId + 2) as Wasm32Index
-			end 'bumpForDispatch'
-			argvScratchLocal = baseIndex
-			argvScanLocal = baseIndex + 1
-			argvLenLocal = baseIndex + 2
+			argvScratchLocal = nextLocal
+			argvScanLocal = nextLocal + 1
+			argvLenLocal = nextLocal + 2
+			nextLocal = nextLocal + 3
 			writeUleb128(localGroups, value: 3)
 			localGroups.push(wasmTypeI32)
 			groupCount = groupCount + 1
 		end 'reserveArgvScratch'
 
+		// Reserve the two phi cycle-break scratch locals (one i64, one f64)
+		// the shared parallel-copy sequencer stages through. Only multi-block
+		// functions branch, so only they can have phi edges that cycle.
+		if isMultiBlock 'reservePhiScratch'
+			gprCycleScratchLocal = nextLocal
+			fpCycleScratchLocal = nextLocal + 1
+			nextLocal = nextLocal + 2
+			writeUleb128(localGroups, value: 1)
+			localGroups.push(wasmTypeI64)
+			writeUleb128(localGroups, value: 1)
+			localGroups.push(wasmTypeF64)
+			groupCount = groupCount + 2
+		end 'reservePhiScratch'
+
 		writeUleb128(body, value: groupCount)
 		body.append(localGroups)
+
+		// Identity coloring so buildEdgeMoves resolves each value id to itself
+		// (== its wasm local index). Sized to cover every value id in use.
+		identityColoring = ColoringResult.identity((maxValueId + 1) as RegInt)
 
 		// Emit instructions for each block.
 		if srcFunc.blockRefs.count() == 1 'singleBlock'
@@ -1490,10 +1587,8 @@ type WasmFunctionLowering
 			return
 		end 'empty'
 
-		// We need a local to hold the "current block index".
-		// Use the local right after all value locals.
-		let maxValueId = findMaxValueId()
-		dispatchLocal = (maxValueId + 1) as MachineWord
+		// dispatchLocal was assigned during the locals declaration in
+		// lowerFunction (the local right after all value locals).
 
 		// Outer loop: re-enters after each block to dispatch to next
 		body.push(opLoop)
@@ -1578,13 +1673,16 @@ type WasmFunctionLowering
 		let thenIdx = findBlockIndex(thenBlock)
 		let elseIdx = findBlockIndex(elseBlock)
 
-		// Store else block args
-		emitBlockArgStores(elseArgs, targetBlock: elseBlock)
-
-		// Store then block args
-		emitBlockArgStores(thenArgs, targetBlock: thenBlock)
-
-		// if condId: dispatch = thenIdx else dispatch = elseIdx
+		// if condId: take the then edge, else: take the else edge.
+		//
+		// The block-arg (phi) stores for each edge MUST live inside that edge's
+		// arm — they are only valid on the path actually taken. Emitting both
+		// sets unconditionally before the `if` clobbers the not-taken target's
+		// phi local: e.g. `cond_br %c then=Bexit() else=Bheader(%v)` would write
+		// %v into the loop-header phi even when exiting, leaving the post-loop
+		// read of that phi holding the loop's would-be next value instead of its
+		// final one (observed as String.trim's backward grapheme scan landing
+		// one position short, eating a non-matching boundary character).
 		body.push(opLocalGet)
 		writeUleb128(body, value: condId as Wasm32Index)
 		body.push(opI32WrapI64)
@@ -1592,19 +1690,15 @@ type WasmFunctionLowering
 		body.push(opIf)
 		body.push(wasmTypeVoid)
 
-		// then: set dispatch to thenIdx
-		body.push(opI32Const)
-		writeSleb128(body, value: thenIdx)
-		body.push(opLocalSet)
-		writeUleb128(body, value: dispatchLocal)
+		// then arm: resolve then-edge phi copies, set dispatch to thenIdx
+		emitEdgePhiCopies(thenArgs, targetBlock: thenBlock)
+		emitSetDispatch(thenIdx)
 
 		body.push(opElse)
 
-		// else: set dispatch to elseIdx
-		body.push(opI32Const)
-		writeSleb128(body, value: elseIdx)
-		body.push(opLocalSet)
-		writeUleb128(body, value: dispatchLocal)
+		// else arm: resolve else-edge phi copies, set dispatch to elseIdx
+		emitEdgePhiCopies(elseArgs, targetBlock: elseBlock)
+		emitSetDispatch(elseIdx)
 
 		body.push(opEnd)
 
@@ -1618,19 +1712,24 @@ type WasmFunctionLowering
 	function emitWasmBranch(targetBlock BlockId, args ValueIdArray)
 		let targetIdx = findBlockIndex(targetBlock)
 
-		// Store block args
-		emitBlockArgStores(args, targetBlock: targetBlock)
+		// Resolve block-arg (phi) copies for this single edge
+		emitEdgePhiCopies(args, targetBlock: targetBlock)
 
-		// Set dispatch local to target block index
-		body.push(opI32Const)
-		writeSleb128(body, value: targetIdx)
-		body.push(opLocalSet)
-		writeUleb128(body, value: dispatchLocal)
+		emitSetDispatch(targetIdx)
 
 		// br back to the loop
 		body.push(opBr)
 		writeUleb128(body, value: loopDepth)
 	end 'emitWasmBranch'
+
+	// Emit `dispatch = blockIdx` — the structured-CFG dispatcher reads this
+	// local at the top of the outer loop to jump to the next block.
+	function emitSetDispatch(blockIdx MachineWord)
+		body.push(opI32Const)
+		writeSleb128(body, value: blockIdx)
+		body.push(opLocalSet)
+		writeUleb128(body, value: dispatchLocal)
+	end 'emitSetDispatch'
 
 	function emitWasmRet(retValId ValueId)
 		if not isVoidReturn 'hasReturn'
@@ -1640,23 +1739,35 @@ type WasmFunctionLowering
 		body.push(opReturn)
 	end 'emitWasmRet'
 
-	function emitBlockArgStores(args ValueIdArray, targetBlock BlockId)
-		// Find the target block and its blockArgs. Store each arg value into the blockArg's valueId local.
-		for blockRef in func.blockRefs 'findBlock'
-			let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
-			if block.id == targetBlock 'found'
-				for i in 0 upto args.count() 'eachArg'
-					let srcId = try args.get(i) otherwise panic("invariant: i < args.count() but get failed")
-					let blockArg = try block.blockArgs.get(i) otherwise panic("invariant: branch arg count exceeds target block.blockArgs count (CFG mismatch)")
-					body.push(opLocalGet)
-					writeUleb128(body, value: srcId as Wasm32Index)
-					body.push(opLocalSet)
-					writeUleb128(body, value: blockArg.valueId as Wasm32Index)
-				end 'eachArg'
-				return
-			end 'found'
-		end 'findBlock'
-	end 'emitBlockArgStores'
+	// Resolve the SSA phi copies for one CFG edge: move each source value into
+	// the destination block's corresponding block-arg local. These are a
+	// parallel copy — a source local can coincide with another arg's
+	// destination (e.g. a back-edge passing `(endPos, gStart)` to a header
+	// whose args reuse those very locals), so emitting the moves naively
+	// one-by-one would clobber a not-yet-read source and silently corrupt the
+	// phi (observed historically as String.trim's backward scan landing one
+	// grapheme short). Routing through the shared parallel-copy sequencer —
+	// the same code the native backends use — guarantees correct topological
+	// ordering and cycle-breaking through the reserved scratch locals.
+	//
+	// The caller emits this strictly inside the arm of the taken edge, so an
+	// edge's copies never land on a path that doesn't take that edge.
+	function emitEdgePhiCopies(srcArgs ValueIdArray, targetBlock BlockId)
+		let succBlock = findBlock(targetBlock)
+		let moves = buildEdgeMoves(succBlock, srcArgIds: srcArgs, coloring: identityColoring)
+		if moves.count() == 0 'noMoves'
+			return
+		end 'noMoves'
+		let emitter = WasmCopyEmitter.create(body, gprScratch: gprCycleScratchLocal, fpScratch: fpCycleScratchLocal)
+		sequentializeParallelCopy(moves, emitter: emitter)
+	end 'emitEdgePhiCopies'
+
+	// Look up the IrBlock for a blockId via the per-function index map.
+	function findBlock(blockId BlockId) returns IrBlock
+		let idx = findBlockIndex(blockId)
+		let blockRef = try func.blockRefs.get(idx) otherwise panic("invariant: blockIndex returned {idx} but func.blockRefs.get failed")
+		return try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
+	end 'findBlock'
 
 	// ============================================================
 	// MirOp emission
@@ -2927,12 +3038,12 @@ type WasmFunctionLowering
 	// ============================================================
 
 	// O(1) blockId → blockRefs-index lookup against the per-function
-	// `blockIndex` map populated at the top of lowerFunction. Returns 0
-	// for unknown ids — the prior linear-scan version did the same, and
-	// callers all read this through `dispatchLocal` plumbing which traps
-	// on bad ids during execution rather than during emission.
+	// `blockIndex` map populated at the top of lowerFunction. A branch
+	// terminator referencing a block not in this function is a compiler
+	// invariant violation, so an unknown id traps rather than silently
+	// resolving to block 0.
 	function findBlockIndex(blockId BlockId) returns MachineWord
-		return try blockIndex.get(blockId) otherwise 0
+		return try blockIndex.get(blockId) otherwise panic("findBlockIndex: branch targets blockId {blockId} not in func.blockRefs")
 	end 'findBlockIndex'
 
 	function findMaxValueId() returns MachineWord

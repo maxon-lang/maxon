@@ -44,6 +44,21 @@ export type ColoringResult
 		end 'init'
 		return Self{assignment: arr}
 	end 'create'
+
+	// Identity coloring: assignment[i] == i for i in 0..valueCount. Used by
+	// backends that don't run register allocation (wasm), where each SSA
+	// value lives in the like-numbered location (a wasm local), so resolving
+	// a value to its "ordinal" is just the identity. `valueCount` should be
+	// maxValueId+1 so every value id in use indexes in range.
+	export static function identity(valueCount RegInt) returns ColoringResult
+		var arr = RegIntArray.create()
+		var i = 0
+		while i < valueCount 'init'
+			arr.push(i)
+			i = i + 1
+		end 'init'
+		return Self{assignment: arr}
+	end 'identity'
 end 'ColoringResult'
 
 // Diagnostic context for colorLookupGpr/Fp panics. Populated by applyColoring

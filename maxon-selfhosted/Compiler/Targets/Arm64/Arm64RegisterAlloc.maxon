@@ -1686,6 +1686,48 @@ function remapA64BaseUseFpDef(a64Op Arm64Op, remap RegIntArray) returns Arm64Op
 end 'remapA64BaseUseFpDef'
 
 // ============================================================
+// ARM64 CopyEmitter implementation
+// ============================================================
+
+// Concrete CopyEmitter for arm64 phi / call-arg parallel-copy resolution.
+// arm64 has no exchange instruction (hasXchg is false), so the shared
+// sequencer routes 2-cycles through the 3-mov scratch path and never calls
+// emitXchg here.
+export type Arm64CopyEmitter implements CopyEmitter
+	export var module as TargetModule
+	export var dstBlock as IrBlock
+	export var desc as TargetRegAlloc
+
+	export static function create(module TargetModule, dstBlock IrBlock, desc TargetRegAlloc) returns Arm64CopyEmitter
+		return Self{module: module, dstBlock: dstBlock, desc: desc}
+	end 'create'
+
+	function emitMovReg(destOrd RegOrdinal, srcOrd RegOrdinal)
+		emitMovRegArm64(self.module, dstBlock: self.dstBlock, destOrd: destOrd, srcOrd: srcOrd)
+	end 'emitMovReg'
+
+	function emitMovFp(destOrd RegOrdinal, srcOrd RegOrdinal)
+		emitMovFpArm64(self.module, dstBlock: self.dstBlock, destOrd: destOrd, srcOrd: srcOrd)
+	end 'emitMovFp'
+
+	function emitXchg(ord1 RegOrdinal, ord2 RegOrdinal)
+		panic("arm64 CopyEmitter.emitXchg unreachable (hasXchg=false)")
+	end 'emitXchg'
+
+	function gprCycleBreakOrd() returns RegOrdinal
+		return self.desc.gprCycleBreakOrd
+	end 'gprCycleBreakOrd'
+
+	function fpCycleBreakOrd() returns RegOrdinal
+		return self.desc.fpCycleBreakOrd
+	end 'fpCycleBreakOrd'
+
+	function hasXchg() returns bool
+		return self.desc.hasXchg
+	end 'hasXchg'
+end 'Arm64CopyEmitter'
+
+// ============================================================
 // ARM64 RegAllocTarget implementation
 // ============================================================
 
@@ -1753,6 +1795,10 @@ export type Arm64RegAllocTarget implements RegAllocTarget
 	function emitXchg(module TargetModule, dstBlock IrBlock, ord1 RegOrdinal, ord2 RegOrdinal)
 		panic("arm64 emitXchg: no native exchange instruction (block={dstBlock.id} ord1={ord1} ord2={ord2} ops={module.arm64Ops.count()})")
 	end 'emitXchg'
+
+	function makeCopyEmitter(module TargetModule, dstBlock IrBlock, desc TargetRegAlloc) returns CopyEmitter
+		return Arm64CopyEmitter.create(module, dstBlock: dstBlock, desc: desc)
+	end 'makeCopyEmitter'
 
 	function emitEpilogue(module TargetModule, dstBlock IrBlock)
 		emitEpilogueArm64(module, dstBlock: dstBlock)

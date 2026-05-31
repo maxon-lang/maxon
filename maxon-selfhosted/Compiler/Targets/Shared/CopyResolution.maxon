@@ -30,6 +30,35 @@ end 'CopyMove'
 // for use as a Map key.
 export typealias EdgeCopyMap = Map with (RegInt, CopyMoveArray)
 
+// The narrow dependency seam the parallel-copy sequencer needs to destroy
+// SSA at a CFG edge. The block-arg path only ever emits register-to-register
+// moves, a swap, and reads the per-class cycle-break scratch + the
+// native-swap capability flag. Extracting just these lets a backend that has
+// no register allocator (wasm — value id == local index, no RegState) drive
+// the SAME sequencing algorithm by supplying its own emitter, instead of
+// stubbing out the full ~40-method RegAllocTarget.
+//
+// Methods carry no TargetModule / IrBlock: the native adapter captures those
+// at construction (it appends ops into a specific block), and wasm has no
+// IrBlock to append to — it writes wasm bytes into its function body buffer.
+export interface CopyEmitter
+	function emitMovReg(destOrd RegOrdinal, srcOrd RegOrdinal)
+	function emitMovFp(destOrd RegOrdinal, srcOrd RegOrdinal)
+	function emitXchg(ord1 RegOrdinal, ord2 RegOrdinal)
+	function gprCycleBreakOrd() returns RegOrdinal
+	function fpCycleBreakOrd() returns RegOrdinal
+	function hasXchg() returns bool
+end 'CopyEmitter'
+
+// The native CopyEmitter implementations (X64CopyEmitter / Arm64CopyEmitter)
+// live with their targets; the generic register allocator obtains one via
+// RegAllocTarget.makeCopyEmitter(module, dstBlock, desc) at each edge. They
+// cannot wrap the RegAllocTarget interface itself: Maxon erases an interface
+// value's concrete type once it is stored in a struct field, so a CopyEmitter
+// that held `regTarget as RegAllocTarget` could not dispatch its emit methods.
+// Each concrete emitter instead stores concrete module/block/desc and calls
+// the target's free emit functions directly.
+
 // blockId -> blockRef (index into module.blocks). Built once per function
 // so successor lookups during edge-copy construction are O(1) instead of
 // O(B).
@@ -73,31 +102,7 @@ export function buildBlockArgCopies(module TargetModule, func IrFunction, colori
 				continue
 			end 'noArgs'
 
-			var moves = CopyMoveArray.create()
-
-			var argIdx = 0
-			for blockArg in succBlock.blockArgs 'eachArg'
-				let dstReg = getAssignedReg(coloring, valueId: blockArg.valueId)
-
-				let srcValueId = try edge.argIds.get(argIdx) otherwise 'noSrcArg'
-					argIdx = argIdx + 1
-					continue
-				end 'noSrcArg'
-				let srcReg = getAssignedReg(coloring, valueId: srcValueId)
-
-				let isFloat = stdTypeIsFloat(blockArg.argType)
-
-				// Original single-move path: skip identity copies. The splitter
-				// creates sub-ranges to make the per-edge interference graph
-				// tractable; the parallel copy itself still flows src → merge
-				// directly. The sub-range's color is the chordal allocator's
-				// hint waypoint, not a physical move waypoint.
-				if srcReg != dstReg and srcReg != RM_NONE and dstReg != RM_NONE 'needsCopy'
-					moves.push(CopyMove.create(srcReg, dstOrd: dstReg, isFloat: isFloat))
-				end 'needsCopy'
-
-				argIdx = argIdx + 1
-			end 'eachArg'
+			let moves = buildEdgeMoves(succBlock, srcArgIds: edge.argIds, coloring: coloring)
 
 			if moves.count() > 0 'hasMoves'
 				let edgeKey = blockId * numBlocks + succId
@@ -109,6 +114,43 @@ export function buildBlockArgCopies(module TargetModule, func IrFunction, colori
 	return edgeCopies
 end 'buildBlockArgCopies'
 
+// Build the parallel-copy move set for one CFG edge: pair each destination
+// block-arg (phi) with the corresponding source arg, resolve both to their
+// allocated ordinals via `coloring`, and emit a CopyMove for every pair that
+// actually moves. Target-neutral — the native backends pass a real coloring;
+// the wasm backend passes an identity coloring (assignment[i] == i) so the
+// ordinals come out as wasm local indices directly.
+//
+// Identity copies are skipped: a src == dst move is a no-op, and feeding one
+// to the sequencer would register the ordinal as both reader and writer of
+// itself and deadlock Phase 1 (cf. partitionRegMove). The splitter creates
+// sub-ranges to keep the per-edge interference graph tractable; the parallel
+// copy itself still flows src → merge directly.
+export function buildEdgeMoves(succBlock IrBlock, srcArgIds ValueIdArray, coloring ColoringResult) returns CopyMoveArray
+	var moves = CopyMoveArray.create()
+
+	var argIdx = 0
+	for blockArg in succBlock.blockArgs 'eachArg'
+		let dstReg = getAssignedReg(coloring, valueId: blockArg.valueId)
+
+		let srcValueId = try srcArgIds.get(argIdx) otherwise 'noSrcArg'
+			argIdx = argIdx + 1
+			continue
+		end 'noSrcArg'
+		let srcReg = getAssignedReg(coloring, valueId: srcValueId)
+
+		let isFloat = stdTypeIsFloat(blockArg.argType)
+
+		if srcReg != dstReg and srcReg != RM_NONE and dstReg != RM_NONE 'needsCopy'
+			moves.push(CopyMove.create(srcReg, dstOrd: dstReg, isFloat: isFloat))
+		end 'needsCopy'
+
+		argIdx = argIdx + 1
+	end 'eachArg'
+
+	return moves
+end 'buildEdgeMoves'
+
 // Emit sequentialized register moves for a parallel copy.
 // Handles dependencies via topological ordering and breaks cycles
 // with xchg (x64) or 3-mov via scratch register (arm64). Each move carries
@@ -118,12 +160,12 @@ end 'buildBlockArgCopies'
 // GPR move to r2 (RDX) and an FP move to r2 (XMM2) would collide in the
 // per-ordinal scratch arrays and produce a malformed move topology that
 // trips the cycle walker.
-export function sequentializeParallelCopy(module TargetModule, moves CopyMoveArray, dstBlock IrBlock, state RegState, regTarget RegAllocTarget)
+export function sequentializeParallelCopy(moves CopyMoveArray, emitter CopyEmitter)
 	if moves.count() == 0 'empty'
 		return
 	end 'empty'
 
-	logTrace(LogCategory.ir, message: function() gives "copy-resolve: block {dstBlock.id} moves={moves.count()}")
+	logTrace(LogCategory.ir, message: function() gives "copy-resolve: moves={moves.count()}")
 
 	var gprMoves = CopyMoveArray.create()
 	var fpMoves = CopyMoveArray.create()
@@ -136,10 +178,10 @@ export function sequentializeParallelCopy(module TargetModule, moves CopyMoveArr
 	end 'partition'
 
 	if gprMoves.count() > 0 'hasGpr'
-		sequentializeMovesForClass(module, moves: gprMoves, isFloat: false, dstBlock: dstBlock, state: state, regTarget: regTarget)
+		sequentializeMovesForClass(gprMoves, isFloat: false, emitter: emitter)
 	end 'hasGpr'
 	if fpMoves.count() > 0 'hasFp'
-		sequentializeMovesForClass(module, moves: fpMoves, isFloat: true, dstBlock: dstBlock, state: state, regTarget: regTarget)
+		sequentializeMovesForClass(fpMoves, isFloat: true, emitter: emitter)
 	end 'hasFp'
 end 'sequentializeParallelCopy'
 
@@ -147,7 +189,7 @@ end 'sequentializeParallelCopy'
 // (all GPR or all FP). Each move's ordinal is a unique key in that class's
 // ordinal space, so the per-dest needsMove / moveFrom / pendingReaders
 // scratch arrays can be addressed by raw ordinal without collisions.
-function sequentializeMovesForClass(module TargetModule, moves CopyMoveArray, isFloat bool, dstBlock IrBlock, state RegState, regTarget RegAllocTarget)
+function sequentializeMovesForClass(moves CopyMoveArray, isFloat bool, emitter CopyEmitter)
 	// needsMove[dstOrd] = 1 while the move targeting that ordinal is still
 	// pending, 0 once emitted. moveFrom[dstOrd] = srcOrd (RM_NONE sentinel
 	// for unset). pendingReaders[ord] tracks how many still-pending moves
@@ -160,9 +202,9 @@ function sequentializeMovesForClass(module TargetModule, moves CopyMoveArray, is
 	var pendingReaders = RegIntArray.create()
 	buildMoveScratch(moves, needsMove: needsMove, moveFrom: moveFrom, pendingReaders: pendingReaders)
 
-	resolveNonConflictingMoves(module, moves: moves, needsMove: needsMove, moveFrom: moveFrom, pendingReaders: pendingReaders, isFloat: isFloat, dstBlock: dstBlock, regTarget: regTarget)
+	resolveNonConflictingMoves(moves, needsMove: needsMove, moveFrom: moveFrom, pendingReaders: pendingReaders, isFloat: isFloat, emitter: emitter)
 
-	breakMoveCycles(module, moves: moves, needsMove: needsMove, moveFrom: moveFrom, isFloat: isFloat, dstBlock: dstBlock, state: state, regTarget: regTarget)
+	breakMoveCycles(moves, needsMove: needsMove, moveFrom: moveFrom, isFloat: isFloat, emitter: emitter)
 end 'sequentializeMovesForClass'
 
 // Populate `needsMove`, `moveFrom`, and `pendingReaders` from `moves` so
@@ -184,13 +226,13 @@ end 'buildMoveScratch'
 // pendingReaders count of the source ordinal, potentially unblocking
 // other moves. Iterates until a full pass commits nothing; remaining
 // pending moves must participate in a cycle and are handled by Phase 2.
-function resolveNonConflictingMoves(module TargetModule, moves CopyMoveArray, needsMove RegIntArray, moveFrom RegIntArray, pendingReaders RegIntArray, isFloat bool, dstBlock IrBlock, regTarget RegAllocTarget)
+function resolveNonConflictingMoves(moves CopyMoveArray, needsMove RegIntArray, moveFrom RegIntArray, pendingReaders RegIntArray, isFloat bool, emitter CopyEmitter)
 	var progress = true
 	while progress 'resolveMoves'
 		progress = false
 
 		for move in moves 'tryMoves'
-			if tryCommitMove(module, dstOrd: move.dstOrd, needsMove: needsMove, moveFrom: moveFrom, pendingReaders: pendingReaders, isFloat: isFloat, dstBlock: dstBlock, regTarget: regTarget) 'fired'
+			if tryCommitMove(move.dstOrd, needsMove: needsMove, moveFrom: moveFrom, pendingReaders: pendingReaders, isFloat: isFloat, emitter: emitter) 'fired'
 				progress = true
 			end 'fired'
 		end 'tryMoves'
@@ -203,7 +245,7 @@ end 'resolveNonConflictingMoves'
 // `dstOrd` is blocked iff some still-pending move reads from it.
 // buildBlockArgCopies / partitionRegMove filter identity copies, so the
 // move itself cannot be a reader of `dstOrd` here.
-function tryCommitMove(module TargetModule, dstOrd RegOrdinal, needsMove RegIntArray, moveFrom RegIntArray, pendingReaders RegIntArray, isFloat bool, dstBlock IrBlock, regTarget RegAllocTarget) returns bool
+function tryCommitMove(dstOrd RegOrdinal, needsMove RegIntArray, moveFrom RegIntArray, pendingReaders RegIntArray, isFloat bool, emitter CopyEmitter) returns bool
 	if getOr(needsMove, index: dstOrd, fallback: 0) != 1 'alreadyDone'
 		return false
 	end 'alreadyDone'
@@ -218,7 +260,7 @@ function tryCommitMove(module TargetModule, dstOrd RegOrdinal, needsMove RegIntA
 		return false
 	end 'cantFire'
 
-	emitClassMov(regTarget, module: module, dstBlock: dstBlock, destOrd: dstOrd, srcOrd: srcOrd, isFloat: isFloat)
+	emitClassMov(emitter, destOrd: dstOrd, srcOrd: srcOrd, isFloat: isFloat)
 	try needsMove.set(dstOrd, value: 0) otherwise panic("invariant: needsMove.set OOB")
 	let prevReaders = getOr(pendingReaders, index: srcOrd, fallback: 0)
 	if prevReaders > 0 'dec'
@@ -232,7 +274,7 @@ end 'tryCommitMove'
 // longer). Two-way swaps use xchg on GPR / a 3-mov on FP; longer cycles
 // stage one ordinal in the class's cycle-break scratch register and
 // chase the moveFrom chain back to the start.
-function breakMoveCycles(module TargetModule, moves CopyMoveArray, needsMove RegIntArray, moveFrom RegIntArray, isFloat bool, dstBlock IrBlock, state RegState, regTarget RegAllocTarget)
+function breakMoveCycles(moves CopyMoveArray, needsMove RegIntArray, moveFrom RegIntArray, isFloat bool, emitter CopyEmitter)
 	for move in moves 'breakCycles'
 		let dstOrd = move.dstOrd
 
@@ -247,19 +289,19 @@ function breakMoveCycles(module TargetModule, moves CopyMoveArray, needsMove Reg
 
 		let otherSrc = getOr(moveFrom, index: srcOrd, fallback: RM_NONE)
 		if getOr(needsMove, index: srcOrd, fallback: 0) == 1 and otherSrc == dstOrd 'twoWaySwap'
-			logTrace(LogCategory.ir, message: function() gives "copy-resolve: block {dstBlock.id} swap r{dstOrd}<->r{srcOrd}")
-			emitClassSwap(regTarget, module: module, state: state, dstBlock: dstBlock, ord1: dstOrd, ord2: srcOrd, isFloat: isFloat)
+			logTrace(LogCategory.ir, message: function() gives "copy-resolve: swap r{dstOrd}<->r{srcOrd}")
+			emitClassSwap(emitter, ord1: dstOrd, ord2: srcOrd, isFloat: isFloat)
 			try needsMove.set(dstOrd, value: 0) otherwise panic("invariant: needsMove.set OOB")
 			try needsMove.set(srcOrd, value: 0) otherwise panic("invariant: needsMove.set OOB")
 		end 'twoWaySwap' else 'longerCycle'
-			logTrace(LogCategory.ir, message: function() gives "copy-resolve: block {dstBlock.id} cycle via scratch r{dstOrd}")
-			let scratchOrd = scratchOrdForClass(state, isFloat: isFloat)
-			emitClassMov(regTarget, module: module, dstBlock: dstBlock, destOrd: scratchOrd, srcOrd: dstOrd, isFloat: isFloat)
+			logTrace(LogCategory.ir, message: function() gives "copy-resolve: cycle via scratch r{dstOrd}")
+			let scratchOrd = scratchOrdForClass(emitter, isFloat: isFloat)
+			emitClassMov(emitter, destOrd: scratchOrd, srcOrd: dstOrd, isFloat: isFloat)
 
 			var cur = dstOrd
 			var curSrc = srcOrd
 			while curSrc != dstOrd 'walkCycle'
-				emitClassMov(regTarget, module: module, dstBlock: dstBlock, destOrd: cur, srcOrd: curSrc, isFloat: isFloat)
+				emitClassMov(emitter, destOrd: cur, srcOrd: curSrc, isFloat: isFloat)
 				try needsMove.set(cur, value: 0) otherwise panic("invariant: needsMove.set OOB")
 				cur = curSrc
 				curSrc = getOr(moveFrom, index: cur, fallback: RM_NONE)
@@ -269,7 +311,7 @@ function breakMoveCycles(module TargetModule, moves CopyMoveArray, needsMove Reg
 				end 'broken'
 			end 'walkCycle'
 
-			emitClassMov(regTarget, module: module, dstBlock: dstBlock, destOrd: cur, srcOrd: scratchOrd, isFloat: isFloat)
+			emitClassMov(emitter, destOrd: cur, srcOrd: scratchOrd, isFloat: isFloat)
 			try needsMove.set(cur, value: 0) otherwise panic("invariant: needsMove.set OOB")
 		end 'longerCycle'
 	end 'breakCycles'
@@ -279,32 +321,41 @@ end 'breakMoveCycles'
 // register-class flag rides on each CopyMove because GPR and FP share the
 // same ordinal space — without it the copy resolver would emit movRegReg
 // for an xmm-to-xmm copy.
-function emitClassMov(regTarget RegAllocTarget, module TargetModule, dstBlock IrBlock, destOrd RegOrdinal, srcOrd RegOrdinal, isFloat bool)
+function emitClassMov(emitter CopyEmitter, destOrd RegOrdinal, srcOrd RegOrdinal, isFloat bool)
 	if isFloat 'fp'
-		regTarget.emitMovFp(module, dstBlock: dstBlock, destOrd: destOrd, srcOrd: srcOrd)
+		emitter.emitMovFp(destOrd: destOrd, srcOrd: srcOrd)
 	end 'fp' else 'gpr'
-		regTarget.emitMovReg(module, dstBlock: dstBlock, destOrd: destOrd, srcOrd: srcOrd)
+		emitter.emitMovReg(destOrd: destOrd, srcOrd: srcOrd)
 	end 'gpr'
 end 'emitClassMov'
 
 // FP swaps fall back to a 3-mov via the FP cycle-break scratch because
-// xchg has no xmm form on x64; GPR swaps still use the native xchg path.
-function emitClassSwap(regTarget RegAllocTarget, module TargetModule, state RegState, dstBlock IrBlock, ord1 RegOrdinal, ord2 RegOrdinal, isFloat bool)
+// xchg has no xmm form on x64; GPR swaps use the native xchg when the target
+// has one (emitter.hasXchg()), otherwise a 3-mov via the GPR scratch — the
+// same shape targets without a hardware exchange (arm64, wasm) rely on.
+function emitClassSwap(emitter CopyEmitter, ord1 RegOrdinal, ord2 RegOrdinal, isFloat bool)
 	if isFloat 'fp'
-		let scratch = state.desc.fpCycleBreakOrd
-		regTarget.emitMovFp(module, dstBlock: dstBlock, destOrd: scratch, srcOrd: ord1)
-		regTarget.emitMovFp(module, dstBlock: dstBlock, destOrd: ord1, srcOrd: ord2)
-		regTarget.emitMovFp(module, dstBlock: dstBlock, destOrd: ord2, srcOrd: scratch)
+		let scratch = emitter.fpCycleBreakOrd()
+		emitter.emitMovFp(destOrd: scratch, srcOrd: ord1)
+		emitter.emitMovFp(destOrd: ord1, srcOrd: ord2)
+		emitter.emitMovFp(destOrd: ord2, srcOrd: scratch)
 	end 'fp' else 'gpr'
-		targetEmitXchgOrSwap(module, state: state, target: regTarget, dstBlock: dstBlock, ord1: ord1, ord2: ord2)
+		if emitter.hasXchg() 'xchg'
+			emitter.emitXchg(ord1: ord1, ord2: ord2)
+		end 'xchg' else 'threeMov'
+			let scratch = emitter.gprCycleBreakOrd()
+			emitter.emitMovReg(destOrd: scratch, srcOrd: ord2)
+			emitter.emitMovReg(destOrd: ord2, srcOrd: ord1)
+			emitter.emitMovReg(destOrd: ord1, srcOrd: scratch)
+		end 'threeMov'
 	end 'gpr'
 end 'emitClassSwap'
 
-function scratchOrdForClass(state RegState, isFloat bool) returns RegOrdinal
+function scratchOrdForClass(emitter CopyEmitter, isFloat bool) returns RegOrdinal
 	if isFloat 'fp'
-		return state.desc.fpCycleBreakOrd
+		return emitter.fpCycleBreakOrd()
 	end 'fp'
-	return state.desc.gprCycleBreakOrd
+	return emitter.gprCycleBreakOrd()
 end 'scratchOrdForClass'
 
 // ============================================================
@@ -438,6 +489,11 @@ end 'isSpillReloadOfClass'
 // `moveFrom` / `pendingReaders`. It can fire as soon as no other pending
 // reg-to-reg move still reads its dst.
 function sequentializeCallArgClass(module TargetModule, regMoves CopyMoveArray, kinds CallArgKindArray, isFloat bool, dstBlock IrBlock, state RegState, regTarget RegAllocTarget)
+	// Reg-to-reg moves + cycle breaking run through the shared, target-neutral
+	// sequencer via the target's concrete CopyEmitter. Reloads / stack-writes
+	// are call-arg specific and stay on regTarget directly (outside CopyEmitter).
+	let emitter = regTarget.makeCopyEmitter(module, dstBlock: dstBlock, desc: state.desc)
+
 	var needsMove = RegIntArray.create()
 	var moveFrom = RegIntArray.create()
 	var pendingReaders = RegIntArray.create()
@@ -463,7 +519,7 @@ function sequentializeCallArgClass(module TargetModule, regMoves CopyMoveArray, 
 		progress = false
 
 		for move in regMoves 'tryRegMoves'
-			if tryCommitMove(module, dstOrd: move.dstOrd, needsMove: needsMove, moveFrom: moveFrom, pendingReaders: pendingReaders, isFloat: isFloat, dstBlock: dstBlock, regTarget: regTarget) 'fired'
+			if tryCommitMove(move.dstOrd, needsMove: needsMove, moveFrom: moveFrom, pendingReaders: pendingReaders, isFloat: isFloat, emitter: emitter) 'fired'
 				progress = true
 			end 'fired'
 		end 'tryRegMoves'
@@ -475,7 +531,7 @@ function sequentializeCallArgClass(module TargetModule, regMoves CopyMoveArray, 
 
 	// Phase 2: break remaining reg-to-reg cycles. Shared with the block-arg
 	// resolver; reload state is independent of cycle-break decisions.
-	breakMoveCycles(module, moves: regMoves, needsMove: needsMove, moveFrom: moveFrom, isFloat: isFloat, dstBlock: dstBlock, state: state, regTarget: regTarget)
+	breakMoveCycles(regMoves, needsMove: needsMove, moveFrom: moveFrom, isFloat: isFloat, emitter: emitter)
 
 	// Phase 3: emit any spillReloads that were blocked through both Phase 1
 	// and Phase 2. By now no reg-to-reg move references their dst, so they

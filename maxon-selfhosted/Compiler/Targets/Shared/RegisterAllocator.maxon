@@ -479,20 +479,6 @@ export function terminatorIsCondBrArm64(module TargetModule, packed OpIndex) ret
 	end 'check'
 end 'terminatorIsCondBrArm64'
 
-// Swap two registers. If the target has a native exchange instruction
-// (state.desc.hasXchg), use it directly; otherwise fall back to a 3-move
-// sequence through the cycle-break scratch register.
-export function targetEmitXchgOrSwap(module TargetModule, state RegState, target RegAllocTarget, dstBlock IrBlock, ord1 RegOrdinal, ord2 RegOrdinal)
-	if state.desc.hasXchg 'xchg'
-		target.emitXchg(module, dstBlock: dstBlock, ord1: ord1, ord2: ord2)
-	end 'xchg' else 'threeMov'
-		let scratch = state.desc.gprCycleBreakOrd
-		target.emitMovReg(module, dstBlock: dstBlock, destOrd: scratch, srcOrd: ord2)
-		target.emitMovReg(module, dstBlock: dstBlock, destOrd: ord2, srcOrd: ord1)
-		target.emitMovReg(module, dstBlock: dstBlock, destOrd: ord1, srcOrd: scratch)
-	end 'threeMov'
-end 'targetEmitXchgOrSwap'
-
 // ============================================================
 // Standalone register allocation pass
 // ============================================================
@@ -1327,7 +1313,8 @@ function emitEdgeCopies(module TargetModule, edgeCopies EdgeCopyMap, fromId Bloc
 	let moves = try edgeCopies.get(edgeKey) otherwise return
 
 	if moves.count() > 0 'hasMoves'
-		sequentializeParallelCopy(module, moves: moves, dstBlock: dstBlock, state: state, regTarget: regTarget)
+		let emitter = regTarget.makeCopyEmitter(module, dstBlock: dstBlock, desc: state.desc)
+		sequentializeParallelCopy(moves, emitter: emitter)
 	end 'hasMoves'
 end 'emitEdgeCopies'
 
@@ -1372,7 +1359,8 @@ function emitElseEdgeCopies(module TargetModule, edgeCopies EdgeCopyMap, block I
 	var tramp = IrBlock.create(trampolineId, label: "__phi_trampoline_{block.id}_{elseTarget}")
 
 	// Emit parallel copies into the trampoline
-	sequentializeParallelCopy(module, moves: moves, dstBlock: tramp, state: state, regTarget: regTarget)
+	let emitter = regTarget.makeCopyEmitter(module, dstBlock: tramp, desc: state.desc)
+	sequentializeParallelCopy(moves, emitter: emitter)
 
 	// Set jmp to original else-target as the trampoline's terminator
 	tramp.terminator = Terminator.opIndex(regTarget.createJmpOp(module, blockId: elseTarget))
