@@ -1,0 +1,156 @@
+// Test: url.parse-ipv4
+function main() returns ExitCode
+	let url = try URL.parse("http://192.168.1.1:3000/api") otherwise 'err'
+		return 1
+	end 'err'
+	let host = try url.host() otherwise 'nh'
+		return 2
+	end 'nh'
+	print("{host}\n")
+	let port = try url.port() otherwise 'np'
+		return 3
+	end 'np'
+	print("{port}\n")
+	print("{url.path()}\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+192.168.1.1
+3000
+/api
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.global_addr @__istr_0
+    %1 = mir.mov_imm 40 : i64
+    %2 = mir.call @mrt_alloc(%1)
+    mir.store %0, %2, 0 width: qword
+    %3 = mir.mov_imm 27 : i64
+    mir.store %3, %2, 8 width: qword
+    %4 = mir.mov_imm -2 : i64
+    mir.store %4, %2, 16 width: qword
+    %5 = mir.mov_imm 1 : i64
+    mir.store %5, %2, 24 width: qword
+    %6 = mir.mov_imm 0 : i64
+    mir.store %6, %2, 32 width: qword
+    %7 = mir.mov_imm 16 : i64
+    %8 = mir.call @mrt_alloc(%7)
+    mir.store %2, %8, 0 width: qword
+    mir.store %5, %8, 8 width: qword
+    %10, %11 = mir.try_call @URL.parse(%8)
+    %13 = mir.cmp ne, %11, %6
+    mir.cond_br %13 [then: try_0.otherwise(), else: try_0.merge()]
+  try_0.otherwise:
+    mir.ret %5
+  try_0.merge:
+    %18, %19 = mir.try_call @URL.host(%10)
+    %21 = mir.cmp ne, %19, %6
+    mir.cond_br %21 [then: try_1.otherwise(), else: try_1.merge()]
+  try_1.otherwise:
+    %23 = mir.mov_imm 2 : i64
+    mir.ret %23
+  try_1.merge:
+    %26 = mir.global_addr @__istr_1
+    %28 = mir.load %18, 0 width: qword
+    %29 = mir.load %28, 0 width: qword
+    %30 = mir.load %28, 8 width: qword
+    %31 = mir.global_addr @__istr_2
+    %35 = mir.add.i64 %6, %30
+    %36 = mir.add.i64 %35, %5
+    %38 = mir.add.i64 %36, %5
+    %39 = mir.call @mrt_alloc(%38)
+    mir.memcpy %39, %26, %6
+    %40 = mir.add.i64 %39, %6
+    mir.memcpy %40, %29, %30
+    %41 = mir.add.i64 %40, %30
+    mir.memcpy %41, %31, %5
+    %43 = mir.mov_imm 40 : i64
+    %44 = mir.call @mrt_alloc(%43)
+    mir.store %39, %44, 0 width: qword
+    mir.store %36, %44, 8 width: qword
+    mir.store %36, %44, 16 width: qword
+    mir.store %5, %44, 24 width: qword
+    mir.store %6, %44, 32 width: qword
+    %47 = mir.mov_imm 16 : i64
+    %48 = mir.call @mrt_alloc(%47)
+    mir.store %44, %48, 0 width: qword
+    mir.store %6, %48, 8 width: qword
+    %112 = mir.load %48, 0 width: qword
+    %113 = mir.load %112, 0 width: qword
+    %114 = mir.load %112, 8 width: qword
+    %115 = mir.call @mrt_write_stdout(%113, %114)
+    %52, %53 = mir.try_call @URL.port(%10)
+    %55 = mir.cmp ne, %53, %6
+    mir.cond_br %55 [then: try_2.otherwise(), else: try_2.merge()]
+  try_2.otherwise:
+    %57 = mir.mov_imm 3 : i64
+    mir.ret %57
+  try_2.merge:
+    %60 = mir.global_addr @__istr_1
+    %62 = mir.mov_imm 21 : i64
+    %63 = mir.call @mrt_alloc(%62)
+    %64 = mir.call @mrt_i64_to_string(%52, %63)
+    %65 = mir.global_addr @__istr_2
+    %69 = mir.add.i64 %6, %64
+    %70 = mir.add.i64 %69, %5
+    %72 = mir.add.i64 %70, %5
+    %73 = mir.call @mrt_alloc(%72)
+    mir.memcpy %73, %60, %6
+    %74 = mir.add.i64 %73, %6
+    mir.memcpy %74, %63, %64
+    %75 = mir.add.i64 %74, %64
+    mir.memcpy %75, %65, %5
+    %77 = mir.mov_imm 40 : i64
+    %78 = mir.call @mrt_alloc(%77)
+    mir.store %73, %78, 0 width: qword
+    mir.store %70, %78, 8 width: qword
+    mir.store %70, %78, 16 width: qword
+    mir.store %5, %78, 24 width: qword
+    mir.store %6, %78, 32 width: qword
+    %81 = mir.mov_imm 16 : i64
+    %82 = mir.call @mrt_alloc(%81)
+    mir.store %78, %82, 0 width: qword
+    mir.store %6, %82, 8 width: qword
+    %116 = mir.load %82, 0 width: qword
+    %117 = mir.load %116, 0 width: qword
+    %118 = mir.load %116, 8 width: qword
+    %119 = mir.call @mrt_write_stdout(%117, %118)
+    %120 = mir.load %10, 8 width: qword
+    %87 = mir.global_addr @__istr_1
+    %89 = mir.load %120, 0 width: qword
+    %90 = mir.load %89, 0 width: qword
+    %91 = mir.load %89, 8 width: qword
+    %92 = mir.global_addr @__istr_2
+    %96 = mir.add.i64 %6, %91
+    %97 = mir.add.i64 %96, %5
+    %99 = mir.add.i64 %97, %5
+    %100 = mir.call @mrt_alloc(%99)
+    mir.memcpy %100, %87, %6
+    %101 = mir.add.i64 %100, %6
+    mir.memcpy %101, %90, %91
+    %102 = mir.add.i64 %101, %91
+    mir.memcpy %102, %92, %5
+    %104 = mir.mov_imm 40 : i64
+    %105 = mir.call @mrt_alloc(%104)
+    mir.store %100, %105, 0 width: qword
+    mir.store %97, %105, 8 width: qword
+    mir.store %97, %105, 16 width: qword
+    mir.store %5, %105, 24 width: qword
+    mir.store %6, %105, 32 width: qword
+    %108 = mir.mov_imm 16 : i64
+    %109 = mir.call @mrt_alloc(%108)
+    mir.store %105, %109, 0 width: qword
+    mir.store %6, %109, 8 width: qword
+    %121 = mir.load %109, 0 width: qword
+    %122 = mir.load %121, 0 width: qword
+    %123 = mir.load %121, 8 width: qword
+    %124 = mir.call @mrt_write_stdout(%122, %123)
+    mir.ret %6
+  }
+}
+---
