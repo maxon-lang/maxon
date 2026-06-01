@@ -2855,11 +2855,6 @@ let GtStatusCompleted = 2
 let GtStatusWaiting = 3
 
 // --- Stack growth ---
-// 2 KB initial green-thread stack, grown on demand by __gt_morestack at each
-// function prologue's stack-guard check (matches the C# bootstrap / Go's
-// _StackMin). Heavyweight Win32 kernel calls run on the per-P 64 KB system
-// stack (see emitX64GtIatCallOnSystemStack), so the GT stack only has to hold
-// Maxon frames.
 // Green-thread stack: 2 KB initial, grown on demand by __gt_morestack at the
 // stack-guard check (emitX64GtStackGuard) emitted into the large Win32 helper
 // prologues — matching the C# bootstrap. A growth is a strict 2× doubling, exactly
@@ -3494,7 +3489,7 @@ end 'emitX64GtAwait'
 // thread's small stack, runs on the per-P 64 KB system stack instead (heavy
 // kernel calls like GetFileAttributesExW probe the TIB stack bounds and fault
 // on a 2 KB GT stack). Mirrors the C# bootstrap's EmitCallImportOnSystemStack,
-// using the `__gt_current_p` global in place of TLS. Args must already be in
+// reading the current P from this OS thread's TLS slot. Args must already be in
 // rcx/rdx/r8/r9; the result is left in rax on both paths. Uses a private block
 // state for its own skip/done jumps.
 function emitX64GtIatCallOnSystemStack(code ByteArray, relocations RelocationArray, rdataRelocs RdataRelocationArray, slotIndex MachineWord)
@@ -4016,7 +4011,9 @@ function emitX64GtInit(code ByteArray, relocations RelocationArray, rdataRelocs 
 	helperLoadSlot(code, slotIndex: 0, dest: X64Register.rcx)  // procs
 	code.append(b"\x48\x8b\x01")  // mov rax, [rcx]  (P[0])
 	emitMovRegRegOp(code, dest: X64Register.r8, src: X64Register.rax)  // r8 = P[0]
-	helperStoreGlobal(code, rdataRelocs: rdataRelocs, src: X64Register.r8, name: "__gt_current_p")  // fallback
+	// (No `__gt_current_p` global store here: the x64 runtime reads the current P
+	// from each OS thread's TLS slot — set via TlsSetValue below and in the worker
+	// loop — so unlike the wasm runtime it keeps no `__gt_current_p` global mirror.)
 	// P[0].status = 1 (active)
 	helperMovRegImm(code, dest: X64Register.rcx, value: 1)
 	helperStoreIndirect(code, base: X64Register.r8, disp: POffStatus, src: X64Register.rcx)
@@ -4056,8 +4053,8 @@ end 'emitX64GtInit'
 // __gt_context_switch(from=rcx, to=rdx): save the current green thread's
 // register state into `from`, restore `to`'s, and `ret` into `to`'s saved
 // return address. Pure stack/register manipulation — ports byte-exact from C#
-// (EmitGtContextSwitch) except `P*` comes from the `__gt_current_p` global
-// instead of TLS.
+// (EmitGtContextSwitch) except `P*` is read from this OS thread's TLS slot
+// (via emitX64GtLoadCurrentP) rather than a single global.
 function emitX64GtContextSwitch(code ByteArray, rdataRelocs RdataRelocationArray, funcLabelNames StringArray, funcLabelOffsets CodeOffsetArray, funcLabelOffsetMap CodeLabelOffsetMap)
 	recordLabel(funcLabelNames, labelOffsets: funcLabelOffsets, labelOffsetMap: funcLabelOffsetMap, name: "__gt_context_switch", offset: code.count())
 

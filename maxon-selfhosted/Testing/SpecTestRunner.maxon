@@ -280,6 +280,12 @@ let whitelist = ["basics",
 	// See `maxonTypeIsDropTracked` / `synthesizeStructDestructors` in
 	// LowerMaxonToStd and `__managed_file_wrap` in runtime.std.
 	"managed-file",
+	// Full async/await via the real green-thread runtime (Go-style GMP: __gt_spawn /
+	// context-switch / trampoline / __gt_await, with 2 KB GT stacks grown by
+	// __gt_morestack via strict 2× doubling, and heavyweight Win32 kernel calls run
+	// on a per-P 64 KB system stack — the g0 model). All fragments pass, including the
+	// `trace-yield` worker-thread scheduling trace (compared after the timing-dependent
+	// worker-lifecycle lines are dropped by normalizeAsyncTraceStderr).
 	"async-await",
 
 	// --- Tier 4: async / IO / network / subprocess (need real runtime) ---
@@ -290,14 +296,6 @@ let whitelist = ["basics",
 	//   `Subprocess.run` throws `spawnFailed`); gated with the Tier-4 subprocess
 	//   specs below. The other six fragments pass.
 	// "managed-socket",
-	// "async-await" — 16/17 pass via the real green-thread runtime (Go-style GMP:
-	//   __gt_spawn / context-switch / trampoline / __gt_await, with 2 KB GT stacks
-	//   grown by __gt_morestack via strict 2× doubling (Go-faithful), and
-	//   heavyweight Win32 kernel calls run on a per-P 64 KB system stack (the g0
-	//   model — both ≤4-arg calls and the >4-arg MultiByteToWideChar). The 1 holdout:
-	//   `trace-yield` asserts the full worker-thread scheduling trace, which the port
-	//   doesn't yet reproduce deterministically even after normalizeAsyncTraceStderr;
-	//   re-enable once it matches.
 	// "async-filesystem",
 	// "async-tcp",
 	// "http-client" — HttpClient.maxon + httpHelpers.maxon are in the stdlib
