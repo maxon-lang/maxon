@@ -179,7 +179,7 @@ end 'writeCovMapTo'
 // next to the exe (outputPath.changeExtension(".covmap")); the spec runner
 // redirects it into its per-suite .coverage directory. When coverage is off
 // the path is ignored — no file is written.
-export function compileSourceWithIr(source String, virtualPath FilePath, target Target, outputPath FilePath, coverage bool, covMapPath FilePath, includeStdlibIr bool = false) returns CompileWithIrResult throws CompileError
+export function compileSourceWithIr(source String, virtualPath FilePath, target Target, outputPath FilePath, coverage bool, covMapPath FilePath, includeStdlibIr bool = false, asyncTrace bool = false) returns CompileWithIrResult throws CompileError
 	let setupStart = passTimerStart()
 	// Single-file fragment: rootPath = the file's parent directory (decision #3
 	// in the directory-as-module redesign — single-file compiles have no module
@@ -188,6 +188,7 @@ export function compileSourceWithIr(source String, virtualPath FilePath, target 
 	let rootPath = try virtualPath.parent() otherwise outputPath
 	var project = createProject(rootPath, target: target)
 	project.coverageEnabled = coverage
+	project.asyncTraceEnabled = asyncTrace
 	fileChanged(project, path: virtualPath, content: source)
 	recordPassSince("__compile-setup", startMs: setupStart)
 
@@ -216,7 +217,7 @@ export typealias VirtualSourceFileArray = Array with VirtualSourceFile
 // resolve the same way they would in a real on-disk project. The caller is
 // responsible for choosing virtual paths whose layout matches the test's
 // intent (e.g. siblings under one dir vs. nested subdirectories).
-export function compileMultiFileSourceWithIr(files VirtualSourceFileArray, projectRoot FilePath, target Target, outputPath FilePath, coverage bool, covMapPath FilePath, includeStdlibIr bool = false) returns CompileWithIrResult throws CompileError
+export function compileMultiFileSourceWithIr(files VirtualSourceFileArray, projectRoot FilePath, target Target, outputPath FilePath, coverage bool, covMapPath FilePath, includeStdlibIr bool = false, asyncTrace bool = false) returns CompileWithIrResult throws CompileError
 	if files.count() == 0 'noFiles'
 		throw CompileError.noSourceFiles(outputPath)
 	end 'noFiles'
@@ -231,6 +232,7 @@ export function compileMultiFileSourceWithIr(files VirtualSourceFileArray, proje
 	// siblings under their nearest shared parent and lose those segments.
 	var project = createProject(projectRoot, target: target)
 	project.coverageEnabled = coverage
+	project.asyncTraceEnabled = asyncTrace
 	for file in files 'eachFile'
 		fileChanged(project, path: file.path, content: file.source)
 	end 'eachFile'

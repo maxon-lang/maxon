@@ -1731,7 +1731,13 @@ export type Parser
 				// checked.
 				_ = try parseTryExpression(block, isStatementContext: true)
 				block = currentBlock
-			end 'isTryStmt' else if stmtToken.kind == TokenKind.if 'isIf'
+			end 'isTryStmt' else if stmtToken.kind == TokenKind.await 'isAwaitStmt'
+				// Statement-form `await p` — await a void-returning async function
+				// (or discard the awaited result). Parse as an expression and drop
+				// the value.
+				_ = try parseAwaitExpression(block)
+				block = currentBlock
+			end 'isAwaitStmt' else if stmtToken.kind == TokenKind.if 'isIf'
 				block = try parseIfStatement(func, block: block)
 			end 'isIf' else if stmtToken.kind == TokenKind.while 'isWhile'
 				block = try parseWhileStatement(func, block: block)
@@ -10051,6 +10057,17 @@ export type Parser
 			return try parseTryExpression(block)
 		end 'isTry'
 
+		// Tier 4: `async f(...)` spawns a green thread and evaluates to a
+		// `Promise with T`; `await p` suspends until the promise completes and
+		// evaluates to its inner value.
+		if at(TokenKind.async) 'isAsync'
+			return try parseAsyncExpression(block)
+		end 'isAsync'
+
+		if at(TokenKind.await) 'isAwait'
+			return try parseAwaitExpression(block)
+		end 'isAwait'
+
 		if at(TokenKind.minus) 'isNeg'
 			let opToken = try consume()
 			let opRange = SourceRange.ofToken(opToken)
@@ -10196,11 +10213,26 @@ export type Parser
 				end 'resolveMethodThrows'
 			end 'haveLastOpForMethodRewrite'
 			if not rewroteMethodCall 'noMethodRewrite'
-				// Inner expression is neither a call nor a methodCall - cannot bind
-				// the error flag without a preceding throwing op. Reaching here is
-				// a parser bug because parseTryExpression's gating already requires
-				// the inner to be a throwing form.
-				panic("parseTryExpression: inner expression has no preceding call/methodCall to rewrite (opCountBefore={opCountBefore}, opCountAfter={opCountAfter})")
+				// Tier 4: `try await p` — the inner expression is an `awaitPromise`.
+				// Rewrite it to a `tryAwait` so the error flag is bound at the
+				// await site (a stored/awaited promise is throwing at the type
+				// level; the runtime branches on the green thread's `threw` bit).
+				var rewroteAwait = false
+				if opCountAfter > opCountBefore 'haveLastOpForAwait'
+					let lastIdx = opCountAfter - 1
+					let lastOp = try module.ops.get(lastIdx) otherwise panic("parseTryExpression: ops.get OOB at last idx={lastIdx} (count={opCountAfter})")
+					rewroteAwait = tryRewriteAwaitToTryAwait(lastIdx, op: lastOp, errorFlagName: errorFlagName, tryRange: SourceRange.ofToken(tryToken))
+					if rewroteAwait 'awaitThrows'
+						calleeThrowsTypeName = ThrowsClause.throwing("")
+					end 'awaitThrows'
+				end 'haveLastOpForAwait'
+				if not rewroteAwait 'noAwaitRewrite'
+					// Inner expression is neither a call, methodCall, nor await —
+					// cannot bind the error flag without a preceding throwing op.
+					// Reaching here is a parser bug because parseTryExpression's
+					// gating already requires the inner to be a throwing form.
+					panic("parseTryExpression: inner expression has no preceding call/methodCall/await to rewrite (opCountBefore={opCountBefore}, opCountAfter={opCountAfter})")
+				end 'noAwaitRewrite'
 			end 'noMethodRewrite'
 		end 'noRewrite'
 
@@ -10508,6 +10540,107 @@ export type Parser
 		try module.ops.set(opIdx, value: MaxonOp.tryCall(callResult, callee: callee, callContext: callContext, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, errorBoundName: errorFlagName, range: range)) otherwise panic("rewriteCallOpToTryCall: ops.set OOB at idx={opIdx}")
 		return true
 	end 'rewriteCallOpToTryCall'
+
+	// Tier 4: parse `async f(...)`. The operand must be a direct function call;
+	// we parse it (which emits a `call` op) and rewrite that op in place to an
+	// `asyncCall`. The expression evaluates to a `Promise with InnerType` where
+	// InnerType is the callee's return type (left unresolved here; TR fills it).
+	// Mirrors `parseTryExpression`'s locate-and-rewrite-terminal-call discipline.
+	function parseAsyncExpression(block IrBlock) returns ExprResult throws ParserError
+		let asyncToken = try consume()  // 'async'
+		// Token span of the call, captured so the E3073 diagnostic can reproduce
+		// the `async f(args)` source spelling.
+		let callStartIdx = cursor.index()
+		let opCountBefore = module.ops.count()
+		let inner = try parsePostfix(block, expr: try parsePrimary(block))
+		let opCountAfter = module.ops.count()
+		let callEndIdx = cursor.index()
+		// Reproduce the `async f(args)` source spelling for the E3073 diagnostic.
+		// Token values concatenate without inserted whitespace — within a single
+		// call there are no newline tokens, so `heavyCompute ( 5 )` round-trips
+		// to `heavyCompute(5)`.
+		var sourceText = "async "
+		var tokIdx = callStartIdx
+		while tokIdx < callEndIdx 'eachTok'
+			let t = try tokens.get(tokIdx) otherwise break
+			sourceText = "{sourceText}{t.value}"
+			tokIdx = tokIdx + 1
+		end 'eachTok'
+		let innerType = exprType(inner)
+		if opCountAfter > opCountBefore 'haveLastOp'
+			let lastIdx = opCountAfter - 1
+			let lastOp = try module.ops.get(lastIdx) otherwise panic("parseAsyncExpression: ops.get OOB at last idx={lastIdx}")
+			if tryRewriteCallToAsyncCall(lastIdx, op: lastOp, innerType: innerType, sourceText: sourceText, asyncRange: SourceRange.ofToken(asyncToken)) 'rewrote'
+				return ExprResult.direct(exprName(inner), valueType: promiseGenericType(project, innerType: innerType))
+			end 'rewrote'
+		end 'haveLastOp'
+		// Inner expression wasn't a direct call (method call, literal, etc.).
+		reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "'async' must be applied to a direct function call", line: asyncToken.line, column: asyncToken.column, filePath: filePath)
+		return inner
+	end 'parseAsyncExpression'
+
+	function tryRewriteCallToAsyncCall(opIdx OpIndex, op MaxonOp, innerType MaxonType, sourceText String, asyncRange SourceRange) returns bool
+		if op.name != "call" 'notACall'
+			return false
+		end 'notACall'
+		match op 'shape'
+			call(callResult, callee, callContext, args, argLabels, argTypes, argRanges, _) then return rewriteCallOpToAsyncCall(opIdx, callResult: callResult, callee: callee, callContext: callContext, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, innerType: innerType, sourceText: sourceText, range: asyncRange)
+			default panic("tryRewriteCallToAsyncCall: op.name == 'call' but match did not extract")
+		end 'shape'
+	end 'tryRewriteCallToAsyncCall'
+
+	// Tier 4: rewrite a terminal `awaitPromise` op into a `tryAwait` so `try
+	// await p` binds the post-await error flag (mirrors tryRewriteCallToTryCall).
+	function tryRewriteAwaitToTryAwait(opIdx OpIndex, op MaxonOp, errorFlagName ByteArray, tryRange SourceRange) returns bool
+		if op.name != "awaitPromise" 'notAwait'
+			return false
+		end 'notAwait'
+		match op 'shape'
+			awaitPromise(result, promise, innerType, promiseType, _) then return rewriteAwaitOpToTryAwait(opIdx, result: result, promise: promise, innerType: innerType, promiseType: promiseType, errorBoundName: errorFlagName, range: tryRange)
+			default panic("tryRewriteAwaitToTryAwait: op.name == awaitPromise but match did not extract")
+		end 'shape'
+	end 'tryRewriteAwaitToTryAwait'
+
+	function rewriteAwaitOpToTryAwait(opIdx OpIndex, result ByteArray, promise ByteArray, innerType MaxonType, promiseType MaxonType, errorBoundName ByteArray, range SourceRange) returns bool
+		try module.ops.set(opIdx, value: MaxonOp.tryAwait(result, promise: promise, innerType: innerType, promiseType: promiseType, errorBoundName: errorBoundName, range: range)) otherwise panic("rewriteAwaitOpToTryAwait: ops.set OOB at idx={opIdx}")
+		return true
+	end 'rewriteAwaitOpToTryAwait'
+
+	function rewriteCallOpToAsyncCall(opIdx OpIndex, callResult ByteArray, callee ByteArray, callContext CallContext, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, innerType MaxonType, sourceText String, range SourceRange) returns bool
+		// `calleeThrows` is left false here; the throwing-async path is driven by
+		// the `try await` keyword at the await site, not by the spawn site.
+		try module.ops.set(opIdx, value: MaxonOp.asyncCall(callResult, callee: callee, callContext: callContext, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, innerType: innerType, calleeThrows: false, callSourceText: sourceText, range: range)) otherwise panic("rewriteCallOpToAsyncCall: ops.set OOB at idx={opIdx}")
+		return true
+	end 'rewriteCallOpToAsyncCall'
+
+	// Tier 4: parse `await promise`. The operand must be a `Promise with T`
+	// value (the result of `async f()`, directly or via a variable); otherwise
+	// E3005 fires naming the operand's kind. Emits an `awaitPromise` op whose
+	// result is the awaited inner value.
+	function parseAwaitExpression(block IrBlock) returns ExprResult throws ParserError
+		let awaitToken = try consume()  // 'await'
+		let operand = try parseUnary(block)
+		let operandType = exprType(operand)
+		// Only fire E3005 when the operand is a *definitely* non-promise concrete
+		// type (int / bool / float / String / a named struct/enum / function).
+		// When the type is still unresolved at parse time (e.g. a `for p in arr`
+		// loop variable, a field load, an array element) we can't tell yet — emit
+		// the await and let TR resolve the inner type from the promise operand's
+		// recorded `Promise with T` producer type.
+		if awaitOperandIsConcreteNonPromise(operandType) and not isPromiseType(project, t: operandType) 'notPromise'
+			reportCompileError(project, code: ErrorCode.semanticTypeMismatch, message: "'await' requires a promise value from 'async', got {awaitNonPromiseKindName(project, t: operandType)}", line: awaitToken.line, column: awaitToken.column, filePath: filePath)
+			// Recover with the operand value typed unresolved so the rest of the
+			// statement still parses (one diagnostic per mistake).
+			return ExprResult.direct(exprName(operand), valueType: MaxonType.unresolved)
+		end 'notPromise'
+		var innerType = MaxonType.unresolved
+		if isPromiseType(project, t: operandType) 'knownPromise'
+			innerType = promiseInnerType(project, t: operandType)
+		end 'knownPromise'
+		let resultName = freshSynthName()
+		module.appendOp(currentBlock, op: MaxonOp.awaitPromise(resultName, promise: exprName(operand), innerType: innerType, promiseType: operandType, range: SourceRange.ofToken(awaitToken)))
+		return ExprResult.direct(resultName, valueType: innerType)
+	end 'parseAwaitExpression'
 
 	// Rewrite the terminal `methodCall` in place to a `tryMethodCall` so
 	// lowering binds the post-call error flag via the multi-value-return
@@ -11098,6 +11231,14 @@ export type Parser
 				// rule with receiver-type awareness.
 				let (argNames, argLabels, argTypes, argRanges) = try parseCallArgsRaw(block, requireNamed: false)
 				let rparenToken = previousToken()
+				// Tier 4: `p.cancel()` on a promise value is the cancel intrinsic,
+				// not a user method. Emit a void `cancelPromise` op and evaluate to
+				// the (discarded) receiver — a non-call value the statement context
+				// drops silently, so no E3065 "result not used" fires.
+				if memberName == "cancel" and argNames.count() == 0 and isPromiseType(project, t: exprType(result)) 'isCancelPromise'
+					module.appendOp(currentBlock, op: MaxonOp.cancelPromise(receiverName, range: SourceRange.between(memberToken, last: rparenToken)))
+					continue
+				end 'isCancelPromise'
 				let methodResultName = freshSynthName()
 				// Emit into `currentBlock` — argument parsing may have moved
 				// control flow (e.g. a nested `try EXPR otherwise FB`), so the
@@ -11300,6 +11441,14 @@ export type Parser
 					// methodCall site above for rationale.
 					let (argNames, argLabels, argTypes, argRanges) = try parseCallArgsRaw(block, requireNamed: false)
 					let rparenToken = previousToken()
+					// Tier 4: `p.cancel()` on a promise local is the cancel intrinsic.
+					// Emit a void `cancelPromise` op and evaluate to the (discarded)
+					// receiver load so the statement context drops a non-call value
+					// — no E3065 "result not used" fires.
+					if memberToken.value == "cancel" and argNames.count() == 0 and isPromiseType(project, t: receiverVarType) 'isCancelPromiseLocal'
+						module.appendOp(currentBlock, op: MaxonOp.cancelPromise(receiverLoadName, range: SourceRange.between(token, last: rparenToken)))
+						return ExprResult.direct(receiverLoadName, valueType: receiverVarType)
+					end 'isCancelPromiseLocal'
 					let methodResultName = freshSynthName()
 					// Emit into `currentBlock` — see emitCallAndResult for rationale.
 					module.appendOp(currentBlock, op: MaxonOp.methodCall(methodResultName, receiver: receiverLoadName, methodName: memberNameBytes, args: argNames, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, range: SourceRange.between(token, last: rparenToken)))
@@ -16210,6 +16359,46 @@ function ternaryArmKindName(t MaxonType) returns String
 		named to cstring gives ""
 	end 'kind'
 end 'ternaryArmKindName'
+
+// Tier 4: the lowercase value-kind name used by the E3005 "await requires a
+// promise" diagnostic. Mirrors the C# bootstrap's
+// `DetermineValueKind(...).ToString().ToLowerInvariant()` so the message text
+// matches (e.g. an `int` operand reports `got integer`).
+function awaitNonPromiseKindName(project Project, t MaxonType) returns String
+	return match t 'kind'
+		boolean gives "bool"
+		integer gives "integer"
+		float gives "float"
+		string gives "struct"
+		named(id) gives awaitNamedKindName(project, id: id)
+		function gives "function"
+		unresolved gives "value"
+		typeParameter gives "value"
+		genericInstance gives "struct"
+		interface gives "value"
+		constInt gives "integer"
+		opaquePointer gives "value"
+	end 'kind'
+end 'awaitNonPromiseKindName'
+
+// True iff `t` is a fully-concrete type that definitely is not a `Promise`
+// (a scalar, String, named struct/enum, or function type). Unresolved /
+// type-parameter / generic-instance / interface / opaque types return false —
+// the await parser defers the E3005 check for those to type resolution.
+function awaitOperandIsConcreteNonPromise(t MaxonType) returns bool
+	return match t 'k'
+		boolean to function gives true
+		unresolved to opaquePointer gives false
+	end 'k'
+end 'awaitOperandIsConcreteNonPromise'
+
+function awaitNamedKindName(project Project, id TypeNameId) returns String
+	let name = project.typeNames.get(id)
+	if project.enumTypes.contains(name) 'isEnum'
+		return "enum"
+	end 'isEnum'
+	return "struct"
+end 'awaitNamedKindName'
 
 // A named type is a "reference" (heap-allocated struct/enum/function) when
 // the project knows about it in the corresponding registry. For named types

@@ -570,7 +570,7 @@ end 'zeroBytesOfSize'
 // runtime.std's lock acquire/release helpers are no-ops while the runtime is
 // single-threaded. When threading lands, register one 8-byte slot per class
 // here and wire the helpers in `__slab_refill_mcache` to a real CAS loop.
-export function registerSlabAndMmGlobalsForDataSection(globalData GlobalDataTable)
+export function registerSlabAndMmGlobalsForDataSection(globalData GlobalDataTable, asyncTraceEnabled bool = false)
 	// Slab bottom-layer state (step 6a.12).
 	addDataSectionEntry(globalData, name: "__slab_init_done", initialBytes: zeroBytesOfSize(8))
 	addDataSectionEntry(globalData, name: "__slab_arena_list_head", initialBytes: zeroBytesOfSize(8))
@@ -593,6 +593,14 @@ export function registerSlabAndMmGlobalsForDataSection(globalData GlobalDataTabl
 	addDataSectionEntry(globalData, name: "__slab_os_direct_count", initialBytes: zeroBytesOfSize(8))
 	addDataSectionEntry(globalData, name: "__slab_os_direct_capacity", initialBytes: zeroBytesOfSize(8))
 
+	// CRITICAL_SECTION (40 bytes) serializing all slab allocator mutations
+	// (mcache pop/refill, mspan free lists, the arena map, the OS-direct tracker).
+	// The slab fast path uses a single shared mcache, so once the green-thread
+	// scheduler runs GTs on multiple OS threads, every __slab_alloc / __slab_free
+	// must hold this lock. Initialized by __slab_init; Windows CRITICAL_SECTIONs
+	// are re-entrant, so a destructor that frees during mm_free is safe.
+	addDataSectionEntry(globalData, name: "__slab_lock", initialBytes: zeroBytesOfSize(40))
+
 	// MM-layer leak counter. Atomic-tracked count of live allocations;
 	// spec tests assert this reaches zero.
 	addDataSectionEntry(globalData, name: "__mm_alloc_count", initialBytes: zeroBytesOfSize(8))
@@ -608,6 +616,31 @@ export function registerSlabAndMmGlobalsForDataSection(globalData GlobalDataTabl
 	addDataSectionEntry(globalData, name: "__mrt_win32_argv_init_done", initialBytes: zeroBytesOfSize(8))
 	addDataSectionEntry(globalData, name: "__mrt_win32_argc", initialBytes: zeroBytesOfSize(8))
 	addDataSectionEntry(globalData, name: "__mrt_win32_argv_cache_ptr", initialBytes: zeroBytesOfSize(8))
+
+	// Tier 4 green-thread runtime state. Single-OS-thread cooperative model:
+	// `__gt_current_p` holds the one ProcContext* (replaces TLS); the run queue
+	// is a global FIFO of ready green threads; `__gt_init_done` guards the lazy
+	// one-time scheduler init done at the first `async` spawn.
+	addDataSectionEntry(globalData, name: "__gt_current_p", initialBytes: zeroBytesOfSize(8))
+	addDataSectionEntry(globalData, name: "__gt_run_queue_head", initialBytes: zeroBytesOfSize(8))
+	addDataSectionEntry(globalData, name: "__gt_run_queue_tail", initialBytes: zeroBytesOfSize(8))
+	addDataSectionEntry(globalData, name: "__gt_init_done", initialBytes: zeroBytesOfSize(8))
+
+	// Tier 4 multi-OS-thread scheduler state (Go-style GMP). `__sched_procs` is the
+	// VirtualAlloc'd P* array (one ProcContext per CPU); `__sched_num_procs` /
+	// `__sched_max_procs` size it; `__sched_active_workers` is an atomically-tracked
+	// running-worker count; `__sched_shutdown_flag` signals worker exit;
+	// `__sched_global_queue_cs` is the CRITICAL_SECTION guarding the global run queue;
+	// `__sched_tls_index` / `__sched_tls_teb_offset` hold the TlsAlloc slot and its
+	// precomputed gs:[] offset for reading the current OS thread's ProcContext*.
+	addDataSectionEntry(globalData, name: "__sched_procs", initialBytes: zeroBytesOfSize(8))
+	addDataSectionEntry(globalData, name: "__sched_num_procs", initialBytes: zeroBytesOfSize(8))
+	addDataSectionEntry(globalData, name: "__sched_max_procs", initialBytes: zeroBytesOfSize(8))
+	addDataSectionEntry(globalData, name: "__sched_active_workers", initialBytes: zeroBytesOfSize(8))
+	addDataSectionEntry(globalData, name: "__sched_shutdown_flag", initialBytes: zeroBytesOfSize(8))
+	addDataSectionEntry(globalData, name: "__sched_tls_index", initialBytes: zeroBytesOfSize(8))
+	addDataSectionEntry(globalData, name: "__sched_tls_teb_offset", initialBytes: zeroBytesOfSize(8))
+	addDataSectionEntry(globalData, name: "__sched_global_queue_cs", initialBytes: zeroBytesOfSize(40))
 
 	// Phase D2: kernel-supplied argc/argv stashed by `mrt_start`'s prologue on
 	// Linux/macOS. The `stashEntryArgv` backend pseudo-op writes rdi/rsi (x64)
@@ -630,7 +663,53 @@ export function registerSlabAndMmGlobalsForDataSection(globalData GlobalDataTabl
 	procSelfExeBytes.push(0)
 	procSelfExeBytes.push(0)
 	addDataSectionEntry(globalData, name: "__mrt_proc_self_exe", initialBytes: procSelfExeBytes)
+
+	// Tier 4 async-trace runtime state (used only when the `--async-trace` /
+	// AsyncTrace fragment flag is set; the strings/globals are reserved
+	// unconditionally so the .data layout is uniform). `__gt_trace_counter` is a
+	// LOCK-XADD'd monotonic GT id source; `__at_trace_cs` is a CRITICAL_SECTION
+	// serializing trace lines across worker threads. The `__at_tag_*` / `__at_io_op_*`
+	// entries are NUL-terminated tag strings the runtime LEAs and writes to stderr.
+	// Mutable globals first so they stay 8-aligned for the atomics; the helper pads
+	// every string entry to a multiple of 8 so nothing after is misaligned.
+	addDataSectionEntry(globalData, name: "__gt_trace_counter", initialBytes: zeroBytesOfSize(8))
+	addDataSectionEntry(globalData, name: "__at_trace_cs", initialBytes: zeroBytesOfSize(40))
+	// `__at_trace_enabled` is the single runtime gate every async-trace print
+	// checks. Its initial value is baked from the compile-time AsyncTrace flag
+	// (1 for an `AsyncTrace: true` fragment, 0 otherwise) so the scheduler stays
+	// silent for normal builds without any per-call compile-time conditioning.
+	var traceEnabledBytes = zeroBytesOfSize(8)
+	if asyncTraceEnabled 'traceOn'
+		try traceEnabledBytes.set(0, value: 1) otherwise panic("registerSlab: __at_trace_enabled init byte OOB")
+	end 'traceOn'
+	addDataSectionEntry(globalData, name: "__at_trace_enabled", initialBytes: traceEnabledBytes)
+	addTraceTagEntry(globalData, name: "__at_tag_spawn", text: b"spawn #")
+	addTraceTagEntry(globalData, name: "__at_tag_await", text: b"await #")
+	addTraceTagEntry(globalData, name: "__at_tag_await_yield", text: b" [yield]")
+	addTraceTagEntry(globalData, name: "__at_tag_await_imm", text: b" [immediate]")
+	addTraceTagEntry(globalData, name: "__at_tag_io_yield", text: b"io_yield #")
+	addTraceTagEntry(globalData, name: "__at_tag_io_resume", text: b"io_resume #")
+	addTraceTagEntry(globalData, name: "__at_tag_worker_start", text: b"worker_start #")
+	addTraceTagEntry(globalData, name: "__at_tag_worker_park", text: b"worker_park #")
+	addTraceTagEntry(globalData, name: "__at_tag_worker_wake", text: b"worker_wake #")
+	addTraceTagEntry(globalData, name: "__at_tag_worker_exit", text: b"worker_exit #")
+	addTraceTagEntry(globalData, name: "__at_tag_worker_prefix", text: b" [M=")
+	addTraceTagEntry(globalData, name: "__at_tag_worker_suffix", text: b"]")
+	addTraceTagEntry(globalData, name: "__at_tag_nl", text: b"\n")
+	addTraceTagEntry(globalData, name: "__at_io_op_file_exists", text: b" [file_exists]")
 end 'registerSlabAndMmGlobalsForDataSection'
+
+// Register one NUL-terminated async-trace tag string in .data, padded to an
+// 8-byte multiple so subsequent .data entries stay aligned.
+function addTraceTagEntry(globalData GlobalDataTable, name String, text ByteArray)
+	var bytes = ByteArray.create()
+	bytes.append(text)
+	bytes.push(0)
+	while bytes.count() mod 8 != 0 'pad'
+		bytes.push(0)
+	end 'pad'
+	addDataSectionEntry(globalData, name: name, initialBytes: bytes)
+end 'addTraceTagEntry'
 
 // Register the allocator-count reader as a callable signature. The
 // `__mm_alloc`, `__mm_decref`, `__mm_incref` functions are now real
@@ -2429,7 +2508,7 @@ type MaxonToStdLowering
 		// `globalAddr __slab_*` / `globalAddr __mm_*` resolve to distinct
 		// addresses. Without this every allocator-state global would alias to
 		// offset 0 the moment `mrt_start` calls `__slab_init`.
-		registerSlabAndMmGlobalsForDataSection(self.globalData)
+		registerSlabAndMmGlobalsForDataSection(self.globalData, asyncTraceEnabled: self.project.asyncTraceEnabled)
 
 		// Copy blocks first so block indices stay aligned 1:1 between the source
 		// MaxonModule.blocks and the dest StdModule.blocks. Each resulting
@@ -2879,6 +2958,18 @@ type MaxonToStdLowering
 			// Reaching it here means the pass was skipped — that's a
 			// pipeline-ordering bug.
 			castCheck then panic("LowerMaxonToStd: castCheck reached lowering — expandCastRangeChecks did not run")
+			// Tier 4 async/await — interim synchronous lowering. The spawned call
+			// runs eagerly at the `async` site and the promise handle IS its
+			// result value; `await` is the identity read. This is correct for
+			// every async-await fragment whose result doesn't depend on real
+			// interleaving (basic / void / sequence / parallel / try-await /
+			// stack-growth / cancel / promise-array). The cooperative
+			// green-thread runtime (needed for the AsyncTrace `trace-yield`
+			// fragment and true interleaving) replaces these arms in a later step.
+			asyncCall(result, callee, _, args, _, _, _, _, _, _, _) then self.lowerAsyncCallReal(result, callee: callee, args: args, opIdx: opIdx, dstBlock: dstBlock)
+			awaitPromise(result, promise, innerType, _, _) then self.lowerAwaitReal(result, promise: promise, innerType: innerType, dstBlock: dstBlock)
+			tryAwait(result, promise, innerType, _, errorBoundName, _) then self.lowerTryAwaitReal(result, promise: promise, innerType: innerType, errorBoundName: errorBoundName, dstBlock: dstBlock)
+			cancelPromise then return
 		end 'lower'
 	end 'lowerOp'
 
@@ -2899,6 +2990,136 @@ type MaxonToStdLowering
 		self.setIsFloat(resultId, isFloat: isFloat)
 		self.setValueType(resultId, t: litType)
 	end 'lowerLiteral'
+
+	// Tier 4 real green-thread lowering: `async f(args)` builds an argument
+	// buffer `[count | managed_mask | arg0 | …]` (allocated via the untracked
+	// slab allocator so it doesn't perturb the leak balance), takes the raw
+	// function pointer via `funcRef`, and spawns a green thread with
+	// `__gt_spawn(func_ptr, count, arg_buf)`. The result is the promise (GT ptr).
+	function lowerAsyncCallReal(result ByteArray, callee ByteArray, args ByteArrayArray, opIdx OpIndex, dstBlock IrBlock)
+		let count = args.count()
+		let bufSize = (count + 2) * 8
+		let sizeId = self.emitConstI64(bufSize as IntConstant, dstBlock: dstBlock)
+		var allocArgs = ValueIdArray.create()
+		allocArgs.push(sizeId)
+		let bufId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(bufId, callee: "__slab_alloc", argIds: allocArgs)))
+		self.setValueType(bufId, t: MaxonType.integer)
+		// [buf+0] = count
+		let countId = self.emitConstI64(count as IntConstant, dstBlock: dstBlock)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(bufId, offset: 0, valueId: countId, width: StoreWidth.qword, isFloat: false)))
+		// [buf+8] = managed_mask (0 — managed-arg incref is a later step)
+		let maskId = self.emitConstI64(0, dstBlock: dstBlock)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(bufId, offset: 8, valueId: maskId, width: StoreWidth.qword, isFloat: false)))
+		// [buf+16 + i*8] = arg i
+		for i in 0 upto count 'eachArg'
+			let argName = try args.get(i) otherwise panic("lowerAsyncCallReal: args.get OOB")
+			let argId = self.resolveName(argName)
+			let argOffset = (16 + i * 8) as IntConstant
+			self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(bufId, offset: argOffset, valueId: argId, width: StoreWidth.qword, isFloat: false)))
+		end 'eachArg'
+		// Raw function pointer (NOT the env thunk — the trampoline calls the user
+		// function directly with the buffered args).
+		let resolvedCallee = try self.project.resolvedCallees.get(opIdx) otherwise String.from(callee)
+		let funcId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.funcRef(funcId, funcName: resolvedCallee)))
+		self.setValueType(funcId, t: MaxonType.integer)
+		// promise = __gt_spawn(func_ptr, count, arg_buf)
+		let countId2 = self.emitConstI64(count as IntConstant, dstBlock: dstBlock)
+		var spawnArgs = ValueIdArray.create()
+		spawnArgs.push(funcId)
+		spawnArgs.push(countId2)
+		spawnArgs.push(bufId)
+		let promiseId = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(promiseId, callee: "__gt_spawn", argIds: spawnArgs)))
+		self.setValueType(promiseId, t: MaxonType.integer)
+	end 'lowerAsyncCallReal'
+
+	// Tier 4 real green-thread lowering: `await p` → `__gt_await(p)`, returning
+	// the green thread's result. A void await binds the result to a throwaway.
+	// `innerType` is the promise's resolved inner type (e.g. `String`); the result
+	// must carry it — not a generic `integer` — so a downstream method call like
+	// `s.isEmpty()` dispatches against the concrete struct rather than falling
+	// through to the Phase 11.4 interface-dispatch stub. (The C# bootstrap does the
+	// same via the await op's ResultKind/ResultStructTypeName.)
+	function lowerAwaitReal(result ByteArray, promise ByteArray, innerType MaxonType, dstBlock IrBlock)
+		let promiseId = self.resolveName(promise)
+		var awaitArgs = ValueIdArray.create()
+		awaitArgs.push(promiseId)
+		if result.isEmpty() 'voidAwait'
+			let throwaway = allocValueId(self.funcIdRef)
+			self.setValueType(throwaway, t: MaxonType.integer)
+			self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(throwaway, callee: "__gt_await", argIds: awaitArgs)))
+			return
+		end 'voidAwait'
+		let resultId = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: "__gt_await", argIds: awaitArgs)))
+		self.setValueType(resultId, t: innerType)
+	end 'lowerAwaitReal'
+
+	// Tier 4 real green-thread lowering: `try await p` → `__gt_await(p)` via a
+	// `tryCall`, which captures the multi-value error flag (rdx — the awaited
+	// green thread's `threw` bit, returned by __gt_await) into `errorBoundName`.
+	// The parser-emitted cmp+condBr on that flag drives the `otherwise` path.
+	// As in `lowerAwaitReal`, the result carries the promise's resolved `innerType`
+	// so a method call on a `try await`-ed managed value dispatches concretely.
+	function lowerTryAwaitReal(result ByteArray, promise ByteArray, innerType MaxonType, errorBoundName ByteArray, dstBlock IrBlock)
+		let promiseId = self.resolveName(promise)
+		var awaitArgs = ValueIdArray.create()
+		awaitArgs.push(promiseId)
+		// Result slot (a throwaway for a void await). A real result carries the
+		// promise's resolved inner type; a void throwaway stays a plain integer.
+		var resultId = allocValueId(self.funcIdRef)
+		var resultType = MaxonType.integer
+		if not result.isEmpty() 'haveResult'
+			resultId = self.defineName(result)
+			resultType = innerType
+		end 'haveResult'
+		self.setValueType(resultId, t: resultType)
+		// Error-flag slot bound to the captured rdx.
+		var flagId = allocValueId(self.funcIdRef)
+		if not errorBoundName.isEmpty() 'haveFlag'
+			flagId = self.defineName(errorBoundName)
+		end 'haveFlag'
+		self.setValueType(flagId, t: MaxonType.integer)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.tryCall(resultId, callee: "__gt_await", argIds: awaitArgs, errorFlagId: flagId)))
+	end 'lowerTryAwaitReal'
+
+	// Tier 4 (interim synchronous async): `async f(args)` runs `f` eagerly and
+	// binds the promise handle to its result. A void callee binds nothing, so
+	// give the promise a dummy 0 handle for the await alias to refer to.
+	function lowerAsyncCallSync(result ByteArray, callee ByteArray, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, opIdx OpIndex, dstBlock IrBlock)
+		self.lowerCall(result, callee: callee, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, opIdx: opIdx, dstBlock: dstBlock)
+		if not self.nameToId.contains(result) 'voidPromise'
+			let id = self.defineName(result)
+			self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: id, value: 0))))
+			self.setValueType(id, t: MaxonType.integer)
+		end 'voidPromise'
+	end 'lowerAsyncCallSync'
+
+	// Tier 4 (interim synchronous async): `await p` is the identity read — the
+	// promise handle already holds the eagerly-computed result.
+	function lowerAwaitSync(result ByteArray, promise ByteArray)
+		if result.isEmpty() 'noResult'
+			return
+		end 'noResult'
+		self.aliasName(result, toId: self.resolveName(promise))
+	end 'lowerAwaitSync'
+
+	// Tier 4 (interim synchronous async): `try await p` reads the result (as
+	// identity) and binds the error flag to 0 (no error). Real throwing-async
+	// capture lands with the green-thread runtime; the Step-2 fragments don't
+	// throw, so a no-error flag is correct for them.
+	function lowerTryAwaitSync(result ByteArray, promise ByteArray, errorBoundName ByteArray, dstBlock IrBlock)
+		if not result.isEmpty() 'haveResult'
+			self.aliasName(result, toId: self.resolveName(promise))
+		end 'haveResult'
+		if not errorBoundName.isEmpty() 'bindFlag'
+			let flagId = self.defineName(errorBoundName)
+			self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: flagId, value: 0))))
+			self.setValueType(flagId, t: MaxonType.integer)
+		end 'bindFlag'
+	end 'lowerTryAwaitSync'
 
 	// Lower a maxon.stringConst op to a heap-allocated String struct
 	// backed by an rdata-resident __ManagedMemory record. Layout matches

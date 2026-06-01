@@ -50,6 +50,11 @@ export function runSemanticChecks(project Project, module MaxonModule, isStdlib 
 	// E3055 (try on non-throwing function), E3057 (missing try on throwing call).
 	checkErrorHandlingRules(project, module: module)
 
+	// Tier 4: E3073 — every `async f()` must target a function that can yield
+	// (contains an await / I/O yield point, transitively). Mirrors the C#
+	// bootstrap's CheckAsyncYielding.
+	checkAsyncYielding(project, module: module)
+
 	// E3087: lint `if x.contains(k) ... try x.get(k) otherwise ...` patterns.
 	// Mirrors the C# bootstrap's CheckRedundantContainsGet — see the
 	// per-function helper below for the full algorithm.
@@ -963,6 +968,168 @@ function checkErrorHandlingRules(project Project, module MaxonModule)
 		end 'eachBlock'
 	end 'eachFunc'
 end 'checkErrorHandlingRules'
+
+// Tier 4 (E3073): every `async f()` must target a function that yields. A
+// function yields if it contains an await / try-await / async-call op, calls a
+// known I/O yield stub, or transitively calls a function that yields. Mirrors
+// the C# bootstrap's CheckAsyncYielding (fixed-point over the call graph).
+//
+// At the Maxon-IR level the spec's yield point is a `call File.exists(...)` —
+// `isAsyncYieldStub` recognizes the user-facing stdlib yield functions (and the
+// underlying runtime primitives) directly, so a caller of `File.exists` is
+// classified as yielding without needing the stdlib body's runtime call to be
+// visible to this pass.
+function checkAsyncYielding(project Project, module MaxonModule)
+	// Fast path: no async-call sites → nothing to validate.
+	if not moduleHasAsyncCall(module) 'noAsync'
+		return
+	end 'noAsync'
+
+	// Build the per-function "yields" set and the callee call-graph in one walk.
+	var yields = StringSet.create()
+	var edges = CallerEdgeMap.create()
+	for func in module.functions 'eachFunc'
+		var callees = FuncNameArray.create()
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("checkAsyncYielding: blockRef OOB")
+			for opIdx in block.opRefs 'eachOp'
+				let op = try module.ops.get(opIdx) otherwise panic("checkAsyncYielding: opIdx OOB")
+				classifyYieldOp(project, op: op, func: func, yields: yields, callees: callees)
+			end 'eachOp'
+			if block.hasTerminatorOp() 'hasTerm'
+				let termOp = try module.ops.get(block.terminatorIndex()) otherwise panic("checkAsyncYielding: termIdx OOB")
+				classifyYieldOp(project, op: termOp, func: func, yields: yields, callees: callees)
+			end 'hasTerm'
+		end 'eachBlock'
+		edges.upsert(func.name, value: callees)
+	end 'eachFunc'
+
+	// Fixed-point: a function yields if any of its (already-qualified) callees
+	// yields.
+	let funcCount = module.functions.count()
+	var changed = true
+	while changed 'propagate'
+		changed = false
+		var i = 0
+		while i < funcCount 'eachCaller'
+			let caller = try module.functions.get(i) otherwise panic("checkAsyncYielding: caller.get OOB")
+			if yields.contains(caller.name) 'already'
+				i = i + 1
+				continue
+			end 'already'
+			let callees = try edges.get(caller.name) otherwise FuncNameArray.create()
+			for callee in callees 'eachCallee'
+				if yields.contains(callee) 'calleeYields'
+					yields.insert(caller.name)
+					changed = true
+					break
+				end 'calleeYields'
+			end 'eachCallee'
+			i = i + 1
+		end 'eachCaller'
+	end 'propagate'
+
+	// Report: each async-call whose (qualified) callee neither yields nor is a
+	// known yield stub.
+	for func in module.functions 'reportFunc'
+		for blockRef in func.blockRefs 'reportBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("checkAsyncYielding: report blockRef OOB")
+			for opIdx in block.opRefs 'reportOp'
+				let op = try module.ops.get(opIdx) otherwise panic("checkAsyncYielding: report opIdx OOB")
+				maybeReportNonYieldingAsync(project, op: op, func: func, yields: yields)
+			end 'reportOp'
+		end 'reportBlock'
+	end 'reportFunc'
+end 'checkAsyncYielding'
+
+function moduleHasAsyncCall(module MaxonModule) returns bool
+	for func in module.functions 'eachFunc'
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("moduleHasAsyncCall: blockRef OOB")
+			for opIdx in block.opRefs 'eachOp'
+				let op = try module.ops.get(opIdx) otherwise panic("moduleHasAsyncCall: opIdx OOB")
+				if op.name == "asyncCall" 'found'
+					return true
+				end 'found'
+			end 'eachOp'
+		end 'eachBlock'
+	end 'eachFunc'
+	return false
+end 'moduleHasAsyncCall'
+
+// Classify one op for the yields walk: async/await ops make the containing
+// function yield; call/tryCall ops either mark a yield (I/O stub callee) or
+// contribute a qualified callee edge for the fixed-point.
+function classifyYieldOp(project Project, op MaxonOp, func IrFunction, yields StringSet, callees FuncNameArray)
+	if op.name == "awaitPromise" or op.name == "tryAwait" 'isAwait'
+		yields.insert(func.name)
+		return
+	end 'isAwait'
+	if op.name == "asyncCall" 'isAsync'
+		match op 'a'
+			asyncCall(_, callee, callContext, _, _, _, _, _, _, _, _) then handleYieldCallEdge(project, callee: callee, callContext: callContext, func: func, yields: yields, callees: callees)
+			default panic("classifyYieldOp: op.name == asyncCall but match failed")
+		end 'a'
+		return
+	end 'isAsync'
+	if op.name == "call" 'isCall'
+		match op 'c'
+			call(_, callee, callContext, _, _, _, _, _) then handleYieldCallEdge(project, callee: callee, callContext: callContext, func: func, yields: yields, callees: callees)
+			default panic("classifyYieldOp: op.name == call but match failed")
+		end 'c'
+		return
+	end 'isCall'
+	if op.name == "tryCall" 'isTryCall'
+		match op 't'
+			tryCall(_, callee, callContext, _, _, _, _, _, _) then handleYieldCallEdge(project, callee: callee, callContext: callContext, func: func, yields: yields, callees: callees)
+			default panic("classifyYieldOp: op.name == tryCall but match failed")
+		end 't'
+		return
+	end 'isTryCall'
+end 'classifyYieldOp'
+
+// An async-call op also makes its containing function yield (it awaits the
+// spawned promise's completion implicitly), so route the spawn-site callee
+// through the same edge handler while marking the caller as yielding.
+function handleYieldCallEdge(project Project, callee ByteArray, callContext CallContext, func IrFunction, yields StringSet, callees FuncNameArray)
+	let qualified = qualifyCalleeForContext(project, bare: String.from(callee), callContext: callContext, currentNamespace: func.namespace, readerFilePath: func.sourceFilePath)
+	if isAsyncYieldStub(qualified) 'isStub'
+		yields.insert(func.name)
+		return
+	end 'isStub'
+	callees.push(qualified)
+end 'handleYieldCallEdge'
+
+function maybeReportNonYieldingAsync(project Project, op MaxonOp, func IrFunction, yields StringSet)
+	if op.name != "asyncCall" 'notAsync'
+		return
+	end 'notAsync'
+	match op 'k'
+		asyncCall(_, callee, callContext, _, _, _, _, _, _, callSourceText, range) then reportIfNonYielding(project, callee: callee, callContext: callContext, callSourceText: callSourceText, range: range, func: func, yields: yields)
+		default panic("maybeReportNonYieldingAsync: op.name == asyncCall but match failed")
+	end 'k'
+end 'maybeReportNonYieldingAsync'
+
+function reportIfNonYielding(project Project, callee ByteArray, callContext CallContext, callSourceText String, range SourceRange, func IrFunction, yields StringSet)
+	let qualified = qualifyCalleeForContext(project, bare: String.from(callee), callContext: callContext, currentNamespace: func.namespace, readerFilePath: func.sourceFilePath)
+	if yields.contains(qualified) or isAsyncYieldStub(qualified) 'yields'
+		return
+	end 'yields'
+	reportCompileError(project, code: ErrorCode.asyncNonYielding, message: "'{callSourceText}' — function never yields; 'async' is for I/O-concurrent work only", line: range.line, column: range.column, filePath: func.sourceFilePath)
+end 'reportIfNonYielding'
+
+// The set of callee names (user-facing stdlib yield functions + underlying
+// runtime primitives) whose call suspends the green thread. Mirrors the C#
+// bootstrap's IoStubs, expressed at the Maxon-IR call-callee granularity.
+function isAsyncYieldStub(name String) returns bool
+	let stubs = ["File.exists", "File.read", "File.delete", "maxon_file_exists", "maxon_file_read", "maxon_file_delete", "maxon_sleep", "sleep"]
+	for s in stubs 'each'
+		if name == s 'hit'
+			return true
+		end 'hit'
+	end 'each'
+	return false
+end 'isAsyncYieldStub'
 
 // E3057: calling a throwing function without `try`.
 // The callee is the unqualified name; qualify it before looking up in funcThrowsTypes.

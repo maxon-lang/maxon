@@ -280,6 +280,7 @@ let whitelist = ["basics",
 	// See `maxonTypeIsDropTracked` / `synthesizeStructDestructors` in
 	// LowerMaxonToStd and `__managed_file_wrap` in runtime.std.
 	"managed-file",
+	"async-await",
 
 	// --- Tier 4: async / IO / network / subprocess (need real runtime) ---
 	// "sleep",
@@ -289,8 +290,13 @@ let whitelist = ["basics",
 	//   `Subprocess.run` throws `spawnFailed`); gated with the Tier-4 subprocess
 	//   specs below. The other six fragments pass.
 	// "managed-socket",
-	// "tcp-client",
-	// "async-await",
+	// "async-await" — 16/17 pass via the real green-thread runtime (single-OS-thread
+	//   cooperative: __gt_spawn / context-switch / trampoline / __gt_await, with 2 KB
+	//   GT stacks grown by __gt_morestack via strict 2× doubling (Go-faithful), and
+	//   heavyweight Win32 kernel calls run on a per-P 64 KB system stack (the g0
+	//   model — both ≤4-arg calls and the >4-arg MultiByteToWideChar). The 1 holdout:
+	//   `trace-yield` needs the C# multi-OS-thread GMP scheduler trace (worker threads);
+	//   a faithful port is in progress. Re-enable once it lands.
 	// "async-filesystem",
 	// "async-tcp",
 	// "http-client" — HttpClient.maxon + httpHelpers.maxon are in the stdlib
@@ -1042,7 +1048,7 @@ end 'sliceFromBytePos'
 function compileFragmentInMemory(fragment Fragment, virtualSourcePath FilePath, target Target, outputExe FilePath) returns CompileWithIrResult throws CompileError
 	let covMapPath = outputExe.changeExtension(".covmap")
 	if not fragment.hasMultiFile 'isSingle'
-		return try compileSourceWithIr(fragment.source, virtualPath: virtualSourcePath, target: target, outputPath: outputExe, coverage: false, covMapPath: covMapPath, includeStdlibIr: fragment.includeStdlibIr)
+		return try compileSourceWithIr(fragment.source, virtualPath: virtualSourcePath, target: target, outputPath: outputExe, coverage: false, covMapPath: covMapPath, includeStdlibIr: fragment.includeStdlibIr, asyncTrace: fragment.asyncTrace)
 	end 'isSingle'
 
 	// Anchor virtual paths in the fragment's directory so module-visibility
@@ -1060,7 +1066,7 @@ function compileFragmentInMemory(fragment Fragment, virtualSourcePath FilePath, 
 		let normalizedSource = pair.source if pair.source.endsWith("\n") else "{pair.source}\n"
 		virtualFiles.push(VirtualSourceFile.create(path, source: normalizedSource))
 	end 'eachFile'
-	return try compileMultiFileSourceWithIr(virtualFiles, projectRoot: fragmentDir, target: target, outputPath: outputExe, coverage: false, covMapPath: covMapPath, includeStdlibIr: fragment.includeStdlibIr)
+	return try compileMultiFileSourceWithIr(virtualFiles, projectRoot: fragmentDir, target: target, outputPath: outputExe, coverage: false, covMapPath: covMapPath, includeStdlibIr: fragment.includeStdlibIr, asyncTrace: fragment.asyncTrace)
 end 'compileFragmentInMemory'
 
 // Cache-parity test driver. Compiles `fragment` twice — once with the stdlib
@@ -1345,7 +1351,7 @@ function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Tar
 
 	// Check runtime stderr
 	if fragment.expectation.hasRuntimeStderr 'checkStderr'
-		let expectedErr = trimWhitespace(fragment.expectation.runtimeStderr)
+		var expectedErr = trimWhitespace(fragment.expectation.runtimeStderr)
 		// CPU-fault panics now carry an " at rip=0xHEX" suffix that varies per
 		// build; strip it so spec expectations match the panic message itself.
 		var actualErr = trimWhitespace(stripFaultRipSuffix(runStderr))
@@ -1353,6 +1359,13 @@ function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Tar
 		if target.os == Os.wasi 'convertWasmtimeOutput'
 			actualErr = convertWasmtimeStderr(actualErr)
 		end 'convertWasmtimeOutput'
+		// AsyncTrace fragments: strip the timing-dependent worker-lifecycle lines from
+		// both sides so the genuine multi-OS-thread scheduler's nondeterministic worker
+		// output is compared only on its deterministic spawn/io/await subset.
+		if fragment.expectation.asyncTrace 'asyncTraceNorm'
+			expectedErr = normalizeAsyncTraceStderr(expectedErr)
+			actualErr = normalizeAsyncTraceStderr(actualErr)
+		end 'asyncTraceNorm'
 		if actualErr != expectedErr 'stderrMismatch'
 			passed = false
 			if errorMsg.isEmpty() 'firstStderr'
@@ -1439,6 +1452,40 @@ function stripAtMarker(line String, marker String) returns String
 	let markerIdx = try line.findFirst(marker) otherwise return line
 	return line.slice(line.startIndex(), endIndex: markerIdx)
 end 'stripAtMarker'
+
+// Normalize an async-trace stderr capture for comparison (ports the C# bootstrap's
+// NormalizeAsyncTraceStderr): drop the timing-dependent worker-lifecycle lines
+// (`worker_start/park/wake/exit`) and any ` [M=N]` worker suffix, leaving the
+// deterministic `spawn / io_yield / io_resume / await` subset. Applied to BOTH the
+// expected and actual stderr of an `AsyncTrace: true` fragment, so a genuinely
+// multi-OS-thread scheduler's nondeterministic worker output doesn't fail the test.
+function normalizeAsyncTraceStderr(s String) returns String
+	var out = ""
+	var first = true
+	for raw in s.replace("\r\n", with: "\n").split("\n") 'eachLine'
+		let line = stripAtMarker(raw, marker: " [M=")
+		if isAsyncWorkerPrefix(firstToken(line)) 'skipWorker'
+			continue
+		end 'skipWorker'
+		if first 'firstLine'
+			out = line
+			first = false
+		end 'firstLine' else 'appendLine'
+			out = "{out}\n{line}"
+		end 'appendLine'
+	end 'eachLine'
+	return trimWhitespace(out)
+end 'normalizeAsyncTraceStderr'
+
+// First whitespace-delimited token of a line (the whole line if it has no space).
+function firstToken(line String) returns String
+	let spaceIdx = try line.findFirst(" ") otherwise return line
+	return line.slice(line.startIndex(), endIndex: spaceIdx)
+end 'firstToken'
+
+function isAsyncWorkerPrefix(prefix String) returns bool
+	return prefix == "worker_start" or prefix == "worker_park" or prefix == "worker_wake" or prefix == "worker_exit"
+end 'isAsyncWorkerPrefix'
 
 // Convert wasmtime's trap stderr into a Maxon-style stack trace.
 // Input:  "panic at ...\nError: failed to run...\n...wasm backtrace:\n  0: 0x445 - <unknown>!mrt_panic\n  1: 0x485 - <unknown>!main\n..."

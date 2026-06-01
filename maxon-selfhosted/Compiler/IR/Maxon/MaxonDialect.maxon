@@ -461,6 +461,65 @@ export function isBuiltinManagedTypeName(name String) returns bool
 	return name == "__ManagedMemory" or name == "__ManagedList" or name == "__ManagedListNode"
 end 'isBuiltinManagedTypeName'
 
+// Tier 4 async/await: the value type produced by `async f()` and consumed by
+// `await`. Modeled as the builtin generic instance `Promise with InnerType`,
+// the same genericInstance machinery `Array with T` uses. The handle itself is
+// an i64 green-thread pointer at runtime; the generic wrapper exists so
+// type-flow can carry the inner (awaited) type and the await-non-promise
+// diagnostic (E3005) can recognize a promise value.
+export function promiseGenericType(project Project, innerType MaxonType) returns MaxonType
+	let baseId = project.typeNames.intern("Promise")
+	var args = MaxonTypeArray.create()
+	args.push(innerType)
+	let giid = project.genericInstances.intern(baseId, args: args)
+	return MaxonType.genericInstance(giid)
+end 'promiseGenericType'
+
+// Resolve a `named(...)` typealias to its underlying type so promise checks see
+// the expanded `Promise with T` generic instance rather than the alias name.
+// E.g. `typealias StrPromise = Promise with String` produces a `named(StrPromise)`
+// type wherever the alias is written (array elements, var annotations); without
+// this, isPromiseType would not recognize it. Bounded loop handles alias-to-alias.
+function resolvePromiseAlias(project Project, t MaxonType) returns MaxonType
+	var resolved = t
+	for _ in 0 upto 8 'unwrap'
+		let name = resolved.namedAliasNameOrEmpty(project)
+		if name.isEmpty() 'notNamed'
+			return resolved
+		end 'notNamed'
+		let next = try project.genericTypealiases.get(name) otherwise return resolved
+		resolved = next
+	end 'unwrap'
+	return resolved
+end 'resolvePromiseAlias'
+
+// True iff `t` is a `Promise with T` generic instance (resolving typealiases).
+// Used by the await parser to gate E3005 and by type-flow consumers that
+// special-case promises.
+export function isPromiseType(project Project, t MaxonType) returns bool
+	return match resolvePromiseAlias(project, t: t) 'p'
+		genericInstance(id) gives genericInstanceIdBaseName(project, id: id) == "Promise"
+		boolean to typeParameter gives false
+		interface to opaquePointer gives false
+	end 'p'
+end 'isPromiseType'
+
+// The inner (awaited) type of a `Promise with T` (resolving typealiases).
+// Returns `unresolved` when `t` isn't a promise or carries no arg — callers gate
+// on `isPromiseType` first, so the fallback only guards against a malformed instance.
+export function promiseInnerType(project Project, t MaxonType) returns MaxonType
+	return match resolvePromiseAlias(project, t: t) 'p'
+		genericInstance(id) gives promiseInnerTypeById(project, id: id)
+		boolean to typeParameter gives MaxonType.unresolved
+		interface to opaquePointer gives MaxonType.unresolved
+	end 'p'
+end 'promiseInnerType'
+
+function promiseInnerTypeById(project Project, id GenericInstanceId) returns MaxonType
+	let (_, args) = project.genericInstances.get(id)
+	return try args.get(0) otherwise MaxonType.unresolved
+end 'promiseInnerTypeById'
+
 export function genericInstanceToString(project Project, baseId TypeNameId, args MaxonTypeArray) returns String
 	let baseName = project.typeNames.get(baseId)
 	if args.count() == 0 'noArgs'
@@ -1441,6 +1500,31 @@ export union MaxonOp
 	//   - exitBlockId: post-loop join block (target of break)
 	//   - label: source-level loop label (already without surrounding `'`)
 	forInIterable(iterName String, iterSlot VarSlot, iterType MaxonType, sourceValue ByteArray, sourceType MaxonType, bodyBlockId BlockId, exitBlockId BlockId, label String, range SourceRange)
+	// Tier 4 async/await. `asyncCall` spawns a green thread running `callee(args)`
+	// and binds `result` to an i64 promise handle (the green-thread pointer).
+	// Shape mirrors `call` plus: `innerType` is the spawned function's return
+	// type (what a subsequent `await` produces); `throws` is true iff the callee
+	// is a throwing function (await must then be `try await`); `callSourceText`
+	// reproduces the `async f(...)` spelling for the E3073 diagnostic.
+	// LowerMaxonToStd lowers this to an arg buffer + `__gt_spawn` call; managed
+	// args are incref'd at the spawn site (see plan). The async-yielding check
+	// (checkAsyncYielding) verifies `callee` transitively yields before lowering.
+	asyncCall(result ByteArray, callee ByteArray, callContext CallContext, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, innerType MaxonType, calleeThrows bool, callSourceText String, range SourceRange)
+	// Tier 4: `await promise`. Suspends the current green thread until `promise`
+	// completes, then binds `result` to its value. `result` is empty for a
+	// void-returning awaited function. `innerType` is the awaited result type.
+	// `promiseType` is the operand's parser/TR-inferred type, retained so the
+	// non-promise diagnostic (E3005) can name the offending kind. LowerMaxonToStd
+	// lowers to a `__gt_await` call.
+	awaitPromise(result ByteArray, promise ByteArray, innerType MaxonType, promiseType MaxonType, range SourceRange)
+	// Tier 4: `try await promise` on a throwing async function. Same as
+	// awaitPromise plus an `errorBoundName` (the synthetic name receiving the
+	// post-await error flag), mirroring `tryCall`'s relationship to `call`.
+	// LowerMaxonToStd lowers to a `__gt_try_await` two-result call.
+	tryAwait(result ByteArray, promise ByteArray, innerType MaxonType, promiseType MaxonType, errorBoundName ByteArray, range SourceRange)
+	// Tier 4: `promise.cancel()`. Requests cancellation of the green thread
+	// associated with `promise`. LowerMaxonToStd lowers to a `__gt_cancel` call.
+	cancelPromise(promise ByteArray, range SourceRange)
 end 'MaxonOp'
 
 export typealias MaxonOpArray = Array with MaxonOp
@@ -1498,6 +1582,10 @@ export function maxonOpToString(project Project, op MaxonOp, blocks IrBlockArray
 		closureEnvLoad(result, captureIndex, captureName, _, _) gives "%{String.from(result)} = maxon.closure_env_load idx={captureIndex} name={String.from(captureName)}"
 		indirectCall(result, callee, fnTypeId, args, argLabels, _, _, _) gives "%{String.from(result)} = maxon.indirect_call %{String.from(callee)}({formatArgNamesWithLabels(args, argLabels: argLabels)}) {lb}fnType = #{fnTypeId}{rb}"
 		forInIterable(iterName, _, iterType, sourceValue, sourceType, bodyBlockId, exitBlockId, label, _) gives "maxon.for_in_iterable {iterName} : {iterType.toString(project)} in %{String.from(sourceValue)} : {sourceType.toString(project)} {lb}body = {resolveBlockLabel(bodyBlockId, blocks: blocks)}, exit = {resolveBlockLabel(exitBlockId, blocks: blocks)}, label = '{label}'{rb}"
+		asyncCall(result, callee, callContext, args, argLabels, _, _, innerType, _, _, _) gives "%{String.from(result)} = maxon.async_call @{String.from(callee)} {lb}ctx = {callContextToString(callContext)}{rb}({formatArgNamesWithLabels(args, argLabels: argLabels)}) : {innerType.toString(project)}"
+		awaitPromise(result, promise, innerType, _, _) gives "%{String.from(result)} = maxon.await %{String.from(promise)} : {innerType.toString(project)}"
+		tryAwait(result, promise, innerType, _, errorBoundName, _) gives "%{String.from(result)} = maxon.try_await %{String.from(promise)} : {innerType.toString(project)} -> err %{String.from(errorBoundName)}"
+		cancelPromise(promise, _) gives "maxon.cancel_promise %{String.from(promise)}"
 	end 'print'
 end 'maxonOpToString'
 

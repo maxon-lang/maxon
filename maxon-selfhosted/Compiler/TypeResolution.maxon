@@ -3068,6 +3068,15 @@ function recordVarDecl(project Project, producerTypes ProducerTypeMap, slotTypes
 			slotTypes.upsert(slotId, value: fromValue)
 			return
 		end 'preferRefined'
+		// Tier 4 / generics: the parser stamped a generic instance whose arg it
+		// couldn't resolve (e.g. `Promise with <unresolved>` from `async f()`),
+		// but the initializer's producer type resolved to a concrete instance —
+		// prefer the resolved one so the inner type flows to consumers (`await`,
+		// element reads). Mirrors the tuple `preferRefined` case above.
+		if genericInstanceHasUnresolvedArg(project, t: slotType) and maxonTypeIsGenericInstance(fromValue) and not genericInstanceHasUnresolvedArg(project, t: fromValue) 'preferRefinedGeneric'
+			slotTypes.upsert(slotId, value: fromValue)
+			return
+		end 'preferRefinedGeneric'
 		slotTypes.upsert(slotId, value: slotType)
 		return
 	end 'haveType'
@@ -3076,6 +3085,26 @@ function recordVarDecl(project Project, producerTypes ProducerTypeMap, slotTypes
 		slotTypes.upsert(slotId, value: fromValue)
 	end 'fromValue'
 end 'recordVarDecl'
+
+// True iff `t` is a generic instance carrying at least one unresolved type
+// argument (e.g. `Promise with <unresolved>` before TR resolves the inner).
+function genericInstanceHasUnresolvedArg(project Project, t MaxonType) returns bool
+	return match t 'g'
+		genericInstance(id) gives genericInstanceArgsHaveUnresolved(project, id: id)
+		boolean to typeParameter gives false
+		interface to opaquePointer gives false
+	end 'g'
+end 'genericInstanceHasUnresolvedArg'
+
+function genericInstanceArgsHaveUnresolved(project Project, id GenericInstanceId) returns bool
+	let (_, args) = project.genericInstances.get(id)
+	for a in args 'each'
+		if isUnresolvedType(a) 'isUnres'
+			return true
+		end 'isUnres'
+	end 'each'
+	return false
+end 'genericInstanceArgsHaveUnresolved'
 
 // Phase 15e: helpers used by recordVarDecl to detect the "slot was stamped
 // as the unspecialised `__TupleN` named type, but the producer-type has the
@@ -3124,6 +3153,14 @@ function recordVarLoad(project Project, producerTypes ProducerTypeMap, slotTypes
 			recordResultType(producerTypes, name: result, t: fromSlot)
 			return
 		end 'preferRefined'
+		// Tier 4 / generics: the parser stamped the load's slotType as a generic
+		// instance with an unresolved arg (`Promise with <unresolved>`), but
+		// `recordVarDecl` already refined the slot's recorded type to a concrete
+		// instance — prefer it so the inner type flows to `await` / element reads.
+		if genericInstanceHasUnresolvedArg(project, t: slotType) and maxonTypeIsGenericInstance(fromSlot) and not genericInstanceHasUnresolvedArg(project, t: fromSlot) 'preferRefinedGeneric'
+			recordResultType(producerTypes, name: result, t: fromSlot)
+			return
+		end 'preferRefinedGeneric'
 		// Phase A widening: when the parser-stamped slotType is int but
 		// the slot's effective type (after `recordVarStore` upgraded it
 		// across arms) is float, prefer the slot-type-map entry so the
@@ -4991,7 +5028,7 @@ function staticTypeFromOpIfMatches(project Project, op MaxonOp, name ByteArray) 
 		stringConst(result, _, _) then return try staticTypedResult(name, result: result, t: stringConstResultType(project))
 		charLiteral(result, _, _) then return try staticTypedResult(name, result: result, t: MaxonType.named(project.typeNames.intern("Character")))
 		byteStringLiteral(result, _, _) then return try staticTypedResult(name, result: result, t: byteStringLiteralResultType(project))
-		stringInterp to forInIterable then throw ArrayLiteralLookupError.notFound
+		stringInterp to cancelPromise then throw ArrayLiteralLookupError.notFound
 	end 'pick'
 end 'staticTypeFromOpIfMatches'
 
@@ -5242,6 +5279,15 @@ function recordOpResult(project Project, producerTypes ProducerTypeMap, slotType
 		// inside the body resolve through the producer-type lookup.
 		forInIterable(iterName, iterSlot, _, sourceValue, sourceType, _, _, _, _) then recordForInIterable(project, producerTypes: producerTypes, slotTypes: slotTypes, iterName: iterName, iterSlot: iterSlot, sourceValue: sourceValue, sourceType: sourceType, enclosingType: enclosingType)
 		castCheck then return
+		// Tier 4 async: `asyncCall` produces a `Promise with InnerType` where the
+		// inner type is the spawned callee's return type (resolved here the same
+		// way a plain `call` result is). `await` / `try await` produce that inner
+		// type, recovered from the promise operand's recorded Promise<T> when the
+		// parser couldn't stamp it. `cancelPromise` has no result.
+		asyncCall(result, callee, callContext, args, _, argTypes, _, _, _, _, _) then recordResultType(producerTypes, name: result, t: promiseGenericType(project, innerType: callResultType(project, callee: callee, callContext: callContext, currentNamespace: currentNamespace, readerFilePath: readerFilePath, args: args, argTypes: argTypes, producerTypes: producerTypes, enclosingType: enclosingType)))
+		awaitPromise(result, promise, innerType, _, _) then recordResultType(producerTypes, name: result, t: resolveAwaitInnerType(project, producerTypes: producerTypes, promise: promise, innerType: innerType))
+		tryAwait(result, promise, innerType, _, _, _) then recordResultType(producerTypes, name: result, t: resolveAwaitInnerType(project, producerTypes: producerTypes, promise: promise, innerType: innerType))
+		cancelPromise then return
 	end 'rec'
 end 'recordOpResult'
 
@@ -5317,7 +5363,7 @@ function maybePatchFnRegistryForOp(project Project, op MaxonOp)
 		literal to rethrow then return
 		functionRef(_, funcName, fnTypeId, _) then patchFnRegistryEntryIfUnresolved(project, funcName: funcName, fnTypeId: fnTypeId)
 		closureCreate(_, funcName, fnTypeId, _, _, _) then patchFnRegistryEntryIfUnresolved(project, funcName: funcName, fnTypeId: fnTypeId)
-		closureEnvLoad to forInIterable then return
+		closureEnvLoad to cancelPromise then return
 	end 'pick'
 end 'maybePatchFnRegistryForOp'
 
@@ -5343,7 +5389,7 @@ function patchClosureEnvLoadCaptureTypes(project Project, module MaxonModule, pr
 				match op 'check'
 					closureCreate(_, funcName, _, capturedNames, _, _) then patchOneClosureLifted(module, liftedName: funcName, capturedNames: capturedNames, outerFunc: outerFunc, outerSlots: outerSlots, liftedToRebuild: liftedToRebuild)
 					literal to functionRef then break 'check'
-					closureEnvLoad to forInIterable then break 'check'
+					closureEnvLoad to cancelPromise then break 'check'
 				end 'check'
 			end 'eachOp'
 		end 'eachBlock'
@@ -5407,7 +5453,7 @@ function patchOneEnvLoadOp(module MaxonModule, opIdx OpIndex, op MaxonOp, captur
 	match op 'pick'
 		closureEnvLoad(result, captureIndex, captureName, captureType, range) then return patchEnvLoadIfNeeded(module, opIdx: opIdx, result: result, captureIndex: captureIndex, captureName: captureName, captureType: captureType, range: range, capturedNames: capturedNames, outerFunc: outerFunc, outerSlots: outerSlots)
 		literal to closureCreate then return false
-		indirectCall to forInIterable then return false
+		indirectCall to cancelPromise then return false
 	end 'pick'
 end 'patchOneEnvLoadOp'
 
@@ -5536,6 +5582,10 @@ function retValueTypeFromProducers(op MaxonOp, producerTypes ProducerTypeMap) re
 		indirectCall gives MaxonType.unresolved
 		forInIterable gives MaxonType.unresolved
 		castCheck gives MaxonType.unresolved
+		asyncCall gives MaxonType.unresolved
+		awaitPromise gives MaxonType.unresolved
+		tryAwait gives MaxonType.unresolved
+		cancelPromise gives MaxonType.unresolved
 	end 'pick'
 end 'retValueTypeFromProducers'
 
@@ -5644,6 +5694,14 @@ function fillUnresolvedTypesForOp(project Project, module MaxonModule, opIdx OpI
 		// before any user-visible type-mismatch can leak.
 		forInIterable then return
 		castCheck then return
+		// Tier 4 async: fill `asyncCall`'s callee-derived innerType + parallel
+		// argTypes from the producer map (same shape as `call`). `await` /
+		// `try await` carry innerType/promiseType the parser resolved from the
+		// promise operand; `cancel` carries no fillable type.
+		asyncCall(result, callee, callContext, args, argLabels, argTypes, argRanges, innerType, calleeThrows, callSourceText, range) then fillAsyncCall(project, module: module, opIdx: opIdx, result: result, callee: callee, callContext: callContext, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, innerType: innerType, calleeThrows: calleeThrows, callSourceText: callSourceText, range: range, producerTypes: producerTypes)
+		awaitPromise(result, promise, innerType, promiseType, range) then fillAwait(project, module: module, opIdx: opIdx, result: result, promise: promise, innerType: innerType, promiseType: promiseType, range: range, producerTypes: producerTypes)
+		tryAwait(result, promise, innerType, promiseType, errorBoundName, range) then fillTryAwait(project, module: module, opIdx: opIdx, result: result, promise: promise, innerType: innerType, promiseType: promiseType, errorBoundName: errorBoundName, range: range, producerTypes: producerTypes)
+		cancelPromise then return
 	end 'fill'
 end 'fillUnresolvedTypesForOp'
 
@@ -5690,6 +5748,14 @@ function fillVarDecl(project Project, module MaxonModule, opIdx OpIndex, slotId 
 			slotTypes.upsert(slotId, value: fromValue)
 			return
 		end 'replaceSeedDecl'
+		// Tier 4 / generics: refine a `Promise with <unresolved>` (or any generic
+		// instance the parser couldn't fully resolve) to the initializer's
+		// concrete producer type, so lowering sees the resolved inner.
+		if genericInstanceHasUnresolvedArg(project, t: slotType) and maxonTypeIsGenericInstance(fromValue) and not genericInstanceHasUnresolvedArg(project, t: fromValue) 'refineGenericArgs'
+			try module.ops.set(opIdx, value: MaxonOp.varDecl(slotId, value: value, slotType: fromValue, range: range)) otherwise panic("fillVarDecl: ops.set OOB at idx={opIdx}")
+			slotTypes.upsert(slotId, value: fromValue)
+			return
+		end 'refineGenericArgs'
 		return
 	end 'noChange'
 	try module.ops.set(opIdx, value: MaxonOp.varDecl(slotId, value: value, slotType: filled, range: range)) otherwise panic("fillVarDecl: ops.set OOB at idx={opIdx}")
@@ -6122,6 +6188,68 @@ function fillArgTypes(args ByteArrayArray, argTypes MaxonTypeArray, producerType
 	return (newArgTypes, changed)
 end 'fillArgTypes'
 
+// Tier 4 async: the awaited result type. The parser stamps the await op's
+// `innerType` when it can (direct `await async-result`); when it had to leave
+// it unresolved (the promise came through a variable / array), recover it from
+// the promise operand's recorded `Promise with T` producer type.
+function resolveAwaitInnerType(project Project, producerTypes ProducerTypeMap, promise ByteArray, innerType MaxonType) returns MaxonType
+	if not isUnresolvedType(innerType) 'haveConcrete'
+		return innerType
+	end 'haveConcrete'
+	let promiseType = lookupProducerType(producerTypes, name: promise)
+	if isPromiseType(project, t: promiseType) 'isPromise'
+		return promiseInnerType(project, t: promiseType)
+	end 'isPromise'
+	return MaxonType.unresolved
+end 'resolveAwaitInnerType'
+
+// Tier 4 async: mirror of `fillCall` for `asyncCall`. Fills the parallel
+// `argTypes` from the producer map, and resolves the op's `innerType` (the
+// spawned callee's return type) when the parser left it unresolved, so
+// lowering and the await sites see a concrete awaited type. Re-emits the op
+// preserving every other field.
+function fillAsyncCall(project Project, module MaxonModule, opIdx OpIndex, result ByteArray, callee ByteArray, callContext CallContext, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, innerType MaxonType, calleeThrows bool, callSourceText String, range SourceRange, producerTypes ProducerTypeMap)
+	let (newArgTypes, argsChanged) = fillArgTypes(args, argTypes: argTypes, producerTypes: producerTypes, callerName: "fillAsyncCall")
+	var newInner = innerType
+	if isUnresolvedType(innerType) 'fillInner'
+		newInner = promiseInnerType(project, t: lookupProducerType(producerTypes, name: result))
+	end 'fillInner'
+	if not argsChanged and not isUnresolvedType(innerType) 'noChange'
+		return
+	end 'noChange'
+	try module.ops.set(opIdx, value: MaxonOp.asyncCall(result, callee: callee, callContext: callContext, args: args, argLabels: argLabels, argTypes: newArgTypes, argRanges: argRanges, innerType: newInner, calleeThrows: calleeThrows, callSourceText: callSourceText, range: range)) otherwise panic("fillAsyncCall: ops.set OOB at idx={opIdx}")
+end 'fillAsyncCall'
+
+// Tier 4 async: re-emit an `awaitPromise` op with its resolved `innerType` when
+// the parser left it unresolved (it can't resolve `await p` where `p` is a
+// for-loop element / field whose Promise<T> only concretizes during TR). The
+// producer map now holds `promise`'s concrete type, so resolveAwaitInnerType can
+// recover T. Without this, lowering would type the awaited value as a generic
+// `integer` and a method call on a managed result (e.g. `String.isEmpty`) would
+// fall through to the Phase 11.4 interface-dispatch stub.
+function fillAwait(project Project, module MaxonModule, opIdx OpIndex, result ByteArray, promise ByteArray, innerType MaxonType, promiseType MaxonType, range SourceRange, producerTypes ProducerTypeMap)
+	if not isUnresolvedType(innerType) 'haveConcrete'
+		return
+	end 'haveConcrete'
+	let newInner = resolveAwaitInnerType(project, producerTypes: producerTypes, promise: promise, innerType: innerType)
+	if isUnresolvedType(newInner) 'stillUnresolved'
+		return
+	end 'stillUnresolved'
+	try module.ops.set(opIdx, value: MaxonOp.awaitPromise(result, promise: promise, innerType: newInner, promiseType: promiseType, range: range)) otherwise panic("fillAwait: ops.set OOB at idx={opIdx}")
+end 'fillAwait'
+
+// As fillAwait, for `try await`.
+function fillTryAwait(project Project, module MaxonModule, opIdx OpIndex, result ByteArray, promise ByteArray, innerType MaxonType, promiseType MaxonType, errorBoundName ByteArray, range SourceRange, producerTypes ProducerTypeMap)
+	if not isUnresolvedType(innerType) 'haveConcrete'
+		return
+	end 'haveConcrete'
+	let newInner = resolveAwaitInnerType(project, producerTypes: producerTypes, promise: promise, innerType: innerType)
+	if isUnresolvedType(newInner) 'stillUnresolved'
+		return
+	end 'stillUnresolved'
+	try module.ops.set(opIdx, value: MaxonOp.tryAwait(result, promise: promise, innerType: newInner, promiseType: promiseType, errorBoundName: errorBoundName, range: range)) otherwise panic("fillTryAwait: ops.set OOB at idx={opIdx}")
+end 'fillTryAwait'
+
 function fillCall(module MaxonModule, opIdx OpIndex, result ByteArray, callee ByteArray, callContext CallContext, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, range SourceRange, producerTypes ProducerTypeMap)
 	let (newArgTypes, changed) = fillArgTypes(args, argTypes: argTypes, producerTypes: producerTypes, callerName: "fillCall")
 	if not changed 'noChange'
@@ -6262,6 +6390,8 @@ function specializeOp(module MaxonModule, opIdx OpIndex, op MaxonOp, nameStringI
 		indirectCall then return
 		forInIterable then return
 		castCheck then return
+		// Tier 4 async: no async op carries a string-const operand to specialize.
+		asyncCall to cancelPromise then return
 	end 'specialize'
 end 'specializeOp'
 
@@ -8493,6 +8623,16 @@ function resolveOneCallOp(project Project, module MaxonModule, op MaxonOp, opIdx
 		end 'extract'
 		return
 	end 'isTryMethodCall'
+	// Tier 4: `asyncCall` carries `call`'s callee shape and lowers via
+	// `lowerCall` (interim synchronous async / future `__gt_spawn`), so it needs
+	// the same `resolvedCallees` sidetable entry as a plain `call`.
+	if op.name == "asyncCall" 'isAsyncCall'
+		match op 'extract'
+			asyncCall(result, callee, callContext, args, argLabels, argTypes, _, _, _, _, range) then resolveCallSite(project, opIdx: opIdx, callee: callee, callContext: callContext, args: args, argLabels: argLabels, argTypes: argTypes, result: result, producerTypes: producerTypes, currentNamespace: currentNamespace, readerFilePath: readerFilePath, enclosingTypeName: enclosingTypeName, funcName: funcName, range: range)
+			default panic("unreachable: already checked op.name == asyncCall")
+		end 'extract'
+		return
+	end 'isAsyncCall'
 end 'resolveOneCallOp'
 
 // `call` op resolution. Free / qualified callees (no implicit receiver):

@@ -177,6 +177,13 @@ function addCalleesFromOpIndex(project Project, module MaxonModule, opIdx OpInde
 		// Phase 5: rethrow lowers directly to `StdCallOp.errorReturn` and
 		// references no callee names.
 		rethrow then return
+		// Tier 4 async: `asyncCall` spawns its callee on a green thread, so the
+		// callee is reachable — mark it exactly like `call`. The await /
+		// try_await / cancel ops reference a runtime promise handle, not a callee
+		// name, so they root nothing (the spawning asyncCall already kept the
+		// spawned body alive).
+		asyncCall(_, callee, callContext, _, _, _, _, _, _, _, _) then markCalleeFromCall(project, callee: callee, callContext: callContext, currentNamespace: currentNamespace, readerFilePath: readerFilePath, worklist: worklist, seen: seen)
+		awaitPromise to cancelPromise then return
 	end 'op'
 end 'addCalleesFromOpIndex'
 

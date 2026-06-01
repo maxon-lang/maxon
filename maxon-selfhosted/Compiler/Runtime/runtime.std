@@ -1277,6 +1277,35 @@ func mrt_write_cstr_stderr 1 void
 
 end
 
+// mm_trace_print_tag(cstr_ptr): write a NUL-terminated async-trace tag string
+// (e.g. "spawn #") to stderr. Thin delegator used by the green-thread
+// scheduler's AsyncTrace emission; mirrors the C# bootstrap's mm_trace_print_tag.
+func mm_trace_print_tag 1 void
+  block entry:
+    v0 = std param 0 i64
+    v1 = std call mrt_write_cstr_stderr v0
+    v2 = std constI64 0
+    std ret v2
+
+end
+
+// mm_trace_print_i64(value): write `value` in decimal to stderr. Uses a stack
+// scratch buffer addressed at slot 4 — mrt_i64_to_string writes its digits
+// FORWARD (increasing address), so slots 4..2 (24 bytes) hold the up-to-21-byte
+// rendering without reaching the saved RBP — then writes exactly the returned
+// length. Mirrors the C# bootstrap's mm_trace_print_i64.
+func mm_trace_print_i64 1 void
+  block entry:
+    v0 = std param 0 i64
+    v1 = std stackAddr 4
+    v2 = std call mrt_i64_to_string v0 v1
+    v3 = std stackAddr 4
+    v4 = std call mrt_write_stderr v3 v2
+    v5 = std constI64 0
+    std ret v5
+
+end
+
 // mrt_panic(msg_ptr): prints panic message + stack trace to stderr, then exits.
 // Walks the RBP/X29 chain to print up to 32 stack frames.
 //
@@ -1872,7 +1901,55 @@ func mrt_file_close 1 i64
 end
 
 // mrt_file_exists(path) -> 1 if path exists (and is not a directory), else 0.
-// Non-throwing. Uses access(path, F_OK) then stat to differentiate dir/file.
+// When the async-await scheduler runs this on a green thread (AsyncTrace builds),
+// it brackets the underlying I/O with `io_yield #<id> [file_exists]` /
+// `io_resume #<id> [file_exists]` trace lines, matching the spec's expected
+// scheduling trace. `__gt_current_trace_id` returns 0 off a green thread, so the
+// guards skip the trace on the main thread and in non-async code; `__gt_trace_emit`
+// additionally self-gates on the runtime trace flag, so a normal build is silent.
+//
+// Slot usage: slot 0 = path *, slot 1 = GT trace id (0 if not on a GT),
+//             slot 2 = mrt_file_exists_impl result.
+func mrt_file_exists 1 i64
+  block entry:
+    v0 = std param 0 i64
+    std storeSlot 0 v0
+    v1 = std call __gt_current_trace_id
+    std storeSlot 1 v1
+    v2 = std constI64 0
+    v3 = std cmpI64Eq v1 v2
+    std condBr v3 do_call yield_trace
+
+  block yield_trace:
+    v4 = std globalAddr __at_tag_io_yield
+    v5 = std loadSlot 1
+    v6 = std globalAddr __at_io_op_file_exists
+    v7 = std call __gt_trace_emit v4 v5 v6
+    std br do_call
+
+  block do_call:
+    v8 = std loadSlot 0
+    v9 = std call mrt_file_exists_impl v8
+    std storeSlot 2 v9
+    v10 = std loadSlot 1
+    v11 = std constI64 0
+    v12 = std cmpI64Eq v10 v11
+    std condBr v12 done resume_trace
+
+  block resume_trace:
+    v13 = std globalAddr __at_tag_io_resume
+    v14 = std loadSlot 1
+    v15 = std globalAddr __at_io_op_file_exists
+    v16 = std call __gt_trace_emit v13 v14 v15
+    std br done
+
+  block done:
+    v17 = std loadSlot 2
+    std ret v17
+end
+
+// Implementation of mrt_file_exists (see the tracing wrapper above). Non-throwing.
+// Uses access(path, F_OK) then stat to differentiate dir/file.
 //
 // Slot usage:
 //   slot 0 = path *
@@ -1880,7 +1957,7 @@ end
 //   slot 2 = access result
 //   slot 3 = stat buffer ptr (144 bytes)
 //   slot 4 = stat result
-func mrt_file_exists 1 i64
+func mrt_file_exists_impl 1 i64
   block entry:
     v0 = std param 0 i64
     std storeSlot 0 v0
@@ -3438,6 +3515,11 @@ func __slab_init 0 void
 
   block do_init:
     v4 = std call __slab_arena_init
+    // Initialize the slab lock that serializes allocator mutations once the
+    // green-thread scheduler runs GTs on multiple OS threads. Runs exactly once
+    // (idempotent via __slab_init_done) on the main thread, before any worker.
+    v6 = std globalAddr __slab_lock
+    std osLockInit v6
     std br done
 
   block done:
@@ -4699,10 +4781,15 @@ end
 // Slot usage:
 //   slot 0 = size (arg)
 //   slot 1 = class_idx
+// Holds __slab_lock across the whole body (single exit) so concurrent worker
+// OS threads can't race on the shared mcache / mspan free lists / arena map.
+// Slot 2 carries the result across the unlock at `exit`.
 func __slab_alloc 1 i64
   block entry:
     v0 = std param 0 i64
     std storeSlot 0 v0
+    v20 = std globalAddr __slab_lock
+    std osLockAcquire v20
 
     v1 = std constI64 32768
     v2 = std cmpI64Gt v0 v1
@@ -4711,7 +4798,8 @@ func __slab_alloc 1 i64
   block os_path:
     v3 = std loadSlot 0
     v4 = std call __slab_os_direct_alloc v3
-    std ret v4
+    std storeSlot 2 v4
+    std br exit
 
   block small_path:
     v5 = std constI64 0
@@ -4741,14 +4829,22 @@ func __slab_alloc 1 i64
   block class_found:
     v16 = std loadSlot 1
     v17 = std call __slab_alloc_class v16
-    std ret v17
+    std storeSlot 2 v17
+    std br exit
 
   block no_class:
     // Should be unreachable (size <= 32768 fits in class 17).
     v18 = std constI64 136
     std osExit v18
     v19 = std constI64 0
-    std ret v19
+    std storeSlot 2 v19
+    std br exit
+
+  block exit:
+    v21 = std globalAddr __slab_lock
+    std osLockRelease v21
+    v22 = std loadSlot 2
+    std ret v22
 end
 
 // __slab_free(ptr): public free entry point. Recovers the owning mspan via
@@ -4758,10 +4854,14 @@ end
 // Slot usage:
 //   slot 0 = ptr (arg)
 //   slot 1 = mspan
+// Holds __slab_lock across the whole body (single exit), matching __slab_alloc,
+// so frees from worker OS threads serialize against allocs/frees on others.
 func __slab_free 1 void
   block entry:
     v0 = std param 0 i64
     std storeSlot 0 v0
+    v11 = std globalAddr __slab_lock
+    std osLockAcquire v11
 
     v1 = std call __slab_arena_map_get v0
     std storeSlot 1 v1
@@ -4773,13 +4873,17 @@ func __slab_free 1 void
   block os_direct:
     v4 = std loadSlot 0
     v5 = std call __slab_os_direct_free v4
-    v6 = std constI64 0
-    std ret v6
+    std br exit
 
   block slab_path:
     v7 = std loadSlot 0
     v8 = std loadSlot 1
     v9 = std call __slab_free_class_with_mspan v7 v8
+    std br exit
+
+  block exit:
+    v12 = std globalAddr __slab_lock
+    std osLockRelease v12
     v10 = std constI64 0
     std ret v10
 end
@@ -6623,6 +6727,55 @@ func __gt_is_complete 1 i64
     v0 = std param 0 i64
     v1 = std constI64 0
     std ret v1
+end
+
+// __gt_spawn(func_ptr, arg_count, arg_buf) -> promise (GT ptr) and
+// __gt_await(promise) -> result. Signature-only stubs: the real bodies are the
+// hand-emitted machine code in X64Backend.maxon (emitX64GtSpawn / emitX64GtAwait),
+// whose `recordLabel` overrides these labels. These dummy bodies exist only so
+// the backend can look up the (arity, return-type) for StdCallOp.call sites.
+func __gt_spawn 3 i64
+  block entry:
+    v0 = std param 0 i64
+    v1 = std param 1 i64
+    v2 = std param 2 i64
+    v3 = std constI64 0
+    std ret v3
+end
+
+func __gt_await 1 i64
+  block entry:
+    v0 = std param 0 i64
+    v1 = std constI64 0
+    std ret v1
+end
+
+// __gt_current_trace_id() -> trace id of the GT running on this OS thread (0 if
+// not on a green thread) and __gt_trace_emit(tag, value, suffix) -> print one
+// async-trace line. Signature-only stubs; the real bodies are hand-emitted in
+// X64Backend.maxon (emitX64GtCurrentTraceId / emitX64GtTraceEmit). mrt_file_exists
+// calls these to bracket its I/O with io_yield/io_resume trace lines.
+func __gt_current_trace_id 0 i64
+  block entry:
+    v0 = std constI64 0
+    std ret v0
+end
+
+// The stub body is never executed (the hand-emitted machine code overrides this
+// label), but it references mm_trace_print_tag / mm_trace_print_i64 so the .std
+// dead-code pass keeps them alive — the real, label-overriding __gt_trace_emit
+// calls them from hand-emitted code the DCE can't see, and without this anchor
+// their labels would be stripped and those calls would resolve to .text+0.
+func __gt_trace_emit 3 void
+  block entry:
+    v0 = std param 0 i64
+    v1 = std param 1 i64
+    v2 = std param 2 i64
+    v3 = std call mm_trace_print_tag v0
+    v4 = std call mm_trace_print_i64 v1
+    v5 = std call mm_trace_print_tag v2
+    v6 = std constI64 0
+    std ret v6
 end
 
 // maxon_managed_is_null(mm) — 1 when `mm` is the runtime's null sentinel, 0

@@ -527,6 +527,13 @@ export type Project
 	// build of any project is unchanged by the coverage machinery.
 	export var coverageEnabled as bool
 
+	// True when the async-await scheduler should emit its `spawn/io_yield/
+	// io_resume/await/worker_*` trace lines to stderr (the `AsyncTrace: true`
+	// spec directive). Bakes the initial value of the `__at_trace_enabled`
+	// runtime global; the green-thread runtime gates every trace print on it,
+	// so a normal build stays silent. Defaults to false.
+	export var asyncTraceEnabled as bool
+
 	// Populated by the InstrumentCoverage pass: one CovSite per instrumented
 	// block. Chunk E serializes this to a .covmap file next to the executable;
 	// Chunk D only builds the in-memory table.
@@ -744,6 +751,7 @@ export type Project
 			diagnostics: DiagnosticArray.create(),
 			globalData: createGlobalDataTable(),
 			coverageEnabled: false,
+			asyncTraceEnabled: false,
 			covSites: CovSiteTable.create(),
 			irDump: IrDumpOptions.disabled(),
 			layoutDescriptors: LayoutDescriptorRegistry.create(),

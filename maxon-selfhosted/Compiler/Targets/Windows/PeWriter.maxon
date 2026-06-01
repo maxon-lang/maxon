@@ -72,6 +72,25 @@ export union IatSlot
 	// the shell32 cases.
 	sleep
 
+	// Tier 4 async: multi-OS-thread green-thread scheduler + IOCP async I/O.
+	// All kernel32. CreateThread spawns worker / I/O OS threads; the event +
+	// wait + TLS APIs drive parking/waking; the IOCP APIs back overlapped I/O;
+	// GetSystemInfo sizes the P array; GetTickCount64 feeds the timer heap.
+	createThread
+	createEventA
+	setEvent
+	resetEvent
+	waitForSingleObject
+	waitForMultipleObjects
+	getSystemInfo
+	tlsAlloc
+	tlsSetValue
+	deleteCriticalSection
+	createIoCompletionPort
+	getQueuedCompletionStatus
+	postQueuedCompletionStatus
+	getTickCount64
+
 	// shell32 — single entry, lives at the end of the IAT in its own
 	// import-directory DLL.
 	commandLineToArgvW
@@ -113,13 +132,27 @@ export function iatSlotIndex(slot IatSlot) returns MachineWord
 		multiByteToWideChar gives 26
 		getLastError gives 27
 		sleep gives 28
-		commandLineToArgvW gives 29
+		createThread gives 29
+		createEventA gives 30
+		setEvent gives 31
+		resetEvent gives 32
+		waitForSingleObject gives 33
+		waitForMultipleObjects gives 34
+		getSystemInfo gives 35
+		tlsAlloc gives 36
+		tlsSetValue gives 37
+		deleteCriticalSection gives 38
+		createIoCompletionPort gives 39
+		getQueuedCompletionStatus gives 40
+		postQueuedCompletionStatus gives 41
+		getTickCount64 gives 42
+		commandLineToArgvW gives 43
 	end 's'
 end 'iatSlotIndex'
 
 // Total IAT slot count — kernel32 run + shell32 run. Mirrors the last
 // enum case's index + 1.
-let IAT_SLOT_COUNT = 30
+let IAT_SLOT_COUNT = 44
 
 type ImportSection
 	export var data as ByteArray
@@ -139,146 +172,122 @@ end 'ImportSection'
 //   IAT  [k32 entries] 0  [s32 entries] 0
 //   ILT  [k32 entries] 0  [s32 entries] 0
 // followed by the Import Directory (3 entries: kernel32, shell32, null).
-let KERNEL32_IAT_END = 29  // exclusive; slots 0..28 are kernel32
-let SHELL32_IAT_START = 29  // slot 29 is shell32 (commandLineToArgvW)
+let KERNEL32_IAT_END = 43  // exclusive; slots 0..42 are kernel32
+let SHELL32_IAT_START = 43  // slot 43 is shell32 (commandLineToArgvW)
 let IMPORT_DIRECTORY_ENTRIES = 2
+
+// kernel32 import names in slot order (slots 0..KERNEL32_IAT_END-1). MUST stay
+// in lockstep with `iatSlotIndex`'s kernel32 arm — same order, same count.
+function kernel32ImportNames() returns StringArray
+	var n = StringArray.create()
+	n.push("ExitProcess")
+	n.push("GetStdHandle")
+	n.push("WriteFile")
+	n.push("ReadFile")
+	n.push("CreateFileA")
+	n.push("CloseHandle")
+	n.push("GetEnvironmentVariableA")
+	n.push("VirtualAlloc")
+	n.push("VirtualFree")
+	n.push("InitializeCriticalSection")
+	n.push("EnterCriticalSection")
+	n.push("LeaveCriticalSection")
+	n.push("GetCommandLineW")
+	n.push("LocalFree")
+	n.push("WideCharToMultiByte")
+	n.push("GetModuleFileNameW")
+	n.push("CreateFileW")
+	n.push("DeleteFileW")
+	n.push("GetFileSizeEx")
+	n.push("GetFileAttributesExW")
+	n.push("SetFilePointerEx")
+	n.push("FindFirstFileW")
+	n.push("FindNextFileW")
+	n.push("FindClose")
+	n.push("CreateDirectoryW")
+	n.push("GetCurrentDirectoryW")
+	n.push("MultiByteToWideChar")
+	n.push("GetLastError")
+	n.push("Sleep")
+	n.push("CreateThread")
+	n.push("CreateEventA")
+	n.push("SetEvent")
+	n.push("ResetEvent")
+	n.push("WaitForSingleObject")
+	n.push("WaitForMultipleObjects")
+	n.push("GetSystemInfo")
+	n.push("TlsAlloc")
+	n.push("TlsSetValue")
+	n.push("DeleteCriticalSection")
+	n.push("CreateIoCompletionPort")
+	n.push("GetQueuedCompletionStatus")
+	n.push("PostQueuedCompletionStatus")
+	n.push("GetTickCount64")
+	return n
+end 'kernel32ImportNames'
+
+// Byte size of one Hint/Name table entry for `name`: 2-byte hint + name + NUL,
+// padded up to an even total (PE requires even alignment).
+function importHintNameEntrySize(name String) returns ByteCount
+	var total = 2 + name.toByteArray().count() + 1
+	if total mod 2 != 0 'odd'
+		total = total + 1
+	end 'odd'
+	return total
+end 'importHintNameEntrySize'
+
+// Append one Hint/Name table entry: `\x00\x00` (hint=0) + name + NUL + even pad.
+function appendImportHintNameEntry(data ByteArray, name String)
+	data.append(b"\x00\x00")
+	let nameBytes = name.toByteArray()
+	data.append(nameBytes)
+	data.push(0)
+	if (2 + nameBytes.count() + 1) mod 2 != 0 'odd'
+		data.push(0)
+	end 'odd'
+end 'appendImportHintNameEntry'
 
 function buildImportSection(idataRva Rva) returns ImportSection
 	var data = ByteArray.create()
-	data.reserve(512)
+	data.reserve(1024)
 
-	// Per-DLL slot count for kernel32; shell32's count is implicit in the
-	// run that follows. Each per-DLL run gets its own trailing null
-	// terminator in IAT/ILT so the loader stops at the right place.
-	let kernel32Count = KERNEL32_IAT_END
-	// Total table size: every slot + one null terminator per DLL.
+	let kernel32Names = kernel32ImportNames()
+	let shell32Name = "CommandLineToArgvW"
+	let kernel32Count = kernel32Names.count()
+
+	// Layout: IAT [k32 | null | s32 | null], ILT [same], import directory
+	// (kernel32, shell32, null), then the Hint/Name table + DLL name strings.
 	let tableBytes = (IAT_SLOT_COUNT + IMPORT_DIRECTORY_ENTRIES) * 8
 	let iatOffset = 0
 	let iltOffset = tableBytes
 	let importDirOffset = tableBytes * 2
-	// Import directory: 2 entries (kernel32, shell32) + 1 null = 60 bytes.
 	let hintNameOffset = importDirOffset + 20 * (IMPORT_DIRECTORY_ENTRIES + 1)
-	let hintExitProcess = hintNameOffset
-	let hintGetStdHandle = hintExitProcess + 14
-	let hintWriteFile = hintGetStdHandle + 16
-	// "ReadFile\0" = 9; with leading 2-byte hint and pad to even → 12.
-	let hintReadFile = hintWriteFile + 12
-	let hintCreateFileA = hintReadFile + 12
-	let hintCloseHandle = hintCreateFileA + 14
-	let hintGetEnvironmentVariableA = hintCloseHandle + 14
-	let hintVirtualAlloc = hintGetEnvironmentVariableA + 26
-	let hintVirtualFree = hintVirtualAlloc + 16
-	let hintInitializeCriticalSection = hintVirtualFree + 14
-	let hintEnterCriticalSection = hintInitializeCriticalSection + 28
-	let hintLeaveCriticalSection = hintEnterCriticalSection + 24
-	// New kernel32 entries for Phase 15b. Name byte counts:
-	// "GetCommandLineW\0" = 16; "LocalFree\0" = 10; "WideCharToMultiByte\0" = 20.
-	// Each preceded by `\x00\x00` hint (2 bytes), padded to even total.
-	let hintGetCommandLineW = hintLeaveCriticalSection + 24
-	let hintLocalFree = hintGetCommandLineW + 18
-	let hintWideCharToMultiByte = hintLocalFree + 12
-	// Phase 15f: "GetModuleFileNameW\0" = 19 → padded to 20 with the leading hint.
-	let hintGetModuleFileNameW = hintWideCharToMultiByte + 22
-	// Phase 15c Stream 3.1: new kernel32 entries for file/directory I/O.
-	// Each entry's slot size is 2 (hint) + name including NUL, padded to even.
-	let hintCreateFileW = hintGetModuleFileNameW + 22  // GetModuleFileNameW total 22
-	let hintDeleteFileW = hintCreateFileW + 14  // CreateFileW total 14
-	let hintGetFileSizeEx = hintDeleteFileW + 14  // DeleteFileW total 14
-	let hintGetFileAttributesExW = hintGetFileSizeEx + 16  // GetFileSizeEx total 16
-	let hintSetFilePointerEx = hintGetFileAttributesExW + 24  // GetFileAttributesExW total 24
-	let hintFindFirstFileW = hintSetFilePointerEx + 20  // SetFilePointerEx total 20
-	let hintFindNextFileW = hintFindFirstFileW + 18  // FindFirstFileW total 18
-	let hintFindClose = hintFindNextFileW + 16  // FindNextFileW total 16
-	let hintCreateDirectoryW = hintFindClose + 12  // FindClose total 12
-	let hintGetCurrentDirectoryW = hintCreateDirectoryW + 20  // CreateDirectoryW total 20
-	let hintMultiByteToWideChar = hintGetCurrentDirectoryW + 24  // GetCurrentDirectoryW total 24
-	let hintGetLastError = hintMultiByteToWideChar + 22  // MultiByteToWideChar total 22
-	// "Sleep\0" = 6 bytes; with 2-byte hint prefix → 8 bytes total, already even.
-	let hintSleep = hintGetLastError + 16  // GetLastError total 16
-	// shell32 entry, moved to the END of the IAT/ILT in Phase 15c so the
-	// kernel32 run stays contiguous. "CommandLineToArgvW\0" = 19 → padded
-	// to 20 with leading hint, so total 22.
-	let hintCommandLineToArgvW = hintSleep + 8  // Sleep total 8
-	let kernel32DllNameOffset = hintCommandLineToArgvW + 22
-	// "kernel32.dll\0" is 13 bytes — no pad needed; the next entry is the
-	// shell32 DLL name string at offset +13.
+
+	// Hint/Name offset of every import, derived (no hand-maintained constants).
+	// kernel32 names come first, then the single shell32 name.
+	let shell32Hint = hintNameOffset + sumKernel32HintSizes(kernel32Names)
+	let afterNames = shell32Hint + importHintNameEntrySize(shell32Name)
+	let kernel32DllNameOffset = afterNames
+	// "kernel32.dll\0" is 13 bytes; shell32's DLL name string follows it.
 	let shell32DllNameOffset = kernel32DllNameOffset + 13
 
-	// IAT entries: kernel32 run, null terminator, shell32 run, null terminator.
-	writeQword(data, value: idataRva + hintExitProcess)
-	writeQword(data, value: idataRva + hintGetStdHandle)
-	writeQword(data, value: idataRva + hintWriteFile)
-	writeQword(data, value: idataRva + hintReadFile)
-	writeQword(data, value: idataRva + hintCreateFileA)
-	writeQword(data, value: idataRva + hintCloseHandle)
-	writeQword(data, value: idataRva + hintGetEnvironmentVariableA)
-	writeQword(data, value: idataRva + hintVirtualAlloc)
-	writeQword(data, value: idataRva + hintVirtualFree)
-	writeQword(data, value: idataRva + hintInitializeCriticalSection)
-	writeQword(data, value: idataRva + hintEnterCriticalSection)
-	writeQword(data, value: idataRva + hintLeaveCriticalSection)
-	writeQword(data, value: idataRva + hintGetCommandLineW)
-	writeQword(data, value: idataRva + hintLocalFree)
-	writeQword(data, value: idataRva + hintWideCharToMultiByte)
-	writeQword(data, value: idataRva + hintGetModuleFileNameW)
-	writeQword(data, value: idataRva + hintCreateFileW)
-	writeQword(data, value: idataRva + hintDeleteFileW)
-	writeQword(data, value: idataRva + hintGetFileSizeEx)
-	writeQword(data, value: idataRva + hintGetFileAttributesExW)
-	writeQword(data, value: idataRva + hintSetFilePointerEx)
-	writeQword(data, value: idataRva + hintFindFirstFileW)
-	writeQword(data, value: idataRva + hintFindNextFileW)
-	writeQword(data, value: idataRva + hintFindClose)
-	writeQword(data, value: idataRva + hintCreateDirectoryW)
-	writeQword(data, value: idataRva + hintGetCurrentDirectoryW)
-	writeQword(data, value: idataRva + hintMultiByteToWideChar)
-	writeQword(data, value: idataRva + hintGetLastError)
-	writeQword(data, value: idataRva + hintSleep)
-	data.append(b"\x00\x00\x00\x00\x00\x00\x00\x00")
-	writeQword(data, value: idataRva + hintCommandLineToArgvW)
-	data.append(b"\x00\x00\x00\x00\x00\x00\x00\x00")
+	// IAT then ILT (identical content): kernel32 run, null term, shell32, null term.
+	for _ in 0 upto 2 'iatIltPasses'
+		var running = hintNameOffset
+		for i in 0 upto kernel32Count 'k32thunk'
+			writeQword(data, value: idataRva + running)
+			let nm = try kernel32Names.get(i) otherwise panic("buildImportSection: kernel32Names.get OOB at {i}")
+			running = running + importHintNameEntrySize(nm)
+		end 'k32thunk'
+		data.append(b"\x00\x00\x00\x00\x00\x00\x00\x00")
+		writeQword(data, value: idataRva + shell32Hint)
+		data.append(b"\x00\x00\x00\x00\x00\x00\x00\x00")
+	end 'iatIltPasses'
 
-	// ILT entries: same as IAT.
-	writeQword(data, value: idataRva + hintExitProcess)
-	writeQword(data, value: idataRva + hintGetStdHandle)
-	writeQword(data, value: idataRva + hintWriteFile)
-	writeQword(data, value: idataRva + hintReadFile)
-	writeQword(data, value: idataRva + hintCreateFileA)
-	writeQword(data, value: idataRva + hintCloseHandle)
-	writeQword(data, value: idataRva + hintGetEnvironmentVariableA)
-	writeQword(data, value: idataRva + hintVirtualAlloc)
-	writeQword(data, value: idataRva + hintVirtualFree)
-	writeQword(data, value: idataRva + hintInitializeCriticalSection)
-	writeQword(data, value: idataRva + hintEnterCriticalSection)
-	writeQword(data, value: idataRva + hintLeaveCriticalSection)
-	writeQword(data, value: idataRva + hintGetCommandLineW)
-	writeQword(data, value: idataRva + hintLocalFree)
-	writeQword(data, value: idataRva + hintWideCharToMultiByte)
-	writeQword(data, value: idataRva + hintGetModuleFileNameW)
-	writeQword(data, value: idataRva + hintCreateFileW)
-	writeQword(data, value: idataRva + hintDeleteFileW)
-	writeQword(data, value: idataRva + hintGetFileSizeEx)
-	writeQword(data, value: idataRva + hintGetFileAttributesExW)
-	writeQword(data, value: idataRva + hintSetFilePointerEx)
-	writeQword(data, value: idataRva + hintFindFirstFileW)
-	writeQword(data, value: idataRva + hintFindNextFileW)
-	writeQword(data, value: idataRva + hintFindClose)
-	writeQword(data, value: idataRva + hintCreateDirectoryW)
-	writeQword(data, value: idataRva + hintGetCurrentDirectoryW)
-	writeQword(data, value: idataRva + hintMultiByteToWideChar)
-	writeQword(data, value: idataRva + hintGetLastError)
-	writeQword(data, value: idataRva + hintSleep)
-	data.append(b"\x00\x00\x00\x00\x00\x00\x00\x00")
-	writeQword(data, value: idataRva + hintCommandLineToArgvW)
-	data.append(b"\x00\x00\x00\x00\x00\x00\x00\x00")
-
-	// Per-DLL Import Directory entries. Each: 4-byte OriginalFirstThunk
-	// (ILT RVA), 8-byte zeros (TimeDateStamp, ForwarderChain), 4-byte
-	// Name RVA, 4-byte FirstThunk (IAT RVA).
-	// kernel32 occupies offsets [0..kernel32Count*8) inside IAT and ILT.
+	// Per-DLL Import Directory entries: 4-byte ILT RVA, 8 zero bytes
+	// (TimeDateStamp, ForwarderChain), 4-byte Name RVA, 4-byte IAT RVA.
 	let kernel32IatRva = idataRva + iatOffset
 	let kernel32IltRva = idataRva + iltOffset
-	// shell32 begins one null terminator (8 bytes) after the kernel32 run.
 	let shell32IatRva = kernel32IatRva + (kernel32Count + 1) * 8
 	let shell32IltRva = kernel32IltRva + (kernel32Count + 1) * 8
 
@@ -295,43 +304,26 @@ function buildImportSection(idataRva Rva) returns ImportSection
 	// Import Directory null terminator (20 bytes).
 	writeZeros(data, n: 20)
 
-	// Hint/Name table entries (hint=0 for each) + DLL names.
-	data.append(b"\x00\x00ExitProcess\x00")
-	data.append(b"\x00\x00GetStdHandle\x00\x00")
-	data.append(b"\x00\x00WriteFile\x00")
-	data.append(b"\x00\x00ReadFile\x00\x00")
-	data.append(b"\x00\x00CreateFileA\x00")
-	data.append(b"\x00\x00CloseHandle\x00")
-	data.append(b"\x00\x00GetEnvironmentVariableA\x00")
-	data.append(b"\x00\x00VirtualAlloc\x00\x00")
-	data.append(b"\x00\x00VirtualFree\x00")
-	data.append(b"\x00\x00InitializeCriticalSection\x00")
-	data.append(b"\x00\x00EnterCriticalSection\x00\x00")
-	data.append(b"\x00\x00LeaveCriticalSection\x00\x00")
-	data.append(b"\x00\x00GetCommandLineW\x00")
-	data.append(b"\x00\x00LocalFree\x00")
-	data.append(b"\x00\x00WideCharToMultiByte\x00")
-	data.append(b"\x00\x00GetModuleFileNameW\x00\x00")
-	// Phase 15c Stream 3.1 entries.
-	data.append(b"\x00\x00CreateFileW\x00")
-	data.append(b"\x00\x00DeleteFileW\x00")
-	data.append(b"\x00\x00GetFileSizeEx\x00")
-	data.append(b"\x00\x00GetFileAttributesExW\x00\x00")
-	data.append(b"\x00\x00SetFilePointerEx\x00\x00")
-	data.append(b"\x00\x00FindFirstFileW\x00\x00")
-	data.append(b"\x00\x00FindNextFileW\x00")
-	data.append(b"\x00\x00FindClose\x00")
-	data.append(b"\x00\x00CreateDirectoryW\x00\x00")
-	data.append(b"\x00\x00GetCurrentDirectoryW\x00\x00")
-	data.append(b"\x00\x00MultiByteToWideChar\x00")
-	data.append(b"\x00\x00GetLastError\x00\x00")
-	data.append(b"\x00\x00Sleep\x00")
-	data.append(b"\x00\x00CommandLineToArgvW\x00\x00")
+	// Hint/Name table + DLL name strings.
+	for i in 0 upto kernel32Count 'k32name'
+		appendImportHintNameEntry(data, name: try kernel32Names.get(i) otherwise panic("buildImportSection: kernel32Names.get OOB at {i}"))
+	end 'k32name'
+	appendImportHintNameEntry(data, name: shell32Name)
 	data.append(b"kernel32.dll\x00")
 	data.append(b"shell32.dll\x00\x00")
 
 	return ImportSection.create(data, iatRva: idataRva + iatOffset, importDirRva: idataRva + importDirOffset, importDirSize: 20 * IMPORT_DIRECTORY_ENTRIES)
 end 'buildImportSection'
+
+// Sum of Hint/Name entry sizes across all kernel32 imports — the offset delta
+// from the first kernel32 entry to the shell32 entry in the Hint/Name table.
+function sumKernel32HintSizes(names StringArray) returns ByteCount
+	var total = 0
+	for i in 0 upto names.count() 'each'
+		total = total + importHintNameEntrySize(try names.get(i) otherwise panic("sumKernel32HintSizes: get OOB at {i}"))
+	end 'each'
+	return total
+end 'sumKernel32HintSizes'
 
 // --- Section header writer ---
 
