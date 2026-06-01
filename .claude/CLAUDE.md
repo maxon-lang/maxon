@@ -56,10 +56,6 @@ Do NOT use `dotnet run` — it recompiles every time. Use the pre-built binaries
 
 Exit code 101 means a memory leak was detected.
 
-## Debugging
-
-For assembly-level debugging of a compiled Maxon executable, use `./scripts/lldb.sh <program>` (pass `program.exe` on Windows). The wrapper sets the env vars required by the bundled `llvm-project/bin/lldb` (Python 3.10 home and site-packages). On Windows Maxon emits COFF symbols, on Linux/macOS it emits the platform-native object format; functions are addressable by name in either case — e.g. `b <module>.main`, `b stdlib.Print.print`, `b __destruct_String`.
-
 ## Code Quality
 
 Apply these standards when writing or reviewing any code:
