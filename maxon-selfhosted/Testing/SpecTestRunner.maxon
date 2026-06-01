@@ -290,13 +290,14 @@ let whitelist = ["basics",
 	//   `Subprocess.run` throws `spawnFailed`); gated with the Tier-4 subprocess
 	//   specs below. The other six fragments pass.
 	// "managed-socket",
-	// "async-await" — 16/17 pass via the real green-thread runtime (single-OS-thread
-	//   cooperative: __gt_spawn / context-switch / trampoline / __gt_await, with 2 KB
-	//   GT stacks grown by __gt_morestack via strict 2× doubling (Go-faithful), and
+	// "async-await" — 16/17 pass via the real green-thread runtime (Go-style GMP:
+	//   __gt_spawn / context-switch / trampoline / __gt_await, with 2 KB GT stacks
+	//   grown by __gt_morestack via strict 2× doubling (Go-faithful), and
 	//   heavyweight Win32 kernel calls run on a per-P 64 KB system stack (the g0
 	//   model — both ≤4-arg calls and the >4-arg MultiByteToWideChar). The 1 holdout:
-	//   `trace-yield` needs the C# multi-OS-thread GMP scheduler trace (worker threads);
-	//   a faithful port is in progress. Re-enable once it lands.
+	//   `trace-yield` asserts the full worker-thread scheduling trace, which the port
+	//   doesn't yet reproduce deterministically even after normalizeAsyncTraceStderr;
+	//   re-enable once it matches.
 	// "async-filesystem",
 	// "async-tcp",
 	// "http-client" — HttpClient.maxon + httpHelpers.maxon are in the stdlib
@@ -323,6 +324,23 @@ typealias TestCount = int(0 to u64.max)
 // child (e.g. an infinite-loop fragment) can't pin the runner. Tuned for
 // fast feedback on local runs; raise if a legitimately heavy test trips it.
 let testProcessTimeoutMs = 2000
+
+// Batch-process wall-clock budget. A batch binary runs every test in a spec
+// sequentially in ONE process, so it legitimately needs more headroom than a
+// single fragment. On wasm32-wasi every function is Asyncify-instrumented (the
+// always-asyncify model), which adds per-call prologue overhead to the whole
+// module — a large batch (e.g. string-type's 77 tests) runs several times
+// slower than native and trips the 2 s single-fragment budget. When the batch
+// times out the worker subprocess is force-killed; in the parallel dispatcher
+// that worker death leaks its parent-side child handle and reroutes the spec
+// to the (slower) per-fragment fallback. A roomier wasm batch budget keeps the
+// batch path alive so neither happens. Native batches stay on the tight budget.
+function batchProcessTimeoutMs(target Target) returns DurationMs
+	if target.os == Os.wasi 'isWasm'
+		return 20000
+	end 'isWasm'
+	return testProcessTimeoutMs
+end 'batchProcessTimeoutMs'
 
 // Per-worker-job wall-clock budget. If a worker doesn't emit WORKER_READY
 // within this many ms of receiving a JOB line, the dispatcher force-kills it
@@ -881,7 +899,7 @@ function runSpecBatch(tests SpecTestArray, specName String, fragmentDir FilePath
 	let projectRoot = try fragmentDir.parent() otherwise panic("runSpecBatch: fragmentDir has no parent")
 	let projectRootUp = try projectRoot.parent() otherwise panic("runSpecBatch: specs dir has no parent")
 	let batchTempDir = projectRootUp.join("temp")
-	let runResult = try Subprocess.run(runCommand.exe, arguments: runCommand.argv, workingDirectory: batchTempDir, timeoutMs: testProcessTimeoutMs) otherwise (err) 'batchRun'
+	let runResult = try Subprocess.run(runCommand.exe, arguments: runCommand.argv, workingDirectory: batchTempDir, timeoutMs: batchProcessTimeoutMs(target)) otherwise (err) 'batchRun'
 		panic("Batch run failed for {batchExePath.toString()}: {err.displayReason()}")
 	end 'batchRun'
 
@@ -1506,10 +1524,16 @@ function convertWasmtimeStderr(s String) returns String
 		let afterBangIdx = try line.indexAfter(bangIdx) otherwise continue
 		let afterBang = line.slice(afterBangIdx, endIndex: line.endIndex())
 		let funcName = trimWhitespace(afterBang)
-		// Skip mrt_panic (implementation detail) and mrt_start (always last)
-		if funcName == "mrt_panic" 'skipPanic'
+		// Skip mrt_panic (implementation detail) and the wasm green-thread
+		// bootstrap frames. On wasm32-wasi every program's `main` runs as the
+		// root green thread, dispatched through `__sched_run` → `__gt_invoke`
+		// (see patchMrtStartWasmBootstrap); those scheduler frames sit between
+		// `main` and `mrt_start` in the wasmtime backtrace but are an
+		// implementation detail of the always-asyncified runtime, exactly like
+		// mrt_panic, so they are elided to match the native stack-trace shape.
+		if funcName == "mrt_panic" or funcName == "__gt_invoke" or funcName == "__sched_run" 'skipImpl'
 			continue
-		end 'skipPanic'
+		end 'skipImpl'
 		trace = "{trace}\n  in {funcName}"
 	end 'eachLine'
 

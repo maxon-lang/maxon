@@ -141,7 +141,7 @@ function countMirNonAbsorbUses(op MirOp, uc UseCountMap, constMap ConstMap)
 		condBranch(condId, _, thenArgs, _, elseArgs) then ucIncrementCondBr(uc, condId: condId, thenArgs: thenArgs, elseArgs: elseArgs)
 		branch(_, args) then ucIncrementArray(uc, ids: args)
 		call(_, _, argIds) then ucIncrementArray(uc, ids: argIds)
-		indirectCall(_, calleeId, argIds) then ucIncrementIdAndArray(uc, id: calleeId, arr: argIds)
+		indirectCall(_, calleeId, argIds, _, _, _) then ucIncrementIdAndArray(uc, id: calleeId, arr: argIds)
 		witnessCall(_, witnessAddrId, _, _, argIds) then ucIncrementIdAndArray(uc, id: witnessAddrId, arr: argIds)
 		ret(retValId) then ucIncrement(uc, valueId: retValId)
 		param then break 'count'
@@ -311,7 +311,7 @@ function countMirOpUses(op MirOp, uc UseCountMap)
 		condBranch(condId, _, thenArgs, _, elseArgs) then ucIncrementCondBr(uc, condId: condId, thenArgs: thenArgs, elseArgs: elseArgs)
 		branch(_, args) then ucIncrementArray(uc, ids: args)
 		call(_, _, argIds) then ucIncrementArray(uc, ids: argIds)
-		indirectCall(_, calleeId, argIds) then ucIncrementIdAndArray(uc, id: calleeId, arr: argIds)
+		indirectCall(_, calleeId, argIds, _, _, _) then ucIncrementIdAndArray(uc, id: calleeId, arr: argIds)
 		witnessCall(_, witnessAddrId, _, _, argIds) then ucIncrementIdAndArray(uc, id: witnessAddrId, arr: argIds)
 		ret(retValId) then ucIncrement(uc, valueId: retValId)
 		param then break 'count'
@@ -912,7 +912,7 @@ type X64FunctionLowering
 			condBranch then break 'dispatch'
 			branch then break 'dispatch'
 			call(resultId, callee, argIds) then lowerCall(resultId, callee: callee, argIds: argIds, dstBlock: dstBlock)
-			indirectCall(resultId, calleeId, argIds) then lowerIndirectCall(resultId, calleeId: calleeId, argIds: argIds, dstBlock: dstBlock)
+			indirectCall(resultId, calleeId, argIds, _, _, _) then lowerIndirectCall(resultId, calleeId: calleeId, argIds: argIds, dstBlock: dstBlock)
 			witnessCall(resultId, witnessAddrId, methodIndex, _, argIds) then lowerWitnessCall(resultId, witnessAddrId: witnessAddrId, methodIndex: methodIndex, argIds: argIds, dstBlock: dstBlock)
 			ret then break 'dispatch'
 			param(resultId, paramIndex, paramType) then lowerParam(resultId, paramIndex: paramIndex, paramType: paramType, dstBlock: dstBlock)

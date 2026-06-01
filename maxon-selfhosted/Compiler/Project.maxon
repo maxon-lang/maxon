@@ -2666,6 +2666,24 @@ export typealias InitToStoredVarsMap = Map with (String, StoredVarNameSet)
 // (the op's only payload is the bare struct name).
 export typealias TupleAllocGidMap = Map with (ByteArray, GenericInstanceId)
 
+// Key for `tupleAllocGids`. The tuple-alloc result name (`$tN`) comes from
+// `freshSynthName`, whose counter RESETS between user functions — so the bare
+// name collides between same-shaped tuples in different functions of one module
+// (e.g. a `(int, float)` tuple and a `(int, int)` tuple both minted as `$t3`),
+// and the later upsert clobbers the earlier element types. That mis-types the
+// float field as int: harmless on x64 (an integer store of float bits round-
+// trips) but emits an invalid `i64.store` of an f64 on wasm. Qualify by the
+// owning function's name (a NUL separator can appear in neither part) so each
+// tuple's pinned types stay distinct. Both the parser (upsert) and
+// lowerStructAlloc (lookup) build the key the same way.
+export function tupleAllocGidKey(funcName String, ptrName ByteArray) returns ByteArray
+	var key = ByteArray.create()
+	key.append(funcName.toByteArray())
+	key.push(0)
+	key.append(ptrName)
+	return key
+end 'tupleAllocGidKey'
+
 // Phase 15a: keys for `project.discardedBareCallResults` / `discardedLetCallResults`.
 // String shape: `"{func.name}::{call.result}"`.
 export typealias DiscardedCallResultSet = Set with String

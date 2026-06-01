@@ -1573,7 +1573,7 @@ function bindCallDefine(op StdCallOp, remap ValueIdArray, nextId ValueId) return
 		ret gives nextId
 		call(resultId, _, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
 		tryCall(resultId, _, _, errorFlagId) gives bindTwoDefines(remap, keyA: resultId, keyB: errorFlagId, nextId: nextId)
-		indirectCall(resultId, _, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
+		indirectCall(resultId, _, _, _, isThrowing, errorFlagId) gives bindIndirectCallDefine(remap, resultId: resultId, isThrowing: isThrowing, errorFlagId: errorFlagId, nextId: nextId)
 		witnessCall(resultId, _, _, _, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
 		witnessTryCall(resultId, _, _, _, _, errorFlagId) gives bindTwoDefines(remap, keyA: resultId, keyB: errorFlagId, nextId: nextId)
 		funcRef(resultId, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
@@ -1657,6 +1657,16 @@ function bindTwoDefines(remap ValueIdArray, keyA ValueId, keyB ValueId, nextId V
 	setRemap(remap, key: keyB, value: nextId + 1)
 	return nextId + 2
 end 'bindTwoDefines'
+
+// An indirect call defines its primary result, plus a second error-flag
+// value when it follows the throwing (dual-value) ABI. Mirrors the
+// call/tryCall split so a spliced-in throwing indirect call binds both.
+function bindIndirectCallDefine(remap ValueIdArray, resultId ValueId, isThrowing bool, errorFlagId ValueId, nextId ValueId) returns ValueId
+	if isThrowing 'isThrows'
+		return bindTwoDefines(remap, keyA: resultId, keyB: errorFlagId, nextId: nextId)
+	end 'isThrows'
+	return bindOneDefine(remap, key: resultId, nextId: nextId)
+end 'bindIndirectCallDefine'
 
 function setRemap(remap ValueIdArray, key ValueId, value ValueId)
 	while remap.count() <= key 'grow'
@@ -1755,7 +1765,7 @@ function rewriteCall(op StdCallOp, remap ValueIdArray) returns StdCallOp
 		ret(retValId) gives StdCallOp.ret(lookupRemap(remap, key: retValId))
 		call(resultId, callee, argIds) gives StdCallOp.call(lookupRemap(remap, key: resultId), callee: callee, argIds: rewriteValueIds(argIds, remap: remap))
 		tryCall(resultId, callee, argIds, errorFlagId) gives StdCallOp.tryCall(lookupRemap(remap, key: resultId), callee: callee, argIds: rewriteValueIds(argIds, remap: remap), errorFlagId: lookupRemap(remap, key: errorFlagId))
-		indirectCall(resultId, calleeId, argIds) gives StdCallOp.indirectCall(lookupRemap(remap, key: resultId), calleeId: lookupRemap(remap, key: calleeId), argIds: rewriteValueIds(argIds, remap: remap))
+		indirectCall(resultId, calleeId, argIds, isVoid, isThrowing, errorFlagId) gives StdCallOp.indirectCall(lookupRemap(remap, key: resultId), calleeId: lookupRemap(remap, key: calleeId), argIds: rewriteValueIds(argIds, remap: remap), isVoid: isVoid, isThrowing: isThrowing, errorFlagId: lookupRemap(remap, key: errorFlagId))
 		witnessCall(resultId, witnessAddrId, methodIndex, isVoid, argIds) gives StdCallOp.witnessCall(lookupRemap(remap, key: resultId), witnessAddrId: lookupRemap(remap, key: witnessAddrId), methodIndex: methodIndex, isVoid: isVoid, argIds: rewriteValueIds(argIds, remap: remap))
 		witnessTryCall(resultId, witnessAddrId, methodIndex, isVoid, argIds, errorFlagId) gives StdCallOp.witnessTryCall(lookupRemap(remap, key: resultId), witnessAddrId: lookupRemap(remap, key: witnessAddrId), methodIndex: methodIndex, isVoid: isVoid, argIds: rewriteValueIds(argIds, remap: remap), errorFlagId: lookupRemap(remap, key: errorFlagId))
 		funcRef(resultId, funcName) gives StdCallOp.funcRef(lookupRemap(remap, key: resultId), funcName: funcName)

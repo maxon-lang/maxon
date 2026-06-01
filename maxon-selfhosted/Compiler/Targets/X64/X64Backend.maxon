@@ -2811,12 +2811,16 @@ function emitX64Win32Helpers(code ByteArray, relocations RelocationArray, callFi
 end 'emitX64Win32Helpers'
 
 // =============================================================================
-// Tier 4 green-thread runtime (cooperative async/await), hand-emitted as raw
-// machine code. Simplified single-OS-thread model: one ProcContext (P) held in
-// the `__gt_current_p` .data global (no TLS), one global FIFO run queue, no
-// work-stealing / IOCP / timers / extra OS threads. Ports the primitives the C#
-// bootstrap emits in X86CodeEmitter.Runtime.cs. Struct offsets are the
-// authoritative GtLayout (maxon-sharp), copied verbatim.
+// Tier 4 green-thread runtime (Go-style GMP async/await), hand-emitted as raw
+// machine code. Multi-OS-thread cooperative scheduler: a VirtualAlloc'd array of
+// ProcContexts (P, one per CPU in `__sched_procs`, sized by GetSystemInfo), each
+// P's running green thread reached through a TLS slot (`__sched_tls_index`; read
+// GS-relative by emitX64GtLoadCurrentP). Worker OS threads are lazily
+// CreateThread'd onto idle Ps by `__gt_enqueue` and parked/woken via per-P
+// events. (The IOCP / GetTickCount64 timer-heap kernel32 imports are reserved
+// for the upcoming async-I/O specs and are not yet wired into emitted code.)
+// Ports the primitives the C# bootstrap emits in X86CodeEmitter.Runtime.cs.
+// Struct offsets are the authoritative GtLayout (maxon-sharp), copied verbatim.
 //
 // ABI note: the self-hosted internal convention is args rcx/rdx/rax, result r8
 // (see `helperEmitDirectCall`), NOT the C# emitter's Win64. Only
@@ -2922,7 +2926,7 @@ end 'emitX64GreenThreadRuntime'
 // struct + TIB, frees the old stack, and returns onto the new (larger) stack so
 // the prologue's guard now passes. All register saves go on the per-P system
 // stack so the GT-stack guard only has to cover this switch sequence. Ports the
-// C# EmitGtMorestack, using the __gt_current_p global instead of TLS.
+// C# EmitGtMorestack, reading the current P from TLS (via emitX64GtLoadCurrentP).
 function emitX64GtMorestack(code ByteArray, relocations RelocationArray, rdataRelocs RdataRelocationArray, funcLabelNames StringArray, funcLabelOffsets CodeOffsetArray, funcLabelOffsetMap CodeLabelOffsetMap)
 	recordLabel(funcLabelNames, labelOffsets: funcLabelOffsets, labelOffsetMap: funcLabelOffsetMap, name: "__gt_morestack", offset: code.count())
 	var st = Win32HelperState.create(2, outgoingBytes: 0, localBytes: 0)
@@ -4081,7 +4085,7 @@ function emitX64GtContextSwitch(code ByteArray, rdataRelocs RdataRelocationArray
 	helperLoadIndirect(code, dest: X64Register.rax, base: X64Register.rdx, disp: GtOffTibStackLimit)
 	code.append(b"\x65\x48\x89\x04\x25\x10\x00\x00\x00")  // mov gs:[0x10], rax
 
-	// P->currentGt = to   (single-thread: P* is the __gt_current_p global)
+	// P->currentGt = to   (P* read from this OS thread's TLS slot)
 	emitX64GtLoadCurrentP(code, dest: X64Register.rax, rdataRelocs: rdataRelocs)
 	helperStoreIndirect(code, base: X64Register.rax, disp: POffCurrentGt, src: X64Register.rdx)
 

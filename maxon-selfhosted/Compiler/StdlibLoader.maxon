@@ -427,9 +427,16 @@ end 'relativePathString'
 
 // Cache key for the currently-discoverable stdlib: every file the recursive
 // walk surfaces plus runtime.std (the latter affects compiled output, so
-// the on-disk cache must invalidate when runtime.std changes).
+// the on-disk cache must invalidate when runtime.std changes). The wasm green
+// thread runtime (runtime_wasm.std) is folded in alongside the stdlib files so
+// edits to the wasm coroutine bodies bust the on-disk cache too.
 function currentStdlibChecksum(_ Target) returns CacheChecksum
-	return computeStdlibChecksum(collectStdlibFiles(), runtimePath: findRuntimePath())
+	var files = collectStdlibFiles()
+	let wasmGtRuntime = findWasmGtRuntimePath()
+	if not wasmGtRuntime.isEmpty() 'hasWasmGt'
+		files.push(wasmGtRuntime)
+	end 'hasWasmGt'
+	return computeStdlibChecksum(files, runtimePath: findRuntimePath())
 end 'currentStdlibChecksum'
 
 // Parse a single stdlib source string and merge its module into `allModule`.

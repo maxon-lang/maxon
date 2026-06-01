@@ -1,0 +1,95 @@
+// Test: async-await.stack-growth
+typealias Integer = int(i64.min to i64.max)
+
+function deepRecurse(n Integer) returns Integer
+		if n == 0 'base'
+				return 0
+		end 'base'
+		return deepRecurse(n - 1) + 1
+end 'deepRecurse'
+
+function yieldAndRecurse() returns Integer
+		_ = File.exists(FilePath from "noyield.txt")
+		return deepRecurse(100)
+end 'yieldAndRecurse'
+
+function main() returns ExitCode
+		let p = async yieldAndRecurse()
+		let result = await p
+		return result
+end 'main'
+---
+ExitCode: 100
+---
+// CompiledIR
+module {
+  func @deepRecurse(local0: i64) -> i64 {
+  entry:
+    %11 = mir.param local0 : i64
+    %2 = mir.mov_imm 0 : i64
+    %3 = mir.cmp eq, %11, %2
+    mir.cond_br %3 [then: base_0(), else: base_0.after()]
+  base_0:
+    %4 = mir.mov_imm 0 : i64
+    mir.ret %4
+  base_0.after:
+    %6 = mir.mov_imm 1 : i64
+    %7 = mir.sub.i64 %11, %6
+    %8 = mir.call @deepRecurse(%7)
+    %9 = mir.mov_imm 1 : i64
+    %10 = mir.add.i64 %8, %9
+    mir.ret %10
+  }
+  func @yieldAndRecurse() -> i64 {
+  entry:
+    %0 = mir.global_addr @__istr_0
+    %1 = mir.mov_imm 40 : i64
+    %2 = mir.call @mrt_alloc(%1)
+    mir.store %0, %2, 0 width: qword
+    %3 = mir.mov_imm 11 : i64
+    mir.store %3, %2, 8 width: qword
+    %4 = mir.mov_imm -2 : i64
+    mir.store %4, %2, 16 width: qword
+    %5 = mir.mov_imm 1 : i64
+    mir.store %5, %2, 24 width: qword
+    %6 = mir.mov_imm 0 : i64
+    mir.store %6, %2, 32 width: qword
+    %7 = mir.mov_imm 16 : i64
+    %8 = mir.call @mrt_alloc(%7)
+    mir.store %2, %8, 0 width: qword
+    %9 = mir.mov_imm 1 : i64
+    mir.store %9, %8, 8 width: qword
+    %10 = mir.call @FilePath.init(%8)
+    %14 = mir.load %10, 0 width: qword
+    %15 = mir.load %14, 0 width: qword
+    %16 = mir.call @mrt_file_exists(%15)
+    %17 = mir.mov_imm 0 : i64
+    %12 = mir.mov_imm 100 : i64
+    %13 = mir.call @deepRecurse(%12)
+    mir.ret %13
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 24 : i64
+    %1 = mir.call @__slab_alloc(%0)
+    %2 = mir.mov_imm 0 : i64
+    mir.store %2, %1, 0 width: qword
+    %3 = mir.mov_imm 0 : i64
+    mir.store %3, %1, 8 width: qword
+    %4 = mir.mov_imm 0 : i64
+    mir.store %4, %1, 16 width: qword
+    %5 = mir.func_addr @yieldAndRecurse
+    %6 = mir.mov_imm 0 : i64
+    %7 = mir.call @__gt_spawn(%5, %6, %1)
+    %9 = mir.call @__gt_await(%7)
+    %10 = mir.mov_imm 125 : i64
+    %11 = mir.cmp ugt, %9, %10
+    mir.cond_br %11 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %12 = mir.global_addr @__panic_msg_40096cb182526902
+    %13 = mir.call @mrt_panic(%12)
+  __range_ok_0:
+    mir.ret %9
+  }
+}
+---

@@ -3909,7 +3909,7 @@ See `specs/typealias-collision.md` and `specs/namespaces.md` for the canonical t
 
 ## Async/Await (Concurrency)
 
-Maxon supports concurrency via `async` and `await` with green threads scheduled across multiple OS worker threads. Each `async` call spawns a lightweight green thread with a growable stack (starting at 4KB). The runtime uses a GMP (Goroutine-Machine-Processor) scheduler with per-worker local queues, work stealing, and IOCP-based overlapped I/O.
+Maxon supports concurrency via `async` and `await` with green threads scheduled across multiple OS worker threads. Each `async` call spawns a lightweight green thread with a growable stack (starting at 2KB, doubling on demand). The runtime uses a GMP (Goroutine-Machine-Processor) scheduler with per-worker local queues, work stealing, and IOCP-based overlapped I/O.
 
 ### Spawning Green Threads
 
@@ -3969,14 +3969,14 @@ The `try await` syntax supports the same `otherwise` clauses as `try` on synchro
 
 ### Cancellation
 
-A promise can be cancelled via the `.cancel()` method:
+A promise exposes a `.cancel()` method:
 
 ```maxon
 var p = async longRunning()
 p.cancel()
 ```
 
-Cancelling a green thread stops it at its next yield point. The green thread's stack is freed.
+Preemptive cancellation is not yet implemented: in the current cooperative scheduler `.cancel()` is a no-op (a spawned green thread still runs to completion when awaited). Real cancellation lands with the IOCP-driven async-I/O work.
 
 ### Typed promises in collections
 
@@ -4006,9 +4006,11 @@ end 'join'
 - **Multi-threaded** -- green threads are distributed across OS worker threads (one per CPU core)
 - **Work stealing** -- idle workers steal from busy workers' local queues for load balancing
 - **Cooperative scheduling** -- context switches at `await` points and I/O operations
-- **Growable stacks** -- 4KB initial, doubles when needed
+- **Growable stacks** -- 2KB initial, doubles when needed
 - **Thread-safe memory** -- atomic reference counting and lock-protected shared state
 - **Fire-and-forget safe** -- unawaited green threads are drained at program exit
+
+The properties above describe the native (x64/arm64) runtime. On `wasm32-wasi` -- which has neither OS threads nor native stack switching -- the same `async`/`await` semantics run on a **single-threaded cooperative scheduler** implemented with Binaryen Asyncify: a green thread suspends at an `await` by unwinding its live call stack into linear memory, and resumes by rewinding it. The multi-threaded properties (worker threads, work stealing) therefore do not apply on wasm.
 
 ---
 

@@ -1520,10 +1520,15 @@ export union MaxonOp
 	// Tier 4: `try await promise` on a throwing async function. Same as
 	// awaitPromise plus an `errorBoundName` (the synthetic name receiving the
 	// post-await error flag), mirroring `tryCall`'s relationship to `call`.
-	// LowerMaxonToStd lowers to a `__gt_try_await` two-result call.
+	// LowerMaxonToStd lowers to a two-result `tryCall` to `__gt_await` whose
+	// captured error flag (rdx — the awaited green thread's `threw` bit) binds
+	// `errorBoundName`.
 	tryAwait(result ByteArray, promise ByteArray, innerType MaxonType, promiseType MaxonType, errorBoundName ByteArray, range SourceRange)
 	// Tier 4: `promise.cancel()`. Requests cancellation of the green thread
-	// associated with `promise`. LowerMaxonToStd lowers to a `__gt_cancel` call.
+	// associated with `promise`. LowerMaxonToStd currently lowers this to a
+	// no-op: in the cooperative scheduler a promise whose spawner never yields
+	// never runs, so there is nothing to stop. Preemptive cancellation (a real
+	// `__gt_cancel`) lands with the IOCP-driven async-I/O work.
 	cancelPromise(promise ByteArray, range SourceRange)
 end 'MaxonOp'
 

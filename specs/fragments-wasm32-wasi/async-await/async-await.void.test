@@ -1,0 +1,74 @@
+// Test: async-await.void
+var flag = 0
+
+function setFlag()
+		_ = File.exists(FilePath from "noyield.txt")
+		flag = 1
+end 'setFlag'
+
+function main() returns ExitCode
+		let p = async setFlag()
+		await p
+		return flag
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @setFlag() {
+  entry:
+    %0 = mir.global_addr @__istr_0
+    %1 = mir.mov_imm 40 : i64
+    %2 = mir.call @mrt_alloc(%1)
+    mir.store %0, %2, 0 width: qword
+    %3 = mir.mov_imm 11 : i64
+    mir.store %3, %2, 8 width: qword
+    %4 = mir.mov_imm -2 : i64
+    mir.store %4, %2, 16 width: qword
+    %5 = mir.mov_imm 1 : i64
+    mir.store %5, %2, 24 width: qword
+    %6 = mir.mov_imm 0 : i64
+    mir.store %6, %2, 32 width: qword
+    %7 = mir.mov_imm 16 : i64
+    %8 = mir.call @mrt_alloc(%7)
+    mir.store %2, %8, 0 width: qword
+    %9 = mir.mov_imm 1 : i64
+    mir.store %9, %8, 8 width: qword
+    %10 = mir.call @FilePath.init(%8)
+    %15 = mir.load %10, 0 width: qword
+    %16 = mir.load %15, 0 width: qword
+    %17 = mir.call @mrt_file_exists(%16)
+    %18 = mir.mov_imm 0 : i64
+    %12 = mir.mov_imm 1 : i64
+    %13 = mir.global_addr @__data_flag
+    mir.store %12, %13, 0 width: qword
+    mir.ret %14
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 24 : i64
+    %1 = mir.call @__slab_alloc(%0)
+    %2 = mir.mov_imm 0 : i64
+    mir.store %2, %1, 0 width: qword
+    %3 = mir.mov_imm 0 : i64
+    mir.store %3, %1, 8 width: qword
+    %4 = mir.mov_imm 1 : i64
+    mir.store %4, %1, 16 width: qword
+    %5 = mir.func_addr @setFlag
+    %6 = mir.mov_imm 0 : i64
+    %7 = mir.call @__gt_spawn(%5, %6, %1)
+    %9 = mir.call @__gt_await(%7)
+    %10 = mir.global_addr @__data_flag
+    %11 = mir.load %10, 0 width: qword
+    %12 = mir.mov_imm 125 : i64
+    %13 = mir.cmp ugt, %11, %12
+    mir.cond_br %13 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %14 = mir.global_addr @__panic_msg_388580e3c964617b
+    %15 = mir.call @mrt_panic(%14)
+  __range_ok_0:
+    mir.ret %11
+  }
+}
+---

@@ -31,6 +31,16 @@
 var cachedRuntimeModule = StdModule.create()
 var runtimeModuleLoaded = false
 
+// Read a `.std` runtime source from `path`, parse it, and promote its
+// storeSlot/loadSlot ops to SSA (see the cachedRuntimeModule note above on why
+// the cache stores post-mem2reg form). `label` names the file in panic
+// messages. Shared by loadRuntimeModule / loadWasmGtRuntime.
+function readParsePromoteStdModule(path FilePath, label String) returns StdModule
+	let source = try File.readText(path) otherwise panic("Failed to read {label} at {path}")
+	var parsed = try parseStdModule(source, startValueId: 0) otherwise panic("Failed to parse {label} at {path}")
+	return promoteMem2Reg(parsed)
+end 'readParsePromoteStdModule'
+
 export function loadRuntimeModule() returns StdModule
 	if runtimeModuleLoaded 'cached'
 		return cachedRuntimeModule
@@ -41,13 +51,94 @@ export function loadRuntimeModule() returns StdModule
 		panic("Cannot find runtime.std -- searched up from current directory")
 	end 'noRuntime'
 
-	let source = try File.readText(runtimePath) otherwise panic("Failed to read runtime.std at {runtimePath}")
-
-	var parsed = try parseStdModule(source, startValueId: 0) otherwise panic("Failed to parse runtime.std at {runtimePath}")
-	cachedRuntimeModule = promoteMem2Reg(parsed)
+	cachedRuntimeModule = readParsePromoteStdModule(runtimePath, label: "runtime.std")
 	runtimeModuleLoaded = true
 	return cachedRuntimeModule
 end 'loadRuntimeModule'
+
+// Parsed runtime_wasm.std module, cached for the process lifetime. Holds the
+// REAL wasm bodies for the green-thread runtime (`__gt_spawn`/`__gt_await`/
+// `__sched_run`/… plus the asyncify primitive stubs). These bodies call the
+// `asyncify_*` imports, which only the wasm backend lowers, so they are spliced
+// in by `augmentWithRuntime` ONLY for `CpuArch.wasm32` — x64/arm64 keep the
+// runtime.std signature stubs (hand-emitted machine code overrides them).
+// Cached post-mem2reg like `loadRuntimeModule`, for the same call-site reasons.
+var cachedWasmGtRuntime = StdModule.create()
+var wasmGtRuntimeLoaded = false
+
+export function loadWasmGtRuntime() returns StdModule
+	if wasmGtRuntimeLoaded 'cached'
+		return cachedWasmGtRuntime
+	end 'cached'
+
+	let runtimePath = findWasmGtRuntimePath()
+	if runtimePath.isEmpty() 'noRuntime'
+		panic("Cannot find runtime_wasm.std -- searched up from current directory")
+	end 'noRuntime'
+
+	cachedWasmGtRuntime = readParsePromoteStdModule(runtimePath, label: "runtime_wasm.std")
+	wasmGtRuntimeLoaded = true
+	return cachedWasmGtRuntime
+end 'loadWasmGtRuntime'
+
+// Names in runtime.std whose bodies runtime_wasm.std overrides on wasm. The
+// runtime.std versions are signature-only stubs (the x64/arm64 backends hand
+// emit machine code that overrides them); on wasm we drop the stubs and splice
+// the real Std-IR bodies from runtime_wasm.std, which call the asyncify
+// primitives only the wasm backend lowers.
+function wasmGtOverrideNames() returns StringArray
+	var names = StringArray.create()
+	names.push("__gt_spawn")
+	names.push("__gt_await")
+	names.push("__gt_current_trace_id")
+	names.push("__gt_trace_emit")
+	return names
+end 'wasmGtOverrideNames'
+
+// Merged wasm runtime cache (base runtime.std with the GT stubs replaced by the
+// runtime_wasm.std bodies). Cached for the process lifetime like the two base
+// modules; the merge is deterministic and target-independent within wasm.
+var cachedWasmRuntimeModule = StdModule.create()
+var wasmRuntimeModuleMerged = false
+
+// Return the runtime StdModule appropriate for `target`. x64/arm64 get the base
+// runtime.std unchanged (stubs + hand-emit overrides). wasm gets the base
+// runtime with the GT stubs dropped and the real runtime_wasm.std bodies merged
+// in, so `filterRuntimeByReachability` walks the wasm bodies' call edges
+// (__gt_spawn → __gt_alloc → __slab_alloc, __sched_run → __gt_invoke → …).
+function buildRuntimeModuleForTarget(target Target) returns StdModule
+	let base = loadRuntimeModule()
+	if target.cpu != CpuArch.wasm32 'native'
+		return base
+	end 'native'
+
+	if wasmRuntimeModuleMerged 'cached'
+		return cachedWasmRuntimeModule
+	end 'cached'
+
+	var merged = StdModule.create()
+	merged.merge(base)
+	merged.dropFunctionsByName(wasmGtOverrideNames())
+	merged.merge(loadWasmGtRuntime())
+	cachedWasmRuntimeModule = merged
+	wasmRuntimeModuleMerged = true
+	return cachedWasmRuntimeModule
+end 'buildRuntimeModuleForTarget'
+
+// Locate runtime_wasm.std alongside runtime.std (same parent-walk as
+// findRuntimePath). Returns an empty path if not found.
+export function findWasmGtRuntimePath() returns FilePath
+	let runtimePath = findRuntimePath()
+	if runtimePath.isEmpty() 'noBase'
+		return FilePath from ""
+	end 'noBase'
+	let dir = try runtimePath.parent() otherwise return FilePath from ""
+	let candidate = dir.join("runtime_wasm.std")
+	if File.exists(candidate) 'found'
+		return candidate
+	end 'found'
+	return FilePath from ""
+end 'findWasmGtRuntimePath'
 
 // True when `name` is a function defined in `runtime.std`. Used to identify
 // runtime-defined names cheaply against the parsed runtime module. The
@@ -89,35 +180,96 @@ export function isPerCompileRuntimeName(name String) returns bool
 	return isStartFunctionName(name) or name == "mrt_cov_hit" or name == "mrt_cov_dump"
 end 'isPerCompileRuntimeName'
 
-export function findRuntimePath() returns FilePath
+// Walk up from the current working directory (at most 10 parent levels,
+// stopping at the filesystem root) and return the first candidate that exists.
+// Each entry of `candidateSegments` is the path-segment list for one candidate,
+// joined onto the level's directory in order — so the join stays per-segment
+// and cross-platform. Returns an empty FilePath when nothing matches at any
+// level (the not-found sentinel callers check with `.isEmpty()`). Shared by
+// findRuntimePath / findWasmOptPath.
+function findFileUpward(candidateSegments StringArrayArray) returns FilePath
 	var dir = Directory.currentPath()
 	for _ in 0 upto 10 'search'
-		// Look for maxon-selfhosted/Compiler/Runtime/runtime.std
-		let candidate = dir.join("maxon-selfhosted").join("Compiler").join("Runtime").join("runtime.std")
-		if File.exists(candidate) 'found'
-			return candidate
-		end 'found'
-		// Also check Compiler/Runtime/runtime.std (if we're inside maxon-selfhosted)
-		let candidate2 = dir.join("Compiler").join("Runtime").join("runtime.std")
-		if File.exists(candidate2) 'found2'
-			return candidate2
-		end 'found2'
-		// Also check Runtime/runtime.std (if we're inside Compiler)
-		let candidate3 = dir.join("Runtime").join("runtime.std")
-		if File.exists(candidate3) 'found3'
-			return candidate3
-		end 'found3'
-		// Also check runtime.std directly
-		let candidate4 = dir.join("runtime.std")
-		if File.exists(candidate4) 'found4'
-			return candidate4
-		end 'found4'
-		// dir.parent() returns no value at the filesystem root; bail out with empty path.
+		for segments in candidateSegments 'eachCandidate'
+			var candidate = dir
+			for segment in segments 'join'
+				candidate = candidate.join(segment)
+			end 'join'
+			if File.exists(candidate) 'found'
+				return candidate
+			end 'found'
+		end 'eachCandidate'
+		// dir.parent() returns no value at the filesystem root; bail out empty.
 		let parentDir = try dir.parent() otherwise return FilePath from ""
 		dir = parentDir
 	end 'search'
 	return FilePath from ""
+end 'findFileUpward'
+
+// runtime.std locations tried at each level of the upward walk: the full
+// repo-relative path, plus successive suffixes for when the search starts
+// already inside maxon-selfhosted / Compiler / Runtime, then the bare name.
+export function findRuntimePath() returns FilePath
+	var candidates = StringArrayArray.create()
+	let full = ["maxon-selfhosted", "Compiler", "Runtime", "runtime.std"]
+	let fromSelfhosted = ["Compiler", "Runtime", "runtime.std"]
+	let fromCompiler = ["Runtime", "runtime.std"]
+	let bare = ["runtime.std"]
+	candidates.push(full)
+	candidates.push(fromSelfhosted)
+	candidates.push(fromCompiler)
+	candidates.push(bare)
+	return findFileUpward(candidates)
 end 'findRuntimePath'
+
+// Find the vendored Binaryen `wasm-opt` (used to asyncify wasm async/await),
+// preferring the `.exe` form on Windows. Returns an empty FilePath if not found.
+function findWasmOptPath() returns FilePath
+	var candidates = StringArrayArray.create()
+	let exe = ["vendor", "wasm-opt", "wasm-opt.exe"]
+	let noExt = ["vendor", "wasm-opt", "wasm-opt"]
+	candidates.push(exe)
+	candidates.push(noExt)
+	return findFileUpward(candidates)
+end 'findWasmOptPath'
+
+// Run the vendored `wasm-opt --asyncify` over the just-emitted wasm in place.
+// Asyncify instruments the module so the green-thread runtime can unwind/rewind
+// its call stack into linear memory at a suspend point (wasm has no native stack
+// switching), resolving the `asyncify.*` imports MirToWasm declares. `-all`
+// enables the multivalue / bulk-memory / reference-types features MirToWasm emits
+// (wasm-opt's parser is MVP-only by default and would reject the module).
+function asyncifyPostProcess(outputPath FilePath)
+	let wasmOptExe = findWasmOptPath()
+	if wasmOptExe.isEmpty() 'missing'
+		panic("wasm-opt not found in vendor/wasm-opt/ — required to asyncify wasm async/await")
+	end 'missing'
+	var argv = StringArray.create()
+	argv.push("--asyncify")
+	argv.push("-all")
+	// Exclude the scheduler driver and the entry function from instrumentation.
+	// A non-instrumented function does NOT save its locals and return on an
+	// unwind — it simply catches it. `__sched_run` calls the coroutine entry
+	// (`__gt_invoke`), so leaving it uninstrumented makes the unwind STOP there:
+	// the scheduler then observes the suspend (gt.status != completed) and clears
+	// the unwinding state via `asyncify_stop_unwind`. `mrt_start` calls
+	// `__sched_run` and must likewise stay a clean stack frame. Everything from
+	// `__gt_invoke` down stays instrumented so the unwind/rewind chain is intact.
+	argv.push("--pass-arg=asyncify-removelist@__sched_run,mrt_start")
+	// Preserve the name section (function names) through the transform so wasmtime
+	// stack traces still resolve `in main` / `in <userfn>` instead of
+	// `<wasm function N>` — the panic-stack-trace specs assert those names.
+	argv.push("-g")
+	argv.push(outputPath.toString())
+	argv.push("-o")
+	argv.push(outputPath.toString())
+	let result = try Subprocess.run(Executable.path(wasmOptExe), arguments: argv, workingDirectory: Directory.currentPath()) otherwise (err) 'runFail'
+		panic("asyncifyPostProcess: failed to run wasm-opt: {err}")
+	end 'runFail'
+	if not result.succeeded() 'failed'
+		panic("asyncifyPostProcess: wasm-opt --asyncify exited {result.exitCode()}:\n{result.stderr}")
+	end 'failed'
+end 'asyncifyPostProcess'
 
 // Prepends runtime functions from runtime.std to a user module.
 // Runtime functions are expressed as Std-level IR and will be lowered by
@@ -150,7 +302,7 @@ end 'findRuntimePath'
 // section of `dispatch()`, feeding its augmented `StdModule` to the
 // downstream per-function lowering / MIR passes.
 export function augmentWithRuntime(module StdModule, project Project) returns StdModule
-	let runtimeModule = loadRuntimeModule()
+	let runtimeModule = buildRuntimeModuleForTarget(project.target)
 	let covFilteredRuntime = filterRuntimeForCoverage(runtimeModule, coverageEnabled: project.coverageEnabled)
 	// Stage B.2 (d43069642): reachability-prune the runtime. After OS /
 	// coverage filtering the runtime module still carries every helper
@@ -214,8 +366,100 @@ export function augmentWithRuntime(module StdModule, project Project) returns St
 	// references these inits via a normal `call` op, so the patch is the
 	// only path that wires them up.
 	patchMrtStartWithModuleInits(augmented, project: project)
+	// On wasm, main must run as a green thread driven by the asyncify scheduler
+	// (so `await` can suspend/resume). Rewrite mrt_start's `call main` tail into
+	// `root = __gt_spawn_root(funcAddr main); r = __sched_run(root)`; the existing
+	// `osExit r` then reports main's GT result. Native targets call main directly.
+	if project.target.cpu == CpuArch.wasm32 'wasmBootstrap'
+		patchMrtStartWasmBootstrap(augmented)
+	end 'wasmBootstrap'
 	return augmented
 end 'augmentWithRuntime'
+
+// Wasm-only: rewrite mrt_start's straight `call main` into the green-thread
+// bootstrap. The merged mrt_start body is `[__slab_init, (module inits…), call
+// main → v_main, osExit v_main, ret]`. We replace the single `call main` op so
+// `v_main` (which `osExit` already reads) becomes the scheduler result:
+//   fn   = funcAddr main           (new value id)
+//   root = __gt_spawn_root(fn)     (new value id)
+//   v_main = __sched_run(root)     (reuses the original `call main` result id)
+// Inserting the first two ops before the rewritten one keeps `osExit v_main`
+// and the `ret` terminator untouched.
+function patchMrtStartWasmBootstrap(module StdModule)
+	for func in module.functions 'findStart'
+		if func.name != "mrt_start" 'notStart'
+			continue
+		end 'notStart'
+		if func.blockRefs.count() == 0 'noBlocks'
+			panic("patchMrtStartWasmBootstrap: mrt_start has no blocks")
+		end 'noBlocks'
+		let entryBlockRef = try func.blockRefs.get(0) otherwise panic("patchMrtStartWasmBootstrap: blockRefs.get(0) OOB")
+		let entryBlock = try module.blocks.get(entryBlockRef) otherwise panic("patchMrtStartWasmBootstrap: blocks.get OOB at {entryBlockRef}")
+		rewriteMainCallToScheduler(module, func: func, block: entryBlock)
+		return
+	end 'findStart'
+	panic("patchMrtStartWasmBootstrap: mrt_start function not in module")
+end 'patchMrtStartWasmBootstrap'
+
+function rewriteMainCallToScheduler(module StdModule, func IrFunction, block IrBlock)
+	var mainCallPos = 0 as ParsedInt
+	var mainResultId = 0 as ValueId
+	var foundMain = false
+	for i in 0 upto block.opRefs.count() 'each'
+		let opIdx = try block.opRefs.get(i) otherwise panic("rewriteMainCallToScheduler: opRefs.get OOB at {i}")
+		let op = try module.ops.get(opIdx) otherwise panic("rewriteMainCallToScheduler: ops.get OOB at {opIdx}")
+		if isCallToMain(op) 'isMain'
+			mainCallPos = i
+			mainResultId = callResultIdOf(op)
+			foundMain = true
+			break
+		end 'isMain'
+	end 'each'
+	if not foundMain 'noMain'
+		panic("patchMrtStartWasmBootstrap: could not locate `call main` in mrt_start entry block")
+	end 'noMain'
+
+	let valueIdRef = ValueIdRef.create(scanMaxValueId(func, module: module) + 1)
+	let fnPtrId = allocValueId(valueIdRef)
+	let rootId = allocValueId(valueIdRef)
+
+	// fn = funcAddr main
+	let fnPtrOpIdx = module.ops.count()
+	module.ops.push(StdOp.system(StdSystemOp.funcAddr(fnPtrId, name: "main")))
+	// root = __gt_spawn_root(fn)
+	var spawnArgs = ValueIdArray.create()
+	spawnArgs.push(fnPtrId)
+	let spawnOpIdx = module.ops.count()
+	module.ops.push(StdOp.call(StdCallOp.call(rootId, callee: "__gt_spawn_root", argIds: spawnArgs)))
+
+	// Rewrite the original `call main` op in place into `call __sched_run root`,
+	// keeping its result id so the downstream `osExit` reads the scheduler's
+	// exit code.
+	let origOpIdx = try block.opRefs.get(mainCallPos) otherwise panic("rewriteMainCallToScheduler: opRefs.get OOB at mainCallPos")
+	var schedArgs = ValueIdArray.create()
+	schedArgs.push(rootId)
+	try module.ops.set(origOpIdx, value: StdOp.call(StdCallOp.call(mainResultId, callee: "__sched_run", argIds: schedArgs))) otherwise panic("rewriteMainCallToScheduler: ops.set OOB at {origOpIdx}")
+
+	// Insert the two new ops immediately before the rewritten call.
+	try block.opRefs.insert(mainCallPos, value: spawnOpIdx) otherwise panic("rewriteMainCallToScheduler: opRefs.insert spawn failed")
+	try block.opRefs.insert(mainCallPos, value: fnPtrOpIdx) otherwise panic("rewriteMainCallToScheduler: opRefs.insert funcAddr failed")
+end 'rewriteMainCallToScheduler'
+
+// Result ValueId of a `call` StdOp. Only invoked after `isCallToMain` confirms
+// `op` is a plain `call` op, so the non-call arms are unreachable and panic.
+function callResultIdOf(op StdOp) returns ValueId
+	match op 'shape'
+		call(c) then return stdCallOpResultId(c)
+		default panic("callResultIdOf: expected call op")
+	end 'shape'
+end 'callResultIdOf'
+
+function stdCallOpResultId(inner StdCallOp) returns ValueId
+	match inner 'callShape'
+		call(resultId, _, _) then return resultId
+		default panic("stdCallOpResultId: expected call op")
+	end 'callShape'
+end 'stdCallOpResultId'
 
 typealias RuntimeReachSet = Set with String
 typealias RuntimeFuncByName = Map with (String, IrFunction)
@@ -258,6 +502,17 @@ function filterRuntimeByReachability(runtime StdModule, userModule StdModule, ta
 		seedRuntimeReachName("mrt_alloc", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
 		seedRuntimeReachName("mm_decref", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
 	end 'win32Helpers'
+
+	// On wasm the green-thread scheduler is driven from `mrt_start`'s bootstrap
+	// tail, which `patchMrtStartWasmBootstrap` rewrites to call `__gt_spawn_root`
+	// + `__sched_run`. That patch runs AFTER this reachability walk, so the call
+	// edges aren't visible here — seed the scheduler roots explicitly. The
+	// transitive walk then pulls in `__gt_invoke`, `__gt_enqueue`, `__gt_dequeue`,
+	// `__gt_init`, `__gt_alloc`, and the asyncify primitive stubs.
+	if target.cpu == CpuArch.wasm32 'wasmScheduler'
+		seedRuntimeReachName("__gt_spawn_root", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
+		seedRuntimeReachName("__sched_run", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
+	end 'wasmScheduler'
 	for func in userModule.functions 'eachUserFunc'
 		collectRuntimeReachFromFunc(userModule, func: func, runtimeMap: runtimeMap, seen: seen, worklist: worklist)
 	end 'eachUserFunc'
@@ -1156,6 +1411,16 @@ export function writeExecutable(outputPath FilePath, codeResult CodeResult, targ
 		windows then writePe(outputPath, codeResult: codeResult, target: target)
 		linux then writeElf(outputPath, codeResult: codeResult, target: target)
 		macos then writeMachO(outputPath, codeResult: codeResult, target: target)
-		wasi then compileWasm(codeResult.mirModule, globalData: codeResult.globalData, outputPath: outputPath, stdlibCache: stdlibCache)
+		wasi then writeWasmExecutable(codeResult.mirModule, globalData: codeResult.globalData, outputPath: outputPath, stdlibCache: stdlibCache)
 	end 'os'
 end 'writeExecutable'
+
+// Emit the wasm module, then asyncify it in place. Every wasm module declares the
+// `asyncify.*` imports (so the green-thread runtime can call them), so every module
+// must be asyncified — the pass internalizes those imports (resolving them) whether
+// or not the program actually suspends; a non-async program just carries dormant
+// instrumentation. Split out of `writeExecutable` so the match arm stays one call.
+function writeWasmExecutable(mirModule MirModule, globalData GlobalDataTable, outputPath FilePath, stdlibCache StdlibCacheData)
+	compileWasm(mirModule, globalData: globalData, outputPath: outputPath, stdlibCache: stdlibCache)
+	asyncifyPostProcess(outputPath)
+end 'writeWasmExecutable'

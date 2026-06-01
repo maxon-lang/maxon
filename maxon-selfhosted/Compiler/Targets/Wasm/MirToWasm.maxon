@@ -68,7 +68,52 @@ let wasiFdPrestatDirName = 14
 // single CLOCK subscription against the monotonic clock.
 let wasiPollOneoff = 15
 
-let wasiImportCount = 16
+// Binaryen Asyncify primitive imports (resolved + internalized by `wasm-opt
+// --asyncify`). Declared right after the WASI imports, so they occupy function
+// indices 16-19 and module-defined functions start at `wasiImportCount`.
+let asyncifyStartUnwindIdx = 16
+let asyncifyStopUnwindIdx = 17
+let asyncifyStartRewindIdx = 18
+let asyncifyStopRewindIdx = 19
+
+let wasiImportCount = 20
+
+// The green-thread runtime calls the asyncify primitives by these Std-IR names;
+// `emitDirectCall` routes them to the fixed import indices above instead of a
+// module-function lookup. (Declared `void` with an i64 data arg in the runtime;
+// the import is `(i32) -> ()`, so the arg is wrapped at the call site.)
+function isAsyncifyImportCall(callee String) returns bool
+	return callee == "asyncify_start_unwind" or callee == "asyncify_stop_unwind" or callee == "asyncify_start_rewind" or callee == "asyncify_stop_rewind"
+end 'isAsyncifyImportCall'
+
+// The four dead asyncify primitive stub functions (defined in runtime_wasm.std
+// for parse-time signature resolution) that must be dropped from the emitted
+// module so they don't collide with the functions Binaryen's `--asyncify` pass
+// generates under the same names. See `emitWasmModule`.
+function asyncifyStubFuncNames() returns StringArray
+	var names = StringArray.create()
+	names.push("asyncify_start_unwind")
+	names.push("asyncify_stop_unwind")
+	names.push("asyncify_start_rewind")
+	names.push("asyncify_stop_rewind")
+	return names
+end 'asyncifyStubFuncNames'
+
+function asyncifyImportIndex(callee String) returns Wasm32Index
+	if callee == "asyncify_start_unwind" 'su'
+		return asyncifyStartUnwindIdx as Wasm32Index
+	end 'su'
+	if callee == "asyncify_stop_unwind" 'stu'
+		return asyncifyStopUnwindIdx as Wasm32Index
+	end 'stu'
+	if callee == "asyncify_start_rewind" 'sr'
+		return asyncifyStartRewindIdx as Wasm32Index
+	end 'sr'
+	if callee == "asyncify_stop_rewind" 'str'
+		return asyncifyStopRewindIdx as Wasm32Index
+	end 'str'
+	panic("asyncifyImportIndex: not an asyncify import call: {callee}")
+end 'asyncifyImportIndex'
 
 // Hardcoded preopen-directory file descriptors used by all path-based
 // operations on wasm32-wasi. The spec runner invokes the test binary
@@ -605,6 +650,21 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 	var wasm = ByteArray.create()
 	writeModuleHeader(wasm)
 
+	// Drop the dead asyncify primitive stub functions before any positional
+	// emission. They exist in the runtime IR only so the Std parser / type
+	// resolution can look up the (arity, void-return) shape of the
+	// `asyncify_*` call sites; every actual call is intercepted by
+	// `emitDirectCall` and routed to the fixed import index, so the stub
+	// bodies are never reached. Binaryen's `--asyncify` pass internalizes the
+	// `asyncify.*` imports by generating module functions named exactly
+	// `asyncify_start_unwind` / `asyncify_stop_unwind` / `asyncify_start_rewind`
+	// / `asyncify_stop_rewind`; leaving our identically-named dead stubs in the
+	// module makes that rename collide (module-utils.cpp rename assertion). We
+	// filter them here — after the MIR pipeline, before emission — so every
+	// downstream positional invariant (function/table/type indices) stays
+	// consistent and the wasm-opt names are free.
+	module.dropFunctionsByName(asyncifyStubFuncNames())
+
 	// Build function table: map function names to indices.
 	// Imported functions come first, then module functions.
 	var funcNames = StringArray.create()
@@ -786,6 +846,27 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 	writeFuncType(pollOneoffType, paramTypes: makeByteArray4(wasmTypeI32, b: wasmTypeI32, c: wasmTypeI32, d: wasmTypeI32), resultTypes: makeByteArray1(wasmTypeI32))
 	types.push(pollOneoffType)
 
+	// Types 16-19: the Binaryen Asyncify primitives the wasm green-thread runtime
+	// imports (resolved by `wasm-opt --asyncify`). Pointers are i32 on wasm32. Each
+	// gets its own positional slot so module-function types stay at `wasiImportCount
+	// + i` (16 & 18 and 17 & 19 share a shape but not a slot).
+	// Type 16: (i32) -> () — asyncify.start_unwind(data_ptr)
+	var asyncifyUnwindArgType = ByteArray.create()
+	writeFuncType(asyncifyUnwindArgType, paramTypes: makeByteArray1(wasmTypeI32), resultTypes: ByteArray.create())
+	types.push(asyncifyUnwindArgType)
+	// Type 17: () -> () — asyncify.stop_unwind()
+	var asyncifyStopUnwindType = ByteArray.create()
+	writeFuncType(asyncifyStopUnwindType, paramTypes: ByteArray.create(), resultTypes: ByteArray.create())
+	types.push(asyncifyStopUnwindType)
+	// Type 18: (i32) -> () — asyncify.start_rewind(data_ptr)
+	var asyncifyRewindArgType = ByteArray.create()
+	writeFuncType(asyncifyRewindArgType, paramTypes: makeByteArray1(wasmTypeI32), resultTypes: ByteArray.create())
+	types.push(asyncifyRewindArgType)
+	// Type 19: () -> () — asyncify.stop_rewind()
+	var asyncifyStopRewindType = ByteArray.create()
+	writeFuncType(asyncifyStopRewindType, paramTypes: ByteArray.create(), resultTypes: ByteArray.create())
+	types.push(asyncifyStopRewindType)
+
 	// Types for module functions (type index = wasiImportCount + i for each)
 	for func in module.functions 'buildTypes'
 		let funcThrows = match func.throwsTypeName 'kind'
@@ -902,6 +983,19 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 	// subscriptions. Used by `osSleep` with a single CLOCK subscription
 	// to wait for `ms` milliseconds against the monotonic clock.
 	importCount = addFuncImport(imports, moduleName: wasiModule, fieldName: b"poll_oneoff", typeIndex: 15, countRef: importCount)
+
+	// Imports 16-19: the Binaryen Asyncify primitives. Module name "asyncify" is the
+	// namespace `wasm-opt --asyncify` recognizes; it rewrites the green-thread
+	// runtime's calls to these into direct calls to the functions it generates
+	// (which spill/restore a coroutine's call stack to linear memory), then drops
+	// the imports — so the final module has no unresolved imports. `get_state` is
+	// NOT one of the four recognized primitives, so the scheduler reads suspend vs.
+	// completion from the GT's own status field instead.
+	let asyncifyModule = b"asyncify"
+	importCount = addFuncImport(imports, moduleName: asyncifyModule, fieldName: b"start_unwind", typeIndex: 16, countRef: importCount)
+	importCount = addFuncImport(imports, moduleName: asyncifyModule, fieldName: b"stop_unwind", typeIndex: 17, countRef: importCount)
+	importCount = addFuncImport(imports, moduleName: asyncifyModule, fieldName: b"start_rewind", typeIndex: 18, countRef: importCount)
+	importCount = addFuncImport(imports, moduleName: asyncifyModule, fieldName: b"stop_rewind", typeIndex: 19, countRef: importCount)
 
 	var importSection = ByteArray.create()
 	writeUleb128(importSection, value: importCount)
@@ -1095,10 +1189,16 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 	writeUleb128(nameSection, value: moduleNamePayload.count() as Wasm32Index)
 	nameSection.append(moduleNamePayload)
 
-	// Subsection 1: function names. Indices cover both WASI imports and
-	// module-defined functions; the index space is shared.
+	// Subsection 1: function names. This is a `namemap` (a vec of (index, name)
+	// pairs); the leading count is the number of PAIRS written, not the total
+	// function-index space. We name the 5 WASI imports below plus every
+	// module-defined function (`funcCount`). Declaring `wasiImportCount + funcCount`
+	// instead over-counts by the unnamed WASI imports, so a strict parser
+	// (Binaryen's `wasm-opt`) reads past the subsection to EOF — wasmtime tolerates
+	// it, but the asyncify post-process pass does not.
+	let namedWasiImports = 5
 	var funcNameMap = ByteArray.create()
-	let totalFuncCount = (wasiImportCount + funcCount) as Wasm32Index
+	let totalFuncCount = (namedWasiImports + funcCount) as Wasm32Index
 	writeUleb128(funcNameMap, value: totalFuncCount)
 	writeUleb128(funcNameMap, value: 0)
 	writeWasmName(funcNameMap, name: b"proc_exit")
@@ -1356,7 +1456,12 @@ type WasmFunctionLowering
 		if srcFunc.name == "mrt_file_close" 'isFileClose'
 			return emitWasmFileClose()
 		end 'isFileClose'
-		if srcFunc.name == "mrt_file_exists" 'isFileExists'
+		// The real existence-check I/O lives in `mrt_file_exists_impl` (the
+		// `mrt_file_exists` wrapper around it adds the async io_yield/io_resume
+		// trace); intercept the impl so the wrapper still lowers normally and
+		// emits its trace, while the actual `osFileAccess`/`osFileStat` body is
+		// replaced by the WASI `path_filestat_get` version.
+		if srcFunc.name == "mrt_file_exists_impl" 'isFileExists'
 			return emitWasmFileExists()
 		end 'isFileExists'
 		if srcFunc.name == "mrt_file_delete" 'isFileDelete'
@@ -1812,7 +1917,7 @@ type WasmFunctionLowering
 			condBranch then panic("wasm: condBranch in single-block function")
 			branch then nop()
 			call(resultId, callee, argIds) then emitCall(resultId, callee: callee, argIds: argIds)
-			indirectCall(resultId, calleeId, argIds) then emitIndirectCall(resultId, calleeId: calleeId, argIds: argIds)
+			indirectCall(resultId, calleeId, argIds, isVoid, isThrowing, errorFlagId) then emitIndirectCall(resultId, calleeId: calleeId, argIds: argIds, isVoid: isVoid, isThrowing: isThrowing, errorFlagId: errorFlagId)
 			witnessCall(resultId, witnessAddrId, methodIndex, isVoid, argIds) then emitWitnessCall(resultId, witnessAddrId: witnessAddrId, methodIndex: methodIndex, isVoid: isVoid, argIds: argIds)
 			ret(retValId) then emitRet(retValId)
 			param(resultId, paramIndex, _) then emitParam(resultId, paramIndex: paramIndex)
@@ -1992,6 +2097,15 @@ type WasmFunctionLowering
 
 	function emitCall(resultId ValueId, callee String, argIds ValueIdArray)
 		emitDirectCall(callee, argIds: argIds)
+		// The asyncify primitives are void imports (intercepted by
+		// emitDirectCall) and never throw. They have no module function entry
+		// in `funcSigs` (the dead Std-IR stubs are filtered out of the emitted
+		// module to avoid colliding with Binaryen's own generated functions), so
+		// the funcSigs-driven result handling below would mis-treat them as
+		// value-returning. Short-circuit: nothing to pop, nothing to store.
+		if isAsyncifyImportCall(callee) 'asyncifyVoid'
+			return
+		end 'asyncifyVoid'
 		// A plain `call` (as opposed to `tryCall`) ignores any error the
 		// callee raises — mirroring the native ABI where the error flag lands
 		// in a dedicated register (RDX/X1) that a non-`try` caller simply
@@ -2051,6 +2165,21 @@ type WasmFunctionLowering
 	// emitCall and emitTryCall; result-stack handling differs and is done
 	// by the caller.
 	function emitDirectCall(callee String, argIds ValueIdArray)
+		// Asyncify primitives are imports at fixed indices — handle them before the
+		// module-function lookup (which would panic on these names). start_unwind /
+		// start_rewind take a single i32 data pointer (the runtime passes it as i64,
+		// so wrap); stop_unwind / stop_rewind take no args. All return void.
+		if isAsyncifyImportCall(callee) 'asyncifyCall'
+			for argId in argIds 'pushWrapped'
+				body.push(opLocalGet)
+				writeUleb128(body, value: argId as Wasm32Index)
+				body.push(opI32WrapI64)
+			end 'pushWrapped'
+			body.push(opCall)
+			writeUleb128(body, value: asyncifyImportIndex(callee))
+			return
+		end 'asyncifyCall'
+
 		for argId in argIds 'pushArgs'
 			body.push(opLocalGet)
 			writeUleb128(body, value: argId as Wasm32Index)
@@ -2993,7 +3122,7 @@ type WasmFunctionLowering
 		writeUleb128(body, value: 0)
 	end 'emitWitnessCallIndirect'
 
-	function emitIndirectCall(resultId ValueId, calleeId ValueId, argIds ValueIdArray)
+	function emitIndirectCall(resultId ValueId, calleeId ValueId, argIds ValueIdArray, isVoid bool, isThrowing bool, errorFlagId ValueId)
 		// Push args first (matches the wasm call_indirect stack order:
 		// args before callee index). This mirrors emitCall's arg push.
 		for argId in argIds 'pushArgs'
@@ -3009,12 +3138,16 @@ type WasmFunctionLowering
 		body.push(opI32WrapI64)
 
 		// Look up the type-section index for this call signature, dedup-
-		// shared with direct-call types via the pre-populated map. In
-		// `fixedCalls` mode (stdlib-cache emission), the user-build will
-		// own the final type-section layout; we record a typeFixup and
-		// write a 5-byte placeholder that gets patched at module-assembly
-		// time.
-		let typeBytes = buildIndirectCallTypeBytes(resultId, isVoid: false, argIds: argIds, throws: false)
+		// shared with direct-call types via the pre-populated map. The
+		// shape (void result / trailing error flag) must match the table
+		// target's own declared type, or call_indirect traps with "indirect
+		// call type mismatch"; the green-thread runtime's `__gt_invoke`
+		// dispatches a coroutine entry whose return shape varies, so it
+		// emits void/throwing indirect calls. In `fixedCalls` mode (stdlib-
+		// cache emission), the user-build will own the final type-section
+		// layout; we record a typeFixup and write a 5-byte placeholder that
+		// gets patched at module-assembly time.
+		let typeBytes = buildIndirectCallTypeBytes(resultId, isVoid: isVoid, argIds: argIds, throws: isThrowing)
 		body.push(opCallIndirect)
 		if fixedCalls 'useFixed'
 			typeFixups.push(WasmTypeFixup.create(body.count(), signatureBytes: typeBytes))
@@ -3025,12 +3158,18 @@ type WasmFunctionLowering
 		end 'useVariable'
 		writeUleb128(body, value: 0)
 
-		// Store the result. All indirect calls today produce an i64/f64
-		// result that flows into a local; void indirect calls would need
-		// a separate codepath but don't appear in the closure-self
-		// fixtures.
-		body.push(opLocalSet)
-		writeUleb128(body, value: resultId as Wasm32Index)
+		// Pop the call_indirect results into locals. Wasm pushes results in
+		// declared order (primary first, error flag last), so for a throwing
+		// call pop the error flag FIRST, then the primary result. A void call
+		// pushes nothing, so there is no local.set at all.
+		if isThrowing 'storeFlag'
+			body.push(opLocalSet)
+			writeUleb128(body, value: errorFlagId as Wasm32Index)
+		end 'storeFlag'
+		if not isVoid 'storeResult'
+			body.push(opLocalSet)
+			writeUleb128(body, value: resultId as Wasm32Index)
+		end 'storeResult'
 	end 'emitIndirectCall'
 
 	// ============================================================
@@ -5523,7 +5662,7 @@ function collectIndirectCallTypes(module MirModule, types ByteArrayArray, typeIn
 			for opIdx in block.opRefs 'eachOp'
 				let op = try module.ops.get(opIdx) otherwise panic("invariant: opIdx from block.opRefs not in module.ops")
 				match op 'check'
-					indirectCall(resultId, _, argIds) then registerIndirectCallType(types, typeIndexMap: typeIndexMap, floatSet: floatSet, resultId: resultId, isVoid: false, argIds: argIds, throws: false)
+					indirectCall(resultId, _, argIds, isVoid, isThrowing, _) then registerIndirectCallType(types, typeIndexMap: typeIndexMap, floatSet: floatSet, resultId: resultId, isVoid: isVoid, argIds: argIds, throws: isThrowing)
 					witnessCall(resultId, _, _, isVoid, argIds) then registerIndirectCallType(types, typeIndexMap: typeIndexMap, floatSet: floatSet, resultId: resultId, isVoid: isVoid, argIds: argIds, throws: false)
 					witnessTryCall(resultId, _, _, isVoid, argIds, _) then registerIndirectCallType(types, typeIndexMap: typeIndexMap, floatSet: floatSet, resultId: resultId, isVoid: isVoid, argIds: argIds, throws: true)
 					movImm to call then break 'check'
@@ -5539,7 +5678,7 @@ function collectIndirectCallTypes(module MirModule, types ByteArrayArray, typeIn
 			if block.hasTerminatorOp() 'hasTerm'
 				let termOp = try module.ops.get(block.terminatorIndex()) otherwise panic("invariant: terminatorIndex not in module.ops")
 				match termOp 'checkTerm'
-					indirectCall(resultId, _, argIds) then registerIndirectCallType(types, typeIndexMap: typeIndexMap, floatSet: floatSet, resultId: resultId, isVoid: false, argIds: argIds, throws: false)
+					indirectCall(resultId, _, argIds, isVoid, isThrowing, _) then registerIndirectCallType(types, typeIndexMap: typeIndexMap, floatSet: floatSet, resultId: resultId, isVoid: isVoid, argIds: argIds, throws: isThrowing)
 					witnessCall(resultId, _, _, isVoid, argIds) then registerIndirectCallType(types, typeIndexMap: typeIndexMap, floatSet: floatSet, resultId: resultId, isVoid: isVoid, argIds: argIds, throws: false)
 					witnessTryCall(resultId, _, _, isVoid, argIds, _) then registerIndirectCallType(types, typeIndexMap: typeIndexMap, floatSet: floatSet, resultId: resultId, isVoid: isVoid, argIds: argIds, throws: true)
 					movImm to call then break 'checkTerm'

@@ -1,0 +1,1198 @@
+// Wasm-only green-thread coroutine runtime (Std-level IR).
+//
+// On wasm32-wasi there is no native stack switching, so green threads are
+// implemented with Binaryen Asyncify: every instrumented function can unwind
+// its live locals into a per-GT buffer at a suspend point and rewind them back
+// later. This file holds the REAL bodies for the `__gt_*` runtime functions on
+// wasm. On x64/arm64 the equivalent bodies are hand-emitted machine code that
+// overrides the signature stubs in runtime.std; those targets must NEVER see
+// these bodies (they call the `asyncify_*` primitives, which only the wasm
+// backend lowers), so `augmentWithRuntime` splices this file in ONLY when
+// `project.target.cpu == CpuArch.wasm32`.
+//
+// Single-threaded, cooperative scheduler. No locks, no per-P array, no TLS.
+// A Promise IS the GT pointer; `await` reads `gt.result`.
+//
+// GT struct (slab-allocated, 80 bytes; wasm-private offsets):
+//   +0  status      0=spawned(new) 1=running 2=completed 3=waiting
+//   +8  result      the GT's return value (await reads this)
+//   +16 threw       error flag (try-await; unused this phase)
+//   +24 funcPtr     wasm function-table index of the coroutine entry
+//   +32 argBuf      pointer to [count@+0, managed_mask@+8, arg_i@+16+i*8]
+//   +40 next        intrusive FIFO link for the run queue
+//   +48 waiter      GT blocked on this one (enqueued when this completes)
+//   +56 traceId     async-trace id (unused this phase)
+//   +64 asyncifyData per-GT asyncify spill buffer (4096 bytes)
+//   +72 started     0 before first dispatch, 1 after (rewind vs first-call)
+//
+// Reuses the `.data` globals registered in registerSlabAndMmGlobalsForDataSection:
+//   __gt_run_queue_head / __gt_run_queue_tail — the FIFO ends
+//   __gt_init_done                            — idempotent-init guard
+//   __gt_current_p                            — the currently-running GT
+//   __gt_trace_counter                        — trace id source (Phase 3)
+
+// ---------------------------------------------------------------------------
+// Asyncify primitive signature stubs.
+//
+// These are dead module functions: `emitDirectCall` in MirToWasm intercepts the
+// four names and emits `call <fixed import index>` (wrapping the i64 ptr arg to
+// i32) instead of a module-function call, so the bodies here are never reached.
+// They exist only so the Std parser resolves the call sites' (arity, return
+// type). Mirrors the `__gt_spawn` stub shape in runtime.std.
+func asyncify_start_unwind 1 void
+  block entry:
+    v0 = std param 0 i64
+    v1 = std constI64 0
+    std ret v1
+end
+
+func asyncify_stop_unwind 0 void
+  block entry:
+    v0 = std constI64 0
+    std ret v0
+end
+
+func asyncify_start_rewind 1 void
+  block entry:
+    v0 = std param 0 i64
+    v1 = std constI64 0
+    std ret v1
+end
+
+func asyncify_stop_rewind 0 void
+  block entry:
+    v0 = std constI64 0
+    std ret v0
+end
+
+// __gt_init(): one-time scheduler init, idempotent via __gt_init_done. Single
+// threaded, so there is nothing to set up beyond flipping the guard.
+func __gt_init 0 void
+  block entry:
+    v0 = std globalAddr __gt_init_done
+    v1 = std loadIndirect v0 0
+    v2 = std constI64 0
+    v3 = std cmpI64Eq v1 v2
+    std condBr v3 do_init done
+
+  block do_init:
+    v4 = std globalAddr __gt_init_done
+    v5 = std constI64 1
+    std storeIndirect v4 0 v5
+    std br done
+
+  block done:
+    v6 = std constI64 0
+    std ret v6
+end
+
+// __gt_enqueue(gt): append `gt` to the tail of the FIFO run queue. Clears
+// gt.next first so the queue stays NUL-terminated.
+func __gt_enqueue 1 void
+  block entry:
+    v0 = std param 0 i64
+    std storeSlot 0 v0
+    // gt.next = 0
+    v1 = std constI64 0
+    std storeIndirect v0 40 v1
+
+    // tail = __gt_run_queue_tail
+    v2 = std globalAddr __gt_run_queue_tail
+    v3 = std loadIndirect v2 0
+    v4 = std constI64 0
+    v5 = std cmpI64Eq v3 v4
+    std condBr v5 empty_queue nonempty_queue
+
+  block empty_queue:
+    // head = tail = gt
+    v6 = std globalAddr __gt_run_queue_head
+    v7 = std loadSlot 0
+    std storeIndirect v6 0 v7
+    v8 = std globalAddr __gt_run_queue_tail
+    v9 = std loadSlot 0
+    std storeIndirect v8 0 v9
+    std br done
+
+  block nonempty_queue:
+    // oldTail.next = gt ; tail = gt
+    v10 = std globalAddr __gt_run_queue_tail
+    v11 = std loadIndirect v10 0
+    v12 = std loadSlot 0
+    std storeIndirect v11 40 v12
+    v13 = std globalAddr __gt_run_queue_tail
+    v14 = std loadSlot 0
+    std storeIndirect v13 0 v14
+    std br done
+
+  block done:
+    v15 = std constI64 0
+    std ret v15
+end
+
+// __gt_dequeue() -> gt (0 if the queue is empty). Pops the head of the FIFO and
+// fixes up the tail when the queue drains.
+func __gt_dequeue 0 i64
+  block entry:
+    v0 = std globalAddr __gt_run_queue_head
+    v1 = std loadIndirect v0 0
+    std storeSlot 0 v1
+    v2 = std constI64 0
+    v3 = std cmpI64Eq v1 v2
+    std condBr v3 empty pop
+
+  block empty:
+    v4 = std constI64 0
+    std ret v4
+
+  block pop:
+    // head = gt.next
+    v5 = std loadSlot 0
+    v6 = std loadIndirect v5 40
+    v7 = std globalAddr __gt_run_queue_head
+    std storeIndirect v7 0 v6
+    // if head == 0, tail = 0
+    v8 = std constI64 0
+    v9 = std cmpI64Eq v6 v8
+    std condBr v9 clear_tail return_gt
+
+  block clear_tail:
+    v10 = std globalAddr __gt_run_queue_tail
+    v11 = std constI64 0
+    std storeIndirect v10 0 v11
+    std br return_gt
+
+  block return_gt:
+    v12 = std loadSlot 0
+    std ret v12
+end
+
+// __gt_invoke(gt): call the coroutine entry through the function table with the
+// buffered args, store the result into gt.result and the throw flag into
+// gt.threw, then mark gt completed.
+//
+// If the call SUSPENDS (asyncify unwinds inside __gt_await), the indirectCall
+// never returns normally — the unwind propagates up to __sched_run — so the
+// `gt.status = completed` line is skipped and status stays at 1 (running). That
+// is how the scheduler detects suspension. On a true completion the call
+// returns and status flips to 2.
+//
+// wasm `call_indirect` needs a static type, so the entry is dispatched on BOTH
+// arity (0..7) AND return shape. The shape is required because the indirect
+// target's wasm signature must match exactly: a void entry pushes no result,
+// a throwing entry pushes a trailing i64 error flag. Mirroring the x64
+// trampoline (which reads r8/rdx uniformly), the runtime cannot ignore a
+// missing/extra wasm result, so it emits one of three `call_indirect` shapes:
+//   shape 0 — `(i64×N)->i64`            (plain result)         std indirectCall
+//   shape 1 — `(i64×N)->()`             (void)                 std indirectCallVoid
+//   shape 2 — `(i64×N)->(i64, i64)`     (result + error flag)  std indirectCallThrows
+// The arg buffer is [count@+0, managed_mask@+8, arg_i@+16+i*8, shape@+16+N*8].
+//
+// Slots: 0=gt, 1=funcPtr, 2=argBuf, 3=count, 4=result, 5=shape, 6=threw.
+func __gt_invoke 1 void
+  block entry:
+    v0 = std param 0 i64
+    std storeSlot 0 v0
+    // funcPtr = gt.funcPtr ; argBuf = gt.argBuf
+    v1 = std loadIndirect v0 24
+    std storeSlot 1 v1
+    v2 = std loadIndirect v0 32
+    std storeSlot 2 v2
+    // count = argBuf[0]
+    v3 = std loadIndirect v2 0
+    std storeSlot 3 v3
+    // shape = argBuf[16 + count*8] (the trailing slot after the args)
+    v200 = std constI64 8
+    v201 = std mulI64 v3 v200
+    v202 = std constI64 16
+    v203 = std addI64 v201 v202
+    v204 = std addI64 v2 v203
+    v205 = std loadIndirect v204 0
+    std storeSlot 5 v205
+    // threw = 0 (overwritten by a throwing entry)
+    v206 = std constI64 0
+    std storeSlot 6 v206
+
+    v4 = std constI64 0
+    v5 = std cmpI64Eq v3 v4
+    std condBr v5 arity0 try1
+
+  block try1:
+    v6 = std constI64 1
+    v7 = std cmpI64Eq v3 v6
+    std condBr v7 arity1 try2
+
+  block try2:
+    v8 = std constI64 2
+    v9 = std cmpI64Eq v3 v8
+    std condBr v9 arity2 try3
+
+  block try3:
+    v10 = std constI64 3
+    v11 = std cmpI64Eq v3 v10
+    std condBr v11 arity3 try4
+
+  block try4:
+    v12 = std constI64 4
+    v13 = std cmpI64Eq v3 v12
+    std condBr v13 arity4 try5
+
+  block try5:
+    v14 = std constI64 5
+    v15 = std cmpI64Eq v3 v14
+    std condBr v15 arity5 try6
+
+  block try6:
+    v16 = std constI64 6
+    v17 = std cmpI64Eq v3 v16
+    std condBr v17 arity6 try7
+
+  block try7:
+    v18 = std constI64 7
+    v19 = std cmpI64Eq v3 v18
+    std condBr v19 arity7 bad_arity
+
+  // --- arity 0 ---
+  block arity0:
+    v220 = std loadSlot 5
+    v221 = std constI64 1
+    v222 = std cmpI64Eq v220 v221
+    std condBr v222 arity0_void arity0_try
+
+  block arity0_try:
+    v223 = std loadSlot 5
+    v224 = std constI64 2
+    v225 = std cmpI64Eq v223 v224
+    std condBr v225 arity0_throws arity0_t3
+
+  block arity0_t3:
+    v600 = std loadSlot 5
+    v601 = std constI64 3
+    v602 = std cmpI64Eq v600 v601
+    std condBr v602 arity0_throwsvoid arity0_i64
+
+  block arity0_i64:
+    v20 = std loadSlot 1
+    v21 = std indirectCall v20
+    std storeSlot 4 v21
+    std br store_result
+
+  block arity0_void:
+    v226 = std loadSlot 1
+    std indirectCallVoid v226
+    std br store_result
+
+  block arity0_throws:
+    v227 = std loadSlot 1
+    v228 = std indirectCallThrows v229 v227
+    std storeSlot 4 v228
+    std storeSlot 6 v229
+    std br store_result
+
+  block arity0_throwsvoid:
+    v603 = std loadSlot 1
+    std indirectCallThrowsVoid v604 v603
+    std storeSlot 6 v604
+    std br store_result
+
+  // --- arity 1 ---
+  block arity1:
+    v230 = std loadSlot 5
+    v231 = std constI64 1
+    v232 = std cmpI64Eq v230 v231
+    std condBr v232 arity1_void arity1_try
+
+  block arity1_try:
+    v233 = std loadSlot 5
+    v234 = std constI64 2
+    v235 = std cmpI64Eq v233 v234
+    std condBr v235 arity1_throws arity1_t3
+
+  block arity1_t3:
+    v610 = std loadSlot 5
+    v611 = std constI64 3
+    v612 = std cmpI64Eq v610 v611
+    std condBr v612 arity1_throwsvoid arity1_i64
+
+  block arity1_i64:
+    v22 = std loadSlot 2
+    v23 = std loadIndirect v22 16
+    v24 = std loadSlot 1
+    v25 = std indirectCall v24 v23
+    std storeSlot 4 v25
+    std br store_result
+
+  block arity1_void:
+    v236 = std loadSlot 2
+    v237 = std loadIndirect v236 16
+    v238 = std loadSlot 1
+    std indirectCallVoid v238 v237
+    std br store_result
+
+  block arity1_throws:
+    v239 = std loadSlot 2
+    v240 = std loadIndirect v239 16
+    v241 = std loadSlot 1
+    v242 = std indirectCallThrows v243 v241 v240
+    std storeSlot 4 v242
+    std storeSlot 6 v243
+    std br store_result
+
+  block arity1_throwsvoid:
+    v613 = std loadSlot 2
+    v614 = std loadIndirect v613 16
+    v615 = std loadSlot 1
+    std indirectCallThrowsVoid v616 v615 v614
+    std storeSlot 6 v616
+    std br store_result
+
+  // --- arity 2 ---
+  block arity2:
+    v250 = std loadSlot 5
+    v251 = std constI64 1
+    v252 = std cmpI64Eq v250 v251
+    std condBr v252 arity2_void arity2_try
+
+  block arity2_try:
+    v253 = std loadSlot 5
+    v254 = std constI64 2
+    v255 = std cmpI64Eq v253 v254
+    std condBr v255 arity2_throws arity2_t3
+
+  block arity2_t3:
+    v620 = std loadSlot 5
+    v621 = std constI64 3
+    v622 = std cmpI64Eq v620 v621
+    std condBr v622 arity2_throwsvoid arity2_i64
+
+  block arity2_i64:
+    v26 = std loadSlot 2
+    v27 = std loadIndirect v26 16
+    v28 = std loadIndirect v26 24
+    v29 = std loadSlot 1
+    v30 = std indirectCall v29 v27 v28
+    std storeSlot 4 v30
+    std br store_result
+
+  block arity2_void:
+    v256 = std loadSlot 2
+    v257 = std loadIndirect v256 16
+    v258 = std loadIndirect v256 24
+    v259 = std loadSlot 1
+    std indirectCallVoid v259 v257 v258
+    std br store_result
+
+  block arity2_throws:
+    v260 = std loadSlot 2
+    v261 = std loadIndirect v260 16
+    v262 = std loadIndirect v260 24
+    v263 = std loadSlot 1
+    v264 = std indirectCallThrows v265 v263 v261 v262
+    std storeSlot 4 v264
+    std storeSlot 6 v265
+    std br store_result
+
+  block arity2_throwsvoid:
+    v623 = std loadSlot 2
+    v624 = std loadIndirect v623 16
+    v625 = std loadIndirect v623 24
+    v626 = std loadSlot 1
+    std indirectCallThrowsVoid v627 v626 v624 v625
+    std storeSlot 6 v627
+    std br store_result
+
+  // --- arity 3 ---
+  block arity3:
+    v270 = std loadSlot 5
+    v271 = std constI64 1
+    v272 = std cmpI64Eq v270 v271
+    std condBr v272 arity3_void arity3_try
+
+  block arity3_try:
+    v273 = std loadSlot 5
+    v274 = std constI64 2
+    v275 = std cmpI64Eq v273 v274
+    std condBr v275 arity3_throws arity3_t3
+
+  block arity3_t3:
+    v630 = std loadSlot 5
+    v631 = std constI64 3
+    v632 = std cmpI64Eq v630 v631
+    std condBr v632 arity3_throwsvoid arity3_i64
+
+  block arity3_i64:
+    v31 = std loadSlot 2
+    v32 = std loadIndirect v31 16
+    v33 = std loadIndirect v31 24
+    v34 = std loadIndirect v31 32
+    v35 = std loadSlot 1
+    v36 = std indirectCall v35 v32 v33 v34
+    std storeSlot 4 v36
+    std br store_result
+
+  block arity3_void:
+    v276 = std loadSlot 2
+    v277 = std loadIndirect v276 16
+    v278 = std loadIndirect v276 24
+    v279 = std loadIndirect v276 32
+    v280 = std loadSlot 1
+    std indirectCallVoid v280 v277 v278 v279
+    std br store_result
+
+  block arity3_throws:
+    v281 = std loadSlot 2
+    v282 = std loadIndirect v281 16
+    v283 = std loadIndirect v281 24
+    v284 = std loadIndirect v281 32
+    v285 = std loadSlot 1
+    v286 = std indirectCallThrows v287 v285 v282 v283 v284
+    std storeSlot 4 v286
+    std storeSlot 6 v287
+    std br store_result
+
+  block arity3_throwsvoid:
+    v633 = std loadSlot 2
+    v634 = std loadIndirect v633 16
+    v635 = std loadIndirect v633 24
+    v636 = std loadIndirect v633 32
+    v637 = std loadSlot 1
+    std indirectCallThrowsVoid v638 v637 v634 v635 v636
+    std storeSlot 6 v638
+    std br store_result
+
+  // --- arity 4 ---
+  block arity4:
+    v290 = std loadSlot 5
+    v291 = std constI64 1
+    v292 = std cmpI64Eq v290 v291
+    std condBr v292 arity4_void arity4_try
+
+  block arity4_try:
+    v293 = std loadSlot 5
+    v294 = std constI64 2
+    v295 = std cmpI64Eq v293 v294
+    std condBr v295 arity4_throws arity4_t3
+
+  block arity4_t3:
+    v640 = std loadSlot 5
+    v641 = std constI64 3
+    v642 = std cmpI64Eq v640 v641
+    std condBr v642 arity4_throwsvoid arity4_i64
+
+  block arity4_i64:
+    v37 = std loadSlot 2
+    v38 = std loadIndirect v37 16
+    v39 = std loadIndirect v37 24
+    v40 = std loadIndirect v37 32
+    v41 = std loadIndirect v37 40
+    v42 = std loadSlot 1
+    v43 = std indirectCall v42 v38 v39 v40 v41
+    std storeSlot 4 v43
+    std br store_result
+
+  block arity4_void:
+    v296 = std loadSlot 2
+    v297 = std loadIndirect v296 16
+    v298 = std loadIndirect v296 24
+    v299 = std loadIndirect v296 32
+    v300 = std loadIndirect v296 40
+    v301 = std loadSlot 1
+    std indirectCallVoid v301 v297 v298 v299 v300
+    std br store_result
+
+  block arity4_throws:
+    v302 = std loadSlot 2
+    v303 = std loadIndirect v302 16
+    v304 = std loadIndirect v302 24
+    v305 = std loadIndirect v302 32
+    v306 = std loadIndirect v302 40
+    v307 = std loadSlot 1
+    v308 = std indirectCallThrows v309 v307 v303 v304 v305 v306
+    std storeSlot 4 v308
+    std storeSlot 6 v309
+    std br store_result
+
+  block arity4_throwsvoid:
+    v643 = std loadSlot 2
+    v644 = std loadIndirect v643 16
+    v645 = std loadIndirect v643 24
+    v646 = std loadIndirect v643 32
+    v647 = std loadIndirect v643 40
+    v648 = std loadSlot 1
+    std indirectCallThrowsVoid v649 v648 v644 v645 v646 v647
+    std storeSlot 6 v649
+    std br store_result
+
+  // --- arity 5 ---
+  block arity5:
+    v310 = std loadSlot 5
+    v311 = std constI64 1
+    v312 = std cmpI64Eq v310 v311
+    std condBr v312 arity5_void arity5_try
+
+  block arity5_try:
+    v313 = std loadSlot 5
+    v314 = std constI64 2
+    v315 = std cmpI64Eq v313 v314
+    std condBr v315 arity5_throws arity5_t3
+
+  block arity5_t3:
+    v650 = std loadSlot 5
+    v651 = std constI64 3
+    v652 = std cmpI64Eq v650 v651
+    std condBr v652 arity5_throwsvoid arity5_i64
+
+  block arity5_i64:
+    v44 = std loadSlot 2
+    v45 = std loadIndirect v44 16
+    v46 = std loadIndirect v44 24
+    v47 = std loadIndirect v44 32
+    v48 = std loadIndirect v44 40
+    v49 = std loadIndirect v44 48
+    v50 = std loadSlot 1
+    v51 = std indirectCall v50 v45 v46 v47 v48 v49
+    std storeSlot 4 v51
+    std br store_result
+
+  block arity5_void:
+    v316 = std loadSlot 2
+    v317 = std loadIndirect v316 16
+    v318 = std loadIndirect v316 24
+    v319 = std loadIndirect v316 32
+    v320 = std loadIndirect v316 40
+    v321 = std loadIndirect v316 48
+    v322 = std loadSlot 1
+    std indirectCallVoid v322 v317 v318 v319 v320 v321
+    std br store_result
+
+  block arity5_throws:
+    v323 = std loadSlot 2
+    v324 = std loadIndirect v323 16
+    v325 = std loadIndirect v323 24
+    v326 = std loadIndirect v323 32
+    v327 = std loadIndirect v323 40
+    v328 = std loadIndirect v323 48
+    v329 = std loadSlot 1
+    v330 = std indirectCallThrows v331 v329 v324 v325 v326 v327 v328
+    std storeSlot 4 v330
+    std storeSlot 6 v331
+    std br store_result
+
+  block arity5_throwsvoid:
+    v653 = std loadSlot 2
+    v654 = std loadIndirect v653 16
+    v655 = std loadIndirect v653 24
+    v656 = std loadIndirect v653 32
+    v657 = std loadIndirect v653 40
+    v658 = std loadIndirect v653 48
+    v659 = std loadSlot 1
+    std indirectCallThrowsVoid v660 v659 v654 v655 v656 v657 v658
+    std storeSlot 6 v660
+    std br store_result
+
+  // --- arity 6 ---
+  block arity6:
+    v340 = std loadSlot 5
+    v341 = std constI64 1
+    v342 = std cmpI64Eq v340 v341
+    std condBr v342 arity6_void arity6_try
+
+  block arity6_try:
+    v343 = std loadSlot 5
+    v344 = std constI64 2
+    v345 = std cmpI64Eq v343 v344
+    std condBr v345 arity6_throws arity6_t3
+
+  block arity6_t3:
+    v680 = std loadSlot 5
+    v681 = std constI64 3
+    v682 = std cmpI64Eq v680 v681
+    std condBr v682 arity6_throwsvoid arity6_i64
+
+  block arity6_i64:
+    v52 = std loadSlot 2
+    v53 = std loadIndirect v52 16
+    v54 = std loadIndirect v52 24
+    v55 = std loadIndirect v52 32
+    v56 = std loadIndirect v52 40
+    v57 = std loadIndirect v52 48
+    v58 = std loadIndirect v52 56
+    v59 = std loadSlot 1
+    v60 = std indirectCall v59 v53 v54 v55 v56 v57 v58
+    std storeSlot 4 v60
+    std br store_result
+
+  block arity6_void:
+    v346 = std loadSlot 2
+    v347 = std loadIndirect v346 16
+    v348 = std loadIndirect v346 24
+    v349 = std loadIndirect v346 32
+    v350 = std loadIndirect v346 40
+    v351 = std loadIndirect v346 48
+    v352 = std loadIndirect v346 56
+    v353 = std loadSlot 1
+    std indirectCallVoid v353 v347 v348 v349 v350 v351 v352
+    std br store_result
+
+  block arity6_throws:
+    v354 = std loadSlot 2
+    v355 = std loadIndirect v354 16
+    v356 = std loadIndirect v354 24
+    v357 = std loadIndirect v354 32
+    v358 = std loadIndirect v354 40
+    v359 = std loadIndirect v354 48
+    v360 = std loadIndirect v354 56
+    v361 = std loadSlot 1
+    v362 = std indirectCallThrows v363 v361 v355 v356 v357 v358 v359 v360
+    std storeSlot 4 v362
+    std storeSlot 6 v363
+    std br store_result
+
+  block arity6_throwsvoid:
+    v663 = std loadSlot 2
+    v664 = std loadIndirect v663 16
+    v665 = std loadIndirect v663 24
+    v666 = std loadIndirect v663 32
+    v667 = std loadIndirect v663 40
+    v668 = std loadIndirect v663 48
+    v669 = std loadIndirect v663 56
+    v670 = std loadSlot 1
+    std indirectCallThrowsVoid v671 v670 v664 v665 v666 v667 v668 v669
+    std storeSlot 6 v671
+    std br store_result
+
+  // --- arity 7 ---
+  block arity7:
+    v370 = std loadSlot 5
+    v371 = std constI64 1
+    v372 = std cmpI64Eq v370 v371
+    std condBr v372 arity7_void arity7_try
+
+  block arity7_try:
+    v373 = std loadSlot 5
+    v374 = std constI64 2
+    v375 = std cmpI64Eq v373 v374
+    std condBr v375 arity7_throws arity7_t3
+
+  block arity7_t3:
+    v690 = std loadSlot 5
+    v691 = std constI64 3
+    v692 = std cmpI64Eq v690 v691
+    std condBr v692 arity7_throwsvoid arity7_i64
+
+  block arity7_i64:
+    v61 = std loadSlot 2
+    v62 = std loadIndirect v61 16
+    v63 = std loadIndirect v61 24
+    v64 = std loadIndirect v61 32
+    v65 = std loadIndirect v61 40
+    v66 = std loadIndirect v61 48
+    v67 = std loadIndirect v61 56
+    v68 = std loadIndirect v61 64
+    v69 = std loadSlot 1
+    v70 = std indirectCall v69 v62 v63 v64 v65 v66 v67 v68
+    std storeSlot 4 v70
+    std br store_result
+
+  block arity7_void:
+    v376 = std loadSlot 2
+    v377 = std loadIndirect v376 16
+    v378 = std loadIndirect v376 24
+    v379 = std loadIndirect v376 32
+    v380 = std loadIndirect v376 40
+    v381 = std loadIndirect v376 48
+    v382 = std loadIndirect v376 56
+    v383 = std loadIndirect v376 64
+    v384 = std loadSlot 1
+    std indirectCallVoid v384 v377 v378 v379 v380 v381 v382 v383
+    std br store_result
+
+  block arity7_throws:
+    v385 = std loadSlot 2
+    v386 = std loadIndirect v385 16
+    v387 = std loadIndirect v385 24
+    v388 = std loadIndirect v385 32
+    v389 = std loadIndirect v385 40
+    v390 = std loadIndirect v385 48
+    v391 = std loadIndirect v385 56
+    v392 = std loadIndirect v385 64
+    v393 = std loadSlot 1
+    v394 = std indirectCallThrows v395 v393 v386 v387 v388 v389 v390 v391 v392
+    std storeSlot 4 v394
+    std storeSlot 6 v395
+    std br store_result
+
+  block arity7_throwsvoid:
+    v693 = std loadSlot 2
+    v694 = std loadIndirect v693 16
+    v695 = std loadIndirect v693 24
+    v696 = std loadIndirect v693 32
+    v697 = std loadIndirect v693 40
+    v698 = std loadIndirect v693 48
+    v699 = std loadIndirect v693 56
+    v700 = std loadIndirect v693 64
+    v701 = std loadSlot 1
+    std indirectCallThrowsVoid v702 v701 v694 v695 v696 v697 v698 v699 v700
+    std storeSlot 6 v702
+    std br store_result
+
+  block bad_arity:
+    // Arities above 7 are unsupported by the wasm coroutine runtime.
+    v71 = std constI64 137
+    std osExit v71
+    v72 = std constI64 0
+    std storeSlot 4 v72
+    std br store_result
+
+  block store_result:
+    // gt.result = result, gt.threw = threw. Reached only when the call returned
+    // normally; on a suspend the unwind skips straight past this whole function.
+    v73 = std loadSlot 0
+    v74 = std loadSlot 4
+    std storeIndirect v73 8 v74
+    v77 = std loadSlot 6
+    std storeIndirect v73 16 v77
+    // gt.status = 2 (completed)
+    v75 = std constI64 2
+    std storeIndirect v73 0 v75
+    v76 = std constI64 0
+    std ret v76
+end
+
+// __gt_alloc(fn, count, buf) -> gt: allocate + initialize a GT and its asyncify
+// spill buffer. Shared by __gt_spawn (async) and __gt_spawn_root (main). Does
+// NOT enqueue or assign a trace id.
+func __gt_alloc 3 i64
+  block entry:
+    v0 = std param 0 i64
+    std storeSlot 0 v0
+    v1 = std param 1 i64
+    std storeSlot 1 v1
+    v2 = std param 2 i64
+    std storeSlot 2 v2
+
+    // gt = __slab_alloc(80)
+    v3 = std constI64 80
+    v4 = std call __slab_alloc v3
+    std storeSlot 3 v4
+
+    // asyncifyData = __slab_alloc(4096)
+    v5 = std constI64 4096
+    v6 = std call __slab_alloc v5
+    std storeSlot 4 v6
+
+    // gt.status = 0
+    v7 = std loadSlot 3
+    v8 = std constI64 0
+    std storeIndirect v7 0 v8
+    // gt.result = 0
+    std storeIndirect v7 8 v8
+    // gt.threw = 0
+    std storeIndirect v7 16 v8
+    // gt.funcPtr = fn
+    v9 = std loadSlot 0
+    std storeIndirect v7 24 v9
+    // gt.argBuf = buf
+    v10 = std loadSlot 2
+    std storeIndirect v7 32 v10
+    // gt.next = 0
+    std storeIndirect v7 40 v8
+    // gt.waiter = 0
+    std storeIndirect v7 48 v8
+    // gt.traceId = 0
+    std storeIndirect v7 56 v8
+    // gt.asyncifyData = asyncifyData
+    v11 = std loadSlot 4
+    std storeIndirect v7 64 v11
+    // gt.started = 0
+    std storeIndirect v7 72 v8
+
+    v12 = std loadSlot 3
+    std ret v12
+end
+
+// __gt_spawn(fn, count, buf) -> promise (GT ptr): the lowering target for
+// `async f(args)`. Lazily inits the scheduler, allocates the GT, assigns a
+// monotonic trace id, emits `spawn #<id>`, and enqueues it.
+//
+// The trace id is `++__gt_trace_counter`. Single-threaded, so a plain
+// load/add/store replaces x64's LOCK XADD. The root GT (main) is created via
+// __gt_spawn_root, which never bumps the counter, so the first `async` spawn
+// gets id 1. __gt_trace_emit self-gates on __at_trace_enabled, so this is a
+// cheap no-op for non-trace builds. Mirrors the spawn-trace tail of
+// emitX64GtSpawn.
+func __gt_spawn 3 i64
+  block entry:
+    v0 = std param 0 i64
+    v1 = std param 1 i64
+    v2 = std param 2 i64
+    v3 = std call __gt_init
+    v4 = std call __gt_alloc v0 v1 v2
+    std storeSlot 0 v4
+
+    // traceId = ++__gt_trace_counter ; gt.traceId = traceId
+    v5 = std globalAddr __gt_trace_counter
+    v6 = std loadIndirect v5 0
+    v7 = std constI64 1
+    v8 = std addI64 v6 v7
+    std storeIndirect v5 0 v8
+    v9 = std loadSlot 0
+    std storeIndirect v9 56 v8
+    std storeSlot 1 v8
+
+    // __gt_trace_emit(tag=&"spawn #", value=traceId, suffix=0)
+    v10 = std globalAddr __at_tag_spawn
+    v11 = std loadSlot 1
+    v12 = std constI64 0
+    v13 = std call __gt_trace_emit v10 v11 v12
+
+    v14 = std loadSlot 0
+    v15 = std call __gt_enqueue v14
+    v16 = std loadSlot 0
+    std ret v16
+end
+
+// __gt_spawn_root(fn) -> gt: spawn the root GT for `main`. Like __gt_spawn but
+// with an empty arg buffer (count 0) and NO trace-id assignment — main is the
+// root, not an `async` spawn, so it must not perturb __gt_trace_counter.
+func __gt_spawn_root 1 i64
+  block entry:
+    v0 = std param 0 i64
+    std storeSlot 0 v0
+    v1 = std call __gt_init
+    // Empty arg buffer: 16 bytes holding count=0, managed_mask=0.
+    v2 = std constI64 16
+    v3 = std call __slab_alloc v2
+    std storeSlot 1 v3
+    v4 = std constI64 0
+    std storeIndirect v3 0 v4
+    std storeIndirect v3 8 v4
+    // gt = __gt_alloc(fn, 0, buf)
+    v5 = std loadSlot 0
+    v6 = std constI64 0
+    v7 = std loadSlot 1
+    v8 = std call __gt_alloc v5 v6 v7
+    std storeSlot 2 v8
+    v9 = std loadSlot 2
+    v10 = std call __gt_enqueue v9
+    v11 = std loadSlot 2
+    std ret v11
+end
+
+// __sched_run(gt0) -> exit code: the cooperative scheduler driver. Runs ready
+// GTs until the queue drains, then returns gt0's result (gt0 is the root GT for
+// main). MUST be on the asyncify removelist so it is NOT instrumented — a non
+// instrumented function does not save+return on an unwind, so it is where the
+// unwind STOPS; it then observes the suspend (status != completed) and calls
+// asyncify_stop_unwind to clear the unwinding state.
+//
+//   loop:
+//     gt = __gt_dequeue() ; if gt == 0: return gt0.result
+//     __gt_current_p = gt ; gt.status = 1 (running)
+//     base = gt.asyncifyData ; base[0] = base+8 ; base[4] = base+4096
+//     if gt.started == 0: gt.started = 1 ; __gt_invoke(gt)
+//     else:               asyncify_start_rewind(base) ; __gt_invoke(gt)
+//     if gt.status == 2: if gt.waiter != 0: __gt_enqueue(gt.waiter)
+//     else:              asyncify_stop_unwind()   // it suspended
+func __sched_run 1 i64
+  block entry:
+    v0 = std param 0 i64
+    std storeSlot 0 v0
+    std br loop_head
+
+  block loop_head:
+    v1 = std call __gt_dequeue
+    std storeSlot 1 v1
+    v2 = std constI64 0
+    v3 = std cmpI64Eq v1 v2
+    std condBr v3 loop_done run_gt
+
+  block loop_done:
+    // The run queue has drained. Snapshot gt0's result, then free the root GT's
+    // per-GT allocations (asyncify spill buffer, arg buffer, GT struct) — the
+    // root GT is run by the scheduler and never awaited, so __gt_await never
+    // frees it; without this it leaks at program exit and trips the MM check.
+    // Read the result BEFORE freeing the struct.
+    v4 = std loadSlot 0
+    v5 = std loadIndirect v4 8
+    std storeSlot 3 v5
+    v50 = std loadIndirect v4 64
+    v51 = std call __slab_free v50
+    v52 = std loadIndirect v4 32
+    v53 = std call __slab_free v52
+    v54 = std call __slab_free v4
+    v55 = std loadSlot 3
+    std ret v55
+
+  block run_gt:
+    // __gt_current_p = gt
+    v6 = std globalAddr __gt_current_p
+    v7 = std loadSlot 1
+    std storeIndirect v6 0 v7
+    // gt.status = 1 (running)
+    v8 = std constI64 1
+    std storeIndirect v7 0 v8
+
+    // base = gt.asyncifyData (the per-GT asyncify spill buffer).
+    v9 = std loadIndirect v7 64
+    std storeSlot 2 v9
+
+    // started?
+    v14 = std loadSlot 1
+    v15 = std loadIndirect v14 72
+    v16 = std constI64 0
+    v17 = std cmpI64Eq v15 v16
+    std condBr v17 first_call rewind_call
+
+  block first_call:
+    // Arm the asyncify data window for a FRESH run: data[+0] = spill region
+    // start (base+8), data[+4] = spill region end (base+4096). Asyncify writes
+    // upward from data[+0] during an unwind, leaving data[+0] at the high-water
+    // mark. We must NOT reset data[+0] on the rewind path: asyncify reads the
+    // saved frames top-down (it DECREMENTS the pointer per frame on restore), so
+    // the pointer has to stay at that high-water mark for start_rewind. Only the
+    // first call seeds it.
+    v10 = std constI64 8
+    v11 = std addI64 v9 v10
+    std storeIndirect v9 0 v11
+    v12 = std constI64 4096
+    v13 = std addI64 v9 v12
+    std storeIndirect v9 4 v13
+    // gt.started = 1 ; __gt_invoke(gt)
+    v18 = std loadSlot 1
+    v19 = std constI64 1
+    std storeIndirect v18 72 v19
+    v20 = std loadSlot 1
+    v21 = std call __gt_invoke v20
+    std br after_invoke
+
+  block rewind_call:
+    // Mark the rewind pass so the resuming __gt_await calls asyncify_stop_rewind
+    // (asyncify has no get_state import). Arm the rewind WITHOUT touching the
+    // data window — data[+0] still holds the unwind's high-water mark, which is
+    // where asyncify starts reading frames back (top-down). Then re-run the GT's
+    // entry: asyncify replays the saved call chain back to the suspend point.
+    v40 = std globalAddr __gt_rewinding
+    v41 = std constI64 1
+    std storeIndirect v40 0 v41
+    v22 = std loadSlot 2
+    v23 = std call asyncify_start_rewind v22
+    v24 = std loadSlot 1
+    v25 = std call __gt_invoke v24
+    std br after_invoke
+
+  block after_invoke:
+    // Completed vs suspended, read from gt.status.
+    v26 = std loadSlot 1
+    v27 = std loadIndirect v26 0
+    v28 = std constI64 2
+    v29 = std cmpI64Eq v27 v28
+    std condBr v29 completed suspended
+
+  block completed:
+    // if gt.waiter != 0: enqueue it
+    v30 = std loadSlot 1
+    v31 = std loadIndirect v30 48
+    v32 = std constI64 0
+    v33 = std cmpI64Eq v31 v32
+    std condBr v33 loop_head enqueue_waiter
+
+  block enqueue_waiter:
+    v34 = std loadSlot 1
+    v35 = std loadIndirect v34 48
+    v36 = std call __gt_enqueue v35
+    std br loop_head
+
+  block suspended:
+    // The GT unwound into its asyncify buffer; clear the unwinding state.
+    v37 = std call asyncify_stop_unwind
+    std br loop_head
+end
+
+// __gt_await(promise) -> (result, threw): the suspend point. Called from user
+// code running as a GT (driven by __gt_invoke). If the awaited GT is already
+// complete, returns its result immediately. Otherwise it registers `self` as
+// the promise's waiter, starts an asyncify unwind, and returns — the unwind
+// propagates up through the (instrumented) user frames + __gt_invoke to the
+// (non-instrumented) __sched_run, which catches it. When the awaited GT later
+// completes, __sched_run enqueues the waiter; the next dispatch takes the
+// rewind path, replays this call chain, and execution resumes just after the
+// start_unwind below, where stop_rewind is called and the result returned.
+//
+// Follows the dual-value error ABI: every non-suspending exit is an
+// `errorReturn` returning (promise.result, promise.threw). A plain `await`
+// discards the threw flag (the wasm backend drops the trailing i64 of a
+// throwing callee reached through a plain `call`); a `try await` captures it
+// via `tryCall`. This mirrors x64's __gt_await (result in r8, threw in rdx).
+// `errorReturn` also makes the StdParser mark this function throwing, so its
+// wasm signature carries the trailing i64 the callers expect.
+//
+// Slots: 0=promise, 1=self, 2=saved result, 3=saved threw.
+func __gt_await 1 i64
+  block entry:
+    v0 = std param 0 i64
+    std storeSlot 0 v0
+    // Distinguish the rewind pass from a fresh call. Asyncify has no `get_state`
+    // import, so `__sched_run` sets `__gt_rewinding` before re-running this GT's
+    // call chain via `asyncify_start_rewind`. On the rewind pass asyncify replays
+    // every call top-to-bottom to rebuild the stack; this `__gt_await` is the
+    // deepest frame (it originally armed the unwind), so it ends the rewind here.
+    v40 = std globalAddr __gt_rewinding
+    v41 = std loadIndirect v40 0
+    v42 = std constI64 0
+    v43 = std cmpI64Eq v41 v42
+    std condBr v43 not_rewinding resume_rewind
+
+  block resume_rewind:
+    // Clear the flag, leave rewind mode, emit the await line (this resume path
+    // had to SUSPEND, so the suffix is " [yield]"), then extract+free+return.
+    // Emitting on the RESUME path orders the await line AFTER the awaited GT's
+    // io_yield/io_resume lines. Mirrors the yielded arm of emitX64GtAwait.
+    v44 = std globalAddr __gt_rewinding
+    v45 = std constI64 0
+    std storeIndirect v44 0 v45
+    v46 = std call asyncify_stop_rewind
+    // __gt_trace_emit(tag=&"await #", value=promise.traceId, suffix=&" [yield]")
+    v49 = std globalAddr __at_tag_await
+    v50 = std loadSlot 0
+    v51 = std loadIndirect v50 56
+    v52 = std globalAddr __at_tag_await_yield
+    v53 = std call __gt_trace_emit v49 v51 v52
+    std br extract
+
+  block not_rewinding:
+    // if promise.status == 2 (completed): return promise.result immediately.
+    v1 = std loadIndirect v0 0
+    v2 = std constI64 2
+    v3 = std cmpI64Eq v1 v2
+    std condBr v3 already_done suspend
+
+  block already_done:
+    // Awaited GT already complete on entry: emit `await #<id> [immediate]`
+    // (no suspend), then extract+free+return. Mirrors the immediate arm of
+    // emitX64GtAwait.
+    v54 = std globalAddr __at_tag_await
+    v55 = std loadSlot 0
+    v56 = std loadIndirect v55 56
+    v57 = std globalAddr __at_tag_await_imm
+    v58 = std call __gt_trace_emit v54 v56 v57
+    std br extract
+
+  block extract:
+    // The awaited GT is complete. Snapshot its result and throw flag, then free
+    // its per-GT allocations (asyncify spill buffer, arg buffer, GT struct) —
+    // the x64 path frees the GT stack here via VirtualFree for the same reason.
+    // We are no longer suspended on this promise and the scheduler is done with
+    // it (status==completed, dequeued), so nothing else references it. Read
+    // BEFORE freeing the struct.
+    v60 = std loadSlot 0
+    v61 = std loadIndirect v60 8
+    std storeSlot 2 v61
+    v62 = std loadIndirect v60 16
+    std storeSlot 3 v62
+    // __slab_free(promise.asyncifyData)
+    v63 = std loadIndirect v60 64
+    v64 = std call __slab_free v63
+    // __slab_free(promise.argBuf)
+    v65 = std loadIndirect v60 32
+    v66 = std call __slab_free v65
+    // __slab_free(promise)  — the GT struct itself, freed last.
+    v67 = std call __slab_free v60
+    // errorReturn(result, threw)
+    v68 = std loadSlot 2
+    v69 = std loadSlot 3
+    std errorReturn v68 v69
+
+  block suspend:
+    // self = __gt_current_p ; self.status = 3 (waiting) ; promise.waiter = self
+    v6 = std globalAddr __gt_current_p
+    v7 = std loadIndirect v6 0
+    std storeSlot 1 v7
+    v8 = std constI64 3
+    std storeIndirect v7 0 v8
+    v9 = std loadSlot 0
+    v10 = std loadSlot 1
+    std storeIndirect v9 48 v10
+
+    // asyncify_start_unwind(self.asyncifyData) arms the unwind, then we RETURN.
+    // Asyncify does not instrument calls to its own primitives, so the unwind
+    // does not propagate from inside this function — it propagates from the
+    // (instrumented) CALLER's post-`call __gt_await` check, which observes the
+    // unwinding state and saves+returns. The chain climbs through the user GT
+    // frames + __gt_invoke (all instrumented) up to the non-instrumented
+    // __sched_run, which catches it. The return values here are irrelevant: the
+    // caller never uses them (its frame is being unwound, not consumed), but the
+    // dual-value ABI still requires two operands, so return (0, 0).
+    v11 = std loadIndirect v7 64
+    v12 = std call asyncify_start_unwind v11
+    v13 = std constI64 0
+    v14 = std constI64 0
+    std errorReturn v13 v14
+end
+
+// __gt_current_trace_id() -> trace id of the running GT (0 if none). Phase 3
+// wires the real trace lines; for now this gives mrt_file_exists a valid id.
+func __gt_current_trace_id 0 i64
+  block entry:
+    v0 = std globalAddr __gt_current_p
+    v1 = std loadIndirect v0 0
+    v2 = std constI64 0
+    v3 = std cmpI64Eq v1 v2
+    std condBr v3 none have
+
+  block none:
+    v4 = std constI64 0
+    std ret v4
+
+  block have:
+    v5 = std loadIndirect v1 56
+    std ret v5
+end
+
+// __gt_trace_emit(tag, value, suffix): print one async-trace line
+// `<tag><value><suffix?>\n` to stderr, gated on __at_trace_enabled. `tag` and
+// `suffix` are cstr addresses (the callers pass `globalAddr __at_tag_*`); the
+// suffix is printed only when non-zero (spawn passes 0). Single-threaded on
+// wasm, so unlike emitX64GtTraceEmit there is NO trace critical section.
+// Mirrors emitX64GtTraceEmit otherwise.
+func __gt_trace_emit 3 void
+  block entry:
+    v0 = std param 0 i64
+    std storeSlot 0 v0
+    v1 = std param 1 i64
+    std storeSlot 1 v1
+    v2 = std param 2 i64
+    std storeSlot 2 v2
+    // if __at_trace_enabled == 0: return
+    v3 = std globalAddr __at_trace_enabled
+    v4 = std loadIndirect v3 0
+    v5 = std constI64 0
+    v6 = std cmpI64Eq v4 v5
+    std condBr v6 disabled emit
+
+  block disabled:
+    v7 = std constI64 0
+    std ret v7
+
+  block emit:
+    // print tag, then value.
+    v8 = std loadSlot 0
+    v9 = std call mm_trace_print_tag v8
+    v10 = std loadSlot 1
+    v11 = std call mm_trace_print_i64 v10
+    // optional suffix: skip when 0.
+    v12 = std loadSlot 2
+    v17 = std constI64 0
+    v18 = std cmpI64Eq v12 v17
+    std condBr v18 no_suffix print_suffix
+
+  block print_suffix:
+    v13 = std loadSlot 2
+    v19 = std call mm_trace_print_tag v13
+    std br no_suffix
+
+  block no_suffix:
+    v14 = std globalAddr __at_tag_nl
+    v15 = std call mm_trace_print_tag v14
+    v16 = std constI64 0
+    std ret v16
+end

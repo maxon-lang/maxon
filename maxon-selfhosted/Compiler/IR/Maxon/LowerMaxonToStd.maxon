@@ -625,6 +625,12 @@ export function registerSlabAndMmGlobalsForDataSection(globalData GlobalDataTabl
 	addDataSectionEntry(globalData, name: "__gt_run_queue_head", initialBytes: zeroBytesOfSize(8))
 	addDataSectionEntry(globalData, name: "__gt_run_queue_tail", initialBytes: zeroBytesOfSize(8))
 	addDataSectionEntry(globalData, name: "__gt_init_done", initialBytes: zeroBytesOfSize(8))
+	// Wasm-only asyncify rewind flag: `__sched_run` sets it to 1 immediately
+	// before `asyncify_start_rewind` so the resuming `__gt_await` knows it is on
+	// the rewind pass (it then calls `asyncify_stop_rewind` to leave rewind mode
+	// and returns the awaited result). Asyncify exposes no `get_state` import, so
+	// the runtime tracks the rewind pass explicitly. Unused on native targets.
+	addDataSectionEntry(globalData, name: "__gt_rewinding", initialBytes: zeroBytesOfSize(8))
 
 	// Tier 4 multi-OS-thread scheduler state (Go-style GMP). `__sched_procs` is the
 	// VirtualAlloc'd P* array (one ProcContext per CPU); `__sched_num_procs` /
@@ -2958,14 +2964,12 @@ type MaxonToStdLowering
 			// Reaching it here means the pass was skipped — that's a
 			// pipeline-ordering bug.
 			castCheck then panic("LowerMaxonToStd: castCheck reached lowering — expandCastRangeChecks did not run")
-			// Tier 4 async/await — interim synchronous lowering. The spawned call
-			// runs eagerly at the `async` site and the promise handle IS its
-			// result value; `await` is the identity read. This is correct for
-			// every async-await fragment whose result doesn't depend on real
-			// interleaving (basic / void / sequence / parallel / try-await /
-			// stack-growth / cancel / promise-array). The cooperative
-			// green-thread runtime (needed for the AsyncTrace `trace-yield`
-			// fragment and true interleaving) replaces these arms in a later step.
+			// Tier 4 async/await — real green-thread lowering. `asyncCall` builds an
+			// argument buffer and spawns a green thread via `__gt_spawn`
+			// (lowerAsyncCallReal); `await` / `try await` suspend on the promise via
+			// `__gt_await` (lowerAwaitReal / lowerTryAwaitReal). `cancelPromise` is
+			// currently a no-op: in the cooperative scheduler a promise whose spawner
+			// never yields never runs, so there is nothing to stop.
 			asyncCall(result, callee, _, args, _, _, _, _, _, _, _) then self.lowerAsyncCallReal(result, callee: callee, args: args, opIdx: opIdx, dstBlock: dstBlock)
 			awaitPromise(result, promise, innerType, _, _) then self.lowerAwaitReal(result, promise: promise, innerType: innerType, dstBlock: dstBlock)
 			tryAwait(result, promise, innerType, _, errorBoundName, _) then self.lowerTryAwaitReal(result, promise: promise, innerType: innerType, errorBoundName: errorBoundName, dstBlock: dstBlock)
@@ -2998,7 +3002,16 @@ type MaxonToStdLowering
 	// `__gt_spawn(func_ptr, count, arg_buf)`. The result is the promise (GT ptr).
 	function lowerAsyncCallReal(result ByteArray, callee ByteArray, args ByteArrayArray, opIdx OpIndex, dstBlock IrBlock)
 		let count = args.count()
-		let bufSize = (count + 2) * 8
+		// One extra trailing slot holds the coroutine entry's return shape
+		// (0=i64, 1=void, 2=throwing). The wasm green-thread runtime's
+		// `__gt_invoke` reads it to pick a `call_indirect` signature matching
+		// the entry's actual wasm type (void entries push no result, throwing
+		// entries push a trailing error flag). x64/arm64 ignore the slot — the
+		// hand-emitted trampoline reads only `count` args and the result/throw
+		// registers regardless — so the extra 8 bytes are harmless there.
+		let resolvedCallee = try self.project.resolvedCallees.get(opIdx) otherwise String.from(callee)
+		let shape = self.asyncCalleeReturnShape(resolvedCallee)
+		let bufSize = (count + 3) * 8
 		let sizeId = self.emitConstI64(bufSize as IntConstant, dstBlock: dstBlock)
 		var allocArgs = ValueIdArray.create()
 		allocArgs.push(sizeId)
@@ -3018,9 +3031,12 @@ type MaxonToStdLowering
 			let argOffset = (16 + i * 8) as IntConstant
 			self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(bufId, offset: argOffset, valueId: argId, width: StoreWidth.qword, isFloat: false)))
 		end 'eachArg'
+		// [buf+16 + count*8] = return shape (trailing slot, after the args).
+		let shapeId = self.emitConstI64(shape, dstBlock: dstBlock)
+		let shapeOffset = (16 + count * 8) as IntConstant
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(bufId, offset: shapeOffset, valueId: shapeId, width: StoreWidth.qword, isFloat: false)))
 		// Raw function pointer (NOT the env thunk — the trampoline calls the user
 		// function directly with the buffered args).
-		let resolvedCallee = try self.project.resolvedCallees.get(opIdx) otherwise String.from(callee)
 		let funcId = allocValueId(self.funcIdRef)
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.funcRef(funcId, funcName: resolvedCallee)))
 		self.setValueType(funcId, t: MaxonType.integer)
@@ -3034,6 +3050,38 @@ type MaxonToStdLowering
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(promiseId, callee: "__gt_spawn", argIds: spawnArgs)))
 		self.setValueType(promiseId, t: MaxonType.integer)
 	end 'lowerAsyncCallReal'
+
+	// Classify an async coroutine entry's return shape for the arg-buffer
+	// trailing slot, matching the wasm signature the entry's own function
+	// type carries:
+	//   0 — plain i64/f64 result    `(i64×N)->i64`
+	//   1 — void                    `(i64×N)->()`
+	//   2 — throwing with a result  `(i64×N)->(i64, i64)`   (result + flag)
+	//   3 — throwing void           `(i64×N)->(i64)`        (flag only)
+	// A throwing void function carries ONLY the trailing error flag (no primary
+	// result), so it needs its own shape distinct from the i64-throwing one.
+	function asyncCalleeReturnShape(callee String) returns IntConstant
+		let throwsClause = try self.project.funcThrowsTypes.get(callee) otherwise ThrowsClause.none
+		let isThrowing = match throwsClause 'throws'
+			none gives false
+			throwing gives true
+		end 'throws'
+		let returnType = try self.project.funcReturnTypes.get(callee) otherwise MaxonReturnType.void
+		let isVoid = match returnType 'ret'
+			void gives true
+			value gives false
+		end 'ret'
+		if isThrowing 'isThrows'
+			if isVoid 'throwsVoid'
+				return 3
+			end 'throwsVoid'
+			return 2
+		end 'isThrows'
+		if isVoid 'isVoidRet'
+			return 1
+		end 'isVoidRet'
+		return 0
+	end 'asyncCalleeReturnShape'
 
 	// Tier 4 real green-thread lowering: `await p` → `__gt_await(p)`, returning
 	// the green thread's result. A void await binds the result to a throwaway.
@@ -3084,42 +3132,6 @@ type MaxonToStdLowering
 		self.setValueType(flagId, t: MaxonType.integer)
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.tryCall(resultId, callee: "__gt_await", argIds: awaitArgs, errorFlagId: flagId)))
 	end 'lowerTryAwaitReal'
-
-	// Tier 4 (interim synchronous async): `async f(args)` runs `f` eagerly and
-	// binds the promise handle to its result. A void callee binds nothing, so
-	// give the promise a dummy 0 handle for the await alias to refer to.
-	function lowerAsyncCallSync(result ByteArray, callee ByteArray, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, opIdx OpIndex, dstBlock IrBlock)
-		self.lowerCall(result, callee: callee, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, opIdx: opIdx, dstBlock: dstBlock)
-		if not self.nameToId.contains(result) 'voidPromise'
-			let id = self.defineName(result)
-			self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: id, value: 0))))
-			self.setValueType(id, t: MaxonType.integer)
-		end 'voidPromise'
-	end 'lowerAsyncCallSync'
-
-	// Tier 4 (interim synchronous async): `await p` is the identity read — the
-	// promise handle already holds the eagerly-computed result.
-	function lowerAwaitSync(result ByteArray, promise ByteArray)
-		if result.isEmpty() 'noResult'
-			return
-		end 'noResult'
-		self.aliasName(result, toId: self.resolveName(promise))
-	end 'lowerAwaitSync'
-
-	// Tier 4 (interim synchronous async): `try await p` reads the result (as
-	// identity) and binds the error flag to 0 (no error). Real throwing-async
-	// capture lands with the green-thread runtime; the Step-2 fragments don't
-	// throw, so a no-error flag is correct for them.
-	function lowerTryAwaitSync(result ByteArray, promise ByteArray, errorBoundName ByteArray, dstBlock IrBlock)
-		if not result.isEmpty() 'haveResult'
-			self.aliasName(result, toId: self.resolveName(promise))
-		end 'haveResult'
-		if not errorBoundName.isEmpty() 'bindFlag'
-			let flagId = self.defineName(errorBoundName)
-			self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: flagId, value: 0))))
-			self.setValueType(flagId, t: MaxonType.integer)
-		end 'bindFlag'
-	end 'lowerTryAwaitSync'
 
 	// Lower a maxon.stringConst op to a heap-allocated String struct
 	// backed by an rdata-resident __ManagedMemory record. Layout matches
@@ -5967,7 +5979,7 @@ type MaxonToStdLowering
 		var argIds = ValueIdArray.create()
 		argIds.push(argId)
 		let resultId = self.defineName(result)
-		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.indirectCall(resultId, calleeId: funcId, argIds: argIds)))
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.indirectCall(resultId, calleeId: funcId, argIds: argIds, isVoid: false, isThrowing: false, errorFlagId: 0)))
 		self.setValueType(resultId, t: MaxonType.integer)
 		return true
 	end 'lowerInternalsIndirectCall1'
@@ -9433,7 +9445,7 @@ type MaxonToStdLowering
 		let envId = try self.fnEnvVarNames.get(calleeId) otherwise panic("lowerIndirectCall: no env recorded for function-pointer value (upstream functionRef/closureCreate/param binding missed)")
 		argIds.push(envId)
 		let resultId = self.defineName(result)
-		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.indirectCall(resultId, calleeId: calleeId, argIds: argIds)))
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.indirectCall(resultId, calleeId: calleeId, argIds: argIds, isVoid: false, isThrowing: false, errorFlagId: 0)))
 		let returnType = functionTypeIdReturnType(self.project, id: fnTypeId)
 		self.setValueType(resultId, t: indirectCallResultType(self.project, returnType: returnType))
 	end 'lowerIndirectCall'
@@ -9511,7 +9523,8 @@ type MaxonToStdLowering
 		// fieldStores for its real fields trip the field-lookup walk.
 		var receiverValueType = MaxonType.named(self.project.typeNames.intern(structNameStr))
 		if rawNameStr.startsWith("__Tuple") 'maybeTuple'
-			if let tupleGid = try self.project.tupleAllocGids.get(result) 'tupleHint'
+			let tupleKey = tupleAllocGidKey(self.currentFuncName, ptrName: result)
+			if let tupleGid = try self.project.tupleAllocGids.get(tupleKey) 'tupleHint'
 				receiverValueType = MaxonType.genericInstance(tupleGid)
 			end 'tupleHint'
 		end 'maybeTuple'

@@ -13668,8 +13668,11 @@ export type Parser
 		if tupleElemTypesAllConcreteAtParse(elemTypes) 'concreteAtParse'
 			let baseId = project.typeNames.intern(baseName)
 			let giid = project.genericInstances.intern(baseId, args: elemTypes)
-			project.tupleAllocGids.upsert(ptrName, value: giid)
-			recordTupleAllocGidUpsert(project, filePath: filePath, key: ptrName)
+			// Qualify the map key by the owning function so `$tN` names that reset
+			// per function don't collide across functions (see tupleAllocGidKey).
+			let tupleKey = tupleAllocGidKey(currentFunc.name, ptrName: ptrName)
+			project.tupleAllocGids.upsert(tupleKey, value: giid)
+			recordTupleAllocGidUpsert(project, filePath: filePath, key: tupleKey)
 			return ExprResult.direct(ptrName, valueType: MaxonType.genericInstance(giid))
 		end 'concreteAtParse'
 		return ExprResult.direct(ptrName, valueType: internMaxonType(project, name: baseName))

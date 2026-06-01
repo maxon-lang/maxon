@@ -188,12 +188,12 @@ function main() returns ExitCode
 		let p1 = async mayFail(true)
 		let r1 = try await p1 otherwise 0
 		let p2 = async mayFail(false)
-		let r2 = try await p2 otherwise 99
+		let r2 = try await p2 otherwise 80
 		return r1 + r2
 end 'main'
 ```
 ```exitcode
-141
+122
 ```
 
 <!-- test: async-await.try-await.propagate -->

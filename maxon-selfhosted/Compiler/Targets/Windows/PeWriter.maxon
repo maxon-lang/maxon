@@ -72,10 +72,13 @@ export union IatSlot
 	// the shell32 cases.
 	sleep
 
-	// Tier 4 async: multi-OS-thread green-thread scheduler + IOCP async I/O.
-	// All kernel32. CreateThread spawns worker / I/O OS threads; the event +
-	// wait + TLS APIs drive parking/waking; the IOCP APIs back overlapped I/O;
-	// GetSystemInfo sizes the P array; GetTickCount64 feeds the timer heap.
+	// Tier 4 async: multi-OS-thread green-thread scheduler (+ reserved IOCP
+	// async-I/O slots). All kernel32. CreateThread spawns worker OS threads; the
+	// event + wait + TLS APIs drive parking/waking; GetSystemInfo sizes the P
+	// array. The IOCP APIs (createIoCompletionPort / get+postQueuedCompletionStatus),
+	// GetTickCount64 (timer heap), WaitForMultipleObjects, ResetEvent and
+	// DeleteCriticalSection are imported ahead of the async-I/O specs but are not
+	// yet referenced by emitted code — keep them in lockstep with `iatSlotIndex`.
 	createThread
 	createEventA
 	setEvent

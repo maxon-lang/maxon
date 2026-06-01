@@ -218,7 +218,7 @@ export type StdToMirLowering
 			call(resultId, callee, argIds) then self.mirModule.appendOp(dstBlock, op: MirOp.call(resultId, callee: callee, argIds: argIds))
 			ret(retValId) then self.mirModule.appendOp(dstBlock, op: MirOp.ret(retValId))
 			param(resultId, paramIndex, paramType) then self.mirModule.appendOp(dstBlock, op: MirOp.param(resultId, paramIndex: paramIndex, paramType: paramType))
-			indirectCall(resultId, calleeId, argIds) then self.mirModule.appendOp(dstBlock, op: MirOp.indirectCall(resultId, calleeId: calleeId, argIds: argIds))
+			indirectCall(resultId, calleeId, argIds, isVoid, isThrowing, errorFlagId) then self.mirModule.appendOp(dstBlock, op: MirOp.indirectCall(resultId, calleeId: calleeId, argIds: argIds, isVoid: isVoid, isThrowing: isThrowing, errorFlagId: errorFlagId))
 			witnessCall(resultId, witnessAddrId, methodIndex, isVoid, argIds) then self.mirModule.appendOp(dstBlock, op: MirOp.witnessCall(resultId, witnessAddrId: witnessAddrId, methodIndex: methodIndex, isVoid: isVoid, argIds: argIds))
 			witnessTryCall(resultId, witnessAddrId, methodIndex, isVoid, argIds, errorFlagId) then self.mirModule.appendOp(dstBlock, op: MirOp.witnessTryCall(resultId, witnessAddrId: witnessAddrId, methodIndex: methodIndex, isVoid: isVoid, argIds: argIds, errorFlagId: errorFlagId))
 			funcRef(resultId, funcName) then self.mirModule.appendOp(dstBlock, op: MirOp.funcAddr(resultId, name: funcName))
@@ -235,7 +235,7 @@ export type StdToMirLowering
 			tailCall(callee, argIds) then self.mirModule.setTerminator(dstBlock, op: MirOp.call(0, callee: callee, argIds: argIds))
 			tryCall(resultId, callee, argIds, errorFlagId) then self.mirModule.setTerminator(dstBlock, op: MirOp.tryCall(resultId, callee: callee, argIds: argIds, errorFlagId: errorFlagId))
 			param(resultId, paramIndex, paramType) then self.mirModule.appendOp(dstBlock, op: MirOp.param(resultId, paramIndex: paramIndex, paramType: paramType))
-			indirectCall(resultId, calleeId, argIds) then self.mirModule.setTerminator(dstBlock, op: MirOp.indirectCall(resultId, calleeId: calleeId, argIds: argIds))
+			indirectCall(resultId, calleeId, argIds, isVoid, isThrowing, errorFlagId) then self.mirModule.setTerminator(dstBlock, op: MirOp.indirectCall(resultId, calleeId: calleeId, argIds: argIds, isVoid: isVoid, isThrowing: isThrowing, errorFlagId: errorFlagId))
 			witnessCall(resultId, witnessAddrId, methodIndex, isVoid, argIds) then self.mirModule.setTerminator(dstBlock, op: MirOp.witnessCall(resultId, witnessAddrId: witnessAddrId, methodIndex: methodIndex, isVoid: isVoid, argIds: argIds))
 			witnessTryCall(resultId, witnessAddrId, methodIndex, isVoid, argIds, errorFlagId) then self.mirModule.setTerminator(dstBlock, op: MirOp.witnessTryCall(resultId, witnessAddrId: witnessAddrId, methodIndex: methodIndex, isVoid: isVoid, argIds: argIds, errorFlagId: errorFlagId))
 			funcRef(resultId, funcName) then self.mirModule.appendOp(dstBlock, op: MirOp.funcAddr(resultId, name: funcName))
@@ -338,7 +338,7 @@ export type StdToMirLowering
 		argIds.push(slotValueId)
 		// resultId 0 mirrors `convertStdFree`'s void-call shape — the
 		// destroyFunc returns nothing observable to the caller.
-		self.mirModule.appendOp(dstBlock, op: MirOp.indirectCall(0, calleeId: fnPtrId, argIds: argIds))
+		self.mirModule.appendOp(dstBlock, op: MirOp.indirectCall(0, calleeId: fnPtrId, argIds: argIds, isVoid: false, isThrowing: false, errorFlagId: 0))
 	end 'lowerDropTypeParam'
 
 	// `sizeId` is reserved for 11.4: when payloads exceed 8 bytes the unbox

@@ -825,7 +825,7 @@ await p
 var p = async mayFail(true)
 var result = try await p otherwise 0
 
-// Cancellation
+// Cancellation (currently a no-op; preemptive cancel not yet implemented)
 var p = async longRunning()
 p.cancel()
 
@@ -840,9 +840,10 @@ for q in arr 'each'
 end 'each'
 ```
 
-- Green threads are distributed across OS worker threads (one per CPU core)
+- Green threads are distributed across OS worker threads (one per CPU core) on native targets
+- On `wasm32-wasi`, async/await runs single-threaded and cooperative (Binaryen Asyncify), not multi-threaded
 - Context switches at `await` points and I/O operations
-- Growable stacks (4KB initial, doubles as needed)
+- Growable stacks (2KB initial, doubles as needed)
 - Throwing async functions require `try await` (not plain `await`)
 - `async` target must yield (contain I/O or `await` points)
 - Unawaited green threads are drained at program exit

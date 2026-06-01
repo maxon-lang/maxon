@@ -371,7 +371,15 @@ export union StdCallOp
 	ret(retValId ValueId) = StdCallOpMeta{isRet: true, isErrorReturn: false, isParam: false, isPureForInlining: true, isUnsupportedInInlineBody: false}
 	call(resultId ValueId, callee String, argIds ValueIdArray) = StdCallOpMeta{isRet: false, isErrorReturn: false, isParam: false, isPureForInlining: false, isUnsupportedInInlineBody: false}
 	tryCall(resultId ValueId, callee String, argIds ValueIdArray, errorFlagId ValueId) = StdCallOpMeta{isRet: false, isErrorReturn: false, isParam: false, isPureForInlining: false, isUnsupportedInInlineBody: false}
-	indirectCall(resultId ValueId, calleeId ValueId, argIds ValueIdArray) = StdCallOpMeta{isRet: false, isErrorReturn: false, isParam: false, isPureForInlining: false, isUnsupportedInInlineBody: true}
+	// `isVoid` lets backends with strict typed calls (wasm `call_indirect`)
+	// emit a no-result signature when the indirect target returns void;
+	// `throws` appends a trailing i64 error flag (the dual-value error ABI)
+	// and, when set, BOTH `resultId` and `errorFlagId` are defined. Native
+	// backends (x64/arm64) ignore both (RAX is always a return slot, RDX
+	// always carries the flag) and only ever produce the (false,false) form;
+	// the void/throwing forms originate solely in the wasm green-thread
+	// runtime (`__gt_invoke`), where the coroutine entry's signature varies.
+	indirectCall(resultId ValueId, calleeId ValueId, argIds ValueIdArray, isVoid bool, isThrowing bool, errorFlagId ValueId) = StdCallOpMeta{isRet: false, isErrorReturn: false, isParam: false, isPureForInlining: false, isUnsupportedInInlineBody: true}
 	// Fused witness-table dispatch: equivalent to
 	//   %fnPtr = sys.witnessMethod %witnessAddrId, [methodIndex]
 	//   %resultId = func.indirectCall %fnPtr(args...)
@@ -752,7 +760,7 @@ export function funcOpToString(op StdCallOp) returns String
 		ret(retValId) gives "func.return %{retValId}"
 		call(resultId, callee, argIds) gives "%{resultId} = func.call @{callee}({formatArgIds(argIds)})"
 		tryCall(resultId, callee, argIds, errorFlagId) gives "%{resultId}, %{errorFlagId} = func.try_call @{callee}({formatArgIds(argIds)})"
-		indirectCall(resultId, calleeId, argIds) gives "%{resultId} = func.indirect_call %{calleeId}({formatArgIds(argIds)})"
+		indirectCall(resultId, calleeId, argIds, _, _, _) gives "%{resultId} = func.indirect_call %{calleeId}({formatArgIds(argIds)})"
 		witnessCall(resultId, witnessAddrId, methodIndex, isVoid, argIds) gives funcOpWitnessCallToString(resultId, witnessAddrId: witnessAddrId, methodIndex: methodIndex, isVoid: isVoid, argIds: argIds)
 		witnessTryCall(resultId, witnessAddrId, methodIndex, isVoid, argIds, errorFlagId) gives funcOpWitnessTryCallToString(resultId, witnessAddrId: witnessAddrId, methodIndex: methodIndex, isVoid: isVoid, argIds: argIds, errorFlagId: errorFlagId)
 		funcRef(resultId, funcName) gives "%{resultId} = func.ref @{funcName}"

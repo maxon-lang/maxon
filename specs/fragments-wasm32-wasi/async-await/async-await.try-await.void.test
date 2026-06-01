@@ -1,0 +1,100 @@
+// Test: async-await.try-await.void
+var flag = 0
+
+enum TestError implements Error
+		failed
+end 'TestError'
+
+function maySetFlag(succeed bool) throws TestError
+		_ = File.exists(FilePath from "noyield.txt")
+		if succeed 'ok'
+				flag = 1
+				return
+		end 'ok'
+		throw TestError.failed
+end 'maySetFlag'
+
+function main() returns ExitCode
+		let p = async maySetFlag(true)
+		try await p otherwise ignore
+		return flag
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @maySetFlag(local0: i1) {
+  entry:
+    %20 = mir.param local0 : i1
+    %1 = mir.global_addr @__istr_0
+    %2 = mir.mov_imm 40 : i64
+    %3 = mir.call @mrt_alloc(%2)
+    mir.store %1, %3, 0 width: qword
+    %4 = mir.mov_imm 11 : i64
+    mir.store %4, %3, 8 width: qword
+    %5 = mir.mov_imm -2 : i64
+    mir.store %5, %3, 16 width: qword
+    %6 = mir.mov_imm 1 : i64
+    mir.store %6, %3, 24 width: qword
+    %7 = mir.mov_imm 0 : i64
+    mir.store %7, %3, 32 width: qword
+    %8 = mir.mov_imm 16 : i64
+    %9 = mir.call @mrt_alloc(%8)
+    mir.store %3, %9, 0 width: qword
+    %10 = mir.mov_imm 1 : i64
+    mir.store %10, %9, 8 width: qword
+    %11 = mir.call @FilePath.init(%9)
+    %21 = mir.load %11, 0 width: qword
+    %22 = mir.load %21, 0 width: qword
+    %23 = mir.call @mrt_file_exists(%22)
+    %24 = mir.mov_imm 0 : i64
+    mir.cond_br %20 [then: ok_0(), else: ok_0.after()]
+  ok_0:
+    %14 = mir.mov_imm 1 : i64
+    %15 = mir.global_addr @__data_flag
+    mir.store %14, %15, 0 width: qword
+    %16 = mir.mov_imm 0 : i64
+    %17 = mir.mov_imm 0 : i64
+    mir.error_return %16, %17
+  ok_0.after:
+    %18 = mir.mov_imm 0 : i64
+    %19 = mir.mov_imm 1 : i64
+    mir.error_return %18, %19
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 1 : i64
+    %1 = mir.mov_imm 32 : i64
+    %2 = mir.call @__slab_alloc(%1)
+    %3 = mir.mov_imm 1 : i64
+    mir.store %3, %2, 0 width: qword
+    %4 = mir.mov_imm 0 : i64
+    mir.store %4, %2, 8 width: qword
+    mir.store %0, %2, 16 width: qword
+    %5 = mir.mov_imm 3 : i64
+    mir.store %5, %2, 24 width: qword
+    %6 = mir.func_addr @maySetFlag
+    %7 = mir.mov_imm 1 : i64
+    %8 = mir.call @__gt_spawn(%6, %7, %2)
+    %11, %13 = mir.try_call @__gt_await(%8)
+    %14 = mir.mov_imm 0 : i64
+    %15 = mir.cmp ne, %13, %14
+    mir.cond_br %15 [then: try_0.otherwise(), else: try_0.merge(%11)]
+  try_0.otherwise:
+    %17 = mir.mov_imm 0 : i64
+    mir.br try_0.merge(%17)
+  try_0.merge:
+    %19 = mir.global_addr @__data_flag
+    %20 = mir.load %19, 0 width: qword
+    %22 = mir.mov_imm 125 : i64
+    %23 = mir.cmp ugt, %20, %22
+    mir.cond_br %23 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %24 = mir.global_addr @__panic_msg_a2b920ccbaa5bfa6
+    %25 = mir.call @mrt_panic(%24)
+  __range_ok_0:
+    mir.ret %20
+  }
+}
+---

@@ -96,7 +96,12 @@ export union MirOp
 	branch(targetBlock BlockId, args ValueIdArray) = MirOpMeta{isMemory: false, isStore: false, isCall: false, clobbersFlags: false, isParam: false, isCmp: false}
 	// Functions
 	call(resultId ValueId, callee String, argIds ValueIdArray) = MirOpMeta{isMemory: true, isStore: false, isCall: true, clobbersFlags: false, isParam: false, isCmp: false}
-	indirectCall(resultId ValueId, calleeId ValueId, argIds ValueIdArray) = MirOpMeta{isMemory: true, isStore: false, isCall: true, clobbersFlags: false, isParam: false, isCmp: false}
+	// `isVoid`/`throws` mirror StdCallOp.indirectCall: void targets emit a
+	// no-result wasm `call_indirect` signature; throwing targets append a
+	// trailing i64 error flag and define `errorFlagId` as a second result.
+	// Only the wasm green-thread runtime (`__gt_invoke`) produces the void/
+	// throwing forms; native backends only ever see the (false,false) form.
+	indirectCall(resultId ValueId, calleeId ValueId, argIds ValueIdArray, isVoid bool, isThrowing bool, errorFlagId ValueId) = MirOpMeta{isMemory: true, isStore: false, isCall: true, clobbersFlags: false, isParam: false, isCmp: false}
 	// Fused witness-table dispatch: load function pointer from
 	// witnessAddr at WITNESS_OFFSET_METHODS + 8*methodIndex, then call
 	// it with argIds. Backends lower this to a memory-indirect call
@@ -243,7 +248,7 @@ export function mirOpToString(op MirOp, blocks IrBlockArray) returns String
 		branch(targetBlock, args) gives mirBranchToString(targetBlock, args: args, blocks: blocks)
 		// Functions
 		call(resultId, callee, argIds) gives "%{resultId} = mir.call @{callee}({formatMirArgs(argIds)})"
-		indirectCall(resultId, calleeId, argIds) gives "%{resultId} = mir.indirect_call %{calleeId}({formatMirArgs(argIds)})"
+		indirectCall(resultId, calleeId, argIds, _, _, _) gives "%{resultId} = mir.indirect_call %{calleeId}({formatMirArgs(argIds)})"
 		witnessCall(resultId, witnessAddrId, methodIndex, isVoid, argIds) gives mirOpWitnessCallToString(resultId, witnessAddrId: witnessAddrId, methodIndex: methodIndex, isVoid: isVoid, argIds: argIds)
 		ret(retValId) gives "mir.ret %{retValId}"
 		param(resultId, paramIndex, paramType) gives "%{resultId} = mir.param local{paramIndex} : {paramType.name}"

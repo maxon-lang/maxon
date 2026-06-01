@@ -3073,7 +3073,7 @@ function recordVarDecl(project Project, producerTypes ProducerTypeMap, slotTypes
 		// but the initializer's producer type resolved to a concrete instance —
 		// prefer the resolved one so the inner type flows to consumers (`await`,
 		// element reads). Mirrors the tuple `preferRefined` case above.
-		if genericInstanceHasUnresolvedArg(project, t: slotType) and maxonTypeIsGenericInstance(fromValue) and not genericInstanceHasUnresolvedArg(project, t: fromValue) 'preferRefinedGeneric'
+		if shouldPreferRefinedGenericInstance(project, stamped: slotType, refined: fromValue) 'preferRefinedGeneric'
 			slotTypes.upsert(slotId, value: fromValue)
 			return
 		end 'preferRefinedGeneric'
@@ -3105,6 +3105,14 @@ function genericInstanceArgsHaveUnresolved(project Project, id GenericInstanceId
 	end 'each'
 	return false
 end 'genericInstanceArgsHaveUnresolved'
+
+// Tier 4 / generics: true when the parser-stamped `stamped` is a generic
+// instance still carrying an unresolved arg while `refined` is the same shape
+// fully resolved — the signal to prefer `refined` so the concrete inner type
+// (e.g. `Promise with String`) flows to consumers (`await`, element reads).
+function shouldPreferRefinedGenericInstance(project Project, stamped MaxonType, refined MaxonType) returns bool
+	return genericInstanceHasUnresolvedArg(project, t: stamped) and maxonTypeIsGenericInstance(refined) and not genericInstanceHasUnresolvedArg(project, t: refined)
+end 'shouldPreferRefinedGenericInstance'
 
 // Phase 15e: helpers used by recordVarDecl to detect the "slot was stamped
 // as the unspecialised `__TupleN` named type, but the producer-type has the
@@ -3157,7 +3165,7 @@ function recordVarLoad(project Project, producerTypes ProducerTypeMap, slotTypes
 		// instance with an unresolved arg (`Promise with <unresolved>`), but
 		// `recordVarDecl` already refined the slot's recorded type to a concrete
 		// instance — prefer it so the inner type flows to `await` / element reads.
-		if genericInstanceHasUnresolvedArg(project, t: slotType) and maxonTypeIsGenericInstance(fromSlot) and not genericInstanceHasUnresolvedArg(project, t: fromSlot) 'preferRefinedGeneric'
+		if shouldPreferRefinedGenericInstance(project, stamped: slotType, refined: fromSlot) 'preferRefinedGeneric'
 			recordResultType(producerTypes, name: result, t: fromSlot)
 			return
 		end 'preferRefinedGeneric'
@@ -5751,7 +5759,7 @@ function fillVarDecl(project Project, module MaxonModule, opIdx OpIndex, slotId 
 		// Tier 4 / generics: refine a `Promise with <unresolved>` (or any generic
 		// instance the parser couldn't fully resolve) to the initializer's
 		// concrete producer type, so lowering sees the resolved inner.
-		if genericInstanceHasUnresolvedArg(project, t: slotType) and maxonTypeIsGenericInstance(fromValue) and not genericInstanceHasUnresolvedArg(project, t: fromValue) 'refineGenericArgs'
+		if shouldPreferRefinedGenericInstance(project, stamped: slotType, refined: fromValue) 'refineGenericArgs'
 			try module.ops.set(opIdx, value: MaxonOp.varDecl(slotId, value: value, slotType: fromValue, range: range)) otherwise panic("fillVarDecl: ops.set OOB at idx={opIdx}")
 			slotTypes.upsert(slotId, value: fromValue)
 			return
@@ -8623,9 +8631,9 @@ function resolveOneCallOp(project Project, module MaxonModule, op MaxonOp, opIdx
 		end 'extract'
 		return
 	end 'isTryMethodCall'
-	// Tier 4: `asyncCall` carries `call`'s callee shape and lowers via
-	// `lowerCall` (interim synchronous async / future `__gt_spawn`), so it needs
-	// the same `resolvedCallees` sidetable entry as a plain `call`.
+	// Tier 4: `asyncCall` carries `call`'s callee shape and lowers through the
+	// resolved callee (the spawned `__gt_spawn` target), so it needs the same
+	// `resolvedCallees` sidetable entry as a plain `call`.
 	if op.name == "asyncCall" 'isAsyncCall'
 		match op 'extract'
 			asyncCall(result, callee, callContext, args, argLabels, argTypes, _, _, _, _, range) then resolveCallSite(project, opIdx: opIdx, callee: callee, callContext: callContext, args: args, argLabels: argLabels, argTypes: argTypes, result: result, producerTypes: producerTypes, currentNamespace: currentNamespace, readerFilePath: readerFilePath, enclosingTypeName: enclosingTypeName, funcName: funcName, range: range)

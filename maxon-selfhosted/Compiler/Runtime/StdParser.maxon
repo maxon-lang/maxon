@@ -589,7 +589,8 @@ export type StdParser
 		if opName == "indirectCall" 'isIndirectCall'
 			// Shape: `[vN =] std indirectCall calleeValueId arg0 arg1 ...`.
 			// First operand is a value-id (the callee function pointer);
-			// remaining operands are value-ids passed as args.
+			// remaining operands are value-ids passed as args. Non-void,
+			// non-throwing — the i64-result shape.
 			let calleeId = try lookupValueId(try consumeName())
 			var argIds = ValueIdArray.create()
 			for argToken in cursor 'icArgLoop'
@@ -598,9 +599,66 @@ export type StdParser
 				end 'icEndArgs'
 				argIds.push(try lookupValueId(argToken.value))
 			end 'icArgLoop'
-			module.appendOp(block, op: StdOp.call(StdCallOp.indirectCall(resultId, calleeId: calleeId, argIds: argIds)))
+			module.appendOp(block, op: StdOp.call(StdCallOp.indirectCall(resultId, calleeId: calleeId, argIds: argIds, isVoid: false, isThrowing: false, errorFlagId: 0)))
 			return
 		end 'isIndirectCall'
+
+		if opName == "indirectCallVoid" 'isIndirectCallVoid'
+			// Shape: `std indirectCallVoid calleeValueId arg0 arg1 ...`.
+			// The indirect target returns void, so the wasm `call_indirect`
+			// signature carries no result and no value is bound. There is no
+			// `resultId` slot; `consumeValueRef` was not called for `vN =`.
+			let calleeId = try lookupValueId(try consumeName())
+			var argIds = ValueIdArray.create()
+			for argToken in cursor 'icvArgLoop'
+				if argToken.kind == TokenKind.newline or argToken.kind == TokenKind.end 'icvEndArgs'
+					break
+				end 'icvEndArgs'
+				argIds.push(try lookupValueId(argToken.value))
+			end 'icvArgLoop'
+			module.appendOp(block, op: StdOp.call(StdCallOp.indirectCall(0, calleeId: calleeId, argIds: argIds, isVoid: true, isThrowing: false, errorFlagId: 0)))
+			return
+		end 'isIndirectCallVoid'
+
+		if opName == "indirectCallThrows" 'isIndirectCallThrows'
+			// Shape: `vRes = std indirectCallThrows vFlagName calleeValueId arg0 ...`.
+			// The indirect target follows the dual-value error ABI, so the wasm
+			// `call_indirect` signature appends a trailing i64 error flag. `resultId`
+			// (the `vN =` LHS) is the primary result; `vFlagName` is a FRESH value
+			// name DEFINED by this op (the captured error flag), registered here so
+			// later ops can read it. The single-LHS .std grammar can't express two
+			// result bindings, so the flag is named as the first operand instead.
+			let flagId = allocValueId(try consumeName())
+			let calleeId = try lookupValueId(try consumeName())
+			var argIds = ValueIdArray.create()
+			for argToken in cursor 'ictArgLoop'
+				if argToken.kind == TokenKind.newline or argToken.kind == TokenKind.end 'ictEndArgs'
+					break
+				end 'ictEndArgs'
+				argIds.push(try lookupValueId(argToken.value))
+			end 'ictArgLoop'
+			module.appendOp(block, op: StdOp.call(StdCallOp.indirectCall(resultId, calleeId: calleeId, argIds: argIds, isVoid: false, isThrowing: true, errorFlagId: flagId)))
+			return
+		end 'isIndirectCallThrows'
+
+		if opName == "indirectCallThrowsVoid" 'isIndirectCallThrowsVoid'
+			// Shape: `std indirectCallThrowsVoid vFlagName calleeValueId arg0 ...`.
+			// The indirect target is a throwing VOID function: its wasm signature
+			// carries ONLY the trailing i64 error flag (no primary result). There
+			// is no `resultId` LHS; `vFlagName` is a FRESH value name DEFINED by
+			// this op (the captured error flag).
+			let flagId = allocValueId(try consumeName())
+			let calleeId = try lookupValueId(try consumeName())
+			var argIds = ValueIdArray.create()
+			for argToken in cursor 'ictvArgLoop'
+				if argToken.kind == TokenKind.newline or argToken.kind == TokenKind.end 'ictvEndArgs'
+					break
+				end 'ictvEndArgs'
+				argIds.push(try lookupValueId(argToken.value))
+			end 'ictvArgLoop'
+			module.appendOp(block, op: StdOp.call(StdCallOp.indirectCall(0, calleeId: calleeId, argIds: argIds, isVoid: true, isThrowing: true, errorFlagId: flagId)))
+			return
+		end 'isIndirectCallThrowsVoid'
 
 		if opName == "param" 'isParam'
 			let paramIndex = try consumeUnsignedInt()

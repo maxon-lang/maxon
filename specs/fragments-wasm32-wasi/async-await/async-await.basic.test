@@ -1,0 +1,70 @@
+// Test: async-await.basic
+typealias Integer = int(i64.min to i64.max)
+
+function compute() returns Integer
+		_ = File.exists(FilePath from "noyield.txt")
+		return 42
+end 'compute'
+
+function main() returns ExitCode
+		let promise = async compute()
+		let result = await promise
+		return result
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @compute() -> i64 {
+  entry:
+    %0 = mir.global_addr @__istr_0
+    %1 = mir.mov_imm 40 : i64
+    %2 = mir.call @mrt_alloc(%1)
+    mir.store %0, %2, 0 width: qword
+    %3 = mir.mov_imm 11 : i64
+    mir.store %3, %2, 8 width: qword
+    %4 = mir.mov_imm -2 : i64
+    mir.store %4, %2, 16 width: qword
+    %5 = mir.mov_imm 1 : i64
+    mir.store %5, %2, 24 width: qword
+    %6 = mir.mov_imm 0 : i64
+    mir.store %6, %2, 32 width: qword
+    %7 = mir.mov_imm 16 : i64
+    %8 = mir.call @mrt_alloc(%7)
+    mir.store %2, %8, 0 width: qword
+    %9 = mir.mov_imm 1 : i64
+    mir.store %9, %8, 8 width: qword
+    %10 = mir.call @FilePath.init(%8)
+    %13 = mir.load %10, 0 width: qword
+    %14 = mir.load %13, 0 width: qword
+    %15 = mir.call @mrt_file_exists(%14)
+    %16 = mir.mov_imm 0 : i64
+    %12 = mir.mov_imm 42 : i64
+    mir.ret %12
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 24 : i64
+    %1 = mir.call @__slab_alloc(%0)
+    %2 = mir.mov_imm 0 : i64
+    mir.store %2, %1, 0 width: qword
+    %3 = mir.mov_imm 0 : i64
+    mir.store %3, %1, 8 width: qword
+    %4 = mir.mov_imm 0 : i64
+    mir.store %4, %1, 16 width: qword
+    %5 = mir.func_addr @compute
+    %6 = mir.mov_imm 0 : i64
+    %7 = mir.call @__gt_spawn(%5, %6, %1)
+    %9 = mir.call @__gt_await(%7)
+    %10 = mir.mov_imm 125 : i64
+    %11 = mir.cmp ugt, %9, %10
+    mir.cond_br %11 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %12 = mir.global_addr @__panic_msg_5459f66d164ae7ea
+    %13 = mir.call @mrt_panic(%12)
+  __range_ok_0:
+    mir.ret %9
+  }
+}
+---

@@ -3563,7 +3563,7 @@ function writeStdCallOp(buf ByteArray, op StdCallOp) throws CacheCorruption
 		ret(retValId) then writeQword(buf, value: retValId)
 		call(resultId, callee, argIds) then try writeStdCallCall(buf, resultId: resultId, callee: callee, argIds: argIds)
 		tryCall(resultId, callee, argIds, errorFlagId) then try writeStdCallTryCall(buf, resultId: resultId, callee: callee, argIds: argIds, errorFlagId: errorFlagId)
-		indirectCall(resultId, calleeId, argIds) then writeStdCallIndirect(buf, resultId: resultId, calleeId: calleeId, argIds: argIds)
+		indirectCall(resultId, calleeId, argIds, isVoid, isThrowing, errorFlagId) then writeStdCallIndirect(buf, resultId: resultId, calleeId: calleeId, argIds: argIds, isVoid: isVoid, isThrowing: isThrowing, errorFlagId: errorFlagId)
 		witnessCall(resultId, witnessAddrId, methodIndex, isVoid, argIds) then writeStdCallWitness(buf, resultId: resultId, witnessAddrId: witnessAddrId, methodIndex: methodIndex, isVoid: isVoid, argIds: argIds)
 		witnessTryCall(resultId, witnessAddrId, methodIndex, isVoid, argIds, errorFlagId) then writeStdCallWitnessTry(buf, resultId: resultId, witnessAddrId: witnessAddrId, methodIndex: methodIndex, isVoid: isVoid, argIds: argIds, errorFlagId: errorFlagId)
 		funcRef(resultId, funcName) then try writeStdCallFuncRef(buf, resultId: resultId, funcName: funcName)
@@ -3586,9 +3586,14 @@ function writeStdCallTryCall(buf ByteArray, resultId ValueId, callee String, arg
 	writeQword(buf, value: errorFlagId)
 end 'writeStdCallTryCall'
 
-function writeStdCallIndirect(buf ByteArray, resultId ValueId, calleeId ValueId, argIds ValueIdArray)
+function writeStdCallIndirect(buf ByteArray, resultId ValueId, calleeId ValueId, argIds ValueIdArray, isVoid bool, isThrowing bool, errorFlagId ValueId)
 	writeQword(buf, value: resultId)
 	writeQword(buf, value: calleeId)
+	let voidFlag = 1 if isVoid else 0
+	writeQword(buf, value: voidFlag)
+	let throwsFlag = 1 if isThrowing else 0
+	writeQword(buf, value: throwsFlag)
+	writeQword(buf, value: errorFlagId)
 	writeValueIdArrayCodec(buf, arr: argIds)
 end 'writeStdCallIndirect'
 
@@ -3672,8 +3677,11 @@ end 'readStdCallTryCall'
 function readStdCallIndirect(buf ByteArray, offset ByteOffset) returns (StdCallOp, ByteOffset)
 	let resultId = readQword(buf, offset: offset)
 	let calleeId = readQword(buf, offset: offset + 8)
-	let (argIds, p) = readValueIdArrayCodec(buf, offset: offset + 16)
-	return (StdCallOp.indirectCall(resultId, calleeId: calleeId, argIds: argIds), p)
+	let isVoid = readQword(buf, offset: offset + 16) != 0
+	let isThrowing = readQword(buf, offset: offset + 24) != 0
+	let errorFlagId = readQword(buf, offset: offset + 32)
+	let (argIds, p) = readValueIdArrayCodec(buf, offset: offset + 40)
+	return (StdCallOp.indirectCall(resultId, calleeId: calleeId, argIds: argIds, isVoid: isVoid, isThrowing: isThrowing, errorFlagId: errorFlagId), p)
 end 'readStdCallIndirect'
 
 function readStdCallWitness(buf ByteArray, offset ByteOffset) returns (StdCallOp, ByteOffset)
