@@ -1147,464 +1147,566 @@ module {
   return_gt:
     mir.ret %30
   }
+  func @__gt_timer_min() -> i64 {
+  entry:
+    %53 = mir.global_addr @__gt_timer_heap
+    %54 = mir.load %53, 0 width: qword
+    %55 = mir.mov_imm 1 : i64
+    mir.br loop(%54, %55)
+  loop:
+    %57 = mir.global_addr @__gt_timer_count
+    %58 = mir.load %57, 0 width: qword
+    %59 = mir.cmp lt, %77, %58
+    %60 = mir.mov_imm 0 : i64
+    %61 = mir.cmp eq, %59, %60
+    mir.cond_br %61 [then: done(), else: body()]
+  body:
+    %62 = mir.global_addr @__gt_timer_heap
+    %64 = mir.mov_imm 16 : i64
+    %65 = mir.mul.i64 %77, %64
+    %66 = mir.add.i64 %62, %65
+    %67 = mir.load %66, 0 width: qword
+    %69 = mir.cmp lt, %67, %76
+    mir.cond_br %69 [then: update(), else: next(%76)]
+  update:
+    mir.br next(%67)
+  next:
+    %72 = mir.mov_imm 1 : i64
+    %73 = mir.add.i64 %77, %72
+    mir.br loop(%75, %73)
+  done:
+    mir.ret %76
+  }
+  func @__gt_timer_advance(local0: i64) {
+  entry:
+    %75 = mir.param local0 : i64
+    %76 = mir.mov_imm 0 : i64
+    mir.br loop(%76)
+  loop:
+    %78 = mir.global_addr @__gt_timer_count
+    %79 = mir.load %78, 0 width: qword
+    %80 = mir.cmp lt, %112, %79
+    %81 = mir.mov_imm 0 : i64
+    %82 = mir.cmp eq, %80, %81
+    mir.cond_br %82 [then: done(), else: body()]
+  body:
+    %83 = mir.global_addr @__gt_timer_heap
+    %85 = mir.mov_imm 16 : i64
+    %86 = mir.mul.i64 %112, %85
+    %87 = mir.add.i64 %83, %86
+    %88 = mir.load %87, 0 width: qword
+    %90 = mir.sub.i64 %88, %75
+    mir.store %90, %87, 0 width: qword
+    %91 = mir.mov_imm 0 : i64
+    %92 = mir.cmp lt, %91, %90
+    mir.cond_br %92 [then: advance(), else: fire()]
+  fire:
+    %94 = mir.load %87, 8 width: qword
+    %95 = mir.global_addr @__gt_timer_count
+    %96 = mir.load %95, 0 width: qword
+    %97 = mir.mov_imm 1 : i64
+    %98 = mir.sub.i64 %96, %97
+    mir.store %98, %95, 0 width: qword
+    %99 = mir.global_addr @__gt_timer_heap
+    %100 = mir.mov_imm 16 : i64
+    %101 = mir.mul.i64 %98, %100
+    %102 = mir.add.i64 %99, %101
+    %104 = mir.load %102, 0 width: qword
+    mir.store %104, %87, 0 width: qword
+    %105 = mir.load %102, 8 width: qword
+    mir.store %105, %87, 8 width: qword
+    %107 = mir.call @__gt_enqueue(%94)
+    mir.br loop(%112)
+  advance:
+    %109 = mir.mov_imm 1 : i64
+    %110 = mir.add.i64 %112, %109
+    mir.br loop(%110)
+  done:
+    %111 = mir.mov_imm 0 : i64
+    mir.ret %111
+  }
+  func @__gt_idle_poll(local0: i64) {
+  entry:
+    %112 = mir.param local0 : i64
+    mir.os_sleep %112
+    %113 = mir.mov_imm 0 : i64
+    mir.ret %113
+  }
   func @__gt_invoke(local0: i64) {
   entry:
-    %42 = mir.param local0 : i64
-    %43 = mir.load %42, 24 width: qword
-    %44 = mir.load %42, 32 width: qword
-    %45 = mir.load %44, 0 width: qword
-    %46 = mir.mov_imm 8 : i64
-    %47 = mir.mul.i64 %45, %46
-    %48 = mir.mov_imm 16 : i64
-    %49 = mir.add.i64 %47, %48
-    %50 = mir.add.i64 %44, %49
-    %51 = mir.load %50, 0 width: qword
-    %52 = mir.mov_imm 0 : i64
-    %53 = mir.mov_imm 0 : i64
-    %54 = mir.cmp eq, %45, %53
-    mir.cond_br %54 [then: arity0(), else: try1()]
+    %133 = mir.param local0 : i64
+    %134 = mir.load %133, 24 width: qword
+    %135 = mir.load %133, 32 width: qword
+    %136 = mir.load %135, 0 width: qword
+    %137 = mir.mov_imm 8 : i64
+    %138 = mir.mul.i64 %136, %137
+    %139 = mir.mov_imm 16 : i64
+    %140 = mir.add.i64 %138, %139
+    %141 = mir.add.i64 %135, %140
+    %142 = mir.load %141, 0 width: qword
+    %143 = mir.mov_imm 0 : i64
+    %144 = mir.mov_imm 0 : i64
+    %145 = mir.cmp eq, %136, %144
+    mir.cond_br %145 [then: arity0(), else: try1()]
   try1:
-    %55 = mir.mov_imm 1 : i64
-    %56 = mir.cmp eq, %45, %55
-    mir.cond_br %56 [then: arity1(), else: try2()]
+    %146 = mir.mov_imm 1 : i64
+    %147 = mir.cmp eq, %136, %146
+    mir.cond_br %147 [then: arity1(), else: try2()]
   try2:
-    %57 = mir.mov_imm 2 : i64
-    %58 = mir.cmp eq, %45, %57
-    mir.cond_br %58 [then: arity2(), else: try3()]
+    %148 = mir.mov_imm 2 : i64
+    %149 = mir.cmp eq, %136, %148
+    mir.cond_br %149 [then: arity2(), else: try3()]
   try3:
-    %59 = mir.mov_imm 3 : i64
-    %60 = mir.cmp eq, %45, %59
-    mir.cond_br %60 [then: arity3(), else: try4()]
+    %150 = mir.mov_imm 3 : i64
+    %151 = mir.cmp eq, %136, %150
+    mir.cond_br %151 [then: arity3(), else: try4()]
   try4:
-    %61 = mir.mov_imm 4 : i64
-    %62 = mir.cmp eq, %45, %61
-    mir.cond_br %62 [then: arity4(), else: try5()]
+    %152 = mir.mov_imm 4 : i64
+    %153 = mir.cmp eq, %136, %152
+    mir.cond_br %153 [then: arity4(), else: try5()]
   try5:
-    %63 = mir.mov_imm 5 : i64
-    %64 = mir.cmp eq, %45, %63
-    mir.cond_br %64 [then: arity5(), else: try6()]
+    %154 = mir.mov_imm 5 : i64
+    %155 = mir.cmp eq, %136, %154
+    mir.cond_br %155 [then: arity5(), else: try6()]
   try6:
-    %65 = mir.mov_imm 6 : i64
-    %66 = mir.cmp eq, %45, %65
-    mir.cond_br %66 [then: arity6(), else: try7()]
+    %156 = mir.mov_imm 6 : i64
+    %157 = mir.cmp eq, %136, %156
+    mir.cond_br %157 [then: arity6(), else: try7()]
   try7:
-    %67 = mir.mov_imm 7 : i64
-    %68 = mir.cmp eq, %45, %67
-    mir.cond_br %68 [then: arity7(), else: bad_arity()]
+    %158 = mir.mov_imm 7 : i64
+    %159 = mir.cmp eq, %136, %158
+    mir.cond_br %159 [then: arity7(), else: bad_arity()]
   arity0:
-    %70 = mir.mov_imm 1 : i64
-    %71 = mir.cmp eq, %51, %70
-    mir.cond_br %71 [then: arity0_void(), else: arity0_try()]
+    %161 = mir.mov_imm 1 : i64
+    %162 = mir.cmp eq, %142, %161
+    mir.cond_br %162 [then: arity0_void(), else: arity0_try()]
   arity0_try:
-    %73 = mir.mov_imm 2 : i64
-    %74 = mir.cmp eq, %51, %73
-    mir.cond_br %74 [then: arity0_throws(), else: arity0_t3()]
+    %164 = mir.mov_imm 2 : i64
+    %165 = mir.cmp eq, %142, %164
+    mir.cond_br %165 [then: arity0_throws(), else: arity0_t3()]
   arity0_t3:
-    %76 = mir.mov_imm 3 : i64
-    %77 = mir.cmp eq, %51, %76
-    mir.cond_br %77 [then: arity0_throwsvoid(), else: arity0_i64()]
+    %167 = mir.mov_imm 3 : i64
+    %168 = mir.cmp eq, %142, %167
+    mir.cond_br %168 [then: arity0_throwsvoid(), else: arity0_i64()]
   arity0_i64:
-    %79 = mir.indirect_call %43()
-    mir.br store_result(%79, %52)
+    %170 = mir.indirect_call %134()
+    mir.br store_result(%170, %143)
   arity0_void:
-    %0 = mir.indirect_call %43()
-    mir.br store_result(%0, %52)
+    %0 = mir.indirect_call %134()
+    mir.br store_result(%0, %143)
   arity0_throws:
-    %82 = mir.indirect_call %43()
-    mir.br store_result(%82, %83)
+    %173 = mir.indirect_call %134()
+    mir.br store_result(%173, %174)
   arity0_throwsvoid:
-    %0 = mir.indirect_call %43()
-    mir.br store_result(%0, %85)
+    %0 = mir.indirect_call %134()
+    mir.br store_result(%0, %176)
   arity1:
-    %87 = mir.mov_imm 1 : i64
-    %88 = mir.cmp eq, %51, %87
-    mir.cond_br %88 [then: arity1_void(), else: arity1_try()]
+    %178 = mir.mov_imm 1 : i64
+    %179 = mir.cmp eq, %142, %178
+    mir.cond_br %179 [then: arity1_void(), else: arity1_try()]
   arity1_try:
-    %90 = mir.mov_imm 2 : i64
-    %91 = mir.cmp eq, %51, %90
-    mir.cond_br %91 [then: arity1_throws(), else: arity1_t3()]
+    %181 = mir.mov_imm 2 : i64
+    %182 = mir.cmp eq, %142, %181
+    mir.cond_br %182 [then: arity1_throws(), else: arity1_t3()]
   arity1_t3:
-    %93 = mir.mov_imm 3 : i64
-    %94 = mir.cmp eq, %51, %93
-    mir.cond_br %94 [then: arity1_throwsvoid(), else: arity1_i64()]
+    %184 = mir.mov_imm 3 : i64
+    %185 = mir.cmp eq, %142, %184
+    mir.cond_br %185 [then: arity1_throwsvoid(), else: arity1_i64()]
   arity1_i64:
-    %96 = mir.load %44, 16 width: qword
-    %98 = mir.indirect_call %43(%96)
-    mir.br store_result(%98, %52)
+    %187 = mir.load %135, 16 width: qword
+    %189 = mir.indirect_call %134(%187)
+    mir.br store_result(%189, %143)
   arity1_void:
-    %100 = mir.load %44, 16 width: qword
-    %0 = mir.indirect_call %43(%100)
-    mir.br store_result(%0, %52)
+    %191 = mir.load %135, 16 width: qword
+    %0 = mir.indirect_call %134(%191)
+    mir.br store_result(%0, %143)
   arity1_throws:
-    %103 = mir.load %44, 16 width: qword
-    %105 = mir.indirect_call %43(%103)
-    mir.br store_result(%105, %106)
+    %194 = mir.load %135, 16 width: qword
+    %196 = mir.indirect_call %134(%194)
+    mir.br store_result(%196, %197)
   arity1_throwsvoid:
-    %108 = mir.load %44, 16 width: qword
-    %0 = mir.indirect_call %43(%108)
-    mir.br store_result(%0, %110)
+    %199 = mir.load %135, 16 width: qword
+    %0 = mir.indirect_call %134(%199)
+    mir.br store_result(%0, %201)
   arity2:
-    %112 = mir.mov_imm 1 : i64
-    %113 = mir.cmp eq, %51, %112
-    mir.cond_br %113 [then: arity2_void(), else: arity2_try()]
+    %203 = mir.mov_imm 1 : i64
+    %204 = mir.cmp eq, %142, %203
+    mir.cond_br %204 [then: arity2_void(), else: arity2_try()]
   arity2_try:
-    %115 = mir.mov_imm 2 : i64
-    %116 = mir.cmp eq, %51, %115
-    mir.cond_br %116 [then: arity2_throws(), else: arity2_t3()]
+    %206 = mir.mov_imm 2 : i64
+    %207 = mir.cmp eq, %142, %206
+    mir.cond_br %207 [then: arity2_throws(), else: arity2_t3()]
   arity2_t3:
-    %118 = mir.mov_imm 3 : i64
-    %119 = mir.cmp eq, %51, %118
-    mir.cond_br %119 [then: arity2_throwsvoid(), else: arity2_i64()]
+    %209 = mir.mov_imm 3 : i64
+    %210 = mir.cmp eq, %142, %209
+    mir.cond_br %210 [then: arity2_throwsvoid(), else: arity2_i64()]
   arity2_i64:
-    %121 = mir.load %44, 16 width: qword
-    %122 = mir.load %44, 24 width: qword
-    %124 = mir.indirect_call %43(%121, %122)
-    mir.br store_result(%124, %52)
+    %212 = mir.load %135, 16 width: qword
+    %213 = mir.load %135, 24 width: qword
+    %215 = mir.indirect_call %134(%212, %213)
+    mir.br store_result(%215, %143)
   arity2_void:
-    %126 = mir.load %44, 16 width: qword
-    %127 = mir.load %44, 24 width: qword
-    %0 = mir.indirect_call %43(%126, %127)
-    mir.br store_result(%0, %52)
+    %217 = mir.load %135, 16 width: qword
+    %218 = mir.load %135, 24 width: qword
+    %0 = mir.indirect_call %134(%217, %218)
+    mir.br store_result(%0, %143)
   arity2_throws:
-    %130 = mir.load %44, 16 width: qword
-    %131 = mir.load %44, 24 width: qword
-    %133 = mir.indirect_call %43(%130, %131)
-    mir.br store_result(%133, %134)
+    %221 = mir.load %135, 16 width: qword
+    %222 = mir.load %135, 24 width: qword
+    %224 = mir.indirect_call %134(%221, %222)
+    mir.br store_result(%224, %225)
   arity2_throwsvoid:
-    %136 = mir.load %44, 16 width: qword
-    %137 = mir.load %44, 24 width: qword
-    %0 = mir.indirect_call %43(%136, %137)
-    mir.br store_result(%0, %139)
+    %227 = mir.load %135, 16 width: qword
+    %228 = mir.load %135, 24 width: qword
+    %0 = mir.indirect_call %134(%227, %228)
+    mir.br store_result(%0, %230)
   arity3:
-    %141 = mir.mov_imm 1 : i64
-    %142 = mir.cmp eq, %51, %141
-    mir.cond_br %142 [then: arity3_void(), else: arity3_try()]
+    %232 = mir.mov_imm 1 : i64
+    %233 = mir.cmp eq, %142, %232
+    mir.cond_br %233 [then: arity3_void(), else: arity3_try()]
   arity3_try:
-    %144 = mir.mov_imm 2 : i64
-    %145 = mir.cmp eq, %51, %144
-    mir.cond_br %145 [then: arity3_throws(), else: arity3_t3()]
+    %235 = mir.mov_imm 2 : i64
+    %236 = mir.cmp eq, %142, %235
+    mir.cond_br %236 [then: arity3_throws(), else: arity3_t3()]
   arity3_t3:
-    %147 = mir.mov_imm 3 : i64
-    %148 = mir.cmp eq, %51, %147
-    mir.cond_br %148 [then: arity3_throwsvoid(), else: arity3_i64()]
+    %238 = mir.mov_imm 3 : i64
+    %239 = mir.cmp eq, %142, %238
+    mir.cond_br %239 [then: arity3_throwsvoid(), else: arity3_i64()]
   arity3_i64:
-    %150 = mir.load %44, 16 width: qword
-    %151 = mir.load %44, 24 width: qword
-    %152 = mir.load %44, 32 width: qword
-    %154 = mir.indirect_call %43(%150, %151, %152)
-    mir.br store_result(%154, %52)
+    %241 = mir.load %135, 16 width: qword
+    %242 = mir.load %135, 24 width: qword
+    %243 = mir.load %135, 32 width: qword
+    %245 = mir.indirect_call %134(%241, %242, %243)
+    mir.br store_result(%245, %143)
   arity3_void:
-    %156 = mir.load %44, 16 width: qword
-    %157 = mir.load %44, 24 width: qword
-    %158 = mir.load %44, 32 width: qword
-    %0 = mir.indirect_call %43(%156, %157, %158)
-    mir.br store_result(%0, %52)
+    %247 = mir.load %135, 16 width: qword
+    %248 = mir.load %135, 24 width: qword
+    %249 = mir.load %135, 32 width: qword
+    %0 = mir.indirect_call %134(%247, %248, %249)
+    mir.br store_result(%0, %143)
   arity3_throws:
-    %161 = mir.load %44, 16 width: qword
-    %162 = mir.load %44, 24 width: qword
-    %163 = mir.load %44, 32 width: qword
-    %165 = mir.indirect_call %43(%161, %162, %163)
-    mir.br store_result(%165, %166)
+    %252 = mir.load %135, 16 width: qword
+    %253 = mir.load %135, 24 width: qword
+    %254 = mir.load %135, 32 width: qword
+    %256 = mir.indirect_call %134(%252, %253, %254)
+    mir.br store_result(%256, %257)
   arity3_throwsvoid:
-    %168 = mir.load %44, 16 width: qword
-    %169 = mir.load %44, 24 width: qword
-    %170 = mir.load %44, 32 width: qword
-    %0 = mir.indirect_call %43(%168, %169, %170)
-    mir.br store_result(%0, %172)
+    %259 = mir.load %135, 16 width: qword
+    %260 = mir.load %135, 24 width: qword
+    %261 = mir.load %135, 32 width: qword
+    %0 = mir.indirect_call %134(%259, %260, %261)
+    mir.br store_result(%0, %263)
   arity4:
-    %174 = mir.mov_imm 1 : i64
-    %175 = mir.cmp eq, %51, %174
-    mir.cond_br %175 [then: arity4_void(), else: arity4_try()]
+    %265 = mir.mov_imm 1 : i64
+    %266 = mir.cmp eq, %142, %265
+    mir.cond_br %266 [then: arity4_void(), else: arity4_try()]
   arity4_try:
-    %177 = mir.mov_imm 2 : i64
-    %178 = mir.cmp eq, %51, %177
-    mir.cond_br %178 [then: arity4_throws(), else: arity4_t3()]
+    %268 = mir.mov_imm 2 : i64
+    %269 = mir.cmp eq, %142, %268
+    mir.cond_br %269 [then: arity4_throws(), else: arity4_t3()]
   arity4_t3:
-    %180 = mir.mov_imm 3 : i64
-    %181 = mir.cmp eq, %51, %180
-    mir.cond_br %181 [then: arity4_throwsvoid(), else: arity4_i64()]
+    %271 = mir.mov_imm 3 : i64
+    %272 = mir.cmp eq, %142, %271
+    mir.cond_br %272 [then: arity4_throwsvoid(), else: arity4_i64()]
   arity4_i64:
-    %183 = mir.load %44, 16 width: qword
-    %184 = mir.load %44, 24 width: qword
-    %185 = mir.load %44, 32 width: qword
-    %186 = mir.load %44, 40 width: qword
-    %188 = mir.indirect_call %43(%183, %184, %185, %186)
-    mir.br store_result(%188, %52)
+    %274 = mir.load %135, 16 width: qword
+    %275 = mir.load %135, 24 width: qword
+    %276 = mir.load %135, 32 width: qword
+    %277 = mir.load %135, 40 width: qword
+    %279 = mir.indirect_call %134(%274, %275, %276, %277)
+    mir.br store_result(%279, %143)
   arity4_void:
-    %190 = mir.load %44, 16 width: qword
-    %191 = mir.load %44, 24 width: qword
-    %192 = mir.load %44, 32 width: qword
-    %193 = mir.load %44, 40 width: qword
-    %0 = mir.indirect_call %43(%190, %191, %192, %193)
-    mir.br store_result(%0, %52)
+    %281 = mir.load %135, 16 width: qword
+    %282 = mir.load %135, 24 width: qword
+    %283 = mir.load %135, 32 width: qword
+    %284 = mir.load %135, 40 width: qword
+    %0 = mir.indirect_call %134(%281, %282, %283, %284)
+    mir.br store_result(%0, %143)
   arity4_throws:
-    %196 = mir.load %44, 16 width: qword
-    %197 = mir.load %44, 24 width: qword
-    %198 = mir.load %44, 32 width: qword
-    %199 = mir.load %44, 40 width: qword
-    %201 = mir.indirect_call %43(%196, %197, %198, %199)
-    mir.br store_result(%201, %202)
+    %287 = mir.load %135, 16 width: qword
+    %288 = mir.load %135, 24 width: qword
+    %289 = mir.load %135, 32 width: qword
+    %290 = mir.load %135, 40 width: qword
+    %292 = mir.indirect_call %134(%287, %288, %289, %290)
+    mir.br store_result(%292, %293)
   arity4_throwsvoid:
-    %204 = mir.load %44, 16 width: qword
-    %205 = mir.load %44, 24 width: qword
-    %206 = mir.load %44, 32 width: qword
-    %207 = mir.load %44, 40 width: qword
-    %0 = mir.indirect_call %43(%204, %205, %206, %207)
-    mir.br store_result(%0, %209)
+    %295 = mir.load %135, 16 width: qword
+    %296 = mir.load %135, 24 width: qword
+    %297 = mir.load %135, 32 width: qword
+    %298 = mir.load %135, 40 width: qword
+    %0 = mir.indirect_call %134(%295, %296, %297, %298)
+    mir.br store_result(%0, %300)
   arity5:
-    %211 = mir.mov_imm 1 : i64
-    %212 = mir.cmp eq, %51, %211
-    mir.cond_br %212 [then: arity5_void(), else: arity5_try()]
+    %302 = mir.mov_imm 1 : i64
+    %303 = mir.cmp eq, %142, %302
+    mir.cond_br %303 [then: arity5_void(), else: arity5_try()]
   arity5_try:
-    %214 = mir.mov_imm 2 : i64
-    %215 = mir.cmp eq, %51, %214
-    mir.cond_br %215 [then: arity5_throws(), else: arity5_t3()]
+    %305 = mir.mov_imm 2 : i64
+    %306 = mir.cmp eq, %142, %305
+    mir.cond_br %306 [then: arity5_throws(), else: arity5_t3()]
   arity5_t3:
-    %217 = mir.mov_imm 3 : i64
-    %218 = mir.cmp eq, %51, %217
-    mir.cond_br %218 [then: arity5_throwsvoid(), else: arity5_i64()]
+    %308 = mir.mov_imm 3 : i64
+    %309 = mir.cmp eq, %142, %308
+    mir.cond_br %309 [then: arity5_throwsvoid(), else: arity5_i64()]
   arity5_i64:
-    %220 = mir.load %44, 16 width: qword
-    %221 = mir.load %44, 24 width: qword
-    %222 = mir.load %44, 32 width: qword
-    %223 = mir.load %44, 40 width: qword
-    %224 = mir.load %44, 48 width: qword
-    %226 = mir.indirect_call %43(%220, %221, %222, %223, %224)
-    mir.br store_result(%226, %52)
+    %311 = mir.load %135, 16 width: qword
+    %312 = mir.load %135, 24 width: qword
+    %313 = mir.load %135, 32 width: qword
+    %314 = mir.load %135, 40 width: qword
+    %315 = mir.load %135, 48 width: qword
+    %317 = mir.indirect_call %134(%311, %312, %313, %314, %315)
+    mir.br store_result(%317, %143)
   arity5_void:
-    %228 = mir.load %44, 16 width: qword
-    %229 = mir.load %44, 24 width: qword
-    %230 = mir.load %44, 32 width: qword
-    %231 = mir.load %44, 40 width: qword
-    %232 = mir.load %44, 48 width: qword
-    %0 = mir.indirect_call %43(%228, %229, %230, %231, %232)
-    mir.br store_result(%0, %52)
+    %319 = mir.load %135, 16 width: qword
+    %320 = mir.load %135, 24 width: qword
+    %321 = mir.load %135, 32 width: qword
+    %322 = mir.load %135, 40 width: qword
+    %323 = mir.load %135, 48 width: qword
+    %0 = mir.indirect_call %134(%319, %320, %321, %322, %323)
+    mir.br store_result(%0, %143)
   arity5_throws:
-    %235 = mir.load %44, 16 width: qword
-    %236 = mir.load %44, 24 width: qword
-    %237 = mir.load %44, 32 width: qword
-    %238 = mir.load %44, 40 width: qword
-    %239 = mir.load %44, 48 width: qword
-    %241 = mir.indirect_call %43(%235, %236, %237, %238, %239)
-    mir.br store_result(%241, %242)
+    %326 = mir.load %135, 16 width: qword
+    %327 = mir.load %135, 24 width: qword
+    %328 = mir.load %135, 32 width: qword
+    %329 = mir.load %135, 40 width: qword
+    %330 = mir.load %135, 48 width: qword
+    %332 = mir.indirect_call %134(%326, %327, %328, %329, %330)
+    mir.br store_result(%332, %333)
   arity5_throwsvoid:
-    %244 = mir.load %44, 16 width: qword
-    %245 = mir.load %44, 24 width: qword
-    %246 = mir.load %44, 32 width: qword
-    %247 = mir.load %44, 40 width: qword
-    %248 = mir.load %44, 48 width: qword
-    %0 = mir.indirect_call %43(%244, %245, %246, %247, %248)
-    mir.br store_result(%0, %250)
+    %335 = mir.load %135, 16 width: qword
+    %336 = mir.load %135, 24 width: qword
+    %337 = mir.load %135, 32 width: qword
+    %338 = mir.load %135, 40 width: qword
+    %339 = mir.load %135, 48 width: qword
+    %0 = mir.indirect_call %134(%335, %336, %337, %338, %339)
+    mir.br store_result(%0, %341)
   arity6:
-    %252 = mir.mov_imm 1 : i64
-    %253 = mir.cmp eq, %51, %252
-    mir.cond_br %253 [then: arity6_void(), else: arity6_try()]
+    %343 = mir.mov_imm 1 : i64
+    %344 = mir.cmp eq, %142, %343
+    mir.cond_br %344 [then: arity6_void(), else: arity6_try()]
   arity6_try:
-    %255 = mir.mov_imm 2 : i64
-    %256 = mir.cmp eq, %51, %255
-    mir.cond_br %256 [then: arity6_throws(), else: arity6_t3()]
+    %346 = mir.mov_imm 2 : i64
+    %347 = mir.cmp eq, %142, %346
+    mir.cond_br %347 [then: arity6_throws(), else: arity6_t3()]
   arity6_t3:
-    %258 = mir.mov_imm 3 : i64
-    %259 = mir.cmp eq, %51, %258
-    mir.cond_br %259 [then: arity6_throwsvoid(), else: arity6_i64()]
+    %349 = mir.mov_imm 3 : i64
+    %350 = mir.cmp eq, %142, %349
+    mir.cond_br %350 [then: arity6_throwsvoid(), else: arity6_i64()]
   arity6_i64:
-    %261 = mir.load %44, 16 width: qword
-    %262 = mir.load %44, 24 width: qword
-    %263 = mir.load %44, 32 width: qword
-    %264 = mir.load %44, 40 width: qword
-    %265 = mir.load %44, 48 width: qword
-    %266 = mir.load %44, 56 width: qword
-    %268 = mir.indirect_call %43(%261, %262, %263, %264, %265, %266)
-    mir.br store_result(%268, %52)
+    %352 = mir.load %135, 16 width: qword
+    %353 = mir.load %135, 24 width: qword
+    %354 = mir.load %135, 32 width: qword
+    %355 = mir.load %135, 40 width: qword
+    %356 = mir.load %135, 48 width: qword
+    %357 = mir.load %135, 56 width: qword
+    %359 = mir.indirect_call %134(%352, %353, %354, %355, %356, %357)
+    mir.br store_result(%359, %143)
   arity6_void:
-    %270 = mir.load %44, 16 width: qword
-    %271 = mir.load %44, 24 width: qword
-    %272 = mir.load %44, 32 width: qword
-    %273 = mir.load %44, 40 width: qword
-    %274 = mir.load %44, 48 width: qword
-    %275 = mir.load %44, 56 width: qword
-    %0 = mir.indirect_call %43(%270, %271, %272, %273, %274, %275)
-    mir.br store_result(%0, %52)
+    %361 = mir.load %135, 16 width: qword
+    %362 = mir.load %135, 24 width: qword
+    %363 = mir.load %135, 32 width: qword
+    %364 = mir.load %135, 40 width: qword
+    %365 = mir.load %135, 48 width: qword
+    %366 = mir.load %135, 56 width: qword
+    %0 = mir.indirect_call %134(%361, %362, %363, %364, %365, %366)
+    mir.br store_result(%0, %143)
   arity6_throws:
-    %278 = mir.load %44, 16 width: qword
-    %279 = mir.load %44, 24 width: qword
-    %280 = mir.load %44, 32 width: qword
-    %281 = mir.load %44, 40 width: qword
-    %282 = mir.load %44, 48 width: qword
-    %283 = mir.load %44, 56 width: qword
-    %285 = mir.indirect_call %43(%278, %279, %280, %281, %282, %283)
-    mir.br store_result(%285, %286)
+    %369 = mir.load %135, 16 width: qword
+    %370 = mir.load %135, 24 width: qword
+    %371 = mir.load %135, 32 width: qword
+    %372 = mir.load %135, 40 width: qword
+    %373 = mir.load %135, 48 width: qword
+    %374 = mir.load %135, 56 width: qword
+    %376 = mir.indirect_call %134(%369, %370, %371, %372, %373, %374)
+    mir.br store_result(%376, %377)
   arity6_throwsvoid:
-    %288 = mir.load %44, 16 width: qword
-    %289 = mir.load %44, 24 width: qword
-    %290 = mir.load %44, 32 width: qword
-    %291 = mir.load %44, 40 width: qword
-    %292 = mir.load %44, 48 width: qword
-    %293 = mir.load %44, 56 width: qword
-    %0 = mir.indirect_call %43(%288, %289, %290, %291, %292, %293)
-    mir.br store_result(%0, %295)
+    %379 = mir.load %135, 16 width: qword
+    %380 = mir.load %135, 24 width: qword
+    %381 = mir.load %135, 32 width: qword
+    %382 = mir.load %135, 40 width: qword
+    %383 = mir.load %135, 48 width: qword
+    %384 = mir.load %135, 56 width: qword
+    %0 = mir.indirect_call %134(%379, %380, %381, %382, %383, %384)
+    mir.br store_result(%0, %386)
   arity7:
-    %297 = mir.mov_imm 1 : i64
-    %298 = mir.cmp eq, %51, %297
-    mir.cond_br %298 [then: arity7_void(), else: arity7_try()]
+    %388 = mir.mov_imm 1 : i64
+    %389 = mir.cmp eq, %142, %388
+    mir.cond_br %389 [then: arity7_void(), else: arity7_try()]
   arity7_try:
-    %300 = mir.mov_imm 2 : i64
-    %301 = mir.cmp eq, %51, %300
-    mir.cond_br %301 [then: arity7_throws(), else: arity7_t3()]
+    %391 = mir.mov_imm 2 : i64
+    %392 = mir.cmp eq, %142, %391
+    mir.cond_br %392 [then: arity7_throws(), else: arity7_t3()]
   arity7_t3:
-    %303 = mir.mov_imm 3 : i64
-    %304 = mir.cmp eq, %51, %303
-    mir.cond_br %304 [then: arity7_throwsvoid(), else: arity7_i64()]
+    %394 = mir.mov_imm 3 : i64
+    %395 = mir.cmp eq, %142, %394
+    mir.cond_br %395 [then: arity7_throwsvoid(), else: arity7_i64()]
   arity7_i64:
-    %306 = mir.load %44, 16 width: qword
-    %307 = mir.load %44, 24 width: qword
-    %308 = mir.load %44, 32 width: qword
-    %309 = mir.load %44, 40 width: qword
-    %310 = mir.load %44, 48 width: qword
-    %311 = mir.load %44, 56 width: qword
-    %312 = mir.load %44, 64 width: qword
-    %314 = mir.indirect_call %43(%306, %307, %308, %309, %310, %311, %312)
-    mir.br store_result(%314, %52)
+    %397 = mir.load %135, 16 width: qword
+    %398 = mir.load %135, 24 width: qword
+    %399 = mir.load %135, 32 width: qword
+    %400 = mir.load %135, 40 width: qword
+    %401 = mir.load %135, 48 width: qword
+    %402 = mir.load %135, 56 width: qword
+    %403 = mir.load %135, 64 width: qword
+    %405 = mir.indirect_call %134(%397, %398, %399, %400, %401, %402, %403)
+    mir.br store_result(%405, %143)
   arity7_void:
-    %316 = mir.load %44, 16 width: qword
-    %317 = mir.load %44, 24 width: qword
-    %318 = mir.load %44, 32 width: qword
-    %319 = mir.load %44, 40 width: qword
-    %320 = mir.load %44, 48 width: qword
-    %321 = mir.load %44, 56 width: qword
-    %322 = mir.load %44, 64 width: qword
-    %0 = mir.indirect_call %43(%316, %317, %318, %319, %320, %321, %322)
-    mir.br store_result(%0, %52)
+    %407 = mir.load %135, 16 width: qword
+    %408 = mir.load %135, 24 width: qword
+    %409 = mir.load %135, 32 width: qword
+    %410 = mir.load %135, 40 width: qword
+    %411 = mir.load %135, 48 width: qword
+    %412 = mir.load %135, 56 width: qword
+    %413 = mir.load %135, 64 width: qword
+    %0 = mir.indirect_call %134(%407, %408, %409, %410, %411, %412, %413)
+    mir.br store_result(%0, %143)
   arity7_throws:
-    %325 = mir.load %44, 16 width: qword
-    %326 = mir.load %44, 24 width: qword
-    %327 = mir.load %44, 32 width: qword
-    %328 = mir.load %44, 40 width: qword
-    %329 = mir.load %44, 48 width: qword
-    %330 = mir.load %44, 56 width: qword
-    %331 = mir.load %44, 64 width: qword
-    %333 = mir.indirect_call %43(%325, %326, %327, %328, %329, %330, %331)
-    mir.br store_result(%333, %334)
+    %416 = mir.load %135, 16 width: qword
+    %417 = mir.load %135, 24 width: qword
+    %418 = mir.load %135, 32 width: qword
+    %419 = mir.load %135, 40 width: qword
+    %420 = mir.load %135, 48 width: qword
+    %421 = mir.load %135, 56 width: qword
+    %422 = mir.load %135, 64 width: qword
+    %424 = mir.indirect_call %134(%416, %417, %418, %419, %420, %421, %422)
+    mir.br store_result(%424, %425)
   arity7_throwsvoid:
-    %336 = mir.load %44, 16 width: qword
-    %337 = mir.load %44, 24 width: qword
-    %338 = mir.load %44, 32 width: qword
-    %339 = mir.load %44, 40 width: qword
-    %340 = mir.load %44, 48 width: qword
-    %341 = mir.load %44, 56 width: qword
-    %342 = mir.load %44, 64 width: qword
-    %0 = mir.indirect_call %43(%336, %337, %338, %339, %340, %341, %342)
-    mir.br store_result(%0, %344)
+    %427 = mir.load %135, 16 width: qword
+    %428 = mir.load %135, 24 width: qword
+    %429 = mir.load %135, 32 width: qword
+    %430 = mir.load %135, 40 width: qword
+    %431 = mir.load %135, 48 width: qword
+    %432 = mir.load %135, 56 width: qword
+    %433 = mir.load %135, 64 width: qword
+    %0 = mir.indirect_call %134(%427, %428, %429, %430, %431, %432, %433)
+    mir.br store_result(%0, %435)
   bad_arity:
-    %345 = mir.mov_imm 137 : i64
-    mir.os_exit %345
-    %346 = mir.mov_imm 0 : i64
-    mir.br store_result(%346, %52)
+    %436 = mir.mov_imm 137 : i64
+    mir.os_exit %436
+    %437 = mir.mov_imm 0 : i64
+    mir.br store_result(%437, %143)
   store_result:
-    mir.store %352, %42, 8 width: qword
-    mir.store %353, %42, 16 width: qword
-    %350 = mir.mov_imm 2 : i64
-    mir.store %350, %42, 0 width: qword
-    %351 = mir.mov_imm 0 : i64
-    mir.ret %351
+    mir.store %443, %133, 8 width: qword
+    mir.store %444, %133, 16 width: qword
+    %441 = mir.mov_imm 2 : i64
+    mir.store %441, %133, 0 width: qword
+    %442 = mir.mov_imm 0 : i64
+    mir.ret %442
   }
   func @__gt_alloc(local0: i64, local1: i64, local2: i64) -> i64 {
   entry:
-    %352 = mir.param local0 : i64
-    %353 = mir.param local1 : i64
-    %354 = mir.param local2 : i64
-    %355 = mir.mov_imm 80 : i64
-    %356 = mir.call @__slab_alloc(%355)
-    %357 = mir.mov_imm 4096 : i64
-    %358 = mir.call @__slab_alloc(%357)
-    %360 = mir.mov_imm 0 : i64
-    mir.store %360, %356, 0 width: qword
-    mir.store %360, %356, 8 width: qword
-    mir.store %360, %356, 16 width: qword
-    mir.store %352, %356, 24 width: qword
-    mir.store %354, %356, 32 width: qword
-    mir.store %360, %356, 40 width: qword
-    mir.store %360, %356, 48 width: qword
-    mir.store %360, %356, 56 width: qword
-    mir.store %358, %356, 64 width: qword
-    mir.store %360, %356, 72 width: qword
-    mir.ret %356
+    %443 = mir.param local0 : i64
+    %444 = mir.param local1 : i64
+    %445 = mir.param local2 : i64
+    %446 = mir.mov_imm 80 : i64
+    %447 = mir.call @__slab_alloc(%446)
+    %448 = mir.mov_imm 4096 : i64
+    %449 = mir.call @__slab_alloc(%448)
+    %451 = mir.mov_imm 0 : i64
+    mir.store %451, %447, 0 width: qword
+    mir.store %451, %447, 8 width: qword
+    mir.store %451, %447, 16 width: qword
+    mir.store %443, %447, 24 width: qword
+    mir.store %445, %447, 32 width: qword
+    mir.store %451, %447, 40 width: qword
+    mir.store %451, %447, 48 width: qword
+    mir.store %451, %447, 56 width: qword
+    mir.store %449, %447, 64 width: qword
+    mir.store %451, %447, 72 width: qword
+    mir.ret %447
   }
   func @__gt_spawn_root(local0: i64) -> i64 {
   entry:
-    %382 = mir.param local0 : i64
-    %383 = mir.call @__gt_init()
-    %384 = mir.mov_imm 16 : i64
-    %385 = mir.call @__slab_alloc(%384)
-    %386 = mir.mov_imm 0 : i64
-    mir.store %386, %385, 0 width: qword
-    mir.store %386, %385, 8 width: qword
-    %388 = mir.mov_imm 0 : i64
-    %390 = mir.call @__gt_alloc(%382, %388, %385)
-    %392 = mir.call @__gt_enqueue(%390)
-    mir.ret %390
+    %473 = mir.param local0 : i64
+    %474 = mir.call @__gt_init()
+    %475 = mir.mov_imm 16 : i64
+    %476 = mir.call @__slab_alloc(%475)
+    %477 = mir.mov_imm 0 : i64
+    mir.store %477, %476, 0 width: qword
+    mir.store %477, %476, 8 width: qword
+    %479 = mir.mov_imm 0 : i64
+    %481 = mir.call @__gt_alloc(%473, %479, %476)
+    %483 = mir.call @__gt_enqueue(%481)
+    mir.ret %481
   }
   func @__sched_run(local0: i64) -> i64 {
   entry:
-    %394 = mir.param local0 : i64
+    %485 = mir.param local0 : i64
     mir.br loop_head()
   loop_head:
-    %395 = mir.call @__gt_dequeue()
-    %396 = mir.mov_imm 0 : i64
-    %397 = mir.cmp eq, %395, %396
-    mir.cond_br %397 [then: loop_done(), else: run_gt()]
+    %486 = mir.call @__gt_dequeue()
+    %487 = mir.mov_imm 0 : i64
+    %488 = mir.cmp eq, %486, %487
+    mir.cond_br %488 [then: queue_drained(), else: run_gt()]
+  queue_drained:
+    %489 = mir.global_addr @__gt_timer_count
+    %490 = mir.load %489, 0 width: qword
+    %491 = mir.mov_imm 0 : i64
+    %492 = mir.cmp eq, %490, %491
+    mir.cond_br %492 [then: loop_done(), else: idle_wait()]
+  idle_wait:
+    %493 = mir.call @__gt_timer_min()
+    %494 = mir.mov_imm 0 : i64
+    %495 = mir.cmp lt, %494, %493
+    mir.cond_br %495 [then: do_poll(), else: do_advance()]
+  do_poll:
+    %497 = mir.call @__gt_idle_poll(%493)
+    mir.br do_advance()
+  do_advance:
+    %499 = mir.call @__gt_timer_advance(%493)
+    mir.br loop_head()
   loop_done:
-    %399 = mir.load %394, 8 width: qword
-    %400 = mir.load %394, 64 width: qword
-    %401 = mir.call @__slab_free(%400)
-    %402 = mir.load %394, 32 width: qword
-    %403 = mir.call @__slab_free(%402)
-    %404 = mir.call @__slab_free(%394)
-    mir.ret %399
+    %501 = mir.load %485, 8 width: qword
+    %502 = mir.load %485, 64 width: qword
+    %503 = mir.call @__slab_free(%502)
+    %504 = mir.load %485, 32 width: qword
+    %505 = mir.call @__slab_free(%504)
+    %506 = mir.call @__slab_free(%485)
+    mir.ret %501
   run_gt:
-    %406 = mir.global_addr @__gt_current_p
-    mir.store %395, %406, 0 width: qword
-    %408 = mir.mov_imm 1 : i64
-    mir.store %408, %395, 0 width: qword
-    %409 = mir.load %395, 64 width: qword
-    %411 = mir.load %395, 72 width: qword
-    %412 = mir.mov_imm 0 : i64
-    %413 = mir.cmp eq, %411, %412
-    mir.cond_br %413 [then: first_call(), else: rewind_call()]
+    %508 = mir.global_addr @__gt_current_p
+    mir.store %486, %508, 0 width: qword
+    %510 = mir.mov_imm 1 : i64
+    mir.store %510, %486, 0 width: qword
+    %511 = mir.load %486, 64 width: qword
+    %513 = mir.load %486, 72 width: qword
+    %514 = mir.mov_imm 0 : i64
+    %515 = mir.cmp eq, %513, %514
+    mir.cond_br %515 [then: first_call(), else: rewind_call()]
   first_call:
-    %414 = mir.mov_imm 8 : i64
-    %415 = mir.add.i64 %409, %414
-    mir.store %415, %409, 0 width: qword
-    %416 = mir.mov_imm 4096 : i64
-    %417 = mir.add.i64 %409, %416
-    mir.store %417, %409, 4 width: qword
-    %419 = mir.mov_imm 1 : i64
-    mir.store %419, %395, 72 width: qword
-    %421 = mir.call @__gt_invoke(%395)
+    %516 = mir.mov_imm 8 : i64
+    %517 = mir.add.i64 %511, %516
+    mir.store %517, %511, 0 width: qword
+    %518 = mir.mov_imm 4096 : i64
+    %519 = mir.add.i64 %511, %518
+    mir.store %519, %511, 4 width: qword
+    %521 = mir.mov_imm 1 : i64
+    mir.store %521, %486, 72 width: qword
+    %523 = mir.call @__gt_invoke(%486)
     mir.br after_invoke()
   rewind_call:
-    %422 = mir.global_addr @__gt_rewinding
-    %423 = mir.mov_imm 1 : i64
-    mir.store %423, %422, 0 width: qword
-    %425 = mir.call @asyncify_start_rewind(%409)
-    %427 = mir.call @__gt_invoke(%395)
+    %524 = mir.global_addr @__gt_rewinding
+    %525 = mir.mov_imm 1 : i64
+    mir.store %525, %524, 0 width: qword
+    %527 = mir.call @asyncify_start_rewind(%511)
+    %529 = mir.call @__gt_invoke(%486)
     mir.br after_invoke()
   after_invoke:
-    %429 = mir.load %395, 0 width: qword
-    %430 = mir.mov_imm 2 : i64
-    %431 = mir.cmp eq, %429, %430
-    mir.cond_br %431 [then: completed(), else: suspended()]
+    %531 = mir.load %486, 0 width: qword
+    %532 = mir.mov_imm 2 : i64
+    %533 = mir.cmp eq, %531, %532
+    mir.cond_br %533 [then: completed(), else: suspended()]
   completed:
-    %433 = mir.load %395, 48 width: qword
-    %434 = mir.mov_imm 0 : i64
-    %435 = mir.cmp eq, %433, %434
-    mir.cond_br %435 [then: loop_head(), else: enqueue_waiter()]
+    %535 = mir.load %486, 48 width: qword
+    %536 = mir.mov_imm 0 : i64
+    %537 = mir.cmp eq, %535, %536
+    mir.cond_br %537 [then: loop_head(), else: enqueue_waiter()]
   enqueue_waiter:
-    %437 = mir.load %395, 48 width: qword
-    %438 = mir.call @__gt_enqueue(%437)
+    %539 = mir.load %486, 48 width: qword
+    %540 = mir.call @__gt_enqueue(%539)
     mir.br loop_head()
   suspended:
-    %439 = mir.call @asyncify_stop_unwind()
+    %541 = mir.call @asyncify_stop_unwind()
     mir.br loop_head()
   }
 }

@@ -92,6 +92,9 @@ function wasmGtOverrideNames() returns StringArray
 	names.push("__gt_await")
 	names.push("__gt_current_trace_id")
 	names.push("__gt_trace_emit")
+	// Cooperative wasm sleep: the runtime.std `maxon_sleep` is a blocking `osSleep`
+	// stub; the wasm body (timer + asyncify suspend) lives in runtime_wasm.std.
+	names.push("maxon_sleep")
 	return names
 end 'wasmGtOverrideNames'
 
@@ -501,6 +504,14 @@ function filterRuntimeByReachability(runtime StdModule, userModule StdModule, ta
 	if target.cpu == CpuArch.x64 and target.os == Os.windows 'win32Helpers'
 		seedRuntimeReachName("mrt_alloc", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
 		seedRuntimeReachName("mm_decref", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
+		// The green-thread runtime (`emitX64GreenThreadRuntime`) is emitted
+		// unconditionally on x64-Windows, and its hand-rolled `__gt_trace_emit`
+		// emits `call rel32` fixups to these two async-trace `.std` helpers (guarded
+		// at runtime by `__at_trace_enabled`, so they never execute in a normal
+		// build). No other call edge reaches them in a non-async-trace program, so
+		// seed them here or the fixups resolve to .text+0 ("Unresolved label").
+		seedRuntimeReachName("mm_trace_print_tag", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
+		seedRuntimeReachName("mm_trace_print_i64", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
 	end 'win32Helpers'
 
 	// On wasm the green-thread scheduler is driven from `mrt_start`'s bootstrap

@@ -648,6 +648,20 @@ export function registerSlabAndMmGlobalsForDataSection(globalData GlobalDataTabl
 	addDataSectionEntry(globalData, name: "__sched_tls_teb_offset", initialBytes: zeroBytesOfSize(8))
 	addDataSectionEntry(globalData, name: "__sched_global_queue_cs", initialBytes: zeroBytesOfSize(40))
 
+	// Tier 4 cooperative-sleep timer: a fixed array of {time i64, gt_ptr i64}
+	// entries (16 bytes each, capacity 256) backing `maxon_sleep`, so a sleeping GT
+	// yields its thread to other GTs and wakes cooperatively. The two backends
+	// interpret it differently: x64-Windows is multi-threaded and uses a min-heap of
+	// ABSOLUTE GetTickCount64 deadlines, drained by `__gt_timer_check` (driven from
+	// the worker loop / `__gt_await` / the sleep park) under the `__gt_timer_cs`
+	// CRITICAL_SECTION. Single-threaded wasm uses a flat array of RELATIVE remaining
+	// milliseconds, decremented by `__sched_run`'s idle poll, and ignores the lock.
+	// Reserved unconditionally so the .data layout is uniform across targets (the
+	// wasm runtime reads `__gt_timer_heap`/`__gt_timer_count` from linear memory too).
+	addDataSectionEntry(globalData, name: "__gt_timer_heap", initialBytes: zeroBytesOfSize(256 * 16))
+	addDataSectionEntry(globalData, name: "__gt_timer_count", initialBytes: zeroBytesOfSize(8))
+	addDataSectionEntry(globalData, name: "__gt_timer_cs", initialBytes: zeroBytesOfSize(40))
+
 	// Phase D2: kernel-supplied argc/argv stashed by `mrt_start`'s prologue on
 	// Linux/macOS. The `stashEntryArgv` backend pseudo-op writes rdi/rsi (x64)
 	// or x0/x1 (arm64) into these slots before any other code in the entry

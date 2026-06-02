@@ -365,6 +365,12 @@ function linkX64StdlibFunctionsConcat(code ByteArray, labelNames StringArray, la
 	if os == Os.windows 'win32Helpers'
 		seeds.push("mrt_alloc")
 		seeds.push("mm_decref")
+		// `emitX64GreenThreadRuntime` (also emitted after this link pass) hand-rolls
+		// `__gt_trace_emit`, whose call fixups reference these two async-trace helpers
+		// (runtime-gated by `__at_trace_enabled`). No other call edge reaches them in
+		// a non-async-trace program, so seed them or the fixups resolve to .text+0.
+		seeds.push("mm_trace_print_tag")
+		seeds.push("mm_trace_print_i64")
 	end 'win32Helpers'
 
 	let needed = computeNeededStdlibFunctions(seeds, stdlibCache: stdlibCache)
@@ -2911,6 +2917,9 @@ function emitX64GreenThreadRuntime(code ByteArray, relocations RelocationArray, 
 	emitX64GtCurrentTraceId(code, rdataRelocs: rdataRelocs, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
 	emitX64SchedWorkerLoop(code, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
 	emitX64GtAwait(code, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
+	emitX64GtTimerAdd(code, relocations: relocations, rdataRelocs: rdataRelocs, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
+	emitX64GtTimerCheck(code, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
+	emitX64MaxonSleep(code, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
 	emitX64GtMorestack(code, relocations: relocations, rdataRelocs: rdataRelocs, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
 end 'emitX64GreenThreadRuntime'
 
@@ -3406,6 +3415,9 @@ function emitX64GtAwait(code ByteArray, relocations RelocationArray, callFixups 
 	// (or another) thread and stashed its waiter, migrating it back onto the queue.
 	helperMarkBlock(state, code: code, blockId: 1)
 	helperEmitDirectCall(code, callFixups: callFixups, target: "__gt_process_pending_waiter")
+	// Drive expired sleep timers so an awaiter blocked on a sleeping GT (rather than
+	// a worker) still re-readies it — otherwise the await loop could spin forever.
+	helperEmitDirectCall(code, callFixups: callFixups, target: "__gt_timer_check")
 	helperEmitDirectCall(code, callFixups: callFixups, target: "__gt_dequeue")
 	helperTestReg(code, reg: X64Register.r8)
 	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 2)  // jz recheck
@@ -3484,6 +3496,309 @@ function emitX64GtAwait(code ByteArray, relocations RelocationArray, callFixups 
 	helperFinalize(state, code: code)
 	helperEpilogue(code)
 end 'emitX64GtAwait'
+
+// dest = &__gt_timer_heap[<slot idxSlot>] for the 16-byte cooperative-sleep timer
+// entries, given the heap base address cached in slot `baseSlot`. Clobbers `scratch`.
+// Collapses the `load index / shl 4 / load base / add` heap-element address arithmetic
+// repeated across the timer min-heap emitters below.
+function helperLoadTimerEntryAddr(code ByteArray, idxSlot VarSlot, baseSlot VarSlot, dest X64Register, scratch X64Register)
+	helperLoadSlot(code, slotIndex: idxSlot, dest: dest)
+	helperShlRegImm(code, dest: dest, value: 4)
+	helperLoadSlot(code, slotIndex: baseSlot, dest: scratch)
+	emitAddRegRegParam(code, dest: dest, src: scratch)
+end 'helperLoadTimerEntryAddr'
+
+// __gt_timer_add(gt=rcx, deadline=rdx): insert (deadline, gt) into the cooperative
+// sleep timer min-heap under `__gt_timer_cs`, keyed by `deadline` (an absolute
+// GetTickCount64 millisecond value). Sift-up restores the min-heap property. Ports
+// the C# bootstrap's RuntimeEmitter.EmitGtTimerAdd. No result. Slots: 0=gt,
+// 1=deadline, 2=i, 3=heap_base, 4=parent.
+function emitX64GtTimerAdd(code ByteArray, relocations RelocationArray, rdataRelocs RdataRelocationArray, funcLabelNames StringArray, funcLabelOffsets CodeOffsetArray, funcLabelOffsetMap CodeLabelOffsetMap)
+	recordLabel(funcLabelNames, labelOffsets: funcLabelOffsets, labelOffsetMap: funcLabelOffsetMap, name: "__gt_timer_add", offset: code.count())
+	var state = Win32HelperState.create(3, outgoingBytes: 32, localBytes: 40)
+	helperPrologue(code, frameSize: 80)
+
+	// block 0: entry — lock, append (deadline, gt) at heap[count], count++.
+	helperMarkBlock(state, code: code, blockId: 0)
+	helperStoreSlot(code, slotIndex: 0, src: X64Register.rcx)  // gt
+	helperStoreSlot(code, slotIndex: 1, src: X64Register.rdx)  // deadline
+	emitLeaRipRelOp(code, dest: X64Register.rcx, rdataLabel: "__gt_timer_cs", rdataRelocs: rdataRelocs)
+	helperEmitIatCall(code, relocations: relocations, slotIndex: iatSlotIndex(IatSlot.enterCriticalSection))
+	// i = count ; count++
+	helperLoadGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.rax, name: "__gt_timer_count")
+	helperStoreSlot(code, slotIndex: 2, src: X64Register.rax)  // i
+	emitAddRegImmParam(code, dest: X64Register.rax, value: 1)
+	helperStoreGlobal(code, rdataRelocs: rdataRelocs, src: X64Register.rax, name: "__gt_timer_count")
+	// heap_base → slot 3
+	emitLeaRipRelOp(code, dest: X64Register.rax, rdataLabel: "__gt_timer_heap", rdataRelocs: rdataRelocs)
+	helperStoreSlot(code, slotIndex: 3, src: X64Register.rax)
+	// &heap[i] = heap_base + i*16 → rcx ; store {deadline, gt}
+	helperLoadTimerEntryAddr(code, idxSlot: 2, baseSlot: 3, dest: X64Register.rcx, scratch: X64Register.rax)  // &heap[i]
+	helperLoadSlot(code, slotIndex: 1, dest: X64Register.rax)  // deadline
+	helperStoreIndirect(code, base: X64Register.rcx, disp: 0, src: X64Register.rax)
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.rax)  // gt
+	helperStoreIndirect(code, base: X64Register.rcx, disp: 8, src: X64Register.rax)
+
+	// block 1: sift_up — while i != 0 and heap[i].deadline < heap[parent].deadline, swap.
+	helperMarkBlock(state, code: code, blockId: 1)
+	helperLoadSlot(code, slotIndex: 2, dest: X64Register.rax)  // i
+	helperTestReg(code, reg: X64Register.rax)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 2)  // jz done (at root)
+	// parent = (i - 1) >> 1 → slot 4
+	emitSubRegImmParam(code, dest: X64Register.rax, value: 1)
+	code.append(b"\x48\xd1\xe8")  // shr rax, 1
+	helperStoreSlot(code, slotIndex: 4, src: X64Register.rax)
+	// &heap[i] → rcx
+	helperLoadTimerEntryAddr(code, idxSlot: 2, baseSlot: 3, dest: X64Register.rcx, scratch: X64Register.rax)  // &heap[i]
+	// &heap[parent] → r10
+	helperLoadTimerEntryAddr(code, idxSlot: 4, baseSlot: 3, dest: X64Register.r10, scratch: X64Register.rax)  // &heap[parent]
+	// rdx = heap[i].deadline ; rax = heap[parent].deadline
+	helperLoadIndirect(code, dest: X64Register.rdx, base: X64Register.rcx, disp: 0)
+	helperLoadIndirect(code, dest: X64Register.rax, base: X64Register.r10, disp: 0)
+	emitCmpRegRegOp(code, lhs: X64Register.rdx, rhs: X64Register.rax)
+	helperEmitCondJump(code, state: state, opcode: 0x83, targetBlock: 2)  // jae done (i >= parent)
+	// swap deadline (offset 0): heap[i] gets parent.deadline, heap[parent] gets i.deadline
+	helperStoreIndirect(code, base: X64Register.rcx, disp: 0, src: X64Register.rax)
+	helperStoreIndirect(code, base: X64Register.r10, disp: 0, src: X64Register.rdx)
+	// swap gt (offset 8)
+	helperLoadIndirect(code, dest: X64Register.rax, base: X64Register.rcx, disp: 8)
+	helperLoadIndirect(code, dest: X64Register.rdx, base: X64Register.r10, disp: 8)
+	helperStoreIndirect(code, base: X64Register.rcx, disp: 8, src: X64Register.rdx)
+	helperStoreIndirect(code, base: X64Register.r10, disp: 8, src: X64Register.rax)
+	// i = parent ; loop
+	helperLoadSlot(code, slotIndex: 4, dest: X64Register.rax)
+	helperStoreSlot(code, slotIndex: 2, src: X64Register.rax)
+	helperEmitJmp(code, state: state, targetBlock: 1)
+
+	// block 2: done — unlock.
+	helperMarkBlock(state, code: code, blockId: 2)
+	emitLeaRipRelOp(code, dest: X64Register.rcx, rdataLabel: "__gt_timer_cs", rdataRelocs: rdataRelocs)
+	helperEmitIatCall(code, relocations: relocations, slotIndex: iatSlotIndex(IatSlot.leaveCriticalSection))
+	helperFinalize(state, code: code)
+	helperEpilogue(code)
+end 'emitX64GtTimerAdd'
+
+// __gt_timer_check(): pop every timer whose deadline has passed (now = GetTickCount64)
+// and re-ready its GT — setting status=ready and, for a non-main GT, __gt_enqueue'ing
+// it. Sift-down restores the min-heap after each pop. Driven from the worker loop,
+// `__gt_await`, and the sleep park so a sleeping GT wakes cooperatively. Ports the C#
+// bootstrap's RuntimeEmitter.EmitGtTimerCheck. No args, no result. Slots: 0=now,
+// 1=heap_base, 2=gt, 3=i, 4=smallest, 5=left, 6=right.
+function emitX64GtTimerCheck(code ByteArray, relocations RelocationArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, funcLabelNames StringArray, funcLabelOffsets CodeOffsetArray, funcLabelOffsetMap CodeLabelOffsetMap)
+	recordLabel(funcLabelNames, labelOffsets: funcLabelOffsets, labelOffsetMap: funcLabelOffsetMap, name: "__gt_timer_check", offset: code.count())
+	var state = Win32HelperState.create(8, outgoingBytes: 32, localBytes: 56)
+	helperPrologue(code, frameSize: 96)
+
+	// block 0: entry — lock-free fast path on count==0, then lock + snapshot now/heap_base.
+	helperMarkBlock(state, code: code, blockId: 0)
+	helperLoadGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.rax, name: "__gt_timer_count")
+	helperTestReg(code, reg: X64Register.rax)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 7)  // jz ret
+	emitLeaRipRelOp(code, dest: X64Register.rcx, rdataLabel: "__gt_timer_cs", rdataRelocs: rdataRelocs)
+	helperEmitIatCall(code, relocations: relocations, slotIndex: iatSlotIndex(IatSlot.enterCriticalSection))
+	helperLoadGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.rax, name: "__gt_timer_count")
+	helperTestReg(code, reg: X64Register.rax)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 6)  // jz unlock
+	helperEmitIatCall(code, relocations: relocations, slotIndex: iatSlotIndex(IatSlot.getTickCount64))  // rax = now
+	helperStoreSlot(code, slotIndex: 0, src: X64Register.rax)
+	emitLeaRipRelOp(code, dest: X64Register.rax, rdataLabel: "__gt_timer_heap", rdataRelocs: rdataRelocs)
+	helperStoreSlot(code, slotIndex: 1, src: X64Register.rax)
+
+	// block 1: loop — if heap[0].deadline > now (or empty) stop; else pop the root.
+	helperMarkBlock(state, code: code, blockId: 1)
+	helperLoadGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.rax, name: "__gt_timer_count")
+	helperTestReg(code, reg: X64Register.rax)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 6)  // jz unlock
+	helperLoadSlot(code, slotIndex: 1, dest: X64Register.rcx)  // heap_base
+	helperLoadIndirect(code, dest: X64Register.rax, base: X64Register.rcx, disp: 0)  // heap[0].deadline
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.rdx)  // now
+	emitCmpRegRegOp(code, lhs: X64Register.rax, rhs: X64Register.rdx)
+	helperEmitCondJump(code, state: state, opcode: 0x87, targetBlock: 6)  // ja unlock (deadline > now)
+	// gt = heap[0].gt → slot 2
+	helperLoadSlot(code, slotIndex: 1, dest: X64Register.rcx)
+	helperLoadIndirect(code, dest: X64Register.rax, base: X64Register.rcx, disp: 8)
+	helperStoreSlot(code, slotIndex: 2, src: X64Register.rax)
+	// count--
+	helperLoadGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.rax, name: "__gt_timer_count")
+	emitSubRegImmParam(code, dest: X64Register.rax, value: 1)
+	helperStoreGlobal(code, rdataRelocs: rdataRelocs, src: X64Register.rax, name: "__gt_timer_count")
+	helperTestReg(code, reg: X64Register.rax)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 4)  // jz fire (heap now empty)
+	// move heap[count] → heap[0]
+	helperLoadGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.rcx, name: "__gt_timer_count")
+	helperShlRegImm(code, dest: X64Register.rcx, value: 4)
+	helperLoadSlot(code, slotIndex: 1, dest: X64Register.rax)
+	emitAddRegRegParam(code, dest: X64Register.rcx, src: X64Register.rax)  // &heap[count]
+	helperLoadSlot(code, slotIndex: 1, dest: X64Register.r10)  // &heap[0]
+	helperLoadIndirect(code, dest: X64Register.rax, base: X64Register.rcx, disp: 0)
+	helperStoreIndirect(code, base: X64Register.r10, disp: 0, src: X64Register.rax)
+	helperLoadIndirect(code, dest: X64Register.rax, base: X64Register.rcx, disp: 8)
+	helperStoreIndirect(code, base: X64Register.r10, disp: 8, src: X64Register.rax)
+	// i = 0
+	code.append(b"\x48\x31\xc0")  // xor rax, rax
+	helperStoreSlot(code, slotIndex: 3, src: X64Register.rax)
+
+	// block 2: sift_down — pick the smaller child; if it beats heap[i], swap and descend.
+	helperMarkBlock(state, code: code, blockId: 2)
+	helperLoadSlot(code, slotIndex: 3, dest: X64Register.rax)  // i
+	emitMovRegRegOp(code, dest: X64Register.rcx, src: X64Register.rax)
+	emitAddRegRegParam(code, dest: X64Register.rcx, src: X64Register.rcx)  // 2*i
+	emitAddRegImmParam(code, dest: X64Register.rcx, value: 1)  // left = 2*i + 1
+	helperStoreSlot(code, slotIndex: 5, src: X64Register.rcx)
+	helperLoadGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.rdx, name: "__gt_timer_count")
+	emitCmpRegRegOp(code, lhs: X64Register.rcx, rhs: X64Register.rdx)
+	helperEmitCondJump(code, state: state, opcode: 0x83, targetBlock: 4)  // jae fire (no children)
+	helperStoreSlot(code, slotIndex: 4, src: X64Register.rcx)  // smallest = left
+	emitAddRegImmParam(code, dest: X64Register.rcx, value: 1)  // right = left + 1
+	helperStoreSlot(code, slotIndex: 6, src: X64Register.rcx)
+	helperLoadGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.rdx, name: "__gt_timer_count")
+	emitCmpRegRegOp(code, lhs: X64Register.rcx, rhs: X64Register.rdx)
+	helperEmitCondJump(code, state: state, opcode: 0x83, targetBlock: 3)  // jae cmp_parent (no right child)
+	// if heap[right].deadline < heap[left].deadline → smallest = right
+	helperLoadTimerEntryAddr(code, idxSlot: 6, baseSlot: 1, dest: X64Register.rcx, scratch: X64Register.rax)  // &heap[right]
+	helperLoadIndirect(code, dest: X64Register.rdx, base: X64Register.rcx, disp: 0)  // right.deadline
+	helperLoadTimerEntryAddr(code, idxSlot: 5, baseSlot: 1, dest: X64Register.rcx, scratch: X64Register.rax)  // &heap[left]
+	helperLoadIndirect(code, dest: X64Register.rax, base: X64Register.rcx, disp: 0)  // left.deadline
+	emitCmpRegRegOp(code, lhs: X64Register.rdx, rhs: X64Register.rax)
+	helperEmitCondJump(code, state: state, opcode: 0x83, targetBlock: 3)  // jae cmp_parent (right >= left)
+	helperLoadSlot(code, slotIndex: 6, dest: X64Register.rcx)
+	helperStoreSlot(code, slotIndex: 4, src: X64Register.rcx)  // smallest = right
+
+	// block 3: cmp_parent — if heap[smallest] beats heap[i], swap and continue; else done.
+	helperMarkBlock(state, code: code, blockId: 3)
+	helperLoadTimerEntryAddr(code, idxSlot: 4, baseSlot: 1, dest: X64Register.rcx, scratch: X64Register.rax)  // &heap[smallest]
+	helperLoadIndirect(code, dest: X64Register.rdx, base: X64Register.rcx, disp: 0)  // smallest.deadline
+	helperLoadTimerEntryAddr(code, idxSlot: 3, baseSlot: 1, dest: X64Register.rcx, scratch: X64Register.rax)  // &heap[i]
+	helperLoadIndirect(code, dest: X64Register.rax, base: X64Register.rcx, disp: 0)  // i.deadline
+	emitCmpRegRegOp(code, lhs: X64Register.rdx, rhs: X64Register.rax)
+	helperEmitCondJump(code, state: state, opcode: 0x83, targetBlock: 4)  // jae fire (heap property restored)
+	// swap heap[i] and heap[smallest]: rcx = &heap[i], r10 = &heap[smallest]
+	helperLoadTimerEntryAddr(code, idxSlot: 3, baseSlot: 1, dest: X64Register.rcx, scratch: X64Register.rax)  // &heap[i]
+	helperLoadTimerEntryAddr(code, idxSlot: 4, baseSlot: 1, dest: X64Register.r10, scratch: X64Register.rax)  // &heap[smallest]
+	helperLoadIndirect(code, dest: X64Register.rax, base: X64Register.rcx, disp: 0)
+	helperLoadIndirect(code, dest: X64Register.rdx, base: X64Register.r10, disp: 0)
+	helperStoreIndirect(code, base: X64Register.rcx, disp: 0, src: X64Register.rdx)
+	helperStoreIndirect(code, base: X64Register.r10, disp: 0, src: X64Register.rax)
+	helperLoadIndirect(code, dest: X64Register.rax, base: X64Register.rcx, disp: 8)
+	helperLoadIndirect(code, dest: X64Register.rdx, base: X64Register.r10, disp: 8)
+	helperStoreIndirect(code, base: X64Register.rcx, disp: 8, src: X64Register.rdx)
+	helperStoreIndirect(code, base: X64Register.r10, disp: 8, src: X64Register.rax)
+	helperLoadSlot(code, slotIndex: 4, dest: X64Register.rax)  // i = smallest
+	helperStoreSlot(code, slotIndex: 3, src: X64Register.rax)
+	helperEmitJmp(code, state: state, targetBlock: 2)
+
+	// block 4: fire — status=ready; enqueue unless the GT is the main thread (stackBase==0).
+	helperMarkBlock(state, code: code, blockId: 4)
+	helperLoadSlot(code, slotIndex: 2, dest: X64Register.rax)  // gt
+	code.append(b"\x48\x31\xc9")  // xor rcx, rcx
+	helperStoreIndirect(code, base: X64Register.rax, disp: GtOffStatus, src: X64Register.rcx)
+	helperLoadIndirect(code, dest: X64Register.rcx, base: X64Register.rax, disp: GtOffStackBase)
+	helperTestReg(code, reg: X64Register.rcx)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 5)  // jz skip_enqueue
+	helperLoadSlot(code, slotIndex: 2, dest: X64Register.rcx)  // gt
+	helperEmitDirectCall(code, callFixups: callFixups, target: "__gt_enqueue")
+
+	// block 5: skip_enqueue — loop back to drain the next expired timer.
+	helperMarkBlock(state, code: code, blockId: 5)
+	helperEmitJmp(code, state: state, targetBlock: 1)
+
+	// block 6: unlock.
+	helperMarkBlock(state, code: code, blockId: 6)
+	emitLeaRipRelOp(code, dest: X64Register.rcx, rdataLabel: "__gt_timer_cs", rdataRelocs: rdataRelocs)
+	helperEmitIatCall(code, relocations: relocations, slotIndex: iatSlotIndex(IatSlot.leaveCriticalSection))
+
+	// block 7: ret.
+	helperMarkBlock(state, code: code, blockId: 7)
+	helperFinalize(state, code: code)
+	helperEpilogue(code)
+end 'emitX64GtTimerCheck'
+
+// maxon_sleep(ms=rcx): suspend the current green thread for `ms` milliseconds as a
+// cooperative yield. Computes deadline = GetTickCount64() + ms, marks self waiting,
+// adds (deadline, self) to the timer heap, then yields to the scheduler until
+// __gt_timer_check re-readies self. The main thread runs an inline scheduler loop
+// (run other GTs / park on its wake event); a worker GT context-switches to its P's
+// mainThread (the worker loop) and resumes when re-enqueued. Ports the C# bootstrap's
+// X86CodeEmitter EmitSleep. Void. Slots: 0=ms, 1=deadline, 2=dequeued GT.
+function emitX64MaxonSleep(code ByteArray, relocations RelocationArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, funcLabelNames StringArray, funcLabelOffsets CodeOffsetArray, funcLabelOffsetMap CodeLabelOffsetMap)
+	recordLabel(funcLabelNames, labelOffsets: funcLabelOffsets, labelOffsetMap: funcLabelOffsetMap, name: "maxon_sleep", offset: code.count())
+	var state = Win32HelperState.create(5, outgoingBytes: 32, localBytes: 24)
+	helperPrologue(code, frameSize: 64)
+
+	// block 0: entry — register the timer, decide main-thread vs worker-GT yield.
+	helperMarkBlock(state, code: code, blockId: 0)
+	helperStoreSlot(code, slotIndex: 0, src: X64Register.rcx)  // ms
+	// Lazy scheduler init so sleep works even with no `async` in the program.
+	helperEmitDirectCall(code, callFixups: callFixups, target: "__gt_init")
+	// deadline = GetTickCount64() + ms
+	helperEmitIatCall(code, relocations: relocations, slotIndex: iatSlotIndex(IatSlot.getTickCount64))
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.rcx)
+	emitAddRegRegParam(code, dest: X64Register.rax, src: X64Register.rcx)
+	helperStoreSlot(code, slotIndex: 1, src: X64Register.rax)  // deadline
+	// self = P.currentGt ; self.status = waiting
+	emitX64GtLoadCurrentP(code, dest: X64Register.r11, rdataRelocs: rdataRelocs)
+	helperLoadIndirect(code, dest: X64Register.r11, base: X64Register.r11, disp: POffCurrentGt)
+	helperMovRegImm(code, dest: X64Register.rax, value: GtStatusWaiting)
+	helperStoreIndirect(code, base: X64Register.r11, disp: GtOffStatus, src: X64Register.rax)
+	// __gt_timer_add(self, deadline)
+	emitMovRegRegOp(code, dest: X64Register.rcx, src: X64Register.r11)
+	helperLoadSlot(code, slotIndex: 1, dest: X64Register.rdx)
+	helperEmitDirectCall(code, callFixups: callFixups, target: "__gt_timer_add")
+	// Re-fetch self (timer_add clobbered r11); main thread iff self.stackBase == 0.
+	emitX64GtLoadCurrentP(code, dest: X64Register.r11, rdataRelocs: rdataRelocs)
+	helperLoadIndirect(code, dest: X64Register.r11, base: X64Register.r11, disp: POffCurrentGt)
+	helperLoadIndirect(code, dest: X64Register.rax, base: X64Register.r11, disp: GtOffStackBase)
+	helperTestReg(code, reg: X64Register.rax)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 2)  // jz mainthread_loop
+
+	// block 1: worker-GT path — switch to P.mainThread (the worker loop), resume later.
+	helperMarkBlock(state, code: code, blockId: 1)
+	emitX64GtLoadCurrentP(code, dest: X64Register.r10, rdataRelocs: rdataRelocs)  // r10 = P
+	helperMovRegImm(code, dest: X64Register.rax, value: GtStatusRunning)
+	helperStoreIndirect(code, base: X64Register.r10, disp: POffMainThread + GtOffStatus, src: X64Register.rax)
+	helperLoadIndirect(code, dest: X64Register.rcx, base: X64Register.r10, disp: POffCurrentGt)  // from = self
+	emitMovRegRegOp(code, dest: X64Register.rdx, src: X64Register.r10)
+	emitAddRegImmParam(code, dest: X64Register.rdx, value: POffMainThread)  // to = &P.mainThread
+	helperEmitDirectCall(code, callFixups: callFixups, target: "__gt_context_switch")
+	helperEmitJmp(code, state: state, targetBlock: 4)  // resume
+
+	// block 2: mainthread_loop — drive the scheduler until our timer fires.
+	helperMarkBlock(state, code: code, blockId: 2)
+	helperEmitDirectCall(code, callFixups: callFixups, target: "__gt_process_pending_waiter")
+	helperEmitDirectCall(code, callFixups: callFixups, target: "__gt_timer_check")
+	// if self.status != waiting → resume
+	emitX64GtLoadCurrentP(code, dest: X64Register.r10, rdataRelocs: rdataRelocs)
+	helperLoadIndirect(code, dest: X64Register.r10, base: X64Register.r10, disp: POffCurrentGt)
+	helperLoadIndirect(code, dest: X64Register.rax, base: X64Register.r10, disp: GtOffStatus)
+	helperCmpRegImm(code, reg: X64Register.rax, value: GtStatusWaiting)
+	helperEmitCondJump(code, state: state, opcode: 0x85, targetBlock: 4)  // jne resume
+	// dequeue a runnable GT and run it while we wait
+	helperEmitDirectCall(code, callFixups: callFixups, target: "__gt_dequeue")  // r8 = GT or 0
+	helperTestReg(code, reg: X64Register.r8)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 3)  // jz park
+	helperStoreSlot(code, slotIndex: 2, src: X64Register.r8)
+	helperMovRegImm(code, dest: X64Register.rax, value: GtStatusRunning)
+	helperStoreIndirect(code, base: X64Register.r8, disp: GtOffStatus, src: X64Register.rax)
+	emitX64GtLoadCurrentP(code, dest: X64Register.rcx, rdataRelocs: rdataRelocs)
+	helperLoadIndirect(code, dest: X64Register.rcx, base: X64Register.rcx, disp: POffCurrentGt)  // from = self
+	helperLoadSlot(code, slotIndex: 2, dest: X64Register.rdx)  // to = dequeued GT
+	helperEmitDirectCall(code, callFixups: callFixups, target: "__gt_context_switch")
+	helperEmitDirectCall(code, callFixups: callFixups, target: "__gt_mark_switched_off")
+	helperEmitJmp(code, state: state, targetBlock: 2)  // loop
+
+	// block 3: park — no runnable GT; wait briefly on our wake event, then re-check.
+	helperMarkBlock(state, code: code, blockId: 3)
+	emitX64GtLoadCurrentP(code, dest: X64Register.rax, rdataRelocs: rdataRelocs)
+	helperLoadIndirect(code, dest: X64Register.rcx, base: X64Register.rax, disp: POffWakeEvent)
+	helperMovRegImm(code, dest: X64Register.rdx, value: 10)  // 10 ms (responsive for sleep timers)
+	helperEmitIatCall(code, relocations: relocations, slotIndex: iatSlotIndex(IatSlot.waitForSingleObject))
+	helperEmitJmp(code, state: state, targetBlock: 2)  // loop
+
+	// block 4: resume — the timer expired (and, for a worker GT, we were re-enqueued).
+	helperMarkBlock(state, code: code, blockId: 4)
+	helperFinalize(state, code: code)
+	helperEpilogue(code)
+end 'emitX64MaxonSleep'
 
 // Emit a ≤4-arg Win32 IAT call that, when the caller is running on a green
 // thread's small stack, runs on the per-P 64 KB system stack instead (heavy
@@ -4037,6 +4352,9 @@ function emitX64GtInit(code ByteArray, relocations RelocationArray, rdataRelocs 
 	// InitializeCriticalSection(&__sched_global_queue_cs)
 	emitLeaRipRelOp(code, dest: X64Register.rcx, rdataLabel: "__sched_global_queue_cs", rdataRelocs: rdataRelocs)
 	helperEmitIatCall(code, relocations: relocations, slotIndex: iatSlotIndex(IatSlot.initializeCriticalSection))
+	// InitializeCriticalSection(&__gt_timer_cs) guards the cooperative-sleep timer heap.
+	emitLeaRipRelOp(code, dest: X64Register.rcx, rdataLabel: "__gt_timer_cs", rdataRelocs: rdataRelocs)
+	helperEmitIatCall(code, relocations: relocations, slotIndex: iatSlotIndex(IatSlot.initializeCriticalSection))
 	// InitializeCriticalSection(&__at_trace_cs) — serializes async-trace lines.
 	emitLeaRipRelOp(code, dest: X64Register.rcx, rdataLabel: "__at_trace_cs", rdataRelocs: rdataRelocs)
 	helperEmitIatCall(code, relocations: relocations, slotIndex: iatSlotIndex(IatSlot.initializeCriticalSection))
@@ -4107,7 +4425,7 @@ end 'emitX64GtContextSwitch'
 // needed. Slots: 0=P*, 1=GT to run.
 function emitX64SchedWorkerLoop(code ByteArray, relocations RelocationArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, funcLabelNames StringArray, funcLabelOffsets CodeOffsetArray, funcLabelOffsetMap CodeLabelOffsetMap)
 	recordLabel(funcLabelNames, labelOffsets: funcLabelOffsets, labelOffsetMap: funcLabelOffsetMap, name: "__sched_worker_loop", offset: code.count())
-	var state = Win32HelperState.create(6, outgoingBytes: 32, localBytes: 16)
+	var state = Win32HelperState.create(7, outgoingBytes: 32, localBytes: 16)
 	helperPrologue(code, frameSize: 48)
 
 	// block 0: adopt P as this OS thread's processor, then fall into the loop.
@@ -4147,6 +4465,8 @@ function emitX64SchedWorkerLoop(code ByteArray, relocations RelocationArray, cal
 	// block 1: loop_top.
 	helperMarkBlock(state, code: code, blockId: 1)
 	helperEmitDirectCall(code, callFixups: callFixups, target: "__gt_process_pending_waiter")
+	// Fire any expired sleep timers (re-enqueues their GTs) before looking for work.
+	helperEmitDirectCall(code, callFixups: callFixups, target: "__gt_timer_check")
 	helperLoadGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.rax, name: "__sched_shutdown_flag")
 	helperTestReg(code, reg: X64Register.rax)
 	helperEmitCondJump(code, state: state, opcode: 0x85, targetBlock: 4)  // jnz exit
@@ -4197,7 +4517,16 @@ function emitX64SchedWorkerLoop(code ByteArray, relocations RelocationArray, cal
 	helperEmitCondJump(code, state: state, opcode: 0x85, targetBlock: 4)  // jnz exit
 	helperLoadSlot(code, slotIndex: 0, dest: X64Register.rax)
 	helperLoadIndirect(code, dest: X64Register.rcx, base: X64Register.rax, disp: POffWakeEvent)
-	helperMovRegImm(code, dest: X64Register.rdx, value: 100)  // 100 ms timeout
+	// Park timeout: 2 ms when sleep timers are pending (so they fire promptly even if
+	// no SetEvent wakes us), else a 100 ms missed-wakeup safety net. rcx (wakeEvent)
+	// survives the count load below.
+	helperMovRegImm(code, dest: X64Register.rdx, value: 100)
+	helperLoadGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.rax, name: "__gt_timer_count")
+	helperTestReg(code, reg: X64Register.rax)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 6)  // jz do_wait (no timers → 100 ms)
+	helperMovRegImm(code, dest: X64Register.rdx, value: 2)
+	// block 6: do_wait.
+	helperMarkBlock(state, code: code, blockId: 6)
 	helperEmitIatCall(code, relocations: relocations, slotIndex: iatSlotIndex(IatSlot.waitForSingleObject))
 	helperLoadSlot(code, slotIndex: 0, dest: X64Register.rax)
 	code.append(b"\x48\x31\xc9")  // xor rcx, rcx

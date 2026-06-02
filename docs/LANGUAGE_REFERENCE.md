@@ -3999,13 +3999,13 @@ end 'join'
 ### Restrictions
 
 - `async` can only be used on direct function calls (not closures or indirect calls)
-- `async` can only target functions that yield (contain I/O operations or `await` points)
+- `async` can only target functions that yield (contain I/O operations, `sleep`, or `await` points)
 
 ### Key Properties
 
 - **Multi-threaded** -- green threads are distributed across OS worker threads (one per CPU core)
 - **Work stealing** -- idle workers steal from busy workers' local queues for load balancing
-- **Cooperative scheduling** -- context switches at `await` points and I/O operations
+- **Cooperative scheduling** -- context switches at `await` points, `sleep` calls, and I/O operations
 - **Growable stacks** -- 2KB initial, doubles when needed
 - **Thread-safe memory** -- atomic reference counting and lock-protected shared state
 - **Fire-and-forget safe** -- unawaited green threads are drained at program exit

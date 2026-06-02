@@ -166,6 +166,217 @@ func __gt_dequeue 0 i64
     std ret v12
 end
 
+// ---------------------------------------------------------------------------
+// Cooperative-sleep timer (wasm). Single-threaded, so instead of the native
+// absolute-deadline min-heap this is a flat array of {remaining_ms, gt} entries
+// in the shared `__gt_timer_heap` / `__gt_timer_count` globals. Wall-clock time
+// only advances on wasm while `__sched_run` blocks in `__gt_idle_poll`, so the
+// scheduler decrements every entry's remaining time by the poll duration and
+// fires those that reach zero — no real clock (and so no extra WASI import) is
+// needed. `maxon_sleep` adds a timer and suspends; `__sched_run` drains the
+// run queue, then idles on the smallest remaining time, advancing the timers.
+
+// __gt_timer_add(gt, ms): append {remaining=ms, gt} to the timer array.
+func __gt_timer_add 2 void
+  block entry:
+    v0 = std param 0 i64
+    v1 = std param 1 i64
+    // i = count
+    v2 = std globalAddr __gt_timer_count
+    v3 = std loadIndirect v2 0
+    // slot = heap + i*16
+    v4 = std globalAddr __gt_timer_heap
+    v5 = std constI64 16
+    v6 = std mulI64 v3 v5
+    v7 = std addI64 v4 v6
+    std storeIndirect v7 0 v1
+    std storeIndirect v7 8 v0
+    // count = i + 1
+    v8 = std constI64 1
+    v9 = std addI64 v3 v8
+    std storeIndirect v2 0 v9
+    v10 = std constI64 0
+    std ret v10
+end
+
+// __gt_timer_min() -> smallest remaining time among pending timers. The caller
+// (__sched_run) guarantees count > 0.
+func __gt_timer_min 0 i64
+  block entry:
+    v0 = std globalAddr __gt_timer_heap
+    v1 = std loadIndirect v0 0
+    std storeSlot 0 v1
+    v2 = std constI64 1
+    std storeSlot 1 v2
+    std br loop
+
+  block loop:
+    v3 = std loadSlot 1
+    v4 = std globalAddr __gt_timer_count
+    v5 = std loadIndirect v4 0
+    v6 = std cmpI64Lt v3 v5
+    v7 = std constI64 0
+    v8 = std cmpI64Eq v6 v7
+    std condBr v8 done body
+
+  block body:
+    v9 = std globalAddr __gt_timer_heap
+    v10 = std loadSlot 1
+    v11 = std constI64 16
+    v12 = std mulI64 v10 v11
+    v13 = std addI64 v9 v12
+    v14 = std loadIndirect v13 0
+    std storeSlot 2 v14
+    v15 = std loadSlot 0
+    v16 = std cmpI64Lt v14 v15
+    std condBr v16 update next
+
+  block update:
+    v17 = std loadSlot 2
+    std storeSlot 0 v17
+    std br next
+
+  block next:
+    v18 = std loadSlot 1
+    v19 = std constI64 1
+    v20 = std addI64 v18 v19
+    std storeSlot 1 v20
+    std br loop
+
+  block done:
+    v21 = std loadSlot 0
+    std ret v21
+end
+
+// __gt_timer_advance(elapsed): subtract `elapsed` from every timer's remaining
+// time and enqueue (then swap-remove) each GT whose remaining reaches <= 0. The
+// swapped-in entry is re-examined at the same index, so a single pass fires all
+// due timers regardless of order.
+func __gt_timer_advance 1 void
+  block entry:
+    v0 = std param 0 i64
+    std storeSlot 0 v0
+    v1 = std constI64 0
+    std storeSlot 1 v1
+    std br loop
+
+  block loop:
+    v2 = std loadSlot 1
+    v3 = std globalAddr __gt_timer_count
+    v4 = std loadIndirect v3 0
+    v5 = std cmpI64Lt v2 v4
+    v6 = std constI64 0
+    v7 = std cmpI64Eq v5 v6
+    std condBr v7 done body
+
+  block body:
+    v8 = std globalAddr __gt_timer_heap
+    v9 = std loadSlot 1
+    v10 = std constI64 16
+    v11 = std mulI64 v9 v10
+    v12 = std addI64 v8 v11
+    std storeSlot 2 v12
+    v13 = std loadIndirect v12 0
+    v14 = std loadSlot 0
+    v15 = std subI64 v13 v14
+    std storeIndirect v12 0 v15
+    // remaining > 0 → keep (advance i); else fire.
+    v16 = std constI64 0
+    v17 = std cmpI64Lt v16 v15
+    std condBr v17 advance fire
+
+  block fire:
+    v18 = std loadSlot 2
+    v19 = std loadIndirect v18 8
+    std storeSlot 3 v19
+    // count-- ; copy last entry into this slot
+    v20 = std globalAddr __gt_timer_count
+    v21 = std loadIndirect v20 0
+    v22 = std constI64 1
+    v23 = std subI64 v21 v22
+    std storeIndirect v20 0 v23
+    v24 = std globalAddr __gt_timer_heap
+    v25 = std constI64 16
+    v26 = std mulI64 v23 v25
+    v27 = std addI64 v24 v26
+    v28 = std loadSlot 2
+    v29 = std loadIndirect v27 0
+    std storeIndirect v28 0 v29
+    v30 = std loadIndirect v27 8
+    std storeIndirect v28 8 v30
+    // enqueue the fired GT (re-examine the swapped-in entry: no i++)
+    v31 = std loadSlot 3
+    v32 = std call __gt_enqueue v31
+    std br loop
+
+  block advance:
+    v33 = std loadSlot 1
+    v34 = std constI64 1
+    v35 = std addI64 v33 v34
+    std storeSlot 1 v35
+    std br loop
+
+  block done:
+    v36 = std constI64 0
+    std ret v36
+end
+
+// __gt_idle_poll(ms): block the single wasm thread for `ms` milliseconds via the
+// `osSleep` poll_oneoff path. Called ONLY from the uninstrumented __sched_run
+// when the run queue is empty but timers are pending, so it idles rather than
+// busy-spinning and does not affect interleaving (nothing else is runnable).
+func __gt_idle_poll 1 void
+  block entry:
+    v0 = std param 0 i64
+    std osSleep v0
+    v1 = std constI64 0
+    std ret v1
+end
+
+// maxon_sleep(ms): cooperative green-thread sleep on wasm. Mirrors __gt_await's
+// suspend/rewind. A fresh call registers a {ms, self} timer, marks self waiting,
+// and arms the asyncify unwind; the rewind pass (driven by __sched_run after the
+// timer fires and re-dispatches self) stops the rewind and returns. Void, so it
+// returns via `std ret` rather than __gt_await's errorReturn. Overrides the
+// runtime.std stub on wasm (registered in wasmGtOverrideNames).
+func maxon_sleep 1 void
+  block entry:
+    v0 = std param 0 i64
+    std storeSlot 0 v0
+    // Rewind pass? (__sched_run sets __gt_rewinding before asyncify_start_rewind.)
+    v1 = std globalAddr __gt_rewinding
+    v2 = std loadIndirect v1 0
+    v3 = std constI64 0
+    v4 = std cmpI64Eq v2 v3
+    std condBr v4 fresh resume
+
+  block resume:
+    v5 = std globalAddr __gt_rewinding
+    v6 = std constI64 0
+    std storeIndirect v5 0 v6
+    v7 = std call asyncify_stop_rewind
+    v8 = std constI64 0
+    std ret v8
+
+  block fresh:
+    // self = __gt_current_p ; self.status = 3 (waiting)
+    v9 = std globalAddr __gt_current_p
+    v10 = std loadIndirect v9 0
+    std storeSlot 1 v10
+    v11 = std constI64 3
+    std storeIndirect v10 0 v11
+    // __gt_timer_add(self, ms)
+    v12 = std loadSlot 1
+    v13 = std loadSlot 0
+    v14 = std call __gt_timer_add v12 v13
+    // asyncify_start_unwind(self.asyncifyData) ; return (caller's frame unwinds)
+    v15 = std loadSlot 1
+    v16 = std loadIndirect v15 64
+    v17 = std call asyncify_start_unwind v16
+    v18 = std constI64 0
+    std ret v18
+end
+
 // __gt_invoke(gt): call the coroutine entry through the function table with the
 // buffered args, store the result into gt.result and the throw flag into
 // gt.threw, then mark gt completed.
@@ -904,7 +1115,34 @@ func __sched_run 1 i64
     std storeSlot 1 v1
     v2 = std constI64 0
     v3 = std cmpI64Eq v1 v2
-    std condBr v3 loop_done run_gt
+    std condBr v3 queue_drained run_gt
+
+  block queue_drained:
+    // Run queue empty. If sleep timers are pending, idle until the nearest one is
+    // due, then advance them and loop; otherwise the program is genuinely done.
+    v90 = std globalAddr __gt_timer_count
+    v91 = std loadIndirect v90 0
+    v92 = std constI64 0
+    v93 = std cmpI64Eq v91 v92
+    std condBr v93 loop_done idle_wait
+
+  block idle_wait:
+    // wait = smallest remaining time; block that long (if > 0) then advance.
+    v94 = std call __gt_timer_min
+    std storeSlot 4 v94
+    v95 = std constI64 0
+    v96 = std cmpI64Lt v95 v94
+    std condBr v96 do_poll do_advance
+
+  block do_poll:
+    v97 = std loadSlot 4
+    v98 = std call __gt_idle_poll v97
+    std br do_advance
+
+  block do_advance:
+    v99 = std loadSlot 4
+    v100 = std call __gt_timer_advance v99
+    std br loop_head
 
   block loop_done:
     // The run queue has drained. Snapshot gt0's result, then free the root GT's

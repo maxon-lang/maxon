@@ -1,0 +1,43 @@
+// Test: sleep.basic
+function main() returns ExitCode
+		sleep(10)
+		print("done\n")
+		return 0
+end 'main'
+---
+Stdout: ```
+done
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 10 : i64
+    %14 = mir.call @maxon_sleep(%0)
+    %2 = mir.global_addr @__istr_0
+    %3 = mir.mov_imm 40 : i64
+    %4 = mir.call @mrt_alloc(%3)
+    mir.store %2, %4, 0 width: qword
+    %5 = mir.mov_imm 5 : i64
+    mir.store %5, %4, 8 width: qword
+    %6 = mir.mov_imm -2 : i64
+    mir.store %6, %4, 16 width: qword
+    %7 = mir.mov_imm 1 : i64
+    mir.store %7, %4, 24 width: qword
+    %8 = mir.mov_imm 0 : i64
+    mir.store %8, %4, 32 width: qword
+    %9 = mir.mov_imm 16 : i64
+    %10 = mir.call @mrt_alloc(%9)
+    mir.store %4, %10, 0 width: qword
+    %11 = mir.mov_imm 1 : i64
+    mir.store %11, %10, 8 width: qword
+    %15 = mir.load %10, 0 width: qword
+    %16 = mir.load %15, 0 width: qword
+    %17 = mir.load %15, 8 width: qword
+    %18 = mir.call @mrt_write_stdout(%16, %17)
+    %13 = mir.mov_imm 0 : i64
+    mir.ret %13
+  }
+}
+---
