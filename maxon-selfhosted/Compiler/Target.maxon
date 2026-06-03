@@ -135,3 +135,12 @@ export function isSupportedTarget(t Target) returns bool
 	let host = detectHostTarget()
 	return targetToString(t) == targetToString(host)
 end 'isSupportedTarget'
+
+// True when `t` can host the Subprocess API. WASI has no process-spawn
+// primitive, so subprocess does not exist on wasm32-wasi; every other OS does.
+export function targetSupportsSubprocess(t Target) returns bool
+	if t.os == Os.wasi 'isWasi'
+		return false
+	end 'isWasi'
+	return true
+end 'targetSupportsSubprocess'

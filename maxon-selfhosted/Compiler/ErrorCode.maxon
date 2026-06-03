@@ -196,6 +196,13 @@ export union ErrorCode
 	// spawning thread, so the spawn is pointless. Emitted by `checkAsyncYielding`.
 	// Mirrors the C# bootstrap's `AsyncNonYielding`.
 	asyncNonYielding = 3073
+	// E3074: a user program targeting wasm32-wasi reaches the `Subprocess` API
+	// (transitively calling a `maxon_subprocess_*` builtin). WASI has no
+	// process-spawn primitive, so subprocess cannot exist on that target —
+	// rather than silently throwing `spawnFailed` at runtime, the call is
+	// rejected at compile time. Guard the call with `#if not os(Wasi)` to
+	// exclude it from the wasm build. Emitted by the subprocess-reachability check.
+	semanticSubprocessUnsupportedTarget = 3074
 	// E3077: a local declared with `var` is never reassigned, so it should
 	// be a `let`. Detected after type resolution by
 	// `checkVarShouldBeLetForEntry` (a `var` whose name never appears in the

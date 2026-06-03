@@ -1,0 +1,18 @@
+// Test: subprocess-unsupported-on-wasm
+function main() returns ExitCode
+	let exe = Executable.name("cmd")
+	var argv = StringArray.create()
+	argv.push("/c")
+	argv.push("echo")
+	let result = try Subprocess.run(exe, arguments: argv) otherwise return 1
+	if not result.succeeded() 'check'
+		return 2
+	end 'check'
+	return 0
+end 'main'
+---
+MaxoncStderr: ```
+error E3074: Subprocess is not supported on wasm32-wasi (no process-spawn primitive); guard the call with #if not os(Wasi).
+```
+---
+---

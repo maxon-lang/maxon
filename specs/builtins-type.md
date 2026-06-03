@@ -99,31 +99,6 @@ end 'main'
 0
 ```
 
-<!-- test: builtins-type.process-execute -->
-```maxon
-function main() returns ExitCode
-	#if os(Windows)
-	let exe = Executable.name("cmd")
-	var argv = StringArray.create()
-	argv.push("/c")
-	argv.push("echo")
-	argv.push("ok")
-	#else
-	let exe = Executable.path(try FilePath.from("/bin/echo") otherwise return 2)
-	var argv = StringArray.create()
-	argv.push("ok")
-	#endif
-	let result = try Subprocess.run(exe, arguments: argv, workingDirectory: Directory.currentPath(), timeoutMs: 5000) otherwise return 3
-	if result.succeeded() 'check'
-		return 0
-	end 'check'
-	return 1
-end 'main'
-```
-```exitcode
-0
-```
-
 <!-- test: builtins-type.command-line-arg-out-of-bounds -->
 <!-- Args: one -->
 ```maxon

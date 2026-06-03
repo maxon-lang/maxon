@@ -1,0 +1,132 @@
+// Reject the `Subprocess` API in user code on targets that cannot host it.
+//
+// E3074 (semanticSubprocessUnsupportedTarget). WASI has no process-spawn
+// primitive, so the entire `stdlib/Subprocess.maxon` family cannot exist on
+// wasm32-wasi. Today such a program compiles and only fails at run time with
+// `spawnFailed`; this pass rejects it at compile time with a clear, guardable
+// diagnostic.
+//
+// Where the check fires:
+//   * Only at a USER call site (the caller function's `sourceFilePath` is NOT
+//     a stdlib path). Stdlib-internal calls between subprocess helpers are
+//     never reported — otherwise the wasm stdlib cache build, which compiles
+//     `stdlib/Subprocess.maxon` from source, would reject itself.
+//   * Only when `targetSupportsSubprocess(target)` is false (i.e. wasm32-wasi).
+//     On every native target the pass is a no-op.
+//
+// Why an entry-point name set rather than a transitive "subprocess builtin"
+// closure:
+//   The subprocess builtins (`__Builtins.subprocess*`) are reached only from
+//   inside `stdlib/Subprocess.maxon`. During a USER compile the stdlib is NOT
+//   parsed into the user's MaxonModule (it is served pre-lowered from the Std-
+//   level stdlib cache — see Project.maxon "user code (where stdlib funcs
+//   aren't in the local module)"). So a reverse-reachability closure seeded
+//   from builtin call ops cannot be computed at user-compile time: the bodies
+//   that contain those builtins simply aren't present. What IS present is the
+//   user's call op into the public API, with `project.resolvedCallees` naming
+//   the mangled callee. We therefore match the resolved callee (mangling
+//   stripped) against the closed, explicit set of PUBLIC subprocess entry
+//   points that reach a builtin. That set is every user-callable function in
+//   `stdlib/Subprocess.maxon` whose body (directly or transitively) reaches a
+//   `__Builtins.subprocess*` builtin:
+//     - Subprocess.run / runConfiguration / runDetachedConfiguration
+//     - Configuration.run / runDetached
+//     - StreamingSubprocess.spawn / spawnWithCwd  (handle factories)
+//     - StreamingSubprocess.{writeStdinLine, readStdoutLine,
+//         readStdoutLineCapped, readStderrLine, readStderrLineCapped,
+//         closeStdin, wait, waitWithTimeout, release}  (handle methods)
+//   Keep this set in sync with the public API in stdlib/Subprocess.maxon: a new
+//   public function there that reaches a subprocess builtin must be added here.
+//   Rejecting the handle factories alone already makes streaming unusable (you
+//   cannot obtain a StreamingSubprocess without `spawn`), but the handle
+//   methods are listed too so a program that passes a handle around still gets
+//   the error pinned to the actual offending call.
+
+typealias SubprocessEntrySet = Set with String
+
+// The closed set of public subprocess entry points (mangling stripped). See the
+// file header for why this is a list and how to keep it current.
+function subprocessApiEntryPoints() returns SubprocessEntrySet
+	var set = SubprocessEntrySet.create()
+	set.insert("Subprocess.run")
+	set.insert("Subprocess.runConfiguration")
+	set.insert("Subprocess.runDetachedConfiguration")
+	set.insert("Configuration.run")
+	set.insert("Configuration.runDetached")
+	set.insert("StreamingSubprocess.spawn")
+	set.insert("StreamingSubprocess.spawnWithCwd")
+	set.insert("StreamingSubprocess.writeStdinLine")
+	set.insert("StreamingSubprocess.readStdoutLine")
+	set.insert("StreamingSubprocess.readStdoutLineCapped")
+	set.insert("StreamingSubprocess.readStderrLine")
+	set.insert("StreamingSubprocess.readStderrLineCapped")
+	set.insert("StreamingSubprocess.closeStdin")
+	set.insert("StreamingSubprocess.wait")
+	set.insert("StreamingSubprocess.waitWithTimeout")
+	set.insert("StreamingSubprocess.release")
+	return set
+end 'subprocessApiEntryPoints'
+
+// Whole-module pass: reject every USER call into the subprocess API when the
+// compile target cannot host subprocess. No-op on supporting targets and for
+// stdlib-defining code. Pure analysis — emits diagnostics, leaves the module
+// unchanged. The pipeline's per-pass error gate throws after this returns.
+export function rejectWasmSubprocess(project Project, module MaxonModule, target Target)
+	if targetSupportsSubprocess(target) 'supported'
+		return
+	end 'supported'
+
+	let entryPoints = subprocessApiEntryPoints()
+	for func in module.functions 'eachFunc'
+		// Stdlib-internal subprocess helpers call each other; never report those
+		// — the wasm stdlib cache build compiles them from source and must pass.
+		if isStdlibFunctionPath(func.sourceFilePath) 'stdlibCaller'
+			continue
+		end 'stdlibCaller'
+		checkUserFunctionForSubprocess(project, module: module, func: func, entryPoints: entryPoints)
+	end 'eachFunc'
+end 'rejectWasmSubprocess'
+
+function checkUserFunctionForSubprocess(project Project, module MaxonModule, func IrFunction, entryPoints SubprocessEntrySet)
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("rejectWasmSubprocess: blockRef from func.blockRefs not in module.blocks")
+		for opIdx in block.opRefs 'eachOp'
+			checkCallOpForSubprocess(project, module: module, opIdx: opIdx, entryPoints: entryPoints, filePath: func.sourceFilePath)
+		end 'eachOp'
+		if block.hasTerminatorOp() 'hasTerm'
+			checkCallOpForSubprocess(project, module: module, opIdx: block.terminatorIndex(), entryPoints: entryPoints, filePath: func.sourceFilePath)
+		end 'hasTerm'
+	end 'eachBlock'
+end 'checkUserFunctionForSubprocess'
+
+function checkCallOpForSubprocess(project Project, module MaxonModule, opIdx OpIndex, entryPoints SubprocessEntrySet, filePath FilePath)
+	let op = try module.ops.get(opIdx) otherwise panic("rejectWasmSubprocess: opIdx not in module.ops")
+	let n = op.name
+	// Only the four resolved-invocation shapes carry a `resolvedCallees` entry
+	// (TypeResolution populates them keyed by op index — same contract
+	// UnusedExportCheck relies on). Any other op cannot name a subprocess
+	// entry point.
+	if n != "call" and n != "tryCall" and n != "methodCall" and n != "tryMethodCall" 'notCallShape'
+		return
+	end 'notCallShape'
+
+	let callee = try project.resolvedCallees.get(opIdx) otherwise return
+	if not entryPoints.contains(stripCalleeMangling(callee)) 'notSubprocess'
+		return
+	end 'notSubprocess'
+
+	let range = callOpSourceRange(op)
+	reportCompileError(project, code: ErrorCode.semanticSubprocessUnsupportedTarget, message: "Subprocess is not supported on wasm32-wasi (no process-spawn primitive); guard the call with #if not os(Wasi).", line: range.line, column: range.column, filePath: filePath)
+end 'checkCallOpForSubprocess'
+
+// The source range of a resolved-invocation op (call / tryCall / methodCall /
+// tryMethodCall). The caller has already filtered to these four shapes.
+function callOpSourceRange(op MaxonOp) returns SourceRange
+	return match op 'r'
+		call(_, _, _, _, _, _, _, range) gives range
+		tryCall(_, _, _, _, _, _, _, _, range) gives range
+		methodCall(_, _, _, _, _, _, _, range) gives range
+		tryMethodCall(_, _, _, _, _, _, _, _, range) gives range
+		default panic("callOpSourceRange: op '{op.name}' is not a resolved-invocation shape")
+	end 'r'
+end 'callOpSourceRange'

@@ -94,6 +94,34 @@ export union IatSlot
 	postQueuedCompletionStatus
 	getTickCount64
 
+	// Tier 4 subprocess (`stdlib/Subprocess.maxon`). All kernel32. CreateProcessW
+	// spawns the child; CreatePipe / CreateNamedPipeW + SetHandleInformation wire
+	// up redirected/streaming stdio; the ProcThreadAttributeList trio scopes
+	// handle inheritance so concurrent spawns don't leak each other's pipes; the
+	// Job Object quartet group-kills a child (+ its descendants) on timeout;
+	// GetExitCodeProcess / TerminateProcess / WaitForSingleObject drive
+	// wait-and-collect; SearchPathW resolves bare exe names; FormatMessageA
+	// renders the last Win32 error; GenerateConsoleCtrlEvent / ResumeThread serve
+	// signal delivery and the create-suspended spawn path. Appended at the end of
+	// the kernel32 run so existing slot ordinals stay stable.
+	createProcessW
+	createPipe
+	createNamedPipeW
+	setHandleInformation
+	getExitCodeProcess
+	terminateProcess
+	searchPathW
+	formatMessageA
+	createJobObjectW
+	assignProcessToJobObject
+	setInformationJobObject
+	terminateJobObject
+	generateConsoleCtrlEvent
+	resumeThread
+	initializeProcThreadAttributeList
+	updateProcThreadAttribute
+	deleteProcThreadAttributeList
+
 	// shell32 — single entry, lives at the end of the IAT in its own
 	// import-directory DLL.
 	commandLineToArgvW
@@ -149,13 +177,30 @@ export function iatSlotIndex(slot IatSlot) returns MachineWord
 		getQueuedCompletionStatus gives 40
 		postQueuedCompletionStatus gives 41
 		getTickCount64 gives 42
-		commandLineToArgvW gives 43
+		createProcessW gives 43
+		createPipe gives 44
+		createNamedPipeW gives 45
+		setHandleInformation gives 46
+		getExitCodeProcess gives 47
+		terminateProcess gives 48
+		searchPathW gives 49
+		formatMessageA gives 50
+		createJobObjectW gives 51
+		assignProcessToJobObject gives 52
+		setInformationJobObject gives 53
+		terminateJobObject gives 54
+		generateConsoleCtrlEvent gives 55
+		resumeThread gives 56
+		initializeProcThreadAttributeList gives 57
+		updateProcThreadAttribute gives 58
+		deleteProcThreadAttributeList gives 59
+		commandLineToArgvW gives 60
 	end 's'
 end 'iatSlotIndex'
 
 // Total IAT slot count — kernel32 run + shell32 run. Mirrors the last
 // enum case's index + 1.
-let IAT_SLOT_COUNT = 44
+let IAT_SLOT_COUNT = 61
 
 type ImportSection
 	export var data as ByteArray
@@ -175,8 +220,8 @@ end 'ImportSection'
 //   IAT  [k32 entries] 0  [s32 entries] 0
 //   ILT  [k32 entries] 0  [s32 entries] 0
 // followed by the Import Directory (3 entries: kernel32, shell32, null).
-let KERNEL32_IAT_END = 43  // exclusive; slots 0..42 are kernel32
-let SHELL32_IAT_START = 43  // slot 43 is shell32 (commandLineToArgvW)
+let KERNEL32_IAT_END = 60  // exclusive; slots 0..59 are kernel32
+let SHELL32_IAT_START = 60  // slot 60 is shell32 (commandLineToArgvW)
 let IMPORT_DIRECTORY_ENTRIES = 2
 
 // kernel32 import names in slot order (slots 0..KERNEL32_IAT_END-1). MUST stay
@@ -226,6 +271,23 @@ function kernel32ImportNames() returns StringArray
 	n.push("GetQueuedCompletionStatus")
 	n.push("PostQueuedCompletionStatus")
 	n.push("GetTickCount64")
+	n.push("CreateProcessW")
+	n.push("CreatePipe")
+	n.push("CreateNamedPipeW")
+	n.push("SetHandleInformation")
+	n.push("GetExitCodeProcess")
+	n.push("TerminateProcess")
+	n.push("SearchPathW")
+	n.push("FormatMessageA")
+	n.push("CreateJobObjectW")
+	n.push("AssignProcessToJobObject")
+	n.push("SetInformationJobObject")
+	n.push("TerminateJobObject")
+	n.push("GenerateConsoleCtrlEvent")
+	n.push("ResumeThread")
+	n.push("InitializeProcThreadAttributeList")
+	n.push("UpdateProcThreadAttribute")
+	n.push("DeleteProcThreadAttributeList")
 	return n
 end 'kernel32ImportNames'
 

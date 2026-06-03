@@ -1,0 +1,41 @@
+// Test: builtins-type.print-via-stdlib
+function main() returns ExitCode
+	print("hello\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+hello
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.global_addr @__istr_0
+    %1 = mir.mov_imm 40 : i64
+    %2 = mir.call @mrt_alloc(%1)
+    mir.store %0, %2, 0 width: qword
+    %3 = mir.mov_imm 6 : i64
+    mir.store %3, %2, 8 width: qword
+    %4 = mir.mov_imm -2 : i64
+    mir.store %4, %2, 16 width: qword
+    %5 = mir.mov_imm 1 : i64
+    mir.store %5, %2, 24 width: qword
+    %6 = mir.mov_imm 0 : i64
+    mir.store %6, %2, 32 width: qword
+    %7 = mir.mov_imm 16 : i64
+    %8 = mir.call @mrt_alloc(%7)
+    mir.store %2, %8, 0 width: qword
+    %9 = mir.mov_imm 1 : i64
+    mir.store %9, %8, 8 width: qword
+    %12 = mir.load %8, 0 width: qword
+    %13 = mir.load %12, 0 width: qword
+    %14 = mir.load %12, 8 width: qword
+    %15 = mir.call @mrt_write_stdout(%13, %14)
+    %11 = mir.mov_imm 0 : i64
+    mir.ret %11
+  }
+}
+---

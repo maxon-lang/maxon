@@ -3,6 +3,7 @@
 
 export typealias TextLineArray = Array with String
 export typealias IntArray = Array with ParsedInt
+export typealias TargetKeyArray = Array with String
 
 export type SpecFrontmatter
 	export var feature as String
@@ -76,9 +77,15 @@ export type SpecTest
 	export var asyncTrace as bool
 	export var includeStdlibIr as bool
 	export var cacheParity as bool
+	// Target keys this test is restricted to (from a `<!-- targets: a, b -->`
+	// directive). Empty means "run on every target". When non-empty, the runner
+	// only generates/runs the test on a target whose key appears here — used for
+	// negative tests that only make sense on one platform (e.g. a compile error
+	// that only fires on wasm32-wasi).
+	export var onlyTargets as TargetKeyArray
 
-	export static function create(name String, source String, expectation TestExpectation, args String, sourceFiles SourceFileArray, hasMultiFile bool, mmTrace bool, asyncTrace bool, includeStdlibIr bool = false, cacheParity bool = false) returns SpecTest
-		return Self{name: name, source: source, expectation: expectation, args: args, sourceFiles: sourceFiles, hasMultiFile: hasMultiFile, mmTrace: mmTrace, asyncTrace: asyncTrace, includeStdlibIr: includeStdlibIr, cacheParity: cacheParity}
+	export static function create(name String, source String, expectation TestExpectation, args String, sourceFiles SourceFileArray, hasMultiFile bool, mmTrace bool, asyncTrace bool, includeStdlibIr bool = false, cacheParity bool = false, onlyTargets TargetKeyArray = TargetKeyArray.create()) returns SpecTest
+		return Self{name: name, source: source, expectation: expectation, args: args, sourceFiles: sourceFiles, hasMultiFile: hasMultiFile, mmTrace: mmTrace, asyncTrace: asyncTrace, includeStdlibIr: includeStdlibIr, cacheParity: cacheParity, onlyTargets: onlyTargets}
 	end 'create'
 end 'SpecTest'
 
@@ -321,6 +328,32 @@ export function splitMultiFileSource(source String) returns SourceFileArray
 	return files
 end 'splitMultiFileSource'
 
+// Parse a `<!-- targets: a, b -->` directive line into the list of target keys
+// it names (comma-separated, each trimmed). Returns an empty array if the
+// content between `targets:` and ` -->` is missing or blank, which the caller
+// treats the same as "no restriction" (run on all targets).
+export function parseTargetsDirective(line String) returns TargetKeyArray
+	var result = TargetKeyArray.create()
+
+	// Advance past the literal "targets:" (8 chars) to the start of the value.
+	var valueStart = try line.findFirst("targets:") otherwise return result
+	for _ in 0 upto 8 'skipPrefix'
+		valueStart = try line.indexAfter(valueStart) otherwise return result
+	end 'skipPrefix'
+
+	let valueEnd = try line.findFirst(" -->") otherwise line.endIndex()
+	let rawValue = line.slice(valueStart, endIndex: valueEnd)
+
+	for part in rawValue.split(",") 'eachTarget'
+		let trimmed = trimWhitespace(part)
+		if not trimmed.isEmpty() 'nonEmpty'
+			result.push(trimmed)
+		end 'nonEmpty'
+	end 'eachTarget'
+
+	return result
+end 'parseTargetsDirective'
+
 // Parse a spec file and extract all tests.
 export function parseSpecFile(content String, targetKey String) returns SpecTestArray
 	var tests = SpecTestArray.create()
@@ -430,6 +463,7 @@ export function parseSpecFile(content String, targetKey String) returns SpecTest
 			var testMmTrace = false
 			var testAsyncTrace = false
 			var testIncludeStdlibIr = false
+			var testOnlyTargets = TargetKeyArray.create()
 			i = i + 1
 
 			while i < lineCount 'blocks'
@@ -491,6 +525,17 @@ export function parseSpecFile(content String, targetKey String) returns SpecTest
 					i = i + 1
 					continue
 				end 'isIncludeStdlibIr'
+
+				// Parse targets directive — restrict the test to the listed target
+				// keys (comma-separated, trimmed). `<!-- targets: wasm32-wasi -->`
+				// makes the test run ONLY on wasm32-wasi; on every other target the
+				// runner skips it. Used for negative tests whose assertion is only
+				// valid on a specific platform.
+				if blockLine.contains("<!-- targets:") 'isTargets'
+					testOnlyTargets = parseTargetsDirective(blockLine)
+					i = i + 1
+					continue
+				end 'isTargets'
 
 				// Recognize SelfhostedOnly directive — the C# runner uses this
 				// to skip tests that exercise self-hosted-only diagnostics
@@ -612,7 +657,7 @@ export function parseSpecFile(content String, targetKey String) returns SpecTest
 				let sourceFiles = splitMultiFileSource(source)
 				let hasMulti = sourceFiles.count() > 0
 
-				let test = SpecTest.create(testName, source: source, expectation: expectation, args: testArgs, sourceFiles: sourceFiles, hasMultiFile: hasMulti, mmTrace: testMmTrace, asyncTrace: testAsyncTrace, includeStdlibIr: testIncludeStdlibIr, cacheParity: fileCacheParity)
+				let test = SpecTest.create(testName, source: source, expectation: expectation, args: testArgs, sourceFiles: sourceFiles, hasMultiFile: hasMulti, mmTrace: testMmTrace, asyncTrace: testAsyncTrace, includeStdlibIr: testIncludeStdlibIr, cacheParity: fileCacheParity, onlyTargets: testOnlyTargets)
 				tests.push(test)
 			end 'hasSource'
 			continue

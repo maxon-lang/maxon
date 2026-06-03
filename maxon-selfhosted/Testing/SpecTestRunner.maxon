@@ -290,11 +290,45 @@ let whitelist = ["basics",
 
 	// --- Tier 4: async / IO / network / subprocess (need real runtime) ---
 	"sleep",
-	// "subprocess",
-	// "builtins-type" (6/7) — the `process-execute` fragment needs the real
-	//   subprocess runtime (`maxon_subprocess_spawn` is still a -1 stub, so
-	//   `Subprocess.run` throws `spawnFailed`); gated with the Tier-4 subprocess
-	//   specs below. The other six fragments pass.
+	// builtins-type is now fully portable: its `process-execute` fragment (the
+	// only one needing subprocess, which can't run on wasm32-wasi) was relocated
+	// into the x64-only `subprocess` spec, leaving 6 universal fragments. It runs
+	// on BOTH targets.
+	"builtins-type",
+	// subprocess-unsupported is a UNIVERSAL whitelist entry (considered on both
+	// targets) holding ONE negative test gated by `<!-- targets: wasm32-wasi -->`.
+	// On wasm32-wasi it runs and asserts the E3074 compile error; on x64 the
+	// `targets:` directive skips it (the same program compiles fine there).
+	"subprocess-unsupported",
+	// "subprocess" — the x64-Windows subprocess runtime is implemented
+	//   (emitX64SubprocessRuntime: 2×CreatePipe + CreateProcessW + drain +
+	//   GetExitCodeProcess + CollectedOutput accessors) and the synchronous core
+	//   works: run-collect / run-path / cwd / exit-code / stderr-collect /
+	//   process-execute all pass on x64-windows, including the `match
+	//   result.status` union read.
+	//
+	//   The 0xC0000005 crash that used to hit run-collect / exit-code on
+	//   `match result.status` was a real compiler bug, now FIXED in
+	//   StdlibCache.translateEnumType: the in-memory stdlib-restore path wasn't
+	//   translating union payload-field type ids through the captured
+	//   typeNameTable (structs were via translateStructType, enums weren't), so a
+	//   cached union's scalar `ExitInt` payload resolved to a managed struct id in
+	//   the destination project and got a bogus `__mm_incref` that faulted.
+	//
+	//   subprocess stays gated as a HOST-ONLY spec (see `hostOnlySpecs` below):
+	//   it is x64-only (no process-spawn on wasm32-wasi), and three fragments
+	//   still need features beyond the runtime itself:
+	//       * timeout-kill / not-found: `match e` on a caught `SubprocessError`
+	//         needs the thrown error VALUE at the catch site, but the
+	//         `otherwise (e)` binding is currently only an integer threw-flag
+	//         (errorFlagId) — there is no union value to match. Needs an
+	//         error-value ABI/model change (surfaces as E3005 today).
+	//       * stdin-bytes: needs the feed-stdin path (minimal spawn wires NUL stdin).
+	//       * async-await / -multi / -parallel: need subprocess wait/spawn added to
+	//         SemanticCheck.isAsyncYieldStub (E3073) plus the heavy Win32 calls
+	//         moved onto the per-P system stack for green-thread execution.
+	//   It is enabled (added to `hostOnlySpecs`) at Phase 7 once all subprocess
+	//   fragments pass.
 	// "managed-socket",
 	// "async-filesystem",
 	// "async-tcp",
@@ -306,6 +340,45 @@ let whitelist = ["basics",
 	//   fragments in the same file, which the self-hosted compiler doesn't
 	//   surface yet. Re-enable once real socket helpers land.
 ]
+
+// Whether the `subprocess` spec is wired into the host-only whitelist. All
+// subprocess fragments now pass on subprocess-capable targets (the full sync
+// core + async + process-execute), so the spec is enabled here and surfaced via
+// `hostOnlySpecs` / `effectiveWhitelist` on every target where
+// `targetSupportsSubprocess` holds (i.e. not wasm32-wasi, where using the
+// Subprocess API is a compile error — see `RejectWasmSubprocess`).
+let subprocessSpecEnabled = true
+
+// Specs that may only run on targets able to host them, gated as a whole rather
+// than per fragment. A host-only spec uses a runtime primitive that some targets
+// lack; gating it here keeps every fragment portable while excluding the whole
+// spec on targets that can't run it. `subprocess` is the first such spec: it
+// needs a process-spawn primitive, which wasm32-wasi (WASI) does not provide.
+function hostOnlySpecs() returns StringArray
+	var result = StringArray.create()
+	if subprocessSpecEnabled 'subprocess'
+		result.push("subprocess")
+	end 'subprocess'
+	return result
+end 'hostOnlySpecs'
+
+// The effective whitelist for `target` = the universal `whitelist` above plus
+// the `hostOnlySpecs` that `target` can actually host (currently: subprocess on
+// any non-wasm OS). Both the serial (`runAllSpecTests`) and parallel
+// (`runAllSpecTestsParallel`) paths iterate this instead of `whitelist` so the
+// gating applies uniformly.
+function effectiveWhitelist(target Target) returns StringArray
+	var result = StringArray.create()
+	for specName in whitelist 'universal'
+		result.push(specName)
+	end 'universal'
+	if targetSupportsSubprocess(target) 'hostOnly'
+		for hostSpec in hostOnlySpecs() 'eachHostSpec'
+			result.push(hostSpec)
+		end 'eachHostSpec'
+	end 'hostOnly'
+	return result
+end 'effectiveWhitelist'
 
 // Signed elapsed time in milliseconds (deltas between Clock.nowMs() reads).
 typealias Millis = int(i64.min to i64.max)
@@ -521,7 +594,7 @@ end 'captureLoweringLog'
 
 // Update RequiredLowering blocks in all spec files by compiling each test and capturing lowering output.
 function updateAllRequiredLowering(specDir FilePath, tempDir FilePath, filter String, target Target, targetKey String)
-	for specName in whitelist 'eachSpec'
+	for specName in effectiveWhitelist(target) 'eachSpec'
 		let specPath = specDir.join("{specName}.md")
 		let content = try File.readText(specPath) otherwise continue
 		let fm = parseFrontmatter(content)
@@ -735,7 +808,7 @@ export function runAllSpecTests(filter String, target Target, updateRequired boo
 	end 'noSpecCacheDir'
 
 	// Pre-create spec subdirectories under the staging area
-	for specName2 in whitelist 'createCacheDirs'
+	for specName2 in effectiveWhitelist(target) 'createCacheDirs'
 		let cacheSubDir = specCacheDir.join(specName2)
 		if not Directory.exists(cacheSubDir) 'noCacheSub'
 			_ = Directory.create(cacheSubDir)
@@ -747,7 +820,7 @@ export function runAllSpecTests(filter String, target Target, updateRequired boo
 	var totalTests = 0
 	var totalFragmentsWritten = 0
 
-	for specName in whitelist 'eachSpec'
+	for specName in effectiveWhitelist(target) 'eachSpec'
 		let outcome = runOneSpecSerial(specName, specDir: specDir, fragmentDir: fragmentDir, specCacheDir: specCacheDir, root: root, target: target, filter: filter, targetKey: targetKey, verbose: verbose)
 		if not outcome.ran 'skipped'
 			continue
@@ -3044,6 +3117,22 @@ function filterMatches(filter String, testPath String) returns bool
 	return false
 end 'filterMatches'
 
+// True when `test` is allowed to run on the target whose key is `targetKey`.
+// A test with an empty `onlyTargets` runs everywhere; one with a non-empty
+// `onlyTargets` runs only on a target whose key is listed (the inverse of a
+// skip — an include filter for platform-specific negative tests).
+function testRunsOnTarget(test SpecTest, targetKey String) returns bool
+	if test.onlyTargets.count() == 0 'unrestricted'
+		return true
+	end 'unrestricted'
+	for allowed in test.onlyTargets 'eachAllowed'
+		if allowed == targetKey 'match'
+			return true
+		end 'match'
+	end 'eachAllowed'
+	return false
+end 'testRunsOnTarget'
+
 function partitionSpecTests(tests SpecTestArray, specName String, filter String, targetKey String) returns SpecWorkUnit
 	var batchable = SpecTestArray.create()
 	var nonBatchable = SpecTestArray.create()
@@ -3055,6 +3144,10 @@ function partitionSpecTests(tests SpecTestArray, specName String, filter String,
 		if not filterMatches(filter, testPath: testPath) 'noMatch'
 			continue
 		end 'noMatch'
+		if not testRunsOnTarget(test, targetKey: targetKey) 'wrongTarget'
+			logInfo(LogCategory.testing, message: function() gives "[SKIP] {testPath} - not for target {targetKey} (targets directive)")
+			continue
+		end 'wrongTarget'
 		if isSelfHostedKnownBroken(specName, testName: test.name) 'knownBroken'
 			continue
 		end 'knownBroken'
@@ -3618,7 +3711,7 @@ export function runAllSpecTestsParallel(filter String, target Target, workerCoun
 	end 'noSpecCacheDir'
 
 	// Pre-create all fragment and cache subdirs so workers don't race on creation.
-	for specName2 in whitelist 'createDirs'
+	for specName2 in effectiveWhitelist(target) 'createDirs'
 		let cacheSubDir = specCacheDir.join(specName2)
 		if not Directory.exists(cacheSubDir) 'noCacheSub'
 			_ = Directory.create(cacheSubDir)
@@ -3637,7 +3730,7 @@ export function runAllSpecTestsParallel(filter String, target Target, workerCoun
 	// Phase 1: Parse all specs and partition tests into batchable / non-batchable.
 	var units = SpecWorkUnitArray.create()
 
-	for specName in whitelist 'parseSpecs'
+	for specName in effectiveWhitelist(target) 'parseSpecs'
 		let specPath = specDir.join("{specName}.md")
 		let content = try File.readText(specPath) otherwise 'readErr'
 			logError(LogCategory.testing, message: function() gives "Could not read spec: {specPath}")

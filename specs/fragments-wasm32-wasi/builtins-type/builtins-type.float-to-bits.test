@@ -12,19 +12,19 @@ ExitCode: 0
 ---
 // CompiledIR
 module {
-  func @main() -> u32 {
+  func @main() -> u8 {
   entry:
-    x64.movsd xmm0, [rip+__float_4607182418800017408]
-    x64.mov r8, 4607182418800017408
-    x64.movq r9, xmm0
-    x64.cmp r9, r8
-    x64.jne check_0.after
+    %0 = mir.mov_imm 4607182418800017408 : f64
+    %1 = mir.bitcast.f64.i64 %0
+    %3 = mir.mov_imm 4607182418800017408 : i64
+    %4 = mir.cmp eq, %1, %3
+    mir.cond_br %4 [then: check_0(), else: check_0.after()]
   check_0:
-    x64.xor r8d, r8d
-    x64.ret
+    %5 = mir.mov_imm 0 : i64
+    mir.ret %5
   check_0.after:
-    x64.mov r8d, 1
-    x64.ret
+    %6 = mir.mov_imm 1 : i64
+    mir.ret %6
   }
 }
 ---

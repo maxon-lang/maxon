@@ -101,7 +101,11 @@ public enum ErrorCode {
   SemanticUnreachableCode = 3071,
   SemanticBuiltinTypeConstruction = 3072,
   AsyncNonYielding = 3073,
-  // 3074 retired (was SemanticDiscardedEnumeratedIndex — check removed with withIterator redesign)
+  // 3074 reserved for SemanticSubprocessUnsupportedTarget — a self-hosted-only
+  // diagnostic (the self-hosted RejectWasmSubprocess pass rejects the Subprocess
+  // API on wasm32-wasi). The C# bootstrap has no such check, so it owns no enum
+  // member here, but the number is taken: do not reuse it. (Originally
+  // SemanticDiscardedEnumeratedIndex, retired with the withIterator redesign.)
   SemanticMatchQualifiedCaseName = 3075,
   SemanticConstructorRestriction = 3076,
   SemanticVarShouldBeLet = 3077,

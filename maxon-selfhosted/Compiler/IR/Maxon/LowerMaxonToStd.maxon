@@ -662,6 +662,34 @@ export function registerSlabAndMmGlobalsForDataSection(globalData GlobalDataTabl
 	addDataSectionEntry(globalData, name: "__gt_timer_count", initialBytes: zeroBytesOfSize(8))
 	addDataSectionEntry(globalData, name: "__gt_timer_cs", initialBytes: zeroBytesOfSize(40))
 
+	// Tier 4 subprocess runtime state (x64-Windows `emitX64SubprocessRuntime`).
+	// Mutable globals first so they stay 8-aligned for the atomics: the last
+	// runtime-side error cstring ptr, the FormatMessageA scratch buffer, and the
+	// LOCK-XADD'd streaming-pipe sequence counter. Reserved unconditionally so the
+	// .data layout is uniform across targets (the runtime.std stubs on wasm/macOS
+	// never touch them; the bytes are dead there, like the GT timer heap).
+	addDataSectionEntry(globalData, name: "__subp_last_error", initialBytes: zeroBytesOfSize(8))
+	addDataSectionEntry(globalData, name: "__subp_last_error_buf", initialBytes: zeroBytesOfSize(512))
+	addDataSectionEntry(globalData, name: "__subp_stream_pipe_seq", initialBytes: zeroBytesOfSize(8))
+	// Fixed error-message strings, LEA'd into __subp_last_error on a failure path
+	// and copied into managed memory by last_error_message. NUL-terminated.
+	addSubprocessString(globalData, name: "__subp_err_search_path", bytes: b"SearchPathW failed\x00")
+	addSubprocessString(globalData, name: "__subp_err_create_process", bytes: b"CreateProcessW failed\x00")
+	addSubprocessString(globalData, name: "__subp_err_create_pipe", bytes: b"CreatePipe failed\x00")
+	addSubprocessString(globalData, name: "__subp_err_create_file", bytes: b"CreateFileW failed\x00")
+	addSubprocessString(globalData, name: "__subp_err_argv", bytes: b"argv parse failed\x00")
+	addSubprocessString(globalData, name: "__subp_err_alloc", bytes: b"allocation failed\x00")
+	addSubprocessString(globalData, name: "__subp_err_unsupported", bytes: b"unsupported stdio kind\x00")
+	addSubprocessString(globalData, name: "__subp_err_invalid_handle", bytes: b"invalid subprocess handle\x00")
+	addSubprocessString(globalData, name: "__subp_err_wait_failed", bytes: b"WaitForSingleObject failed\x00")
+	addSubprocessString(globalData, name: "__subp_err_signal_unsupported", bytes: b"signal not supported on this platform\x00")
+	// ANSI "NUL\0\0" (CreateFileA-style) and UTF-16 "NUL\0" (CreateFileW) for the
+	// null device, plus the UTF-16 streaming-pipe name prefix L"\\.\pipe\maxon_stream_"
+	// (no trailing NUL — build_pipe_name_wide appends pid_seq_dir + the wide NUL).
+	addSubprocessString(globalData, name: "__subp_nul_devname", bytes: b"NUL\x00\x00")
+	addSubprocessString(globalData, name: "__subp_nul_devname_w", bytes: utf16leTerminated("NUL"))
+	addSubprocessString(globalData, name: "__subp_pipe_name_prefix_w", bytes: utf16leBytes("\\\\.\\pipe\\maxon_stream_"))
+
 	// Phase D2: kernel-supplied argc/argv stashed by `mrt_start`'s prologue on
 	// Linux/macOS. The `stashEntryArgv` backend pseudo-op writes rdi/rsi (x64)
 	// or x0/x1 (arm64) into these slots before any other code in the entry
@@ -730,6 +758,40 @@ function addTraceTagEntry(globalData GlobalDataTable, name String, text ByteArra
 	end 'pad'
 	addDataSectionEntry(globalData, name: name, initialBytes: bytes)
 end 'addTraceTagEntry'
+
+// Register one subprocess string constant in writable .data, padded to an
+// 8-byte multiple so the next .data entry stays aligned. `bytes` already
+// carries any required NUL terminator(s) (the caller decides; UTF-16 entries
+// and the no-terminator pipe prefix differ), so this only pads.
+function addSubprocessString(globalData GlobalDataTable, name String, bytes ByteArray)
+	var padded = ByteArray.create()
+	padded.append(bytes)
+	while padded.count() mod 8 != 0 'pad'
+		padded.push(0)
+	end 'pad'
+	addDataSectionEntry(globalData, name: name, initialBytes: padded)
+end 'addSubprocessString'
+
+// UTF-16LE byte image of an ASCII string (each char followed by a 0 high byte),
+// with NO terminator — used for the streaming-pipe name prefix that a builder
+// appends to.
+function utf16leBytes(ascii String) returns ByteArray
+	var bytes = ByteArray.create()
+	for b in ascii.toByteArray() 'each'
+		bytes.push(b)
+		bytes.push(0)
+	end 'each'
+	return bytes
+end 'utf16leBytes'
+
+// UTF-16LE byte image of an ASCII string plus a wide NUL terminator (two zero
+// bytes) — used for CreateFileW-style wide device names.
+function utf16leTerminated(ascii String) returns ByteArray
+	var bytes = utf16leBytes(ascii)
+	bytes.push(0)
+	bytes.push(0)
+	return bytes
+end 'utf16leTerminated'
 
 // Register the allocator-count reader as a callable signature. The
 // `__mm_alloc`, `__mm_decref`, `__mm_incref` functions are now real

@@ -1986,6 +1986,51 @@ function translateStructType(project Project, data StdlibCacheData, st StructTyp
 	return StructType.create(st.name, fields: fields, byteSize: st.byteSize, visibility: st.visibility, sourceFilePath: st.sourceFilePath, nameLine: st.nameLine, nameColumn: st.nameColumn, expectedMethods: translatedExpected, innerAliases: translatedInner)
 end 'translateStructType'
 
+// Translate a captured EnumType into the destination project's id space —
+// the enum-side counterpart of `translateStructType`. The in-memory
+// `captureStdlibMetadata` path copies each `EnumType` verbatim, so every
+// MaxonType it carries (each union case's payload-field types and the enum's
+// substituted `expectedMethods` signatures) still indexes the *source*
+// project's registries. Re-intern each through the captured `typeNameTable`
+// so a restored union references the destination project's `typeNames`. For
+// the disk path this is the same identity round-trip `translateStructType`
+// performs — the typeNameTable is mirrored from the destination interner, so
+// `intern(name)` returns the same id. Without this, a `match` on a cached
+// union (e.g. `TerminationStatus`) reads each payload field's type through a
+// stale id that lands on an unrelated type — classifying a scalar `ExitInt`
+// payload as a managed `Configuration` struct and emitting a bogus
+// `__mm_incref` on the scalar that faults at runtime.
+function translateEnumType(project Project, data StdlibCacheData, et EnumType) returns EnumType
+	var cases = EnumCaseArray.create()
+	for c in et.cases 'eachCase'
+		var payloadFields = EnumPayloadFieldArray.create()
+		for pf in c.payloadFields 'eachPayload'
+			payloadFields.push(EnumPayloadField.create(pf.name, fieldType: translateMaxonType(project, data: data, t: pf.fieldType)))
+		end 'eachPayload'
+		cases.push(EnumCase.create(c.name, ordinal: c.ordinal, rawValue: c.rawValue, line: c.line, column: c.column, payloadFields: payloadFields, backingStructName: c.backingStructName, backingStructExprId: c.backingStructExprId, rawStringValue: c.rawStringValue, rawFunctionName: c.rawFunctionName))
+	end 'eachCase'
+
+	var expectedMethods = InterfaceMethodSigArray.create()
+	for m in et.expectedMethods 'eachMethod'
+		expectedMethods.push(translateInterfaceMethodSig(project, data: data, sig: m))
+	end 'eachMethod'
+
+	// Function-backed enums share one FunctionTypeId across every case. It
+	// indexes the source project's `functionTypes`; re-intern the captured
+	// signature so the restored enum points at the destination id. Non
+	// function-backed enums keep the sentinel `0` (the disk path never sets
+	// either field, so this only fires on the in-memory capture path).
+	var functionBackingTypeId = et.functionBackingTypeId
+	if et.isFunctionBacked and functionBackingTypeId != 0 'remapFnBacking'
+		functionBackingTypeId = match translateCapturedFunctionType(project, data: data, id: et.functionBackingTypeId) 'extractId'
+			function(id) gives id
+			default panic("translateEnumType: translateCapturedFunctionType returned a non-function type for enum '{et.name}'")
+		end 'extractId'
+	end 'remapFnBacking'
+
+	return EnumType.create(et.name, cases: cases, isFloatBacked: et.isFloatBacked, visibility: et.visibility, sourceFilePath: et.sourceFilePath, nameLine: et.nameLine, nameColumn: et.nameColumn, expectedMethods: expectedMethods, isUnion: et.isUnion, isStringBacked: et.isStringBacked, isCharBacked: et.isCharBacked, isFunctionBacked: et.isFunctionBacked, functionBackingTypeId: functionBackingTypeId)
+end 'translateEnumType'
+
 // Capture parser metadata from a project into a StdlibCacheData.
 export function captureStdlibMetadata(project Project, data StdlibCacheData)
 	// Snapshot the type-name interner so restoreStdlibMetadata can translate
@@ -2288,10 +2333,14 @@ export function restoreStdlibMetadata(project Project, data StdlibCacheData)
 
 	// Cache v47: restore enum types so `match` on cached stdlib enums
 	// (MapError, ArrayError, ...) dispatches by case name. Payload-field
-	// MaxonTypes were already re-interned through the destination project's
-	// interner during `readMaxonType`, so no further translation step.
+	// and expectedMethod MaxonTypes carry the same captured-id problem as
+	// struct fields — the in-memory `captureStdlibMetadata` path copies each
+	// `EnumType` verbatim with the source project's ids. Translate every
+	// named id through the typeNameTable before insertion (a no-op identity
+	// on the disk path, where readMaxonType already reinterned the names).
 	for (name, et) in data.enumTypes 'restoreEnums'
-		try project.enumTypes.insert(name, value: et) otherwise ignore
+		let translatedEnum = translateEnumType(project, data: data, et: et)
+		try project.enumTypes.insert(name, value: translatedEnum) otherwise ignore
 	end 'restoreEnums'
 
 	// Restore top-level constants

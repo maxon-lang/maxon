@@ -1122,7 +1122,7 @@ end 'reportIfNonYielding'
 // runtime primitives) whose call suspends the green thread. Mirrors the C#
 // bootstrap's IoStubs, expressed at the Maxon-IR call-callee granularity.
 function isAsyncYieldStub(name String) returns bool
-	let stubs = ["File.exists", "File.read", "File.delete", "maxon_file_exists", "maxon_file_read", "maxon_file_delete", "maxon_sleep", "stdlib.sleep"]
+	let stubs = ["File.exists", "File.read", "File.delete", "maxon_file_exists", "maxon_file_read", "maxon_file_delete", "maxon_sleep", "stdlib.sleep", "Subprocess.run", "maxon_subprocess_wait_collect"]
 	for s in stubs 'each'
 		if name == s 'hit'
 			return true
@@ -1588,7 +1588,10 @@ end 'slotIsGuarded'
 // the user sees `Map.contains`, not the synthetic mangled form. We do
 // NOT strip a leading namespace dot because the self-hosted resolver
 // emits `{TypeName}.{method}` directly (no `stdlib.` prefix).
-function stripCalleeMangling(callee String) returns String
+//
+// `module` (visible to the Compiler/ subtree) so the IR-pass
+// RejectWasmSubprocess can reuse it instead of re-deriving the same one-liner.
+module function stripCalleeMangling(callee String) returns String
 	let dollarIdx = try callee.findFirst("$") otherwise return callee
 	return callee.slice(callee.startIndex(), endIndex: dollarIdx)
 end 'stripCalleeMangling'

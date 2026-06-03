@@ -6537,6 +6537,22 @@ export type Parser
 			module.setTerminator(block, op: MaxonOp.throw(typeNameToken.value, variantName: variantToken.value, payloadValueName: ctorCall.resultName, range: SourceRange.between(throwToken, last: ctorCall.lastToken)))
 			return
 		end 'hasPayload'
+		// Bare case of an associated-value union: a `try ... otherwise (e)`
+		// site binds `e` to the union POINTER (see declareErrorBindingInBlock's
+		// union path), so the throw must also produce a heap union pointer.
+		// Route the bare case through its no-arg constructor
+		// `__construct_Union_Bare()` (synthesized for every union case) and
+		// thread the boxed result as the throw's payload value — otherwise the
+		// flag carries `ordinal + 1` (an integer) and `match e` dereferences
+		// that small integer as a pointer (0xC0000005). Plain bare enums keep
+		// the ordinal+1 ABI: their `(e)` binding recovers the ordinal via
+		// `flag - 1` and never treats the flag as a pointer.
+		if enumIsAssociatedValueUnion(typeNameToken.value) 'bareUnionCase'
+			let ctorName = unionConstructorSymbolName(typeNameToken.value, caseName: variantToken.value)
+			let ctorResult = emitCallAndResult(ctorName, args: ByteArrayArray.create(), argLabels: StringArray.create(), argTypes: MaxonTypeArray.create(), argRanges: SourceRangeArray.create(), callContext: CallContext.qualified, range: SourceRange.between(throwToken, last: variantToken))
+			module.setTerminator(block, op: MaxonOp.throw(typeNameToken.value, variantName: variantToken.value, payloadValueName: exprName(ctorResult), range: SourceRange.between(throwToken, last: variantToken)))
+			return
+		end 'bareUnionCase'
 		module.setTerminator(block, op: MaxonOp.throw(typeNameToken.value, variantName: variantToken.value, payloadValueName: ByteArray.create(), range: SourceRange.between(throwToken, last: variantToken)))
 	end 'parseThrowStatement'
 
@@ -10187,7 +10203,7 @@ export type Parser
 				if not isStatementContext 'checkVoidReturn'
 					try checkQualifiedCalleeNotVoidReturn(qualifiedCallee, tryToken: tryToken)
 				end 'checkVoidReturn'
-				calleeThrowsTypeName = try project.funcThrowsTypes.get(qualifiedCallee) otherwise ThrowsClause.none
+				calleeThrowsTypeName = resolveThrowsClauseForCallee(qualifiedCallee)
 			end 'resolveCalleeInfo'
 		end 'haveLastOp'
 		if not rewroteCall 'noRewrite'
@@ -10209,7 +10225,7 @@ export type Parser
 					// the binding falls back to `integer`).
 					let rewrittenOp = try module.ops.get(lastIdx) otherwise panic("parseTryExpression: re-read OOB after method rewrite")
 					let qualifiedCallee = qualifiedCalleeFromTryCall(rewrittenOp, opIdx: lastIdx)
-					calleeThrowsTypeName = try project.funcThrowsTypes.get(qualifiedCallee) otherwise ThrowsClause.none
+					calleeThrowsTypeName = resolveThrowsClauseForCallee(qualifiedCallee)
 				end 'resolveMethodThrows'
 			end 'haveLastOpForMethodRewrite'
 			if not rewroteMethodCall 'noMethodRewrite'
@@ -10682,6 +10698,33 @@ export type Parser
 			default panic("qualifiedCalleeFromTryCall: expected tryCall or tryMethodCall op, got '{op.name}'")
 		end 'extract'
 	end 'qualifiedCalleeFromTryCall'
+
+	// Resolve the throws-clause for a qualified callee, falling back to the
+	// overload bucket on a direct miss. `qualifyCalleeForContext` leaves an
+	// overloaded callee at its bare qualified name (e.g. `Subprocess.run`)
+	// because overload disambiguation runs later in TypeResolution; the
+	// throws clause, however, is only recorded under the mangled variants
+	// (`Subprocess.run$Executable`, ...). Without this fallback the `(e)`
+	// binding for a `try Subprocess.run(...) otherwise (e)` falls back to
+	// `ThrowsClause.none` → `e` is typed `integer` and bound to `flag - 1`,
+	// so the union pointer is lost and the downstream `match e` trips E3005.
+	// Every overload of a given name shares one declared error type in
+	// practice, so the first throwing variant in the bucket is authoritative.
+	function resolveThrowsClauseForCallee(qualifiedCallee String) returns ThrowsClause
+		if let direct = try project.funcThrowsTypes.get(qualifiedCallee) 'directHit'
+			return direct
+		end 'directHit'
+		if let variants = try project.overloadedNames.get(qualifiedCallee) 'overloaded'
+			for variant in variants 'eachVariant'
+				if let clause = try project.funcThrowsTypes.get(variant) 'variantClause'
+					if throwsClauseIsThrowing(clause) 'isThrowing'
+						return clause
+					end 'isThrowing'
+				end 'variantClause'
+			end 'eachVariant'
+		end 'overloaded'
+		return ThrowsClause.none
+	end 'resolveThrowsClauseForCallee'
 
 	// Recover the receiver's MaxonType for a tryMethodCall at parse time by
 	// scanning backward from `scanFrom` (exclusive) for the op that

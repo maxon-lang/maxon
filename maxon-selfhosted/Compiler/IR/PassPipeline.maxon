@@ -31,6 +31,12 @@ export union PassKind
 	// referenced only inside its declaring module subtree), or E3094
 	// (`module` decl with no out-of-file readers).
 	checkUnusedExports
+	// E3074: reject the `Subprocess` API in user code on targets that cannot
+	// host it (wasm32-wasi has no process-spawn primitive). Runs after
+	// checkUnusedExports so `project.resolvedCallees` is fully populated and
+	// before DFE (which could drop the offending caller before it is checked).
+	// No-op on supporting targets and for stdlib-defining code.
+	rejectWasmSubprocess
 	deadFunctionElimination
 	// Phase 11.2: emit per-instantiation layout descriptors + thunks
 	// (Maxon-level; runs after DFE has narrowed the live function set
@@ -265,6 +271,7 @@ export type PassPipeline
 			// signal there and would emit a flood of E3092s against legitimately
 			// public typealiases.
 			checkUnusedExports then runCheckUnusedExportsIfNotStdlib(project, module: maxonModule, isStdlib: isStdlib)
+			rejectWasmSubprocess then rejectWasmSubprocess(project, module: maxonModule, target: target)
 			deadFunctionElimination then maxonModule = eliminateDeadFunctions(project, module: maxonModule)
 			buildLayoutDescriptors then buildLayoutDescriptors(project, maxonModule: maxonModule, globalData: globalData)
 			buildWitnessTables then buildWitnessTables(project, maxonModule: maxonModule, globalData: globalData)
@@ -606,6 +613,7 @@ export function classifyPass(pass PassKind) returns PassClassification
 		resolveTypes gives PassClassification.wholeModule
 		semanticCheck gives PassClassification.wholeModule
 		checkUnusedExports gives PassClassification.wholeModule
+		rejectWasmSubprocess gives PassClassification.wholeModule
 		deadFunctionElimination gives PassClassification.wholeModule
 		buildLayoutDescriptors gives PassClassification.wholeModule
 		buildWitnessTables gives PassClassification.wholeModule
@@ -666,6 +674,11 @@ export function buildMidPipeline(project Project) returns PassKindArray
 	// callee/global/field name we need. Runs before DFE so an unused-export
 	// diagnostic isn't suppressed by the elimination of its own decl.
 	passes.push(PassKind.checkUnusedExports)
+	// E3074: reject the Subprocess API in user code on targets that cannot host
+	// it (wasm32-wasi). Runs after checkUnusedExports so resolvedCallees is fully
+	// populated, and before DFE so the offending caller is still present to be
+	// checked. No-op on supporting targets and for stdlib-defining code.
+	passes.push(PassKind.rejectWasmSubprocess)
 	// Phase 11.2: emit layout-descriptor blobs + stub thunks for every
 	// concrete generic instantiation. Must run BEFORE DFE so the synthesized
 	// thunks and the witness-method-impl names get pushed onto
@@ -795,6 +808,7 @@ function classifyPhase(pass PassKind) returns PipelinePhase
 		resolveTypes gives PipelinePhase.maxon
 		semanticCheck gives PipelinePhase.maxon
 		checkUnusedExports gives PipelinePhase.maxon
+		rejectWasmSubprocess gives PipelinePhase.maxon
 		deadFunctionElimination gives PipelinePhase.maxon
 		buildLayoutDescriptors gives PipelinePhase.maxon
 		buildWitnessTables gives PipelinePhase.maxon
@@ -921,6 +935,7 @@ export function passKindToString(pass PassKind) returns String
 		resolveTypes gives "resolve-types"
 		semanticCheck gives "semantic-check"
 		checkUnusedExports gives "check-unused-exports"
+		rejectWasmSubprocess gives "reject-wasm-subprocess"
 		deadFunctionElimination gives "dead-function-elimination"
 		buildLayoutDescriptors gives "build-layout-descriptors"
 		buildWitnessTables gives "build-witness-tables"

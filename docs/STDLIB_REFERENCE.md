@@ -809,7 +809,7 @@ print("Running as: {exe.path}\n")
 
 Launch and manage child processes. Modeled after Swift's `Subprocess` (swift-foundation SF-0007). The hot path is `Subprocess.run(.name("git"), arguments: argv)`, which captures stdout/stderr into a `CollectedOutput` value. For full control, build a `Configuration` and call `.run()` on it.
 
-**Not available on `wasm32-wasi`** — WASI has no process-spawn primitives. Wrap callers in `#if not os(Wasi)` for portable stdlib code.
+**Not available on `wasm32-wasi`** — WASI has no process-spawn primitives. Any call into the `Subprocess` API on that target is a compile error (**E3074**), not a runtime failure, so the problem surfaces at build time. Wrap callers in `#if not os(Wasi)` (compile the call only on non-WASI targets) for portable stdlib code.
 
 ### Hot path
 

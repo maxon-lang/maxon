@@ -2788,6 +2788,25 @@ function resolveOverloadByLabels(project Project, variants QualifiedNameArray, a
 		if hasSelf 'skipSelf'
 			startIdx = 1
 		end 'skipSelf'
+		// Arity filter: the call's arg count must fall within the variant's
+		// [requiredParams, totalParams] window. Without this, label matching
+		// alone treats every overload that merely SHARES the labeled param
+		// names as a match — so a 2-arg `run(exe, arguments: a)` spuriously
+		// matched the 3-arg and 4-arg `run` overloads (all carry `executable` /
+		// `arguments`) and reported E3007. Defaulted (trailing) params widen the
+		// lower bound so default-bearing overloads still resolve when omitted.
+		let totalUserParams = sig.paramNames.count() - startIdx
+		var defaultedCount = 0
+		for di in startIdx upto sig.paramNames.count() 'countDefaults'
+			let pd = try sig.paramDefaults.get(di) otherwise ParamDefault.none
+			if paramDefaultHasValue(pd) 'hasDefault'
+				defaultedCount = defaultedCount + 1
+			end 'hasDefault'
+		end 'countDefaults'
+		let requiredUserParams = totalUserParams - defaultedCount
+		if argLabels.count() < requiredUserParams or argLabels.count() > totalUserParams 'arityMismatch'
+			continue
+		end 'arityMismatch'
 		var ok = true
 		for i in 0 upto argLabels.count() 'eachArg'
 			let label = try argLabels.get(i) otherwise return v
