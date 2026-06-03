@@ -24,12 +24,17 @@ export function buildToolHandler(argsDoc JsonDoc, argsId JsonNodeId) returns Too
 		return ToolOutcome.error(RpcStandardErrorCode.invalidParams.rawValue, message: "build: missing required `target` (one of csharp | selfhosted | both)")
 	end 'noTarget'
 
+	// Sentinel: absent flag defaults to keeping the cache (false).
+	let noStdlibCache = try argsDoc.getBool(argsId, key: "noStdlibCache") otherwise false
+
 	let repoRoot = repoRootPath()
 	if target.equals("csharp") 'cs'
+		// The C# bootstrap's stdlib cache is in-memory only — there is no
+		// on-disk `.mxc` to delete, so `noStdlibCache` is a no-op here.
 		return runCsharpBuild(repoRoot)
 	end 'cs'
 	if target.equals("selfhosted") 'sh'
-		return runSelfhostedBuild(repoRoot)
+		return runSelfhostedBuild(repoRoot, noStdlibCache: noStdlibCache)
 	end 'sh'
 	if target.equals("both") 'both'
 		let csOutcome = runCsharpBuild(repoRoot)
@@ -38,7 +43,7 @@ export function buildToolHandler(argsDoc JsonDoc, argsId JsonNodeId) returns Too
 		// reference (Maxon's compiler currently has trouble with function-
 		// type values), so we just inline the conditional here.
 		match csOutcome 'cs'
-			success then return runSelfhostedBuild(repoRoot)
+			success then return runSelfhostedBuild(repoRoot, noStdlibCache: noStdlibCache)
 			error then return csOutcome
 		end 'cs'
 	end 'both'
@@ -61,18 +66,29 @@ function runCsharpBuild(repoRoot FilePath) returns ToolOutcome
 	let elapsed = Clock.elapsedMs(timing)
 
 	let binaryPath = childPath(repoRoot, segment: "bin/maxon.exe")
-	return buildOutcome("csharp", result: result, durationMs: elapsed, expectedBinary: binaryPath)
+	// csharp builds never touch the on-disk stdlib cache, so the deleted-files
+	// list is always empty here.
+	return buildOutcome("csharp", result: result, durationMs: elapsed, expectedBinary: binaryPath, deletedCacheFiles: StringArray.create())
 end 'runCsharpBuild'
 
 // =============================================================================
 // selfhosted target
 // =============================================================================
 
-function runSelfhostedBuild(repoRoot FilePath) returns ToolOutcome
+function runSelfhostedBuild(repoRoot FilePath, noStdlibCache bool) returns ToolOutcome
 	let csharpBinary = childPath(repoRoot, segment: "bin/maxon.exe")
 	if not File.exists(csharpBinary) 'noCsharp'
 		return ToolOutcome.error(RpcStandardErrorCode.invalidRequest.rawValue, message: "build selfhosted: `{csharpBinary.path}` does not exist. Build the C# bootstrap first via target=csharp.")
 	end 'noCsharp'
+
+	// When the caller asks to disable the stdlib cache, delete every
+	// pre-compiled `stdlib-*.mxc` under maxon-selfhosted/.maxon/cache/ before
+	// the build so the bootstrap recompiles the stdlib from source. We do this
+	// before timing the build so the build duration stays comparable.
+	var deletedCacheFiles = StringArray.create()
+	if noStdlibCache 'wipeCache'
+		deletedCacheFiles = deleteStdlibCacheFiles(repoRoot)
+	end 'wipeCache'
 
 	let timing = Clock.nowMs()
 	var argv = StringArray.create()
@@ -84,8 +100,56 @@ function runSelfhostedBuild(repoRoot FilePath) returns ToolOutcome
 	let elapsed = Clock.elapsedMs(timing)
 
 	let binaryPath = childPath(repoRoot, segment: "maxon-selfhosted/.maxon/maxon-selfhosted.exe")
-	return buildOutcome("selfhosted", result: result, durationMs: elapsed, expectedBinary: binaryPath)
+	return buildOutcome("selfhosted", result: result, durationMs: elapsed, expectedBinary: binaryPath, deletedCacheFiles: deletedCacheFiles)
 end 'runSelfhostedBuild'
+
+// =============================================================================
+// stdlib cache deletion
+// =============================================================================
+
+// Delete every `stdlib-*.mxc` file under maxon-selfhosted/.maxon/cache/ and
+// return the paths that were actually removed. A missing cache directory or an
+// absent cache file is not an error: the disabled-cache invariant we promise
+// the caller ("no stdlib cache on disk before the build") already holds in that
+// case, so we simply return the (possibly empty) list of files we deleted.
+function deleteStdlibCacheFiles(repoRoot FilePath) returns StringArray
+	var deleted = StringArray.create()
+	let cacheDir = childPath(repoRoot, segment: "maxon-selfhosted/.maxon/cache")
+	if not Directory.exists(cacheDir) 'noDir'
+		return deleted
+	end 'noDir'
+
+	let entries = try Directory.list(cacheDir) otherwise 'listFailed'
+		// Listing failed (permissions, race). Surface nothing deleted rather
+		// than aborting the whole build — the build itself will still report a
+		// stale-cache hit if one survived, which is the visible signal.
+		return deleted
+	end 'listFailed'
+
+	for entry in entries 'each'
+		let name = lastSegment(entry)
+		if not isStdlibCacheFile(name) 'notCache'
+			continue
+		end 'notCache'
+		try File.delete(entry) otherwise 'delFailed'
+			// A file we listed but cannot delete: skip it rather than fail the
+			// build. It stays out of `deleted` so the caller sees it was not
+			// removed.
+			continue
+		end 'delFailed'
+		deleted.push(entry.path)
+	end 'each'
+
+	return deleted
+end 'deleteStdlibCacheFiles'
+
+// A stdlib cache file is named `stdlib-<target>.mxc` (e.g.
+// `stdlib-x64-windows.mxc`). Match on that prefix + extension so sibling
+// artifacts in the cache dir (build manifests, the run-cache exe) are left
+// untouched.
+function isStdlibCacheFile(name String) returns bool
+	return name.startsWith("stdlib-") and name.endsWith(".mxc")
+end 'isStdlibCacheFile'
 
 // =============================================================================
 // Outcome construction
@@ -93,7 +157,12 @@ end 'runSelfhostedBuild'
 
 // Build the success/error JSON envelope for one build invocation. Shared
 // between csharp and selfhosted because the shape is identical.
-function buildOutcome(target String, result CollectedOutput, durationMs DurationMs, expectedBinary FilePath) returns ToolOutcome
+//
+// `deletedCacheFiles` lists the stdlib cache files removed before this build
+// (empty unless `noStdlibCache` was requested). It is always emitted — even
+// when empty — so a client that asked for a cache wipe can confirm the wipe
+// happened rather than guessing from a missing field.
+function buildOutcome(target String, result CollectedOutput, durationMs DurationMs, expectedBinary FilePath, deletedCacheFiles StringArray) returns ToolOutcome
 	var doc = JsonDoc.create()
 	let targetId = doc.add(JsonNode.stringNode(target))
 	let exitCodeId = doc.add(JsonNode.numberNode(result.exitCode()))
@@ -105,6 +174,7 @@ function buildOutcome(target String, result CollectedOutput, durationMs Duration
 	let errorsArr = buildErrorsArray(doc, errors: errors)
 	let rawTail = lastBytes(combinedOutput, max: rawTailMaxBytes)
 	let rawTailId = doc.add(JsonNode.stringNode(rawTail))
+	let deletedArr = stringArrayToJson(doc, values: deletedCacheFiles)
 
 	var keys = StringArray.create()
 	var children = JsonNodeIdArray.create()
@@ -123,12 +193,23 @@ function buildOutcome(target String, result CollectedOutput, durationMs Duration
 	end 'haveBinary'
 	keys.push("errors")
 	children.push(errorsArr)
+	keys.push("deletedStdlibCacheFiles")
+	children.push(deletedArr)
 	keys.push("rawTail")
 	children.push(rawTailId)
 	doc.root = doc.add(JsonNode.objectNode(keys, children: children))
 
 	return ToolOutcome.success(doc, root: doc.root)
 end 'buildOutcome'
+
+// Wrap a `StringArray` as a JSON array of string nodes.
+function stringArrayToJson(doc JsonDoc, values StringArray) returns JsonNodeId
+	var ids = JsonNodeIdArray.create()
+	for value in values 'each'
+		ids.push(doc.add(JsonNode.stringNode(value)))
+	end 'each'
+	return doc.add(JsonNode.arrayNode(ids))
+end 'stringArrayToJson'
 
 // Surface a Subprocess spawn / timeout / I/O failure as a JSON-RPC error. We
 // can't construct the success-shaped buildOutcome here because we never got an

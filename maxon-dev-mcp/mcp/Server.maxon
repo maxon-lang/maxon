@@ -222,9 +222,11 @@ function schemaForBuild(doc JsonDoc) returns JsonNodeId
 	targetChoices.push("both")
 	let targetSchema = schemaStringEnum(doc, choices: targetChoices, description: "Which compiler to build. `both` chains csharp then selfhosted.")
 	let cleanSchema = schemaBoolean(doc, description: "When true, force a clean rebuild (deletes intermediate caches). Default false.")
+	let noStdlibCacheSchema = schemaBoolean(doc, description: "When true, delete the on-disk self-hosted stdlib cache (maxon-selfhosted/.maxon/cache/stdlib-*.mxc) before building so the stdlib is recompiled from source. No effect on the csharp target, whose stdlib cache is in-memory only. Default false.")
 	var fields = SchemaFieldArray.create()
 	fields.push(SchemaField.create("target", schemaId: targetSchema, required: true))
 	fields.push(SchemaField.create("clean", schemaId: cleanSchema, required: false))
+	fields.push(SchemaField.create("noStdlibCache", schemaId: noStdlibCacheSchema, required: false))
 	return schemaObject(doc, fields: fields, description: "Build the Maxon compiler.")
 end 'schemaForBuild'
 

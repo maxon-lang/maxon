@@ -24,7 +24,7 @@ When working in this repo, prefer the `maxon-dev` MCP tools over raw Bash invoca
 | Look up a 4-digit error code | `mcp__maxon-dev__lookup_error_code` |
 | Debug memory-management issues | `mcp__maxon-dev__mm_trace_analyze` |
 
-Flags like `--filter`, `--update-required`, `--log`, `--mm-trace`, and `--target` are exposed as parameters on the relevant tools (`filter`, `updateRequired`, `log`, `mmTrace`, `target`). When iterating on a specific failing test, pass `filter` to `run_spec_test`/`run_self_hosted_test` or use `spec_test_outcome` for per-test verbose output. Cross-compile tests (e.g. wasm) via `target: "wasm32-wasi"` on `run_self_hosted_test`/`spec_test_outcome`.
+Flags like `--filter`, `--update-required`, `--log`, `--mm-trace`, and `--target` are exposed as parameters on the relevant tools (`filter`, `updateRequired`, `log`, `mmTrace`, `target`). When iterating on a specific failing test, pass `filter` to `run_spec_test`/`run_self_hosted_test` or use `spec_test_outcome` for per-test verbose output. Cross-compile tests (e.g. wasm) via `target: "wasm32-wasi"` on `run_self_hosted_test`/`spec_test_outcome`. To force a from-source stdlib rebuild, pass `noStdlibCache: true` to `build` — it deletes `maxon-selfhosted/.maxon/cache/stdlib-*.mxc` before the build (no-op for `target: "csharp"`, whose stdlib cache is in-memory).
 
 ## Building and Testing
 
