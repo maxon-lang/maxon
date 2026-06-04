@@ -409,9 +409,10 @@ let testProcessTimeoutMs = 2000
 // module — a large batch (e.g. string-type's 77 tests) runs several times
 // slower than native and trips the 2 s single-fragment budget. When the batch
 // times out the worker subprocess is force-killed; in the parallel dispatcher
-// that worker death leaks its parent-side child handle and reroutes the spec
-// to the (slower) per-fragment fallback. A roomier wasm batch budget keeps the
-// batch path alive so neither happens. Native batches stay on the tight budget.
+// that worker death now aborts the whole test run (see abortOnCrashedWorker), so
+// a too-tight wasm batch budget would turn a slow-but-correct spec into a hard
+// failure. A roomier wasm batch budget keeps the batch path alive so that never
+// happens. Native batches stay on the tight budget.
 function batchProcessTimeoutMs(target Target) returns DurationMs
 	if target.os == Os.wasi 'isWasm'
 		return 20000
@@ -422,7 +423,7 @@ end 'batchProcessTimeoutMs'
 // Per-worker-job wall-clock budget. If a worker doesn't emit WORKER_READY
 // within this many ms of receiving a JOB line, the dispatcher force-kills it
 // via subprocessKill; the resulting EOF makes the drain GT throw, which
-// routes through recoverFromCrashedJob just like a panic does. Sized for the
+// aborts the run via abortOnCrashedWorker just like a panic does. Sized for the
 // heaviest spec (stdlib-array singles) plus headroom; raise if a legitimately
 // heavy spec starts tripping it.
 let workerJobTimeoutMs = 60000 as Millis
@@ -2637,6 +2638,26 @@ function workerStderrIsCompilerPanic(stderr String) returns bool
 	return stderr.contains("\nStack trace:")
 end 'workerStderrIsCompilerPanic'
 
+// Forward a worker's cleaned stderr to the parent's stderr, guaranteeing a
+// trailing newline so whatever the parent prints next doesn't glue onto the
+// worker's last line. When `cleaned` is empty and `emptyFallback` is non-empty,
+// the fallback is printed instead — the crash path uses this to note a worker
+// that died before writing anything. An empty `emptyFallback` prints nothing,
+// which is what the panic and clean-shutdown paths want since they only ever
+// pass non-empty stderr.
+function forwardWorkerStderr(cleaned String, emptyFallback String = "")
+	if cleaned.isEmpty() 'empty'
+		if not emptyFallback.isEmpty() 'hasFallback'
+			printError(emptyFallback)
+		end 'hasFallback'
+	end 'empty' else 'hasContent'
+		printError(cleaned)
+		if not cleaned.endsWith("\n") 'noTrailingNl'
+			printError("\n")
+		end 'noTrailingNl'
+	end 'hasContent'
+end 'forwardWorkerStderr'
+
 // Abort the parent runner immediately with the worker's panic output. Called
 // when a worker subprocess panicked during compilation: re-running the same
 // fragment in a fresh subprocess would just re-panic, so further retries waste
@@ -2650,15 +2671,59 @@ function abortOnWorkerCompilerPanic(workerLabel String, stderr String)
 	if not compilingLabel.isEmpty() 'hasLabel'
 		printError("Panicked while compiling: {compilingLabel}\n")
 	end 'hasLabel'
-	printError(cleaned)
-	if not cleaned.endsWith("\n") 'noTrailingNl'
-		printError("\n")
-	end 'noTrailingNl'
+	forwardWorkerStderr(cleaned)
 	if compilingLabel.isEmpty() 'noLabel'
 		panic("Compiler panicked while running spec tests; see stderr above")
 	end 'noLabel'
 	panic("Compiler panicked while compiling {compilingLabel}; see stderr above")
 end 'abortOnWorkerCompilerPanic'
+
+// Drain whatever a (now-dead) worker buffered on its stderr pipe into a single
+// joined string. The child has already exited, so each ReadFile returns the
+// pipe-buffered bytes and then EOF (empty line). Shared by the clean-shutdown
+// drain and the crash-abort path so both consume stderr the same way. Stops on
+// EOF or the first read error (a released/closed handle).
+function drainChildStderr(child StreamingSubprocess) returns String
+	var sb = ""
+	let cap = 65536 as ByteLimit
+	while true 'lineLoop'
+		let line = try child.readStderrLineCapped(cap) otherwise break
+		if line.isEmpty() 'eof'
+			break
+		end 'eof'
+		if sb.isEmpty() 'firstLine'
+			sb = line
+		end 'firstLine' else 'restLine'
+			sb = "{sb}\n{line}"
+		end 'restLine'
+	end 'lineLoop'
+	return sb
+end 'drainChildStderr'
+
+// Abort the parent runner immediately because a worker subprocess died mid-job
+// (EOF before WORKER_READY, a non-zero exit, a watchdog force-kill, or a broken
+// stdin pipe). A worker death should never happen on a healthy tree, so masking
+// it by rerouting the spec to the slower per-fragment path — or silently
+// charging its tests as failures — lets a real crash slip by unnoticed. Instead
+// we surface the dead worker's stderr (which usually carries the panic + stack
+// trace, or at least the last WORKER_COMPILING breadcrumb) and panic so the run
+// ends with a non-zero exit code. `child` is the dead worker's handle; this
+// function never returns (it always panics), so it does not release the handle —
+// the panic tears the process down and the OS reclaims it.
+function abortOnCrashedWorker(workerLabel String, job SpecJob, child StreamingSubprocess)
+	let stderr = drainChildStderr(child)
+	let cleaned = stripCompilingBreadcrumbs(stderr)
+	let compilingLabel = lastCompilingLabelFromStderr(stderr)
+	printError("\n=== Worker crashed in {workerLabel} on '{job.label()}' — aborting test run ===\n")
+	if not compilingLabel.isEmpty() 'hasLabel'
+		printError("Crashed while compiling: {compilingLabel}\n")
+	end 'hasLabel'
+	forwardWorkerStderr(cleaned, emptyFallback: "(worker produced no stderr output before dying)\n")
+	if compilingLabel.isEmpty() 'noLabel'
+		panic("Worker subprocess crashed on '{job.label()}' while running spec tests; see stderr above")
+	end 'noLabel'
+	panic("Worker subprocess crashed while compiling {compilingLabel}; see stderr above")
+end 'abortOnCrashedWorker'
 
 // Emit one WORKER_SINGLE_RESULT summary line for a spec.
 // Format: WORKER_SINGLE_RESULT:{specName}:{passed}:{failed}:compileMs:{ms}
@@ -3361,8 +3426,8 @@ function drainResultsThunk(child StreamingSubprocess) returns StringArray throws
 		if line.isEmpty() 'eof'
 			// EOF before WORKER_READY = worker exited mid-job (panic, crash,
 			// or watchdog kill). Surface as an ioFailed so the dispatcher's
-			// `try await ... otherwise 'workerDied` routes through
-			// recoverFromCrashedJob the same way an I/O error does.
+			// `try await ... otherwise 'workerDied` aborts the run via
+			// abortOnCrashedWorker the same way an I/O error does.
 			throw SubprocessError.ioFailed("EOF before WORKER_READY")
 		end 'eof'
 		let trimmed = trimWhitespace(line)
@@ -3460,29 +3525,12 @@ type PersistentWorkerHandle
 		child.closeStdin()
 		let code = try child.wait()
 
-		var sb = ""
-		let cap = 65536 as ByteLimit
-		while true 'lineLoop'
-			let line = try child.readStderrLineCapped(cap) otherwise break
-			if line.isEmpty() 'eof'
-				break
-			end 'eof'
-			if sb.isEmpty() 'firstLine'
-				sb = line
-			end 'firstLine' else 'restLine'
-				sb = "{sb}\n{line}"
-			end 'restLine'
-		end 'lineLoop'
-
-		let cleaned = stripCompilingBreadcrumbs(sb)
+		let cleaned = stripCompilingBreadcrumbs(drainChildStderr(child))
 		if not cleaned.isEmpty() 'hasContent'
 			if workerStderrIsCompilerPanic(cleaned) 'panicked'
 				abortOnWorkerCompilerPanic("persistent worker {workerId}", stderr: cleaned)
 			end 'panicked'
-			printError(cleaned)
-			if not cleaned.endsWith("\n") 'noNl'
-				printError("\n")
-			end 'noNl'
+			forwardWorkerStderr(cleaned)
 		end 'hasContent'
 
 		child.release()
@@ -3615,50 +3663,6 @@ type VarHolder
 		return Self{value: value}
 	end 'create'
 end 'VarHolder'
-
-// Account for a job whose worker crashed before producing a RESULT line. For
-// batch crashes we re-route every batchable test through the fallback path so
-// per-test isolation kicks in; for singles/fallback crashes we charge every
-// affected test as a failure straight away (singles already runs one compile
-// per test, so retrying within the dispatcher would just compound the wait).
-// Returns the optional follow-up job (a fallback for crashed-batch retries),
-// or the empty-marker job if no retry is needed.
-function recoverFromCrashedJob(job SpecJob, units SpecWorkUnitArray, totalFailed_io VarHolder, failOwners StringArray, failPayloads TextLineArray) returns SpecJob
-	let none = SpecJob.empty()
-	if job.kind == "batch" 'wasBatch'
-		let unit = findUnitByName(units, specName: job.specName)
-		var allNames = StringArray.create()
-		for t in unit.batchable 'eachTest'
-			allNames.push(t.name)
-		end 'eachTest'
-		if allNames.count() == 0 'noTests'
-			return none
-		end 'noTests'
-		logError(LogCategory.testing, message: function() gives "[CRASH] batch worker died on spec '{job.specName}'; rerouting {allNames.count()} test(s) to per-fragment fallback")
-		return SpecJob.createFallback(job.specName, tests: allNames, weight: allNames.count())
-	end 'wasBatch'
-	if job.kind == "singles" 'wasSingles'
-		let unit = findUnitByName(units, specName: job.specName)
-		let crashedCount = unit.nonBatchable.count() + unit.missingLoweringCount
-		totalFailed_io.value = totalFailed_io.value + crashedCount
-		failOwners.push(job.specName)
-		failPayloads.push("  {job.specName}: worker crashed during singles phase (panic, timeout, or non-zero exit); {crashedCount} test(s) charged as failed")
-		logError(LogCategory.testing, message: function() gives "[FAIL] {job.specName} ({crashedCount} test(s)): singles worker crashed")
-		logSpecFailuresFor(failOwners, payloads: failPayloads, specName: job.specName)
-		return none
-	end 'wasSingles'
-	if job.kind == "fallback" 'wasFallback'
-		let crashedCount = job.fallbackTests.count()
-		totalFailed_io.value = totalFailed_io.value + crashedCount
-		failOwners.push(job.specName)
-		failPayloads.push("  {job.specName}: worker crashed during fallback phase (panic, timeout, or non-zero exit); {crashedCount} test(s) charged as failed")
-		logError(LogCategory.testing, message: function() gives "[FAIL] {job.specName} ({crashedCount} test(s)): fallback worker crashed")
-		logSpecFailuresFor(failOwners, payloads: failPayloads, specName: job.specName)
-		return none
-	end 'wasFallback'
-	logError(LogCategory.testing, message: function() gives "[DISPATCH ERROR] unknown job kind '{job.kind}' on crash recovery")
-	return none
-end 'recoverFromCrashedJob'
 
 // Run spec tests with a work-stealing pool of persistent worker subprocesses.
 // Each worker stays alive across many JOB:... lines, amortising its stdlib-cache
@@ -3931,21 +3935,10 @@ export function runAllSpecTestsParallel(filter String, target Target, workerCoun
 				let job = popHeaviestJob(jobQueue)
 				var h = try workers.get(idleIdx) otherwise panic("dispatch: workers.get({idleIdx}) failed")
 				try h.sendJob(job.toJobLine()) otherwise 'sendFailed'
-					// Treat a write error like a crash: recover the job, mark
-					// the slot dead, and continue. Counting a never-dispatched
-					// failure as a completed job keeps jobsDispatched ==
-					// jobsCompleted simple — the recovery handler has already
-					// charged the spec, and the slot is permanently out.
-					let followup = recoverFromCrashedJob(job, units: units, totalFailed_io: failedBox, failOwners: failOwners, failPayloads: failPayloads)
-					if followup.kind != "" 'hasFollowup'
-						jobQueue.push(followup)
-					end 'hasFollowup'
-					h.child.release()
-					try busy.set(idleIdx, value: false) otherwise panic("dispatch: busy.set after sendJob failure")
-					try deadSlots.set(idleIdx, value: true) otherwise panic("dispatch: deadSlots.set after sendJob failure")
-					jobsDispatched = jobsDispatched + 1
-					jobsCompleted = jobsCompleted + 1
-					continue
+					// A write error means the worker's stdin pipe broke — the
+					// worker already died. Abort the run with its stderr rather
+					// than masking the death by rerouting the job elsewhere.
+					abortOnCrashedWorker("worker {h.workerId}", job: job, child: h.child)
 				end 'sendFailed'
 				try currentJobs.set(idleIdx, value: job) otherwise panic("dispatch: currentJobs.set({idleIdx}) failed")
 				try busy.set(idleIdx, value: true) otherwise panic("dispatch: busy.set({idleIdx}) failed")
@@ -4056,20 +4049,11 @@ export function runAllSpecTestsParallel(filter String, target Target, workerCoun
 		let lines = try await drainPromise otherwise 'workerDied'
 			// Worker crashed mid-job (the drain GT hit EOF on readStdoutLine
 			// before WORKER_READY, or readStdoutLine itself raised an I/O
-			// error). Recover the work it was holding, then mark the slot
-			// dead so the find-idle and find-busy scans skip it. We don't
-			// respawn: surviving workers can absorb whatever the queue still
-			// holds, and one fewer worker just trims parallelism by 1/N.
-			logError(LogCategory.testing, message: function() gives "[CRASH] worker {h.workerId} died on '{job.label()}' (EOF or I/O error before WORKER_READY)")
-			let followup = recoverFromCrashedJob(job, units: units, totalFailed_io: failedBox, failOwners: failOwners, failPayloads: failPayloads)
-			if followup.kind != "" 'hasFollowup'
-				jobQueue.push(followup)
-			end 'hasFollowup'
-			h.child.release()
-			try busy.set(drainIdx, value: false) otherwise panic("dispatch: busy.set after drain failure")
-			try deadSlots.set(drainIdx, value: true) otherwise panic("dispatch: deadSlots.set after drain failure")
-			jobsCompleted = jobsCompleted + 1
-			continue
+			// error). A worker death should never happen — it means a real
+			// compiler crash, watchdog-killed hang, or broken pipe — so we
+			// abort the whole run with the dead worker's stderr rather than
+			// masking it by rerouting to the slower per-fragment path.
+			abortOnCrashedWorker("worker {h.workerId}", job: job, child: h.child)
 		end 'workerDied'
 
 		// Pipeline the next dispatch BEFORE processing the prior results: the
@@ -4082,22 +4066,11 @@ export function runAllSpecTestsParallel(filter String, target Target, workerCoun
 		if jobQueue.count() > 0 'hasMoreWork'
 			let nextJob = popHeaviestJob(jobQueue)
 			try h.sendJob(nextJob.toJobLine()) otherwise 'nextSendFailed'
-				// Send-failed pipelining edge: the worker died between READY and
-				// the next sendJob. Re-queue both the just-completed job's
-				// (already-processed) followup AND the next job, mark slot dead.
-				// We DON'T `continue` here — we still need to process the prior
-				// `lines` so the spec gets its totals; fall through with a flag.
-				let recoverNext = recoverFromCrashedJob(nextJob, units: units, totalFailed_io: failedBox, failOwners: failOwners, failPayloads: failPayloads)
-				if recoverNext.kind != "" 'hasRecoverFollowup'
-					jobQueue.push(recoverNext)
-				end 'hasRecoverFollowup'
-				h.child.release()
-				try deadSlots.set(drainIdx, value: true) otherwise panic("dispatch: deadSlots.set after pipelined sendJob failure")
-				jobsDispatched = jobsDispatched + 1
-				jobsCompleted = jobsCompleted + 1
-				// Fall through to processWorkerResults for the JUST-COMPLETED
-				// `job` — its `lines` are valid; the failed pipelined send is
-				// already accounted for above.
+				// The worker died between emitting WORKER_READY and accepting the
+				// next job — its stdin pipe broke. Abort the run with its stderr
+				// rather than masking the death; the just-completed `lines` no
+				// longer matter once we're aborting.
+				abortOnCrashedWorker("worker {h.workerId}", job: nextJob, child: h.child)
 			end 'nextSendFailed'
 			let slotStillLive = try deadSlots.get(drainIdx) otherwise panic("dispatch: deadSlots.get({drainIdx}) after pipelined send")
 			if not slotStillLive 'pipelinedOk'
