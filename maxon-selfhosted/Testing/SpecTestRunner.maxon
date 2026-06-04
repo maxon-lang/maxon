@@ -403,21 +403,50 @@ typealias TestCount = int(0 to u64.max)
 let testProcessTimeoutMs = 2000
 
 // Batch-process wall-clock budget. A batch binary runs every test in a spec
-// sequentially in ONE process, so it legitimately needs more headroom than a
-// single fragment. On wasm32-wasi every function is Asyncify-instrumented (the
-// always-asyncify model), which adds per-call prologue overhead to the whole
-// module — a large batch (e.g. string-type's 77 tests) runs several times
-// slower than native and trips the 2 s single-fragment budget. When the batch
-// times out the worker subprocess is force-killed; in the parallel dispatcher
-// that worker death now aborts the whole test run (see abortOnCrashedWorker), so
-// a too-tight wasm batch budget would turn a slow-but-correct spec into a hard
-// failure. A roomier wasm batch budget keeps the batch path alive so that never
-// happens. Native batches stay on the tight budget.
-function batchProcessTimeoutMs(target Target) returns DurationMs
-	if target.os == Os.wasi 'isWasm'
-		return 20000
-	end 'isWasm'
-	return testProcessTimeoutMs
+// sequentially in ONE process, so its budget has to scale with the test count,
+// not stay pinned at the single-fragment `testProcessTimeoutMs` — a spec whose
+// fragments are individually fast can still take far longer than one fragment's
+// budget once dozens run back-to-back. The `subprocess` spec is the clearest
+// case: each of its 12 fragments spawns a real child process (`cmd /c ...`), and
+// process creation + pipe drain on Windows costs enough that the serial batch
+// blows past 2 s even though every fragment passes comfortably on its own.
+//
+// We therefore scale the budget by the test count: each included test gets a
+// per-test allotment within the shared run. Native uses the single-fragment
+// `testProcessTimeoutMs`; wasm32-wasi uses a larger per-test factor because
+// every function is Asyncify-instrumented (the always-asyncify model), adding
+// per-call prologue overhead to the whole module so a wasm batch runs several
+// times slower than native.
+//
+// The result is clamped to [testProcessTimeoutMs, batchTimeoutCeilingMs]: the
+// floor keeps a single-test batch at the full single-fragment allotment; the
+// ceiling stays comfortably under the parallel dispatcher's per-worker watchdog
+// (`workerJobTimeoutMs`) so a large batch's own run timeout fires (and triggers
+// the graceful per-fragment reroute below) BEFORE the watchdog force-kills the
+// whole worker. Without the ceiling a 77-test wasm batch would compute a budget
+// far past the watchdog, which would kill the worker first and abort the run.
+//
+// If a batch still times out (a legitimately slow spec, or a real hang), the
+// run-failure path in `runSpecBatch` reroutes its tests to the per-fragment path
+// rather than aborting — so a too-tight budget degrades to slower-but-correct,
+// never a hard failure.
+let batchTimeoutCeilingMs = 30000 as DurationMs
+
+function batchProcessTimeoutMs(target Target, testCount TestCount) returns DurationMs
+	// Per-target per-test allotment and floor. wasm's Asyncify overhead makes
+	// each test several times slower, so it gets a larger per-test factor and
+	// retains its previously-proven 20 s minimum (which already covered the
+	// heaviest wasm batch, string-type's 77 fragments).
+	let perTestMs = 800 as DurationMs if target.os == Os.wasi else testProcessTimeoutMs
+	let floorMs = 20000 as DurationMs if target.os == Os.wasi else testProcessTimeoutMs
+	let scaled = testCount * perTestMs
+	if scaled < floorMs 'belowFloor'
+		return floorMs
+	end 'belowFloor'
+	if scaled > batchTimeoutCeilingMs 'aboveCeiling'
+		return batchTimeoutCeilingMs
+	end 'aboveCeiling'
+	return scaled
 end 'batchProcessTimeoutMs'
 
 // Per-worker-job wall-clock budget. If a worker doesn't emit WORKER_READY
@@ -977,8 +1006,20 @@ function runSpecBatch(tests SpecTestArray, specName String, fragmentDir FilePath
 	let projectRoot = try fragmentDir.parent() otherwise panic("runSpecBatch: fragmentDir has no parent")
 	let projectRootUp = try projectRoot.parent() otherwise panic("runSpecBatch: specs dir has no parent")
 	let batchTempDir = projectRootUp.join("temp")
-	let runResult = try Subprocess.run(runCommand.exe, arguments: runCommand.argv, workingDirectory: batchTempDir, timeoutMs: batchProcessTimeoutMs(target)) otherwise (err) 'batchRun'
-		panic("Batch run failed for {batchExePath.toString()}: {err.displayReason()}")
+	let runResult = try Subprocess.run(runCommand.exe, arguments: runCommand.argv, workingDirectory: batchTempDir, timeoutMs: batchProcessTimeoutMs(target, testCount: tests.count())) otherwise (err) 'batchRun'
+		// The batched binary failed to run cleanly — most commonly a timeout
+		// (the whole spec runs sequentially in one process, so a spec full of
+		// slow tests, e.g. subprocess fragments each spawning a child process,
+		// can exceed the batch budget even when every test passes on its own).
+		// A run failure yields no per-test slices, so we can't attribute it to
+		// any single test. Mirror the batch-compile-failure path: reroute every
+		// batchable test to the per-fragment path, where each runs in its own
+		// process under the per-fragment `testProcessTimeoutMs` budget and a run
+		// failure is reported as a normal per-test failure. Do NOT panic — a
+		// batch-run failure must not abort the whole test run.
+		logDebug(LogCategory.testing, message: function() gives "[BATCH FALLBACK] {specName}: batch run failed ({err.displayReason()}); re-running batchable tests individually")
+		pushBatchableForFallback(outcome, tests: tests, alreadySkipped: buildResult.skippedNames)
+		return outcome
 	end 'batchRun'
 
 	// First pass: check each batchable test's slice. Tests with a present and
