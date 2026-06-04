@@ -42,12 +42,15 @@
 //   methods are listed too so a program that passes a handle around still gets
 //   the error pinned to the actual offending call.
 
-typealias SubprocessEntrySet = Set with String
+// A closed set of public stdlib entry points (mangling stripped) that a wasm
+// API-rejection pass matches resolved callees against. Shared by the subprocess
+// and networking passes via `rejectApiCallsOnUnsupportedTarget`.
+export typealias ApiEntrySet = Set with String
 
 // The closed set of public subprocess entry points (mangling stripped). See the
 // file header for why this is a list and how to keep it current.
-function subprocessApiEntryPoints() returns SubprocessEntrySet
-	var set = SubprocessEntrySet.create()
+function subprocessApiEntryPoints() returns ApiEntrySet
+	var set = ApiEntrySet.create()
 	set.insert("Subprocess.run")
 	set.insert("Subprocess.runConfiguration")
 	set.insert("Subprocess.runDetachedConfiguration")
@@ -76,52 +79,62 @@ export function rejectWasmSubprocess(project Project, module MaxonModule, target
 		return
 	end 'supported'
 
-	let entryPoints = subprocessApiEntryPoints()
+	rejectApiCallsOnUnsupportedTarget(project, module: module, entryPoints: subprocessApiEntryPoints(), code: ErrorCode.semanticSubprocessUnsupportedTarget, message: "Subprocess is not supported on wasm32-wasi (no process-spawn primitive); guard the call with #if not os(Wasi).")
+end 'rejectWasmSubprocess'
+
+// Shared traversal for the wasm API-rejection passes (subprocess + networking).
+// Walks every USER function's ops (block ops + terminator) and reports `code` at
+// each resolved invocation whose mangling-stripped callee is in `entryPoints`.
+// The caller has already gated on the target (`targetSupportsSubprocess` /
+// `networkingRejectedTarget`); this helper assumes rejection applies. Pure
+// analysis — emits diagnostics, leaves the module unchanged. Exported so the
+// sibling RejectWasmNetworking pass shares the identical walk.
+export function rejectApiCallsOnUnsupportedTarget(project Project, module MaxonModule, entryPoints ApiEntrySet, code ErrorCode, message String)
 	for func in module.functions 'eachFunc'
-		// Stdlib-internal subprocess helpers call each other; never report those
-		// — the wasm stdlib cache build compiles them from source and must pass.
+		// Stdlib-internal helpers call each other; never report those — the wasm
+		// stdlib cache build compiles them from source and must pass.
 		if isStdlibFunctionPath(func.sourceFilePath) 'stdlibCaller'
 			continue
 		end 'stdlibCaller'
-		checkUserFunctionForSubprocess(project, module: module, func: func, entryPoints: entryPoints)
+		checkUserFunctionForApi(project, module: module, func: func, entryPoints: entryPoints, code: code, message: message)
 	end 'eachFunc'
-end 'rejectWasmSubprocess'
+end 'rejectApiCallsOnUnsupportedTarget'
 
-function checkUserFunctionForSubprocess(project Project, module MaxonModule, func IrFunction, entryPoints SubprocessEntrySet)
+function checkUserFunctionForApi(project Project, module MaxonModule, func IrFunction, entryPoints ApiEntrySet, code ErrorCode, message String)
 	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise panic("rejectWasmSubprocess: blockRef from func.blockRefs not in module.blocks")
+		let block = try module.blocks.get(blockRef) otherwise panic("rejectApiCallsOnUnsupportedTarget: blockRef from func.blockRefs not in module.blocks")
 		for opIdx in block.opRefs 'eachOp'
-			checkCallOpForSubprocess(project, module: module, opIdx: opIdx, entryPoints: entryPoints, filePath: func.sourceFilePath)
+			checkCallOpForApi(project, module: module, opIdx: opIdx, entryPoints: entryPoints, filePath: func.sourceFilePath, code: code, message: message)
 		end 'eachOp'
 		if block.hasTerminatorOp() 'hasTerm'
-			checkCallOpForSubprocess(project, module: module, opIdx: block.terminatorIndex(), entryPoints: entryPoints, filePath: func.sourceFilePath)
+			checkCallOpForApi(project, module: module, opIdx: block.terminatorIndex(), entryPoints: entryPoints, filePath: func.sourceFilePath, code: code, message: message)
 		end 'hasTerm'
 	end 'eachBlock'
-end 'checkUserFunctionForSubprocess'
+end 'checkUserFunctionForApi'
 
-function checkCallOpForSubprocess(project Project, module MaxonModule, opIdx OpIndex, entryPoints SubprocessEntrySet, filePath FilePath)
-	let op = try module.ops.get(opIdx) otherwise panic("rejectWasmSubprocess: opIdx not in module.ops")
+function checkCallOpForApi(project Project, module MaxonModule, opIdx OpIndex, entryPoints ApiEntrySet, filePath FilePath, code ErrorCode, message String)
+	let op = try module.ops.get(opIdx) otherwise panic("rejectApiCallsOnUnsupportedTarget: opIdx not in module.ops")
 	let n = op.name
 	// Only the four resolved-invocation shapes carry a `resolvedCallees` entry
 	// (TypeResolution populates them keyed by op index — same contract
-	// UnusedExportCheck relies on). Any other op cannot name a subprocess
-	// entry point.
+	// UnusedExportCheck relies on). Any other op cannot name an API entry point.
 	if n != "call" and n != "tryCall" and n != "methodCall" and n != "tryMethodCall" 'notCallShape'
 		return
 	end 'notCallShape'
 
 	let callee = try project.resolvedCallees.get(opIdx) otherwise return
-	if not entryPoints.contains(stripCalleeMangling(callee)) 'notSubprocess'
+	if not entryPoints.contains(stripCalleeMangling(callee)) 'notRejected'
 		return
-	end 'notSubprocess'
+	end 'notRejected'
 
 	let range = callOpSourceRange(op)
-	reportCompileError(project, code: ErrorCode.semanticSubprocessUnsupportedTarget, message: "Subprocess is not supported on wasm32-wasi (no process-spawn primitive); guard the call with #if not os(Wasi).", line: range.line, column: range.column, filePath: filePath)
-end 'checkCallOpForSubprocess'
+	reportCompileError(project, code: code, message: message, line: range.line, column: range.column, filePath: filePath)
+end 'checkCallOpForApi'
 
 // The source range of a resolved-invocation op (call / tryCall / methodCall /
-// tryMethodCall). The caller has already filtered to these four shapes.
-function callOpSourceRange(op MaxonOp) returns SourceRange
+// tryMethodCall). The caller has already filtered to these four shapes. Exported
+// so the sibling RejectWasmNetworking pass reuses the same range extraction.
+export function callOpSourceRange(op MaxonOp) returns SourceRange
 	return match op 'r'
 		call(_, _, _, _, _, _, _, range) gives range
 		tryCall(_, _, _, _, _, _, _, _, range) gives range

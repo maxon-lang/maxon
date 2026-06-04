@@ -822,6 +822,13 @@ export function registerSlabAndMmGlobalsForDataSection(globalData GlobalDataTabl
 	addDataSectionEntry(globalData, name: "__io_done_head", initialBytes: zeroBytesOfSize(8))
 	addDataSectionEntry(globalData, name: "__io_done_tail", initialBytes: zeroBytesOfSize(8))
 	addDataSectionEntry(globalData, name: "__io_connectex_ptr", initialBytes: zeroBytesOfSize(8))
+	// `__io_net_wsa_init` is the lazy-Winsock-init guard: 0 until the first
+	// `tcpConnect`/DNS resolve runs `__io_net_ensure_started` (WSAStartup +
+	// ConnectEx acquisition), then 1. Keeps non-networking programs out of
+	// ws2_32 entirely (Winsock is never started, no ws2 IAT slot referenced).
+	// Reserved unconditionally like the IOCP slots above so the .data layout is
+	// uniform; INERT on every target until a socket call lands.
+	addDataSectionEntry(globalData, name: "__io_net_wsa_init", initialBytes: zeroBytesOfSize(8))
 	// Fixed panic message for `__gt_panic_io` (unknown sync op code — should never
 	// happen). NUL-terminated, padded to 8-byte alignment like the other strings.
 	addSubprocessString(globalData, name: "__io_panic_msg", bytes: b"PANIC: unknown I/O op code\x00")
@@ -8645,6 +8652,15 @@ type MaxonToStdLowering
 			if structName == "__ManagedFile" 'builtinHandle'
 				continue
 			end 'builtinHandle'
+			// `__ManagedSocket`'s destructor (`__destruct___ManagedSocket`) is
+			// hand-emitted by `emitX64NetworkingRuntime` (it calls
+			// `mrt_managed_socket_close`); the runtime is the sole owner of that
+			// symbol. `__ManagedSocket` is not drop-tracked today, so this skip is
+			// defensive — it guarantees the synthesizer never claims the symbol if
+			// drop-tracking ever widens to cover it. Mirrors `__ManagedFile` above.
+			if structName == "__ManagedSocket" 'socketHandle'
+				continue
+			end 'socketHandle'
 			if not structNameIsDropTracked(self.project, structName: structName) 'notTracked'
 				continue
 			end 'notTracked'

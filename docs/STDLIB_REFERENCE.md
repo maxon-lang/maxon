@@ -569,6 +569,8 @@ end 'loop'
 
 `TcpClient` provides TCP client networking with automatic resource cleanup. It is defined in `stdlib/TcpClient.maxon`. The socket is backed by `__ManagedSocket`, a builtin type whose destructor closes the file descriptor when the last reference goes out of scope.
 
+**Not available on `wasm32-wasi`** — WASI has no socket primitive. Any call into the networking API (`TcpClient.connect/send/recv/close`, and the `HttpClient` family that builds on it) on that target is a compile error (**E3096**), not a runtime failure, so the problem surfaces at build time. Wrap callers in `#if not os(Wasi)` (compile the call only on non-WASI targets) for portable stdlib code. Mirrors the `Subprocess` rejection (E3074).
+
 **NetworkPort Alias**
 
 The `NetworkPort` type alias constrains port numbers to the valid TCP range:

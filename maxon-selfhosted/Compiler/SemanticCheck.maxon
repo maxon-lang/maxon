@@ -1122,7 +1122,12 @@ end 'reportIfNonYielding'
 // runtime primitives) whose call suspends the green thread. Mirrors the C#
 // bootstrap's IoStubs, expressed at the Maxon-IR call-callee granularity.
 function isAsyncYieldStub(name String) returns bool
-	let stubs = ["File.exists", "File.read", "File.delete", "maxon_file_exists", "maxon_file_read", "maxon_file_delete", "maxon_sleep", "stdlib.sleep", "Subprocess.run", "maxon_subprocess_wait_collect"]
+	// Networking ops yield the green thread via overlapped IOCP (ConnectEx /
+	// WSASend / WSARecv) and DNS-resolve on the sync worker, so `async` over them
+	// is legitimate. `TcpClient.connect/send/recv` are the user-facing yield
+	// functions; the `mrt_managed_socket_*` runtime helpers are the lowered
+	// targets a transitive walk may reach.
+	let stubs = ["File.exists", "File.read", "File.delete", "maxon_file_exists", "maxon_file_read", "maxon_file_delete", "maxon_sleep", "stdlib.sleep", "Subprocess.run", "maxon_subprocess_wait_collect", "TcpClient.connect", "TcpClient.send", "TcpClient.recv", "mrt_managed_socket_tcp_connect", "mrt_managed_socket_send", "mrt_managed_socket_recv"]
 	for s in stubs 'each'
 		if name == s 'hit'
 			return true

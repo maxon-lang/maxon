@@ -149,6 +149,29 @@ export union IatSlot
 	// shell32 — single entry, lives at the end of the IAT in its own
 	// import-directory DLL.
 	commandLineToArgvW
+
+	// ws2_32 - Winsock TCP networking (x64-windows `emitX64NetworkingRuntime`).
+	// Lives in its own import-directory DLL run AFTER shell32, but UNLIKE every
+	// other run its DLL directory entry + IAT/ILT thunks + hint-name strings are
+	// emitted CONDITIONALLY: only when a program actually references a ws2_32 slot
+	// (detected from `codeResult.relocations` in `writePe`). A non-networking PE
+	// therefore carries no ws2_32 import at all and is byte-identical to the
+	// pre-networking output. The slot ORDINALS below are fixed compile-time
+	// constants regardless of presence - they are a numbering scheme the call-site
+	// relocations and `patchRelocationsX86` depend on, not a guarantee the import
+	// is emitted. ConnectEx is intentionally absent: it is called through the
+	// `__io_connectex_ptr` function pointer (loaded via WSAIoctl), not an IAT slot.
+	wsaStartup
+	wsaSocketW
+	wsaGetLastError
+	wsaIoctl
+	bind
+	getAddrInfo
+	freeAddrInfo
+	wsaSend
+	wsaRecv
+	setSockOpt
+	closeSocket
 end 'IatSlot'
 
 // Integer slot index of an `IatSlot`. Mirrors the case order above and is
@@ -228,12 +251,25 @@ export function iatSlotIndex(slot IatSlot) returns MachineWord
 		createDirectoryA gives 67
 		getCurrentDirectoryA gives 68
 		commandLineToArgvW gives 69
+		wsaStartup gives 70
+		wsaSocketW gives 71
+		wsaGetLastError gives 72
+		wsaIoctl gives 73
+		bind gives 74
+		getAddrInfo gives 75
+		freeAddrInfo gives 76
+		wsaSend gives 77
+		wsaRecv gives 78
+		setSockOpt gives 79
+		closeSocket gives 80
 	end 's'
 end 'iatSlotIndex'
 
-// Total IAT slot count — kernel32 run + shell32 run. Mirrors the last
-// enum case's index + 1.
-let IAT_SLOT_COUNT = 70
+// Total IAT slot space — kernel32 run + shell32 run + ws2_32 run. Mirrors the
+// last enum case's index + 1. This is the maximum slot NUMBERING; the IAT/ILT
+// table actually emitted is sized from the present-DLL set (see
+// `emittedIatSlotCount`), which drops the ws2_32 run when networking is unused.
+let IAT_SLOT_COUNT = 81
 
 type ImportSection
 	export var data as ByteArray
@@ -255,7 +291,51 @@ end 'ImportSection'
 // followed by the Import Directory (3 entries: kernel32, shell32, null).
 let KERNEL32_IAT_END = 69  // exclusive; slots 0..68 are kernel32
 let SHELL32_IAT_START = 69  // slot 69 is shell32 (commandLineToArgvW)
-let IMPORT_DIRECTORY_ENTRIES = 2
+// ws2_32 run: slots 70..80 (11 imports). Emitted ONLY when a program references
+// a ws2_32 slot (see `usesWs2_32` in `writePe`); otherwise the run, its DLL
+// directory entry, and its hint-name strings are omitted entirely.
+let WS2_32_IAT_START = 70
+let WS2_32_IAT_COUNT = 11
+
+// Number of import-directory entries actually emitted for this build: 2 when
+// ws2_32 is unused (kernel32, shell32), 3 when it is (kernel32, shell32,
+// ws2_32). Replaces the former fixed `IMPORT_DIRECTORY_ENTRIES` constant so the
+// table sizing, directory-entry loop, `importDirSize`, and `iatDirSize` all
+// agree with whether the ws2_32 run was physically written.
+function importDirEntries(usesWs2_32 bool) returns ByteCount
+	if usesWs2_32 'withWs2'
+		return 3
+	end 'withWs2'
+	return 2
+end 'importDirEntries'
+
+// Number of IAT/ILT thunk slots actually emitted for this build. Without ws2_32
+// the table holds the kernel32 + shell32 slots (0..SHELL32_IAT_START); with it,
+// the full slot space. The per-DLL null terminators are added on top of this by
+// the table-size arithmetic.
+function emittedIatSlotCount(usesWs2_32 bool) returns ByteCount
+	if usesWs2_32 'withWs2'
+		return IAT_SLOT_COUNT
+	end 'withWs2'
+	return WS2_32_IAT_START
+end 'emittedIatSlotCount'
+
+// True when any code relocation targets a ws2_32 IAT slot (index in
+// [WS2_32_IAT_START, IAT_SLOT_COUNT)). This is the single reachability signal
+// that drives whether the ws2_32 import is emitted: it is true EXACTLY when
+// `emitX64NetworkingRuntime` ran and produced ws2 IAT calls, so the import-table
+// gate and the runtime-emit gate cannot disagree (see the networking-port plan's
+// "PE conditional-import correctness" gotcha). A non-networking program produces
+// no such relocation, so this is false and the PE is byte-identical to the
+// pre-networking output.
+function programUsesWs2_32(relocations RelocationArray) returns bool
+	for reloc in relocations 'each'
+		if reloc.slotIndex >= WS2_32_IAT_START and reloc.slotIndex < IAT_SLOT_COUNT 'isWs2'
+			return true
+		end 'isWs2'
+	end 'each'
+	return false
+end 'programUsesWs2_32'
 
 // kernel32 import names in slot order (slots 0..KERNEL32_IAT_END-1). MUST stay
 // in lockstep with `iatSlotIndex`'s kernel32 arm — same order, same count.
@@ -333,6 +413,25 @@ function kernel32ImportNames() returns StringArray
 	return n
 end 'kernel32ImportNames'
 
+// ws2_32 import names in slot order (slots WS2_32_IAT_START..IAT_SLOT_COUNT-1).
+// MUST stay in lockstep with `iatSlotIndex`'s ws2_32 arm — same order, same
+// count (`WS2_32_IAT_COUNT`). Only emitted into the PE when networking is linked.
+function ws2_32ImportNames() returns StringArray
+	var n = StringArray.create()
+	n.push("WSAStartup")
+	n.push("WSASocketW")
+	n.push("WSAGetLastError")
+	n.push("WSAIoctl")
+	n.push("bind")
+	n.push("getaddrinfo")
+	n.push("freeaddrinfo")
+	n.push("WSASend")
+	n.push("WSARecv")
+	n.push("setsockopt")
+	n.push("closesocket")
+	return n
+end 'ws2_32ImportNames'
+
 // Byte size of one Hint/Name table entry for `name`: 2-byte hint + name + NUL,
 // padded up to an even total (PE requires even alignment).
 function importHintNameEntrySize(name String) returns ByteCount
@@ -354,31 +453,51 @@ function appendImportHintNameEntry(data ByteArray, name String)
 	end 'odd'
 end 'appendImportHintNameEntry'
 
-function buildImportSection(idataRva Rva) returns ImportSection
+// Build the .idata import section. `usesWs2_32` controls whether the ws2_32 run
+// (IAT/ILT thunks + directory entry + hint-name strings) is physically emitted.
+// When false the output is byte-identical to the pre-networking layout: only
+// kernel32 + shell32 runs, a 2-entry directory, and the two DLL-name strings.
+// When true the ws2_32 run is APPENDED after shell32, so kernel32/shell32 RVAs
+// and offsets are unchanged either way (ws2 only ever adds at the tail).
+function buildImportSection(idataRva Rva, usesWs2_32 bool) returns ImportSection
 	var data = ByteArray.create()
 	data.reserve(1024)
 
 	let kernel32Names = kernel32ImportNames()
 	let shell32Name = "CommandLineToArgvW"
+	let ws2_32Names = ws2_32ImportNames()
 	let kernel32Count = kernel32Names.count()
+	let ws2_32Count = ws2_32Names.count()
+	let dirEntries = importDirEntries(usesWs2_32)
 
-	// Layout: IAT [k32 | null | s32 | null], ILT [same], import directory
-	// (kernel32, shell32, null), then the Hint/Name table + DLL name strings.
-	let tableBytes = (IAT_SLOT_COUNT + IMPORT_DIRECTORY_ENTRIES) * 8
+	// Layout: IAT [k32 | null | s32 | null (| ws2 | null)], ILT [same], import
+	// directory (kernel32, shell32 (, ws2_32), null), then the Hint/Name table +
+	// DLL name strings. The ws2_32 run appears only when `usesWs2_32`.
+	let tableBytes = (emittedIatSlotCount(usesWs2_32) + dirEntries) * 8
 	let iatOffset = 0
 	let iltOffset = tableBytes
 	let importDirOffset = tableBytes * 2
-	let hintNameOffset = importDirOffset + 20 * (IMPORT_DIRECTORY_ENTRIES + 1)
+	let hintNameOffset = importDirOffset + 20 * (dirEntries + 1)
 
-	// Hint/Name offset of every import, derived (no hand-maintained constants).
-	// kernel32 names come first, then the single shell32 name.
-	let shell32Hint = hintNameOffset + sumKernel32HintSizes(kernel32Names)
-	let afterNames = shell32Hint + importHintNameEntrySize(shell32Name)
+	// Hint/Name offsets, all derived (no hand-maintained constants). kernel32
+	// names first, then shell32's single name, then (conditionally) the ws2_32
+	// run, then the even-padded DLL-name strings.
+	let shell32Hint = hintNameOffset + sumHintSizes(kernel32Names)
+	let ws2_32HintStart = shell32Hint + importHintNameEntrySize(shell32Name)
+	var afterNames = ws2_32HintStart
+	if usesWs2_32 'ws2Names'
+		afterNames = ws2_32HintStart + sumHintSizes(ws2_32Names)
+	end 'ws2Names'
+
+	let kernel32DllField = dllNameField("kernel32.dll")
+	let shell32DllField = dllNameField("shell32.dll")
+	let ws2_32DllField = dllNameField("ws2_32.dll")
 	let kernel32DllNameOffset = afterNames
-	// "kernel32.dll\0" is 13 bytes; shell32's DLL name string follows it.
-	let shell32DllNameOffset = kernel32DllNameOffset + 13
+	let shell32DllNameOffset = kernel32DllNameOffset + kernel32DllField.count()
+	let ws2_32DllNameOffset = shell32DllNameOffset + shell32DllField.count()
 
-	// IAT then ILT (identical content): kernel32 run, null term, shell32, null term.
+	// IAT then ILT (identical content): kernel32 run + null, shell32 + null, and
+	// (conditionally) ws2_32 run + null.
 	for _ in 0 upto 2 'iatIltPasses'
 		var running = hintNameOffset
 		for i in 0 upto kernel32Count 'k32thunk'
@@ -389,6 +508,15 @@ function buildImportSection(idataRva Rva) returns ImportSection
 		data.append(b"\x00\x00\x00\x00\x00\x00\x00\x00")
 		writeQword(data, value: idataRva + shell32Hint)
 		data.append(b"\x00\x00\x00\x00\x00\x00\x00\x00")
+		if usesWs2_32 'ws2thunks'
+			var ws2Running = ws2_32HintStart
+			for i in 0 upto ws2_32Count 'ws2thunk'
+				writeQword(data, value: idataRva + ws2Running)
+				let nm = try ws2_32Names.get(i) otherwise panic("buildImportSection: ws2_32Names.get OOB at {i}")
+				ws2Running = ws2Running + importHintNameEntrySize(nm)
+			end 'ws2thunk'
+			data.append(b"\x00\x00\x00\x00\x00\x00\x00\x00")
+		end 'ws2thunks'
 	end 'iatIltPasses'
 
 	// Per-DLL Import Directory entries: 4-byte ILT RVA, 8 zero bytes
@@ -397,6 +525,8 @@ function buildImportSection(idataRva Rva) returns ImportSection
 	let kernel32IltRva = idataRva + iltOffset
 	let shell32IatRva = kernel32IatRva + (kernel32Count + 1) * 8
 	let shell32IltRva = kernel32IltRva + (kernel32Count + 1) * 8
+	let ws2_32IatRva = shell32IatRva + 2 * 8  // shell32 has 1 slot + 1 null term
+	let ws2_32IltRva = shell32IltRva + 2 * 8
 
 	writeDword(data, value: kernel32IltRva)
 	data.append(b"\x00\x00\x00\x00\x00\x00\x00\x00")
@@ -408,6 +538,13 @@ function buildImportSection(idataRva Rva) returns ImportSection
 	writeDword(data, value: idataRva + shell32DllNameOffset)
 	writeDword(data, value: shell32IatRva)
 
+	if usesWs2_32 'ws2Dir'
+		writeDword(data, value: ws2_32IltRva)
+		data.append(b"\x00\x00\x00\x00\x00\x00\x00\x00")
+		writeDword(data, value: idataRva + ws2_32DllNameOffset)
+		writeDword(data, value: ws2_32IatRva)
+	end 'ws2Dir'
+
 	// Import Directory null terminator (20 bytes).
 	writeZeros(data, n: 20)
 
@@ -416,21 +553,47 @@ function buildImportSection(idataRva Rva) returns ImportSection
 		appendImportHintNameEntry(data, name: try kernel32Names.get(i) otherwise panic("buildImportSection: kernel32Names.get OOB at {i}"))
 	end 'k32name'
 	appendImportHintNameEntry(data, name: shell32Name)
-	data.append(b"kernel32.dll\x00")
-	data.append(b"shell32.dll\x00\x00")
+	if usesWs2_32 'ws2HintNames'
+		for i in 0 upto ws2_32Count 'ws2name'
+			appendImportHintNameEntry(data, name: try ws2_32Names.get(i) otherwise panic("buildImportSection: ws2_32Names.get OOB at {i}"))
+		end 'ws2name'
+	end 'ws2HintNames'
+	data.append(kernel32DllField)
+	data.append(shell32DllField)
+	if usesWs2_32 'ws2DllName'
+		data.append(ws2_32DllField)
+	end 'ws2DllName'
 
-	return ImportSection.create(data, iatRva: idataRva + iatOffset, importDirRva: idataRva + importDirOffset, importDirSize: 20 * IMPORT_DIRECTORY_ENTRIES)
+	return ImportSection.create(data, iatRva: idataRva + iatOffset, importDirRva: idataRva + importDirOffset, importDirSize: 20 * dirEntries)
 end 'buildImportSection'
 
-// Sum of Hint/Name entry sizes across all kernel32 imports — the offset delta
-// from the first kernel32 entry to the shell32 entry in the Hint/Name table.
-function sumKernel32HintSizes(names StringArray) returns ByteCount
+// Sum of Hint/Name entry sizes across a run of imports — the offset delta from
+// the first entry of the run to whatever follows it in the Hint/Name table.
+// Used for both the kernel32 run (delta to shell32) and the ws2_32 run (delta
+// to the DLL-name strings).
+function sumHintSizes(names StringArray) returns ByteCount
 	var total = 0
 	for i in 0 upto names.count() 'each'
-		total = total + importHintNameEntrySize(try names.get(i) otherwise panic("sumKernel32HintSizes: get OOB at {i}"))
+		total = total + importHintNameEntrySize(try names.get(i) otherwise panic("sumHintSizes: get OOB at {i}"))
 	end 'each'
 	return total
-end 'sumKernel32HintSizes'
+end 'sumHintSizes'
+
+// The even-padded DLL-name string field for the import directory: name + NUL,
+// then one extra NUL when the total is odd (PE requires even alignment for the
+// strings that follow). Deriving this removes the hand-maintained pad literals
+// (`b"kernel32.dll\x00"`, `b"shell32.dll\x00\x00"`) that an off-by-pad edit
+// would silently corrupt the IAT with — a load crash, given a 3rd conditional
+// DLL run now shifts these around.
+function dllNameField(name String) returns ByteArray
+	var field = ByteArray.create()
+	field.append(name.toByteArray())
+	field.push(0)
+	if field.count() mod 2 != 0 'odd'
+		field.push(0)
+	end 'odd'
+	return field
+end 'dllNameField'
 
 // --- Section header writer ---
 
@@ -561,10 +724,15 @@ end 'writeCoffSymbolTable'
 // Convert a flat slot index into its byte offset in the IAT. Each DLL run
 // in the IAT/ILT is followed by an 8-byte null terminator, so slots past
 // the first DLL boundary are shifted by 8 bytes for every prior boundary.
-// Today the only boundary is between kernel32 (slots 0..KERNEL32_IAT_END-1)
-// and shell32 (slot SHELL32_IAT_START onward); extend this stepwise as
-// more DLLs are imported.
+// Boundaries: kernel32 (slots 0..KERNEL32_IAT_END-1), shell32 (slot
+// SHELL32_IAT_START), ws2_32 (slots WS2_32_IAT_START onward). A ws2_32 slot is
+// only ever the target of a relocation when the ws2_32 run is present (it is
+// emitted exactly when `emitX64NetworkingRuntime` ran), so the ws2 branch can
+// assume both prior null gaps (after kernel32, after shell32) exist.
 function iatSlotByteOffset(slotIndex MachineWord) returns ByteOffset
+	if slotIndex >= WS2_32_IAT_START 'inWs2'
+		return (slotIndex + 2) * 8
+	end 'inWs2'
 	if slotIndex >= SHELL32_IAT_START 'inShell32'
 		return (slotIndex + 1) * 8
 	end 'inShell32'
@@ -690,9 +858,13 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 		symdataSizeVirtual = alignUp(symdataSize, alignment: SECTION_ALIGNMENT)
 	end 'setSymdataVirtual'
 
-	// .idata section
+	// .idata section. ws2_32 is imported only when the emitted code actually
+	// references a ws2_32 IAT slot (i.e. `emitX64NetworkingRuntime` ran). The
+	// same `usesWs2_32` drives the IAT data-directory size below so the directory
+	// and the physically-emitted table always agree.
+	let usesWs2_32 = programUsesWs2_32(codeResult.relocations)
 	let idataRva = symdataRva + symdataSizeVirtual
-	let idata = buildImportSection(idataRva)
+	let idata = buildImportSection(idataRva, usesWs2_32: usesWs2_32)
 	let idataSize = idata.data.count()
 	let idataSizeAligned = alignUp(idataSize, alignment: FILE_ALIGNMENT)
 	let idataSizeVirtual = alignUp(idataSize, alignment: SECTION_ALIGNMENT)
@@ -757,9 +929,10 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	let imageBase = 0x140000000
 	patchFuncAbs64InRdata(codeResult.rdata, rdataRelocs: codeResult.rdataRelocations, textAbsBase: imageBase + textRva, debugSymbols: codeResult.debugSymbols)
 
-	// IAT directory size: one qword per slot plus one null terminator per
-	// imported DLL. Layout matches `buildImportSection`.
-	let iatDirSize = (IAT_SLOT_COUNT + IMPORT_DIRECTORY_ENTRIES) * 8
+	// IAT directory size: one qword per emitted slot plus one null terminator per
+	// imported DLL. Layout matches `buildImportSection` — both sized from the
+	// same `usesWs2_32`, so the directory size never diverges from the table.
+	let iatDirSize = (emittedIatSlotCount(usesWs2_32) + importDirEntries(usesWs2_32)) * 8
 
 	// === DOS Header (64 bytes) + PE Signature ===
 	// MZ magic, 58 zero bytes, PE offset=64, then PE\0\0 signature

@@ -317,17 +317,43 @@ export function concatX64FunctionChunks(chunks FunctionCodeChunkArray, targetMod
 		wasi gives false
 	end 'check'
 
+	// Networking is the FIRST reachability-GATED runtime tier (subprocess /
+	// green-thread are unconditional dead code today). The signal: any accumulated
+	// call fixup targeting `mrt_managed_socket_*`. CRITICAL TIMING — those fixups
+	// originate inside `stdlib/TcpClient.maxon`'s LINKED body, not the user chunks,
+	// so they only appear in `callFixups` AFTER `linkX64StdlibFunctionsConcat` above
+	// (~305). Compute the gate HERE, immediately before the emit block — not after
+	// the chunk loop (~295), where cache-linked socket fixups don't exist yet.
+	var usesNetworking = false
+	for fx in callFixups 'detectNet'
+		if fx.targetName.startsWith("mrt_managed_socket_") 'isSocket'
+			usesNetworking = true
+			break
+		end 'isSocket'
+	end 'detectNet'
+
 	if isWindowsOs 'emitHelpers'
 		emitX64Win32Helpers(code, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
 		// Tier 4 cooperative green-thread runtime (async/await). Emitted after the
 		// win32 helpers; dead code unless a program uses `async`, so non-async
-		// programs are unaffected.
-		emitX64GreenThreadRuntime(code, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
+		// programs are unaffected. `usesNetworking` gates the two ws2-calling
+		// sync-worker dispatch arms inside the IOCP runtime.
+		emitX64GreenThreadRuntime(code, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap, usesNetworking: usesNetworking)
 		// Tier 4 subprocess runtime. Emitted last; the `maxon_subprocess_*` labels
 		// recorded here override the signature-only stubs in runtime.std via
 		// `labelOffsetMap.upsert` (last write wins). Dead code unless a program
 		// calls `Subprocess.run` / `Configuration.run`.
 		emitX64SubprocessRuntime(code, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
+		// Tier 4 networking runtime (`stdlib/TcpClient.maxon` / `HttpClient.maxon`).
+		// Reachability-GATED (unlike its siblings): emitted only when a program
+		// reaches a `mrt_managed_socket_*` helper. The recorded labels override the
+		// runtime.std sentinel stubs via `labelOffsetMap.upsert`; the ws2 IAT
+		// relocations these bodies carry are exactly what makes PeWriter import
+		// ws2_32 (the import gate and this emit gate are driven by the same signal,
+		// so they cannot disagree).
+		if usesNetworking 'emitNet'
+			emitX64NetworkingRuntime(code, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
+		end 'emitNet'
 	end 'emitHelpers'
 
 	let symdata = buildSymbolTable(funcLabelNames, funcLabelOffsets: funcLabelOffsets)
@@ -383,7 +409,22 @@ function linkX64StdlibFunctionsConcat(code ByteArray, labelNames StringArray, la
 		seeds.push("mm_trace_print_hex")
 	end 'win32Helpers'
 
-	let needed = computeNeededStdlibFunctions(seeds, stdlibCache: stdlibCache)
+	var needed = computeNeededStdlibFunctions(seeds, stdlibCache: stdlibCache)
+
+	// Networking late-emission seed: the hand-rolled `emitX64NetworkingRuntime`
+	// helper `mrt_managed_socket_tcp_connect` (which OVERRIDES the runtime.std
+	// sentinel stub via labelOffsetMap.upsert) calls `mrt_cstr_from_mm` to turn
+	// the managed host string into a C string. That call fixup is added after
+	// this link pass, so it can't seed the walk — and the sentinel stub it
+	// replaces never calls it, so the walk above won't pull it either. Seed it
+	// explicitly when networking is reachable (the user program reaches the
+	// socket helper). Gated on reachability so non-networking programs stay
+	// byte-identical (unlike the unconditional win32-helper seeds above, which
+	// every Windows program already links).
+	if os == Os.windows and needed.contains("mrt_managed_socket_tcp_connect") 'netHelpers'
+		seeds.push("mrt_cstr_from_mm")
+		needed = computeNeededStdlibFunctions(seeds, stdlibCache: stdlibCache)
+	end 'netHelpers'
 
 	for func in stdlibCache.functions 'linkFuncs'
 		if not needed.contains(func.name) 'skip'
@@ -2754,6 +2795,65 @@ function helperLoadByte(code ByteArray, dest X64Register, base X64Register, disp
 	emitMemBaseDisp(code, reg: regCode(dest), base: base, disp: disp)
 end 'helperLoadByte'
 
+// Store a 16-bit immediate: mov word [base + disp], imm16. Used to write the
+// sin_family field of a sockaddr_in. (66 C7 /0 ib — operand-size prefix 0x66.)
+function helperStoreWordImm(code ByteArray, base X64Register, disp StackSize, value MachineWord)
+	code.push(0x66)
+	if isExtended(base) 'rex'
+		code.push(0x41)
+	end 'rex'
+	code.push(0xC7)
+	emitMemBaseDisp(code, reg: 0, base: base, disp: disp)
+	code.push(value and 0xFF)
+	code.push((value shr 8) and 0xFF)
+end 'helperStoreWordImm'
+
+// Store the low 16 bits of a register: mov word [base + disp], srcLow16.
+// (66 89 /r.) Used to write sin_port = htons(port) after ROL AX, 8.
+function helperStoreWordRegLow(code ByteArray, base X64Register, disp StackSize, src X64Register)
+	code.push(0x66)
+	if isExtended(base) or isExtended(src) 'rex'
+		var rex = 0x40
+		if isExtended(src) 'r'
+			rex = rex or 0x04
+		end 'r'
+		if isExtended(base) 'b'
+			rex = rex or 0x01
+		end 'b'
+		code.push(rex)
+	end 'rex'
+	code.push(0x89)
+	emitMemBaseDisp(code, reg: regCode(src), base: base, disp: disp)
+end 'helperStoreWordRegLow'
+
+// Store a 32-bit immediate: mov dword [base + disp], imm32. (C7 /0 id, no REX.W
+// so it is a 32-bit store.) Used to zero/set hints DWORD fields.
+function helperStoreDwordImm(code ByteArray, base X64Register, disp StackSize, value MachineWord)
+	if isExtended(base) 'rex'
+		code.push(0x41)
+	end 'rex'
+	code.push(0xC7)
+	emitMemBaseDisp(code, reg: 0, base: base, disp: disp)
+	writeDword(code, value: value)
+end 'helperStoreDwordImm'
+
+// Store the low 32 bits of a register: mov dword [base + disp], srcLow32.
+// (89 /r, no REX.W.) Used to write sin_addr = resolved IP DWORD.
+function helperStoreDwordRegLow(code ByteArray, base X64Register, disp StackSize, src X64Register)
+	if isExtended(base) or isExtended(src) 'rex'
+		var rex = 0x40
+		if isExtended(src) 'r'
+			rex = rex or 0x04
+		end 'r'
+		if isExtended(base) 'b'
+			rex = rex or 0x01
+		end 'b'
+		code.push(rex)
+	end 'rex'
+	code.push(0x89)
+	emitMemBaseDisp(code, reg: regCode(src), base: base, disp: disp)
+end 'helperStoreDwordRegLow'
+
 // Emit an IAT-indirect call to the given slot. The caller is responsible
 // for pre-loading args into rcx/rdx/r8/r9 and placing extra args on the
 // stack. Outgoing-arg space (incl. 32-byte shadow region) is already
@@ -3031,7 +3131,14 @@ let FaultCodeStackOverflow = 4
 
 // Top-level driver — emit every green-thread runtime function. Invoked from
 // `concatX64FunctionChunks` right after `emitX64Win32Helpers`, Windows-only.
-function emitX64GreenThreadRuntime(code ByteArray, relocations RelocationArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, funcLabelNames StringArray, funcLabelOffsets CodeOffsetArray, funcLabelOffsetMap CodeLabelOffsetMap)
+// `usesNetworking` gates the two ws2-calling sync-worker dispatch arms (DNS
+// resolve / net close): when networking is linked they call
+// `__io_net_sync_dns` / `__io_net_sync_close` (emitted by
+// `emitX64NetworkingRuntime`); when not, ops 13/14 fall through to
+// `__gt_panic_io` like any unknown op (no code can submit a net sync op then).
+// Gating the arms keeps their `helperEmitDirectCall` targets out of the call
+// fixups on non-networking programs, so nothing references the unemitted bodies.
+function emitX64GreenThreadRuntime(code ByteArray, relocations RelocationArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, funcLabelNames StringArray, funcLabelOffsets CodeOffsetArray, funcLabelOffsetMap CodeLabelOffsetMap, usesNetworking bool)
 	emitX64GtContextSwitch(code, rdataRelocs: rdataRelocs, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
 	// Per-P shard-id reader for the sharded slab allocator (overrides the
 	// runtime.std -1 stub). Reads the calling OS thread's adopted P from TLS.
@@ -3058,7 +3165,7 @@ function emitX64GreenThreadRuntime(code ByteArray, relocations RelocationArray, 
 	emitX64GtFaultThunk(code, callFixups: callFixups, rdataRelocs: rdataRelocs, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
 	// Tier 4 async-I/O IOCP completion machinery. INERT until async-I/O specs submit
 	// work; emitted for C# parity (see the emitX64IoRuntime section header).
-	emitX64IoRuntime(code, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
+	emitX64IoRuntime(code, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap, usesNetworking: usesNetworking)
 end 'emitX64GreenThreadRuntime'
 
 // =============================================================================
@@ -7713,6 +7820,12 @@ let IoSyncOpGetCwd = 6
 let IoSyncOpFileOpenRead = 7
 let IoSyncOpFileOpenWrite = 8
 let IoSyncOpCloseHandle = 9
+// Network sync ops 13/14 — byte-compatible with the C# bootstrap (SyncOpNetClose=13,
+// SyncOpDnsResolve=14). Serviced only when networking is linked (see the gated
+// dispatch arms in `emitX64IoSyncWorkerLoop`); otherwise they panic like any
+// unknown op, which is unreachable because no code submits them.
+let IoSyncOpNetClose = 13
+let IoSyncOpDnsResolve = 14
 let IoSyncOpFileOpenWriteExec = 15
 let IoSyncOpShutdown = 0xFF
 
@@ -7722,7 +7835,7 @@ let IoSyncWorkerCount = 1
 
 // Top-level driver: emit every async-I/O IOCP runtime function. Registered in the
 // emitX64GreenThreadRuntime dispatcher after the scheduler functions.
-function emitX64IoRuntime(code ByteArray, relocations RelocationArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, funcLabelNames StringArray, funcLabelOffsets CodeOffsetArray, funcLabelOffsetMap CodeLabelOffsetMap)
+function emitX64IoRuntime(code ByteArray, relocations RelocationArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, funcLabelNames StringArray, funcLabelOffsets CodeOffsetArray, funcLabelOffsetMap CodeLabelOffsetMap, usesNetworking bool)
 	emitX64IoCompleteGt(code, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
 	emitX64IoGetLastError(code, rdataRelocs: rdataRelocs, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
 	emitX64IoEnqueueSyncReq(code, relocations: relocations, rdataRelocs: rdataRelocs, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
@@ -7732,7 +7845,7 @@ function emitX64IoRuntime(code ByteArray, relocations RelocationArray, callFixup
 	emitX64IoCheckCompletions(code, callFixups: callFixups, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
 	emitX64IoPanicIo(code, callFixups: callFixups, rdataRelocs: rdataRelocs, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
 	emitX64IoCompletionLoop(code, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
-	emitX64IoSyncWorkerLoop(code, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
+	emitX64IoSyncWorkerLoop(code, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap, usesNetworking: usesNetworking)
 	emitX64IoSubmitOverlapped(code, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap, ioFuncSlot: iatSlotIndex(IatSlot.readFile), funcName: "__io_submit_read")
 	emitX64IoSubmitOverlapped(code, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap, ioFuncSlot: iatSlotIndex(IatSlot.writeFile), funcName: "__io_submit_write")
 	emitX64IoSubmitSync(code, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
@@ -8102,11 +8215,15 @@ end 'emitX64IoCompletionLoop'
 // OS thread entry point (CreateThread callback, Win64 ABI). Waits on the request
 // event, dequeues one SyncRequest, dispatches on its op code, and drives
 // __io_complete_gt with the result. Exits on the Shutdown sentinel. Runs on its own
-// OS stack with no adopted P → plain direct IAT calls. Ports C# EmitIoSyncWorkerLoop;
-// the network ops (which need ws2_32, never submitted by the self-hosted compiler)
-// route to __gt_panic_io, the same control flow as the unknown-op default. Slots:
+// OS stack with no adopted P → plain direct IAT calls. Ports C# EmitIoSyncWorkerLoop.
+// The network ops (13 net_close / 14 dns_resolve) need ws2_32, so their op BODIES
+// live in `emitX64NetworkingRuntime` (`__io_net_sync_close` / `__io_net_sync_dns`);
+// here the dispatch only routes to them, and ONLY when `usesNetworking` (else those
+// arms are omitted and 13/14 fall through to __gt_panic_io — unreachable, since no
+// code submits a net sync op on a non-networking program). This keeps ws2 IAT
+// relocations out of the always-emitted worker loop. Slots:
 //   0=req, 1=result, 2=scratch (handle/buf), 3=captured Win32 error code.
-function emitX64IoSyncWorkerLoop(code ByteArray, relocations RelocationArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, funcLabelNames StringArray, funcLabelOffsets CodeOffsetArray, funcLabelOffsetMap CodeLabelOffsetMap)
+function emitX64IoSyncWorkerLoop(code ByteArray, relocations RelocationArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, funcLabelNames StringArray, funcLabelOffsets CodeOffsetArray, funcLabelOffsetMap CodeLabelOffsetMap, usesNetworking bool)
 	recordLabel(funcLabelNames, labelOffsets: funcLabelOffsets, labelOffsetMap: funcLabelOffsetMap, name: "__io_sync_worker_loop", offset: code.count())
 	// Blocks: 0=top, then one per op + helpers. See the per-block comments.
 	//   0=top  1=dispatch  2=op_done  3=shutdown
@@ -8114,7 +8231,8 @@ function emitX64IoSyncWorkerLoop(code ByteArray, relocations RelocationArray, ca
 	//   15=fn_eof  16=dir_exists  17=de_no  18=dir_create  19=get_cwd
 	//   20=cwd_ok  21=file_open_read  22=for_fail  23=file_open_write
 	//   24=fow_fail  25=close_handle  26=open_common (IOCP-associate)  27=oc_fail
-	var state = Win32HelperState.create(28, outgoingBytes: 64, localBytes: 32)
+	//   28=net_close  29=dns_resolve  (only when usesNetworking)
+	var state = Win32HelperState.create(30, outgoingBytes: 64, localBytes: 32)
 	helperPrologue(code, frameSize: 96)
 
 	// block 0: top — WaitForSingleObject(req event, INFINITE); dequeue; if NULL, re-wait.
@@ -8158,7 +8276,15 @@ function emitX64IoSyncWorkerLoop(code ByteArray, relocations RelocationArray, ca
 	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 23)  // exec == write on Windows
 	helperCmpRegImm(code, reg: X64Register.rcx, value: IoSyncOpCloseHandle)
 	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 25)
-	// Unknown / unsupported (network) op → panic, matching the C# default arm.
+	if usesNetworking 'netDispatch'
+		// Network ops route to the ws2-calling bodies in emitX64NetworkingRuntime.
+		helperCmpRegImm(code, reg: X64Register.rcx, value: IoSyncOpNetClose)
+		helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 28)
+		helperCmpRegImm(code, reg: X64Register.rcx, value: IoSyncOpDnsResolve)
+		helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 29)
+	end 'netDispatch'
+	// Unknown / unsupported op → panic, matching the C# default arm. When
+	// networking is unlinked, ops 13/14 reach here (but are never submitted).
 	helperEmitDirectCall(code, callFixups: callFixups, target: "__gt_panic_io")
 
 	// block 10: fileExists — GetFileAttributesA(arg0) != INVALID and not a directory.
@@ -8335,6 +8461,28 @@ function emitX64IoSyncWorkerLoop(code ByteArray, relocations RelocationArray, ca
 	helperEmitIatCall(code, relocations: relocations, slotIndex: iatSlotIndex(IatSlot.setFileCompletionNotificationModes))
 	helperLoadSlot(code, slotIndex: 2, dest: X64Register.rax)  // result = handle
 	helperEmitJmp(code, state: state, targetBlock: 2)
+
+	if usesNetworking 'netBlocks'
+		// block 28: net_close — delegate to __io_net_sync_close(handle=rcx) -> r8.
+		// The body (closesocket) lives in emitX64NetworkingRuntime so its ws2 IAT
+		// relocation is absent on non-networking programs.
+		helperMarkBlock(state, code: code, blockId: 28)
+		helperLoadSlot(code, slotIndex: 0, dest: X64Register.rax)  // req
+		helperLoadIndirect(code, dest: X64Register.rcx, base: X64Register.rax, disp: IoSyncReqOffArg0)  // handle
+		helperEmitDirectCall(code, callFixups: callFixups, target: "__io_net_sync_close")
+		emitMovRegRegOp(code, dest: X64Register.rax, src: X64Register.r8)  // result = r8
+		helperEmitJmp(code, state: state, targetBlock: 2)  // op_done
+
+		// block 29: dns_resolve — delegate to __io_net_sync_dns(host=rcx) -> r8
+		// (resolved IP, or -1 DNS fail, or -2 TEST-NET-1 sentinel). The body
+		// (lazy WSAStartup + getaddrinfo) lives in emitX64NetworkingRuntime.
+		helperMarkBlock(state, code: code, blockId: 29)
+		helperLoadSlot(code, slotIndex: 0, dest: X64Register.rax)  // req
+		helperLoadIndirect(code, dest: X64Register.rcx, base: X64Register.rax, disp: IoSyncReqOffArg0)  // host cstring
+		helperEmitDirectCall(code, callFixups: callFixups, target: "__io_net_sync_dns")
+		emitMovRegRegOp(code, dest: X64Register.rax, src: X64Register.r8)  // result = r8
+		helperEmitJmp(code, state: state, targetBlock: 2)  // op_done
+	end 'netBlocks'
 
 	// block 2: op_done — complete the waiting green thread with the result.
 	helperMarkBlock(state, code: code, blockId: 2)
@@ -8811,6 +8959,922 @@ function emitX64IoShutdown(code ByteArray, relocations RelocationArray, callFixu
 	helperFinalize(state, code: code)
 	helperEpilogue(code)
 end 'emitX64IoShutdown'
+
+// =============================================================================
+// Tier 4 networking runtime (`stdlib/TcpClient.maxon` / `stdlib/HttpClient.maxon`).
+// Hand-emitted x64 machine code porting the C# bootstrap's net helpers
+// (X86CodeEmitter.Runtime.cs: EmitNetTcpConnect / EmitIoSubmitSocketOverlapped /
+// EmitNetClose / EmitNetSocketDestructor / EmitWsaEnsureInit / the sync-worker
+// DNS+close ops) to the self-hosted ABI.
+//
+// x64-WINDOWS ONLY: the green-thread/IOCP runtime these hook into exists only on
+// x64-windows; arm64/macos/linux have no `__gt_*`/`__io_*` runtime (C#'s kqueue
+// path is out of scope), and wasm32-wasi has no sockets (rejected at compile time
+// by RejectWasmNetworking). On those targets the runtime.std `mrt_managed_socket_*`
+// sentinel stubs remain and a socket call throws at runtime.
+//
+// REACHABILITY-GATED, unlike its siblings (subprocess/green-thread are emitted
+// unconditionally as dead code). Emitted only when a program reaches a
+// `mrt_managed_socket_*` helper (`usesNetworking` in concatX64FunctionChunks).
+// The recorded labels override the runtime.std sentinel stubs via
+// labelOffsetMap.upsert. These bodies are the SOLE carriers of ws2_32 IAT
+// relocations — which is exactly what drives PeWriter to import ws2_32, so the
+// emit gate and the import gate cannot disagree.
+//
+// errorReturn ABI (the highest-risk detail): a throwing helper places its
+// primary result in R8 and the error flag in RDX on EVERY exit path. Success ⇒
+// flag 0; each error path ⇒ flag = `__ManagedSocketError` ordinal + 1
+// (bufferOutOfBounds 1, resolveFailed 2, connectFailed 3, sendFailed 4,
+// recvFailed 5). `close` is non-throwing (void) so it just returns.
+//
+// Allocator split (crossing these corrupts the heap): AsyncOpContext + scratch →
+// `__slab_alloc`/`__slab_free` (zeroed); the `__ManagedSocket` wrapper →
+// `mm_alloc(8, &__destruct___ManagedSocket, 0)` (refcounted/drop-tracked); the
+// host cstring from `mrt_cstr_from_mm` is `mm_alloc`-backed → `mm_decref` it.
+//
+// System stack: tcpConnect/send/recv run ON a green thread, so every WSA*/kernel32
+// call is system-stack-wrapped (emitX64GtSystemStackEnter/Leave +
+// emitX64GtIatCallOnSystemStack). The sync-worker DNS/close ops run on the raw
+// sync-worker OS thread (no adopted P) → plain helperEmitIatCall (the system-stack
+// wrappers take their P==0 "skip" path there anyway).
+// =============================================================================
+
+// Winsock error / option constants used below.
+let WsaIoPending = 997  // WSA_IO_PENDING
+let WsaFlagOverlapped = 1
+let SioGetExtensionFunctionPointer = 0xC8000006
+let SolSocket = 0xFFFF
+let SoUpdateConnectContext = 0x7010
+let AfInet = 2
+let SockStream = 1
+let IpprotoTcp = 6
+let FileSkipCompletionPortOnSuccess = 1
+let ErrorOperationAborted = 0x3EF
+let TestNet1NetOrder = 0x010200C0  // 192.0.2.1 in network byte order
+// __ManagedSocketError ordinals + 1 (the errorReturn flag values). See the
+// runtime.std header and registerManagedSocketErrorEnum.
+let SockFlagBufferOutOfBounds = 1
+let SockFlagResolveFailed = 2
+let SockFlagConnectFailed = 3
+let SockFlagSendFailed = 4
+let SockFlagRecvFailed = 5
+
+// Top-level driver: emit every networking runtime function. Order matters only
+// for label resolvability of LEA-func-addr targets within the pass — all labels
+// resolve at the final resolveCallFixups, so any order works; we emit the leaf
+// helpers first for readability.
+function emitX64NetworkingRuntime(code ByteArray, relocations RelocationArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, funcLabelNames StringArray, funcLabelOffsets CodeOffsetArray, funcLabelOffsetMap CodeLabelOffsetMap)
+	emitX64NetEnsureStarted(code, relocations: relocations, rdataRelocs: rdataRelocs, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
+	emitX64NetSyncDns(code, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
+	emitX64NetSyncClose(code, relocations: relocations, rdataRelocs: rdataRelocs, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
+	emitX64NetSocketDestructor(code, callFixups: callFixups, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
+	emitX64NetTcpConnect(code, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
+	emitX64IoSubmitSocketOverlapped(code, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap, isRecv: false, funcName: "mrt_managed_socket_send")
+	emitX64IoSubmitSocketOverlapped(code, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap, isRecv: true, funcName: "mrt_managed_socket_recv")
+	emitX64NetClose(code, callFixups: callFixups, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
+end 'emitX64NetworkingRuntime'
+
+// __io_net_ensure_started() -> void : idempotent lazy Winsock init. Guarded by
+// `__io_net_wsa_init`; runs WSAStartup + acquires the ConnectEx function pointer
+// via WSAIoctl into `__io_connectex_ptr`. Called ONLY from the sync-worker DNS op
+// (`__io_net_sync_dns`), which `__io_submit_sync` serializes onto the single
+// sync-worker OS thread — so the guard runs on exactly one thread, no
+// CRITICAL_SECTION needed. Ports C# EmitWsaEnsureInit + the ConnectEx-load block
+// of EmitIoInit. Runs on the raw sync-worker thread (no adopted P) → plain IAT
+// calls (the system-stack wrappers take their P==0 skip path).
+// Local frame (rbp-relative slots): 0=tempSock, 1=connectex_ptr out, 2=bytesReturned,
+//   3..4=GUID (16 bytes), 5..55=WSADATA (≥408 bytes). 56 slots * 8 = 448 bytes.
+// NOTE on multi-slot struct bases: stack slots grow DOWNWARD (slot N =
+// rbp-(N+1)*8), so a struct spanning slots [lo..hi] has its BASE (lowest
+// address, where the OS writes byte 0) at the HIGHEST slot index. `&guid` is
+// therefore slot 4 (not 3), and `&wsaData` is slot 55 (not 5).
+function emitX64NetEnsureStarted(code ByteArray, relocations RelocationArray, rdataRelocs RdataRelocationArray, funcLabelNames StringArray, funcLabelOffsets CodeOffsetArray, funcLabelOffsetMap CodeLabelOffsetMap)
+	recordLabel(funcLabelNames, labelOffsets: funcLabelOffsets, labelOffsetMap: funcLabelOffsetMap, name: "__io_net_ensure_started", offset: code.count())
+	// Blocks: 0=entry, 1=do_init, 2=ret.
+	// frameSize must hold the local slots (WSADATA ≥408 + GUID/ptrs) AND leave
+	// shadow/stack-arg room below; sized generously.
+	var state = Win32HelperState.create(3, outgoingBytes: 0x48, localBytes: 448)
+	helperPrologue(code, frameSize: 512)
+	helperMarkBlock(state, code: code, blockId: 0)
+	// if __io_net_wsa_init != 0 → ret (already started).
+	helperLoadGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.rax, name: "__io_net_wsa_init")
+	helperTestReg(code, reg: X64Register.rax)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 1)  // jz do_init
+	helperFinalize(state, code: code)
+	helperEpilogue(code)
+
+	// block 1: do_init.
+	helperMarkBlock(state, code: code, blockId: 1)
+	// WSAStartup(0x0202, &wsaData). WSADATA spans slots 5..55; its base (lowest
+	// address) is slot 55 — that is where WSAStartup begins writing the 408 bytes.
+	helperMovRegImm(code, dest: X64Register.rcx, value: 0x0202)  // version 2.2
+	helperLeaStackSlot(code, slotIndex: 55, dest: X64Register.rdx)  // &wsaData (base)
+	helperEmitIatCall(code, relocations: relocations, slotIndex: iatSlotIndex(IatSlot.wsaStartup))
+	// tempSock = WSASocketW(AF_INET, SOCK_STREAM, IPPROTO_TCP, NULL, 0, WSA_FLAG_OVERLAPPED).
+	// 6 args → frame 0x30 (shadow 0x20 + 2 stack args 0x10). Sync worker: no P, plain call.
+	emitX64GtSystemStackEnter(code, rdataRelocs: rdataRelocs, frameSize: 0x30)
+	helperMovRegImm(code, dest: X64Register.rcx, value: AfInet)
+	helperMovRegImm(code, dest: X64Register.rdx, value: SockStream)
+	helperMovRegImm(code, dest: X64Register.r8, value: IpprotoTcp)
+	code.append(b"\x4d\x31\xc9")  // xor r9, r9 (lpProtocolInfo = NULL)
+	code.append(b"\x48\x31\xc0")  // xor rax, rax
+	emitMovRspOffsetReg(code, offset: 0x20, srcReg: X64Register.rax)  // g = 0
+	helperMovRegImm(code, dest: X64Register.rax, value: WsaFlagOverlapped)
+	emitMovRspOffsetReg(code, offset: 0x28, srcReg: X64Register.rax)  // dwFlags
+	helperEmitIatCall(code, relocations: relocations, slotIndex: iatSlotIndex(IatSlot.wsaSocketW))
+	emitX64GtSystemStackLeave(code, rdataRelocs: rdataRelocs, frameSize: 0x30)
+	helperStoreSlot(code, slotIndex: 0, src: X64Register.rax)  // tempSock
+	// Store WSAID_CONNECTEX GUID into slots 3..4 (16 bytes). The GUID's base (byte
+	// 0) is the lower address = slot 4, so the first qword goes to slot 4 and the
+	// second to slot 3 (the higher address).
+	emitMovRegImmGeneric(code, dest: X64Register.rax, value: 0x4660DDF325A207B9)
+	helperStoreSlot(code, slotIndex: 4, src: X64Register.rax)  // GUID[0..8] at base
+	emitMovRegImmGeneric(code, dest: X64Register.rax, value: 0x3E06748CE576E98E)
+	helperStoreSlot(code, slotIndex: 3, src: X64Register.rax)  // GUID[8..16]
+	// Zero connectex_ptr out (slot 1) + bytesReturned (slot 2).
+	code.append(b"\x48\x31\xc0")  // xor rax, rax
+	helperStoreSlot(code, slotIndex: 1, src: X64Register.rax)
+	helperStoreSlot(code, slotIndex: 2, src: X64Register.rax)
+	// WSAIoctl(tempSock, SIO_GET_EXTENSION_FUNCTION_POINTER, &guid, 16,
+	//   &connectex_ptr, 8, &bytesReturned, NULL, NULL). 9 args → frame 0x48
+	//   (shadow 0x20 + 5 stack args 0x28).
+	emitX64GtSystemStackEnter(code, rdataRelocs: rdataRelocs, frameSize: 0x48)
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.rcx)  // tempSock
+	helperMovRegImm(code, dest: X64Register.rdx, value: SioGetExtensionFunctionPointer)
+	helperLeaStackSlot(code, slotIndex: 4, dest: X64Register.r8)  // &guid (base = slot 4)
+	helperMovRegImm(code, dest: X64Register.r9, value: 16)  // cbInBuffer
+	helperLeaStackSlot(code, slotIndex: 1, dest: X64Register.rax)
+	emitMovRspOffsetReg(code, offset: 0x20, srcReg: X64Register.rax)  // lpvOutBuffer = &connectex_ptr
+	helperMovRegImm(code, dest: X64Register.rax, value: 8)
+	emitMovRspOffsetReg(code, offset: 0x28, srcReg: X64Register.rax)  // cbOutBuffer = 8
+	helperLeaStackSlot(code, slotIndex: 2, dest: X64Register.rax)
+	emitMovRspOffsetReg(code, offset: 0x30, srcReg: X64Register.rax)  // lpcbBytesReturned
+	code.append(b"\x48\x31\xc0")  // xor rax, rax
+	emitMovRspOffsetReg(code, offset: 0x38, srcReg: X64Register.rax)  // lpOverlapped = NULL
+	emitMovRspOffsetReg(code, offset: 0x40, srcReg: X64Register.rax)  // lpCompletionRoutine = NULL
+	helperEmitIatCall(code, relocations: relocations, slotIndex: iatSlotIndex(IatSlot.wsaIoctl))
+	emitX64GtSystemStackLeave(code, rdataRelocs: rdataRelocs, frameSize: 0x48)
+	// __io_connectex_ptr = connectex_ptr out.
+	helperLoadSlot(code, slotIndex: 1, dest: X64Register.rax)
+	helperStoreGlobal(code, rdataRelocs: rdataRelocs, src: X64Register.rax, name: "__io_connectex_ptr")
+	// closesocket(tempSock).
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.rcx)
+	emitX64GtIatCallOnSystemStack(code, relocations: relocations, rdataRelocs: rdataRelocs, slotIndex: iatSlotIndex(IatSlot.closeSocket))
+	// __io_net_wsa_init = 1.
+	helperMovRegImm(code, dest: X64Register.rax, value: 1)
+	helperStoreGlobal(code, rdataRelocs: rdataRelocs, src: X64Register.rax, name: "__io_net_wsa_init")
+	helperEmitJmp(code, state: state, targetBlock: 2)
+
+	// block 2: ret.
+	helperMarkBlock(state, code: code, blockId: 2)
+	helperFinalize(state, code: code)
+	helperEpilogue(code)
+end 'emitX64NetEnsureStarted'
+
+// __io_net_sync_dns(host=rcx) -> r8 : DNS-resolve `host` on the sync-worker
+// thread (getaddrinfo needs a full OS stack). Returns the resolved IPv4 (4-byte
+// value in a qword), or -1 (DNS failure), or -2 (TEST-NET-1 192.0.2.1 sentinel,
+// for deterministic connect-failure tests). Lazily starts Winsock first. Ports
+// C# __io_sync_op_dns_resolve. Runs on the raw sync-worker thread (no P).
+// Local slots: 0=host, 1=result(addrinfo**), 2=resolved IP, 3..8=hints (48 bytes).
+function emitX64NetSyncDns(code ByteArray, relocations RelocationArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, funcLabelNames StringArray, funcLabelOffsets CodeOffsetArray, funcLabelOffsetMap CodeLabelOffsetMap)
+	recordLabel(funcLabelNames, labelOffsets: funcLabelOffsets, labelOffsetMap: funcLabelOffsetMap, name: "__io_net_sync_dns", offset: code.count())
+	// Blocks: 0=entry, 1=dns_ok, 2=not_testnet, 3=dns_fail.
+	var state = Win32HelperState.create(4, outgoingBytes: 0x20, localBytes: 80)
+	helperPrologue(code, frameSize: 96)
+	helperMarkBlock(state, code: code, blockId: 0)
+	helperStoreSlot(code, slotIndex: 0, src: X64Register.rcx)  // host
+	// Lazy WSAStartup + ConnectEx acquisition (idempotent, single-threaded here).
+	helperEmitDirectCall(code, callFixups: callFixups, target: "__io_net_ensure_started")
+	// Zero hints (48 bytes = slots 3..8).
+	code.append(b"\x48\x31\xc0")  // xor rax, rax
+	helperStoreSlot(code, slotIndex: 3, src: X64Register.rax)
+	helperStoreSlot(code, slotIndex: 4, src: X64Register.rax)
+	helperStoreSlot(code, slotIndex: 5, src: X64Register.rax)
+	helperStoreSlot(code, slotIndex: 6, src: X64Register.rax)
+	helperStoreSlot(code, slotIndex: 7, src: X64Register.rax)
+	helperStoreSlot(code, slotIndex: 8, src: X64Register.rax)
+	// hints.ai_family=AF_INET@+4, ai_socktype=SOCK_STREAM@+8, ai_protocol=IPPROTO_TCP@+12.
+	// The 48-byte hints struct occupies slots 3..8. Stack slots grow DOWNWARD
+	// (slot N = rbp-(N+1)*8), so the struct's BASE (lowest address) is slot 8
+	// (-0x48); the struct spans [-0x48, -0x18). `&hints` and all field offsets are
+	// therefore relative to slot 8, NOT slot 3 (slot 3 is the highest qword).
+	let hintsOff = helperSlotRbpOffset(8 as VarSlot)
+	helperStoreDwordImm(code, base: X64Register.rbp, disp: hintsOff + 4, value: AfInet)
+	helperStoreDwordImm(code, base: X64Register.rbp, disp: hintsOff + 8, value: SockStream)
+	helperStoreDwordImm(code, base: X64Register.rbp, disp: hintsOff + 12, value: IpprotoTcp)
+	// getaddrinfo(host, NULL, &hints, &result). 4 reg args, plain call (no P).
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.rcx)  // host
+	code.append(b"\x48\x31\xd2")  // xor rdx, rdx (service = NULL)
+	helperLeaStackSlot(code, slotIndex: 8, dest: X64Register.r8)  // &hints (slot 8 = base)
+	helperLeaStackSlot(code, slotIndex: 1, dest: X64Register.r9)  // &result
+	emitX64GtIatCallOnSystemStack(code, relocations: relocations, rdataRelocs: rdataRelocs, slotIndex: iatSlotIndex(IatSlot.getAddrInfo))
+	// 0 = success → dns_ok; non-zero → dns_fail (-1).
+	helperTestReg(code, reg: X64Register.rax)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 1)  // jz dns_ok
+	helperEmitJmp(code, state: state, targetBlock: 3)  // dns_fail
+
+	// block 1: dns_ok — ip = *(*(result+0x20)+4) (ai_addr → sin_addr DWORD).
+	helperMarkBlock(state, code: code, blockId: 1)
+	helperLoadSlot(code, slotIndex: 1, dest: X64Register.rax)  // result (addrinfo*)
+	helperLoadIndirect(code, dest: X64Register.rax, base: X64Register.rax, disp: 0x20)  // ai_addr
+	code.append(b"\x8b\x40\x04")  // mov eax, [rax+4] (sin_addr, zero-extends)
+	helperStoreSlot(code, slotIndex: 2, src: X64Register.rax)  // resolved IP
+	// freeaddrinfo(result).
+	helperLoadSlot(code, slotIndex: 1, dest: X64Register.rcx)
+	emitX64GtIatCallOnSystemStack(code, relocations: relocations, rdataRelocs: rdataRelocs, slotIndex: iatSlotIndex(IatSlot.freeAddrInfo))
+	// TEST-NET-1 (192.0.2.1, net order 0x010200C0) → return -2.
+	helperLoadSlot(code, slotIndex: 2, dest: X64Register.rax)
+	helperCmpRegImm(code, reg: X64Register.rax, value: TestNet1NetOrder)
+	helperEmitCondJump(code, state: state, opcode: 0x85, targetBlock: 2)  // jne not_testnet
+	helperMovRegImm(code, dest: X64Register.r8, value: 0xFFFFFFFFFFFFFFFE)  // -2
+	helperFinalize(state, code: code)
+	helperEpilogue(code)
+
+	// block 2: not_testnet — return resolved IP.
+	helperMarkBlock(state, code: code, blockId: 2)
+	helperLoadSlot(code, slotIndex: 2, dest: X64Register.r8)
+	helperFinalize(state, code: code)
+	helperEpilogue(code)
+
+	// block 3: dns_fail — return -1.
+	helperMarkBlock(state, code: code, blockId: 3)
+	helperMovRegImm(code, dest: X64Register.r8, value: 0xFFFFFFFFFFFFFFFF)  // -1
+	helperFinalize(state, code: code)
+	helperEpilogue(code)
+end 'emitX64NetSyncDns'
+
+// __io_net_sync_close(handle=rcx) -> r8 : closesocket(handle) on the sync-worker
+// thread. Idempotent on a 0 handle. Ports C# __io_sync_op_net_close.
+function emitX64NetSyncClose(code ByteArray, relocations RelocationArray, rdataRelocs RdataRelocationArray, funcLabelNames StringArray, funcLabelOffsets CodeOffsetArray, funcLabelOffsetMap CodeLabelOffsetMap)
+	recordLabel(funcLabelNames, labelOffsets: funcLabelOffsets, labelOffsetMap: funcLabelOffsetMap, name: "__io_net_sync_close", offset: code.count())
+	// Blocks: 0=entry, 1=skip.
+	var state = Win32HelperState.create(2, outgoingBytes: 0x20, localBytes: 0)
+	helperPrologue(code, frameSize: 32)
+	helperMarkBlock(state, code: code, blockId: 0)
+	// if handle == 0 → skip (return 0).
+	helperTestReg(code, reg: X64Register.rcx)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 1)  // jz skip
+	// closesocket(handle). rcx already = handle.
+	emitX64GtIatCallOnSystemStack(code, relocations: relocations, rdataRelocs: rdataRelocs, slotIndex: iatSlotIndex(IatSlot.closeSocket))
+	code.append(b"\x4d\x31\xc0")  // xor r8, r8 (result 0)
+	helperFinalize(state, code: code)
+	helperEpilogue(code)
+	// block 1: skip — return 0.
+	helperMarkBlock(state, code: code, blockId: 1)
+	code.append(b"\x4d\x31\xc0")  // xor r8, r8
+	helperFinalize(state, code: code)
+	helperEpilogue(code)
+end 'emitX64NetSyncClose'
+
+// __destruct___ManagedSocket(ptr=param0) -> i64 : mm_alloc destructor ABI.
+// Delegates to mrt_managed_socket_close(ptr), returns 0. Ports C#
+// EmitNetSocketDestructor. Internal ABI: param0 = rcx; result in r8.
+function emitX64NetSocketDestructor(code ByteArray, callFixups CallFixupArray, funcLabelNames StringArray, funcLabelOffsets CodeOffsetArray, funcLabelOffsetMap CodeLabelOffsetMap)
+	recordLabel(funcLabelNames, labelOffsets: funcLabelOffsets, labelOffsetMap: funcLabelOffsetMap, name: "__destruct___ManagedSocket", offset: code.count())
+	var state = Win32HelperState.create(1, outgoingBytes: 0x20, localBytes: 0)
+	helperPrologue(code, frameSize: 32)
+	helperMarkBlock(state, code: code, blockId: 0)
+	// mrt_managed_socket_close(ptr). rcx already = ptr (param0). Non-throwing void.
+	helperEmitDirectCall(code, callFixups: callFixups, target: "mrt_managed_socket_close")
+	code.append(b"\x4d\x31\xc0")  // xor r8, r8 (return 0)
+	helperFinalize(state, code: code)
+	helperEpilogue(code)
+end 'emitX64NetSocketDestructor'
+
+// mrt_managed_socket_close(selfPtr=param0) -> void : explicit close. Idempotent.
+// Reads _handle from [selfPtr+0], zeros the field FIRST (so the destructor won't
+// double-close on a reused OS handle), then routes closesocket to the sync worker
+// via __io_submit_sync(IoSyncOpNetClose). Non-throwing — overrides the runtime.std
+// stub (which only zeroed the field). Ports C# EmitNetClose. Internal ABI:
+// param0 = rcx; the runtime.std stub is `mrt_managed_socket_close 1 void`, so the
+// caller does not read a result. Slots: 0=selfPtr, 1=handle.
+function emitX64NetClose(code ByteArray, callFixups CallFixupArray, funcLabelNames StringArray, funcLabelOffsets CodeOffsetArray, funcLabelOffsetMap CodeLabelOffsetMap)
+	recordLabel(funcLabelNames, labelOffsets: funcLabelOffsets, labelOffsetMap: funcLabelOffsetMap, name: "mrt_managed_socket_close", offset: code.count())
+	// Blocks: 0=entry, 1=noop.
+	var state = Win32HelperState.create(2, outgoingBytes: 0x20, localBytes: 16)
+	helperPrologue(code, frameSize: 48)
+	helperMarkBlock(state, code: code, blockId: 0)
+	helperStoreSlot(code, slotIndex: 0, src: X64Register.rcx)  // selfPtr
+	// if selfPtr == 0 → noop.
+	helperTestReg(code, reg: X64Register.rcx)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 1)  // jz noop
+	// handle = *(selfPtr+0).
+	helperLoadIndirect(code, dest: X64Register.rax, base: X64Register.rcx, disp: 0)
+	helperStoreSlot(code, slotIndex: 1, src: X64Register.rax)
+	helperTestReg(code, reg: X64Register.rax)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 1)  // jz noop (already closed)
+	// *(selfPtr+0) = 0 FIRST (destructor idempotency).
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.rcx)
+	code.append(b"\x48\x31\xc0")  // xor rax, rax
+	helperStoreIndirect(code, base: X64Register.rcx, disp: 0, src: X64Register.rax)
+	// __io_submit_sync(IoSyncOpNetClose, handle, 0). Internal ABI rcx=op, rdx=arg0, rax=arg1.
+	helperMovRegImm(code, dest: X64Register.rcx, value: IoSyncOpNetClose)
+	helperLoadSlot(code, slotIndex: 1, dest: X64Register.rdx)  // handle
+	code.append(b"\x48\x31\xc0")  // xor rax, rax (arg1 = 0)
+	helperEmitDirectCall(code, callFixups: callFixups, target: "__io_submit_sync")
+	helperFinalize(state, code: code)
+	helperEpilogue(code)
+	// block 1: noop — nothing to do.
+	helperMarkBlock(state, code: code, blockId: 1)
+	helperFinalize(state, code: code)
+	helperEpilogue(code)
+end 'emitX64NetClose'
+
+// Shared body for mrt_managed_socket_send / mrt_managed_socket_recv (C#
+// EmitIoSubmitSocketOverlapped). Both issue an overlapped WSASend/WSARecv on
+// the green thread and yield until IOCP completes, then return the byte count
+// (errorReturn ABI: result → R8, flag → RDX). `isRecv` selects WSARecv (+ a
+// zeroed lpFlags DWORD) vs WSASend (dwFlags=0), the recvFailed vs sendFailed
+// flag, and the buffer length source (recv: capacity; send: the `length` arg
+// after an offset+length>capacity bounds check → bufferOutOfBounds).
+//
+// __ManagedMemory header (managed ptr is the header ptr): buffer@0, length@8,
+// capacity@16. send/recv only read buffer@0 and capacity@16.
+//
+// Internal ABI params: send = (selfPtr rcx, mmPtr rdx, offset rax, length r9);
+// recv = (selfPtr rcx, mmPtr rdx). Slots:
+//   0=handle, 1=mmPtr, 2=offset(send)/cap(recv), 3=length(send)/cap(recv),
+//   4=ctx, 5=saved-error / dequeued-GT / bytes(sync), 6=WSABUF.len(+pad),
+//   7=WSABUF.buf, 8=recv flags DWORD.
+// Blocks: 0=entry, 1=oob(send only), 2=sync_err, 3=sync_done, 4=yield,
+//   5=worker_switch, 6=mainthread_loop, 7=mt_run, 8=mt_park, 9=resume, 10=cancelled.
+function emitX64IoSubmitSocketOverlapped(code ByteArray, relocations RelocationArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, funcLabelNames StringArray, funcLabelOffsets CodeOffsetArray, funcLabelOffsetMap CodeLabelOffsetMap, isRecv bool, funcName String)
+	recordLabel(funcLabelNames, labelOffsets: funcLabelOffsets, labelOffsetMap: funcLabelOffsetMap, name: funcName, offset: code.count())
+	var wsaSlot = iatSlotIndex(IatSlot.wsaSend)
+	var osErrFlag = SockFlagSendFailed
+	if isRecv 'recvSelect'
+		wsaSlot = iatSlotIndex(IatSlot.wsaRecv)
+		osErrFlag = SockFlagRecvFailed
+	end 'recvSelect'
+	var state = Win32HelperState.create(11, outgoingBytes: 0x40, localBytes: 80)
+	helperPrologue(code, frameSize: 128)
+	helperMarkBlock(state, code: code, blockId: 0)
+	// Capture args. handle = *(selfPtr+0).
+	helperLoadIndirect(code, dest: X64Register.r10, base: X64Register.rcx, disp: 0)  // handle
+	helperStoreSlot(code, slotIndex: 0, src: X64Register.r10)
+	helperStoreSlot(code, slotIndex: 1, src: X64Register.rdx)  // mmPtr
+	if isRecv 'recvArgs'
+		// recv: length/cap = *(mmPtr+16); buffer base = *(mmPtr+0).
+		helperLoadIndirect(code, dest: X64Register.rax, base: X64Register.rdx, disp: 16)  // capacity
+		helperStoreSlot(code, slotIndex: 3, src: X64Register.rax)  // length used by WSABUF
+		helperLoadIndirect(code, dest: X64Register.rax, base: X64Register.rdx, disp: 0)  // dataPtr
+		// WSABUF = {ULONG len@0; CHAR* buf@8}. Base (byte 0) = slot 7 (lower addr);
+		// buf@base+8 lives in slot 6. Store buf to slot 6.
+		helperStoreSlot(code, slotIndex: 6, src: X64Register.rax)  // WSABUF.buf = dataPtr
+	end 'recvArgs' else 'sendArgs'
+		// send: offset=rax (param2), length=r9 (param3). The offset+length>capacity
+		// bounds check + WSABUF.buf computation happen after the cancel check (in
+		// the `sendBoundsJump` block) so the cancel path doesn't run them.
+		helperStoreSlot(code, slotIndex: 2, src: X64Register.rax)  // offset
+		helperStoreSlot(code, slotIndex: 3, src: X64Register.r9)  // length
+	end 'sendArgs'
+	// Cancel check (shared). self.cancel_flag != 0 → cancelled.
+	emitX64GtLoadCurrentP(code, dest: X64Register.r10, rdataRelocs: rdataRelocs)
+	helperLoadIndirect(code, dest: X64Register.r10, base: X64Register.r10, disp: POffCurrentGt)
+	helperLoadIndirect(code, dest: X64Register.rax, base: X64Register.r10, disp: GtOffCancelFlag)
+	helperTestReg(code, reg: X64Register.rax)
+	helperEmitCondJump(code, state: state, opcode: 0x85, targetBlock: 10)  // jnz cancelled
+	if not isRecv 'sendBoundsJump'
+		// (offset + length) > capacity → oob. Compute sum = offset + length.
+		helperLoadSlot(code, slotIndex: 2, dest: X64Register.rax)  // offset
+		helperLoadSlot(code, slotIndex: 3, dest: X64Register.r9)  // length
+		emitAddRegRegParam(code, dest: X64Register.rax, src: X64Register.r9)  // rax = offset+length
+		helperLoadSlot(code, slotIndex: 1, dest: X64Register.r11)  // mmPtr
+		helperLoadIndirect(code, dest: X64Register.r11, base: X64Register.r11, disp: 16)  // capacity
+		emitCmpRegRegOp(code, lhs: X64Register.rax, rhs: X64Register.r11)
+		helperEmitCondJump(code, state: state, opcode: 0x87, targetBlock: 1)  // ja oob (unsigned >)
+		// bufPtr = dataPtr + offset.
+		helperLoadSlot(code, slotIndex: 1, dest: X64Register.rax)  // mmPtr
+		helperLoadIndirect(code, dest: X64Register.rax, base: X64Register.rax, disp: 0)  // dataPtr
+		helperLoadSlot(code, slotIndex: 2, dest: X64Register.r9)  // offset
+		emitAddRegRegParam(code, dest: X64Register.rax, src: X64Register.r9)
+		helperStoreSlot(code, slotIndex: 6, src: X64Register.rax)  // WSABUF.buf = dataPtr+offset (slot 6 = base+8)
+	end 'sendBoundsJump'
+	// ctx = __slab_alloc(IoAsyncCtxSize) (zeroed OVERLAPPED + fields).
+	helperMovRegImm(code, dest: X64Register.rcx, value: IoAsyncCtxSize)
+	helperEmitDirectCall(code, callFixups: callFixups, target: "__slab_alloc")
+	helperStoreSlot(code, slotIndex: 4, src: X64Register.r8)  // ctx
+	// ctx.waiter = self ; self.io_handle = handle ; self.status = waiting.
+	emitX64GtLoadCurrentP(code, dest: X64Register.r10, rdataRelocs: rdataRelocs)
+	helperLoadIndirect(code, dest: X64Register.rdx, base: X64Register.r10, disp: POffCurrentGt)
+	helperStoreIndirect(code, base: X64Register.r8, disp: IoAsyncCtxOffWaiter, src: X64Register.rdx)
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.rax)  // handle
+	helperStoreIndirect(code, base: X64Register.rdx, disp: GtOffIoHandle, src: X64Register.rax)
+	helperMovRegImm(code, dest: X64Register.rax, value: GtStatusWaiting)
+	helperStoreIndirect(code, base: X64Register.rdx, disp: GtOffStatus, src: X64Register.rax)
+	// Build WSABUF {len@0, buf@8}: base = slot 7 (lower addr), buf already stored in
+	// slot 6 (= base+8). Zero slot 7 (len qword incl. the 4 pad bytes) then write the
+	// low 32 bits of the length into WSABUF.len at base+0.
+	code.append(b"\x48\x31\xc0")  // xor rax, rax
+	helperStoreSlot(code, slotIndex: 7, src: X64Register.rax)  // zero len+pad
+	helperLoadSlot(code, slotIndex: 3, dest: X64Register.rax)  // length/cap
+	let wsabufLenOff = helperSlotRbpOffset(7 as VarSlot)
+	helperStoreDwordRegLow(code, base: X64Register.rbp, disp: wsabufLenOff, src: X64Register.rax)  // WSABUF.len @0
+	if isRecv 'recvFlags'
+		// Zero the lpFlags DWORD (slot 8) for WSARecv.
+		code.append(b"\x48\x31\xc0")  // xor rax, rax
+		helperStoreSlot(code, slotIndex: 8, src: X64Register.rax)
+	end 'recvFlags'
+	// WSASend/WSARecv(handle, &WSABUF, 1, NULL, dwFlags/&flags, ctx, NULL). 7 args
+	// → frame 0x40 (shadow 0x20 + 3 stack args 0x18 + pad 0x08). On the system stack.
+	emitX64GtSystemStackEnter(code, rdataRelocs: rdataRelocs, frameSize: 0x40)
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.rcx)  // socket handle
+	helperLeaStackSlot(code, slotIndex: 7, dest: X64Register.rdx)  // &WSABUF (base = slot 7)
+	helperMovRegImm(code, dest: X64Register.r8, value: 1)  // dwBufferCount
+	code.append(b"\x4d\x31\xc9")  // xor r9, r9 (lpNumberOfBytes = NULL)
+	if isRecv 'recvStackArgs'
+		// [rsp+0x20] = &flags (DWORD 0 at slot 8).
+		helperLeaStackSlot(code, slotIndex: 8, dest: X64Register.rax)
+		emitMovRspOffsetReg(code, offset: 0x20, srcReg: X64Register.rax)
+	end 'recvStackArgs' else 'sendStackArgs'
+		// [rsp+0x20] = dwFlags = 0.
+		code.append(b"\x48\x31\xc0")  // xor rax, rax
+		emitMovRspOffsetReg(code, offset: 0x20, srcReg: X64Register.rax)
+	end 'sendStackArgs'
+	helperLoadSlot(code, slotIndex: 4, dest: X64Register.rax)  // ctx
+	emitMovRspOffsetReg(code, offset: 0x28, srcReg: X64Register.rax)  // lpOverlapped = ctx
+	code.append(b"\x48\x31\xc0")  // xor rax, rax
+	emitMovRspOffsetReg(code, offset: 0x30, srcReg: X64Register.rax)  // lpCompletionRoutine = NULL
+	helperEmitIatCall(code, relocations: relocations, slotIndex: wsaSlot)
+	emitX64GtSystemStackLeave(code, rdataRelocs: rdataRelocs, frameSize: 0x40)
+	// 0 → sync success (FILE_SKIP_COMPLETION) → sync_done. Else SOCKET_ERROR.
+	helperTestReg(code, reg: X64Register.rax)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 3)  // jz sync_done
+	// WSAGetLastError; 997 (WSA_IO_PENDING) → yield; else sync error. rax holds the
+	// WSA error code on the fall-through. MUST explicitly jmp sync_err: block 1
+	// (oob) is emitted next physically, so without this the genuine-sync-error path
+	// would fall into oob — returning the wrong flag, skipping io-state cleanup, and
+	// LEAKING the slab ctx (block 1 never frees it). sync_err's first op saves rax.
+	emitX64GtIatCallOnSystemStack(code, relocations: relocations, rdataRelocs: rdataRelocs, slotIndex: iatSlotIndex(IatSlot.wsaGetLastError))
+	helperCmpRegImm(code, reg: X64Register.rax, value: WsaIoPending)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 4)  // je yield
+	helperEmitJmp(code, state: state, targetBlock: 2)  // else → sync_err (real OS error)
+
+	// block 1: oob (send only) — bufferOutOfBounds. R8=0, RDX=flag.
+	helperMarkBlock(state, code: code, blockId: 1)
+	code.append(b"\x4d\x31\xc0")  // xor r8, r8 (result 0)
+	helperMovRegImm(code, dest: X64Register.rdx, value: SockFlagBufferOutOfBounds)
+	helperFinalize(state, code: code)
+	helperEpilogue(code)
+
+	// block 2: sync_err — clear io_handle/status, store error, free ctx, return
+	//   error flag (R8=0, RDX=osErrFlag).
+	helperMarkBlock(state, code: code, blockId: 2)
+	helperStoreSlot(code, slotIndex: 5, src: X64Register.rax)  // save Win32 error
+	emitX64GtLoadCurrentP(code, dest: X64Register.r10, rdataRelocs: rdataRelocs)
+	helperLoadIndirect(code, dest: X64Register.r10, base: X64Register.r10, disp: POffCurrentGt)
+	code.append(b"\x48\x31\xc9")  // xor rcx, rcx
+	helperStoreIndirect(code, base: X64Register.r10, disp: GtOffIoHandle, src: X64Register.rcx)
+	helperStoreIndirect(code, base: X64Register.r10, disp: GtOffStatus, src: X64Register.rcx)  // ready
+	helperLoadSlot(code, slotIndex: 5, dest: X64Register.rax)
+	helperStoreIndirect(code, base: X64Register.r10, disp: GtOffIoErrorCode, src: X64Register.rax)
+	helperLoadSlot(code, slotIndex: 4, dest: X64Register.rcx)  // free ctx
+	helperEmitDirectCall(code, callFixups: callFixups, target: "__slab_free")
+	code.append(b"\x4d\x31\xc0")  // xor r8, r8 (result 0)
+	helperMovRegImm(code, dest: X64Register.rdx, value: osErrFlag)
+	helperFinalize(state, code: code)
+	helperEpilogue(code)
+
+	// block 3: sync_done — GetOverlappedResult for the byte count, then resume.
+	helperMarkBlock(state, code: code, blockId: 3)
+	code.append(b"\x48\x31\xc0")  // xor rax, rax
+	helperStoreSlot(code, slotIndex: 5, src: X64Register.rax)  // zero bytes slot
+	emitX64GtSystemStackEnter(code, rdataRelocs: rdataRelocs, frameSize: 0x30)
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.rcx)  // hFile = socket
+	helperLoadSlot(code, slotIndex: 4, dest: X64Register.rdx)  // lpOverlapped = ctx
+	helperLeaStackSlot(code, slotIndex: 5, dest: X64Register.r8)  // &bytesTransferred
+	code.append(b"\x4d\x31\xc9")  // xor r9, r9 (bWait = FALSE)
+	helperEmitIatCall(code, relocations: relocations, slotIndex: iatSlotIndex(IatSlot.getOverlappedResult))
+	emitX64GtSystemStackLeave(code, rdataRelocs: rdataRelocs, frameSize: 0x30)
+	helperLoadSlot(code, slotIndex: 5, dest: X64Register.rcx)  // bytes
+	emitX64GtLoadCurrentP(code, dest: X64Register.r10, rdataRelocs: rdataRelocs)
+	helperLoadIndirect(code, dest: X64Register.r10, base: X64Register.r10, disp: POffCurrentGt)
+	helperStoreIndirect(code, base: X64Register.r10, disp: GtOffIoResultVal, src: X64Register.rcx)
+	code.append(b"\x48\x31\xc0")  // xor rax, rax
+	helperStoreIndirect(code, base: X64Register.r10, disp: GtOffStatus, src: X64Register.rax)  // ready
+	helperLoadSlot(code, slotIndex: 4, dest: X64Register.rcx)  // free ctx
+	helperEmitDirectCall(code, callFixups: callFixups, target: "__slab_free")
+	helperEmitJmp(code, state: state, targetBlock: 9)  // resume
+
+	// block 4: yield — I/O pending. self == mainThread (stackBase==0) → loop, else switch.
+	helperMarkBlock(state, code: code, blockId: 4)
+	emitX64GtLoadCurrentP(code, dest: X64Register.r10, rdataRelocs: rdataRelocs)
+	helperLoadIndirect(code, dest: X64Register.rcx, base: X64Register.r10, disp: POffCurrentGt)
+	helperLoadIndirect(code, dest: X64Register.rax, base: X64Register.rcx, disp: GtOffStackBase)
+	helperTestReg(code, reg: X64Register.rax)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 6)  // jz mainthread_loop
+
+	// block 5: worker_switch — ioYielded=0, mainThread running, switch self→mainThread.
+	helperMarkBlock(state, code: code, blockId: 5)
+	code.append(b"\x48\x31\xc0")  // xor rax, rax
+	helperStoreIndirect(code, base: X64Register.rcx, disp: GtOffIoYielded, src: X64Register.rax)
+	emitX64GtLoadCurrentP(code, dest: X64Register.r10, rdataRelocs: rdataRelocs)
+	helperMovRegImm(code, dest: X64Register.rax, value: GtStatusRunning)
+	helperStoreIndirect(code, base: X64Register.r10, disp: POffMainThread + GtOffStatus, src: X64Register.rax)
+	helperLoadIndirect(code, dest: X64Register.rcx, base: X64Register.r10, disp: POffCurrentGt)  // from = self
+	emitMovRegRegOp(code, dest: X64Register.rdx, src: X64Register.r10)
+	emitAddRegImmParam(code, dest: X64Register.rdx, value: POffMainThread)  // to = &P.mainThread
+	helperEmitDirectCall(code, callFixups: callFixups, target: "__gt_context_switch")
+	helperEmitJmp(code, state: state, targetBlock: 9)  // resume
+
+	// block 6: mainthread_loop — drive the scheduler until our I/O completes.
+	helperMarkBlock(state, code: code, blockId: 6)
+	helperEmitDirectCall(code, callFixups: callFixups, target: "__gt_process_pending_waiter")
+	helperEmitDirectCall(code, callFixups: callFixups, target: "__io_check_completions")
+	emitX64GtLoadCurrentP(code, dest: X64Register.r10, rdataRelocs: rdataRelocs)
+	helperLoadIndirect(code, dest: X64Register.r10, base: X64Register.r10, disp: POffCurrentGt)
+	helperLoadIndirect(code, dest: X64Register.rax, base: X64Register.r10, disp: GtOffStatus)
+	helperCmpRegImm(code, reg: X64Register.rax, value: GtStatusWaiting)
+	helperEmitCondJump(code, state: state, opcode: 0x85, targetBlock: 9)  // jne resume
+	helperEmitDirectCall(code, callFixups: callFixups, target: "__gt_dequeue")
+	helperTestReg(code, reg: X64Register.r8)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 8)  // jz park
+
+	// block 7: mt_run — run the dequeued GT.
+	helperMarkBlock(state, code: code, blockId: 7)
+	helperStoreSlot(code, slotIndex: 5, src: X64Register.r8)
+	helperMovRegImm(code, dest: X64Register.rcx, value: GtStatusRunning)
+	helperStoreIndirect(code, base: X64Register.r8, disp: GtOffStatus, src: X64Register.rcx)
+	emitX64GtLoadCurrentP(code, dest: X64Register.rcx, rdataRelocs: rdataRelocs)
+	helperLoadIndirect(code, dest: X64Register.rcx, base: X64Register.rcx, disp: POffCurrentGt)  // from = self
+	helperLoadSlot(code, slotIndex: 5, dest: X64Register.rdx)  // to = g
+	helperEmitDirectCall(code, callFixups: callFixups, target: "__gt_context_switch")
+	helperLoadSlot(code, slotIndex: 5, dest: X64Register.rax)
+	helperMovRegImm(code, dest: X64Register.rcx, value: 1)
+	helperStoreIndirect(code, base: X64Register.rax, disp: GtOffIoYielded, src: X64Register.rcx)
+	helperEmitJmp(code, state: state, targetBlock: 6)  // re-loop
+
+	// block 8: mt_park — WaitForSingleObject(done event, 50ms), then re-loop.
+	helperMarkBlock(state, code: code, blockId: 8)
+	helperLoadGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.rcx, name: "__io_done_event")
+	helperMovRegImm(code, dest: X64Register.rdx, value: 50)
+	emitX64GtIatCallOnSystemStack(code, relocations: relocations, rdataRelocs: rdataRelocs, slotIndex: iatSlotIndex(IatSlot.waitForSingleObject))
+	helperEmitJmp(code, state: state, targetBlock: 6)
+
+	// block 9: resume — clear io_handle; if io_error_code != 0 → OS error; else
+	//   success (R8 = bytes, RDX = 0). Do NOT map bytes==0 to an error (the
+	//   stdlib decides connectionClosed).
+	helperMarkBlock(state, code: code, blockId: 9)
+	emitX64GtLoadCurrentP(code, dest: X64Register.r10, rdataRelocs: rdataRelocs)
+	helperLoadIndirect(code, dest: X64Register.r10, base: X64Register.r10, disp: POffCurrentGt)
+	code.append(b"\x48\x31\xc0")  // xor rax, rax
+	helperStoreIndirect(code, base: X64Register.r10, disp: GtOffIoHandle, src: X64Register.rax)  // clear io_handle
+	helperLoadIndirect(code, dest: X64Register.rax, base: X64Register.r10, disp: GtOffIoErrorCode)
+	helperTestReg(code, reg: X64Register.rax)
+	helperEmitCondJump(code, state: state, opcode: 0x85, targetBlock: 2)  // jnz sync_err (OS error path)
+	// success: R8 = io_result_val (bytes), RDX = 0.
+	helperLoadIndirect(code, dest: X64Register.r8, base: X64Register.r10, disp: GtOffIoResultVal)
+	code.append(b"\x48\x31\xd2")  // xor rdx, rdx (flag = 0)
+	helperFinalize(state, code: code)
+	helperEpilogue(code)
+
+	// block 10: cancelled — ERROR_OPERATION_ABORTED, return osErrFlag (R8=0).
+	helperMarkBlock(state, code: code, blockId: 10)
+	emitX64GtLoadCurrentP(code, dest: X64Register.r10, rdataRelocs: rdataRelocs)
+	helperLoadIndirect(code, dest: X64Register.r10, base: X64Register.r10, disp: POffCurrentGt)
+	helperMovRegImm(code, dest: X64Register.rax, value: ErrorOperationAborted)
+	helperStoreIndirect(code, base: X64Register.r10, disp: GtOffIoErrorCode, src: X64Register.rax)
+	code.append(b"\x4d\x31\xc0")  // xor r8, r8 (result 0)
+	helperMovRegImm(code, dest: X64Register.rdx, value: osErrFlag)
+	helperFinalize(state, code: code)
+	helperEpilogue(code)
+end 'emitX64IoSubmitSocketOverlapped'
+
+// mrt_managed_socket_tcp_connect(mmHostPtr=rcx, port=rdx) -> managed __ManagedSocket
+// (errorReturn ABI: result → R8, flag → RDX). Resolves the host on the sync worker
+// (DNS needs a full OS stack), then creates + binds the socket and connects via
+// overlapped ConnectEx on the green thread. Ports C# EmitNetTcpConnect + the
+// parser's cstr/flag work. Slots:
+//   0=hostMm, 1=port, 2=socket, 3=ctx, 4=resolvedIP, 5=temp(fnptr/error/dequeuedGT),
+//   6..7=bind sockaddr (16 bytes), 8..9=connect sockaddr (16 bytes), 10=mptr, 11=hostCstr.
+// Blocks: 0=entry, 1=connect_err(sync ConnectEx fail), 2=sync_done, 3=yield,
+//   4=worker_switch, 5=mainthread_loop, 6=mt_run, 7=mt_park, 8=resume,
+//   9=async_fail, 10=async_fail_noclose, 11=sock_ok, 12=bind_ok, 13=sock_fail,
+//   14=bind_fail, 15=dns_fail, 16=cancelled, 17=make_err (alloc placeholder + return).
+function emitX64NetTcpConnect(code ByteArray, relocations RelocationArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, funcLabelNames StringArray, funcLabelOffsets CodeOffsetArray, funcLabelOffsetMap CodeLabelOffsetMap)
+	recordLabel(funcLabelNames, labelOffsets: funcLabelOffsets, labelOffsetMap: funcLabelOffsetMap, name: "mrt_managed_socket_tcp_connect", offset: code.count())
+	var state = Win32HelperState.create(18, outgoingBytes: 0x40, localBytes: 128)
+	helperPrologue(code, frameSize: 176)
+	helperMarkBlock(state, code: code, blockId: 0)
+	helperStoreSlot(code, slotIndex: 0, src: X64Register.rcx)  // hostMm
+	helperStoreSlot(code, slotIndex: 1, src: X64Register.rdx)  // port
+	// Cancel check.
+	emitX64GtLoadCurrentP(code, dest: X64Register.r10, rdataRelocs: rdataRelocs)
+	helperLoadIndirect(code, dest: X64Register.r10, base: X64Register.r10, disp: POffCurrentGt)
+	helperLoadIndirect(code, dest: X64Register.rax, base: X64Register.r10, disp: GtOffCancelFlag)
+	helperTestReg(code, reg: X64Register.rax)
+	helperEmitCondJump(code, state: state, opcode: 0x85, targetBlock: 16)  // jnz cancelled
+	// hostCstr = mrt_cstr_from_mm(hostMm).
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.rcx)
+	helperEmitDirectCall(code, callFixups: callFixups, target: "mrt_cstr_from_mm")
+	emitMovRegRegOp(code, dest: X64Register.rax, src: X64Register.r8)  // result in r8
+	helperStoreSlot(code, slotIndex: 11, src: X64Register.rax)  // hostCstr
+	// __io_submit_sync(IoSyncOpDnsResolve, hostCstr, 0) → ip/-1/-2 in r8.
+	helperMovRegImm(code, dest: X64Register.rcx, value: IoSyncOpDnsResolve)
+	helperLoadSlot(code, slotIndex: 11, dest: X64Register.rdx)  // hostCstr (arg0)
+	code.append(b"\x48\x31\xc0")  // xor rax, rax (arg1 = 0)
+	helperEmitDirectCall(code, callFixups: callFixups, target: "__io_submit_sync")
+	helperStoreSlot(code, slotIndex: 4, src: X64Register.r8)  // resolved IP / -1 / -2
+	// mm_decref(hostCstr) — it is mm_alloc-backed.
+	helperLoadSlot(code, slotIndex: 11, dest: X64Register.rcx)
+	helperEmitDirectCall(code, callFixups: callFixups, target: "mm_decref")
+	// if resolvedIP < 0 → DNS/connect failure. -1 → resolveFailed, -2 → connectFailed.
+	helperLoadSlot(code, slotIndex: 4, dest: X64Register.rax)
+	helperTestReg(code, reg: X64Register.rax)
+	helperEmitCondJump(code, state: state, opcode: 0x88, targetBlock: 15)  // js dns_fail (signed < 0)
+
+	// --- Socket creation + bind + overlapped ConnectEx ---
+	// socket = WSASocketW(AF_INET, SOCK_STREAM, IPPROTO_TCP, NULL, 0, WSA_FLAG_OVERLAPPED).
+	emitX64GtSystemStackEnter(code, rdataRelocs: rdataRelocs, frameSize: 0x30)
+	helperMovRegImm(code, dest: X64Register.rcx, value: AfInet)
+	helperMovRegImm(code, dest: X64Register.rdx, value: SockStream)
+	helperMovRegImm(code, dest: X64Register.r8, value: IpprotoTcp)
+	code.append(b"\x4d\x31\xc9")  // xor r9, r9
+	code.append(b"\x48\x31\xc0")  // xor rax, rax
+	emitMovRspOffsetReg(code, offset: 0x20, srcReg: X64Register.rax)  // g = 0
+	helperMovRegImm(code, dest: X64Register.rax, value: WsaFlagOverlapped)
+	emitMovRspOffsetReg(code, offset: 0x28, srcReg: X64Register.rax)
+	helperEmitIatCall(code, relocations: relocations, slotIndex: iatSlotIndex(IatSlot.wsaSocketW))
+	emitX64GtSystemStackLeave(code, rdataRelocs: rdataRelocs, frameSize: 0x30)
+	// INVALID_SOCKET (-1) → sock_fail (connectFailed).
+	helperMovRegImm(code, dest: X64Register.rcx, value: 0xFFFFFFFFFFFFFFFF)
+	emitCmpRegRegOp(code, lhs: X64Register.rax, rhs: X64Register.rcx)
+	helperEmitCondJump(code, state: state, opcode: 0x85, targetBlock: 11)  // jne sock_ok
+	helperEmitJmp(code, state: state, targetBlock: 13)  // sock_fail
+
+	// block 1: connect_err — sync ConnectEx error. closesocket, clear io state,
+	//   free ctx, connectFailed.
+	helperMarkBlock(state, code: code, blockId: 1)
+	helperStoreSlot(code, slotIndex: 5, src: X64Register.rax)  // save WSA error
+	helperLoadSlot(code, slotIndex: 2, dest: X64Register.rcx)  // socket
+	emitX64GtIatCallOnSystemStack(code, relocations: relocations, rdataRelocs: rdataRelocs, slotIndex: iatSlotIndex(IatSlot.closeSocket))
+	emitX64GtLoadCurrentP(code, dest: X64Register.r10, rdataRelocs: rdataRelocs)
+	helperLoadIndirect(code, dest: X64Register.r10, base: X64Register.r10, disp: POffCurrentGt)
+	code.append(b"\x48\x31\xc9")  // xor rcx, rcx
+	helperStoreIndirect(code, base: X64Register.r10, disp: GtOffIoHandle, src: X64Register.rcx)
+	helperStoreIndirect(code, base: X64Register.r10, disp: GtOffStatus, src: X64Register.rcx)
+	helperLoadSlot(code, slotIndex: 5, dest: X64Register.rax)
+	helperStoreIndirect(code, base: X64Register.r10, disp: GtOffIoErrorCode, src: X64Register.rax)
+	helperLoadSlot(code, slotIndex: 3, dest: X64Register.rcx)  // free ctx
+	helperEmitDirectCall(code, callFixups: callFixups, target: "__slab_free")
+	helperMovRegImm(code, dest: X64Register.rdx, value: SockFlagConnectFailed)
+	helperEmitJmp(code, state: state, targetBlock: 17)  // make_err
+
+	// block 2: sync_done — ConnectEx returned TRUE (immediate completion). Store
+	//   socket as io_result_val, status ready, free ctx, resume.
+	helperMarkBlock(state, code: code, blockId: 2)
+	emitX64GtLoadCurrentP(code, dest: X64Register.r10, rdataRelocs: rdataRelocs)
+	helperLoadIndirect(code, dest: X64Register.r10, base: X64Register.r10, disp: POffCurrentGt)
+	helperLoadSlot(code, slotIndex: 2, dest: X64Register.rcx)  // socket
+	helperStoreIndirect(code, base: X64Register.r10, disp: GtOffIoResultVal, src: X64Register.rcx)
+	code.append(b"\x48\x31\xc0")  // xor rax, rax
+	helperStoreIndirect(code, base: X64Register.r10, disp: GtOffStatus, src: X64Register.rax)  // ready
+	helperLoadSlot(code, slotIndex: 3, dest: X64Register.rcx)  // free ctx
+	helperEmitDirectCall(code, callFixups: callFixups, target: "__slab_free")
+	helperEmitJmp(code, state: state, targetBlock: 8)  // resume
+
+	// block 3: yield — ConnectEx IO_PENDING. self == mainThread → loop, else switch.
+	helperMarkBlock(state, code: code, blockId: 3)
+	emitX64GtLoadCurrentP(code, dest: X64Register.r10, rdataRelocs: rdataRelocs)
+	helperLoadIndirect(code, dest: X64Register.rcx, base: X64Register.r10, disp: POffCurrentGt)
+	helperLoadIndirect(code, dest: X64Register.rax, base: X64Register.rcx, disp: GtOffStackBase)
+	helperTestReg(code, reg: X64Register.rax)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 5)  // jz mainthread_loop
+
+	// block 4: worker_switch.
+	helperMarkBlock(state, code: code, blockId: 4)
+	code.append(b"\x48\x31\xc0")  // xor rax, rax
+	helperStoreIndirect(code, base: X64Register.rcx, disp: GtOffIoYielded, src: X64Register.rax)
+	emitX64GtLoadCurrentP(code, dest: X64Register.r10, rdataRelocs: rdataRelocs)
+	helperMovRegImm(code, dest: X64Register.rax, value: GtStatusRunning)
+	helperStoreIndirect(code, base: X64Register.r10, disp: POffMainThread + GtOffStatus, src: X64Register.rax)
+	helperLoadIndirect(code, dest: X64Register.rcx, base: X64Register.r10, disp: POffCurrentGt)  // from = self
+	emitMovRegRegOp(code, dest: X64Register.rdx, src: X64Register.r10)
+	emitAddRegImmParam(code, dest: X64Register.rdx, value: POffMainThread)  // to = &P.mainThread
+	helperEmitDirectCall(code, callFixups: callFixups, target: "__gt_context_switch")
+	helperEmitJmp(code, state: state, targetBlock: 8)  // resume
+
+	// block 5: mainthread_loop.
+	helperMarkBlock(state, code: code, blockId: 5)
+	helperEmitDirectCall(code, callFixups: callFixups, target: "__gt_process_pending_waiter")
+	helperEmitDirectCall(code, callFixups: callFixups, target: "__io_check_completions")
+	emitX64GtLoadCurrentP(code, dest: X64Register.r10, rdataRelocs: rdataRelocs)
+	helperLoadIndirect(code, dest: X64Register.r10, base: X64Register.r10, disp: POffCurrentGt)
+	helperLoadIndirect(code, dest: X64Register.rax, base: X64Register.r10, disp: GtOffStatus)
+	helperCmpRegImm(code, reg: X64Register.rax, value: GtStatusWaiting)
+	helperEmitCondJump(code, state: state, opcode: 0x85, targetBlock: 8)  // jne resume
+	helperEmitDirectCall(code, callFixups: callFixups, target: "__gt_dequeue")
+	helperTestReg(code, reg: X64Register.r8)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 7)  // jz park
+
+	// block 6: mt_run.
+	helperMarkBlock(state, code: code, blockId: 6)
+	helperStoreSlot(code, slotIndex: 5, src: X64Register.r8)
+	helperMovRegImm(code, dest: X64Register.rcx, value: GtStatusRunning)
+	helperStoreIndirect(code, base: X64Register.r8, disp: GtOffStatus, src: X64Register.rcx)
+	emitX64GtLoadCurrentP(code, dest: X64Register.rcx, rdataRelocs: rdataRelocs)
+	helperLoadIndirect(code, dest: X64Register.rcx, base: X64Register.rcx, disp: POffCurrentGt)  // from = self
+	helperLoadSlot(code, slotIndex: 5, dest: X64Register.rdx)  // to = g
+	helperEmitDirectCall(code, callFixups: callFixups, target: "__gt_context_switch")
+	helperLoadSlot(code, slotIndex: 5, dest: X64Register.rax)
+	helperMovRegImm(code, dest: X64Register.rcx, value: 1)
+	helperStoreIndirect(code, base: X64Register.rax, disp: GtOffIoYielded, src: X64Register.rcx)
+	helperEmitJmp(code, state: state, targetBlock: 5)  // re-loop
+
+	// block 7: mt_park.
+	helperMarkBlock(state, code: code, blockId: 7)
+	helperLoadGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.rcx, name: "__io_done_event")
+	helperMovRegImm(code, dest: X64Register.rdx, value: 50)
+	emitX64GtIatCallOnSystemStack(code, relocations: relocations, rdataRelocs: rdataRelocs, slotIndex: iatSlotIndex(IatSlot.waitForSingleObject))
+	helperEmitJmp(code, state: state, targetBlock: 5)
+
+	// block 8: resume — clear io_handle, socket = io_result_val; on error or
+	//   socket==0 → async_fail; else setsockopt(SO_UPDATE_CONNECT_CONTEXT) + wrap.
+	helperMarkBlock(state, code: code, blockId: 8)
+	emitX64GtLoadCurrentP(code, dest: X64Register.r10, rdataRelocs: rdataRelocs)
+	helperLoadIndirect(code, dest: X64Register.r10, base: X64Register.r10, disp: POffCurrentGt)
+	code.append(b"\x48\x31\xc0")  // xor rax, rax
+	helperStoreIndirect(code, base: X64Register.r10, disp: GtOffIoHandle, src: X64Register.rax)
+	helperLoadIndirect(code, dest: X64Register.rax, base: X64Register.r10, disp: GtOffIoResultVal)
+	helperStoreSlot(code, slotIndex: 2, src: X64Register.rax)  // socket
+	// io_error_code != 0 → async_fail.
+	helperLoadIndirect(code, dest: X64Register.rax, base: X64Register.r10, disp: GtOffIoErrorCode)
+	helperTestReg(code, reg: X64Register.rax)
+	helperEmitCondJump(code, state: state, opcode: 0x85, targetBlock: 9)  // jnz async_fail
+	// socket == 0 → async_fail.
+	helperLoadSlot(code, slotIndex: 2, dest: X64Register.rax)
+	helperTestReg(code, reg: X64Register.rax)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 9)  // jz async_fail
+	// setsockopt(socket, SOL_SOCKET, SO_UPDATE_CONNECT_CONTEXT, NULL, 0). 5 args → 0x30.
+	emitX64GtSystemStackEnter(code, rdataRelocs: rdataRelocs, frameSize: 0x30)
+	helperLoadSlot(code, slotIndex: 2, dest: X64Register.rcx)  // socket
+	helperMovRegImm(code, dest: X64Register.rdx, value: SolSocket)
+	helperMovRegImm(code, dest: X64Register.r8, value: SoUpdateConnectContext)
+	code.append(b"\x4d\x31\xc9")  // xor r9, r9 (optval = NULL)
+	code.append(b"\x48\x31\xc0")  // xor rax, rax
+	emitMovRspOffsetReg(code, offset: 0x20, srcReg: X64Register.rax)  // optlen = 0
+	helperEmitIatCall(code, relocations: relocations, slotIndex: iatSlotIndex(IatSlot.setSockOpt))
+	emitX64GtSystemStackLeave(code, rdataRelocs: rdataRelocs, frameSize: 0x30)
+	// Wrap: mptr = mm_alloc(8, &__destruct___ManagedSocket, 0); *(mptr+0) = socket.
+	helperMovRegImm(code, dest: X64Register.rcx, value: 8)
+	emitLeaFuncAddrOp(code, dest: X64Register.rdx, callFixups: callFixups, rdataRelocs: rdataRelocs, funcName: "__destruct___ManagedSocket")
+	code.append(b"\x48\x31\xc0")  // xor rax, rax (tag = 0)
+	helperEmitDirectCall(code, callFixups: callFixups, target: "mm_alloc")
+	emitMovRegRegOp(code, dest: X64Register.rax, src: X64Register.r8)  // mptr in r8
+	helperLoadSlot(code, slotIndex: 2, dest: X64Register.rcx)  // socket
+	helperStoreIndirect(code, base: X64Register.rax, disp: 0, src: X64Register.rcx)  // *(mptr+0) = socket
+	emitMovRegRegOp(code, dest: X64Register.r8, src: X64Register.rax)  // R8 = mptr
+	code.append(b"\x48\x31\xd2")  // xor rdx, rdx (flag = 0)
+	helperFinalize(state, code: code)
+	helperEpilogue(code)
+
+	// block 9: async_fail — closesocket if non-zero, then connectFailed.
+	helperMarkBlock(state, code: code, blockId: 9)
+	helperLoadSlot(code, slotIndex: 2, dest: X64Register.rcx)  // socket
+	helperTestReg(code, reg: X64Register.rcx)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 10)  // jz async_fail_noclose
+	emitX64GtIatCallOnSystemStack(code, relocations: relocations, rdataRelocs: rdataRelocs, slotIndex: iatSlotIndex(IatSlot.closeSocket))
+	// block 10: async_fail_noclose.
+	helperMarkBlock(state, code: code, blockId: 10)
+	helperMovRegImm(code, dest: X64Register.rdx, value: SockFlagConnectFailed)
+	helperEmitJmp(code, state: state, targetBlock: 17)  // make_err
+
+	// block 11: sock_ok — save socket; register with IOCP; bind; ConnectEx.
+	helperMarkBlock(state, code: code, blockId: 11)
+	helperStoreSlot(code, slotIndex: 2, src: X64Register.rax)  // socket
+	// CreateIoCompletionPort(socket, __io_iocp, 0, 0).
+	helperLoadSlot(code, slotIndex: 2, dest: X64Register.rcx)
+	helperLoadGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.rdx, name: "__io_iocp")
+	code.append(b"\x4d\x31\xc0")  // xor r8, r8
+	code.append(b"\x4d\x31\xc9")  // xor r9, r9
+	emitX64GtIatCallOnSystemStack(code, relocations: relocations, rdataRelocs: rdataRelocs, slotIndex: iatSlotIndex(IatSlot.createIoCompletionPort))
+	// SetFileCompletionNotificationModes(socket, FILE_SKIP_COMPLETION_PORT_ON_SUCCESS).
+	helperLoadSlot(code, slotIndex: 2, dest: X64Register.rcx)
+	helperMovRegImm(code, dest: X64Register.rdx, value: FileSkipCompletionPortOnSuccess)
+	emitX64GtIatCallOnSystemStack(code, relocations: relocations, rdataRelocs: rdataRelocs, slotIndex: iatSlotIndex(IatSlot.setFileCompletionNotificationModes))
+	// Build bind sockaddr_in (slots 6..7, 16 bytes): INADDR_ANY:0, family=AF_INET.
+	// Base (byte 0) = slot 7 (lower address); the struct spans [slot7, slot7+16).
+	code.append(b"\x48\x31\xc0")  // xor rax, rax
+	helperStoreSlot(code, slotIndex: 6, src: X64Register.rax)
+	helperStoreSlot(code, slotIndex: 7, src: X64Register.rax)
+	let bindOff = helperSlotRbpOffset(7 as VarSlot)
+	helperStoreWordImm(code, base: X64Register.rbp, disp: bindOff, value: AfInet)  // sin_family @0
+	// bind(socket, &bind_addr, 16).
+	helperLoadSlot(code, slotIndex: 2, dest: X64Register.rcx)
+	helperLeaStackSlot(code, slotIndex: 7, dest: X64Register.rdx)  // &bind_addr (base)
+	helperMovRegImm(code, dest: X64Register.r8, value: 16)
+	emitX64GtIatCallOnSystemStack(code, relocations: relocations, rdataRelocs: rdataRelocs, slotIndex: iatSlotIndex(IatSlot.bind))
+	// 0 = success → bind_ok; else bind_fail.
+	helperTestReg(code, reg: X64Register.rax)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 12)  // jz bind_ok
+	helperEmitJmp(code, state: state, targetBlock: 14)  // bind_fail
+
+	// block 12: bind_ok — build connect sockaddr_in, alloc ctx, ConnectEx.
+	helperMarkBlock(state, code: code, blockId: 12)
+	// connect sockaddr_in (slots 8..9, 16 bytes): family=AF_INET, port=htons(port), addr=ip.
+	// Base (byte 0) = slot 9 (lower address); the struct spans [slot9, slot9+16).
+	code.append(b"\x48\x31\xc0")  // xor rax, rax
+	helperStoreSlot(code, slotIndex: 8, src: X64Register.rax)
+	helperStoreSlot(code, slotIndex: 9, src: X64Register.rax)
+	let connOff = helperSlotRbpOffset(9 as VarSlot)
+	helperStoreWordImm(code, base: X64Register.rbp, disp: connOff, value: AfInet)  // sin_family @0
+	// sin_port = htons(port) @2: load port, ROL AX,8, store word.
+	helperLoadSlot(code, slotIndex: 1, dest: X64Register.rax)  // port
+	code.append(b"\x66\xc1\xc0\x08")  // rol ax, 8 (htons)
+	helperStoreWordRegLow(code, base: X64Register.rbp, disp: connOff + 2, src: X64Register.rax)
+	// sin_addr = resolved IP @4 (DWORD).
+	helperLoadSlot(code, slotIndex: 4, dest: X64Register.rax)
+	helperStoreDwordRegLow(code, base: X64Register.rbp, disp: connOff + 4, src: X64Register.rax)
+	// ctx = __slab_alloc(IoAsyncCtxSize).
+	helperMovRegImm(code, dest: X64Register.rcx, value: IoAsyncCtxSize)
+	helperEmitDirectCall(code, callFixups: callFixups, target: "__slab_alloc")
+	helperStoreSlot(code, slotIndex: 3, src: X64Register.r8)  // ctx
+	// ctx.waiter = self ; ctx.custom_result = socket ; self.io_handle = socket ; waiting.
+	emitX64GtLoadCurrentP(code, dest: X64Register.r10, rdataRelocs: rdataRelocs)
+	helperLoadIndirect(code, dest: X64Register.rdx, base: X64Register.r10, disp: POffCurrentGt)
+	helperStoreIndirect(code, base: X64Register.r8, disp: IoAsyncCtxOffWaiter, src: X64Register.rdx)
+	helperLoadSlot(code, slotIndex: 2, dest: X64Register.rax)  // socket
+	helperStoreIndirect(code, base: X64Register.r8, disp: IoAsyncCtxOffCustomResult, src: X64Register.rax)
+	helperStoreIndirect(code, base: X64Register.rdx, disp: GtOffIoHandle, src: X64Register.rax)
+	helperMovRegImm(code, dest: X64Register.rax, value: GtStatusWaiting)
+	helperStoreIndirect(code, base: X64Register.rdx, disp: GtOffStatus, src: X64Register.rax)
+	// ConnectEx(socket, &addr, 16, NULL, 0, NULL, ctx) via __io_connectex_ptr. 7 args
+	// (4 reg + 3 stack) → frame 0x40. CALL through the function pointer.
+	helperLoadGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.rax, name: "__io_connectex_ptr")
+	helperStoreSlot(code, slotIndex: 5, src: X64Register.rax)  // save fn ptr
+	emitX64GtSystemStackEnter(code, rdataRelocs: rdataRelocs, frameSize: 0x40)
+	helperLoadSlot(code, slotIndex: 2, dest: X64Register.rcx)  // socket
+	helperLeaStackSlot(code, slotIndex: 9, dest: X64Register.rdx)  // &sockaddr_in (base = slot 9)
+	helperMovRegImm(code, dest: X64Register.r8, value: 16)  // namelen
+	code.append(b"\x4d\x31\xc9")  // xor r9, r9 (lpSendBuffer = NULL)
+	code.append(b"\x48\x31\xc0")  // xor rax, rax
+	emitMovRspOffsetReg(code, offset: 0x20, srcReg: X64Register.rax)  // dwSendDataLength = 0
+	emitMovRspOffsetReg(code, offset: 0x28, srcReg: X64Register.rax)  // lpdwBytesSent = NULL
+	helperLoadSlot(code, slotIndex: 3, dest: X64Register.rax)  // ctx
+	emitMovRspOffsetReg(code, offset: 0x30, srcReg: X64Register.rax)  // lpOverlapped = ctx
+	helperLoadSlot(code, slotIndex: 5, dest: X64Register.rax)  // fn ptr
+	code.append(b"\xff\xd0")  // call rax
+	emitX64GtSystemStackLeave(code, rdataRelocs: rdataRelocs, frameSize: 0x40)
+	// TRUE (non-zero) → sync_done; FALSE → check WSAGetLastError.
+	helperTestReg(code, reg: X64Register.rax)
+	helperEmitCondJump(code, state: state, opcode: 0x85, targetBlock: 2)  // jnz sync_done
+	emitX64GtIatCallOnSystemStack(code, relocations: relocations, rdataRelocs: rdataRelocs, slotIndex: iatSlotIndex(IatSlot.wsaGetLastError))
+	helperCmpRegImm(code, reg: X64Register.rax, value: WsaIoPending)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 3)  // je yield
+	helperEmitJmp(code, state: state, targetBlock: 1)  // connect_err (rax = WSA error)
+
+	// block 13: sock_fail — WSASocketW failed. connectFailed (no socket to close).
+	helperMarkBlock(state, code: code, blockId: 13)
+	helperMovRegImm(code, dest: X64Register.rdx, value: SockFlagConnectFailed)
+	helperEmitJmp(code, state: state, targetBlock: 17)  // make_err
+
+	// block 14: bind_fail — closesocket, connectFailed.
+	helperMarkBlock(state, code: code, blockId: 14)
+	helperLoadSlot(code, slotIndex: 2, dest: X64Register.rcx)
+	emitX64GtIatCallOnSystemStack(code, relocations: relocations, rdataRelocs: rdataRelocs, slotIndex: iatSlotIndex(IatSlot.closeSocket))
+	helperMovRegImm(code, dest: X64Register.rdx, value: SockFlagConnectFailed)
+	helperEmitJmp(code, state: state, targetBlock: 17)  // make_err
+
+	// block 15: dns_fail — resolvedIP -1 → resolveFailed, -2 → connectFailed.
+	// No socket exists on this path, so set the flag directly and go straight to
+	// make_err (do NOT route through bind_fail/sock_fail — bind_fail would
+	// closesocket a garbage handle). Default the flag to resolveFailed, override
+	// to connectFailed when the sentinel is exactly -2 (TEST-NET-1).
+	helperMarkBlock(state, code: code, blockId: 15)
+	helperMovRegImm(code, dest: X64Register.rdx, value: SockFlagResolveFailed)
+	helperLoadSlot(code, slotIndex: 4, dest: X64Register.rax)
+	helperCmpRegImm(code, reg: X64Register.rax, value: 0xFFFFFFFFFFFFFFFE)  // -2 (TEST-NET-1)
+	helperEmitCondJump(code, state: state, opcode: 0x85, targetBlock: 17)  // jne make_err (resolveFailed)
+	helperMovRegImm(code, dest: X64Register.rdx, value: SockFlagConnectFailed)  // -2 → connectFailed
+	helperEmitJmp(code, state: state, targetBlock: 17)  // make_err
+
+	// block 16: cancelled — ERROR_OPERATION_ABORTED, connectFailed.
+	helperMarkBlock(state, code: code, blockId: 16)
+	emitX64GtLoadCurrentP(code, dest: X64Register.r10, rdataRelocs: rdataRelocs)
+	helperLoadIndirect(code, dest: X64Register.r10, base: X64Register.r10, disp: POffCurrentGt)
+	helperMovRegImm(code, dest: X64Register.rax, value: ErrorOperationAborted)
+	helperStoreIndirect(code, base: X64Register.r10, disp: GtOffIoErrorCode, src: X64Register.rax)
+	helperMovRegImm(code, dest: X64Register.rdx, value: SockFlagConnectFailed)
+	helperEmitJmp(code, state: state, targetBlock: 17)  // make_err
+
+	// block 17: make_err — RDX already holds the error flag. Allocate a heap
+	//   __ManagedSocket{_handle:0} so the scope-exit decref hits a real header
+	//   (the destructor no-ops on handle 0), then R8 = mptr, RDX = flag, ret.
+	helperMarkBlock(state, code: code, blockId: 17)
+	helperStoreSlot(code, slotIndex: 5, src: X64Register.rdx)  // save flag (mm_alloc clobbers rdx)
+	helperMovRegImm(code, dest: X64Register.rcx, value: 8)
+	emitLeaFuncAddrOp(code, dest: X64Register.rdx, callFixups: callFixups, rdataRelocs: rdataRelocs, funcName: "__destruct___ManagedSocket")
+	code.append(b"\x48\x31\xc0")  // xor rax, rax (tag = 0)
+	helperEmitDirectCall(code, callFixups: callFixups, target: "mm_alloc")
+	emitMovRegRegOp(code, dest: X64Register.rax, src: X64Register.r8)  // mptr in r8
+	code.append(b"\x48\x31\xc9")  // xor rcx, rcx
+	helperStoreIndirect(code, base: X64Register.rax, disp: 0, src: X64Register.rcx)  // _handle = 0
+	emitMovRegRegOp(code, dest: X64Register.r8, src: X64Register.rax)  // R8 = mptr
+	helperLoadSlot(code, slotIndex: 5, dest: X64Register.rdx)  // RDX = flag
+	helperFinalize(state, code: code)
+	helperEpilogue(code)
+end 'emitX64NetTcpConnect'
 
 // =============================================================================
 // 1. mrt_win32_translate_lasterror — calls GetLastError (IAT 27),
