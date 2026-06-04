@@ -962,11 +962,78 @@ func __gt_invoke 1 void
     std storeIndirect v73 8 v74
     v77 = std loadSlot 6
     std storeIndirect v73 16 v77
+    // Drop the spawn-time refs on managed args (paired with the lowering's
+    // per-arg `__mm_incref`). Mirrors the x64 trampoline: for each index i in
+    // 0..6 with count>i and managed_mask bit i set and arg[i] non-null, call
+    // mm_decref(arg[i]). Done here in store_result — the single convergence
+    // reached ONLY on a true completion (an asyncify suspend unwinds past this
+    // whole function, so the decref runs exactly once, after the entry returns).
+    // Slots: 7=i, 8=argBuf, 9=count, 10=managed_mask, 11=arg.
+    v710 = std loadSlot 2
+    std storeSlot 8 v710
+    v711 = std loadIndirect v710 0
+    std storeSlot 9 v711
+    v712 = std loadIndirect v710 8
+    std storeSlot 10 v712
+    v713 = std constI64 0
+    std storeSlot 7 v713
+    std br decref_loop
+
+  block decref_loop:
+    // i < count ? (cap at 7 below via the mask, which has no bits past 6).
+    v714 = std loadSlot 7
+    v715 = std loadSlot 9
+    v716 = std cmpI64Lt v714 v715
+    std condBr v716 decref_body decref_done
+
+  block decref_body:
+    // bit = managed_mask & (1 << i). Use a left-shift of 1 by i so no per-index
+    // unrolling is needed; mask bits live only in 0..6 (lowering cap).
+    v717 = std constI64 1
+    v718 = std loadSlot 7
+    v719 = std shlI64 v717 v718
+    v720 = std loadSlot 10
+    v721 = std andI64 v720 v719
+    v722 = std constI64 0
+    v723 = std cmpI64Ne v721 v722
+    std condBr v723 decref_managed decref_next
+
+  block decref_managed:
+    // arg = argBuf[16 + i*8].
+    v724 = std loadSlot 8
+    v725 = std loadSlot 7
+    v726 = std constI64 8
+    v727 = std mulI64 v725 v726
+    v728 = std constI64 16
+    v729 = std addI64 v727 v728
+    v730 = std addI64 v724 v729
+    v731 = std loadIndirect v730 0
+    std storeSlot 11 v731
+    // Null guard — a managed pointer can legitimately be NULL; mm_decref panics
+    // on NULL.
+    v732 = std constI64 0
+    v733 = std cmpI64Ne v731 v732
+    std condBr v733 decref_call decref_next
+
+  block decref_call:
+    v734 = std loadSlot 11
+    v735 = std call mm_decref v734
+    std br decref_next
+
+  block decref_next:
+    v736 = std loadSlot 7
+    v737 = std constI64 1
+    v738 = std addI64 v736 v737
+    std storeSlot 7 v738
+    std br decref_loop
+
+  block decref_done:
     // gt.status = 2 (completed)
-    v75 = std constI64 2
-    std storeIndirect v73 0 v75
-    v76 = std constI64 0
-    std ret v76
+    v75 = std loadSlot 0
+    v76 = std constI64 2
+    std storeIndirect v75 0 v76
+    v78 = std constI64 0
+    std ret v78
 end
 
 // __gt_alloc(fn, count, buf) -> gt: allocate + initialize a GT and its asyncify

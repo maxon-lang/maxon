@@ -292,6 +292,14 @@ export union X64Op
 	// listing the use+def operand (valReg) first and the use-only operand (addrReg)
 	// second, mirroring the existing twoAddr ops (addRegReg, etc.).
 	lockXaddMemReg(valReg X64VReg, addrReg X64VReg) = X64OpMeta{latency: 8, isMemory: true, isStore: true, isCall: false, setsFlags: true, pattern: OpPattern.twoAddr, implicitGprReads: 0, implicitGprDefs: 0}
+	// lockCmpxchgMemReg: `LOCK CMPXCHG qword [addr], new` — atomically compare RAX
+	// to [addr] and, if equal, store `new`; otherwise load [addr] into RAX. Both
+	// register operands (`newReg` in ModRM.reg, `addrReg` in ModRM.r/m) are
+	// read-only, so the pattern is `twoUse`. The accumulator RAX is BOTH read
+	// (the expected/old value) and written (clobbered with the observed value),
+	// modeled via the implicit RAX bit (ord 0 -> mask 1) on reads and defs so the
+	// regalloc reserves RAX across the instruction. ZF reflects the swap outcome.
+	lockCmpxchgMemReg(newReg X64VReg, addrReg X64VReg) = X64OpMeta{latency: 8, isMemory: true, isStore: true, isCall: false, setsFlags: true, pattern: OpPattern.twoUse, implicitGprReads: 1, implicitGprDefs: 1}
 	// Phase D2 entry-point bookkeeping: stash kernel-supplied argc/argv from
 	// rdi/rsi into the `__mrt_argc` / `__mrt_argv` globals. Inserted before the
 	// prologue of `mrt_start` (and `mrt_start_with_coverage`) by the prologue
@@ -448,6 +456,7 @@ export function x64OpToString(op X64Op, blocks IrBlockArray) returns String
 		lockIncMemory(addrReg) gives "x64.lock inc qword ptr [{x64VRegToString(addrReg)}]"
 		lockDecMemory(addrReg) gives "x64.lock dec qword ptr [{x64VRegToString(addrReg)}]"
 		lockXaddMemReg(valReg, addrReg) gives "x64.lock xadd qword ptr [{x64VRegToString(addrReg)}], {x64VRegToString(valReg)}"
+		lockCmpxchgMemReg(newReg, addrReg) gives "x64.lock cmpxchg qword ptr [{x64VRegToString(addrReg)}], {x64VRegToString(newReg)}"
 		stashEntryArgv gives "x64.stash_entry_argv [__mrt_argc],rdi; [__mrt_argv],rsi"
 		addRegMem(destReg, baseReg, offset) gives "x64.add {x64VRegToString(destReg)}, [{x64VRegToString(baseReg)}{formatSignedOffset(offset)}]"
 		subRegMem(destReg, baseReg, offset) gives "x64.sub {x64VRegToString(destReg)}, [{x64VRegToString(baseReg)}{formatSignedOffset(offset)}]"

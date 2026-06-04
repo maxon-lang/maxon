@@ -1431,6 +1431,7 @@ function sysOpTouchesSlot(op StdSystemOp) returns bool
 		atomicInc gives false
 		atomicDec gives false
 		atomicXadd gives false
+		atomicCas gives false
 		osLockInit gives false
 		osLockAcquire gives false
 		osLockRelease gives false
@@ -1634,6 +1635,7 @@ function bindSystemDefine(op StdSystemOp, remap ValueIdArray, nextId ValueId) re
 		atomicInc gives nextId
 		atomicDec gives nextId
 		atomicXadd(resultId, _, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
+		atomicCas(resultId, _, _, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
 		osLockInit gives nextId
 		osLockAcquire gives nextId
 		osLockRelease gives nextId
@@ -1824,6 +1826,7 @@ function rewriteSystem(op StdSystemOp, remap ValueIdArray) returns StdSystemOp
 		atomicInc(addrId) gives StdSystemOp.atomicInc(lookupRemap(remap, key: addrId))
 		atomicDec(addrId) gives StdSystemOp.atomicDec(lookupRemap(remap, key: addrId))
 		atomicXadd(resultId, addrId, valId) gives StdSystemOp.atomicXadd(lookupRemap(remap, key: resultId), addrId: lookupRemap(remap, key: addrId), valId: lookupRemap(remap, key: valId))
+		atomicCas(resultId, addrId, oldId, newId) gives StdSystemOp.atomicCas(lookupRemap(remap, key: resultId), addrId: lookupRemap(remap, key: addrId), oldId: lookupRemap(remap, key: oldId), newId: lookupRemap(remap, key: newId))
 		osLockInit(addrId) gives StdSystemOp.osLockInit(lookupRemap(remap, key: addrId))
 		osLockAcquire(addrId) gives StdSystemOp.osLockAcquire(lookupRemap(remap, key: addrId))
 		osLockRelease(addrId) gives StdSystemOp.osLockRelease(lookupRemap(remap, key: addrId))

@@ -326,6 +326,7 @@ export function arm64OpHasVirtualRegs(op Arm64Op) returns bool
 		atomicIncMem(addrReg) gives isVirtualArm64Gpr(addrReg)
 		atomicDecMem(addrReg) gives isVirtualArm64Gpr(addrReg)
 		atomicXaddMem(resultReg, addrReg, valReg) gives isVirtualArm64Gpr(resultReg) or isVirtualArm64Gpr(addrReg) or isVirtualArm64Gpr(valReg)
+		atomicCasMem(resultReg, addrReg, oldReg, newReg) gives isVirtualArm64Gpr(resultReg) or isVirtualArm64Gpr(addrReg) or isVirtualArm64Gpr(oldReg) or isVirtualArm64Gpr(newReg)
 		stashEntryArgv gives false
 		addRegImm(destReg, _) gives isVirtualArm64Gpr(destReg)
 		subRegImm(destReg, _) gives isVirtualArm64Gpr(destReg)
@@ -422,6 +423,7 @@ export function countArm64OpReads(counts RegIntArray, a64Op Arm64Op)
 		atomicIncMem(addrReg) then incUse(counts, id: arm64VRegId(addrReg))
 		atomicDecMem(addrReg) then incUse(counts, id: arm64VRegId(addrReg))
 		atomicXaddMem(_, addrReg, valReg) then countArm64TwoReads(counts, reg1: addrReg, reg2: valReg)
+		atomicCasMem(_, addrReg, oldReg, newReg) then countArm64ThreeReads(counts, reg1: addrReg, reg2: oldReg, reg3: newReg)
 		stashEntryArgv then break 'scan'
 		// Phase 2: immediate-form ALU — dest is both read and written.
 		addRegImm(destReg, _) then incUse(counts, id: arm64VRegId(destReg))
@@ -464,6 +466,7 @@ export function noteArm64OpDefs(defBlocks RegIntArray, blockIdx RegInt, a64Op Ar
 		// Phase 2 (x64-only) patterns — never appear on arm64 but the match must
 		// cover them for exhaustiveness.
 		baseUseUseDef to defUseImm then break 'patDef'
+		fourAddr then noteArm64FourAddr(defBlocks, blockIdx: blockIdx, op: a64Op)
 	end 'patDef'
 end 'noteArm64OpDefs'
 
@@ -491,6 +494,7 @@ function noteArm64FpDef(defBlocks RegIntArray, blockIdx RegInt, op Arm64Op, pat 
 		fpTwoAddr then break 'which'
 		movRegReg to csel then break 'which'
 		baseUseUseDef to defUseImm then break 'which'
+		fourAddr then break 'which'
 	end 'which'
 end 'noteArm64FpDef'
 
@@ -573,6 +577,14 @@ function noteArm64ThreeAddr(defBlocks RegIntArray, blockIdx RegInt, op Arm64Op)
 	end 'extract'
 end 'noteArm64ThreeAddr'
 
+// One def + three uses (fourAddr). atomicCasMem is the only such op.
+function noteArm64FourAddr(defBlocks RegIntArray, blockIdx RegInt, op Arm64Op)
+	match op 'extract'
+		atomicCasMem(dest, _, _, _) then noteArm64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		default panic("noteArm64: unexpected op for pattern")
+	end 'extract'
+end 'noteArm64FourAddr'
+
 function noteArm64DefUse(defBlocks RegIntArray, blockIdx RegInt, op Arm64Op)
 	match op 'extract'
 		negReg(dest, _) then noteArm64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
@@ -621,6 +633,12 @@ function countArm64TwoReads(counts RegIntArray, reg1 Arm64VReg, reg2 Arm64VReg)
 	incUse(counts, id: arm64VRegId(reg1))
 	incUse(counts, id: arm64VRegId(reg2))
 end 'countArm64TwoReads'
+
+function countArm64ThreeReads(counts RegIntArray, reg1 Arm64VReg, reg2 Arm64VReg, reg3 Arm64VReg)
+	incUse(counts, id: arm64VRegId(reg1))
+	incUse(counts, id: arm64VRegId(reg2))
+	incUse(counts, id: arm64VRegId(reg3))
+end 'countArm64ThreeReads'
 
 function countArm64FpTwoReads(counts RegIntArray, fp1 Arm64FpVReg, fp2 Arm64FpVReg)
 	incUse(counts, id: arm64FpVRegId(fp1))
@@ -703,6 +721,7 @@ export function recordArm64OpLastUses(positions RegIntArray, a64Op Arm64Op, opId
 		atomicIncMem(addrReg) then recordLastUse(positions, id: arm64VRegId(addrReg), opIdx: opIdx)
 		atomicDecMem(addrReg) then recordLastUse(positions, id: arm64VRegId(addrReg), opIdx: opIdx)
 		atomicXaddMem(_, addrReg, valReg) then recordArm64TwoLastUses(positions, reg1: addrReg, reg2: valReg, opIdx: opIdx)
+		atomicCasMem(_, addrReg, oldReg, newReg) then recordArm64ThreeLastUses(positions, reg1: addrReg, reg2: oldReg, reg3: newReg, opIdx: opIdx)
 		stashEntryArgv then break 'scan'
 		// Phase 2: immediate-form ALU — dest is both read and written.
 		addRegImm(destReg, _) then recordLastUse(positions, id: arm64VRegId(destReg), opIdx: opIdx)
@@ -717,6 +736,12 @@ function recordArm64TwoLastUses(positions RegIntArray, reg1 Arm64VReg, reg2 Arm6
 	recordLastUse(positions, id: arm64VRegId(reg1), opIdx: opIdx)
 	recordLastUse(positions, id: arm64VRegId(reg2), opIdx: opIdx)
 end 'recordArm64TwoLastUses'
+
+function recordArm64ThreeLastUses(positions RegIntArray, reg1 Arm64VReg, reg2 Arm64VReg, reg3 Arm64VReg, opIdx RegInt)
+	recordLastUse(positions, id: arm64VRegId(reg1), opIdx: opIdx)
+	recordLastUse(positions, id: arm64VRegId(reg2), opIdx: opIdx)
+	recordLastUse(positions, id: arm64VRegId(reg3), opIdx: opIdx)
+end 'recordArm64ThreeLastUses'
 
 function recordArm64FpTwoLastUses(positions RegIntArray, fp1 Arm64FpVReg, fp2 Arm64FpVReg, opIdx RegInt)
 	recordLastUse(positions, id: arm64FpVRegId(fp1), opIdx: opIdx)
@@ -891,6 +916,25 @@ function arm64OpWithPhysThreeAddr(op Arm64Op, d RegOrdinal, s1 RegOrdinal, s2 Re
 	end 'rebuild'
 end 'arm64OpWithPhysThreeAddr'
 
+// fourAddr operands: one def (resultReg) + three uses (addr, old, new).
+function arm64OpFourAddrOperands(op Arm64Op) returns (Arm64VReg, Arm64VReg, Arm64VReg, Arm64VReg)
+	return match op 'get'
+		atomicCasMem(resultReg, addrReg, oldReg, newReg) gives(resultReg, addrReg, oldReg, newReg)
+		default panic("arm64OpFourAddrOperands: unexpected op")
+	end 'get'
+end 'arm64OpFourAddrOperands'
+
+function arm64OpWithPhysFourAddr(op Arm64Op, d RegOrdinal, s1 RegOrdinal, s2 RegOrdinal, s3 RegOrdinal) returns Arm64Op
+	let dp = arm64PhysFromOrd(d)
+	let s1p = arm64PhysFromOrd(s1)
+	let s2p = arm64PhysFromOrd(s2)
+	let s3p = arm64PhysFromOrd(s3)
+	return match op 'rebuild'
+		atomicCasMem gives Arm64Op.atomicCasMem(dp, addrReg: s1p, oldReg: s2p, newReg: s3p)
+		default panic("arm64OpWithPhysFourAddr: not a fourAddr op")
+	end 'rebuild'
+end 'arm64OpWithPhysFourAddr'
+
 function arm64OpDefUseOperands(op Arm64Op) returns (Arm64VReg, Arm64VReg)
 	return match op 'get'
 		negReg(dest, src) gives(dest, src)
@@ -1042,6 +1086,7 @@ export function colorArm64Op(module TargetModule, a64Op Arm64Op, coloring Colori
 		singleDef then colorA64SingleDef(module, a64Op: a64Op, coloring: coloring, opRefs: opRefs)
 		singleUse then colorA64SingleUse(module, a64Op: a64Op, coloring: coloring, opRefs: opRefs)
 		threeAddr then colorA64ThreeAddr(module, a64Op: a64Op, coloring: coloring, opRefs: opRefs)
+		fourAddr then colorA64FourAddr(module, a64Op: a64Op, coloring: coloring, opRefs: opRefs)
 		defUse then colorA64DefUse(module, a64Op: a64Op, coloring: coloring, opRefs: opRefs)
 		twoUse then colorA64TwoUse(module, a64Op: a64Op, coloring: coloring, opRefs: opRefs)
 		singleUseNodef then colorA64SingleUseNodef(module, a64Op: a64Op, coloring: coloring, opRefs: opRefs)
@@ -1109,6 +1154,15 @@ function colorA64ThreeAddr(module TargetModule, a64Op Arm64Op, coloring Coloring
 	let s2 = colorArm64Gpr(src2, coloring: coloring)
 	pushArm64ToList(module, opRefs: opRefs, op: arm64OpWithPhysThreeAddr(a64Op, d: d, s1: s1, s2: s2))
 end 'colorA64ThreeAddr'
+
+function colorA64FourAddr(module TargetModule, a64Op Arm64Op, coloring ColoringResult, opRefs OpIndexList)
+	var (dest, src1, src2, src3) = arm64OpFourAddrOperands(a64Op)
+	let d = colorArm64Gpr(dest, coloring: coloring)
+	let s1 = colorArm64Gpr(src1, coloring: coloring)
+	let s2 = colorArm64Gpr(src2, coloring: coloring)
+	let s3 = colorArm64Gpr(src3, coloring: coloring)
+	pushArm64ToList(module, opRefs: opRefs, op: arm64OpWithPhysFourAddr(a64Op, d: d, s1: s1, s2: s2, s3: s3))
+end 'colorA64FourAddr'
 
 function colorA64DefUse(module TargetModule, a64Op Arm64Op, coloring ColoringResult, opRefs OpIndexList)
 	var (dest, src) = arm64OpDefUseOperands(a64Op)
@@ -1420,6 +1474,8 @@ export function remapArm64Op(a64Op Arm64Op, remap RegIntArray) returns Arm64Op
 
 		threeAddr gives remapA64ThreeAddr(a64Op, remap: remap)
 
+		fourAddr gives remapA64FourAddr(a64Op, remap: remap)
+
 		defUse gives remapA64DefUse(a64Op, remap: remap)
 
 		twoUse gives remapA64TwoUse(a64Op, remap: remap)
@@ -1524,6 +1580,13 @@ function remapA64ThreeAddr(a64Op Arm64Op, remap RegIntArray) returns Arm64Op
 		default panic("remapArm64: unexpected op for pattern")
 	end 'remap'
 end 'remapA64ThreeAddr'
+
+function remapA64FourAddr(a64Op Arm64Op, remap RegIntArray) returns Arm64Op
+	return match a64Op 'remap'
+		atomicCasMem(resultReg, addrReg, oldReg, newReg) gives Arm64Op.atomicCasMem(remapArm64Gpr(resultReg, remap: remap), addrReg: remapArm64Gpr(addrReg, remap: remap), oldReg: remapArm64Gpr(oldReg, remap: remap), newReg: remapArm64Gpr(newReg, remap: remap))
+		default panic("remapArm64: unexpected op for pattern")
+	end 'remap'
+end 'remapA64FourAddr'
 
 function remapA64DefUse(a64Op Arm64Op, remap RegIntArray) returns Arm64Op
 	return match a64Op 'remap'

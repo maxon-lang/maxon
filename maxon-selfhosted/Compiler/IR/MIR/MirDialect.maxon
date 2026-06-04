@@ -175,11 +175,12 @@ export union MirOp
 	osDirGetcwd(resultId ValueId, bufPtrId ValueId, bufSizeId ValueId) = MirOpMeta{isMemory: true, isStore: true, isCall: true, clobbersFlags: false, isParam: false, isCmp: false}
 	osDirMkdir(resultId ValueId, cStringPtrId ValueId, modeId ValueId) = MirOpMeta{isMemory: true, isStore: true, isCall: true, clobbersFlags: false, isParam: false, isCmp: false}
 	// Atomic 64-bit memory ops. atomicDec sets ZF when the result is 0.
-	// atomicXadd returns the prior value. All three clobber flags via the
-	// LOCK INC/DEC/XADD lowering.
+	// atomicXadd returns the prior value. atomicCas returns 1 on success / 0 on
+	// failure. All clobber flags via the LOCK INC/DEC/XADD/CMPXCHG lowering.
 	atomicInc(addrId ValueId) = MirOpMeta{isMemory: true, isStore: true, isCall: false, clobbersFlags: true, isParam: false, isCmp: false}
 	atomicDec(addrId ValueId) = MirOpMeta{isMemory: true, isStore: true, isCall: false, clobbersFlags: true, isParam: false, isCmp: false}
 	atomicXadd(resultId ValueId, addrId ValueId, valId ValueId) = MirOpMeta{isMemory: true, isStore: true, isCall: false, clobbersFlags: true, isParam: false, isCmp: false}
+	atomicCas(resultId ValueId, addrId ValueId, oldId ValueId, newId ValueId) = MirOpMeta{isMemory: true, isStore: true, isCall: false, clobbersFlags: true, isParam: false, isCmp: false}
 	// Platform locks. Init is a no-op on Linux; spinlock acquire/release on Linux,
 	// CRITICAL_SECTION calls on Windows.
 	osLockInit(addrId ValueId) = MirOpMeta{isMemory: true, isStore: true, isCall: true, clobbersFlags: false, isParam: false, isCmp: false}
@@ -294,6 +295,7 @@ export function mirOpToString(op MirOp, blocks IrBlockArray) returns String
 		atomicInc(addrId) gives "mir.atomic_inc %{addrId}"
 		atomicDec(addrId) gives "mir.atomic_dec %{addrId}"
 		atomicXadd(resultId, addrId, valId) gives "%{resultId} = mir.atomic_xadd %{addrId}, %{valId}"
+		atomicCas(resultId, addrId, oldId, newId) gives "%{resultId} = mir.atomic_cas %{addrId}, %{oldId}, %{newId}"
 		osLockInit(addrId) gives "mir.os_lock_init %{addrId}"
 		osLockAcquire(addrId) gives "mir.os_lock_acquire %{addrId}"
 		osLockRelease(addrId) gives "mir.os_lock_release %{addrId}"

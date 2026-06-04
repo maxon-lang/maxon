@@ -232,6 +232,12 @@ export union Arm64Op
 	atomicIncMem(addrReg Arm64VReg) = Arm64OpMeta{latency: 8, isMemory: true, isStore: true, isCall: false, setsFlags: false, pattern: OpPattern.singleUseNodef, implicitGprReads: 0, implicitGprDefs: 0}
 	atomicDecMem(addrReg Arm64VReg) = Arm64OpMeta{latency: 8, isMemory: true, isStore: true, isCall: false, setsFlags: false, pattern: OpPattern.singleUseNodef, implicitGprReads: 0, implicitGprDefs: 0}
 	atomicXaddMem(resultReg Arm64VReg, addrReg Arm64VReg, valReg Arm64VReg) = Arm64OpMeta{latency: 8, isMemory: true, isStore: true, isCall: false, setsFlags: false, pattern: OpPattern.threeAddr, implicitGprReads: 0, implicitGprDefs: 0}
+	// atomicCasMem: compare-and-swap emitted as an LDAXR/CMP/B.NE/STLXR/CBNZ retry
+	// loop followed by CSET. `resultReg` receives 1 on success / 0 on failure;
+	// `addrReg`/`oldReg`/`newReg` are read-only inputs. The LL/SC scratch (x16/x17)
+	// lives outside the regalloc pool so no implicit defs are tracked, mirroring
+	// atomicXaddMem. Pattern is `fourAddr` (one def + three uses).
+	atomicCasMem(resultReg Arm64VReg, addrReg Arm64VReg, oldReg Arm64VReg, newReg Arm64VReg) = Arm64OpMeta{latency: 8, isMemory: true, isStore: true, isCall: false, setsFlags: false, pattern: OpPattern.fourAddr, implicitGprReads: 0, implicitGprDefs: 0}
 	// Phase D2 entry-point bookkeeping: stash kernel-supplied argc/argv from
 	// x0/x1 (AArch64 ELF entry convention) into `__mrt_argc` / `__mrt_argv`.
 	// Only emitted on Linux/macOS for `mrt_start` / `mrt_start_with_coverage`
@@ -342,6 +348,7 @@ export function arm64OpToString(op Arm64Op, blocks IrBlockArray) returns String
 		atomicIncMem(addrReg) gives "arm64.atomic_inc [{arm64VRegToString(addrReg)}]"
 		atomicDecMem(addrReg) gives "arm64.atomic_dec [{arm64VRegToString(addrReg)}]"
 		atomicXaddMem(resultReg, addrReg, valReg) gives "arm64.atomic_xadd {arm64VRegToString(resultReg)}, [{arm64VRegToString(addrReg)}], {arm64VRegToString(valReg)}"
+		atomicCasMem(resultReg, addrReg, oldReg, newReg) gives "arm64.atomic_cas {arm64VRegToString(resultReg)}, [{arm64VRegToString(addrReg)}], {arm64VRegToString(oldReg)}, {arm64VRegToString(newReg)}"
 		stashEntryArgv gives "arm64.stash_entry_argv [__mrt_argc],x0; [__mrt_argv],x1"
 		addRegImm(destReg, value) gives "arm64.add {arm64VRegToString(destReg)}, {arm64VRegToString(destReg)}, #{value}"
 		subRegImm(destReg, value) gives "arm64.sub {arm64VRegToString(destReg)}, {arm64VRegToString(destReg)}, #{value}"

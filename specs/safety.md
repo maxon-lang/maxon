@@ -24,6 +24,7 @@ fires, the process always exits.
 ## Tests
 
 <!-- test: divide-by-zero -->
+<!-- targets: x64-windows -->
 ### Integer divide-by-zero produces a clean panic
 ```maxon
 function main() returns ExitCode
@@ -40,6 +41,7 @@ panic: integer divide by zero
 ```
 
 <!-- test: mod-by-zero -->
+<!-- targets: x64-windows -->
 ### Integer modulo-by-zero produces a clean panic
 ```maxon
 function main() returns ExitCode
@@ -56,6 +58,7 @@ panic: integer divide by zero
 ```
 
 <!-- test: force-segfault -->
+<!-- targets: x64-windows -->
 ### Deliberate access violation produces a clean panic
 ```maxon
 function main() returns ExitCode

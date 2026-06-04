@@ -1966,6 +1966,7 @@ type WasmFunctionLowering
 			atomicInc(addrId) then emitAtomicAddOne(addrId, isSubtract: false)
 			atomicDec(addrId) then emitAtomicAddOne(addrId, isSubtract: true)
 			atomicXadd(resultId, addrId, valId) then emitAtomicXadd(resultId, addrId: addrId, valId: valId)
+			atomicCas(resultId, addrId, oldId, newId) then emitAtomicCas(resultId, addrId: addrId, oldId: oldId, newId: newId)
 			osLockInit then nop()
 			osLockAcquire then nop()
 			osLockRelease then nop()
@@ -2942,6 +2943,34 @@ type WasmFunctionLowering
 		body.push(opI64Add)
 		emitI64StoreAtZero()
 	end 'emitAtomicXadd'
+
+	// Compare-and-swap: result = (*addr == old) ? 1 : 0, and on a match write
+	// `new`. wasm32-wasi MVP is single-threaded, so a plain compare + conditional
+	// store is correct; the x86 LOCK CMPXCHG and ARM64 LL/SC loop only exist to
+	// guard against contention that cannot occur here.
+	// TODO(wasm-threads): swap for the 0xFE-prefixed atomic.rmw.cmpxchg op if the
+	// threads target ever lands.
+	function emitAtomicCas(resultId ValueId, addrId ValueId, oldId ValueId, newId ValueId)
+		// result = i64.extend_u(i64.eq(*addr, old))  -> 1 on match, 0 otherwise
+		emitLocalAsI32(addrId)
+		emitI64LoadAtZero()
+		body.push(opLocalGet)
+		writeUleb128(body, value: oldId as Wasm32Index)
+		body.push(opI64Eq)
+		body.push(opI64ExtendI32U)
+		emitLocalSet(resultId)
+
+		// *addr = select(new, *addr, result) — keeps the old word on a mismatch.
+		// wasm `select` pops [val1, val2, cond] and yields val1 when cond != 0.
+		emitLocalAsI32(addrId)
+		body.push(opLocalGet)
+		writeUleb128(body, value: newId as Wasm32Index)
+		emitLocalAsI32(addrId)
+		emitI64LoadAtZero()
+		emitLocalAsI32(resultId)
+		body.push(opSelect)
+		emitI64StoreAtZero()
+	end 'emitAtomicCas'
 
 	function emitFuncAddr(resultId ValueId, name String)
 		// Stage F (closures): emit the function's table index as an i32,

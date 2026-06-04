@@ -180,6 +180,7 @@ function arm64ScanOpForCalleeSaved(op Arm64Op, gprSeen RegIntArray, fpSeen RegIn
 		atomicIncMem(addrReg) then arm64MarkGprIfCalleeSaved(gprSeen, vreg: addrReg)
 		atomicDecMem(addrReg) then arm64MarkGprIfCalleeSaved(gprSeen, vreg: addrReg)
 		atomicXaddMem(resultReg, addrReg, valReg) then arm64ScanThreeGprs(gprSeen, a: resultReg, b: addrReg, c: valReg)
+		atomicCasMem(resultReg, addrReg, oldReg, newReg) then arm64ScanFourGprs(gprSeen, a: resultReg, b: addrReg, c: oldReg, d: newReg)
 		stashEntryArgv then break 'scan'
 		addRegImm(destReg, _) then arm64MarkGprIfCalleeSaved(gprSeen, vreg: destReg)
 		subRegImm(destReg, _) then arm64MarkGprIfCalleeSaved(gprSeen, vreg: destReg)
@@ -199,6 +200,13 @@ function arm64ScanThreeGprs(seen RegIntArray, a Arm64VReg, b Arm64VReg, c Arm64V
 	arm64MarkGprIfCalleeSaved(seen, vreg: b)
 	arm64MarkGprIfCalleeSaved(seen, vreg: c)
 end 'arm64ScanThreeGprs'
+
+function arm64ScanFourGprs(seen RegIntArray, a Arm64VReg, b Arm64VReg, c Arm64VReg, d Arm64VReg)
+	arm64MarkGprIfCalleeSaved(seen, vreg: a)
+	arm64MarkGprIfCalleeSaved(seen, vreg: b)
+	arm64MarkGprIfCalleeSaved(seen, vreg: c)
+	arm64MarkGprIfCalleeSaved(seen, vreg: d)
+end 'arm64ScanFourGprs'
 
 function arm64ScanTwoFps(seen RegIntArray, a Arm64FpVReg, b Arm64FpVReg)
 	arm64MarkFpIfCalleeSaved(seen, vreg: a)

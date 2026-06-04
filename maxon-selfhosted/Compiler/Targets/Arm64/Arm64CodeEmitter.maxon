@@ -413,6 +413,14 @@ export function arm64EmitCondBranch(code ByteArray, cond MachineWord)
 	arm64EmitInsn(code, insn: insn)
 end 'arm64EmitCondBranch'
 
+// B.cond with an explicit imm19 branch offset (in instructions, sign-extended).
+// Unlike arm64EmitCondBranch this needs no later patching — used by the inline
+// atomic CAS LL/SC loop whose branch targets are fixed relative distances.
+export function arm64EmitCondBranchOffset(code ByteArray, cond MachineWord, imm19 MachineWord)
+	let insn = 0x54000000 or ((imm19 and 0x7FFFF) shl 5) or cond
+	arm64EmitInsn(code, insn: insn)
+end 'arm64EmitCondBranchOffset'
+
 // B (unconditional) with imm26 placeholder (patched later)
 export function arm64EmitBranch(code ByteArray)
 	code.append(b"\x00\x00\x00\x14")
@@ -1301,6 +1309,7 @@ function emitArm64Instruction(op Arm64Op, code ByteArray, jumpFixups BlockIdFixu
 		atomicIncMem(addrReg) then arm64EmitAtomicIncMem(code, addrReg: addrReg)
 		atomicDecMem(addrReg) then arm64EmitAtomicDecMem(code, addrReg: addrReg)
 		atomicXaddMem(resultReg, addrReg, valReg) then arm64EmitAtomicXaddMem(code, resultReg: resultReg, addrReg: addrReg, valReg: valReg)
+		atomicCasMem(resultReg, addrReg, oldReg, newReg) then arm64EmitAtomicCasMem(code, resultReg: resultReg, addrReg: addrReg, oldReg: oldReg, newReg: newReg)
 		stashEntryArgv then arm64EmitStashEntryArgvOp(code, rdataRelocs: rdataRelocs)
 		// Phase 2 dialect groundwork. No codegen path emits these yet — Phase 3's
 		// memory-operand fold capability flag is false on arm64, so the fold pass
@@ -1868,6 +1877,38 @@ function arm64EmitAtomicXaddMem(code ByteArray, resultReg Arm64VReg, addrReg Arm
 	// MOV Xresult, X16 (ORR Xresult, XZR, X16)
 	arm64EmitMovRegReg(code, rd: rd, rn: 16)
 end 'arm64EmitAtomicXaddMem'
+
+// atomicCasMem(resultReg, addrReg, oldReg, newReg):
+//   .loop:                                  ; instr 0
+//     LDAXR x16, [Xaddr]                     ; x16 = observed
+//     CMP   x16, Xold                        ; instr 1 — EQ iff observed == old
+//     B.NE  .exit                            ; instr 2 — mismatch: leave NE, bail
+//     STLXR w17, Xnew, [Xaddr]               ; instr 3 — w17 = store status
+//     CBNZ  w17, .loop                       ; instr 4 — retry on lost reservation
+//   .exit:                                   ; instr 5
+//     CSET  Xresult, EQ                      ; result = 1 iff last CMP was EQ
+//
+// STLXR and CBNZ leave the condition flags untouched, so at `.exit` the flags
+// still reflect the final CMP: EQ on the success path (store landed), NE on the
+// mismatch path. The B.NE forward offset is +3 instructions (instr 2 -> instr 5);
+// the CBNZ backward offset is -4 instructions (instr 4 -> instr 0, encoded as the
+// 19-bit two's complement 0x7FFFC). x16/x17 are LL/SC scratch outside the
+// regalloc pool, matching the inc/dec/xadd emitters.
+function arm64EmitAtomicCasMem(code ByteArray, resultReg Arm64VReg, addrReg Arm64VReg, oldReg Arm64VReg, newReg Arm64VReg)
+	let rd = resolveArm64Gpr(resultReg).rawValue
+	let rn = resolveArm64Gpr(addrReg).rawValue
+	let ro = resolveArm64Gpr(oldReg).rawValue
+	let rv = resolveArm64Gpr(newReg).rawValue
+	arm64EmitLdaxr(code, rt: 16, rn: rn)
+	arm64EmitCmp(code, rn: 16, rm: ro)
+	// B.NE +3 instructions to the CSET (skips STLXR + CBNZ). cond ne = 1.
+	arm64EmitCondBranchOffset(code, cond: 1, imm19: 3)
+	arm64EmitStlxr(code, rs: 17, rt: rv, rn: rn)
+	// CBNZ W17, -4 instructions back to LDAXR.
+	arm64EmitCbnzW(code, rn: 17, imm19: 0x7FFFC)
+	// CSET Xresult, EQ — 1 on the matched-and-stored path, 0 on mismatch. cond eq = 0.
+	arm64EmitCset(code, rd: rd, cond: 0)
+end 'arm64EmitAtomicCasMem'
 
 // leaFromStack: ADD Xd, X29, #stackOffset (PC-neutral address materialization).
 function arm64EmitLeaFromStackOp(code ByteArray, dest Arm64VReg, stackOffset MachineWord)

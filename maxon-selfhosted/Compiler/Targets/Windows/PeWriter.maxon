@@ -122,6 +122,30 @@ export union IatSlot
 	updateProcThreadAttribute
 	deleteProcThreadAttributeList
 
+	// CPU-fault diagnostics (Tier 4 fault handler). kernel32!AddVectoredException-
+	// Handler registers the runtime's VEH thunk at __gt_init time. Appended at the
+	// end of the kernel32 run so existing kernel32 slot ordinals stay stable
+	// (shell32 below shifts by one).
+	addVectoredExceptionHandler
+
+	// Tier 4 async-I/O IOCP completion machinery (x64-Windows `emitX64IoRuntime`).
+	// All kernel32. The overlapped read/write path uses SetFileCompletionNotification-
+	// Modes (FILE_SKIP_COMPLETION_PORT_ON_SUCCESS) + GetOverlappedResult; the sync-
+	// fallback worker drives the ANSI filesystem ops (GetFileAttributesA, DeleteFileA,
+	// FindFirstFileA / FindNextFileA, CreateDirectoryA, GetCurrentDirectoryA). Appended
+	// at the end of the kernel32 run so existing kernel32 slot ordinals stay stable
+	// (shell32 below shifts by eight). INERT until async-I/O specs submit work — the
+	// emitted IOCP functions reference these, but no lowering invokes those functions
+	// yet, so the slots are never hit at runtime.
+	setFileCompletionNotificationModes
+	getOverlappedResult
+	getFileAttributesA
+	deleteFileA
+	findFirstFileA
+	findNextFileA
+	createDirectoryA
+	getCurrentDirectoryA
+
 	// shell32 — single entry, lives at the end of the IAT in its own
 	// import-directory DLL.
 	commandLineToArgvW
@@ -194,13 +218,22 @@ export function iatSlotIndex(slot IatSlot) returns MachineWord
 		initializeProcThreadAttributeList gives 57
 		updateProcThreadAttribute gives 58
 		deleteProcThreadAttributeList gives 59
-		commandLineToArgvW gives 60
+		addVectoredExceptionHandler gives 60
+		setFileCompletionNotificationModes gives 61
+		getOverlappedResult gives 62
+		getFileAttributesA gives 63
+		deleteFileA gives 64
+		findFirstFileA gives 65
+		findNextFileA gives 66
+		createDirectoryA gives 67
+		getCurrentDirectoryA gives 68
+		commandLineToArgvW gives 69
 	end 's'
 end 'iatSlotIndex'
 
 // Total IAT slot count — kernel32 run + shell32 run. Mirrors the last
 // enum case's index + 1.
-let IAT_SLOT_COUNT = 61
+let IAT_SLOT_COUNT = 70
 
 type ImportSection
 	export var data as ByteArray
@@ -220,8 +253,8 @@ end 'ImportSection'
 //   IAT  [k32 entries] 0  [s32 entries] 0
 //   ILT  [k32 entries] 0  [s32 entries] 0
 // followed by the Import Directory (3 entries: kernel32, shell32, null).
-let KERNEL32_IAT_END = 60  // exclusive; slots 0..59 are kernel32
-let SHELL32_IAT_START = 60  // slot 60 is shell32 (commandLineToArgvW)
+let KERNEL32_IAT_END = 69  // exclusive; slots 0..68 are kernel32
+let SHELL32_IAT_START = 69  // slot 69 is shell32 (commandLineToArgvW)
 let IMPORT_DIRECTORY_ENTRIES = 2
 
 // kernel32 import names in slot order (slots 0..KERNEL32_IAT_END-1). MUST stay
@@ -288,6 +321,15 @@ function kernel32ImportNames() returns StringArray
 	n.push("InitializeProcThreadAttributeList")
 	n.push("UpdateProcThreadAttribute")
 	n.push("DeleteProcThreadAttributeList")
+	n.push("AddVectoredExceptionHandler")
+	n.push("SetFileCompletionNotificationModes")
+	n.push("GetOverlappedResult")
+	n.push("GetFileAttributesA")
+	n.push("DeleteFileA")
+	n.push("FindFirstFileA")
+	n.push("FindNextFileA")
+	n.push("CreateDirectoryA")
+	n.push("GetCurrentDirectoryA")
 	return n
 end 'kernel32ImportNames'
 

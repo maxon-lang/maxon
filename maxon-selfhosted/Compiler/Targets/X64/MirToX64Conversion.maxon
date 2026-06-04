@@ -182,6 +182,7 @@ function countMirNonAbsorbUses(op MirOp, uc UseCountMap, constMap ConstMap)
 		atomicInc(addrId) then ucIncrement(uc, valueId: addrId)
 		atomicDec(addrId) then ucIncrement(uc, valueId: addrId)
 		atomicXadd(_, addrId, valId) then ucIncrementTwo(uc, a: addrId, b: valId)
+		atomicCas(_, addrId, oldId, newId) then ucIncrementThree(uc, a: addrId, b: oldId, c: newId)
 		osLockInit(addrId) then ucIncrement(uc, valueId: addrId)
 		osLockAcquire(addrId) then ucIncrement(uc, valueId: addrId)
 		osLockRelease(addrId) then ucIncrement(uc, valueId: addrId)
@@ -352,6 +353,7 @@ function countMirOpUses(op MirOp, uc UseCountMap)
 		atomicInc(addrId) then ucIncrement(uc, valueId: addrId)
 		atomicDec(addrId) then ucIncrement(uc, valueId: addrId)
 		atomicXadd(_, addrId, valId) then ucIncrementTwo(uc, a: addrId, b: valId)
+		atomicCas(_, addrId, oldId, newId) then ucIncrementThree(uc, a: addrId, b: oldId, c: newId)
 		osLockInit(addrId) then ucIncrement(uc, valueId: addrId)
 		osLockAcquire(addrId) then ucIncrement(uc, valueId: addrId)
 		osLockRelease(addrId) then ucIncrement(uc, valueId: addrId)
@@ -448,6 +450,7 @@ function mirSysTempCount(op MirOp) returns SlotIndex
 		atomicInc gives 0
 		atomicDec gives 0
 		atomicXadd gives 1
+		atomicCas gives 1
 		// osLockInit: InitializeCriticalSection(addr) — 1 iatCall arg on Windows.
 		// On Linux it's a zero-fill no-op.
 		osLockInit gives 2
@@ -1644,6 +1647,7 @@ type X64FunctionLowering
 			atomicInc(addrId) then lowerAtomicInc(addrId, dstBlock: dstBlock)
 			atomicDec(addrId) then lowerAtomicDec(addrId, dstBlock: dstBlock)
 			atomicXadd(resultId, addrId, valId) then lowerAtomicXadd(resultId, addrId: addrId, valId: valId, dstBlock: dstBlock)
+			atomicCas(resultId, addrId, oldId, newId) then lowerAtomicCas(resultId, addrId: addrId, oldId: oldId, newId: newId, dstBlock: dstBlock)
 			osLockInit(addrId) then lowerOsLockInit(addrId, dstBlock: dstBlock)
 			osLockAcquire(addrId) then lowerOsLockAcquire(addrId, dstBlock: dstBlock)
 			osLockRelease(addrId) then lowerOsLockRelease(addrId, dstBlock: dstBlock)
@@ -2584,11 +2588,43 @@ type X64FunctionLowering
 		appendX64Op(target, block: dstBlock, op: X64Op.lockXaddMemReg(resultReg, addrReg: addrReg))
 	end 'lowerAtomicXadd'
 
+	// Atomic compare-and-swap: `LOCK CMPXCHG qword [addr], new`, then derive the
+	// boolean result from ZF. x86 CMPXCHG forces the expected (old) value into the
+	// implicit accumulator RAX and clobbers RAX (it loads the observed memory value
+	// there on failure). So, mirroring lowerDivRem's fixed-register discipline:
+	//   1. mov rax, old                  ; pin the comparand into the accumulator
+	//   2. lock cmpxchg [addr], new      ; ZF=1 + store new on match, else ZF=0
+	//   3. setz result                   ; result = 1 on success / 0 on failure
+	// The `setcc` op already zero-extends its byte result to the full 64-bit
+	// register (see emitSetccOp), so a single setcc yields a clean 0/1. The
+	// implicit RAX read+def declared on lockCmpxchgMemReg keeps the regalloc from
+	// coloring `old`/`addr`/`new`/`result` into the clobbered RAX.
+	function lowerAtomicCas(resultId ValueId, addrId ValueId, oldId ValueId, newId ValueId, dstBlock IrBlock)
+		let rax = physReg(X64Register.rax)
+		let addrReg = X64VReg.virtual(addrId)
+		let newReg = X64VReg.virtual(newId)
+		let resultReg = X64VReg.virtual(resultId)
+		appendX64Op(target, block: dstBlock, op: X64Op.movRegReg(rax, srcReg: X64VReg.virtual(oldId)))
+		appendX64Op(target, block: dstBlock, op: X64Op.lockCmpxchgMemReg(newReg, addrReg: addrReg))
+		appendX64Op(target, block: dstBlock, op: X64Op.setcc(resultReg, condition: X64SetccCondition.e))
+	end 'lowerAtomicCas'
+
 	// osLockInit / osLockAcquire / osLockRelease: thin wrappers around the
 	// platform's mutex primitive. Windows uses CRITICAL_SECTION (IAT slots
 	// 8/9/10). Linux is a no-op for now — real recursive spinlocks land
 	// in step 6a.23 once runtime.std supports the helper functions; the
 	// 6a.20 spec tests run on x64-windows where the IAT path is exercised.
+	//
+	// Init runs once at startup on the main OS thread, so a direct
+	// InitializeCriticalSection IAT call on the current (large) stack is safe.
+	// Acquire/Release, however, wrap the hot `__slab_alloc`/`__slab_free` body
+	// and run from green threads on 2 KB GT stacks. A direct EnterCriticalSection
+	// is a user-mode fast path only while UNCONTENDED; under contention (e.g.
+	// concurrent async `Subprocess.run` hammering `__slab_lock`) it makes a
+	// blocking kernel wait that probes the TIB stack bounds — corrupting the tiny
+	// GT stack (flaky 0xC0000005). So acquire/release route through the runtime
+	// leaf helpers `__rt_oslock_acquire`/`__rt_oslock_release`, which run the
+	// kernel call on the per-P system stack when on a GT (and directly otherwise).
 	function lowerOsLockInit(addrId ValueId, dstBlock IrBlock)
 		match osDesc.os 'pickOs'
 			windows then lowerOsLockCallWindows(addrId, slotIndex: iatSlotIndex(IatSlot.initializeCriticalSection), dstBlock: dstBlock)
@@ -2600,7 +2636,7 @@ type X64FunctionLowering
 
 	function lowerOsLockAcquire(addrId ValueId, dstBlock IrBlock)
 		match osDesc.os 'pickOs'
-			windows then lowerOsLockCallWindows(addrId, slotIndex: iatSlotIndex(IatSlot.enterCriticalSection), dstBlock: dstBlock)
+			windows then lowerOsLockCallDirectWindows(addrId, calleeName: "__rt_oslock_acquire", dstBlock: dstBlock)
 			linux then break 'pickOs'  // real spinlock lowering deferred to step 6a.23
 			macos then panic("osLockAcquire not supported on x64 macos target")
 			wasi then panic("osLockAcquire not supported on x64 wasi target")
@@ -2609,7 +2645,7 @@ type X64FunctionLowering
 
 	function lowerOsLockRelease(addrId ValueId, dstBlock IrBlock)
 		match osDesc.os 'pickOs'
-			windows then lowerOsLockCallWindows(addrId, slotIndex: iatSlotIndex(IatSlot.leaveCriticalSection), dstBlock: dstBlock)
+			windows then lowerOsLockCallDirectWindows(addrId, calleeName: "__rt_oslock_release", dstBlock: dstBlock)
 			linux then break 'pickOs'  // real spinlock lowering deferred to step 6a.23
 			macos then panic("osLockRelease not supported on x64 macos target")
 			wasi then panic("osLockRelease not supported on x64 wasi target")
@@ -2617,8 +2653,7 @@ type X64FunctionLowering
 	end 'lowerOsLockRelease'
 
 	// Shared helper: emit a single-arg IAT call passing `addr` to a kernel32
-	// CRITICAL_SECTION routine. Used for InitializeCriticalSection /
-	// EnterCriticalSection / LeaveCriticalSection.
+	// CRITICAL_SECTION routine. Used for InitializeCriticalSection (osLockInit).
 	function lowerOsLockCallWindows(addrId ValueId, slotIndex MachineWord, dstBlock IrBlock)
 		let addrSlot = ensureValueInSlot(addrId, dstBlock: dstBlock)
 		var args = VarSlotArray.create()
@@ -2627,6 +2662,21 @@ type X64FunctionLowering
 		appendX64Op(target, block: dstBlock, op: X64Op.iatCall(resultSlot, slotIndex: slotIndex, argSlots: args))
 		nextTempSlot = nextTempSlot + 1
 	end 'lowerOsLockCallWindows'
+
+	// Shared helper: emit an internal-ABI direct call to one of the runtime's
+	// `__rt_oslock_*` leaf helpers, passing the lock address in the first
+	// call-convention GPR (rcx). The helper runs the contended kernel call on the
+	// per-P system stack when on a green thread (emitX64GtIatCallOnSystemStack);
+	// see lowerOsLockAcquire/lowerOsLockRelease for why the direct IAT call is
+	// unsafe from a GT. `callDirect` marks the full caller-saved set clobbered
+	// (X64Op.callDirect implicitGprDefs), matching every other call in the slab
+	// allocator body, so the regalloc spills the values the allocator keeps live
+	// across the lock exactly as it does for `__slab_alloc_class` etc.
+	function lowerOsLockCallDirectWindows(addrId ValueId, calleeName String, dstBlock IrBlock)
+		let argReg = getCallConvGpr(0)  // rcx — also where EnterCriticalSection/LeaveCriticalSection read their arg (Win64)
+		appendX64Op(target, block: dstBlock, op: X64Op.movRegReg(physReg(argReg), srcReg: X64VReg.virtual(addrId)))
+		appendX64Op(target, block: dstBlock, op: X64Op.callDirect(calleeName))
+	end 'lowerOsLockCallDirectWindows'
 end 'X64FunctionLowering'
 
 // ============================================================

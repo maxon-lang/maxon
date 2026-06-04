@@ -273,6 +273,7 @@ export function x64OpHasVirtualRegs(op X64Op) returns bool
 		lockIncMemory(addrReg) gives isVirtualGpr(addrReg)
 		lockDecMemory(addrReg) gives isVirtualGpr(addrReg)
 		lockXaddMemReg(valReg, addrReg) gives isVirtualGpr(valReg) or isVirtualGpr(addrReg)
+		lockCmpxchgMemReg(newReg, addrReg) gives isVirtualGpr(newReg) or isVirtualGpr(addrReg)
 		stashEntryArgv gives false
 		// Phase 2: memory-operand ALU forms (dest is use+def, base is use)
 		addRegMem(destReg, baseReg, _) gives isVirtualGpr(destReg) or isVirtualGpr(baseReg)
@@ -509,6 +510,7 @@ export function countX64OpReads(counts RegIntArray, x64Op X64Op)
 		lockIncMemory(addrReg) then incUse(counts, id: x64VRegId(addrReg))
 		lockDecMemory(addrReg) then incUse(counts, id: x64VRegId(addrReg))
 		lockXaddMemReg(valReg, addrReg) then countX64TwoReads(counts, reg1: valReg, reg2: addrReg)
+		lockCmpxchgMemReg(newReg, addrReg) then countX64TwoReads(counts, reg1: newReg, reg2: addrReg)
 		stashEntryArgv then break 'scan'
 		// Phase 2: dest is both read and written, base is read.
 		addRegMem(destReg, baseReg, _) then countX64TwoReads(counts, reg1: destReg, reg2: baseReg)
@@ -556,6 +558,7 @@ export function noteX64OpDefs(defBlocks RegIntArray, blockIdx RegInt, x64Op X64O
 		baseUseUseDef then noteX64BaseUseUseDef(defBlocks, blockIdx: blockIdx, op: x64Op)
 		baseTwoUse then break 'patDef'
 		defUseImm then noteX64DefUseImm(defBlocks, blockIdx: blockIdx, op: x64Op)
+		fourAddr then break 'patDef'
 	end 'patDef'
 end 'noteX64OpDefs'
 
@@ -682,6 +685,7 @@ function noteX64FpDef(defBlocks RegIntArray, blockIdx RegInt, op X64Op, pat OpPa
 		baseUseFpUse then break 'which'
 		movRegReg to csel then break 'which'
 		baseUseUseDef to defUseImm then break 'which'
+		fourAddr then break 'which'
 	end 'which'
 end 'noteX64FpDef'
 
@@ -815,6 +819,7 @@ export function recordX64OpLastUses(positions RegIntArray, x64Op X64Op, opIdx Re
 		lockIncMemory(addrReg) then recordLastUse(positions, id: x64VRegId(addrReg), opIdx: opIdx)
 		lockDecMemory(addrReg) then recordLastUse(positions, id: x64VRegId(addrReg), opIdx: opIdx)
 		lockXaddMemReg(valReg, addrReg) then recordX64TwoLastUses(positions, reg1: valReg, reg2: addrReg, opIdx: opIdx)
+		lockCmpxchgMemReg(newReg, addrReg) then recordX64TwoLastUses(positions, reg1: newReg, reg2: addrReg, opIdx: opIdx)
 		stashEntryArgv then break 'scan'
 		// Phase 2: memory-operand ALU — both dest (use+def) and base (use) are reads.
 		addRegMem(destReg, baseReg, _) then recordX64TwoLastUses(positions, reg1: destReg, reg2: baseReg, opIdx: opIdx)
@@ -1215,6 +1220,7 @@ function x64GetTwoUseOperands(x64Op X64Op) returns (X64VReg, X64VReg)
 	return match x64Op 'get'
 		cmpRegReg(lhsReg, rhsReg) gives(lhsReg, rhsReg)
 		testRegReg(reg1, reg2) gives(reg1, reg2)
+		lockCmpxchgMemReg(newReg, addrReg) gives(newReg, addrReg)
 		default panic("x64GetTwoUseOperands: unexpected op")
 	end 'get'
 end 'x64GetTwoUseOperands'
@@ -1226,6 +1232,7 @@ function x64WithTwoUse(x64Op X64Op, r1 RegOrdinal, r2 RegOrdinal) returns X64Op
 	return match x64Op 'rebuild'
 		cmpRegReg gives X64Op.cmpRegReg(r1p, rhsReg: r2p)
 		testRegReg gives X64Op.testRegReg(r1p, reg2: r2p)
+		lockCmpxchgMemReg gives X64Op.lockCmpxchgMemReg(r1p, addrReg: r2p)
 		default panic("x64WithTwoUse: unexpected op")
 	end 'rebuild'
 end 'x64WithTwoUse'
@@ -2009,6 +2016,8 @@ export function remapX64Op(x64Op X64Op, remap RegIntArray) returns X64Op
 		baseTwoUse gives remapX64BaseTwoUse(x64Op, remap: remap)
 
 		defUseImm gives remapX64DefUseImm(x64Op, remap: remap)
+
+		fourAddr gives x64Op
 	end 'dispatch'
 end 'remapX64Op'
 
@@ -2087,6 +2096,7 @@ function remapX64TwoUse(x64Op X64Op, remap RegIntArray) returns X64Op
 	return match x64Op 'remap'
 		cmpRegReg(lhs, rhs) gives X64Op.cmpRegReg(remapGpr(lhs, remap: remap), rhsReg: remapGpr(rhs, remap: remap))
 		testRegReg(r1, r2) gives X64Op.testRegReg(remapGpr(r1, remap: remap), reg2: remapGpr(r2, remap: remap))
+		lockCmpxchgMemReg(newReg, addrReg) gives X64Op.lockCmpxchgMemReg(remapGpr(newReg, remap: remap), addrReg: remapGpr(addrReg, remap: remap))
 		default panic("remapX64: unexpected op for pattern")
 	end 'remap'
 end 'remapX64TwoUse'

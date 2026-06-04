@@ -414,6 +414,7 @@ export type Arm64Backend implements TargetBackend
 			atomicInc gives 1
 			atomicDec gives 1
 			atomicXadd gives 2
+			atomicCas gives 2
 			osLockInit gives 2
 			osLockAcquire gives 2
 			osLockRelease gives 2
@@ -986,6 +987,7 @@ export type Arm64Backend implements TargetBackend
 			atomicInc(addrId) then result = lowerAtomicIncArm64(addrId, dstBlock: dstBlock, nextTempSlot: nextTempSlot)
 			atomicDec(addrId) then result = lowerAtomicDecArm64(addrId, dstBlock: dstBlock, nextTempSlot: nextTempSlot)
 			atomicXadd(resultId, addrId, valId) then result = lowerAtomicXaddArm64(resultId, addrId: addrId, valId: valId, dstBlock: dstBlock, nextTempSlot: nextTempSlot)
+			atomicCas(resultId, addrId, oldId, newId) then result = lowerAtomicCasArm64(resultId, addrId: addrId, oldId: oldId, newId: newId, dstBlock: dstBlock, nextTempSlot: nextTempSlot)
 			// Linux locks land in step 6a.12 with the runtime.std spinlock helpers.
 			osLockInit then result = nextTempSlot
 			osLockAcquire then result = nextTempSlot
@@ -1015,6 +1017,11 @@ export type Arm64Backend implements TargetBackend
 		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.atomicXaddMem(Arm64VReg.virtual(resultId), addrReg: Arm64VReg.virtual(addrId), valReg: Arm64VReg.virtual(valId)))
 		return nextTempSlot
 	end 'lowerAtomicXaddArm64'
+
+	function lowerAtomicCasArm64(resultId ValueId, addrId ValueId, oldId ValueId, newId ValueId, dstBlock IrBlock, nextTempSlot SlotIndex) returns SlotIndex
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.atomicCasMem(Arm64VReg.virtual(resultId), addrReg: Arm64VReg.virtual(addrId), oldReg: Arm64VReg.virtual(oldId), newReg: Arm64VReg.virtual(newId)))
+		return nextTempSlot
+	end 'lowerAtomicCasArm64'
 
 	// Ensure a value is stored to a VarSlot. For SysOps that need slot-based addressing,
 	// we store the virtual register value into a temp slot.

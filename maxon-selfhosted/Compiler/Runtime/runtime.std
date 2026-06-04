@@ -1306,6 +1306,107 @@ func mm_trace_print_i64 1 void
 
 end
 
+// mm_trace_print_hex(value): write `value` as "0x" + 16 zero-padded lowercase
+// hex digits to stderr. Used by the CPU-fault diagnostic (emitX64GtFaultDiagnostic)
+// to render the faulting RIP / bad VA in a form an operator can resolve against
+// `llvm-objdump -d`. Fixed 18-byte rendering into a stack scratch buffer.
+//
+// Nibbles are extracted from the LOW end (mask the low 4 bits, then `shrsi 4`)
+// and written right-to-left into buf[17] down to buf[2], so the arithmetic
+// (sign-smearing) right shift is harmless — each masked nibble is consumed before
+// the smeared high bits can reach it across the exactly-16 iterations.
+//
+// Slot usage: slot 0 = value, slot 1 = loop index i (0..15), slot 2 = buf base.
+func mm_trace_print_hex 1 void
+  block entry:
+    v0 = std param 0 i64
+    std storeSlot 0 v0
+    // buf = &scratch (stackAddr 10 keeps the 18-byte buffer clear of slots 0..2).
+    v1 = std stackAddr 10
+    std storeSlot 2 v1
+    // buf[0] = '0', buf[1] = 'x'
+    v2 = std constI64 0
+    v3 = std constI64 0x30
+    std storeByte v1 v2 v3
+    v4 = std constI64 1
+    v5 = std constI64 0x78
+    std storeByte v1 v4 v5
+    // i = 0
+    v6 = std constI64 0
+    std storeSlot 1 v6
+    std br digit_loop
+
+  block digit_loop:
+    v7 = std loadSlot 1
+    v8 = std constI64 16
+    v9 = std cmpI64Lt v7 v8
+    std condBr v9 digit_body write_phase
+
+  block digit_body:
+    // nibble = value & 0xF
+    v10 = std loadSlot 0
+    v11 = std constI64 0xF
+    v12 = std andI64 v10 v11
+    // value = value shrsi 4
+    v13 = std constI64 4
+    v14 = std shrI64 v10 v13
+    std storeSlot 0 v14
+    // char = nibble < 10 ? '0'+nibble : 'a'+(nibble-10) = 0x57+nibble
+    v15 = std constI64 10
+    v16 = std cmpI64Lt v12 v15
+    std condBr v16 digit_dec digit_alpha
+
+  block digit_dec:
+    v17 = std constI64 0x30
+    v18 = std addI64 v12 v17
+    std storeSlot 3 v18
+    std br digit_store
+
+  block digit_alpha:
+    v19 = std constI64 0x57
+    v20 = std addI64 v12 v19
+    std storeSlot 3 v20
+    std br digit_store
+
+  block digit_store:
+    // pos = 17 - i
+    v21 = std loadSlot 1
+    v22 = std constI64 17
+    v23 = std subI64 v22 v21
+    v24 = std loadSlot 2
+    v25 = std loadSlot 3
+    std storeByte v24 v23 v25
+    // i++
+    v26 = std constI64 1
+    v27 = std addI64 v21 v26
+    std storeSlot 1 v27
+    std br digit_loop
+
+  block write_phase:
+    v28 = std loadSlot 2
+    v29 = std constI64 18
+    v30 = std call mrt_write_stderr v28 v29
+    v31 = std constI64 0
+    std ret v31
+
+end
+
+// maxon_force_segfault(): deliberately read through address 0 to trigger a CPU
+// access-violation fault (STATUS_ACCESS_VIOLATION on Windows / SIGSEGV on POSIX /
+// an out-of-bounds linear-memory trap on wasm). Exercises the VEH fault-recovery
+// path on x64-Windows (clean `panic: nil pointer or invalid memory access` + exit 1)
+// and backs `__Builtins.forceSegfault()` / the `safety` spec. The load always
+// faults, so the `ret` is unreachable. Mirrors the C# bootstrap's hand-rolled
+// EmitMaxonForceSegfault; expressed here as portable Std IR so every target gets it.
+func maxon_force_segfault 0 void
+  block entry:
+    v0 = std constI64 0
+    v1 = std loadIndirect v0 0
+    v2 = std constI64 0
+    std ret v2
+
+end
+
 // mrt_panic(msg_ptr): prints panic message + stack trace to stderr, then exits.
 // Walks the RBP/X29 chain to print up to 32 stack frames.
 //
@@ -3554,27 +3655,63 @@ end
 //
 // Globals consumed (declared by step 6a.17 alongside the chunk-allocator
 // globals — see the TODO atop the bottom-layer block):
-//   __slab_mcache_base     8 bytes  pointer-array of 18 mspan*; single-thread.
-//   __slab_meta_free_head  8 bytes  head of intrusive free-list of 64 B slots.
+//   __slab_mcache_base   36864 B    SLAB_MAX_SHARDS(256) × 18 mspan*. Per-P
+//                                   sharded: P with id `i` owns the 18-entry
+//                                   row at `__slab_mcache_base + i*144`.
+//   __slab_meta_free_head  8 bytes  head of intrusive free-list of 80 B slots.
 //   __slab_meta_bump_ptr   8 bytes  current bump pointer in metadata chunk.
 //   __slab_meta_bump_end   8 bytes  end of the metadata chunk.
 //   __slab_mcentral_array  288 B    18 × {partial_head(8), full_head(8)}.
 //
-// mspan struct (64 bytes, mirrors RuntimeEmitter.Allocator.cs):
+// mspan struct (80-byte slot; fields mirror RuntimeEmitter.Allocator.cs):
 //   +0x00 base_addr    +0x08 slot_size   +0x10 free_list   +0x18 free_count
 //   +0x20 next_span    +0x28 class_idx   +0x30 total_slots +0x38 arena_base
+//   +0x40 owning_p     (the shard id of the P that currently owns this span's
+//                       free_list and is its sole writer. MUTABLE: stamped to the
+//                       creating P's raw id at creation, set to the 0xFFFFFFFF
+//                       "in mcentral, owned by nobody" sentinel when a fully-
+//                       emptied span is returned to mcentral, and re-stamped to
+//                       the acquiring P's raw id on refill — see the per-P design
+//                       note below)
 //
-// TODO(step 6a.14): introduce `__slab_free` (public) that recovers the mspan
-// from the slot pointer via the two-level arena map, then forwards to
-// __slab_free_class_with_mspan. Until then the slab allocator leaks freed
-// slots — acceptable per the plan because user code is not yet routed
-// through it.
+// =============================================================================
+// Per-P sharded allocator (Go/mimalloc style). The fast path is lockless:
 //
-// TODO(step 6a.17): the per-class mcentral locks (__slab_mcentral_lock_<i>,
-// 40 bytes on Windows / 24 on Linux) are intentionally NOT acquired here.
-// The self-hosted compiler currently runs single-threaded so contention is
-// impossible; once threading lands the lock acquire/release must be inserted
-// at the marked sites in __slab_refill_mcache.
+//   * Each P (one ProcContext per CPU; `__slab_current_p_id` reads the calling
+//     OS thread's adopted P, or -1 when none) owns its own mcache ROW, so the
+//     mcache pop in __slab_alloc_class and the local push in __slab_free touch
+//     ONLY that P's spans. A span's owning_p names its current exclusive owner;
+//     while a P holds the span it is the sole writer of that span's free_list —
+//     the single-writer invariant that makes the lockless pop/push safe. A span
+//     changes hands only via mcentral while it is fully empty and quiesced (see
+//     the cross-P reclamation in the slow-path bullet below), so the ownership
+//     transfer never races a live writer.
+//
+//   * A free of a slot whose span is owned by a DIFFERENT P (cross-thread free,
+//     or a free from a raw OS thread with no P) is NOT applied locally. Instead
+//     the slot is CAS-pushed onto the OWNER P's remote-free MPSC queue
+//     (`__sched_procs[owning_p] + POffRemoteFreeHead`, a Treiber stack). The
+//     owner drains the whole chain with one AtomicCAS (head→NULL) on its
+//     __slab_alloc slow path (__slab_drain_remote_frees) and replays each slot
+//     onto its span — again as the single writer, so still lockless.
+//
+//   * The SLOW path (refill: read mcentral.partial / grow a fresh span via the
+//     chunk + metadata + arena-map allocators) and the arena-large / OS-direct
+//     free paths still mutate genuinely shared structures, so they hold the
+//     global __slab_lock (re-entrant CRITICAL_SECTION on Windows). This is the
+//     only lock on the hot path's miss handling; the per-class mcentral locks
+//     of the C# bootstrap are unnecessary because __slab_lock already serializes
+//     every mcentral mutation here — including cross-P span reclamation: a fully-
+//     emptied span is returned to mcentral with owning_p set to the 0xFFFFFFFF
+//     sentinel, then later re-acquired and re-stamped by a refilling P, all under
+//     __slab_lock.
+//
+//   * Cross-target degrade: wasm32-wasi and arm64-macos have no multi-P
+//     scheduler, and `__slab_current_p_id` returns -1 there (and on x64 before
+//     the scheduler starts / on raw threads). The .std code maps -1 → shard 0,
+//     so the allocator collapses to a single shard. Single-threaded targets see
+//     exactly one writer, so the lockless fast path and the (uncontended)
+//     remote-free CAS are trivially correct.
 // =============================================================================
 
 // __slab_class_size(idx) -> i64
@@ -3849,15 +3986,15 @@ func __slab_objs_per_span 1 i64
 end
 
 // __slab_meta_alloc() -> ptr
-// Hands out 64-byte slots used as mspan-header storage. Three-tier:
+// Hands out 80-byte slots used as mspan-header storage. Three-tier:
 //   1. Pop from intrusive free-list at __slab_meta_free_head if non-null:
 //      result = head; head = [head]. (The first 8 bytes of a freed slot
 //      hold the next-pointer.)
 //   2. Otherwise bump within the current metadata chunk: if
-//      bump_ptr + 64 ≤ bump_end, return bump_ptr and advance.
+//      bump_ptr + 80 ≤ bump_end, return bump_ptr and advance.
 //   3. Otherwise grab a new 8 KiB chunk from the chunk allocator (one chunk
-//      = 128 mspans), reserve its first 64 B as the return value, and seed
-//      bump_ptr = chunk + 64, bump_end = chunk + 8192.
+//      = 102 mspans), reserve its first 80 B as the return value, and seed
+//      bump_ptr = chunk + 80, bump_end = chunk + 8192.
 //
 // Slot usage:
 //   slot 0 = candidate ptr / chunk_base
@@ -3879,11 +4016,13 @@ func __slab_meta_alloc 0 i64
     std ret v1
 
   block try_bump:
-    // bump_ptr + 64 ≤ bump_end ?
+    // bump_ptr + 80 ≤ bump_end ?  (80-byte mspan slots: the 64-byte field block
+    // 0x00..0x38 plus owning_p at 0x40, rounded up to 16-byte alignment so
+    // successive headers stay aligned. Mirrors C# MspanMetaSlotSize = 0x50.)
     v5 = std globalAddr __slab_meta_bump_ptr
     v6 = std loadIndirect v5 0
     std storeSlot 0 v6
-    v7 = std constI64 0x40
+    v7 = std constI64 0x50
     v8 = std addI64 v6 v7
     std storeSlot 1 v8
     v9 = std globalAddr __slab_meta_bump_end
@@ -3906,8 +4045,8 @@ func __slab_meta_alloc 0 i64
     v14 = std constI64 1
     v15 = std call __slab_arena_alloc_chunks v14
     std storeSlot 0 v15
-    // bump_ptr = chunk_base + 64
-    v16 = std constI64 0x40
+    // bump_ptr = chunk_base + 80 (first 80-byte mspan slot is the return value)
+    v16 = std constI64 0x50
     v17 = std addI64 v15 v16
     v18 = std globalAddr __slab_meta_bump_ptr
     std storeIndirect v18 0 v17
@@ -3937,23 +4076,256 @@ func __slab_meta_free 1 void
     std ret v3
 end
 
-// __slab_refill_mcache(class_idx): repopulates mcache[class_idx] with a span
-// that has at least one free slot. Two-tier:
+// =============================================================================
+// Per-P sharding support (current-P resolution + remote-free MPSC queue).
+// =============================================================================
+
+// __slab_current_p_id() -> i64 : shard id of the calling OS thread's adopted P,
+// or -1 when no multi-P scheduler owns this thread. This is the SIGNATURE STUB
+// used on wasm32-wasi / arm64-macos (and any target without a GMP scheduler):
+// returns -1 unconditionally so the allocator collapses to a single shard. On
+// x64-Windows, `emitX64SlabCurrentPId` overrides this label with a TLS-reading
+// machine-code version (returns P->id, or -1 before the scheduler starts / on a
+// raw OS thread). Keep the body minimal — it must link on every target.
+func __slab_current_p_id 0 i64
+  block entry:
+    v0 = std constI64 -1
+    std ret v0
+end
+
+// __slab_clamp_shard(raw_id) -> i64 : map a raw P id into the mcache row index
+// range [0, SLAB_MAX_SHARDS=256). A -1 (no scheduler) becomes shard 0.
+//
+// Invariant: a real P id never reaches the cap. The scheduler sizes __sched_procs
+// to GetSystemInfo's dwNumberOfProcessors, which reports the calling thread's
+// processor group only — at most 64 logical processors on Windows. So P ids are
+// always in [0, 63], 4× below the 256-shard array, and the cap-to-255 branch
+// below is unreachable in practice. It exists purely as a hard bound so a
+// pathological CPU count can never index past the static mcache array (a distinct
+// row per P is what keeps the lockless fast-path pop single-writer; sharing a row
+// would break that, hence the array is generously oversized rather than relying
+// on a runtime cap that could alias two Ps onto one row).
+//
+// NOTE: this is the MCACHE INDEX only. A span's owning_p stores the RAW id (see
+// __slab_refill_mcache), and cross-P free routing compares the raw id, so the
+// index mapping here never affects free correctness.
+//
+// Slot usage: slot 0 = raw id (arg)
+func __slab_clamp_shard 1 i64
+  block entry:
+    v0 = std param 0 i64
+    std storeSlot 0 v0
+    v1 = std constI64 0
+    v2 = std cmpI64Lt v0 v1
+    std condBr v2 zero check_cap
+
+  block check_cap:
+    v3 = std loadSlot 0
+    v4 = std constI64 256
+    v5 = std cmpI64Ge v3 v4
+    std condBr v5 cap ok
+
+  block cap:
+    v6 = std constI64 255
+    std ret v6
+
+  block ok:
+    v7 = std loadSlot 0
+    std ret v7
+
+  block zero:
+    v8 = std constI64 0
+    std ret v8
+end
+
+// __slab_proc_at(id) -> i64 : the ProcContext* for shard `id` from the scheduler's
+// P array (__sched_procs), or 0 when there is no P (id < 0, or the scheduler has
+// not allocated its P array yet — __sched_procs == NULL). Used to find the drain
+// target (current P) on the alloc slow path and the remote-free push target
+// (owner P) on the free path.
+//
+// Slot usage: slot 0 = id (arg)
+func __slab_proc_at 1 i64
+  block entry:
+    v0 = std param 0 i64
+    std storeSlot 0 v0
+    // id < 0 → no P.
+    v1 = std constI64 0
+    v2 = std cmpI64Lt v0 v1
+    std condBr v2 none have_id
+
+  block have_id:
+    // procs = __sched_procs ; if NULL → no P.
+    v3 = std globalAddr __sched_procs
+    v4 = std loadIndirect v3 0
+    v5 = std constI64 0
+    v6 = std cmpI64Eq v4 v5
+    std condBr v6 none lookup
+
+  block lookup:
+    // return procs[id]  (procs is an array of P*; entry is itself a P*)
+    v7 = std loadSlot 0
+    v8 = std constI64 3
+    v9 = std shlI64 v7 v8
+    v10 = std addI64 v4 v9
+    v11 = std loadIndirect v10 0
+    std ret v11
+
+  block none:
+    v12 = std constI64 0
+    std ret v12
+end
+
+// __slab_remote_free_push(p_ptr, slot): CAS-push `slot` onto P p_ptr's remote-free
+// MPSC queue (the Treiber stack at p_ptr + 0x78 = POffRemoteFreeHead). The slot's
+// first 8 bytes hold the `next` link. Lock-free, multiple producers:
+//   retry: old = [p+0x78]; [slot] = old; if CAS([p+0x78], old, slot) goto done; retry
+// On single-threaded targets the CAS never contends, so this is a plain push.
+//
+// Slot usage: slot 0 = p_ptr (arg), slot 1 = slot (arg), slot 2 = head addr
+func __slab_remote_free_push 2 void
+  block entry:
+    v0 = std param 0 i64
+    std storeSlot 0 v0
+    v1 = std param 1 i64
+    std storeSlot 1 v1
+    // head_addr = p_ptr + 0x78
+    v2 = std constI64 0x78
+    v3 = std addI64 v0 v2
+    std storeSlot 2 v3
+    std br retry
+
+  block retry:
+    // old = [head_addr]
+    v4 = std loadSlot 2
+    v5 = std loadIndirect v4 0
+    // [slot] = old   (link the new node to the current head)
+    v6 = std loadSlot 1
+    std storeIndirect v6 0 v5
+    // success = CAS(head_addr, old, slot)
+    v7 = std loadSlot 2
+    v8 = std loadSlot 1
+    v9 = std atomicCas v7 v5 v8
+    v10 = std constI64 0
+    v11 = std cmpI64Eq v9 v10
+    std condBr v11 retry done
+
+  block done:
+    v12 = std constI64 0
+    std ret v12
+end
+
+// __slab_drain_remote_frees(p_ptr): drain P p_ptr's remote-free MPSC queue back
+// onto the owning spans' free lists. Called ONLY by the owner P (on its
+// __slab_alloc slow path) — so the per-span pushes are lockless (single-writer
+// invariant). One AtomicCAS detaches the entire chain (head → NULL); we then walk
+// it, and for each node look up its span via the arena map and push the node onto
+// span.free_list (incrementing free_count). A NULL p_ptr (no P) is a no-op.
+//
+// Each per-node push goes through __slab_free_class_with_mspan — the same helper
+// the local free path uses — so a drained free that fully empties a span returns
+// it to mcentral (under __slab_lock, owning_p stamped to the 0xFFFFFFFF sentinel),
+// exactly like a same-P free. The arena-map span lookup is a lockless read of the
+// immutable map (slab spans are never unregistered).
+//
+// Slot usage:
+//   slot 0 = p_ptr (arg)
+//   slot 1 = chain head (detached)
+//   slot 2 = current node
+//   slot 3 = next node (parked across the span lookup)
+//   slot 4 = span_ptr
+func __slab_drain_remote_frees 1 void
+  block entry:
+    v0 = std param 0 i64
+    std storeSlot 0 v0
+    v1 = std constI64 0
+    v2 = std cmpI64Eq v0 v1
+    std condBr v2 done detach_retry
+
+  block detach_retry:
+    // old = [p+0x78]; if NULL nothing to drain.
+    v3 = std loadSlot 0
+    v4 = std constI64 0x78
+    v5 = std addI64 v3 v4
+    v6 = std loadIndirect v5 0
+    v7 = std constI64 0
+    v8 = std cmpI64Eq v6 v7
+    std condBr v8 done try_detach
+
+  block try_detach:
+    // success = CAS([p+0x78], old, NULL)
+    v9 = std loadSlot 0
+    v10 = std constI64 0x78
+    v11 = std addI64 v9 v10
+    v12 = std constI64 0
+    v13 = std atomicCas v11 v6 v12
+    v14 = std constI64 0
+    v15 = std cmpI64Eq v13 v14
+    std condBr v15 detach_retry detached
+
+  block detached:
+    // chain head = old; current = head
+    std storeSlot 1 v6
+    std storeSlot 2 v6
+    std br walk
+
+  block walk:
+    v16 = std loadSlot 2
+    v17 = std constI64 0
+    v18 = std cmpI64Eq v16 v17
+    std condBr v18 done walk_body
+
+  block walk_body:
+    // next = [current]  (park it before span_lookup / free-list push clobber it)
+    v19 = std loadSlot 2
+    v20 = std loadIndirect v19 0
+    std storeSlot 3 v20
+
+    // span = __slab_arena_map_get(current). Per the cross-P invariant the lookup
+    // always succeeds: the node lives in a span the arena map registered at
+    // creation, and that span is never unregistered (slab spans are not freed).
+    v21 = std loadSlot 2
+    v22 = std call __slab_arena_map_get v21
+    std storeSlot 4 v22
+
+    // Push current onto span.free_list and bump free_count (we are the owner P,
+    // so this is the lockless single-writer push — same as __slab_free's local
+    // path and __slab_free_class_with_mspan).
+    v23 = std loadSlot 2
+    v24 = std loadSlot 4
+    v25 = std call __slab_free_class_with_mspan v23 v24
+
+    // current = next
+    v26 = std loadSlot 3
+    std storeSlot 2 v26
+    std br walk
+
+  block done:
+    v27 = std constI64 0
+    std ret v27
+end
+
+// __slab_refill_mcache(class_idx, shard): repopulates this P's mcache row entry
+// mcache[shard][class_idx] with a span that has at least one free slot. Two-tier:
 //   1. Pop the head of mcentral[class_idx].partial — clearing its next_span
-//      pointer — and store it as mcache[class_idx]. The mcentral.partial list
-//      is the source of recycled spans.
+//      pointer — and store it as mcache[shard][class_idx]. (partial_head is
+//      always NULL today: spans are never returned to mcentral, so this branch
+//      is dead but kept correct for a future recycling path.)
 //   2. If partial is empty: build a brand-new span by allocating chunks for
 //      the slot data, an mspan header from the metadata slab, initialising
-//      the mspan fields, then walking the slot region wiring up the
-//      intrusive free list ([slot[i]] = slot[i+1], last slot's next = 0).
+//      the mspan fields (including owning_p = shard), then walking the slot
+//      region wiring up the intrusive free list ([slot[i]] = slot[i+1], last
+//      slot's next = 0).
 //
-// Lock acquire/release intentionally elided — see the file-level TODO for
-// step 6a.17.
+// This is the slow path: it reads mcentral and drives the chunk / metadata /
+// arena-map allocators, all of which mutate genuinely shared structures, so the
+// whole body runs under the global __slab_lock (re-entrant on Windows). The
+// per-P mcache fast path in __slab_alloc_class takes NO lock.
 //
 // Slot usage:
 //   slot 0  = class_idx (arg)
 //   slot 1  = mcentral entry addr
-//   slot 2  = mcache slot addr  (mcache_base + class_idx * 8)
+//   slot 2  = mcache slot addr  (mcache_base + shard*144 + class_idx*8)
 //   slot 3  = span_ptr (winning mspan)
 //   slot 4  = slot_size
 //   slot 5  = total_slots (objs_per_span)
@@ -3963,11 +4335,21 @@ end
 //   slot 9  = arena_base (most recent arena from chunk allocator)
 //   slot 10 = i (free-list build counter)
 //   slot 11 = current slot addr
-//   slot 12 = next slot addr
-func __slab_refill_mcache 1 void
+//   slot 13 = raw_id (arg, = owning_p for fresh spans)
+//   slot 14 = shard = clamp(raw_id) (mcache row index)
+func __slab_refill_mcache 2 void
   block entry:
     v0 = std param 0 i64
     std storeSlot 0 v0
+    v100 = std param 1 i64
+    std storeSlot 13 v100
+    // shard = clamp(raw_id) — the mcache row to fill (must match __slab_alloc_class).
+    v105 = std call __slab_clamp_shard v100
+    std storeSlot 14 v105
+
+    // Slow path: serialize mcentral / chunk / metadata / arena-map mutations.
+    v101 = std globalAddr __slab_lock
+    std osLockAcquire v101
 
     // mcentral_entry_addr = __slab_mcentral_array + class_idx * 16
     v1 = std globalAddr __slab_mcentral_array
@@ -3976,14 +4358,16 @@ func __slab_refill_mcache 1 void
     v4 = std addI64 v1 v3
     std storeSlot 1 v4
 
-    // mcache_slot_addr = __slab_mcache_base + class_idx * 8
+    // mcache_slot_addr = __slab_mcache_base + shard*144 + class_idx*8
     v5 = std globalAddr __slab_mcache_base
+    v102 = std constI64 144
+    v106 = std loadSlot 14
+    v103 = std mulI64 v106 v102
+    v104 = std addI64 v5 v103
     v6 = std constI64 3
     v7 = std shlI64 v0 v6
-    v8 = std addI64 v5 v7
+    v8 = std addI64 v104 v7
     std storeSlot 2 v8
-
-    // TODO(step 6a.17): acquire __slab_mcentral_lock_<class_idx>.
 
     // partial = mcentral_entry.partial_head
     v9 = std loadIndirect v4 0
@@ -3999,6 +4383,15 @@ func __slab_refill_mcache 1 void
     std storeIndirect v13 0 v12
     v14 = std constI64 0
     std storeIndirect v9 0x20 v14
+
+    // Re-stamp owning_p = raw_id under __slab_lock — this P now exclusively owns
+    // the span (it carried the 0xFFFFFFFF sentinel while parked in mcentral).
+    // Mirrors RuntimeEmitter.Allocator.cs's __slab_mcentral_get_span re-stamp.
+    // The span was returned only when fully free, so its free_list already holds
+    // every slot and free_count == total_slots — it is immediately usable, and
+    // the alloc pop below draws from that intact list.
+    v107 = std loadSlot 13
+    std storeIndirect v9 0x40 v107
     std br install
 
   block grow_new:
@@ -4053,6 +4446,14 @@ func __slab_refill_mcache 1 void
     std storeIndirect v27 0x28 v29
     std storeIndirect v27 0x30 v18
     std storeIndirect v27 0x38 v26
+    // owning_p = raw_id. Set once, here, while the creating P holds __slab_lock;
+    // never changed afterwards. This P is therefore the permanent single writer
+    // of this span's free_list, and every cross-P free of one of its slots is
+    // routed to this P's remote-free queue (see __slab_free). Storing the raw id
+    // (not the clamped mcache shard) lets __slab_free compare it exactly against
+    // a freeing thread's raw id, so raw OS threads (id -1) always route remote.
+    v57 = std loadSlot 13
+    std storeIndirect v27 0x40 v57
 
     // Register the new mspan in the arena map so __slab_arena_map_get
     // (and therefore __slab_free) can recover it from any slot pointer.
@@ -4111,78 +4512,129 @@ func __slab_refill_mcache 1 void
     std br link_loop
 
   block install:
-    // mcache[class_idx] = span
+    // mcache[shard][class_idx] = span
     v50 = std loadSlot 2
     v51 = std loadSlot 3
     std storeIndirect v50 0 v51
 
-    // TODO(step 6a.17): release __slab_mcentral_lock_<class_idx>.
+    v58 = std globalAddr __slab_lock
+    std osLockRelease v58
 
     v52 = std constI64 0
     std ret v52
 end
 
 // __slab_alloc_class(class_idx) -> ptr
-// Fast path slab allocator. Pops a slot from the cached mspan in
-// mcache[class_idx]. Refills via __slab_refill_mcache when the slot is empty,
-// retries once, then proceeds with the pop. A successful pop also clears the
-// mcache entry when the span runs out of free slots so the next allocation
-// triggers a refill rather than walking a depleted span on every call.
+// Fast path slab allocator, per-P sharded. Pops a slot from the cached mspan in
+// THIS P's mcache row (mcache_base + shard*144 + class_idx*8). The pop is
+// lockless: only the owning P writes its own row's spans' free_lists.
 //
-// Structure: rather than a back-edge `do_refill -> load_span` retry loop
-// (which keeps mcache_slot_addr live across the refill call and trips the
-// register allocator's caller-saved spill heuristics), the body is laid out
-// linearly. The first attempt either succeeds and falls through to the pop,
-// or jumps to a refill block that calls `__slab_refill_mcache` then
-// recomputes mcache_slot_addr from scratch and proceeds with the pop —
-// `__slab_refill_mcache` guarantees the mcache slot now references a span
-// with at least one free slot.
+// On a miss (no cached span, or its free_count == 0) it first drains this P's
+// remote-free queue — a burst of cross-P frees aimed at this P's spans may have
+// refilled the cached span without needing fresh memory — and re-probes. If
+// still empty it calls __slab_refill_mcache(class, shard) (which takes
+// __slab_lock and either recycles an mcentral span or grows a new one), then
+// pops.
+//
+// Structure mirrors the original linear layout (no back-edge retry that would
+// keep the mcache addr live across calls and trip the spill heuristics): the
+// fast path falls through to the pop; a miss routes through drain → re-probe →
+// refill → pop.
 //
 // Slot usage:
 //   slot 0 = class_idx (arg)
 //   slot 1 = mcache_slot_addr
 //   slot 2 = span_ptr
 //   slot 3 = result slot
+//   slot 4 = shard (this P's mcache row index = clamp(raw_id))
+//   slot 5 = raw_id (this P's real id; passed to refill as owning_p)
 func __slab_alloc_class 1 i64
   block entry:
     v0 = std param 0 i64
     std storeSlot 0 v0
 
-    // mcache_slot_addr = __slab_mcache_base + class_idx * 8
+    // raw_id = current P id (-1 if none); shard = clamp(raw_id) for the mcache row.
+    v38 = std call __slab_current_p_id
+    std storeSlot 5 v38
+    v40 = std call __slab_clamp_shard v38
+    std storeSlot 4 v40
+
+    // mcache_slot_addr = __slab_mcache_base + shard*144 + class_idx*8
     v1 = std globalAddr __slab_mcache_base
+    v41 = std constI64 144
+    v42 = std mulI64 v40 v41
+    v43 = std addI64 v1 v42
+    v44 = std loadSlot 0
     v2 = std constI64 3
-    v3 = std shlI64 v0 v2
-    v4 = std addI64 v1 v3
+    v3 = std shlI64 v44 v2
+    v4 = std addI64 v43 v3
     std storeSlot 1 v4
 
     // span = [mcache_slot]
     v5 = std loadIndirect v4 0
     v6 = std constI64 0
     v7 = std cmpI64Eq v5 v6
-    std condBr v7 do_refill check_count
+    std condBr v7 do_drain check_count
 
   block check_count:
-    // Defensive: a cached span could in principle have free_count == 0 (e.g.
-    // after a future thread hand-off). Treat it as a miss and refill.
+    // A cached span with free_count == 0 is a miss — drain + maybe refill.
     std storeSlot 2 v5
     v8 = std loadIndirect v5 0x18
     v9 = std constI64 0
     v10 = std cmpI64Eq v8 v9
-    std condBr v10 do_refill pop_slot
+    std condBr v10 do_drain pop_slot
+
+  block do_drain:
+    // Drain this P's remote-free queue (no-op when there is no P). Reclaimed
+    // slots are pushed back onto their spans' free lists, possibly refilling the
+    // cached span we just found empty.
+    v45 = std loadSlot 5
+    v46 = std call __slab_proc_at v45
+    v47 = std call __slab_drain_remote_frees v46
+
+    // Re-probe the cached span after draining. Recompute the mcache addr from
+    // the shard (the call clobbered caller-saved regs).
+    v48 = std loadSlot 4
+    v49 = std globalAddr __slab_mcache_base
+    v50 = std constI64 144
+    v51 = std mulI64 v48 v50
+    v52 = std addI64 v49 v51
+    v53 = std loadSlot 0
+    v54 = std constI64 3
+    v55 = std shlI64 v53 v54
+    v56 = std addI64 v52 v55
+    std storeSlot 1 v56
+
+    v57 = std loadIndirect v56 0
+    v58 = std constI64 0
+    v59 = std cmpI64Eq v57 v58
+    std condBr v59 do_refill probe_count
+
+  block probe_count:
+    std storeSlot 2 v57
+    v60 = std loadIndirect v57 0x18
+    v61 = std constI64 0
+    v62 = std cmpI64Eq v60 v61
+    std condBr v62 do_refill pop_slot
 
   block do_refill:
+    // Pass class_idx + raw_id; refill stamps owning_p = raw_id and indexes the
+    // mcache row by clamp(raw_id) — matching slot 4 here.
     v11 = std loadSlot 0
-    v12 = std call __slab_refill_mcache v11
+    v63 = std loadSlot 5
+    v12 = std call __slab_refill_mcache v11 v63
 
-    // Recompute mcache_slot_addr — the value we computed in entry was kept in
-    // a caller-saved register that the call clobbers, so reload from slot 0
-    // (class_idx) and rebuild instead of relying on slot 1 being live in a
-    // register.
+    // Recompute mcache_slot_addr from the shard — the refill call clobbered the
+    // caller-saved register that held it.
     v13 = std loadSlot 0
     v14 = std globalAddr __slab_mcache_base
+    v64 = std loadSlot 4
+    v65 = std constI64 144
+    v66 = std mulI64 v64 v65
+    v67 = std addI64 v14 v66
     v15 = std constI64 3
     v16 = std shlI64 v13 v15
-    v17 = std addI64 v14 v16
+    v17 = std addI64 v67 v16
     std storeSlot 1 v17
 
     // After the refill the mcache slot is guaranteed to point at a span with
@@ -4227,17 +4679,136 @@ func __slab_alloc_class 1 i64
     std ret v29
 end
 
+// __slab_mcentral_return_span(span): return a fully-emptied span to its class's
+// mcentral partial list so a DIFFERENT P can later reclaim it (faithful port of
+// RuntimeEmitter.Allocator.cs's __slab_mcentral_return_span). Called from
+// __slab_free_class_with_mspan when a free brings free_count up to total_slots —
+// the common sink for the same-P local free, the fallback-local free, and the
+// remote-free drain. Without this, P0's emptied spans are stranded and other Ps
+// grow fresh arena spans, so per-P RSS grows without bound on migrating
+// workloads.
+//
+// Runs entirely under the global __slab_lock (the same lock __slab_refill_mcache
+// takes), which serializes every mcentral mutation — the get (refill take_partial),
+// the return here, and the cross-P mcache eviction. The per-P mcache FAST path in
+// __slab_alloc_class / the local free push stay lock-free; only this off-fast-path
+// event takes the lock.
+//
+// Steps, all under the lock:
+//   1. span.owning_p = 0xFFFFFFFF — the "in mcentral, owned by nobody" sentinel.
+//      A concurrent cross-P free that reads this sentinel hits the defensive
+//      panic in __slab_free (the owning P drained all in-flight remote frees for
+//      this span before its free_count could reach total_slots, so observing the
+//      sentinel on the free path is a genuine invariant violation).
+//   2. Prepend span to __slab_mcentral_array[class_idx].partial_head (offset 0).
+//   3. Cross-P mcache eviction: walk all SLAB_MAX_SHARDS(256) mcache rows and NULL
+//      any slot that still points at this span. The 256-shard static bound (not
+//      __sched_max_procs) is used deliberately: clamp(-1)=shard 0 is the row used
+//      on single-shard targets (wasm / arm64 / pre-scheduler x64) where
+//      __sched_max_procs is 0, so a 0..__sched_max_procs walk would skip shard 0
+//      and leave a dangling cached pointer. The alloc-side evict block already
+//      NULLs the owner's slot when a span fills, so this loop is mostly defensive
+//      — but ported faithfully to match C# and cover any partial-occupancy corner.
+//
+// Slot usage:
+//   slot 0 = span (arg)
+//   slot 1 = class_offset (class_idx * 8)
+//   slot 2 = loop index i
+//   slot 3 = mcache_base
+func __slab_mcentral_return_span 1 void
+  block entry:
+    v0 = std param 0 i64
+    std storeSlot 0 v0
+
+    v1 = std globalAddr __slab_lock
+    std osLockAcquire v1
+
+    // span.owning_p = sentinel (0xFFFFFFFF).
+    v2 = std loadSlot 0
+    v3 = std constI64 0xFFFFFFFF
+    std storeIndirect v2 0x40 v3
+
+    // class_offset = span.class_idx * 8
+    v4 = std loadIndirect v2 0x28
+    v5 = std constI64 3
+    v6 = std shlI64 v4 v5
+    std storeSlot 1 v6
+
+    // mcentral_entry_addr = __slab_mcentral_array + class_idx*16 = base + class_offset*2
+    v7 = std globalAddr __slab_mcentral_array
+    v8 = std constI64 1
+    v9 = std shlI64 v6 v8
+    v10 = std addI64 v7 v9
+
+    // Prepend span to partial_head: span.next_span = partial_head; partial_head = span.
+    v11 = std loadIndirect v10 0
+    std storeIndirect v2 0x20 v11
+    std storeIndirect v10 0 v2
+
+    // Cross-P mcache eviction. i = 0; mcache_base cached in slot 3.
+    v12 = std globalAddr __slab_mcache_base
+    std storeSlot 3 v12
+    v13 = std constI64 0
+    std storeSlot 2 v13
+    std br evict_loop
+
+  block evict_loop:
+    v14 = std loadSlot 2
+    v15 = std constI64 256
+    v16 = std cmpI64Ge v14 v15
+    std condBr v16 evict_done evict_body
+
+  block evict_body:
+    // mcache_slot_addr = mcache_base + i*144 + class_offset
+    v17 = std loadSlot 2
+    v18 = std constI64 144
+    v19 = std mulI64 v17 v18
+    v20 = std loadSlot 3
+    v21 = std addI64 v20 v19
+    v22 = std loadSlot 1
+    v23 = std addI64 v21 v22
+
+    // If [mcache_slot] == span, NULL it.
+    v24 = std loadIndirect v23 0
+    v25 = std loadSlot 0
+    v26 = std cmpI64Eq v24 v25
+    std condBr v26 evict_clear evict_next
+
+  block evict_clear:
+    v27 = std constI64 0
+    std storeIndirect v23 0 v27
+    std br evict_next
+
+  block evict_next:
+    v28 = std loadSlot 2
+    v29 = std constI64 1
+    v30 = std addI64 v28 v29
+    std storeSlot 2 v30
+    std br evict_loop
+
+  block evict_done:
+    v31 = std globalAddr __slab_lock
+    std osLockRelease v31
+    v32 = std constI64 0
+    std ret v32
+end
+
 // __slab_free_class_with_mspan(slot, mspan)
 // Returns `slot` to its owning mspan's free list:
 //   [slot] = mspan.free_list
 //   mspan.free_list = slot
 //   mspan.free_count += 1
 //
-// This is the building block that step 6a.14's `__slab_free` will use once it
-// can resolve the mspan from an arbitrary slot pointer via the two-level
-// arena map. Until then callers must already know `mspan` — none do today,
-// which is why this is a leak in practice. That is OK: user code is not yet
-// routed through the slab.
+// This is the common sink for every free path: __slab_free's same-P local push,
+// its fallback-local push, and __slab_drain_remote_frees' replay of cross-P
+// frees. All three reach here as the span's single writer (the owning P), so the
+// per-span list mutation needs no lock.
+//
+// When this free brings free_count up to total_slots the span is now fully empty,
+// so we hand it back to mcentral via __slab_mcentral_return_span (which takes
+// __slab_lock internally) — letting a different P reclaim it instead of stranding
+// it in this P's mcache. Mirrors RuntimeEmitter.Allocator.cs's
+// EmitPushSlotOntoSpanFreeList.
 //
 // Slot usage:
 //   slot 0 = slot (arg)
@@ -4245,7 +4816,9 @@ end
 func __slab_free_class_with_mspan 2 void
   block entry:
     v0 = std param 0 i64
+    std storeSlot 0 v0
     v1 = std param 1 i64
+    std storeSlot 1 v1
 
     // [slot] = mspan.free_list
     v2 = std loadIndirect v1 0x10
@@ -4254,14 +4827,26 @@ func __slab_free_class_with_mspan 2 void
     // mspan.free_list = slot
     std storeIndirect v1 0x10 v0
 
-    // mspan.free_count += 1
+    // mspan.free_count += 1 (result kept in v5 for the fully-free compare below).
     v3 = std loadIndirect v1 0x18
     v4 = std constI64 1
     v5 = std addI64 v3 v4
     std storeIndirect v1 0x18 v5
 
-    v6 = std constI64 0
-    std ret v6
+    // Fully free? free_count == total_slots (+0x30) → return span to mcentral so
+    // another P can reclaim it. Otherwise fall through to the plain return.
+    v6 = std loadIndirect v1 0x30
+    v7 = std cmpI64Eq v5 v6
+    std condBr v7 return_span done
+
+  block return_span:
+    v8 = std loadSlot 1
+    v9 = std call __slab_mcentral_return_span v8
+    std br done
+
+  block done:
+    v10 = std constI64 0
+    std ret v10
 end
 
 // =============================================================================
@@ -4781,25 +5366,30 @@ end
 // Slot usage:
 //   slot 0 = size (arg)
 //   slot 1 = class_idx
-// Holds __slab_lock across the whole body (single exit) so concurrent worker
-// OS threads can't race on the shared mcache / mspan free lists / arena map.
-// Slot 2 carries the result across the unlock at `exit`.
+//
+// No global lock on the small-object fast path: __slab_alloc_class serves from
+// the calling P's own mcache row (lockless) and only takes __slab_lock inside
+// __slab_refill_mcache on a miss. The >32768 OS-direct path mutates the shared
+// OS-direct array, so it alone is wrapped in __slab_lock.
 func __slab_alloc 1 i64
   block entry:
     v0 = std param 0 i64
     std storeSlot 0 v0
-    v20 = std globalAddr __slab_lock
-    std osLockAcquire v20
 
     v1 = std constI64 32768
     v2 = std cmpI64Gt v0 v1
     std condBr v2 os_path small_path
 
   block os_path:
+    v20 = std globalAddr __slab_lock
+    std osLockAcquire v20
     v3 = std loadSlot 0
     v4 = std call __slab_os_direct_alloc v3
     std storeSlot 2 v4
-    std br exit
+    v21 = std globalAddr __slab_lock
+    std osLockRelease v21
+    v22 = std loadSlot 2
+    std ret v22
 
   block small_path:
     v5 = std constI64 0
@@ -4829,39 +5419,39 @@ func __slab_alloc 1 i64
   block class_found:
     v16 = std loadSlot 1
     v17 = std call __slab_alloc_class v16
-    std storeSlot 2 v17
-    std br exit
+    std ret v17
 
   block no_class:
     // Should be unreachable (size <= 32768 fits in class 17).
     v18 = std constI64 136
     std osExit v18
     v19 = std constI64 0
-    std storeSlot 2 v19
-    std br exit
-
-  block exit:
-    v21 = std globalAddr __slab_lock
-    std osLockRelease v21
-    v22 = std loadSlot 2
-    std ret v22
+    std ret v19
 end
 
 // __slab_free(ptr): public free entry point. Recovers the owning mspan via
-// __slab_arena_map_get; if the lookup misses, the pointer must have come
-// from the OS-direct path, so __slab_os_direct_free handles it.
+// __slab_arena_map_get (a lockless read of the immutable arena map). Routing:
+//
+//   * miss (span == NULL): the pointer came from the >32768 OS-direct path —
+//     free it under __slab_lock (mutates the shared OS-direct array).
+//
+//   * hit, same-P free (my raw id == span.owning_p): push the slot onto the
+//     span's free_list directly. Lockless — this P is the span's single writer.
+//
+//   * hit, cross-P free (different P, or a raw OS thread with no P): CAS-push the
+//     slot onto the OWNER P's remote-free MPSC queue; the owner drains it on its
+//     next alloc slow path. No span free_list is touched by a non-owner.
 //
 // Slot usage:
 //   slot 0 = ptr (arg)
-//   slot 1 = mspan
-// Holds __slab_lock across the whole body (single exit), matching __slab_alloc,
-// so frees from worker OS threads serialize against allocs/frees on others.
+//   slot 1 = span_ptr
+//   slot 2 = owning_p
+//   slot 3 = my raw id
+//   slot 4 = target P ptr (remote path)
 func __slab_free 1 void
   block entry:
     v0 = std param 0 i64
     std storeSlot 0 v0
-    v11 = std globalAddr __slab_lock
-    std osLockAcquire v11
 
     v1 = std call __slab_arena_map_get v0
     std storeSlot 1 v1
@@ -4871,21 +5461,96 @@ func __slab_free 1 void
     std condBr v3 os_direct slab_path
 
   block os_direct:
+    // OS-direct free mutates the shared OS-direct array — serialize it.
+    v20 = std globalAddr __slab_lock
+    std osLockAcquire v20
     v4 = std loadSlot 0
     v5 = std call __slab_os_direct_free v4
-    std br exit
+    v21 = std globalAddr __slab_lock
+    std osLockRelease v21
+    v6 = std constI64 0
+    std ret v6
 
   block slab_path:
-    v7 = std loadSlot 0
-    v8 = std loadSlot 1
-    v9 = std call __slab_free_class_with_mspan v7 v8
-    std br exit
+    // owning_p = span.owning_p ; my_id = current raw P id.
+    v7 = std loadSlot 1
+    v8 = std loadIndirect v7 0x40
+    std storeSlot 2 v8
+    v9 = std call __slab_current_p_id
+    std storeSlot 3 v9
 
-  block exit:
-    v12 = std globalAddr __slab_lock
-    std osLockRelease v12
+    // Same-P free requires my_id >= 0 AND my_id == owning_p. A raw OS thread
+    // (my_id == -1) never matches, so it always routes remote — exactly the
+    // C# bootstrap's LoadCurrentP==NULL → remote rule.
     v10 = std constI64 0
-    std ret v10
+    v11 = std cmpI64Lt v9 v10
+    std condBr v11 remote_path check_owner
+
+  block check_owner:
+    v12 = std loadSlot 2
+    v13 = std loadSlot 3
+    v14 = std cmpI64Eq v12 v13
+    std condBr v14 local_path check_sentinel
+
+  block check_sentinel:
+    // Defensive: a genuine cross-P free (real P, owning_p != my_id) must never
+    // observe the 0xFFFFFFFF "in mcentral, owned by nobody" sentinel — the owning
+    // P drains every in-flight remote free for a span before its free_count can
+    // reach total_slots and the span is handed to mcentral. Observing it here is a
+    // Mimalloc-invariant violation that would otherwise index __sched_procs at the
+    // huge sentinel id (OOB) and corrupt memory; panic loudly instead. Faithful
+    // port of RuntimeEmitter.Allocator.cs's defensive sentinel panic (the raw-OS-
+    // thread path with my_id < 0 skips this check, exactly as the C# bootstrap's
+    // LoadCurrentP==NULL → remotePath jump bypasses it).
+    v34 = std loadSlot 2
+    v35 = std constI64 0xFFFFFFFF
+    v36 = std cmpI64Eq v34 v35
+    std condBr v36 sentinel_panic remote_path
+
+  block sentinel_panic:
+    v37 = std globalAddr __slab_panic_sentinel_owning_p
+    v38 = std call mrt_panic v37
+    v39 = std constI64 0
+    std ret v39
+
+  block local_path:
+    // Single-writer push onto our own span's free list — lockless unless this
+    // free fully empties the span, in which case __slab_free_class_with_mspan
+    // escalates to a locked mcentral return.
+    v15 = std loadSlot 0
+    v16 = std loadSlot 1
+    v17 = std call __slab_free_class_with_mspan v15 v16
+    v18 = std constI64 0
+    std ret v18
+
+  block remote_path:
+    // target_p = __sched_procs[owning_p]. Resolve and CAS-push onto its queue.
+    v22 = std loadSlot 2
+    v23 = std call __slab_proc_at v22
+    std storeSlot 4 v23
+
+    // Defensive: a NULL target (owning_p has no live P — unreachable for a span
+    // created with owning_p >= 0, since the scheduler/P array is never torn down)
+    // would otherwise drop the free. Fall back to the local push so the slot is
+    // never lost. With no live scheduler there is no contending writer either,
+    // so the direct push is safe.
+    v24 = std constI64 0
+    v25 = std cmpI64Eq v23 v24
+    std condBr v25 fallback_local do_remote
+
+  block fallback_local:
+    v26 = std loadSlot 0
+    v27 = std loadSlot 1
+    v28 = std call __slab_free_class_with_mspan v26 v27
+    v29 = std constI64 0
+    std ret v29
+
+  block do_remote:
+    v30 = std loadSlot 4
+    v31 = std loadSlot 0
+    v32 = std call __slab_remote_free_push v30 v31
+    v33 = std constI64 0
+    std ret v33
 end
 
 // =============================================================================
@@ -6727,6 +7392,49 @@ func __gt_is_complete 1 i64
     v0 = std param 0 i64
     v1 = std constI64 0
     std ret v1
+end
+
+// __gt_init() -> void. Signature-only stub: the real body is the hand-emitted
+// machine code in X64Backend.maxon (emitX64GtInit), whose `recordLabel` overrides
+// this label. The stub exists so the backend can look up the (arity, return-type)
+// for the `call __gt_init` op that patchMrtStartCallGtInit injects into mrt_start
+// on x64-Windows (to install the VEH fault handler before main runs).
+//
+// Like __gt_trace_emit below, the stub body doubles as a DCE anchor: it references
+// the two .std helpers the hand-emitted CPU-fault diagnostic (emitX64GtFaultDiagnostic)
+// calls — mrt_write_cstr_stderr and mm_trace_print_hex — so the dead-code pass keeps
+// their labels alive even though the only real callers are machine code the DCE can't
+// see (their fixups would otherwise resolve to .text+0). The body never executes (the
+// hand-emitted __gt_init overrides it); the arg is a throwaway constant string addr.
+func __gt_init 0 void
+  block entry:
+    v0 = std globalAddr __gt_panic_msg_other
+    v1 = std call mrt_write_cstr_stderr v0
+    v2 = std constI64 0
+    v3 = std call mm_trace_print_hex v2
+    v4 = std constI64 0
+    std ret v4
+end
+
+// __io_init() -> void and __io_shutdown() -> void. Signature-only stubs: the real
+// bodies are the hand-emitted machine code in X64Backend.maxon (emitX64IoInit /
+// emitX64IoShutdown), emitted unconditionally on x64-Windows by emitX64IoRuntime,
+// whose `recordLabel` overrides these labels. The stubs exist so the MIR->x64 call
+// lowering can resolve the (arity 0, return void) signature via lookupFuncReturnStdType
+// for the `call __io_init` / `call __io_shutdown` ops that patchMrtStartCallIoInit /
+// patchMrtStartCallIoShutdown inject into mrt_start AFTER the reachability walk (which
+// is why filterRuntimeByReachability also seeds both names on x64-Windows). The bodies
+// never execute (the hand-emitted machine code overrides them).
+func __io_init 0 void
+  block entry:
+    v0 = std constI64 0
+    std ret v0
+end
+
+func __io_shutdown 0 void
+  block entry:
+    v0 = std constI64 0
+    std ret v0
 end
 
 // __gt_spawn(func_ptr, arg_count, arg_buf) -> promise (GT ptr) and

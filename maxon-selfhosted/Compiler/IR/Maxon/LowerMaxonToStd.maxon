@@ -583,8 +583,16 @@ export function registerSlabAndMmGlobalsForDataSection(globalData GlobalDataTabl
 	addDataSectionEntry(globalData, name: "__slab_meta_bump_end", initialBytes: zeroBytesOfSize(8))
 	// 18 size classes × {partial_head(8), full_head(8)} = 288 bytes.
 	addDataSectionEntry(globalData, name: "__slab_mcentral_array", initialBytes: zeroBytesOfSize(288))
-	// 18 size classes × mspan* (8 bytes) = 144 bytes.
-	addDataSectionEntry(globalData, name: "__slab_mcache_base", initialBytes: zeroBytesOfSize(144))
+	// Per-P sharded mcache: SLAB_MAX_SHARDS shards × 18 size classes × mspan* (8 bytes).
+	// Each P (one per CPU in the Tier-4 GMP scheduler) owns shard p_id, indexed
+	// `__slab_mcache_base + p_id*144 + class*8`. The fast-path mcache pop/push is
+	// then lockless (single-writer per P); cross-P frees route through each P's
+	// remote-free MPSC queue instead of touching another shard's free lists.
+	// SLAB_MAX_SHARDS = 256 comfortably exceeds dwNumberOfProcessors on any real
+	// machine (the .std fast path additionally clamps the shard index, and degrades
+	// to shard 0 when there is no multi-P scheduler — wasm / arm64 / pre-init x64).
+	// 256 × 18 × 8 = 36864 bytes of .data, zero-initialized.
+	addDataSectionEntry(globalData, name: "__slab_mcache_base", initialBytes: zeroBytesOfSize(36864))
 
 	// Slab top-layer state (step 6a.14): two-level arena map + OS-direct
 	// (>32KB) tracker.
@@ -648,6 +656,19 @@ export function registerSlabAndMmGlobalsForDataSection(globalData GlobalDataTabl
 	addDataSectionEntry(globalData, name: "__sched_tls_teb_offset", initialBytes: zeroBytesOfSize(8))
 	addDataSectionEntry(globalData, name: "__sched_global_queue_cs", initialBytes: zeroBytesOfSize(40))
 
+	// Tier 4 all-threads list + live-thread count (Go-style GMP completion path).
+	// `__gt_all_head` is the head of a singly-linked list of every live (non-completed)
+	// green thread, linked via the GT struct's `all_next` field (GtOffAllNext, 0x88).
+	// `__gt_live_count` is the atomically-tracked number of live green threads
+	// (excludes the per-OS-thread inline mainThreads). `__sched_all_cs` is the
+	// CRITICAL_SECTION serializing list link/unlink across worker OS threads:
+	// `__gt_spawn` prepends + LOCK-INCs; the trampoline LOCK-DECs + unlinks on
+	// completion. Reserved unconditionally so the .data layout is uniform across
+	// targets (only the x64-Windows runtime touches them today).
+	addDataSectionEntry(globalData, name: "__gt_all_head", initialBytes: zeroBytesOfSize(8))
+	addDataSectionEntry(globalData, name: "__gt_live_count", initialBytes: zeroBytesOfSize(8))
+	addDataSectionEntry(globalData, name: "__sched_all_cs", initialBytes: zeroBytesOfSize(40))
+
 	// Tier 4 cooperative-sleep timer: a fixed array of {time i64, gt_ptr i64}
 	// entries (16 bytes each, capacity 256) backing `maxon_sleep`, so a sleeping GT
 	// yields its thread to other GTs and wakes cooperatively. The two backends
@@ -661,6 +682,36 @@ export function registerSlabAndMmGlobalsForDataSection(globalData GlobalDataTabl
 	addDataSectionEntry(globalData, name: "__gt_timer_heap", initialBytes: zeroBytesOfSize(256 * 16))
 	addDataSectionEntry(globalData, name: "__gt_timer_count", initialBytes: zeroBytesOfSize(8))
 	addDataSectionEntry(globalData, name: "__gt_timer_cs", initialBytes: zeroBytesOfSize(40))
+
+	// Tier 4 CPU-fault diagnostics (x64-Windows `emitX64GtFaultThunk` /
+	// `emitX64GtFaultDiagnostic`). The vectored exception handler stashes the
+	// faulting RIP, the bad VA, and a pointer to the chosen panic-message string in
+	// these mutable slots before redirecting the faulting thread's CONTEXT to the
+	// diagnostic printer. The `__gt_panic_msg_*` strings are the fixed messages the
+	// thunk LEAs (one per converted exception code) plus the tag fragments the
+	// diagnostic prints around the hex addresses. Reserved unconditionally so the
+	// .data layout is uniform across targets — wasm/arm64 emit no VEH and never
+	// touch these (dead bytes, like the GT timer heap). The diagnostic deliberately
+	// omits a trailing newline on each message; it appends " at rip=" + hex below.
+	addDataSectionEntry(globalData, name: "__gt_fault_rip", initialBytes: zeroBytesOfSize(8))
+	addDataSectionEntry(globalData, name: "__gt_fault_last_addr", initialBytes: zeroBytesOfSize(8))
+	addDataSectionEntry(globalData, name: "__gt_fault_msg", initialBytes: zeroBytesOfSize(8))
+	// Re-entrancy guard: set to 1 by the thunk on the first converted fault. A
+	// second fault (e.g. a benign access violation Windows raises and would
+	// normally handle itself while the diagnostic's ExitProcess tears the process
+	// down) observes the flag and returns EXCEPTION_CONTINUE_SEARCH so the OS
+	// default disposition applies — preventing a recursive diagnostic + double
+	// print. The faulting process is already on its way out, so never resetting it
+	// is correct.
+	addDataSectionEntry(globalData, name: "__gt_fault_in_progress", initialBytes: zeroBytesOfSize(8))
+	addSubprocessString(globalData, name: "__gt_panic_msg_nil_deref", bytes: b"panic: nil pointer or invalid memory access\x00")
+	addSubprocessString(globalData, name: "__gt_panic_msg_div_zero", bytes: b"panic: integer divide by zero\x00")
+	addSubprocessString(globalData, name: "__gt_panic_msg_int_overflow", bytes: b"panic: integer overflow\x00")
+	addSubprocessString(globalData, name: "__gt_panic_msg_stack_overflow", bytes: b"panic: stack overflow\x00")
+	addSubprocessString(globalData, name: "__gt_panic_msg_other", bytes: b"panic: unhandled CPU fault\x00")
+	addSubprocessString(globalData, name: "__gt_panic_msg_at_rip", bytes: b" at rip=\x00")
+	addSubprocessString(globalData, name: "__gt_panic_msg_addr", bytes: b" addr=\x00")
+	addSubprocessString(globalData, name: "__gt_panic_msg_nl", bytes: b"\n\x00")
 
 	// Tier 4 subprocess runtime state (x64-Windows `emitX64SubprocessRuntime`).
 	// Mutable globals first so they stay 8-aligned for the atomics: the last
@@ -745,6 +796,44 @@ export function registerSlabAndMmGlobalsForDataSection(globalData GlobalDataTabl
 	addTraceTagEntry(globalData, name: "__at_tag_worker_suffix", text: b"]")
 	addTraceTagEntry(globalData, name: "__at_tag_nl", text: b"\n")
 	addTraceTagEntry(globalData, name: "__at_io_op_file_exists", text: b" [file_exists]")
+
+	// Tier 4 async-I/O IOCP machinery state (x64-Windows `emitX64IoRuntime`).
+	// Mirrors the C# bootstrap's `EmitIoRuntime` globals so the .data layout stays
+	// compatible. `__io_iocp` is the I/O completion port HANDLE; `__io_completion_thread`
+	// and the `__io_sync_workers` HANDLE array hold the IOCP-poller and sync-fallback
+	// OS threads (IoSyncWorkerCount = 1, so the array is one 8-byte slot). Two queues
+	// each guarded by a CRITICAL_SECTION (40 bytes on x64) + an Event: the sync-request
+	// queue (`__io_sync_cs` / manual-reset `__io_sync_req_event` / head+tail) feeds the
+	// worker, and the done queue (`__io_done_cs` / auto-reset `__io_done_event` /
+	// head+tail) carries completions back. `__io_connectex_ptr` caches the ConnectEx
+	// function pointer (unused by the non-networking subset ported here; reserved for
+	// layout/parity). Reserved unconditionally so the .data layout is uniform across
+	// targets — wasm/arm64 emit no IOCP and never touch these (dead bytes, like the GT
+	// timer heap); INERT on x64 too until async-I/O specs submit work.
+	addDataSectionEntry(globalData, name: "__io_iocp", initialBytes: zeroBytesOfSize(8))
+	addDataSectionEntry(globalData, name: "__io_completion_thread", initialBytes: zeroBytesOfSize(8))
+	addDataSectionEntry(globalData, name: "__io_sync_workers", initialBytes: zeroBytesOfSize(8))
+	addDataSectionEntry(globalData, name: "__io_sync_cs", initialBytes: zeroBytesOfSize(40))
+	addDataSectionEntry(globalData, name: "__io_sync_req_event", initialBytes: zeroBytesOfSize(8))
+	addDataSectionEntry(globalData, name: "__io_sync_req_head", initialBytes: zeroBytesOfSize(8))
+	addDataSectionEntry(globalData, name: "__io_sync_req_tail", initialBytes: zeroBytesOfSize(8))
+	addDataSectionEntry(globalData, name: "__io_done_cs", initialBytes: zeroBytesOfSize(40))
+	addDataSectionEntry(globalData, name: "__io_done_event", initialBytes: zeroBytesOfSize(8))
+	addDataSectionEntry(globalData, name: "__io_done_head", initialBytes: zeroBytesOfSize(8))
+	addDataSectionEntry(globalData, name: "__io_done_tail", initialBytes: zeroBytesOfSize(8))
+	addDataSectionEntry(globalData, name: "__io_connectex_ptr", initialBytes: zeroBytesOfSize(8))
+	// Fixed panic message for `__gt_panic_io` (unknown sync op code — should never
+	// happen). NUL-terminated, padded to 8-byte alignment like the other strings.
+	addSubprocessString(globalData, name: "__io_panic_msg", bytes: b"PANIC: unknown I/O op code\x00")
+
+	// Fixed panic message for `__slab_free`'s defensive cross-P sentinel check
+	// (a genuine cross-P free observing the 0xFFFFFFFF "in mcentral" owning_p —
+	// a Mimalloc-invariant violation). Registered here (not in `registerPanicStrings`,
+	// which only runs on the x64/arm64 backend paths) because `__slab_free` is
+	// linked into every target's runtime, so the wasm data layout must include it
+	// too. Mirrors RuntimeEmitter.MemoryManager.cs's `__slab_panic_sentinel_owning_p`
+	// symdata. NUL-terminated, padded to 8-byte alignment like the other strings.
+	addSubprocessString(globalData, name: "__slab_panic_sentinel_owning_p", bytes: b"__slab_free: cross-P free hit owning_p sentinel; span already returned to mcentral (Mimalloc invariant violation)\n\x00")
 end 'registerSlabAndMmGlobalsForDataSection'
 
 // Register one NUL-terminated async-trace tag string in .data, padded to an
@@ -840,6 +929,11 @@ export function registerBuiltinsIntrinsicSignatures(project Project)
 	// QueryPerformanceCounter, POSIX clock_gettime(CLOCK_MONOTONIC), WASI
 	// `monotonic-clock` — and returns the result in milliseconds.
 	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Builtins.currentTimeMs", paramNames: StringArray.create(), paramTypes: MaxonTypeArray.create(), returnType: intReturn)
+	// Deliberately dereferences address 0 to trigger a CPU access-violation fault,
+	// exercising the VEH fault-recovery path (clean `panic: nil pointer ...`
+	// diagnostic + exit 1). Zero-arg, void return (no `result not used` diagnostic).
+	// Mirrors the C# bootstrap's `__Builtins.forceSegfault` -> `maxon_force_segfault`.
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Builtins.forceSegfault", paramNames: StringArray.create(), paramTypes: MaxonTypeArray.create(), returnType: MaxonReturnType.void)
 	// Phase 3.4: subprocess builtins. Each call lowers to a fixed
 	// `maxon_subprocess_*` runtime symbol that the bootstrap-emitted runtime
 	// provides; the self-hosted backend just dispatches by name. The
@@ -3046,7 +3140,7 @@ type MaxonToStdLowering
 			// `__gt_await` (lowerAwaitReal / lowerTryAwaitReal). `cancelPromise` is
 			// currently a no-op: in the cooperative scheduler a promise whose spawner
 			// never yields never runs, so there is nothing to stop.
-			asyncCall(result, callee, _, args, _, _, _, _, _, _, _) then self.lowerAsyncCallReal(result, callee: callee, args: args, opIdx: opIdx, dstBlock: dstBlock)
+			asyncCall(result, callee, _, args, _, argTypes, _, _, _, _, _) then self.lowerAsyncCallReal(result, callee: callee, args: args, argTypes: argTypes, opIdx: opIdx, dstBlock: dstBlock)
 			awaitPromise(result, promise, innerType, _, _) then self.lowerAwaitReal(result, promise: promise, innerType: innerType, dstBlock: dstBlock)
 			tryAwait(result, promise, innerType, _, errorBoundName, _) then self.lowerTryAwaitReal(result, promise: promise, innerType: innerType, errorBoundName: errorBoundName, dstBlock: dstBlock)
 			cancelPromise then return
@@ -3076,7 +3170,7 @@ type MaxonToStdLowering
 	// slab allocator so it doesn't perturb the leak balance), takes the raw
 	// function pointer via `funcRef`, and spawns a green thread with
 	// `__gt_spawn(func_ptr, count, arg_buf)`. The result is the promise (GT ptr).
-	function lowerAsyncCallReal(result ByteArray, callee ByteArray, args ByteArrayArray, opIdx OpIndex, dstBlock IrBlock)
+	function lowerAsyncCallReal(result ByteArray, callee ByteArray, args ByteArrayArray, argTypes MaxonTypeArray, opIdx OpIndex, dstBlock IrBlock)
 		let count = args.count()
 		// One extra trailing slot holds the coroutine entry's return shape
 		// (0=i64, 1=void, 2=throwing). The wasm green-thread runtime's
@@ -3097,15 +3191,47 @@ type MaxonToStdLowering
 		// [buf+0] = count
 		let countId = self.emitConstI64(count as IntConstant, dstBlock: dstBlock)
 		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(bufId, offset: 0, valueId: countId, width: StoreWidth.qword, isFloat: false)))
-		// [buf+8] = managed_mask (0 — managed-arg incref is a later step)
-		let maskId = self.emitConstI64(0, dstBlock: dstBlock)
+		// [buf+8] = managed_mask. Bit i (LSB = arg0) is set when arg i is a
+		// refcounted heap pointer (struct/array/string/union). The trampoline
+		// reads this mask after the user function returns and drops the spawn-
+		// time incref on each set bit; the paired increfs are emitted below,
+		// before `__gt_spawn`. Classification mirrors `maxonTypeIsManagedRef`
+		// over the per-arg `argTypes` — these are the user args in order, so the
+		// mask bit and the arg-buffer slot share index `i` (no implicit layout
+		// or witness params to skew the alignment). The trampoline loads only 7
+		// args (indices 0..6), so cap the mask scan there: a bit beyond what the
+		// trampoline decrefs would leak an incref with no matching decref.
+		var maskScanCount = count
+		if maskScanCount > 7 'capScan'
+			maskScanCount = 7
+		end 'capScan'
+		var managedMask = 0
+		for i in 0 upto maskScanCount 'maskBit'
+			let argType = try argTypes.get(i) otherwise panic("lowerAsyncCallReal: argTypes.get OOB")
+			if maxonTypeIsManagedRef(self.project, t: argType) 'isManaged'
+				managedMask = managedMask or (1 shl i)
+			end 'isManaged'
+		end 'maskBit'
+		let maskId = self.emitConstI64(managedMask as IntConstant, dstBlock: dstBlock)
 		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(bufId, offset: 8, valueId: maskId, width: StoreWidth.qword, isFloat: false)))
-		// [buf+16 + i*8] = arg i
+		// [buf+16 + i*8] = arg i. For each managed arg we also emit an
+		// `__mm_incref` so the value survives any scope-end decref the caller
+		// emits between the `async X(...)` site and the moment the spawned GT
+		// runs (e.g. a loop-local `var argv` decref'd at each iteration's scope
+		// exit). The GT's body owns this spawn-time ref; the trampoline drops it
+		// via the managed_mask after the function returns.
 		for i in 0 upto count 'eachArg'
 			let argName = try args.get(i) otherwise panic("lowerAsyncCallReal: args.get OOB")
 			let argId = self.resolveName(argName)
 			let argOffset = (16 + i * 8) as IntConstant
 			self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(bufId, offset: argOffset, valueId: argId, width: StoreWidth.qword, isFloat: false)))
+			if (managedMask and (1 shl i)) != 0 'increfManaged'
+				var increfArgs = ValueIdArray.create()
+				increfArgs.push(argId)
+				let increfRetId = allocValueId(self.funcIdRef)
+				self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(increfRetId, callee: "stdlib.__mm_incref", argIds: increfArgs)))
+				self.setValueType(increfRetId, t: MaxonType.integer)
+			end 'increfManaged'
 		end 'eachArg'
 		// [buf+16 + count*8] = return shape (trailing slot, after the args).
 		let shapeId = self.emitConstI64(shape, dstBlock: dstBlock)
@@ -5711,6 +5837,9 @@ type MaxonToStdLowering
 		if methodName == "currentTimeMs" 'isCurrentTimeMs'
 			return self.lowerBuiltinsCurrentTimeMs(result, args: args, dstBlock: dstBlock)
 		end 'isCurrentTimeMs'
+		if methodName == "forceSegfault" 'isForceSegfault'
+			return self.lowerBuiltinsForceSegfault(result, args: args, dstBlock: dstBlock)
+		end 'isForceSegfault'
 		if methodName == "sleep" 'isSleep'
 			return self.lowerBuiltinsSleep(result, args: args, dstBlock: dstBlock)
 		end 'isSleep'
@@ -6333,6 +6462,25 @@ type MaxonToStdLowering
 		self.setValueType(resultId, t: MaxonType.integer)
 		return true
 	end 'lowerBuiltinsSleep'
+
+	// `__Builtins.forceSegfault()`: dereference address 0 to trigger a CPU
+	// access-violation fault, exercising the VEH fault-recovery path. Lowers to the
+	// runtime helper `maxon_force_segfault` (never returns — the load always faults).
+	// Void-returning, so it follows the same throwaway-result + 0-const binding as
+	// `lowerBuiltinsSleep`. Mirrors the C# bootstrap's `maxon_force_segfault`.
+	function lowerBuiltinsForceSegfault(result ByteArray, args ByteArrayArray, dstBlock IrBlock) returns bool
+		if args.count() != 0 'badArity'
+			self.reportLowerError(ErrorCode.semanticWrongArgCount, message: "__Builtins.forceSegfault: expected 0 args, got {args.count()}")
+			return true
+		end 'badArity'
+		let throwawayId = allocValueId(self.funcIdRef)
+		self.setValueType(throwawayId, t: MaxonType.integer)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(throwawayId, callee: "maxon_force_segfault", argIds: ValueIdArray.create())))
+		let resultId = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: resultId, value: 0))))
+		self.setValueType(resultId, t: MaxonType.integer)
+		return true
+	end 'lowerBuiltinsForceSegfault'
 
 	function lowerBuiltinsGtIsComplete(result ByteArray, args ByteArrayArray, dstBlock IrBlock) returns bool
 		if args.count() != 1 'badArity'

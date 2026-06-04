@@ -11,11 +11,15 @@ ExitCode: 8
 module {
   func @mrt_start() {
   entry:
-    x64.prologue stack_size=16
+    x64.prologue stack_size=32
+    x64.call __gt_init
+    x64.call __io_init
     x64.call __slab_init
     x64.call main
-    x64.xor r9d, r9d
-    x64.mov [rbp-8], r8
+    x64.mov r12, r8
+    x64.call __io_shutdown
+    x64.xor r8d, r8d
+    x64.mov [rbp-8], r12
     x64.call_import slot_0
     x64.epilogue
     x64.ret

@@ -150,6 +150,11 @@ let whitelist = ["basics",
 	"function-overloads",
 	"tuples",
 	"panic-stack-trace",
+	// CPU-fault diagnostics: divide/mod-by-zero, nil-deref (via __Builtins.forceSegfault).
+	// The x64-Windows VEH fault handler maps each fault to a clean `panic: ...`
+	// message + exit 1; the runner strips the per-build " at rip=0x..." suffix
+	// (stripFaultRipSuffix) before comparing to the bare spec message.
+	"safety",
 	"command-line-args",
 	"file-io",
 	"directory",
@@ -257,7 +262,8 @@ let whitelist = ["basics",
 	// "managed-list" (25/34) — borrow-check / mm-trace fragments.
 	// "ownership-edge-cases" (32/88) — extensive mm-trace stderr fragments.
 	// "memory-safety" — HANGS/slow (heavy mm-trace fragment set).
-	// "safety" (0/3) — `result not used` discard diagnostic on forceSegfault.
+	// "safety" — ENABLED (see the active whitelist above): CPU-fault diagnostics now
+	//   land via the x64-Windows VEH handler + __Builtins.forceSegfault.
 	"leak-checker",
 	// "refcount" — HANGS/slow (heavy mm-trace fragment set).
 	"sha256",

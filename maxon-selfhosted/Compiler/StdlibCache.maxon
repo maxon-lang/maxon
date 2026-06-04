@@ -3870,6 +3870,7 @@ function writeStdSystemOp(buf ByteArray, op StdSystemOp) throws CacheCorruption
 		atomicInc(addrId) then writeQword(buf, value: addrId)
 		atomicDec(addrId) then writeQword(buf, value: addrId)
 		atomicXadd(resultId, addrId, valId) then writeStdSysAtomicXadd(buf, resultId: resultId, addrId: addrId, valId: valId)
+		atomicCas(resultId, addrId, oldId, newId) then writeStdSysAtomicCas(buf, resultId: resultId, addrId: addrId, oldId: oldId, newId: newId)
 		osLockInit(addrId) then writeQword(buf, value: addrId)
 		osLockAcquire(addrId) then writeQword(buf, value: addrId)
 		osLockRelease(addrId) then writeQword(buf, value: addrId)
@@ -4071,6 +4072,13 @@ function writeStdSysAtomicXadd(buf ByteArray, resultId ValueId, addrId ValueId, 
 	writeQword(buf, value: valId)
 end 'writeStdSysAtomicXadd'
 
+function writeStdSysAtomicCas(buf ByteArray, resultId ValueId, addrId ValueId, oldId ValueId, newId ValueId)
+	writeQword(buf, value: resultId)
+	writeQword(buf, value: addrId)
+	writeQword(buf, value: oldId)
+	writeQword(buf, value: newId)
+end 'writeStdSysAtomicCas'
+
 function writeStdSysBoxValue(buf ByteArray, resultId ValueId, valueId ValueId, sizeId ValueId)
 	writeQword(buf, value: resultId)
 	writeQword(buf, value: valueId)
@@ -4155,6 +4163,7 @@ function readStdSystemOp(buf ByteArray, offset ByteOffset) returns (StdSystemOp,
 		atomicInc gives readStdSysAtomicInc(buf, offset: pos)
 		atomicDec gives readStdSysAtomicDec(buf, offset: pos)
 		atomicXadd gives readStdSysAtomicXadd(buf, offset: pos)
+		atomicCas gives readStdSysAtomicCas(buf, offset: pos)
 		osLockInit gives readStdSysOsLockInit(buf, offset: pos)
 		osLockAcquire gives readStdSysOsLockAcquire(buf, offset: pos)
 		osLockRelease gives readStdSysOsLockRelease(buf, offset: pos)
@@ -4430,6 +4439,14 @@ function readStdSysAtomicXadd(buf ByteArray, offset ByteOffset) returns (StdSyst
 	let valId = readQword(buf, offset: offset + 16)
 	return (StdSystemOp.atomicXadd(resultId, addrId: addrId, valId: valId), offset + 24)
 end 'readStdSysAtomicXadd'
+
+function readStdSysAtomicCas(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
+	let resultId = readQword(buf, offset: offset)
+	let addrId = readQword(buf, offset: offset + 8)
+	let oldId = readQword(buf, offset: offset + 16)
+	let newId = readQword(buf, offset: offset + 24)
+	return (StdSystemOp.atomicCas(resultId, addrId: addrId, oldId: oldId, newId: newId), offset + 32)
+end 'readStdSysAtomicCas'
 
 function readStdSysOsLockInit(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
 	let addrId = readQword(buf, offset: offset)

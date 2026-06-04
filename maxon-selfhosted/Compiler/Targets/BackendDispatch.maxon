@@ -88,6 +88,7 @@ end 'loadWasmGtRuntime'
 // primitives only the wasm backend lowers.
 function wasmGtOverrideNames() returns StringArray
 	var names = StringArray.create()
+	names.push("__gt_init")
 	names.push("__gt_spawn")
 	names.push("__gt_await")
 	names.push("__gt_current_trace_id")
@@ -376,8 +377,136 @@ export function augmentWithRuntime(module StdModule, project Project) returns St
 	if project.target.cpu == CpuArch.wasm32 'wasmBootstrap'
 		patchMrtStartWasmBootstrap(augmented)
 	end 'wasmBootstrap'
+	// On x64-Windows, install the CPU-fault handler (the vectored exception handler
+	// registered at the tail of __gt_init) for EVERY program — not just async ones —
+	// so a hardware fault in straight-line code prints a clean diagnostic and exits 1
+	// instead of a silent 0xC0000005. Mirrors the C# bootstrap, which calls __gt_init
+	// unconditionally from _start. The call is idempotent (guarded by __gt_init_done),
+	// so an async program that later spawns just observes the flag and skips re-init.
+	if project.target.cpu == CpuArch.x64 and project.target.os == Os.windows 'x64WinFaultHandler'
+		patchMrtStartCallGtInit(augmented)
+		// Bring up the IOCP async-I/O subsystem (completion thread + sync worker)
+		// right after the scheduler, and tear it down before osExit — mirroring the
+		// C# bootstrap, which calls __io_init / __io_shutdown unconditionally from
+		// _start. Both are idempotent / guarded (sentinel __io_done_event) so a
+		// program that never touches async I/O pays only the bring-up/teardown.
+		patchMrtStartCallIoInit(augmented)
+		patchMrtStartCallIoShutdown(augmented)
+	end 'x64WinFaultHandler'
 	return augmented
 end 'augmentWithRuntime'
+
+// x64-Windows-only: prepend `std call __gt_init` to mrt_start's entry block so the
+// VEH fault handler is installed before main runs. __gt_init is idempotent, takes
+// no args, and returns void — its result id is unused (mrt_start's osExit reads
+// main's result, untouched here). Mirrors patchMrtStartWasmBootstrap's structure.
+function patchMrtStartCallGtInit(module StdModule)
+	for func in module.functions 'findStart'
+		if func.name != "mrt_start" 'notStart'
+			continue
+		end 'notStart'
+		if func.blockRefs.count() == 0 'noBlocks'
+			panic("patchMrtStartCallGtInit: mrt_start has no blocks")
+		end 'noBlocks'
+		let entryBlockRef = try func.blockRefs.get(0) otherwise panic("patchMrtStartCallGtInit: blockRefs.get(0) OOB")
+		let entryBlock = try module.blocks.get(entryBlockRef) otherwise panic("patchMrtStartCallGtInit: blocks.get OOB at {entryBlockRef}")
+		let valueIdRef = ValueIdRef.create(scanMaxValueId(func, module: module) + 1)
+		let resultId = allocValueId(valueIdRef)
+		let initOpIdx = module.ops.count()
+		module.ops.push(StdOp.call(StdCallOp.call(resultId, callee: "__gt_init", argIds: ValueIdArray.create())))
+		try entryBlock.opRefs.insert(0, value: initOpIdx) otherwise panic("patchMrtStartCallGtInit: opRefs.insert failed")
+		return
+	end 'findStart'
+	panic("patchMrtStartCallGtInit: mrt_start function not in module")
+end 'patchMrtStartCallGtInit'
+
+// x64-Windows-only: insert `std call __io_init` into mrt_start's entry block
+// immediately AFTER the `call __gt_init` op installed by patchMrtStartCallGtInit
+// (index 0), matching the C# bootstrap order: scheduler first, then I/O. __io_init
+// is idempotent (guarded by __io_done_event), takes no args, returns void — its
+// result id is unused. Must run after patchMrtStartCallGtInit so index 1 sits
+// just past the __gt_init op. Mirrors patchMrtStartCallGtInit's structure.
+function patchMrtStartCallIoInit(module StdModule)
+	for func in module.functions 'findStart'
+		if func.name != "mrt_start" 'notStart'
+			continue
+		end 'notStart'
+		if func.blockRefs.count() == 0 'noBlocks'
+			panic("patchMrtStartCallIoInit: mrt_start has no blocks")
+		end 'noBlocks'
+		let entryBlockRef = try func.blockRefs.get(0) otherwise panic("patchMrtStartCallIoInit: blockRefs.get(0) OOB")
+		let entryBlock = try module.blocks.get(entryBlockRef) otherwise panic("patchMrtStartCallIoInit: blocks.get OOB at {entryBlockRef}")
+		let valueIdRef = ValueIdRef.create(scanMaxValueId(func, module: module) + 1)
+		let resultId = allocValueId(valueIdRef)
+		let initOpIdx = module.ops.count()
+		module.ops.push(StdOp.call(StdCallOp.call(resultId, callee: "__io_init", argIds: ValueIdArray.create())))
+		try entryBlock.opRefs.insert(1, value: initOpIdx) otherwise panic("patchMrtStartCallIoInit: opRefs.insert failed")
+		return
+	end 'findStart'
+	panic("patchMrtStartCallIoInit: mrt_start function not in module")
+end 'patchMrtStartCallIoInit'
+
+// x64-Windows-only: insert `std call __io_shutdown` into mrt_start's entry block
+// immediately BEFORE the `osExit` op, so the IOCP completion thread + sync worker
+// are joined and all handles/CRITICAL_SECTIONs released before the process exits.
+// Mirrors the C# bootstrap, which calls __io_shutdown after the green threads drain
+// and before the leak check / exit. __io_shutdown is guarded on __io_done_event so it
+// is a safe no-op if a program errored before __io_init ran. Takes no args, returns
+// void — result id unused. We locate the osExit op (the merged mrt_start body is
+// `[__gt_init, __io_init, __slab_init, …, call main, osExit, ret]`) rather than a
+// fixed index because module-init patches and the gt/io inits shift positions.
+function patchMrtStartCallIoShutdown(module StdModule)
+	for func in module.functions 'findStart'
+		if func.name != "mrt_start" 'notStart'
+			continue
+		end 'notStart'
+		if func.blockRefs.count() == 0 'noBlocks'
+			panic("patchMrtStartCallIoShutdown: mrt_start has no blocks")
+		end 'noBlocks'
+		let entryBlockRef = try func.blockRefs.get(0) otherwise panic("patchMrtStartCallIoShutdown: blockRefs.get(0) OOB")
+		let entryBlock = try module.blocks.get(entryBlockRef) otherwise panic("patchMrtStartCallIoShutdown: blocks.get OOB at {entryBlockRef}")
+		var osExitPos = -1
+		for i in 0 upto entryBlock.opRefs.count() 'each'
+			let opIdx = try entryBlock.opRefs.get(i) otherwise panic("patchMrtStartCallIoShutdown: opRefs.get OOB at {i}")
+			let op = try module.ops.get(opIdx) otherwise panic("patchMrtStartCallIoShutdown: ops.get OOB at {opIdx}")
+			if isOsExitOp(op) 'isExit'
+				osExitPos = i
+				break
+			end 'isExit'
+		end 'each'
+		if osExitPos < 0 'noExit'
+			panic("patchMrtStartCallIoShutdown: could not locate osExit in mrt_start entry block")
+		end 'noExit'
+		let valueIdRef = ValueIdRef.create(scanMaxValueId(func, module: module) + 1)
+		let resultId = allocValueId(valueIdRef)
+		let shutdownOpIdx = module.ops.count()
+		module.ops.push(StdOp.call(StdCallOp.call(resultId, callee: "__io_shutdown", argIds: ValueIdArray.create())))
+		try entryBlock.opRefs.insert(osExitPos, value: shutdownOpIdx) otherwise panic("patchMrtStartCallIoShutdown: opRefs.insert failed")
+		return
+	end 'findStart'
+	panic("patchMrtStartCallIoShutdown: mrt_start function not in module")
+end 'patchMrtStartCallIoShutdown'
+
+// True iff `op` is `std osExit <codeId>` (the mrt_start process-exit op).
+function isOsExitOp(op StdOp) returns bool
+	return match op 'shape'
+		system(inner) gives isOsExitSystemOp(inner)
+		call gives false
+		arith gives false
+		control gives false
+		memory gives false
+	end 'shape'
+end 'isOsExitOp'
+
+// Range patterns span the StdSystemOp arms before/after `osExit` so the predicate
+// stays exhaustive without a `default` arm (matching the rest of this file's style).
+function isOsExitSystemOp(inner StdSystemOp) returns bool
+	return match inner 'sysShape'
+		globalAddr to loadByte gives false
+		osExit gives true
+		osSleep to dropTypeParam gives false
+	end 'sysShape'
+end 'isOsExitSystemOp'
 
 // Wasm-only: rewrite mrt_start's straight `call main` into the green-thread
 // bootstrap. The merged mrt_start body is `[__slab_init, (module inits…), call
@@ -512,6 +641,28 @@ function filterRuntimeByReachability(runtime StdModule, userModule StdModule, ta
 		// seed them here or the fixups resolve to .text+0 ("Unresolved label").
 		seedRuntimeReachName("mm_trace_print_tag", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
 		seedRuntimeReachName("mm_trace_print_i64", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
+		// The CPU-fault diagnostic (`emitX64GtFaultDiagnostic`, also hand-rolled
+		// unconditionally on x64-Windows) emits `call rel32` fixups to these two
+		// `.std` helpers to render its panic line. Same late-emission invisibility as
+		// the async-trace helpers above, so seed them here for the cache-off leg.
+		seedRuntimeReachName("mrt_write_cstr_stderr", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
+		seedRuntimeReachName("mm_trace_print_hex", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
+		// `patchMrtStartCallGtInit` (in `augmentWithRuntime`) injects `call __gt_init`
+		// into `mrt_start` AFTER this reachability walk, so the call edge is invisible
+		// here. Seed the `__gt_init` signature-only stub so its (arity, return-type) is
+		// in `allFunctions` for the MIR→x64 lowering of that call, and so the runtime
+		// module keeps it on the cache-off leg (the hand-emitted `emitX64GtInit`
+		// overrides the label, but the stub must survive the filter to supply the sig).
+		// The stub body also transitively anchors mrt_write_cstr_stderr / mm_trace_print_hex.
+		seedRuntimeReachName("__gt_init", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
+		// `patchMrtStartCallIoInit` / `patchMrtStartCallIoShutdown` inject `call __io_init`
+		// and `call __io_shutdown` into `mrt_start` AFTER this walk (same invisibility as
+		// `__gt_init`). Seed both signature-only stubs so their (arity, return-type) is in
+		// `allFunctions` for the MIR->x64 lowering of those calls and so the runtime module
+		// keeps them through the filter (the hand-emitted emitX64IoInit / emitX64IoShutdown
+		// override the labels, but the stubs must survive to supply the signatures).
+		seedRuntimeReachName("__io_init", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
+		seedRuntimeReachName("__io_shutdown", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
 	end 'win32Helpers'
 
 	// On wasm the green-thread scheduler is driven from `mrt_start`'s bootstrap
@@ -1370,6 +1521,7 @@ function getMirLatency(op MirOp, table TargetLatencyTable) returns Latency
 		atomicInc gives 8
 		atomicDec gives 8
 		atomicXadd gives 8
+		atomicCas gives 8
 		osLockInit gives 5
 		osLockAcquire gives 30
 		osLockRelease gives 5

@@ -592,6 +592,11 @@ export union StdSystemOp
 	// LOCK XADD on x86, LDAXR/ADD/STLXR loop on ARM64. Used by debug-stream slot
 	// reservation and as a building block for cmpxchg loops.
 	atomicXadd(resultId ValueId, addrId ValueId, valId ValueId)
+	// Atomic 64-bit compare-and-swap: if [addrId] == oldId { [addrId] = newId;
+	// result = 1 } else { result = 0 }. LOCK CMPXCHG on x86, LDAXR/CMP/B.NE/STLXR/
+	// CBNZ retry loop + CSET on ARM64. The building block for lock-free MPSC
+	// queues (e.g. the per-P sharded allocator's remote-free list).
+	atomicCas(resultId ValueId, addrId ValueId, oldId ValueId, newId ValueId)
 	// Initialize a platform lock at [addrId]. Windows: InitializeCriticalSection.
 	// Linux: no-op (recursive spinlocks zero-init from mmap-allocated pages).
 	osLockInit(addrId ValueId)
@@ -819,6 +824,7 @@ export function sysOpToString(op StdSystemOp) returns String
 		atomicInc(addrId) gives "sys.atomic_inc %{addrId}"
 		atomicDec(addrId) gives "sys.atomic_dec %{addrId}"
 		atomicXadd(resultId, addrId, valId) gives "%{resultId} = sys.atomic_xadd %{addrId}, %{valId}"
+		atomicCas(resultId, addrId, oldId, newId) gives "%{resultId} = sys.atomic_cas %{addrId}, %{oldId}, %{newId}"
 		osLockInit(addrId) gives "sys.os_lock_init %{addrId}"
 		osLockAcquire(addrId) gives "sys.os_lock_acquire %{addrId}"
 		osLockRelease(addrId) gives "sys.os_lock_release %{addrId}"
