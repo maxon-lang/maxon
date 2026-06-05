@@ -37,10 +37,6 @@ export union PassKind
 	// before DFE (which could drop the offending caller before it is checked).
 	// No-op on supporting targets and for stdlib-defining code.
 	rejectWasmSubprocess
-	// E3096: reject the networking API (TcpClient / HttpClient) in user code on
-	// targets that cannot host it (wasm32-wasi has no socket primitive). Same
-	// placement rationale as rejectWasmSubprocess above.
-	rejectWasmNetworking
 	deadFunctionElimination
 	// Phase 11.2: emit per-instantiation layout descriptors + thunks
 	// (Maxon-level; runs after DFE has narrowed the live function set
@@ -276,7 +272,6 @@ export type PassPipeline
 			// public typealiases.
 			checkUnusedExports then runCheckUnusedExportsIfNotStdlib(project, module: maxonModule, isStdlib: isStdlib)
 			rejectWasmSubprocess then rejectWasmSubprocess(project, module: maxonModule, target: target)
-			rejectWasmNetworking then rejectWasmNetworking(project, module: maxonModule, target: target)
 			deadFunctionElimination then maxonModule = eliminateDeadFunctions(project, module: maxonModule)
 			buildLayoutDescriptors then buildLayoutDescriptors(project, maxonModule: maxonModule, globalData: globalData)
 			buildWitnessTables then buildWitnessTables(project, maxonModule: maxonModule, globalData: globalData)
@@ -619,7 +614,6 @@ export function classifyPass(pass PassKind) returns PassClassification
 		semanticCheck gives PassClassification.wholeModule
 		checkUnusedExports gives PassClassification.wholeModule
 		rejectWasmSubprocess gives PassClassification.wholeModule
-		rejectWasmNetworking gives PassClassification.wholeModule
 		deadFunctionElimination gives PassClassification.wholeModule
 		buildLayoutDescriptors gives PassClassification.wholeModule
 		buildWitnessTables gives PassClassification.wholeModule
@@ -685,10 +679,6 @@ export function buildMidPipeline(project Project) returns PassKindArray
 	// populated, and before DFE so the offending caller is still present to be
 	// checked. No-op on supporting targets and for stdlib-defining code.
 	passes.push(PassKind.rejectWasmSubprocess)
-	// E3096: reject the networking API (TcpClient / HttpClient) in user code on
-	// wasm32-wasi (no socket primitive). Same placement rationale as the
-	// subprocess rejection directly above.
-	passes.push(PassKind.rejectWasmNetworking)
 	// Phase 11.2: emit layout-descriptor blobs + stub thunks for every
 	// concrete generic instantiation. Must run BEFORE DFE so the synthesized
 	// thunks and the witness-method-impl names get pushed onto
@@ -819,7 +809,6 @@ function classifyPhase(pass PassKind) returns PipelinePhase
 		semanticCheck gives PipelinePhase.maxon
 		checkUnusedExports gives PipelinePhase.maxon
 		rejectWasmSubprocess gives PipelinePhase.maxon
-		rejectWasmNetworking gives PipelinePhase.maxon
 		deadFunctionElimination gives PipelinePhase.maxon
 		buildLayoutDescriptors gives PipelinePhase.maxon
 		buildWitnessTables gives PipelinePhase.maxon
@@ -947,7 +936,6 @@ export function passKindToString(pass PassKind) returns String
 		semanticCheck gives "semantic-check"
 		checkUnusedExports gives "check-unused-exports"
 		rejectWasmSubprocess gives "reject-wasm-subprocess"
-		rejectWasmNetworking gives "reject-wasm-networking"
 		deadFunctionElimination gives "dead-function-elimination"
 		buildLayoutDescriptors gives "build-layout-descriptors"
 		buildWitnessTables gives "build-witness-tables"

@@ -275,6 +275,84 @@ function asyncifyPostProcess(outputPath FilePath)
 	end 'failed'
 end 'asyncifyPostProcess'
 
+// Find the vendored `wasm-tools` (used to wrap the emitted core module into a
+// WASI Preview2 component), preferring the `.exe` form on Windows. Returns an
+// empty FilePath if not found.
+function findWasmToolsPath() returns FilePath
+	var candidates = StringArrayArray.create()
+	let exe = ["vendor", "wasm-tools", "wasm-tools.exe"]
+	let noExt = ["vendor", "wasm-tools", "wasm-tools"]
+	candidates.push(exe)
+	candidates.push(noExt)
+	return findFileUpward(candidates)
+end 'findWasmToolsPath'
+
+// Locate the vendored WASI WIT package directory (`vendor/wasi-wit`). We search
+// for the `world.wit` file via the same upward walk used for the runtime and
+// wasm-opt, then return its parent directory — `wasm-tools component embed`
+// wants the package root, not the file. Returns an empty FilePath if not found.
+function findWasmWitDir() returns FilePath
+	var candidates = StringArrayArray.create()
+	let full = ["vendor", "wasi-wit", "world.wit"]
+	candidates.push(full)
+	let witFile = findFileUpward(candidates)
+	if witFile.isEmpty() 'missing'
+		return FilePath from ""
+	end 'missing'
+	return try witFile.parent() otherwise return FilePath from ""
+end 'findWasmWitDir'
+
+// Wrap the just-asyncified core module into a WASI Preview2 component. The core
+// module imports the raw Preview2 interface funcs and exports `wasi:cli/run`;
+// `wasm-tools component embed` records the `maxon:app/command` world (so the
+// component model knows which interfaces the core lifts/lowers), and
+// `component new` produces the final component wasmtime runs. The
+// `cli-exit-with-code` feature must be enabled at embed time because the
+// `wasi:cli/exit` import is gated `@unstable(cli-exit-with-code)` in the WIT.
+function wrapWasmComponent(outputPath FilePath)
+	let wasmToolsExe = findWasmToolsPath()
+	if wasmToolsExe.isEmpty() 'missingTool'
+		panic("wasm-tools not found in vendor/wasm-tools/ — required to wrap wasm core module into a Preview2 component")
+	end 'missingTool'
+	let witDir = findWasmWitDir()
+	if witDir.isEmpty() 'missingWit'
+		panic("WASI WIT package not found at vendor/wasi-wit/ — required to wrap wasm core module into a Preview2 component")
+	end 'missingWit'
+	// Intermediate embedded core (component metadata recorded, not yet a
+	// component) lives next to the output so it shares the same writable dir.
+	let tmpEmbed = outputPath.changeExtension(".embed.wasm")
+	let cwd = Directory.currentPath()
+	var embedArgs = StringArray.create()
+	embedArgs.push("component")
+	embedArgs.push("embed")
+	embedArgs.push(witDir.toString())
+	embedArgs.push(outputPath.toString())
+	embedArgs.push("-o")
+	embedArgs.push(tmpEmbed.toString())
+	embedArgs.push("--world")
+	embedArgs.push("maxon:app/command")
+	embedArgs.push("--features")
+	embedArgs.push("cli-exit-with-code")
+	let embedResult = try Subprocess.run(Executable.path(wasmToolsExe), arguments: embedArgs, workingDirectory: cwd) otherwise (err) 'embedRunFail'
+		panic("wrapWasmComponent: failed to run wasm-tools component embed: {err}")
+	end 'embedRunFail'
+	if not embedResult.succeeded() 'embedFailed'
+		panic("wrapWasmComponent: wasm-tools component embed exited {embedResult.exitCode()}:\n{embedResult.stderr}")
+	end 'embedFailed'
+	var newArgs = StringArray.create()
+	newArgs.push("component")
+	newArgs.push("new")
+	newArgs.push(tmpEmbed.toString())
+	newArgs.push("-o")
+	newArgs.push(outputPath.toString())
+	let newResult = try Subprocess.run(Executable.path(wasmToolsExe), arguments: newArgs, workingDirectory: cwd) otherwise (err) 'newRunFail'
+		panic("wrapWasmComponent: failed to run wasm-tools component new: {err}")
+	end 'newRunFail'
+	if not newResult.succeeded() 'newFailed'
+		panic("wrapWasmComponent: wasm-tools component new exited {newResult.exitCode()}:\n{newResult.stderr}")
+	end 'newFailed'
+end 'wrapWasmComponent'
+
 // Prepends runtime functions from runtime.std to a user module.
 // Runtime functions are expressed as Std-level IR and will be lowered by
 // the backend just like user functions.
@@ -1586,4 +1664,5 @@ end 'writeExecutable'
 function writeWasmExecutable(mirModule MirModule, globalData GlobalDataTable, outputPath FilePath, stdlibCache StdlibCacheData)
 	compileWasm(mirModule, globalData: globalData, outputPath: outputPath, stdlibCache: stdlibCache)
 	asyncifyPostProcess(outputPath)
+	wrapWasmComponent(outputPath)
 end 'writeWasmExecutable'

@@ -1,0 +1,78 @@
+// Test: managed-socket.connect-refused
+function main() returns ExitCode
+	let host = "192.0.2.1"
+	try __ManagedSocket.tcpConnect(host.managed, 1) otherwise (e) 'connErr'
+		match e 'check'
+			connectFailed then print("connect failed")
+			default throws __ManagedSocketError.resolveFailed
+		end 'check'
+		return 42
+	end 'connErr'
+	return 0
+end 'main'
+---
+ExitCode: 42
+Stdout: ```
+connect failed
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.global_addr @__istr_0
+    %1 = mir.mov_imm 40 : i64
+    %2 = mir.call @mrt_alloc(%1)
+    mir.store %0, %2, 0 width: qword
+    %3 = mir.mov_imm 9 : i64
+    mir.store %3, %2, 8 width: qword
+    %4 = mir.mov_imm -2 : i64
+    mir.store %4, %2, 16 width: qword
+    %5 = mir.mov_imm 1 : i64
+    mir.store %5, %2, 24 width: qword
+    %6 = mir.mov_imm 0 : i64
+    mir.store %6, %2, 32 width: qword
+    %7 = mir.mov_imm 16 : i64
+    %8 = mir.call @mrt_alloc(%7)
+    mir.store %2, %8, 0 width: qword
+    mir.store %5, %8, 8 width: qword
+    %11 = mir.load %8, 0 width: qword
+    %13, %14 = mir.try_call @mrt_managed_socket_tcp_connect(%11, %5)
+    %16 = mir.cmp ne, %14, %6
+    mir.cond_br %16 [then: try_0.otherwise(), else: try_0.merge()]
+  try_0.otherwise:
+    %19 = mir.sub.i64 %14, %5
+    %21 = mir.mov_imm 2 : i64
+    %22 = mir.cmp eq, %19, %21
+    mir.cond_br %22 [then: check_0.case0(), else: check_0.case1()]
+  check_0.merge:
+    %23 = mir.mov_imm 42 : i64
+    mir.ret %23
+  check_0.case0:
+    %24 = mir.global_addr @__istr_1
+    %25 = mir.mov_imm 40 : i64
+    %26 = mir.call @mrt_alloc(%25)
+    mir.store %24, %26, 0 width: qword
+    %27 = mir.mov_imm 14 : i64
+    mir.store %27, %26, 8 width: qword
+    %28 = mir.mov_imm -2 : i64
+    mir.store %28, %26, 16 width: qword
+    mir.store %5, %26, 24 width: qword
+    mir.store %6, %26, 32 width: qword
+    %31 = mir.mov_imm 16 : i64
+    %32 = mir.call @mrt_alloc(%31)
+    mir.store %26, %32, 0 width: qword
+    mir.store %5, %32, 8 width: qword
+    %37 = mir.load %32, 0 width: qword
+    %38 = mir.load %37, 0 width: qword
+    %39 = mir.load %37, 8 width: qword
+    %40 = mir.call @mrt_write_stdout(%38, %39)
+    mir.br check_0.merge()
+  check_0.case1:
+    %36 = mir.mov_imm 2 : i64
+    mir.error_return %6, %36
+  try_0.merge:
+    mir.ret %6
+  }
+}
+---

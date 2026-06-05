@@ -306,10 +306,11 @@ let whitelist = ["basics",
 	// On wasm32-wasi it runs and asserts the E3074 compile error; on x64 the
 	// `targets:` directive skips it (the same program compiles fine there).
 	"subprocess-unsupported",
-	// networking-unsupported mirrors subprocess-unsupported: a UNIVERSAL entry
-	// holding ONE wasm32-wasi-gated negative test asserting E3096 (the networking
-	// API rejected on WASI). Skipped on x64 by its `targets:` directive.
-	"networking-unsupported",
+	// networking-unsupported (the E3096-on-wasm32-wasi negative test) was REMOVED:
+	// wasm32-wasi now has a real networking runtime (WASI Preview2 wasi:sockets),
+	// so the networking API is no longer compile-rejected there and the
+	// `managed-socket`/`tcp-client`/`async-tcp`/`http-client` specs run on wasm via
+	// the host-only whitelist (`targetRunsNetworking` now includes wasm32-wasi).
 	// "subprocess" — the x64-Windows subprocess runtime is implemented
 	//   (emitX64SubprocessRuntime: 2×CreatePipe + CreateProcessW + drain +
 	//   GetExitCodeProcess + CollectedOutput accessors) and the synchronous core
@@ -592,6 +593,22 @@ function buildWasmRunCommand(outputPath FilePath, testArgs String) returns RunCo
 	let wasmtimeExe = try FilePath.from(wasmtimePath) otherwise panic("buildWasmRunCommand: findWasmtimePath returned an invalid path '{wasmtimePath}'")
 	var argv = StringArray.create()
 	argv.push("run")
+	// Enable the gated `cli-exit-with-code` proposal so the component's
+	// `wasi:cli/exit.exit-with-code` import resolves (the WIT marks it
+	// `@unstable(cli-exit-with-code)`); without it wasmtime rejects the module.
+	argv.push("-S")
+	argv.push("cli-exit-with-code=y")
+	// Sockets support for the socket I/O specs. These `-S` flags are harmless
+	// for non-network programs: the component model strips imports a core never
+	// uses, so a program that does no socket I/O simply never references them.
+	argv.push("-S")
+	argv.push("tcp")
+	argv.push("-S")
+	argv.push("inherit-network")
+	argv.push("-S")
+	argv.push("allow-ip-name-lookup")
+	// All `-S` (wasmtime option) flags MUST precede the module path; anything
+	// after the module is forwarded as a guest argv entry.
 	argv.push("--dir=.")
 	argv.push("--dir=..::../")
 	argv.push(outputPath.toString())
@@ -1666,7 +1683,11 @@ function convertWasmtimeStderr(s String) returns String
 		// `main` and `mrt_start` in the wasmtime backtrace but are an
 		// implementation detail of the always-asyncified runtime, exactly like
 		// mrt_panic, so they are elided to match the native stack-trace shape.
-		if funcName == "mrt_panic" or funcName == "__gt_invoke" or funcName == "__sched_run" 'skipImpl'
+		// `run` is the synthetic Preview2 component entry adapter (the
+		// wasi:cli/run export wrapper) that calls into `mrt_start`; it sits
+		// below `mrt_start` and is the component-model analog of `_start`, so
+		// it is elided for the same reason.
+		if funcName == "mrt_panic" or funcName == "__gt_invoke" or funcName == "__sched_run" or funcName == "run" 'skipImpl'
 			continue
 		end 'skipImpl'
 		trace = "{trace}\n  in {funcName}"

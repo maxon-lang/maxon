@@ -7820,6 +7820,7 @@ let IoSyncOpGetCwd = 6
 let IoSyncOpFileOpenRead = 7
 let IoSyncOpFileOpenWrite = 8
 let IoSyncOpCloseHandle = 9
+
 // Network sync ops 13/14 — byte-compatible with the C# bootstrap (SyncOpNetClose=13,
 // SyncOpDnsResolve=14). Serviced only when networking is linked (see the gated
 // dispatch arms in `emitX64IoSyncWorkerLoop`); otherwise they panic like any
@@ -8969,9 +8970,10 @@ end 'emitX64IoShutdown'
 //
 // x64-WINDOWS ONLY: the green-thread/IOCP runtime these hook into exists only on
 // x64-windows; arm64/macos/linux have no `__gt_*`/`__io_*` runtime (C#'s kqueue
-// path is out of scope), and wasm32-wasi has no sockets (rejected at compile time
-// by RejectWasmNetworking). On those targets the runtime.std `mrt_managed_socket_*`
-// sentinel stubs remain and a socket call throws at runtime.
+// path is out of scope), so on those targets the runtime.std `mrt_managed_socket_*`
+// sentinel stubs remain and a socket call throws at runtime. (wasm32-wasi has its
+// OWN networking runtime via WASI Preview2 wasi:sockets — see emitWasmSocketTcpConnect
+// in Targets/Wasm/MirToWasm.maxon — so it is NOT a stub-only target.)
 //
 // REACHABILITY-GATED, unlike its siblings (subprocess/green-thread are emitted
 // unconditionally as dead code). Emitted only when a program reaches a
@@ -9011,6 +9013,7 @@ let IpprotoTcp = 6
 let FileSkipCompletionPortOnSuccess = 1
 let ErrorOperationAborted = 0x3EF
 let TestNet1NetOrder = 0x010200C0  // 192.0.2.1 in network byte order
+
 // __ManagedSocketError ordinals + 1 (the errorReturn flag values). See the
 // runtime.std header and registerManagedSocketErrorEnum.
 let SockFlagBufferOutOfBounds = 1

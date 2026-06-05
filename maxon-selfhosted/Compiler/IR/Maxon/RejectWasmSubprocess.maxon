@@ -43,8 +43,10 @@
 //   the error pinned to the actual offending call.
 
 // A closed set of public stdlib entry points (mangling stripped) that a wasm
-// API-rejection pass matches resolved callees against. Shared by the subprocess
-// and networking passes via `rejectApiCallsOnUnsupportedTarget`.
+// API-rejection pass matches resolved callees against, via
+// `rejectApiCallsOnUnsupportedTarget`. (Subprocess is the sole user today; the
+// helper stays generic so a future socket-less / capability-less API can reuse
+// the same walk.)
 export typealias ApiEntrySet = Set with String
 
 // The closed set of public subprocess entry points (mangling stripped). See the
@@ -82,13 +84,12 @@ export function rejectWasmSubprocess(project Project, module MaxonModule, target
 	rejectApiCallsOnUnsupportedTarget(project, module: module, entryPoints: subprocessApiEntryPoints(), code: ErrorCode.semanticSubprocessUnsupportedTarget, message: "Subprocess is not supported on wasm32-wasi (no process-spawn primitive); guard the call with #if not os(Wasi).")
 end 'rejectWasmSubprocess'
 
-// Shared traversal for the wasm API-rejection passes (subprocess + networking).
+// Shared traversal for a wasm API-rejection pass (currently only subprocess).
 // Walks every USER function's ops (block ops + terminator) and reports `code` at
 // each resolved invocation whose mangling-stripped callee is in `entryPoints`.
-// The caller has already gated on the target (`targetSupportsSubprocess` /
-// `networkingRejectedTarget`); this helper assumes rejection applies. Pure
-// analysis — emits diagnostics, leaves the module unchanged. Exported so the
-// sibling RejectWasmNetworking pass shares the identical walk.
+// The caller has already gated on the target (`targetSupportsSubprocess`); this
+// helper assumes rejection applies. Pure analysis — emits diagnostics, leaves the
+// module unchanged. Exported/generic so a future capability-less API can reuse it.
 export function rejectApiCallsOnUnsupportedTarget(project Project, module MaxonModule, entryPoints ApiEntrySet, code ErrorCode, message String)
 	for func in module.functions 'eachFunc'
 		// Stdlib-internal helpers call each other; never report those — the wasm
@@ -133,7 +134,7 @@ end 'checkCallOpForApi'
 
 // The source range of a resolved-invocation op (call / tryCall / methodCall /
 // tryMethodCall). The caller has already filtered to these four shapes. Exported
-// so the sibling RejectWasmNetworking pass reuses the same range extraction.
+// (generic) for reuse by any future API-rejection pass.
 export function callOpSourceRange(op MaxonOp) returns SourceRange
 	return match op 'r'
 		call(_, _, _, _, _, _, _, range) gives range

@@ -145,27 +145,18 @@ export function targetSupportsSubprocess(t Target) returns bool
 	return true
 end 'targetSupportsSubprocess'
 
-// True ONLY for wasm32-wasi: the target on which using the networking API is a
-// COMPILE error (WASI has no socket primitive). Mirrors the wasm-subprocess
-// rejection. Distinct from `targetRunsNetworking` below — a target can be
-// neither (e.g. arm64-macos: networking compiles to runtime.std sentinel stubs
-// that throw, and is excluded from the host-only spec whitelist).
-export function networkingRejectedTarget(t Target) returns bool
-	if t.cpu == CpuArch.wasm32 and t.os == Os.wasi 'isWasm'
-		return true
-	end 'isWasm'
-	return false
-end 'networkingRejectedTarget'
-
-// True ONLY for x64-windows: the one target with a real networking runtime
-// (`emitX64NetworkingRuntime` + the green-thread/IOCP machinery). Used to gate
+// True for the targets with a REAL networking runtime: x64-windows
+// (`emitX64NetworkingRuntime`, Winsock/IOCP) and wasm32-wasi
+// (`emitWasmSocketTcpConnect` etc. over WASI Preview2 wasi:sockets). Used to gate
 // the networking specs into the host-only whitelist. arm64/macos/linux keep the
 // sentinel stubs (TcpClient compiles, a socket call throws at runtime), so they
-// are NOT in this set; wasm32-wasi is rejected at compile time instead (see
-// `networkingRejectedTarget`).
+// are NOT in this set.
 export function targetRunsNetworking(t Target) returns bool
 	if t.cpu == CpuArch.x64 and t.os == Os.windows 'isX64Win'
 		return true
 	end 'isX64Win'
+	if t.cpu == CpuArch.wasm32 and t.os == Os.wasi 'isWasm'
+		return true
+	end 'isWasm'
 	return false
 end 'targetRunsNetworking'
