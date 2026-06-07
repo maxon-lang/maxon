@@ -160,6 +160,7 @@ function countMirNonAbsorbUses(op MirOp, uc UseCountMap, constMap ConstMap)
 		osClose(fdId) then ucIncrement(uc, valueId: fdId)
 		osGetEnv(_, namePtrId, nameLenId, outBufPtrId, outBufLenId) then ucIncrementFour(uc, a: namePtrId, b: nameLenId, c: outBufPtrId, d: outBufLenId)
 		osGetArgc then break 'count'
+		osClockMs then break 'count'
 		osGetArgv(_, indexId) then ucIncrement(uc, valueId: indexId)
 		osGetExecutablePath(_, bufPtrId, bufSizeId) then ucIncrementTwo(uc, a: bufPtrId, b: bufSizeId)
 		memcpy(dstId, srcId, lenId) then ucIncrementThree(uc, a: dstId, b: srcId, c: lenId)
@@ -331,6 +332,7 @@ function countMirOpUses(op MirOp, uc UseCountMap)
 		osClose(fdId) then ucIncrement(uc, valueId: fdId)
 		osGetEnv(_, namePtrId, nameLenId, outBufPtrId, outBufLenId) then ucIncrementFour(uc, a: namePtrId, b: nameLenId, c: outBufPtrId, d: outBufLenId)
 		osGetArgc then break 'count'
+		osClockMs then break 'count'
 		osGetArgv(_, indexId) then ucIncrement(uc, valueId: indexId)
 		osGetExecutablePath(_, bufPtrId, bufSizeId) then ucIncrementTwo(uc, a: bufPtrId, b: bufSizeId)
 		memcpy(dstId, srcId, lenId) then ucIncrementThree(uc, a: dstId, b: srcId, c: lenId)
@@ -423,6 +425,8 @@ function mirSysTempCount(op MirOp) returns SlotIndex
 		// argv / executable-path ops match the file-I/O budget shape: up to
 		// 4 input arg slots + a result slot fits comfortably within 8.
 		osGetArgc gives 8
+		// osClockMs: zero-arg GetTickCount64 IAT call (Windows) + result slot.
+		osClockMs gives 4
 		osGetArgv gives 8
 		osGetExecutablePath gives 8
 		// osAllocPages on Windows: VirtualAlloc(NULL, size, 0x3000, 0x04) — 4 iatCall args + result slot.
@@ -1625,6 +1629,7 @@ type X64FunctionLowering
 			osClose(fdId) then lowerOsClose(fdId, dstBlock: dstBlock)
 			osGetEnv(resultId, namePtrId, nameLenId, outBufPtrId, outBufLenId) then lowerOsGetEnv(resultId, namePtrId: namePtrId, nameLenId: nameLenId, outBufPtrId: outBufPtrId, outBufLenId: outBufLenId, dstBlock: dstBlock)
 			osGetArgc(resultId) then lowerOsGetArgc(resultId, dstBlock: dstBlock)
+			osClockMs(resultId) then lowerOsClockMs(resultId, dstBlock: dstBlock)
 			osGetArgv(resultId, indexId) then lowerOsGetArgv(resultId, indexId: indexId, dstBlock: dstBlock)
 			osGetExecutablePath(resultId, bufPtrId, bufSizeId) then lowerOsGetExecutablePath(resultId, bufPtrId: bufPtrId, bufSizeId: bufSizeId, dstBlock: dstBlock)
 			memcpy(dstId, srcId, lenId) then lowerMemcpy(dstId, srcId: srcId, lenId: lenId, dstBlock: dstBlock)
@@ -2533,6 +2538,30 @@ type X64FunctionLowering
 			wasi then panic("osGetArgc op should not reach the X64 backend on wasi — MirToWasm intercepts")
 		end 'os'
 	end 'lowerOsGetArgc'
+
+	// `osClockMs` on Windows: a zero-arg kernel32!GetTickCount64 IAT call. The
+	// API returns the milliseconds-since-boot count in RAX (a monotonic source
+	// with ~10-16 ms granularity), which the `iatCall` op captures into a temp
+	// slot; we then load that slot into the result's virtual register. Linux /
+	// macOS lowerings are out of scope for the x64+wasm clock work (the WASI
+	// path is intercepted in MirToWasm before reaching this backend).
+	function lowerOsClockMsWindows(resultId ValueId, dstBlock IrBlock)
+		let args = VarSlotArray.create()
+		let resultSlot = nextTempSlot
+		appendX64Op(target, block: dstBlock, op: X64Op.iatCall(resultSlot, slotIndex: iatSlotIndex(IatSlot.getTickCount64), argSlots: args))
+		valueSlotMapSet(valueSlots, valueId: resultId, slot: resultSlot)
+		appendX64Op(target, block: dstBlock, op: X64Op.loadSlot(X64VReg.virtual(resultId), slotIndex: resultSlot))
+		nextTempSlot = nextTempSlot + 1
+	end 'lowerOsClockMsWindows'
+
+	function lowerOsClockMs(resultId ValueId, dstBlock IrBlock)
+		match osDesc.os 'os'
+			windows then lowerOsClockMsWindows(resultId, dstBlock: dstBlock)
+			linux then panic("x64-linux osClockMs not yet implemented — needs clock_gettime(CLOCK_MONOTONIC) syscall marshalling")
+			macos then panic("x64-macos osClockMs not supported: x64 Mach-O writer not implemented")
+			wasi then panic("osClockMs op should not reach the X64 backend on wasi — MirToWasm intercepts")
+		end 'os'
+	end 'lowerOsClockMs'
 
 	function lowerOsGetArgv(resultId ValueId, indexId ValueId, dstBlock IrBlock)
 		match osDesc.os 'os'

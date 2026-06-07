@@ -154,16 +154,22 @@ let wasiResolveStreamDrop = 34
 // timeout that a bare `pollable.block` on the socket alone would incur.
 let wasiPoll = 35
 
+// wasi:clocks/monotonic-clock.now() -> instant(i64). The monotonic clock's
+// current value in NANOSECONDS; backs stdlib/Clock.maxon via the osClockMs op
+// (divided to milliseconds at the call site). Appended after wasiPoll so the
+// preceding WASI import ordinals stay fixed.
+let wasiMonotonicNow = 36
+
 // Binaryen Asyncify primitive imports (resolved + internalized by `wasm-opt
 // --asyncify`). Declared right after the WASI imports (the last of which is
-// `wasiPoll` at 35), so they occupy function indices 36-39 and module-defined
-// functions start at `wasiImportCount`.
-let asyncifyStartUnwindIdx = 36
-let asyncifyStopUnwindIdx = 37
-let asyncifyStartRewindIdx = 38
-let asyncifyStopRewindIdx = 39
+// `wasiMonotonicNow` at 36), so they occupy function indices 37-40 and
+// module-defined functions start at `wasiImportCount`.
+let asyncifyStartUnwindIdx = 37
+let asyncifyStopUnwindIdx = 38
+let asyncifyStartRewindIdx = 39
+let asyncifyStopRewindIdx = 40
 
-let wasiImportCount = 40
+let wasiImportCount = 41
 
 // The green-thread runtime calls the asyncify primitives by these Std-IR names;
 // `emitDirectCall` routes them to the fixed import indices above instead of a
@@ -895,24 +901,26 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 	pushWasiType(types, i32Count: 1, extra: novals, results: novals)
 	// 35 poll(list-ptr i32, list-len i32, ret i32) -> ()
 	pushWasiType(types, i32Count: 3, extra: novals, results: novals)
+	// 36 monotonic-clock.now() -> instant i64
+	pushWasiType(types, i32Count: 0, extra: novals, results: i64v)
 
-	// Types 36-39: the Binaryen Asyncify primitives the wasm green-thread runtime
+	// Types 37-40: the Binaryen Asyncify primitives the wasm green-thread runtime
 	// imports (resolved by `wasm-opt --asyncify`). Pointers are i32 on wasm32. Each
 	// gets its own positional slot so module-function types stay at `wasiImportCount
-	// + i` (36 & 38 and 37 & 39 share a shape but not a slot).
-	// Type 36: (i32) -> () — asyncify.start_unwind(data_ptr)
+	// + i` (37 & 39 and 38 & 40 share a shape but not a slot).
+	// Type 37: (i32) -> () — asyncify.start_unwind(data_ptr)
 	var asyncifyUnwindArgType = ByteArray.create()
 	writeFuncType(asyncifyUnwindArgType, paramTypes: makeByteArray1(wasmTypeI32), resultTypes: ByteArray.create())
 	types.push(asyncifyUnwindArgType)
-	// Type 37: () -> () — asyncify.stop_unwind()
+	// Type 38: () -> () — asyncify.stop_unwind()
 	var asyncifyStopUnwindType = ByteArray.create()
 	writeFuncType(asyncifyStopUnwindType, paramTypes: ByteArray.create(), resultTypes: ByteArray.create())
 	types.push(asyncifyStopUnwindType)
-	// Type 38: (i32) -> () — asyncify.start_rewind(data_ptr)
+	// Type 39: (i32) -> () — asyncify.start_rewind(data_ptr)
 	var asyncifyRewindArgType = ByteArray.create()
 	writeFuncType(asyncifyRewindArgType, paramTypes: makeByteArray1(wasmTypeI32), resultTypes: ByteArray.create())
 	types.push(asyncifyRewindArgType)
-	// Type 39: () -> () — asyncify.stop_rewind()
+	// Type 40: () -> () — asyncify.stop_rewind()
 	var asyncifyStopRewindType = ByteArray.create()
 	writeFuncType(asyncifyStopRewindType, paramTypes: ByteArray.create(), resultTypes: ByteArray.create())
 	types.push(asyncifyStopRewindType)
@@ -1065,17 +1073,18 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 	importCount = addFuncImport(imports, moduleName: modSockNameLookup, fieldName: b"[method]resolve-address-stream.resolve-next-address", typeIndex: 33, countRef: importCount)
 	importCount = addFuncImport(imports, moduleName: modSockNameLookup, fieldName: b"[resource-drop]resolve-address-stream", typeIndex: 34, countRef: importCount)
 	importCount = addFuncImport(imports, moduleName: modIoPoll, fieldName: b"poll", typeIndex: 35, countRef: importCount)
+	importCount = addFuncImport(imports, moduleName: modClock, fieldName: b"now", typeIndex: 36, countRef: importCount)
 
-	// Imports 36-39: the Binaryen Asyncify primitives. Module name "asyncify" is the
+	// Imports 37-40: the Binaryen Asyncify primitives. Module name "asyncify" is the
 	// namespace `wasm-opt --asyncify` recognizes; it rewrites the green-thread
 	// runtime's calls to these into direct calls to the functions it generates
 	// (which spill/restore a coroutine's call stack to linear memory), then drops
 	// the imports — so the final module has no unresolved imports.
 	let asyncifyModule = b"asyncify"
-	importCount = addFuncImport(imports, moduleName: asyncifyModule, fieldName: b"start_unwind", typeIndex: 36, countRef: importCount)
-	importCount = addFuncImport(imports, moduleName: asyncifyModule, fieldName: b"stop_unwind", typeIndex: 37, countRef: importCount)
-	importCount = addFuncImport(imports, moduleName: asyncifyModule, fieldName: b"start_rewind", typeIndex: 38, countRef: importCount)
-	importCount = addFuncImport(imports, moduleName: asyncifyModule, fieldName: b"stop_rewind", typeIndex: 39, countRef: importCount)
+	importCount = addFuncImport(imports, moduleName: asyncifyModule, fieldName: b"start_unwind", typeIndex: 37, countRef: importCount)
+	importCount = addFuncImport(imports, moduleName: asyncifyModule, fieldName: b"stop_unwind", typeIndex: 38, countRef: importCount)
+	importCount = addFuncImport(imports, moduleName: asyncifyModule, fieldName: b"start_rewind", typeIndex: 39, countRef: importCount)
+	importCount = addFuncImport(imports, moduleName: asyncifyModule, fieldName: b"stop_rewind", typeIndex: 40, countRef: importCount)
 
 	var importSection = ByteArray.create()
 	writeUleb128(importSection, value: importCount)
@@ -2109,6 +2118,7 @@ type WasmFunctionLowering
 			osClose then panic("wasm: osClose not yet implemented (Phase 3)")
 			osGetEnv then panic("wasm: osGetEnv not yet implemented (Phase 3)")
 			osGetArgc(resultId) then emitOsGetArgc(resultId)
+			osClockMs(resultId) then emitOsClockMs(resultId)
 			osGetArgv(resultId, indexId) then emitOsGetArgv(resultId, indexId: indexId)
 			osGetExecutablePath(resultId, bufPtrId, bufSizeId) then emitOsGetExecutablePath(resultId, bufPtrId: bufPtrId, bufSizeId: bufSizeId)
 			memcpy(dstId, srcId, lenId) then emitMemcpy(dstId, srcId: srcId, lenId: lenId)
@@ -2580,6 +2590,23 @@ type WasmFunctionLowering
 		body.push(opCall)
 		writeUleb128(body, value: wasiPollableDrop as Wasm32Index)
 	end 'emitOsSleep'
+
+	// `osClockMs` on WASI: read wasi:clocks/monotonic-clock.now() — the
+	// monotonic instant in NANOSECONDS — and divide (unsigned) by 1_000_000 to
+	// produce the milliseconds the Clock stdlib expects. The result lands in
+	// resultId. monotonic-clock is monotonic per the WASI contract, so the
+	// `Clock.elapsedMs` skew guard never trips.
+	function emitOsClockMs(resultId ValueId)
+		// now() -> i64 nanoseconds.
+		body.push(opCall)
+		writeUleb128(body, value: wasiMonotonicNow as Wasm32Index)
+		// ns / 1_000_000 = ms.
+		body.push(opI64Const)
+		writeSleb128(body, value: 1000000)
+		body.push(opI64DivU)
+		body.push(opLocalSet)
+		writeUleb128(body, value: resultId as Wasm32Index)
+	end 'emitOsClockMs'
 
 	function emitOsWrite(ptrId ValueId, lenId ValueId, fd MachineWord)
 		// Preview2 write: get the stdout/stderr output-stream handle, then
@@ -3378,6 +3405,7 @@ type WasmFunctionLowering
 				let found = match op 'check'
 					movImm to osGetEnv gives false
 					osGetArgc gives true
+					osClockMs gives false
 					osGetArgv gives true
 					osGetExecutablePath gives true
 					memcpy to errorReturn gives false

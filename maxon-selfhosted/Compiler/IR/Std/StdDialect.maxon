@@ -509,6 +509,13 @@ export union StdSystemOp
 	// chooses how to obtain it (kernel-stashed globals on Linux/macOS,
 	// GetCommandLineW+CommandLineToArgvW on Windows, WASI args_sizes_get).
 	osGetArgc(resultId ValueId)
+	// OS-neutral monotonic clock in milliseconds. Returns a millisecond
+	// counter whose absolute value is platform-defined but whose differences
+	// are meaningful (backs stdlib/Clock.maxon). Lowered per-OS by the
+	// backend: Windows uses kernel32!GetTickCount64 via IAT; WASI reads
+	// wasi:clocks/monotonic-clock.now (nanoseconds, divided to ms);
+	// Linux/macOS lowerings are not yet implemented (panic).
+	osClockMs(resultId ValueId)
 	// Returns a NUL-terminated C-string pointer to argv[index], or 0 if
 	// out of bounds. The pointer is owned by the runtime (kernel-supplied
 	// argv block on Linux/macOS, lazily-allocated UTF-8 cache on Windows,
@@ -800,6 +807,7 @@ export function sysOpToString(op StdSystemOp) returns String
 		osClose(fdId) gives "sys.os_close %{fdId}"
 		osGetEnv(resultId, namePtrId, nameLenId, outBufPtrId, outBufLenId) gives "%{resultId} = sys.os_get_env %{namePtrId}, %{nameLenId}, %{outBufPtrId}, %{outBufLenId}"
 		osGetArgc(resultId) gives "%{resultId} = sys.os_get_argc"
+		osClockMs(resultId) gives "%{resultId} = sys.os_clock_ms"
 		osGetArgv(resultId, indexId) gives "%{resultId} = sys.os_get_argv %{indexId}"
 		osGetExecutablePath(resultId, bufPtrId, bufSizeId) gives "%{resultId} = sys.os_get_executable_path %{bufPtrId}, %{bufSizeId}"
 		loadFramePtr(resultId) gives "%{resultId} = sys.load_frame_ptr"

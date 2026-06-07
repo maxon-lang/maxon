@@ -1027,7 +1027,7 @@ let elapsed = Clock.elapsedMs(since: start)
 print("Took {elapsed}ms\n")
 ```
 
-Backed by `QueryPerformanceCounter` (Windows), `clock_gettime(CLOCK_MONOTONIC)` (POSIX), or the WASI `monotonic-clock` interface.
+Backed by `GetTickCount64` (Windows) and the WASI `wasi:clocks/monotonic-clock.now` interface (wasm32-wasi). The Linux/macOS lowerings (`clock_gettime(CLOCK_MONOTONIC)`) are not yet implemented.
 
 ---
 

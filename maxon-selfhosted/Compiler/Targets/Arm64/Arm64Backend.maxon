@@ -388,6 +388,8 @@ export type Arm64Backend implements TargetBackend
 			// slot-count figures here mirror the file-I/O band so the slot
 			// accounting is correct once real emitters land.
 			osGetArgc gives 8
+			// osClockMs: zero-arg call + result slot; mirrors the X64 budget.
+			osClockMs gives 4
 			osGetArgv gives 8
 			osGetExecutablePath gives 8
 			// Page allocation, atomics, and locks (added with the slab allocator).
@@ -965,6 +967,7 @@ export type Arm64Backend implements TargetBackend
 			osClose then panic("osClose not yet implemented for arm64 (Phase 3)")
 			osGetEnv then panic("osGetEnv not yet implemented for arm64 (Phase 3)")
 			osGetArgc(resultId) then result = lowerOsGetArgcArm64(resultId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
+			osClockMs then panic("osClockMs not yet implemented for arm64 — clock runtime is scoped to x64-windows + wasm32-wasi")
 			osGetArgv(resultId, indexId) then result = lowerOsGetArgvArm64(resultId, indexId: indexId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
 			osGetExecutablePath(resultId, bufPtrId, bufSizeId) then result = lowerOsGetExecutablePathArm64(resultId, bufPtrId: bufPtrId, bufSizeId: bufSizeId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
 			memcpy(dstId, srcId, lenId) then result = lowerMemcpyArm64(dstId, srcId: srcId, lenId: lenId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)

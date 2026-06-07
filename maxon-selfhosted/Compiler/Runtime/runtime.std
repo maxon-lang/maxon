@@ -7116,11 +7116,13 @@ end
 //   void family      → standard `ret 0` convention.
 
 // maxon_current_time_ms() — monotonic clock helper for stdlib/Clock.maxon.
-// Real bodies query QueryPerformanceCounter / clock_gettime; the stub returns
-// 0 so `Clock.elapsedMs(since: start)` reports 0 elapsed.
+// Lowers to the target-neutral `osClockMs` op: x64-Windows reads
+// kernel32!GetTickCount64 (ms since boot) via IAT; wasm32-wasi reads
+// wasi:clocks/monotonic-clock.now (nanoseconds, divided to ms at MirToWasm).
+// Linux/macOS lowerings are not yet implemented (the op panics there).
 func maxon_current_time_ms 0 i64
   block entry:
-    v0 = std constI64 0
+    v0 = std osClockMs
     std ret v0
 end
 

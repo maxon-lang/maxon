@@ -145,6 +145,10 @@ export union MirOp
 	// osGetExecutablePath writes into the caller-supplied buffer, so it
 	// participates in the store band.
 	osGetArgc(resultId ValueId) = MirOpMeta{isMemory: true, isStore: false, isCall: true, clobbersFlags: false, isParam: false, isCmp: false}
+	// osClockMs is a pure read (returns a process-state integer); same band
+	// shape as osGetArgc — a call that produces a result without touching
+	// caller memory.
+	osClockMs(resultId ValueId) = MirOpMeta{isMemory: true, isStore: false, isCall: true, clobbersFlags: false, isParam: false, isCmp: false}
 	osGetArgv(resultId ValueId, indexId ValueId) = MirOpMeta{isMemory: true, isStore: false, isCall: true, clobbersFlags: false, isParam: false, isCmp: false}
 	osGetExecutablePath(resultId ValueId, bufPtrId ValueId, bufSizeId ValueId) = MirOpMeta{isMemory: true, isStore: true, isCall: true, clobbersFlags: false, isParam: false, isCmp: false}
 	memcpy(dstId ValueId, srcId ValueId, lenId ValueId) = MirOpMeta{isMemory: true, isStore: true, isCall: false, clobbersFlags: false, isParam: false, isCmp: false}
@@ -273,6 +277,7 @@ export function mirOpToString(op MirOp, blocks IrBlockArray) returns String
 		osClose(fdId) gives "mir.os_close %{fdId}"
 		osGetEnv(resultId, namePtrId, nameLenId, outBufPtrId, outBufLenId) gives "%{resultId} = mir.os_get_env %{namePtrId}, %{nameLenId}, %{outBufPtrId}, %{outBufLenId}"
 		osGetArgc(resultId) gives "%{resultId} = mir.os_get_argc"
+		osClockMs(resultId) gives "%{resultId} = mir.os_clock_ms"
 		osGetArgv(resultId, indexId) gives "%{resultId} = mir.os_get_argv %{indexId}"
 		osGetExecutablePath(resultId, bufPtrId, bufSizeId) gives "%{resultId} = mir.os_get_executable_path %{bufPtrId}, %{bufSizeId}"
 		memcpy(dstId, srcId, lenId) gives "mir.memcpy %{dstId}, %{srcId}, %{lenId}"

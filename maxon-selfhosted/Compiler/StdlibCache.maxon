@@ -193,7 +193,11 @@ let CACHE_MAGIC_3 = 0x00  // '\0'
 // Std-DFE consults a flat table instead of re-walking the cached Std-IR
 // snapshot to re-derive reachability. New trailing blob; bump invalidates
 // older caches that lack the table.
-let CACHE_FORMAT_VERSION = 68
+// v69: new `osClockMs` StdSystemOp (monotonic-clock-ms primitive) inserted
+// between osGetArgc and osGetArgv in the union, shifting every later
+// StdSystemOp ordinal. The serialized system-op tag is the union ordinal, so
+// caches written before the shift would mis-deserialize; bump to invalidate.
+let CACHE_FORMAT_VERSION = 69
 
 // ============================================================
 // Types
@@ -3846,6 +3850,7 @@ function writeStdSystemOp(buf ByteArray, op StdSystemOp) throws CacheCorruption
 		osClose(fdId) then writeQword(buf, value: fdId)
 		osGetEnv(resultId, namePtrId, nameLenId, outBufPtrId, outBufLenId) then writeStdSysOsGetEnv(buf, resultId: resultId, namePtrId: namePtrId, nameLenId: nameLenId, outBufPtrId: outBufPtrId, outBufLenId: outBufLenId)
 		osGetArgc(resultId) then writeQword(buf, value: resultId)
+		osClockMs(resultId) then writeQword(buf, value: resultId)
 		osGetArgv(resultId, indexId) then writeStdSysOsGetArgv(buf, resultId: resultId, indexId: indexId)
 		osGetExecutablePath(resultId, bufPtrId, bufSizeId) then writeStdSysOsGetExecutablePath(buf, resultId: resultId, bufPtrId: bufPtrId, bufSizeId: bufSizeId)
 		loadFramePtr(resultId) then writeQword(buf, value: resultId)
@@ -4139,6 +4144,7 @@ function readStdSystemOp(buf ByteArray, offset ByteOffset) returns (StdSystemOp,
 		osClose gives readStdSysOsClose(buf, offset: pos)
 		osGetEnv gives readStdSysOsGetEnv(buf, offset: pos)
 		osGetArgc gives readStdSysOsGetArgc(buf, offset: pos)
+		osClockMs gives readStdSysOsClockMs(buf, offset: pos)
 		osGetArgv gives readStdSysOsGetArgv(buf, offset: pos)
 		osGetExecutablePath gives readStdSysOsGetExecutablePath(buf, offset: pos)
 		loadFramePtr gives readStdSysLoadFramePtr(buf, offset: pos)
@@ -4276,6 +4282,11 @@ function readStdSysOsGetArgc(buf ByteArray, offset ByteOffset) returns (StdSyste
 	let resultId = readQword(buf, offset: offset)
 	return (StdSystemOp.osGetArgc(resultId), offset + 8)
 end 'readStdSysOsGetArgc'
+
+function readStdSysOsClockMs(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
+	let resultId = readQword(buf, offset: offset)
+	return (StdSystemOp.osClockMs(resultId), offset + 8)
+end 'readStdSysOsClockMs'
 
 function readStdSysOsGetArgv(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
 	let resultId = readQword(buf, offset: offset)
