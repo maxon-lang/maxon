@@ -399,36 +399,27 @@ end 'queryCodeResult'
 // that's the guard that lets the incremental path roll out behind a
 // flag without breaking spec-test parity.
 
-// Ensure every function in the StdModule has a stamped contentHash.
-// Idempotent: skips functions whose contentHash is already non-zero.
-// Called lazily from the per-function queries because the Maxon→Std
-// lowerer doesn't propagate Maxon-phase block shape to StdModule
-// (post-lowering blocks aren't comparable to pre-lowering blocks). For
-// the incremental cache key we hash the StdModule's function shape
-// directly — the stamped value carries through the rest of the pipeline.
+// Op-content-deep Std-tier content hash of a single function. Pure — does not
+// mutate the function or module. Shared by `stampStdContentHash` (the chunk-
+// cache key path) and the inliner's `recordInlineEdge` (which captures a
+// callee's hash at splice time, before DCE can drop the standalone body). The
+// two callers MUST agree byte-for-byte: an inline-dep hash captured here is
+// later compared against a callee's stamped `contentHash` in
+// `callerInlineDepsUnchanged`, so any divergence would break invalidation.
 //
-// Step 3.5a (content-deep hash): the hash also folds in `stdOpToString` for
-// every op in every block of the function, so a body edit that preserves
-// shape (e.g. flipping the constant in `return 1` to `return 2`) still
-// produces a distinct contentHash. Before this, the hash only covered
-// block count / opRefs count / terminator kind / labels — none of which
-// change when a literal value flips, so two materially-different functions
-// hashed identically and the per-function chunk cache served stale bytes.
-function stampStdContentHash(project Project, module StdModule, funcIdx FuncIndex)
-	var func = try module.functions.get(funcIdx) otherwise panic("stampStdContentHash: functions.get OOB at {funcIdx}")
-	// Always recompute. Step 3.5a: the Maxon-level
-	// `stampFunctionContentHashes` runs before this stamp and writes a
-	// shape-only hash onto every function (via `computeFunctionContentHash`),
-	// so an `alreadyStamped` shortcut here would leave the shape-only hash
-	// in place — letting literal-value edits (which preserve block shape)
-	// slip through the chunk cache as false hits. Overwriting with the
-	// op-content-deep hash below is the load-bearing invalidation signal
-	// for the per-function chunk cache.
+// The hash folds in `stdOpToString` for every op in every block (Step 3.5a),
+// so a body edit that preserves shape (e.g. flipping the constant in
+// `return 1` to `return 2`) still produces a distinct contentHash. Before
+// this, the hash only covered block count / opRefs count / terminator kind /
+// labels — none of which change when a literal value flips, so two
+// materially-different functions hashed identically and the per-function
+// chunk cache served stale bytes.
+export function computeStdContentHashFor(project Project, module StdModule, func IrFunction) returns ContentHash
 	var h = computeFunctionSignatureHash(project, func: func)
 	h = mix(h, value: func.varSlotCount as ContentHash)
 	h = mix(h, value: func.blockRefs.count())
 	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise panic("stampStdContentHash: blocks.get OOB")
+		let block = try module.blocks.get(blockRef) otherwise panic("computeStdContentHashFor: blocks.get OOB")
 		h = mixString(h, s: block.label)
 		h = mix(h, value: block.opRefs.count())
 		let termKind = match block.terminator 'tk'
@@ -442,15 +433,34 @@ function stampStdContentHash(project Project, module StdModule, funcIdx FuncInde
 		// literal-value edit (or any other intra-op change) flips the
 		// contentHash even when block shape is preserved.
 		for opIdx in block.opRefs 'eachOp'
-			let op = try module.ops.get(opIdx) otherwise panic("stampStdContentHash: ops.get OOB at {opIdx}")
+			let op = try module.ops.get(opIdx) otherwise panic("computeStdContentHashFor: ops.get OOB at {opIdx}")
 			h = mixString(h, s: stdOpToString(op, blocks: module.blocks))
 		end 'eachOp'
 		if block.hasTerminatorOp() 'hasTermOp'
-			let termOp = try module.ops.get(block.terminatorIndex()) otherwise panic("stampStdContentHash: ops.get OOB at terminator {block.terminatorIndex()}")
+			let termOp = try module.ops.get(block.terminatorIndex()) otherwise panic("computeStdContentHashFor: ops.get OOB at terminator {block.terminatorIndex()}")
 			h = mixString(h, s: stdOpToString(termOp, blocks: module.blocks))
 		end 'hasTermOp'
 	end 'eachBlock'
-	func.contentHash = h
+	return h
+end 'computeStdContentHashFor'
+
+// Stamp one StdModule function's contentHash with its op-content-deep hash.
+// Called lazily from the per-function queries because the Maxon→Std lowerer
+// doesn't propagate Maxon-phase block shape to StdModule (post-lowering blocks
+// aren't comparable to pre-lowering blocks), so the incremental cache key has
+// to be derived from the StdModule's function shape directly — the stamped
+// value carries through the rest of the pipeline.
+function stampStdContentHash(project Project, module StdModule, funcIdx FuncIndex)
+	var func = try module.functions.get(funcIdx) otherwise panic("stampStdContentHash: functions.get OOB at {funcIdx}")
+	// Always recompute. Step 3.5a: the Maxon-level
+	// `stampFunctionContentHashes` runs before this stamp and writes a
+	// shape-only hash onto every function (via `computeFunctionContentHash`),
+	// so an `alreadyStamped` shortcut here would leave the shape-only hash
+	// in place — letting literal-value edits (which preserve block shape)
+	// slip through the chunk cache as false hits. Overwriting with the
+	// op-content-deep hash (`computeStdContentHashFor`) is the load-bearing
+	// invalidation signal for the per-function chunk cache.
+	func.contentHash = computeStdContentHashFor(project, module: module, func: func)
 	try module.functions.set(funcIdx, value: func) otherwise panic("stampStdContentHash: functions.set OOB at {funcIdx}")
 end 'stampStdContentHash'
 
@@ -754,6 +764,48 @@ export function refreshMidContentHashForFunction(project Project, funcName Strin
 	let memo = MidFuncMemo.create(func, keyHash: func.contentHash, computedAt: project.db.currentRevision, verifiedAt: project.db.currentRevision)
 	project.db.midPerFunc.upsert(funcName, value: memo)
 end 'refreshMidContentHashForFunction'
+
+// Capture the inline-dependency fingerprint for `callerName` from the current
+// build: the callees the inliner spliced into it, each paired with the content
+// hash its body had at splice time. This is a direct read of
+// `project.inlineEdges` (the inliner already captured each callee's hash at the
+// splice, before `dceFunctions` could drop the standalone body — see
+// `recordInlineEdge`). A persistent chunk cache stores the returned array
+// alongside the caller's chunk; on a later build it captures the fingerprint
+// again and compares via `callerInlineDepsUnchanged`. Returns an empty array
+// when the caller had nothing inlined into it.
+export function captureInlineDeps(project Project, callerName String) returns InlineDepArray
+	return try project.inlineEdges.get(callerName) otherwise InlineDepArray.create()
+end 'captureInlineDeps'
+
+// Inline-aware validity predicate for a persistent (or warm) caller chunk.
+// `stored` is the inline-dependency fingerprint captured when the chunk was
+// stamped (a prior build); `fresh` is the fingerprint of the current build
+// (`captureInlineDeps` after the inliner re-ran). The caller's chunk is
+// inline-valid iff the two fingerprints are identical — same callees, same
+// order, same body hashes. Any difference (a callee's body changed, a callee
+// is no longer inlined, or a new callee got inlined) means the caller's inlined
+// copy diverged and its chunk must be recomputed.
+//
+// A persistent chunk loaded from disk is safe to reuse only when BOTH its own
+// keyHash matches (caller body unchanged) AND this returns true. The in-memory
+// path gets the latter for free via the post-inline deep-op hash; this is the
+// hook the on-disk cache depends on. Pure — no side effects.
+export function callerInlineDepsUnchanged(stored InlineDepArray, fresh InlineDepArray) returns bool
+	if stored.count() != fresh.count() 'countDiff'
+		return false
+	end 'countDiff'
+	for (iter, dep) in stored.withIterator() 'each'
+		let other = try fresh.get(iter.index()) otherwise panic("callerInlineDepsUnchanged: fresh.get OOB at {iter.index()} (counts matched)")
+		if dep.calleeName != other.calleeName 'nameDiff'
+			return false
+		end 'nameDiff'
+		if dep.calleeHash != other.calleeHash 'hashDiff'
+			return false
+		end 'hashDiff'
+	end 'each'
+	return true
+end 'callerInlineDepsUnchanged'
 
 function dumpTargetLoweringIr(project Project, result CodeResult)
 	if not project.irDump.stagesEnabled() 'disabled'

@@ -88,6 +88,11 @@ let MAX_FIXPOINT_ROUNDS = 5
 // unchanged.
 export function inlineModule(module StdModule, project Project, skipCallerNames StringArray = StringArray.create()) returns StdModule
 	let skipSet = buildSkipCallerSet(skipCallerNames)
+	// Reset the inline-edge record for this build. Fixpoint rounds below
+	// accumulate into it; a stale map from a prior `queryAllMid` run would
+	// keep edges for splices that no longer happen after an edit. See
+	// `Project.inlineEdges` and `recordInlineEdge`.
+	project.inlineEdges = InlineEdgeMap.create()
 	var rounds = 0
 	var keepGoing = true
 	var totalSplices = 0
@@ -895,6 +900,7 @@ function performInline(module StdModule, project Project, caller IrFunction, blo
 	end 'tryCallSite'
 
 	invalidateCachedHash(project, callerName: caller.name)
+	recordInlineEdge(project, module: module, callerName: caller.name, callee: callee)
 	logTrace(LogCategory.ir, message: function() gives "inliner: spliced @{callShape.callee} into @{caller.name} (call op #{opIdx} in block_{block.id})")
 	return true
 end 'performInline'
@@ -1016,6 +1022,7 @@ function performMultiBlockInline(module StdModule, project Project, caller IrFun
 	end 'subErrFlag'
 
 	invalidateCachedHash(project, callerName: caller.name)
+	recordInlineEdge(project, module: module, callerName: caller.name, callee: callee)
 	logTrace(LogCategory.ir, message: function() gives "inliner: spliced multi-block @{callShape.callee} into @{caller.name} (call op #{opIdx} in block_{block.id}, +{callee.blockRefs.count()} block(s))")
 	return true
 end 'performMultiBlockInline'
@@ -1890,3 +1897,23 @@ export function invalidateCachedHash(project Project, callerName String)
 	_ = project.db.mirPerFunc.remove(callerName)
 	_ = project.db.codePerFunc.remove(callerName)
 end 'invalidateCachedHash'
+
+// Record that the inliner spliced `callee`'s body into `callerName` this build,
+// pairing the callee name with the content hash its body has RIGHT NOW (before
+// the downstream `dceFunctions` pass can drop the standalone callee). Both
+// splice paths call this alongside `invalidateCachedHash`. The recorded deps let
+// a persistent chunk cache validate a cached caller chunk without re-running the
+// whole-module inliner: the caller is inline-valid only if every recorded
+// callee's body hash is unchanged. Duplicate edges (the same callee inlined at
+// multiple call sites, or across fixpoint rounds) are collapsed so the
+// dependency set stays minimal; the first recorded hash wins, which is correct
+// because all splices of the same callee in one build see the same body.
+function recordInlineEdge(project Project, module StdModule, callerName String, callee IrFunction)
+	var deps = captureInlineDeps(project, callerName: callerName)
+	if inlineDepsContainCallee(deps, calleeName: callee.name) 'already'
+		return
+	end 'already'
+	let calleeHash = computeStdContentHashFor(project, module: module, func: callee)
+	deps.push(InlineDep.create(callee.name, calleeHash: calleeHash))
+	project.inlineEdges.upsert(callerName, value: deps)
+end 'recordInlineEdge'

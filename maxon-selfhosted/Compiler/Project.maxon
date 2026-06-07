@@ -606,6 +606,24 @@ export type Project
 	// monomorphization-quality codegen.
 	export var staticRdataValues as StaticRdataValueMap
 
+	// Inline-edge record for inline-aware cache invalidation. Maps each caller
+	// name to the callees the inliner spliced into it during this build, each
+	// paired with the callee's content hash captured at splice time. The inliner
+	// records an edge at every splice site (`performInline` /
+	// `performMultiBlockInline`); the inliner clears the map at the start of its
+	// run so it reflects the current build only.
+	//
+	// Why this exists alongside the post-inline deep-op content hash: the
+	// in-memory chunk cache is already inline-correct because `queryAllMid`
+	// re-runs the inliner every build and `stampStdContentHash` hashes the
+	// post-inline body (an inlined callee's ops are physically in the caller's
+	// blocks at hash time). A *persistent* chunk cache loaded from disk without
+	// re-running the inliner can't recompute that post-inline hash, so it needs
+	// these edges plus each callee's own body hash to validate a cached caller
+	// chunk. See `captureInlineDeps` / `callerInlineDepsUnchanged` in
+	// Queries.maxon.
+	export var inlineEdges as InlineEdgeMap
+
 	// Constant-array-to-rdata fast path. Populated by the
 	// `runConstantArrayLiteralRdata` pass; consumed by the lowering hook
 	// at `__ManagedMemory.create`. See ConstantArrayRdataInfo for details.
@@ -760,6 +778,7 @@ export type Project
 			witnessConditionalRoots: WitnessConditionalRootsMap.create(),
 			genericFunctionImplicitArity: GenericFunctionImplicitArityMap.create(),
 			staticRdataValues: StaticRdataValueMap.create(),
+			inlineEdges: InlineEdgeMap.create(),
 			constantArrayRdata: ConstantArrayRdataMap.create(),
 			pendingWitnessThunkGids: GenericInstanceIdArray.create(),
 			pendingWitnessThunkInterfaces: StringArray.create(),
@@ -1050,6 +1069,15 @@ export typealias PendingTernaryArmCheckArray = Array with PendingTernaryArmCheck
 // the canonicalize pass to fold `descriptorField` reads into constants
 // when the descriptor's content is known at compile time.
 export typealias StaticRdataValueMap = Map with (String, ByteArray)
+
+// Inline-aware cache invalidation: caller name → the callees the inliner
+// spliced into that caller this build, each paired with the content hash its
+// body had at splice time. Capturing the hash AT splice time (rather than
+// re-deriving it later) is essential: the inliner's downstream `dceFunctions`
+// pass drops callees whose every call site was spliced, so a later lookup of
+// the callee's standalone body would find nothing. See `Project.inlineEdges`
+// and `InlineDep`.
+export typealias InlineEdgeMap = Map with (String, InlineDepArray)
 
 // Stage K.4 witness-conditional roots: rdata label → list of function
 // names whose liveness is contingent on that label being demanded by a

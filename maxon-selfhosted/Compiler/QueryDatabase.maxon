@@ -103,6 +103,38 @@ export typealias MidFuncCacheMap = Map with (String, MidFuncMemo)
 export typealias MirFuncCacheMap = Map with (String, MirFuncMemo)
 export typealias CodeChunkCacheMap = Map with (String, CodeChunkMemo)
 
+// Inline-aware cache invalidation fingerprint. One entry per callee whose body
+// the inliner spliced into a given caller, pairing the callee's name with the
+// Std-tier content hash it had when the caller's chunk was stamped. A loaded
+// persistent chunk is inline-valid only if every dep's `calleeHash` still
+// matches the callee's current content hash — that's how a callee-body edit
+// invalidates a caller whose copy of the callee was inlined, without re-running
+// the whole-module inliner to recompute the caller's post-inline hash. See
+// `captureInlineDeps` / `callerInlineDepsUnchanged` in Queries.maxon.
+export type InlineDep
+	export var calleeName as String
+	export var calleeHash as ContentHash
+
+	export static function create(calleeName String, calleeHash ContentHash) returns InlineDep
+		return Self{calleeName: calleeName, calleeHash: calleeHash}
+	end 'create'
+end 'InlineDep'
+
+export typealias InlineDepArray = Array with InlineDep
+
+// True when `deps` already records an inline edge to a callee named
+// `calleeName`. Shared by the inliner's per-build dedup guard
+// (`recordInlineEdge`) and the Scenario I incremental test, so both agree on
+// what "this callee is already a recorded dep" means.
+export function inlineDepsContainCallee(deps InlineDepArray, calleeName String) returns bool
+	for dep in deps 'each'
+		if dep.calleeName == calleeName 'found'
+			return true
+		end 'found'
+	end 'each'
+	return false
+end 'inlineDepsContainCallee'
+
 // Map typealiases for per-file caches.
 export typealias TokenCacheMap = Map with (FilePath, TokenMemo)
 export typealias ParseCacheMap = Map with (FilePath, ParseMemo)

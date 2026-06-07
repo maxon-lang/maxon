@@ -12,11 +12,27 @@
 //     visibility, implicit-param flags) so caller signature edges propagate
 //     correctly.
 //   - Includes structural body shape (block count, opRefs counts, terminator
-//     kinds, varSlotCount). Enough to detect any meaningful body edit; a
-//     full byte-level op hash is left for 11.6+ when the inliner needs
-//     fine-grained invalidation.
+//     kinds, varSlotCount). The Std-tier stamp (`stampStdContentHash` /
+//     `computeStdContentHashFor` in Queries.maxon) additionally folds in each
+//     op's printed form, so a literal-value edit that preserves block shape
+//     still flips the hash.
 //   - Hashes callee names that appear in the body (signature edges only —
 //     callee bodies do not feed in here).
+//
+// Inline-aware invalidation contract (two regimes, both load-bearing):
+//   1. In-memory (same process): the chunk cache is inline-correct for free.
+//      `queryAllMid` re-runs the inliner on every build, and the Std-tier
+//      content hash is taken over the POST-inline body — an inlined callee's
+//      ops physically live in the caller's blocks at hash time, so editing the
+//      callee flips the caller's hash and invalidates its chunk.
+//   2. Cross-process (persistent cache): a chunk loaded from disk is reused
+//      WITHOUT re-running the inliner, so the post-inline hash can't be
+//      recomputed. Correctness then relies on `Project.inlineEdges` — the
+//      inliner records, per caller, each inlined callee's body hash captured at
+//      splice time (`recordInlineEdge`). A loaded caller chunk is inline-valid
+//      only if its own keyHash matches AND `callerInlineDepsUnchanged` confirms
+//      every inlined callee's body hash is unchanged. Any future on-disk chunk
+//      cache MUST honor this — see `captureInlineDeps` in Queries.maxon.
 //
 // Algorithm: FNV-1a-like rolling 64-bit mix. Cheap enough to recompute on
 // every queryMidForFunction call without measurable overhead.

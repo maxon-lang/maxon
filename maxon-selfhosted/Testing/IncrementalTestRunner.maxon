@@ -185,6 +185,25 @@ export function runIncrementalTests() returns ExitCode
 	end 'failH'
 	cleanupIncrTest(sourcePath, exePath: exePath)
 
+	// --- Scenario I: inline-aware cache invalidation ---
+	// Verifies that editing a callee body that the inliner spliced into a
+	// caller invalidates the caller's cached chunk. Exercises the inline-edge
+	// recording (`project.inlineEdges`) and the persistence-layer hooks
+	// (`captureInlineDeps` / `callerInlineDepsUnchanged`). Uses a fresh Project
+	// per leg to sidestep the same-Project reparse quirk; byte-identity against
+	// a clean full build is the load-bearing correctness gate.
+	logInfo(LogCategory.testing, message: function() gives "Scenario I: inline-aware invalidation...")
+	cleanupIncrTest(sourcePath, exePath: exePath)
+	let scenarioIPassed = runInlineInvalidationScenario(sourcePath, exePath: exePath)
+	if scenarioIPassed 'passI'
+		print("[PASS] Scenario I: inline-aware invalidation\n")
+		totalPassed = totalPassed + 1
+	end 'passI' else 'failI'
+		print("[FAIL] Scenario I: inline-aware invalidation\n")
+		totalFailed = totalFailed + 1
+	end 'failI'
+	cleanupIncrTest(sourcePath, exePath: exePath)
+
 	// --- Scenario G: ReParseParity (parser snapshot/restore correctness) ---
 	// Compile source v1 in a fresh Project (bytes A). In a second fresh
 	// Project, compile v1, fileChange to v2, fileChange back to v1, compile
@@ -385,6 +404,180 @@ function runReParseParityScenario(sourcePath FilePath, exePath FilePath) returns
 
 	return true
 end 'runReParseParityScenario'
+
+// Scenario I: inline-aware cache invalidation. Builds a program where a tiny
+// `int`-returning accessor (`getVal`) is unconditionally inlined into its
+// caller (`compute`), then verifies that:
+//   1. The inliner recorded the `compute → getVal` edge in `project.inlineEdges`.
+//   2. `captureInlineDeps(compute)` returns the callee fingerprint, and
+//      `callerInlineDepsUnchanged` agrees the deps are fresh immediately after.
+//   3. Editing ONLY `getVal`'s body and recompiling the SAME Project recomputes
+//      `compute`'s chunk (inline-aware invalidation), and the v1 deps now fail
+//      `callerInlineDepsUnchanged` against the v2 mid module (callee hash flipped).
+//   4. The incremental v2 binary is byte-identical to a clean full v2 build.
+// `getVal` returns plain `int` (full range) so it isn't gated by the
+// observable-frame range-check rule that skips `ExitCode`-returning accessors.
+function runInlineInvalidationScenario(sourcePath FilePath, exePath FilePath) returns bool
+	let sourceV1 = inlineScenarioSource(1 as MagicReturn)
+	let sourceV2 = inlineScenarioSource(2 as MagicReturn)
+	var passed = true
+
+	// --- Cold leg: fresh Project, incremental on, compile v1. ---
+	try File.writeText(sourcePath, content: sourceV1) otherwise 'writeV1'
+		print("  Scenario I: failed to write v1 source\n")
+		return false
+	end 'writeV1'
+	try File.delete(exePath) otherwise ignore
+	var project = createProject(sourcePath, target: detectHostTarget())
+	project.db.enableIncremental = true
+	try compileProject(project) otherwise 'compV1'
+		print("  Scenario I: v1 compile failed\n")
+		return false
+	end 'compV1'
+
+	// (1) The inliner must have spliced `getVal` into `compute`. If this fails
+	// the inliner isn't inlining the accessor (e.g. a budget/gate change), and
+	// the rest of the scenario can't prove anything — fail loudly here.
+	let calleesV1 = try project.inlineEdges.get("compute") otherwise 'noEdge'
+		print("  Scenario I: no inline edges recorded for 'compute' — accessor was not inlined; scenario cannot verify invalidation\n")
+		return false
+	end 'noEdge'
+	if not inlineDepsContainCallee(calleesV1, calleeName: "getVal") 'missingCallee'
+		print("  Scenario I: 'compute' inline edges did not include 'getVal' (got {calleesV1.count()} edge(s))\n")
+		return false
+	end 'missingCallee'
+
+	// (2) captureInlineDeps returns the callee fingerprint; comparing it to
+	// itself must report "unchanged" (the predicate's reflexive base case).
+	let depsV1 = captureInlineDeps(project, callerName: "compute")
+	if depsV1.count() == 0 'noDeps'
+		print("  Scenario I: captureInlineDeps returned no deps for 'compute'\n")
+		return false
+	end 'noDeps'
+	if not callerInlineDepsUnchanged(depsV1, fresh: depsV1) 'notReflexive'
+		print("  Scenario I: callerInlineDepsUnchanged(depsV1, depsV1) returned false (should be true)\n")
+		return false
+	end 'notReflexive'
+
+	// Record `compute`'s cached-chunk key hash from the v1 build so we can prove
+	// it flips after the callee edit (direct invalidation signal, independent of
+	// the byte-identity gate below).
+	let computeChunkV1 = try project.db.codePerFunc.get("compute") otherwise 'noChunkV1'
+		print("  Scenario I: 'compute' has no cached chunk after v1 build\n")
+		return false
+	end 'noChunkV1'
+	let computeKeyHashV1 = computeChunkV1.keyHash
+
+	// --- Edit leg: same Project, edit ONLY getVal's body, recompile. ---
+	try File.writeText(sourcePath, content: sourceV2) otherwise 'writeV2'
+		print("  Scenario I: failed to write v2 source\n")
+		return false
+	end 'writeV2'
+	try File.delete(exePath) otherwise ignore
+	resetCounters(project)
+	let incrOutput = try compileProject(project) otherwise 'compV2'
+		print("  Scenario I: v2 incremental compile failed\n")
+		return false
+	end 'compV2'
+
+	// (3a) The caller whose inlined copy of `getVal` changed must have recomputed
+	// its chunk: its post-inline body now embeds the new `getVal` literal, so the
+	// freshly-stamped chunk's key hash must differ from the v1 key hash. An equal
+	// hash would mean `compute`'s cached chunk was reused despite the inlined
+	// callee edit — the stale-bytes regression this change guards against.
+	let computeChunkV2 = try project.db.codePerFunc.get("compute") otherwise 'noChunkV2'
+		print("  Scenario I: 'compute' has no cached chunk after v2 build\n")
+		return false
+	end 'noChunkV2'
+	if computeChunkV2.keyHash == computeKeyHashV1 'keyUnchanged'
+		print("  Scenario I: 'compute' chunk key hash unchanged after editing inlined callee 'getVal' — stale-bytes regression\n")
+		return false
+	end 'keyUnchanged'
+
+	// (3b) The freshly-captured v2 deps must differ from the stored v1 deps —
+	// the persistence-layer predicate correctly detects the inlined callee edit
+	// (getVal's body hash flipped, so its InlineDep hash differs between builds).
+	let depsV2 = captureInlineDeps(project, callerName: "compute")
+	if callerInlineDepsUnchanged(depsV1, fresh: depsV2) 'depsStillFresh'
+		print("  Scenario I: callerInlineDepsUnchanged(depsV1, depsV2) returned true — inlined callee edit not detected\n")
+		return false
+	end 'depsStillFresh'
+
+	let incrBytes = try File.readBinary(incrOutput) otherwise 'readIncr'
+		print("  Scenario I: failed to read incremental v2 binary\n")
+		return false
+	end 'readIncr'
+
+	// --- Reference leg: fresh Project, full (non-incremental) v2 build. ---
+	try File.delete(exePath) otherwise ignore
+	var refProject = createProject(sourcePath, target: detectHostTarget())
+	refProject.db.enableIncremental = false
+	let refOutput = try compileProject(refProject) otherwise 'compRef'
+		print("  Scenario I: reference v2 full build failed\n")
+		return false
+	end 'compRef'
+	let refBytes = try File.readBinary(refOutput) otherwise 'readRef'
+		print("  Scenario I: failed to read reference v2 binary\n")
+		return false
+	end 'readRef'
+
+	// (4) Byte-identity: the incremental rebuild after the callee edit must
+	// match a clean full build of the same source.
+	if incrBytes != refBytes 'bytesDiffer'
+		print("  Scenario I: incremental v2 binary ({incrBytes.count()} bytes) != full v2 binary ({refBytes.count()} bytes) — invalidation produced wrong code\n")
+		passed = false
+	end 'bytesDiffer'
+
+	return passed
+end 'runInlineInvalidationScenario'
+
+// Source for Scenario I: a tiny full-range accessor `getVal` (inlined into
+// `compute`), a caller that uses its result, and a `main` that returns it.
+// Only `getVal`'s literal flips between v1 and v2 so the edit is isolated to
+// the inlined callee body.
+function inlineScenarioSource(calleeReturn MagicReturn) returns String
+	// `FullInt` is a full-range int alias (i64.min..i64.max) so `getVal` is NOT
+	// gated by the inliner's observable-frame range-check rule (which skips
+	// narrowed-range returns like `ExitCode`). Bare `int` is rejected by E3005,
+	// hence the alias.
+	var src = ""
+	src.append("typealias FullInt = int(i64.min to i64.max)\n")
+	src.append("function getVal() returns FullInt\n")
+	src.append("\treturn {calleeReturn}\n")
+	src.append("end 'getVal'\n")
+	// `barrier` returns the narrowed-range `ExitCode` alias, so the inliner's
+	// observable-frame range-check gate always skips it. Keeping a `barrier()`
+	// call inside `compute` means `compute` is never pure and never picks up the
+	// all-const-args budget bonus at `main`'s call site — so `compute` is NOT
+	// inlined into `main` (which would DCE it and leave no standalone chunk to
+	// inspect). `getVal`, by contrast, is a tiny full-range accessor that IS
+	// inlined into `compute`: exactly the caller-with-inlined-callee shape this
+	// scenario needs.
+	src.append("function barrier() returns ExitCode\n")
+	src.append("\treturn 0 as ExitCode\n")
+	src.append("end 'barrier'\n")
+	src.append("function compute(seed FullInt) returns FullInt\n")
+	src.append("\tlet v = getVal()\n")
+	src.append("\tlet b = barrier()\n")
+	src.append("\tvar acc = v + seed\n")
+	src.append("\tacc = acc + b\n")
+	src.append("\tacc = acc + seed\n")
+	src.append("\tacc = acc * seed\n")
+	src.append("\tacc = acc + v\n")
+	src.append("\tacc = acc * v\n")
+	src.append("\tacc = acc + seed\n")
+	src.append("\tacc = acc * seed\n")
+	src.append("\tacc = acc + v\n")
+	src.append("\tacc = acc + seed\n")
+	src.append("\treturn acc\n")
+	src.append("end 'compute'\n")
+	src.append("function main() returns ExitCode\n")
+	src.append("\tlet c = compute(1 as FullInt)\n")
+	src.append("\tlet ok = (c != (0 as FullInt))\n")
+	src.append("\treturn (3 as ExitCode) if ok else (0 as ExitCode)\n")
+	src.append("end 'main'\n")
+	return src
+end 'inlineScenarioSource'
 
 function assertCounter(name String, actual Revision, expected Revision) returns bool
 	if actual != expected 'mismatch'
