@@ -16,30 +16,35 @@ ExitCode: 0
 module {
   func @main() -> u32 {
   entry:
-    x64.prologue stack_size=16
+    x64.prologue stack_size=32
+    x64.xor eax, eax
     x64.mov edx, 8
     x64.mov ecx, 4
-    x64.call stdlib.__managed_mem_create
-    x64.mov r9, r8
-    x64.xor esi, esi
+    x64.call stdlib.__managed_mem_create_managed
+    x64.mov r12, r8
+    x64.xor r13d, r13d
   try_0.merge:
-    x64.mov r8, [r9+8] (8b)
+    x64.mov r8, [r12+8] (8b)
     x64.test r8, r8
     x64.je badLen_0.after
   badLen_0:
+    x64.mov rcx, r12
+    x64.call __mm_decref_maybenull_helper
     x64.mov r8d, 2
     x64.epilogue
     x64.ret
   badLen_0.after:
-    x64.mov r8, [r9+16] (8b)
-    x64.cmp r8, 4
+    x64.mov r14, [r12+16] (8b)
+    x64.mov rcx, r12
+    x64.call __mm_decref_maybenull_helper
+    x64.cmp r14, 4
     x64.je badCap_0.after
   badCap_0:
     x64.mov r8d, 3
     x64.epilogue
     x64.ret
   badCap_0.after:
-    x64.mov r8, rsi
+    x64.mov r8, r13
     x64.epilogue
     x64.ret
   }

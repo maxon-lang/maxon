@@ -9,6 +9,7 @@ public static partial class MaxonToStandardConversion {
     "__managed_mem_byte_at", "__managed_mem_set_byte",
     "__managed_mem_grow", "__managed_mem_set_length",
     "__managed_mem_shift_right", "__managed_mem_shift_left",
+    "__managed_mem_swap",
     "__managed_mem_create", "__managed_mem_slice"
   ];
 

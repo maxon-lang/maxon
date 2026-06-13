@@ -668,7 +668,7 @@ typealias PeSectionList = Array with PeSectionRec
 // record carrying the section's raw size) followed by one external function
 // symbol per DebugSymbol entry, then the COFF string table. Returns the total
 // symbol count for the COFF header backpatch.
-function writeCoffSymbolTable(pe ByteArray, debugSymbols DebugSymbolArray, codeSize ByteCount, hasRdata bool, rdataSize ByteCount, hasSymdata bool, symdataSize ByteCount, idataSize ByteCount, dataRawSize ByteCount, hasCovdata bool, covdataSize ByteCount) returns MachineWord
+function writeCoffSymbolTable(pe ByteArray, debugSymbols DebugSymbolArray, codeSize ByteCount, hasRdata bool, rdataSize ByteCount, hasSymdata bool, symdataSize ByteCount, idataSize ByteCount, dataRawSize ByteCount, hasCovdata bool, covdataSize ByteCount, rsrcSize ByteCount) returns MachineWord
 	var stringTable = ByteArray.create()
 	// Reserve the leading 4-byte size prefix; patched after all names are appended.
 	writeZeros(stringTable, n: 4)
@@ -688,6 +688,7 @@ function writeCoffSymbolTable(pe ByteArray, debugSymbols DebugSymbolArray, codeS
 	if hasCovdata 'addCovdata'
 		sections.push(PeSectionRec.create(".covdata", rawSize: covdataSize))
 	end 'addCovdata'
+	sections.push(PeSectionRec.create(".rsrc", rawSize: rsrcSize))
 
 	var totalSymbolCount = 0 as MachineWord
 	for (iter, section) in sections.withIterator() 'sectionSyms'
@@ -718,6 +719,78 @@ function writeCoffSymbolTable(pe ByteArray, debugSymbols DebugSymbolArray, codeS
 
 	return totalSymbolCount
 end 'writeCoffSymbolTable'
+
+// --- Resource section (.rsrc): embedded application manifest ---
+
+// Windows' Installer Detection heuristic treats an exe whose NAME contains an
+// installer-ish token ("update", "setup", "patch") as a legacy installer and
+// demands elevation at CreateProcess time UNLESS the binary declares an
+// explicit requestedExecutionLevel. Spec tests compile to exes named after the
+// test (`map.string-keys-upsert-update.exe`), so spawning them failed with
+// "The requested operation requires elevation". Embedding the standard
+// `asInvoker` manifest opts every produced binary out of the heuristic.
+//
+// The section holds the minimal single-resource tree:
+//   root IMAGE_RESOURCE_DIRECTORY (16) + 1 entry (8)   → type dir   @24
+//   type IMAGE_RESOURCE_DIRECTORY (16) + 1 entry (8)   → lang dir   @48
+//   lang IMAGE_RESOURCE_DIRECTORY (16) + 1 entry (8)   → data entry @72
+//   IMAGE_RESOURCE_DATA_ENTRY (16)                     → manifest   @88
+let RSRC_TYPE_DIR_OFFSET = 24
+let RSRC_LANG_DIR_OFFSET = 48
+let RSRC_DATA_ENTRY_OFFSET = 72
+let RSRC_MANIFEST_OFFSET = 88
+// High bit of a directory entry's offset field marks "points at a subdirectory".
+let RSRC_SUBDIR_BIT = 0x80000000
+let RT_MANIFEST_TYPE_ID = 24
+let CREATEPROCESS_MANIFEST_RESOURCE_ID = 1
+let RSRC_LANG_ID_EN_US = 0x409
+
+typealias ResourceEntryCount = int(0 to 65535)
+
+function manifestXml() returns ByteArray
+	let xml = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><assembly xmlns=\"urn:schemas-microsoft-com:asm.v1\" manifestVersion=\"1.0\"><trustInfo xmlns=\"urn:schemas-microsoft-com:asm.v3\"><security><requestedPrivileges><requestedExecutionLevel level=\"asInvoker\" uiAccess=\"false\"/></requestedPrivileges></security></trustInfo></assembly>"
+	return xml.toByteArray()
+end 'manifestXml'
+
+// One IMAGE_RESOURCE_DIRECTORY header with `idEntries` ID-keyed entries.
+function writeResourceDirHeader(buf ByteArray, idEntries ResourceEntryCount)
+	writeDword(buf, value: 0)  // Characteristics
+	writeDword(buf, value: 0)  // TimeDateStamp
+	writeWord(buf, value: 0)   // MajorVersion
+	writeWord(buf, value: 0)   // MinorVersion
+	writeWord(buf, value: 0)   // NumberOfNamedEntries
+	writeWord(buf, value: idEntries)
+end 'writeResourceDirHeader'
+
+function buildRsrcSection(rsrcRva Rva) returns ByteArray
+	var rsrc = ByteArray.create()
+	let manifest = manifestXml()
+
+	// Root directory: one ID entry (the RT_MANIFEST type) → type subdirectory.
+	writeResourceDirHeader(rsrc, idEntries: 1)
+	writeDword(rsrc, value: RT_MANIFEST_TYPE_ID)
+	writeDword(rsrc, value: RSRC_SUBDIR_BIT or RSRC_TYPE_DIR_OFFSET)
+
+	// Type-level directory: one entry (resource ID 1) → language subdirectory.
+	writeResourceDirHeader(rsrc, idEntries: 1)
+	writeDword(rsrc, value: CREATEPROCESS_MANIFEST_RESOURCE_ID)
+	writeDword(rsrc, value: RSRC_SUBDIR_BIT or RSRC_LANG_DIR_OFFSET)
+
+	// Language-level directory: one entry (en-US) → data entry (leaf: no subdir bit).
+	writeResourceDirHeader(rsrc, idEntries: 1)
+	writeDword(rsrc, value: RSRC_LANG_ID_EN_US)
+	writeDword(rsrc, value: RSRC_DATA_ENTRY_OFFSET)
+
+	// IMAGE_RESOURCE_DATA_ENTRY: the manifest's RVA is image-relative (NOT
+	// section-relative, unlike the directory-entry offsets above).
+	writeDword(rsrc, value: rsrcRva + RSRC_MANIFEST_OFFSET)
+	writeDword(rsrc, value: manifest.count())
+	writeDword(rsrc, value: 0)  // CodePage
+	writeDword(rsrc, value: 0)  // Reserved
+
+	rsrc.append(manifest)
+	return rsrc
+end 'buildRsrcSection'
 
 // --- Main PE writer ---
 
@@ -821,8 +894,8 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	let hasSymdata = symdataSize > 0
 	let hasCovdata = covdataSize > 0
 
-	// Count sections: .text + .idata + .data + optional .rdata + optional .symtab + optional .covdata
-	var numSections = 3
+	// Count sections: .text + .idata + .data + .rsrc + optional .rdata + optional .symtab + optional .covdata
+	var numSections = 4
 	if hasRdata 'countRdata'
 		numSections = numSections + 1
 	end 'countRdata'
@@ -894,7 +967,15 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 		covdataSizeVirtual = alignUp(covdataSize, alignment: SECTION_ALIGNMENT)
 	end 'setCovdataVirtual'
 
-	let imageSize = covdataRva + covdataSizeVirtual
+	// .rsrc section: the embedded asInvoker manifest, always emitted (see
+	// buildRsrcSection). Placed last so no existing section RVA shifts.
+	let rsrcRva = covdataRva + covdataSizeVirtual
+	let rsrcData = buildRsrcSection(rsrcRva)
+	let rsrcSize = rsrcData.count()
+	let rsrcSizeAligned = alignUp(rsrcSize, alignment: FILE_ALIGNMENT)
+	let rsrcSizeVirtual = alignUp(rsrcSize, alignment: SECTION_ALIGNMENT)
+
+	let imageSize = rsrcRva + rsrcSizeVirtual
 
 	logDebug(LogCategory.binary, message: function() gives "Code section: {codeSize} bytes")
 	logDebug(LogCategory.binary, message: function() gives "Rdata section: {rdataSize} bytes")
@@ -959,7 +1040,7 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	// === Optional Header PE32+ (240 bytes) ===
 	pe.append(b"\x0b\x02\x0e\x00")
 	writeDword(pe, value: codeSizeAligned)
-	writeDword(pe, value: rdataSizeAligned + symdataSizeAligned + idataSizeAligned + covdataSizeAligned)
+	writeDword(pe, value: rdataSizeAligned + symdataSizeAligned + idataSizeAligned + covdataSizeAligned + rsrcSizeAligned)
 	pe.append(b"\x00\x00\x00\x00")  // BaseOfCode(0) — placeholder before textRva writes
 	writeDword(pe, value: textRva)
 	writeDword(pe, value: textRva)
@@ -982,8 +1063,11 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	pe.append(b"\x00\x00\x00\x00\x00\x00\x00\x00")
 	writeDword(pe, value: idata.importDirRva)
 	writeDword(pe, value: idata.importDirSize)
-	// 2-11: zeros
-	writeZeros(pe, n: 80)
+	// 2: Resource Table (.rsrc — the embedded asInvoker manifest)
+	writeDword(pe, value: rsrcRva)
+	writeDword(pe, value: rsrcSize)
+	// 3-11: zeros
+	writeZeros(pe, n: 72)
 	// 12: IAT
 	writeDword(pe, value: idata.iatRva)
 	writeDword(pe, value: iatDirSize)
@@ -1010,7 +1094,10 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	nextFilePointer = nextFilePointer + dataRawSize
 	if hasCovdata 'writeCovdataHeader'
 		writeSectionHeader(pe, name: ".covdata", virtualSize: covdataSize, virtualAddress: covdataRva, rawDataSize: covdataSizeAligned, rawDataPointer: nextFilePointer, characteristics: 0xC0000040)
+		nextFilePointer = nextFilePointer + covdataSizeAligned
 	end 'writeCovdataHeader'
+	// .rsrc section: read-only initialized data
+	writeSectionHeader(pe, name: ".rsrc", virtualSize: rsrcSize, virtualAddress: rsrcRva, rawDataSize: rsrcSizeAligned, rawDataPointer: nextFilePointer, characteristics: 0x40000040)
 
 	// Pad headers to alignment
 	padTo(pe, size: headersAligned)
@@ -1053,12 +1140,18 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 		padTo(pe, size: headersAligned + codeSizeAligned + rdataSizeAligned + symdataSizeAligned + idataSizeAligned + dataRawSize + covdataSizeAligned)
 	end 'writeCovdata'
 
+	// === .rsrc section ===
+	// covdataSizeAligned is 0 when .covdata is absent, so the cumulative
+	// formula needs no conditional (same convention as rdata/symtab above).
+	pe.append(rsrcData)
+	padTo(pe, size: headersAligned + codeSizeAligned + rdataSizeAligned + symdataSizeAligned + idataSizeAligned + dataRawSize + covdataSizeAligned + rsrcSizeAligned)
+
 	// === COFF symbol table + string table ===
 	// Appended past the last loadable section. Image loaders ignore trailing
 	// bytes; debuggers (lldb, llvm-objdump) read this table to resolve names.
 	if codeResult.debugSymbols.count() > 0 'writeCoff'
 		let symbolTableFileOffset = pe.count()
-		let totalSymbolCount = writeCoffSymbolTable(pe, debugSymbols: codeResult.debugSymbols, codeSize: codeSize, hasRdata: hasRdata, rdataSize: rdataSize, hasSymdata: hasSymdata, symdataSize: symdataSize, idataSize: idataSize, dataRawSize: dataRawSize, hasCovdata: hasCovdata, covdataSize: covdataSize)
+		let totalSymbolCount = writeCoffSymbolTable(pe, debugSymbols: codeResult.debugSymbols, codeSize: codeSize, hasRdata: hasRdata, rdataSize: rdataSize, hasSymdata: hasSymdata, symdataSize: symdataSize, idataSize: idataSize, dataRawSize: dataRawSize, hasCovdata: hasCovdata, covdataSize: covdataSize, rsrcSize: rsrcSize)
 		patchDword(pe, offset: pointerToSymbolTableOffset, value: symbolTableFileOffset)
 		patchDword(pe, offset: numberOfSymbolsOffset, value: totalSymbolCount)
 		logDebug(LogCategory.binary, message: function() gives "COFF symbol table: {totalSymbolCount} entries at file offset {symbolTableFileOffset}")

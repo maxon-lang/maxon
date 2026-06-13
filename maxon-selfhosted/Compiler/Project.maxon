@@ -34,9 +34,22 @@ export type IrDumpOptions
 	// increments once per pass dump so filenames are ordered across
 	// queryAllMid, the backend pipeline, and the final target-lowering dump.
 	export var passCounter as DumpPassCounter
+	// When false (the default), each stage dump renders only the user
+	// program's IR — the stdlib, which dwarfs a typical test program, is
+	// filtered out. Serializing the full stdlib after every pass is the
+	// dominant cost of `--dump-stages`, so excluding it makes stage dumps an
+	// order of magnitude cheaper. `--dump-stages-stdlib` flips this to true
+	// for the rare case where you need to inspect post-pass stdlib IR.
+	export var stagesIncludeStdlib as bool
+	// Stage selection from `--dump-stages[=NAMES]`: a comma-separated list of
+	// pass-name substrings. When non-empty, only stages whose label contains
+	// one of the entries are rendered and written (`stageWanted`); skipped
+	// stages still advance `passCounter` so a filtered dump keeps the same
+	// `NN-` numbering as a full one. Empty = every stage.
+	export var stagesFilter as String
 
 	export static function disabled() returns IrDumpOptions
-		return Self{emitFinal: false, stagesBasePath: "", passCounter: 1}
+		return Self{emitFinal: false, stagesBasePath: "", passCounter: 1, stagesIncludeStdlib: false, stagesFilter: ""}
 	end 'disabled'
 
 	// True when any form of IR dumping is active. Callers use this to bypass
@@ -50,6 +63,37 @@ export type IrDumpOptions
 	export function stagesEnabled() returns bool
 		return not stagesBasePath.isEmpty()
 	end 'stagesEnabled'
+
+	// Whether a stage/target dump should filter the stdlib out of its render.
+	// The default (stdlib excluded) keeps stage dumps cheap; `--dump-stages-stdlib`
+	// sets `stagesIncludeStdlib` to opt back in. Single source of truth for the
+	// `skipStdlib` argument the IR printers take — see `PassPipeline.renderPhaseModule`
+	// and `dumpTargetLoweringIr`.
+	export function renderSkipsStdlib() returns bool
+		return not stagesIncludeStdlib
+	end 'renderSkipsStdlib'
+
+	// True when the stage labelled `label` should be rendered and written under
+	// the current `stagesFilter`: an empty filter selects every stage; otherwise
+	// any comma-separated entry that is a SUBSTRING of the label selects it
+	// (`refcounts` matches `insert-refcounts`; `dce` matches both `dce` and
+	// `dce-functions`). Callers that skip a stage must still claim its file
+	// number via `claimStageNumber` so filtered and full dumps share numbering.
+	export function stageWanted(label String) returns bool
+		if stagesFilter.isEmpty() 'all'
+			return true
+		end 'all'
+
+		for entry in stagesFilter.split(",") 'eachEntry'
+			let wanted = entry.trim()
+
+			if not wanted.isEmpty() and label.contains(wanted) 'hit'
+				return true
+			end 'hit'
+		end 'eachEntry'
+
+		return false
+	end 'stageWanted'
 end 'IrDumpOptions'
 
 // Visibility tier for a top-level declaration. Three tiers match the
@@ -208,6 +252,71 @@ export type Project
 	// Default values are currently limited to integer literals; omitted
 	// parameters without a default are a compile error at the call site.
 	export var funcSignatures as FuncSignatureMap
+
+	// Return-borrow registry: qualified function names whose return value is a
+	// BORROW of a parameter (an interior view returned WITHOUT an owning incref) —
+	// e.g. an iterator `.current()` returning the collection's element, or any
+	// method `return self.field` / `return param.accessor()` that forwards a
+	// borrow. Populated during lowering (`recordReturnBorrowFact` at the `ret`,
+	// where the returned value's alias-ness is structurally known) and propagated
+	// across forwarding returns by `analyzeReturnBorrowFixpoint`. The refcount
+	// classifier (`recordCallResultType`) reads it: a call to a return-borrow
+	// function yields a `borrowed` result (it owns no +1), not the default
+	// `callReturnRc1`. This is the return-side dual of the argument-consume fact —
+	// computed structurally from the callee, never by callee-name matching.
+	export var funcReturnsBorrow as FuncReturnsBorrowSet
+
+	// RECEIVER-INTERIOR return registry (the liveness-only superset of
+	// `funcReturnsBorrow`). Function names whose return value structurally derives
+	// from the receiver's interior — a node/element pointer the receiver's
+	// structure still owns the contents of — REGARDLESS of whether the function
+	// hands the caller its own +1 on that pointer. `List.walkTo` is the model: its
+	// loop phi over the chain walkers is ACQUIRED (+1 to the caller, so it must
+	// stay OUT of `funcReturnsBorrow` — callers release the node), but the node's
+	// value slot is freed by the CHAIN's teardown, so the receiver list must
+	// outlive the node's uses. `StdLiveness.recordNavBorrow` consumes the UNION of
+	// this set and `funcReturnsBorrow` to extend the receiver's live range —
+	// extend-only, so an over-broad entry risks a late release, never a premature
+	// free. Computed by `analyzeReturnBorrows` after its borrow fixpoint;
+	// persisted in the stdlib cache (v77) for the user build.
+	export var funcReturnsReceiverInterior as FuncReturnsBorrowSet
+
+	// Element-loader CHAIN-BOUNDARY registry. Qualified function names that route
+	// through the shared `__managed_mem_load_sized` load primitive (the element loaders
+	// `__managed_mem_get` / `__managed_mem_cursor_current`). Computed structurally by
+	// `analyzeReturnBorrows` over the stdlib and persisted in the cache (v73) for the
+	// user build. The return-borrow inserter's wrapper-retain boundary
+	// (`calleeIsBorrowFunction`) consults it to fire the borrow→owned retain EXACTLY
+	// ONCE per forwarding chain — replacing a hardcoded loader-name list with the
+	// structural fact "calls the load chokepoint".
+	export var funcIsElementLoader as FuncReturnsBorrowSet
+
+	// Argument-CONSUME registry (Concept C — the structural replacement for the
+	// inserter's hand-synced callee allowlists). For each function NAME, a bool per
+	// parameter index: true iff the callee TAKES OWNERSHIP of that argument (moves
+	// its +1 into durable storage WITHOUT increfing — a container's element buffer, a
+	// list node, a heap field, or the wrapper struct it returns) vs. merely BORROWING
+	// it for a read (`Map.get`/`Set.contains` take the same type-parameter arg but
+	// only probe it). Computed STRUCTURALLY from each callee's body by
+	// `analyzeParamConsumes` (a whole-module fixpoint over forwarding edges, the
+	// argument-side dual of `funcReturnsBorrow`), never by callee-name matching. The
+	// inserter reads `paramConsumesArg` here to suppress the local release of a
+	// consumed argument — its +1 transferred to the callee's container, balanced by
+	// that container's destructor. A missing entry means "no consume info" → the
+	// inserter falls back to its conservative default (no suppression → at worst a
+	// leak, never a double-free).
+	export var funcParamConsumes as FuncParamConsumesMap
+
+	// Return-side companion to `funcParamConsumes`: qualified function names whose
+	// return value OWNS the +1 of a CONSUMED parameter (a transparent wrapper —
+	// `Array.init`/`Vector.init`'s `return Self{managed: arg}`: the result aliases the
+	// arg's storage with no fresh alloc/incref, so the caller's result inherits the
+	// arg's +1). Computed by `analyzeParamConsumes` alongside the consume bits. The
+	// inserter reads it (`calleeReturnsConsumedArg`) so a transparent-wrap result is
+	// treated as already-owning a transferable +1 — the return-side fact the design
+	// keeps DISTINCT from the per-class `plusOneOwnership` (it is about a call result
+	// inheriting its wrapped arg's reference, orthogonal to the result's class).
+	export var funcReturnsConsumedArg as FuncReturnsBorrowSet
 
 	// Per-call-site substituted paramTypes — the FuncSignature's declared
 	// paramTypes resolved against each call's enclosing-struct innerAliases
@@ -534,6 +643,22 @@ export type Project
 	// so a normal build stays silent. Defaults to false.
 	export var asyncTraceEnabled as bool
 
+	// When true, the memory-manager runtime (mm_alloc / mm_free / mm_incref /
+	// mm_decref / mm_raw_* / mm_cow + the slab layer) emits a textual trace to
+	// stderr — each allocation/free/refcount op as one line, with a type tag,
+	// a per-allocation id, sizes, and a nesting indent. `__Internals.mmTraceEnabled()`
+	// folds to this flag as a compile-time constant, so untraced builds DCE the
+	// trace code to nothing. Defaults to false.
+	export var mmTraceEnabled as bool
+
+	// When true, `patchMrtStartLeakCheck` wraps mrt_start's `osExit(main())` in
+	// `mrt_leak_check`, so a program that exits with any live `__mm_alloc`
+	// allocation returns exit code 101 instead of main's value. The spec-test
+	// per-fragment success path sets this so leaking ladder/success tests fail
+	// (the standalone equivalent of the batch dispatcher's per-test leak diff).
+	// Off by default — production binaries don't pay the exit-time check.
+	export var leakCheckEnabled as bool
+
 	// Populated by the InstrumentCoverage pass: one CovSite per instrumented
 	// block. Chunk E serializes this to a .covmap file next to the executable;
 	// Chunk D only builds the in-memory table.
@@ -728,6 +853,11 @@ export type Project
 			funcVisibilities: FuncVisibilityMap.create(),
 			methodNameIndex: MethodNameIndex.create(),
 			funcSignatures: FuncSignatureMap.create(),
+			funcReturnsBorrow: FuncReturnsBorrowSet.create(),
+			funcReturnsReceiverInterior: FuncReturnsBorrowSet.create(),
+			funcIsElementLoader: FuncReturnsBorrowSet.create(),
+			funcParamConsumes: FuncParamConsumesMap.create(),
+			funcReturnsConsumedArg: FuncReturnsBorrowSet.create(),
 			callParamTypes: CallParamTypesMap.create(),
 			resolvedCallees: ResolvedCalleesMap.create(),
 			resolvedReceiverTypes: ResolvedReceiverTypesMap.create(),
@@ -770,6 +900,8 @@ export type Project
 			globalData: createGlobalDataTable(),
 			coverageEnabled: false,
 			asyncTraceEnabled: false,
+			mmTraceEnabled: false,
+			leakCheckEnabled: false,
 			covSites: CovSiteTable.create(),
 			irDump: IrDumpOptions.disabled(),
 			layoutDescriptors: LayoutDescriptorRegistry.create(),
@@ -2716,6 +2848,17 @@ end 'tupleAllocGidKey'
 // String shape: `"{func.name}::{call.result}"`.
 export typealias DiscardedCallResultSet = Set with String
 
+// Qualified function names whose return value is a borrow of a parameter. See
+// `Project.funcReturnsBorrow`. Also reused for `Project.funcReturnsConsumedArg`
+// (the transparent-wrapper return-side fact), which is likewise a name set.
+export typealias FuncReturnsBorrowSet = Set with String
+
+// Per-parameter argument-consume bits, keyed by qualified function name. Entry `i`
+// is true iff the callee takes ownership of parameter `i` (see
+// `Project.funcParamConsumes`). The BoolArray is indexed by ABI parameter position
+// (leading `__self` at 0), matching `FuncSignature.paramTypes`.
+export typealias FuncParamConsumesMap = Map with (String, BoolArray)
+
 export type TypealiasRange
 	export var lower as RangeBound
 	export var upper as RangeBound
@@ -2767,14 +2910,20 @@ end 'resolveType'
 // default. MaxonType is value-only so void never reaches this function —
 // function return types go through maxonReturnTypeToStdReturnType instead.
 export function resolveMaxonTypeToStd(project Project, ref MaxonType) returns StdType
-	// MaxonType.string has no Std representation yet. Type-checking at call
-	// sites must reject string flows before lowering reaches this path. If
-	// we ever do see one here, panic loudly — it means a pass upstream of
-	// lowering let a string-typed value escape. The match below covers the
-	// numeric and named cases; the string case is handled separately so the
-	// panic message can carry context.
+	// `string` and `character` are first-class primitive arms whose concrete
+	// representation is a managed-pointer struct (the `BuiltinStringLiteral` /
+	// `BuiltinCharLiteral` implementor), so at the Std/ABI layer they ARE an i64
+	// pointer — identical to the `named(<struct>)` form they reconcile to. Most
+	// string/char VALUES carry the `named(...)` form by lowering time (the literal
+	// producers emit it directly); but a value typed via the discovery accessors'
+	// bootstrap fallback — `fromName(name String)` / a char-backed enum's
+	// `fromRawValue` synthesized for an enum declared BEFORE the string/char struct's
+	// conformance is discovered — legitimately reaches lowering as the bare primitive
+	// arm. Lowering it to i64 (the managed-pointer ABI) is exactly correct: a
+	// first-class primitive type MUST have a Std representation.
 	match ref 'stringGuard'
-		string then panic("resolveMaxonTypeToStd: MaxonType.string has no Std representation; callers should have type-checked the value out before lowering")
+		string then return StdType.i64
+		character then return StdType.i64
 		boolean then return StdType.i1
 		integer then return StdType.i64
 		float then return StdType.f64

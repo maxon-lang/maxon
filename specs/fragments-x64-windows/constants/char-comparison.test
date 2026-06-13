@@ -27,9 +27,12 @@ module {
     x64.mov r13, r8
     x64.mov r8d, 10
     x64.mov [r13+0], r8 (1b)
-    x64.mov ecx, 40
-    x64.call mrt_alloc
+    x64.lea rdx, [rip+stdlib.__destruct___ManagedMemory]
+    x64.mov ecx, 48
+    x64.call mrt_alloc_with_dtor
     x64.mov r14, r8
+    x64.xor r8d, r8d
+    x64.mov [r14+40], r8 (8b)
     x64.mov [r14+0], r13 (8b)
     x64.mov r8d, 1
     x64.mov [r14+8], r8 (8b)
@@ -37,15 +40,23 @@ module {
     x64.mov [r14+16], r8 (8b)
     x64.mov r8d, 1
     x64.mov [r14+24], r8 (8b)
-    x64.xor r8d, r8d
+    x64.mov r8, -1
     x64.mov [r14+32], r8 (8b)
+    x64.xor eax, eax
+    x64.lea rdx, [rip+__destruct_Character]
     x64.mov ecx, 8
-    x64.call mrt_alloc
-    x64.mov [r8+0], r14 (8b)
-    x64.mov rcx, r8
+    x64.call stdlib.__mm_alloc
+    x64.mov r13, r8
+    x64.mov [r13+0], r14 (8b)
+    x64.mov rcx, r13
     x64.mov rdx, r12
     x64.call Character.equals
-    x64.test r8, r8
+    x64.mov r14, r8
+    x64.mov rcx, r13
+    x64.call mm_drop
+    x64.mov rcx, r12
+    x64.call __mm_decref_maybenull_helper
+    x64.test r14, r14
     x64.je check_0.after
   check_0:
     x64.mov r8d, 1

@@ -1024,4 +1024,5 @@ Do NOT use `dotnet run` — it recompiles every time. Use the pre-built binaries
 ./bin/maxon.exe build foo.maxon --log=codegen:trace
 ./bin/maxon.exe build foo.maxon --mm-trace               # memory manager trace
 ./bin/maxon.exe build foo.maxon --mm-debug               # memory debug checks
+./bin/maxon.exe build foo.maxon --leak-check             # exit 101 if any alloc is live at exit
 ```

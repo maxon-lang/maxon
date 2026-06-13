@@ -32,6 +32,17 @@ export type TestExpectation
 	// silently skip the check on others (a parity gap that lets target-
 	// specific lowering changes drift unobserved).
 	export var hasAnyRequiredLowering as bool
+	// RequiredIR — the ENFORCED counterpart of the `// CompiledIR` snapshot.
+	// `RequiredIR:<target>` pins the test's final per-function compiled IR (the
+	// same string written to the fragment's `// CompiledIR` section). When present,
+	// the runner compares it against the freshly-compiled IR and FAILS on mismatch,
+	// so an unintended lowering/codegen change surfaces immediately for review.
+	// Target-qualified like RequiredLowering; populated by `--update-required`.
+	export var requiredIr as String
+	export var hasRequiredIr as bool
+	// True when the spec authored a RequiredIR block for ANY target (parity-gap
+	// flag, mirroring hasAnyRequiredLowering).
+	export var hasAnyRequiredIr as bool
 	export var requiredRdata as String
 	export var hasRequiredRdata as bool
 	export var requiredData as String
@@ -43,15 +54,9 @@ export type TestExpectation
 	// Opt-in via the `<!-- IncludeStdlibIr -->` spec directive; defaults to
 	// false so existing tests are unaffected.
 	export var includeStdlibIr as bool
-	// True when the spec file contains a top-level `<!-- CacheParity -->`
-	// directive. The runner double-compiles every test in such a file —
-	// once with the stdlib cache forced off, once with it on — and fails
-	// if the captured RequiredLowering or RequiredRdata diverges between
-	// legs. Used to surface cache-masked bugs as test failures.
-	export var cacheParity as bool
 
 	export static function create() returns TestExpectation
-		return Self{exitCode: 0, hasExitCode: false, stdout: "", hasStdout: false, compilerStderr: "", hasCompilerStderr: false, runtimeStderr: "", hasRuntimeStderr: false, requiredLowering: "", hasRequiredLowering: false, hasAnyRequiredLowering: false, requiredRdata: "", hasRequiredRdata: false, requiredData: "", hasRequiredData: false, mmTrace: false, asyncTrace: false, includeStdlibIr: false, cacheParity: false}
+		return Self{exitCode: 0, hasExitCode: false, stdout: "", hasStdout: false, compilerStderr: "", hasCompilerStderr: false, runtimeStderr: "", hasRuntimeStderr: false, requiredLowering: "", hasRequiredLowering: false, hasAnyRequiredLowering: false, requiredIr: "", hasRequiredIr: false, hasAnyRequiredIr: false, requiredRdata: "", hasRequiredRdata: false, requiredData: "", hasRequiredData: false, mmTrace: false, asyncTrace: false, includeStdlibIr: false}
 	end 'create'
 end 'TestExpectation'
 
@@ -76,7 +81,6 @@ export type SpecTest
 	export var mmTrace as bool
 	export var asyncTrace as bool
 	export var includeStdlibIr as bool
-	export var cacheParity as bool
 	// Target keys this test is restricted to (from a `<!-- targets: a, b -->`
 	// directive). Empty means "run on every target". When non-empty, the runner
 	// only generates/runs the test on a target whose key appears here — used for
@@ -84,8 +88,8 @@ export type SpecTest
 	// that only fires on wasm32-wasi).
 	export var onlyTargets as TargetKeyArray
 
-	export static function create(name String, source String, expectation TestExpectation, args String, sourceFiles SourceFileArray, hasMultiFile bool, mmTrace bool, asyncTrace bool, includeStdlibIr bool = false, cacheParity bool = false, onlyTargets TargetKeyArray = TargetKeyArray.create()) returns SpecTest
-		return Self{name: name, source: source, expectation: expectation, args: args, sourceFiles: sourceFiles, hasMultiFile: hasMultiFile, mmTrace: mmTrace, asyncTrace: asyncTrace, includeStdlibIr: includeStdlibIr, cacheParity: cacheParity, onlyTargets: onlyTargets}
+	export static function create(name String, source String, expectation TestExpectation, args String, sourceFiles SourceFileArray, hasMultiFile bool, mmTrace bool, asyncTrace bool, includeStdlibIr bool = false, onlyTargets TargetKeyArray = TargetKeyArray.create()) returns SpecTest
+		return Self{name: name, source: source, expectation: expectation, args: args, sourceFiles: sourceFiles, hasMultiFile: hasMultiFile, mmTrace: mmTrace, asyncTrace: asyncTrace, includeStdlibIr: includeStdlibIr, onlyTargets: onlyTargets}
 	end 'create'
 end 'SpecTest'
 
@@ -112,10 +116,9 @@ export type Fragment
 	export var mmTrace as bool
 	export var asyncTrace as bool
 	export var includeStdlibIr as bool
-	export var cacheParity as bool
 
-	export static function create(filePath String, testName String, source String, expectation TestExpectation, generatedIR String, hasGeneratedIR bool, args String, sourceFiles SourceFileArray, hasMultiFile bool, mmTrace bool, asyncTrace bool, includeStdlibIr bool = false, cacheParity bool = false) returns Fragment
-		return Self{filePath: filePath, testName: testName, source: source, expectation: expectation, generatedIR: generatedIR, hasGeneratedIR: hasGeneratedIR, args: args, sourceFiles: sourceFiles, hasMultiFile: hasMultiFile, mmTrace: mmTrace, asyncTrace: asyncTrace, includeStdlibIr: includeStdlibIr, cacheParity: cacheParity}
+	export static function create(filePath String, testName String, source String, expectation TestExpectation, generatedIR String, hasGeneratedIR bool, args String, sourceFiles SourceFileArray, hasMultiFile bool, mmTrace bool, asyncTrace bool, includeStdlibIr bool = false) returns Fragment
+		return Self{filePath: filePath, testName: testName, source: source, expectation: expectation, generatedIR: generatedIR, hasGeneratedIR: hasGeneratedIR, args: args, sourceFiles: sourceFiles, hasMultiFile: hasMultiFile, mmTrace: mmTrace, asyncTrace: asyncTrace, includeStdlibIr: includeStdlibIr}
 	end 'create'
 end 'Fragment'
 
@@ -361,22 +364,15 @@ export function parseSpecFile(content String, targetKey String) returns SpecTest
 	var i = 0
 	let lineCount = lines.count()
 
-	// Find the ## Tests section (skip ## Documentation). While scanning, also
-	// look for the file-level `<!-- CacheParity -->` directive so it can be
-	// stamped on every test produced from this file.
+	// Find the ## Tests section (skip ## Documentation).
 	var inTestsSection = false
 	var testsStartLine = 0
-	var fileCacheParity = false
 
 	while i < lineCount 'findTests'
 		let line = try lines.get(i) otherwise 'skip'
 			i = i + 1
 			continue
 		end 'skip'
-
-		if line.contains("<!-- CacheParity") 'isCacheParity'
-			fileCacheParity = true
-		end 'isCacheParity'
 
 		if line.startsWith("## Tests") 'foundTests'
 			inTestsSection = true
@@ -596,11 +592,29 @@ export function parseSpecFile(content String, targetKey String) returns SpecTest
 					continue
 				end 'isStdout'
 
-				// Skip RequiredIR blocks (handled by C# compiler only)
-				if blockLine.startsWith("```RequiredIR") 'isIR'
+				// RequiredIR — target-qualified, the ENFORCED `// CompiledIR`. Parse the
+				// block matching the current target into `requiredIr`; the runner
+				// compares it against the freshly-compiled IR and fails on mismatch.
+				if not targetKey.isEmpty() 'hasTargetKeyIr'
+					if blockLine.startsWith("```RequiredIR:{targetKey}") 'isTargetIr'
+						i = i + 1
+						let irBlock = readCodeBlock(lines, startLine: i, lineCount: lineCount)
+						expectation.requiredIr = irBlock
+						expectation.hasRequiredIr = true
+						expectation.hasAnyRequiredIr = true
+						i = skipCodeBlock(lines, startLine: i, lineCount: lineCount)
+						continue
+					end 'isTargetIr'
+				end 'hasTargetKeyIr'
+
+				// A RequiredIR block for some OTHER target — record the parity flag,
+				// skip the body. (Includes legacy unqualified `RequiredIR` blocks
+				// emitted by the C# compiler, which carry no `:target` suffix.)
+				if blockLine.startsWith("```RequiredIR") 'isOtherIr'
+					expectation.hasAnyRequiredIr = true
 					i = skipCodeBlock(lines, startLine: i + 1, lineCount: lineCount)
 					continue
-				end 'isIR'
+				end 'isOtherIr'
 
 				// RequiredLowering — always target-qualified, no unqualified fallback
 				if not targetKey.isEmpty() 'hasTargetKeyLowering'
@@ -651,13 +665,12 @@ export function parseSpecFile(content String, targetKey String) returns SpecTest
 				expectation.mmTrace = testMmTrace
 				expectation.asyncTrace = testAsyncTrace
 				expectation.includeStdlibIr = testIncludeStdlibIr
-				expectation.cacheParity = fileCacheParity
 
 				// Split multi-file source
 				let sourceFiles = splitMultiFileSource(source)
 				let hasMulti = sourceFiles.count() > 0
 
-				let test = SpecTest.create(testName, source: source, expectation: expectation, args: testArgs, sourceFiles: sourceFiles, hasMultiFile: hasMulti, mmTrace: testMmTrace, asyncTrace: testAsyncTrace, includeStdlibIr: testIncludeStdlibIr, cacheParity: fileCacheParity, onlyTargets: testOnlyTargets)
+				let test = SpecTest.create(testName, source: source, expectation: expectation, args: testArgs, sourceFiles: sourceFiles, hasMultiFile: hasMulti, mmTrace: testMmTrace, asyncTrace: testAsyncTrace, includeStdlibIr: testIncludeStdlibIr, onlyTargets: testOnlyTargets)
 				tests.push(test)
 			end 'hasSource'
 			continue

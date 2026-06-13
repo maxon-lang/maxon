@@ -17,14 +17,25 @@ module {
   func @main() -> u32 {
   entry:
     x64.prologue stack_size=16
+    x64.xor eax, eax
+    x64.lea rdx, [rip+__destruct_Set]
     x64.mov ecx, 32
-    x64.call mrt_alloc
+    x64.call stdlib.__mm_alloc
+    x64.mov r12, r8
+  inlined_stdlib.__mm_incref_0_0:
+    x64.mov r8, r12
+    x64.sub r8, 8
+    x64.lock inc qword ptr [r8]
+  inline_cont_main_0:
     x64.lea r9, [rip+__witness_int_Equatable]
     x64.lea rax, [rip+__witness_int_Hashable]
     x64.lea rdx, [rip+__layout_Set_Int]
-    x64.mov rcx, r8
+    x64.mov rcx, r12
     x64.call Set.count
-    x64.test r8, r8
+    x64.mov r13, r8
+    x64.mov rcx, r12
+    x64.call __mm_decref_maybenull_helper
+    x64.test r13, r13
     x64.je check_0.after
   check_0:
     x64.mov r8d, 1

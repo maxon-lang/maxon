@@ -28,10 +28,40 @@ export typealias LayoutDescriptorByteSize = int(0 to u64.max)
 let LAYOUT_DESCRIPTOR_BYTE_SIZE = 56
 let LAYOUT_FLAG_HAS_HEAP_REFS = 1
 
+// Per-type-arg HAS_HEAP_REFS bits are packed into the same `flags@24` qword,
+// starting at bit 8 (`flags` bit i+8 = heap-ref status of type-arg i). Bit 0
+// stays the aggregate OR of every arg's heap-ref bit for backward compat
+// (the generic Array body's element-destroy stamp reads bit 0 of whatever
+// layout is forwarded to it). A field-array call site for a multi-type-param
+// aggregate (e.g. `Map`'s `keys` / `values` arrays) projects the matching
+// per-arg bit out of the forwarded aggregate to pick a singleton element
+// layout whose bit 0 reflects only THAT field's element — see
+// `materializeLayoutForGid` in LowerMaxonToStd. The 8-bit base leaves room
+// for 56 type-args (bits 8..63) before the qword overflows.
+export let LAYOUT_PER_ARG_HEAPREF_SHIFT = 8
+
+// Fixed rdata labels for the two shared singleton element-layout descriptors
+// the field-array projection selects between. `__layout_elem_managed` has
+// `flags@24` bit 0 = 1 (heap-managed element → the generic Array body's stamp
+// installs `&__mm_decref`); `__layout_elem_raw` has bit 0 = 0 (raw element →
+// stamp is a no-op). Every other field is 0 because the generic Array body
+// reads ONLY bit 0 of the forwarded layout (the element-destroy stamp). See
+// `materializeLayoutForGid` (the selector) and `emitElementLayoutSingletons`
+// (the writer).
+export let LAYOUT_ELEM_MANAGED_LABEL = "__layout_elem_managed"
+export let LAYOUT_ELEM_RAW_LABEL = "__layout_elem_raw"
+
+// Build a singleton element-layout descriptor whose only meaningful field is
+// `flags@24` bit 0 (`hasHeapRefs`). All sizing/func/field-offset slots are 0 —
+// the generic Array body never reads them through a forwarded layout.
+export function elementLayoutSingleton(hasHeapRefs bool) returns LayoutDescriptor
+	return LayoutDescriptor.create(0, alignment: 0, elementSize: 0, hasHeapRefs: hasHeapRefs, perArgHeapRefBits: 0, copyFuncName: "", destroyFuncName: "", fieldOffsetsPtr: "")
+end 'elementLayoutSingleton'
+
 let LAYOUT_OFFSET_SIZE = 0
 let LAYOUT_OFFSET_ALIGNMENT = 8
 let LAYOUT_OFFSET_ELEMENT_SIZE = 16
-let LAYOUT_OFFSET_FLAGS = 24
+export let LAYOUT_OFFSET_FLAGS = 24
 export let LAYOUT_OFFSET_COPY_FUNC = 32
 export let LAYOUT_OFFSET_DESTROY_FUNC = 40
 let LAYOUT_OFFSET_FIELD_OFFSETS_PTR = 48
@@ -41,6 +71,11 @@ export type LayoutDescriptor
 	export var alignment as MachineWord
 	export var elementSize as MachineWord
 	export var hasHeapRefs as bool
+	// Per-type-arg HAS_HEAP_REFS bitmask: bit i is set iff type-arg i is
+	// heap-managed. Encoded into `flags@24` at bit `LAYOUT_PER_ARG_HEAPREF_SHIFT + i`
+	// so a multi-type-param field-array call site can project the bit for the
+	// specific element it forwards a layout for (see `materializeLayoutForGid`).
+	export var perArgHeapRefBits as MachineWord
 	export var copyFuncName as String
 	export var destroyFuncName as String
 	// Rdata label of an optional `__layout_fields_<mangled>` blob carrying
@@ -48,12 +83,13 @@ export type LayoutDescriptor
 	// fields (primitives, arrays, function-shaped containers).
 	export var fieldOffsetsPtr as String
 
-	export static function create(size MachineWord, alignment MachineWord, elementSize MachineWord, hasHeapRefs bool, copyFuncName String, destroyFuncName String, fieldOffsetsPtr String) returns LayoutDescriptor
+	export static function create(size MachineWord, alignment MachineWord, elementSize MachineWord, hasHeapRefs bool, perArgHeapRefBits MachineWord, copyFuncName String, destroyFuncName String, fieldOffsetsPtr String) returns LayoutDescriptor
 		return Self{
 			size: size,
 			alignment: alignment,
 			elementSize: elementSize,
 			hasHeapRefs: hasHeapRefs,
+			perArgHeapRefBits: perArgHeapRefBits,
 			copyFuncName: copyFuncName,
 			destroyFuncName: destroyFuncName,
 			fieldOffsetsPtr: fieldOffsetsPtr
@@ -75,6 +111,11 @@ export function encodeLayoutDescriptor(d LayoutDescriptor) returns ByteArray
 	if d.hasHeapRefs 'setRef'
 		flags = flags or LAYOUT_FLAG_HAS_HEAP_REFS
 	end 'setRef'
+	// Pack the per-type-arg heap-ref bits above bit 0 (bits 8..63). A
+	// field-array call site projects the bit for its specific element by
+	// shifting `flags` right by `LAYOUT_PER_ARG_HEAPREF_SHIFT + ordinal`
+	// and masking with 1 — see `materializeLayoutForGid`.
+	flags = flags or (d.perArgHeapRefBits shl LAYOUT_PER_ARG_HEAPREF_SHIFT)
 	writeQword(buf, value: flags)
 	writeQword(buf, value: 0)
 	writeQword(buf, value: 0)

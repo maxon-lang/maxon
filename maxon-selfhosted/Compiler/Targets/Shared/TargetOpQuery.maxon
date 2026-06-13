@@ -20,6 +20,14 @@ export interface TargetOpQuery
 	function detectConstant(module TargetModule, packed OpIndex, valueId RegInt, isConst BoolArray, constVal RegIntArray)
 	// --- Physical register reads (LiveRangeBuilder) ---
 	function getExplicitPhysReads(module TargetModule, packed OpIndex) returns RegMask
+	// Mask of fixed physical registers this op reads as an IN-PLACE operand that
+	// stays live across the op (e.g. x64 `shl reg, cl` reads RCX as its count).
+	// LiveRangeBuilder emits a clobber pseudo-range for these so the op's own
+	// virtual dest/operand can't be colored into the same physical register and
+	// clobber it. Distinct from getExplicitPhysReads (movRegReg-from-phys) and
+	// from the broad implicitGprReads mask (which includes ret/call arg regs that
+	// must NOT pin a range here). Returns 0 for ops with no such constraint.
+	function getFixedInPlaceReads(module TargetModule, packed OpIndex) returns RegMask
 	// --- Return terminator (SSAColoring) ---
 	function isReturnTerminator(module TargetModule, packed OpIndex) returns bool
 	// --- Epilogue op (PrologueEpiloguePass) ---

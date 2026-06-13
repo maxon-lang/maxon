@@ -13,42 +13,55 @@ ExitCode: 0
 module {
   func @main() -> u32 {
   entry:
-    x64.prologue stack_size=16
-    x64.mov ecx, 40
-    x64.call mrt_alloc
+    x64.prologue stack_size=32
+    x64.lea rdx, [rip+stdlib.__destruct___ManagedMemory]
+    x64.mov ecx, 48
+    x64.call mrt_alloc_with_dtor
     x64.mov r12, r8
+    x64.xor r13d, r13d
+    x64.mov [r12+40], r13 (8b)
     x64.lea r8, [rip+__istr_0]
     x64.mov [r12+0], r8 (8b)
     x64.mov r8d, 5
     x64.mov [r12+8], r8 (8b)
     x64.mov r8, -2
     x64.mov [r12+16], r8 (8b)
-    x64.mov r13d, 1
-    x64.mov [r12+24], r13 (8b)
-    x64.xor r8d, r8d
-    x64.mov [r12+32], r8 (8b)
+    x64.mov r14d, 1
+    x64.mov [r12+24], r14 (8b)
+    x64.mov [r12+32], r13 (8b)
+    x64.lea rdx, [rip+__destruct_String]
     x64.mov ecx, 16
-    x64.call mrt_alloc
-    x64.mov [r8+0], r12 (8b)
-    x64.mov [r8+8], r13 (8b)
-    x64.mov ecx, 40
-    x64.call mrt_alloc
+    x64.mov rax, r13
+    x64.call stdlib.__mm_alloc
+    x64.mov r15, r8
+    x64.mov [r15+0], r12 (8b)
+    x64.mov [r15+8], r14 (8b)
+    x64.mov rcx, r15
+    x64.call mm_drop
+    x64.lea rdx, [rip+stdlib.__destruct___ManagedMemory]
+    x64.mov ecx, 48
+    x64.call mrt_alloc_with_dtor
     x64.mov r12, r8
+    x64.mov [r12+40], r13 (8b)
     x64.lea r8, [rip+__istr_0]
     x64.mov [r12+0], r8 (8b)
     x64.mov r8d, 5
     x64.mov [r12+8], r8 (8b)
     x64.mov r8, -2
     x64.mov [r12+16], r8 (8b)
-    x64.mov [r12+24], r13 (8b)
-    x64.xor r8d, r8d
-    x64.mov [r12+32], r8 (8b)
+    x64.mov [r12+24], r14 (8b)
+    x64.mov [r12+32], r13 (8b)
+    x64.lea rdx, [rip+__destruct_String]
     x64.mov ecx, 16
-    x64.call mrt_alloc
-    x64.mov [r8+0], r12 (8b)
-    x64.mov [r8+8], r13 (8b)
+    x64.mov rax, r13
+    x64.call stdlib.__mm_alloc
+    x64.mov r15, r8
+    x64.mov [r15+0], r12 (8b)
+    x64.mov [r15+8], r14 (8b)
+    x64.mov rcx, r15
+    x64.call mm_drop
   check_0:
-    x64.xor r8d, r8d
+    x64.mov r8, r13
     x64.epilogue
     x64.ret
   }

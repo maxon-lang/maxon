@@ -28,76 +28,84 @@ ExitCode: 42
 module {
   func @main() -> u32 {
   entry:
-    x64.prologue stack_size=16
-    x64.mov r12d, 1
+    x64.prologue stack_size=32
+    x64.xor eax, eax
     x64.xor edx, edx
     x64.mov ecx, 16
-    x64.mov rax, r12
     x64.call stdlib.__mm_alloc
-    x64.mov r9, r8
-    x64.mov [r9+0], r12 (8b)
+    x64.mov r12, r8
+    x64.mov r8d, 1
+    x64.mov [r12+0], r8 (8b)
     x64.mov r8d, 10
-    x64.mov [r9+8], r8 (8b)
-    x64.mov rsi, [r9+0] (8b)
-    x64.xor r12d, r12d
-    x64.cmp rsi, 1
+    x64.mov [r12+8], r8 (8b)
+    x64.mov r9, [r12+0] (8b)
+    x64.xor r13d, r13d
+    x64.cmp r9, 1
     x64.jne first_0.next0
     x64.jmp first_0.case0
   first_0.merge:
-    x64.mov r8, [r9+0] (8b)
+    x64.mov r8, [r12+0] (8b)
     x64.cmp r8, 1
     x64.jne second_0.next0
     x64.jmp second_0.case0
   first_0.case0:
-    x64.mov r8, [r9+8] (8b)
+    x64.mov r8, [r12+8] (8b)
     x64.mov r8d, 20
-    x64.mov [r9+8], r8 (8b)
+    x64.mov [r12+8], r8 (8b)
     x64.jmp first_0.merge
   first_0.next0:
-    x64.mov r8, [r9+0] (8b)
+    x64.mov r8, [r12+0] (8b)
     x64.test r8, r8
     x64.jne first_0.merge
   first_0.case1:
-    x64.mov r8, r12
+    x64.mov rcx, r12
+    x64.call mm_drop
+    x64.mov r8, r13
     x64.epilogue
     x64.ret
   second_0.merge:
-    x64.mov r8, [r9+0] (8b)
+    x64.mov r8, [r12+0] (8b)
     x64.cmp r8, 1
     x64.jne read_0.next0
     x64.jmp read_0.case0
   second_0.case0:
-    x64.mov r8, [r9+8] (8b)
+    x64.mov r8, [r12+8] (8b)
     x64.add r8, 22
-    x64.mov [r9+8], r8 (8b)
+    x64.mov [r12+8], r8 (8b)
     x64.jmp second_0.merge
   second_0.next0:
-    x64.mov r8, [r9+0] (8b)
+    x64.mov r8, [r12+0] (8b)
     x64.test r8, r8
     x64.jne second_0.merge
   second_0.case1:
-    x64.mov r8, r12
+    x64.mov rcx, r12
+    x64.call mm_drop
+    x64.mov r8, r13
     x64.epilogue
     x64.ret
   read_0.case0:
-    x64.mov r8, [r9+8] (8b)
-    x64.mov r9d, 4294967295
-    x64.cmp r8, r9
+    x64.mov r13, [r12+8] (8b)
+    x64.mov rcx, r12
+    x64.call mm_drop
+    x64.mov r8d, 4294967295
+    x64.cmp r13, r8
     x64.jbe __range_ok_0
     x64.jmp __range_panic_0
   read_0.next0:
-    x64.mov r8, [r9+0] (8b)
-    x64.test r8, r8
+    x64.mov r14, [r12+0] (8b)
+    x64.mov rcx, r12
+    x64.call mm_drop
+    x64.test r14, r14
     x64.jne read_0.next1
   read_0.case1:
-    x64.mov r8, r12
+    x64.mov r8, r13
     x64.epilogue
     x64.ret
   read_0.next1:
-    x64.lea r13, [rip+__panic_msg_ed54f83161c316d7]
-    x64.mov rcx, r13
+    x64.lea r12, [rip+__panic_msg_96c7daeb3f9a871f]
+    x64.mov rcx, r12
     x64.call mrt_panic
-    x64.mov r8, r12
+    x64.mov r8, r13
     x64.epilogue
     x64.ret
   __range_panic_0:
@@ -105,6 +113,7 @@ module {
     x64.mov rcx, r12
     x64.call mrt_panic
   __range_ok_0:
+    x64.mov r8, r13
     x64.epilogue
     x64.ret
   }

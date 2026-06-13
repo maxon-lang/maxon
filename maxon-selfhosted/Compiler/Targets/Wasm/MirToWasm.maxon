@@ -382,6 +382,22 @@ type WasmFuncSigs
 		return try self.nameIndex.get(name) otherwise throw WasmFuncSigError.notFound
 	end 'indexOf'
 
+	// Like `indexOf`, but bridges a BARE name to its `stdlib.`-qualified table
+	// entry the way the native linkers do (x64 `recordLabel`/`calleeNameMatches`
+	// register a bare alias for every qualified stdlib label and match either
+	// form). Stdlib bodies are lowered under their qualified `stdlib.<name>`
+	// label, but the hand-emitted wasm bodies (file/directory/socket primitives)
+	// reference runtime helpers by their BARE name (`__managed_mem_create`,
+	// `mrt_alloc`). Without this bridge a bare lookup misses the qualified table
+	// entry and panics ("wasm: function not found"). Tries the exact name first,
+	// then the `stdlib.`-qualified form.
+	export function indexOfBridged(name String) returns Wasm32Index throws WasmFuncSigError
+		if let idx = try self.nameIndex.get(name) 'exact'
+			return idx
+		end 'exact'
+		return try self.nameIndex.get("stdlib.{name}") otherwise throw WasmFuncSigError.notFound
+	end 'indexOfBridged'
+
 	// O(1) check: does the named callee throw? Unknown callees (imports,
 	// not-yet-registered) are treated as non-throwing. Named `calleeThrows`
 	// rather than `throws` so it can be invoked — `throws` is a keyword.
@@ -620,6 +636,26 @@ function computeNeededWasmStdlibFunctions(module MirModule, globalData GlobalDat
 	return computeNeededStdlibFunctionsWasm(seeds, stdlibCache: stdlibCache)
 end 'computeNeededWasmStdlibFunctions'
 
+// Resolve a referenced callee name to the form that actually keys the wasm
+// stdlib function table, bridging the bare↔`stdlib.`-qualified split the same
+// way `WasmFuncSigs.indexOfBridged` / the native linkers do. Stdlib bodies are
+// cached under their qualified `stdlib.<name>` label, but call/funcAddr edges
+// reach them under either form (runtime.std and hand-emitted bodies use bare
+// names; stdlib MIR uses qualified). Returns the table-present name, or "" when
+// the callee is not a cached stdlib function (an import / runtime stub supplied
+// elsewhere). Keying the reachable set on the canonical form is what lets
+// `emitWasmModule`'s `neededStdlib.contains(func.name)` match the cache name.
+function wasmCanonicalStdlibName(funcNameToIndex StdlibFuncIndexMap, name String) returns String
+	if funcNameToIndex.contains(name) 'exact'
+		return name
+	end 'exact'
+	let qualified = "stdlib.{name}"
+	if funcNameToIndex.contains(qualified) 'bridged'
+		return qualified
+	end 'bridged'
+	return ""
+end 'wasmCanonicalStdlibName'
+
 // Compute transitive closure over WASM stdlib function dependencies.
 export function computeNeededStdlibFunctionsWasm(seeds StringArray, stdlibCache StdlibCacheData) returns StdlibFuncNameSet
 	var funcNameToIndex = StdlibFuncIndexMap.create()
@@ -632,9 +668,10 @@ export function computeNeededStdlibFunctionsWasm(seeds StringArray, stdlibCache 
 	var worklist = StringArray.create()
 
 	for name in seeds 'seed'
-		if funcNameToIndex.contains(name) and not needed.contains(name) 'isStdlib'
-			needed.insert(name)
-			worklist.push(name)
+		let canonical = wasmCanonicalStdlibName(funcNameToIndex, name: name)
+		if not canonical.isEmpty() and not needed.contains(canonical) 'isStdlib'
+			needed.insert(canonical)
+			worklist.push(canonical)
 		end 'isStdlib'
 	end 'seed'
 
@@ -645,8 +682,8 @@ export function computeNeededStdlibFunctionsWasm(seeds StringArray, stdlibCache 
 		let name = "{nameRef}"
 		wi = wi + 1
 
-		// `name` was only added to worklist via `funcNameToIndex.contains(...)` checks above,
-		// so the lookup is mechanically guaranteed to succeed.
+		// `name` is already a canonical table key (seeded/enqueued via
+		// `wasmCanonicalStdlibName`), so the lookup is mechanically guaranteed to succeed.
 		let funcIdx = try funcNameToIndex.get(name) otherwise panic("invariant: name in worklist passed contains() but get() failed")
 
 		let func = try stdlibCache.wasmFunctions.get(funcIdx) otherwise panic("invariant: funcIdx from funcNameToIndex not in stdlibCache.wasmFunctions")
@@ -654,9 +691,10 @@ export function computeNeededStdlibFunctionsWasm(seeds StringArray, stdlibCache 
 		var newDeps = StringArray.create()
 
 		for fixup in func.callFixups 'eachDep'
-			if funcNameToIndex.contains(fixup.targetName) and not needed.contains(fixup.targetName) 'newDep'
-				needed.insert(fixup.targetName)
-				newDeps.push(fixup.targetName)
+			let depName = wasmCanonicalStdlibName(funcNameToIndex, name: fixup.targetName)
+			if not depName.isEmpty() and not needed.contains(depName) 'newDep'
+				needed.insert(depName)
+				newDeps.push(depName)
 			end 'newDep'
 		end 'eachDep'
 
@@ -666,9 +704,10 @@ export function computeNeededStdlibFunctionsWasm(seeds StringArray, stdlibCache 
 		// in the reachable set so its table slot exists and the funcAddr patch
 		// resolves to a real index.
 		for addrFix in func.funcAddrFixups 'eachAddrDep'
-			if funcNameToIndex.contains(addrFix.targetName) and not needed.contains(addrFix.targetName) 'newAddrDep'
-				needed.insert(addrFix.targetName)
-				newDeps.push(addrFix.targetName)
+			let addrDepName = wasmCanonicalStdlibName(funcNameToIndex, name: addrFix.targetName)
+			if not addrDepName.isEmpty() and not needed.contains(addrDepName) 'newAddrDep'
+				needed.insert(addrDepName)
+				newDeps.push(addrDepName)
 			end 'newAddrDep'
 		end 'eachAddrDep'
 
@@ -2399,7 +2438,14 @@ type WasmFunctionLowering
 	// indistinguishable from a typed callee that returns i64. O(1) via
 	// funcSigs.nameIndex.
 	function lookupReturnInfo(callee String) returns StdReturnType
-		let idx = try funcSigs.indexOf(callee) otherwise return StdReturnType.value(StdType.i64)
+		// Bridge bare↔`stdlib.`-qualified the same way the call-index lookup
+		// (`findFunctionIndex`/`indexOfBridged`) does. A call op naming a stdlib
+		// helper by its BARE name (e.g. `mrt_start` calling `__slab_init`) resolves
+		// its call index through the bridge, but the void/return-type query MUST use
+		// the same bridge or it misses the qualified `stdlib.__slab_init` table
+		// entry and falls back to the value-returning default — emitting a bogus
+		// `local.set` after a void call, which underflows the wasm operand stack.
+		let idx = try funcSigs.indexOfBridged(callee) otherwise return StdReturnType.value(StdType.i64)
 		return try funcSigs.returnTypes.get(idx) otherwise StdReturnType.value(StdType.i64)
 	end 'lookupReturnInfo'
 
@@ -3503,7 +3549,7 @@ end 'WasmFunctionLowering'
 // WasmFunctionLowering because emitWasmModule and the stdlib-body fixup
 // loop both call it without holding a lowering instance.
 function findFunctionIndex(funcSigs WasmFuncSigs, name String, importCount Wasm32Index) returns Wasm32Index
-	let idx = try funcSigs.indexOf(name) otherwise panic("wasm: function not found: {name}")
+	let idx = try funcSigs.indexOfBridged(name) otherwise panic("wasm: function not found: {name}")
 	return (importCount + idx) as Wasm32Index
 end 'findFunctionIndex'
 

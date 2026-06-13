@@ -1,0 +1,110 @@
+// Test: rung-12-struct-array-clear-decrefs-all
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Box'
+
+typealias BoxArray = Array with Box
+
+function main() returns ExitCode
+	var xs = BoxArray.create()
+	xs.push(Box.create(7))
+	xs.push(Box.create(9))
+	xs.clear()
+	return xs.count()
+end 'main'
+---
+MmTrace: true
+ExitCode: 0
+Stderr: ```
+mm_alloc Array #1 size=8 [main]
+mm_incref Array #1 rc=1 [main]
+mm_alloc __ManagedMemory #2 size=48 [main]
+mm_incref __ManagedMemory #2 rc=1 [main]
+mm_move Array #1 -> return [main]
+mm_alloc Box #3 size=8 [Box.create]
+mm_incref Box #3 rc=1 [Box.create]
+mm_move Box #3 -> return [Box.create]
+mm_move Box #3 -> container
+mm_alloc <raw> #4 size=32
+mm_incref <raw> #4 rc=1
+mm_alloc Box #5 size=8 [Box.create]
+mm_incref Box #5 rc=1 [Box.create]
+mm_move Box #5 -> return [Box.create]
+mm_move Box #5 -> container
+mm_decref Box #3 rc=0
+  mm_free Box #3
+mm_decref Box #5 rc=0
+  mm_free Box #5
+mm_decref Array #1 rc=0
+  mm_decref __ManagedMemory #2 rc=0
+    mm_decref <raw> #4 rc=0
+      mm_free <raw> #4
+    mm_free __ManagedMemory #2
+  mm_free Array #1
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %19 = mir.global_addr @__mtstr_scope_main
+    %20 = mir.call @mm_scope_push(%19)
+    %1 = mir.global_addr @__layout_Array_Box
+    %2 = mir.call @Array.create(%1)
+    %4 = mir.mov_imm 7 : i64
+    %21 = mir.global_addr @__mtstr_scope_Box_create
+    %22 = mir.call @mm_scope_push(%21)
+    %23 = mir.mov_imm 8 : i64
+    %24 = mir.mov_imm 0 : i64
+    %25 = mir.mov_imm 53 : i64
+    %26 = mir.call @stdlib.__mm_alloc(%23, %24, %25)
+    %50 = mir.call @stdlib.__mm_incref(%26)
+    mir.store %4, %26, 0 width: qword
+    %28 = mir.call @mm_move_return(%26)
+    %29 = mir.call @mm_scope_pop()
+    %6 = mir.global_addr @__layout_Array_Box
+    %53 = mir.call @mm_move_container(%26)
+    %7 = mir.call @Array.push(%2, %26, %6)
+    %9 = mir.mov_imm 9 : i64
+    %30 = mir.global_addr @__mtstr_scope_Box_create
+    %31 = mir.call @mm_scope_push(%30)
+    %32 = mir.mov_imm 8 : i64
+    %33 = mir.mov_imm 0 : i64
+    %34 = mir.mov_imm 53 : i64
+    %35 = mir.call @stdlib.__mm_alloc(%32, %33, %34)
+    %51 = mir.call @stdlib.__mm_incref(%35)
+    mir.store %9, %35, 0 width: qword
+    %37 = mir.call @mm_move_return(%35)
+    %38 = mir.call @mm_scope_pop()
+    %11 = mir.global_addr @__layout_Array_Box
+    %54 = mir.call @mm_move_container(%35)
+    %12 = mir.call @Array.push(%2, %35, %11)
+    %39 = mir.load %2, 0 width: qword
+    %43 = mir.call @stdlib.__managed_mem_walk_elements(%39)
+    %44 = mir.mov_imm 8 : i64
+    %45 = mir.add.i64 %39, %44
+    %46 = mir.mov_imm 0 : i64
+    mir.store %46, %45, 0 width: qword
+    %49 = mir.call @mm_scope_pop()
+    %42 = mir.call @mm_scope_pop()
+    %17 = mir.global_addr @__layout_Array_Box
+    %18 = mir.call @Array.count(%2, %17)
+    %52 = mir.call @stdlib.__mm_decref(%2)
+    %55 = mir.call @mm_scope_pop()
+    %56 = mir.mov_imm 125 : i64
+    %57 = mir.cmp ugt, %18, %56
+    mir.cond_br %57 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %58 = mir.global_addr @__panic_msg_1fb4fb0c02a3cbfe
+    %59 = mir.call @mrt_panic(%58)
+  __range_ok_0:
+    mir.ret %18
+  }
+}
+---

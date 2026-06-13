@@ -60,16 +60,16 @@ module {
     x64.prologue stack_size=16
     x64.mov rdx, [rcx+8] (8b)
     x64.mov r8, [rcx+0] (8b)
-  inlined_Array.get_0:
+  inlined_Array.get_0_0:
     x64.mov rcx, [r8+0] (8b)
     x64.call stdlib.__managed_mem_get
     x64.test rdx, rdx
-    x64.je inlined_Array.get_2
-  inlined_Array.get_1:
+    x64.je inlined_Array.get_3_0
+  inlined_Array.get_1_0:
     x64.mov edx, 1
     x64.xor r8d, r8d
     x64.jmp inline_cont_IntList.current_0
-  inlined_Array.get_2:
+  inlined_Array.get_3_0:
     x64.xor edx, edx
   inline_cont_IntList.current_0:
     x64.test rdx, rdx
@@ -95,17 +95,25 @@ module {
     x64.test r8, r8
     x64.jne empty_0.after
   empty_0:
+    x64.mov rcx, r12
+    x64.call __mm_decref_maybenull_helper
     x64.mov edx, 1
     x64.xor r8d, r8d
     x64.epilogue
     x64.ret
   empty_0.after:
+    x64.xor eax, eax
+    x64.lea rdx, [rip+__destruct_IntList]
     x64.mov ecx, 16
-    x64.call mrt_alloc
-    x64.mov [r8+0], r12 (8b)
-    x64.xor r9d, r9d
-    x64.mov [r8+8], r9 (8b)
+    x64.call stdlib.__mm_alloc
+    x64.mov r13, r8
+    x64.mov rcx, r13
+    x64.call stdlib.__mm_incref
+    x64.mov [r13+0], r12 (8b)
+    x64.xor r8d, r8d
+    x64.mov [r13+8], r8 (8b)
     x64.xor edx, edx
+    x64.mov r8, r13
     x64.epilogue
     x64.ret
   }
@@ -114,10 +122,12 @@ module {
     x64.prologue stack_size=32
     x64.xor r12d, r12d
     x64.lea rdx, [rip+stdlib.__destruct___ManagedMemory]
-    x64.mov ecx, 40
+    x64.mov ecx, 48
     x64.mov rax, r12
     x64.call stdlib.__mm_alloc
     x64.mov r13, r8
+    x64.mov rcx, r13
+    x64.call stdlib.__mm_incref
     x64.lea r8, [rip+__rdata_arr_main_0]
     x64.mov [r13+0], r8 (8b)
     x64.mov r8d, 3
@@ -128,26 +138,13 @@ module {
     x64.mov [r13+24], r8 (8b)
     x64.mov r8, -2
     x64.mov [r13+32], r8 (8b)
-    x64.mov ecx, 8
-    x64.call mrt_alloc
-    x64.mov r14, r8
-    x64.mov ecx, 40
-    x64.call mrt_alloc
-    x64.xor r9d, r9d
-    x64.mov [r8+0], r9 (8b)
-    x64.xor r9d, r9d
-    x64.mov [r8+8], r9 (8b)
-    x64.xor r9d, r9d
-    x64.mov [r8+16], r9 (8b)
-    x64.mov r9d, 8
-    x64.mov [r8+24], r9 (8b)
-    x64.xor r9d, r9d
-    x64.mov [r8+32], r9 (8b)
-    x64.mov [r14+0], r8 (8b)
-    x64.mov [r14+0], r13 (8b)
-    x64.mov rcx, r14
+    x64.mov [r13+40], r12 (8b)
+    x64.lea rdx, [rip+__layout_Array_Int]
+    x64.mov rcx, r13
+    x64.call Array.init
+    x64.mov rcx, r8
     x64.call IntList.create
-    x64.mov r9, r8
+    x64.mov r13, r8
     x64.test rdx, rdx
     x64.je try_0.merge
   try_0.otherwise:
@@ -156,9 +153,12 @@ module {
     x64.ret
   try_0.merge:
     x64.mov edx, 20
-    x64.mov rcx, r9
+    x64.mov rcx, r13
     x64.call IntList.has
-    x64.test r8, r8
+    x64.mov r14, r8
+    x64.mov rcx, r13
+    x64.call __mm_decref_maybenull_helper
+    x64.test r14, r14
     x64.je yes_0.after
   yes_0:
     x64.mov r8d, 1
@@ -175,19 +175,19 @@ module {
     x64.mov r12, rcx
     x64.mov r13, rdx
     x64.jmp loop_0
-  inlined_IntList.advance_0:
+  inlined_IntList.advance_0_0:
     x64.mov rcx, [r12+0] (8b)
     x64.mov r14, [r12+8] (8b)
     x64.lea rdx, [rip+__layout_Array_Integer]
     x64.call Array.count
     x64.add r14, 1
     x64.cmp r14, r8
-    x64.jl inlined_IntList.advance_2
-  inlined_IntList.advance_1:
+    x64.jl inlined_IntList.advance_2_0
+  inlined_IntList.advance_1_0:
     x64.mov edx, 1
     x64.xor r8d, r8d
     x64.jmp inline_cont_IntList.has_0
-  inlined_IntList.advance_2:
+  inlined_IntList.advance_2_0:
     x64.mov r8, [r12+8] (8b)
     x64.add r8, 1
     x64.mov [r12+8], r8 (8b)
@@ -201,7 +201,7 @@ module {
     x64.mov rcx, r12
     x64.call IntList.current
     x64.cmp r8, r13
-    x64.jne inlined_IntList.advance_0
+    x64.jne inlined_IntList.advance_0_0
     x64.jmp found_0
   loop_0.exit:
     x64.xor r8d, r8d

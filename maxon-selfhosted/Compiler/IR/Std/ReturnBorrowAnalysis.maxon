@@ -1,0 +1,1297 @@
+// Return-borrow analysis (the return-side dual of the argument-consume fact).
+//
+// A function "returns a borrow" when its return value is an interior view of a
+// PARAMETER returned WITHOUT taking an owning reference — e.g. an iterator
+// `.current()` returning the collection's element, the runtime element loaders
+// (`__managed_mem_get` / `__managed_mem_cursor_current`) they forward to (real Maxon
+// functions whose bodies return a param-derived `load`, classified borrow-returning
+// by the same structural leaf rule during the STDLIB BUILD where their bodies are
+// present, then persisted in `funcReturnsBorrow` via the cache — NO name allowlist),
+// or any `return self.field` / `return param.accessor()` chain. Such a result owns NO
+// `+1`: the value it points at is owned by the parameter's collection.
+//
+// The default classification (`recordCallResultType` -> `callReturnRc1`) assumes
+// EVERY direct-call result transfers a `+1` to the caller. That is a LIE for a
+// borrow-returning callee, and it breaks container CONSTRUCTION: `Set.init` /
+// `Map.init` iterate a borrowed input array (`for elem in arr`) and move each
+// `.current()` element into the container's storage. The element-move accounting
+// suppresses the element's drop on the assumption a `+1` transfers — but a borrow
+// carries none — so the container holds the element with no reference and the
+// input array's teardown frees it out from under the container (a destructor-walk
+// UAF; the rung-28 over-free).
+//
+// This pass computes the fact STRUCTURALLY from each callee's body (never by
+// callee-name matching, save for the bodyless runtime loader intrinsics noted
+// above — the return-side dual of the structural move-model "Concept C") and
+// reclassifies borrow-returning call RESULTS by USE:
+//   - a result CONSUMED BY A CONTAINER becomes `borrowed` (the container takes its
+//     own ref; the source still owns the element); whereas
+//   - a result RETURNED by the enclosing function becomes `incomingOwner` so it
+//     ACQUIRES its own +1 at the return, handing the caller a genuinely-owned
+//     reference (the `Map.get`/`Array.get` element-get contract — see rung-11).
+// It runs once on the whole Std module (the per-function inserter cannot see
+// callees), AFTER `lowerMaxonToStd` and BEFORE `insertRefcounts`.
+//
+// Leaf rule — a function's return value is a borrow iff its DEFINING op is:
+//   - a `param` op (the parameter's borrowed reference);
+//   - a `load_indirect` / `load_byte` (reads memory, mints no ownership); or
+//   - a `call` to a function G that itself returns a borrow (forwarding).
+// It is NOT a borrow iff the def op is an allocation (`__mm_alloc` / `mrt_alloc*`)
+// or a call to a non-borrow-returning function (which hands back an owned `+1`).
+// Unknown / value-type-producing defs (arith, const, store) are treated as
+// non-borrow: they never produce a managed pointer, so the classification is
+// irrelevant and the conservative answer (owns-a-+1) avoids UNDER-counting a real
+// owner. The analysis is a fixpoint over the forwarding edges until
+// `funcReturnsBorrow` stabilizes.
+
+// Run the analysis: populate `project.funcReturnsBorrow` (fixpoint) then reclassify
+// borrow-returning call results across the module. Returns the module unchanged
+// (mutates `project.funcReturnsBorrow` and per-function `valueOwnership`).
+export function analyzeReturnBorrows(module StdModule, project Project) returns StdModule
+	// Identify the element-loader CHAIN-BOUNDARY functions structurally: a function is
+	// an element loader iff its body directly calls `__managed_mem_load_sized`, the
+	// single sized-managed-element load primitive (see `funcCallsElementLoadPrimitive`).
+	// This replaces a hardcoded `{__managed_mem_get, __managed_mem_cursor_current}` name
+	// list with the structural fact "routes through the shared load chokepoint" — set-
+	// equivalent today (those are the ONLY two callers) and self-extending: a future
+	// loader MUST call the primitive to do its element load, so it is recognized with no
+	// list edit. Persisted in the cache (v73) for the user build, where these bodies are
+	// absent.
+	//
+	// MUST run BEFORE the borrow fixpoint: the fixpoint's
+	// `forwardedBorrowWillBeRetained` consults `calleeIsBorrowFunction`, whose
+	// loader EXCLUSION is what keeps a leaf intrinsic-forwarder (`Array.get`,
+	// whose returned value forwards `__managed_mem_get`) classified as a PURE
+	// borrow. With an empty loader set, the leaf was mispredicted as a
+	// retained wrapper and never entered `funcReturnsBorrow` — so no caller
+	// reclassified its results, and every stdlib `stack.get(i)` result got a
+	// `callReturnRc1` release that stripped the container's element ref (the
+	// driftsort run-stack over-release). The detection itself is purely
+	// structural (no dependence on the borrow set), so hoisting it is safe.
+	for funcIdx in 0 upto module.functions.count() 'eachFuncLoader'
+		let func = try module.functions.get(funcIdx) otherwise panic("analyzeReturnBorrows: functions.get OOB at {funcIdx}")
+		if func.blockRefs.count() == 0 'empty'
+			continue
+		end 'empty'
+		if funcCallsElementLoadPrimitive(module, func: func) 'isLoader'
+			project.funcIsElementLoader.insert(func.name)
+		end 'isLoader'
+	end 'eachFuncLoader'
+
+	// Seed the BODYLESS runtime element loader: `mrt_managed_list_node_value`
+	// reads the node's value slot — a borrow the NODE owns, exactly as
+	// `__managed_mem_get` reads an element the MM owns. The structural loops
+	// above can't see it (its body lives in runtime.std, not this module), so
+	// seed both facts the Maxon-bodied loaders derive structurally:
+	//   - `funcIsElementLoader`: it is a chain-boundary loader, so a forwarder
+	//     (`ListIterator.current`, `List.first`) stays a PURE borrow-returner
+	//     (the wrapper retain lands one level further out, where the borrow
+	//     escapes — mirroring `Array.get` over `__managed_mem_get`);
+	//   - `funcReturnsBorrow`: its result owns no +1, so the fixpoint's
+	//     `valueOwnsPlusOne` doesn't misread a forwarded node-value as owned.
+	// Without the seed, `current` was excluded from `funcReturnsBorrow` and
+	// `planReturnedBorrowRetains` baked a layout-routed retain into its body;
+	// inlined into a concrete caller the retain's +1 had no releasable class
+	// (the list-of-structs for-in leak). Both link-leg spellings are seeded.
+	project.funcIsElementLoader.insert("mrt_managed_list_node_value")
+	project.funcIsElementLoader.insert("stdlib.mrt_managed_list_node_value")
+	project.funcReturnsBorrow.insert("mrt_managed_list_node_value")
+	project.funcReturnsBorrow.insert("stdlib.mrt_managed_list_node_value")
+
+	// The node WALKERS likewise return chain-owned borrows (the node pointers
+	// the list's links already own), so a function returning a walker result
+	// DIRECTLY classifies borrow-returning. (A walker result merged through a
+	// loop PHI — `List.walkTo`'s `current = current.next()` — still reads as
+	// owning: the phi keeps the conservative owns-+1 answer, since `Array.
+	// remove`/`pop` return merge phis whose +1 the transfer machinery supplies.)
+	// Mirrors `StdLiveness.calleeReturnsReceiverBorrow`'s walker list.
+	project.funcReturnsBorrow.insert("mrt_managed_list_head")
+	project.funcReturnsBorrow.insert("stdlib.mrt_managed_list_head")
+	project.funcReturnsBorrow.insert("mrt_managed_list_tail")
+	project.funcReturnsBorrow.insert("stdlib.mrt_managed_list_tail")
+	project.funcReturnsBorrow.insert("mrt_managed_list_node_next")
+	project.funcReturnsBorrow.insert("stdlib.mrt_managed_list_node_next")
+	project.funcReturnsBorrow.insert("mrt_managed_list_node_prev")
+	project.funcReturnsBorrow.insert("stdlib.mrt_managed_list_node_prev")
+
+	// Fixpoint: repeat until no function's return-borrow status flips. Monotonic
+	// (once true it stays true), so the loop terminates in <= #functions rounds.
+	var changed = true
+	while changed 'fixpoint'
+		changed = false
+		for funcIdx in 0 upto module.functions.count() 'eachFunc'
+			let func = try module.functions.get(funcIdx) otherwise panic("analyzeReturnBorrows: functions.get OOB at {funcIdx}")
+			if func.blockRefs.count() == 0 'empty'
+				continue
+			end 'empty'
+			if project.funcReturnsBorrow.contains(func.name) 'settled'
+				continue
+			end 'settled'
+			if functionReturnsBorrow(module, func: func, project: project) 'isBorrow'
+				project.funcReturnsBorrow.insert(func.name)
+				changed = true
+			end 'isBorrow'
+		end 'eachFunc'
+	end 'fixpoint'
+
+	// RECEIVER-INTERIOR sweep (after the borrow fixpoint, so `valueOwnsPlusOne`'s
+	// phi trace sees the settled borrow set): a function whose EVERY return value
+	// owns no +1 structurally — ignoring the acquired-class / wrapper-retain
+	// exemptions that keep +1-handing functions OUT of `funcReturnsBorrow` —
+	// returns a pointer INTO its receiver's structure. `List.walkTo` is the
+	// motivating member: its loop phi over the chain walkers is acquired (+1 to
+	// the caller, so NOT a borrow-returner), but the node's value slot is freed
+	// by the chain's teardown, so liveness must extend the receiver list past the
+	// node's uses (`recordNavBorrow` consumes the union of this set and
+	// `funcReturnsBorrow`). Liveness-only and extend-only: an over-broad entry
+	// risks a late release, never a premature free.
+	for funcIdx in 0 upto module.functions.count() 'eachFuncInterior'
+		let func = try module.functions.get(funcIdx) otherwise panic("analyzeReturnBorrows: functions.get OOB at {funcIdx}")
+		if func.blockRefs.count() == 0 'emptyInterior'
+			continue
+		end 'emptyInterior'
+		if project.funcReturnsReceiverInterior.contains(func.name) 'alreadyInterior'
+			continue
+		end 'alreadyInterior'
+		if functionReturnsReceiverInterior(module, func: func, project: project) 'isInterior'
+			project.funcReturnsReceiverInterior.insert(func.name)
+		end 'isInterior'
+	end 'eachFuncInterior'
+
+	// Reclassify: every call RESULT whose callee returns a borrow becomes
+	// `borrowed` (it owns no +1) instead of the lowering default `callReturnRc1`.
+	// `func` is mutated in place (its `valueOwnership`) and written back.
+	for funcIdx in 0 upto module.functions.count() 'eachFuncRC'
+		var func = try module.functions.get(funcIdx) otherwise panic("analyzeReturnBorrows: functions.get OOB at {funcIdx}")
+		reclassifyBorrowReturnResults(module, func: func, project: project)
+		try module.functions.set(funcIdx, value: func) otherwise panic("analyzeReturnBorrows: functions.set OOB at {funcIdx}")
+	end 'eachFuncRC'
+
+	return module
+end 'analyzeReturnBorrows'
+
+// The receiver-interior dual of `functionReturnsBorrow`: every return value owns
+// no +1 STRUCTURALLY (`valueOwnsPlusOne` — allocations and non-borrow calls block
+// it), with NO acquired-class / wrapper-retain exemptions: those exemptions
+// describe who supplies the caller's +1, not whether the pointee lives inside
+// the receiver. Void functions return no interior pointer.
+function functionReturnsReceiverInterior(module StdModule, func IrFunction, project Project) returns bool
+	let defs = buildValueDefMap(module, func: func)
+	var sawReturn = false
+
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("functionReturnsReceiverInterior: blockRef not in module.blocks")
+		if not block.hasTerminatorOp() 'noTerm'
+			continue
+		end 'noTerm'
+		let term = try module.ops.get(block.terminatorIndex()) otherwise panic("functionReturnsReceiverInterior: terminatorIndex not in module.ops")
+		let retVal = returnValueOf(term)
+		if retVal.present 'isReturn'
+			sawReturn = true
+			if valueOwnsPlusOne(module, defs: defs, func: func, valueId: retVal.value, project: project) 'ownsPlusOne'
+				return false
+			end 'ownsPlusOne'
+		end 'isReturn'
+	end 'eachBlock'
+
+	return sawReturn
+end 'functionReturnsReceiverInterior'
+
+// True iff EVERY return terminator of `func` returns a borrow value (per the leaf
+// rule). A function with no return value (void) trivially returns no borrow.
+function functionReturnsBorrow(module StdModule, func IrFunction, project Project) returns bool
+	let defs = buildValueDefMap(module, func: func)
+	var sawReturn = false
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("functionReturnsBorrow: blockRef not in module.blocks")
+		if not block.hasTerminatorOp() 'noTerm'
+			continue
+		end 'noTerm'
+		let termIdx = block.terminatorIndex()
+		let term = try module.ops.get(termIdx) otherwise panic("functionReturnsBorrow: terminatorIndex not in module.ops")
+		let retVal = returnValueOf(term)
+		if retVal.present 'isReturn'
+			sawReturn = true
+			// A function returns a borrow iff NONE of its returns OWNS a +1. A return
+			// value owns a +1 only when freshly allocated or handed back by a non-
+			// borrow-returning call; a load / param / arith-computed scalar / a
+			// forwarded borrow-call owns none. (Inverting "every return is a borrow"
+			// is more robust: a value-type return — e.g. the bit-extraction `and 1`
+			// in `__managed_mem_cursor_current`'s bool path — is an arith result that
+			// is provably NOT a managed pointer, so it must not block the borrow
+			// classification of the managed-pointer path.)
+			//
+			// The structural rule alone is NOT the whole story: the inserter HANDS
+			// THE CALLER A +1 for two returned-value shapes the structural rule
+			// calls borrows, and a function that hands +1 must NOT be in
+			// `funcReturnsBorrow` (its call results keep the `callReturnRc1`
+			// default and get released):
+			//
+			//   1. A returned value lowering classified with an ACQUIRED class
+			//      (`incomingOwner` / `freshRc0` / `selfReturnBorrow`): the inserter
+			//      acquires it at the def or the return (`computeIncomingOwnerAcquire`
+			//      rule (a)). Without this, `return self.field` accessors
+			//      (`URL.query`) were marked borrow-returning, their call results
+			//      reclassified `borrowed` (no release), and the acquire-on-return
+			//      +1 leaked on every call.
+			//
+			//   2. A FORWARDED borrow the reclassify/retain pipeline will repair:
+			//      `reclassifyBorrowReturnResults`' wrapper arm flips the returned
+			//      forwarded value to `borrowed` and `planReturnedBorrowRetains`
+			//      hands the caller a layout-routed +1 (`Map.get`'s element-get
+			//      contract). The repair fires regardless of THIS function's set
+			//      membership (its gate is the CALLEE's membership), so excluding
+			//      the wrapper here exactly matches the +1 it returns.
+			if returnedValueClassIsAcquired(func, valueId: retVal.value) 'classAcquired'
+				return false
+			end 'classAcquired'
+
+			if valueOwnsPlusOne(module, defs: defs, func: func, valueId: retVal.value, project: project) 'ownsPlusOne'
+				return false
+			end 'ownsPlusOne'
+
+			if forwardedBorrowWillBeRetained(module, defs: defs, func: func, valueId: retVal.value, project: project) 'willRetain'
+				return false
+			end 'willRetain'
+		end 'isReturn'
+	end 'eachBlock'
+	return sawReturn
+end 'functionReturnsBorrow'
+
+// True iff lowering classified `valueId` with a class the inserter ACQUIRES
+// (`computeIncomingOwnerAcquire` rule (a) / the def-acquire classes) — a returned
+// value of such a class is handed to the caller with a real +1, so the enclosing
+// function returns an OWNER, not a borrow. The acquire machinery only fires for
+// MANAGED values (`classIsIncomingOwner` / `shouldAcquire` are isManaged-gated),
+// so an unmanaged value with a stale acquired class returns NO +1 and must not
+// flip its function out of the borrow set (callers would over-release a borrow).
+function returnedValueClassIsAcquired(func IrFunction, valueId ValueId) returns bool
+	if not func.isValueManaged(valueId) 'notManaged'
+		return false
+	end 'notManaged'
+
+	return match func.ownershipOfValue(valueId) 'cls'
+		freshRc0 or selfReturnBorrow or incomingOwner gives true
+		notManaged or callReturnRc1 or borrowed gives false
+	end 'cls'
+end 'returnedValueClassIsAcquired'
+
+// True iff returned value `valueId` is a forwarded borrow-FUNCTION result the
+// reclassify/retain pipeline will hand back with a +1: the wrapper arm of
+// `reclassifyBorrowReturnResults` flips it to `borrowed`, and
+// `planReturnedBorrowRetains` retains it iff the function's layout resolves —
+// guaranteed for a returned type-param value (`funcHasDroppableTypeParam`'s
+// returned-borrow arm), else iff some other droppable type-param value forces the
+// layout. Mirrors those gates exactly so `funcReturnsBorrow`'s no-+1 meaning holds.
+function forwardedBorrowWillBeRetained(module StdModule, defs ValueDefMap, func IrFunction, valueId ValueId, project Project) returns bool
+	if not func.isValueManaged(valueId) and not func.isValueTypeParam(valueId) 'notManaged'
+		return false
+	end 'notManaged'
+
+	let defIdx = try defs.get(valueId) otherwise return false
+	let defOp = try module.ops.get(defIdx) otherwise return false
+
+	if not opCallsBorrowFunction(defOp, project: project) 'notForwarded'
+		return false
+	end 'notForwarded'
+
+	if not func.hasImplicitLayoutParam 'noLayout'
+		return false
+	end 'noLayout'
+
+	if func.isValueTypeParam(valueId) 'typeParam'
+		return true
+	end 'typeParam'
+
+	return funcHasDroppableTypeParam(func, returnedValues: returnedValueBits(module, func: func))
+end 'forwardedBorrowWillBeRetained'
+
+// The function's returned ValueIds as a BoolArray keyed by ValueId (the shape
+// `funcHasDroppableTypeParam` consumes).
+function returnedValueBits(module StdModule, func IrFunction) returns BoolArray
+	let returned = collectReturnedValues(module, func: func)
+	var bits = BoolArray.create()
+
+	for vid in returned 'each'
+		while bits.count() <= vid 'grow'
+			bits.push(false)
+		end 'grow'
+		try bits.set(vid, value: true) otherwise panic("returnedValueBits: bits.set OOB after grow")
+	end 'each'
+
+	return bits
+end 'returnedValueBits'
+
+// An optional ValueId result (no `T?` optional in the codebase — use an explicit
+// presence flag, the `BypassTarget`-style idiom).
+type RetValueOpt
+	export var present as bool
+	export var value as ValueId
+
+	export static function some(value ValueId) returns RetValueOpt
+		return Self{present: true, value: value}
+	end 'some'
+
+	export static function none() returns RetValueOpt
+		return Self{present: false, value: i64.max}
+	end 'none'
+end 'RetValueOpt'
+
+// The returned ValueId of a `ret`/`errorReturn` terminator, else `none`.
+function returnValueOf(op StdOp) returns RetValueOpt
+	return match op 'dispatch'
+		arith gives RetValueOpt.none()
+		control gives RetValueOpt.none()
+		call(c) gives returnValueOfCall(c)
+		memory gives RetValueOpt.none()
+		system gives RetValueOpt.none()
+	end 'dispatch'
+end 'returnValueOf'
+
+function returnValueOfCall(c StdCallOp) returns RetValueOpt
+	return match c 'check'
+		ret(retValId) gives RetValueOpt.some(retValId)
+		call to tailCall gives RetValueOpt.none()
+		param gives RetValueOpt.none()
+		errorReturn(retValId, _) gives RetValueOpt.some(retValId)
+	end 'check'
+end 'returnValueOfCall'
+
+// True iff `valueId` (a return value) OWNS a transferable +1 — its defining op is
+// a fresh allocation or a call to a NON-borrow-returning function. A load, a
+// `param`, an arith-computed scalar, or a forwarded borrow-call owns none. A value
+// with no recorded def (e.g. a phi block-arg the fixpoint cannot trace) is treated
+// conservatively as owning a +1 (so an untraceable return blocks the borrow
+// classification — bias toward "owns a +1", never under-counting a real owner).
+function valueOwnsPlusOne(module StdModule, defs ValueDefMap, func IrFunction, valueId ValueId, project Project) returns bool
+	// No op def = a BLOCK PARAMETER (phi). Default CONSERVATIVE owns-+1: a phi
+	// of not-owners is NOT safely a borrow — `Array.remove`/`pop` return merge
+	// phis whose +1 the transfer machinery supplies, and classifying them
+	// borrow-returning stripped the caller's release (the remove/pop-transfer
+	// mm-ladder regression that reverted the GENERAL phi-tracing experiment).
+	// The ONE recognized exception is the all-borrow-CALL merge
+	// (`phiMergesOnlyBorrowCallResults`): every incoming is a direct call
+	// result of a `funcReturnsBorrow` callee (`List.walkTo`'s loop phi over the
+	// seeded `mrt_managed_list_head`/`node_next` walkers) — no arm can be a
+	// transfer (+1) source, so the merge is a true borrow. Anything else (a
+	// load, a const sentinel, an alloc, a non-borrow call) keeps owns-+1.
+	let defIdx = try defs.get(valueId) otherwise 'phiDef'
+		var visited = ValueIdArray.create()
+		return not phiMergesOnlyBorrowCallResults(module, defs: defs, func: func, phiId: valueId, project: project, visited: visited)
+	end 'phiDef'
+	let defOp = try module.ops.get(defIdx) otherwise return true
+	// A LOAD is the borrow-vs-owner crux: a load whose ADDRESS derives from a
+	// parameter is a borrow of the param's pointee (owns no +1 — the iterator
+	// `.current()` element). A load from NON-param memory (slab internals, a fresh
+	// allocation's interior) is the RESULT of an owning operation reached by
+	// pointer — e.g. `__mm_alloc` returns a load of the slab free-list head, which
+	// owns the allocated object. So a load owns a +1 UNLESS its address is
+	// param-derived. Without this, `__mm_alloc` (and every allocator) is wrongly
+	// flagged borrow, stripping the field-store-incref off every `Self{f: T.create()}`.
+	if opIsLoad(defOp) 'isLoad'
+		// A MODULE-GLOBAL slot read (`load [globalAddr @__data_<var>] + 0`) is a
+		// borrow: the `.data` slot is the owner-of-record (it took the +1 at the
+		// global store; the exit-time cleanup patch releases it). Without this, a
+		// static getter (`return CharacterSet.cachedX`) is judged to return an
+		// OWNER, its callers release the "+1" — and the global's occupant is
+		// freed out from under the slot (the 181-test global-cleanup
+		// over-release). Runtime-internal symbols (slab heads etc.) don't carry
+		// the `__data_` Maxon top-level prefix, so allocator loads keep their
+		// owner classification.
+		if loadIsModuleGlobalSlotRead(module, defs: defs, op: defOp) 'globalSlot'
+			return false
+		end 'globalSlot'
+		var visited = ValueIdArray.create()
+		return not loadAddressDerivesFromParam(module, defs: defs, op: defOp, visited: visited)
+	end 'isLoad'
+	// A POINTER HEADER-OFFSET preserves ownership: `__mm_alloc` returns `slotBase + 32`
+	// (the user region just past the 32-byte header) where `slotBase` is the
+	// `__slab_alloc` result. An additive op with exactly one CONSTANT operand is a
+	// fixed pointer adjustment, not a fresh computation — the result owns a +1 iff the
+	// non-constant base does. Bounded to additive-with-one-const so it never turns an
+	// index/arith computation (two dynamic operands) into a false owner.
+	let offsetBase = additiveConstOffsetBase(module, defs: defs, op: defOp)
+	if offsetBase.present 'headerOffset'
+		return valueOwnsPlusOne(module, defs: defs, func: func, valueId: offsetBase.value, project: project)
+	end 'headerOffset'
+	return defOpOwnsPlusOne(defOp, project: project)
+end 'valueOwnsPlusOne'
+
+// True iff `phiId` is a block parameter of `func` ALL of whose incoming edge
+// values are direct call results of `funcReturnsBorrow` callees — the
+// `List.walkTo` shape (`current = chain.head(); current = current.next()` in a
+// loop), where every arm is a chain-owned node borrow. Loop-carried self-edges
+// and mutually-phi incomings recurse with a visited set (a cycle contributes no
+// +1). Returns false for anything else, INCLUDING a phi with no incoming edges
+// (nothing proves it a borrow).
+function phiMergesOnlyBorrowCallResults(module StdModule, defs ValueDefMap, func IrFunction, phiId ValueId, project Project, visited ValueIdArray) returns bool
+	if valueIdArrayContainsRB(visited, vid: phiId) 'cycle'
+		return true
+	end 'cycle'
+	visited.push(phiId)
+
+	let (found, phiBlockId, argIdx) = findBlockArgPosition(module, func: func, valueId: phiId)
+	if not found 'notBlockArg'
+		return false
+	end 'notBlockArg'
+
+	var sawIncoming = false
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("phiMergesOnlyBorrowCallResults: blockRef not in module.blocks")
+		if not block.hasTerminatorOp() 'noTerm'
+			continue
+		end 'noTerm'
+		let term = try module.ops.get(block.terminatorIndex()) otherwise panic("phiMergesOnlyBorrowCallResults: terminatorIndex not in module.ops")
+		let edges = branchArgsInto(term, targetBlockId: phiBlockId, argIdx: argIdx)
+		for incoming in edges 'eachIncoming'
+			sawIncoming = true
+			if incoming == phiId 'selfEdge'
+				continue
+			end 'selfEdge'
+			if not incomingIsBorrowCallOrPhi(module, defs: defs, func: func, incoming: incoming, project: project, visited: visited) 'notBorrow'
+				return false
+			end 'notBorrow'
+		end 'eachIncoming'
+	end 'eachBlock'
+
+	return sawIncoming
+end 'phiMergesOnlyBorrowCallResults'
+
+// One incoming of the all-borrow merge: a direct `funcReturnsBorrow`-callee call
+// result, or itself a phi that recursively satisfies the same rule.
+function incomingIsBorrowCallOrPhi(module StdModule, defs ValueDefMap, func IrFunction, incoming ValueId, project Project, visited ValueIdArray) returns bool
+	let inDefIdx = try defs.get(incoming) otherwise 'incomingPhi'
+		return phiMergesOnlyBorrowCallResults(module, defs: defs, func: func, phiId: incoming, project: project, visited: visited)
+	end 'incomingPhi'
+	let inOp = try module.ops.get(inDefIdx) otherwise return false
+	return opIsBorrowSetCall(inOp, project: project)
+end 'incomingIsBorrowCallOrPhi'
+
+// True iff `op` is a static call/tryCall whose callee is in `funcReturnsBorrow`.
+// Plain set membership — the loader chain-boundary exclusion
+// (`calleeIsBorrowFunction`) is irrelevant here: a loader result merged through
+// a phi is still a borrow for +1-counting purposes.
+function opIsBorrowSetCall(op StdOp, project Project) returns bool
+	return match op 'dispatch'
+		call(c) gives callIsBorrowSetCall(c, project: project)
+		arith gives false
+		control gives false
+		memory gives false
+		system gives false
+	end 'dispatch'
+end 'opIsBorrowSetCall'
+
+function callIsBorrowSetCall(c StdCallOp, project Project) returns bool
+	return match c 'check'
+		call(_, callee, _) gives project.funcReturnsBorrow.contains(callee)
+		tryCall(_, callee, _, _) gives project.funcReturnsBorrow.contains(callee)
+		ret gives false
+		indirectCall to tailCall gives false
+		param gives false
+		errorReturn gives false
+	end 'check'
+end 'callIsBorrowSetCall'
+
+// Locate `valueId` among the block parameters of `func`: returns
+// `(true, blockId, argIndex)` on a hit, `(false, 0, 0)` otherwise.
+function findBlockArgPosition(module StdModule, func IrFunction, valueId ValueId) returns (bool, BlockId, NodeIndex)
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("findBlockArgPosition: blockRef not in module.blocks")
+		for i in 0 upto block.blockArgs.count() 'eachArg'
+			let arg = try block.blockArgs.get(i) otherwise panic("findBlockArgPosition: blockArgs.get({i}) OOB despite bounds")
+			if arg.valueId == valueId 'hit'
+				return (true, block.id, i)
+			end 'hit'
+		end 'eachArg'
+	end 'eachBlock'
+	return (false, 0, 0)
+end 'findBlockArgPosition'
+
+// The values a terminator passes into `targetBlockId`'s block-arg `argIdx` —
+// zero, one, or (for a condBr whose both arms hit the target) two entries.
+function branchArgsInto(term StdOp, targetBlockId BlockId, argIdx NodeIndex) returns ValueIdArray
+	var out = ValueIdArray.create()
+	match term 'dispatch'
+		control(cf) then collectControlArgsInto(cf, targetBlockId: targetBlockId, argIdx: argIdx, out: out)
+		arith then break 'dispatch'
+		call then break 'dispatch'
+		memory then break 'dispatch'
+		system then break 'dispatch'
+	end 'dispatch'
+	return out
+end 'branchArgsInto'
+
+function collectControlArgsInto(cf StdControlOp, targetBlockId BlockId, argIdx NodeIndex, out ValueIdArray)
+	match cf 'check'
+		br(target, argIds) then appendEdgeArg(out, target: target, argIds: argIds, targetBlockId: targetBlockId, argIdx: argIdx)
+		condBr(_, thenTarget, thenArgIds, elseTarget, elseArgIds) then appendCondBrEdgeArgs(out, thenTarget: thenTarget, thenArgIds: thenArgIds, elseTarget: elseTarget, elseArgIds: elseArgIds, targetBlockId: targetBlockId, argIdx: argIdx)
+	end 'check'
+end 'collectControlArgsInto'
+
+function appendCondBrEdgeArgs(out ValueIdArray, thenTarget BlockId, thenArgIds ValueIdArray, elseTarget BlockId, elseArgIds ValueIdArray, targetBlockId BlockId, argIdx NodeIndex)
+	appendEdgeArg(out, target: thenTarget, argIds: thenArgIds, targetBlockId: targetBlockId, argIdx: argIdx)
+	appendEdgeArg(out, target: elseTarget, argIds: elseArgIds, targetBlockId: targetBlockId, argIdx: argIdx)
+end 'appendCondBrEdgeArgs'
+
+function appendEdgeArg(out ValueIdArray, target BlockId, argIds ValueIdArray, targetBlockId BlockId, argIdx NodeIndex)
+	if target != targetBlockId 'otherTarget'
+		return
+	end 'otherTarget'
+	let vid = try argIds.get(argIdx) otherwise return
+	out.push(vid)
+end 'appendEdgeArg'
+
+// Local contains helper (the InsertRefcounts `valueIdArrayContains` is
+// module-private to that file).
+function valueIdArrayContainsRB(arr ValueIdArray, vid ValueId) returns bool
+	for v in arr 'each'
+		if v == vid 'hit'
+			return true
+		end 'hit'
+	end 'each'
+	return false
+end 'valueIdArrayContainsRB'
+
+// If `op` is an additive binary op (`addI64`/`subI64`) with exactly one CONSTANT
+// operand, the ValueId of its non-constant base operand (a fixed pointer offset);
+// else `none`. The base whose ownership the offset result inherits (see
+// `valueOwnsPlusOne`'s header-offset case).
+function additiveConstOffsetBase(module StdModule, defs ValueDefMap, op StdOp) returns RetValueOpt
+	return match op 'dispatch'
+		arith(a) gives additiveConstOffsetBaseArith(a, module: module, defs: defs)
+		control gives RetValueOpt.none()
+		call gives RetValueOpt.none()
+		memory gives RetValueOpt.none()
+		system gives RetValueOpt.none()
+	end 'dispatch'
+end 'additiveConstOffsetBase'
+
+function additiveConstOffsetBaseArith(a StdArithOp, module StdModule, defs ValueDefMap) returns RetValueOpt
+	return match a 'check'
+		const gives RetValueOpt.none()
+		unary gives RetValueOpt.none()
+		binary(b) gives additiveConstOffsetBaseBinary(b, module: module, defs: defs)
+	end 'check'
+end 'additiveConstOffsetBaseArith'
+
+function additiveConstOffsetBaseBinary(b StdArithBinaryOp, module StdModule, defs ValueDefMap) returns RetValueOpt
+	let kind = additiveOpcodeKind(b.opcode)
+	if kind == (AdditiveKind.notAdditive) 'notAdd'
+		return RetValueOpt.none()
+	end 'notAdd'
+	let leftConst = valueIsConstant(module, defs: defs, valueId: b.leftId)
+	let rightConst = valueIsConstant(module, defs: defs, valueId: b.rightId)
+	// `subI64` is base - const (the const must be the right operand to be an offset);
+	// `addI64` commutes, so either operand may be the const. Exactly one constant.
+	if rightConst and not leftConst 'baseLeft'
+		return RetValueOpt.some(b.leftId)
+	end 'baseLeft'
+	if leftConst and not rightConst and kind == (AdditiveKind.commutativeAdd) 'baseRight'
+		return RetValueOpt.some(b.rightId)
+	end 'baseRight'
+	return RetValueOpt.none()
+end 'additiveConstOffsetBaseBinary'
+
+// Whether a binary opcode is an additive pointer-offset, and if so whether it
+// commutes (an `addI64` const may be on either side; a `subI64` const must be the
+// subtrahend on the right).
+enum AdditiveKind
+	notAdditive
+	commutativeAdd
+	subtractRight
+end 'AdditiveKind'
+
+function additiveOpcodeKind(opcode StdArithBinaryOpcode) returns AdditiveKind
+	return match opcode 'check'
+		addI64 gives AdditiveKind.commutativeAdd
+		subI64 gives AdditiveKind.subtractRight
+		mulI64 to cmpF64Ge gives AdditiveKind.notAdditive
+	end 'check'
+end 'additiveOpcodeKind'
+
+// True iff `valueId` is defined by an integer-constant op (`constI64`).
+function valueIsConstant(module StdModule, defs ValueDefMap, valueId ValueId) returns bool
+	let defIdx = try defs.get(valueId) otherwise return false
+	let defOp = try module.ops.get(defIdx) otherwise return false
+	return match defOp 'dispatch'
+		arith(a) gives arithOpIsConst(a)
+		control gives false
+		call gives false
+		memory gives false
+		system gives false
+	end 'dispatch'
+end 'valueIsConstant'
+
+function arithOpIsConst(a StdArithOp) returns bool
+	return match a 'check'
+		const gives true
+		unary gives false
+		binary gives false
+	end 'check'
+end 'arithOpIsConst'
+
+// True iff `op` is a memory-reading load (`load_indirect`/`load_byte`).
+function opIsLoad(op StdOp) returns bool
+	return match op 'dispatch'
+		arith gives false
+		control gives false
+		call gives false
+		memory gives false
+		system(s) gives sysOpIsLoad(s)
+	end 'dispatch'
+end 'opIsLoad'
+
+function sysOpIsLoad(s StdSystemOp) returns bool
+	return match s 'check'
+		globalAddr to storeByte gives false
+		loadByte gives true
+		osExit to loadFramePtr gives false
+		loadIndirect gives true
+		funcAddr to dropTypeParam gives false
+	end 'check'
+end 'sysOpIsLoad'
+
+// True iff the ADDRESS operand of load `op` is PARAM-ROOTED (the load reads the
+// parameter's pointee — a borrow), as opposed to global/alloc-rooted (owns a +1).
+// See `addressIsParamRooted` for the global-root discriminator that distinguishes a
+// param deref-base from a param used as an index offset into a global. `visited`
+// guards against cycles (a phi-fed address).
+function loadAddressDerivesFromParam(module StdModule, defs ValueDefMap, op StdOp, visited ValueIdArray) returns bool
+	let addrId = loadAddressId(op)
+	if addrId == (i64.max) 'noAddr'
+		return false
+	end 'noAddr'
+	return addressIsParamRooted(module, defs: defs, valueId: addrId, visited: visited)
+end 'loadAddressDerivesFromParam'
+
+// True iff `op` is a `loadIndirect` at offset 0 whose address is DIRECTLY a
+// `globalAddr` of a Maxon module-global `.data` slot (`__data_<topLevelVar>`,
+// the `dataSymbolName` shape `lowerGlobalLoad` emits). The slot owns its
+// occupant, so the loaded value is a borrow. Runtime `.data` symbols (slab
+// state etc.) have their own un-prefixed names and are deliberately excluded.
+function loadIsModuleGlobalSlotRead(module StdModule, defs ValueDefMap, op StdOp) returns bool
+	let slot = match op 'dispatch'
+		arith gives GlobalSlotLoad.none()
+		control gives GlobalSlotLoad.none()
+		call gives GlobalSlotLoad.none()
+		memory gives GlobalSlotLoad.none()
+		system(s) gives globalSlotLoadOfSys(s)
+	end 'dispatch'
+	if not slot.present 'notSlotLoad'
+		return false
+	end 'notSlotLoad'
+	let addrDefIdx = try defs.get(slot.addrId) otherwise return false
+	let addrDef = try module.ops.get(addrDefIdx) otherwise return false
+	return opIsModuleGlobalAddr(addrDef)
+end 'loadIsModuleGlobalSlotRead'
+
+type GlobalSlotLoad
+	export let present as bool
+	export let addrId as ValueId
+
+	export static function none() returns GlobalSlotLoad
+		return Self{present: false, addrId: 0}
+	end 'none'
+
+	export static function some(addrId ValueId) returns GlobalSlotLoad
+		return Self{present: true, addrId: addrId}
+	end 'some'
+end 'GlobalSlotLoad'
+
+function globalSlotLoadOfSys(s StdSystemOp) returns GlobalSlotLoad
+	return match s 'check'
+		loadIndirect(_, addrId, offset, _, _, _) gives(GlobalSlotLoad.some(addrId) if offset == 0 else GlobalSlotLoad.none())
+		globalAddr to storeByte gives GlobalSlotLoad.none()
+		loadByte gives GlobalSlotLoad.none()
+		osExit to loadFramePtr gives GlobalSlotLoad.none()
+		funcAddr to dropTypeParam gives GlobalSlotLoad.none()
+	end 'check'
+end 'globalSlotLoadOfSys'
+
+function opIsModuleGlobalAddr(op StdOp) returns bool
+	return match op 'dispatch'
+		arith gives false
+		control gives false
+		call gives false
+		memory gives false
+		system(s) gives sysOpIsModuleGlobalAddr(s)
+	end 'dispatch'
+end 'opIsModuleGlobalAddr'
+
+function sysOpIsModuleGlobalAddr(s StdSystemOp) returns bool
+	return match s 'check'
+		globalAddr(_, name) gives name.startsWith("__data_")
+		memcpy to dropTypeParam gives false
+	end 'check'
+end 'sysOpIsModuleGlobalAddr'
+
+// The address (base) operand of a load op, or `i64.max` sentinel for a non-load.
+function loadAddressId(op StdOp) returns ValueId
+	return match op 'dispatch'
+		arith gives i64.max
+		control gives i64.max
+		call gives i64.max
+		memory gives i64.max
+		system(s) gives sysLoadAddressId(s)
+	end 'dispatch'
+end 'loadAddressId'
+
+function sysLoadAddressId(s StdSystemOp) returns ValueId
+	return match s 'check'
+		loadIndirect(_, addrId, _, _, _, _) gives addrId
+		loadByte(_, baseId, _) gives baseId
+		globalAddr to storeByte gives i64.max
+		osExit to loadFramePtr gives i64.max
+		funcAddr to dropTypeParam gives i64.max
+	end 'check'
+end 'sysLoadAddressId'
+
+// True iff `valueId` is a PARAM-ROOTED address — its dereferenced base is a
+// parameter (passed directly, or reached by loading THROUGH param memory), NOT
+// merely a parameter used as an additive INDEX OFFSET into a global-rooted base.
+// Walks the def chain through loads (the loaded value carries the param-ness of its
+// address) and arith (address computation). Stops at calls / allocations (not
+// param-rooted). `visited` bounds the walk.
+//
+// THE GLOBAL-ROOT DISCRIMINATOR. An arith address whose operand chain reaches a
+// `globalAddr` op is global-rooted REGARDLESS of any sibling param offset — so a
+// load through it owns a +1, not a borrow. This is what separates the slab
+// allocator from an element accessor: `__slab_alloc_class` computes
+// `mcacheSlot = globalAddr(__slab_mcache_base) + shard*STRIDE + (classIdx shl 3)`
+// and loads through it — `classIdx` (a param) is only an additive index into a
+// GLOBAL base, so the loaded free-list head OWNS a +1 (a fresh allocation). Without
+// the discriminator, the param-in-the-arith wrongly flagged the allocator's result
+// a borrow, stripping the field-store-incref off every `Self{f: T.create()}` and
+// forcing the (now-removed) `calleeIsAllocation` name list. Conversely, the element
+// loaders (`__managed_mem_get`/`cursor_current`) root their address at the param
+// itself — `buffer = loadIndirect(self); load(buffer + idx*elemSize)` — with NO
+// `globalAddr` in the chain, so they correctly STAY borrows.
+function addressIsParamRooted(module StdModule, defs ValueDefMap, valueId ValueId, visited ValueIdArray) returns bool
+	if valueIdArrayContains(visited, vid: valueId) 'seen'
+		return false
+	end 'seen'
+	visited.push(valueId)
+	let defIdx = try defs.get(valueId) otherwise return false
+	let defOp = try module.ops.get(defIdx) otherwise return false
+	if opIsParam(defOp) 'param'
+		return true
+	end 'param'
+	if opIsGlobalAddr(defOp) 'global'
+		return false
+	end 'global'
+	if opIsLoad(defOp) 'load'
+		let addrId = loadAddressId(defOp)
+		if addrId == (i64.max) 'noAddr'
+			return false
+		end 'noAddr'
+		return addressIsParamRooted(module, defs: defs, valueId: addrId, visited: visited)
+	end 'load'
+	if opIsArith(defOp) 'arith'
+		// A global-rooted operand dominates: the address is an offset INTO a global,
+		// not a deref of a param, so no operand's param-ness makes it a borrow.
+		if anyOperandRootsInGlobal(module, defs: defs, op: defOp) 'globalRooted'
+			return false
+		end 'globalRooted'
+		let operands = extractStdOpOperands(defOp)
+		for readId in operands.readIds 'eachOperand'
+			if addressIsParamRooted(module, defs: defs, valueId: readId, visited: visited) 'derives'
+				return true
+			end 'derives'
+		end 'eachOperand'
+		return false
+	end 'arith'
+	return false
+end 'addressIsParamRooted'
+
+// True iff any operand of arith `op` transitively roots in a `globalAddr` op
+// (through loads + further arith). The global-root marker for `addressIsParamRooted`:
+// an address expression containing a global base is an offset into that global, never
+// a borrow of a parameter's pointee. Each operand gets its own fresh `visited` bound
+// (a separate cycle guard per operand subtree).
+function anyOperandRootsInGlobal(module StdModule, defs ValueDefMap, op StdOp) returns bool
+	let operands = extractStdOpOperands(op)
+	for readId in operands.readIds 'eachOperand'
+		var seen = ValueIdArray.create()
+		if valueRootsInGlobal(module, defs: defs, valueId: readId, visited: seen) 'global'
+			return true
+		end 'global'
+	end 'eachOperand'
+	return false
+end 'anyOperandRootsInGlobal'
+
+// True iff `valueId` transitively roots in a `globalAddr` op, walking through loads
+// (the loaded value carries the global-ness of its address) and arith operands.
+function valueRootsInGlobal(module StdModule, defs ValueDefMap, valueId ValueId, visited ValueIdArray) returns bool
+	if valueIdArrayContains(visited, vid: valueId) 'seen'
+		return false
+	end 'seen'
+	visited.push(valueId)
+	let defIdx = try defs.get(valueId) otherwise return false
+	let defOp = try module.ops.get(defIdx) otherwise return false
+	if opIsGlobalAddr(defOp) 'global'
+		return true
+	end 'global'
+	if opIsLoad(defOp) 'load'
+		let addrId = loadAddressId(defOp)
+		if addrId == (i64.max) 'noAddr'
+			return false
+		end 'noAddr'
+		return valueRootsInGlobal(module, defs: defs, valueId: addrId, visited: visited)
+	end 'load'
+	if opIsArith(defOp) 'arith'
+		let operands = extractStdOpOperands(defOp)
+		for readId in operands.readIds 'eachOperand'
+			if valueRootsInGlobal(module, defs: defs, valueId: readId, visited: visited) 'roots'
+				return true
+			end 'roots'
+		end 'eachOperand'
+		return false
+	end 'arith'
+	return false
+end 'valueRootsInGlobal'
+
+// True iff `op` is a `globalAddr` system op (the address of a named data global —
+// the base of slab/runtime global state, never a parameter's pointee).
+function opIsGlobalAddr(op StdOp) returns bool
+	return match op 'dispatch'
+		arith gives false
+		control gives false
+		call gives false
+		memory gives false
+		system(s) gives sysOpIsGlobalAddr(s)
+	end 'dispatch'
+end 'opIsGlobalAddr'
+
+function sysOpIsGlobalAddr(s StdSystemOp) returns bool
+	return match s 'check'
+		globalAddr gives true
+		memcpy to dropTypeParam gives false
+	end 'check'
+end 'sysOpIsGlobalAddr'
+
+// True iff `op` is a `param` op.
+function opIsParam(op StdOp) returns bool
+	return match op 'dispatch'
+		arith gives false
+		control gives false
+		call(c) gives callOpIsParam(c)
+		memory gives false
+		system gives false
+	end 'dispatch'
+end 'opIsParam'
+
+function callOpIsParam(c StdCallOp) returns bool
+	return match c 'check'
+		ret gives false
+		call to tailCall gives false
+		param gives true
+		errorReturn gives false
+	end 'check'
+end 'callOpIsParam'
+
+// True iff `op` is an arithmetic op (address computation / scalar).
+function opIsArith(op StdOp) returns bool
+	return match op 'dispatch'
+		arith gives true
+		control gives false
+		call gives false
+		memory gives false
+		system gives false
+	end 'dispatch'
+end 'opIsArith'
+
+// Classify a value's DEFINING op as owning a +1 (true) or not (false). A call to a
+// non-borrow-returning callee mints/forwards an owned +1; an OS-page allocation
+// syscall (`osAllocPages`/`osAllocPagesLarge`) mints fresh OS memory the caller
+// owns. Params, arith, stores, etc. do not. (Loads are handled separately in
+// `valueOwnsPlusOne` by address provenance; additive header-offsets there too.)
+function defOpOwnsPlusOne(op StdOp, project Project) returns bool
+	return match op 'dispatch'
+		arith gives false
+		control gives false
+		call(c) gives callOpOwnsPlusOne(c, project: project)
+		memory gives false
+		system(s) gives sysOpOwnsPlusOne(s)
+	end 'dispatch'
+end 'defOpOwnsPlusOne'
+
+// True iff `s` is an OS-page allocation syscall — it mints fresh, owned memory
+// (`__slab_os_direct_alloc` returns `osAllocPages(...)` directly). Every other
+// system op (loads, stores, atomics, descriptor reads) owns no +1.
+function sysOpOwnsPlusOne(s StdSystemOp) returns bool
+	return match s 'check'
+		globalAddr to drop gives false
+		osAllocPages gives true
+		osAllocPagesLarge gives true
+		osFreePages to dropTypeParam gives false
+	end 'check'
+end 'sysOpOwnsPlusOne'
+
+// A `param` op (borrowed param ref), a borrow-returning call, or an allocation
+// that is itself a borrow (never — allocs own a +1) do NOT own a +1 here. A direct
+// `call`/`tryCall` to a NON-borrow-returning function owns the call's +1. An
+// indirect/witness call is treated conservatively as owning a +1 (unknown callee).
+function callOpOwnsPlusOne(c StdCallOp, project Project) returns bool
+	return match c 'check'
+		ret gives false
+		call(_, callee, _) gives not calleeReturnsBorrow(callee, project: project)
+		tryCall(_, callee, _, _) gives not calleeReturnsBorrow(callee, project: project)
+		indirectCall to tailCall gives true
+		param gives false
+		errorReturn gives false
+	end 'check'
+end 'callOpOwnsPlusOne'
+
+// True iff a call to `callee` yields a borrow (owns no +1) — consult the structural
+// fixpoint set. FULLY STRUCTURAL — no callee-name allowlist whatsoever, including for
+// allocators. The allocator family (`__mm_alloc` → `__slab_alloc` → `__slab_alloc_class`
+// / `__slab_os_direct_alloc`) is classified owns-+1 by the leaf rule directly:
+// `__slab_alloc_class` loads through a `globalAddr(__slab_mcache_base)`-rooted address
+// (the global-root discriminator in `addressIsParamRooted`), `__slab_os_direct_alloc`
+// returns an `osAllocPages` syscall result (`sysOpOwnsPlusOne`), and `__mm_alloc`'s
+// `slotBase + 32` header-offset inherits its base's ownership (`additiveConstOffsetBase`).
+// So no allocator ever enters `funcReturnsBorrow`, and a call to one here correctly
+// reports NOT-a-borrow with no name check. The bodyless element-loader intrinsics
+// (`__managed_mem_get` / `__managed_mem_cursor_current`) ARE real Maxon functions whose
+// bodies return a param-rooted `load`; `analyzeReturnBorrows` runs over the stdlib during
+// the STDLIB BUILD (where their bodies are present), classifies them borrow-returning by
+// that same leaf rule, and persists the result in `funcReturnsBorrow` (cache v72). The
+// user build restores it, so a call to `__managed_mem_get` here is recognized from the
+// cached structural fact, NOT a hardcoded name list a future intrinsic would silently
+// need adding to.
+function calleeReturnsBorrow(callee String, project Project) returns bool
+	return project.funcReturnsBorrow.contains(callee)
+end 'calleeReturnsBorrow'
+
+// Reclassify each borrow-returning call RESULT in `func` to `OwnershipClass.borrowed`
+// (it owns no +1, unlike the lowering default `callReturnRc1`'s assumption of a
+// transferred +1). Only managed / type-parameter call results with a USE the default
+// mishandles are touched:
+//
+//   CONTAINER-CONSUMED. The result is moved into a container's element storage. The
+//     container must take its OWN ref (the inserter's
+//     `planBorrowedElementContainerRetains`); the source collection still owns the
+//     element. (The original rung-28 over-free fix.) Applies to ANY borrow-returning
+//     callee, including the iterator `.current()` chain (cursor_current).
+//
+//   FORWARDED THROUGH A WRAPPER. The result of a borrow-returning stdlib FUNCTION is
+//     FORWARDED as this function's own return value (`Map.get` returns the borrow from
+//     `values.get(...)` — a call to `Array.get`). Returned as-is, the caller (which
+//     treats the result as `callReturnRc1`) consumes a +1 the borrow never owned and
+//     double-frees once the source collection's teardown frees the element (the
+//     `Map<K,Box>` get-borrow-after-free). Marking it `borrowed` makes the inserter's
+//     `planReturnedBorrowRetains` emit a layout-routed retain so the WRAPPER hands its
+//     caller a genuinely-owned +1; the caller's default `callReturnRc1` consumes it.
+//
+//     The repair is gated to a borrow-returning stdlib FUNCTION callee, NOT a bodyless
+//     borrow INTRINSIC (`__managed_mem_get` / `__managed_mem_cursor_current`). A leaf
+//     accessor whose return is the intrinsic directly (`Array.get`, `Iterator.current`)
+//     must KEEP returning a borrow: it is the form called INTERNALLY as a transient
+//     view (`Map.findSlot`/`contains` compare `keys.get(i)` without decreffing; the
+//     loop body reads `it.current()` without owning it), and retaining it there would
+//     leak (the source still owns the element). Repairing only the wrapper layer —
+//     the boundary where the value ESCAPES to an external keeper — fixes the kept-get
+//     contract without disturbing those internal borrows, and fires EXACTLY ONCE per
+//     forwarding chain (the leaf stays a borrow, the wrapper retains once). A direct
+//     user `arr.get(i)` kept past the array's life is repaired the same way at ITS
+//     enclosing function (which forwards the stdlib `Array.get`) — the rung-11 contract
+//     (proven for both the inlined and this non-inlined wrapper path).
+//
+// NARROWING (blast-radius control): a borrow-returning result that is STORED
+// (captured by a closure, stored into a non-container field) is left untouched —
+// reclassifying those was measured to regress (`ownership/closure-captures-
+// borrow`): the store-side machinery expects the stored value's class to carry
+// the +1 it moves. The three reclassified shapes (container-consumed,
+// wrapper-forwarded, transient-read-only) each have matching inserter handling
+// for the borrowed class.
+function reclassifyBorrowReturnResults(module StdModule, func IrFunction, project Project)
+	let returned = collectReturnedValues(module, func: func)
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("reclassifyBorrowReturnResults: blockRef not in module.blocks")
+		for opIdx in block.opRefs 'eachOp'
+			let op = try module.ops.get(opIdx) otherwise panic("reclassifyBorrowReturnResults: opIdx not in module.ops")
+			let res = borrowReturningCallResult(op, project: project)
+			if res.present 'borrowResult'
+				// Only a MANAGED result can be a refcounted borrow; a non-managed
+				// (primitive) result ignores the class. A type-parameter result is
+				// managed-at-runtime via its layout, so it is reclassified too.
+				let managed = func.isValueManaged(res.value) or func.isValueTypeParam(res.value)
+				let consumed = resultConsumedByContainer(module, func: func, resultId: res.value, project: project)
+				let forwarded = opCallsBorrowFunction(op, project: project) and valueIdArrayContains(returned, vid: res.value)
+				// THIRD case: a borrow result used ONLY TRANSIENTLY — never stored
+				// (heap field / slot / closure capture), never consumed by a container
+				// mutator, never returned; all uses are plain reads (a compare, a
+				// print, a field load). The default `callReturnRc1` plants a last-use
+				// RELEASE for a +1 the borrow never owned, stripping the container's
+				// own reference off the element (the `Log.fired` scan-loop
+				// over-release: each non-inlined `ArrayIterator.current` read decref'd
+				// the live element to 0 under the still-live array). `borrowed` (no
+				// acquire, no release) is exactly right for a transient read; the
+				// borrow's validity across its uses is the borrow-liveness machinery's
+				// job either way. Stored/captured borrows stay untouched (the measured
+				// `ownership/closure-captures-borrow` regression of a blanket flip).
+				let transientOnly = not valueIdArrayContains(returned, vid: res.value) and not borrowResultIsStoredAnywhere(module, func: func, resultId: res.value)
+				if managed and (consumed or forwarded or transientOnly) 'reclassify'
+					func.setValueOwnership(res.value, cls: OwnershipClass.borrowed)
+				end 'reclassify'
+			end 'borrowResult'
+		end 'eachOp'
+	end 'eachBlock'
+end 'reclassifyBorrowReturnResults'
+
+// True iff `op` is a direct/try call to a borrow-returning stdlib FUNCTION (one with
+// a Maxon body, in `funcReturnsBorrow`) — NOT a bodyless borrow intrinsic. This is
+// the wrapper-forwarding case repaired by `planReturnedBorrowRetains`: the leaf
+// intrinsic-returning accessors (`Array.get`/`Iterator.current`) stay borrows so
+// their internal transient-borrow callers are undisturbed.
+function opCallsBorrowFunction(op StdOp, project Project) returns bool
+	return match op 'dispatch'
+		arith gives false
+		control gives false
+		call(c) gives callIsBorrowFunction(c, project: project)
+		memory gives false
+		system gives false
+	end 'dispatch'
+end 'opCallsBorrowFunction'
+
+function callIsBorrowFunction(c StdCallOp, project Project) returns bool
+	return match c 'check'
+		ret gives false
+		call(_, callee, _) gives calleeIsBorrowFunction(callee, project: project)
+		tryCall(_, callee, _, _) gives calleeIsBorrowFunction(callee, project: project)
+		indirectCall to tailCall gives false
+		param gives false
+		errorReturn gives false
+	end 'check'
+end 'callIsBorrowFunction'
+
+// True iff `callee` is a borrow-returning WRAPPER FUNCTION (in the cached/fixpoint set)
+// whose result the enclosing function should retain when it FORWARDS it — i.e. NOT one
+// of the element-loader leaf intrinsics. This is the wrapper-retain boundary: the retain
+// that converts a forwarded borrow into a genuinely-owned `+1` must fire EXACTLY ONCE
+// per forwarding chain, at the OUTER wrapper. The chain is always
+// `__managed_mem_load_sized`(load) ← `__managed_mem_get`(fwd) ← `Array.get` ← `Map.get`;
+// excluding the `__managed_mem_*` element-loaders here makes the FIRST stdlib wrapper
+// (`Array.get`) NOT retain (its forwardee is an excluded loader) while the next
+// (`Map.get`) DOES — net one retain, where the borrow escapes to the user.
+//
+// The boundary marks WHERE the chain's retain lands (the retain-exactly-once semantic),
+// not whether a callee returns a borrow. It is now STRUCTURAL: the excluded loaders are
+// exactly the functions that route through the shared `__managed_mem_load_sized` load
+// primitive (`funcIsElementLoader`, computed during the stdlib build, cached v73). The
+// loaders are bodied forwarders indistinguishable from the wrappers by leaf-vs-forwarder
+// / has-body tests — but the wrappers call the LOADERS while the loaders call the load
+// PRIMITIVE, so "calls the primitive" cleanly separates them. Dropping the exclusion
+// DOUBLE-retains the get-borrow → leak (verified). A FUTURE element-loader added to
+// `lowerManagedMemBuiltin` is recognized automatically: it MUST call the primitive to do
+// its element load, so no list edit is needed.
+//
+// RELATED (not a synced copy): `StdLiveness.calleeReturnsReceiverBorrow` marks the
+// same CONCEPT — a result that is an interior borrow of arg 0 — for the liveness
+// extension, but its membership deliberately DIFFERS: it adds the list-node walkers
+// (`mrt_managed_list_*`) and omits `__managed_mem_get` (the element-get's live range
+// is already covered by other edges). It remains a name list (those walkers are
+// bodyless runtime primitives with no in-module body to scan).
+function calleeIsBorrowFunction(callee String, project Project) returns bool
+	if isElementLoaderIntrinsic(callee, project: project) 'loader'
+		return false
+	end 'loader'
+	return project.funcReturnsBorrow.contains(callee)
+end 'calleeIsBorrowFunction'
+
+// True iff `callee` is an element-loader CHAIN-BOUNDARY function — one that routes
+// through the shared sized-managed-element load primitive (`funcCallsElementLoadPrimitive`),
+// computed structurally during the stdlib build and persisted in `funcIsElementLoader`
+// (cache v73). Replaces a hardcoded name list: a future `__managed_mem_*` loader is
+// recognized automatically because it MUST call the load primitive, with no list edit.
+// Bare and `stdlib.`-qualified spellings both land in the set (the function's own name
+// as it appears in the module). The cache restore also seeds both spellings.
+function isElementLoaderIntrinsic(callee String, project Project) returns bool
+	return project.funcIsElementLoader.contains(callee)
+end 'isElementLoaderIntrinsic'
+
+// True iff `func`'s body directly calls `__managed_mem_load_sized` — the single
+// element-size-dispatched managed-pointer load primitive in the runtime. It is called
+// ONLY by the element loaders (`__managed_mem_get` / `__managed_mem_cursor_current`),
+// so "calls it" is the structural signature of an element-loader chain bottom: the layer
+// whose return is a RAW receiver-borrow (a load of the receiver's interior), below which
+// the wrapper-retain must NOT fire. Wrappers (`Array.get` / `Map.get`) call the loaders,
+// not the primitive, so they are correctly excluded.
+function funcCallsElementLoadPrimitive(module StdModule, func IrFunction) returns bool
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("funcCallsElementLoadPrimitive: blockRef not in module.blocks")
+		for opIdx in block.opRefs 'eachOp'
+			let op = try module.ops.get(opIdx) otherwise panic("funcCallsElementLoadPrimitive: opIdx not in module.ops")
+			if opCallsElementLoadPrimitive(op) 'calls'
+				return true
+			end 'calls'
+		end 'eachOp'
+	end 'eachBlock'
+	return false
+end 'funcCallsElementLoadPrimitive'
+
+function opCallsElementLoadPrimitive(op StdOp) returns bool
+	return match op 'dispatch'
+		arith gives false
+		control gives false
+		call(c) gives callTargetsElementLoadPrimitive(c)
+		memory gives false
+		system gives false
+	end 'dispatch'
+end 'opCallsElementLoadPrimitive'
+
+function callTargetsElementLoadPrimitive(c StdCallOp) returns bool
+	return match c 'check'
+		ret gives false
+		call(_, callee, _) gives calleeIsElementLoadPrimitive(callee)
+		tryCall(_, callee, _, _) gives calleeIsElementLoadPrimitive(callee)
+		indirectCall to tailCall gives false
+		param gives false
+		errorReturn gives false
+	end 'check'
+end 'callTargetsElementLoadPrimitive'
+
+// True iff `callee` is the sized-managed-element load primitive. This is the ONE
+// anchored runtime name in the boundary detection — a single chokepoint function, not a
+// growable list. Both link-leg spellings are matched.
+function calleeIsElementLoadPrimitive(callee String) returns bool
+	return callee == "stdlib.__managed_mem_load_sized" or callee == "__managed_mem_load_sized"
+end 'calleeIsElementLoadPrimitive'
+
+// The set of ValueIds returned by any `ret`/`errorReturn` terminator of `func` —
+// the values whose +1 (once they own one) transfers to the caller. Used to detect
+// a get-intrinsic borrow result the enclosing function FORWARDS as its own return
+// value, so the inserter retains it into a genuinely-owned +1.
+function collectReturnedValues(module StdModule, func IrFunction) returns ValueIdArray
+	var returned = ValueIdArray.create()
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("collectReturnedValues: blockRef not in module.blocks")
+		if not block.hasTerminatorOp() 'noTerm'
+			continue
+		end 'noTerm'
+		let term = try module.ops.get(block.terminatorIndex()) otherwise panic("collectReturnedValues: terminatorIndex not in module.ops")
+		let retVal = returnValueOf(term)
+		if retVal.present 'isReturn'
+			returned.push(retVal.value)
+		end 'isReturn'
+	end 'eachBlock'
+	return returned
+end 'collectReturnedValues'
+
+// True iff any op in `func` STORES `resultId` — into a heap field
+// (`storeIndirect` as the VALUE operand), a stack slot (`storeSlot`, including
+// closure-captured address-taken slots), or a global. A stored borrow escapes
+// into an owner whose teardown expects a real +1, so the transient-read
+// reclassification must not touch it.
+function borrowResultIsStoredAnywhere(module StdModule, func IrFunction, resultId ValueId) returns bool
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("borrowResultIsStoredAnywhere: blockRef not in module.blocks")
+		for opIdx in block.opRefs 'eachOp'
+			let op = try module.ops.get(opIdx) otherwise panic("borrowResultIsStoredAnywhere: opIdx not in module.ops")
+			if opStoresValue(op, vid: resultId) 'stored'
+				return true
+			end 'stored'
+		end 'eachOp'
+	end 'eachBlock'
+	return false
+end 'borrowResultIsStoredAnywhere'
+
+function opStoresValue(op StdOp, vid ValueId) returns bool
+	return match op 'dispatch'
+		arith gives false
+		control gives false
+		call gives false
+		memory(m) gives memOpStoresValue(m, vid: vid)
+		system(s) gives sysOpStoresValue(s, vid: vid)
+	end 'dispatch'
+end 'opStoresValue'
+
+function memOpStoresValue(m StdMemoryOp, vid ValueId) returns bool
+	return match m 'check'
+		storeSlot(_, valueId) gives valueId == vid
+		loadSlot gives false
+	end 'check'
+end 'memOpStoresValue'
+
+function sysOpStoresValue(s StdSystemOp, vid ValueId) returns bool
+	return match s 'check'
+		storeIndirect(_, _, valueId, _, _) gives valueId == vid
+		globalAddr to loadByte gives false
+		osExit to osWrite gives false
+		free gives false
+		osWriteErr to loadFramePtr gives false
+		funcAddr gives false
+		loadIndirect gives false
+		drop gives false
+		osAllocPages to osDirMkdir gives false
+		atomicInc to osLockRelease gives false
+		boxValue to dropTypeParam gives false
+	end 'check'
+end 'sysOpStoresValue'
+
+// True iff `resultId` is used anywhere in `func` as a non-self element argument to
+// a CONTAINER MUTATOR call (`Set.insert`/`Map.insert`/`Array.push`/…) — i.e. it is
+// MOVED into a container's element storage. A consumed borrow-returning result is
+// reclassified `borrowed` so the inserter's `planBorrowedElementContainerRetains`
+// makes the container take its own ref.
+function resultConsumedByContainer(module StdModule, func IrFunction, resultId ValueId, project Project) returns bool
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("resultConsumedByContainer: blockRef not in module.blocks")
+		for opIdx in block.opRefs 'eachOp'
+			let op = try module.ops.get(opIdx) otherwise panic("resultConsumedByContainer: opIdx not in module.ops")
+			// `callConsumesManagedElement` (the inserter's container-mutator consume
+			// recognizer) is the single source of truth for "is this op a container
+			// mutator consuming `resultId` as an element?" — shared here so the
+			// borrow-reclassification narrowing stays in lockstep with the inserter's
+			// `planBorrowedElementContainerRetains` consume set. Both read the same
+			// structural `project.funcParamConsumes` bits computed by
+			// `analyzeParamConsumes` (Concept C).
+			if callConsumesManagedElement(project.funcParamConsumes, op: op, argId: resultId) 'consumed'
+				return true
+			end 'consumed'
+		end 'eachOp'
+	end 'eachBlock'
+	return false
+end 'resultConsumedByContainer'
+
+// The result ValueId of `op` iff `op` is a direct/try call to a borrow-returning
+// callee, else `none`.
+function borrowReturningCallResult(op StdOp, project Project) returns RetValueOpt
+	return match op 'dispatch'
+		arith gives RetValueOpt.none()
+		control gives RetValueOpt.none()
+		call(c) gives borrowReturningCallResultOfCall(c, project: project)
+		memory gives RetValueOpt.none()
+		system gives RetValueOpt.none()
+	end 'dispatch'
+end 'borrowReturningCallResult'
+
+function borrowReturningCallResultOfCall(c StdCallOp, project Project) returns RetValueOpt
+	return match c 'check'
+		ret gives RetValueOpt.none()
+		call(resultId, callee, _) gives(RetValueOpt.some(resultId) if calleeReturnsBorrow(callee, project: project) else RetValueOpt.none())
+		tryCall(resultId, callee, _, _) gives(RetValueOpt.some(resultId) if calleeReturnsBorrow(callee, project: project) else RetValueOpt.none())
+		indirectCall to tailCall gives RetValueOpt.none()
+		param gives RetValueOpt.none()
+		errorReturn gives RetValueOpt.none()
+	end 'check'
+end 'borrowReturningCallResultOfCall'
+
+// Per-function map from a ValueId to the index of the op that DEFINES it (its
+// `writeIds`). Built once per function for the return-value provenance walk.
+typealias ValueDefMap = Map with (ValueId, OpIndex)
+
+function buildValueDefMap(module StdModule, func IrFunction) returns ValueDefMap
+	var defs = ValueDefMap.create()
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("buildValueDefMap: blockRef not in module.blocks")
+		for opIdx in block.opRefs 'eachOp'
+			let op = try module.ops.get(opIdx) otherwise panic("buildValueDefMap: opIdx not in module.ops")
+			let operands = extractStdOpOperands(op)
+			for writeId in operands.writeIds 'eachDef'
+				defs.upsert(writeId, value: opIdx)
+			end 'eachDef'
+		end 'eachOp'
+	end 'eachBlock'
+	return defs
+end 'buildValueDefMap'

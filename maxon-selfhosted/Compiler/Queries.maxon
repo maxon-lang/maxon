@@ -816,6 +816,16 @@ function dumpTargetLoweringIr(project Project, result CodeResult)
 	if project.target.cpu == CpuArch.wasm32 'noTarget'
 		return
 	end 'noTarget'
-	let content = targetModuleToString(result.targetModule, skipStdlib: false, cpu: project.target.cpu)
+	// `--dump-stages=NAMES` selection — claim the number, skip the render
+	// (mirrors `dumpPassIr`).
+	if not project.irDump.stageWanted("target-lowering") 'filtered'
+		claimStageNumber(project)
+		return
+	end 'filtered'
+
+	// Honor the same stdlib filter as the per-pass stage dumps: default to
+	// the user program only, include stdlib only under `--dump-stages-stdlib`.
+	let skipStdlib = project.irDump.renderSkipsStdlib()
+	let content = targetModuleToString(result.targetModule, skipStdlib: skipStdlib, cpu: project.target.cpu)
 	writeStageDumpFile(project, label: "target-lowering", phase: PipelinePhase.target, content: content)
 end 'dumpTargetLoweringIr'

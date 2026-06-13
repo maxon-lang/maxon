@@ -1,0 +1,109 @@
+// Test: rung-32-loop-carried-managed-var
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Box'
+
+function main() returns ExitCode
+	var acc = Box.create(0)
+	var i = 0
+	while i < 3 'accumulate'
+		acc = Box.create(acc.value + i + 1)
+		i = i + 1
+	end 'accumulate'
+	return acc.value
+end 'main'
+---
+MmTrace: true
+ExitCode: 6
+Stderr: ```
+mm_alloc Box #1 size=8 [Box.create]
+mm_incref Box #1 rc=1 [Box.create]
+mm_move Box #1 -> return [Box.create]
+mm_move Box #1 -> phi [main]
+mm_decref Box #1 rc=0 [main]
+  mm_free Box #1
+mm_alloc Box #2 size=8 [Box.create]
+mm_incref Box #2 rc=1 [Box.create]
+mm_move Box #2 -> return [Box.create]
+mm_move Box #2 -> phi [main]
+mm_decref Box #2 rc=0 [main]
+  mm_free Box #2
+mm_alloc Box #3 size=8 [Box.create]
+mm_incref Box #3 rc=1 [Box.create]
+mm_move Box #3 -> return [Box.create]
+mm_move Box #3 -> phi [main]
+mm_decref Box #3 rc=0 [main]
+  mm_free Box #3
+mm_alloc Box #4 size=8 [Box.create]
+mm_incref Box #4 rc=1 [Box.create]
+mm_move Box #4 -> return [Box.create]
+mm_move Box #4 -> phi [main]
+mm_decref Box #4 rc=0 [main]
+  mm_free Box #4
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %19 = mir.global_addr @__mtstr_scope_main
+    %20 = mir.call @mm_scope_push(%19)
+    %1 = mir.mov_imm 0 : i64
+    %23 = mir.global_addr @__mtstr_scope_Box_create
+    %24 = mir.call @mm_scope_push(%23)
+    %25 = mir.mov_imm 8 : i64
+    %26 = mir.mov_imm 0 : i64
+    %27 = mir.mov_imm 60 : i64
+    %28 = mir.call @stdlib.__mm_alloc(%25, %26, %27)
+    %41 = mir.call @stdlib.__mm_incref(%28)
+    mir.store %1, %28, 0 width: qword
+    %30 = mir.call @mm_move_return(%28)
+    %31 = mir.call @mm_scope_pop()
+    %3 = mir.mov_imm 0 : i64
+    %45 = mir.call @mm_move_phi(%28)
+    mir.br accumulate_0.header(%28, %3)
+  accumulate_0.header:
+    %5 = mir.mov_imm 3 : i64
+    %6 = mir.cmp lt, %22, %5
+    mir.cond_br %6 [then: accumulate_0(), else: accumulate_0.exit()]
+  accumulate_0:
+    %8 = mir.load %21, 0 width: qword
+    %10 = mir.add.i64 %8, %22
+    %43 = mir.call @__mm_decref_maybenull_helper(%21)
+    %11 = mir.mov_imm 1 : i64
+    %12 = mir.add.i64 %10, %11
+    %32 = mir.global_addr @__mtstr_scope_Box_create
+    %33 = mir.call @mm_scope_push(%32)
+    %34 = mir.mov_imm 8 : i64
+    %35 = mir.mov_imm 0 : i64
+    %36 = mir.mov_imm 60 : i64
+    %37 = mir.call @stdlib.__mm_alloc(%34, %35, %36)
+    %42 = mir.call @stdlib.__mm_incref(%37)
+    mir.store %12, %37, 0 width: qword
+    %39 = mir.call @mm_move_return(%37)
+    %40 = mir.call @mm_scope_pop()
+    %15 = mir.mov_imm 1 : i64
+    %16 = mir.add.i64 %22, %15
+    %46 = mir.call @mm_move_phi(%37)
+    mir.br accumulate_0.header(%37, %16)
+  accumulate_0.exit:
+    %18 = mir.load %21, 0 width: qword
+    %44 = mir.call @__mm_decref_maybenull_helper(%21)
+    %47 = mir.call @mm_scope_pop()
+    %48 = mir.mov_imm 125 : i64
+    %49 = mir.cmp ugt, %18, %48
+    mir.cond_br %49 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %50 = mir.global_addr @__panic_msg_307640d376df0d0d
+    %51 = mir.call @mrt_panic(%50)
+  __range_ok_0:
+    mir.ret %18
+  }
+}
+---

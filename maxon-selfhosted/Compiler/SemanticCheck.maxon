@@ -572,7 +572,7 @@ function maxonTypesMatchForConformance(project Project, expected MaxonType, actu
 	end 'giResult'
 	let expName = match expected 'expCase'
 		named(id) gives project.typeNames.get(id)
-		boolean to string gives ""
+		boolean to character gives ""
 		function to cstring gives ""
 	end 'expCase'
 	if expName.isEmpty() 'noExpName'
@@ -580,7 +580,7 @@ function maxonTypesMatchForConformance(project Project, expected MaxonType, actu
 	end 'noExpName'
 	let actParamName = match actual 'actCase'
 		typeParameter(id) gives project.typeParameters.getName(id)
-		boolean to string gives ""
+		boolean to character gives ""
 		named gives ""
 		function gives ""
 		unresolved gives ""
@@ -2154,10 +2154,11 @@ function argTypesCompatible(project Project, argType MaxonType, paramType MaxonT
 	if argEndpointIsDynamic(arg) or argEndpointIsDynamic(param) 'dynamicResolved'
 		return true
 	end 'dynamicResolved'
-	// Lowering's char-byte → Character coercion: a single-byte char literal is
-	// typed `int` on the fast path but legitimately initializes a `Character`
-	// param. `coerceArgToParam` accepts it via a runtime materialization.
-	if isIntType(arg) and namedTypeIs(project, t: param, name: "Character") 'charByte'
+	// Lowering's char-byte → char coercion: a single-byte char literal is
+	// typed `int` on the fast path but legitimately initializes a char-literal
+	// (`BuiltinCharLiteral`) param. `coerceArgToParam` accepts it via a runtime
+	// materialization.
+	if isIntType(arg) and namedTypeIs(project, t: param, name: builtinCharLiteralTypeName()) 'charByte'
 		return true
 	end 'charByte'
 	// Synthesized union companion types (`<Union>.unionCases`) interact with
@@ -2281,7 +2282,7 @@ end 'genericInstanceArgsById'
 // collection name itself.
 function collectionBaseName(project Project, t MaxonType) returns String
 	return match t 'k'
-		boolean to string gives ""
+		boolean to character gives ""
 		named(id) gives project.typeNames.get(id)
 		function to typeParameter gives ""
 		genericInstance(id) gives genericInstanceIdBaseName(project, id: id)
@@ -2394,6 +2395,7 @@ function isGenuinePrimitive(project Project, t MaxonType) returns bool
 		integer gives true
 		float gives true
 		string gives true
+		character gives true
 		named(id) gives namedIsPrimitiveAlias(project, name: project.typeNames.get(id))
 		function to cstring gives false
 	end 'k'

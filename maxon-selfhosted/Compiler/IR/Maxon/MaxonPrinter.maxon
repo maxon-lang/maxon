@@ -6,9 +6,9 @@ export function maxonModuleToString(project Project, module MaxonModule, skipStd
 	var body = ""
 	for func in module.functions 'eachFunc'
 		if skipStdlib 'filter'
-			if skipFunction(func.name) 'isRuntime'
+			if skipPrintedFunction(func) 'hidden'
 				continue
-			end 'isRuntime'
+			end 'hidden'
 		end 'filter'
 		// O(1)-amortized `append`, not O(n) interp reallocation — see the
 		// note in TargetPrinter.targetModuleToString.
@@ -43,7 +43,7 @@ function maxonFunctionToString(project Project, module MaxonModule, func IrFunct
 	let funcBlocks = resolveFuncBlocks(module.blocks, blockRefs: func.blockRefs)
 
 	for block in funcBlocks 'eachBlock'
-		sb.append("  {block.label}:\n")
+		sb.append("  {block.label}{formatBlockArgs(block)}:\n")
 
 		for opIdx in block.opRefs 'eachOp'
 			let opText = maxonOpIdxToString(project, module: module, opIdx: opIdx, blocks: funcBlocks)

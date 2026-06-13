@@ -9,92 +9,253 @@ function main() returns ExitCode
 end 'main'
 ---
 ExitCode: 42
----
-// CompiledIR
+RequiredIRSelfhosted: ```
+=== maxon
+module {
+  func @main() -> i64 {
+  entry:
+    %0 = maxon.call @Vec3.create
+    maxon.assign %0 {var = __call_tmp_0} {decl = 1 : i1}
+    maxon.assign %0 {var = v} {decl = 1 : i1} {mut = 1 : i1}
+    %1 = maxon.struct_var_ref v
+    %2 = maxon.literal {value = 0 : i64}
+    %3 = maxon.literal {value = 42 : i64}
+    %4 = maxon.try_call @Vec3.set %1, %2, %3
+    maxon.assign %4 {var = __try_error_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %5 = maxon.literal {value = 0 : i64}
+    %6 = maxon.binop %4, %5 {op = ne}
+    maxon.cond_br %6 [then: otherwise_panic_0, else: otherwise_continue_0]
+  otherwise_panic_0:
+    maxon.panic "panic at set-and-get.test:7: test invariant: set OOB"
+  otherwise_continue_0:
+    %7 = maxon.struct_var_ref v
+    %8 = maxon.literal {value = 0 : i64}
+    %11, %10 = maxon.try_call @Vec3.get %7, %8
+    %12 = maxon.literal {value = 0 : i64}
+    maxon.assign %12 {var = __try_default_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %11 {var = __try_result_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %13 = maxon.literal {value = 0 : i64}
+    %14 = maxon.binop %10, %13 {op = ne}
+    maxon.cond_br %14 [then: otherwise_default_error_0, else: otherwise_default_continue_0]
+  otherwise_default_error_0:
+    %15 = maxon.var_ref {var = __try_default_0} {type = i64}
+    maxon.assign %15 {var = __try_result_0} {kind = i64} {mut = 1 : i1}
+    maxon.br otherwise_default_continue_0
+  otherwise_default_continue_0:
+    %16 = maxon.var_ref {var = __try_result_0} {type = i64}
+    %17 = maxon.literal {value = 0 : i64}
+    %18 = maxon.binop %16, %17 {op = lt}
+    %19 = maxon.literal {value = 4294967295 : i64}
+    %20 = maxon.binop %16, %19 {op = gt}
+    %21 = maxon.binop %18, %20 {op = or}
+    maxon.cond_br %21 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    maxon.panic "panic at set-and-get.test:8: Range check failed: value outside typealias 'ExitCode'"
+  __range_ok_0:
+    maxon.scope_end [__try_error_0, v, __try_default_0, __try_result_0]
+    maxon.return %16
+  }
+}
+=== standard
 module {
   func @main() -> u32 {
   entry:
-    x64.prologue stack_size=16
-    x64.mov ecx, 8
-    x64.call mrt_alloc
-    x64.mov r12, r8
-    x64.mov ecx, 40
-    x64.call mrt_alloc
-    x64.xor r9d, r9d
-    x64.mov [r8+0], r9 (8b)
-    x64.xor r9d, r9d
-    x64.mov [r8+8], r9 (8b)
-    x64.xor r9d, r9d
-    x64.mov [r8+16], r9 (8b)
-    x64.mov r9d, 8
-    x64.mov [r8+24], r9 (8b)
-    x64.xor r9d, r9d
-    x64.mov [r8+32], r9 (8b)
-    x64.mov [r12+0], r8 (8b)
-    x64.mov r13, [r12+0] (8b)
-    x64.mov r8d, 3
-    x64.mov [r13+16], r8 (8b)
-    x64.mov r8d, 8
-    x64.mov [r13+24], r8 (8b)
-    x64.mov ecx, 24
-    x64.call mrt_alloc
-    x64.mov [r13+0], r8 (8b)
-    x64.mov r8d, 3
-    x64.mov [r13+8], r8 (8b)
-    x64.mov eax, 42
-    x64.xor r13d, r13d
-  inlined_Vector.set_0:
-    x64.mov rcx, [r12+0] (8b)
-    x64.mov rdx, r13
-    x64.call stdlib.__managed_mem_set
-    x64.test rdx, rdx
-    x64.je inlined_Vector.set_2
-  inlined_Vector.set_1:
-    x64.mov edx, 1
-    x64.xor r8d, r8d
-    x64.jmp inline_cont_main_0
-  inlined_Vector.set_2:
-    x64.xor edx, edx
-    x64.xor r8d, r8d
-  inline_cont_main_0:
-    x64.test rdx, rdx
-    x64.je inlined_Vector.get_0
-  try_0.otherwise:
-    x64.lea r12, [rip+__panic_msg_5412ac3f26a6251f]
-    x64.mov rcx, r12
-    x64.call mrt_panic
-    x64.mov r8, r13
-    x64.epilogue
-    x64.ret
-  inlined_Vector.get_0:
-    x64.mov rcx, [r12+0] (8b)
-    x64.mov rdx, r13
-    x64.call stdlib.__managed_mem_get
-    x64.test rdx, rdx
-    x64.je inlined_Vector.get_2
-  inlined_Vector.get_1:
-    x64.mov edx, 1
-    x64.xor r8d, r8d
-    x64.jmp inline_cont_main_1
-  inlined_Vector.get_2:
-    x64.xor edx, edx
-  inline_cont_main_1:
-    x64.test rdx, rdx
-    x64.je try_1.ok
-    x64.mov r8, r13
-    x64.jmp try_1.merge
-  try_1.ok:
-  try_1.merge:
-    x64.mov r9d, 4294967295
-    x64.cmp r8, r9
-    x64.jbe __range_ok_0
+    %0 = func.call @Vec3.create
+    memref.store %0, v
+    %3 = arith.constant {value = 0 : i64}
+    %4 = arith.constant {value = 42 : i64}
+    %5 = memref.load v : i64
+    %6 = func.try_call @Vec3.set %5, %3, %4
+    %7 = arith.constant {value = 0 : i64}
+    %8 = arith.cmpi ne %6, %7
+    cf.cond_br %8 [then: otherwise_panic_0, else: otherwise_continue_0]
+  otherwise_panic_0:
+    %9 = memref.lea_symdata __panic_msg_0
+    %10 = std.ptr_to_i64 %9
+    std.call_runtime @mrt_panic %10
+  otherwise_continue_0:
+    %11 = arith.constant {value = 0 : i64}
+    %12 = memref.load v : i64
+    %13, %14 = func.try_call @Vec3.get %12, %11
+    %15 = arith.constant {value = 0 : i64}
+    memref.store %15, __try_default_0
+    memref.store %13, __try_result_0
+    %16 = arith.constant {value = 0 : i64}
+    %17 = arith.cmpi ne %14, %16
+    cf.cond_br %17 [then: otherwise_default_error_0, else: otherwise_default_continue_0]
+  otherwise_default_error_0:
+    %18 = memref.load __try_default_0 : i64
+    memref.store %18, __try_result_0
+    cf.br otherwise_default_continue_0
+  otherwise_default_continue_0:
+    %19 = memref.load __try_result_0 : i64
+    %20 = arith.constant {value = 0 : i64}
+    %21 = arith.cmpi lt %19, %20
+    %22 = arith.constant {value = 4294967295 : i64}
+    %23 = arith.cmpi gt %19, %22
+    %24 = arith.ori1 %21, %23
+    cf.cond_br %24 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    x64.lea r12, [rip+__panic_msg_5fab73bedab2fc00]
-    x64.mov rcx, r12
+    %25 = memref.lea_symdata __panic_msg_1
+    %26 = std.ptr_to_i64 %25
+    std.call_runtime @mrt_panic %26
+  __range_ok_0:
+    %27 = memref.load v : i64
+    std.call_runtime_if_nonnull @mm_decref %27
+    func.return %19
+  }
+  func @__destruct___ManagedMemory_Int(ptr: i64) {
+  entry:
+    %30 = func.param ptr : StdI64
+    memref.store %30, __destr_ptr
+    %33 = memref.load __destr_ptr : i64
+    %34 = memref.load_indirect %33+16
+    %35 = arith.constant {value = -1 : i64}
+    %36 = arith.cmpi eq %34, %35
+    cf.cond_br %36 [then: slice_cleanup_0, else: check_owned_0]
+  slice_cleanup_0:
+    %37 = memref.load __destr_ptr : i64
+    %38 = memref.load_indirect %37+32
+    std.call_runtime_if_nonnull @mm_decref %38
+    cf.br skip_buf_0
+  check_owned_0:
+    %39 = memref.load __destr_ptr : i64
+    %40 = memref.load_indirect %39+16
+    %41 = arith.constant {value = -2 : i64}
+    %42 = arith.cmpi ne %40, %41
+    cf.cond_br %42 [then: free_buf_0, else: skip_buf_0]
+  free_buf_0:
+    %43 = memref.load __destr_ptr : i64
+    %44 = memref.load_indirect %43+0
+    std.call_runtime @mm_raw_free %44
+    cf.br skip_buf_0
+  skip_buf_0:
+    cf.br done
+  done:
+    func.return
+  }
+  func @__destruct_Vec3(ptr: i64) {
+  entry:
+    %45 = func.param ptr : StdI64
+    memref.store %45, __destr_ptr
+    %46 = memref.load __destr_ptr : i64
+    %47 = memref.load_indirect %46+0
+    std.call_runtime_if_nonnull @mm_decref %47
+    cf.br done
+  done:
+    func.return
+  }
+}
+=== x86
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.call Vec3.create
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.xor edx, edx
+    x64.mov r8, 42
+    x64.call Vec3.set
+    x64.xor ecx, ecx
+    x64.cmp rdx, rcx
+    x64.je main.otherwise_continue_0
+  otherwise_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  otherwise_continue_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.xor edx, edx
+    x64.call Vec3.get
+    x64.xor ecx, ecx
+    x64.mov [rbp-16], rcx
+    x64.mov [rbp-24], rax
+    x64.xor eax, eax
+    x64.cmp rdx, rax
+    x64.je main.otherwise_default_continue_0
+  otherwise_default_error_0:
+    x64.mov rax, [rbp-16]
+    x64.mov [rbp-24], rax
+    x64.jmp main.otherwise_default_continue_0
+  otherwise_default_continue_0:
+    x64.mov rax, [rbp-24]
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_1]
+    x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_0:
+    x64.mov rbx, [rbp-8]
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rax, [rbp-24]
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct___ManagedMemory_Int(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.mov rdx, -1
+    x64.cmp rcx, rdx
+    x64.jne __destruct___ManagedMemory_Int.check_owned_0
+  slice_cleanup_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+32]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_0
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.jmp __destruct___ManagedMemory_Int.skip_buf_0
+  check_owned_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.mov rdx, -2
+    x64.cmp rcx, rdx
+    x64.je __destruct___ManagedMemory_Int.skip_buf_0
+  free_buf_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.call mm_raw_free
+    x64.jmp __destruct___ManagedMemory_Int.skip_buf_0
+  skip_buf_0:
+    x64.jmp __destruct___ManagedMemory_Int.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Vec3(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_0
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.jmp __destruct_Vec3.done
+  done:
     x64.epilogue
     x64.ret
   }
 }
+```
+---
 ---

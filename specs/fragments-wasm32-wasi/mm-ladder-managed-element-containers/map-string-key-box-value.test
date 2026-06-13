@@ -1,0 +1,303 @@
+// Test: map-string-key-box-value
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Box'
+
+typealias StrBoxMap = Map with (String, Box)
+
+function main() returns ExitCode
+	var m = StrBoxMap.create()
+	m.upsert("alpha", value: Box.create(7))
+	m.upsert("beta", value: Box.create(9))
+	let b = try m.get("alpha") otherwise return 99
+	return b.value
+end 'main'
+---
+MmTrace: true
+ExitCode: 7
+Stderr: ```
+mm_alloc Map #1 size=40 [main]
+mm_alloc Array #2 size=8 [main]
+mm_incref Array #2 rc=1 [main]
+mm_alloc __ManagedMemory #3 size=48 [main]
+mm_incref __ManagedMemory #3 rc=1 [main]
+mm_move Array #2 -> return [main]
+mm_move Array #2 -> return
+mm_alloc Array #4 size=8
+mm_incref Array #4 rc=1
+mm_alloc __ManagedMemory #5 size=48
+mm_incref __ManagedMemory #5 rc=1
+mm_move Array #4 -> return
+mm_move Array #4 -> return
+mm_alloc Array #6 size=8
+mm_incref Array #6 rc=1
+mm_alloc __ManagedMemory #7 size=48
+mm_incref __ManagedMemory #7 rc=1
+mm_move Array #6 -> return
+mm_move Array #6 -> return
+mm_move Map #1 -> return
+mm_alloc <raw> #8 size=40
+mm_incref <raw> #8 rc=1
+mm_alloc String #9 size=16
+mm_incref String #9 rc=1
+mm_alloc Box #10 size=8 [Box.create]
+mm_incref Box #10 rc=1 [Box.create]
+mm_move Box #10 -> return [Box.create]
+mm_move Box #10 -> container
+mm_move String #9 -> container
+mm_alloc Array #11 size=8
+mm_incref Array #11 rc=1
+mm_alloc __ManagedMemory #12 size=48
+mm_incref __ManagedMemory #12 rc=1
+mm_decref Array #2 rc=0
+  mm_decref __ManagedMemory #3 rc=0
+    mm_free __ManagedMemory #3
+  mm_free Array #2
+mm_alloc <raw> #13 size=128
+mm_incref <raw> #13 rc=1
+mm_alloc Array #14 size=8
+mm_incref Array #14 rc=1
+mm_alloc __ManagedMemory #15 size=48
+mm_incref __ManagedMemory #15 rc=1
+mm_decref Array #4 rc=0
+  mm_decref __ManagedMemory #5 rc=0
+    mm_free __ManagedMemory #5
+  mm_free Array #4
+mm_alloc <raw> #16 size=128
+mm_incref <raw> #16 rc=1
+mm_alloc Array #17 size=8
+mm_incref Array #17 rc=1
+mm_alloc __ManagedMemory #18 size=48
+mm_incref __ManagedMemory #18 rc=1
+mm_decref Array #6 rc=0
+  mm_decref __ManagedMemory #7 rc=0
+    mm_free __ManagedMemory #7
+  mm_free Array #6
+mm_alloc <raw> #19 size=128
+mm_incref <raw> #19 rc=1
+mm_alloc <raw> #20 size=40
+mm_incref <raw> #20 rc=1
+mm_alloc String #21 size=16
+mm_incref String #21 rc=1
+mm_alloc Box #22 size=8 [Box.create]
+mm_incref Box #22 rc=1 [Box.create]
+mm_move Box #22 -> return [Box.create]
+mm_move Box #22 -> container
+mm_move String #21 -> container
+mm_alloc <raw> #23 size=40
+mm_incref <raw> #23 rc=1
+mm_alloc String #24 size=16
+mm_incref Box #10 rc=2
+mm_drop String #24
+    mm_decref <raw> #23 rc=0
+      mm_free <raw> #23
+    mm_free String #24
+mm_drop Map #1
+    mm_decref Array #11 rc=0
+      mm_decref __ManagedMemory #12 rc=0
+        mm_decref String #21 rc=0
+          mm_decref <raw> #20 rc=0
+            mm_free <raw> #20
+          mm_free String #21
+        mm_decref String #9 rc=0
+          mm_decref <raw> #8 rc=0
+            mm_free <raw> #8
+          mm_free String #9
+        mm_decref <raw> #13 rc=0
+          mm_free <raw> #13
+        mm_free __ManagedMemory #12
+      mm_free Array #11
+    mm_decref Array #14 rc=0
+      mm_decref __ManagedMemory #15 rc=0
+        mm_decref Box #22 rc=0
+          mm_free Box #22
+        mm_decref Box #10 rc=1
+        mm_decref <raw> #16 rc=0
+          mm_free <raw> #16
+        mm_free __ManagedMemory #15
+      mm_free Array #14
+    mm_decref Array #17 rc=0
+      mm_decref __ManagedMemory #18 rc=0
+        mm_decref <raw> #19 rc=0
+          mm_free <raw> #19
+        mm_free __ManagedMemory #18
+      mm_free Array #17
+    mm_free Map #1
+mm_decref Box #10 rc=0
+  mm_free Box #10
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %73 = mir.global_addr @__mtstr_scope_main
+    %74 = mir.call @mm_scope_push(%73)
+    %0 = mir.mov_imm 0 : i64
+    %3 = mir.global_addr @__layout_Map_String_Box
+    %75 = mir.mov_imm 40 : i64
+    %76 = mir.func_addr @__destruct_Map
+    %77 = mir.mov_imm 37 : i64
+    %78 = mir.call @stdlib.__mm_alloc(%75, %76, %77)
+    %105 = mir.load %3, 24 width: qword
+    %106 = mir.mov_imm 8 : i64
+    %107 = mir.shr.i64 %105, %106
+    %108 = mir.mov_imm 1 : i64
+    %109 = mir.and.i64 %107, %108
+    %110 = mir.global_addr @__layout_elem_managed
+    %111 = mir.global_addr @__layout_elem_raw
+    %112 = mir.sub.i64 %110, %111
+    %113 = mir.mul.i64 %109, %112
+    %114 = mir.add.i64 %111, %113
+    %115 = mir.call @Array.create(%114)
+    %117 = mir.call @mm_move_return(%115)
+    %118 = mir.call @mm_scope_pop()
+    mir.store %115, %78, 0 width: qword
+    %119 = mir.load %3, 24 width: qword
+    %120 = mir.mov_imm 9 : i64
+    %121 = mir.shr.i64 %119, %120
+    %122 = mir.mov_imm 1 : i64
+    %123 = mir.and.i64 %121, %122
+    %124 = mir.global_addr @__layout_elem_managed
+    %125 = mir.global_addr @__layout_elem_raw
+    %126 = mir.sub.i64 %124, %125
+    %127 = mir.mul.i64 %123, %126
+    %128 = mir.add.i64 %125, %127
+    %129 = mir.call @Array.create(%128)
+    %131 = mir.call @mm_move_return(%129)
+    %132 = mir.call @mm_scope_pop()
+    mir.store %129, %78, 8 width: qword
+    %133 = mir.global_addr @__layout_Array_SlotState
+    %134 = mir.call @Array.create(%133)
+    %136 = mir.call @mm_move_return(%134)
+    %137 = mir.call @mm_scope_pop()
+    mir.store %134, %78, 16 width: qword
+    %138 = mir.mov_imm 0 : i64
+    %140 = mir.call @mm_scope_pop()
+    mir.store %138, %78, 24 width: qword
+    %141 = mir.mov_imm 0 : i64
+    %143 = mir.call @mm_scope_pop()
+    mir.store %141, %78, 32 width: qword
+    %85 = mir.call @mm_move_return(%78)
+    %86 = mir.call @mm_scope_pop()
+    %8 = mir.global_addr @__istr_0
+    %9 = mir.mov_imm 40 : i64
+    %10 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %11 = mir.call @mrt_alloc_with_dtor(%9, %10)
+    mir.store %8, %11, 0 width: qword
+    %12 = mir.mov_imm 5 : i64
+    mir.store %12, %11, 8 width: qword
+    %13 = mir.mov_imm -2 : i64
+    mir.store %13, %11, 16 width: qword
+    %14 = mir.mov_imm 1 : i64
+    mir.store %14, %11, 24 width: qword
+    mir.store %0, %11, 32 width: qword
+    %16 = mir.mov_imm 16 : i64
+    %17 = mir.func_addr @__destruct_String
+    %18 = mir.mov_imm 6 : i64
+    %19 = mir.call @stdlib.__mm_alloc(%16, %17, %18)
+    %144 = mir.call @stdlib.__mm_incref(%19)
+    mir.store %11, %19, 0 width: qword
+    mir.store %14, %19, 8 width: qword
+    %21 = mir.mov_imm 7 : i64
+    %87 = mir.global_addr @__mtstr_scope_Box_create
+    %88 = mir.call @mm_scope_push(%87)
+    %89 = mir.mov_imm 8 : i64
+    %90 = mir.mov_imm 0 : i64
+    %91 = mir.mov_imm 60 : i64
+    %92 = mir.call @stdlib.__mm_alloc(%89, %90, %91)
+    %145 = mir.call @stdlib.__mm_incref(%92)
+    mir.store %21, %92, 0 width: qword
+    %94 = mir.call @mm_move_return(%92)
+    %95 = mir.call @mm_scope_pop()
+    %23 = mir.global_addr @__layout_Map_String_Box
+    %24 = mir.global_addr @__witness_String_Hashable
+    %25 = mir.global_addr @__witness_String_Equatable
+    %152 = mir.call @mm_move_container(%92)
+    %151 = mir.call @mm_move_container(%19)
+    %26 = mir.call @Map.upsert(%78, %19, %92, %23, %24, %25)
+    %28 = mir.global_addr @__istr_1
+    %29 = mir.mov_imm 40 : i64
+    %30 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %31 = mir.call @mrt_alloc_with_dtor(%29, %30)
+    mir.store %28, %31, 0 width: qword
+    %32 = mir.mov_imm 4 : i64
+    mir.store %32, %31, 8 width: qword
+    %33 = mir.mov_imm -2 : i64
+    mir.store %33, %31, 16 width: qword
+    mir.store %14, %31, 24 width: qword
+    mir.store %0, %31, 32 width: qword
+    %36 = mir.mov_imm 16 : i64
+    %37 = mir.func_addr @__destruct_String
+    %38 = mir.mov_imm 6 : i64
+    %39 = mir.call @stdlib.__mm_alloc(%36, %37, %38)
+    %146 = mir.call @stdlib.__mm_incref(%39)
+    mir.store %31, %39, 0 width: qword
+    mir.store %14, %39, 8 width: qword
+    %41 = mir.mov_imm 9 : i64
+    %96 = mir.global_addr @__mtstr_scope_Box_create
+    %97 = mir.call @mm_scope_push(%96)
+    %98 = mir.mov_imm 8 : i64
+    %99 = mir.mov_imm 0 : i64
+    %100 = mir.mov_imm 60 : i64
+    %101 = mir.call @stdlib.__mm_alloc(%98, %99, %100)
+    %147 = mir.call @stdlib.__mm_incref(%101)
+    mir.store %41, %101, 0 width: qword
+    %103 = mir.call @mm_move_return(%101)
+    %104 = mir.call @mm_scope_pop()
+    %43 = mir.global_addr @__layout_Map_String_Box
+    %44 = mir.global_addr @__witness_String_Hashable
+    %45 = mir.global_addr @__witness_String_Equatable
+    %154 = mir.call @mm_move_container(%101)
+    %153 = mir.call @mm_move_container(%39)
+    %46 = mir.call @Map.upsert(%78, %39, %101, %43, %44, %45)
+    %48 = mir.global_addr @__istr_0
+    %49 = mir.mov_imm 40 : i64
+    %50 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %51 = mir.call @mrt_alloc_with_dtor(%49, %50)
+    mir.store %48, %51, 0 width: qword
+    %52 = mir.mov_imm 5 : i64
+    mir.store %52, %51, 8 width: qword
+    %53 = mir.mov_imm -2 : i64
+    mir.store %53, %51, 16 width: qword
+    mir.store %14, %51, 24 width: qword
+    mir.store %0, %51, 32 width: qword
+    %56 = mir.mov_imm 16 : i64
+    %57 = mir.func_addr @__destruct_String
+    %58 = mir.mov_imm 6 : i64
+    %59 = mir.call @stdlib.__mm_alloc(%56, %57, %58)
+    mir.store %51, %59, 0 width: qword
+    mir.store %14, %59, 8 width: qword
+    %61 = mir.global_addr @__layout_Map_String_Box
+    %62 = mir.global_addr @__witness_String_Hashable
+    %63 = mir.global_addr @__witness_String_Equatable
+    %64, %65 = mir.try_call @Map.get(%78, %59, %61, %62, %63)
+    %149 = mir.call @mm_drop(%59)
+    %148 = mir.call @mm_drop(%78)
+    %67 = mir.cmp ne, %65, %0
+    mir.cond_br %67 [then: try_0.otherwise(), else: try_0.merge()]
+  try_0.otherwise:
+    %69 = mir.mov_imm 99 : i64
+    %155 = mir.call @mm_scope_pop()
+    mir.ret %69
+  try_0.merge:
+    %72 = mir.load %64, 0 width: qword
+    %150 = mir.call @stdlib.__mm_decref(%64)
+    %156 = mir.call @mm_scope_pop()
+    %157 = mir.mov_imm 125 : i64
+    %158 = mir.cmp ugt, %72, %157
+    mir.cond_br %158 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %159 = mir.global_addr @__panic_msg_4bbdb37ddd6f7589
+    %160 = mir.call @mrt_panic(%159)
+  __range_ok_0:
+    mir.ret %72
+  }
+}
+---

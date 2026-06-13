@@ -1038,7 +1038,8 @@ maxon lsp-server             # Start LSP server for IDE integration
 | Option | Description |
 |--------|-------------|
 | `--emit-ir` | Output IR to `<source>.ir` |
-| `--dump-stages` | Write IR at each pipeline stage |
+| `--dump-stages` | Write IR at each pipeline stage (user program only) |
+| `--dump-stages-stdlib` | Like `--dump-stages` but include the full stdlib IR (implies `--dump-stages`) |
 | `--mm-trace` | Enable runtime memory manager trace output (stderr) |
 | `--log=LEVEL` | Set log level (none, error, info, debug, trace) |
 | `--log=CAT:LEVEL` | Set log level per category |

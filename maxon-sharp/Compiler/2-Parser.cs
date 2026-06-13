@@ -1278,6 +1278,8 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       ["self", "index", "count"], [mm, IrType.I64, IrType.I64], null, throwsType: mmErr);
     RegisterBuiltinMethod("__ManagedMemory", "shiftLeft",
       ["self", "index", "count"], [mm, IrType.I64, IrType.I64], null, throwsType: mmErr);
+    RegisterBuiltinMethod("__ManagedMemory", "swap",
+      ["self", "i", "j"], [mm, IrType.I64, IrType.I64], null, throwsType: mmErr);
     RegisterBuiltinMethod("__ManagedMemory", "byteAt",
       ["self", "index"], [mm, IrType.I64], IrType.I64, throwsType: mmErr);
     RegisterBuiltinMethod("__ManagedMemory", "setByte",
@@ -9987,7 +9989,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   private static bool IsMutatingBuiltinMethod(string baseTypeName, string methodName) =>
     baseTypeName switch {
       "__ManagedMemory" => methodName is "set" or "remove" or "clear" or "setLength" or "grow"
-        or "shiftRight" or "shiftLeft" or "setByte" or "append",
+        or "shiftRight" or "shiftLeft" or "swap" or "setByte" or "append",
       "__ManagedList" => methodName is "insertFirst" or "insertLast" or "insertAfter" or "insertBefore"
         or "reinsertFirst" or "reinsertLast" or "reinsertAfter" or "reinsertBefore"
         or "detach" or "remove" or "clear" or "cursorReset" or "cursorStart" or "cursorAdvance",
@@ -10132,6 +10134,12 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         var index = args[1];
         var count = args[2];
         EmitBuiltinTryCall("__managed_mem_shift_left", [selfValue, index, count], null, null, mmErr);
+        return (true, null);
+      }
+      case "swap": {
+        var i = args[1];
+        var j = args[2];
+        EmitBuiltinTryCall("__managed_mem_swap", [selfValue, i, j], null, null, mmErr);
         return (true, null);
       }
       case "byteAt": {

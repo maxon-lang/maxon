@@ -395,7 +395,37 @@ function linkX64StdlibFunctionsConcat(code ByteArray, labelNames StringArray, la
 	// seed addition that pulls the same names into the cache-off pipeline.
 	if os == Os.windows 'win32Helpers'
 		seeds.push("mrt_alloc")
+		// The hand-emitted `__ManagedSocket` wrap in `emitX64NetTcpConnect` calls
+		// `mrt_alloc_with_dtor` via a late call fixup the reachability pass can't
+		// see — seed it so the linker keeps it (else the fixup resolves to .text+0).
+		seeds.push("mrt_alloc_with_dtor")
 		seeds.push("mm_decref")
+		// `emitX64Win32FreeArgvCache` (the argv-cache teardown helper, emitted after
+		// this link pass) calls `__mm_decref_maybenull_helper` to release each cached
+		// argv buffer + the pointer array. Seed it here (cache-on) so the fixup
+		// resolves; mirrored in the cache-off filterRuntimeByReachability win32 block.
+		seeds.push("__mm_decref_maybenull_helper")
+		// `mm_drop` — the insert-refcounts owner-drop wrapper. Seed it (cache-on)
+		// like `mm_decref`; mirrored in the cache-off filterRuntimeByReachability so
+		// `__mm_drop` is pulled symmetrically into both legs (cache parity).
+		seeds.push("mm_drop")
+		// `mm_retain_type_param` — the insert-refcounts borrowed-element container
+		// retain wrapper (emitted late, no source call edge). Seed it symmetrically.
+		seeds.push("mm_retain_type_param")
+		// Per-arg-ordinal forms (a multi-type-param generic routes a value's
+		// retain/drop through its OWN heap-ref bit). Same late-emission seeding.
+		seeds.push("mm_retain_type_param_at")
+		seeds.push("mm_drop_type_param_at")
+		// `mm_move_{return,container,phi}` — the insert-refcounts trace-only ownership-
+		// move markers (destination baked into the callee). Same symmetric seeding as
+		// `mm_drop` so `__mm_move_trace` lands in both legs.
+		seeds.push("mm_move_return")
+		seeds.push("mm_move_container")
+		seeds.push("mm_move_phi")
+		// `mm_scope_push`/`mm_scope_pop` — mm-trace scope-stack frame bracketing.
+		// Same symmetric seeding so `__mm_scope_push`/`__mm_scope_pop` land in both legs.
+		seeds.push("mm_scope_push")
+		seeds.push("mm_scope_pop")
 		// `emitX64GreenThreadRuntime` (also emitted after this link pass) hand-rolls
 		// `__gt_trace_emit`, whose call fixups reference these two async-trace helpers
 		// (runtime-gated by `__at_trace_enabled`). No other call edge reaches them in
@@ -407,6 +437,17 @@ function linkX64StdlibFunctionsConcat(code ByteArray, labelNames StringArray, la
 		// as the async-trace helpers, so seed them explicitly.
 		seeds.push("mrt_write_cstr_stderr")
 		seeds.push("mm_trace_print_hex")
+		// `emitX64SubprocessRuntime` (emitted after this pass) hand-rolls the
+		// subprocess readline / last-error / stream-copy helpers, which allocate
+		// result buffers directly via `__slab_alloc`/`__slab_free` and wrap them
+		// into managed memory via `__managed_mem_create`. These slab/managed
+		// functions now live in Internals (`stdlib.`-qualified in the cache); the
+		// late call fixups reference them bare, so seed them or a subprocess-using
+		// program with no other MM edge resolves the calls to .text+0.
+		// `computeNeededStdlibFunctions` bridges the bare seed to the qualified key.
+		seeds.push("__slab_alloc")
+		seeds.push("__slab_free")
+		seeds.push("__managed_mem_create")
 	end 'win32Helpers'
 
 	var needed = computeNeededStdlibFunctions(seeds, stdlibCache: stdlibCache)
@@ -475,17 +516,48 @@ export typealias BlockJumpFixupArray = Array with BlockJumpFixup
 // engine.
 typealias CodeLabelOffsetMap = Map with (String, CodeOffset)
 
+// Strip a leading `stdlib.` namespace prefix from a recorded label name, giving
+// the bare symbol a runtime.std (Std-IR) call site references. Returns the input
+// unchanged when there is no such prefix.
+function stripStdlibPrefix(name String) returns String
+	let prefix = "stdlib."
+	if not name.startsWith(prefix) 'noPrefix'
+		return name
+	end 'noPrefix'
+	var idx = name.startIndex()
+	for _ in 0 upto prefix.byteLength() 'advance'
+		idx = try name.indexAfter(idx) otherwise return name
+	end 'advance'
+	return name.slice(idx, endIndex: name.endIndex())
+end 'stripStdlibPrefix'
+
 function recordLabel(labelNames StringArray, labelOffsets CodeOffsetArray, labelOffsetMap CodeLabelOffsetMap, name String, offset CodeOffset)
 	logTrace(LogCategory.codegen, message: function() gives "Label '{name}' at code offset {offset}")
 	labelNames.push(name)
 	labelOffsets.push(offset)
 	labelOffsetMap.upsert(name, value: offset)
+	// Bare alias for a `stdlib.`-qualified definition so a bare call site (from
+	// runtime.std Std-IR, which has no namespace form) resolves to a Maxon-phase
+	// Internals function recorded under its `stdlib.`-qualified name. The bridge
+	// is symmetric with `lookupFuncParamTypes`/`calleeNameMatches`.
+	if name.startsWith("stdlib.") 'qualified'
+		labelOffsetMap.upsert(stripStdlibPrefix(name), value: offset)
+	end 'qualified'
 end 'recordLabel'
 
 function lookupLabel(labelOffsetMap CodeLabelOffsetMap, name String) returns CodeOffset
 	let offset = try labelOffsetMap.get(name) otherwise 'missing'
-		logError(LogCategory.codegen, message: function() gives "Unresolved label '{name}' -- call will jump to offset 0")
-		return 0
+		// Bare callee -> `stdlib.`-qualified def: a call emitted bare (from
+		// runtime.std Std-IR) may target a function whose definition was recorded
+		// `stdlib.`-qualified (a Maxon-phase Internals function). `recordLabel`
+		// also records the bare alias for qualified defs, so the reverse (qualified
+		// call -> bare def) resolves on the exact lookup above; this fallback covers
+		// a bare call against a qualified-only record.
+		let qualifiedOffset = try labelOffsetMap.get("stdlib.{name}") otherwise 'stillMissing'
+			logError(LogCategory.codegen, message: function() gives "Unresolved label '{name}' -- call will jump to offset 0")
+			return 0
+		end 'stillMissing'
+		return qualifiedOffset
 	end 'missing'
 	return offset
 end 'lookupLabel'
@@ -2966,6 +3038,9 @@ function emitX64Win32Helpers(code ByteArray, relocations RelocationArray, callFi
 	// `rdataRelocs` array to record .data displacement fixups.
 	emitX64Win32GetArgc(code, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
 	emitX64Win32GetArgv(code, callFixups: callFixups, rdataRelocs: rdataRelocs, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
+	// Teardown counterpart to GetArgc: frees the lazily-built argv cache at exit
+	// so its `mrt_alloc`'d array + per-arg buffers don't read as permanent leaks.
+	emitX64Win32FreeArgvCache(code, callFixups: callFixups, rdataRelocs: rdataRelocs, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
 	emitX64Win32GetExecutablePath(code, relocations: relocations, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
 end 'emitX64Win32Helpers'
 
@@ -3147,6 +3222,8 @@ function emitX64GreenThreadRuntime(code ByteArray, relocations RelocationArray, 
 	emitX64GtDequeue(code, relocations: relocations, rdataRelocs: rdataRelocs, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
 	emitX64GtInit(code, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
 	emitX64GtSpawn(code, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
+	emitX64GtCancel(code, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
+	emitX64GtCleanup(code, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
 	emitX64GtTrampoline(code, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
 	emitX64GtProcessPendingWaiter(code, callFixups: callFixups, rdataRelocs: rdataRelocs, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
 	emitX64GtTraceEmit(code, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
@@ -7231,6 +7308,219 @@ function emitX64GtSpawn(code ByteArray, relocations RelocationArray, callFixups 
 	helperEpilogue(code)
 end 'emitX64GtSpawn'
 
+// __gt_cancel(gt=rcx): request cancellation — gt.cancel_flag = 1. Ports C#
+// EmitGtCancel MINUS the CancelIoEx arm: the self-hosted IOCP machinery is
+// inert (GtOffIoHandle is never written — see the GtOff block comment), so
+// there is no in-flight OVERLAPPED to abort yet. The flag is consumed by
+// nothing at runtime today; the cleanup drain (below) runs every still-live
+// GT to completion regardless, which is what the leak gate needs. Internal
+// ABI; no result.
+function emitX64GtCancel(code ByteArray, funcLabelNames StringArray, funcLabelOffsets CodeOffsetArray, funcLabelOffsetMap CodeLabelOffsetMap)
+	recordLabel(funcLabelNames, labelOffsets: funcLabelOffsets, labelOffsetMap: funcLabelOffsetMap, name: "__gt_cancel", offset: code.count())
+	var state = Win32HelperState.create(1, outgoingBytes: 0, localBytes: 0)
+	helperPrologue(code, frameSize: 0)
+	helperMarkBlock(state, code: code, blockId: 0)
+	helperMovRegImm(code, dest: X64Register.rax, value: 1)
+	helperStoreIndirect(code, base: X64Register.rcx, disp: GtOffCancelFlag, src: X64Register.rax)
+	helperFinalize(state, code: code)
+	helperEpilogue(code)
+end 'emitX64GtCancel'
+
+// __gt_cleanup(): called from mrt_start after main returns (the
+// patchMrtStartCallGtCleanup injection), BEFORE the global-decref /
+// io-shutdown / leak-gate patches. Ports C# EmitGtCleanup:
+//   Step 1 — flag every live GT cancelled (the all-threads walk; CancelIoEx
+//            omitted, see emitX64GtCancel).
+//   Step 2 — set __sched_shutdown_flag and SetEvent every worker's wake event
+//            so parked workers exit their loops.
+//   Step 3 — drain: run queued GTs to completion ON THIS (main) thread; when
+//            the queue is empty but GTs are still live (sleeping / io-parked),
+//            wait briefly and re-check (a bounded wait rather than C#'s
+//            INFINITE io_done_event wait, so an expired-timer GT is re-queued
+//            by __gt_timer_check without needing an I/O completion to wake us).
+//   Step 4 — wait (5s cap each) for the worker OS threads to exit.
+// C#'s Step 5 (slab-freeing the per-P GT free lists) is intentionally NOT
+// ported: GT records are __slab_alloc'd (invisible to the __mm_alloc_count
+// leak gate) and the process is about to exit — freeing them is busywork.
+//
+// Without this drain, main could exit while a spawned GT was mid-run (a
+// cancelled or never-awaited `async`), and the leak gate counted the GT's
+// in-flight allocations as leaks (async-await.cancel / managed-args-many /
+// the subprocess-async and async-tcp error paths).
+//
+// The drain frees a completed GT's stack + recycles its record ONLY when no
+// waiter is registered — a waiter's own __gt_await extract path performs that
+// teardown, and doing it here too would double-free (a guard C#'s drain does
+// not need to spell out because un-awaited promises never carry waiters).
+function emitX64GtCleanup(code ByteArray, relocations RelocationArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, funcLabelNames StringArray, funcLabelOffsets CodeOffsetArray, funcLabelOffsetMap CodeLabelOffsetMap)
+	recordLabel(funcLabelNames, labelOffsets: funcLabelOffsets, labelOffsetMap: funcLabelOffsetMap, name: "__gt_cleanup", offset: code.count())
+	// Blocks: 0=entry, 1=cancel_loop, 2=set_shutdown, 3=wake_loop, 4=wake_next,
+	// 5=drain, 6=run_done_check, 7=check_live, 8=teardown_gt, 9=free_full,
+	// 10=drain_continue, 11=wait_workers, 12=wait_wloop, 13=wait_wnext, 14=done.
+	// Slots: 0=GT cursor / dequeued GT, 1=num_procs, 2=i, 3=scratch P.
+	var state = Win32HelperState.create(15, outgoingBytes: 32, localBytes: 32)
+	helperPrologue(code, frameSize: 64)
+
+	// block 0: entry — cursor = __gt_all_head.
+	helperMarkBlock(state, code: code, blockId: 0)
+	helperLoadGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.rax, name: "__gt_all_head")
+	helperStoreSlot(code, slotIndex: 0, src: X64Register.rax)
+
+	// block 1: cancel_loop — flag each live GT, follow all_next.
+	helperMarkBlock(state, code: code, blockId: 1)
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.rax)
+	helperTestReg(code, reg: X64Register.rax)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 2)  // jz set_shutdown
+	helperMovRegImm(code, dest: X64Register.rcx, value: 1)
+	helperStoreIndirect(code, base: X64Register.rax, disp: GtOffCancelFlag, src: X64Register.rcx)
+	helperLoadIndirect(code, dest: X64Register.rax, base: X64Register.rax, disp: GtOffAllNext)
+	helperStoreSlot(code, slotIndex: 0, src: X64Register.rax)
+	helperEmitJmp(code, state: state, targetBlock: 1)
+
+	// block 2: set_shutdown — __sched_shutdown_flag = 1; i = 1; num_procs cached.
+	helperMarkBlock(state, code: code, blockId: 2)
+	helperMovRegImm(code, dest: X64Register.rax, value: 1)
+	helperStoreGlobal(code, rdataRelocs: rdataRelocs, src: X64Register.rax, name: "__sched_shutdown_flag")
+	helperLoadGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.rax, name: "__sched_num_procs")
+	helperStoreSlot(code, slotIndex: 1, src: X64Register.rax)
+	helperMovRegImm(code, dest: X64Register.rax, value: 1)
+	helperStoreSlot(code, slotIndex: 2, src: X64Register.rax)
+
+	// block 3: wake_loop — SetEvent(P[i].wakeEvent) for i in 1..num_procs.
+	helperMarkBlock(state, code: code, blockId: 3)
+	helperLoadSlot(code, slotIndex: 2, dest: X64Register.rax)
+	helperLoadSlot(code, slotIndex: 1, dest: X64Register.rdx)
+	code.append(b"\x48\x39\xd0")  // cmp rax, rdx
+	helperEmitCondJump(code, state: state, opcode: 0x83, targetBlock: 5)  // jae drain
+	helperLoadGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.rcx, name: "__sched_procs")
+	helperLoadSlot(code, slotIndex: 2, dest: X64Register.rdx)
+	code.append(b"\x48\x8d\x0c\xd1")  // lea rcx, [rcx + rdx*8]
+	helperLoadIndirect(code, dest: X64Register.rcx, base: X64Register.rcx, disp: 0)
+	helperLoadIndirect(code, dest: X64Register.rcx, base: X64Register.rcx, disp: POffWakeEvent)
+	helperTestReg(code, reg: X64Register.rcx)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 4)  // jz wake_next (never started)
+	emitX64GtIatCallOnSystemStack(code, relocations: relocations, rdataRelocs: rdataRelocs, slotIndex: iatSlotIndex(IatSlot.setEvent))
+
+	// block 4: wake_next — i++.
+	helperMarkBlock(state, code: code, blockId: 4)
+	helperLoadSlot(code, slotIndex: 2, dest: X64Register.rax)
+	code.append(b"\x48\x83\xc0\x01")  // add rax, 1
+	helperStoreSlot(code, slotIndex: 2, src: X64Register.rax)
+	helperEmitJmp(code, state: state, targetBlock: 3)
+
+	// block 5: drain — pump the waiter/io/timer queues, then run one GT.
+	helperMarkBlock(state, code: code, blockId: 5)
+	helperEmitDirectCall(code, callFixups: callFixups, target: "__gt_process_pending_waiter")
+	helperEmitDirectCall(code, callFixups: callFixups, target: "__io_check_completions")
+	helperEmitDirectCall(code, callFixups: callFixups, target: "__gt_timer_check")
+	helperEmitDirectCall(code, callFixups: callFixups, target: "__gt_dequeue")  // r8 = GT or 0
+	helperTestReg(code, reg: X64Register.r8)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 7)  // jz check_live
+	helperStoreSlot(code, slotIndex: 0, src: X64Register.r8)
+	// g.status = running ; context_switch(from = P->currentGt, to = g).
+	helperMovRegImm(code, dest: X64Register.rax, value: GtStatusRunning)
+	helperStoreIndirect(code, base: X64Register.r8, disp: GtOffStatus, src: X64Register.rax)
+	emitX64GtLoadCurrentP(code, dest: X64Register.rcx, rdataRelocs: rdataRelocs)
+	helperLoadIndirect(code, dest: X64Register.rcx, base: X64Register.rcx, disp: POffCurrentGt)
+	emitMovRegRegOp(code, dest: X64Register.rdx, src: X64Register.r8)
+	helperEmitDirectCall(code, callFixups: callFixups, target: "__gt_context_switch")
+	// Resumed: the GT we ran (slot 0) is off its stack — mark ioYielded from
+	// the local slot (the C# resume-point discipline, as in the worker loop).
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.rax)
+	helperMovRegImm(code, dest: X64Register.rcx, value: 1)
+	helperStoreIndirect(code, base: X64Register.rax, disp: GtOffIoYielded, src: X64Register.rcx)
+
+	// block 6: run_done_check — completed AND un-awaited → teardown; else drain.
+	helperMarkBlock(state, code: code, blockId: 6)
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.rax)
+	helperLoadIndirect(code, dest: X64Register.rcx, base: X64Register.rax, disp: GtOffStatus)
+	helperCmpRegImm(code, reg: X64Register.rcx, value: GtStatusCompleted)
+	helperEmitCondJump(code, state: state, opcode: 0x85, targetBlock: 5)  // jnz drain
+	helperLoadIndirect(code, dest: X64Register.rcx, base: X64Register.rax, disp: GtOffWaiter)
+	helperTestReg(code, reg: X64Register.rcx)
+	helperEmitCondJump(code, state: state, opcode: 0x85, targetBlock: 5)  // jnz drain (waiter owns teardown)
+	helperEmitJmp(code, state: state, targetBlock: 8)
+
+	// block 8: teardown_gt — VirtualFree the stack (if any), then recycle the
+	// record (free-list, overflow → __slab_free). Mirrors __gt_await's extract.
+	helperMarkBlock(state, code: code, blockId: 8)
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.r10)
+	helperLoadIndirect(code, dest: X64Register.rcx, base: X64Register.r10, disp: GtOffStackBase)
+	helperTestReg(code, reg: X64Register.rcx)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 10)  // jz drain_continue (no stack)
+	code.append(b"\x48\x31\xd2")  // xor rdx, rdx (dwSize = 0)
+	helperMovRegImm(code, dest: X64Register.r8, value: MemRelease)
+	helperEmitIatCall(code, relocations: relocations, slotIndex: iatSlotIndex(IatSlot.virtualFree))
+
+	// block 10: drain_continue — return the record to this P's free list.
+	helperMarkBlock(state, code: code, blockId: 10)
+	emitX64GtLoadCurrentP(code, dest: X64Register.r11, rdataRelocs: rdataRelocs)
+	helperLoadIndirect(code, dest: X64Register.rax, base: X64Register.r11, disp: POffFreeListLen)
+	helperCmpRegImm(code, reg: X64Register.rax, value: MaxFreeListLen)
+	helperEmitCondJump(code, state: state, opcode: 0x83, targetBlock: 9)  // jae free_full
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.rcx)
+	helperLoadIndirect(code, dest: X64Register.rax, base: X64Register.r11, disp: POffFreeListHead)
+	helperStoreIndirect(code, base: X64Register.rcx, disp: GtOffNext, src: X64Register.rax)
+	helperStoreIndirect(code, base: X64Register.r11, disp: POffFreeListHead, src: X64Register.rcx)
+	helperLoadIndirect(code, dest: X64Register.rax, base: X64Register.r11, disp: POffFreeListLen)
+	code.append(b"\x48\x83\xc0\x01")  // add rax, 1
+	helperStoreIndirect(code, base: X64Register.r11, disp: POffFreeListLen, src: X64Register.rax)
+	helperEmitJmp(code, state: state, targetBlock: 5)  // back to drain
+
+	// block 9: free_full — __slab_free(gt).
+	helperMarkBlock(state, code: code, blockId: 9)
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.rcx)
+	helperEmitDirectCall(code, callFixups: callFixups, target: "__slab_free")
+	helperEmitJmp(code, state: state, targetBlock: 5)
+
+	// block 7: check_live — queue empty: all GTs done → wait_workers; else a
+	// brief wait (the io_done_event when live, 10 ms cap) and re-drain so
+	// sleeping GTs get re-queued by the next __gt_timer_check.
+	helperMarkBlock(state, code: code, blockId: 7)
+	helperLoadGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.rax, name: "__gt_live_count")
+	helperTestReg(code, reg: X64Register.rax)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 11)  // jz wait_workers
+	helperLoadGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.rcx, name: "__io_done_event")
+	helperTestReg(code, reg: X64Register.rcx)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 5)  // jz drain (no I/O subsystem)
+	helperMovRegImm(code, dest: X64Register.rdx, value: 10)
+	emitX64GtIatCallOnSystemStack(code, relocations: relocations, rdataRelocs: rdataRelocs, slotIndex: iatSlotIndex(IatSlot.waitForSingleObject))
+	helperEmitJmp(code, state: state, targetBlock: 5)
+
+	// block 11: wait_workers — i = 1; join each worker handle (5 s cap).
+	helperMarkBlock(state, code: code, blockId: 11)
+	helperMovRegImm(code, dest: X64Register.rax, value: 1)
+	helperStoreSlot(code, slotIndex: 2, src: X64Register.rax)
+
+	// block 12: wait_wloop.
+	helperMarkBlock(state, code: code, blockId: 12)
+	helperLoadSlot(code, slotIndex: 2, dest: X64Register.rax)
+	helperLoadSlot(code, slotIndex: 1, dest: X64Register.rdx)
+	code.append(b"\x48\x39\xd0")  // cmp rax, rdx
+	helperEmitCondJump(code, state: state, opcode: 0x83, targetBlock: 14)  // jae done
+	helperLoadGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.rcx, name: "__sched_procs")
+	helperLoadSlot(code, slotIndex: 2, dest: X64Register.rdx)
+	code.append(b"\x48\x8d\x0c\xd1")  // lea rcx, [rcx + rdx*8]
+	helperLoadIndirect(code, dest: X64Register.rcx, base: X64Register.rcx, disp: 0)
+	helperLoadIndirect(code, dest: X64Register.rcx, base: X64Register.rcx, disp: POffOsThreadHandle)
+	helperTestReg(code, reg: X64Register.rcx)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 13)  // jz wait_wnext (never started)
+	helperMovRegImm(code, dest: X64Register.rdx, value: 5000)
+	emitX64GtIatCallOnSystemStack(code, relocations: relocations, rdataRelocs: rdataRelocs, slotIndex: iatSlotIndex(IatSlot.waitForSingleObject))
+
+	// block 13: wait_wnext — i++.
+	helperMarkBlock(state, code: code, blockId: 13)
+	helperLoadSlot(code, slotIndex: 2, dest: X64Register.rax)
+	code.append(b"\x48\x83\xc0\x01")  // add rax, 1
+	helperStoreSlot(code, slotIndex: 2, src: X64Register.rax)
+	helperEmitJmp(code, state: state, targetBlock: 12)
+
+	// block 14: done.
+	helperMarkBlock(state, code: code, blockId: 14)
+	helperFinalize(state, code: code)
+	helperEpilogue(code)
+end 'emitX64GtCleanup'
+
 // __gt_enqueue(g=rcx): append the green thread `g` to the tail of the global FIFO
 // run queue under `__sched_global_queue_cs`, then (after releasing the lock) run
 // the wake phase: scan P[1..num_procs-1] for an idle worker and SetEvent it, or —
@@ -7336,14 +7626,21 @@ function emitX64GtEnqueue(code ByteArray, relocations RelocationArray, callFixup
 	code.append(b"\x48\x8d\x0c\xd1")  // lea rcx, [rcx + rdx*8]
 	helperLoadIndirect(code, dest: X64Register.rcx, base: X64Register.rcx, disp: 0)
 	helperStoreSlot(code, slotIndex: 3, src: X64Register.rcx)
-	// if P[i].status != 0 (already running) → spawn_next
-	helperLoadIndirect(code, dest: X64Register.rax, base: X64Register.rcx, disp: POffStatus)
-	helperTestReg(code, reg: X64Register.rax)
-	helperEmitCondJump(code, state: state, opcode: 0x85, targetBlock: 7)  // jnz spawn_next
-	// claim it: P[i].status = 1
-	helperLoadSlot(code, slotIndex: 3, dest: X64Register.rcx)
-	helperMovRegImm(code, dest: X64Register.rax, value: 1)
-	helperStoreIndirect(code, base: X64Register.rcx, disp: POffStatus, src: X64Register.rax)
+	// Atomically claim P[i] for a worker via CMPXCHG(&P[i].status, 0 -> 1). The whole
+	// wake/spawn phase runs WITHOUT the run-queue lock (released above), and multiple
+	// OS threads enqueue concurrently, so a plain read/test/store test-and-set let TWO
+	// threads both observe status==0 and both CreateThread a worker on the SAME P. Two
+	// workers adopting one P share its id, hence its per-P slab mcache shard, and their
+	// lockless same-P allocations then hand the SAME slab slot to both threads -> heap
+	// corruption (a managed pointer field clobbered by a concurrent cmdline UTF-16
+	// write, etc.). LOCK CMPXCHG makes the 0->1 claim exclusive: the loser's ZF=0
+	// routes to spawn_next so exactly one thread spawns the worker. rcx already holds
+	// P[i]; advance to &P[i].status.
+	emitAddRegImmParam(code, dest: X64Register.rcx, value: POffStatus)
+	code.append(b"\x48\x31\xc0")  // xor rax, rax (CMPXCHG comparand = expected 0)
+	helperMovRegImm(code, dest: X64Register.rdx, value: 1)  // new = 1 (active)
+	emitLockCmpxchgMemRegOp(code, addrReg: X64Register.rcx, newReg: X64Register.rdx)
+	helperEmitCondJump(code, state: state, opcode: 0x85, targetBlock: 7)  // jnz spawn_next (claim lost)
 	// CreateThread(NULL, 0, &__sched_worker_loop, P[i], 0, NULL) on the system stack.
 	// frameSize 0x30 = shadow(0x20) + 2 stack args at [rsp+0x20]/[rsp+0x28].
 	emitX64GtSystemStackEnter(code, rdataRelocs: rdataRelocs, frameSize: 0x30)
@@ -9719,11 +10016,11 @@ function emitX64NetTcpConnect(code ByteArray, relocations RelocationArray, callF
 	emitMovRspOffsetReg(code, offset: 0x20, srcReg: X64Register.rax)  // optlen = 0
 	helperEmitIatCall(code, relocations: relocations, slotIndex: iatSlotIndex(IatSlot.setSockOpt))
 	emitX64GtSystemStackLeave(code, rdataRelocs: rdataRelocs, frameSize: 0x30)
-	// Wrap: mptr = mm_alloc(8, &__destruct___ManagedSocket, 0); *(mptr+0) = socket.
+	// Wrap: mptr = mrt_alloc_with_dtor(8, &__destruct___ManagedSocket) (rc=1, 32-byte
+	// header — the alloc-at-0 replacement for the retired mm_alloc(8, dtor, 0)).
 	helperMovRegImm(code, dest: X64Register.rcx, value: 8)
 	emitLeaFuncAddrOp(code, dest: X64Register.rdx, callFixups: callFixups, rdataRelocs: rdataRelocs, funcName: "__destruct___ManagedSocket")
-	code.append(b"\x48\x31\xc0")  // xor rax, rax (tag = 0)
-	helperEmitDirectCall(code, callFixups: callFixups, target: "mm_alloc")
+	helperEmitDirectCall(code, callFixups: callFixups, target: "mrt_alloc_with_dtor")
 	emitMovRegRegOp(code, dest: X64Register.rax, src: X64Register.r8)  // mptr in r8
 	helperLoadSlot(code, slotIndex: 2, dest: X64Register.rcx)  // socket
 	helperStoreIndirect(code, base: X64Register.rax, disp: 0, src: X64Register.rcx)  // *(mptr+0) = socket
@@ -9861,20 +10158,19 @@ function emitX64NetTcpConnect(code ByteArray, relocations RelocationArray, callF
 	helperMovRegImm(code, dest: X64Register.rdx, value: SockFlagConnectFailed)
 	helperEmitJmp(code, state: state, targetBlock: 17)  // make_err
 
-	// block 17: make_err — RDX already holds the error flag. Allocate a heap
-	//   __ManagedSocket{_handle:0} so the scope-exit decref hits a real header
-	//   (the destructor no-ops on handle 0), then R8 = mptr, RDX = flag, ret.
+	// block 17: make_err — RDX already holds the error flag; R8 = NULL. The
+	//   throw edge carries NO owned result: the refcount inserter routes a
+	//   tryCall result's release to the SUCCESS block (the Maxon throw ABI
+	//   zeroes the result register on the error edge), so the heap
+	//   `__ManagedSocket{_handle:0}` placeholder this block used to allocate
+	//   was NEVER released — one leaked wrapper per failed connect/resolve
+	//   (the tcp-client / managed-socket / async-tcp error-path leak family).
+	//   The placeholder predates the SSA inserter, whose predecessor dropped
+	//   results unconditionally and needed a real header to decref. NULL now
+	//   matches `__managed_file_wrap`'s error contract (caller-side releases
+	//   are null-guarded no-ops).
 	helperMarkBlock(state, code: code, blockId: 17)
-	helperStoreSlot(code, slotIndex: 5, src: X64Register.rdx)  // save flag (mm_alloc clobbers rdx)
-	helperMovRegImm(code, dest: X64Register.rcx, value: 8)
-	emitLeaFuncAddrOp(code, dest: X64Register.rdx, callFixups: callFixups, rdataRelocs: rdataRelocs, funcName: "__destruct___ManagedSocket")
-	code.append(b"\x48\x31\xc0")  // xor rax, rax (tag = 0)
-	helperEmitDirectCall(code, callFixups: callFixups, target: "mm_alloc")
-	emitMovRegRegOp(code, dest: X64Register.rax, src: X64Register.r8)  // mptr in r8
-	code.append(b"\x48\x31\xc9")  // xor rcx, rcx
-	helperStoreIndirect(code, base: X64Register.rax, disp: 0, src: X64Register.rcx)  // _handle = 0
-	emitMovRegRegOp(code, dest: X64Register.r8, src: X64Register.rax)  // R8 = mptr
-	helperLoadSlot(code, slotIndex: 5, dest: X64Register.rdx)  // RDX = flag
+	code.append(b"\x4d\x31\xc0")  // xor r8, r8 (no result on the throw edge)
 	helperFinalize(state, code: code)
 	helperEpilogue(code)
 end 'emitX64NetTcpConnect'
@@ -11435,6 +11731,103 @@ function emitX64Win32GetArgv(code ByteArray, callFixups CallFixupArray, rdataRel
 
 	helperFinalize(state, code: code)
 end 'emitX64Win32GetArgv'
+
+// =============================================================================
+// 14b. mrt_win32_free_argv_cache() — release the lazily-built argv cache at
+// process teardown so the leak gate sees zero live allocations.
+//
+// `mrt_win32_get_argc` builds the cache exactly once via `mrt_alloc` (rc=1, no
+// destructor): one `argc*8` pointer array (`__mrt_win32_argv_cache_ptr`) plus
+// one UTF-8 buffer per argv entry (`argv_cache_ptr[i]`). Those blocks are
+// process-lifetime by design, so nothing ever decrefs them — under the
+// `__mm_alloc_count` leak gate they read as `argc + 1` permanent leaks. This
+// helper, injected into `mrt_start` right before `osExit` (by
+// `patchMrtStartFreeArgvCache`), decrefs each buffer and the array so the
+// gate balances. No-op if the cache was never built.
+//
+// Each block is `mrt_alloc`'d at rc=1 → a single `__mm_decref_maybenull_helper`
+// drives it to rc=0 → `mm_free` (which decrements `__mm_alloc_count`). The
+// maybe-null variant tolerates a 0 slot defensively, though the builder always
+// fills every entry.
+//
+// Internal ABI: 0 args, result in r8 (unused — the injected call ignores it).
+//
+// Stack:
+//   slot 0 = i      (loop index)
+//   slot 1 = argc   (cached count)
+// Outgoing: __mm_decref_maybenull_helper has 1 arg → 32 shadow.
+// Frame: 2 slots (16) + 32 outgoing = 48, aligned 16 = 48.
+//
+// Block plan:
+//   0: entry — if init flag clear, jump to done.
+//   1: setup — load argc, i = 0.
+//   2: loop_head — if i >= argc, jump to free_array; else decref buffer[i], i++.
+//   3: free_array — decref the pointer array, clear the cache globals.
+//   4: done — return 0.
+// =============================================================================
+function emitX64Win32FreeArgvCache(code ByteArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, funcLabelNames StringArray, funcLabelOffsets CodeOffsetArray, funcLabelOffsetMap CodeLabelOffsetMap)
+	let helperStart = code.count()
+	recordLabel(funcLabelNames, labelOffsets: funcLabelOffsets, labelOffsetMap: funcLabelOffsetMap, name: "mrt_win32_free_argv_cache", offset: helperStart)
+
+	let frameSize = 48
+	var state = Win32HelperState.create(5, outgoingBytes: 32, localBytes: 16)
+
+	helperPrologue(code, frameSize: frameSize)
+
+	// Block 0: short-circuit if the cache was never built.
+	helperMarkBlock(state, code: code, blockId: 0)
+	helperLoadGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.rax, name: "__mrt_win32_argv_init_done")
+	helperTestReg(code, reg: X64Register.rax)
+	// JZ → done.
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 4)
+	helperEmitJmp(code, state: state, targetBlock: 1)
+
+	// Block 1: setup — argc = __mrt_win32_argc; i = 0.
+	helperMarkBlock(state, code: code, blockId: 1)
+	helperLoadGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.rax, name: "__mrt_win32_argc")
+	helperStoreSlot(code, slotIndex: 1, src: X64Register.rax)
+	helperMovRegImm(code, dest: X64Register.rax, value: 0)
+	helperStoreSlot(code, slotIndex: 0, src: X64Register.rax)
+	helperEmitJmp(code, state: state, targetBlock: 2)
+
+	// Block 2: loop_head — if i >= argc, free the array.
+	helperMarkBlock(state, code: code, blockId: 2)
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.rax)
+	helperLoadSlot(code, slotIndex: 1, dest: X64Register.rcx)
+	emitCmpRegRegOp(code, lhs: X64Register.rax, rhs: X64Register.rcx)
+	// JGE → free_array.
+	helperEmitCondJump(code, state: state, opcode: 0x8D, targetBlock: 3)
+
+	// buf = __mrt_win32_argv_cache_ptr[i*8]; decref it.
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.rcx)
+	helperShlRegImm(code, dest: X64Register.rcx, value: 3)
+	helperLoadGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.rax, name: "__mrt_win32_argv_cache_ptr")
+	emitAddRegRegParam(code, dest: X64Register.rcx, src: X64Register.rax)
+	helperLoadIndirect(code, dest: X64Register.rcx, base: X64Register.rcx, disp: 0)
+	helperEmitDirectCall(code, callFixups: callFixups, target: "__mm_decref_maybenull_helper")
+
+	// i++.
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.rax)
+	emitAddRegImmParam(code, dest: X64Register.rax, value: 1)
+	helperStoreSlot(code, slotIndex: 0, src: X64Register.rax)
+	helperEmitJmp(code, state: state, targetBlock: 2)
+
+	// Block 3: free_array — decref the pointer array, then clear the globals so
+	// a (defensive) re-entry is a clean no-op.
+	helperMarkBlock(state, code: code, blockId: 3)
+	helperLoadGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.rcx, name: "__mrt_win32_argv_cache_ptr")
+	helperEmitDirectCall(code, callFixups: callFixups, target: "__mm_decref_maybenull_helper")
+	helperMovRegImm(code, dest: X64Register.rax, value: 0)
+	helperStoreGlobal(code, rdataRelocs: rdataRelocs, src: X64Register.rax, name: "__mrt_win32_argv_cache_ptr")
+	helperStoreGlobal(code, rdataRelocs: rdataRelocs, src: X64Register.rax, name: "__mrt_win32_argv_init_done")
+	helperEmitJmp(code, state: state, targetBlock: 4)
+
+	// Block 4: done — return 0.
+	helperMarkBlock(state, code: code, blockId: 4)
+	helperReturnImm(code, value: 0)
+
+	helperFinalize(state, code: code)
+end 'emitX64Win32FreeArgvCache'
 
 // =============================================================================
 // 15. mrt_win32_get_executable_path(buf, bufSize) — writes UTF-8 path of the

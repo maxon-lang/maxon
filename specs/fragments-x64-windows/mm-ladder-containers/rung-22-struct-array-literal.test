@@ -1,0 +1,181 @@
+// Test: rung-22-struct-array-literal
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Box'
+
+function main() returns ExitCode
+	let xs = [Box.create(7), Box.create(9), Box.create(11)]
+	return xs.count()
+end 'main'
+---
+MmTrace: true
+ExitCode: 3
+Stderr: ```
+mm_alloc Box #1 size=8 [Box.create]
+mm_incref Box #1 rc=1 [Box.create]
+mm_move Box #1 -> return [Box.create]
+mm_alloc Box #2 size=8 [Box.create]
+mm_incref Box #2 rc=1 [Box.create]
+mm_move Box #2 -> return [Box.create]
+mm_alloc Box #3 size=8 [Box.create]
+mm_incref Box #3 rc=1 [Box.create]
+mm_move Box #3 -> return [Box.create]
+mm_alloc __ManagedMemory #4 size=48 [main]
+mm_incref __ManagedMemory #4 rc=1 [main]
+mm_alloc <raw> #5 size=24 [main]
+mm_incref <raw> #5 rc=1 [main]
+mm_move Box #1 -> container
+mm_move Box #2 -> container
+mm_move Box #3 -> container
+mm_move __ManagedMemory #4 -> container
+mm_alloc Array #6 size=8
+mm_incref Array #6 rc=1
+mm_alloc __ManagedMemory #7 size=48
+mm_incref __ManagedMemory #7 rc=1
+mm_decref __ManagedMemory #7 rc=0
+  mm_free __ManagedMemory #7
+mm_move Array #6 -> return
+mm_decref Array #6 rc=0
+  mm_decref __ManagedMemory #4 rc=0
+    mm_decref Box #1 rc=0
+      mm_free Box #1
+    mm_decref Box #2 rc=0
+      mm_free Box #2
+    mm_decref Box #3 rc=0
+      mm_free Box #3
+    mm_decref <raw> #5 rc=0
+      mm_free <raw> #5
+    mm_free __ManagedMemory #4
+  mm_free Array #6
+```
+RequiredIRSelfhosted: ```
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=48
+    x64.lea r12, [rip+__mtstr_scope_main]
+    x64.lea r13, [rip+__mtstr_scope_Box_create]
+    x64.mov r14d, 60
+    x64.xor r15d, r15d
+    x64.mov r8d, 8
+    x64.mov r8d, 7
+    x64.mov rcx, r12
+    x64.call mm_scope_push
+    x64.mov rcx, r13
+    x64.call mm_scope_push
+    x64.mov rcx, 8
+    x64.mov rdx, r15
+    x64.mov rax, r14
+    x64.call stdlib.__mm_alloc
+    x64.mov r12, r8
+    x64.mov rcx, r12
+    x64.call stdlib.__mm_incref
+    x64.mov r8, 7
+    x64.mov [r12+0], r8 (8b)
+    x64.mov rcx, r12
+    x64.call mm_move_return
+    x64.call mm_scope_pop
+    x64.lea r13, [rip+__mtstr_scope_Box_create]
+    x64.mov r14d, 60
+    x64.xor r15d, r15d
+    x64.mov r8d, 8
+    x64.mov r8d, 9
+    x64.mov rcx, r13
+    x64.call mm_scope_push
+    x64.mov rcx, 8
+    x64.mov rdx, r15
+    x64.mov rax, r14
+    x64.call stdlib.__mm_alloc
+    x64.mov r13, r8
+    x64.mov rcx, r13
+    x64.call stdlib.__mm_incref
+    x64.mov r8, 9
+    x64.mov [r13+0], r8 (8b)
+    x64.mov rcx, r13
+    x64.call mm_move_return
+    x64.call mm_scope_pop
+    x64.lea r14, [rip+__mtstr_scope_Box_create]
+    x64.mov r15d, 60
+    x64.xor r8d, r8d
+    x64.mov [rbp+-8], r8
+    x64.mov r8d, 8
+    x64.mov r8d, 11
+    x64.mov rcx, r14
+    x64.call mm_scope_push
+    x64.mov rcx, 8
+    x64.mov rax, r15
+    x64.mov rdx, [rbp+-8]
+    x64.call stdlib.__mm_alloc
+    x64.mov r14, r8
+    x64.mov rcx, r14
+    x64.call stdlib.__mm_incref
+    x64.mov r8, 11
+    x64.mov [r14+0], r8 (8b)
+    x64.mov rcx, r14
+    x64.call mm_move_return
+    x64.call mm_scope_pop
+    x64.xor eax, eax
+    x64.mov edx, 8
+    x64.mov ecx, 3
+    x64.call stdlib.__managed_mem_create_managed
+    x64.mov r15, r8
+    x64.call mm_scope_pop
+    x64.mov rcx, r12
+    x64.call mm_move_container
+    x64.xor edx, edx
+    x64.mov rcx, r15
+    x64.mov rax, r12
+    x64.call stdlib.__managed_mem_set
+    x64.mov rcx, r13
+    x64.call mm_move_container
+    x64.mov edx, 1
+    x64.mov rcx, r15
+    x64.mov rax, r13
+    x64.call stdlib.__managed_mem_set
+    x64.mov rcx, r14
+    x64.call mm_move_container
+    x64.mov edx, 2
+    x64.mov rcx, r15
+    x64.mov rax, r14
+    x64.call stdlib.__managed_mem_set
+    x64.mov edx, 3
+    x64.mov rcx, r15
+    x64.call stdlib.__managed_mem_set_length
+    x64.lea r8, [rip+stdlib.__mm_decref]
+    x64.mov [r15+40], r8 (8b)
+    x64.mov rcx, r15
+    x64.call mm_move_container
+    x64.lea rdx, [rip+__layout_Array_Box]
+    x64.mov rcx, r15
+    x64.call Array.init
+    x64.mov r12, r8
+    x64.lea rdx, [rip+__layout_Array_Box]
+    x64.mov rcx, r12
+    x64.call Array.count
+    x64.mov r13, r8
+    x64.mov rcx, r12
+    x64.call __mm_decref_maybenull_helper
+    x64.call mm_scope_pop
+    x64.mov r8d, 4294967295
+    x64.cmp r13, r8
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea r12, [rip+__panic_msg_2fc3d208e149bb27]
+    x64.mov rcx, r12
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov r8, r13
+    x64.epilogue
+    x64.ret
+  }
+}
+
+```
+---
+---

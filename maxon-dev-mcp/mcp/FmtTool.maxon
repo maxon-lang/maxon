@@ -1,13 +1,16 @@
 // `fmt` MCP tool. Wraps `./bin/maxon.exe fmt` so a client can format a
 // snippet (returning the formatted text inline) or a file (formatted
-// in-place, returns the new contents).
+// in-place on disk).
 //
 // Inputs (JSON):
 //   source: { kind: "file", path } | { kind: "snippet", code }
 //
 // Output (JSON):
-//   exitCode, success, durationMs, formatted (the formatted text),
-//   changed (true iff the formatter modified the input).
+//   exitCode, success, durationMs, changed (true iff the formatter modified
+//   the input), and — for snippets only — formatted (the formatted text).
+//   File sources are rewritten in place and do NOT echo the formatted source
+//   back: the caller already has the file on disk, so returning it would only
+//   burn tokens. Read the file (or check `changed`) instead.
 
 let fmtTimeoutMs = 30000
 let fmtRawTailMaxBytes = 4096
@@ -46,7 +49,7 @@ export function fmtHandler(argsDoc JsonDoc, argsId JsonNodeId) returns ToolOutco
 	end 'readBackErr'
 
 	let changed = not originalBytes.equals(formatted)
-	let outcome = buildFmtOutcome(formatted, changed: changed, durationMs: elapsed, exitCode: result.exitCode(), output: result)
+	let outcome = buildFmtOutcome(formatted, changed: changed, includeFormatted: resolved.isSnippet, durationMs: elapsed, exitCode: result.exitCode(), output: result)
 	cleanupResolvedSource(resolved)
 	return outcome
 end 'fmtHandler'
@@ -55,12 +58,16 @@ end 'fmtHandler'
 // Outcome construction
 // =============================================================================
 
-function buildFmtOutcome(formatted String, changed bool, durationMs DurationMs, exitCode ExitInt, output CollectedOutput) returns ToolOutcome
+// `includeFormatted` controls whether the (potentially large) formatted
+// source is echoed back in the response. For snippet sources it MUST be
+// true — the caller has no on-disk file to read it from. For file sources
+// it is false: the file was rewritten in place, so echoing the source back
+// only burns tokens. Callers learn whether anything changed via `changed`.
+function buildFmtOutcome(formatted String, changed bool, includeFormatted bool, durationMs DurationMs, exitCode ExitInt, output CollectedOutput) returns ToolOutcome
 	var doc = JsonDoc.create()
 	let exitId = doc.add(JsonNode.numberNode(exitCode))
 	let successId = doc.add(JsonNode.boolNode(output.succeeded()))
 	let durId = doc.add(JsonNode.numberNode(durationMs))
-	let formattedId = doc.add(JsonNode.stringNode(formatted))
 	let changedId = doc.add(JsonNode.boolNode(changed))
 	let combined = combineStreams(output.stdout, stderr: output.stderr)
 	let rawTailId = doc.add(JsonNode.stringNode(lastBytes(combined, max: fmtRawTailMaxBytes)))
@@ -73,8 +80,11 @@ function buildFmtOutcome(formatted String, changed bool, durationMs DurationMs, 
 	children.push(successId)
 	keys.push("durationMs")
 	children.push(durId)
-	keys.push("formatted")
-	children.push(formattedId)
+	if includeFormatted 'withFormatted'
+		let formattedId = doc.add(JsonNode.stringNode(formatted))
+		keys.push("formatted")
+		children.push(formattedId)
+	end 'withFormatted'
 	keys.push("changed")
 	children.push(changedId)
 	keys.push("rawTail")

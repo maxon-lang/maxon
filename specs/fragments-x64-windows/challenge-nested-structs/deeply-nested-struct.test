@@ -40,29 +40,43 @@ module {
   func @main() -> u32 {
   entry:
     x64.prologue stack_size=16
+    x64.xor eax, eax
+    x64.xor edx, edx
     x64.mov ecx, 8
-    x64.call mrt_alloc
+    x64.call stdlib.__mm_alloc
     x64.mov r12, r8
+    x64.mov rcx, r12
+    x64.call stdlib.__mm_incref
     x64.mov r8d, 42
     x64.mov [r12+0], r8 (8b)
+    x64.xor eax, eax
+    x64.lea rdx, [rip+__destruct_Level2]
     x64.mov ecx, 8
-    x64.call mrt_alloc
+    x64.call stdlib.__mm_alloc
     x64.mov r13, r8
+    x64.mov rcx, r13
+    x64.call stdlib.__mm_incref
     x64.mov [r13+0], r12 (8b)
+    x64.xor eax, eax
+    x64.lea rdx, [rip+__destruct_Level3]
     x64.mov ecx, 8
-    x64.call mrt_alloc
-    x64.mov [r8+0], r13 (8b)
+    x64.call stdlib.__mm_alloc
+    x64.mov r12, r8
+    x64.mov [r12+0], r13 (8b)
+    x64.mov r8, [r12+0] (8b)
     x64.mov r9, [r8+0] (8b)
-    x64.mov rsi, [r9+0] (8b)
-    x64.mov r8, [rsi+0] (8b)
-    x64.mov r9d, 4294967295
-    x64.cmp r8, r9
+    x64.mov r13, [r9+0] (8b)
+    x64.mov rcx, r12
+    x64.call mm_drop
+    x64.mov r8d, 4294967295
+    x64.cmp r13, r8
     x64.jbe __range_ok_0
   __range_panic_0:
     x64.lea r12, [rip+__panic_msg_b34078a8aef2a417]
     x64.mov rcx, r12
     x64.call mrt_panic
   __range_ok_0:
+    x64.mov r8, r13
     x64.epilogue
     x64.ret
   }

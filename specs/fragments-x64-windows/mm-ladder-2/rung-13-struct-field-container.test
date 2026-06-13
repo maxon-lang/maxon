@@ -1,0 +1,96 @@
+// Test: rung-13-struct-field-container
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+type Bag
+	export var items as IntArray
+
+	static function create() returns Self
+		return Self{items: IntArray.create()}
+	end 'create'
+end 'Bag'
+
+function main() returns ExitCode
+	var bag = Bag.create()
+	bag.items.push(10)
+	bag.items.push(20)
+	return bag.items.count()
+end 'main'
+---
+MmTrace: true
+ExitCode: 2
+Stderr: ```
+mm_alloc Bag #1 size=8 [Bag.create]
+mm_alloc Array #2 size=8 [Bag.create]
+mm_incref Array #2 rc=1 [Bag.create]
+mm_alloc __ManagedMemory #3 size=48 [Bag.create]
+mm_incref __ManagedMemory #3 rc=1 [Bag.create]
+mm_move Array #2 -> return [Bag.create]
+mm_move Bag #1 -> return [Bag.create]
+mm_alloc <raw> #4 size=32 [main]
+mm_incref <raw> #4 rc=1 [main]
+mm_drop Bag #1 [main]
+    mm_decref Array #2 rc=0 [main]
+      mm_decref __ManagedMemory #3 rc=0 [main]
+        mm_decref <raw> #4 rc=0 [main]
+          mm_free <raw> #4
+        mm_free __ManagedMemory #3
+      mm_free Array #2
+    mm_free Bag #1
+```
+RequiredIRSelfhosted: ```
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.lea r12, [rip+__mtstr_scope_main]
+    x64.mov rcx, r12
+    x64.call mm_scope_push
+    x64.lea r12, [rip+__mtstr_scope_Bag_create]
+    x64.mov rcx, r12
+    x64.call mm_scope_push
+    x64.mov eax, 60
+    x64.lea rdx, [rip+__destruct_Bag]
+    x64.mov ecx, 8
+    x64.call stdlib.__mm_alloc
+    x64.mov r12, r8
+    x64.lea rcx, [rip+__layout_Array_Integer]
+    x64.call Array.create
+    x64.mov [r12+0], r8 (8b)
+    x64.mov rcx, r12
+    x64.call mm_move_return
+    x64.call mm_scope_pop
+    x64.mov r13, [r12+0] (8b)
+    x64.lea rax, [rip+__layout_Array_Integer]
+    x64.mov edx, 10
+    x64.mov rcx, r13
+    x64.call Array.push
+    x64.mov r13, [r12+0] (8b)
+    x64.lea rax, [rip+__layout_Array_Integer]
+    x64.mov edx, 20
+    x64.mov rcx, r13
+    x64.call Array.push
+    x64.mov rcx, [r12+0] (8b)
+    x64.lea rdx, [rip+__layout_Array_Integer]
+    x64.call Array.count
+    x64.mov r13, r8
+    x64.mov rcx, r12
+    x64.call mm_drop
+    x64.call mm_scope_pop
+    x64.mov r8d, 4294967295
+    x64.cmp r13, r8
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea r12, [rip+__panic_msg_8adcd9a244189a61]
+    x64.mov rcx, r12
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov r8, r13
+    x64.epilogue
+    x64.ret
+  }
+}
+
+```
+---
+---

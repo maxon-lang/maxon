@@ -1,0 +1,918 @@
+// Parameter-consume analysis (Concept C — the argument-side dual of
+// `ReturnBorrowAnalysis`, and the structural replacement for the refcount
+// inserter's hand-synced callee allowlists).
+//
+// A function CONSUMES parameter P when it takes ownership of P's reference: it
+// MOVES P's `+1` into durable storage WITHOUT increfing — a container's element
+// buffer (`__managed_mem_set`), a list node (`mrt_managed_list_*_value`), a heap
+// struct field, or the wrapper struct it RETURNS (`Array.init`'s
+// `return Self{managed: arg}`). A consuming parameter's caller must NOT release its
+// argument at the call's last use: the `+1` transferred to the callee's container,
+// balanced by that container's destructor. The OPPOSITE — a BORROW — reads P
+// without taking its reference (`Map.get`/`Set.contains` probe the same
+// type-parameter key but only compare it); the caller keeps ownership and releases.
+//
+// This was previously approximated by THREE hand-maintained callee-NAME allowlists
+// in InsertRefcounts.maxon (`isConsumingContainerMutator`, `calleeMovesValue`,
+// `calleeTransparentlyWrapsArg`) — every new stdlib container method a latent
+// double-free (missed move) or leak (over-suppression) until someone edited a
+// string. Identifying callees by name is fragile and wrong; this pass computes the
+// fact STRUCTURALLY from each callee's body instead (the consume-side of the
+// move-model rewrite — "Concept C": derive per-param consume bits from the body).
+//
+// WHY A PRE-INSERTION STRUCTURAL WALK IS SOUND. This pass runs AFTER
+// `lowerMaxonToStd` + inlining/DCE and BEFORE `insertRefcounts` (the SOLE incref
+// placer). So every body it sees has ZERO refcount ops yet: every `store_indirect`
+// of a parameter is a RAW move (no retain-then-store to disambiguate). "P flows to a
+// store/box/consuming-call sink" therefore IS "P is consumed" — no incref-tracking
+// needed, exactly as `ReturnBorrowAnalysis` reasons.
+//
+// THE LEAF RULE. A function consumes its parameter `i` iff, within its body, the
+// SSA value of `param i` (or an SSA copy reached through pass-through forwarding —
+// loads/arith that re-derive the SAME managed pointer) reaches a CONSUME SINK:
+//   - a `store_indirect` / `box_value` of it into heap storage (the durable-store
+//     leaf: `__managed_mem_set`'s raw store, a `Self{field: P}` wrapper store), OR
+//   - an argument at position `j` of a call to a function G that CONSUMES param `j`
+//     (the forwarding edge: `Array.push` → `managed.set` → `__managed_mem_set`).
+// It is NOT consumed when P only reaches loads / comparisons / returns-as-borrow.
+//
+// The forwarding edge makes this a FIXPOINT over the module's call graph, monotonic
+// (a consume bit, once set, stays set), terminating in <= (#functions x #params)
+// rounds. It bottoms out at the INTRINSIC LEAF-CONSUMERS — a tiny set of raw runtime
+// helpers (`mrt_managed_list_*`) whose bodies live in runtime.std (slot-form, linked
+// at the backend, never in this module) and so cannot be analyzed structurally.
+// These are compiler-internal primitives, NOT user-facing API that grows, so seeding
+// them is legitimate — it is the high-level container-method list (which grew with
+// every stdlib method) that the structural walk eliminates.
+//
+// RETURN-SIDE COMPANION (`funcReturnsConsumedArg`). A transparent wrapper
+// (`Array.init`/`Vector.init`: `return Self{managed: arg}`) both CONSUMES arg 0 AND
+// RETURNS a value owning arg 0's `+1` (the result aliases the arg's storage with no
+// fresh alloc/incref). The consume bit covers the arg side; this pass ALSO records
+// the return-side fact so the inserter treats such a result as already-owning a
+// transferable `+1` — kept DISTINCT from the per-class `plusOneOwnership` per the
+// design (it is about a call RESULT inheriting its wrapped arg's reference).
+
+// Run the analysis: populate `project.funcParamConsumes` (per-function per-parameter
+// consume bits) and `project.funcReturnsConsumedArg` (transparent-wrapper results) to
+// a fixpoint over `module`'s forwarding edges. Returns the module unchanged (mutates
+// only the two `project` registries — no IR is rewritten).
+//
+// CACHE INTERACTION. The STDLIB consume facts are computed ONCE when the stdlib cache
+// is built (this pass runs over the full stdlib module during cache warming) and
+// PERSISTED in the cache (`captureRegistries`/`restoreRegistries` in StdlibCache.maxon),
+// restored into `project.funcParamConsumes`/`funcReturnsConsumedArg` before the user
+// build. So on a user build the stdlib facts are ALREADY present in `project` when this
+// pass runs; the fixpoint here only ADDS the USER functions' consume facts (a user
+// `wrapper(box)` that forwards `box` into a consuming stdlib callee), forwarding from
+// the restored stdlib bits. A non-inlined consuming stdlib callee (`Array.push` linked,
+// not inlined) is a signature-only stub in the user module but its consume bit was
+// restored from the cache, so the user caller reads the real bit. The intrinsic-leaf
+// seed is re-applied every run (cheap, idempotent) so the leaves are present even on a
+// fresh/cache-bypass build.
+export function analyzeParamConsumes(module StdModule, project Project) returns StdModule
+	seedIntrinsicLeafConsumers(project)
+
+	// Structural "may return this arg" relation, computed ONCE before the consume
+	// fixpoint (it depends only on each body's return terminators, not on consume bits).
+	// `funcMayReturnArg[callee]` flags each parameter position the callee RETURNS on
+	// SOME path — the IDENTITY-PASSTHROUGH shape (`return param`, e.g.
+	// `FilePath.resolveFileURL`/`normalizeSeparators` returning their input unchanged on
+	// the no-op branch). The result of such a call ALIASES the passed argument, so the
+	// consume walk must follow the call's result as another handle on the parameter.
+	// Without this a param laundered through a passthrough call before reaching a
+	// `Self{field: …}` store-sink is missed → the wrapper's consume bit is unset → the
+	// caller DROPS the arg even though the wrapper kept it (the `FilePath from "x"`
+	// global UAF). Computed where bodies are present (stdlib build); the consume bits it
+	// produces are cached, so the user build needs no separate persistence.
+	let mayReturnArg = computeMayReturnArgMap(module)
+
+	// Fixpoint: recompute each function's consume bits until no bit flips. Each round
+	// consults the callees' CURRENT bits (the restored stdlib facts + this round's), so
+	// a consume fact propagates one forwarding hop per round; monotonic, so it settles.
+	var changed = true
+	while changed 'fixpoint'
+		changed = false
+		for funcIdx in 0 upto module.functions.count() 'eachFunc'
+			let func = try module.functions.get(funcIdx) otherwise panic("analyzeParamConsumes: functions.get OOB at {funcIdx}")
+			if func.blockRefs.count() == 0 'empty'
+				continue
+			end 'empty'
+			if updateFuncConsumeBits(module, func: func, project: project, mayReturnArg: mayReturnArg) 'flipped'
+				changed = true
+			end 'flipped'
+		end 'eachFunc'
+	end 'fixpoint'
+
+	logTrace(LogCategory.ir, message: function() gives "RC-PCA-DONE funcs={module.functions.count()} consumingCallees={project.funcParamConsumes.count()} wrappers={project.funcReturnsConsumedArg.count()}")
+
+	// With the consume facts settled, correct every `__gt_spawn` managed_mask:
+	// the GT trampoline drops the spawn-time reference of each mask-bit arg
+	// after the spawned function returns (it is the arg's CALLING FRAME), but
+	// a spawned callee that CONSUMES a param already spent that reference —
+	// the trampoline's drop would over-release it (the subprocess-async
+	// `Configuration`-builder over-free). The mask is emitted at lowering,
+	// BEFORE these bits exist for user callees, so the correction lives here.
+	adjustGtSpawnMasks(module, project: project)
+
+	return module
+end 'analyzeParamConsumes'
+
+// Rewrite each `__gt_spawn(funcRef F, count, buf)` site's managed_mask store
+// (`store [buf+8] = mask`) to `mask and not consumedBits(F)`. The mask const
+// may be CSE-shared with unrelated constants (cse runs before this pass), so
+// the store is repointed at a FRESH const op rather than mutating the old one
+// (DCE collects it if orphaned).
+function adjustGtSpawnMasks(module StdModule, project Project)
+	for func in module.functions 'eachFunc'
+		var maskIdRef = NoValueIdRef
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("adjustGtSpawnMasks: blockRef not in module.blocks")
+			maskIdRef = adjustGtSpawnMasksInBlock(module, func: func, block: block, project: project, idRef: maskIdRef)
+		end 'eachBlock'
+	end 'eachFunc'
+end 'adjustGtSpawnMasks'
+
+// Sentinel "no ValueIdRef minted yet for this function" — the fresh-id scan is
+// deferred until a block actually contains a spawn whose mask needs clearing.
+let NoValueIdRef = 0
+
+function adjustGtSpawnMasksInBlock(module StdModule, func IrFunction, block IrBlock, project Project, idRef ValueIdRefHandle) returns ValueIdRefHandle
+	var liveIdRef = idRef
+	for opIdx in block.opRefs 'eachOp'
+		let op = try module.ops.get(opIdx) otherwise panic("adjustGtSpawnMasksInBlock: opIdx not in module.ops")
+		let (isSpawn, funcValueId, bufValueId) = gtSpawnOperandsOf(op)
+		if not isSpawn 'notSpawn'
+			continue
+		end 'notSpawn'
+		let calleeName = funcRefTargetInBlock(module, block: block, valueId: funcValueId)
+		if calleeName.isEmpty() 'noStaticCallee'
+			continue
+		end 'noStaticCallee'
+		let consumedMask = consumedArgMaskOf(project, callee: calleeName)
+		if consumedMask == 0 'nothingConsumed'
+			continue
+		end 'nothingConsumed'
+		liveIdRef = repointSpawnMaskStore(module, func: func, block: block, bufValueId: bufValueId, clearBits: consumedMask, idRef: liveIdRef)
+	end 'eachOp'
+	return liveIdRef
+end 'adjustGtSpawnMasksInBlock'
+
+// The (present, funcRefValueId, argBufValueId) triple of a direct
+// `__gt_spawn(func_ptr, count, arg_buf)` call op.
+function gtSpawnOperandsOf(op StdOp) returns (bool, ValueId, ValueId)
+	return match op 'dispatch'
+		call(c) gives gtSpawnCallOperandsOf(c)
+		arith gives (false, 0, 0)
+		control gives (false, 0, 0)
+		memory gives (false, 0, 0)
+		system gives (false, 0, 0)
+	end 'dispatch'
+end 'gtSpawnOperandsOf'
+
+function gtSpawnCallOperandsOf(c StdCallOp) returns (bool, ValueId, ValueId)
+	return match c 'check'
+		call(_, callee, argIds) gives gtSpawnArgIdsOf(callee, argIds: argIds)
+		ret gives (false, 0, 0)
+		tryCall to errorReturn gives (false, 0, 0)
+	end 'check'
+end 'gtSpawnCallOperandsOf'
+
+function gtSpawnArgIdsOf(callee String, argIds ValueIdArray) returns (bool, ValueId, ValueId)
+	if callee != "__gt_spawn" or argIds.count() != 3 'notSpawn'
+		return (false, 0, 0)
+	end 'notSpawn'
+	let funcValueId = try argIds.get(0) otherwise panic("gtSpawnArgIdsOf: argIds.get(0) failed despite count==3")
+	let bufValueId = try argIds.get(2) otherwise panic("gtSpawnArgIdsOf: argIds.get(2) failed despite count==3")
+	return (true, funcValueId, bufValueId)
+end 'gtSpawnArgIdsOf'
+
+// The funcRef target name defining `valueId` within `block`, or "" when the
+// definition isn't a same-block funcRef (lowerAsyncCallReal always emits the
+// funcRef contiguously with the spawn, and the inliner splices bodies whole,
+// so a miss means an unexpected shape — skipped conservatively).
+function funcRefTargetInBlock(module StdModule, block IrBlock, valueId ValueId) returns String
+	for opIdx in block.opRefs 'eachOp'
+		let op = try module.ops.get(opIdx) otherwise panic("funcRefTargetInBlock: opIdx not in module.ops")
+		let name = funcRefTargetOf(op, valueId: valueId)
+		if not name.isEmpty() 'hit'
+			return name
+		end 'hit'
+	end 'eachOp'
+	return ""
+end 'funcRefTargetInBlock'
+
+function funcRefTargetOf(op StdOp, valueId ValueId) returns String
+	return match op 'dispatch'
+		call(c) gives funcRefCallTargetOf(c, valueId: valueId)
+		arith gives ""
+		control gives ""
+		memory gives ""
+		system gives ""
+	end 'dispatch'
+end 'funcRefTargetOf'
+
+function funcRefCallTargetOf(c StdCallOp, valueId ValueId) returns String
+	return match c 'check'
+		funcRef(resultId, funcName) gives(funcName if resultId == valueId else "")
+		ret gives ""
+		call gives ""
+		tryCall to witnessTryCall gives ""
+		tailCall to errorReturn gives ""
+	end 'check'
+end 'funcRefCallTargetOf'
+
+// Pack `callee`'s consume bits into a trampoline-shaped mask (bit i = param i,
+// capped at the trampoline's 7-arg window like the lowering's mask scan).
+function consumedArgMaskOf(project Project, callee String) returns MachineWord
+	let bits = try project.funcParamConsumes.get(callee) otherwise return 0
+	var mask = 0 as MachineWord
+	var limit = bits.count()
+	if limit > 7 'cap'
+		limit = 7
+	end 'cap'
+	for i in 0 upto limit 'each'
+		if (try bits.get(i) otherwise false) 'set'
+			mask = mask or (1 shl (i as ParsedInt))
+		end 'set'
+	end 'each'
+	return mask
+end 'consumedArgMaskOf'
+
+typealias ValueIdRefHandle = int(0 to u64.max)
+
+// Repoint the `store [bufValueId + 8] = mask` op at a fresh const carrying
+// `mask and not clearBits`. Returns the (possibly just-minted) running max
+// value id so multiple spawns in one function keep ids unique.
+function repointSpawnMaskStore(module StdModule, func IrFunction, block IrBlock, bufValueId ValueId, clearBits MachineWord, idRef ValueIdRefHandle) returns ValueIdRefHandle
+	for pos in 0 upto block.opRefs.count() 'eachOp'
+		let opIdx = try block.opRefs.get(pos) otherwise panic("repointSpawnMaskStore: opRefs.get OOB at {pos}")
+		let op = try module.ops.get(opIdx) otherwise panic("repointSpawnMaskStore: opIdx not in module.ops")
+		let maskValueId = maskStoreValueOf(op, bufValueId: bufValueId)
+		if maskValueId == 0 'notMaskStore'
+			continue
+		end 'notMaskStore'
+		let (haveMask, oldMask) = constValueInBlock(module, block: block, valueId: maskValueId)
+		if not haveMask 'noConst'
+			panic("repointSpawnMaskStore: __gt_spawn mask store's value %{maskValueId} is not a same-block const")
+		end 'noConst'
+		let newMask = oldMask and not clearBits
+		if newMask == oldMask 'unchanged'
+			return idRef
+		end 'unchanged'
+		var nextId = idRef
+		if nextId == NoValueIdRef 'mintRef'
+			nextId = scanMaxValueId(func, module: module) + 1
+		end 'mintRef'
+		let newConstId = nextId as ValueId
+		let constOpIdx = module.ops.count()
+		module.ops.push(StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: newConstId, value: newMask as IntConstant))))
+		try block.opRefs.insert(pos, value: constOpIdx) otherwise panic("repointSpawnMaskStore: opRefs.insert failed at {pos}")
+		// The store shifted to pos+1; rewrite it to consume the fresh const.
+		let storeOpIdx = try block.opRefs.get(pos + 1) otherwise panic("repointSpawnMaskStore: opRefs.get OOB after insert")
+		try module.ops.set(storeOpIdx, value: StdOp.system(StdSystemOp.storeIndirect(bufValueId, offset: 8, valueId: newConstId, width: StoreWidth.qword, isFloat: false))) otherwise panic("repointSpawnMaskStore: ops.set OOB at {storeOpIdx}")
+		return (nextId + 1) as ValueIdRefHandle
+	end 'eachOp'
+	panic("repointSpawnMaskStore: no `store [buf+8]` mask store found for __gt_spawn buffer %{bufValueId}")
+end 'repointSpawnMaskStore'
+
+// The stored value id when `op` is the spawn buffer's mask store
+// (`store_indirect [bufValueId + 8] = v`), else 0.
+function maskStoreValueOf(op StdOp, bufValueId ValueId) returns ValueId
+	return match op 'dispatch'
+		system(s) gives sysMaskStoreValueOf(s, bufValueId: bufValueId)
+		arith gives 0
+		control gives 0
+		call gives 0
+		memory gives 0
+	end 'dispatch'
+end 'maskStoreValueOf'
+
+function sysMaskStoreValueOf(s StdSystemOp, bufValueId ValueId) returns ValueId
+	return match s 'check'
+		storeIndirect(addrId, offset, valueId, _, _) gives(valueId if (addrId == bufValueId and offset == 8) else 0)
+		loadIndirect gives 0
+		globalAddr to loadByte gives 0
+		osExit to osWrite gives 0
+		free gives 0
+		osWriteErr to loadFramePtr gives 0
+		funcAddr gives 0
+		drop gives 0
+		osAllocPages to osDirMkdir gives 0
+		atomicInc to osLockRelease gives 0
+		boxValue to dropTypeParam gives 0
+	end 'check'
+end 'sysMaskStoreValueOf'
+
+// The (present, value) of a same-block `constI64` defining `valueId`.
+function constValueInBlock(module StdModule, block IrBlock, valueId ValueId) returns (bool, MachineWord)
+	for opIdx in block.opRefs 'eachOp'
+		let op = try module.ops.get(opIdx) otherwise panic("constValueInBlock: opIdx not in module.ops")
+		let (hit, value) = constValueOf(op, valueId: valueId)
+		if hit 'found'
+			return (true, value)
+		end 'found'
+	end 'eachOp'
+	return (false, 0)
+end 'constValueInBlock'
+
+function constValueOf(op StdOp, valueId ValueId) returns (bool, MachineWord)
+	return match op 'dispatch'
+		arith(a) gives arithConstValueOf(a, valueId: valueId)
+		call gives (false, 0)
+		control gives (false, 0)
+		memory gives (false, 0)
+		system gives (false, 0)
+	end 'dispatch'
+end 'constValueOf'
+
+function arithConstValueOf(a StdArithOp, valueId ValueId) returns (bool, MachineWord)
+	return match a 'check'
+		const(c) gives((c.resultId == valueId, c.value as MachineWord))
+		unary gives (false, 0)
+		binary gives (false, 0)
+	end 'check'
+end 'arithConstValueOf'
+
+// Recompute `func`'s consume bits this round; return true iff any bit newly flipped
+// to true (drives the fixpoint). Reads callees' CURRENT bits for forwarding.
+function updateFuncConsumeBits(module StdModule, func IrFunction, project Project, mayReturnArg MayReturnArgMap) returns bool
+	let paramValues = collectParamValues(module, func: func)
+	var prior = try project.funcParamConsumes.get(func.name) otherwise BoolArray.create()
+	var flipped = false
+
+	for paramIndex in 0 upto func.paramCount 'eachParam'
+		if boolArrayGet(prior, idx: paramIndex) 'alreadyConsumed'
+			continue
+		end 'alreadyConsumed'
+		let paramVal = paramValueForIndex(paramValues, paramIndex: paramIndex)
+		if paramVal == CONSUME_NO_VALUE 'noSsaValue'
+			continue
+		end 'noSsaValue'
+		// NOTE on precision: a non-managed param (an `__mm_alloc` size/tag, a slab raw
+		// address) can reach a store-sink too, but the inserter NEVER treats a
+		// non-managed value as a release candidate, so a spurious consume bit on it is
+		// inert. We deliberately do NOT gate on `func.isValueManaged(paramVal)` here:
+		// the managed/type-param classification is not reliably populated on stdlib
+		// TEMPLATE bodies at cache-warming time (the generic `Array.push`/`Map.insert`
+		// element params would be skipped), which would zero out the real consume set.
+		// The dangerous case to exclude is a RETAIN (a managed borrow-capture), handled
+		// by the incref gate below.
+		//
+		// A param the function INCREFS is RETAINED, not consumed: the function took
+		// its OWN reference (the caller still owns theirs), so the caller must still
+		// release at the call. The canonical case is `__ManagedMemoryCursor`'s
+		// `lowerCreateCursor`, which manually increfs `source` before storing it into
+		// the cursor (the cursor's destructor drops that retained ref) — so
+		// `ArrayIterator.create`/`createCursor` borrow-capture their source rather
+		// than consuming it. Excluding incref'd params is what distinguishes a
+		// retain-then-store (borrow) from a raw move-store (consume); both otherwise
+		// look identical pre-insertion (`Array.init`'s `Self{managed: arg}` vs the
+		// cursor's `Self{raw: cursor}` over a retained source).
+		if functionIncrefsValue(module, func: func, valueId: paramVal) 'retained'
+			continue
+		end 'retained'
+		// A TYPE-PARAMETER-typed parameter is consumed BY CONVENTION: the callee
+		// owns its generic-typed params (`releaseKindAtLastUse`'s type-param domain
+		// drops them at last use — the legacy injector contract), so ownership
+		// transfers at the call even when the body only READS the param
+		// (`Map.findSlot`'s key feeds witness hash/equals calls, never a store).
+		// Without this bit a CONCRETE caller doesn't see the transfer and releases
+		// the arg too — the callee's `dropTypeParam` plus the caller's release
+		// double-drop the key (the String-keyed `m.get("a")` UAF).
+		//
+		// The signal is the DECLARED parameter type (`maxonParamTypes`), NOT the
+		// per-value `isValueTypeParam` table: the table's contents differ between
+		// the stdlib cache-warm pipeline and the user pipeline (warm OVER-marked —
+		// spurious consume bits on `List.get`/`walkTo`'s receiver released the
+		// list out from under `get(1)` on the cached leg only — while the user
+		// pipeline never marked at all). The declared type is the same fact on
+		// both legs; cache-RESTORED functions have empty `maxonParamTypes`, which
+		// is fine — their warm-computed bits arrive via the restored registry and
+		// the `alreadyConsumed` skip keeps them.
+		if paramIndex < func.maxonParamTypes.count() 'hasDeclaredType'
+			let declaredType = try func.maxonParamTypes.get(paramIndex) otherwise panic("analyzeParamConsumes: maxonParamTypes.get({paramIndex}) OOB despite bounds check")
+			if maxonTypeIsTypeParameter(declaredType) 'genericParam'
+				setConsumeBit(project, funcName: func.name, paramIndex: paramIndex, paramCount: func.paramCount)
+				logTrace(LogCategory.ir, message: function() gives "RC-PCA-SET func={func.name} pos={paramIndex} (type-param convention)")
+				flipped = true
+				continue
+			end 'genericParam'
+		end 'hasDeclaredType'
+		if paramValueReachesConsumeSink(module, func: func, valueId: paramVal, project: project, mayReturnArg: mayReturnArg) 'consumed'
+			setConsumeBit(project, funcName: func.name, paramIndex: paramIndex, paramCount: func.paramCount)
+			logTrace(LogCategory.ir, message: function() gives "RC-PCA-SET func={func.name} pos={paramIndex}")
+			flipped = true
+		end 'consumed'
+	end 'eachParam'
+
+	// Transparent-wrapper return-side fact: the function RETURNS a value owning a
+	// consumed param's +1 (a `Self{field: arg}` wrapper). Recorded once stable.
+	if not project.funcReturnsConsumedArg.contains(func.name) 'notYetWrapper'
+		if functionReturnsConsumedArg(module, func: func, paramValues: paramValues, project: project) 'isWrapper'
+			project.funcReturnsConsumedArg.insert(func.name)
+			flipped = true
+		end 'isWrapper'
+	end 'notYetWrapper'
+
+	return flipped
+end 'updateFuncConsumeBits'
+
+// Sentinel: a parameter index with no `param` op in the body (e.g. an unused param
+// the lowerer never materialized) — never a consume candidate.
+let CONSUME_NO_VALUE = (-1) as ValueId
+
+// True iff `valueId` (a parameter's SSA value) reaches a CONSUME SINK anywhere in
+// `func` — a heap store/box of it, or a call that consumes it at its argument
+// position. Post-mem2reg the parameter is a single SSA value used directly at its
+// sinks (no slot relays / pointer-identity copies survive — the unary opcodes are
+// all arithmetic/float, none of which alias a managed pointer), so a single forward
+// scan over the body for a direct sink is exact. A param re-passed to a consuming
+// callee is caught as the call-sink (the forwarding edge); a param stored into a
+// field/element/wrapper is caught as the store-sink.
+function paramValueReachesConsumeSink(module StdModule, func IrFunction, valueId ValueId, project Project, mayReturnArg MayReturnArgMap) returns bool
+	// The set of SSA values that ALIAS the parameter: the param's own value, plus the
+	// result of any call that MAY-RETURN one of those aliases as its argument (an
+	// identity-passthrough whose result is the same pointer). Grown to a fixpoint so a
+	// param laundered through a CHAIN of passthroughs (`resolveFileURL` then
+	// `normalizeSeparators`) is followed all the way to its store-sink.
+	var aliases = ValueIdArray.create()
+	aliases.push(valueId)
+	var expanded = true
+	while expanded 'growAliases'
+		expanded = false
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("paramValueReachesConsumeSink: blockRef not in module.blocks")
+			for opIdx in block.opRefs 'eachOp'
+				let op = try module.ops.get(opIdx) otherwise panic("paramValueReachesConsumeSink: opIdx not in module.ops")
+				let aliasedResult = callPassesThroughAlias(op, aliases: aliases, mayReturnArg: mayReturnArg)
+				if aliasedResult != CONSUME_NO_VALUE and not valueIdArrayContains(aliases, vid: aliasedResult) 'newAlias'
+					aliases.push(aliasedResult)
+					expanded = true
+					logTrace(LogCategory.ir, message: function() gives "RC-PCA-ALIAS func={func.name} param=%{valueId} aliasResult=%{aliasedResult}")
+				end 'newAlias'
+			end 'eachOp'
+		end 'eachBlock'
+	end 'growAliases'
+
+	for aliasId in aliases 'eachAlias'
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("paramValueReachesConsumeSink: blockRef not in module.blocks (sink scan)")
+			if blockBodyOrTermSinks(module, block: block, valueId: aliasId, project: project) 'sunk'
+				return true
+			end 'sunk'
+		end 'eachBlock'
+	end 'eachAlias'
+	return false
+end 'paramValueReachesConsumeSink'
+
+// If `op` is a call that MAY-RETURN one of its arguments AND that argument is in the
+// current `aliases` set, the call's RESULT id (it aliases the same parameter); else
+// `CONSUME_NO_VALUE`. The structural basis of the passthrough-aliasing edge: a call to
+// `G` returns its arg `j` on some path (`mayReturnArg[G][j]`), so passing a
+// param-aliased value at position `j` makes the result another handle on the param.
+function callPassesThroughAlias(op StdOp, aliases ValueIdArray, mayReturnArg MayReturnArgMap) returns ValueId
+	return match op 'dispatch'
+		call(c) gives callResultAliasesArg(c, aliases: aliases, mayReturnArg: mayReturnArg)
+		arith gives CONSUME_NO_VALUE
+		control gives CONSUME_NO_VALUE
+		memory gives CONSUME_NO_VALUE
+		system gives CONSUME_NO_VALUE
+	end 'dispatch'
+end 'callPassesThroughAlias'
+
+function callResultAliasesArg(c StdCallOp, aliases ValueIdArray, mayReturnArg MayReturnArgMap) returns ValueId
+	return match c 'check'
+		call(resultId, callee, argIds) gives calleeResultAliasesArg(resultId, callee: callee, argIds: argIds, aliases: aliases, mayReturnArg: mayReturnArg)
+		tryCall(resultId, callee, argIds, _) gives calleeResultAliasesArg(resultId, callee: callee, argIds: argIds, aliases: aliases, mayReturnArg: mayReturnArg)
+		ret gives CONSUME_NO_VALUE
+		indirectCall to errorReturn gives CONSUME_NO_VALUE
+	end 'check'
+end 'callResultAliasesArg'
+
+// `resultId` iff `callee` may-return its arg at a position whose argument is currently
+// a param-alias; else `CONSUME_NO_VALUE`.
+function calleeResultAliasesArg(resultId ValueId, callee String, argIds ValueIdArray, aliases ValueIdArray, mayReturnArg MayReturnArgMap) returns ValueId
+	let returnedPositions = try mayReturnArg.get(callee) otherwise return CONSUME_NO_VALUE
+	var idx = 0
+	while idx < argIds.count() 'each'
+		let aid = try argIds.get(idx) otherwise panic("calleeResultAliasesArg: argIds.get OOB despite idx < count")
+		if valueIdArrayContains(aliases, vid: aid) and boolArrayGet(returnedPositions, idx: idx) 'aliasReturned'
+			return resultId
+		end 'aliasReturned'
+		idx = idx + 1
+	end 'each'
+	return CONSUME_NO_VALUE
+end 'calleeResultAliasesArg'
+
+// True iff `func` increfs `valueId` anywhere (`stdlib.__mm_incref(valueId)` or its
+// bare/`mm_incref` spellings). A function that increfs a param took its OWN reference
+// to it (a retain), so storing it afterward is a borrow-capture, not a consume of
+// the caller's reference. (The lowered stdlib bodies contain manual increfs only at
+// the few retain sites — `lowerCreateCursor` — never at the move-store mutators, so
+// this cleanly separates retain from consume.)
+function functionIncrefsValue(module StdModule, func IrFunction, valueId ValueId) returns bool
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("functionIncrefsValue: blockRef not in module.blocks")
+		for opIdx in block.opRefs 'eachOp'
+			let op = try module.ops.get(opIdx) otherwise panic("functionIncrefsValue: opIdx not in module.ops")
+			if opIncrefsValue(op, valueId: valueId) 'increfs'
+				return true
+			end 'increfs'
+		end 'eachOp'
+	end 'eachBlock'
+	return false
+end 'functionIncrefsValue'
+
+function opIncrefsValue(op StdOp, valueId ValueId) returns bool
+	return match op 'dispatch'
+		call(c) gives callIncrefsValue(c, valueId: valueId)
+		arith gives false
+		control gives false
+		memory gives false
+		system gives false
+	end 'dispatch'
+end 'opIncrefsValue'
+
+function callIncrefsValue(c StdCallOp, valueId ValueId) returns bool
+	return match c 'check'
+		call(_, callee, argIds) gives calleeIsIncref(callee) and valueIdArrayContains(argIds, vid: valueId)
+		tryCall(_, callee, argIds, _) gives calleeIsIncref(callee) and valueIdArrayContains(argIds, vid: valueId)
+		ret gives false
+		indirectCall to errorReturn gives false
+	end 'check'
+end 'callIncrefsValue'
+
+function calleeIsIncref(callee String) returns bool
+	return callee == "stdlib.__mm_incref" or callee == "__mm_incref" or callee == "mm_incref"
+end 'calleeIsIncref'
+
+// Scan one block's body ops + terminator for a consume sink of `valueId`.
+function blockBodyOrTermSinks(module StdModule, block IrBlock, valueId ValueId, project Project) returns bool
+	for opIdx in block.opRefs 'eachOp'
+		let op = try module.ops.get(opIdx) otherwise panic("blockBodyOrTermSinks: opIdx not in module.ops")
+		if opIsConsumeSinkFor(op, valueId: valueId, project: project) 'sink'
+			return true
+		end 'sink'
+	end 'eachOp'
+	if block.hasTerminatorOp() 'hasTerm'
+		let term = try module.ops.get(block.terminatorIndex()) otherwise panic("blockBodyOrTermSinks: terminatorIndex not in module.ops")
+		if opIsConsumeSinkFor(term, valueId: valueId, project: project) 'termSink'
+			return true
+		end 'termSink'
+	end 'hasTerm'
+	return false
+end 'blockBodyOrTermSinks'
+
+// True iff `op` is a DIRECT consume sink of `valueId`:
+//   - a `store_indirect` / `box_value` whose STORED value is `valueId` (moved into
+//     heap storage), OR
+//   - a call that CONSUMES `valueId` at its argument position (an intrinsic leaf or a
+//     module function whose consume bit for that position is already set).
+function opIsConsumeSinkFor(op StdOp, valueId ValueId, project Project) returns bool
+	if opStoresValueIntoHeap(op, valueId: valueId) 'store'
+		return true
+	end 'store'
+	return callConsumesArgValue(op, valueId: valueId, project: project)
+end 'opIsConsumeSinkFor'
+
+// True iff `op` stores `valueId` AS THE STORED VALUE into heap memory
+// (`store_indirect`'s value operand or `box_value`'s value operand). Storing it as
+// an ADDRESS/base is not a consume (the pointer is read, not the pointee moved).
+function opStoresValueIntoHeap(op StdOp, valueId ValueId) returns bool
+	return match op 'dispatch'
+		system(s) gives sysStoresValue(s, valueId: valueId)
+		arith gives false
+		control gives false
+		call gives false
+		memory gives false
+	end 'dispatch'
+end 'opStoresValueIntoHeap'
+
+function sysStoresValue(s StdSystemOp, valueId ValueId) returns bool
+	return match s 'check'
+		storeIndirect(_, _, storedId, _, _) gives storedId == valueId
+		boxValue(_, storedId, _) gives storedId == valueId
+		globalAddr to loadByte gives false
+		osExit to loadFramePtr gives false
+		loadIndirect gives false
+		funcAddr gives false
+		drop gives false
+		osAllocPages to osDirMkdir gives false
+		atomicInc to osLockRelease gives false
+		unboxValue gives false
+		loadLayoutDescriptor to dropTypeParam gives false
+	end 'check'
+end 'sysStoresValue'
+
+// True iff `op` is a call passing `valueId` at an argument position the callee
+// CONSUMES (per the fixpoint's current bits / the intrinsic leaf set).
+function callConsumesArgValue(op StdOp, valueId ValueId, project Project) returns bool
+	return match op 'dispatch'
+		call(c) gives callConsumesValueArg(c, valueId: valueId, project: project)
+		arith gives false
+		control gives false
+		memory gives false
+		system gives false
+	end 'dispatch'
+end 'callConsumesArgValue'
+
+function callConsumesValueArg(c StdCallOp, valueId ValueId, project Project) returns bool
+	return match c 'check'
+		call(_, callee, argIds) gives calleeConsumesArgAt(callee, argIds: argIds, valueId: valueId, project: project)
+		tryCall(_, callee, argIds, _) gives calleeConsumesArgAt(callee, argIds: argIds, valueId: valueId, project: project)
+		ret gives false
+		indirectCall to errorReturn gives false
+	end 'check'
+end 'callConsumesValueArg'
+
+// True iff `callee` consumes the argument equal to `valueId` (found at its position
+// in `argIds`). An intrinsic leaf-consumer consumes its value arg (the LAST arg);
+// otherwise consult the callee's current consume bits for that position.
+function calleeConsumesArgAt(callee String, argIds ValueIdArray, valueId ValueId, project Project) returns bool
+	var idx = 0
+	while idx < argIds.count() 'each'
+		let aid = try argIds.get(idx) otherwise panic("calleeConsumesArgAt: argIds.get OOB despite idx < count")
+		if aid == valueId 'atPos'
+			if calleeConsumesParamIndex(callee, paramIndex: idx, project: project) 'consumes'
+				return true
+			end 'consumes'
+		end 'atPos'
+		idx = idx + 1
+	end 'each'
+	return false
+end 'calleeConsumesArgAt'
+
+// True iff a call to `callee` consumes its parameter at `paramIndex`. Reads the
+// consume registry — which `seedIntrinsicLeafConsumers` pre-populated for the
+// runtime.std raw helpers and the fixpoint fills in for every analyzable callee — so
+// intrinsic leaves and module functions are looked up through ONE table.
+module function calleeConsumesParamIndex(callee String, paramIndex NodeIndex, project Project) returns bool
+	let bits = try project.funcParamConsumes.get(callee) otherwise return false
+	return boolArrayGet(bits, idx: paramIndex)
+end 'calleeConsumesParamIndex'
+
+// ============================================================
+// Transparent-wrapper return-side fact (`funcReturnsConsumedArg`)
+// ============================================================
+
+// True iff `func` is a TRANSPARENT-WRAPPER reinterpret: every return terminator
+// returns a CONSUMED PARAMETER DIRECTLY (the result IS the param's pointer, no fresh
+// wrapping allocation between). This is the `BuiltinArrayLiteral` shape — `Array.init`
+// /`Vector.init`'s `return Self{managed: managed}` over a single-pointer-field struct
+// lowers to "return the managed param" (a no-op reinterpret). The result carries the
+// SAME +1 as the param, so a caller's global-store of it needs no separate
+// store-incref (`isTransparentWrapResult`).
+//
+// CRUCIALLY this EXCLUDES a real multi-field constructor (`String.init`'s
+// `String{managed, isAsciiFlag}`): that ALLOCATES a fresh struct and stores `managed`
+// into a field — the result is a DISTINCT object that takes its OWN +1 on `managed`
+// via the inserter's field-store incref, so the caller's arg decref is still needed.
+// A real constructor's return value is alloc-defined (not the param itself), so the
+// "returns the param directly" test below rejects it. (The earlier alloc-based test
+// had this backwards — it matched the real constructors and missed the reinterprets.)
+function functionReturnsConsumedArg(module StdModule, func IrFunction, paramValues ParamValueMap, project Project) returns bool
+	var sawReturn = false
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("functionReturnsConsumedArg: blockRef not in module.blocks")
+		if not block.hasTerminatorOp() 'noTerm'
+			continue
+		end 'noTerm'
+		let term = try module.ops.get(block.terminatorIndex()) otherwise panic("functionReturnsConsumedArg: terminatorIndex not in module.ops")
+		let retVal = consumeReturnValueOf(term)
+		if retVal == CONSUME_NO_VALUE 'notReturn'
+			continue
+		end 'notReturn'
+		sawReturn = true
+		if not returnedValueIsConsumedParam(func, paramValues: paramValues, retVal: retVal, project: project) 'notReinterpret'
+			return false
+		end 'notReinterpret'
+	end 'eachBlock'
+	return sawReturn
+end 'functionReturnsConsumedArg'
+
+// True iff `retVal` IS a consumed parameter of `func` returned directly (the
+// transparent reinterpret). The returned SSA value equals a param whose consume bit is
+// set — no fresh allocation wraps it. A real constructor returns an alloc result (a
+// different SSA id than any param), so it fails this test.
+function returnedValueIsConsumedParam(func IrFunction, paramValues ParamValueMap, retVal ValueId, project Project) returns bool
+	for paramIndex in 0 upto func.paramCount 'eachParam'
+		let pv = paramValueForIndex(paramValues, paramIndex: paramIndex)
+		if pv == CONSUME_NO_VALUE 'noVal'
+			continue
+		end 'noVal'
+		if pv == retVal and calleeConsumesParamIndex(func.name, paramIndex: paramIndex, project: project) 'isReinterpret'
+			return true
+		end 'isReinterpret'
+	end 'eachParam'
+	return false
+end 'returnedValueIsConsumedParam'
+
+// The returned ValueId of a `ret`/`errorReturn` terminator, else `CONSUME_NO_VALUE`.
+function consumeReturnValueOf(term StdOp) returns ValueId
+	return match term 'dispatch'
+		call(c) gives consumeReturnValueOfCall(c)
+		arith gives CONSUME_NO_VALUE
+		control gives CONSUME_NO_VALUE
+		memory gives CONSUME_NO_VALUE
+		system gives CONSUME_NO_VALUE
+	end 'dispatch'
+end 'consumeReturnValueOf'
+
+function consumeReturnValueOfCall(c StdCallOp) returns ValueId
+	return match c 'check'
+		ret(retValId) gives retValId
+		call to tailCall gives CONSUME_NO_VALUE
+		param gives CONSUME_NO_VALUE
+		errorReturn(retValId, _) gives retValId
+	end 'check'
+end 'consumeReturnValueOfCall'
+
+// ============================================================
+// Intrinsic leaf-consumers (the runtime.std raw helpers)
+// ============================================================
+
+// Seed the consume registry for the runtime.std raw helpers whose bodies are NOT in
+// this module (slot-form, linked at the backend) and so cannot be analyzed. Each
+// MOVES its managed value argument into a container WITHOUT increfing; the
+// container's destructor performs the matching decref. The moved value is the LAST
+// argument in every such helper (the receiver/index/target args precede it). These
+// are compiler-internal primitives (a closed set), not user API. (`__managed_mem_set`
+// IS analyzable Maxon — it raw-stores via `__Internals.storeIndirect` — so the
+// structural store-sink rule detects it without a seed; it is intentionally NOT
+// listed here.)
+function seedIntrinsicLeafConsumers(project Project)
+	seedLastArgConsumer(project, callee: "mrt_managed_list_insert_last_value", paramCount: 2)
+	seedLastArgConsumer(project, callee: "mrt_managed_list_insert_first_value", paramCount: 2)
+	seedLastArgConsumer(project, callee: "mrt_managed_list_insert_after_value", paramCount: 3)
+	seedLastArgConsumer(project, callee: "mrt_managed_list_insert_before_value", paramCount: 3)
+	seedLastArgConsumer(project, callee: "mrt_managed_list_node_set_value", paramCount: 2)
+	seedLastArgConsumer(project, callee: "mrt_managed_list_push_value", paramCount: 2)
+	seedLastArgConsumer(project, callee: "mrt_managed_list_alloc_node", paramCount: 1)
+end 'seedIntrinsicLeafConsumers'
+
+// Record `callee` as consuming its LAST parameter (the moved value position).
+function seedLastArgConsumer(project Project, callee String, paramCount NodeIndex)
+	setConsumeBit(project, funcName: callee, paramIndex: paramCount - 1, paramCount: paramCount)
+end 'seedLastArgConsumer'
+
+// ============================================================
+// Registry mutation + param/value plumbing
+// ============================================================
+
+// Set `funcName`'s consume bit for `paramIndex`, growing the BoolArray to
+// `paramCount` entries (default false) on first touch.
+function setConsumeBit(project Project, funcName String, paramIndex NodeIndex, paramCount NodeIndex)
+	var bits = try project.funcParamConsumes.get(funcName) otherwise growConsumeBits(paramCount)
+	while bits.count() <= paramIndex 'grow'
+		bits.push(false)
+	end 'grow'
+	try bits.set(paramIndex, value: true) otherwise panic("setConsumeBit: set OOB after grow")
+	project.funcParamConsumes.upsert(funcName, value: bits)
+end 'setConsumeBit'
+
+function growConsumeBits(paramCount NodeIndex) returns BoolArray
+	var bits = BoolArray.create()
+	var i = 0
+	while i < paramCount 'fill'
+		bits.push(false)
+		i = i + 1
+	end 'fill'
+	return bits
+end 'growConsumeBits'
+
+function boolArrayGet(bits BoolArray, idx NodeIndex) returns bool
+	return try bits.get(idx) otherwise false
+end 'boolArrayGet'
+
+// Render a BoolArray as `[1,0,1]` for trace logging.
+function boolArrayToString(bits BoolArray) returns String
+	var out = "["
+	var i = 0
+	while i < bits.count() 'each'
+		if i > 0 'sep'
+			out = "{out},"
+		end 'sep'
+		let v = try bits.get(i) otherwise false
+		out = (("{out}1") if v else ("{out}0"))
+		i = i + 1
+	end 'each'
+	return "{out}]"
+end 'boolArrayToString'
+
+// Per-callee map from a function name to a BoolArray flagging which parameter
+// positions that function MAY RETURN on some path (the identity-passthrough relation).
+// Built ONCE up front by `computeMayReturnArgMap` and consulted by the consume walk's
+// passthrough-aliasing edge (`calleeResultAliasesArg`).
+typealias MayReturnArgMap = Map with (String, BoolArray)
+
+// Build the may-return-arg relation for every function in `module`: a position is
+// flagged iff SOME `ret`/`errorReturn` terminator returns that parameter's SSA value
+// DIRECTLY (`return param` — the no-transform passthrough branch). A return value that
+// is an allocation / arith / a different SSA id is not a passthrough and sets no bit.
+// (Direct param-equality is sufficient for the passthrough shapes that matter —
+// `resolveFileURL`/`normalizeSeparators`'s `return input`/`return path`; the value
+// survives mem2reg as the param's own SSA id with no intervening pointer-identity copy,
+// per the same single-SSA-value reasoning the consume sink scan relies on.)
+function computeMayReturnArgMap(module StdModule) returns MayReturnArgMap
+	var out = MayReturnArgMap.create()
+	for funcIdx in 0 upto module.functions.count() 'eachFunc'
+		let func = try module.functions.get(funcIdx) otherwise panic("computeMayReturnArgMap: functions.get OOB at {funcIdx}")
+		if func.blockRefs.count() == 0 'empty'
+			continue
+		end 'empty'
+		let positions = computeReturnedParamPositions(module, func: func)
+		if positions.present 'hasReturnedParam'
+			out.upsert(func.name, value: positions.bits)
+			logTrace(LogCategory.ir, message: function() gives "RC-MAYRETARG func={func.name} positions={boolArrayToString(positions.bits)}")
+		end 'hasReturnedParam'
+	end 'eachFunc'
+	return out
+end 'computeMayReturnArgMap'
+
+// A BoolArray of returned-parameter positions plus a presence flag (true iff at least
+// one position is returned) — the per-function result of the may-return-arg scan.
+type ReturnedParamPositions
+	export var present as bool
+	export var bits as BoolArray
+
+	export static function none() returns ReturnedParamPositions
+		return Self{present: false, bits: BoolArray.create()}
+	end 'none'
+
+	export static function some(bits BoolArray) returns ReturnedParamPositions
+		return Self{present: true, bits: bits}
+	end 'some'
+end 'ReturnedParamPositions'
+
+function computeReturnedParamPositions(module StdModule, func IrFunction) returns ReturnedParamPositions
+	let paramValues = collectParamValues(module, func: func)
+	var bits = BoolArray.create()
+	var i = 0
+	while i < func.paramCount 'fillFalse'
+		bits.push(false)
+		i = i + 1
+	end 'fillFalse'
+	var any = false
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("computeReturnedParamPositions: blockRef not in module.blocks")
+		if not block.hasTerminatorOp() 'noTerm'
+			continue
+		end 'noTerm'
+		let term = try module.ops.get(block.terminatorIndex()) otherwise panic("computeReturnedParamPositions: terminatorIndex not in module.ops")
+		let retVal = consumeReturnValueOf(term)
+		if retVal == CONSUME_NO_VALUE 'notReturn'
+			continue
+		end 'notReturn'
+		for paramIndex in 0 upto func.paramCount 'eachParam'
+			let pv = paramValueForIndex(paramValues, paramIndex: paramIndex)
+			if pv != CONSUME_NO_VALUE and pv == retVal 'returnsThisParam'
+				try bits.set(paramIndex, value: true) otherwise panic("computeReturnedParamPositions: bits.set OOB at {paramIndex}")
+				any = true
+			end 'returnsThisParam'
+		end 'eachParam'
+	end 'eachBlock'
+	if not any 'noneReturned'
+		return ReturnedParamPositions.none()
+	end 'noneReturned'
+	return ReturnedParamPositions.some(bits)
+end 'computeReturnedParamPositions'
+
+// Per-function map from a parameter ABI index to the SSA value its `param` op
+// defines (the body's handle on that parameter). Built once per function.
+typealias ParamValueMap = Map with (NodeIndex, ValueId)
+
+function collectParamValues(module StdModule, func IrFunction) returns ParamValueMap
+	var pv = ParamValueMap.create()
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("collectParamValues: blockRef not in module.blocks")
+		for opIdx in block.opRefs 'eachOp'
+			let op = try module.ops.get(opIdx) otherwise panic("collectParamValues: opIdx not in module.ops")
+			recordParamOp(op, pv: pv)
+		end 'eachOp'
+	end 'eachBlock'
+	return pv
+end 'collectParamValues'
+
+function recordParamOp(op StdOp, pv ParamValueMap)
+	match op 'dispatch'
+		call(c) then recordParamCall(c, pv: pv)
+		arith then break 'dispatch'
+		control then break 'dispatch'
+		memory then break 'dispatch'
+		system then break 'dispatch'
+	end 'dispatch'
+end 'recordParamOp'
+
+function recordParamCall(c StdCallOp, pv ParamValueMap)
+	match c 'check'
+		param(resultId, paramIndex, _) then pv.upsert(paramIndex as NodeIndex, value: resultId)
+		ret then break 'check'
+		call to tailCall then break 'check'
+		errorReturn then break 'check'
+	end 'check'
+end 'recordParamCall'
+
+function paramValueForIndex(pv ParamValueMap, paramIndex NodeIndex) returns ValueId
+	return try pv.get(paramIndex) otherwise CONSUME_NO_VALUE
+end 'paramValueForIndex'

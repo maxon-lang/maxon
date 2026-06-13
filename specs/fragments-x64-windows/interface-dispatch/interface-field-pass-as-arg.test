@@ -66,15 +66,21 @@ module {
   }
   func @Holder.create(rcx: i64, rdx: i64) -> i64 {
   entry:
-    x64.prologue stack_size=16
+    x64.prologue stack_size=32
     x64.mov [rbp-8], rcx
     x64.mov [rbp-16], rdx
+    x64.xor eax, eax
+    x64.xor edx, edx
     x64.mov ecx, 16
-    x64.call mrt_alloc
-    x64.mov r9, [rbp-16]
-    x64.mov rsi, [rbp-8]
-    x64.mov [r8+0], rsi (8b)
-    x64.mov [r8+8], r9 (8b)
+    x64.call stdlib.__mm_alloc
+    x64.mov r12, r8
+    x64.mov rcx, r12
+    x64.call stdlib.__mm_incref
+    x64.mov r8, [rbp-16]
+    x64.mov r9, [rbp-8]
+    x64.mov [r12+0], r9 (8b)
+    x64.mov [r12+8], r8 (8b)
+    x64.mov r8, r12
     x64.epilogue
     x64.ret
   }
@@ -93,24 +99,34 @@ module {
   func @main() -> u32 {
   entry:
     x64.prologue stack_size=16
+    x64.xor eax, eax
+    x64.xor edx, edx
     x64.mov ecx, 8
-    x64.call mrt_alloc
-    x64.mov r9d, 42
-    x64.mov [r8+0], r9 (8b)
+    x64.call stdlib.__mm_alloc
+    x64.mov r12, r8
+    x64.mov r8d, 42
+    x64.mov [r12+0], r8 (8b)
     x64.lea rdx, [rip+__witness_Marker_Tagged]
-    x64.mov rcx, r8
+    x64.mov rcx, r12
     x64.call Holder.create
-    x64.mov rdx, [r8+8] (8b)
-    x64.mov rcx, [r8+0] (8b)
+    x64.mov r13, r8
+    x64.mov rcx, r12
+    x64.call mm_drop
+    x64.mov rdx, [r13+8] (8b)
+    x64.mov rcx, [r13+0] (8b)
     x64.call callTag
-    x64.mov r9d, 4294967295
-    x64.cmp r8, r9
+    x64.mov r12, r8
+    x64.mov rcx, r13
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r8d, 4294967295
+    x64.cmp r12, r8
     x64.jbe __range_ok_0
   __range_panic_0:
     x64.lea r12, [rip+__panic_msg_d97c31bc521f5d8c]
     x64.mov rcx, r12
     x64.call mrt_panic
   __range_ok_0:
+    x64.mov r8, r12
     x64.epilogue
     x64.ret
   }

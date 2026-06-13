@@ -1,0 +1,223 @@
+// Test: rung-26-nested-struct-array-of-arrays
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Box'
+
+typealias BoxArray = Array with Box
+typealias BoxGrid = Array with BoxArray
+
+function main() returns ExitCode
+	var grid = BoxGrid.create()
+	var row0 = BoxArray.create()
+	row0.push(Box.create(7))
+	row0.push(Box.create(9))
+	grid.push(row0)
+	var row1 = BoxArray.create()
+	row1.push(Box.create(11))
+	grid.push(row1)
+	return grid.count()
+end 'main'
+---
+MmTrace: true
+ExitCode: 2
+Stderr: ```
+mm_alloc Array #1 size=8 [main]
+mm_incref Array #1 rc=1 [main]
+mm_alloc __ManagedMemory #2 size=48 [main]
+mm_incref __ManagedMemory #2 rc=1 [main]
+mm_move Array #1 -> return [main]
+mm_alloc Array #3 size=8 [main]
+mm_incref Array #3 rc=1 [main]
+mm_alloc __ManagedMemory #4 size=48 [main]
+mm_incref __ManagedMemory #4 rc=1 [main]
+mm_move Array #3 -> return [main]
+mm_alloc Box #5 size=8 [Box.create]
+mm_incref Box #5 rc=1 [Box.create]
+mm_move Box #5 -> return [Box.create]
+mm_move Box #5 -> container [main]
+mm_alloc <raw> #6 size=32 [main]
+mm_incref <raw> #6 rc=1 [main]
+mm_alloc Box #7 size=8 [Box.create]
+mm_incref Box #7 rc=1 [Box.create]
+mm_move Box #7 -> return [Box.create]
+mm_move Box #7 -> container [main]
+mm_move Array #3 -> container [main]
+mm_alloc <raw> #8 size=32 [main]
+mm_incref <raw> #8 rc=1 [main]
+mm_alloc Array #9 size=8 [main]
+mm_incref Array #9 rc=1 [main]
+mm_alloc __ManagedMemory #10 size=48 [main]
+mm_incref __ManagedMemory #10 rc=1 [main]
+mm_move Array #9 -> return [main]
+mm_alloc Box #11 size=8 [Box.create]
+mm_incref Box #11 rc=1 [Box.create]
+mm_move Box #11 -> return [Box.create]
+mm_move Box #11 -> container [main]
+mm_alloc <raw> #12 size=32 [main]
+mm_incref <raw> #12 rc=1 [main]
+mm_move Array #9 -> container [main]
+mm_decref Array #1 rc=0 [main]
+  mm_decref __ManagedMemory #2 rc=0 [main]
+    mm_decref Array #3 rc=0 [main]
+      mm_decref __ManagedMemory #4 rc=0 [main]
+        mm_decref Box #5 rc=0 [main]
+          mm_free Box #5
+        mm_decref Box #7 rc=0 [main]
+          mm_free Box #7
+        mm_decref <raw> #6 rc=0 [main]
+          mm_free <raw> #6
+        mm_free __ManagedMemory #4
+      mm_free Array #3
+    mm_decref Array #9 rc=0 [main]
+      mm_decref __ManagedMemory #10 rc=0 [main]
+        mm_decref Box #11 rc=0 [main]
+          mm_free Box #11
+        mm_decref <raw> #12 rc=0 [main]
+          mm_free <raw> #12
+        mm_free __ManagedMemory #10
+      mm_free Array #9
+    mm_decref <raw> #8 rc=0 [main]
+      mm_free <raw> #8
+    mm_free __ManagedMemory #2
+  mm_free Array #1
+```
+RequiredIRSelfhosted: ```
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=48
+    x64.lea r12, [rip+__mtstr_scope_main]
+    x64.lea r13, [rip+__layout_Array_BoxArray]
+    x64.lea r14, [rip+__layout_Array_Box]
+    x64.lea r15, [rip+__mtstr_scope_Box_create]
+    x64.mov r8d, 60
+    x64.xor r8d, r8d
+    x64.mov [rbp+-8], r8
+    x64.mov r8d, 8
+    x64.mov r8d, 7
+    x64.mov rcx, r12
+    x64.call mm_scope_push
+    x64.mov rcx, r13
+    x64.call Array.create
+    x64.mov r12, r8
+    x64.mov rcx, r14
+    x64.call Array.create
+    x64.mov r13, r8
+    x64.mov rcx, r15
+    x64.call mm_scope_push
+    x64.mov rcx, 8
+    x64.mov rdx, [rbp+-8]
+    x64.mov rax, 60
+    x64.call stdlib.__mm_alloc
+    x64.mov r14, r8
+    x64.mov rcx, r14
+    x64.call stdlib.__mm_incref
+    x64.mov r8, 7
+    x64.mov [r14+0], r8 (8b)
+    x64.mov rcx, r14
+    x64.call mm_move_return
+    x64.call mm_scope_pop
+    x64.mov rcx, r14
+    x64.call mm_move_container
+    x64.lea rax, [rip+__layout_Array_Box]
+    x64.lea r15, [rip+__mtstr_scope_Box_create]
+    x64.mov r8d, 60
+    x64.xor r8d, r8d
+    x64.mov [rbp+-8], r8
+    x64.mov r8d, 8
+    x64.mov r8d, 9
+    x64.mov rcx, r13
+    x64.mov rdx, r14
+    x64.call Array.push
+    x64.mov rcx, r15
+    x64.call mm_scope_push
+    x64.mov rcx, 8
+    x64.mov rdx, [rbp+-8]
+    x64.mov rax, 60
+    x64.call stdlib.__mm_alloc
+    x64.mov r14, r8
+    x64.mov rcx, r14
+    x64.call stdlib.__mm_incref
+    x64.mov r8, 9
+    x64.mov [r14+0], r8 (8b)
+    x64.mov rcx, r14
+    x64.call mm_move_return
+    x64.call mm_scope_pop
+    x64.mov rcx, r14
+    x64.call mm_move_container
+    x64.lea rax, [rip+__layout_Array_Box]
+    x64.mov rcx, r13
+    x64.mov rdx, r14
+    x64.call Array.push
+    x64.mov rcx, r13
+    x64.call mm_move_container
+    x64.lea rax, [rip+__layout_Array_BoxArray]
+    x64.lea r14, [rip+__layout_Array_Box]
+    x64.lea r15, [rip+__mtstr_scope_Box_create]
+    x64.mov r8d, 60
+    x64.xor r8d, r8d
+    x64.mov [rbp+-8], r8
+    x64.mov r8d, 8
+    x64.mov r8d, 11
+    x64.mov rcx, r12
+    x64.mov rdx, r13
+    x64.call Array.push
+    x64.mov rcx, r14
+    x64.call Array.create
+    x64.mov r13, r8
+    x64.mov rcx, r15
+    x64.call mm_scope_push
+    x64.mov rcx, 8
+    x64.mov rdx, [rbp+-8]
+    x64.mov rax, 60
+    x64.call stdlib.__mm_alloc
+    x64.mov r14, r8
+    x64.mov rcx, r14
+    x64.call stdlib.__mm_incref
+    x64.mov r8, 11
+    x64.mov [r14+0], r8 (8b)
+    x64.mov rcx, r14
+    x64.call mm_move_return
+    x64.call mm_scope_pop
+    x64.mov rcx, r14
+    x64.call mm_move_container
+    x64.lea rax, [rip+__layout_Array_Box]
+    x64.mov rcx, r13
+    x64.mov rdx, r14
+    x64.call Array.push
+    x64.mov rcx, r13
+    x64.call mm_move_container
+    x64.lea rax, [rip+__layout_Array_BoxArray]
+    x64.mov rcx, r12
+    x64.mov rdx, r13
+    x64.call Array.push
+    x64.lea rdx, [rip+__layout_Array_BoxArray]
+    x64.mov rcx, r12
+    x64.call Array.count
+    x64.mov r13, r8
+    x64.mov rcx, r12
+    x64.call __mm_decref_maybenull_helper
+    x64.call mm_scope_pop
+    x64.mov r8d, 4294967295
+    x64.cmp r13, r8
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea r12, [rip+__panic_msg_1196ed9618376cbc]
+    x64.mov rcx, r12
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov r8, r13
+    x64.epilogue
+    x64.ret
+  }
+}
+
+```
+---
+---

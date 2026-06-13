@@ -1,0 +1,81 @@
+// Test: rung-07-loop-iteration-freed
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Box'
+
+function main() returns ExitCode
+	var sum = 0
+	for i in 1 to 3 'loop'
+		let b = Box.create(i)
+		sum = sum + b.value
+	end 'loop'
+	return sum
+end 'main'
+---
+MmTrace: true
+ExitCode: 6
+Stderr: ```
+mm_alloc Box #1 size=8 [Box.create]
+mm_move Box #1 -> return [Box.create]
+mm_drop Box #1 [main]
+    mm_free Box #1
+mm_alloc Box #2 size=8 [Box.create]
+mm_move Box #2 -> return [Box.create]
+mm_drop Box #2 [main]
+    mm_free Box #2
+mm_alloc Box #3 size=8 [Box.create]
+mm_move Box #3 -> return [Box.create]
+mm_drop Box #3 [main]
+    mm_free Box #3
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %17 = mir.global_addr @__mtstr_scope_main
+    %18 = mir.call @mm_scope_push(%17)
+    %1 = mir.mov_imm 0 : i64
+    %2 = mir.mov_imm 1 : i64
+    %3 = mir.mov_imm 3 : i64
+    mir.br loop_0.header(%1, %2)
+  loop_0.header:
+    %6 = mir.cmp le, %20, %3
+    mir.cond_br %6 [then: loop_0(), else: loop_0.exit()]
+  loop_0:
+    %21 = mir.global_addr @__mtstr_scope_Box_create
+    %22 = mir.call @mm_scope_push(%21)
+    %23 = mir.mov_imm 8 : i64
+    %24 = mir.mov_imm 0 : i64
+    %25 = mir.mov_imm 60 : i64
+    %26 = mir.call @stdlib.__mm_alloc(%23, %24, %25)
+    mir.store %20, %26, 0 width: qword
+    %28 = mir.call @mm_move_return(%26)
+    %29 = mir.call @mm_scope_pop()
+    %11 = mir.load %26, 0 width: qword
+    %12 = mir.add.i64 %19, %11
+    %30 = mir.call @mm_drop(%26)
+    mir.br loop_0.step()
+  loop_0.step:
+    %14 = mir.mov_imm 1 : i64
+    %15 = mir.add.i64 %20, %14
+    mir.br loop_0.header(%12, %15)
+  loop_0.exit:
+    %31 = mir.call @mm_scope_pop()
+    %32 = mir.mov_imm 125 : i64
+    %33 = mir.cmp ugt, %19, %32
+    mir.cond_br %33 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %34 = mir.global_addr @__panic_msg_ddd5203208018c1a
+    %35 = mir.call @mrt_panic(%34)
+  __range_ok_0:
+    mir.ret %19
+  }
+}
+---

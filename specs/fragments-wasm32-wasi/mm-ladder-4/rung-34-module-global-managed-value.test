@@ -1,0 +1,48 @@
+// Test: rung-34-module-global-managed-value
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Box'
+
+let g = Box.create(7)
+
+function main() returns ExitCode
+	return g.value
+end 'main'
+---
+MmTrace: true
+ExitCode: 7
+Stderr: ```
+mm_alloc Box #1 size=8 [Box.create]
+mm_incref Box #1 rc=1 [Box.create]
+mm_move Box #1 -> return [Box.create]
+mm_move Box #1 -> container [__module_init_2]
+mm_decref Box #1 rc=0 [main]
+  mm_free Box #1
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %3 = mir.global_addr @__mtstr_scope_main
+    %4 = mir.call @mm_scope_push(%3)
+    %0 = mir.global_addr @__data_g
+    %1 = mir.load %0, 0 width: qword
+    %2 = mir.load %1, 0 width: qword
+    %5 = mir.mov_imm 125 : i64
+    %6 = mir.cmp ugt, %2, %5
+    mir.cond_br %6 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %7 = mir.global_addr @__panic_msg_322536c63b56263b
+    %8 = mir.call @mrt_panic(%7)
+  __range_ok_0:
+    mir.ret %2
+  }
+}
+---

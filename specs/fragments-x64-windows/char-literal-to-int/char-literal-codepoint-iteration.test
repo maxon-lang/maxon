@@ -15,10 +15,13 @@ ExitCode: 2
 module {
   func @main() -> u32 {
   entry:
-    x64.prologue stack_size=16
-    x64.mov ecx, 40
-    x64.call mrt_alloc
+    x64.prologue stack_size=32
+    x64.lea rdx, [rip+stdlib.__destruct___ManagedMemory]
+    x64.mov ecx, 48
+    x64.call mrt_alloc_with_dtor
     x64.mov r12, r8
+    x64.xor r13d, r13d
+    x64.mov [r12+40], r13 (8b)
     x64.lea r8, [rip+__istr_0]
     x64.mov [r12+0], r8 (8b)
     x64.mov r8d, 5
@@ -27,65 +30,61 @@ module {
     x64.mov [r12+16], r8 (8b)
     x64.mov r8d, 1
     x64.mov [r12+24], r8 (8b)
-    x64.xor r8d, r8d
-    x64.mov [r12+32], r8 (8b)
+    x64.mov [r12+32], r13 (8b)
+    x64.lea rdx, [rip+__destruct_String]
     x64.mov ecx, 16
-    x64.call mrt_alloc
-    x64.mov [r8+0], r12 (8b)
-    x64.mov r9d, 1
-    x64.mov [r8+8], r9 (8b)
-    x64.mov rcx, [r8+0] (8b)
-    x64.call CodepointView.create
-    x64.xor r12d, r12d
-  inlined_CodepointView.createIterator_0:
-    x64.mov rcx, [r8+0] (8b)
-    x64.call CodepointIterator.create
-    x64.test rdx, rdx
-    x64.je inlined_CodepointView.createIterator_2
-  inlined_CodepointView.createIterator_1:
-    x64.xor ecx, ecx
-    x64.mov r13, rcx
-    x64.jmp inline_cont_main_0
-  inlined_CodepointView.createIterator_2:
-    x64.xor r9d, r9d
-    x64.mov r13, r8
-    x64.mov rdx, r9
+    x64.mov rax, r13
+    x64.call stdlib.__mm_alloc
+    x64.mov r14, r8
+    x64.mov [r14+0], r12 (8b)
+    x64.mov r8d, 1
+    x64.mov [r14+8], r8 (8b)
+    x64.mov rcx, [r14+0] (8b)
+  inlined_stdlib.__mm_incref_0_0:
+    x64.mov r8, rcx
+    x64.sub r8, 8
+    x64.lock inc qword ptr [r8]
   inline_cont_main_0:
+    x64.call CodepointView.create
+    x64.mov r12, r8
+    x64.mov rcx, r14
+    x64.call mm_drop
+    x64.mov rcx, r12
+    x64.call CodepointView.createIterator
+    x64.mov r14, r8
     x64.test rdx, rdx
     x64.je chars_0
-    x64.mov r8, r12
-    x64.jmp chars_0.exit
-  inlined_CodepointIterator.advance_0:
-    x64.mov r8, [r13+0] (8b)
-    x64.movzx r9, [r13+20] (1b)
-    x64.mov rsi, [r13+8] (8b)
+    x64.jmp __rc_edge_13_0
+  inlined_CodepointIterator.advance_0_0:
+    x64.mov r8, [r14+0] (8b)
+    x64.movzx r9, [r14+20] (1b)
+    x64.mov rsi, [r14+8] (8b)
     x64.mov rdi, [r8+8] (8b)
     x64.add rsi, r9
     x64.cmp rsi, rdi
-    x64.jl inlined_CodepointIterator.advance_2
-  inlined_CodepointIterator.advance_1:
+    x64.jl inlined_CodepointIterator.advance_2_0
+  inlined_CodepointIterator.advance_1_0:
     x64.mov edx, 1
     x64.xor r8d, r8d
     x64.jmp inline_cont_main_1
-  inlined_CodepointIterator.advance_2:
-    x64.mov [r13+8], rsi (8b)
-    x64.mov rdx, [r13+8] (8b)
-    x64.mov rcx, [r13+0] (8b)
+  inlined_CodepointIterator.advance_2_0:
+    x64.mov [r14+8], rsi (8b)
+    x64.mov rdx, [r14+8] (8b)
+    x64.mov rcx, [r14+0] (8b)
     x64.call stdlib.helpers.string.utf8DecodeAt
-    x64.mov [r13+16], r8 (4b)
-    x64.mov rdx, [r13+8] (8b)
-    x64.mov rcx, [r13+0] (8b)
+    x64.mov [r14+16], r8 (4b)
+    x64.mov rdx, [r14+8] (8b)
+    x64.mov rcx, [r14+0] (8b)
     x64.call stdlib.helpers.string.utf8ByteLengthAt
-    x64.mov [r13+20], r8 (1b)
+    x64.mov [r14+20], r8 (1b)
     x64.xor edx, edx
     x64.xor r8d, r8d
   inline_cont_main_1:
     x64.test rdx, rdx
     x64.je chars_0
-    x64.mov r8, r12
-    x64.jmp chars_0.exit
+    x64.jmp __rc_edge_10_0
   chars_0:
-    x64.mov rcx, r13
+    x64.mov rcx, r14
     x64.call CodepointIterator.current
     x64.cmp r8, 45
     x64.jne dash_0.after
@@ -96,9 +95,21 @@ module {
     x64.jbe __range_ok_0
     x64.jmp __range_panic_0
   dash_0:
-    x64.add r12, 1
+    x64.add r13, 1
   dash_0.after:
-    x64.jmp inlined_CodepointIterator.advance_0
+    x64.jmp inlined_CodepointIterator.advance_0_0
+  __rc_edge_13_0:
+    x64.mov rcx, r12
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r8, r13
+    x64.jmp chars_0.exit
+  __rc_edge_10_0:
+    x64.mov rcx, r14
+    x64.call __mm_decref_maybenull_helper
+    x64.mov rcx, r12
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r8, r13
+    x64.jmp chars_0.exit
   __range_panic_0:
     x64.lea r12, [rip+__panic_msg_61e773a776e3a786]
     x64.mov rcx, r12

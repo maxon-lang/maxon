@@ -232,7 +232,8 @@ function receiverTypeIsMutationChecked(project Project, t MaxonType) returns boo
 	return match t 'check'
 		boolean to float gives false
 		string gives true
-		named(id) gives project.typeNames.get(id) == "String"
+		character gives true
+		named(id) gives nonEmptyEquals(project.typeNames.get(id), discovered: getCachedBuiltinStringLiteralTypeName())
 		function to typeParameter gives false
 		genericInstance(id) gives not isBuiltinManagedTypeName(genericInstanceIdBaseName(project, id: id))
 		interface to cstring gives false
@@ -449,6 +450,7 @@ function typeIsHeapAllocated(project Project, t MaxonType) returns bool
 		integer gives false
 		float gives false
 		string gives true
+		character gives true
 		named(id) gives namedTypeIsHeapAllocated(project, id: id)
 		function gives false
 		unresolved gives false

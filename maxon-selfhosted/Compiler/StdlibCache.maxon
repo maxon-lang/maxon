@@ -197,7 +197,61 @@ let CACHE_MAGIC_3 = 0x00  // '\0'
 // between osGetArgc and osGetArgv in the union, shifting every later
 // StdSystemOp ordinal. The serialized system-op tag is the union ordinal, so
 // caches written before the shift would mis-deserialize; bump to invalidate.
-let CACHE_FORMAT_VERSION = 69
+// v70 (Concept C): persisted argument-consume facts (`funcParamConsumes` +
+// `funcReturnsConsumedArg`) computed by `analyzeParamConsumes` over the stdlib,
+// so a user build reads the structural per-parameter consume bits for non-inlined
+// consuming stdlib callees instead of falling back to the callee-name allowlists.
+// New trailing tables; bump invalidates older caches that lack them.
+// v71: layout descriptors now pack per-type-arg HAS_HEAP_REFS bits into
+// `flags@24` (bits 8+), and BuildLayoutDescriptors emits two fixed-label
+// singleton element layouts (`__layout_elem_managed` / `__layout_elem_raw`).
+// The descriptor flag-bit semantics and the set of cached rdata blobs changed,
+// so older caches must be regenerated.
+// v72: persisted RETURN-BORROW facts (`funcReturnsBorrow`) computed by
+// `analyzeReturnBorrows` over the stdlib, so a user build restores a stdlib
+// function's borrow-returning status (notably the bodyless-in-user-build
+// element loaders `__managed_mem_get` / `__managed_mem_cursor_current`)
+// instead of re-deriving it from a name allowlist. New trailing table; bump
+// invalidates older caches that lack it.
+// v73: persisted ELEMENT-LOADER chain-boundary facts (`funcIsElementLoader`) —
+// the functions that call the shared `__managed_mem_load_sized` load primitive,
+// computed by `analyzeReturnBorrows`. Restores the wrapper-retain boundary on the
+// user build (bodies absent) so the borrow→owned retain fires exactly once,
+// replacing the hardcoded loader-name list. New trailing table; bump invalidates
+// older caches that lack it.
+// v74: persist the four refcount-insertion per-value side-tables on each cached
+// stdlib `IrFunction` (`valueOwnership`/`valueManaged`/`valueTypeParam`/
+// `valueTypeParamName`). `writeStdIrFunction` previously omitted them, so a
+// cache-restored function had EMPTY tables; when the user-pipeline inliner spliced
+// a cached stdlib body into user code, `threadInlinedOwnership` read the empty
+// tables and classified inlined alloc results (e.g. `StringIndex.create`'s box)
+// as `notManaged` → the inserter never dropped them. Result: the SAME program is
+// leak-free when stdlib is compiled from source but LEAKS against the cache — the
+// shared root cause of the mass spec-test exit-101 failures. New trailing per-func
+// run; bump invalidates older caches that lack it.
+// v75: `analyzeParamConsumes` now sets the consume bit for every TYPE-PARAMETER-
+// typed parameter (the callee-owns-generic-params convention), so cached
+// `funcParamConsumes` from older builds disagree with the inserter's caller-side
+// transfer accounting (the String-keyed `m.get("a")` double-drop). Same format,
+// different facts; bump forces recompute.
+// v76: generic-shared `Self{...}` allocations with type-param fields stamp the
+// layout descriptor's destroy thunk as their destructor, layout destroy thunks
+// emit a real `__mm_decref_maybenull_helper` per heap-bearing field, and the
+// borrow-liveness nav edge skips arg-0-consuming factories — cached v75 bodies
+// carry the old null-destructor allocs and over-extended borrow refcounting.
+// v77: `analyzeReturnBorrows` now classifies the all-borrow-call merge phi
+// (`List.walkTo`'s loop over the seeded node walkers) as borrow-returning, so
+// cached `funcReturnsBorrow` sets and the inserter's caller-side accounting
+// from v76 disagree (the `List.get` element over-release). Same format,
+// different facts; bump forces recompute. Also adds the trailing
+// `funcReturnsReceiverInterior` set (format change).
+// v78: `lowerCreateCursor` classifies the cursor `callReturnRc1` (the empty-
+// collection throw path now releases it) — cached v77 bodies strand the cursor
+// + its retained source on that path.
+// v79: `lowerFieldStore` emits a typed decref-old on every NON-INIT store to a
+// heap-managed field (the builder-pattern reassign leak) — cached v78 stdlib
+// bodies lack the release and disagree with from-source builds.
+let CACHE_FORMAT_VERSION = 79
 
 // ============================================================
 // Types
@@ -300,6 +354,21 @@ export union BuiltinDictionaryLiteralName
 	found(name String)
 end 'BuiltinDictionaryLiteralName'
 
+// Discovery cache for the BuiltinCharLiteral protocol — same shape as
+// BuiltinArrayLiteralName, see `cachedBuiltinCharLiteralTypeName` in StdlibLoader
+// for the parser-side static this mirrors.
+export union BuiltinCharLiteralName
+	none
+	found(name String)
+end 'BuiltinCharLiteralName'
+
+// Discovery cache for the BuiltinStringLiteral protocol — same shape as
+// BuiltinArrayLiteralName, see `cachedBuiltinStringLiteralTypeName` in StdlibLoader.
+export union BuiltinStringLiteralName
+	none
+	found(name String)
+end 'BuiltinStringLiteralName'
+
 // All data needed to link pre-compiled stdlib into a user program.
 export type StdlibCacheData
 	export var functions as ObjectFunctionArray
@@ -321,6 +390,35 @@ export type StdlibCacheData
 	export var typealiasCastCategories as TypealiasCastCategoryMap
 	export var funcReturnTypes as FuncReturnTypeMap
 	export var funcSignatures as FuncSignatureMap
+	// Cache v70 (Concept C): the structural argument-CONSUME facts computed by
+	// `analyzeParamConsumes` over the full stdlib during cache warming. Persisted so a
+	// user build (where the consuming stdlib bodies are signature-only stubs) reads the
+	// real per-parameter consume bits instead of re-deriving them (or falling back to
+	// the retired callee-name allowlists). `funcParamConsumes` is keyed by qualified
+	// function name → per-parameter BoolArray; `funcReturnsConsumedArg` is the
+	// transparent-wrapper return-side name set. Names/bits reference no type-interner
+	// id, so they round-trip verbatim (no `translateMaxonType` needed).
+	export var funcParamConsumes as FuncParamConsumesMap
+	export var funcReturnsConsumedArg as FuncReturnsBorrowSet
+	// Cache v72: persisted RETURN-BORROW facts (`funcReturnsBorrow`) computed by
+	// `analyzeReturnBorrows` over the stdlib, so the user build restores a stdlib
+	// function's borrow-returning status (notably the bodyless-in-user-build element
+	// loaders `__managed_mem_get` / `__managed_mem_cursor_current`, whose actual bodies
+	// return a param-derived load) instead of re-deriving it from a name allowlist.
+	// Same `Set<String>` shape as `funcReturnsConsumedArg`; names round-trip verbatim.
+	export var funcReturnsBorrow as FuncReturnsBorrowSet
+	// Cache v77: persisted RECEIVER-INTERIOR return facts
+	// (`funcReturnsReceiverInterior`) — the liveness-only superset of the borrow
+	// set (`List.walkTo` returns an ACQUIRED node whose value the chain still
+	// owns). Restored on the user build so `recordNavBorrow` extends the receiver
+	// past opaque interior-returning calls. Same `Set<String>` shape.
+	export var funcReturnsReceiverInterior as FuncReturnsBorrowSet
+	// Cache v73: persisted ELEMENT-LOADER chain-boundary facts (`funcIsElementLoader`)
+	// computed by `analyzeReturnBorrows` (the functions that call the shared
+	// `__managed_mem_load_sized` load primitive). Restored on the user build so the
+	// wrapper-retain boundary fires exactly once without a hardcoded loader-name list.
+	// Same `Set<String>` shape; names round-trip verbatim.
+	export var funcIsElementLoader as FuncReturnsBorrowSet
 	// Cache v47: persisted throws-clause per qualified function name so
 	// `try X.method() otherwise (e)` can recover the bare-enum / union
 	// throws type at parse time even when stdlib was loaded from cache
@@ -356,6 +454,12 @@ export type StdlibCacheData
 	// Mirror of `builtinArrayLiteralTypeName` for the BuiltinDictionaryLiteral
 	// protocol. Persisted so map literals (`[k: v, ...]`) survive a cache hit.
 	export var builtinDictionaryLiteralTypeName as BuiltinDictionaryLiteralName
+	// Mirror for the BuiltinCharLiteral protocol. Persisted so char literals
+	// (`'x'`) resolve to the discovered type across a cache hit.
+	export var builtinCharLiteralTypeName as BuiltinCharLiteralName
+	// Mirror for the BuiltinStringLiteral protocol. Persisted so string literals
+	// (`"..."`) and the `string` primitive arm resolve across a cache hit.
+	export var builtinStringLiteralTypeName as BuiltinStringLiteralName
 	// Phase 11.4 (cache v8): per-registry snapshots so cached-stdlib user
 	// builds see the same `project.*` state a fresh-from-source build would.
 	// Without these the user-code pipeline can't dispatch through
@@ -445,6 +549,21 @@ export type StdlibCacheData
 	// `restoreRegistries`. Not serialised — recomputable from the on-disk
 	// registry list at every cache load.
 	export var writerGidToProjectGid as GenericInstanceIdArray
+	// In-memory only. Maps each writer-side `GenericInstanceId` to its entry
+	// in `data.genericInstances`' CURRENT id space. The two spaces coincide
+	// on the in-memory capture path (the capture mirror preserves writer
+	// ordering), but diverge on the disk path: after the read re-mirrors
+	// `data.genericInstances` from the first reading project (the
+	// identity-translation trick), writer ordering is lost there — the
+	// read-time writer→project map is the only surviving record of it.
+	// `restoreRegistries` rebuilds `writerGidToProjectGid` for each
+	// destination project by translating THIS map's data-space entries;
+	// rebuilding positionally from `data.genericInstances` instead silently
+	// attached `__layout_*` labels to the wrong generic instances whenever
+	// recursive arg interning had reordered the reader's id assignments
+	// (e.g. `Array with String` restored with `__layout_Array_SlotState`,
+	// so its element walk never ran and every element leaked).
+	export var writerGidToDataGid as GenericInstanceIdArray
 
 	export static function create() returns StdlibCacheData
 		return Self{
@@ -457,6 +576,11 @@ export type StdlibCacheData
 			typealiasCastCategories: TypealiasCastCategoryMap.create(),
 			funcReturnTypes: FuncReturnTypeMap.create(),
 			funcSignatures: FuncSignatureMap.create(),
+			funcParamConsumes: FuncParamConsumesMap.create(),
+			funcReturnsConsumedArg: FuncReturnsBorrowSet.create(),
+			funcReturnsBorrow: FuncReturnsBorrowSet.create(),
+			funcReturnsReceiverInterior: FuncReturnsBorrowSet.create(),
+			funcIsElementLoader: FuncReturnsBorrowSet.create(),
 			funcThrowsTypes: FuncThrowsTypeMap.create(),
 			structTypes: StructTypeMap.create(),
 			enumTypes: EnumTypeMap.create(),
@@ -464,6 +588,8 @@ export type StdlibCacheData
 			typeNameTable: StringArray.create(),
 			builtinArrayLiteralTypeName: BuiltinArrayLiteralName.none,
 			builtinDictionaryLiteralTypeName: BuiltinDictionaryLiteralName.none,
+			builtinCharLiteralTypeName: BuiltinCharLiteralName.none,
+			builtinStringLiteralTypeName: BuiltinStringLiteralName.none,
 			interfaces: IrInterfaceMap.create(),
 			conformances: ConformanceRegistry.create(),
 			typeParameters: TypeParamRegistry.create(),
@@ -483,7 +609,8 @@ export type StdlibCacheData
 			extensionMethodWhereClauses: WhereClauseMapByName.create(),
 			inlinerStdModule: StdModule.create(),
 			stdFuncEdges: CachedFuncEdgeMap.create(),
-			writerGidToProjectGid: GenericInstanceIdArray.create()
+			writerGidToProjectGid: GenericInstanceIdArray.create(),
+			writerGidToDataGid: GenericInstanceIdArray.create()
 		}
 	end 'create'
 end 'StdlibCacheData'
@@ -646,6 +773,44 @@ function readBuiltinDictionaryLiteralNameField(buf ByteArray, offset ByteOffset)
 	let (name, nextPos) = result
 	return (BuiltinDictionaryLiteralName.found(name), nextPos)
 end 'readBuiltinDictionaryLiteralNameField'
+
+// Mirrors writeBuiltinArrayLiteralNameField for the char literal cache.
+function writeBuiltinCharLiteralNameField(buf ByteArray, value BuiltinCharLiteralName) throws CacheCorruption
+	match value 'enc'
+		none then try writeOptionalString(buf, present: false, value: "")
+		found(n) then try writeOptionalString(buf, present: true, value: n)
+	end 'enc'
+end 'writeBuiltinCharLiteralNameField'
+
+function readBuiltinCharLiteralNameField(buf ByteArray, offset ByteOffset) returns (BuiltinCharLiteralName, ByteOffset) throws CacheCorruption
+	let result = try readOptionalString(buf, offset: offset) otherwise (e) 'pickArm'
+		match e 'kind'
+			absent then return (BuiltinCharLiteralName.none, offset + 1)
+			invalidEncoding then throw CacheCorruption.invalidEncoding
+		end 'kind'
+	end 'pickArm'
+	let (name, nextPos) = result
+	return (BuiltinCharLiteralName.found(name), nextPos)
+end 'readBuiltinCharLiteralNameField'
+
+// Mirrors writeBuiltinArrayLiteralNameField for the string literal cache.
+function writeBuiltinStringLiteralNameField(buf ByteArray, value BuiltinStringLiteralName) throws CacheCorruption
+	match value 'enc'
+		none then try writeOptionalString(buf, present: false, value: "")
+		found(n) then try writeOptionalString(buf, present: true, value: n)
+	end 'enc'
+end 'writeBuiltinStringLiteralNameField'
+
+function readBuiltinStringLiteralNameField(buf ByteArray, offset ByteOffset) returns (BuiltinStringLiteralName, ByteOffset) throws CacheCorruption
+	let result = try readOptionalString(buf, offset: offset) otherwise (e) 'pickArm'
+		match e 'kind'
+			absent then return (BuiltinStringLiteralName.none, offset + 1)
+			invalidEncoding then throw CacheCorruption.invalidEncoding
+		end 'kind'
+	end 'pickArm'
+	let (name, nextPos) = result
+	return (BuiltinStringLiteralName.found(name), nextPos)
+end 'readBuiltinStringLiteralNameField'
 
 // ============================================================
 // Write cache
@@ -875,6 +1040,40 @@ function encodeStdlibCacheBody(project Project, buf ByteArray, data StdlibCacheD
 		end 'eachParamDefault'
 	end 'eachSig'
 
+	// Cache v70 (Concept C): per-function argument-consume bits. name → BoolArray
+	// (a length-prefixed run of bool bytes). No type-interner ids, so no codec helper
+	// beyond string + bool-byte. Followed by the transparent-wrapper name set.
+	writeDword(buf, value: data.funcParamConsumes.count())
+	for (name, bits) in data.funcParamConsumes 'eachConsume'
+		try writeString(buf, s: name)
+		writeDword(buf, value: bits.count())
+		for b in bits 'eachConsumeBit'
+			writeBoolByte(buf, b: b)
+		end 'eachConsumeBit'
+	end 'eachConsume'
+	writeDword(buf, value: data.funcReturnsConsumedArg.count())
+	for wrapperName in data.funcReturnsConsumedArg 'eachWrapper'
+		try writeString(buf, s: wrapperName)
+	end 'eachWrapper'
+
+	// Cache v72: return-borrow function-name set (same shape as the wrapper set above).
+	writeDword(buf, value: data.funcReturnsBorrow.count())
+	for borrowName in data.funcReturnsBorrow 'eachBorrow'
+		try writeString(buf, s: borrowName)
+	end 'eachBorrow'
+
+	// Cache v77: receiver-interior return set (same shape).
+	writeDword(buf, value: data.funcReturnsReceiverInterior.count())
+	for interiorName in data.funcReturnsReceiverInterior 'eachInterior'
+		try writeString(buf, s: interiorName)
+	end 'eachInterior'
+
+	// Cache v73: element-loader chain-boundary function-name set (same shape).
+	writeDword(buf, value: data.funcIsElementLoader.count())
+	for loaderName in data.funcIsElementLoader 'eachLoader'
+		try writeString(buf, s: loaderName)
+	end 'eachLoader'
+
 	// Cache v47: per-function throws-clause. Mirrors the funcReturnTypes
 	// layout — string key + ThrowsClause field via the absent/throwing codec.
 	writeDword(buf, value: data.funcThrowsTypes.count())
@@ -964,6 +1163,8 @@ function encodeStdlibCacheBody(project Project, buf ByteArray, data StdlibCacheD
 	// conformance metadata is otherwise gone.
 	try writeBuiltinArrayLiteralNameField(buf, value: data.builtinArrayLiteralTypeName)
 	try writeBuiltinDictionaryLiteralNameField(buf, value: data.builtinDictionaryLiteralTypeName)
+	try writeBuiltinCharLiteralNameField(buf, value: data.builtinCharLiteralTypeName)
+	try writeBuiltinStringLiteralNameField(buf, value: data.builtinStringLiteralTypeName)
 
 	// Cache v8: Phase 11 conformance + registry state. Order matters on the
 	// read side — typeParameters / interfaceRegistry / genericInstances are
@@ -1393,6 +1594,58 @@ function decodeStdlibCache(project Project, buf ByteArray, target Target, expect
 		try data.funcSignatures.insert(sigName, value: FuncSignature.create(paramNames, paramTypes: paramTypes, paramDefaults: paramDefaults)) otherwise ignore
 	end 'eachSig'
 
+	// Cache v70 (Concept C): argument-consume bits, then the transparent-wrapper
+	// name set. Read in the exact order written above.
+	let consumeCount = readDword(buf, offset: pos)
+	pos = pos + 4
+	for _ in 0 upto consumeCount 'eachConsume'
+		let (consumeName, pC0) = try readString(buf, offset: pos)
+		pos = pC0
+		let bitCount = readDword(buf, offset: pos)
+		pos = pos + 4
+		var bits = BoolArray.create()
+		for _ in 0 upto bitCount 'eachConsumeBit'
+			let (b, pC1) = readBoolByte(buf, offset: pos)
+			pos = pC1
+			bits.push(b)
+		end 'eachConsumeBit'
+		data.funcParamConsumes.upsert(consumeName, value: bits)
+	end 'eachConsume'
+	let wrapperCount = readDword(buf, offset: pos)
+	pos = pos + 4
+	for _ in 0 upto wrapperCount 'eachWrapper'
+		let (wrapperName, pW0) = try readString(buf, offset: pos)
+		pos = pW0
+		data.funcReturnsConsumedArg.insert(wrapperName)
+	end 'eachWrapper'
+
+	// Cache v72: return-borrow function-name set (read in write order).
+	let borrowCount = readDword(buf, offset: pos)
+	pos = pos + 4
+	for _ in 0 upto borrowCount 'eachBorrow'
+		let (borrowName, pB0) = try readString(buf, offset: pos)
+		pos = pB0
+		data.funcReturnsBorrow.insert(borrowName)
+	end 'eachBorrow'
+
+	// Cache v77: receiver-interior return set (read in write order).
+	let interiorCount = readDword(buf, offset: pos)
+	pos = pos + 4
+	for _ in 0 upto interiorCount 'eachInterior'
+		let (interiorName, pI0) = try readString(buf, offset: pos)
+		pos = pI0
+		data.funcReturnsReceiverInterior.insert(interiorName)
+	end 'eachInterior'
+
+	// Cache v73: element-loader chain-boundary function-name set (read in write order).
+	let loaderCount = readDword(buf, offset: pos)
+	pos = pos + 4
+	for _ in 0 upto loaderCount 'eachLoader'
+		let (loaderName, pL0) = try readString(buf, offset: pos)
+		pos = pL0
+		data.funcIsElementLoader.insert(loaderName)
+	end 'eachLoader'
+
 	// Cache v47: function throws-clause entries. Mirrors the
 	// funcReturnTypes loop above — string key + ThrowsClause value.
 	let throwsCount = readDword(buf, offset: pos)
@@ -1534,6 +1787,12 @@ function decodeStdlibCache(project Project, buf ByteArray, target Target, expect
 	let (builtinDictionaryLiteralName, pBdl) = try readBuiltinDictionaryLiteralNameField(buf, offset: pos)
 	pos = pBdl
 	data.builtinDictionaryLiteralTypeName = builtinDictionaryLiteralName
+	let (builtinCharLiteralName, pBcl) = try readBuiltinCharLiteralNameField(buf, offset: pos)
+	pos = pBcl
+	data.builtinCharLiteralTypeName = builtinCharLiteralName
+	let (builtinStringLiteralName, pBsl) = try readBuiltinStringLiteralNameField(buf, offset: pos)
+	pos = pBsl
+	data.builtinStringLiteralTypeName = builtinStringLiteralName
 
 	// Cache v8: read Phase 11 conformance + registry state in the same order
 	// the writer emitted it. The MaxonType helpers (`readMaxonType` etc.)
@@ -1636,6 +1895,18 @@ function decodeStdlibCache(project Project, buf ByteArray, target Target, expect
 		let (baseId, args) = project.genericInstances.get(i)
 		_ = data.genericInstances.intern(baseId, args: args)
 	end 'mirrorGenericInstances'
+
+	// The mirror above re-keyed `data.genericInstances` into the reading
+	// project's id space, discarding the writer's ordering. The read-time
+	// writer→project map is the only record of that ordering — and since the
+	// mirror is an identity copy (the project registry is intern-built, so
+	// it has no structural duplicates), a project gid IS the data gid.
+	// Persist it as writer→data so `restoreRegistries` can rebuild
+	// writer→project maps for this and any later project in the process.
+	data.writerGidToDataGid.clear()
+	for projectGid in data.writerGidToProjectGid 'recordWriterToData'
+		data.writerGidToDataGid.push(projectGid)
+	end 'recordWriterToData'
 	// Rebuild `data.typeParameters` in `project.typeParameters`'s id space
 	// (so cached MaxonType.typeParameter(id) payloads round-trip identity)
 	// while preserving the constraints originally read from disk. The disk
@@ -1727,6 +1998,24 @@ end 'decodeStdlibCache'
 // Compute which stdlib functions are needed given a set of seed function names.
 // Performs transitive closure over call dependencies and adr fixup dependencies.
 // Returns the set of needed function names.
+// Resolve a (possibly bare) call/seed name to the actual stdlib-cache key.
+// The cache is keyed by the function's emitted name: runtime.std functions are
+// bare (`__mm_alloc` callers like `mrt_alloc`), while Internals.maxon functions
+// are `stdlib.`-qualified (`stdlib.__mm_alloc`). A bare call from runtime.std
+// targeting an Internals function therefore won't exact-match the qualified
+// cache key, so probe the `stdlib.`-qualified form too. Returns the empty
+// string when neither form is a cache function.
+function resolveStdlibCacheKey(name String, funcNameToIndex StdlibFuncIndexMap) returns String
+	if funcNameToIndex.contains(name) 'exact'
+		return name
+	end 'exact'
+	let qualified = "stdlib.{name}"
+	if funcNameToIndex.contains(qualified) 'qualifiedHit'
+		return qualified
+	end 'qualifiedHit'
+	return ""
+end 'resolveStdlibCacheKey'
+
 export function computeNeededStdlibFunctions(seeds StringArray, stdlibCache StdlibCacheData) returns StdlibFuncNameSet
 	var funcNameToIndex = StdlibFuncIndexMap.create()
 
@@ -1737,11 +2026,13 @@ export function computeNeededStdlibFunctions(seeds StringArray, stdlibCache Stdl
 	var needed = StdlibFuncNameSet.create()
 	var worklist = StringArray.create()
 
-	// Seed from caller-provided names
+	// Seed from caller-provided names, resolving each to its cache key so a bare
+	// runtime.std call to a `stdlib.`-qualified Internals function still seeds.
 	for name in seeds 'seed'
-		if funcNameToIndex.contains(name) and not needed.contains(name) 'isStdlib'
-			needed.insert(name)
-			worklist.push(name)
+		let key = resolveStdlibCacheKey(name, funcNameToIndex: funcNameToIndex)
+		if not key.isEmpty() and not needed.contains(key) 'isStdlib'
+			needed.insert(key)
+			worklist.push(key)
 		end 'isStdlib'
 	end 'seed'
 
@@ -1763,16 +2054,18 @@ export function computeNeededStdlibFunctions(seeds StringArray, stdlibCache Stdl
 		var newDeps = StringArray.create()
 
 		for fixup in func.callFixups 'eachDep'
-			if funcNameToIndex.contains(fixup.targetName) and not needed.contains(fixup.targetName) 'newDep'
-				needed.insert(fixup.targetName)
-				newDeps.push(fixup.targetName)
+			let depKey = resolveStdlibCacheKey(fixup.targetName, funcNameToIndex: funcNameToIndex)
+			if not depKey.isEmpty() and not needed.contains(depKey) 'newDep'
+				needed.insert(depKey)
+				newDeps.push(depKey)
 			end 'newDep'
 		end 'eachDep'
 
 		for fixup in func.adrFixups 'eachAdrDep'
-			if funcNameToIndex.contains(fixup.targetName) and not needed.contains(fixup.targetName) 'newAdrDep'
-				needed.insert(fixup.targetName)
-				newDeps.push(fixup.targetName)
+			let adrKey = resolveStdlibCacheKey(fixup.targetName, funcNameToIndex: funcNameToIndex)
+			if not adrKey.isEmpty() and not needed.contains(adrKey) 'newAdrDep'
+				needed.insert(adrKey)
+				newDeps.push(adrKey)
 			end 'newAdrDep'
 		end 'eachAdrDep'
 
@@ -1830,6 +2123,7 @@ function translateMaxonType(project Project, data StdlibCacheData, t MaxonType) 
 		integer gives MaxonType.integer
 		float gives MaxonType.float
 		string gives MaxonType.string
+		character gives MaxonType.character
 		unresolved gives MaxonType.unresolved
 		named(id) gives translateNamedTypeId(project, table: data.typeNameTable, id: id)
 		function(id) gives translateCapturedFunctionType(project, data: data, id: id)
@@ -2076,6 +2370,39 @@ export function captureStdlibMetadata(project Project, data StdlibCacheData)
 		try data.funcSignatures.insert(name, value: sig) otherwise ignore
 	end 'copySigs'
 
+	// Cache v70 (Concept C): snapshot the stdlib argument-consume facts so a cached
+	// user build reads the structural per-parameter consume bits (the inserter's
+	// name-free consume signal). Copy each BoolArray by value so the cache owns it.
+	for (name, bits) in project.funcParamConsumes 'copyConsumes'
+		var bitsCopy = BoolArray.create()
+		for b in bits 'eachBit'
+			bitsCopy.push(b)
+		end 'eachBit'
+		data.funcParamConsumes.upsert(name, value: bitsCopy)
+	end 'copyConsumes'
+	for wrapperName in project.funcReturnsConsumedArg 'copyWrappers'
+		data.funcReturnsConsumedArg.insert(wrapperName)
+	end 'copyWrappers'
+
+	// Cache v72: snapshot the stdlib's structural return-borrow facts so the user
+	// build restores them (notably the element-loader intrinsics, classified from
+	// their bodies here) instead of a name allowlist.
+	for borrowName in project.funcReturnsBorrow 'copyBorrows'
+		data.funcReturnsBorrow.insert(borrowName)
+	end 'copyBorrows'
+
+	// Cache v77: snapshot the receiver-interior return facts for the same reason.
+	for interiorName in project.funcReturnsReceiverInterior 'copyInteriors'
+		data.funcReturnsReceiverInterior.insert(interiorName)
+	end 'copyInteriors'
+
+	// Cache v73: snapshot the element-loader chain-boundary facts (functions that call
+	// the `__managed_mem_load_sized` primitive) for the same reason — the loader bodies
+	// are absent on the user build.
+	for loaderName in project.funcIsElementLoader 'copyLoaders'
+		data.funcIsElementLoader.insert(loaderName)
+	end 'copyLoaders'
+
 	// Cache v47: snapshot per-callee throws-clause so a cached-stdlib run
 	// of `try map.insert(...) otherwise (e) ... match e ...` recovers the
 	// MapError-typed binding instead of falling back to `integer`.
@@ -2117,6 +2444,18 @@ export function captureStdlibMetadata(project Project, data StdlibCacheData)
 	end 'noDictLit' else 'haveDictLit'
 		data.builtinDictionaryLiteralTypeName = BuiltinDictionaryLiteralName.found(rawDict)
 	end 'haveDictLit'
+	let rawChar = getCachedBuiltinCharLiteralTypeName()
+	if rawChar.isEmpty() 'noCharLit'
+		data.builtinCharLiteralTypeName = BuiltinCharLiteralName.none
+	end 'noCharLit' else 'haveCharLit'
+		data.builtinCharLiteralTypeName = BuiltinCharLiteralName.found(rawChar)
+	end 'haveCharLit'
+	let rawStr = getCachedBuiltinStringLiteralTypeName()
+	if rawStr.isEmpty() 'noStrLit'
+		data.builtinStringLiteralTypeName = BuiltinStringLiteralName.none
+	end 'noStrLit' else 'haveStrLit'
+		data.builtinStringLiteralTypeName = BuiltinStringLiteralName.found(rawStr)
+	end 'haveStrLit'
 
 	// Cache v8: snapshot Phase 11 conformance + registry state. These
 	// registries are populated during the cache-build pipeline's
@@ -2175,9 +2514,14 @@ function captureRegistries(project Project, data StdlibCacheData)
 		_ = data.functionTypes.append(params, returnType: returnType)
 	end 'eachFt'
 
+	// Record writer→data gid alongside the mirror. The raw gids embedded in
+	// `layoutDescriptors`/`witnessTables` below are writer-project ids, so
+	// each writer entry's data-space id must be captured for the restore-time
+	// writer→project rebuild (`restoreRegistries`).
+	data.writerGidToDataGid.clear()
 	for i in 0 upto project.genericInstances.count() 'eachGi'
 		let (baseId, args) = project.genericInstances.get(i)
-		_ = data.genericInstances.intern(baseId, args: args)
+		data.writerGidToDataGid.push(data.genericInstances.intern(baseId, args: args))
 	end 'eachGi'
 
 	for (name, iface) in project.interfaces 'eachInterface'
@@ -2298,6 +2642,41 @@ export function restoreStdlibMetadata(project Project, data StdlibCacheData)
 		try project.funcSignatures.insert(name, value: FuncSignature.create(sig.paramNames, paramTypes: translatedTypes, paramDefaults: sig.paramDefaults)) otherwise ignore
 	end 'restoreSigs'
 
+	// Cache v70 (Concept C): replay the stdlib argument-consume facts. No
+	// captured-id translation — names are strings and the payload is a BoolArray of
+	// per-parameter consume bits. The user-pipeline `analyzeParamConsumes` forwards
+	// from these for user functions; the inserter reads them for non-inlined
+	// consuming stdlib callees.
+	for (name, bits) in data.funcParamConsumes 'restoreConsumes'
+		var bitsCopy = BoolArray.create()
+		for b in bits 'eachBit'
+			bitsCopy.push(b)
+		end 'eachBit'
+		project.funcParamConsumes.upsert(name, value: bitsCopy)
+	end 'restoreConsumes'
+	for wrapperName in data.funcReturnsConsumedArg 'restoreWrappers'
+		project.funcReturnsConsumedArg.insert(wrapperName)
+	end 'restoreWrappers'
+	// Cache v72: replay the stdlib's structural return-borrow facts into the user
+	// project so `analyzeReturnBorrows` / the inserter see a stdlib callee's
+	// borrow-returning status without re-analyzing its (absent) body.
+	for borrowName in data.funcReturnsBorrow 'restoreBorrows'
+		project.funcReturnsBorrow.insert(borrowName)
+	end 'restoreBorrows'
+
+	// Cache v77: replay the receiver-interior return facts so the liveness
+	// nav-borrow edge extends receivers past opaque interior-returning callees
+	// (`List.walkTo`) on the user build.
+	for interiorName in data.funcReturnsReceiverInterior 'restoreInteriors'
+		project.funcReturnsReceiverInterior.insert(interiorName)
+	end 'restoreInteriors'
+
+	// Cache v73: replay the element-loader chain-boundary facts so the wrapper-retain
+	// boundary (`calleeIsBorrowFunction`) excludes a stdlib loader without its body.
+	for loaderName in data.funcIsElementLoader 'restoreLoaders'
+		project.funcIsElementLoader.insert(loaderName)
+	end 'restoreLoaders'
+
 	// Cache v47: replay per-callee throws-clause so `funcThrowsTypes.get`
 	// at parse time of user code returns the stdlib method's declared
 	// error type. The clause is a plain `ThrowsClause.throwing(name)` /
@@ -2330,8 +2709,22 @@ export function restoreStdlibMetadata(project Project, data StdlibCacheData)
 	// Restore struct types. Field MaxonTypes carry the same captured-id
 	// problem as funcReturnTypes — translate every named id through the
 	// typeNameTable before insertion.
+	//
+	// Rebuild the `structInnerAliasNames` reverse index alongside each restored
+	// struct: the parser maintains it on a from-source build (one entry per
+	// member typealias declared in a type body), but a cached build never parses
+	// the stdlib, so the index would otherwise stay empty for stdlib member
+	// aliases. `structNameIsHeapManaged`'s member-alias resolution (which
+	// classifies a value typed by a bare member alias like `Map.Entry` =
+	// `(Key, Value)` heap-managed) gates on this index — without the rebuild a
+	// cached build misclassifies such a value `notManaged`, and the lifted-closure
+	// param of `m.map(function(p) gives p)` loses its return-incref, diverging from
+	// the from-source build (the stdlib-map-on-map-with-function cache-only crash).
 	for (name, st) in data.structTypes 'restoreStructs'
 		let translated = translateStructType(project, data: data, st: st)
+		for (aliasName, _) in translated.innerAliases 'eachInnerAlias'
+			project.structInnerAliasNames.insert(aliasName)
+		end 'eachInnerAlias'
 		try project.structTypes.insert(name, value: translated) otherwise ignore
 	end 'restoreStructs'
 
@@ -2367,6 +2760,14 @@ export function restoreStdlibMetadata(project Project, data StdlibCacheData)
 		none then break 'restoreDict'
 		found(n) then setCachedBuiltinDictionaryLiteralTypeName(n)
 	end 'restoreDict'
+	match data.builtinCharLiteralTypeName 'restoreChar'
+		none then break 'restoreChar'
+		found(n) then setCachedBuiltinCharLiteralTypeName(n)
+	end 'restoreChar'
+	match data.builtinStringLiteralTypeName 'restoreStr'
+		none then break 'restoreStr'
+		found(n) then setCachedBuiltinStringLiteralTypeName(n)
+	end 'restoreStr'
 
 	// Cache v8: replay Phase 11 conformance + registry state. The on-disk
 	// codec re-interns named/typeParameter/genericInstance/interface arms
@@ -2469,13 +2870,21 @@ function restoreRegistries(project Project, data StdlibCacheData)
 	// in-memory cache path (activateStdlibCache after warmup) would see an
 	// empty map and panic in `translateWriterGenericInstanceId`.
 	//
+	// Route each writer gid through `writerGidToDataGid` — on the disk path
+	// `data.genericInstances` is a mirror of the FIRST reading project's
+	// registry, whose ordering diverges from the writer's once recursive arg
+	// interning reorders id assignments, so indexing it positionally by
+	// writer gid translates the WRONG entry (`__layout_Array_String` landed
+	// on `Array with Element` while `Array with String` got the
+	// `__layout_Array_SlotState` label, killing its element walk).
+	//
 	// Mutate the existing array in-place (clear then refill) so this works
 	// when `data` is passed as a value parameter — `.push` mutates through
 	// the array reference without requiring the enclosing struct to be a
 	// `var` binding at every call site.
 	data.writerGidToProjectGid.clear()
-	for i in 0 upto data.genericInstances.count() 'eachGi'
-		let destGid = translateCapturedGenericInstanceId(project, data: data, id: i)
+	for dataGid in data.writerGidToDataGid 'eachGi'
+		let destGid = translateCapturedGenericInstanceId(project, data: data, id: dataGid)
 		data.writerGidToProjectGid.push(destGid)
 	end 'eachGi'
 
@@ -2591,6 +3000,18 @@ function readVisibility(buf ByteArray, offset ByteOffset) returns (Visibility, B
 	let v = try Visibility.fromRawValue(raw) otherwise throw CacheCorruption.invalidEncoding
 	return (v, offset + 4)
 end 'readVisibility'
+
+// --- OwnershipClass (refcount-insertion per-value class) ---
+
+function writeOwnershipClass(buf ByteArray, c OwnershipClass)
+	writeDword(buf, value: c.rawValue)
+end 'writeOwnershipClass'
+
+function readOwnershipClass(buf ByteArray, offset ByteOffset) returns (OwnershipClass, ByteOffset) throws CacheCorruption
+	let raw = readDword(buf, offset: offset)
+	let c = try OwnershipClass.fromRawValue(raw) otherwise throw CacheCorruption.invalidEncoding
+	return (c, offset + 4)
+end 'readOwnershipClass'
 
 // --- FilePath ---
 
@@ -4713,6 +5134,36 @@ function writeStdIrFunction(buf ByteArray, func IrFunction) throws CacheCorrupti
 	// carry their capture count on the IrFunction itself, replacing the
 	// project-wide `closureCaptureCounts` map.
 	writeQword(buf, value: func.closureCaptureCount)
+	// Cache v74: the four refcount-insertion per-value side-tables
+	// (`valueOwnership`/`valueManaged`/`valueTypeParam`/`valueTypeParamName`,
+	// keyed by ValueId). LowerMaxonToStd populates these; the user-pipeline
+	// inliner's `threadInlinedOwnership` reads them when splicing a cached stdlib
+	// body into user code. Omitting them left a cache-restored function with EMPTY
+	// tables, so inlined alloc results (e.g. `StringIndex.create`'s box) defaulted
+	// to `notManaged` and the inserter never dropped them — the cache-parity leak
+	// where the SAME program is leak-free from source but leaks against the cache.
+	// Each is a count-prefixed run, index-ordered (the setters grow on demand, so
+	// restoring 0..count-1 in order is exact).
+	writeDword(buf, value: func.valueOwnership.count())
+	for cls in func.valueOwnership 'eachOwnership'
+		writeOwnershipClass(buf, c: cls)
+	end 'eachOwnership'
+	writeDword(buf, value: func.valueManaged.count())
+	for m in func.valueManaged 'eachManaged'
+		writeBoolByte(buf, b: m)
+	end 'eachManaged'
+	writeDword(buf, value: func.valueTypeParam.count())
+	for tp in func.valueTypeParam 'eachTypeParam'
+		writeBoolByte(buf, b: tp)
+	end 'eachTypeParam'
+	writeDword(buf, value: func.valueTypeParamName.count())
+	for tpName in func.valueTypeParamName 'eachTypeParamName'
+		// Most entries are "" (only type-parameter values carry a name), and the
+		// mandatory string codec rejects a length-0 payload (CacheCorruption →
+		// "skipping persist", silently disabling the cache). Use the optional-string
+		// codec that round-trips "" via the `absent` tag.
+		try writeOptionalStringDefaultEmpty(buf, value: tpName)
+	end 'eachTypeParamName'
 end 'writeStdIrFunction'
 
 function readStdIrFunction(buf ByteArray, offset ByteOffset) returns (IrFunction, ByteOffset) throws CacheCorruption
@@ -4755,6 +5206,38 @@ function readStdIrFunction(buf ByteArray, offset ByteOffset) returns (IrFunction
 	let captureCount = readQword(buf, offset: pos)
 	pos = pos + 8
 	func.closureCaptureCount = captureCount
+	// Cache v74: restore the four refcount-insertion per-value side-tables in the
+	// exact order written. Index-ordered restore is exact because the setters
+	// grow the parallel array on demand (see writeStdIrFunction for why these must
+	// round-trip — the cache-parity inlined-alloc leak).
+	let ownershipCount = readDword(buf, offset: pos)
+	pos = pos + 4
+	for i in 0 upto ownershipCount 'restoreOwnership'
+		let (cls, pNext) = try readOwnershipClass(buf, offset: pos)
+		pos = pNext
+		func.setValueOwnership(i, cls: cls)
+	end 'restoreOwnership'
+	let managedCount = readDword(buf, offset: pos)
+	pos = pos + 4
+	for i in 0 upto managedCount 'restoreManaged'
+		let (m, pNext) = readBoolByte(buf, offset: pos)
+		pos = pNext
+		func.setValueManaged(i, managed: m)
+	end 'restoreManaged'
+	let typeParamCount = readDword(buf, offset: pos)
+	pos = pos + 4
+	for i in 0 upto typeParamCount 'restoreTypeParam'
+		let (tp, pNext) = readBoolByte(buf, offset: pos)
+		pos = pNext
+		func.setValueTypeParam(i, isTypeParam: tp)
+	end 'restoreTypeParam'
+	let typeParamNameCount = readDword(buf, offset: pos)
+	pos = pos + 4
+	for i in 0 upto typeParamNameCount 'restoreTypeParamName'
+		let (tpName, pNext) = try readOptionalStringDefaultEmpty(buf, offset: pos)
+		pos = pNext
+		func.setValueTypeParamName(i, paramName: tpName)
+	end 'restoreTypeParamName'
 	return (func, pos)
 end 'readStdIrFunction'
 

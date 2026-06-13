@@ -77,7 +77,19 @@ export union PassKind
 	// Phase 3: Maxon → Std
 	lowerMaxonToStd
 	// Phase 4: Std passes
-	injectDrops
+	// Argument-consume analysis (Concept C): structurally compute, per callee
+	// parameter, whether the callee takes ownership of the argument — the
+	// name-free replacement for the inserter's hand-synced callee allowlists.
+	// Whole-module (the per-function inserter cannot see callees); runs before
+	// `analyzeReturnBorrows` (whose container-consume narrowing reads it) and
+	// `insertRefcounts`.
+	analyzeParamConsumes
+	// Return-borrow reclassification: structurally fix call-result ownership for
+	// borrow-returning callees (iterator `.current()` etc.) to `borrowed` before
+	// the inserter reads the classes. Whole-module (the per-function inserter
+	// cannot see callees); runs right before `insertRefcounts`.
+	analyzeReturnBorrows
+	insertRefcounts
 	mem2reg
 	canonicalize
 	cse
@@ -153,9 +165,10 @@ export type PassPipeline
 	// that, which is why this is separate from `sourceFileName`.
 	export var sourcePath as FilePath
 	// True when this pipeline is lowering the stdlib (as opposed to user code).
-	// Controls the panic-message label prefix: stdlib panics become
-	// `__stdlib_panic_msg_<hash>`, user panics become `__panic_msg_<hash>`.
-	// Without this split, the two sides would collide at link time.
+	// Gates semantic checks that don't apply to trusted stdlib source
+	// (checkCallArgumentTypes, the cross-file cycle/unused-export audits). It no
+	// longer affects panic-message labels — those are content-hashed and dedupe
+	// across pipelines (see `panicLabelFor`).
 	export var isStdlib as bool
 
 	// --- Scheduled passes ---
@@ -180,21 +193,28 @@ export type PassPipeline
 
 	// Mint the panic-message label for `message`. Used by lowerMaxonToStd (for
 	// `panic("...")` ops and the interface-dispatch stub) and insertRangeChecks
-	// (for range-check panics). The prefix is determined by isStdlib.
+	// (for range-check panics).
 	//
 	// The label is **content-derived** — a 64-bit FNV-1a hash of the message
 	// bytes, not a monotonic counter. This makes the label independent of how
 	// many panics were lowered before it, so a function lowered in isolation
 	// (the demand-driven stdlib cache path) produces the exact same label it
 	// would in a whole-module compile. `addNamedGlobalData` dedupes by name, so
-	// identical messages share one label and one rdata entry. Distinct messages
-	// colliding on a 64-bit hash is the same negligible, untracked risk the
-	// `__istr_<id>` / `__float_<bits>` content-keyed labels already accept.
+	// identical messages share one label and one rdata entry — INCLUDING the same
+	// message lowered once by the stdlib cache build and once by a cache-off user
+	// pipeline, which is why there is no longer a separate `__stdlib_panic_msg_`
+	// namespace (the old counter-era split that a content hash makes obsolete; it
+	// also broke cache-parity by tying the prefix to the lowering pipeline's
+	// `isStdlib` flag). Distinct messages colliding on a 64-bit hash is the same
+	// negligible, untracked risk the `__istr_<id>` / `__float_<bits>` content-keyed
+	// labels already accept.
+	// Panic labels are content hashes (FNV-1a of the message), so the same message
+	// yields the same `__panic_msg_<hash>` label in every pipeline and dedupes via
+	// `addNamedGlobalData` rather than colliding — there is no separate
+	// `__stdlib_panic_msg_` namespace (the obsolete counter-era split). `isStdlib`
+	// no longer affects the label.
 	export function panicLabelFor(message String) returns String
 		let h = hashString64(message)
-		if isStdlib 'stdlib'
-			return "__stdlib_panic_msg_{h:016x}"
-		end 'stdlib'
 		return "__panic_msg_{h:016x}"
 	end 'panicLabelFor'
 
@@ -288,10 +308,19 @@ export type PassPipeline
 			// singleton-wrap-per-function would emit divergent helpers.
 			lowerMaxonToStd then stdModule = lowerMaxonToStd(self, maxonModule: maxonModule, project: project, globalData: globalData)
 
+			// Whole-module argument-consume analysis (Concept C): structural per-param
+			// consume bits the inserter reads instead of callee-name allowlists. Must
+			// run before `analyzeReturnBorrows` (reads the consume set) and the inserter.
+			analyzeParamConsumes then stdModule = analyzeParamConsumes(stdModule, project: project)
+
+			// Whole-module return-borrow reclassification (the per-function inserter
+			// cannot see callees, so this must run before it on the whole module).
+			analyzeReturnBorrows then stdModule = analyzeReturnBorrows(stdModule, project: project)
+
 			// Phase 4: Std passes — each `perFunction`-classified pass runs through
 			// the shared singleton-wrap loop; `inliner` and `dceFunctions` stay
 			// whole-module.
-			injectDrops then runStdPassPerFunction(self, kind: pass)
+			insertRefcounts then runStdPassPerFunction(self, kind: pass)
 			mem2reg then runStdPassPerFunction(self, kind: pass)
 			canonicalize then runStdPassPerFunction(self, kind: pass)
 			cse then runStdPassPerFunction(self, kind: pass)
@@ -345,17 +374,30 @@ export type PassPipeline
 		if not project.irDump.stagesEnabled() 'disabled'
 			return
 		end 'disabled'
+
+		// `--dump-stages=NAMES` selection: an unwanted stage claims its file
+		// number (so filtered and full dumps share `NN-` prefixes) but skips
+		// the render — serialization is the dominant cost of a stage dump.
+		if not project.irDump.stageWanted(name) 'filtered'
+			claimStageNumber(project)
+			return
+		end 'filtered'
+
 		let phase = classifyPhase(pass)
 		let content = self.renderPhaseModule(phase)
 		writeStageDumpFile(project, label: name, phase: phase, content: content)
 	end 'dumpPassIr'
 
 	function renderPhaseModule(phase PipelinePhase) returns String
+		// Default: filter stdlib out of every stage dump. Rendering the whole
+		// stdlib after each pass is what makes `--dump-stages` slow, and it is
+		// rarely what you want — `--dump-stages-stdlib` opts back in.
+		let skipStdlib = project.irDump.renderSkipsStdlib()
 		return match phase 'pick'
-			maxon gives maxonModuleToString(project, module: maxonModule, skipStdlib: false)
-			std gives stdModuleToString(stdModule, skipStdlib: false)
-			mir gives mirModuleToString(mirModule, skipStdlib: false)
-			target gives targetModuleToString(targetModule, skipStdlib: false, cpu: targetModule.cpu)
+			maxon gives maxonModuleToString(project, module: maxonModule, skipStdlib: skipStdlib)
+			std gives stdModuleToString(stdModule, skipStdlib: skipStdlib)
+			mir gives mirModuleToString(mirModule, skipStdlib: skipStdlib)
+			target gives targetModuleToString(targetModule, skipStdlib: skipStdlib, cpu: targetModule.cpu)
 		end 'pick'
 	end 'renderPhaseModule'
 end 'PassPipeline'
@@ -525,7 +567,7 @@ export function runStdPassPerFunction(pipeline PassPipeline, kind PassKind)
 		let func = try pipeline.stdModule.functions.get(funcIdx) otherwise panic("runStdPassPerFunction: functions.get OOB at {funcIdx}")
 		var singleton = packSingletonStdModule(pipeline.stdModule, func: func)
 		match kind 'invoke'
-			injectDrops then _ = injectDrops(singleton)
+			insertRefcounts then _ = insertRefcounts(singleton, funcParamConsumes: pipeline.project.funcParamConsumes, funcReturnsConsumedArg: pipeline.project.funcReturnsConsumedArg, funcReturnsBorrow: pipeline.project.funcReturnsBorrow, funcReturnsReceiverInterior: pipeline.project.funcReturnsReceiverInterior, mmTrace: pipeline.project.mmTraceEnabled)
 			mem2reg then _ = promoteMem2Reg(singleton)
 			canonicalize then _ = canonicalize(singleton, project: pipeline.project)
 			cse then _ = eliminateCommonSubexpressions(singleton)
@@ -624,7 +666,7 @@ export function classifyPass(pass PassKind) returns PassClassification
 		augmentWithRuntime gives PassClassification.wholeModule
 		instrumentCoverage gives PassClassification.wholeModule
 		lowerMaxonToStd gives PassClassification.perFunction
-		injectDrops gives PassClassification.perFunction
+		insertRefcounts gives PassClassification.perFunction
 		mem2reg gives PassClassification.perFunction
 		canonicalize gives PassClassification.perFunction
 		cse gives PassClassification.perFunction
@@ -636,6 +678,8 @@ export function classifyPass(pass PassKind) returns PassClassification
 		// run as whole-module passes.
 		inliner gives PassClassification.wholeModule
 		dceFunctions gives PassClassification.wholeModule
+		analyzeParamConsumes gives PassClassification.wholeModule
+		analyzeReturnBorrows gives PassClassification.wholeModule
 		insertRangeChecks gives PassClassification.perFunction
 		lowerABI gives PassClassification.perFunction
 		lowerStdToMir gives PassClassification.perFunction
@@ -711,9 +755,9 @@ export function buildMidPipeline(project Project) returns PassKindArray
 	passes.push(PassKind.constantArrayLiteralRdata)
 	// Phase 3: Maxon → Std
 	passes.push(PassKind.lowerMaxonToStd)
-	// Phase 4a: drop injection (Std-level)
-	passes.push(PassKind.injectDrops)
-	// Phase 4b: Std passes
+	// Phase 4: Std passes. (The legacy pre-mem2reg `injectDrops` pass was retired
+	// — refcount release insertion now runs POST-mem2reg as `insertRefcounts`, on
+	// the SSA/block-arg form, from per-value liveness + ownership classification.)
 	passes.push(PassKind.mem2reg)
 	passes.push(PassKind.canonicalize)
 	passes.push(PassKind.cse)
@@ -730,6 +774,23 @@ export function buildMidPipeline(project Project) returns PassKindArray
 	passes.push(PassKind.canonicalize)
 	passes.push(PassKind.dce)
 	passes.push(PassKind.dceFunctions)
+	// Argument-consume analysis (Concept C) — structurally compute per-callee-param
+	// consume bits (the name-free replacement for the inserter's container-mutator /
+	// runtime-helper / transparent-wrapper allowlists). Whole-module fixpoint over
+	// forwarding edges; runs after inlining/DCE settle the value graph, before the
+	// return-borrow narrowing (which reads the consume set) and the inserter.
+	passes.push(PassKind.analyzeParamConsumes)
+	// Return-borrow reclassification — fix borrow-returning call-result ownership
+	// (iterator `.current()` etc.) to `borrowed` so the inserter takes the
+	// container's own ref on a borrowed element moved into a container. Whole-module
+	// fixpoint; runs after inlining/DCE settle the value graph, right before the
+	// inserter reads the classes.
+	passes.push(PassKind.analyzeReturnBorrows)
+	// SSA refcount inserter: materializes the minimal incref/decref set at exact
+	// per-value last use from per-value liveness + the persisted ownership
+	// classification — subsuming the removed pre-mem2reg injectDrops. Runs on the
+	// post-mem2reg block-arg/phi form, after inlining/DCE settle the value graph.
+	passes.push(PassKind.insertRefcounts)
 	passes.push(PassKind.insertRangeChecks)
 	passes.push(PassKind.lowerABI)
 	if project.coverageEnabled 'cov'
@@ -791,6 +852,13 @@ export function writeStageDumpFile(project Project, label String, phase Pipeline
 	project.irDump.passCounter = counter + 1
 end 'writeStageDumpFile'
 
+// Advance the `--dump-stages` file counter WITHOUT writing a file. Called for
+// stages a `--dump-stages=NAMES` filter skips, so the stages that ARE written
+// keep the same `NN-` numbers a full dump would give them.
+export function claimStageNumber(project Project)
+	project.irDump.passCounter = project.irDump.passCounter + 1
+end 'claimStageNumber'
+
 function phaseToString(phase PipelinePhase) returns String
 	return match phase 'name'
 		maxon gives "maxon"
@@ -817,7 +885,9 @@ function classifyPhase(pass PassKind) returns PipelinePhase
 		maxonBorrowCheck gives PipelinePhase.maxon
 		constantArrayLiteralRdata gives PipelinePhase.maxon
 		lowerMaxonToStd gives PipelinePhase.std
-		injectDrops gives PipelinePhase.std
+		analyzeParamConsumes gives PipelinePhase.std
+		analyzeReturnBorrows gives PipelinePhase.std
+		insertRefcounts gives PipelinePhase.std
 		mem2reg gives PipelinePhase.std
 		canonicalize gives PipelinePhase.std
 		cse gives PipelinePhase.std
@@ -943,9 +1013,11 @@ export function passKindToString(pass PassKind) returns String
 		fieldInitCheck gives "field-init-check"
 		constantArrayLiteralRdata gives "constant-array-literal-rdata"
 		maxonBorrowCheck gives "maxon-borrow-check"
-		injectDrops gives "inject-drops"
+		insertRefcounts gives "insert-refcounts"
 		insertRangeChecks gives "insert-range-checks"
 		lowerMaxonToStd gives "lower-maxon-to-std"
+		analyzeParamConsumes gives "analyze-param-consumes"
+		analyzeReturnBorrows gives "analyze-return-borrows"
 		mem2reg gives "mem2reg"
 		canonicalize gives "canonicalize"
 		cse gives "cse"

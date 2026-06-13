@@ -239,6 +239,7 @@ public static class ParameterMutationAnalysisPass {
   private static bool IsMutatingBuiltinCallee(string callee) =>
     callee is "__managed_mem_set" or "__managed_mem_set_byte" or "__managed_mem_set_length"
       or "__managed_mem_grow" or "__managed_mem_shift_right" or "__managed_mem_shift_left"
+      or "__managed_mem_swap"
       or "__managed_mem_remove"
       or "__managed_list_reinsert_first" or "__managed_list_reinsert_last"
       or "__managed_list_reinsert_after" or "__managed_list_reinsert_before"

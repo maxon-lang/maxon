@@ -1,0 +1,91 @@
+// Test: rung-40-closure-captures-managed
+typealias Integer = int(i64.min to i64.max)
+typealias IntFn = function() returns Integer
+
+type Box
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Box'
+
+function callIt(f IntFn) returns Integer
+	return f()
+end 'callIt'
+
+function main() returns ExitCode
+	let b = Box.create(7)
+	return callIt(function() gives b.value)
+end 'main'
+---
+MmTrace: true
+ExitCode: 7
+Stderr: ```
+mm_alloc Box #1 size=8 [Box.create]
+mm_incref Box #1 rc=1 [Box.create]
+mm_move Box #1 -> return [Box.create]
+mm_alloc __closure_env #2 size=8 [main]
+mm_drop __closure_env #2 [callIt]
+    mm_free __closure_env #2
+mm_decref Box #1 rc=0 [main]
+  mm_free Box #1
+```
+---
+// CompiledIR
+module {
+  func @main$closure_0(local0: i64) -> i64 {
+  entry:
+    %7 = mir.param local0 : i64
+    %5 = mir.global_addr @__mtstr_scope_main_closure_0
+    %6 = mir.call @mm_scope_push(%5)
+    %2 = mir.load %7, 0 width: qword
+    %3 = mir.load %2, 0 width: qword
+    %4 = mir.load %3, 0 width: qword
+    %8 = mir.call @mm_scope_pop()
+    mir.ret %4
+  }
+  func @main() -> u8 {
+  entry:
+    %11 = mir.global_addr @__mtstr_scope_main
+    %12 = mir.call @mm_scope_push(%11)
+    %0 = mir.mov_imm 0 : i64
+    mir.store_slot slot_0, %0
+    %1 = mir.mov_imm 7 : i64
+    %13 = mir.global_addr @__mtstr_scope_Box_create
+    %14 = mir.call @mm_scope_push(%13)
+    %15 = mir.mov_imm 8 : i64
+    %16 = mir.mov_imm 0 : i64
+    %17 = mir.mov_imm 60 : i64
+    %18 = mir.call @stdlib.__mm_alloc(%15, %16, %17)
+    %27 = mir.call @stdlib.__mm_incref(%18)
+    mir.store %1, %18, 0 width: qword
+    %20 = mir.call @mm_move_return(%18)
+    %21 = mir.call @mm_scope_pop()
+    mir.store_slot slot_0, %18
+    %3 = mir.func_addr @main$closure_0
+    %4 = mir.stack_slot_addr slot_0
+    %5 = mir.mov_imm 8 : i64
+    %6 = mir.mov_imm 0 : i64
+    %7 = mir.mov_imm 9 : i64
+    %8 = mir.call @stdlib.__mm_alloc(%5, %6, %7)
+    mir.store %4, %8, 0 width: qword
+    %22 = mir.global_addr @__mtstr_scope_callIt
+    %23 = mir.call @mm_scope_push(%22)
+    %24 = mir.indirect_call %3(%8)
+    %28 = mir.call @mm_drop(%8)
+    %26 = mir.call @mm_scope_pop()
+    %29 = mir.load_slot slot_0
+    %30 = mir.call @__mm_decref_maybenull_helper(%29)
+    %31 = mir.call @mm_scope_pop()
+    %32 = mir.mov_imm 125 : i64
+    %33 = mir.cmp ugt, %24, %32
+    mir.cond_br %33 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %34 = mir.global_addr @__panic_msg_1ebff9872053aabe
+    %35 = mir.call @mrt_panic(%34)
+  __range_ok_0:
+    mir.ret %24
+  }
+}
+---

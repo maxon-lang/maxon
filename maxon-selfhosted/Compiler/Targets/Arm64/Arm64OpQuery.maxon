@@ -74,6 +74,14 @@ export type Arm64OpQuery implements TargetOpQuery
 		return 0 * count
 	end 'getExplicitPhysReads'
 
+	// ARM64 variable shifts (LSLV/LSRV/ASRV) take their count in an ordinary
+	// GPR operand, not a fixed register like x86's CL, so there is no in-place
+	// fixed-register read to pin. Always 0.
+	function getFixedInPlaceReads(module TargetModule, packed OpIndex) returns RegMask
+		let count = module.arm64Ops.count() + packed
+		return 0 * count
+	end 'getFixedInPlaceReads'
+
 	// --- Return terminator ---
 
 	function isReturnTerminator(module TargetModule, packed OpIndex) returns bool

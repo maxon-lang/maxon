@@ -1,0 +1,73 @@
+// Test: rung-04-return-transfers-ownership
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Box'
+
+function makeBox(n Integer) returns Box
+	let local = Box.create(n)
+	return local
+end 'makeBox'
+
+function main() returns ExitCode
+	let b = makeBox(5)
+	return b.value
+end 'main'
+---
+MmTrace: true
+ExitCode: 5
+Stderr: ```
+mm_alloc Box #1 size=8 [Box.create]
+mm_incref Box #1 rc=1 [Box.create]
+mm_move Box #1 -> return [Box.create]
+mm_move Box #1 -> return [makeBox]
+mm_decref Box #1 rc=0 [main]
+  mm_free Box #1
+```
+---
+// CompiledIR
+module {
+  func @makeBox(local0: i64) -> i64 {
+  entry:
+    %7 = mir.param local0 : i64
+    %5 = mir.global_addr @__mtstr_scope_makeBox
+    %6 = mir.call @mm_scope_push(%5)
+    %8 = mir.global_addr @__mtstr_scope_Box_create
+    %9 = mir.call @mm_scope_push(%8)
+    %10 = mir.mov_imm 8 : i64
+    %11 = mir.mov_imm 0 : i64
+    %12 = mir.mov_imm 60 : i64
+    %13 = mir.call @stdlib.__mm_alloc(%10, %11, %12)
+    %17 = mir.call @stdlib.__mm_incref(%13)
+    mir.store %7, %13, 0 width: qword
+    %15 = mir.call @mm_move_return(%13)
+    %16 = mir.call @mm_scope_pop()
+    %18 = mir.call @mm_move_return(%13)
+    %19 = mir.call @mm_scope_pop()
+    mir.ret %13
+  }
+  func @main() -> u8 {
+  entry:
+    %5 = mir.global_addr @__mtstr_scope_main
+    %6 = mir.call @mm_scope_push(%5)
+    %1 = mir.mov_imm 5 : i64
+    %2 = mir.call @makeBox(%1)
+    %4 = mir.load %2, 0 width: qword
+    %7 = mir.call @stdlib.__mm_decref(%2)
+    %8 = mir.call @mm_scope_pop()
+    %9 = mir.mov_imm 125 : i64
+    %10 = mir.cmp ugt, %4, %9
+    mir.cond_br %10 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %11 = mir.global_addr @__panic_msg_470a54a8df2172f0
+    %12 = mir.call @mrt_panic(%11)
+  __range_ok_0:
+    mir.ret %4
+  }
+}
+---

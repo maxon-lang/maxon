@@ -1,0 +1,102 @@
+// Test: rung-31-managed-returned-from-one-arm
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Box'
+
+function pick(flag bool) returns Box
+	let a = Box.create(7)
+	let b = Box.create(9)
+	if flag 'br'
+		return a
+	end 'br'
+	return b
+end 'pick'
+
+function main() returns ExitCode
+	let chosen = pick(true)
+	return chosen.value
+end 'main'
+---
+MmTrace: true
+ExitCode: 7
+Stderr: ```
+mm_alloc Box #1 size=8 [Box.create]
+mm_incref Box #1 rc=1 [Box.create]
+mm_move Box #1 -> return [Box.create]
+mm_alloc Box #2 size=8 [Box.create]
+mm_incref Box #2 rc=1 [Box.create]
+mm_move Box #2 -> return [Box.create]
+mm_decref Box #2 rc=0 [pick]
+  mm_free Box #2
+mm_move Box #1 -> return [pick]
+mm_decref Box #1 rc=0 [main]
+  mm_free Box #1
+```
+---
+// CompiledIR
+module {
+  func @pick(local0: i1) -> i64 {
+  entry:
+    %12 = mir.param local0 : i1
+    %10 = mir.global_addr @__mtstr_scope_pick
+    %11 = mir.call @mm_scope_push(%10)
+    %3 = mir.mov_imm 7 : i64
+    %13 = mir.global_addr @__mtstr_scope_Box_create
+    %14 = mir.call @mm_scope_push(%13)
+    %15 = mir.mov_imm 8 : i64
+    %16 = mir.mov_imm 0 : i64
+    %17 = mir.mov_imm 60 : i64
+    %18 = mir.call @stdlib.__mm_alloc(%15, %16, %17)
+    %31 = mir.call @stdlib.__mm_incref(%18)
+    mir.store %3, %18, 0 width: qword
+    %20 = mir.call @mm_move_return(%18)
+    %21 = mir.call @mm_scope_pop()
+    %5 = mir.mov_imm 9 : i64
+    %22 = mir.global_addr @__mtstr_scope_Box_create
+    %23 = mir.call @mm_scope_push(%22)
+    %24 = mir.mov_imm 8 : i64
+    %25 = mir.mov_imm 0 : i64
+    %26 = mir.mov_imm 60 : i64
+    %27 = mir.call @stdlib.__mm_alloc(%24, %25, %26)
+    %32 = mir.call @stdlib.__mm_incref(%27)
+    mir.store %5, %27, 0 width: qword
+    %29 = mir.call @mm_move_return(%27)
+    %30 = mir.call @mm_scope_pop()
+    mir.cond_br %12 [then: br_0(), else: br_0.after()]
+  br_0:
+    %38 = mir.call @stdlib.__mm_decref(%27)
+    %33 = mir.call @mm_move_return(%18)
+    %35 = mir.call @mm_scope_pop()
+    mir.ret %18
+  br_0.after:
+    %37 = mir.call @stdlib.__mm_decref(%18)
+    %34 = mir.call @mm_move_return(%27)
+    %36 = mir.call @mm_scope_pop()
+    mir.ret %27
+  }
+  func @main() -> u8 {
+  entry:
+    %5 = mir.global_addr @__mtstr_scope_main
+    %6 = mir.call @mm_scope_push(%5)
+    %1 = mir.mov_imm 1 : i64
+    %2 = mir.call @pick(%1)
+    %4 = mir.load %2, 0 width: qword
+    %7 = mir.call @stdlib.__mm_decref(%2)
+    %8 = mir.call @mm_scope_pop()
+    %9 = mir.mov_imm 125 : i64
+    %10 = mir.cmp ugt, %4, %9
+    mir.cond_br %10 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %11 = mir.global_addr @__panic_msg_ef2a39cbd94f687b
+    %12 = mir.call @mrt_panic(%11)
+  __range_ok_0:
+    mir.ret %4
+  }
+}
+---

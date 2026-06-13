@@ -68,6 +68,15 @@ export interface RegAllocTarget
 
 	function getImplicitGprDefs(module TargetModule, packed OpIndex) returns RegMask
 
+	// Physical-GPR DEST mask of an op with an explicit PHYSICAL destination
+	// register (a call-convention arg mov, a folded spill reload, a phys-dest
+	// lea/imm). Distinct from `getImplicitGprDefs` — those are instantaneous
+	// side-effect clobbers (idiv's RAX/RDX) pinned to one position, while a
+	// physical ARG register stays OCCUPIED from the arg move until the call
+	// it feeds, so `insertPhysicalConstraints` extends these pseudo-ranges to
+	// the next call in the block. A virtual destination contributes 0.
+	function getPhysGprDestMask(module TargetModule, packed OpIndex) returns RegMask
+
 	function getImplicitGprReads(module TargetModule, packed OpIndex) returns RegMask
 
 	// Physical GPR ordinal that holds the `index`th GPR-class argument under

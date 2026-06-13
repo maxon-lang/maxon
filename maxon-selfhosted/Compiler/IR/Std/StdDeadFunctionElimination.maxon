@@ -575,6 +575,16 @@ function recordCallEdge(op StdCallOp, edges CachedFuncEdges)
 end 'recordCallEdge'
 
 function recordSystemEdge(op StdSystemOp, edges CachedFuncEdges)
+	// A `funcAddr name` is a STATIC reachability edge to `name` (the same edge
+	// `promoteLabelsFromSystemOp` promotes in the in-module / load-time walk). It
+	// must be recorded as a callee here too, or a cached function that takes a
+	// destructor address (`destructManagedMemoryAddr`) would, on cache replay via
+	// `applyCachedFuncEdges`, leave that destructor unrooted — the cache-build leg
+	// drifting from the in-module leg the shared classifiers promise to mirror.
+	let funcAddrName = funcAddrCalleeEdge(op)
+	if not funcAddrName.isEmpty() 'funcAddrEdge'
+		edges.callees.push(funcAddrName)
+	end 'funcAddrEdge'
 	let (kind, name) = classifySystemOpLabelDemand(op)
 	match kind 'demand'
 		none then return
@@ -643,24 +653,52 @@ function classifySystemOpLabelDemand(op StdSystemOp) returns StdLabelDemand
 		// `globalAddr` pins a generic globalData entry (string / float
 		// constants). It doesn't carry witness-conditional roots — those
 		// only key off witness/layout labels.
-		globalAddr(_, name) gives (StdLabelDemandKind.plain, name)
+		globalAddr(_, name) gives(StdLabelDemandKind.plain, name)
 		// `loadLayoutDescriptor` / `loadWitnessTable` pin both the blob AND
 		// its conditional-root impls.
-		loadLayoutDescriptor(_, label) gives (StdLabelDemandKind.conditionalRoot, label)
-		loadWitnessTable(_, label) gives (StdLabelDemandKind.conditionalRoot, label)
+		loadLayoutDescriptor(_, label) gives(StdLabelDemandKind.conditionalRoot, label)
+		loadWitnessTable(_, label) gives(StdLabelDemandKind.conditionalRoot, label)
 		// `funcAddr` resolves through the link-time symbol table, not
-		// globalData, and any function it names is already rooted by the
-		// `funcRef` op that produced its value. Other variants either patch
-		// register state or perform OS-level work — none can pin a
-		// witness/layout label.
-		memcpy to loadIndirect gives (StdLabelDemandKind.none, "")
-		funcAddr gives (StdLabelDemandKind.none, "")
-		storeIndirect to unboxValue gives (StdLabelDemandKind.none, "")
-		descriptorField to dropTypeParam gives (StdLabelDemandKind.none, "")
+		// globalData, so it pins NO rdata label (hence `none` here). Its STATIC
+		// reachability edge to the named function is handled separately by
+		// `promoteLabelsFromSystemOp`'s `funcAddrEdge` match (a directly-emitted
+		// `funcAddr` — e.g. a destructor pointer — has no preceding `funcRef` to
+		// root it). Other variants either patch register state or perform
+		// OS-level work — none can pin a witness/layout label.
+		memcpy to loadIndirect gives(StdLabelDemandKind.none, "")
+		funcAddr gives(StdLabelDemandKind.none, "")
+		storeIndirect to unboxValue gives(StdLabelDemandKind.none, "")
+		descriptorField to dropTypeParam gives(StdLabelDemandKind.none, "")
 	end 'kind'
 end 'classifySystemOpLabelDemand'
 
+// The static-reachability callee a `funcAddr name` op names (taking a function's
+// address — e.g. a destructor pointer the runtime invokes indirectly), or "" for
+// any other system op. The previous assumption ("a funcAddr target is already
+// rooted by the funcRef that produced its value") fails for `funcAddr` ops emitted
+// directly (lowerInternalsNamedFuncAddr's `destructManagedMemoryAddr()` →
+// `funcAddr stdlib.__destruct___ManagedMemory`, with NO preceding funcRef): the
+// destructor would be pruned in the cache-off / cache-parity leg. Shared by
+// `promoteLabelsFromSystemOp` (in-module / load-time worklist push) and
+// `recordSystemEdge` (cache-build extraction) so the two legs stay in lockstep.
+function funcAddrCalleeEdge(op StdSystemOp) returns String
+	return match op 'funcAddrEdge'
+		funcAddr(_, name) gives name
+		globalAddr to loadIndirect gives ""
+		storeIndirect to unboxValue gives ""
+		descriptorField to dropTypeParam gives ""
+		loadLayoutDescriptor gives ""
+		loadWitnessTable gives ""
+	end 'funcAddrEdge'
+end 'funcAddrCalleeEdge'
+
 function promoteLabelsFromSystemOp(project Project, op StdSystemOp, worklist StringArray, seen StdDfeStringSet, liveLabels StdDfeStringSet)
+	// Promote a `funcAddr` target as a static reachability root (see
+	// `funcAddrCalleeEdge` for why a directly-emitted funcAddr needs this).
+	let funcAddrName = funcAddrCalleeEdge(op)
+	if not funcAddrName.isEmpty() 'funcAddrEdge'
+		markStdCallee(funcAddrName, worklist: worklist, seen: seen)
+	end 'funcAddrEdge'
 	let (kind, name) = classifySystemOpLabelDemand(op)
 	match kind 'demand'
 		none then return

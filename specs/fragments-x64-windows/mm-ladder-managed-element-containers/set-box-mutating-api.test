@@ -1,0 +1,365 @@
+// Test: set-box-mutating-api
+typealias Integer = int(i64.min to i64.max)
+typealias HashValue = int(0 to u32.max)
+
+type Box implements Hashable, Equatable
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+
+	export function hash() returns HashValue
+		return value mod 100
+	end 'hash'
+
+	export function equals(other Box) returns bool
+		return value == other.value
+	end 'equals'
+end 'Box'
+
+typealias BoxSet = Set with Box
+
+function main() returns ExitCode
+	var s = BoxSet.create()
+	s.insert(Box.create(7))
+	s.insert(Box.create(9))
+	s.insert(Box.create(11))
+	_ = s.remove(Box.create(9))
+	if s.contains(Box.create(7)) 'has7'
+		return s.count()
+	end 'has7'
+	return 0
+end 'main'
+---
+MmTrace: true
+ExitCode: 2
+Stderr: ```
+mm_alloc Set #1 size=32 [main]
+mm_alloc Array #2 size=8 [main]
+mm_incref Array #2 rc=1 [main]
+mm_alloc __ManagedMemory #3 size=48 [main]
+mm_incref __ManagedMemory #3 rc=1 [main]
+mm_move Array #2 -> return [main]
+mm_move Array #2 -> return [main]
+mm_alloc Array #4 size=8
+mm_incref Array #4 rc=1
+mm_alloc __ManagedMemory #5 size=48
+mm_incref __ManagedMemory #5 rc=1
+mm_move Array #4 -> return
+mm_move Array #4 -> return
+mm_move Set #1 -> return
+mm_alloc Box #6 size=8 [Box.create]
+mm_incref Box #6 rc=1 [Box.create]
+mm_move Box #6 -> return [Box.create]
+mm_move Box #6 -> container
+mm_alloc Array #7 size=8
+mm_incref Array #7 rc=1
+mm_alloc __ManagedMemory #8 size=48
+mm_incref __ManagedMemory #8 rc=1
+mm_alloc <raw> #9 size=128
+mm_incref <raw> #9 rc=1
+mm_alloc Array #10 size=8
+mm_incref Array #10 rc=1
+mm_alloc __ManagedMemory #11 size=48
+mm_incref __ManagedMemory #11 rc=1
+mm_alloc <raw> #12 size=128
+mm_incref <raw> #12 rc=1
+mm_decref Array #2 rc=0
+  mm_decref __ManagedMemory #3 rc=0
+    mm_free __ManagedMemory #3
+  mm_free Array #2
+mm_decref Array #4 rc=0
+  mm_decref __ManagedMemory #5 rc=0
+    mm_free __ManagedMemory #5
+  mm_free Array #4
+mm_alloc Box #13 size=8 [Box.create]
+mm_incref Box #13 rc=1 [Box.create]
+mm_move Box #13 -> return [Box.create]
+mm_move Box #13 -> container [Box.hash]
+mm_alloc Box #14 size=8 [Box.create]
+mm_incref Box #14 rc=1 [Box.create]
+mm_move Box #14 -> return [Box.create]
+mm_move Box #14 -> container [Box.hash]
+mm_alloc Box #15 size=8 [Box.create]
+mm_incref Box #15 rc=1 [Box.create]
+mm_move Box #15 -> return [Box.create]
+mm_move Box #15 -> container [Box.hash]
+mm_decref Box #15 rc=0 [Box.hash]
+  mm_free Box #15
+mm_alloc Box #16 size=8 [Box.create]
+mm_incref Box #16 rc=1 [Box.create]
+mm_move Box #16 -> return [Box.create]
+mm_move Box #16 -> container [Box.hash]
+mm_decref Box #16 rc=0 [Box.hash]
+  mm_free Box #16
+mm_drop Set #1 [Box.hash]
+    mm_decref Array #7 rc=0 [Box.hash]
+      mm_decref __ManagedMemory #8 rc=0 [Box.hash]
+        mm_decref Box #6 rc=0 [Box.hash]
+          mm_free Box #6
+        mm_decref Box #13 rc=0 [Box.hash]
+          mm_free Box #13
+        mm_decref Box #14 rc=0 [Box.hash]
+          mm_free Box #14
+        mm_decref <raw> #9 rc=0 [Box.hash]
+          mm_free <raw> #9
+        mm_free __ManagedMemory #8
+      mm_free Array #7
+    mm_decref Array #10 rc=0 [Box.hash]
+      mm_decref __ManagedMemory #11 rc=0 [Box.hash]
+        mm_decref <raw> #12 rc=0 [Box.hash]
+          mm_free <raw> #12
+        mm_free __ManagedMemory #11
+      mm_free Array #10
+    mm_free Set #1
+```
+---
+// CompiledIR
+module {
+  func @Box.hash(rcx: i64) -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov r12, rcx
+    x64.lea r13, [rip+__mtstr_scope_Box_hash]
+    x64.mov rcx, r13
+    x64.call mm_scope_push
+    x64.mov rax, [r12+0] (8b)
+    x64.mov r8d, 100
+    x64.cqo
+    x64.idiv r8
+    x64.mov r8, rdx
+    x64.mov r9d, 4294967295
+    x64.cmp r8, r9
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea r12, [rip+__panic_msg_b6f1f6cedba0cae7]
+    x64.mov rcx, r12
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+  func @Box.equals(rcx: i64, rdx: i64) -> i1 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov r12, rcx
+    x64.mov r13, rdx
+    x64.lea r14, [rip+__mtstr_scope_Box_equals]
+    x64.mov rcx, r14
+    x64.call mm_scope_push
+    x64.mov r14, [r13+0] (8b)
+    x64.mov r13, [r12+0] (8b)
+    x64.call mm_scope_pop
+    x64.cmp r13, r14
+    x64.sete r8
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=48
+    x64.lea r12, [rip+__mtstr_scope_main]
+    x64.mov r13d, 42
+    x64.lea r14, [rip+__destruct_Set]
+    x64.mov r15d, 32
+    x64.lea r8, [rip+__layout_Set_Box]
+    x64.mov [rbp+-8], r8
+    x64.mov rcx, r12
+    x64.call mm_scope_push
+    x64.mov rcx, r15
+    x64.mov rdx, r14
+    x64.mov rax, r13
+    x64.call stdlib.__mm_alloc
+    x64.mov r12, r8
+    x64.mov rcx, [rbp+-8]
+    x64.call Array.create
+    x64.mov r13, r8
+    x64.mov rcx, r13
+    x64.call mm_move_return
+    x64.call mm_scope_pop
+    x64.lea rcx, [rip+__layout_Array_SetSlotState]
+    x64.mov [r12+0], r13 (8b)
+    x64.call Array.create
+    x64.mov r13, r8
+    x64.mov rcx, r13
+    x64.call mm_move_return
+    x64.call mm_scope_pop
+    x64.mov [r12+8], r13 (8b)
+    x64.call mm_scope_pop
+    x64.xor r8d, r8d
+    x64.mov [r12+16], r8 (8b)
+    x64.call mm_scope_pop
+    x64.xor r8d, r8d
+    x64.mov [r12+24], r8 (8b)
+    x64.mov rcx, r12
+    x64.call mm_move_return
+    x64.call mm_scope_pop
+    x64.lea r13, [rip+__mtstr_scope_Box_create]
+    x64.mov r14d, 60
+    x64.xor r15d, r15d
+    x64.mov r8d, 8
+    x64.mov r8d, 7
+    x64.mov rcx, r13
+    x64.call mm_scope_push
+    x64.mov rcx, 8
+    x64.mov rdx, r15
+    x64.mov rax, r14
+    x64.call stdlib.__mm_alloc
+    x64.mov r13, r8
+    x64.mov rcx, r13
+    x64.call stdlib.__mm_incref
+    x64.mov r8, 7
+    x64.mov [r13+0], r8 (8b)
+    x64.mov rcx, r13
+    x64.call mm_move_return
+    x64.call mm_scope_pop
+    x64.mov rcx, r13
+    x64.call mm_move_container
+    x64.lea rsi, [rip+__witness_Box_Equatable]
+    x64.lea r9, [rip+__witness_Box_Hashable]
+    x64.lea rax, [rip+__layout_Set_Box]
+    x64.lea r14, [rip+__mtstr_scope_Box_create]
+    x64.mov r15d, 60
+    x64.xor r8d, r8d
+    x64.mov [rbp+-8], r8
+    x64.mov r8d, 8
+    x64.mov r8d, 9
+    x64.mov rcx, r12
+    x64.mov rdx, r13
+    x64.call Set.insert
+    x64.mov rcx, r14
+    x64.call mm_scope_push
+    x64.mov rcx, 8
+    x64.mov rax, r15
+    x64.mov rdx, [rbp+-8]
+    x64.call stdlib.__mm_alloc
+    x64.mov r13, r8
+    x64.mov rcx, r13
+    x64.call stdlib.__mm_incref
+    x64.mov r8, 9
+    x64.mov [r13+0], r8 (8b)
+    x64.mov rcx, r13
+    x64.call mm_move_return
+    x64.call mm_scope_pop
+    x64.mov rcx, r13
+    x64.call mm_move_container
+    x64.lea rsi, [rip+__witness_Box_Equatable]
+    x64.lea r9, [rip+__witness_Box_Hashable]
+    x64.lea rax, [rip+__layout_Set_Box]
+    x64.lea r14, [rip+__mtstr_scope_Box_create]
+    x64.mov r15d, 60
+    x64.xor r8d, r8d
+    x64.mov [rbp+-8], r8
+    x64.mov r8d, 8
+    x64.mov r8d, 11
+    x64.mov rcx, r12
+    x64.mov rdx, r13
+    x64.call Set.insert
+    x64.mov rcx, r14
+    x64.call mm_scope_push
+    x64.mov rcx, 8
+    x64.mov rax, r15
+    x64.mov rdx, [rbp+-8]
+    x64.call stdlib.__mm_alloc
+    x64.mov r13, r8
+    x64.mov rcx, r13
+    x64.call stdlib.__mm_incref
+    x64.mov r8, 11
+    x64.mov [r13+0], r8 (8b)
+    x64.mov rcx, r13
+    x64.call mm_move_return
+    x64.call mm_scope_pop
+    x64.mov rcx, r13
+    x64.call mm_move_container
+    x64.lea rsi, [rip+__witness_Box_Equatable]
+    x64.lea r9, [rip+__witness_Box_Hashable]
+    x64.lea rax, [rip+__layout_Set_Box]
+    x64.lea r14, [rip+__mtstr_scope_Box_create]
+    x64.mov r15d, 60
+    x64.xor r8d, r8d
+    x64.mov [rbp+-8], r8
+    x64.mov r8d, 8
+    x64.mov r8d, 9
+    x64.mov rcx, r12
+    x64.mov rdx, r13
+    x64.call Set.insert
+    x64.mov rcx, r14
+    x64.call mm_scope_push
+    x64.mov rcx, 8
+    x64.mov rax, r15
+    x64.mov rdx, [rbp+-8]
+    x64.call stdlib.__mm_alloc
+    x64.mov r13, r8
+    x64.mov rcx, r13
+    x64.call stdlib.__mm_incref
+    x64.mov r8, 9
+    x64.mov [r13+0], r8 (8b)
+    x64.mov rcx, r13
+    x64.call mm_move_return
+    x64.call mm_scope_pop
+    x64.mov rcx, r13
+    x64.call mm_move_container
+    x64.lea rsi, [rip+__witness_Box_Equatable]
+    x64.lea r9, [rip+__witness_Box_Hashable]
+    x64.lea rax, [rip+__layout_Set_Box]
+    x64.mov rcx, r12
+    x64.mov rdx, r13
+    x64.call Set.remove
+    x64.lea r13, [rip+__mtstr_scope_Box_create]
+    x64.mov rcx, r13
+    x64.call mm_scope_push
+    x64.mov eax, 60
+    x64.xor edx, edx
+    x64.mov ecx, 8
+    x64.call stdlib.__mm_alloc
+    x64.mov r13, r8
+    x64.mov rcx, r13
+    x64.call stdlib.__mm_incref
+    x64.mov r8d, 7
+    x64.mov [r13+0], r8 (8b)
+    x64.mov rcx, r13
+    x64.call mm_move_return
+    x64.call mm_scope_pop
+    x64.mov rcx, r13
+    x64.call mm_move_container
+    x64.lea rsi, [rip+__witness_Box_Equatable]
+    x64.lea r9, [rip+__witness_Box_Hashable]
+    x64.lea rax, [rip+__layout_Set_Box]
+    x64.mov rcx, r12
+    x64.mov rdx, r13
+    x64.call Set.contains
+    x64.test r8, r8
+    x64.je has7_0.after
+  has7_0:
+    x64.lea r9, [rip+__witness_Box_Equatable]
+    x64.lea rax, [rip+__witness_Box_Hashable]
+    x64.lea rdx, [rip+__layout_Set_Box]
+    x64.mov rcx, r12
+    x64.call Set.count
+    x64.mov r13, r8
+    x64.mov rcx, r12
+    x64.call mm_drop
+    x64.call mm_scope_pop
+    x64.mov r8d, 4294967295
+    x64.cmp r13, r8
+    x64.jbe __range_ok_0
+    x64.jmp __range_panic_0
+  has7_0.after:
+    x64.mov rcx, r12
+    x64.call mm_drop
+    x64.call mm_scope_pop
+    x64.xor r8d, r8d
+    x64.epilogue
+    x64.ret
+  __range_panic_0:
+    x64.lea r12, [rip+__panic_msg_7d5b657832cec9b9]
+    x64.mov rcx, r12
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov r8, r13
+    x64.epilogue
+    x64.ret
+  }
+}
+---

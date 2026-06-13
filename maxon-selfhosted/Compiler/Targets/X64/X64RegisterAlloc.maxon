@@ -732,6 +732,167 @@ function noteX64Shift(defBlocks RegIntArray, blockIdx RegInt, op X64Op)
 	end 'extract'
 end 'noteX64Shift'
 
+// Physical-GPR DEST mask of an op. The call-lowering arg setup and the spill
+// inserter's reload folding produce mov/load/lea ops whose DEST is an explicit
+// PHYSICAL register (`mov rcx, virtArg`; after folding, `mov rcx, [rbp+off]`).
+// Such a write is invisible to the virtual def scan (`noteX64OpDefs` ignores
+// physical ids), so unless it is surfaced as an implicit def, no clobber
+// pseudo-range exists at that position and the colorer may assign a virtual
+// whose range spans the op to the same register — the op then silently
+// clobbers it. Concretely: the split-boundary `mov L_post, L` that
+// `trySplitAtCall` inserts between a call's arg moves and the call read its
+// layout vreg from rcx AFTER the folded arg reload overwrote rcx, so
+// `Array.push` received the ARRAY pointer as its LAYOUT descriptor (the sort
+// int-corruption miscompile).
+//
+// Mirrors `noteX64OpDefs`'s pattern dispatch; per-pattern extractors return
+// the phys mask of the GPR dest (a virtual dest contributes 0 via
+// `x64PhysRegMask`). FP-dest patterns contribute 0 — XMM clobbers are not
+// GPR constraints.
+export function x64OpPhysGprDestMask(x64Op X64Op) returns RegMask
+	let pat = x64Op.rawValue.pattern
+	return match pat 'patMask'
+		passThrough gives 0
+		singleDef gives x64PhysMaskSingleDef(x64Op)
+		singleUse gives 0
+		defUse gives x64PhysMaskDefUse(x64Op)
+		twoAddr gives x64PhysMaskTwoAddr(x64Op)
+		useDefImm gives x64PhysMaskUseDefImm(x64Op)
+		unaryInPlace gives x64PhysMaskUnaryInPlace(x64Op)
+		threeAddr to baseUseSrcUse gives 0
+		baseUseDest gives x64PhysMaskBaseUseDest(x64Op)
+		fpSingleDef to fpTwoUse gives 0
+		fpMov gives 0
+		gprToFp gives 0
+		fpToGpr gives x64PhysMaskFpToGpr(x64Op)
+		baseUseFpUse gives 0
+		baseUseFpDef gives 0
+		movRegReg gives x64PhysMaskMovRegReg(x64Op)
+		constImm gives x64PhysMaskConstImm(x64Op)
+		shift gives x64PhysMaskShift(x64Op)
+		divReg to csel gives 0
+		baseUseUseDef gives x64PhysMaskBaseUseUseDef(x64Op)
+		baseTwoUse gives 0
+		defUseImm gives x64PhysMaskDefUseImm(x64Op)
+		fourAddr gives 0
+	end 'patMask'
+end 'x64OpPhysGprDestMask'
+
+function x64PhysMaskSingleDef(op X64Op) returns RegMask
+	return match op 'extract'
+		loadSlot(dest, _) gives x64PhysRegMask(dest)
+		loadRegRbpOffset(dest, _) gives x64PhysRegMask(dest)
+		reloadFromStack(dest, _) gives x64PhysRegMask(dest)
+		xorRegRegSelf(reg) gives x64PhysRegMask(reg)
+		globalLoad(dest, _, _) gives x64PhysRegMask(dest)
+		leaFromStack(dest, _) gives x64PhysRegMask(dest)
+		leaRipRelative(dest, _) gives x64PhysRegMask(dest)
+		leaFuncAddr(dest, _) gives x64PhysRegMask(dest)
+		setcc(dest, _) gives x64PhysRegMask(dest)
+		default panic("x64PhysMaskSingleDef: unexpected op for pattern")
+	end 'extract'
+end 'x64PhysMaskSingleDef'
+
+function x64PhysMaskDefUse(op X64Op) returns RegMask
+	return match op 'extract'
+		movsxd(dest, _) gives x64PhysRegMask(dest)
+		movzx32(dest, _) gives x64PhysRegMask(dest)
+		default panic("x64PhysMaskDefUse: unexpected op for pattern")
+	end 'extract'
+end 'x64PhysMaskDefUse'
+
+function x64PhysMaskTwoAddr(op X64Op) returns RegMask
+	return match op 'extract'
+		addRegReg(dest, _) gives x64PhysRegMask(dest)
+		subRegReg(dest, _) gives x64PhysRegMask(dest)
+		imulRegReg(dest, _) gives x64PhysRegMask(dest)
+		andRegReg(dest, _) gives x64PhysRegMask(dest)
+		orRegReg(dest, _) gives x64PhysRegMask(dest)
+		xorRegReg(dest, _) gives x64PhysRegMask(dest)
+		cmov(dest, _, _) gives x64PhysRegMask(dest)
+		lockXaddMemReg(valReg, _) gives x64PhysRegMask(valReg)
+		default panic("x64PhysMaskTwoAddr: unexpected op for pattern")
+	end 'extract'
+end 'x64PhysMaskTwoAddr'
+
+function x64PhysMaskUseDefImm(op X64Op) returns RegMask
+	return match op 'extract'
+		addRegImm(dest, _) gives x64PhysRegMask(dest)
+		subRegImm(dest, _) gives x64PhysRegMask(dest)
+		andRegImm(dest, _) gives x64PhysRegMask(dest)
+		orRegImm(dest, _) gives x64PhysRegMask(dest)
+		xorRegImm(dest, _) gives x64PhysRegMask(dest)
+		default panic("x64PhysMaskUseDefImm: unexpected op for pattern")
+	end 'extract'
+end 'x64PhysMaskUseDefImm'
+
+function x64PhysMaskUnaryInPlace(op X64Op) returns RegMask
+	return match op 'extract'
+		negReg(reg) gives x64PhysRegMask(reg)
+		bitNotReg(reg) gives x64PhysRegMask(reg)
+		default panic("x64PhysMaskUnaryInPlace: unexpected op for pattern")
+	end 'extract'
+end 'x64PhysMaskUnaryInPlace'
+
+function x64PhysMaskBaseUseDest(op X64Op) returns RegMask
+	return match op 'extract'
+		loadIndirect(dest, _, _, _, _) gives x64PhysRegMask(dest)
+		nullSafeLoad(dest, _, _) gives x64PhysRegMask(dest)
+		default panic("x64PhysMaskBaseUseDest: unexpected op for pattern")
+	end 'extract'
+end 'x64PhysMaskBaseUseDest'
+
+function x64PhysMaskFpToGpr(op X64Op) returns RegMask
+	return match op 'extract'
+		cvttFloat2Si(dest, _, _) gives x64PhysRegMask(dest)
+		movqXmmToGpr(dest, _) gives x64PhysRegMask(dest)
+		default panic("x64PhysMaskFpToGpr: unexpected op for pattern")
+	end 'extract'
+end 'x64PhysMaskFpToGpr'
+
+function x64PhysMaskMovRegReg(op X64Op) returns RegMask
+	return match op 'extract'
+		movRegReg(destReg, _) gives x64PhysRegMask(destReg)
+		default panic("x64PhysMaskMovRegReg: unexpected op for pattern")
+	end 'extract'
+end 'x64PhysMaskMovRegReg'
+
+function x64PhysMaskConstImm(op X64Op) returns RegMask
+	return match op 'extract'
+		movRegImm(dest, _) gives x64PhysRegMask(dest)
+		movRegImm32(dest, _) gives x64PhysRegMask(dest)
+		default panic("x64PhysMaskConstImm: unexpected op for pattern")
+	end 'extract'
+end 'x64PhysMaskConstImm'
+
+function x64PhysMaskShift(op X64Op) returns RegMask
+	return match op 'extract'
+		shlRegCl(dest, _, _) gives x64PhysRegMask(dest)
+		sarRegCl(dest, _, _) gives x64PhysRegMask(dest)
+		shrRegCl(dest, _, _) gives x64PhysRegMask(dest)
+		default panic("x64PhysMaskShift: unexpected op for pattern")
+	end 'extract'
+end 'x64PhysMaskShift'
+
+function x64PhysMaskBaseUseUseDef(op X64Op) returns RegMask
+	return match op 'extract'
+		addRegMem(dest, _, _) gives x64PhysRegMask(dest)
+		subRegMem(dest, _, _) gives x64PhysRegMask(dest)
+		andRegMem(dest, _, _) gives x64PhysRegMask(dest)
+		orRegMem(dest, _, _) gives x64PhysRegMask(dest)
+		xorRegMem(dest, _, _) gives x64PhysRegMask(dest)
+		imulRegMem(dest, _, _) gives x64PhysRegMask(dest)
+		default panic("x64PhysMaskBaseUseUseDef: unexpected op for pattern")
+	end 'extract'
+end 'x64PhysMaskBaseUseUseDef'
+
+function x64PhysMaskDefUseImm(op X64Op) returns RegMask
+	return match op 'extract'
+		imulRegImm(dest, _, _) gives x64PhysRegMask(dest)
+		default panic("x64PhysMaskDefUseImm: unexpected op for pattern")
+	end 'extract'
+end 'x64PhysMaskDefUseImm'
+
 function countX64TwoReads(counts RegIntArray, reg1 X64VReg, reg2 X64VReg)
 	incUse(counts, id: x64VRegId(reg1))
 	incUse(counts, id: x64VRegId(reg2))
@@ -2519,24 +2680,24 @@ export type X64RegAllocTarget implements RegAllocTarget
 
 	function getImplicitGprDefs(module TargetModule, packed OpIndex) returns RegMask
 		let x64Op = try module.x64Ops.get(packed) otherwise panic("invariant: packed opIdx not in module.x64Ops")
-		var mask = x64Op.rawValue.implicitGprDefs
-		// `movRegReg phys, virt` writes a physical register but the dest is
-		// not a virtual, so the regalloc otherwise records no def for it.
-		// Surface the physical write as an implicit def so a clobber pseudo-
-		// range gets emitted, preventing the regalloc from assigning later
-		// virtuals (whose lifetimes overlap subsequent users of that physical)
-		// to the same register. Without this, a sequence like
-		//     mov rcx, count_v
-		//     mov resultV, value_v   ; <-- regalloc may pick rcx for resultV
-		//     shr resultV, resultV, rcx
-		// happily clobbers rcx in the second mov.
-		match x64Op 'pickPhysDest'
-			movRegReg(destReg, _) then mask = mask or x64PhysRegMask(destReg)
-			prologue to memcpyOp then break 'pickPhysDest'
-			cmpRegReg to imulRegImm then break 'pickPhysDest'
-		end 'pickPhysDest'
-		return mask
+		return x64Op.rawValue.implicitGprDefs
 	end 'getImplicitGprDefs'
+
+	// Explicit phys-dest writes (arg movs, folded spill reloads, phys-dest
+	// leas/imms) are surfaced separately from the instantaneous side-effect
+	// clobbers above: `insertPhysicalConstraints` extends their pseudo-ranges
+	// to the next call in the block, modeling the arg register's OCCUPANCY
+	// from the move to the call it feeds. Without this, a sequence like
+	//     mov rcx, count_v
+	//     mov resultV, value_v   ; <-- regalloc may pick rcx for resultV
+	//     shr resultV, resultV, rcx
+	// happily clobbers rcx in the second mov — and a value hint-coalesced
+	// into an arg register was clobbered by a later constant materialized
+	// into the same register before the call (see `x64OpPhysGprDestMask`).
+	function getPhysGprDestMask(module TargetModule, packed OpIndex) returns RegMask
+		let x64Op = try module.x64Ops.get(packed) otherwise panic("invariant: packed opIdx not in module.x64Ops")
+		return x64OpPhysGprDestMask(x64Op)
+	end 'getPhysGprDestMask'
 
 	function getImplicitGprReads(module TargetModule, packed OpIndex) returns RegMask
 		let x64Op = try module.x64Ops.get(packed) otherwise panic("invariant: packed opIdx not in module.x64Ops")

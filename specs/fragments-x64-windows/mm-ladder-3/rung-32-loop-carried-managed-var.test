@@ -1,0 +1,126 @@
+// Test: rung-32-loop-carried-managed-var
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Box'
+
+function main() returns ExitCode
+	var acc = Box.create(0)
+	var i = 0
+	while i < 3 'accumulate'
+		acc = Box.create(acc.value + i + 1)
+		i = i + 1
+	end 'accumulate'
+	return acc.value
+end 'main'
+---
+MmTrace: true
+ExitCode: 6
+Stderr: ```
+mm_alloc Box #1 size=8 [Box.create]
+mm_incref Box #1 rc=1 [Box.create]
+mm_move Box #1 -> return [Box.create]
+mm_move Box #1 -> phi [main]
+mm_alloc Box #2 size=8 [Box.create]
+mm_incref Box #2 rc=1 [Box.create]
+mm_move Box #2 -> return [Box.create]
+mm_move Box #2 -> phi [main]
+mm_decref Box #1 rc=0 [main]
+  mm_free Box #1
+mm_alloc Box #3 size=8 [Box.create]
+mm_incref Box #3 rc=1 [Box.create]
+mm_move Box #3 -> return [Box.create]
+mm_move Box #3 -> phi [main]
+mm_decref Box #2 rc=0 [main]
+  mm_free Box #2
+mm_alloc Box #4 size=8 [Box.create]
+mm_incref Box #4 rc=1 [Box.create]
+mm_move Box #4 -> return [Box.create]
+mm_move Box #4 -> phi [main]
+mm_decref Box #3 rc=0 [main]
+  mm_free Box #3
+mm_decref Box #4 rc=0 [main]
+  mm_free Box #4
+```
+RequiredIRSelfhosted: ```
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.lea r12, [rip+__mtstr_scope_main]
+    x64.mov rcx, r12
+    x64.call mm_scope_push
+    x64.lea r12, [rip+__mtstr_scope_Box_create]
+    x64.mov rcx, r12
+    x64.call mm_scope_push
+    x64.mov eax, 60
+    x64.xor edx, edx
+    x64.mov ecx, 8
+    x64.call stdlib.__mm_alloc
+    x64.mov r12, r8
+    x64.mov rcx, r12
+    x64.call stdlib.__mm_incref
+    x64.xor r8d, r8d
+    x64.mov [r12+0], r8 (8b)
+    x64.mov rcx, r12
+    x64.call mm_move_return
+    x64.call mm_scope_pop
+    x64.mov rcx, r12
+    x64.call mm_move_phi
+    x64.xor r8d, r8d
+    x64.mov r13, r8
+  accumulate_0.header:
+    x64.cmp r13, 3
+    x64.jge accumulate_0.exit
+  accumulate_0:
+    x64.mov r14, [r12+0] (8b)
+    x64.lea r15, [rip+__mtstr_scope_Box_create]
+    x64.mov rcx, r15
+    x64.call mm_scope_push
+    x64.mov eax, 60
+    x64.xor edx, edx
+    x64.mov ecx, 8
+    x64.call stdlib.__mm_alloc
+    x64.mov r15, r8
+    x64.mov rcx, r15
+    x64.call stdlib.__mm_incref
+    x64.add r14, r13
+    x64.add r14, 1
+    x64.mov [r15+0], r14 (8b)
+    x64.mov rcx, r15
+    x64.call mm_move_return
+    x64.call mm_scope_pop
+    x64.mov rcx, r15
+    x64.call mm_move_phi
+    x64.mov rcx, r12
+    x64.call __mm_decref_maybenull_helper
+    x64.add r13, 1
+    x64.mov r12, r15
+    x64.jmp accumulate_0.header
+  accumulate_0.exit:
+    x64.mov r13, [r12+0] (8b)
+    x64.mov rcx, r12
+    x64.call __mm_decref_maybenull_helper
+    x64.call mm_scope_pop
+    x64.mov r8d, 4294967295
+    x64.cmp r13, r8
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea r12, [rip+__panic_msg_307640d376df0d0d]
+    x64.mov rcx, r12
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov r8, r13
+    x64.epilogue
+    x64.ret
+  }
+}
+
+```
+---
+---

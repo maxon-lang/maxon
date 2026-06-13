@@ -1,0 +1,1553 @@
+// Std-IR per-value (SSA) liveness analysis.
+//
+// Runs on post-mem2reg Std-IR (block-argument / phi form) and computes, for
+// every basic block, the set of SSA ValueIds that are live on entry (liveIn)
+// and on exit (liveOut). The Step-5 refcount inserter consumes this to place a
+// decref at the program point immediately after a managed value's final use on
+// each path, and to decide whether a value is still live across a CFG merge.
+//
+// This is a LIBRARY, not a registered pass: it adds no IR and has no
+// pipeline entry. The inserter (Step 5) calls `computeStdLiveness` directly,
+// then queries it.
+//
+// =====================================================================
+// Algorithm (backward gen/kill dataflow over reverse-postorder)
+// =====================================================================
+// Mirrors the register-allocator's `computeLiveness`
+// (Targets/Shared/LivenessAnalysis.maxon) but operates on Std ops and
+// per-value SSA ids instead of TargetModule vregs:
+//
+//   1. For each block B, compute use[B] (read before defined in B) and
+//      def[B] (defined in B — including block-args, which are defs at the
+//      TOP of the block).
+//   2. Iterate to a fixed point over reverse-RPO:
+//        liveOut[B] = union of liveIn[S] for each successor S of B
+//        liveIn[B]  = use[B] union (liveOut[B] - def[B])
+//
+// Each per-block set is a `StdLiveSet`: a sparse `members` list (iterated by
+// the fixpoint unions, so per-iteration work scales with the actual live-set
+// size) plus a dense `bits` BoolArray (O(1) membership for consumer queries).
+//
+// =====================================================================
+// SSA / block-argument handling (the three correctness specifics)
+// =====================================================================
+//   (a) BLOCK-ARG DEF. A block-arg (phi) is a DEF at the head of its own
+//       block, so its valueId goes into def[B]. It is therefore NOT a
+//       live-in of B (it is produced there), and `liveIn` correctly excludes
+//       it via the `liveOut[B] - def[B]` subtraction.
+//   (b) TERMINATOR-ARG = PREDECESSOR USE. A terminator's argument lists
+//       feed the successor's block-args. `br(target, argIds)` and
+//       `condBr(condId, _, thenArgIds, _, elseArgIds)` therefore contribute
+//       USES in the PREDECESSOR block (the one holding the terminator) — NOT
+//       in the successor. We read the terminator op via
+//       `module.ops.get(block.terminatorIndex())` and feed its argIds into
+//       use[predecessor].
+//   (c) condBr CONDITION. `condBr`'s `condId` is likewise a use in the
+//       predecessor (the block that branches on it).
+//
+// =====================================================================
+// Indexing convention
+// =====================================================================
+// liveIn/liveOut are indexed by `block.id` (the per-function BlockId), sized
+// to `func.nextBlockId` — exactly matching CfgInfo / RpoInfo, which are also
+// keyed by block.id. `module.blocks.get(blockRef)` maps a func.blockRefs entry
+// to the flat IrBlock; we then key everything by `block.id`.
+//
+// =====================================================================
+// Public API (consumed by the Step-5 inserter)
+// =====================================================================
+//   computeStdLiveness(module, func, cfg, rpo) returns StdLivenessInfo
+//       Whole-function liveness. `cfg`/`rpo` are the caller's already-built
+//       CfgInfo/RpoInfo (build once via buildCfg / computeReversePostorder,
+//       share with dominators/loops).
+//
+//   StdLivenessInfo.liveOutContains(blockId, vid) returns bool
+//       Is value `vid` live at the EXIT of block `blockId`? This is the seed
+//       the inserter uses for a within-block backward scan.
+//   StdLivenessInfo.liveInContains(blockId, vid) returns bool
+//       Is value `vid` live at the ENTRY of block `blockId`?
+//
+//   computeBlockLiveAfter(module, block, liveness) returns StdLiveAfter
+//       Per-op-position liveness WITHIN one block, computed by seeding from
+//       liveOut[block] and scanning the block's terminator + body ops
+//       backward. The inserter uses this to find the exact op after which a
+//       value's last use occurs (place the decref right there).
+//   StdLiveAfter.isLiveAfterBodyOp(opPosition, vid) returns bool
+//       Is `vid` live immediately AFTER the body op at `opPosition`
+//       (0-based index into block.opRefs)? "After op at the last position"
+//       equals liveOut for the fall-through case; values whose last use IS
+//       this op are live BEFORE it but not after, which is exactly the
+//       "place decref after this op" signal.
+//   StdLiveAfter.isLiveBeforeBodyOp(opPosition, vid) returns bool
+//       Is `vid` live immediately BEFORE the body op at `opPosition`?
+//
+//   extractStdOpOperands(op) returns StdOpOperands
+//       The per-op operand extractor: `readIds` = the ValueIds the op reads,
+//       `writeIds` = the ValueIds it produces (0, 1, or 2 — tryCall /
+//       witnessTryCall define both a result and an error flag). Exhaustive
+//       over every StdOp / StdSystemOp variant (mirrors DCE's use scan).
+
+export typealias StdLiveSetArray = Array with StdLiveSet
+
+// Sparse-set wrapper over a BoolArray. `bits` is the membership oracle (sized
+// to maxValueId+1); `members` is the append-only insertion-order list of
+// present valueIds. Liveness is monotonic across fixed-point iterations, so
+// there is no remove. Mirrors `LiveSet` in the target liveness pass, renamed
+// to avoid a flat-namespace collision and re-typed for ValueId (which is
+// always >= 0, unlike the target's RegInt vregs).
+export type StdLiveSet
+	export var bits as BoolArray
+	export var members as ValueIdArray
+
+	export static function create(maxVal ValueId) returns StdLiveSet
+		var bits = BoolArray.create()
+		bits.resize(maxVal)
+		return Self{bits: bits, members: ValueIdArray.create()}
+	end 'create'
+
+	export function contains(vid ValueId) returns bool
+		return try self.bits.get(vid) otherwise false
+	end 'contains'
+
+	// Mark `vid` as a member. Returns true iff it was newly added (the set
+	// grew) — the fixed-point loop uses that to detect convergence.
+	export function add(vid ValueId) returns bool
+		let prev = try self.bits.get(vid) otherwise panic("StdLiveSet.add: bits.get({vid}) OOB; bits sized to maxValueId+1")
+		if prev 'alreadyPresent'
+			return false
+		end 'alreadyPresent'
+
+		try self.bits.set(vid, value: true) otherwise panic("StdLiveSet.add: bits.set({vid}) OOB; bits sized to maxValueId+1")
+		self.members.push(vid)
+		return true
+	end 'add'
+end 'StdLiveSet'
+
+// Whole-function liveness result. liveIn/liveOut are indexed by block.id.
+// `borrows` carries the interior-borrow relation used to extend a base's
+// liveness over the pointers borrowed out of it (the UAF fix); the inserter
+// reads it to find a base's extended death point.
+export type StdLivenessInfo
+	export var liveIn as StdLiveSetArray
+	export var liveOut as StdLiveSetArray
+	export var maxValueId as ValueId
+	export var borrows as BorrowInfo
+
+	export static function create(liveIn StdLiveSetArray, liveOut StdLiveSetArray, maxValueId ValueId, borrows BorrowInfo) returns StdLivenessInfo
+		return Self{liveIn: liveIn, liveOut: liveOut, maxValueId: maxValueId, borrows: borrows}
+	end 'create'
+
+	// Is `vid` live at the EXIT of block `blockId`? Out-of-range blockId
+	// (block not in this function's id space) answers false.
+	export function liveOutContains(blockId BlockId, vid ValueId) returns bool
+		let set = try self.liveOut.get(blockId) otherwise return false
+		return set.contains(vid)
+	end 'liveOutContains'
+
+	// Is `vid` live at the ENTRY of block `blockId`?
+	export function liveInContains(blockId BlockId, vid ValueId) returns bool
+		let set = try self.liveIn.get(blockId) otherwise return false
+		return set.contains(vid)
+	end 'liveInContains'
+end 'StdLivenessInfo'
+
+// Operand record for one Std op: the ValueIds it reads (`readIds`) and the
+// ValueIds it produces (`writeIds`). Most ops define 0 or 1 value; `tryCall`
+// and `witnessTryCall` define 2 (result + error flag). Using a `writeIds`
+// array rather than an optional single id keeps the dual-def case exact and
+// avoids a 0-sentinel (ValueId 0 is a legitimate id). (`uses`/`defs` would
+// collide with the `uses` language keyword, hence the read/write naming.)
+export type StdOpOperands
+	export var readIds as ValueIdArray
+	export var writeIds as ValueIdArray
+
+	export static function create() returns StdOpOperands
+		return Self{readIds: ValueIdArray.create(), writeIds: ValueIdArray.create()}
+	end 'create'
+end 'StdOpOperands'
+
+// Per-op-position liveness within a single block. `liveAfterBody[i]` is the
+// set of values live immediately after body op `i` (0-based into
+// block.opRefs). `liveBeforeBody[i]` is the set live immediately before it.
+// `liveAfterBody[last]` is the block's liveOut minus the terminator's own
+// effect; `liveBeforeBody[0]` is liveIn. Built by `computeBlockLiveAfter`.
+export type StdLiveAfter
+	export var liveBeforeBody as StdLiveSetArray
+	export var liveAfterBody as StdLiveSetArray
+	export var maxValueId as ValueId
+
+	export static function create(liveBeforeBody StdLiveSetArray, liveAfterBody StdLiveSetArray, maxValueId ValueId) returns StdLiveAfter
+		return Self{liveBeforeBody: liveBeforeBody, liveAfterBody: liveAfterBody, maxValueId: maxValueId}
+	end 'create'
+
+	// Is `vid` live immediately AFTER the body op at `opPosition`? If a
+	// value's last use IS that op, it is live BEFORE but not AFTER — the
+	// inserter places the decref right after this op.
+	export function isLiveAfterBodyOp(opPosition NodePos, vid ValueId) returns bool
+		let set = try self.liveAfterBody.get(opPosition) otherwise return false
+		return set.contains(vid)
+	end 'isLiveAfterBodyOp'
+
+	// Is `vid` live immediately BEFORE the body op at `opPosition`?
+	export function isLiveBeforeBodyOp(opPosition NodePos, vid ValueId) returns bool
+		let set = try self.liveBeforeBody.get(opPosition) otherwise return false
+		return set.contains(vid)
+	end 'isLiveBeforeBodyOp'
+end 'StdLiveAfter'
+
+// 0-based position of a body op within a block's opRefs list.
+typealias NodePos = int(0 to u64.max)
+
+// ============================================================
+// Interior-borrow liveness extension (the UAF fix)
+// ============================================================
+// A `loadIndirect` of POINTER width out of a managed/releasable base produces an
+// INTERIOR-BORROW pointer: a raw pointer aimed *inside* the base's heap
+// allocation (its String buffer, an Array's element storage, a struct field that
+// is itself a pointer). That borrowed pointer is NOT refcounted in its own right
+// (it is just an address), so per-VALUE SSA liveness ends the base at its last
+// DIRECT use — the `loadIndirect` itself. But the borrowed pointer keeps being
+// read AFTER that (a `memcpy`/`rep_movsb` over the buffer, a `mrt_write_stdout`,
+// further pointer arithmetic). Releasing the base at its direct last use runs the
+// base's destructor, which frees the very allocation the borrowed pointer aims
+// into → use-after-free.
+//
+// FIX: the base must outlive every interior pointer borrowed out of it. We model
+// this as a liveness EXTENSION: wherever a borrowed result R is live, its base B
+// is treated as live too (`B borrowed-from by R` ⇒ B ⊇ R's liveness). This is
+// realised by EXPANDING every read of R into a read of R *and* B (transitively up
+// the borrow chain) before the use/def + backward scans consume it — so B's
+// last-use, and thus the inserter's decref point, naturally moves to AFTER R's
+// last use on every path (the CFG fixpoint carries it across blocks).
+//
+// SOUNDNESS / over-extension: extending B's lifetime is the SAFE direction — the
+// worst case is a slightly-later decref (a transient extra live ref), never an
+// early free. We extend EXACTLY to the borrowed pointer's last use (not to
+// function end), so no leak is introduced: B is still released, just after the
+// borrow is done. We restrict the relation to POINTER-width (`qword`, non-float)
+// loads: a narrower load (byte/halfword/word) or a float load can never be an
+// interior pointer that is later dereferenced, so excluding them avoids needless
+// lifetime extension. A qword scalar load (e.g. a length field) that happens to
+// outlive the base is still handled correctly — extending over it merely delays
+// the (still-emitted) decref, never frees early.
+
+// Sentinel for `BorrowInfo.baseOf`: this value did not come from a pointer-width
+// interior load (it has no borrow base). ValueId is always >= 0.
+let BORROW_NO_BASE = i64.max
+
+// Per-function interior-borrow relation: `baseOf[result]` is the base ValueId a
+// pointer-width `loadIndirect` loaded `result` from (i.e. `result` is an interior
+// pointer into `baseOf[result]`'s allocation), or `BORROW_NO_BASE` if `result`
+// was not produced by such a load. Built once per function and consumed by both
+// the liveness scans (here) and the refcount inserter (which expands the same
+// way to find the base's extended death point).
+export type BorrowInfo
+	export var baseOf as ValueIdArray
+
+	export static function create(baseOf ValueIdArray) returns BorrowInfo
+		return Self{baseOf: baseOf}
+	end 'create'
+
+	// The immediate borrow base of `vid`, or `BORROW_NO_BASE`.
+	export function baseOfValue(vid ValueId) returns ValueId
+		return try self.baseOf.get(vid) otherwise BORROW_NO_BASE
+	end 'baseOfValue'
+
+	// True iff `vid` is an interior pointer borrowed out of some base.
+	export function isBorrow(vid ValueId) returns bool
+		return self.baseOfValue(vid) != BORROW_NO_BASE
+	end 'isBorrow'
+
+	// The ROOT of `vid`'s borrow chain (`vid` → base → base-of-base → … → root,
+	// the first value with no base). If `vid` has no base it is its own root and is
+	// returned unchanged. Bounded by the table size so a transient fixpoint cycle
+	// terminates. The refcount inserter uses this to resolve an `incomingOwner`
+	// value's SOURCE object (the containing allocation it was loaded out of).
+	export function rootOf(vid ValueId) returns ValueId
+		return borrowRootOf(vid, baseOf: self.baseOf)
+	end 'rootOf'
+end 'BorrowInfo'
+
+// Build the interior-borrow relation for a function: scan every body op (and
+// terminator, for completeness) for a POINTER-width `loadIndirect` and record
+// `baseOf[result] = addr`. Only `qword` non-float loads qualify — narrower or
+// float loads are never interior pointers subject to the UAF hazard.
+export function buildBorrowInfo(module StdModule, func IrFunction, maxVal ValueId, funcReturnsBorrow FuncReturnsBorrowSet, funcReturnsReceiverInterior FuncReturnsBorrowSet, funcParamConsumes FuncParamConsumesMap) returns BorrowInfo
+	var baseOf = ValueIdArray.create()
+	var i = 0
+	while i < maxVal 'init'
+		baseOf.push(BORROW_NO_BASE)
+		i = i + 1
+	end 'init'
+
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("buildBorrowInfo: blockRef not in module.blocks")
+		for opIdx in block.opRefs 'eachOp'
+			let op = try module.ops.get(opIdx) otherwise panic("buildBorrowInfo: opIdx not in module.ops")
+			recordBorrowForOp(op, baseOf: baseOf, funcReturnsBorrow: funcReturnsBorrow, funcReturnsReceiverInterior: funcReturnsReceiverInterior, funcParamConsumes: funcParamConsumes)
+		end 'eachOp'
+	end 'eachBlock'
+
+	// Propagate borrow bases transitively through (a) heap stores of a borrow and
+	// (b) block-args (phis), to a combined fixpoint. This is what couples a
+	// COLLECTION's lifetime to an ITERATOR that borrows into it — the pattern the
+	// nav-call edges alone don't reach:
+	//
+	//   for n in list:  the iterator is a FRESH allocation; lowering stores the
+	//   head node (a borrow of the list) INTO the iterator struct
+	//   (`store [iter+0] = headNode`), then each loop iteration RELOADS the node
+	//   from the iterator (`node = [iter+0]`) and advances it. The SSA borrow
+	//   chain node→list is broken by that store/reload through heap memory, and
+	//   the node is additionally carried through loop phis. Without propagation,
+	//   liveness ends the list at the iterator's creation and the inserter frees
+	//   it before the loop body reads `node.value()` — a use-after-free that
+	//   truncates iteration (sum stops after element 0) and corrupts reads.
+	//
+	// Two propagation rules, iterated together until stable:
+	//   STORE: `store [A+_] = V` where V borrows base R ⇒ A borrows R (the
+	//     allocation now holds a live interior pointer into R, so R must outlive
+	//     A). Only when A has no nearer base, so a direct interior pointer keeps
+	//     its precise base.
+	//   PHI:   a block-arg whose incoming edge values all resolve to the same
+	//     borrow root R (and R is not the phi itself) borrows R. The fixpoint
+	//     handles the cyclic loop-carried phi (it appears on its own back-edge).
+	//
+	// SOUNDNESS: both rules only EXTEND a base's live range, never shrink it — an
+	// imprecise entry risks a late release (leak, recoverable), never a premature
+	// free (UAF). The store rule fires ONLY for a stored value that is itself a
+	// borrow (a freshRc0/owned value stored into a field — e.g. the
+	// managed-field-reassignment case — has no base, so it is untouched).
+	propagateBorrows(module, func: func, baseOf: baseOf)
+
+	return BorrowInfo.create(baseOf)
+end 'buildBorrowInfo'
+
+// The (addr, value) pairs of every heap store, collected once so the borrow
+// fixpoint can re-evaluate them as stored values gain bases.
+type StoreEdge
+	export var addrId as ValueId
+	export var valueId as ValueId
+
+	export static function create(addrId ValueId, valueId ValueId) returns StoreEdge
+		return Self{addrId: addrId, valueId: valueId}
+	end 'create'
+end 'StoreEdge'
+
+typealias StoreEdgeArray = Array with StoreEdge
+
+// Combined store + phi borrow-base propagation to a fixpoint (see
+// `buildBorrowInfo`'s rules + soundness note).
+function propagateBorrows(module StdModule, func IrFunction, baseOf ValueIdArray)
+	let storeEdges = collectStoreEdges(module, func: func)
+	let phiEdges = buildPhiIncomingMap(module, func: func)
+
+	var changed = true
+	var guard = 0
+	// Each value's base can change at most O(chain length) ≤ table size times;
+	// the product bounds the worst-case fixpoint without an unbounded loop.
+	let guardLimit = (storeEdges.count() + func.blockRefs.count() + 1) * (baseOf.count() + 1)
+	while changed and guard < guardLimit 'fixpoint'
+		changed = false
+		guard = guard + 1
+		if propagateStoreBorrows(storeEdges, baseOf: baseOf) 'storeChanged'
+			changed = true
+		end 'storeChanged'
+		if propagatePhiBorrows(module, func: func, phiEdges: phiEdges, baseOf: baseOf) 'phiChanged'
+			changed = true
+		end 'phiChanged'
+	end 'fixpoint'
+end 'propagateBorrows'
+
+// One sweep of the STORE rule. Returns true iff any base changed.
+function propagateStoreBorrows(storeEdges StoreEdgeArray, baseOf ValueIdArray) returns bool
+	var changed = false
+	for e in storeEdges 'each'
+		if applyStoreBorrow(e, baseOf: baseOf) 'updated'
+			changed = true
+		end 'updated'
+	end 'each'
+	return changed
+end 'propagateStoreBorrows'
+
+function applyStoreBorrow(e StoreEdge, baseOf ValueIdArray) returns bool
+	if e.addrId >= baseOf.count() 'oob'
+		return false
+	end 'oob'
+	let valueRoot = borrowRootOf(e.valueId, baseOf: baseOf)
+	if valueRoot == BORROW_NO_BASE 'valueNotBorrow'
+		return false
+	end 'valueNotBorrow'
+	// The stored value carries no interior-borrow base (its root is itself) ⇒
+	// nothing to propagate. Only a value that borrows SOME OTHER base couples the
+	// allocation to that base.
+	if valueRoot == e.valueId 'rootIsSelf'
+		return false
+	end 'rootIsSelf'
+	// Do not couple an allocation to itself, and keep an existing (nearer) base.
+	if valueRoot == e.addrId 'sameAlloc'
+		return false
+	end 'sameAlloc'
+	let existing = try baseOf.get(e.addrId) otherwise BORROW_NO_BASE
+	if existing != BORROW_NO_BASE 'hasBase'
+		return false
+	end 'hasBase'
+	try baseOf.set(e.addrId, value: valueRoot) otherwise panic("applyStoreBorrow: baseOf.set OOB")
+	return true
+end 'applyStoreBorrow'
+
+// One sweep of the PHI rule over every block-arg. Returns true iff any changed.
+function propagatePhiBorrows(module StdModule, func IrFunction, phiEdges PhiIncomingMap, baseOf ValueIdArray) returns bool
+	var changed = false
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("propagatePhiBorrows: blockRef not in module.blocks")
+		var argIdx = 0
+		while argIdx < block.blockArgs.count() 'eachArg'
+			let arg = try block.blockArgs.get(argIdx) otherwise panic("propagatePhiBorrows: blockArgs.get OOB")
+			if updatePhiBorrowBase(func, phiId: arg.valueId, block: block, argIdx: argIdx, edgeArgs: phiEdges, baseOf: baseOf) 'updated'
+				changed = true
+			end 'updated'
+			argIdx = argIdx + 1
+		end 'eachArg'
+	end 'eachBlock'
+	return changed
+end 'propagatePhiBorrows'
+
+// Collect (addr, value) for every heap store in the function.
+function collectStoreEdges(module StdModule, func IrFunction) returns StoreEdgeArray
+	var edges = StoreEdgeArray.create()
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("collectStoreEdges: blockRef not in module.blocks")
+		for opIdx in block.opRefs 'eachOp'
+			let op = try module.ops.get(opIdx) otherwise panic("collectStoreEdges: opIdx not in module.ops")
+			collectStoreEdgeFromOp(op, edges: edges)
+		end 'eachOp'
+	end 'eachBlock'
+	return edges
+end 'collectStoreEdges'
+
+function collectStoreEdgeFromOp(op StdOp, edges StoreEdgeArray)
+	match op 'dispatch'
+		system(s) then collectStoreEdgeFromSys(s, edges: edges)
+		arith then break 'dispatch'
+		control then break 'dispatch'
+		call then break 'dispatch'
+		memory then break 'dispatch'
+	end 'dispatch'
+end 'collectStoreEdgeFromOp'
+
+function collectStoreEdgeFromSys(s StdSystemOp, edges StoreEdgeArray)
+	match s 'check'
+		storeIndirect(addrId, _, valueId, _, _) then edges.push(StoreEdge.create(addrId, valueId: valueId))
+		globalAddr to loadByte then break 'check'
+		osExit to osWrite then break 'check'
+		free then break 'check'
+		osWriteErr to loadFramePtr then break 'check'
+		loadIndirect then break 'check'
+		funcAddr then break 'check'
+		drop then break 'check'
+		osAllocPages to osDirMkdir then break 'check'
+		atomicInc to osLockRelease then break 'check'
+		boxValue to dropTypeParam then break 'check'
+	end 'check'
+end 'collectStoreEdgeFromSys'
+
+// Per-(block, block-arg-index) list of the values predecessors pass into that
+// phi. Keyed by a flat `blockId * width + argIdx` index into a bucket array, so
+// the lookup stays allocation-free during the fixpoint. `width` is the max
+// block-arg count over the function (small — a handful), so the table is
+// blockCount * width buckets.
+type PhiIncomingMap
+	export var buckets as ValueIdArrayArray
+	export var width as NodeIndex
+
+	export static function create(numBlocks BlockId, width NodeIndex) returns PhiIncomingMap
+		var buckets = ValueIdArrayArray.create()
+		let w = maxOne(width)
+		let total = numBlocks * w
+		var i = 0
+		while i < total 'init'
+			buckets.push(ValueIdArray.create())
+			i = i + 1
+		end 'init'
+		return Self{buckets: buckets, width: w}
+	end 'create'
+
+	export function incomingFor(blockId BlockId, argIdx NodeIndex) returns ValueIdArray
+		let idx = blockId * self.width + argIdx
+		return try self.buckets.get(idx) otherwise EMPTY_VALUE_ID_ARRAY
+	end 'incomingFor'
+end 'PhiIncomingMap'
+
+typealias ValueIdArrayArray = Array with ValueIdArray
+
+let EMPTY_VALUE_ID_ARRAY = ValueIdArray.create()
+
+function maxOne(n NodeIndex) returns NodeIndex
+	return n if n > 0 else 1
+end 'maxOne'
+
+// Append `value` to the (blockId, argIdx) bucket. A free function (mirrors
+// Mem2Reg's `defStacks.get(slot).push`) so it mutates the element array in place
+// without borrowing the enclosing `PhiIncomingMap` across the push.
+function phiIncomingAdd(map PhiIncomingMap, blockId BlockId, argIdx NodeIndex, value ValueId)
+	let idx = blockId * map.width + argIdx
+	var bucket = try map.buckets.get(idx) otherwise panic("phiIncomingAdd: bucket idx {idx} OOB (blockId={blockId} argIdx={argIdx})")
+	bucket.push(value)
+end 'phiIncomingAdd'
+
+// Build the (block, arg-index) → incoming-values map by scanning every block's
+// terminator for the per-edge block-arg lists it passes to its successors.
+function buildPhiIncomingMap(module StdModule, func IrFunction) returns PhiIncomingMap
+	var width = 0
+	for blockRef in func.blockRefs 'measureBlocks'
+		let block = try module.blocks.get(blockRef) otherwise panic("buildPhiIncomingMap: blockRef not in module.blocks (measure)")
+		if block.blockArgs.count() > width 'wider'
+			width = block.blockArgs.count()
+		end 'wider'
+	end 'measureBlocks'
+
+	var map = PhiIncomingMap.create(func.nextBlockId, width: width)
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("buildPhiIncomingMap: blockRef not in module.blocks")
+		if not block.hasTerminatorOp() 'noTerm'
+			continue
+		end 'noTerm'
+		let term = try module.ops.get(block.terminatorIndex()) otherwise panic("buildPhiIncomingMap: terminator not in module.ops")
+		recordTerminatorEdgeArgs(term, map: map)
+	end 'eachBlock'
+	return map
+end 'buildPhiIncomingMap'
+
+function recordTerminatorEdgeArgs(term StdOp, map PhiIncomingMap)
+	match term 'dispatch'
+		control(cf) then recordCfEdgeArgs(cf, map: map)
+		arith then break 'dispatch'
+		call then break 'dispatch'
+		memory then break 'dispatch'
+		system then break 'dispatch'
+	end 'dispatch'
+end 'recordTerminatorEdgeArgs'
+
+function recordCfEdgeArgs(cf StdControlOp, map PhiIncomingMap)
+	match cf 'check'
+		br(target, argIds) then recordEdgeArgList(target, argIds: argIds, map: map)
+		condBr(_, thenTarget, thenArgIds, elseTarget, elseArgIds) then recordCondBrEdgeArgs(thenTarget, thenArgIds: thenArgIds, elseTarget: elseTarget, elseArgIds: elseArgIds, map: map)
+	end 'check'
+end 'recordCfEdgeArgs'
+
+function recordCondBrEdgeArgs(thenTarget BlockId, thenArgIds ValueIdArray, elseTarget BlockId, elseArgIds ValueIdArray, map PhiIncomingMap)
+	recordEdgeArgList(thenTarget, argIds: thenArgIds, map: map)
+	recordEdgeArgList(elseTarget, argIds: elseArgIds, map: map)
+end 'recordCondBrEdgeArgs'
+
+function recordEdgeArgList(target BlockId, argIds ValueIdArray, map PhiIncomingMap)
+	var argIdx = 0
+	for v in argIds 'each'
+		phiIncomingAdd(map, blockId: target, argIdx: argIdx, value: v)
+		argIdx = argIdx + 1
+	end 'each'
+end 'recordEdgeArgList'
+
+// Set `baseOf[phiId]` to the common borrow root of its incoming edge values, if
+// they agree and it is not already set to that. Returns true iff it changed.
+//
+// Two phi shapes are subtly distinct and BOTH carry managed `incomingOwner`
+// values, so managed-ness alone cannot tell them apart:
+//   - an OWNED move-merge phi (an inliner continuation phi the return value was
+//     MOVED into — e.g. `List from [...]` returning the List struct) IS its own
+//     incoming value: one heap object, one +1. It must NOT record a borrow base
+//     (the `commonRoot ∈ incoming` guard below skips it), or the inserter would
+//     decref that single +1 twice → the `List.get` UAF.
+//   - a GENUINE interior-borrow phi (the for-in loop iterator) borrows a DIFFERENT
+//     object reached only transitively (the collection). It MUST record the base,
+//     or the collection is freed before the loop ends → for-in-over-List truncates
+//     after element 0. Its success edge carries the real iterator while its `try`
+//     error edge carries a `notManaged` null sentinel; the sentinel-skip below
+//     keeps that null from disagreeing the real borrow root away.
+function updatePhiBorrowBase(func IrFunction, phiId ValueId, block IrBlock, argIdx NodeIndex, edgeArgs PhiIncomingMap, baseOf ValueIdArray) returns bool
+	if phiId >= baseOf.count() 'oob'
+		return false
+	end 'oob'
+	let incoming = edgeArgs.incomingFor(block.id, argIdx: argIdx)
+	if incoming.count() == 0 'noPreds'
+		return false
+	end 'noPreds'
+
+	// Resolve each incoming value to its borrow root, IGNORING two kinds of edge:
+	//
+	//   SELF-ROOT — a LOOP-CARRIED phi appears on its own back-edge, and before the
+	//   fixpoint converges that back-edge value transiently roots to the phi itself.
+	//   Folding it in would force perpetual disagreement and the loop collection
+	//   would never get its base. Skipping self-roots lets the entry edge pin the
+	//   base; the back-edge then re-resolves THROUGH that base on the next sweep (it
+	//   borrows the same collection), so the agreement is real once stable.
+	//
+	//   NULL/UNDEF SENTINEL — a `notManaged` value reaching a MANAGED phi is the
+	//   synthetic undef/zero mem2reg materializes on a path with no reaching store
+	//   (the error path of a `try` that feeds the merged result: e.g. the for-in
+	//   iterator phi merges the real iterator on the success edge with a `const 0`
+	//   null on the `mrt_managed_list_head` error edge). That sentinel is never a
+	//   live borrow — folding its base-less root in would DISAGREE with the real
+	//   iterator's root and suppress the base, freeing the collection before the loop
+	//   (the for-in-over-List truncation: iteration stopped after element 0). The
+	//   error edge is taken only when iteration has ended and the iterator is null, so
+	//   the borrow it would carry is dead there — skipping it is sound (this only
+	//   restricts agreement to the live edges; the base still EXTENDS, never shrinks).
+	var commonRoot = BORROW_NO_BASE
+	var sawExternal = false
+	for v in incoming 'eachIn'
+		if func.isValueManaged(phiId) and not func.isValueManaged(v) 'nullSentinel'
+			continue
+		end 'nullSentinel'
+		let root = borrowRootOf(v, baseOf: baseOf)
+		if root == phiId 'selfRoot'
+			continue
+		end 'selfRoot'
+		if not sawExternal 'firstExternal'
+			commonRoot = root
+			sawExternal = true
+		end 'firstExternal' else 'restExternal'
+			if root != commonRoot 'disagree'
+				return false
+			end 'disagree'
+		end 'restExternal'
+	end 'eachIn'
+
+	// No external (non-self) incoming root, or it carries no borrow base ⇒ nothing
+	// to extend (the phi's own last-use release applies).
+	if not sawExternal or commonRoot == BORROW_NO_BASE 'noExternalBase'
+		return false
+	end 'noExternalBase'
+
+	// An OWNED move-merge phi (a managed `incomingOwner` continuation phi the return
+	// value was MOVED into) IS its own incoming value — one heap object, one +1 — not
+	// a borrow. Detect it structurally: `commonRoot` is itself one of the phi's
+	// incoming edge values (the moved-in source object, passed in directly as the
+	// `ret`→`br cont [retVal]` phi arg). Recording `baseOf[phi] = commonRoot` there
+	// would make the inserter decref that single +1 at BOTH the phi's last use AND
+	// commonRoot's borrow-extended last use → over-free (the `List.get` UAF: the List
+	// struct freed before `get` ran, because its continuation phi was recorded
+	// borrowing the struct alloc it IS an alias of). A GENUINE interior-borrow phi
+	// (the for-in loop iterator) borrows a DIFFERENT object: the collection is reached
+	// only TRANSITIVELY through the borrow chain (`createIterator` ⇒ baseOf[iter] =
+	// receiver, plus the store/reload fixpoint), never passed in as an edge value — so
+	// this is false and the base IS recorded, keeping the collection live across the
+	// loop. `isValueManaged` is a precondition: a `notManaged` phi is never an
+	// ownership move-merge and must always record (the raw interior-pointer case).
+	if func.isValueManaged(phiId) and valueIdArrayContains(incoming, vid: commonRoot) 'ownedSelfMoveMerge'
+		return false
+	end 'ownedSelfMoveMerge'
+
+	let existing = try baseOf.get(phiId) otherwise BORROW_NO_BASE
+	if existing == commonRoot 'unchanged'
+		return false
+	end 'unchanged'
+	try baseOf.set(phiId, value: commonRoot) otherwise panic("updatePhiBorrowBase: baseOf.set OOB")
+	return true
+end 'updatePhiBorrowBase'
+
+// Follow `vid`'s borrow chain to its root (the first value with no base), bounded
+// by the table size so a transient cycle during the fixpoint terminates.
+function borrowRootOf(vid ValueId, baseOf ValueIdArray) returns ValueId
+	var cur = vid
+	var steps = 0
+	let limit = baseOf.count() + 1
+	while steps < limit 'walk'
+		let base = try baseOf.get(cur) otherwise BORROW_NO_BASE
+		if base == BORROW_NO_BASE 'root'
+			return cur
+		end 'root'
+		cur = base
+		steps = steps + 1
+	end 'walk'
+	return cur
+end 'borrowRootOf'
+
+function recordBorrowForOp(op StdOp, baseOf ValueIdArray, funcReturnsBorrow FuncReturnsBorrowSet, funcReturnsReceiverInterior FuncReturnsBorrowSet, funcParamConsumes FuncParamConsumesMap)
+	match op 'dispatch'
+		system(s) then recordBorrowForSys(s, baseOf: baseOf)
+		call(c) then recordBorrowForCall(c, baseOf: baseOf, funcReturnsBorrow: funcReturnsBorrow, funcReturnsReceiverInterior: funcReturnsReceiverInterior, funcParamConsumes: funcParamConsumes)
+		arith(a) then recordBorrowForArith(a, baseOf: baseOf)
+		control then break 'dispatch'
+		memory then break 'dispatch'
+	end 'dispatch'
+end 'recordBorrowForOp'
+
+// Record the interior-borrow edge for POINTER ARITHMETIC: `addi`/`subi` derive a
+// pointer INTO whatever the left operand points at (inlined Internals bodies
+// address fields as `record + MM_OFFSET_*`). Without this edge the borrow chain
+// breaks at the arith op: liveness ends the root at its last DIRECT use, the
+// inserter releases it there, and the derived pointer's later read/write hits
+// freed memory (the inlined `Array.clear` UAF — `walk; release root; store
+// [root_field+8] = 0` writing into a freed record whose stale length then
+// double-walks the elements at teardown). The left operand is the conventional
+// pointer side (`ptr + const-offset` is the only shape lowering emits); a plain
+// integer add records a harmless edge to a non-managed root (only EXTENDS its
+// live range — integers carry no refcount ops). Mirrors
+// `recordPointerLoadBorrow`'s extend-only soundness.
+function recordBorrowForArith(a StdArithOp, baseOf ValueIdArray)
+	match a 'check'
+		binary(op) then recordPointerArithBorrow(op, baseOf: baseOf)
+		const then break 'check'
+		unary then break 'check'
+	end 'check'
+end 'recordBorrowForArith'
+
+function recordPointerArithBorrow(op StdArithBinaryOp, baseOf ValueIdArray)
+	let derivesPointer = match op.opcode 'opc'
+		addI64 or subI64 gives true
+		mulI64 to cmpF64Ge gives false
+	end 'opc'
+	if not derivesPointer 'notPtrArith'
+		return
+	end 'notPtrArith'
+	if op.resultId >= baseOf.count() 'oob'
+		return
+	end 'oob'
+	try baseOf.set(op.resultId, value: op.leftId) otherwise panic("recordPointerArithBorrow: baseOf.set({op.resultId}) OOB despite bound check")
+end 'recordPointerArithBorrow'
+
+// Record the interior-borrow edge for a runtime navigation helper whose result
+// is a pointer INTO (or a sibling/descendant pointer reachable from) its
+// receiver argument — exactly the call-result analogue of
+// `recordPointerLoadBorrow`. These helpers walk a managed container the caller
+// owns and hand back a raw INTERIOR pointer (a node, a node's value slot, a
+// sibling node) WITHOUT taking a reference: the container retains ownership.
+//
+// WHY this is needed (the UAF this prevents): with the cached stdlib now
+// carrying its real per-value ownership classification, an inlined accessor's
+// receiver (e.g. a `List`/`Array` the caller owns) is a managed value the
+// inserter releases at its SSA last use. That last syntactic use is feeding the
+// navigation helper — but the BORROWED result (the node, then the node's value)
+// is read AFTER the call, often much later (a `for n in list` loop body, a
+// `list.get(i)` whose value is printed downstream). Without a borrow edge from
+// the call result back to its receiver, liveness ends the container at the
+// navigation call and the inserter frees it out from under the still-live
+// borrow → use-after-free / double-free (manifesting as corrupted reads —
+// `list.get(1)` returning garbage). Recording `result → receiverArg` keeps the
+// container live transitively (result → node → list → list-box) until the last
+// borrowed read, so the release lands after the borrow is dead.
+//
+// SOUNDNESS: this only EXTENDS a base's live range (never shrinks it), so the
+// worst case of an over-broad entry is a slightly-late release (a non-leak), not
+// a premature free. The allowlist is the set of runtime helpers whose body is a
+// pure interior `loadIndirect`/pointer-walk of arg 0 (verified against
+// runtime.std) — never an allocating or ref-taking call.
+function recordBorrowForCall(c StdCallOp, baseOf ValueIdArray, funcReturnsBorrow FuncReturnsBorrowSet, funcReturnsReceiverInterior FuncReturnsBorrowSet, funcParamConsumes FuncParamConsumesMap)
+	match c 'check'
+		call(resultId, callee, argIds) then recordNavBorrow(resultId, callee: callee, argIds: argIds, baseOf: baseOf, funcReturnsBorrow: funcReturnsBorrow, funcReturnsReceiverInterior: funcReturnsReceiverInterior, funcParamConsumes: funcParamConsumes)
+		tryCall(resultId, callee, argIds, _) then recordNavBorrow(resultId, callee: callee, argIds: argIds, baseOf: baseOf, funcReturnsBorrow: funcReturnsBorrow, funcReturnsReceiverInterior: funcReturnsReceiverInterior, funcParamConsumes: funcParamConsumes)
+		indirectCall to errorReturn then break 'check'
+		ret then break 'check'
+	end 'check'
+end 'recordBorrowForCall'
+
+// A call result borrows its arg-0 receiver when the callee is a known runtime
+// pointer-walk/iterator helper (the name lists below) OR any STDLIB function
+// the return-borrow analysis classified borrow-returning (`funcReturnsBorrow`
+// — `List.walkTo`/`List.get` survive as opaque calls in cached builds, and
+// without the edge the receiver list dies at the call, freeing the nodes the
+// returned borrow still points into). Like every borrow edge this only
+// EXTENDS the receiver's live range — over-matching risks a late release,
+// never a premature free.
+function recordNavBorrow(resultId ValueId, callee String, argIds ValueIdArray, baseOf ValueIdArray, funcReturnsBorrow FuncReturnsBorrowSet, funcReturnsReceiverInterior FuncReturnsBorrowSet, funcParamConsumes FuncParamConsumesMap)
+	// `funcReturnsReceiverInterior` is the liveness-only superset: a callee like
+	// `List.walkTo` hands the caller an ACQUIRED node (+1, so it is NOT in
+	// `funcReturnsBorrow` — callers release it) whose value slot the receiver's
+	// chain still owns. The receiver must outlive the node's uses either way.
+	if not calleeReturnsReceiverBorrow(callee) and not calleeReturnsReceiverIterator(callee) and not funcReturnsBorrow.contains(callee) and not funcReturnsReceiverInterior.contains(callee) 'notNav'
+		return
+	end 'notNav'
+	// A callee that CONSUMES its arg-0 receiver (`funcParamConsumes` bit 0 — a
+	// transparent-wrapper factory like `WithIterIterator.create` moving its
+	// type-param `source` into the box) takes OWNERSHIP of the receiver; the
+	// result owns it, it does not borrow it. Recording the edge would extend
+	// the receiver's live range past the consuming call, and the borrow-base
+	// terminator drop would then release a +1 the box already owns — freeing
+	// the moved-in value out from under the wrapper (the `withIterator`
+	// early-exhaustion UAF).
+	if calleeConsumesReceiver(callee, funcParamConsumes: funcParamConsumes) 'consumed'
+		return
+	end 'consumed'
+	let receiver = try argIds.get(0) otherwise return
+	if resultId >= baseOf.count() 'oob'
+		return
+	end 'oob'
+	try baseOf.set(resultId, value: receiver) otherwise panic("recordNavBorrow: baseOf.set({resultId}) OOB despite bound check")
+end 'recordNavBorrow'
+
+// True iff `callee`'s consume-bit vector marks arg 0 consumed (see
+// `analyzeParamConsumes` — the Concept-C structural/convention bits).
+function calleeConsumesReceiver(callee String, funcParamConsumes FuncParamConsumesMap) returns bool
+	let bits = try funcParamConsumes.get(callee) otherwise return false
+	return try bits.get(0) otherwise false
+end 'calleeConsumesReceiver'
+
+// The runtime helpers whose RESULT is an interior borrow of arg 0 (the receiver
+// container/node). Kept in sync with runtime.std: each body is a pure
+// `loadIndirect`/pointer-walk of its first argument that returns a pointer the
+// caller does NOT own (the container does). Stripped of the `stdlib.` prefix
+// where lowering emits one (cursor helpers) — both spellings are matched.
+//
+// `__managed_mem_get(self, idx)` is the indexed getter: it returns
+// `load(load(self) + idx*elemSize)` — an element pointer INTO the receiver's
+// backing buffer that the container owns, NOT the caller. Recording the
+// result→self borrow edge couples the container's live range to the returned
+// element's uses, so the inserter releases the container only AFTER the
+// borrowed element is dead. Without it, an aliased/indexed managed element
+// (`let ys = xs; let a = ys.get(0); return a.value`) frees the array — and its
+// element — at the much earlier `get` call, BEFORE `planReturnedBorrowRetains`
+// has retained the element, so the borrow-retain increfs a freed header
+// (garbage-tag UAF).
+function calleeReturnsReceiverBorrow(callee String) returns bool
+	return callee == "mrt_managed_list_head" or callee == "mrt_managed_list_tail" or callee == "mrt_managed_list_node_next" or callee == "mrt_managed_list_node_prev" or callee == "mrt_managed_list_node_value" or callee == "stdlib.__managed_mem_cursor_current" or callee == "__managed_mem_cursor_current" or callee == "stdlib.__managed_mem_get" or callee == "__managed_mem_get"
+end 'calleeReturnsReceiverBorrow'
+
+// Iterator/cursor FACTORIES whose result — a FRESH allocation, unlike the pure
+// pointer-walk helpers above — holds an INTERIOR pointer (a `__ManagedMemoryCursor`)
+// into its arg-0 receiver's backing store. The returned iterator does NOT take a
+// reference on the collection (the collection retains ownership of its backing),
+// so the collection must OUTLIVE the iterator. Recording `result → receiver`
+// couples the collection's live range to every later iterator read
+// (`advance`/`current`/`peek`), so the inserter releases the collection only
+// AFTER the iterator's last use — never at the (much earlier) `createIterator`
+// call, which would free the backing out from under the cursor (the
+// `sha256` w-schedule / K-table iteration UAF: the array `w` was decref'd right
+// after `Array.createIterator(w)` while the loop still advanced the cursor,
+// reading freed/zeroed words → corrupted hash).
+//
+// This is the cross-function analogue of the in-line `for n in list` borrow the
+// STORE/PHI fixpoint already handles for inlined iterators; in the NON-inlined
+// cached stdlib bodies `createIterator` stays an opaque call, so the borrow edge
+// must be recorded at the call. SOUNDNESS: like every borrow edge it only EXTENDS
+// the receiver's live range — an over-broad match risks a late release (leak),
+// never a premature free. Matched across the generic stdlib collections; both the
+// bare and `stdlib.`-prefixed spellings are covered.
+//
+// The `*Iterator.create(backing)` family is the LOWERED form a `*.createIterator()`
+// inlines to: `ByteView.createIterator()` is `return try ByteIterator.create(managed)`,
+// so after inlining only `ByteIterator.create` survives as the opaque call, taking
+// the `__ManagedMemory` backing (the String's buffer) as arg 0 and storing it for
+// the walk. Without matching it, the String backing is freed right after
+// `ByteIterator.create` while the loop still reads through the iterator → the
+// for-in-over-bytes/codepoints garbage-after-element-0 UAF. Matched by the
+// `Iterator.create` suffix so every string-view and collection iterator factory
+// (`ByteIterator`/`CodepointIterator`/`UTF16Iterator`/`ListIterator`/`ArrayIterator`/
+// …) is covered; a factory whose arg 0 is a non-managed value (e.g. `RangeIterator`)
+// records a harmless non-managed base that is never released.
+function calleeReturnsReceiverIterator(callee String) returns bool
+	return callee.endsWith(".createIterator") or callee.endsWith(".createCursor") or callee.endsWith(".createReverseIterator") or callee.endsWith("Iterator.create")
+end 'calleeReturnsReceiverIterator'
+
+function recordBorrowForSys(s StdSystemOp, baseOf ValueIdArray)
+	match s 'check'
+		loadIndirect(resultId, addrId, _, width, _, isFloat) then recordPointerLoadBorrow(resultId, addrId: addrId, width: width, isFloat: isFloat, baseOf: baseOf)
+		globalAddr to loadByte then break 'check'
+		osExit to osWrite then break 'check'
+		free then break 'check'
+		osWriteErr to loadFramePtr then break 'check'
+		funcAddr then break 'check'
+		storeIndirect then break 'check'
+		drop then break 'check'
+		osAllocPages to osDirMkdir then break 'check'
+		atomicInc to osLockRelease then break 'check'
+		boxValue to dropTypeParam then break 'check'
+	end 'check'
+end 'recordBorrowForSys'
+
+// Record an interior-borrow edge `result → addr` only for a POINTER-width load
+// (a `qword`, non-float read — the shape of a pointer/field-pointer load). The
+// base array is sized to maxVal; a result id past that range cannot occur (every
+// def is < maxVal), but the bounded set keeps this total.
+function recordPointerLoadBorrow(resultId ValueId, addrId ValueId, width StoreWidth, isFloat bool, baseOf ValueIdArray)
+	if isFloat 'float'
+		return
+	end 'float'
+	let isPointerWidth = match width 'w'
+		qword gives true
+		byte gives false
+		halfword gives false
+		word gives false
+	end 'w'
+	if not isPointerWidth 'narrow'
+		return
+	end 'narrow'
+	if resultId >= baseOf.count() 'oob'
+		return
+	end 'oob'
+	try baseOf.set(resultId, value: addrId) otherwise panic("recordPointerLoadBorrow: baseOf.set({resultId}) OOB despite bound check")
+end 'recordPointerLoadBorrow'
+
+// Expand a read-operand list to also include, for every interior-borrow result
+// it reads, the base(s) that result borrows from — transitively up the borrow
+// chain. This is the mechanism that keeps a base live wherever a pointer
+// borrowed out of it is live. A `seen` guard bounds the walk (a borrow chain is
+// a DAG over distinct SSA ids, but the guard makes it robust to any cycle).
+//
+// Returns a NEW array (original `readIds` order preserved, bases appended) so
+// callers may keep the raw reads where they need the syntactic operands.
+export function expandReadsWithBorrows(readIds ValueIdArray, borrows BorrowInfo) returns ValueIdArray
+	var expanded = ValueIdArray.create()
+	for r in readIds 'eachRead'
+		expanded.push(r)
+		appendBorrowBases(r, borrows: borrows, into: expanded)
+	end 'eachRead'
+	return expanded
+end 'expandReadsWithBorrows'
+
+// Walk `vid`'s borrow chain (vid → base → base-of-base → …) appending each base
+// to `into`, stopping at the first non-borrow root or a repeat. Does NOT append
+// `vid` itself (the caller already holds it).
+function appendBorrowBases(vid ValueId, borrows BorrowInfo, into ValueIdArray)
+	var cur = vid
+	var steps = 0
+	let limit = borrows.baseOf.count() + 1
+	while steps < limit 'walk'
+		let base = borrows.baseOfValue(cur)
+		if base == BORROW_NO_BASE 'noBase'
+			return
+		end 'noBase'
+		into.push(base)
+		cur = base
+		steps = steps + 1
+	end 'walk'
+end 'appendBorrowBases'
+
+// ============================================================
+// Public entry point
+// ============================================================
+
+export function computeStdLiveness(module StdModule, func IrFunction, cfg CfgInfo, rpo RpoInfo, funcReturnsBorrow FuncReturnsBorrowSet, funcReturnsReceiverInterior FuncReturnsBorrowSet, funcParamConsumes FuncParamConsumesMap) returns StdLivenessInfo
+	let numBlocks = func.nextBlockId
+
+	// Phase 1: max valueId + the interior-borrow relation + per-block use/def
+	// sets. The borrow relation must be built before the use/def scan so a
+	// borrowed pointer's read also generates a read of its base (keeping the base
+	// live wherever the pointer is) — see `buildBorrowInfo` / the UAF note.
+	let maxVal = scanMaxValueId(module, func: func) + 1
+	let borrows = buildBorrowInfo(module, func: func, maxVal: maxVal, funcReturnsBorrow: funcReturnsBorrow, funcReturnsReceiverInterior: funcReturnsReceiverInterior, funcParamConsumes: funcParamConsumes)
+	let udSets = buildUseDefSets(module, func: func, numBlocks: numBlocks, maxVal: maxVal, borrows: borrows)
+	let useSets = udSets.useSets
+	let defSets = udSets.defSets
+
+	// Phase 2: empty liveIn/liveOut sets, one per block id.
+	var liveIn = StdLiveSetArray.create()
+	var liveOut = StdLiveSetArray.create()
+
+	var bi = 0
+	while bi < numBlocks 'initLive'
+		liveIn.push(StdLiveSet.create(maxVal))
+		liveOut.push(StdLiveSet.create(maxVal))
+		bi = bi + 1
+	end 'initLive'
+
+	// Phase 3: backward fixed point over reverse-RPO. Iterating the sparse
+	// `members` lists keeps per-step work proportional to live-set size.
+	var changed = true
+	var iterCount = 0
+	while changed 'fixedPoint'
+		changed = false
+		iterCount = iterCount + 1
+
+		var ri = rpo.order.count() - 1
+		while ri >= 0 'eachBlock'
+			let blockId = try rpo.order.get(ri) otherwise 'skipBlock'
+				ri = ri - 1
+				continue
+			end 'skipBlock'
+
+			var blockLiveOut = try liveOut.get(blockId) otherwise 'noOut'
+				ri = ri - 1
+				continue
+			end 'noOut'
+
+			var blockLiveIn = try liveIn.get(blockId) otherwise 'noIn'
+				ri = ri - 1
+				continue
+			end 'noIn'
+
+			// liveOut[B] = union of liveIn[S] for each successor S.
+			let succs = try cfg.successors.get(blockId) otherwise 'noSuccs'
+				ri = ri - 1
+				continue
+			end 'noSuccs'
+
+			for succ in succs 'eachSucc'
+				let succLiveIn = try liveIn.get(succ) otherwise panic("invariant: succ < numBlocks but liveIn.get({succ}) failed")
+				if stdLiveSetUnionInto(blockLiveOut, from: succLiveIn) 'changedOut'
+					changed = true
+				end 'changedOut'
+			end 'eachSucc'
+
+			// liveIn[B] = use[B] union (liveOut[B] - def[B]).
+			let blockUse = try useSets.get(blockId) otherwise 'noUse'
+				ri = ri - 1
+				continue
+			end 'noUse'
+
+			let blockDef = try defSets.get(blockId) otherwise 'noDef'
+				ri = ri - 1
+				continue
+			end 'noDef'
+
+			if stdLiveSetComputeLiveIn(blockLiveIn, liveOut: blockLiveOut, useSet: blockUse, defSet: blockDef) 'changedIn'
+				changed = true
+			end 'changedIn'
+
+			ri = ri - 1
+		end 'eachBlock'
+	end 'fixedPoint'
+
+	logDebug(LogCategory.ir, message: function() gives "std-liveness: func={func.name} blocks={numBlocks} maxVid={maxVal} iterations={iterCount}")
+	return StdLivenessInfo.create(liveIn, liveOut: liveOut, maxValueId: maxVal, borrows: borrows)
+end 'computeStdLiveness'
+
+// ============================================================
+// Phase 1: per-block use/def sets
+// ============================================================
+
+// Bundled result of the use/def scan: parallel arrays indexed by block.id.
+// (Field names avoid the `uses` language keyword.)
+type UseDefSets
+	export var useSets as StdLiveSetArray
+	export var defSets as StdLiveSetArray
+
+	static function create(useSets StdLiveSetArray, defSets StdLiveSetArray) returns UseDefSets
+		return Self{useSets: useSets, defSets: defSets}
+	end 'create'
+end 'UseDefSets'
+
+function buildUseDefSets(module StdModule, func IrFunction, numBlocks BlockId, maxVal ValueId, borrows BorrowInfo) returns UseDefSets
+	var useSets = StdLiveSetArray.create()
+	var defSets = StdLiveSetArray.create()
+
+	var bi = 0
+	while bi < numBlocks 'initSets'
+		useSets.push(StdLiveSet.create(maxVal))
+		defSets.push(StdLiveSet.create(maxVal))
+		bi = bi + 1
+	end 'initSets'
+
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
+		let blockId = block.id
+
+		var useSet = try useSets.get(blockId) otherwise panic("invariant: useSets sized to numBlocks but get({blockId}) failed")
+		var defSet = try defSets.get(blockId) otherwise panic("invariant: defSets sized to numBlocks but get({blockId}) failed")
+
+		scanBlockUseDef(module, block: block, useSet: useSet, defSet: defSet, borrows: borrows)
+	end 'eachBlock'
+
+	return UseDefSets.create(useSets, defSets: defSets)
+end 'buildUseDefSets'
+
+// Compute use[B] / def[B] for one block. A value is in use[B] if it is read
+// before being defined in B; a value is in def[B] if it is defined in B.
+// Order matters: block-args are defined at the block head, then body ops are
+// scanned forward (each op's uses checked against the running def set, then
+// its defs added), then the terminator's uses/condition are folded in last.
+function scanBlockUseDef(module StdModule, block IrBlock, useSet StdLiveSet, defSet StdLiveSet, borrows BorrowInfo)
+	// (a) Block-args are DEFS at the top of the block.
+	for blockArg in block.blockArgs 'eachArg'
+		_ = defSet.add(blockArg.valueId)
+	end 'eachArg'
+
+	// Body ops, forward.
+	for opIdx in block.opRefs 'eachOp'
+		let op = try module.ops.get(opIdx) otherwise panic("invariant: opIdx from block.opRefs not in module.ops")
+		scanOpUseDef(op, useSet: useSet, defSet: defSet, borrows: borrows)
+	end 'eachOp'
+
+	// (b)+(c) Terminator: its argIds (and condBr condId) are uses in THIS
+	// (predecessor) block, feeding successors' block-args. The terminator
+	// itself produces no value, so it contributes only uses.
+	if block.hasTerminatorOp() 'hasTerm'
+		let term = try module.ops.get(block.terminatorIndex()) otherwise panic("invariant: terminatorIndex not in module.ops")
+		scanOpUseDef(term, useSet: useSet, defSet: defSet, borrows: borrows)
+	end 'hasTerm'
+end 'scanBlockUseDef'
+
+// Fold one op's operands into a forward use/def scan. Uses are added only if
+// not already locally defined (read-before-def within the block); defs are
+// added unconditionally. Each read is expanded with its interior-borrow bases
+// (`expandReadsWithBorrows`) so a base stays live wherever a pointer borrowed
+// out of it is read — the UAF fix's liveness extension.
+function scanOpUseDef(op StdOp, useSet StdLiveSet, defSet StdLiveSet, borrows BorrowInfo)
+	let operands = extractStdOpOperands(op)
+	let reads = expandReadsWithBorrows(operands.readIds, borrows: borrows)
+
+	for u in reads 'eachUse'
+		if not defSet.contains(u) 'notLocallyDef'
+			_ = useSet.add(u)
+		end 'notLocallyDef'
+	end 'eachUse'
+
+	for d in operands.writeIds 'eachDef'
+		_ = defSet.add(d)
+	end 'eachDef'
+end 'scanOpUseDef'
+
+// Scan every block to find the highest ValueId referenced (operand, def, or
+// block-arg). Returns the max id itself; callers add 1 for array sizing.
+function scanMaxValueId(module StdModule, func IrFunction) returns ValueId
+	var maxVal = 0
+
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
+
+		for blockArg in block.blockArgs 'eachArg'
+			if blockArg.valueId > maxVal 'updArg'
+				maxVal = blockArg.valueId
+			end 'updArg'
+		end 'eachArg'
+
+		for opIdx in block.opRefs 'eachOp'
+			let op = try module.ops.get(opIdx) otherwise panic("invariant: opIdx from block.opRefs not in module.ops")
+			maxVal = maxOpValueId(op, current: maxVal)
+		end 'eachOp'
+
+		if block.hasTerminatorOp() 'hasTerm'
+			let term = try module.ops.get(block.terminatorIndex()) otherwise panic("invariant: terminatorIndex not in module.ops")
+			maxVal = maxOpValueId(term, current: maxVal)
+		end 'hasTerm'
+	end 'eachBlock'
+
+	return maxVal
+end 'scanMaxValueId'
+
+function maxOpValueId(op StdOp, current ValueId) returns ValueId
+	var maxVal = current
+	let operands = extractStdOpOperands(op)
+
+	for u in operands.readIds 'eachUse'
+		if u > maxVal 'updUse'
+			maxVal = u
+		end 'updUse'
+	end 'eachUse'
+
+	for d in operands.writeIds 'eachDef'
+		if d > maxVal 'updDef'
+			maxVal = d
+		end 'updDef'
+	end 'eachDef'
+
+	return maxVal
+end 'maxOpValueId'
+
+// ============================================================
+// Per-op operand extraction (exhaustive over all StdOp variants)
+// ============================================================
+// Mirrors DeadCodeElimination's `countPackedOpUses` use scan, extended to
+// also collect the def(s). Every variant is enumerated; no bare default.
+
+export function extractStdOpOperands(op StdOp) returns StdOpOperands
+	var operands = StdOpOperands.create()
+	match op 'outer'
+		arith(inner) then extractArithOperands(inner, operands: operands)
+		control(inner) then extractControlOperands(inner, operands: operands)
+		call(inner) then extractCallOperands(inner, operands: operands)
+		memory(inner) then extractMemoryOperands(inner, operands: operands)
+		system(inner) then extractSystemOperands(inner, operands: operands)
+	end 'outer'
+	return operands
+end 'extractStdOpOperands'
+
+function extractArithOperands(op StdArithOp, operands StdOpOperands)
+	match op 'arith'
+		const(c) then operands.writeIds.push(c.resultId)
+		unary(u) then extractUnaryOperands(u, operands: operands)
+		binary(b) then extractBinaryOperands(b, operands: operands)
+	end 'arith'
+end 'extractArithOperands'
+
+function extractUnaryOperands(u StdArithUnaryOp, operands StdOpOperands)
+	operands.readIds.push(u.operandId)
+	operands.writeIds.push(u.resultId)
+end 'extractUnaryOperands'
+
+function extractBinaryOperands(b StdArithBinaryOp, operands StdOpOperands)
+	operands.readIds.push(b.leftId)
+	operands.readIds.push(b.rightId)
+	operands.writeIds.push(b.resultId)
+end 'extractBinaryOperands'
+
+function extractControlOperands(op StdControlOp, operands StdOpOperands)
+	match op 'control'
+		br(_, argIds) then pushAll(argIds, into: operands.readIds)
+		condBr(condId, _, thenArgIds, _, elseArgIds) then extractCondBrOperands(condId, thenArgIds: thenArgIds, elseArgIds: elseArgIds, operands: operands)
+	end 'control'
+end 'extractControlOperands'
+
+function extractCondBrOperands(condId ValueId, thenArgIds ValueIdArray, elseArgIds ValueIdArray, operands StdOpOperands)
+	operands.readIds.push(condId)
+	pushAll(thenArgIds, into: operands.readIds)
+	pushAll(elseArgIds, into: operands.readIds)
+end 'extractCondBrOperands'
+
+function extractCallOperands(op StdCallOp, operands StdOpOperands)
+	match op 'call'
+		ret(retValId) then operands.readIds.push(retValId)
+		call(resultId, _, argIds) then extractDirectCallOperands(resultId, argIds: argIds, operands: operands)
+		tryCall(resultId, _, argIds, errorFlagId) then extractTryCallOperands(resultId, argIds: argIds, errorFlagId: errorFlagId, operands: operands)
+		indirectCall(resultId, calleeId, argIds, _, isThrowing, errorFlagId) then extractIndirectCallOperands(resultId, calleeId: calleeId, argIds: argIds, isThrowing: isThrowing, errorFlagId: errorFlagId, operands: operands)
+		witnessCall(resultId, witnessAddrId, _, _, argIds) then extractWitnessCallOperands(resultId, witnessAddrId: witnessAddrId, argIds: argIds, operands: operands)
+		witnessTryCall(resultId, witnessAddrId, _, _, argIds, errorFlagId) then extractWitnessTryCallOperands(resultId, witnessAddrId: witnessAddrId, argIds: argIds, errorFlagId: errorFlagId, operands: operands)
+		funcRef(resultId, _) then operands.writeIds.push(resultId)
+		tailCall(_, argIds) then pushAll(argIds, into: operands.readIds)
+		param(resultId, _, _) then operands.writeIds.push(resultId)
+		errorReturn(retValId, errorFlagId) then extractErrorReturnOperands(retValId, errorFlagId: errorFlagId, operands: operands)
+	end 'call'
+end 'extractCallOperands'
+
+function extractDirectCallOperands(resultId ValueId, argIds ValueIdArray, operands StdOpOperands)
+	pushAll(argIds, into: operands.readIds)
+	operands.writeIds.push(resultId)
+end 'extractDirectCallOperands'
+
+// tryCall DEFINES both the result and the error flag (multi-value-return ABI).
+function extractTryCallOperands(resultId ValueId, argIds ValueIdArray, errorFlagId ValueId, operands StdOpOperands)
+	pushAll(argIds, into: operands.readIds)
+	operands.writeIds.push(resultId)
+	operands.writeIds.push(errorFlagId)
+end 'extractTryCallOperands'
+
+function extractIndirectCallOperands(resultId ValueId, calleeId ValueId, argIds ValueIdArray, isThrowing bool, errorFlagId ValueId, operands StdOpOperands)
+	operands.readIds.push(calleeId)
+	pushAll(argIds, into: operands.readIds)
+	operands.writeIds.push(resultId)
+	// A throwing indirect call DEFINES the error flag too (multi-value-return ABI),
+	// mirroring tryCall. A non-throwing indirect call has no error flag to define.
+	if isThrowing 'throws'
+		operands.writeIds.push(errorFlagId)
+	end 'throws'
+end 'extractIndirectCallOperands'
+
+function extractWitnessCallOperands(resultId ValueId, witnessAddrId ValueId, argIds ValueIdArray, operands StdOpOperands)
+	operands.readIds.push(witnessAddrId)
+	pushAll(argIds, into: operands.readIds)
+	operands.writeIds.push(resultId)
+end 'extractWitnessCallOperands'
+
+// witnessTryCall, like tryCall, DEFINES both result and error flag.
+function extractWitnessTryCallOperands(resultId ValueId, witnessAddrId ValueId, argIds ValueIdArray, errorFlagId ValueId, operands StdOpOperands)
+	operands.readIds.push(witnessAddrId)
+	pushAll(argIds, into: operands.readIds)
+	operands.writeIds.push(resultId)
+	operands.writeIds.push(errorFlagId)
+end 'extractWitnessTryCallOperands'
+
+// errorReturn is a terminator that USES both operands (no def).
+function extractErrorReturnOperands(retValId ValueId, errorFlagId ValueId, operands StdOpOperands)
+	operands.readIds.push(retValId)
+	operands.readIds.push(errorFlagId)
+end 'extractErrorReturnOperands'
+
+function extractMemoryOperands(op StdMemoryOp, operands StdOpOperands)
+	match op 'memory'
+		storeSlot(_, valueId) then operands.readIds.push(valueId)
+		loadSlot(resultId, _) then operands.writeIds.push(resultId)
+	end 'memory'
+end 'extractMemoryOperands'
+
+// Exhaustive over all StdSystemOp variants. The use side mirrors DCE's
+// `countSysUses`; each value-producing variant also records its resultId as a
+// def. Ordering of pushes is irrelevant — sets dedup membership.
+function extractSystemOperands(op StdSystemOp, operands StdOpOperands)
+	match op 'system'
+		globalAddr(resultId, _) then operands.writeIds.push(resultId)
+		memcpy(dstId, srcId, lenId) then pushThree(dstId, b: srcId, c: lenId, into: operands.readIds)
+		stackAddr(resultId, _) then operands.writeIds.push(resultId)
+		storeByte(baseId, offsetId, byteId) then pushThree(baseId, b: offsetId, c: byteId, into: operands.readIds)
+		loadByte(resultId, baseId, offsetId) then extractLoadByteOperands(resultId, baseId: baseId, offsetId: offsetId, operands: operands)
+		osExit(codeId) then operands.readIds.push(codeId)
+		osSleep(msId) then operands.readIds.push(msId)
+		osWrite(ptrId, lenId) then pushTwo(ptrId, b: lenId, into: operands.readIds)
+		free(ptrId) then operands.readIds.push(ptrId)
+		osWriteErr(ptrId, lenId) then pushTwo(ptrId, b: lenId, into: operands.readIds)
+		osRead(resultId, ptrId, lenId) then extractOsReadOperands(resultId, ptrId: ptrId, lenId: lenId, operands: operands)
+		osOpenWrite(resultId, pathPtrId, pathLenId) then extractOsOpenWriteOperands(resultId, pathPtrId: pathPtrId, pathLenId: pathLenId, operands: operands)
+		osWriteFd(fdId, ptrId, lenId) then pushThree(fdId, b: ptrId, c: lenId, into: operands.readIds)
+		osClose(fdId) then operands.readIds.push(fdId)
+		osGetEnv(resultId, namePtrId, nameLenId, outBufPtrId, outBufLenId) then extractOsGetEnvOperands(resultId, namePtrId: namePtrId, nameLenId: nameLenId, outBufPtrId: outBufPtrId, outBufLenId: outBufLenId, operands: operands)
+		osGetArgc(resultId) then operands.writeIds.push(resultId)
+		osClockMs(resultId) then operands.writeIds.push(resultId)
+		osGetArgv(resultId, indexId) then extractOsGetArgvOperands(resultId, indexId: indexId, operands: operands)
+		osGetExecutablePath(resultId, bufPtrId, bufSizeId) then extractOsGetExecutablePathOperands(resultId, bufPtrId: bufPtrId, bufSizeId: bufSizeId, operands: operands)
+		loadFramePtr(resultId) then operands.writeIds.push(resultId)
+		loadIndirect(resultId, addrId, _, _, _, _) then extractLoadIndirectOperands(resultId, addrId: addrId, operands: operands)
+		funcAddr(resultId, _) then operands.writeIds.push(resultId)
+		storeIndirect(addrId, _, valueId, _, _) then pushTwo(addrId, b: valueId, into: operands.readIds)
+		drop(valueId) then operands.readIds.push(valueId)
+		osAllocPages(resultId, sizeId) then extractOneUseOneDef(resultId, useId: sizeId, operands: operands)
+		osAllocPagesLarge(resultId, sizeId) then extractOneUseOneDef(resultId, useId: sizeId, operands: operands)
+		osFreePages(ptrId, sizeId) then pushTwo(ptrId, b: sizeId, into: operands.readIds)
+		osFileOpen(resultId, cStringPtrId, flagsId, fileModeId) then extractOsFileOpenOperands(resultId, cStringPtrId: cStringPtrId, flagsId: flagsId, fileModeId: fileModeId, operands: operands)
+		osFileRead(resultId, fdId, bufPtrId, countId) then extractThreeUseOneDef(resultId, a: fdId, b: bufPtrId, c: countId, operands: operands)
+		osFileWrite(resultId, fdId, bufPtrId, countId) then extractThreeUseOneDef(resultId, a: fdId, b: bufPtrId, c: countId, operands: operands)
+		osFileClose(resultId, fdId) then extractOneUseOneDef(resultId, useId: fdId, operands: operands)
+		osFileLseek(resultId, fdId, offsetId, whenceId) then extractThreeUseOneDef(resultId, a: fdId, b: offsetId, c: whenceId, operands: operands)
+		osFileStat(resultId, cStringPtrId, statBufPtrId) then extractTwoUseOneDef(resultId, a: cStringPtrId, b: statBufPtrId, operands: operands)
+		osFileAccess(resultId, cStringPtrId, modeId) then extractTwoUseOneDef(resultId, a: cStringPtrId, b: modeId, operands: operands)
+		osFileUnlink(resultId, cStringPtrId) then extractOneUseOneDef(resultId, useId: cStringPtrId, operands: operands)
+		osDirGetdents64(resultId, fdId, bufPtrId, bufSizeId) then extractThreeUseOneDef(resultId, a: fdId, b: bufPtrId, c: bufSizeId, operands: operands)
+		osDirGetcwd(resultId, bufPtrId, bufSizeId) then extractTwoUseOneDef(resultId, a: bufPtrId, b: bufSizeId, operands: operands)
+		osDirMkdir(resultId, cStringPtrId, modeId) then extractTwoUseOneDef(resultId, a: cStringPtrId, b: modeId, operands: operands)
+		atomicInc(addrId) then operands.readIds.push(addrId)
+		atomicDec(addrId) then operands.readIds.push(addrId)
+		atomicXadd(resultId, addrId, valId) then extractTwoUseOneDef(resultId, a: addrId, b: valId, operands: operands)
+		atomicCas(resultId, addrId, oldId, newId) then extractThreeUseOneDef(resultId, a: addrId, b: oldId, c: newId, operands: operands)
+		osLockInit(addrId) then operands.readIds.push(addrId)
+		osLockAcquire(addrId) then operands.readIds.push(addrId)
+		osLockRelease(addrId) then operands.readIds.push(addrId)
+		boxValue(resultId, valueId, sizeId) then extractTwoUseOneDef(resultId, a: valueId, b: sizeId, operands: operands)
+		unboxValue(resultId, ptrId, sizeId) then extractTwoUseOneDef(resultId, a: ptrId, b: sizeId, operands: operands)
+		loadLayoutDescriptor(resultId, _) then operands.writeIds.push(resultId)
+		loadWitnessTable(resultId, _) then operands.writeIds.push(resultId)
+		descriptorField(resultId, descAddrId, _) then extractOneUseOneDef(resultId, useId: descAddrId, operands: operands)
+		witnessMethod(resultId, witnessAddrId, _) then extractOneUseOneDef(resultId, useId: witnessAddrId, operands: operands)
+		dropTypeParam(slotValueId, layoutValueId) then pushTwo(slotValueId, b: layoutValueId, into: operands.readIds)
+	end 'system'
+end 'extractSystemOperands'
+
+function extractLoadByteOperands(resultId ValueId, baseId ValueId, offsetId ValueId, operands StdOpOperands)
+	pushTwo(baseId, b: offsetId, into: operands.readIds)
+	operands.writeIds.push(resultId)
+end 'extractLoadByteOperands'
+
+function extractOsReadOperands(resultId ValueId, ptrId ValueId, lenId ValueId, operands StdOpOperands)
+	pushTwo(ptrId, b: lenId, into: operands.readIds)
+	operands.writeIds.push(resultId)
+end 'extractOsReadOperands'
+
+function extractOsOpenWriteOperands(resultId ValueId, pathPtrId ValueId, pathLenId ValueId, operands StdOpOperands)
+	pushTwo(pathPtrId, b: pathLenId, into: operands.readIds)
+	operands.writeIds.push(resultId)
+end 'extractOsOpenWriteOperands'
+
+function extractOsGetEnvOperands(resultId ValueId, namePtrId ValueId, nameLenId ValueId, outBufPtrId ValueId, outBufLenId ValueId, operands StdOpOperands)
+	operands.readIds.push(namePtrId)
+	operands.readIds.push(nameLenId)
+	operands.readIds.push(outBufPtrId)
+	operands.readIds.push(outBufLenId)
+	operands.writeIds.push(resultId)
+end 'extractOsGetEnvOperands'
+
+function extractOsGetArgvOperands(resultId ValueId, indexId ValueId, operands StdOpOperands)
+	operands.readIds.push(indexId)
+	operands.writeIds.push(resultId)
+end 'extractOsGetArgvOperands'
+
+function extractOsGetExecutablePathOperands(resultId ValueId, bufPtrId ValueId, bufSizeId ValueId, operands StdOpOperands)
+	pushTwo(bufPtrId, b: bufSizeId, into: operands.readIds)
+	operands.writeIds.push(resultId)
+end 'extractOsGetExecutablePathOperands'
+
+function extractLoadIndirectOperands(resultId ValueId, addrId ValueId, operands StdOpOperands)
+	operands.readIds.push(addrId)
+	operands.writeIds.push(resultId)
+end 'extractLoadIndirectOperands'
+
+function extractOsFileOpenOperands(resultId ValueId, cStringPtrId ValueId, flagsId ValueId, fileModeId ValueId, operands StdOpOperands)
+	pushThree(cStringPtrId, b: flagsId, c: fileModeId, into: operands.readIds)
+	operands.writeIds.push(resultId)
+end 'extractOsFileOpenOperands'
+
+// One operand read, one value defined (osAllocPages, osFileClose,
+// osFileUnlink, descriptorField, witnessMethod).
+function extractOneUseOneDef(resultId ValueId, useId ValueId, operands StdOpOperands)
+	operands.readIds.push(useId)
+	operands.writeIds.push(resultId)
+end 'extractOneUseOneDef'
+
+// Two operands read, one value defined.
+function extractTwoUseOneDef(resultId ValueId, a ValueId, b ValueId, operands StdOpOperands)
+	pushTwo(a, b: b, into: operands.readIds)
+	operands.writeIds.push(resultId)
+end 'extractTwoUseOneDef'
+
+// Three operands read, one value defined.
+function extractThreeUseOneDef(resultId ValueId, a ValueId, b ValueId, c ValueId, operands StdOpOperands)
+	pushThree(a, b: b, c: c, into: operands.readIds)
+	operands.writeIds.push(resultId)
+end 'extractThreeUseOneDef'
+
+function pushAll(ids ValueIdArray, into ValueIdArray)
+	for id in ids 'each'
+		into.push(id)
+	end 'each'
+end 'pushAll'
+
+// Linear membership scan: true iff `ids` contains `vid`. The shared home for the
+// `for v in ids { if v == vid return true } false` loop the Std analyses each
+// need (the inserter's arg/edge/visited scans, the consume/return-borrow def
+// walks) — exported so they call one copy instead of redefining it per file.
+export function valueIdArrayContains(ids ValueIdArray, vid ValueId) returns bool
+	for id in ids 'each'
+		if id == vid 'hit'
+			return true
+		end 'hit'
+	end 'each'
+	return false
+end 'valueIdArrayContains'
+
+function pushTwo(a ValueId, b ValueId, into ValueIdArray)
+	into.push(a)
+	into.push(b)
+end 'pushTwo'
+
+function pushThree(a ValueId, b ValueId, c ValueId, into ValueIdArray)
+	into.push(a)
+	into.push(b)
+	into.push(c)
+end 'pushThree'
+
+// ============================================================
+// Within-block per-op-position liveness (live-after-op query)
+// ============================================================
+
+// Compute per-op-position liveness inside one block by seeding the dataflow
+// at liveOut[block] and walking backward through the terminator and then the
+// body ops. For body op at index i:
+//   liveAfterBody[i]  = the live set entering this op from below
+//   liveBeforeBody[i] = liveAfterBody[i] minus this op's defs, plus its uses
+// The terminator's uses (branch args + condBr condition) are applied first so
+// they are already reflected by the time we reach the last body op.
+export function computeBlockLiveAfter(module StdModule, block IrBlock, liveness StdLivenessInfo) returns StdLiveAfter
+	let maxVal = liveness.maxValueId
+
+	// `running` = the set live at the current backward position. Seed from
+	// liveOut[block] (everything live as control leaves the block).
+	var running = StdLiveSet.create(maxVal)
+	let blockLiveOut = try liveness.liveOut.get(block.id) otherwise panic("computeBlockLiveAfter: liveOut missing for block id={block.id}")
+	_ = stdLiveSetUnionInto(running, from: blockLiveOut)
+
+	// Apply the terminator backward first (its argIds / condId are uses; it
+	// defines nothing). This yields the live set just after the last body op.
+	if block.hasTerminatorOp() 'hasTerm'
+		let term = try module.ops.get(block.terminatorIndex()) otherwise panic("invariant: terminatorIndex not in module.ops")
+		applyOpBackward(term, running: running, borrows: liveness.borrows)
+	end 'hasTerm'
+
+	let opCount = block.opRefs.count()
+	var liveBefore = StdLiveSetArray.create()
+	var liveAfter = StdLiveSetArray.create()
+
+	// Pre-size both arrays so we can fill them back-to-front by index.
+	var fill = 0
+	while fill < opCount 'preSize'
+		liveBefore.push(StdLiveSet.create(maxVal))
+		liveAfter.push(StdLiveSet.create(maxVal))
+		fill = fill + 1
+	end 'preSize'
+
+	// Walk body ops from last to first. At each position, snapshot the
+	// after-set, apply the op backward, then snapshot the before-set.
+	var pos = opCount - 1
+	while pos >= 0 'eachOpBackward'
+		let opIdx = try block.opRefs.get(pos) otherwise panic("computeBlockLiveAfter: opRefs.get({pos}) failed despite pos < count")
+		let op = try module.ops.get(opIdx) otherwise panic("invariant: opIdx from block.opRefs not in module.ops")
+
+		var afterSet = try liveAfter.get(pos) otherwise panic("computeBlockLiveAfter: liveAfter.get({pos}) failed despite pre-size")
+		_ = stdLiveSetUnionInto(afterSet, from: running)
+
+		applyOpBackward(op, running: running, borrows: liveness.borrows)
+
+		var beforeSet = try liveBefore.get(pos) otherwise panic("computeBlockLiveAfter: liveBefore.get({pos}) failed despite pre-size")
+		_ = stdLiveSetUnionInto(beforeSet, from: running)
+
+		pos = pos - 1
+	end 'eachOpBackward'
+
+	return StdLiveAfter.create(liveBefore, liveAfterBody: liveAfter, maxValueId: maxVal)
+end 'computeBlockLiveAfter'
+
+// Backward transfer for one op on the running live set: a defined value is no
+// longer live above the op (remove), and each used value becomes live above
+// it (add). Removal is modelled by rebuilding the set without the defs, since
+// StdLiveSet is add-only. Reads are expanded with their interior-borrow bases so
+// a base stays live above any op that reads a pointer borrowed out of it — the
+// UAF fix carried into the per-op-position liveness the inserter queries.
+//
+// DEF-then-USE ordering matters at the borrow's def: `r = loadIndirect(base+0)`
+// both DEFINES `r` and READS `base`. Processing defs first removes `r`, then the
+// expanded uses re-add `base` (and, were `base` itself a borrow, its base too).
+// The base is therefore live AFTER this load (it was read here) and stays live
+// upward to its own def — exactly the direct-use liveness; the EXTENSION happens
+// at the LATER ops that read `r`, where `r`'s read now also re-adds `base`.
+export function applyOpBackward(op StdOp, running StdLiveSet, borrows BorrowInfo)
+	let operands = extractStdOpOperands(op)
+
+	// Remove defs: a value defined here is dead above this op (its
+	// definition point). Rebuild `running.members` excluding the defs and
+	// clear their bits.
+	for d in operands.writeIds 'eachDef'
+		removeFromLiveSet(running, vid: d)
+	end 'eachDef'
+
+	// Add uses (borrow-expanded): each operand — and the base of any interior
+	// pointer it reads — is live immediately above this op.
+	let reads = expandReadsWithBorrows(operands.readIds, borrows: borrows)
+	for u in reads 'eachUse'
+		_ = running.add(u)
+	end 'eachUse'
+end 'applyOpBackward'
+
+// Remove a single value from a StdLiveSet (clear its bit and drop it from the
+// sparse member list). StdLiveSet is normally monotonic, but the within-block
+// backward scan needs a kill step at each def, so this local mutation is
+// confined to `computeBlockLiveAfter`.
+function removeFromLiveSet(set StdLiveSet, vid ValueId)
+	let present = try set.bits.get(vid) otherwise false
+	if not present 'notPresent'
+		return
+	end 'notPresent'
+
+	try set.bits.set(vid, value: false) otherwise panic("removeFromLiveSet: bits.set({vid}) OOB")
+
+	var rebuilt = ValueIdArray.create()
+	for m in set.members 'each'
+		if m != vid 'keep'
+			rebuilt.push(m)
+		end 'keep'
+	end 'each'
+	set.members = rebuilt
+end 'removeFromLiveSet'
+
+// ============================================================
+// Live-set operations
+// ============================================================
+
+// Union `from` into `target`; returns true iff target grew. Iterates the
+// sparse member list so cost scales with live-set size, not maxValueId.
+export function stdLiveSetUnionInto(target StdLiveSet, from StdLiveSet) returns bool
+	var changed = false
+	for vid in from.members 'each'
+		if target.add(vid) 'added'
+			changed = true
+		end 'added'
+	end 'each'
+	return changed
+end 'stdLiveSetUnionInto'
+
+// liveIn = useSet union (liveOut - defSet). Returns true iff liveIn grew.
+// Both contributors only grow across the fixed point, so liveIn only grows.
+export function stdLiveSetComputeLiveIn(liveIn StdLiveSet, liveOut StdLiveSet, useSet StdLiveSet, defSet StdLiveSet) returns bool
+	var changed = false
+
+	for vid in useSet.members 'eachUse'
+		if liveIn.add(vid) 'addedUse'
+			changed = true
+		end 'addedUse'
+	end 'eachUse'
+
+	for vid in liveOut.members 'eachOut'
+		if defSet.contains(vid) 'skipDef'
+			continue
+		end 'skipDef'
+		if liveIn.add(vid) 'addedOut'
+			changed = true
+		end 'addedOut'
+	end 'eachOut'
+
+	return changed
+end 'stdLiveSetComputeLiveIn'

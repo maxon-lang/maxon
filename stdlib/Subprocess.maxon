@@ -520,8 +520,15 @@ end 'appendNulTerminated'
 /// NUL) the same as a missing one for those slots. Producing it once per call
 /// avoids re-walking ASCII-scan logic for an empty string literal.
 function subprocessEmptyManaged() returns __ManagedMemory
-	let empty = ""
-	return empty.managed
+	// MUST return an OWNED record (`create`'s rc=1 contract), not a borrow of a
+	// local: `let empty = ""; return empty.managed` handed back the inner MM of
+	// a String RELEASED at this function's exit — the record was freed before
+	// the caller passed it to spawn, and the caller's release of the
+	// callReturnRc1-classified result then drove the freed header negative.
+	// Capacity 1 (not 0) so the record carries a real, zero-filled buffer —
+	// the runtime reads the slot as a leading-NUL cstring, and a NULL buffer
+	// pointer faulted inside spawn.
+	return try __ManagedMemory.create(1, 1) otherwise panic("subprocessEmptyManaged: create(1, 1) cannot fail")
 end 'subprocessEmptyManaged'
 
 /// Empty cstring sentinel — paired with `subprocessEmptyManaged()` for slots

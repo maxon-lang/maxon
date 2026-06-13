@@ -81,6 +81,25 @@ export type X64OpQuery implements TargetOpQuery
 		return 0
 	end 'getExplicitPhysReads'
 
+	// `shl/shr/sar reg, cl` read RCX as the in-place shift count. The count is
+	// moved into RCX just before the shift and must stay live across it; report
+	// RCX here so LiveRangeBuilder pins a pseudo-range that forbids the shift's
+	// own dest/operand vreg from being colored RCX (which would let the count
+	// `mov rcx, …` clobber the shiftee). The shiftCount operand is always the
+	// physical RCX (see lowerShift), so the mask is constant for shift ops.
+	function getFixedInPlaceReads(module TargetModule, packed OpIndex) returns RegMask
+		let x64Op = try module.x64Ops.get(packed) otherwise panic("invariant: packed opIdx not in module.x64Ops")
+		var mask = 0
+		match x64Op 'extract'
+			shlRegCl(_, _, shiftCount) then mask = x64PhysRegMask(shiftCount)
+			sarRegCl(_, _, shiftCount) then mask = x64PhysRegMask(shiftCount)
+			shrRegCl(_, _, shiftCount) then mask = x64PhysRegMask(shiftCount)
+			prologue to xorRegReg then break 'extract'
+			cmpRaxRcx to imulRegImm then break 'extract'
+		end 'extract'
+		return mask
+	end 'getFixedInPlaceReads'
+
 	// --- Return terminator ---
 
 	function isReturnTerminator(module TargetModule, packed OpIndex) returns bool

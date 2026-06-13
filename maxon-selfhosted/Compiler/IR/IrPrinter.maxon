@@ -39,6 +39,30 @@ export function formatStdFuncHeader(func IrFunction) returns String
 	return sb
 end 'formatStdFuncHeader'
 
+// Render a block's incoming parameters (phi-node block args) as
+// `(%v0: type, %v1: type)`, or "" for a block with no params. mem2reg, the
+// parser, and the MIR/target lowering all populate `block.blockArgs`; without
+// printing them, the merged value at a join point looks like an undefined SSA
+// reference in dumps (the use names a value with no visible def) — a trap when
+// reading IR. Shared by Std/Mir/Maxon/Target printers so every stage renders
+// block params identically. Mirrors `func.param N : type` in formatStdFuncHeader.
+export function formatBlockArgs(block IrBlock) returns String
+	if block.blockArgs.count() == 0 'noArgs'
+		return ""
+	end 'noArgs'
+	var sb = "("
+	var first = true
+	for arg in block.blockArgs 'eachArg'
+		if not first 'sep'
+			sb.append(", ")
+		end 'sep'
+		first = false
+		sb.append("%{arg.valueId}: {arg.argType.name}")
+	end 'eachArg'
+	sb.append(")")
+	return sb
+end 'formatBlockArgs'
+
 // --- Stable label renumbering ---
 //
 // Counter-based identifier names in the lowering pipeline (block labels,

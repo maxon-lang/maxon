@@ -33,29 +33,44 @@ ExitCode: 0
 module {
   func @main() -> u32 {
   entry:
-    x64.prologue stack_size=16
+    x64.prologue stack_size=48
+    x64.xor eax, eax
+    x64.xor edx, edx
     x64.mov ecx, 8
-    x64.call mrt_alloc
+    x64.call stdlib.__mm_alloc
     x64.mov r12, r8
     x64.mov r8d, 42
     x64.mov [r12+0], r8 (8b)
+    x64.xor eax, eax
+    x64.xor edx, edx
     x64.mov ecx, 8
-    x64.call mrt_alloc
+    x64.call stdlib.__mm_alloc
     x64.mov r13, r8
     x64.mov r8d, 42
     x64.mov [r13+0], r8 (8b)
+    x64.xor eax, eax
+    x64.xor edx, edx
     x64.mov ecx, 8
-    x64.call mrt_alloc
-    x64.mov r9d, 99
-    x64.mov [r8+0], r9 (8b)
-    x64.mov r9, [r13+0] (8b)
-    x64.mov rsi, [r12+0] (8b)
-    x64.cmp rsi, r9
+    x64.call stdlib.__mm_alloc
+    x64.mov r14, r8
+    x64.mov r8d, 99
+    x64.mov [r14+0], r8 (8b)
+    x64.mov r15, [r13+0] (8b)
+    x64.mov r8, [r12+0] (8b)
+    x64.mov [rbp+-8], r8
+    x64.mov rcx, r13
+    x64.call mm_drop
+    x64.mov r8, [rbp+-8]
+    x64.cmp r8, r15
     x64.jne eq_0.after
   eq_0:
-    x64.mov r9, [r8+0] (8b)
-    x64.mov r8, [r12+0] (8b)
-    x64.cmp r8, r9
+    x64.mov r13, [r14+0] (8b)
+    x64.mov r15, [r12+0] (8b)
+    x64.mov rcx, r14
+    x64.call mm_drop
+    x64.mov rcx, r12
+    x64.call mm_drop
+    x64.cmp r15, r13
     x64.jne neq_0.after
   neq_0:
     x64.mov r8d, 1
@@ -66,6 +81,10 @@ module {
     x64.epilogue
     x64.ret
   eq_0.after:
+    x64.mov rcx, r14
+    x64.call mm_drop
+    x64.mov rcx, r12
+    x64.call mm_drop
     x64.mov r8d, 1
     x64.epilogue
     x64.ret

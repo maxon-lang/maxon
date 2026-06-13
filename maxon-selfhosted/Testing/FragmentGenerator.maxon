@@ -27,10 +27,6 @@ export function generateFragmentContent(test SpecTest, compileIr String) returns
 		sb.append("IncludeStdlibIr: true\n")
 	end 'hasIncludeStdlibIr'
 
-	if test.cacheParity 'hasCacheParity'
-		sb.append("CacheParity: true\n")
-	end 'hasCacheParity'
-
 	if test.expectation.hasCompilerStderr 'hasCompilerErr'
 		sb.append("MaxoncStderr: ```\n{test.expectation.compilerStderr}\n```\n")
 	end 'hasCompilerErr' else 'isSuccess'
@@ -50,6 +46,10 @@ export function generateFragmentContent(test SpecTest, compileIr String) returns
 			sb.append("RequiredLowering: ```\n{test.expectation.requiredLowering}\n```\n")
 		end 'hasLowering'
 
+		if test.expectation.hasRequiredIr 'hasIr'
+			sb.append("RequiredIRSelfhosted: ```\n{test.expectation.requiredIr}\n```\n")
+		end 'hasIr'
+
 		if test.expectation.hasRequiredRdata 'hasRdata'
 			sb.append("RequiredRdata: ```\n{test.expectation.requiredRdata}\n```\n")
 		end 'hasRdata'
@@ -64,7 +64,12 @@ export function generateFragmentContent(test SpecTest, compileIr String) returns
 	// Compiled IR section (may be empty). When non-empty, prefix with a
 	// "// CompiledIR" header so section 3 can never be confused with the
 	// RequiredLowering/RequiredIR expectation blocks in section 2.
-	if not compileIr.isEmpty() 'hasIr'
+	//
+	// When the test pins `RequiredIR` (the ENFORCED IR), the informational
+	// CompiledIR snapshot is redundant — RequiredIR carries the same content as an
+	// assertion — so skip it (mirrors the C# compiler, which omits CompiledIR once
+	// RequiredIR is set). Keeps the fragment from duplicating the whole IR.
+	if not compileIr.isEmpty() and not test.expectation.hasRequiredIr 'hasIr'
 		sb.append("// CompiledIR\n{compileIr.trim()}\n")
 	end 'hasIr'
 
@@ -200,7 +205,6 @@ export function parseFragment(fragmentPath FilePath) returns Fragment throws Com
 	var fragMmTrace = false
 	var fragAsyncTrace = false
 	var fragIncludeStdlibIr = false
-	var fragCacheParity = false
 
 	var k = firstSep + 1
 	while k < secondSep 'parseExpect'
@@ -231,9 +235,7 @@ export function parseFragment(fragmentPath FilePath) returns Fragment throws Com
 			fragAsyncTrace = trimmedLine.contains("true")
 		end 'isAsync' else if trimmedLine.startsWith("IncludeStdlibIr:") 'isIncludeStdlibIr'
 			fragIncludeStdlibIr = trimmedLine.contains("true")
-		end 'isIncludeStdlibIr' else if trimmedLine.startsWith("CacheParity:") 'isCacheParity'
-			fragCacheParity = trimmedLine.contains("true")
-		end 'isCacheParity' else if trimmedLine.startsWith("MaxoncStderr: ```") 'isCompErr'
+		end 'isIncludeStdlibIr' else if trimmedLine.startsWith("MaxoncStderr: ```") 'isCompErr'
 			k = k + 1
 			let errBlock = readFragmentMultilineValue(lines, startLine: k, endLine: secondSep)
 			expectation.compilerStderr = errBlock.value
@@ -254,14 +256,18 @@ export function parseFragment(fragmentPath FilePath) returns Fragment throws Com
 			expectation.hasRuntimeStderr = true
 			k = stderrBlock.nextLine
 			continue
-		end 'isStderr' else if trimmedLine.startsWith("RequiredIR: ```") 'isIR'
-			// Skip RequiredIR blocks in legacy fragments (no longer used by self-hosted compiler)
+		end 'isStderr' else if trimmedLine.startsWith("RequiredIRSelfhosted: ```") 'isSelfhostedIr'
+			// The ENFORCED `// CompiledIR` (self-hosted RequiredIR oracle): parse into
+			// `requiredIr` so the runner compares it against the freshly-compiled IR.
 			k = k + 1
 			let irBlock = readFragmentMultilineValue(lines, startLine: k, endLine: secondSep)
+			expectation.requiredIr = irBlock.value
+			expectation.hasRequiredIr = true
 			k = irBlock.nextLine
 			continue
-		end 'isIR' else if trimmedLine.startsWith("RequiredIR: ```") 'isLegacyIR'
-			// Skip legacy RequiredIR blocks in fragments (still emitted by maxon-sharp)
+		end 'isSelfhostedIr' else if trimmedLine.startsWith("RequiredIR: ```") 'isLegacyIR'
+			// Skip legacy unqualified RequiredIR blocks (emitted by maxon-sharp);
+			// the self-hosted compiler uses RequiredIRSelfhosted above.
 			k = k + 1
 			let irBlock = readFragmentMultilineValue(lines, startLine: k, endLine: secondSep)
 			k = irBlock.nextLine
@@ -295,7 +301,6 @@ export function parseFragment(fragmentPath FilePath) returns Fragment throws Com
 	expectation.mmTrace = fragMmTrace
 	expectation.asyncTrace = fragAsyncTrace
 	expectation.includeStdlibIr = fragIncludeStdlibIr
-	expectation.cacheParity = fragCacheParity
 
 	// Parse compiled IR (between second and third ---). When non-empty,
 	// section 3 must start with a "// CompiledIR" header — this is the
@@ -364,7 +369,7 @@ export function parseFragment(fragmentPath FilePath) returns Fragment throws Com
 	let sourceFiles = splitMultiFileSource(source)
 	let hasMulti = sourceFiles.count() > 0
 
-	return Fragment.create(fragmentPath.toString(), testName: testName, source: source, expectation: expectation, generatedIR: generatedIR, hasGeneratedIR: hasGeneratedIR, args: fragArgs, sourceFiles: sourceFiles, hasMultiFile: hasMulti, mmTrace: fragMmTrace, asyncTrace: fragAsyncTrace, includeStdlibIr: fragIncludeStdlibIr, cacheParity: fragCacheParity)
+	return Fragment.create(fragmentPath.toString(), testName: testName, source: source, expectation: expectation, generatedIR: generatedIR, hasGeneratedIR: hasGeneratedIR, args: fragArgs, sourceFiles: sourceFiles, hasMultiFile: hasMulti, mmTrace: fragMmTrace, asyncTrace: fragAsyncTrace, includeStdlibIr: fragIncludeStdlibIr)
 end 'parseFragment'
 
 // Helper: read a multi-line value from fragment lines until a closing ``` is found.

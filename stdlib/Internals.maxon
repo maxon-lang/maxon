@@ -15,11 +15,22 @@
 typealias MachineWord = int(i64.min to i64.max)
 
 // Atomically increment the refcount at [ptr - 8]. Caller must ensure ptr is
-// the user-region pointer (24-byte mm header sits at ptr-24..ptr-1; refcount
+// the user-region pointer (32-byte mm header sits at ptr-32..ptr-1; refcount
 // is the trailing word at ptr-8). Migrated from runtime.std's mm_incref so
 // the inliner can see this 2-op body at every call site.
 function __mm_incref(ptr MachineWord)
+	// STRICT: see `__mm_decref`. A null or non-heap value reaching incref is a
+	// classification bug — fault on the `[ptr-8]` header write rather than
+	// silently no-opping (which would let the bug hide and the real reference
+	// leak). incref has no maybe-null sibling: the inserter only increfs values
+	// it has proven live (a fresh allocation or a dominating definition), so a
+	// null here is always wrong.
 	__Internals.atomicInc(ptr - 8)
+	if __Internals.mmTraceEnabled() != 0 'trace'
+		// Trace AFTER the increment so `rc=` shows the new (post-incref) count,
+		// matching the C# bootstrap.
+		__mmTraceRefcountLine(9, ptr: ptr, rc: __Internals.loadIndirect(ptr - 8))
+	end 'trace'
 end '__mm_incref'
 
 // Atomically decrement the refcount at [ptr - 8]. If the prior value was 1
@@ -30,102 +41,553 @@ end '__mm_incref'
 // value to detect the transition to zero across architectures uniformly —
 // the bare atomic_dec op has no result Id in Std-IR.
 function __mm_decref(ptr MachineWord)
+	// STRICT: __mm_decref dereferences the allocation header at `[ptr-8]` (and
+	// `[ptr-32]` on free). A null or non-heap value reaching here is NOT tolerated
+	// — it is a refcount-inserter / lowering classification BUG, and faulting on
+	// the header read surfaces it loudly with a stack trace instead of silently
+	// no-opping (which masks the bug and leaks the real owner). The ONLY caller
+	// allowed to pass a possibly-null pointer is `__mm_decref_maybenull_helper`, which
+	// tolerates EXACTLY null (==0) at the statically-maybe-null release sites
+	// (incomingOwner / selfReturnBorrow values, field-reassign old-occupant drop)
+	// and calls through to this strict body for every non-null pointer.
+	if __Internals.mmTraceEnabled() != 0 'trace'
+		// Trace BEFORE the decrement, printing the count it is about to
+		// transition to (prior - 1), matching the C# bootstrap. Read the live
+		// count from the header here since atomicXadd returns the prior value
+		// but the trace must precede the slab/free activity it nests over.
+		__mmTraceRefcountLine(10, ptr: ptr, rc: __Internals.loadIndirect(ptr - 8) - 1)
+	end 'trace'
 	let prior = __Internals.atomicXadd(ptr - 8, value: -1)
 	if prior == 1 'lastRef'
 		__mm_free(ptr)
 	end 'lastRef'
+	// STRICT over-release trap: prior == 0 means this decref releases a
+	// reference that was never taken (the sole-owner rc=0 reference belongs to
+	// `__mm_drop`, never to decref); prior < 0 means the header is already
+	// corrupt. Both are refcount-inserter / lowering bugs. Silently going
+	// negative masks the bug as a leak — or, once a later incref crosses zero
+	// again, as a delayed double-free whose slab-slot reuse corrupts unrelated
+	// data. Fault loudly at the source instead.
+	if prior <= 0 'overRelease'
+		panic("__mm_decref: over-release — refcount was already 0")
+	end 'overRelease'
 end '__mm_decref'
 
-// Allocate a tracked block of `size` bytes through the slab allocator.
-// Layout: 24-byte mm header followed by the user region.
-//   slot_base + 0  : destructor (function pointer; 0 means "no destructor")
-//   slot_base + 8  : size (user-region size)
-//   slot_base + 16 : refcount (initialized to 1)
-//   user_ptr       = slot_base + 24 (returned)
-//
-// `tag` is currently unused — preserved in the signature for parity with the
-// older runtime body and for forward compatibility with allocation-site
-// tagging. Sizes below 1 are clamped to 1; we don't panic.
-function __mm_alloc(size MachineWord, destructor MachineWord, tag MachineWord) returns MachineWord
-	// `tag` is currently a placeholder; binding it to the discard pattern
-	// keeps the param name labelable from call sites without tripping E3012.
-	_ = tag
-	var clampedSize = size
-	if size < 1 'clamp'
-		clampedSize = 1
-	end 'clamp'
-	__Internals.atomicInc(__Internals.mmAllocCountAddr())
-	let slotBase = __slab_alloc(clampedSize + 24)
-	__Internals.storeIndirect(slotBase, value: destructor)
-	__Internals.storeIndirect(slotBase + 8, value: clampedSize)
-	__Internals.storeIndirect(slotBase + 16, value: 1)
-	return slotBase + 24
-end '__mm_alloc'
-
-// Release a tracked allocation. Reads the destructor from [ptr - 24] and
-// invokes it (if non-null) before slab-freeing. The destructor is
-// responsible for decreffing managed fields stored inside the user region;
-// __mm_free only releases the surrounding allocation.
-//
-// Tolerates ptr == 0 as a no-op so callers don't have to null-check.
-function __mm_free(ptr MachineWord)
-	if ptr == 0 'nullPtr'
+// Owner-drop for the alloc-at-0 model. `[ptr-8]` counts EXTRA references beyond
+// the single owner; a freshly-allocated value owned by exactly one binding sits
+// at rc=0 its whole life (it was moved in, never shared/incref'd). When that
+// owner's scope ends:
+//   - rc == 0  → this is the sole reference; free the block directly.
+//   - rc  > 0  → the value escaped (was incref'd for another owner); decref the
+//                extra reference and leave the block for the last owner to free.
+// Null-tolerant (==0 ptr) for slots that were zero-initialized but never assigned
+// on the taken exit path — the scope-exit drop runs unconditionally per slot.
+// This is the primitive the binding scope-exit drop uses; it is DISTINCT from
+// `__mm_decref` (which frees only on prior-rc==1 and is for releasing an EXTRA
+// reference an aliasing owner holds, not the sole owner's rc=0 reference).
+function __mm_drop(ptr MachineWord)
+	if ptr == 0 'null'
 		return
-	end 'nullPtr'
-	let destructor = __Internals.loadIndirect(ptr - 24)
-	if destructor != 0 'hasDtor'
-		__Internals.indirectCall1(destructor, arg: ptr)
-	end 'hasDtor'
-	__Internals.atomicDec(__Internals.mmAllocCountAddr())
-	__slab_free(ptr - 24)
-end '__mm_free'
+	end 'null'
+	let rc = __Internals.loadIndirect(ptr - 8)
+	if rc == 0 'soleOwner'
+		// Scope-exit drop of the sole owner (rc==0): emit a `mm_drop TypeName #id`
+		// marker line so the trace shows WHERE the value goes out of scope, then
+		// free it with the `mm_free` line nested (indented) one level under the drop.
+		if __Internals.mmTraceEnabled() != 0 'trace'
+			__mmTraceIndent()
+			__mmW(21)
+			__mmTracePackedTag(__Internals.loadIndirect(ptr - 32))
+			__mmTraceScopeAndNewline(__mmTraceCurrentScope())
+			__mmTraceDepthInc()
+			__mm_free(ptr)
+			__mmTraceDepthDec()
+			return
+		end 'trace'
+		__mm_free(ptr)
+		return
+	end 'soleOwner'
+	// rc>0: the value escaped (an extra owner exists). Decref this owner's ref; the
+	// last owner frees. (No mm_drop marker — a plain decref like any shared value.)
+	__mm_decref(ptr)
+end '__mm_drop'
 
-// Top-level slab allocator entry point. Routes to the OS-direct path for
-// requests larger than 32KB, otherwise picks the smallest size class that
-// fits and forwards to __slab_alloc_class. Migrated from runtime.std so
-// the inliner can see this dispatch logic and (eventually) inline the
-// small-path entirely at hot call sites.
+// Trace-only marker for an ownership MOVE: a managed value whose +1 transfers to a
+// new owner WITHOUT a refcount op (returned to the caller, stored into a container/
+// global/field, or carried into a successor block's phi). At runtime a move is a
+// plain store/return with no rc change — this helper exists purely so the mm-trace
+// shows WHERE ownership transfers. `dest` selects the destination suffix:
+// 0 = ` -> return` (lit 23), 1 = ` -> container` (lit 24), 2 = ` -> phi` (lit 25).
+// No-op (and DCE'd away) in untraced builds. Null-tolerant so a move-suppressed
+// edge value that happens to be null is silently skipped.
+function __mm_move_trace(ptr MachineWord, dest MachineWord)
+	// Gate the whole body on the compile-time `mmTraceEnabled` constant (same shape
+	// as `__mm_incref`/`__mm_decref`'s trace block) so an untraced build folds the
+	// entire function to a bare `ret` — keeping cache-off and cache-on byte-identical.
+	if __Internals.mmTraceEnabled() != 0 'trace'
+		if ptr != 0 'nonNull'
+			__mmTraceIndent()
+			__mmW(22)
+			__mmTracePackedTag(__Internals.loadIndirect(ptr - 32))
+			__mmW(23 + dest)
+			__mmTraceScopeAndNewline(__mmTraceCurrentScope())
+		end 'nonNull'
+	end 'trace'
+end '__mm_move_trace'
+
+// mm-trace scope STACK. `__mm_trace_scope` is an array of cstr pointers (one slot
+// per active function frame); `__mm_trace_scope_depth` is the live depth. The trace
+// reads the TOP frame for each line; push/pop bracket each function body so an
+// inlined callee's push/pop (inlined verbatim) restore the caller's scope after the
+// inlined region — making `[scope]` correct at any inlining depth. 256 slots (2048
+// bytes / 8) is far beyond any real inlined depth; overflow stops pushing rather
+// than corrupt memory. All three are no-ops (DCE'd) in untraced builds.
+
+// Top-of-stack scope cstr ptr, or 0 when the stack is empty.
+function __mmTraceCurrentScope() returns MachineWord
+	let depth = __Internals.loadIndirect(__Internals.mmTraceScopeDepthAddr())
+	if depth <= 0 'empty'
+		return 0
+	end 'empty'
+	return __Internals.loadIndirect(__Internals.mmTraceScopeAddr() + (depth - 1) * 8)
+end '__mmTraceCurrentScope'
+
+// Push `name` (a cstr ptr) as the current scope frame. Bounds-guarded: a full stack
+// (256 frames) drops the push so deep recursion degrades the trace without faulting.
+// Whole-body gate on the compile-time `mmTraceEnabled` constant (NOT an early
+// `if==0 return`) so an untraced build folds the entire function to a bare `ret` —
+// keeping cache-off and cache-on byte-identical (the early-return form compiled to 3
+// extra bytes in one leg; see __mm_move_trace).
+function __mm_scope_push(name MachineWord)
+	if __Internals.mmTraceEnabled() != 0 'trace'
+		let depth = __Internals.loadIndirect(__Internals.mmTraceScopeDepthAddr())
+		if depth < 256 'hasRoom'
+			__Internals.storeIndirect(__Internals.mmTraceScopeAddr() + depth * 8, value: name)
+			__Internals.storeIndirect(__Internals.mmTraceScopeDepthAddr(), value: depth + 1)
+		end 'hasRoom'
+	end 'trace'
+end '__mm_scope_push'
+
+// Pop the current scope frame. Bounds-guarded: an empty stack stays at 0 (a stray
+// pop cannot underflow). Whole-body gated (see __mm_scope_push) so an untraced build
+// folds it to a bare `ret`.
+function __mm_scope_pop()
+	if __Internals.mmTraceEnabled() != 0 'trace'
+		let depth = __Internals.loadIndirect(__Internals.mmTraceScopeDepthAddr())
+		if depth > 0 'nonEmpty'
+			__Internals.storeIndirect(__Internals.mmTraceScopeDepthAddr(), value: depth - 1)
+		end 'nonEmpty'
+	end 'trace'
+end '__mm_scope_pop'
+
+// =============================================================================
+// mm-trace: textual allocator trace to stderr (gated on __Internals.mmTraceEnabled,
+// a compile-time constant — untraced builds DCE every helper below to nothing).
 //
-// Size class lookup is a linear scan over 18 size classes because the
-// cascade compiles to a binary-search-like pattern after canonicalize/cse
-// see through the loop. A precomputed size→class table would be a future
-// micro-optimization.
-function __slab_alloc(size MachineWord) returns MachineWord
-	if size > 32768 'osPath'
-		return __Internals.slabOsDirectAlloc(size)
-	end 'osPath'
-	var classIdx = 0
-	for _ in 0 upto 18 'classLoop'
-		let classSize = __slab_class_size(classIdx)
-		if classSize >= size 'fits'
-			return __Internals.slabAllocClass(classIdx)
-		end 'fits'
-		classIdx = classIdx + 1
-	end 'classLoop'
-	// Unreachable (size <= 32768 fits in class 17). Exit cleanly rather
-	// than continuing past the dispatch table.
-	__Internals.osExit(136)
+// Each line is `indent + tag + [TypeName #id] + [fields] + "\n"`, where the
+// indent is two spaces per `__mm_trace_depth` level. The mm-layer prints its
+// own line, bumps the depth, runs the child slab/OS calls (which print one
+// level deeper), then drops the depth — reproducing the C# bootstrap's nesting.
+// `__mm_trace_tag_ctx` carries the packed_id from the mm-layer to the slab
+// layer so sl_alloc / sl_free echo the same `TypeName #id`.
+// =============================================================================
+
+// Write a NUL-terminated C string at `ptr` to stderr (length via strlen scan).
+// Trace literals come from the compiler-emitted `__mm_trace_lit_lookup` table
+// (rdata-resident, so no allocation/drop is involved — unlike a `b"..."` local).
+function __mmTraceWriteCstr(ptr MachineWord)
+	var n = 0
+	while __Internals.loadByte(ptr + n, offset: 0) != 0 'scan'
+		n = n + 1
+	end 'scan'
+	__Internals.osWriteErr(ptr, len: n)
+end '__mmTraceWriteCstr'
+
+// Write fixed format literal #idx (see emitMmTraceLitTable for the index map).
+function __mmW(idx MachineWord)
+	__mmTraceWriteCstr(__Internals.mmTraceLit(idx))
+end '__mmW'
+
+// Write a non-negative integer to stderr in decimal. Digits are emitted into a
+// fixed 24-byte scratch global (single-threaded trace path) from least- to
+// most-significant, then written in order. Zero prints "0".
+//
+// `__Internals.mmTraceIntBufAddr()` is re-evaluated at every use rather than
+// bound to a local: drop-injection treats a globalAddr-derived local as
+// heap-owned and emits a stray `sys.free` (mrt_free) at function exit.
+function __mmTraceWriteInt(value MachineWord)
+	if value == 0 'zero'
+		__Internals.storeByte(__Internals.mmTraceIntBufAddr(), offset: 0, value: 0x30)
+		__Internals.osWriteErr(__Internals.mmTraceIntBufAddr(), len: 1)
+		return
+	end 'zero'
+	var v = value
+	var n = 0
+	// Emit digits in reverse into the scratch buffer.
+	while v > 0 'digits'
+		let d = v mod 10
+		__Internals.storeByte(__Internals.mmTraceIntBufAddr(), offset: 23 - n, value: 0x30 + d)
+		v = v / 10
+		n = n + 1
+	end 'digits'
+	__Internals.osWriteErr(__Internals.mmTraceIntBufAddr() + (24 - n), len: n)
+end '__mmTraceWriteInt'
+
+// Two-space-per-level indentation for the current trace depth.
+function __mmTraceIndent()
+	let depth = __Internals.loadIndirect(__Internals.mmTraceDepthAddr())
+	var i = 0
+	while i < depth 'each'
+		__mmW(6)
+		i = i + 1
+	end 'each'
+end '__mmTraceIndent'
+
+function __mmTraceDepthInc()
+	__Internals.storeIndirect(__Internals.mmTraceDepthAddr(), value: __Internals.loadIndirect(__Internals.mmTraceDepthAddr()) + 1)
+end '__mmTraceDepthInc'
+
+function __mmTraceDepthDec()
+	__Internals.storeIndirect(__Internals.mmTraceDepthAddr(), value: __Internals.loadIndirect(__Internals.mmTraceDepthAddr()) - 1)
+end '__mmTraceDepthDec'
+
+// Mint the next managed-allocation id (`#N`), starting at 1.
+function __mmTraceNextAllocId() returns MachineWord
+	let id = __Internals.loadIndirect(__Internals.mmAllocIdCounterAddr()) + 1
+	__Internals.storeIndirect(__Internals.mmAllocIdCounterAddr(), value: id)
+	return id
+end '__mmTraceNextAllocId'
+
+// Print ` TypeName #id` from a packed_id (tag in low 16 bits, id in high bits).
+// Used both directly (mm-layer, from the live header) and via the tag context
+// (slab layer). Prints nothing when packedId is 0 (untraced header — never minted).
+//
+// STRICT TAG: a non-zero packedId means a TRACKED allocation (it carries a minted
+// alloc-id), so it MUST resolve to a real type tag. A name of `(null)` is the symptom of
+// either (a) an alloc site that minted an id but passed `tag: 0` (a missing-tag bug —
+// `mrt_alloc`/`mrt_alloc_with_dtor`/hand-rolled `__mm_alloc(size, dtor, 0)`), OR (b) an
+// UNREGISTERED non-zero tag — which in practice means the header is GARBAGE: a freed /
+// reused slot read by a use-after-free, whose `[ptr-32]` no longer holds a valid
+// packed_id. Either way it is a real bug, so panic rather than silently printing
+// `(null)` (which would let a UAF masquerade as a balanced trace — the leak gate can't
+// see it). Both the tag==0 case AND the unregistered-tag case are caught by checking
+// the RESOLVED NAME against the `(null)` sentinel. Raw, deliberately-typeless buffers
+// carry the reserved `MM_TAG_RAW` sentinel (a registered name), so they never trip this.
+function __mmTracePackedTag(packedId MachineWord)
+	if packedId == 0 'noTag'
+		return
+	end 'noTag'
+	let namePtr = __Internals.mmTagName(packedId and 65535)
+	if __mmTraceNameIsNullSentinel(namePtr) 'nullName'
+		panic("mm-trace: tracked allocation #{packedId shr 16} has no valid type tag (tag={packedId and 65535}) — either an alloc site passed tag:0 / an unregistered tag, or this is a use-after-free reading a garbage header")
+	end 'nullName'
+	__mmW(7)
+	__mmTraceWriteCstr(namePtr)
+	__mmW(1)
+	__mmTraceWriteInt(packedId shr 16)
+end '__mmTracePackedTag'
+
+// True iff the NUL-terminated cstr at `ptr` is exactly the `(null)` tag sentinel that
+// `__mm_tag_lookup` returns for index 0 / any unregistered index. Byte-compares against
+// `"(null)"` (0x28 0x6E 0x75 0x6C 0x6C 0x29 0x00) so the strict-tag panic in
+// `__mmTracePackedTag` fires on BOTH a missing tag and a garbage/UAF header, without
+// needing the compile-time tag count at runtime.
+function __mmTraceNameIsNullSentinel(ptr MachineWord) returns bool
+	if __Internals.loadByte(ptr, offset: 0) != 0x28 'b0'
+		return false
+	end 'b0'
+	if __Internals.loadByte(ptr, offset: 1) != 0x6E 'b1'
+		return false
+	end 'b1'
+	if __Internals.loadByte(ptr, offset: 2) != 0x75 'b2'
+		return false
+	end 'b2'
+	if __Internals.loadByte(ptr, offset: 3) != 0x6C 'b3'
+		return false
+	end 'b3'
+	if __Internals.loadByte(ptr, offset: 4) != 0x6C 'b4'
+		return false
+	end 'b4'
+	if __Internals.loadByte(ptr, offset: 5) != 0x29 'b5'
+		return false
+	end 'b5'
+	return __Internals.loadByte(ptr, offset: 6) == 0
+end '__mmTraceNameIsNullSentinel'
+
+// mm-layer alloc line: `mm_alloc TypeName #id size=S [scope]`. Sets the tag
+// context (so the child sl_alloc echoes the same TypeName #id) and bumps the
+// depth so the slab call's lines indent under this one.
+function __mmTraceAllocLine(packedId MachineWord, size MachineWord, scope MachineWord)
+	__mmTraceIndent()
+	__mmW(0)
+	__mmTracePackedTag(packedId)
+	__mmW(2)
+	__mmTraceWriteInt(size)
+	__mmTraceScopeAndNewline(scope)
+	__Internals.storeIndirect(__Internals.mmTraceTagCtxAddr(), value: packedId)
+	__mmTraceDepthInc()
+end '__mmTraceAllocLine'
+
+// Print ` [scope]\n` when scope (a cstr ptr) is non-null, else just `\n`.
+function __mmTraceScopeAndNewline(scope MachineWord)
+	if scope != 0 'hasScope'
+		__mmW(3)
+		__mmTraceWriteCstr(scope)
+		__mmW(4)
+	end 'hasScope'
+	__mmW(5)
+end '__mmTraceScopeAndNewline'
+
+// mm-layer refcount line: `<indent><tag-lit> TypeName #id rc=<rc> [scope]`.
+// `litIdx` is 9 (`mm_incref`) or 10 (`mm_decref`). The `TypeName #id` echo comes
+// from the live header's packed_id at [ptr-32]; the scope is the active
+// `__mm_trace_scope`. Mirrors the C# bootstrap: incref traces with the
+// POST-increment count, decref with the count it is ABOUT to transition to
+// (caller passes the value to print). Emitted at the current depth (no
+// depth-inc — refcount ops have no nested slab activity).
+function __mmTraceRefcountLine(litIdx MachineWord, ptr MachineWord, rc MachineWord)
+	__mmTraceIndent()
+	__mmW(litIdx)
+	__mmTracePackedTag(__Internals.loadIndirect(ptr - 32))
+	__mmW(11)
+	__mmTraceWriteInt(rc)
+	__mmTraceScopeAndNewline(__mmTraceCurrentScope())
+end '__mmTraceRefcountLine'
+
+// Print ` class=N` for a slab class index (no special handling — N is the
+// numeric class index; -1 for OS-direct / arena-large prints "-1").
+function __mmTraceWriteClass(classIdx MachineWord)
+	__mmW(14)
+	if classIdx < 0 'neg'
+		// "-" then the magnitude. __mmTraceWriteInt only handles non-negative.
+		__Internals.storeByte(__Internals.mmTraceIntBufAddr(), offset: 0, value: 0x2D)
+		__Internals.osWriteErr(__Internals.mmTraceIntBufAddr(), len: 1)
+		__mmTraceWriteInt(0 - classIdx)
+		return
+	end 'neg'
+	__mmTraceWriteInt(classIdx)
+end '__mmTraceWriteClass'
+
+// Slab alloc line: `<indent>sl_alloc[ TypeName #id] size=R class=C\n`. The
+// ` TypeName #id` echo comes from `__mm_trace_tag_ctx` (set by the mm-layer
+// before it called the slab; 0 for a raw alloc — then no tag is printed).
+// `reqSize` is the size passed to __slab_alloc (REQUESTED size), matching the
+// C# bootstrap (sl_alloc prints requested, sl_free prints the class slot size).
+function __mmTraceSlabAllocLine(reqSize MachineWord, classIdx MachineWord)
+	__mmTraceIndent()
+	__mmW(12)
+	__mmTracePackedTag(__Internals.loadIndirect(__Internals.mmTraceTagCtxAddr()))
+	__mmW(2)
+	__mmTraceWriteInt(reqSize)
+	__mmTraceWriteClass(classIdx)
+	__mmW(5)
+end '__mmTraceSlabAllocLine'
+
+// Slab free line: `<indent>sl_free[ TypeName #id] size=S class=C\n`. `slotSize`
+// is the owning mspan's slot_size (the CLASS size, not the original request) —
+// the free path has only the mspan available, so it reports the rounded class
+// size, matching the C# bootstrap's sl_free asymmetry.
+function __mmTraceSlabFreeLine(slotSize MachineWord, classIdx MachineWord)
+	__mmTraceIndent()
+	__mmW(13)
+	__mmTracePackedTag(__Internals.loadIndirect(__Internals.mmTraceTagCtxAddr()))
+	__mmW(2)
+	__mmTraceWriteInt(slotSize)
+	__mmTraceWriteClass(classIdx)
+	__mmW(5)
+end '__mmTraceSlabFreeLine'
+
+// OS-page allocation line: `<indent>os_alloc size=N\n` at the current depth.
+// Emitted at each raw OS reservation (the 64 MiB arena and any growth arenas).
+function __mmTraceOsAllocLine(size MachineWord)
+	__mmTraceIndent()
+	__mmW(15)
+	__mmW(2)
+	__mmTraceWriteInt(size)
+	__mmW(5)
+end '__mmTraceOsAllocLine'
+
+// One-time slab-init trace: `sl_init\n  os_alloc size=N\n`. Called from the
+// runtime `__slab_arena_init` (which owns the first OS reservation) before it
+// allocates the arena. Internally gated on `mmTraceEnabled()` so it folds to an
+// empty body in untraced builds — the runtime caller invokes it unconditionally.
+function __mmTraceSlabInit(arenaSize MachineWord)
+	if __Internals.mmTraceEnabled() != 0 'on'
+		__mmW(16)
+		__mmW(5)
+		__mmTraceDepthInc()
+		__mmTraceOsAllocLine(arenaSize)
+		__mmTraceDepthDec()
+	end 'on'
+end '__mmTraceSlabInit'
+
+// One OS-growth-arena trace line, internally gated. Called from the runtime
+// `__slab_arena_alloc_chunks` growth path before it reserves a fresh arena.
+function __mmTraceOsGrow(arenaSize MachineWord)
+	if __Internals.mmTraceEnabled() != 0 'on'
+		__mmTraceOsAllocLine(arenaSize)
+	end 'on'
+end '__mmTraceOsGrow'
+
+// =============================================================================
+// Sharded slab allocator (migrated from runtime.std — sharded variant).
+//
+// This is the per-P sharded (Go/mimalloc-style) slab. The fast path is
+// lockless: each P owns its own mcache ROW (mcache_base + shard*144), and the
+// span it pops from is its sole writer. A cross-P free is CAS-pushed onto the
+// owner P's remote-free MPSC queue and replayed by the owner on its alloc slow
+// path. The slow path (refill / mcentral mutation / OS-direct) takes the global
+// __slab_lock. On single-P targets (wasm / arm64 / pre-scheduler x64)
+// __slab_current_p_id returns -1 → shard 0, collapsing to a single shard.
+//
+// mspan struct (80-byte / 0x50 slot):
+//   +0x00 base_addr  +0x08 slot_size  +0x10 free_list  +0x18 free_count
+//   +0x20 next_span  +0x28 class_idx  +0x30 total_slots +0x38 arena_base
+//   +0x40 owning_p   (RAW P id; 0xFFFFFFFF sentinel while parked in mcentral)
+//
+// ProcContext remote-free queue head sits at p_ptr + 0x78 (Treiber stack).
+//
+// `__Internals.atomicCas(addr, old, new)` returns 1 on success / 0 on failure
+// (NOT the prior value) — the CAS loops below test it as a success boolean.
+// =============================================================================
+
+// Zeroes `size` bytes starting at `ptr`. Byte-at-a-time loop — callers do not
+// have to align `size` to 8 bytes.
+function __slab_memzero(ptr MachineWord, size MachineWord)
+	for i in 0 upto size 'loop'
+		__Internals.storeByte(ptr, offset: i, value: 0)
+	end 'loop'
+end '__slab_memzero'
+
+// Allocates the very first 64 MiB arena from the OS, initialises its metadata
+// and bitmap, prepends it to the arena list, and flips __slab_init_done to 1.
+// Bitmap layout: chunk 0 holds the metadata, so its bit stays 0 (used); the
+// other 8191 chunks start as 1 (free). 128 qwords of bitmap: qword 0 = -2
+// (0xFFFFFFFFFFFFFFFE), qwords 1..127 = -1 (all free).
+//
+// globalAddr results are inlined (never bound to a local) so drop-injection
+// does not treat them as heap-owned and emit a stray sys.free at function exit.
+function __slab_arena_init()
+	let arenaBase = __Internals.osAllocPages(0x4000000)
+	// metadata: next = NULL (offset 0)
+	__Internals.storeIndirect(arenaBase, value: 0)
+	// bitmap qword 0 = 0xFFFFFFFFFFFFFFFE (chunk 0 used, rest free)
+	__Internals.storeIndirect(arenaBase + 0x10, value: -2)
+	// qwords 1..127 = -1 (all free)
+	for i in 1 upto 128 'fill'
+		__Internals.storeIndirect(arenaBase + 0x10 + (i shl 3), value: -1)
+	end 'fill'
+	// Prepend to the arena list head: new->next = old_head; head = new.
+	let oldHead = __Internals.loadIndirect(__Internals.slabArenaListHeadAddr())
+	__Internals.storeIndirect(arenaBase, value: oldHead)
+	__Internals.storeIndirect(__Internals.slabArenaListHeadAddr(), value: arenaBase)
+	// __slab_init_done = 1
+	__Internals.storeIndirect(__Internals.slabInitDoneAddr(), value: 1)
+end '__slab_arena_init'
+
+// Walks the arena list scanning each arena's bitmap bit-by-bit for a run of
+// `numChunks` consecutive free chunks. On success: clears those bits, stores
+// the arena base in __slab_arena_last_base, and returns
+// (arena_base + run_start * CHUNK_SIZE). On failure (no arena had room),
+// allocates a fresh 64 MiB arena via the OS, links it in, and retries.
+function __slab_arena_alloc_chunks(numChunks MachineWord) returns MachineWord
+	var arenaPtr = __Internals.loadIndirect(__Internals.slabArenaListHeadAddr())
+	while true 'arenaLoop'
+		if arenaPtr == 0 'grow'
+			// No arena had room — alloc a fresh 64 MiB arena and link in.
+			let newArena = __Internals.osAllocPages(0x4000000)
+			// metadata: next = old_head
+			__Internals.storeIndirect(newArena, value: __Internals.loadIndirect(__Internals.slabArenaListHeadAddr()))
+			// bitmap qword 0 = 0xFFFFFFFFFFFFFFFE
+			__Internals.storeIndirect(newArena + 0x10, value: -2)
+			// qwords 1..127 = -1 (all free)
+			for j in 1 upto 128 'growFill'
+				__Internals.storeIndirect(newArena + 0x10 + (j shl 3), value: -1)
+			end 'growFill'
+			// head = new_arena
+			__Internals.storeIndirect(__Internals.slabArenaListHeadAddr(), value: newArena)
+			// Restart the scan against the fresh arena.
+			arenaPtr = newArena
+			continue
+		end 'grow'
+
+		// Scan this arena's bitmap. Skip chunk 0 (always used by metadata).
+		var i = 1
+		var runLen = 0
+		var runStart = 0
+		var found = false
+		while i < 0x2000 'bitLoop'
+			let qwordIdx = i shr 6
+			let qwordAddr = arenaPtr + 0x10 + (qwordIdx shl 3)
+			let qword = __Internals.loadIndirect(qwordAddr)
+			let bit = (qword shr (i and 63)) and 1
+			if bit == 0 'used'
+				runLen = 0
+			end 'used'
+			if bit != 0 'free'
+				if runLen == 0 'startRun'
+					runStart = i
+				end 'startRun'
+				runLen = runLen + 1
+				if runLen >= numChunks 'gotRun'
+					found = true
+					break
+				end 'gotRun'
+			end 'free'
+			i = i + 1
+		end 'bitLoop'
+
+		if found 'haveRun'
+			// Clear bits runStart..runStart+numChunks-1 in the bitmap.
+			for j in runStart upto runStart + numChunks 'clear'
+				let qwordIdx = j shr 6
+				let qwordAddr = arenaPtr + 0x10 + (qwordIdx shl 3)
+				// mask = ~(1 << (j & 63)). Maxon has no unary bitNot; xor with -1
+				// (all-ones two's complement) is the same.
+				let bit = 1 shl (j and 63)
+				let mask = bit xor -1
+				let prior = __Internals.loadIndirect(qwordAddr)
+				__Internals.storeIndirect(qwordAddr, value: prior and mask)
+			end 'clear'
+			// __slab_arena_last_base = arena_ptr
+			__Internals.storeIndirect(__Internals.slabArenaLastBaseAddr(), value: arenaPtr)
+			// result = arena + runStart * CHUNK_SIZE
+			return arenaPtr + (runStart shl 13)
+		end 'haveRun'
+
+		// No run found in this arena; advance to next (offset 0 = next pointer).
+		arenaPtr = __Internals.loadIndirect(arenaPtr)
+	end 'arenaLoop'
+	// Unreachable — the while-true above either returns or grows then retries.
 	return 0
-end '__slab_alloc'
+end '__slab_arena_alloc_chunks'
 
-// Top-level slab free entry point. Recovers the owning mspan via the
-// two-level arena map; if the lookup misses, the pointer came from the
-// OS-direct path. Migrated from runtime.std.
-function __slab_free(ptr MachineWord)
-	let mspan = __slab_arena_map_get(ptr)
-	if mspan == 0 'osDirect'
-		__slab_os_direct_free(ptr)
-		return
-	end 'osDirect'
-	__slab_free_class_with_mspan(ptr, mspan: mspan)
-end '__slab_free'
+// Marks chunks [chunkIndex, chunkIndex + numChunks) as free in the bitmap of
+// the given arena. Bit-by-bit OR.
+function __slab_arena_free_chunks(arenaBase MachineWord, chunkIndex MachineWord, numChunks MachineWord)
+	for j in chunkIndex upto chunkIndex + numChunks 'loop'
+		let qwordIdx = j shr 6
+		let qwordAddr = arenaBase + 0x10 + (qwordIdx shl 3)
+		let bit = 1 shl (j and 63)
+		let prior = __Internals.loadIndirect(qwordAddr)
+		__Internals.storeIndirect(qwordAddr, value: prior or bit)
+	end 'loop'
+end '__slab_arena_free_chunks'
+
+// Public init entry. Idempotent — runs __slab_arena_init only if the
+// `__slab_init_done` flag is still 0, then initialises the slab lock. The
+// lock init runs exactly once (guarded by init_done) on the main thread
+// before any worker, serializing slow-path mutations once GTs run on
+// multiple OS threads.
+function __slab_init()
+	let done = __Internals.loadIndirect(__Internals.slabInitDoneAddr())
+	if done == 0 'doInit'
+		__slab_arena_init()
+		__Internals.osLockInit(__Internals.slabLockAddr())
+	end 'doInit'
+end '__slab_init'
 
 // Size-class size lookup table. Returns the byte size of class `idx`.
-// Migrated from runtime.std as an 18-way cascade; the optimizer compiles
-// this into a binary-search-shaped jump tree. Once inlined into
-// __slab_alloc, the call site's class index is often a constant (when
-// callers explicitly route through a fixed class), enabling constant
-// folding of the entire lookup down to a single immediate.
 function __slab_class_size(idx MachineWord) returns MachineWord
 	if idx == 0 'c'
 		return 8
@@ -181,10 +643,7 @@ function __slab_class_size(idx MachineWord) returns MachineWord
 	return 32768
 end '__slab_class_size'
 
-// Objects-per-span lookup table. Kept in lock-step with `__slab_class_size`:
-// class N's mspan holds `__slab_objs_per_span(N)` slots of `__slab_class_size(N)`
-// bytes each, packed in chunks totaling roughly the class's natural span
-// budget (8KB for small classes, larger for larger ones).
+// Objects-per-span lookup table. Kept in lock-step with __slab_class_size.
 function __slab_objs_per_span(idx MachineWord) returns MachineWord
 	if idx == 0 'c'
 		return 1024
@@ -240,162 +699,12 @@ function __slab_objs_per_span(idx MachineWord) returns MachineWord
 	return 1
 end '__slab_objs_per_span'
 
-// Zeroes `size` bytes starting at `ptr`. Byte-at-a-time loop — callers do not
-// have to align `size` to 8 bytes. Migrated from runtime.std's
-// `__slab_memzero` so the inliner can see this body at every caller (the
-// lazy-init paths in __slab_arena_map_ensure and __slab_os_direct_alloc each
-// hit it once per fresh chunk).
-function __slab_memzero(ptr MachineWord, size MachineWord)
-	for i in 0 upto size 'loop'
-		__Internals.storeByte(ptr, offset: i, value: 0)
-	end 'loop'
-end '__slab_memzero'
-
-// Allocates the very first 64 MiB arena from the OS, initialises its metadata
-// and bitmap, prepends it to the arena list, and flips __slab_init_done to 1.
-// Idempotent at the __slab_init level — the caller guards on init_done.
-//
-// Bitmap layout: chunk 0 holds the metadata, so its bit must stay 0 (used).
-// All other 8191 chunks start as 1 (free). 128 qwords of bitmap. We write
-// 0xFFFFFFFFFFFFFFFE (-2) into qword 0 and 0xFFFFFFFFFFFFFFFF (-1) into
-// qwords 1..127.
-function __slab_arena_init()
-	let arenaBase = __Internals.osAllocPages(0x4000000)
-	// metadata: next = NULL (offset 0)
-	__Internals.storeIndirect(arenaBase, value: 0)
-	// bitmap qword 0 = 0xFFFFFFFFFFFFFFFE (chunk 0 used, rest free)
-	__Internals.storeIndirect(arenaBase + 0x10, value: -2)
-	// qwords 1..127 = -1 (all free)
-	for i in 1 upto 128 'fill'
-		__Internals.storeIndirect(arenaBase + 0x10 + (i shl 3), value: -1)
-	end 'fill'
-	// Prepend to the arena list head: new->next = old_head; head = new.
-	//
-	// We avoid binding the globalAddr result (`slabArenaListHeadAddr()`) to a
-	// local — drop-injection treats globalAddr-derived slot values as heap-
-	// owned and would emit a `sys.free` at function exit, surfacing as a
-	// stray `mrt_free` call. Inlining each use keeps the value temp-only.
-	let oldHead = __Internals.loadIndirect(__Internals.slabArenaListHeadAddr())
-	__Internals.storeIndirect(arenaBase, value: oldHead)
-	__Internals.storeIndirect(__Internals.slabArenaListHeadAddr(), value: arenaBase)
-	// __slab_init_done = 1
-	__Internals.storeIndirect(__Internals.slabInitDoneAddr(), value: 1)
-end '__slab_arena_init'
-
-// Walks the arena list scanning each arena's bitmap bit-by-bit for a run of
-// `numChunks` consecutive free chunks. On success: clears those bits, stores
-// the arena base in __slab_arena_last_base, and returns
-// (arena_base + run_start * CHUNK_SIZE). On failure (no arena had room),
-// allocates a fresh 64 MiB arena via the OS, links it in, and retries.
-//
-// The C# implementation has a qword-level fast path with BSF; this port
-// keeps the runtime's bit-by-bit scan. Chunk allocation is rare (mspan
-// refill or arena-map L2), so the simpler scan is fine.
-//
-// Avoid binding any globalAddr result to a local — drop-injection would treat
-// it as heap-owned and emit a stray sys.free at function exit.
-function __slab_arena_alloc_chunks(numChunks MachineWord) returns MachineWord
-	var arenaPtr = __Internals.loadIndirect(__Internals.slabArenaListHeadAddr())
-	while true 'arenaLoop'
-		if arenaPtr == 0 'grow'
-			// No arena had room — alloc a fresh 64 MiB arena and link in.
-			let newArena = __Internals.osAllocPages(0x4000000)
-			// metadata: next = old_head
-			__Internals.storeIndirect(newArena, value: __Internals.loadIndirect(__Internals.slabArenaListHeadAddr()))
-			// bitmap qword 0 = 0xFFFFFFFFFFFFFFFE
-			__Internals.storeIndirect(newArena + 0x10, value: -2)
-			// qwords 1..127 = -1 (all free)
-			for j in 1 upto 128 'growFill'
-				__Internals.storeIndirect(newArena + 0x10 + (j shl 3), value: -1)
-			end 'growFill'
-			// head = new_arena
-			__Internals.storeIndirect(__Internals.slabArenaListHeadAddr(), value: newArena)
-			// Restart the scan against the fresh arena.
-			arenaPtr = newArena
-			continue
-		end 'grow'
-
-		// Scan this arena's bitmap. Skip chunk 0 (always used by metadata).
-		var i = 1
-		var runLen = 0
-		var runStart = 0
-		var found = false
-		while i < 0x2000 'bitLoop'
-			let qwordIdx = i shr 6
-			let qwordAddr = arenaPtr + 0x10 + (qwordIdx shl 3)
-			let qword = __Internals.loadIndirect(qwordAddr)
-			let bit = (qword shr (i and 63)) and 1
-			if bit == 0 'used'
-				runLen = 0
-			end 'used'
-			if bit != 0 'free'
-				if runLen == 0 'startRun'
-					runStart = i
-				end 'startRun'
-				runLen = runLen + 1
-				if runLen >= numChunks 'gotRun'
-					found = true
-					break
-				end 'gotRun'
-			end 'free'
-			i = i + 1
-		end 'bitLoop'
-
-		if found 'haveRun'
-			// Clear bits runStart..runStart+numChunks-1 in the bitmap.
-			for j in runStart upto runStart + numChunks 'clear'
-				let qwordIdx = j shr 6
-				let qwordAddr = arenaPtr + 0x10 + (qwordIdx shl 3)
-				// ~(1 << (j & 63)) — Maxon has no unary `bitNot`, so xor with -1
-				// (all-ones in two's complement) achieves the same result.
-				let mask = (1 shl (j and 63)) xor -1
-				let prior = __Internals.loadIndirect(qwordAddr)
-				__Internals.storeIndirect(qwordAddr, value: prior and mask)
-			end 'clear'
-			// __slab_arena_last_base = arena_ptr
-			__Internals.storeIndirect(__Internals.slabArenaLastBaseAddr(), value: arenaPtr)
-			// result = arena + runStart * CHUNK_SIZE
-			return arenaPtr + (runStart shl 13)
-		end 'haveRun'
-
-		// No run found in this arena; advance to next.
-		arenaPtr = __Internals.loadIndirect(arenaPtr)
-	end 'arenaLoop'
-	// Unreachable — the while-true above either returns or grows then retries.
-	return 0
-end '__slab_arena_alloc_chunks'
-
-// Marks chunks [chunkIndex, chunkIndex + numChunks) as free in the bitmap of
-// the given arena. Bit-by-bit OR; the C# version uses qword masks for speed,
-// but this is on the cold free path.
-function __slab_arena_free_chunks(arenaBase MachineWord, chunkIndex MachineWord, numChunks MachineWord)
-	for j in chunkIndex upto chunkIndex + numChunks 'loop'
-		let qwordIdx = j shr 6
-		let qwordAddr = arenaBase + 0x10 + (qwordIdx shl 3)
-		let bit = 1 shl (j and 63)
-		let prior = __Internals.loadIndirect(qwordAddr)
-		__Internals.storeIndirect(qwordAddr, value: prior or bit)
-	end 'loop'
-end '__slab_arena_free_chunks'
-
-// Public init entry. Idempotent — runs __slab_arena_init only if the
-// `__slab_init_done` flag is still 0. The size-class tables, mcache /
-// mcentral arrays, arena map, and OS-direct array are zeroed by the linker
-// (they live in BSS-equivalent data section entries); their setup is
-// implicit / lazy.
-function __slab_init()
-	let done = __Internals.loadIndirect(__Internals.slabInitDoneAddr())
-	if done == 0 'doInit'
-		__slab_arena_init()
-	end 'doInit'
-end '__slab_init'
-
-// Hands out 64-byte slots used as mspan-header storage. Three-tier:
-//   1. Pop from intrusive free-list at __slab_meta_free_head if non-null.
-//   2. Otherwise bump within the current metadata chunk if it has room.
-//   3. Otherwise grab a fresh 8 KiB chunk from the chunk allocator (one
-//      chunk = 128 mspans), reserve its first 64B as the return value, and
-//      reseed bump_ptr / bump_end.
+// Hands out 80-byte (0x50) slots used as mspan-header storage. Three-tier:
+//   1. Pop from the intrusive free-list at __slab_meta_free_head if non-null.
+//   2. Otherwise bump within the current metadata chunk if it has room
+//      (bump_ptr + 0x50 <= bump_end).
+//   3. Otherwise grab a fresh 8 KiB chunk; reserve its first 0x50 bytes as the
+//      result and reseed bump_ptr = chunk + 0x50, bump_end = chunk + 0x2000.
 function __slab_meta_alloc() returns MachineWord
 	let head = __Internals.loadIndirect(__Internals.slabMetaFreeHeadAddr())
 	if head != 0 'popFree'
@@ -405,54 +714,176 @@ function __slab_meta_alloc() returns MachineWord
 		return head
 	end 'popFree'
 
-	// Bump path: if bump_ptr + 64 <= bump_end, take the current bump_ptr and
-	// advance. Std-IR used signed Lt for the gate; both values are well below
+	// Bump path. Std-IR uses signed Lt for the gate; both values are well below
 	// the high bit so signed/unsigned agree.
 	let bumpPtr = __Internals.loadIndirect(__Internals.slabMetaBumpPtrAddr())
-	let advanced = bumpPtr + 0x40
+	let advanced = bumpPtr + 0x50
 	let bumpEnd = __Internals.loadIndirect(__Internals.slabMetaBumpEndAddr())
 	if bumpEnd >= advanced 'doBump'
 		__Internals.storeIndirect(__Internals.slabMetaBumpPtrAddr(), value: advanced)
 		return bumpPtr
 	end 'doBump'
 
-	// Grow: fresh 8 KiB metadata chunk. First 64B is the result; the rest
-	// becomes the new bump region.
+	// Grow: fresh 8 KiB metadata chunk. First 0x50 bytes is the result; the
+	// rest becomes the new bump region.
 	let chunkBase = __slab_arena_alloc_chunks(1)
-	__Internals.storeIndirect(__Internals.slabMetaBumpPtrAddr(), value: chunkBase + 0x40)
+	__Internals.storeIndirect(__Internals.slabMetaBumpPtrAddr(), value: chunkBase + 0x50)
 	__Internals.storeIndirect(__Internals.slabMetaBumpEndAddr(), value: chunkBase + 0x2000)
 	return chunkBase
 end '__slab_meta_alloc'
 
 // Pushes `ptr` onto the metadata free list. `[ptr] = old_head; head = ptr.`
-// The slot's first 8 bytes get clobbered with the next pointer — fine, the
-// caller is done with the contents.
 function __slab_meta_free(ptr MachineWord)
 	let oldHead = __Internals.loadIndirect(__Internals.slabMetaFreeHeadAddr())
 	__Internals.storeIndirect(ptr, value: oldHead)
 	__Internals.storeIndirect(__Internals.slabMetaFreeHeadAddr(), value: ptr)
 end '__slab_meta_free'
 
-// Repopulates mcache[classIdx] with a span that has at least one free slot.
-// Two-tier:
-//   1. Pop the head of mcentral[classIdx].partial — clearing its next_span
-//      pointer — and install it as mcache[classIdx].
-//   2. If partial is empty: build a fresh span by allocating chunks for the
-//      slot data, an mspan header from the metadata slab, initialising the
-//      mspan fields, registering it in the arena map, then walking the slot
-//      region to wire up the intrusive free list.
+// Shard id of the calling OS thread's adopted P, or -1 when no multi-P
+// scheduler owns this thread. Signature stub (returns -1) for targets without
+// a GMP scheduler; x64-Windows overrides this label with a TLS-reading
+// machine-code version (emitX64SlabCurrentPId).
+function __slab_current_p_id() returns MachineWord
+	return -1
+end '__slab_current_p_id'
+
+// Number of mcache shard rows (one per possible P). The mcache base is sized
+// SLAB_MAX_SHARDS × SLAB_NUM_SIZE_CLASSES × 8 bytes (see the `__slab_mcache_base`
+// data-section entry).
+let SLAB_MAX_SHARDS = 256
+
+// Bytes between consecutive mcache rows: one 8-byte span* slot per size class.
+// Must stay lock-step with the size-class count baked into the mcache base size.
+let SLAB_MCACHE_ROW_STRIDE = 144
+
+// Sentinel stamped into an mspan's owning_p (+0x40) while the span is parked in
+// mcentral (owned by no P). A real raw P id can never collide with it, so a
+// cross-P free that observes it has hit a returned-span invariant violation.
+let MSPAN_OWNING_P_PARKED = 0xFFFFFFFF
+
+// The mcache row reserved for ALL raw OS threads (id < 0: the subprocess sync
+// worker, the IOCP completion poller — threads with no adopted P). It MUST be
+// distinct from every real P's row (a real P's row is its id, 0..num_procs-1),
+// so a raw thread's lockless-looking fast path never shares a cached span with
+// P[0]. Real Ps never reach num_procs == SLAB_MAX_SHARDS in practice; the
+// `>= SLAB_MAX_SHARDS` cap below is for an unreachable >256-CPU host and would
+// only collide there. Raw-thread access to this row is additionally serialized
+// under __slab_lock (see __slab_alloc / __slab_free), since multiple raw threads
+// share it — they have no exclusive-owner guarantee the per-P fast path relies on.
+let SLAB_RAW_SHARD = SLAB_MAX_SHARDS - 1
+
+// Map a raw P id into the mcache row index range [0, SLAB_MAX_SHARDS).
+// A -1 (no scheduler / raw OS thread) becomes the dedicated raw shard, NOT shard
+// 0 — sharing shard 0 with P[0] (the main thread, which actively allocates while
+// draining green threads in an await loop) raced the main thread's lockless pops
+// against a raw thread's, handing the same slab slot to both → heap corruption
+// (the async-subprocess flake: a managed pointer overwritten by a concurrent
+// cmdline UTF-16 / child-output write). A (practically unreachable) id >= 256 is
+// capped to the last row. This is the MCACHE INDEX only — a span's owning_p
+// stores the RAW id, so the cap never affects free correctness.
+function __slab_clamp_shard(rawId MachineWord) returns MachineWord
+	if rawId < 0 'neg'
+		return SLAB_RAW_SHARD
+	end 'neg'
+	if rawId >= SLAB_MAX_SHARDS 'cap'
+		return SLAB_MAX_SHARDS - 1
+	end 'cap'
+	return rawId
+end '__slab_clamp_shard'
+
+// The ProcContext* for shard `id` from the scheduler's P array
+// (__sched_procs), or 0 when there is no P (id < 0, or __sched_procs is still
+// NULL). procs is an array of P*; entry `id` is itself a P*.
+function __slab_proc_at(id MachineWord) returns MachineWord
+	if id < 0 'none'
+		return 0
+	end 'none'
+	let procs = __Internals.loadIndirect(__Internals.schedProcsAddr())
+	if procs == 0 'noProcs'
+		return 0
+	end 'noProcs'
+	return __Internals.loadIndirect(procs + (id shl 3))
+end '__slab_proc_at'
+
+// CAS-push `slot` onto P `pPtr`'s remote-free MPSC queue (Treiber stack at
+// pPtr + 0x78). The slot's first 8 bytes hold the `next` link. Lock-free,
+// multiple producers. On single-threaded targets the CAS never contends.
+function __slab_remote_free_push(pPtr MachineWord, slot MachineWord)
+	let headAddr = pPtr + 0x78
+	while true 'retry'
+		// old = [headAddr]; [slot] = old (link new node to the current head)
+		let old = __Internals.loadIndirect(headAddr)
+		__Internals.storeIndirect(slot, value: old)
+		// success = CAS(headAddr, old, slot) — returns 1 on success / 0 on fail.
+		if __Internals.atomicCas(headAddr, old: old, new: slot) != 0 'done'
+			return
+		end 'done'
+	end 'retry'
+end '__slab_remote_free_push'
+
+// Drain P `pPtr`'s remote-free MPSC queue back onto the owning spans' free
+// lists. Called ONLY by the owner P (on its alloc slow path), so the per-span
+// pushes are lockless (single-writer). One AtomicCAS detaches the entire chain
+// (head -> NULL); we then walk it, looking up each node's span via the arena
+// map and pushing it onto span.free_list. A NULL pPtr (no P) is a no-op.
+function __slab_drain_remote_frees(pPtr MachineWord)
+	if pPtr == 0 'none'
+		return
+	end 'none'
+
+	let headAddr = pPtr + 0x78
+	// Detach the chain: CAS([p+0x78], old, NULL) until we win or it's empty.
+	var chainHead = 0
+	while true 'detachRetry'
+		let old = __Internals.loadIndirect(headAddr)
+		if old == 0 'empty'
+			return
+		end 'empty'
+		// success = CAS(headAddr, old, 0) — 1 on success / 0 on fail.
+		if __Internals.atomicCas(headAddr, old: old, new: 0) != 0 'detached'
+			chainHead = old
+			break
+		end 'detached'
+	end 'detachRetry'
+
+	// Walk the detached chain, replaying each node onto its span's free list.
+	var current = chainHead
+	while current != 0 'walk'
+		// Park `next` before the span lookup / free-list push clobbers [current].
+		let next = __Internals.loadIndirect(current)
+		// span = arena_map_get(current). Per the cross-P invariant this always
+		// succeeds (the span is registered at creation and never unregistered).
+		let span = __slab_arena_map_get(current)
+		// Single-writer push onto span.free_list (same helper the local free
+		// path uses; fully empties → returns span to mcentral).
+		__slab_free_class_with_mspan(current, mspan: span)
+		current = next
+	end 'walk'
+end '__slab_drain_remote_frees'
+
+// Repopulates this P's mcache row entry mcache[shard][classIdx] with a span
+// that has at least one free slot. Two-tier:
+//   1. Pop the head of mcentral[classIdx].partial (clearing its next_span) and
+//      install it; re-stamp owning_p = rawId under the lock.
+//   2. If partial is empty: build a fresh span — alloc chunks for slot data, an
+//      mspan header from the metadata slab, init the mspan fields (owning_p =
+//      rawId), register it in the arena map, and wire up the intrusive free
+//      list.
 //
-// Lock acquire/release elided — single-threaded today (see step 6a.17 TODO
-// in runtime.std for the multi-thread plan).
+// Slow path: reads mcentral and drives the chunk / metadata / arena-map
+// allocators, so the whole body runs under the global __slab_lock. The per-P
+// mcache fast path takes NO lock.
 //
-// mspan layout (64 bytes):
-//   +0x00 base_addr   +0x08 slot_size   +0x10 free_list   +0x18 free_count
-//   +0x20 next_span   +0x28 class_idx   +0x30 total_slots +0x38 arena_base
-function __slab_refill_mcache(classIdx MachineWord)
-	// mcentral entry address = base + classIdx * 16 (two pointer-slot pairs
-	// per class). mcache slot address = base + classIdx * 8.
+// `shard = clamp(rawId)` is the mcache row index (must match __slab_alloc_class);
+// `rawId` is stamped into owning_p so cross-P frees compare it exactly.
+function __slab_refill_mcache(classIdx MachineWord, rawId MachineWord)
+	let rowShard = __slab_clamp_shard(rawId)
+
+	__Internals.osLockAcquire(__Internals.slabLockAddr())
+
+	// mcentral entry = base + classIdx * 16; mcache slot = base + rowShard*stride + classIdx*8.
 	let mcentralEntry = __Internals.slabMcentralArrayAddr() + (classIdx shl 4)
-	let mcacheSlot = __Internals.slabMcacheBaseAddr() + (classIdx shl 3)
+	let mcacheSlot = __Internals.slabMcacheBaseAddr() + (rowShard * SLAB_MCACHE_ROW_STRIDE) + (classIdx shl 3)
 
 	let partial = __Internals.loadIndirect(mcentralEntry)
 	var span = 0
@@ -462,6 +893,9 @@ function __slab_refill_mcache(classIdx MachineWord)
 		let nextSpan = __Internals.loadIndirect(partial + 0x20)
 		__Internals.storeIndirect(mcentralEntry, value: nextSpan)
 		__Internals.storeIndirect(partial + 0x20, value: 0)
+		// Re-stamp owning_p = rawId — this P now exclusively owns the span (it
+		// carried the 0xFFFFFFFF sentinel while parked in mcentral).
+		__Internals.storeIndirect(partial + 0x40, value: rawId)
 	end 'takePartial'
 
 	if partial == 0 'growNew'
@@ -485,12 +919,14 @@ function __slab_refill_mcache(classIdx MachineWord)
 		__Internals.storeIndirect(span + 0x28, value: classIdx)
 		__Internals.storeIndirect(span + 0x30, value: totalSlots)
 		__Internals.storeIndirect(span + 0x38, value: arenaBase)
+		// owning_p = rawId (set once, here, under the lock). Storing the raw id
+		// (not the clamped shard) lets __slab_free compare it exactly against a
+		// freeing thread's raw id, so raw OS threads (id -1) always route remote.
+		__Internals.storeIndirect(span + 0x40, value: rawId)
 
 		// Register the new mspan in the arena map. num_pages == num_chunks
-		// because chunks and pages are both 8KB. The migrated function's
-		// second param is `endAddr` for legacy reasons; it actually
-		// carries num_pages.
-		__slab_arena_map_set(pageBase, endAddr: numChunks, mspan: span)
+		// because chunks and pages are both 8KB.
+		__slab_arena_map_set(pageBase, numPages: numChunks, mspan: span)
 
 		// Build the intrusive free list: slot[i] -> slot[i+1], last slot -> 0.
 		for i in 0 upto totalSlots 'linkLoop'
@@ -504,38 +940,61 @@ function __slab_refill_mcache(classIdx MachineWord)
 		end 'linkLoop'
 	end 'growNew'
 
-	// mcache[classIdx] = span
+	// mcache[rowShard][classIdx] = span
 	__Internals.storeIndirect(mcacheSlot, value: span)
+	__Internals.osLockRelease(__Internals.slabLockAddr())
 end '__slab_refill_mcache'
 
-// Fast-path slab allocator. Pops a slot from the cached mspan in
-// mcache[classIdx]. Refills via __slab_refill_mcache when the slot is empty
-// (or the cached span unexpectedly has free_count == 0), retries the load,
-// then proceeds with the pop. A successful pop that drains the span clears
-// the mcache entry so the next allocation triggers a refill rather than
-// walking a depleted span on every call.
+// Fast-path slab allocator, per-P sharded. Pops a slot from the cached mspan in
+// THIS P's mcache row (mcache_base + shard*144 + classIdx*8). The pop is
+// lockless. On a miss (no cached span, or free_count == 0) it first drains this
+// P's remote-free queue and re-probes; if still empty it refills (which takes
+// __slab_lock) then pops. A successful pop that drains the span clears the
+// mcache entry so the next call refills cleanly.
 function __slab_alloc_class(classIdx MachineWord) returns MachineWord
-	let mcacheBase = __Internals.slabMcacheBaseAddr()
-	let mcacheSlot = mcacheBase + (classIdx shl 3)
-	let initialSpan = __Internals.loadIndirect(mcacheSlot)
+	// rawId = current P id (-1 if none); shard = clamp(rawId) for the mcache row.
+	let rawId = __slab_current_p_id()
+	let shard = __slab_clamp_shard(rawId)
 
-	// Refill when the mcache slot is empty OR the cached span is depleted.
-	// A `var span` we'd later re-assign tripped the optimizer in early
-	// experiments; this two-pass form (one load before refill, one after)
-	// keeps the per-branch SSA clean.
-	var needRefill = false
-	if initialSpan == 0 'noSpan'
-		needRefill = true
+	let mcacheSlot = __Internals.slabMcacheBaseAddr() + (shard * SLAB_MCACHE_ROW_STRIDE) + (classIdx shl 3)
+	let cachedSpan = __Internals.loadIndirect(mcacheSlot)
+
+	// Determine whether the cached span is a miss (empty slot, or free_count==0).
+	var miss = false
+	if cachedSpan == 0 'noSpan'
+		miss = true
 	end 'noSpan'
-	if initialSpan != 0 'haveSpan'
-		if __Internals.loadIndirect(initialSpan + 0x18) == 0 'depleted'
-			needRefill = true
+	if cachedSpan != 0 'haveSpan'
+		if __Internals.loadIndirect(cachedSpan + 0x18) == 0 'depleted'
+			miss = true
 		end 'depleted'
 	end 'haveSpan'
-	if needRefill 'doRefill'
-		__slab_refill_mcache(classIdx)
-	end 'doRefill'
 
+	if miss 'handleMiss'
+		// Drain this P's remote-free queue (no-op when there is no P). Reclaimed
+		// slots may refill the cached span we just found empty.
+		__slab_drain_remote_frees(__slab_proc_at(rawId))
+
+		// Re-probe the cached span after draining.
+		let probedSpan = __Internals.loadIndirect(mcacheSlot)
+		var stillMiss = false
+		if probedSpan == 0 'noSpan2'
+			stillMiss = true
+		end 'noSpan2'
+		if probedSpan != 0 'haveSpan2'
+			if __Internals.loadIndirect(probedSpan + 0x18) == 0 'depleted2'
+				stillMiss = true
+			end 'depleted2'
+		end 'haveSpan2'
+
+		if stillMiss 'doRefill'
+			// Pass classIdx + rawId; refill stamps owning_p = rawId and indexes
+			// the mcache row by clamp(rawId).
+			__slab_refill_mcache(classIdx, rawId: rawId)
+		end 'doRefill'
+	end 'handleMiss'
+
+	// After any drain/refill the mcache slot points at a span with free_count > 0.
 	let span = __Internals.loadIndirect(mcacheSlot)
 	// result = span.free_list
 	let result = __Internals.loadIndirect(span + 0x10)
@@ -544,40 +1003,71 @@ function __slab_alloc_class(classIdx MachineWord) returns MachineWord
 	// span.free_count -= 1
 	let newFreeCount = __Internals.loadIndirect(span + 0x18) - 1
 	__Internals.storeIndirect(span + 0x18, value: newFreeCount)
-	// Drop drained spans from the mcache so the next call hits the refill
-	// path cleanly. The span lives on through free callers via the arena map.
+	// Drop drained spans from the mcache so the next call hits the refill path.
 	if newFreeCount == 0 'evict'
 		__Internals.storeIndirect(mcacheSlot, value: 0)
 	end 'evict'
 	return result
 end '__slab_alloc_class'
 
+// Return a fully-emptied span to its class's mcentral partial list so a
+// DIFFERENT P can later reclaim it. Runs entirely under the global __slab_lock.
+// Steps: (1) span.owning_p = 0xFFFFFFFF sentinel; (2) prepend span to
+// mcentral[classIdx].partial_head; (3) walk all 256 mcache rows and NULL any
+// slot still pointing at this span (mostly defensive — the alloc-side evict
+// already NULLs the owner's slot, but the 256-shard bound covers shard 0, the
+// single-shard / pre-scheduler row).
+function __slab_mcentral_return_span(span MachineWord)
+	__Internals.osLockAcquire(__Internals.slabLockAddr())
+
+	// span.owning_p = parked sentinel (no P owns it while in mcentral).
+	__Internals.storeIndirect(span + 0x40, value: MSPAN_OWNING_P_PARKED)
+
+	// class_offset = span.class_idx * 8; mcentral entry = base + class_offset*2.
+	let classIdx = __Internals.loadIndirect(span + 0x28)
+	let classOffset = classIdx shl 3
+	let mcentralEntry = __Internals.slabMcentralArrayAddr() + (classOffset shl 1)
+
+	// Prepend span to partial_head: span.next_span = partial_head; partial_head = span.
+	__Internals.storeIndirect(span + 0x20, value: __Internals.loadIndirect(mcentralEntry))
+	__Internals.storeIndirect(mcentralEntry, value: span)
+
+	// Cross-P mcache eviction: NULL any row still caching this span.
+	for i in 0 upto SLAB_MAX_SHARDS 'evictLoop'
+		let mcacheSlot = __Internals.slabMcacheBaseAddr() + (i * SLAB_MCACHE_ROW_STRIDE) + classOffset
+		if __Internals.loadIndirect(mcacheSlot) == span 'hit'
+			__Internals.storeIndirect(mcacheSlot, value: 0)
+		end 'hit'
+	end 'evictLoop'
+
+	__Internals.osLockRelease(__Internals.slabLockAddr())
+end '__slab_mcentral_return_span'
+
 // Returns `slot` to its owning mspan's free list:
-//   [slot] = mspan.free_list
-//   mspan.free_list = slot
-//   mspan.free_count += 1
-//
-// Building block for __slab_free; the caller is expected to have resolved
-// the owning mspan via the arena map.
+//   [slot] = mspan.free_list ; mspan.free_list = slot ; mspan.free_count += 1
+// Common sink for every free path (same-P local push, fallback-local push, and
+// the remote-free drain replay) — all reach here as the span's single writer,
+// so the per-span mutation needs no lock. When this free brings free_count up
+// to total_slots (+0x30) the span is fully empty and is handed back to mcentral
+// (which takes __slab_lock internally).
 function __slab_free_class_with_mspan(slot MachineWord, mspan MachineWord)
 	let oldFreeList = __Internals.loadIndirect(mspan + 0x10)
 	__Internals.storeIndirect(slot, value: oldFreeList)
 	__Internals.storeIndirect(mspan + 0x10, value: slot)
 	let newCount = __Internals.loadIndirect(mspan + 0x18) + 1
 	__Internals.storeIndirect(mspan + 0x18, value: newCount)
+
+	// Fully free? free_count == total_slots → return span to mcentral.
+	if newCount == __Internals.loadIndirect(mspan + 0x30) 'fullyFree'
+		__slab_mcentral_return_span(mspan)
+	end 'fullyFree'
 end '__slab_free_class_with_mspan'
 
 // Ensures L1, L2, and spans[] arrays exist for the arena map entry covering
 // `addr`. Lazy-allocates each layer on first need.
-//
-// Three-level structure (mirrors EmitArenaMapEnsure in the C# bootstrap):
 //   bits 39+   -> L1 slot      (256 entries, 2048 bytes)
 //   bits 26-38 -> L2 slot      (8192 entries, 65536 bytes)
 //   bits 13-25 -> spans[] slot (8192 entries, 65536 bytes)
-// Each L2 covers a 64MB region; each spans[] entry covers one 8KB page.
-//
-// Single-threaded today — see step 6a.17 TODO in runtime.std for the
-// lock-acquire / lock-release plan when threads land.
 function __slab_arena_map_ensure(addr MachineWord)
 	// Lazy-allocate L1 if missing.
 	if __Internals.loadIndirect(__Internals.slabArenaMapL1Addr()) == 0 'allocL1'
@@ -611,22 +1101,14 @@ end '__slab_arena_map_ensure'
 
 // Registers `mspan` in the arena map for every 8KB page in
 // [base, base + numPages * 8192). Multi-page mspans share the same mspan
-// pointer across every page slot so __slab_arena_map_get returns the
-// same mspan for any pointer inside the span.
-//
-// The bridge's middle param name `endAddr` is misleading legacy from the
-// initial registration — semantically it's `numPages`. Both the runtime
-// callee and this body treat it as a page count.
-function __slab_arena_map_set(base MachineWord, endAddr MachineWord, mspan MachineWord)
-	let numPages = endAddr
+// pointer across every page slot so __slab_arena_map_get returns the same
+// mspan for any pointer inside the span.
+function __slab_arena_map_set(base MachineWord, numPages MachineWord, mspan MachineWord)
 	for i in 0 upto numPages 'loop'
 		let pageAddr = base + (i shl 13)
 		__slab_arena_map_ensure(pageAddr)
 
-		// Re-walk the L1 / L2 / spans[] chain for `pageAddr`. We don't
-		// keep ensure()'s computed pointers around — that would force
-		// every multi-page iteration to maintain extra state across the
-		// __slab_arena_map_ensure call, and the chain is short.
+		// Re-walk the L1 / L2 / spans[] chain for `pageAddr`.
 		let l1Base = __Internals.loadIndirect(__Internals.slabArenaMapL1Addr())
 		let l1Idx = pageAddr shr 39
 		let l2Ptr = __Internals.loadIndirect(l1Base + (l1Idx shl 3))
@@ -638,9 +1120,7 @@ function __slab_arena_map_set(base MachineWord, endAddr MachineWord, mspan Machi
 end '__slab_arena_map_set'
 
 // Looks up the mspan registered for the 8KB page containing `ptr`, or 0 if
-// none. Performs the three-level lookup with no locks — reads are
-// race-safe in single-threaded mode (thread safety arrives with step
-// 6a.17, alongside the locks for ensure/set).
+// none. Three-level lookup with no locks (reads of the immutable map).
 function __slab_arena_map_get(ptr MachineWord) returns MachineWord
 	let l1Base = __Internals.loadIndirect(__Internals.slabArenaMapL1Addr())
 	if l1Base == 0 'noL1'
@@ -664,10 +1144,8 @@ function __slab_arena_map_get(ptr MachineWord) returns MachineWord
 end '__slab_arena_map_get'
 
 // Finds the OS-direct tracking entry for `ptr`, retrieves its size, swap-
-// removes the entry from the array, and releases the pages to the OS.
-// Exits with sentinel code 135 if `ptr` is not found — the only way that
-// happens in a correctly-paired alloc/free workload is a double-free or
-// pointer corruption.
+// removes the entry from the array, and releases the pages to the OS. Exits
+// with sentinel code 135 if `ptr` is not found (double-free / corruption).
 function __slab_os_direct_free(ptr MachineWord)
 	let count = __Internals.loadIndirect(__Internals.slabOsDirectCountAddr())
 	let arrayBase = __Internals.loadIndirect(__Internals.slabOsDirectArrayAddr())
@@ -686,8 +1164,7 @@ function __slab_os_direct_free(ptr MachineWord)
 	end 'scan'
 
 	if not found 'miss'
-		// 135 = OS-direct miss — distinct sentinel mirrors the runtime
-		// version so a debugger can still recognise the condition.
+		// 135 = OS-direct miss.
 		__Internals.osExit(135)
 	end 'miss'
 
@@ -704,13 +1181,10 @@ function __slab_os_direct_free(ptr MachineWord)
 end '__slab_os_direct_free'
 
 // Allocates `size` bytes (rounded up to 8KB) directly from the OS via
-// `osAllocPages` and records (ptr, alignedSize) in the OS-direct tracking
-// array so __slab_os_direct_free can later return it to the OS.
-//
-// Capacity model: the array is a single 8KB chunk holding 512 (ptr, size)
-// entries, lazy-allocated on first call. The C# bootstrap binary-searches
-// a sorted array; we keep the simpler linear approach until a workload
-// justifies the complexity. Exits with sentinel 134 if the array is full.
+// osAllocPages and records (ptr, alignedSize) in the OS-direct tracking array
+// so __slab_os_direct_free can later return it to the OS. The array is a single
+// 8KB chunk holding 512 (ptr, size) entries, lazy-allocated on first call.
+// Exits with sentinel 134 if the array is full.
 function __slab_os_direct_alloc(size MachineWord) returns MachineWord
 	// Align up to 8KB.
 	let aligned = (size + 8191) and -8192
@@ -728,8 +1202,7 @@ function __slab_os_direct_alloc(size MachineWord) returns MachineWord
 	let count = __Internals.loadIndirect(__Internals.slabOsDirectCountAddr())
 	let capacity = __Internals.loadIndirect(__Internals.slabOsDirectCapacityAddr())
 	if count >= capacity 'full'
-		// 134 = OS-direct capacity exceeded — same sentinel as the
-		// runtime version so a debugger can identify the condition.
+		// 134 = OS-direct capacity exceeded.
 		__Internals.osExit(134)
 	end 'full'
 
@@ -740,6 +1213,215 @@ function __slab_os_direct_alloc(size MachineWord) returns MachineWord
 	__Internals.storeIndirect(__Internals.slabOsDirectCountAddr(), value: count + 1)
 	return ptr
 end '__slab_os_direct_alloc'
+
+// Public allocator entry point. Routes >32768 to the OS-direct path (under
+// __slab_lock, mutating the shared OS-direct array); otherwise scans the
+// 18-class size table for the smallest class >= size and serves it from the
+// calling P's own mcache row (lockless fast path; refill takes __slab_lock).
+function __slab_alloc(size MachineWord) returns MachineWord
+	if size > 32768 'osPath'
+		__Internals.osLockAcquire(__Internals.slabLockAddr())
+		let osPtr = __slab_os_direct_alloc(size)
+		__Internals.osLockRelease(__Internals.slabLockAddr())
+		return osPtr
+	end 'osPath'
+	var classIdx = 0
+	for _ in 0 upto 18 'classLoop'
+		let classSize = __slab_class_size(classIdx)
+		if classSize >= size 'fits'
+			// A raw OS thread (id < 0) reaches the shared raw mcache shard. Two cases:
+			//   (a) PRE-SCHEDULER main (no `async` yet → `__slab_proc_at(0) == 0`): the
+			//       lone thread, so its pop is single-writer — lockless, no overhead on
+			//       ordinary non-async programs.
+			//   (b) a genuine raw thread WHILE a scheduler runs (subprocess sync worker
+			//       / IOCP poller — main is then P[0], id 0): it shares the raw shard
+			//       with the OTHER raw threads, so the pop is NOT single-writer.
+			//       Serialize the whole class-alloc under __slab_lock; the inner refill
+			//       re-acquires it, which is safe because __slab_lock is a recursive
+			//       Windows CRITICAL_SECTION. `__gt_init` runs on main before any worker
+			//       exists, so no raw thread ever takes the unlocked (a) path.
+			// Real Ps (id >= 0) always keep the lockless fast path — each owns its shard.
+			if __slab_current_p_id() < 0 and __slab_proc_at(0) != 0 'rawThreadLocked'
+				__Internals.osLockAcquire(__Internals.slabLockAddr())
+				let rawSlot = __slab_alloc_class(classIdx)
+				__Internals.osLockRelease(__Internals.slabLockAddr())
+				return rawSlot
+			end 'rawThreadLocked'
+			return __slab_alloc_class(classIdx)
+		end 'fits'
+		classIdx = classIdx + 1
+	end 'classLoop'
+	// Unreachable (size <= 32768 fits in class 17).
+	__Internals.osExit(136)
+	return 0
+end '__slab_alloc'
+
+// Public free entry point. Recovers the owning mspan via __slab_arena_map_get
+// (a lockless read of the immutable map). Routing:
+//   * miss (span == 0): OS-direct pointer — free it under __slab_lock.
+//   * same-P free (my raw id >= 0 AND == span.owning_p): lockless local push.
+//   * cross-P free (different P, or a raw OS thread with no P): CAS-push onto
+//     the OWNER P's remote-free queue.
+function __slab_free(ptr MachineWord)
+	let span = __slab_arena_map_get(ptr)
+	if span == 0 'osDirect'
+		// OS-direct free mutates the shared OS-direct array — serialize it.
+		__Internals.osLockAcquire(__Internals.slabLockAddr())
+		__slab_os_direct_free(ptr)
+		__Internals.osLockRelease(__Internals.slabLockAddr())
+		return
+	end 'osDirect'
+
+	let owningP = __Internals.loadIndirect(span + 0x40)
+	let myId = __slab_current_p_id()
+
+	// RAW-OWNED span (owning_p < 0): the span lives in the shared raw mcache shard,
+	// whose alloc side is serialized under __slab_lock once a scheduler runs (see
+	// __slab_alloc). Once a scheduler is up (`__slab_proc_at(0) != 0`), ANY free of
+	// such a slot — by the owning raw thread, another raw thread, or a real P that
+	// received the slot through cross-thread data sharing — MUST take the same lock,
+	// or it races the raw thread's allocation pop / another raw free. (The
+	// `owningP == myId` raw==raw==-1 case and the real-P `__slab_proc_at(<0)==0`
+	// fallback-local case both reach an UNLOCKED push otherwise.) The recursive
+	// CRITICAL_SECTION makes the inner mcentral-return re-acquire safe. Before the
+	// scheduler exists the lone main thread is the only writer → lockless.
+	if owningP < 0 and __slab_proc_at(0) != 0 'rawOwnedLocked'
+		__Internals.osLockAcquire(__Internals.slabLockAddr())
+		__slab_free_class_with_mspan(ptr, mspan: span)
+		__Internals.osLockRelease(__Internals.slabLockAddr())
+		return
+	end 'rawOwnedLocked'
+
+	// Same-P free requires my_id >= 0 AND my_id == owning_p. A raw OS thread
+	// (my_id == -1) never matches owning_p (>= 0), so it always routes remote.
+	if owningP == myId 'localPath'
+		// Single-writer push onto our own span's free list (lockless unless this
+		// free fully empties the span, escalating to a locked mcentral return).
+		__slab_free_class_with_mspan(ptr, mspan: span)
+		return
+	end 'localPath'
+
+	// Defensive: a genuine cross-P free (real P, owning_p != my_id) must never
+	// observe the 0xFFFFFFFF sentinel — the owning P drains every in-flight
+	// remote free for a span before its free_count can reach total_slots. A
+	// raw-OS-thread free (my_id < 0) skips this check (its id never equals the
+	// sentinel anyway), exactly as the bootstrap's LoadCurrentP==NULL path does.
+	if myId >= 0 'realP'
+		if owningP == MSPAN_OWNING_P_PARKED 'sentinel'
+			panic("__slab_free: cross-P free hit owning_p sentinel; span already returned to mcentral (Mimalloc invariant violation)")
+		end 'sentinel'
+	end 'realP'
+
+	// Remote path: target_p = __sched_procs[owning_p]; CAS-push onto its queue.
+	let targetP = __slab_proc_at(owningP)
+	if targetP == 0 'fallbackLocal'
+		// Defensive: a NULL target (no live P for owning_p) would drop the free.
+		// Fall back to the local push so the slot is never lost; with no live
+		// scheduler there is no contending writer, so the direct push is safe.
+		__slab_free_class_with_mspan(ptr, mspan: span)
+		return
+	end 'fallbackLocal'
+	__slab_remote_free_push(targetP, slot: ptr)
+end '__slab_free'
+
+// Allocate a tracked block of `size` bytes through the slab allocator.
+// Layout: 32-byte mm header followed by the user region. The `packed_id`
+// word carries `(alloc_id << 16) | tag_index` for mm-trace; it sits at
+// slot_base+0 so the destructor / size / refcount fields keep their
+// historical `user_ptr - 24 / -16 / -8` offsets (every destructor and the
+// COW path reads those, so leaving them put keeps the header change local
+// to __mm_alloc / __mm_free).
+//   slot_base + 0  : packed_id  (alloc_id << 16 | tag_index; 0 when untraced)
+//   slot_base + 8  : destructor (function pointer; 0 means "no destructor")
+//   slot_base + 16 : size       (user-region size)
+//   slot_base + 24 : refcount   (initialized to 0 — alloc-at-0 model, mirrors
+//                                 the C# bootstrap: a fresh allocation owns NO
+//                                 reference; the binding/field store that takes
+//                                 ownership increfs it to 1. A value never bound
+//                                 anywhere is freed at its producing scope's exit
+//                                 decref of rc 0→... — see __mm_decref guard.)
+//   user_ptr       = slot_base + 32 (returned)
+//
+// `tag` is the type's mm-trace tag index (0 = untagged). It's threaded
+// through even when tracing is off so the header layout stays uniform; the
+// packed_id word is simply 0 in untraced builds.
+function __mm_alloc(size MachineWord, destructor MachineWord, tag MachineWord) returns MachineWord
+	var clampedSize = size
+	if size < 1 'clamp'
+		clampedSize = 1
+	end 'clamp'
+	__Internals.atomicInc(__Internals.mmAllocCountAddr())
+	// packed_id = (alloc_id << 16) | tag_index, minted per allocation when
+	// tracing; 0 when untraced so the header carries no trace state.
+	var packedId = 0
+	if __Internals.mmTraceEnabled() != 0 'traceId'
+		packedId = (__mmTraceNextAllocId() shl 16) or (tag and 65535)
+		// Print the mm_alloc line (top-down mm -> sl -> os order), set the tag
+		// context for the slab layer, and bump the depth so the slab call's
+		// sl_alloc / os_alloc lines indent under us. The `[scope]` label comes
+		// from `__mm_trace_scope` (set by the alloc call site); 0 = no scope.
+		__mmTraceAllocLine(packedId, size: clampedSize, scope: __mmTraceCurrentScope())
+	end 'traceId'
+	let slotBase = __slab_alloc(clampedSize + 32)
+	if __Internals.mmTraceEnabled() != 0 'traceDone'
+		__mmTraceDepthDec()
+	end 'traceDone'
+	__Internals.storeIndirect(slotBase, value: packedId)
+	__Internals.storeIndirect(slotBase + 8, value: destructor)
+	__Internals.storeIndirect(slotBase + 16, value: clampedSize)
+	// Refcount-insertion (Step 2): a fresh allocation owns NO reference — the
+	// refcount header starts at 0 (alloc-at-0). With lowering no longer emitting
+	// any incref, the binding/field store that takes ownership is the first +1,
+	// supplied by the late SSA insert-refcounts pass. (See the header layout
+	// comment above and the __mm_decref rc-guard.)
+	__Internals.storeIndirect(slotBase + 24, value: 0)
+	return slotBase + 32
+end '__mm_alloc'
+
+// Release a tracked allocation. Reads the destructor from [ptr - 24] and
+// invokes it (if non-null) before slab-freeing. The destructor is
+// responsible for decreffing managed fields stored inside the user region;
+// __mm_free only releases the surrounding allocation.
+//
+// Tolerates ptr == 0 as a no-op so callers don't have to null-check.
+function __mm_free(ptr MachineWord)
+	if ptr == 0 'nullPtr'
+		return
+	end 'nullPtr'
+	if __Internals.mmTraceEnabled() != 0 'traceOn'
+		// Match the C# bootstrap's nesting (mm_decref already printed this
+		// value's `mm_decref ... rc=0` line at the current depth):
+		//   depth+1  → run the destructor so its field decrefs (and any
+		//              transitive frees they trigger) print one level deeper;
+		//   emit `mm_free TypeName #id` at depth+1;
+		//   depth+1 again → `__slab_free` prints `sl_free ...` under the free line;
+		//   restore depth.
+		__mmTraceDepthInc()
+		let destructorT = __Internals.loadIndirect(ptr - 24)
+		if destructorT != 0 'hasDtorT'
+			__Internals.indirectCall1(destructorT, arg: ptr)
+		end 'hasDtorT'
+		__mmTraceIndent()
+		__mmW(8)
+		__mmTracePackedTag(__Internals.loadIndirect(ptr - 32))
+		__mmW(5)
+		__Internals.atomicDec(__Internals.mmAllocCountAddr())
+		// Echo this value's tag onto the slab free so `sl_free` shows TypeName #id.
+		__Internals.storeIndirect(__Internals.mmTraceTagCtxAddr(), value: __Internals.loadIndirect(ptr - 32))
+		__mmTraceDepthInc()
+		__slab_free(ptr - 32)
+		__mmTraceDepthDec()
+		__mmTraceDepthDec()
+		return
+	end 'traceOn'
+	let destructor = __Internals.loadIndirect(ptr - 24)
+	if destructor != 0 'hasDtor'
+		__Internals.indirectCall1(destructor, arg: ptr)
+	end 'hasDtor'
+	__Internals.atomicDec(__Internals.mmAllocCountAddr())
+	// slot_base = ptr - 32 (packed_id is the first header word).
+	__slab_free(ptr - 32)
+end '__mm_free'
 
 // =============================================================================
 // __ManagedMemory destructor and builtin helpers (Phase 4 migration).
@@ -763,17 +1445,90 @@ end '__slab_os_direct_alloc'
 //   6       | invalidByteRange  | 7
 //   7       | invalidAllocation | 8
 //
-// __ManagedMemory layout (5-field, 40-byte struct, all i64):
-//   offset 0  buffer       (heap pointer to mm_alloc'd buffer, or 0)
-//   offset 8  length       (live element count)
-//   offset 16 capacity     (allocated element slots; -1 = slice, -2 = rdata)
-//   offset 24 element_size (sizeof(Element); 1 for Byte, 8 otherwise)
-//   offset 32 parent_ptr   (-1 root; -2 rdata-backed; otherwise parent ptr)
+// __ManagedMemory layout (6-field, 48-byte struct, all i64):
+//   offset 0  buffer         (heap pointer to mm_alloc'd buffer, or 0)
+//   offset 8  length         (live element count)
+//   offset 16 capacity       (allocated element slots; -1 = slice, -2 = rdata)
+//   offset 24 element_size   (sizeof(Element); 1 for Byte, 8 otherwise)
+//   offset 32 parent_ptr     (-1 root; -2 rdata-backed; otherwise parent ptr)
+//   offset 40 element_destroy(per-element teardown fn ptr, or 0 — see MM_OFFSET_ELEMENT_DESTROY)
 //
 // We use `int` rather than `__ManagedMemory` for self/result types — the
 // helpers treat MMs as raw pointers and the call site re-stamps the result
 // type via refineMmCallResultType.
 // =============================================================================
+
+// Single source of truth for the __ManagedMemory record size. Every hand-rolled
+// __mm_alloc of a record header references this so the size lives in one place.
+// (Does NOT cover element buffers or the separate __ManagedMemoryCursor struct.)
+let MANAGED_MEM_RECORD_SIZE = 48
+
+// Fixed mm-trace tag indices for the runtime's own allocations. These mirror the
+// reserved-index order in `resetMmTraceTags` (LowerMaxonToStd) exactly: the compiler
+// interns these names FIRST every compile, so the index is a stable literal the
+// runtime can stamp into a packed_id. Without a real tag these allocations traced as
+// `(null)` — and the strict null-tag panic in `__mmTracePackedTag` now rejects a
+// `tag:0` entirely. A raw byte buffer is `<raw>`; a record/cursor/list node names
+// its actual type so the alloc/free tree reads `mm_alloc __ManagedMemory #N`.
+let MM_TAG_RAW = 1
+let MM_TAG_MANAGED_MEMORY = 2
+let MM_TAG_MANAGED_MEMORY_CURSOR = 3
+let MM_TAG_MANAGED_LIST = 4
+let MM_TAG_MANAGED_LIST_NODE = 5
+
+// Named byte-offsets of the five i64 fields in the __ManagedMemory record, and
+// the three sentinel values the parent_ptr field can hold. Replacing the magic
+// literals at every mm-record access site so the layout lives in one place.
+let MM_OFFSET_BUFFER = 0
+let MM_OFFSET_LENGTH = 8
+let MM_OFFSET_CAPACITY = 16
+let MM_OFFSET_ELEMENT_SIZE = 24
+let MM_OFFSET_PARENT = 32
+let MM_OFFSET_ELEMENT_DESTROY = 40
+let MM_PARENT_ROOT = -1
+let MM_PARENT_RDATA = -2
+let MM_PARENT_UNINIT = 0
+
+// Runtime-readable fields of the per-instantiation layout descriptor blob.
+// ABI source of truth is `maxon-selfhosted/Compiler/IR/LayoutDescriptor.maxon`
+// (56-byte rdata image: size@0, alignment@8, elementSize@16, flags@24,
+// copyFunc@32, destroyFunc@40, fieldOffsetsPtr@48). Only the two fields the
+// generic-body element-walk wiring reads at runtime are mirrored here; changing
+// either end requires updating the other in lockstep. `flags` bit 0 is set when
+// the instance's element type is heap-managed (a String / generic-instance
+// pointer, or — after the recursive widening — a struct with managed fields).
+let LAYOUT_OFFSET_FLAGS = 24
+let LAYOUT_OFFSET_DESTROY_FUNC = 40
+let LAYOUT_FLAG_HAS_HEAP_REFS = 1
+
+// Allocate a raw element buffer for an mm record and return it at refcount 1.
+// A ROOT `__ManagedMemory`'s `__destruct___ManagedMemory` does exactly ONE
+// `__mm_decref(buffer)` at teardown, and `__mm_decref` frees only on the 1->0
+// transition (alloc-at-0), so the buffer MUST be rc=1 when stored — a bare
+// `__mm_alloc(size, 0, 0)` (rc=0) would have its single ROOT decref go 0->-1 and
+// never free → the buffer leaks. This wraps alloc+incref (the same rc=1 contract
+// `mrt_alloc` and `mm_realloc` already honor for owned buffers) so every record
+// builder (create/slice/cow/from_cstring) shares one place to get an owned
+// buffer. destructor=0: the buffer is raw bytes; its element pointers (if any)
+// are torn down by the record's element-walk, not the buffer's own destructor.
+function __managed_mem_alloc_buffer(byteLen MachineWord) returns MachineWord
+	let buf = __mm_alloc(byteLen, destructor: 0, tag: MM_TAG_RAW)
+	__mm_incref(buf)
+	// Zero-fill the buffer (matches the C# `mm_raw_alloc`, which zero-fills every
+	// raw allocation). `__mm_alloc` hands back a reused slab slot holding the
+	// previous occupant's bytes. A container that fills its buffer SPARSELY — a
+	// Map/Set hash table writes keys at hashed positions, leaving the rest
+	// unwritten — would have those stale bytes read by the ROOT destructor's
+	// element-walk and decref'd as live managed pointers → a fault (the
+	// String-keyed-map teardown crash). Zero-init makes unoccupied slots read null
+	// so the walk's `if slot != 0` guard skips them.
+	var i = 0
+	while i < byteLen 'zero'
+		__Internals.storeByte(buf, offset: i, value: 0)
+		i = i + 1
+	end 'zero'
+	return buf
+end '__managed_mem_alloc_buffer'
 
 // Destructor invoked indirectly by mm_free via the destructor function
 // pointer baked into the mm_alloc header. Inspects `parent_ptr` (offset 32)
@@ -788,18 +1543,28 @@ end '__slab_os_direct_alloc'
 // call_indirect needs the static call-site type to match exactly. The
 // returned 0 is silently discarded.
 function __destruct___ManagedMemory(self MachineWord) returns MachineWord
-	let parent = __Internals.loadIndirect(self + 32)
-	if parent == -1 'root'
+	let parent = __Internals.loadIndirect(self + MM_OFFSET_PARENT)
+	if parent == MM_PARENT_ROOT 'root'
+		// Container element-walk teardown. element_destroy@40 holds the
+		// per-element teardown function pointer (or 0 for raw/unmanaged-element
+		// buffers). For managed-pointer elements it is &__mm_decref: each live
+		// slot in [0, length) carries exactly +1 (push moved the caller's ref in
+		// without an incref), so decref-ing the slot value once nets to zero and
+		// cascades into the element's own destructor. Walk ONLY in the ROOT
+		// branch — slice/rdata views alias a buffer they do not own and walking
+		// them would double-free. The element_destroy==0 gate keeps raw/byte/
+		// primitive buffers from being walked (decref-ing a raw int would fault).
+		__managed_mem_walk_elements(self)
 		let buffer = __Internals.loadIndirect(self)
 		if buffer != 0 'hasBuf'
 			__mm_decref(buffer)
 		end 'hasBuf'
 		return 0
 	end 'root'
-	if parent == -2 'rdata'
+	if parent == MM_PARENT_RDATA 'rdata'
 		return 0
 	end 'rdata'
-	if parent == 0 'uninit'
+	if parent == MM_PARENT_UNINIT 'uninit'
 		return 0
 	end 'uninit'
 	// Slice view: drop one ref on the parent __ManagedMemory.
@@ -807,16 +1572,131 @@ function __destruct___ManagedMemory(self MachineWord) returns MachineWord
 	return 0
 end '__destruct___ManagedMemory'
 
+// Walk the live elements [0, length) of a ROOT record and run the per-element
+// teardown (`element_destroy@40`, &__mm_decref for managed-pointer elements) on each
+// non-null slot. Shared by the record's destructor (teardown) and `__managed_mem_clear`
+// (truncate-to-empty): each live slot carries exactly +1 (push moved the caller's ref
+// in without an incref), so one decref nets to zero and cascades into the element's
+// own destructor. A 0 `element_destroy` (raw/primitive elements) makes this a no-op —
+// decref-ing a raw int would fault. Does NOT touch the buffer or length; callers do.
+function __managed_mem_walk_elements(self MachineWord)
+	let elementDestroy = __Internals.loadIndirect(self + MM_OFFSET_ELEMENT_DESTROY)
+	if elementDestroy == 0 'rawElems'
+		return
+	end 'rawElems'
+	let length = __Internals.loadIndirect(self + MM_OFFSET_LENGTH)
+	let elemSize = __Internals.loadIndirect(self + MM_OFFSET_ELEMENT_SIZE)
+	let walkBuf = __Internals.loadIndirect(self)
+	if walkBuf == 0 'noBuf'
+		return
+	end 'noBuf'
+	var i = 0
+	while i < length 'eachElem'
+		let slot = __Internals.loadIndirect(walkBuf + i * elemSize)
+		if slot != 0 'live'
+			// `element_destroy` is `&__mm_decref` (void), so use the void-shaped
+			// indirect call — wasm's `call_indirect` type-checks the site against the
+			// target's `(i64) -> void` signature (`indirectCall1` would trap as a
+			// mismatch). See `lowerInternalsIndirectCall1`.
+			__Internals.indirectCallVoid1(elementDestroy, arg: slot)
+		end 'live'
+		i = i + 1
+	end 'eachElem'
+end '__managed_mem_walk_elements'
+
+// clear(self) — drop every live managed element, then truncate to empty (length=0).
+// `Array.clear()` formerly lowered to a bare `length = 0`, which leaked every managed
+// element (the slots' +1 refs were orphaned with no walk). Walk-then-truncate frees
+// them; the backing buffer + capacity are retained for reuse. For a raw-element record
+// the walk is inert, so this stays correct (and a no-op beyond the length store) for
+// `Array with Integer`/`Byte`. Returns 0 (the void result the lowering binds).
+function __managed_mem_clear(self MachineWord) returns MachineWord
+	__managed_mem_walk_elements(self)
+	__Internals.storeIndirect(self + MM_OFFSET_LENGTH, value: 0)
+	return 0
+end '__managed_mem_clear'
+
+// __destruct___ManagedMemoryCursor(self): release the source __ManagedMemory the
+// cursor RETAINED at creation. A for-in cursor borrows the source collection's
+// buffer (cursor.buffer@0 aliases source.buffer), so the source MUST stay alive
+// for the whole loop — lowerCreateCursor increfs source_ptr@32 when building the
+// cursor, and this destructor drops that ref when the iterator (which owns the
+// cursor) is torn down. Without the retain+release pair the inserter freed the
+// source collection right after createIterator() (its textual last use), leaving
+// the cursor's buffer pointer dangling → SIGSEGV on the 2nd iteration once the
+// freed slab slot was reused. `buffer@0` is NOT decref'd here: it is owned by the
+// source record (source_ptr), released transitively when source_ptr's refcount
+// hits 0. Returns i64 (0) to match the indirect-call destructor ABI.
+function __destruct___ManagedMemoryCursor(self MachineWord) returns MachineWord
+	let sourcePtr = __Internals.loadIndirect(self + 32)
+	if sourcePtr != 0 'hasSource'
+		__mm_decref(sourcePtr)
+	end 'hasSource'
+	return 0
+end '__destruct___ManagedMemoryCursor'
+
 // setLength(self, n) — bounds-check n against capacity, then write to
 // self.length. Throws invalidLength (wire 4) on n > capacity.
 function __managed_mem_set_length(self MachineWord, n MachineWord) returns MachineWord throws __ManagedMemoryError
-	let capacity = __Internals.loadIndirect(self + 16)
+	let capacity = __Internals.loadIndirect(self + MM_OFFSET_CAPACITY)
 	if n > capacity 'tooLong'
 		throw __ManagedMemoryError.invalidLength
 	end 'tooLong'
-	__Internals.storeIndirect(self + 8, value: n)
+	__Internals.storeIndirect(self + MM_OFFSET_LENGTH, value: n)
 	return 0
 end '__managed_mem_set_length'
+
+// Bit-packed-bool element access (element_size == 0 sentinel): one bit per
+// element, bit (idx & 7) of byte (idx >> 3). These two helpers are the single
+// source of truth for that layout, shared by get / cursor_current (read) and
+// set / raw_set (write) so the masking math can never drift between sites.
+function __managed_mem_read_bit(buffer MachineWord, idx MachineWord) returns MachineWord
+	let byte = __Internals.loadByte(buffer + (idx shr 3), offset: 0)
+	return (byte shr (idx and 7)) and 1
+end '__managed_mem_read_bit'
+
+function __managed_mem_write_bit(buffer MachineWord, idx MachineWord, value MachineWord)
+	let byteAddr = buffer + (idx shr 3)
+	let bitOff = idx and 7
+	let cur = __Internals.loadByte(byteAddr, offset: 0)
+	let cleared = cur and (255 xor (1 shl bitOff))
+	let newByte = cleared or ((value and 1) shl bitOff)
+	__Internals.storeByte(byteAddr, offset: 0, value: newByte)
+end '__managed_mem_write_bit'
+
+// Width-dispatched scalar load/store at a precomputed element address. The
+// element_size cascade (1→byte, 2→halfword, 4→word, else qword) was copied
+// across get / cursor_current (load) and set / raw_set (store); centralize it
+// so a new width or a fixed default lands in exactly one place. Unsigned reads —
+// typed sign-extension is applied by the caller's field-load shim.
+function __managed_mem_load_sized(addr MachineWord, elemSize MachineWord) returns MachineWord
+	if elemSize == 1 'b'
+		return __Internals.loadByte(addr, offset: 0)
+	end 'b'
+	if elemSize == 2 'h'
+		return __Internals.loadHalfword(addr)
+	end 'h'
+	if elemSize == 4 'w'
+		return __Internals.loadWord(addr)
+	end 'w'
+	return __Internals.loadIndirect(addr)
+end '__managed_mem_load_sized'
+
+function __managed_mem_store_sized(addr MachineWord, elemSize MachineWord, value MachineWord)
+	if elemSize == 1 'b'
+		__Internals.storeByte(addr, offset: 0, value: value)
+		return
+	end 'b'
+	if elemSize == 2 'h'
+		__Internals.storeHalfword(addr, value: value)
+		return
+	end 'h'
+	if elemSize == 4 'w'
+		__Internals.storeWord(addr, value: value)
+		return
+	end 'w'
+	__Internals.storeIndirect(addr, value: value)
+end '__managed_mem_store_sized'
 
 // cursor_current(cursor) — load the element at the cursor's current
 // position, dispatching on element_size like __managed_mem_get does.
@@ -831,17 +1711,12 @@ function __managed_mem_cursor_current(cursor MachineWord) returns MachineWord
 	let buffer = __Internals.loadIndirect(cursor)
 	let position = __Internals.loadIndirect(cursor + 8)
 	let elemSize = __Internals.loadIndirect(cursor + 24)
-	let addr = buffer + position * elemSize
-	if elemSize == 1 'b'
-		return __Internals.loadByte(addr, offset: 0)
-	end 'b'
-	if elemSize == 2 'h'
-		return __Internals.loadHalfword(addr)
-	end 'h'
-	if elemSize == 4 'w'
-		return __Internals.loadWord(addr)
-	end 'w'
-	return __Internals.loadIndirect(addr)
+	// element_size == 0 is the bit-packed-bool sentinel: extract bit
+	// (position & 7) of byte (position >> 3) — same layout as __managed_mem_get.
+	if elemSize == 0 'bit'
+		return __managed_mem_read_bit(buffer, idx: position)
+	end 'bit'
+	return __managed_mem_load_sized(buffer + position * elemSize, elemSize: elemSize)
 end '__managed_mem_cursor_current'
 
 // get(self, idx) — bounds-check idx ∈ [0, length), then load the element.
@@ -853,23 +1728,18 @@ function __managed_mem_get(self MachineWord, idx MachineWord) returns MachineWor
 	if idx < 0 'lo'
 		throw __ManagedMemoryError.indexOutOfBounds
 	end 'lo'
-	let length = __Internals.loadIndirect(self + 8)
+	let length = __Internals.loadIndirect(self + MM_OFFSET_LENGTH)
 	if idx >= length 'hi'
 		throw __ManagedMemoryError.indexOutOfBounds
 	end 'hi'
-	let elemSize = __Internals.loadIndirect(self + 24)
+	let elemSize = __Internals.loadIndirect(self + MM_OFFSET_ELEMENT_SIZE)
 	let buffer = __Internals.loadIndirect(self)
-	let addr = buffer + idx * elemSize
-	if elemSize == 1 'b'
-		return __Internals.loadByte(addr, offset: 0)
-	end 'b'
-	if elemSize == 2 'h'
-		return __Internals.loadHalfword(addr)
-	end 'h'
-	if elemSize == 4 'w'
-		return __Internals.loadWord(addr)
-	end 'w'
-	return __Internals.loadIndirect(addr)
+	// element_size == 0 is the bit-packed-bool sentinel: one bit per element.
+	// Extract bit (idx & 7) of byte (idx >> 3) and normalize to 0/1.
+	if elemSize == 0 'bit'
+		return __managed_mem_read_bit(buffer, idx: idx)
+	end 'bit'
+	return __managed_mem_load_sized(buffer + idx * elemSize, elemSize: elemSize)
 end '__managed_mem_get'
 
 // set(self, idx, value) — bounds-check idx ∈ [0, capacity) (push() reserves
@@ -881,32 +1751,148 @@ function __managed_mem_set(self MachineWord, idx MachineWord, value MachineWord)
 	if idx < 0 'lo'
 		throw __ManagedMemoryError.indexOutOfBounds
 	end 'lo'
-	var capacity = __Internals.loadIndirect(self + 16)
+	var capacity = __Internals.loadIndirect(self + MM_OFFSET_CAPACITY)
 	if capacity < 0 'cow'
 		_ = __managed_mem_cow_check(self)
-		capacity = __Internals.loadIndirect(self + 16)
+		capacity = __Internals.loadIndirect(self + MM_OFFSET_CAPACITY)
 	end 'cow'
 	if idx >= capacity 'hi'
 		throw __ManagedMemoryError.indexOutOfBounds
 	end 'hi'
-	let elemSize = __Internals.loadIndirect(self + 24)
+	let elemSize = __Internals.loadIndirect(self + MM_OFFSET_ELEMENT_SIZE)
 	let buffer = __Internals.loadIndirect(self)
-	let addr = buffer + idx * elemSize
-	if elemSize == 1 'b'
-		__Internals.storeByte(addr, offset: 0, value: value)
+	// In-place overwrite of a LIVE managed element must release the displaced
+	// occupant, or its +1 leaks (the teardown walk only decrefs whatever the slot
+	// holds at teardown — the new value, not the one we overwrite here). Gate on
+	// element_destroy != 0 (managed-pointer elements only — raw/primitive slots
+	// hold no refcounted occupant) AND idx < length (the slot already holds a live
+	// element). `push` writes at idx == length (a fresh, never-occupied slot) so it
+	// is correctly excluded — it MOVES the caller's +1 in with no decref. The new
+	// value's +1 likewise moves in here (the caller's last-use decref is suppressed
+	// by `opMovesValueIntoContainer`), so net per element stays 0.
+	let elementDestroy = __Internals.loadIndirect(self + MM_OFFSET_ELEMENT_DESTROY)
+	if elementDestroy != 0 'maybeReleaseOld'
+		let curLength = __Internals.loadIndirect(self + MM_OFFSET_LENGTH)
+		if idx < curLength 'liveSlot'
+			let oldVal = __Internals.loadIndirect(buffer + idx * elemSize)
+			if oldVal != 0 'haveOld'
+				// `element_destroy` is `&__mm_decref` (void) — void-shaped indirect call
+				// so wasm's typed `call_indirect` matches the target (mirrors the
+				// element-walk site; see `lowerInternalsIndirectCall1`).
+				__Internals.indirectCallVoid1(elementDestroy, arg: oldVal)
+			end 'haveOld'
+		end 'liveSlot'
+	end 'maybeReleaseOld'
+	// element_size == 0 is the bit-packed-bool sentinel: read-modify-write the
+	// single bit (idx & 7) of byte (idx >> 3).
+	if elemSize == 0 'bit'
+		__managed_mem_write_bit(buffer, idx: idx, value: value)
 		return 0
-	end 'b'
-	if elemSize == 2 'h'
-		__Internals.storeHalfword(addr, value: value)
-		return 0
-	end 'h'
-	if elemSize == 4 'w'
-		__Internals.storeWord(addr, value: value)
-		return 0
-	end 'w'
-	__Internals.storeIndirect(addr, value: value)
+	end 'bit'
+	__managed_mem_store_sized(buffer + idx * elemSize, elemSize: elemSize, value: value)
 	return 0
 end '__managed_mem_set'
+
+// swap(self, i, j) — exchange the raw element_size bytes of slots i and j with
+// NO refcount traffic. A swap MOVES ownership between slots: both occupants stay
+// live inside the container, their refcounts unchanged. This is exactly why it
+// must NOT go through get+set — `__managed_mem_set` decrefs the displaced
+// occupant (correct for an OVERWRITE, where the old value is discarded), which
+// during a swap would free a box that is merely being relocated to the other
+// slot → use-after-free / corrupted elements (the sort-of-managed-elements bug).
+// COW-aware: a slice/rdata-backed buffer (capacity < 0) is materialized private
+// first so the swap never mutates shared storage. Bounds: i,j ∈ [0, length).
+// Throws indexOutOfBounds (wire 1) on OOB.
+function __managed_mem_swap(self MachineWord, i MachineWord, j MachineWord) returns MachineWord throws __ManagedMemoryError
+	let length = __Internals.loadIndirect(self + MM_OFFSET_LENGTH)
+	if i < 0 'iLo'
+		throw __ManagedMemoryError.indexOutOfBounds
+	end 'iLo'
+	if i >= length 'iHi'
+		throw __ManagedMemoryError.indexOutOfBounds
+	end 'iHi'
+	if j < 0 'jLo'
+		throw __ManagedMemoryError.indexOutOfBounds
+	end 'jLo'
+	if j >= length 'jHi'
+		throw __ManagedMemoryError.indexOutOfBounds
+	end 'jHi'
+	if i == j 'noOp'
+		return 0
+	end 'noOp'
+	let capacity = __Internals.loadIndirect(self + MM_OFFSET_CAPACITY)
+	if capacity < 0 'cow'
+		_ = __managed_mem_cow_check(self)
+	end 'cow'
+	let elemSize = __Internals.loadIndirect(self + MM_OFFSET_ELEMENT_SIZE)
+	let buffer = __Internals.loadIndirect(self)
+	// element_size == 0 is the bit-packed-bool sentinel: swap the two bits in
+	// place (read both, write each to the other's slot) — no whole-byte copy.
+	if elemSize == 0 'bit'
+		let iByteAddr = buffer + (i shr 3)
+		let iBitOff = i and 7
+		let jByteAddr = buffer + (j shr 3)
+		let jBitOff = j and 7
+		let iCur = __Internals.loadByte(iByteAddr, offset: 0)
+		let jCur = __Internals.loadByte(jByteAddr, offset: 0)
+		let iBit = (iCur shr iBitOff) and 1
+		let jBit = (jCur shr jBitOff) and 1
+		let iCleared = iCur and (255 xor (1 shl iBitOff))
+		__Internals.storeByte(iByteAddr, offset: 0, value: iCleared or (jBit shl iBitOff))
+		// Re-read j's byte: i and j may live in the SAME byte, so the store above
+		// can have changed it — operate on the freshest value to avoid clobbering.
+		let jCur2 = __Internals.loadByte(jByteAddr, offset: 0)
+		let jCleared = jCur2 and (255 xor (1 shl jBitOff))
+		__Internals.storeByte(jByteAddr, offset: 0, value: jCleared or (iBit shl jBitOff))
+		return 0
+	end 'bit'
+	let iAddr = buffer + i * elemSize
+	let jAddr = buffer + j * elemSize
+	// Byte-wise exchange of the two element_size-byte slots. The slots are
+	// distinct (i != j), so no overlap — a forward byte loop is safe.
+	var b = 0
+	while b < elemSize 'swapBytes'
+		let ib = __Internals.loadByte(iAddr, offset: b)
+		let jb = __Internals.loadByte(jAddr, offset: b)
+		__Internals.storeByte(iAddr, offset: b, value: jb)
+		__Internals.storeByte(jAddr, offset: b, value: ib)
+		b = b + 1
+	end 'swapBytes'
+	return 0
+end '__managed_mem_swap'
+
+// rawSet(self, idx, value) — store `value` into slot `idx` as a pure
+// element_size-byte overwrite, with NO refcount traffic: it does NOT decref the
+// displaced occupant (unlike `set`) and does NOT assume the stored value carries
+// a +1 to move in. This is the relocation primitive for a PERMUTATION (the sort):
+// the same multiset of elements is shuffled within the buffer, so every element's
+// refcount must stay invariant — the displaced occupant is not discarded, it is
+// being moved elsewhere by another rawSet in the same pass. Bounds: idx ∈
+// [0, capacity); COW-materializes a shared buffer first. For a scalar element the
+// `value` IS the datum; for a managed/struct element it is the element pointer.
+// Throws indexOutOfBounds (wire 1) on OOB.
+function __managed_mem_raw_set(self MachineWord, idx MachineWord, value MachineWord) returns MachineWord throws __ManagedMemoryError
+	if idx < 0 'lo'
+		throw __ManagedMemoryError.indexOutOfBounds
+	end 'lo'
+	var capacity = __Internals.loadIndirect(self + MM_OFFSET_CAPACITY)
+	if capacity < 0 'cow'
+		_ = __managed_mem_cow_check(self)
+		capacity = __Internals.loadIndirect(self + MM_OFFSET_CAPACITY)
+	end 'cow'
+	if idx >= capacity 'hi'
+		throw __ManagedMemoryError.indexOutOfBounds
+	end 'hi'
+	let elemSize = __Internals.loadIndirect(self + MM_OFFSET_ELEMENT_SIZE)
+	let buffer = __Internals.loadIndirect(self)
+	// element_size == 0 is the bit-packed-bool sentinel: read-modify-write the bit.
+	if elemSize == 0 'bit'
+		__managed_mem_write_bit(buffer, idx: idx, value: value)
+		return 0
+	end 'bit'
+	__managed_mem_store_sized(buffer + idx * elemSize, elemSize: elemSize, value: value)
+	return 0
+end '__managed_mem_raw_set'
 
 // Buffer-level Copy-On-Write. If capacity >= 0 the buffer is already
 // mm_alloc-owned and writable — no-op. If capacity < 0 (rdata = -2 or
@@ -916,21 +1902,36 @@ end '__managed_mem_set'
 // binary's read-only section; slice buffers are owned by their parent).
 // Non-throwing.
 function __managed_mem_cow_check(self MachineWord) returns MachineWord
-	let capacity = __Internals.loadIndirect(self + 16)
+	let capacity = __Internals.loadIndirect(self + MM_OFFSET_CAPACITY)
 	if capacity >= 0 'noCopy'
 		return 0
 	end 'noCopy'
-	let length = __Internals.loadIndirect(self + 8)
-	let elemSize = __Internals.loadIndirect(self + 24)
-	let byteLen = length * elemSize
-	// destructor=0, tag=0: the buffer is a raw byte allocation (no nested
-	// heap refs). mm_alloc clamps zero-sized requests to 1.
-	let newBuf = __mm_alloc(byteLen, destructor: 0, tag: 0)
+	let length = __Internals.loadIndirect(self + MM_OFFSET_LENGTH)
+	let elemSize = __Internals.loadIndirect(self + MM_OFFSET_ELEMENT_SIZE)
+	// Bit-packed bool buffers (element_size == 0) hold (length + 7) >> 3 bytes;
+	// every other element type holds length * element_size bytes.
+	let byteLen = ((length + 7) shr 3) if elemSize == 0 else (length * elemSize)
+	// Owned (rc=1) raw byte buffer — see __managed_mem_alloc_buffer. mm_alloc
+	// clamps zero-sized requests to 1.
+	let newBuf = __managed_mem_alloc_buffer(byteLen)
 	let oldBuf = __Internals.loadIndirect(self)
 	// memcpy handles byteLen == 0 as a no-op per ABI.
 	__Internals.memcpy(newBuf, src: oldBuf, size: byteLen)
 	__Internals.storeIndirect(self, value: newBuf)
-	__Internals.storeIndirect(self + 16, value: length)
+	__Internals.storeIndirect(self + MM_OFFSET_CAPACITY, value: length)
+	// Promote the record to ROOT now that it owns a private heap buffer.
+	// `__destruct___ManagedMemory` keys teardown on parent_ptr (NOT capacity), so
+	// without this the record kept its pre-COW parent — RDATA (-2: "nothing to
+	// free", so the new owned buffer leaked — the append/grow-from-literal leak) or
+	// a slice parent (whose ref we must now drop, since we no longer alias its
+	// buffer). Capture the old parent before overwriting, set ROOT, then release a
+	// real slice parent (a heap pointer, i.e. not one of the ROOT/RDATA/UNINIT
+	// sentinels).
+	let oldParent = __Internals.loadIndirect(self + MM_OFFSET_PARENT)
+	__Internals.storeIndirect(self + MM_OFFSET_PARENT, value: MM_PARENT_ROOT)
+	if oldParent != MM_PARENT_ROOT and oldParent != MM_PARENT_RDATA and oldParent != MM_PARENT_UNINIT 'wasSlice'
+		__mm_decref(oldParent)
+	end 'wasSlice'
 	return 0
 end '__managed_mem_cow_check'
 
@@ -940,16 +1941,16 @@ end '__managed_mem_cow_check'
 // runtime.std, so we cross the bridge via `__Internals.mmRealloc`.
 function __managed_mem_grow(self MachineWord, newCap MachineWord) returns MachineWord throws __ManagedMemoryError
 	_ = __managed_mem_cow_check(self)
-	let capacity = __Internals.loadIndirect(self + 16)
+	let capacity = __Internals.loadIndirect(self + MM_OFFSET_CAPACITY)
 	if newCap < capacity 'tooSmall'
 		throw __ManagedMemoryError.invalidCapacity
 	end 'tooSmall'
-	let elemSize = __Internals.loadIndirect(self + 24)
+	let elemSize = __Internals.loadIndirect(self + MM_OFFSET_ELEMENT_SIZE)
 	let newSize = newCap * elemSize
 	let oldBuf = __Internals.loadIndirect(self)
 	let newBuf = __Internals.mmRealloc(oldBuf, newSize: newSize)
 	__Internals.storeIndirect(self, value: newBuf)
-	__Internals.storeIndirect(self + 16, value: newCap)
+	__Internals.storeIndirect(self + MM_OFFSET_CAPACITY, value: newCap)
 	return 0
 end '__managed_mem_grow'
 
@@ -959,8 +1960,8 @@ function __managed_mem_byte_at(self MachineWord, i MachineWord) returns MachineW
 	if i < 0 'lo'
 		throw __ManagedMemoryError.invalidByteRange
 	end 'lo'
-	let length = __Internals.loadIndirect(self + 8)
-	let elemSize = __Internals.loadIndirect(self + 24)
+	let length = __Internals.loadIndirect(self + MM_OFFSET_LENGTH)
+	let elemSize = __Internals.loadIndirect(self + MM_OFFSET_ELEMENT_SIZE)
 	let limit = length * elemSize
 	if i >= limit 'hi'
 		throw __ManagedMemoryError.invalidByteRange
@@ -976,8 +1977,8 @@ function __managed_mem_set_byte(self MachineWord, i MachineWord, value MachineWo
 	if i < 0 'lo'
 		throw __ManagedMemoryError.invalidByteRange
 	end 'lo'
-	let length = __Internals.loadIndirect(self + 8)
-	let elemSize = __Internals.loadIndirect(self + 24)
+	let length = __Internals.loadIndirect(self + MM_OFFSET_LENGTH)
+	let elemSize = __Internals.loadIndirect(self + MM_OFFSET_ELEMENT_SIZE)
 	let limit = length * elemSize
 	if i >= limit 'hi'
 		throw __ManagedMemoryError.invalidByteRange
@@ -995,11 +1996,11 @@ function __managed_mem_remove(self MachineWord, idx MachineWord) returns Machine
 	if idx < 0 'lo'
 		throw __ManagedMemoryError.indexOutOfBounds
 	end 'lo'
-	let length = __Internals.loadIndirect(self + 8)
+	let length = __Internals.loadIndirect(self + MM_OFFSET_LENGTH)
 	if idx >= length 'hi'
 		throw __ManagedMemoryError.indexOutOfBounds
 	end 'hi'
-	let elemSize = __Internals.loadIndirect(self + 24)
+	let elemSize = __Internals.loadIndirect(self + MM_OFFSET_ELEMENT_SIZE)
 	let buffer = __Internals.loadIndirect(self)
 	let elemAddr = buffer + idx * elemSize
 	// Element-width dispatch mirrors __managed_mem_get. After the load we
@@ -1027,7 +2028,7 @@ function __managed_mem_remove(self MachineWord, idx MachineWord) returns Machine
 		__Internals.storeByte(buffer, offset: i - elemSize, value: byte)
 		i = i + 1
 	end 'shiftLoop'
-	__Internals.storeIndirect(self + 8, value: length - 1)
+	__Internals.storeIndirect(self + MM_OFFSET_LENGTH, value: length - 1)
 	return result
 end '__managed_mem_remove'
 
@@ -1042,11 +2043,11 @@ function __managed_mem_shift_right(self MachineWord, idx MachineWord, count Mach
 	if count < 0 'countNeg'
 		throw __ManagedMemoryError.shiftOutOfBounds
 	end 'countNeg'
-	let capacity = __Internals.loadIndirect(self + 16)
+	let capacity = __Internals.loadIndirect(self + MM_OFFSET_CAPACITY)
 	if idx + count > capacity 'oob'
 		throw __ManagedMemoryError.shiftOutOfBounds
 	end 'oob'
-	let elemSize = __Internals.loadIndirect(self + 24)
+	let elemSize = __Internals.loadIndirect(self + MM_OFFSET_ELEMENT_SIZE)
 	let buffer = __Internals.loadIndirect(self)
 	// sourceLastByte = (idx + count) * elemSize - 1; descend to
 	// startByte = idx * elemSize.
@@ -1057,6 +2058,21 @@ function __managed_mem_shift_right(self MachineWord, idx MachineWord, count Mach
 		__Internals.storeByte(buffer, offset: i + elemSize, value: byte)
 		i = i - 1
 	end 'loop'
+	// Zero the vacated source slot at buffer[idx] so the caller's following
+	// `set(idx, value)` does not decref the STALE DUPLICATE pointer the shift left
+	// there (the original occupant was copied to buffer[idx+1]). Without this, the
+	// `set` decref-old frees the element we just relocated → dangling slot at idx+1.
+	// This MIRRORS the C# bootstrap's `LowerManagedMemShift` intrinsic, which is the
+	// reference implementation: C# intercepts every `__managed_mem_*` builtin and
+	// emits its own lowering that zeroes this same slot ("prevent the subsequent
+	// set() from decrefing a stale duplicate pointer"). The self-hosted compiler runs
+	// THIS Maxon body instead, so it must carry the identical zeroing.
+	var z = startByte
+	let holeEnd = startByte + elemSize
+	while z < holeEnd 'clearHole'
+		__Internals.storeByte(buffer, offset: z, value: 0)
+		z = z + 1
+	end 'clearHole'
 	return 0
 end '__managed_mem_shift_right'
 
@@ -1071,11 +2087,11 @@ function __managed_mem_shift_left(self MachineWord, idx MachineWord, count Machi
 	if count < 0 'countNeg'
 		throw __ManagedMemoryError.shiftOutOfBounds
 	end 'countNeg'
-	let capacity = __Internals.loadIndirect(self + 16)
+	let capacity = __Internals.loadIndirect(self + MM_OFFSET_CAPACITY)
 	if idx + count > capacity 'oob'
 		throw __ManagedMemoryError.shiftOutOfBounds
 	end 'oob'
-	let elemSize = __Internals.loadIndirect(self + 24)
+	let elemSize = __Internals.loadIndirect(self + MM_OFFSET_ELEMENT_SIZE)
 	let buffer = __Internals.loadIndirect(self)
 	let endByte = (idx + count) * elemSize
 	var i = idx * elemSize
@@ -1093,10 +2109,10 @@ end '__managed_mem_shift_left'
 // responsibility (we use self.element_size for byte arithmetic on both
 // sides — same as the bootstrap). Non-throwing.
 function __managed_mem_append(self MachineWord, other MachineWord) returns MachineWord
-	let selfLen = __Internals.loadIndirect(self + 8)
-	let otherLen = __Internals.loadIndirect(other + 8)
+	let selfLen = __Internals.loadIndirect(self + MM_OFFSET_LENGTH)
+	let otherLen = __Internals.loadIndirect(other + MM_OFFSET_LENGTH)
 	let newLength = selfLen + otherLen
-	let capacity = __Internals.loadIndirect(self + 16)
+	let capacity = __Internals.loadIndirect(self + MM_OFFSET_CAPACITY)
 	if capacity < newLength 'doGrow'
 		// Geometric growth: request max(newLength, capacity*2) so a series
 		// of `append` calls runs in amortized O(1) per element. Without
@@ -1117,13 +2133,32 @@ function __managed_mem_append(self MachineWord, other MachineWord) returns Machi
 		// wire is also discarded because no try/otherwise surrounds the call.
 		_ = try __managed_mem_grow(self, newCap: requested) otherwise 0
 	end 'doGrow'
-	let elemSize = __Internals.loadIndirect(self + 24)
+	let elemSize = __Internals.loadIndirect(self + MM_OFFSET_ELEMENT_SIZE)
 	let selfBuf = __Internals.loadIndirect(self)
 	let otherBuf = __Internals.loadIndirect(other)
 	let dst = selfBuf + selfLen * elemSize
 	let nBytes = otherLen * elemSize
 	__Internals.memcpy(dst, src: otherBuf, size: nBytes)
-	__Internals.storeIndirect(self + 8, value: newLength)
+
+	// Managed-element append SHARES the copied elements with `other`: take +1 on
+	// each copied slot (released once by each record's teardown walk) and
+	// propagate the element_destroy stamp onto a destination that doesn't carry
+	// it yet (an `Array.create()`-fresh accumulator) so the destination's walk
+	// actually fires. Either record may carry the stamp — read both. Without
+	// this, freeing the source array freed the appended elements out from under
+	// the destination (the append-managed-elements source-freed UAF).
+	let selfDestroy = __Internals.loadIndirect(self + MM_OFFSET_ELEMENT_DESTROY)
+	let otherDestroy = __Internals.loadIndirect(other + MM_OFFSET_ELEMENT_DESTROY)
+	var elementDestroy = selfDestroy
+	if elementDestroy == 0 'inheritStamp'
+		elementDestroy = otherDestroy
+		__Internals.storeIndirect(self + MM_OFFSET_ELEMENT_DESTROY, value: elementDestroy)
+	end 'inheritStamp'
+	if elementDestroy != 0 'managedElems'
+		__managed_mem_retain_range(dst, count: otherLen, elemSize: elemSize)
+	end 'managedElems'
+
+	__Internals.storeIndirect(self + MM_OFFSET_LENGTH, value: newLength)
 	return 0
 end '__managed_mem_append'
 
@@ -1139,29 +2174,66 @@ function __managed_mem_slice(self MachineWord, start MachineWord, endIdx Machine
 	if endIdx < start 'endLow'
 		throw __ManagedMemoryError.sliceOutOfBounds
 	end 'endLow'
-	let length = __Internals.loadIndirect(self + 8)
+	let length = __Internals.loadIndirect(self + MM_OFFSET_LENGTH)
 	if endIdx > length 'endHi'
 		throw __ManagedMemoryError.sliceOutOfBounds
 	end 'endHi'
-	let elemSize = __Internals.loadIndirect(self + 24)
+	let elemSize = __Internals.loadIndirect(self + MM_OFFSET_ELEMENT_SIZE)
 	let sliceLen = endIdx - start
 	let byteLen = sliceLen * elemSize
 	let destructor = __Internals.destructManagedMemoryAddr()
-	let newStruct = __mm_alloc(40, destructor: destructor, tag: 0)
+	let newStruct = __mm_alloc(MANAGED_MEM_RECORD_SIZE, destructor: destructor, tag: MM_TAG_MANAGED_MEMORY)
+	// alloc-at-0 → restore the rc=1 contract callers assume. `Array.slice` binds this
+	// record into a NEW Array via `Self{managed: newManaged}`; that owning field holds
+	// the lone reference, dropped exactly once by the Array's destructor. The call
+	// result is classified `callReturnRc1` (owns a +1), so without this incref the
+	// record stays rc=0 and the owner's single decref goes 0->-1 and never frees → the
+	// sliced record + its copied buffer leak.
+	__mm_incref(newStruct)
+	// Managed-element slices SHARE their elements with the source: the memcpy
+	// below copies raw slot POINTERS, so the new record must take its own +1 on
+	// each live slot and inherit the source's element_destroy stamp — its
+	// teardown walk then releases exactly the refs taken here. Without the
+	// retain+stamp, the source's clear/teardown freed the shared elements under
+	// the slice (the `Log.stopCapture` clone UAF that corrupted concurrent sort
+	// data via slab-slot reuse) and the slice's own copies leaked.
+	let elementDestroy = __Internals.loadIndirect(self + MM_OFFSET_ELEMENT_DESTROY)
 	var newBuf = 0
 	if sliceLen != 0 'hasContent'
-		newBuf = __mm_alloc(byteLen, destructor: 0, tag: 0)
+		newBuf = __managed_mem_alloc_buffer(byteLen)
 		let srcBuf = __Internals.loadIndirect(self)
 		let srcAddr = srcBuf + start * elemSize
 		__Internals.memcpy(newBuf, src: srcAddr, size: byteLen)
+		if elementDestroy != 0 'managedElems'
+			__managed_mem_retain_range(newBuf, count: sliceLen, elemSize: elemSize)
+		end 'managedElems'
 	end 'hasContent'
 	__Internals.storeIndirect(newStruct, value: newBuf)
-	__Internals.storeIndirect(newStruct + 8, value: sliceLen)
-	__Internals.storeIndirect(newStruct + 16, value: sliceLen)
-	__Internals.storeIndirect(newStruct + 24, value: elemSize)
-	__Internals.storeIndirect(newStruct + 32, value: -1)
+	__Internals.storeIndirect(newStruct + MM_OFFSET_LENGTH, value: sliceLen)
+	__Internals.storeIndirect(newStruct + MM_OFFSET_CAPACITY, value: sliceLen)
+	__Internals.storeIndirect(newStruct + MM_OFFSET_ELEMENT_SIZE, value: elemSize)
+	__Internals.storeIndirect(newStruct + MM_OFFSET_PARENT, value: MM_PARENT_ROOT)
+	__Internals.storeIndirect(newStruct + MM_OFFSET_ELEMENT_DESTROY, value: elementDestroy)
 	return newStruct
 end '__managed_mem_slice'
+
+// Take +1 on each live (non-null) managed-pointer slot in `buffer[0, count)`.
+// The retain mirror of `__managed_mem_walk_elements`: a record whose
+// element_destroy is stamped (always `&__mm_decref` — managed-pointer
+// elements) releases each slot once at teardown, so a helper that copies slot
+// pointers into a walked buffer (`slice`, `append`) must take the matching +1
+// here. Callers gate on `element_destroy != 0`, so a raw/primitive buffer is
+// never walked (increfing a raw int would fault).
+function __managed_mem_retain_range(buffer MachineWord, count MachineWord, elemSize MachineWord)
+	var i = 0
+	while i < count 'eachElem'
+		let slot = __Internals.loadIndirect(buffer + i * elemSize)
+		if slot != 0 'live'
+			__mm_incref(slot)
+		end 'live'
+		i = i + 1
+	end 'eachElem'
+end '__managed_mem_retain_range'
 
 // create(count, elemSize) — static `__ManagedMemory.create`. Allocates a
 // fresh root __ManagedMemory header plus, when count > 0, a fresh
@@ -1169,20 +2241,66 @@ end '__managed_mem_slice'
 // capacity=count, element_size=elemSize, parent_ptr=-1 (root).
 // Non-throwing (allocation-failure signalling is reserved for a future hook).
 function __managed_mem_create(count MachineWord, elemSize MachineWord) returns MachineWord
+	return __managed_mem_create_managed(count, elemSize: elemSize, elementDestroy: 0)
+end '__managed_mem_create'
+
+// create_managed(count, elemSize, elementDestroy) — like __managed_mem_create
+// but additionally stamps element_destroy@40 with the per-element teardown
+// function pointer. Lowering passes &__mm_decref here when the element type is
+// drop-tracked and stored as an 8-byte managed pointer, so the destructor's
+// ROOT-branch element-walk decrefs each live element (cascading into the
+// element's own destructor). For raw/byte/primitive element buffers lowering
+// passes 0 (via __managed_mem_create), leaving the walk disabled.
+function __managed_mem_create_managed(count MachineWord, elemSize MachineWord, elementDestroy MachineWord) returns MachineWord
 	let destructor = __Internals.destructManagedMemoryAddr()
-	let newStruct = __mm_alloc(40, destructor: destructor, tag: 0)
+	let newStruct = __mm_alloc(MANAGED_MEM_RECORD_SIZE, destructor: destructor, tag: MM_TAG_MANAGED_MEMORY)
+	// alloc-at-0 → restore the rc=1 contract callers assume. The new record is bound
+	// into an OWNING container (an array literal's `Array.init(record)` transparent
+	// wrap, a String, `mrt_read_stdin_managed`, …) whose field holds the lone reference
+	// and whose destructor drops it once. `__mm_alloc` returns rc=0, and a transparent-
+	// wrap/move owner supplies no field-store-incref, so without this the owner's single
+	// decref goes 0->-1 and never frees → the record + buffer (+ any managed elements)
+	// leak (the array-literal-of-Box leak). Mirrors `__managed_mem_slice` and the
+	// lowering's `synthesizeManagedFieldInits` (both rc=1).
+	__mm_incref(newStruct)
 	var newBuf = 0
 	if count > 0 'hasContent'
 		let size = count * elemSize
-		newBuf = __mm_alloc(size, destructor: 0, tag: 0)
+		newBuf = __managed_mem_alloc_buffer(size)
 	end 'hasContent'
 	__Internals.storeIndirect(newStruct, value: newBuf)
-	__Internals.storeIndirect(newStruct + 8, value: 0)
-	__Internals.storeIndirect(newStruct + 16, value: count)
-	__Internals.storeIndirect(newStruct + 24, value: elemSize)
-	__Internals.storeIndirect(newStruct + 32, value: -1)
+	__Internals.storeIndirect(newStruct + MM_OFFSET_LENGTH, value: 0)
+	__Internals.storeIndirect(newStruct + MM_OFFSET_CAPACITY, value: count)
+	__Internals.storeIndirect(newStruct + MM_OFFSET_ELEMENT_SIZE, value: elemSize)
+	__Internals.storeIndirect(newStruct + MM_OFFSET_PARENT, value: MM_PARENT_ROOT)
+	__Internals.storeIndirect(newStruct + MM_OFFSET_ELEMENT_DESTROY, value: elementDestroy)
 	return newStruct
-end '__managed_mem_create'
+end '__managed_mem_create_managed'
+
+// set_element_destroy_from_layout(self, layoutDesc, elementDestroy) — stamp the
+// record's element_destroy@40 from a runtime layout descriptor. Used by the
+// generic-container element-walk wiring: inside a generic `Array<Element>` body
+// the backing `__ManagedMemory` is created/grown where `Element` is still an
+// unbound type-parameter, so `mmCreateElementIsManagedPointer`'s static check
+// can't see whether the element is managed — but the body DOES carry the
+// instance's layout descriptor (forwarded as the implicit layout param). This
+// helper reads that descriptor's `flags@24` HAS_HEAP_REFS bit and, when set,
+// stamps `elementDestroy` (lowering passes &__mm_decref for pointer elements) so
+// the destructor's ROOT-branch element-walk fires. When the bit is clear (raw /
+// primitive elements) the record's element_destroy stays 0 and the walk is inert
+// — so a raw-int array is never walked (decref-ing a raw int would fault). Set-
+// once / idempotent: re-stamping the same pointer on every grow is harmless.
+// `layoutDesc == 0` is tolerated (no descriptor available → leave 0, no walk).
+function __managed_mem_set_element_destroy_from_layout(self MachineWord, layoutDesc MachineWord, elementDestroy MachineWord) returns MachineWord
+	if layoutDesc == 0 'noDesc'
+		return 0
+	end 'noDesc'
+	let flags = __Internals.loadIndirect(layoutDesc + LAYOUT_OFFSET_FLAGS)
+	if (flags and LAYOUT_FLAG_HAS_HEAP_REFS) != 0 'managed'
+		__Internals.storeIndirect(self + MM_OFFSET_ELEMENT_DESTROY, value: elementDestroy)
+	end 'managed'
+	return 0
+end '__managed_mem_set_element_destroy_from_layout'
 
 // toCString(self) — return a NUL-terminated byte pointer into self's buffer.
 // A zero-copy slice or rdata-backed literal often has `buffer[length] != 0`
@@ -1196,7 +2314,7 @@ end '__managed_mem_create'
 // `newCap = length + 1 > capacity` can never trip `invalidCapacity`.
 function __managed_mem_to_cstring(self MachineWord) returns MachineWord
 	let buffer = __Internals.loadIndirect(self)
-	let length = __Internals.loadIndirect(self + 8)
+	let length = __Internals.loadIndirect(self + MM_OFFSET_LENGTH)
 	if __Internals.loadByte(buffer, offset: length) == 0 'alreadyTerminated'
 		return buffer
 	end 'alreadyTerminated'
@@ -1204,7 +2322,7 @@ function __managed_mem_to_cstring(self MachineWord) returns MachineWord
 	// value — the rdata/shared sentinels are negative and so are < length + 1,
 	// routing through `grow`, which COWs then reallocs. So reaching the
 	// terminator write below always means we own the buffer.
-	let capacity = __Internals.loadIndirect(self + 16)
+	let capacity = __Internals.loadIndirect(self + MM_OFFSET_CAPACITY)
 	if capacity < length + 1 'needRoom'
 		_ = try __managed_mem_grow(self, newCap: length + 1) otherwise panic("__managed_mem_to_cstring: grow to length+1 cannot shrink")
 	end 'needRoom'
@@ -1228,13 +2346,14 @@ function __managed_mem_from_cstring(cstr MachineWord) returns MachineWord
 	end 'scan'
 	let bufSize = len + 1
 	let destructor = __Internals.destructManagedMemoryAddr()
-	let newStruct = __mm_alloc(40, destructor: destructor, tag: 0)
-	let newBuf = __mm_alloc(bufSize, destructor: 0, tag: 0)
+	let newStruct = __mm_alloc(MANAGED_MEM_RECORD_SIZE, destructor: destructor, tag: MM_TAG_MANAGED_MEMORY)
+	let newBuf = __managed_mem_alloc_buffer(bufSize)
 	__Internals.memcpy(newBuf, src: cstr, size: bufSize)
 	__Internals.storeIndirect(newStruct, value: newBuf)
-	__Internals.storeIndirect(newStruct + 8, value: len)
-	__Internals.storeIndirect(newStruct + 16, value: bufSize)
-	__Internals.storeIndirect(newStruct + 24, value: 1)
-	__Internals.storeIndirect(newStruct + 32, value: -1)
+	__Internals.storeIndirect(newStruct + MM_OFFSET_LENGTH, value: len)
+	__Internals.storeIndirect(newStruct + MM_OFFSET_CAPACITY, value: bufSize)
+	__Internals.storeIndirect(newStruct + MM_OFFSET_ELEMENT_SIZE, value: 1)
+	__Internals.storeIndirect(newStruct + MM_OFFSET_PARENT, value: MM_PARENT_ROOT)
+	__Internals.storeIndirect(newStruct + MM_OFFSET_ELEMENT_DESTROY, value: 0)
 	return newStruct
 end '__managed_mem_from_cstring'

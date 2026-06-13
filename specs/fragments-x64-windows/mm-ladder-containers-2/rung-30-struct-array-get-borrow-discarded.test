@@ -1,0 +1,174 @@
+// Test: rung-30-struct-array-get-borrow-discarded
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Box'
+
+typealias BoxArray = Array with Box
+
+function main() returns ExitCode
+	var xs = BoxArray.create()
+	xs.push(Box.create(7))
+	xs.push(Box.create(9))
+	let first = try xs.get(0) otherwise return 1
+	let v = first.value
+	return v + xs.count()
+end 'main'
+---
+MmTrace: true
+ExitCode: 9
+Stderr: ```
+mm_alloc Array #1 size=8 [main]
+mm_incref Array #1 rc=1 [main]
+mm_alloc __ManagedMemory #2 size=48 [main]
+mm_incref __ManagedMemory #2 rc=1 [main]
+mm_move Array #1 -> return [main]
+mm_alloc Box #3 size=8 [Box.create]
+mm_incref Box #3 rc=1 [Box.create]
+mm_move Box #3 -> return [Box.create]
+mm_move Box #3 -> container [main]
+mm_alloc <raw> #4 size=32 [main]
+mm_incref <raw> #4 rc=1 [main]
+mm_alloc Box #5 size=8 [Box.create]
+mm_incref Box #5 rc=1 [Box.create]
+mm_move Box #5 -> return [Box.create]
+mm_move Box #5 -> container [main]
+mm_incref Box #3 rc=2 [main]
+mm_decref Box #3 rc=1 [main]
+mm_decref Array #1 rc=0 [main]
+  mm_decref __ManagedMemory #2 rc=0 [main]
+    mm_decref Box #3 rc=0 [main]
+      mm_free Box #3
+    mm_decref Box #5 rc=0 [main]
+      mm_free Box #5
+    mm_decref <raw> #4 rc=0 [main]
+      mm_free <raw> #4
+    mm_free __ManagedMemory #2
+  mm_free Array #1
+```
+RequiredIRSelfhosted: ```
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=48
+    x64.lea r12, [rip+__mtstr_scope_main]
+    x64.lea r13, [rip+__layout_Array_Box]
+    x64.lea r14, [rip+__mtstr_scope_Box_create]
+    x64.mov r15d, 60
+    x64.xor r8d, r8d
+    x64.mov [rbp+-8], r8
+    x64.mov r8d, 8
+    x64.mov r8d, 7
+    x64.mov rcx, r12
+    x64.call mm_scope_push
+    x64.mov rcx, r13
+    x64.call Array.create
+    x64.mov r12, r8
+    x64.mov rcx, r14
+    x64.call mm_scope_push
+    x64.mov rcx, 8
+    x64.mov rax, r15
+    x64.mov rdx, [rbp+-8]
+    x64.call stdlib.__mm_alloc
+    x64.mov r13, r8
+    x64.mov rcx, r13
+    x64.call stdlib.__mm_incref
+    x64.mov r8, 7
+    x64.mov [r13+0], r8 (8b)
+    x64.mov rcx, r13
+    x64.call mm_move_return
+    x64.call mm_scope_pop
+    x64.mov rcx, r13
+    x64.call mm_move_container
+    x64.lea rax, [rip+__layout_Array_Box]
+    x64.mov rcx, r12
+    x64.mov rdx, r13
+    x64.call Array.push
+    x64.lea r13, [rip+__mtstr_scope_Box_create]
+    x64.mov rcx, r13
+    x64.call mm_scope_push
+    x64.mov eax, 60
+    x64.xor edx, edx
+    x64.mov ecx, 8
+    x64.call stdlib.__mm_alloc
+    x64.mov r13, r8
+    x64.mov rcx, r13
+    x64.call stdlib.__mm_incref
+    x64.mov r8d, 9
+    x64.mov [r13+0], r8 (8b)
+    x64.mov rcx, r13
+    x64.call mm_move_return
+    x64.call mm_scope_pop
+    x64.mov rcx, r13
+    x64.call mm_move_container
+    x64.lea rax, [rip+__layout_Array_Box]
+    x64.mov rcx, r12
+    x64.mov rdx, r13
+    x64.call Array.push
+    x64.xor edx, edx
+  inlined_Array.get_0_0:
+    x64.mov rcx, [r12+0] (8b)
+    x64.call stdlib.__managed_mem_get
+    x64.mov r13, r8
+    x64.test rdx, rdx
+    x64.je inlined_Array.get_3_0
+  inlined_Array.get_1_0:
+    x64.mov edx, 1
+    x64.xor ecx, ecx
+    x64.mov r13, rcx
+    x64.jmp inline_cont_main_0
+  inlined_Array.get_3_0:
+    x64.xor r14d, r14d
+    x64.jmp __rc_edge_6_0
+  inline_cont_main_0:
+    x64.test rdx, rdx
+    x64.je try_0.merge
+  try_0.otherwise:
+    x64.mov rcx, r12
+    x64.call __mm_decref_maybenull_helper
+    x64.mov rcx, r13
+    x64.call __mm_decref_maybenull_helper
+    x64.call mm_scope_pop
+    x64.mov r8d, 1
+    x64.epilogue
+    x64.ret
+  try_0.merge:
+    x64.mov r14, [r13+0] (8b)
+    x64.lea rdx, [rip+__layout_Array_Box]
+    x64.mov rcx, r12
+    x64.call Array.count
+    x64.mov r15, r8
+    x64.mov rcx, r13
+    x64.call __mm_decref_maybenull_helper
+    x64.mov rcx, r12
+    x64.call __mm_decref_maybenull_helper
+    x64.call mm_scope_pop
+    x64.mov r9d, 4294967295
+    x64.mov r8, r14
+    x64.add r8, r15
+    x64.cmp r8, r9
+    x64.jbe __range_ok_0
+    x64.jmp __range_panic_0
+  __rc_edge_6_0:
+    x64.mov rcx, r13
+    x64.call stdlib.__mm_incref
+    x64.mov rdx, r14
+    x64.jmp inline_cont_main_0
+  __range_panic_0:
+    x64.lea r12, [rip+__panic_msg_71d7ab6d360ee5e1]
+    x64.mov rcx, r12
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+
+```
+---
+---

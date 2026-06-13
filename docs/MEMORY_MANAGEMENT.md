@@ -154,15 +154,24 @@ Types that contain only primitives (e.g., `Point{x: int, y: int}`) have a NULL d
 `__ManagedMemory` is the internal backing store used by `String`, `Array`, and other buffer-based types. It is heap-allocated via `mm_alloc` with its own refcount. The parent struct's destructor calls `mm_decref` on it.
 
 ```
-__ManagedMemory layout (40 bytes):
-+--------------------------------------------+
-| +0   buffer        (ptr) -> heap data      |
-| +8   length        (i64) -> element count  |
-| +16  capacity      (i64) -> ownership mode |
-| +24  element_size   (i64) -> bytes per elem |
-| +32  parent_ptr    (ptr) -> parent struct  |
-+--------------------------------------------+
+__ManagedMemory layout (48 bytes):
++-----------------------------------------------------+
+| +0   buffer          (ptr) -> heap data             |
+| +8   length          (i64) -> element count         |
+| +16  capacity        (i64) -> ownership mode        |
+| +24  element_size    (i64) -> bytes per elem        |
+| +32  parent_ptr      (ptr) -> parent struct         |
+| +40  element_destroy (ptr) -> per-element destructor |
++-----------------------------------------------------+
 ```
+
+The `element_destroy` field at +40 holds a per-element teardown function pointer
+(or `0` for raw/unmanaged elements). When a buffer is a destructor ROOT, the
+`__destruct___ManagedMemory` walk reads this slot and calls it on each element
+before freeing the buffer. The record is a full 48 bytes precisely so this slot
+is in-bounds: a short 40-byte allocation would leave the walk reading adjacent
+heap garbage and calling it as a function pointer. Every allocation site zeroes
+the slot when the elements are raw, so the walk's `== 0` gate no-ops.
 
 The `capacity` field encodes the buffer's ownership mode:
 - **capacity > 0** (owned): buffer is a writable heap allocation. When length reaches capacity, it is reallocated (typically doubled) via `mm_realloc`.

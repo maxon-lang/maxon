@@ -1,0 +1,132 @@
+// Test: rung-18-struct-array-pop-transfer
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Box'
+
+typealias BoxArray = Array with Box
+
+function takeLast(xs BoxArray) returns Integer throws ArrayError
+	let b = try xs.pop() otherwise throw ArrayError.indexOutOfBounds
+	return b.value
+end 'takeLast'
+
+function main() returns ExitCode
+	var xs = BoxArray.create()
+	xs.push(Box.create(7))
+	xs.push(Box.create(9))
+	return try takeLast(xs) otherwise 0
+end 'main'
+---
+MmTrace: true
+ExitCode: 9
+Stderr: ```
+mm_alloc Array #1 size=8 [main]
+mm_incref Array #1 rc=1 [main]
+mm_alloc __ManagedMemory #2 size=48 [main]
+mm_incref __ManagedMemory #2 rc=1 [main]
+mm_move Array #1 -> return [main]
+mm_alloc Box #3 size=8 [Box.create]
+mm_incref Box #3 rc=1 [Box.create]
+mm_move Box #3 -> return [Box.create]
+mm_move Box #3 -> container
+mm_alloc <raw> #4 size=32
+mm_incref <raw> #4 rc=1
+mm_alloc Box #5 size=8 [Box.create]
+mm_incref Box #5 rc=1 [Box.create]
+mm_move Box #5 -> return [Box.create]
+mm_move Box #5 -> container
+mm_decref Box #5 rc=0
+  mm_free Box #5
+mm_decref Array #1 rc=0
+  mm_decref __ManagedMemory #2 rc=0
+    mm_decref Box #3 rc=0
+      mm_free Box #3
+    mm_decref <raw> #4 rc=0
+      mm_free <raw> #4
+    mm_free __ManagedMemory #2
+  mm_free Array #1
+```
+---
+// CompiledIR
+module {
+  func @takeLast(local0: i64) -> i64 {
+  entry:
+    %18 = mir.param local0 : i64
+    %16 = mir.global_addr @__mtstr_scope_takeLast
+    %17 = mir.call @mm_scope_push(%16)
+    %1 = mir.mov_imm 0 : i64
+    %4 = mir.global_addr @__layout_Array_Box
+    %5, %6 = mir.try_call @Array.pop(%18, %4)
+    %8 = mir.cmp ne, %6, %1
+    mir.cond_br %8 [then: try_0.otherwise(), else: try_0.merge()]
+  try_0.otherwise:
+    %11 = mir.mov_imm 1 : i64
+    %20 = mir.call @mm_scope_pop()
+    mir.error_return %1, %11
+  try_0.merge:
+    %14 = mir.load %5, 0 width: qword
+    %19 = mir.call @stdlib.__mm_decref(%5)
+    %21 = mir.call @mm_scope_pop()
+    mir.error_return %14, %1
+  }
+  func @main() -> u8 {
+  entry:
+    %21 = mir.global_addr @__mtstr_scope_main
+    %22 = mir.call @mm_scope_push(%21)
+    %1 = mir.global_addr @__layout_Array_Box
+    %2 = mir.call @Array.create(%1)
+    %4 = mir.mov_imm 7 : i64
+    %24 = mir.global_addr @__mtstr_scope_Box_create
+    %25 = mir.call @mm_scope_push(%24)
+    %26 = mir.mov_imm 8 : i64
+    %27 = mir.mov_imm 0 : i64
+    %28 = mir.mov_imm 60 : i64
+    %29 = mir.call @stdlib.__mm_alloc(%26, %27, %28)
+    %42 = mir.call @stdlib.__mm_incref(%29)
+    mir.store %4, %29, 0 width: qword
+    %31 = mir.call @mm_move_return(%29)
+    %32 = mir.call @mm_scope_pop()
+    %6 = mir.global_addr @__layout_Array_Box
+    %45 = mir.call @mm_move_container(%29)
+    %7 = mir.call @Array.push(%2, %29, %6)
+    %9 = mir.mov_imm 9 : i64
+    %33 = mir.global_addr @__mtstr_scope_Box_create
+    %34 = mir.call @mm_scope_push(%33)
+    %35 = mir.mov_imm 8 : i64
+    %36 = mir.mov_imm 0 : i64
+    %37 = mir.mov_imm 60 : i64
+    %38 = mir.call @stdlib.__mm_alloc(%35, %36, %37)
+    %43 = mir.call @stdlib.__mm_incref(%38)
+    mir.store %9, %38, 0 width: qword
+    %40 = mir.call @mm_move_return(%38)
+    %41 = mir.call @mm_scope_pop()
+    %11 = mir.global_addr @__layout_Array_Box
+    %46 = mir.call @mm_move_container(%38)
+    %12 = mir.call @Array.push(%2, %38, %11)
+    %14, %15 = mir.try_call @takeLast(%2)
+    %44 = mir.call @stdlib.__mm_decref(%2)
+    %16 = mir.mov_imm 0 : i64
+    %17 = mir.cmp ne, %15, %16
+    mir.cond_br %17 [then: try_0.otherwise(), else: try_0.merge(%14)]
+  try_0.otherwise:
+    %19 = mir.mov_imm 0 : i64
+    mir.br try_0.merge(%19)
+  try_0.merge:
+    %47 = mir.call @mm_scope_pop()
+    %48 = mir.mov_imm 125 : i64
+    %49 = mir.cmp ugt, %23, %48
+    mir.cond_br %49 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %50 = mir.global_addr @__panic_msg_619486479506635f
+    %51 = mir.call @mrt_panic(%50)
+  __range_ok_0:
+    mir.ret %23
+  }
+}
+---

@@ -54,7 +54,10 @@ function printUsage()
 	print("\n")
 	print("Build options (build, run):\n")
 	print("  --emit-ir                Write .ir file\n")
-	print("  --dump-stages            Write IR at each pipeline stage\n")
+	print("  --mm-trace               Materialize the mm-trace runtime (alloc/incref/decref/drop/free to stderr) + bypass the stdlib cache\n")
+	print("  --leak-check             Wire the process-exit leak gate: exit 101 if any allocation is live at exit (uses the stdlib cache)\n")
+	print("  --dump-stages[=NAMES]    Write IR at each pipeline stage (user program only); NAMES = comma-separated pass-name substrings to dump only matching stages (e.g. =insert-refcounts)\n")
+	print("  --dump-stages-stdlib[=NAMES]  Like --dump-stages but include the full stdlib IR in each stage file\n")
 	print("  --track-allocs           Track heap allocations and print memory stats\n")
 	print("  --coverage               Emit a coverage-instrumented executable + .covmap\n")
 	print("\n")
@@ -84,6 +87,8 @@ function runBuild(args MaxonArgs) returns ExitCode
 	irDump.emitFinal = args.emitIr
 	if args.dumpStages 'wantStages'
 		irDump.stagesBasePath = fp.changeExtension("").toString()
+		irDump.stagesIncludeStdlib = args.dumpStagesStdlib
+		irDump.stagesFilter = args.dumpStagesFilter
 	end 'wantStages'
 	var irOutputPath = FilePath from ""
 	if args.emitIr 'wantIr'
@@ -91,7 +96,7 @@ function runBuild(args MaxonArgs) returns ExitCode
 	end 'wantIr'
 
 	let startMs = Clock.nowMs()
-	let outputPath = try compile(fp, target: args.target(), coverage: args.coverage, irDump: irDump, irOutputPath: irOutputPath) otherwise (e) 'err'
+	let outputPath = try compile(fp, target: args.target(), coverage: args.coverage, irDump: irDump, irOutputPath: irOutputPath, mmTrace: args.mmTrace, leakCheck: args.leakCheck, noStdlibCache: args.noStdlibCache) otherwise (e) 'err'
 		match e 'report'
 			fileNotFound(p) then printError("error: file not found: {p}\n")
 			directoryNotFound(p) then printError("error: directory not found: {p}\n")

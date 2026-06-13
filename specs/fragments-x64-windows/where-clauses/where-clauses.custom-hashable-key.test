@@ -40,7 +40,7 @@ module {
     x64.cmp r8, r9
     x64.jbe __range_ok_0
   __range_panic_0:
-    x64.lea r12, [rip+__panic_msg_aace59db8240f23d]
+    x64.lea r12, [rip+__panic_msg_aff73e450047db95]
     x64.mov rcx, r12
     x64.call mrt_panic
   __range_ok_0:
@@ -58,39 +58,61 @@ module {
   func @main() -> u32 {
   entry:
     x64.prologue stack_size=16
+    x64.xor eax, eax
+    x64.lea rdx, [rip+__destruct_Map]
     x64.mov ecx, 40
-    x64.call mrt_alloc
+    x64.call stdlib.__mm_alloc
     x64.mov r12, r8
+  inlined_stdlib.__mm_incref_0_0:
+    x64.mov r8, r12
+    x64.sub r8, 8
+    x64.lock inc qword ptr [r8]
+  inline_cont_main_0:
+    x64.xor eax, eax
+    x64.xor edx, edx
     x64.mov ecx, 8
-    x64.call mrt_alloc
-    x64.mov r9d, 1
-    x64.mov [r8+0], r9 (8b)
+    x64.call stdlib.__mm_alloc
+    x64.mov r13, r8
+    x64.mov rcx, r13
+    x64.call stdlib.__mm_incref
+    x64.mov r8d, 1
+    x64.mov [r13+0], r8 (8b)
     x64.lea rdi, [rip+__witness_MyKey_Equatable]
     x64.lea rsi, [rip+__witness_MyKey_Hashable]
     x64.lea r9, [rip+__layout_Map_MyKey_Integer]
     x64.mov eax, 42
     x64.mov rcx, r12
-    x64.mov rdx, r8
+    x64.mov rdx, r13
     x64.call Map.insert
-    x64.mov r8, r12
     x64.test rdx, rdx
-    x64.je try_0.merge
+    x64.je __rc_edge_6_0
   try_0.otherwise:
-    x64.xor r8d, r8d
+    x64.xor ecx, ecx
   try_0.merge:
+    x64.call __mm_decref_maybenull_helper
     x64.lea r9, [rip+__witness_MyKey_Equatable]
     x64.lea rax, [rip+__witness_MyKey_Hashable]
     x64.lea rdx, [rip+__layout_Map_MyKey_Integer]
     x64.mov rcx, r12
     x64.call Map.count
-    x64.mov r9d, 4294967295
-    x64.cmp r8, r9
+    x64.mov r13, r8
+    x64.mov rcx, r12
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r8d, 4294967295
+    x64.cmp r13, r8
     x64.jbe __range_ok_0
+    x64.jmp __range_panic_0
+  __rc_edge_6_0:
+    x64.mov rcx, r12
+    x64.call stdlib.__mm_incref
+    x64.mov rcx, r12
+    x64.jmp try_0.merge
   __range_panic_0:
-    x64.lea r12, [rip+__panic_msg_114e61a3e65190db]
+    x64.lea r12, [rip+__panic_msg_4130f817a21c4614]
     x64.mov rcx, r12
     x64.call mrt_panic
   __range_ok_0:
+    x64.mov r8, r13
     x64.epilogue
     x64.ret
   }

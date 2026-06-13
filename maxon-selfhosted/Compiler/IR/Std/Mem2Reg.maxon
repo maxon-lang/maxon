@@ -24,8 +24,15 @@ typealias DefStackArray = Array with ValueIdArray
 // ============================================================
 
 export function promoteMem2Reg(module StdModule) returns StdModule
-	for func in module.functions 'eachFunc'
+	// Index-iterate with a mutable `func` binding (vs. `for func in`): the
+	// ownership threading stamps the per-ValueId classification onto promoted
+	// params and block-arg phis, which mutates the function's valueOwnership/
+	// valueManaged side-tables — and an immutable for-loop element may not be
+	// passed to a mutating function. Mirrors InsertRangeChecks/DeadCodeElimination.
+	for funcIdx in 0 upto module.functions.count() 'eachFunc'
+		var func = try module.functions.get(funcIdx) otherwise panic("invariant: funcIdx < functions.count() but get failed")
 		promoteFunction(func, module: module)
+		try module.functions.set(funcIdx, value: func) otherwise panic("invariant: module.functions.set OOB")
 	end 'eachFunc'
 	return module
 end 'promoteMem2Reg'
@@ -153,6 +160,17 @@ type SlotInfo
 	// the parseTryFallback / parseMatchExpression seeded-with-int-zero slot
 	// whose only "real" stores are the float result/fallback arms.
 	export var valueIsFloat as BoolArray
+	// Refcount-insertion (ownership threading): per-SLOT ownership classification,
+	// captured from each slot's LOADS during analysis (before any ValueId is
+	// remapped) and stamped onto promoted def/phi/param values so the post-mem2reg
+	// `insertRefcounts` pass keys off per-VALUE classification on the SSA form.
+	// `slotOwnership[slotId]` defaults to `notManaged`; `slotManaged` mirrors
+	// `IrFunction.valueManaged`; `slotTypeParam`/`slotTypeParamName` carry the
+	// generic-type-parameter bit + receiver param name for `sys.dropTypeParam`.
+	export var slotOwnership as OwnershipClassArray
+	export var slotManaged as BoolArray
+	export var slotTypeParam as BoolArray
+	export var slotTypeParamName as StringArray
 
 	static function create() returns SlotInfo
 		return Self{
@@ -164,7 +182,11 @@ type SlotInfo
 			slotHasStore: BoolArray.create(),
 			slotHasLoad: BoolArray.create(),
 			slotAddressTaken: BoolArray.create(),
-			valueIsFloat: BoolArray.create()
+			valueIsFloat: BoolArray.create(),
+			slotOwnership: OwnershipClassArray.create(),
+			slotManaged: BoolArray.create(),
+			slotTypeParam: BoolArray.create(),
+			slotTypeParamName: StringArray.create()
 		}
 	end 'create'
 end 'SlotInfo'
@@ -190,6 +212,18 @@ function growSlotInfo(slotId VarSlot, info SlotInfo)
 	while info.slotAddressTaken.count() < needed 'growAT'
 		info.slotAddressTaken.push(false)
 	end 'growAT'
+	while info.slotOwnership.count() < needed 'growSO'
+		info.slotOwnership.push(OwnershipClass.notManaged)
+	end 'growSO'
+	while info.slotManaged.count() < needed 'growSM'
+		info.slotManaged.push(false)
+	end 'growSM'
+	while info.slotTypeParam.count() < needed 'growSTP'
+		info.slotTypeParam.push(false)
+	end 'growSTP'
+	while info.slotTypeParamName.count() < needed 'growSTPN'
+		info.slotTypeParamName.push("")
+	end 'growSTPN'
 end 'growSlotInfo'
 
 function analyzeSlots(func IrFunction, module StdModule, paramCount ParamCount) returns SlotInfo
@@ -199,10 +233,10 @@ function analyzeSlots(func IrFunction, module StdModule, paramCount ParamCount) 
 	for blockRef in func.blockRefs 'scanBlocks'
 		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
 		for packed in block.opRefs 'scanOps'
-			analyzeSlotOp(packed, module: module, blockId: block.id, info: info)
+			analyzeSlotOp(func, opIdx: packed, module: module, blockId: block.id, info: info)
 		end 'scanOps'
 		if block.hasTerminatorOp() 'hasTerm'
-			analyzeSlotOp(block.terminatorIndex(), module: module, blockId: block.id, info: info)
+			analyzeSlotOp(func, opIdx: block.terminatorIndex(), module: module, blockId: block.id, info: info)
 		end 'hasTerm'
 	end 'scanBlocks'
 
@@ -241,10 +275,10 @@ function analyzeSlots(func IrFunction, module StdModule, paramCount ParamCount) 
 	return info
 end 'analyzeSlots'
 
-function analyzeSlotOp(opIdx OpIndex, module StdModule, blockId BlockId, info SlotInfo)
+function analyzeSlotOp(func IrFunction, opIdx OpIndex, module StdModule, blockId BlockId, info SlotInfo)
 	let stdOp = try module.ops.get(opIdx) otherwise panic("invariant: opIdx not in module.ops")
 	match stdOp 'dispatch'
-		memory(op) then analyzeSlotMemRefOp(op, blockId: blockId, info: info)
+		memory(op) then analyzeSlotMemRefOp(func, memOp: op, blockId: blockId, info: info)
 		arith then return
 		control then return
 		call then return
@@ -288,10 +322,10 @@ function markSlotAddressTaken(slotId VarSlot, blockId BlockId, info SlotInfo)
 	logTrace(LogCategory.ir, message: function() gives "mem2reg: slot_{slotId} address-taken in block_{blockId} — refusing promotion")
 end 'markSlotAddressTaken'
 
-function analyzeSlotMemRefOp(memOp StdMemoryOp, blockId BlockId, info SlotInfo)
+function analyzeSlotMemRefOp(func IrFunction, memOp StdMemoryOp, blockId BlockId, info SlotInfo)
 	match memOp 'check'
 		storeSlot(slotId, _) then recordSlotStore(slotId, blockId: blockId, info: info)
-		loadSlot(resultId, slotId) then recordSlotLoad(resultId, slotId: slotId, info: info)
+		loadSlot(resultId, slotId) then recordSlotLoad(func, resultId: resultId, slotId: slotId, info: info)
 	end 'check'
 end 'analyzeSlotMemRefOp'
 
@@ -310,7 +344,7 @@ function recordSlotStore(slotId VarSlot, blockId BlockId, info SlotInfo)
 	info.hasAnySlot = true
 end 'recordSlotStore'
 
-function recordSlotLoad(resultId ValueId, slotId VarSlot, info SlotInfo)
+function recordSlotLoad(func IrFunction, resultId ValueId, slotId VarSlot, info SlotInfo)
 	growSlotInfo(slotId, info: info)
 	try info.slotHasLoad.set(slotId, value: true) otherwise panic("invariant: info.slotHasLoad.set OOB")
 	// Track loadResultId -> slotId for float usage detection
@@ -322,6 +356,25 @@ function recordSlotLoad(resultId ValueId, slotId VarSlot, info SlotInfo)
 		info.maxSlot = slotId
 	end 'updateMax'
 	info.hasAnySlot = true
+
+	// Refcount-insertion: capture this slot's ownership class from the load's
+	// classification (set by lowerVarLoad). A managed slot's loads all carry the
+	// same managed class (incomingOwner, or borrowed for relay/borrow slots). The
+	// promoted-PARAM root init copies it onto the fresh paramId (a param has no
+	// store-def to carry the class). Recording it for every slot is harmless.
+	if func.isValueManaged(resultId) 'managedLoad'
+		try info.slotManaged.set(slotId, value: true) otherwise panic("invariant: info.slotManaged.set OOB after growSlotInfo")
+		try info.slotOwnership.set(slotId, value: func.ownershipOfValue(resultId)) otherwise panic("invariant: info.slotOwnership.set OOB after growSlotInfo")
+	end 'managedLoad'
+
+	// Type-parameter slots: loads are NOT managed (so the block above skips them),
+	// but release routes through sys.dropTypeParam; carry the bit + receiver param
+	// name + class so param init can thread them onto a promoted param's value.
+	if func.isValueTypeParam(resultId) 'typeParamLoad'
+		try info.slotTypeParam.set(slotId, value: true) otherwise panic("invariant: info.slotTypeParam.set OOB after growSlotInfo")
+		try info.slotTypeParamName.set(slotId, value: func.valueTypeParamNameOf(resultId)) otherwise panic("invariant: info.slotTypeParamName.set OOB after growSlotInfo")
+		try info.slotOwnership.set(slotId, value: func.ownershipOfValue(resultId)) otherwise panic("invariant: info.slotOwnership.set OOB after growSlotInfo (type-param)")
+	end 'typeParamLoad'
 end 'recordSlotLoad'
 
 // Float detection: check if load results are used as float operands
@@ -699,16 +752,6 @@ function paramAbiToScopeSlot(func IrFunction, abiIdx VarSlot) returns VarSlot
 	return maxMapped + 1 + (abiIdx - mapCount)
 end 'paramAbiToScopeSlot'
 
-// True iff `slotId` is a param-region scope slot (a param or its companion).
-// Body locals are absent from the map. When the map is empty, fall back to
-// `slotId < func.paramCount` (the old identity).
-function isParamRegionScopeSlot(func IrFunction, slotId VarSlot) returns bool
-	if func.scopeSlotToAbiParamIndex.count() == 0 'noMap'
-		return slotId < func.paramCount
-	end 'noMap'
-	return func.scopeSlotToAbiParamIndex.contains(slotId)
-end 'isParamRegionScopeSlot'
-
 // C1.c/d: detect whether `slotId` is one half of a fat-pointer pair: the value
 // half (slotMaxonTypes[slotId] is interface) or a witness companion. After the
 // slot<->abi decoupling a PARAM witness companion is the reservation's recorded
@@ -748,7 +791,7 @@ function slotIsInterfaceFatPointer(func IrFunction, slotId VarSlot) returns bool
 	// region appended by extendSlotsForInterfaceWitnesses.
 	var localInterfaceCount = 0 as VarSlot
 	for sId in 0 upto totalSlots 'count'
-		if isParamRegionScopeSlot(func, slotId: sId) 'skipParam'
+		if func.isParamRegionScopeSlot(sId) 'skipParam'
 			continue
 		end 'skipParam'
 		let st = try func.slotMaxonTypes.get(sId) otherwise continue
@@ -1148,6 +1191,51 @@ type RenameState
 	end 'create'
 end 'RenameState'
 
+// Refcount-insertion: copy a promoted slot's captured ownership class + managed
+// bit (gathered from its loads in analyzeSlots) onto an SSA value the promotion
+// makes the slot's def. Used for promoted-PARAM roots, whose fresh `paramId` has
+// no class of its own. A no-op for non-managed slots — they leave the value at
+// the `notManaged`/false default.
+function threadSlotClassOntoValue(func IrFunction, slotId VarSlot, valueId ValueId, slotInfo SlotInfo)
+	// A promoted type-parameter param gets a fresh `paramId` with no type-param
+	// bit / class of its own. Thread the slot's captured bit AND class onto it so
+	// the inserter releases it via `sys.dropTypeParam` only when owned (not a
+	// borrow). Independent of the managed branch below (a type-param is never
+	// managed).
+	if getSlotBool(slotInfo.slotTypeParam, slotId: slotId) 'typeParam'
+		func.setValueTypeParam(valueId, isTypeParam: true)
+		func.setValueTypeParamName(valueId, paramName: try slotInfo.slotTypeParamName.get(slotId) otherwise "")
+		let tpCls = try slotInfo.slotOwnership.get(slotId) otherwise OwnershipClass.notManaged
+		func.setValueOwnership(valueId, cls: tpCls)
+	end 'typeParam'
+	if not getSlotBool(slotInfo.slotManaged, slotId: slotId) 'notManaged'
+		return
+	end 'notManaged'
+	let cls = try slotInfo.slotOwnership.get(slotId) otherwise OwnershipClass.notManaged
+	func.setValueManaged(valueId, managed: true)
+	func.setValueOwnership(valueId, cls: cls)
+end 'threadSlotClassOntoValue'
+
+// Refcount-insertion: fold one incoming edge value's managed-ness/type-param-ness
+// into a phi (block-arg) value. The phi is a NEW ValueId with no class of its own;
+// any managed (or type-parameter) incoming RAISES it to an OWNED merged value
+// (`incomingOwner`). Monotonic (only raises, never lowers), so the order edges are
+// processed in is irrelevant — loop back-edges and self-referential phis converge.
+// The Step-5 inserter re-reads each predecessor's incoming class to decide which
+// edges need an incref; this single phi class only says "the merged value is owned".
+function mergeIncomingClassIntoPhi(func IrFunction, phiValueId ValueId, incomingValueId ValueId)
+	if func.isValueTypeParam(incomingValueId) 'incomingTypeParam'
+		func.setValueTypeParam(phiValueId, isTypeParam: true)
+		func.setValueTypeParamName(phiValueId, paramName: func.valueTypeParamNameOf(incomingValueId))
+		func.setValueOwnership(phiValueId, cls: OwnershipClass.incomingOwner)
+	end 'incomingTypeParam'
+	if not func.isValueManaged(incomingValueId) 'incomingNotManaged'
+		return
+	end 'incomingNotManaged'
+	func.setValueManaged(phiValueId, managed: true)
+	func.setValueOwnership(phiValueId, cls: OwnershipClass.incomingOwner)
+end 'mergeIncomingClassIntoPhi'
+
 function createRenameState(func IrFunction, module StdModule, slotInfo SlotInfo, paramCount ParamCount, funcIdRef ValueIdRef, promotable PromotableInfo) returns RenameState
 	let numSlots = slotInfo.maxSlot + 1
 	var defStacks = DefStackArray.create()
@@ -1197,6 +1285,13 @@ function createRenameState(func IrFunction, module StdModule, slotInfo SlotInfo,
 		if getSlotBool(promotable.isPromotable, slotId: scopeSlot) 'promoted'
 			try paramValueIds.set(pIdx, value: paramId) otherwise panic("invariant: paramValueIds.set OOB")
 			try paramSlotIsPromoted.set(pIdx, value: true) otherwise panic("invariant: paramSlotIsPromoted.set OOB")
+			// Refcount-insertion: a promoted param's only SSA def is this fresh
+			// `paramId`, which carries no Step-1 class (params are read via loadSlot,
+			// never store-defined — the classification lived on the now-dissolved
+			// load results). Stamp the param slot's captured class onto `paramId` so
+			// the inserter sees a managed param as `incomingOwner` (caller owns it →
+			// incref when stored/returned, never decref'd at its own last use).
+			threadSlotClassOntoValue(func, slotId: scopeSlot, valueId: paramId, slotInfo: slotInfo)
 			// Push the param valueId as the initial definition for this slot
 			var stack = try defStacks.get(scopeSlot) otherwise panic("invariant: defStacks sized to numSlots >= scopeSlot but get({scopeSlot}) failed")
 			stack.push(paramId)
@@ -1579,7 +1674,7 @@ function fillEdgePhiArgsWalk(blockId BlockId, func IrFunction, module StdModule,
 	fillEdgePhiArgsProcessOps(block, module: module, defStacks: defStacks, pushCounts: pushCounts, promotable: promotable)
 
 	// Fill edge phi args from terminator
-	fillEdgePhiArgsForTerminator(block, module: module, defStacks: defStacks, phiMap: phiMap, numBlocks: numBlocks, numSlots: numSlots, edgePhiArgs: edgePhiArgs)
+	fillEdgePhiArgsForTerminator(func, block: block, module: module, defStacks: defStacks, phiMap: phiMap, numBlocks: numBlocks, numSlots: numSlots, edgePhiArgs: edgePhiArgs)
 
 	// Recurse into dominated children
 	fillEdgePhiArgsChildren(blockId, func: func, module: module, defStacks: defStacks, domInfo: domInfo, numBlocks: numBlocks, numSlots: numSlots, phiMap: phiMap, promotable: promotable, cfg: cfg, edgePhiArgs: edgePhiArgs)
@@ -1618,13 +1713,13 @@ function fillEdgePhiArgsProcessStore(slotId VarSlot, valueId ValueId, defStacks 
 	try pushCounts.set(slotId, value: pc + 1) otherwise panic("invariant: pushCounts.set OOB")
 end 'fillEdgePhiArgsProcessStore'
 
-function fillEdgePhiArgsForTerminator(block IrBlock, module StdModule, defStacks DefStackArray, phiMap PhiMap, numBlocks BlockId, numSlots VarSlot, edgePhiArgs EdgePhiArgTable)
+function fillEdgePhiArgsForTerminator(func IrFunction, block IrBlock, module StdModule, defStacks DefStackArray, phiMap PhiMap, numBlocks BlockId, numSlots VarSlot, edgePhiArgs EdgePhiArgTable)
 	if not block.hasTerminatorOp() 'noTerm'
 		return
 	end 'noTerm'
 	let stdOp = try module.ops.get(block.terminatorIndex()) otherwise panic("invariant: terminator opIdx not in module.ops")
 	match stdOp 'dispatch'
-		control(op) then fillEdgeCfPhiArgs(block.id, cfOp: op, defStacks: defStacks, phiMap: phiMap, numBlocks: numBlocks, numSlots: numSlots, edgePhiArgs: edgePhiArgs)
+		control(op) then fillEdgeCfPhiArgs(func, fromBlock: block.id, cfOp: op, defStacks: defStacks, phiMap: phiMap, numBlocks: numBlocks, numSlots: numSlots, edgePhiArgs: edgePhiArgs)
 		arith then return
 		call then return
 		memory then return
@@ -1632,19 +1727,19 @@ function fillEdgePhiArgsForTerminator(block IrBlock, module StdModule, defStacks
 	end 'dispatch'
 end 'fillEdgePhiArgsForTerminator'
 
-function fillEdgeCfPhiArgs(fromBlock BlockId, cfOp StdControlOp, defStacks DefStackArray, phiMap PhiMap, numBlocks BlockId, numSlots VarSlot, edgePhiArgs EdgePhiArgTable)
+function fillEdgeCfPhiArgs(func IrFunction, fromBlock BlockId, cfOp StdControlOp, defStacks DefStackArray, phiMap PhiMap, numBlocks BlockId, numSlots VarSlot, edgePhiArgs EdgePhiArgTable)
 	match cfOp 'fill'
-		br(target, _) then storeEdgePhiArgs(fromBlock, toBlock: target, defStacks: defStacks, phiMap: phiMap, numBlocks: numBlocks, numSlots: numSlots, edgePhiArgs: edgePhiArgs)
-		condBr(_, thenTarget, _, elseTarget, _) then storeCondBrEdgePhiArgs(fromBlock, thenTarget: thenTarget, elseTarget: elseTarget, defStacks: defStacks, phiMap: phiMap, numBlocks: numBlocks, numSlots: numSlots, edgePhiArgs: edgePhiArgs)
+		br(target, _) then storeEdgePhiArgs(func, fromBlock: fromBlock, toBlock: target, defStacks: defStacks, phiMap: phiMap, numBlocks: numBlocks, numSlots: numSlots, edgePhiArgs: edgePhiArgs)
+		condBr(_, thenTarget, _, elseTarget, _) then storeCondBrEdgePhiArgs(func, fromBlock: fromBlock, thenTarget: thenTarget, elseTarget: elseTarget, defStacks: defStacks, phiMap: phiMap, numBlocks: numBlocks, numSlots: numSlots, edgePhiArgs: edgePhiArgs)
 	end 'fill'
 end 'fillEdgeCfPhiArgs'
 
-function storeCondBrEdgePhiArgs(fromBlock BlockId, thenTarget BlockId, elseTarget BlockId, defStacks DefStackArray, phiMap PhiMap, numBlocks BlockId, numSlots VarSlot, edgePhiArgs EdgePhiArgTable)
-	storeEdgePhiArgs(fromBlock, toBlock: thenTarget, defStacks: defStacks, phiMap: phiMap, numBlocks: numBlocks, numSlots: numSlots, edgePhiArgs: edgePhiArgs)
-	storeEdgePhiArgs(fromBlock, toBlock: elseTarget, defStacks: defStacks, phiMap: phiMap, numBlocks: numBlocks, numSlots: numSlots, edgePhiArgs: edgePhiArgs)
+function storeCondBrEdgePhiArgs(func IrFunction, fromBlock BlockId, thenTarget BlockId, elseTarget BlockId, defStacks DefStackArray, phiMap PhiMap, numBlocks BlockId, numSlots VarSlot, edgePhiArgs EdgePhiArgTable)
+	storeEdgePhiArgs(func, fromBlock: fromBlock, toBlock: thenTarget, defStacks: defStacks, phiMap: phiMap, numBlocks: numBlocks, numSlots: numSlots, edgePhiArgs: edgePhiArgs)
+	storeEdgePhiArgs(func, fromBlock: fromBlock, toBlock: elseTarget, defStacks: defStacks, phiMap: phiMap, numBlocks: numBlocks, numSlots: numSlots, edgePhiArgs: edgePhiArgs)
 end 'storeCondBrEdgePhiArgs'
 
-function storeEdgePhiArgs(fromBlock BlockId, toBlock BlockId, defStacks DefStackArray, phiMap PhiMap, numBlocks BlockId, numSlots VarSlot, edgePhiArgs EdgePhiArgTable)
+function storeEdgePhiArgs(func IrFunction, fromBlock BlockId, toBlock BlockId, defStacks DefStackArray, phiMap PhiMap, numBlocks BlockId, numSlots VarSlot, edgePhiArgs EdgePhiArgTable)
 	let targetSlots = try phiMap.get(toBlock) otherwise panic("invariant: phiMap sized to numBlocks but get({toBlock}) failed")
 
 	// Build the list of values to pass as phi args for this edge
@@ -1659,6 +1754,10 @@ function storeEdgePhiArgs(fromBlock BlockId, toBlock BlockId, defStacks DefStack
 				args.push(0)
 			end 'emptyStack' else 'hasVal'
 				let topVal = try stack.get(stack.count() - 1) otherwise panic("storeEdgePhiArgs: non-empty stack check just succeeded but stack.get(count-1) failed (count={stack.count()})")
+				// Refcount-insertion: fold the incoming value's managed-ness/class
+				// into the phi (a NEW ValueId with no class of its own). Monotonic
+				// (only raises to managed/incomingOwner), so edge order is irrelevant.
+				mergeIncomingClassIntoPhi(func, phiValueId: phiValueId, incomingValueId: topVal)
 				args.push(topVal)
 			end 'hasVal'
 		end 'hasPhi'

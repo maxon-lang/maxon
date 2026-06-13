@@ -394,7 +394,12 @@ export function augmentWithRuntime(module StdModule, project Project) returns St
 	// + transitively walk runtime helpers' call edges, and trim the
 	// runtime to that closure. This makes cache-off and cache-on paths
 	// emit the same set of runtime functions for the same user program.
-	let filteredRuntime = filterRuntimeByReachability(covFilteredRuntime, userModule: module, target: project.target, globalData: project.globalData)
+	// `patchMrtStartGlobalCleanup` injects `call __mm_decref_maybenull_helper` into
+	// mrt_start AFTER this reachability walk (one per managed module-global), so the
+	// edge is invisible to the filter — seed the helper when the program HAS a managed
+	// global, mirroring the `mrt_leak_check` late-injection seed.
+	let hasManagedGlobals = collectManagedGlobalNames(project).count() > 0
+	let filteredRuntime = filterRuntimeByReachability(covFilteredRuntime, userModule: module, target: project.target, globalData: project.globalData, leakCheck: project.leakCheckEnabled, hasManagedGlobals: hasManagedGlobals)
 	if project.coverageEnabled 'reserveGlobals'
 		// Register the coverage globals once per compile, after instrumentation
 		// has finalized the site count but before backend emission reads the
@@ -448,6 +453,27 @@ export function augmentWithRuntime(module StdModule, project Project) returns St
 	// references these inits via a normal `call` op, so the patch is the
 	// only path that wires them up.
 	patchMrtStartWithModuleInits(augmented, project: project)
+	// Drain live green threads to completion BEFORE the global decrefs /
+	// io-shutdown / leak gate below: main may return while a spawned GT is
+	// mid-run (a cancelled or never-awaited `async`), and the leak gate would
+	// count the GT's in-flight allocations as leaks. Applied before
+	// patchMrtStartGlobalCleanup so the drain executes first (before-osExit
+	// insertions land in application order). x64-Windows only — the wasm
+	// scheduler runs main itself as a GT (`__sched_run` returns only once
+	// every GT is done), and other targets have no preemptive GT runtime.
+	if project.target.cpu == CpuArch.x64 and project.target.os == Os.windows 'x64WinGtCleanup'
+		patchMrtStartCallGtCleanup(augmented)
+	end 'x64WinGtCleanup'
+	// Release every module-global holding a MANAGED value at program exit, so a
+	// `let g = Box.create(7)` (or any container/string global) is freed EXACTLY
+	// once rather than left as a 1-per-global leak. Mirrors the C# bootstrap's
+	// `__maxon_global_cleanup`, but inlined into `mrt_start` (the self-hosted
+	// patch-based architecture) as a null-guarded decref of each global's slot,
+	// inserted right before `osExit`. Runs AFTER main (so main's reads of the
+	// global are valid) and BEFORE the io-shutdown / leak-check patches below (so
+	// the leak gate sees the globals freed — those patches insert at the new
+	// osExit position, landing after these decrefs).
+	patchMrtStartGlobalCleanup(augmented, project: project)
 	// On wasm, main must run as a green thread driven by the asyncify scheduler
 	// (so `await` can suspend/resume). Rewrite mrt_start's `call main` tail into
 	// `root = __gt_spawn_root(funcAddr main); r = __sched_run(root)`; the existing
@@ -470,7 +496,19 @@ export function augmentWithRuntime(module StdModule, project Project) returns St
 		// program that never touches async I/O pays only the bring-up/teardown.
 		patchMrtStartCallIoInit(augmented)
 		patchMrtStartCallIoShutdown(augmented)
+		// Free the lazily-built Win32 argv cache (mrt_win32_get_argc's mrt_alloc'd
+		// pointer array + per-arg UTF-8 buffers) before exit so `CommandLine.args()`
+		// programs don't read as permanent `__mm_alloc_count` leaks. No-op when the
+		// cache was never built; the leak-check patch below sees the freed cache.
+		patchMrtStartFreeArgvCache(augmented)
 	end 'x64WinFaultHandler'
+	// Spec-test leak gate: wrap osExit(main()) in mrt_leak_check so a standalone
+	// program that exits with live allocations returns 101. Runs LAST so it sees
+	// the final osExit position after the gt/io/module-init patches above. Gated
+	// on the project flag — production binaries skip it.
+	if project.leakCheckEnabled 'leakGate'
+		patchMrtStartLeakCheck(augmented)
+	end 'leakGate'
 	return augmented
 end 'augmentWithRuntime'
 
@@ -524,46 +562,140 @@ function patchMrtStartCallIoInit(module StdModule)
 	panic("patchMrtStartCallIoInit: mrt_start function not in module")
 end 'patchMrtStartCallIoInit'
 
+// The located insertion site inside `mrt_start`'s entry block: the entry block
+// itself, the position of its `osExit` op (every late patch inserts cleanup ops
+// immediately before exit), the exit-code value id `osExit` reads, and a fresh
+// `ValueIdRef` seeded past the function's current max id. Returned by
+// `locateMrtStartExit` so the three `patchMrtStart*` exit patches share one lookup.
+type MrtStartExitSite
+	export var entryBlock as IrBlock
+	export var osExitPos as ParsedInt
+	export var exitCodeId as ValueId
+	export var valueIdRef as ValueIdRef
+
+	export static function create(entryBlock IrBlock, osExitPos ParsedInt, exitCodeId ValueId, valueIdRef ValueIdRef) returns MrtStartExitSite
+		return Self{entryBlock: entryBlock, osExitPos: osExitPos, exitCodeId: exitCodeId, valueIdRef: valueIdRef}
+	end 'create'
+end 'MrtStartExitSite'
+
+// Locate `mrt_start`'s entry block and the position of its `osExit` op (the merged
+// body is `[__gt_init, __io_init, __slab_init, …, call main, osExit, ret]`; the
+// osExit index shifts as module-init / gt/io patches insert ops, so it is found by
+// scan, not a fixed index). Panics if `mrt_start` is absent, blockless, or has no
+// osExit — every caller treats those as hard invariant violations. `who` names the
+// calling patch so the panic message stays specific.
+function locateMrtStartExit(module StdModule, who String) returns MrtStartExitSite
+	for func in module.functions 'findStart'
+		if func.name != "mrt_start" 'notStart'
+			continue
+		end 'notStart'
+		if func.blockRefs.count() == 0 'noBlocks'
+			panic("{who}: mrt_start has no blocks")
+		end 'noBlocks'
+		let entryBlockRef = try func.blockRefs.get(0) otherwise panic("{who}: blockRefs.get(0) OOB")
+		let entryBlock = try module.blocks.get(entryBlockRef) otherwise panic("{who}: blocks.get OOB at {entryBlockRef}")
+		var osExitPos = -1
+		var exitCodeId = 0 as ValueId
+		for i in 0 upto entryBlock.opRefs.count() 'each'
+			let opIdx = try entryBlock.opRefs.get(i) otherwise panic("{who}: opRefs.get OOB at {i}")
+			let op = try module.ops.get(opIdx) otherwise panic("{who}: ops.get OOB at {opIdx}")
+			if isOsExitOp(op) 'isExit'
+				osExitPos = i
+				exitCodeId = osExitCodeIdOf(op)
+				break
+			end 'isExit'
+		end 'each'
+		if osExitPos < 0 'noExit'
+			panic("{who}: could not locate osExit in mrt_start entry block")
+		end 'noExit'
+		let valueIdRef = ValueIdRef.create(scanMaxValueId(func, module: module) + 1)
+		return MrtStartExitSite.create(entryBlock, osExitPos: osExitPos, exitCodeId: exitCodeId, valueIdRef: valueIdRef)
+	end 'findStart'
+	panic("{who}: mrt_start function not in module")
+end 'locateMrtStartExit'
+
 // x64-Windows-only: insert `std call __io_shutdown` into mrt_start's entry block
 // immediately BEFORE the `osExit` op, so the IOCP completion thread + sync worker
 // are joined and all handles/CRITICAL_SECTIONs released before the process exits.
 // Mirrors the C# bootstrap, which calls __io_shutdown after the green threads drain
 // and before the leak check / exit. __io_shutdown is guarded on __io_done_event so it
 // is a safe no-op if a program errored before __io_init ran. Takes no args, returns
-// void — result id unused. We locate the osExit op (the merged mrt_start body is
-// `[__gt_init, __io_init, __slab_init, …, call main, osExit, ret]`) rather than a
-// fixed index because module-init patches and the gt/io inits shift positions.
+// void — result id unused.
 function patchMrtStartCallIoShutdown(module StdModule)
-	for func in module.functions 'findStart'
-		if func.name != "mrt_start" 'notStart'
-			continue
-		end 'notStart'
-		if func.blockRefs.count() == 0 'noBlocks'
-			panic("patchMrtStartCallIoShutdown: mrt_start has no blocks")
-		end 'noBlocks'
-		let entryBlockRef = try func.blockRefs.get(0) otherwise panic("patchMrtStartCallIoShutdown: blockRefs.get(0) OOB")
-		let entryBlock = try module.blocks.get(entryBlockRef) otherwise panic("patchMrtStartCallIoShutdown: blocks.get OOB at {entryBlockRef}")
-		var osExitPos = -1
-		for i in 0 upto entryBlock.opRefs.count() 'each'
-			let opIdx = try entryBlock.opRefs.get(i) otherwise panic("patchMrtStartCallIoShutdown: opRefs.get OOB at {i}")
-			let op = try module.ops.get(opIdx) otherwise panic("patchMrtStartCallIoShutdown: ops.get OOB at {opIdx}")
-			if isOsExitOp(op) 'isExit'
-				osExitPos = i
-				break
-			end 'isExit'
-		end 'each'
-		if osExitPos < 0 'noExit'
-			panic("patchMrtStartCallIoShutdown: could not locate osExit in mrt_start entry block")
-		end 'noExit'
-		let valueIdRef = ValueIdRef.create(scanMaxValueId(func, module: module) + 1)
-		let resultId = allocValueId(valueIdRef)
-		let shutdownOpIdx = module.ops.count()
-		module.ops.push(StdOp.call(StdCallOp.call(resultId, callee: "__io_shutdown", argIds: ValueIdArray.create())))
-		try entryBlock.opRefs.insert(osExitPos, value: shutdownOpIdx) otherwise panic("patchMrtStartCallIoShutdown: opRefs.insert failed")
-		return
-	end 'findStart'
-	panic("patchMrtStartCallIoShutdown: mrt_start function not in module")
+	let site = locateMrtStartExit(module, who: "patchMrtStartCallIoShutdown")
+	let resultId = allocValueId(site.valueIdRef)
+	let shutdownOpIdx = module.ops.count()
+	module.ops.push(StdOp.call(StdCallOp.call(resultId, callee: "__io_shutdown", argIds: ValueIdArray.create())))
+	try site.entryBlock.opRefs.insert(site.osExitPos, value: shutdownOpIdx) otherwise panic("patchMrtStartCallIoShutdown: opRefs.insert failed")
 end 'patchMrtStartCallIoShutdown'
+
+// x64-Windows-only: insert `std call __gt_cleanup` into mrt_start's entry block
+// immediately BEFORE the `osExit` op — running it after main returns but ahead
+// of every other exit patch (global decrefs, io-shutdown, leak gate), so live
+// green threads drain to completion while the runtime they need is still up.
+// Takes no args, returns void — result id unused.
+function patchMrtStartCallGtCleanup(module StdModule)
+	let site = locateMrtStartExit(module, who: "patchMrtStartCallGtCleanup")
+	let resultId = allocValueId(site.valueIdRef)
+	let cleanupOpIdx = module.ops.count()
+	module.ops.push(StdOp.call(StdCallOp.call(resultId, callee: "__gt_cleanup", argIds: ValueIdArray.create())))
+	try site.entryBlock.opRefs.insert(site.osExitPos, value: cleanupOpIdx) otherwise panic("patchMrtStartCallGtCleanup: opRefs.insert failed")
+end 'patchMrtStartCallGtCleanup'
+
+// x64-Windows-only: insert `std call mrt_win32_free_argv_cache` into mrt_start's
+// entry block immediately BEFORE the `osExit` op, releasing the lazily-built
+// argv cache (the `mrt_alloc`'d pointer array + per-arg UTF-8 buffers that
+// `mrt_win32_get_argc` builds once and never frees). Without this teardown, any
+// program that calls `CommandLine.args()` reads as `argc + 1` permanent leaks
+// under the `__mm_alloc_count` gate (exit 101). The helper is a no-op if the
+// cache was never built, so it's safe to inject unconditionally. Runs after
+// main (so its reads of argv are valid) and before the leak-check patch (so the
+// gate sees the cache freed). Takes no args, returns void — result id unused.
+function patchMrtStartFreeArgvCache(module StdModule)
+	let site = locateMrtStartExit(module, who: "patchMrtStartFreeArgvCache")
+	let resultId = allocValueId(site.valueIdRef)
+	let freeOpIdx = module.ops.count()
+	module.ops.push(StdOp.call(StdCallOp.call(resultId, callee: "mrt_win32_free_argv_cache", argIds: ValueIdArray.create())))
+	try site.entryBlock.opRefs.insert(site.osExitPos, value: freeOpIdx) otherwise panic("patchMrtStartFreeArgvCache: opRefs.insert failed")
+end 'patchMrtStartFreeArgvCache'
+
+// Extract the exit-code value id from an `osExit` system op.
+function osExitCodeIdOf(op StdOp) returns ValueId
+	match op 'shape'
+		system(inner) then return osExitCodeIdOfSystemOp(inner)
+		call then panic("osExitCodeIdOf: not an osExit op")
+		arith then panic("osExitCodeIdOf: not an osExit op")
+		control then panic("osExitCodeIdOf: not an osExit op")
+		memory then panic("osExitCodeIdOf: not an osExit op")
+	end 'shape'
+end 'osExitCodeIdOf'
+
+function osExitCodeIdOfSystemOp(inner StdSystemOp) returns ValueId
+	match inner 'shape'
+		osExit(codeId) then return codeId
+		default panic("osExitCodeIdOfSystemOp: not an osExit op")
+	end 'shape'
+end 'osExitCodeIdOfSystemOp'
+
+// Wrap mrt_start's `osExit(main_result)` in `mrt_leak_check` so a program that
+// exits with any live `__mm_alloc` allocation returns exit 101. Rewrites the
+// osExit op to `osExit(mrt_leak_check(main_result))`, inserting the check call
+// just before it. Gated by `project.leakCheckEnabled` (set by the spec-test
+// per-fragment success path) so production binaries are unaffected.
+function patchMrtStartLeakCheck(module StdModule)
+	let site = locateMrtStartExit(module, who: "patchMrtStartLeakCheck")
+	let checkedId = allocValueId(site.valueIdRef)
+	// checked = mrt_leak_check(exitCode)
+	var checkArgs = ValueIdArray.create()
+	checkArgs.push(site.exitCodeId)
+	let checkOpIdx = module.ops.count()
+	module.ops.push(StdOp.call(StdCallOp.call(checkedId, callee: "mrt_leak_check", argIds: checkArgs)))
+	try site.entryBlock.opRefs.insert(site.osExitPos, value: checkOpIdx) otherwise panic("patchMrtStartLeakCheck: opRefs.insert failed")
+	// Rewrite the (now shifted) osExit to consume the checked code. The insert
+	// pushed osExit to osExitPos+1.
+	let osExitOpIdx = try site.entryBlock.opRefs.get(site.osExitPos + 1) otherwise panic("patchMrtStartLeakCheck: osExit opRefs.get OOB after insert")
+	try module.ops.set(osExitOpIdx, value: StdOp.system(StdSystemOp.osExit(checkedId))) otherwise panic("patchMrtStartLeakCheck: ops.set OOB at {osExitOpIdx}")
+end 'patchMrtStartLeakCheck'
 
 // True iff `op` is `std osExit <codeId>` (the mrt_start process-exit op).
 function isOsExitOp(op StdOp) returns bool
@@ -685,7 +817,7 @@ typealias RuntimeFuncByName = Map with (String, IrFunction)
 // is also seeded because backends emit literal `call mrt_panic` for
 // range-check guards regardless of whether user IR has a matching call
 // edge yet.
-function filterRuntimeByReachability(runtime StdModule, userModule StdModule, target Target, globalData GlobalDataTable) returns StdModule
+function filterRuntimeByReachability(runtime StdModule, userModule StdModule, target Target, globalData GlobalDataTable, leakCheck bool, hasManagedGlobals bool) returns StdModule
 	let cpu = target.cpu
 	var runtimeMap = RuntimeFuncByName.create()
 	for func in runtime.functions 'buildRuntimeMap'
@@ -694,6 +826,23 @@ function filterRuntimeByReachability(runtime StdModule, userModule StdModule, ta
 
 	var seen = RuntimeReachSet.create()
 	var worklist = StringArray.create()
+
+	// `patchMrtStartLeakCheck` injects `call mrt_leak_check` into mrt_start AFTER
+	// this reachability walk, so the edge is invisible here. Seed it (when the
+	// leak gate is enabled) or the filter prunes it and the patch's call resolves
+	// to .text+0. Target-agnostic — unlike the win32-only late helpers below.
+	if leakCheck 'leakCheckRoot'
+		seedRuntimeReachName("mrt_leak_check", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
+	end 'leakCheckRoot'
+	// `patchMrtStartGlobalCleanup` injects `call __mm_decref_maybenull_helper` into
+	// mrt_start AFTER this walk (one per managed module-global), so the edge is
+	// invisible here. Seed the helper when the program has a managed global, or the
+	// filter prunes it and the patch's call resolves to .text+0 (and its signature is
+	// missing from `allFunctions` at MIR→backend lowering). Target-agnostic — the
+	// global cleanup runs on every target, like `mrt_leak_check` above.
+	if hasManagedGlobals 'globalCleanupRoot'
+		seedRuntimeReachName("__mm_decref_maybenull_helper", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
+	end 'globalCleanupRoot'
 	// `mrt_start` is unconditionally seeded — it's the binary entry point
 	// invoked by the OS, not by any in-module call op. Everything else
 	// (including `mrt_panic`) must be reached through real call edges
@@ -711,6 +860,42 @@ function filterRuntimeByReachability(runtime StdModule, userModule StdModule, ta
 	if target.cpu == CpuArch.x64 and target.os == Os.windows 'win32Helpers'
 		seedRuntimeReachName("mrt_alloc", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
 		seedRuntimeReachName("mm_decref", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
+		// The `mrt_win32_free_argv_cache` teardown helper (emitted alongside the
+		// other win32 helpers) calls `__mm_decref_maybenull_helper` to release the
+		// argv cache. Seed it here unconditionally — the helper's call fixup must
+		// resolve even for a program with no managed globals (the `hasManagedGlobals`
+		// seed above doesn't cover the argv-cache use).
+		seedRuntimeReachName("__mm_decref_maybenull_helper", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
+		// `mm_drop` (the insert-refcounts owner-drop wrapper) is seeded UNCONDITIONALLY
+		// in the cache-on link too (linkX64StdlibFunctionsConcat) — mirror it here so
+		// cache-off compiles the same runtime dep and the legs stay byte-identical.
+		seedRuntimeReachName("mm_drop", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
+		// `mm_retain_type_param` (insert-refcounts borrowed-element container retain)
+		// is likewise emitted late (post-DCE), so seed it symmetrically in both legs.
+		seedRuntimeReachName("mm_retain_type_param", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
+		// Per-arg-ordinal forms (a multi-type-param generic routes a value's
+		// retain/drop through its OWN heap-ref bit). Same symmetric seeding.
+		seedRuntimeReachName("mm_retain_type_param_at", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
+		seedRuntimeReachName("mm_drop_type_param_at", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
+		// `mm_move_{return,container,phi}` (the insert-refcounts trace-only ownership-
+		// move markers; destination baked into the callee) — same symmetric-seed
+		// treatment as `mm_drop` so both link legs pull `__mm_move_trace`.
+		seedRuntimeReachName("mm_move_return", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
+		seedRuntimeReachName("mm_move_container", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
+		seedRuntimeReachName("mm_move_phi", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
+		// `mm_scope_push`/`mm_scope_pop` (mm-trace scope-stack frame bracketing) —
+		// same symmetric-seed treatment so `__mm_scope_push`/`__mm_scope_pop` land in
+		// both legs and an untraced program keeps cache parity.
+		seedRuntimeReachName("mm_scope_push", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
+		seedRuntimeReachName("mm_scope_pop", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
+		// `mrt_alloc_with_dtor` is seeded UNCONDITIONALLY in the cache-on link
+		// path (`linkX64StdlibFunctionsConcat`'s win32 block) because the
+		// hand-emitted `__ManagedSocket` wrap calls it via a late fixup. To keep
+		// cache-off in lockstep — else cache-on links `mrt_alloc_with_dtor` (+ its
+		// transitive `__destruct___ManagedMemory`) for every Windows program while
+		// cache-off's runtime DFE prunes them, diverging the cache-parity `.text`
+		// by exactly those two bodies — seed it here too.
+		seedRuntimeReachName("mrt_alloc_with_dtor", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
 		// The green-thread runtime (`emitX64GreenThreadRuntime`) is emitted
 		// unconditionally on x64-Windows, and its hand-rolled `__gt_trace_emit`
 		// emits `call rel32` fixups to these two async-trace `.std` helpers (guarded
@@ -741,6 +926,18 @@ function filterRuntimeByReachability(runtime StdModule, userModule StdModule, ta
 		// override the labels, but the stubs must survive to supply the signatures).
 		seedRuntimeReachName("__io_init", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
 		seedRuntimeReachName("__io_shutdown", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
+		// `patchMrtStartCallGtCleanup` injects `call __gt_cleanup` into mrt_start
+		// AFTER this walk (same invisibility as `__io_shutdown`); `__gt_cancel` is
+		// reached only from user `p.cancel()` lowerings, but seed it symmetrically
+		// so the hand-emitted body's label always has its signature stub behind it
+		// in both cache legs.
+		seedRuntimeReachName("__gt_cleanup", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
+		seedRuntimeReachName("__gt_cancel", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
+		// Same pattern for the argv-cache teardown helper: seed its signature-only
+		// stub so the injected `call mrt_win32_free_argv_cache` (added to mrt_start
+		// after this walk by patchMrtStartFreeArgvCache) resolves its (0, void)
+		// signature; the hand-emitted emitX64Win32FreeArgvCache overrides the label.
+		seedRuntimeReachName("mrt_win32_free_argv_cache", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
 	end 'win32Helpers'
 
 	// On wasm the green-thread scheduler is driven from `mrt_start`'s bootstrap
@@ -781,6 +978,24 @@ function filterRuntimeByReachability(runtime StdModule, userModule StdModule, ta
 		// makes the same seed contribution at MIR time; mirroring it here
 		// keeps the two reachability sets in sync.
 		appendFuncAbs64Seeds(userCalleeSeeds, relocs: globalData.pendingRdataRelocs)
+		// Wasm-only: the runtime is MERGED into and lowered with the module on
+		// wasm (`augmentWithRuntime`; `cacheHasRuntimeBodies` is false here), so
+		// the emitter's `computeNeededWasmStdlibFunctions` walks the kept runtime
+		// bodies and pulls in stdlib functions reached ONLY through runtime→stdlib
+		// edges (e.g. `mrt_alloc`→`__mm_alloc`→`__mmTraceAllocLine`→
+		// `__mmTracePackedTag`, whose body statically calls `mrt_panic`). The DCE
+		// seed above sees only the pre-merge user module, so without these extra
+		// seeds its needed-stdlib set is a strict subset of the emitter's — and a
+		// runtime helper referenced only by such a stdlib body (`mrt_panic`) gets
+		// dropped while the emitter's fixup-patch loop still tries to resolve it.
+		// Seeding the runtime module's own callees brings the two sets in sync.
+		// Native keeps runtime bodies in the cache and relies on link-time
+		// reachability, so it must NOT seed these (it would over-retain).
+		if cpu == CpuArch.wasm32 'wasmRuntimeStdlibSeeds'
+			for rtCallee in collectUserCalleeSeeds(runtime) 'addRtSeed'
+				userCalleeSeeds.push(rtCallee)
+			end 'addRtSeed'
+		end 'wasmRuntimeStdlibSeeds'
 		seedFromCacheCallees(cpu, userCalleeSeeds: userCalleeSeeds, runtimeMap: runtimeMap, seen: seen, worklist: worklist)
 	end 'cacheValid'
 
@@ -1161,6 +1376,71 @@ function stdCallOpIsCallTo(inner StdCallOp, name String) returns bool
 		errorReturn gives false
 	end 'callShape'
 end 'stdCallOpIsCallTo'
+
+// Release every module-global holding a MANAGED value at program exit (the
+// self-hosted `__maxon_global_cleanup`). For each top-level `var`/`let`/`static`
+// whose slot type is heap-managed (`maxonTypeIsHeapManaged`), insert into
+// `mrt_start`'s entry block, immediately before `osExit`:
+//   addr = sys.global_addr @__data_<name>      (the .data slot)
+//   ptr  = sys.load_indirect [addr]            (the global's current occupant)
+//   __mm_decref_maybenull_helper(ptr)          (null-guarded: a never-initialized
+//                                               global reads 0 and no-ops)
+// so the FINAL occupant of every managed global is freed exactly once, matching
+// the C# bootstrap's `GenerateGlobalCleanup`. NON-managed globals (int/bool/float
+// counters) are skipped — their slot is a value, not an owned pointer. The decrefs
+// are emitted in a DETERMINISTIC (lexicographic) name order so RequiredIR / cache
+// parity stay stable across runs (Map iteration order is not guaranteed). Inserted
+// before the io-shutdown / leak-check patches run, so those land after these
+// decrefs (the leak gate then sees the globals already freed).
+function patchMrtStartGlobalCleanup(module StdModule, project Project)
+	let managedNames = collectManagedGlobalNames(project)
+	if managedNames.count() == 0 'noManagedGlobals'
+		return
+	end 'noManagedGlobals'
+	let site = locateMrtStartExit(module, who: "patchMrtStartGlobalCleanup")
+	var insertAt = site.osExitPos
+	for name in managedNames 'eachGlobal'
+		insertAt = emitGlobalCleanupDecref(module, block: site.entryBlock, valueIdRef: site.valueIdRef, varName: name, insertAt: insertAt)
+	end 'eachGlobal'
+end 'patchMrtStartGlobalCleanup'
+
+// The lexicographically-sorted qualified names of every top-level var/let whose
+// slot type is heap-managed (a container/string/struct holding an owned +1). The
+// sort makes the cleanup-decref emission order deterministic regardless of Map
+// iteration order.
+function collectManagedGlobalNames(project Project) returns StringArray
+	var names = StringArray.create()
+	for (varName, info) in project.topLevelVars 'eachVar'
+		if maxonTypeIsHeapManaged(project, t: info.slotType) 'managed'
+			names.push(varName)
+		end 'managed'
+	end 'eachVar'
+	return sortStringsAscending(names)
+end 'collectManagedGlobalNames'
+
+// Emit the 3-op null-guarded decref sequence for one managed global at `insertAt`
+// in `block.opRefs`, returning the next insert index (advanced past the 3 inserted
+// refs so the following global lands after this one — preserving sorted order).
+function emitGlobalCleanupDecref(module StdModule, block IrBlock, valueIdRef ValueIdRef, varName String, insertAt ParsedInt) returns ParsedInt
+	let addrId = allocValueId(valueIdRef)
+	let addrOpIdx = module.ops.count()
+	module.ops.push(StdOp.system(StdSystemOp.globalAddr(addrId, name: dataSymbolName(varName))))
+	try block.opRefs.insert(insertAt, value: addrOpIdx) otherwise panic("emitGlobalCleanupDecref: opRefs.insert addr failed at {insertAt}")
+
+	let ptrId = allocValueId(valueIdRef)
+	let loadOpIdx = module.ops.count()
+	module.ops.push(StdOp.system(StdSystemOp.loadIndirect(ptrId, addrId: addrId, offset: 0, width: StoreWidth.qword, signed: false, isFloat: false)))
+	try block.opRefs.insert(insertAt + 1, value: loadOpIdx) otherwise panic("emitGlobalCleanupDecref: opRefs.insert load failed at {insertAt}")
+
+	let resultId = allocValueId(valueIdRef)
+	let decrefOpIdx = module.ops.count()
+	var decrefArgs = ValueIdArray.create()
+	decrefArgs.push(ptrId)
+	module.ops.push(StdOp.call(StdCallOp.call(resultId, callee: "__mm_decref_maybenull_helper", argIds: decrefArgs)))
+	try block.opRefs.insert(insertAt + 2, value: decrefOpIdx) otherwise panic("emitGlobalCleanupDecref: opRefs.insert decref failed at {insertAt}")
+
+	return insertAt + 3
+end 'emitGlobalCleanupDecref'
 
 // Filter the loaded runtime module's function list based on whether coverage
 // instrumentation is active. Blocks and ops stay put in the arrays (dropping

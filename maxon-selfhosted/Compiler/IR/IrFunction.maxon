@@ -113,6 +113,35 @@ export typealias ParamReservationArray = Array with ParamReservation
 // locals are absent. Built by `buildAbiParamMap` in TypeResolution.
 export typealias ScopeSlotToAbiIndexMap = Map with (VarSlot, ParamCount)
 
+// Refcount-insertion (the SSA-based "insert-where-needed" model): the ownership
+// category of an SSA value at the point it is produced. Recorded per-ValueId by
+// LowerMaxonToStd and PERSISTED on the Std `IrFunction` (`valueOwnership`), so the
+// post-mem2reg `insertRefcounts` pass can place incref/decref WITHOUT re-deriving
+// ownership from the discarded lowering-time `valueType` map.
+//
+//   - freshRc0:         allocator/constructor result (`__mm_alloc`, struct literal,
+//                       enum/union construct). rc starts at 0 → first owner increfs.
+//   - callReturnRc1:    a call result that transferred a +1 to the caller. The
+//                       first owner CONSUMES the +1 — no incref on bind.
+//   - selfReturnBorrow: a self-returning method result; the pointer borrows a
+//                       param's ref (carries no +1) → a new owner must incref.
+//   - incomingOwner:    a value read out of a slot/field (a loaded alias) — a copy
+//                       of a ref another location owns; a store into a new owner increfs.
+//   - borrowed:         a relay / for-loop borrow (single-use move relay or a view
+//                       into a collection the loop does not own). Never refcounted.
+//   - notManaged:       default for non-drop-tracked values (no refcounting).
+export enum OwnershipClass
+	notManaged
+	freshRc0
+	callReturnRc1
+	selfReturnBorrow
+	incomingOwner
+	borrowed
+end 'OwnershipClass'
+
+// Parallel array keyed by ValueId. Entries default to `OwnershipClass.notManaged`.
+export typealias OwnershipClassArray = Array with OwnershipClass
+
 export type IrFunction
 	// --- Common fields (all phases) ---
 	export var name as String
@@ -259,6 +288,14 @@ export type IrFunction
 	export var scopeSlotToAbiParamIndex as ScopeSlotToAbiIndexMap
 	export var abiParamIndexToScopeSlot as VarSlotArray
 
+	// Refcount-insertion: per-slot "this slot is a single-use MOVE relay" /
+	// "this slot is a for-loop BORROW view" bits. A load out of such a slot is
+	// classified `borrowed` (never refcounted) rather than `incomingOwner`. Set by
+	// LowerMaxonToStd at the relay/for-borrow sites; read by `lowerVarLoad` and
+	// (via the captured slot class) by mem2reg's promotion threading.
+	export var relaySlot as BoolArray
+	export var borrowSlot as BoolArray
+
 	// Phase 15a: function purity (no side effects, no global mutation, no
 	// param mutation, transitively pure call graph). Computed by
 	// `computePurity` in SemanticCheck.maxon; read by `checkDiscardedResults`
@@ -269,6 +306,46 @@ export type IrFunction
 	// purity computed at every fresh build, but skipped on the cache-restore
 	// path since `discarded-results` is a user-code lint.
 	export var isPure as bool
+
+	// --- Refcount-insertion side-tables (parallel arrays keyed by ValueId) ---
+	// Populated as LowerMaxonToStd lowers each value; threaded unchanged through
+	// mem2reg (SSA rename copies the class to the renamed id) and the inliner;
+	// consumed by `insertRefcounts`. Empty for restored stdlib functions and
+	// Std-phase synthesized helpers (those emit no managed user values).
+	//
+	// `valueOwnership[id]` — the `OwnershipClass` of the value (default notManaged).
+	export var valueOwnership as OwnershipClassArray
+	// `valueManaged[id]` — true iff `id` is a drop-tracked/heap-managed reference
+	// (drives "should this value be refcounted at all").
+	export var valueManaged as BoolArray
+	// `valueTypeParam[id]` — true iff `id`'s Maxon type is a generic typeParameter
+	// (released via `sys.dropTypeParam` through the `__layout` descriptor, NOT via
+	// mm_incref/decref — type-parameter values are not `valueManaged`).
+	export var valueTypeParam as BoolArray
+	// Parallel to `valueTypeParam`: the receiver type-param NAME backing the value.
+	export var valueTypeParamName as StringArray
+	// Ordered type-parameter names of the enclosing generic context ("Key",
+	// "Value" for a `Map` method), stamped by LowerMaxonToStd alongside
+	// `hasImplicitLayoutParam`. The position of a value's `valueTypeParamName`
+	// in this list is the ordinal of its per-arg heap-ref bit in the layout
+	// descriptor's `flags@24` (bit `LAYOUT_PER_ARG_HEAPREF_SHIFT + ordinal`) —
+	// the refcount inserter routes a type-param value's drop/retain through
+	// that bit instead of the aggregate descriptor's `destroyFunc` (which
+	// describes the INSTANCE, not the element — calling it on an element only
+	// ever worked for single-managed-field-at-offset-0 shapes). Empty for
+	// non-generic functions.
+	export var typeParamNames as StringArray
+	// `valueInlinedArg[id]` — true iff this CALLER value was passed as an
+	// ARGUMENT to a call the inliner spliced away. Set by the inliner at each
+	// splice; consumed by `storeIsFieldOverwrite`: a field store through such a
+	// base was a PARAM-BASE store in the callee (a fully-constructed struct's
+	// reassignment — the `Container.setData` shape), and the param-base
+	// decref-old rule must survive the inlining that erased the param. Never a
+	// construction-site base: a `Self{...}` literal's fresh alloc is a body
+	// LOCAL of its constructor, not an argument into it. Transient (intra-
+	// pipeline) — deliberately NOT persisted in the stdlib cache; restored
+	// stdlib bodies are already refcount-inserted.
+	export var valueInlinedArg as BoolArray
 
 	// Create an IrFunction at the Maxon phase. Maxon-phase type fields are
 	// populated; Std-phase fields are left at defaults. Visibility defaults
@@ -309,7 +386,15 @@ export type IrFunction
 			paramReservations: ParamReservationArray.create(),
 			scopeSlotToAbiParamIndex: ScopeSlotToAbiIndexMap.create(),
 			abiParamIndexToScopeSlot: VarSlotArray.create(),
-			isPure: true
+			isPure: true,
+			relaySlot: BoolArray.create(),
+			borrowSlot: BoolArray.create(),
+			valueOwnership: OwnershipClassArray.create(),
+			valueManaged: BoolArray.create(),
+			valueTypeParam: BoolArray.create(),
+			valueTypeParamName: StringArray.create(),
+			typeParamNames: StringArray.create(),
+			valueInlinedArg: BoolArray.create()
 		}
 	end 'create'
 
@@ -351,7 +436,15 @@ export type IrFunction
 			paramReservations: ParamReservationArray.create(),
 			scopeSlotToAbiParamIndex: ScopeSlotToAbiIndexMap.create(),
 			abiParamIndexToScopeSlot: VarSlotArray.create(),
-			isPure: true
+			isPure: true,
+			relaySlot: BoolArray.create(),
+			borrowSlot: BoolArray.create(),
+			valueOwnership: OwnershipClassArray.create(),
+			valueManaged: BoolArray.create(),
+			valueTypeParam: BoolArray.create(),
+			valueTypeParamName: StringArray.create(),
+			typeParamNames: StringArray.create(),
+			valueInlinedArg: BoolArray.create()
 		}
 	end 'createFromStd'
 
@@ -400,7 +493,15 @@ export type IrFunction
 			paramReservations: src.paramReservations,
 			scopeSlotToAbiParamIndex: src.scopeSlotToAbiParamIndex,
 			abiParamIndexToScopeSlot: src.abiParamIndexToScopeSlot,
-			isPure: src.isPure
+			isPure: src.isPure,
+			relaySlot: src.relaySlot,
+			borrowSlot: src.borrowSlot,
+			valueOwnership: src.valueOwnership,
+			valueManaged: src.valueManaged,
+			valueTypeParam: src.valueTypeParam,
+			valueTypeParamName: src.valueTypeParamName,
+			typeParamNames: src.typeParamNames,
+			valueInlinedArg: src.valueInlinedArg
 		}
 	end 'clone'
 
@@ -418,6 +519,109 @@ export type IrFunction
 		end 'eachBlock'
 		return copy
 	end 'cloneWithBlockRefs'
+
+	// --- Relay/borrow slot accessors (grow-on-demand BoolArray idiom) ---
+
+	export function markRelaySlot(slot VarSlot)
+		while self.relaySlot.count() <= slot 'grow'
+			self.relaySlot.push(false)
+		end 'grow'
+		try self.relaySlot.set(slot, value: true) otherwise panic("invariant: relaySlot.set OOB after grow")
+	end 'markRelaySlot'
+
+	export function isRelaySlot(slot VarSlot) returns bool
+		return try self.relaySlot.get(slot) otherwise false
+	end 'isRelaySlot'
+
+	export function markBorrowSlot(slot VarSlot)
+		while self.borrowSlot.count() <= slot 'grow'
+			self.borrowSlot.push(false)
+		end 'grow'
+		try self.borrowSlot.set(slot, value: true) otherwise panic("invariant: borrowSlot.set OOB after grow")
+	end 'markBorrowSlot'
+
+	export function isBorrowSlot(slot VarSlot) returns bool
+		return try self.borrowSlot.get(slot) otherwise false
+	end 'isBorrowSlot'
+
+	// True iff `slot` is a param-region scope slot (a declared parameter or its
+	// reserved companion). Under the scope-slot<->ABI decoupling a parameter can
+	// occupy a scope slot >= paramCount (companion-reservation gaps push later
+	// params past their ABI index), so callers MUST NOT assume `slot < paramCount`
+	// identifies params. Consult the `scopeSlotToAbiParamIndex` map; when it is
+	// empty (synthesized / pre-decoupling functions) fall back to the old
+	// `slot < paramCount` identity. Used by every pass that must treat params and
+	// body locals differently (mem2reg seeding, lowering's local zero-init).
+	export function isParamRegionScopeSlot(slot VarSlot) returns bool
+		if self.scopeSlotToAbiParamIndex.count() == 0 'noMap'
+			return slot < self.paramCount
+		end 'noMap'
+		return self.scopeSlotToAbiParamIndex.contains(slot)
+	end 'isParamRegionScopeSlot'
+
+	// --- Refcount-insertion side-table accessors ---
+	// Each grows its parallel array on demand (defaulting unseen ids), mirroring
+	// the `markRelaySlot`/`markBorrowSlot` BoolArray idiom.
+
+	export function setValueOwnership(id ValueId, cls OwnershipClass)
+		while self.valueOwnership.count() <= id 'grow'
+			self.valueOwnership.push(OwnershipClass.notManaged)
+		end 'grow'
+		try self.valueOwnership.set(id, value: cls) otherwise panic("invariant: valueOwnership.set OOB after grow")
+	end 'setValueOwnership'
+
+	// Ownership category of ValueId `id`; `notManaged` for ids never recorded.
+	export function ownershipOfValue(id ValueId) returns OwnershipClass
+		return try self.valueOwnership.get(id) otherwise OwnershipClass.notManaged
+	end 'ownershipOfValue'
+
+	export function setValueManaged(id ValueId, managed bool)
+		while self.valueManaged.count() <= id 'grow'
+			self.valueManaged.push(false)
+		end 'grow'
+		try self.valueManaged.set(id, value: managed) otherwise panic("invariant: valueManaged.set OOB after grow")
+	end 'setValueManaged'
+
+	// True iff ValueId `id` was recorded as a managed/refcounted reference.
+	export function isValueManaged(id ValueId) returns bool
+		return try self.valueManaged.get(id) otherwise false
+	end 'isValueManaged'
+
+	export function setValueTypeParam(id ValueId, isTypeParam bool)
+		while self.valueTypeParam.count() <= id 'grow'
+			self.valueTypeParam.push(false)
+		end 'grow'
+		try self.valueTypeParam.set(id, value: isTypeParam) otherwise panic("invariant: valueTypeParam.set OOB after grow")
+	end 'setValueTypeParam'
+
+	// True iff ValueId `id` was recorded as a generic type-parameter value.
+	export function isValueTypeParam(id ValueId) returns bool
+		return try self.valueTypeParam.get(id) otherwise false
+	end 'isValueTypeParam'
+
+	export function setValueTypeParamName(id ValueId, paramName String)
+		while self.valueTypeParamName.count() <= id 'grow'
+			self.valueTypeParamName.push("")
+		end 'grow'
+		try self.valueTypeParamName.set(id, value: paramName) otherwise panic("invariant: valueTypeParamName.set OOB after grow")
+	end 'setValueTypeParamName'
+
+	// Receiver type-param NAME backing ValueId `id`; "" for ids never recorded.
+	export function valueTypeParamNameOf(id ValueId) returns String
+		return try self.valueTypeParamName.get(id) otherwise ""
+	end 'valueTypeParamNameOf'
+
+	export function setValueInlinedArg(id ValueId)
+		while self.valueInlinedArg.count() <= id 'grow'
+			self.valueInlinedArg.push(false)
+		end 'grow'
+		try self.valueInlinedArg.set(id, value: true) otherwise panic("invariant: valueInlinedArg.set OOB after grow")
+	end 'setValueInlinedArg'
+
+	// True iff ValueId `id` was passed as an argument to an inlined call.
+	export function isValueInlinedArg(id ValueId) returns bool
+		return try self.valueInlinedArg.get(id) otherwise false
+	end 'isValueInlinedArg'
 end 'IrFunction'
 
 export typealias IrFunctionArray = Array with IrFunction

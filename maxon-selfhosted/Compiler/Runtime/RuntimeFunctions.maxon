@@ -135,6 +135,20 @@ export function addInternedString(table GlobalDataTable, stringId StringId, data
 	return name
 end 'addInternedString'
 
+// Independent (owned) copy of a String's UTF-8 bytes. `String.toByteArray()`
+// is a ZERO-COPY view that shares the String's backing `__ManagedMemory`, so
+// appending to that view directly mutates the String's storage in place —
+// corrupting every other alias of it (e.g. a `funcReturnTypes`/`funcSignatures`
+// map key that happens to be the same interned String). Callers that need to
+// append a terminator must build over this owned copy, never the raw view.
+export function ownedStringByteCopy(s String) returns ByteArray
+	var bytes = ByteArray.create()
+	for b in s.toByteArray() 'copyByte'
+		bytes.push(b)
+	end 'copyByte'
+	return bytes
+end 'ownedStringByteCopy'
+
 // Convert a panic message into the C-string byte image stored in rdata: the
 // message bytes, a trailing newline, then a NUL terminator. mrt_panic reads
 // the pointer as a C string and the fixed panic strings (see
@@ -142,7 +156,7 @@ end 'addInternedString'
 // this builds the same image for messages whose text is only known at compile
 // time, so the two pushes aren't open-coded at every panic emitter.
 export function panicMessageCString(message String) returns ByteArray
-	var bytes = message.toByteArray()
+	var bytes = ownedStringByteCopy(message)
 	bytes.push(0x0A)  // newline
 	bytes.push(0)  // NUL terminator
 	return bytes
@@ -285,22 +299,91 @@ end 'isUserRdataEntry'
 
 // Serialize the global data table into a flat ByteArray for the .rdata section.
 // Each entry is 8-byte aligned. Populates the offset map for label-to-offset resolution.
-// Two-pass emission: user entries (classified by `isUserRdataEntry`) first,
-// infrastructure entries last. Within each pass, original insertion order is
-// preserved. Matching the C# bootstrap's prefix-first layout lets the spec
-// runner verify user `RequiredRdata` byte blocks against the start of the
-// section.
+// Emission order:
+//   1. user entries (str/istr/float/ucd/array literals), insertion order — the
+//      `RequiredRdata` golden blocks pin these at the START of the section.
+//   2. panic messages (`__panic_msg_<hash>`), SORTED by label. Panic strings are
+//      content-hashed and registered at lowering time, so their insertion order
+//      differs between the cache-on leg (stdlib panics arrive via the cache's
+//      `mergeStdlibGlobalData`, appended after user code) and the cache-off leg
+//      (stdlib bodies lowered inline register their panics early, interleaved).
+//      Sorting by the (content-derived) label makes the order identical in both
+//      legs — the cache-parity fix — and stays deterministic across edits.
+//   3. infrastructure entries (everything else), insertion order.
 export function buildRdataSection(table GlobalDataTable, map RdataOffsetMap) returns ByteArray
 	var rdata = ByteArray.create()
 	let count = table.names.count()
 	emitRdataPass(rdata, table: table, map: map, count: count, wantUser: true)
+	emitSortedPanicRdataPass(rdata, table: table, map: map, count: count)
 	emitRdataPass(rdata, table: table, map: map, count: count, wantUser: false)
 	return rdata
 end 'buildRdataSection'
 
+// Selection sort of a StringArray by byte-wise lexicographic order. Panic-label
+// lists are small (a handful per program), so O(n^2) is fine, and selection sort
+// avoids needing an array insert/shift primitive.
+export function sortStringsAscending(names StringArray) returns StringArray
+	var remaining = StringArray.create()
+	for name in names 'copy'
+		remaining.push(name)
+	end 'copy'
+	var out = StringArray.create()
+	while remaining.count() > 0 'pickMin'
+		var minIdx = 0
+		var minName = try remaining.get(0) otherwise panic("sortStringsAscending: remaining.get(0) failed")
+		var j = 1
+		while j < remaining.count() 'scan'
+			let candidate = try remaining.get(j) otherwise panic("sortStringsAscending: remaining.get({j}) failed")
+			if stringLexLess(candidate, b: minName) 'smaller'
+				minIdx = j
+				minName = candidate
+			end 'smaller'
+			j = j + 1
+		end 'scan'
+		out.push(minName)
+		// Remove minIdx from `remaining` by swapping the tail in and popping.
+		let lastIdx = remaining.count() - 1
+		if minIdx != lastIdx 'notLast'
+			let tail = (try remaining.get(lastIdx) otherwise panic("sortStringsAscending: remaining.get(last) failed")).clone()
+			try remaining.set(minIdx, value: tail) otherwise panic("sortStringsAscending: remaining.set({minIdx}) failed")
+		end 'notLast'
+		try remaining.pop() otherwise panic("sortStringsAscending: remaining.pop on non-empty failed")
+	end 'pickMin'
+	return out
+end 'sortStringsAscending'
+
+// Emit panic-message entries (`__panic_msg_<hash>`) sorted by label. Separated
+// from `emitRdataPass` so the sort is isolated to these content-hashed labels —
+// `isUserRdataEntry` reports panic messages as "user" so they would otherwise
+// land in pass 1 in INSERTION order, which diverges between cache-parity legs.
+function emitSortedPanicRdataPass(rdata ByteArray, table GlobalDataTable, map RdataOffsetMap, count ByteCount)
+	var panicNames = StringArray.create()
+	for i in 0 upto count 'collect'
+		let name = try table.names.get(i) otherwise panic("emitSortedPanicRdataPass: names.get({i}) failed")
+		if name.startsWith("__panic_msg_") 'isPanic'
+			panicNames.push(name)
+		end 'isPanic'
+	end 'collect'
+	let sorted = sortStringsAscending(panicNames)
+	for name in sorted 'emit'
+		let idx = try table.nameIndex.get(name) otherwise panic("emitSortedPanicRdataPass: nameIndex.get('{name}') failed")
+		let data = try table.values.get(idx) otherwise panic("emitSortedPanicRdataPass: values.get({idx}) failed")
+		map.record(name, offset: rdata.count())
+		rdata.append(data)
+		while rdata.count() mod 8 != 0 'align'
+			rdata.push(0)
+		end 'align'
+	end 'emit'
+end 'emitSortedPanicRdataPass'
+
 function emitRdataPass(rdata ByteArray, table GlobalDataTable, map RdataOffsetMap, count ByteCount, wantUser bool)
 	for i in 0 upto count 'build'
 		let name = try table.names.get(i) otherwise panic("emitRdataPass: i < count = table.names.count() but get({i}) failed")
+		// Panic messages are emitted by `emitSortedPanicRdataPass` (sorted, between
+		// the user and infra passes), so skip them in both insertion-order passes.
+		if name.startsWith("__panic_msg_") 'skipPanic'
+			continue
+		end 'skipPanic'
 		let isUser = isUserRdataEntry(name)
 		if isUser != wantUser 'skipPass'
 			continue

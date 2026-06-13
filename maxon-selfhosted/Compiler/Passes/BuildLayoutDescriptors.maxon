@@ -31,6 +31,13 @@ export function buildLayoutDescriptors(project Project, maxonModule MaxonModule,
 	// tries to load a missing descriptor.
 	seedConformanceLayouts(project)
 
+	// Emit the two shared singleton element-layout descriptors the field-array
+	// projection selects between (`__layout_elem_managed` / `__layout_elem_raw`).
+	// Unconditional + idempotent: they're 56-byte blobs and a `loadLayoutDescriptor`
+	// against either label must always resolve, so we never gate their emission on
+	// whether a multi-type-param aggregate happens to be present this run.
+	emitElementLayoutSingletons(globalData, project: project)
+
 	let count = project.genericInstances.count()
 	if count == 0 'noWork'
 		return
@@ -76,7 +83,39 @@ function seedConformanceLayouts(project Project)
 	end 'eachConf'
 end 'seedConformanceLayouts'
 
+// Emit the two fixed-label singleton element-layout descriptors the field-array
+// projection (`materializeLayoutForGid`) selects between. A multi-type-param
+// aggregate (e.g. `Map with (Integer, Box)`) forwards ONE aggregate layout to
+// every field-array's generic `Array.reserve`, whose only use of the forwarded
+// layout is the element-destroy stamp reading `flags@24` bit 0. The aggregate's
+// bit 0 is the OR over all args, so the wrong arrays (the `Integer` keys array)
+// would get `&__mm_decref` stamped and walk raw integers at teardown (the
+// `Map<Integer, Box>` nil-deref crash). The projection instead forwards one of
+// these singletons whose bit 0 reflects only the specific field's element.
+//
+// Both are registered into `globalData` (so the writer emits the bytes and
+// `loadLayoutDescriptor` against the label resolves) and into
+// `project.staticRdataValues` (so a cache-restored build re-emits them on the
+// fresh per-run `globalData`). They carry no copy/destroy thunk slots, so they
+// need no `funcAbs64InRdata` relocs or witness-conditional roots — a
+// `loadLayoutDescriptor` pins the blob directly via Std-DFE.
+function emitElementLayoutSingletons(globalData GlobalDataTable, project Project)
+	emitOneElementLayoutSingleton(globalData, project: project, label: LAYOUT_ELEM_MANAGED_LABEL, hasHeapRefs: true)
+	emitOneElementLayoutSingleton(globalData, project: project, label: LAYOUT_ELEM_RAW_LABEL, hasHeapRefs: false)
+end 'emitElementLayoutSingletons'
+
+function emitOneElementLayoutSingleton(globalData GlobalDataTable, project Project, label String, hasHeapRefs bool)
+	let bytes = encodeLayoutDescriptor(elementLayoutSingleton(hasHeapRefs))
+	addNamedGlobalData(globalData, name: label, data: bytes)
+	project.staticRdataValues.upsert(label, value: bytes)
+end 'emitOneElementLayoutSingleton'
+
 function emitDescriptorForInstance(project Project, maxonModule MaxonModule, globalData GlobalDataTable, gid GenericInstanceId)
+	let mangled = mangleInstance(project, gid: gid)
+	let descriptorLabel = "__layout_{mangled}"
+	let copyName = "__layout_copy_{mangled}"
+	let destroyName = "__layout_destroy_{mangled}"
+
 	if project.layoutDescriptors.contains(gid) 'alreadyEmitted'
 		// Cache restore path: the descriptor's bytes were captured in
 		// `project.staticRdataValues` when the stdlib was built, but
@@ -86,6 +125,35 @@ function emitDescriptorForInstance(project Project, maxonModule MaxonModule, glo
 		let label = project.layoutDescriptors.labelFor(gid)
 		let bytes = try project.staticRdataValues.get(label) otherwise return
 		addNamedGlobalData(globalData, name: label, data: bytes)
+		// CRITICAL (mirrors the witness cache-restore path in
+		// `emitWitnessForConformance`): the copy/destroy thunk RELOCS and the
+		// witness-conditional ROOTS live on per-pipeline-run state
+		// (`globalData.pendingRdataRelocs` / the conditional-root set), which the
+		// stdlib cache does NOT carry — only the descriptor bytes and the thunk
+		// BODIES are cached. Without re-pushing them here, the +32/+40 copy/destroy
+		// slots are never patched (stay 0) and the destroy thunk is never linked
+		// (no conditional root promotes it), so an element-drop through a
+		// CACHE-RESTORED descriptor (`__layout_Array_Character`, which is baked into
+		// the stdlib cache because `Array<Character>` is instantiated inside stdlib)
+		// calls `[layout+40] == 0` → rip=0 (the `Set/Array with Character` membership
+		// crash). `int`/`Box` descriptors are NOT cached, so they hit the fresh path
+		// below and were never affected. The thunk bodies are already in the cache,
+		// so do NOT re-synthesize them.
+		//
+		// The copy/destroy thunk names MUST be derived from the CACHED LABEL, not from
+		// `mangleInstance(gid)` recomputed at the top of this function. On restore the
+		// gid is re-interned into the USER project's id space, where the SAME
+		// `(baseId, args)` shape can re-mangle differently — concretely, a cached
+		// `__layout_Array_String` gid restores with a CONDITIONAL `typeParameter(Element)`
+		// arg, so `mangleInstance` yields `Array_Element` and `copyName` would become
+		// `__layout_copy_Array_Element` — a thunk that was never synthesized (conditional
+		// gids skip synthesis), so its `funcAbs64InRdata` reloc dangles and
+		// `patchOneFuncAbs64InRdata` panics ("no .text symbol"). The cached LABEL is the
+		// authoritative concrete name the stdlib build synthesized the thunk under, so
+		// build the thunk names from it.
+		let restoredCopyName = layoutThunkNameFromLabel(label, kind: "copy")
+		let restoredDestroyName = layoutThunkNameFromLabel(label, kind: "destroy")
+		registerLayoutThunkRelocsAndRoots(project, globalData: globalData, descriptorLabel: label, copyName: restoredCopyName, destroyName: restoredDestroyName)
 		return
 	end 'alreadyEmitted'
 
@@ -111,37 +179,58 @@ function emitDescriptorForInstance(project Project, maxonModule MaxonModule, glo
 		return
 	end 'parametricNamed'
 
-	let mangled = mangleInstance(project, gid: gid)
-	let descriptorLabel = "__layout_{mangled}"
-	let copyName = "__layout_copy_{mangled}"
-	let destroyName = "__layout_destroy_{mangled}"
-
 	let descriptor = computeLayoutDescriptor(project, gid: gid, copyName: copyName, destroyName: destroyName)
 	let bytes = encodeLayoutDescriptor(descriptor)
 
 	addNamedGlobalData(globalData, name: descriptorLabel, data: bytes)
 	project.staticRdataValues.upsert(descriptorLabel, value: bytes)
 
-	// Two funcAbs64InRdata relocs target the synthesized thunks at the
-	// fixed +32 (copy) and +40 (destroy) offsets within the descriptor.
-	// Both rdataLabel fields point at the descriptor itself so
-	// `resolveRdataRelocations` resolves their `rdataOffset` from the same
-	// rdata-offset map that backs every other rdata relocation.
-	pushFuncAbs64Reloc(globalData, rdataLabel: descriptorLabel, funcName: copyName, offsetInLabel: LAYOUT_OFFSET_COPY_FUNC)
-	pushFuncAbs64Reloc(globalData, rdataLabel: descriptorLabel, funcName: destroyName, offsetInLabel: LAYOUT_OFFSET_DESTROY_FUNC)
+	registerLayoutThunkRelocsAndRoots(project, globalData: globalData, descriptorLabel: descriptorLabel, copyName: copyName, destroyName: destroyName)
 
 	synthesizeCopyThunk(project, maxonModule: maxonModule, gid: gid, name: copyName)
 	synthesizeDestroyThunk(project, maxonModule: maxonModule, gid: gid, name: destroyName)
-	// Stage K.4: witness-conditional roots keyed by the descriptor label.
-	// Std-DFE promotes copy/destroy to definite roots iff a live function
-	// emits `loadLayoutDescriptor(descriptorLabel)`. If no user code
-	// reaches the descriptor, both the rdata blob and the thunks are
-	// correctly dropped.
-	pushWitnessConditionalRoot(project, rdataLabel: descriptorLabel, funcName: copyName)
-	pushWitnessConditionalRoot(project, rdataLabel: descriptorLabel, funcName: destroyName)
 
 	project.layoutDescriptors.intern(gid, label: descriptorLabel)
 end 'emitDescriptorForInstance'
+
+// Register the per-pipeline-run state both descriptor legs (fresh-emit and
+// cache-restore) need but the stdlib cache does not carry: the two
+// `funcAbs64InRdata` relocs that patch the copy/destroy thunk VAs into the
+// descriptor's fixed +32/+40 slots, and the witness-conditional roots that keep
+// those thunks linked iff a live function loads the descriptor. Mirrors the
+// witness path's unconditional reloc + conditional-root re-push
+// (`emitWitnessForConformance`), so a cache-restored descriptor's element-drop
+// slot is patched exactly like a freshly-emitted one.
+//
+// The relocs' `rdataLabel` points at the descriptor itself so
+// `resolveRdataRelocations` resolves their `rdataOffset` from the same
+// rdata-offset map that backs every other rdata relocation. Std-DFE promotes the
+// copy/destroy thunks to definite roots iff a live function emits
+// `loadLayoutDescriptor(descriptorLabel)`; if no user code reaches the descriptor,
+// both the rdata blob and the thunks are correctly dropped.
+// Derive a layout copy/destroy thunk name (`__layout_copy_<mangled>` /
+// `__layout_destroy_<mangled>`) from a descriptor LABEL (`__layout_<mangled>`).
+// Used by the cache-restore leg, where the cached label is the authoritative
+// concrete mangling and `mangleInstance(gid)` cannot be trusted (the restored gid
+// may carry conditional type-parameter args that re-mangle differently). The label
+// always begins with the `__layout_` prefix (`emitDescriptorForInstance` /
+// `emitOneElementLayoutSingleton`); splice `<kind>_` after it.
+function layoutThunkNameFromLabel(label String, kind String) returns String
+	if not label.startsWith("__layout_") 'unexpected'
+		panic("layoutThunkNameFromLabel: descriptor label '{label}' does not start with '__layout_'")
+	end 'unexpected'
+	// Splice `<kind>_` after the leading `__layout_`. The prefix appears only at the
+	// start (mangled type names never contain `__layout_`), so a single replace of the
+	// prefix is an exact, unambiguous rewrite.
+	return label.replace("__layout_", with: "__layout_{kind}_")
+end 'layoutThunkNameFromLabel'
+
+function registerLayoutThunkRelocsAndRoots(project Project, globalData GlobalDataTable, descriptorLabel String, copyName String, destroyName String)
+	pushFuncAbs64Reloc(globalData, rdataLabel: descriptorLabel, funcName: copyName, offsetInLabel: LAYOUT_OFFSET_COPY_FUNC)
+	pushFuncAbs64Reloc(globalData, rdataLabel: descriptorLabel, funcName: destroyName, offsetInLabel: LAYOUT_OFFSET_DESTROY_FUNC)
+	pushWitnessConditionalRoot(project, rdataLabel: descriptorLabel, funcName: copyName)
+	pushWitnessConditionalRoot(project, rdataLabel: descriptorLabel, funcName: destroyName)
+end 'registerLayoutThunkRelocsAndRoots'
 
 // Compute the concrete layout for a GenericInstance. Phase 11.2 baseline:
 // look up the base struct in `project.structTypes` and use its `byteSize`;
@@ -160,9 +249,35 @@ function computeLayoutDescriptor(project Project, gid GenericInstanceId, copyNam
 		end 'minAlign'
 	end 'isStruct'
 	let elementSize = primitiveElementSize(project, args: args)
-	let hasHeapRefs = instanceHasHeapRefs(args)
-	return LayoutDescriptor.create(size, alignment: alignment, elementSize: elementSize, hasHeapRefs: hasHeapRefs, copyFuncName: copyName, destroyFuncName: destroyName, fieldOffsetsPtr: "")
+	let hasHeapRefs = instanceHasHeapRefs(project, args: args)
+	let perArgHeapRefBits = computePerArgHeapRefBits(project, args: args)
+	return LayoutDescriptor.create(size, alignment: alignment, elementSize: elementSize, hasHeapRefs: hasHeapRefs, perArgHeapRefBits: perArgHeapRefBits, copyFuncName: copyName, destroyFuncName: destroyName, fieldOffsetsPtr: "")
 end 'computeLayoutDescriptor'
+
+// Pack one HAS_HEAP_REFS bit per type-arg: bit i is set iff `args[i]` is a
+// heap-managed type. The aggregate descriptor's `flags@24` carries these
+// above the per-arg shift so a multi-type-param field-array call site can
+// project the exact element's heap-ref status (the `Map<Integer, Box>` keys
+// vs values disambiguation — see `materializeLayoutForGid`). Only the low 56
+// bits are encodable (`flags` is a single qword and bit 0 is the aggregate
+// OR), so args beyond index 55 leave their bit unencodable; that is far
+// beyond any real generic arity, so we cap the walk there rather than
+// silently shifting into / past bit 63.
+function computePerArgHeapRefBits(project Project, args MaxonTypeArray) returns MachineWord
+	var bits = 0 as MachineWord
+	let maxEncodableArgs = 56
+	var limit = args.count()
+	if limit > maxEncodableArgs 'cap'
+		limit = maxEncodableArgs
+	end 'cap'
+	for i in 0 upto limit 'each'
+		let a = try args.get(i) otherwise panic("computePerArgHeapRefBits: args.get OOB at {i}")
+		if argTypeHasHeapRefs(project, t: a) 'isHeap'
+			bits = bits or (1 shl (i as ParsedInt))
+		end 'isHeap'
+	end 'each'
+	return bits
+end 'computePerArgHeapRefBits'
 
 // Recover an "element size" hint: when the instance has exactly one type
 // argument (the typical container shape — `Array with T`, `__ManagedMemory
@@ -190,39 +305,73 @@ export function primitiveWidth(project Project, t MaxonType) returns MachineWord
 		integer gives 8
 		float gives 8
 		string gives 8
+		character gives 8
 		named gives storeWidthBytes(storeWidthOfStdType(resolveMaxonTypeToStd(project, ref: t)))
 		function to cstring gives 8
 	end 'w'
 end 'primitiveWidth'
 
-// True iff any type argument is itself a heap-managed value (string or
-// reference-counted instance). Returns false for primitives and plain
-// named types — even though some named types ARE heap-managed, the
-// descriptor reader hasn't acquired a use for the bit yet, and Phase
-// 11.4's full walk over named-struct fields supersedes this anyway.
-function instanceHasHeapRefs(args MaxonTypeArray) returns bool
+// True iff any type argument is itself a heap-managed value — a string, a
+// reference-counted generic instance, an interface existential, OR a `named`
+// user struct (every struct is heap-allocated + refcount-managed). The runtime
+// element-walk reads the resulting HAS_HEAP_REFS bit to decide whether to stamp
+// `&__mm_decref` on a container's backing buffer, so a `named`-element container
+// (`Array with Box`) MUST report true here or its elements leak — see
+// `argTypeHasHeapRefs` / `namedArgHasHeapRefs` for the per-arg decision.
+function instanceHasHeapRefs(project Project, args MaxonTypeArray) returns bool
 	for i in 0 upto args.count() 'each'
 		let a = try args.get(i) otherwise panic("instanceHasHeapRefs: args.get OOB at {i}")
-		if maxonTypeIsHeapManaged(a) 'hit'
+		if argTypeHasHeapRefs(project, t: a) 'hit'
 			return true
 		end 'hit'
 	end 'each'
 	return false
 end 'instanceHasHeapRefs'
 
-function maxonTypeIsHeapManaged(t MaxonType) returns bool
+// True iff a layout-descriptor element/key type holds a heap reference the
+// container's destructor must walk. A `named` USER STRUCT counts (every struct is
+// heap-allocated + refcount-managed — `structNameIsHeapManaged`); without this an
+// `Array with Box` / a `Map with (String, Box)` got HAS_HEAP_REFS=false, so the
+// runtime element-walk never stamped `&__mm_decref` and every managed element leaked.
+// `string`/`genericInstance`/`interface` are heap-managed by shape; primitives and a
+// still-unbound `typeParameter` are not (the latter is monomorphized away before a
+// descriptor is emitted — see `instanceHasUnboundTypeParam`).
+function argTypeHasHeapRefs(project Project, t MaxonType) returns bool
 	return match t 'h'
 		string gives true
-		genericInstance gives true
+		character gives true
+		// `Promise with T` elements are raw green-thread handles, NOT mm
+		// objects (see structNameIsHeapManaged) — an element walk over them
+		// would decref `[gt - 8]` slab memory (the promise-array teardown
+		// over-release). Every other generic instance is heap-managed.
+		genericInstance(id) gives(genericInstanceIdBaseName(project, id: id) != "Promise")
 		interface gives true
+		named(id) gives namedArgHasHeapRefs(project, name: project.typeNames.get(id))
 		boolean to float gives false
-		named gives false
 		function gives false
 		unresolved gives false
 		typeParameter gives false
 		constInt to cstring gives false
 	end 'h'
-end 'maxonTypeIsHeapManaged'
+end 'argTypeHasHeapRefs'
+
+// A `named` layout-descriptor arg holds a heap reference when it is a user struct
+// (`structNameIsHeapManaged`) OR a typealias that RESOLVES to one — a generic-container
+// alias (`typealias IntArray = Array with Integer`) reaches here as `named("IntArray")`,
+// NOT the underlying `genericInstance`, so a bare struct check would miss it and the
+// enclosing container (`Array with IntArray`) would get HAS_HEAP_REFS=false → no element
+// walk → every nested container element leaks. Chase the generic-typealias target and
+// recurse. Ranged/scalar typealiases (`typealias Integer = int(...)`) resolve to a
+// primitive and correctly stay non-heap.
+function namedArgHasHeapRefs(project Project, name String) returns bool
+	if structNameIsHeapManaged(project, structName: name) 'isStruct'
+		return true
+	end 'isStruct'
+	if let aliasTarget = try project.genericTypealiases.get(name) 'isGenericAlias'
+		return argTypeHasHeapRefs(project, t: aliasTarget)
+	end 'isGenericAlias'
+	return false
+end 'namedArgHasHeapRefs'
 
 // True iff any element references an unbound type-parameter. Used to
 // gate per-call-site materialization in Phase 11.4: layout descriptors
@@ -286,6 +435,7 @@ function namedArgIsParametric(project Project, t MaxonType) returns bool
 		integer gives false
 		float gives false
 		string gives false
+		character gives false
 		function gives false
 		unresolved gives true
 		typeParameter gives true
@@ -345,7 +495,8 @@ function mangleType(project Project, t MaxonType) returns String
 		boolean gives "Bool"
 		integer gives "Int"
 		float gives "Float"
-		string gives "String"
+		string gives sanitizeIdentifier(builtinStringLiteralTypeName())
+		character gives sanitizeIdentifier(builtinCharLiteralTypeName())
 		named(id) gives sanitizeIdentifier(project.typeNames.get(id))
 		function gives "Fn"
 		unresolved gives "Unresolved"
@@ -442,25 +593,8 @@ end 'synthName'
 // String-typed local" destroy shape for non-struct generic instances.
 function instanceArgsHaveHeapRefs(project Project, gid GenericInstanceId) returns bool
 	let (_, args) = project.genericInstances.get(gid)
-	return instanceHasHeapRefs(args)
+	return instanceHasHeapRefs(project, args: args)
 end 'instanceArgsHaveHeapRefs'
-
-// Pick a representative heap-ref-bearing MaxonType from the gid's args.
-// Used when synthesizing a destroy thunk for the single-word case so the
-// loaded value's slot can be typed appropriately for C1.b's injectDrops
-// Caller must have already confirmed `instanceArgsHaveHeapRefs(gid)`; if
-// the loop here found nothing heap-bearing the caller's precondition is
-// already broken, so panic rather than returning a sentinel type.
-function representativeHeapType(project Project, gid GenericInstanceId) returns MaxonType
-	let (_, args) = project.genericInstances.get(gid)
-	for i in 0 upto args.count() 'eachArg'
-		let a = try args.get(i) otherwise panic("representativeHeapType: args.get OOB at {i}")
-		if maxonTypeIsHeapManaged(a) 'hit'
-			return a
-		end 'hit'
-	end 'eachArg'
-	panic("representativeHeapType: no heap-managed arg found in generic instance {gid} — caller must guard with instanceArgsHaveHeapRefs")
-end 'representativeHeapType'
 
 // Boilerplate: create an IrFunction shell for a thunk, register one
 // entry block, and bind the parameter slots. Returns (func, entryBlock).
@@ -552,13 +686,13 @@ function emitWordCopyAtOffset(project Project, maxonModule MaxonModule, block Ir
 	emitRuntimeCall(project, maxonModule: maxonModule, block: block, resultName: storeResult, callee: "__layout_word_store", args: storeArgs)
 end 'emitWordCopyAtOffset'
 
-// Read the single 8-byte word at offset and bind it as a slot of the
-// given MaxonType. Used by the destroy thunk path for heap-ref-bearing
-// fields/words: C1.b's slot-MaxonType plumbing will let injectDrops emit
-// the matching `mm_decref` at the slot's lifetime end. Today the slot
-// type carried by varDecl is discarded by lowerMaxonToStd, so the
-// runtime effect is a no-op until C1.b lands — but the *shape* is right.
-function emitWordDestroyAtOffset(project Project, maxonModule MaxonModule, block IrBlock, thunkName String, valueName ByteArray, offset FieldOffset, slotMaxonType MaxonType, slotId VarSlot, tag String)
+// Read the single 8-byte word at offset and release it via the null-tolerant
+// `__mm_decref_maybenull_helper` (a moved-out / never-assigned field slot reads
+// exactly 0; any other non-pointer junk still faults loudly inside the strict
+// `mm_decref` it routes to). The destroy-side mirror of `emitWordCopyAtOffset`'s
+// hand-emitted `mm_incref` — thunk loads are below the inserter's classify
+// surface, so the release must be explicit here.
+function emitWordDestroyAtOffset(project Project, maxonModule MaxonModule, block IrBlock, thunkName String, valueName ByteArray, offset FieldOffset, tag String)
 	var valueAt = valueName
 	if offset != 0 'needAdjust'
 		let offConst = synthName(thunkName, suffix: "doff_{tag}")
@@ -573,7 +707,10 @@ function emitWordDestroyAtOffset(project Project, maxonModule MaxonModule, block
 	loadArgs.push(valueAt)
 	emitRuntimeCall(project, maxonModule: maxonModule, block: block, resultName: loaded, callee: "__layout_word_load", args: loadArgs)
 
-	maxonModule.appendOp(block, op: MaxonOp.varDecl(slotId, value: loaded, slotType: slotMaxonType, range: SourceRange.none()))
+	let released = synthName(thunkName, suffix: "drel_{tag}")
+	var decArgs = ByteArrayArray.create()
+	decArgs.push(loaded)
+	emitRuntimeCall(project, maxonModule: maxonModule, block: block, resultName: released, callee: "__mm_decref_maybenull_helper", args: decArgs)
 end 'emitWordDestroyAtOffset'
 
 // Synthesize the body of __layout_copy_<m>(src ptr, dst ptr) for a
@@ -608,7 +745,7 @@ function synthesizeCopyThunk(project Project, maxonModule MaxonModule, gid Gener
 				panic("synthesizeCopyThunk: field '{field.name}' on struct '{baseName}' has unresolved offset — layoutAllStructs pass did not run")
 			end 'unresolved'
 			let concrete = substituteType(project, t: field.fieldType, subst: subst)
-			let isHeap = maxonTypeIsHeapManaged(concrete)
+			let isHeap = argTypeHasHeapRefs(project, t: concrete)
 			emitWordCopyAtOffset(project, maxonModule: maxonModule, block: block, thunkName: name, srcName: srcLoad, dstName: dstLoad, offset: field.offset, fieldHasHeapRef: isHeap, tag: "f{i}")
 		end 'eachField'
 	end 'isStruct' else 'singleWord'
@@ -626,17 +763,20 @@ end 'synthesizeCopyThunk'
 //
 //   - Pure-primitive instance (no heap-bearing args, non-struct base):
 //     `ret 0` — nothing to release.
-//   - Heap-ref-bearing single word: load the 8-byte word and bind it as
-//     a slot of the heap type. injectDrops then sees the slot's
-//     lifetime end at function return and emits `mm_decref` (once
-//     C1.b plumbs the slot MaxonType through Std lowering).
-//   - Struct-shaped: per-field walk; for each heap-ref-bearing field,
-//     load it into its own slot of the field's substituted type.
+//   - Heap-ref-bearing single word: load the 8-byte word and release it
+//     via `__mm_decref_maybenull_helper` (null-guarded — a moved-out /
+//     never-assigned field slot reads 0).
+//   - Struct-shaped: per-field walk; for each heap-ref-bearing field
+//     (after substituting the instance's type args), load + release.
 //     Non-heap fields contribute nothing.
 //
-// We deliberately do NOT hand-emit `mm_decref` calls — that's
-// injectDrops' job. C1.a lands the shape; the runtime effect arrives
-// when C1.b lights up the slot-type-driven drop emission.
+// The release is hand-emitted, mirroring `emitWordCopyAtOffset`'s
+// hand-emitted `mm_incref`: thunk bodies are synthesized below the
+// classify surface the refcount inserter reads, so the inserter never
+// releases their loads. The thunk doubles as the box DESTRUCTOR for
+// generic-shared `Self{...}` allocations with type-param fields (see
+// `structAllocLayoutDestructorApplies` in LowerMaxonToStd) — its
+// `(i64) -> i64` shape matches the `mm_alloc` destructor-slot ABI.
 function synthesizeDestroyThunk(project Project, maxonModule MaxonModule, gid GenericInstanceId, name String)
 	var (func, block) = startThunkFunc(maxonModule, name: name, paramCount: 1, returnsInteger: true)
 
@@ -645,9 +785,6 @@ function synthesizeDestroyThunk(project Project, maxonModule MaxonModule, gid Ge
 
 	let (baseId, args) = project.genericInstances.get(gid)
 	let baseName = project.typeNames.get(baseId)
-	// Param slot 0 is the only user-facing slot today; field-destroy
-	// slots count up from slot 1.
-	var nextSlot = 1 as VarSlot
 	if let st = try project.structTypes.get(baseName) 'isStruct'
 		let subst = buildSubstitution(project, declaringTypeName: baseName, args: args)
 		for i in 0 upto st.fields.count() 'eachField'
@@ -656,16 +793,13 @@ function synthesizeDestroyThunk(project Project, maxonModule MaxonModule, gid Ge
 				panic("synthesizeDestroyThunk: field '{field.name}' on struct '{baseName}' has unresolved offset — layoutAllStructs pass did not run")
 			end 'unresolved'
 			let concrete = substituteType(project, t: field.fieldType, subst: subst)
-			if maxonTypeIsHeapManaged(concrete) 'isHeap'
-				emitWordDestroyAtOffset(project, maxonModule: maxonModule, block: block, thunkName: name, valueName: valueLoad, offset: field.offset, slotMaxonType: concrete, slotId: nextSlot, tag: "f{i}")
-				nextSlot = nextSlot + 1
+			if argTypeHasHeapRefs(project, t: concrete) 'isHeap'
+				emitWordDestroyAtOffset(project, maxonModule: maxonModule, block: block, thunkName: name, valueName: valueLoad, offset: field.offset, tag: "f{i}")
 			end 'isHeap'
 		end 'eachField'
 	end 'isStruct' else 'singleWord'
 		if instanceArgsHaveHeapRefs(project, gid: gid) 'hasHeap'
-			let slotType = representativeHeapType(project, gid: gid)
-			emitWordDestroyAtOffset(project, maxonModule: maxonModule, block: block, thunkName: name, valueName: valueLoad, offset: 0, slotMaxonType: slotType, slotId: nextSlot, tag: "w0")
-			nextSlot = nextSlot + 1
+			emitWordDestroyAtOffset(project, maxonModule: maxonModule, block: block, thunkName: name, valueName: valueLoad, offset: 0, tag: "w0")
 		end 'hasHeap'
 	end 'singleWord'
 

@@ -3,6 +3,7 @@
 // produced .ir artifact(s) inline.
 //
 // Inputs (JSON):
+//   compiler: "csharp" | "selfhosted"  — which compiler to use (required)
 //   source: { kind: "file", path } | { kind: "snippet", code }
 //   dumpStages?: bool   — when true, also returns per-stage .N-maxon.ir files
 //
@@ -20,20 +21,39 @@ let irMaxBytes = 204800
 // second; 30s is generous for cold-cache stdlib parses.
 let dumpIrTimeoutMs = 30000
 
-/// Entry point called by Server.maxon's dispatch table.
+/// Entry point called by Server.maxon's dispatch table. The caller picks the
+/// compiler (`compiler` is required) and may set `dumpStages`.
 export function dumpIrHandler(argsDoc JsonDoc, argsId JsonNodeId) returns ToolOutcome
-	let mainFile = try resolveProjectSource(argsDoc, argsId: argsId, snippetPrefix: "dump-ir") otherwise (err) 'badSrc'
-		return ToolOutcome.error(RpcStandardErrorCode.invalidParams.rawValue, message: "dump_ir: {sourceArgErrorReason(err)}")
+	let compiler = try resolveRequiredCompiler(argsDoc, argsId: argsId) otherwise (err) 'badCompiler'
+		return ToolOutcome.error(RpcStandardErrorCode.invalidParams.rawValue, message: "dump_ir: {compilerArgErrorReason(err)}")
+	end 'badCompiler'
+
+	let dumpStages = try argsDoc.getBool(argsId, key: "dumpStages") otherwise false
+	return emitIr(argsDoc, argsId: argsId, toolName: "dump_ir", snippetPrefix: "dump-ir", compiler: compiler, dumpStages: dumpStages)
+end 'dumpIrHandler'
+
+/// Entry point for the `dump_stages` tool. Always uses the self-hosted
+/// compiler and always passes `--dump-stages`; the caller supplies only
+/// the source. Returns every stage artifact plus the final .ir.
+export function dumpStagesHandler(argsDoc JsonDoc, argsId JsonNodeId) returns ToolOutcome
+	return emitIr(argsDoc, argsId: argsId, toolName: "dump_stages", snippetPrefix: "dump-stages", compiler: "selfhosted", dumpStages: true)
+end 'dumpStagesHandler'
+
+// Shared body of `dump_ir` / `dump_stages`: resolve the source, locate the
+// chosen compiler binary, run `build --emit-ir` (with `--dump-stages` when
+// requested), and package the produced .ir artifact(s). `toolName` only colours
+// the error messages so each tool reports under its own name.
+function emitIr(argsDoc JsonDoc, argsId JsonNodeId, toolName String, snippetPrefix String, compiler String, dumpStages bool) returns ToolOutcome
+	let mainFile = try resolveProjectSource(argsDoc, argsId: argsId, snippetPrefix: snippetPrefix) otherwise (err) 'badSrc'
+		return ToolOutcome.error(RpcStandardErrorCode.invalidParams.rawValue, message: "{toolName}: {sourceArgErrorReason(err)}")
 	end 'badSrc'
 
 	let repoRoot = repoRootPath()
-	let csharpBinary = childPath(repoRoot, segment: "bin/maxon.exe")
-	if not File.exists(csharpBinary) 'noCsharp'
+	let binary = try compilerBinary(repoRoot, compiler: compiler) otherwise 'noBin'
 		cleanupResolvedSource(mainFile)
-		return ToolOutcome.error(RpcStandardErrorCode.invalidRequest.rawValue, message: "dump_ir: `{csharpBinary.path}` does not exist. Build the C# bootstrap first via the `build` tool.")
-	end 'noCsharp'
+		return ToolOutcome.error(RpcStandardErrorCode.invalidRequest.rawValue, message: "{toolName}: the {compiler} compiler binary does not exist. Build it first via the `build` tool (target: \"{compiler}\").")
+	end 'noBin'
 
-	let dumpStages = try argsDoc.getBool(argsId, key: "dumpStages") otherwise false
 	var argv = StringArray.create()
 	argv.push("build")
 	argv.push(mainFile.projectDir.path)
@@ -42,15 +62,15 @@ export function dumpIrHandler(argsDoc JsonDoc, argsId JsonNodeId) returns ToolOu
 		argv.push("--dump-stages")
 	end 'doStages'
 
-	let result = try Subprocess.run(Executable.path(csharpBinary), arguments: argv, workingDirectory: repoRoot, timeoutMs: dumpIrTimeoutMs) otherwise (err) 'spawn'
+	let result = try Subprocess.run(Executable.path(binary), arguments: argv, workingDirectory: repoRoot, timeoutMs: dumpIrTimeoutMs) otherwise (err) 'spawn'
 		cleanupResolvedSource(mainFile)
-		return ToolOutcome.error(RpcStandardErrorCode.internalError.rawValue, message: "dump_ir: {err.displayReason()}")
+		return ToolOutcome.error(RpcStandardErrorCode.internalError.rawValue, message: "{toolName}: {err.displayReason()}")
 	end 'spawn'
 
 	let outcome = buildOutcome(mainFile, result: result, dumpStages: dumpStages)
 	cleanupResolvedSource(mainFile)
 	return outcome
-end 'dumpIrHandler'
+end 'emitIr'
 
 // =============================================================================
 // Artifact collection

@@ -178,8 +178,10 @@ export extension Array
 			if cmp(rv, cv) != Ordering.lessThan 'heapOk'
 				return
 			end 'heapOk'
-			try managed.set(lo + root, value: cv) otherwise panic("siftDown: set OOB at root")
-			try managed.set(lo + child, value: rv) otherwise panic("siftDown: set OOB at child")
+			// Raw swap, not get+set: `set`'s overwrite decref would free the
+			// displaced occupant while its borrow is still in flight (see
+			// `Array.swap`).
+			self.swap(lo + root, j: lo + child)
 			root = child
 		end 'sift'
 	end 'siftDown'

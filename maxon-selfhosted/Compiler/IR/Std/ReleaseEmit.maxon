@@ -1,0 +1,145 @@
+// Shared refcount release/acquire op emission for the SSA refcount inserter
+// (`InsertRefcounts`), the SOLE owner of release insertion since Step 6 retired
+// the pre-mem2reg `InjectDrops` pass.
+//
+// The `insert-where-needed` model splits two concerns:
+//   - PLACEMENT — *where* an incref/decref/free goes. Owned by the caller
+//     (`InsertRefcounts` decides the exact program point from per-value
+//     liveness).
+//   - SELECTION — *which* release op a given value needs. Owned by THIS module.
+//
+// A value gets released one of three ways (the inserter chooses by per-value
+// ownership class / type bit and calls the matching builder):
+//   1. `sys.free`            — a RAW heap allocation (a `sys.globalAddr`-
+//                              derived pointer, i.e. an `mrt_alloc`/raw buffer
+//                              not behind the refcounted `__ManagedMemory`
+//                              header). Identified by the heap-alloc scan.
+//   2. `sys.dropTypeParam`   — a generic type-parameter value: destruction
+//                              routes through the enclosing function's implicit
+//                              `__layout` descriptor's `destroyFunc`. The
+//                              inserter detects these by the persisted per-VALUE
+//                              `valueTypeParam` bit (mem2reg promotes type-
+//                              parameter locals to SSA, so there is no slot to
+//                              key off post-mem2reg).
+//   3. `mm_decref`           — a managed refcounted reference (the common case).
+//                              Two flavors:
+//                                - `__mm_decref_maybenull_helper` for a value that
+//                                  may be null (slot-derived / merged-phi values);
+//                                - `stdlib.__mm_decref` for a provably-non-null
+//                                  value (a fresh allocation result, a value
+//                                  whose definition dominates the release with
+//                                  no intervening null path).
+//
+// The incref side emits `stdlib.__mm_incref`.
+
+// Sentinel: "this function has no implicit `__layout` param" — used by callers
+// that thread the layout descriptor ValueId for `sys.dropTypeParam` emission.
+export let RELEASE_NO_LAYOUT = i64.max
+
+// ============================================================
+// Implicit `__layout` descriptor ValueId
+// ============================================================
+
+// Derive the entry-block param ValueId for the FIRST implicit `__layout_*`
+// param of a generic function. Per-type-param layouts: the N layout slots
+// occupy `[paramCount - witnessCount - N, paramCount - witnessCount)`, in
+// declared type-param order, after user args and the optional `__env` slot,
+// with the per-constraint `__witness_*` slots sitting past them. Panics if the
+// function carries no implicit layout param — an upstream contract violation,
+// not a recoverable runtime condition.
+export function implicitLayoutValueIdOf(func IrFunction) returns ValueId
+	if not func.hasImplicitLayoutParam 'noLayout'
+		panic("implicitLayoutValueIdOf: func '{func.name}' has no implicit layout param")
+	end 'noLayout'
+	// Single-layout model: a function carries exactly ONE implicit layout param,
+	// laid out after the user args and before the per-constraint witness params
+	// (paramCount - witnessCount - 1). Mirrors InjectDrops.getImplicitLayoutValueId.
+	let witnessCount = func.implicitWitnessConstraints.count()
+	return (func.paramCount - witnessCount - 1) as ValueId
+end 'implicitLayoutValueIdOf'
+
+// ============================================================
+// Release-op construction
+// ============================================================
+
+// Build a `sys.dropTypeParam` op routing destruction of `valueId` (a generic
+// type-parameter local) through the function's implicit `__layout` descriptor.
+// Returns the op's index in `module.ops`.
+export function buildDropTypeParamOp(module StdModule, valueId ValueId, layoutValueId ValueId) returns OpIndex
+	let idx = module.ops.count()
+	module.ops.push(StdOp.system(StdSystemOp.dropTypeParam(valueId, layoutValueId: layoutValueId)))
+	return idx
+end 'buildDropTypeParamOp'
+
+// Build a managed decref call for `valueId`. A decref is an ordinary runtime
+// call returning i64 (the new refcount, discarded), so it needs a fresh result
+// ValueId minted from `idRef`. `nullGuarded` selects the runtime entry:
+//   - true  → `__mm_decref_maybenull_helper` (tolerates EXACTLY null; the slot-derived
+//             / merged-phi case where a path may not have stored. A misrouted
+//             non-null scalar still faults inside strict `__mm_decref`).
+//   - false → `stdlib.__mm_decref` (STRICT — the value is provably non-null, a
+//             fresh allocation or a definition that dominates the release; a null
+//             here faults loudly rather than masking an inserter bug).
+// Returns the op's index in `module.ops`.
+export function buildDecrefOp(module StdModule, valueId ValueId, nullGuarded bool, idRef ValueIdRef) returns OpIndex
+	let resultId = allocValueId(idRef)
+	var argIds = ValueIdArray.create()
+	argIds.push(valueId)
+	let callee = ("__mm_decref_maybenull_helper" if nullGuarded else "stdlib.__mm_decref")
+	let idx = module.ops.count()
+	module.ops.push(StdOp.call(StdCallOp.call(resultId, callee: callee, argIds: argIds)))
+	return idx
+end 'buildDecrefOp'
+
+// Build a managed incref call (`stdlib.__mm_incref`) for `valueId`. Like
+// decref, an ordinary i64-returning runtime call needing a fresh result id.
+// Returns the op's index in `module.ops`.
+export function buildIncrefOp(module StdModule, valueId ValueId, idRef ValueIdRef) returns OpIndex
+	let resultId = allocValueId(idRef)
+	var argIds = ValueIdArray.create()
+	argIds.push(valueId)
+	let idx = module.ops.count()
+	module.ops.push(StdOp.call(StdCallOp.call(resultId, callee: "stdlib.__mm_incref", argIds: argIds)))
+	return idx
+end 'buildIncrefOp'
+
+// Build a layout-routed retain call (`stdlib.__mm_retain_type_param(value,
+// layout)`) for a BORROWED element moved into a container. The runtime helper
+// increfs `value` iff the layout descriptor's HAS_HEAP_REFS bit is set (a managed-
+// pointer element) and no-ops a primitive element — so it is safe for a generic
+// type-parameter element whose concrete managed-ness is only known at runtime. An
+// ordinary i64-returning runtime call needing a fresh result id.
+export function buildRetainTypeParamCall(module StdModule, valueId ValueId, layoutValueId ValueId, idRef ValueIdRef) returns OpIndex
+	let resultId = allocValueId(idRef)
+	var argIds = ValueIdArray.create()
+	argIds.push(valueId)
+	argIds.push(layoutValueId)
+	let idx = module.ops.count()
+	module.ops.push(StdOp.call(StdCallOp.call(resultId, callee: "mm_retain_type_param", argIds: argIds)))
+	return idx
+end 'buildRetainTypeParamCall'
+
+// Build a pointer-width (`qword`, non-float) `load_indirect` that reloads the
+// OLD value a heap field at `[addrId + offset]` held before an overwriting
+// store. The result ValueId is minted fresh from `idRef` and returned alongside
+// the op index, since the caller (the heap-store overwrite path) feeds that
+// result into a `__mm_decref_maybenull_helper` of the old field value. A managed field
+// always holds a pointer-width reference (or null), so `qword` is the correct
+// width; `signed`/`isFloat` are irrelevant for a pointer load.
+export function buildLoadOldFieldOp(module StdModule, addrId ValueId, offset MachineWord, idRef ValueIdRef) returns LoadOldField
+	let resultId = allocValueId(idRef)
+	let idx = module.ops.count()
+	module.ops.push(StdOp.system(StdSystemOp.loadIndirect(resultId, addrId: addrId, offset: offset, width: StoreWidth.qword, signed: false, isFloat: false)))
+	return LoadOldField.create(resultId, opIdx: idx)
+end 'buildLoadOldFieldOp'
+
+// The fresh result ValueId and op index of a `buildLoadOldFieldOp` load — the
+// caller places the op and decrefs `resultId` (the old field value).
+export type LoadOldField
+	export var resultId as ValueId
+	export var opIdx as OpIndex
+
+	export static function create(resultId ValueId, opIdx OpIndex) returns LoadOldField
+		return Self{resultId: resultId, opIdx: opIdx}
+	end 'create'
+end 'LoadOldField'

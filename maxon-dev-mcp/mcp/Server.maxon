@@ -181,13 +181,16 @@ function toolSchema(doc JsonDoc, name String) returns JsonNodeId
 		return schemaForLookupErrorCode(doc)
 	end 'lec'
 	if name.equals("dump_ir") 'di'
-		return schemaForSourceOnly(doc, withDumpStages: true)
+		return schemaForSourceOnly(doc, withDumpStages: true, withCompiler: true)
 	end 'di'
+	if name.equals("dump_stages") 'ds'
+		return schemaForSourceOnly(doc, withDumpStages: false, withCompiler: false)
+	end 'ds'
 	if name.equals("run_program") 'rp'
 		return schemaForRunProgram(doc)
 	end 'rp'
 	if name.equals("fmt") 'fm'
-		return schemaForSourceOnly(doc, withDumpStages: false)
+		return schemaForSourceOnly(doc, withDumpStages: false, withCompiler: false)
 	end 'fm'
 	if name.equals("run_self_hosted_test") 'rsht'
 		return schemaForSelfHostedSpecTest(doc)
@@ -302,17 +305,24 @@ function schemaForLookupErrorCode(doc JsonDoc) returns JsonNodeId
 end 'schemaForLookupErrorCode'
 
 // -----------------------------------------------------------------------------
-// dump_ir / fmt — both take a `source` block; dump_ir adds dumpStages
+// dump_ir / fmt — both take a `source` block; dump_ir adds compiler + dumpStages
 // -----------------------------------------------------------------------------
-function schemaForSourceOnly(doc JsonDoc, withDumpStages bool) returns JsonNodeId
-	let sourceSchema = schemaSource(doc)
+function schemaForSourceOnly(doc JsonDoc, withDumpStages bool, withCompiler bool) returns JsonNodeId
 	var fields = SchemaFieldArray.create()
+	if withCompiler 'comp'
+		var compilerChoices = StringArray.create()
+		compilerChoices.push("csharp")
+		compilerChoices.push("selfhosted")
+		let compilerSchema = schemaStringEnum(doc, choices: compilerChoices, description: "Which compiler to build with. Required — there is no default.")
+		fields.push(SchemaField.create("compiler", schemaId: compilerSchema, required: true))
+	end 'comp'
+	let sourceSchema = schemaSource(doc)
 	fields.push(SchemaField.create("source", schemaId: sourceSchema, required: true))
 	if withDumpStages 'stages'
 		let dumpStagesSchema = schemaBoolean(doc, description: "When true, also emit per-stage IR artifacts (.1-maxon.ir, .2-hir.ir, etc.).")
 		fields.push(SchemaField.create("dumpStages", schemaId: dumpStagesSchema, required: false))
 	end 'stages'
-	let description = "Operate on a Maxon source: either a file/project or an inline snippet." if withDumpStages else "Format a Maxon source: either a file/project or an inline snippet."
+	let description = "Compile a Maxon source with the chosen compiler and emit IR." if withDumpStages else "Format a Maxon source: either a file/project or an inline snippet."
 	return schemaObject(doc, fields: fields, description: description)
 end 'schemaForSourceOnly'
 
@@ -366,8 +376,11 @@ function toolDescription(name String) returns String
 		return "Look up a 4-digit Maxon error code (e.g. E3014) by its numeric value, returning the source-of-truth doc comment and the spec files that exercise it."
 	end 'lec'
 	if name.equals("dump_ir") 'di'
-		return "Compile a snippet or file with --emit-ir and return the resulting .ir text (optionally per-stage when dumpStages=true)."
+		return "Compile a snippet or file with --emit-ir using the chosen compiler (csharp | selfhosted) and return the resulting .ir text (optionally per-stage when dumpStages=true)."
 	end 'di'
+	if name.equals("dump_stages") 'ds'
+		return "Compile a snippet or file with the self-hosted compiler using --dump-stages and return all per-stage IR artifacts (.1-maxon.ir, .2-hir.ir, etc.) plus the final .ir."
+	end 'ds'
 	if name.equals("run_program") 'rp'
 		return "Compile and execute a Maxon snippet or file with the chosen compiler (csharp | selfhosted), returning build + run exit codes, durations, and stdout/stderr."
 	end 'rp'
@@ -445,6 +458,9 @@ function invokeTool(name String, argsDoc JsonDoc, argsId JsonNodeId) returns Too
 	if name.equals("dump_ir") 'di'
 		return dumpIrHandler(argsDoc, argsId: argsId)
 	end 'di'
+	if name.equals("dump_stages") 'ds'
+		return dumpStagesHandler(argsDoc, argsId: argsId)
+	end 'ds'
 	if name.equals("run_program") 'rp'
 		return runProgramHandler(argsDoc, argsId: argsId)
 	end 'rp'
@@ -566,6 +582,7 @@ function toolRegistry() returns ToolNameArray
 	names.push("run_spec_test")
 	names.push("lookup_error_code")
 	names.push("dump_ir")
+	names.push("dump_stages")
 	names.push("run_program")
 	names.push("fmt")
 	names.push("run_self_hosted_test")

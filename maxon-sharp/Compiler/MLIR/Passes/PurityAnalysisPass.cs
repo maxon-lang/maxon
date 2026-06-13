@@ -79,6 +79,7 @@ public static class PurityAnalysisPass {
     "__managed_mem_set_byte",
     "__managed_mem_grow", "__managed_mem_set_length",
     "__managed_mem_shift_right", "__managed_mem_shift_left",
+    "__managed_mem_swap",
     "__managed_list_reinsert_first", "__managed_list_reinsert_last",
     "__managed_list_reinsert_after", "__managed_list_reinsert_before",
     // socket I/O is inherently impure

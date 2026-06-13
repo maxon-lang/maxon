@@ -11,7 +11,7 @@
 //
 // Assertion leaves (see header comment on `walkAssertion` for the full list):
 //   {"equals": <any>}, {"isString": true}, {"isNumber": true}, {"isBool": true},
-//   {"present": true}, {"contains": "..."}, {"length": N},
+//   {"present": true}, {"absent": true}, {"contains": "..."}, {"length": N},
 //   {"parseJsonText": <inner>}, plus bare objects/arrays which recurse.
 
 typealias TestCount = int(0 to u64.max)
@@ -337,9 +337,13 @@ end 'splitJsonLines'
 /// 
 /// Recognised assertion forms at the leaf:
 ///   {"equals": <any>}, {"isString": true}, {"isNumber": true},
-///   {"isBool": true}, {"present": true}, {"contains": "..."},
-///   {"length": N}, {"items": [...]}, {"parseJsonText": <inner>}
+///   {"isBool": true}, {"present": true}, {"absent": true},
+///   {"contains": "..."}, {"length": N}, {"items": [...]},
+///   {"parseJsonText": <inner>}
 /// Plus: bare object recurses by key; bare array recurses positionally.
+/// Note: {"absent": true} is resolved against the parent object in
+/// `walkRecursiveObject` (a missing key passes); it only reaches the leaf
+/// walker when the key is unexpectedly present, where it fails.
 function walkAssertion(actualDoc JsonDoc, actualId JsonNodeId, assertDoc JsonDoc, assertId JsonNodeId, path String) returns bool
 	let assertNode = assertDoc.get(assertId)
 	match assertNode.kind 'k'
@@ -364,6 +368,7 @@ function walkObjectAssertion(actualDoc JsonDoc, actualId JsonNodeId, assertDoc J
 		isNumber then return checkType(actualDoc, actualId: actualId, expected: JsonKind.jsonNumber, path: path)
 		isBool then return checkType(actualDoc, actualId: actualId, expected: JsonKind.jsonBool, path: path)
 		present then return checkPresent(path)
+		absent then return checkAbsentAtLeaf(path)
 		contains then return checkContains(actualDoc, actualId: actualId, assertDoc: assertDoc, assertId: assertId, path: path)
 		length then return checkLengthThenMaybeItems(actualDoc, actualId: actualId, assertDoc: assertDoc, assertId: assertId, path: path)
 		parseJsonText then return checkParseJsonText(actualDoc, actualId: actualId, assertDoc: assertDoc, assertId: assertId, path: path)
@@ -377,6 +382,7 @@ enum AssertOp
 	isNumber
 	isBool
 	present
+	absent
 	contains
 	length
 	parseJsonText
@@ -407,6 +413,9 @@ function detectOperator(assertDoc JsonDoc, assertId JsonNodeId) returns AssertOp
 	if first.equals("present") 'pres'
 		return AssertOp.present
 	end 'pres'
+	if first.equals("absent") 'abs'
+		return AssertOp.absent
+	end 'abs'
 	if first.equals("contains") 'cont'
 		return AssertOp.contains
 	end 'cont'
@@ -429,10 +438,21 @@ function walkRecursiveObject(actualDoc JsonDoc, actualId JsonNodeId, assertDoc J
 	for i in 0 upto keyCount 'eachKey'
 		let key = try assertNode.keys.get(i) otherwise panic("walkRecursiveObject: keys.get OOB")
 		let childAssertId = try assertNode.children.get(i) otherwise panic("walkRecursiveObject: children.get OOB")
+		// `{"absent": true}` asserts the key is NOT present in actual. It is
+		// handled here rather than at the leaf because a missing key would
+		// otherwise short-circuit as a generic "missing key" failure below.
+		let expectAbsent = detectOperator(assertDoc, assertId: childAssertId).ordinal == AssertOp.absent.ordinal
 		let childActualId = try actualDoc.getChild(actualId, key: key) otherwise 'noKey'
+			if expectAbsent 'absentOk'
+				continue
+			end 'absentOk'
 			print("FAIL at {path}.{key}: missing key in actual\n")
 			return false
 		end 'noKey'
+		if expectAbsent 'unexpectedlyPresent'
+			print("FAIL at {path}.{key}: expected key to be absent, but it is present\n")
+			return false
+		end 'unexpectedlyPresent'
 		let subPath = "{path}.{key}"
 		let ok = walkAssertion(actualDoc, actualId: childActualId, assertDoc: assertDoc, assertId: childAssertId, path: subPath)
 		if not ok 'fail'
@@ -497,6 +517,17 @@ function checkPresent(_ String) returns bool
 	// functions but unused on the always-true success path.
 	return true
 end 'checkPresent'
+
+// Reaching the leaf walker with an `absent` operator means the key WAS found
+// in actual — the absence assertion is violated. The successful (key-missing)
+// case is short-circuited in `walkRecursiveObject` before the leaf is reached;
+// this path exists so the operator match stays exhaustive and so a stray
+// `{"absent": true}` against an array element or top-level value still fails
+// loudly rather than silently passing.
+function checkAbsentAtLeaf(path String) returns bool
+	print("FAIL at {path}: expected to be absent, but it is present\n")
+	return false
+end 'checkAbsentAtLeaf'
 
 function checkContains(actualDoc JsonDoc, actualId JsonNodeId, assertDoc JsonDoc, assertId JsonNodeId, path String) returns bool
 	let actualNode = actualDoc.get(actualId)

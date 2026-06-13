@@ -22,16 +22,14 @@
 export extension Array
 	// Unconditional swap of elements at positions i and j. Used by pdqsort's
 	// pivot-shuffle and heapsort's extraction step where the swap is mandatory
-	// and no comparator is needed. Lives next to `compareAndSwap` so both
-	// share the same get/set bounds-handling discipline.
+	// and no comparator is needed. Routes through the raw `managed.swap`
+	// builtin: a swap MOVES ownership between slots with refcounts unchanged.
+	// Building it from get+set instead would decref the displaced occupant
+	// (`__managed_mem_set`'s overwrite semantics) while the borrowed copy of
+	// it is still waiting to be stored into the other slot — freeing a
+	// managed element mid-swap (the sort-of-managed-elements UAF).
 	export function swap(i SortIndex, j SortIndex)
-		if i == j 'noOp'
-			return
-		end 'noOp'
-		let a = try managed.get(i) otherwise panic("swap: get OOB at i; caller must pre-bound i,j")
-		let b = try managed.get(j) otherwise panic("swap: get OOB at j; caller must pre-bound i,j")
-		try managed.set(i, value: b) otherwise panic("swap: set OOB at i")
-		try managed.set(j, value: a) otherwise panic("swap: set OOB at j")
+		try managed.swap(i, j: j) otherwise panic("swap: index OOB; caller must pre-bound i,j")
 	end 'swap'
 
 	// Reverse the slice [lo, hi) in place by swapping from both ends inward.
@@ -53,11 +51,9 @@ export extension Array
 	end 'reverseRange'
 
 	// Compare elements at positions i and j; if managed[i] > managed[j],
-	// swap them. The "branchless" property is a future optimization (would
-	// require a swap primitive on __ManagedMemory that bypasses the typed
-	// get/set refcount machinery); today this is a straight compare-and-swap
-	// built from get/set, which still has the right memory traffic profile
-	// for tiny slices.
+	// swap them. The reads are borrows (no refcount traffic); the exchange
+	// goes through the raw `managed.swap` builtin for the same
+	// ownership-move reason as `swap` above.
 	export function compareAndSwap(i SortIndex, j SortIndex, cmp SortComparator)
 		let a = try managed.get(i) otherwise panic("compareAndSwap: get OOB at i; caller must pre-bound i,j")
 		let b = try managed.get(j) otherwise panic("compareAndSwap: get OOB at j; caller must pre-bound i,j")
@@ -65,8 +61,7 @@ export extension Array
 		if ord != Ordering.greaterThan 'inOrder'
 			return
 		end 'inOrder'
-		try managed.set(i, value: b) otherwise panic("compareAndSwap: set OOB at i")
-		try managed.set(j, value: a) otherwise panic("compareAndSwap: set OOB at j")
+		self.swap(i, j: j)
 	end 'compareAndSwap'
 
 	// 2-element network: a single compare-and-swap.

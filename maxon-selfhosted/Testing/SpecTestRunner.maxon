@@ -2,7 +2,15 @@
 // Parses spec files, generates fragments, and runs tests.
 // Uses the fragment-based pipeline matching the C# test runner.
 
-let whitelist = ["basics",
+let whitelist = ["mm-ladder",
+	"mm-ladder-2",
+	"mm-ladder-3",
+	"mm-ladder-4",
+	"mm-ladder-5",
+	"mm-ladder-containers",
+	"mm-ladder-containers-2",
+	"mm-ladder-managed-element-containers",
+	"basics",
 	"compiler-directives",
 	"print-function",
 	"variables",
@@ -117,6 +125,7 @@ let whitelist = ["basics",
 	"primitive-cloneable",
 	"primitive-comparable",
 	"string-type",
+	"string-type-2",
 	"string-interpolation",
 	"character-type",
 	"type-checking",
@@ -158,7 +167,6 @@ let whitelist = ["basics",
 	"command-line-args",
 	"file-io",
 	"directory",
-	"cache-parity",
 	"arithmetic-operators",
 	"keyword-parameter-names",
 	"while-loops",
@@ -423,6 +431,12 @@ typealias TestCount = int(0 to u64.max)
 // fast feedback on local runs; raise if a legitimately heavy test trips it.
 let testProcessTimeoutMs = 2000
 
+// Process-exit code returned by `mrt_leak_check` (the leak gate wired into
+// leak-checked binaries) when an allocation is still live at exit. Matches the
+// `101` constant the runtime's `mrt_leak_check` returns. A test that expects a
+// non-101 exit but gets this has leaked.
+let SPEC_LEAK_EXIT_CODE = 101 as ProcessExitCode
+
 // Batch-process wall-clock budget. A batch binary runs every test in a spec
 // sequentially in ONE process, so its budget has to scale with the test count,
 // not stay pinned at the single-fragment `testProcessTimeoutMs` — a spec whose
@@ -665,6 +679,75 @@ function captureLoweringLog(source String, testName String, specName String, tem
 	return loweringLog
 end 'captureLoweringLog'
 
+// Capture a test's final per-function compiled IR (the `// CompiledIR` content,
+// `finalIrString` with stdlib skipped) for `--update-required` to write into the
+// test's `RequiredIR:<target>` block. Mirrors captureLoweringLog but returns
+// `compileResult.ir` instead of the trace. Returns "" on compile failure.
+function captureCompiledIr(source String, virtualPath FilePath, specName String, tempDir FilePath, target Target, includeStdlibIr bool, mmTrace bool) returns String
+	let ext = executableExtension(target)
+	let tempExe = tempDir.join("{specName}{ext}")
+	let normalizedSource = source.trim()
+	// Match the validation run's compile EXACTLY so the captured IR is byte-identical:
+	//  - `virtualPath` = the fragment .test path (content-hashed panic labels embed it),
+	//  - the test's `mmTrace` (with trace on, a managed alloc's tag-index immediate is
+	//    interned/non-zero), AND
+	//  - for an mmTrace test, the stdlib cache BYPASS the validation run uses: a
+	//    cache-bypass compile re-lowers stdlib, which interns the stdlib types' trace
+	//    tags FIRST, so the user type's tag index (and its alloc immediate) only matches
+	//    when both legs lower stdlib the same way. resetMmTraceTags() (in
+	//    compileSourceWithIr) zeroes the table at the start of each compile.
+	var bypassed = false
+	if mmTrace 'bypassForTrace'
+		resetStdlibLoaderState()
+		setStdlibCacheBypassed(true)
+		bypassed = true
+	end 'bypassForTrace'
+	let compileResult = try compileSourceWithIr(normalizedSource, virtualPath: virtualPath, target: target, outputPath: tempExe, coverage: false, covMapPath: tempExe.changeExtension(".covmap"), includeStdlibIr: includeStdlibIr, asyncTrace: false, mmTrace: mmTrace) otherwise 'compileFailed'
+		if bypassed 'restoreErr'
+			setStdlibCacheBypassed(false)
+			resetStdlibLoaderState()
+			warmStdlibCache(target)
+		end 'restoreErr'
+		return ""
+	end 'compileFailed'
+	if bypassed 'restore'
+		setStdlibCacheBypassed(false)
+		resetStdlibLoaderState()
+		warmStdlibCache(target)
+	end 'restore'
+	cleanup(tempExe)
+	return compileResult.ir
+end 'captureCompiledIr'
+
+// Capture a test's mm-trace (the `stderr` block) for `--update-required` to write
+// when the test has `<!-- MmTrace -->`. Compiles with the stdlib cache BYPASSED so
+// the trace calls are materialized (the on-disk cache is built trace-free — see
+// the bypass in runTestFromFragment), runs the exe, and returns its trimmed
+// stderr. Restores the warm cache afterward. Returns "" on compile/run failure.
+function captureMmTrace(source String, virtualPath FilePath, specName String, tempDir FilePath, target Target, includeStdlibIr bool) returns String
+	let ext = executableExtension(target)
+	let tempExe = tempDir.join("{specName}_mmtrace{ext}")
+	let normalizedSource = source.trim()
+	resetStdlibLoaderState()
+	setStdlibCacheBypassed(true)
+	let compileResult = try compileSourceWithIr(normalizedSource, virtualPath: virtualPath, target: target, outputPath: tempExe, coverage: false, covMapPath: tempExe.changeExtension(".covmap"), includeStdlibIr: includeStdlibIr, asyncTrace: false, mmTrace: true, leakCheck: true) otherwise 'compileFailed'
+		setStdlibCacheBypassed(false)
+		resetStdlibLoaderState()
+		warmStdlibCache(target)
+		return ""
+	end 'compileFailed'
+	setStdlibCacheBypassed(false)
+	resetStdlibLoaderState()
+	warmStdlibCache(target)
+	let runCommand = buildRunCommand(compileResult.outputPath, target: target, testArgs: "")
+	let runResult = try Subprocess.run(runCommand.exe, arguments: runCommand.argv, workingDirectory: tempDir, timeoutMs: testProcessTimeoutMs) otherwise 'runFail'
+		cleanup(tempExe)
+		return ""
+	end 'runFail'
+	cleanup(tempExe)
+	return trimWhitespace(stripFaultRipSuffix(runResult.stderr))
+end 'captureMmTrace'
+
 // Update RequiredLowering blocks in all spec files by compiling each test and capturing lowering output.
 function updateAllRequiredLowering(specDir FilePath, tempDir FilePath, filter String, target Target, targetKey String)
 	for specName in effectiveWhitelist(target) 'eachSpec'
@@ -684,6 +767,14 @@ function updateAllRequiredLowering(specDir FilePath, tempDir FilePath, filter St
 			if test.expectation.hasCompilerStderr 'skipErrorTest'
 				continue
 			end 'skipErrorTest'
+			// Multi-file tests (`// --- file: …` markers) need the multi-file compile
+			// path to resolve cross-module callees; the single-file capture below
+			// compiles only the first file and panics on a cross-module call
+			// (`lookupFuncParamTypes: callee 'utils.qualifiedHelper' not registered`).
+			// Their lowering/IR goldens aren't captured this way — skip.
+			if test.hasMultiFile 'skipMultiFile'
+				continue
+			end 'skipMultiFile'
 			let loweringLog = captureLoweringLog(test.source, testName: test.name, specName: specName, tempDir: tempDir, target: target)
 			if not loweringLog.isEmpty() 'hasLog'
 				results.push(TestResult.create(test.name, passed: true, errorMessage: "", filePath: "", loweringLog: loweringLog, compileIr: ""))
@@ -695,6 +786,81 @@ function updateAllRequiredLowering(specDir FilePath, tempDir FilePath, filter St
 	end 'eachSpec'
 	logInfo(LogCategory.testing, message: function() gives "Updated RequiredLowering blocks in spec files")
 end 'updateAllRequiredLowering'
+
+// Update RequiredIR blocks in all spec files by compiling each test and capturing
+// its final per-function IR (the enforced `// CompiledIR`). Mirrors
+// updateAllRequiredLowering; only tests with an existing RequiredIR:<target>
+// placeholder are updated (updateIrBlock is not a backfill tool).
+function updateAllRequiredIr(fragmentDir FilePath, tempDir FilePath, filter String, target Target, targetKey String)
+	let specDir = try fragmentDir.parent() otherwise panic("updateAllRequiredIr: fragmentDir has no parent")
+	for specName in effectiveWhitelist(target) 'eachSpec'
+		let specPath = specDir.join("{specName}.md")
+		let content = try File.readText(specPath) otherwise continue
+		let fm = parseFrontmatter(content)
+		if fm.status == "draft" 'isDraft'
+			continue
+		end 'isDraft'
+		let tests = parseSpecFile(content, targetKey: targetKey)
+		var results = TestResultArray.create()
+		var mmTraceResults = TestResultArray.create()
+		for test in tests 'eachTest'
+			let testPath = "{specName}/{test.name}"
+			if not filterMatches(filter, testPath: testPath) 'noMatch'
+				continue
+			end 'noMatch'
+			if test.expectation.hasCompilerStderr 'skipErrorTest'
+				continue
+			end 'skipErrorTest'
+			// Skip multi-file tests — the single-file capture below can't resolve
+			// cross-module callees (see updateAllRequiredLowering's matching guard).
+			if test.hasMultiFile 'skipMultiFile'
+				continue
+			end 'skipMultiFile'
+			// Compile the EXACT source + virtual path the validation run uses so the
+			// captured IR matches byte-for-byte. The run compiles `fragment.source`,
+			// which is the `// Test: <name>` header line + the spec block (see
+			// generateFragmentContent) — that header shifts every line down by one, so
+			// a content-hashed panic message (which embeds `:{sourceLine}`) differs if
+			// we compile the raw block instead. The virtual path is the fragment .test
+			// path (its basename feeds the panic message's `sourceFileName`).
+			let fragSource = "// Test: {test.name}\n{test.source}"
+			let fragVirtualPath = fragmentDir.join(specName).join("{test.name}.test")
+			let ir = captureCompiledIr(fragSource, virtualPath: fragVirtualPath, specName: specName, tempDir: tempDir, target: target, includeStdlibIr: test.expectation.includeStdlibIr, mmTrace: test.expectation.mmTrace)
+			if not ir.isEmpty() 'hasIr'
+				results.push(TestResult.create(test.name, passed: true, errorMessage: "", filePath: "", loweringLog: "", compileIr: ir))
+			end 'hasIr'
+			// MmTrace tests: capture the runtime mm-trace and write it into the
+			// `stderr` block, so authors don't hand-transcribe traces. (Carried in
+			// the TestResult's `loweringLog` field for updateSpecStderr.)
+			if test.expectation.mmTrace 'hasMmTrace'
+				let trace = captureMmTrace(fragSource, virtualPath: fragVirtualPath, specName: specName, tempDir: tempDir, target: target, includeStdlibIr: test.expectation.includeStdlibIr)
+				mmTraceResults.push(TestResult.create(test.name, passed: true, errorMessage: "", filePath: "", loweringLog: trace, compileIr: ""))
+			end 'hasMmTrace'
+		end 'eachTest'
+		// Both captures above are independent of the block edits below (they compile
+		// the original source, not the edited spec file), so the write order is
+		// immaterial — each is an idempotent find/replace of its own fenced block.
+		if mmTraceResults.count() > 0 'hasTraces'
+			updateSpecStderr(specPath, results: mmTraceResults)
+		end 'hasTraces'
+		if results.count() > 0 'hasResults'
+			updateSpecRequiredIr(specPath, targetKey: targetKey, results: results)
+		end 'hasResults'
+	end 'eachSpec'
+	logInfo(LogCategory.testing, message: function() gives "Updated RequiredIR + mm-trace blocks in spec files")
+end 'updateAllRequiredIr'
+
+// Regenerate EVERY `--update-required` block family for the whitelisted specs:
+// the legacy `RequiredLowering` blocks AND the enforced `RequiredIR:<target>` +
+// mm-trace `stderr` blocks. Single source of truth so the serial
+// (`runAllSpecTests`) and parallel (`runAllSpecTestsParallel`) dispatchers can't
+// drift — they previously each inlined this, and the parallel (default) path was
+// missing the `updateAllRequiredIr` call, so `--update-required` silently left
+// RequiredIR/stderr stale.
+function runRequiredBlockUpdates(specDir FilePath, fragmentDir FilePath, tempDir FilePath, filter String, target Target, targetKey String)
+	updateAllRequiredLowering(specDir, tempDir: tempDir, filter: filter, target: target, targetKey: targetKey)
+	updateAllRequiredIr(fragmentDir, tempDir: tempDir, filter: filter, target: target, targetKey: targetKey)
+end 'runRequiredBlockUpdates'
 
 // Run all whitelisted spec tests for a specific target.
 // Warm the stdlib cache before running spec tests. This ensures all tests
@@ -869,7 +1035,7 @@ export function runAllSpecTests(filter String, target Target, updateRequired boo
 
 	// Update spec files before generating fragments so tests compare against current output
 	if updateRequired 'preUpdate'
-		updateAllRequiredLowering(specDir, tempDir: tempDir, filter: filter, target: target, targetKey: targetKey)
+		runRequiredBlockUpdates(specDir, fragmentDir: fragmentDir, tempDir: tempDir, filter: filter, target: target, targetKey: targetKey)
 	end 'preUpdate'
 
 	// On-disk staging area for compiled exes. The run step needs a stable
@@ -1019,7 +1185,16 @@ function runSpecBatch(tests SpecTestArray, specName String, fragmentDir FilePath
 	let batchedSource = buildResult.source
 	let covMapPath = batchExePath.changeExtension(".covmap")
 	emitWorkerCompiling("{specName} (batch of {tests.count()})")
-	let cr = try compileSourceWithIr(batchedSource, virtualPath: virtualPath, target: target, outputPath: batchExePath, coverage: false, covMapPath: covMapPath) otherwise 'batchCompileFailed'
+	// leakCheck: true wires the process-exit leak gate into the batched binary, so a
+	// batch that leaks ANY allocation exits 101 — matching the per-fragment path. The
+	// gate is cumulative (one `mrt_leak_check` at the dispatcher's exit, after every
+	// test's main ran), so it cannot attribute the leak to a single test; the run
+	// handler below detects the 101 batch exit and re-runs EVERY batched test via the
+	// per-fragment path, where each runs in isolation under its own leak gate and the
+	// real leaker is reported. Without this the batch silently passed leaking tests
+	// (the leak only surfaced when a sibling crash truncated the batch and forced
+	// fallback) — so a test's pass/fail depended on batch ordering.
+	let cr = try compileSourceWithIr(batchedSource, virtualPath: virtualPath, target: target, outputPath: batchExePath, coverage: false, covMapPath: covMapPath, leakCheck: true) otherwise 'batchCompileFailed'
 		totalCompileMs = totalCompileMs + (Clock.nowMs() - compileStart)
 		let capturedErrors = stopCapturingErrors()
 		// The shared compile didn't identify any single test — re-run every
@@ -1058,6 +1233,23 @@ function runSpecBatch(tests SpecTestArray, specName String, fragmentDir FilePath
 		pushBatchableForFallback(outcome, tests: tests, alreadySkipped: buildResult.skippedNames)
 		return outcome
 	end 'batchRun'
+
+	// Leak gate: the batched binary is compiled with `leakCheck: true`, so its
+	// cumulative process-exit `mrt_leak_check` returns SPEC_LEAK_EXIT_CODE (101) when
+	// ANY test left an allocation live. That verdict is whole-process — it can't say
+	// WHICH test leaked — so re-run every batched test via the per-fragment path,
+	// where each runs in isolation under its own leak gate and the real leaker is
+	// attributed. Without this, batched tests skipped the leak gate that per-fragment
+	// tests enforce, so a leaking test silently passed in a batch (surfacing only when
+	// a sibling crash happened to force fallback) — making pass/fail depend on batch
+	// composition. The per-test stdout/exit-code slices are still valid here (the gate
+	// runs after every test's main), but a leaking batch must not commit any PASS that
+	// the honest per-fragment path would fail.
+	if runResult.exitCode() == SPEC_LEAK_EXIT_CODE 'batchLeaked'
+		logDebug(LogCategory.testing, message: function() gives "[BATCH FALLBACK] {specName}: batch leaked (exit {SPEC_LEAK_EXIT_CODE}); re-running batchable tests individually to attribute the leak")
+		pushBatchableForFallback(outcome, tests: tests, alreadySkipped: buildResult.skippedNames)
+		return outcome
+	end 'batchLeaked'
 
 	// First pass: check each batchable test's slice. Tests with a present and
 	// passing slice are committed as PASS immediately; tests with a missing
@@ -1219,10 +1411,11 @@ end 'sliceFromBytePos'
 // reader sees in the editor; the multi-file branch synthesizes per-file
 // virtual paths under a directory derived from the fragment so module
 // visibility (which depends on directory subtree relationships) works.
-function compileFragmentInMemory(fragment Fragment, virtualSourcePath FilePath, target Target, outputExe FilePath) returns CompileWithIrResult throws CompileError
+function compileFragmentInMemory(fragment Fragment, virtualSourcePath FilePath, target Target, outputExe FilePath, leakCheck bool = false) returns CompileWithIrResult throws CompileError
 	let covMapPath = outputExe.changeExtension(".covmap")
+	let effectiveMmTrace = fragment.mmTrace
 	if not fragment.hasMultiFile 'isSingle'
-		return try compileSourceWithIr(fragment.source, virtualPath: virtualSourcePath, target: target, outputPath: outputExe, coverage: false, covMapPath: covMapPath, includeStdlibIr: fragment.includeStdlibIr, asyncTrace: fragment.asyncTrace)
+		return try compileSourceWithIr(fragment.source, virtualPath: virtualSourcePath, target: target, outputPath: outputExe, coverage: false, covMapPath: covMapPath, includeStdlibIr: fragment.includeStdlibIr, asyncTrace: fragment.asyncTrace, mmTrace: effectiveMmTrace, leakCheck: leakCheck)
 	end 'isSingle'
 
 	// Anchor virtual paths in the fragment's directory so module-visibility
@@ -1240,179 +1433,11 @@ function compileFragmentInMemory(fragment Fragment, virtualSourcePath FilePath, 
 		let normalizedSource = pair.source if pair.source.endsWith("\n") else "{pair.source}\n"
 		virtualFiles.push(VirtualSourceFile.create(path, source: normalizedSource))
 	end 'eachFile'
-	return try compileMultiFileSourceWithIr(virtualFiles, projectRoot: fragmentDir, target: target, outputPath: outputExe, coverage: false, covMapPath: covMapPath, includeStdlibIr: fragment.includeStdlibIr, asyncTrace: fragment.asyncTrace)
+	return try compileMultiFileSourceWithIr(virtualFiles, projectRoot: fragmentDir, target: target, outputPath: outputExe, coverage: false, covMapPath: covMapPath, includeStdlibIr: fragment.includeStdlibIr, asyncTrace: fragment.asyncTrace, mmTrace: effectiveMmTrace, leakCheck: leakCheck)
 end 'compileFragmentInMemory'
-
-// Cache-parity test driver. Compiles `fragment` twice — once with the stdlib
-// cache forced off via `setStdlibCacheBypassed(true)`, once with it on — and
-// fails if the captured RequiredLowering trace or the compiled PE's `.rdata`
-// section differs between legs. Only compared fields are IR + rdata; runtime
-// stdout / stderr / exit code are intentionally not checked because a
-// cache-masked bug can corrupt slot data or rdata layout without changing
-// the program's runtime output (the whole point of running this gate is to
-// catch IR-level drift the regular suite would silently let through).
-//
-// After both legs we call `warmStdlibCache(target)` so the rest of the suite
-// resumes from a warm in-process cache (otherwise every subsequent test would
-// pay the cold-start parse cost).
-function runTestParityCheck(fragment Fragment, projectRoot FilePath, target Target, specName String, specCacheDir FilePath) returns TestResult
-	let testName = fragment.testName
-	let tempDir = projectRoot.join("temp")
-	let virtualSourcePath = try FilePath.from(fragment.filePath) otherwise tempDir.join("{fragment.testName}.test")
-	let ext = executableExtension(target)
-	let cacheSpecDir = specCacheDir.join(specName)
-	if not Directory.exists(cacheSpecDir) 'noCacheDir'
-		_ = Directory.create(cacheSpecDir)
-	end 'noCacheDir'
-	let outputExeA = cacheSpecDir.join("{fragment.testName}-cacheoff{ext}")
-	let outputExeB = cacheSpecDir.join("{fragment.testName}-cacheon{ext}")
-
-	// Leg B (cache on) runs first to exercise the in-process warm path that
-	// every other spec test uses; leg A (cache off) then wipes the loader
-	// state and re-parses stdlib from source. Running A first would leave a
-	// partially-restored in-process state that leg B couldn't trust.
-	let legB = runParityLeg(fragment, virtualSourcePath: virtualSourcePath, target: target, outputExe: outputExeB, bypassed: false)
-	let legA = runParityLeg(fragment, virtualSourcePath: virtualSourcePath, target: target, outputExe: outputExeA, bypassed: true)
-
-	// Restore suite-wide warm state for subsequent (non-parity) tests so the
-	// rest of the run keeps its normal wall clock. The reset is essential —
-	// leg B left in-process state from a bypassed-then-restored parse cycle
-	// that the cache's gid translator can't always reconcile against a fresh
-	// warmup project (StdlibCache.translateWriterGenericInstanceId panics
-	// without this reset).
-	resetStdlibLoaderState()
-	warmStdlibCache(target)
-
-	var errorMsg = ""
-	var passed = true
-
-	// Compile-status divergence is itself a parity failure: a cache-masked bug
-	// can manifest as "compiles with cache on, fails to compile with cache
-	// off" (or vice versa). Catch this before the IR/rdata diff.
-	if legA.compiled != legB.compiled 'compileStatusDiff'
-		passed = false
-		errorMsg = "cache-parity: compile status diverged. leg A (cache off) compiled={legA.compiled}; leg B (cache on) compiled={legB.compiled}\nleg A error: {legA.errorMessage}\nleg B error: {legB.errorMessage}"
-	end 'compileStatusDiff' else 'sameCompileStatus'
-		if not legA.compiled 'bothFailed'
-			// Both legs failed: compare error messages. Different errors → still
-			// a parity bug.
-			if legA.errorMessage != legB.errorMessage 'errorMessageDiff'
-				passed = false
-				errorMsg = "cache-parity: both legs failed but with different errors.\n--- leg A (cache off) ---\n{legA.errorMessage}\n--- leg B (cache on) ---\n{legB.errorMessage}"
-			end 'errorMessageDiff'
-		end 'bothFailed' else 'bothOk'
-			// Note: lowering-trace comparison is intentionally NOT done on
-			// tryold. Leg A (cache off) lowers the full stdlib through the
-			// user pipeline; leg B (cache on) loads stdlib metadata from
-			// the cache and lowers nothing stdlib-related in the user
-			// pipeline. Their lowering traces diverge by design — that's
-			// the cache's *purpose*. The right parity invariant on tryold
-			// is "same observable output": rdata bytes and (when we add
-			// it) text-section function bytes match between legs.
-			//
-			// Rdata + text comparison is PE-only — non-Windows targets
-			// emit code/data into other sections, so we skip the byte
-			// compare on those.
-			if target.os == Os.windows 'isWindows'
-				if legA.rdataBytes != legB.rdataBytes 'rdataMismatch'
-					passed = false
-					errorMsg = "cache-parity: .rdata diverged between leg A (cache off) and leg B (cache on)\nleg A ({legA.rdataBytes.count()} bytes): {formatHexBytes(legA.rdataBytes)}\nleg B ({legB.rdataBytes.count()} bytes): {formatHexBytes(legB.rdataBytes)}"
-				end 'rdataMismatch'
-				if legA.textBytes != legB.textBytes 'textMismatch'
-					passed = false
-					let textMsg = "cache-parity: .text diverged between leg A (cache off) and leg B (cache on); leg A {legA.textBytes.count()} bytes / leg B {legB.textBytes.count()} bytes"
-					if errorMsg.isEmpty() 'firstText'
-						errorMsg = textMsg
-					end 'firstText' else 'appendText'
-						errorMsg = "{errorMsg}\n{textMsg}"
-					end 'appendText'
-				end 'textMismatch'
-			end 'isWindows'
-		end 'bothOk'
-	end 'sameCompileStatus'
-
-	cleanup(outputExeA)
-	cleanup(outputExeB)
-	return TestResult.create(testName, passed: passed, errorMessage: errorMsg, filePath: fragment.filePath, loweringLog: legB.loweringLog, compileIr: "")
-end 'runTestParityCheck'
-
-// Per-leg result for a cache-parity test. `compiled = false` means the compile
-// itself failed (which should never happen for either leg when the fix being
-// tested is well-formed — both compile or neither does). On success,
-// `loweringLog` is the captured IR trace and `rdataBytes` is the .rdata
-// section bytes (empty on non-Windows targets).
-type ParityLegResult
-	export var compiled as bool
-	export var errorMessage as String
-	export var loweringLog as String
-	export var rdataBytes as ByteArray
-	export var textBytes as ByteArray
-
-	static function create(compiled bool, errorMessage String, loweringLog String, rdataBytes ByteArray, textBytes ByteArray) returns ParityLegResult
-		return Self{compiled: compiled, errorMessage: errorMessage, loweringLog: loweringLog, rdataBytes: rdataBytes, textBytes: textBytes}
-	end 'create'
-end 'ParityLegResult'
-
-// Run one leg of a cache-parity test. Resets stdlib loader state, flips the
-// bypass to the requested value, compiles, and captures both the IR trace and
-// (on Windows targets) the compiled .rdata section bytes.
-function runParityLeg(fragment Fragment, virtualSourcePath FilePath, target Target, outputExe FilePath, bypassed bool) returns ParityLegResult
-	// Reset only on the bypassed leg: that's the one that must re-parse stdlib
-	// from source. The non-bypassed leg deliberately leaves the suite-wide
-	// warm in-process state in place so it exercises the normal
-	// `stdlibLoaded` cached path that every other spec test uses — which is
-	// also the path most likely to mask bugs.
-	if bypassed 'needsFreshParse'
-		resetStdlibLoaderState()
-	end 'needsFreshParse'
-	setStdlibCacheBypassed(bypassed)
-	setCategoryLogLevel(LogCategory.ir, level: LogLevel.TRACE)
-	startCapturingTrace()
-	startCapturingErrors()
-
-	// We use `compileOk.outputPath` further down (it's the same path we asked
-	// the compiler to produce, but binding through the compile result keeps
-	// the analyzer satisfied that the call's return value is consumed).
-	let compileOk = try compileFragmentInMemory(fragment, virtualSourcePath: virtualSourcePath, target: target, outputExe: outputExe) otherwise 'compileFailed'
-		let capturedErrors = stopCapturingErrors()
-		cancelCapturingTrace()
-		setCategoryLogLevel(LogCategory.ir, level: LogLevel.ERROR)
-		setStdlibCacheBypassed(false)
-		return ParityLegResult.create(false, errorMessage: capturedErrors, loweringLog: "", rdataBytes: ByteArray.create(), textBytes: ByteArray.create())
-	end 'compileFailed'
-	let compiledExe = compileOk.outputPath
-
-	cancelCapturingErrors()
-	let loweringLog = stopCapturingTrace()
-	setCategoryLogLevel(LogCategory.ir, level: LogLevel.ERROR)
-	setStdlibCacheBypassed(false)
-
-	var rdataBytes = ByteArray.create()
-	var textBytes = ByteArray.create()
-	if target.os == Os.windows 'readSections'
-		let exeBytes = try File.readBinary(compiledExe) otherwise ByteArray.create()
-		let sections = try parsePeSections(exeBytes) otherwise PeSectionInfoArray.create()
-		if let text = try findSection(sections, name: ".text") 'haveText'
-			textBytes = readPeSectionBytes(exeBytes, info: text)
-		end 'haveText'
-		if let rdata = try findSection(sections, name: ".rdata") 'haveRdata'
-			rdataBytes = readPeSectionBytes(exeBytes, info: rdata)
-		end 'haveRdata'
-	end 'readSections'
-
-	return ParityLegResult.create(true, errorMessage: "", loweringLog: loweringLog, rdataBytes: rdataBytes, textBytes: textBytes)
-end 'runParityLeg'
 
 // Run a single test from a parsed fragment. Returns TestResult.
 function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Target, captureTrace bool = false, specName String, specCacheDir FilePath) returns TestResult
-	// Cache-parity spec files dispatch to a dedicated double-compile harness
-	// that fails the test if the IR or .rdata diverges between cache-off and
-	// cache-on legs. Runtime stdout / stderr / exit code are intentionally
-	// not checked in this mode — see runTestParityCheck for rationale.
-	if fragment.cacheParity 'isParity'
-		return runTestParityCheck(fragment, projectRoot: projectRoot, target: target, specName: specName, specCacheDir: specCacheDir)
-	end 'isParity'
-
 	let tempDir = projectRoot.join("temp")
 	// virtualPath ends up embedded in compiler error messages, so point it at
 	// the on-disk fragment we just wrote — readers can open the path verbatim.
@@ -1438,6 +1463,18 @@ function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Tar
 		startCapturingTrace()
 	end 'enableTrace'
 
+	// mm-trace emits its `mm_alloc`/`mm_decref`/... runtime calls from INSIDE the
+	// stdlib MM bodies (`__mm_alloc`, `__slab_*`), guarded by a compile-time
+	// `__Internals.mmTraceEnabled()` fold. The on-disk stdlib cache is built
+	// trace-free, so a cache-ON functional compile would emit no trace. Force a
+	// cache-BYPASS compile for MmTrace fragments so the stdlib is lowered fresh
+	// with `project.mmTraceEnabled = true`, materializing the trace calls. Restore
+	// the warm cache state afterward so later tests are unaffected.
+	if fragment.mmTrace 'mmTraceBypass'
+		resetStdlibLoaderState()
+		setStdlibCacheBypassed(true)
+	end 'mmTraceBypass'
+
 	// Compile source directly from memory, capturing any error output.
 	// Multi-file tests (those with `// --- file: name.maxon` markers) feed
 	// each fragment as a distinct compilation unit so cross-file references
@@ -1445,13 +1482,22 @@ function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Tar
 	startCapturingErrors()
 	let compileStart = Clock.nowMs()
 	emitWorkerCompiling("{specName}/{testName}")
-	let compileResult = try compileFragmentInMemory(fragment, virtualSourcePath: virtualSourcePath, target: target, outputExe: outputExe) otherwise 'compileFailed'
+	// Enable the process-exit leak gate for success tests (compiler-error tests
+	// never run an exe). A leaking program then exits 101 and the exitcode oracle
+	// catches it — the per-fragment equivalent of the batch dispatcher's leak diff.
+	let wantLeakCheck = not fragment.expectation.hasCompilerStderr
+	let compileResult = try compileFragmentInMemory(fragment, virtualSourcePath: virtualSourcePath, target: target, outputExe: outputExe, leakCheck: wantLeakCheck) otherwise 'compileFailed'
 		totalCompileMs = totalCompileMs + (Clock.nowMs() - compileStart)
 		let capturedErrors = stopCapturingErrors()
 		if needTrace 'cancelTrace'
 			cancelCapturingTrace()
 			setCategoryLogLevel(LogCategory.ir, level: LogLevel.ERROR)
 		end 'cancelTrace'
+		if fragment.mmTrace 'restoreBypassOnFail'
+			setStdlibCacheBypassed(false)
+			resetStdlibLoaderState()
+			warmStdlibCache(target)
+		end 'restoreBypassOnFail'
 
 		if fragment.expectation.hasCompilerStderr 'expectedError'
 			// Compilation failed as expected — validate the error message
@@ -1470,6 +1516,13 @@ function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Tar
 	end 'compileFailed'
 	totalCompileMs = totalCompileMs + (Clock.nowMs() - compileStart)
 	cancelCapturingErrors()
+	// Restore the warm cache state after an MmTrace bypass compile (the traced
+	// exe is already on disk, so this only affects subsequent tests).
+	if fragment.mmTrace 'restoreBypass'
+		setStdlibCacheBypassed(false)
+		resetStdlibLoaderState()
+		warmStdlibCache(target)
+	end 'restoreBypass'
 	let outputPath = compileResult.outputPath
 	let compileIr = compileResult.ir
 
@@ -1573,6 +1626,22 @@ function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Tar
 			end 'appendLowering'
 		end 'loweringFailed'
 	end 'checkLowering'
+
+	// Check RequiredIR — the enforced `// CompiledIR`. Compare the spec's pinned
+	// per-test IR against this run's freshly-compiled IR; a mismatch fails the test
+	// so an unintended lowering/codegen change surfaces for review (regenerate with
+	// `--update-required` once the change is confirmed intentional).
+	if fragment.expectation.hasRequiredIr 'checkIr'
+		let irResult = checkRequiredIr(fragment.expectation.requiredIr, actual: compileIr)
+		if not irResult.passed 'irFailed'
+			passed = false
+			if errorMsg.isEmpty() 'firstIr'
+				errorMsg = irResult.message
+			end 'firstIr' else 'appendIr'
+				errorMsg = "{errorMsg}\n{irResult.message}"
+			end 'appendIr'
+		end 'irFailed'
+	end 'checkIr'
 
 	// Check RequiredRdata — byte-for-byte compare the compiled .exe's .rdata
 	// section against the typed values in the spec block. PE-only; ELF and
@@ -2340,6 +2409,22 @@ function checkRequiredLowering(expected String, actual String) returns LoweringC
 	return LoweringCheckResult.create(true, message: "")
 end 'checkRequiredLowering'
 
+// RequiredIR comparison: the enforced `// CompiledIR`. Whitespace-normalized like
+// RequiredLowering, PLUS the content-hashed panic-message labels are canonicalized
+// (`__panic_msg_<hex>` → `__panic_msg_*`). The hash derives from the panic message
+// TEXT, which embeds the source file path/position — that varies between the
+// `--update-required` capture and the validation run, so pinning the raw hash would
+// make every range-checked rung spuriously fail. Canonicalizing pins the IR SHAPE
+// (the panic block + its lea/call sequence) without the path-dependent hash.
+function checkRequiredIr(expected String, actual String) returns LoweringCheckResult
+	let expNorm = normalizeLowering(expected)
+	let actNorm = normalizeLowering(actual)
+	if expNorm != actNorm 'mismatch'
+		return LoweringCheckResult.create(false, message: "RequiredIR mismatch.\nExpected:\n{expNorm}\nActual:\n{actNorm}")
+	end 'mismatch'
+	return LoweringCheckResult.create(true, message: "")
+end 'checkRequiredIr'
+
 function normalizeLowering(text String) returns String
 	let lines = text.split("\n")
 	var result = ""
@@ -2375,7 +2460,7 @@ function updateSpecLowering(specPath FilePath, targetKey String, results TestRes
 			continue
 		end 'noLog'
 
-		let updatedContent = updateLoweringBlock(specContent, testName: result.testName, targetKey: targetKey, loweringLog: result.loweringLog)
+		let updatedContent = updateLoweringBlock(specContent, testName: result.testName, targetKey: targetKey, loweringLog: result.loweringLog, blockKeyword: "RequiredLowering", targetQualified: true)
 		if updatedContent != specContent 'changed'
 			specContent = updatedContent
 			modified = true
@@ -2395,12 +2480,84 @@ function updateSpecLowering(specPath FilePath, targetKey String, results TestRes
 	end 'showCount'
 end 'updateSpecLowering'
 
-// Update or insert a RequiredLowering:{targetKey} block for a given test in spec content.
-function updateLoweringBlock(specContent String, testName String, targetKey String, loweringLog String) returns String
+// Update a single spec file's RequiredIR blocks from the captured per-test IR.
+// Mirrors updateSpecLowering, reusing updateLoweringBlock with the "RequiredIR"
+// keyword and the test's compiled IR (result.compileIr).
+function updateSpecRequiredIr(specPath FilePath, targetKey String, results TestResultArray)
+	var specContent = try File.readText(specPath) otherwise return
+
+	var modified = false
+	var totalUpdated = 0
+
+	for result in results 'eachResult'
+		if result.compileIr.isEmpty() 'noIr'
+			continue
+		end 'noIr'
+
+		let updatedContent = updateLoweringBlock(specContent, testName: result.testName, targetKey: targetKey, loweringLog: result.compileIr, blockKeyword: "RequiredIR", targetQualified: true)
+		if updatedContent != specContent 'changed'
+			specContent = updatedContent
+			modified = true
+			totalUpdated = totalUpdated + 1
+			logInfo(LogCategory.testing, message: function() gives "Updated RequiredIR:{targetKey} for {result.testName}")
+		end 'changed'
+	end 'eachResult'
+
+	if modified 'writeBack'
+		try File.writeText(specPath, content: specContent) otherwise 'writeErr'
+			logError(LogCategory.testing, message: function() gives "Failed to write spec: {specPath}")
+		end 'writeErr'
+	end 'writeBack'
+
+	if totalUpdated > 0 'showCount'
+		logInfo(LogCategory.testing, message: function() gives "Updated {totalUpdated} RequiredIR block(s) in {specPath}")
+	end 'showCount'
+end 'updateSpecRequiredIr'
+
+// Update each test's `stderr` block from the captured mm-trace (carried in the
+// TestResult's loweringLog field). Mirrors updateSpecRequiredIr; the `stderr`
+// block is NOT target-qualified. Only existing `stderr` blocks are updated.
+function updateSpecStderr(specPath FilePath, results TestResultArray)
+	var specContent = try File.readText(specPath) otherwise return
+
+	var modified = false
+	var totalUpdated = 0
+
+	for result in results 'eachResult'
+		let updatedContent = updateLoweringBlock(specContent, testName: result.testName, targetKey: "", loweringLog: result.loweringLog, blockKeyword: "stderr", targetQualified: false)
+		if updatedContent != specContent 'changed'
+			specContent = updatedContent
+			modified = true
+			totalUpdated = totalUpdated + 1
+			logInfo(LogCategory.testing, message: function() gives "Updated mm-trace stderr for {result.testName}")
+		end 'changed'
+	end 'eachResult'
+
+	if modified 'writeBack'
+		try File.writeText(specPath, content: specContent) otherwise 'writeErr'
+			logError(LogCategory.testing, message: function() gives "Failed to write spec: {specPath}")
+		end 'writeErr'
+	end 'writeBack'
+
+	if totalUpdated > 0 'showCount'
+		logInfo(LogCategory.testing, message: function() gives "Updated {totalUpdated} mm-trace block(s) in {specPath}")
+	end 'showCount'
+end 'updateSpecStderr'
+
+// Update or insert a fenced block for a given test in spec content. When
+// `targetQualified` is true the header is `{blockKeyword}:{targetKey}`
+// ("RequiredLowering"/"RequiredIR"); when false it is the bare `{blockKeyword}`
+// ("stderr"). All three share the same find/replace/insert mechanics.
+function updateLoweringBlock(specContent String, testName String, targetKey String, loweringLog String, blockKeyword String, targetQualified bool) returns String
 	let lines = specContent.split("\n")
 	let lineCount = lines.count()
 	let testMarker = "<!-- test: {testName} -->"
-	let blockHeader = "```RequiredLowering:{targetKey}"
+	var blockHeader = "```{blockKeyword}"
+	var otherTargetPrefix = "```{blockKeyword}"
+	if targetQualified 'qualify'
+		blockHeader = "```{blockKeyword}:{targetKey}"
+		otherTargetPrefix = "```{blockKeyword}:"
+	end 'qualify'
 
 	// Find the test marker line
 	var testLine = -1
@@ -2488,7 +2645,7 @@ function updateLoweringBlock(specContent String, testName String, targetKey Stri
 	for i in (testLine + 1) upto nextTestLine 'findOther'
 		let line = try lines.get(i) otherwise continue
 		let trimmed = trimWhitespace(line)
-		if trimmed.startsWith("```RequiredLowering:") 'isLowering'
+		if trimmed.startsWith(otherTargetPrefix) 'isLowering'
 			hasOtherTargetBlock = true
 			break
 		end 'isLowering'
@@ -3692,7 +3849,7 @@ function sumTestWeight(tests SpecTestArray) returns TestCount
 	var total = 0 as TestCount
 	for t in tests 'eachTest'
 		var w = t.source.byteLength()
-		if t.cacheParity or t.includeStdlibIr 'isHeavy'
+		if t.includeStdlibIr 'isHeavy'
 			w = w + stdlibBurden
 		end 'isHeavy'
 		total = total + w
@@ -3842,7 +3999,7 @@ export function runAllSpecTestsParallel(filter String, target Target, workerCoun
 	markPhase("warmStdlibCache done")
 
 	if updateRequired 'preUpdate'
-		updateAllRequiredLowering(specDir, tempDir: tempDir, filter: filter, target: target, targetKey: targetKey)
+		runRequiredBlockUpdates(specDir, fragmentDir: fragmentDir, tempDir: tempDir, filter: filter, target: target, targetKey: targetKey)
 	end 'preUpdate'
 
 	let specCacheDir = fragmentDir.join(".spec-cache")
@@ -3904,9 +4061,9 @@ export function runAllSpecTestsParallel(filter String, target Target, workerCoun
 	let targetStr = targetToString(target)
 
 	// Weight tests by stdlib-compile burden, not test count. The per-test
-	// `cacheParity` and `includeStdlibIr` flags trigger a re-compile-the-world
-	// path that dwarfs the test's own source bytes — a 30-byte main() can
-	// take 8+s. We assign each such test a hefty fixed bonus (16 KiB ≈ a
+	// `includeStdlibIr` flag triggers a re-compile-the-world path that dwarfs
+	// the test's own source bytes — a 30-byte main() can take 8+s. We assign
+	// each such test a hefty fixed bonus (16 KiB ≈ a
 	// large spec body) on top of its own source length. For ordinary tests
 	// the source byte count alone correlates well with parse+typecheck+codegen
 	// work; weight-by-test-count buries 15KLOC specs (register-allocator)
@@ -4242,6 +4399,15 @@ export function runAllSpecTestsParallel(filter String, target Target, workerCoun
 	// child, drain whatever's buffered in its stderr, then release the OS
 	// handle. Dead slots (whose drain threw mid-loop) have already been
 	// released; skip them.
+	//
+	// A worker that exits nonzero at shutdown is a HARD failure even when
+	// every test it ran passed: the persistent worker is itself a leak-gated
+	// Maxon program (built with `mrt_leak_check`), so exit code 101 means the
+	// COMPILER leaked allocations while servicing this worker's tests. Track
+	// it so the suite returns nonzero (the gate below) rather than silently
+	// passing — otherwise a regression that leaks but keeps all tests green
+	// would never fail CI.
+	var failedWorkerCount = 0
 	for i in 0 upto liveWorkerCount 'shutdownLoop'
 		let isDead = try deadSlots.get(i) otherwise false
 		if isDead 'skipDead'
@@ -4256,7 +4422,9 @@ export function runAllSpecTestsParallel(filter String, target Target, workerCoun
 			continue
 		end 'shutdownFailed'
 		if exitCode != 0 'badExit'
-			logError(LogCategory.testing, message: function() gives "[SHUTDOWN] worker {i} exited with code {exitCode}")
+			failedWorkerCount = failedWorkerCount + 1
+			let leakHint = " (memory leak — exit code 101)" if exitCode == 101 else ""
+			logError(LogCategory.testing, message: function() gives "[SHUTDOWN] worker {i} exited with code {exitCode}{leakHint}")
 		end 'badExit'
 	end 'shutdownLoop'
 	markPhase("Phase 4 worker shutdown done")
@@ -4277,5 +4445,14 @@ export function runAllSpecTestsParallel(filter String, target Target, workerCoun
 	if totalFailed > 0 'hasFail'
 		return 1
 	end 'hasFail'
+
+	// All tests passed, but a worker that exited nonzero at shutdown (leak gate
+	// tripped — exit 101) is still a suite failure. Surface it as a nonzero exit
+	// so the leak gate is honest: green tests can never mask a compiler leak.
+	if failedWorkerCount > 0 'workerLeaked'
+		logError(LogCategory.testing, message: function() gives "{failedWorkerCount} worker(s) exited nonzero at shutdown (compiler leak / crash) — failing the suite despite {totalPassed} passing tests")
+		return 1
+	end 'workerLeaked'
+
 	return 0
 end 'runAllSpecTestsParallel'

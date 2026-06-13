@@ -1,0 +1,55 @@
+// Test: rung-01-single-alloc-freed
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Box'
+
+function main() returns ExitCode
+	let b = Box.create(7)
+	return b.value
+end 'main'
+---
+MmTrace: true
+ExitCode: 7
+Stderr: ```
+mm_alloc Box #1 size=8 [Box.create]
+mm_move Box #1 -> return [Box.create]
+mm_drop Box #1 [main]
+    mm_free Box #1
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %5 = mir.global_addr @__mtstr_scope_main
+    %6 = mir.call @mm_scope_push(%5)
+    %1 = mir.mov_imm 7 : i64
+    %7 = mir.global_addr @__mtstr_scope_Box_create
+    %8 = mir.call @mm_scope_push(%7)
+    %9 = mir.mov_imm 8 : i64
+    %10 = mir.mov_imm 0 : i64
+    %11 = mir.mov_imm 60 : i64
+    %12 = mir.call @stdlib.__mm_alloc(%9, %10, %11)
+    mir.store %1, %12, 0 width: qword
+    %14 = mir.call @mm_move_return(%12)
+    %15 = mir.call @mm_scope_pop()
+    %4 = mir.load %12, 0 width: qword
+    %16 = mir.call @mm_drop(%12)
+    %17 = mir.call @mm_scope_pop()
+    %18 = mir.mov_imm 125 : i64
+    %19 = mir.cmp ugt, %4, %18
+    mir.cond_br %19 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %20 = mir.global_addr @__panic_msg_5b074d262f8db1ca
+    %21 = mir.call @mrt_panic(%20)
+  __range_ok_0:
+    mir.ret %4
+  }
+}
+---

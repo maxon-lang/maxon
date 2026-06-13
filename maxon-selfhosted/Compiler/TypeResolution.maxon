@@ -348,8 +348,94 @@ end 'isKnownTypeName'
 // type-name validity probes. Includes both the casing of `string` (lower-
 // case used by some stdlib decls) and `String` (the canonical alias name).
 function isBuiltinTypeName(name String) returns bool
-	return name == "bool" or name == "int" or name == "float" or name == "string" or name == "String" or name == "Character"
+	// `bool`/`int`/`float`/`string` are language-primitive keywords. The stdlib
+	// structs implementing `BuiltinStringLiteral` / `BuiltinCharLiteral` are
+	// discovered (not assumed). This is a PROBE that can run during stdlib parsing
+	// before discovery completes, so it reads the raw cache (empty string when
+	// undiscovered) and never panics — an empty cache simply doesn't match.
+	if name == "bool" or name == "int" or name == "float" or name == "string" 'primitive'
+		return true
+	end 'primitive'
+	return nonEmptyEquals(name, discovered: getCachedBuiltinStringLiteralTypeName()) or nonEmptyEquals(name, discovered: getCachedBuiltinCharLiteralTypeName())
 end 'isBuiltinTypeName'
+
+// True iff `candidate` equals `discovered` and `discovered` is non-empty — for
+// builtin-type-name probes that must not match an empty (undiscovered) cache.
+export function nonEmptyEquals(candidate String, discovered String) returns bool
+	return not discovered.isEmpty() and candidate == discovered
+end 'nonEmptyEquals'
+
+// Shared body for the panicking literal-type-name accessors below: returns the
+// discovered name, or panics with a uniform message naming the absent
+// `implements <protocol>` conformance. Centralizes the "discovered name is
+// MANDATORY here" contract so each literal kind doesn't re-spell the read /
+// empty-check / panic. `protocol` is the `Builtin*Literal` interface, `literalKind`
+// the user-facing phrasing for the diagnostic (e.g. "char literals").
+function requireDiscoveredLiteralTypeName(name String, protocol String, literalKind String) returns String
+	if name.isEmpty() 'undiscovered'
+		panic("requireDiscoveredLiteralTypeName: no stdlib type declares `implements {protocol}` ({literalKind} cannot be lowered)")
+	end 'undiscovered'
+	return name
+end 'requireDiscoveredLiteralTypeName'
+
+// The stdlib type a single-quote character literal (`'x'`) lowers to — the type
+// declaring `implements BuiltinCharLiteral`, discovered at parse time and cached
+// (see `cachedBuiltinCharLiteralTypeName` in StdlibLoader). Every site that needs
+// "the char-literal type name" reads this instead of hardcoding it, so the compiler
+// has no built-in knowledge of the stdlib type name. Panics if no implementing type
+// was discovered — a char literal cannot exist without one, so reaching here with an
+// empty cache is a stdlib-setup bug, not a user error.
+export function builtinCharLiteralTypeName() returns String
+	return requireDiscoveredLiteralTypeName(getCachedBuiltinCharLiteralTypeName(), protocol: "BuiltinCharLiteral", literalKind: "char literals")
+end 'builtinCharLiteralTypeName'
+
+// The `MaxonType` a character literal lowers to: the discovered char-literal struct
+// (`named(<discovered>)`) when registered, else the language-primitive `character`
+// arm. The primitive fallback is BOOTSTRAP-CRITICAL and is NOT a hardcoded stdlib
+// name: enum helper synthesis (`fromRawValue` for a char-backed enum) runs at
+// `parseEnumDecl` for enums declared BEFORE the char struct's conformance is
+// discovered, and `MaxonType.character` is the correct pre-registration
+// representation (TypeResolution reconciles it to the struct once registered — the
+// same pattern `builtinStringLiteralType` uses with `MaxonType.string`).
+export function builtinCharLiteralType(project Project) returns MaxonType
+	let name = getCachedBuiltinCharLiteralTypeName()
+	if name.isEmpty() 'undiscovered'
+		return MaxonType.character
+	end 'undiscovered'
+	return MaxonType.named(project.typeNames.intern(name))
+end 'builtinCharLiteralType'
+
+// The stdlib type a double-quote string literal (`"..."`) and the `string`
+// primitive type-arm lower to — the type declaring `implements
+// BuiltinStringLiteral`, discovered and cached like the char-literal type. Panics if
+// undiscovered (string literals cannot exist without an implementing type).
+export function builtinStringLiteralTypeName() returns String
+	return requireDiscoveredLiteralTypeName(getCachedBuiltinStringLiteralTypeName(), protocol: "BuiltinStringLiteral", literalKind: "string literals")
+end 'builtinStringLiteralTypeName'
+
+// The `MaxonType` a string literal lowers to: the discovered string-literal struct
+// (`named(<discovered>)`) when registered, else the language-primitive `string` arm.
+// The primitive fallback is BOOTSTRAP-CRITICAL and is NOT a hardcoded stdlib name:
+// enum helper synthesis (`fromName(name String)`) runs at `parseEnumDecl` for enums
+// declared BEFORE the string struct's conformance is discovered, and `MaxonType.string`
+// is the correct pre-registration representation (TypeResolution reconciles it to the
+// struct once registered — the same fallback `stringConstResultType` relies on).
+export function builtinStringLiteralType(project Project) returns MaxonType
+	let name = getCachedBuiltinStringLiteralTypeName()
+	if name.isEmpty() 'undiscovered'
+		return MaxonType.string
+	end 'undiscovered'
+	return MaxonType.named(project.typeNames.intern(name))
+end 'builtinStringLiteralType'
+
+// The stdlib type an array literal (`[...]`) and a byte-string literal (`b"..."`)
+// lower to — the type declaring `implements BuiltinArrayLiteral`, discovered at
+// parse time and cached (see `cachedBuiltinArrayLiteralTypeName` in StdlibLoader and
+// the parser's `discoverBuiltinArrayLiteralType`). Panics if undiscovered (an array
+// literal cannot be lowered without an implementing type).
+export function builtinArrayLiteralTypeName() returns String
+	return requireDiscoveredLiteralTypeName(getCachedBuiltinArrayLiteralTypeName(), protocol: "BuiltinArrayLiteral", literalKind: "array/byte-string literals")
+end 'builtinArrayLiteralTypeName'
 
 function validateGenericInstanceConstraints(project Project, expr UnresolvedTypeExpr, declLine LineNumber, declColumn ColumnNumber, declFilePath FilePath)
 	match expr 'extract'
@@ -1128,6 +1214,7 @@ function substituteMaxonType(project Project, t MaxonType, bindings TypeBindingM
 		integer then return MaxonType.integer
 		float then return MaxonType.float
 		string then return MaxonType.string
+		character then return MaxonType.character
 		// Function types are structural — they don't carry a name to bind
 		// against — so they pass through substitution unchanged. (Inner
 		// param/return types might mention bound names, but that
@@ -1273,13 +1360,22 @@ end 'resolveAllStructTypes'
 // substitution mirrors structs: an enum that declares `implements I with X`
 // gets its expected method set computed against the resolved interface
 // before the EnumType is built.
+//
+// The drain UPSERTS: a user enum whose bare name collides with a stdlib enum
+// (e.g. a test-local `ParseError`) must SHADOW the entry that
+// `restoreStdlibMetadata` (cache-hit) or the stdlib's own resolution pass
+// (from-source) pre-populated — an insert-ignore here silently dropped the
+// user's declaration while still removing it from `unresolvedEnums`, so
+// `throw ParseError.<case>` later resolved against the stdlib enum (E3034).
+// Two USER enums with one name can't reach this point: the second
+// declaration already failed parse with "Duplicate enum".
 function resolveAllEnumTypes(project Project)
 	var resolvedNames = StringArray.create()
 
 	for (name, entry) in project.unresolvedEnums 'sweep'
 		let expected = computeExpectedMethodsForConformances(project, declName: entry.name, conformances: entry.implementedInterfaces, declFilePath: entry.filePath)
 		let et = EnumType.create(entry.name, cases: entry.cases, isFloatBacked: entry.isFloatBacked, visibility: entry.visibility, sourceFilePath: entry.filePath, nameLine: entry.line, nameColumn: entry.column, expectedMethods: expected, isUnion: entry.isUnion, isStringBacked: entry.isStringBacked, isCharBacked: entry.isCharBacked, isFunctionBacked: entry.isFunctionBacked)
-		try project.enumTypes.insert(name, value: et) otherwise ignore
+		project.enumTypes.upsert(name, value: et)
 		resolvedNames.push(name)
 	end 'sweep'
 
@@ -1659,6 +1755,9 @@ export function convertCastCategory(project Project, t MaxonType) returns CastCa
 		integer then return CastCategory.int
 		float then return CastCategory.float
 		string then return CastCategory.string
+		// `character` has no CastCategory of its own; like `string`, it is a
+		// managed-pointer primitive whose only Std-level cast family is `string`.
+		character then return CastCategory.string
 		named(id) then return namedIdCastCategory(project, id: id)
 		// Stage E (closures): function-typed values lower to i64 pointers.
 		// Cast/compare validation treats them as `int` so a `(T) returns
@@ -1718,10 +1817,10 @@ function namedIdCastCategory(project Project, id TypeNameId) returns CastCategor
 		// arms in `convertCastCategory`.
 		return CastCategory.int
 	end 'unknown'
-	// Phase 7: the `String` struct is the user-facing string type; map to
+	// Phase 7: the string-literal struct is the user-facing string type; map to
 	// `CastCategory.string` so call/cast diagnostics distinguish it from
 	// generic struct-pointer i64 values.
-	if name == "String" 'isString'
+	if nonEmptyEquals(name, discovered: getCachedBuiltinStringLiteralTypeName()) 'isString'
 		return CastCategory.string
 	end 'isString'
 	// Ranged-primitive aliases pin their cast category at resolution time so
@@ -1743,7 +1842,7 @@ export function maxonTypeIsKnown(project Project, t MaxonType) returns bool
 	// struct-field / signature validation purposes.
 	match t 'check'
 		named(id) then return namedIdIsKnown(project, id: id)
-		boolean to string then return true
+		boolean to character then return true
 		function then return true
 		unresolved then return false
 		// Phase 11.0: generic-aware arms exist on the parser-AST surface only.
@@ -1978,6 +2077,7 @@ function numericKindOf(project Project, t MaxonType) returns NumericKind
 		named(id) gives namedIdNumericKind(project, id: id)
 		boolean gives NumericKind.notNumeric
 		string gives NumericKind.notNumeric
+		character gives NumericKind.notNumeric
 		function to cstring gives NumericKind.notNumeric
 	end 'check'
 end 'numericKindOf'
@@ -2230,6 +2330,7 @@ function checkTypeParamComparison(project Project, predicate CmpPredicate, opera
 		integer gives ""
 		float gives ""
 		string gives ""
+		character gives ""
 		named gives ""
 		function gives ""
 		unresolved gives ""
@@ -2879,10 +2980,10 @@ function stringCharEnumScalarPeerName(project Project, t MaxonType) returns Stri
 	end 'notNamed'
 	if let enumDef = try project.enumTypes.get(name) 'isEnum'
 		if enumDef.isStringBacked 'string'
-			return "String"
+			return builtinStringLiteralTypeName()
 		end 'string'
 		if enumDef.isCharBacked 'char'
-			return "Character"
+			return builtinCharLiteralTypeName()
 		end 'char'
 	end 'isEnum'
 	return ""
@@ -2940,9 +3041,16 @@ function maybeCoerceOneCmp(project Project, module MaxonModule, opIdx OpIndex, r
 
 	// The scalar peer for the whole comparison. Both sides agree (a string-
 	// backed enum is only ever compared against String, a char-backed enum
-	// against Character) — pick whichever side is the enum.
-	let peerName = leftPeer if leftIsEnum else rightPeer
-	let peerType = MaxonType.named(project.typeNames.intern(peerName))
+	// against Character) — pick whichever side is the enum. Intern from the
+	// chosen peer via an explicit branch (not a ternary): a ternary eagerly
+	// evaluates both arms, and an interned-name lookup on the unchosen peer is
+	// wasted work; the branch keeps the single intern on the chosen side.
+	var peerNameId = 0 as TypeNameId
+	if leftIsEnum 'peerFromLeft'
+		peerNameId = project.typeNames.intern(leftPeer)
+	end 'peerFromLeft' else 'peerFromRight'
+		peerNameId = project.typeNames.intern(rightPeer)
+	end 'peerFromRight'
 
 	var newLeft = left
 	if leftIsEnum 'coerceLeft'
@@ -2954,6 +3062,7 @@ function maybeCoerceOneCmp(project Project, module MaxonModule, opIdx OpIndex, r
 		newRight = insertRawValueLoad(module, anchorOpIdx: opIdx, operand: right, side: "r", range: range)
 	end 'coerceRight'
 
+	let peerType = MaxonType.named(peerNameId)
 	try module.ops.set(opIdx, value: MaxonOp.cmp(result, left: newLeft, right: newRight, predicate: predicate, leftType: peerType, rightType: peerType, operandType: peerType, range: range)) otherwise panic("maybeCoerceOneCmp: ops.set OOB at idx={opIdx}")
 end 'maybeCoerceOneCmp'
 
@@ -3120,7 +3229,7 @@ end 'shouldPreferRefinedGenericInstance'
 function maxonTypeIsBareTupleNamed(project Project, t MaxonType) returns bool
 	let name = match t 'getName'
 		named(id) gives project.typeNames.get(id)
-		boolean to string gives ""
+		boolean to character gives ""
 		function to cstring gives ""
 	end 'getName'
 	return isTupleStructName(name)
@@ -3129,7 +3238,7 @@ end 'maxonTypeIsBareTupleNamed'
 function maxonTypeIsTupleGenericInstance(project Project, t MaxonType) returns bool
 	let name = match t 'getName'
 		genericInstance(id) gives genericInstanceBaseName(project, gid: id)
-		boolean to string gives ""
+		boolean to character gives ""
 		function gives ""
 		named gives ""
 		unresolved gives ""
@@ -3319,7 +3428,7 @@ end 'recordVarStore'
 export function maxonTypeIsNamed(t MaxonType) returns bool
 	return match t 'check'
 		named gives true
-		boolean to string gives false
+		boolean to character gives false
 		function to cstring gives false
 	end 'check'
 end 'maxonTypeIsNamed'
@@ -3327,7 +3436,7 @@ end 'maxonTypeIsNamed'
 export function maxonTypeIsGenericInstance(t MaxonType) returns bool
 	return match t 'check'
 		genericInstance gives true
-		boolean to string gives false
+		boolean to character gives false
 		named gives false
 		function to unresolved gives false
 		typeParameter gives false
@@ -3344,7 +3453,7 @@ end 'maxonTypeIsGenericInstance'
 export function maxonTypeIsTypeParameter(t MaxonType) returns bool
 	return match t 'check'
 		typeParameter gives true
-		boolean to string gives false
+		boolean to character gives false
 		named gives false
 		function to unresolved gives false
 		genericInstance to cstring gives false
@@ -3374,7 +3483,7 @@ function typeParamBelongsToEnclosing(project Project, t MaxonType, enclosingType
 	end 'notTypeParam'
 	let id = match t 'extract'
 		typeParameter(pid) gives pid
-		boolean to string panic("typeParamBelongsToEnclosing: just verified typeParameter shape — unreachable")
+		boolean to character panic("typeParamBelongsToEnclosing: just verified typeParameter shape — unreachable")
 		named panic("typeParamBelongsToEnclosing: just verified typeParameter shape — unreachable")
 		function to unresolved panic("typeParamBelongsToEnclosing: just verified typeParameter shape — unreachable")
 		genericInstance to cstring panic("typeParamBelongsToEnclosing: just verified typeParameter shape — unreachable")
@@ -3569,7 +3678,7 @@ end 'methodCallResultType'
 // Map.Key / Map.Value typeParameters it knows how to resolve.
 function resolveInterfaceTypeParamsViaConformance(project Project, t MaxonType, receiverType MaxonType) returns MaxonType
 	return match t 'walk'
-		boolean to string gives t
+		boolean to character gives t
 		named gives chaseReceiverInnerAlias(project, t: t, receiverType: receiverType)
 		function(id) gives resolveInterfaceTypeParamsInFunction(project, id: id, receiverType: receiverType)
 		unresolved gives t
@@ -3767,7 +3876,7 @@ end 'singleGenericArgFromGid'
 function interfaceReceiverIsIteratorShape(project Project, t MaxonType) returns bool
 	let interfaceName = match t 'pick'
 		interface(id) gives project.interfaceRegistry.getName(id)
-		boolean to string gives ""
+		boolean to character gives ""
 		function gives ""
 		unresolved gives ""
 		typeParameter gives ""
@@ -3899,7 +4008,7 @@ end 'typeParameterMethodResultType'
 function promoteInterfaceUsesParamRef(project Project, t MaxonType, interfaceName String) returns MaxonType
 	let name = match t 'pick'
 		named(id) gives project.typeNames.get(id)
-		boolean to string gives ""
+		boolean to character gives ""
 		function to cstring gives ""
 	end 'pick'
 	if name.isEmpty() 'notNamed'
@@ -3968,7 +4077,7 @@ end 'applyInnerAliasFromReceiver'
 // and try to apply it to `t`. First hit wins — alias names are
 // project-wide unique within the stdlib so there's no ambiguity in
 // practice. Returns `t` unchanged when no conformance hit.
-function applyInnerAliasFromInterfaces(project Project, t MaxonType, receiverStructName String) returns MaxonType
+export function applyInnerAliasFromInterfaces(project Project, t MaxonType, receiverStructName String) returns MaxonType
 	for confId in 0 upto project.conformances.typeNames.count() 'scan'
 		let implementerName = try project.conformances.typeNames.get(confId) otherwise panic("applyInnerAliasFromInterfaces: typeNames.get OOB at {confId}")
 		if implementerName != receiverStructName 'skip'
@@ -3995,7 +4104,7 @@ end 'applyInnerAliasFromInterfaces'
 export function normalizeReceiverInContext(project Project, t MaxonType, enclosingType String) returns MaxonType
 	return match t 'norm'
 		named(id) gives normalizeNamedReceiver(project, id: id, enclosingType: enclosingType)
-		boolean to string gives t
+		boolean to character gives t
 		function to cstring gives t
 	end 'norm'
 end 'normalizeReceiverInContext'
@@ -4169,7 +4278,7 @@ function fieldLoadResultType(project Project, receiverType MaxonType, fieldName 
 	if project.enumTypes.contains(structName) 'maybeEnumAccessor'
 		let fieldNameStr = String.from(fieldName)
 		if fieldNameStr == "name" 'isName'
-			return MaxonType.named(project.typeNames.intern("String"))
+			return builtinStringLiteralType(project)
 		end 'isName'
 		if fieldNameStr == "rawValue" 'isRaw'
 			// `.rawValue` surfaces the case's declared backing value, so its type
@@ -4187,10 +4296,10 @@ function fieldLoadResultType(project Project, receiverType MaxonType, fieldName 
 				return MaxonType.float
 			end 'asFloat'
 			if enumDef.isStringBacked 'asString'
-				return MaxonType.named(project.typeNames.intern("String"))
+				return builtinStringLiteralType(project)
 			end 'asString'
 			if enumDef.isCharBacked 'asChar'
-				return MaxonType.named(project.typeNames.intern("Character"))
+				return builtinCharLiteralType(project)
 			end 'asChar'
 			return MaxonType.integer
 		end 'isRaw'
@@ -4308,7 +4417,7 @@ export function applyInnerAliasIfNamed(project Project, t MaxonType, innerAliase
 	end 'empty'
 	return match t 'check'
 		named(id) gives lookupInnerAliasOrPassThrough(project, id: id, innerAliases: innerAliases)
-		boolean to string gives t
+		boolean to character gives t
 		function gives t
 		unresolved gives t
 		typeParameter gives t
@@ -4559,14 +4668,17 @@ function registeredRefNameOrEmpty(project Project, t MaxonType) returns String
 	return ""
 end 'registeredRefNameOrEmpty'
 
-// Phase 7: stringConst / stringInterp produce a real `String` struct value
-// once stdlib/String.maxon is whitelisted. When that struct is registered,
-// return its named-type form; otherwise fall back to the legacy
-// `MaxonType.string` primitive tag so pre-Phase-7 code paths still work.
+// Phase 7: stringConst / stringInterp produce a real string-literal struct value
+// (the type declaring `implements BuiltinStringLiteral`, discovered — never
+// hardcoded) once that struct is registered. When it is, return its named-type
+// form; otherwise fall back to the legacy `MaxonType.string` primitive tag so the
+// bootstrap path (before the struct is registered, or in a non-stdlib build) still
+// works. Reads the raw cache (not the panicking accessor) because this can run
+// before discovery completes.
 function stringConstResultType(project Project) returns MaxonType
-	let stringId = project.typeNames.intern("String")
-	if project.structTypes.contains("String") or project.unresolvedStructTypes.contains("String") 'haveStruct'
-		return MaxonType.named(stringId)
+	let stringName = getCachedBuiltinStringLiteralTypeName()
+	if not stringName.isEmpty() and (project.structTypes.contains(stringName) or project.unresolvedStructTypes.contains(stringName)) 'haveStruct'
+		return MaxonType.named(project.typeNames.intern(stringName))
 	end 'haveStruct'
 	return MaxonType.string
 end 'stringConstResultType'
@@ -4583,7 +4695,7 @@ end 'stringConstResultType'
 // Exported so `LowerMaxonToStd.lowerByteStringLiteral` can pin the
 // per-function value-type map to the identical gid the resolver wrote.
 export function byteStringLiteralResultType(project Project) returns MaxonType
-	return internSingleArgGenericInstance(project, baseTypeName: "Array", elementType: MaxonType.integer)
+	return internSingleArgGenericInstance(project, baseTypeName: builtinArrayLiteralTypeName(), elementType: MaxonType.integer)
 end 'byteStringLiteralResultType'
 
 // Resolve a `call`/`tryCall` op's result type, with a special case for
@@ -4749,7 +4861,7 @@ function unifyParamWithArg(project Project, declaringTypeName String, paramType 
 	match paramType 'paramShape'
 		typeParameter(pid) then unifyBindParam(project, declaringTypeName: declaringTypeName, pid: pid, argType: argType, subst: subst)
 		genericInstance(pgid) then unifyGenericInstance(project, declaringTypeName: declaringTypeName, paramGid: pgid, argType: argType, subst: subst)
-		boolean to string then return
+		boolean to character then return
 		named then return
 		function then return
 		unresolved then return
@@ -4778,7 +4890,7 @@ end 'unifyBindParam'
 function unifyGenericInstance(project Project, declaringTypeName String, paramGid GenericInstanceId, argType MaxonType, subst TypeSubstitution)
 	match argType 'argShape'
 		genericInstance(argGid) then unifyGenericInstanceArgs(project, declaringTypeName: declaringTypeName, paramGid: paramGid, argGid: argGid, subst: subst)
-		boolean to string then return
+		boolean to character then return
 		named then return
 		function then return
 		unresolved then return
@@ -5052,7 +5164,7 @@ function staticTypeFromOpIfMatches(project Project, op MaxonOp, name ByteArray) 
 	match op 'pick'
 		literal(result, _, valueType, _) then return try staticTypedResult(name, result: result, t: valueType)
 		stringConst(result, _, _) then return try staticTypedResult(name, result: result, t: stringConstResultType(project))
-		charLiteral(result, _, _) then return try staticTypedResult(name, result: result, t: MaxonType.named(project.typeNames.intern("Character")))
+		charLiteral(result, _, _) then return try staticTypedResult(name, result: result, t: builtinCharLiteralType(project))
 		byteStringLiteral(result, _, _) then return try staticTypedResult(name, result: result, t: byteStringLiteralResultType(project))
 		stringInterp to cancelPromise then throw ArrayLiteralLookupError.notFound
 	end 'pick'
@@ -5120,7 +5232,7 @@ function refineTupleStructAlloc(project Project, producerTypes ProducerTypeMap, 
 	let receiverType = lookupProducerType(producerTypes, name: receiver)
 	let receiverName = match receiverType 'extractBase'
 		named(id) gives project.typeNames.get(id)
-		boolean to string gives ""
+		boolean to character gives ""
 		function to cstring gives ""
 	end 'extractBase'
 	if not isTupleStructName(receiverName) 'notTuple'
@@ -5173,7 +5285,7 @@ end 'cloneTupleArgs'
 
 function isConcreteTupleArgType(t MaxonType) returns bool
 	return match t 'check'
-		boolean to string gives true
+		boolean to character gives true
 		named gives true
 		function gives true
 		genericInstance gives true
@@ -5242,7 +5354,7 @@ function recordOpResult(project Project, producerTypes ProducerTypeMap, slotType
 	match op 'rec'
 		literal(result, _, valueType, _) then recordResultType(producerTypes, name: result, t: valueType)
 		stringConst(result, _, _) then recordResultType(producerTypes, name: result, t: stringConstResultType(project))
-		charLiteral(result, _, _) then recordResultType(producerTypes, name: result, t: MaxonType.named(project.typeNames.intern("Character")))
+		charLiteral(result, _, _) then recordResultType(producerTypes, name: result, t: builtinCharLiteralType(project))
 		byteStringLiteral(result, _, _) then recordResultType(producerTypes, name: result, t: byteStringLiteralResultType(project))
 		stringInterp(result, _, _) then recordResultType(producerTypes, name: result, t: stringConstResultType(project))
 		varDecl(slotId, value, slotType, _) then recordVarDecl(project, producerTypes: producerTypes, slotTypes: slotTypes, slotId: slotId, value: value, slotType: slotType)
@@ -5967,16 +6079,17 @@ function interpKindForType(project Project, t MaxonType, fallback InterpExprKind
 		integer gives InterpExprKind.i64
 		float gives InterpExprKind.f64
 		string gives InterpExprKind.string
+		character gives InterpExprKind.character
 		named(id) gives interpKindForNamedTypeName(project, name: project.typeNames.get(id), fallback: fallback)
 		function to cstring gives fallback
 	end 'k'
 end 'interpKindForType'
 
 function interpKindForNamedTypeName(project Project, name String, fallback InterpExprKind) returns InterpExprKind
-	if name == "String" 'isString'
+	if nonEmptyEquals(name, discovered: getCachedBuiltinStringLiteralTypeName()) 'isString'
 		return InterpExprKind.string
 	end 'isString'
-	if name == "Character" 'isChar'
+	if nonEmptyEquals(name, discovered: getCachedBuiltinCharLiteralTypeName()) 'isChar'
 		return InterpExprKind.character
 	end 'isChar'
 	if name == "bool" 'isBool'
@@ -6676,7 +6789,8 @@ end 'checkBinopOperands'
 // named arms that resolve to a non-struct (typealiases over int/float etc.).
 function blameStructTypeName(project Project, t MaxonType) returns String
 	return match t 'check'
-		string gives "String"
+		string gives builtinStringLiteralTypeName()
+		character gives builtinCharLiteralTypeName()
 		named(id) gives blameStructIfRegistered(project, id: id)
 		boolean gives ""
 		integer gives ""
@@ -7370,7 +7484,7 @@ function typedResultFromOpIfMatches(project Project, op MaxonOp, name ByteArray)
 	match op 'pick'
 		literal(result, _, valueType, _) then return try staticTypedResult(name, result: result, t: valueType)
 		stringConst(result, _, _) then return try staticTypedResult(name, result: result, t: stringConstResultType(project))
-		charLiteral(result, _, _) then return try staticTypedResult(name, result: result, t: MaxonType.named(project.typeNames.intern("Character")))
+		charLiteral(result, _, _) then return try staticTypedResult(name, result: result, t: builtinCharLiteralType(project))
 		byteStringLiteral(result, _, _) then return try staticTypedResult(name, result: result, t: byteStringLiteralResultType(project))
 		varLoad(result, _, slotType, _) then return try staticTypedResult(name, result: result, t: slotType)
 		globalLoad(result, _, slotType, _) then return try staticTypedResult(name, result: result, t: slotType)
@@ -7437,13 +7551,13 @@ function maxonTypeIsRefinementOf(project Project, existing MaxonType, refined Ma
 	return match existing 'pickExisting'
 		named gives match refined 'pickRefined'
 			genericInstance gives true
-			boolean to string gives false
+			boolean to character gives false
 			named gives false
 			function to unresolved gives false
 			typeParameter gives false
 			interface to cstring gives false
 		end 'pickRefined'
-		boolean to string gives false
+		boolean to character gives false
 		function to cstring gives false
 	end 'pickExisting'
 end 'maxonTypeIsRefinementOf'
@@ -8157,7 +8271,7 @@ function maxonTypeIsDynamicDispatch(project Project, t MaxonType) returns bool
 		typeParameter gives true
 		genericInstance(gid) gives genericInstanceArgsContainTypeParameter(project, gid: gid)
 		unresolved gives true
-		boolean to string gives false
+		boolean to character gives false
 		function gives false
 		named gives false
 		constInt to cstring gives false
@@ -8187,7 +8301,7 @@ function maxonTypeContainsTypeParameter(project Project, t MaxonType) returns bo
 	return match t 'pick'
 		typeParameter gives true
 		genericInstance(gid) gives genericInstanceArgsContainTypeParameter(project, gid: gid)
-		boolean to string gives false
+		boolean to character gives false
 		function gives false
 		named gives false
 		interface gives false
@@ -8765,7 +8879,7 @@ function charByteRetyped(project Project, valueName ByteArray, valueType MaxonTy
 	if not isCharByteValue(project, valueName: valueName, valueType: valueType, funcName: funcName) 'pass'
 		return valueType
 	end 'pass'
-	return MaxonType.named(project.typeNames.intern("Character"))
+	return builtinCharLiteralType(project)
 end 'charByteRetyped'
 
 // True when `valueName` has type `integer` AND is tagged as a char-byte
@@ -8805,7 +8919,7 @@ function retypeCharByteArgsToCharacter(project Project, args ByteArrayArray, arg
 	end 'skipSelf'
 	var didSubstitute = false
 	var newTypes = MaxonTypeArray.create()
-	let characterType = MaxonType.named(project.typeNames.intern("Character"))
+	let characterType = builtinCharLiteralType(project)
 	for i in 0 upto argTypes.count() 'eachArg'
 		let t = try argTypes.get(i) otherwise return CharByteRetypedArgs.create(argTypes, didSubstitute: false)
 		if i < startIdx 'beforeUser'

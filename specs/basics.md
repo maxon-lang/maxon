@@ -1,6 +1,6 @@
 ---
 feature: basics
-status: stable
+status: selfhosted
 keywords: [main, return, semantic, validation]
 category: basics
 ---
@@ -67,81 +67,14 @@ end 'main'
 42
 ```
 ```RequiredIR:x64-windows
-=== maxon
 module {
-  func @getValue() -> i64 {
-  entry:
-    %0 = maxon.literal {value = 42 : i64}
-    maxon.scope_end []
-    maxon.return %0
-  }
-  func @main() -> i64 {
-  entry:
-    %1 = maxon.call @getValue
-    %2 = maxon.literal {value = 0 : i64}
-    %3 = maxon.binop %1, %2 {op = lt}
-    %4 = maxon.literal {value = 4294967295 : i64}
-    %5 = maxon.binop %1, %4 {op = gt}
-    %6 = maxon.binop %3, %5 {op = or}
-    maxon.cond_br %6 [then: __range_panic_0, else: __range_ok_0]
-  __range_panic_0:
-    maxon.panic "panic at return-function-call.test:10: Range check failed: value outside typealias 'ExitCode'"
-  __range_ok_0:
-    maxon.scope_end []
-    maxon.return %1
-  }
-}
-=== standard
-module {
-  func @getValue() -> i64 {
-  entry:
-    %0 = arith.constant {value = 42 : i64}
-    func.return %0
-  }
   func @main() -> u32 {
   entry:
-    %1 = func.call @getValue
-    %2 = arith.constant {value = 0 : i64}
-    %3 = arith.cmpi lt %1, %2
-    %4 = arith.constant {value = 4294967295 : i64}
-    %5 = arith.cmpi gt %1, %4
-    %6 = arith.ori1 %3, %5
-    cf.cond_br %6 [then: __range_panic_0, else: __range_ok_0]
-  __range_panic_0:
-    %7 = memref.lea_symdata __panic_msg_0
-    %8 = std.ptr_to_i64 %7
-    std.call_runtime @mrt_panic %8
-  __range_ok_0:
-    func.return %1
-  }
-}
-=== x86
-module {
-  func @getValue() -> i64 {
-  entry:
-    x64.mov rax, 42
-    x64.ret
-  }
-  func @main() -> u32 {
-  entry:
-    x64.prologue stack_size=16
-    x64.call getValue
-    x64.xor ecx, ecx
-    x64.mov edx, 4294967295
-    x64.cmp rax, rdx
-    x64.jg main.__range_panic_0
-    x64.cmp rax, rcx
-    x64.jl main.__range_panic_0
-    x64.jmp main.__range_ok_0
-  __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_0]
-    x64.mov rcx, rax
-    x64.call mrt_panic
-  __range_ok_0:
-    x64.epilogue
+    x64.mov r8d, 42
     x64.ret
   }
 }
+
 ```
 ```RequiredIR:arm64-macos
 === maxon
@@ -243,58 +176,23 @@ end 'main'
 f64 3.14
 ```
 ```RequiredIR:x64-windows
-=== maxon
-module {
-  func @main() -> i64 {
-  entry:
-    %0 = maxon.literal {value = 3.14 : f64}
-    maxon.assign %0 {var = x} {kind = f64} {decl = 1 : i1}
-    %1 = maxon.literal {value = 3.14 : f64}
-    %2 = maxon.binop %0, %1 {op = eq} {kind = f64}
-    maxon.cond_br %2 [then: check_0, else: other_0]
-  check_0:
-    %3 = maxon.literal {value = 1 : i64}
-    maxon.scope_end [x]
-    maxon.return %3
-  other_0:
-    %4 = maxon.literal {value = 0 : i64}
-    maxon.scope_end [x]
-    maxon.return %4
-  }
-}
-=== standard
 module {
   func @main() -> u32 {
   entry:
-    %0 = arith.float_constant {value = 3.14 : f64}
-    %1 = arith.float_constant {value = 3.14 : f64}
-    %2 = arith.cmpf eq %0, %1
-    cf.cond_br %2 [then: check_0, else: other_0]
+    x64.movsd xmm0, [rip+__float_4614253070214989087]
+    x64.movsd xmm1, [rip+__float_4614253070214989087]
+    x64.ucomisd xmm1, xmm0
+    x64.jp other_0
+    x64.jne other_0
   check_0:
-    %3 = arith.constant {value = 1 : i64}
-    func.return %3
-  other_0:
-    %4 = arith.constant {value = 0 : i64}
-    func.return %4
-  }
-}
-=== x86
-module {
-  func @main() -> u32 {
-  entry:
-    x64.movsd xmm0, [rip+__float_3.14]
-    x64.movsd xmm1, [rip+__float_3.14]
-    x64.ucomisd xmm0, xmm1
-    x64.jne main.other_0
-    x64.jp main.other_0
-  check_0:
-    x64.mov rax, 1
+    x64.mov r8d, 1
     x64.ret
   other_0:
-    x64.xor eax, eax
+    x64.xor r8d, r8d
     x64.ret
   }
 }
+
 ```
 ```RequiredIR:arm64-macos
 === maxon
@@ -352,62 +250,3 @@ module {
   }
 }
 ```
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

@@ -71,6 +71,16 @@ export union MaxonType
 	integer
 	float
 	string
+	// A single Unicode character — a first-class primitive, the type a `'x'`
+	// character literal carries. The stdlib struct implementing `BuiltinCharLiteral`
+	// (discovered, not hardcoded) is its concrete representation; lowering resolves
+	// `character` to that struct's Std layout (an 8-byte managed pointer), exactly as
+	// `string` resolves to the `BuiltinStringLiteral` struct. Placed adjacent to
+	// `string` so the two literal-backed primitives sit together; NOTE this is
+	// OUTSIDE the `boolean to string` range, so every match arm that handled the
+	// leading scalar primitives via that range must add an explicit `character` arm
+	// (the compiler's exhaustiveness check flags each one).
+	character
 	named(id TypeNameId)
 	// Function-typed parameter (and, eventually, closure value). Carries an
 	// id into `Project.functionTypes` rather than the param/return types
@@ -144,7 +154,8 @@ export union MaxonType
 			boolean gives "bool"
 			integer gives "int"
 			float gives "float"
-			string gives "String"
+			string gives printableStringTypeName()
+			character gives printableCharacterTypeName()
 			named(id) gives project.typeNames.get(id)
 			function(id) gives functionTypeToString(project, id: id)
 			unresolved gives "<unresolved>"
@@ -167,7 +178,7 @@ export union MaxonType
 	export function nameOrEmpty(project Project) returns String
 		return match self 'name'
 			named(id) gives project.typeNames.get(id)
-			boolean to string gives ""
+			boolean to character gives ""
 			function to unresolved gives ""
 			typeParameter(id) gives project.typeParameters.getName(id)
 			genericInstance(id) gives genericInstanceIdBaseName(project, id: id)
@@ -184,7 +195,7 @@ export union MaxonType
 	export function namedAliasNameOrEmpty(project Project) returns String
 		return match self 'name'
 			named(id) gives project.typeNames.get(id)
-			boolean to string gives ""
+			boolean to character gives ""
 			function to cstring gives ""
 		end 'name'
 	end 'namedAliasNameOrEmpty'
@@ -322,6 +333,7 @@ export function maxonTypeWidthBytes(project Project, t MaxonType) returns Machin
 		integer gives 8
 		float gives 8
 		string gives 8
+		character gives 8
 		named(id) gives namedTypeWidthBytes(project, id: id)
 		function gives 8
 		unresolved gives 8
@@ -627,6 +639,7 @@ export function maxonTypesStructurallyEqual(a MaxonType, b MaxonType) returns bo
 		integer gives matchesIntegerArm(b)
 		float gives matchesFloatArm(b)
 		string gives matchesStringArm(b)
+		character gives matchesCharacterArm(b)
 		named(idA) gives matchesNamedArm(b, idA: idA)
 		function(idA) gives matchesFunctionArm(b, idA: idA)
 		unresolved gives matchesUnresolvedArm(b)
@@ -675,14 +688,24 @@ function matchesStringArm(b MaxonType) returns bool
 	return match b 'm'
 		string gives true
 		boolean to float gives false
-		named to cstring gives false
+		character to cstring gives false
 	end 'm'
 end 'matchesStringArm'
+
+// Twin of `matchesStringArm`: a `character` is structurally equal only to
+// another `character`, never to `string` or any other arm.
+function matchesCharacterArm(b MaxonType) returns bool
+	return match b 'm'
+		character gives true
+		boolean to string gives false
+		named to cstring gives false
+	end 'm'
+end 'matchesCharacterArm'
 
 function matchesNamedArm(b MaxonType, idA TypeNameId) returns bool
 	return match b 'm'
 		named(idB) gives idA == idB
-		boolean to string gives false
+		boolean to character gives false
 		function to cstring gives false
 	end 'm'
 end 'matchesNamedArm'
@@ -863,6 +886,7 @@ export function writeMaxonType(project Project, buf ByteArray, t MaxonType) thro
 		integer then break
 		float then break
 		string then break
+		character then break
 		named(id) then try writeString(buf, s: project.typeNames.get(id))
 		// Cache v49: persist function-type signatures so stdlib functions with
 		// function-typed parameters (e.g. `Iterable.map(transform(Element)
@@ -1007,6 +1031,7 @@ export function readMaxonType(project Project, buf ByteArray, offset ByteOffset)
 		integer then return (MaxonType.integer, pos)
 		float then return (MaxonType.float, pos)
 		string then return (MaxonType.string, pos)
+		character then return (MaxonType.character, pos)
 		named then return try readMaxonTypeNamed(project, buf: buf, offset: pos)
 		// Cache v49: round-trip function-type signatures (param list +
 		// return type). Symmetric with the `function(id)` writer arm.
@@ -2336,7 +2361,7 @@ function bindInterfaceParamsToConformanceArgs(project Project, t MaxonType, uses
 		genericInstance(gid) gives bindGenericInstanceArgs(project, gid: gid, usesParams: usesParams, confArgs: confArgs)
 		typeParameter(id) gives substituteInterfaceParamArgByName(t, argName: project.typeParameters.getName(id), usesParams: usesParams, confArgs: confArgs)
 		named(id) gives substituteInterfaceParamArgByName(t, argName: project.typeNames.get(id), usesParams: usesParams, confArgs: confArgs)
-		boolean to string gives t
+		boolean to character gives t
 		function gives t
 		unresolved gives t
 		interface gives t
@@ -2453,7 +2478,8 @@ end 'baseNameOfMaxonType'
 //
 // Encoding (kept narrow on purpose; matches the minimum needed for
 // `Array.contains(Element)` vs `Array.contains(Array<Element>)`):
-//   - primitives:        `$bool`, `$int`, `$float`, `$String`
+//   - primitives:        `$bool`, `$int`, `$float`, `$<string struct>` (the
+//                        discovered `BuiltinStringLiteral` type, e.g. `$String`)
 //   - named types:       `$<TypeName>`
 //   - type parameters:   `$<ParamName>`        (bare param name like `Element`)
 //   - generic instances: `$<Base>_<Arg1>_...`  (e.g. `$Array_Element`)
@@ -2464,7 +2490,16 @@ export function mangleSuffixForMaxonType(project Project, t MaxonType) returns S
 		boolean gives "$bool"
 		integer gives "$int"
 		float gives "$float"
-		string gives "$String"
+		// The primitive `string` arm, the string-alias arms in
+		// `namedTypeMangleSuffix`, and a `named(<string struct>)` value MUST all
+		// mangle to the SAME suffix or `string`-primitive and struct-typed string
+		// overloads collide incorrectly. Anchor every one on the discovered
+		// string-literal struct name rather than a hardcoded `"String"`.
+		string gives "${builtinStringLiteralTypeName()}"
+		// `character` mangles to `$<discovered char-literal struct name>` — kept
+		// DISTINCT from `string` so a `'x'` char-literal argument and a `"x"`
+		// string argument never collide into one overload bucket.
+		character gives "${builtinCharLiteralTypeName()}"
 		// Named types may be typealiases for primitives (`typealias Integer =
 		// int(i64.min to i64.max)`); fold them to the primitive suffix so an
 		// `int` literal argument and an `Integer` parameter mangle identically.
@@ -2498,7 +2533,7 @@ function namedTypeMangleSuffix(project Project, name String) returns String
 			int gives "$int"
 			float gives "$float"
 			bool gives "$bool"
-			string gives "$String"
+			string gives "${builtinStringLiteralTypeName()}"
 			cstring gives "$cstring"
 		end 'cat'
 	end 'isPrimAlias'
@@ -2508,7 +2543,7 @@ function namedTypeMangleSuffix(project Project, name String) returns String
 				int gives "$int"
 				float gives "$float"
 				bool gives "$bool"
-				string gives "$String"
+				string gives "${builtinStringLiteralTypeName()}"
 				cstring gives "$cstring"
 			end 'cat'
 		end 'haveCat'
@@ -2545,7 +2580,7 @@ function parseTimeTypealiasCategoryByName(project Project, name String) returns 
 	if name == "bool" 'isBool'
 		return CastCategory.bool
 	end 'isBool'
-	if name == "String" or name == "string" 'isString'
+	if name == "string" or nonEmptyEquals(name, discovered: getCachedBuiltinStringLiteralTypeName()) 'isString'
 		return CastCategory.string
 	end 'isString'
 	if let stdType = try project.typealiases.get(name) 'haveResolved'
@@ -2574,6 +2609,31 @@ function mangleSuffixForGenericInstance(project Project, id GenericInstanceId) r
 	return result
 end 'mangleSuffixForGenericInstance'
 
+// Non-panicking discovered-name accessor: the discovered struct name when stdlib
+// is loaded, else `fallback`. A printer must never panic, so the printable type-arm
+// names fall back to the bare primitive keyword rather than the panicking
+// `builtin*LiteralTypeName` accessors — and never hardcode a struct name.
+function discoveredNameOr(discovered String, fallback String) returns String
+	if discovered.isEmpty() 'undiscovered'
+		return fallback
+	end 'undiscovered'
+	return discovered
+end 'discoveredNameOr'
+
+// The printable name for the `string` primitive type-arm: the discovered
+// string-literal struct (`BuiltinStringLiteral` implementor), else the bare
+// `string` keyword.
+function printableStringTypeName() returns String
+	return discoveredNameOr(getCachedBuiltinStringLiteralTypeName(), fallback: "string")
+end 'printableStringTypeName'
+
+// The printable name for the `character` primitive type-arm: the discovered
+// char-literal struct (`BuiltinCharLiteral` implementor), else the bare
+// `character` keyword.
+function printableCharacterTypeName() returns String
+	return discoveredNameOr(getCachedBuiltinCharLiteralTypeName(), fallback: "character")
+end 'printableCharacterTypeName'
+
 // Bare-token (no `$` prefix) variant for use when the token is being joined
 // with `_` separators inside a larger mangle string.
 function mangleTokenForMaxonType(project Project, t MaxonType) returns String
@@ -2581,7 +2641,8 @@ function mangleTokenForMaxonType(project Project, t MaxonType) returns String
 		boolean gives "bool"
 		integer gives "int"
 		float gives "float"
-		string gives "String"
+		string gives builtinStringLiteralTypeName()
+		character gives builtinCharLiteralTypeName()
 		named(id) gives project.typeNames.get(id)
 		typeParameter(id) gives project.typeParameters.getName(id)
 		genericInstance(id) gives mangleSuffixForGenericInstance(project, id: id)
@@ -2891,7 +2952,7 @@ function chaseParamTypeThroughInnerAlias(project Project, t MaxonType, enclosing
 	end 'noEnclosing'
 	return match t 'check'
 		named(id) gives chaseNamedThroughInnerAlias(project, name: project.typeNames.get(id), enclosingType: enclosingType, fallback: t)
-		boolean to string gives t
+		boolean to character gives t
 		typeParameter gives t
 		genericInstance gives t
 		function gives t
@@ -2942,6 +3003,7 @@ function paramTypeShape(t MaxonType) returns ParsedInt
 		integer gives 2
 		float gives 3
 		string gives 4
+		character gives 13
 		named gives 5
 		function gives 6
 		interface gives 7

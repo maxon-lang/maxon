@@ -11,15 +11,66 @@ ExitCode: 8
 module {
   func @mrt_start() {
   entry:
-    x64.prologue stack_size=32
+    x64.prologue stack_size=80
     x64.call __gt_init
     x64.call __io_init
     x64.call __slab_init
     x64.call main
     x64.mov r12, r8
+    x64.call __gt_cleanup
+    x64.lea r8, [rip+__data_CharacterSet.cachedAlphanumerics]
+    x64.lea r13, [rip+__data_CharacterSet.cachedControlCharacters]
+    x64.lea r14, [rip+__data_CharacterSet.cachedDecimalDigits]
+    x64.lea r15, [rip+__data_CharacterSet.cachedLetters]
+    x64.lea r9, [rip+__data_CharacterSet.cachedLowercaseLetters]
+    x64.mov [rbp+-24], r9
+    x64.lea r9, [rip+__data_CharacterSet.cachedNewlines]
+    x64.mov [rbp+-32], r9
+    x64.lea r9, [rip+__data_CharacterSet.cachedPunctuation]
+    x64.mov [rbp+-40], r9
+    x64.lea r9, [rip+__data_CharacterSet.cachedSymbols]
+    x64.mov [rbp+-48], r9
+    x64.mov rcx, [r8+0] (8b)
+    x64.call __mm_decref_maybenull_helper
+    x64.mov rcx, [r13+0] (8b)
+    x64.call __mm_decref_maybenull_helper
+    x64.mov rcx, [r14+0] (8b)
+    x64.call __mm_decref_maybenull_helper
+    x64.mov rcx, [r15+0] (8b)
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r8, [rbp+-24]
+    x64.mov rcx, [r8+0] (8b)
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r8, [rbp+-32]
+    x64.mov rcx, [r8+0] (8b)
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r8, [rbp+-40]
+    x64.mov rcx, [r8+0] (8b)
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r8, [rbp+-48]
+    x64.mov rcx, [r8+0] (8b)
+    x64.call __mm_decref_maybenull_helper
+    x64.lea r8, [rip+__data_CharacterSet.cachedUppercaseLetters]
+    x64.mov rcx, [r8+0] (8b)
+    x64.call __mm_decref_maybenull_helper
+    x64.lea r8, [rip+__data_CharacterSet.cachedWhitespaces]
+    x64.mov rcx, [r8+0] (8b)
+    x64.call __mm_decref_maybenull_helper
+    x64.lea r8, [rip+__data_CharacterSet.cachedWhitespacesAndNewlines]
+    x64.mov rcx, [r8+0] (8b)
+    x64.call __mm_decref_maybenull_helper
+    x64.lea r8, [rip+__data_captured]
+    x64.mov rcx, [r8+0] (8b)
+    x64.call __mm_decref_maybenull_helper
+    x64.lea r8, [rip+__data_sha256KTable]
+    x64.mov rcx, [r8+0] (8b)
+    x64.call __mm_decref_maybenull_helper
     x64.call __io_shutdown
-    x64.xor r8d, r8d
-    x64.mov [rbp-8], r12
+    x64.call mrt_win32_free_argv_cache
+    x64.mov rcx, r12
+    x64.call mrt_leak_check
+    x64.xor r9d, r9d
+    x64.mov [rbp-8], r8
     x64.call_import slot_0
     x64.epilogue
     x64.ret
@@ -63,10 +114,10 @@ module {
     %11 = arith.float_constant {value = 0 : f64}
     %12 = arith.subf %11, %69
     cf.br neg_0.after(%12)
-  neg_0.after:
+  neg_0.after(%61: f64):
     %13 = arith.constant {value = 0 : i64}
     cf.br reduce_0.header(%61, %13)
-  reduce_0.header:
+  reduce_0.header(%60: f64, %62: i64):
     %16 = arith.cmpf gt, %60, %70
     cf.cond_br %16 [then: reduce_0, else: series_0.header(%70, %70, %70)]
   reduce_0:
@@ -75,7 +126,7 @@ module {
     %21 = arith.constant {value = 1 : i64}
     %22 = arith.addi %62, %21
     cf.br reduce_0.header(%19, %22)
-  series_0.header:
+  series_0.header(%63: f64, %64: f64, %65: f64):
     %27 = arith.float_constant {value = 4626322717216342016 : f64}
     %28 = arith.cmpf lt, %65, %27
     cf.cond_br %28 [then: series_0, else: series_0.exit]
@@ -90,7 +141,7 @@ module {
   series_0.exit:
     %44 = arith.constant {value = 0 : i64}
     cf.br square_0.header(%64, %44)
-  square_0.header:
+  square_0.header(%67: f64, %68: i64):
     %48 = arith.cmpi lt, %68, %62
     cf.cond_br %48 [then: square_0, else: square_0.exit]
   square_0:
@@ -105,7 +156,7 @@ module {
   invert_0:
     %58 = arith.divf %70, %67
     cf.br invert_0.after(%58)
-  invert_0.after:
+  invert_0.after(%66: f64):
     func.return %66
   }
   func @Math.log(local0: f64) -> f64 {
@@ -127,7 +178,7 @@ module {
   one_0.after:
     %9 = arith.constant {value = 0 : i64}
     cf.br normalize_down_0.header(%9, %85)
-  normalize_down_0.header:
+  normalize_down_0.header(%79: i64, %81: f64):
     %12 = arith.float_constant {value = 4607182418800017408 : f64}
     %13 = arith.cmpf ge, %81, %12
     cf.cond_br %13 [then: normalize_down_0, else: normalize_up_0.header(%79, %81)]
@@ -137,7 +188,7 @@ module {
     %18 = arith.constant {value = 1 : i64}
     %19 = arith.addi %79, %18
     cf.br normalize_down_0.header(%19, %16)
-  normalize_up_0.header:
+  normalize_up_0.header(%78: i64, %80: f64):
     %21 = arith.float_constant {value = 4602678819172646912 : f64}
     %22 = arith.cmpf lt, %80, %21
     cf.cond_br %22 [then: normalize_up_0, else: normalize_up_0.exit]
@@ -157,7 +208,7 @@ module {
     %45 = arith.constant {value = 1 : i64}
     %46 = arith.constant {value = 20 : i64}
     cf.br series_0.header(%37, %37, %45)
-  series_0.header:
+  series_0.header(%82: f64, %83: f64, %84: i64):
     %49 = arith.cmpi lt, %84, %46
     cf.cond_br %49 [then: series_0, else: series_0.exit]
   series_0:
@@ -225,7 +276,7 @@ module {
     %33 = arith.float_constant {value = 4626322717216342016 : f64}
     %34 = arith.cmpf le, %80, %33
     cf.cond_br %34 [then: mult_loop_0.header(%81, %3), else: positive_int_0.after]
-  mult_loop_0.header:
+  mult_loop_0.header(%75: f64, %76: f64):
     %39 = arith.cmpf lt, %76, %80
     cf.cond_br %39 [then: mult_loop_0, else: mult_loop_0.exit]
   mult_loop_0:
@@ -242,7 +293,7 @@ module {
     %54 = arith.float_constant {value = 4626322717216342016 : f64}
     %55 = arith.cmpf le, %52, %54
     cf.cond_br %55 [then: div_loop_0.header(%81, %3), else: is_int_0.after]
-  div_loop_0.header:
+  div_loop_0.header(%77: f64, %78: f64):
     %60 = arith.cmpf lt, %78, %52
     cf.cond_br %60 [then: div_loop_0, else: div_loop_0.exit]
   div_loop_0:

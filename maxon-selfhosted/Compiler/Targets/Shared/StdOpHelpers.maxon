@@ -237,38 +237,91 @@ end 'computeOverflowStackOffset'
 
 // Look up a callee's parameter types from the MIR-phase function list,
 // falling back to the pre-compiled stdlib function list.
-export function lookupFuncParamTypes(callee String, allFunctions IrFunctionArray, stdlibFunctions ObjectFunctionArray) returns StdTypeArray
-	for func in allFunctions 'search'
+// Bridge a call-site callee name against a function's stored name. Exact match
+// wins; otherwise a bare runtime callee (e.g. `__mm_alloc` written in runtime.std)
+// also matches the `stdlib.`-qualified Internals definition (`stdlib.__mm_alloc`).
+// Runtime helpers (runtime.std, parsed as Std-IR) reference Internals helpers by
+// bare name because Std-IR call syntax has no namespace form; the Internals bodies
+// carry a `stdlib.` prefix from Maxon-phase qualification. The linker resolves the
+// two by the bare symbol, but pre-link backend param/return type lookups need this
+// bridge to find the qualified definition.
+export function calleeNameMatches(funcName String, callee String) returns bool
+	if funcName == callee 'exact'
+		return true
+	end 'exact'
+	// Bare callee (runtime.std) -> `stdlib.`-qualified def (Internals).
+	if funcName.startsWith("stdlib.") and not callee.startsWith("stdlib.") 'qualifiedDef'
+		return funcName == "stdlib.{callee}"
+	end 'qualifiedDef'
+	// `stdlib.`-qualified callee (a Maxon-phase-qualified call to a helper now
+	// defined bare in runtime.std, e.g. `stdlib.__slab_alloc` -> `__slab_alloc`).
+	if callee.startsWith("stdlib.") and not funcName.startsWith("stdlib.") 'bareDef'
+		return callee == "stdlib.{funcName}"
+	end 'bareDef'
+	return false
+end 'calleeNameMatches'
+
+enum FuncSignatureLookupError implements Error
+	notRegistered
+end 'FuncSignatureLookupError'
+
+// The two fields a backend type lookup needs off a function definition,
+// returned by `findCalleeSignature` so the two-pass search order lives in one
+// place regardless of whether the hit came from an `IrFunction` or an
+// `ObjectFunction` (which have distinct types but the same three fields).
+type CalleeSignature
+	export var paramTypes as StdTypeArray
+	export var returnType as StdReturnType
+
+	export static function create(paramTypes StdTypeArray, returnType StdReturnType) returns CalleeSignature
+		return Self{paramTypes: paramTypes, returnType: returnType}
+	end 'create'
+end 'CalleeSignature'
+
+// Locate `callee`'s signature in the MIR-phase function list, falling back to
+// the pre-compiled stdlib list. Both `lookupFuncParamTypes` and
+// `lookupFuncReturnStdType` route through this so the two-pass search order
+// lives in exactly one place. Pass 1 is an exact-name match: a bare runtime
+// symbol that is defined bare (e.g. runtime.std's sharded `__slab_refill_mcache`,
+// arity 2) MUST win over any `stdlib.`-qualified definition of the same bare name
+// (Internals may carry a stale/different-arity copy). Pass 2 falls back to the
+// bare-callee -> `stdlib.`-qualified bridge only when no exact definition exists.
+function findCalleeSignature(callee String, allFunctions IrFunctionArray, stdlibFunctions ObjectFunctionArray) returns CalleeSignature throws FuncSignatureLookupError
+	for func in allFunctions 'searchExact'
 		if func.name == callee 'found'
-			return func.paramTypes
+			return CalleeSignature.create(func.paramTypes, returnType: func.returnType)
+		end 'found'
+	end 'searchExact'
+	for func in stdlibFunctions 'searchStdlibExact'
+		if func.name == callee 'found'
+			return CalleeSignature.create(func.paramTypes, returnType: func.returnType)
+		end 'found'
+	end 'searchStdlibExact'
+
+	for func in allFunctions 'search'
+		if calleeNameMatches(func.name, callee: callee) 'found'
+			return CalleeSignature.create(func.paramTypes, returnType: func.returnType)
 		end 'found'
 	end 'search'
-
 	for func in stdlibFunctions 'searchStdlib'
-		if func.name == callee 'found'
-			return func.paramTypes
+		if calleeNameMatches(func.name, callee: callee) 'found'
+			return CalleeSignature.create(func.paramTypes, returnType: func.returnType)
 		end 'found'
 	end 'searchStdlib'
 
-	panic("lookupFuncParamTypes: callee '{callee}' not registered in funcSignatures (allFunctions={allFunctions.count()}, stdlibFunctions={stdlibFunctions.count()})")
+	throw FuncSignatureLookupError.notRegistered
+end 'findCalleeSignature'
+
+export function lookupFuncParamTypes(callee String, allFunctions IrFunctionArray, stdlibFunctions ObjectFunctionArray) returns StdTypeArray
+	let sig = try findCalleeSignature(callee, allFunctions: allFunctions, stdlibFunctions: stdlibFunctions) otherwise panic("lookupFuncParamTypes: callee '{callee}' not registered in funcSignatures (allFunctions={allFunctions.count()}, stdlibFunctions={stdlibFunctions.count()})")
+	return sig.paramTypes
 end 'lookupFuncParamTypes'
 
 // Look up a callee's return type from the MIR-phase function list,
 // falling back to the pre-compiled stdlib function list.
 export function lookupFuncReturnStdType(callee String, allFunctions IrFunctionArray, stdlibFunctions ObjectFunctionArray) returns StdReturnType
-	for func in allFunctions 'search'
-		if func.name == callee 'found'
-			return func.returnType
-		end 'found'
-	end 'search'
-
-	for func in stdlibFunctions 'searchStdlib'
-		if func.name == callee 'found'
-			return func.returnType
-		end 'found'
-	end 'searchStdlib'
-
-	panic("lookupFuncReturnStdType: callee '{callee}' not registered in funcSignatures (allFunctions={allFunctions.count()}, stdlibFunctions={stdlibFunctions.count()})")
+	let sig = try findCalleeSignature(callee, allFunctions: allFunctions, stdlibFunctions: stdlibFunctions) otherwise panic("lookupFuncReturnStdType: callee '{callee}' not registered in funcSignatures (allFunctions={allFunctions.count()}, stdlibFunctions={stdlibFunctions.count()})")
+	return sig.returnType
 end 'lookupFuncReturnStdType'
 
 // ============================================================

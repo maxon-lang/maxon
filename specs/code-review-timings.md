@@ -67,3 +67,21 @@ Pre-2026-05-19 rows predate this columnization — `?` marks unrecorded values.
 | 2026-06-03 |    2.3s |   43.7s | 2779 |             21.9s |  66.8s |   40.5s | 2210 | 12 |
 | 2026-06-04 |    2.0s |   38.7s | 2779 |             18.8s |  48.4s |   36.4s | 2219 | 12 |
 | 2026-06-04 |    2.3s |   40.2s | 2779 |             19.0s |  54.0s |   47.6s | 2219 | 12 |
+| 2026-06-08 |    1.8s |      ?† |    ? |             17.7s |     ?† |      ?† |    ? |  ? |
+| 2026-06-09 |   47.2s |      ?† |    ? |             23.5s | 51.3s‡ | 40.6s‡  | 30‡ |  ? |
+
+† 2026-06-08 was a ladder-only code-review run (`/code-review` invoked with "do
+not run tests other than ladder tests"), so the full-suite test wall-clocks /
+counts were not measured. The `mm-ladder` + `mm-ladder-containers` ladder
+(22 rungs) was green on both x64-windows and wasm32-wasi (no leaks, no crashes).
+Build times are real, full-suite cold builds (`C# build` clean; `Self-hosted
+build` from-source incl. stdlib recompile).
+
+‡ 2026-06-09 was a ladder-only code-review run (`/code-review` "only run ladder
+tests"). `C# tests` is `?` because the `mm-ladder*` specs are self-hosted-only
+(the C# runner registers none of them). The `SH x64` / `SH wasm` wall-clocks and
+`SH n` are the `--filter=mm-ladder` subset (30 fragments across `mm-ladder`,
+`mm-ladder-2`, `mm-ladder-containers`, `mm-ladder-managed-element-containers`,
+including the new `set-from-character-literals-membership` test), NOT the full
+suite, so they are not comparable to the unmarked full-suite rows above. All 30
+passed on both targets (no leaks, no crashes). Build times are real cold builds.

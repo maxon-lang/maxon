@@ -2006,6 +2006,44 @@ public static partial class MaxonToStandardConversion {
         LowerManagedMemShift(shiftOp, func, ref block, valueMap, varTypes, errorFlagValue: errorFlagValue);
         return true;
       }
+      case "__managed_mem_swap": {
+        // Slot exchange. The bootstrap's refcount model balances a get+set
+        // exchange on its own (loads take refs, stores release the displaced
+        // occupant's), so lower swap as exactly that sequence here. The
+        // self-hosted compiler instead routes to the raw byte-exchange helper
+        // (`stdlib.__managed_mem_swap`) because its move-model `set` frees the
+        // displaced occupant while the swap still aliases it.
+        var (elementKind, typeParamName, _, isStructElem, structElemTypeName, elementStorageType) = DeriveManagedElementInfo(args[0], valueMap, typeDefs);
+        var getI = new MaxonManagedMemGetOp(args[0], args[1], elementKind) {
+          TypeParamName = typeParamName,
+          IsStructElement = isStructElem,
+          StructElementTypeName = structElemTypeName,
+          ElementStorageType = elementStorageType,
+          IsBoundsCheckSafe = false
+        };
+        LowerManagedMemGet(getI, func, ref block, valueMap, varTypes, temps, errorFlagValue: errorFlagValue);
+        var getJ = new MaxonManagedMemGetOp(args[0], args[2], elementKind) {
+          TypeParamName = typeParamName,
+          IsStructElement = isStructElem,
+          StructElementTypeName = structElemTypeName,
+          ElementStorageType = elementStorageType,
+          IsBoundsCheckSafe = false
+        };
+        LowerManagedMemGet(getJ, func, ref block, valueMap, varTypes, temps, errorFlagValue: errorFlagValue);
+        var setI = new MaxonManagedMemSetOp(args[0], args[1], getJ.Result, elementKind) {
+          TypeParamName = typeParamName,
+          IsStructElement = isStructElem,
+          ElementStorageType = elementStorageType
+        };
+        LowerManagedMemSet(setI, func, ref block, valueMap, varTypes, errorFlagValue: errorFlagValue);
+        var setJ = new MaxonManagedMemSetOp(args[0], args[2], getI.Result, elementKind) {
+          TypeParamName = typeParamName,
+          IsStructElement = isStructElem,
+          ElementStorageType = elementStorageType
+        };
+        LowerManagedMemSet(setJ, func, ref block, valueMap, varTypes, errorFlagValue: errorFlagValue);
+        return true;
+      }
       case "__managed_mem_create": {
         if (result is not MaxonStruct createResult)
           throw new InvalidOperationException("__managed_mem_create requires a MaxonStruct result");

@@ -1,0 +1,79 @@
+// Test: rung-09-int-array-push-get
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function main() returns ExitCode
+	var xs = IntArray.create()
+	xs.push(10)
+	xs.push(20)
+	return try xs.get(1) otherwise 0
+end 'main'
+---
+MmTrace: true
+ExitCode: 20
+Stderr: ```
+mm_alloc Array #1 size=8 [main]
+mm_incref Array #1 rc=1 [main]
+mm_alloc __ManagedMemory #2 size=48 [main]
+mm_incref __ManagedMemory #2 rc=1 [main]
+mm_move Array #1 -> return [main]
+mm_alloc <raw> #3 size=32
+mm_incref <raw> #3 rc=1
+mm_decref Array #1 rc=0
+  mm_decref __ManagedMemory #2 rc=0
+    mm_decref <raw> #3 rc=0
+      mm_free <raw> #3
+    mm_free __ManagedMemory #2
+  mm_free Array #1
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %21 = mir.global_addr @__mtstr_scope_main
+    %22 = mir.call @mm_scope_push(%21)
+    %1 = mir.global_addr @__layout_Array_Integer
+    %2 = mir.call @Array.create(%1)
+    %4 = mir.mov_imm 10 : i64
+    %5 = mir.global_addr @__layout_Array_Integer
+    %6 = mir.call @Array.push(%2, %4, %5)
+    %8 = mir.mov_imm 20 : i64
+    %9 = mir.global_addr @__layout_Array_Integer
+    %10 = mir.call @Array.push(%2, %8, %9)
+    %12 = mir.mov_imm 1 : i64
+    mir.br inlined_Array.get_0_0()
+  inlined_Array.get_0_0:
+    %24 = mir.load %2, 0 width: qword
+    %25, %26 = mir.try_call @stdlib.__managed_mem_get(%24, %12)
+    %34 = mir.call @stdlib.__mm_decref(%2)
+    %27 = mir.mov_imm 0 : i64
+    %28 = mir.cmp ne, %26, %27
+    mir.cond_br %28 [then: inlined_Array.get_1_0(), else: inlined_Array.get_3_0()]
+  inlined_Array.get_1_0:
+    %29 = mir.mov_imm 0 : i64
+    %30 = mir.mov_imm 1 : i64
+    mir.br inline_cont_main_0(%29, %30)
+  inlined_Array.get_3_0:
+    %31 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%25, %31)
+  inline_cont_main_0:
+    %16 = mir.mov_imm 0 : i64
+    %17 = mir.cmp ne, %33, %16
+    mir.cond_br %17 [then: try_0.otherwise(), else: try_0.merge(%32)]
+  try_0.otherwise:
+    %19 = mir.mov_imm 0 : i64
+    mir.br try_0.merge(%19)
+  try_0.merge:
+    %35 = mir.call @mm_scope_pop()
+    %36 = mir.mov_imm 125 : i64
+    %37 = mir.cmp ugt, %23, %36
+    mir.cond_br %37 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %38 = mir.global_addr @__panic_msg_0bbc49cb9c06d4cb
+    %39 = mir.call @mrt_panic(%38)
+  __range_ok_0:
+    mir.ret %23
+  }
+}
+---

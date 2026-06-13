@@ -37,9 +37,11 @@ maxon build [file|directory] [options]
 |--------|-------------|
 | `--target=ARCH-OS` | Set compilation target (default: `x64-windows`). Examples: `x64-windows`, `arm64-macos`, `x64-linux` |
 | `--emit-ir` | Write `.ir` file |
-| `--dump-stages` | Write IR at each pipeline stage (`.1-maxon.ir`, etc.) |
-| `--mm-trace` | Enable runtime memory manager trace output (stderr) |
+| `--dump-stages` | Write IR at each pipeline stage (`.1-maxon.ir`, etc.), user program only |
+| `--dump-stages-stdlib` | Like `--dump-stages` but include the full stdlib IR in each stage file (implies `--dump-stages`) |
+| `--mm-trace` | Enable runtime memory manager trace output (stderr). Bypasses the stdlib native cache so stdlib re-lowers through the user pipeline with tracing materialized |
 | `--mm-debug` | Enable runtime memory debug checks (magic, canary, poison) |
+| `--leak-check` | Wire the process-exit leak gate (`mrt_leak_check`) into the binary so it exits `101` if any allocation is still live at exit. Unlike `--mm-trace`, does NOT bypass the stdlib cache, so it reproduces the cached-build path |
 | `--async-trace` | Enable async/await runtime trace output (stderr) |
 | `--debugstream` | Enable shared-memory debug stream (use with `maxon monitor`) |
 | `--timing` | Print per-stage compile timings to stderr |

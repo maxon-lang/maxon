@@ -13,21 +13,23 @@ module {
   func @main() -> u32 {
   entry:
     x64.prologue stack_size=16
-    x64.mov ecx, 40
-    x64.call mrt_alloc
+    x64.lea rdx, [rip+stdlib.__destruct___ManagedMemory]
+    x64.mov ecx, 48
+    x64.call mrt_alloc_with_dtor
     x64.mov r12, r8
+    x64.xor eax, eax
+    x64.mov [r12+40], rax (8b)
     x64.lea r8, [rip+__istr_0]
     x64.mov [r12+0], r8 (8b)
-    x64.xor r8d, r8d
-    x64.mov [r12+8], r8 (8b)
+    x64.mov [r12+8], rax (8b)
     x64.mov r8, -2
     x64.mov [r12+16], r8 (8b)
     x64.mov r8d, 1
     x64.mov [r12+24], r8 (8b)
-    x64.xor r8d, r8d
-    x64.mov [r12+32], r8 (8b)
+    x64.mov [r12+32], rax (8b)
+    x64.lea rdx, [rip+__destruct_Array]
     x64.mov ecx, 8
-    x64.call mrt_alloc
+    x64.call stdlib.__mm_alloc
     x64.mov r13, r8
     x64.mov [r13+0], r12 (8b)
     x64.lea rax, [rip+__layout_Array_Int]
@@ -41,26 +43,40 @@ module {
     x64.lea rdx, [rip+__layout_Array_Int]
     x64.mov rcx, r13
     x64.call Array.count
-    x64.mov r9d, 4294967295
-    x64.cmp r8, r9
+    x64.mov r12, r8
+    x64.mov r8d, 4294967295
+    x64.cmp r12, r8
     x64.jle __cast_check_lo_0
-    x64.jmp __cast_panic_0
+    x64.jmp __rc_edge_0_0
   __cast_check_lo_0:
-    x64.test r8, r8
+    x64.test r12, r12
     x64.jge __cast_ok_0
+    x64.jmp __rc_edge_3_0
   __cast_panic_0:
     x64.lea r12, [rip+__panic_msg_55158570d8915400]
     x64.mov rcx, r12
     x64.call mrt_panic
   __cast_ok_0:
-    x64.mov r9d, 4294967295
-    x64.cmp r8, r9
+    x64.mov rcx, r13
+    x64.call mm_drop
+    x64.mov r8d, 4294967295
+    x64.cmp r12, r8
     x64.jbe __range_ok_0
+    x64.jmp __range_panic_0
+  __rc_edge_0_0:
+    x64.mov rcx, r13
+    x64.call mm_drop
+    x64.jmp __cast_panic_0
+  __rc_edge_3_0:
+    x64.mov rcx, r13
+    x64.call mm_drop
+    x64.jmp __cast_panic_0
   __range_panic_0:
     x64.lea r12, [rip+__panic_msg_55158570d8915400]
     x64.mov rcx, r12
     x64.call mrt_panic
   __range_ok_0:
+    x64.mov r8, r12
     x64.epilogue
     x64.ret
   }

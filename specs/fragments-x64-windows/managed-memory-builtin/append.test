@@ -38,10 +38,11 @@ module {
   func @main() -> u32 {
   entry:
     x64.prologue stack_size=48
+    x64.xor eax, eax
     x64.mov edx, 8
     x64.mov r12d, 4
     x64.mov rcx, r12
-    x64.call stdlib.__managed_mem_create
+    x64.call stdlib.__managed_mem_create_managed
     x64.mov r13, r8
     x64.xor r14d, r14d
     x64.mov r15d, 2
@@ -53,6 +54,8 @@ module {
     x64.test rdx, rdx
     x64.je try_1.merge
   try_1.otherwise:
+    x64.mov rcx, r13
+    x64.call __mm_decref_maybenull_helper
     x64.mov r8, r15
     x64.epilogue
     x64.ret
@@ -64,6 +67,8 @@ module {
     x64.test rdx, rdx
     x64.je try_2.merge
   try_2.otherwise:
+    x64.mov rcx, r13
+    x64.call __mm_decref_maybenull_helper
     x64.mov r8d, 3
     x64.epilogue
     x64.ret
@@ -75,13 +80,16 @@ module {
     x64.test rdx, rdx
     x64.je try_3.merge
   try_3.otherwise:
+    x64.mov rcx, r13
+    x64.call __mm_decref_maybenull_helper
     x64.mov r8d, 3
     x64.epilogue
     x64.ret
   try_3.merge:
+    x64.xor eax, eax
     x64.mov edx, 8
     x64.mov rcx, r12
-    x64.call stdlib.__managed_mem_create
+    x64.call stdlib.__managed_mem_create_managed
     x64.mov [rbp+-8], r8
   try_4.merge:
     x64.mov rdx, r15
@@ -90,6 +98,10 @@ module {
     x64.test rdx, rdx
     x64.je try_5.merge
   try_5.otherwise:
+    x64.mov rcx, r13
+    x64.call __mm_decref_maybenull_helper
+    x64.mov rcx, [rbp+-8]
+    x64.call __mm_decref_maybenull_helper
     x64.mov r8d, 5
     x64.epilogue
     x64.ret
@@ -101,6 +113,10 @@ module {
     x64.test rdx, rdx
     x64.je try_6.merge
   try_6.otherwise:
+    x64.mov rcx, r13
+    x64.call __mm_decref_maybenull_helper
+    x64.mov rcx, [rbp+-8]
+    x64.call __mm_decref_maybenull_helper
     x64.mov r8d, 6
     x64.epilogue
     x64.ret
@@ -112,6 +128,10 @@ module {
     x64.test rdx, rdx
     x64.je try_7.merge
   try_7.otherwise:
+    x64.mov rcx, [rbp+-8]
+    x64.call __mm_decref_maybenull_helper
+    x64.mov rcx, r13
+    x64.call __mm_decref_maybenull_helper
     x64.mov r8d, 6
     x64.epilogue
     x64.ret
@@ -119,11 +139,15 @@ module {
     x64.mov rcx, r13
     x64.mov rdx, [rbp+-8]
     x64.call stdlib.__managed_mem_append
+    x64.mov rcx, [rbp+-8]
+    x64.call __mm_decref_maybenull_helper
   try_8.merge:
     x64.mov r8, [r13+8] (8b)
     x64.cmp r8, 4
     x64.je badLen_0.after
   badLen_0:
+    x64.mov rcx, r13
+    x64.call __mm_decref_maybenull_helper
     x64.mov r8d, 8
     x64.epilogue
     x64.ret
@@ -135,6 +159,8 @@ module {
     x64.test rdx, rdx
     x64.je try_9.merge
   try_9.otherwise:
+    x64.mov rcx, r13
+    x64.call __mm_decref_maybenull_helper
     x64.mov r8d, 9
     x64.epilogue
     x64.ret
@@ -146,6 +172,8 @@ module {
     x64.test rdx, rdx
     x64.je try_10.merge
   try_10.otherwise:
+    x64.mov rcx, r13
+    x64.call __mm_decref_maybenull_helper
     x64.mov r8d, 9
     x64.epilogue
     x64.ret
@@ -157,6 +185,8 @@ module {
     x64.test rdx, rdx
     x64.je try_11.merge
   try_11.otherwise:
+    x64.mov rcx, r13
+    x64.call __mm_decref_maybenull_helper
     x64.mov r8d, 9
     x64.epilogue
     x64.ret
@@ -164,10 +194,12 @@ module {
     x64.mov edx, 3
     x64.mov rcx, r13
     x64.call stdlib.__managed_mem_get
-    x64.mov r9, r8
+    x64.mov [rbp+-16], r8
     x64.test rdx, rdx
     x64.je try_12.merge
   try_12.otherwise:
+    x64.mov rcx, r13
+    x64.call __mm_decref_maybenull_helper
     x64.mov r8d, 9
     x64.epilogue
     x64.ret
@@ -175,6 +207,8 @@ module {
     x64.cmp r12, 1
     x64.je badV0_0.after
   badV0_0:
+    x64.mov rcx, r13
+    x64.call __mm_decref_maybenull_helper
     x64.mov r8d, 10
     x64.epilogue
     x64.ret
@@ -183,6 +217,8 @@ module {
     x64.cmp r8, 2
     x64.je badV1_0.after
   badV1_0:
+    x64.mov rcx, r13
+    x64.call __mm_decref_maybenull_helper
     x64.mov r8d, 11
     x64.epilogue
     x64.ret
@@ -190,11 +226,16 @@ module {
     x64.cmp r15, 3
     x64.je badV2_0.after
   badV2_0:
+    x64.mov rcx, r13
+    x64.call __mm_decref_maybenull_helper
     x64.mov r8d, 12
     x64.epilogue
     x64.ret
   badV2_0.after:
-    x64.cmp r9, 4
+    x64.mov rcx, r13
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r8, [rbp+-16]
+    x64.cmp r8, 4
     x64.je badV3_0.after
   badV3_0:
     x64.mov r8d, 13

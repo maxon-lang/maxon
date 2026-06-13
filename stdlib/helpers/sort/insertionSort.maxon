@@ -15,9 +15,16 @@ export extension Array
 	typealias SortComparator = function(Element, Element) returns Ordering
 
 	// In-place insertion sort over the closed-open range [lo, hi).
-	// Stable: equal elements keep relative order because the shift loop
+	// Stable: equal elements keep relative order because the bubble loop
 	// stops as soon as the predecessor is not strictly greater than the
-	// pending element (cmp returning `equalTo` does not trigger a shift).
+	// pending element (cmp returning `equalTo` does not trigger a swap).
+	//
+	// The pending element bubbles down via raw SWAPS rather than the textbook
+	// hold-and-shift form: holding `pending` while `set` shifts its slot would
+	// decref the held occupant out from under the borrow
+	// (`__managed_mem_set`'s overwrite semantics free the displaced element —
+	// the sort-of-managed-elements UAF). A swap moves ownership between slots
+	// with refcounts unchanged, so managed elements survive the relocation.
 	export function internalInsertionSortRange(lo SortIndex, hi SortIndex, cmp SortComparator)
 		Log.trace("insertionSort.run")
 		if hi <= lo + 1 'trivial'
@@ -25,18 +32,17 @@ export extension Array
 		end 'trivial'
 		var i = lo + 1
 		while i < hi 'outer'
-			let pending = try managed.get(i) otherwise panic("internalInsertionSortRange: pending get OOB; invariant i < hi <= managed.length()")
 			var j = i
 			while j > lo 'inner'
 				let prev = try managed.get(j - 1) otherwise panic("internalInsertionSortRange: prev get OOB; invariant j > lo >= 0")
+				let pending = try managed.get(j) otherwise panic("internalInsertionSortRange: pending get OOB; invariant j <= i < hi <= managed.length()")
 				let ord = cmp(prev, pending)
 				if ord != Ordering.greaterThan 'placed'
 					break
 				end 'placed'
-				try managed.set(j, value: prev) otherwise panic("internalInsertionSortRange: shift set OOB; invariant j <= i < hi")
+				self.swap(j - 1, j: j)
 				j = j - 1
 			end 'inner'
-			try managed.set(j, value: pending) otherwise panic("internalInsertionSortRange: final set OOB; invariant j >= lo")
 			i = i + 1
 		end 'outer'
 	end 'internalInsertionSortRange'

@@ -19,7 +19,8 @@ When working in this repo, prefer the `maxon-dev` MCP tools over raw Bash invoca
 | Run self-hosted spec tests | `mcp__maxon-dev__run_self_hosted_test` |
 | Get per-test PASS/FAIL detail for a filter | `mcp__maxon-dev__spec_test_outcome` (requires `filter`) |
 | Run an inline Maxon snippet or a file | `mcp__maxon-dev__run_program` (requires `compiler: "csharp"` or `"selfhosted"`) |
-| Dump IR (optionally per-stage) | `mcp__maxon-dev__dump_ir` (set `dumpStages: true` for stage-by-stage artifacts) |
+| Dump IR (optionally per-stage) | `mcp__maxon-dev__dump_ir` (requires `compiler: "csharp"` or `"selfhosted"`; set `dumpStages: true` for stage-by-stage artifacts) |
+| Dump all per-stage IR (self-hosted) | `mcp__maxon-dev__dump_stages` (self-hosted, always emits every stage artifact + the final `.ir`) |
 | Format a Maxon file or snippet | `mcp__maxon-dev__fmt` |
 | Look up a 4-digit error code | `mcp__maxon-dev__lookup_error_code` |
 | Debug memory-management issues | `mcp__maxon-dev__mm_trace_analyze` |

@@ -198,11 +198,44 @@ export function setCachedBuiltinDictionaryLiteralTypeName(name String)
 	cachedBuiltinDictionaryLiteralTypeName = name.toByteArray()
 end 'setCachedBuiltinDictionaryLiteralTypeName'
 
-// Cache-parity test harness: when true, `getStdlibModule` skips both the
-// in-process warm path and the on-disk cache read, forcing a fresh parse +
-// lowering from source on every call. The companion write-cache call at the
-// end of `getStdlibModule` is also short-circuited so a bypassed run doesn't
-// inadvertently warm the disk cache for a subsequent non-bypassed leg.
+// Mirror of `cachedBuiltinArrayLiteralTypeName` for the `BuiltinCharLiteral`
+// protocol — the type a single-quote character literal (`'x'`) lowers to. The
+// compiler knows nothing about "Character" specifically; it discovers whichever
+// stdlib type declares `implements BuiltinCharLiteral` (parser walk over
+// `unresolvedStructTypes`, republished into this cache by `restoreStdlibMetadata`
+// on cache-hit runs). Every site that previously hardcoded the `"Character"` type
+// name reads `builtinCharLiteralTypeName(project)` instead.
+var cachedBuiltinCharLiteralTypeName = ByteArray.create()
+
+export function getCachedBuiltinCharLiteralTypeName() returns String
+	return String.from(cachedBuiltinCharLiteralTypeName)
+end 'getCachedBuiltinCharLiteralTypeName'
+
+export function setCachedBuiltinCharLiteralTypeName(name String)
+	cachedBuiltinCharLiteralTypeName = name.toByteArray()
+end 'setCachedBuiltinCharLiteralTypeName'
+
+// Mirror of `cachedBuiltinCharLiteralTypeName` for the `BuiltinStringLiteral`
+// protocol — the type a double-quote string literal (`"..."`) and the `string`
+// primitive type-arm lower to. The compiler knows nothing about "String"
+// specifically; it discovers whichever stdlib type declares `implements
+// BuiltinStringLiteral`.
+var cachedBuiltinStringLiteralTypeName = ByteArray.create()
+
+export function getCachedBuiltinStringLiteralTypeName() returns String
+	return String.from(cachedBuiltinStringLiteralTypeName)
+end 'getCachedBuiltinStringLiteralTypeName'
+
+export function setCachedBuiltinStringLiteralTypeName(name String)
+	cachedBuiltinStringLiteralTypeName = name.toByteArray()
+end 'setCachedBuiltinStringLiteralTypeName'
+
+// `--mm-trace` bypass: when true, `getStdlibModule` skips both the in-process
+// warm path and the on-disk cache read, forcing a fresh parse + lowering from
+// source so stdlib lowers INLINE in the user pipeline with the mm-trace calls
+// materialized (the on-disk cache is built trace-free). The companion
+// write-cache call at the end of `getStdlibModule` is also short-circuited so a
+// bypassed (traced) run doesn't overwrite the disk cache with a traced build.
 var stdlibCacheBypassed = false
 
 // Phase 0b regalloc roadmap: process-wide set of stdlib function names whose
@@ -304,17 +337,17 @@ export function setStdlibCacheBypassed(bypassed bool)
 end 'setStdlibCacheBypassed'
 
 // Wipe every module-level stdlib-cache var back to its initial state. The
-// cache-parity test harness calls this between the two legs of a parity test
-// so leg B starts from the same blank in-process state as leg A, regardless
-// of what leg A left behind. Each assignment mirrors the original top-level
-// initializer above.
+// mm-trace test path calls this before a bypassed (traced) compile so it starts
+// from blank in-process state and re-parses stdlib from source, and again
+// afterward (paired with `warmStdlibCache`) so later untraced tests resume from
+// the warm cache. Each assignment mirrors the original top-level initializer above.
 //
 // `stdlibCacheProjectDirs` is intentionally NOT reset: it's not loader cache
 // state, it's a sticky hint that pins the on-disk cache file location to the
 // first project's directory observed in the process. Clearing it would make
 // post-reset compiles look for the cache under the per-test exe's path
 // instead of the suite-warmup project's, producing spurious cache misses on
-// the cache-on leg of every parity test.
+// the warm cached compile that follows an mm-trace test's reset.
 export function resetStdlibLoaderState()
 	cachedStdlibModule = MaxonModule.create()
 	stdlibParsedModuleArr = StdlibParseSnapshotArray.create()
@@ -332,6 +365,8 @@ export function resetStdlibLoaderState()
 	stdlibCacheOsOrd = 0
 	cachedBuiltinArrayLiteralTypeName = ByteArray.create()
 	cachedBuiltinDictionaryLiteralTypeName = ByteArray.create()
+	cachedBuiltinCharLiteralTypeName = ByteArray.create()
+	cachedBuiltinStringLiteralTypeName = ByteArray.create()
 end 'resetStdlibLoaderState'
 
 export function findStdlibPath() returns FilePath
@@ -471,6 +506,36 @@ function parseStdlibSource(project Project, allModule MaxonModule, filePath File
 	allModule.merge(parsed)
 end 'parseStdlibSource'
 
+// Seed the allocator/MM boundary functions the runtime calls into as stdlib-DFE
+// liveness roots. The runtime bodies (`mrt_start` + the runtime.std MM/container
+// helpers) are merged into the user module AFTER the stdlib DFE runs (see
+// `augmentWithRuntime`), so the DFE never sees edges like `mrt_start`→`__slab_init`
+// or `mrt_alloc`→`__mm_alloc` and would prune the Internals bodies — leaving the
+// cache-off / mm-trace bypass leg (empty `stdlibFunctions`) with no definition to
+// resolve those calls' signatures against. The cache-on linker pulls the same
+// closure transitively from `mrt_start`/`mrt_alloc`, so rooting them keeps the
+// from-source and cached builds' function sets in lockstep. Transitive callees
+// follow the DFE walk.
+function seedRuntimeBootstrapStdlibRoots(project Project)
+	let roots = [
+		"stdlib.__slab_init",
+		"stdlib.__slab_free",
+		"stdlib.__mm_alloc",
+		"stdlib.__mm_free",
+		"stdlib.__mm_incref",
+		"stdlib.__mm_decref",
+		"stdlib.__mm_drop",
+		"stdlib.__mm_move_trace",
+		"stdlib.__mm_scope_push",
+		"stdlib.__mm_scope_pop",
+		"stdlib.__mm_panic_list_empty",
+		"stdlib.__managed_mem_create"
+	]
+	for r in roots 'seed'
+		project.livenessRoots.push(r)
+	end 'seed'
+end 'seedRuntimeBootstrapStdlibRoots'
+
 export function getStdlibModule(project Project) returns MaxonModule
 	// Register the allocator-runtime intrinsics (`__mm_alloc`,
 	// `__mm_decref`, etc.) so user Maxon source can call them as plain
@@ -516,6 +581,17 @@ export function getStdlibModule(project Project) returns MaxonModule
 	// qualified-static call shape. File-path gating in `lowerInternalsIntrinsic`
 	// rejects callers outside the designated internals file.
 	registerInternalsIntrinsicSignatures(project)
+	// The runtime (`mrt_start` + the runtime.std MM/container bodies) calls a
+	// fixed set of allocator/MM functions defined in `stdlib/Internals.maxon`
+	// (`__slab_init`, `__mm_alloc`, `__managed_mem_create`, …). The runtime is
+	// merged into the user module AFTER the stdlib DFE runs (see
+	// `augmentWithRuntime`), so the stdlib DFE never sees those call edges and
+	// would prune the Internals bodies — leaving `mrt_start`'s `call __slab_init`
+	// with no definition to resolve its signature against (the cache-off /
+	// mm-trace bypass leg, where `stdlibFunctions` is empty). Seeding them as
+	// liveness roots keeps the bodies alive through the from-source build. The
+	// cache-on path restores the same roots from `data.livenessRoots`.
+	seedRuntimeBootstrapStdlibRoots(project)
 	if stdlibLoaded and not stdlibCacheBypassed 'cached'
 		let restoreStart = passTimerStart()
 		// Restore metadata into the new project
@@ -577,7 +653,7 @@ export function getStdlibModule(project Project) returns MaxonModule
 	let checksumStart = passTimerStart()
 	let contentChecksum = currentStdlibChecksum(project.target)
 	recordPassSince("__stdlib-checksum", startMs: checksumStart)
-	// Cache-parity test harness: skip the read entirely when bypassed so the
+	// `--mm-trace` bypass: skip the read entirely when bypassed so the
 	// expensive decode + restore work doesn't even fire. Falls through to the
 	// parse-from-source path below.
 	let cacheResult = readStdlibCache(project, path: cachePath, target: project.target, expectedChecksum: contentChecksum) if not stdlibCacheBypassed else StdlibCacheResult.create(StdlibCacheData.create(), valid: false)
@@ -683,9 +759,10 @@ export function getStdlibModule(project Project) returns MaxonModule
 	// Build and write stdlib cache for next time.
 	// After writing, switch to cached mode so subsequent calls in the same
 	// process (e.g. spec tests) consistently use the pre-compiled path.
-	// Cache-parity test harness: when bypassed, skip both the write and the
-	// `stdlibLoaded` marker so a subsequent leg-A compile in the same process
-	// re-parses from source rather than picking up half-cached state.
+	// `--mm-trace` bypass: skip both the write and the `stdlibLoaded` marker so
+	// the parsed module flows into the user pipeline (where the mm-trace tag
+	// table is interned and the `__mm_tag_lookup` helper is emitted last, after
+	// user types are known) rather than being baked into a trace-free cache.
 	if not stdlibCacheBypassed 'writeCache'
 		buildAndWriteStdlibCache(project, allModule: allModule, cachePath: cachePath, contentChecksum: contentChecksum)
 		stdlibLoaded = true
@@ -702,9 +779,9 @@ export function getStdlibModule(project Project) returns MaxonModule
 		return cachedStdlibModule
 	end 'switchToCached'
 
-	// Cache write was bypassed (cache-parity test harness): return the
-	// parsed module so the user pipeline has stdlib bodies to call into,
-	// since there's no cache for it to consume.
+	// Cache write was bypassed (`--mm-trace`): return the parsed module so the
+	// user pipeline has stdlib bodies to lower inline, since there's no cache
+	// for it to consume.
 	return allModule
 end 'getStdlibModule'
 
@@ -741,12 +818,35 @@ function buildAndWriteStdlibCache(project Project, allModule MaxonModule, cacheP
 	pipeline.addPass(PassKind.lowerMaxonToStd)
 	// No maxonBorrowCheck in the stdlib sandbox — stdlib is exempt from the
 	// E3070 borrow check (user code can't fix it, and the bootstrap skips it).
-	pipeline.addPass(PassKind.injectDrops)
 	pipeline.addPass(PassKind.mem2reg)
 	pipeline.addPass(PassKind.canonicalize)
 	pipeline.addPass(PassKind.cse)
 	pipeline.addPass(PassKind.licm)
 	pipeline.addPass(PassKind.dce)
+	// Argument-consume analysis (Concept C) — compute the stdlib's structural
+	// per-parameter consume facts on the FULL stdlib call graph (every container
+	// body present, nothing inlined away here), so they can be PERSISTED in the cache
+	// (`captureStdlibMetadata`) and restored into the user project. Without this the
+	// user build's consuming stdlib callees are signature-only stubs with no body to
+	// analyze, leaving `funcParamConsumes` empty and forcing the inserter onto the
+	// retired callee-name allowlists. Must run before `insertRefcounts` (which reads
+	// the facts to suppress a consumed arg's release).
+	pipeline.addPass(PassKind.analyzeParamConsumes)
+	// Return-borrow analysis (Concept C's return-side dual) — compute the stdlib's
+	// structural return-borrow facts on the FULL stdlib call graph so they can be
+	// PERSISTED in the cache (`captureStdlibMetadata` → `funcReturnsBorrow`) and
+	// restored into the user project. The bodyless element-loader intrinsics
+	// (`__managed_mem_get` → `__managed_mem_load_sized` → `__Internals.loadIndirect`)
+	// ARE real Maxon functions whose bodies return a param-derived `load`, so the
+	// structural leaf rule classifies them borrow-returning HERE (where their bodies are
+	// present) — replacing the `calleeIsBorrowIntrinsic` name allowlist the user build
+	// fell back on (the user module sees them only as bodyless external calls). Must run
+	// after `analyzeParamConsumes` (its container-consume narrowing reads the consume
+	// set) and before `insertRefcounts` (which reads the borrow classes).
+	pipeline.addPass(PassKind.analyzeReturnBorrows)
+	// SSA refcount inserter (post-mem2reg) — the retired pre-mem2reg injectDrops's
+	// replacement; runs on the SSA form from per-value liveness + ownership class.
+	pipeline.addPass(PassKind.insertRefcounts)
 	// Skip insertRangeChecks — it emits mrt_panic calls that require runtime
 	// functions, but stdlib functions take validated inputs from their callers.
 	pipeline.addPass(PassKind.lowerABI)

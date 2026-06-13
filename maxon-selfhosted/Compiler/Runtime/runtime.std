@@ -16,6 +16,29 @@ func mrt_start 0 void
     std ret v1
 end
 
+// mrt_leak_check(code): process-exit leak gate. Reads the live tracked-allocation
+// counter `__mm_alloc_count` (incremented by __mm_alloc, decremented by __mm_free);
+// returns `code` (main's exit code) when the count is zero, or 101 when any
+// allocation is still live at program exit. `patchMrtStartLeakCheck` rewrites
+// mrt_start's `osExit(main())` to `osExit(mrt_leak_check(main()))` when the
+// project's leak-check is enabled (spec-test success/ladder runs), so a leaking
+// standalone program exits 101 and its test fails — the per-fragment equivalent
+// of the batch dispatcher's per-test alloc-count diff.
+func mrt_leak_check 1 i64
+  block entry:
+    v0 = std param 0 i64
+    v1 = std globalAddr __mm_alloc_count
+    v2 = std loadIndirect v1 0
+    v3 = std constI64 0
+    v4 = std cmpI64Eq v2 v3
+    std condBr v4 clean leaked
+  block clean:
+    std ret v0
+  block leaked:
+    v5 = std constI64 101
+    std ret v5
+end
+
 // mrt_write_stdout(ptr len): writes len bytes at ptr to stdout.
 func mrt_write_stdout 2 void
   block entry:
@@ -1630,12 +1653,81 @@ end
 // returned pointer carries a 24-byte mm header and refcount=1. Callers
 // that drop their reference must call mm_decref; callers that don't are
 // effectively leaking under __mm_alloc_count.
+func mrt_memzero 2 void
+  block entry:
+    v0 = std param 0 i64
+    std storeSlot 0 v0
+    v1 = std param 1 i64
+    std storeSlot 1 v1
+    v2 = std constI64 0
+    std storeSlot 2 v2
+    std br loop
+
+  block loop:
+    v3 = std loadSlot 2
+    v4 = std loadSlot 1
+    v5 = std cmpI64Lt v3 v4
+    std condBr v5 body done
+
+  block body:
+    v6 = std loadSlot 0
+    v7 = std loadSlot 2
+    v8 = std addI64 v6 v7
+    v9 = std constI64 0
+    v13 = std constI64 0
+    std storeByte v8 v9 v13
+    v10 = std loadSlot 2
+    v11 = std constI64 1
+    v12 = std addI64 v10 v11
+    std storeSlot 2 v12
+    std br loop
+
+  block done:
+    v14 = std constI64 0
+    std ret v14
+end
+
 func mrt_alloc 1 i64
   block entry:
     v0 = std param 0 i64
+    std storeSlot 0 v0
     v1 = std constI64 0
-    v2 = std constI64 0
-    v3 = std call mm_alloc v0 v1 v2
+    // tag = MM_TAG_RAW (1): a raw, deliberately-typeless block. Non-zero so the
+    // strict mm-trace null-tag panic distinguishes this from a forgotten type tag.
+    v2 = std constI64 1
+    v3 = std call __mm_alloc v0 v1 v2
+    std storeSlot 1 v3
+    // alloc-at-0 → restore the rc=1 contract this raw-buffer wrapper promises.
+    v4 = std call __mm_incref v3
+    // Zero the buffer (matches the C# `mm_raw_alloc`, which zero-fills every raw
+    // allocation). A reused slab slot holds the previous occupant's bytes; a
+    // sparsely-filled container buffer (a Map/Set hash table) leaves unwritten
+    // slots holding that garbage, and the container's element-walk would then
+    // decref the junk as a live pointer → fault. Zero-init makes unoccupied slots
+    // read null so the walk's `if slot != 0` guard skips them.
+    v5 = std loadSlot 1
+    v6 = std loadSlot 0
+    std call mrt_memzero v5 v6
+    std ret v3
+end
+
+// mrt_alloc_with_dtor(size, destructor) -> rc=1 tracked block carrying
+// `destructor`. The alloc-at-0 equivalent of the retired `mm_alloc(size, dtor,
+// 0)`: `__mm_alloc` returns rc=0, so incref to the rc=1 contract the caller
+// (e.g. the hand-emitted `__ManagedSocket` / `__ManagedFile` wrappers in the
+// backends) expects. No zero-fill — the caller fully initializes the fixed-size
+// wrapper struct it allocates.
+func mrt_alloc_with_dtor 2 i64
+  block entry:
+    v0 = std param 0 i64
+    v1 = std param 1 i64
+    // tag = MM_TAG_RAW (1): the wrapper is type-agnostic (used by various fixed-size
+    // managed wrappers — __ManagedMemory records, cursors, socket/file handles). A
+    // non-zero sentinel keeps it out of the null-tag panic; callers that want a
+    // precise type name in the trace tag at their own `__mm_alloc` site instead.
+    v2 = std constI64 1
+    v3 = std call __mm_alloc v0 v1 v2
+    v4 = std call __mm_incref v3
     std ret v3
 end
 
@@ -2407,9 +2499,12 @@ func mrt_directory_open_search 1 i64
     v16 = std call mrt_alloc v15
     std storeSlot 3 v16
 
-    // Allocate 40-byte handle block.
+    // Allocate the 40-byte handle block WITH the search-handle destructor so
+    // an owner-drop closes the fd / frees the dirent even when the user never
+    // called close() (close() stamps the -1/0 sentinels making it idempotent).
     v17 = std constI64 40
-    v18 = std call mrt_alloc v17
+    v26 = std funcAddr __destruct___ManagedDirectory
+    v18 = std call mrt_alloc_with_dtor v17 v26
     std storeSlot 4 v18
 
     // Init block fields.
@@ -2763,6 +2858,14 @@ end
 //
 // Slot usage:
 //   slot 0 = self (block ptr)
+// Close the search handle's RESOURCES (fd + dirent buffer) and stamp the
+// closed sentinels (fd = -1, dirent = 0) so the handle destructor
+// (`__destruct___ManagedDirectory`, run when the OWNER's reference drops) is
+// an idempotent no-op afterward. close() must NOT release the handle BLOCK:
+// its single +1 belongs to the owner (a `Directory.dir` field / a scope
+// binding), whose own decref frees the block — close() decreffing it too
+// double-released every explicitly-closed handle (the `Directory.list`
+// teardown trap). Mirrors `__ManagedFile.close`'s -1-sentinel contract.
 func mrt_directory_close 1 i64
   block entry:
     v0 = std param 0 i64
@@ -2785,19 +2888,54 @@ func mrt_directory_close 1 i64
   block free_bufs:
     v6 = std loadIndirect v0 8
     v7 = std cmpI64Eq v6 v1
-    std condBr v7 free_block free_dirent
+    std condBr v7 stamp_closed free_dirent
 
   block free_dirent:
     v8 = std call mm_decref v6
-    std br free_block
+    std br stamp_closed
 
-  block free_block:
-    v9 = std call mm_decref v0
+  block stamp_closed:
+    v9 = std constI64 -1
+    std storeIndirect v0 0 v9
+    v10 = std constI64 0
+    std storeIndirect v0 8 v10
+    std storeIndirect v0 32 v10
     std br done
 
   block done:
-    v10 = std constI64 0
-    std ret v10
+    v11 = std constI64 0
+    std ret v11
+end
+
+// Destructor for a __ManagedDirectory search handle: runs when the OWNER's
+// reference drops the block to rc 0. Closes the fd and frees the dirent
+// buffer iff an explicit close() didn't already (the -1/0 sentinels make it
+// idempotent). The block itself is freed by mm_free after this returns.
+func __destruct___ManagedDirectory 1 i64
+  block entry:
+    v0 = std param 0 i64
+    std storeSlot 0 v0
+    v1 = std constI64 0
+    v2 = std loadIndirect v0 0
+    v3 = std cmpI64Lt v2 v1
+    std condBr v3 free_bufs do_close
+
+  block do_close:
+    v4 = std osFileClose v2
+    std br free_bufs
+
+  block free_bufs:
+    v5 = std loadIndirect v0 8
+    v6 = std cmpI64Eq v5 v1
+    std condBr v6 done free_dirent
+
+  block free_dirent:
+    v7 = std call mm_decref v5
+    std br done
+
+  block done:
+    v8 = std constI64 0
+    std ret v8
 end
 
 // mrt_directory_exists(path) -> 1 if directory, else 0. Non-throwing.
@@ -3158,2508 +3296,33 @@ func mrt_start_with_coverage 0 void
 end
 
 // =============================================================================
-// Slab allocator — bottom layer (step 6a.12 of the allocator port).
-//
-// Provides:
-//   - __slab_memzero            byte-zero helper used by upper layers.
-//   - __slab_arena_init         allocates the first 64MB arena from the OS,
-//                               sets up its bitmap, links it into the head.
-//   - __slab_arena_alloc_chunks bitmap scan for N contiguous 8KB chunks.
-//   - __slab_arena_free_chunks  marks chunks free in the bitmap.
-//   - __slab_init               public init entry; idempotent.
-//
-// The upper layers (mspan, mcentral, mcache, arena map, mm_*) live in later
-// steps. None of these functions are reachable from user code yet — step 6a.17
-// will wire __slab_init into mrt_start and step 6a.18 will route mrt_alloc /
-// __mm_alloc through the slab. Until then this file simply has to PARSE,
-// LOWER, and EMIT cleanly so the build keeps producing a working binary.
-//
-// Constants (mirrored from RuntimeEmitter.Allocator.cs):
-//   ARENA_SIZE           = 0x4000000   // 64 MiB
-//   CHUNK_SIZE           = 0x2000      // 8 KiB
-//   CHUNKS_PER_ARENA     = 0x2000      // 8192 chunks
-//   ARENA_META_OFF_NEXT  = 0x00
-//   ARENA_META_OFF_BITMAP= 0x10        // 1024-byte bitmap, 128 qwords
-//
-// Mutable globals expected by these functions:
-//   __slab_arena_list_head   8 bytes — head of the singly-linked arena list
-//   __slab_arena_last_base   8 bytes — arena base of the most recent
-//                                       successful arena_alloc_chunks call
-//   __slab_init_done         8 bytes — 0 = uninitialised, 1 = ready
-//
-// TODO(step 6a.17): the X64/Arm64 backends do not yet register these `__slab_*`
-// labels in either the rdata or .data prelude. globalAddr emits a relocation
-// referencing the unregistered label, and `lookupRdataOffset` silently returns
-// offset 0 — harmless because the functions in this block are unreached, but
-// the bootstrap step that calls __slab_init from mrt_start MUST first arrange
-// for these globals to be backed by writable storage (likely via a new
-// addDataSectionEntry call).
-//
-// TODO(step 6a.13+): size-class lookup tables (__slab_class_sizes,
-// __slab_objs_per_span) are not emitted here — the chunk allocator does not
-// need them. They will arrive with the mspan/mcentral layer.
-// =============================================================================
-
-// __slab_memzero(ptr, size): zeros `size` bytes starting at `ptr`. Loops one
-// byte at a time so callers don't have to ensure 8-byte alignment of `size`.
-//
-// Slot usage:
-//   slot 0 = ptr (arg)
-//   slot 1 = size (arg)
-//   slot 2 = i (loop counter)
-func __slab_memzero 2 void
-  block entry:
-    v0 = std param 0 i64
-    std storeSlot 0 v0
-    v1 = std param 1 i64
-    std storeSlot 1 v1
-    v2 = std constI64 0
-    std storeSlot 2 v2
-    std br loop
-
-  block loop:
-    v3 = std loadSlot 2
-    v4 = std loadSlot 1
-    v5 = std cmpI64Lt v3 v4
-    std condBr v5 body done
-
-  block body:
-    v6 = std loadSlot 0
-    v7 = std loadSlot 2
-    v8 = std constI64 0
-    std storeByte v6 v7 v8
-    v9 = std loadSlot 2
-    v10 = std constI64 1
-    v11 = std addI64 v9 v10
-    std storeSlot 2 v11
-    std br loop
-
-  block done:
-    v12 = std constI64 0
-    std ret v12
-end
-
-// __slab_arena_init(): allocates the very first 64 MiB arena from the OS,
-// initialises its metadata + bitmap, prepends it to the arena list, and
-// flips __slab_init_done to 1. Idempotent — only runs when the head is null.
-//
-// Bitmap layout: chunk 0 holds the metadata, so its bit must stay 0 (used).
-// All other 8191 chunks start as 1 (free). 128 qwords of bitmap. We write
-// 0xFFFFFFFFFFFFFFFE into qword 0 and 0xFFFFFFFFFFFFFFFF into qwords 1..127.
-//
-// Slot usage:
-//   slot 0 = arena_base
-//   slot 1 = qword index (loop counter)
-func __slab_arena_init 0 void
-  block entry:
-    v0 = std constI64 0x4000000
-    v1 = std osAllocPages v0
-    std storeSlot 0 v1
-
-    // metadata: next = NULL  (offset 0x00)
-    v2 = std constI64 0
-    std storeIndirect v1 0 v2
-
-    // bitmap qword 0 = 0xFFFFFFFFFFFFFFFE  (chunk 0 used, rest free)
-    // arena_base + 0x10
-    v3 = std constI64 0x10
-    v4 = std addI64 v1 v3
-    v5 = std constI64 -2
-    std storeIndirect v4 0 v5
-
-    // qwords 1..127 = 0xFFFFFFFFFFFFFFFF
-    v6 = std constI64 1
-    std storeSlot 1 v6
-    std br fill_loop
-
-  block fill_loop:
-    v7 = std loadSlot 1
-    v8 = std constI64 128
-    v9 = std cmpI64Lt v7 v8
-    std condBr v9 fill_body fill_done
-
-  block fill_body:
-    v10 = std loadSlot 0
-    v11 = std loadSlot 1
-    v12 = std constI64 3
-    v13 = std shlI64 v11 v12
-    v14 = std constI64 0x10
-    v15 = std addI64 v13 v14
-    v16 = std addI64 v10 v15
-    v17 = std constI64 -1
-    std storeIndirect v16 0 v17
-    v18 = std loadSlot 1
-    v19 = std constI64 1
-    v20 = std addI64 v18 v19
-    std storeSlot 1 v20
-    std br fill_loop
-
-  block fill_done:
-    // Prepend to the arena list head: new->next = old_head; head = new.
-    v21 = std globalAddr __slab_arena_list_head
-    v22 = std loadIndirect v21 0
-    v23 = std loadSlot 0
-    std storeIndirect v23 0 v22
-    std storeIndirect v21 0 v23
-
-    // __slab_init_done = 1
-    v24 = std globalAddr __slab_init_done
-    v25 = std constI64 1
-    std storeIndirect v24 0 v25
-
-    v26 = std constI64 0
-    std ret v26
-end
-
-// __slab_arena_alloc_chunks(num_chunks) -> ptr
-//
-// Walks the arena list scanning each arena's bitmap bit-by-bit for a run of
-// `num_chunks` consecutive free chunks. On success: clears those bits, stores
-// the arena base in __slab_arena_last_base, and returns
-// (arena_base + run_start * CHUNK_SIZE).
-//
-// On failure (no arena has room): allocates a fresh 64 MiB arena via the OS,
-// links it in, and retries. The C# implementation uses a qword-level fast
-// path with BSF; this port uses a simple bit-by-bit scan. The bottom layer
-// is not on a hot path yet (chunks are allocated rarely — once per mspan
-// refill or arena-map L2), so the simpler scan is fine for now.
-//
-// TODO(perf, step 6a.18): port the qword/BSF fast path from
-// EmitArenaAllocChunks once the upper layer is calling this in production.
-//
-// Slot usage:
-//   slot 0  = num_chunks (arg)
-//   slot 1  = arena_ptr (current arena being scanned)
-//   slot 2  = i (chunk index 0..ChunksPerArena)
-//   slot 3  = run_len
-//   slot 4  = run_start
-//   slot 5  = result ptr
-//   slot 6  = j (clear loop counter)
-func __slab_arena_alloc_chunks 1 i64
-  block entry:
-    v0 = std param 0 i64
-    std storeSlot 0 v0
-
-    v1 = std globalAddr __slab_arena_list_head
-    v2 = std loadIndirect v1 0
-    std storeSlot 1 v2
-    std br arena_loop
-
-  block arena_loop:
-    v3 = std loadSlot 1
-    v4 = std constI64 0
-    v5 = std cmpI64Eq v3 v4
-    std condBr v5 grow_arena scan_init
-
-  block scan_init:
-    // i = 1 (skip chunk 0, always used by metadata)
-    v6 = std constI64 1
-    std storeSlot 2 v6
-    v7 = std constI64 0
-    std storeSlot 3 v7
-    v8 = std constI64 0
-    std storeSlot 4 v8
-    std br bit_loop
-
-  block bit_loop:
-    // i < CHUNKS_PER_ARENA (8192)?
-    v9 = std loadSlot 2
-    v10 = std constI64 0x2000
-    v11 = std cmpI64Lt v9 v10
-    std condBr v11 bit_body next_arena
-
-  block bit_body:
-    // qword_idx = i >> 6
-    v12 = std loadSlot 2
-    v13 = std constI64 6
-    v14 = std shrI64 v12 v13
-    // qword_addr = arena + 0x10 + qword_idx * 8
-    v15 = std loadSlot 1
-    v16 = std constI64 3
-    v17 = std shlI64 v14 v16
-    v18 = std constI64 0x10
-    v19 = std addI64 v17 v18
-    v20 = std addI64 v15 v19
-    v21 = std loadIndirect v20 0
-    // bit = (qword >> (i & 63)) & 1
-    v22 = std constI64 63
-    v23 = std andI64 v12 v22
-    v24 = std shrI64 v21 v23
-    v25 = std constI64 1
-    v26 = std andI64 v24 v25
-    v27 = std constI64 0
-    v28 = std cmpI64Eq v26 v27
-    std condBr v28 bit_used bit_free
-
-  block bit_used:
-    // run broken
-    v29 = std constI64 0
-    std storeSlot 3 v29
-    std br bit_advance
-
-  block bit_free:
-    // run_len was 0? then run_start = i.
-    v30 = std loadSlot 3
-    v31 = std constI64 0
-    v32 = std cmpI64Eq v30 v31
-    std condBr v32 set_start incr_run
-
-  block set_start:
-    v33 = std loadSlot 2
-    std storeSlot 4 v33
-    std br incr_run
-
-  block incr_run:
-    v34 = std loadSlot 3
-    v35 = std constI64 1
-    v36 = std addI64 v34 v35
-    std storeSlot 3 v36
-    // run_len >= num_chunks?
-    v37 = std loadSlot 0
-    v38 = std cmpI64Lt v36 v37
-    std condBr v38 bit_advance found
-
-  block bit_advance:
-    v39 = std loadSlot 2
-    v40 = std constI64 1
-    v41 = std addI64 v39 v40
-    std storeSlot 2 v41
-    std br bit_loop
-
-  block next_arena:
-    // arena = arena->next  (offset 0x00)
-    v42 = std loadSlot 1
-    v43 = std loadIndirect v42 0
-    std storeSlot 1 v43
-    std br arena_loop
-
-  block found:
-    // Clear bits run_start..run_start+num_chunks-1 in the bitmap.
-    // j = run_start
-    v44 = std loadSlot 4
-    std storeSlot 6 v44
-    std br clear_loop
-
-  block clear_loop:
-    // j < run_start + num_chunks?
-    v45 = std loadSlot 6
-    v46 = std loadSlot 4
-    v47 = std loadSlot 0
-    v48 = std addI64 v46 v47
-    v49 = std cmpI64Lt v45 v48
-    std condBr v49 clear_body clear_done
-
-  block clear_body:
-    // qword_addr = arena + 0x10 + (j >> 6) * 8
-    v50 = std constI64 6
-    v51 = std shrI64 v45 v50
-    v52 = std constI64 3
-    v53 = std shlI64 v51 v52
-    v54 = std constI64 0x10
-    v55 = std addI64 v53 v54
-    v56 = std loadSlot 1
-    v57 = std addI64 v56 v55
-    // mask = ~(1 << (j & 63))
-    v58 = std constI64 63
-    v59 = std andI64 v45 v58
-    v60 = std constI64 1
-    v61 = std shlI64 v60 v59
-    v62 = std bitNotI64 v61
-    // bitmap[qword] &= mask
-    v63 = std loadIndirect v57 0
-    v64 = std andI64 v63 v62
-    std storeIndirect v57 0 v64
-    // j++
-    v65 = std constI64 1
-    v66 = std addI64 v45 v65
-    std storeSlot 6 v66
-    std br clear_loop
-
-  block clear_done:
-    // __slab_arena_last_base = arena_ptr
-    v67 = std globalAddr __slab_arena_last_base
-    v68 = std loadSlot 1
-    std storeIndirect v67 0 v68
-    // result = arena + run_start * CHUNK_SIZE
-    v69 = std loadSlot 4
-    v70 = std constI64 13
-    v71 = std shlI64 v69 v70
-    v72 = std loadSlot 1
-    v73 = std addI64 v72 v71
-    std ret v73
-
-  block grow_arena:
-    // No arena had room — allocate a fresh 64 MiB arena from the OS, link
-    // it in, then jump back to the top to retry the scan.
-    v74 = std constI64 0x4000000
-    v75 = std osAllocPages v74
-    std storeSlot 1 v75
-
-    // metadata: next = old_head
-    v76 = std globalAddr __slab_arena_list_head
-    v77 = std loadIndirect v76 0
-    std storeIndirect v75 0 v77
-
-    // bitmap qword 0 = 0xFFFFFFFFFFFFFFFE
-    v78 = std constI64 0x10
-    v79 = std addI64 v75 v78
-    v80 = std constI64 -2
-    std storeIndirect v79 0 v80
-
-    // qwords 1..127 = -1 (all free)
-    v81 = std constI64 1
-    std storeSlot 6 v81
-    std br grow_fill_loop
-
-  block grow_fill_loop:
-    v82 = std loadSlot 6
-    v83 = std constI64 128
-    v84 = std cmpI64Lt v82 v83
-    std condBr v84 grow_fill_body grow_fill_done
-
-  block grow_fill_body:
-    v85 = std loadSlot 1
-    v86 = std loadSlot 6
-    v87 = std constI64 3
-    v88 = std shlI64 v86 v87
-    v89 = std constI64 0x10
-    v90 = std addI64 v88 v89
-    v91 = std addI64 v85 v90
-    v92 = std constI64 -1
-    std storeIndirect v91 0 v92
-    v93 = std loadSlot 6
-    v94 = std constI64 1
-    v95 = std addI64 v93 v94
-    std storeSlot 6 v95
-    std br grow_fill_loop
-
-  block grow_fill_done:
-    // head = new_arena (slot 1 still holds it)
-    v96 = std loadSlot 1
-    std storeIndirect v76 0 v96
-    // Restart the scan against the fresh arena.
-    std br arena_loop
-end
-
-// __slab_arena_free_chunks(arena_base, chunk_index, num_chunks)
-//
-// Marks chunks [chunk_index .. chunk_index + num_chunks - 1] as free in the
-// bitmap of the given arena. Bit-by-bit OR; the C# version uses qword masks.
-//
-// Slot usage:
-//   slot 0 = arena_base (arg)
-//   slot 1 = chunk_index (arg)
-//   slot 2 = num_chunks (arg)
-//   slot 3 = j (loop counter, absolute chunk index)
-func __slab_arena_free_chunks 3 void
-  block entry:
-    v0 = std param 0 i64
-    std storeSlot 0 v0
-    v1 = std param 1 i64
-    std storeSlot 1 v1
-    v2 = std param 2 i64
-    std storeSlot 2 v2
-
-    // j = chunk_index
-    std storeSlot 3 v1
-    std br loop
-
-  block loop:
-    // j < chunk_index + num_chunks?
-    v3 = std loadSlot 3
-    v4 = std loadSlot 1
-    v5 = std loadSlot 2
-    v6 = std addI64 v4 v5
-    v7 = std cmpI64Lt v3 v6
-    std condBr v7 body done
-
-  block body:
-    // qword_addr = arena_base + 0x10 + (j >> 6) * 8
-    v8 = std constI64 6
-    v9 = std shrI64 v3 v8
-    v10 = std constI64 3
-    v11 = std shlI64 v9 v10
-    v12 = std constI64 0x10
-    v13 = std addI64 v11 v12
-    v14 = std loadSlot 0
-    v15 = std addI64 v14 v13
-    // bitmap[qword] |= 1 << (j & 63)
-    v16 = std constI64 63
-    v17 = std andI64 v3 v16
-    v18 = std constI64 1
-    v19 = std shlI64 v18 v17
-    v20 = std loadIndirect v15 0
-    v21 = std orI64 v20 v19
-    std storeIndirect v15 0 v21
-    // j++
-    v22 = std constI64 1
-    v23 = std addI64 v3 v22
-    std storeSlot 3 v23
-    std br loop
-
-  block done:
-    v24 = std constI64 0
-    std ret v24
-end
-
-// __slab_init(): public init entry. Idempotent — runs __slab_arena_init
-// only if __slab_init_done is still 0. The size-class tables and the
-// upper-layer state (mcache, mcentral, arena map, OS-direct array) are NOT
-// set up here yet — they belong to step 6a.13+.
-func __slab_init 0 void
-  block entry:
-    v0 = std globalAddr __slab_init_done
-    v1 = std loadIndirect v0 0
-    v2 = std constI64 0
-    v3 = std cmpI64Eq v1 v2
-    std condBr v3 do_init done
-
-  block do_init:
-    v4 = std call __slab_arena_init
-    // Initialize the slab lock that serializes allocator mutations once the
-    // green-thread scheduler runs GTs on multiple OS threads. Runs exactly once
-    // (idempotent via __slab_init_done) on the main thread, before any worker.
-    v6 = std globalAddr __slab_lock
-    std osLockInit v6
-    std br done
-
-  block done:
-    v5 = std constI64 0
-    std ret v5
-end
-
-// =============================================================================
-// Slab allocator — middle layer (step 6a.13 of the allocator port).
-//
-// Adds the mspan / mcentral / mcache layer on top of the chunk allocator.
-//
-// Provides:
-//   - __slab_class_size(idx)        size-class lookup table (cascade compares).
-//   - __slab_objs_per_span(idx)     objects-per-span lookup table.
-//   - __slab_meta_alloc()           hands out 64-byte mspan-header slots,
-//                                   backed by a free list + bump pointer that
-//                                   refills from a dedicated 8 KiB chunk.
-//   - __slab_meta_free(ptr)         pushes a 64-byte slot back onto the free
-//                                   list.
-//   - __slab_refill_mcache(class)   drains a span from mcentral.partial or
-//                                   builds a fresh one, stores it in
-//                                   mcache[class].
-//   - __slab_alloc_class(class)     fast-path: pop a slot from the cached
-//                                   span, refilling mcache on miss.
-//   - __slab_free_class_with_mspan(slot, mspan)
-//                                   pushes a slot back onto its span's free
-//                                   list. The arena-map–driven public free
-//                                   path (`__slab_free`) belongs to step
-//                                   6a.14 — until then callers must already
-//                                   know the owning mspan.
-//
-// Globals consumed (declared by step 6a.17 alongside the chunk-allocator
-// globals — see the TODO atop the bottom-layer block):
-//   __slab_mcache_base   36864 B    SLAB_MAX_SHARDS(256) × 18 mspan*. Per-P
-//                                   sharded: P with id `i` owns the 18-entry
-//                                   row at `__slab_mcache_base + i*144`.
-//   __slab_meta_free_head  8 bytes  head of intrusive free-list of 80 B slots.
-//   __slab_meta_bump_ptr   8 bytes  current bump pointer in metadata chunk.
-//   __slab_meta_bump_end   8 bytes  end of the metadata chunk.
-//   __slab_mcentral_array  288 B    18 × {partial_head(8), full_head(8)}.
-//
-// mspan struct (80-byte slot; fields mirror RuntimeEmitter.Allocator.cs):
-//   +0x00 base_addr    +0x08 slot_size   +0x10 free_list   +0x18 free_count
-//   +0x20 next_span    +0x28 class_idx   +0x30 total_slots +0x38 arena_base
-//   +0x40 owning_p     (the shard id of the P that currently owns this span's
-//                       free_list and is its sole writer. MUTABLE: stamped to the
-//                       creating P's raw id at creation, set to the 0xFFFFFFFF
-//                       "in mcentral, owned by nobody" sentinel when a fully-
-//                       emptied span is returned to mcentral, and re-stamped to
-//                       the acquiring P's raw id on refill — see the per-P design
-//                       note below)
-//
-// =============================================================================
-// Per-P sharded allocator (Go/mimalloc style). The fast path is lockless:
-//
-//   * Each P (one ProcContext per CPU; `__slab_current_p_id` reads the calling
-//     OS thread's adopted P, or -1 when none) owns its own mcache ROW, so the
-//     mcache pop in __slab_alloc_class and the local push in __slab_free touch
-//     ONLY that P's spans. A span's owning_p names its current exclusive owner;
-//     while a P holds the span it is the sole writer of that span's free_list —
-//     the single-writer invariant that makes the lockless pop/push safe. A span
-//     changes hands only via mcentral while it is fully empty and quiesced (see
-//     the cross-P reclamation in the slow-path bullet below), so the ownership
-//     transfer never races a live writer.
-//
-//   * A free of a slot whose span is owned by a DIFFERENT P (cross-thread free,
-//     or a free from a raw OS thread with no P) is NOT applied locally. Instead
-//     the slot is CAS-pushed onto the OWNER P's remote-free MPSC queue
-//     (`__sched_procs[owning_p] + POffRemoteFreeHead`, a Treiber stack). The
-//     owner drains the whole chain with one AtomicCAS (head→NULL) on its
-//     __slab_alloc slow path (__slab_drain_remote_frees) and replays each slot
-//     onto its span — again as the single writer, so still lockless.
-//
-//   * The SLOW path (refill: read mcentral.partial / grow a fresh span via the
-//     chunk + metadata + arena-map allocators) and the arena-large / OS-direct
-//     free paths still mutate genuinely shared structures, so they hold the
-//     global __slab_lock (re-entrant CRITICAL_SECTION on Windows). This is the
-//     only lock on the hot path's miss handling; the per-class mcentral locks
-//     of the C# bootstrap are unnecessary because __slab_lock already serializes
-//     every mcentral mutation here — including cross-P span reclamation: a fully-
-//     emptied span is returned to mcentral with owning_p set to the 0xFFFFFFFF
-//     sentinel, then later re-acquired and re-stamped by a refilling P, all under
-//     __slab_lock.
-//
-//   * Cross-target degrade: wasm32-wasi and arm64-macos have no multi-P
-//     scheduler, and `__slab_current_p_id` returns -1 there (and on x64 before
-//     the scheduler starts / on raw threads). The .std code maps -1 → shard 0,
-//     so the allocator collapses to a single shard. Single-threaded targets see
-//     exactly one writer, so the lockless fast path and the (uncontended)
-//     remote-free CAS are trivially correct.
-// =============================================================================
-
-// __slab_class_size(idx) -> i64
-// Returns SlabClassSizes[idx]. Implemented as a cascade of equality compares
-// rather than a data-table load so we don't have to register a new symdata
-// global in this step (that would also pull in step-6a.17 work). The 18-way
-// cascade is fine — it sits behind both __slab_alloc_class (size class is
-// already known statically by the caller in many cases) and the upcoming
-// __slab_alloc which dispatches once per allocation.
-//
-// Slot usage:
-//   slot 0 = idx (arg)
-func __slab_class_size 1 i64
-  block entry:
-    v0 = std param 0 i64
-    std storeSlot 0 v0
-    v1 = std constI64 0
-    v2 = std cmpI64Eq v0 v1
-    std condBr v2 c0 t1
-  block t1:
-    v3 = std constI64 1
-    v4 = std cmpI64Eq v0 v3
-    std condBr v4 c1 t2
-  block t2:
-    v5 = std constI64 2
-    v6 = std cmpI64Eq v0 v5
-    std condBr v6 c2 t3
-  block t3:
-    v7 = std constI64 3
-    v8 = std cmpI64Eq v0 v7
-    std condBr v8 c3 t4
-  block t4:
-    v9 = std constI64 4
-    v10 = std cmpI64Eq v0 v9
-    std condBr v10 c4 t5
-  block t5:
-    v11 = std constI64 5
-    v12 = std cmpI64Eq v0 v11
-    std condBr v12 c5 t6
-  block t6:
-    v13 = std constI64 6
-    v14 = std cmpI64Eq v0 v13
-    std condBr v14 c6 t7
-  block t7:
-    v15 = std constI64 7
-    v16 = std cmpI64Eq v0 v15
-    std condBr v16 c7 t8
-  block t8:
-    v17 = std constI64 8
-    v18 = std cmpI64Eq v0 v17
-    std condBr v18 c8 t9
-  block t9:
-    v19 = std constI64 9
-    v20 = std cmpI64Eq v0 v19
-    std condBr v20 c9 t10
-  block t10:
-    v21 = std constI64 10
-    v22 = std cmpI64Eq v0 v21
-    std condBr v22 c10 t11
-  block t11:
-    v23 = std constI64 11
-    v24 = std cmpI64Eq v0 v23
-    std condBr v24 c11 t12
-  block t12:
-    v25 = std constI64 12
-    v26 = std cmpI64Eq v0 v25
-    std condBr v26 c12 t13
-  block t13:
-    v27 = std constI64 13
-    v28 = std cmpI64Eq v0 v27
-    std condBr v28 c13 t14
-  block t14:
-    v29 = std constI64 14
-    v30 = std cmpI64Eq v0 v29
-    std condBr v30 c14 t15
-  block t15:
-    v31 = std constI64 15
-    v32 = std cmpI64Eq v0 v31
-    std condBr v32 c15 t16
-  block t16:
-    v33 = std constI64 16
-    v34 = std cmpI64Eq v0 v33
-    std condBr v34 c16 c17
-  block c0:
-    v100 = std constI64 8
-    std ret v100
-  block c1:
-    v101 = std constI64 16
-    std ret v101
-  block c2:
-    v102 = std constI64 24
-    std ret v102
-  block c3:
-    v103 = std constI64 32
-    std ret v103
-  block c4:
-    v104 = std constI64 48
-    std ret v104
-  block c5:
-    v105 = std constI64 64
-    std ret v105
-  block c6:
-    v106 = std constI64 96
-    std ret v106
-  block c7:
-    v107 = std constI64 128
-    std ret v107
-  block c8:
-    v108 = std constI64 192
-    std ret v108
-  block c9:
-    v109 = std constI64 256
-    std ret v109
-  block c10:
-    v110 = std constI64 384
-    std ret v110
-  block c11:
-    v111 = std constI64 512
-    std ret v111
-  block c12:
-    v112 = std constI64 1024
-    std ret v112
-  block c13:
-    v113 = std constI64 2048
-    std ret v113
-  block c14:
-    v114 = std constI64 4096
-    std ret v114
-  block c15:
-    v115 = std constI64 8192
-    std ret v115
-  block c16:
-    v116 = std constI64 16384
-    std ret v116
-  block c17:
-    v117 = std constI64 32768
-    std ret v117
-end
-
-// __slab_objs_per_span(idx) -> i64
-// Returns SlabObjsPerSpan[idx]. Same cascade-compare pattern as
-// __slab_class_size. The two tables are kept in lock-step with the C# arrays
-// in RuntimeEmitter.Allocator.cs (search for SlabClassSizes / SlabObjsPerSpan).
-//
-// Slot usage:
-//   slot 0 = idx (arg)
-func __slab_objs_per_span 1 i64
-  block entry:
-    v0 = std param 0 i64
-    std storeSlot 0 v0
-    v1 = std constI64 0
-    v2 = std cmpI64Eq v0 v1
-    std condBr v2 c0 t1
-  block t1:
-    v3 = std constI64 1
-    v4 = std cmpI64Eq v0 v3
-    std condBr v4 c1 t2
-  block t2:
-    v5 = std constI64 2
-    v6 = std cmpI64Eq v0 v5
-    std condBr v6 c2 t3
-  block t3:
-    v7 = std constI64 3
-    v8 = std cmpI64Eq v0 v7
-    std condBr v8 c3 t4
-  block t4:
-    v9 = std constI64 4
-    v10 = std cmpI64Eq v0 v9
-    std condBr v10 c4 t5
-  block t5:
-    v11 = std constI64 5
-    v12 = std cmpI64Eq v0 v11
-    std condBr v12 c5 t6
-  block t6:
-    v13 = std constI64 6
-    v14 = std cmpI64Eq v0 v13
-    std condBr v14 c6 t7
-  block t7:
-    v15 = std constI64 7
-    v16 = std cmpI64Eq v0 v15
-    std condBr v16 c7 t8
-  block t8:
-    v17 = std constI64 8
-    v18 = std cmpI64Eq v0 v17
-    std condBr v18 c8 t9
-  block t9:
-    v19 = std constI64 9
-    v20 = std cmpI64Eq v0 v19
-    std condBr v20 c9 t10
-  block t10:
-    v21 = std constI64 10
-    v22 = std cmpI64Eq v0 v21
-    std condBr v22 c10 t11
-  block t11:
-    v23 = std constI64 11
-    v24 = std cmpI64Eq v0 v23
-    std condBr v24 c11 t12
-  block t12:
-    v25 = std constI64 12
-    v26 = std cmpI64Eq v0 v25
-    std condBr v26 c12 t13
-  block t13:
-    v27 = std constI64 13
-    v28 = std cmpI64Eq v0 v27
-    std condBr v28 c13 t14
-  block t14:
-    v29 = std constI64 14
-    v30 = std cmpI64Eq v0 v29
-    std condBr v30 c14 t15
-  block t15:
-    v31 = std constI64 15
-    v32 = std cmpI64Eq v0 v31
-    std condBr v32 c15 t16
-  block t16:
-    v33 = std constI64 16
-    v34 = std cmpI64Eq v0 v33
-    std condBr v34 c16 c17
-  block c0:
-    v100 = std constI64 1024
-    std ret v100
-  block c1:
-    v101 = std constI64 512
-    std ret v101
-  block c2:
-    v102 = std constI64 341
-    std ret v102
-  block c3:
-    v103 = std constI64 256
-    std ret v103
-  block c4:
-    v104 = std constI64 170
-    std ret v104
-  block c5:
-    v105 = std constI64 128
-    std ret v105
-  block c6:
-    v106 = std constI64 85
-    std ret v106
-  block c7:
-    v107 = std constI64 64
-    std ret v107
-  block c8:
-    v108 = std constI64 42
-    std ret v108
-  block c9:
-    v109 = std constI64 32
-    std ret v109
-  block c10:
-    v110 = std constI64 21
-    std ret v110
-  block c11:
-    v111 = std constI64 16
-    std ret v111
-  block c12:
-    v112 = std constI64 8
-    std ret v112
-  block c13:
-    v113 = std constI64 4
-    std ret v113
-  block c14:
-    v114 = std constI64 2
-    std ret v114
-  block c15:
-    v115 = std constI64 4
-    std ret v115
-  block c16:
-    v116 = std constI64 2
-    std ret v116
-  block c17:
-    v117 = std constI64 1
-    std ret v117
-end
-
-// __slab_meta_alloc() -> ptr
-// Hands out 80-byte slots used as mspan-header storage. Three-tier:
-//   1. Pop from intrusive free-list at __slab_meta_free_head if non-null:
-//      result = head; head = [head]. (The first 8 bytes of a freed slot
-//      hold the next-pointer.)
-//   2. Otherwise bump within the current metadata chunk: if
-//      bump_ptr + 80 ≤ bump_end, return bump_ptr and advance.
-//   3. Otherwise grab a new 8 KiB chunk from the chunk allocator (one chunk
-//      = 102 mspans), reserve its first 80 B as the return value, and seed
-//      bump_ptr = chunk + 80, bump_end = chunk + 8192.
-//
-// Slot usage:
-//   slot 0 = candidate ptr / chunk_base
-//   slot 1 = next free-list head / advanced bump_ptr
-//   slot 2 = bump_end (only on bump path)
-func __slab_meta_alloc 0 i64
-  block entry:
-    // --- Free list path ---
-    v0 = std globalAddr __slab_meta_free_head
-    v1 = std loadIndirect v0 0
-    v2 = std constI64 0
-    v3 = std cmpI64Eq v1 v2
-    std condBr v3 try_bump pop_free
-
-  block pop_free:
-    // result = v1; head = [v1]
-    v4 = std loadIndirect v1 0
-    std storeIndirect v0 0 v4
-    std ret v1
-
-  block try_bump:
-    // bump_ptr + 80 ≤ bump_end ?  (80-byte mspan slots: the 64-byte field block
-    // 0x00..0x38 plus owning_p at 0x40, rounded up to 16-byte alignment so
-    // successive headers stay aligned. Mirrors C# MspanMetaSlotSize = 0x50.)
-    v5 = std globalAddr __slab_meta_bump_ptr
-    v6 = std loadIndirect v5 0
-    std storeSlot 0 v6
-    v7 = std constI64 0x50
-    v8 = std addI64 v6 v7
-    std storeSlot 1 v8
-    v9 = std globalAddr __slab_meta_bump_end
-    v10 = std loadIndirect v9 0
-    std storeSlot 2 v10
-    // Use signed Lt — both values are valid pointers in user space, well below
-    // 0x8000_0000_0000_0000, so signed and unsigned compares agree here.
-    v11 = std cmpI64Lt v10 v8
-    std condBr v11 grow do_bump
-
-  block do_bump:
-    // bump_ptr = bump_ptr + 64; return old bump_ptr
-    v12 = std loadSlot 1
-    std storeIndirect v5 0 v12
-    v13 = std loadSlot 0
-    std ret v13
-
-  block grow:
-    // Need a fresh metadata chunk.
-    v14 = std constI64 1
-    v15 = std call __slab_arena_alloc_chunks v14
-    std storeSlot 0 v15
-    // bump_ptr = chunk_base + 80 (first 80-byte mspan slot is the return value)
-    v16 = std constI64 0x50
-    v17 = std addI64 v15 v16
-    v18 = std globalAddr __slab_meta_bump_ptr
-    std storeIndirect v18 0 v17
-    // bump_end = chunk_base + 8192
-    v19 = std constI64 0x2000
-    v20 = std addI64 v15 v19
-    v21 = std globalAddr __slab_meta_bump_end
-    std storeIndirect v21 0 v20
-    // Return chunk_base — the first 64-byte slot of the fresh chunk.
-    std ret v15
-end
-
-// __slab_meta_free(ptr): pushes `ptr` onto the metadata free list.
-// [ptr] = old_head; head = ptr. The slot's first 8 bytes are clobbered with
-// the next-pointer, which is fine — the caller is done with the contents.
-//
-// Slot usage:
-//   slot 0 = ptr (arg)
-func __slab_meta_free 1 void
-  block entry:
-    v0 = std param 0 i64
-    v1 = std globalAddr __slab_meta_free_head
-    v2 = std loadIndirect v1 0
-    std storeIndirect v0 0 v2
-    std storeIndirect v1 0 v0
-    v3 = std constI64 0
-    std ret v3
-end
-
-// =============================================================================
-// Per-P sharding support (current-P resolution + remote-free MPSC queue).
-// =============================================================================
-
-// __slab_current_p_id() -> i64 : shard id of the calling OS thread's adopted P,
-// or -1 when no multi-P scheduler owns this thread. This is the SIGNATURE STUB
-// used on wasm32-wasi / arm64-macos (and any target without a GMP scheduler):
-// returns -1 unconditionally so the allocator collapses to a single shard. On
-// x64-Windows, `emitX64SlabCurrentPId` overrides this label with a TLS-reading
-// machine-code version (returns P->id, or -1 before the scheduler starts / on a
-// raw OS thread). Keep the body minimal — it must link on every target.
-func __slab_current_p_id 0 i64
-  block entry:
-    v0 = std constI64 -1
-    std ret v0
-end
-
-// __slab_clamp_shard(raw_id) -> i64 : map a raw P id into the mcache row index
-// range [0, SLAB_MAX_SHARDS=256). A -1 (no scheduler) becomes shard 0.
-//
-// Invariant: a real P id never reaches the cap. The scheduler sizes __sched_procs
-// to GetSystemInfo's dwNumberOfProcessors, which reports the calling thread's
-// processor group only — at most 64 logical processors on Windows. So P ids are
-// always in [0, 63], 4× below the 256-shard array, and the cap-to-255 branch
-// below is unreachable in practice. It exists purely as a hard bound so a
-// pathological CPU count can never index past the static mcache array (a distinct
-// row per P is what keeps the lockless fast-path pop single-writer; sharing a row
-// would break that, hence the array is generously oversized rather than relying
-// on a runtime cap that could alias two Ps onto one row).
-//
-// NOTE: this is the MCACHE INDEX only. A span's owning_p stores the RAW id (see
-// __slab_refill_mcache), and cross-P free routing compares the raw id, so the
-// index mapping here never affects free correctness.
-//
-// Slot usage: slot 0 = raw id (arg)
-func __slab_clamp_shard 1 i64
-  block entry:
-    v0 = std param 0 i64
-    std storeSlot 0 v0
-    v1 = std constI64 0
-    v2 = std cmpI64Lt v0 v1
-    std condBr v2 zero check_cap
-
-  block check_cap:
-    v3 = std loadSlot 0
-    v4 = std constI64 256
-    v5 = std cmpI64Ge v3 v4
-    std condBr v5 cap ok
-
-  block cap:
-    v6 = std constI64 255
-    std ret v6
-
-  block ok:
-    v7 = std loadSlot 0
-    std ret v7
-
-  block zero:
-    v8 = std constI64 0
-    std ret v8
-end
-
-// __slab_proc_at(id) -> i64 : the ProcContext* for shard `id` from the scheduler's
-// P array (__sched_procs), or 0 when there is no P (id < 0, or the scheduler has
-// not allocated its P array yet — __sched_procs == NULL). Used to find the drain
-// target (current P) on the alloc slow path and the remote-free push target
-// (owner P) on the free path.
-//
-// Slot usage: slot 0 = id (arg)
-func __slab_proc_at 1 i64
-  block entry:
-    v0 = std param 0 i64
-    std storeSlot 0 v0
-    // id < 0 → no P.
-    v1 = std constI64 0
-    v2 = std cmpI64Lt v0 v1
-    std condBr v2 none have_id
-
-  block have_id:
-    // procs = __sched_procs ; if NULL → no P.
-    v3 = std globalAddr __sched_procs
-    v4 = std loadIndirect v3 0
-    v5 = std constI64 0
-    v6 = std cmpI64Eq v4 v5
-    std condBr v6 none lookup
-
-  block lookup:
-    // return procs[id]  (procs is an array of P*; entry is itself a P*)
-    v7 = std loadSlot 0
-    v8 = std constI64 3
-    v9 = std shlI64 v7 v8
-    v10 = std addI64 v4 v9
-    v11 = std loadIndirect v10 0
-    std ret v11
-
-  block none:
-    v12 = std constI64 0
-    std ret v12
-end
-
-// __slab_remote_free_push(p_ptr, slot): CAS-push `slot` onto P p_ptr's remote-free
-// MPSC queue (the Treiber stack at p_ptr + 0x78 = POffRemoteFreeHead). The slot's
-// first 8 bytes hold the `next` link. Lock-free, multiple producers:
-//   retry: old = [p+0x78]; [slot] = old; if CAS([p+0x78], old, slot) goto done; retry
-// On single-threaded targets the CAS never contends, so this is a plain push.
-//
-// Slot usage: slot 0 = p_ptr (arg), slot 1 = slot (arg), slot 2 = head addr
-func __slab_remote_free_push 2 void
-  block entry:
-    v0 = std param 0 i64
-    std storeSlot 0 v0
-    v1 = std param 1 i64
-    std storeSlot 1 v1
-    // head_addr = p_ptr + 0x78
-    v2 = std constI64 0x78
-    v3 = std addI64 v0 v2
-    std storeSlot 2 v3
-    std br retry
-
-  block retry:
-    // old = [head_addr]
-    v4 = std loadSlot 2
-    v5 = std loadIndirect v4 0
-    // [slot] = old   (link the new node to the current head)
-    v6 = std loadSlot 1
-    std storeIndirect v6 0 v5
-    // success = CAS(head_addr, old, slot)
-    v7 = std loadSlot 2
-    v8 = std loadSlot 1
-    v9 = std atomicCas v7 v5 v8
-    v10 = std constI64 0
-    v11 = std cmpI64Eq v9 v10
-    std condBr v11 retry done
-
-  block done:
-    v12 = std constI64 0
-    std ret v12
-end
-
-// __slab_drain_remote_frees(p_ptr): drain P p_ptr's remote-free MPSC queue back
-// onto the owning spans' free lists. Called ONLY by the owner P (on its
-// __slab_alloc slow path) — so the per-span pushes are lockless (single-writer
-// invariant). One AtomicCAS detaches the entire chain (head → NULL); we then walk
-// it, and for each node look up its span via the arena map and push the node onto
-// span.free_list (incrementing free_count). A NULL p_ptr (no P) is a no-op.
-//
-// Each per-node push goes through __slab_free_class_with_mspan — the same helper
-// the local free path uses — so a drained free that fully empties a span returns
-// it to mcentral (under __slab_lock, owning_p stamped to the 0xFFFFFFFF sentinel),
-// exactly like a same-P free. The arena-map span lookup is a lockless read of the
-// immutable map (slab spans are never unregistered).
-//
-// Slot usage:
-//   slot 0 = p_ptr (arg)
-//   slot 1 = chain head (detached)
-//   slot 2 = current node
-//   slot 3 = next node (parked across the span lookup)
-//   slot 4 = span_ptr
-func __slab_drain_remote_frees 1 void
-  block entry:
-    v0 = std param 0 i64
-    std storeSlot 0 v0
-    v1 = std constI64 0
-    v2 = std cmpI64Eq v0 v1
-    std condBr v2 done detach_retry
-
-  block detach_retry:
-    // old = [p+0x78]; if NULL nothing to drain.
-    v3 = std loadSlot 0
-    v4 = std constI64 0x78
-    v5 = std addI64 v3 v4
-    v6 = std loadIndirect v5 0
-    v7 = std constI64 0
-    v8 = std cmpI64Eq v6 v7
-    std condBr v8 done try_detach
-
-  block try_detach:
-    // success = CAS([p+0x78], old, NULL)
-    v9 = std loadSlot 0
-    v10 = std constI64 0x78
-    v11 = std addI64 v9 v10
-    v12 = std constI64 0
-    v13 = std atomicCas v11 v6 v12
-    v14 = std constI64 0
-    v15 = std cmpI64Eq v13 v14
-    std condBr v15 detach_retry detached
-
-  block detached:
-    // chain head = old; current = head
-    std storeSlot 1 v6
-    std storeSlot 2 v6
-    std br walk
-
-  block walk:
-    v16 = std loadSlot 2
-    v17 = std constI64 0
-    v18 = std cmpI64Eq v16 v17
-    std condBr v18 done walk_body
-
-  block walk_body:
-    // next = [current]  (park it before span_lookup / free-list push clobber it)
-    v19 = std loadSlot 2
-    v20 = std loadIndirect v19 0
-    std storeSlot 3 v20
-
-    // span = __slab_arena_map_get(current). Per the cross-P invariant the lookup
-    // always succeeds: the node lives in a span the arena map registered at
-    // creation, and that span is never unregistered (slab spans are not freed).
-    v21 = std loadSlot 2
-    v22 = std call __slab_arena_map_get v21
-    std storeSlot 4 v22
-
-    // Push current onto span.free_list and bump free_count (we are the owner P,
-    // so this is the lockless single-writer push — same as __slab_free's local
-    // path and __slab_free_class_with_mspan).
-    v23 = std loadSlot 2
-    v24 = std loadSlot 4
-    v25 = std call __slab_free_class_with_mspan v23 v24
-
-    // current = next
-    v26 = std loadSlot 3
-    std storeSlot 2 v26
-    std br walk
-
-  block done:
-    v27 = std constI64 0
-    std ret v27
-end
-
-// __slab_refill_mcache(class_idx, shard): repopulates this P's mcache row entry
-// mcache[shard][class_idx] with a span that has at least one free slot. Two-tier:
-//   1. Pop the head of mcentral[class_idx].partial — clearing its next_span
-//      pointer — and store it as mcache[shard][class_idx]. (partial_head is
-//      always NULL today: spans are never returned to mcentral, so this branch
-//      is dead but kept correct for a future recycling path.)
-//   2. If partial is empty: build a brand-new span by allocating chunks for
-//      the slot data, an mspan header from the metadata slab, initialising
-//      the mspan fields (including owning_p = shard), then walking the slot
-//      region wiring up the intrusive free list ([slot[i]] = slot[i+1], last
-//      slot's next = 0).
-//
-// This is the slow path: it reads mcentral and drives the chunk / metadata /
-// arena-map allocators, all of which mutate genuinely shared structures, so the
-// whole body runs under the global __slab_lock (re-entrant on Windows). The
-// per-P mcache fast path in __slab_alloc_class takes NO lock.
-//
-// Slot usage:
-//   slot 0  = class_idx (arg)
-//   slot 1  = mcentral entry addr
-//   slot 2  = mcache slot addr  (mcache_base + shard*144 + class_idx*8)
-//   slot 3  = span_ptr (winning mspan)
-//   slot 4  = slot_size
-//   slot 5  = total_slots (objs_per_span)
-//   slot 6  = data_size = slot_size * total_slots
-//   slot 7  = num_chunks
-//   slot 8  = page_base (slot region base)
-//   slot 9  = arena_base (most recent arena from chunk allocator)
-//   slot 10 = i (free-list build counter)
-//   slot 11 = current slot addr
-//   slot 13 = raw_id (arg, = owning_p for fresh spans)
-//   slot 14 = shard = clamp(raw_id) (mcache row index)
-func __slab_refill_mcache 2 void
-  block entry:
-    v0 = std param 0 i64
-    std storeSlot 0 v0
-    v100 = std param 1 i64
-    std storeSlot 13 v100
-    // shard = clamp(raw_id) — the mcache row to fill (must match __slab_alloc_class).
-    v105 = std call __slab_clamp_shard v100
-    std storeSlot 14 v105
-
-    // Slow path: serialize mcentral / chunk / metadata / arena-map mutations.
-    v101 = std globalAddr __slab_lock
-    std osLockAcquire v101
-
-    // mcentral_entry_addr = __slab_mcentral_array + class_idx * 16
-    v1 = std globalAddr __slab_mcentral_array
-    v2 = std constI64 4
-    v3 = std shlI64 v0 v2
-    v4 = std addI64 v1 v3
-    std storeSlot 1 v4
-
-    // mcache_slot_addr = __slab_mcache_base + shard*144 + class_idx*8
-    v5 = std globalAddr __slab_mcache_base
-    v102 = std constI64 144
-    v106 = std loadSlot 14
-    v103 = std mulI64 v106 v102
-    v104 = std addI64 v5 v103
-    v6 = std constI64 3
-    v7 = std shlI64 v0 v6
-    v8 = std addI64 v104 v7
-    std storeSlot 2 v8
-
-    // partial = mcentral_entry.partial_head
-    v9 = std loadIndirect v4 0
-    v10 = std constI64 0
-    v11 = std cmpI64Eq v9 v10
-    std condBr v11 grow_new take_partial
-
-  block take_partial:
-    // span = partial; partial_head = span.next_span; span.next_span = 0
-    std storeSlot 3 v9
-    v12 = std loadIndirect v9 0x20
-    v13 = std loadSlot 1
-    std storeIndirect v13 0 v12
-    v14 = std constI64 0
-    std storeIndirect v9 0x20 v14
-
-    // Re-stamp owning_p = raw_id under __slab_lock — this P now exclusively owns
-    // the span (it carried the 0xFFFFFFFF sentinel while parked in mcentral).
-    // Mirrors RuntimeEmitter.Allocator.cs's __slab_mcentral_get_span re-stamp.
-    // The span was returned only when fully free, so its free_list already holds
-    // every slot and free_count == total_slots — it is immediately usable, and
-    // the alloc pop below draws from that intact list.
-    v107 = std loadSlot 13
-    std storeIndirect v9 0x40 v107
-    std br install
-
-  block grow_new:
-    // Fetch class parameters.
-    v15 = std loadSlot 0
-    v16 = std call __slab_class_size v15
-    std storeSlot 4 v16
-    v17 = std loadSlot 0
-    v18 = std call __slab_objs_per_span v17
-    std storeSlot 5 v18
-
-    // data_size = slot_size * total_slots
-    v19 = std mulI64 v16 v18
-    std storeSlot 6 v19
-
-    // num_chunks = (data_size + 8191) >> 13
-    v20 = std constI64 8191
-    v21 = std addI64 v19 v20
-    v22 = std constI64 13
-    v23 = std shrI64 v21 v22
-    std storeSlot 7 v23
-
-    // page_base = __slab_arena_alloc_chunks(num_chunks)
-    v24 = std call __slab_arena_alloc_chunks v23
-    std storeSlot 8 v24
-
-    // arena_base = __slab_arena_last_base
-    v25 = std globalAddr __slab_arena_last_base
-    v26 = std loadIndirect v25 0
-    std storeSlot 9 v26
-
-    // span = __slab_meta_alloc()
-    v27 = std call __slab_meta_alloc
-    std storeSlot 3 v27
-
-    // Initialise mspan fields.
-    //   +0x00 base_addr   = page_base
-    //   +0x08 slot_size   = slot_size
-    //   +0x10 free_list   = page_base
-    //   +0x18 free_count  = total_slots
-    //   +0x20 next_span   = 0
-    //   +0x28 class_idx   = class_idx
-    //   +0x30 total_slots = total_slots
-    //   +0x38 arena_base  = arena_base
-    std storeIndirect v27 0x00 v24
-    std storeIndirect v27 0x08 v16
-    std storeIndirect v27 0x10 v24
-    std storeIndirect v27 0x18 v18
-    v28 = std constI64 0
-    std storeIndirect v27 0x20 v28
-    v29 = std loadSlot 0
-    std storeIndirect v27 0x28 v29
-    std storeIndirect v27 0x30 v18
-    std storeIndirect v27 0x38 v26
-    // owning_p = raw_id. Set once, here, while the creating P holds __slab_lock;
-    // never changed afterwards. This P is therefore the permanent single writer
-    // of this span's free_list, and every cross-P free of one of its slots is
-    // routed to this P's remote-free queue (see __slab_free). Storing the raw id
-    // (not the clamped mcache shard) lets __slab_free compare it exactly against
-    // a freeing thread's raw id, so raw OS threads (id -1) always route remote.
-    v57 = std loadSlot 13
-    std storeIndirect v27 0x40 v57
-
-    // Register the new mspan in the arena map so __slab_arena_map_get
-    // (and therefore __slab_free) can recover it from any slot pointer.
-    // num_pages == num_chunks because chunks and pages are both 8KB.
-    v53 = std loadSlot 8
-    v54 = std loadSlot 7
-    v55 = std loadSlot 3
-    v56 = std call __slab_arena_map_set v53 v54 v55
-
-    // Build the intrusive free list. i = 0.
-    v30 = std constI64 0
-    std storeSlot 10 v30
-    std br link_loop
-
-  block link_loop:
-    v31 = std loadSlot 10
-    v32 = std loadSlot 5
-    v33 = std cmpI64Lt v31 v32
-    std condBr v33 link_body install
-
-  block link_body:
-    // current = page_base + i * slot_size
-    v34 = std loadSlot 10
-    v35 = std loadSlot 4
-    v36 = std mulI64 v34 v35
-    v37 = std loadSlot 8
-    v38 = std addI64 v37 v36
-    std storeSlot 11 v38
-
-    // i + 1 == total_slots ?
-    v39 = std constI64 1
-    v40 = std addI64 v34 v39
-    v41 = std loadSlot 5
-    v42 = std cmpI64Eq v40 v41
-    std condBr v42 last_slot mid_slot
-
-  block mid_slot:
-    // [current] = page_base + (i+1) * slot_size
-    v43 = std mulI64 v40 v35
-    v44 = std loadSlot 8
-    v45 = std addI64 v44 v43
-    std storeIndirect v38 0 v45
-    std br link_advance
-
-  block last_slot:
-    // [current] = 0
-    v46 = std constI64 0
-    std storeIndirect v38 0 v46
-    std br link_advance
-
-  block link_advance:
-    v47 = std loadSlot 10
-    v48 = std constI64 1
-    v49 = std addI64 v47 v48
-    std storeSlot 10 v49
-    std br link_loop
-
-  block install:
-    // mcache[shard][class_idx] = span
-    v50 = std loadSlot 2
-    v51 = std loadSlot 3
-    std storeIndirect v50 0 v51
-
-    v58 = std globalAddr __slab_lock
-    std osLockRelease v58
-
-    v52 = std constI64 0
-    std ret v52
-end
-
-// __slab_alloc_class(class_idx) -> ptr
-// Fast path slab allocator, per-P sharded. Pops a slot from the cached mspan in
-// THIS P's mcache row (mcache_base + shard*144 + class_idx*8). The pop is
-// lockless: only the owning P writes its own row's spans' free_lists.
-//
-// On a miss (no cached span, or its free_count == 0) it first drains this P's
-// remote-free queue — a burst of cross-P frees aimed at this P's spans may have
-// refilled the cached span without needing fresh memory — and re-probes. If
-// still empty it calls __slab_refill_mcache(class, shard) (which takes
-// __slab_lock and either recycles an mcentral span or grows a new one), then
-// pops.
-//
-// Structure mirrors the original linear layout (no back-edge retry that would
-// keep the mcache addr live across calls and trip the spill heuristics): the
-// fast path falls through to the pop; a miss routes through drain → re-probe →
-// refill → pop.
-//
-// Slot usage:
-//   slot 0 = class_idx (arg)
-//   slot 1 = mcache_slot_addr
-//   slot 2 = span_ptr
-//   slot 3 = result slot
-//   slot 4 = shard (this P's mcache row index = clamp(raw_id))
-//   slot 5 = raw_id (this P's real id; passed to refill as owning_p)
-func __slab_alloc_class 1 i64
-  block entry:
-    v0 = std param 0 i64
-    std storeSlot 0 v0
-
-    // raw_id = current P id (-1 if none); shard = clamp(raw_id) for the mcache row.
-    v38 = std call __slab_current_p_id
-    std storeSlot 5 v38
-    v40 = std call __slab_clamp_shard v38
-    std storeSlot 4 v40
-
-    // mcache_slot_addr = __slab_mcache_base + shard*144 + class_idx*8
-    v1 = std globalAddr __slab_mcache_base
-    v41 = std constI64 144
-    v42 = std mulI64 v40 v41
-    v43 = std addI64 v1 v42
-    v44 = std loadSlot 0
-    v2 = std constI64 3
-    v3 = std shlI64 v44 v2
-    v4 = std addI64 v43 v3
-    std storeSlot 1 v4
-
-    // span = [mcache_slot]
-    v5 = std loadIndirect v4 0
-    v6 = std constI64 0
-    v7 = std cmpI64Eq v5 v6
-    std condBr v7 do_drain check_count
-
-  block check_count:
-    // A cached span with free_count == 0 is a miss — drain + maybe refill.
-    std storeSlot 2 v5
-    v8 = std loadIndirect v5 0x18
-    v9 = std constI64 0
-    v10 = std cmpI64Eq v8 v9
-    std condBr v10 do_drain pop_slot
-
-  block do_drain:
-    // Drain this P's remote-free queue (no-op when there is no P). Reclaimed
-    // slots are pushed back onto their spans' free lists, possibly refilling the
-    // cached span we just found empty.
-    v45 = std loadSlot 5
-    v46 = std call __slab_proc_at v45
-    v47 = std call __slab_drain_remote_frees v46
-
-    // Re-probe the cached span after draining. Recompute the mcache addr from
-    // the shard (the call clobbered caller-saved regs).
-    v48 = std loadSlot 4
-    v49 = std globalAddr __slab_mcache_base
-    v50 = std constI64 144
-    v51 = std mulI64 v48 v50
-    v52 = std addI64 v49 v51
-    v53 = std loadSlot 0
-    v54 = std constI64 3
-    v55 = std shlI64 v53 v54
-    v56 = std addI64 v52 v55
-    std storeSlot 1 v56
-
-    v57 = std loadIndirect v56 0
-    v58 = std constI64 0
-    v59 = std cmpI64Eq v57 v58
-    std condBr v59 do_refill probe_count
-
-  block probe_count:
-    std storeSlot 2 v57
-    v60 = std loadIndirect v57 0x18
-    v61 = std constI64 0
-    v62 = std cmpI64Eq v60 v61
-    std condBr v62 do_refill pop_slot
-
-  block do_refill:
-    // Pass class_idx + raw_id; refill stamps owning_p = raw_id and indexes the
-    // mcache row by clamp(raw_id) — matching slot 4 here.
-    v11 = std loadSlot 0
-    v63 = std loadSlot 5
-    v12 = std call __slab_refill_mcache v11 v63
-
-    // Recompute mcache_slot_addr from the shard — the refill call clobbered the
-    // caller-saved register that held it.
-    v13 = std loadSlot 0
-    v14 = std globalAddr __slab_mcache_base
-    v64 = std loadSlot 4
-    v65 = std constI64 144
-    v66 = std mulI64 v64 v65
-    v67 = std addI64 v14 v66
-    v15 = std constI64 3
-    v16 = std shlI64 v13 v15
-    v17 = std addI64 v67 v16
-    std storeSlot 1 v17
-
-    // After the refill the mcache slot is guaranteed to point at a span with
-    // free_count > 0 (otherwise __slab_refill_mcache would have grown a fresh
-    // one), so we can fall straight through to the pop.
-    v18 = std loadIndirect v17 0
-    std storeSlot 2 v18
-    std br pop_slot
-
-  block pop_slot:
-    // result = span.free_list
-    v19 = std loadSlot 2
-    v20 = std loadIndirect v19 0x10
-    std storeSlot 3 v20
-
-    // span.free_list = [result] (next pointer at slot offset 0)
-    v21 = std loadIndirect v20 0
-    std storeIndirect v19 0x10 v21
-
-    // span.free_count -= 1
-    v22 = std loadIndirect v19 0x18
-    v23 = std constI64 1
-    v24 = std subI64 v22 v23
-    std storeIndirect v19 0x18 v24
-
-    // If free_count is now 0, drop the span from the mcache so the next call
-    // refills cleanly. The span lives on through free callers because the
-    // arena map (step 6a.14) — and __slab_free_class_with_mspan today — own
-    // the link back.
-    v25 = std constI64 0
-    v26 = std cmpI64Eq v24 v25
-    std condBr v26 evict ret_slot
-
-  block evict:
-    v27 = std loadSlot 1
-    v28 = std constI64 0
-    std storeIndirect v27 0 v28
-    std br ret_slot
-
-  block ret_slot:
-    v29 = std loadSlot 3
-    std ret v29
-end
-
-// __slab_mcentral_return_span(span): return a fully-emptied span to its class's
-// mcentral partial list so a DIFFERENT P can later reclaim it (faithful port of
-// RuntimeEmitter.Allocator.cs's __slab_mcentral_return_span). Called from
-// __slab_free_class_with_mspan when a free brings free_count up to total_slots —
-// the common sink for the same-P local free, the fallback-local free, and the
-// remote-free drain. Without this, P0's emptied spans are stranded and other Ps
-// grow fresh arena spans, so per-P RSS grows without bound on migrating
-// workloads.
-//
-// Runs entirely under the global __slab_lock (the same lock __slab_refill_mcache
-// takes), which serializes every mcentral mutation — the get (refill take_partial),
-// the return here, and the cross-P mcache eviction. The per-P mcache FAST path in
-// __slab_alloc_class / the local free push stay lock-free; only this off-fast-path
-// event takes the lock.
-//
-// Steps, all under the lock:
-//   1. span.owning_p = 0xFFFFFFFF — the "in mcentral, owned by nobody" sentinel.
-//      A concurrent cross-P free that reads this sentinel hits the defensive
-//      panic in __slab_free (the owning P drained all in-flight remote frees for
-//      this span before its free_count could reach total_slots, so observing the
-//      sentinel on the free path is a genuine invariant violation).
-//   2. Prepend span to __slab_mcentral_array[class_idx].partial_head (offset 0).
-//   3. Cross-P mcache eviction: walk all SLAB_MAX_SHARDS(256) mcache rows and NULL
-//      any slot that still points at this span. The 256-shard static bound (not
-//      __sched_max_procs) is used deliberately: clamp(-1)=shard 0 is the row used
-//      on single-shard targets (wasm / arm64 / pre-scheduler x64) where
-//      __sched_max_procs is 0, so a 0..__sched_max_procs walk would skip shard 0
-//      and leave a dangling cached pointer. The alloc-side evict block already
-//      NULLs the owner's slot when a span fills, so this loop is mostly defensive
-//      — but ported faithfully to match C# and cover any partial-occupancy corner.
-//
-// Slot usage:
-//   slot 0 = span (arg)
-//   slot 1 = class_offset (class_idx * 8)
-//   slot 2 = loop index i
-//   slot 3 = mcache_base
-func __slab_mcentral_return_span 1 void
-  block entry:
-    v0 = std param 0 i64
-    std storeSlot 0 v0
-
-    v1 = std globalAddr __slab_lock
-    std osLockAcquire v1
-
-    // span.owning_p = sentinel (0xFFFFFFFF).
-    v2 = std loadSlot 0
-    v3 = std constI64 0xFFFFFFFF
-    std storeIndirect v2 0x40 v3
-
-    // class_offset = span.class_idx * 8
-    v4 = std loadIndirect v2 0x28
-    v5 = std constI64 3
-    v6 = std shlI64 v4 v5
-    std storeSlot 1 v6
-
-    // mcentral_entry_addr = __slab_mcentral_array + class_idx*16 = base + class_offset*2
-    v7 = std globalAddr __slab_mcentral_array
-    v8 = std constI64 1
-    v9 = std shlI64 v6 v8
-    v10 = std addI64 v7 v9
-
-    // Prepend span to partial_head: span.next_span = partial_head; partial_head = span.
-    v11 = std loadIndirect v10 0
-    std storeIndirect v2 0x20 v11
-    std storeIndirect v10 0 v2
-
-    // Cross-P mcache eviction. i = 0; mcache_base cached in slot 3.
-    v12 = std globalAddr __slab_mcache_base
-    std storeSlot 3 v12
-    v13 = std constI64 0
-    std storeSlot 2 v13
-    std br evict_loop
-
-  block evict_loop:
-    v14 = std loadSlot 2
-    v15 = std constI64 256
-    v16 = std cmpI64Ge v14 v15
-    std condBr v16 evict_done evict_body
-
-  block evict_body:
-    // mcache_slot_addr = mcache_base + i*144 + class_offset
-    v17 = std loadSlot 2
-    v18 = std constI64 144
-    v19 = std mulI64 v17 v18
-    v20 = std loadSlot 3
-    v21 = std addI64 v20 v19
-    v22 = std loadSlot 1
-    v23 = std addI64 v21 v22
-
-    // If [mcache_slot] == span, NULL it.
-    v24 = std loadIndirect v23 0
-    v25 = std loadSlot 0
-    v26 = std cmpI64Eq v24 v25
-    std condBr v26 evict_clear evict_next
-
-  block evict_clear:
-    v27 = std constI64 0
-    std storeIndirect v23 0 v27
-    std br evict_next
-
-  block evict_next:
-    v28 = std loadSlot 2
-    v29 = std constI64 1
-    v30 = std addI64 v28 v29
-    std storeSlot 2 v30
-    std br evict_loop
-
-  block evict_done:
-    v31 = std globalAddr __slab_lock
-    std osLockRelease v31
-    v32 = std constI64 0
-    std ret v32
-end
-
-// __slab_free_class_with_mspan(slot, mspan)
-// Returns `slot` to its owning mspan's free list:
-//   [slot] = mspan.free_list
-//   mspan.free_list = slot
-//   mspan.free_count += 1
-//
-// This is the common sink for every free path: __slab_free's same-P local push,
-// its fallback-local push, and __slab_drain_remote_frees' replay of cross-P
-// frees. All three reach here as the span's single writer (the owning P), so the
-// per-span list mutation needs no lock.
-//
-// When this free brings free_count up to total_slots the span is now fully empty,
-// so we hand it back to mcentral via __slab_mcentral_return_span (which takes
-// __slab_lock internally) — letting a different P reclaim it instead of stranding
-// it in this P's mcache. Mirrors RuntimeEmitter.Allocator.cs's
-// EmitPushSlotOntoSpanFreeList.
-//
-// Slot usage:
-//   slot 0 = slot (arg)
-//   slot 1 = mspan (arg)
-func __slab_free_class_with_mspan 2 void
-  block entry:
-    v0 = std param 0 i64
-    std storeSlot 0 v0
-    v1 = std param 1 i64
-    std storeSlot 1 v1
-
-    // [slot] = mspan.free_list
-    v2 = std loadIndirect v1 0x10
-    std storeIndirect v0 0 v2
-
-    // mspan.free_list = slot
-    std storeIndirect v1 0x10 v0
-
-    // mspan.free_count += 1 (result kept in v5 for the fully-free compare below).
-    v3 = std loadIndirect v1 0x18
-    v4 = std constI64 1
-    v5 = std addI64 v3 v4
-    std storeIndirect v1 0x18 v5
-
-    // Fully free? free_count == total_slots (+0x30) → return span to mcentral so
-    // another P can reclaim it. Otherwise fall through to the plain return.
-    v6 = std loadIndirect v1 0x30
-    v7 = std cmpI64Eq v5 v6
-    std condBr v7 return_span done
-
-  block return_span:
-    v8 = std loadSlot 1
-    v9 = std call __slab_mcentral_return_span v8
-    std br done
-
-  block done:
-    v10 = std constI64 0
-    std ret v10
-end
-
-// =============================================================================
-// Slab allocator — top layer (step 6a.14 of the allocator port).
-//
-// Adds the two-level radix tree mapping any pointer back to its owning mspan,
-// the OS-direct path for >32KB allocations, and the public __slab_alloc /
-// __slab_free entry points.
-//
-// Architecture:
-//   __slab_arena_map_l1 -> 256 entries, each pointing to an L2 table
-//   each L2 table       -> 8192 entries, each pointing to a `spans[]` array
-//   each `spans[]` array -> 8192 entries, each holding an mspan* for one 8KB
-//                          page within an arena (or NULL if unmapped).
-//
-// Address decoding (mirrors the C# bootstrap exactly):
-//   l1_idx     = ptr >> 39                          // bits 39+ pick L1 slot
-//   l2_idx     = (ptr >> 26) & 0x1FFF               // bits 26-38 pick L2 slot
-//   page_idx   = (ptr >> 13) & 0x1FFF               // bits 13-25 pick page slot
-//
-// Mutable globals expected by these functions (registered by step 6a.17):
-//   __slab_arena_map_l1        8 bytes — pointer to lazily-allocated L1 array
-//   __slab_os_direct_array     8 bytes — pointer to (ptr,size) entries
-//   __slab_os_direct_count     8 bytes — number of OS-direct entries in use
-//   __slab_os_direct_capacity  8 bytes — number of (ptr,size) slots available
-//
-// TODO(step 6a.17): the X64/Arm64 backends do not yet register these labels
-// in the .data section; until then `globalAddr` references resolve to offset 0
-// and these functions only need to PARSE/LOWER/EMIT cleanly. They become
-// reachable from user code once mrt_alloc is rerouted in step 6a.18.
-// =============================================================================
-
-// __slab_arena_map_ensure(addr): ensures the L1, L2, and spans[] arrays exist
-// for the arena map entry corresponding to `addr`. Lazy-allocates each layer
-// on first need. Three-level mirror of EmitArenaMapEnsure in
-// RuntimeEmitter.Allocator.cs (the plan's "two-level" wording collapses the
-// L2 and spans[] layers descriptively, but the actual structure must be
-// three-level — bits 39+ -> bits 26-38 -> bits 13-25 — because each L2 slot
-// covers a 64MB region and each spans[] entry covers one 8KB page within it).
-//
-// TODO(step 6a.17): this function is presently single-threaded. The C# version
-// holds __slab_mspan_pool_lock around L1 allocation to keep two threads from
-// racing on the global pointer. When threads land, wrap the alloc_l1 /
-// alloc_l2 / alloc_spans paths with osLockAcquire / osLockRelease.
-//
-// Slot usage:
-//   slot 0 = addr (arg)
-//   slot 1 = scratch (l1_alloc / l2_alloc / spans_alloc result holders)
-//   slot 2 = l1_idx
-//   slot 3 = l1_base
-//   slot 4 = l1_slot_addr
-//   slot 5 = l2_ptr
-//   slot 6 = l2_idx
-//   slot 7 = l2_slot_addr
-//   slot 8 = spans_ptr
-func __slab_arena_map_ensure 1 void
-  block entry:
-    v0 = std param 0 i64
-    std storeSlot 0 v0
-
-    // Lazy-allocate L1 if missing.
-    v1 = std globalAddr __slab_arena_map_l1
-    v2 = std loadIndirect v1 0
-    v3 = std constI64 0
-    v4 = std cmpI64Eq v2 v3
-    std condBr v4 alloc_l1 l1_ready
-
-  block alloc_l1:
-    // L1 = 256 entries * 8 bytes = 2048 bytes -> 1 chunk.
-    v5 = std constI64 1
-    v6 = std call __slab_arena_alloc_chunks v5
-    std storeSlot 1 v6
-    v7 = std constI64 2048
-    v8 = std call __slab_memzero v6 v7
-    v9 = std globalAddr __slab_arena_map_l1
-    v10 = std loadSlot 1
-    std storeIndirect v9 0 v10
-    std br l1_ready
-
-  block l1_ready:
-    // l1_idx = addr >> 39
-    v11 = std loadSlot 0
-    v12 = std constI64 39
-    v13 = std shrI64 v11 v12
-    std storeSlot 2 v13
-
-    // l1_base = [__slab_arena_map_l1]
-    v14 = std globalAddr __slab_arena_map_l1
-    v15 = std loadIndirect v14 0
-    std storeSlot 3 v15
-
-    // l1_slot_addr = l1_base + l1_idx * 8
-    v16 = std constI64 3
-    v17 = std shlI64 v13 v16
-    v18 = std addI64 v15 v17
-    std storeSlot 4 v18
-
-    // l2_ptr = [l1_slot]
-    v19 = std loadIndirect v18 0
-    v20 = std constI64 0
-    v21 = std cmpI64Eq v19 v20
-    std condBr v21 alloc_l2 l2_have_ptr
-
-  block alloc_l2:
-    // L2 = 8192 entries * 8 bytes = 65536 bytes -> 8 chunks.
-    v22 = std constI64 8
-    v23 = std call __slab_arena_alloc_chunks v22
-    std storeSlot 5 v23
-    v24 = std constI64 65536
-    v25 = std call __slab_memzero v23 v24
-    // [l1_slot] = l2_ptr
-    v26 = std loadSlot 4
-    v27 = std loadSlot 5
-    std storeIndirect v26 0 v27
-    std br compute_l2_idx
-
-  block l2_have_ptr:
-    std storeSlot 5 v19
-    std br compute_l2_idx
-
-  block compute_l2_idx:
-    // l2_idx = (addr >> 26) & 0x1FFF
-    v28 = std loadSlot 0
-    v29 = std constI64 26
-    v30 = std shrI64 v28 v29
-    v31 = std constI64 8191
-    v32 = std andI64 v30 v31
-    std storeSlot 6 v32
-
-    // l2_slot_addr = l2_ptr + l2_idx * 8
-    v33 = std loadSlot 5
-    v34 = std constI64 3
-    v35 = std shlI64 v32 v34
-    v36 = std addI64 v33 v35
-    std storeSlot 7 v36
-
-    // spans_ptr = [l2_slot]
-    v37 = std loadIndirect v36 0
-    v38 = std constI64 0
-    v39 = std cmpI64Eq v37 v38
-    std condBr v39 alloc_spans done
-
-  block alloc_spans:
-    // spans[] = 8192 entries * 8 bytes = 65536 bytes -> 8 chunks.
-    v40 = std constI64 8
-    v41 = std call __slab_arena_alloc_chunks v40
-    std storeSlot 8 v41
-    v42 = std constI64 65536
-    v43 = std call __slab_memzero v41 v42
-    // [l2_slot] = spans_ptr
-    v44 = std loadSlot 7
-    v45 = std loadSlot 8
-    std storeIndirect v44 0 v45
-    std br done
-
-  block done:
-    v46 = std constI64 0
-    std ret v46
-end
-
-// __slab_arena_map_set(base, num_pages, mspan): registers `mspan` in the arena
-// map for every 8KB page in [base, base + num_pages*8192). Multi-page mspans
-// share the same mspan pointer across all of their page slots so that
-// __slab_arena_map_get on any pointer inside the span returns the same mspan.
-//
-// Mirrors EmitSpanMapUpdate(writeSpanPtr=true) in the C# bootstrap.
-//
-// Slot usage:
-//   slot 0 = base (arg)
-//   slot 1 = num_pages (arg)
-//   slot 2 = mspan (arg)
-//   slot 3 = i (loop counter)
-//   slot 4 = page_addr
-func __slab_arena_map_set 3 void
-  block entry:
-    v0 = std param 0 i64
-    std storeSlot 0 v0
-    v1 = std param 1 i64
-    std storeSlot 1 v1
-    v2 = std param 2 i64
-    std storeSlot 2 v2
-    v3 = std constI64 0
-    std storeSlot 3 v3
-    std br loop
-
-  block loop:
-    v4 = std loadSlot 3
-    v5 = std loadSlot 1
-    v6 = std cmpI64Lt v4 v5
-    std condBr v6 body done
-
-  block body:
-    // page_addr = base + i * 8192
-    v7 = std loadSlot 0
-    v8 = std loadSlot 3
-    v9 = std constI64 13
-    v10 = std shlI64 v8 v9
-    v11 = std addI64 v7 v10
-    std storeSlot 4 v11
-
-    // Ensure map entries exist.
-    v12 = std call __slab_arena_map_ensure v11
-
-    // l1_idx = page_addr >> 39
-    v13 = std loadSlot 4
-    v14 = std constI64 39
-    v15 = std shrI64 v13 v14
-
-    // l2_ptr = [l1_base + l1_idx*8]
-    v16 = std globalAddr __slab_arena_map_l1
-    v17 = std loadIndirect v16 0
-    v18 = std constI64 3
-    v19 = std shlI64 v15 v18
-    v20 = std addI64 v17 v19
-    v21 = std loadIndirect v20 0
-
-    // l2_idx = (page_addr >> 26) & 0x1FFF
-    v22 = std loadSlot 4
-    v23 = std constI64 26
-    v24 = std shrI64 v22 v23
-    v25 = std constI64 8191
-    v26 = std andI64 v24 v25
-
-    // spans_ptr = [l2_ptr + l2_idx*8]
-    v27 = std constI64 3
-    v28 = std shlI64 v26 v27
-    v29 = std addI64 v21 v28
-    v30 = std loadIndirect v29 0
-
-    // page_idx = (page_addr >> 13) & 0x1FFF
-    v31 = std loadSlot 4
-    v32 = std constI64 13
-    v33 = std shrI64 v31 v32
-    v34 = std constI64 8191
-    v35 = std andI64 v33 v34
-
-    // [spans_ptr + page_idx*8] = mspan
-    v36 = std constI64 3
-    v37 = std shlI64 v35 v36
-    v38 = std addI64 v30 v37
-    v39 = std loadSlot 2
-    std storeIndirect v38 0 v39
-
-    // i++
-    v40 = std loadSlot 3
-    v41 = std constI64 1
-    v42 = std addI64 v40 v41
-    std storeSlot 3 v42
-    std br loop
-
-  block done:
-    v43 = std constI64 0
-    std ret v43
-end
-
-// __slab_arena_map_get(ptr) -> mspan_ptr
-// Returns the mspan registered for the 8KB page containing `ptr`, or NULL if
-// none. Performs the three-level lookup with no locks (reads are racy-safe in
-// single-threaded mode; thread-safety arrives with step 6a.17).
-//
-// Slot usage:
-//   slot 0 = ptr (arg)
-func __slab_arena_map_get 1 i64
-  block entry:
-    v0 = std param 0 i64
-    std storeSlot 0 v0
-
-    v1 = std globalAddr __slab_arena_map_l1
-    v2 = std loadIndirect v1 0
-    v3 = std constI64 0
-    v4 = std cmpI64Eq v2 v3
-    std condBr v4 ret_null check_l2
-
-  block check_l2:
-    v5 = std loadSlot 0
-    v6 = std constI64 39
-    v7 = std shrI64 v5 v6
-
-    v8 = std constI64 3
-    v9 = std shlI64 v7 v8
-    v10 = std addI64 v2 v9
-    v11 = std loadIndirect v10 0
-
-    v12 = std constI64 0
-    v13 = std cmpI64Eq v11 v12
-    std condBr v13 ret_null check_spans
-
-  block check_spans:
-    v14 = std loadSlot 0
-    v15 = std constI64 26
-    v16 = std shrI64 v14 v15
-    v17 = std constI64 8191
-    v18 = std andI64 v16 v17
-
-    v19 = std constI64 3
-    v20 = std shlI64 v18 v19
-    v21 = std addI64 v11 v20
-    v22 = std loadIndirect v21 0
-
-    v23 = std constI64 0
-    v24 = std cmpI64Eq v22 v23
-    std condBr v24 ret_null lookup_span
-
-  block lookup_span:
-    v25 = std loadSlot 0
-    v26 = std constI64 13
-    v27 = std shrI64 v25 v26
-    v28 = std constI64 8191
-    v29 = std andI64 v27 v28
-
-    v30 = std constI64 3
-    v31 = std shlI64 v29 v30
-    v32 = std addI64 v22 v31
-    v33 = std loadIndirect v32 0
-    std ret v33
-
-  block ret_null:
-    v34 = std constI64 0
-    std ret v34
-end
-
-func __slab_os_direct_free 1 void
-  block entry:
-    v0 = std param 0 i64
-    std storeSlot 0 v0
-
-    v1 = std globalAddr __slab_os_direct_count
-    v2 = std loadIndirect v1 0
-    std storeSlot 1 v2
-
-    v3 = std globalAddr __slab_os_direct_array
-    v4 = std loadIndirect v3 0
-    std storeSlot 2 v4
-
-    v5 = std constI64 0
-    std storeSlot 3 v5
-    std br loop
-
-  block loop:
-    v6 = std loadSlot 3
-    v7 = std loadSlot 1
-    v8 = std cmpI64Lt v6 v7
-    std condBr v8 check_entry not_found
-
-  block check_entry:
-    v9 = std loadSlot 2
-    v10 = std loadSlot 3
-    v11 = std constI64 4
-    v12 = std shlI64 v10 v11
-    v13 = std addI64 v9 v12
-    v14 = std loadIndirect v13 0
-    v15 = std loadSlot 0
-    v16 = std cmpI64Eq v14 v15
-    std condBr v16 found advance
-
-  block advance:
-    v17 = std loadSlot 3
-    v18 = std constI64 1
-    v19 = std addI64 v17 v18
-    std storeSlot 3 v19
-    std br loop
-
-  block found:
-    v20 = std loadIndirect v13 8
-    std storeSlot 4 v20
-
-    v21 = std loadSlot 1
-    v22 = std constI64 1
-    v23 = std subI64 v21 v22
-
-    v24 = std loadSlot 3
-    v25 = std cmpI64Eq v24 v23
-    std condBr v25 update_count do_swap
-
-  block do_swap:
-    v26 = std loadSlot 2
-    v27 = std constI64 4
-    v28 = std shlI64 v23 v27
-    v29 = std addI64 v26 v28
-    v30 = std loadIndirect v29 0
-    v31 = std loadIndirect v29 8
-    std storeIndirect v13 0 v30
-    std storeIndirect v13 8 v31
-    std br update_count
-
-  block update_count:
-    v32 = std globalAddr __slab_os_direct_count
-    std storeIndirect v32 0 v23
-
-    v33 = std loadSlot 0
-    v34 = std loadSlot 4
-    std osFreePages v33 v34
-
-    v35 = std constI64 0
-    std ret v35
-
-  block not_found:
-    // Exit with a distinct sentinel for debuggers: 135 = OS-direct miss.
-    v36 = std constI64 135
-    std osExit v36
-    v37 = std constI64 0
-    std ret v37
-end
-
-// __slab_os_direct_alloc(size) -> ptr
-// Allocates `size` bytes (rounded up to 8KB) directly from the OS via
-// osAllocPages, and records (ptr, aligned_size) in the OS-direct tracking
-// array so __slab_os_direct_free can later return it to the OS.
-//
-// Capacity model: the array is a single 8KB chunk holding 512 (ptr, size)
-// entries, lazy-allocated on first call. Each entry covers a >32KB allocation,
-// so 512 outstanding OS-direct allocations is plenty for early bring-up.
-//
-// TODO(step 6a.??): grow the OS-direct array dynamically once heavy users
-// exist. The C# bootstrap sorts entries and binary-searches; we punt on that
-// until we have a workload that justifies the complexity.
-//
-// Slot usage:
-//   slot 0 = size (arg)
-//   slot 1 = aligned size
-//   slot 2 = ptr
-//   slot 3 = scratch (chunk pointer during lazy-init)
-//   slot 4 = count
-func __slab_os_direct_alloc 1 i64
-  block entry:
-    v0 = std param 0 i64
-    std storeSlot 0 v0
-
-    // aligned = (size + 8191) & ~8191
-    v1 = std constI64 8191
-    v2 = std addI64 v0 v1
-    v3 = std constI64 -8192
-    v4 = std andI64 v2 v3
-    std storeSlot 1 v4
-
-    // ptr = osAllocPages(aligned)
-    v5 = std osAllocPages v4
-    std storeSlot 2 v5
-
-    // Lazy-allocate the OS-direct array if capacity == 0.
-    v6 = std globalAddr __slab_os_direct_capacity
-    v7 = std loadIndirect v6 0
-    v8 = std constI64 0
-    v9 = std cmpI64Eq v7 v8
-    std condBr v9 alloc_arr arr_ready
-
-  block alloc_arr:
-    // 1 chunk = 8192 bytes / 16 bytes per entry = 512 entries.
-    v10 = std constI64 1
-    v11 = std call __slab_arena_alloc_chunks v10
-    std storeSlot 3 v11
-    v12 = std constI64 8192
-    v13 = std call __slab_memzero v11 v12
-    v14 = std globalAddr __slab_os_direct_array
-    v15 = std loadSlot 3
-    std storeIndirect v14 0 v15
-    v16 = std globalAddr __slab_os_direct_capacity
-    v17 = std constI64 512
-    std storeIndirect v16 0 v17
-    std br arr_ready
-
-  block arr_ready:
-    // Reload count and capacity (capacity may have just been written).
-    v18 = std globalAddr __slab_os_direct_count
-    v19 = std loadIndirect v18 0
-    std storeSlot 4 v19
-    v20 = std globalAddr __slab_os_direct_capacity
-    v21 = std loadIndirect v20 0
-
-    // If count >= capacity, exhausted — exit with sentinel code.
-    v22 = std cmpI64Lt v19 v21
-    std condBr v22 do_insert capacity_exceeded
-
-  block capacity_exceeded:
-    // TODO(step 6a.??): grow the array. For now exit with a distinct code so
-    // the failure is unambiguous from a debugger.
-    v23 = std constI64 134
-    std osExit v23
-    v24 = std constI64 0
-    std ret v24
-
-  block do_insert:
-    // entry_addr = array_base + count * 16
-    v25 = std globalAddr __slab_os_direct_array
-    v26 = std loadIndirect v25 0
-    v27 = std loadSlot 4
-    v28 = std constI64 4
-    v29 = std shlI64 v27 v28
-    v30 = std addI64 v26 v29
-    // entry.ptr = ptr (offset 0)
-    v31 = std loadSlot 2
-    std storeIndirect v30 0 v31
-    // entry.size = aligned (offset 8)
-    v32 = std loadSlot 1
-    std storeIndirect v30 8 v32
-    // count++
-    v33 = std loadSlot 4
-    v34 = std constI64 1
-    v35 = std addI64 v33 v34
-    v36 = std globalAddr __slab_os_direct_count
-    std storeIndirect v36 0 v35
-
-    v37 = std loadSlot 2
-    std ret v37
-end
-
-// __slab_alloc(size) -> ptr
-// Public allocator entry point. Routes to:
-//   - __slab_os_direct_alloc for size > 32768 (SLAB_MAX_SMALL_SIZE)
-//   - __slab_alloc_class otherwise, after a linear scan of the size-class
-//     table to find the smallest class >= size.
-//
-// The 18-class linear scan is what the C# bootstrap also uses; the bounded
-// loop count makes it competitive with a binary search and far simpler to
-// emit. Future micro-optimisation: a precomputed small-bucket table.
-//
-// Slot usage:
-//   slot 0 = size (arg)
-//   slot 1 = class_idx
-//
-// No global lock on the small-object fast path: __slab_alloc_class serves from
-// the calling P's own mcache row (lockless) and only takes __slab_lock inside
-// __slab_refill_mcache on a miss. The >32768 OS-direct path mutates the shared
-// OS-direct array, so it alone is wrapped in __slab_lock.
-func __slab_alloc 1 i64
-  block entry:
-    v0 = std param 0 i64
-    std storeSlot 0 v0
-
-    v1 = std constI64 32768
-    v2 = std cmpI64Gt v0 v1
-    std condBr v2 os_path small_path
-
-  block os_path:
-    v20 = std globalAddr __slab_lock
-    std osLockAcquire v20
-    v3 = std loadSlot 0
-    v4 = std call __slab_os_direct_alloc v3
-    std storeSlot 2 v4
-    v21 = std globalAddr __slab_lock
-    std osLockRelease v21
-    v22 = std loadSlot 2
-    std ret v22
-
-  block small_path:
-    v5 = std constI64 0
-    std storeSlot 1 v5
-    std br class_loop
-
-  block class_loop:
-    v6 = std loadSlot 1
-    v7 = std constI64 18
-    v8 = std cmpI64Lt v6 v7
-    std condBr v8 class_test no_class
-
-  block class_test:
-    v9 = std loadSlot 1
-    v10 = std call __slab_class_size v9
-    v11 = std loadSlot 0
-    v12 = std cmpI64Ge v10 v11
-    std condBr v12 class_found class_advance
-
-  block class_advance:
-    v13 = std loadSlot 1
-    v14 = std constI64 1
-    v15 = std addI64 v13 v14
-    std storeSlot 1 v15
-    std br class_loop
-
-  block class_found:
-    v16 = std loadSlot 1
-    v17 = std call __slab_alloc_class v16
-    std ret v17
-
-  block no_class:
-    // Should be unreachable (size <= 32768 fits in class 17).
-    v18 = std constI64 136
-    std osExit v18
-    v19 = std constI64 0
-    std ret v19
-end
-
-// __slab_free(ptr): public free entry point. Recovers the owning mspan via
-// __slab_arena_map_get (a lockless read of the immutable arena map). Routing:
-//
-//   * miss (span == NULL): the pointer came from the >32768 OS-direct path —
-//     free it under __slab_lock (mutates the shared OS-direct array).
-//
-//   * hit, same-P free (my raw id == span.owning_p): push the slot onto the
-//     span's free_list directly. Lockless — this P is the span's single writer.
-//
-//   * hit, cross-P free (different P, or a raw OS thread with no P): CAS-push the
-//     slot onto the OWNER P's remote-free MPSC queue; the owner drains it on its
-//     next alloc slow path. No span free_list is touched by a non-owner.
-//
-// Slot usage:
-//   slot 0 = ptr (arg)
-//   slot 1 = span_ptr
-//   slot 2 = owning_p
-//   slot 3 = my raw id
-//   slot 4 = target P ptr (remote path)
-func __slab_free 1 void
-  block entry:
-    v0 = std param 0 i64
-    std storeSlot 0 v0
-
-    v1 = std call __slab_arena_map_get v0
-    std storeSlot 1 v1
-
-    v2 = std constI64 0
-    v3 = std cmpI64Eq v1 v2
-    std condBr v3 os_direct slab_path
-
-  block os_direct:
-    // OS-direct free mutates the shared OS-direct array — serialize it.
-    v20 = std globalAddr __slab_lock
-    std osLockAcquire v20
-    v4 = std loadSlot 0
-    v5 = std call __slab_os_direct_free v4
-    v21 = std globalAddr __slab_lock
-    std osLockRelease v21
-    v6 = std constI64 0
-    std ret v6
-
-  block slab_path:
-    // owning_p = span.owning_p ; my_id = current raw P id.
-    v7 = std loadSlot 1
-    v8 = std loadIndirect v7 0x40
-    std storeSlot 2 v8
-    v9 = std call __slab_current_p_id
-    std storeSlot 3 v9
-
-    // Same-P free requires my_id >= 0 AND my_id == owning_p. A raw OS thread
-    // (my_id == -1) never matches, so it always routes remote — exactly the
-    // C# bootstrap's LoadCurrentP==NULL → remote rule.
-    v10 = std constI64 0
-    v11 = std cmpI64Lt v9 v10
-    std condBr v11 remote_path check_owner
-
-  block check_owner:
-    v12 = std loadSlot 2
-    v13 = std loadSlot 3
-    v14 = std cmpI64Eq v12 v13
-    std condBr v14 local_path check_sentinel
-
-  block check_sentinel:
-    // Defensive: a genuine cross-P free (real P, owning_p != my_id) must never
-    // observe the 0xFFFFFFFF "in mcentral, owned by nobody" sentinel — the owning
-    // P drains every in-flight remote free for a span before its free_count can
-    // reach total_slots and the span is handed to mcentral. Observing it here is a
-    // Mimalloc-invariant violation that would otherwise index __sched_procs at the
-    // huge sentinel id (OOB) and corrupt memory; panic loudly instead. Faithful
-    // port of RuntimeEmitter.Allocator.cs's defensive sentinel panic (the raw-OS-
-    // thread path with my_id < 0 skips this check, exactly as the C# bootstrap's
-    // LoadCurrentP==NULL → remotePath jump bypasses it).
-    v34 = std loadSlot 2
-    v35 = std constI64 0xFFFFFFFF
-    v36 = std cmpI64Eq v34 v35
-    std condBr v36 sentinel_panic remote_path
-
-  block sentinel_panic:
-    v37 = std globalAddr __slab_panic_sentinel_owning_p
-    v38 = std call mrt_panic v37
-    v39 = std constI64 0
-    std ret v39
-
-  block local_path:
-    // Single-writer push onto our own span's free list — lockless unless this
-    // free fully empties the span, in which case __slab_free_class_with_mspan
-    // escalates to a locked mcentral return.
-    v15 = std loadSlot 0
-    v16 = std loadSlot 1
-    v17 = std call __slab_free_class_with_mspan v15 v16
-    v18 = std constI64 0
-    std ret v18
-
-  block remote_path:
-    // target_p = __sched_procs[owning_p]. Resolve and CAS-push onto its queue.
-    v22 = std loadSlot 2
-    v23 = std call __slab_proc_at v22
-    std storeSlot 4 v23
-
-    // Defensive: a NULL target (owning_p has no live P — unreachable for a span
-    // created with owning_p >= 0, since the scheduler/P array is never torn down)
-    // would otherwise drop the free. Fall back to the local push so the slot is
-    // never lost. With no live scheduler there is no contending writer either,
-    // so the direct push is safe.
-    v24 = std constI64 0
-    v25 = std cmpI64Eq v23 v24
-    std condBr v25 fallback_local do_remote
-
-  block fallback_local:
-    v26 = std loadSlot 0
-    v27 = std loadSlot 1
-    v28 = std call __slab_free_class_with_mspan v26 v27
-    v29 = std constI64 0
-    std ret v29
-
-  block do_remote:
-    v30 = std loadSlot 4
-    v31 = std loadSlot 0
-    v32 = std call __slab_remote_free_push v30 v31
-    v33 = std constI64 0
-    std ret v33
-end
-
-// =============================================================================
 // MM tracked layer
 // =============================================================================
 //
-// mm_alloc / mm_free / mm_incref / mm_decref / mm_realloc — refcounted user
-// pointers carrying a destructor function pointer and tag, all stored in a
-// header preceding the user-facing pointer. This is the layer that
-// __ManagedMemory.create (Phase 6b) will call directly.
+// There is exactly ONE allocator: `__mm_alloc` (stdlib/Internals.maxon),
+// alloc-at-0 — a fresh allocation owns NO reference; the binding/field-store
+// that takes ownership supplies the first +1. runtime.std no longer defines its
+// own `mm_alloc`; `mrt_alloc` and the runtime container helpers call
+// `__mm_alloc` directly (see `mrt_alloc` for the raw-buffer rc=1 convention).
+// `mm_incref` / `mm_decref` / `mm_free` are thin delegations to the matching
+// `__mm_*` Internals bodies (single source of truth — refcount maintenance,
+// mm-trace instrumentation, and the pointer-sanity guard all live there).
 //
-// Header layout (24 bytes preceding the user pointer):
+// Header layout (32 bytes preceding the user pointer; matches Internals):
+//   [ptr - 32] = packed_id (alloc_id << 16 | tag; 0 when untraced)
 //   [ptr - 24] = destructor function pointer (i64, 0 if no destructor)
 //   [ptr - 16] = size in bytes (i64; user-requested size)
 //   [ptr -  8] = refcount (i64)
 //
-// TODO(perf): pack into a 16-byte header like the C# bootstrap. The bootstrap
-// encodes (tag, destructor offset, size class index) into one i64 plus an
-// i64 refcount. We use 24 bytes here for clarity; the simplification costs
-// us 8 bytes per allocation but avoids the packing/unpacking arithmetic and
-// the destructor-offset relocation logic.
-//
-// TODO(diag): per-tag leak breakdown. The `tag` argument to mm_alloc is
-// currently accepted and ignored — a future diag pass will use it to give a
-// per-type leak summary on shutdown.
-//
 // Globals referenced (registered by registerSlabAndMmGlobalsForDataSection
 // in LowerMaxonToStd):
-//   __mm_alloc_count   8 bytes — atomic count of live mm_alloc allocations.
+//   __mm_alloc_count   8 bytes — atomic count of live __mm_alloc allocations.
 //
 // Destructor invocation: when mm_decref drives the refcount to zero it
 // calls mm_free, which reads the destructor pointer from [ptr - 24] and
 // invokes it via `indirectCall` (if non-null) before slab-freeing. The
 // destructor receives the user pointer and is expected to decref any
 // managed fields stored in the user region.
-
-// mm_alloc(size, destructor, tag) -> ptr: allocate a tracked refcounted
-// buffer with a 24-byte header. Refcount starts at 1. The `tag` arg is
-// accepted for API parity with the C# bootstrap but currently ignored.
-//
-// Slot usage:
-//   slot 0 = size       (arg)
-//   slot 1 = destructor (arg)
-//   slot 2 = tag        (arg, currently unused)
-//   slot 3 = slot_base  (raw slab pointer)
-//   slot 4 = user_ptr   (returned)
-//   slot 5 = clamped_size (size, clamped to >= 1)
-func mm_alloc 3 i64
-  block entry:
-    v0 = std param 0 i64
-    std storeSlot 0 v0
-    v1 = std param 1 i64
-    std storeSlot 1 v1
-    v2 = std param 2 i64
-    std storeSlot 2 v2
-
-    // Clamp size: if size < 1, clamp to 1 (no panic).
-    v3 = std loadSlot 0
-    v4 = std constI64 1
-    v5 = std cmpI64Lt v3 v4
-    std condBr v5 clamp_size keep_size
-
-  block clamp_size:
-    v6 = std constI64 1
-    std storeSlot 5 v6
-    std br do_alloc
-
-  block keep_size:
-    v7 = std loadSlot 0
-    std storeSlot 5 v7
-    std br do_alloc
-
-  block do_alloc:
-    // Atomic increment __mm_alloc_count.
-    v8 = std globalAddr __mm_alloc_count
-    std atomicInc v8
-
-    // raw_size = clamped_size + 24
-    v9 = std loadSlot 5
-    v10 = std constI64 24
-    v11 = std addI64 v9 v10
-    v12 = std call __slab_alloc v11
-    std storeSlot 3 v12
-
-    // user_ptr = slot_base + 24
-    v13 = std loadSlot 3
-    v14 = std constI64 24
-    v15 = std addI64 v13 v14
-    std storeSlot 4 v15
-
-    // Store destructor at [user_ptr - 24] == [slot_base + 0].
-    v16 = std loadSlot 3
-    v17 = std loadSlot 1
-    std storeIndirect v16 0 v17
-
-    // Store size at [user_ptr - 16] == [slot_base + 8].
-    v18 = std loadSlot 3
-    v19 = std loadSlot 5
-    std storeIndirect v18 8 v19
-
-    // Store refcount = 1 at [user_ptr - 8] == [slot_base + 16].
-    v20 = std loadSlot 3
-    v21 = std constI64 1
-    std storeIndirect v20 16 v21
-
-    // Return user_ptr.
-    v22 = std loadSlot 4
-    std ret v22
-end
 
 // mm_incref(ptr): atomically bump the refcount at [ptr - 8].
 // Caller must ensure ptr is non-null; we skip the null check for speed
@@ -5670,19 +3333,19 @@ end
 //
 // Slot usage:
 //   slot 0 = ptr (arg)
+// Delegates to the stdlib `__mm_incref` so refcount maintenance — and its
+// mm-trace instrumentation + pointer-sanity guard — live in ONE place
+// (stdlib/Internals.maxon). The runtime.std `mrt_*` wrappers and any legacy
+// `mm_incref` call sites route through here; the lowering's direct
+// `stdlib.__mm_incref` calls hit the same body. Keeping both names as one
+// implementation prevents the traced/untraced split that previously left
+// scope-exit decrefs (via `__mm_decref_maybenull_helper`→`mm_decref`) untraced.
 func mm_incref 1 void
   block entry:
     v0 = std param 0 i64
-    std storeSlot 0 v0
-
-    // refcount_addr = ptr - 8
-    v1 = std loadSlot 0
-    v2 = std constI64 8
-    v3 = std subI64 v1 v2
-    std atomicInc v3
-
-    v4 = std constI64 0
-    std ret v4
+    v1 = std call __mm_incref v0
+    v2 = std constI64 0
+    std ret v2
 end
 
 // mm_decref(ptr): atomically decrement the refcount at [ptr - 8]. If the
@@ -5696,35 +3359,220 @@ end
 // Slot usage:
 //   slot 0 = ptr (arg)
 //   slot 1 = prior refcount (return of atomicXadd)
+// Delegates to the stdlib `__mm_decref` (single source of truth — trace +
+// guard + transition-to-zero free all live there). See `mm_incref`.
 func mm_decref 1 void
   block entry:
     v0 = std param 0 i64
-    std storeSlot 0 v0
+    v1 = std call __mm_decref v0
+    v2 = std constI64 0
+    std ret v2
+end
 
-    // refcount_addr = ptr - 8
-    v1 = std loadSlot 0
-    v2 = std constI64 8
-    v3 = std subI64 v1 v2
-
-    // prior = atomicXadd(refcount_addr, -1)
-    v4 = std constI64 -1
-    v5 = std atomicXadd v3 v4
-    std storeSlot 1 v5
-
-    // If prior == 1, the new refcount is 0 — free.
-    v6 = std loadSlot 1
+// mm_retain_type_param(value, layout): incref a generic type-parameter POINTER
+// value iff the layout descriptor's HAS_HEAP_REFS flag (`flags@24`, bit 0) is set.
+// The SYMMETRIC counterpart of the element-walk's `element_destroy` (&__mm_decref):
+// inside a generic body the concrete element managed-ness is only known at runtime
+// via the layout descriptor. The refcount inserter emits a `mm_retain_type_param`
+// call when a BORROWED element is moved into a container that must take its own
+// ref (the source collection still owns its reference). A primitive element (bit
+// clear), a null layout, or a null value is a no-op. The logic is INLINE here
+// (calling the always-reachable `__mm_incref`) rather than delegating to a
+// separate stdlib helper, so no extra source call edge is needed to keep it linked.
+// Emitted late (post-DCE), so seeded as a runtime reachability root in BOTH link
+// legs (BackendDispatch / X64Backend); its signature is registered here for the
+// backend's call-lowering lookup.
+//
+// Slot usage:
+//   slot 0 = value (arg), slot 1 = layout descriptor (arg)
+func mm_retain_type_param 2 void
+  block entry:
+    v0 = std param 0 i64
+    v1 = std param 1 i64
+    v2 = std constI64 0
+    v3 = std cmpI64Eq v1 v2
+    std condBr v3 noop check_value
+  block check_value:
+    v4 = std constI64 0
+    v5 = std cmpI64Eq v0 v4
+    std condBr v5 noop do_check
+  block do_check:
+    v6 = std loadIndirect v1 24
     v7 = std constI64 1
-    v8 = std cmpI64Eq v6 v7
-    std condBr v8 do_free done
+    v8 = std andI64 v6 v7
+    v9 = std constI64 0
+    v10 = std cmpI64Eq v8 v9
+    std condBr v10 noop do_incref
+  block do_incref:
+    v11 = std call __mm_incref v0
+    v12 = std constI64 0
+    std ret v12
+  block noop:
+    v13 = std constI64 0
+    std ret v13
+end
 
-  block do_free:
-    v9 = std loadSlot 0
-    v10 = std call mm_free v9
-    std br done
+// mm_retain_type_param_at(value, layout, ordinal): incref a generic type-parameter
+// POINTER value iff the layout descriptor's PER-ARG heap-ref bit for type-arg
+// `ordinal` is set (`flags@24` bit `8 + ordinal` — LAYOUT_PER_ARG_HEAPREF_SHIFT).
+// The multi-type-param form of `mm_retain_type_param`: inside a `Map<K,V>` body
+// the aggregate bit 0 is the OR over BOTH args, so retaining a raw-int Value
+// through it increfs the integer (the `m.get("a")` addr=-7 fault). The inserter
+// passes the value's own param ordinal so only ITS managed-ness is consulted.
+// A primitive element (bit clear), a null layout, or a null value is a no-op.
+// Emitted late (post-DCE) → seeded as a runtime reachability root in BOTH link
+// legs, exactly like `mm_retain_type_param`.
+//
+// Slot usage:
+//   slot 0 = value (arg), slot 1 = layout descriptor (arg), slot 2 = ordinal (arg)
+func mm_retain_type_param_at 3 void
+  block entry:
+    v0 = std param 0 i64
+    v1 = std param 1 i64
+    v2 = std param 2 i64
+    v3 = std constI64 0
+    v4 = std cmpI64Eq v1 v3
+    std condBr v4 noop check_value
+  block check_value:
+    v5 = std constI64 0
+    v6 = std cmpI64Eq v0 v5
+    std condBr v6 noop do_check
+  block do_check:
+    v7 = std loadIndirect v1 24
+    v8 = std constI64 8
+    v9 = std addI64 v2 v8
+    v10 = std shrI64 v7 v9
+    v11 = std constI64 1
+    v12 = std andI64 v10 v11
+    v13 = std constI64 0
+    v14 = std cmpI64Eq v12 v13
+    std condBr v14 noop do_incref
+  block do_incref:
+    v15 = std call __mm_incref v0
+    v16 = std constI64 0
+    std ret v16
+  block noop:
+    v17 = std constI64 0
+    std ret v17
+end
 
-  block done:
-    v11 = std constI64 0
-    std ret v11
+// mm_drop_type_param_at(value, layout, ordinal): release a generic type-parameter
+// value through its PER-ARG heap-ref bit (`flags@24` bit `8 + ordinal`) — decref
+// when the concrete type-arg is heap-managed, no-op when raw. The drop-side dual
+// of `mm_retain_type_param_at`, replacing the old `sys.dropTypeParam` indirect
+// call through the aggregate descriptor's `destroyFunc`: that function destroys
+// the INSTANCE shape (e.g. `__layout_destroy_Map_String_Int` reads three struct
+// fields), so calling it on an ELEMENT only ever worked by coincidence for
+// single-managed-field-at-offset-0 layouts and faulted for everything else
+// (the String-keyed map findSlot key drop reading `[str+8]`=isAscii as a
+// pointer). Null layout / null value are no-ops (a zero-init'd slot's path).
+// Seeded as a runtime reachability root in BOTH link legs.
+//
+// Slot usage:
+//   slot 0 = value (arg), slot 1 = layout descriptor (arg), slot 2 = ordinal (arg)
+func mm_drop_type_param_at 3 void
+  block entry:
+    v0 = std param 0 i64
+    v1 = std param 1 i64
+    v2 = std param 2 i64
+    v3 = std constI64 0
+    v4 = std cmpI64Eq v1 v3
+    std condBr v4 noop check_value
+  block check_value:
+    v5 = std constI64 0
+    v6 = std cmpI64Eq v0 v5
+    std condBr v6 noop do_check
+  block do_check:
+    v7 = std loadIndirect v1 24
+    v8 = std constI64 8
+    v9 = std addI64 v2 v8
+    v10 = std shrI64 v7 v9
+    v11 = std constI64 1
+    v12 = std andI64 v10 v11
+    v13 = std constI64 0
+    v14 = std cmpI64Eq v12 v13
+    std condBr v14 noop do_decref
+  block do_decref:
+    v15 = std call __mm_decref v0
+    v16 = std constI64 0
+    std ret v16
+  block noop:
+    v17 = std constI64 0
+    std ret v17
+end
+
+// mm_drop(ptr): owner-drop of a never-escaped freshRc0 value — frees at rc==0,
+// else decrefs. The SSA insert-refcounts pass emits `mm_drop` at the last use of
+// a provably-local allocation. Wraps the stdlib `__mm_drop` (single source of
+// truth). Seeded as a runtime-reachability root in BOTH the cache-off
+// (`filterRuntimeByReachability`) and cache-on (`linkX64StdlibFunctionsConcat`)
+// link paths — exactly like `mm_decref` — so its `call __mm_drop` edge pulls the
+// stdlib body symmetrically and a no-managed-alloc program keeps cache parity.
+func mm_drop 1 void
+  block entry:
+    v0 = std param 0 i64
+    v1 = std call __mm_drop v0
+    v2 = std constI64 0
+    std ret v2
+end
+
+// mm_move_{return,container,phi}(ptr): trace-only marker for an ownership MOVE — a
+// value whose +1 transfers to a new owner with NO refcount op. The destination is
+// baked into WHICH wrapper is called (not a runtime `dest` operand): this avoids a
+// regalloc hazard where a `dest`-const ValueId, queued at a branch terminator next
+// to the phi-edge materialization, was scheduled AFTER the `mm_move` call and read
+// stale (the phi-move traced `-> return` instead of `-> phi`). Each wrapper passes a
+// CONSTANT dest to the stdlib `__mm_move_trace` (single source of truth — trace line
+// + null/untraced guards). 0=return, 1=container, 2=phi. Untraced bodies DCE to a
+// bare `ret`. All three are seeded as runtime-reachability roots in BOTH link legs.
+func mm_move_return 1 void
+  block entry:
+    v0 = std param 0 i64
+    v1 = std constI64 0
+    v2 = std call __mm_move_trace v0 v1
+    v3 = std constI64 0
+    std ret v3
+end
+
+func mm_move_container 1 void
+  block entry:
+    v0 = std param 0 i64
+    v1 = std constI64 1
+    v2 = std call __mm_move_trace v0 v1
+    v3 = std constI64 0
+    std ret v3
+end
+
+func mm_move_phi 1 void
+  block entry:
+    v0 = std param 0 i64
+    v1 = std constI64 2
+    v2 = std call __mm_move_trace v0 v1
+    v3 = std constI64 0
+    std ret v3
+end
+
+// mm_scope_push(name) / mm_scope_pop(): mm-trace scope STACK frame bracketing. Each
+// function pushes its name cstr on entry and pops before returning; trace lines read
+// the top frame, so an inlined callee's push/pop (inlined verbatim) restore the
+// caller's scope after the inlined region — `[scope]` correct at any inline depth.
+// Wrap the stdlib `__mm_scope_push`/`__mm_scope_pop` (single source of truth; bodies
+// DCE to nothing untraced). Seeded as runtime-reachability roots in BOTH link legs
+// like `mm_drop`/`mm_move`, so the `call __mm_scope_*` edges stay symmetric between
+// the cache-off and cache-on builds.
+func mm_scope_push 1 void
+  block entry:
+    v0 = std param 0 i64
+    v1 = std call __mm_scope_push v0
+    v2 = std constI64 0
+    std ret v2
+end
+
+func mm_scope_pop 0 void
+  block entry:
+    v0 = std call __mm_scope_pop
+    v1 = std constI64 0
+    std ret v1
 end
 
 // mm_free(ptr): release a tracked allocation. Internal — usually invoked
@@ -5737,58 +3585,15 @@ end
 //   slot 0 = ptr (arg)
 //   slot 1 = slot_base (= ptr - 24)
 //   slot 2 = destructor (read from [ptr - 24], 0 means "no destructor")
+// Delegates to the stdlib `__mm_free` (single source of truth — runs the
+// destructor, decrements __mm_alloc_count, slab-frees, and emits the
+// mm-trace `mm_free`/`sl_free` nesting). See `mm_incref`.
 func mm_free 1 void
   block entry:
     v0 = std param 0 i64
-    std storeSlot 0 v0
-
-    v1 = std constI64 0
-    v2 = std cmpI64Eq v0 v1
-    std condBr v2 null_path live_path
-
-  block null_path:
-    v3 = std constI64 0
-    std ret v3
-
-  block live_path:
-    // Load destructor from [ptr - 24]. Compute address explicitly because
-    // loadIndirect takes only unsigned offsets.
-    v11 = std loadSlot 0
-    v12 = std constI64 24
-    v13 = std subI64 v11 v12
-    v14 = std loadIndirect v13 0
-    std storeSlot 2 v14
-
-    // If destructor != 0, run it.
-    v15 = std loadSlot 2
-    v16 = std constI64 0
-    v17 = std cmpI64Eq v15 v16
-    std condBr v17 free_only do_destruct
-
-  block do_destruct:
-    // destructor(ptr) — reads managed fields out of the user region and
-    // decrefs them. Must run BEFORE slab_free so the user data is still
-    // intact when the destructor reads it.
-    v18 = std loadSlot 2
-    v19 = std loadSlot 0
-    v20 = std indirectCall v18 v19
-    std br free_only
-
-  block free_only:
-    // Atomic decrement __mm_alloc_count.
-    v4 = std globalAddr __mm_alloc_count
-    std atomicDec v4
-
-    // slot_base = ptr - 24
-    v5 = std loadSlot 0
-    v6 = std constI64 24
-    v7 = std subI64 v5 v6
-    std storeSlot 1 v7
-
-    v8 = std loadSlot 1
-    v9 = std call __slab_free v8
-    v10 = std constI64 0
-    std ret v10
+    v1 = std call __mm_free v0
+    v2 = std constI64 0
+    std ret v2
 end
 
 // mm_realloc(ptr, new_size) -> new_ptr: grow or shrink a tracked allocation.
@@ -5824,11 +3629,9 @@ func mm_realloc 2 i64
     std condBr v3 null_path live_path
 
   block null_path:
-    // ptr == 0 => behave as mm_alloc(new_size, 0, 0).
+    // ptr == 0 => behave as a fresh raw allocation the caller owns (rc=1).
     v4 = std loadSlot 1
-    v5 = std constI64 0
-    v6 = std constI64 0
-    v7 = std call mm_alloc v4 v5 v6
+    v7 = std call mrt_alloc v4
     std ret v7
 
   block live_path:
@@ -5847,13 +3650,19 @@ func mm_realloc 2 i64
     v15 = std loadIndirect v14 0
     std storeSlot 3 v15
 
-    // new_ptr = mm_alloc(new_size, destructor, 0). This refreshes the
+    // new_ptr = __mm_alloc(new_size, destructor, 0). This refreshes the
     // destructor on the new buffer so a subsequent mm_decref still has it.
+    // alloc-at-0: the new buffer INHERITS the old object's reference (realloc
+    // identity), so incref to rc=1 — the old buffer is slab-freed below without
+    // a matching decref, so its +1 transfers here.
     v16 = std loadSlot 1
     v17 = std loadSlot 3
-    v18 = std constI64 0
-    v19 = std call mm_alloc v16 v17 v18
+    // tag = MM_TAG_RAW (1): a realloc'd raw element buffer. Non-zero so the strict
+    // mm-trace null-tag panic is not tripped (the buffer carries no element type).
+    v18 = std constI64 1
+    v19 = std call __mm_alloc v16 v17 v18
     std storeSlot 4 v19
+    v35 = std call __mm_incref v19
 
     // copy_size = min(old_size, new_size)
     v20 = std loadSlot 2
@@ -5878,10 +3687,25 @@ func mm_realloc 2 i64
     v27 = std loadSlot 5
     std memcpy v25 v26 v27
 
+    // Zero the GROWN tail [copy_size, new_size). The new buffer came from
+    // __mm_alloc (uninitialized slab bytes); memcpy only filled [0, copy_size).
+    // A container that grows its buffer and fills it SPARSELY (a Map/Set hash
+    // table) leaves the tail slots holding garbage, which its element-walk would
+    // decref as live pointers → fault. Zeroing the tail makes unoccupied slots
+    // read null so the walk skips them (matches C# `mm_raw_realloc`, whose new
+    // buffer is zero-filled by `mm_raw_alloc` before the copy).
+    v40 = std loadSlot 4
+    v41 = std loadSlot 5
+    v42 = std addI64 v40 v41
+    v43 = std loadSlot 1
+    v44 = std subI64 v43 v41
+    std call mrt_memzero v42 v44
+
     // Slab-free the old buffer directly (bypassing mm_free): the new buffer
     // has taken ownership of the contents, so the destructor must NOT run.
+    // slot_base = old_ptr - 32 (32-byte header).
     v28 = std loadSlot 0
-    v29 = std constI64 24
+    v29 = std constI64 32
     v30 = std subI64 v28 v29
     std storeSlot 6 v30
     v31 = std loadSlot 6
@@ -5895,101 +3719,6 @@ func mm_realloc 2 i64
 
     v34 = std loadSlot 4
     std ret v34
-end
-
-// Step 6b.3: __destruct___ManagedMemory(self) — destructor for a
-// `__ManagedMemory` instance. Runs (will run, once indirect-call lands on
-// the StdParser side and `mm_decref` is wired to dispatch on the destructor
-// slot stored in the MM header) when `mm_decref` drops a __ManagedMemory's
-// refcount to zero. Until indirect-call is exposed (TODO 6a.18+), the
-// lowering pass for `__ManagedMemory` (step 6b.4) will need to either call
-// this function directly at the appropriate point or substitute equivalent
-// inlined teardown — both paths are valid because the destructor only ever
-// runs against `__ManagedMemory` instances.
-//
-// Inspects `parent_ptr` (offset 32 in the 5-field 40-byte struct) to decide
-// what to free:
-//   parent_ptr == -1:  this is a root __ManagedMemory; drop its buffer via
-//                      mm_decref.
-//   parent_ptr == -2:  this is rdata-backed; the buffer is in the static
-//                      .rdata section and must NOT be freed.
-//   parent_ptr == 0:   uninitialized (e.g. a freshly slab-allocated header
-//                      that was never populated); nothing to free.
-//   otherwise:         this is a slice view; mm_decref the parent so the
-//                      parent's refcount drops by one.
-//
-// The function takes `self` as a tracked pointer (i.e. ptr == user_ptr,
-// already past the 24-byte mm_alloc header). All field offsets are relative
-// to that pointer — `loadIndirect self 0` returns the buffer pointer,
-// `loadIndirect self 32` returns parent_ptr, etc.
-//
-// Returns i64 (always 0) rather than void: the call site uses `indirectCall`
-// (mm_free reads the destructor pointer out of the allocation header), and
-// the wasm backend's `call_indirect` requires the static call-site type to
-// match the target function's signature exactly. Matching the IR
-// `indirectCall` op's "always defines a result value" shape on the
-// destructor side keeps the wasm signature uniform across every callable
-// destructor and avoids a per-target void-indirect-call codepath. The
-// returned 0 is silently discarded by the X64/Arm64 backends and stored
-// into a never-read SSA value by the wasm backend.
-//
-// Slot usage:
-//   slot 0 = self     (arg)
-//   slot 1 = parent   (loaded from self+32)
-func __destruct___ManagedMemory 1 i64
-  block entry:
-    v0 = std param 0 i64
-    std storeSlot 0 v0
-
-    // parent = self.parent_ptr (offset 32)
-    v1 = std loadSlot 0
-    v2 = std loadIndirect v1 32
-    std storeSlot 1 v2
-
-    // if parent == -1 -> free_buffer
-    v3 = std loadSlot 1
-    v4 = std constI64 -1
-    v5 = std cmpI64Eq v3 v4
-    std condBr v5 free_buffer check_rdata
-
-  block check_rdata:
-    // if parent == -2 -> done (rdata-backed; do nothing)
-    v6 = std loadSlot 1
-    v7 = std constI64 -2
-    v8 = std cmpI64Eq v6 v7
-    std condBr v8 done check_uninit
-
-  block check_uninit:
-    // if parent == 0 -> done (uninitialized; nothing to free)
-    v9 = std loadSlot 1
-    v10 = std constI64 0
-    v11 = std cmpI64Eq v9 v10
-    std condBr v11 done decref_parent
-
-  block free_buffer:
-    // Buffer pointer at offset 0. Drop our ref via mm_decref if non-null;
-    // mm_decref dereferences [ptr-8] without a null check, so guard.
-    v12 = std loadSlot 0
-    v13 = std loadIndirect v12 0
-    v14 = std constI64 0
-    v15 = std cmpI64Eq v13 v14
-    std condBr v15 done do_free_buffer
-
-  block do_free_buffer:
-    v16 = std loadSlot 0
-    v17 = std loadIndirect v16 0
-    v18 = std call mm_decref v17
-    std br done
-
-  block decref_parent:
-    // Slice view: drop one ref on the parent __ManagedMemory.
-    v19 = std loadSlot 1
-    v20 = std call mm_decref v19
-    std br done
-
-  block done:
-    v21 = std constI64 0
-    std ret v21
 end
 
 // __destruct___ManagedFile(self): destructor for a refcounted __ManagedFile
@@ -6027,9 +3756,10 @@ end
 //
 // The lowering calls this unconditionally on every open, including the
 // error path where the open returned the -1 sentinel. An invalid fd
-// (negative) is passed straight through WITHOUT allocating, so a failed
-// open does not leak a handle — the caller's `try ... otherwise` diverts
-// before the sentinel is ever bound to a drop-tracked slot.
+// (negative) returns NULL (0) without allocating, so a failed open does
+// not leak a handle — and the caller-side error-edge release the
+// `callReturnRc1` classification plans is a null-guarded no-op (a
+// negative-fd passthrough would feed the decref a non-pointer scalar).
 //
 // Slot usage:
 //   slot 0 = fd
@@ -6038,21 +3768,24 @@ func __managed_file_wrap 1 i64
   block entry:
     v0 = std param 0 i64
     std storeSlot 0 v0
-    // Pass an invalid (negative) fd straight through — no allocation.
+    // Invalid (negative) fd → return null, no allocation.
     v8 = std constI64 0
     v9 = std cmpI64Lt v0 v8
     std condBr v9 invalid do_wrap
 
   block invalid:
-    v10 = std loadSlot 0
+    v10 = std constI64 0
     std ret v10
 
   block do_wrap:
     v1 = std constI64 8
     v2 = std funcAddr __destruct___ManagedFile
-    v3 = std constI64 0
-    v4 = std call mm_alloc v1 v2 v3
+    // tag = MM_TAG_RAW (1): a fixed-size handle wrapper, no element type to name.
+    v3 = std constI64 1
+    v4 = std call __mm_alloc v1 v2 v3
     std storeSlot 1 v4
+    // alloc-at-0: the returned __ManagedFile is an owned ref — incref to rc=1.
+    v8 = std call __mm_incref v4
     v5 = std loadSlot 1
     v6 = std loadSlot 0
     std storeIndirect v5 0 v6
@@ -6060,15 +3793,20 @@ func __managed_file_wrap 1 i64
     std ret v7
 end
 
-// mrt_decref_if_nonnull(ptr): mm_decref the pointer when it is non-null.
-// mm_decref dereferences [ptr-8] without a null check, so this guard makes
-// it safe to call on a slot that may still hold the zero-initialized
-// sentinel (an unassigned managed local, or a moved-out handle). Reused by
-// the scope-exit drop lowering and the synthesized struct destructors.
+// __mm_decref_maybenull_helper(ptr): the ONLY null-tolerant decref entry. Tolerates
+// EXACTLY null (ptr == 0) — a value that is statically maybe-null at its release
+// site (an `incomingOwner`/`selfReturnBorrow` value on a path that may not have
+// stored, or a field-reassign old-occupant that may be unset) — and routes every
+// non-null pointer through STRICT `mm_decref`. It does NOT tolerate arbitrary
+// low/misrouted scalars: only exact 0 short-circuits, so a misrouted index/length
+// still faults inside `__mm_decref` (the bug surfaces loudly instead of hiding).
+// Emitted by the inserter only at the statically-maybe-null release classes and
+// by the synthesized struct/field destructors; provably-live releases call
+// strict `mm_decref` directly.
 //
 // Slot usage:
 //   slot 0 = ptr
-func mrt_decref_if_nonnull 1 i64
+func __mm_decref_maybenull_helper 1 i64
   block entry:
     v0 = std param 0 i64
     std storeSlot 0 v0
@@ -6121,945 +3859,6 @@ end
 //   offset 24 element_size i64 (sizeof(Element); 1 for Byte, 8 otherwise)
 //   offset 32 parent_ptr   i64 (-1 root; -2 rdata-backed; otherwise parent ptr)
 // =============================================================================
-
-// __managed_mem_set_length(self, n) -> 0 (sets error invalidLength=3, wire 4
-// on n > capacity)
-//
-// Slot usage:
-//   slot 0 = self (arg)
-//   slot 1 = n    (arg)
-func __managed_mem_set_length 2 i64
-  block entry:
-    v0 = std param 0 i64
-    std storeSlot 0 v0
-    v1 = std param 1 i64
-    std storeSlot 1 v1
-
-    // capacity = self[16]
-    v2 = std loadIndirect v0 16
-    // if n <= capacity -> ok, else -> err
-    v3 = std cmpI64Le v1 v2
-    std condBr v3 ok err
-
-  block err:
-    v4 = std constI64 4
-    v5 = std constI64 0
-    std errorReturn v5 v4
-
-  block ok:
-    v7 = std loadSlot 0
-    v8 = std loadSlot 1
-    std storeIndirect v7 8 v8
-    v9 = std constI64 0
-    v10 = std constI64 0
-    std errorReturn v9 v10
-end
-
-// __managed_mem_get(self, idx) -> value (sets error indexOutOfBounds=0,
-// wire 1, on out-of-bounds)
-//
-// Slot usage:
-//   slot 0 = self (arg)
-//   slot 1 = idx  (arg)
-func __managed_mem_get 2 i64
-  block entry:
-    v0 = std param 0 i64
-    std storeSlot 0 v0
-    v1 = std param 1 i64
-    std storeSlot 1 v1
-
-    // length = self[8]
-    v2 = std loadIndirect v0 8
-    // if idx < 0 -> err
-    v3 = std constI64 0
-    v4 = std cmpI64Lt v1 v3
-    std condBr v4 err lo_ok
-
-  block lo_ok:
-    // if idx < length -> ok, else -> err
-    v5 = std loadSlot 1
-    v6 = std loadSlot 0
-    v7 = std loadIndirect v6 8
-    v8 = std cmpI64Lt v5 v7
-    std condBr v8 ok err
-
-  block err:
-    v9 = std constI64 1
-    v10 = std constI64 0
-    std errorReturn v10 v9
-
-  block ok:
-    // elemSize = self[24]; buffer = self[0]; addr = buffer + idx * elemSize
-    v12 = std loadSlot 0
-    v13 = std loadIndirect v12 24
-    v14 = std loadSlot 1
-    v15 = std mulI64 v14 v13
-    v16 = std loadSlot 0
-    v17 = std loadIndirect v16 0
-    v18 = std addI64 v17 v15
-    // if elemSize == 1 -> byte path
-    v19 = std constI64 1
-    v20 = std cmpI64Eq v13 v19
-    std condBr v20 byte_path word_path
-
-  block byte_path:
-    v21 = std constI64 0
-    v22 = std loadByte v18 v21
-    v100 = std constI64 0
-    std errorReturn v22 v100
-
-  block word_path:
-    v23 = std loadIndirect v18 0
-    v101 = std constI64 0
-    std errorReturn v23 v101
-end
-
-// __managed_mem_set(self, idx, value) -> 0 (sets error indexOutOfBounds=0,
-// wire 1, on out-of-bounds)
-//
-// Slot usage:
-//   slot 0 = self  (arg)
-//   slot 1 = idx   (arg)
-//   slot 2 = value (arg)
-func __managed_mem_set 3 i64
-  block entry:
-    v0 = std param 0 i64
-    std storeSlot 0 v0
-    v1 = std param 1 i64
-    std storeSlot 1 v1
-    v2 = std param 2 i64
-    std storeSlot 2 v2
-
-    // if idx < 0 -> err
-    v3 = std constI64 0
-    v4 = std cmpI64Lt v1 v3
-    std condBr v4 err lo_ok
-
-  block lo_ok:
-    // if idx < capacity -> ok else -> err. set() bounds-checks against
-    // capacity, NOT length, so push()'s "set then setLength" sequence is
-    // valid: push reserves capacity for len+1, writes the new element at
-    // slot `len` (which is < capacity but == length), then bumps length.
-    // Matches C# bootstrap semantics in `LowerManagedMemSet`.
-    //
-    // For rdata-backed buffers capacity == -2, so any non-negative idx
-    // fails this check. Treat capacity < 0 as "needs COW first" and
-    // re-bounds-check against the post-COW capacity (= length).
-    v5 = std loadSlot 0
-    v6 = std loadIndirect v5 16
-    v200 = std constI64 0
-    v201 = std cmpI64Lt v6 v200
-    std condBr v201 cow capCheck
-
-  block capCheck:
-    v7 = std loadSlot 1
-    v8 = std cmpI64Lt v7 v6
-    std condBr v8 ok err
-
-  block err:
-    v9 = std constI64 1
-    v10 = std constI64 0
-    std errorReturn v10 v9
-
-  block cow:
-    v202 = std loadSlot 0
-    v203 = std call __managed_mem_cow_check v202
-    // Re-load capacity (now == length). idx < capacity is the same as
-    // idx < length; rdata-backed buffers don't have spare capacity for
-    // out-of-length writes.
-    v204 = std loadSlot 0
-    v205 = std loadIndirect v204 16
-    v206 = std loadSlot 1
-    v207 = std cmpI64Lt v206 v205
-    std condBr v207 ok err
-
-  block ok:
-    // elemSize = self[24]; buffer = self[0]; addr = buffer + idx * elemSize
-    v12 = std loadSlot 0
-    v13 = std loadIndirect v12 24
-    v14 = std loadSlot 1
-    v15 = std mulI64 v14 v13
-    v16 = std loadSlot 0
-    v17 = std loadIndirect v16 0
-    v18 = std addI64 v17 v15
-    // if elemSize == 1 -> byte path
-    v19 = std constI64 1
-    v20 = std cmpI64Eq v13 v19
-    std condBr v20 byte_path word_path
-
-  block byte_path:
-    v21 = std constI64 0
-    v22 = std loadSlot 2
-    std storeByte v18 v21 v22
-    v23 = std constI64 0
-    v100 = std constI64 0
-    std errorReturn v23 v100
-
-  block word_path:
-    v24 = std loadSlot 2
-    std storeIndirect v18 0 v24
-    v25 = std constI64 0
-    v101 = std constI64 0
-    std errorReturn v25 v101
-end
-
-// __managed_mem_cow_check(self) -> 0 (no error path)
-// Buffer-level Copy-On-Write. If the receiver's capacity is >= 0 the
-// buffer is already mm_alloc-owned and writable — no-op. If capacity < 0
-// (rdata = -2 or slice = -1) the buffer is shared / read-only; allocate a
-// fresh mm_alloc buffer of length*elemSize bytes, memcpy the old bytes
-// in, store the fresh buffer back into self, and update capacity to
-// length so subsequent capacity bounds checks work normally.
-//
-// Slot usage:
-//   slot 0 = self      (arg)
-//   slot 1 = capacity  (cached)
-//   slot 2 = length
-//   slot 3 = elemSize
-//   slot 4 = byteLen   (length * elemSize)
-//   slot 5 = newBuf
-//   slot 6 = oldBuf
-func __managed_mem_cow_check 1 i64
-  block entry:
-    v0 = std param 0 i64
-    std storeSlot 0 v0
-
-    // If capacity >= 0, buffer is owned — return.
-    v1 = std loadIndirect v0 16
-    std storeSlot 1 v1
-    v2 = std constI64 0
-    v3 = std cmpI64Lt v1 v2
-    std condBr v3 doCopy noCopy
-
-  block noCopy:
-    v100 = std constI64 0
-    std ret v100
-
-  block doCopy:
-    // length, elemSize, byteLen
-    v4 = std loadIndirect v0 8
-    std storeSlot 2 v4
-    v5 = std loadIndirect v0 24
-    std storeSlot 3 v5
-    v6 = std mulI64 v4 v5
-    std storeSlot 4 v6
-
-    // mm_alloc(byteLen, destructor=0, tag=0) — destructor isn't needed
-    // because the buffer is a raw byte allocation (no nested heap refs).
-    // For empty buffers (byteLen == 0) mm_alloc clamps to size 1.
-    v7 = std loadSlot 4
-    v8 = std constI64 0
-    v9 = std constI64 0
-    v10 = std call mm_alloc v7 v8 v9
-    std storeSlot 5 v10
-
-    // Save oldBuf BEFORE we mutate self.buffer.
-    v11 = std loadIndirect v0 0
-    std storeSlot 6 v11
-
-    // memcpy(newBuf, oldBuf, byteLen) — std memcpy handles byteLen==0
-    // safely (ABI requires it to be a no-op on zero count).
-    v12 = std loadSlot 5
-    v13 = std loadSlot 6
-    v14 = std loadSlot 4
-    std memcpy v12 v13 v14
-
-    // self.buffer = newBuf
-    v15 = std loadSlot 5
-    std storeIndirect v0 0 v15
-    // self.capacity = length (we allocated exactly length slots; subsequent
-    // grow() calls will realloc as needed)
-    v16 = std loadSlot 2
-    std storeIndirect v0 16 v16
-    // Old rdata/slice buffer is intentionally NOT freed: rdata lives in
-    // the binary's read-only section; slice buffers are owned by their
-    // parent struct (whose refcount tracks lifetime).
-
-    v17 = std constI64 0
-    std ret v17
-end
-
-// __managed_mem_grow(self, newCap) -> 0 (sets error invalidCapacity=4,
-// wire 5, on newCap < capacity)
-//
-// COW-aware: if the receiver's capacity is < 0 (rdata-backed = -2 or
-// slice-backed = -1), call __managed_mem_cow_check to materialize a
-// private writable buffer first; that promotes capacity to length, after
-// which the standard "newCap < capacity" check and mm_realloc path apply.
-//
-// Slot usage:
-//   slot 0 = self    (arg)
-//   slot 1 = newCap  (arg)
-//   slot 2 = newBuf  (mm_realloc result)
-func __managed_mem_grow 2 i64
-  block entry:
-    v0 = std param 0 i64
-    std storeSlot 0 v0
-    v1 = std param 1 i64
-    std storeSlot 1 v1
-
-    // Promote any rdata/slice buffer to a private heap buffer. No-op
-    // when capacity >= 0.
-    v100 = std loadSlot 0
-    v101 = std call __managed_mem_cow_check v100
-
-    // if newCap < capacity -> err (now meaningful on the post-COW capacity)
-    v2 = std loadIndirect v0 16
-    v3 = std cmpI64Lt v1 v2
-    std condBr v3 err ok
-
-  block err:
-    v4 = std constI64 5
-    v5 = std constI64 0
-    std errorReturn v5 v4
-
-  block ok:
-    // newSize = newCap * elemSize
-    v7 = std loadSlot 0
-    v8 = std loadIndirect v7 24
-    v9 = std loadSlot 1
-    v10 = std mulI64 v9 v8
-    // newBuf = mm_realloc(self.buffer, newSize)
-    v11 = std loadSlot 0
-    v12 = std loadIndirect v11 0
-    v13 = std call mm_realloc v12 v10
-    std storeSlot 2 v13
-    // self.buffer = newBuf; self.capacity = newCap
-    v14 = std loadSlot 0
-    v15 = std loadSlot 2
-    std storeIndirect v14 0 v15
-    v16 = std loadSlot 0
-    v17 = std loadSlot 1
-    std storeIndirect v16 16 v17
-    v18 = std constI64 0
-    v19 = std constI64 0
-    std errorReturn v18 v19
-end
-
-// __managed_mem_byte_at(self, i) -> byte (sets error invalidByteRange=6,
-// wire 7, on out-of-bounds)
-// Bound: i < length * element_size.
-//
-// Slot usage:
-//   slot 0 = self (arg)
-//   slot 1 = i    (arg)
-func __managed_mem_byte_at 2 i64
-  block entry:
-    v0 = std param 0 i64
-    std storeSlot 0 v0
-    v1 = std param 1 i64
-    std storeSlot 1 v1
-
-    // if i < 0 -> err
-    v2 = std constI64 0
-    v3 = std cmpI64Lt v1 v2
-    std condBr v3 err lo_ok
-
-  block lo_ok:
-    // limit = length * element_size
-    v4 = std loadIndirect v0 8
-    v5 = std loadIndirect v0 24
-    v6 = std mulI64 v4 v5
-    // if i < limit -> ok else -> err
-    v7 = std loadSlot 1
-    v8 = std cmpI64Lt v7 v6
-    std condBr v8 ok err
-
-  block err:
-    v9 = std constI64 7
-    v10 = std constI64 0
-    std errorReturn v10 v9
-
-  block ok:
-    v12 = std loadSlot 0
-    v13 = std loadIndirect v12 0
-    v14 = std loadSlot 1
-    v15 = std loadByte v13 v14
-    v16 = std constI64 0
-    std errorReturn v15 v16
-end
-
-// __managed_mem_set_byte(self, i, value) -> 0 (sets error invalidByteRange=6,
-// wire 7, on OOB)
-//
-// Slot usage:
-//   slot 0 = self  (arg)
-//   slot 1 = i     (arg)
-//   slot 2 = value (arg)
-func __managed_mem_set_byte 3 i64
-  block entry:
-    v0 = std param 0 i64
-    std storeSlot 0 v0
-    v1 = std param 1 i64
-    std storeSlot 1 v1
-    v2 = std param 2 i64
-    std storeSlot 2 v2
-
-    // if i < 0 -> err
-    v3 = std constI64 0
-    v4 = std cmpI64Lt v1 v3
-    std condBr v4 err lo_ok
-
-  block lo_ok:
-    v5 = std loadIndirect v0 8
-    v6 = std loadIndirect v0 24
-    v7 = std mulI64 v5 v6
-    v8 = std loadSlot 1
-    v9 = std cmpI64Lt v8 v7
-    std condBr v9 cow err
-
-  block err:
-    v10 = std constI64 7
-    v11 = std constI64 0
-    std errorReturn v11 v10
-
-  block cow:
-    // Buffer-level COW: if self is rdata- or slice-backed, allocate a
-    // private copy and switch self.buffer over before writing. No-op when
-    // capacity >= 0.
-    v100 = std loadSlot 0
-    v101 = std call __managed_mem_cow_check v100
-    std br ok
-
-  block ok:
-    v13 = std loadSlot 0
-    v14 = std loadIndirect v13 0
-    v15 = std loadSlot 1
-    v16 = std loadSlot 2
-    std storeByte v14 v15 v16
-    v17 = std constI64 0
-    v18 = std constI64 0
-    std errorReturn v17 v18
-end
-
-// __managed_mem_remove(self, idx) -> value (sets error indexOutOfBounds=0,
-// wire 1, on OOB).
-// Loads the element at idx, shifts the tail left by one element via a
-// byte-by-byte ascending copy (overlap-safe for left-shift), decrements
-// length by one, and returns the loaded value.
-//
-// Slot usage:
-//   slot 0 = self      (arg)
-//   slot 1 = idx       (arg)
-//   slot 2 = result    (loaded element)
-//   slot 3 = elemSize
-//   slot 4 = buffer
-//   slot 5 = length
-//   slot 6 = i         (byte loop counter, in source bytes)
-//   slot 7 = endByte   (length * elemSize)
-func __managed_mem_remove 2 i64
-  block entry:
-    v0 = std param 0 i64
-    std storeSlot 0 v0
-    v1 = std param 1 i64
-    std storeSlot 1 v1
-
-    // if idx < 0 -> err
-    v2 = std constI64 0
-    v3 = std cmpI64Lt v1 v2
-    std condBr v3 err lo_ok
-
-  block lo_ok:
-    v4 = std loadIndirect v0 8
-    std storeSlot 5 v4
-    // if idx < length -> ok else -> err
-    v5 = std loadSlot 1
-    v6 = std loadSlot 5
-    v7 = std cmpI64Lt v5 v6
-    std condBr v7 ok err
-
-  block err:
-    v8 = std constI64 1
-    v9 = std constI64 0
-    std errorReturn v9 v8
-
-  block ok:
-    v11 = std loadSlot 0
-    v12 = std loadIndirect v11 24
-    std storeSlot 3 v12
-    v13 = std loadIndirect v11 0
-    std storeSlot 4 v13
-    // result = element at idx (mirror __managed_mem_get word/byte split)
-    v14 = std loadSlot 1
-    v15 = std mulI64 v14 v12
-    v16 = std addI64 v13 v15
-    v17 = std constI64 1
-    v18 = std cmpI64Eq v12 v17
-    std condBr v18 read_byte read_word
-
-  block read_byte:
-    v19 = std constI64 0
-    v20 = std loadByte v16 v19
-    std storeSlot 2 v20
-    std br shift_setup
-
-  block read_word:
-    v21 = std loadIndirect v16 0
-    std storeSlot 2 v21
-    std br shift_setup
-
-  block shift_setup:
-    // Initialize byte-loop: i = (idx + 1) * elemSize  (source start)
-    // endByte = length * elemSize
-    v22 = std loadSlot 1
-    v23 = std constI64 1
-    v24 = std addI64 v22 v23
-    v25 = std loadSlot 3
-    v26 = std mulI64 v24 v25
-    std storeSlot 6 v26
-    v27 = std loadSlot 5
-    v28 = std mulI64 v27 v25
-    std storeSlot 7 v28
-    std br shift_loop
-
-  block shift_loop:
-    // while i < endByte: buffer[i - elemSize] = buffer[i]; i = i + 1
-    v29 = std loadSlot 6
-    v30 = std loadSlot 7
-    v31 = std cmpI64Lt v29 v30
-    std condBr v31 shift_body shift_end
-
-  block shift_body:
-    v32 = std loadSlot 4
-    v33 = std loadSlot 6
-    v34 = std loadByte v32 v33
-    v35 = std loadSlot 3
-    v36 = std subI64 v33 v35
-    std storeByte v32 v36 v34
-    v37 = std constI64 1
-    v38 = std addI64 v33 v37
-    std storeSlot 6 v38
-    std br shift_loop
-
-  block shift_end:
-    // length = length - 1
-    v39 = std loadSlot 5
-    v40 = std constI64 1
-    v41 = std subI64 v39 v40
-    v42 = std loadSlot 0
-    std storeIndirect v42 8 v41
-    v43 = std loadSlot 2
-    v44 = std constI64 0
-    std errorReturn v43 v44
-end
-
-// __managed_mem_shift_right(self, idx, count) -> 0 (sets error
-// shiftOutOfBounds=5, wire 6, on OOB).
-// Shifts `count` elements starting at position `idx` to the right by one
-// element (so element at idx ends up at idx+1, ..., idx+count-1 ends up at
-// idx+count). Bounds check: idx + count <= capacity (no underflow guard
-// needed because both inputs are user-supplied i64 — negative inputs trip
-// the same check via signed comparison).
-//
-// Implements via descending byte-loop so source/dest overlap is safe.
-//
-// Slot usage:
-//   slot 0 = self     (arg)
-//   slot 1 = idx      (arg)
-//   slot 2 = count    (arg)
-//   slot 3 = elemSize
-//   slot 4 = buffer
-//   slot 5 = i        (byte loop counter, in source bytes; descends)
-//   slot 6 = startByte (idx * elemSize, loop terminator)
-func __managed_mem_shift_right 3 i64
-  block entry:
-    v0 = std param 0 i64
-    std storeSlot 0 v0
-    v1 = std param 1 i64
-    std storeSlot 1 v1
-    v2 = std param 2 i64
-    std storeSlot 2 v2
-
-    // if idx < 0 or count < 0 -> err
-    v3 = std constI64 0
-    v4 = std cmpI64Lt v1 v3
-    std condBr v4 err idx_ok
-
-  block idx_ok:
-    v5 = std cmpI64Lt v2 v3
-    std condBr v5 err count_ok
-
-  block count_ok:
-    // end = idx + count; if end > capacity -> err
-    v6 = std addI64 v1 v2
-    v7 = std loadIndirect v0 16
-    v8 = std cmpI64Gt v6 v7
-    std condBr v8 err ok
-
-  block err:
-    v9 = std constI64 6
-    v10 = std constI64 0
-    std errorReturn v10 v9
-
-  block ok:
-    v12 = std loadIndirect v0 24
-    std storeSlot 3 v12
-    v13 = std loadIndirect v0 0
-    std storeSlot 4 v13
-    // sourceLastByte = (idx + count) * elemSize - 1
-    // i starts there and descends down to startByte = idx * elemSize.
-    v14 = std loadSlot 1
-    v15 = std loadSlot 2
-    v16 = std addI64 v14 v15
-    v17 = std mulI64 v16 v12
-    v18 = std constI64 1
-    v19 = std subI64 v17 v18
-    std storeSlot 5 v19
-    v20 = std mulI64 v14 v12
-    std storeSlot 6 v20
-    std br loop_head
-
-  block loop_head:
-    // while i >= startByte: buffer[i + elemSize] = buffer[i]; i = i - 1
-    v21 = std loadSlot 5
-    v22 = std loadSlot 6
-    v23 = std cmpI64Ge v21 v22
-    std condBr v23 loop_body loop_end
-
-  block loop_body:
-    v24 = std loadSlot 4
-    v25 = std loadSlot 5
-    v26 = std loadByte v24 v25
-    v27 = std loadSlot 3
-    v28 = std addI64 v25 v27
-    std storeByte v24 v28 v26
-    v29 = std constI64 1
-    v30 = std subI64 v25 v29
-    std storeSlot 5 v30
-    std br loop_head
-
-  block loop_end:
-    v31 = std constI64 0
-    v32 = std constI64 0
-    std errorReturn v31 v32
-end
-
-// __managed_mem_shift_left(self, idx, count) -> 0 (sets error
-// shiftOutOfBounds=5, wire 6, on OOB).
-// Shifts `count` elements starting at position `idx` to the left by one
-// element (so element at idx ends up at idx-1, ..., idx+count-1 ends up at
-// idx+count-2). Bounds checks: idx >= 1 (so idx-1 is valid),
-// idx + count <= capacity.
-//
-// Implements via ascending byte-loop so source/dest overlap is safe.
-//
-// Slot usage:
-//   slot 0 = self     (arg)
-//   slot 1 = idx      (arg)
-//   slot 2 = count    (arg)
-//   slot 3 = elemSize
-//   slot 4 = buffer
-//   slot 5 = i        (byte loop counter, in source bytes; ascends)
-//   slot 6 = endByte  ((idx + count) * elemSize, loop terminator)
-func __managed_mem_shift_left 3 i64
-  block entry:
-    v0 = std param 0 i64
-    std storeSlot 0 v0
-    v1 = std param 1 i64
-    std storeSlot 1 v1
-    v2 = std param 2 i64
-    std storeSlot 2 v2
-
-    // if idx < 1 or count < 0 -> err
-    v3 = std constI64 1
-    v4 = std cmpI64Lt v1 v3
-    std condBr v4 err count_check
-
-  block count_check:
-    v5 = std constI64 0
-    v6 = std cmpI64Lt v2 v5
-    std condBr v6 err range_check
-
-  block range_check:
-    v7 = std addI64 v1 v2
-    v8 = std loadIndirect v0 16
-    v9 = std cmpI64Gt v7 v8
-    std condBr v9 err ok
-
-  block err:
-    v10 = std constI64 6
-    v11 = std constI64 0
-    std errorReturn v11 v10
-
-  block ok:
-    v13 = std loadIndirect v0 24
-    std storeSlot 3 v13
-    v14 = std loadIndirect v0 0
-    std storeSlot 4 v14
-    // i = idx * elemSize
-    // endByte = (idx + count) * elemSize
-    v15 = std mulI64 v1 v13
-    std storeSlot 5 v15
-    v16 = std addI64 v1 v2
-    v17 = std mulI64 v16 v13
-    std storeSlot 6 v17
-    std br loop_head
-
-  block loop_head:
-    v18 = std loadSlot 5
-    v19 = std loadSlot 6
-    v20 = std cmpI64Lt v18 v19
-    std condBr v20 loop_body loop_end
-
-  block loop_body:
-    v21 = std loadSlot 4
-    v22 = std loadSlot 5
-    v23 = std loadByte v21 v22
-    v24 = std loadSlot 3
-    v25 = std subI64 v22 v24
-    std storeByte v21 v25 v23
-    v26 = std constI64 1
-    v27 = std addI64 v22 v26
-    std storeSlot 5 v27
-    std br loop_head
-
-  block loop_end:
-    v28 = std constI64 0
-    v29 = std constI64 0
-    std errorReturn v28 v29
-end
-
-// __managed_mem_append(self, other) -> 0 (always succeeds).
-// Grows self if needed so capacity >= self.length + other.length, then
-// memcpy's other.buffer's first (other.length * elemSize) bytes onto the
-// end of self.buffer at offset (self.length * elemSize). Increments
-// self.length by other.length.
-//
-// Element-size compatibility is the caller's responsibility — we use
-// self.element_size for the byte arithmetic on both sides (as the bootstrap
-// does via the per-method ConcreteTypeName check at parse time).
-//
-// Slot usage:
-//   slot 0 = self      (arg)
-//   slot 1 = other     (arg)
-//   slot 2 = newLength (self.length + other.length)
-//   slot 3 = elemSize
-//   slot 4 = otherLen
-func __managed_mem_append 2 i64
-  block entry:
-    v0 = std param 0 i64
-    std storeSlot 0 v0
-    v1 = std param 1 i64
-    std storeSlot 1 v1
-
-    // newLength = self.length + other.length
-    v2 = std loadIndirect v0 8
-    v3 = std loadIndirect v1 8
-    std storeSlot 4 v3
-    v4 = std addI64 v2 v3
-    std storeSlot 2 v4
-
-    // Grow if capacity < newLength
-    v5 = std loadIndirect v0 16
-    v6 = std cmpI64Lt v5 v4
-    std condBr v6 do_grow do_copy
-
-  block do_grow:
-    // grow(self, newLength) — never errors here (newLength >= capacity)
-    v7 = std loadSlot 0
-    v8 = std loadSlot 2
-    v9 = std call __managed_mem_grow v7 v8
-    std br do_copy
-
-  block do_copy:
-    // dst = self.buffer + self.length * elemSize
-    // src = other.buffer
-    // n   = other.length * elemSize
-    v10 = std loadSlot 0
-    v11 = std loadIndirect v10 24
-    std storeSlot 3 v11
-    v12 = std loadIndirect v10 0
-    v13 = std loadIndirect v10 8
-    v14 = std mulI64 v13 v11
-    v15 = std addI64 v12 v14
-    v16 = std loadSlot 1
-    v17 = std loadIndirect v16 0
-    v18 = std loadSlot 4
-    v19 = std mulI64 v18 v11
-    std memcpy v15 v17 v19
-
-    // self.length = newLength
-    v20 = std loadSlot 0
-    v21 = std loadSlot 2
-    std storeIndirect v20 8 v21
-    v22 = std constI64 0
-    std ret v22
-end
-
-// __managed_mem_slice(self, start, end) -> newPtr (sets error
-// sliceOutOfBounds=2, wire 3, on OOB).
-// Allocates a fresh root __ManagedMemory header (mm_alloc'd, with the same
-// destructor as the source) plus a fresh buffer (mm_alloc'd, untagged) sized for
-// (end - start) elements. Copies the slice's bytes from the source buffer
-// into the new buffer. The new struct's parent_ptr is -1 (root) — i.e. the
-// slice owns its buffer; we don't hold a reference to the source.
-//
-// Bounds checks: 0 <= start <= end <= length.
-//
-// Slot usage:
-//   slot 0 = self     (arg)
-//   slot 1 = start    (arg)
-//   slot 2 = end      (arg)
-//   slot 3 = elemSize
-//   slot 4 = sliceLen (end - start)
-//   slot 5 = byteLen  (sliceLen * elemSize)
-//   slot 6 = newStruct
-//   slot 7 = newBuf
-func __managed_mem_slice 3 i64
-  block entry:
-    v0 = std param 0 i64
-    std storeSlot 0 v0
-    v1 = std param 1 i64
-    std storeSlot 1 v1
-    v2 = std param 2 i64
-    std storeSlot 2 v2
-
-    v3 = std constI64 0
-    // if start < 0 -> err
-    v4 = std cmpI64Lt v1 v3
-    std condBr v4 err start_ok
-
-  block start_ok:
-    // if end < start -> err
-    v5 = std cmpI64Lt v2 v1
-    std condBr v5 err end_ok
-
-  block end_ok:
-    // if end > length -> err
-    v6 = std loadIndirect v0 8
-    v7 = std cmpI64Gt v2 v6
-    std condBr v7 err alloc
-
-  block err:
-    v8 = std constI64 3
-    v9 = std constI64 0
-    std errorReturn v9 v8
-
-  block alloc:
-    // sliceLen = end - start
-    // byteLen = sliceLen * elemSize
-    v11 = std loadIndirect v0 24
-    std storeSlot 3 v11
-    v12 = std subI64 v2 v1
-    std storeSlot 4 v12
-    v13 = std mulI64 v12 v11
-    std storeSlot 5 v13
-
-    // newStruct = mm_alloc(40, &__destruct___ManagedMemory, 0)
-    v14 = std constI64 40
-    v15 = std funcAddr __destruct___ManagedMemory
-    v16 = std constI64 0
-    v17 = std call mm_alloc v14 v15 v16
-    std storeSlot 6 v17
-
-    // If sliceLen == 0, no buffer; store 0 for buffer and skip the copy.
-    v18 = std loadSlot 4
-    v19 = std constI64 0
-    v20 = std cmpI64Eq v18 v19
-    std condBr v20 init_empty alloc_buf
-
-  block alloc_buf:
-    v21 = std loadSlot 5
-    v37 = std constI64 0
-    v38 = std constI64 0
-    v22 = std call mm_alloc v21 v37 v38
-    std storeSlot 7 v22
-    // memcpy(newBuf, self.buffer + start * elemSize, byteLen)
-    v23 = std loadSlot 0
-    v24 = std loadIndirect v23 0
-    v25 = std loadSlot 1
-    v26 = std loadSlot 3
-    v27 = std mulI64 v25 v26
-    v28 = std addI64 v24 v27
-    v29 = std loadSlot 5
-    std memcpy v22 v28 v29
-    std br init_struct
-
-  block init_empty:
-    v30 = std constI64 0
-    std storeSlot 7 v30
-    std br init_struct
-
-  block init_struct:
-    // newStruct fields: buffer=newBuf, length=sliceLen, capacity=sliceLen,
-    //                   element_size=elemSize, parent_ptr=-1 (root)
-    v31 = std loadSlot 6
-    v32 = std loadSlot 7
-    std storeIndirect v31 0 v32
-    v33 = std loadSlot 4
-    std storeIndirect v31 8 v33
-    std storeIndirect v31 16 v33
-    v34 = std loadSlot 3
-    std storeIndirect v31 24 v34
-    v35 = std constI64 -1
-    std storeIndirect v31 32 v35
-    v36 = std constI64 0
-    std errorReturn v31 v36
-end
-
-// __managed_mem_create(count, elemSize) -> newPtr.
-// Static __ManagedMemory.create. Allocates a fresh root __ManagedMemory
-// struct (mm_alloc) plus, when count > 0, a fresh buffer (mm_alloc, untagged)
-// sized for `count` elements. Initializes:
-//   buffer       = newBuf or 0
-//   length       = 0
-//   capacity     = count
-//   element_size = elemSize
-//   parent_ptr   = -1 (root)
-// Does not currently signal allocation failure (the slab+mm layer
-// panics on exhaustion); error 7 (invalidAllocation) is reserved for a
-// future hook.
-//
-// Slot usage:
-//   slot 0 = count    (arg)
-//   slot 1 = elemSize (arg)
-//   slot 2 = newStruct
-//   slot 3 = newBuf
-func __managed_mem_create 2 i64
-  block entry:
-    v0 = std param 0 i64
-    std storeSlot 0 v0
-    v1 = std param 1 i64
-    std storeSlot 1 v1
-
-    // newStruct = mm_alloc(40, &__destruct___ManagedMemory, 0)
-    v2 = std constI64 40
-    v3 = std funcAddr __destruct___ManagedMemory
-    v4 = std constI64 0
-    v5 = std call mm_alloc v2 v3 v4
-    std storeSlot 2 v5
-
-    // If count > 0 alloc buffer; else store 0.
-    v6 = std constI64 0
-    v7 = std cmpI64Le v0 v6
-    std condBr v7 init_empty alloc_buf
-
-  block alloc_buf:
-    // size = count * elemSize; allocate as untagged buffer (no destructor).
-    v8 = std mulI64 v0 v1
-    v15 = std constI64 0
-    v16 = std constI64 0
-    v9 = std call mm_alloc v8 v15 v16
-    std storeSlot 3 v9
-    std br init_struct
-
-  block init_empty:
-    v10 = std constI64 0
-    std storeSlot 3 v10
-    std br init_struct
-
-  block init_struct:
-    v11 = std loadSlot 2
-    v12 = std loadSlot 3
-    std storeIndirect v11 0 v12
-    v13 = std constI64 0
-    std storeIndirect v11 8 v13     // length = 0
-    std storeIndirect v11 16 v0     // capacity = count
-    std storeIndirect v11 24 v1     // element_size = elemSize
-    v14 = std constI64 -1
-    std storeIndirect v11 32 v14    // parent_ptr = -1 (root)
-    std ret v11
-end
 
 // __layout_word_load(ptr) -> i64
 // Reads 8 bytes from ptr. Used by Phase 11.2 layout copy/destroy thunks
@@ -7141,18 +3940,18 @@ func maxon_sleep 1 void
     std ret v1
 end
 
-// maxon_subprocess_resolve_on_path(name_mm) — PATH lookup. Stub returns a
-// fresh empty MM so the Subprocess.maxon caller's `managedIsNull` check sees
-// "resolver returned something" and uses the bare name with the OS spawn
-// primitive. The subsequent spawn-stub will fail with -1, surfacing as
-// `SubprocessError.spawnFailed`.
+// maxon_subprocess_resolve_on_path(name_mm) — PATH lookup. Stub returns NULL
+// (0): `Subprocess.resolveByName`'s `managedIsNull` check treats null and
+// empty identically (its miss path falls back to the bare name, which the OS
+// spawn primitive resolves itself — CreateProcessW iterates PATH+PATHEXT).
+// The previous fresh-empty-MM return leaked the 48-byte record + 1-byte
+// buffer on EVERY resolve (the caller discards a miss without releasing it,
+// and the result is deliberately unclassified).
 func maxon_subprocess_resolve_on_path 1 i64
   block entry:
     v0 = std param 0 i64
-    v1 = std constI64 1
-    v2 = std constI64 1
-    v3 = std call __managed_mem_create v1 v2
-    std ret v3
+    v1 = std constI64 0
+    std ret v1
 end
 
 // maxon_subprocess_spawn(argv, argc, cwd, envBlock, envInherit,
@@ -7439,6 +4238,20 @@ func __io_shutdown 0 void
     std ret v0
 end
 
+// mrt_win32_free_argv_cache() -> void. Signature-only stub: the real body is the
+// hand-emitted machine code in X64Backend.maxon (emitX64Win32FreeArgvCache),
+// emitted on x64-Windows by emitX64Win32Helpers, whose `recordLabel` overrides
+// this label. The stub exists so the MIR->x64 call lowering can resolve the
+// (arity 0, return void) signature for the `call mrt_win32_free_argv_cache` op
+// that patchMrtStartFreeArgvCache injects into mrt_start AFTER the reachability
+// walk (which is why filterRuntimeByReachability also seeds the name's transitive
+// dep `__mm_decref_maybenull_helper` on x64-Windows). The body never executes.
+func mrt_win32_free_argv_cache 0 void
+  block entry:
+    v0 = std constI64 0
+    std ret v0
+end
+
 // __gt_spawn(func_ptr, arg_count, arg_buf) -> promise (GT ptr) and
 // __gt_await(promise) -> result. Signature-only stubs: the real bodies are the
 // hand-emitted machine code in X64Backend.maxon (emitX64GtSpawn / emitX64GtAwait),
@@ -7458,6 +4271,31 @@ func __gt_await 1 i64
     v0 = std param 0 i64
     v1 = std constI64 0
     std ret v1
+end
+
+// __gt_cancel(promise) — request cancellation of a green thread (sets
+// gt.cancel_flag = 1). Signature-only stub: the real body is the hand-emitted
+// machine code in X64Backend.maxon (emitX64GtCancel), whose `recordLabel`
+// overrides this label. On targets without the x64 GT runtime the stub makes
+// `p.cancel()` a no-op, matching the cooperative-scheduler semantics where a
+// never-yielding spawner's promise never runs anyway.
+func __gt_cancel 1 void
+  block entry:
+    v0 = std param 0 i64
+    v1 = std constI64 0
+    std ret v1
+end
+
+// __gt_cleanup() — called from mrt_start after main returns (see
+// patchMrtStartCallGtCleanup): drain every live green thread to completion so
+// the process doesn't exit while a spawned GT is mid-run holding live
+// allocations (the leak gate would count them), then shut the worker pool
+// down. Signature-only stub; the real body is hand-emitted in X64Backend.maxon
+// (emitX64GtCleanup).
+func __gt_cleanup 0 void
+  block entry:
+    v0 = std constI64 0
+    std ret v0
 end
 
 // __gt_current_trace_id() -> trace id of the GT running on this OS thread (0 if
@@ -7506,12 +4344,16 @@ end
 // Backs every `__ManagedList.*` and `__ManagedListNode.*` method registered in
 // `registerManagedListMethods` / `registerManagedListNodeMethods`.
 //
-// Layouts mirror the C# bootstrap:
-//   __ManagedList (32 bytes via mm_alloc):
-//     offset  0  head    i64 (first __ManagedListNode pointer, or 0)
-//     offset  8  tail    i64 (last __ManagedListNode pointer, or 0)
-//     offset 16  count   i64 (number of nodes)
-//     offset 24  cursor  i64 (current iteration cursor node pointer, or 0)
+// Layouts mirror the C# bootstrap (plus the trailing elem_managed flag):
+//   __ManagedList (40 bytes via mm_alloc):
+//     offset  0  head         i64 (first __ManagedListNode pointer, or 0)
+//     offset  8  tail         i64 (last __ManagedListNode pointer, or 0)
+//     offset 16  count        i64 (number of nodes)
+//     offset 24  cursor       i64 (current iteration cursor node pointer, or 0)
+//     offset 32  elem_managed i64 (1 when Element is heap-managed — stamped at
+//                                  create from the layout descriptor's heap-ref
+//                                  bit; destructor/clear decref each node's
+//                                  value when set)
 //
 //   __ManagedListNode (32 bytes via mm_alloc):
 //     offset  0  next    i64 (next __ManagedListNode pointer, or 0)
@@ -7526,20 +4368,17 @@ end
 //   2       | nodeNotInList     | 3
 //   3       | nodeAlreadyInList | 4
 //
-// Element-managed lifecycle: the runtime helpers operate on raw i64 values.
-// Reference counting for managed-element values (incref on insert, decref on
-// remove/clear) is the responsibility of the Maxon-level lowering layer,
-// matching the discipline used by __ManagedMemory.set/get. For Phase C we
-// keep the simpler primitive-element pattern; managed-element decref on
-// clear() / list destruction is left as a follow-up — it requires either an
-// element-aware destructor pointer chosen at allocation time or a separate
-// `__mrt_managed_list_clear_managed` variant selected at the dispatch site.
+// Element-managed lifecycle: the insert helpers receive values whose +1 the
+// caller transferred in (the intrinsic-consumer seed); each node owns its
+// value's reference. The list-level `elem_managed` flag (offset 32, stamped at
+// create from the layout descriptor's heap-ref bit) tells the destructor and
+// `clear` walks whether to decref each node's value before freeing the node;
+// `remove` hands the unlinked value's +1 to the caller instead.
 // =============================================================================
 
 // __destruct___ManagedList(self): destructor for a __ManagedList instance.
-// Walks every node, clears its links, and mm_decref's it. The "managed
-// values inside nodes" case is not yet decref'd here — see the section
-// header above for the rationale.
+// Walks every node, drops its value when `elem_managed` is set, clears its
+// links, and mm_decref's it.
 //
 // Slot usage:
 //   slot 0 = self    (arg, list_ptr)
@@ -7566,6 +4405,29 @@ func __destruct___ManagedList 1 i64
     v5 = std loadSlot 1
     v6 = std loadIndirect v5 0
     std storeSlot 2 v6
+    // Drop the node's value when the element type is heap-managed (the
+    // node owns the +1 the insert helper moved in). Null value = no-op
+    // (a cleared slot).
+    v20 = std loadSlot 0
+    v21 = std loadIndirect v20 32
+    v22 = std constI64 0
+    v23 = std cmpI64Eq v21 v22
+    std condBr v23 clear_links drop_value
+
+  block drop_value:
+    v24 = std loadSlot 1
+    v25 = std loadIndirect v24 24
+    v26 = std constI64 0
+    v27 = std cmpI64Eq v25 v26
+    std condBr v27 clear_links do_value_decref
+
+  block do_value_decref:
+    v28 = std loadSlot 1
+    v29 = std loadIndirect v28 24
+    v30 = std call __mm_decref v29
+    std br clear_links
+
+  block clear_links:
     // Zero the node's link fields so the freed node looks detached if
     // anything still has a stray pointer to it.
     v7 = std loadSlot 1
@@ -7600,22 +4462,31 @@ func __destruct___ManagedListNode 1 i64
     std ret v1
 end
 
-// mrt_managed_list_create() -> ptr to fresh empty __ManagedList.
-// All four fields (head, tail, count, cursor) zero-initialized.
-func mrt_managed_list_create 0 i64
+// mrt_managed_list_create(elem_managed) -> ptr to fresh empty __ManagedList.
+// head/tail/count/cursor zero-initialized; `elem_managed` (the layout
+// descriptor's heap-ref bit, projected at the lowering's synthesized-create
+// site) is stamped at offset 32 so the destructor/clear walks know whether to
+// decref each node's value.
+func mrt_managed_list_create 1 i64
   block entry:
-    v0 = std constI64 32
+    v8 = std param 0 i64
+    v0 = std constI64 40
     v1 = std funcAddr __destruct___ManagedList
-    v2 = std constI64 0
-    v3 = std call mm_alloc v0 v1 v2
+    // tag = MM_TAG_MANAGED_LIST (4) — see resetMmTraceTags' reserved indices.
+    v2 = std constI64 4
+    v3 = std call __mm_alloc v0 v1 v2
     std storeSlot 0 v3
-    // Zero head/tail/count/cursor.
+    // alloc-at-0: the returned list is an owned ref — incref to rc=1 so the
+    // caller's matching decref balances (see dual-mm-alloc unification).
+    v7 = std call __mm_incref v3
+    // Zero head/tail/count/cursor; stamp elem_managed.
     v4 = std loadSlot 0
     v5 = std constI64 0
     std storeIndirect v4 0 v5
     std storeIndirect v4 8 v5
     std storeIndirect v4 16 v5
     std storeIndirect v4 24 v5
+    std storeIndirect v4 32 v8
     v6 = std loadSlot 0
     std ret v6
 end
@@ -7632,9 +4503,12 @@ func mrt_managed_list_alloc_node 1 i64
 
     v1 = std constI64 32
     v2 = std funcAddr __destruct___ManagedListNode
-    v3 = std constI64 0
-    v4 = std call mm_alloc v1 v2 v3
+    // tag = MM_TAG_MANAGED_LIST_NODE (5) — see resetMmTraceTags' reserved indices.
+    v3 = std constI64 5
+    v4 = std call __mm_alloc v1 v2 v3
     std storeSlot 1 v4
+    // alloc-at-0: the returned node is an owned ref — incref to rc=1.
+    v9 = std call __mm_incref v4
 
     // Zero next/prev/list.
     v5 = std loadSlot 1
@@ -8014,6 +4888,9 @@ func mrt_managed_list_insert_first_value 2 i64
     v4 = std loadSlot 2
     v5 = std call mrt_managed_list_link_first v3 v4
 
+    // Release the transient alloc +1; the list owns the node via link_first.
+    v7 = std loadSlot 2
+    v8 = std call mm_decref v7
     v6 = std loadSlot 2
     std ret v6
 end
@@ -8033,6 +4910,9 @@ func mrt_managed_list_insert_last_value 2 i64
     v4 = std loadSlot 2
     v5 = std call mrt_managed_list_link_last v3 v4
 
+    // Release the transient alloc +1; the list owns the node via link_last.
+    v7 = std loadSlot 2
+    v8 = std call mm_decref v7
     v6 = std loadSlot 2
     std ret v6
 end
@@ -8055,6 +4935,9 @@ func mrt_managed_list_insert_after_value 3 i64
     v6 = std loadSlot 3
     v7 = std call mrt_managed_list_link_after v4 v5 v6
 
+    // Release the transient alloc +1; the list owns the node via link_after.
+    v9 = std loadSlot 3
+    v10 = std call mm_decref v9
     v8 = std loadSlot 3
     std ret v8
 end
@@ -8077,6 +4960,9 @@ func mrt_managed_list_insert_before_value 3 i64
     v6 = std loadSlot 3
     v7 = std call mrt_managed_list_link_before v4 v5 v6
 
+    // Release the transient alloc +1; the list owns the node via link_before.
+    v9 = std loadSlot 3
+    v10 = std call mm_decref v9
     v8 = std loadSlot 3
     std ret v8
 end
@@ -8324,8 +5210,9 @@ func mrt_managed_list_is_empty 1 i64
     std ret v3
 end
 
-// mrt_managed_list_clear(list): unlinks and frees every node. Managed-value
-// decref on each node is not performed today — see the section header above.
+// mrt_managed_list_clear(list): unlinks and frees every node, dropping each
+// node's value first when the list's `elem_managed` flag is set (the node owns
+// the +1 the insert helper moved in).
 //
 // Slot usage:
 //   slot 0 = list_ptr (arg)
@@ -8351,15 +5238,36 @@ func mrt_managed_list_clear 1 void
     v5 = std loadSlot 1
     v6 = std loadIndirect v5 0
     std storeSlot 2 v6
+    // Drop the node's value when the element type is heap-managed.
+    v20 = std loadSlot 0
+    v21 = std loadIndirect v20 32
+    v22 = std constI64 0
+    v23 = std cmpI64Eq v21 v22
+    std condBr v23 clear_links drop_value
 
+  block drop_value:
+    v24 = std loadSlot 1
+    v25 = std loadIndirect v24 24
+    v26 = std constI64 0
+    v27 = std cmpI64Eq v25 v26
+    std condBr v27 clear_links do_value_decref
+
+  block do_value_decref:
+    v28 = std loadSlot 1
+    v29 = std loadIndirect v28 24
+    v30 = std call __mm_decref v29
+    std br clear_links
+
+  block clear_links:
     // Clear node links so a stray pointer sees a detached node.
-    v7 = std constI64 0
-    std storeIndirect v5 0 v7
-    std storeIndirect v5 8 v7
-    std storeIndirect v5 16 v7
+    v7 = std loadSlot 1
+    v31 = std constI64 0
+    std storeIndirect v7 0 v31
+    std storeIndirect v7 8 v31
+    std storeIndirect v7 16 v31
 
     // Drop the list's owned reference.
-    v8 = std call mm_decref v5
+    v8 = std call mm_decref v7
 
     // current = next
     v9 = std loadSlot 2

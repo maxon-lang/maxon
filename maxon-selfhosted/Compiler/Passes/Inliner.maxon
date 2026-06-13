@@ -810,6 +810,341 @@ end 'extractFromCallOp'
 // Drops the caller's per-function MIR/MID/code memos so the next query
 // recomputes from the rewritten body. Returning `false` from any
 // validity gate aborts the splice with no caller mutation.
+
+// Refcount-insertion: thread the callee's per-ValueId ownership classification
+// onto the FRESH caller body ids minted for this splice (ids > callerOrigMaxId;
+// ids at/below it are call-site args already classified in the caller — must NOT
+// be clobbered). The post-inline SSA inserter reads caller.valueManaged /
+// .valueOwnership, so without this an inlined allocation/load lands `notManaged`
+// and is never refcounted (leak). CRITICAL: a fresh body id REUSES a caller id
+// freed by DCE, which may hold a STALE class — so set ALL THREE side-tables for
+// EVERY fresh id (managed → copy callee's class; non-managed → CLEAR to
+// notManaged), never skip the non-managed case (a stale freshRc0 on a reused id
+// → the inserter increfs a raw buffer load → write fault).
+function threadInlinedOwnership(module StdModule, callee IrFunction, caller IrFunction, remap ValueIdArray, callerOrigMaxId ValueId)
+	// A callee value whose ACQUIRE is already inlined — it has an `__mm_incref`
+	// op in the callee body that the splice carries verbatim into the caller.
+	// Threading its original acquire-class (freshRc0 / incomingOwner /
+	// selfReturnBorrow) would make the post-inline user `insertRefcounts`
+	// RE-acquire it (a SECOND incref) on top of the inlined one → the value is
+	// incref'd twice but released once → leak (the `s.bytes()`/view-method
+	// double-incref of the String's inner __ManagedMemory). Thread such a value
+	// as `callReturnRc1` (the design's `arrivesOwning` state): it carries a
+	// transferable +1 and releases at last use, but does NOT acquire at its def —
+	// so the single inlined incref is its +1, and the inserter places only the
+	// matching release. The inlined refcount ops are KEPT (unlike stripping them,
+	// which under-refs complex inlined helpers and double-frees per the design's
+	// conservative invariant); only the redundant re-acquire is suppressed.
+	let calleeIncrefd = collectCalleeRcCallArgs(module, callee: callee, kind: RcCallKind.incref)
+	// A callee value whose RELEASE is already inlined — the callee body carries its
+	// `mm_drop`/`__mm_decref` op verbatim (stdlib bodies arrive fully refcounted
+	// from the stdlib build). Threading its original class would make the
+	// post-inline inserter plan a SECOND release at the value's last use — a
+	// double-free (the `Array.sort` closure-env double `mm_drop` → slab-corruption
+	// teardown crash). Such a value's refcount lifecycle is COMPLETE inside the
+	// spliced ops, so it threads as `notManaged` (no further rc ops). The callee's
+	// RETURNED value is exempt: its release deliberately lives in the CALLER
+	// (return-transfer), so a body-side release of a sibling arm must not erase
+	// the caller's duty to release the result.
+	let calleeReleased = collectCalleeRcCallArgs(module, callee: callee, kind: RcCallKind.release)
+	let calleeReturned = collectCalleeReturnedValues(module, callee: callee)
+	var calleeId = 0
+	while calleeId < remap.count() 'eachCalleeId'
+		let callerId = try remap.get(calleeId) otherwise REMAP_INVALID
+		if callerId != REMAP_INVALID and callerId > callerOrigMaxId 'freshBodyId'
+			let returned = getBoolAtDefaultFalse(calleeReturned, idx: calleeId)
+			let releasedInBody = getBoolAtDefaultFalse(calleeReleased, idx: calleeId) and not returned
+			let calleeClass = callee.ownershipOfValue(calleeId)
+			// A BORROWED value the body incref'd is the STORE-RETAIN shape: the
+			// callee took the container's own ref before storing/forwarding it
+			// (the `ListIterator.node` field store, the `append` element retain).
+			// Its lifecycle is COMPLETE inside the spliced ops — the minted +1
+			// belongs to the container the body gave it to, and the value itself
+			// owns nothing — so it threads `notManaged` exactly like a body-side
+			// release. Threading `borrowed` would make the post-inline heap-store
+			// sweep add a SECOND store-incref (leak); threading an owning class
+			// would make the inserter release a +1 the container owns
+			// (over-release). A RETURNED retained borrow is exempt: its +1
+			// deliberately transfers out (`planReturnedBorrowRetains`), so it
+			// threads as `callReturnRc1` via `ownershipForInlinedValue`.
+			let retainCompleteInBody = ownershipClassIsBorrowed(calleeClass) and getBoolAtDefaultFalse(calleeIncrefd, idx: calleeId) and not returned
+			if releasedInBody or retainCompleteInBody 'rcComplete'
+				caller.setValueManaged(callerId, managed: false)
+				caller.setValueOwnership(callerId, cls: OwnershipClass.notManaged)
+			end 'rcComplete' else 'thread'
+				caller.setValueManaged(callerId, managed: callee.isValueManaged(calleeId))
+				let threadedClass = ownershipForInlinedValue(calleeClass, alreadyIncrefd: getBoolAtDefaultFalse(calleeIncrefd, idx: calleeId))
+				caller.setValueOwnership(callerId, cls: threadedClass)
+			end 'thread'
+			caller.setValueTypeParam(callerId, isTypeParam: callee.isValueTypeParam(calleeId))
+		end 'freshBodyId' else if callerId != REMAP_INVALID 'inlinedArg'
+			// A callee id remapped to a PRE-EXISTING caller value is a param→arg
+			// binding (`bindParamRemap` — body defines always mint fresh ids).
+			// Mark the caller value ONLY when the callee uses this param DIRECTLY as
+			// a field-store base (`param.field = x`): that is the inlined
+			// `Container.setData` field-reassign shape the inserter's param-base
+			// `storeIsFieldOverwrite` rule must survive the erased param for.
+			//
+			// The flag MUST NOT be set for an arg the callee merely READS/FORWARDS
+			// (`addDep(db, dep)`'s `dep`, pushed into an array, never field-stored):
+			// `valueInlinedArg` is read PER-VALUE by `storeIsFieldOverwrite` for
+			// EVERY store through that base — including the value's OWN construction
+			// field-init stores from the constructor that produced it. A `Self{...}`
+			// literal's fresh `__mm_alloc` result, once flagged, makes the inserter
+			// treat those INIT stores (writing slab-garbage slots) as overwrites and
+			// emit a decref-old on the uninitialized field — over-releasing whatever
+			// stale managed pointer the recycled slab slot still held (the
+			// array-managed-multi-call-lifecycle over-release). Gating on a real
+			// field-store base keeps the flag meaning what its name claims, and a
+			// genuine `param.field = x` reassign still gets it.
+			if calleeParamIsFieldStoreBase(module, callee: callee, paramValueId: calleeId) 'isReassignBase'
+				caller.setValueInlinedArg(callerId)
+			end 'isReassignBase'
+		end 'inlinedArg'
+		calleeId = calleeId + 1
+	end 'eachCalleeId'
+end 'threadInlinedOwnership'
+
+// True iff `paramValueId` (a callee PARAM's SSA value) is used DIRECTLY as the
+// base of a `store_indirect` anywhere in `callee`'s body — the `param.field = x`
+// reassign shape (`Container.setData`'s `self.data = data`). This is exactly the
+// store form `storeIsFieldOverwrite`'s param-base rule matches (it keys on the
+// store's `addrId` being the inlined-arg value), so a param the callee only
+// loads/forwards (never stores through) needs no `valueInlinedArg` flag — and must
+// not get one, or its OWN construction field-init stores get mis-read as
+// reassign-overwrites and over-release slab garbage.
+function calleeParamIsFieldStoreBase(module StdModule, callee IrFunction, paramValueId ValueId) returns bool
+	for blockRef in callee.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("calleeParamIsFieldStoreBase: blockRef not in module.blocks")
+		for opIdx in block.opRefs 'eachOp'
+			let op = try module.ops.get(opIdx) otherwise panic("calleeParamIsFieldStoreBase: opIdx not in module.ops")
+			if opStoresThroughBase(op, baseId: paramValueId) 'storesThrough'
+				return true
+			end 'storesThrough'
+		end 'eachOp'
+	end 'eachBlock'
+	return false
+end 'calleeParamIsFieldStoreBase'
+
+function opStoresThroughBase(op StdOp, baseId ValueId) returns bool
+	return match op 'dispatch'
+		system(s) gives sysStoresThroughBase(s, baseId: baseId)
+		arith gives false
+		control gives false
+		call gives false
+		memory gives false
+	end 'dispatch'
+end 'opStoresThroughBase'
+
+function sysStoresThroughBase(s StdSystemOp, baseId ValueId) returns bool
+	return match s 'check'
+		storeIndirect(addrId, _, _, _, _) gives addrId == baseId
+		loadIndirect gives false
+		globalAddr to loadByte gives false
+		osExit to osWrite gives false
+		free gives false
+		osWriteErr to loadFramePtr gives false
+		funcAddr gives false
+		drop gives false
+		osAllocPages to osDirMkdir gives false
+		atomicInc to osLockRelease gives false
+		boxValue to dropTypeParam gives false
+	end 'check'
+end 'sysStoresThroughBase'
+
+function ownershipClassIsBorrowed(cls OwnershipClass) returns bool
+	return match cls 'check'
+		borrowed gives true
+		notManaged gives false
+		freshRc0 to incomingOwner gives false
+	end 'check'
+end 'ownershipClassIsBorrowed'
+
+// A value whose acquire (`__mm_incref`) is already inlined must NOT be re-acquired
+// by the post-inline inserter. Demote the three acquire-at-def classes to
+// `callReturnRc1` (arrivesOwning: no def-acquire, carries +1, releases at last use).
+// A BORROWED value the body incref'd is the STORE-INCREF shape (the callee took the
+// container's own ref on a borrowed element/node before storing it — the
+// `ListIterator.node` field store): threading `borrowed` would make the post-inline
+// inserter's heap-store sweep add a SECOND store-incref on the same store. Demote it
+// to `callReturnRc1` too: the inlined incref IS the +1 that transfers into the field
+// (the store is a move at last use, no extra ops). Non-acquiring classes that the
+// body did NOT incref stay untouched (they emit no def-incref to duplicate).
+function ownershipForInlinedValue(calleeClass OwnershipClass, alreadyIncrefd bool) returns OwnershipClass
+	if not alreadyIncrefd 'keepClass'
+		return calleeClass
+	end 'keepClass'
+	return match calleeClass 'demote'
+		freshRc0 gives OwnershipClass.callReturnRc1
+		incomingOwner gives OwnershipClass.callReturnRc1
+		selfReturnBorrow gives OwnershipClass.callReturnRc1
+		callReturnRc1 gives OwnershipClass.callReturnRc1
+		borrowed gives OwnershipClass.callReturnRc1
+		notManaged gives OwnershipClass.notManaged
+	end 'demote'
+end 'ownershipForInlinedValue'
+
+// Which refcount-op family a callee-body scan marks: `incref` (the value
+// arrives already-acquired in the caller — the spliced incref op is verbatim)
+// or `release` (the spliced release completes the value's lifecycle in the
+// caller — the inserter's release-emit forms).
+enum RcCallKind
+	incref
+	release
+end 'RcCallKind'
+
+// Mark, per callee ValueId, whether the callee body performs a `kind`-family
+// refcount call on it (the call's first arg).
+function collectCalleeRcCallArgs(module StdModule, callee IrFunction, kind RcCallKind) returns BoolArray
+	let maxId = scanMaxValueId(callee, module: module)
+	var marks = BoolArray.create()
+	marks.resize(maxId + 1)
+	for blockRef in callee.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise continue
+		for opIdx in block.opRefs 'eachOp'
+			let op = try module.ops.get(opIdx) otherwise continue
+			markRcCallArg(op, marks: marks, kind: kind)
+		end 'eachOp'
+		if block.hasTerminatorOp() 'hasTerm'
+			let term = try module.ops.get(block.terminatorIndex()) otherwise continue
+			markRcCallArg(term, marks: marks, kind: kind)
+		end 'hasTerm'
+	end 'eachBlock'
+	return marks
+end 'collectCalleeRcCallArgs'
+
+function markRcCallArg(op StdOp, marks BoolArray, kind RcCallKind)
+	match op 'outer'
+		call(inner) then markRcCallArgFromCall(inner, marks: marks, kind: kind)
+		arith then break 'outer'
+		control then break 'outer'
+		memory then break 'outer'
+		system then break 'outer'
+	end 'outer'
+end 'markRcCallArg'
+
+function markRcCallArgFromCall(inner StdCallOp, marks BoolArray, kind RcCallKind)
+	let shape = extractFromCallOp(inner)
+	if shape.kind != CallShapeKind.staticCall 'notStatic'
+		return
+	end 'notStatic'
+	if not calleeIsRcCall(shape.callee, kind: kind) 'notRcCall'
+		return
+	end 'notRcCall'
+	let argId = try shape.argIds.get(0) otherwise return
+	if argId < marks.count() 'inRange'
+		try marks.set(argId, value: true) otherwise panic("markRcCallArgFromCall: marks.set OOB despite bound check")
+	end 'inRange'
+end 'markRcCallArgFromCall'
+
+// The inserter's refcount-emit callees per family (`buildIncrefOp` /
+// `buildDropManagedOp` / `buildDecrefOp`), in both `stdlib.`-qualified and
+// bare runtime forms.
+function calleeIsRcCall(callee String, kind RcCallKind) returns bool
+	return match kind 'family'
+		incref gives callee == "stdlib.__mm_incref" or callee == "__mm_incref"
+		release gives callee == "mm_drop" or callee == "stdlib.__mm_decref" or callee == "__mm_decref" or callee == "__mm_decref_maybenull_helper"
+	end 'family'
+end 'calleeIsRcCall'
+
+// Mark, per callee ValueId, whether any `ret` / `errorReturn` terminator in the
+// callee returns it — the value whose +1 transfers to the caller at the splice.
+function collectCalleeReturnedValues(module StdModule, callee IrFunction) returns BoolArray
+	let maxId = scanMaxValueId(callee, module: module)
+	var marks = BoolArray.create()
+	marks.resize(maxId + 1)
+	for blockRef in callee.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise continue
+		if not block.hasTerminatorOp() 'noTerm'
+			continue
+		end 'noTerm'
+		let term = try module.ops.get(block.terminatorIndex()) otherwise continue
+		if not isRetOpStd(term) 'notReturn'
+			continue
+		end 'notReturn'
+		let operands = extractStdOpOperands(term)
+		for readId in operands.readIds 'eachRead'
+			if readId < marks.count() 'inRange'
+				try marks.set(readId, value: true) otherwise panic("collectCalleeReturnedValues: marks.set OOB despite bound check")
+			end 'inRange'
+		end 'eachRead'
+	end 'eachBlock'
+	return marks
+end 'collectCalleeReturnedValues'
+
+function getBoolAtDefaultFalse(arr BoolArray, idx ValueId) returns bool
+	return try arr.get(idx) otherwise false
+end 'getBoolAtDefaultFalse'
+
+// Refcount-insertion: a multi-block inline's continuation phi (a fresh id) merges
+// the callee's return value. Inherit the original call result's managed-ness/class
+// so the inserter releases the merged value at its last use. A type-param result
+// only raises the phi to an owned type-param in a caller that carries an implicit
+// `__layout` (a generic caller) — in a non-generic caller the monomorphized value
+// is a plain scalar with no layout to dropTypeParam, so leave it unclassed there.
+function threadReturnPhiOwnership(caller IrFunction, callResultId ValueId, phiValueId ValueId)
+	if caller.isValueTypeParam(callResultId) and caller.hasImplicitLayoutParam 'tp'
+		caller.setValueTypeParam(phiValueId, isTypeParam: true)
+		caller.setValueOwnership(phiValueId, cls: OwnershipClass.incomingOwner)
+		return
+	end 'tp'
+	if caller.isValueManaged(callResultId) 'mgd'
+		caller.setValueManaged(phiValueId, managed: true)
+		// A call-site class that is NOT the acquiring default rides onto the
+		// merged phi verbatim:
+		//   - `callReturnRc1` / `freshRc0` (contract classes): blanket
+		//     `incomingOwner` would ACQUIRE a fresh +1 at the phi and release only
+		//     that one, orphaning a carried +1.
+		//   - `borrowed` (a global-slot read / reclassified borrow result): the
+		//     merged value owns no +1, so the phi must not acquire or release.
+		// Non-contract managed results keep the historical `incomingOwner`
+		// threading.
+		let callSiteClass = caller.ownershipOfValue(callResultId)
+		if callSiteClass == OwnershipClass.callReturnRc1 or callSiteClass == OwnershipClass.freshRc0 or callSiteClass == OwnershipClass.borrowed 'contract'
+			caller.setValueOwnership(phiValueId, cls: callSiteClass)
+		end 'contract' else 'plain'
+			caller.setValueOwnership(phiValueId, cls: OwnershipClass.incomingOwner)
+		end 'plain'
+	end 'mgd'
+end 'threadReturnPhiOwnership'
+
+// Refcount-insertion (single-block splice): the caller's uses of the call result
+// are rewritten to the inlined return value, whose threaded class came from the
+// CALLEE's side-tables. An ownership-blind callee body (the raw-`MachineWord`
+// Internals helpers — `__managed_mem_create`'s `return __managed_mem_create_managed(...)`)
+// threads `notManaged`, silently erasing an explicit call-site contract stamp
+// (`callReturnRc1` on `__ManagedMemory.create`, `freshRc0` on `fromCString`) → the
+// record's +1 is orphaned → leak. When the call site says managed and the inlined
+// return value says raw, the call site knows the contract — copy its managed bit
+// and class onto the substituted value. When BOTH sides are managed the callee's
+// (possibly incref-demoted) class is the accurate one — leave it.
+//
+// (Borrow-returning callees need no special case here: the GLOBAL-slot borrow
+// contract is carried by the values themselves — `lowerGlobalLoad` classifies
+// slot reads `borrowed` and `valueOwnsPlusOne` keeps slot-read getters in
+// `funcReturnsBorrow` so the call-site class is `borrowed` BEFORE inlining.
+// A guard that skipped the preserve for every borrow-set callee was tried and
+// measured to REGRESS: it also erased load-bearing call-site classes on
+// element-loader splices.)
+function preserveCallSiteOwnership(caller IrFunction, oldResultId ValueId, newId ValueId)
+	if caller.isValueManaged(oldResultId) and not caller.isValueManaged(newId) 'blindCallee'
+		caller.setValueManaged(newId, managed: true)
+		caller.setValueOwnership(newId, cls: caller.ownershipOfValue(oldResultId))
+	end 'blindCallee'
+end 'preserveCallSiteOwnership'
+
+// True for container methods that TRANSFER a managed element out of the collection
+// (the slot relinquishes its +1 to the returned value). These must NOT be inlined — the
+// call site's concrete-return classification (`callReturnRc1`) is the only place the
+// transferred +1 is correctly accounted; inlining loses it (the generic body returns a
+// `notManaged` `Element` type-param). BORROW returns (`get`/`current`) are deliberately
+// absent — they keep inlining, handled correctly by the inserter's `incomingOwner`
+// acquire. Names are the user-facing generic methods (matched after monomorphization
+// keeps the `Array.remove`-style qualified name).
+function calleeIsContainerTransferMethod(callee String) returns bool
+	return callee == "Array.remove" or callee == "Array.pop" or callee == "Vector.remove" or callee == "Vector.pop"
+end 'calleeIsContainerTransferMethod'
+
 function performInline(module StdModule, project Project, caller IrFunction, block IrBlock, opIdx OpIndex, funcMap StdFuncByNameForInliner) returns bool
 	let callShape = extractCallShape(module, opIdx: opIdx)
 	if callShape.kind != CallShapeKind.staticCall 'notStatic'
@@ -819,6 +1154,21 @@ function performInline(module StdModule, project Project, caller IrFunction, blo
 	if callee.blockRefs.count() == 0 'noBlocks'
 		return false
 	end 'noBlocks'
+	if calleeIsContainerTransferMethod(callShape.callee) 'transferCallee'
+		// A container method that TRANSFERS a managed element OUT (`Array.remove`/`pop`)
+		// must stay a real call so the call site's `recordCallResultType` classifies its
+		// result `callReturnRc1` (owns the transferred +1, decref once at last use).
+		// Inlining replaces that clean concrete classification with the generic body's
+		// threaded one — where the `__managed_mem_remove` result is a `notManaged`
+		// `Element` type-param — and the phi-edge reconciliation then fires a SPURIOUS
+		// incref on the moved value (the transferred +1 is orphaned → the removed element
+		// leaks at rc=1). A blanket "promote inlined returns to callReturnRc1" fix is
+		// WRONG: it conflates these with BORROW returns (`get`), turning get-borrow into a
+		// use-after-free. Not-inlining is the surgical fix — borrow methods (`get`) keep
+		// inlining, since the inserter's `incomingOwner` acquire already handles a kept
+		// borrow correctly.
+		return false
+	end 'transferCallee'
 	if callee.blockRefs.count() > 1 'multi'
 		return performMultiBlockInline(module, project: project, caller: caller, block: block, opIdx: opIdx, callee: callee, callShape: callShape)
 	end 'multi'
@@ -841,13 +1191,18 @@ function performInline(module StdModule, project Project, caller IrFunction, blo
 
 	// Phase 1: build the remap.
 	let calleeMaxId = scanMaxValueId(callee, module: module)
-	var nextId = scanMaxValueId(caller, module: module) + 1
+	let callerOrigMaxId = scanMaxValueId(caller, module: module)
+	var nextId = callerOrigMaxId + 1
 	var remap = ValueIdArray.create()
 	while remap.count() <= calleeMaxId 'init'
 		remap.push(REMAP_INVALID)
 	end 'init'
 	bindParamRemap(module, calleeBlock: calleeBlock, argIds: callShape.argIds, remap: remap)
 	nextId = bindBodyRemap(module, calleeBlock: calleeBlock, calleeTermIdx: calleeBlock.terminatorIndex(), remap: remap, nextId: nextId)
+	// Refcount-insertion: thread the callee's per-ValueId ownership classification
+	// onto the fresh caller body ids so the post-inline SSA inserter refcounts the
+	// inlined allocations/loads (an unthreaded id lands `notManaged` → leak).
+	threadInlinedOwnership(module, callee: callee, caller: caller, remap: remap, callerOrigMaxId: callerOrigMaxId)
 
 	// Phase 2: replace the call op in caller's block.opRefs with the
 	// rewritten body. Find the call's position first; insert is at the
@@ -857,7 +1212,19 @@ function performInline(module StdModule, project Project, caller IrFunction, blo
 	if removedIdx != opIdx 'mismatch'
 		panic("performInline: removed opIdx {removedIdx} != expected {opIdx}")
 	end 'mismatch'
-	emitInlinedBody(module, callerBlock: block, calleeBlock: calleeBlock, remap: remap, insertAt: posInBlock)
+	let afterBodyPos = emitInlinedBody(module, callerBlock: block, calleeBlock: calleeBlock, remap: remap, insertAt: posInBlock)
+
+	// mm-trace: re-emit the ownership return-move that inlining erases (managed
+	// return) + the scope-stack pop balancing the inlined callee's entry push. The
+	// scope-stack model means the move/pop scopes are correct at any inline depth
+	// (move reads the still-pushed callee frame; pop restores the caller). The
+	// inlined return value is `remap[retValId]` for a non-void callee.
+	var inlinedRetForTrace = REMAP_INVALID as ValueId
+	if not stdReturnTypeIsVoid(callee.returnType) 'nonVoidRet'
+		inlinedRetForTrace = try remap.get(retValId) otherwise REMAP_INVALID
+	end 'nonVoidRet'
+	let retIsManaged = inlinedRetForTrace != REMAP_INVALID and caller.isValueManaged(inlinedRetForTrace)
+	_ = emitInlineReturnMoveAndPop(module, project: project, callerBlock: block, pos: afterBodyPos, inlinedRetId: inlinedRetForTrace, retIsManaged: retIsManaged, nextId: nextId)
 
 	// Phase 3: rewrite the caller's existing ops so any reference to the
 	// call's old resultId now reads the inlined return value. Two cases:
@@ -872,6 +1239,8 @@ function performInline(module StdModule, project Project, caller IrFunction, blo
 		if inlinedRet == REMAP_INVALID 'unmapped'
 			panic("performInline: ret ValueId {retValId} not bound by callee body walk")
 		end 'unmapped'
+
+		preserveCallSiteOwnership(caller, oldResultId: callShape.resultId, newId: inlinedRet)
 		substituteCallResultInCaller(module, caller: caller, oldId: callShape.resultId, newId: inlinedRet)
 	end 'hasReturn'
 
@@ -944,13 +1313,17 @@ function performMultiBlockInline(module StdModule, project Project, caller IrFun
 	// or when the call site is a tryCall), and an error-flag register
 	// (when the call site is a tryCall).
 	let calleeMaxId = scanMaxValueId(callee, module: module)
-	var nextId = scanMaxValueId(caller, module: module) + 1
+	let callerOrigMaxId = scanMaxValueId(caller, module: module)
+	var nextId = callerOrigMaxId + 1
 	var remap = ValueIdArray.create()
 	while remap.count() <= calleeMaxId 'init'
 		remap.push(REMAP_INVALID)
 	end 'init'
 	bindParamRemapMulti(module, callee: callee, argIds: callShape.argIds, remap: remap)
 	nextId = bindMultiBlockBodyRemap(module, callee: callee, remap: remap, nextId: nextId)
+	// Refcount-insertion: thread the callee's ownership classification onto the
+	// fresh caller body ids (see the single-block splice for the rationale).
+	threadInlinedOwnership(module, callee: callee, caller: caller, remap: remap, callerOrigMaxId: callerOrigMaxId)
 	let isTryCallSite = callShape.errorFlagId != 0
 	let returnsValue = not stdReturnTypeIsVoid(callee.returnType)
 	// Primary return phi: needed when callee returns a value OR the call
@@ -1015,6 +1388,9 @@ function performMultiBlockInline(module StdModule, project Project, caller IrFun
 
 	// Phase 6: substitute call result.
 	if needsPrimaryPhi 'subRet'
+		// Refcount-insertion: the continuation phi (a fresh id) inherits the original
+		// call result's managed-ness/class so the inserter releases it at its last use.
+		threadReturnPhiOwnership(caller, callResultId: callShape.resultId, phiValueId: phiValueId)
 		substituteCallResultInCaller(module, caller: caller, oldId: callShape.resultId, newId: phiValueId)
 	end 'subRet'
 	if isTryCallSite 'subErrFlag'
@@ -1132,7 +1508,16 @@ function emitMultiBlockInlinedBlocks(module StdModule, callee IrFunction, valueR
 	for cBlockRef in callee.blockRefs 'eachCalleeBlock'
 		let cBlock = try module.blocks.get(cBlockRef) otherwise panic("emitMultiBlockInlinedBlocks: blockRef {cBlockRef} not in module")
 		let newBlockId = try blockRemap.get(cBlock.id) otherwise panic("emitMultiBlockInlinedBlocks: blockRemap missing id {cBlock.id}")
-		var newBlock = IrBlock.create(newBlockId, label: "inlined_{callee.name}_{cBlock.id}")
+		// Label MUST include the fresh per-inline-site `newBlockId`, NOT just the callee's
+		// own `cBlock.id`: when the SAME callee is inlined more than once into one caller
+		// (e.g. `__mm_incref` inlined for both the Array alloc and its backing record),
+		// `{callee.name}_{cBlock.id}` is IDENTICAL across the sites → two blocks share the
+		// label `inlined_stdlib.__mm_incref_0`. Branch targets resolve by LABEL at MIR/
+		// codegen, so a `br inlined_stdlib.__mm_incref_0` becomes ambiguous and may jump
+		// to the wrong copy — corrupting control flow (the `create()+push()+return` from a
+		// helper dropped the pushed length: the second incref block re-entered the field-
+		// init path). `newBlockId` is globally unique, so the label is now unambiguous.
+		var newBlock = IrBlock.create(newBlockId, label: "inlined_{callee.name}_{cBlock.id}_{newBlockId}")
 		// Block args: callee's own blockArgs need fresh remapped ValueIds.
 		// In practice multi-block callees that survived the gate either have
 		// no blockArgs (non-mem2reg shapes) or carry phis whose ValueIds were
@@ -1453,21 +1838,23 @@ function sysOpTouchesSlot(op StdSystemOp) returns bool
 	end 'shape'
 end 'sysOpTouchesSlot'
 
-// Walk the leading run of `param` ops in the callee's entry block and
-// bind each param's resultId to the corresponding call-site arg. Skips
-// non-param ops; the callee's `param` ops are guaranteed to live at the
-// head of the entry block by the lowering convention. A trailing implicit
-// layout/witness param without a matching arg keeps its REMAP_INVALID
-// sentinel and any op that names it would fail downstream — but that
-// shape doesn't survive the spliceability gate (only callees with
-// hasImplicitLayoutParam=false reach here in practice for the accessor-
-// shape targets 11.6 cares about).
+// Walk the callee's entire entry block and bind each `param` op's resultId to
+// the corresponding call-site arg. The lowering convention puts `param` ops at
+// the head of the entry block, but instrumentation can prepend ops before them
+// (mm-trace's `mm_scope_push` lands at the very head) — a leading-run scan
+// that breaks at the first non-param op then binds NOTHING, leaving every
+// param id unmapped so spliced body ops read the CALLER's same-numbered values
+// (the traced `Wrapper.wrap` layout-param read of the caller's const 7 →
+// `[7+40]` nil-deref). Scanning the whole entry block is equally cheap and
+// immune to prepended ops. A trailing implicit layout/witness param without a
+// matching arg keeps its REMAP_INVALID sentinel and any op that names it would
+// fail downstream — but that shape doesn't survive the spliceability gate.
 function bindParamRemap(module StdModule, calleeBlock IrBlock, argIds ValueIdArray, remap ValueIdArray)
 	for opIdx in calleeBlock.opRefs 'each'
 		let op = try module.ops.get(opIdx) otherwise continue
 		let pinfo = paramInfo(op)
 		if pinfo.paramIndex < 0 'notParam'
-			break
+			continue
 		end 'notParam'
 		if pinfo.paramIndex < argIds.count() 'hasArg'
 			let argId = try argIds.get(pinfo.paramIndex) otherwise panic("bindParamRemap: argIds.get OOB at {pinfo.paramIndex}")
@@ -1728,7 +2115,49 @@ end 'OpPositionError'
 // caller's `block.opRefs` at the splice position. The insertion runs in
 // callee-source order, so the spliced body reads the same way as the
 // original — earlier ops dominate later ones.
-function emitInlinedBody(module StdModule, callerBlock IrBlock, calleeBlock IrBlock, remap ValueIdArray, insertAt ParsedInt)
+// mm-trace only: at an inlined call site, re-emit the ownership MOVE that inlining
+// erases AND the scope-stack pop that balances the inlined callee's entry push.
+// The callee's `ret` of a managed value is a transfer to the caller — lost when the
+// inliner replaces `ret` with value-substitution; re-emit it as
+// `mm_move(retVal, RETURN)`. Then `mm_scope_pop()` to leave the callee's scope frame
+// (the callee's own `mm_scope_push` was inlined with its body but its pop was tied to
+// the now-erased `ret`). The move reads top-of-stack = the callee frame (still pushed
+// here), so it traces `[callee]`; the pop then restores the caller frame for the
+// post-inline continuation (where the value's eventual drop traces `[caller]`).
+// Ops are inserted at `pos` (just after the spliced body). The pop is ALWAYS emitted
+// (even for a non-managed / void return) to keep the stack balanced; only the move is
+// gated on a managed return. Returns the next free ValueId. No-op when untraced.
+function emitInlineReturnMoveAndPop(module StdModule, project Project, callerBlock IrBlock, pos ParsedInt, inlinedRetId ValueId, retIsManaged bool, nextId ValueId) returns ValueId
+	if not project.mmTraceEnabled 'untraced'
+		return nextId
+	end 'untraced'
+	var id = nextId
+	var at = pos
+	if retIsManaged and inlinedRetId != REMAP_INVALID 'moveTrace'
+		// The inlined `ret` is an ownership return-move: call `mm_move_return` (the
+		// destination is baked into the callee, so no const operand to misorder).
+		let moveResultId = id
+		id = id + 1
+		var moveArgs = ValueIdArray.create()
+		moveArgs.push(inlinedRetId)
+		let moveOpIdx = module.ops.count()
+		module.ops.push(StdOp.call(StdCallOp.call(moveResultId, callee: "mm_move_return", argIds: moveArgs)))
+		try callerBlock.opRefs.insert(at, value: moveOpIdx) otherwise panic("emitInlineReturnMoveAndPop: insert mm_move_return failed")
+		at = at + 1
+	end 'moveTrace'
+	// Pop the inlined callee's scope frame (balances its inlined entry push).
+	let popResultId = id
+	id = id + 1
+	let popOpIdx = module.ops.count()
+	module.ops.push(StdOp.call(StdCallOp.call(popResultId, callee: "mm_scope_pop", argIds: ValueIdArray.create())))
+	try callerBlock.opRefs.insert(at, value: popOpIdx) otherwise panic("emitInlineReturnMoveAndPop: insert mm_scope_pop failed")
+	return id
+end 'emitInlineReturnMoveAndPop'
+
+// Splice the callee's body ops into `callerBlock` at `insertAt`, returning the
+// position just AFTER the last spliced op (so the caller can append post-body
+// trace ops there).
+function emitInlinedBody(module StdModule, callerBlock IrBlock, calleeBlock IrBlock, remap ValueIdArray, insertAt ParsedInt) returns ParsedInt
 	var pos = insertAt
 	for opIdx in calleeBlock.opRefs 'eachOp'
 		let op = try module.ops.get(opIdx) otherwise continue
@@ -1741,6 +2170,7 @@ function emitInlinedBody(module StdModule, callerBlock IrBlock, calleeBlock IrBl
 		try callerBlock.opRefs.insert(pos, value: newIdx) otherwise panic("emitInlinedBody: opRefs.insert at {pos} failed")
 		pos = pos + 1
 	end 'eachOp'
+	return pos
 end 'emitInlinedBody'
 
 // Rewrite an op so every ValueId reference (define or operand) is mapped

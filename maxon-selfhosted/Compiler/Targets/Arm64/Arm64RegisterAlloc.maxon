@@ -556,6 +556,60 @@ function noteArm64SingleDef(defBlocks RegIntArray, blockIdx RegInt, op Arm64Op)
 	end 'extract'
 end 'noteArm64SingleDef'
 
+// Physical-GPR mask of one vreg operand: a physical register contributes its
+// ordinal bit; a virtual contributes 0. Mirror of the x64 `x64PhysRegMask`.
+function arm64PhysRegMask(vreg Arm64VReg) returns RegMask
+	return match vreg 'check'
+		physical(reg) gives 1 shl arm64RegToOrdinal(reg)
+		virtual gives 0
+	end 'check'
+end 'arm64PhysRegMask'
+
+// Physical-GPR DEST mask of an op — see `RegAllocTarget.getPhysGprDestMask`
+// and the x64 mirror `x64OpPhysGprDestMask`. On arm64 explicit phys dests
+// occur only in call argument setup and return plumbing, which lower to the
+// singleDef / constImm / movRegReg patterns; every other pattern's dest is
+// virtual at this stage and contributes 0.
+export function arm64OpPhysGprDestMask(a64Op Arm64Op) returns RegMask
+	let pat = a64Op.rawValue.pattern
+	return match pat 'patMask'
+		singleDef gives arm64PhysMaskSingleDef(a64Op)
+		constImm gives arm64PhysMaskConstImm(a64Op)
+		movRegReg gives arm64PhysMaskMovRegReg(a64Op)
+		passThrough gives 0
+		singleUse to baseUseFpDef gives 0
+		shift to csel gives 0
+		baseUseUseDef to fourAddr gives 0
+	end 'patMask'
+end 'arm64OpPhysGprDestMask'
+
+function arm64PhysMaskSingleDef(op Arm64Op) returns RegMask
+	return match op 'extract'
+		ldrFromSlot(dest, _) gives arm64PhysRegMask(dest)
+		reloadFromStack(dest, _) gives arm64PhysRegMask(dest)
+		globalLoad(dest, _, _) gives arm64PhysRegMask(dest)
+		leaFromStack(dest, _) gives arm64PhysRegMask(dest)
+		leaRdata(dest, _) gives arm64PhysRegMask(dest)
+		leaFuncAddr(dest, _) gives arm64PhysRegMask(dest)
+		cset(dest, _) gives arm64PhysRegMask(dest)
+		default panic("arm64PhysMaskSingleDef: unexpected op for pattern")
+	end 'extract'
+end 'arm64PhysMaskSingleDef'
+
+function arm64PhysMaskConstImm(op Arm64Op) returns RegMask
+	return match op 'extract'
+		movImm(dest, _) gives arm64PhysRegMask(dest)
+		default panic("arm64PhysMaskConstImm: unexpected op for pattern")
+	end 'extract'
+end 'arm64PhysMaskConstImm'
+
+function arm64PhysMaskMovRegReg(op Arm64Op) returns RegMask
+	return match op 'extract'
+		movRegReg(destReg, _) gives arm64PhysRegMask(destReg)
+		default panic("arm64PhysMaskMovRegReg: unexpected op for pattern")
+	end 'extract'
+end 'arm64PhysMaskMovRegReg'
+
 function noteArm64ThreeAddr(defBlocks RegIntArray, blockIdx RegInt, op Arm64Op)
 	match op 'extract'
 		addRegs(dest, _, _) then noteArm64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
@@ -1898,6 +1952,16 @@ export type Arm64RegAllocTarget implements RegAllocTarget
 		let a64Op = try module.arm64Ops.get(packed) otherwise panic("invariant: packed opIdx not in module.arm64Ops")
 		return a64Op.rawValue.implicitGprDefs
 	end 'getImplicitGprDefs'
+
+	// See RegAllocTarget.getPhysGprDestMask. On arm64, explicit phys-dest
+	// writes appear only in call argument setup and return-value plumbing —
+	// mov / load / lea / imm shapes (the singleDef, constImm, and movRegReg
+	// patterns); there is no spill-fold path here (`hasMemOperandAlu` is
+	// false), so the x64-only memory-ALU shapes never carry a phys dest.
+	function getPhysGprDestMask(module TargetModule, packed OpIndex) returns RegMask
+		let a64Op = try module.arm64Ops.get(packed) otherwise panic("invariant: packed opIdx not in module.arm64Ops")
+		return arm64OpPhysGprDestMask(a64Op)
+	end 'getPhysGprDestMask'
 
 	function getImplicitGprReads(module TargetModule, packed OpIndex) returns RegMask
 		let a64Op = try module.arm64Ops.get(packed) otherwise panic("invariant: packed opIdx not in module.arm64Ops")

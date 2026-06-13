@@ -4682,7 +4682,15 @@ export type Parser
 				if getCachedBuiltinDictionaryLiteralTypeName().isEmpty() 'firstImpl'
 					setCachedBuiltinDictionaryLiteralTypeName(currentTypeName)
 				end 'firstImpl'
-			end 'isBdl'
+			end 'isBdl' else if conf.interfaceName == "BuiltinCharLiteral" 'isBcl'
+				if getCachedBuiltinCharLiteralTypeName().isEmpty() 'firstImpl'
+					setCachedBuiltinCharLiteralTypeName(currentTypeName)
+				end 'firstImpl'
+			end 'isBcl' else if conf.interfaceName == "BuiltinStringLiteral" 'isBsl'
+				if getCachedBuiltinStringLiteralTypeName().isEmpty() 'firstImpl'
+					setCachedBuiltinStringLiteralTypeName(currentTypeName)
+				end 'firstImpl'
+			end 'isBsl'
 		end 'discoverBuiltins'
 
 		currentTypeName = ""
@@ -7345,6 +7353,7 @@ export type Parser
 			integer gives true
 			float gives true
 			string gives true
+			character gives true
 			function gives true
 			named(id) gives namedTypeIsKnownNonEnum(project.typeNames.get(id))
 			unresolved gives false
@@ -8208,6 +8217,11 @@ export type Parser
 		// fallback's varLoad reads a well-typed value under wasm's stricter
 		// validation.
 		let resultSlot = scope.declareShadowing("__match_{header.userLabel}_{currentFunc.nextBlockId}", varType: MaxonType.unresolved, mutable: true)
+		// Refcount-insertion: the match-result slot is a single-merge-load MOVE relay
+		// — its one consuming load takes ownership of the arm's value, so the slot
+		// must NOT incref-on-store / scope-exit-decref (a managed arm value would be
+		// freed before the consuming load uses it). CONTRACT: keep it single-load.
+		currentFunc.markRelaySlot(resultSlot)
 		let seedZero = emitLiteral(currentBlock, value: 0, valueType: MaxonType.integer)
 		module.appendOp(currentBlock, op: MaxonOp.varDecl(resultSlot, value: seedZero, slotType: MaxonType.unresolved, range: SourceRange.none()))
 
@@ -8710,6 +8724,12 @@ export type Parser
 			end 'userLoopVar'
 		end 'namedIter'
 		module.appendOp(bodyBlock, op: MaxonOp.varDecl(loopVarSlot, value: currentResultName, slotType: MaxonType.unresolved, range: stmtRange))
+		// Refcount-insertion: the for-loop variable BORROWS the collection's element
+		// — the loop body neither owns it nor refcounts it. Mark it a borrow slot so
+		// a load of it classifies `borrowed` (not `incomingOwner`); otherwise a managed
+		// element (e.g. a `String` in `for k in keys`) is incref'd on store + decref'd
+		// at loop end, freeing the collection's element mid-loop / over-decref.
+		func.markBorrowSlot(loopVarSlot)
 		if isDestructure 'emitFieldBindings'
 			for i in 0 upto destructureNames.count() 'eachDestructure'
 				let destName = try destructureNames.get(i) otherwise panic("parseForInIterable: destructureNames.get OOB at {i}")
@@ -8723,6 +8743,9 @@ export type Parser
 					destSlot = declareCheckedLocal(destName, varType: MaxonType.unresolved, mutable: false, line: forToken.line, column: forToken.column)
 				end 'namedField'
 				module.appendOp(bodyBlock, op: MaxonOp.varDecl(destSlot, value: fieldLoadName, slotType: MaxonType.unresolved, range: stmtRange))
+				// Refcount-insertion: destructured fields are borrows of the (borrowed)
+				// tuple element's fields — never owned by the loop body.
+				func.markBorrowSlot(destSlot)
 			end 'eachDestructure'
 		end 'emitFieldBindings'
 
@@ -9700,7 +9723,7 @@ export type Parser
 		return match t 'check'
 			named gives true
 			typeParameter gives true
-			boolean to string gives false
+			boolean to character gives false
 			function gives false
 			unresolved gives false
 			genericInstance to cstring gives false
@@ -9710,7 +9733,7 @@ export type Parser
 	function isNamedMaxonType(t MaxonType) returns bool
 		return match t 'check'
 			named gives true
-			boolean to string gives false
+			boolean to character gives false
 			function to cstring gives false
 		end 'check'
 	end 'isNamedMaxonType'
@@ -9743,6 +9766,7 @@ export type Parser
 			integer gives false
 			float gives false
 			string gives false
+			character gives false
 			unresolved gives false
 			typeParameter gives false
 			genericInstance gives false
@@ -10327,6 +10351,11 @@ export type Parser
 		// `parseMatchExpression` seeds its result slot.
 		let seedZero = emitLiteral(innerExitBlock, value: 0, valueType: MaxonType.integer)
 		module.appendOp(innerExitBlock, op: MaxonOp.varDecl(resultSlot, value: seedZero, slotType: MaxonType.unresolved, range: SourceRange.ofToken(tryToken)))
+		// Refcount-insertion: the try-result slot is a single-merge-load MOVE relay
+		// (the merge block's one load consumes the value). Mark it so it is not
+		// incref-on-store / scope-exit-decref'd — the move accounting assumes exactly
+		// one consuming load.
+		currentFunc.markRelaySlot(resultSlot)
 
 		var fallbackBlock = module.addBlockAt(currentFunc, label: "{baseLabel}.otherwise", filePath: tryFilePath, firstLine: tryToken.line)
 		let fallbackBlockId = fallbackBlock.id
@@ -11180,7 +11209,7 @@ export type Parser
 		for i in 0 upto elemTypes.count() 'each'
 			let t = try elemTypes.get(i) otherwise return false
 			let ok = match t 'check'
-				boolean to string gives true
+				boolean to character gives true
 				named gives true
 				function to cstring gives false
 			end 'check'
@@ -12297,6 +12326,7 @@ export type Parser
 			integer gives 0
 			float gives 0
 			string gives 0
+			character gives 0
 			genericInstance gives 0
 			function gives 0
 			unresolved gives 0
@@ -12349,6 +12379,7 @@ export type Parser
 			integer gives MaxonType.unresolved
 			float gives MaxonType.unresolved
 			string gives MaxonType.unresolved
+			character gives MaxonType.unresolved
 			named gives MaxonType.unresolved
 			function gives MaxonType.unresolved
 			unresolved gives MaxonType.unresolved
@@ -13240,7 +13271,7 @@ export type Parser
 		let stringId = project.strings.intern(String.from(decoded))
 		let name = freshSynthName()
 		module.appendOp(block, op: MaxonOp.charLiteral(name, stringId: stringId, range: range))
-		let charType = MaxonType.named(project.typeNames.intern("Character"))
+		let charType = builtinCharLiteralType(project)
 		return ExprResult.direct(name, valueType: charType)
 	end 'parseCharLiteralExpr'
 
@@ -13407,7 +13438,7 @@ export type Parser
 		// flow, and the stringInterp op must reference its parts from the
 		// block where they were defined.
 		module.appendOp(currentBlock, op: MaxonOp.stringInterp(resultName, parts: parts, range: interpRange))
-		return ExprResult.direct(resultName, valueType: MaxonType.named(project.typeNames.intern("String")))
+		return ExprResult.direct(resultName, valueType: builtinStringLiteralType(project))
 	end 'parseStringLiteral'
 
 	// Drive the `stringInterpStart <expr> stringInterpEnd stringLiteral(frag)*`
@@ -13507,16 +13538,17 @@ export type Parser
 			integer gives InterpExprKind.i64
 			float gives InterpExprKind.f64
 			string gives InterpExprKind.string
+			character gives InterpExprKind.character
 			named(id) gives interpKindForNamed(project.typeNames.get(id))
 			function to cstring gives InterpExprKind.i64
 		end 'k'
 	end 'inferInterpKind'
 
 	function interpKindForNamed(name String) returns InterpExprKind
-		if name == "String" 'isString'
+		if nonEmptyEquals(name, discovered: getCachedBuiltinStringLiteralTypeName()) 'isString'
 			return InterpExprKind.string
 		end 'isString'
-		if name == "Character" 'isChar'
+		if nonEmptyEquals(name, discovered: getCachedBuiltinCharLiteralTypeName()) 'isChar'
 			return InterpExprKind.character
 		end 'isChar'
 		if name == "bool" 'isBool'
@@ -13546,7 +13578,7 @@ export type Parser
 		// Phase 7: a materialized stringConst is a real `String` struct value;
 		// TypeResolution refines the named type once stdlib registers `String`.
 		// Falls back to the legacy `MaxonType.string` primitive tag pre-Phase-7.
-		return ExprResult.direct(name, valueType: MaxonType.named(project.typeNames.intern("String")))
+		return ExprResult.direct(name, valueType: builtinStringLiteralType(project))
 	end 'materializeStringConstIfNeeded'
 
 	// Validate \xNN and \uNNNN escape sequences in `token.value`. Reports
@@ -15280,7 +15312,7 @@ export function synthesizeEnumFromNameHelperImpl(project Project, module MaxonMo
 		return
 	end 'alreadyRegistered'
 
-	let stringMaxonType = MaxonType.named(project.typeNames.intern("String"))
+	let stringMaxonType = builtinStringLiteralType(project)
 	let enumMaxonType = internMaxonType(project, name: enumName)
 	var paramNames = StringArray.create()
 	paramNames.push("name")
@@ -15397,8 +15429,12 @@ export function synthesizeEnumFromRawStringHelperImpl(project Project, module Ma
 		return
 	end 'alreadyRegistered'
 
-	let rawTypeName = "Character" if isCharBacked else "String"
-	let rawMaxonType = MaxonType.named(project.typeNames.intern(rawTypeName))
+	var rawMaxonType = MaxonType.unresolved
+	if isCharBacked 'charRaw'
+		rawMaxonType = builtinCharLiteralType(project)
+	end 'charRaw' else 'stringRaw'
+		rawMaxonType = builtinStringLiteralType(project)
+	end 'stringRaw'
 	let enumMaxonType = internMaxonType(project, name: enumName)
 	var paramNames = StringArray.create()
 	paramNames.push("raw")
@@ -16034,7 +16070,7 @@ function validateFromRawValueLiteral(project Project, enumName String, classific
 		// String/char-backed: the raw value is the case's declared literal.
 		let expectedKind = LiteralArgKind.charLiteral if isCharBacked else LiteralArgKind.stringLiteral
 		if lit.kind != expectedKind 'typeMismatch'
-			let expectedName = "Character" if isCharBacked else "String"
+			let expectedName = builtinCharLiteralTypeName() if isCharBacked else builtinStringLiteralTypeName()
 			reportCompileError(project, code: ErrorCode.semanticTypeMismatch, message: "type mismatch: 'expected {expectedName}, got {literalArgTypeName(lit)}'", line: argRange.line, column: argRange.column, filePath: callerFilePath)
 			return true
 		end 'typeMismatch'
@@ -16082,8 +16118,8 @@ end 'validateFromNameLiteral'
 function literalArgTypeName(lit LiteralArgInfo) returns String
 	return match lit.kind 'name'
 		intLiteral gives "int"
-		stringLiteral gives "String"
-		charLiteral gives "Character"
+		stringLiteral gives builtinStringLiteralTypeName()
+		charLiteral gives builtinCharLiteralTypeName()
 	end 'name'
 end 'literalArgTypeName'
 
@@ -16402,6 +16438,7 @@ function ternaryArmKindName(t MaxonType) returns String
 		integer gives "Integer"
 		float gives "Float"
 		string gives "Struct"
+		character gives "Struct"
 		named to cstring gives ""
 	end 'kind'
 end 'ternaryArmKindName'
@@ -16416,6 +16453,7 @@ function awaitNonPromiseKindName(project Project, t MaxonType) returns String
 		integer gives "integer"
 		float gives "float"
 		string gives "struct"
+		character gives "struct"
 		named(id) gives awaitNamedKindName(project, id: id)
 		function gives "function"
 		unresolved gives "value"

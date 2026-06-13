@@ -5,9 +5,9 @@ export function targetModuleToString(module TargetModule, skipStdlib bool, cpu C
 	var body = ""
 	for func in module.functions 'eachFunc'
 		if skipStdlib 'filter'
-			if skipFunction(func.name) 'isRuntime'
+			if skipPrintedFunction(func) 'hidden'
 				continue
-			end 'isRuntime'
+			end 'hidden'
 		end 'filter'
 		// `append` mutates the String buffer with amortized-O(1) doubling growth,
 		// keeping the printer O(total bytes) instead of the O(n²) shape you get
@@ -43,7 +43,7 @@ function targetFunctionToString(module TargetModule, func IrFunction, cpu CpuArc
 	let funcBlocks = resolveFuncBlocks(module.blocks, blockRefs: func.blockRefs)
 
 	for block in funcBlocks 'eachBlock'
-		sb.append("  {block.label}:\n")
+		sb.append("  {block.label}{formatBlockArgs(block)}:\n")
 
 		for opIdx in block.opRefs 'eachOp'
 			let opText = targetOpIdxToString(module, opIdx: opIdx, blocks: funcBlocks, cpu: cpu)
@@ -99,6 +99,19 @@ export function skipFunction(name String) returns bool
 	end 'eachPrefix'
 	return false
 end 'skipFunction'
+
+// The filter the IR printers apply when `skipStdlib` is set: hide a function
+// from the dump when it is either a prefix-named runtime helper OR defined in a
+// stdlib source file. `skipFunction` alone only catches the `__`/`mrt_`/...
+// runtime helpers; the bulk of the stdlib (`Array.*`, `String.*`, `Map.*`, …)
+// has plain user-style names and is identified by its source path instead.
+// `isStdlibFunctionPath` recognizes both freshly-parsed stdlib files and
+// cache-restored functions (which carry the shared stdlib-bootstrap path), so
+// this stays correct across the early pipeline phases where the stdlib is still
+// linked inline into the module being dumped.
+export function skipPrintedFunction(func IrFunction) returns bool
+	return skipFunction(func.name) or isStdlibFunctionPath(func.sourceFilePath)
+end 'skipPrintedFunction'
 
 // Single source of truth for the runtime/stdlib name prefixes hidden from
 // spec IR snapshots. Update this list when a new compiler-internal helper

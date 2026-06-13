@@ -27,8 +27,10 @@ public static partial class SpecParser {
   /// <summary>
   /// Parse all spec files in a directory.
   /// Skips specs with status: draft (work-in-progress) or status: selfhosted
-  /// (written against self-hosted-only intrinsics like __mm_raw_alloc; the C#
-  /// bootstrap doesn't expose those, so its runner can't compile them).
+  /// (written against self-hosted-only intrinsics like __mm_raw_alloc, which
+  /// the C# bootstrap doesn't expose, or pinning RequiredIR where the two
+  /// compilers' lowering diverges — one shared block can't satisfy both
+  /// runners, so the spec is owned by the self-hosted suite).
   /// When targetKey is provided (e.g. "x64-windows"), extracts RequiredIR:{targetKey} blocks.
   /// </summary>
   public static List<SpecFile> ParseDirectory(string specDir, string? targetKey = null) {
