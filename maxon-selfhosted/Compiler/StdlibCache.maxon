@@ -684,6 +684,63 @@ export function getCompilerFingerprint() returns (MachineWord, MachineWord)
 	return (info.size, info.modifiedTime)
 end 'getCompilerFingerprint'
 
+// Short, filename-safe hex token derived from the compiler fingerprint
+// (`getCompilerFingerprint`'s size + mtime), used as a filename component so
+// distinct compiler versions write distinct, coexisting cache files instead of
+// stomping each other (see *Cache validity key* in the libraries plan). The
+// raw `(size, mtime)` tuple isn't filename-shaped; this folds both words
+// through the same 32-bit FNV-1a the source checksum uses, then formats the
+// result as 8 lowercase hex digits.
+//
+// A degraded `(0, 0)` fingerprint (executable path / file-info lookup failed)
+// folds to a fixed token like any other input — the on-disk header's
+// fingerprint check (and, in a later phase, disabling caching on a `(0, 0)`
+// fingerprint) remains the correctness backstop; the token only governs
+// filename coexistence.
+export function compilerFingerprintToken() returns String
+	let (size, mtime) = getCompilerFingerprint()
+	var h = FNV_OFFSET_BASIS
+	h = fnvFoldWord(h, word: size)
+	h = fnvFoldWord(h, word: mtime)
+	return toHex8(h)
+end 'compilerFingerprintToken'
+
+// Fold a full machine word into an FNV-1a state byte-by-byte (8 bytes,
+// little-endian), so both halves of a 64-bit input affect the 32-bit result.
+function fnvFoldWord(state CacheChecksum, word MachineWord) returns CacheChecksum
+	var s = state
+	var shift = 0
+	while shift < 64 'eachByte'
+		s = fnvUpdate(s, b: (word shr shift) and 0xFF)
+		shift = shift + 8
+	end 'eachByte'
+	return s
+end 'fnvFoldWord'
+
+// Format the low 32 bits of `value` as exactly 8 lowercase hex digits
+// (most-significant nibble first). No stdlib hex formatter exists, so this
+// nibble-walks a digit table. Counts UP (0..8) and shifts from the high nibble
+// down so the index variable never goes negative (MachineWord is unsigned).
+function toHex8(value MachineWord) returns String
+	let digits = "0123456789abcdef"
+	var out = ByteArray.create()
+	var i = 0
+	while i < 8 'eachNibble'
+		let shift = (7 - i) * 4
+		let idx = (value shr shift) and 0xF
+		out.push(byteAt(digits, index: idx))
+		i = i + 1
+	end 'eachNibble'
+	return String.from(out)
+end 'toHex8'
+
+// Read the `index`-th byte of a String's UTF-8 bytes. The hex digit table is
+// pure ASCII, so a byte index is a character index.
+function byteAt(s String, index MachineWord) returns MachineWord
+	let bytes = s.toByteArray()
+	return try bytes.get(index) otherwise panic("byteAt: index {index} out of range for '{s}'")
+end 'byteAt'
+
 // ============================================================
 // ThrowsClause cache field helpers
 // ============================================================

@@ -5,15 +5,17 @@ var libraryRegistry = LibraryRegistry.create()
 
 // Fetch-or-create the stdlib Library (always index 0). Created lazily because
 // `findStdlibPath()` walks the filesystem; the anchors are filled in on first
-// access. `rootPath` is the parent of `stdlib/` (namespace anchor); for Phase
-// 1 `cacheDirRoot` mirrors today's behavior and is set to the same parent —
-// Phase 2 will move it to `findStdlibPath()`. Returns a SNAPSHOT; mutate via
-// `setStdlibLib`.
+// access. `rootPath` is the parent of `stdlib/` (namespace anchor, so
+// `stdlib/Math.maxon` parses as namespace `stdlib`); `cacheDirRoot` is the
+// `stdlib/` dir itself (Phase 2), so the cache lives adjacent to its sources at
+// `<stdlibDir>/.maxon/cache/` and is shared across every project that resolves
+// the same stdlib — not duplicated per user project. Returns a SNAPSHOT; mutate
+// via `setStdlibLib`.
 function stdlibLib() returns Library
 	if libraryRegistry.libs.count() == 0 'create'
 		let stdlibPath = findStdlibPath()
 		let projectRoot = try stdlibPath.parent() otherwise FilePath from ""
-		libraryRegistry.libs.push(Library.create("stdlib", rootPath: projectRoot, cacheDirRoot: projectRoot, isStdlib: true))
+		libraryRegistry.libs.push(Library.create("stdlib", rootPath: projectRoot, cacheDirRoot: stdlibPath, isStdlib: true))
 	end 'create'
 	return try libraryRegistry.libs.get(0) otherwise panic("stdlibLib: registry empty after create")
 end 'stdlibLib'
@@ -23,6 +25,56 @@ end 'stdlibLib'
 function setStdlibLib(lib Library)
 	try libraryRegistry.libs.set(0, value: lib) otherwise panic("setStdlibLib: registry index 0 missing")
 end 'setStdlibLib'
+
+// Compute the on-disk cache path for `lib` and `target` (Phase 2). The cache
+// lives in the library's OWN directory (`<cacheDirRoot>/.maxon/cache/`), shared
+// across every project that resolves this library, and the filename carries the
+// target AND the compiler-fingerprint token so two compiler versions sharing
+// the dir write distinct, coexisting files instead of stomping each other (see
+// *Cache validity key* in the libraries plan). The `<optsHash>` filename
+// component lands in Phase 3 with the three-tier split; Phase 2's filename is
+// `<lib>-<target>-<fp>.mxc`.
+function libraryCachePath(lib Library, target Target) returns FilePath
+	let cacheDir = lib.cacheDirRoot.join(".maxon").join("cache")
+	let fp = compilerFingerprintToken()
+	return cacheDir.join("{lib.name}-{targetToString(target)}-{fp}.mxc")
+end 'libraryCachePath'
+
+// Delete the on-disk caches for every library this project uses (backs the
+// `maxon clean` command). Phase 2 resolves only stdlib; Phase 5 extends the set
+// to the project's external libraries. For each library, removes every `*.mxc`
+// (all fingerprint × target combinations) and any stray `*.tmp` left by a
+// crashed/aborted atomic write under `<cacheDirRoot>/.maxon/cache/`. Returns the
+// paths actually removed (for the CLI to report). A missing cache dir or an
+// unreadable/undeletable file is skipped silently — clean is best-effort.
+export function cleanLibraryCaches() returns StringArray
+	var deleted = StringArray.create()
+	deleteCacheFilesUnder(stdlibLib().cacheDirRoot, into: deleted)
+	return deleted
+end 'cleanLibraryCaches'
+
+// Delete `*.mxc` + `*.tmp` directly under `<libCacheDirRoot>/.maxon/cache/`,
+// appending each removed path to `out`. Non-recursive: cache files live flat in
+// that one directory. Tolerates a missing dir / list failure / per-file delete
+// failure by skipping (best-effort clean).
+function deleteCacheFilesUnder(libCacheDirRoot FilePath, into StringArray)
+	if libCacheDirRoot.isEmpty() 'noRoot'
+		return
+	end 'noRoot'
+	let cacheDir = libCacheDirRoot.join(".maxon").join("cache")
+	if not Directory.exists(cacheDir) 'noDir'
+		return
+	end 'noDir'
+	let entries = try Directory.list(cacheDir) otherwise return
+	for entry in entries 'eachEntry'
+		let name = entry.filename()
+		if not (name.endsWith(".mxc") or name.endsWith(".tmp")) 'notCache'
+			continue
+		end 'notCache'
+		try File.delete(entry) otherwise continue
+		into.push(entry.toString())
+	end 'eachEntry'
+end 'deleteCacheFilesUnder'
 
 export function getCachedStdlibStdModule() returns StdModule
 	return stdlibLib().inlinerStdModule
@@ -168,13 +220,6 @@ function applyPendingFuncRenames(project Project, allModule MaxonModule)
 	end 'eachFunc'
 	project.pendingFuncRenames = FuncRenameMap.create()
 end 'applyPendingFuncRenames'
-
-// Project directories where the on-disk stdlib cache lives, pinned on the
-// first `getStdlibModule` load so cross-target reloads (`loadCacheForTarget`)
-// and lazy-codegen persistence (`persistGrownStdlibCache`) compute the same
-// `.maxon/cache/` path. A singleton array (index 0) for the same constant-
-// initializer reason the parsed-module snapshot uses one.
-var stdlibCacheProjectDirs = FilePathArray.create()
 
 // Discovery cache for the BuiltinArrayLiteral protocol, stored on the stdlib
 // Library's `builtinArrayLiteralTypeName`. The parser walks
@@ -529,22 +574,13 @@ export function getStdlibModule(project Project) returns MaxonModule
 
 	logInfo(LogCategory.compiler, message: function() gives "Loading stdlib from {stdlibPath}")
 
-	// Try loading pre-compiled stdlib cache from project's .maxon/cache/ directory.
-	// For single-file builds, use the parent directory. The user-supplied path
-	// can be relative (e.g. `maxon build test.maxon` from inside its directory) —
-	// a bare filename has no separator, so .parent() would throw. Resolve against
-	// the current working directory first to guarantee a parent exists.
-	// Save the project dir so loadCacheForTarget uses the same path.
-	var projectDir = project.rootPath
-	if File.exists(project.rootPath) 'isSingleFile'
-		let absoluteFile = project.rootPath.resolve(Directory.currentPath())
-		projectDir = try absoluteFile.parent() otherwise panic("single-file path has no parent after resolving against cwd: {absoluteFile.toString()}")
-	end 'isSingleFile'
-	if stdlibCacheProjectDirs.count() == 0 'firstSet'
-		stdlibCacheProjectDirs.push(projectDir)
-	end 'firstSet'
-	let cacheDir = projectDir.join(".maxon").join("cache")
-	let cachePath = cacheDir.join("stdlib-{targetToString(project.target)}.mxc")
+	// Phase 2: the stdlib cache lives in the stdlib's OWN directory
+	// (`<stdlibDir>/.maxon/cache/`), shared across every project that resolves
+	// it, with the target + compiler-fingerprint baked into the filename for
+	// coexistence. The path no longer depends on the user project, so the old
+	// per-project `.maxon/cache/` location, the single-file parent resolution,
+	// and the sticky `stdlibCacheProjectDirs` pin are all gone.
+	let cachePath = libraryCachePath(stdlibLib(), target: project.target)
 	let checksumStart = passTimerStart()
 	let contentChecksum = currentStdlibChecksum(project.target)
 	recordPassSince("__stdlib-checksum", startMs: checksumStart)
@@ -995,10 +1031,9 @@ function loadCacheForTarget(project Project)
 		return
 	end 'noStdlib'
 
-	// Use the same project directory as the initial cache load
-	let projectDir = try stdlibCacheProjectDirs.get(0) otherwise return
-	let cacheDir = projectDir.join(".maxon").join("cache")
-	let cachePath = cacheDir.join("stdlib-{targetToString(project.target)}.mxc")
+	// Phase 2: same library-owned cache dir as the initial load, now keyed by
+	// the NEW target (cross-compile switch) plus the compiler fingerprint.
+	let cachePath = libraryCachePath(stdlibLib(), target: project.target)
 	let contentChecksum = currentStdlibChecksum(project.target)
 
 	let cacheResult = readStdlibCache(project, path: cachePath, target: project.target, expectedChecksum: contentChecksum)
@@ -1403,23 +1438,18 @@ export function ensureStdlibFunctionsCompiled(project Project, seeds StringArray
 	logInfo(LogCategory.compiler, message: function() gives "Lazily compiled {keptCount} stdlib functions ({lazyCompiledStdlibNames.count()} cached)")
 end 'ensureStdlibFunctionsCompiled'
 
-// Compute the on-disk cache path for `project`'s target, mirroring the loader's
-// path computation (`getStdlibModule` / `loadCacheForTarget`). Empty when no
-// project dir has been pinned yet (the cache can't be located).
-function currentStdlibCachePath(project Project) returns FilePath
-	let projectDir = try stdlibCacheProjectDirs.get(0) otherwise return FilePath from ""
-	return projectDir.join(".maxon").join("cache").join("stdlib-{targetToString(project.target)}.mxc")
-end 'currentStdlibCachePath'
-
 // Re-serialize the in-memory stdlib `cacheData` (now carrying the
 // lazily-compiled bytecode) to the cache file, so subsequent builds reuse it.
+// Skips persistence when stdlib couldn't be located (empty `cacheDirRoot`),
+// which would otherwise resolve to a bare relative path under the cwd.
 function persistGrownStdlibCache(project Project)
-	let cachePath = currentStdlibCachePath(project)
-	if cachePath.isEmpty() 'noPath'
+	let lib = stdlibLib()
+	if lib.cacheDirRoot.isEmpty() 'noPath'
 		return
 	end 'noPath'
+	let cachePath = libraryCachePath(lib, target: project.target)
 	let contentChecksum = currentStdlibChecksum(project.target)
-	writeStdlibCache(project, path: cachePath, data: stdlibLib().cacheData, target: project.target, contentChecksum: contentChecksum)
+	writeStdlibCache(project, path: cachePath, data: lib.cacheData, target: project.target, contentChecksum: contentChecksum)
 end 'persistGrownStdlibCache'
 
 // Run the native backend tail (target lowering + regalloc + prologue/epilogue

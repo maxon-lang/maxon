@@ -18,6 +18,7 @@ function main() returns ExitCode
 		specTest gives runSpecTests(args)
 		testIncremental gives runIncrementalTests()
 		coverageReport gives runCoverageReportCli(args)
+		clean gives runClean()
 		unknown gives unknownCommand()
 	end 'cmd'
 
@@ -42,6 +43,25 @@ function runCoverageReportCli(args MaxonArgs) returns ExitCode
 	return runCoverageReport(exePath)
 end 'runCoverageReportCli'
 
+// `maxon clean` — delete the on-disk caches for every library this project
+// uses (Phase 2: stdlib only; Phase 5 extends it to the project's external
+// libraries). Removes all `*.mxc` (every fingerprint × target) and stray
+// `*.tmp` under each library's `.maxon/cache/`. Because libraries are shared,
+// cleaning a shared lib's cache also affects other projects' next build —
+// expected for an explicit clean.
+function runClean() returns ExitCode
+	let deleted = cleanLibraryCaches()
+	if deleted.count() == 0 'nothing'
+		print("maxon clean: no cache files to remove\n")
+	end 'nothing' else 'some'
+		for path in deleted 'eachDeleted'
+			print("removed {path}\n")
+		end 'eachDeleted'
+		print("maxon clean: removed {deleted.count()} cache file(s)\n")
+	end 'some'
+	return 0
+end 'runClean'
+
 function printUsage()
 	print("Usage: maxon <command> [options]\n")
 	print("\n")
@@ -51,6 +71,7 @@ function printUsage()
 	print("  spec-test [options]      Run spec tests\n")
 	print("  test-incremental         Run incremental compilation tests\n")
 	print("  coverage report <exe>    Aggregate <exe>.covmap + <exe>*.covdata into <exe>.lcov\n")
+	print("  clean                    Delete this project's library caches (stdlib .maxon/cache)\n")
 	print("\n")
 	print("Build options (build, run):\n")
 	print("  --emit-ir                Write .ir file\n")

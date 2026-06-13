@@ -5,6 +5,7 @@ export union Command
 	specTest
 	testIncremental
 	coverageReport
+	clean
 	unknown
 end 'Command'
 
@@ -116,7 +117,9 @@ export type MaxonArgs
 			args.command = Command.specTest
 		end 'isSpec' else if cmdStr == "test-incremental" 'isInc'
 			args.command = Command.testIncremental
-		end 'isInc' else if cmdStr == "coverage" 'isCov'
+		end 'isInc' else if cmdStr == "clean" 'isClean'
+			args.command = Command.clean
+		end 'isClean' else if cmdStr == "coverage" 'isCov'
 			// Sentinel: user may type "coverage" alone; empty string flows to the 'notReport' else below.
 			let sub = try allArgs.get(2) otherwise ""
 			if sub == "report" 'isReport'
@@ -208,6 +211,7 @@ export type MaxonArgs
 			specTest gives true
 			testIncremental gives true
 			coverageReport gives false
+			clean gives true
 			unknown gives true
 		end 'needsDefault'
 		if args.path.isEmpty() and needsCwdDefault 'defaultPath'
