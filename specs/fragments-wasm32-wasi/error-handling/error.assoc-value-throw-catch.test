@@ -42,47 +42,46 @@ module {
     %8 = mir.mov_imm 16 : i64
     %9 = mir.mov_imm 0 : i64
     %10 = mir.mov_imm 0 : i64
-    %11 = mir.call @stdlib.__mm_alloc(%8, %9, %10)
-    mir.store %10, %11, 0 width: qword
-    mir.store %5, %11, 8 width: qword
+    %11 = mir.mov_imm 0 : i64
+    %12 = mir.call @stdlib.__mm_alloc(%8, %9, %11)
+    mir.store %10, %12, 0 width: qword
+    mir.store %5, %12, 8 width: qword
     %7 = mir.mov_imm 0 : i64
-    mir.error_return %7, %11
+    %13 = mir.call @mm_drop(%12)
+    mir.error_return %7, %12
   }
   func @main() -> u8 {
   entry:
     %0 = mir.mov_imm 0 : i64
-    %1, %2 = mir.try_call @mayFail()
-    %3 = mir.mov_imm 0 : i64
-    %4 = mir.cmp ne, %2, %3
-    mir.cond_br %4 [then: try_0.otherwise(), else: try_0.merge(%0, %1)]
+    %2, %3 = mir.try_call @mayFail()
+    %5 = mir.cmp ne, %3, %0
+    mir.cond_br %5 [then: try_0.otherwise(), else: try_0.merge(%0, %2)]
   try_0.otherwise:
-    %7 = mir.load %2, 0 width: qword
-    %8 = mir.mov_imm 0 : i64
-    %9 = mir.cmp eq, %7, %8
-    mir.cond_br %9 [then: check_0.case0(), else: check_0.next0()]
-  check_0.merge:
-    %10 = mir.mov_imm 0 : i64
-    mir.br try_0.merge(%19, %10)
+    %8 = mir.load %3, 0 width: qword
+    %10 = mir.cmp eq, %8, %0
+    mir.cond_br %10 [then: check_0.case0(), else: check_0.next0()]
+  check_0.merge(%20: i64):
+    mir.br try_0.merge(%20, %0)
   check_0.case0:
-    %11 = mir.load %2, 8 width: qword
-    mir.br check_0.merge(%11)
+    %12 = mir.load %3, 8 width: qword
+    mir.br check_0.merge(%12)
   check_0.next0:
-    %13 = mir.load %2, 0 width: qword
-    %14 = mir.mov_imm 1 : i64
-    %15 = mir.cmp eq, %13, %14
-    mir.cond_br %15 [then: check_0.case1(), else: check_0.merge(%0)]
+    %14 = mir.load %3, 0 width: qword
+    %15 = mir.mov_imm 1 : i64
+    %16 = mir.cmp eq, %14, %15
+    mir.cond_br %16 [then: check_0.case1(), else: check_0.merge(%0)]
   check_0.case1:
-    %16 = mir.mov_imm 1 : i64
-    mir.br check_0.merge(%16)
-  try_0.merge:
-    %22 = mir.mov_imm 125 : i64
-    %23 = mir.cmp ugt, %20, %22
-    mir.cond_br %23 [then: __range_panic_0(), else: __range_ok_0()]
+    %17 = mir.mov_imm 1 : i64
+    mir.br check_0.merge(%17)
+  try_0.merge(%21: i64, %22: i64):
+    %23 = mir.mov_imm 125 : i64
+    %24 = mir.cmp ugt, %21, %23
+    mir.cond_br %24 [then: __range_panic_0(), else: __range_ok_0()]
   __range_panic_0:
-    %24 = mir.global_addr @__panic_msg_c698f8f18c8b74c1
-    %25 = mir.call @mrt_panic(%24)
+    %25 = mir.global_addr @__panic_msg_c698f8f18c8b74c1
+    %26 = mir.call @mrt_panic(%25)
   __range_ok_0:
-    mir.ret %20
+    mir.ret %21
   }
 }
 ---

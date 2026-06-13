@@ -79,28 +79,37 @@ module {
   }
   func @main() -> u8 {
   entry:
-    %14 = mir.mov_imm 0 : i64
-    %15 = mir.call @mrt_alloc(%14)
-    %16 = mir.mov_imm 0 : i64
-    %17 = mir.call @mrt_alloc(%16)
+    %17 = mir.mov_imm 0 : i64
     %18 = mir.mov_imm 0 : i64
-    %19 = mir.call @mrt_alloc(%18)
-    %4 = mir.global_addr @__witness_One_Valued
-    %5 = mir.call @getValue(%15, %4)
-    %7 = mir.global_addr @__witness_Two_Valued
-    %8 = mir.call @getValue(%17, %7)
-    %9 = mir.add.i64 %5, %8
-    %11 = mir.global_addr @__witness_Three_Valued
-    %12 = mir.call @getValue(%19, %11)
-    %13 = mir.add.i64 %9, %12
-    %20 = mir.mov_imm 125 : i64
-    %21 = mir.cmp ugt, %13, %20
-    mir.cond_br %21 [then: __range_panic_0(), else: __range_ok_0()]
+    %19 = mir.mov_imm 0 : i64
+    %20 = mir.call @stdlib.__mm_alloc(%17, %18, %19)
+    %21 = mir.mov_imm 0 : i64
+    %22 = mir.mov_imm 0 : i64
+    %23 = mir.mov_imm 0 : i64
+    %24 = mir.call @stdlib.__mm_alloc(%21, %22, %23)
+    %25 = mir.mov_imm 0 : i64
+    %26 = mir.mov_imm 0 : i64
+    %27 = mir.mov_imm 0 : i64
+    %28 = mir.call @stdlib.__mm_alloc(%25, %26, %27)
+    %7 = mir.global_addr @__witness_One_Valued
+    %8 = mir.call @getValue(%20, %7)
+    %29 = mir.call @mm_drop(%20)
+    %10 = mir.global_addr @__witness_Two_Valued
+    %11 = mir.call @getValue(%24, %10)
+    %30 = mir.call @mm_drop(%24)
+    %12 = mir.add.i64 %8, %11
+    %14 = mir.global_addr @__witness_Three_Valued
+    %15 = mir.call @getValue(%28, %14)
+    %31 = mir.call @mm_drop(%28)
+    %16 = mir.add.i64 %12, %15
+    %32 = mir.mov_imm 125 : i64
+    %33 = mir.cmp ugt, %16, %32
+    mir.cond_br %33 [then: __range_panic_0(), else: __range_ok_0()]
   __range_panic_0:
-    %22 = mir.global_addr @__panic_msg_ddfda7c0a9135d8e
-    %23 = mir.call @mrt_panic(%22)
+    %34 = mir.global_addr @__panic_msg_ddfda7c0a9135d8e
+    %35 = mir.call @mrt_panic(%34)
   __range_ok_0:
-    mir.ret %13
+    mir.ret %16
   }
 }
 ---

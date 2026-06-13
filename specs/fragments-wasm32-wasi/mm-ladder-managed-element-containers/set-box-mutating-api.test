@@ -41,7 +41,7 @@ mm_incref Array #2 rc=1 [main]
 mm_alloc __ManagedMemory #3 size=48 [main]
 mm_incref __ManagedMemory #3 rc=1 [main]
 mm_move Array #2 -> return [main]
-mm_move Array #2 -> return
+mm_move Array #2 -> return [main]
 mm_alloc Array #4 size=8
 mm_incref Array #4 rc=1
 mm_alloc __ManagedMemory #5 size=48
@@ -76,35 +76,39 @@ mm_decref Array #4 rc=0
 mm_alloc Box #13 size=8 [Box.create]
 mm_incref Box #13 rc=1 [Box.create]
 mm_move Box #13 -> return [Box.create]
-mm_move Box #13 -> container
+mm_move Box #13 -> container [Box.hash]
 mm_alloc Box #14 size=8 [Box.create]
 mm_incref Box #14 rc=1 [Box.create]
 mm_move Box #14 -> return [Box.create]
-mm_move Box #14 -> container
+mm_move Box #14 -> container [Box.hash]
 mm_alloc Box #15 size=8 [Box.create]
+mm_incref Box #15 rc=1 [Box.create]
 mm_move Box #15 -> return [Box.create]
-mm_drop Box #15
-    mm_free Box #15
+mm_move Box #15 -> container [Box.hash]
+mm_decref Box #15 rc=0 [Box.hash]
+  mm_free Box #15
 mm_alloc Box #16 size=8 [Box.create]
+mm_incref Box #16 rc=1 [Box.create]
 mm_move Box #16 -> return [Box.create]
-mm_drop Box #16
-    mm_free Box #16
-mm_drop Set #1
-    mm_decref Array #7 rc=0
-      mm_decref __ManagedMemory #8 rc=0
-        mm_decref Box #6 rc=0
+mm_move Box #16 -> container [Box.hash]
+mm_decref Box #16 rc=0 [Box.hash]
+  mm_free Box #16
+mm_drop Set #1 [Box.hash]
+    mm_decref Array #7 rc=0 [Box.hash]
+      mm_decref __ManagedMemory #8 rc=0 [Box.hash]
+        mm_decref Box #6 rc=0 [Box.hash]
           mm_free Box #6
-        mm_decref Box #13 rc=0
+        mm_decref Box #13 rc=0 [Box.hash]
           mm_free Box #13
-        mm_decref Box #14 rc=0
+        mm_decref Box #14 rc=0 [Box.hash]
           mm_free Box #14
-        mm_decref <raw> #9 rc=0
+        mm_decref <raw> #9 rc=0 [Box.hash]
           mm_free <raw> #9
         mm_free __ManagedMemory #8
       mm_free Array #7
-    mm_decref Array #10 rc=0
-      mm_decref __ManagedMemory #11 rc=0
-        mm_decref <raw> #12 rc=0
+    mm_decref Array #10 rc=0 [Box.hash]
+      mm_decref __ManagedMemory #11 rc=0 [Box.hash]
+        mm_decref <raw> #12 rc=0 [Box.hash]
           mm_free <raw> #12
         mm_free __ManagedMemory #11
       mm_free Array #10
@@ -223,14 +227,15 @@ module {
     %89 = mir.mov_imm 0 : i64
     %90 = mir.mov_imm 60 : i64
     %91 = mir.call @stdlib.__mm_alloc(%88, %89, %90)
+    %122 = mir.call @stdlib.__mm_incref(%91)
     mir.store %27, %91, 0 width: qword
     %93 = mir.call @mm_move_return(%91)
     %94 = mir.call @mm_scope_pop()
     %29 = mir.global_addr @__layout_Set_Box
     %30 = mir.global_addr @__witness_Box_Hashable
     %31 = mir.global_addr @__witness_Box_Equatable
+    %128 = mir.call @mm_move_container(%91)
     %32 = mir.call @Set.remove(%51, %91, %29, %30, %31)
-    %122 = mir.call @mm_drop(%91)
     %34 = mir.mov_imm 7 : i64
     %95 = mir.global_addr @__mtstr_scope_Box_create
     %96 = mir.call @mm_scope_push(%95)
@@ -238,14 +243,15 @@ module {
     %98 = mir.mov_imm 0 : i64
     %99 = mir.mov_imm 60 : i64
     %100 = mir.call @stdlib.__mm_alloc(%97, %98, %99)
+    %123 = mir.call @stdlib.__mm_incref(%100)
     mir.store %34, %100, 0 width: qword
     %102 = mir.call @mm_move_return(%100)
     %103 = mir.call @mm_scope_pop()
     %36 = mir.global_addr @__layout_Set_Box
     %37 = mir.global_addr @__witness_Box_Hashable
     %38 = mir.global_addr @__witness_Box_Equatable
+    %129 = mir.call @mm_move_container(%100)
     %39 = mir.call @Set.contains(%51, %100, %36, %37, %38)
-    %123 = mir.call @mm_drop(%100)
     mir.cond_br %39 [then: has7_0(), else: has7_0.after()]
   has7_0:
     %41 = mir.global_addr @__layout_Set_Box
@@ -253,18 +259,18 @@ module {
     %43 = mir.global_addr @__witness_Box_Equatable
     %44 = mir.call @Set.count(%51, %41, %42, %43)
     %124 = mir.call @mm_drop(%51)
-    %128 = mir.call @mm_scope_pop()
-    %131 = mir.mov_imm 125 : i64
-    %132 = mir.cmp ugt, %44, %131
-    mir.cond_br %132 [then: __range_panic_0(), else: __range_ok_0()]
+    %130 = mir.call @mm_scope_pop()
+    %133 = mir.mov_imm 125 : i64
+    %134 = mir.cmp ugt, %44, %133
+    mir.cond_br %134 [then: __range_panic_0(), else: __range_ok_0()]
   has7_0.after:
-    %130 = mir.call @mm_drop(%51)
+    %132 = mir.call @mm_drop(%51)
     %45 = mir.mov_imm 0 : i64
-    %129 = mir.call @mm_scope_pop()
+    %131 = mir.call @mm_scope_pop()
     mir.ret %45
   __range_panic_0:
-    %133 = mir.global_addr @__panic_msg_7d5b657832cec9b9
-    %134 = mir.call @mrt_panic(%133)
+    %135 = mir.global_addr @__panic_msg_7d5b657832cec9b9
+    %136 = mir.call @mrt_panic(%135)
   __range_ok_0:
     mir.ret %44
   }

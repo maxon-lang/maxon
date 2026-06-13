@@ -17,10 +17,18 @@ module {
     %0 = mir.global_addr @__data_path
     %1 = mir.load %0, 0 width: qword
     %5 = mir.load %1, 0 width: qword
-    %6 = mir.load %5, 0 width: qword
-    %7 = mir.load %6, 0 width: qword
-    %8 = mir.load %6, 8 width: qword
-    %9 = mir.call @mrt_write_stdout(%7, %8)
+    mir.br inlined_stdlib.__mm_incref_0_0()
+  inlined_stdlib.__mm_incref_0_0:
+    %11 = mir.mov_imm 8 : i64
+    %12 = mir.sub.i64 %5, %11
+    mir.atomic_inc %12
+    mir.br inline_cont_main_0()
+  inline_cont_main_0:
+    %7 = mir.load %5, 0 width: qword
+    %8 = mir.load %7, 0 width: qword
+    %9 = mir.load %7, 8 width: qword
+    %10 = mir.call @mrt_write_stdout(%8, %9)
+    %13 = mir.call @__mm_decref_maybenull_helper(%5)
     %4 = mir.mov_imm 0 : i64
     mir.ret %4
   }

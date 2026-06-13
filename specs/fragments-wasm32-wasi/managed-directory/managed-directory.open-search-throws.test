@@ -12,34 +12,37 @@ ExitCode: 42
 module {
   func @main() -> u8 {
   entry:
-    %0 = mir.global_addr @__istr_0
-    %1 = mir.mov_imm 40 : i64
-    %2 = mir.call @mrt_alloc(%1)
-    mir.store %0, %2, 0 width: qword
-    %3 = mir.mov_imm 34 : i64
-    mir.store %3, %2, 8 width: qword
-    %4 = mir.mov_imm -2 : i64
-    mir.store %4, %2, 16 width: qword
-    %5 = mir.mov_imm 1 : i64
-    mir.store %5, %2, 24 width: qword
-    %6 = mir.mov_imm 0 : i64
-    mir.store %6, %2, 32 width: qword
-    %7 = mir.mov_imm 16 : i64
-    %8 = mir.call @mrt_alloc(%7)
-    mir.store %2, %8, 0 width: qword
-    %9 = mir.mov_imm 1 : i64
-    mir.store %9, %8, 8 width: qword
-    %10 = mir.load %8, 0 width: qword
-    %11, %12 = mir.try_call @mrt_directory_open_search(%10)
-    %13 = mir.mov_imm 0 : i64
-    %14 = mir.cmp ne, %12, %13
-    mir.cond_br %14 [then: try_0.otherwise(), else: try_0.merge()]
+    %0 = mir.mov_imm 0 : i64
+    %1 = mir.global_addr @__istr_0
+    %2 = mir.mov_imm 48 : i64
+    %3 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %4 = mir.call @mrt_alloc_with_dtor(%2, %3)
+    mir.store %0, %4, 40 width: qword
+    mir.store %1, %4, 0 width: qword
+    %6 = mir.mov_imm 34 : i64
+    mir.store %6, %4, 8 width: qword
+    %7 = mir.mov_imm -2 : i64
+    mir.store %7, %4, 16 width: qword
+    %8 = mir.mov_imm 1 : i64
+    mir.store %8, %4, 24 width: qword
+    mir.store %0, %4, 32 width: qword
+    %11 = mir.mov_imm 16 : i64
+    %12 = mir.func_addr @__destruct_String
+    %10 = mir.call @stdlib.__mm_alloc(%11, %12, %0)
+    mir.store %4, %10, 0 width: qword
+    %14 = mir.mov_imm 1 : i64
+    mir.store %14, %10, 8 width: qword
+    %15 = mir.load %10, 0 width: qword
+    %16, %17 = mir.try_call @mrt_directory_open_search(%15)
+    %22 = mir.call @mm_drop(%10)
+    %19 = mir.cmp ne, %17, %0
+    mir.cond_br %19 [then: try_0.otherwise(), else: try_0.merge()]
   try_0.otherwise:
-    %16 = mir.mov_imm 42 : i64
-    mir.ret %16
+    %21 = mir.mov_imm 42 : i64
+    mir.ret %21
   try_0.merge:
-    %18 = mir.mov_imm 0 : i64
-    mir.ret %18
+    %23 = mir.call @__mm_decref_maybenull_helper(%16)
+    mir.ret %0
   }
 }
 ---

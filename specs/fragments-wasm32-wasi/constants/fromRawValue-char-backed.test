@@ -23,34 +23,42 @@ module {
     %1 = mir.mov_imm 1 : i64
     %2 = mir.call @mrt_alloc(%1)
     mir.store %0, %2, 0 width: byte
-    %3 = mir.mov_imm 40 : i64
-    %4 = mir.call @mrt_alloc(%3)
-    mir.store %2, %4, 0 width: qword
-    mir.store %1, %4, 8 width: qword
-    mir.store %1, %4, 16 width: qword
-    mir.store %1, %4, 24 width: qword
-    %8 = mir.mov_imm 0 : i64
-    mir.store %8, %4, 32 width: qword
-    %9 = mir.mov_imm 8 : i64
-    %10 = mir.call @mrt_alloc(%9)
-    mir.store %4, %10, 0 width: qword
-    %11, %12 = mir.try_call @__enum_Grade_fromRawValue(%10)
-    %13 = mir.mov_imm 0 : i64
-    %14 = mir.cmp ne, %12, %13
-    mir.cond_br %14 [then: try_0.otherwise(), else: try_0.merge(%11)]
+    %3 = mir.mov_imm 48 : i64
+    %4 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %5 = mir.call @mrt_alloc_with_dtor(%3, %4)
+    %6 = mir.mov_imm 0 : i64
+    mir.store %6, %5, 40 width: qword
+    mir.store %2, %5, 0 width: qword
+    mir.store %1, %5, 8 width: qword
+    mir.store %1, %5, 16 width: qword
+    mir.store %1, %5, 24 width: qword
+    %10 = mir.mov_imm -1 : i64
+    mir.store %10, %5, 32 width: qword
+    %12 = mir.mov_imm 8 : i64
+    %13 = mir.func_addr @__destruct_Character
+    %14 = mir.mov_imm 0 : i64
+    %11 = mir.call @stdlib.__mm_alloc(%12, %13, %14)
+    mir.store %5, %11, 0 width: qword
+    %15, %16 = mir.try_call @__enum_Grade_fromRawValue(%11)
+    %17 = mir.mov_imm 0 : i64
+    %18 = mir.cmp ne, %16, %17
+    %30 = mir.call @mm_drop(%11)
+    mir.cond_br %18 [then: try_0.otherwise(), else: try_0.merge(%15)]
   try_0.otherwise:
-    %16 = mir.mov_imm 2 : i64
-    mir.br try_0.merge(%16)
-  try_0.merge:
-    %20 = mir.call @__enum_Grade_rawString(%25)
-    %21 = mir.call @__enum_Grade_rawString(%1)
-    %22 = mir.call @Character.equals(%20, %21)
-    mir.cond_br %22 [then: check_0(), else: check_0.after()]
+    %20 = mir.mov_imm 2 : i64
+    mir.br try_0.merge(%20)
+  try_0.merge(%29: i64):
+    %24 = mir.call @__enum_Grade_rawString(%29)
+    %25 = mir.call @__enum_Grade_rawString(%1)
+    %26 = mir.call @Character.equals(%24, %25)
+    %32 = mir.call @__mm_decref_maybenull_helper(%24)
+    %31 = mir.call @__mm_decref_maybenull_helper(%25)
+    mir.cond_br %26 [then: check_0(), else: check_0.after()]
   check_0:
     mir.ret %1
   check_0.after:
-    %24 = mir.mov_imm 0 : i64
-    mir.ret %24
+    %28 = mir.mov_imm 0 : i64
+    mir.ret %28
   }
 }
 ---

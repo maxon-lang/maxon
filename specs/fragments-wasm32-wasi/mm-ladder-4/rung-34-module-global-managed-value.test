@@ -22,7 +22,7 @@ mm_alloc Box #1 size=8 [Box.create]
 mm_incref Box #1 rc=1 [Box.create]
 mm_move Box #1 -> return [Box.create]
 mm_move Box #1 -> container [__module_init_2]
-mm_decref Box #1 rc=0 [main]
+mm_decref Box #1 rc=0
   mm_free Box #1
 ```
 ---
@@ -35,12 +35,13 @@ module {
     %0 = mir.global_addr @__data_g
     %1 = mir.load %0, 0 width: qword
     %2 = mir.load %1, 0 width: qword
-    %5 = mir.mov_imm 125 : i64
-    %6 = mir.cmp ugt, %2, %5
-    mir.cond_br %6 [then: __range_panic_0(), else: __range_ok_0()]
+    %5 = mir.call @mm_scope_pop()
+    %6 = mir.mov_imm 125 : i64
+    %7 = mir.cmp ugt, %2, %6
+    mir.cond_br %7 [then: __range_panic_0(), else: __range_ok_0()]
   __range_panic_0:
-    %7 = mir.global_addr @__panic_msg_322536c63b56263b
-    %8 = mir.call @mrt_panic(%7)
+    %8 = mir.global_addr @__panic_msg_322536c63b56263b
+    %9 = mir.call @mrt_panic(%8)
   __range_ok_0:
     mir.ret %2
   }

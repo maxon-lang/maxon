@@ -1633,6 +1633,13 @@ type WasmFunctionLowering
 		if srcFunc.name == "mrt_panic_print_frame" 'isPrintFrame'
 			return emitWasmNopVoidFunc()
 		end 'isPrintFrame'
+		// The argv-cache teardown injected into mrt_start before osExit (see
+		// argvCacheTeardown / patchMrtStartFreeArgvCache). Releases the single
+		// process-lifetime buffer `emitArgvCacheEnsure` builds via mrt_alloc so a
+		// `CommandLine.args()` program doesn't read as a permanent leak.
+		if srcFunc.name == "mrt_wasm_free_argv_cache" 'isFreeArgvCache'
+			return emitWasmFreeArgvCache(funcSigs)
+		end 'isFreeArgvCache'
 		// Phase 15c Stream 3.3: file/directory I/O. The runtime.std bodies
 		// reference Linux-only `osFile*` / `osDir*` ops, so intercept here
 		// and emit the WASI-backed bodies instead.
@@ -1695,6 +1702,12 @@ type WasmFunctionLowering
 		if srcFunc.name == "mrt_directory_close" 'isDirClose'
 			return emitWasmDirectoryClose(funcSigs)
 		end 'isDirClose'
+		// The search-handle destructor (run on owner-drop) shares the Linux-only
+		// `osFileClose`/dirent layout, so intercept it too and emit the
+		// idempotent WASI-backed release.
+		if srcFunc.name == "__destruct___ManagedDirectory" 'isDirDestruct'
+			return emitWasmDirectoryDestruct(funcSigs)
+		end 'isDirDestruct'
 		if srcFunc.name == "mrt_directory_exists" 'isDirExists'
 			return emitWasmDirectoryExists()
 		end 'isDirExists'
@@ -3924,6 +3937,62 @@ function emitArgvCacheEnsure(body ByteArray, funcSigs WasmFuncSigs, scratchLocal
 	body.push(opEnd)
 end 'emitArgvCacheEnsure'
 
+// mrt_wasm_free_argv_cache() -> void. Release the single process-lifetime buffer
+// `emitArgvCacheEnsure` builds via `mrt_alloc` (the argc-entry pointer array +
+// the NUL-terminated argument copies live in ONE block, unlike the x64 win32
+// cache's per-arg blocks). The buffer is `mrt_alloc`'d at rc=1, so a single
+// `mm_decref` drives it to rc=0 → `mm_free`, which decrements `__mm_alloc_count`
+// so the leak gate balances. No-op when the cache was never built (init flag
+// clear); the init flag is cleared and the pointer zeroed so a defensive
+// re-entry is a clean no-op. Injected into mrt_start before osExit by
+// `patchMrtStartFreeArgvCache` (selected via `argvCacheTeardown`).
+function emitWasmFreeArgvCache(funcSigs WasmFuncSigs) returns ByteArray
+	var body = ByteArray.create()
+	// No locals beyond the (zero) params.
+	writeUleb128(body, value: 0)
+
+	// if (*(i32)argvCacheInitFlagBase) == 0: nothing built — return.
+	body.push(opI32Const)
+	writeSleb128(body, value: argvCacheInitFlagBase as ParsedInt)
+	body.push(opI32Load)
+	body.push(0x02)
+	writeUleb128(body, value: 0)
+	body.push(opIf)
+	body.push(wasmTypeVoid)
+
+	// mm_decref(bufPtr). bufPtr is stored as an i32; zero-extend to the i64 the
+	// decref helper expects.
+	body.push(opI32Const)
+	writeSleb128(body, value: argvCacheBufPtrBase as ParsedInt)
+	body.push(opI32Load)
+	body.push(0x02)
+	writeUleb128(body, value: 0)
+	body.push(opI64ExtendI32U)
+	body.push(opCall)
+	writeUleb128(body, value: findFunctionIndex(funcSigs, name: "mm_decref", importCount: wasiImportCount))
+
+	// Clear the init flag and pointer so a re-entry is a clean no-op.
+	body.push(opI32Const)
+	writeSleb128(body, value: argvCacheInitFlagBase as ParsedInt)
+	body.push(opI32Const)
+	writeSleb128(body, value: 0)
+	body.push(opI32Store)
+	body.push(0x02)
+	writeUleb128(body, value: 0)
+	body.push(opI32Const)
+	writeSleb128(body, value: argvCacheBufPtrBase as ParsedInt)
+	body.push(opI32Const)
+	writeSleb128(body, value: 0)
+	body.push(opI32Store)
+	body.push(0x02)
+	writeUleb128(body, value: 0)
+
+	body.push(opEnd)
+
+	body.push(opEnd)
+	return body
+end 'emitWasmFreeArgvCache'
+
 // Push the address of field `fieldOffset` within list-element `idxLocal` of the
 // get-arguments `list<string>`, i.e. listPtr + idxLocal*stride + fieldOffset,
 // where listPtr = *(i32)(retArea + 0). Used by emitArgvCacheEnsure to read each
@@ -6092,30 +6161,29 @@ end 'emitWasmDirectoryFilename'
 // Preview2: resource-drop the directory-entry-stream and the directory
 // descriptor (both no-result imports), then decref the persistent name buffer
 // (if one was copied) and the state block.
-function emitWasmDirectoryClose(funcSigs WasmFuncSigs) returns ByteArray
-	var body = ByteArray.create()
-	// Locals: 1 i32 (blockI32) + 1 i64 (nameBuf scratch — holds the i64 handle).
-	emitWasmMixedLocals(body, i32Count: 1, i64Count: 1)
-	let localBlock = 0
-	let localBlockI32 = 1
-	let localNameBuf = 2
-
-	// If self == 0 return 0.
+// Drop the WASI directory resources held in the block and decref the cached
+// entry-name buffer, then stamp the dirDesc sentinel (-1) so a second release
+// (an explicit close() followed by the owner-drop destructor, or vice versa)
+// is a no-op. Mirrors the native `mrt_directory_close`/`__destruct___Managed-
+// Directory` -1 sentinel idempotency. Does NOT decref the block itself; the
+// caller decides whether to free the block (close) or leave it to mm_free
+// (destructor).
+//
+// `localBlockI32` must already hold `block as i32`; `localNameBuf` is an i64
+// scratch local the caller has reserved.
+function emitWasmDirectoryReleaseHandles(body ByteArray, funcSigs WasmFuncSigs, localBlockI32 MachineWord, localNameBuf MachineWord)
+	// Idempotency guard: if block.dirDesc == -1 a previous release already ran;
+	// skip the drops/decref so the WASI handles are never double-dropped.
 	body.push(opLocalGet)
-	writeUleb128(body, value: localBlock)
-	body.push(opI64Eqz)
+	writeUleb128(body, value: localBlockI32)
+	body.push(opI64Load)
+	body.push(0x03)
+	writeUleb128(body, value: wasmDirBlockOffDirDesc as ParsedInt)
+	body.push(opI64Const)
+	writeSleb128(body, value: -1)
+	body.push(opI64Ne)
 	body.push(opIf)
 	body.push(wasmTypeVoid)
-	body.push(opI64Const)
-	writeSleb128(body, value: 0)
-	body.push(opReturn)
-	body.push(opEnd)
-
-	body.push(opLocalGet)
-	writeUleb128(body, value: localBlock)
-	body.push(opI32WrapI64)
-	body.push(opLocalSet)
-	writeUleb128(body, value: localBlockI32)
 
 	// [resource-drop]directory-entry-stream(block.streamHandle). No result.
 	body.push(opLocalGet)
@@ -6155,17 +6223,104 @@ function emitWasmDirectoryClose(funcSigs WasmFuncSigs) returns ByteArray
 	writeUleb128(body, value: findFunctionIndex(funcSigs, name: "mm_decref", importCount: wasiImportCount))
 	body.push(opEnd)
 
-	// mm_decref(block itself). Void return; no drop.
+	// Stamp the sentinels: dirDesc = -1 (release marker), nameBuf = 0 so a
+	// later release neither re-drops nor re-decrefs.
+	body.push(opLocalGet)
+	writeUleb128(body, value: localBlockI32)
+	body.push(opI64Const)
+	writeSleb128(body, value: -1)
+	body.push(opI64Store)
+	body.push(0x03)
+	writeUleb128(body, value: wasmDirBlockOffDirDesc as ParsedInt)
+	body.push(opLocalGet)
+	writeUleb128(body, value: localBlockI32)
+	body.push(opI64Const)
+	writeSleb128(body, value: 0)
+	body.push(opI64Store)
+	body.push(0x03)
+	writeUleb128(body, value: wasmDirBlockOffNameBuf as ParsedInt)
+
+	body.push(opEnd)
+end 'emitWasmDirectoryReleaseHandles'
+
+function emitWasmDirectoryClose(funcSigs WasmFuncSigs) returns ByteArray
+	var body = ByteArray.create()
+	// Locals: 1 i32 (blockI32) + 1 i64 (nameBuf scratch — holds the i64 handle).
+	emitWasmMixedLocals(body, i32Count: 1, i64Count: 1)
+	let localBlock = 0
+	let localBlockI32 = 1
+	let localNameBuf = 2
+
+	// If self == 0 return 0.
 	body.push(opLocalGet)
 	writeUleb128(body, value: localBlock)
-	body.push(opCall)
-	writeUleb128(body, value: findFunctionIndex(funcSigs, name: "mm_decref", importCount: wasiImportCount))
+	body.push(opI64Eqz)
+	body.push(opIf)
+	body.push(wasmTypeVoid)
+	body.push(opI64Const)
+	writeSleb128(body, value: 0)
+	body.push(opReturn)
+	body.push(opEnd)
+
+	body.push(opLocalGet)
+	writeUleb128(body, value: localBlock)
+	body.push(opI32WrapI64)
+	body.push(opLocalSet)
+	writeUleb128(body, value: localBlockI32)
+
+	// Drop the WASI handles + decref nameBuf, stamping the -1 sentinel so a
+	// later owner-drop (the __ManagedDirectory scope cleanup that decrefs the
+	// block to rc 0 and runs the destructor) sees the marker and does not
+	// double-drop. Like the native `mrt_directory_close`, this does NOT decref
+	// the block itself — the block's refcount is owned by the surrounding scope,
+	// which releases it independently (decref'ing it here over-released it once
+	// the owner's destructor also ran).
+	emitWasmDirectoryReleaseHandles(body, funcSigs: funcSigs, localBlockI32: localBlockI32, localNameBuf: localNameBuf)
 
 	body.push(opI64Const)
 	writeSleb128(body, value: 0)
 	body.push(opEnd)
 	return body
 end 'emitWasmDirectoryClose'
+
+// Destructor for a __ManagedDirectory search handle: runs when the owner's
+// reference drops the block to rc 0. Releases the WASI directory resources and
+// frees the cached entry-name buffer iff an explicit close() didn't already
+// (the -1 dirDesc sentinel makes it idempotent). The block itself is freed by
+// mm_free after this returns, so — unlike close() — it must NOT decref it.
+// Mirrors the native `__destruct___ManagedDirectory`.
+function emitWasmDirectoryDestruct(funcSigs WasmFuncSigs) returns ByteArray
+	var body = ByteArray.create()
+	// Locals: 1 i32 (blockI32) + 1 i64 (nameBuf scratch).
+	emitWasmMixedLocals(body, i32Count: 1, i64Count: 1)
+	let localBlock = 0
+	let localBlockI32 = 1
+	let localNameBuf = 2
+
+	// If self == 0 return 0.
+	body.push(opLocalGet)
+	writeUleb128(body, value: localBlock)
+	body.push(opI64Eqz)
+	body.push(opIf)
+	body.push(wasmTypeVoid)
+	body.push(opI64Const)
+	writeSleb128(body, value: 0)
+	body.push(opReturn)
+	body.push(opEnd)
+
+	body.push(opLocalGet)
+	writeUleb128(body, value: localBlock)
+	body.push(opI32WrapI64)
+	body.push(opLocalSet)
+	writeUleb128(body, value: localBlockI32)
+
+	emitWasmDirectoryReleaseHandles(body, funcSigs: funcSigs, localBlockI32: localBlockI32, localNameBuf: localNameBuf)
+
+	body.push(opI64Const)
+	writeSleb128(body, value: 0)
+	body.push(opEnd)
+	return body
+end 'emitWasmDirectoryDestruct'
 
 // mrt_directory_exists(__ManagedMemory path) -> 1 if path is a directory else 0.
 // Non-throwing.

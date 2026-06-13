@@ -33,6 +33,7 @@ mm_incref <raw> #5 rc=1 [main]
 mm_move Box #1 -> container
 mm_move Box #2 -> container
 mm_move Box #3 -> container
+mm_move __ManagedMemory #4 -> container
 mm_alloc Array #6 size=8
 mm_incref Array #6 rc=1
 mm_alloc __ManagedMemory #7 size=48
@@ -109,20 +110,21 @@ module {
     %18, %19 = mir.try_call @stdlib.__managed_mem_set(%59, %17, %54)
     %20 = mir.mov_imm 3 : i64
     %21, %22 = mir.try_call @stdlib.__managed_mem_set_length(%59, %20)
-    %23 = mir.global_addr @__layout_Array_Box
-    %24 = mir.call @Array.init(%59, %23)
-    %25 = mir.func_addr @stdlib.__mm_decref
-    mir.store %25, %59, 40 width: qword
+    %23 = mir.func_addr @stdlib.__mm_decref
+    mir.store %23, %59, 40 width: qword
+    %24 = mir.global_addr @__layout_Array_Box
+    %69 = mir.call @mm_move_container(%59)
+    %25 = mir.call @Array.init(%59, %24)
     %27 = mir.global_addr @__layout_Array_Box
-    %28 = mir.call @Array.count(%24, %27)
-    %65 = mir.call @stdlib.__mm_decref(%24)
-    %69 = mir.call @mm_scope_pop()
-    %70 = mir.mov_imm 125 : i64
-    %71 = mir.cmp ugt, %28, %70
-    mir.cond_br %71 [then: __range_panic_0(), else: __range_ok_0()]
+    %28 = mir.call @Array.count(%25, %27)
+    %65 = mir.call @__mm_decref_maybenull_helper(%25)
+    %70 = mir.call @mm_scope_pop()
+    %71 = mir.mov_imm 125 : i64
+    %72 = mir.cmp ugt, %28, %71
+    mir.cond_br %72 [then: __range_panic_0(), else: __range_ok_0()]
   __range_panic_0:
-    %72 = mir.global_addr @__panic_msg_2fc3d208e149bb27
-    %73 = mir.call @mrt_panic(%72)
+    %73 = mir.global_addr @__panic_msg_2fc3d208e149bb27
+    %74 = mir.call @mrt_panic(%73)
   __range_ok_0:
     mir.ret %28
   }

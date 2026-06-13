@@ -18,48 +18,67 @@ ExitCode: 1
 module {
   func @main() -> u8 {
   entry:
-    %28 = mir.mov_imm 8 : i64
-    %29 = mir.call @mrt_alloc(%28)
-    %30 = mir.mov_imm 40 : i64
-    %31 = mir.call @mrt_alloc(%30)
-    %32 = mir.mov_imm 0 : i64
-    mir.store %32, %31, 0 width: qword
-    %33 = mir.mov_imm 0 : i64
-    mir.store %33, %31, 8 width: qword
-    %34 = mir.mov_imm 0 : i64
-    mir.store %34, %31, 16 width: qword
-    %35 = mir.mov_imm 8 : i64
-    mir.store %35, %31, 24 width: qword
-    %36 = mir.mov_imm 0 : i64
-    mir.store %36, %31, 32 width: qword
-    mir.store %31, %29, 0 width: qword
-    %3 = mir.mov_imm 1 : i64
-    %4 = mir.global_addr @__layout_Array_Bool
-    %5 = mir.call @Array.push(%29, %3, %4)
-    %7 = mir.mov_imm 0 : i64
-    %8 = mir.global_addr @__layout_Array_Bool
-    %9 = mir.call @Array.push(%29, %7, %8)
-    %37 = mir.load %29, 0 width: qword
-    %38 = mir.mov_imm 0 : i64
-    mir.store %38, %37, 8 width: qword
-    %14 = mir.global_addr @__layout_Array_Bool
-    %15 = mir.call @Array.count(%29, %14)
-    %17 = mir.mov_imm 1 : i64
-    %18 = mir.global_addr @__layout_Array_Bool
-    %19 = mir.call @Array.push(%29, %17, %18)
-    %21 = mir.global_addr @__layout_Array_Bool
-    %22 = mir.call @Array.count(%29, %21)
-    %24 = mir.mov_imm 10 : i64
-    %25 = mir.mul.i64 %15, %24
-    %27 = mir.add.i64 %25, %22
-    %39 = mir.mov_imm 125 : i64
-    %40 = mir.cmp ugt, %27, %39
-    mir.cond_br %40 [then: __range_panic_0(), else: __range_ok_0()]
+    %29 = mir.mov_imm 8 : i64
+    %30 = mir.func_addr @__destruct_Array
+    %31 = mir.mov_imm 0 : i64
+    %32 = mir.call @stdlib.__mm_alloc(%29, %30, %31)
+    mir.br inlined_stdlib.__mm_incref_0_0()
+  inlined_stdlib.__mm_incref_0_0:
+    %42 = mir.mov_imm 8 : i64
+    %43 = mir.sub.i64 %32, %42
+    mir.atomic_inc %43
+    mir.br inline_cont_main_0()
+  inline_cont_main_0:
+    %34 = mir.mov_imm 48 : i64
+    %35 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %36 = mir.call @stdlib.__mm_alloc(%34, %35, %31)
+    mir.br inlined_stdlib.__mm_incref_0_1()
+  inlined_stdlib.__mm_incref_0_1:
+    %44 = mir.mov_imm 8 : i64
+    %45 = mir.sub.i64 %36, %44
+    mir.atomic_inc %45
+    mir.br inline_cont_main_1()
+  inline_cont_main_1:
+    mir.store %31, %36, 0 width: qword
+    mir.store %31, %36, 8 width: qword
+    mir.store %31, %36, 16 width: qword
+    %38 = mir.mov_imm 8 : i64
+    mir.store %38, %36, 24 width: qword
+    %39 = mir.mov_imm -1 : i64
+    mir.store %39, %36, 32 width: qword
+    mir.store %31, %36, 40 width: qword
+    mir.store %36, %32, 0 width: qword
+    %4 = mir.mov_imm 1 : i64
+    %5 = mir.global_addr @__layout_Array_Bool
+    %6 = mir.call @Array.push(%32, %4, %5)
+    %8 = mir.mov_imm 0 : i64
+    %9 = mir.global_addr @__layout_Array_Bool
+    %10 = mir.call @Array.push(%32, %8, %9)
+    %40 = mir.load %32, 0 width: qword
+    %46 = mir.call @stdlib.__managed_mem_walk_elements(%40)
+    %47 = mir.mov_imm 8 : i64
+    %48 = mir.add.i64 %40, %47
+    %49 = mir.mov_imm 0 : i64
+    mir.store %49, %48, 0 width: qword
+    %15 = mir.global_addr @__layout_Array_Bool
+    %16 = mir.call @Array.count(%32, %15)
+    %18 = mir.mov_imm 1 : i64
+    %19 = mir.global_addr @__layout_Array_Bool
+    %20 = mir.call @Array.push(%32, %18, %19)
+    %22 = mir.global_addr @__layout_Array_Bool
+    %23 = mir.call @Array.count(%32, %22)
+    %25 = mir.mov_imm 10 : i64
+    %26 = mir.mul.i64 %16, %25
+    %28 = mir.add.i64 %26, %23
+    %50 = mir.call @__mm_decref_maybenull_helper(%32)
+    %51 = mir.mov_imm 125 : i64
+    %52 = mir.cmp ugt, %28, %51
+    mir.cond_br %52 [then: __range_panic_0(), else: __range_ok_0()]
   __range_panic_0:
-    %41 = mir.global_addr @__panic_msg_f36c62543751a194
-    %42 = mir.call @mrt_panic(%41)
+    %53 = mir.global_addr @__panic_msg_f36c62543751a194
+    %54 = mir.call @mrt_panic(%53)
   __range_ok_0:
-    mir.ret %27
+    mir.ret %28
   }
 }
 ---

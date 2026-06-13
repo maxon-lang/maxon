@@ -496,12 +496,19 @@ export function augmentWithRuntime(module StdModule, project Project) returns St
 		// program that never touches async I/O pays only the bring-up/teardown.
 		patchMrtStartCallIoInit(augmented)
 		patchMrtStartCallIoShutdown(augmented)
-		// Free the lazily-built Win32 argv cache (mrt_win32_get_argc's mrt_alloc'd
-		// pointer array + per-arg UTF-8 buffers) before exit so `CommandLine.args()`
-		// programs don't read as permanent `__mm_alloc_count` leaks. No-op when the
-		// cache was never built; the leak-check patch below sees the freed cache.
-		patchMrtStartFreeArgvCache(augmented)
 	end 'x64WinFaultHandler'
+	// Release any process-lifetime argv cache before exit so a `CommandLine.args()`
+	// program doesn't read as a permanent `__mm_alloc_count` leak. Which backends
+	// build a cache (and thus which helper frees it) is decided once, exhaustively,
+	// by `argvCacheTeardown` — a new target must declare its teardown there or the
+	// build fails, so no backend can silently skip this the way wasm once did. The
+	// helper is a no-op when the cache was never built; the leak-check patch below
+	// sees the freed cache. Runs after main (argv reads are valid) and before the
+	// leak gate (insertions land at the new osExit position, after these).
+	match argvCacheTeardown(project.target) 'argvFree'
+		none then break 'argvFree'
+		helper(name) then patchMrtStartFreeArgvCache(augmented, helper: name)
+	end 'argvFree'
 	// Spec-test leak gate: wrap osExit(main()) in mrt_leak_check so a standalone
 	// program that exits with live allocations returns 101. Runs LAST so it sees
 	// the final osExit position after the gt/io/module-init patches above. Gated
@@ -642,20 +649,21 @@ function patchMrtStartCallGtCleanup(module StdModule)
 	try site.entryBlock.opRefs.insert(site.osExitPos, value: cleanupOpIdx) otherwise panic("patchMrtStartCallGtCleanup: opRefs.insert failed")
 end 'patchMrtStartCallGtCleanup'
 
-// x64-Windows-only: insert `std call mrt_win32_free_argv_cache` into mrt_start's
-// entry block immediately BEFORE the `osExit` op, releasing the lazily-built
-// argv cache (the `mrt_alloc`'d pointer array + per-arg UTF-8 buffers that
-// `mrt_win32_get_argc` builds once and never frees). Without this teardown, any
-// program that calls `CommandLine.args()` reads as `argc + 1` permanent leaks
-// under the `__mm_alloc_count` gate (exit 101). The helper is a no-op if the
-// cache was never built, so it's safe to inject unconditionally. Runs after
-// main (so its reads of argv are valid) and before the leak-check patch (so the
-// gate sees the cache freed). Takes no args, returns void — result id unused.
-function patchMrtStartFreeArgvCache(module StdModule)
+// Insert `std call <helper>` into mrt_start's entry block immediately BEFORE the
+// `osExit` op, releasing the process-lifetime argv cache the target's backend
+// builds once and never frees (the x64/arm64-Windows `mrt_alloc` pointer array +
+// per-arg buffers, or the wasm single rebuilt-layout buffer). Without this
+// teardown, any program that calls `CommandLine.args()` reads as permanent
+// `__mm_alloc_count` leaks (exit 101). `helper` is chosen by `argvCacheTeardown`
+// and is a no-op if the cache was never built, so it's safe to inject
+// unconditionally. Runs after main (so its reads of argv are valid) and before
+// the leak-check patch (so the gate sees the cache freed). The helper takes no
+// args and returns void — its result id is unused.
+function patchMrtStartFreeArgvCache(module StdModule, helper String)
 	let site = locateMrtStartExit(module, who: "patchMrtStartFreeArgvCache")
 	let resultId = allocValueId(site.valueIdRef)
 	let freeOpIdx = module.ops.count()
-	module.ops.push(StdOp.call(StdCallOp.call(resultId, callee: "mrt_win32_free_argv_cache", argIds: ValueIdArray.create())))
+	module.ops.push(StdOp.call(StdCallOp.call(resultId, callee: helper, argIds: ValueIdArray.create())))
 	try site.entryBlock.opRefs.insert(site.osExitPos, value: freeOpIdx) otherwise panic("patchMrtStartFreeArgvCache: opRefs.insert failed")
 end 'patchMrtStartFreeArgvCache'
 
@@ -933,12 +941,19 @@ function filterRuntimeByReachability(runtime StdModule, userModule StdModule, ta
 		// in both cache legs.
 		seedRuntimeReachName("__gt_cleanup", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
 		seedRuntimeReachName("__gt_cancel", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
-		// Same pattern for the argv-cache teardown helper: seed its signature-only
-		// stub so the injected `call mrt_win32_free_argv_cache` (added to mrt_start
-		// after this walk by patchMrtStartFreeArgvCache) resolves its (0, void)
-		// signature; the hand-emitted emitX64Win32FreeArgvCache overrides the label.
-		seedRuntimeReachName("mrt_win32_free_argv_cache", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
 	end 'win32Helpers'
+
+	// Seed the argv-cache teardown helper for whichever backend builds a cache.
+	// `patchMrtStartFreeArgvCache` injects `call <helper>` into mrt_start AFTER
+	// this walk, so the edge is invisible here; seed the signature-only stub so
+	// its (0, void) signature is in `allFunctions` for the call's lowering and
+	// the runtime body survives the filter (the hand-emitted body overrides the
+	// label). Chosen by the same `argvCacheTeardown` dispatch as the injection,
+	// so the seed and the call can never name different helpers.
+	match argvCacheTeardown(target) 'argvSeed'
+		none then break 'argvSeed'
+		helper(name) then seedRuntimeReachName(name, runtimeMap: runtimeMap, seen: seen, worklist: worklist)
+	end 'argvSeed'
 
 	// On wasm the green-thread scheduler is driven from `mrt_start`'s bootstrap
 	// tail, which `patchMrtStartWasmBootstrap` rewrites to call `__gt_spawn_root`
@@ -1725,7 +1740,7 @@ function emitBackendIncrementalWith(pipeline PassPipeline, stdlibCache StdlibCac
 		chunks.push(chunk)
 	end 'collect'
 
-	var result = concatFunctionChunksForTarget(chunks, targetModule: pipeline.targetModule, mirModule: pipeline.mirModule, globalData: pipeline.globalData, stdlibCache: stdlibCache, target: pipeline.target)
+	var result = concatFunctionChunksForTarget(pipeline.project, chunks: chunks, targetModule: pipeline.targetModule, mirModule: pipeline.mirModule, globalData: pipeline.globalData, stdlibCache: stdlibCache, target: pipeline.target)
 	recordPassSince("__emitTargetCode", startMs: emitStart)
 	result.targetModule = pipeline.targetModule
 	return result
@@ -1792,10 +1807,10 @@ typealias StringContentHashMap = Map with (String, ContentHash)
 // concat functions live in their respective backend modules. WASM is
 // unreachable here because `emitBackendIncremental` delegates wasm builds
 // to the whole-module driver before this point.
-function concatFunctionChunksForTarget(chunks FunctionCodeChunkArray, targetModule TargetModule, mirModule MirModule, globalData GlobalDataTable, stdlibCache StdlibCacheData, target Target) returns CodeResult
+function concatFunctionChunksForTarget(project Project, chunks FunctionCodeChunkArray, targetModule TargetModule, mirModule MirModule, globalData GlobalDataTable, stdlibCache StdlibCacheData, target Target) returns CodeResult
 	return match target.cpu 'cpu'
-		x64 gives concatX64FunctionChunks(chunks, targetModule: targetModule, mirModule: mirModule, globalData: globalData, stdlibCache: stdlibCache, os: target.os)
-		arm64 gives concatArm64FunctionChunks(chunks, targetModule: targetModule, mirModule: mirModule, globalData: globalData, stdlibCache: stdlibCache, target: target)
+		x64 gives concatX64FunctionChunks(project, chunks: chunks, targetModule: targetModule, mirModule: mirModule, globalData: globalData, stdlibCache: stdlibCache, os: target.os)
+		arm64 gives concatArm64FunctionChunks(project, chunks: chunks, targetModule: targetModule, mirModule: mirModule, globalData: globalData, stdlibCache: stdlibCache, target: target)
 		wasm32 panic("unreachable: emitBackendIncremental delegates WASM to emitBackend")
 	end 'cpu'
 end 'concatFunctionChunksForTarget'

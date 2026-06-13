@@ -21,36 +21,37 @@ ExitCode: 0
 module {
   func @main() -> u8 {
   entry:
-    %0 = mir.global_addr @__istr_0
-    %1 = mir.mov_imm 40 : i64
-    %2 = mir.call @mrt_alloc(%1)
-    mir.store %0, %2, 0 width: qword
-    %3 = mir.mov_imm 37 : i64
-    mir.store %3, %2, 8 width: qword
-    %4 = mir.mov_imm -2 : i64
-    mir.store %4, %2, 16 width: qword
-    %5 = mir.mov_imm 1 : i64
-    mir.store %5, %2, 24 width: qword
-    %6 = mir.mov_imm 0 : i64
-    mir.store %6, %2, 32 width: qword
-    %7 = mir.mov_imm 16 : i64
-    %8 = mir.call @mrt_alloc(%7)
-    mir.store %2, %8, 0 width: qword
+    %0 = mir.mov_imm 0 : i64
+    %2 = mir.global_addr @__istr_0
+    %3 = mir.mov_imm 48 : i64
+    %4 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %5 = mir.call @mrt_alloc_with_dtor(%3, %4)
+    mir.store %0, %5, 40 width: qword
+    mir.store %2, %5, 0 width: qword
+    %7 = mir.mov_imm 37 : i64
+    mir.store %7, %5, 8 width: qword
+    %8 = mir.mov_imm -2 : i64
+    mir.store %8, %5, 16 width: qword
     %9 = mir.mov_imm 1 : i64
-    mir.store %9, %8, 8 width: qword
-    %20 = mir.load %8, 0 width: qword
-    %21 = mir.call @stdlib.__managed_mem_to_cstring(%20)
-    %12 = mir.call @maxon_subprocess_resolve_on_path(%21)
-    %14 = mir.call @maxon_managed_is_null(%12)
-    %16 = mir.mov_imm 0 : i64
-    %17 = mir.cmp eq, %14, %16
-    mir.cond_br %17 [then: zero_0(), else: zero_0.after()]
+    mir.store %9, %5, 24 width: qword
+    mir.store %0, %5, 32 width: qword
+    %12 = mir.mov_imm 16 : i64
+    %13 = mir.func_addr @__destruct_String
+    %11 = mir.call @stdlib.__mm_alloc(%12, %13, %0)
+    mir.store %5, %11, 0 width: qword
+    %15 = mir.mov_imm 1 : i64
+    mir.store %15, %11, 8 width: qword
+    %24 = mir.load %11, 0 width: qword
+    %25 = mir.call @stdlib.__managed_mem_to_cstring(%24)
+    %18 = mir.call @maxon_subprocess_resolve_on_path(%25)
+    %26 = mir.call @mm_drop(%11)
+    %20 = mir.call @maxon_managed_is_null(%18)
+    %23 = mir.cmp eq, %20, %0
+    mir.cond_br %23 [then: zero_0(), else: zero_0.after()]
   zero_0:
-    %18 = mir.mov_imm 0 : i64
-    mir.ret %18
+    mir.ret %0
   zero_0.after:
-    %19 = mir.mov_imm 0 : i64
-    mir.ret %19
+    mir.ret %0
   }
 }
 ---

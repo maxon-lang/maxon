@@ -145,6 +145,63 @@ export function targetSupportsSubprocess(t Target) returns bool
 	return true
 end 'targetSupportsSubprocess'
 
+// Whether a target builds a process-lifetime argv cache that must be released
+// at exit, and if so the name of the teardown helper. Acquiring argv is
+// inherently target-specific, so the cache (and thus the teardown) is too:
+//   - x64 Linux & macOS: argv comes straight from the kernel entry registers
+//     (__mrt_argc/__mrt_argv) — nothing is allocated, nothing to free.
+//   - x64 Windows: GetCommandLineW/CommandLineToArgvW; the hand-rolled
+//     `mrt_win32_get_argc` builds an `mrt_alloc` pointer array + per-arg buffers
+//     once, freed by `mrt_win32_free_argv_cache`.
+//   - wasm32-wasi: `wasi:cli/environment.get-arguments` returns a list<string>;
+//     `emitArgvCacheEnsure` rebuilds the legacy layout into one `mrt_alloc`
+//     buffer, freed by `mrt_wasm_free_argv_cache`.
+//   - arm64 (every OS): the backend is compile-verify only — its `mrt_win32_*`
+//     argv helpers are skeleton stubs (return 0), so no cache is ever built and
+//     there is nothing to free.
+// `augmentWithRuntime` injects a call to the named helper before `osExit` so a
+// `CommandLine.args()` program doesn't read as a permanent `__mm_alloc_count`
+// leak. The `helper` arm names a function the corresponding backend defines.
+export union ArgvCacheTeardown
+	none
+	helper(name String)
+end 'ArgvCacheTeardown'
+
+// The argv-cache teardown obligation for `t`. Exhaustive over (cpu, os): a new
+// target must add an arm here (the build fails otherwise) so it can never
+// silently skip the teardown the way wasm once did. Only the two targets that
+// actually allocate a process-lifetime argv cache name a helper; everything else
+// (kernel argv on x64 posix, skeleton-stub argv on arm64) allocates nothing.
+export function argvCacheTeardown(t Target) returns ArgvCacheTeardown
+	return match t.cpu 'cpu'
+		x64 gives argvCacheTeardownX64(t.os)
+		wasm32 gives argvCacheTeardownWasm(t.os)
+		arm64 gives ArgvCacheTeardown.none
+	end 'cpu'
+end 'argvCacheTeardown'
+
+// x64: only Windows builds a cache (the `mrt_win32_get_argc` pointer array +
+// per-arg buffers). Linux/macOS take argv from the kernel entry registers.
+function argvCacheTeardownX64(os Os) returns ArgvCacheTeardown
+	return match os 'os'
+		windows gives ArgvCacheTeardown.helper("mrt_win32_free_argv_cache")
+		linux gives ArgvCacheTeardown.none
+		macos gives ArgvCacheTeardown.none
+		wasi gives ArgvCacheTeardown.none
+	end 'os'
+end 'argvCacheTeardownX64'
+
+// wasm: only wasi is built; it rebuilds the Preview2 `list<string>` into one
+// `mrt_alloc` buffer that `mrt_wasm_free_argv_cache` releases.
+function argvCacheTeardownWasm(os Os) returns ArgvCacheTeardown
+	return match os 'os'
+		wasi gives ArgvCacheTeardown.helper("mrt_wasm_free_argv_cache")
+		windows gives ArgvCacheTeardown.none
+		linux gives ArgvCacheTeardown.none
+		macos gives ArgvCacheTeardown.none
+	end 'os'
+end 'argvCacheTeardownWasm'
+
 // True for the targets with a REAL networking runtime: x64-windows
 // (`emitX64NetworkingRuntime`, Winsock/IOCP) and wasm32-wasi
 // (`emitWasmSocketTcpConnect` etc. over WASI Preview2 wasi:sockets). Used to gate

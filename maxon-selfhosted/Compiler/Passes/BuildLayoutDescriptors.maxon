@@ -55,13 +55,58 @@ export function buildLayoutDescriptors(project Project, maxonModule MaxonModule,
 		walkInstantiations(project, t: MaxonType.genericInstance(gid), out: visited)
 	end 'eachInstance'
 
-	for gid in 0 upto count 'emit'
-		if not visited.contains(gid) 'unreachable'
-			continue
-		end 'unreachable'
+	// Emit descriptors in a deterministic, gid-ORDER-INDEPENDENT order
+	// (sorted by mangled descriptor label) rather than raw gid order. The
+	// `project.genericInstances` gid numbering is NOT stable across build
+	// scenarios: a COLD build interns stdlib instances in compile-discovery
+	// order (the stdlib is compiled in the user's own project), while a WARM
+	// build re-interns them in cache disk-read order (depth-first over the
+	// serialized registry in `readGenericInstanceRegistry`). The two orderings
+	// assign different gids to the same instance (e.g. `Array<String>` is gid 6
+	// cold / gid 8 warm), so a gid-ordered emit lays the descriptor BLOBS into
+	// `project.globalData` — and therefore `.rdata` — in a build-dependent
+	// order, breaking cold==warm cache parity. Sorting by the mangled label
+	// (a pure function of the instance's structural shape) makes the `.rdata`
+	// layout depend only on WHICH descriptors are present, not on the gid
+	// interning order that produced them.
+	var orderedGids = GenericInstanceIdArray.create()
+	for gid in 0 upto count 'collect'
+		if visited.contains(gid) 'reachable'
+			orderedGids.push(gid)
+		end 'reachable'
+	end 'collect'
+	sortGidsByLabel(project, gids: orderedGids)
+
+	for gid in orderedGids 'emit'
 		emitDescriptorForInstance(project, maxonModule: maxonModule, globalData: globalData, gid: gid)
 	end 'emit'
 end 'buildLayoutDescriptors'
+
+// Insertion-sort `gids` ascending by their mangled descriptor label
+// (`__layout_<mangled>`), the build-order-independent key
+// `buildLayoutDescriptors` emits in. Distinct gids always mangle to distinct
+// labels (the mangling is injective over concrete instances), so the order is
+// total and deterministic.
+function sortGidsByLabel(project Project, gids GenericInstanceIdArray)
+	let n = gids.count()
+	for i in 1 upto n 'sort'
+		let key = try gids.get(i) otherwise panic("sortGidsByLabel: gids.get({i}) failed (count={n})")
+		let keyLabel = mangleInstance(project, gid: key)
+		var j = i
+		while j > 0 'shift'
+			let prev = try gids.get(j - 1) otherwise panic("sortGidsByLabel: gids.get({j - 1}) failed")
+			let prevLabel = mangleInstance(project, gid: prev)
+			// `prevLabel <= keyLabel` — the non-strict form of the shared
+			// byte-wise comparator (`stringLexLess` is strict `<`).
+			if not stringLexLess(keyLabel, b: prevLabel) 'inPlace'
+				break
+			end 'inPlace'
+			try gids.set(j, value: prev) otherwise panic("sortGidsByLabel: gids.set({j}) OOB")
+			j = j - 1
+		end 'shift'
+		try gids.set(j, value: key) otherwise panic("sortGidsByLabel: gids.set({j}) OOB")
+	end 'sort'
+end 'sortGidsByLabel'
 
 // Walk every conformance and pre-intern the `Interface with [args]` gid
 // so the downstream descriptor emit picks it up. Conformances without

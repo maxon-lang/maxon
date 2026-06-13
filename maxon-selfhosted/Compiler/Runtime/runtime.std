@@ -4252,6 +4252,21 @@ func mrt_win32_free_argv_cache 0 void
     std ret v0
 end
 
+// mrt_wasm_free_argv_cache() -> void. Signature-only stub: the real body is the
+// hand-emitted WASM in MirToWasm.maxon (emitWasmFreeArgvCache, intercepted by
+// name), which mm_decrefs the single process-lifetime buffer that
+// `emitArgvCacheEnsure` builds via `mrt_alloc` and clears the init flag. This is
+// the wasm counterpart to `mrt_win32_free_argv_cache`; `argvCacheTeardown`
+// (Target.maxon) selects it for wasm targets and `patchMrtStartFreeArgvCache`
+// injects the `call mrt_wasm_free_argv_cache` into mrt_start AFTER the
+// reachability walk (which is why the walk seeds this name). The body never
+// executes — the intercept replaces it.
+func mrt_wasm_free_argv_cache 0 void
+  block entry:
+    v0 = std constI64 0
+    std ret v0
+end
+
 // __gt_spawn(func_ptr, arg_count, arg_buf) -> promise (GT ptr) and
 // __gt_await(promise) -> result. Signature-only stubs: the real bodies are the
 // hand-emitted machine code in X64Backend.maxon (emitX64GtSpawn / emitX64GtAwait),

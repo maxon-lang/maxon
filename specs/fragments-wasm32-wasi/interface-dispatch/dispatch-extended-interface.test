@@ -81,23 +81,26 @@ module {
   }
   func @main() -> u8 {
   entry:
-    %0 = mir.mov_imm 10 : i64
-    %9 = mir.mov_imm 8 : i64
-    %10 = mir.call @mrt_alloc(%9)
-    mir.store %0, %10, 0 width: qword
-    %3 = mir.global_addr @__witness_Impl_Base
-    %4 = mir.call @callBase(%10, %3)
-    %6 = mir.global_addr @__witness_Impl_Derived
-    %7 = mir.call @callDerived(%10, %6)
-    %8 = mir.add.i64 %4, %7
-    %11 = mir.mov_imm 125 : i64
-    %12 = mir.cmp ugt, %8, %11
-    mir.cond_br %12 [then: __range_panic_0(), else: __range_ok_0()]
+    %1 = mir.mov_imm 10 : i64
+    %10 = mir.mov_imm 8 : i64
+    %11 = mir.mov_imm 0 : i64
+    %12 = mir.mov_imm 0 : i64
+    %13 = mir.call @stdlib.__mm_alloc(%10, %11, %12)
+    mir.store %1, %13, 0 width: qword
+    %4 = mir.global_addr @__witness_Impl_Base
+    %5 = mir.call @callBase(%13, %4)
+    %7 = mir.global_addr @__witness_Impl_Derived
+    %8 = mir.call @callDerived(%13, %7)
+    %14 = mir.call @mm_drop(%13)
+    %9 = mir.add.i64 %5, %8
+    %15 = mir.mov_imm 125 : i64
+    %16 = mir.cmp ugt, %9, %15
+    mir.cond_br %16 [then: __range_panic_0(), else: __range_ok_0()]
   __range_panic_0:
-    %13 = mir.global_addr @__panic_msg_cb1cbf5e76f74316
-    %14 = mir.call @mrt_panic(%13)
+    %17 = mir.global_addr @__panic_msg_cb1cbf5e76f74316
+    %18 = mir.call @mrt_panic(%17)
   __range_ok_0:
-    mir.ret %8
+    mir.ret %9
   }
 }
 ---

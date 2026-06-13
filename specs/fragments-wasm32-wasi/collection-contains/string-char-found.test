@@ -13,43 +13,50 @@ ExitCode: 1
 module {
   func @main() -> u8 {
   entry:
-    %0 = mir.global_addr @__istr_0
-    %1 = mir.mov_imm 40 : i64
-    %2 = mir.call @mrt_alloc(%1)
-    mir.store %0, %2, 0 width: qword
-    %3 = mir.mov_imm 11 : i64
-    mir.store %3, %2, 8 width: qword
-    %4 = mir.mov_imm -2 : i64
-    mir.store %4, %2, 16 width: qword
-    %5 = mir.mov_imm 1 : i64
-    mir.store %5, %2, 24 width: qword
-    %6 = mir.mov_imm 0 : i64
-    mir.store %6, %2, 32 width: qword
-    %7 = mir.mov_imm 16 : i64
-    %8 = mir.call @mrt_alloc(%7)
-    mir.store %2, %8, 0 width: qword
-    mir.store %5, %8, 8 width: qword
-    %11 = mir.mov_imm 111 : i64
-    %13 = mir.call @mrt_alloc(%5)
-    mir.store %11, %13, 0 width: byte
-    %14 = mir.mov_imm 40 : i64
-    %15 = mir.call @mrt_alloc(%14)
-    mir.store %13, %15, 0 width: qword
-    mir.store %5, %15, 8 width: qword
-    mir.store %5, %15, 16 width: qword
-    mir.store %5, %15, 24 width: qword
-    %19 = mir.mov_imm 0 : i64
-    mir.store %19, %15, 32 width: qword
-    %20 = mir.mov_imm 8 : i64
-    %21 = mir.call @mrt_alloc(%20)
-    mir.store %15, %21, 0 width: qword
-    %22 = mir.call @String.contains$Character(%8, %21)
-    mir.cond_br %22 [then: check_0(), else: check_0.after()]
+    %0 = mir.mov_imm 0 : i64
+    %1 = mir.global_addr @__istr_0
+    %2 = mir.mov_imm 48 : i64
+    %3 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %4 = mir.call @mrt_alloc_with_dtor(%2, %3)
+    mir.store %0, %4, 40 width: qword
+    mir.store %1, %4, 0 width: qword
+    %6 = mir.mov_imm 11 : i64
+    mir.store %6, %4, 8 width: qword
+    %7 = mir.mov_imm -2 : i64
+    mir.store %7, %4, 16 width: qword
+    %8 = mir.mov_imm 1 : i64
+    mir.store %8, %4, 24 width: qword
+    mir.store %0, %4, 32 width: qword
+    %11 = mir.mov_imm 16 : i64
+    %12 = mir.func_addr @__destruct_String
+    %10 = mir.call @stdlib.__mm_alloc(%11, %12, %0)
+    mir.store %4, %10, 0 width: qword
+    mir.store %8, %10, 8 width: qword
+    %16 = mir.mov_imm 111 : i64
+    %18 = mir.call @mrt_alloc(%8)
+    mir.store %16, %18, 0 width: byte
+    %19 = mir.mov_imm 48 : i64
+    %20 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %21 = mir.call @mrt_alloc_with_dtor(%19, %20)
+    mir.store %0, %21, 40 width: qword
+    mir.store %18, %21, 0 width: qword
+    mir.store %8, %21, 8 width: qword
+    mir.store %8, %21, 16 width: qword
+    mir.store %8, %21, 24 width: qword
+    %26 = mir.mov_imm -1 : i64
+    mir.store %26, %21, 32 width: qword
+    %28 = mir.mov_imm 8 : i64
+    %29 = mir.func_addr @__destruct_Character
+    %27 = mir.call @stdlib.__mm_alloc(%28, %29, %0)
+    mir.store %21, %27, 0 width: qword
+    %31 = mir.call @String.contains$Character(%10, %27)
+    %33 = mir.call @mm_drop(%10)
+    %32 = mir.call @mm_drop(%27)
+    mir.cond_br %31 [then: check_0(), else: check_0.after()]
   check_0:
-    mir.ret %5
+    mir.ret %8
   check_0.after:
-    %24 = mir.mov_imm 0 : i64
-    mir.ret %24
+    mir.ret %0
   }
 }
 ---

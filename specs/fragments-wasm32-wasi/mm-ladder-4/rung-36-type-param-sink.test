@@ -37,6 +37,8 @@ mm_move Box #1 -> return [Box.create]
 mm_alloc Wrapper #2 size=8 [Wrapper.wrap]
 mm_move Wrapper #2 -> return [Wrapper.wrap]
 mm_drop Wrapper #2 [main]
+    mm_decref Box #1 rc=0 [__layout_destroy_Wrapper_Box]
+      mm_free Box #1
     mm_free Wrapper #2
 ```
 ---
@@ -57,10 +59,11 @@ module {
     mir.store %1, %15, 0 width: qword
     %17 = mir.call @mm_move_return(%15)
     %18 = mir.call @mm_scope_pop()
+    %3 = mir.global_addr @__layout_Wrapper_Box
     %19 = mir.global_addr @__mtstr_scope_Wrapper_wrap
     %20 = mir.call @mm_scope_push(%19)
     %21 = mir.mov_imm 8 : i64
-    %22 = mir.mov_imm 0 : i64
+    %22 = mir.load %3, 40 width: qword
     %23 = mir.mov_imm 61 : i64
     %24 = mir.call @stdlib.__mm_alloc(%21, %22, %23)
     mir.store %15, %24, 0 width: qword

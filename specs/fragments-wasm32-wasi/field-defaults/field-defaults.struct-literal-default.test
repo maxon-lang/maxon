@@ -27,30 +27,42 @@ ExitCode: 7
 ---
 // CompiledIR
 module {
+  func @Shape.create() -> i64 {
+  entry:
+    %0 = mir.mov_imm 8 : i64
+    %2 = mir.func_addr @__destruct_Shape
+    %3 = mir.mov_imm 0 : i64
+    %1 = mir.call @stdlib.__mm_alloc(%0, %2, %3)
+    %11 = mir.call @stdlib.__mm_incref(%1)
+    %5 = mir.mov_imm 3 : i64
+    %6 = mir.mov_imm 4 : i64
+    %7 = mir.mov_imm 16 : i64
+    %8 = mir.mov_imm 0 : i64
+    %9 = mir.mov_imm 0 : i64
+    %10 = mir.call @stdlib.__mm_alloc(%7, %8, %9)
+    %12 = mir.call @stdlib.__mm_incref(%10)
+    mir.store %5, %10, 0 width: qword
+    mir.store %6, %10, 8 width: qword
+    mir.store %10, %1, 0 width: qword
+    mir.ret %1
+  }
   func @main() -> u8 {
   entry:
-    %8 = mir.mov_imm 8 : i64
-    %9 = mir.call @mrt_alloc(%8)
-    %10 = mir.mov_imm 3 : i64
-    %11 = mir.mov_imm 4 : i64
-    %12 = mir.mov_imm 16 : i64
-    %13 = mir.call @mrt_alloc(%12)
-    mir.store %10, %13, 0 width: qword
-    mir.store %11, %13, 8 width: qword
-    mir.store %13, %9, 0 width: qword
-    %2 = mir.load %9, 0 width: qword
-    %3 = mir.load %2, 0 width: qword
-    %5 = mir.load %9, 0 width: qword
-    %6 = mir.load %5, 8 width: qword
-    %7 = mir.add.i64 %3, %6
-    %14 = mir.mov_imm 125 : i64
-    %15 = mir.cmp ugt, %7, %14
-    mir.cond_br %15 [then: __range_panic_0(), else: __range_ok_0()]
+    %1 = mir.call @Shape.create()
+    %3 = mir.load %1, 0 width: qword
+    %4 = mir.load %3, 0 width: qword
+    %6 = mir.load %1, 0 width: qword
+    %7 = mir.load %6, 8 width: qword
+    %8 = mir.add.i64 %4, %7
+    %9 = mir.call @__mm_decref_maybenull_helper(%1)
+    %10 = mir.mov_imm 125 : i64
+    %11 = mir.cmp ugt, %8, %10
+    mir.cond_br %11 [then: __range_panic_0(), else: __range_ok_0()]
   __range_panic_0:
-    %16 = mir.global_addr @__panic_msg_4c925234baca74c8
-    %17 = mir.call @mrt_panic(%16)
+    %12 = mir.global_addr @__panic_msg_4c925234baca74c8
+    %13 = mir.call @mrt_panic(%12)
   __range_ok_0:
-    mir.ret %7
+    mir.ret %8
   }
 }
 ---

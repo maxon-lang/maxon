@@ -10,31 +10,37 @@ ExitCode: 3
 module {
   func @main() -> u8 {
   entry:
-    %0 = mir.global_addr @__istr_0
-    %1 = mir.mov_imm 40 : i64
-    %2 = mir.call @mrt_alloc(%1)
-    mir.store %0, %2, 0 width: qword
-    %3 = mir.mov_imm 3 : i64
-    mir.store %3, %2, 8 width: qword
-    %4 = mir.mov_imm -2 : i64
-    mir.store %4, %2, 16 width: qword
-    %5 = mir.mov_imm 1 : i64
-    mir.store %5, %2, 24 width: qword
-    %6 = mir.mov_imm 0 : i64
-    mir.store %6, %2, 32 width: qword
-    %7 = mir.mov_imm 8 : i64
-    %8 = mir.call @mrt_alloc(%7)
-    mir.store %2, %8, 0 width: qword
-    %10 = mir.global_addr @__layout_Array_Int
-    %11 = mir.call @Array.count(%8, %10)
-    %12 = mir.mov_imm 125 : i64
-    %13 = mir.cmp ugt, %11, %12
-    mir.cond_br %13 [then: __range_panic_0(), else: __range_ok_0()]
+    %1 = mir.global_addr @__istr_0
+    %2 = mir.mov_imm 48 : i64
+    %3 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %4 = mir.call @mrt_alloc_with_dtor(%2, %3)
+    %5 = mir.mov_imm 0 : i64
+    mir.store %5, %4, 40 width: qword
+    mir.store %1, %4, 0 width: qword
+    %6 = mir.mov_imm 3 : i64
+    mir.store %6, %4, 8 width: qword
+    %7 = mir.mov_imm -2 : i64
+    mir.store %7, %4, 16 width: qword
+    %8 = mir.mov_imm 1 : i64
+    mir.store %8, %4, 24 width: qword
+    %9 = mir.mov_imm 0 : i64
+    mir.store %9, %4, 32 width: qword
+    %10 = mir.mov_imm 8 : i64
+    %11 = mir.func_addr @__destruct_Array
+    %12 = mir.mov_imm 0 : i64
+    %13 = mir.call @stdlib.__mm_alloc(%10, %11, %12)
+    mir.store %4, %13, 0 width: qword
+    %15 = mir.global_addr @__layout_Array_Int
+    %16 = mir.call @Array.count(%13, %15)
+    %17 = mir.call @mm_drop(%13)
+    %18 = mir.mov_imm 125 : i64
+    %19 = mir.cmp ugt, %16, %18
+    mir.cond_br %19 [then: __range_panic_0(), else: __range_ok_0()]
   __range_panic_0:
-    %14 = mir.global_addr @__panic_msg_6efee6cad6d63c89
-    %15 = mir.call @mrt_panic(%14)
+    %20 = mir.global_addr @__panic_msg_6efee6cad6d63c89
+    %21 = mir.call @mrt_panic(%20)
   __range_ok_0:
-    mir.ret %11
+    mir.ret %16
   }
 }
 ---

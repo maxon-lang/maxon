@@ -39,13 +39,13 @@ mm_incref Array #3 rc=1 [Cache.create]
 mm_alloc __ManagedMemory #4 size=48 [Cache.create]
 mm_incref __ManagedMemory #4 rc=1 [Cache.create]
 mm_move Array #3 -> return [Cache.create]
-mm_move Array #3 -> return [main]
-mm_alloc Array #5 size=8
-mm_incref Array #5 rc=1
-mm_alloc __ManagedMemory #6 size=48
-mm_incref __ManagedMemory #6 rc=1
-mm_move Array #5 -> return
-mm_move Array #5 -> return
+mm_move Array #3 -> return [Cache.create]
+mm_alloc Array #5 size=8 [main]
+mm_incref Array #5 rc=1 [main]
+mm_alloc __ManagedMemory #6 size=48 [main]
+mm_incref __ManagedMemory #6 rc=1 [main]
+mm_move Array #5 -> return [main]
+mm_move Array #5 -> return [main]
 mm_alloc Array #7 size=8
 mm_incref Array #7 rc=1
 mm_alloc __ManagedMemory #8 size=48
@@ -232,24 +232,25 @@ module {
     %26 = mir.global_addr @__witness_int_Hashable
     %27 = mir.global_addr @__witness_int_Equatable
     %28, %29 = mir.try_call @Map.get(%23, %24, %25, %26, %27)
-    %59 = mir.call @stdlib.__mm_decref(%3)
     %30 = mir.mov_imm 0 : i64
     %31 = mir.cmp ne, %29, %30
     mir.cond_br %31 [then: try_0.otherwise(), else: try_0.merge()]
   try_0.otherwise:
+    %65 = mir.call @__mm_decref_maybenull_helper(%3)
     %33 = mir.mov_imm 99 : i64
     %63 = mir.call @mm_scope_pop()
     mir.ret %33
   try_0.merge:
     %36 = mir.load %28, 0 width: qword
-    %60 = mir.call @stdlib.__mm_decref(%28)
+    %60 = mir.call @__mm_decref_maybenull_helper(%3)
+    %59 = mir.call @__mm_decref_maybenull_helper(%28)
     %64 = mir.call @mm_scope_pop()
-    %65 = mir.mov_imm 125 : i64
-    %66 = mir.cmp ugt, %36, %65
-    mir.cond_br %66 [then: __range_panic_0(), else: __range_ok_0()]
+    %66 = mir.mov_imm 125 : i64
+    %67 = mir.cmp ugt, %36, %66
+    mir.cond_br %67 [then: __range_panic_0(), else: __range_ok_0()]
   __range_panic_0:
-    %67 = mir.global_addr @__panic_msg_d19e0d427ab0878b
-    %68 = mir.call @mrt_panic(%67)
+    %68 = mir.global_addr @__panic_msg_d19e0d427ab0878b
+    %69 = mir.call @mrt_panic(%68)
   __range_ok_0:
     mir.ret %36
   }

@@ -13,18 +13,27 @@ ExitCode: 42
 module {
   func @main() -> u8 {
   entry:
-    %0 = mir.call @Directory.currentPath()
-    %8 = mir.load %0, 0 width: qword
-    %3 = mir.call @String.count(%8)
-    %4 = mir.mov_imm 0 : i64
-    %5 = mir.cmp gt, %3, %4
-    mir.cond_br %5 [then: ok_0(), else: ok_0.after()]
+    %1 = mir.call @Directory.currentPath()
+    %9 = mir.load %1, 0 width: qword
+    mir.br inlined_stdlib.__mm_incref_0_0()
+  inlined_stdlib.__mm_incref_0_0:
+    %11 = mir.mov_imm 8 : i64
+    %12 = mir.sub.i64 %9, %11
+    mir.atomic_inc %12
+    mir.br inline_cont_main_0()
+  inline_cont_main_0:
+    %4 = mir.call @String.count(%9)
+    %14 = mir.call @__mm_decref_maybenull_helper(%1)
+    %13 = mir.call @__mm_decref_maybenull_helper(%9)
+    %5 = mir.mov_imm 0 : i64
+    %6 = mir.cmp gt, %4, %5
+    mir.cond_br %6 [then: ok_0(), else: ok_0.after()]
   ok_0:
-    %6 = mir.mov_imm 42 : i64
-    mir.ret %6
-  ok_0.after:
-    %7 = mir.mov_imm 0 : i64
+    %7 = mir.mov_imm 42 : i64
     mir.ret %7
+  ok_0.after:
+    %8 = mir.mov_imm 0 : i64
+    mir.ret %8
   }
 }
 ---

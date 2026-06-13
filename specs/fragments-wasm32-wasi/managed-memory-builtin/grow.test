@@ -25,83 +25,93 @@ ExitCode: 0
 module {
   func @main() -> u8 {
   entry:
-    %0 = mir.mov_imm 2 : i64
-    %1 = mir.mov_imm 8 : i64
-    %2 = mir.call @stdlib.__managed_mem_create(%0, %1)
-    %3 = mir.mov_imm 0 : i64
+    %0 = mir.mov_imm 0 : i64
+    %2 = mir.mov_imm 2 : i64
+    %3 = mir.mov_imm 8 : i64
+    %80 = mir.mov_imm 0 : i64
+    %81 = mir.call @stdlib.__managed_mem_create_managed(%2, %3, %80)
     mir.br try_0.merge()
   try_0.merge:
-    %10 = mir.mov_imm 2 : i64
-    %11, %12 = mir.try_call @stdlib.__managed_mem_set_length(%2, %10)
-    %14 = mir.cmp ne, %12, %3
-    mir.cond_br %14 [then: try_1.otherwise(), else: try_1.merge()]
+    %12 = mir.mov_imm 2 : i64
+    %13, %14 = mir.try_call @stdlib.__managed_mem_set_length(%81, %12)
+    %16 = mir.cmp ne, %14, %0
+    mir.cond_br %16 [then: try_1.otherwise(), else: try_1.merge()]
   try_1.otherwise:
-    %16 = mir.mov_imm 2 : i64
-    mir.ret %16
+    %83 = mir.call @__mm_decref_maybenull_helper(%81)
+    %18 = mir.mov_imm 2 : i64
+    mir.ret %18
   try_1.merge:
-    %20 = mir.mov_imm 77 : i64
-    %21, %22 = mir.try_call @stdlib.__managed_mem_set(%2, %3, %20)
-    %24 = mir.cmp ne, %22, %3
-    mir.cond_br %24 [then: try_2.otherwise(), else: try_2.merge()]
+    %22 = mir.mov_imm 77 : i64
+    %23, %24 = mir.try_call @stdlib.__managed_mem_set(%81, %0, %22)
+    %26 = mir.cmp ne, %24, %0
+    mir.cond_br %26 [then: try_2.otherwise(), else: try_2.merge()]
   try_2.otherwise:
-    %26 = mir.mov_imm 3 : i64
-    mir.ret %26
+    %84 = mir.call @__mm_decref_maybenull_helper(%81)
+    %28 = mir.mov_imm 3 : i64
+    mir.ret %28
   try_2.merge:
-    %29 = mir.mov_imm 1 : i64
-    %30 = mir.mov_imm 88 : i64
-    %31, %32 = mir.try_call @stdlib.__managed_mem_set(%2, %29, %30)
-    %34 = mir.cmp ne, %32, %3
-    mir.cond_br %34 [then: try_3.otherwise(), else: try_3.merge()]
+    %31 = mir.mov_imm 1 : i64
+    %32 = mir.mov_imm 88 : i64
+    %33, %34 = mir.try_call @stdlib.__managed_mem_set(%81, %31, %32)
+    %36 = mir.cmp ne, %34, %0
+    mir.cond_br %36 [then: try_3.otherwise(), else: try_3.merge()]
   try_3.otherwise:
-    %36 = mir.mov_imm 3 : i64
-    mir.ret %36
+    %85 = mir.call @__mm_decref_maybenull_helper(%81)
+    %38 = mir.mov_imm 3 : i64
+    mir.ret %38
   try_3.merge:
-    %39 = mir.mov_imm 8 : i64
-    %40, %41 = mir.try_call @stdlib.__managed_mem_grow(%2, %39)
-    %43 = mir.cmp ne, %41, %3
-    mir.cond_br %43 [then: try_4.otherwise(), else: try_4.merge()]
+    %41 = mir.mov_imm 8 : i64
+    %42, %43 = mir.try_call @stdlib.__managed_mem_grow(%81, %41)
+    %45 = mir.cmp ne, %43, %0
+    mir.cond_br %45 [then: try_4.otherwise(), else: try_4.merge()]
   try_4.otherwise:
-    %45 = mir.mov_imm 4 : i64
-    mir.ret %45
+    %86 = mir.call @__mm_decref_maybenull_helper(%81)
+    %47 = mir.mov_imm 4 : i64
+    mir.ret %47
   try_4.merge:
-    %48 = mir.load %2, 16 width: qword
-    %49 = mir.mov_imm 8 : i64
-    %50 = mir.cmp ne, %48, %49
-    mir.cond_br %50 [then: badCap_0(), else: badCap_0.after()]
+    %50 = mir.load %81, 16 width: qword
+    %51 = mir.mov_imm 8 : i64
+    %52 = mir.cmp ne, %50, %51
+    mir.cond_br %52 [then: badCap_0(), else: badCap_0.after()]
   badCap_0:
-    %51 = mir.mov_imm 5 : i64
-    mir.ret %51
+    %87 = mir.call @__mm_decref_maybenull_helper(%81)
+    %53 = mir.mov_imm 5 : i64
+    mir.ret %53
   badCap_0.after:
-    %54, %55 = mir.try_call @stdlib.__managed_mem_get(%2, %3)
-    %57 = mir.cmp ne, %55, %3
-    mir.cond_br %57 [then: try_5.otherwise(), else: try_5.merge()]
+    %56, %57 = mir.try_call @stdlib.__managed_mem_get(%81, %0)
+    %59 = mir.cmp ne, %57, %0
+    mir.cond_br %59 [then: try_5.otherwise(), else: try_5.merge()]
   try_5.otherwise:
-    %59 = mir.mov_imm 6 : i64
-    mir.ret %59
+    %88 = mir.call @__mm_decref_maybenull_helper(%81)
+    %61 = mir.mov_imm 6 : i64
+    mir.ret %61
   try_5.merge:
-    %62 = mir.mov_imm 1 : i64
-    %63, %64 = mir.try_call @stdlib.__managed_mem_get(%2, %62)
-    %66 = mir.cmp ne, %64, %3
-    mir.cond_br %66 [then: try_6.otherwise(), else: try_6.merge()]
+    %64 = mir.mov_imm 1 : i64
+    %65, %66 = mir.try_call @stdlib.__managed_mem_get(%81, %64)
+    %68 = mir.cmp ne, %66, %0
+    mir.cond_br %68 [then: try_6.otherwise(), else: try_6.merge()]
   try_6.otherwise:
-    %68 = mir.mov_imm 6 : i64
-    mir.ret %68
+    %89 = mir.call @__mm_decref_maybenull_helper(%81)
+    %70 = mir.mov_imm 6 : i64
+    mir.ret %70
   try_6.merge:
-    %71 = mir.mov_imm 77 : i64
-    %72 = mir.cmp ne, %54, %71
-    mir.cond_br %72 [then: badA_0(), else: badA_0.after()]
+    %73 = mir.mov_imm 77 : i64
+    %74 = mir.cmp ne, %56, %73
+    mir.cond_br %74 [then: badA_0(), else: badA_0.after()]
   badA_0:
-    %73 = mir.mov_imm 7 : i64
-    mir.ret %73
+    %90 = mir.call @__mm_decref_maybenull_helper(%81)
+    %75 = mir.mov_imm 7 : i64
+    mir.ret %75
   badA_0.after:
-    %75 = mir.mov_imm 88 : i64
-    %76 = mir.cmp ne, %63, %75
-    mir.cond_br %76 [then: badB_0(), else: badB_0.after()]
+    %77 = mir.mov_imm 88 : i64
+    %78 = mir.cmp ne, %65, %77
+    %82 = mir.call @__mm_decref_maybenull_helper(%81)
+    mir.cond_br %78 [then: badB_0(), else: badB_0.after()]
   badB_0:
-    %77 = mir.mov_imm 8 : i64
-    mir.ret %77
+    %79 = mir.mov_imm 8 : i64
+    mir.ret %79
   badB_0.after:
-    mir.ret %3
+    mir.ret %0
   }
 }
 ---

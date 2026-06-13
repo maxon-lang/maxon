@@ -32,31 +32,36 @@ Monday
 module {
   func @main() -> u8 {
   entry:
-    %92 = mir.mov_imm -2 : i64
-    %93 = mir.mov_imm 40 : i64
-    %94 = mir.mov_imm 16 : i64
+    %122 = mir.mov_imm -2 : i64
+    %123 = mir.mov_imm 16 : i64
+    %124 = mir.mov_imm 48 : i64
     %0 = mir.mov_imm 0 : i64
-    %4 = mir.mov_imm 1 : i64
+    %6 = mir.mov_imm 1 : i64
     mir.br w_0.case0()
-  w_0.merge:
-    %95 = mir.load %91, 0 width: qword
-    %96 = mir.load %95, 0 width: qword
-    %97 = mir.load %95, 8 width: qword
-    %98 = mir.call @mrt_write_stdout(%96, %97)
+  w_0.merge(%121: i64):
+    %125 = mir.load %121, 0 width: qword
+    %126 = mir.load %125, 0 width: qword
+    %127 = mir.load %125, 8 width: qword
+    %128 = mir.call @mrt_write_stdout(%126, %127)
+    %130 = mir.call @__mm_decref_maybenull_helper(%121)
     mir.ret %0
   w_0.case0:
-    %9 = mir.global_addr @__istr_0
-    %11 = mir.call @mrt_alloc(%93)
-    mir.store %9, %11, 0 width: qword
-    %12 = mir.mov_imm 6 : i64
-    mir.store %12, %11, 8 width: qword
-    mir.store %92, %11, 16 width: qword
-    mir.store %4, %11, 24 width: qword
-    mir.store %0, %11, 32 width: qword
-    %17 = mir.call @mrt_alloc(%94)
-    mir.store %11, %17, 0 width: qword
-    mir.store %4, %17, 8 width: qword
-    mir.br w_0.merge(%17)
+    %11 = mir.global_addr @__istr_0
+    %13 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %14 = mir.call @mrt_alloc_with_dtor(%124, %13)
+    mir.store %0, %14, 40 width: qword
+    mir.store %11, %14, 0 width: qword
+    %16 = mir.mov_imm 6 : i64
+    mir.store %16, %14, 8 width: qword
+    mir.store %122, %14, 16 width: qword
+    mir.store %6, %14, 24 width: qword
+    mir.store %0, %14, 32 width: qword
+    %22 = mir.func_addr @__destruct_String
+    %20 = mir.call @stdlib.__mm_alloc(%123, %22, %0)
+    %129 = mir.call @stdlib.__mm_incref(%20)
+    mir.store %14, %20, 0 width: qword
+    mir.store %6, %20, 8 width: qword
+    mir.br w_0.merge(%20)
   }
 }
 ---

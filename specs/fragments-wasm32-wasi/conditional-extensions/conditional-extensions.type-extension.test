@@ -30,21 +30,25 @@ ExitCode: 1
 module {
   func @main() -> u8 {
   entry:
-    %0 = mir.mov_imm 42 : i64
-    %10 = mir.mov_imm 8 : i64
-    %11 = mir.call @mrt_alloc(%10)
-    mir.store %0, %11, 0 width: qword
-    %4 = mir.mov_imm 42 : i64
-    %6 = mir.global_addr @__witness_int_Equatable
-    %12 = mir.load %11, 0 width: qword
-    %13 = mir.witness_call %6, [0](%12, %4)
-    mir.cond_br %13 [then: yes_0(), else: yes_0.after()]
+    %1 = mir.mov_imm 42 : i64
+    %2 = mir.global_addr @__layout_Box_Int
+    %11 = mir.mov_imm 8 : i64
+    %12 = mir.load %2, 40 width: qword
+    %13 = mir.mov_imm 0 : i64
+    %14 = mir.call @stdlib.__mm_alloc(%11, %12, %13)
+    mir.store %1, %14, 0 width: qword
+    %5 = mir.mov_imm 42 : i64
+    %7 = mir.global_addr @__witness_int_Equatable
+    %15 = mir.load %14, 0 width: qword
+    %16 = mir.witness_call %7, [0](%15, %5)
+    %17 = mir.call @mm_drop(%14)
+    mir.cond_br %16 [then: yes_0(), else: yes_0.after()]
   yes_0:
-    %8 = mir.mov_imm 1 : i64
-    mir.ret %8
-  yes_0.after:
-    %9 = mir.mov_imm 0 : i64
+    %9 = mir.mov_imm 1 : i64
     mir.ret %9
+  yes_0.after:
+    %10 = mir.mov_imm 0 : i64
+    mir.ret %10
   }
 }
 ---

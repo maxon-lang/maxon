@@ -30,81 +30,82 @@ ExitCode: 0
 module {
   func @main() -> u8 {
   entry:
-    %35 = mir.mov_imm 8 : i64
-    %36 = mir.call @mrt_alloc(%35)
-    %37 = mir.mov_imm 40 : i64
-    %38 = mir.call @mrt_alloc(%37)
-    %39 = mir.mov_imm 0 : i64
-    mir.store %39, %38, 0 width: qword
-    %40 = mir.mov_imm 0 : i64
-    mir.store %40, %38, 8 width: qword
-    %41 = mir.mov_imm 0 : i64
-    mir.store %41, %38, 16 width: qword
-    %42 = mir.mov_imm 8 : i64
-    mir.store %42, %38, 24 width: qword
-    %43 = mir.mov_imm 0 : i64
-    mir.store %43, %38, 32 width: qword
-    mir.store %38, %36, 0 width: qword
-    %44 = mir.load %36, 0 width: qword
-    %45 = mir.load %44, 8 width: qword
-    %46 = mir.mov_imm 0 : i64
-    %47 = mir.cmp eq, %45, %46
-    %5 = mir.mov_imm 0 : i64
-    %6 = mir.cmp eq, %47, %5
-    mir.cond_br %6 [then: e1_0(), else: e1_0.after()]
-  e1_0:
-    %7 = mir.mov_imm 1 : i64
-    mir.ret %7
-  e1_0.after:
-    %9 = mir.mov_imm 42 : i64
-    %10 = mir.global_addr @__layout_Array_Int
-    %11 = mir.call @Array.push(%36, %9, %10)
-    %48 = mir.load %36, 0 width: qword
-    %49 = mir.load %48, 8 width: qword
-    %50 = mir.mov_imm 0 : i64
-    %51 = mir.cmp eq, %49, %50
-    %15 = mir.mov_imm 1 : i64
-    %16 = mir.cmp eq, %51, %15
-    mir.cond_br %16 [then: e2_0(), else: inlined_Array.pop_0()]
-  e2_0:
-    %17 = mir.mov_imm 2 : i64
-    mir.ret %17
-  inlined_Array.pop_0:
-    %52 = mir.load %36, 0 width: qword
-    %53 = mir.load %52, 8 width: qword
-    %54 = mir.mov_imm 0 : i64
-    %55 = mir.cmp eq, %53, %54
-    mir.cond_br %55 [then: inlined_Array.pop_1(), else: inlined_Array.pop_2()]
-  inlined_Array.pop_1:
-    %56 = mir.mov_imm 1 : i64
-    mir.br inline_cont_main_0(%54, %56)
-  inlined_Array.pop_2:
-    %57 = mir.load %36, 0 width: qword
-    %58 = mir.mov_imm 1 : i64
-    %59 = mir.sub.i64 %53, %58
-    %60, %61 = mir.try_call @stdlib.__managed_mem_remove(%57, %59)
-    %62 = mir.cmp ne, %61, %54
-    mir.cond_br %62 [then: inlined_Array.pop_3(), else: inline_cont_main_0(%60, %54)]
-  inlined_Array.pop_3:
-    %63 = mir.mov_imm 1 : i64
-    mir.br inline_cont_main_0(%54, %63)
+    %0 = mir.mov_imm 0 : i64
+    %36 = mir.mov_imm 8 : i64
+    %37 = mir.func_addr @__destruct_Array
+    %38 = mir.mov_imm 0 : i64
+    %39 = mir.call @stdlib.__mm_alloc(%36, %37, %38)
+    mir.br inlined_stdlib.__mm_incref_0_0()
+  inlined_stdlib.__mm_incref_0_0:
+    %59 = mir.mov_imm 8 : i64
+    %60 = mir.sub.i64 %39, %59
+    mir.atomic_inc %60
+    mir.br inline_cont_main_0()
   inline_cont_main_0:
-    %23 = mir.cmp ne, %65, %5
-    mir.cond_br %23 [then: try_0.merge(%5), else: try_0.ok()]
+    %41 = mir.mov_imm 48 : i64
+    %42 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %43 = mir.call @stdlib.__mm_alloc(%41, %42, %38)
+    mir.br inlined_stdlib.__mm_incref_0_1()
+  inlined_stdlib.__mm_incref_0_1:
+    %61 = mir.mov_imm 8 : i64
+    %62 = mir.sub.i64 %43, %61
+    mir.atomic_inc %62
+    mir.br inline_cont_main_1()
+  inline_cont_main_1:
+    mir.store %38, %43, 0 width: qword
+    mir.store %38, %43, 8 width: qword
+    mir.store %38, %43, 16 width: qword
+    %45 = mir.mov_imm 8 : i64
+    mir.store %45, %43, 24 width: qword
+    %46 = mir.mov_imm -1 : i64
+    mir.store %46, %43, 32 width: qword
+    mir.store %38, %43, 40 width: qword
+    mir.store %43, %39, 0 width: qword
+    %47 = mir.load %39, 0 width: qword
+    %48 = mir.load %47, 8 width: qword
+    %49 = mir.mov_imm 0 : i64
+    %50 = mir.cmp eq, %48, %49
+    %7 = mir.cmp eq, %50, %0
+    mir.cond_br %7 [then: e1_0(), else: e1_0.after()]
+  e1_0:
+    %64 = mir.call @__mm_decref_maybenull_helper(%39)
+    %8 = mir.mov_imm 1 : i64
+    mir.ret %8
+  e1_0.after:
+    %10 = mir.mov_imm 42 : i64
+    %11 = mir.global_addr @__layout_Array_Int
+    %12 = mir.call @Array.push(%39, %10, %11)
+    %51 = mir.load %39, 0 width: qword
+    %52 = mir.load %51, 8 width: qword
+    %53 = mir.mov_imm 0 : i64
+    %54 = mir.cmp eq, %52, %53
+    %16 = mir.mov_imm 1 : i64
+    %17 = mir.cmp eq, %54, %16
+    mir.cond_br %17 [then: e2_0(), else: e2_0.after()]
+  e2_0:
+    %65 = mir.call @__mm_decref_maybenull_helper(%39)
+    %18 = mir.mov_imm 2 : i64
+    mir.ret %18
+  e2_0.after:
+    %20 = mir.global_addr @__layout_Array_Int
+    %21, %22 = mir.try_call @Array.pop(%39, %20)
+    %24 = mir.cmp ne, %22, %0
+    mir.cond_br %24 [then: try_0.merge(%0), else: try_0.ok()]
   try_0.ok:
-    mir.br try_0.merge(%64)
-  try_0.merge:
-    %66 = mir.load %36, 0 width: qword
-    %67 = mir.load %66, 8 width: qword
-    %68 = mir.mov_imm 0 : i64
-    %69 = mir.cmp eq, %67, %68
-    %31 = mir.cmp eq, %69, %5
-    mir.cond_br %31 [then: e3_0(), else: e3_0.after()]
+    mir.br try_0.merge(%21)
+  try_0.merge(%35: i64):
+    %55 = mir.load %39, 0 width: qword
+    %56 = mir.load %55, 8 width: qword
+    %57 = mir.mov_imm 0 : i64
+    %58 = mir.cmp eq, %56, %57
+    %63 = mir.call @__mm_decref_maybenull_helper(%39)
+    %32 = mir.cmp eq, %58, %0
+    mir.cond_br %32 [then: e3_0(), else: e3_0.after()]
   e3_0:
-    %32 = mir.mov_imm 3 : i64
-    mir.ret %32
+    %33 = mir.mov_imm 3 : i64
+    mir.ret %33
   e3_0.after:
-    mir.ret %5
+    mir.ret %0
   }
 }
 ---

@@ -55,47 +55,52 @@ module {
   check_0.after:
     %4 = mir.mov_imm 7 : i64
     %8 = mir.mov_imm 8 : i64
-    %9 = mir.call @mrt_alloc(%8)
-    mir.store %4, %9, 0 width: qword
+    %9 = mir.mov_imm 0 : i64
+    %10 = mir.mov_imm 0 : i64
+    %11 = mir.call @stdlib.__mm_alloc(%8, %9, %10)
+    %12 = mir.call @stdlib.__mm_incref(%11)
+    mir.store %4, %11, 0 width: qword
     %6 = mir.mov_imm 0 : i64
-    mir.error_return %9, %6
+    mir.error_return %11, %6
   }
   func @main() -> u8 {
   entry:
     %0 = mir.mov_imm 0 : i64
-    mir.br inlined_getBoxValue_0()
-  inlined_getBoxValue_0:
+    mir.br inlined_getBoxValue_0_0()
+  inlined_getBoxValue_0_0:
     %13, %14 = mir.try_call @makeBox(%0)
     %15 = mir.mov_imm 0 : i64
     %16 = mir.cmp ne, %14, %15
-    mir.cond_br %16 [then: inlined_getBoxValue_1(), else: inlined_getBoxValue_2()]
-  inlined_getBoxValue_1:
+    mir.cond_br %16 [then: inlined_getBoxValue_1_0(), else: inlined_getBoxValue_3_0()]
+  inlined_getBoxValue_1_0:
     %17 = mir.mov_imm 1 : i64
     %18 = mir.neg.i64 %17
     mir.br inline_cont_main_0(%18)
-  inlined_getBoxValue_2:
+  inlined_getBoxValue_3_0:
     %19 = mir.load %13, 0 width: qword
+    %29 = mir.call @__mm_decref_maybenull_helper(%13)
     mir.br inline_cont_main_0(%19)
-  inline_cont_main_0:
+  inline_cont_main_0(%20: i64):
     %3 = mir.mov_imm 7 : i64
     %4 = mir.cmp eq, %20, %3
     mir.cond_br %4 [then: g_0(), else: g_0.after()]
   g_0:
     %5 = mir.mov_imm 1 : i64
-    mir.br inlined_getBoxValue_0()
-  inlined_getBoxValue_0:
+    mir.br inlined_getBoxValue_0_1()
+  inlined_getBoxValue_0_1:
     %21, %22 = mir.try_call @makeBox(%5)
     %23 = mir.mov_imm 0 : i64
     %24 = mir.cmp ne, %22, %23
-    mir.cond_br %24 [then: inlined_getBoxValue_1(), else: inlined_getBoxValue_2()]
-  inlined_getBoxValue_1:
+    mir.cond_br %24 [then: inlined_getBoxValue_1_1(), else: inlined_getBoxValue_3_1()]
+  inlined_getBoxValue_1_1:
     %25 = mir.mov_imm 1 : i64
     %26 = mir.neg.i64 %25
     mir.br inline_cont_main_1(%26)
-  inlined_getBoxValue_2:
+  inlined_getBoxValue_3_1:
     %27 = mir.load %21, 0 width: qword
+    %30 = mir.call @__mm_decref_maybenull_helper(%21)
     mir.br inline_cont_main_1(%27)
-  inline_cont_main_1:
+  inline_cont_main_1(%28: i64):
     %8 = mir.mov_imm 1 : i64
     %9 = mir.neg.i64 %8
     %10 = mir.cmp eq, %28, %9

@@ -4,8 +4,6 @@ Do not use "cmd /c" to run commands
 
 There are no time constraints. Complexity doesn't matter. If you are fixing an issue then fix it properly. No workarounds.
 
-Do not use git commands that would change the working directory like stash or checkout
-
 ## maxon-dev MCP tools (PREFER THESE)
 
 When working in this repo, prefer the `maxon-dev` MCP tools over raw Bash invocations of the compiler binaries. They are faster (no shell startup), return structured results, and are the canonical way to drive builds, tests, and one-off snippets in this project. Bash invocation of `./bin/maxon.exe` or `./maxon-selfhosted/.maxon/maxon-selfhosted.exe` should only be used when no MCP tool covers the case.

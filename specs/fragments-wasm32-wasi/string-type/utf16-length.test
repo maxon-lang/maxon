@@ -15,58 +15,78 @@ Stdout: ```
 module {
   func @main() -> u8 {
   entry:
-    %0 = mir.global_addr @__istr_0
-    %1 = mir.mov_imm 40 : i64
-    %2 = mir.call @mrt_alloc(%1)
-    mir.store %0, %2, 0 width: qword
-    %3 = mir.mov_imm 6 : i64
-    mir.store %3, %2, 8 width: qword
-    %4 = mir.mov_imm -2 : i64
-    mir.store %4, %2, 16 width: qword
-    %5 = mir.mov_imm 1 : i64
-    mir.store %5, %2, 24 width: qword
-    %6 = mir.mov_imm 0 : i64
-    mir.store %6, %2, 32 width: qword
-    %7 = mir.mov_imm 16 : i64
-    %8 = mir.call @mrt_alloc(%7)
-    mir.store %2, %8, 0 width: qword
-    mir.store %6, %8, 8 width: qword
-    %39 = mir.load %8, 0 width: qword
-    %40 = mir.call @UTF16View.create(%39)
-    %13 = mir.call @UTF16View.count(%40)
-    %14 = mir.global_addr @__istr_1
-    %16 = mir.mov_imm 21 : i64
-    %17 = mir.call @mrt_alloc(%16)
-    %18 = mir.call @mrt_i64_to_string(%13, %17)
-    %19 = mir.global_addr @__istr_2
-    %20 = mir.mov_imm 1 : i64
-    %23 = mir.add.i64 %6, %18
-    %24 = mir.add.i64 %23, %20
-    %25 = mir.mov_imm 1 : i64
-    %26 = mir.add.i64 %24, %25
-    %27 = mir.call @mrt_alloc(%26)
-    mir.memcpy %27, %14, %6
-    %28 = mir.add.i64 %27, %6
-    mir.memcpy %28, %17, %18
-    %29 = mir.add.i64 %28, %18
-    mir.memcpy %29, %19, %20
-    %31 = mir.mov_imm 40 : i64
-    %32 = mir.call @mrt_alloc(%31)
-    mir.store %27, %32, 0 width: qword
-    mir.store %24, %32, 8 width: qword
-    mir.store %24, %32, 16 width: qword
-    %33 = mir.mov_imm 1 : i64
-    mir.store %33, %32, 24 width: qword
-    mir.store %6, %32, 32 width: qword
-    %35 = mir.mov_imm 16 : i64
-    %36 = mir.call @mrt_alloc(%35)
-    mir.store %32, %36, 0 width: qword
-    mir.store %6, %36, 8 width: qword
-    %41 = mir.load %36, 0 width: qword
-    %42 = mir.load %41, 0 width: qword
-    %43 = mir.load %41, 8 width: qword
-    %44 = mir.call @mrt_write_stdout(%42, %43)
-    mir.ret %6
+    %0 = mir.mov_imm 0 : i64
+    %2 = mir.global_addr @__istr_0
+    %3 = mir.mov_imm 48 : i64
+    %4 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %5 = mir.call @mrt_alloc_with_dtor(%3, %4)
+    mir.store %0, %5, 40 width: qword
+    mir.store %2, %5, 0 width: qword
+    %7 = mir.mov_imm 6 : i64
+    mir.store %7, %5, 8 width: qword
+    %8 = mir.mov_imm -2 : i64
+    mir.store %8, %5, 16 width: qword
+    %9 = mir.mov_imm 1 : i64
+    mir.store %9, %5, 24 width: qword
+    mir.store %0, %5, 32 width: qword
+    %12 = mir.mov_imm 16 : i64
+    %13 = mir.func_addr @__destruct_String
+    %11 = mir.call @stdlib.__mm_alloc(%12, %13, %0)
+    mir.store %5, %11, 0 width: qword
+    mir.store %0, %11, 8 width: qword
+    %50 = mir.load %11, 0 width: qword
+    mir.br inlined_stdlib.__mm_incref_0_0()
+  inlined_stdlib.__mm_incref_0_0:
+    %57 = mir.mov_imm 8 : i64
+    %58 = mir.sub.i64 %50, %57
+    mir.atomic_inc %58
+    mir.br inline_cont_main_0()
+  inline_cont_main_0:
+    %52 = mir.call @UTF16View.create(%50)
+    %60 = mir.call @mm_drop(%11)
+    %19 = mir.call @UTF16View.count(%52)
+    %61 = mir.call @__mm_decref_maybenull_helper(%52)
+    %20 = mir.global_addr @__istr_1
+    %22 = mir.mov_imm 21 : i64
+    %23 = mir.call @mrt_alloc(%22)
+    %24 = mir.call @mrt_i64_to_string(%19, %23)
+    %25 = mir.global_addr @__istr_2
+    %26 = mir.mov_imm 1 : i64
+    %29 = mir.add.i64 %0, %24
+    %30 = mir.add.i64 %29, %26
+    %31 = mir.mov_imm 1 : i64
+    %32 = mir.add.i64 %30, %31
+    %33 = mir.call @mrt_alloc(%32)
+    mir.memcpy %33, %20, %0
+    %34 = mir.add.i64 %33, %0
+    mir.memcpy %34, %23, %24
+    %35 = mir.add.i64 %34, %24
+    mir.memcpy %35, %25, %26
+    %37 = mir.call @stdlib.__mm_decref(%23)
+    %38 = mir.mov_imm 48 : i64
+    %39 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %40 = mir.call @mrt_alloc_with_dtor(%38, %39)
+    mir.store %0, %40, 40 width: qword
+    mir.store %33, %40, 0 width: qword
+    mir.store %30, %40, 8 width: qword
+    mir.store %30, %40, 16 width: qword
+    %42 = mir.mov_imm 1 : i64
+    mir.store %42, %40, 24 width: qword
+    %43 = mir.mov_imm -1 : i64
+    mir.store %43, %40, 32 width: qword
+    %45 = mir.mov_imm 16 : i64
+    %46 = mir.func_addr @__destruct_String
+    %44 = mir.call @stdlib.__mm_alloc(%45, %46, %0)
+    mir.store %40, %44, 0 width: qword
+    mir.store %0, %44, 8 width: qword
+    %53 = mir.load %44, 0 width: qword
+    %59 = mir.call @stdlib.__mm_incref(%53)
+    %54 = mir.load %53, 0 width: qword
+    %55 = mir.load %53, 8 width: qword
+    %56 = mir.call @mrt_write_stdout(%54, %55)
+    %63 = mir.call @mm_drop(%44)
+    %62 = mir.call @__mm_decref_maybenull_helper(%53)
+    mir.ret %0
   }
 }
 ---

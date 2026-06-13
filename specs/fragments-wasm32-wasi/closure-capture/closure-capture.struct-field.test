@@ -35,26 +35,36 @@ module {
   }
   func @main() -> u8 {
   entry:
-    %0 = mir.mov_imm 5 : i64
-    %9 = mir.mov_imm 8 : i64
-    %10 = mir.call @mrt_alloc(%9)
-    mir.store %0, %10, 0 width: qword
-    mir.store_slot slot_0, %10
-    %2 = mir.func_addr @main$closure_0
-    %3 = mir.stack_slot_addr slot_0
-    %4 = mir.mov_imm 8 : i64
-    %5 = mir.call @mrt_alloc(%4)
-    mir.store %3, %5, 0 width: qword
+    %0 = mir.mov_imm 0 : i64
+    mir.store_slot slot_0, %0
+    %1 = mir.mov_imm 5 : i64
+    %12 = mir.mov_imm 8 : i64
+    %13 = mir.mov_imm 0 : i64
+    %14 = mir.mov_imm 0 : i64
+    %15 = mir.call @stdlib.__mm_alloc(%12, %13, %14)
+    %17 = mir.call @stdlib.__mm_incref(%15)
+    mir.store %1, %15, 0 width: qword
+    mir.store_slot slot_0, %15
+    %3 = mir.func_addr @main$closure_0
+    %4 = mir.stack_slot_addr slot_0
+    %5 = mir.mov_imm 8 : i64
     %6 = mir.mov_imm 0 : i64
-    %11 = mir.indirect_call %2(%6, %5)
-    %12 = mir.mov_imm 125 : i64
-    %13 = mir.cmp ugt, %11, %12
-    mir.cond_br %13 [then: __range_panic_0(), else: __range_ok_0()]
+    %7 = mir.mov_imm 0 : i64
+    %8 = mir.call @stdlib.__mm_alloc(%5, %6, %7)
+    mir.store %4, %8, 0 width: qword
+    %9 = mir.mov_imm 0 : i64
+    %16 = mir.indirect_call %3(%9, %8)
+    %19 = mir.load_slot slot_0
+    %20 = mir.call @__mm_decref_maybenull_helper(%19)
+    %18 = mir.call @mm_drop(%8)
+    %21 = mir.mov_imm 125 : i64
+    %22 = mir.cmp ugt, %16, %21
+    mir.cond_br %22 [then: __range_panic_0(), else: __range_ok_0()]
   __range_panic_0:
-    %14 = mir.global_addr @__panic_msg_4c9a8f269a2e9c5a
-    %15 = mir.call @mrt_panic(%14)
+    %23 = mir.global_addr @__panic_msg_4c9a8f269a2e9c5a
+    %24 = mir.call @mrt_panic(%23)
   __range_ok_0:
-    mir.ret %11
+    mir.ret %16
   }
 }
 ---

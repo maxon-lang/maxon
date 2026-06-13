@@ -26,24 +26,24 @@ mm_alloc Box #1 size=8 [Box.create]
 mm_incref Box #1 rc=1 [Box.create]
 mm_move Box #1 -> return [Box.create]
 mm_move Box #1 -> phi [main]
-mm_decref Box #1 rc=0 [main]
-  mm_free Box #1
 mm_alloc Box #2 size=8 [Box.create]
 mm_incref Box #2 rc=1 [Box.create]
 mm_move Box #2 -> return [Box.create]
 mm_move Box #2 -> phi [main]
-mm_decref Box #2 rc=0 [main]
-  mm_free Box #2
+mm_decref Box #1 rc=0 [main]
+  mm_free Box #1
 mm_alloc Box #3 size=8 [Box.create]
 mm_incref Box #3 rc=1 [Box.create]
 mm_move Box #3 -> return [Box.create]
 mm_move Box #3 -> phi [main]
-mm_decref Box #3 rc=0 [main]
-  mm_free Box #3
+mm_decref Box #2 rc=0 [main]
+  mm_free Box #2
 mm_alloc Box #4 size=8 [Box.create]
 mm_incref Box #4 rc=1 [Box.create]
 mm_move Box #4 -> return [Box.create]
 mm_move Box #4 -> phi [main]
+mm_decref Box #3 rc=0 [main]
+  mm_free Box #3
 mm_decref Box #4 rc=0 [main]
   mm_free Box #4
 ```
@@ -68,14 +68,13 @@ module {
     %3 = mir.mov_imm 0 : i64
     %45 = mir.call @mm_move_phi(%28)
     mir.br accumulate_0.header(%28, %3)
-  accumulate_0.header:
+  accumulate_0.header(%21: i64, %22: i64):
     %5 = mir.mov_imm 3 : i64
     %6 = mir.cmp lt, %22, %5
     mir.cond_br %6 [then: accumulate_0(), else: accumulate_0.exit()]
   accumulate_0:
     %8 = mir.load %21, 0 width: qword
     %10 = mir.add.i64 %8, %22
-    %43 = mir.call @__mm_decref_maybenull_helper(%21)
     %11 = mir.mov_imm 1 : i64
     %12 = mir.add.i64 %10, %11
     %32 = mir.global_addr @__mtstr_scope_Box_create
@@ -91,6 +90,7 @@ module {
     %15 = mir.mov_imm 1 : i64
     %16 = mir.add.i64 %22, %15
     %46 = mir.call @mm_move_phi(%37)
+    %43 = mir.call @__mm_decref_maybenull_helper(%21)
     mir.br accumulate_0.header(%37, %16)
   accumulate_0.exit:
     %18 = mir.load %21, 0 width: qword

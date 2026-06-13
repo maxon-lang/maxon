@@ -30,25 +30,31 @@ ExitCode: 57
 module {
   func @main() -> u8 {
   entry:
-    %0 = mir.mov_imm 100 : i64
-    %8 = mir.mov_imm 8 : i64
-    %9 = mir.call @mrt_alloc(%8)
-    mir.store %0, %9, 0 width: qword
-    %2 = mir.mov_imm 50 : i64
+    %2 = mir.mov_imm 100 : i64
     %10 = mir.mov_imm 8 : i64
-    %11 = mir.call @mrt_alloc(%10)
-    mir.store %2, %11, 0 width: qword
-    %6 = mir.mov_imm 7 : i64
-    %12 = mir.load %11, 0 width: qword
-    %13 = mir.add.i64 %12, %6
-    %14 = mir.mov_imm 125 : i64
-    %15 = mir.cmp ugt, %13, %14
-    mir.cond_br %15 [then: __range_panic_0(), else: __range_ok_0()]
+    %11 = mir.mov_imm 0 : i64
+    %12 = mir.mov_imm 0 : i64
+    %13 = mir.call @stdlib.__mm_alloc(%10, %11, %12)
+    mir.store %2, %13, 0 width: qword
+    %20 = mir.call @mm_drop(%13)
+    %4 = mir.mov_imm 50 : i64
+    %14 = mir.mov_imm 8 : i64
+    %15 = mir.mov_imm 0 : i64
+    %16 = mir.mov_imm 0 : i64
+    %17 = mir.call @stdlib.__mm_alloc(%14, %15, %16)
+    mir.store %4, %17, 0 width: qword
+    %8 = mir.mov_imm 7 : i64
+    %18 = mir.load %17, 0 width: qword
+    %19 = mir.add.i64 %18, %8
+    %21 = mir.call @mm_drop(%17)
+    %22 = mir.mov_imm 125 : i64
+    %23 = mir.cmp ugt, %19, %22
+    mir.cond_br %23 [then: __range_panic_0(), else: __range_ok_0()]
   __range_panic_0:
-    %16 = mir.global_addr @__panic_msg_06acd80cc4feccc8
-    %17 = mir.call @mrt_panic(%16)
+    %24 = mir.global_addr @__panic_msg_06acd80cc4feccc8
+    %25 = mir.call @mrt_panic(%24)
   __range_ok_0:
-    mir.ret %13
+    mir.ret %19
   }
 }
 ---

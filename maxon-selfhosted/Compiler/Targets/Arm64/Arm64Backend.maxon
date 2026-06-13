@@ -129,7 +129,7 @@ export type Arm64Backend implements TargetBackend
 			chunks.push(chunk)
 		end 'eachFunc'
 
-		return concatArm64FunctionChunks(chunks, targetModule: targetModule, mirModule: mirModule, globalData: globalData, stdlibCache: stdlibCache, target: target)
+		return concatArm64FunctionChunks(project, chunks: chunks, targetModule: targetModule, mirModule: mirModule, globalData: globalData, stdlibCache: stdlibCache, target: target)
 	end 'emitTargetCode'
 
 	function scanOpForFrameInfo(packed OpIndex, state FrameScanState)
@@ -1927,7 +1927,7 @@ end 'Arm64Backend'
 // preserving the byte layout a single-pass whole-module emit would produce.
 // ADR fixups travel on `FunctionCodeChunk.arm64AdrFixups` (a shared field
 // so cached chunks round-trip everything needed to rebuild).
-export function concatArm64FunctionChunks(chunks FunctionCodeChunkArray, targetModule TargetModule, mirModule MirModule, globalData GlobalDataTable, stdlibCache StdlibCacheData, target Target) returns CodeResult
+export function concatArm64FunctionChunks(project Project, chunks FunctionCodeChunkArray, targetModule TargetModule, mirModule MirModule, globalData GlobalDataTable, stdlibCache StdlibCacheData, target Target) returns CodeResult
 	var code = ByteArray.create()
 	code.reserve(1024)
 	var relocations = RelocationArray.create()
@@ -1960,9 +1960,13 @@ export function concatArm64FunctionChunks(chunks FunctionCodeChunkArray, targetM
 		end 'rebaseAdr'
 	end 'eachChunk'
 
-	// Link pre-compiled stdlib functions (if cache is available)
-	if stdlibCache.functions.count() > 0 'hasStdlib'
-		linkArm64StdlibFunctions(code, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, callFixups: callFixups, adrFixups: adrFixups, rdataRelocs: rdataRelocs, relocations: relocations, globalData: globalData, stdlibCache: stdlibCache)
+	// Link pre-compiled stdlib functions. v80 lazy codegen: gate on cache
+	// VALIDITY, not `functions.count() > 0` — a metadata-only cold cache is
+	// valid but starts empty, and `linkArm64StdlibFunctions` (via
+	// `ensureStdlibFunctionsCompiled`) fills it. The cache-bypassed path is
+	// `isStdlibCacheValid() == false` → skipped, stdlib from the user module.
+	if isStdlibCacheValid() 'hasStdlib'
+		linkArm64StdlibFunctions(project, code: code, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, callFixups: callFixups, adrFixups: adrFixups, rdataRelocs: rdataRelocs, relocations: relocations, globalData: globalData, stdlibCache: stdlibCache)
 	end 'hasStdlib'
 
 	// Phase D4: emit hand-rolled `mrt_win32_*` helpers AFTER the stdlib link

@@ -24,7 +24,7 @@ ExitCode: 32
 module {
   func @Thing.make(local0: i64) -> i64 {
   entry:
-    %9 = mir.param local0 : i64
+    %11 = mir.param local0 : i64
     %1 = mir.global_addr @__data_Thing.created
     %2 = mir.load %1, 0 width: qword
     %3 = mir.mov_imm 1 : i64
@@ -32,30 +32,35 @@ module {
     %5 = mir.global_addr @__data_Thing.created
     mir.store %4, %5, 0 width: qword
     %6 = mir.mov_imm 8 : i64
-    %7 = mir.call @mrt_alloc(%6)
-    mir.store %9, %7, 0 width: qword
+    %8 = mir.mov_imm 0 : i64
+    %9 = mir.mov_imm 0 : i64
+    %7 = mir.call @stdlib.__mm_alloc(%6, %8, %9)
+    %12 = mir.call @stdlib.__mm_incref(%7)
+    mir.store %11, %7, 0 width: qword
     mir.ret %7
   }
   func @main() -> u8 {
   entry:
-    %0 = mir.mov_imm 10 : i64
-    %1 = mir.call @Thing.make(%0)
-    %2 = mir.mov_imm 20 : i64
+    %2 = mir.mov_imm 10 : i64
     %3 = mir.call @Thing.make(%2)
-    %4 = mir.global_addr @__data_Thing.created
-    %5 = mir.load %4, 0 width: qword
-    %7 = mir.load %1, 0 width: qword
-    %8 = mir.add.i64 %5, %7
-    %10 = mir.load %3, 0 width: qword
-    %11 = mir.add.i64 %8, %10
-    %12 = mir.mov_imm 125 : i64
-    %13 = mir.cmp ugt, %11, %12
-    mir.cond_br %13 [then: __range_panic_0(), else: __range_ok_0()]
+    %4 = mir.mov_imm 20 : i64
+    %5 = mir.call @Thing.make(%4)
+    %6 = mir.global_addr @__data_Thing.created
+    %7 = mir.load %6, 0 width: qword
+    %9 = mir.load %3, 0 width: qword
+    %10 = mir.add.i64 %7, %9
+    %14 = mir.call @__mm_decref_maybenull_helper(%3)
+    %12 = mir.load %5, 0 width: qword
+    %13 = mir.add.i64 %10, %12
+    %15 = mir.call @__mm_decref_maybenull_helper(%5)
+    %16 = mir.mov_imm 125 : i64
+    %17 = mir.cmp ugt, %13, %16
+    mir.cond_br %17 [then: __range_panic_0(), else: __range_ok_0()]
   __range_panic_0:
-    %14 = mir.global_addr @__panic_msg_40895eb09193f9e5
-    %15 = mir.call @mrt_panic(%14)
+    %18 = mir.global_addr @__panic_msg_40895eb09193f9e5
+    %19 = mir.call @mrt_panic(%18)
   __range_ok_0:
-    mir.ret %11
+    mir.ret %13
   }
 }
 ---

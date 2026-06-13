@@ -35,26 +35,26 @@ mm_move Array #1 -> return [main]
 mm_alloc Box #3 size=8 [Box.create]
 mm_incref Box #3 rc=1 [Box.create]
 mm_move Box #3 -> return [Box.create]
-mm_move Box #3 -> container
-mm_alloc <raw> #4 size=32
-mm_incref <raw> #4 rc=1
+mm_move Box #3 -> container [main]
+mm_alloc <raw> #4 size=32 [main]
+mm_incref <raw> #4 rc=1 [main]
 mm_alloc Box #5 size=8 [Box.create]
 mm_incref Box #5 rc=1 [Box.create]
 mm_move Box #5 -> return [Box.create]
-mm_move Box #5 -> container
+mm_move Box #5 -> container [main]
 mm_alloc Box #6 size=8 [Box.create]
 mm_incref Box #6 rc=1 [Box.create]
 mm_move Box #6 -> return [Box.create]
-mm_move Box #6 -> container
-mm_decref Box #3 rc=0
+mm_move Box #6 -> container [main]
+mm_decref Box #3 rc=0 [main]
   mm_free Box #3
-mm_decref Box #5 rc=0
+mm_decref Box #5 rc=0 [main]
   mm_free Box #5
-mm_decref Box #6 rc=0
+mm_decref Box #6 rc=0 [main]
   mm_free Box #6
-mm_decref Array #1 rc=0
-  mm_decref __ManagedMemory #2 rc=0
-    mm_decref <raw> #4 rc=0
+mm_decref Array #1 rc=0 [main]
+  mm_decref __ManagedMemory #2 rc=0 [main]
+    mm_decref <raw> #4 rc=0 [main]
       mm_free <raw> #4
     mm_free __ManagedMemory #2
   mm_free Array #1
@@ -112,7 +112,7 @@ module {
     %77 = mir.call @mm_move_container(%67)
     %19 = mir.call @Array.push(%4, %67, %18)
     mir.br drain_0.header(%0)
-  drain_0.header:
+  drain_0.header(%43: i64):
     %22 = mir.global_addr @__layout_Array_Box
     %23 = mir.call @Array.count(%4, %22)
     %25 = mir.cmp gt, %23, %0
@@ -123,20 +123,20 @@ module {
     %32 = mir.cmp ne, %30, %0
     mir.cond_br %32 [then: try_0.otherwise(), else: try_0.merge()]
   drain_0.exit:
-    %80 = mir.call @stdlib.__mm_decref(%4)
+    %80 = mir.call @__mm_decref_maybenull_helper(%4)
     %78 = mir.call @mm_scope_pop()
     %82 = mir.mov_imm 125 : i64
     %83 = mir.cmp ugt, %43, %82
     mir.cond_br %83 [then: __range_panic_0(), else: __range_ok_0()]
   try_0.otherwise:
-    %81 = mir.call @stdlib.__mm_decref(%4)
+    %81 = mir.call @__mm_decref_maybenull_helper(%4)
     %35 = mir.mov_imm 99 : i64
     %79 = mir.call @mm_scope_pop()
     mir.ret %35
   try_0.merge:
     %39 = mir.load %29, 0 width: qword
     %40 = mir.add.i64 %43, %39
-    %74 = mir.call @stdlib.__mm_decref(%29)
+    %74 = mir.call @__mm_decref_maybenull_helper(%29)
     mir.br drain_0.header(%40)
   __range_panic_0:
     %84 = mir.global_addr @__panic_msg_6f9dc238c5955a7d

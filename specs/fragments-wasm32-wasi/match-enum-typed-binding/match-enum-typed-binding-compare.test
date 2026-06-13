@@ -57,7 +57,7 @@ module {
     %11 = mir.mov_imm 0 : i64
     mir.ret %11
   check_0.next1:
-    %12 = mir.global_addr @__panic_msg_1097c97d71f9fc43
+    %12 = mir.global_addr @__panic_msg_96c7daeb3f9a871f
     %13 = mir.call @mrt_panic(%12)
     %14 = mir.mov_imm 0 : i64
     mir.ret %14
@@ -74,7 +74,7 @@ module {
     %3 = mir.mov_imm 1 : i64
     %4 = mir.cmp eq, %15, %3
     mir.cond_br %4 [then: g_0.case0(), else: g_0.next0()]
-  g_0.merge:
+  g_0.merge(%14: i64):
     %16 = mir.mov_imm 125 : i64
     %17 = mir.cmp ugt, %14, %16
     mir.cond_br %17 [then: __range_panic_0(), else: __range_ok_0()]
@@ -103,22 +103,24 @@ module {
   }
   func @main() -> u8 {
   entry:
-    %0 = mir.mov_imm 1 : i64
-    %4 = mir.mov_imm 16 : i64
-    %5 = mir.mov_imm 0 : i64
+    %1 = mir.mov_imm 1 : i64
+    %5 = mir.mov_imm 16 : i64
     %6 = mir.mov_imm 0 : i64
-    %7 = mir.call @stdlib.__mm_alloc(%4, %5, %6)
-    mir.store %6, %7, 0 width: qword
-    mir.store %0, %7, 8 width: qword
-    %3 = mir.call @isGreen(%7)
-    %8 = mir.mov_imm 125 : i64
-    %9 = mir.cmp ugt, %3, %8
-    mir.cond_br %9 [then: __range_panic_0(), else: __range_ok_0()]
+    %7 = mir.mov_imm 0 : i64
+    %8 = mir.mov_imm 0 : i64
+    %9 = mir.call @stdlib.__mm_alloc(%5, %6, %8)
+    mir.store %7, %9, 0 width: qword
+    mir.store %1, %9, 8 width: qword
+    %4 = mir.call @isGreen(%9)
+    %10 = mir.call @mm_drop(%9)
+    %11 = mir.mov_imm 125 : i64
+    %12 = mir.cmp ugt, %4, %11
+    mir.cond_br %12 [then: __range_panic_0(), else: __range_ok_0()]
   __range_panic_0:
-    %10 = mir.global_addr @__panic_msg_bd057b1665426c12
-    %11 = mir.call @mrt_panic(%10)
+    %13 = mir.global_addr @__panic_msg_bd057b1665426c12
+    %14 = mir.call @mrt_panic(%13)
   __range_ok_0:
-    mir.ret %3
+    mir.ret %4
   }
 }
 ---

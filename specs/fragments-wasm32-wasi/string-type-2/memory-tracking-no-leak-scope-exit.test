@@ -1,0 +1,84 @@
+// Test: memory-tracking-no-leak-scope-exit
+function main() returns ExitCode
+	if true 'scope'
+		let temp = "heap allocated string here!"
+		print("{temp.count()}\n")
+	end 'scope'
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+27
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %1 = mir.mov_imm 1 : i64
+    mir.br scope_0()
+  scope_0:
+    %2 = mir.global_addr @__istr_0
+    %3 = mir.mov_imm 48 : i64
+    %4 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %5 = mir.call @mrt_alloc_with_dtor(%3, %4)
+    mir.store %0, %5, 40 width: qword
+    mir.store %2, %5, 0 width: qword
+    %7 = mir.mov_imm 27 : i64
+    mir.store %7, %5, 8 width: qword
+    %8 = mir.mov_imm -2 : i64
+    mir.store %8, %5, 16 width: qword
+    mir.store %1, %5, 24 width: qword
+    mir.store %0, %5, 32 width: qword
+    %12 = mir.mov_imm 16 : i64
+    %13 = mir.func_addr @__destruct_String
+    %11 = mir.call @stdlib.__mm_alloc(%12, %13, %0)
+    mir.store %5, %11, 0 width: qword
+    mir.store %1, %11, 8 width: qword
+    %17 = mir.call @String.count(%11)
+    %53 = mir.call @mm_drop(%11)
+    %18 = mir.global_addr @__istr_1
+    %20 = mir.mov_imm 21 : i64
+    %21 = mir.call @mrt_alloc(%20)
+    %22 = mir.call @mrt_i64_to_string(%17, %21)
+    %23 = mir.global_addr @__istr_2
+    %27 = mir.add.i64 %0, %22
+    %28 = mir.add.i64 %27, %1
+    %30 = mir.add.i64 %28, %1
+    %31 = mir.call @mrt_alloc(%30)
+    mir.memcpy %31, %18, %0
+    %32 = mir.add.i64 %31, %0
+    mir.memcpy %32, %21, %22
+    %33 = mir.add.i64 %32, %22
+    mir.memcpy %33, %23, %1
+    %35 = mir.call @stdlib.__mm_decref(%21)
+    %36 = mir.mov_imm 48 : i64
+    %37 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %38 = mir.call @mrt_alloc_with_dtor(%36, %37)
+    mir.store %0, %38, 40 width: qword
+    mir.store %31, %38, 0 width: qword
+    mir.store %28, %38, 8 width: qword
+    mir.store %28, %38, 16 width: qword
+    mir.store %1, %38, 24 width: qword
+    %41 = mir.mov_imm -1 : i64
+    mir.store %41, %38, 32 width: qword
+    %43 = mir.mov_imm 16 : i64
+    %44 = mir.func_addr @__destruct_String
+    %42 = mir.call @stdlib.__mm_alloc(%43, %44, %0)
+    mir.store %38, %42, 0 width: qword
+    mir.store %0, %42, 8 width: qword
+    %48 = mir.load %42, 0 width: qword
+    %52 = mir.call @stdlib.__mm_incref(%48)
+    %49 = mir.load %48, 0 width: qword
+    %50 = mir.load %48, 8 width: qword
+    %51 = mir.call @mrt_write_stdout(%49, %50)
+    %55 = mir.call @mm_drop(%42)
+    %54 = mir.call @__mm_decref_maybenull_helper(%48)
+    mir.br scope_0.after()
+  scope_0.after:
+    mir.ret %0
+  }
+}
+---

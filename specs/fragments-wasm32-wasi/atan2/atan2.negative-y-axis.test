@@ -43,38 +43,46 @@ module {
     mir.memcpy %20, %9, %10
     %21 = mir.add.i64 %20, %10
     mir.memcpy %21, %11, %12
-    %23 = mir.mov_imm 40 : i64
-    %24 = mir.call @mrt_alloc(%23)
-    mir.store %19, %24, 0 width: qword
-    mir.store %16, %24, 8 width: qword
-    mir.store %16, %24, 16 width: qword
-    %25 = mir.mov_imm 1 : i64
-    mir.store %25, %24, 24 width: qword
-    mir.store %7, %24, 32 width: qword
-    %27 = mir.mov_imm 16 : i64
-    %28 = mir.call @mrt_alloc(%27)
-    mir.store %24, %28, 0 width: qword
-    mir.store %7, %28, 8 width: qword
-    %43 = mir.load %28, 0 width: qword
-    %44 = mir.load %43, 0 width: qword
-    %45 = mir.load %43, 8 width: qword
-    %46 = mir.call @mrt_write_stdout(%44, %45)
-    %32 = mir.mov_imm 4609749470587618591 : f64
-    %33 = mir.mov_imm 0 : f64
-    %34 = mir.sub.f64 %33, %32
-    %35 = mir.cmp flt, %4, %34
-    mir.cond_br %35 [then: check1_0(), else: check1_0.after()]
-  check1_0:
-    %37 = mir.mov_imm 4609794506583892296 : f64
+    %23 = mir.call @stdlib.__mm_decref(%9)
+    %24 = mir.mov_imm 48 : i64
+    %25 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %26 = mir.call @mrt_alloc_with_dtor(%24, %25)
+    mir.store %7, %26, 40 width: qword
+    mir.store %19, %26, 0 width: qword
+    mir.store %16, %26, 8 width: qword
+    mir.store %16, %26, 16 width: qword
+    %28 = mir.mov_imm 1 : i64
+    mir.store %28, %26, 24 width: qword
+    %29 = mir.mov_imm -1 : i64
+    mir.store %29, %26, 32 width: qword
+    %31 = mir.mov_imm 16 : i64
+    %32 = mir.func_addr @__destruct_String
+    %30 = mir.call @stdlib.__mm_alloc(%31, %32, %7)
+    mir.store %26, %30, 0 width: qword
+    mir.store %7, %30, 8 width: qword
+    %48 = mir.load %30, 0 width: qword
+    %52 = mir.call @stdlib.__mm_incref(%48)
+    %49 = mir.load %48, 0 width: qword
+    %50 = mir.load %48, 8 width: qword
+    %51 = mir.call @mrt_write_stdout(%49, %50)
+    %54 = mir.call @mm_drop(%30)
+    %53 = mir.call @__mm_decref_maybenull_helper(%48)
+    %37 = mir.mov_imm 4609749470587618591 : f64
     %38 = mir.mov_imm 0 : f64
     %39 = mir.sub.f64 %38, %37
-    %40 = mir.cmp fgt, %4, %39
-    mir.cond_br %40 [then: check2_0(), else: check1_0.after()]
+    %40 = mir.cmp flt, %4, %39
+    mir.cond_br %40 [then: check1_0(), else: check1_0.after()]
+  check1_0:
+    %42 = mir.mov_imm 4609794506583892296 : f64
+    %43 = mir.mov_imm 0 : f64
+    %44 = mir.sub.f64 %43, %42
+    %45 = mir.cmp fgt, %4, %44
+    mir.cond_br %45 [then: check2_0(), else: check1_0.after()]
   check2_0:
     mir.ret %7
   check1_0.after:
-    %42 = mir.mov_imm 1 : i64
-    mir.ret %42
+    %47 = mir.mov_imm 1 : i64
+    mir.ret %47
   }
 }
 ---

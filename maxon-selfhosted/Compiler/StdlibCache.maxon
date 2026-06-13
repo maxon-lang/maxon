@@ -251,7 +251,15 @@ let CACHE_MAGIC_3 = 0x00  // '\0'
 // v79: `lowerFieldStore` emits a typed decref-old on every NON-INIT store to a
 // heap-managed field (the builder-pattern reassign leak) — cached v78 stdlib
 // bodies lack the release and disagree with from-source builds.
-let CACHE_FORMAT_VERSION = 79
+// v80: lazy per-function stdlib codegen (native targets). The cold native
+// cache is written METADATA-ONLY — `functions` holds signature-only stubs
+// (name/return/param types, empty code) and accretes real per-function
+// bytecode on demand as user builds reach each function (see
+// `ensureStdlibFunctionsCompiled` in StdlibLoader.maxon). Wasm stays eager. A
+// v79 reader assumes every `functions` entry carries complete code, so it
+// would silently mislink a v80 stub cache; the version gate forces clean
+// regeneration.
+let CACHE_FORMAT_VERSION = 80
 
 // ============================================================
 // Types

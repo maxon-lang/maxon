@@ -53,6 +53,50 @@ export function cachedStdFuncEdges() returns CachedFuncEdgeMap
 	return cachedStdlibFuncEdges
 end 'cachedStdFuncEdges'
 
+// v80 lazy codegen: process-wide memo of the reconstructed, fully-lowered
+// stdlib MIR module that `ensureStdlibFunctionsCompiled` codegens subsets
+// from on demand. Built once (the first time any stdlib function must be
+// lazily compiled) by re-merging the persisted post-dce Std-IR snapshot
+// (`cachedStdlibStdModule`) with the cache-side runtime bodies and running
+// lowerStdToMir + commuteForCoalescing + scheduleInstructions over the
+// union — the exact prefix `buildAndWriteStdlibCache` runs before its
+// backend tail, so per-function lowering is byte-identical to the eager
+// path. `lazyStdlibMirBuilt` guards the one-time build; keyed implicitly to
+// the process's single active target.
+var lazyStdlibMir = MirModule.create()
+var lazyStdlibMirBuilt = false
+
+// The reconstructed stdlib+runtime Std module (snapshot ∪ cache-side runtime),
+// retained between the cheap edge-build and the on-demand MIR lowering so the
+// merge isn't repeated. Built by `ensureLazyStdlibEdges`.
+var lazyReconstructed = StdModule.create()
+var lazyStdlibEdgesBuilt = false
+
+// Full Std-IR call-edge map over the RECONSTRUCTED module (stdlib snapshot +
+// runtime bodies), so the lazy needed-closure can follow runtime->runtime and
+// runtime->stdlib edges that `cachedStdlibFuncEdges` (stdlib-only snapshot)
+// omits. Built by `ensureLazyStdlibEdges` (cheap; no MIR lowering).
+var lazyStdlibFuncEdges = CachedFuncEdgeMap.create()
+
+// Names already present in `cachedStdlibCacheData.functions`, for O(1)
+// missing-set computation without rescanning the function array each link.
+var lazyCompiledStdlibNames = StdlibFuncNameSet.create()
+
+// Gate for persisting the user-path lazy-codegen growth back to the on-disk
+// cache. Safe ONLY when the stdlib metadata was captured in the SAME project
+// that is now compiling user code — true for a single-project CLI `maxon
+// build` (the stdlib cache is built in the user's own project, so its
+// `topLevelConstants` string ids are valid in that project's interner for
+// re-serialization). FALSE for the spec runner / in-memory compiles, where
+// stdlib is built in a warmup project and fragments compile in separate
+// worker projects whose interner lacks those ids — re-serializing there
+// panics in `writeConstantValue`. `compile()` (the CLI path) sets this true.
+var stdlibCachePersistAllowed = false
+
+export function setStdlibCachePersistAllowed(allowed bool)
+	stdlibCachePersistAllowed = allowed
+end 'setStdlibCachePersistAllowed'
+
 // Process-wide accessor for the parsed stdlib MaxonModule (the Maxon-IR
 // shape of every stdlib function body whitelisted by `stdlibWhitelist`).
 // Consumers — today only `MonomorphizeExtensions` falling back when a
@@ -359,6 +403,7 @@ export function resetStdlibLoaderState()
 	cachedStdlibStdModule = StdModule.create()
 	cachedStdlibFuncEdges = CachedFuncEdgeMap.create()
 	cachedStdlibCacheData = StdlibCacheData.create()
+	resetLazyStdlibState()
 	stdlibCacheValid = false
 	stdlibCacheTargetSet = false
 	stdlibCacheCpuOrd = 0
@@ -368,6 +413,21 @@ export function resetStdlibLoaderState()
 	cachedBuiltinCharLiteralTypeName = ByteArray.create()
 	cachedBuiltinStringLiteralTypeName = ByteArray.create()
 end 'resetStdlibLoaderState'
+
+// Invalidate the v80 lazy-codegen memo (reconstructed MIR, edge map, and the
+// already-compiled-name set). Called by `resetStdlibLoaderState` and on every
+// cross-target switch (`loadCacheForTarget`) — the memo is keyed to one
+// target's reconstructed module + arch backend and must not leak across.
+// `lazyCompiledStdlibNames` is re-seeded from the loaded cache's real-code
+// entries by `syncLazyCompiledNames` on the next lazy fill.
+function resetLazyStdlibState()
+	lazyStdlibMir = MirModule.create()
+	lazyStdlibMirBuilt = false
+	lazyReconstructed = StdModule.create()
+	lazyStdlibEdgesBuilt = false
+	lazyStdlibFuncEdges = CachedFuncEdgeMap.create()
+	lazyCompiledStdlibNames = StdlibFuncNameSet.create()
+end 'resetLazyStdlibState'
 
 export function findStdlibPath() returns FilePath
 	var dir = Directory.currentPath()
@@ -659,7 +719,7 @@ export function getStdlibModule(project Project) returns MaxonModule
 	let cacheResult = readStdlibCache(project, path: cachePath, target: project.target, expectedChecksum: contentChecksum) if not stdlibCacheBypassed else StdlibCacheResult.create(StdlibCacheData.create(), valid: false)
 
 	if cacheResult.valid 'cacheHit'
-		logInfo(LogCategory.compiler, message: function() gives "Stdlib cache hit: loaded {cacheResult.data.functions.count()} pre-compiled functions")
+		logInfo(LogCategory.compiler, message: function() gives "Stdlib cache hit: {countCompiledStdlibFunctions(cacheResult.data)} functions cached")
 		activateStdlibCache(cacheResult.data, target: project.target)
 
 		// Restore parser metadata so user code can reference stdlib types.
@@ -785,8 +845,12 @@ export function getStdlibModule(project Project) returns MaxonModule
 	return allModule
 end 'getStdlibModule'
 
-// Build the stdlib cache by compiling the parsed MaxonModule through the
-// full pipeline and capturing per-function machine code output.
+// Build the stdlib cache by compiling the parsed MaxonModule through the mid
+// pipeline + metadata capture. v80: on NATIVE targets it writes the cache
+// metadata-only (signature stubs, no eager regalloc — the ~7.8s backend tail
+// over ~992 functions is deferred to lazy per-function codegen at link time),
+// then eagerly compiles just the universal runtime floor; on WASM it emits
+// every function eagerly (wasm has no lazy path — see the emit block below).
 function buildAndWriteStdlibCache(project Project, allModule MaxonModule, cachePath FilePath, contentChecksum CacheChecksum)
 	var globalData = createGlobalDataTable()
 	let sourceFileName = ""
@@ -945,6 +1009,17 @@ function buildAndWriteStdlibCache(project Project, allModule MaxonModule, cacheP
 	recordPassSince("__stdlib-captureMetadata", startMs: metaStart)
 
 	// Emit per-function bytecode (dispatched by target).
+	//
+	// v80 lazy codegen: on the metadata-only cold path, SKIP all per-function
+	// regalloc + emit (the ~7.8s `buildStdlibNativeWith` cost over ~992
+	// functions). `cacheData.functions` holds signature-only stubs; the user
+	// build compiles each reached function on demand at link time (see
+	// `ensureStdlibFunctionsCompiled`), filling the stubs' real bytecode.
+	// Everything ABOVE this point (metadata,
+	// `inlinerStdModule` Std-IR snapshot, `stdFuncEdges`, the merged-MIR
+	// `pipeline.mirModule` that the in-process lazy-fill reuses) is still
+	// produced in full — only the expensive backend tail is deferred.
+	//
 	// Native: the merged stdModule contains runtime bodies (excluding
 	// per-compile names — entry-point variants and coverage helpers); they
 	// lower into ObjectFunctions identically to stdlib bodies, and the
@@ -954,51 +1029,53 @@ function buildAndWriteStdlibCache(project Project, allModule MaxonModule, cacheP
 	// `injectRuntimeSignatures`); the user pipeline supplies them. Strip
 	// every runtime function from the cache so the empty stubs the wasm
 	// emitter produces for runtime signatures don't shadow real bodies.
+	// Native (x64/arm64): write SIGNATURE-ONLY stubs (name + return type + param
+	// types, empty code/fixups) for every function — NO eager regalloc/emit (the
+	// ~7.8s cost over ~992 functions is deferred). The stubs let the user
+	// build's per-function target lowering resolve callee signatures via
+	// `findCalleeSignature`'s `stdlibFunctions` fallback (runtime callees like
+	// `__gt_init` aren't in the user module on a valid native cache). Lazy
+	// codegen fills each reached stub's real code in place at link time
+	// (`ensureStdlibFunctionsCompiled`). Stubs carry no callFixups, so the
+	// linker's fixup-closure (`computeNeededStdlibFunctions`) never traverses a
+	// stub — the edge-map closure (`lazyNeededClosure`) drives compilation, then
+	// the linker sees real fixups on the filled-in entries.
+	//
+	// Wasm stays EAGER: its runtime sigs come from the user pipeline's
+	// `injectRuntimeSignatures` (not the cache), so the native signature-stub +
+	// lazy-backend mechanism doesn't apply. Emit every wasm function now.
 	if isWasm 'emitWasm'
 		let wasmEmitStart = passTimerStart()
 		cacheData.wasmFunctions = emitWasmPerFunction(pipeline.mirModule, globalData: pipeline.globalData).filter(function(func) gives not isRuntimeFunctionName(func.name))
 		recordPassSince("__stdlib-emitWasm", startMs: wasmEmitStart)
 		logInfo(LogCategory.compiler, message: function() gives "Wrote stdlib cache: {cacheData.wasmFunctions.count()} WASM functions to {cachePath}")
-	end 'emitWasm' else 'emitNative'
-		// Create backend, run target lowering + regalloc + prologue/epilogue + emit
-		let emittedFunctions = match project.target.cpu 'emitPerFunc'
-			x64 gives buildStdlibNativeWith(pipeline, backend: X64Backend.create(pipeline.mirModule, target: project.target, globalData: pipeline.globalData, stdlibFunctions: cacheData.functions))
-			arm64 gives buildStdlibNativeWith(pipeline, backend: Arm64Backend.create(pipeline.mirModule, target: project.target, globalData: pipeline.globalData, stdlibFunctions: cacheData.functions))
-			default panic("unreachable: WASM handled above")
-		end 'emitPerFunc'
-		cacheData.functions = emittedFunctions.filter(function(func) gives not isPerCompileRuntimeName(func.name))
-		logInfo(LogCategory.compiler, message: function() gives "Wrote stdlib cache: {cacheData.functions.count()} functions to {cachePath}")
-	end 'emitNative'
+	end 'emitWasm' else 'nativeStubs'
+		cacheData.functions = buildSignatureStubs(pipeline.mirModule)
+		logInfo(LogCategory.compiler, message: function() gives "Wrote stdlib cache (metadata-only): {cacheData.functions.count()} signature stubs, bytecode compiled lazily on demand -> {cachePath}")
+	end 'nativeStubs'
 
 	// Write to disk and activate cache for subsequent compilations in this process
 	let writeStart = passTimerStart()
 	writeStdlibCache(project, path: cachePath, data: cacheData, target: project.target, contentChecksum: contentChecksum)
 	recordPassSince("__stdlib-writeCache", startMs: writeStart)
 	activateStdlibCache(cacheData, target: project.target)
+
+	// v80: on native, eagerly compile the universal runtime FLOOR (the functions
+	// every native program links — the `mrt_*`/`mm_*`/`__slab_*` runtime + entry
+	// machinery) into the just-written cache. This runs in the STDLIB BUILD
+	// project, whose interner holds the metadata's constant string ids, so the
+	// re-serialize (inside `ensureStdlibFunctionsCompiled`, when persist is
+	// allowed) is safe. The payoff: the very next build of ANY program finds the
+	// floor already compiled on disk and lazily compiles nothing for a
+	// stdlib-free program — a sub-500ms warm `return 0`. Program-specific
+	// functions a user build reaches beyond the floor are compiled (and, on a
+	// CLI build, persisted) lazily by the user-build link path.
+	if not isWasm 'eagerFloor'
+		var floorSeeds = StringArray.create()
+		appendX64EagerFloorSeeds(floorSeeds, os: project.target.os)
+		ensureStdlibFunctionsCompiled(project, seeds: floorSeeds)
+	end 'eagerFloor'
 end 'buildAndWriteStdlibCache'
-
-function buildStdlibNativeWith(pipeline PassPipeline, backend TargetBackend) returns ObjectFunctionArray
-	// The cache-build backend bypasses BackendDispatch, so its phases aren't
-	// timed by the dispatch-side instrumentation. Wrap them with the same
-	// `passTimerStart()/recordPassSince()` helpers (no-ops unless
-	// `--profile-passes`) so `dumpPassTimings()` accounts for the cache build.
-	// `allocateRegisters` is timed internally (per-func buckets), so it's not
-	// wrapped again here.
-	let lmtStart = passTimerStart()
-	pipeline.targetModule = backend.lowerMirToTarget()
-	recordPassSince("__stdlib-lowerMirToTarget", startMs: lmtStart)
-
-	pipeline.targetModule = allocateRegisters(pipeline.targetModule, target: pipeline.target)
-
-	let peStart = passTimerStart()
-	insertPrologueEpilogueWith(pipeline.targetModule, backend: backend)
-	recordPassSince("__stdlib-prologueEpilogue", startMs: peStart)
-
-	let emitStart = passTimerStart()
-	let emitted = backend.emitPerFunction()
-	recordPassSince("__stdlib-emitPerFunction", startMs: emitStart)
-	return emitted
-end 'buildStdlibNativeWith'
 
 // Load `runtime.std` and push signature-only entries (name, paramCount,
 // paramTypes, returnType) for every runtime function into the stdlib
@@ -1071,6 +1148,13 @@ function seedModuleInitFuncsFromLivenessRoots(project Project)
 end 'seedModuleInitFuncsFromLivenessRoots'
 
 function loadCacheForTarget(project Project)
+	// Cross-target switch: the lazy MIR / edge map / compiled-name set are all
+	// keyed to the PREVIOUS target's reconstructed module and arch backend.
+	// Invalidate them so the new target rebuilds its own (otherwise
+	// `ensureStdlibFunctionsCompiled` would run the new arch's backend over the
+	// old arch's lazy MIR and treat old-target names as already compiled).
+	resetLazyStdlibState()
+
 	let stdlibPath = findStdlibPath()
 	if stdlibPath.isEmpty() 'noStdlib'
 		return
@@ -1085,7 +1169,7 @@ function loadCacheForTarget(project Project)
 	let cacheResult = readStdlibCache(project, path: cachePath, target: project.target, expectedChecksum: contentChecksum)
 
 	if cacheResult.valid 'cacheHit'
-		logInfo(LogCategory.compiler, message: function() gives "Stdlib cache hit for {targetToString(project.target)}: loaded {cacheResult.data.functions.count()} native + {cacheResult.data.wasmFunctions.count()} WASM functions")
+		logInfo(LogCategory.compiler, message: function() gives "Stdlib cache hit for {targetToString(project.target)}: {countCompiledStdlibFunctions(cacheResult.data)} of {cacheResult.data.functions.count()} native functions have bytecode (rest deferred stubs) + {cacheResult.data.wasmFunctions.count()} WASM functions")
 		activateStdlibCache(cacheResult.data, target: project.target)
 		return
 	end 'cacheHit'
@@ -1151,3 +1235,377 @@ function buildStdFuncEdgeMap(snapshot StdModule) returns CachedFuncEdgeMap
 	end 'eachFunc'
 	return edgeMap
 end 'buildStdFuncEdgeMap'
+
+// ============================================================
+// v80 lazy per-function stdlib codegen
+// ============================================================
+
+// Build signature-only `ObjectFunction` stubs (name + return type + param
+// count/types, empty code/fixups) from the lowered MIR module, one per
+// function the eager native path would have emitted (same
+// `isPerCompileRuntimeName` filter). These let the user build's per-function
+// target lowering resolve every stdlib/runtime callee signature on a cold
+// metadata-only cache, before lazy codegen fills in the real bytecode. The
+// MIR `IrFunction` carries the post-lowerStdToMir signature (paramTypes are
+// already StdType, matching the eager ObjectFunction's paramTypes).
+function buildSignatureStubs(mirModule MirModule) returns ObjectFunctionArray
+	var stubs = ObjectFunctionArray.create()
+	for func in mirModule.functions 'eachFunc'
+		if isPerCompileRuntimeName(func.name) 'perCompile'
+			continue
+		end 'perCompile'
+		var stub = ObjectFunction.create(func.name, returnType: func.returnType, paramCount: func.paramCount)
+		stub.paramTypes = func.paramTypes
+		stubs.push(stub)
+	end 'eachFunc'
+	return stubs
+end 'buildSignatureStubs'
+
+// Reconstruct the merged stdlib+runtime StdModule and extract its full
+// call-edge map — the CHEAP half of lazy setup (a couple of merges + an edge
+// walk, no lowering). Memoized via `lazyStdlibEdgesBuilt`. The needed-closure
+// only needs the edge map, so a warm build whose every reachable function is
+// already compiled pays just this — never the expensive MIR lowering below.
+//
+// `cachedStdlibStdModule` is the post-dce snapshot (stdlib bodies, no runtime);
+// merging the cache-side runtime bodies mirrors the eager build's
+// `pipeline.stdModule.merge(buildCacheSideRuntime(...))` splice point. The
+// reconstructed module is retained for `ensureLazyStdlibMir` to lower on
+// demand.
+function ensureLazyStdlibEdges()
+	if lazyStdlibEdgesBuilt 'already'
+		return
+	end 'already'
+
+	var reconstructed = StdModule.create()
+	reconstructed.merge(cachedStdlibStdModule)
+	let runtimeForCache = buildCacheSideRuntime(loadRuntimeModule())
+	reconstructed.merge(runtimeForCache)
+
+	lazyReconstructed = reconstructed
+	lazyStdlibFuncEdges = buildStdFuncEdgeMap(reconstructed)
+	lazyStdlibEdgesBuilt = true
+end 'ensureLazyStdlibEdges'
+
+// Lower the reconstructed module to MIR — the EXPENSIVE half (lowerStdToMir +
+// commuteForCoalescing + scheduleInstructions over ~992 functions, ~170ms).
+// Only called when there is at least one function to compile, so a fully-warm
+// build skips it. Memoized via `lazyStdlibMirBuilt`. Because every one of those
+// passes is `perFunction` (intra-function) and panic-message labels are
+// content-hashed (pipeline-independent), a function lowered here is
+// byte-identical to the same function in a whole-module eager build.
+//
+// `project` supplies the target + globalData context. Native-only; wasm lazy
+// codegen is handled on its own path.
+function ensureLazyStdlibMir(project Project)
+	if lazyStdlibMirBuilt 'already'
+		return
+	end 'already'
+	ensureLazyStdlibEdges()
+
+	var pipeline = PassPipeline.create(MaxonModule.create(), project: project, globalData: cachedStdlibCacheData.globalData, target: project.target, sourceFileName: "", isStdlib: true)
+	pipeline.stdModule = lazyReconstructed
+	pipeline.addPass(PassKind.lowerStdToMir)
+	pipeline.addPass(PassKind.commuteForCoalescing)
+	pipeline.addPass(PassKind.scheduleInstructions)
+	try pipeline.run() otherwise panic("Lazy stdlib MIR build failed; see error diagnostics above")
+
+	lazyStdlibMir = pipeline.mirModule
+	lazyStdlibMirBuilt = true
+end 'ensureLazyStdlibMir'
+
+// Transitive closure over the reconstructed Std-IR call-edge map, resolving
+// each (possibly bare) seed name to its actual function key (mirrors
+// `resolveStdlibCacheKey`: a bare runtime call to a `stdlib.`-qualified
+// Internals function probes the qualified form). Returns every function name
+// reachable from `seeds` — the set the lazy backend must compile so the
+// linker's name-keyed closure resolves with no gap.
+function lazyNeededClosure(project Project, seeds StringArray) returns StdlibFuncNameSet
+	var needed = StdlibFuncNameSet.create()
+	var worklist = StringArray.create()
+
+	for name in seeds 'seed'
+		let key = resolveLazyEdgeKey(name)
+		if not key.isEmpty() and not needed.contains(key) 'isFunc'
+			needed.insert(key)
+			worklist.push(key)
+		end 'isFunc'
+	end 'seed'
+
+	var wi = 0
+	while wi < worklist.count() 'walk'
+		let nameRef = try worklist.get(wi) otherwise 'skip'
+			wi = wi + 1
+			continue
+		end 'skip'
+		let name = "{nameRef}"
+		wi = wi + 1
+		let edges = try lazyStdlibFuncEdges.get(name) otherwise continue
+		for callee in edges.callees 'eachCallee'
+			let depKey = resolveLazyEdgeKey(callee)
+			if not depKey.isEmpty() and not needed.contains(depKey) 'newDep'
+				needed.insert(depKey)
+				worklist.push(depKey)
+			end 'newDep'
+		end 'eachCallee'
+		// Witness/layout conditional-root labels (`loadWitnessTable` /
+		// `loadLayoutDescriptor`) reach their impl functions only through
+		// `project.witnessConditionalRoots`, NOT a `call`/`funcAddr` edge — mirror
+		// the in-module DFE's `promoteConditionalRoots` so a generic whose witness
+		// impls are reachable solely via a conditional-root label still gets those
+		// impls compiled (otherwise they would link as `.text+0` stubs). `seen`
+		// for labels is `needed` membership of the resolved impl names — the
+		// closure converges because impls are finite.
+		for label in edges.conditionalRootLabels 'eachCondRoot'
+			if let bucket = try project.witnessConditionalRoots.get(label) 'haveBucket'
+				for i in 0 upto bucket.count() 'eachImpl'
+					let implName = try bucket.get(i) otherwise panic("lazyNeededClosure: witnessConditionalRoots bucket OOB at {i}")
+					let implKey = resolveLazyEdgeKey(implName)
+					if not implKey.isEmpty() and not needed.contains(implKey) 'newImpl'
+						needed.insert(implKey)
+						worklist.push(implKey)
+					end 'newImpl'
+				end 'eachImpl'
+			end 'haveBucket'
+		end 'eachCondRoot'
+	end 'walk'
+
+	return needed
+end 'lazyNeededClosure'
+
+// Resolve a (possibly bare) name to its key in `lazyStdlibFuncEdges`, probing
+// the `stdlib.`-qualified form for bare runtime->Internals calls. Empty when
+// neither form is a known function.
+function resolveLazyEdgeKey(name String) returns String
+	if lazyStdlibFuncEdges.contains(name) 'exact'
+		return name
+	end 'exact'
+	let qualified = "stdlib.{name}"
+	if lazyStdlibFuncEdges.contains(qualified) 'qualified'
+		return qualified
+	end 'qualified'
+	return ""
+end 'resolveLazyEdgeKey'
+
+// Seed `lazyCompiledStdlibNames` from cache entries that already carry REAL
+// machine code (non-empty `code`). Signature-only stubs (empty `code`, written
+// by `buildSignatureStubs` on a cold cache) are NOT marked compiled — they
+// still need their bytecode filled in. On a warm cache that accreted real code
+// over prior builds, those entries pre-mark so we don't recompile them.
+// Idempotent — safe to call before each lazy-fill.
+function syncLazyCompiledNames()
+	for func in cachedStdlibCacheData.functions 'eachEntry'
+		if func.code.count() > 0 and not lazyCompiledStdlibNames.contains(func.name) 'isReal'
+			lazyCompiledStdlibNames.insert(func.name)
+		end 'isReal'
+	end 'eachEntry'
+end 'syncLazyCompiledNames'
+
+// Count cache entries that carry REAL machine code (non-empty `code`), as
+// opposed to v80 signature-only stubs (empty `code`, bytecode still deferred).
+// Used for honest cache-hit logging — `functions.count()` alone counts stubs
+// as if they were compiled.
+export function countCompiledStdlibFunctions(data StdlibCacheData) returns MachineWord
+	var n = 0
+	for func in data.functions 'eachFunc'
+		if func.code.count() > 0 'hasCode'
+			n = n + 1
+		end 'hasCode'
+	end 'eachFunc'
+	return n
+end 'countCompiledStdlibFunctions'
+
+// Map each cache function name to its index in `cachedStdlibCacheData.functions`,
+// so lazy codegen can replace a signature stub in place (`.set`) rather than
+// append — keeping the array's order (and the linker's `.text` layout derived
+// from it) stable and stub-free of duplicates.
+function buildCacheFuncIndex() returns StdlibFuncIndexMap
+	var index = StdlibFuncIndexMap.create()
+	for (iter, func) in cachedStdlibCacheData.functions.withIterator() 'eachEntry'
+		index.upsert(func.name, value: iter.index())
+	end 'eachEntry'
+	return index
+end 'buildCacheFuncIndex'
+
+// Compile every native stdlib/runtime function transitively reachable from
+// `seeds` that is not yet present in the cache's `functions` array, filling
+// each freshly-emitted ObjectFunction into its pre-existing signature-stub
+// slot. Called by the native linkers (x64/arm64) BEFORE
+// `computeNeededStdlibFunctions` so the cache holds every function the
+// name-keyed link closure will then resolve. A no-op (beyond the cheap
+// missing-set scan) when the cache already carries every reachable function —
+// the steady-state warm-cache hit.
+//
+// The closure runs over the reconstructed Std-IR edge map (`lazyNeededClosure`),
+// NOT the compiled `callFixups`: on a metadata-only cold cache the `functions`
+// entries are signature-only stubs with EMPTY callFixups, so
+// `computeNeededStdlibFunctions`' own fixup closure would resolve nothing past
+// the seeds. The edge map is the codegen-free call graph derived from the same
+// bodies, so its closure equals the eventual fixup closure.
+//
+// Determinism: each emitted body is written IN PLACE into the slot its
+// signature stub already occupies (`.set` by name index, below), so the
+// `functions` array order never deviates from the cold-build stub order — and
+// the linker's `.text` layout, which iterates that array, stays stable across
+// builds regardless of which program triggered which compiles. The stub order
+// is itself build-order-independent (`buildSignatureStubs` emits in
+// `mirModule.functions` order, a pure function of the stdlib's structure), so
+// slot-preservation — NOT a name sort — is what makes cache-parity hold. Do
+// not "sort by name" here: that would reorder fills relative to the stubs and
+// break parity.
+//
+// Mutates the process-global `cachedStdlibCacheData` directly (not a passed-in
+// value) so the link path's immutable `stdlibCache` binding — which aliases
+// the same heap-backed `functions` array via `getStdlibCacheData()` — sees the
+// additions without threading a `mutates` annotation up through
+// `queryCodeResult`. Maxon `Array` is reference-backed, so a push on the
+// global is visible through every alias.
+export function ensureStdlibFunctionsCompiled(project Project, seeds StringArray)
+	syncLazyCompiledNames()
+
+	let lazyStart = passTimerStart()
+	// Cheap: build the edge map (no MIR lowering) and compute what the program
+	// transitively reaches, minus what the cache already has real code for.
+	ensureLazyStdlibEdges()
+	let needed = lazyNeededClosure(project, seeds: seeds)
+
+	var missingSet = StdlibFuncNameSet.create()
+	for name in needed 'eachNeeded'
+		if not lazyCompiledStdlibNames.contains(name) 'isMissing'
+			missingSet.insert(name)
+		end 'isMissing'
+	end 'eachNeeded'
+
+	if missingSet.count() == 0 'nothingToDo'
+		// Fully-warm hit: every reachable function already carries real code.
+		// We paid only the cheap edge build — no MIR lowering, no regalloc.
+		return
+	end 'nothingToDo'
+
+	// Something to compile — NOW pay the expensive MIR lowering (once).
+	ensureLazyStdlibMir(project)
+
+	// Select the MIR functions to lower in the SAME order they appear in the
+	// reconstructed module (preserving lowering context), restricted to the
+	// missing set. The emitted results are filled back into their existing
+	// stub slots below (`.set` by name index), so the cache's function order
+	// stays fixed at the build-order-independent stub order.
+	var funcsToLower = IrFunctionArray.create()
+	for func in lazyStdlibMir.functions 'pickMir'
+		if missingSet.contains(func.name) 'wanted'
+			funcsToLower.push(func)
+		end 'wanted'
+	end 'pickMir'
+
+	let emitted = compileStdlibMirSubsetNative(project, funcsToLower: funcsToLower)
+
+	// Fill each freshly-emitted function's real bytecode into its existing
+	// signature-stub slot (`.set` by name index), preserving the cache array's
+	// order so the linker's `.text` layout stays stable regardless of which
+	// program triggered the compile. Every MIR function gets a stub on the cold
+	// build, so the `.set` path always taken; the `else` push is a correctness
+	// backstop for the unreachable no-stub case (it keeps the body linkable,
+	// though an out-of-stub-order append would perturb parity — which is why it
+	// must stay unreachable).
+	let index = buildCacheFuncIndex()
+	var keptCount = 0
+	for func in emitted 'fill'
+		if isPerCompileRuntimeName(func.name) 'perCompile'
+			continue
+		end 'perCompile'
+		if lazyCompiledStdlibNames.contains(func.name) 'alreadyReal'
+			continue
+		end 'alreadyReal'
+		if let slot = try index.get(func.name) 'hasStub'
+			try cachedStdlibCacheData.functions.set(slot, value: func) otherwise panic("lazy codegen: stub slot {slot} for '{func.name}' out of bounds")
+		end 'hasStub' else 'noStub'
+			cachedStdlibCacheData.functions.push(func)
+		end 'noStub'
+		lazyCompiledStdlibNames.insert(func.name)
+		keptCount = keptCount + 1
+	end 'fill'
+
+	// Safety tripwire (risk #2 in the design): every reachable function MUST now
+	// carry real code, or the linker's name-keyed closure would link a stub's
+	// empty `code` and resolve calls into it to `.text+0` — a silent corruption.
+	// A miss here means `lazyNeededClosure` (edge map) under-approximated the
+	// linker's fixup closure. Per-compile runtime names are intentionally NOT in
+	// the cache (the user pipeline supplies them), so they're exempt.
+	for name in missingSet 'verify'
+		if isPerCompileRuntimeName(name) 'exemptPerCompile'
+			continue
+		end 'exemptPerCompile'
+		if not lazyCompiledStdlibNames.contains(name) 'gap'
+			panic("lazy codegen: needed stdlib function '{name}' has no compiled body after lazy fill — edge-map closure under-approximated the linker closure (would link .text+0)")
+		end 'gap'
+	end 'verify'
+
+	// Persist the grown cache so the NEXT build reuses the just-compiled
+	// bytecode (zero regalloc). Only safe from a single-project CLI build (see
+	// `stdlibCachePersistAllowed`); the spec runner's cross-project workers
+	// leave it false and recompile in-process each run (no on-disk growth).
+	if stdlibCachePersistAllowed 'persist'
+		persistGrownStdlibCache(project)
+	end 'persist'
+
+	recordPassSince("__stdlib-lazyCodegen", startMs: lazyStart)
+	// `lazyCompiledStdlibNames` counts entries that now carry REAL machine code;
+	// `functions.count()` is the TOTAL of compiled bodies + signature-only stubs
+	// (the un-reached functions whose bytecode is still deferred). Report both so
+	// the line doesn't misclaim every stub as compiled.
+	logInfo(LogCategory.compiler, message: function() gives "Lazily compiled {keptCount} stdlib functions ({lazyCompiledStdlibNames.count()} cached)")
+end 'ensureStdlibFunctionsCompiled'
+
+// Compute the on-disk cache path for `project`'s target, mirroring the loader's
+// path computation (`getStdlibModule` / `loadCacheForTarget`). Empty when no
+// project dir has been pinned yet (the cache can't be located).
+function currentStdlibCachePath(project Project) returns FilePath
+	let projectDir = try stdlibCacheProjectDirs.get(0) otherwise return FilePath from ""
+	return projectDir.join(".maxon").join("cache").join("stdlib-{targetToString(project.target)}.mxc")
+end 'currentStdlibCachePath'
+
+// Re-serialize the in-memory `cachedStdlibCacheData` (now carrying the
+// lazily-compiled bytecode) to the cache file, so subsequent builds reuse it.
+function persistGrownStdlibCache(project Project)
+	let cachePath = currentStdlibCachePath(project)
+	if cachePath.isEmpty() 'noPath'
+		return
+	end 'noPath'
+	let contentChecksum = currentStdlibChecksum(project.target)
+	writeStdlibCache(project, path: cachePath, data: cachedStdlibCacheData, target: project.target, contentChecksum: contentChecksum)
+end 'persistGrownStdlibCache'
+
+// Run the native backend tail (target lowering + regalloc + prologue/epilogue
+// + emit) over a SUBSET of the lazy MIR module's functions, returning their
+// ObjectFunctions. Mirrors `buildStdlibNativeWith` exactly except it lowers
+// `funcsToLower` instead of the whole module — `lowerMirToTargetForFunctions`
+// keeps `allFunctions` pointing at the full module for callee-signature
+// resolution, and per-function regalloc/emit are byte-identical to the eager
+// whole-module path (the existing incremental-emit guarantee).
+//
+// `lowerMirToTargetForFunctions` stores the lowered module into the backend's
+// own `targetModule` field (which `emitPerFunction` later reads); the same
+// reference is what `allocateRegisters` (in-place mutation) and
+// `insertPrologueEpilogueWith` operate on, so all four steps act on one
+// module — exactly as `buildStdlibNativeWith` does.
+function compileStdlibMirSubsetNative(project Project, funcsToLower IrFunctionArray) returns ObjectFunctionArray
+	match project.target.cpu 'arch'
+		x64 then return runNativeBackendTail(X64Backend.create(lazyStdlibMir, target: project.target, globalData: cachedStdlibCacheData.globalData, stdlibFunctions: cachedStdlibCacheData.functions), funcsToLower: funcsToLower, target: project.target)
+		arm64 then return runNativeBackendTail(Arm64Backend.create(lazyStdlibMir, target: project.target, globalData: cachedStdlibCacheData.globalData, stdlibFunctions: cachedStdlibCacheData.functions), funcsToLower: funcsToLower, target: project.target)
+		default panic("compileStdlibMirSubsetNative: non-native target reached lazy native codegen")
+	end 'arch'
+end 'compileStdlibMirSubsetNative'
+
+// Run the backend tail (subset target-lowering -> regalloc -> prologue/epilogue
+// -> per-function emit) on `backend`, returning the emitted ObjectFunctions.
+// Takes `backend` as a `TargetBackend` parameter (the proven dispatch shape
+// used by `prepareTargetModuleForFunctions`); the per-arch concrete backend is
+// constructed by the caller's `match` so the interface value is a parameter,
+// not a local from a returning function (which the C# bootstrap can't resolve
+// interface-dispatch on).
+function runNativeBackendTail(backend TargetBackend, funcsToLower IrFunctionArray, target Target) returns ObjectFunctionArray
+	var targetModule = backend.lowerMirToTargetForFunctions(funcsToLower)
+	targetModule = allocateRegisters(targetModule, target: target)
+	insertPrologueEpilogueWith(targetModule, backend: backend)
+	return backend.emitPerFunction()
+end 'runNativeBackendTail'

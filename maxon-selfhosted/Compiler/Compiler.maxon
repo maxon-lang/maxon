@@ -12,6 +12,11 @@ export function compile(path FilePath, target Target, coverage bool = false, irD
 		setStdlibCacheBypassed(true)
 	end 'cacheBypass'
 	resetMmTraceTags()
+	// CLI build: a single project builds the stdlib cache AND compiles user
+	// code, so the cache's metadata string ids are valid in this project's
+	// interner — re-serializing the lazily-grown cache back to disk is safe.
+	// (The spec runner's cross-project workers leave this false.)
+	setStdlibCachePersistAllowed(true)
 	var project = createProject(path, target: target)
 	project.coverageEnabled = coverage
 	project.mmTraceEnabled = mmTrace
@@ -20,7 +25,14 @@ export function compile(path FilePath, target Target, coverage bool = false, irD
 	// the spec runner's per-fragment leak gate; does NOT bypass the stdlib cache.
 	project.leakCheckEnabled = leakCheck
 	project.irDump = irDump
+	// Note: `stdlibCachePersistAllowed` is left set across a `compileProject`
+	// throw — harmless, because the only setter is this function's entry (which
+	// re-sets it `true` next call) and the spec runner uses `compileSourceWithIr`
+	// (never `compile()`), so the flag is always `false` there. Rebinding +
+	// rethrowing the error here to reset it would be cleaner in principle but
+	// trips a self-hosted MM null-incref on the rebound `CompileError`.
 	let outputPath = try compileProject(project)
+	setStdlibCachePersistAllowed(false)
 	if mmTrace or noStdlibCache 'restoreBypass'
 		setStdlibCacheBypassed(false)
 		resetStdlibLoaderState()

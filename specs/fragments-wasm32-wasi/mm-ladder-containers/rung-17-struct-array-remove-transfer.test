@@ -34,20 +34,20 @@ mm_move Array #1 -> return [main]
 mm_alloc Box #3 size=8 [Box.create]
 mm_incref Box #3 rc=1 [Box.create]
 mm_move Box #3 -> return [Box.create]
-mm_move Box #3 -> container
-mm_alloc <raw> #4 size=32
-mm_incref <raw> #4 rc=1
+mm_move Box #3 -> container [main]
+mm_alloc <raw> #4 size=32 [main]
+mm_incref <raw> #4 rc=1 [main]
 mm_alloc Box #5 size=8 [Box.create]
 mm_incref Box #5 rc=1 [Box.create]
 mm_move Box #5 -> return [Box.create]
-mm_move Box #5 -> container
-mm_decref Box #3 rc=0
+mm_move Box #5 -> container [main]
+mm_decref Box #3 rc=0 [takeFirst]
   mm_free Box #3
-mm_decref Array #1 rc=0
-  mm_decref __ManagedMemory #2 rc=0
-    mm_decref Box #5 rc=0
+mm_decref Array #1 rc=0 [main]
+  mm_decref __ManagedMemory #2 rc=0 [main]
+    mm_decref Box #5 rc=0 [main]
       mm_free Box #5
-    mm_decref <raw> #4 rc=0
+    mm_decref <raw> #4 rc=0 [main]
       mm_free <raw> #4
     mm_free __ManagedMemory #2
   mm_free Array #1
@@ -71,7 +71,7 @@ module {
     mir.error_return %1, %12
   try_0.merge:
     %15 = mir.load %6, 0 width: qword
-    %20 = mir.call @stdlib.__mm_decref(%6)
+    %20 = mir.call @__mm_decref_maybenull_helper(%6)
     %22 = mir.call @mm_scope_pop()
     mir.error_return %15, %1
   }
@@ -110,14 +110,14 @@ module {
     %46 = mir.call @mm_move_container(%38)
     %12 = mir.call @Array.push(%2, %38, %11)
     %14, %15 = mir.try_call @takeFirst(%2)
-    %44 = mir.call @stdlib.__mm_decref(%2)
+    %44 = mir.call @__mm_decref_maybenull_helper(%2)
     %16 = mir.mov_imm 0 : i64
     %17 = mir.cmp ne, %15, %16
     mir.cond_br %17 [then: try_0.otherwise(), else: try_0.merge(%14)]
   try_0.otherwise:
     %19 = mir.mov_imm 0 : i64
     mir.br try_0.merge(%19)
-  try_0.merge:
+  try_0.merge(%23: i64):
     %47 = mir.call @mm_scope_pop()
     %48 = mir.mov_imm 125 : i64
     %49 = mir.cmp ugt, %23, %48

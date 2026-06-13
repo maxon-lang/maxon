@@ -1156,7 +1156,7 @@ export function emitArm64PerFunction(module TargetModule, globalData GlobalDataT
 end 'emitArm64PerFunction'
 
 // Link pre-compiled stdlib functions into the ARM64 code output.
-export function linkArm64StdlibFunctions(code ByteArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap, callFixups Arm64CallFixupArray, adrFixups Arm64AdrFixupArray, rdataRelocs RdataRelocationArray, relocations RelocationArray, globalData GlobalDataTable, stdlibCache StdlibCacheData)
+export function linkArm64StdlibFunctions(project Project, code ByteArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap, callFixups Arm64CallFixupArray, adrFixups Arm64AdrFixupArray, rdataRelocs RdataRelocationArray, relocations RelocationArray, globalData GlobalDataTable, stdlibCache StdlibCacheData)
 	// Collect seed names from user call fixups and adr fixups
 	var seeds = StringArray.create()
 
@@ -1177,6 +1177,12 @@ export function linkArm64StdlibFunctions(code ByteArray, labelNames StringArray,
 	// merge below, so seed from both places to cover stdlib targets.
 	appendFuncAbs64Seeds(seeds, relocs: rdataRelocs)
 	appendFuncAbs64Seeds(seeds, relocs: globalData.pendingRdataRelocs)
+
+	// v80 lazy codegen: compile (regalloc + emit) every function reachable from
+	// `seeds` that the metadata-only cold cache hasn't emitted yet, into
+	// `stdlibCache.functions`, before the closure reads it. Mirrors the x64
+	// concat path. No-op once the cache carries every reachable function.
+	ensureStdlibFunctionsCompiled(project, seeds: seeds)
 
 	let needed = computeNeededStdlibFunctions(seeds, stdlibCache: stdlibCache)
 

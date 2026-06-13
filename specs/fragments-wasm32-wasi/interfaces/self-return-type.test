@@ -31,41 +31,48 @@ ExitCode: 45
 module {
   func @Point.move(local0: i64, local1: i64, local2: i64) -> i64 {
   entry:
-    %13 = mir.param local0 : i64
-    %14 = mir.param local1 : i64
-    %15 = mir.param local2 : i64
+    %15 = mir.param local0 : i64
+    %16 = mir.param local1 : i64
+    %17 = mir.param local2 : i64
     %3 = mir.mov_imm 16 : i64
-    %4 = mir.call @mrt_alloc(%3)
-    %5 = mir.load %13, 0 width: qword
-    %8 = mir.add.i64 %5, %14
-    mir.store %8, %4, 0 width: qword
-    %9 = mir.load %13, 8 width: qword
-    %12 = mir.add.i64 %9, %15
-    mir.store %12, %4, 8 width: qword
+    %5 = mir.mov_imm 0 : i64
+    %6 = mir.mov_imm 0 : i64
+    %4 = mir.call @stdlib.__mm_alloc(%3, %5, %6)
+    %18 = mir.call @stdlib.__mm_incref(%4)
+    %7 = mir.load %15, 0 width: qword
+    %10 = mir.add.i64 %7, %16
+    mir.store %10, %4, 0 width: qword
+    %11 = mir.load %15, 8 width: qword
+    %14 = mir.add.i64 %11, %17
+    mir.store %14, %4, 8 width: qword
     mir.ret %4
   }
   func @main() -> u8 {
   entry:
-    %0 = mir.mov_imm 10 : i64
-    %1 = mir.mov_imm 20 : i64
-    %12 = mir.mov_imm 16 : i64
-    %13 = mir.call @mrt_alloc(%12)
-    mir.store %0, %13, 0 width: qword
-    mir.store %1, %13, 8 width: qword
-    %4 = mir.mov_imm 5 : i64
-    %5 = mir.mov_imm 10 : i64
-    %6 = mir.call @Point.move(%13, %4, %5)
-    %8 = mir.load %6, 0 width: qword
-    %10 = mir.load %6, 8 width: qword
-    %11 = mir.add.i64 %8, %10
-    %14 = mir.mov_imm 125 : i64
-    %15 = mir.cmp ugt, %11, %14
-    mir.cond_br %15 [then: __range_panic_0(), else: __range_ok_0()]
+    %2 = mir.mov_imm 10 : i64
+    %3 = mir.mov_imm 20 : i64
+    %14 = mir.mov_imm 16 : i64
+    %15 = mir.mov_imm 0 : i64
+    %16 = mir.mov_imm 0 : i64
+    %17 = mir.call @stdlib.__mm_alloc(%14, %15, %16)
+    mir.store %2, %17, 0 width: qword
+    mir.store %3, %17, 8 width: qword
+    %6 = mir.mov_imm 5 : i64
+    %7 = mir.mov_imm 10 : i64
+    %8 = mir.call @Point.move(%17, %6, %7)
+    %18 = mir.call @mm_drop(%17)
+    %10 = mir.load %8, 0 width: qword
+    %12 = mir.load %8, 8 width: qword
+    %13 = mir.add.i64 %10, %12
+    %19 = mir.call @__mm_decref_maybenull_helper(%8)
+    %20 = mir.mov_imm 125 : i64
+    %21 = mir.cmp ugt, %13, %20
+    mir.cond_br %21 [then: __range_panic_0(), else: __range_ok_0()]
   __range_panic_0:
-    %16 = mir.global_addr @__panic_msg_282a71a5e4a68288
-    %17 = mir.call @mrt_panic(%16)
+    %22 = mir.global_addr @__panic_msg_282a71a5e4a68288
+    %23 = mir.call @mrt_panic(%22)
   __range_ok_0:
-    mir.ret %11
+    mir.ret %13
   }
 }
 ---

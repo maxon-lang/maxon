@@ -111,7 +111,7 @@ export type X64Backend implements TargetBackend
 			chunks.push(chunk)
 		end 'eachFunc'
 
-		return concatX64FunctionChunks(chunks, targetModule: targetModule, mirModule: module, globalData: globalData, stdlibCache: stdlibCache, os: target.os)
+		return concatX64FunctionChunks(project, chunks: chunks, targetModule: targetModule, mirModule: module, globalData: globalData, stdlibCache: stdlibCache, os: target.os)
 	end 'emitTargetCode'
 
 	function scanOpForFrameInfo(packed OpIndex, state FrameScanState)
@@ -197,58 +197,6 @@ export type X64Backend implements TargetBackend
 		let x64Op = try targetModule.x64Ops.get(packed) otherwise panic("invariant: packed opIdx not in targetModule.x64Ops")
 		emitX64Op(x64Op, code: code, blockFixups: blockFixups, callFixups: callFixups, relocations: relocations, rdataRelocs: rdataRelocs, tracker: tracker)
 	end 'emitPackedOp'
-
-	// Link pre-compiled stdlib functions into the x64 code output.
-	// Uses shared reachability analysis, then appends code with x64-specific fixup adjustment.
-	function linkX64StdlibFunctions(code ByteArray, labelNames StringArray, labelOffsets CodeOffsetArray, labelOffsetMap CodeLabelOffsetMap, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, relocations RelocationArray, stdlibCache StdlibCacheData)
-		// Collect seed names from user call fixups
-		var seeds = StringArray.create()
-		for fixup in callFixups 'collectSeeds'
-			seeds.push(fixup.targetName)
-		end 'collectSeeds'
-
-		// Phase 11.2/11.3: rdata-resident `funcAbs64InRdata` relocs reference
-		// __layout_copy_*/destroy thunks and witness method-impls that are
-		// reachable only through static rdata pointers — never via a `call`
-		// op. Without seeding them as link-roots here, the PE writer panics
-		// when the reloc target is missing from `.text`. The witness/layout
-		// relocs live on `globalData.pendingRdataRelocs` until the post-link
-		// merge below, so seed from both places to cover stdlib targets.
-		appendFuncAbs64Seeds(seeds, relocs: rdataRelocs)
-		appendFuncAbs64Seeds(seeds, relocs: globalData.pendingRdataRelocs)
-
-		let needed = computeNeededStdlibFunctions(seeds, stdlibCache: stdlibCache)
-
-		// Append each needed function's code and fixups
-		for func in stdlibCache.functions 'linkFuncs'
-			if not needed.contains(func.name) 'skip'
-				continue
-			end 'skip'
-
-			let funcStart = code.count()
-			logDebug(LogCategory.compiler, message: function() gives "  Linking '{func.name}': {func.code.count()} bytes at offset {funcStart}")
-
-			labelNames.push(func.name)
-			labelOffsets.push(funcStart)
-			labelOffsetMap.upsert(func.name, value: funcStart)
-			code.append(func.code)
-
-			for fixup in func.callFixups 'adjustFixups'
-				callFixups.push(CallFixup.create(funcStart + fixup.codeOffset, targetName: fixup.targetName))
-			end 'adjustFixups'
-
-			for reloc in func.rdataRelocs 'adjustRdata'
-				rdataRelocs.push(RdataRelocation.create(funcStart + reloc.codeOffset, rdataLabel: reloc.rdataLabel, kind: reloc.kind))
-			end 'adjustRdata'
-
-			for reloc in func.relocations 'adjustRelocs'
-				relocations.push(Relocation.create(funcStart + reloc.codeOffset, slotIndex: reloc.slotIndex))
-			end 'adjustRelocs'
-		end 'linkFuncs'
-
-		mergeStdlibGlobalData(globalData, rdataRelocs: rdataRelocs, stdlibCache: stdlibCache)
-		logInfo(LogCategory.compiler, message: function() gives "Linked {needed.count()} stdlib functions ({stdlibCache.functions.count()} available)")
-	end 'linkX64StdlibFunctions'
 end 'X64Backend'
 
 // Concat path — lay each chunk's bytes into the final `.text`, rebase every
@@ -263,7 +211,7 @@ end 'X64Backend'
 // the per-function query cache by `emitBackendIncrementalWith`. The same
 // downstream rdata/IAT/symbol post-process applies — the only thing that
 // changes between the two callers is where the chunks came from.
-export function concatX64FunctionChunks(chunks FunctionCodeChunkArray, targetModule TargetModule, mirModule MirModule, globalData GlobalDataTable, stdlibCache StdlibCacheData, os Os) returns CodeResult
+export function concatX64FunctionChunks(project Project, chunks FunctionCodeChunkArray, targetModule TargetModule, mirModule MirModule, globalData GlobalDataTable, stdlibCache StdlibCacheData, os Os) returns CodeResult
 	var code = ByteArray.create()
 	code.reserve(1024)
 	var relocations = RelocationArray.create()
@@ -301,8 +249,16 @@ export function concatX64FunctionChunks(chunks FunctionCodeChunkArray, targetMod
 	// the soon-to-be-emitted hand-rolled `mrt_win32_*` helpers'
 	// call fixups resolve against linked cache bodies. The cache-off path
 	// gets the same names via `filterRuntimeByReachability`.
-	if stdlibCache.functions.count() > 0 'hasStdlib'
-		linkX64StdlibFunctionsConcat(code, labelNames: funcLabelNames, labelOffsets: funcLabelOffsets, labelOffsetMap: funcLabelOffsetMap, callFixups: callFixups, rdataRelocs: rdataRelocs, relocations: relocations, globalData: globalData, stdlibCache: stdlibCache, os: os)
+	//
+	// v80 lazy codegen: gate on cache VALIDITY, not `functions.count() > 0` —
+	// a metadata-only cold cache is valid but starts with zero compiled
+	// functions, and the linker (via `ensureStdlibFunctionsCompiled`) is what
+	// fills them. The old count gate would skip the link pass on a cold cache
+	// and leave every stdlib call unresolved. The cache-bypassed path
+	// (`--mm-trace`) is `isStdlibCacheValid() == false` → still skipped, with
+	// stdlib supplied from the user module instead.
+	if isStdlibCacheValid() 'hasStdlib'
+		linkX64StdlibFunctionsConcat(project, code: code, labelNames: funcLabelNames, labelOffsets: funcLabelOffsets, labelOffsetMap: funcLabelOffsetMap, callFixups: callFixups, rdataRelocs: rdataRelocs, relocations: relocations, globalData: globalData, stdlibCache: stdlibCache, os: os)
 	end 'hasStdlib'
 
 	// Phase B1: emit hand-rolled `mrt_win32_*` helpers AFTER the
@@ -375,11 +331,75 @@ export function concatX64FunctionChunks(chunks FunctionCodeChunkArray, targetMod
 	return result
 end 'concatX64FunctionChunks'
 
-// Free-function variant of `X64Backend.linkX64StdlibFunctions`. The method
-// version is a member on the backend type so it can read `globalData` from
-// the backend; the concat path doesn't have a backend instance handy, so we
-// take `globalData` as an explicit parameter. Body is otherwise identical.
-function linkX64StdlibFunctionsConcat(code ByteArray, labelNames StringArray, labelOffsets CodeOffsetArray, labelOffsetMap CodeLabelOffsetMap, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, relocations RelocationArray, globalData GlobalDataTable, stdlibCache StdlibCacheData, os Os)
+// The unconditional x64-Windows runtime-floor seeds: names referenced only by
+// hand-rolled helpers emitted AFTER the stdlib link pass (`mrt_win32_*`,
+// green-thread / fault-diagnostic / subprocess runtime), so no IR call edge
+// reaches them and they must be seeded explicitly or their fixups resolve to
+// .text+0. Shared by the cache-on link (`linkX64StdlibFunctionsConcat`), the
+// cache-off DCE (`filterRuntimeByReachability`), and the v80 eager-floor
+// compile, so all three link the identical set (cache parity).
+export function appendX64Win32RuntimeSeeds(seeds StringArray, os Os)
+	if os != Os.windows 'notWindows'
+		return
+	end 'notWindows'
+	seeds.push("mrt_alloc")
+	seeds.push("mrt_alloc_with_dtor")
+	seeds.push("mm_decref")
+	seeds.push("__mm_decref_maybenull_helper")
+	seeds.push("mm_drop")
+	seeds.push("mm_retain_type_param")
+	seeds.push("mm_retain_type_param_at")
+	seeds.push("mm_drop_type_param_at")
+	seeds.push("mm_move_return")
+	seeds.push("mm_move_container")
+	seeds.push("mm_move_phi")
+	seeds.push("mm_scope_push")
+	seeds.push("mm_scope_pop")
+	seeds.push("mm_trace_print_tag")
+	seeds.push("mm_trace_print_i64")
+	seeds.push("mrt_write_cstr_stderr")
+	seeds.push("mm_trace_print_hex")
+	seeds.push("__slab_alloc")
+	seeds.push("__slab_free")
+	seeds.push("__managed_mem_create")
+end 'appendX64Win32RuntimeSeeds'
+
+// The v80 eager-floor seed set: a SUPERSET of the link-path seeds that also
+// includes the entry-machinery functions injected into `mrt_start` after the
+// link pass (`patchMrtStartCall*`: `__gt_init`/`__io_init`/`__io_shutdown`/
+// `__gt_cleanup`/`mrt_win32_free_argv_cache`) and `mrt_start` itself. These are
+// linked by EVERY native program but are NOT seeded as cache link-roots (they
+// are hand-emitted / label-overridden), so they must be listed here separately
+// to pre-compile the complete runtime floor — i.e. every floor function plus
+// everything those functions transitively reach. `mrt_start` is per-compile
+// (`isPerCompileRuntimeName`), so its OWN body is not cached — but seeding it
+// still pulls its transitive callees into the eager-compile closure, which is
+// the point. Pre-compiling the floor means a stdlib-free program lazily
+// compiles NOTHING on a warm cache. Kept distinct from
+// `appendX64Win32RuntimeSeeds` precisely so these names are NOT injected into
+// the link-time root set (where they could shadow hand-emitted bodies).
+export function appendX64EagerFloorSeeds(seeds StringArray, os Os)
+	appendX64Win32RuntimeSeeds(seeds, os: os)
+	if os != Os.windows 'notWindows'
+		return
+	end 'notWindows'
+	seeds.push("mrt_start")
+	seeds.push("__gt_init")
+	seeds.push("__io_init")
+	seeds.push("__io_shutdown")
+	seeds.push("__gt_cleanup")
+	seeds.push("__gt_cancel")
+	seeds.push("mrt_win32_free_argv_cache")
+end 'appendX64EagerFloorSeeds'
+
+// The sole x64 stdlib linker (the concat / chunk-driven emit path is the only
+// live emit path — `emitTargetCode` always routes through
+// `concatX64FunctionChunks`). Takes `globalData` as an explicit parameter
+// since the concat path has no backend instance handy. v80: it first calls
+// `ensureStdlibFunctionsCompiled` to lazily compile any reachable stdlib
+// function the metadata-only cold cache hasn't emitted yet, then runs the
+// name-keyed reachability closure + appends each needed function's bytecode.
+function linkX64StdlibFunctionsConcat(project Project, code ByteArray, labelNames StringArray, labelOffsets CodeOffsetArray, labelOffsetMap CodeLabelOffsetMap, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, relocations RelocationArray, globalData GlobalDataTable, stdlibCache StdlibCacheData, os Os)
 	var seeds = StringArray.create()
 	for fixup in callFixups 'collectSeeds'
 		seeds.push(fixup.targetName)
@@ -387,68 +407,20 @@ function linkX64StdlibFunctionsConcat(code ByteArray, labelNames StringArray, la
 	appendFuncAbs64Seeds(seeds, relocs: rdataRelocs)
 	appendFuncAbs64Seeds(seeds, relocs: globalData.pendingRdataRelocs)
 
-	// Phase B1: the hand-rolled `mrt_win32_*` helpers (emitted by
-	// `emitX64Win32Helpers` after this link pass) reference `mrt_alloc` and
-	// `mm_decref` via call fixups. Their fixups can't seed the link walk yet
-	// (they're emitted after this pass), so we add the names here explicitly
-	// on Windows targets — this matches the `filterRuntimeByReachability`
-	// seed addition that pulls the same names into the cache-off pipeline.
-	if os == Os.windows 'win32Helpers'
-		seeds.push("mrt_alloc")
-		// The hand-emitted `__ManagedSocket` wrap in `emitX64NetTcpConnect` calls
-		// `mrt_alloc_with_dtor` via a late call fixup the reachability pass can't
-		// see — seed it so the linker keeps it (else the fixup resolves to .text+0).
-		seeds.push("mrt_alloc_with_dtor")
-		seeds.push("mm_decref")
-		// `emitX64Win32FreeArgvCache` (the argv-cache teardown helper, emitted after
-		// this link pass) calls `__mm_decref_maybenull_helper` to release each cached
-		// argv buffer + the pointer array. Seed it here (cache-on) so the fixup
-		// resolves; mirrored in the cache-off filterRuntimeByReachability win32 block.
-		seeds.push("__mm_decref_maybenull_helper")
-		// `mm_drop` — the insert-refcounts owner-drop wrapper. Seed it (cache-on)
-		// like `mm_decref`; mirrored in the cache-off filterRuntimeByReachability so
-		// `__mm_drop` is pulled symmetrically into both legs (cache parity).
-		seeds.push("mm_drop")
-		// `mm_retain_type_param` — the insert-refcounts borrowed-element container
-		// retain wrapper (emitted late, no source call edge). Seed it symmetrically.
-		seeds.push("mm_retain_type_param")
-		// Per-arg-ordinal forms (a multi-type-param generic routes a value's
-		// retain/drop through its OWN heap-ref bit). Same late-emission seeding.
-		seeds.push("mm_retain_type_param_at")
-		seeds.push("mm_drop_type_param_at")
-		// `mm_move_{return,container,phi}` — the insert-refcounts trace-only ownership-
-		// move markers (destination baked into the callee). Same symmetric seeding as
-		// `mm_drop` so `__mm_move_trace` lands in both legs.
-		seeds.push("mm_move_return")
-		seeds.push("mm_move_container")
-		seeds.push("mm_move_phi")
-		// `mm_scope_push`/`mm_scope_pop` — mm-trace scope-stack frame bracketing.
-		// Same symmetric seeding so `__mm_scope_push`/`__mm_scope_pop` land in both legs.
-		seeds.push("mm_scope_push")
-		seeds.push("mm_scope_pop")
-		// `emitX64GreenThreadRuntime` (also emitted after this link pass) hand-rolls
-		// `__gt_trace_emit`, whose call fixups reference these two async-trace helpers
-		// (runtime-gated by `__at_trace_enabled`). No other call edge reaches them in
-		// a non-async-trace program, so seed them or the fixups resolve to .text+0.
-		seeds.push("mm_trace_print_tag")
-		seeds.push("mm_trace_print_i64")
-		// `emitX64GtFaultDiagnostic` (the VEH redirect target, also hand-rolled after
-		// this pass) calls these to render the panic line. Same late-emission problem
-		// as the async-trace helpers, so seed them explicitly.
-		seeds.push("mrt_write_cstr_stderr")
-		seeds.push("mm_trace_print_hex")
-		// `emitX64SubprocessRuntime` (emitted after this pass) hand-rolls the
-		// subprocess readline / last-error / stream-copy helpers, which allocate
-		// result buffers directly via `__slab_alloc`/`__slab_free` and wrap them
-		// into managed memory via `__managed_mem_create`. These slab/managed
-		// functions now live in Internals (`stdlib.`-qualified in the cache); the
-		// late call fixups reference them bare, so seed them or a subprocess-using
-		// program with no other MM edge resolves the calls to .text+0.
-		// `computeNeededStdlibFunctions` bridges the bare seed to the qualified key.
-		seeds.push("__slab_alloc")
-		seeds.push("__slab_free")
-		seeds.push("__managed_mem_create")
-	end 'win32Helpers'
+	// Phase B1: the hand-rolled `mrt_win32_*` helpers (emitted after this link
+	// pass) reference runtime functions via late call fixups the reachability
+	// walk can't see yet. Seed those names explicitly (shared with the cache-off
+	// `filterRuntimeByReachability` win32 block AND the v80 eager-floor seed so
+	// every Windows program links the same set). Extracted to one helper so the
+	// three callers can't drift.
+	appendX64Win32RuntimeSeeds(seeds, os: os)
+
+	// v80 lazy codegen: on a metadata-only cold cache (and any partial warm
+	// cache) the functions transitively reachable from `seeds` may not yet have
+	// emitted bytecode. Compile (regalloc + emit) exactly those — and only those
+	// — into `stdlibCache.functions` BEFORE `computeNeededStdlibFunctions` reads
+	// it. No-op when the cache already carries every reachable function.
+	ensureStdlibFunctionsCompiled(project, seeds: seeds)
 
 	var needed = computeNeededStdlibFunctions(seeds, stdlibCache: stdlibCache)
 
@@ -464,6 +436,7 @@ function linkX64StdlibFunctionsConcat(code ByteArray, labelNames StringArray, la
 	// every Windows program already links).
 	if os == Os.windows and needed.contains("mrt_managed_socket_tcp_connect") 'netHelpers'
 		seeds.push("mrt_cstr_from_mm")
+		ensureStdlibFunctionsCompiled(project, seeds: seeds)
 		needed = computeNeededStdlibFunctions(seeds, stdlibCache: stdlibCache)
 	end 'netHelpers'
 

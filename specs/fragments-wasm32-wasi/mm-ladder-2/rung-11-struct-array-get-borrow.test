@@ -34,26 +34,26 @@ mm_move Array #1 -> return [main]
 mm_alloc Box #3 size=8 [Box.create]
 mm_incref Box #3 rc=1 [Box.create]
 mm_move Box #3 -> return [Box.create]
-mm_move Box #3 -> container
-mm_alloc <raw> #4 size=32
-mm_incref <raw> #4 rc=1
+mm_move Box #3 -> container [main]
+mm_alloc <raw> #4 size=32 [main]
+mm_incref <raw> #4 rc=1 [main]
 mm_alloc Box #5 size=8 [Box.create]
 mm_incref Box #5 rc=1 [Box.create]
 mm_move Box #5 -> return [Box.create]
-mm_move Box #5 -> container
+mm_move Box #5 -> container [main]
 mm_incref Box #3 rc=2 [first]
 mm_move Box #3 -> return [first]
-mm_decref Array #1 rc=0
-  mm_decref __ManagedMemory #2 rc=0
-    mm_decref Box #3 rc=1
-    mm_decref Box #5 rc=0
+mm_decref Array #1 rc=0 [main]
+  mm_decref __ManagedMemory #2 rc=0 [main]
+    mm_decref Box #3 rc=1 [main]
+    mm_decref Box #5 rc=0 [main]
       mm_free Box #5
-    mm_decref <raw> #4 rc=0
+    mm_decref <raw> #4 rc=0 [main]
       mm_free <raw> #4
     mm_free __ManagedMemory #2
   mm_free Array #1
-mm_move Box #3 -> phi
-mm_decref Box #3 rc=0
+mm_move Box #3 -> phi [main]
+mm_decref Box #3 rc=0 [main]
   mm_free Box #3
 ```
 ---
@@ -79,7 +79,7 @@ module {
   inlined_Array.get_3_0:
     %24 = mir.mov_imm 0 : i64
     mir.br __rc_edge_6_0()
-  inline_cont_first_0:
+  inline_cont_first_0(%25: i64, %26: i64):
     %8 = mir.cmp ne, %26, %1
     mir.cond_br %8 [then: try_0.otherwise(), else: try_0.merge()]
   try_0.otherwise:
@@ -131,7 +131,7 @@ module {
     %62 = mir.call @mm_move_container(%43)
     %14 = mir.call @Array.push(%4, %43, %13)
     %16, %17 = mir.try_call @first(%4)
-    %59 = mir.call @stdlib.__mm_decref(%4)
+    %59 = mir.call @__mm_decref_maybenull_helper(%4)
     %19 = mir.cmp ne, %17, %0
     %63 = mir.call @mm_move_phi(%16)
     mir.cond_br %19 [then: try_0.otherwise(), else: try_0.merge(%16)]
@@ -148,7 +148,7 @@ module {
     %55 = mir.call @mm_scope_pop()
     %64 = mir.call @mm_move_phi(%52)
     mir.br try_0.merge(%52)
-  try_0.merge:
+  try_0.merge(%28: i64):
     %25 = mir.load %28, 0 width: qword
     %60 = mir.call @__mm_decref_maybenull_helper(%28)
     %65 = mir.call @mm_scope_pop()

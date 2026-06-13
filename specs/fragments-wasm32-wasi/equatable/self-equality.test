@@ -28,20 +28,23 @@ ExitCode: 0
 module {
   func @main() -> u8 {
   entry:
-    %0 = mir.mov_imm 7 : i64
-    %7 = mir.mov_imm 8 : i64
-    %8 = mir.call @mrt_alloc(%7)
-    mir.store %0, %8, 0 width: qword
-    %9 = mir.load %8, 0 width: qword
-    %10 = mir.load %8, 0 width: qword
-    %11 = mir.cmp eq, %9, %10
-    mir.cond_br %11 [then: check_0(), else: check_0.after()]
+    %1 = mir.mov_imm 7 : i64
+    %8 = mir.mov_imm 8 : i64
+    %9 = mir.mov_imm 0 : i64
+    %10 = mir.mov_imm 0 : i64
+    %11 = mir.call @stdlib.__mm_alloc(%8, %9, %10)
+    mir.store %1, %11, 0 width: qword
+    %12 = mir.load %11, 0 width: qword
+    %13 = mir.load %11, 0 width: qword
+    %14 = mir.cmp eq, %12, %13
+    %15 = mir.call @mm_drop(%11)
+    mir.cond_br %14 [then: check_0(), else: check_0.after()]
   check_0:
-    %5 = mir.mov_imm 0 : i64
-    mir.ret %5
-  check_0.after:
-    %6 = mir.mov_imm 1 : i64
+    %6 = mir.mov_imm 0 : i64
     mir.ret %6
+  check_0.after:
+    %7 = mir.mov_imm 1 : i64
+    mir.ret %7
   }
 }
 ---

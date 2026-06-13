@@ -28,7 +28,7 @@ mm_incref Array #2 rc=1 [main]
 mm_alloc __ManagedMemory #3 size=48 [main]
 mm_incref __ManagedMemory #3 rc=1 [main]
 mm_move Array #2 -> return [main]
-mm_move Array #2 -> return
+mm_move Array #2 -> return [main]
 mm_alloc Array #4 size=8
 mm_incref Array #4 rc=1
 mm_alloc __ManagedMemory #5 size=48
@@ -199,24 +199,25 @@ module {
     %26 = mir.global_addr @__witness_int_Hashable
     %27 = mir.global_addr @__witness_int_Equatable
     %28, %29 = mir.try_call @Map.get(%42, %24, %25, %26, %27)
-    %110 = mir.call @mm_drop(%42)
     %30 = mir.mov_imm 0 : i64
     %31 = mir.cmp ne, %29, %30
     mir.cond_br %31 [then: try_0.otherwise(), else: try_0.merge()]
   try_0.otherwise:
+    %116 = mir.call @mm_drop(%42)
     %33 = mir.mov_imm 99 : i64
     %114 = mir.call @mm_scope_pop()
     mir.ret %33
   try_0.merge:
     %36 = mir.load %28, 0 width: qword
-    %111 = mir.call @stdlib.__mm_decref(%28)
+    %111 = mir.call @mm_drop(%42)
+    %110 = mir.call @__mm_decref_maybenull_helper(%28)
     %115 = mir.call @mm_scope_pop()
-    %116 = mir.mov_imm 125 : i64
-    %117 = mir.cmp ugt, %36, %116
-    mir.cond_br %117 [then: __range_panic_0(), else: __range_ok_0()]
+    %117 = mir.mov_imm 125 : i64
+    %118 = mir.cmp ugt, %36, %117
+    mir.cond_br %118 [then: __range_panic_0(), else: __range_ok_0()]
   __range_panic_0:
-    %118 = mir.global_addr @__panic_msg_08d7dd78af4f2445
-    %119 = mir.call @mrt_panic(%118)
+    %119 = mir.global_addr @__panic_msg_08d7dd78af4f2445
+    %120 = mir.call @mrt_panic(%119)
   __range_ok_0:
     mir.ret %36
   }

@@ -26,8 +26,8 @@ ExitCode: 42
 module {
   func @Branched.make(local0: i1) -> i64 {
   entry:
-    %9 = mir.param local0 : i1
-    mir.cond_br %9 [then: br_0(), else: other_0()]
+    %11 = mir.param local0 : i1
+    mir.cond_br %11 [then: br_0(), else: other_0()]
   br_0:
     %2 = mir.mov_imm 42 : i64
     mir.br br_0.merge(%2)
@@ -35,25 +35,29 @@ module {
     %3 = mir.mov_imm 42 : i64
     %4 = mir.neg.i64 %3
     mir.br br_0.merge(%4)
-  br_0.merge:
+  br_0.merge(%10: i64):
     %5 = mir.mov_imm 8 : i64
-    %6 = mir.call @mrt_alloc(%5)
-    mir.store %8, %6, 0 width: qword
+    %7 = mir.mov_imm 0 : i64
+    %8 = mir.mov_imm 0 : i64
+    %6 = mir.call @stdlib.__mm_alloc(%5, %7, %8)
+    %12 = mir.call @stdlib.__mm_incref(%6)
+    mir.store %10, %6, 0 width: qword
     mir.ret %6
   }
   func @main() -> u8 {
   entry:
-    %0 = mir.mov_imm 1 : i64
-    %1 = mir.call @Branched.make(%0)
-    %3 = mir.load %1, 0 width: qword
-    %4 = mir.mov_imm 125 : i64
-    %5 = mir.cmp ugt, %3, %4
-    mir.cond_br %5 [then: __range_panic_0(), else: __range_ok_0()]
+    %1 = mir.mov_imm 1 : i64
+    %2 = mir.call @Branched.make(%1)
+    %4 = mir.load %2, 0 width: qword
+    %5 = mir.call @__mm_decref_maybenull_helper(%2)
+    %6 = mir.mov_imm 125 : i64
+    %7 = mir.cmp ugt, %4, %6
+    mir.cond_br %7 [then: __range_panic_0(), else: __range_ok_0()]
   __range_panic_0:
-    %6 = mir.global_addr @__panic_msg_aeef911bfaa0ccd9
-    %7 = mir.call @mrt_panic(%6)
+    %8 = mir.global_addr @__panic_msg_aeef911bfaa0ccd9
+    %9 = mir.call @mrt_panic(%8)
   __range_ok_0:
-    mir.ret %3
+    mir.ret %4
   }
 }
 ---
