@@ -127,9 +127,9 @@ function releaseKindName(kind ReleaseKind) returns String
 	end 'name'
 end 'releaseKindName'
 
-export function insertRefcounts(module StdModule, funcParamConsumes FuncParamConsumesMap, funcReturnsConsumedArg FuncReturnsBorrowSet, funcReturnsBorrow FuncReturnsBorrowSet, funcReturnsReceiverInterior FuncReturnsBorrowSet, mmTrace bool = false) returns StdModule
+export function insertRefcounts(module StdModule, funcParamConsumes FuncParamConsumesMap, funcReturnsConsumedArg FuncReturnsBorrowSet, funcReturnsBorrow FuncReturnsBorrowSet, funcReturnsReceiverInterior FuncReturnsBorrowSet) returns StdModule
 	for func in module.functions 'eachFunc'
-		insertRefcountsInFunction(func, module: module, funcParamConsumes: funcParamConsumes, funcReturnsConsumedArg: funcReturnsConsumedArg, funcReturnsBorrow: funcReturnsBorrow, funcReturnsReceiverInterior: funcReturnsReceiverInterior, includeManaged: true, mmTrace: mmTrace)
+		insertRefcountsInFunction(func, module: module, funcParamConsumes: funcParamConsumes, funcReturnsConsumedArg: funcReturnsConsumedArg, funcReturnsBorrow: funcReturnsBorrow, funcReturnsReceiverInterior: funcReturnsReceiverInterior, includeManaged: true)
 	end 'eachFunc'
 
 	return module
@@ -150,7 +150,7 @@ export function insertTypeParamDrops(module StdModule) returns StdModule
 	let emptyReturnsBorrow = FuncReturnsBorrowSet.create()
 	let emptyReturnsInterior = FuncReturnsBorrowSet.create()
 	for func in module.functions 'eachFunc'
-		insertRefcountsInFunction(func, module: module, funcParamConsumes: emptyConsumes, funcReturnsConsumedArg: emptyReturnsConsumed, funcReturnsBorrow: emptyReturnsBorrow, funcReturnsReceiverInterior: emptyReturnsInterior, includeManaged: false, mmTrace: false)
+		insertRefcountsInFunction(func, module: module, funcParamConsumes: emptyConsumes, funcReturnsConsumedArg: emptyReturnsConsumed, funcReturnsBorrow: emptyReturnsBorrow, funcReturnsReceiverInterior: emptyReturnsInterior, includeManaged: false)
 	end 'eachFunc'
 
 	return module
@@ -160,7 +160,7 @@ end 'insertTypeParamDrops'
 // Per-function driver
 // ============================================================
 
-function insertRefcountsInFunction(func IrFunction, module StdModule, funcParamConsumes FuncParamConsumesMap, funcReturnsConsumedArg FuncReturnsBorrowSet, funcReturnsBorrow FuncReturnsBorrowSet, funcReturnsReceiverInterior FuncReturnsBorrowSet, includeManaged bool, mmTrace bool)
+function insertRefcountsInFunction(func IrFunction, module StdModule, funcParamConsumes FuncParamConsumesMap, funcReturnsConsumedArg FuncReturnsBorrowSet, funcReturnsBorrow FuncReturnsBorrowSet, funcReturnsReceiverInterior FuncReturnsBorrowSet, includeManaged bool)
 	if func.blockRefs.count() == 0 'empty'
 		return
 	end 'empty'
@@ -251,7 +251,7 @@ function insertRefcountsInFunction(func IrFunction, module StdModule, funcParamC
 	// closure borrows it by reference) and released at scope exit, not at the SSA store.
 	let addressTakenSlots = collectAddressTakenSlots(func, module: module)
 
-	var ctx = RcContext.create(func, module: module, cfg: cfg, rpo: rpo, domInfo: domInfo, liveness: liveness, idRef: idRef, paramValues: paramValues, returnedValues: returnedValues, globalAddrValues: globalAddrValues, transparentWrapResults: transparentWrapResults, borrowReturningCallResults: borrowReturningCallResults, addressTakenSlots: addressTakenSlots, entryBlockId: entryBlockId, numBlocks: numBlocks, layoutValueId: layoutValueId, includeManaged: includeManaged, mmTrace: mmTrace, funcParamConsumes: funcParamConsumes, funcReturnsConsumedArg: funcReturnsConsumedArg)
+	var ctx = RcContext.create(func, module: module, cfg: cfg, rpo: rpo, domInfo: domInfo, liveness: liveness, idRef: idRef, paramValues: paramValues, returnedValues: returnedValues, globalAddrValues: globalAddrValues, transparentWrapResults: transparentWrapResults, borrowReturningCallResults: borrowReturningCallResults, addressTakenSlots: addressTakenSlots, entryBlockId: entryBlockId, numBlocks: numBlocks, layoutValueId: layoutValueId, includeManaged: includeManaged, funcParamConsumes: funcParamConsumes, funcReturnsConsumedArg: funcReturnsConsumedArg)
 
 	// Per-value acquire analysis for `incomingOwner` values (the conditional rule;
 	// see `computeIncomingOwnerAcquire`). Must run BEFORE the acquire/release/phi
@@ -313,22 +313,7 @@ function insertRefcountsInFunction(func IrFunction, module StdModule, funcParamC
 		planPhiEdgeIncrefs(ctx)
 	end 'managedPhi'
 
-	// mm-trace only: queue trace-only `mm_move` markers at ownership-move sites.
-	// Pure instrumentation — never affects refcount correctness; gated on mmTrace
-	// so untraced builds emit identical IR. Managed domain only (a move transfers a
-	// managed +1).
-	if ctx.mmTrace and ctx.includeManaged 'moveTraces'
-		planMoveTraces(ctx)
-	end 'moveTraces'
-
 	applyPlans(ctx)
-
-	// mm-trace only: append the scope-stack pop at each ret AFTER applyPlans so it
-	// sits below every release/move at the terminator (the drop reads this frame;
-	// the pop then restores the caller's). No-op untraced / non-managed domain.
-	if ctx.mmTrace and ctx.includeManaged 'scopePops'
-		emitScopePopsAtRets(ctx)
-	end 'scopePops'
 
 	// Edge-death decrefs are applied last because they may SPLIT critical edges
 	// (adding blocks + rewriting terminators), which must not perturb the
@@ -516,11 +501,6 @@ type RcContext
 	// When false (stdlib type-param-only mode), the managed `mm_incref`/
 	// `mm_decref` domain is suppressed and only `sys.dropTypeParam` is emitted.
 	export var includeManaged as bool
-	// mm-trace on: emit trace-only `mm_move` markers at ownership-move sites
-	// (return / container-or-global-or-field store / phi transfer) so the trace
-	// shows where ownership transfers without a refcount op. No-op when false
-	// (untraced builds emit no move markers — keeps the IR identical).
-	export var mmTrace as bool
 	// Per-ValueId acquire decision for `incomingOwner` values (computed once per
 	// function by `computeIncomingOwnerAcquire`; see `incomingOwnerAcquiresCached`).
 	// `true` ⇒ this loaded-alias value takes a local owning +1 at its def (paired
@@ -545,7 +525,7 @@ type RcContext
 	// drop/retain call in the function — the entry block dominates all uses.
 	export var ordinalConstIds as ValueIdArray
 
-	static function create(func IrFunction, module StdModule, cfg CfgInfo, rpo RpoInfo, domInfo DomInfo, liveness StdLivenessInfo, idRef ValueIdRef, paramValues BoolArray, returnedValues BoolArray, globalAddrValues BoolArray, transparentWrapResults BoolArray, borrowReturningCallResults BoolArray, addressTakenSlots BoolArray, entryBlockId BlockId, numBlocks BlockId, layoutValueId ValueId, includeManaged bool, mmTrace bool, funcParamConsumes FuncParamConsumesMap, funcReturnsConsumedArg FuncReturnsBorrowSet) returns RcContext
+	static function create(func IrFunction, module StdModule, cfg CfgInfo, rpo RpoInfo, domInfo DomInfo, liveness StdLivenessInfo, idRef ValueIdRef, paramValues BoolArray, returnedValues BoolArray, globalAddrValues BoolArray, transparentWrapResults BoolArray, borrowReturningCallResults BoolArray, addressTakenSlots BoolArray, entryBlockId BlockId, numBlocks BlockId, layoutValueId ValueId, includeManaged bool, funcParamConsumes FuncParamConsumesMap, funcReturnsConsumedArg FuncReturnsBorrowSet) returns RcContext
 		return Self{
 			func: func,
 			module: module,
@@ -564,7 +544,6 @@ type RcContext
 			numBlocks: numBlocks,
 			layoutValueId: layoutValueId,
 			includeManaged: includeManaged,
-			mmTrace: mmTrace,
 			incomingOwnerAcquire: BoolArray.create(),
 			insertions: RcInsertionArray.create(),
 			edgeReleases: RcEdgeReleaseArray.create(),
@@ -3046,149 +3025,6 @@ function buildDropManagedOp(module StdModule, valueId ValueId, idRef ValueIdRef)
 	return opIdx
 end 'buildDropManagedOp'
 
-// mm-trace only: queue a trace-only `mm_move` marker at every ownership-move site.
-// A move is where a managed value's +1 transfers to a new owner WITHOUT a refcount
-// op — the inserter's `valueEscapes` chokepoint recognizes exactly three forms, and
-// this mirrors them so the trace shows each transfer:
-//   - body op that MOVES the value into a container/global/field (`mm_move ... -> container`)
-//   - terminator that MOVES the value into a successor phi (`mm_move ... -> phi`)
-//   - `ret` / `errorReturn` of the value (`mm_move ... -> return`)
-// Pure instrumentation: queued via the same `queueInsertion`/`applyPlans` machinery
-// as real refcount ops but with no refcount effect. Inserted BEFORE the moving op
-// (at its position) so the trace line prints just before the transfer happens.
-function planMoveTraces(ctx RcContext)
-	for blockRef in ctx.func.blockRefs 'eachBlock'
-		let block = try ctx.module.blocks.get(blockRef) otherwise continue
-		var pos = 0
-		for opIdx in block.opRefs 'eachOp'
-			let op = try ctx.module.ops.get(opIdx) otherwise continue
-			planMoveTraceForBodyOp(ctx, blockRef: blockRef, op: op, pos: pos)
-			pos = pos + 1
-		end 'eachOp'
-		if block.hasTerminatorOp() 'hasTerm'
-			planMoveTraceForTerminator(ctx, blockRef: blockRef, block: block)
-		end 'hasTerm'
-	end 'eachBlock'
-end 'planMoveTraces'
-
-// Queue an `mm_move ... -> container` for each managed operand this body op MOVES
-// into a container/global/field (mirrors the `opMovesValueIntoContainer` move set).
-function planMoveTraceForBodyOp(ctx RcContext, blockRef BlockRef, op StdOp, pos NodeIndex)
-	var argId = 0
-	while argId <= ctx.liveness.maxValueId 'eachArg'
-		if ctx.isManaged(argId) and opMovesValueIntoContainer(ctx, op: op, argId: argId) 'moved'
-			queueMoveTrace(ctx, blockRef: blockRef, pos: pos, valueId: argId, dest: MOVE_DEST_CONTAINER)
-		end 'moved'
-		argId = argId + 1
-	end 'eachArg'
-end 'planMoveTraceForBodyOp'
-
-// Queue an `mm_move ... -> return` for a returned managed value, or `... -> phi`
-// for a managed value carried into a successor phi, at the block's terminator. The
-// matching `mm_scope_pop()` is appended separately by `emitScopePopsAtRets` (after
-// applyPlans) so it lands strictly below this move.
-function planMoveTraceForTerminator(ctx RcContext, blockRef BlockRef, block IrBlock)
-	let term = try ctx.module.ops.get(block.terminatorIndex()) otherwise panic("planMoveTraceForTerminator: terminatorIndex not in module.ops")
-	let opCount = block.opRefs.count()
-	if let retValId = try returnedValueOfTerminator(term) 'isReturn'
-		if ctx.isManaged(retValId) 'managed'
-			queueMoveTrace(ctx, blockRef: blockRef, pos: opCount, valueId: retValId, dest: MOVE_DEST_RETURN)
-			return
-		end 'managed'
-	end 'isReturn'
-	// Phi move: any managed value carried into a successor block-arg phi.
-	var vid = 0
-	while vid <= ctx.liveness.maxValueId 'eachVal'
-		if ctx.isManaged(vid) and valueMovedIntoAnyPhi(ctx, block: block, vid: vid) 'phiMove'
-			queueMoveTrace(ctx, blockRef: blockRef, pos: opCount, valueId: vid, dest: MOVE_DEST_PHI)
-		end 'phiMove'
-		vid = vid + 1
-	end 'eachVal'
-end 'planMoveTraceForTerminator'
-
-// mm-trace only: append `mm_scope_pop()` as the LAST body op of every `ret`/
-// `errorReturn` block, balancing the function's entry `mm_scope_push`. Run AFTER
-// `applyPlans` so the pop is guaranteed below all queued releases/moves at the
-// terminator — the value's last-use drop/decref reads this frame (stack top), then
-// the pop restores the caller's frame for whatever runs after (the inlined-into
-// continuation). Appended directly (not queued) since it must be unconditionally
-// last and applyPlans' position machinery can't express "after everything".
-//
-// Only functions that ALSO carry an entry `mm_scope_push` get a balancing pop: this
-// per-function Std pass runs over the WHOLE module (user source + the linked stdlib
-// runtime), but only user-source functions receive the entry push (emitted by
-// `emitMmTraceScopePush` during `LowerMaxonToStd`, which never touches the precompiled
-// stdlib). Popping at the rets of a push-less stdlib trace helper (e.g.
-// `__mmTracePackedTag`) would net-pop the scope stack on every call, unwinding the
-// caller's frames so every subsequent trace line reads the wrong (or empty) scope.
-function emitScopePopsAtRets(ctx RcContext)
-	if not ctx.mmTrace 'untraced'
-		return
-	end 'untraced'
-	if not funcHasEntryScopePush(ctx) 'noEntryPush'
-		return
-	end 'noEntryPush'
-	for blockRef in ctx.func.blockRefs 'eachBlock'
-		var block = try ctx.module.blocks.get(blockRef) otherwise continue
-		if not block.hasTerminatorOp() 'noTerm'
-			continue
-		end 'noTerm'
-		let term = try ctx.module.ops.get(block.terminatorIndex()) otherwise continue
-		if not isRetOrErrorReturnTerminator(term) 'notRet'
-			continue
-		end 'notRet'
-		let resultId = allocValueId(ctx.idRef)
-		let popOpIdx = ctx.module.ops.count()
-		ctx.module.ops.push(StdOp.call(StdCallOp.call(resultId, callee: "mm_scope_pop", argIds: ValueIdArray.create())))
-		block.opRefs.append(popOpIdx)
-	end 'eachBlock'
-end 'emitScopePopsAtRets'
-
-// True iff the function's entry block contains a `mm_scope_push` call — i.e. it was
-// lowered from user source with a scope frame and therefore needs a balancing pop at
-// each ret. Precompiled stdlib functions never get the entry push, so they return
-// false and `emitScopePopsAtRets` leaves them untouched (see its note).
-function funcHasEntryScopePush(ctx RcContext) returns bool
-	let entryBlock = try ctx.module.blocks.get(blockRefForId(ctx, blockId: ctx.entryBlockId)) otherwise return false
-	for opIdx in entryBlock.opRefs 'eachOp'
-		let op = try ctx.module.ops.get(opIdx) otherwise continue
-		if opIsCallToCallee(op, name: "mm_scope_push") 'isPush'
-			return true
-		end 'isPush'
-	end 'eachOp'
-	return false
-end 'funcHasEntryScopePush'
-
-// True iff `op` is a plain `call` whose callee is exactly `name`.
-function opIsCallToCallee(op StdOp, name String) returns bool
-	return match op 'dispatch'
-		call(c) gives match c 'inner'
-			call(_, callee, _) gives callee == name
-			ret gives false
-			tryCall to errorReturn gives false
-		end 'inner'
-		arith gives false
-		control gives false
-		memory gives false
-		system gives false
-	end 'dispatch'
-end 'opIsCallToCallee'
-
-// True iff `term` is a `ret` or `errorReturn` terminator.
-function isRetOrErrorReturnTerminator(term StdOp) returns bool
-	return match term 'dispatch'
-		call(c) gives match c 'check'
-			ret gives true
-			errorReturn gives true
-			call to param gives false
-		end 'check'
-		arith gives false
-		control gives false
-		memory gives false
-		system gives false
-	end 'dispatch'
-end 'isRetOrErrorReturnTerminator'
-
 // The returned ValueId of a `ret`/`errorReturn` terminator. THROWS
 // `NotAReturnTerminator` for any other op rather than returning a sentinel:
 // `ValueId` is unsigned (`0 to u64.max`), so there is no in-range "absent" value,
@@ -3210,50 +3046,6 @@ end 'returnedValueOfTerminator'
 enum NotAReturnTerminator implements Error
 	notAReturn
 end 'NotAReturnTerminator'
-
-// Move-destination codes for `mm_move(value, dest)` — must match the
-// `__mm_move_trace` dest→literal mapping in stdlib/Internals.maxon
-// (0 → ` -> return`, 1 → ` -> container`, 2 → ` -> phi`).
-typealias MoveDestCode = int(0 to 2)
-
-let MOVE_DEST_RETURN = 0 as MoveDestCode
-let MOVE_DEST_CONTAINER = 1 as MoveDestCode
-let MOVE_DEST_PHI = 2 as MoveDestCode
-
-// Queue an `mm_move(value, dest)` trace-only marker — a no-runtime-effect line for
-// an ownership MOVE (the value's +1 transfers to a new owner with no refcount op).
-// Emits the runtime.std wrapper `mm_move` (bare name), seeded as a runtime-
-// reachability root in BOTH link legs like `mm_drop`, so its `call __mm_move_trace`
-// edge stays symmetric (cache parity) and the body DCEs to nothing in untraced
-// builds. The `dest` immediate needs its own `const` op; BOTH must be inserted into
-// the block (pushing the const to the op pool without a block placement leaves its
-// result vreg with a def but no live range → SSA-coloring panic). Both are queued
-// at the SAME `pos`: applyPlans inserts ties in reverse plan-order, so queuing the
-// const THEN the call lands them as `const, call` (the call inserted first at `pos`,
-// then the const inserted at `pos` pushes the call down). Using `pos`+`pos+1` would
-// break — applyPlans inserts descending, so `pos+1` is applied while the const is
-// not yet present (out-of-bounds at a terminator where pos == opCount). Callers gate
-// on `ctx.mmTrace`.
-function queueMoveTrace(ctx RcContext, blockRef BlockRef, pos NodeIndex, valueId ValueId, dest MoveDestCode)
-	let resultId = allocValueId(ctx.idRef)
-	var argIds = ValueIdArray.create()
-	argIds.push(valueId)
-	let callOpIdx = ctx.module.ops.count()
-	ctx.module.ops.push(StdOp.call(StdCallOp.call(resultId, callee: moveTraceCallee(dest), argIds: argIds)))
-	queueInsertion(ctx, blockRef: blockRef, pos: pos, opIdx: callOpIdx)
-end 'queueMoveTrace'
-
-// The runtime wrapper name for a move to `dest`. The destination is baked into the
-// callee (mm_move_return/container/phi) rather than a runtime operand, so there is no
-// `dest`-const ValueId to be misordered by regalloc at a branch terminator.
-function moveTraceCallee(dest MoveDestCode) returns String
-	return match dest 'pick'
-		0 gives "mm_move_return"
-		1 gives "mm_move_container"
-		2 gives "mm_move_phi"
-		default panic("moveTraceCallee: invalid dest {dest}")
-	end 'pick'
-end 'moveTraceCallee'
 
 // Build a `sys.dropTypeParam` for a generic type-parameter value, threading the
 // function's resolved implicit `__layout` descriptor ValueId. `ctx.layoutValueId`

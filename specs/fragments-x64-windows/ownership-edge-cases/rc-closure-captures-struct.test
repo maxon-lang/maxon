@@ -20,29 +20,7 @@ function main() returns ExitCode
 	return result
 end 'main'
 ---
-MmTrace: true
 ExitCode: 3
-Stderr: ```
-sl_init
-  os_alloc size=67108864
-mm_alloc Config #1 size=8 [Config.create]
-  sl_alloc Config #1 size=40 class=4
-mm_incref Config #1 rc=1 [Config.create]
-mm_transfer Config #1 rc=1 [Config.create]
-mm_alloc ClosureEnv #2 size=8 [main]
-  sl_alloc ClosureEnv #2 size=40 class=4
-mm_incref ClosureEnv #2 rc=1 [main]
-mm_decref Config #1 rc=0 [main]
-  mm_free Config #1
-    sl_free Config #1 size=48 class=4
-mm_decref ClosureEnv #2 rc=0 [main]
-  mm_free ClosureEnv #2
-    sl_free ClosureEnv #2 size=48 class=4
-mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R1
-  sl_free size=48 class=4
-```
 ---
 // CompiledIR
 module {
@@ -52,7 +30,7 @@ module {
     x64.mov [rbp-16], rcx
     x64.mov rcx, 8
     x64.xor edx, edx
-    x64.mov r8, 1
+    x64.mov r8, 42
     x64.call mm_alloc
     x64.mov [rbp-8], rax
     x64.mov rax, [rbp-8]
@@ -81,11 +59,11 @@ module {
     x64.mov rcx, 3
     x64.call Config.create
     x64.mov [rbp-8], rax
-    x64.lea_func rax, [_$closure_0]
+    x64.lea_func rax, [_$closure_1]
     x64.mov [rbp-24], rax
     x64.mov rcx, 8
     x64.xor edx, edx
-    x64.mov r8, 2
+    x64.mov r8, 41
     x64.call mm_alloc
     x64.lea rcx, [rbp-8]
     x64.mov rdx, rcx
@@ -124,20 +102,6 @@ module {
     x64.call mm_decref
     x64.label __nonnull_skip_1
     x64.mov rax, [rbp-32]
-    x64.epilogue
-    x64.ret
-  }
-  func @_$closure_0(_: i64, __env: i64) -> i64 {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rdx
-    x64.mov rax, [rbp-8]
-    x64.mov rbx, [rax+0]
-    x64.mov rax, [rbx+0]
-    x64.mov [rbp-16], rax
-    x64.mov rax, [rbp-16]
-    x64.mov rbx, [rax+0]
-    x64.mov rax, rbx
     x64.epilogue
     x64.ret
   }

@@ -350,15 +350,10 @@ export function appendX64Win32RuntimeSeeds(seeds StringArray, os Os)
 	seeds.push("mm_retain_type_param")
 	seeds.push("mm_retain_type_param_at")
 	seeds.push("mm_drop_type_param_at")
-	seeds.push("mm_move_return")
-	seeds.push("mm_move_container")
-	seeds.push("mm_move_phi")
-	seeds.push("mm_scope_push")
-	seeds.push("mm_scope_pop")
-	seeds.push("mm_trace_print_tag")
-	seeds.push("mm_trace_print_i64")
+	seeds.push("__diag_print_tag")
+	seeds.push("__diag_print_i64")
 	seeds.push("mrt_write_cstr_stderr")
-	seeds.push("mm_trace_print_hex")
+	seeds.push("__diag_print_hex")
 	seeds.push("__slab_alloc")
 	seeds.push("__slab_free")
 	seeds.push("__managed_mem_create")
@@ -5753,7 +5748,7 @@ end 'emitX64SubprocessResultStreamCopy'
 // clean panic line to stderr, and ExitProcess(1). Ports the C# bootstrap's
 // EmitGtFaultDiagnostic (X86CodeEmitter.Runtime.cs), simplified to the internal
 // runtime helpers this backend already links (mrt_write_cstr_stderr +
-// mm_trace_print_hex). Hand-emitted (not a runtime.std body) so the redirect can
+// __diag_print_hex). Hand-emitted (not a runtime.std body) so the redirect can
 // publish its absolute address and so no DCE root is needed for it.
 function emitX64GtFaultDiagnostic(code ByteArray, relocations RelocationArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, funcLabelNames StringArray, funcLabelOffsets CodeOffsetArray, funcLabelOffsetMap CodeLabelOffsetMap)
 	recordLabel(funcLabelNames, labelOffsets: funcLabelOffsets, labelOffsetMap: funcLabelOffsetMap, name: "__gt_fault_diagnostic", offset: code.count())
@@ -5767,12 +5762,12 @@ function emitX64GtFaultDiagnostic(code ByteArray, relocations RelocationArray, c
 	emitLeaRipRelOp(code, dest: X64Register.rcx, rdataLabel: "__gt_panic_msg_at_rip", rdataRelocs: rdataRelocs)
 	helperEmitDirectCall(code, callFixups: callFixups, target: "mrt_write_cstr_stderr")
 	helperLoadGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.rcx, name: "__gt_fault_rip")
-	helperEmitDirectCall(code, callFixups: callFixups, target: "mm_trace_print_hex")
+	helperEmitDirectCall(code, callFixups: callFixups, target: "__diag_print_hex")
 	// " addr=" <hex bad VA> (meaningful for access violations; 0 otherwise)
 	emitLeaRipRelOp(code, dest: X64Register.rcx, rdataLabel: "__gt_panic_msg_addr", rdataRelocs: rdataRelocs)
 	helperEmitDirectCall(code, callFixups: callFixups, target: "mrt_write_cstr_stderr")
 	helperLoadGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.rcx, name: "__gt_fault_last_addr")
-	helperEmitDirectCall(code, callFixups: callFixups, target: "mm_trace_print_hex")
+	helperEmitDirectCall(code, callFixups: callFixups, target: "__diag_print_hex")
 	// Trailing newline.
 	emitLeaRipRelOp(code, dest: X64Register.rcx, rdataLabel: "__gt_panic_msg_nl", rdataRelocs: rdataRelocs)
 	helperEmitDirectCall(code, callFixups: callFixups, target: "mrt_write_cstr_stderr")
@@ -6404,20 +6399,20 @@ function emitX64GtTraceEmit(code ByteArray, relocations RelocationArray, callFix
 	emitX64GtIatCallOnSystemStack(code, relocations: relocations, rdataRelocs: rdataRelocs, slotIndex: iatSlotIndex(IatSlot.enterCriticalSection))
 	// print tag, then value.
 	helperLoadSlot(code, slotIndex: 0, dest: X64Register.rcx)
-	helperEmitDirectCall(code, callFixups: callFixups, target: "mm_trace_print_tag")
+	helperEmitDirectCall(code, callFixups: callFixups, target: "__diag_print_tag")
 	helperLoadSlot(code, slotIndex: 1, dest: X64Register.rcx)
-	helperEmitDirectCall(code, callFixups: callFixups, target: "mm_trace_print_i64")
+	helperEmitDirectCall(code, callFixups: callFixups, target: "__diag_print_i64")
 	// optional suffix.
 	helperLoadSlot(code, slotIndex: 2, dest: X64Register.rax)
 	helperTestReg(code, reg: X64Register.rax)
 	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 1)  // jz no_suffix
 	helperLoadSlot(code, slotIndex: 2, dest: X64Register.rcx)
-	helperEmitDirectCall(code, callFixups: callFixups, target: "mm_trace_print_tag")
+	helperEmitDirectCall(code, callFixups: callFixups, target: "__diag_print_tag")
 
 	// block 1: newline, then LeaveCriticalSection.
 	helperMarkBlock(state, code: code, blockId: 1)
 	emitLeaRipRelOp(code, dest: X64Register.rcx, rdataLabel: "__at_tag_nl", rdataRelocs: rdataRelocs)
-	helperEmitDirectCall(code, callFixups: callFixups, target: "mm_trace_print_tag")
+	helperEmitDirectCall(code, callFixups: callFixups, target: "__diag_print_tag")
 	emitLeaRipRelOp(code, dest: X64Register.rcx, rdataLabel: "__at_trace_cs", rdataRelocs: rdataRelocs)
 	emitX64GtIatCallOnSystemStack(code, relocations: relocations, rdataRelocs: rdataRelocs, slotIndex: iatSlotIndex(IatSlot.leaveCriticalSection))
 

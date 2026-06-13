@@ -215,7 +215,6 @@ i8[] 10, 20, 30
 ```
 
 <!-- test: rdata-cow-mutation-copies-to-heap -->
-<!-- MmTrace -->
 ```maxon
 function main() returns ExitCode
 	var arr = [42]
@@ -225,31 +224,6 @@ end 'main'
 ```
 ```exitcode
 77
-```
-```stderr
-sl_init
-  os_alloc size=67108864
-mm_alloc __ManagedMemory #1 size=40 [main]
-  sl_alloc __ManagedMemory #1 size=72 class=6
-mm_alloc __Array_i64 #2 size=8 [main]
-  sl_alloc __Array_i64 #2 size=40 class=4
-mm_incref __ManagedMemory #1 rc=1 [main]
-mm_incref __Array_i64 #2 rc=1 [main]
-mm_raw_alloc #R1 size=8 [cow_copy]
-  sl_alloc size=8 class=0
-mm_cow __ManagedMemory #1 rc=1 size=8
-mm_decref __Array_i64 #2 rc=0 [main]
-  mm_decref __ManagedMemory #1 rc=0 [~__Array_i64]
-    mm_raw_free #R1
-      sl_free size=8 class=0
-    mm_free __ManagedMemory #1
-      sl_free __ManagedMemory #1 size=96 class=6
-  mm_free __Array_i64 #2
-    sl_free __Array_i64 #2 size=48 class=4
-mm_raw_alloc #R2 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R2
-  sl_free size=48 class=4
 ```
 ```RequiredRdata
 i64 42

@@ -33,37 +33,43 @@ module {
   entry:
     %1 = mir.mov_imm 10 : i64
     %2 = mir.mov_imm 20 : i64
-    %3 = mir.call @__construct_TestOp_add(%1, %2)
-    %5 = mir.load %3, 0 width: qword
+    %28 = mir.mov_imm 24 : i64
+    %29 = mir.mov_imm 0 : i64
+    %30 = mir.mov_imm 0 : i64
+    %31 = mir.call @stdlib.__mm_alloc(%28, %29)
+    mir.store %30, %31, 0 width: qword
+    mir.store %1, %31, 8 width: qword
+    mir.store %2, %31, 16 width: qword
+    %5 = mir.load %31, 0 width: qword
     %6 = mir.mov_imm 0 : i64
     %7 = mir.cmp eq, %5, %6
     mir.cond_br %7 [then: handle_0.case0(), else: handle_0.next0()]
   handle_0.case0:
-    %8 = mir.load %3, 8 width: qword
-    %9 = mir.load %3, 16 width: qword
+    %8 = mir.load %31, 8 width: qword
+    %9 = mir.load %31, 16 width: qword
     %12 = mir.add.i64 %8, %9
-    %28 = mir.call @__mm_decref_maybenull_helper(%3)
-    %31 = mir.mov_imm 125 : i64
-    %32 = mir.cmp ugt, %12, %31
-    mir.cond_br %32 [then: __range_panic_0(), else: __range_ok_0()]
+    %32 = mir.call @mm_drop(%31)
+    %35 = mir.mov_imm 125 : i64
+    %36 = mir.cmp ugt, %12, %35
+    mir.cond_br %36 [then: __range_panic_0(), else: __range_ok_0()]
   handle_0.next0:
-    %13 = mir.load %3, 0 width: qword
+    %13 = mir.load %31, 0 width: qword
     %14 = mir.mov_imm 1 : i64
     %15 = mir.cmp eq, %13, %14
     mir.cond_br %15 [then: handle_0.case1(), else: handle_0.next1()]
   handle_0.case1:
-    %16 = mir.load %3, 8 width: qword
-    %17 = mir.load %3, 16 width: qword
+    %16 = mir.load %31, 8 width: qword
+    %17 = mir.load %31, 16 width: qword
     %20 = mir.mul.i64 %16, %17
-    %29 = mir.call @__mm_decref_maybenull_helper(%3)
-    %35 = mir.mov_imm 125 : i64
-    %36 = mir.cmp ugt, %20, %35
-    mir.cond_br %36 [then: __range_panic_1(), else: __range_ok_1()]
+    %33 = mir.call @mm_drop(%31)
+    %39 = mir.mov_imm 125 : i64
+    %40 = mir.cmp ugt, %20, %39
+    mir.cond_br %40 [then: __range_panic_1(), else: __range_ok_1()]
   handle_0.next1:
-    %21 = mir.load %3, 0 width: qword
+    %21 = mir.load %31, 0 width: qword
     %22 = mir.mov_imm 2 : i64
     %23 = mir.cmp eq, %21, %22
-    %30 = mir.call @__mm_decref_maybenull_helper(%3)
+    %34 = mir.call @mm_drop(%31)
     mir.cond_br %23 [then: handle_0.case2(), else: handle_0.next2()]
   handle_0.case2:
     %24 = mir.mov_imm 0 : i64
@@ -74,13 +80,13 @@ module {
     %27 = mir.mov_imm 0 : i64
     mir.ret %27
   __range_panic_0:
-    %33 = mir.global_addr @__panic_msg_b7ee1995a3900875
-    %34 = mir.call @mrt_panic(%33)
+    %37 = mir.global_addr @__panic_msg_b7ee1995a3900875
+    %38 = mir.call @mrt_panic(%37)
   __range_ok_0:
     mir.ret %12
   __range_panic_1:
-    %37 = mir.global_addr @__panic_msg_b7ee1995a3900875
-    %38 = mir.call @mrt_panic(%37)
+    %41 = mir.global_addr @__panic_msg_b7ee1995a3900875
+    %42 = mir.call @mrt_panic(%41)
   __range_ok_1:
     mir.ret %20
   }

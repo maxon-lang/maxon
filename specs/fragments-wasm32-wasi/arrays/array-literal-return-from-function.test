@@ -24,46 +24,18 @@ ExitCode: 60
 module {
   func @makeNumbers() -> i64 {
   entry:
-    %15 = mir.mov_imm 8 : i64
-    %16 = mir.func_addr @__destruct_Array
-    %17 = mir.mov_imm 0 : i64
-    %18 = mir.call @stdlib.__mm_alloc(%15, %16, %17)
-    mir.br inlined_stdlib.__mm_incref_0_0()
-  inlined_stdlib.__mm_incref_0_0:
-    %26 = mir.mov_imm 8 : i64
-    %27 = mir.sub.i64 %18, %26
-    mir.atomic_inc %27
-    mir.br inline_cont_makeNumbers_0()
-  inline_cont_makeNumbers_0:
-    %20 = mir.mov_imm 48 : i64
-    %21 = mir.func_addr @stdlib.__destruct___ManagedMemory
-    %22 = mir.call @stdlib.__mm_alloc(%20, %21, %17)
-    mir.br inlined_stdlib.__mm_incref_0_1()
-  inlined_stdlib.__mm_incref_0_1:
-    %28 = mir.mov_imm 8 : i64
-    %29 = mir.sub.i64 %22, %28
-    mir.atomic_inc %29
-    mir.br inline_cont_makeNumbers_1()
-  inline_cont_makeNumbers_1:
-    mir.store %17, %22, 0 width: qword
-    mir.store %17, %22, 8 width: qword
-    mir.store %17, %22, 16 width: qword
-    %24 = mir.mov_imm 8 : i64
-    mir.store %24, %22, 24 width: qword
-    %25 = mir.mov_imm -1 : i64
-    mir.store %25, %22, 32 width: qword
-    mir.store %17, %22, 40 width: qword
-    mir.store %22, %18, 0 width: qword
+    %1 = mir.global_addr @__layout_Array_Integer
+    %2 = mir.call @Array.create(%1)
     %4 = mir.mov_imm 10 : i64
     %5 = mir.global_addr @__layout_Array_Integer
-    %6 = mir.call @Array.push(%18, %4, %5)
+    %6 = mir.call @Array.push(%2, %4, %5)
     %8 = mir.mov_imm 20 : i64
     %9 = mir.global_addr @__layout_Array_Integer
-    %10 = mir.call @Array.push(%18, %8, %9)
+    %10 = mir.call @Array.push(%2, %8, %9)
     %12 = mir.mov_imm 30 : i64
     %13 = mir.global_addr @__layout_Array_Integer
-    %14 = mir.call @Array.push(%18, %12, %13)
-    mir.ret %18
+    %14 = mir.call @Array.push(%2, %12, %13)
+    mir.ret %2
   }
   func @main() -> u8 {
   entry:

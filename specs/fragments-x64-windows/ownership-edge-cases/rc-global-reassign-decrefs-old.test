@@ -22,52 +22,7 @@ function main() returns ExitCode
 	return g.val
 end 'main'
 ---
-MmTrace: true
 ExitCode: 30
-Stderr: ```
-sl_init
-  os_alloc size=67108864
-mm_alloc State #1 size=8 [State.create]
-  sl_alloc State #1 size=40 class=4
-mm_incref State #1 rc=1 [State.create]
-mm_transfer State #1 rc=1 [State.create]
-mm_incref State #1 rc=2 [__module_init]
-mm_decref State #1 rc=1 [__module_init]
-mm_alloc State #2 size=8 [State.create]
-  sl_alloc State #2 size=40 class=4
-mm_incref State #2 rc=1 [State.create]
-mm_transfer State #2 rc=1 [State.create]
-mm_decref State #1 rc=0 [step]
-  mm_free State #1
-    sl_free State #1 size=48 class=4
-mm_incref State #2 rc=2 [step]
-mm_decref State #2 rc=1 [step]
-mm_alloc State #3 size=8 [State.create]
-  sl_alloc State #3 size=40 class=4
-mm_incref State #3 rc=1 [State.create]
-mm_transfer State #3 rc=1 [State.create]
-mm_decref State #2 rc=0 [step]
-  mm_free State #2
-    sl_free State #2 size=48 class=4
-mm_incref State #3 rc=2 [step]
-mm_decref State #3 rc=1 [step]
-mm_alloc State #4 size=8 [State.create]
-  sl_alloc State #4 size=40 class=4
-mm_incref State #4 rc=1 [State.create]
-mm_transfer State #4 rc=1 [State.create]
-mm_decref State #3 rc=0 [step]
-  mm_free State #3
-    sl_free State #3 size=48 class=4
-mm_incref State #4 rc=2 [step]
-mm_decref State #4 rc=1 [step]
-mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R1
-  sl_free size=48 class=4
-mm_decref State #4 rc=0 [__maxon_global_cleanup]
-  mm_free State #4
-    sl_free State #4 size=48 class=4
-```
 ---
 // CompiledIR
 module {
@@ -77,7 +32,7 @@ module {
     x64.mov [rbp-16], rcx
     x64.mov rcx, 8
     x64.xor edx, edx
-    x64.mov r8, 1
+    x64.mov r8, 38
     x64.call mm_alloc
     x64.mov [rbp-8], rax
     x64.mov rax, [rbp-8]
@@ -141,39 +96,6 @@ module {
     x64.call mrt_panic
   __range_ok_0:
     x64.mov rax, rdx
-    x64.epilogue
-    x64.ret
-  }
-  func @__module_init() {
-  entry:
-    x64.prologue stack_size=16
-    x64.xor ecx, ecx
-    x64.call State.create
-    x64.mov [rbp-8], rax
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rbp-8]
-    x64.call mm_incref
-    x64.mov rcx, [rbp-8]
-    x64.mov qword [rip+g], rcx
-    x64.mov rdx, [rbp-8]
-    x64.test rdx, rdx
-    x64.jz __nonnull_skip_0
-    x64.mov rcx, [rbp-8]
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.epilogue
-    x64.ret
-  }
-  func @__maxon_global_cleanup() {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov rax, qword [rip+g]
-    x64.mov [rbp-8], rax
-    x64.test rax, rax
-    x64.jz __nonnull_skip_0
-    x64.mov rcx, [rbp-8]
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
     x64.epilogue
     x64.ret
   }

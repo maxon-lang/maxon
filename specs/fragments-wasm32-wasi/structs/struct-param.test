@@ -31,35 +31,33 @@ module {
     %3 = mir.mov_imm 4 : i64
     %11 = mir.mov_imm 16 : i64
     %12 = mir.mov_imm 0 : i64
-    %13 = mir.mov_imm 0 : i64
-    %14 = mir.call @stdlib.__mm_alloc(%11, %12, %13)
-    mir.store %2, %14, 0 width: qword
-    mir.store %3, %14, 8 width: qword
+    %13 = mir.call @stdlib.__mm_alloc(%11, %12)
+    mir.store %2, %13, 0 width: qword
+    mir.store %3, %13, 8 width: qword
     %5 = mir.mov_imm 2 : i64
     %6 = mir.mov_imm 1 : i64
-    %15 = mir.mov_imm 16 : i64
-    %16 = mir.mov_imm 0 : i64
-    %17 = mir.mov_imm 0 : i64
-    %18 = mir.call @stdlib.__mm_alloc(%15, %16, %17)
-    mir.store %5, %18, 0 width: qword
-    mir.store %6, %18, 8 width: qword
-    %19 = mir.load %14, 0 width: qword
-    %20 = mir.load %18, 0 width: qword
-    %21 = mir.mul.i64 %19, %20
-    %22 = mir.load %14, 8 width: qword
-    %23 = mir.load %18, 8 width: qword
-    %24 = mir.mul.i64 %22, %23
-    %27 = mir.call @mm_drop(%18)
-    %26 = mir.call @mm_drop(%14)
-    %25 = mir.add.i64 %21, %24
-    %28 = mir.mov_imm 125 : i64
-    %29 = mir.cmp ugt, %25, %28
-    mir.cond_br %29 [then: __range_panic_0(), else: __range_ok_0()]
+    %14 = mir.mov_imm 16 : i64
+    %15 = mir.mov_imm 0 : i64
+    %16 = mir.call @stdlib.__mm_alloc(%14, %15)
+    mir.store %5, %16, 0 width: qword
+    mir.store %6, %16, 8 width: qword
+    %17 = mir.load %13, 0 width: qword
+    %18 = mir.load %16, 0 width: qword
+    %19 = mir.mul.i64 %17, %18
+    %20 = mir.load %13, 8 width: qword
+    %21 = mir.load %16, 8 width: qword
+    %22 = mir.mul.i64 %20, %21
+    %25 = mir.call @mm_drop(%16)
+    %24 = mir.call @mm_drop(%13)
+    %23 = mir.add.i64 %19, %22
+    %26 = mir.mov_imm 125 : i64
+    %27 = mir.cmp ugt, %23, %26
+    mir.cond_br %27 [then: __range_panic_0(), else: __range_ok_0()]
   __range_panic_0:
-    %30 = mir.global_addr @__panic_msg_8c94c4ae8dec10f2
-    %31 = mir.call @mrt_panic(%30)
+    %28 = mir.global_addr @__panic_msg_8c94c4ae8dec10f2
+    %29 = mir.call @mrt_panic(%28)
   __range_ok_0:
-    mir.ret %25
+    mir.ret %23
   }
 }
 ---

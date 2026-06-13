@@ -10,47 +10,19 @@ ExitCode: 32
 module {
   func @main() -> u8 {
   entry:
-    %7 = mir.mov_imm 8 : i64
-    %8 = mir.func_addr @__destruct_Array
-    %9 = mir.mov_imm 0 : i64
-    %10 = mir.call @stdlib.__mm_alloc(%7, %8, %9)
-    mir.br inlined_stdlib.__mm_incref_0_0()
-  inlined_stdlib.__mm_incref_0_0:
-    %18 = mir.mov_imm 8 : i64
-    %19 = mir.sub.i64 %10, %18
-    mir.atomic_inc %19
-    mir.br inline_cont_main_0()
-  inline_cont_main_0:
-    %12 = mir.mov_imm 48 : i64
-    %13 = mir.func_addr @stdlib.__destruct___ManagedMemory
-    %14 = mir.call @stdlib.__mm_alloc(%12, %13, %9)
-    mir.br inlined_stdlib.__mm_incref_0_1()
-  inlined_stdlib.__mm_incref_0_1:
-    %20 = mir.mov_imm 8 : i64
-    %21 = mir.sub.i64 %14, %20
-    mir.atomic_inc %21
-    mir.br inline_cont_main_1()
-  inline_cont_main_1:
-    mir.store %9, %14, 0 width: qword
-    mir.store %9, %14, 8 width: qword
-    mir.store %9, %14, 16 width: qword
-    %16 = mir.mov_imm 8 : i64
-    mir.store %16, %14, 24 width: qword
-    %17 = mir.mov_imm -1 : i64
-    mir.store %17, %14, 32 width: qword
-    mir.store %9, %14, 40 width: qword
-    mir.store %14, %10, 0 width: qword
-    %3 = mir.call @stdlib.sha256(%10)
-    %22 = mir.call @__mm_decref_maybenull_helper(%10)
+    %1 = mir.global_addr @__layout_Array_Byte
+    %2 = mir.call @Array.create(%1)
+    %3 = mir.call @stdlib.sha256(%2)
+    %7 = mir.call @__mm_decref_maybenull_helper(%2)
     %5 = mir.global_addr @__layout_Array_Byte
     %6 = mir.call @Array.count(%3, %5)
-    %23 = mir.call @__mm_decref_maybenull_helper(%3)
-    %24 = mir.mov_imm 125 : i64
-    %25 = mir.cmp ugt, %6, %24
-    mir.cond_br %25 [then: __range_panic_0(), else: __range_ok_0()]
+    %8 = mir.call @__mm_decref_maybenull_helper(%3)
+    %9 = mir.mov_imm 125 : i64
+    %10 = mir.cmp ugt, %6, %9
+    mir.cond_br %10 [then: __range_panic_0(), else: __range_ok_0()]
   __range_panic_0:
-    %26 = mir.global_addr @__panic_msg_e6cef440e2e60729
-    %27 = mir.call @mrt_panic(%26)
+    %11 = mir.global_addr @__panic_msg_e6cef440e2e60729
+    %12 = mir.call @mrt_panic(%11)
   __range_ok_0:
     mir.ret %6
   }

@@ -22,25 +22,7 @@ function main() returns ExitCode
 	return check(42)
 end 'main'
 ---
-MmTrace: true
 ExitCode: 42
-Stderr: ```
-sl_init
-  os_alloc size=67108864
-mm_alloc Config #1 size=8 [Config.create]
-  sl_alloc Config #1 size=40 class=4
-mm_incref Config #1 rc=1 [Config.create]
-mm_transfer Config #1 rc=1 [Config.create]
-mm_incref Config #1 rc=2 [__module_init]
-mm_decref Config #1 rc=1 [__module_init]
-mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R1
-  sl_free size=48 class=4
-mm_decref Config #1 rc=0 [__maxon_global_cleanup]
-  mm_free Config #1
-    sl_free Config #1 size=48 class=4
-```
 ---
 // CompiledIR
 module {
@@ -50,7 +32,7 @@ module {
     x64.mov [rbp-16], rcx
     x64.mov rcx, 8
     x64.xor edx, edx
-    x64.mov r8, 1
+    x64.mov r8, 8
     x64.call mm_alloc
     x64.mov [rbp-8], rax
     x64.mov rax, [rbp-8]
@@ -99,39 +81,6 @@ module {
     x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_0:
-    x64.epilogue
-    x64.ret
-  }
-  func @__module_init() {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov rcx, 10
-    x64.call Config.create
-    x64.mov [rbp-8], rax
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rbp-8]
-    x64.call mm_incref
-    x64.mov rcx, [rbp-8]
-    x64.mov qword [rip+cfg], rcx
-    x64.mov rdx, [rbp-8]
-    x64.test rdx, rdx
-    x64.jz __nonnull_skip_0
-    x64.mov rcx, [rbp-8]
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.epilogue
-    x64.ret
-  }
-  func @__maxon_global_cleanup() {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov rax, qword [rip+cfg]
-    x64.mov [rbp-8], rax
-    x64.test rax, rax
-    x64.jz __nonnull_skip_0
-    x64.mov rcx, [rbp-8]
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
     x64.epilogue
     x64.ret
   }

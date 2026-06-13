@@ -49,24 +49,12 @@ export type MaxonArgs
 	export var updateRequired as bool
 	export var verbose as bool
 	export var coverage as bool
-	// `--mm-trace`: compile with the mm-trace runtime materialized (so the exe
-	// prints the alloc/incref/decref/drop/free trace to stderr) AND bypass the
-	// stdlib native cache so stdlib is re-lowered through the user pipeline with
-	// tracing on. This mirrors the spec runner's MmTrace path exactly, so a
-	// `maxon build --mm-trace <file>` reproduces (and lets you debug) trace and
-	// cache-bypass behavior standalone.
-	export var mmTrace as bool
 	// `maxon build --leak-check <file>` wires the process-exit leak gate
 	// (`mrt_leak_check`) into the binary so it exits 101 if any allocation is
 	// still live at exit. The spec runner enables this internally; this flag
-	// lets you reproduce/debug a leak-gated build standalone (unlike --mm-trace,
-	// it does NOT bypass the stdlib cache, so it reproduces the cached-build path).
+	// lets you reproduce/debug a leak-gated build standalone. It does NOT bypass
+	// the stdlib cache, so it reproduces the cached-build path.
 	export var leakCheck as bool
-	// `maxon build --no-stdlib-cache <file>` bypasses the on-disk stdlib native
-	// cache so the stdlib re-lowers through the user pipeline from source —
-	// the cache-free leg `--mm-trace` uses, WITHOUT trace materialization.
-	// Diagnostic flag for attributing cached-vs-from-source divergence.
-	export var noStdlibCache as bool
 	// Print per-pass wall-clock timings at the end of the run. Useful for
 	// understanding where compile time is being spent during spec runs.
 	export var profilePasses as bool
@@ -87,13 +75,6 @@ export type MaxonArgs
 	// run via the per-fragment path (used when the batch rewriter rejected
 	// them mid-batch). Subprocess-isolated to contain compile-time panics.
 	export var workerFallback as String
-	// Phase 0b regalloc roadmap: comma-separated list of stdlib function
-	// names whose source file should be dropped from the stdlib cache
-	// before warmStdlibCache runs. Used to bypass functions that the
-	// self-hosted register allocator currently mis-compiles (notably
-	// `sha256`) so the rest of the spec suite can run while the allocator
-	// is being fixed. Empty = default strict behavior.
-	export var skipStdlibFns as String
 
 	export static function parse() returns MaxonArgs throws ArgError
 		let allArgs = CommandLine.args()
@@ -111,16 +92,13 @@ export type MaxonArgs
 			updateRequired: false,
 			verbose: false,
 			coverage: false,
-			mmTrace: false,
 			leakCheck: false,
-			noStdlibCache: false,
 			profilePasses: false,
 			workers: 12,
 			workerPersistent: false,
 			workerSpec: "",
 			workerSingles: "",
-			workerFallback: "",
-			skipStdlibFns: ""
+			workerFallback: ""
 		}
 
 		if allArgs.count() < 2 'noArgs'
@@ -174,13 +152,9 @@ export type MaxonArgs
 				args.targetOption = try parseTargetOption(targetStr) otherwise throw ArgError.invalidOption(arg)
 			end 'isTarget' else if arg == "--emit-ir" 'isEmitIr'
 				args.emitIr = true
-			end 'isEmitIr' else if arg == "--mm-trace" 'isMmTrace'
-				args.mmTrace = true
-			end 'isMmTrace' else if arg == "--leak-check" 'isLeakCheck'
+			end 'isEmitIr' else if arg == "--leak-check" 'isLeakCheck'
 				args.leakCheck = true
-			end 'isLeakCheck' else if arg == "--no-stdlib-cache" 'isNoStdlibCache'
-				args.noStdlibCache = true
-			end 'isNoStdlibCache' else if arg == "--dump-stages" 'isDumpStages'
+			end 'isLeakCheck' else if arg == "--dump-stages" 'isDumpStages'
 				args.dumpStages = true
 			end 'isDumpStages' else if arg.startsWith("--dump-stages=") 'isDumpStagesFiltered'
 				// Sentinel: an empty NAMES list means "dump every stage" — same
@@ -220,10 +194,7 @@ export type MaxonArgs
 				args.workerSingles = try CommandLine.optionValue(arg) otherwise ""
 			end 'isWorkerSingles' else if arg.startsWith("--worker-fallback=") 'isWorkerFallback'
 				args.workerFallback = try CommandLine.optionValue(arg) otherwise ""
-			end 'isWorkerFallback' else if arg.startsWith("--skip-stdlib-fn=") 'isSkipStdlibFn'
-				// Sentinel: empty value means no functions skipped — same as omitting the flag.
-				args.skipStdlibFns = try CommandLine.optionValue(arg) otherwise ""
-			end 'isSkipStdlibFn' else if not arg.startsWith("--") 'isPositional'
+			end 'isWorkerFallback' else if not arg.startsWith("--") 'isPositional'
 				args.path = arg
 			end 'isPositional'
 		end 'scan'

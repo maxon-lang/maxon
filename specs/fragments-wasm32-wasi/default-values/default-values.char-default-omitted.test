@@ -17,10 +17,10 @@ A
 module {
   func @initial(local0: i64) -> u8 {
   entry:
-    %32 = mir.param local0 : i64
+    %31 = mir.param local0 : i64
     %2 = mir.global_addr @__istr_0
     %3 = mir.mov_imm 0 : i64
-    %4 = mir.load %32, 0 width: qword
+    %4 = mir.load %31, 0 width: qword
     %5 = mir.load %4, 0 width: qword
     %6 = mir.load %4, 8 width: qword
     %7 = mir.global_addr @__istr_0
@@ -47,16 +47,16 @@ module {
     mir.store %24, %21, 32 width: qword
     %26 = mir.mov_imm 16 : i64
     %27 = mir.func_addr @__destruct_String
-    %25 = mir.call @stdlib.__mm_alloc(%26, %27, %3)
+    %25 = mir.call @stdlib.__mm_alloc(%26, %27)
     mir.store %21, %25, 0 width: qword
     mir.store %3, %25, 8 width: qword
-    %33 = mir.load %25, 0 width: qword
-    %37 = mir.call @stdlib.__mm_incref(%33)
-    %34 = mir.load %33, 0 width: qword
-    %35 = mir.load %33, 8 width: qword
-    %36 = mir.call @mrt_write_stdout(%34, %35)
-    %39 = mir.call @mm_drop(%25)
-    %38 = mir.call @__mm_decref_maybenull_helper(%33)
+    %32 = mir.load %25, 0 width: qword
+    %36 = mir.call @stdlib.__mm_incref(%32)
+    %33 = mir.load %32, 0 width: qword
+    %34 = mir.load %32, 8 width: qword
+    %35 = mir.call @mrt_write_stdout(%33, %34)
+    %38 = mir.call @mm_drop(%25)
+    %37 = mir.call @__mm_decref_maybenull_helper(%32)
     mir.ret %3
   }
   func @main() -> u8 {
@@ -81,19 +81,18 @@ module {
     mir.store %10, %5, 32 width: qword
     %12 = mir.mov_imm 8 : i64
     %13 = mir.func_addr @__destruct_Character
-    %14 = mir.mov_imm 0 : i64
-    %11 = mir.call @stdlib.__mm_alloc(%12, %13, %14)
+    %11 = mir.call @stdlib.__mm_alloc(%12, %13)
     mir.store %5, %11, 0 width: qword
-    %15 = mir.call @initial(%11)
-    %16 = mir.call @mm_drop(%11)
-    %17 = mir.mov_imm 125 : i64
-    %18 = mir.cmp ugt, %15, %17
-    mir.cond_br %18 [then: __range_panic_0(), else: __range_ok_0()]
+    %14 = mir.call @initial(%11)
+    %15 = mir.call @mm_drop(%11)
+    %16 = mir.mov_imm 125 : i64
+    %17 = mir.cmp ugt, %14, %16
+    mir.cond_br %17 [then: __range_panic_0(), else: __range_ok_0()]
   __range_panic_0:
-    %19 = mir.global_addr @__panic_msg_9ed8bbaaafbf6f04
-    %20 = mir.call @mrt_panic(%19)
+    %18 = mir.global_addr @__panic_msg_9ed8bbaaafbf6f04
+    %19 = mir.call @mrt_panic(%18)
   __range_ok_0:
-    mir.ret %15
+    mir.ret %14
   }
 }
 ---

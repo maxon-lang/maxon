@@ -56,37 +56,36 @@ module {
     %15 = mir.mov_imm 16 : i64
     %16 = mir.mov_imm 0 : i64
     %17 = mir.mov_imm 1 : i64
-    %18 = mir.mov_imm 0 : i64
-    %19 = mir.call @stdlib.__mm_alloc(%15, %16, %18)
-    mir.store %17, %19, 0 width: qword
-    mir.store %1, %19, 8 width: qword
-    %4 = mir.load %19, 0 width: qword
+    %18 = mir.call @stdlib.__mm_alloc(%15, %16)
+    mir.store %17, %18, 0 width: qword
+    mir.store %1, %18, 8 width: qword
+    %4 = mir.load %18, 0 width: qword
     %5 = mir.mov_imm 1 : i64
     %6 = mir.cmp eq, %4, %5
     mir.cond_br %6 [then: mutate_0.case0(), else: mutate_0.next0()]
   mutate_0.merge:
-    %8 = mir.call @readValue(%19)
-    %20 = mir.call @mm_drop(%19)
-    %22 = mir.mov_imm 125 : i64
-    %23 = mir.cmp ugt, %8, %22
-    mir.cond_br %23 [then: __range_panic_0(), else: __range_ok_0()]
+    %8 = mir.call @readValue(%18)
+    %19 = mir.call @mm_drop(%18)
+    %21 = mir.mov_imm 125 : i64
+    %22 = mir.cmp ugt, %8, %21
+    mir.cond_br %22 [then: __range_panic_0(), else: __range_ok_0()]
   mutate_0.case0:
-    %9 = mir.load %19, 8 width: qword
+    %9 = mir.load %18, 8 width: qword
     %10 = mir.mov_imm 99 : i64
-    mir.store %10, %19, 8 width: qword
+    mir.store %10, %18, 8 width: qword
     mir.br mutate_0.merge()
   mutate_0.next0:
-    %11 = mir.load %19, 0 width: qword
+    %11 = mir.load %18, 0 width: qword
     %12 = mir.mov_imm 0 : i64
     %13 = mir.cmp eq, %11, %12
     mir.cond_br %13 [then: mutate_0.case1(), else: mutate_0.merge()]
   mutate_0.case1:
-    %21 = mir.call @mm_drop(%19)
+    %20 = mir.call @mm_drop(%18)
     %14 = mir.mov_imm 0 : i64
     mir.ret %14
   __range_panic_0:
-    %24 = mir.global_addr @__panic_msg_c38c03073893ee3f
-    %25 = mir.call @mrt_panic(%24)
+    %23 = mir.global_addr @__panic_msg_c38c03073893ee3f
+    %24 = mir.call @mrt_panic(%23)
   __range_ok_0:
     mir.ret %8
   }

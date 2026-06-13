@@ -885,17 +885,6 @@ function filterRuntimeByReachability(runtime StdModule, userModule StdModule, ta
 		// retain/drop through its OWN heap-ref bit). Same symmetric seeding.
 		seedRuntimeReachName("mm_retain_type_param_at", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
 		seedRuntimeReachName("mm_drop_type_param_at", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
-		// `mm_move_{return,container,phi}` (the insert-refcounts trace-only ownership-
-		// move markers; destination baked into the callee) — same symmetric-seed
-		// treatment as `mm_drop` so both link legs pull `__mm_move_trace`.
-		seedRuntimeReachName("mm_move_return", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
-		seedRuntimeReachName("mm_move_container", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
-		seedRuntimeReachName("mm_move_phi", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
-		// `mm_scope_push`/`mm_scope_pop` (mm-trace scope-stack frame bracketing) —
-		// same symmetric-seed treatment so `__mm_scope_push`/`__mm_scope_pop` land in
-		// both legs and an untraced program keeps cache parity.
-		seedRuntimeReachName("mm_scope_push", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
-		seedRuntimeReachName("mm_scope_pop", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
 		// `mrt_alloc_with_dtor` is seeded UNCONDITIONALLY in the cache-on link
 		// path (`linkX64StdlibFunctionsConcat`'s win32 block) because the
 		// hand-emitted `__ManagedSocket` wrap calls it via a late fixup. To keep
@@ -910,21 +899,21 @@ function filterRuntimeByReachability(runtime StdModule, userModule StdModule, ta
 		// at runtime by `__at_trace_enabled`, so they never execute in a normal
 		// build). No other call edge reaches them in a non-async-trace program, so
 		// seed them here or the fixups resolve to .text+0 ("Unresolved label").
-		seedRuntimeReachName("mm_trace_print_tag", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
-		seedRuntimeReachName("mm_trace_print_i64", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
+		seedRuntimeReachName("__diag_print_tag", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
+		seedRuntimeReachName("__diag_print_i64", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
 		// The CPU-fault diagnostic (`emitX64GtFaultDiagnostic`, also hand-rolled
 		// unconditionally on x64-Windows) emits `call rel32` fixups to these two
 		// `.std` helpers to render its panic line. Same late-emission invisibility as
 		// the async-trace helpers above, so seed them here for the cache-off leg.
 		seedRuntimeReachName("mrt_write_cstr_stderr", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
-		seedRuntimeReachName("mm_trace_print_hex", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
+		seedRuntimeReachName("__diag_print_hex", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
 		// `patchMrtStartCallGtInit` (in `augmentWithRuntime`) injects `call __gt_init`
 		// into `mrt_start` AFTER this reachability walk, so the call edge is invisible
 		// here. Seed the `__gt_init` signature-only stub so its (arity, return-type) is
 		// in `allFunctions` for the MIR→x64 lowering of that call, and so the runtime
 		// module keeps it on the cache-off leg (the hand-emitted `emitX64GtInit`
 		// overrides the label, but the stub must survive the filter to supply the sig).
-		// The stub body also transitively anchors mrt_write_cstr_stderr / mm_trace_print_hex.
+		// The stub body also transitively anchors mrt_write_cstr_stderr / __diag_print_hex.
 		seedRuntimeReachName("__gt_init", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
 		// `patchMrtStartCallIoInit` / `patchMrtStartCallIoShutdown` inject `call __io_init`
 		// and `call __io_shutdown` into `mrt_start` AFTER this walk (same invisibility as
@@ -997,8 +986,8 @@ function filterRuntimeByReachability(runtime StdModule, userModule StdModule, ta
 		// wasm (`augmentWithRuntime`; `cacheHasRuntimeBodies` is false here), so
 		// the emitter's `computeNeededWasmStdlibFunctions` walks the kept runtime
 		// bodies and pulls in stdlib functions reached ONLY through runtime→stdlib
-		// edges (e.g. `mrt_alloc`→`__mm_alloc`→`__mmTraceAllocLine`→
-		// `__mmTracePackedTag`, whose body statically calls `mrt_panic`). The DCE
+		// edges (e.g. `mrt_alloc`→`__mm_alloc`→`__slab_alloc`, whose body
+		// statically calls `mrt_panic`). The DCE
 		// seed above sees only the pre-merge user module, so without these extra
 		// seeds its needed-stdlib set is a strict subset of the emitter's — and a
 		// runtime helper referenced only by such a stdlib body (`mrt_panic`) gets

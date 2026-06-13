@@ -1272,7 +1272,6 @@ end 'main'
 ```
 
 <!-- test: try-block.inline-managed-arg-throws -->
-<!-- MmTrace -->
 Regression: a bare throwing call inside a try-block whose argument is an
 inline allocation (`workFunc(IntArray.create())`) must release the
 argument's allocation when the call throws. Previously the argument was
@@ -1309,25 +1308,4 @@ end 'main'
 ```
 ```exitcode
 42
-```
-```stderr
-sl_init
-  os_alloc size=67108864
-mm_alloc __ManagedMemory_Idx #1 size=40 [IntArray.create]
-  sl_alloc __ManagedMemory_Idx #1 size=72 class=6
-mm_alloc IntArray #2 size=8 [IntArray.create]
-  sl_alloc IntArray #2 size=40 class=4
-mm_incref __ManagedMemory_Idx #1 rc=1 [IntArray.create]
-mm_incref IntArray #2 rc=1 [IntArray.create]
-mm_transfer IntArray #2 rc=1 [IntArray.create]
-mm_decref IntArray #2 rc=0 [main]
-  mm_decref __ManagedMemory_Idx #1 rc=0 [~IntArray]
-    mm_free __ManagedMemory_Idx #1
-      sl_free __ManagedMemory_Idx #1 size=96 class=6
-  mm_free IntArray #2
-    sl_free IntArray #2 size=48 class=4
-mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R1
-  sl_free size=48 class=4
 ```

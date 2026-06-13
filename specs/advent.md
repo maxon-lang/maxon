@@ -87,6 +87,17 @@ module {
 }
 ```
 
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    mir.ret %0
+  }
+}
+
+```
+
 <!-- test: day2 -->
 ```maxon
 
@@ -293,6 +304,17 @@ module {
 }
 ```
 
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %3 = mir.mov_imm 7 : i64
+    mir.ret %3
+  }
+}
+
+```
+
 <!-- test: day4a -->
 <!-- Args: 1 -->
 ```maxon
@@ -360,7 +382,6 @@ module {
     x64.mov [r8+32], r13 (8b)
     x64.lea rdx, [rip+__destruct_String]
     x64.mov ecx, 16
-    x64.mov rax, r13
     x64.call stdlib.__mm_alloc
     x64.mov [rbp+-16], r8
     x64.mov rcx, [rbp+-16]
@@ -1635,6 +1656,79 @@ module {
 }
 ```
 
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %2 = mir.call @CommandLine.args()
+    %4 = mir.mov_imm 1 : i64
+    mir.br inlined_Array.get_0_0()
+  inlined_Array.get_0_0:
+    %40 = mir.load %2, 0 width: qword
+    %41, %42 = mir.try_call @stdlib.__managed_mem_get(%40, %4)
+    %43 = mir.mov_imm 0 : i64
+    %44 = mir.cmp ne, %42, %43
+    mir.cond_br %44 [then: inlined_Array.get_1_0(), else: inlined_Array.get_3_0()]
+  inlined_Array.get_1_0:
+    %54 = mir.call @__mm_decref_maybenull_helper(%2)
+    %45 = mir.mov_imm 0 : i64
+    %46 = mir.mov_imm 1 : i64
+    mir.br inline_cont_main_0(%45, %46)
+  inlined_Array.get_3_0:
+    %47 = mir.mov_imm 0 : i64
+    mir.br __rc_edge_11_0()
+  inline_cont_main_0(%48: i64, %49: i64):
+    %9 = mir.cmp ne, %49, %0
+    mir.cond_br %9 [then: try_0.otherwise(), else: try_0.merge(%48)]
+  try_0.otherwise:
+    %55 = mir.call @__mm_decref_maybenull_helper(%48)
+    %11 = mir.global_addr @__istr_0
+    %12 = mir.mov_imm 48 : i64
+    %13 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %14 = mir.call @mrt_alloc_with_dtor(%12, %13)
+    mir.store %0, %14, 40 width: qword
+    mir.store %11, %14, 0 width: qword
+    mir.store %0, %14, 8 width: qword
+    %17 = mir.mov_imm -2 : i64
+    mir.store %17, %14, 16 width: qword
+    %18 = mir.mov_imm 1 : i64
+    mir.store %18, %14, 24 width: qword
+    mir.store %0, %14, 32 width: qword
+    %21 = mir.mov_imm 16 : i64
+    %22 = mir.func_addr @__destruct_String
+    %20 = mir.call @stdlib.__mm_alloc(%21, %22)
+    %52 = mir.call @stdlib.__mm_incref(%20)
+    mir.store %14, %20, 0 width: qword
+    %23 = mir.mov_imm 1 : i64
+    mir.store %23, %20, 8 width: qword
+    mir.br try_0.merge(%20)
+  try_0.merge(%38: i64):
+    %25, %26 = mir.try_call @stdlib.__int_fromString(%38)
+    %53 = mir.call @__mm_decref_maybenull_helper(%38)
+    %28 = mir.cmp ne, %26, %0
+    mir.cond_br %28 [then: try_1.merge(%0), else: try_1.ok()]
+  try_1.ok:
+    mir.br try_1.merge(%25)
+  try_1.merge(%39: i64):
+    %33 = mir.mov_imm 1000 : i64
+    %34 = mir.cmp gt, %39, %33
+    mir.cond_br %34 [then: guard_0(), else: guard_0.after()]
+  guard_0:
+    %35 = mir.mov_imm 99 : i64
+    mir.ret %35
+  guard_0.after:
+    %51 = mir.mov_imm 3 : i64
+    mir.ret %51
+  __rc_edge_11_0:
+    %56 = mir.call @stdlib.__mm_incref(%41)
+    %57 = mir.call @__mm_decref_maybenull_helper(%2)
+    mir.br inline_cont_main_0(%41, %47)
+  }
+}
+
+```
+
 <!-- test: day4b -->
 <!-- Args: 3 -->
 ```maxon
@@ -1702,7 +1796,6 @@ module {
     x64.mov [r8+32], r13 (8b)
     x64.lea rdx, [rip+__destruct_String]
     x64.mov ecx, 16
-    x64.mov rax, r13
     x64.call stdlib.__mm_alloc
     x64.mov [rbp+-16], r8
     x64.mov rcx, [rbp+-16]
@@ -2984,4 +3077,77 @@ module {
     x64.ret
   }
 }
+```
+
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %2 = mir.call @CommandLine.args()
+    %4 = mir.mov_imm 1 : i64
+    mir.br inlined_Array.get_0_0()
+  inlined_Array.get_0_0:
+    %40 = mir.load %2, 0 width: qword
+    %41, %42 = mir.try_call @stdlib.__managed_mem_get(%40, %4)
+    %43 = mir.mov_imm 0 : i64
+    %44 = mir.cmp ne, %42, %43
+    mir.cond_br %44 [then: inlined_Array.get_1_0(), else: inlined_Array.get_3_0()]
+  inlined_Array.get_1_0:
+    %54 = mir.call @__mm_decref_maybenull_helper(%2)
+    %45 = mir.mov_imm 0 : i64
+    %46 = mir.mov_imm 1 : i64
+    mir.br inline_cont_main_0(%45, %46)
+  inlined_Array.get_3_0:
+    %47 = mir.mov_imm 0 : i64
+    mir.br __rc_edge_11_0()
+  inline_cont_main_0(%48: i64, %49: i64):
+    %9 = mir.cmp ne, %49, %0
+    mir.cond_br %9 [then: try_0.otherwise(), else: try_0.merge(%48)]
+  try_0.otherwise:
+    %55 = mir.call @__mm_decref_maybenull_helper(%48)
+    %11 = mir.global_addr @__istr_0
+    %12 = mir.mov_imm 48 : i64
+    %13 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %14 = mir.call @mrt_alloc_with_dtor(%12, %13)
+    mir.store %0, %14, 40 width: qword
+    mir.store %11, %14, 0 width: qword
+    mir.store %0, %14, 8 width: qword
+    %17 = mir.mov_imm -2 : i64
+    mir.store %17, %14, 16 width: qword
+    %18 = mir.mov_imm 1 : i64
+    mir.store %18, %14, 24 width: qword
+    mir.store %0, %14, 32 width: qword
+    %21 = mir.mov_imm 16 : i64
+    %22 = mir.func_addr @__destruct_String
+    %20 = mir.call @stdlib.__mm_alloc(%21, %22)
+    %52 = mir.call @stdlib.__mm_incref(%20)
+    mir.store %14, %20, 0 width: qword
+    %23 = mir.mov_imm 1 : i64
+    mir.store %23, %20, 8 width: qword
+    mir.br try_0.merge(%20)
+  try_0.merge(%38: i64):
+    %25, %26 = mir.try_call @stdlib.__int_fromString(%38)
+    %53 = mir.call @__mm_decref_maybenull_helper(%38)
+    %28 = mir.cmp ne, %26, %0
+    mir.cond_br %28 [then: try_1.merge(%0), else: try_1.ok()]
+  try_1.ok:
+    mir.br try_1.merge(%25)
+  try_1.merge(%39: i64):
+    %33 = mir.mov_imm 1000 : i64
+    %34 = mir.cmp gt, %39, %33
+    mir.cond_br %34 [then: guard_0(), else: guard_0.after()]
+  guard_0:
+    %35 = mir.mov_imm 99 : i64
+    mir.ret %35
+  guard_0.after:
+    %51 = mir.mov_imm 6 : i64
+    mir.ret %51
+  __rc_edge_11_0:
+    %56 = mir.call @stdlib.__mm_incref(%41)
+    %57 = mir.call @__mm_decref_maybenull_helper(%2)
+    mir.br inline_cont_main_0(%41, %47)
+  }
+}
+
 ```

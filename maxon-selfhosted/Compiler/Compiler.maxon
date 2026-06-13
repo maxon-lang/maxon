@@ -1,17 +1,7 @@
 // Convenience wrapper: compiles a file or directory and returns the output executable path.
 // When `irDump.enabled()` is true, the project-wide query cache is bypassed
 // so the pipeline re-runs and the printer hooks observe fresh modules.
-export function compile(path FilePath, target Target, coverage bool = false, irDump IrDumpOptions = IrDumpOptions.disabled(), irOutputPath FilePath = FilePath from "", mmTrace bool = false, leakCheck bool = false, noStdlibCache bool = false) returns FilePath throws CompileError
-	// `--mm-trace`: bypass the stdlib native cache so stdlib re-lowers through the
-	// user pipeline with tracing materialized — the exact path the spec runner's
-	// MmTrace tests take. Reset the loader so the bypass takes effect this compile.
-	// `--no-stdlib-cache` forces the same bypass WITHOUT trace materialization —
-	// the diagnostic leg for attributing cached-vs-from-source divergence.
-	if mmTrace or noStdlibCache 'cacheBypass'
-		resetStdlibLoaderState()
-		setStdlibCacheBypassed(true)
-	end 'cacheBypass'
-	resetMmTraceTags()
+export function compile(path FilePath, target Target, coverage bool = false, irDump IrDumpOptions = IrDumpOptions.disabled(), irOutputPath FilePath = FilePath from "", leakCheck bool = false) returns FilePath throws CompileError
 	// CLI build: a single project builds the stdlib cache AND compiles user
 	// code, so the cache's metadata string ids are valid in this project's
 	// interner — re-serializing the lazily-grown cache back to disk is safe.
@@ -19,7 +9,6 @@ export function compile(path FilePath, target Target, coverage bool = false, irD
 	setStdlibCachePersistAllowed(true)
 	var project = createProject(path, target: target)
 	project.coverageEnabled = coverage
-	project.mmTraceEnabled = mmTrace
 	// `--leak-check`: wire the process-exit leak gate (`mrt_leak_check`) so the
 	// binary exits 101 if any allocation is live at exit. Standalone equivalent of
 	// the spec runner's per-fragment leak gate; does NOT bypass the stdlib cache.
@@ -33,10 +22,6 @@ export function compile(path FilePath, target Target, coverage bool = false, irD
 	// trips a self-hosted MM null-incref on the rebound `CompileError`.
 	let outputPath = try compileProject(project)
 	setStdlibCachePersistAllowed(false)
-	if mmTrace or noStdlibCache 'restoreBypass'
-		setStdlibCacheBypassed(false)
-		resetStdlibLoaderState()
-	end 'restoreBypass'
 
 	// Write the final .ir file for --emit-ir. The code cache is populated by
 	// compileProject above; caching is disabled when emitFinal is true so the
@@ -217,7 +202,7 @@ end 'writeCovMapTo'
 // next to the exe (outputPath.changeExtension(".covmap")); the spec runner
 // redirects it into its per-suite .coverage directory. When coverage is off
 // the path is ignored — no file is written.
-export function compileSourceWithIr(source String, virtualPath FilePath, target Target, outputPath FilePath, coverage bool, covMapPath FilePath, includeStdlibIr bool = false, asyncTrace bool = false, mmTrace bool = false, leakCheck bool = false) returns CompileWithIrResult throws CompileError
+export function compileSourceWithIr(source String, virtualPath FilePath, target Target, outputPath FilePath, coverage bool, covMapPath FilePath, includeStdlibIr bool = false, asyncTrace bool = false, leakCheck bool = false) returns CompileWithIrResult throws CompileError
 	let setupStart = passTimerStart()
 	// Single-file fragment: rootPath = the file's parent directory (decision #3
 	// in the directory-as-module redesign — single-file compiles have no module
@@ -225,13 +210,8 @@ export function compileSourceWithIr(source String, virtualPath FilePath, target 
 	// parent (defensive — runner always hands us an absolute path).
 	let rootPath = try virtualPath.parent() otherwise outputPath
 	var project = createProject(rootPath, target: target)
-	// Reset the process-global mm-trace tag table so a type's interned index is a
-	// stable function of THIS program (else the index — and the alloc's tag
-	// immediate in the compiled IR — varies with prior compiles in the process).
-	resetMmTraceTags()
 	project.coverageEnabled = coverage
 	project.asyncTraceEnabled = asyncTrace
-	project.mmTraceEnabled = mmTrace
 	project.leakCheckEnabled = leakCheck
 	fileChanged(project, path: virtualPath, content: source)
 	recordPassSince("__compile-setup", startMs: setupStart)
@@ -261,7 +241,7 @@ export typealias VirtualSourceFileArray = Array with VirtualSourceFile
 // resolve the same way they would in a real on-disk project. The caller is
 // responsible for choosing virtual paths whose layout matches the test's
 // intent (e.g. siblings under one dir vs. nested subdirectories).
-export function compileMultiFileSourceWithIr(files VirtualSourceFileArray, projectRoot FilePath, target Target, outputPath FilePath, coverage bool, covMapPath FilePath, includeStdlibIr bool = false, asyncTrace bool = false, mmTrace bool = false, leakCheck bool = false) returns CompileWithIrResult throws CompileError
+export function compileMultiFileSourceWithIr(files VirtualSourceFileArray, projectRoot FilePath, target Target, outputPath FilePath, coverage bool, covMapPath FilePath, includeStdlibIr bool = false, asyncTrace bool = false, leakCheck bool = false) returns CompileWithIrResult throws CompileError
 	if files.count() == 0 'noFiles'
 		throw CompileError.noSourceFiles(outputPath)
 	end 'noFiles'
@@ -275,10 +255,8 @@ export function compileMultiFileSourceWithIr(files VirtualSourceFileArray, proje
 	// "deepest common ancestor" heuristic instead would collapse two
 	// siblings under their nearest shared parent and lose those segments.
 	var project = createProject(projectRoot, target: target)
-	resetMmTraceTags()
 	project.coverageEnabled = coverage
 	project.asyncTraceEnabled = asyncTrace
-	project.mmTraceEnabled = mmTrace
 	project.leakCheckEnabled = leakCheck
 	for file in files 'eachFile'
 		fileChanged(project, path: file.path, content: file.source)

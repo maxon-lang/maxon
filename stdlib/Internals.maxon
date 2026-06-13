@@ -26,11 +26,6 @@ function __mm_incref(ptr MachineWord)
 	// it has proven live (a fresh allocation or a dominating definition), so a
 	// null here is always wrong.
 	__Internals.atomicInc(ptr - 8)
-	if __Internals.mmTraceEnabled() != 0 'trace'
-		// Trace AFTER the increment so `rc=` shows the new (post-incref) count,
-		// matching the C# bootstrap.
-		__mmTraceRefcountLine(9, ptr: ptr, rc: __Internals.loadIndirect(ptr - 8))
-	end 'trace'
 end '__mm_incref'
 
 // Atomically decrement the refcount at [ptr - 8]. If the prior value was 1
@@ -50,13 +45,6 @@ function __mm_decref(ptr MachineWord)
 	// tolerates EXACTLY null (==0) at the statically-maybe-null release sites
 	// (incomingOwner / selfReturnBorrow values, field-reassign old-occupant drop)
 	// and calls through to this strict body for every non-null pointer.
-	if __Internals.mmTraceEnabled() != 0 'trace'
-		// Trace BEFORE the decrement, printing the count it is about to
-		// transition to (prior - 1), matching the C# bootstrap. Read the live
-		// count from the header here since atomicXadd returns the prior value
-		// but the trace must precede the slab/free activity it nests over.
-		__mmTraceRefcountLine(10, ptr: ptr, rc: __Internals.loadIndirect(ptr - 8) - 1)
-	end 'trace'
 	let prior = __Internals.atomicXadd(ptr - 8, value: -1)
 	if prior == 1 'lastRef'
 		__mm_free(ptr)
@@ -91,19 +79,8 @@ function __mm_drop(ptr MachineWord)
 	end 'null'
 	let rc = __Internals.loadIndirect(ptr - 8)
 	if rc == 0 'soleOwner'
-		// Scope-exit drop of the sole owner (rc==0): emit a `mm_drop TypeName #id`
-		// marker line so the trace shows WHERE the value goes out of scope, then
-		// free it with the `mm_free` line nested (indented) one level under the drop.
-		if __Internals.mmTraceEnabled() != 0 'trace'
-			__mmTraceIndent()
-			__mmW(21)
-			__mmTracePackedTag(__Internals.loadIndirect(ptr - 32))
-			__mmTraceScopeAndNewline(__mmTraceCurrentScope())
-			__mmTraceDepthInc()
-			__mm_free(ptr)
-			__mmTraceDepthDec()
-			return
-		end 'trace'
+		// Scope-exit drop of the sole owner (rc==0): this is the sole reference,
+		// so free the block directly.
 		__mm_free(ptr)
 		return
 	end 'soleOwner'
@@ -111,323 +88,6 @@ function __mm_drop(ptr MachineWord)
 	// last owner frees. (No mm_drop marker — a plain decref like any shared value.)
 	__mm_decref(ptr)
 end '__mm_drop'
-
-// Trace-only marker for an ownership MOVE: a managed value whose +1 transfers to a
-// new owner WITHOUT a refcount op (returned to the caller, stored into a container/
-// global/field, or carried into a successor block's phi). At runtime a move is a
-// plain store/return with no rc change — this helper exists purely so the mm-trace
-// shows WHERE ownership transfers. `dest` selects the destination suffix:
-// 0 = ` -> return` (lit 23), 1 = ` -> container` (lit 24), 2 = ` -> phi` (lit 25).
-// No-op (and DCE'd away) in untraced builds. Null-tolerant so a move-suppressed
-// edge value that happens to be null is silently skipped.
-function __mm_move_trace(ptr MachineWord, dest MachineWord)
-	// Gate the whole body on the compile-time `mmTraceEnabled` constant (same shape
-	// as `__mm_incref`/`__mm_decref`'s trace block) so an untraced build folds the
-	// entire function to a bare `ret` — keeping cache-off and cache-on byte-identical.
-	if __Internals.mmTraceEnabled() != 0 'trace'
-		if ptr != 0 'nonNull'
-			__mmTraceIndent()
-			__mmW(22)
-			__mmTracePackedTag(__Internals.loadIndirect(ptr - 32))
-			__mmW(23 + dest)
-			__mmTraceScopeAndNewline(__mmTraceCurrentScope())
-		end 'nonNull'
-	end 'trace'
-end '__mm_move_trace'
-
-// mm-trace scope STACK. `__mm_trace_scope` is an array of cstr pointers (one slot
-// per active function frame); `__mm_trace_scope_depth` is the live depth. The trace
-// reads the TOP frame for each line; push/pop bracket each function body so an
-// inlined callee's push/pop (inlined verbatim) restore the caller's scope after the
-// inlined region — making `[scope]` correct at any inlining depth. 256 slots (2048
-// bytes / 8) is far beyond any real inlined depth; overflow stops pushing rather
-// than corrupt memory. All three are no-ops (DCE'd) in untraced builds.
-
-// Top-of-stack scope cstr ptr, or 0 when the stack is empty.
-function __mmTraceCurrentScope() returns MachineWord
-	let depth = __Internals.loadIndirect(__Internals.mmTraceScopeDepthAddr())
-	if depth <= 0 'empty'
-		return 0
-	end 'empty'
-	return __Internals.loadIndirect(__Internals.mmTraceScopeAddr() + (depth - 1) * 8)
-end '__mmTraceCurrentScope'
-
-// Push `name` (a cstr ptr) as the current scope frame. Bounds-guarded: a full stack
-// (256 frames) drops the push so deep recursion degrades the trace without faulting.
-// Whole-body gate on the compile-time `mmTraceEnabled` constant (NOT an early
-// `if==0 return`) so an untraced build folds the entire function to a bare `ret` —
-// keeping cache-off and cache-on byte-identical (the early-return form compiled to 3
-// extra bytes in one leg; see __mm_move_trace).
-function __mm_scope_push(name MachineWord)
-	if __Internals.mmTraceEnabled() != 0 'trace'
-		let depth = __Internals.loadIndirect(__Internals.mmTraceScopeDepthAddr())
-		if depth < 256 'hasRoom'
-			__Internals.storeIndirect(__Internals.mmTraceScopeAddr() + depth * 8, value: name)
-			__Internals.storeIndirect(__Internals.mmTraceScopeDepthAddr(), value: depth + 1)
-		end 'hasRoom'
-	end 'trace'
-end '__mm_scope_push'
-
-// Pop the current scope frame. Bounds-guarded: an empty stack stays at 0 (a stray
-// pop cannot underflow). Whole-body gated (see __mm_scope_push) so an untraced build
-// folds it to a bare `ret`.
-function __mm_scope_pop()
-	if __Internals.mmTraceEnabled() != 0 'trace'
-		let depth = __Internals.loadIndirect(__Internals.mmTraceScopeDepthAddr())
-		if depth > 0 'nonEmpty'
-			__Internals.storeIndirect(__Internals.mmTraceScopeDepthAddr(), value: depth - 1)
-		end 'nonEmpty'
-	end 'trace'
-end '__mm_scope_pop'
-
-// =============================================================================
-// mm-trace: textual allocator trace to stderr (gated on __Internals.mmTraceEnabled,
-// a compile-time constant — untraced builds DCE every helper below to nothing).
-//
-// Each line is `indent + tag + [TypeName #id] + [fields] + "\n"`, where the
-// indent is two spaces per `__mm_trace_depth` level. The mm-layer prints its
-// own line, bumps the depth, runs the child slab/OS calls (which print one
-// level deeper), then drops the depth — reproducing the C# bootstrap's nesting.
-// `__mm_trace_tag_ctx` carries the packed_id from the mm-layer to the slab
-// layer so sl_alloc / sl_free echo the same `TypeName #id`.
-// =============================================================================
-
-// Write a NUL-terminated C string at `ptr` to stderr (length via strlen scan).
-// Trace literals come from the compiler-emitted `__mm_trace_lit_lookup` table
-// (rdata-resident, so no allocation/drop is involved — unlike a `b"..."` local).
-function __mmTraceWriteCstr(ptr MachineWord)
-	var n = 0
-	while __Internals.loadByte(ptr + n, offset: 0) != 0 'scan'
-		n = n + 1
-	end 'scan'
-	__Internals.osWriteErr(ptr, len: n)
-end '__mmTraceWriteCstr'
-
-// Write fixed format literal #idx (see emitMmTraceLitTable for the index map).
-function __mmW(idx MachineWord)
-	__mmTraceWriteCstr(__Internals.mmTraceLit(idx))
-end '__mmW'
-
-// Write a non-negative integer to stderr in decimal. Digits are emitted into a
-// fixed 24-byte scratch global (single-threaded trace path) from least- to
-// most-significant, then written in order. Zero prints "0".
-//
-// `__Internals.mmTraceIntBufAddr()` is re-evaluated at every use rather than
-// bound to a local: drop-injection treats a globalAddr-derived local as
-// heap-owned and emits a stray `sys.free` (mrt_free) at function exit.
-function __mmTraceWriteInt(value MachineWord)
-	if value == 0 'zero'
-		__Internals.storeByte(__Internals.mmTraceIntBufAddr(), offset: 0, value: 0x30)
-		__Internals.osWriteErr(__Internals.mmTraceIntBufAddr(), len: 1)
-		return
-	end 'zero'
-	var v = value
-	var n = 0
-	// Emit digits in reverse into the scratch buffer.
-	while v > 0 'digits'
-		let d = v mod 10
-		__Internals.storeByte(__Internals.mmTraceIntBufAddr(), offset: 23 - n, value: 0x30 + d)
-		v = v / 10
-		n = n + 1
-	end 'digits'
-	__Internals.osWriteErr(__Internals.mmTraceIntBufAddr() + (24 - n), len: n)
-end '__mmTraceWriteInt'
-
-// Two-space-per-level indentation for the current trace depth.
-function __mmTraceIndent()
-	let depth = __Internals.loadIndirect(__Internals.mmTraceDepthAddr())
-	var i = 0
-	while i < depth 'each'
-		__mmW(6)
-		i = i + 1
-	end 'each'
-end '__mmTraceIndent'
-
-function __mmTraceDepthInc()
-	__Internals.storeIndirect(__Internals.mmTraceDepthAddr(), value: __Internals.loadIndirect(__Internals.mmTraceDepthAddr()) + 1)
-end '__mmTraceDepthInc'
-
-function __mmTraceDepthDec()
-	__Internals.storeIndirect(__Internals.mmTraceDepthAddr(), value: __Internals.loadIndirect(__Internals.mmTraceDepthAddr()) - 1)
-end '__mmTraceDepthDec'
-
-// Mint the next managed-allocation id (`#N`), starting at 1.
-function __mmTraceNextAllocId() returns MachineWord
-	let id = __Internals.loadIndirect(__Internals.mmAllocIdCounterAddr()) + 1
-	__Internals.storeIndirect(__Internals.mmAllocIdCounterAddr(), value: id)
-	return id
-end '__mmTraceNextAllocId'
-
-// Print ` TypeName #id` from a packed_id (tag in low 16 bits, id in high bits).
-// Used both directly (mm-layer, from the live header) and via the tag context
-// (slab layer). Prints nothing when packedId is 0 (untraced header — never minted).
-//
-// STRICT TAG: a non-zero packedId means a TRACKED allocation (it carries a minted
-// alloc-id), so it MUST resolve to a real type tag. A name of `(null)` is the symptom of
-// either (a) an alloc site that minted an id but passed `tag: 0` (a missing-tag bug —
-// `mrt_alloc`/`mrt_alloc_with_dtor`/hand-rolled `__mm_alloc(size, dtor, 0)`), OR (b) an
-// UNREGISTERED non-zero tag — which in practice means the header is GARBAGE: a freed /
-// reused slot read by a use-after-free, whose `[ptr-32]` no longer holds a valid
-// packed_id. Either way it is a real bug, so panic rather than silently printing
-// `(null)` (which would let a UAF masquerade as a balanced trace — the leak gate can't
-// see it). Both the tag==0 case AND the unregistered-tag case are caught by checking
-// the RESOLVED NAME against the `(null)` sentinel. Raw, deliberately-typeless buffers
-// carry the reserved `MM_TAG_RAW` sentinel (a registered name), so they never trip this.
-function __mmTracePackedTag(packedId MachineWord)
-	if packedId == 0 'noTag'
-		return
-	end 'noTag'
-	let namePtr = __Internals.mmTagName(packedId and 65535)
-	if __mmTraceNameIsNullSentinel(namePtr) 'nullName'
-		panic("mm-trace: tracked allocation #{packedId shr 16} has no valid type tag (tag={packedId and 65535}) — either an alloc site passed tag:0 / an unregistered tag, or this is a use-after-free reading a garbage header")
-	end 'nullName'
-	__mmW(7)
-	__mmTraceWriteCstr(namePtr)
-	__mmW(1)
-	__mmTraceWriteInt(packedId shr 16)
-end '__mmTracePackedTag'
-
-// True iff the NUL-terminated cstr at `ptr` is exactly the `(null)` tag sentinel that
-// `__mm_tag_lookup` returns for index 0 / any unregistered index. Byte-compares against
-// `"(null)"` (0x28 0x6E 0x75 0x6C 0x6C 0x29 0x00) so the strict-tag panic in
-// `__mmTracePackedTag` fires on BOTH a missing tag and a garbage/UAF header, without
-// needing the compile-time tag count at runtime.
-function __mmTraceNameIsNullSentinel(ptr MachineWord) returns bool
-	if __Internals.loadByte(ptr, offset: 0) != 0x28 'b0'
-		return false
-	end 'b0'
-	if __Internals.loadByte(ptr, offset: 1) != 0x6E 'b1'
-		return false
-	end 'b1'
-	if __Internals.loadByte(ptr, offset: 2) != 0x75 'b2'
-		return false
-	end 'b2'
-	if __Internals.loadByte(ptr, offset: 3) != 0x6C 'b3'
-		return false
-	end 'b3'
-	if __Internals.loadByte(ptr, offset: 4) != 0x6C 'b4'
-		return false
-	end 'b4'
-	if __Internals.loadByte(ptr, offset: 5) != 0x29 'b5'
-		return false
-	end 'b5'
-	return __Internals.loadByte(ptr, offset: 6) == 0
-end '__mmTraceNameIsNullSentinel'
-
-// mm-layer alloc line: `mm_alloc TypeName #id size=S [scope]`. Sets the tag
-// context (so the child sl_alloc echoes the same TypeName #id) and bumps the
-// depth so the slab call's lines indent under this one.
-function __mmTraceAllocLine(packedId MachineWord, size MachineWord, scope MachineWord)
-	__mmTraceIndent()
-	__mmW(0)
-	__mmTracePackedTag(packedId)
-	__mmW(2)
-	__mmTraceWriteInt(size)
-	__mmTraceScopeAndNewline(scope)
-	__Internals.storeIndirect(__Internals.mmTraceTagCtxAddr(), value: packedId)
-	__mmTraceDepthInc()
-end '__mmTraceAllocLine'
-
-// Print ` [scope]\n` when scope (a cstr ptr) is non-null, else just `\n`.
-function __mmTraceScopeAndNewline(scope MachineWord)
-	if scope != 0 'hasScope'
-		__mmW(3)
-		__mmTraceWriteCstr(scope)
-		__mmW(4)
-	end 'hasScope'
-	__mmW(5)
-end '__mmTraceScopeAndNewline'
-
-// mm-layer refcount line: `<indent><tag-lit> TypeName #id rc=<rc> [scope]`.
-// `litIdx` is 9 (`mm_incref`) or 10 (`mm_decref`). The `TypeName #id` echo comes
-// from the live header's packed_id at [ptr-32]; the scope is the active
-// `__mm_trace_scope`. Mirrors the C# bootstrap: incref traces with the
-// POST-increment count, decref with the count it is ABOUT to transition to
-// (caller passes the value to print). Emitted at the current depth (no
-// depth-inc — refcount ops have no nested slab activity).
-function __mmTraceRefcountLine(litIdx MachineWord, ptr MachineWord, rc MachineWord)
-	__mmTraceIndent()
-	__mmW(litIdx)
-	__mmTracePackedTag(__Internals.loadIndirect(ptr - 32))
-	__mmW(11)
-	__mmTraceWriteInt(rc)
-	__mmTraceScopeAndNewline(__mmTraceCurrentScope())
-end '__mmTraceRefcountLine'
-
-// Print ` class=N` for a slab class index (no special handling — N is the
-// numeric class index; -1 for OS-direct / arena-large prints "-1").
-function __mmTraceWriteClass(classIdx MachineWord)
-	__mmW(14)
-	if classIdx < 0 'neg'
-		// "-" then the magnitude. __mmTraceWriteInt only handles non-negative.
-		__Internals.storeByte(__Internals.mmTraceIntBufAddr(), offset: 0, value: 0x2D)
-		__Internals.osWriteErr(__Internals.mmTraceIntBufAddr(), len: 1)
-		__mmTraceWriteInt(0 - classIdx)
-		return
-	end 'neg'
-	__mmTraceWriteInt(classIdx)
-end '__mmTraceWriteClass'
-
-// Slab alloc line: `<indent>sl_alloc[ TypeName #id] size=R class=C\n`. The
-// ` TypeName #id` echo comes from `__mm_trace_tag_ctx` (set by the mm-layer
-// before it called the slab; 0 for a raw alloc — then no tag is printed).
-// `reqSize` is the size passed to __slab_alloc (REQUESTED size), matching the
-// C# bootstrap (sl_alloc prints requested, sl_free prints the class slot size).
-function __mmTraceSlabAllocLine(reqSize MachineWord, classIdx MachineWord)
-	__mmTraceIndent()
-	__mmW(12)
-	__mmTracePackedTag(__Internals.loadIndirect(__Internals.mmTraceTagCtxAddr()))
-	__mmW(2)
-	__mmTraceWriteInt(reqSize)
-	__mmTraceWriteClass(classIdx)
-	__mmW(5)
-end '__mmTraceSlabAllocLine'
-
-// Slab free line: `<indent>sl_free[ TypeName #id] size=S class=C\n`. `slotSize`
-// is the owning mspan's slot_size (the CLASS size, not the original request) —
-// the free path has only the mspan available, so it reports the rounded class
-// size, matching the C# bootstrap's sl_free asymmetry.
-function __mmTraceSlabFreeLine(slotSize MachineWord, classIdx MachineWord)
-	__mmTraceIndent()
-	__mmW(13)
-	__mmTracePackedTag(__Internals.loadIndirect(__Internals.mmTraceTagCtxAddr()))
-	__mmW(2)
-	__mmTraceWriteInt(slotSize)
-	__mmTraceWriteClass(classIdx)
-	__mmW(5)
-end '__mmTraceSlabFreeLine'
-
-// OS-page allocation line: `<indent>os_alloc size=N\n` at the current depth.
-// Emitted at each raw OS reservation (the 64 MiB arena and any growth arenas).
-function __mmTraceOsAllocLine(size MachineWord)
-	__mmTraceIndent()
-	__mmW(15)
-	__mmW(2)
-	__mmTraceWriteInt(size)
-	__mmW(5)
-end '__mmTraceOsAllocLine'
-
-// One-time slab-init trace: `sl_init\n  os_alloc size=N\n`. Called from the
-// runtime `__slab_arena_init` (which owns the first OS reservation) before it
-// allocates the arena. Internally gated on `mmTraceEnabled()` so it folds to an
-// empty body in untraced builds — the runtime caller invokes it unconditionally.
-function __mmTraceSlabInit(arenaSize MachineWord)
-	if __Internals.mmTraceEnabled() != 0 'on'
-		__mmW(16)
-		__mmW(5)
-		__mmTraceDepthInc()
-		__mmTraceOsAllocLine(arenaSize)
-		__mmTraceDepthDec()
-	end 'on'
-end '__mmTraceSlabInit'
-
-// One OS-growth-arena trace line, internally gated. Called from the runtime
-// `__slab_arena_alloc_chunks` growth path before it reserves a fresh arena.
-function __mmTraceOsGrow(arenaSize MachineWord)
-	if __Internals.mmTraceEnabled() != 0 'on'
-		__mmTraceOsAllocLine(arenaSize)
-	end 'on'
-end '__mmTraceOsGrow'
 
 // =============================================================================
 // Sharded slab allocator (migrated from runtime.std — sharded variant).
@@ -1325,13 +985,13 @@ function __slab_free(ptr MachineWord)
 end '__slab_free'
 
 // Allocate a tracked block of `size` bytes through the slab allocator.
-// Layout: 32-byte mm header followed by the user region. The `packed_id`
-// word carries `(alloc_id << 16) | tag_index` for mm-trace; it sits at
-// slot_base+0 so the destructor / size / refcount fields keep their
-// historical `user_ptr - 24 / -16 / -8` offsets (every destructor and the
-// COW path reads those, so leaving them put keeps the header change local
-// to __mm_alloc / __mm_free).
-//   slot_base + 0  : packed_id  (alloc_id << 16 | tag_index; 0 when untraced)
+// Layout: 32-byte mm header followed by the user region. The first header
+// word sits at slot_base+0 so the destructor / size / refcount fields keep
+// their historical `user_ptr - 24 / -16 / -8` offsets (every destructor and
+// the COW path reads those, so leaving them put keeps the header layout
+// stable). That word is reserved (always 0) — it preserves the trailing
+// offsets without carrying any payload.
+//   slot_base + 0  : reserved   (always 0)
 //   slot_base + 8  : destructor (function pointer; 0 means "no destructor")
 //   slot_base + 16 : size       (user-region size)
 //   slot_base + 24 : refcount   (initialized to 0 — alloc-at-0 model, mirrors
@@ -1341,32 +1001,17 @@ end '__slab_free'
 //                                 anywhere is freed at its producing scope's exit
 //                                 decref of rc 0→... — see __mm_decref guard.)
 //   user_ptr       = slot_base + 32 (returned)
-//
-// `tag` is the type's mm-trace tag index (0 = untagged). It's threaded
-// through even when tracing is off so the header layout stays uniform; the
-// packed_id word is simply 0 in untraced builds.
-function __mm_alloc(size MachineWord, destructor MachineWord, tag MachineWord) returns MachineWord
+function __mm_alloc(size MachineWord, destructor MachineWord) returns MachineWord
 	var clampedSize = size
 	if size < 1 'clamp'
 		clampedSize = 1
 	end 'clamp'
 	__Internals.atomicInc(__Internals.mmAllocCountAddr())
-	// packed_id = (alloc_id << 16) | tag_index, minted per allocation when
-	// tracing; 0 when untraced so the header carries no trace state.
-	var packedId = 0
-	if __Internals.mmTraceEnabled() != 0 'traceId'
-		packedId = (__mmTraceNextAllocId() shl 16) or (tag and 65535)
-		// Print the mm_alloc line (top-down mm -> sl -> os order), set the tag
-		// context for the slab layer, and bump the depth so the slab call's
-		// sl_alloc / os_alloc lines indent under us. The `[scope]` label comes
-		// from `__mm_trace_scope` (set by the alloc call site); 0 = no scope.
-		__mmTraceAllocLine(packedId, size: clampedSize, scope: __mmTraceCurrentScope())
-	end 'traceId'
 	let slotBase = __slab_alloc(clampedSize + 32)
-	if __Internals.mmTraceEnabled() != 0 'traceDone'
-		__mmTraceDepthDec()
-	end 'traceDone'
-	__Internals.storeIndirect(slotBase, value: packedId)
+	// The first header word is reserved (always 0). It is kept so the
+	// destructor / size / refcount offsets stay at their historical
+	// `user_ptr - 24 / -16 / -8`.
+	__Internals.storeIndirect(slotBase, value: 0)
 	__Internals.storeIndirect(slotBase + 8, value: destructor)
 	__Internals.storeIndirect(slotBase + 16, value: clampedSize)
 	// Refcount-insertion (Step 2): a fresh allocation owns NO reference — the
@@ -1388,38 +1033,12 @@ function __mm_free(ptr MachineWord)
 	if ptr == 0 'nullPtr'
 		return
 	end 'nullPtr'
-	if __Internals.mmTraceEnabled() != 0 'traceOn'
-		// Match the C# bootstrap's nesting (mm_decref already printed this
-		// value's `mm_decref ... rc=0` line at the current depth):
-		//   depth+1  → run the destructor so its field decrefs (and any
-		//              transitive frees they trigger) print one level deeper;
-		//   emit `mm_free TypeName #id` at depth+1;
-		//   depth+1 again → `__slab_free` prints `sl_free ...` under the free line;
-		//   restore depth.
-		__mmTraceDepthInc()
-		let destructorT = __Internals.loadIndirect(ptr - 24)
-		if destructorT != 0 'hasDtorT'
-			__Internals.indirectCall1(destructorT, arg: ptr)
-		end 'hasDtorT'
-		__mmTraceIndent()
-		__mmW(8)
-		__mmTracePackedTag(__Internals.loadIndirect(ptr - 32))
-		__mmW(5)
-		__Internals.atomicDec(__Internals.mmAllocCountAddr())
-		// Echo this value's tag onto the slab free so `sl_free` shows TypeName #id.
-		__Internals.storeIndirect(__Internals.mmTraceTagCtxAddr(), value: __Internals.loadIndirect(ptr - 32))
-		__mmTraceDepthInc()
-		__slab_free(ptr - 32)
-		__mmTraceDepthDec()
-		__mmTraceDepthDec()
-		return
-	end 'traceOn'
 	let destructor = __Internals.loadIndirect(ptr - 24)
 	if destructor != 0 'hasDtor'
 		__Internals.indirectCall1(destructor, arg: ptr)
 	end 'hasDtor'
 	__Internals.atomicDec(__Internals.mmAllocCountAddr())
-	// slot_base = ptr - 32 (packed_id is the first header word).
+	// slot_base = ptr - 32 (the reserved word is the first header word).
 	__slab_free(ptr - 32)
 end '__mm_free'
 
@@ -1463,19 +1082,6 @@ end '__mm_free'
 // (Does NOT cover element buffers or the separate __ManagedMemoryCursor struct.)
 let MANAGED_MEM_RECORD_SIZE = 48
 
-// Fixed mm-trace tag indices for the runtime's own allocations. These mirror the
-// reserved-index order in `resetMmTraceTags` (LowerMaxonToStd) exactly: the compiler
-// interns these names FIRST every compile, so the index is a stable literal the
-// runtime can stamp into a packed_id. Without a real tag these allocations traced as
-// `(null)` — and the strict null-tag panic in `__mmTracePackedTag` now rejects a
-// `tag:0` entirely. A raw byte buffer is `<raw>`; a record/cursor/list node names
-// its actual type so the alloc/free tree reads `mm_alloc __ManagedMemory #N`.
-let MM_TAG_RAW = 1
-let MM_TAG_MANAGED_MEMORY = 2
-let MM_TAG_MANAGED_MEMORY_CURSOR = 3
-let MM_TAG_MANAGED_LIST = 4
-let MM_TAG_MANAGED_LIST_NODE = 5
-
 // Named byte-offsets of the five i64 fields in the __ManagedMemory record, and
 // the three sentinel values the parent_ptr field can hold. Replacing the magic
 // literals at every mm-record access site so the layout lives in one place.
@@ -1512,7 +1118,7 @@ let LAYOUT_FLAG_HAS_HEAP_REFS = 1
 // buffer. destructor=0: the buffer is raw bytes; its element pointers (if any)
 // are torn down by the record's element-walk, not the buffer's own destructor.
 function __managed_mem_alloc_buffer(byteLen MachineWord) returns MachineWord
-	let buf = __mm_alloc(byteLen, destructor: 0, tag: MM_TAG_RAW)
+	let buf = __mm_alloc(byteLen, destructor: 0)
 	__mm_incref(buf)
 	// Zero-fill the buffer (matches the C# `mm_raw_alloc`, which zero-fills every
 	// raw allocation). `__mm_alloc` hands back a reused slab slot holding the
@@ -2182,7 +1788,7 @@ function __managed_mem_slice(self MachineWord, start MachineWord, endIdx Machine
 	let sliceLen = endIdx - start
 	let byteLen = sliceLen * elemSize
 	let destructor = __Internals.destructManagedMemoryAddr()
-	let newStruct = __mm_alloc(MANAGED_MEM_RECORD_SIZE, destructor: destructor, tag: MM_TAG_MANAGED_MEMORY)
+	let newStruct = __mm_alloc(MANAGED_MEM_RECORD_SIZE, destructor: destructor)
 	// alloc-at-0 → restore the rc=1 contract callers assume. `Array.slice` binds this
 	// record into a NEW Array via `Self{managed: newManaged}`; that owning field holds
 	// the lone reference, dropped exactly once by the Array's destructor. The call
@@ -2253,7 +1859,7 @@ end '__managed_mem_create'
 // passes 0 (via __managed_mem_create), leaving the walk disabled.
 function __managed_mem_create_managed(count MachineWord, elemSize MachineWord, elementDestroy MachineWord) returns MachineWord
 	let destructor = __Internals.destructManagedMemoryAddr()
-	let newStruct = __mm_alloc(MANAGED_MEM_RECORD_SIZE, destructor: destructor, tag: MM_TAG_MANAGED_MEMORY)
+	let newStruct = __mm_alloc(MANAGED_MEM_RECORD_SIZE, destructor: destructor)
 	// alloc-at-0 → restore the rc=1 contract callers assume. The new record is bound
 	// into an OWNING container (an array literal's `Array.init(record)` transparent
 	// wrap, a String, `mrt_read_stdin_managed`, …) whose field holds the lone reference
@@ -2346,7 +1952,7 @@ function __managed_mem_from_cstring(cstr MachineWord) returns MachineWord
 	end 'scan'
 	let bufSize = len + 1
 	let destructor = __Internals.destructManagedMemoryAddr()
-	let newStruct = __mm_alloc(MANAGED_MEM_RECORD_SIZE, destructor: destructor, tag: MM_TAG_MANAGED_MEMORY)
+	let newStruct = __mm_alloc(MANAGED_MEM_RECORD_SIZE, destructor: destructor)
 	let newBuf = __managed_mem_alloc_buffer(bufSize)
 	__Internals.memcpy(newBuf, src: cstr, size: bufSize)
 	__Internals.storeIndirect(newStruct, value: newBuf)

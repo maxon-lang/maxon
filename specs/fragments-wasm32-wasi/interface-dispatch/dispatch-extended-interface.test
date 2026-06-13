@@ -84,21 +84,20 @@ module {
     %1 = mir.mov_imm 10 : i64
     %10 = mir.mov_imm 8 : i64
     %11 = mir.mov_imm 0 : i64
-    %12 = mir.mov_imm 0 : i64
-    %13 = mir.call @stdlib.__mm_alloc(%10, %11, %12)
-    mir.store %1, %13, 0 width: qword
+    %12 = mir.call @stdlib.__mm_alloc(%10, %11)
+    mir.store %1, %12, 0 width: qword
     %4 = mir.global_addr @__witness_Impl_Base
-    %5 = mir.call @callBase(%13, %4)
+    %5 = mir.call @callBase(%12, %4)
     %7 = mir.global_addr @__witness_Impl_Derived
-    %8 = mir.call @callDerived(%13, %7)
-    %14 = mir.call @mm_drop(%13)
+    %8 = mir.call @callDerived(%12, %7)
+    %13 = mir.call @mm_drop(%12)
     %9 = mir.add.i64 %5, %8
-    %15 = mir.mov_imm 125 : i64
-    %16 = mir.cmp ugt, %9, %15
-    mir.cond_br %16 [then: __range_panic_0(), else: __range_ok_0()]
+    %14 = mir.mov_imm 125 : i64
+    %15 = mir.cmp ugt, %9, %14
+    mir.cond_br %15 [then: __range_panic_0(), else: __range_ok_0()]
   __range_panic_0:
-    %17 = mir.global_addr @__panic_msg_cb1cbf5e76f74316
-    %18 = mir.call @mrt_panic(%17)
+    %16 = mir.global_addr @__panic_msg_cb1cbf5e76f74316
+    %17 = mir.call @mrt_panic(%16)
   __range_ok_0:
     mir.ret %9
   }

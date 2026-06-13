@@ -15,10 +15,6 @@ export function generateFragmentContent(test SpecTest, compileIr String) returns
 		sb.append("Args: {test.args}\n")
 	end 'hasArgs'
 
-	if test.mmTrace 'hasMmTrace'
-		sb.append("MmTrace: true\n")
-	end 'hasMmTrace'
-
 	if test.asyncTrace 'hasAsyncTrace'
 		sb.append("AsyncTrace: true\n")
 	end 'hasAsyncTrace'
@@ -202,7 +198,6 @@ export function parseFragment(fragmentPath FilePath) returns Fragment throws Com
 	// Parse expectation section (between first and second ---)
 	var expectation = TestExpectation.create()
 	var fragArgs = ""
-	var fragMmTrace = false
 	var fragAsyncTrace = false
 	var fragIncludeStdlibIr = false
 
@@ -229,9 +224,7 @@ export function parseFragment(fragmentPath FilePath) returns Fragment throws Com
 				argsIdx = try trimmedLine.indexAfter(argsIdx) otherwise break
 			end 'skipArgsPrefix'
 			fragArgs = trimWhitespace(trimmedLine.slice(argsIdx, endIndex: trimmedLine.endIndex()))
-		end 'isArgs' else if trimmedLine.startsWith("MmTrace:") 'isMm'
-			fragMmTrace = trimmedLine.contains("true")
-		end 'isMm' else if trimmedLine.startsWith("AsyncTrace:") 'isAsync'
+		end 'isArgs' else if trimmedLine.startsWith("AsyncTrace:") 'isAsync'
 			fragAsyncTrace = trimmedLine.contains("true")
 		end 'isAsync' else if trimmedLine.startsWith("IncludeStdlibIr:") 'isIncludeStdlibIr'
 			fragIncludeStdlibIr = trimmedLine.contains("true")
@@ -298,7 +291,6 @@ export function parseFragment(fragmentPath FilePath) returns Fragment throws Com
 		k = k + 1
 	end 'parseExpect'
 
-	expectation.mmTrace = fragMmTrace
 	expectation.asyncTrace = fragAsyncTrace
 	expectation.includeStdlibIr = fragIncludeStdlibIr
 
@@ -369,7 +361,7 @@ export function parseFragment(fragmentPath FilePath) returns Fragment throws Com
 	let sourceFiles = splitMultiFileSource(source)
 	let hasMulti = sourceFiles.count() > 0
 
-	return Fragment.create(fragmentPath.toString(), testName: testName, source: source, expectation: expectation, generatedIR: generatedIR, hasGeneratedIR: hasGeneratedIR, args: fragArgs, sourceFiles: sourceFiles, hasMultiFile: hasMulti, mmTrace: fragMmTrace, asyncTrace: fragAsyncTrace, includeStdlibIr: fragIncludeStdlibIr)
+	return Fragment.create(fragmentPath.toString(), testName: testName, source: source, expectation: expectation, generatedIR: generatedIR, hasGeneratedIR: hasGeneratedIR, args: fragArgs, sourceFiles: sourceFiles, hasMultiFile: hasMulti, asyncTrace: fragAsyncTrace, includeStdlibIr: fragIncludeStdlibIr)
 end 'parseFragment'
 
 // Helper: read a multi-line value from fragment lines until a closing ``` is found.

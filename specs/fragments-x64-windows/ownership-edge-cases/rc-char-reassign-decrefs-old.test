@@ -5,42 +5,7 @@ function main() returns ExitCode
 	return c.byteLength()
 end 'main'
 ---
-MmTrace: true
 ExitCode: 1
-Stderr: ```
-sl_init
-  os_alloc size=67108864
-mm_alloc Character #1 size=8 [main]
-  sl_alloc Character #1 size=40 class=4
-mm_alloc __ManagedMemory #2 size=40 [main]
-  sl_alloc __ManagedMemory #2 size=72 class=6
-mm_incref __ManagedMemory #2 rc=1 [main]
-mm_incref Character #1 rc=1 [main]
-mm_incref Character #1 rc=2 [main]
-mm_alloc Character #3 size=8 [main]
-  sl_alloc Character #3 size=40 class=4
-mm_alloc __ManagedMemory #4 size=40 [main]
-  sl_alloc __ManagedMemory #4 size=72 class=6
-mm_incref __ManagedMemory #4 rc=1 [main]
-mm_incref Character #3 rc=1 [main]
-mm_decref Character #1 rc=1 [main]
-mm_decref Character #3 rc=0 [main]
-  mm_decref __ManagedMemory #4 rc=0 [~Character]
-    mm_free __ManagedMemory #4
-      sl_free __ManagedMemory #4 size=96 class=6
-  mm_free Character #3
-    sl_free Character #3 size=48 class=4
-mm_decref Character #1 rc=0 [main]
-  mm_decref __ManagedMemory #2 rc=0 [~Character]
-    mm_free __ManagedMemory #2
-      sl_free __ManagedMemory #2 size=96 class=6
-  mm_free Character #1
-    sl_free Character #1 size=48 class=4
-mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R1
-  sl_free size=48 class=4
-```
 ---
 // CompiledIR
 module {
@@ -55,14 +20,14 @@ module {
     x64.mov [rbp-48], rcx
     x64.mov rdx, rsi
     x64.mov rcx, 8
-    x64.mov r8, 1
+    x64.mov r8, 62
     x64.call mm_alloc
     x64.mov [rbp-8], rax
     x64.lea_func rdi, [__destruct___ManagedMemory]
     x64.mov r8, rdi
     x64.mov rdx, r8
     x64.mov rcx, 40
-    x64.mov r8, 2
+    x64.mov r8, 61
     x64.call mm_alloc
     x64.mov [rbp-16], rax
     x64.mov r9, -2
@@ -102,13 +67,13 @@ module {
     x64.mov [rbp-56], rcx
     x64.mov rdx, rbx
     x64.mov rcx, 8
-    x64.mov r8, 1
+    x64.mov r8, 62
     x64.call mm_alloc
     x64.mov [rbp-32], rax
     x64.lea_func rcx, [__destruct___ManagedMemory]
     x64.mov rdx, rcx
     x64.mov rcx, 40
-    x64.mov r8, 2
+    x64.mov r8, 61
     x64.call mm_alloc
     x64.mov [rbp-40], rax
     x64.mov rax, -2
@@ -172,57 +137,6 @@ module {
     x64.call mm_decref
     x64.label __nonnull_skip_2
     x64.mov rax, [rbp-64]
-    x64.epilogue
-    x64.ret
-  }
-  func @__destruct_Character(ptr: i64) {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+0]
-    x64.mov [rbp-16], rcx
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_0
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.jmp __destruct_Character.done
-  done:
-    x64.epilogue
-    x64.ret
-  }
-  func @__destruct___ManagedMemory(ptr: i64) {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+16]
-    x64.mov rdx, -1
-    x64.cmp rcx, rdx
-    x64.jne __destruct___ManagedMemory.check_owned_0
-  slice_cleanup_0:
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+32]
-    x64.mov [rbp-16], rcx
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_0
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.jmp __destruct___ManagedMemory.skip_buf_0
-  check_owned_0:
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+16]
-    x64.mov rdx, -2
-    x64.cmp rcx, rdx
-    x64.je __destruct___ManagedMemory.skip_buf_0
-  free_buf_0:
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+0]
-    x64.call mm_raw_free
-    x64.jmp __destruct___ManagedMemory.skip_buf_0
-  skip_buf_0:
-    x64.jmp __destruct___ManagedMemory.done
-  done:
     x64.epilogue
     x64.ret
   }

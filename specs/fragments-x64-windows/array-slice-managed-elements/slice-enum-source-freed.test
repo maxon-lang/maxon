@@ -39,38 +39,13 @@ module {
   func @makeSlice() -> i64 {
   entry:
     x64.prologue stack_size=32
+    x64.lea rcx, [rip+__layout_Array_Op]
     x64.xor r12d, r12d
-    x64.lea rdx, [rip+__destruct_Array]
-    x64.mov ecx, 8
-    x64.mov rax, r12
-    x64.call stdlib.__mm_alloc
-    x64.mov r13, r8
-  inlined_stdlib.__mm_incref_0_0:
-    x64.mov r8, r13
-    x64.sub r8, 8
-    x64.lock inc qword ptr [r8]
-  inline_cont_makeSlice_0:
-    x64.lea rdx, [rip+stdlib.__destruct___ManagedMemory]
-    x64.mov ecx, 48
-    x64.mov rax, r12
-    x64.call stdlib.__mm_alloc
-  inlined_stdlib.__mm_incref_0_1:
-    x64.mov r9, r8
-    x64.sub r9, 8
-    x64.lock inc qword ptr [r9]
-  inline_cont_makeSlice_1:
-    x64.mov r9d, 8
-    x64.mov rsi, -1
-    x64.xor eax, eax
-    x64.xor edx, edx
-    x64.mov ecx, 16
-    x64.mov [r8+0], r12 (8b)
-    x64.mov [r8+8], r12 (8b)
-    x64.mov [r8+16], r12 (8b)
-    x64.mov [r8+24], r9 (8b)
-    x64.mov [r8+32], rsi (8b)
-    x64.mov [r8+40], r12 (8b)
-    x64.mov [r13+0], r8 (8b)
+    x64.mov r13d, 16
+    x64.call Array.create
+    x64.mov r14, r8
+    x64.mov rcx, r13
+    x64.mov rdx, r12
     x64.call stdlib.__mm_alloc
     x64.mov r12, r8
     x64.mov rcx, r12
@@ -80,10 +55,9 @@ module {
     x64.mov r8d, 10
     x64.mov [r12+8], r8 (8b)
     x64.lea rax, [rip+__layout_Array_Op]
-    x64.mov rcx, r13
+    x64.mov rcx, r14
     x64.mov rdx, r12
     x64.call Array.push
-    x64.xor eax, eax
     x64.xor edx, edx
     x64.mov ecx, 16
     x64.call stdlib.__mm_alloc
@@ -95,10 +69,9 @@ module {
     x64.mov r8d, 20
     x64.mov [r12+8], r8 (8b)
     x64.lea rax, [rip+__layout_Array_Op]
-    x64.mov rcx, r13
+    x64.mov rcx, r14
     x64.mov rdx, r12
     x64.call Array.push
-    x64.xor eax, eax
     x64.xor edx, edx
     x64.mov ecx, 16
     x64.call stdlib.__mm_alloc
@@ -110,23 +83,23 @@ module {
     x64.mov r8d, 30
     x64.mov [r12+8], r8 (8b)
     x64.lea rax, [rip+__layout_Array_Op]
-    x64.mov rcx, r13
+    x64.mov rcx, r14
     x64.mov rdx, r12
     x64.call Array.push
     x64.lea r9, [rip+__layout_Array_Op]
     x64.mov eax, 3
     x64.mov edx, 1
-    x64.mov rcx, r13
+    x64.mov rcx, r14
     x64.call Array.slice
     x64.mov r12, r8
-    x64.mov r14, rdx
-    x64.mov rcx, r13
+    x64.mov r13, rdx
+    x64.mov rcx, r14
     x64.call __mm_decref_maybenull_helper
-    x64.test r14, r14
+    x64.test r13, r13
     x64.je try_0.cont
   try_0.err:
     x64.xor r8d, r8d
-    x64.mov rdx, r14
+    x64.mov rdx, r13
     x64.epilogue
     x64.ret
   try_0.cont:
@@ -180,7 +153,6 @@ module {
     x64.je __phi_trampoline_19_0
   try_1.otherwise:
     x64.call __mm_decref_maybenull_helper
-    x64.xor eax, eax
     x64.xor edx, edx
     x64.mov ecx, 16
     x64.call stdlib.__mm_alloc

@@ -1192,13 +1192,12 @@ function performInline(module StdModule, project Project, caller IrFunction, blo
 	// Phase 1: build the remap.
 	let calleeMaxId = scanMaxValueId(callee, module: module)
 	let callerOrigMaxId = scanMaxValueId(caller, module: module)
-	var nextId = callerOrigMaxId + 1
 	var remap = ValueIdArray.create()
 	while remap.count() <= calleeMaxId 'init'
 		remap.push(REMAP_INVALID)
 	end 'init'
 	bindParamRemap(module, calleeBlock: calleeBlock, argIds: callShape.argIds, remap: remap)
-	nextId = bindBodyRemap(module, calleeBlock: calleeBlock, calleeTermIdx: calleeBlock.terminatorIndex(), remap: remap, nextId: nextId)
+	_ = bindBodyRemap(module, calleeBlock: calleeBlock, calleeTermIdx: calleeBlock.terminatorIndex(), remap: remap, nextId: callerOrigMaxId + 1)
 	// Refcount-insertion: thread the callee's per-ValueId ownership classification
 	// onto the fresh caller body ids so the post-inline SSA inserter refcounts the
 	// inlined allocations/loads (an unthreaded id lands `notManaged` → leak).
@@ -1212,19 +1211,7 @@ function performInline(module StdModule, project Project, caller IrFunction, blo
 	if removedIdx != opIdx 'mismatch'
 		panic("performInline: removed opIdx {removedIdx} != expected {opIdx}")
 	end 'mismatch'
-	let afterBodyPos = emitInlinedBody(module, callerBlock: block, calleeBlock: calleeBlock, remap: remap, insertAt: posInBlock)
-
-	// mm-trace: re-emit the ownership return-move that inlining erases (managed
-	// return) + the scope-stack pop balancing the inlined callee's entry push. The
-	// scope-stack model means the move/pop scopes are correct at any inline depth
-	// (move reads the still-pushed callee frame; pop restores the caller). The
-	// inlined return value is `remap[retValId]` for a non-void callee.
-	var inlinedRetForTrace = REMAP_INVALID as ValueId
-	if not stdReturnTypeIsVoid(callee.returnType) 'nonVoidRet'
-		inlinedRetForTrace = try remap.get(retValId) otherwise REMAP_INVALID
-	end 'nonVoidRet'
-	let retIsManaged = inlinedRetForTrace != REMAP_INVALID and caller.isValueManaged(inlinedRetForTrace)
-	_ = emitInlineReturnMoveAndPop(module, project: project, callerBlock: block, pos: afterBodyPos, inlinedRetId: inlinedRetForTrace, retIsManaged: retIsManaged, nextId: nextId)
+	_ = emitInlinedBody(module, callerBlock: block, calleeBlock: calleeBlock, remap: remap, insertAt: posInBlock)
 
 	// Phase 3: rewrite the caller's existing ops so any reference to the
 	// call's old resultId now reads the inlined return value. Two cases:
@@ -1840,11 +1827,10 @@ end 'sysOpTouchesSlot'
 
 // Walk the callee's entire entry block and bind each `param` op's resultId to
 // the corresponding call-site arg. The lowering convention puts `param` ops at
-// the head of the entry block, but instrumentation can prepend ops before them
-// (mm-trace's `mm_scope_push` lands at the very head) — a leading-run scan
-// that breaks at the first non-param op then binds NOTHING, leaving every
-// param id unmapped so spliced body ops read the CALLER's same-numbered values
-// (the traced `Wrapper.wrap` layout-param read of the caller's const 7 →
+// the head of the entry block, but a non-param op can precede them — a
+// leading-run scan that breaks at the first non-param op then binds NOTHING,
+// leaving every param id unmapped so spliced body ops read the CALLER's
+// same-numbered values (a layout-param read of the caller's const 7 →
 // `[7+40]` nil-deref). Scanning the whole entry block is equally cheap and
 // immune to prepended ops. A trailing implicit layout/witness param without a
 // matching arg keeps its REMAP_INVALID sentinel and any op that names it would
@@ -2115,44 +2101,6 @@ end 'OpPositionError'
 // caller's `block.opRefs` at the splice position. The insertion runs in
 // callee-source order, so the spliced body reads the same way as the
 // original — earlier ops dominate later ones.
-// mm-trace only: at an inlined call site, re-emit the ownership MOVE that inlining
-// erases AND the scope-stack pop that balances the inlined callee's entry push.
-// The callee's `ret` of a managed value is a transfer to the caller — lost when the
-// inliner replaces `ret` with value-substitution; re-emit it as
-// `mm_move(retVal, RETURN)`. Then `mm_scope_pop()` to leave the callee's scope frame
-// (the callee's own `mm_scope_push` was inlined with its body but its pop was tied to
-// the now-erased `ret`). The move reads top-of-stack = the callee frame (still pushed
-// here), so it traces `[callee]`; the pop then restores the caller frame for the
-// post-inline continuation (where the value's eventual drop traces `[caller]`).
-// Ops are inserted at `pos` (just after the spliced body). The pop is ALWAYS emitted
-// (even for a non-managed / void return) to keep the stack balanced; only the move is
-// gated on a managed return. Returns the next free ValueId. No-op when untraced.
-function emitInlineReturnMoveAndPop(module StdModule, project Project, callerBlock IrBlock, pos ParsedInt, inlinedRetId ValueId, retIsManaged bool, nextId ValueId) returns ValueId
-	if not project.mmTraceEnabled 'untraced'
-		return nextId
-	end 'untraced'
-	var id = nextId
-	var at = pos
-	if retIsManaged and inlinedRetId != REMAP_INVALID 'moveTrace'
-		// The inlined `ret` is an ownership return-move: call `mm_move_return` (the
-		// destination is baked into the callee, so no const operand to misorder).
-		let moveResultId = id
-		id = id + 1
-		var moveArgs = ValueIdArray.create()
-		moveArgs.push(inlinedRetId)
-		let moveOpIdx = module.ops.count()
-		module.ops.push(StdOp.call(StdCallOp.call(moveResultId, callee: "mm_move_return", argIds: moveArgs)))
-		try callerBlock.opRefs.insert(at, value: moveOpIdx) otherwise panic("emitInlineReturnMoveAndPop: insert mm_move_return failed")
-		at = at + 1
-	end 'moveTrace'
-	// Pop the inlined callee's scope frame (balances its inlined entry push).
-	let popResultId = id
-	id = id + 1
-	let popOpIdx = module.ops.count()
-	module.ops.push(StdOp.call(StdCallOp.call(popResultId, callee: "mm_scope_pop", argIds: ValueIdArray.create())))
-	try callerBlock.opRefs.insert(at, value: popOpIdx) otherwise panic("emitInlineReturnMoveAndPop: insert mm_scope_pop failed")
-	return id
-end 'emitInlineReturnMoveAndPop'
 
 // Splice the callee's body ops into `callerBlock` at `insertAt`, returning the
 // position just AFTER the last spliced op (so the caller can append post-body

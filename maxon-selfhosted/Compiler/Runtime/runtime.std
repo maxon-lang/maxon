@@ -1300,10 +1300,10 @@ func mrt_write_cstr_stderr 1 void
 
 end
 
-// mm_trace_print_tag(cstr_ptr): write a NUL-terminated async-trace tag string
+// __diag_print_tag(cstr_ptr): write a NUL-terminated async-trace tag string
 // (e.g. "spawn #") to stderr. Thin delegator used by the green-thread
-// scheduler's AsyncTrace emission; mirrors the C# bootstrap's mm_trace_print_tag.
-func mm_trace_print_tag 1 void
+// scheduler's AsyncTrace emission; mirrors the C# bootstrap's __diag_print_tag.
+func __diag_print_tag 1 void
   block entry:
     v0 = std param 0 i64
     v1 = std call mrt_write_cstr_stderr v0
@@ -1312,12 +1312,12 @@ func mm_trace_print_tag 1 void
 
 end
 
-// mm_trace_print_i64(value): write `value` in decimal to stderr. Uses a stack
+// __diag_print_i64(value): write `value` in decimal to stderr. Uses a stack
 // scratch buffer addressed at slot 4 — mrt_i64_to_string writes its digits
 // FORWARD (increasing address), so slots 4..2 (24 bytes) hold the up-to-21-byte
 // rendering without reaching the saved RBP — then writes exactly the returned
-// length. Mirrors the C# bootstrap's mm_trace_print_i64.
-func mm_trace_print_i64 1 void
+// length. Mirrors the C# bootstrap's __diag_print_i64.
+func __diag_print_i64 1 void
   block entry:
     v0 = std param 0 i64
     v1 = std stackAddr 4
@@ -1329,7 +1329,7 @@ func mm_trace_print_i64 1 void
 
 end
 
-// mm_trace_print_hex(value): write `value` as "0x" + 16 zero-padded lowercase
+// __diag_print_hex(value): write `value` as "0x" + 16 zero-padded lowercase
 // hex digits to stderr. Used by the CPU-fault diagnostic (emitX64GtFaultDiagnostic)
 // to render the faulting RIP / bad VA in a form an operator can resolve against
 // `llvm-objdump -d`. Fixed 18-byte rendering into a stack scratch buffer.
@@ -1340,7 +1340,7 @@ end
 // the smeared high bits can reach it across the exactly-16 iterations.
 //
 // Slot usage: slot 0 = value, slot 1 = loop index i (0..15), slot 2 = buf base.
-func mm_trace_print_hex 1 void
+func __diag_print_hex 1 void
   block entry:
     v0 = std param 0 i64
     std storeSlot 0 v0
@@ -1648,8 +1648,8 @@ func mrt_panic_print_frame 2 void
 
 end
 
-// mrt_alloc(size): thin wrapper around mm_alloc with no destructor and no
-// tag. Every allocation goes through the unified tracked path: the
+// mrt_alloc(size): thin wrapper around mm_alloc with no destructor.
+// Every allocation goes through the unified tracked path: the
 // returned pointer carries a 24-byte mm header and refcount=1. Callers
 // that drop their reference must call mm_decref; callers that don't are
 // effectively leaking under __mm_alloc_count.
@@ -1692,10 +1692,7 @@ func mrt_alloc 1 i64
     v0 = std param 0 i64
     std storeSlot 0 v0
     v1 = std constI64 0
-    // tag = MM_TAG_RAW (1): a raw, deliberately-typeless block. Non-zero so the
-    // strict mm-trace null-tag panic distinguishes this from a forgotten type tag.
-    v2 = std constI64 1
-    v3 = std call __mm_alloc v0 v1 v2
+    v3 = std call __mm_alloc v0 v1
     std storeSlot 1 v3
     // alloc-at-0 → restore the rc=1 contract this raw-buffer wrapper promises.
     v4 = std call __mm_incref v3
@@ -1712,8 +1709,8 @@ func mrt_alloc 1 i64
 end
 
 // mrt_alloc_with_dtor(size, destructor) -> rc=1 tracked block carrying
-// `destructor`. The alloc-at-0 equivalent of the retired `mm_alloc(size, dtor,
-// 0)`: `__mm_alloc` returns rc=0, so incref to the rc=1 contract the caller
+// `destructor`. The alloc-at-0 equivalent of the retired `mm_alloc(size, dtor)`:
+// `__mm_alloc` returns rc=0, so incref to the rc=1 contract the caller
 // (e.g. the hand-emitted `__ManagedSocket` / `__ManagedFile` wrappers in the
 // backends) expects. No zero-fill — the caller fully initializes the fixed-size
 // wrapper struct it allocates.
@@ -1721,12 +1718,7 @@ func mrt_alloc_with_dtor 2 i64
   block entry:
     v0 = std param 0 i64
     v1 = std param 1 i64
-    // tag = MM_TAG_RAW (1): the wrapper is type-agnostic (used by various fixed-size
-    // managed wrappers — __ManagedMemory records, cursors, socket/file handles). A
-    // non-zero sentinel keeps it out of the null-tag panic; callers that want a
-    // precise type name in the trace tag at their own `__mm_alloc` site instead.
-    v2 = std constI64 1
-    v3 = std call __mm_alloc v0 v1 v2
+    v3 = std call __mm_alloc v0 v1
     v4 = std call __mm_incref v3
     std ret v3
 end
@@ -3305,11 +3297,11 @@ end
 // own `mm_alloc`; `mrt_alloc` and the runtime container helpers call
 // `__mm_alloc` directly (see `mrt_alloc` for the raw-buffer rc=1 convention).
 // `mm_incref` / `mm_decref` / `mm_free` are thin delegations to the matching
-// `__mm_*` Internals bodies (single source of truth — refcount maintenance,
-// mm-trace instrumentation, and the pointer-sanity guard all live there).
+// `__mm_*` Internals bodies (single source of truth — refcount maintenance
+// and the pointer-sanity guard both live there).
 //
 // Header layout (32 bytes preceding the user pointer; matches Internals):
-//   [ptr - 32] = packed_id (alloc_id << 16 | tag; 0 when untraced)
+//   [ptr - 32] = reserved (always 0)
 //   [ptr - 24] = destructor function pointer (i64, 0 if no destructor)
 //   [ptr - 16] = size in bytes (i64; user-requested size)
 //   [ptr -  8] = refcount (i64)
@@ -3516,65 +3508,6 @@ func mm_drop 1 void
     std ret v2
 end
 
-// mm_move_{return,container,phi}(ptr): trace-only marker for an ownership MOVE — a
-// value whose +1 transfers to a new owner with NO refcount op. The destination is
-// baked into WHICH wrapper is called (not a runtime `dest` operand): this avoids a
-// regalloc hazard where a `dest`-const ValueId, queued at a branch terminator next
-// to the phi-edge materialization, was scheduled AFTER the `mm_move` call and read
-// stale (the phi-move traced `-> return` instead of `-> phi`). Each wrapper passes a
-// CONSTANT dest to the stdlib `__mm_move_trace` (single source of truth — trace line
-// + null/untraced guards). 0=return, 1=container, 2=phi. Untraced bodies DCE to a
-// bare `ret`. All three are seeded as runtime-reachability roots in BOTH link legs.
-func mm_move_return 1 void
-  block entry:
-    v0 = std param 0 i64
-    v1 = std constI64 0
-    v2 = std call __mm_move_trace v0 v1
-    v3 = std constI64 0
-    std ret v3
-end
-
-func mm_move_container 1 void
-  block entry:
-    v0 = std param 0 i64
-    v1 = std constI64 1
-    v2 = std call __mm_move_trace v0 v1
-    v3 = std constI64 0
-    std ret v3
-end
-
-func mm_move_phi 1 void
-  block entry:
-    v0 = std param 0 i64
-    v1 = std constI64 2
-    v2 = std call __mm_move_trace v0 v1
-    v3 = std constI64 0
-    std ret v3
-end
-
-// mm_scope_push(name) / mm_scope_pop(): mm-trace scope STACK frame bracketing. Each
-// function pushes its name cstr on entry and pops before returning; trace lines read
-// the top frame, so an inlined callee's push/pop (inlined verbatim) restore the
-// caller's scope after the inlined region — `[scope]` correct at any inline depth.
-// Wrap the stdlib `__mm_scope_push`/`__mm_scope_pop` (single source of truth; bodies
-// DCE to nothing untraced). Seeded as runtime-reachability roots in BOTH link legs
-// like `mm_drop`/`mm_move`, so the `call __mm_scope_*` edges stay symmetric between
-// the cache-off and cache-on builds.
-func mm_scope_push 1 void
-  block entry:
-    v0 = std param 0 i64
-    v1 = std call __mm_scope_push v0
-    v2 = std constI64 0
-    std ret v2
-end
-
-func mm_scope_pop 0 void
-  block entry:
-    v0 = std call __mm_scope_pop
-    v1 = std constI64 0
-    std ret v1
-end
-
 // mm_free(ptr): release a tracked allocation. Internal — usually invoked
 // by mm_decref when the refcount reaches zero. Reads the destructor from
 // [ptr - 24] and invokes it (if non-null) before slab-freeing. The
@@ -3602,7 +3535,7 @@ end
 // allocation directly (bypassing mm_free / the destructor — the new buffer
 // now owns whatever resources the old one held).
 //
-// If ptr == 0, behaves as mm_alloc(new_size, destructor=0, tag=0).
+// If ptr == 0, behaves as mm_alloc(new_size, destructor=0).
 //
 // Note: realloc transfers ownership. If the caller had aliased the old
 // pointer (incref'd it elsewhere), they would expect both to refer to the
@@ -3650,17 +3583,14 @@ func mm_realloc 2 i64
     v15 = std loadIndirect v14 0
     std storeSlot 3 v15
 
-    // new_ptr = __mm_alloc(new_size, destructor, 0). This refreshes the
+    // new_ptr = __mm_alloc(new_size, destructor). This refreshes the
     // destructor on the new buffer so a subsequent mm_decref still has it.
     // alloc-at-0: the new buffer INHERITS the old object's reference (realloc
     // identity), so incref to rc=1 — the old buffer is slab-freed below without
     // a matching decref, so its +1 transfers here.
     v16 = std loadSlot 1
     v17 = std loadSlot 3
-    // tag = MM_TAG_RAW (1): a realloc'd raw element buffer. Non-zero so the strict
-    // mm-trace null-tag panic is not tripped (the buffer carries no element type).
-    v18 = std constI64 1
-    v19 = std call __mm_alloc v16 v17 v18
+    v19 = std call __mm_alloc v16 v17
     std storeSlot 4 v19
     v35 = std call __mm_incref v19
 
@@ -3780,9 +3710,7 @@ func __managed_file_wrap 1 i64
   block do_wrap:
     v1 = std constI64 8
     v2 = std funcAddr __destruct___ManagedFile
-    // tag = MM_TAG_RAW (1): a fixed-size handle wrapper, no element type to name.
-    v3 = std constI64 1
-    v4 = std call __mm_alloc v1 v2 v3
+    v4 = std call __mm_alloc v1 v2
     std storeSlot 1 v4
     // alloc-at-0: the returned __ManagedFile is an owned ref — incref to rc=1.
     v8 = std call __mm_incref v4
@@ -4203,7 +4131,7 @@ end
 //
 // Like __gt_trace_emit below, the stub body doubles as a DCE anchor: it references
 // the two .std helpers the hand-emitted CPU-fault diagnostic (emitX64GtFaultDiagnostic)
-// calls — mrt_write_cstr_stderr and mm_trace_print_hex — so the dead-code pass keeps
+// calls — mrt_write_cstr_stderr and __diag_print_hex — so the dead-code pass keeps
 // their labels alive even though the only real callers are machine code the DCE can't
 // see (their fixups would otherwise resolve to .text+0). The body never executes (the
 // hand-emitted __gt_init overrides it); the arg is a throwaway constant string addr.
@@ -4212,7 +4140,7 @@ func __gt_init 0 void
     v0 = std globalAddr __gt_panic_msg_other
     v1 = std call mrt_write_cstr_stderr v0
     v2 = std constI64 0
-    v3 = std call mm_trace_print_hex v2
+    v3 = std call __diag_print_hex v2
     v4 = std constI64 0
     std ret v4
 end
@@ -4325,7 +4253,7 @@ func __gt_current_trace_id 0 i64
 end
 
 // The stub body is never executed (the hand-emitted machine code overrides this
-// label), but it references mm_trace_print_tag / mm_trace_print_i64 so the .std
+// label), but it references __diag_print_tag / __diag_print_i64 so the .std
 // dead-code pass keeps them alive — the real, label-overriding __gt_trace_emit
 // calls them from hand-emitted code the DCE can't see, and without this anchor
 // their labels would be stripped and those calls would resolve to .text+0.
@@ -4334,9 +4262,9 @@ func __gt_trace_emit 3 void
     v0 = std param 0 i64
     v1 = std param 1 i64
     v2 = std param 2 i64
-    v3 = std call mm_trace_print_tag v0
-    v4 = std call mm_trace_print_i64 v1
-    v5 = std call mm_trace_print_tag v2
+    v3 = std call __diag_print_tag v0
+    v4 = std call __diag_print_i64 v1
+    v5 = std call __diag_print_tag v2
     v6 = std constI64 0
     std ret v6
 end
@@ -4487,9 +4415,7 @@ func mrt_managed_list_create 1 i64
     v8 = std param 0 i64
     v0 = std constI64 40
     v1 = std funcAddr __destruct___ManagedList
-    // tag = MM_TAG_MANAGED_LIST (4) — see resetMmTraceTags' reserved indices.
-    v2 = std constI64 4
-    v3 = std call __mm_alloc v0 v1 v2
+    v3 = std call __mm_alloc v0 v1
     std storeSlot 0 v3
     // alloc-at-0: the returned list is an owned ref — incref to rc=1 so the
     // caller's matching decref balances (see dual-mm-alloc unification).
@@ -4518,9 +4444,7 @@ func mrt_managed_list_alloc_node 1 i64
 
     v1 = std constI64 32
     v2 = std funcAddr __destruct___ManagedListNode
-    // tag = MM_TAG_MANAGED_LIST_NODE (5) — see resetMmTraceTags' reserved indices.
-    v3 = std constI64 5
-    v4 = std call __mm_alloc v1 v2 v3
+    v4 = std call __mm_alloc v1 v2
     std storeSlot 1 v4
     // alloc-at-0: the returned node is an owned ref — incref to rc=1.
     v9 = std call __mm_incref v4

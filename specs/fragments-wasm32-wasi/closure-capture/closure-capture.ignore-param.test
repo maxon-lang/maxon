@@ -32,20 +32,19 @@ module {
     %2 = mir.stack_slot_addr slot_0
     %3 = mir.mov_imm 8 : i64
     %4 = mir.mov_imm 0 : i64
-    %5 = mir.mov_imm 0 : i64
-    %6 = mir.call @stdlib.__mm_alloc(%3, %4, %5)
-    mir.store %2, %6, 0 width: qword
-    %7 = mir.mov_imm 99 : i64
-    %10 = mir.indirect_call %1(%7, %6)
-    %11 = mir.call @mm_drop(%6)
-    %12 = mir.mov_imm 125 : i64
-    %13 = mir.cmp ugt, %10, %12
-    mir.cond_br %13 [then: __range_panic_0(), else: __range_ok_0()]
+    %5 = mir.call @stdlib.__mm_alloc(%3, %4)
+    mir.store %2, %5, 0 width: qword
+    %6 = mir.mov_imm 99 : i64
+    %9 = mir.indirect_call %1(%6, %5)
+    %10 = mir.call @mm_drop(%5)
+    %11 = mir.mov_imm 125 : i64
+    %12 = mir.cmp ugt, %9, %11
+    mir.cond_br %12 [then: __range_panic_0(), else: __range_ok_0()]
   __range_panic_0:
-    %14 = mir.global_addr @__panic_msg_7150bfd342200f8a
-    %15 = mir.call @mrt_panic(%14)
+    %13 = mir.global_addr @__panic_msg_7150bfd342200f8a
+    %14 = mir.call @mrt_panic(%13)
   __range_ok_0:
-    mir.ret %10
+    mir.ret %9
   }
 }
 ---

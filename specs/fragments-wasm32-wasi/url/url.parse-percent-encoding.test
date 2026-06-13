@@ -32,62 +32,58 @@ module {
     mir.store %0, %5, 32 width: qword
     %12 = mir.mov_imm 16 : i64
     %13 = mir.func_addr @__destruct_String
-    %11 = mir.call @stdlib.__mm_alloc(%12, %13, %0)
+    %11 = mir.call @stdlib.__mm_alloc(%12, %13)
     mir.store %5, %11, 0 width: qword
     mir.store %9, %11, 8 width: qword
-    %16, %17 = mir.try_call @URL.parse(%11)
-    %63 = mir.call @mm_drop(%11)
-    %19 = mir.cmp ne, %17, %0
-    mir.cond_br %19 [then: try_0.otherwise(), else: try_0.merge()]
+    %15, %16 = mir.try_call @URL.parse(%11)
+    %61 = mir.call @mm_drop(%11)
+    %18 = mir.cmp ne, %16, %0
+    mir.cond_br %18 [then: try_0.otherwise(), else: try_0.merge()]
   try_0.otherwise:
     mir.ret %9
   try_0.merge:
-    %54 = mir.load %16, 8 width: qword
-    mir.br inlined_stdlib.__mm_incref_0_0()
-  inlined_stdlib.__mm_incref_0_0:
-    %60 = mir.mov_imm 8 : i64
-    %61 = mir.sub.i64 %54, %60
-    mir.atomic_inc %61
-    mir.br inline_cont_main_0()
-  inline_cont_main_0:
-    %25 = mir.global_addr @__istr_1
-    %27 = mir.load %54, 0 width: qword
-    %28 = mir.load %27, 0 width: qword
-    %29 = mir.load %27, 8 width: qword
-    %30 = mir.global_addr @__istr_2
-    %34 = mir.add.i64 %0, %29
-    %35 = mir.add.i64 %34, %9
-    %37 = mir.add.i64 %35, %9
-    %38 = mir.call @mrt_alloc(%37)
-    mir.memcpy %38, %25, %0
-    %39 = mir.add.i64 %38, %0
-    mir.memcpy %39, %28, %29
-    %40 = mir.add.i64 %39, %29
+    %52 = mir.load %15, 8 width: qword
+    %58 = mir.mov_imm 8 : i64
+    %59 = mir.sub.i64 %52, %58
+    mir.atomic_inc %59
+    %24 = mir.global_addr @__istr_1
+    %26 = mir.load %52, 0 width: qword
+    %27 = mir.load %26, 0 width: qword
+    %28 = mir.load %26, 8 width: qword
+    %29 = mir.global_addr @__istr_2
+    %33 = mir.add.i64 %0, %28
+    %34 = mir.add.i64 %33, %9
+    %36 = mir.add.i64 %34, %9
+    %37 = mir.call @mrt_alloc(%36)
+    mir.memcpy %37, %24, %0
+    %38 = mir.add.i64 %37, %0
+    mir.memcpy %38, %27, %28
+    %39 = mir.add.i64 %38, %28
+    %62 = mir.call @__mm_decref_maybenull_helper(%52)
+    %63 = mir.call @__mm_decref_maybenull_helper(%15)
+    mir.memcpy %39, %29, %9
+    %41 = mir.mov_imm 48 : i64
+    %42 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %43 = mir.call @mrt_alloc_with_dtor(%41, %42)
+    mir.store %0, %43, 40 width: qword
+    mir.store %37, %43, 0 width: qword
+    mir.store %34, %43, 8 width: qword
+    mir.store %34, %43, 16 width: qword
+    mir.store %9, %43, 24 width: qword
+    %46 = mir.mov_imm -1 : i64
+    mir.store %46, %43, 32 width: qword
+    %48 = mir.mov_imm 16 : i64
+    %49 = mir.func_addr @__destruct_String
+    %47 = mir.call @stdlib.__mm_alloc(%48, %49)
+    mir.store %43, %47, 0 width: qword
+    mir.store %0, %47, 8 width: qword
+    %54 = mir.load %47, 0 width: qword
+    %60 = mir.call @stdlib.__mm_incref(%54)
+    %55 = mir.load %54, 0 width: qword
+    %56 = mir.load %54, 8 width: qword
+    %57 = mir.call @mrt_write_stdout(%55, %56)
+    %65 = mir.call @mm_drop(%47)
     %64 = mir.call @__mm_decref_maybenull_helper(%54)
-    %65 = mir.call @__mm_decref_maybenull_helper(%16)
-    mir.memcpy %40, %30, %9
-    %42 = mir.mov_imm 48 : i64
-    %43 = mir.func_addr @stdlib.__destruct___ManagedMemory
-    %44 = mir.call @mrt_alloc_with_dtor(%42, %43)
-    mir.store %0, %44, 40 width: qword
-    mir.store %38, %44, 0 width: qword
-    mir.store %35, %44, 8 width: qword
-    mir.store %35, %44, 16 width: qword
-    mir.store %9, %44, 24 width: qword
-    %47 = mir.mov_imm -1 : i64
-    mir.store %47, %44, 32 width: qword
-    %49 = mir.mov_imm 16 : i64
-    %50 = mir.func_addr @__destruct_String
-    %48 = mir.call @stdlib.__mm_alloc(%49, %50, %0)
-    mir.store %44, %48, 0 width: qword
-    mir.store %0, %48, 8 width: qword
-    %56 = mir.load %48, 0 width: qword
-    %62 = mir.call @stdlib.__mm_incref(%56)
-    %57 = mir.load %56, 0 width: qword
-    %58 = mir.load %56, 8 width: qword
-    %59 = mir.call @mrt_write_stdout(%57, %58)
-    %67 = mir.call @mm_drop(%48)
-    %66 = mir.call @__mm_decref_maybenull_helper(%56)
     mir.ret %0
   }
 }

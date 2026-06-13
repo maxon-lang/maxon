@@ -23,87 +23,7 @@ function main() returns ExitCode
 	return total
 end 'main'
 ---
-MmTrace: true
 ExitCode: 60
-Stderr: ```
-sl_init
-  os_alloc size=67108864
-mm_alloc __ManagedMemory_Score #1 size=40 [ScoreArray.create]
-  sl_alloc __ManagedMemory_Score #1 size=72 class=6
-mm_alloc ScoreArray #2 size=8 [ScoreArray.create]
-  sl_alloc ScoreArray #2 size=40 class=4
-mm_incref __ManagedMemory_Score #1 rc=1 [ScoreArray.create]
-mm_incref ScoreArray #2 rc=1 [ScoreArray.create]
-mm_transfer ScoreArray #2 rc=1 [ScoreArray.create]
-mm_alloc Score #3 size=8 [Score.create]
-  sl_alloc Score #3 size=40 class=4
-mm_incref Score #3 rc=1 [Score.create]
-mm_transfer Score #3 rc=1 [Score.create]
-mm_realloc __ManagedMemory_Score #1 size=32
-  mm_raw_alloc #R1 size=32 [realloc]
-    sl_alloc size=32 class=3
-mm_incref Score #3 rc=2 [ScoreArray.push]
-mm_alloc Score #4 size=8 [Score.create]
-  sl_alloc Score #4 size=40 class=4
-mm_incref Score #4 rc=1 [Score.create]
-mm_transfer Score #4 rc=1 [Score.create]
-mm_incref Score #4 rc=2 [ScoreArray.push]
-mm_alloc Score #5 size=8 [Score.create]
-  sl_alloc Score #5 size=40 class=4
-mm_incref Score #5 rc=1 [Score.create]
-mm_transfer Score #5 rc=1 [Score.create]
-mm_incref Score #5 rc=2 [ScoreArray.push]
-mm_alloc Cursor #6 size=40 [stdlib.ArrayIterator.create]
-  sl_alloc Cursor #6 size=72 class=6
-mm_incref __ManagedMemory_Score #1 rc=2 [stdlib.ArrayIterator.create]
-mm_incref Cursor #6 rc=1 [stdlib.ArrayIterator.create]
-mm_incref Cursor #6 rc=2 [stdlib.ArrayIterator.create]
-mm_alloc ArrayIterator #7 size=8 [stdlib.ArrayIterator.create]
-  sl_alloc ArrayIterator #7 size=40 class=4
-mm_incref Cursor #6 rc=3 [stdlib.ArrayIterator.create]
-mm_decref Cursor #6 rc=2 [stdlib.ArrayIterator.create]
-mm_decref Cursor #6 rc=1 [stdlib.ArrayIterator.create]
-mm_incref ArrayIterator #7 rc=1 [stdlib.ArrayIterator.create]
-mm_transfer ArrayIterator #7 rc=1 [stdlib.ArrayIterator.create]
-mm_transfer ArrayIterator #7 rc=1 [ScoreArray.createIterator]
-mm_incref Score #3 rc=3 [__ArrayIterator_Score.current]
-mm_decref Score #3 rc=2 [main]
-mm_incref Score #4 rc=3 [__ArrayIterator_Score.current]
-mm_decref Score #4 rc=2 [main]
-mm_incref Score #5 rc=3 [__ArrayIterator_Score.current]
-mm_decref Score #5 rc=2 [main]
-mm_decref ArrayIterator #7 rc=0 [main]
-  mm_decref Cursor #6 rc=0 [~ArrayIterator]
-    mm_decref __ManagedMemory_Score #1 rc=1 [~__ManagedMemoryCursor]
-    mm_free Cursor #6
-      sl_free Cursor #6 size=96 class=6
-  mm_free ArrayIterator #7
-    sl_free ArrayIterator #7 size=48 class=4
-mm_decref Score #5 rc=1 [main]
-mm_decref Score #4 rc=1 [main]
-mm_decref Score #3 rc=1 [main]
-mm_decref ScoreArray #2 rc=0 [main]
-  mm_decref __ManagedMemory_Score #1 rc=0 [~ScoreArray]
-    mm_decref Score #3 rc=0 [~ManagedElements]
-      mm_free Score #3
-        sl_free Score #3 size=48 class=4
-    mm_decref Score #4 rc=0 [~ManagedElements]
-      mm_free Score #4
-        sl_free Score #4 size=48 class=4
-    mm_decref Score #5 rc=0 [~ManagedElements]
-      mm_free Score #5
-        sl_free Score #5 size=48 class=4
-    mm_raw_free #R1
-      sl_free size=32 class=3
-    mm_free __ManagedMemory_Score #1
-      sl_free __ManagedMemory_Score #1 size=96 class=6
-  mm_free ScoreArray #2
-    sl_free ScoreArray #2 size=48 class=4
-mm_raw_alloc #R2 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R2
-  sl_free size=48 class=4
-```
 ---
 // CompiledIR
 module {
@@ -113,7 +33,7 @@ module {
     x64.mov [rbp-16], rcx
     x64.mov rcx, 8
     x64.xor edx, edx
-    x64.mov r8, 3
+    x64.mov r8, 53
     x64.call mm_alloc
     x64.mov [rbp-8], rax
     x64.mov rax, [rbp-8]
@@ -235,38 +155,6 @@ module {
     x64.call mm_decref
     x64.label __nonnull_skip_5
     x64.mov rax, [rbp-40]
-    x64.epilogue
-    x64.ret
-  }
-  func @__destruct___ManagedMemoryCursor(ptr: i64) {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+32]
-    x64.mov [rbp-16], rcx
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_0
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.jmp __destruct___ManagedMemoryCursor.done
-  done:
-    x64.epilogue
-    x64.ret
-  }
-  func @__destruct_ArrayIterator(ptr: i64) {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+0]
-    x64.mov [rbp-16], rcx
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_0
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.jmp __destruct_ArrayIterator.done
-  done:
     x64.epilogue
     x64.ret
   }

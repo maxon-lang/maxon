@@ -126,7 +126,6 @@ end 'main'
 ```
 
 <!-- test: memory.self-field-overwrite-frees-old -->
-<!-- MmTrace -->
 Overwrite a self field in a method and verify all allocations are freed properly.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -173,62 +172,8 @@ end 'main'
 ```stdout
 20
 ```
-```stderr
-sl_init
-  os_alloc size=67108864
-mm_alloc Inner #1 size=8 [Inner.create]
-  sl_alloc Inner #1 size=40 class=4
-mm_incref Inner #1 rc=1 [Inner.create]
-mm_transfer Inner #1 rc=1 [Inner.create]
-mm_alloc Container #2 size=16 [Container.create]
-  sl_alloc Container #2 size=48 class=4
-mm_incref Inner #1 rc=2 [Container.create]
-mm_incref Container #2 rc=1 [Container.create]
-mm_transfer Container #2 rc=1 [Container.create]
-mm_alloc Inner #3 size=8 [Inner.create]
-  sl_alloc Inner #3 size=40 class=4
-mm_incref Inner #3 rc=1 [Inner.create]
-mm_transfer Inner #3 rc=1 [Inner.create]
-mm_decref Inner #1 rc=1 [Container.replaceChild]
-mm_incref Inner #3 rc=2 [Container.replaceChild]
-mm_raw_alloc #R1 size=21 [toStr.buf [testAssign]]
-  sl_alloc size=21 class=2
-mm_alloc String #4 size=16 [testAssign]
-  sl_alloc String #4 size=48 class=4
-mm_alloc __ManagedMemory #5 size=40 [testAssign]
-  sl_alloc __ManagedMemory #5 size=72 class=6
-mm_raw_alloc #R2 size=4 [interp.buf [testAssign]]
-  sl_alloc size=4 class=0
-mm_raw_free #R1
-  sl_free size=24 class=2
-mm_incref __ManagedMemory #5 rc=1 [testAssign]
-mm_incref String #4 rc=1 [testAssign]
-mm_decref String #4 rc=0 [testAssign]
-  mm_decref __ManagedMemory #5 rc=0 [~String]
-    mm_raw_free #R2
-      sl_free size=8 class=0
-    mm_free __ManagedMemory #5
-      sl_free __ManagedMemory #5 size=96 class=6
-  mm_free String #4
-    sl_free String #4 size=48 class=4
-mm_decref Inner #3 rc=1 [testAssign]
-mm_decref Inner #1 rc=0 [testAssign]
-  mm_free Inner #1
-    sl_free Inner #1 size=48 class=4
-mm_decref Container #2 rc=0 [testAssign]
-  mm_decref Inner #3 rc=0 [~Container]
-    mm_free Inner #3
-      sl_free Inner #3 size=48 class=4
-  mm_free Container #2
-    sl_free Container #2 size=48 class=4
-mm_raw_alloc #R3 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R3
-  sl_free size=48 class=4
-```
 
 <!-- test: memory.qualified-field-overwrite-frees-old -->
-<!-- MmTrace -->
 Overwrite a qualified field and verify all allocations are freed properly.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -266,57 +211,4 @@ end 'main'
 ```
 ```stdout
 20
-```
-```stderr
-sl_init
-  os_alloc size=67108864
-mm_alloc Right #1 size=8 [Right.create]
-  sl_alloc Right #1 size=40 class=4
-mm_incref Right #1 rc=1 [Right.create]
-mm_transfer Right #1 rc=1 [Right.create]
-mm_alloc Pair #2 size=16 [Pair.create]
-  sl_alloc Pair #2 size=48 class=4
-mm_incref Right #1 rc=2 [Pair.create]
-mm_incref Pair #2 rc=1 [Pair.create]
-mm_transfer Pair #2 rc=1 [Pair.create]
-mm_alloc Right #3 size=8 [Right.create]
-  sl_alloc Right #3 size=40 class=4
-mm_incref Right #3 rc=1 [Right.create]
-mm_transfer Right #3 rc=1 [Right.create]
-mm_decref Right #1 rc=1 [testAssign]
-mm_incref Right #3 rc=2 [testAssign]
-mm_raw_alloc #R1 size=21 [toStr.buf [testAssign]]
-  sl_alloc size=21 class=2
-mm_alloc String #4 size=16 [testAssign]
-  sl_alloc String #4 size=48 class=4
-mm_alloc __ManagedMemory #5 size=40 [testAssign]
-  sl_alloc __ManagedMemory #5 size=72 class=6
-mm_raw_alloc #R2 size=4 [interp.buf [testAssign]]
-  sl_alloc size=4 class=0
-mm_raw_free #R1
-  sl_free size=24 class=2
-mm_incref __ManagedMemory #5 rc=1 [testAssign]
-mm_incref String #4 rc=1 [testAssign]
-mm_decref String #4 rc=0 [testAssign]
-  mm_decref __ManagedMemory #5 rc=0 [~String]
-    mm_raw_free #R2
-      sl_free size=8 class=0
-    mm_free __ManagedMemory #5
-      sl_free __ManagedMemory #5 size=96 class=6
-  mm_free String #4
-    sl_free String #4 size=48 class=4
-mm_decref Right #3 rc=1 [testAssign]
-mm_decref Right #1 rc=0 [testAssign]
-  mm_free Right #1
-    sl_free Right #1 size=48 class=4
-mm_decref Pair #2 rc=0 [testAssign]
-  mm_decref Right #3 rc=0 [~Pair]
-    mm_free Right #3
-      sl_free Right #3 size=48 class=4
-  mm_free Pair #2
-    sl_free Pair #2 size=48 class=4
-mm_raw_alloc #R3 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R3
-  sl_free size=48 class=4
 ```

@@ -47,7 +47,6 @@ export type TestExpectation
 	export var hasRequiredRdata as bool
 	export var requiredData as String
 	export var hasRequiredData as bool
-	export var mmTrace as bool
 	export var asyncTrace as bool
 	// When true, the captured CompiledIR snapshot includes stdlib functions
 	// reachable from `main` (dceFunctions has already pruned unreachable ones).
@@ -56,7 +55,7 @@ export type TestExpectation
 	export var includeStdlibIr as bool
 
 	export static function create() returns TestExpectation
-		return Self{exitCode: 0, hasExitCode: false, stdout: "", hasStdout: false, compilerStderr: "", hasCompilerStderr: false, runtimeStderr: "", hasRuntimeStderr: false, requiredLowering: "", hasRequiredLowering: false, hasAnyRequiredLowering: false, requiredIr: "", hasRequiredIr: false, hasAnyRequiredIr: false, requiredRdata: "", hasRequiredRdata: false, requiredData: "", hasRequiredData: false, mmTrace: false, asyncTrace: false, includeStdlibIr: false}
+		return Self{exitCode: 0, hasExitCode: false, stdout: "", hasStdout: false, compilerStderr: "", hasCompilerStderr: false, runtimeStderr: "", hasRuntimeStderr: false, requiredLowering: "", hasRequiredLowering: false, hasAnyRequiredLowering: false, requiredIr: "", hasRequiredIr: false, hasAnyRequiredIr: false, requiredRdata: "", hasRequiredRdata: false, requiredData: "", hasRequiredData: false, asyncTrace: false, includeStdlibIr: false}
 	end 'create'
 end 'TestExpectation'
 
@@ -78,7 +77,6 @@ export type SpecTest
 	export var args as String
 	export var sourceFiles as SourceFileArray
 	export var hasMultiFile as bool
-	export var mmTrace as bool
 	export var asyncTrace as bool
 	export var includeStdlibIr as bool
 	// Target keys this test is restricted to (from a `<!-- targets: a, b -->`
@@ -88,8 +86,8 @@ export type SpecTest
 	// that only fires on wasm32-wasi).
 	export var onlyTargets as TargetKeyArray
 
-	export static function create(name String, source String, expectation TestExpectation, args String, sourceFiles SourceFileArray, hasMultiFile bool, mmTrace bool, asyncTrace bool, includeStdlibIr bool = false, onlyTargets TargetKeyArray = TargetKeyArray.create()) returns SpecTest
-		return Self{name: name, source: source, expectation: expectation, args: args, sourceFiles: sourceFiles, hasMultiFile: hasMultiFile, mmTrace: mmTrace, asyncTrace: asyncTrace, includeStdlibIr: includeStdlibIr, onlyTargets: onlyTargets}
+	export static function create(name String, source String, expectation TestExpectation, args String, sourceFiles SourceFileArray, hasMultiFile bool, asyncTrace bool, includeStdlibIr bool = false, onlyTargets TargetKeyArray = TargetKeyArray.create()) returns SpecTest
+		return Self{name: name, source: source, expectation: expectation, args: args, sourceFiles: sourceFiles, hasMultiFile: hasMultiFile, asyncTrace: asyncTrace, includeStdlibIr: includeStdlibIr, onlyTargets: onlyTargets}
 	end 'create'
 end 'SpecTest'
 
@@ -113,12 +111,11 @@ export type Fragment
 	export var args as String
 	export var sourceFiles as SourceFileArray
 	export var hasMultiFile as bool
-	export var mmTrace as bool
 	export var asyncTrace as bool
 	export var includeStdlibIr as bool
 
-	export static function create(filePath String, testName String, source String, expectation TestExpectation, generatedIR String, hasGeneratedIR bool, args String, sourceFiles SourceFileArray, hasMultiFile bool, mmTrace bool, asyncTrace bool, includeStdlibIr bool = false) returns Fragment
-		return Self{filePath: filePath, testName: testName, source: source, expectation: expectation, generatedIR: generatedIR, hasGeneratedIR: hasGeneratedIR, args: args, sourceFiles: sourceFiles, hasMultiFile: hasMultiFile, mmTrace: mmTrace, asyncTrace: asyncTrace, includeStdlibIr: includeStdlibIr}
+	export static function create(filePath String, testName String, source String, expectation TestExpectation, generatedIR String, hasGeneratedIR bool, args String, sourceFiles SourceFileArray, hasMultiFile bool, asyncTrace bool, includeStdlibIr bool = false) returns Fragment
+		return Self{filePath: filePath, testName: testName, source: source, expectation: expectation, generatedIR: generatedIR, hasGeneratedIR: hasGeneratedIR, args: args, sourceFiles: sourceFiles, hasMultiFile: hasMultiFile, asyncTrace: asyncTrace, includeStdlibIr: includeStdlibIr}
 	end 'create'
 end 'Fragment'
 
@@ -456,7 +453,6 @@ export function parseSpecFile(content String, targetKey String) returns SpecTest
 			var source = ""
 			var expectation = TestExpectation.create()
 			var testArgs = ""
-			var testMmTrace = false
 			var testAsyncTrace = false
 			var testIncludeStdlibIr = false
 			var testOnlyTargets = TargetKeyArray.create()
@@ -497,13 +493,6 @@ export function parseSpecFile(content String, targetKey String) returns SpecTest
 					i = i + 1
 					continue
 				end 'isArgs'
-
-				// Parse MmTrace directive
-				if blockLine.contains("<!-- MmTrace") 'isMmTrace'
-					testMmTrace = true
-					i = i + 1
-					continue
-				end 'isMmTrace'
 
 				// Parse AsyncTrace directive
 				if blockLine.contains("<!-- AsyncTrace") 'isAsyncTrace'
@@ -662,7 +651,6 @@ export function parseSpecFile(content String, targetKey String) returns SpecTest
 
 			// Only add test if we found source code
 			if not source.isEmpty() 'hasSource'
-				expectation.mmTrace = testMmTrace
 				expectation.asyncTrace = testAsyncTrace
 				expectation.includeStdlibIr = testIncludeStdlibIr
 
@@ -670,7 +658,7 @@ export function parseSpecFile(content String, targetKey String) returns SpecTest
 				let sourceFiles = splitMultiFileSource(source)
 				let hasMulti = sourceFiles.count() > 0
 
-				let test = SpecTest.create(testName, source: source, expectation: expectation, args: testArgs, sourceFiles: sourceFiles, hasMultiFile: hasMulti, mmTrace: testMmTrace, asyncTrace: testAsyncTrace, includeStdlibIr: testIncludeStdlibIr, onlyTargets: testOnlyTargets)
+				let test = SpecTest.create(testName, source: source, expectation: expectation, args: testArgs, sourceFiles: sourceFiles, hasMultiFile: hasMulti, asyncTrace: testAsyncTrace, includeStdlibIr: testIncludeStdlibIr, onlyTargets: testOnlyTargets)
 				tests.push(test)
 			end 'hasSource'
 			continue
@@ -751,7 +739,7 @@ export function extractDocExamples(content String) returns SpecTestArray
 					expectation.hasExitCode = true
 				end 'defaultExitCode'
 
-				let test = SpecTest.create(testName, source: code, expectation: expectation, args: "", sourceFiles: SourceFileArray.create(), hasMultiFile: false, mmTrace: false, asyncTrace: false)
+				let test = SpecTest.create(testName, source: code, expectation: expectation, args: "", sourceFiles: SourceFileArray.create(), hasMultiFile: false, asyncTrace: false)
 				tests.push(test)
 			end 'hasMain'
 

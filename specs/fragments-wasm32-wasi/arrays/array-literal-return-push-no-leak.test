@@ -24,44 +24,16 @@ module {
   entry:
     %20 = mir.param local0 : i64
     %21 = mir.param local1 : i64
-    %22 = mir.mov_imm 8 : i64
-    %23 = mir.func_addr @__destruct_Array
-    %24 = mir.mov_imm 0 : i64
-    %25 = mir.call @stdlib.__mm_alloc(%22, %23, %24)
-    mir.br inlined_stdlib.__mm_incref_0_0()
-  inlined_stdlib.__mm_incref_0_0:
-    %33 = mir.mov_imm 8 : i64
-    %34 = mir.sub.i64 %25, %33
-    mir.atomic_inc %34
-    mir.br inline_cont_makeNumbers_0()
-  inline_cont_makeNumbers_0:
-    %27 = mir.mov_imm 48 : i64
-    %28 = mir.func_addr @stdlib.__destruct___ManagedMemory
-    %29 = mir.call @stdlib.__mm_alloc(%27, %28, %24)
-    mir.br inlined_stdlib.__mm_incref_0_1()
-  inlined_stdlib.__mm_incref_0_1:
-    %35 = mir.mov_imm 8 : i64
-    %36 = mir.sub.i64 %29, %35
-    mir.atomic_inc %36
-    mir.br inline_cont_makeNumbers_1()
-  inline_cont_makeNumbers_1:
-    mir.store %24, %29, 0 width: qword
-    mir.store %24, %29, 8 width: qword
-    mir.store %24, %29, 16 width: qword
-    %31 = mir.mov_imm 8 : i64
-    mir.store %31, %29, 24 width: qword
-    %32 = mir.mov_imm -1 : i64
-    mir.store %32, %29, 32 width: qword
-    mir.store %24, %29, 40 width: qword
-    mir.store %29, %25, 0 width: qword
+    %3 = mir.global_addr @__layout_Array_Integer
+    %4 = mir.call @Array.create(%3)
     %7 = mir.global_addr @__layout_Array_Integer
-    %8 = mir.call @Array.push(%25, %20, %7)
+    %8 = mir.call @Array.push(%4, %20, %7)
     %11 = mir.global_addr @__layout_Array_Integer
-    %12 = mir.call @Array.push(%25, %21, %11)
+    %12 = mir.call @Array.push(%4, %21, %11)
     %16 = mir.add.i64 %20, %21
     %17 = mir.global_addr @__layout_Array_Integer
-    %18 = mir.call @Array.push(%25, %16, %17)
-    mir.ret %25
+    %18 = mir.call @Array.push(%4, %16, %17)
+    mir.ret %4
   }
   func @main() -> u8 {
   entry:

@@ -30,31 +30,34 @@ module {
     mir.store %6, %3, 16 width: qword
     %7 = mir.mov_imm 1 : i64
     mir.store %7, %3, 24 width: qword
-    mir.store %4, %3, 32 width: qword
+    %8 = mir.mov_imm 0 : i64
+    mir.store %8, %3, 32 width: qword
     %10 = mir.mov_imm 16 : i64
     %11 = mir.func_addr @__destruct_String
-    %9 = mir.call @stdlib.__mm_alloc(%10, %11, %4)
-    %34 = mir.call @stdlib.__mm_incref(%9)
+    %9 = mir.call @stdlib.__mm_alloc(%10, %11)
+    %35 = mir.call @stdlib.__mm_incref(%9)
     mir.store %3, %9, 0 width: qword
     mir.store %7, %9, 8 width: qword
-    %15 = mir.mov_imm 8 : i64
-    %32 = mir.mov_imm 0 : i64
-    %33 = mir.call @stdlib.__managed_mem_create_managed(%7, %15, %32)
-    %19, %20 = mir.try_call @stdlib.__managed_mem_set(%33, %4, %9)
-    %22, %23 = mir.try_call @stdlib.__managed_mem_set_length(%33, %7)
-    %24 = mir.func_addr @stdlib.__mm_decref
-    mir.store %24, %33, 40 width: qword
-    %25 = mir.global_addr @__layout_Array_String
-    %26 = mir.call @Array.init(%33, %25)
-    %27 = mir.global_addr @__layout_Array_String
-    %28 = mir.call @Array.count(%26, %27)
-    %31 = mir.cmp eq, %28, %7
-    %35 = mir.call @__mm_decref_maybenull_helper(%26)
-    mir.cond_br %31 [then: check_0(), else: check_0.after()]
+    %14 = mir.mov_imm 8 : i64
+    %33 = mir.mov_imm 0 : i64
+    %34 = mir.call @stdlib.__managed_mem_create_managed(%7, %14, %33)
+    %17 = mir.mov_imm 0 : i64
+    %18, %19 = mir.try_call @stdlib.__managed_mem_set(%34, %17, %9)
+    %21, %22 = mir.try_call @stdlib.__managed_mem_set_length(%34, %7)
+    %23 = mir.func_addr @stdlib.__mm_decref
+    mir.store %23, %34, 40 width: qword
+    %24 = mir.global_addr @__layout_Array_String
+    %25 = mir.call @Array.init(%34, %24)
+    %26 = mir.global_addr @__layout_Array_String
+    %27 = mir.call @Array.count(%25, %26)
+    %30 = mir.cmp eq, %27, %7
+    %36 = mir.call @__mm_decref_maybenull_helper(%25)
+    mir.cond_br %30 [then: check_0(), else: check_0.after()]
   check_0:
     mir.ret %7
   check_0.after:
-    mir.ret %4
+    %32 = mir.mov_imm 0 : i64
+    mir.ret %32
   }
 }
 ---

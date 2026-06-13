@@ -2,15 +2,7 @@
 // Parses spec files, generates fragments, and runs tests.
 // Uses the fragment-based pipeline matching the C# test runner.
 
-let whitelist = ["mm-ladder",
-	"mm-ladder-2",
-	"mm-ladder-3",
-	"mm-ladder-4",
-	"mm-ladder-5",
-	"mm-ladder-containers",
-	"mm-ladder-containers-2",
-	"mm-ladder-managed-element-containers",
-	"basics",
+let whitelist = ["basics",
 	"compiler-directives",
 	"print-function",
 	"variables",
@@ -683,70 +675,18 @@ end 'captureLoweringLog'
 // `finalIrString` with stdlib skipped) for `--update-required` to write into the
 // test's `RequiredIR:<target>` block. Mirrors captureLoweringLog but returns
 // `compileResult.ir` instead of the trace. Returns "" on compile failure.
-function captureCompiledIr(source String, virtualPath FilePath, specName String, tempDir FilePath, target Target, includeStdlibIr bool, mmTrace bool) returns String
+function captureCompiledIr(source String, virtualPath FilePath, specName String, tempDir FilePath, target Target, includeStdlibIr bool) returns String
 	let ext = executableExtension(target)
 	let tempExe = tempDir.join("{specName}{ext}")
 	let normalizedSource = source.trim()
 	// Match the validation run's compile EXACTLY so the captured IR is byte-identical:
-	//  - `virtualPath` = the fragment .test path (content-hashed panic labels embed it),
-	//  - the test's `mmTrace` (with trace on, a managed alloc's tag-index immediate is
-	//    interned/non-zero), AND
-	//  - for an mmTrace test, the stdlib cache BYPASS the validation run uses: a
-	//    cache-bypass compile re-lowers stdlib, which interns the stdlib types' trace
-	//    tags FIRST, so the user type's tag index (and its alloc immediate) only matches
-	//    when both legs lower stdlib the same way. resetMmTraceTags() (in
-	//    compileSourceWithIr) zeroes the table at the start of each compile.
-	var bypassed = false
-	if mmTrace 'bypassForTrace'
-		resetStdlibLoaderState()
-		setStdlibCacheBypassed(true)
-		bypassed = true
-	end 'bypassForTrace'
-	let compileResult = try compileSourceWithIr(normalizedSource, virtualPath: virtualPath, target: target, outputPath: tempExe, coverage: false, covMapPath: tempExe.changeExtension(".covmap"), includeStdlibIr: includeStdlibIr, asyncTrace: false, mmTrace: mmTrace) otherwise 'compileFailed'
-		if bypassed 'restoreErr'
-			setStdlibCacheBypassed(false)
-			resetStdlibLoaderState()
-			warmStdlibCache(target)
-		end 'restoreErr'
+	// `virtualPath` = the fragment .test path (content-hashed panic labels embed it).
+	let compileResult = try compileSourceWithIr(normalizedSource, virtualPath: virtualPath, target: target, outputPath: tempExe, coverage: false, covMapPath: tempExe.changeExtension(".covmap"), includeStdlibIr: includeStdlibIr, asyncTrace: false) otherwise 'compileFailed'
 		return ""
 	end 'compileFailed'
-	if bypassed 'restore'
-		setStdlibCacheBypassed(false)
-		resetStdlibLoaderState()
-		warmStdlibCache(target)
-	end 'restore'
 	cleanup(tempExe)
 	return compileResult.ir
 end 'captureCompiledIr'
-
-// Capture a test's mm-trace (the `stderr` block) for `--update-required` to write
-// when the test has `<!-- MmTrace -->`. Compiles with the stdlib cache BYPASSED so
-// the trace calls are materialized (the on-disk cache is built trace-free — see
-// the bypass in runTestFromFragment), runs the exe, and returns its trimmed
-// stderr. Restores the warm cache afterward. Returns "" on compile/run failure.
-function captureMmTrace(source String, virtualPath FilePath, specName String, tempDir FilePath, target Target, includeStdlibIr bool) returns String
-	let ext = executableExtension(target)
-	let tempExe = tempDir.join("{specName}_mmtrace{ext}")
-	let normalizedSource = source.trim()
-	resetStdlibLoaderState()
-	setStdlibCacheBypassed(true)
-	let compileResult = try compileSourceWithIr(normalizedSource, virtualPath: virtualPath, target: target, outputPath: tempExe, coverage: false, covMapPath: tempExe.changeExtension(".covmap"), includeStdlibIr: includeStdlibIr, asyncTrace: false, mmTrace: true, leakCheck: true) otherwise 'compileFailed'
-		setStdlibCacheBypassed(false)
-		resetStdlibLoaderState()
-		warmStdlibCache(target)
-		return ""
-	end 'compileFailed'
-	setStdlibCacheBypassed(false)
-	resetStdlibLoaderState()
-	warmStdlibCache(target)
-	let runCommand = buildRunCommand(compileResult.outputPath, target: target, testArgs: "")
-	let runResult = try Subprocess.run(runCommand.exe, arguments: runCommand.argv, workingDirectory: tempDir, timeoutMs: testProcessTimeoutMs) otherwise 'runFail'
-		cleanup(tempExe)
-		return ""
-	end 'runFail'
-	cleanup(tempExe)
-	return trimWhitespace(stripFaultRipSuffix(runResult.stderr))
-end 'captureMmTrace'
 
 // Update RequiredLowering blocks in all spec files by compiling each test and capturing lowering output.
 function updateAllRequiredLowering(specDir FilePath, tempDir FilePath, filter String, target Target, targetKey String)
@@ -802,7 +742,6 @@ function updateAllRequiredIr(fragmentDir FilePath, tempDir FilePath, filter Stri
 		end 'isDraft'
 		let tests = parseSpecFile(content, targetKey: targetKey)
 		var results = TestResultArray.create()
-		var mmTraceResults = TestResultArray.create()
 		for test in tests 'eachTest'
 			let testPath = "{specName}/{test.name}"
 			if not filterMatches(filter, testPath: testPath) 'noMatch'
@@ -825,29 +764,19 @@ function updateAllRequiredIr(fragmentDir FilePath, tempDir FilePath, filter Stri
 			// path (its basename feeds the panic message's `sourceFileName`).
 			let fragSource = "// Test: {test.name}\n{test.source}"
 			let fragVirtualPath = fragmentDir.join(specName).join("{test.name}.test")
-			let ir = captureCompiledIr(fragSource, virtualPath: fragVirtualPath, specName: specName, tempDir: tempDir, target: target, includeStdlibIr: test.expectation.includeStdlibIr, mmTrace: test.expectation.mmTrace)
+			let ir = captureCompiledIr(fragSource, virtualPath: fragVirtualPath, specName: specName, tempDir: tempDir, target: target, includeStdlibIr: test.expectation.includeStdlibIr)
 			if not ir.isEmpty() 'hasIr'
 				results.push(TestResult.create(test.name, passed: true, errorMessage: "", filePath: "", loweringLog: "", compileIr: ir))
 			end 'hasIr'
-			// MmTrace tests: capture the runtime mm-trace and write it into the
-			// `stderr` block, so authors don't hand-transcribe traces. (Carried in
-			// the TestResult's `loweringLog` field for updateSpecStderr.)
-			if test.expectation.mmTrace 'hasMmTrace'
-				let trace = captureMmTrace(fragSource, virtualPath: fragVirtualPath, specName: specName, tempDir: tempDir, target: target, includeStdlibIr: test.expectation.includeStdlibIr)
-				mmTraceResults.push(TestResult.create(test.name, passed: true, errorMessage: "", filePath: "", loweringLog: trace, compileIr: ""))
-			end 'hasMmTrace'
 		end 'eachTest'
-		// Both captures above are independent of the block edits below (they compile
-		// the original source, not the edited spec file), so the write order is
-		// immaterial — each is an idempotent find/replace of its own fenced block.
-		if mmTraceResults.count() > 0 'hasTraces'
-			updateSpecStderr(specPath, results: mmTraceResults)
-		end 'hasTraces'
+		// The capture above is independent of the block edit below (it compiles the
+		// original source, not the edited spec file), so the write is an idempotent
+		// find/replace of the RequiredIR fenced block.
 		if results.count() > 0 'hasResults'
 			updateSpecRequiredIr(specPath, targetKey: targetKey, results: results)
 		end 'hasResults'
 	end 'eachSpec'
-	logInfo(LogCategory.testing, message: function() gives "Updated RequiredIR + mm-trace blocks in spec files")
+	logInfo(LogCategory.testing, message: function() gives "Updated RequiredIR blocks in spec files")
 end 'updateAllRequiredIr'
 
 // Regenerate EVERY `--update-required` block family for the whitelisted specs:
@@ -1413,9 +1342,8 @@ end 'sliceFromBytePos'
 // visibility (which depends on directory subtree relationships) works.
 function compileFragmentInMemory(fragment Fragment, virtualSourcePath FilePath, target Target, outputExe FilePath, leakCheck bool = false) returns CompileWithIrResult throws CompileError
 	let covMapPath = outputExe.changeExtension(".covmap")
-	let effectiveMmTrace = fragment.mmTrace
 	if not fragment.hasMultiFile 'isSingle'
-		return try compileSourceWithIr(fragment.source, virtualPath: virtualSourcePath, target: target, outputPath: outputExe, coverage: false, covMapPath: covMapPath, includeStdlibIr: fragment.includeStdlibIr, asyncTrace: fragment.asyncTrace, mmTrace: effectiveMmTrace, leakCheck: leakCheck)
+		return try compileSourceWithIr(fragment.source, virtualPath: virtualSourcePath, target: target, outputPath: outputExe, coverage: false, covMapPath: covMapPath, includeStdlibIr: fragment.includeStdlibIr, asyncTrace: fragment.asyncTrace, leakCheck: leakCheck)
 	end 'isSingle'
 
 	// Anchor virtual paths in the fragment's directory so module-visibility
@@ -1433,7 +1361,7 @@ function compileFragmentInMemory(fragment Fragment, virtualSourcePath FilePath, 
 		let normalizedSource = pair.source if pair.source.endsWith("\n") else "{pair.source}\n"
 		virtualFiles.push(VirtualSourceFile.create(path, source: normalizedSource))
 	end 'eachFile'
-	return try compileMultiFileSourceWithIr(virtualFiles, projectRoot: fragmentDir, target: target, outputPath: outputExe, coverage: false, covMapPath: covMapPath, includeStdlibIr: fragment.includeStdlibIr, asyncTrace: fragment.asyncTrace, mmTrace: effectiveMmTrace, leakCheck: leakCheck)
+	return try compileMultiFileSourceWithIr(virtualFiles, projectRoot: fragmentDir, target: target, outputPath: outputExe, coverage: false, covMapPath: covMapPath, includeStdlibIr: fragment.includeStdlibIr, asyncTrace: fragment.asyncTrace, leakCheck: leakCheck)
 end 'compileFragmentInMemory'
 
 // Run a single test from a parsed fragment. Returns TestResult.
@@ -1463,18 +1391,6 @@ function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Tar
 		startCapturingTrace()
 	end 'enableTrace'
 
-	// mm-trace emits its `mm_alloc`/`mm_decref`/... runtime calls from INSIDE the
-	// stdlib MM bodies (`__mm_alloc`, `__slab_*`), guarded by a compile-time
-	// `__Internals.mmTraceEnabled()` fold. The on-disk stdlib cache is built
-	// trace-free, so a cache-ON functional compile would emit no trace. Force a
-	// cache-BYPASS compile for MmTrace fragments so the stdlib is lowered fresh
-	// with `project.mmTraceEnabled = true`, materializing the trace calls. Restore
-	// the warm cache state afterward so later tests are unaffected.
-	if fragment.mmTrace 'mmTraceBypass'
-		resetStdlibLoaderState()
-		setStdlibCacheBypassed(true)
-	end 'mmTraceBypass'
-
 	// Compile source directly from memory, capturing any error output.
 	// Multi-file tests (those with `// --- file: name.maxon` markers) feed
 	// each fragment as a distinct compilation unit so cross-file references
@@ -1493,11 +1409,6 @@ function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Tar
 			cancelCapturingTrace()
 			setCategoryLogLevel(LogCategory.ir, level: LogLevel.ERROR)
 		end 'cancelTrace'
-		if fragment.mmTrace 'restoreBypassOnFail'
-			setStdlibCacheBypassed(false)
-			resetStdlibLoaderState()
-			warmStdlibCache(target)
-		end 'restoreBypassOnFail'
 
 		if fragment.expectation.hasCompilerStderr 'expectedError'
 			// Compilation failed as expected — validate the error message
@@ -1516,13 +1427,6 @@ function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Tar
 	end 'compileFailed'
 	totalCompileMs = totalCompileMs + (Clock.nowMs() - compileStart)
 	cancelCapturingErrors()
-	// Restore the warm cache state after an MmTrace bypass compile (the traced
-	// exe is already on disk, so this only affects subsequent tests).
-	if fragment.mmTrace 'restoreBypass'
-		setStdlibCacheBypassed(false)
-		resetStdlibLoaderState()
-		warmStdlibCache(target)
-	end 'restoreBypass'
 	let outputPath = compileResult.outputPath
 	let compileIr = compileResult.ir
 
@@ -2513,36 +2417,6 @@ function updateSpecRequiredIr(specPath FilePath, targetKey String, results TestR
 		logInfo(LogCategory.testing, message: function() gives "Updated {totalUpdated} RequiredIR block(s) in {specPath}")
 	end 'showCount'
 end 'updateSpecRequiredIr'
-
-// Update each test's `stderr` block from the captured mm-trace (carried in the
-// TestResult's loweringLog field). Mirrors updateSpecRequiredIr; the `stderr`
-// block is NOT target-qualified. Only existing `stderr` blocks are updated.
-function updateSpecStderr(specPath FilePath, results TestResultArray)
-	var specContent = try File.readText(specPath) otherwise return
-
-	var modified = false
-	var totalUpdated = 0
-
-	for result in results 'eachResult'
-		let updatedContent = updateLoweringBlock(specContent, testName: result.testName, targetKey: "", loweringLog: result.loweringLog, blockKeyword: "stderr", targetQualified: false)
-		if updatedContent != specContent 'changed'
-			specContent = updatedContent
-			modified = true
-			totalUpdated = totalUpdated + 1
-			logInfo(LogCategory.testing, message: function() gives "Updated mm-trace stderr for {result.testName}")
-		end 'changed'
-	end 'eachResult'
-
-	if modified 'writeBack'
-		try File.writeText(specPath, content: specContent) otherwise 'writeErr'
-			logError(LogCategory.testing, message: function() gives "Failed to write spec: {specPath}")
-		end 'writeErr'
-	end 'writeBack'
-
-	if totalUpdated > 0 'showCount'
-		logInfo(LogCategory.testing, message: function() gives "Updated {totalUpdated} mm-trace block(s) in {specPath}")
-	end 'showCount'
-end 'updateSpecStderr'
 
 // Update or insert a fenced block for a given test in spec content. When
 // `targetQualified` is true the header is `{blockKeyword}:{targetKey}`

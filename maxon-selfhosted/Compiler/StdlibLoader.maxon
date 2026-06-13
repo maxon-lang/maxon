@@ -274,150 +274,10 @@ export function setCachedBuiltinStringLiteralTypeName(name String)
 	cachedBuiltinStringLiteralTypeName = name.toByteArray()
 end 'setCachedBuiltinStringLiteralTypeName'
 
-// `--mm-trace` bypass: when true, `getStdlibModule` skips both the in-process
-// warm path and the on-disk cache read, forcing a fresh parse + lowering from
-// source so stdlib lowers INLINE in the user pipeline with the mm-trace calls
-// materialized (the on-disk cache is built trace-free). The companion
-// write-cache call at the end of `getStdlibModule` is also short-circuited so a
-// bypassed (traced) run doesn't overwrite the disk cache with a traced build.
-var stdlibCacheBypassed = false
-
-// Phase 0b regalloc roadmap: process-wide set of stdlib function names whose
-// source files should be dropped from the whitelist before parsing /
-// compiling the stdlib cache. Used by `spec-test --skip-stdlib-fn=NAME[,...]`
-// to bypass functions the current register allocator cannot compile (notably
-// `sha256`) so the rest of the spec suite can run while the allocator is
-// being fixed. Each entry is a *function name* (e.g. `sha256`) — the filter
-// resolves the name to the corresponding whitelist entry by matching its
-// file basename without the `.maxon` extension, case-insensitively.
-//
-// Stored lowercased so the per-file match in `collectStdlibFiles` is a flat
-// equality check. Removed by Phase 3 of the roadmap once sha256 compiles
-// cleanly; the flag becomes a no-op (no whitelist entry will match) but is
-// not deleted because future allocator phases may rely on it again.
-var skippedStdlibFunctionsLower = StringArray.create()
-
-// Original comma-separated argument as supplied on the CLI, preserved so
-// the parent process can forward it verbatim to its worker subprocesses
-// (each worker re-parses its own CLI args, so the skip set must round-trip
-// through `--skip-stdlib-fn=...` exactly as the user supplied it).
-var skippedStdlibFunctionsRaw = ByteArray.create()
-
-// Setter for the skipped-function list. Called from the spec-test entry
-// point after argument parsing, before any `warmStdlibCache(target)` call.
-// Lowercases each name once so per-file matching during `collectStdlibFiles`
-// stays a flat equality check rather than re-lowering on every call.
-//
-// `rawArg` is the original comma-separated CLI value (or "" if none) — the
-// parent process stashes it here so worker-command builders can read it
-// back via `getSkippedStdlibFunctionsArg()` without a separate plumbing
-// path through every call layer.
-export function setSkippedStdlibFunctions(names StringArray, rawArg String)
-	var lowered = StringArray.create()
-	for name in names 'each'
-		var trimmed = name.trim()
-		if trimmed.isEmpty() 'empty'
-			continue
-		end 'empty'
-		lowered.push(trimmed.toLower())
-	end 'each'
-	skippedStdlibFunctionsLower = lowered
-	skippedStdlibFunctionsRaw = rawArg.toByteArray()
-end 'setSkippedStdlibFunctions'
-
-export function getSkippedStdlibFunctionsArg() returns String
-	return String.from(skippedStdlibFunctionsRaw)
-end 'getSkippedStdlibFunctionsArg'
-
-// Test whether a whitelisted stdlib file should be dropped from the
-// per-process cache build because the user passed its function name via
-// `--skip-stdlib-fn`. Matches against the basename with `.maxon` stripped,
-// case-insensitively — so `--skip-stdlib-fn=sha256` skips
-// `stdlib/Sha256.maxon` (and any future relocations of that file).
-function isStdlibRelativePathSkipped(relPath String) returns bool
-	if skippedStdlibFunctionsLower.count() == 0 'noSkips'
-		return false
-	end 'noSkips'
-	// Extract the filename without leading directories. Whitelist entries
-	// always end in `.maxon`; the stem helper enforces that invariant.
-	let lastSlash = try relPath.findLast("/") otherwise 'noSlash'
-		// No slash → the whole string is the basename.
-		return checkStemAgainstSkipList(relPath)
-	end 'noSlash'
-	let nameStart = try relPath.indexAfter(lastSlash) otherwise 'badSlashIdx'
-		// `lastSlash` was just produced by findLast on the same string, so
-		// indexAfter can only fail if the slash is at the very end — which
-		// would mean an empty basename and a bogus whitelist entry.
-		return false
-	end 'badSlashIdx'
-	let basename = relPath.slice(nameStart, endIndex: relPath.endIndex())
-	return checkStemAgainstSkipList(basename)
-end 'isStdlibRelativePathSkipped'
-
-// Compare `basename` (filename portion of a whitelist entry, no leading
-// directory) against the lowercased skip set. The basename must end in
-// `.maxon`; the extension is stripped before the case-insensitive match.
-function checkStemAgainstSkipList(basename String) returns bool
-	if not basename.endsWith(".maxon") 'notMaxon'
-		return false
-	end 'notMaxon'
-	let dotIdx = try basename.findLast(".") otherwise 'noDot'
-		// Cannot happen: endsWith(".maxon") above guarantees a "." is
-		// present. The type system still requires the throw be handled.
-		return false
-	end 'noDot'
-	var stem = basename.slice(basename.startIndex(), endIndex: dotIdx)
-	stem = stem.toLower()
-	for skipName in skippedStdlibFunctionsLower 'eachSkip'
-		if skipName == stem 'match'
-			return true
-		end 'match'
-	end 'eachSkip'
-	return false
-end 'checkStemAgainstSkipList'
-
-export function setStdlibCacheBypassed(bypassed bool)
-	stdlibCacheBypassed = bypassed
-end 'setStdlibCacheBypassed'
-
-// Wipe every module-level stdlib-cache var back to its initial state. The
-// mm-trace test path calls this before a bypassed (traced) compile so it starts
-// from blank in-process state and re-parses stdlib from source, and again
-// afterward (paired with `warmStdlibCache`) so later untraced tests resume from
-// the warm cache. Each assignment mirrors the original top-level initializer above.
-//
-// `stdlibCacheProjectDirs` is intentionally NOT reset: it's not loader cache
-// state, it's a sticky hint that pins the on-disk cache file location to the
-// first project's directory observed in the process. Clearing it would make
-// post-reset compiles look for the cache under the per-test exe's path
-// instead of the suite-warmup project's, producing spurious cache misses on
-// the warm cached compile that follows an mm-trace test's reset.
-export function resetStdlibLoaderState()
-	cachedStdlibModule = MaxonModule.create()
-	stdlibParsedModuleArr = StdlibParseSnapshotArray.create()
-	stdlibLoaded = false
-	stdlibTypealiases = TypealiasMap.create()
-	stdlibTypealiasVisibilities = TypealiasVisibilityMap.create()
-	stdlibTypealiasRanges = TypealiasRangeMap.create()
-	stdlibTypealiasCastCategories = TypealiasCastCategoryMap.create()
-	cachedStdlibStdModule = StdModule.create()
-	cachedStdlibFuncEdges = CachedFuncEdgeMap.create()
-	cachedStdlibCacheData = StdlibCacheData.create()
-	resetLazyStdlibState()
-	stdlibCacheValid = false
-	stdlibCacheTargetSet = false
-	stdlibCacheCpuOrd = 0
-	stdlibCacheOsOrd = 0
-	cachedBuiltinArrayLiteralTypeName = ByteArray.create()
-	cachedBuiltinDictionaryLiteralTypeName = ByteArray.create()
-	cachedBuiltinCharLiteralTypeName = ByteArray.create()
-	cachedBuiltinStringLiteralTypeName = ByteArray.create()
-end 'resetStdlibLoaderState'
-
 // Invalidate the v80 lazy-codegen memo (reconstructed MIR, edge map, and the
-// already-compiled-name set). Called by `resetStdlibLoaderState` and on every
-// cross-target switch (`loadCacheForTarget`) — the memo is keyed to one
-// target's reconstructed module + arch backend and must not leak across.
+// already-compiled-name set). Called on every cross-target switch
+// (`loadCacheForTarget`) — the memo is keyed to one target's reconstructed
+// module + arch backend and must not leak across.
 // `lazyCompiledStdlibNames` is re-seeded from the loaded cache's real-code
 // entries by `syncLazyCompiledNames` on the next lazy fill.
 function resetLazyStdlibState()
@@ -456,9 +316,7 @@ end 'findStdlibProjectRoot'
 // Recursively collect every `.maxon` file under `stdlib/`. Load order is
 // whatever order the filesystem returns — the type / conformance resolver
 // is order-independent, so the cache build does not depend on which file
-// parses first. Files individually skipped via `--skip-stdlib-fn=NAME`
-// are filtered here (Phase 0b runner-side workaround for the register
-// allocator); the rest are returned for parsing.
+// parses first.
 function collectStdlibFiles() returns FilePathArray
 	var files = FilePathArray.create()
 	let stdlibPath = findStdlibPath()
@@ -469,15 +327,12 @@ function collectStdlibFiles() returns FilePathArray
 	return files
 end 'collectStdlibFiles'
 
-// Walk `dir` recursively and push every `.maxon` file into `out`. Honours
-// the `--skip-stdlib-fn=NAME[,...]` runtime opt-in by skipping files whose
-// basename (with `.maxon` stripped) matches a skipped name. Hidden entries
-// (`.something`) and non-existent / unreadable directories are silently
-// ignored — the stdlib tree is trusted content, so a missing subdirectory
-// is treated as "nothing to add" rather than a fatal error.
+// Walk `dir` recursively and push every `.maxon` file into `out`. Hidden
+// entries (`.something`) and non-existent / unreadable directories are
+// silently ignored — the stdlib tree is trusted content, so a missing
+// subdirectory is treated as "nothing to add" rather than a fatal error.
 function collectMaxonFilesUnder(dir FilePath, into FilePathArray)
 	let entries = try Directory.list(dir) otherwise return
-	let projectRoot = findStdlibProjectRoot()
 	for entry in entries 'eachEntry'
 		if Directory.exists(entry) 'isDir'
 			collectMaxonFilesUnder(entry, into: into)
@@ -486,39 +341,10 @@ function collectMaxonFilesUnder(dir FilePath, into FilePathArray)
 			if not name.endsWith(".maxon") 'notMaxon'
 				continue
 			end 'notMaxon'
-			// `isStdlibRelativePathSkipped` matches case-insensitively on the
-			// basename minus `.maxon`, so we pass the entry's relative path
-			// for symmetry with the original whitelist-driven shape.
-			let rel = relativePathString(entry, root: projectRoot)
-			if isStdlibRelativePathSkipped(rel) 'skipped'
-				continue
-			end 'skipped'
 			into.push(entry)
 		end 'isFile'
 	end 'eachEntry'
 end 'collectMaxonFilesUnder'
-
-// Render `path` relative to `root` with forward slashes. Used by
-// `collectMaxonFilesUnder` so the value passed to `isStdlibRelativePathSkipped`
-// matches what the old whitelist-driven path produced (e.g.
-// "stdlib/helpers/string/utf8.maxon" rather than the absolute system path).
-function relativePathString(path FilePath, root FilePath) returns String
-	let pathStr = path.toString()
-	let rootStr = root.toString()
-	if rootStr.isEmpty() 'noRoot'
-		return pathStr
-	end 'noRoot'
-	let prefix = "{rootStr}{FilePath.separator()}"
-	if not pathStr.startsWith(prefix) 'noPrefix'
-		return pathStr
-	end 'noPrefix'
-	let prefixLen = prefix.byteLength()
-	let suffixManaged = try pathStr.managed.slice(prefixLen, pathStr.byteLength()) otherwise return pathStr
-	let suffix = String.init(suffixManaged)
-	// Normalise path separators to forward slashes so the value matches the
-	// form the legacy whitelist used ("stdlib/X.maxon" on every OS).
-	return suffix.replace(FilePath.separator(), with: "/")
-end 'relativePathString'
 
 // Cache key for the currently-discoverable stdlib: every file the recursive
 // walk surfaces plus runtime.std (the latter affects compiled output, so
@@ -585,9 +411,6 @@ function seedRuntimeBootstrapStdlibRoots(project Project)
 		"stdlib.__mm_incref",
 		"stdlib.__mm_decref",
 		"stdlib.__mm_drop",
-		"stdlib.__mm_move_trace",
-		"stdlib.__mm_scope_push",
-		"stdlib.__mm_scope_pop",
 		"stdlib.__mm_panic_list_empty",
 		"stdlib.__managed_mem_create"
 	]
@@ -652,7 +475,7 @@ export function getStdlibModule(project Project) returns MaxonModule
 	// liveness roots keeps the bodies alive through the from-source build. The
 	// cache-on path restores the same roots from `data.livenessRoots`.
 	seedRuntimeBootstrapStdlibRoots(project)
-	if stdlibLoaded and not stdlibCacheBypassed 'cached'
+	if stdlibLoaded 'cached'
 		let restoreStart = passTimerStart()
 		// Restore metadata into the new project
 		if stdlibCacheValid 'restoreFromCache'
@@ -713,10 +536,7 @@ export function getStdlibModule(project Project) returns MaxonModule
 	let checksumStart = passTimerStart()
 	let contentChecksum = currentStdlibChecksum(project.target)
 	recordPassSince("__stdlib-checksum", startMs: checksumStart)
-	// `--mm-trace` bypass: skip the read entirely when bypassed so the
-	// expensive decode + restore work doesn't even fire. Falls through to the
-	// parse-from-source path below.
-	let cacheResult = readStdlibCache(project, path: cachePath, target: project.target, expectedChecksum: contentChecksum) if not stdlibCacheBypassed else StdlibCacheResult.create(StdlibCacheData.create(), valid: false)
+	let cacheResult = readStdlibCache(project, path: cachePath, target: project.target, expectedChecksum: contentChecksum)
 
 	if cacheResult.valid 'cacheHit'
 		logInfo(LogCategory.compiler, message: function() gives "Stdlib cache hit: {countCompiledStdlibFunctions(cacheResult.data)} functions cached")
@@ -816,33 +636,20 @@ export function getStdlibModule(project Project) returns MaxonModule
 		stdlibTypealiasCastCategories.upsert(name, value: category)
 	end 'cacheCategories'
 
-	// Build and write stdlib cache for next time.
-	// After writing, switch to cached mode so subsequent calls in the same
-	// process (e.g. spec tests) consistently use the pre-compiled path.
-	// `--mm-trace` bypass: skip both the write and the `stdlibLoaded` marker so
-	// the parsed module flows into the user pipeline (where the mm-trace tag
-	// table is interned and the `__mm_tag_lookup` helper is emitted last, after
-	// user types are known) rather than being baked into a trace-free cache.
-	if not stdlibCacheBypassed 'writeCache'
-		buildAndWriteStdlibCache(project, allModule: allModule, cachePath: cachePath, contentChecksum: contentChecksum)
-		stdlibLoaded = true
-	end 'writeCache'
+	// Build and write the stdlib cache for next time, then switch to cached
+	// mode so subsequent calls in the same process (e.g. spec tests)
+	// consistently use the pre-compiled path.
+	buildAndWriteStdlibCache(project, allModule: allModule, cachePath: cachePath, contentChecksum: contentChecksum)
+	stdlibLoaded = true
 
-	if stdlibCacheValid 'switchToCached'
-		// Cache was built successfully — the user binary picks up stdlib via
-		// the pre-compiled cache (linked at codegen) plus the metadata we
-		// already restored on this project, so the parsed module must NOT
-		// flow into the user pipeline. Otherwise emitWasm/x64 sees the same
-		// stdlib functions twice — once from the IR and once from the cache —
-		// and the wasm validator rejects the duplicate definitions.
-		cachedStdlibModule = MaxonModule.create()
-		return cachedStdlibModule
-	end 'switchToCached'
-
-	// Cache write was bypassed (`--mm-trace`): return the parsed module so the
-	// user pipeline has stdlib bodies to lower inline, since there's no cache
-	// for it to consume.
-	return allModule
+	// The user binary picks up stdlib via the pre-compiled cache (linked at
+	// codegen) plus the metadata already restored on this project, so the
+	// parsed module must NOT flow into the user pipeline — otherwise
+	// emitWasm/x64 sees the same stdlib functions twice (once from the IR and
+	// once from the cache) and the wasm validator rejects the duplicate
+	// definitions. Return an empty module.
+	cachedStdlibModule = MaxonModule.create()
+	return cachedStdlibModule
 end 'getStdlibModule'
 
 // Build the stdlib cache by compiling the parsed MaxonModule through the mid

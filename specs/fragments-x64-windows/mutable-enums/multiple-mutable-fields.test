@@ -29,10 +29,16 @@ module {
   func @main() -> u32 {
   entry:
     x64.prologue stack_size=32
-    x64.mov edx, 2
-    x64.mov ecx, 1
-    x64.call __construct_Pair_values
+    x64.xor edx, edx
+    x64.mov ecx, 24
+    x64.call stdlib.__mm_alloc
     x64.mov r12, r8
+    x64.mov r8d, 1
+    x64.mov [r12+0], r8 (8b)
+    x64.mov r8d, 1
+    x64.mov [r12+8], r8 (8b)
+    x64.mov r8d, 2
+    x64.mov [r12+16], r8 (8b)
     x64.mov r9, [r12+0] (8b)
     x64.xor r13d, r13d
     x64.cmp r9, 1
@@ -54,7 +60,7 @@ module {
     x64.jne update-a_0.merge
   update-a_0.case1:
     x64.mov rcx, r12
-    x64.call __mm_decref_maybenull_helper
+    x64.call mm_drop
     x64.mov r8, r13
     x64.epilogue
     x64.ret
@@ -74,7 +80,7 @@ module {
     x64.jne update-b_0.merge
   update-b_0.case1:
     x64.mov rcx, r12
-    x64.call __mm_decref_maybenull_helper
+    x64.call mm_drop
     x64.mov r8, r13
     x64.epilogue
     x64.ret
@@ -82,7 +88,7 @@ module {
     x64.mov r13, [r12+16] (8b)
     x64.mov r14, [r12+8] (8b)
     x64.mov rcx, r12
-    x64.call __mm_decref_maybenull_helper
+    x64.call mm_drop
     x64.mov r9d, 4294967295
     x64.mov r8, r14
     x64.add r8, r13
@@ -92,7 +98,7 @@ module {
   read_0.next0:
     x64.mov r14, [r12+0] (8b)
     x64.mov rcx, r12
-    x64.call __mm_decref_maybenull_helper
+    x64.call mm_drop
     x64.test r14, r14
     x64.jne read_0.next1
   read_0.case1:

@@ -13,7 +13,6 @@ Uses `MmTrace: true` so the trace log verifies correct incref/decref/free behavi
 ## Tests
 
 <!-- test: rc-single-alloc-freed -->
-<!-- MmTrace -->
 Single struct allocated and freed in the same function scope.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -35,24 +34,8 @@ end 'main'
 ```exitcode
 1
 ```
-```stderr
-sl_init
-  os_alloc size=67108864
-mm_alloc Point #1 size=16 [Point.create]
-  sl_alloc Point #1 size=48 class=4
-mm_incref Point #1 rc=1 [Point.create]
-mm_transfer Point #1 rc=1 [Point.create]
-mm_decref Point #1 rc=0 [main]
-  mm_free Point #1
-    sl_free Point #1 size=48 class=4
-mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R1
-  sl_free size=48 class=4
-```
 
 <!-- test: rc-alias-incref -->
-<!-- MmTrace -->
 Aliasing a struct increfs it; both variables share refcount and object is freed once.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -74,24 +57,8 @@ end 'main'
 ```exitcode
 42
 ```
-```stderr
-sl_init
-  os_alloc size=67108864
-mm_alloc Box #1 size=8 [Box.create]
-  sl_alloc Box #1 size=40 class=4
-mm_incref Box #1 rc=1 [Box.create]
-mm_transfer Box #1 rc=1 [Box.create]
-mm_decref Box #1 rc=0 [main]
-  mm_free Box #1
-    sl_free Box #1 size=48 class=4
-mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R1
-  sl_free size=48 class=4
-```
 
 <!-- test: rc-reassign-decrefs-old -->
-<!-- MmTrace -->
 Reassigning a var decrefs the old object immediately; the old object must be freed before scope exit.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -114,38 +81,8 @@ end 'main'
 ```exitcode
 3
 ```
-```stderr
-sl_init
-  os_alloc size=67108864
-mm_alloc Tag #1 size=8 [Tag.create]
-  sl_alloc Tag #1 size=40 class=4
-mm_incref Tag #1 rc=1 [Tag.create]
-mm_transfer Tag #1 rc=1 [Tag.create]
-mm_alloc Tag #2 size=8 [Tag.create]
-  sl_alloc Tag #2 size=40 class=4
-mm_incref Tag #2 rc=1 [Tag.create]
-mm_transfer Tag #2 rc=1 [Tag.create]
-mm_decref Tag #1 rc=0 [main]
-  mm_free Tag #1
-    sl_free Tag #1 size=48 class=4
-mm_alloc Tag #3 size=8 [Tag.create]
-  sl_alloc Tag #3 size=40 class=4
-mm_incref Tag #3 rc=1 [Tag.create]
-mm_transfer Tag #3 rc=1 [Tag.create]
-mm_decref Tag #2 rc=0 [main]
-  mm_free Tag #2
-    sl_free Tag #2 size=48 class=4
-mm_decref Tag #3 rc=0 [main]
-  mm_free Tag #3
-    sl_free Tag #3 size=48 class=4
-mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R1
-  sl_free size=48 class=4
-```
 
 <!-- test: rc-inner-block-freed -->
-<!-- MmTrace -->
 Struct created in an inner if-block is freed when that block exits, before the outer block ends.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -170,24 +107,8 @@ end 'main'
 ```exitcode
 7
 ```
-```stderr
-sl_init
-  os_alloc size=67108864
-mm_alloc Widget #1 size=8 [Widget.create]
-  sl_alloc Widget #1 size=40 class=4
-mm_incref Widget #1 rc=1 [Widget.create]
-mm_transfer Widget #1 rc=1 [Widget.create]
-mm_decref Widget #1 rc=0 [main]
-  mm_free Widget #1
-    sl_free Widget #1 size=48 class=4
-mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R1
-  sl_free size=48 class=4
-```
 
 <!-- test: rc-return-transfers-ownership -->
-<!-- MmTrace -->
 Returning a struct skips its decref; caller receives ownership and frees it at its own scope exit.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -213,25 +134,8 @@ end 'main'
 ```exitcode
 99
 ```
-```stderr
-sl_init
-  os_alloc size=67108864
-mm_alloc Token #1 size=8 [Token.create]
-  sl_alloc Token #1 size=40 class=4
-mm_incref Token #1 rc=1 [Token.create]
-mm_transfer Token #1 rc=1 [Token.create]
-mm_transfer Token #1 rc=1 [makeToken]
-mm_decref Token #1 rc=0 [main]
-  mm_free Token #1
-    sl_free Token #1 size=48 class=4
-mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R1
-  sl_free size=48 class=4
-```
 
 <!-- test: rc-alias-survives-reassign -->
-<!-- MmTrace -->
 Aliased reference keeps object alive when the original var is reassigned.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -254,33 +158,8 @@ end 'main'
 ```exitcode
 30
 ```
-```stderr
-sl_init
-  os_alloc size=67108864
-mm_alloc Num #1 size=8 [Num.create]
-  sl_alloc Num #1 size=40 class=4
-mm_incref Num #1 rc=1 [Num.create]
-mm_transfer Num #1 rc=1 [Num.create]
-mm_incref Num #1 rc=2 [main]
-mm_alloc Num #2 size=8 [Num.create]
-  sl_alloc Num #2 size=40 class=4
-mm_incref Num #2 rc=1 [Num.create]
-mm_transfer Num #2 rc=1 [Num.create]
-mm_decref Num #1 rc=1 [main]
-mm_decref Num #2 rc=0 [main]
-  mm_free Num #2
-    sl_free Num #2 size=48 class=4
-mm_decref Num #1 rc=0 [main]
-  mm_free Num #1
-    sl_free Num #1 size=48 class=4
-mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R1
-  sl_free size=48 class=4
-```
 
 <!-- test: rc-loop-per-iteration-freed -->
-<!-- MmTrace -->
 A struct allocated each loop iteration is freed at loop-block exit before the next iteration.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -307,45 +186,8 @@ end 'main'
 ```exitcode
 6
 ```
-```stderr
-sl_init
-  os_alloc size=67108864
-mm_alloc Counter #1 size=8 [Counter.create]
-  sl_alloc Counter #1 size=40 class=4
-mm_incref Counter #1 rc=1 [Counter.create]
-mm_transfer Counter #1 rc=1 [Counter.create]
-mm_decref Counter #1 rc=0 [main]
-  mm_free Counter #1
-    sl_free Counter #1 size=48 class=4
-mm_alloc Counter #2 size=8 [Counter.create]
-  sl_alloc Counter #2 size=40 class=4
-mm_incref Counter #2 rc=1 [Counter.create]
-mm_transfer Counter #2 rc=1 [Counter.create]
-mm_decref Counter #2 rc=0 [main]
-  mm_free Counter #2
-    sl_free Counter #2 size=48 class=4
-mm_alloc Counter #3 size=8 [Counter.create]
-  sl_alloc Counter #3 size=40 class=4
-mm_incref Counter #3 rc=1 [Counter.create]
-mm_transfer Counter #3 rc=1 [Counter.create]
-mm_decref Counter #3 rc=0 [main]
-  mm_free Counter #3
-    sl_free Counter #3 size=48 class=4
-mm_alloc Counter #4 size=8 [Counter.create]
-  sl_alloc Counter #4 size=40 class=4
-mm_incref Counter #4 rc=1 [Counter.create]
-mm_transfer Counter #4 rc=1 [Counter.create]
-mm_decref Counter #4 rc=0 [main]
-  mm_free Counter #4
-    sl_free Counter #4 size=48 class=4
-mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R1
-  sl_free size=48 class=4
-```
 
 <!-- test: rc-break-frees-before-exit -->
-<!-- MmTrace -->
 Struct allocated before a break is decref'd before the loop block is exited.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -373,45 +215,8 @@ end 'main'
 ```exitcode
 3
 ```
-```stderr
-sl_init
-  os_alloc size=67108864
-mm_alloc Step #1 size=8 [Step.create]
-  sl_alloc Step #1 size=40 class=4
-mm_incref Step #1 rc=1 [Step.create]
-mm_transfer Step #1 rc=1 [Step.create]
-mm_decref Step #1 rc=0 [main]
-  mm_free Step #1
-    sl_free Step #1 size=48 class=4
-mm_alloc Step #2 size=8 [Step.create]
-  sl_alloc Step #2 size=40 class=4
-mm_incref Step #2 rc=1 [Step.create]
-mm_transfer Step #2 rc=1 [Step.create]
-mm_decref Step #2 rc=0 [main]
-  mm_free Step #2
-    sl_free Step #2 size=48 class=4
-mm_alloc Step #3 size=8 [Step.create]
-  sl_alloc Step #3 size=40 class=4
-mm_incref Step #3 rc=1 [Step.create]
-mm_transfer Step #3 rc=1 [Step.create]
-mm_decref Step #3 rc=0 [main]
-  mm_free Step #3
-    sl_free Step #3 size=48 class=4
-mm_alloc Step #4 size=8 [Step.create]
-  sl_alloc Step #4 size=40 class=4
-mm_incref Step #4 rc=1 [Step.create]
-mm_transfer Step #4 rc=1 [Step.create]
-mm_decref Step #4 rc=0 [main]
-  mm_free Step #4
-    sl_free Step #4 size=48 class=4
-mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R1
-  sl_free size=48 class=4
-```
 
 <!-- test: rc-continue-frees-before-restart -->
-<!-- MmTrace -->
 Struct allocated before a continue is decref'd before the loop restarts.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -441,52 +246,8 @@ end 'main'
 ```exitcode
 8
 ```
-```stderr
-sl_init
-  os_alloc size=67108864
-mm_alloc Item #1 size=8 [Item.create]
-  sl_alloc Item #1 size=40 class=4
-mm_incref Item #1 rc=1 [Item.create]
-mm_transfer Item #1 rc=1 [Item.create]
-mm_decref Item #1 rc=0 [main]
-  mm_free Item #1
-    sl_free Item #1 size=48 class=4
-mm_alloc Item #2 size=8 [Item.create]
-  sl_alloc Item #2 size=40 class=4
-mm_incref Item #2 rc=1 [Item.create]
-mm_transfer Item #2 rc=1 [Item.create]
-mm_decref Item #2 rc=0 [main]
-  mm_free Item #2
-    sl_free Item #2 size=48 class=4
-mm_alloc Item #3 size=8 [Item.create]
-  sl_alloc Item #3 size=40 class=4
-mm_incref Item #3 rc=1 [Item.create]
-mm_transfer Item #3 rc=1 [Item.create]
-mm_decref Item #3 rc=0 [main]
-  mm_free Item #3
-    sl_free Item #3 size=48 class=4
-mm_alloc Item #4 size=8 [Item.create]
-  sl_alloc Item #4 size=40 class=4
-mm_incref Item #4 rc=1 [Item.create]
-mm_transfer Item #4 rc=1 [Item.create]
-mm_decref Item #4 rc=0 [main]
-  mm_free Item #4
-    sl_free Item #4 size=48 class=4
-mm_alloc Item #5 size=8 [Item.create]
-  sl_alloc Item #5 size=40 class=4
-mm_incref Item #5 rc=1 [Item.create]
-mm_transfer Item #5 rc=1 [Item.create]
-mm_decref Item #5 rc=0 [main]
-  mm_free Item #5
-    sl_free Item #5 size=48 class=4
-mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R1
-  sl_free size=48 class=4
-```
 
 <!-- test: rc-nested-struct-field-incref -->
-<!-- MmTrace -->
 When a struct literal is assigned as a field, the field value is incref'd; both outer and inner are freed correctly.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -516,33 +277,8 @@ end 'main'
 ```exitcode
 55
 ```
-```stderr
-sl_init
-  os_alloc size=67108864
-mm_alloc Inner #1 size=8 [Inner.create]
-  sl_alloc Inner #1 size=40 class=4
-mm_incref Inner #1 rc=1 [Inner.create]
-mm_transfer Inner #1 rc=1 [Inner.create]
-mm_alloc Outer #2 size=8 [Outer.create]
-  sl_alloc Outer #2 size=40 class=4
-mm_incref Inner #1 rc=2 [Outer.create]
-mm_incref Outer #2 rc=1 [Outer.create]
-mm_transfer Outer #2 rc=1 [Outer.create]
-mm_decref Outer #2 rc=0 [main]
-  mm_decref Inner #1 rc=1 [~Outer]
-  mm_free Outer #2
-    sl_free Outer #2 size=48 class=4
-mm_decref Inner #1 rc=0 [main]
-  mm_free Inner #1
-    sl_free Inner #1 size=48 class=4
-mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R1
-  sl_free size=48 class=4
-```
 
 <!-- test: rc-nested-struct-deep-freed -->
-<!-- MmTrace -->
 Three-level nested struct: all three levels are freed when the outermost var leaves scope.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -579,42 +315,8 @@ end 'main'
 ```exitcode
 7
 ```
-```stderr
-sl_init
-  os_alloc size=67108864
-mm_alloc A #1 size=8 [A.create]
-  sl_alloc A #1 size=40 class=4
-mm_incref A #1 rc=1 [A.create]
-mm_transfer A #1 rc=1 [A.create]
-mm_alloc B #2 size=8 [B.create]
-  sl_alloc B #2 size=40 class=4
-mm_incref A #1 rc=2 [B.create]
-mm_incref B #2 rc=1 [B.create]
-mm_transfer B #2 rc=1 [B.create]
-mm_alloc C #3 size=8 [C.create]
-  sl_alloc C #3 size=40 class=4
-mm_incref B #2 rc=2 [C.create]
-mm_incref C #3 rc=1 [C.create]
-mm_transfer C #3 rc=1 [C.create]
-mm_decref B #2 rc=1 [main]
-mm_decref A #1 rc=1 [main]
-mm_decref C #3 rc=0 [main]
-  mm_decref B #2 rc=0 [~C]
-    mm_decref A #1 rc=0 [~B]
-      mm_free A #1
-        sl_free A #1 size=48 class=4
-    mm_free B #2
-      sl_free B #2 size=48 class=4
-  mm_free C #3
-    sl_free C #3 size=48 class=4
-mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R1
-  sl_free size=48 class=4
-```
 
 <!-- test: rc-field-overwrite-decrefs-old -->
-<!-- MmTrace -->
 Overwriting a struct field via a method decrefs the old field value and increfs the new one.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -649,42 +351,8 @@ end 'main'
 ```exitcode
 2
 ```
-```stderr
-sl_init
-  os_alloc size=67108864
-mm_alloc Payload #1 size=8 [Payload.create]
-  sl_alloc Payload #1 size=40 class=4
-mm_incref Payload #1 rc=1 [Payload.create]
-mm_transfer Payload #1 rc=1 [Payload.create]
-mm_alloc Container #2 size=8 [Container.create]
-  sl_alloc Container #2 size=40 class=4
-mm_incref Payload #1 rc=2 [Container.create]
-mm_incref Container #2 rc=1 [Container.create]
-mm_transfer Container #2 rc=1 [Container.create]
-mm_alloc Payload #3 size=8 [Payload.create]
-  sl_alloc Payload #3 size=40 class=4
-mm_incref Payload #3 rc=1 [Payload.create]
-mm_transfer Payload #3 rc=1 [Payload.create]
-mm_decref Payload #1 rc=1 [Container.setPayload]
-mm_incref Payload #3 rc=2 [Container.setPayload]
-mm_decref Payload #3 rc=1 [main]
-mm_decref Container #2 rc=0 [main]
-  mm_decref Payload #3 rc=0 [~Container]
-    mm_free Payload #3
-      sl_free Payload #3 size=48 class=4
-  mm_free Container #2
-    sl_free Container #2 size=48 class=4
-mm_decref Payload #1 rc=0 [main]
-  mm_free Payload #1
-    sl_free Payload #1 size=48 class=4
-mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R1
-  sl_free size=48 class=4
-```
 
 <!-- test: rc-field-overwrite-managed-list -->
-<!-- MmTrace -->
 Overwriting a struct field three times; each old value must be freed promptly.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -720,60 +388,8 @@ end 'main'
 ```exitcode
 30
 ```
-```stderr
-sl_init
-  os_alloc size=67108864
-mm_alloc Val #1 size=8 [Val.create]
-  sl_alloc Val #1 size=40 class=4
-mm_incref Val #1 rc=1 [Val.create]
-mm_transfer Val #1 rc=1 [Val.create]
-mm_alloc Holder #2 size=8 [Holder.create]
-  sl_alloc Holder #2 size=40 class=4
-mm_incref Val #1 rc=2 [Holder.create]
-mm_incref Holder #2 rc=1 [Holder.create]
-mm_transfer Holder #2 rc=1 [Holder.create]
-mm_alloc Val #3 size=8 [Val.create]
-  sl_alloc Val #3 size=40 class=4
-mm_incref Val #3 rc=1 [Val.create]
-mm_transfer Val #3 rc=1 [Val.create]
-mm_decref Val #1 rc=1 [Holder.set]
-mm_incref Val #3 rc=2 [Holder.set]
-mm_alloc Val #4 size=8 [Val.create]
-  sl_alloc Val #4 size=40 class=4
-mm_incref Val #4 rc=1 [Val.create]
-mm_transfer Val #4 rc=1 [Val.create]
-mm_decref Val #3 rc=1 [Holder.set]
-mm_incref Val #4 rc=2 [Holder.set]
-mm_alloc Val #5 size=8 [Val.create]
-  sl_alloc Val #5 size=40 class=4
-mm_incref Val #5 rc=1 [Val.create]
-mm_transfer Val #5 rc=1 [Val.create]
-mm_decref Val #4 rc=1 [Holder.set]
-mm_incref Val #5 rc=2 [Holder.set]
-mm_decref Val #5 rc=1 [main]
-mm_decref Val #4 rc=0 [main]
-  mm_free Val #4
-    sl_free Val #4 size=48 class=4
-mm_decref Val #3 rc=0 [main]
-  mm_free Val #3
-    sl_free Val #3 size=48 class=4
-mm_decref Val #1 rc=0 [main]
-  mm_free Val #1
-    sl_free Val #1 size=48 class=4
-mm_decref Holder #2 rc=0 [main]
-  mm_decref Val #5 rc=0 [~Holder]
-    mm_free Val #5
-      sl_free Val #5 size=48 class=4
-  mm_free Holder #2
-    sl_free Holder #2 size=48 class=4
-mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R1
-  sl_free size=48 class=4
-```
 
 <!-- test: rc-container-push-incref -->
-<!-- MmTrace -->
 Pushing a struct into an array increfs it; after the local var leaves scope the element still lives.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -801,49 +417,8 @@ end 'main'
 ```exitcode
 10
 ```
-```stderr
-sl_init
-  os_alloc size=67108864
-mm_alloc __ManagedMemory_Node #1 size=40 [NodeArray.create]
-  sl_alloc __ManagedMemory_Node #1 size=72 class=6
-mm_alloc NodeArray #2 size=8 [NodeArray.create]
-  sl_alloc NodeArray #2 size=40 class=4
-mm_incref __ManagedMemory_Node #1 rc=1 [NodeArray.create]
-mm_incref NodeArray #2 rc=1 [NodeArray.create]
-mm_transfer NodeArray #2 rc=1 [NodeArray.create]
-mm_alloc Node #3 size=8 [Node.create]
-  sl_alloc Node #3 size=40 class=4
-mm_incref Node #3 rc=1 [Node.create]
-mm_transfer Node #3 rc=1 [Node.create]
-mm_realloc __ManagedMemory_Node #1 size=32
-  mm_raw_alloc #R1 size=32 [realloc]
-    sl_alloc size=32 class=3
-mm_incref Node #3 rc=2 [NodeArray.push]
-mm_decref Node #3 rc=1 [main]
-mm_incref Node #3 rc=2 [NodeArray.get]
-mm_transfer Node #3 rc=2 [NodeArray.get]
-mm_incref Node #3 rc=3 [main]
-mm_decref Node #3 rc=2 [main]
-mm_decref Node #3 rc=1 [main]
-mm_decref NodeArray #2 rc=0 [main]
-  mm_decref __ManagedMemory_Node #1 rc=0 [~NodeArray]
-    mm_decref Node #3 rc=0 [~ManagedElements]
-      mm_free Node #3
-        sl_free Node #3 size=48 class=4
-    mm_raw_free #R1
-      sl_free size=32 class=3
-    mm_free __ManagedMemory_Node #1
-      sl_free __ManagedMemory_Node #1 size=96 class=6
-  mm_free NodeArray #2
-    sl_free NodeArray #2 size=48 class=4
-mm_raw_alloc #R2 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R2
-  sl_free size=48 class=4
-```
 
 <!-- test: rc-container-pop-decrefs -->
-<!-- MmTrace -->
 Popping the last element and discarding the result frees the element at scope exit.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -871,58 +446,8 @@ end 'main'
 ```exitcode
 1
 ```
-```stderr
-sl_init
-  os_alloc size=67108864
-mm_alloc __ManagedMemory_Node #1 size=40 [NodeArray.create]
-  sl_alloc __ManagedMemory_Node #1 size=72 class=6
-mm_alloc NodeArray #2 size=8 [NodeArray.create]
-  sl_alloc NodeArray #2 size=40 class=4
-mm_incref __ManagedMemory_Node #1 rc=1 [NodeArray.create]
-mm_incref NodeArray #2 rc=1 [NodeArray.create]
-mm_transfer NodeArray #2 rc=1 [NodeArray.create]
-mm_alloc Node #3 size=8 [Node.create]
-  sl_alloc Node #3 size=40 class=4
-mm_incref Node #3 rc=1 [Node.create]
-mm_transfer Node #3 rc=1 [Node.create]
-mm_realloc __ManagedMemory_Node #1 size=32
-  mm_raw_alloc #R1 size=32 [realloc]
-    sl_alloc size=32 class=3
-mm_incref Node #3 rc=2 [NodeArray.push]
-mm_alloc Node #4 size=8 [Node.create]
-  sl_alloc Node #4 size=40 class=4
-mm_incref Node #4 rc=1 [Node.create]
-mm_transfer Node #4 rc=1 [Node.create]
-mm_incref Node #4 rc=2 [NodeArray.push]
-mm_incref Node #4 rc=3 [NodeArray.remove]
-mm_transfer Node #4 rc=3 [NodeArray.remove]
-mm_decref Node #4 rc=2 [NodeArray.remove]
-mm_incref Node #4 rc=3 [main]
-mm_decref Node #4 rc=2 [main]
-mm_decref Node #4 rc=1 [main]
-mm_decref Node #3 rc=1 [main]
-mm_decref Node #4 rc=0 [main]
-  mm_free Node #4
-    sl_free Node #4 size=48 class=4
-mm_decref NodeArray #2 rc=0 [main]
-  mm_decref __ManagedMemory_Node #1 rc=0 [~NodeArray]
-    mm_decref Node #3 rc=0 [~ManagedElements]
-      mm_free Node #3
-        sl_free Node #3 size=48 class=4
-    mm_raw_free #R1
-      sl_free size=32 class=3
-    mm_free __ManagedMemory_Node #1
-      sl_free __ManagedMemory_Node #1 size=96 class=6
-  mm_free NodeArray #2
-    sl_free NodeArray #2 size=48 class=4
-mm_raw_alloc #R2 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R2
-  sl_free size=48 class=4
-```
 
 <!-- test: rc-container-overwrite-decrefs-old -->
-<!-- MmTrace -->
 Setting an element at an existing index must decref the old element and incref the new one.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -948,58 +473,8 @@ end 'main'
 ```exitcode
 200
 ```
-```stderr
-sl_init
-  os_alloc size=67108864
-mm_alloc __ManagedMemory_Item #1 size=40 [ItemArray.create]
-  sl_alloc __ManagedMemory_Item #1 size=72 class=6
-mm_alloc ItemArray #2 size=8 [ItemArray.create]
-  sl_alloc ItemArray #2 size=40 class=4
-mm_incref __ManagedMemory_Item #1 rc=1 [ItemArray.create]
-mm_incref ItemArray #2 rc=1 [ItemArray.create]
-mm_transfer ItemArray #2 rc=1 [ItemArray.create]
-mm_alloc Item #3 size=8 [Item.create]
-  sl_alloc Item #3 size=40 class=4
-mm_incref Item #3 rc=1 [Item.create]
-mm_transfer Item #3 rc=1 [Item.create]
-mm_realloc __ManagedMemory_Item #1 size=32
-  mm_raw_alloc #R1 size=32 [realloc]
-    sl_alloc size=32 class=3
-mm_incref Item #3 rc=2 [ItemArray.push]
-mm_alloc Item #4 size=8 [Item.create]
-  sl_alloc Item #4 size=40 class=4
-mm_incref Item #4 rc=1 [Item.create]
-mm_transfer Item #4 rc=1 [Item.create]
-mm_decref Item #3 rc=1 [ItemArray.set]
-mm_incref Item #4 rc=2 [ItemArray.set]
-mm_incref Item #4 rc=3 [ItemArray.get]
-mm_transfer Item #4 rc=3 [ItemArray.get]
-mm_incref Item #4 rc=4 [main]
-mm_decref Item #4 rc=3 [main]
-mm_decref Item #4 rc=2 [main]
-mm_decref Item #3 rc=0 [main]
-  mm_free Item #3
-    sl_free Item #3 size=48 class=4
-mm_decref Item #4 rc=1 [main]
-mm_decref ItemArray #2 rc=0 [main]
-  mm_decref __ManagedMemory_Item #1 rc=0 [~ItemArray]
-    mm_decref Item #4 rc=0 [~ManagedElements]
-      mm_free Item #4
-        sl_free Item #4 size=48 class=4
-    mm_raw_free #R1
-      sl_free size=32 class=3
-    mm_free __ManagedMemory_Item #1
-      sl_free __ManagedMemory_Item #1 size=96 class=6
-  mm_free ItemArray #2
-    sl_free ItemArray #2 size=48 class=4
-mm_raw_alloc #R2 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R2
-  sl_free size=48 class=4
-```
 
 <!-- test: rc-container-clear-decrefs-all -->
-<!-- MmTrace -->
 Clearing an array decrefs every element; all elements freed when rc hits 0.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -1026,62 +501,8 @@ end 'main'
 ```exitcode
 0
 ```
-```stderr
-sl_init
-  os_alloc size=67108864
-mm_alloc __ManagedMemory_Item #1 size=40 [ItemArray.create]
-  sl_alloc __ManagedMemory_Item #1 size=72 class=6
-mm_alloc ItemArray #2 size=8 [ItemArray.create]
-  sl_alloc ItemArray #2 size=40 class=4
-mm_incref __ManagedMemory_Item #1 rc=1 [ItemArray.create]
-mm_incref ItemArray #2 rc=1 [ItemArray.create]
-mm_transfer ItemArray #2 rc=1 [ItemArray.create]
-mm_alloc Item #3 size=8 [Item.create]
-  sl_alloc Item #3 size=40 class=4
-mm_incref Item #3 rc=1 [Item.create]
-mm_transfer Item #3 rc=1 [Item.create]
-mm_realloc __ManagedMemory_Item #1 size=32
-  mm_raw_alloc #R1 size=32 [realloc]
-    sl_alloc size=32 class=3
-mm_incref Item #3 rc=2 [ItemArray.push]
-mm_alloc Item #4 size=8 [Item.create]
-  sl_alloc Item #4 size=40 class=4
-mm_incref Item #4 rc=1 [Item.create]
-mm_transfer Item #4 rc=1 [Item.create]
-mm_incref Item #4 rc=2 [ItemArray.push]
-mm_alloc Item #5 size=8 [Item.create]
-  sl_alloc Item #5 size=40 class=4
-mm_incref Item #5 rc=1 [Item.create]
-mm_transfer Item #5 rc=1 [Item.create]
-mm_incref Item #5 rc=2 [ItemArray.push]
-mm_decref Item #3 rc=1 [~ManagedElements]
-mm_decref Item #4 rc=1 [~ManagedElements]
-mm_decref Item #5 rc=1 [~ManagedElements]
-mm_decref Item #5 rc=0 [main]
-  mm_free Item #5
-    sl_free Item #5 size=48 class=4
-mm_decref Item #4 rc=0 [main]
-  mm_free Item #4
-    sl_free Item #4 size=48 class=4
-mm_decref Item #3 rc=0 [main]
-  mm_free Item #3
-    sl_free Item #3 size=48 class=4
-mm_decref ItemArray #2 rc=0 [main]
-  mm_decref __ManagedMemory_Item #1 rc=0 [~ItemArray]
-    mm_raw_free #R1
-      sl_free size=32 class=3
-    mm_free __ManagedMemory_Item #1
-      sl_free __ManagedMemory_Item #1 size=96 class=6
-  mm_free ItemArray #2
-    sl_free ItemArray #2 size=48 class=4
-mm_raw_alloc #R2 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R2
-  sl_free size=48 class=4
-```
 
 <!-- test: rc-container-scope-exit-decrefs-elements -->
-<!-- MmTrace -->
 When a container holding struct elements goes out of scope, all elements are decref'd.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -1112,62 +533,8 @@ end 'main'
 ```exitcode
 3
 ```
-```stderr
-sl_init
-  os_alloc size=67108864
-mm_alloc __ManagedMemory_Item #1 size=40 [ItemArray.create]
-  sl_alloc __ManagedMemory_Item #1 size=72 class=6
-mm_alloc ItemArray #2 size=8 [ItemArray.create]
-  sl_alloc ItemArray #2 size=40 class=4
-mm_incref __ManagedMemory_Item #1 rc=1 [ItemArray.create]
-mm_incref ItemArray #2 rc=1 [ItemArray.create]
-mm_transfer ItemArray #2 rc=1 [ItemArray.create]
-mm_alloc Item #3 size=8 [Item.create]
-  sl_alloc Item #3 size=40 class=4
-mm_incref Item #3 rc=1 [Item.create]
-mm_transfer Item #3 rc=1 [Item.create]
-mm_realloc __ManagedMemory_Item #1 size=32
-  mm_raw_alloc #R1 size=32 [realloc]
-    sl_alloc size=32 class=3
-mm_incref Item #3 rc=2 [ItemArray.push]
-mm_alloc Item #4 size=8 [Item.create]
-  sl_alloc Item #4 size=40 class=4
-mm_incref Item #4 rc=1 [Item.create]
-mm_transfer Item #4 rc=1 [Item.create]
-mm_incref Item #4 rc=2 [ItemArray.push]
-mm_alloc Item #5 size=8 [Item.create]
-  sl_alloc Item #5 size=40 class=4
-mm_incref Item #5 rc=1 [Item.create]
-mm_transfer Item #5 rc=1 [Item.create]
-mm_incref Item #5 rc=2 [ItemArray.push]
-mm_decref Item #5 rc=1 [fill]
-mm_decref Item #4 rc=1 [fill]
-mm_decref Item #3 rc=1 [fill]
-mm_decref ItemArray #2 rc=0 [fill]
-  mm_decref __ManagedMemory_Item #1 rc=0 [~ItemArray]
-    mm_decref Item #3 rc=0 [~ManagedElements]
-      mm_free Item #3
-        sl_free Item #3 size=48 class=4
-    mm_decref Item #4 rc=0 [~ManagedElements]
-      mm_free Item #4
-        sl_free Item #4 size=48 class=4
-    mm_decref Item #5 rc=0 [~ManagedElements]
-      mm_free Item #5
-        sl_free Item #5 size=48 class=4
-    mm_raw_free #R1
-      sl_free size=32 class=3
-    mm_free __ManagedMemory_Item #1
-      sl_free __ManagedMemory_Item #1 size=96 class=6
-  mm_free ItemArray #2
-    sl_free ItemArray #2 size=48 class=4
-mm_raw_alloc #R2 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R2
-  sl_free size=48 class=4
-```
 
 <!-- test: rc-insert-then-remove-no-leak -->
-<!-- MmTrace -->
 Insert many structs then remove them all; zero elements remain in memory.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -1202,100 +569,8 @@ end 'main'
 ```exitcode
 10
 ```
-```stderr
-sl_init
-  os_alloc size=67108864
-mm_alloc __ManagedMemory_Entry #1 size=40 [EntryArray.create]
-  sl_alloc __ManagedMemory_Entry #1 size=72 class=6
-mm_alloc EntryArray #2 size=8 [EntryArray.create]
-  sl_alloc EntryArray #2 size=40 class=4
-mm_incref __ManagedMemory_Entry #1 rc=1 [EntryArray.create]
-mm_incref EntryArray #2 rc=1 [EntryArray.create]
-mm_transfer EntryArray #2 rc=1 [EntryArray.create]
-mm_alloc Entry #3 size=8 [Entry.create]
-  sl_alloc Entry #3 size=40 class=4
-mm_incref Entry #3 rc=1 [Entry.create]
-mm_transfer Entry #3 rc=1 [Entry.create]
-mm_realloc __ManagedMemory_Entry #1 size=32
-  mm_raw_alloc #R1 size=32 [realloc]
-    sl_alloc size=32 class=3
-mm_incref Entry #3 rc=2 [EntryArray.push]
-mm_decref Entry #3 rc=1 [main]
-mm_alloc Entry #4 size=8 [Entry.create]
-  sl_alloc Entry #4 size=40 class=4
-mm_incref Entry #4 rc=1 [Entry.create]
-mm_transfer Entry #4 rc=1 [Entry.create]
-mm_incref Entry #4 rc=2 [EntryArray.push]
-mm_decref Entry #4 rc=1 [main]
-mm_alloc Entry #5 size=8 [Entry.create]
-  sl_alloc Entry #5 size=40 class=4
-mm_incref Entry #5 rc=1 [Entry.create]
-mm_transfer Entry #5 rc=1 [Entry.create]
-mm_incref Entry #5 rc=2 [EntryArray.push]
-mm_decref Entry #5 rc=1 [main]
-mm_alloc Entry #6 size=8 [Entry.create]
-  sl_alloc Entry #6 size=40 class=4
-mm_incref Entry #6 rc=1 [Entry.create]
-mm_transfer Entry #6 rc=1 [Entry.create]
-mm_incref Entry #6 rc=2 [EntryArray.push]
-mm_decref Entry #6 rc=1 [main]
-mm_alloc Entry #7 size=8 [Entry.create]
-  sl_alloc Entry #7 size=40 class=4
-mm_incref Entry #7 rc=1 [Entry.create]
-mm_transfer Entry #7 rc=1 [Entry.create]
-mm_realloc __ManagedMemory_Entry #1 size=64
-  mm_raw_alloc #R2 size=64 [realloc]
-    sl_alloc size=64 class=5
-  mm_raw_free #R1 [realloc]
-    sl_free size=32 class=3
-mm_incref Entry #7 rc=2 [EntryArray.push]
-mm_decref Entry #7 rc=1 [main]
-mm_incref Entry #3 rc=2 [EntryArray.remove]
-mm_transfer Entry #3 rc=2 [EntryArray.remove]
-mm_decref Entry #3 rc=1 [EntryArray.remove]
-mm_decref Entry #3 rc=0 [main]
-  mm_free Entry #3
-    sl_free Entry #3 size=48 class=4
-mm_incref Entry #4 rc=2 [EntryArray.remove]
-mm_transfer Entry #4 rc=2 [EntryArray.remove]
-mm_decref Entry #4 rc=1 [EntryArray.remove]
-mm_decref Entry #4 rc=0 [main]
-  mm_free Entry #4
-    sl_free Entry #4 size=48 class=4
-mm_incref Entry #5 rc=2 [EntryArray.remove]
-mm_transfer Entry #5 rc=2 [EntryArray.remove]
-mm_decref Entry #5 rc=1 [EntryArray.remove]
-mm_decref Entry #5 rc=0 [main]
-  mm_free Entry #5
-    sl_free Entry #5 size=48 class=4
-mm_incref Entry #6 rc=2 [EntryArray.remove]
-mm_transfer Entry #6 rc=2 [EntryArray.remove]
-mm_decref Entry #6 rc=1 [EntryArray.remove]
-mm_decref Entry #6 rc=0 [main]
-  mm_free Entry #6
-    sl_free Entry #6 size=48 class=4
-mm_incref Entry #7 rc=2 [EntryArray.remove]
-mm_transfer Entry #7 rc=2 [EntryArray.remove]
-mm_decref Entry #7 rc=1 [EntryArray.remove]
-mm_decref Entry #7 rc=0 [main]
-  mm_free Entry #7
-    sl_free Entry #7 size=48 class=4
-mm_decref EntryArray #2 rc=0 [main]
-  mm_decref __ManagedMemory_Entry #1 rc=0 [~EntryArray]
-    mm_raw_free #R2
-      sl_free size=64 class=5
-    mm_free __ManagedMemory_Entry #1
-      sl_free __ManagedMemory_Entry #1 size=96 class=6
-  mm_free EntryArray #2
-    sl_free EntryArray #2 size=48 class=4
-mm_raw_alloc #R3 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R3
-  sl_free size=48 class=4
-```
 
 <!-- test: rc-insert-in-middle-no-leak -->
-<!-- MmTrace -->
 Insert at index 0 into an existing array; shiftRight zeroes the gap so no double-free occurs.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -1324,77 +599,8 @@ end 'main'
 ```exitcode
 60
 ```
-```stderr
-sl_init
-  os_alloc size=67108864
-mm_alloc __ManagedMemory_Val #1 size=40 [ValArray.create]
-  sl_alloc __ManagedMemory_Val #1 size=72 class=6
-mm_alloc ValArray #2 size=8 [ValArray.create]
-  sl_alloc ValArray #2 size=40 class=4
-mm_incref __ManagedMemory_Val #1 rc=1 [ValArray.create]
-mm_incref ValArray #2 rc=1 [ValArray.create]
-mm_transfer ValArray #2 rc=1 [ValArray.create]
-mm_alloc Val #3 size=8 [Val.create]
-  sl_alloc Val #3 size=40 class=4
-mm_incref Val #3 rc=1 [Val.create]
-mm_transfer Val #3 rc=1 [Val.create]
-mm_realloc __ManagedMemory_Val #1 size=32
-  mm_raw_alloc #R1 size=32 [realloc]
-    sl_alloc size=32 class=3
-mm_incref Val #3 rc=2 [ValArray.push]
-mm_alloc Val #4 size=8 [Val.create]
-  sl_alloc Val #4 size=40 class=4
-mm_incref Val #4 rc=1 [Val.create]
-mm_transfer Val #4 rc=1 [Val.create]
-mm_incref Val #4 rc=2 [ValArray.push]
-mm_alloc Val #5 size=8 [Val.create]
-  sl_alloc Val #5 size=40 class=4
-mm_incref Val #5 rc=1 [Val.create]
-mm_transfer Val #5 rc=1 [Val.create]
-mm_incref Val #5 rc=2 [ValArray.insert]
-mm_incref Val #3 rc=3 [ValArray.get]
-mm_transfer Val #3 rc=3 [ValArray.get]
-mm_incref Val #3 rc=4 [main]
-mm_incref Val #5 rc=3 [ValArray.get]
-mm_transfer Val #5 rc=3 [ValArray.get]
-mm_incref Val #5 rc=4 [main]
-mm_incref Val #4 rc=3 [ValArray.get]
-mm_transfer Val #4 rc=3 [ValArray.get]
-mm_incref Val #4 rc=4 [main]
-mm_decref Val #4 rc=3 [main]
-mm_decref Val #5 rc=3 [main]
-mm_decref Val #3 rc=3 [main]
-mm_decref Val #5 rc=2 [main]
-mm_decref Val #4 rc=2 [main]
-mm_decref Val #3 rc=2 [main]
-mm_decref Val #4 rc=1 [main]
-mm_decref Val #5 rc=1 [main]
-mm_decref Val #3 rc=1 [main]
-mm_decref ValArray #2 rc=0 [main]
-  mm_decref __ManagedMemory_Val #1 rc=0 [~ValArray]
-    mm_decref Val #3 rc=0 [~ManagedElements]
-      mm_free Val #3
-        sl_free Val #3 size=48 class=4
-    mm_decref Val #5 rc=0 [~ManagedElements]
-      mm_free Val #5
-        sl_free Val #5 size=48 class=4
-    mm_decref Val #4 rc=0 [~ManagedElements]
-      mm_free Val #4
-        sl_free Val #4 size=48 class=4
-    mm_raw_free #R1
-      sl_free size=32 class=3
-    mm_free __ManagedMemory_Val #1
-      sl_free __ManagedMemory_Val #1 size=96 class=6
-  mm_free ValArray #2
-    sl_free ValArray #2 size=48 class=4
-mm_raw_alloc #R2 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R2
-  sl_free size=48 class=4
-```
 
 <!-- test: rc-remove-middle-no-double-free -->
-<!-- MmTrace -->
 Removing the middle element from an array; shiftLeft zeroes the trailing slot so setLength does not double-decref.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -1423,67 +629,8 @@ end 'main'
 ```exitcode
 4
 ```
-```stderr
-sl_init
-  os_alloc size=67108864
-mm_alloc __ManagedMemory_Val #1 size=40 [ValArray.create]
-  sl_alloc __ManagedMemory_Val #1 size=72 class=6
-mm_alloc ValArray #2 size=8 [ValArray.create]
-  sl_alloc ValArray #2 size=40 class=4
-mm_incref __ManagedMemory_Val #1 rc=1 [ValArray.create]
-mm_incref ValArray #2 rc=1 [ValArray.create]
-mm_transfer ValArray #2 rc=1 [ValArray.create]
-mm_alloc Val #3 size=8 [Val.create]
-  sl_alloc Val #3 size=40 class=4
-mm_incref Val #3 rc=1 [Val.create]
-mm_transfer Val #3 rc=1 [Val.create]
-mm_realloc __ManagedMemory_Val #1 size=32
-  mm_raw_alloc #R1 size=32 [realloc]
-    sl_alloc size=32 class=3
-mm_incref Val #3 rc=2 [ValArray.push]
-mm_alloc Val #4 size=8 [Val.create]
-  sl_alloc Val #4 size=40 class=4
-mm_incref Val #4 rc=1 [Val.create]
-mm_transfer Val #4 rc=1 [Val.create]
-mm_incref Val #4 rc=2 [ValArray.push]
-mm_alloc Val #5 size=8 [Val.create]
-  sl_alloc Val #5 size=40 class=4
-mm_incref Val #5 rc=1 [Val.create]
-mm_transfer Val #5 rc=1 [Val.create]
-mm_incref Val #5 rc=2 [ValArray.push]
-mm_incref Val #4 rc=3 [ValArray.remove]
-mm_transfer Val #4 rc=3 [ValArray.remove]
-mm_decref Val #4 rc=2 [ValArray.remove]
-mm_incref Val #4 rc=3 [main]
-mm_decref Val #4 rc=2 [main]
-mm_decref Val #5 rc=1 [main]
-mm_decref Val #4 rc=1 [main]
-mm_decref Val #3 rc=1 [main]
-mm_decref Val #4 rc=0 [main]
-  mm_free Val #4
-    sl_free Val #4 size=48 class=4
-mm_decref ValArray #2 rc=0 [main]
-  mm_decref __ManagedMemory_Val #1 rc=0 [~ValArray]
-    mm_decref Val #3 rc=0 [~ManagedElements]
-      mm_free Val #3
-        sl_free Val #3 size=48 class=4
-    mm_decref Val #5 rc=0 [~ManagedElements]
-      mm_free Val #5
-        sl_free Val #5 size=48 class=4
-    mm_raw_free #R1
-      sl_free size=32 class=3
-    mm_free __ManagedMemory_Val #1
-      sl_free __ManagedMemory_Val #1 size=96 class=6
-  mm_free ValArray #2
-    sl_free ValArray #2 size=48 class=4
-mm_raw_alloc #R2 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R2
-  sl_free size=48 class=4
-```
 
 <!-- test: rc-nested-container-freed -->
-<!-- MmTrace -->
 An array whose element type itself contains a struct field; freeing the outer array frees all nested objects.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -1516,71 +663,8 @@ end 'main'
 ```exitcode
 2
 ```
-```stderr
-sl_init
-  os_alloc size=67108864
-mm_alloc __ManagedMemory_Wrapper #1 size=40 [WrapperArray.create]
-  sl_alloc __ManagedMemory_Wrapper #1 size=72 class=6
-mm_alloc WrapperArray #2 size=8 [WrapperArray.create]
-  sl_alloc WrapperArray #2 size=40 class=4
-mm_incref __ManagedMemory_Wrapper #1 rc=1 [WrapperArray.create]
-mm_incref WrapperArray #2 rc=1 [WrapperArray.create]
-mm_transfer WrapperArray #2 rc=1 [WrapperArray.create]
-mm_alloc Inner #3 size=8 [Inner.create]
-  sl_alloc Inner #3 size=40 class=4
-mm_incref Inner #3 rc=1 [Inner.create]
-mm_transfer Inner #3 rc=1 [Inner.create]
-mm_alloc Wrapper #4 size=8 [Wrapper.create]
-  sl_alloc Wrapper #4 size=40 class=4
-mm_incref Inner #3 rc=2 [Wrapper.create]
-mm_incref Wrapper #4 rc=1 [Wrapper.create]
-mm_transfer Wrapper #4 rc=1 [Wrapper.create]
-mm_realloc __ManagedMemory_Wrapper #1 size=32
-  mm_raw_alloc #R1 size=32 [realloc]
-    sl_alloc size=32 class=3
-mm_incref Wrapper #4 rc=2 [WrapperArray.push]
-mm_alloc Inner #5 size=8 [Inner.create]
-  sl_alloc Inner #5 size=40 class=4
-mm_incref Inner #5 rc=1 [Inner.create]
-mm_transfer Inner #5 rc=1 [Inner.create]
-mm_alloc Wrapper #6 size=8 [Wrapper.create]
-  sl_alloc Wrapper #6 size=40 class=4
-mm_incref Inner #5 rc=2 [Wrapper.create]
-mm_incref Wrapper #6 rc=1 [Wrapper.create]
-mm_transfer Wrapper #6 rc=1 [Wrapper.create]
-mm_incref Wrapper #6 rc=2 [WrapperArray.push]
-mm_decref Wrapper #6 rc=1 [main]
-mm_decref Inner #5 rc=1 [main]
-mm_decref Wrapper #4 rc=1 [main]
-mm_decref Inner #3 rc=1 [main]
-mm_decref WrapperArray #2 rc=0 [main]
-  mm_decref __ManagedMemory_Wrapper #1 rc=0 [~WrapperArray]
-    mm_decref Wrapper #4 rc=0 [~ManagedElements]
-      mm_decref Inner #3 rc=0 [~Wrapper]
-        mm_free Inner #3
-          sl_free Inner #3 size=48 class=4
-      mm_free Wrapper #4
-        sl_free Wrapper #4 size=48 class=4
-    mm_decref Wrapper #6 rc=0 [~ManagedElements]
-      mm_decref Inner #5 rc=0 [~Wrapper]
-        mm_free Inner #5
-          sl_free Inner #5 size=48 class=4
-      mm_free Wrapper #6
-        sl_free Wrapper #6 size=48 class=4
-    mm_raw_free #R1
-      sl_free size=32 class=3
-    mm_free __ManagedMemory_Wrapper #1
-      sl_free __ManagedMemory_Wrapper #1 size=96 class=6
-  mm_free WrapperArray #2
-    sl_free WrapperArray #2 size=48 class=4
-mm_raw_alloc #R2 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R2
-  sl_free size=48 class=4
-```
 
 <!-- test: rc-return-from-inner-block-cleanup -->
-<!-- MmTrace -->
 Returning from inside a nested block must decref all locals in every enclosing block before returning.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -1609,31 +693,8 @@ end 'main'
 ```exitcode
 3
 ```
-```stderr
-sl_init
-  os_alloc size=67108864
-mm_alloc Step #1 size=8 [Step.create]
-  sl_alloc Step #1 size=40 class=4
-mm_incref Step #1 rc=1 [Step.create]
-mm_transfer Step #1 rc=1 [Step.create]
-mm_alloc Step #2 size=8 [Step.create]
-  sl_alloc Step #2 size=40 class=4
-mm_incref Step #2 rc=1 [Step.create]
-mm_transfer Step #2 rc=1 [Step.create]
-mm_decref Step #2 rc=0 [compute]
-  mm_free Step #2
-    sl_free Step #2 size=48 class=4
-mm_decref Step #1 rc=0 [compute]
-  mm_free Step #1
-    sl_free Step #1 size=48 class=4
-mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R1
-  sl_free size=48 class=4
-```
 
 <!-- test: rc-return-container-element -->
-<!-- MmTrace -->
 Getting an element from a container and returning it; element rc stays above 0 while container is freed.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -1663,50 +724,8 @@ end 'main'
 ```exitcode
 77
 ```
-```stderr
-sl_init
-  os_alloc size=67108864
-mm_alloc __ManagedMemory_Item #1 size=40 [ItemArray.create]
-  sl_alloc __ManagedMemory_Item #1 size=72 class=6
-mm_alloc ItemArray #2 size=8 [ItemArray.create]
-  sl_alloc ItemArray #2 size=40 class=4
-mm_incref __ManagedMemory_Item #1 rc=1 [ItemArray.create]
-mm_incref ItemArray #2 rc=1 [ItemArray.create]
-mm_transfer ItemArray #2 rc=1 [ItemArray.create]
-mm_alloc Item #3 size=8 [Item.create]
-  sl_alloc Item #3 size=40 class=4
-mm_incref Item #3 rc=1 [Item.create]
-mm_transfer Item #3 rc=1 [Item.create]
-mm_realloc __ManagedMemory_Item #1 size=32
-  mm_raw_alloc #R1 size=32 [realloc]
-    sl_alloc size=32 class=3
-mm_incref Item #3 rc=2 [ItemArray.push]
-mm_incref Item #3 rc=3 [ItemArray.get]
-mm_transfer Item #3 rc=3 [ItemArray.get]
-mm_incref Item #3 rc=4 [getFirst]
-mm_decref Item #3 rc=3 [getFirst]
-mm_transfer Item #3 rc=3 [getFirst]
-mm_decref Item #3 rc=2 [main]
-mm_decref Item #3 rc=1 [main]
-mm_decref ItemArray #2 rc=0 [main]
-  mm_decref __ManagedMemory_Item #1 rc=0 [~ItemArray]
-    mm_decref Item #3 rc=0 [~ManagedElements]
-      mm_free Item #3
-        sl_free Item #3 size=48 class=4
-    mm_raw_free #R1
-      sl_free size=32 class=3
-    mm_free __ManagedMemory_Item #1
-      sl_free __ManagedMemory_Item #1 size=96 class=6
-  mm_free ItemArray #2
-    sl_free ItemArray #2 size=48 class=4
-mm_raw_alloc #R2 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R2
-  sl_free size=48 class=4
-```
 
 <!-- test: rc-global-struct-outlives-local -->
-<!-- MmTrace -->
 A global variable holds a struct that outlives the function that created it.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -1733,35 +752,8 @@ end 'main'
 ```exitcode
 42
 ```
-```stderr
-sl_init
-  os_alloc size=67108864
-mm_alloc Cfg #1 size=8 [Cfg.create]
-  sl_alloc Cfg #1 size=40 class=4
-mm_incref Cfg #1 rc=1 [Cfg.create]
-mm_transfer Cfg #1 rc=1 [Cfg.create]
-mm_incref Cfg #1 rc=2 [__module_init]
-mm_decref Cfg #1 rc=1 [__module_init]
-mm_alloc Cfg #2 size=8 [Cfg.create]
-  sl_alloc Cfg #2 size=40 class=4
-mm_incref Cfg #2 rc=1 [Cfg.create]
-mm_transfer Cfg #2 rc=1 [Cfg.create]
-mm_decref Cfg #1 rc=0 [setup]
-  mm_free Cfg #1
-    sl_free Cfg #1 size=48 class=4
-mm_incref Cfg #2 rc=2 [setup]
-mm_decref Cfg #2 rc=1 [setup]
-mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R1
-  sl_free size=48 class=4
-mm_decref Cfg #2 rc=0 [__maxon_global_cleanup]
-  mm_free Cfg #2
-    sl_free Cfg #2 size=48 class=4
-```
 
 <!-- test: rc-global-reassign-decrefs-old -->
-<!-- MmTrace -->
 Reassigning a global struct var decrefs the old object and increfs the new one.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -1790,53 +782,8 @@ end 'main'
 ```exitcode
 30
 ```
-```stderr
-sl_init
-  os_alloc size=67108864
-mm_alloc State #1 size=8 [State.create]
-  sl_alloc State #1 size=40 class=4
-mm_incref State #1 rc=1 [State.create]
-mm_transfer State #1 rc=1 [State.create]
-mm_incref State #1 rc=2 [__module_init]
-mm_decref State #1 rc=1 [__module_init]
-mm_alloc State #2 size=8 [State.create]
-  sl_alloc State #2 size=40 class=4
-mm_incref State #2 rc=1 [State.create]
-mm_transfer State #2 rc=1 [State.create]
-mm_decref State #1 rc=0 [step]
-  mm_free State #1
-    sl_free State #1 size=48 class=4
-mm_incref State #2 rc=2 [step]
-mm_decref State #2 rc=1 [step]
-mm_alloc State #3 size=8 [State.create]
-  sl_alloc State #3 size=40 class=4
-mm_incref State #3 rc=1 [State.create]
-mm_transfer State #3 rc=1 [State.create]
-mm_decref State #2 rc=0 [step]
-  mm_free State #2
-    sl_free State #2 size=48 class=4
-mm_incref State #3 rc=2 [step]
-mm_decref State #3 rc=1 [step]
-mm_alloc State #4 size=8 [State.create]
-  sl_alloc State #4 size=40 class=4
-mm_incref State #4 rc=1 [State.create]
-mm_transfer State #4 rc=1 [State.create]
-mm_decref State #3 rc=0 [step]
-  mm_free State #3
-    sl_free State #3 size=48 class=4
-mm_incref State #4 rc=2 [step]
-mm_decref State #4 rc=1 [step]
-mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R1
-  sl_free size=48 class=4
-mm_decref State #4 rc=0 [__maxon_global_cleanup]
-  mm_free State #4
-    sl_free State #4 size=48 class=4
-```
 
 <!-- test: rc-enum-no-struct-payload-freed -->
-<!-- MmTrace -->
 A simple enum enum (no struct payload) is freed correctly at scope exit.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -1864,17 +811,8 @@ end 'main'
 ```exitcode
 2
 ```
-```stderr
-sl_init
-  os_alloc size=67108864
-mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R1
-  sl_free size=48 class=4
-```
 
 <!-- test: rc-enum-struct-payload-freed -->
-<!-- MmTrace -->
 A enum case with a struct-typed associated value; when the enum is freed its payload must be decref'd.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -1907,36 +845,8 @@ end 'main'
 ```exitcode
 5
 ```
-```stderr
-sl_init
-  os_alloc size=67108864
-mm_alloc Body #1 size=8 [Body.create]
-  sl_alloc Body #1 size=40 class=4
-mm_incref Body #1 rc=1 [Body.create]
-mm_transfer Body #1 rc=1 [Body.create]
-mm_alloc Shape #2 size=16 [main]
-  sl_alloc Shape #2 size=48 class=4
-mm_incref Body #1 rc=2 [main]
-mm_incref Shape #2 rc=1 [main]
-mm_incref Shape #2 rc=2 [massOf]
-mm_incref Body #1 rc=3 [massOf]
-mm_decref Shape #2 rc=1 [massOf]
-mm_decref Body #1 rc=2 [massOf]
-mm_decref Body #1 rc=1 [main]
-mm_decref Shape #2 rc=0 [main]
-  mm_decref Body #1 rc=0 [~Shape]
-    mm_free Body #1
-      sl_free Body #1 size=48 class=4
-  mm_free Shape #2
-    sl_free Shape #2 size=48 class=4
-mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R1
-  sl_free size=48 class=4
-```
 
 <!-- test: rc-closure-env-freed -->
-<!-- MmTrace -->
 Closure environment block is allocated as a struct and freed when the closure variable goes out of scope.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -1955,23 +865,8 @@ end 'main'
 ```exitcode
 15
 ```
-```stderr
-sl_init
-  os_alloc size=67108864
-mm_alloc ClosureEnv #1 size=8 [main]
-  sl_alloc ClosureEnv #1 size=40 class=4
-mm_incref ClosureEnv #1 rc=1 [main]
-mm_decref ClosureEnv #1 rc=0 [main]
-  mm_free ClosureEnv #1
-    sl_free ClosureEnv #1 size=48 class=4
-mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R1
-  sl_free size=48 class=4
-```
 
 <!-- test: rc-closure-captures-struct -->
-<!-- MmTrace -->
 Closure captures a struct variable by address; the closure env is freed at scope exit but the original struct lives on.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -1998,30 +893,8 @@ end 'main'
 ```exitcode
 3
 ```
-```stderr
-sl_init
-  os_alloc size=67108864
-mm_alloc Config #1 size=8 [Config.create]
-  sl_alloc Config #1 size=40 class=4
-mm_incref Config #1 rc=1 [Config.create]
-mm_transfer Config #1 rc=1 [Config.create]
-mm_alloc ClosureEnv #2 size=8 [main]
-  sl_alloc ClosureEnv #2 size=40 class=4
-mm_incref ClosureEnv #2 rc=1 [main]
-mm_decref Config #1 rc=0 [main]
-  mm_free Config #1
-    sl_free Config #1 size=48 class=4
-mm_decref ClosureEnv #2 rc=0 [main]
-  mm_free ClosureEnv #2
-    sl_free ClosureEnv #2 size=48 class=4
-mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R1
-  sl_free size=48 class=4
-```
 
 <!-- test: rc-error-path-cleanup -->
-<!-- MmTrace -->
 On the error path of a try expression the locally allocated struct must still be freed.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -2045,41 +918,8 @@ end 'main'
 ```exitcode
 99
 ```
-```stderr
-sl_init
-  os_alloc size=67108864
-mm_alloc __ManagedMemory_Item #1 size=40 [ItemArray.create]
-  sl_alloc __ManagedMemory_Item #1 size=72 class=6
-mm_alloc ItemArray #2 size=8 [ItemArray.create]
-  sl_alloc ItemArray #2 size=40 class=4
-mm_incref __ManagedMemory_Item #1 rc=1 [ItemArray.create]
-mm_incref ItemArray #2 rc=1 [ItemArray.create]
-mm_transfer ItemArray #2 rc=1 [ItemArray.create]
-mm_alloc Item #3 size=8 [Item.create]
-  sl_alloc Item #3 size=40 class=4
-mm_incref Item #3 rc=1 [Item.create]
-mm_transfer Item #3 rc=1 [Item.create]
-mm_incref Item #3 rc=2 [main]
-mm_incref Item #3 rc=3 [main]
-mm_decref Item #3 rc=2 [main]
-mm_decref Item #3 rc=1 [main]
-mm_decref Item #3 rc=0 [main]
-  mm_free Item #3
-    sl_free Item #3 size=48 class=4
-mm_decref ItemArray #2 rc=0 [main]
-  mm_decref __ManagedMemory_Item #1 rc=0 [~ItemArray]
-    mm_free __ManagedMemory_Item #1
-      sl_free __ManagedMemory_Item #1 size=96 class=6
-  mm_free ItemArray #2
-    sl_free ItemArray #2 size=48 class=4
-mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R1
-  sl_free size=48 class=4
-```
 
 <!-- test: rc-managed-list-insert-incref -->
-<!-- MmTrace -->
 Inserting a struct into a managed list increfs the value; the node holds the reference.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -2104,40 +944,8 @@ end 'main'
 ```exitcode
 7
 ```
-```stderr
-sl_init
-  os_alloc size=67108864
-mm_alloc TokenManagedList #1 size=32 [main]
-  sl_alloc TokenManagedList #1 size=64 class=5
-mm_incref TokenManagedList #1 rc=1 [main]
-mm_alloc Token #2 size=8 [Token.create]
-  sl_alloc Token #2 size=40 class=4
-mm_incref Token #2 rc=1 [Token.create]
-mm_transfer Token #2 rc=1 [Token.create]
-mm_alloc __ManagedListNode #3 size=32 [main]
-  sl_alloc __ManagedListNode #3 size=64 class=5
-mm_incref Token #2 rc=2 [main]
-mm_incref __ManagedListNode #3 rc=1 [managed_list_insert]
-mm_incref __ManagedListNode #3 rc=2 [main]
-mm_decref Token #2 rc=1 [main]
-mm_decref __ManagedListNode #3 rc=1 [main]
-mm_decref TokenManagedList #1 rc=0 [main]
-  mm_decref Token #2 rc=0 [managed_list_clear]
-    mm_free Token #2
-      sl_free Token #2 size=48 class=4
-  mm_decref __ManagedListNode #3 rc=0 [managed_list_clear]
-    mm_free __ManagedListNode #3
-      sl_free __ManagedListNode #3 size=64 class=5
-  mm_free TokenManagedList #1
-    sl_free TokenManagedList #1 size=64 class=5
-mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R1
-  sl_free size=48 class=4
-```
 
 <!-- test: rc-managed-list-remove-decrefs -->
-<!-- MmTrace -->
 Removing a node from a managed list transfers ownership; value is freed when the result var leaves scope.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -2162,40 +970,8 @@ end 'main'
 ```exitcode
 9
 ```
-```stderr
-sl_init
-  os_alloc size=67108864
-mm_alloc TokenManagedList #1 size=32 [main]
-  sl_alloc TokenManagedList #1 size=64 class=5
-mm_incref TokenManagedList #1 rc=1 [main]
-mm_alloc Token #2 size=8 [Token.create]
-  sl_alloc Token #2 size=40 class=4
-mm_incref Token #2 rc=1 [Token.create]
-mm_transfer Token #2 rc=1 [Token.create]
-mm_alloc __ManagedListNode #3 size=32 [main]
-  sl_alloc __ManagedListNode #3 size=64 class=5
-mm_incref Token #2 rc=2 [main]
-mm_incref __ManagedListNode #3 rc=1 [managed_list_insert]
-mm_incref __ManagedListNode #3 rc=2 [main]
-mm_decref __ManagedListNode #3 rc=1 [main]
-mm_decref Token #2 rc=1 [main]
-mm_decref __ManagedListNode #3 rc=0 [main]
-  mm_free __ManagedListNode #3
-    sl_free __ManagedListNode #3 size=64 class=5
-mm_decref Token #2 rc=0 [main]
-  mm_free Token #2
-    sl_free Token #2 size=48 class=4
-mm_decref TokenManagedList #1 rc=0 [main]
-  mm_free TokenManagedList #1
-    sl_free TokenManagedList #1 size=64 class=5
-mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R1
-  sl_free size=48 class=4
-```
 
 <!-- test: rc-managed-list-clear-decrefs-all -->
-<!-- MmTrace -->
 Clearing a managed list decrefs every node value; all values freed when rc hits 0.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -2222,68 +998,8 @@ end 'main'
 ```exitcode
 0
 ```
-```stderr
-sl_init
-  os_alloc size=67108864
-mm_alloc TokenManagedList #1 size=32 [main]
-  sl_alloc TokenManagedList #1 size=64 class=5
-mm_incref TokenManagedList #1 rc=1 [main]
-mm_alloc Token #2 size=8 [Token.create]
-  sl_alloc Token #2 size=40 class=4
-mm_incref Token #2 rc=1 [Token.create]
-mm_transfer Token #2 rc=1 [Token.create]
-mm_alloc __ManagedListNode #3 size=32 [main]
-  sl_alloc __ManagedListNode #3 size=64 class=5
-mm_incref Token #2 rc=2 [main]
-mm_incref __ManagedListNode #3 rc=1 [managed_list_insert]
-mm_alloc Token #4 size=8 [Token.create]
-  sl_alloc Token #4 size=40 class=4
-mm_incref Token #4 rc=1 [Token.create]
-mm_transfer Token #4 rc=1 [Token.create]
-mm_alloc __ManagedListNode #5 size=32 [main]
-  sl_alloc __ManagedListNode #5 size=64 class=5
-mm_incref Token #4 rc=2 [main]
-mm_incref __ManagedListNode #5 rc=1 [managed_list_insert]
-mm_alloc Token #6 size=8 [Token.create]
-  sl_alloc Token #6 size=40 class=4
-mm_incref Token #6 rc=1 [Token.create]
-mm_transfer Token #6 rc=1 [Token.create]
-mm_alloc __ManagedListNode #7 size=32 [main]
-  sl_alloc __ManagedListNode #7 size=64 class=5
-mm_incref Token #6 rc=2 [main]
-mm_incref __ManagedListNode #7 rc=1 [managed_list_insert]
-mm_decref Token #2 rc=1 [managed_list_clear]
-mm_decref __ManagedListNode #3 rc=0 [managed_list_clear]
-  mm_free __ManagedListNode #3
-    sl_free __ManagedListNode #3 size=64 class=5
-mm_decref Token #4 rc=1 [managed_list_clear]
-mm_decref __ManagedListNode #5 rc=0 [managed_list_clear]
-  mm_free __ManagedListNode #5
-    sl_free __ManagedListNode #5 size=64 class=5
-mm_decref Token #6 rc=1 [managed_list_clear]
-mm_decref __ManagedListNode #7 rc=0 [managed_list_clear]
-  mm_free __ManagedListNode #7
-    sl_free __ManagedListNode #7 size=64 class=5
-mm_decref Token #6 rc=0 [main]
-  mm_free Token #6
-    sl_free Token #6 size=48 class=4
-mm_decref Token #4 rc=0 [main]
-  mm_free Token #4
-    sl_free Token #4 size=48 class=4
-mm_decref Token #2 rc=0 [main]
-  mm_free Token #2
-    sl_free Token #2 size=48 class=4
-mm_decref TokenManagedList #1 rc=0 [main]
-  mm_free TokenManagedList #1
-    sl_free TokenManagedList #1 size=64 class=5
-mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R1
-  sl_free size=48 class=4
-```
 
 <!-- test: rc-managed-list-node-set-value-decrefs-old -->
-<!-- MmTrace -->
 Calling `setValue` on a managed list node decrefs the old value and increfs the new one.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -2308,49 +1024,8 @@ end 'main'
 ```exitcode
 99
 ```
-```stderr
-sl_init
-  os_alloc size=67108864
-mm_alloc TokenManagedList #1 size=32 [main]
-  sl_alloc TokenManagedList #1 size=64 class=5
-mm_incref TokenManagedList #1 rc=1 [main]
-mm_alloc Token #2 size=8 [Token.create]
-  sl_alloc Token #2 size=40 class=4
-mm_incref Token #2 rc=1 [Token.create]
-mm_transfer Token #2 rc=1 [Token.create]
-mm_alloc __ManagedListNode #3 size=32 [main]
-  sl_alloc __ManagedListNode #3 size=64 class=5
-mm_incref Token #2 rc=2 [main]
-mm_incref __ManagedListNode #3 rc=1 [managed_list_insert]
-mm_incref __ManagedListNode #3 rc=2 [main]
-mm_alloc Token #4 size=8 [Token.create]
-  sl_alloc Token #4 size=40 class=4
-mm_incref Token #4 rc=1 [Token.create]
-mm_transfer Token #4 rc=1 [Token.create]
-mm_decref Token #2 rc=1 [main]
-mm_incref Token #4 rc=2 [main]
-mm_decref Token #4 rc=1 [main]
-mm_decref Token #2 rc=0 [main]
-  mm_free Token #2
-    sl_free Token #2 size=48 class=4
-mm_decref __ManagedListNode #3 rc=1 [main]
-mm_decref TokenManagedList #1 rc=0 [main]
-  mm_decref Token #4 rc=0 [managed_list_clear]
-    mm_free Token #4
-      sl_free Token #4 size=48 class=4
-  mm_decref __ManagedListNode #3 rc=0 [managed_list_clear]
-    mm_free __ManagedListNode #3
-      sl_free __ManagedListNode #3 size=64 class=5
-  mm_free TokenManagedList #1
-    sl_free TokenManagedList #1 size=64 class=5
-mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R1
-  sl_free size=48 class=4
-```
 
 <!-- test: rc-for-in-elem-decrefed -->
-<!-- MmTrace -->
 In a for-in loop over a struct array each element reference is decref'd at the end of the loop body.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -2380,88 +1055,8 @@ end 'main'
 ```exitcode
 60
 ```
-```stderr
-sl_init
-  os_alloc size=67108864
-mm_alloc __ManagedMemory_Score #1 size=40 [ScoreArray.create]
-  sl_alloc __ManagedMemory_Score #1 size=72 class=6
-mm_alloc ScoreArray #2 size=8 [ScoreArray.create]
-  sl_alloc ScoreArray #2 size=40 class=4
-mm_incref __ManagedMemory_Score #1 rc=1 [ScoreArray.create]
-mm_incref ScoreArray #2 rc=1 [ScoreArray.create]
-mm_transfer ScoreArray #2 rc=1 [ScoreArray.create]
-mm_alloc Score #3 size=8 [Score.create]
-  sl_alloc Score #3 size=40 class=4
-mm_incref Score #3 rc=1 [Score.create]
-mm_transfer Score #3 rc=1 [Score.create]
-mm_realloc __ManagedMemory_Score #1 size=32
-  mm_raw_alloc #R1 size=32 [realloc]
-    sl_alloc size=32 class=3
-mm_incref Score #3 rc=2 [ScoreArray.push]
-mm_alloc Score #4 size=8 [Score.create]
-  sl_alloc Score #4 size=40 class=4
-mm_incref Score #4 rc=1 [Score.create]
-mm_transfer Score #4 rc=1 [Score.create]
-mm_incref Score #4 rc=2 [ScoreArray.push]
-mm_alloc Score #5 size=8 [Score.create]
-  sl_alloc Score #5 size=40 class=4
-mm_incref Score #5 rc=1 [Score.create]
-mm_transfer Score #5 rc=1 [Score.create]
-mm_incref Score #5 rc=2 [ScoreArray.push]
-mm_alloc Cursor #6 size=40 [stdlib.ArrayIterator.create]
-  sl_alloc Cursor #6 size=72 class=6
-mm_incref __ManagedMemory_Score #1 rc=2 [stdlib.ArrayIterator.create]
-mm_incref Cursor #6 rc=1 [stdlib.ArrayIterator.create]
-mm_incref Cursor #6 rc=2 [stdlib.ArrayIterator.create]
-mm_alloc ArrayIterator #7 size=8 [stdlib.ArrayIterator.create]
-  sl_alloc ArrayIterator #7 size=40 class=4
-mm_incref Cursor #6 rc=3 [stdlib.ArrayIterator.create]
-mm_decref Cursor #6 rc=2 [stdlib.ArrayIterator.create]
-mm_decref Cursor #6 rc=1 [stdlib.ArrayIterator.create]
-mm_incref ArrayIterator #7 rc=1 [stdlib.ArrayIterator.create]
-mm_transfer ArrayIterator #7 rc=1 [stdlib.ArrayIterator.create]
-mm_transfer ArrayIterator #7 rc=1 [ScoreArray.createIterator]
-mm_incref Score #3 rc=3 [__ArrayIterator_Score.current]
-mm_decref Score #3 rc=2 [main]
-mm_incref Score #4 rc=3 [__ArrayIterator_Score.current]
-mm_decref Score #4 rc=2 [main]
-mm_incref Score #5 rc=3 [__ArrayIterator_Score.current]
-mm_decref Score #5 rc=2 [main]
-mm_decref ArrayIterator #7 rc=0 [main]
-  mm_decref Cursor #6 rc=0 [~ArrayIterator]
-    mm_decref __ManagedMemory_Score #1 rc=1 [~__ManagedMemoryCursor]
-    mm_free Cursor #6
-      sl_free Cursor #6 size=96 class=6
-  mm_free ArrayIterator #7
-    sl_free ArrayIterator #7 size=48 class=4
-mm_decref Score #5 rc=1 [main]
-mm_decref Score #4 rc=1 [main]
-mm_decref Score #3 rc=1 [main]
-mm_decref ScoreArray #2 rc=0 [main]
-  mm_decref __ManagedMemory_Score #1 rc=0 [~ScoreArray]
-    mm_decref Score #3 rc=0 [~ManagedElements]
-      mm_free Score #3
-        sl_free Score #3 size=48 class=4
-    mm_decref Score #4 rc=0 [~ManagedElements]
-      mm_free Score #4
-        sl_free Score #4 size=48 class=4
-    mm_decref Score #5 rc=0 [~ManagedElements]
-      mm_free Score #5
-        sl_free Score #5 size=48 class=4
-    mm_raw_free #R1
-      sl_free size=32 class=3
-    mm_free __ManagedMemory_Score #1
-      sl_free __ManagedMemory_Score #1 size=96 class=6
-  mm_free ScoreArray #2
-    sl_free ScoreArray #2 size=48 class=4
-mm_raw_alloc #R2 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R2
-  sl_free size=48 class=4
-```
 
 <!-- test: rc-multiple-aliases-freed-once -->
-<!-- MmTrace -->
 Three aliases to the same object; the object is freed exactly once when the last alias leaves scope.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -2484,24 +1079,8 @@ end 'main'
 ```exitcode
 21
 ```
-```stderr
-sl_init
-  os_alloc size=67108864
-mm_alloc Data #1 size=8 [Data.create]
-  sl_alloc Data #1 size=40 class=4
-mm_incref Data #1 rc=1 [Data.create]
-mm_transfer Data #1 rc=1 [Data.create]
-mm_decref Data #1 rc=0 [main]
-  mm_free Data #1
-    sl_free Data #1 size=48 class=4
-mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R1
-  sl_free size=48 class=4
-```
 
 <!-- test: rc-deep-container-of-containers -->
-<!-- MmTrace -->
 An array of arrays of structs; freeing the outer array cascades through all levels.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -2532,102 +1111,8 @@ end 'main'
 ```exitcode
 2
 ```
-```stderr
-sl_init
-  os_alloc size=67108864
-mm_alloc __ManagedMemory_CellArray #1 size=40 [Grid.create]
-  sl_alloc __ManagedMemory_CellArray #1 size=72 class=6
-mm_alloc Grid #2 size=8 [Grid.create]
-  sl_alloc Grid #2 size=40 class=4
-mm_incref __ManagedMemory_CellArray #1 rc=1 [Grid.create]
-mm_incref Grid #2 rc=1 [Grid.create]
-mm_transfer Grid #2 rc=1 [Grid.create]
-mm_alloc __ManagedMemory_Cell #3 size=40 [CellArray.create]
-  sl_alloc __ManagedMemory_Cell #3 size=72 class=6
-mm_alloc CellArray #4 size=8 [CellArray.create]
-  sl_alloc CellArray #4 size=40 class=4
-mm_incref __ManagedMemory_Cell #3 rc=1 [CellArray.create]
-mm_incref CellArray #4 rc=1 [CellArray.create]
-mm_transfer CellArray #4 rc=1 [CellArray.create]
-mm_alloc Cell #5 size=8 [Cell.create]
-  sl_alloc Cell #5 size=40 class=4
-mm_incref Cell #5 rc=1 [Cell.create]
-mm_transfer Cell #5 rc=1 [Cell.create]
-mm_realloc __ManagedMemory_Cell #3 size=32
-  mm_raw_alloc #R1 size=32 [realloc]
-    sl_alloc size=32 class=3
-mm_incref Cell #5 rc=2 [CellArray.push]
-mm_alloc Cell #6 size=8 [Cell.create]
-  sl_alloc Cell #6 size=40 class=4
-mm_incref Cell #6 rc=1 [Cell.create]
-mm_transfer Cell #6 rc=1 [Cell.create]
-mm_incref Cell #6 rc=2 [CellArray.push]
-mm_alloc __ManagedMemory_Cell #7 size=40 [CellArray.create]
-  sl_alloc __ManagedMemory_Cell #7 size=72 class=6
-mm_alloc CellArray #8 size=8 [CellArray.create]
-  sl_alloc CellArray #8 size=40 class=4
-mm_incref __ManagedMemory_Cell #7 rc=1 [CellArray.create]
-mm_incref CellArray #8 rc=1 [CellArray.create]
-mm_transfer CellArray #8 rc=1 [CellArray.create]
-mm_alloc Cell #9 size=8 [Cell.create]
-  sl_alloc Cell #9 size=40 class=4
-mm_incref Cell #9 rc=1 [Cell.create]
-mm_transfer Cell #9 rc=1 [Cell.create]
-mm_realloc __ManagedMemory_Cell #7 size=32
-  mm_raw_alloc #R2 size=32 [realloc]
-    sl_alloc size=32 class=3
-mm_incref Cell #9 rc=2 [CellArray.push]
-mm_realloc __ManagedMemory_CellArray #1 size=32
-  mm_raw_alloc #R3 size=32 [realloc]
-    sl_alloc size=32 class=3
-mm_incref CellArray #4 rc=2 [Grid.push]
-mm_incref CellArray #8 rc=2 [Grid.push]
-mm_decref Cell #9 rc=1 [main]
-mm_decref Cell #6 rc=1 [main]
-mm_decref Cell #5 rc=1 [main]
-mm_decref CellArray #8 rc=1 [main]
-mm_decref CellArray #4 rc=1 [main]
-mm_decref Grid #2 rc=0 [main]
-  mm_decref __ManagedMemory_CellArray #1 rc=0 [~Grid]
-    mm_decref CellArray #4 rc=0 [~ManagedElements]
-      mm_decref __ManagedMemory_Cell #3 rc=0 [~CellArray]
-        mm_decref Cell #5 rc=0 [~ManagedElements]
-          mm_free Cell #5
-            sl_free Cell #5 size=48 class=4
-        mm_decref Cell #6 rc=0 [~ManagedElements]
-          mm_free Cell #6
-            sl_free Cell #6 size=48 class=4
-        mm_raw_free #R1
-          sl_free size=32 class=3
-        mm_free __ManagedMemory_Cell #3
-          sl_free __ManagedMemory_Cell #3 size=96 class=6
-      mm_free CellArray #4
-        sl_free CellArray #4 size=48 class=4
-    mm_decref CellArray #8 rc=0 [~ManagedElements]
-      mm_decref __ManagedMemory_Cell #7 rc=0 [~CellArray]
-        mm_decref Cell #9 rc=0 [~ManagedElements]
-          mm_free Cell #9
-            sl_free Cell #9 size=48 class=4
-        mm_raw_free #R2
-          sl_free size=32 class=3
-        mm_free __ManagedMemory_Cell #7
-          sl_free __ManagedMemory_Cell #7 size=96 class=6
-      mm_free CellArray #8
-        sl_free CellArray #8 size=48 class=4
-    mm_raw_free #R3
-      sl_free size=32 class=3
-    mm_free __ManagedMemory_CellArray #1
-      sl_free __ManagedMemory_CellArray #1 size=96 class=6
-  mm_free Grid #2
-    sl_free Grid #2 size=48 class=4
-mm_raw_alloc #R4 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R4
-  sl_free size=48 class=4
-```
 
 <!-- test: rc-struct-with-array-field-freed -->
-<!-- MmTrace -->
 A struct that owns an array field; when the struct is freed the array (and its elements) are freed too.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -2664,62 +1149,8 @@ end 'main'
 ```exitcode
 2
 ```
-```stderr
-sl_init
-  os_alloc size=67108864
-mm_alloc __ManagedMemory_Entry #1 size=40 [EntryArray.create]
-  sl_alloc __ManagedMemory_Entry #1 size=72 class=6
-mm_alloc EntryArray #2 size=8 [EntryArray.create]
-  sl_alloc EntryArray #2 size=40 class=4
-mm_incref __ManagedMemory_Entry #1 rc=1 [EntryArray.create]
-mm_incref EntryArray #2 rc=1 [EntryArray.create]
-mm_transfer EntryArray #2 rc=1 [EntryArray.create]
-mm_alloc Bucket #3 size=8 [Bucket.create]
-  sl_alloc Bucket #3 size=40 class=4
-mm_incref EntryArray #2 rc=2 [Bucket.create]
-mm_incref Bucket #3 rc=1 [Bucket.create]
-mm_transfer Bucket #3 rc=1 [Bucket.create]
-mm_alloc Entry #4 size=8 [Entry.create]
-  sl_alloc Entry #4 size=40 class=4
-mm_incref Entry #4 rc=1 [Entry.create]
-mm_transfer Entry #4 rc=1 [Entry.create]
-mm_realloc __ManagedMemory_Entry #1 size=32
-  mm_raw_alloc #R1 size=32 [realloc]
-    sl_alloc size=32 class=3
-mm_incref Entry #4 rc=2 [EntryArray.push]
-mm_alloc Entry #5 size=8 [Entry.create]
-  sl_alloc Entry #5 size=40 class=4
-mm_incref Entry #5 rc=1 [Entry.create]
-mm_transfer Entry #5 rc=1 [Entry.create]
-mm_incref Entry #5 rc=2 [EntryArray.push]
-mm_decref Entry #5 rc=1 [fill]
-mm_decref Entry #4 rc=1 [fill]
-mm_decref EntryArray #2 rc=1 [fill]
-mm_decref Bucket #3 rc=0 [fill]
-  mm_decref EntryArray #2 rc=0 [~Bucket]
-    mm_decref __ManagedMemory_Entry #1 rc=0 [~EntryArray]
-      mm_decref Entry #4 rc=0 [~ManagedElements]
-        mm_free Entry #4
-          sl_free Entry #4 size=48 class=4
-      mm_decref Entry #5 rc=0 [~ManagedElements]
-        mm_free Entry #5
-          sl_free Entry #5 size=48 class=4
-      mm_raw_free #R1
-        sl_free size=32 class=3
-      mm_free __ManagedMemory_Entry #1
-        sl_free __ManagedMemory_Entry #1 size=96 class=6
-    mm_free EntryArray #2
-      sl_free EntryArray #2 size=48 class=4
-  mm_free Bucket #3
-    sl_free Bucket #3 size=48 class=4
-mm_raw_alloc #R2 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R2
-  sl_free size=48 class=4
-```
 
 <!-- test: rc-return-struct-literal -->
-<!-- MmTrace -->
 Returning a struct literal directly from a function must transfer ownership at rc=1.
 The callee constructs the struct (rc=0), increfs it for the assignment, and transfers
 ownership to the caller via KeepVars. The caller must not incref again.
@@ -2747,25 +1178,8 @@ end 'main'
 ```exitcode
 10
 ```
-```stderr
-sl_init
-  os_alloc size=67108864
-mm_alloc Pair #1 size=16 [Pair.create]
-  sl_alloc Pair #1 size=48 class=4
-mm_incref Pair #1 rc=1 [Pair.create]
-mm_transfer Pair #1 rc=1 [Pair.create]
-mm_transfer Pair #1 rc=1 [makePair]
-mm_decref Pair #1 rc=0 [main]
-  mm_free Pair #1
-    sl_free Pair #1 size=48 class=4
-mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R1
-  sl_free size=48 class=4
-```
 
 <!-- test: rc-return-struct-with-managed-field -->
-<!-- MmTrace -->
 Returning a struct whose field is a shared managed reference. The callee increfs
 the shared field when storing it, and transfers the outer struct at rc=1.
 The caller must decref the outer struct, which cascades to decref the managed field.
@@ -2801,34 +1215,8 @@ end 'main'
 ```exitcode
 5
 ```
-```stderr
-sl_init
-  os_alloc size=67108864
-mm_alloc Inner #1 size=8 [Inner.create]
-  sl_alloc Inner #1 size=40 class=4
-mm_incref Inner #1 rc=1 [Inner.create]
-mm_transfer Inner #1 rc=1 [Inner.create]
-mm_alloc Wrapper #2 size=8 [Wrapper.create]
-  sl_alloc Wrapper #2 size=40 class=4
-mm_incref Inner #1 rc=2 [Wrapper.create]
-mm_incref Wrapper #2 rc=1 [Wrapper.create]
-mm_transfer Wrapper #2 rc=1 [Wrapper.create]
-mm_transfer Wrapper #2 rc=1 [wrap]
-mm_decref Wrapper #2 rc=0 [main]
-  mm_decref Inner #1 rc=1 [~Wrapper]
-  mm_free Wrapper #2
-    sl_free Wrapper #2 size=48 class=4
-mm_decref Inner #1 rc=0 [main]
-  mm_free Inner #1
-    sl_free Inner #1 size=48 class=4
-mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R1
-  sl_free size=48 class=4
-```
 
 <!-- test: rc-list-scope-cleanup -->
-<!-- MmTrace -->
 List (struct owning a managed list field) must walk and decref managed list node values on scope exit.
 ```maxon
 typealias StringList = List with String
@@ -2842,50 +1230,8 @@ end 'main'
 ```exitcode
 0
 ```
-```stderr
-sl_init
-  os_alloc size=67108864
-mm_alloc __ManagedList_String #1 size=32 [StringList.create]
-  sl_alloc __ManagedList_String #1 size=64 class=5
-mm_alloc StringList #2 size=8 [StringList.create]
-  sl_alloc StringList #2 size=40 class=4
-mm_incref __ManagedList_String #1 rc=1 [StringList.create]
-mm_incref StringList #2 rc=1 [StringList.create]
-mm_transfer StringList #2 rc=1 [StringList.create]
-mm_alloc String #3 size=16 [main]
-  sl_alloc String #3 size=48 class=4
-mm_alloc __ManagedMemory #4 size=40 [main]
-  sl_alloc __ManagedMemory #4 size=72 class=6
-mm_incref __ManagedMemory #4 rc=1 [main]
-mm_incref String #3 rc=1 [main]
-mm_alloc __ManagedListNode #5 size=32 [StringList.append]
-  sl_alloc __ManagedListNode #5 size=64 class=5
-mm_incref String #3 rc=2 [StringList.append]
-mm_incref __ManagedListNode #5 rc=1 [managed_list_insert]
-mm_decref String #3 rc=1 [main]
-mm_decref StringList #2 rc=0 [main]
-  mm_decref __ManagedList_String #1 rc=0 [~StringList]
-    mm_decref String #3 rc=0 [managed_list_clear]
-      mm_decref __ManagedMemory #4 rc=0 [~String]
-        mm_free __ManagedMemory #4
-          sl_free __ManagedMemory #4 size=96 class=6
-      mm_free String #3
-        sl_free String #3 size=48 class=4
-    mm_decref __ManagedListNode #5 rc=0 [managed_list_clear]
-      mm_free __ManagedListNode #5
-        sl_free __ManagedListNode #5 size=64 class=5
-    mm_free __ManagedList_String #1
-      sl_free __ManagedList_String #1 size=64 class=5
-  mm_free StringList #2
-    sl_free StringList #2 size=48 class=4
-mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R1
-  sl_free size=48 class=4
-```
 
 <!-- test: match-string-pattern-cleanup -->
-<!-- MmTrace -->
 Match pattern string literals must be freed after comparison, even when a case matches.
 ```maxon
 function main() returns ExitCode
@@ -2900,41 +1246,8 @@ end 'main'
 ```exitcode
 1
 ```
-```stderr
-sl_init
-  os_alloc size=67108864
-mm_alloc String #1 size=16 [main]
-  sl_alloc String #1 size=48 class=4
-mm_alloc __ManagedMemory #2 size=40 [main]
-  sl_alloc __ManagedMemory #2 size=72 class=6
-mm_incref __ManagedMemory #2 rc=1 [main]
-mm_incref String #1 rc=1 [main]
-mm_alloc String #3 size=16 [main]
-  sl_alloc String #3 size=48 class=4
-mm_alloc __ManagedMemory #4 size=40 [main]
-  sl_alloc __ManagedMemory #4 size=72 class=6
-mm_incref __ManagedMemory #4 rc=1 [main]
-mm_incref String #3 rc=1 [main]
-mm_decref String #3 rc=0 [main]
-  mm_decref __ManagedMemory #4 rc=0 [~String]
-    mm_free __ManagedMemory #4
-      sl_free __ManagedMemory #4 size=96 class=6
-  mm_free String #3
-    sl_free String #3 size=48 class=4
-mm_decref String #1 rc=0 [main]
-  mm_decref __ManagedMemory #2 rc=0 [~String]
-    mm_free __ManagedMemory #2
-      sl_free __ManagedMemory #2 size=96 class=6
-  mm_free String #1
-    sl_free String #1 size=48 class=4
-mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R1
-  sl_free size=48 class=4
-```
 
 <!-- test: rc-char-single-alloc-freed -->
-<!-- MmTrace -->
 Single character allocated and freed in the same function scope; Character + child __ManagedMemory both cleaned up.
 ```maxon
 function main() returns ExitCode
@@ -2945,29 +1258,8 @@ end 'main'
 ```exitcode
 1
 ```
-```stderr
-sl_init
-  os_alloc size=67108864
-mm_alloc Character #1 size=8 [main]
-  sl_alloc Character #1 size=40 class=4
-mm_alloc __ManagedMemory #2 size=40 [main]
-  sl_alloc __ManagedMemory #2 size=72 class=6
-mm_incref __ManagedMemory #2 rc=1 [main]
-mm_incref Character #1 rc=1 [main]
-mm_decref Character #1 rc=0 [main]
-  mm_decref __ManagedMemory #2 rc=0 [~Character]
-    mm_free __ManagedMemory #2
-      sl_free __ManagedMemory #2 size=96 class=6
-  mm_free Character #1
-    sl_free Character #1 size=48 class=4
-mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R1
-  sl_free size=48 class=4
-```
 
 <!-- test: rc-char-alias-incref -->
-<!-- MmTrace -->
 Aliasing a character increfs it; both variables share the same Character object.
 ```maxon
 function main() returns ExitCode
@@ -2979,29 +1271,8 @@ end 'main'
 ```exitcode
 2
 ```
-```stderr
-sl_init
-  os_alloc size=67108864
-mm_alloc Character #1 size=8 [main]
-  sl_alloc Character #1 size=40 class=4
-mm_alloc __ManagedMemory #2 size=40 [main]
-  sl_alloc __ManagedMemory #2 size=72 class=6
-mm_incref __ManagedMemory #2 rc=1 [main]
-mm_incref Character #1 rc=1 [main]
-mm_decref Character #1 rc=0 [main]
-  mm_decref __ManagedMemory #2 rc=0 [~Character]
-    mm_free __ManagedMemory #2
-      sl_free __ManagedMemory #2 size=96 class=6
-  mm_free Character #1
-    sl_free Character #1 size=48 class=4
-mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R1
-  sl_free size=48 class=4
-```
 
 <!-- test: rc-char-reassign-decrefs-old -->
-<!-- MmTrace -->
 Reassigning a character var decrefs and frees the old Character (with its managed child) before storing the new one.
 ```maxon
 function main() returns ExitCode
@@ -3013,43 +1284,8 @@ end 'main'
 ```exitcode
 1
 ```
-```stderr
-sl_init
-  os_alloc size=67108864
-mm_alloc Character #1 size=8 [main]
-  sl_alloc Character #1 size=40 class=4
-mm_alloc __ManagedMemory #2 size=40 [main]
-  sl_alloc __ManagedMemory #2 size=72 class=6
-mm_incref __ManagedMemory #2 rc=1 [main]
-mm_incref Character #1 rc=1 [main]
-mm_incref Character #1 rc=2 [main]
-mm_alloc Character #3 size=8 [main]
-  sl_alloc Character #3 size=40 class=4
-mm_alloc __ManagedMemory #4 size=40 [main]
-  sl_alloc __ManagedMemory #4 size=72 class=6
-mm_incref __ManagedMemory #4 rc=1 [main]
-mm_incref Character #3 rc=1 [main]
-mm_decref Character #1 rc=1 [main]
-mm_decref Character #3 rc=0 [main]
-  mm_decref __ManagedMemory #4 rc=0 [~Character]
-    mm_free __ManagedMemory #4
-      sl_free __ManagedMemory #4 size=96 class=6
-  mm_free Character #3
-    sl_free Character #3 size=48 class=4
-mm_decref Character #1 rc=0 [main]
-  mm_decref __ManagedMemory #2 rc=0 [~Character]
-    mm_free __ManagedMemory #2
-      sl_free __ManagedMemory #2 size=96 class=6
-  mm_free Character #1
-    sl_free Character #1 size=48 class=4
-mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R1
-  sl_free size=48 class=4
-```
 
 <!-- test: rc-char-return-transfers-ownership -->
-<!-- MmTrace -->
 Returning a character from a function transfers ownership to the caller.
 ```maxon
 function makeChar() returns Character
@@ -3064,30 +1300,8 @@ end 'main'
 ```exitcode
 1
 ```
-```stderr
-sl_init
-  os_alloc size=67108864
-mm_alloc Character #1 size=8 [makeChar]
-  sl_alloc Character #1 size=40 class=4
-mm_alloc __ManagedMemory #2 size=40 [makeChar]
-  sl_alloc __ManagedMemory #2 size=72 class=6
-mm_incref __ManagedMemory #2 rc=1 [makeChar]
-mm_incref Character #1 rc=1 [makeChar]
-mm_transfer Character #1 rc=1 [makeChar]
-mm_decref Character #1 rc=0 [main]
-  mm_decref __ManagedMemory #2 rc=0 [~Character]
-    mm_free __ManagedMemory #2
-      sl_free __ManagedMemory #2 size=96 class=6
-  mm_free Character #1
-    sl_free Character #1 size=48 class=4
-mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R1
-  sl_free size=48 class=4
-```
 
 <!-- test: rc-char-inner-block-freed -->
-<!-- MmTrace -->
 A character created in an inner if-block is freed when that block exits.
 ```maxon
 function main() returns ExitCode
@@ -3102,29 +1316,8 @@ end 'main'
 ```exitcode
 1
 ```
-```stderr
-sl_init
-  os_alloc size=67108864
-mm_alloc Character #1 size=8 [main]
-  sl_alloc Character #1 size=40 class=4
-mm_alloc __ManagedMemory #2 size=40 [main]
-  sl_alloc __ManagedMemory #2 size=72 class=6
-mm_incref __ManagedMemory #2 rc=1 [main]
-mm_incref Character #1 rc=1 [main]
-mm_decref Character #1 rc=0 [main]
-  mm_decref __ManagedMemory #2 rc=0 [~Character]
-    mm_free __ManagedMemory #2
-      sl_free __ManagedMemory #2 size=96 class=6
-  mm_free Character #1
-    sl_free Character #1 size=48 class=4
-mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R1
-  sl_free size=48 class=4
-```
 
 <!-- test: rc-tuple-primitive-freed -->
-<!-- MmTrace -->
 A tuple of primitives is heap-allocated and freed at scope exit.
 ```maxon
 function main() returns ExitCode
@@ -3135,23 +1328,8 @@ end 'main'
 ```exitcode
 10
 ```
-```stderr
-sl_init
-  os_alloc size=67108864
-mm_alloc __Tuple_i64_i64 #1 size=16 [main]
-  sl_alloc __Tuple_i64_i64 #1 size=48 class=4
-mm_incref __Tuple_i64_i64 #1 rc=1 [main]
-mm_decref __Tuple_i64_i64 #1 rc=0 [main]
-  mm_free __Tuple_i64_i64 #1
-    sl_free __Tuple_i64_i64 #1 size=48 class=4
-mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R1
-  sl_free size=48 class=4
-```
 
 <!-- test: rc-tuple-alias-incref -->
-<!-- MmTrace -->
 Aliasing a tuple increfs it; both variables share the same tuple object.
 ```maxon
 function main() returns ExitCode
@@ -3163,23 +1341,8 @@ end 'main'
 ```exitcode
 10
 ```
-```stderr
-sl_init
-  os_alloc size=67108864
-mm_alloc __Tuple_i64_i64 #1 size=16 [main]
-  sl_alloc __Tuple_i64_i64 #1 size=48 class=4
-mm_incref __Tuple_i64_i64 #1 rc=1 [main]
-mm_decref __Tuple_i64_i64 #1 rc=0 [main]
-  mm_free __Tuple_i64_i64 #1
-    sl_free __Tuple_i64_i64 #1 size=48 class=4
-mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R1
-  sl_free size=48 class=4
-```
 
 <!-- test: rc-tuple-reassign-decrefs-old -->
-<!-- MmTrace -->
 Reassigning a tuple var decrefs the old tuple before storing the new one.
 ```maxon
 function main() returns ExitCode
@@ -3191,29 +1354,8 @@ end 'main'
 ```exitcode
 7
 ```
-```stderr
-sl_init
-  os_alloc size=67108864
-mm_alloc __Tuple_i64_i64 #1 size=16 [main]
-  sl_alloc __Tuple_i64_i64 #1 size=48 class=4
-mm_incref __Tuple_i64_i64 #1 rc=1 [main]
-mm_alloc __Tuple_i64_i64 #2 size=16 [main]
-  sl_alloc __Tuple_i64_i64 #2 size=48 class=4
-mm_incref __Tuple_i64_i64 #2 rc=1 [main]
-mm_decref __Tuple_i64_i64 #1 rc=0 [main]
-  mm_free __Tuple_i64_i64 #1
-    sl_free __Tuple_i64_i64 #1 size=48 class=4
-mm_decref __Tuple_i64_i64 #2 rc=0 [main]
-  mm_free __Tuple_i64_i64 #2
-    sl_free __Tuple_i64_i64 #2 size=48 class=4
-mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R1
-  sl_free size=48 class=4
-```
 
 <!-- test: rc-tuple-with-string-freed -->
-<!-- MmTrace -->
 A tuple containing a managed type (String); the destructor must cascade to decref the String field.
 ```maxon
 function main() returns ExitCode
@@ -3224,37 +1366,8 @@ end 'main'
 ```exitcode
 42
 ```
-```stderr
-sl_init
-  os_alloc size=67108864
-mm_alloc String #1 size=16 [main]
-  sl_alloc String #1 size=48 class=4
-mm_alloc __ManagedMemory #2 size=40 [main]
-  sl_alloc __ManagedMemory #2 size=72 class=6
-mm_incref __ManagedMemory #2 rc=1 [main]
-mm_incref String #1 rc=1 [main]
-mm_alloc __Tuple_i64_String #3 size=16 [main]
-  sl_alloc __Tuple_i64_String #3 size=48 class=4
-mm_incref String #1 rc=2 [main]
-mm_incref __Tuple_i64_String #3 rc=1 [main]
-mm_decref String #1 rc=1 [main]
-mm_decref __Tuple_i64_String #3 rc=0 [main]
-  mm_decref String #1 rc=0 [~__Tuple_i64_String]
-    mm_decref __ManagedMemory #2 rc=0 [~String]
-      mm_free __ManagedMemory #2
-        sl_free __ManagedMemory #2 size=96 class=6
-    mm_free String #1
-      sl_free String #1 size=48 class=4
-  mm_free __Tuple_i64_String #3
-    sl_free __Tuple_i64_String #3 size=48 class=4
-mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R1
-  sl_free size=48 class=4
-```
 
 <!-- test: rc-tuple-return-transfers-ownership -->
-<!-- MmTrace -->
 Returning a tuple from a function transfers ownership to the caller.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -3271,24 +1384,8 @@ end 'main'
 ```exitcode
 8
 ```
-```stderr
-sl_init
-  os_alloc size=67108864
-mm_alloc __Tuple_i64_i64 #1 size=16 [makePair]
-  sl_alloc __Tuple_i64_i64 #1 size=48 class=4
-mm_incref __Tuple_i64_i64 #1 rc=1 [makePair]
-mm_transfer __Tuple_i64_i64 #1 rc=1 [makePair]
-mm_decref __Tuple_i64_i64 #1 rc=0 [main]
-  mm_free __Tuple_i64_i64 #1
-    sl_free __Tuple_i64_i64 #1 size=48 class=4
-mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R1
-  sl_free size=48 class=4
-```
 
 <!-- test: rc-tuple-destructuring-cleanup -->
-<!-- MmTrace -->
 Destructuring a tuple frees the tuple wrapper while the bindings remain live.
 ```maxon
 function main() returns ExitCode
@@ -3300,23 +1397,8 @@ end 'main'
 ```exitcode
 30
 ```
-```stderr
-sl_init
-  os_alloc size=67108864
-mm_alloc __Tuple_i64_i64 #1 size=16 [main]
-  sl_alloc __Tuple_i64_i64 #1 size=48 class=4
-mm_incref __Tuple_i64_i64 #1 rc=1 [main]
-mm_decref __Tuple_i64_i64 #1 rc=0 [main]
-  mm_free __Tuple_i64_i64 #1
-    sl_free __Tuple_i64_i64 #1 size=48 class=4
-mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R1
-  sl_free size=48 class=4
-```
 
 <!-- test: rc-tuple-with-struct-freed -->
-<!-- MmTrace -->
 A tuple containing a user-defined struct; the destructor cascades through the tuple into the struct.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -3337,29 +1419,6 @@ end 'main'
 ```
 ```exitcode
 1
-```
-```stderr
-sl_init
-  os_alloc size=67108864
-mm_alloc Point #1 size=16 [Point.create]
-  sl_alloc Point #1 size=48 class=4
-mm_incref Point #1 rc=1 [Point.create]
-mm_transfer Point #1 rc=1 [Point.create]
-mm_alloc __Tuple_i64_Point #2 size=16 [main]
-  sl_alloc __Tuple_i64_Point #2 size=48 class=4
-mm_incref Point #1 rc=2 [main]
-mm_incref __Tuple_i64_Point #2 rc=1 [main]
-mm_decref Point #1 rc=1 [main]
-mm_decref __Tuple_i64_Point #2 rc=0 [main]
-  mm_decref Point #1 rc=0 [~__Tuple_i64_Point]
-    mm_free Point #1
-      sl_free Point #1 size=48 class=4
-  mm_free __Tuple_i64_Point #2
-    sl_free __Tuple_i64_Point #2 size=48 class=4
-mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R1
-  sl_free size=48 class=4
 ```
 
 <!-- test: rc-struct-literal-as-function-arg -->

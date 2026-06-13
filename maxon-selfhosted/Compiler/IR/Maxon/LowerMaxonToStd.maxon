@@ -102,7 +102,7 @@ end 'unionDestructorSymbol'
 // managed payload field that must be `mm_decref`'d when the union value
 // dies. Drives both the destructor-synthesis decision (skip emission for
 // scalar-only unions) and `lowerEnumConstruct`'s funcRef-vs-null choice
-// for the `mm_alloc(size, dtor, tag)` destructor argument.
+// for the `mm_alloc(size, dtor)` destructor argument.
 function unionHasManagedPayload(project Project, unionType EnumType) returns bool
 	for c in unionType.cases 'scanCases'
 		for f in c.payloadFields 'scanFields'
@@ -582,21 +582,6 @@ function zeroBytesOfSize(sizeBytes IntConstant) returns ByteArray
 	return bytes
 end 'zeroBytesOfSize'
 
-// UTF-8 bytes of `s` plus a trailing NUL — the C-string image for an mm-trace
-// tag-name or label that `mrt_write_stderr` reads as a NUL-terminated string.
-//
-// Builds over `ownedStringByteCopy` rather than the raw `s.toByteArray()`
-// view: `toByteArray()` shares the String's backing `__ManagedMemory`, so
-// appending the NUL to it directly would mutate the String's storage in place
-// — corrupting every other alias of `s` (e.g. when `s` is `srcFunc.name`,
-// which is the same interned String as a `funcReturnTypes`/`funcSignatures`
-// map key). See `ownedStringByteCopy`.
-function nulTerminatedBytes(s String) returns ByteArray
-	var bytes = ownedStringByteCopy(s)
-	bytes.push(0)
-	return bytes
-end 'nulTerminatedBytes'
-
 // Step 6a.17: register every slab/MM allocator-runtime global in the .data
 // prelude so `globalAddr __slab_*` / `globalAddr __mm_*` resolves to a unique
 // address. Without these entries every name aliased to offset 0 (the
@@ -661,28 +646,6 @@ export function registerSlabAndMmGlobalsForDataSection(globalData GlobalDataTabl
 	// MM-layer leak counter. Atomic-tracked count of live allocations;
 	// spec tests assert this reaches zero.
 	addDataSectionEntry(globalData, name: "__mm_alloc_count", initialBytes: zeroBytesOfSize(8))
-
-	// mm-trace state (only mutated when mm-trace is enabled; reserved
-	// unconditionally so the .data layout is uniform across traced/untraced
-	// builds). `__mm_trace_depth` is the current indent level; `__mm_trace_tag_ctx`
-	// holds the packed_id the mm-layer hands to the slab layer so sl_alloc /
-	// sl_free can echo the same `TypeName #id`; `__mm_alloc_id_counter` mints the
-	// per-allocation `#N` ids.
-	addDataSectionEntry(globalData, name: "__mm_trace_depth", initialBytes: zeroBytesOfSize(8))
-	addDataSectionEntry(globalData, name: "__mm_trace_tag_ctx", initialBytes: zeroBytesOfSize(8))
-	addDataSectionEntry(globalData, name: "__mm_alloc_id_counter", initialBytes: zeroBytesOfSize(8))
-	// 24-byte scratch buffer for formatting trace integers as decimal digits.
-	addDataSectionEntry(globalData, name: "__mm_trace_int_buf", initialBytes: zeroBytesOfSize(24))
-	// mm-trace scope STACK: `__mm_trace_scope` is an array of cstr pointers (one per
-	// active function frame), `__mm_trace_scope_depth` is the live depth. Each function
-	// `mm_scope_push(name)`es its name on entry and `mm_scope_pop()`s before returning;
-	// an inlined callee's push/pop inline verbatim, so the stack naturally restores the
-	// caller's scope after the inlined region. Trace lines read top-of-stack
-	// (`stack[depth-1]`, or 0 when empty). 256 slots is far beyond any real inlined
-	// call depth; overflow simply stops pushing (the trace degrades, never corrupts).
-	// Single-threaded trace path.
-	addDataSectionEntry(globalData, name: "__mm_trace_scope", initialBytes: zeroBytesOfSize(2048))
-	addDataSectionEntry(globalData, name: "__mm_trace_scope_depth", initialBytes: zeroBytesOfSize(8))
 
 	// Phase B3: lazy-init cache for the hand-rolled `mrt_win32_get_argc` /
 	// `mrt_win32_get_argv` helpers. First call to either helper populates
@@ -1171,17 +1134,6 @@ export function registerInternalsIntrinsicSignatures(project Project)
 	// chain), defeating the purpose of having a raw address-of op. Each
 	// global the runtime helpers need has a dedicated intrinsic here.
 	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.mmAllocCountAddr", paramNames: StringArray.create(), paramTypes: MaxonTypeArray.create(), returnType: intReturn)
-	// mm-trace flag (compile-time constant) + trace-state global accessors.
-	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.mmTraceEnabled", paramNames: StringArray.create(), paramTypes: MaxonTypeArray.create(), returnType: intReturn)
-	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.mmTraceDepthAddr", paramNames: StringArray.create(), paramTypes: MaxonTypeArray.create(), returnType: intReturn)
-	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.mmTraceTagCtxAddr", paramNames: StringArray.create(), paramTypes: MaxonTypeArray.create(), returnType: intReturn)
-	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.mmAllocIdCounterAddr", paramNames: StringArray.create(), paramTypes: MaxonTypeArray.create(), returnType: intReturn)
-	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.mmTraceIntBufAddr", paramNames: StringArray.create(), paramTypes: MaxonTypeArray.create(), returnType: intReturn)
-	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.mmTraceScopeAddr", paramNames: StringArray.create(), paramTypes: MaxonTypeArray.create(), returnType: intReturn)
-	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.mmTraceScopeDepthAddr", paramNames: StringArray.create(), paramTypes: MaxonTypeArray.create(), returnType: intReturn)
-	// mm-trace tag-name / literal lookup: index -> rdata cstr address.
-	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.mmTagName", paramNames: mmParamNames1("tagIndex"), paramTypes: mmParamTypes1(MaxonType.integer), returnType: intReturn)
-	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.mmTraceLit", paramNames: mmParamNames1("litIndex"), paramTypes: mmParamTypes1(MaxonType.integer), returnType: intReturn)
 	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.slabArenaListHeadAddr", paramNames: StringArray.create(), paramTypes: MaxonTypeArray.create(), returnType: intReturn)
 	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.slabArenaLastBaseAddr", paramNames: StringArray.create(), paramTypes: MaxonTypeArray.create(), returnType: intReturn)
 	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.slabInitDoneAddr", paramNames: StringArray.create(), paramTypes: MaxonTypeArray.create(), returnType: intReturn)
@@ -2931,59 +2883,6 @@ type MaxonToStdLowering
 		end 'eachBlock'
 	end 'auditUnclassifiedCallResults'
 
-	// Emit the tag-index const for a managed allocation's `__mm_alloc(size, dtor,
-	// tag)` call. When mm-trace is enabled, interns `typeName` into the tag table
-	// and emits its 1-based index, so the runtime trace resolves `TypeName #id`;
-	// otherwise emits 0 (no tag — untraced builds don't need it). The index is
-	// packed into the allocation's packed_id header at alloc time.
-	function emitMmTraceTag(typeName String, dstBlock IrBlock) returns ValueId
-		var index = 0 as ParsedInt
-		if self.project.mmTraceEnabled 'enabled'
-			index = internMmTraceTag(typeName)
-		end 'enabled'
-		let tagId = self.emitConstI64(index, dstBlock: dstBlock)
-		self.setValueType(tagId, t: MaxonType.integer)
-		return tagId
-	end 'emitMmTraceTag'
-
-	// mm-trace scope: at function-body entry, store the enclosing function's name
-	// cstr into the `__mm_trace_scope` global so every alloc/incref/decref/drop line
-	// emitted while this function runs is suffixed ` [funcName]` (the C# bootstrap's
-	// scope context — see `__mmTraceScopeAndNewline`). Lets a debugger see WHERE
-	// each MM event happens. Only emitted when mm-trace is enabled (untraced builds
-	// never read the global). The name string lives in `.rdata` under an
-	// `__mtstr_scope_<sanitized>` symbol; the store is `[__mm_trace_scope] = &name`.
-	// NB: a nested call sets its own scope and does not restore the caller's — the
-	// scope therefore reflects the function the allocation physically occurs in,
-	// which is exactly what the trace wants (an alloc in a callee shows the callee).
-	function emitMmTraceScopePush(funcName String, entryBlock IrBlock)
-		if not self.project.mmTraceEnabled 'disabled'
-			return
-		end 'disabled'
-		let nameSym = "__mtstr_scope_{sanitizeForRdataSymbol(funcName)}"
-		self.registerTraceString(nameSym, bytes: nulTerminatedBytes(funcName))
-		let namePtrId = allocValueId(self.funcIdRef)
-		let callResultId = allocValueId(self.funcIdRef)
-		self.setValueType(namePtrId, t: MaxonType.integer)
-		self.setValueType(callResultId, t: MaxonType.integer)
-		// Insert the `mm_scope_push(&funcName)` at the FRONT of the entry block (it must
-		// run before any body alloc/incref so the frame is on the stack), but allocate
-		// its ValueIds AFTER the body has been lowered (this method is called post-body)
-		// so the body's own ValueIds are NOT shifted off the `funcIdRef`-starts-at-
-		// paramCount contract downstream lowering relies on. Push each op to the pool,
-		// then insert at the front of opRefs in execution order (globalAddr, then call).
-		// The matching `mm_scope_pop()` is emitted before each `ret` (emitMmTraceScopePop)
-		// and, for an inlined callee, by the inliner after the return-move.
-		let namePtrOpIdx = self.stdModule.ops.count()
-		self.stdModule.ops.push(StdOp.system(StdSystemOp.globalAddr(namePtrId, name: nameSym)))
-		var pushArgs = ValueIdArray.create()
-		pushArgs.push(namePtrId)
-		let callOpIdx = self.stdModule.ops.count()
-		self.stdModule.ops.push(StdOp.call(StdCallOp.call(callResultId, callee: "mm_scope_push", argIds: pushArgs)))
-		try entryBlock.opRefs.insert(0, value: namePtrOpIdx) otherwise panic("emitMmTraceScopePush: opRefs.insert namePtr failed")
-		try entryBlock.opRefs.insert(1, value: callOpIdx) otherwise panic("emitMmTraceScopePush: opRefs.insert call failed")
-	end 'emitMmTraceScopePush'
-
 	function getValueType(id ValueId) returns MaxonType
 		return try self.valueType.get(id) otherwise MaxonType.integer
 	end 'getValueType'
@@ -3491,26 +3390,6 @@ type MaxonToStdLowering
 				end 'hasTerm'
 			end 'eachBlock'
 
-			// mm-trace: set the scope to this function's name so every MM-event line
-			// emitted while it runs is suffixed ` [funcName]`. Done AFTER the body
-			// lowers — emitMmTraceScopeSet allocates 2 ValueIds, and doing so before
-			// the body would shift the body's IDs off the `funcIdRef`-starts-at-
-			// paramCount contract downstream lowering relies on (breaks e.g. method-
-			// call result-type resolution — the JsonDoc.rootKind regression). It
-			// inserts its ops at the FRONT of the entry block so they run first. No-op
-			// when untraced.
-			// Only USER functions set the scope. The trace line for an alloc is
-			// printed from INSIDE `__mm_alloc` (after its internal trace helpers like
-			// `__mmTraceNextAllocId` have run); if every stdlib function also set the
-			// scope, those helpers would clobber it and the line would read
-			// `[stdlib.__mmTraceWriteInt]` instead of the user function the alloc
-			// logically happens in. Gating to user functions keeps the scope at the
-			// nearest enclosing user frame (`[main]`, `[Box.create]`).
-			if entryRef >= 0 and not isStdlibNamespace(srcFunc.namespace) 'scopeSet'
-				var scopeEntryBlock = try self.stdModule.blocks.get(entryRef) otherwise panic("invariant: entryRef from blockRefs not in stdModule.blocks")
-				self.emitMmTraceScopePush(srcFunc.name, entryBlock: scopeEntryBlock)
-			end 'scopeSet'
-
 			// Classification audit: surface every heap-managed-typed CALL result
 			// the body left unclassified (see auditUnclassifiedCallResults).
 			self.auditUnclassifiedCallResults(srcFunc)
@@ -3564,13 +3443,6 @@ type MaxonToStdLowering
 		// param so wasm's `call_indirect` sees a matching signature.
 		self.synthesizeFnRefThunks()
 
-		// mm-trace: emit the `__mm_tag_lookup(idx)` helper (index -> rdata cstr
-		// of the managed type name) plus the name strings, from the tag table
-		// interned during alloc lowering. Also the fixed format-literal table
-		// (`__mm_trace_lit_lookup`). No-op when mm-trace is off.
-		self.emitMmTagLookupFunction()
-		self.emitMmTraceLitTable()
-
 		return self.stdModule
 	end 'lower'
 
@@ -3613,8 +3485,8 @@ type MaxonToStdLowering
 			enumMatchArm then panic("lowerMaxonToStd: enumMatchArm seen as a regular op (parser bug — should always be a terminator)")
 			rangeMatchArm then panic("lowerMaxonToStd: rangeMatchArm seen as a regular op (parser bug — should always be a terminator)")
 			// Phase 9 Stage 3: heap-boxed union construction + tag/payload
-			// reads. enumConstruct expands to `__mm_alloc(size, null, tag)
-			// + storeIndirect tag + per-field storeIndirect`; enumTag and
+			// reads. enumConstruct expands to `__mm_alloc(size, dtor)
+			// + storeIndirect ordinal + per-field storeIndirect`; enumTag and
 			// enumPayloadRead are plain loadIndirects at offsets 0 and
 			// `8 + fieldIndex*8` respectively. enumPayloadStore is Stage 4
 			// territory (write-back from match-arm assignment); a sighting
@@ -3981,7 +3853,7 @@ type MaxonToStdLowering
 
 	// Emit the outer Character (8 bytes — only the `managed` pointer field) wrapping
 	// the inner `mmId` __ManagedMemory, into the caller-supplied `characterId`.
-	// Allocated drop-tracked via `stdlib.__mm_alloc(8, &__destruct_Character, tag)`
+	// Allocated drop-tracked via `stdlib.__mm_alloc(8, &__destruct_Character)`
 	// (rc=0) so its rc→0 free runs `__destruct_Character`, which decrefs the inner
 	// __ManagedMemory field. Classified `freshRc0` (like `lowerStringConst`'s String):
 	// the inserter acquires the +1 at def and decrefs at last use → a char literal
@@ -3997,11 +3869,9 @@ type MaxonToStdLowering
 		let chDtorId = allocValueId(self.funcIdRef)
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.funcRef(chDtorId, funcName: self.structDestructorSymbol(charTypeName))))
 		self.setValueType(chDtorId, t: MaxonType.integer)
-		let chTagId = self.emitMmTraceTag(charTypeName, dstBlock: dstBlock)
 		var chArgIds = ValueIdArray.create()
 		chArgIds.push(chSizeId)
 		chArgIds.push(chDtorId)
-		chArgIds.push(chTagId)
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(characterId, callee: "stdlib.__mm_alloc", argIds: chArgIds)))
 		let characterType = builtinCharLiteralType(self.project)
 		self.setValueType(characterId, t: characterType)
@@ -4050,7 +3920,7 @@ type MaxonToStdLowering
 
 	// Emit the outer `String` envelope (16 bytes — `_managed@0`, `isAsciiFlag@8`)
 	// wrapping the inner `mmId` __ManagedMemory into the caller-supplied `stringId`.
-	// Allocated drop-tracked via `stdlib.__mm_alloc(16, &__destruct_String, tag)` (rc=0)
+	// Allocated drop-tracked via `stdlib.__mm_alloc(16, &__destruct_String)` (rc=0)
 	// so its rc→0 free runs `__destruct_String`, which decrefs the inner MM field;
 	// classified `freshRc0` so the inserter acquires the def +1 and releases at last use.
 	// The String sibling of `emitCharacterEnvelope`, shared by `lowerStringConst`,
@@ -4063,11 +3933,9 @@ type MaxonToStdLowering
 		let strDtorId = allocValueId(self.funcIdRef)
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.funcRef(strDtorId, funcName: self.structDestructorSymbol(strTypeName))))
 		self.setValueType(strDtorId, t: MaxonType.integer)
-		let strTagId = self.emitMmTraceTag(strTypeName, dstBlock: dstBlock)
 		var strArgIds = ValueIdArray.create()
 		strArgIds.push(strSizeId)
 		strArgIds.push(strDtorId)
-		strArgIds.push(strTagId)
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(stringId, callee: "stdlib.__mm_alloc", argIds: strArgIds)))
 		let stringType = builtinStringLiteralType(self.project)
 		self.setValueType(stringId, t: stringType)
@@ -4180,7 +4048,7 @@ type MaxonToStdLowering
 		self.storeI64Const(mmId, offset: 32, value: 0, dstBlock: dstBlock)
 
 		// Outer Array (8 bytes): managed at offset 0. Allocated drop-tracked via
-		// `stdlib.__mm_alloc(8, &__destruct_<Array>, tag)` (rc=0) so its rc→0 free runs
+		// `stdlib.__mm_alloc(8, &__destruct_<Array>)` (rc=0) so its rc→0 free runs
 		// the Array destructor, which decrefs the inner __ManagedMemory field. Classified
 		// `freshRc0`: the inserter acquires the +1 at def and decrefs at last use → a
 		// byte-string literal that is used-and-dropped (or moved into a container) reaches
@@ -4198,11 +4066,9 @@ type MaxonToStdLowering
 			self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: arrDtorId, value: 0))))
 		end 'nullDtor'
 		self.setValueType(arrDtorId, t: MaxonType.integer)
-		let arrTagId = self.emitMmTraceTag(arrTypeName, dstBlock: dstBlock)
 		var arrArgIds = ValueIdArray.create()
 		arrArgIds.push(arrSizeId)
 		arrArgIds.push(arrDtorId)
-		arrArgIds.push(arrTagId)
 		let resultId = self.defineName(result)
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: "stdlib.__mm_alloc", argIds: arrArgIds)))
 		// Pin the value-type map to the same gid TypeResolution recorded for
@@ -6825,18 +6691,6 @@ type MaxonToStdLowering
 		if methodName == "memcpy" 'isMemcpy'
 			return self.lowerInternalsMemcpy(result, args: args, dstBlock: dstBlock)
 		end 'isMemcpy'
-		// `__Internals.mmTraceEnabled()` folds to the project's mm-trace flag as
-		// a compile-time i64 constant (1 / 0). DCE then prunes every gated trace
-		// branch in untraced builds, so the allocator helpers carry no overhead.
-		if methodName == "mmTraceEnabled" 'isMmTraceEnabled'
-			return self.lowerInternalsMmTraceEnabled(result, dstBlock: dstBlock)
-		end 'isMmTraceEnabled'
-		if methodName == "mmTagName" 'isMmTagName'
-			return self.lowerInternalsMmTagName(result, args: args, dstBlock: dstBlock)
-		end 'isMmTagName'
-		if methodName == "mmTraceLit" 'isMmTraceLit'
-			return self.lowerInternalsMmTraceLit(result, args: args, dstBlock: dstBlock)
-		end 'isMmTraceLit'
 		// Address-of-named-global / address-of-named-function bridges
 		if let globalName = try lookupInternalsGlobalAddrTarget(methodName) 'isGlobalAddr'
 			return self.lowerInternalsNamedGlobalAddr(result, args: args, dstBlock: dstBlock, globalName: globalName)
@@ -7138,45 +6992,6 @@ type MaxonToStdLowering
 		self.setValueType(resultId, t: MaxonType.integer)
 		return true
 	end 'lowerInternalsMemcpy'
-
-	// Lower `__Internals.mmTraceEnabled()` to a constant i64 (1 when the project
-	// enables mm-trace, else 0). A plain const so canonicalize/DCE can
-	// constant-fold the surrounding `if __Internals.mmTraceEnabled() ...` guards.
-	function lowerInternalsMmTraceEnabled(result ByteArray, dstBlock IrBlock) returns bool
-		let value = 1 if self.project.mmTraceEnabled else 0
-		let resultId = self.defineName(result)
-		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: resultId, value: value))))
-		self.setValueType(resultId, t: MaxonType.integer)
-		return true
-	end 'lowerInternalsMmTraceEnabled'
-
-	// Lower `__Internals.mmTagName(idx)` to a call to the generated runtime
-	// `__mm_tag_lookup` helper (tag index -> rdata cstr address of the type
-	// name; `(null)` for index 0 / unknown). Untraced builds DCE the call away.
-	function lowerInternalsMmTagName(result ByteArray, args ByteArrayArray, dstBlock IrBlock) returns bool
-		return self.lowerInternalsTableLookup(result, args: args, dstBlock: dstBlock, callee: "__mm_tag_lookup", intrinsic: "mmTagName")
-	end 'lowerInternalsMmTagName'
-
-	// Lower `__Internals.mmTraceLit(idx)` to a call to the generated
-	// `__mm_trace_lit_lookup` helper (returns the rdata address of the fixed
-	// trace-format literal at index `idx`).
-	function lowerInternalsMmTraceLit(result ByteArray, args ByteArrayArray, dstBlock IrBlock) returns bool
-		return self.lowerInternalsTableLookup(result, args: args, dstBlock: dstBlock, callee: "__mm_trace_lit_lookup", intrinsic: "mmTraceLit")
-	end 'lowerInternalsMmTraceLit'
-
-	function lowerInternalsTableLookup(result ByteArray, args ByteArrayArray, dstBlock IrBlock, callee String, intrinsic String) returns bool
-		if args.count() != 1 'badArity'
-			self.reportLowerError(ErrorCode.semanticTypeMismatch, message: "__Internals.{intrinsic} expects 1 argument, got {args.count()}")
-			return true
-		end 'badArity'
-		let idxId = self.resolveName(try args.get(0) otherwise panic("{intrinsic}: args.get(0) after arity check"))
-		var callArgs = ValueIdArray.create()
-		callArgs.push(idxId)
-		let resultId = self.defineName(result)
-		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: callee, argIds: callArgs)))
-		self.setValueType(resultId, t: MaxonType.integer)
-		return true
-	end 'lowerInternalsTableLookup'
 
 	function lowerInternalsLoadFramePtr(result ByteArray, args ByteArrayArray, dstBlock IrBlock) returns bool
 		if args.count() != 0 'badArity'
@@ -7646,45 +7461,6 @@ type MaxonToStdLowering
 		self.setValueType(resultId, t: resultType)
 		return true
 	end 'lowerBuiltinsSubprocessCall'
-
-	// Lower a 1-arg allocator intrinsic to `runtime_callee(arg)`. The
-	// runtime helpers return i64 (or "void" by always returning 0); we
-	// always allocate a result ValueId so subsequent reads resolve, even
-	// when the source-level call is for a void-returning helper like
-	// `mm_decref` whose return is discarded.
-	function lowerMmRuntimeCall1(result ByteArray, callee String, args ByteArrayArray, dstBlock IrBlock) returns bool
-		if args.count() != 1 'badArity'
-			self.reportLowerError(ErrorCode.semanticWrongArgCount, message: "{callee}: expected 1 arg, got {args.count()}")
-			return true
-		end 'badArity'
-		let argName = try args.get(0) otherwise panic("invariant: args.count() == 1 just checked")
-		let argId = self.resolveName(argName)
-		var argIds = ValueIdArray.create()
-		argIds.push(argId)
-		let resultId = self.defineName(result)
-		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: callee, argIds: argIds)))
-		self.setValueType(resultId, t: MaxonType.integer)
-		return true
-	end 'lowerMmRuntimeCall1'
-
-	// 3-arg variant: `mm_alloc(size, destructor, tag)`.
-	function lowerMmRuntimeCall3(result ByteArray, callee String, args ByteArrayArray, dstBlock IrBlock) returns bool
-		if args.count() != 3 'badArity'
-			self.reportLowerError(ErrorCode.semanticWrongArgCount, message: "{callee}: expected 3 args, got {args.count()}")
-			return true
-		end 'badArity'
-		let sizeName = try args.get(0) otherwise panic("invariant: args.count() == 3 just checked (size)")
-		let dtorName = try args.get(1) otherwise panic("invariant: args.count() == 3 just checked (destructor)")
-		let tagName = try args.get(2) otherwise panic("invariant: args.count() == 3 just checked (tag)")
-		var argIds = ValueIdArray.create()
-		argIds.push(self.resolveName(sizeName))
-		argIds.push(self.resolveName(dtorName))
-		argIds.push(self.resolveName(tagName))
-		let resultId = self.defineName(result)
-		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: callee, argIds: argIds)))
-		self.setValueType(resultId, t: MaxonType.integer)
-		return true
-	end 'lowerMmRuntimeCall3'
 
 	// Lower the `__mm_alloc_count` count-reader intrinsic to
 	// `loadIndirect(globalAddr(__mm_alloc_count))`. Reads the same i64 slot
@@ -8370,7 +8146,7 @@ type MaxonToStdLowering
 	// pass registered `info` against this op's `OpIndex`; the bytes already
 	// live in `.rdata` under `info.rdataLabel`. Emit:
 	//
-	//   newStruct = __mm_alloc(40, destructor = __destruct___ManagedMemory, tag = 0)
+	//   newStruct = __mm_alloc(40, destructor = __destruct___ManagedMemory)
 	//   newStruct[0]  = globalAddr(info.rdataLabel)   // buffer
 	//   newStruct[8]  = info.count                    // length
 	//   newStruct[16] = -2                            // capacity (read-only sentinel)
@@ -8396,13 +8172,9 @@ type MaxonToStdLowering
 		// would leave it OOB (the wild-indirect-call teardown crash).
 		let sizeId = self.emitConstI64(48, dstBlock: dstBlock)
 		self.setValueType(sizeId, t: MaxonType.integer)
-		// Tag the __ManagedMemory record so the trace names it (not `(null)`, which the
-		// strict null-tag panic rejects).
-		let tagId = self.emitMmTraceTag("__ManagedMemory", dstBlock: dstBlock)
 		var allocArgs = ValueIdArray.create()
 		allocArgs.push(sizeId)
 		allocArgs.push(dtorRefId)
-		allocArgs.push(tagId)
 		let mmId = self.defineName(result)
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(mmId, callee: "stdlib.__mm_alloc", argIds: allocArgs)))
 		self.setValueType(mmId, t: MaxonType.named(self.project.typeNames.intern("__ManagedMemory")))
@@ -9781,133 +9553,6 @@ type MaxonToStdLowering
 		end 'eachThunk'
 	end 'synthesizeFnRefThunks'
 
-	// Mangle a managed type name into a `.rdata` symbol for its trace string.
-	// Non-alphanumeric bytes become `_` so the result is a valid linker symbol.
-	// Numeric byte boundaries (0x30-0x39 = '0'-'9', 0x41-0x5a = 'A'-'Z',
-	// 0x61-0x7a = 'a'-'z', 0x5f = '_') sidestep the bootstrap's char-to-Byte
-	// cast-validation hiccup — same trick as `sanitizeFunctionNameForLabel`.
-	function mmTagNameSymbol(typeName String) returns String
-		// NB: the symbol must NOT start with `__mm_` / `__slab_` — those prefixes
-		// route to the writable `.data` section in `relocKindForLabel`, but these
-		// trace-name strings live in read-only `.rdata`. `__mtstr_` keeps them
-		// on the rdata relocation path.
-		return "__mtstr_name_{sanitizeForRdataSymbol(typeName)}"
-	end 'mmTagNameSymbol'
-
-	// Register a NUL-terminated trace string in `.rdata` under `name`.
-	function registerTraceString(name String, bytes ByteArray)
-		addNamedGlobalData(self.globalData, name: name, data: bytes)
-	end 'registerTraceString'
-
-	// Emit the `__mm_tag_lookup(idx) -> i64` runtime helper: a cmp-chain over
-	// the interned tag table that returns the `.rdata` address of each managed
-	// type's NUL-terminated name string, or the address of "(null)" for index 0
-	// / any unknown index. Each name string is registered as named rdata.
-	//
-	// Emitted in both the stdlib-cache build and the user build (so the
-	// `__mmTracePackedTag` call resolves in either; the cache build keeps all
-	// functions, so the callee can't dangle). The stdlib build sees an empty
-	// tag table (user types aren't interned yet), so type names trace as
-	// "(null)" until the cross-boundary tag table is wired.
-	function emitMmTagLookupFunction()
-		// Register the fallback "(null)" string and every interned tag name.
-		self.registerTraceString("__mtstr_name_null", bytes: nulTerminatedBytes("(null)"))
-		var symbols = StringArray.create()
-		for i in 0 upto globalMmTraceTagNames.count() 'eachName'
-			let name = try globalMmTraceTagNames.get(i) otherwise panic("emitMmTagLookupFunction: tag name get OOB at {i}")
-			let sym = mmTagNameSymbol(name)
-			self.registerTraceString(sym, bytes: nulTerminatedBytes(name))
-			symbols.push(sym)
-		end 'eachName'
-		// Tag indices are 1-based; index 0 (and any unknown) maps to "(null)".
-		self.emitRdataAddrLookupFunction("__mm_tag_lookup", oneBased: true, symbols: symbols, fallbackSym: "__mtstr_name_null")
-	end 'emitMmTagLookupFunction'
-
-	// Emit the fixed mm-trace format literals as named rdata + a 0-based
-	// `__mm_trace_lit_lookup(idx)` cmp-chain returning each literal's address.
-	// The index order is the contract referenced by stdlib/Internals.maxon's
-	// `__mmLit*` helpers.
-	// Always emitted — see emitMmTagLookupFunction for why it can't be gated.
-	function emitMmTraceLitTable()
-		var lits = StringArray.create()
-		lits.push("mm_alloc")  // 0
-		lits.push(" #")  // 1
-		lits.push(" size=")  // 2
-		lits.push(" [")  // 3
-		lits.push("]")  // 4
-		lits.push("\n")  // 5
-		lits.push("  ")  // 6
-		lits.push(" ")  // 7
-		lits.push("mm_free")  // 8
-		lits.push("mm_incref")  // 9
-		lits.push("mm_decref")  // 10
-		lits.push(" rc=")  // 11
-		lits.push("sl_alloc")  // 12
-		lits.push("sl_free")  // 13
-		lits.push(" class=")  // 14
-		lits.push("os_alloc")  // 15
-		lits.push("sl_init")  // 16
-		lits.push("mm_raw_alloc")  // 17
-		lits.push("mm_raw_free")  // 18
-		lits.push(" #R")  // 19
-		lits.push("mm_cow")  // 20
-		lits.push("mm_drop")  // 21
-		lits.push("mm_move")  // 22
-		lits.push(" -> return")  // 23
-		lits.push(" -> container")  // 24
-		lits.push(" -> phi")  // 25
-		var symbols = StringArray.create()
-		for i in 0 upto lits.count() 'each'
-			let s = try lits.get(i) otherwise panic("emitMmTraceLitTable: lits.get OOB at {i}")
-			let sym = "__mtstr_lit_{i}"
-			self.registerTraceString(sym, bytes: nulTerminatedBytes(s))
-			symbols.push(sym)
-		end 'each'
-		self.emitRdataAddrLookupFunction("__mm_trace_lit_lookup", oneBased: false, symbols: symbols, fallbackSym: try symbols.get(0) otherwise panic("emitMmTraceLitTable: no literals"))
-	end 'emitMmTraceLitTable'
-
-	// Build a `func name(idx) -> i64` that returns the rdata address of
-	// `symbols[idx]` (1-based when `oneBased`, else 0-based), with `fallbackSym`
-	// for any out-of-range index. A linear cmp-chain — the table is tiny.
-	function emitRdataAddrLookupFunction(name String, oneBased bool, symbols StringArray, fallbackSym String)
-		var paramTypes = StdTypeArray.create()
-		paramTypes.push(StdType.i64)
-		var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: paramTypes, returnLine: 0)
-		var idRef = ValueIdRef.create(1)
-		var entryBlock = self.stdModule.addBlock(func, label: "entry")
-		self.stdModule.appendOp(entryBlock, op: StdOp.call(StdCallOp.param(0 as ValueId, paramIndex: 0, paramType: StdType.i64)))
-		let bias = 1 if oneBased else 0
-		var curBlock = entryBlock
-		for i in 0 upto symbols.count() 'each'
-			let sym = try symbols.get(i) otherwise panic("emitRdataAddrLookupFunction: symbols.get OOB at {i}")
-			let idxConst = allocValueId(idRef)
-			self.stdModule.appendOp(curBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: idxConst, value: (i + bias) as ParsedInt))))
-			let cmpId = allocValueId(idRef)
-			self.stdModule.appendOp(curBlock, op: StdOp.arith(StdArithOp.binary(StdArithBinaryOp.create(StdArithBinaryOpcode.cmpI64Eq, resultId: cmpId, leftId: 0 as ValueId, rightId: idxConst))))
-			var hitBlock = self.stdModule.addBlock(func, label: "hit_{i}")
-			let missBlock = self.stdModule.addBlock(func, label: "miss_{i}")
-			self.stdModule.setTerminator(curBlock, op: StdOp.control(StdControlOp.condBr(cmpId, thenTarget: hitBlock.id, thenArgIds: ValueIdArray.create(), elseTarget: missBlock.id, elseArgIds: ValueIdArray.create())))
-			let hitAddr = allocValueId(idRef)
-			self.stdModule.appendOp(hitBlock, op: StdOp.system(StdSystemOp.globalAddr(hitAddr, name: sym)))
-			self.stdModule.setTerminator(hitBlock, op: StdOp.call(StdCallOp.ret(hitAddr)))
-			curBlock = missBlock
-		end 'each'
-		let fbAddr = allocValueId(idRef)
-		self.stdModule.appendOp(curBlock, op: StdOp.system(StdSystemOp.globalAddr(fbAddr, name: fallbackSym)))
-		self.stdModule.setTerminator(curBlock, op: StdOp.call(StdCallOp.ret(fbAddr)))
-		func.varSlotCount = idRef.nextId as VarSlot
-		self.stdModule.functions.push(func)
-		// Seed as a liveness root when mm-trace is on so dce-functions keeps it:
-		// in the USER pipeline the only caller (`__mmTracePackedTag` / `__mmW`)
-		// lives in the cached stdlib and is invisible to the in-module call-graph
-		// walk, so without this root the user-emitted (full-table) version would
-		// be pruned and the stdlib cache's (empty / partial) version would win.
-		// Off-trace builds don't root it, so it stays DCE-eligible there.
-		if self.project.mmTraceEnabled 'rootIt'
-			self.project.livenessRoots.push(name)
-		end 'rootIt'
-	end 'emitRdataAddrLookupFunction'
-
 	function synthesizeOneFnRefThunk(targetName String)
 		// Pull the target's signature from project tables — the parser
 		// registered every free function under its qualified name with
@@ -10657,15 +10302,14 @@ type MaxonToStdLowering
 		return UnionTypeLookup.hit(resolved)
 	end 'unionTypeForScrutinee'
 
-	// Phase 9 Stage 3: lower `MaxonOp.enumConstruct(result, EnumName, caseName,
-	// payloadValues)` to the heap-boxed layout the bootstrap uses:
-	// `__mm_alloc(size, destructor=null, tag=ordinal)` followed by a
-	// `storeIndirect` for the tag word at offset 0 and one `storeIndirect`
-	// per payload field at offset 8 + i*8. Managed-pointer payloads
-	// (struct/string/array/other-union) get an `__mm_incref` so the union
-	// owns its own reference. The destructor pointer is null in Stage 3
-	// — leaks of payload-bearing unions are the expected signal that
-	// Stage 4's destructor synthesis still needs to land.
+	// Lower `MaxonOp.enumConstruct(result, EnumName, caseName, payloadValues)`
+	// to the heap-boxed layout the bootstrap uses: `__mm_alloc(size, destructor)`
+	// followed by a `storeIndirect` for the case ordinal at offset 0 and one
+	// `storeIndirect` per payload field at offset 8 + i*8. Managed-pointer
+	// payloads (struct/string/array/other-union) are released at the union's
+	// rc→0 by the synthesized `__destruct_<Union>` destructor (passed here as
+	// the alloc's destructor pointer when any case carries a managed payload;
+	// null for scalar-only unions).
 	function lowerEnumConstruct(result ByteArray, enumName String, caseName String, payloadValues ByteArrayArray, dstBlock IrBlock)
 		let unionType = try self.project.enumTypes.get(enumName) otherwise 'unknownUnion'
 			self.reportLowerError(ErrorCode.semanticTypeMismatch, message: "lowerEnumConstruct: unknown union type '{enumName}'")
@@ -10707,16 +10351,9 @@ type MaxonToStdLowering
 		self.setValueType(dtorId, t: MaxonType.integer)
 		let tagOrdinalId = self.emitConstI64(theCase.ordinal as ParsedInt, dstBlock: dstBlock)
 		self.setValueType(tagOrdinalId, t: MaxonType.integer)
-		// mm-trace TYPE tag — the interned union type-name index, NOT the case
-		// ordinal. `__mm_alloc`'s `tag` param feeds the trace's `__mm_tag_lookup`
-		// so the alloc reads `Maybe #N`, not a garbage `(null)`/ordinal that trips
-		// the strict null-tag panic. The case ORDINAL is stored separately at the
-		// box's offset 0 below (read back by the match-side `enumTag`).
-		let traceTagId = self.emitMmTraceTag(unionType.name, dstBlock: dstBlock)
 		var allocArgIds = ValueIdArray.create()
 		allocArgIds.push(sizeId)
 		allocArgIds.push(dtorId)
-		allocArgIds.push(traceTagId)
 		let resultId = self.defineName(result)
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: "stdlib.__mm_alloc", argIds: allocArgIds)))
 		let unionMaxonType = MaxonType.named(self.project.typeNames.intern(unionType.name))
@@ -10726,10 +10363,8 @@ type MaxonToStdLowering
 		// the eventual decref (whose `__destruct_<Union>` cascades into each managed
 		// payload field) — lowering emits NO manual incref here.
 		self.classifyValue(resultId, cls: OwnershipClass.freshRc0, valueMaxonType: unionMaxonType)
-		// `__mm_alloc`'s `tag` parameter is a placeholder slot in the
-		// current runtime (see stdlib/Internals.maxon) — it does NOT
-		// populate the user region. Storing the tag explicitly here is
-		// what the match-side `enumTag` load reads back.
+		// Store the case ordinal at the box's offset 0 — this is what the
+		// match-side `enumTag` load reads back to dispatch on the live case.
 		self.emitStoreFieldI64(resultId, offset: 0, valueId: tagOrdinalId, dstBlock: dstBlock)
 		for i in 0 upto theCase.payloadFields.count() 'eachField'
 			let field = try theCase.payloadFields.get(i) otherwise panic("lowerEnumConstruct: payloadFields.get OOB at {i}")
@@ -11089,11 +10724,9 @@ type MaxonToStdLowering
 		// enclosing function's scope exit (`planAddressTakenSlotDrops`), not by the env.
 		let envDtorId = self.emitConstI64(0, dstBlock: dstBlock)
 		self.setValueType(envDtorId, t: MaxonType.integer)
-		let envTagId = self.emitMmTraceTag("__closure_env", dstBlock: dstBlock)
 		var allocArgs = ValueIdArray.create()
 		allocArgs.push(envSizeId)
 		allocArgs.push(envDtorId)
-		allocArgs.push(envTagId)
 		let envBaseId = allocValueId(self.funcIdRef)
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(envBaseId, callee: "stdlib.__mm_alloc", argIds: allocArgs)))
 		// Classify the env as a fresh rc=0 allocation so the inserter acquires + drops it
@@ -11265,7 +10898,7 @@ type MaxonToStdLowering
 		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: sizeId, value: byteSize))))
 		self.setValueType(sizeId, t: MaxonType.integer)
 		let resultId = self.defineName(result)
-		// Every heap struct is allocated via `__mm_alloc(size, destructor, tag)`
+		// Every heap struct is allocated via `__mm_alloc(size, destructor)`
 		// (alloc-at-0, refcount-tracked) — matching the C# reference, where
 		// `IrStructType.IsHeapAllocated` is always true and `EmitAlloc` always
 		// emits `mm_alloc`. The destructor pointer is `&__destruct_<Struct>` when
@@ -11307,13 +10940,9 @@ type MaxonToStdLowering
 			self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: dtorPtrId, value: 0))))
 		end 'nullDtor'
 		self.setValueType(dtorPtrId, t: MaxonType.integer)
-		// mm-trace tag: intern the struct's type name so the trace shows
-		// `TypeName #id` (e.g. `Box #1`) instead of `(null)`.
-		let tagId = self.emitMmTraceTag(structNameStr, dstBlock: dstBlock)
 		var allocArgIds = ValueIdArray.create()
 		allocArgIds.push(sizeId)
 		allocArgIds.push(dtorPtrId)
-		allocArgIds.push(tagId)
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: "stdlib.__mm_alloc", argIds: allocArgIds)))
 		// Phase 15e: a `__TupleN` allocation whose element types were
 		// concrete at parse time has its specialised `genericInstance` gid
@@ -11528,16 +11157,12 @@ type MaxonToStdLowering
 			let mmDtorId = allocValueId(self.funcIdRef)
 			self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.funcRef(mmDtorId, funcName: "stdlib.__destruct___ManagedMemory")))
 			self.setValueType(mmDtorId, t: MaxonType.integer)
-			// Allocate via `stdlib.__mm_alloc(48, dtor, tag)` (rc=0) + `__mm_incref`
-			// (→ rc=1, the owned-record contract), instead of the type-agnostic
-			// `mrt_alloc_with_dtor` wrapper, so the trace names the record
-			// `__ManagedMemory` (the wrapper stamps the `<raw>` sentinel). The +1 is the
-			// enclosing struct's reference, dropped by its synthesized destructor.
-			let mmTagId = self.emitMmTraceTag("__ManagedMemory", dstBlock: dstBlock)
+			// Allocate via `stdlib.__mm_alloc(48, dtor)` (rc=0) + `__mm_incref`
+			// (→ rc=1, the owned-record contract). The +1 is the enclosing struct's
+			// reference, dropped by its synthesized destructor.
 			var mmArgIds = ValueIdArray.create()
 			mmArgIds.push(mmSizeId)
 			mmArgIds.push(mmDtorId)
-			mmArgIds.push(mmTagId)
 			let mmId = allocValueId(self.funcIdRef)
 			self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(mmId, callee: "stdlib.__mm_alloc", argIds: mmArgIds)))
 			self.setValueType(mmId, t: MaxonType.named(self.project.typeNames.intern("__ManagedMemory")))
@@ -11953,91 +11578,6 @@ type MaxonToStdLowering
 	end 'lowerConvert'
 end 'MaxonToStdLowering'
 
-// Process-global mm-trace tag table. The tag index must be identical whether a
-// managed type's `__mm_alloc` is lowered in the stdlib-cache build or the user
-// build (they are separate pipelines / projects), so the table can't be
-// per-project — a divergent counter would bake a tag into user `main` that the
-// stdlib-built `__mm_tag_lookup` can't resolve. A single process-global table,
-// shared across every pipeline in the process, keeps indices consistent; the
-// user pipeline's `emitMmTagLookupFunction` (which runs last, after the stdlib
-// types are already interned) then emits the complete `__mm_tag_lookup`.
-//
-// NOTE: on this branch no alloc-lowering site interns into this table yet (the
-// `__mm_alloc` tag argument is still a hardcoded 0), so `__mm_tag_lookup`
-// currently resolves every index to "(null)". Wiring the interning at the alloc
-// sites is a follow-up; the helper itself is emitted unconditionally so the
-// `__mm_tag_lookup` / `__mm_trace_lit_lookup` calls always resolve at codegen.
-var globalMmTraceTagNames = StringArray.create()
-
-// Reset the mm-trace tag table at the start of each compilation. The table is a
-// process-global accumulator; without a per-compile reset, a type's interned index
-// depends on how many other tags earlier compiles in the same process registered
-// (e.g. `Box` = index 0 in a fresh process but 95 after the stdlib cache warm),
-// making the alloc's tag-index immediate — and thus the compiled IR — non-
-// deterministic across runs (a RequiredIR / cache-parity divergence). Clearing it
-// per compile makes the index a stable function of the program's own type set.
-export function resetMmTraceTags()
-	globalMmTraceTagNames.clear()
-	// Reserve the fixed runtime tag indices BEFORE any user/stdlib type is interned,
-	// so each maps to a stable, compile-independent index (1..N) the runtime can pass
-	// as a literal. The runtime's own allocations (raw buffers, `__ManagedMemory`
-	// records, cursors, list nodes) happen inside Internals.maxon where the per-program
-	// interned index of a type isn't known — these fixed sentinels give them a real
-	// trace name (`<raw>` / `__ManagedMemory` / …) instead of `(null)`. The order here
-	// is the contract `MM_TRACE_*_TAG` below (and the runtime constants) depend on.
-	// Determinism: same reason the table is reset per compile (see above).
-	_ = internMmTraceTag(MM_TRACE_RAW_TAG_NAME)  // 1
-	_ = internMmTraceTag("__ManagedMemory")  // 2
-	_ = internMmTraceTag("__ManagedMemoryCursor")  // 3
-	_ = internMmTraceTag("__ManagedList")  // 4
-	_ = internMmTraceTag("__ManagedListNode")  // 5
-end 'resetMmTraceTags'
-
-// The reserved name for the raw-allocation tag sentinel (tag index 1 — the first
-// thing `resetMmTraceTags` interns). Raw, deliberately-typeless allocations (backing
-// byte buffers, slab blocks) stamp this instead of `tag:0` so the strict null-tag
-// panic in `__mmTracePackedTag` distinguishes "deliberately raw" from "forgot to
-// tag". The angle brackets keep it from colliding with any real Maxon type name.
-let MM_TRACE_RAW_TAG_NAME = "<raw>"
-
-// Sanitize a name into the body of an `.rdata` trace-string symbol: keep
-// alphanumerics, replace every other byte with `_`. (The numeric byte boundaries
-// sidestep the bootstrap's char-to-Byte cast hiccup — same trick as
-// `sanitizeFunctionNameForLabel`.) Shared by `mmTagNameSymbol` (type-name tags),
-// `emitMmTraceScopeSet` (scope/function names), and the inliner's scope-restore.
-export function sanitizeForRdataSymbol(name String) returns String
-	let underscore = 0x5f as Byte
-	var sanitized = ByteArray.create()
-	for b in name.toByteArray() 'each'
-		let isDigit = b >= 0x30 and b <= 0x39
-		let isUpper = b >= 0x41 and b <= 0x5a
-		let isLower = b >= 0x61 and b <= 0x7a
-		if isDigit or isUpper or isLower 'keep'
-			sanitized.push(b)
-		end 'keep' else 'replace'
-			sanitized.push(underscore)
-		end 'replace'
-	end 'each'
-	return String.from(sanitized)
-end 'sanitizeForRdataSymbol'
-
-// Intern a managed type name into the mm-trace tag table, returning its 1-based
-// index (0 = no tag). Deduplicates by name. The index is stamped into a managed
-// allocation's packed_id (`(allocId << 16) | tagIndex`) at the alloc site so the
-// runtime `__mm_tag_lookup(idx)` resolves the trace's `TypeName` (else "(null)").
-// Mirrors the C# bootstrap's `EnsureTagIndex`.
-export function internMmTraceTag(typeName String) returns ParsedInt
-	let n = globalMmTraceTagNames.count()
-	for i in 0 upto n 'find'
-		let existing = try globalMmTraceTagNames.get(i) otherwise panic("internMmTraceTag: get OOB at {i}")
-		if existing == typeName 'match'
-			return (i + 1) as ParsedInt
-		end 'match'
-	end 'find'
-	globalMmTraceTagNames.push(typeName)
-	return globalMmTraceTagNames.count() as ParsedInt
-end 'internMmTraceTag'
-
 export type MathIntrinsicHit
 	export var opcode as StdArithUnaryOpcode
 	export var resultType as MaxonType
@@ -12141,24 +11681,6 @@ end 'InternalsRuntimeCallHit'
 export function lookupInternalsGlobalAddrTarget(methodName String) returns String throws InternalsBridgeLookupError
 	if methodName == "mmAllocCountAddr" 'a'
 		return "__mm_alloc_count"
-	end 'a'
-	if methodName == "mmTraceDepthAddr" 'a'
-		return "__mm_trace_depth"
-	end 'a'
-	if methodName == "mmTraceTagCtxAddr" 'a'
-		return "__mm_trace_tag_ctx"
-	end 'a'
-	if methodName == "mmAllocIdCounterAddr" 'a'
-		return "__mm_alloc_id_counter"
-	end 'a'
-	if methodName == "mmTraceIntBufAddr" 'a'
-		return "__mm_trace_int_buf"
-	end 'a'
-	if methodName == "mmTraceScopeAddr" 'a'
-		return "__mm_trace_scope"
-	end 'a'
-	if methodName == "mmTraceScopeDepthAddr" 'a'
-		return "__mm_trace_scope_depth"
 	end 'a'
 	if methodName == "slabLockAddr" 'a'
 		return "__slab_lock"

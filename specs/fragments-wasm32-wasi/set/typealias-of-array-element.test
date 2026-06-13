@@ -22,70 +22,37 @@ module {
   entry:
     %32 = mir.mov_imm 32 : i64
     %33 = mir.func_addr @__destruct_Set
-    %34 = mir.mov_imm 0 : i64
-    %35 = mir.call @stdlib.__mm_alloc(%32, %33, %34)
-    mir.br inlined_stdlib.__mm_incref_0_0()
-  inlined_stdlib.__mm_incref_0_0:
-    %48 = mir.mov_imm 8 : i64
-    %49 = mir.sub.i64 %35, %48
-    mir.atomic_inc %49
-    mir.br inline_cont_main_0()
-  inline_cont_main_0:
-    %37 = mir.mov_imm 8 : i64
-    %38 = mir.func_addr @__destruct_Array
-    %39 = mir.mov_imm 0 : i64
-    %40 = mir.call @stdlib.__mm_alloc(%37, %38, %39)
-    mir.br inlined_stdlib.__mm_incref_0_1()
-  inlined_stdlib.__mm_incref_0_1:
-    %50 = mir.mov_imm 8 : i64
-    %51 = mir.sub.i64 %40, %50
-    mir.atomic_inc %51
-    mir.br inline_cont_main_1()
-  inline_cont_main_1:
-    %42 = mir.mov_imm 48 : i64
-    %43 = mir.func_addr @stdlib.__destruct___ManagedMemory
-    %44 = mir.call @stdlib.__mm_alloc(%42, %43, %39)
-    mir.br inlined_stdlib.__mm_incref_0_2()
-  inlined_stdlib.__mm_incref_0_2:
-    %52 = mir.mov_imm 8 : i64
-    %53 = mir.sub.i64 %44, %52
-    mir.atomic_inc %53
-    mir.br inline_cont_main_2()
-  inline_cont_main_2:
-    mir.store %39, %44, 0 width: qword
-    mir.store %39, %44, 8 width: qword
-    mir.store %39, %44, 16 width: qword
-    %46 = mir.mov_imm 8 : i64
-    mir.store %46, %44, 24 width: qword
-    %47 = mir.mov_imm -1 : i64
-    mir.store %47, %44, 32 width: qword
-    mir.store %39, %44, 40 width: qword
-    mir.store %44, %40, 0 width: qword
+    %34 = mir.call @stdlib.__mm_alloc(%32, %33)
+    %36 = mir.mov_imm 8 : i64
+    %37 = mir.sub.i64 %34, %36
+    mir.atomic_inc %37
+    %6 = mir.global_addr @__layout_Array_Byte
+    %7 = mir.call @Array.create(%6)
     %10 = mir.global_addr @__layout_Set_ByteArray
     %11 = mir.global_addr @__witness_Array_with_Byte_Hashable
     %12 = mir.global_addr @__witness_Array_with_Byte_Equatable
-    %54 = mir.call @stdlib.__mm_incref(%40)
-    %13 = mir.call @Set.insert(%35, %40, %10, %11, %12)
+    %38 = mir.call @stdlib.__mm_incref(%7)
+    %13 = mir.call @Set.insert(%34, %7, %10, %11, %12)
     %15 = mir.global_addr @__layout_Set_ByteArray
     %16 = mir.global_addr @__witness_Array_with_Byte_Hashable
     %17 = mir.global_addr @__witness_Array_with_Byte_Equatable
-    %18 = mir.call @Set.count(%35, %15, %16, %17)
+    %18 = mir.call @Set.count(%34, %15, %16, %17)
     %19 = mir.mov_imm 1 : i64
     %20 = mir.cmp ne, %18, %19
     mir.cond_br %20 [then: count_0(), else: count_0.after()]
   count_0:
-    %57 = mir.call @__mm_decref_maybenull_helper(%40)
-    %56 = mir.call @__mm_decref_maybenull_helper(%35)
+    %41 = mir.call @__mm_decref_maybenull_helper(%7)
+    %40 = mir.call @__mm_decref_maybenull_helper(%34)
     %21 = mir.mov_imm 1 : i64
     mir.ret %21
   count_0.after:
     %24 = mir.global_addr @__layout_Set_ByteArray
     %25 = mir.global_addr @__witness_Array_with_Byte_Hashable
     %26 = mir.global_addr @__witness_Array_with_Byte_Equatable
-    %27 = mir.call @Set.contains(%35, %40, %24, %25, %26)
+    %27 = mir.call @Set.contains(%34, %7, %24, %25, %26)
     %28 = mir.mov_imm 1 : i64
     %29 = mir.xor.i64 %27, %28
-    %55 = mir.call @__mm_decref_maybenull_helper(%35)
+    %39 = mir.call @__mm_decref_maybenull_helper(%34)
     mir.cond_br %29 [then: present_0(), else: present_0.after()]
   present_0:
     %30 = mir.mov_imm 2 : i64

@@ -20,34 +20,7 @@ function main() returns ExitCode
 	return globalCfg.level
 end 'main'
 ---
-MmTrace: true
 ExitCode: 42
-Stderr: ```
-sl_init
-  os_alloc size=67108864
-mm_alloc Cfg #1 size=8 [Cfg.create]
-  sl_alloc Cfg #1 size=40 class=4
-mm_incref Cfg #1 rc=1 [Cfg.create]
-mm_transfer Cfg #1 rc=1 [Cfg.create]
-mm_incref Cfg #1 rc=2 [__module_init]
-mm_decref Cfg #1 rc=1 [__module_init]
-mm_alloc Cfg #2 size=8 [Cfg.create]
-  sl_alloc Cfg #2 size=40 class=4
-mm_incref Cfg #2 rc=1 [Cfg.create]
-mm_transfer Cfg #2 rc=1 [Cfg.create]
-mm_decref Cfg #1 rc=0 [setup]
-  mm_free Cfg #1
-    sl_free Cfg #1 size=48 class=4
-mm_incref Cfg #2 rc=2 [setup]
-mm_decref Cfg #2 rc=1 [setup]
-mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R1
-  sl_free size=48 class=4
-mm_decref Cfg #2 rc=0 [__maxon_global_cleanup]
-  mm_free Cfg #2
-    sl_free Cfg #2 size=48 class=4
-```
 ---
 // CompiledIR
 module {
@@ -57,7 +30,7 @@ module {
     x64.mov [rbp-16], rcx
     x64.mov rcx, 8
     x64.xor edx, edx
-    x64.mov r8, 1
+    x64.mov r8, 37
     x64.call mm_alloc
     x64.mov [rbp-8], rax
     x64.mov rax, [rbp-8]
@@ -117,39 +90,6 @@ module {
     x64.call mrt_panic
   __range_ok_0:
     x64.mov rax, rdx
-    x64.epilogue
-    x64.ret
-  }
-  func @__module_init() {
-  entry:
-    x64.prologue stack_size=16
-    x64.xor ecx, ecx
-    x64.call Cfg.create
-    x64.mov [rbp-8], rax
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rbp-8]
-    x64.call mm_incref
-    x64.mov rcx, [rbp-8]
-    x64.mov qword [rip+globalCfg], rcx
-    x64.mov rdx, [rbp-8]
-    x64.test rdx, rdx
-    x64.jz __nonnull_skip_0
-    x64.mov rcx, [rbp-8]
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.epilogue
-    x64.ret
-  }
-  func @__maxon_global_cleanup() {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov rax, qword [rip+globalCfg]
-    x64.mov [rbp-8], rax
-    x64.test rax, rax
-    x64.jz __nonnull_skip_0
-    x64.mov rcx, [rbp-8]
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
     x64.epilogue
     x64.ret
   }

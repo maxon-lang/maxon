@@ -12,12 +12,12 @@ ExitCode: 11
 module {
   func @main() -> u8 {
   entry:
-    %0 = mir.mov_imm 0 : i64
     %3 = mir.global_addr @__istr_0
     %4 = mir.mov_imm 48 : i64
     %5 = mir.func_addr @stdlib.__destruct___ManagedMemory
     %6 = mir.call @mrt_alloc_with_dtor(%4, %5)
-    mir.store %0, %6, 40 width: qword
+    %7 = mir.mov_imm 0 : i64
+    mir.store %7, %6, 40 width: qword
     mir.store %3, %6, 0 width: qword
     %8 = mir.mov_imm 11 : i64
     mir.store %8, %6, 8 width: qword
@@ -25,29 +25,30 @@ module {
     mir.store %9, %6, 16 width: qword
     %10 = mir.mov_imm 1 : i64
     mir.store %10, %6, 24 width: qword
-    mir.store %0, %6, 32 width: qword
+    %11 = mir.mov_imm 0 : i64
+    mir.store %11, %6, 32 width: qword
     %13 = mir.mov_imm 16 : i64
     %14 = mir.func_addr @__destruct_String
-    %12 = mir.call @stdlib.__mm_alloc(%13, %14, %0)
+    %12 = mir.call @stdlib.__mm_alloc(%13, %14)
     mir.store %6, %12, 0 width: qword
-    %16 = mir.mov_imm 1 : i64
-    mir.store %16, %12, 8 width: qword
-    %24 = mir.load %12, 0 width: qword
-    %25 = mir.call @stdlib.__managed_mem_to_cstring(%24)
-    %19 = mir.call @stdlib.__managed_mem_from_cstring(%25)
-    %26 = mir.call @stdlib.__mm_incref(%19)
-    %27 = mir.call @mm_drop(%12)
-    %21 = mir.call @String.init(%19)
-    %23 = mir.call @String.byteLength(%21)
-    %28 = mir.call @__mm_decref_maybenull_helper(%21)
-    %29 = mir.mov_imm 125 : i64
-    %30 = mir.cmp ugt, %23, %29
-    mir.cond_br %30 [then: __range_panic_0(), else: __range_ok_0()]
+    %15 = mir.mov_imm 1 : i64
+    mir.store %15, %12, 8 width: qword
+    %23 = mir.load %12, 0 width: qword
+    %24 = mir.call @stdlib.__managed_mem_to_cstring(%23)
+    %18 = mir.call @stdlib.__managed_mem_from_cstring(%24)
+    %25 = mir.call @stdlib.__mm_incref(%18)
+    %26 = mir.call @mm_drop(%12)
+    %20 = mir.call @String.init(%18)
+    %22 = mir.call @String.byteLength(%20)
+    %27 = mir.call @__mm_decref_maybenull_helper(%20)
+    %28 = mir.mov_imm 125 : i64
+    %29 = mir.cmp ugt, %22, %28
+    mir.cond_br %29 [then: __range_panic_0(), else: __range_ok_0()]
   __range_panic_0:
-    %31 = mir.global_addr @__panic_msg_53f73030e2c4bde3
-    %32 = mir.call @mrt_panic(%31)
+    %30 = mir.global_addr @__panic_msg_53f73030e2c4bde3
+    %31 = mir.call @mrt_panic(%30)
   __range_ok_0:
-    mir.ret %23
+    mir.ret %22
   }
 }
 ---

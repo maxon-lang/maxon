@@ -43,7 +43,6 @@ anything meaningful to optimize.
 ## Tests
 
 <!-- test: refcount-baseline-whole-program -->
-<!-- MmTrace -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
@@ -222,549 +221,6 @@ end 'main'
 ```
 ```exitcode
 0
-```
-```stderr
-sl_init
-  os_alloc size=67108864
-mm_alloc Point #1 size=16 [Point.create]
-  sl_alloc Point #1 size=48 class=4
-mm_incref Point #1 rc=1 [Point.create]
-mm_transfer Point #1 rc=1 [Point.create]
-mm_incref Point #1 rc=2 [main]
-mm_decref Point #1 rc=1 [main]
-mm_incref Point #1 rc=2 [main]
-mm_alloc Point #2 size=16 [Point.create]
-  sl_alloc Point #2 size=48 class=4
-mm_incref Point #2 rc=1 [Point.create]
-mm_transfer Point #2 rc=1 [Point.create]
-mm_alloc Point #3 size=16 [Point.create]
-  sl_alloc Point #3 size=48 class=4
-mm_incref Point #3 rc=1 [Point.create]
-mm_transfer Point #3 rc=1 [Point.create]
-mm_alloc __ManagedMemory_String #4 size=40 [StringArray.create]
-  sl_alloc __ManagedMemory_String #4 size=72 class=6
-mm_alloc StringArray #5 size=8 [StringArray.create]
-  sl_alloc StringArray #5 size=40 class=4
-mm_incref __ManagedMemory_String #4 rc=1 [StringArray.create]
-mm_incref StringArray #5 rc=1 [StringArray.create]
-mm_transfer StringArray #5 rc=1 [StringArray.create]
-mm_raw_alloc #R1 size=21 [toStr.buf [main]]
-  sl_alloc size=21 class=2
-mm_alloc String #6 size=16 [main]
-  sl_alloc String #6 size=48 class=4
-mm_alloc __ManagedMemory #7 size=40 [main]
-  sl_alloc __ManagedMemory #7 size=72 class=6
-mm_raw_alloc #R2 size=7 [interp.buf [main]]
-  sl_alloc size=7 class=0
-mm_raw_free #R1
-  sl_free size=24 class=2
-mm_incref __ManagedMemory #7 rc=1 [main]
-mm_incref String #6 rc=1 [main]
-mm_realloc __ManagedMemory_String #4 size=32
-  mm_raw_alloc #R3 size=32 [realloc]
-    sl_alloc size=32 class=3
-mm_incref String #6 rc=2 [StringArray.push]
-mm_decref String #6 rc=1 [main]
-mm_raw_alloc #R4 size=21 [toStr.buf [main]]
-  sl_alloc size=21 class=2
-mm_alloc String #8 size=16 [main]
-  sl_alloc String #8 size=48 class=4
-mm_alloc __ManagedMemory #9 size=40 [main]
-  sl_alloc __ManagedMemory #9 size=72 class=6
-mm_raw_alloc #R5 size=7 [interp.buf [main]]
-  sl_alloc size=7 class=0
-mm_raw_free #R4
-  sl_free size=24 class=2
-mm_incref __ManagedMemory #9 rc=1 [main]
-mm_incref String #8 rc=1 [main]
-mm_incref String #8 rc=2 [StringArray.push]
-mm_decref String #8 rc=1 [main]
-mm_raw_alloc #R6 size=21 [toStr.buf [main]]
-  sl_alloc size=21 class=2
-mm_alloc String #10 size=16 [main]
-  sl_alloc String #10 size=48 class=4
-mm_alloc __ManagedMemory #11 size=40 [main]
-  sl_alloc __ManagedMemory #11 size=72 class=6
-mm_raw_alloc #R7 size=7 [interp.buf [main]]
-  sl_alloc size=7 class=0
-mm_raw_free #R6
-  sl_free size=24 class=2
-mm_incref __ManagedMemory #11 rc=1 [main]
-mm_incref String #10 rc=1 [main]
-mm_incref String #10 rc=2 [StringArray.push]
-mm_decref String #10 rc=1 [main]
-mm_raw_alloc #R8 size=21 [toStr.buf [main]]
-  sl_alloc size=21 class=2
-mm_alloc String #12 size=16 [main]
-  sl_alloc String #12 size=48 class=4
-mm_alloc __ManagedMemory #13 size=40 [main]
-  sl_alloc __ManagedMemory #13 size=72 class=6
-mm_raw_alloc #R9 size=7 [interp.buf [main]]
-  sl_alloc size=7 class=0
-mm_raw_free #R8
-  sl_free size=24 class=2
-mm_incref __ManagedMemory #13 rc=1 [main]
-mm_incref String #12 rc=1 [main]
-mm_incref String #12 rc=2 [StringArray.push]
-mm_decref String #12 rc=1 [main]
-mm_raw_alloc #R10 size=21 [toStr.buf [main]]
-  sl_alloc size=21 class=2
-mm_alloc String #14 size=16 [main]
-  sl_alloc String #14 size=48 class=4
-mm_alloc __ManagedMemory #15 size=40 [main]
-  sl_alloc __ManagedMemory #15 size=72 class=6
-mm_raw_alloc #R11 size=7 [interp.buf [main]]
-  sl_alloc size=7 class=0
-mm_raw_free #R10
-  sl_free size=24 class=2
-mm_incref __ManagedMemory #15 rc=1 [main]
-mm_incref String #14 rc=1 [main]
-mm_realloc __ManagedMemory_String #4 size=64
-  mm_raw_alloc #R12 size=64 [realloc]
-    sl_alloc size=64 class=5
-  mm_raw_free #R3 [realloc]
-    sl_free size=32 class=3
-mm_incref String #14 rc=2 [StringArray.push]
-mm_decref String #14 rc=1 [main]
-mm_alloc __ManagedMemory_Integer #16 size=40 [IntArray.create]
-  sl_alloc __ManagedMemory_Integer #16 size=72 class=6
-mm_alloc IntArray #17 size=8 [IntArray.create]
-  sl_alloc IntArray #17 size=40 class=4
-mm_incref __ManagedMemory_Integer #16 rc=1 [IntArray.create]
-mm_incref IntArray #17 rc=1 [IntArray.create]
-mm_transfer IntArray #17 rc=1 [IntArray.create]
-mm_realloc __ManagedMemory_Integer #16 size=32
-  mm_raw_alloc #R13 size=32 [realloc]
-    sl_alloc size=32 class=3
-mm_alloc __ManagedMemory_Integer #18 size=40 [IntArray.create]
-  sl_alloc __ManagedMemory_Integer #18 size=72 class=6
-mm_alloc IntArray #19 size=8 [IntArray.create]
-  sl_alloc IntArray #19 size=40 class=4
-mm_incref __ManagedMemory_Integer #18 rc=1 [IntArray.create]
-mm_incref IntArray #19 rc=1 [IntArray.create]
-mm_transfer IntArray #19 rc=1 [IntArray.create]
-mm_realloc __ManagedMemory_Integer #18 size=32
-  mm_raw_alloc #R14 size=32 [realloc]
-    sl_alloc size=32 class=3
-mm_alloc __ManagedMemory_IntArray #20 size=40 [Matrix.create]
-  sl_alloc __ManagedMemory_IntArray #20 size=72 class=6
-mm_alloc Matrix #21 size=8 [Matrix.create]
-  sl_alloc Matrix #21 size=40 class=4
-mm_incref __ManagedMemory_IntArray #20 rc=1 [Matrix.create]
-mm_incref Matrix #21 rc=1 [Matrix.create]
-mm_transfer Matrix #21 rc=1 [Matrix.create]
-mm_realloc __ManagedMemory_IntArray #20 size=32
-  mm_raw_alloc #R15 size=32 [realloc]
-    sl_alloc size=32 class=3
-mm_incref IntArray #17 rc=2 [Matrix.push]
-mm_incref IntArray #19 rc=2 [Matrix.push]
-mm_alloc Cursor #22 size=40 [stdlib.ArrayIterator.create]
-  sl_alloc Cursor #22 size=72 class=6
-mm_incref __ManagedMemory_IntArray #20 rc=2 [stdlib.ArrayIterator.create]
-mm_incref Cursor #22 rc=1 [stdlib.ArrayIterator.create]
-mm_incref Cursor #22 rc=2 [stdlib.ArrayIterator.create]
-mm_alloc ArrayIterator #23 size=8 [stdlib.ArrayIterator.create]
-  sl_alloc ArrayIterator #23 size=40 class=4
-mm_incref Cursor #22 rc=3 [stdlib.ArrayIterator.create]
-mm_decref Cursor #22 rc=2 [stdlib.ArrayIterator.create]
-mm_decref Cursor #22 rc=1 [stdlib.ArrayIterator.create]
-mm_incref ArrayIterator #23 rc=1 [stdlib.ArrayIterator.create]
-mm_transfer ArrayIterator #23 rc=1 [stdlib.ArrayIterator.create]
-mm_transfer ArrayIterator #23 rc=1 [Matrix.createIterator]
-mm_incref IntArray #17 rc=3 [__ArrayIterator_IntArray.current]
-mm_decref IntArray #17 rc=2 [matrix_total]
-mm_incref IntArray #19 rc=3 [__ArrayIterator_IntArray.current]
-mm_decref IntArray #19 rc=2 [matrix_total]
-mm_decref ArrayIterator #23 rc=0 [matrix_total]
-  mm_decref Cursor #22 rc=0 [~ArrayIterator]
-    mm_decref __ManagedMemory_IntArray #20 rc=1 [~__ManagedMemoryCursor]
-    mm_free Cursor #22
-      sl_free Cursor #22 size=96 class=6
-  mm_free ArrayIterator #23
-    sl_free ArrayIterator #23 size=48 class=4
-mm_alloc Point #24 size=16 [Point.create]
-  sl_alloc Point #24 size=48 class=4
-mm_incref Point #24 rc=1 [Point.create]
-mm_transfer Point #24 rc=1 [Point.create]
-mm_alloc Point #25 size=16 [Point.create]
-  sl_alloc Point #25 size=48 class=4
-mm_incref Point #25 rc=1 [Point.create]
-mm_transfer Point #25 rc=1 [Point.create]
-mm_transfer Point #25 rc=1 [make_point]
-mm_alloc String #26 size=16 [main]
-  sl_alloc String #26 size=48 class=4
-mm_alloc __ManagedMemory #27 size=40 [main]
-  sl_alloc __ManagedMemory #27 size=72 class=6
-mm_incref __ManagedMemory #27 rc=1 [main]
-mm_incref String #26 rc=1 [main]
-mm_alloc Person #28 size=16 [Person.create]
-  sl_alloc Person #28 size=48 class=4
-mm_incref String #26 rc=2 [Person.create]
-mm_incref Person #28 rc=1 [Person.create]
-mm_transfer Person #28 rc=1 [Person.create]
-mm_alloc String #29 size=16 [main]
-  sl_alloc String #29 size=48 class=4
-mm_alloc __ManagedMemory #30 size=40 [main]
-  sl_alloc __ManagedMemory #30 size=72 class=6
-mm_incref __ManagedMemory #30 rc=1 [main]
-mm_incref String #29 rc=1 [main]
-mm_decref String #26 rc=1 [main]
-mm_incref String #29 rc=2 [main]
-mm_alloc String #31 size=16 [main]
-  sl_alloc String #31 size=48 class=4
-mm_alloc __ManagedMemory #32 size=40 [main]
-  sl_alloc __ManagedMemory #32 size=72 class=6
-mm_incref __ManagedMemory #32 rc=1 [main]
-mm_incref String #31 rc=1 [main]
-mm_decref String #29 rc=1 [main]
-mm_incref String #31 rc=2 [main]
-mm_alloc String #33 size=16 [main]
-  sl_alloc String #33 size=48 class=4
-mm_alloc __ManagedMemory #34 size=40 [main]
-  sl_alloc __ManagedMemory #34 size=72 class=6
-mm_incref __ManagedMemory #34 rc=1 [main]
-mm_incref String #33 rc=1 [main]
-mm_alloc Shape #35 size=16 [main]
-  sl_alloc Shape #35 size=48 class=4
-mm_incref String #33 rc=2 [main]
-mm_incref Shape #35 rc=1 [main]
-mm_alloc String #36 size=16 [main]
-  sl_alloc String #36 size=48 class=4
-mm_alloc __ManagedMemory #37 size=40 [main]
-  sl_alloc __ManagedMemory #37 size=72 class=6
-mm_incref __ManagedMemory #37 rc=1 [main]
-mm_incref String #36 rc=1 [main]
-mm_alloc Shape #38 size=16 [main]
-  sl_alloc Shape #38 size=48 class=4
-mm_incref String #36 rc=2 [main]
-mm_incref Shape #38 rc=1 [main]
-mm_alloc Shape #39 size=16 [main]
-  sl_alloc Shape #39 size=48 class=4
-mm_incref Shape #39 rc=1 [main]
-mm_alloc String #40 size=16 [main]
-  sl_alloc String #40 size=48 class=4
-mm_alloc __ManagedMemory #41 size=40 [main]
-  sl_alloc __ManagedMemory #41 size=72 class=6
-mm_incref __ManagedMemory #41 rc=1 [main]
-mm_incref String #40 rc=1 [main]
-mm_incref String #40 rc=2 [main]
-mm_alloc ClosureEnv #42 size=8 [main]
-  sl_alloc ClosureEnv #42 size=40 class=4
-mm_incref ClosureEnv #42 rc=1 [main]
-mm_raw_alloc #R16 size=21 [toStr.buf [_$closure_0]]
-  sl_alloc size=21 class=2
-mm_alloc String #43 size=16 [_$closure_0]
-  sl_alloc String #43 size=48 class=4
-mm_alloc __ManagedMemory #44 size=40 [_$closure_0]
-  sl_alloc __ManagedMemory #44 size=72 class=6
-mm_raw_alloc #R17 size=6 [interp.buf [_$closure_0]]
-  sl_alloc size=6 class=0
-mm_raw_free #R16
-  sl_free size=24 class=2
-mm_incref __ManagedMemory #44 rc=1 [_$closure_0]
-mm_incref String #43 rc=1 [_$closure_0]
-mm_decref String #43 rc=0 [_$closure_0]
-  mm_decref __ManagedMemory #44 rc=0 [~String]
-    mm_raw_free #R17
-      sl_free size=8 class=0
-    mm_free __ManagedMemory #44
-      sl_free __ManagedMemory #44 size=96 class=6
-  mm_free String #43
-    sl_free String #43 size=48 class=4
-mm_raw_alloc #R18 size=21 [toStr.buf [_$closure_0]]
-  sl_alloc size=21 class=2
-mm_alloc String #45 size=16 [_$closure_0]
-  sl_alloc String #45 size=48 class=4
-mm_alloc __ManagedMemory #46 size=40 [_$closure_0]
-  sl_alloc __ManagedMemory #46 size=72 class=6
-mm_raw_alloc #R19 size=6 [interp.buf [_$closure_0]]
-  sl_alloc size=6 class=0
-mm_raw_free #R18
-  sl_free size=24 class=2
-mm_incref __ManagedMemory #46 rc=1 [_$closure_0]
-mm_incref String #45 rc=1 [_$closure_0]
-mm_decref String #45 rc=0 [_$closure_0]
-  mm_decref __ManagedMemory #46 rc=0 [~String]
-    mm_raw_free #R19
-      sl_free size=8 class=0
-    mm_free __ManagedMemory #46
-      sl_free __ManagedMemory #46 size=96 class=6
-  mm_free String #45
-    sl_free String #45 size=48 class=4
-mm_alloc __ManagedMemory_Point #47 size=40 [PointArray.create]
-  sl_alloc __ManagedMemory_Point #47 size=72 class=6
-mm_alloc PointArray #48 size=8 [PointArray.create]
-  sl_alloc PointArray #48 size=40 class=4
-mm_incref __ManagedMemory_Point #47 rc=1 [PointArray.create]
-mm_incref PointArray #48 rc=1 [PointArray.create]
-mm_transfer PointArray #48 rc=1 [PointArray.create]
-mm_alloc Point #49 size=16 [Point.create]
-  sl_alloc Point #49 size=48 class=4
-mm_incref Point #49 rc=1 [Point.create]
-mm_transfer Point #49 rc=1 [Point.create]
-mm_realloc __ManagedMemory_Point #47 size=32
-  mm_raw_alloc #R20 size=32 [realloc]
-    sl_alloc size=32 class=3
-mm_incref Point #49 rc=2 [PointArray.push]
-mm_alloc Point #50 size=16 [Point.create]
-  sl_alloc Point #50 size=48 class=4
-mm_incref Point #50 rc=1 [Point.create]
-mm_transfer Point #50 rc=1 [Point.create]
-mm_incref Point #50 rc=2 [PointArray.push]
-mm_alloc Point #51 size=16 [Point.create]
-  sl_alloc Point #51 size=48 class=4
-mm_incref Point #51 rc=1 [Point.create]
-mm_transfer Point #51 rc=1 [Point.create]
-mm_incref Point #51 rc=2 [PointArray.push]
-mm_alloc Cursor #52 size=40 [stdlib.ArrayIterator.create]
-  sl_alloc Cursor #52 size=72 class=6
-mm_incref __ManagedMemory_Point #47 rc=2 [stdlib.ArrayIterator.create]
-mm_incref Cursor #52 rc=1 [stdlib.ArrayIterator.create]
-mm_incref Cursor #52 rc=2 [stdlib.ArrayIterator.create]
-mm_alloc ArrayIterator #53 size=8 [stdlib.ArrayIterator.create]
-  sl_alloc ArrayIterator #53 size=40 class=4
-mm_incref Cursor #52 rc=3 [stdlib.ArrayIterator.create]
-mm_decref Cursor #52 rc=2 [stdlib.ArrayIterator.create]
-mm_decref Cursor #52 rc=1 [stdlib.ArrayIterator.create]
-mm_incref ArrayIterator #53 rc=1 [stdlib.ArrayIterator.create]
-mm_transfer ArrayIterator #53 rc=1 [stdlib.ArrayIterator.create]
-mm_transfer ArrayIterator #53 rc=1 [PointArray.createIterator]
-mm_incref Point #49 rc=3 [__ArrayIterator_Point.current]
-mm_decref Point #49 rc=2 [points_x_sum]
-mm_incref Point #50 rc=3 [__ArrayIterator_Point.current]
-mm_decref Point #50 rc=2 [points_x_sum]
-mm_incref Point #51 rc=3 [__ArrayIterator_Point.current]
-mm_decref Point #51 rc=2 [points_x_sum]
-mm_decref ArrayIterator #53 rc=0 [points_x_sum]
-  mm_decref Cursor #52 rc=0 [~ArrayIterator]
-    mm_decref __ManagedMemory_Point #47 rc=1 [~__ManagedMemoryCursor]
-    mm_free Cursor #52
-      sl_free Cursor #52 size=96 class=6
-  mm_free ArrayIterator #53
-    sl_free ArrayIterator #53 size=48 class=4
-mm_alloc __ManagedMemory_Point #54 size=40 [PointArray.create]
-  sl_alloc __ManagedMemory_Point #54 size=72 class=6
-mm_alloc PointArray #55 size=8 [PointArray.create]
-  sl_alloc PointArray #55 size=40 class=4
-mm_incref __ManagedMemory_Point #54 rc=1 [PointArray.create]
-mm_incref PointArray #55 rc=1 [PointArray.create]
-mm_transfer PointArray #55 rc=1 [PointArray.create]
-mm_alloc Point #56 size=16 [Point.create]
-  sl_alloc Point #56 size=48 class=4
-mm_incref Point #56 rc=1 [Point.create]
-mm_transfer Point #56 rc=1 [Point.create]
-mm_realloc __ManagedMemory_Point #54 size=32
-  mm_raw_alloc #R21 size=32 [realloc]
-    sl_alloc size=32 class=3
-mm_incref Point #56 rc=2 [PointArray.push]
-mm_alloc Point #57 size=16 [Point.create]
-  sl_alloc Point #57 size=48 class=4
-mm_incref Point #57 rc=1 [Point.create]
-mm_transfer Point #57 rc=1 [Point.create]
-mm_incref Point #57 rc=2 [PointArray.push]
-mm_alloc Point #58 size=16 [Point.create]
-  sl_alloc Point #58 size=48 class=4
-mm_incref Point #58 rc=1 [Point.create]
-mm_transfer Point #58 rc=1 [Point.create]
-mm_incref Point #58 rc=2 [PointArray.push]
-mm_incref Point #56 rc=3 [PointArray.get]
-mm_transfer Point #56 rc=3 [PointArray.get]
-mm_decref Point #56 rc=2 [main]
-mm_decref ClosureEnv #42 rc=0 [main]
-  mm_free ClosureEnv #42
-    sl_free ClosureEnv #42 size=48 class=4
-mm_incref Point #57 rc=3 [PointArray.get]
-mm_transfer Point #57 rc=3 [PointArray.get]
-mm_decref Point #57 rc=2 [main]
-mm_incref Point #58 rc=3 [PointArray.get]
-mm_transfer Point #58 rc=3 [PointArray.get]
-mm_decref Point #58 rc=2 [main]
-mm_decref Point #58 rc=1 [main]
-mm_decref Point #57 rc=1 [main]
-mm_decref Point #56 rc=1 [main]
-mm_decref Point #51 rc=1 [main]
-mm_decref Point #50 rc=1 [main]
-mm_decref Point #49 rc=1 [main]
-mm_decref String #40 rc=1 [main]
-mm_decref String #36 rc=1 [main]
-mm_decref String #33 rc=1 [main]
-mm_decref String #31 rc=1 [main]
-mm_decref String #29 rc=0 [main]
-  mm_decref __ManagedMemory #30 rc=0 [~String]
-    mm_free __ManagedMemory #30
-      sl_free __ManagedMemory #30 size=96 class=6
-  mm_free String #29
-    sl_free String #29 size=48 class=4
-mm_decref String #26 rc=0 [main]
-  mm_decref __ManagedMemory #27 rc=0 [~String]
-    mm_free __ManagedMemory #27
-      sl_free __ManagedMemory #27 size=96 class=6
-  mm_free String #26
-    sl_free String #26 size=48 class=4
-mm_decref Point #3 rc=0 [main]
-  mm_free Point #3
-    sl_free Point #3 size=48 class=4
-mm_decref Point #2 rc=0 [main]
-  mm_free Point #2
-    sl_free Point #2 size=48 class=4
-mm_decref PointArray #55 rc=0 [main]
-  mm_decref __ManagedMemory_Point #54 rc=0 [~PointArray]
-    mm_decref Point #56 rc=0 [~ManagedElements]
-      mm_free Point #56
-        sl_free Point #56 size=48 class=4
-    mm_decref Point #57 rc=0 [~ManagedElements]
-      mm_free Point #57
-        sl_free Point #57 size=48 class=4
-    mm_decref Point #58 rc=0 [~ManagedElements]
-      mm_free Point #58
-        sl_free Point #58 size=48 class=4
-    mm_raw_free #R21
-      sl_free size=32 class=3
-    mm_free __ManagedMemory_Point #54
-      sl_free __ManagedMemory_Point #54 size=96 class=6
-  mm_free PointArray #55
-    sl_free PointArray #55 size=48 class=4
-mm_decref PointArray #48 rc=0 [main]
-  mm_decref __ManagedMemory_Point #47 rc=0 [~PointArray]
-    mm_decref Point #49 rc=0 [~ManagedElements]
-      mm_free Point #49
-        sl_free Point #49 size=48 class=4
-    mm_decref Point #50 rc=0 [~ManagedElements]
-      mm_free Point #50
-        sl_free Point #50 size=48 class=4
-    mm_decref Point #51 rc=0 [~ManagedElements]
-      mm_free Point #51
-        sl_free Point #51 size=48 class=4
-    mm_raw_free #R20
-      sl_free size=32 class=3
-    mm_free __ManagedMemory_Point #47
-      sl_free __ManagedMemory_Point #47 size=96 class=6
-  mm_free PointArray #48
-    sl_free PointArray #48 size=48 class=4
-mm_decref String #40 rc=0 [main]
-  mm_decref __ManagedMemory #41 rc=0 [~String]
-    mm_free __ManagedMemory #41
-      sl_free __ManagedMemory #41 size=96 class=6
-  mm_free String #40
-    sl_free String #40 size=48 class=4
-mm_decref Shape #39 rc=0 [main]
-  mm_free Shape #39
-    sl_free Shape #39 size=48 class=4
-mm_decref Shape #38 rc=0 [main]
-  mm_decref String #36 rc=0 [~Shape]
-    mm_decref __ManagedMemory #37 rc=0 [~String]
-      mm_free __ManagedMemory #37
-        sl_free __ManagedMemory #37 size=96 class=6
-    mm_free String #36
-      sl_free String #36 size=48 class=4
-  mm_free Shape #38
-    sl_free Shape #38 size=48 class=4
-mm_decref Shape #35 rc=0 [main]
-  mm_decref String #33 rc=0 [~Shape]
-    mm_decref __ManagedMemory #34 rc=0 [~String]
-      mm_free __ManagedMemory #34
-        sl_free __ManagedMemory #34 size=96 class=6
-    mm_free String #33
-      sl_free String #33 size=48 class=4
-  mm_free Shape #35
-    sl_free Shape #35 size=48 class=4
-mm_decref Person #28 rc=0 [main]
-  mm_decref String #31 rc=0 [~Person]
-    mm_decref __ManagedMemory #32 rc=0 [~String]
-      mm_free __ManagedMemory #32
-        sl_free __ManagedMemory #32 size=96 class=6
-    mm_free String #31
-      sl_free String #31 size=48 class=4
-  mm_free Person #28
-    sl_free Person #28 size=48 class=4
-mm_decref Point #25 rc=0 [main]
-  mm_free Point #25
-    sl_free Point #25 size=48 class=4
-mm_decref Point #24 rc=0 [main]
-  mm_free Point #24
-    sl_free Point #24 size=48 class=4
-mm_decref Matrix #21 rc=0 [main]
-  mm_decref __ManagedMemory_IntArray #20 rc=0 [~Matrix]
-    mm_decref IntArray #17 rc=1 [~ManagedElements]
-    mm_decref IntArray #19 rc=1 [~ManagedElements]
-    mm_raw_free #R15
-      sl_free size=32 class=3
-    mm_free __ManagedMemory_IntArray #20
-      sl_free __ManagedMemory_IntArray #20 size=96 class=6
-  mm_free Matrix #21
-    sl_free Matrix #21 size=48 class=4
-mm_decref IntArray #19 rc=0 [main]
-  mm_decref __ManagedMemory_Integer #18 rc=0 [~IntArray]
-    mm_raw_free #R14
-      sl_free size=32 class=3
-    mm_free __ManagedMemory_Integer #18
-      sl_free __ManagedMemory_Integer #18 size=96 class=6
-  mm_free IntArray #19
-    sl_free IntArray #19 size=48 class=4
-mm_decref IntArray #17 rc=0 [main]
-  mm_decref __ManagedMemory_Integer #16 rc=0 [~IntArray]
-    mm_raw_free #R13
-      sl_free size=32 class=3
-    mm_free __ManagedMemory_Integer #16
-      sl_free __ManagedMemory_Integer #16 size=96 class=6
-  mm_free IntArray #17
-    sl_free IntArray #17 size=48 class=4
-mm_decref StringArray #5 rc=0 [main]
-  mm_decref __ManagedMemory_String #4 rc=0 [~StringArray]
-    mm_decref String #6 rc=0 [~ManagedElements]
-      mm_decref __ManagedMemory #7 rc=0 [~String]
-        mm_raw_free #R2
-          sl_free size=8 class=0
-        mm_free __ManagedMemory #7
-          sl_free __ManagedMemory #7 size=96 class=6
-      mm_free String #6
-        sl_free String #6 size=48 class=4
-    mm_decref String #8 rc=0 [~ManagedElements]
-      mm_decref __ManagedMemory #9 rc=0 [~String]
-        mm_raw_free #R5
-          sl_free size=8 class=0
-        mm_free __ManagedMemory #9
-          sl_free __ManagedMemory #9 size=96 class=6
-      mm_free String #8
-        sl_free String #8 size=48 class=4
-    mm_decref String #10 rc=0 [~ManagedElements]
-      mm_decref __ManagedMemory #11 rc=0 [~String]
-        mm_raw_free #R7
-          sl_free size=8 class=0
-        mm_free __ManagedMemory #11
-          sl_free __ManagedMemory #11 size=96 class=6
-      mm_free String #10
-        sl_free String #10 size=48 class=4
-    mm_decref String #12 rc=0 [~ManagedElements]
-      mm_decref __ManagedMemory #13 rc=0 [~String]
-        mm_raw_free #R9
-          sl_free size=8 class=0
-        mm_free __ManagedMemory #13
-          sl_free __ManagedMemory #13 size=96 class=6
-      mm_free String #12
-        sl_free String #12 size=48 class=4
-    mm_decref String #14 rc=0 [~ManagedElements]
-      mm_decref __ManagedMemory #15 rc=0 [~String]
-        mm_raw_free #R11
-          sl_free size=8 class=0
-        mm_free __ManagedMemory #15
-          sl_free __ManagedMemory #15 size=96 class=6
-      mm_free String #14
-        sl_free String #14 size=48 class=4
-    mm_raw_free #R12
-      sl_free size=64 class=5
-    mm_free __ManagedMemory_String #4
-      sl_free __ManagedMemory_String #4 size=96 class=6
-  mm_free StringArray #5
-    sl_free StringArray #5 size=48 class=4
-mm_decref Point #1 rc=1 [main]
-mm_decref Point #1 rc=0 [main]
-  mm_free Point #1
-    sl_free Point #1 size=48 class=4
-mm_raw_alloc #R22 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R22
-  sl_free size=48 class=4
 ```
 ```RequiredIR:x64-windows
 === maxon
@@ -4819,7 +4275,6 @@ brackets and similar shapes where srcVar's own scope-end decref fires
 in the same block before varName's decref.
 
 <!-- test: prefix-kill-sibling-cleanup -->
-<!-- MmTrace -->
 Two aliased struct slots both scope-end-decreffed in the same block.
 When `b`'s decref comes first in the prefix, the alias anchor for `a`
 is already "killed" in the legacy sense — the relaxation recognises
@@ -4850,30 +4305,6 @@ end 'main'
 ```exitcode
 18
 ```
-```stderr
-sl_init
-  os_alloc size=67108864
-mm_alloc Box #1 size=8 [Box.create]
-  sl_alloc Box #1 size=40 class=4
-mm_incref Box #1 rc=1 [Box.create]
-mm_transfer Box #1 rc=1 [Box.create]
-mm_alloc Box #2 size=8 [Box.create]
-  sl_alloc Box #2 size=40 class=4
-mm_incref Box #2 rc=1 [Box.create]
-mm_transfer Box #2 rc=1 [Box.create]
-mm_incref Box #1 rc=2 [main]
-mm_decref Box #1 rc=1 [main]
-mm_decref Box #2 rc=0 [main]
-  mm_free Box #2
-    sl_free Box #2 size=48 class=4
-mm_decref Box #1 rc=0 [main]
-  mm_free Box #1
-    sl_free Box #1 size=48 class=4
-mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R1
-  sl_free size=48 class=4
-```
 
 ## Phase 2 regression tests — multi-exit bracket elimination
 
@@ -4883,7 +4314,6 @@ when the matched decrefs are on mutually-exclusive paths (e.g. match arms
 that both scope-clean the same slot at their exits).
 
 <!-- test: multi-exit-match-arm-brackets -->
-<!-- MmTrace -->
 An aliased slot whose scope-end decrefs sit on two mutually-exclusive
 match arms. The incref in the pre-match block dominates both decref
 blocks; each iteration from the incref hits exactly one of them. Phase 2
@@ -4921,24 +4351,8 @@ end 'main'
 ```exitcode
 42
 ```
-```stderr
-sl_init
-  os_alloc size=67108864
-mm_alloc Box #1 size=8 [Box.create]
-  sl_alloc Box #1 size=40 class=4
-mm_incref Box #1 rc=1 [Box.create]
-mm_transfer Box #1 rc=1 [Box.create]
-mm_decref Box #1 rc=0 [main]
-  mm_free Box #1
-    sl_free Box #1 size=48 class=4
-mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R1
-  sl_free size=48 class=4
-```
 
 <!-- test: multi-exit-three-way-split -->
-<!-- MmTrace -->
 Three-way exit (three match arms, each decrefing the aliased slot at
 its scope end). Phase 2 eliminates the shared-source bracket across all
 three.
@@ -4977,21 +4391,6 @@ end 'main'
 ```exitcode
 14
 ```
-```stderr
-sl_init
-  os_alloc size=67108864
-mm_alloc Box #1 size=8 [Box.create]
-  sl_alloc Box #1 size=40 class=4
-mm_incref Box #1 rc=1 [Box.create]
-mm_transfer Box #1 rc=1 [Box.create]
-mm_decref Box #1 rc=0 [main]
-  mm_free Box #1
-    sl_free Box #1 size=48 class=4
-mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R1
-  sl_free size=48 class=4
-```
 
 ## Phase 1 regression tests — try-call borrow-awareness
 
@@ -5004,7 +4403,6 @@ authoritative assertion — reviewing its diff after a future change
 catches accidental regression of this optimization.
 
 <!-- test: try-call-borrow-only-window -->
-<!-- MmTrace -->
 Alias assignment `let b = a` in an inner block, followed by a try-call
 on a borrow-only callee inside the same block. The bracket on `b`
 spans the try-call and `b`'s scope-end decref fires before `a`'s outer
@@ -5046,24 +4444,8 @@ end 'main'
 ```exitcode
 42
 ```
-```stderr
-sl_init
-  os_alloc size=67108864
-mm_alloc Box #1 size=8 [Box.create]
-  sl_alloc Box #1 size=40 class=4
-mm_incref Box #1 rc=1 [Box.create]
-mm_transfer Box #1 rc=1 [Box.create]
-mm_decref Box #1 rc=0 [main]
-  mm_free Box #1
-    sl_free Box #1 size=48 class=4
-mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R1
-  sl_free size=48 class=4
-```
 
 <!-- test: try-call-retaining-callee-preserved -->
-<!-- MmTrace -->
 Negative: same shape but the callee retains its argument (stores it
 into a container field). The bracket must be preserved — the callee
 holds its own ref independently and could outlive the caller's window.
@@ -5103,46 +4485,8 @@ end 'main'
 ```exitcode
 42
 ```
-```stderr
-sl_init
-  os_alloc size=67108864
-mm_alloc __ManagedMemory_Box #1 size=40 [BoxArray.create]
-  sl_alloc __ManagedMemory_Box #1 size=72 class=6
-mm_alloc BoxArray #2 size=8 [BoxArray.create]
-  sl_alloc BoxArray #2 size=40 class=4
-mm_incref __ManagedMemory_Box #1 rc=1 [BoxArray.create]
-mm_incref BoxArray #2 rc=1 [BoxArray.create]
-mm_transfer BoxArray #2 rc=1 [BoxArray.create]
-mm_alloc Box #3 size=8 [Box.create]
-  sl_alloc Box #3 size=40 class=4
-mm_incref Box #3 rc=1 [Box.create]
-mm_transfer Box #3 rc=1 [Box.create]
-mm_incref Box #3 rc=2 [main]
-mm_realloc __ManagedMemory_Box #1 size=32
-  mm_raw_alloc #R1 size=32 [realloc]
-    sl_alloc size=32 class=3
-mm_incref Box #3 rc=3 [BoxArray.push]
-mm_decref Box #3 rc=2 [main]
-mm_decref BoxArray #2 rc=0 [main]
-  mm_decref __ManagedMemory_Box #1 rc=0 [~BoxArray]
-    mm_decref Box #3 rc=1 [~ManagedElements]
-    mm_raw_free #R1
-      sl_free size=32 class=3
-    mm_free __ManagedMemory_Box #1
-      sl_free __ManagedMemory_Box #1 size=96 class=6
-  mm_free BoxArray #2
-    sl_free BoxArray #2 size=48 class=4
-mm_decref Box #3 rc=0 [main]
-  mm_free Box #3
-    sl_free Box #3 size=48 class=4
-mm_raw_alloc #R2 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R2
-  sl_free size=48 class=4
-```
 
 <!-- test: try-call-aliasfromstore-window -->
-<!-- MmTrace -->
 The firstStoreOf alias shape (same SSA heap pointer stored into two
 slots with a try-call between). Mirrors the for-in lowering that
 stores `iter.current()` into both `__forin_result` and the user's
@@ -5188,25 +4532,8 @@ end 'main'
 ```exitcode
 42
 ```
-```stderr
-sl_init
-  os_alloc size=67108864
-mm_alloc Box #1 size=8 [Box.create]
-  sl_alloc Box #1 size=40 class=4
-mm_incref Box #1 rc=1 [Box.create]
-mm_transfer Box #1 rc=1 [Box.create]
-mm_transfer Box #1 rc=1 [pair]
-mm_decref Box #1 rc=0 [main]
-  mm_free Box #1
-    sl_free Box #1 size=48 class=4
-mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R1
-  sl_free size=48 class=4
-```
 
 <!-- test: try-call-inside-loop-body -->
-<!-- MmTrace -->
 Try-call inside a loop body where the alias source is stable across
 iterations. The loop-invariant sub-pass eliminates the per-iteration
 incref/decref on the alias slot. Mirrors the
@@ -5248,21 +4575,6 @@ end 'main'
 ```exitcode
 21
 ```
-```stderr
-sl_init
-  os_alloc size=67108864
-mm_alloc Box #1 size=8 [Box.create]
-  sl_alloc Box #1 size=40 class=4
-mm_incref Box #1 rc=1 [Box.create]
-mm_transfer Box #1 rc=1 [Box.create]
-mm_decref Box #1 rc=0 [main]
-  mm_free Box #1
-    sl_free Box #1 size=48 class=4
-mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R1
-  sl_free size=48 class=4
-```
 
 ## Phase 4 regression tests — global-load anchor elimination
 
@@ -5273,7 +4585,6 @@ an orphan temp, when the function is proven borrow-only on that global
 (no tainted-from-global SSA value reaches a retention event in the body).
 
 <!-- test: global-struct-load-borrow -->
-<!-- MmTrace -->
 A module-level managed struct global is read borrow-only inside a
 function — it reads a single field via `load_indirect` and returns a
 scalar comparison. The emitter wraps the global load in incref+decref
@@ -5306,21 +4617,4 @@ end 'main'
 ```
 ```exitcode
 42
-```
-```stderr
-sl_init
-  os_alloc size=67108864
-mm_alloc Config #1 size=8 [Config.create]
-  sl_alloc Config #1 size=40 class=4
-mm_incref Config #1 rc=1 [Config.create]
-mm_transfer Config #1 rc=1 [Config.create]
-mm_incref Config #1 rc=2 [__module_init]
-mm_decref Config #1 rc=1 [__module_init]
-mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R1
-  sl_free size=48 class=4
-mm_decref Config #1 rc=0 [__maxon_global_cleanup]
-  mm_free Config #1
-    sl_free Config #1 size=48 class=4
 ```
