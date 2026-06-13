@@ -1,0 +1,198 @@
+// Library: a separately-compiled, separately-cached unit of Maxon code.
+//
+// Phase 1 of the libraries design (see `library plan.md`). The self-hosted
+// compiler historically hard-wired the standard library as a process-wide
+// collection of ~15 top-level `var`s in `StdlibLoader.maxon` (the cached
+// module, its linkable `StdlibCacheData`, the post-DCE Std-IR snapshot, the
+// DFE edge table, the typealias sidecars, the literal-protocol type names,
+// and the per-target-validity flags). This type collapses that scattered
+// state into one value carried in a keyed `LibraryRegistry`.
+//
+// stdlib is just the first Library (registered under key `"stdlib"`); it is
+// special only in that it owns the `__Internals.*` system-op surface and the
+// builtin-type bootstrap. Later phases register the user program and any
+// `--library=DIR` / `build.maxon library("...")` directories as additional
+// Library entries, each with its own on-disk cache in the library's own
+// directory.
+//
+// Maxon value types copy by value, so a Library pulled out of the registry is
+// a SNAPSHOT: mutating it does not write through to the registry. Callers that
+// change a Library's state must read it, mutate the copy, and store it back by
+// index (`reg.libs.set(i, value: lib)`) — the same set-back idiom
+// `applyPendingFuncRenames` uses. Reference-backed fields (Array / Map values
+// such as `cacheData`, `typealiases`, `funcEdges`) alias the same heap storage
+// through a value copy, but scalar fields (`bool`, `MachineWord`, `ByteArray`)
+// do not, so the set-back is mandatory whenever a scalar changes.
+export type Library
+	// "stdlib" for the standard library, else the basename of the library
+	// root dir. Drives the cache filename prefix.
+	export var name as String
+
+	// Namespace anchor for `deriveNamespace` — each library file's namespace
+	// is derived from its path relative to this root. For stdlib this is the
+	// parent of `stdlib/` (so `stdlib/Math.maxon` parses as namespace
+	// `stdlib`); for external libraries it is the library root itself.
+	export var rootPath as FilePath
+
+	// Where the library's `.maxon/cache/` directory lives (Phase 2 wires this
+	// into the cache path computation). For stdlib it is the `stdlib/` dir
+	// itself — distinct from `rootPath`, which is its parent. For external
+	// libraries the two coincide.
+	export var cacheDirRoot as FilePath
+
+	// Gates the library-specific specialness: `__Internals.*` raw system ops
+	// and the runtime-body splice into the cache build are stdlib-only.
+	export var isStdlib as bool
+
+	// --- warm / parsed state -------------------------------------------------
+	// (was the `stdlibLoaded` flag, `cachedStdlibModule`, the
+	//  `stdlibParsedModuleArr` sandbox snapshot, and the typealias sidecars)
+
+	// True once the library has been loaded (from cache or parsed from source)
+	// in this process. Subsequent `getStdlibModule`-style calls take the warm
+	// path and only restore metadata into the new project.
+	export var loaded as bool
+
+	// The library's MaxonModule as returned to the user pipeline. Empty on a
+	// cache hit (the library is pre-compiled to machine code and linked in),
+	// the parsed module on a from-source build.
+	export var cachedModule as MaxonModule
+
+	// The lazy sandbox-parse snapshot (parsed MaxonModule + its owning sandbox
+	// Project), held in an array so the empty-initial / grow-to-one shape
+	// sidesteps the constant-constructor restriction on top-level inits.
+	export var parsedSnapshot as StdlibParseSnapshotArray
+
+	// In-process mirror of the typealias registries captured from the parse,
+	// restored into a second project that reuses the warm (parse-path) library
+	// so file-private aliases keep their visibility / range / cast category.
+	export var typealiases as TypealiasMap
+	export var typealiasVisibilities as TypealiasVisibilityMap
+	export var typealiasRanges as TypealiasRangeMap
+	export var typealiasCastCategories as TypealiasCastCategoryMap
+
+	// --- compiled cache + linker payload ------------------------------------
+	// (was `cachedStdlibCacheData`, `stdlibCacheValid`,
+	//  `stdlibCacheTargetSet`/`stdlibCache{Cpu,Os}Ord`,
+	//  `cachedStdlibStdModule`, `cachedStdlibFuncEdges`)
+
+	// The relocatable, name-keyed per-function machine code + global data the
+	// linker pulls from by demand-closure.
+	export var cacheData as StdlibCacheData
+
+	// True when `cacheData` is populated and valid for the active target.
+	export var cacheValid as bool
+
+	// True once a target has been recorded for `cacheData` (so the first
+	// cross-target switch is detected rather than mistaken for a same-target
+	// reuse).
+	export var cacheTargetSet as bool
+
+	// The CPU / OS ordinals of the target `cacheData` was built/loaded for, so
+	// a target change triggers a per-target cache reload.
+	export var cacheCpuOrd as MachineWord
+	export var cacheOsOrd as MachineWord
+
+	// The post-DCE Std-IR snapshot the user pipeline's inliner splices accessor
+	// bodies from (cross-module inlining).
+	export var inlinerStdModule as StdModule
+
+	// Precomputed Std-DFE reachability edges over `inlinerStdModule`, one record
+	// per function, so the load-time Std-DFE follows the cached call graph +
+	// witness/layout demands without re-walking the snapshot IR.
+	export var funcEdges as CachedFuncEdgeMap
+
+	// --- literal-protocol discovery -----------------------------------------
+	// (was `cachedBuiltin{Array,Dictionary,Char,String}LiteralTypeName`)
+	//
+	// The implementing type names for the `Builtin{Array,Dictionary,Char,
+	// String}Literal` protocols, discovered at parse time and persisted so
+	// cache-hit runs (which skip the parse) still resolve the literal types.
+	// Stored as ByteArray rather than String because top-level var initializers
+	// only accept constant constructors; an empty `ByteArray.create()` is such
+	// a constructor while a `""` String literal is not. Accessors round-trip
+	// through String at the boundary.
+	export var builtinArrayLiteralTypeName as ByteArray
+	export var builtinDictionaryLiteralTypeName as ByteArray
+	export var builtinCharLiteralTypeName as ByteArray
+	export var builtinStringLiteralTypeName as ByteArray
+
+	export static function create(name String, rootPath FilePath, cacheDirRoot FilePath, isStdlib bool) returns Library
+		return Self{
+			name: name,
+			rootPath: rootPath,
+			cacheDirRoot: cacheDirRoot,
+			isStdlib: isStdlib,
+			loaded: false,
+			cachedModule: MaxonModule.create(),
+			parsedSnapshot: StdlibParseSnapshotArray.create(),
+			typealiases: TypealiasMap.create(),
+			typealiasVisibilities: TypealiasVisibilityMap.create(),
+			typealiasRanges: TypealiasRangeMap.create(),
+			typealiasCastCategories: TypealiasCastCategoryMap.create(),
+			cacheData: StdlibCacheData.create(),
+			cacheValid: false,
+			cacheTargetSet: false,
+			cacheCpuOrd: 0,
+			cacheOsOrd: 0,
+			inlinerStdModule: StdModule.create(),
+			funcEdges: CachedFuncEdgeMap.create(),
+			builtinArrayLiteralTypeName: ByteArray.create(),
+			builtinDictionaryLiteralTypeName: ByteArray.create(),
+			builtinCharLiteralTypeName: ByteArray.create(),
+			builtinStringLiteralTypeName: ByteArray.create()
+		}
+	end 'create'
+end 'Library'
+
+export typealias LibraryArray = Array with Library
+
+// Keyed collection of every Library active in this process. Phase 1 holds a
+// single entry (stdlib); later phases push the user program and external
+// libraries. Stored as a top-level `var` in `StdlibLoader.maxon`; lookups are
+// by `name` (linear over a handful of entries).
+export type LibraryRegistry
+	export var libs as LibraryArray
+
+	export static function create() returns LibraryRegistry
+		return Self{libs: LibraryArray.create()}
+	end 'create'
+end 'LibraryRegistry'
+
+// Register the builtin-type surface every Maxon compile needs: the `__mm_*`
+// allocator intrinsics, the `__Managed{Memory,File,Directory,List,ListNode,
+// Socket}` builtin structs + their error enums + method signatures, and the
+// `__Builtins.*` write-stdout/stderr intrinsics. This is the block that was
+// duplicated verbatim at the stdlib sandbox parse and the main stdlib load;
+// extracting it here removes the duplication and gives later library code one
+// reusable entry point.
+//
+// `registerInternalsIntrinsicSignatures` is intentionally NOT included — the
+// raw `__Internals.*` system-op surface is stdlib-only (file-path gated in
+// `lowerInternalsIntrinsic`), so it stays a separate call at the stdlib sites.
+//
+// Idempotent: each underlying `register*` helper drops a duplicate silently
+// (its inserts are `try ... otherwise ignore`), so calling this more than once
+// on the same project is safe.
+export function registerBuiltinTypeBootstrap(project Project)
+	// Allocator-runtime intrinsics (`__mm_alloc`, `__mm_decref`, …) so user
+	// Maxon source can call them as plain functions.
+	registerMmIntrinsicSignatures(project)
+	// The `__ManagedMemory` builtin struct, its `__ManagedMemoryError` enum,
+	// and the `__ManagedMemory.*` method signatures.
+	registerManagedMemoryType(project)
+	// The `__ManagedFile` / `__ManagedDirectory` builtin structs, their
+	// `__Managed{File,Directory}Error` enums, and their method signatures.
+	registerManagedFileType(project)
+	registerManagedDirectoryType(project)
+	// The `__ManagedList` / `__ManagedListNode` builtin structs and the
+	// `__ManagedListError` enum so `stdlib/List.maxon` parses + type-resolves.
+	registerManagedListType(project)
+	registerManagedListNodeType(project)
+	// The `__ManagedSocket` builtin struct and the `__ManagedSocketError` enum
+	// so `stdlib/TcpClient.maxon` parses + type-resolves.
+	registerManagedSocketType(project)
+	// `__Builtins.writeStdout` / `__Builtins.writeStderr` as qualified static
+	// intrinsic signatures so stdlib `Print.maxon` parses + type-resolves.
+	registerBuiltinsIntrinsicSignatures(project)
+end 'registerBuiltinTypeBootstrap'
