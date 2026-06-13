@@ -88,6 +88,13 @@ let wasiDescriptorStatAt = 17
 //   path(ptr,len), ret-area i32) -> (). Result<_,error-code>.
 let wasiDescriptorUnlinkFileAt = 18
 
+// wasi:filesystem/types [method]descriptor.rename-at(self i32, old-path(ptr,len),
+//   new-descriptor i32, new-path(ptr,len), ret-area i32) -> ().
+//   Result<_,error-code>. Phase 2b atomic rename. This is the LAST WASI import
+//   (positional type index 41, after the asyncify primitives at 37-40), so adding
+//   it bumps `wasiImportCount` from 41 to 42 — see the type/import blocks below.
+let wasiDescriptorRenameAt = 41
+
 // wasi:filesystem/types [method]descriptor.create-directory-at(self i32,
 //   path(ptr,len), ret-area i32) -> (). Result<_,error-code>.
 let wasiDescriptorCreateDirectoryAt = 19
@@ -169,7 +176,11 @@ let asyncifyStopUnwindIdx = 38
 let asyncifyStartRewindIdx = 39
 let asyncifyStopRewindIdx = 40
 
-let wasiImportCount = 41
+// Phase 2b: descriptor.rename-at is imported AFTER the asyncify primitives, at
+// function index 41 (type index 41). Module-defined functions therefore start at
+// 42. `wasm-opt --asyncify` drops the asyncify imports (37-40) but leaves the
+// rename-at import in place, so the final module keeps a real WASI import here.
+let wasiImportCount = 42
 
 // The green-thread runtime calls the asyncify primitives by these Std-IR names;
 // `emitDirectCall` routes them to the fixed import indices above instead of a
@@ -964,6 +975,12 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 	writeFuncType(asyncifyStopRewindType, paramTypes: ByteArray.create(), resultTypes: ByteArray.create())
 	types.push(asyncifyStopRewindType)
 
+	// Type 41: descriptor.rename-at(self i32, old_ptr i32, old_len i32,
+	//   new_desc i32, new_ptr i32, new_len i32, ret i32) -> (). The result
+	//   <_,error-code> is written to the ret-area; the call itself is void.
+	//   Positioned after asyncify so its index equals the rename-at import index.
+	pushWasiType(types, i32Count: 7, extra: novals, results: novals)
+
 	// Types for module functions (type index = wasiImportCount + i for each)
 	for func in module.functions 'buildTypes'
 		let funcThrows = match func.throwsTypeName 'kind'
@@ -1124,6 +1141,11 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 	importCount = addFuncImport(imports, moduleName: asyncifyModule, fieldName: b"stop_unwind", typeIndex: 38, countRef: importCount)
 	importCount = addFuncImport(imports, moduleName: asyncifyModule, fieldName: b"start_rewind", typeIndex: 39, countRef: importCount)
 	importCount = addFuncImport(imports, moduleName: asyncifyModule, fieldName: b"stop_rewind", typeIndex: 40, countRef: importCount)
+
+	// Phase 2b: descriptor.rename-at (import 41, type 41). Added last so the
+	// asyncify imports keep indices 37-40; `wasm-opt --asyncify` drops those four
+	// and leaves this one, the module's only surviving real WASI import here.
+	importCount = addFuncImport(imports, moduleName: modFsTypes, fieldName: b"[method]descriptor.rename-at", typeIndex: 41, countRef: importCount)
 
 	var importSection = ByteArray.create()
 	writeUleb128(importSection, value: importCount)
@@ -1672,6 +1694,9 @@ type WasmFunctionLowering
 		if srcFunc.name == "mrt_file_delete" 'isFileDelete'
 			return emitWasmFileDelete()
 		end 'isFileDelete'
+		if srcFunc.name == "mrt_file_rename" 'isFileRename'
+			return emitWasmFileRename()
+		end 'isFileRename'
 		if srcFunc.name == "mrt_file_stat" 'isFileStat'
 			return emitWasmFileStat(funcSigs)
 		end 'isFileStat'
@@ -2192,6 +2217,7 @@ type WasmFunctionLowering
 			osFileStat then panic("wasm: osFileStat op should not reach MirToWasm — Linux-only")
 			osFileAccess then panic("wasm: osFileAccess op should not reach MirToWasm — Linux-only")
 			osFileUnlink then panic("wasm: osFileUnlink op should not reach MirToWasm — Linux-only")
+			osFileRename then panic("wasm: osFileRename op should not reach MirToWasm — intercepted at mrt_file_rename")
 			osDirGetdents64 then panic("wasm: osDirGetdents64 op should not reach MirToWasm — Linux-only")
 			osDirGetcwd then panic("wasm: osDirGetcwd op should not reach MirToWasm — Linux-only")
 			osDirMkdir then panic("wasm: osDirMkdir op should not reach MirToWasm — Linux-only")
@@ -5035,6 +5061,86 @@ function emitWasmFileDelete() returns ByteArray
 	body.push(opEnd)
 	return body
 end 'emitWasmFileDelete'
+
+// mrt_file_rename(__ManagedMemory oldPath, __ManagedMemory newPath) throws -> 0.
+//
+// Preview2: descriptor.rename-at(self, old-path(ptr,len), new-descriptor,
+// new-path(ptr,len), ret-area). Both paths are resolved against the preopened
+// cwd descriptor (re-rooting onto the parent preopen when a path starts with
+// ".."), exactly like unlink-file-at — the only difference is the second
+// (descriptor, ptr, len) triple. Renaming across preopens is not expressed by
+// the cache writer (temp + final live in the same dir), but resolving each path
+// independently keeps the ".." re-root behavior consistent with the other ops.
+// The result<_, error-code> is written to the return area (align 1 → error-code
+// byte at +1); the call itself is void.
+function emitWasmFileRename() returns ByteArray
+	var body = ByteArray.create()
+	// Locals (after the two i64 params): 7 i32 (errCode + per-path buf/len/desc)
+	// + 1 i64 (flag).
+	emitWasmMixedLocals(body, i32Count: 7, i64Count: 1)
+	let localOldMm = 0
+	let localNewMm = 1
+	let localErrCode = 2
+	let localOldBuf = 3
+	let localOldLen = 4
+	let localOldDesc = 5
+	let localNewBuf = 6
+	let localNewLen = 7
+	let localNewDesc = 8
+	let localFlag = 9
+
+	// Extract (buffer, length) for both managed paths.
+	emitMmBufferPtr(body, mmLocal: localOldMm)
+	body.push(opLocalSet)
+	writeUleb128(body, value: localOldBuf)
+	emitMmLengthI32(body, mmLocal: localOldMm)
+	body.push(opLocalSet)
+	writeUleb128(body, value: localOldLen)
+
+	emitMmBufferPtr(body, mmLocal: localNewMm)
+	body.push(opLocalSet)
+	writeUleb128(body, value: localNewBuf)
+	emitMmLengthI32(body, mmLocal: localNewMm)
+	body.push(opLocalSet)
+	writeUleb128(body, value: localNewLen)
+
+	// Resolve a preopen descriptor for each path (may advance buf/len past "..").
+	emitResolvePreopenDesc(body, pathBufLocal: localOldBuf, pathLenLocal: localOldLen, descLocal: localOldDesc)
+	emitResolvePreopenDesc(body, pathBufLocal: localNewBuf, pathLenLocal: localNewLen, descLocal: localNewDesc)
+
+	// rename-at(oldDesc, old_ptr, old_len, newDesc, new_ptr, new_len, ret-area).
+	body.push(opLocalGet)
+	writeUleb128(body, value: localOldDesc)
+	body.push(opLocalGet)
+	writeUleb128(body, value: localOldBuf)
+	body.push(opLocalGet)
+	writeUleb128(body, value: localOldLen)
+	body.push(opLocalGet)
+	writeUleb128(body, value: localNewDesc)
+	body.push(opLocalGet)
+	writeUleb128(body, value: localNewBuf)
+	body.push(opLocalGet)
+	writeUleb128(body, value: localNewLen)
+	body.push(opI32Const)
+	writeSleb128(body, value: wasiRetAreaBase as ParsedInt)
+	body.push(opCall)
+	writeUleb128(body, value: wasiDescriptorRenameAt as Wasm32Index)
+
+	// Map error-code; catchall mirrors mrt_file_delete's wire 7 (deleteFailed —
+	// no renameFailed variant exists). User-facing File.rename collapses every
+	// __ManagedFileError to FileRenameError.failed, so the exact arm is cosmetic.
+	emitWasmMapWasiErrorCode(body, tempLocal: localErrCode, errOffset: 1, catchallFlag: 7)
+	body.push(opLocalSet)
+	writeUleb128(body, value: localFlag)
+
+	// Return (0, flag).
+	body.push(opI64Const)
+	writeSleb128(body, value: 0)
+	body.push(opLocalGet)
+	writeUleb128(body, value: localFlag)
+	body.push(opEnd)
+	return body
+end 'emitWasmFileRename'
 
 // mrt_file_stat(__ManagedMemory path) throws -> i64 buffer ptr (48 bytes).
 //

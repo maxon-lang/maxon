@@ -44,6 +44,7 @@ public partial class X86CodeEmitter {
     EmitMaxonFileRead();
     EmitMaxonFileClose();
     EmitMaxonFileDelete();
+    EmitMaxonFileRename();
     EmitMaxonFindFilename();
     EmitMaxonFindNextFile();
     EmitMaxonDirectoryExists();
@@ -1976,6 +1977,30 @@ public partial class X86CodeEmitter {
     EmitCallRuntimeLabel("__io_submit_sync");
     // RAX = DeleteFileA result (non-zero = success, zero = failure)
     // Invert: 0 = success, non-zero = failure
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitSetcc("z", X86Register.Rax);                   // AL = 1 if failed
+    EmitMovzxReg8To64(X86Register.Rax);
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// maxon_file_rename(cstring_old, cstring_new) -> 0 on success, non-zero on failure.
+  /// Calls MoveFileExA(old, new, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)
+  /// directly — both paths are ANSI C-strings, so no UTF-16 conversion is needed and
+  /// the 3 args fit in rcx/rdx/r8 without a sync-worker hop. The atomic replace makes
+  /// the destination publish torn-read-safe; write-through flushes the metadata so a
+  /// crash right after can't lose the new name. MoveFileExA returns non-zero on
+  /// success, so we invert to the 0=ok convention the lowering expects.
+  /// Stack: [rbp-8]=old, [rbp-0x10]=new
+  /// </summary>
+  private void EmitMaxonFileRename() {
+    EmitRuntimeFunctionStart("maxon_file_rename", 2, 0x20);
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8);           // arg0 = old path
+    EmitMovRegMem(X86Register.Rdx, -0x10, 8);           // arg1 = new path
+    EmitMovRegImm(X86Register.R8, 9);                   // MOVEFILE_REPLACE_EXISTING(1)|MOVEFILE_WRITE_THROUGH(8)
+    EmitCallImportOnSystemStack("kernel32.dll", "MoveFileExA");
+    // RAX = MoveFileExA result (non-zero = success, zero = failure). Invert to
+    // 0 = success, non-zero = failure.
     EmitTestRegReg(X86Register.Rax, X86Register.Rax);
     EmitSetcc("z", X86Register.Rax);                   // AL = 1 if failed
     EmitMovzxReg8To64(X86Register.Rax);

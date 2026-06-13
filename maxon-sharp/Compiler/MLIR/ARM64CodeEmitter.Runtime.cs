@@ -257,6 +257,7 @@ public partial class ARM64CodeEmitter {
     EmitMaxonFileRead();
     EmitMaxonFileClose();
     EmitMaxonFileDelete();
+    EmitMaxonFileRename();
     EmitMaxonCommandLineCount();
     EmitMaxonCommandLineArg();
     EmitMaxonExecutablePath();
@@ -2064,6 +2065,21 @@ public partial class ARM64CodeEmitter {
     EmitRuntimeFunctionEnd();
   }
 
+  // maxon_file_rename(cstring_old, cstring_new) -> 0 on success, -1 on failure.
+  // Delegates to __io_submit_sync(SyncOpFileRename, old, new); the sync worker
+  // runs rename(2), which atomically replaces the destination. arg0/arg1 carry
+  // the two paths, so no third argument slot is needed.
+  private void EmitMaxonFileRename() {
+    EmitRuntimeFunctionStart("maxon_file_rename", 2, 0x30);
+    EmitReloadArg(0);
+    EmitMovRegReg(ARM64Register.X1, ARM64Register.X0); // arg0 = old path
+    EmitReloadArg(1);
+    EmitMovRegReg(ARM64Register.X2, ARM64Register.X0); // arg1 = new path
+    EmitMovRegImm(ARM64Register.X0, SyncOpFileRename);
+    EmitBranchLink("__io_submit_sync");
+    EmitRuntimeFunctionEnd();
+  }
+
   // --- Managed File I/O ---
 
   // __ManagedFile layout: [+0] = fd (i64), total 8 bytes
@@ -2887,6 +2903,7 @@ public partial class ARM64CodeEmitter {
   private const long SyncOpNetRecv = 12;
   private const long SyncOpNetClose = 13;
   private const long SyncOpFileOpenWriteExec = 14;
+  private const long SyncOpFileRename = 15;
 
   // P (ProcContext) struct offsets and MaxFreeListLen live in GtLayout / RuntimeEmitter.Scheduler.
 
@@ -4264,6 +4281,8 @@ public partial class ARM64CodeEmitter {
     EmitBranchCond(ARM64ConditionCode.Eq, "__io_op_file_exists");
     EmitCmpImm(ARM64Register.X2, SyncOpFileDelete);
     EmitBranchCond(ARM64ConditionCode.Eq, "__io_op_file_delete");
+    EmitCmpImm(ARM64Register.X2, SyncOpFileRename);
+    EmitBranchCond(ARM64ConditionCode.Eq, "__io_op_file_rename");
     EmitCmpImm(ARM64Register.X2, SyncOpDirExists);
     EmitBranchCond(ARM64ConditionCode.Eq, "__io_op_dir_exists");
     EmitCmpImm(ARM64Register.X2, SyncOpDirCreate);
@@ -4323,6 +4342,20 @@ public partial class ARM64CodeEmitter {
     EmitMovRegImm(ARM64Register.X0, 0); // success (0 per spec)
     EmitBranch("__io_op_done");
     DefineLabel("__io_op_file_delete_fail");
+    EmitCaptureErrnoToFrameSlot(200); // capture errno for notFound/accessDenied
+    EmitMovRegImm(ARM64Register.X0, -1); // failure
+    EmitBranch("__io_op_done");
+
+    // --- SyncOpFileRename: rename(old, new) ---
+    DefineLabel("__io_op_file_rename");
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X9, ARM64Register.X29, 16, 8); // req
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X9, SyncReqOffArg0, 8); // old path
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X9, SyncReqOffArg1, 8); // new path
+    EmitCallImport("rename");
+    EmitBranchOnLibcError("__io_op_file_rename_fail");
+    EmitMovRegImm(ARM64Register.X0, 0); // success (0 per spec)
+    EmitBranch("__io_op_done");
+    DefineLabel("__io_op_file_rename_fail");
     EmitCaptureErrnoToFrameSlot(200); // capture errno for notFound/accessDenied
     EmitMovRegImm(ARM64Register.X0, -1); // failure
     EmitBranch("__io_op_done");

@@ -62,6 +62,9 @@ public static partial class MaxonToStandardConversion {
       case "__managed_file_delete":
         LowerManagedFileDelete(args, block, valueMap, varTypes, errorFlagValue);
         return true;
+      case "__managed_file_rename":
+        LowerManagedFileRename(args, block, valueMap, varTypes, errorFlagValue);
+        return true;
       case "__managed_file_stat":
         LowerManagedFileStat(args, result, block, valueMap, varTypes, errorFlagValue);
         return true;
@@ -295,6 +298,29 @@ public static partial class MaxonToStandardConversion {
       new StdI64(IrContext.Current.NextStdId()));
     block.AddOp(callRt);
     // delete returns 0 on success, non-zero on any failure.
+    var rc = (StdI64)callRt.Result!;
+    var zero = new StdConstI64Op(0);
+    block.AddOp(zero);
+    var isError = new StdCmpI64Op("ne", rc, zero.Result);
+    block.AddOp(isError);
+    EmitBoundsCheckErrorFlag(block, isError.Result, MfErrDeleteFailed + 1, valueMap, varTypes, errorFlagValue,
+      SelectIoErrorOrdinal);
+  }
+
+  private static void LowerManagedFileRename(
+    List<MaxonValue> args,
+    IrBlock<StandardOp> block,
+    Dictionary<MaxonValue, StdValue> valueMap,
+    Dictionary<string, string> varTypes,
+    MaxonValue? errorFlagValue) {
+    var oldPath = (StdI64)valueMap[args[0]];
+    var newPath = (StdI64)valueMap[args[1]];
+    var callRt = new StdCallRuntimeOp("maxon_file_rename", [oldPath, newPath],
+      new StdI64(IrContext.Current.NextStdId()));
+    block.AddOp(callRt);
+    // rename returns 0 on success, non-zero on any failure (mirrors delete). There
+    // is no dedicated renameFailed enum variant, so the catch-all reuses
+    // deleteFailed — File.rename collapses every __ManagedFileError to .failed.
     var rc = (StdI64)callRt.Result!;
     var zero = new StdConstI64Op(0);
     block.AddOp(zero);

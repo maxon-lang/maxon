@@ -177,6 +177,12 @@ export enum IatSlot
 	// Appended at the end of the kernel32 run so existing ordinals stay stable.
 	GetHandleInformation
 
+	// Phase 2b atomic file rename. kernel32!MoveFileExW backs `mrt_win32_rename`
+	// (REPLACE_EXISTING | WRITE_THROUGH). Appended at the end of the kernel32 run
+	// so existing kernel32 slot ordinals stay stable; only shell32/ws2_32 shift by
+	// one (see the `sleep`/`addVectoredExceptionHandler` slots' rationale).
+	MoveFileExW
+
 	// shell32 — single entry, lives at the end of the IAT in its own
 	// import-directory DLL.
 	CommandLineToArgvW
@@ -217,7 +223,7 @@ end 'iatSlotIndex'
 // last enum case's index + 1. This is the maximum slot NUMBERING; the IAT/ILT
 // table actually emitted is sized from the present-DLL set (see
 // `emittedIatSlotCount`), which drops the ws2_32 run when networking is unused.
-let IAT_SLOT_COUNT = 83
+let IAT_SLOT_COUNT = 84
 
 type ImportSection
 	export var data as ByteArray
@@ -237,13 +243,13 @@ end 'ImportSection'
 //   IAT  [k32 entries] 0  [s32 entries] 0
 //   ILT  [k32 entries] 0  [s32 entries] 0
 // followed by the Import Directory (3 entries: kernel32, shell32, null).
-let KERNEL32_IAT_END = 71  // exclusive; slots 0..70 are kernel32
-let SHELL32_IAT_START = 71  // slot 71 is shell32 (commandLineToArgvW)
+let KERNEL32_IAT_END = 72  // exclusive; slots 0..71 are kernel32 (last: MoveFileExW)
+let SHELL32_IAT_START = 72  // slot 72 is shell32 (commandLineToArgvW)
 
-// ws2_32 run: slots 72..82 (11 imports). Emitted ONLY when a program references
+// ws2_32 run: slots 73..83 (11 imports). Emitted ONLY when a program references
 // a ws2_32 slot (see `usesWs2_32` in `writePe`); otherwise the run, its DLL
 // directory entry, and its hint-name strings are omitted entirely.
-let WS2_32_IAT_START = 72
+let WS2_32_IAT_START = 73
 
 // Number of import-directory entries actually emitted for this build: 2 when
 // ws2_32 is unused (kernel32, shell32), 3 when it is (kernel32, shell32,

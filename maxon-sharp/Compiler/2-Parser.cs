@@ -1221,6 +1221,8 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       ["path"], [mm], IrType.I64, isStatic: true);
     RegisterBuiltinMethod("__ManagedFile", "delete",
       ["path"], [mm], null, isStatic: true, throwsType: mfErr);
+    RegisterBuiltinMethod("__ManagedFile", "rename",
+      ["oldPath", "newPath"], [mm, mm], null, isStatic: true, throwsType: mfErr);
     RegisterBuiltinMethod("__ManagedFile", "stat",
       ["path"], [mm], IrType.I64, isStatic: true, throwsType: mfErr);
     RegisterBuiltinMethod("__ManagedFile", "statField",
@@ -10469,6 +10471,17 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         _currentBlock!.AddOp(tryOp);
         return (true, null);
       }
+      case "rename": {
+        // rename(oldManaged, newManaged) throws __ManagedFileError. Both paths are
+        // converted to C-strings; the runtime helper does the atomic replace.
+        var toCstrOldOp = new MaxonManagedToCStringOp(args[0]);
+        _currentBlock!.AddOp(toCstrOldOp);
+        var toCstrNewOp = new MaxonManagedToCStringOp(args[1]);
+        _currentBlock!.AddOp(toCstrNewOp);
+        var tryOp = new MaxonTryCallOp("__managed_file_rename", [toCstrOldOp.Result, toCstrNewOp.Result], (MaxonValueKind?)null, null) { ThrowsType = mfErr };
+        _currentBlock!.AddOp(tryOp);
+        return (true, null);
+      }
       case "stat": {
         // stat(managed) throws __ManagedFileError (notFound / statFailed); returns raw buffer ptr on success.
         var toCstrOp = new MaxonManagedToCStringOp(args[0]);
@@ -14783,7 +14796,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
           bool isBuiltinStatic = resolvedBase switch {
             "__ManagedMemory" when nextMethod is "create" or "fromCString" => true,
             "__ManagedSocket" when nextMethod is "tcpConnect" => true,
-            "__ManagedFile" when nextMethod is "openRead" or "openWrite" or "openWriteExecutable" or "exists" or "delete" or "stat" or "statField" or "statFree" => true,
+            "__ManagedFile" when nextMethod is "openRead" or "openWrite" or "openWriteExecutable" or "exists" or "delete" or "rename" or "stat" or "statField" or "statFree" => true,
             "__ManagedDirectory" when nextMethod is "openSearch" or "exists" or "create" or "currentPath" => true,
             "__ManagedList" when nextMethod is "create" => true,
             _ => false,

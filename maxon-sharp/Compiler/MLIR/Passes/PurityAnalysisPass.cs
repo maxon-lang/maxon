@@ -90,7 +90,7 @@ public static class PurityAnalysisPass {
     "__managed_file_close", "__managed_file_exists",
     "__managed_file_open_read", "__managed_file_open_write",
     "__managed_file_open_write_executable",
-    "__managed_file_delete", "__managed_file_stat",
+    "__managed_file_delete", "__managed_file_rename", "__managed_file_stat",
     "__managed_file_stat_field", "__managed_file_stat_free",
     // directory I/O is inherently impure
     "__managed_directory_open_search", "__managed_directory_create",

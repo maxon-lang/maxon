@@ -27,6 +27,10 @@ end 'FileWriteError'
 enum FileDeleteError implements Error
 	notFound
 end 'FileDeleteError'
+
+enum FileRenameError implements Error
+	failed
+end 'FileRenameError'
 ```
 
 ### File.readText
@@ -330,4 +334,76 @@ end 'main'
 ```
 ```stdout
 Binary read/write OK
+```
+
+### File.rename
+
+Atomically rename (move) a file, replacing the destination if it already
+exists. Backed by `MoveFileEx` (Windows), `rename(2)` (POSIX), and
+`descriptor.rename-at` (WASI).
+
+**Signature:** `static function rename(from FilePath, to FilePath) throws FileRenameError`
+
+<!-- test: write-rename-and-read -->
+```maxon
+
+function main() returns ExitCode
+	let src = FilePath from "test_rename_src.bin"
+	let dst = FilePath from "test_rename_dst.bin"
+
+	var data = ByteArray.create()
+	data.push(70 as Byte)
+	data.push(71 as Byte)
+
+	try File.writeBinary(src, content: data) otherwise 'write_err'
+		print("Write failed")
+		return 1
+	end 'write_err'
+
+	// Rename src -> dst.
+	try File.rename(src, to: dst) otherwise 'rename_err'
+		print("Rename failed")
+		return 2
+	end 'rename_err'
+
+	// Source is gone, destination carries the bytes.
+	if File.exists(src) 'src_remains'
+		print("Source still exists")
+		return 3
+	end 'src_remains'
+
+	let readData = try File.readBinary(dst) otherwise 'read_err'
+		print("Read failed")
+		return 4
+	end 'read_err'
+
+	if readData.count() != 2 'count_check'
+		print("Wrong count: {readData.count()}")
+		return 5
+	end 'count_check'
+
+	// Rename over an existing destination replaces it.
+	try File.writeBinary(src, content: data) otherwise 'rewrite_err'
+		print("Rewrite failed")
+		return 6
+	end 'rewrite_err'
+
+	try File.rename(src, to: dst) otherwise 'replace_err'
+		print("Replace rename failed")
+		return 7
+	end 'replace_err'
+
+	try File.delete(dst) otherwise 'del_err'
+		print("Delete failed")
+	end 'del_err'
+
+	print("Rename OK")
+	return 42
+end 'main'
+```
+```exitcode
+42
+```
+```stdout
+Rename OK
 ```

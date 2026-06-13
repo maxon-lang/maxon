@@ -15,6 +15,11 @@ export enum FileDeleteError implements Error
 	notFound
 end 'FileDeleteError'
 
+/// Error for file rename operations
+export enum FileRenameError implements Error
+	failed
+end 'FileRenameError'
+
 export typealias FileSize = int(0 to u64.max)
 export typealias Timestamp = int(0 to u64.max)
 
@@ -154,6 +159,16 @@ export type File
 			throw FileDeleteError.notFound
 		end 'failed'
 	end 'delete'
+
+	/// Atomically rename (move) a file from one path to another. If the
+	/// destination exists it is replaced in a single step, so a reader of the
+	/// destination never observes a partially written file. Used to publish
+	/// freshly written files (e.g. cache entries) without a torn-read window.
+	export static function rename(from FilePath, to FilePath) throws FileRenameError
+		try __ManagedFile.rename(from.path.managed, to.path.managed) otherwise 'failed'
+			throw FileRenameError.failed
+		end 'failed'
+	end 'rename'
 
 	/// Get file metadata
 	export static function info(path FilePath) returns FileInfo throws FileInfoError

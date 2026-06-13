@@ -3004,6 +3004,7 @@ function emitX64Win32Helpers(code ByteArray, relocations RelocationArray, callFi
 	emitX64Win32Close(code, relocations: relocations, callFixups: callFixups, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
 	emitX64Win32Lseek(code, relocations: relocations, callFixups: callFixups, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
 	emitX64Win32Unlink(code, relocations: relocations, callFixups: callFixups, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
+	emitX64Win32Rename(code, relocations: relocations, callFixups: callFixups, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
 	emitX64Win32Mkdir(code, relocations: relocations, callFixups: callFixups, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
 	emitX64Win32Access(code, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
 	emitX64Win32Stat(code, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
@@ -11057,6 +11058,83 @@ function emitX64Win32Unlink(code ByteArray, relocations RelocationArray, callFix
 
 	helperFinalize(state, code: code)
 end 'emitX64Win32Unlink'
+
+// =============================================================================
+// 6b. mrt_win32_rename(oldCStringPtr, newCStringPtr)
+// rcx=oldCstr, rdx=newCstr. Converts BOTH UTF-8 paths to UTF-16 (two separate
+// 1024-wchar stack buffers), then MoveFileExW(&wideOld, &wideNew,
+// MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH = 0x9). The replace flag
+// makes the publish atomic; write-through forces the rename's metadata to disk
+// so a crash right after can't lose the new name.
+//
+// Stack (rbp-relative, slot N = [rbp-(N+1)*8]):
+//   slot 0   = oldCstr
+//   slot 1   = newCstr
+//   slot 2   = MoveFileExW BOOL result
+//   slot 259 = base of the OLD wide buffer (2048 bytes, grows toward rbp)
+//   slot 519 = base of the NEW wide buffer (2048 bytes, below the OLD buffer)
+// The two buffers (4096 bytes) plus the small slots fit in localBytes=4160; the
+// 6-arg MultiByteToWideChar needs 32 shadow + 16 stack = 48 outgoing bytes.
+// Block plan: 0=entry, 1=fail (translate GetLastError), 2=ok (return 0).
+// =============================================================================
+function emitX64Win32Rename(code ByteArray, relocations RelocationArray, callFixups CallFixupArray, funcLabelNames StringArray, funcLabelOffsets CodeOffsetArray, funcLabelOffsetMap CodeLabelOffsetMap)
+	let helperStart = code.count()
+	recordLabel(funcLabelNames, labelOffsets: funcLabelOffsets, labelOffsetMap: funcLabelOffsetMap, name: "mrt_win32_rename", offset: helperStart)
+
+	let oldWideSlot = 259
+	let newWideSlot = 519
+	let frameSize = 4208
+	var state = Win32HelperState.create(3, outgoingBytes: 48, localBytes: 4160)
+
+	helperPrologue(code, frameSize: frameSize)
+
+	helperMarkBlock(state, code: code, blockId: 0)
+	helperStoreSlot(code, slotIndex: 0, src: X64Register.rcx)
+	helperStoreSlot(code, slotIndex: 1, src: X64Register.rdx)
+
+	// MultiByteToWideChar(65001, 0, oldCstr, -1, &wideOld, 1024).
+	helperMovRegImm(code, dest: X64Register.rcx, value: 65001)
+	helperMovRegImm(code, dest: X64Register.rdx, value: 0)
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.r8)
+	helperMovRegImm(code, dest: X64Register.r9, value: -1)
+	helperLeaStackSlot(code, slotIndex: oldWideSlot, dest: X64Register.rax)
+	emitMovRspOffsetReg(code, offset: 32, srcReg: X64Register.rax)
+	helperMovRegImm(code, dest: X64Register.rax, value: 1024)
+	emitMovRspOffsetReg(code, offset: 40, srcReg: X64Register.rax)
+	helperEmitIatCall(code, relocations: relocations, slotIndex: iatSlotIndex(IatSlot.MultiByteToWideChar))
+
+	// MultiByteToWideChar(65001, 0, newCstr, -1, &wideNew, 1024).
+	helperMovRegImm(code, dest: X64Register.rcx, value: 65001)
+	helperMovRegImm(code, dest: X64Register.rdx, value: 0)
+	helperLoadSlot(code, slotIndex: 1, dest: X64Register.r8)
+	helperMovRegImm(code, dest: X64Register.r9, value: -1)
+	helperLeaStackSlot(code, slotIndex: newWideSlot, dest: X64Register.rax)
+	emitMovRspOffsetReg(code, offset: 32, srcReg: X64Register.rax)
+	helperMovRegImm(code, dest: X64Register.rax, value: 1024)
+	emitMovRspOffsetReg(code, offset: 40, srcReg: X64Register.rax)
+	helperEmitIatCall(code, relocations: relocations, slotIndex: iatSlotIndex(IatSlot.MultiByteToWideChar))
+
+	// MoveFileExW(&wideOld, &wideNew, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH).
+	helperLeaStackSlot(code, slotIndex: oldWideSlot, dest: X64Register.rcx)
+	helperLeaStackSlot(code, slotIndex: newWideSlot, dest: X64Register.rdx)
+	helperMovRegImm(code, dest: X64Register.r8, value: 9)
+	helperEmitIatCall(code, relocations: relocations, slotIndex: iatSlotIndex(IatSlot.MoveFileExW))
+	helperStoreSlot(code, slotIndex: 2, src: X64Register.rax)
+
+	helperLoadSlot(code, slotIndex: 2, dest: X64Register.rax)
+	helperTestReg(code, reg: X64Register.rax)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 1)
+	helperEmitJmp(code, state: state, targetBlock: 2)
+
+	helperMarkBlock(state, code: code, blockId: 1)
+	helperEmitDirectCall(code, callFixups: callFixups, target: "mrt_win32_translate_lasterror")
+	helperEpilogue(code)
+
+	helperMarkBlock(state, code: code, blockId: 2)
+	helperReturnImm(code, value: 0)
+
+	helperFinalize(state, code: code)
+end 'emitX64Win32Rename'
 
 // =============================================================================
 // 7. mrt_win32_mkdir(cStringPtr, mode)

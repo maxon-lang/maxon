@@ -21,7 +21,7 @@ public static partial class MaxonToStandardConversion {
     "__managed_file_size", "__managed_file_read", "__managed_file_write",
     "__managed_file_open_read", "__managed_file_open_write",
     "__managed_file_open_write_executable",
-    "__managed_file_delete", "__managed_file_stat"
+    "__managed_file_delete", "__managed_file_rename", "__managed_file_stat"
   ];
 
   private static readonly HashSet<string> ThrowingManagedDirectoryBuiltins = [

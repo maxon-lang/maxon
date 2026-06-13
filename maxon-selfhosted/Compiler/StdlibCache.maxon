@@ -881,6 +881,17 @@ end 'readBuiltinStringLiteralNameField'
 // Write cache
 // ============================================================
 
+// Process-local monotonic counter for `writeFileAtomic` temp names, so two
+// atomic writes from the SAME process (e.g. the lazy-codegen cache grow after
+// the initial write) never reuse a temp name even within one millisecond.
+var atomicTempSeq = 0
+
+function nextAtomicTempSeq() returns MachineWord
+	let n = atomicTempSeq
+	atomicTempSeq = atomicTempSeq + 1
+	return n
+end 'nextAtomicTempSeq'
+
 // Step 8 boundary: every `writeString` / `writeOptionalString` call beneath
 // this entry point can throw `CacheCorruption.invalidEncoding` — see
 // `Serialize.writeString`'s mandatory-non-empty invariant. We swallow the
@@ -888,6 +899,44 @@ end 'readBuiltinStringLiteralNameField'
 // cache. The build itself still completes correctly because the cache is
 // an optimisation, not a correctness requirement; the next clean run will
 // retry the write from a fresh in-memory state.
+// Write `bytes` to `path` atomically: stage the content in a sibling temp file,
+// then rename it over `path`. The rename is a single filesystem operation on
+// every target (MoveFileExW/REPLACE_EXISTING on Windows, rename(2)/renameat on
+// Linux, descriptor.rename-at on WASI), so a concurrent reader of `path` always
+// sees either the old complete file or the new complete file — never a torn,
+// half-written prefix. On any failure the partial temp is best-effort deleted so
+// it can't shadow a later attempt.
+//
+// The temp name is `<path>.<ms>.<n>.tmp`, where `<ms>` is a monotonic timestamp
+// and `<n>` a process-local counter. Two independent builds with the SAME
+// compiler fingerprint (so the same final path) can race — sharing the cache
+// dir is exactly what Phase 2 introduces — and a fixed temp name would let them
+// interleave writes into one temp, so the rename could publish a half-written
+// mix. The uniquifier gives each writer its own temp; the rename is what's
+// atomic, so the loser's rename simply overwrites the winner's (last-writer-wins,
+// wasted work, never corruption). The `.tmp` extension keeps the deleter's
+// `*.tmp` sweep and `maxon clean` matching it. (No pid accessor exists, so the
+// ms+counter pair is the unique-enough stand-in.)
+function writeFileAtomic(path FilePath, bytes ByteArray)
+	let stamp = Clock.nowMs()
+	let seq = nextAtomicTempSeq()
+	// Appending a suffix to an already-validated path can't introduce a new
+	// invalid character, so `from` cannot fail here.
+	let tempPath = try FilePath.from("{path.path}.{stamp}.{seq}.tmp") otherwise panic("writeFileAtomic: temp path rejected — numeric '.tmp' suffix can't invalidate a valid path")
+
+	try File.writeBinary(tempPath, content: bytes) otherwise 'writeErr'
+		logError(LogCategory.compiler, message: function() gives "writeFileAtomic: failed to write temp file {tempPath}")
+		// Best-effort cleanup so a stale partial temp doesn't linger.
+		try File.delete(tempPath) otherwise ignore
+		return
+	end 'writeErr'
+
+	try File.rename(tempPath, to: path) otherwise 'renameErr'
+		logError(LogCategory.compiler, message: function() gives "writeFileAtomic: failed to rename {tempPath} over {path}")
+		try File.delete(tempPath) otherwise ignore
+	end 'renameErr'
+end 'writeFileAtomic'
+
 export function writeStdlibCache(project Project, path FilePath, data StdlibCacheData, target Target, contentChecksum CacheChecksum)
 	var buf = ByteArray.create()
 	buf.reserve(4096)
@@ -905,9 +954,8 @@ export function writeStdlibCache(project Project, path FilePath, data StdlibCach
 		_ = Directory.create(parentDir)
 	end 'hasParent'
 
-	try File.writeBinary(path, content: buf) otherwise 'writeErr'
-		logError(LogCategory.compiler, message: function() gives "Failed to write stdlib cache to {path}")
-	end 'writeErr'
+	// Publish atomically: a reader racing the write never sees a torn cache file.
+	writeFileAtomic(path, bytes: buf)
 end 'writeStdlibCache'
 
 function encodeStdlibCacheBody(project Project, buf ByteArray, data StdlibCacheData, target Target, contentChecksum CacheChecksum) throws CacheCorruption
@@ -4355,6 +4403,7 @@ function writeStdSystemOp(buf ByteArray, op StdSystemOp) throws CacheCorruption
 		osFileStat(resultId, cStringPtrId, statBufPtrId) then writeStdSysOsFileStat(buf, resultId: resultId, cStringPtrId: cStringPtrId, statBufPtrId: statBufPtrId)
 		osFileAccess(resultId, cStringPtrId, modeId) then writeStdSysOsFileAccess(buf, resultId: resultId, cStringPtrId: cStringPtrId, modeId: modeId)
 		osFileUnlink(resultId, cStringPtrId) then writeStdSysOsFileUnlink(buf, resultId: resultId, cStringPtrId: cStringPtrId)
+		osFileRename(resultId, oldPathPtrId, newPathPtrId) then writeStdSysOsFileRename(buf, resultId: resultId, oldPathPtrId: oldPathPtrId, newPathPtrId: newPathPtrId)
 		osDirGetdents64(resultId, fdId, bufPtrId, bufSizeId) then writeStdSysOsDirGetdents64(buf, resultId: resultId, fdId: fdId, bufPtrId: bufPtrId, bufSizeId: bufSizeId)
 		osDirGetcwd(resultId, bufPtrId, bufSizeId) then writeStdSysOsDirGetcwd(buf, resultId: resultId, bufPtrId: bufPtrId, bufSizeId: bufSizeId)
 		osDirMkdir(resultId, cStringPtrId, modeId) then writeStdSysOsDirMkdir(buf, resultId: resultId, cStringPtrId: cStringPtrId, modeId: modeId)
@@ -4538,6 +4587,12 @@ function writeStdSysOsFileUnlink(buf ByteArray, resultId ValueId, cStringPtrId V
 	writeQword(buf, value: cStringPtrId)
 end 'writeStdSysOsFileUnlink'
 
+function writeStdSysOsFileRename(buf ByteArray, resultId ValueId, oldPathPtrId ValueId, newPathPtrId ValueId)
+	writeQword(buf, value: resultId)
+	writeQword(buf, value: oldPathPtrId)
+	writeQword(buf, value: newPathPtrId)
+end 'writeStdSysOsFileRename'
+
 function writeStdSysOsDirGetdents64(buf ByteArray, resultId ValueId, fdId ValueId, bufPtrId ValueId, bufSizeId ValueId)
 	writeQword(buf, value: resultId)
 	writeQword(buf, value: fdId)
@@ -4649,6 +4704,7 @@ function readStdSystemOp(buf ByteArray, offset ByteOffset) returns (StdSystemOp,
 		osFileStat gives readStdSysOsFileStat(buf, offset: pos)
 		osFileAccess gives readStdSysOsFileAccess(buf, offset: pos)
 		osFileUnlink gives readStdSysOsFileUnlink(buf, offset: pos)
+		osFileRename gives readStdSysOsFileRename(buf, offset: pos)
 		osDirGetdents64 gives readStdSysOsDirGetdents64(buf, offset: pos)
 		osDirGetcwd gives readStdSysOsDirGetcwd(buf, offset: pos)
 		osDirMkdir gives readStdSysOsDirMkdir(buf, offset: pos)
@@ -4897,6 +4953,13 @@ function readStdSysOsFileUnlink(buf ByteArray, offset ByteOffset) returns (StdSy
 	let cStringPtrId = readQword(buf, offset: offset + 8)
 	return (StdSystemOp.osFileUnlink(resultId, cStringPtrId: cStringPtrId), offset + 16)
 end 'readStdSysOsFileUnlink'
+
+function readStdSysOsFileRename(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
+	let resultId = readQword(buf, offset: offset)
+	let oldPathPtrId = readQword(buf, offset: offset + 8)
+	let newPathPtrId = readQword(buf, offset: offset + 16)
+	return (StdSystemOp.osFileRename(resultId, oldPathPtrId: oldPathPtrId, newPathPtrId: newPathPtrId), offset + 24)
+end 'readStdSysOsFileRename'
 
 function readStdSysOsDirGetdents64(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
 	let resultId = readQword(buf, offset: offset)

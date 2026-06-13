@@ -410,6 +410,7 @@ export type Arm64Backend implements TargetBackend
 			osFileStat gives 8
 			osFileAccess gives 8
 			osFileUnlink gives 8
+			osFileRename gives 8
 			osDirGetdents64 gives 8
 			osDirGetcwd gives 8
 			osDirMkdir gives 8
@@ -984,6 +985,7 @@ export type Arm64Backend implements TargetBackend
 			osFileStat(resultId, cStringPtrId, statBufPtrId) then result = lowerOsFileStatArm64(resultId, cStringPtrId: cStringPtrId, statBufPtrId: statBufPtrId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
 			osFileAccess(resultId, cStringPtrId, modeId) then result = lowerOsFileAccessArm64(resultId, cStringPtrId: cStringPtrId, modeId: modeId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
 			osFileUnlink(resultId, cStringPtrId) then result = lowerOsFileUnlinkArm64(resultId, cStringPtrId: cStringPtrId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
+			osFileRename(resultId, oldPathPtrId, newPathPtrId) then result = lowerOsFileRenameArm64(resultId, oldPathPtrId: oldPathPtrId, newPathPtrId: newPathPtrId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
 			osDirGetdents64(resultId, fdId, bufPtrId, bufSizeId) then result = lowerOsDirGetdents64Arm64(resultId, fdId: fdId, bufPtrId: bufPtrId, bufSizeId: bufSizeId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
 			osDirGetcwd(resultId, bufPtrId, bufSizeId) then result = lowerOsDirGetcwdArm64(resultId, bufPtrId: bufPtrId, bufSizeId: bufSizeId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
 			osDirMkdir(resultId, cStringPtrId, modeId) then result = lowerOsDirMkdirArm64(resultId, cStringPtrId: cStringPtrId, modeId: modeId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
@@ -1885,6 +1887,62 @@ export type Arm64Backend implements TargetBackend
 		argIds.push(cStringPtrId)
 		return lowerFileIoOpArm64(resultId, opName: "osFileUnlink", valueArgIds: argIds, prependAtFdCwd: true, appendZeroFlags: true, linuxSyscallNum: 35, winCallee: "mrt_win32_unlink", dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
 	end 'lowerOsFileUnlinkArm64'
+
+	// rename(oldpath, newpath). ARM64 has no plain `rename`; the only entry
+	// point is `renameat(olddirfd, oldpath, newdirfd, newpath)` (syscall 38),
+	// so we anchor BOTH paths at AT_FDCWD. The generic `lowerFileIoOpArm64`
+	// can only prepend a single AT_FDCWD, so the Linux path needs the dedicated
+	// `emitLinuxRenameatArm64` to interleave AT_FDCWD before each path. Windows
+	// goes through `mrt_win32_rename` like the other file-I/O helpers.
+	function lowerOsFileRenameArm64(resultId ValueId, oldPathPtrId ValueId, newPathPtrId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
+		match osDesc.os 'os'
+			windows then return lowerOsFileRenameWin32Arm64(resultId, oldPathPtrId: oldPathPtrId, newPathPtrId: newPathPtrId, dstBlock: dstBlock, nextTempSlot: nextTempSlot)
+			linux then return emitLinuxRenameatArm64(resultId, oldPathPtrId: oldPathPtrId, newPathPtrId: newPathPtrId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+			macos then panic("ARM64 osFileRename not supported on macos target")
+			wasi then panic("ARM64 osFileRename should not reach the backend on wasi — MirToWasm intercepts")
+		end 'os'
+	end 'lowerOsFileRenameArm64'
+
+	// Windows arm: call the `mrt_win32_rename` helper with both path args. The
+	// arm64-windows helper is an ENOSYS skeleton (file I/O is stubbed on that
+	// target — see Arm64Win32Helpers.maxon), but the call shape must still match.
+	function lowerOsFileRenameWin32Arm64(resultId ValueId, oldPathPtrId ValueId, newPathPtrId ValueId, dstBlock IrBlock, nextTempSlot SlotIndex) returns SlotIndex
+		var argIds = ValueIdArray.create()
+		argIds.push(oldPathPtrId)
+		argIds.push(newPathPtrId)
+		emitArm64DirectCallHandRolled(resultId, callee: "mrt_win32_rename", argIds: argIds, dstBlock: dstBlock)
+		return nextTempSlot
+	end 'lowerOsFileRenameWin32Arm64'
+
+	// Linux `renameat(AT_FDCWD, oldpath, AT_FDCWD, newpath)` (syscall 38).
+	// AT_FDCWD = -100 is materialized fresh before each path; the result is
+	// captured exactly like `emitLinuxFileSyscallArm64`.
+	function emitLinuxRenameatArm64(resultId ValueId, oldPathPtrId ValueId, newPathPtrId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+		var tempSlot = nextTempSlot
+		var argSlots = VarSlotArray.create()
+
+		let oldFdSlot = materializeConstSlotArm64(-100, dstBlock: dstBlock, nextTempSlot: tempSlot)
+		tempSlot = tempSlot + 1
+		argSlots.push(oldFdSlot)
+
+		let (oldSlot, afterOld) = reserveValueArm64(oldPathPtrId, valueSlots: valueSlots, tempSlot: tempSlot, dstBlock: dstBlock)
+		tempSlot = afterOld
+		argSlots.push(oldSlot)
+
+		let newFdSlot = materializeConstSlotArm64(-100, dstBlock: dstBlock, nextTempSlot: tempSlot)
+		tempSlot = tempSlot + 1
+		argSlots.push(newFdSlot)
+
+		let (newSlot, afterNew) = reserveValueArm64(newPathPtrId, valueSlots: valueSlots, tempSlot: tempSlot, dstBlock: dstBlock)
+		tempSlot = afterNew
+		argSlots.push(newSlot)
+
+		let resultSlot = tempSlot
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.syscall(resultSlot, number: 38, argSlots: argSlots))
+		valueSlotMapSet(valueSlots, valueId: resultId, slot: resultSlot)
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.ldrFromSlot(Arm64VReg.virtual(resultId), slotIndex: resultSlot))
+		return tempSlot + 1
+	end 'emitLinuxRenameatArm64'
 
 	// `mrt_win32_getdents64` — see runtime.std for wrapper-block layout.
 	function lowerOsDirGetdents64Arm64(resultId ValueId, fdId ValueId, bufPtrId ValueId, bufSizeId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex

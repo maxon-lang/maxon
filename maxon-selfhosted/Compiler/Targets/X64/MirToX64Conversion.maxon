@@ -177,6 +177,7 @@ function countMirNonAbsorbUses(op MirOp, uc UseCountMap, constMap ConstMap)
 		osFileStat(_, cStringPtrId, statBufPtrId) then ucIncrementTwo(uc, a: cStringPtrId, b: statBufPtrId)
 		osFileAccess(_, cStringPtrId, modeId) then ucIncrementTwo(uc, a: cStringPtrId, b: modeId)
 		osFileUnlink(_, cStringPtrId) then ucIncrement(uc, valueId: cStringPtrId)
+		osFileRename(_, oldPathPtrId, newPathPtrId) then ucIncrementTwo(uc, a: oldPathPtrId, b: newPathPtrId)
 		osDirGetdents64(_, fdId, bufPtrId, bufSizeId) then ucIncrementThree(uc, a: fdId, b: bufPtrId, c: bufSizeId)
 		osDirGetcwd(_, bufPtrId, bufSizeId) then ucIncrementTwo(uc, a: bufPtrId, b: bufSizeId)
 		osDirMkdir(_, cStringPtrId, modeId) then ucIncrementTwo(uc, a: cStringPtrId, b: modeId)
@@ -349,6 +350,7 @@ function countMirOpUses(op MirOp, uc UseCountMap)
 		osFileStat(_, cStringPtrId, statBufPtrId) then ucIncrementTwo(uc, a: cStringPtrId, b: statBufPtrId)
 		osFileAccess(_, cStringPtrId, modeId) then ucIncrementTwo(uc, a: cStringPtrId, b: modeId)
 		osFileUnlink(_, cStringPtrId) then ucIncrement(uc, valueId: cStringPtrId)
+		osFileRename(_, oldPathPtrId, newPathPtrId) then ucIncrementTwo(uc, a: oldPathPtrId, b: newPathPtrId)
 		osDirGetdents64(_, fdId, bufPtrId, bufSizeId) then ucIncrementThree(uc, a: fdId, b: bufPtrId, c: bufSizeId)
 		osDirGetcwd(_, bufPtrId, bufSizeId) then ucIncrementTwo(uc, a: bufPtrId, b: bufSizeId)
 		osDirMkdir(_, cStringPtrId, modeId) then ucIncrementTwo(uc, a: cStringPtrId, b: modeId)
@@ -447,6 +449,7 @@ function mirSysTempCount(op MirOp) returns SlotIndex
 		osFileStat gives 8
 		osFileAccess gives 8
 		osFileUnlink gives 8
+		osFileRename gives 8
 		osDirGetdents64 gives 8
 		osDirGetcwd gives 8
 		osDirMkdir gives 8
@@ -1646,6 +1649,7 @@ type X64FunctionLowering
 			osFileStat(resultId, cStringPtrId, statBufPtrId) then lowerOsFileStatOp(resultId, cStringPtrId: cStringPtrId, statBufPtrId: statBufPtrId, dstBlock: dstBlock)
 			osFileAccess(resultId, cStringPtrId, modeId) then lowerOsFileAccessOp(resultId, cStringPtrId: cStringPtrId, modeId: modeId, dstBlock: dstBlock)
 			osFileUnlink(resultId, cStringPtrId) then lowerOsFileUnlinkOp(resultId, cStringPtrId: cStringPtrId, dstBlock: dstBlock)
+				osFileRename(resultId, oldPathPtrId, newPathPtrId) then lowerOsFileRenameOp(resultId, oldPathPtrId: oldPathPtrId, newPathPtrId: newPathPtrId, dstBlock: dstBlock)
 			osDirGetdents64(resultId, fdId, bufPtrId, bufSizeId) then lowerOsDirGetdents64Op(resultId, fdId: fdId, bufPtrId: bufPtrId, bufSizeId: bufSizeId, dstBlock: dstBlock)
 			osDirGetcwd(resultId, bufPtrId, bufSizeId) then lowerOsDirGetcwdOp(resultId, bufPtrId: bufPtrId, bufSizeId: bufSizeId, dstBlock: dstBlock)
 			osDirMkdir(resultId, cStringPtrId, modeId) then lowerOsDirMkdirOp(resultId, cStringPtrId: cStringPtrId, modeId: modeId, dstBlock: dstBlock)
@@ -2354,6 +2358,15 @@ type X64FunctionLowering
 		argIds.push(cStringPtrId)
 		lowerFileIoOp(resultId, opName: "osFileUnlink", argIds: argIds, linuxSyscallNum: 87, winCallee: "mrt_win32_unlink", dstBlock: dstBlock)
 	end 'lowerOsFileUnlinkOp'
+
+	// rename(oldpath, newpath). x86-64 SYS_rename = 82; on Windows the
+	// `mrt_win32_rename` helper drives MoveFileExW with REPLACE_EXISTING.
+	function lowerOsFileRenameOp(resultId ValueId, oldPathPtrId ValueId, newPathPtrId ValueId, dstBlock IrBlock)
+		var argIds = ValueIdArray.create()
+		argIds.push(oldPathPtrId)
+		argIds.push(newPathPtrId)
+		lowerFileIoOp(resultId, opName: "osFileRename", argIds: argIds, linuxSyscallNum: 82, winCallee: "mrt_win32_rename", dstBlock: dstBlock)
+	end 'lowerOsFileRenameOp'
 
 	// `mrt_win32_getdents64` — the helper drives FindFirstFileW/FindNextFileW
 	// state through the wrapper block returned by `mrt_win32_open` with

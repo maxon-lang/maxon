@@ -582,6 +582,9 @@ export union StdSystemOp
 	osFileAccess(resultId ValueId, cStringPtrId ValueId, modeId ValueId)
 	// unlink(path). Returns 0 or -errno.
 	osFileUnlink(resultId ValueId, cStringPtrId ValueId)
+	// rename(oldpath, newpath). Returns 0 or -errno. Atomic replace on all targets;
+	// the cache writer relies on this to publish a fully-written file in one step.
+	osFileRename(resultId ValueId, oldPathPtrId ValueId, newPathPtrId ValueId)
 	// getdents64(fd, buf, count). Returns bytes filled or -errno.
 	osDirGetdents64(resultId ValueId, fdId ValueId, bufPtrId ValueId, bufSizeId ValueId)
 	// getcwd(buf, size). Returns buf or -errno.
@@ -826,6 +829,7 @@ export function sysOpToString(op StdSystemOp) returns String
 		osFileStat(resultId, cStringPtrId, statBufPtrId) gives "%{resultId} = sys.os_file_stat %{cStringPtrId}, %{statBufPtrId}"
 		osFileAccess(resultId, cStringPtrId, modeId) gives "%{resultId} = sys.os_file_access %{cStringPtrId}, %{modeId}"
 		osFileUnlink(resultId, cStringPtrId) gives "%{resultId} = sys.os_file_unlink %{cStringPtrId}"
+		osFileRename(resultId, oldPathPtrId, newPathPtrId) gives "%{resultId} = sys.os_file_rename %{oldPathPtrId}, %{newPathPtrId}"
 		osDirGetdents64(resultId, fdId, bufPtrId, bufSizeId) gives "%{resultId} = sys.os_dir_getdents64 %{fdId}, %{bufPtrId}, %{bufSizeId}"
 		osDirGetcwd(resultId, bufPtrId, bufSizeId) gives "%{resultId} = sys.os_dir_getcwd %{bufPtrId}, %{bufSizeId}"
 		osDirMkdir(resultId, cStringPtrId, modeId) gives "%{resultId} = sys.os_dir_mkdir %{cStringPtrId}, %{modeId}"

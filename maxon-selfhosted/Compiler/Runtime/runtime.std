@@ -2257,6 +2257,64 @@ func mrt_file_delete 1 i64
     std errorReturn v13 v14
 end
 
+// mrt_file_rename(oldPath, newPath) throws -> 0. Linux rename(oldpath, newpath).
+// Atomic replace: the destination, if it exists, is overwritten in one step so
+// readers never observe a partially written file. The stdlib cache writer relies
+// on this to publish a fully-written file by renaming a temp sibling over it.
+//
+// Slot usage:
+//   slot 0 = oldPath *
+//   slot 1 = newPath *
+//   slot 2 = oldPath cstr ptr
+//   slot 3 = newPath cstr ptr
+//   slot 4 = syscall result (0 or -errno)
+func mrt_file_rename 2 i64
+  block entry:
+    v0 = std param 0 i64
+    std storeSlot 0 v0
+    v1 = std param 1 i64
+    std storeSlot 1 v1
+
+    v2 = std loadSlot 0
+    v3 = std call mrt_cstr_from_mm v2
+    std storeSlot 2 v3
+
+    v4 = std loadSlot 1
+    v5 = std call mrt_cstr_from_mm v4
+    std storeSlot 3 v5
+
+    v6 = std loadSlot 2
+    v7 = std loadSlot 3
+    v8 = std osFileRename v6 v7
+    std storeSlot 4 v8
+
+    v9 = std loadSlot 2
+    v10 = std call mm_decref v9
+    v11 = std loadSlot 3
+    v12 = std call mm_decref v11
+
+    v13 = std loadSlot 4
+    v14 = std constI64 0
+    v15 = std cmpI64Lt v13 v14
+    std condBr v15 fail ok
+
+  block fail:
+    // Mirror mrt_file_delete: catchAll = flag 1 (__ManagedFileError.notFound);
+    // ENOENT/EACCES map to notFound (flag 1) / accessDenied (flag 2) via
+    // mrt_select_io_error_flag. The user-facing File.rename collapses every
+    // __ManagedFileError to FileRenameError.failed, so the exact arm is cosmetic.
+    v16 = std loadSlot 4
+    v17 = std constI64 1
+    v18 = std call mrt_select_io_error_flag v16 v17
+    v19 = std constI64 0
+    std errorReturn v19 v18
+
+  block ok:
+    v20 = std constI64 0
+    v21 = std constI64 0
+    std errorReturn v20 v21
+end
+
 // mrt_file_stat(path) throws -> __ManagedMemory ptr (48-byte buffer).
 // Layout: [size@0, mtime@8, ctime@16, atime@24, isDirectory@32, isReadOnly@40].
 // Linux x86_64 struct stat (144 bytes) fields used:
