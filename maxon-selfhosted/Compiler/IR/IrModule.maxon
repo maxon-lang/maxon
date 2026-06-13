@@ -15,6 +15,8 @@ export typealias BlockIndex = int(0 to u64.max)
 export typealias FuncIndex = int(0 to u64.max)
 export typealias BlockRefIndex = int(0 to u64.max)
 
+typealias DroppedNameSet = Set with String
+
 // Thrown by IrModule.findBlockRef when the given block isn't registered in
 // the function's block list — used by the parser's statement-line recorder
 // to silently skip detached sink blocks produced by newDetachedBlock.
@@ -198,15 +200,24 @@ export type IrModule uses Op
 	// `self.blocks` / `self.ops` as orphans because the backend walks
 	// `self.functions[].blockRefs[]`, never the global blocks array.
 	export function dropFunctionsByName(names StringArray)
-		var i = 0
-		while i < self.functions.count() 'walk'
-			let f = try self.functions.get(i) otherwise panic("dropFunctionsByName: get OOB at {i}")
-			if nameInArray(f.name, names: names) 'remove'
-				_ = try self.functions.remove(i) otherwise panic("dropFunctionsByName: remove OOB at {i}")
-			end 'remove' else 'advance'
-				i = i + 1
-			end 'advance'
-		end 'walk'
+		// Intern the drop list into a set (O(1) membership) and rebuild
+		// `self.functions` in one pass, keeping survivors. The old form did a
+		// linear `names` scan per function AND an O(count) `remove(i)` per drop,
+		// so dropping the stdlib snapshot (functions in the thousands) was
+		// O(F² + F·N); this is O(F + N).
+		var dropSet = DroppedNameSet.create()
+		for n in names 'eachName'
+			dropSet.insert(n)
+		end 'eachName'
+
+		var kept = IrFunctionArray.create()
+		for f in self.functions 'eachFunc'
+			if dropSet.contains(f.name) 'drop'
+				continue
+			end 'drop'
+			kept.push(f)
+		end 'eachFunc'
+		self.functions = kept
 	end 'dropFunctionsByName'
 
 	// Merge all data from a source module into this module.
@@ -232,16 +243,6 @@ export type IrModule uses Op
 		end 'eachFunc'
 	end 'merge'
 end 'IrModule'
-
-// Linear-search membership test used by IrModule.dropFunctionsByName.
-function nameInArray(name String, names StringArray) returns bool
-	for n in names 'each'
-		if n == name 'match'
-			return true
-		end 'match'
-	end 'each'
-	return false
-end 'nameInArray'
 
 // Block-reachable op counter shared by IrModule.liveOpCount and
 // TargetModule.liveOpCount. Sums every block's `opRefs.count()` across

@@ -446,12 +446,8 @@ end 'interfaceDeclaresMethodTransitive'
 // dispatch and panic in lowering. The struct-side mirror of the
 // interface-receiver passthrough in `lowerMethodCall`.
 export function receiverImplementsIteratorShapedInterface(project Project, receiverTypeName String) returns bool
-	let total = project.conformances.count()
-	for i in 0 upto total 'eachConf'
-		let (confType, ifaceName, _) = project.conformances.get(i)
-		if confType != receiverTypeName 'skipOther'
-			continue
-		end 'skipOther'
+	for confId in project.conformances.idsForType(receiverTypeName) 'eachConf'
+		let (_, ifaceName, _) = project.conformances.get(confId)
 		let declaresCreateIterator = interfaceDeclaresMethodTransitive(project, interfaceName: ifaceName, methodName: "createIterator")
 		let declaresCurrent = interfaceDeclaresMethodTransitive(project, interfaceName: ifaceName, methodName: "current")
 		let declaresAdvance = interfaceDeclaresMethodTransitive(project, interfaceName: ifaceName, methodName: "advance")
@@ -2099,7 +2095,7 @@ function maxonTypeIsManagedRef(project Project, t MaxonType) returns bool
 		// (e.g. `Array<Element>`) — EXCEPT `Promise with T`, whose values
 		// are raw green-thread handles (see structNameIsHeapManaged).
 		named(id) gives namedTypeIsManagedRef(project, id: id)
-		genericInstance(id) gives(genericInstanceIdBaseName(project, id: id) != "Promise")
+		genericInstance(id) gives (genericInstanceIdBaseName(project, id: id) != "Promise")
 		constInt to cstring gives false
 	end 'classify'
 end 'maxonTypeIsManagedRef'
@@ -2337,19 +2333,19 @@ end 'memberAliasTargetIsTuple'
 function callResultOf(op StdOp) returns (bool, ValueId, String)
 	return match op 'dispatch'
 		call(c) gives callShapeResultOf(c)
-		arith gives(false, 0, "")
-		control gives(false, 0, "")
-		memory gives(false, 0, "")
-		system gives(false, 0, "")
+		arith gives (false, 0, "")
+		control gives (false, 0, "")
+		memory gives (false, 0, "")
+		system gives (false, 0, "")
 	end 'dispatch'
 end 'callResultOf'
 
 function callShapeResultOf(c StdCallOp) returns (bool, ValueId, String)
 	return match c 'check'
-		call(resultId, callee, _) gives(true, resultId, callee)
-		tryCall(resultId, callee, _, _) gives(true, resultId, callee)
-		ret gives(false, 0, "")
-		indirectCall to errorReturn gives(false, 0, "")
+		call(resultId, callee, _) gives (true, resultId, callee)
+		tryCall(resultId, callee, _, _) gives (true, resultId, callee)
+		ret gives (false, 0, "")
+		indirectCall to errorReturn gives (false, 0, "")
 	end 'check'
 end 'callShapeResultOf'
 

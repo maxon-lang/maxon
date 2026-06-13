@@ -12,16 +12,21 @@ Prefer the `maxon-dev` MCP tools for build/test/format operations (see CLAUDE.md
 
 ## Steps
 
-0. Read `docs/WRITING_MAXON_CODE.md`
-1. Use `mcp__maxon-dev__fmt` to format all modified maxon files, ensuring consistent code style.
-2. Apply the standard code quality checklist from CLAUDE.md to all changed files.
-3. Update documentation, including `LANGUAGE_REFERENCE.md` and `STDLIB_REFERENCE.md` and `QUICK_REFERENCE.md` and `BNF_SYNTAX.md` if necessary.
-4. Rebuild and run spec tests if you made any changes to the codebase, ensuring all tests pass. Run the C# tests first, then the self-hosted tests, then the self-hosted wasm target:
+1. Read `docs/WRITING_MAXON_CODE.md`
+
+2. Use `mcp__maxon-dev__fmt` to format all modified maxon files, ensuring consistent code style.
+
+3. Apply the standard code quality checklist from CLAUDE.md to all changed files.
+
+4. Update documentation, including `LANGUAGE_REFERENCE.md` and `STDLIB_REFERENCE.md` and `QUICK_REFERENCE.md` and `BNF_SYNTAX.md` if necessary.
+
+5. Rebuild and run spec tests if you made any changes to the codebase, ensuring all tests pass. Run the C# tests first, then the self-hosted tests, then the self-hosted wasm target:
     - **Build:** `mcp__maxon-dev__build` with `target: "both"`.
     - **C# spec tests:** `mcp__maxon-dev__run_spec_test` (default compiler is `csharp`).
     - **Self-hosted spec tests:** `mcp__maxon-dev__run_self_hosted_test`.
     - **Self-hosted wasm target:** `mcp__maxon-dev__run_self_hosted_test` with `target: "wasm32-wasi"`.
+Ignore changes to test fragments until all 3 test runs are completed.
 
-5. Refactor all modified files to eliminate duplicated code, regardless if it was pre-existing or introduced by you. Our goal is to continuously improve the code quality.
+6. Refactor all modified files to eliminate duplicated code, regardless if it was pre-existing or introduced by you. Our goal is to continuously improve the code quality.
 
-6. Give me a git commit message that summaries the changes in this commit, not what happened in the code review.
+7. Commit to the current branch when completeGive me a git commit message that summaries the changes in this commit, not what happened in the code review.

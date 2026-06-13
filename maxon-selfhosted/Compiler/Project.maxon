@@ -1510,6 +1510,15 @@ export type ConformanceRegistry
 	export var interfaceNames as StringArray
 	export var withArgsList as ConformanceWithArgsArray
 
+	// Reverse index: typeName -> the conformance ids whose `typeNames[id]`
+	// equals that name, in append order. Kept in lockstep with the parallel
+	// arrays by `intern` (the single append path). Lets `intern`/`contains`
+	// and the call-site resolvers (`findInterfaceExtensionCallee`,
+	// `applyInnerAliasFromInterfaces`) probe only the rows for one receiver
+	// type instead of scanning the whole registry (O(rows-for-type) vs
+	// O(conformances), where conformances is stdlib + user = hundreds–thousands).
+	var idsByType as ConformanceIdsByTypeMap = ConformanceIdsByTypeMap.create()
+
 	export static function create() returns ConformanceRegistry
 		return Self{typeNames: StringArray.create(), interfaceNames: StringArray.create(), withArgsList: ConformanceWithArgsArray.create()}
 	end 'create'
@@ -1518,23 +1527,44 @@ export type ConformanceRegistry
 		return typeNames.count()
 	end 'count'
 
+	// All conformance ids recorded for `typeName`, in append order. Empty
+	// when the type has no conformances. The result aliases the stored array
+	// — callers must only read it.
+	export function idsForType(typeName String) returns ConformanceIdArray
+		return try idsByType.get(typeName) otherwise ConformanceIdArray.create()
+	end 'idsForType'
+
 	// Intern a (typeName, interfaceName) pair with its captured `with` args.
 	// Returns an existing id on a duplicate insert (parser may revisit the
 	// same conformance during recovery).
 	export function intern(typeName String, interfaceName String, withArgs MaxonTypeArray) returns ConformanceId
-		for i in 0 upto typeNames.count() 'scan'
-			let t = try typeNames.get(i) otherwise panic("ConformanceRegistry.intern: typeNames.get OOB at {i}")
-			let n = try interfaceNames.get(i) otherwise panic("ConformanceRegistry.intern: interfaceNames desync at {i}")
-			if t == typeName and n == interfaceName 'hit'
-				return i
+		for existingId in idsForType(typeName) 'scan'
+			let n = try interfaceNames.get(existingId) otherwise panic("ConformanceRegistry.intern: interfaceNames desync at {existingId}")
+			if n == interfaceName 'hit'
+				return existingId
 			end 'hit'
 		end 'scan'
 		let id = typeNames.count()
 		typeNames.push(typeName)
 		interfaceNames.push(interfaceName)
 		withArgsList.push(withArgs)
+		recordIdForType(typeName, id: id)
 		return id
 	end 'intern'
+
+	// Append `id` to the reverse-index bucket for `typeName`, creating the
+	// bucket on first sight. The only mutator of `idsByType`. The retrieved
+	// bucket aliases the stored array, so an in-place `push` updates the map
+	// entry directly — no write-back `set` needed.
+	function recordIdForType(typeName String, id ConformanceId)
+		if var bucket = try idsByType.get(typeName) 'exists'
+			bucket.push(id)
+		end 'exists' else 'fresh'
+			var created = ConformanceIdArray.create()
+			created.push(id)
+			idsByType.upsert(typeName, value: created)
+		end 'fresh'
+	end 'recordIdForType'
 
 	// Resolve an id back to its (typeName, interfaceName, withArgs) payload.
 	export function get(id ConformanceId) returns (String, String, MaxonTypeArray)
@@ -1546,10 +1576,9 @@ export type ConformanceRegistry
 
 	// True when the registry has an entry for the given pair.
 	export function contains(typeName String, interfaceName String) returns bool
-		for i in 0 upto typeNames.count() 'scan'
-			let t = try typeNames.get(i) otherwise panic("ConformanceRegistry.contains: typeNames.get OOB at {i}")
-			let n = try interfaceNames.get(i) otherwise panic("ConformanceRegistry.contains: interfaceNames desync at {i}")
-			if t == typeName and n == interfaceName 'hit'
+		for id in idsForType(typeName) 'scan'
+			let n = try interfaceNames.get(id) otherwise panic("ConformanceRegistry.contains: interfaceNames desync at {id}")
+			if n == interfaceName 'hit'
 				return true
 			end 'hit'
 		end 'scan'
@@ -1558,6 +1587,8 @@ export type ConformanceRegistry
 end 'ConformanceRegistry'
 
 export typealias ConformanceId = int(0 to u64.max)
+export typealias ConformanceIdArray = Array with ConformanceId
+typealias ConformanceIdsByTypeMap = Map with (String, ConformanceIdArray)
 export typealias ConformanceWithArgsArray = Array with MaxonTypeArray
 
 // J.4b: extension-method → where-clauses map. Populated by the parser

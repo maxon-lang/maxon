@@ -817,7 +817,7 @@ end 'matchParamByAbiIndex'
 
 function paramResultIfAbiIndex(c StdCallOp, abiIndex VarSlot) returns ValueId
 	return match c 'check'
-		param(resultId, paramIndex, _) gives(resultId if paramIndex == abiIndex else REFCOUNT_NO_VALUE)
+		param(resultId, paramIndex, _) gives (resultId if paramIndex == abiIndex else REFCOUNT_NO_VALUE)
 		ret to tailCall gives REFCOUNT_NO_VALUE
 		errorReturn gives REFCOUNT_NO_VALUE
 	end 'check'
@@ -1402,8 +1402,8 @@ function plusOneOwnership(ctx RcContext, id ValueId) returns PlusOneOwnership
 		return (PlusOneOwnership.arrivesOwning if valueIsConsumedParamOfCurrentFunc(ctx, valueId: id) else PlusOneOwnership.noPlusOne)
 	end 'param'
 	return match ctx.classOf(id) 'class'
-		freshRc0 gives(PlusOneOwnership.acquiredAtDef if freshRc0NeedsAcquire(ctx, id: id) else PlusOneOwnership.noPlusOne)
-		incomingOwner gives(PlusOneOwnership.acquiredAtDef if ctx.incomingOwnerAcquiresCached(id) else PlusOneOwnership.noPlusOne)
+		freshRc0 gives (PlusOneOwnership.acquiredAtDef if freshRc0NeedsAcquire(ctx, id: id) else PlusOneOwnership.noPlusOne)
+		incomingOwner gives (PlusOneOwnership.acquiredAtDef if ctx.incomingOwnerAcquiresCached(id) else PlusOneOwnership.noPlusOne)
 		selfReturnBorrow gives PlusOneOwnership.acquiredAtDef
 		callReturnRc1 gives PlusOneOwnership.arrivesOwning
 		borrowed gives PlusOneOwnership.noPlusOne
@@ -1765,18 +1765,18 @@ end 'paramAbiIndexOfValue'
 function paramOpAbiIndexIfDefines(op StdOp, valueId ValueId) returns ParsedInt
 	return match op 'dispatch'
 		call(c) gives paramCallAbiIndexIfDefines(c, valueId: valueId)
-		arith gives(-1)
-		control gives(-1)
-		memory gives(-1)
-		system gives(-1)
+		arith gives (-1)
+		control gives (-1)
+		memory gives (-1)
+		system gives (-1)
 	end 'dispatch'
 end 'paramOpAbiIndexIfDefines'
 
 function paramCallAbiIndexIfDefines(c StdCallOp, valueId ValueId) returns ParsedInt
 	return match c 'check'
-		param(resultId, paramIndex, _) gives(paramIndex if resultId == valueId else (-1))
-		ret to tailCall gives(-1)
-		errorReturn gives(-1)
+		param(resultId, paramIndex, _) gives (paramIndex if resultId == valueId else (-1))
+		ret to tailCall gives (-1)
+		errorReturn gives (-1)
 	end 'check'
 end 'paramCallAbiIndexIfDefines'
 
@@ -1946,7 +1946,7 @@ end 'fieldLoadResultId'
 
 function sysFieldLoadResultId(s StdSystemOp, addrId ValueId, offset MachineWord) returns ValueId
 	return match s 'check'
-		loadIndirect(resultId, loadAddrId, loadOffset, _, _, _) gives(resultId if (loadAddrId == addrId and loadOffset == offset) else REFCOUNT_NO_VALUE)
+		loadIndirect(resultId, loadAddrId, loadOffset, _, _, _) gives (resultId if (loadAddrId == addrId and loadOffset == offset) else REFCOUNT_NO_VALUE)
 		globalAddr to loadByte gives REFCOUNT_NO_VALUE
 		osExit to osWrite gives REFCOUNT_NO_VALUE
 		free gives REFCOUNT_NO_VALUE
@@ -1986,7 +1986,7 @@ end 'opIsDecrefOldHelperOf'
 
 function callIsDecrefOldHelperOf(c StdCallOp, argId ValueId) returns bool
 	return match c 'check'
-		call(_, callee, argIds) gives(callee == "__mm_decref_maybenull_helper" and valueIdArrayContains(argIds, vid: argId))
+		call(_, callee, argIds) gives (callee == "__mm_decref_maybenull_helper" and valueIdArrayContains(argIds, vid: argId))
 		ret gives false
 		tryCall to errorReturn gives false
 	end 'check'
@@ -2656,9 +2656,13 @@ function planTerminatorDeaths(ctx RcContext, blockRef BlockRef, block IrBlock)
 	// pointer it reads. Independent of body-op count, so it is correct for
 	// terminator-only blocks too.
 	let liveBeforeTerm = liveSetBeforeTerminator(ctx, block: block)
-	var releasedHere = ValueIdArray.create()
+	// O(1) membership bitset (sized to the value-id space) so the per-live
+	// dedup test is constant time rather than a linear re-scan of the
+	// already-released values; the live set can hold dozens–hundreds of
+	// values in loop-heavy blocks.
+	var releasedHere = StdLiveSet.create(ctx.liveness.maxValueId)
 	for vid in liveBeforeTerm.members 'eachLive'
-		if valueIdArrayContains(releasedHere, vid: vid) 'dup'
+		if releasedHere.contains(vid) 'dup'
 			continue
 		end 'dup'
 		// Live-out values survive into a successor — released on an out-edge by
@@ -2733,7 +2737,7 @@ function planTerminatorDeaths(ctx RcContext, blockRef BlockRef, block IrBlock)
 		logTrace(LogCategory.ir, message: function() gives "RC-TERMDROP func={ctx.func.name} val=%{vid} block_{block.id} class={ownershipClassName(ctx.classOf(vid))} kind={releaseKindName(releaseKindAtLastUse(ctx, id: vid))}")
 		let relIdx = buildReleaseOp(ctx, id: vid)
 		queueInsertion(ctx, blockRef: blockRef, pos: opCount, opIdx: relIdx)
-		releasedHere.push(vid)
+		_ = releasedHere.add(vid)
 	end 'eachLive'
 end 'planTerminatorDeaths'
 
@@ -3260,6 +3264,10 @@ function planInBlockDeaths(ctx RcContext, blockRef BlockRef, block IrBlock)
 		// a managed value used both directly and as a borrow base at its last use
 		// is decref'd TWICE → over-free / double-free crash (the file-io / map
 		// String double-free that Fix-1's managed-String classification exposed).
+		// `candidates` is one op's read operands plus their borrow bases — at most
+		// a handful of entries — and `releasedHere` is re-created per op, so the
+		// linear dedup scan is over a tiny bounded set. A bitset here would cost a
+		// full value-id-space allocation per op, far more than the scan it replaces.
 		var releasedHere = ValueIdArray.create()
 		for useId in candidates 'eachUse'
 			if not valueIdArrayContains(releasedHere, vid: useId) 'notYetReleased'
@@ -4141,8 +4149,8 @@ end 'tryCallErrorFlagForResult'
 function tryCallErrorFlagIfResult(op StdOp, resultId ValueId) returns ValueId
 	return match op 'dispatch'
 		call(c) gives match c 'inner'
-			tryCall(r, _, _, errorFlagId) gives(errorFlagId if r == resultId else REFCOUNT_NO_VALUE)
-			witnessTryCall(r, _, _, _, _, errorFlagId) gives(errorFlagId if r == resultId else REFCOUNT_NO_VALUE)
+			tryCall(r, _, _, errorFlagId) gives (errorFlagId if r == resultId else REFCOUNT_NO_VALUE)
+			witnessTryCall(r, _, _, _, _, errorFlagId) gives (errorFlagId if r == resultId else REFCOUNT_NO_VALUE)
 			ret gives REFCOUNT_NO_VALUE
 			call gives REFCOUNT_NO_VALUE
 			indirectCall to witnessCall gives REFCOUNT_NO_VALUE
@@ -4714,7 +4722,7 @@ end 'opDefinesConstantZero'
 
 function arithDefinesConstantZero(a StdArithOp, vid ValueId) returns bool
 	return match a 'check'
-		const(c) gives(c.resultId == vid and c.value == 0)
+		const(c) gives (c.resultId == vid and c.value == 0)
 		unary to binary gives false
 	end 'check'
 end 'arithDefinesConstantZero'
@@ -4738,7 +4746,7 @@ end 'incomingPhiArg'
 
 function incomingPhiArgCf(cf StdControlOp, toBlockId BlockId, argIdx NodeIndex) returns ValueId
 	return match cf 'check'
-		br(target, argIds) gives(argAtOrNone(argIds, argIdx: argIdx) if target == toBlockId else REFCOUNT_NO_VALUE)
+		br(target, argIds) gives (argAtOrNone(argIds, argIdx: argIdx) if target == toBlockId else REFCOUNT_NO_VALUE)
 		condBr(_, thenTarget, thenArgIds, elseTarget, elseArgIds) gives incomingCondBrArg(thenTarget, thenArgIds: thenArgIds, elseTarget: elseTarget, elseArgIds: elseArgIds, toBlockId: toBlockId, argIdx: argIdx)
 	end 'check'
 end 'incomingPhiArgCf'
@@ -5010,7 +5018,7 @@ end 'edgeArgsFor'
 
 function edgeArgsForCf(cf StdControlOp, toBlockId BlockId) returns ValueIdArray
 	return match cf 'check'
-		br(target, argIds) gives(cloneValueIdArray(argIds) if target == toBlockId else ValueIdArray.create())
+		br(target, argIds) gives (cloneValueIdArray(argIds) if target == toBlockId else ValueIdArray.create())
 		condBr(_, thenTarget, thenArgIds, elseTarget, elseArgIds) gives condBrEdgeArgs(thenTarget, thenArgIds: thenArgIds, elseTarget: elseTarget, elseArgIds: elseArgIds, toBlockId: toBlockId)
 	end 'check'
 end 'edgeArgsForCf'

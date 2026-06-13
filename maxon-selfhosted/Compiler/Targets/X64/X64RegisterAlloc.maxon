@@ -1303,14 +1303,14 @@ end 'x64WithSingleUse'
 // Extract dest and src GPR VRegs from a twoAddr-pattern op (dest is use+def, src is use).
 function x64GetTwoAddrOperands(x64Op X64Op) returns (X64VReg, X64VReg)
 	return match x64Op 'get'
-		addRegReg(destReg, srcReg) gives(destReg, srcReg)
-		subRegReg(destReg, srcReg) gives(destReg, srcReg)
-		imulRegReg(destReg, srcReg) gives(destReg, srcReg)
-		andRegReg(destReg, srcReg) gives(destReg, srcReg)
-		orRegReg(destReg, srcReg) gives(destReg, srcReg)
-		xorRegReg(destReg, srcReg) gives(destReg, srcReg)
-		cmov(dest, src, _) gives(dest, src)
-		lockXaddMemReg(valReg, addrReg) gives(valReg, addrReg)
+		addRegReg(destReg, srcReg) gives (destReg, srcReg)
+		subRegReg(destReg, srcReg) gives (destReg, srcReg)
+		imulRegReg(destReg, srcReg) gives (destReg, srcReg)
+		andRegReg(destReg, srcReg) gives (destReg, srcReg)
+		orRegReg(destReg, srcReg) gives (destReg, srcReg)
+		xorRegReg(destReg, srcReg) gives (destReg, srcReg)
+		cmov(dest, src, _) gives (dest, src)
+		lockXaddMemReg(valReg, addrReg) gives (valReg, addrReg)
 		default panic("x64GetTwoAddrOperands: unexpected op")
 	end 'get'
 end 'x64GetTwoAddrOperands'
@@ -1379,9 +1379,9 @@ end 'x64WithUnaryInPlace'
 // Extract both GPR VRegs from a twoUse-pattern op.
 function x64GetTwoUseOperands(x64Op X64Op) returns (X64VReg, X64VReg)
 	return match x64Op 'get'
-		cmpRegReg(lhsReg, rhsReg) gives(lhsReg, rhsReg)
-		testRegReg(reg1, reg2) gives(reg1, reg2)
-		lockCmpxchgMemReg(newReg, addrReg) gives(newReg, addrReg)
+		cmpRegReg(lhsReg, rhsReg) gives (lhsReg, rhsReg)
+		testRegReg(reg1, reg2) gives (reg1, reg2)
+		lockCmpxchgMemReg(newReg, addrReg) gives (newReg, addrReg)
 		default panic("x64GetTwoUseOperands: unexpected op")
 	end 'get'
 end 'x64GetTwoUseOperands'
@@ -1401,8 +1401,8 @@ end 'x64WithTwoUse'
 // Extract dest and src GPR VRegs from a defUse-pattern op (dest is def, src is use).
 function x64GetDefUseOperands(x64Op X64Op) returns (X64VReg, X64VReg)
 	return match x64Op 'get'
-		movsxd(dest, src) gives(dest, src)
-		movzx32(dest, src) gives(dest, src)
+		movsxd(dest, src) gives (dest, src)
+		movzx32(dest, src) gives (dest, src)
 		default panic("x64GetDefUseOperands: unexpected op")
 	end 'get'
 end 'x64GetDefUseOperands'
@@ -1421,7 +1421,7 @@ end 'x64WithDefUse'
 // Extract base and src GPR VRegs from a baseUseSrcUse-pattern op.
 function x64GetBaseUseSrcUseOperands(x64Op X64Op) returns (X64VReg, X64VReg)
 	return match x64Op 'get'
-		storeIndirect(baseReg, _, srcReg, _) gives(baseReg, srcReg)
+		storeIndirect(baseReg, _, srcReg, _) gives (baseReg, srcReg)
 		default panic("x64GetBaseUseSrcUseOperands: unexpected op")
 	end 'get'
 end 'x64GetBaseUseSrcUseOperands'
@@ -1439,8 +1439,8 @@ end 'x64WithBaseUseSrcUse'
 // Extract base and dest GPR VRegs from a baseUseDest-pattern op.
 function x64GetBaseUseDestOperands(x64Op X64Op) returns (X64VReg, X64VReg)
 	return match x64Op 'get'
-		loadIndirect(destReg, baseReg, _, _, _) gives(baseReg, destReg)
-		nullSafeLoad(dest, baseReg, _) gives(baseReg, dest)
+		loadIndirect(destReg, baseReg, _, _, _) gives (baseReg, destReg)
+		nullSafeLoad(dest, baseReg, _) gives (baseReg, dest)
 		default panic("x64GetBaseUseDestOperands: unexpected op")
 	end 'get'
 end 'x64GetBaseUseDestOperands'
@@ -1460,12 +1460,12 @@ end 'x64WithBaseUseDest'
 // `base` is use-only.
 function x64GetBaseUseUseDefOperands(x64Op X64Op) returns (X64VReg, X64VReg)
 	return match x64Op 'get'
-		addRegMem(dest, base, _) gives(dest, base)
-		subRegMem(dest, base, _) gives(dest, base)
-		andRegMem(dest, base, _) gives(dest, base)
-		orRegMem(dest, base, _) gives(dest, base)
-		xorRegMem(dest, base, _) gives(dest, base)
-		imulRegMem(dest, base, _) gives(dest, base)
+		addRegMem(dest, base, _) gives (dest, base)
+		subRegMem(dest, base, _) gives (dest, base)
+		andRegMem(dest, base, _) gives (dest, base)
+		orRegMem(dest, base, _) gives (dest, base)
+		xorRegMem(dest, base, _) gives (dest, base)
+		imulRegMem(dest, base, _) gives (dest, base)
 		default panic("x64GetBaseUseUseDefOperands: unexpected op")
 	end 'get'
 end 'x64GetBaseUseUseDefOperands'
@@ -1488,7 +1488,7 @@ end 'x64WithBaseUseUseDef'
 // Phase 2: extract (lhs, base) from a baseTwoUse-pattern op. Both are use-only.
 function x64GetBaseTwoUseOperands(x64Op X64Op) returns (X64VReg, X64VReg)
 	return match x64Op 'get'
-		cmpRegMem(lhs, base, _) gives(lhs, base)
+		cmpRegMem(lhs, base, _) gives (lhs, base)
 		default panic("x64GetBaseTwoUseOperands: unexpected op")
 	end 'get'
 end 'x64GetBaseTwoUseOperands'
@@ -1507,7 +1507,7 @@ end 'x64WithBaseTwoUse'
 // src is use-only, an immediate rides along.
 function x64GetDefUseImmOperands(x64Op X64Op) returns (X64VReg, X64VReg)
 	return match x64Op 'get'
-		imulRegImm(dest, src, _) gives(dest, src)
+		imulRegImm(dest, src, _) gives (dest, src)
 		default panic("x64GetDefUseImmOperands: unexpected op")
 	end 'get'
 end 'x64GetDefUseImmOperands'
@@ -1567,12 +1567,12 @@ end 'x64WithFpSingleUse'
 // Extract dest and src FP VRegs from an fpTwoAddr-pattern op (dest is use+def, src is use).
 function x64GetFpTwoAddrOperands(x64Op X64Op) returns (X64FpVReg, X64FpVReg)
 	return match x64Op 'get'
-		addXmm(dest, src, _) gives(dest, src)
-		subXmm(dest, src, _) gives(dest, src)
-		mulXmm(dest, src, _) gives(dest, src)
-		divXmm(dest, src, _) gives(dest, src)
-		minXmm(dest, src, _) gives(dest, src)
-		maxXmm(dest, src, _) gives(dest, src)
+		addXmm(dest, src, _) gives (dest, src)
+		subXmm(dest, src, _) gives (dest, src)
+		mulXmm(dest, src, _) gives (dest, src)
+		divXmm(dest, src, _) gives (dest, src)
+		minXmm(dest, src, _) gives (dest, src)
+		maxXmm(dest, src, _) gives (dest, src)
 		default panic("x64GetFpTwoAddrOperands: unexpected op")
 	end 'get'
 end 'x64GetFpTwoAddrOperands'
@@ -1595,10 +1595,10 @@ end 'x64WithFpTwoAddr'
 // Extract dest and src FP VRegs from an fpDefUse-pattern op (dest is def, src is use).
 function x64GetFpDefUseOperands(x64Op X64Op) returns (X64FpVReg, X64FpVReg)
 	return match x64Op 'get'
-		sqrtXmm(dest, src, _) gives(dest, src)
-		roundXmm(dest, src, _, _) gives(dest, src)
-		cvtSd2Ss(dest, src) gives(dest, src)
-		cvtSs2Sd(dest, src) gives(dest, src)
+		sqrtXmm(dest, src, _) gives (dest, src)
+		roundXmm(dest, src, _, _) gives (dest, src)
+		cvtSd2Ss(dest, src) gives (dest, src)
+		cvtSs2Sd(dest, src) gives (dest, src)
 		default panic("x64GetFpDefUseOperands: unexpected op")
 	end 'get'
 end 'x64GetFpDefUseOperands'
@@ -1619,7 +1619,7 @@ end 'x64WithFpDefUse'
 // Extract both FP VRegs from an fpTwoUse-pattern op.
 function x64GetFpTwoUseOperands(x64Op X64Op) returns (X64FpVReg, X64FpVReg)
 	return match x64Op 'get'
-		ucomisXmm(src1, src2, _) gives(src1, src2)
+		ucomisXmm(src1, src2, _) gives (src1, src2)
 		default panic("x64GetFpTwoUseOperands: unexpected op")
 	end 'get'
 end 'x64GetFpTwoUseOperands'
@@ -1637,8 +1637,8 @@ end 'x64WithFpTwoUse'
 // Extract FP dest and GPR src from a gprToFp-pattern op.
 function x64GetGprToFpOperands(x64Op X64Op) returns (X64FpVReg, X64VReg)
 	return match x64Op 'get'
-		cvtSi2Float(dest, src, _) gives(dest, src)
-		movqGprToXmm(dest, src) gives(dest, src)
+		cvtSi2Float(dest, src, _) gives (dest, src)
+		movqGprToXmm(dest, src) gives (dest, src)
 		default panic("x64GetGprToFpOperands: unexpected op")
 	end 'get'
 end 'x64GetGprToFpOperands'
@@ -1657,8 +1657,8 @@ end 'x64WithGprToFp'
 // Extract GPR dest and FP src from an fpToGpr-pattern op.
 function x64GetFpToGprOperands(x64Op X64Op) returns (X64VReg, X64FpVReg)
 	return match x64Op 'get'
-		cvttFloat2Si(dest, src, _) gives(dest, src)
-		movqXmmToGpr(dest, src) gives(dest, src)
+		cvttFloat2Si(dest, src, _) gives (dest, src)
+		movqXmmToGpr(dest, src) gives (dest, src)
 		default panic("x64GetFpToGprOperands: unexpected op")
 	end 'get'
 end 'x64GetFpToGprOperands'
@@ -1677,7 +1677,7 @@ end 'x64WithFpToGpr'
 // Extract GPR base and FP src from a baseUseFpUse-pattern op.
 function x64GetBaseUseFpUseOperands(x64Op X64Op) returns (X64VReg, X64FpVReg)
 	return match x64Op 'get'
-		storeIndirectXmm(baseReg, _, src, _) gives(baseReg, src)
+		storeIndirectXmm(baseReg, _, src, _) gives (baseReg, src)
 		default panic("x64GetBaseUseFpUseOperands: unexpected op")
 	end 'get'
 end 'x64GetBaseUseFpUseOperands'
@@ -1695,7 +1695,7 @@ end 'x64WithBaseUseFpUse'
 // Extract GPR base and FP dest from a baseUseFpDef-pattern op.
 function x64GetBaseUseFpDefOperands(x64Op X64Op) returns (X64VReg, X64FpVReg)
 	return match x64Op 'get'
-		loadIndirectXmm(dest, baseReg, _, _) gives(baseReg, dest)
+		loadIndirectXmm(dest, baseReg, _, _) gives (baseReg, dest)
 		default panic("x64GetBaseUseFpDefOperands: unexpected op")
 	end 'get'
 end 'x64GetBaseUseFpDefOperands'

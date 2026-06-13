@@ -223,14 +223,10 @@ function emitPerInstanceWitnessTables(project Project, globalData GlobalDataTabl
 		// Pair this gid with every conformance whose conforming type matches
 		// the base — `Array: Equatable` and `Array: Hashable` both fire for
 		// a gid whose base is `Array`.
-		for cid in 0 upto conformanceCount 'eachConformance'
-			let typeName = try project.conformances.typeNames.get(cid) otherwise panic("emitPerInstanceWitnessTables: typeNames.get OOB at {cid}")
-			if typeName != baseName 'baseMismatch'
-				continue
-			end 'baseMismatch'
+		for cid in project.conformances.idsForType(baseName) 'eachConformance'
 			// Skip non-generic conformers — they're handled by the
 			// unconditional emitter above and don't need per-instance tables.
-			if project.typeParameters.getParamNames(typeName).count() == 0 'nonGenericConformer'
+			if project.typeParameters.getParamNames(baseName).count() == 0 'nonGenericConformer'
 				continue
 			end 'nonGenericConformer'
 			let interfaceName = try project.conformances.interfaceNames.get(cid) otherwise panic("emitPerInstanceWitnessTables: interfaceNames.get OOB at {cid}")

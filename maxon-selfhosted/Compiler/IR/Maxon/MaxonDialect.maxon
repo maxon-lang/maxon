@@ -2409,11 +2409,7 @@ end 'substituteInterfaceParamArgByName'
 // for conformer struct receivers (Map / Set / List / OpenRange) that don't
 // re-declare the alias in their own body.
 function chaseTypealiasTypeViaConformingInterfaces(project Project, name String, structName String) returns MaxonType throws TypealiasChaseError
-	for confId in 0 upto project.conformances.typeNames.count() 'scan'
-		let implName = try project.conformances.typeNames.get(confId) otherwise panic("chaseTypealiasTypeViaConformingInterfaces: typeNames.get OOB at {confId}")
-		if implName != structName 'skip'
-			continue
-		end 'skip'
+	for confId in project.conformances.idsForType(structName) 'scan'
 		let ifaceName = try project.conformances.interfaceNames.get(confId) otherwise panic("chaseTypealiasTypeViaConformingInterfaces: interfaceNames.get OOB at {confId}")
 		let confArgs = try project.conformances.withArgsList.get(confId) otherwise panic("chaseTypealiasTypeViaConformingInterfaces: withArgsList.get OOB at {confId}")
 		if let iface = try project.interfaces.get(ifaceName) 'haveIface'

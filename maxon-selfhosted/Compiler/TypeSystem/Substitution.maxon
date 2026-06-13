@@ -434,23 +434,16 @@ function baseNameOfGid(project Project, gid GenericInstanceId) returns String
 end 'baseNameOfGid'
 
 // Locate the `project.conformances` entry id for `(implementerName,
-// interfaceName)`. Linear scan matches the existing
-// `tryMaterializeLayoutFromConformance` walk; the registry is small in
-// practice (one entry per `implements` clause across the whole project).
-// Exported so the layout-side conformance lookup in lowering reuses the
-// same walk instead of re-implementing the (typeName, interfaceName) scan.
+// interfaceName)`. Probes only the reverse-index bucket for `implementerName`
+// (`ConformanceRegistry.idsForType`) rather than scanning the whole registry.
+// Exported so the layout-side conformance lookup in lowering reuses the same
+// walk instead of re-implementing the (typeName, interfaceName) scan.
 export function findConformanceEntry(project Project, implementerName String, interfaceName String) returns ConformanceId throws ConformanceLookupError
-	let total = project.conformances.count()
-	for i in 0 upto total 'scan'
-		let confType = try project.conformances.typeNames.get(i) otherwise panic("findConformanceEntry: typeNames.get OOB at {i}")
-		if confType != implementerName 'skipType'
-			continue
-		end 'skipType'
-		let confIface = try project.conformances.interfaceNames.get(i) otherwise panic("findConformanceEntry: interfaceNames.get OOB at {i}")
-		if confIface != interfaceName 'skipIface'
-			continue
-		end 'skipIface'
-		return i
+	for confId in project.conformances.idsForType(implementerName) 'scan'
+		let confIface = try project.conformances.interfaceNames.get(confId) otherwise panic("findConformanceEntry: interfaceNames.get OOB at {confId}")
+		if confIface == interfaceName 'hit'
+			return confId
+		end 'hit'
 	end 'scan'
 	throw ConformanceLookupError.notFound
 end 'findConformanceEntry'

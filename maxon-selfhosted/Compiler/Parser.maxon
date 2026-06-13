@@ -7475,15 +7475,12 @@ export type Parser
 	// don't participate — they're already filtered out of the missing-set
 	// computation; the same shape works here.
 	function allSeenKeysAreCasesOf(enumCases EnumCaseArray, seenKeys ReferencedVarSet) returns bool
+		var caseNames = ReferencedVarSet.create()
+		for c in enumCases 'collectCases'
+			caseNames.insert(c.name)
+		end 'collectCases'
 		for key in seenKeys 'eachKey'
-			var found = false
-			for c in enumCases 'eachCase'
-				if c.name == key 'hit'
-					found = true
-					break
-				end 'hit'
-			end 'eachCase'
-			if not found 'miss'
+			if not caseNames.contains(key) 'miss'
 				return false
 			end 'miss'
 		end 'eachKey'

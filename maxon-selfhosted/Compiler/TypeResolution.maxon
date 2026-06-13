@@ -4078,11 +4078,7 @@ end 'applyInnerAliasFromReceiver'
 // project-wide unique within the stdlib so there's no ambiguity in
 // practice. Returns `t` unchanged when no conformance hit.
 export function applyInnerAliasFromInterfaces(project Project, t MaxonType, receiverStructName String) returns MaxonType
-	for confId in 0 upto project.conformances.typeNames.count() 'scan'
-		let implementerName = try project.conformances.typeNames.get(confId) otherwise panic("applyInnerAliasFromInterfaces: typeNames.get OOB at {confId}")
-		if implementerName != receiverStructName 'skip'
-			continue
-		end 'skip'
+	for confId in project.conformances.idsForType(receiverStructName) 'scan'
 		let interfaceName = try project.conformances.interfaceNames.get(confId) otherwise panic("applyInnerAliasFromInterfaces: interfaceNames.get OOB at {confId}")
 		let iface = try project.interfaces.get(interfaceName) otherwise continue
 		if iface.innerAliases.count() == 0 'noAliases'
@@ -4622,7 +4618,7 @@ function checkPendingTernaryArmTypes(project Project, module MaxonModule, func I
 					continue
 				end 'notStore'
 				let (storeSlot, value) = match op 'storeMatch'
-					varStore(slotId, val, _) gives(slotId, val)
+					varStore(slotId, val, _) gives (slotId, val)
 					default panic("checkPendingTernaryArmTypes: op.name == varStore but match failed")
 				end 'storeMatch'
 				if storeSlot != entry.slot 'otherSlot'
@@ -9205,12 +9201,8 @@ end 'maybeMonomorphizeUserExtension'
 // extensions to B) are visible without re-walking the
 // interface-extends-interface chain.
 function findInterfaceExtensionCallee(project Project, typeName String, methodName String, argTypes MaxonTypeArray) returns String throws InterfaceExtensionLookupError
-	let total = project.conformances.count()
-	for i in 0 upto total 'eachConf'
-		let (confType, ifaceName, _) = project.conformances.get(i)
-		if confType != typeName 'skipOther'
-			continue
-		end 'skipOther'
+	for confId in project.conformances.idsForType(typeName) 'eachConf'
+		let (_, ifaceName, _) = project.conformances.get(confId)
 		let candidate = "{ifaceName}.{methodName}"
 		let resolvedCandidate = resolveOverloadedCallee(project, bareQualifiedName: candidate, argTypes: argTypes, hasSelf: false)
 		if project.funcSignatures.contains(resolvedCandidate) 'hit'
@@ -9453,10 +9445,10 @@ function maybePropagateForCallOp(project Project, module MaxonModule, op MaxonOp
 		return
 	end 'notACall'
 	let (args, argTypes) = match op 'extract'
-		methodCall(_, _, _, a, _, at, _, _) gives(a, at)
-		tryMethodCall(_, _, _, a, _, at, _, _, _) gives(a, at)
-		call(_, _, _, a, _, at, _, _) gives(a, at)
-		tryCall(_, _, _, a, _, at, _, _, _) gives(a, at)
+		methodCall(_, _, _, a, _, at, _, _) gives (a, at)
+		tryMethodCall(_, _, _, a, _, at, _, _, _) gives (a, at)
+		call(_, _, _, a, _, at, _, _) gives (a, at)
+		tryCall(_, _, _, a, _, at, _, _, _) gives (a, at)
 		default panic("maybePropagateForCallOp: op.name in [methodCall, tryMethodCall, call, tryCall] but match arm not picked up — variant drift?")
 	end 'extract'
 	if args.count() == 0 'noArgs'
@@ -9530,8 +9522,8 @@ function patchOneClosureArg(project Project, module MaxonModule, producerOpIdx O
 		return
 	end 'notAClosure'
 	let (result, liftedName) = match producerOp 'extractClosure'
-		functionRef(r, n, _, _) gives(r, n)
-		closureCreate(r, n, _, _, _, _) gives(r, n)
+		functionRef(r, n, _, _) gives (r, n)
+		closureCreate(r, n, _, _, _, _) gives (r, n)
 		default panic("patchOneClosureArg: producer op kind drift — pre-filter said functionRef/closureCreate but match didn't bind")
 	end 'extractClosure'
 

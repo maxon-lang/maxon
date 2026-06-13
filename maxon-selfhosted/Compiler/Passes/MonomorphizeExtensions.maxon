@@ -571,20 +571,22 @@ function buildSlotRemap(srcFunc IrFunction) returns SlotRemap
 		return remap
 	end 'empty'
 	let allVars = srcFunc.scope.allVars()
-	// Build a parallel slot→name array so we can iterate in slot order.
-	// The Maxon Map iterator doesn't guarantee insertion order, so a
-	// straight `for (k, v) in allVars` could shuffle slot ids; explicit
-	// per-slot lookup keeps the renumber deterministic.
+	// Mark which slot ids are occupied in one pass over the scope vars, then
+	// walk 0..total in slot order. The Maxon Map iterator doesn't guarantee
+	// insertion order, so iterating `allVars` directly could shuffle slot ids;
+	// the occupied-bit array keeps the renumber deterministic while replacing
+	// the former per-slot full-map scan (O(slots × vars)) with O(slots + vars).
+	var slotOccupied = BoolArray.create()
+	slotOccupied.resize(total)
+	for (_, info) in allVars 'markOccupied'
+		if info.slot < total 'inRange'
+			try slotOccupied.set(info.slot, value: true) otherwise panic("buildSlotRemap: slotOccupied.set OOB despite info.slot < total")
+		end 'inRange'
+	end 'markOccupied'
+
 	var dstSlot = 0 as VarSlot
 	for srcSlot in 0 upto total 'eachSlot'
-		var foundName = ""
-		for (name, info) in allVars 'lookupBySlot'
-			if info.slot == srcSlot 'hit'
-				foundName = name
-				break
-			end 'hit'
-		end 'lookupBySlot'
-		if foundName.isEmpty() 'unmapped'
+		if not (try slotOccupied.get(srcSlot) otherwise false) 'unmapped'
 			continue
 		end 'unmapped'
 		// slot<->abi decoupling: the parser reserves ONE `__companion_<param>`

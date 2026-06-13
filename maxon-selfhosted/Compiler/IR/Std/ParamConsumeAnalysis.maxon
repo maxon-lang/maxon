@@ -214,7 +214,7 @@ end 'funcRefTargetOf'
 
 function funcRefCallTargetOf(c StdCallOp, valueId ValueId) returns String
 	return match c 'check'
-		funcRef(resultId, funcName) gives(funcName if resultId == valueId else "")
+		funcRef(resultId, funcName) gives (funcName if resultId == valueId else "")
 		ret gives ""
 		call gives ""
 		tryCall to witnessTryCall gives ""
@@ -290,7 +290,7 @@ end 'maskStoreValueOf'
 
 function sysMaskStoreValueOf(s StdSystemOp, bufValueId ValueId) returns ValueId
 	return match s 'check'
-		storeIndirect(addrId, offset, valueId, _, _) gives(valueId if (addrId == bufValueId and offset == 8) else 0)
+		storeIndirect(addrId, offset, valueId, _, _) gives (valueId if (addrId == bufValueId and offset == 8) else 0)
 		loadIndirect gives 0
 		globalAddr to loadByte gives 0
 		osExit to osWrite gives 0
@@ -328,7 +328,7 @@ end 'constValueOf'
 
 function arithConstValueOf(a StdArithOp, valueId ValueId) returns (bool, MachineWord)
 	return match a 'check'
-		const(c) gives((c.resultId == valueId, c.value as MachineWord))
+		const(c) gives ((c.resultId == valueId, c.value as MachineWord))
 		unary gives (false, 0)
 		binary gives (false, 0)
 	end 'check'
@@ -436,6 +436,14 @@ function paramValueReachesConsumeSink(module StdModule, func IrFunction, valueId
 	// identity-passthrough whose result is the same pointer). Grown to a fixpoint so a
 	// param laundered through a CHAIN of passthroughs (`resolveFileURL` then
 	// `normalizeSeparators`) is followed all the way to its store-sink.
+	// `aliases` is the set of SSA values that alias this one parameter — it
+	// grows only when a call passes an existing alias through and may-returns
+	// it, so it holds the passthrough-chain length (realistically 1–few). The
+	// linear `valueIdArrayContains` membership tests below (here and in
+	// `calleeResultAliasesArg`) are therefore over a tiny array; a hash set or
+	// value-id-space bitset would add per-parameter allocation/hashing that
+	// outweighs scanning a handful of entries, and would not touch the real
+	// cost — the full-body re-walk the fixpoint performs per discovered alias.
 	var aliases = ValueIdArray.create()
 	aliases.push(valueId)
 	var expanded = true
