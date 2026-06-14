@@ -1,5 +1,60 @@
 # Libraries in the self-hosted Maxon compiler — full phased design
 
+## Implementation status (updated 2026-06-14)
+
+Branch `feature/libraries`. All work below is committed and verified green on a **cold** cache:
+self-hosted spec **2219/2219**, wasm32-wasi **2205/2205**, no memory leaks.
+
+**Done:**
+- **Phase 1 — `Library` value type + keyed registry.** The ~15 stdlib singletons collapsed into one
+  `Library` (in `Compiler/Library.maxon`) held in a `LibraryRegistry`; exported accessors delegate
+  through it. Builtin-type bootstrap extracted to `registerBuiltinTypeBootstrap`. Deterministic file
+  sort added (spike A2). Byte-behavior-preserving.
+- **Phase 2a — cache relocated to the library's own dir.** Cache now lives in `stdlib/.maxon/cache/`
+  (shared across projects), filename `stdlib-<target>-<fp>.mxc` with a compiler-fingerprint token for
+  coexistence. `maxon clean` command added. Sticky `stdlibCacheProjectDirs` removed. The old
+  `noStdlibCache` MCP flag was removed (superseded by `maxon clean`).
+- **Phase 2b — atomic cache writes.** New `mrt_file_rename` primitive lowered on **all four targets**
+  (Windows MoveFileExW, x64/arm64-linux rename syscall, WASI rename-at); `File.rename` stdlib surface;
+  every cache write routes through `writeFileAtomic` (temp + atomic rename). No torn reads.
+- **Spec-runner warming removed** (the parent pre-warm + per-worker warm + `warmStdlibCache`). This
+  exposed a latent **stale-id leak** the warm had masked: `restoreRegistries` restored
+  `topLevelVars[*].slotType` without id-translation → fixed (root cause, not a workaround). mm-trace
+  references removed from the self-hosted compiler (they were comment-only; no functional mm-trace
+  code exists self-hosted).
+- **Phase 3.5 — library-owned id-space (CACHE_FORMAT_VERSION → 81).** The cache codec is now
+  **project-independent**: every id-bearing field serializes through the cache's OWN snapshot tables
+  (model (b): the library is interned first → its ids are a stable prefix identical in every consumer).
+  Deleted `writerGidToProjectGid`/`writerGidToDataGid` + the entire `translate*` family. Persist gate
+  removed — **any project (spec workers, user builds) now persists its lazily-grown cache.**
+
+**Key finding — the persist/sharing win is small, and that is expected (measured 2026-06-14):**
+The user expected a big repeated-run spec speedup from cross-worker cache sharing; measurement shows
+the **ceiling is ~5%**. The stdlib cache only removes stdlib lazy-codegen, which is a one-time
+~5 s/worker-process cost amortized across ~50 tests/worker. The dominant cost (~90%+ of warm wall
+time) is **per-test user-program compile + regalloc + link**, paid every test, every run — which the
+stdlib cache structurally cannot touch. Evidence: a cold full suite (108 s) was *faster* than warm
+runs (95/100/139 s); run-to-run variance (~40 s) dwarfs the ~5 s stdlib budget. The real cold→warm
+win (−33%, 46 s→31 s) was **already realized at run 2** and flatlines after. **The big repeated-run
+speedup requires Phase 7 (user-program Tier-C cache)** — caching the regalloc'd user functions per
+test — not anything in the stdlib cache.
+
+**Known defect (real, minor): parallel clobbering.** Concurrent spec workers each re-serialize their
+whole in-memory snapshot via last-writer-wins `rename`, with no merge — so a single `--workers=N`
+cold run converges to only **168–197** of the **270** functions a serial run persists (27–38% lost),
+and the file size oscillates instead of plateauing. Serial (`--workers=1`) converges cleanly and is
+byte-stable. **Fix (deferred):** read-modify-write *merge* under the atomic rename — before
+persisting, re-read the on-disk cache, union with the in-memory growth (prefer real bytecode over
+stubs), then atomic-write the union. Worth doing for determinism + clean convergence and as the merge
+discipline Phase 7 must adopt from day one, but it recovers little wall time (because of the ~5%
+ceiling above). Verified NOT a bug: workers DO reuse on-disk bytecode (cache-hit path pre-marks
+compiled functions via `syncLazyCompiledNames`; 2nd-run workers report 0 lazy compiles).
+
+**Not yet done:** Phase 0 (test harness), Phase 3 (3-tier split — note: Phase 3.5 landed the id-space
+refinement ahead of the tier split; the split itself is still pending), Phases 4–7.
+
+(Detailed Phase 3.5 design + file:line rationale: `library-idspace-design.md`.)
+
 ## Context
 
 The self-hosted Maxon compiler hard-wires the standard library as a process-wide singleton: ~15
@@ -1291,6 +1346,12 @@ preserve type/funcAddr/globalAddr fixups).
 
 ## Phase 7 — User program as a Library (persistent Tier C; inline-aware reuse)
 
+> **⭐ This is the phase that actually delivers the repeated-build / repeated-spec-run speedup.** The
+> 2026-06-14 measurement (see *Implementation status*) showed the stdlib cache caps at ~5% of spec
+> wall time; the dominant ~90%+ is the **per-test user-program compile + regalloc** this phase caches.
+> When building it, adopt the **read-modify-write merge** discipline (re-read on-disk, union, atomic
+> write) from day one so the user cache doesn't inherit the stdlib cache's parallel-clobber defect.
+
 **Goal.** The user program gets its own **persistent on-disk Tier C cache** so that across separate
 `maxon build` invocations a user function is not recompiled — and, **critically**, when a user
 function inlines a stdlib body, the **final post-inline, register-allocated user function** is cached
@@ -1390,17 +1451,20 @@ relinked by name).
 
 ## Phase landing order + gates
 
-| Phase | Lands | Byte-parity claim | Format bump |
-|-------|-------|-------------------|-------------|
-| 0 | `maxon test-libcache` harness + `--cache-stats` (cross-process observability) | validates current behavior | no |
-| 1 | Library type + registry; stdlib = lib#0; extract builtin bootstrap | identical to pre-change | no |
-| 2 | cache → `<libDir>/.maxon/cache`; **fingerprint-in-filename** (coexist, no auto-prune); **atomic write**; `maxon clean`; drop sticky pin | path-only, identical bytes | no |
-| 3 | split cache into 3 tiers (shared meta A+B / per-target C) | identical exe bytes | **70** |
-| 3.5 | **library-owned id-space**: codec resolves through cache's own snapshots, not the consumer; order-faithful replay; delete `writerGidToProjectGid`/`translate*`; relax persist gate so workers persist+share | cold spec run grows on-disk cache; cross-worker sharing | **81** (real version bump) |
-| 4 | linker/inliner/DFE over N caches via combined accessors | combined-of-one == stdlib-only | no |
-| 5 | `--library=DIR` + `build.maxon library("…")`; external lib compile+cache | suite identical with 0 extra libs | no |
-| 6 | per-file/per-function incremental cache update | incremental == full rebuild | **71** |
-| 7 | user program as a Library: persistent Tier C + inline-aware reuse | warm rebuild == cold (cross-process) | new file fmt (own version) |
+| Phase | Status | Lands | Byte-parity claim | Format bump |
+|-------|--------|-------|-------------------|-------------|
+| 0 | ⬜ todo | `maxon test-libcache` harness + `--cache-stats` (cross-process observability) | validates current behavior | no |
+| 1 | ✅ done | Library type + registry; stdlib = lib#0; extract builtin bootstrap | identical to pre-change | no |
+| 2 | ✅ done | cache → `<libDir>/.maxon/cache`; **fingerprint-in-filename** (coexist, no auto-prune); **atomic write**; `maxon clean`; drop sticky pin | path-only, identical bytes | no |
+| 3 | ⬜ todo | split cache into 3 tiers (shared meta A+B / per-target C) | identical exe bytes | **70** |
+| 3.5 | ✅ done | **library-owned id-space**: codec resolves through cache's own snapshots, not the consumer; order-faithful replay; delete `writerGidToProjectGid`/`translate*`; relax persist gate so workers persist+share | cold spec run grows on-disk cache; cross-worker sharing | **81** (done) |
+| 4 | ⬜ todo | linker/inliner/DFE over N caches via combined accessors | combined-of-one == stdlib-only | no |
+| 5 | ⬜ todo | `--library=DIR` + `build.maxon library("…")`; external lib compile+cache | suite identical with 0 extra libs | no |
+| 6 | ⬜ todo | per-file/per-function incremental cache update | incremental == full rebuild | **71** |
+| 7 | ⭐ todo (the real speedup) | user program as a Library: persistent Tier C + inline-aware reuse | warm rebuild == cold (cross-process) | new file fmt (own version) |
+
+Also pending: the **read-modify-write merge** fix for the stdlib cache's parallel-clobber defect
+(see *Implementation status*) — small, do before/with Phase 7.
 
 Cache contents per the three-tier model: every **library** cache holds **(A) library metadata**,
 **(B) inlinable Std IR**, and **(C) per-target linkable bytecode** — A+B shared across targets in
