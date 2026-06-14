@@ -1171,17 +1171,21 @@ export type Parser
 	function parseParamDefaultExpressionHelper(paramType MaxonType, leadToken Token) returns ParamDefault throws ParserError
 		let helperIndex = paramDefaultHelperCounter
 		paramDefaultHelperCounter = paramDefaultHelperCounter + 1
-		// The namespace prefix scopes the helper to its declaring file so
-		// helpers from two files with the same source paramDefault counter
-		// don't collide in the project-wide funcSignatures map. `namespace`
-		// is empty for the entry-point file ("main"); fall back to the file
-		// path stem in that case so the helper name still carries a stable
-		// per-file disambiguator.
+		// The helper name must be unique PROJECT-WIDE: it is registered in the
+		// project-wide funcReturnTypes / funcSignatures maps. The namespace alone
+		// is NOT a per-file disambiguator — many files share one namespace (every
+		// file under Compiler/IR/Maxon/ declares `namespace Compiler.IR.Maxon`),
+		// so two such files each minting `__paramDefault_0` collided. Include the
+		// file's stem (verified unique across the self-hosted tree, and naturally
+		// distinct per source file) so the per-file counter stays deterministic on
+		// re-parse while names never clash across files. `namespace` is empty for
+		// the entry-point file; fall back to "__main" there.
 		var nsPrefix = namespace
 		if nsPrefix.isEmpty() 'noNs'
 			nsPrefix = "__main"
 		end 'noNs'
-		let helperName = "{nsPrefix}.__paramDefault_{helperIndex}"
+		let fileStem = filePath.stem()
+		let helperName = "{nsPrefix}.__paramDefault_{fileStem}_{helperIndex}"
 		let returnType = MaxonReturnType.value(paramType)
 		var helperFunc = IrFunction.create(helperName, maxonReturnType: returnType, paramCount: 0, maxonParamTypes: MaxonTypeArray.create(), returnLine: leadToken.line)
 		helperFunc.namespace = namespace
