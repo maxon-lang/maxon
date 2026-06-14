@@ -1104,3 +1104,43 @@ end 'main'
 ```exitcode
 77
 ```
+
+<!-- test: error.rethrow-caught-binding -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+// Re-throw a caught `(e)` binding from an expression-form `try ... otherwise (e)`
+// handler. `outer` catches `inner`'s error into `e`, then `throw e` re-publishes
+// the SAME error to `outer`'s caller. The propagated variant must survive the
+// hop: `main` distinguishes `low` (1) from `high` (7) by re-throwing it again
+// and matching at the top, proving the ordinal carries through every re-throw.
+enum Fault implements Error
+	low
+	high
+end 'Fault'
+
+function inner() returns Integer throws Fault
+	throw Fault.high
+end 'inner'
+
+function outer() returns Integer throws Fault
+	return try inner() otherwise (e) 'h'
+		throw e
+	end 'h'
+end 'outer'
+
+function main() returns ExitCode
+	var code = 0 as ExitCode
+	try outer() otherwise (e) 'top'
+		match e 'm'
+			low then code = 1
+			high then code = 7
+		end 'm'
+	end 'top'
+	return code
+end 'main'
+```
+```exitcode
+7
+```

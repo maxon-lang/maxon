@@ -6928,6 +6928,27 @@ export type Parser
 	// `try ... otherwise (e)` site.
 	function parseThrowStatement(block IrBlock) throws ParserError
 		let throwToken = try consume()  // caller has already dispatched on 'throw'
+
+		// Discriminate the two `throw` shapes:
+		//   - `throw EnumName.case [(args)]` — the literal form: the head names
+		//     an enum/union TYPE (never a local), followed by `.case`.
+		//   - `throw <expr>` — re-throw an existing error value (a caught `(e)`
+		//     binding, a variable, or a `self.field` holding an error value).
+		// The literal form is recognised iff the head token is an identifier-
+		// like type name (NOT a local in scope) immediately followed by `.case`.
+		// This mirrors `parseIdentifierExpr`'s `not scope.contains(name)`
+		// type-vs-local split. Anything else is the general re-throw form,
+		// matching the C# bootstrap's `ParseThrow` (which always parses an
+		// expression, then routes the resolved error value through the throw /
+		// rethrow ABI). Without this, `throw e` consumed `e` as a type name and
+		// then `expect(dot)` hit EOF — the E2010 this fix removes.
+		let headToken = cursor.current()
+		let headIsTypeName = tokenIsIdentifierLike(headToken) and not scope.contains(headToken.value) and atOffset(TokenKind.dot, offset: 1) and atOffsetIdentifierLike(2)
+		if not headIsTypeName 'isRethrowValue'
+			try parseRethrowValue(block, throwToken: throwToken)
+			return
+		end 'isRethrowValue'
+
 		let typeNameToken = try consumeExpecting("error type name")
 		try expect(TokenKind.dot)
 		let variantToken = try consumeExpecting("error variant name")
@@ -6969,6 +6990,86 @@ export type Parser
 		end 'bareUnionCase'
 		module.setTerminator(block, op: MaxonOp.throw(typeNameToken.value, variantName: variantToken.value, payloadValueName: ByteArray.create(), range: SourceRange.between(throwToken, last: variantToken)))
 	end 'parseThrowStatement'
+
+	// Re-throw an existing error VALUE: `throw e` (a caught `otherwise (e)`
+	// binding), `throw someVar`, or `throw self.field`. Mirrors the C#
+	// bootstrap's `ParseThrow`, which parses an expression, resolves it to an
+	// error-enum value, and re-publishes it through the multi-value-return
+	// error ABI.
+	//
+	// The value's runtime representation depends on the error type:
+	//   - A UNION-typed error value (bare-case or payload-bearing) is already
+	//     the raw error flag: for the self-hosted dialect every union case is
+	//     heap-boxed by its synthesized constructor, so the value IS the box
+	//     pointer the `try` site's `flag != 0` test recognises. The `(e)`
+	//     binding (declareErrorBindingInBlock) binds `e` straight to that flag,
+	//     and a `self.field` holding a union value carries the same pointer.
+	//     Re-throw it verbatim — no `+1`.
+	//   - A bare-ENUM error value is the variant ORDINAL (the `(e)` binding is
+	//     `flag - 1`). The flag ABI reserves 0 for "no error in flight", so the
+	//     re-published flag must be `ordinal + 1` (matches lowerThrow's literal
+	//     path and the C# `LowerThrow` ordinal arm).
+	// `MaxonOp.rethrow(flagName)` lowers the chosen flag value to a single
+	// `errorReturn(zero, errorFlagId: flag)` — the runtime-valued sibling of
+	// the constant-flag `MaxonOp.throw`.
+	function parseRethrowValue(block IrBlock, throwToken Token) throws ParserError
+		currentBlock = block
+		let valueResult = try parseExpression(currentBlock)
+		let valueName = exprName(valueResult)
+		let valueType = exprType(valueResult)
+		let lastTok = previousToken()
+		let range = SourceRange.between(throwToken, last: lastTok)
+
+		// Decide the flag value. A union value is the flag as-is; a bare enum
+		// value is the ordinal and needs `+1` so the reserved-0 success
+		// sentinel is preserved.
+		let valueTypeName = valueType.nameOrEmpty(project)
+		let flagName = computeRethrowFlag(currentBlock, valueName: valueName, isUnion: enumIsAssociatedValueUnion(valueTypeName), range: range)
+
+		// Inside an active block-form `try`, route the re-thrown error to the
+		// shared `otherwise` handler instead of the function exit — mirrors
+		// `routeBareThrowToActiveTryBlock` and the C# `RouteBareThrowToTryBlock`,
+		// which both store the computed flag into the block's shared error slot
+		// and branch to the handler. The result MUST be captured in a `let` and
+		// branched on directly: `if try routeRethrow... 'label'` would parse as
+		// the if-try boolean form ("enter if the callee did NOT throw"), which
+		// always enters and silently skips the plain-rethrow tail below.
+		let routedRethrow = try routeRethrowToActiveTryBlock(currentBlock, flagName: flagName, range: range)
+		if routedRethrow 'routedToTryBlock'
+			return
+		end 'routedToTryBlock'
+
+		module.setTerminator(currentBlock, op: MaxonOp.rethrow(flagName, range: range))
+	end 'parseRethrowValue'
+
+	// Materialize the runtime error flag for a re-thrown value. A union value
+	// is already the flag (heap-box pointer); a bare-enum value is the ordinal
+	// and needs `+1` to clear the reserved-0 "no error" sentinel.
+	function computeRethrowFlag(block IrBlock, valueName ByteArray, isUnion bool, range SourceRange) returns ByteArray
+		if isUnion 'unionPassthrough'
+			return valueName
+		end 'unionPassthrough'
+		let oneName = emitLiteral(block, value: 1, valueType: MaxonType.integer, range: range)
+		let flagComputed = freshSynthName()
+		module.appendOp(block, op: MaxonOp.binop(flagComputed, left: valueName, right: oneName, opKind: BinOpKind.add, operandType: MaxonType.integer, range: range))
+		return flagComputed
+	end 'computeRethrowFlag'
+
+	// Block-form-try routing for a re-thrown runtime error flag. Returns false
+	// when no block-form try is active (caller then emits a plain rethrow).
+	// Stores the runtime flag into the shared error-flag slot and branches to
+	// the block's shared error handler, exactly as
+	// `routeBareThrowToActiveTryBlock` does for a literal `throw Enum.case`.
+	function routeRethrowToActiveTryBlock(block IrBlock, flagName ByteArray, range SourceRange) returns bool throws ParserError
+		if tryBlockStack.count() == 0 'noActiveBlock'
+			return false
+		end 'noActiveBlock'
+		let ctx = try tryBlockStack.last() otherwise return false
+		currentBlock = block
+		module.appendOp(currentBlock, op: MaxonOp.varStore(ctx.errorFlagSlot, value: flagName, range: range))
+		module.setTerminator(currentBlock, op: MaxonOp.br(ctx.errorBlockId, range: range))
+		return true
+	end 'routeRethrowToActiveTryBlock'
 
 	// Phase 9 Stage 5c: emit the constructor call for `throw EnumName.case(args)`
 	// and return both the SSA name binding the constructed union pointer and
@@ -15426,6 +15527,14 @@ export type Parser
 		let tok = try cursor.peek(offset) otherwise return false
 		return tok.kind == kind
 	end 'atOffset'
+
+	// Is the token at peek(offset) identifier-like (a plain identifier or an
+	// identifier-like keyword)? Tolerates EOF. Used by the `throw` parser to
+	// confirm the `EnumName.case` literal shape before committing to it.
+	function atOffsetIdentifierLike(offset ElementCount) returns bool
+		let tok = try cursor.peek(offset) otherwise return false
+		return tokenIsIdentifierLike(tok)
+	end 'atOffsetIdentifierLike'
 
 	// If the current token matches `kind`, consume it (advancing past it,
 	// silently tolerating EOF) and return true. Otherwise leave the cursor in

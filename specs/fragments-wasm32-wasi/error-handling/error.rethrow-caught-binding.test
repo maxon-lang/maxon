@@ -1,0 +1,90 @@
+// Test: error.rethrow-caught-binding
+
+typealias Integer = int(i64.min to i64.max)
+
+// Re-throw a caught `(e)` binding from an expression-form `try ... otherwise (e)`
+// handler. `outer` catches `inner`'s error into `e`, then `throw e` re-publishes
+// the SAME error to `outer`'s caller. The propagated variant must survive the
+// hop: `main` distinguishes `low` (1) from `high` (7) by re-throwing it again
+// and matching at the top, proving the ordinal carries through every re-throw.
+enum Fault implements Error
+	low
+	high
+end 'Fault'
+
+function inner() returns Integer throws Fault
+	throw Fault.high
+end 'inner'
+
+function outer() returns Integer throws Fault
+	return try inner() otherwise (e) 'h'
+		throw e
+	end 'h'
+end 'outer'
+
+function main() returns ExitCode
+	var code = 0 as ExitCode
+	try outer() otherwise (e) 'top'
+		match e 'm'
+			low then code = 1
+			high then code = 7
+		end 'm'
+	end 'top'
+	return code
+end 'main'
+---
+ExitCode: 7
+---
+// CompiledIR
+module {
+  func @outer() -> i64 {
+  entry:
+    %13 = mir.mov_imm 0 : i64
+    %14 = mir.mov_imm 2 : i64
+    mir.br try_0.otherwise()
+  try_0.otherwise:
+    %5 = mir.mov_imm 1 : i64
+    %6 = mir.sub.i64 %14, %5
+    %8 = mir.mov_imm 1 : i64
+    %9 = mir.add.i64 %6, %8
+    %10 = mir.mov_imm 0 : i64
+    mir.error_return %10, %9
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %1, %2 = mir.try_call @outer()
+    %3 = mir.mov_imm 0 : i64
+    %4 = mir.cmp ne, %2, %3
+    mir.cond_br %4 [then: try_0.otherwise(), else: try_0.merge(%0, %1)]
+  try_0.otherwise:
+    %6 = mir.mov_imm 1 : i64
+    %7 = mir.sub.i64 %2, %6
+    %9 = mir.mov_imm 0 : i64
+    %10 = mir.cmp eq, %7, %9
+    mir.cond_br %10 [then: m_0.case0(), else: m_0.next0()]
+  m_0.merge(%18: i64):
+    %11 = mir.mov_imm 0 : i64
+    mir.br try_0.merge(%18, %11)
+  m_0.case0:
+    %12 = mir.mov_imm 1 : i64
+    mir.br m_0.merge(%12)
+  m_0.next0:
+    %13 = mir.mov_imm 1 : i64
+    %14 = mir.cmp eq, %7, %13
+    mir.cond_br %14 [then: m_0.case1(), else: m_0.merge(%0)]
+  m_0.case1:
+    %15 = mir.mov_imm 7 : i64
+    mir.br m_0.merge(%15)
+  try_0.merge(%19: i64, %20: i64):
+    %21 = mir.mov_imm 125 : i64
+    %22 = mir.cmp ugt, %19, %21
+    mir.cond_br %22 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %23 = mir.global_addr @__panic_msg_83b34d5fe5fd0700
+    %24 = mir.call @mrt_panic(%23)
+  __range_ok_0:
+    mir.ret %19
+  }
+}
+---

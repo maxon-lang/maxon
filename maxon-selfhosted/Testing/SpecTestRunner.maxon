@@ -216,11 +216,16 @@ let whitelist = ["basics",
 	"struct-array-get-refcount",
 	"free-function-from-method",
 	"self-field-method-chain",
-	// "rethrow-stashed-self-field" — parser: `Expected '.'` on self union field.
+	// `throw <value>` re-throw form (caught `(e)` binding / stashed payload-union
+	// self field) now parses + lowers correctly — see parseRethrowValue.
+	"throw-transfers-ownership",
+	// "rethrow-stashed-self-field" — re-throw parses now, but the embedded
+	//   `throw Inner.exhausted` literal is a FULLY-bare union whose heap-box
+	//   constructor is gated on a payload-bearing case (parseUnionDecl's
+	//   `unionHasPayload`); a separate no-payload-union-constructor gap.
 	// "heap-field-assignment" (3/5) — runtime stderr for field-overwrite frees.
 	// "pass-by-reference" (8/14) — primitive/struct ref mutation not propagated.
 	// "reference-identity" (1/11) — `is` diagnostic code + clone codegen crash.
-	// "throw-transfers-ownership" (1/2) — parser: `Expected '.'` on self field.
 	// "try-block" (15/31) — block-form try Phase A complete: single-enum
 	//   success/error/array/nested-throw paths all pass (the nested-if/while/match
 	//   use-after-free is FIXED — see parseTryBlock's re-fetched `bodyBlock`).

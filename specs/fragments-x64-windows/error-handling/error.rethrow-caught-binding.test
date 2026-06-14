@@ -1,0 +1,95 @@
+// Test: error.rethrow-caught-binding
+
+typealias Integer = int(i64.min to i64.max)
+
+// Re-throw a caught `(e)` binding from an expression-form `try ... otherwise (e)`
+// handler. `outer` catches `inner`'s error into `e`, then `throw e` re-publishes
+// the SAME error to `outer`'s caller. The propagated variant must survive the
+// hop: `main` distinguishes `low` (1) from `high` (7) by re-throwing it again
+// and matching at the top, proving the ordinal carries through every re-throw.
+enum Fault implements Error
+	low
+	high
+end 'Fault'
+
+function inner() returns Integer throws Fault
+	throw Fault.high
+end 'inner'
+
+function outer() returns Integer throws Fault
+	return try inner() otherwise (e) 'h'
+		throw e
+	end 'h'
+end 'outer'
+
+function main() returns ExitCode
+	var code = 0 as ExitCode
+	try outer() otherwise (e) 'top'
+		match e 'm'
+			low then code = 1
+			high then code = 7
+		end 'm'
+	end 'top'
+	return code
+end 'main'
+---
+ExitCode: 7
+---
+// CompiledIR
+module {
+  func @outer() -> i64 {
+  entry:
+    x64.mov r8d, 2
+    x64.xor r9d, r9d
+  try_0.otherwise:
+    x64.sub r8, 1
+    x64.xor r9d, r9d
+    x64.mov rdx, r8
+    x64.add rdx, 1
+    x64.mov r8, r9
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.call outer
+    x64.xor r9d, r9d
+    x64.test rdx, rdx
+    x64.je __phi_trampoline_0_0
+  try_0.otherwise:
+    x64.sub rdx, 1
+    x64.test rdx, rdx
+    x64.jne m_0.next0
+    x64.jmp m_0.case0
+  m_0.merge:
+    x64.xor r9d, r9d
+    x64.jmp try_0.merge
+  m_0.case0:
+    x64.mov r8d, 1
+    x64.jmp m_0.merge
+  m_0.next0:
+    x64.cmp rdx, 1
+    x64.jne __phi_trampoline_5_0
+  m_0.case1:
+    x64.mov r8d, 7
+    x64.jmp m_0.merge
+  try_0.merge:
+    x64.mov r9d, 4294967295
+    x64.cmp r8, r9
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea r12, [rip+__panic_msg_83b34d5fe5fd0700]
+    x64.mov rcx, r12
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  __phi_trampoline_0_0:
+    x64.xchg r8, r9
+    x64.jmp try_0.merge
+  __phi_trampoline_5_0:
+    x64.mov r8, r9
+    x64.jmp m_0.merge
+  }
+}
+---
