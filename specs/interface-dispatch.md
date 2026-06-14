@@ -204,6 +204,49 @@ end 'main'
 ```
 
 
+<!-- test: dispatch-named-first-arg -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+// An interface (or type-parameter) method call may name its FIRST argument:
+// the receiver dispatches through interface monomorphization, which is
+// receiver-type-dependent and so cannot be ruled out syntactically at parse
+// time. The C# bootstrap accepts this (it routes interface/type-param method
+// calls through a path that silently consumes a first-arg label); the self-
+// hosted parser defers the E2052 check to TypeResolution, which re-applies it
+// only for concrete-struct / enum / builtin receivers. This is the regression
+// guard for that split.
+interface Combiner
+	function combine(first Integer, second Integer) returns Integer
+end 'Combiner'
+
+type Summer implements Combiner
+	let bias as Integer
+
+	function combine(first Integer, second Integer) returns Integer
+		return bias + first + second
+	end 'combine'
+
+	static function create(bias Integer) returns Self
+		return Self{bias: bias}
+	end 'create'
+end 'Summer'
+
+function combineVia(c Combiner) returns Integer
+	return c.combine(first: 12, second: 30)
+end 'combineVia'
+
+function main() returns ExitCode
+	let s = Summer.create(0)
+	return combineVia(s)
+end 'main'
+```
+```exitcode
+42
+```
+
+
 <!-- test: dispatch-multiple-methods -->
 ```maxon
 

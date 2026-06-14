@@ -10080,6 +10080,23 @@ end 'validateQualifiedCallArgLabels'
 
 function validateMethodCallArgLabels(project Project, receiver ByteArray, args ByteArrayArray, argLabels StringArray, argRanges SourceRangeArray, producerTypes ProducerTypeMap, filePath FilePath)
 	let receiverType = lookupProducerType(producerTypes, name: receiver)
+	// E2052 (first arg cannot be named) is deferred from parse time for ALL
+	// method calls because the receiver type isn't known there (parseCallArgsRaw
+	// is invoked with `allowFirstNamed: true`). The C# bootstrap accepts a named
+	// first arg ONLY for interface / type-parameter receivers (which route
+	// through `ParseTypeParamMethodCallStatement`); concrete-struct, enum, and
+	// builtin receivers route through `ParseArgList` / `ParseBuiltinArgs`, both
+	// of which reject it. `methodCallReceiverRejectsNamedFirstArg` replicates
+	// that split. The first user arg is `args[0]` here (the receiver is a
+	// separate op field, not arg slot 0), so its label is `argLabels[0]`.
+	if methodCallReceiverRejectsNamedFirstArg(project, receiverType: receiverType) and args.count() >= 1 'maybeFirstNamed'
+		let firstLabel = try argLabels.get(0) otherwise ""
+		if not firstLabel.isEmpty() 'firstNamed'
+			let firstRange = try argRanges.get(0) otherwise SourceRange.none()
+			reportCompileError(project, code: ErrorCode.parserFirstArgCannotBeNamed, message: "first arg cannot be named", line: firstRange.line, column: firstRange.column, filePath: filePath)
+			return
+		end 'firstNamed'
+	end 'maybeFirstNamed'
 	let structName = try maxonTypeStructName(project, t: receiverType) otherwise ""
 	if structName.isEmpty() 'unresolvedReceiver'
 		// Receiver type didn't resolve through buildProducerTypes — common
@@ -10107,6 +10124,81 @@ function validateMethodCallArgLabels(project Project, receiver ByteArray, args B
 		return
 	end 'each'
 end 'validateMethodCallArgLabels'
+
+// True iff a method call on a receiver of type `receiverType` must reject a
+// named first argument (E2052). Mirrors the C# bootstrap's parse-time split:
+//   - interface / type-parameter receivers route through
+//     `ParseTypeParamMethodCallStatement`, which silently consumes a first-arg
+//     label → a named first arg is ALLOWED → return false.
+//   - concrete struct / enum receivers (`ParseInstanceMethodCallStatement` →
+//     `ParseArgList`) and builtin receivers (`ParseBuiltinArgs` → `ParseArgList`)
+//     reject a named first arg → return true.
+//   - an unresolved receiver (producer type didn't resolve) is treated
+//     conservatively as ALLOWED so the validator never emits a false positive
+//     before the receiver's type is known — matching the unresolved-receiver
+//     early-return that the E3005 path below also relies on.
+function methodCallReceiverRejectsNamedFirstArg(project Project, receiverType MaxonType) returns bool
+	// Interface / type-parameter receivers permit a named first arg (C#
+	// routes them through `ParseTypeParamMethodCallStatement`), so they never
+	// reject. Every other arm falls through to the struct/enum/builtin checks.
+	let isInterfaceOrTypeParam = match receiverType 'recv'
+		interface gives true
+		typeParameter gives true
+		boolean to unresolved gives false
+		genericInstance gives false
+		constInt to cstring gives false
+	end 'recv'
+	if isInterfaceOrTypeParam 'allowNamedFirst'
+		return false
+	end 'allowNamedFirst'
+	// Not an interface / type-parameter. Concrete struct / enum receivers
+	// resolve through `maxonTypeStructName`; recognise those (and reject the
+	// named first arg) regardless of the `__` builtin prefix (the C# bootstrap
+	// rejects a named first arg for builtin methods too).
+	let structName = try maxonTypeStructName(project, t: receiverType) otherwise ""
+	if not structName.isEmpty() 'isStructOrEnum'
+		return true
+	end 'isStructOrEnum'
+	// Builtin receivers (`__ManagedMemory`, `__ManagedList`, … and their
+	// `with`-instantiated generic forms) don't register in structTypes, so
+	// `maxonTypeStructName` returns empty for them. Recognise the builtin by
+	// its `__`-prefixed base name — directly or through a generic-typealias /
+	// inner-alias that chases to a `__`-prefixed type — and reject the named
+	// first arg to match `ParseBuiltinArgs`.
+	if maxonTypeIsBuiltinReceiver(project, t: receiverType) 'isBuiltinRecv'
+		return true
+	end 'isBuiltinRecv'
+	// Unresolved / unknown receiver — conservatively allow.
+	return false
+end 'methodCallReceiverRejectsNamedFirstArg'
+
+// True iff `t` denotes a compiler-builtin receiver type — a `__`-prefixed
+// type either directly, via a generic instance whose base is `__`-prefixed
+// (`__ManagedMemory with Byte`), or via a typealias / struct-inner-alias that
+// resolves to a `__`-prefixed type (`typealias ByteMemory = __ManagedMemory
+// with Byte`). Builtins are recognised by the reserved `__` name prefix.
+function maxonTypeIsBuiltinReceiver(project Project, t MaxonType) returns bool
+	let baseName = t.nameOrEmpty(project)
+	if baseName.startsWith("__") 'directBuiltin'
+		return true
+	end 'directBuiltin'
+	if baseName.isEmpty() 'noName'
+		return false
+	end 'noName'
+	if let resolved = try project.genericTypealiases.get(baseName) 'isGenAlias'
+		if resolved.nameOrEmpty(project).startsWith("__") 'aliasIsBuiltin'
+			return true
+		end 'aliasIsBuiltin'
+	end 'isGenAlias'
+	for (_, st) in project.structTypes 'eachStruct'
+		if let innerResolved = try st.innerAliases.get(baseName) 'innerHit'
+			if innerResolved.nameOrEmpty(project).startsWith("__") 'innerIsBuiltin'
+				return true
+			end 'innerIsBuiltin'
+		end 'innerHit'
+	end 'eachStruct'
+	return false
+end 'maxonTypeIsBuiltinReceiver'
 
 // --- E3059: try/otherwise type-mismatch validation ---
 //

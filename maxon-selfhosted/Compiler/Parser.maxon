@@ -12242,7 +12242,10 @@ export type Parser
 				// the call back to the receiver's pre-try block, orphaning the merge
 				// block (left unterminated → assertAllBlocksTerminated panic).
 				let methodArgsBlock = currentBlock
-				let (argNames, argLabels, argTypes, argRanges) = try parseCallArgsRaw(methodArgsBlock, requireNamed: false)
+				// allowFirstNamed: the receiver may be interface/type-param-typed,
+				// which permits a named first arg; E2052 is re-applied for
+				// concrete-struct receivers in validateMethodCallArgLabels.
+				let (argNames, argLabels, argTypes, argRanges) = try parseCallArgsRaw(methodArgsBlock, requireNamed: false, allowFirstNamed: true)
 				let rparenToken = previousToken()
 				// Tier 4: `p.cancel()` on a promise value is the cancel intrinsic,
 				// not a user method. Emit a void `cancelPromise` op and evaluate to
@@ -12425,7 +12428,11 @@ export type Parser
 					try eat(TokenKind.dot)
 					_ = try consume()
 					try eat(TokenKind.leftParen)
-					let (argNames, argLabels, argTypes, argRanges) = try parseCallArgsRaw(block, requireNamed: false)
+					// allowFirstNamed: method call on a global receiver — the
+					// receiver may be interface/type-param-typed (named first arg
+					// allowed); validateMethodCallArgLabels re-applies E2052 for
+					// concrete-struct receivers. See the parsePostfix site above.
+					let (argNames, argLabels, argTypes, argRanges) = try parseCallArgsRaw(block, requireNamed: false, allowFirstNamed: true)
 					let rparenToken = previousToken()
 					let methodResultName = freshSynthName()
 					// Emit into `currentBlock` — see emitCallAndResult for rationale.
@@ -12450,9 +12457,12 @@ export type Parser
 					_ = try consume()
 					try eat(TokenKind.leftParen)
 					// methodCall on a local receiver — defer the named-arg-required
-					// check (E3005) to TypeResolution. See the parsePostfix
-					// methodCall site above for rationale.
-					let (argNames, argLabels, argTypes, argRanges) = try parseCallArgsRaw(block, requireNamed: false)
+					// check (E3005) AND the first-arg-cannot-be-named check (E2052)
+					// to TypeResolution. The receiver may be interface/type-param-
+					// typed (named first arg allowed); validateMethodCallArgLabels
+					// re-applies E2052 for concrete-struct receivers. See the
+					// parsePostfix methodCall site above for rationale.
+					let (argNames, argLabels, argTypes, argRanges) = try parseCallArgsRaw(block, requireNamed: false, allowFirstNamed: true)
 					let rparenToken = previousToken()
 					// Tier 4: `p.cancel()` on a promise local is the cancel intrinsic.
 					// Emit a void `cancelPromise` op and evaluate to the (discarded)
@@ -13083,7 +13093,23 @@ export type Parser
 	// slotting that lived in parseCallArgsWithSignature.
 	// entry: cursor AT first-arg-first-token OR AT `)` if no args.
 	// exit:  cursor on the token AFTER `)`.
-	function parseCallArgsRaw(block IrBlock, requireNamed bool = true) returns (ByteArrayArray, StringArray, MaxonTypeArray, SourceRangeArray) throws ParserError
+	//
+	// `allowFirstNamed` defers the E2052 "first arg cannot be named" check the
+	// same way `requireNamed: false` defers E3005. Method-call sites
+	// (`receiver.method(...)`) pass `allowFirstNamed: true` because at parse
+	// time the receiver type isn't resolved and a concrete-struct method (which
+	// rejects a named first arg) cannot be told apart from an interface /
+	// type-parameter method (which allows it — mirroring the C# bootstrap's
+	// `ParseTypeParamMethodCallStatement`, whose arg loop silently consumes a
+	// label on any arg including the first). When true, a first-arg label is
+	// captured into the parallel `labels` array (threaded exactly like a
+	// non-first label) instead of being rejected; `validateMethodCallArgLabels`
+	// in TypeResolution re-applies E2052 once the resolved receiver type proves
+	// the call targets a concrete struct/enum/builtin. Free / qualified / enum-
+	// constructor call sites keep `allowFirstNamed: false` — their callee
+	// identity is known at parse time (the C# bootstrap rejects them inline via
+	// `ParseArgList` / `ParseEnumAssociatedValueArgs`).
+	function parseCallArgsRaw(block IrBlock, requireNamed bool = true, allowFirstNamed bool = false) returns (ByteArrayArray, StringArray, MaxonTypeArray, SourceRangeArray) throws ParserError
 		var args = ByteArrayArray.create()
 		var labels = StringArray.create()
 		var argTypes = MaxonTypeArray.create()
@@ -13102,13 +13128,22 @@ export type Parser
 				let argStartPos = cursor.index()
 				let labelOpt = try consumeArgLabel(requireNamed and argIndex >= 1)
 				var labelStr = ""
+				// When a first-arg label is deferred (allowFirstNamed), point the
+				// arg's range at the label token so the TR-side E2052 diagnostic
+				// lands on the `name:` label, matching the C# bootstrap's
+				// `firstLabelToken` position. Otherwise the range starts at the
+				// value expression (post-label).
+				var argRangeStartToken = cursor.current()
 				if labelOpt.hasValue 'hasLabel'
 					labelStr = labelOpt.token.value
-					if argIndex == 0 'firstArgNamed'
+					if argIndex == 0 and not allowFirstNamed 'firstArgNamed'
 						reportCompileError(project, code: ErrorCode.parserFirstArgCannotBeNamed, message: "first arg cannot be named", line: labelOpt.token.line, column: labelOpt.token.column, filePath: filePath)
 					end 'firstArgNamed'
+					if argIndex == 0 and allowFirstNamed 'deferredFirstLabel'
+						argRangeStartToken = labelOpt.token
+					end 'deferredFirstLabel'
 				end 'hasLabel'
-				let argFirstToken = cursor.current()
+				let argFirstToken = argRangeStartToken
 				// E3077: clear the bare-var-read tracker so it reflects ONLY this
 				// argument's expression; after the parse, a non-empty name means
 				// the arg was (or ended in) a local read — mark it as having

@@ -192,3 +192,35 @@ end 'main'
 error E2052: specs/fragments/parameter-labels/error-first-arg-named.test:10:13: first arg cannot be named
 ```
 
+<!-- test: error-method-first-arg-named -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+// A CONCRETE-STRUCT method call rejects a named first arg, exactly like a
+// free-function call. The parser defers E2052 for all method calls (the
+// receiver type isn't known at parse time), and TypeResolution re-applies it
+// once the receiver resolves to a concrete struct. Interface / type-parameter
+// receivers are exempt (see interface-dispatch/dispatch-named-first-arg).
+type Pair
+	let a as Integer
+	let b as Integer
+
+	function combine(first Integer, second Integer) returns Integer
+		return a + b + first + second
+	end 'combine'
+
+	static function create(a Integer, b Integer) returns Self
+		return Self{a: a, b: b}
+	end 'create'
+end 'Pair'
+
+function main() returns ExitCode
+	let p = Pair.create(1, b: 2)
+	return p.combine(first: 3, second: 4)
+end 'main'
+```
+```maxoncstderr
+error E2052: specs/fragments/parameter-labels/error-method-first-arg-named.test:25:19: first arg cannot be named
+```
+
