@@ -181,3 +181,39 @@ end 'main'
 ```exitcode
 1
 ```
+
+
+<!-- test: try-otherwise-value-flow.parenthesized-try-in-if-condition -->
+A parenthesized `(try CALL otherwise VALUE)` used as an `if` condition. The
+bare-`try`-as-if-condition form (`if try f() otherwise … 'l'`) lets the
+if-parser own the success/error split and never consumes an `otherwise`, but
+that special-case applies only to the condition's DIRECT, unparenthesized try.
+Once wrapped in parens, the try is a self-contained boolean value expression
+that must consume its own `otherwise` — so this must parse without an
+"otherwise requires try" (E3058) error.
+```maxon
+typealias Tally = int(0 to 125)
+typealias BoolArray = Array with bool
+
+function countSet(bits BoolArray) returns Tally
+	var n = 0
+	for i in 0 upto bits.count() 'each'
+		if (try bits.get(i) otherwise false) 'set'
+			n = n + 1
+		end 'set'
+	end 'each'
+	return n as Tally
+end 'countSet'
+
+function main() returns ExitCode
+	var b = BoolArray.create()
+	b.push(true)
+	b.push(false)
+	b.push(true)
+	b.push(true)
+	return countSet(b)
+end 'main'
+```
+```exitcode
+3
+```

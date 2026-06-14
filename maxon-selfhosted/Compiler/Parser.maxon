@@ -14661,11 +14661,20 @@ export type Parser
 		// Parenthesized sub-expression: clear `inForInHeader` so an inner
 		// `to`/`upto` lowers to Range.create/OpenRange.create (the for-in
 		// header's range-suppression only applies to the unparenthesized
-		// top-level bounds).
+		// top-level bounds). Likewise clear `inIfCondition`: the
+		// bare-`try`-as-if-condition special-case (parseTryExpression's
+		// `asIfCond` early return, which lets the if-parser own the success/
+		// error split and leaves `otherwise` unconsumed) applies only to the
+		// condition's DIRECT, unparenthesized try. A parenthesized
+		// `(try f() otherwise v)` is a self-contained value expression that
+		// must consume its own `otherwise`, exactly as in any other context.
 		let savedInForInHeader = inForInHeader
+		let savedInIfCondition = inIfCondition
 		inForInHeader = false
+		inIfCondition = false
 		let inner = try parseExpression(block)
 		inForInHeader = savedInForInHeader
+		inIfCondition = savedInIfCondition
 		if not at(TokenKind.comma) 'plainParen'
 			try expect(TokenKind.rightParen)
 			return inner
