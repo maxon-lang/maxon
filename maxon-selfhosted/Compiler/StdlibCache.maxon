@@ -3064,8 +3064,23 @@ function restoreRegistries(project Project, data StdlibCacheData)
 		end 'eachVar'
 		try project.initToStoredVars.insert(initName, value: copiedVars) otherwise ignore
 	end 'eachInitVars'
+	// The captured `info.slotType` carries a `genericInstance`/`named`/etc. id in
+	// the cache's id-space, which generally diverges from this project's
+	// id-space (generic-instance gid numbering is assignment-order-dependent and
+	// is NOT stable across compiles — see BuildLayoutDescriptors). Insert the
+	// info RAW and you keep a stale gid: e.g. `captured` (a `TraceKeyArray =
+	// Array with TraceKey`) is `genericInstance(gid=4)` in the cache, but gid=4
+	// names a DIFFERENT instance in the user project once earlier compiles in the
+	// process interned generics in another order — so `maxonTypeIsHeapManaged`
+	// resolves the wrong base name and `patchMrtStartGlobalCleanup` skips the
+	// teardown decref, leaking the global's final occupant. Translate the
+	// slotType into this project's id-space (the same translation the rest of
+	// `restoreStdlibMetadata` applies to captured types) so the gid is stable
+	// regardless of compilation order.
 	for (varName, info) in data.topLevelVars 'eachTopVar'
-		try project.topLevelVars.insert(varName, value: info) otherwise ignore
+		let translatedSlot = translateMaxonType(project, data: data, t: info.slotType)
+		let translatedInfo = TopLevelVarInfo.create(info.name, slotType: translatedSlot, initialValue: info.initialValue, visibility: info.visibility, sourceFilePath: info.sourceFilePath)
+		try project.topLevelVars.insert(varName, value: translatedInfo) otherwise ignore
 	end 'eachTopVar'
 
 	// Phase 11.4: replay the generic-function implicit-arity map so the

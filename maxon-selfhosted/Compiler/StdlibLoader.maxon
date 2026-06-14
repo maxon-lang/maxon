@@ -468,7 +468,7 @@ end 'parseStdlibSource'
 // helpers) are merged into the user module AFTER the stdlib DFE runs (see
 // `augmentWithRuntime`), so the DFE never sees edges like `mrt_start`→`__slab_init`
 // or `mrt_alloc`→`__mm_alloc` and would prune the Internals bodies — leaving the
-// cache-off / mm-trace bypass leg (empty `stdlibFunctions`) with no definition to
+// cache-off leg (empty `stdlibFunctions`) with no definition to
 // resolve those calls' signatures against. The cache-on linker pulls the same
 // closure transitively from `mrt_start`/`mrt_alloc`, so rooting them keeps the
 // from-source and cached builds' function sets in lockstep. Transitive callees
@@ -513,8 +513,8 @@ export function getStdlibModule(project Project) returns MaxonModule
 	// merged into the user module AFTER the stdlib DFE runs (see
 	// `augmentWithRuntime`), so the stdlib DFE never sees those call edges and
 	// would prune the Internals bodies — leaving `mrt_start`'s `call __slab_init`
-	// with no definition to resolve its signature against (the cache-off /
-	// mm-trace bypass leg, where `stdlibFunctions` is empty). Seeding them as
+	// with no definition to resolve its signature against (the cache-off leg,
+	// where `stdlibFunctions` is empty). Seeding them as
 	// liveness roots keeps the bodies alive through the from-source build. The
 	// cache-on path restores the same roots from `data.livenessRoots`.
 	seedRuntimeBootstrapStdlibRoots(project)

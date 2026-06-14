@@ -3384,11 +3384,11 @@ end
 // Slot usage:
 //   slot 0 = ptr (arg)
 // Delegates to the stdlib `__mm_incref` so refcount maintenance — and its
-// mm-trace instrumentation + pointer-sanity guard — live in ONE place
+// pointer-sanity guard — live in ONE place
 // (stdlib/Internals.maxon). The runtime.std `mrt_*` wrappers and any legacy
 // `mm_incref` call sites route through here; the lowering's direct
 // `stdlib.__mm_incref` calls hit the same body. Keeping both names as one
-// implementation prevents the traced/untraced split that previously left
+// implementation prevents the split that previously left
 // scope-exit decrefs (via `__mm_decref_maybenull_helper`→`mm_decref`) untraced.
 func mm_incref 1 void
   block entry:
@@ -3577,8 +3577,7 @@ end
 //   slot 1 = slot_base (= ptr - 24)
 //   slot 2 = destructor (read from [ptr - 24], 0 means "no destructor")
 // Delegates to the stdlib `__mm_free` (single source of truth — runs the
-// destructor, decrements __mm_alloc_count, slab-frees, and emits the
-// mm-trace `mm_free`/`sl_free` nesting). See `mm_incref`.
+// destructor, decrements __mm_alloc_count, and slab-frees). See `mm_incref`.
 func mm_free 1 void
   block entry:
     v0 = std param 0 i64

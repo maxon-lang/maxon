@@ -254,9 +254,9 @@ export function concatX64FunctionChunks(project Project, chunks FunctionCodeChun
 	// a metadata-only cold cache is valid but starts with zero compiled
 	// functions, and the linker (via `ensureStdlibFunctionsCompiled`) is what
 	// fills them. The old count gate would skip the link pass on a cold cache
-	// and leave every stdlib call unresolved. The cache-bypassed path
-	// (`--mm-trace`) is `isStdlibCacheValid() == false` → still skipped, with
-	// stdlib supplied from the user module instead.
+	// and leave every stdlib call unresolved. A cache-invalid build
+	// (`isStdlibCacheValid() == false`) is still skipped here, with stdlib
+	// supplied from the user module instead.
 	if isStdlibCacheValid() 'hasStdlib'
 		linkX64StdlibFunctionsConcat(project, code: code, labelNames: funcLabelNames, labelOffsets: funcLabelOffsets, labelOffsetMap: funcLabelOffsetMap, callFixups: callFixups, rdataRelocs: rdataRelocs, relocations: relocations, globalData: globalData, stdlibCache: stdlibCache, os: os)
 	end 'hasStdlib'
@@ -8586,7 +8586,7 @@ let IoSyncOpFileOpenWriteExec = 15
 let IoSyncOpShutdown = 0xFF
 
 // Number of sync-worker OS threads. Matches the C# bootstrap's IoSyncWorkerCount=1
-// (the shutdown-sentinel count the mm-trace tests assert on follows from it).
+// (the per-worker shutdown-sentinel count follows from it).
 let IoSyncWorkerCount = 1
 
 // Top-level driver: emit every async-I/O IOCP runtime function. Registered in the
