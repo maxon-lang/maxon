@@ -1,0 +1,61 @@
+// Test: try-block-forward-declared-throwing-call
+enum BumpError implements Error
+		tooBig
+end 'BumpError'
+
+function run() returns ExitCode
+		try 'work'
+				step()
+		end 'work' otherwise (e) 'bad'
+				match e 'kind'
+						tooBig then return 7
+				end 'kind'
+		end 'bad'
+		return 3
+end 'run'
+
+function step() throws BumpError
+		throw BumpError.tooBig
+end 'step'
+
+function main() returns ExitCode
+		return run()
+end 'main'
+---
+ExitCode: 7
+---
+// CompiledIR
+module {
+  func @run() -> u8 {
+  entry:
+    %17 = mir.mov_imm 1 : i64
+    mir.br tryblock_0.err()
+  tryblock_0.err:
+    %6 = mir.mov_imm 1 : i64
+    %7 = mir.sub.i64 %17, %6
+    %9 = mir.mov_imm 0 : i64
+    %10 = mir.cmp eq, %7, %9
+    mir.cond_br %10 [then: kind_0.case0(), else: kind_0.next0()]
+  kind_0.case0:
+    %12 = mir.mov_imm 7 : i64
+    mir.ret %12
+  kind_0.next0:
+    %13 = mir.global_addr @__panic_msg_96c7daeb3f9a871f
+    %14 = mir.call @mrt_panic(%13)
+    %15 = mir.mov_imm 0 : i64
+    mir.ret %15
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.call @run()
+    %1 = mir.mov_imm 125 : i64
+    %2 = mir.cmp ugt, %0, %1
+    mir.cond_br %2 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %3 = mir.global_addr @__panic_msg_6b6630ef527ac541
+    %4 = mir.call @mrt_panic(%3)
+  __range_ok_0:
+    mir.ret %0
+  }
+}
+---

@@ -74,6 +74,10 @@ typealias UnicodeCodepoint = int(0 to 0x10FFFF)
 // when the parser needs to qualify a method call on `m`.
 typealias ScanDepth = int(0 to 8)
 
+// Block-nesting depth for the throws-clause header prescan (`prescanFunctionThrows`).
+typealias PrescanDepth = int(0 to u64.max)
+typealias PrescanDepthArray = Array with PrescanDepth
+
 // Stage E (closures): one entry per distinct outer-scope name captured by
 // a closure body. The parser appends to `closureCaptures` in first-reference
 // order so `index` doubles as the env-array slot at lowering time. Capture
@@ -538,6 +542,17 @@ export type Parser
 	export function parseModule() returns MaxonModule throws ParserError
 		logDebug(LogCategory.parser, message: function() gives "parser: module={filePath}")
 
+		// Header prescan: register every `function ... throws E` clause (free
+		// functions and type/extension methods) BEFORE the main body parse runs.
+		// The main parse is single-pass top-to-bottom, so without this a body that
+		// references a sibling/free throwing function declared LATER in the file
+		// can't see its throws clause at parse time. That breaks block-form-try
+		// routing (`try 'l' ... end` whose body bare-calls a forward-declared
+		// throwing function): the routing scan can't tell the call throws, so it
+		// wrongly reports E3083 "try block contains no throwing calls". Mirrors the
+		// C# bootstrap's `PreScanFunction` pass. See `prescanFunctionThrows`.
+		prescanFunctionThrows()
+
 		// Stream-style dispatch: each helper exits past its last-consumed token.
 		// Use skipOptionalNewlines (vs skipNewlines) since trailing newlines at
 		// EOF are normal at top level — they're just blank lines after the last
@@ -603,6 +618,200 @@ export type Parser
 
 		return module
 	end 'parseModule'
+
+	// Header prescan that registers `funcThrowsTypes` for every throwing
+	// `function`/method declared in this file, so the single-pass main parse can
+	// resolve a try-block body call to a forward-declared throwing sibling/free
+	// function. Mirrors the C# bootstrap's `PreScanFunction`, but registers ONLY
+	// the throws clause (return types, signatures, and overload mangling stay
+	// with the main parse). We never overwrite an existing entry, so the main
+	// parse's later `funcThrowsTypes.insert` simply no-ops on what we seeded.
+	//
+	// Implementation: a depth-balanced linear walk over the token stream. We do
+	// NOT skip function bodies — bodies contain no `function IDENT(` patterns
+	// (closures are the nameless `function(` shape), so a forward scan finds
+	// exactly the declaration headers. `depth` counts open `end`-bearing blocks
+	// so the type/extension stack can pop when a type body closes. Interface
+	// method signatures carry no body (no `end`), so they do not open a block.
+	function prescanFunctionThrows()
+		let tokenCount = tokens.count()
+		// Parallel stacks: typeName + isInterface, keyed by the depth at which the
+		// type/extension/interface block opened. Popped when `depth` falls back to
+		// that opening depth.
+		var typeNameStack = StringArray.create()
+		var typeOpenDepthStack = PrescanDepthArray.create()
+		var typeIsInterfaceStack = BoolArray.create()
+		var depth = 0 as PrescanDepth
+		var i = 0 as ElementCount
+		while i < tokenCount 'scan'
+			let tok = try tokens.get(i) otherwise break
+			let kind = tok.kind
+			// Pop any type/extension/interface whose block has closed.
+			while typeOpenDepthStack.count() > 0 and depth < (try typeOpenDepthStack.get(typeOpenDepthStack.count() - 1) otherwise 0 as PrescanDepth) 'popClosed'
+				_ = try typeNameStack.pop() otherwise break
+				_ = try typeOpenDepthStack.pop() otherwise break
+				_ = try typeIsInterfaceStack.pop() otherwise break
+			end 'popClosed'
+			if kind == TokenKind.type or kind == TokenKind.extension or kind == TokenKind.interface or kind == TokenKind.enum or kind == TokenKind.union 'typeOpener'
+				let nameTok = try tokens.get(i + 1) otherwise Token.eof()
+				if nameTok.kind == TokenKind.identifier 'haveTypeName'
+					typeNameStack.push(nameTok.value)
+				end 'haveTypeName' else 'noTypeName'
+					// Defensive: a malformed opener without a following identifier
+					// still opens a block we must balance, with no usable type name.
+					typeNameStack.push("")
+				end 'noTypeName'
+				typeOpenDepthStack.push(depth + 1)
+				typeIsInterfaceStack.push(kind == TokenKind.interface)
+				depth = depth + 1
+				i = i + 1
+				continue
+			end 'typeOpener'
+			if kind == TokenKind.function 'maybeFuncDecl'
+				let nameTok = try tokens.get(i + 1) otherwise Token.eof()
+				let afterName = try tokens.get(i + 2) otherwise Token.eof()
+				// A declaration is `function IDENT (`; a closure literal is the
+				// nameless `function (` shape and is skipped (it carries no `end`).
+				if nameTok.kind == TokenKind.identifier and afterName.kind == TokenKind.leftParen 'isFuncDecl'
+					let insideInterface = typeIsInterfaceStack.count() > 0 and (try typeIsInterfaceStack.get(typeIsInterfaceStack.count() - 1) otherwise false)
+					prescanRegisterFuncThrows(nameTok, headerStart: i + 2, owningType: prescanCurrentOwningType(typeNameStack))
+					// Interface method signatures are bodiless (no matching `end`),
+					// so they do NOT open a block. Type/extension methods and free
+					// functions do.
+					if not insideInterface 'opensBlock'
+						depth = depth + 1
+					end 'opensBlock'
+				end 'isFuncDecl'
+				i = i + 1
+				continue
+			end 'maybeFuncDecl'
+			if kind == TokenKind.if or kind == TokenKind.while or kind == TokenKind.for or kind == TokenKind.match 'blockOpener'
+				depth = depth + 1
+				i = i + 1
+				continue
+			end 'blockOpener'
+			if kind == TokenKind.else 'elseReopen'
+				// `end 'x' else ...` — the `end` already decremented; `else`
+				// reopens a block. `else if` is one block, so skip a trailing `if`
+				// to avoid double-counting.
+				depth = depth + 1
+				let nextTok = try tokens.get(i + 1) otherwise Token.eof()
+				if nextTok.kind == TokenKind.if 'elseIf'
+					i = i + 2
+					continue
+				end 'elseIf'
+				i = i + 1
+				continue
+			end 'elseReopen'
+			if kind == TokenKind.try 'maybeTryBlock'
+				// Block-form `try 'label' ... end` carries an `end`; the label is a
+				// charLiteral. Single-line `try expr otherwise ...` has no label and
+				// no `end`, so it opens no block.
+				let labelTok = try tokens.get(i + 1) otherwise Token.eof()
+				if labelTok.kind == TokenKind.charLiteral 'isBlockTry'
+					depth = depth + 1
+				end 'isBlockTry'
+				i = i + 1
+				continue
+			end 'maybeTryBlock'
+			if kind == TokenKind.end 'closeBlock'
+				if depth > 0 'haveDepth'
+					depth = depth - 1
+				end 'haveDepth'
+				i = i + 1
+				continue
+			end 'closeBlock'
+			i = i + 1
+		end 'scan'
+	end 'prescanFunctionThrows'
+
+	// Owning type for a method header during the throws prescan: the innermost
+	// open type/extension/interface name, or "" when at top level (a free
+	// function). Empty entries (malformed openers) read back as "" and so route
+	// to the free-function qualification path.
+	function prescanCurrentOwningType(typeNameStack StringArray) returns String
+		if typeNameStack.count() == 0 'topLevel'
+			return ""
+		end 'topLevel'
+		return try typeNameStack.get(typeNameStack.count() - 1) otherwise ""
+	end 'prescanCurrentOwningType'
+
+	// Scan a function header (`headerStart` indexes the opening `(`) for a
+	// `throws E` clause and, when present, seed `funcThrowsTypes` for the
+	// qualified callee. Balances parens across the parameter list, then looks for
+	// `throws IDENT` before the header's terminating newline. Only seeds when no
+	// entry exists yet and the function actually throws — a missing entry already
+	// means "does not throw", and seeding `none` could shadow the overload-bucket
+	// fallback in `resolveThrowsClauseForCallee`.
+	function prescanRegisterFuncThrows(nameToken Token, headerStart ElementCount, owningType String)
+		let tokenCount = tokens.count()
+		var j = headerStart
+		var parenDepth = 0
+		var sawParams = false
+		// Walk the parameter list, balancing parens.
+		while j < tokenCount 'params'
+			let tok = try tokens.get(j) otherwise return
+			if tok.kind == TokenKind.leftParen 'open'
+				parenDepth = parenDepth + 1
+				sawParams = true
+			end 'open'
+			if tok.kind == TokenKind.rightParen 'close'
+				parenDepth = parenDepth - 1
+				if parenDepth == 0 'paramsDone'
+					j = j + 1
+					break
+				end 'paramsDone'
+			end 'close'
+			j = j + 1
+		end 'params'
+		if not sawParams 'noParams'
+			return
+		end 'noParams'
+		// After the parameter list: scan the remaining header tokens (up to the
+		// terminating newline) for a `throws E` clause. `returns T` and `where ...`
+		// may sit in between; we only act on the `throws` keyword.
+		while j < tokenCount 'header'
+			let tok = try tokens.get(j) otherwise return
+			if tok.kind == TokenKind.newline 'endOfHeader'
+				return
+			end 'endOfHeader'
+			if tok.kind == TokenKind.throws 'haveThrows'
+				let errTok = try tokens.get(j + 1) otherwise return
+				if errTok.kind != TokenKind.identifier 'noErrName'
+					return
+				end 'noErrName'
+				let qualified = prescanQualifiedFuncName(nameToken.value, owningType: owningType)
+				prescanSeedFuncThrows(qualified, errorTypeName: errTok.value)
+				return
+			end 'haveThrows'
+			j = j + 1
+		end 'header'
+	end 'prescanRegisterFuncThrows'
+
+	// Qualify a prescanned function name the same way `parseFunction` does: a
+	// method becomes `TypeName.method`; a free `main` stays bare; any other free
+	// function gets the file namespace prefix.
+	function prescanQualifiedFuncName(name String, owningType String) returns String
+		if not owningType.isEmpty() 'isMethod'
+			return "{owningType}.{name}"
+		end 'isMethod'
+		if name == "main" 'isMain'
+			return name
+		end 'isMain'
+		return qualifyName(namespace, name: name)
+	end 'prescanQualifiedFuncName'
+
+	// Seed one `funcThrowsTypes` entry from the prescan. No-ops when an entry
+	// already exists (so a later main-parse registration is authoritative) and
+	// records the key in the file's parse delta so an incremental re-parse rolls
+	// it back alongside the main-parse inserts.
+	function prescanSeedFuncThrows(qualified String, errorTypeName String)
+		if project.funcThrowsTypes.contains(qualified) 'present'
+			return
+		end 'present'
+		try project.funcThrowsTypes.insert(qualified, value: ThrowsClause.throwing(errorTypeName)) otherwise return
+		recordFuncThrowsInsert(project, filePath: filePath, key: qualified)
+	end 'prescanSeedFuncThrows'
 
 	// E3062: every file-private `typealias` recorded in this Parser must be
 	// referenced explicitly somewhere in the file. Implicit uses inferred from
@@ -11630,12 +11839,10 @@ export type Parser
 	// expressions whose intermediate types are still unresolved).
 	function qualifyMethodCalleeFromReceiver(receiver ByteArray, methodName String, scanFrom OpIndex) returns String
 		let receiverType = scanProducerTypeForName(receiver, scanFrom: scanFrom)
-		logTrace(LogCategory.parser, message: function() gives "qualifyMethodCalleeFromReceiver: receiver='{String.from(receiver)}' methodName='{methodName}' scanFrom={scanFrom} receiverType.kind='{receiverType.name}'")
 		if isUnresolvedType(receiverType) 'unresolved'
 			return methodName
 		end 'unresolved'
 		let structName = try maxonTypeStructName(project, t: receiverType) otherwise return methodName
-		logTrace(LogCategory.parser, message: function() gives "qualifyMethodCalleeFromReceiver: structName='{structName}' -> '{structName}.{methodName}'")
 		return "{structName}.{methodName}"
 	end 'qualifyMethodCalleeFromReceiver'
 
@@ -17545,18 +17752,46 @@ export function maxonTypeStructName(project Project, t MaxonType) returns String
 	// to recover the underlying struct name (`Array`) so field/method
 	// lookups against the alias work the same as against the base type.
 	if let aliased = try project.genericTypealiases.get(nameStr) 'haveAlias'
-		let aliasedName = aliased.nameOrEmpty(project)
-		if not aliasedName.isEmpty() 'haveAliasName'
-			if project.structTypes.contains(aliasedName) 'aliasIsStruct'
-				return aliasedName
-			end 'aliasIsStruct'
-			if project.enumTypes.contains(aliasedName) or project.unresolvedEnums.contains(aliasedName) 'aliasIsEnum'
-				return aliasedName
-			end 'aliasIsEnum'
-		end 'haveAliasName'
+		return try structOrEnumNameForAliasBase(project, aliasedName: aliased.nameOrEmpty(project))
 	end 'haveAlias'
+	// Parse-time generic typealias: a `typealias IntArray = Array with Code`
+	// declared in the file currently being parsed has NOT yet been drained
+	// into `genericTypealiases` (TypeResolution does that later) -- it still
+	// lives in `unresolvedTypealiases` as an RHS expression. Receivers typed
+	// via such an alias (e.g. a parameter `a IntArray`) reach a parse-time
+	// methodCall qualifier before resolution runs, so chase the unresolved
+	// RHS here too. Without this, a bare `a.get(...)` inside a block-form try
+	// can't have its `Array.get` throws clause resolved at parse, and the
+	// routing scan misses the throwing call -- a false E3083.
+	if let entry = try project.unresolvedTypealiases.get(nameStr) 'haveUnresolvedAlias'
+		if isGenericAliasExpr(entry.expr) 'isGeneric'
+			let resolved = resolveGenericAliasExpr(project, expr: entry.expr, declaringTypeName: "")
+			return try structOrEnumNameForAliasBase(project, aliasedName: resolved.nameOrEmpty(project))
+		end 'isGeneric'
+	end 'haveUnresolvedAlias'
 	throw MaxonTypeStructNameError.notAStruct
 end 'maxonTypeStructName'
+
+// Given the base name a generic typealias resolves to (`Array`, an enum
+// name, ...), return it iff it names a known struct or enum across both the
+// resolved (`structTypes` / `enumTypes`) and parse-time-unresolved
+// (`unresolvedStructTypes` / `unresolvedEnums`) registries. Throws
+// `notAStruct` when the base name is empty or names neither -- letting the
+// caller propagate the same conservative miss. Shared by the resolved-alias
+// (`genericTypealiases`) and parse-time-alias (`unresolvedTypealiases`) chase
+// branches of `maxonTypeStructName`.
+export function structOrEnumNameForAliasBase(project Project, aliasedName String) returns String throws MaxonTypeStructNameError
+	if aliasedName.isEmpty() 'noName'
+		throw MaxonTypeStructNameError.notAStruct
+	end 'noName'
+	if project.structTypes.contains(aliasedName) or project.unresolvedStructTypes.contains(aliasedName) 'aliasIsStruct'
+		return aliasedName
+	end 'aliasIsStruct'
+	if project.enumTypes.contains(aliasedName) or project.unresolvedEnums.contains(aliasedName) 'aliasIsEnum'
+		return aliasedName
+	end 'aliasIsEnum'
+	throw MaxonTypeStructNameError.notAStruct
+end 'structOrEnumNameForAliasBase'
 
 // Create a block that is not added to the function's block list.
 // Used as a sink for dead code after fully-terminated if/else branches.

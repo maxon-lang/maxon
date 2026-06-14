@@ -79,3 +79,62 @@ end 'main'
 ```exitcode
 7
 ```
+
+<!-- test: try-block-throwing-method-on-param-array -->
+Block-form `try 'l' ... end 'l' otherwise (e) ...` whose body bare-calls a throwing method (Array.get/Array.set) on a PARAMETER-typed array receiver routes to the shared handler — the parser must recover the receiver's struct type through its generic typealias to find Array.get's throws clause.
+```maxon
+typealias Code = int(0 to 125)
+typealias CodeArray = Array with Code
+
+function bump(a CodeArray)
+		try 'update'
+				let old = a.get(0)
+				a.set(0, value: old + 1)
+		end 'update' otherwise (e) 'bad'
+				match e 'kind'
+						indexOutOfBounds then panic("oob")
+						emptySlot then panic("empty")
+				end 'kind'
+		end 'bad'
+end 'bump'
+
+function main() returns ExitCode
+		var a = CodeArray.create()
+		a.push(41)
+		bump(a)
+		return try a.get(0) otherwise 99
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: try-block-forward-declared-throwing-call -->
+Block-form `try` body that bare-calls a free function declared LATER in the file: the header prescan registers the forward function's throws clause so the body's call is recognized as throwing (no false E3083).
+```maxon
+enum BumpError implements Error
+		tooBig
+end 'BumpError'
+
+function run() returns ExitCode
+		try 'work'
+				step()
+		end 'work' otherwise (e) 'bad'
+				match e 'kind'
+						tooBig then return 7
+				end 'kind'
+		end 'bad'
+		return 3
+end 'run'
+
+function step() throws BumpError
+		throw BumpError.tooBig
+end 'step'
+
+function main() returns ExitCode
+		return run()
+end 'main'
+```
+```exitcode
+7
+```

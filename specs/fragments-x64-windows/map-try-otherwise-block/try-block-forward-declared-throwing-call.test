@@ -1,0 +1,65 @@
+// Test: try-block-forward-declared-throwing-call
+enum BumpError implements Error
+		tooBig
+end 'BumpError'
+
+function run() returns ExitCode
+		try 'work'
+				step()
+		end 'work' otherwise (e) 'bad'
+				match e 'kind'
+						tooBig then return 7
+				end 'kind'
+		end 'bad'
+		return 3
+end 'run'
+
+function step() throws BumpError
+		throw BumpError.tooBig
+end 'step'
+
+function main() returns ExitCode
+		return run()
+end 'main'
+---
+ExitCode: 7
+---
+// CompiledIR
+module {
+  func @run() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov r8d, 1
+  tryblock_0.err:
+    x64.sub r8, 1
+    x64.test r8, r8
+    x64.jne kind_0.next0
+  kind_0.case0:
+    x64.mov r8d, 7
+    x64.epilogue
+    x64.ret
+  kind_0.next0:
+    x64.lea r12, [rip+__panic_msg_96c7daeb3f9a871f]
+    x64.mov rcx, r12
+    x64.call mrt_panic
+    x64.xor r8d, r8d
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.call run
+    x64.mov r9d, 4294967295
+    x64.cmp r8, r9
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea r12, [rip+__panic_msg_6b6630ef527ac541]
+    x64.mov rcx, r12
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+---
