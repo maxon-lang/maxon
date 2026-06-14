@@ -113,20 +113,6 @@ var lazyStdlibFuncEdges = CachedFuncEdgeMap.create()
 // missing-set computation without rescanning the function array each link.
 var lazyCompiledStdlibNames = StdlibFuncNameSet.create()
 
-// Gate for persisting the user-path lazy-codegen growth back to the on-disk
-// cache. Safe ONLY when the stdlib metadata was captured in the SAME project
-// that is now compiling user code — true for a single-project CLI `maxon
-// build` (the stdlib cache is built in the user's own project, so its
-// `topLevelConstants` string ids are valid in that project's interner for
-// re-serialization). FALSE for the spec runner / in-memory compiles, where
-// stdlib is built in a warmup project and fragments compile in separate
-// worker projects whose interner lacks those ids — re-serializing there
-// panics in `writeConstantValue`. `compile()` (the CLI path) sets this true.
-var stdlibCachePersistAllowed = false
-
-export function setStdlibCachePersistAllowed(allowed bool)
-	stdlibCachePersistAllowed = allowed
-end 'setStdlibCachePersistAllowed'
 
 // Process-wide accessor for the parsed stdlib MaxonModule (the Maxon-IR
 // shape of every stdlib function body whitelisted by `stdlibWhitelist`).
@@ -1422,13 +1408,13 @@ export function ensureStdlibFunctionsCompiled(project Project, seeds StringArray
 		end 'gap'
 	end 'verify'
 
-	// Persist the grown cache so the NEXT build reuses the just-compiled
-	// bytecode (zero regalloc). Only safe from a single-project CLI build (see
-	// `stdlibCachePersistAllowed`); the spec runner's cross-project workers
-	// leave it false and recompile in-process each run (no on-disk growth).
-	if stdlibCachePersistAllowed 'persist'
-		persistGrownStdlibCache(project)
-	end 'persist'
+	// Persist the grown cache so the NEXT build — in ANY process, including the
+	// spec runner's cross-project workers — reuses the just-compiled bytecode
+	// (zero regalloc). Safe from any project since Phase 3.5 made the cache codec
+	// project-independent. Only reached when functions were actually compiled
+	// (the fully-warm hit returns early above), so steady state writes nothing;
+	// `writeFileAtomic` makes concurrent writers last-writer-wins, never torn.
+	persistGrownStdlibCache(project)
 
 	recordPassSince("__stdlib-lazyCodegen", startMs: lazyStart)
 	// `lazyCompiledStdlibNames` counts entries that now carry REAL machine code;
