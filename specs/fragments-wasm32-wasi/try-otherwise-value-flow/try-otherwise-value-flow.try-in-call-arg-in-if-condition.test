@@ -1,0 +1,82 @@
+// Test: try-otherwise-value-flow.try-in-call-arg-in-if-condition
+typealias Octet = int(0 to 255)
+typealias OctetArray = Array with Octet
+
+function isBig(b Octet) returns bool
+	return b > 100
+end 'isBig'
+
+function check(bytes OctetArray, i Octet) returns ExitCode
+	if isBig(try bytes.get(i) otherwise 0) 'big'
+		return 1
+	end 'big'
+	return 0
+end 'check'
+
+function main() returns ExitCode
+	var a = OctetArray.create()
+	a.push(200)
+	return check(a, i: 0)
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @check(local0: i64, local1: u8) -> u8 {
+  entry:
+    %16 = mir.param local0 : i64
+    %17 = mir.param local1 : u8
+    mir.br inlined_Array.get_0_0()
+  inlined_Array.get_0_0:
+    %18 = mir.load %16, 0 width: qword
+    %19, %20 = mir.try_call @stdlib.__managed_mem_get(%18, %17)
+    %21 = mir.mov_imm 0 : i64
+    %22 = mir.cmp ne, %20, %21
+    mir.cond_br %22 [then: inlined_Array.get_1_0(), else: inlined_Array.get_3_0()]
+  inlined_Array.get_1_0:
+    %23 = mir.mov_imm 0 : i64
+    %24 = mir.mov_imm 1 : i64
+    mir.br inline_cont_check_0(%23, %24)
+  inlined_Array.get_3_0:
+    %25 = mir.mov_imm 0 : i64
+    mir.br inline_cont_check_0(%19, %25)
+  inline_cont_check_0(%26: i64, %27: i64):
+    %7 = mir.mov_imm 0 : i64
+    %8 = mir.cmp ne, %27, %7
+    mir.cond_br %8 [then: try_0.otherwise(), else: try_0.merge(%26)]
+  try_0.otherwise:
+    %10 = mir.mov_imm 0 : i64
+    mir.br try_0.merge(%10)
+  try_0.merge(%15: i64):
+    %28 = mir.mov_imm 100 : i64
+    %29 = mir.cmp gt, %15, %28
+    mir.cond_br %29 [then: big_0(), else: big_0.after()]
+  big_0:
+    %13 = mir.mov_imm 1 : i64
+    mir.ret %13
+  big_0.after:
+    %14 = mir.mov_imm 0 : i64
+    mir.ret %14
+  }
+  func @main() -> u8 {
+  entry:
+    %1 = mir.global_addr @__layout_Array_Octet
+    %2 = mir.call @Array.create(%1)
+    %4 = mir.mov_imm 200 : i64
+    %5 = mir.global_addr @__layout_Array_Octet
+    %6 = mir.call @Array.push(%2, %4, %5)
+    %8 = mir.mov_imm 0 : i64
+    %9 = mir.call @check(%2, %8)
+    %10 = mir.call @__mm_decref_maybenull_helper(%2)
+    %11 = mir.mov_imm 125 : i64
+    %12 = mir.cmp ugt, %9, %11
+    mir.cond_br %12 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %13 = mir.global_addr @__panic_msg_d7bd7685b91967e4
+    %14 = mir.call @mrt_panic(%13)
+  __range_ok_0:
+    mir.ret %9
+  }
+}
+---

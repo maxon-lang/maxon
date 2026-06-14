@@ -217,3 +217,37 @@ end 'main'
 ```exitcode
 3
 ```
+
+
+<!-- test: try-otherwise-value-flow.try-in-call-arg-in-if-condition -->
+A `try CALL otherwise VALUE` used as a CALL ARGUMENT inside an `if` condition.
+The bare-`try`-as-if-condition special-case (parseTryExpression's `asIfCond`
+early return, which leaves `otherwise` unconsumed) applies only to the
+condition's DIRECT top-level try. A try nested inside a call argument is a
+self-contained value that must consume its own `otherwise` — so this must parse
+without an "otherwise requires try" (E3058) error. Mirrors the compiler's own
+`validateEscapes` (`if ... not isHexDigitByte(try bytes.get(i + 2) otherwise 0)`).
+```maxon
+typealias Octet = int(0 to 255)
+typealias OctetArray = Array with Octet
+
+function isBig(b Octet) returns bool
+	return b > 100
+end 'isBig'
+
+function check(bytes OctetArray, i Octet) returns ExitCode
+	if isBig(try bytes.get(i) otherwise 0) 'big'
+		return 1
+	end 'big'
+	return 0
+end 'check'
+
+function main() returns ExitCode
+	var a = OctetArray.create()
+	a.push(200)
+	return check(a, i: 0)
+end 'main'
+```
+```exitcode
+1
+```

@@ -13495,7 +13495,18 @@ export type Parser
 				// the arg was (or ended in) a local read — mark it as having
 				// exercised its mutability, since the callee may mutate it.
 				lastExprVarRefName = ""
+				// A call argument is a self-contained value expression. Clear
+				// `inIfCondition` across it so a `try X otherwise Y` nested inside
+				// an argument (e.g. `if isBig(try a.get(i) otherwise 0) 'l'`)
+				// consumes its own `otherwise` instead of taking
+				// parseTryExpression's if-condition early-return (which leaves
+				// `otherwise` dangling → E3058 + cascade E2010). The
+				// bare-try-as-if-condition special case applies only to the
+				// condition's DIRECT top-level try — same rationale as parseParenExpr.
+				let savedInIfConditionArg = inIfCondition
+				inIfCondition = false
 				let argResult = try parseExpression(currentBlock)
+				inIfCondition = savedInIfConditionArg
 				if not lastExprVarRefName.isEmpty() 'argIsVarRead'
 					markVarReassigned(lastExprVarRefName)
 				end 'argIsVarRead'
