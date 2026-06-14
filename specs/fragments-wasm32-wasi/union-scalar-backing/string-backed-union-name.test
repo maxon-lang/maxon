@@ -1,0 +1,81 @@
+// Test: string-backed-union-name
+union Mnemonic
+	add = "mir.add.i64"
+	sub = "mir.sub.i64"
+end 'Mnemonic'
+
+function main() returns ExitCode
+	let m = Mnemonic.sub
+	if m.rawValue == "mir.sub.i64" and m.name == "sub" 'ok'
+		return 3
+	end 'ok'
+	return 1
+end 'main'
+---
+ExitCode: 3
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 1 : i64
+    %2 = mir.call @__enum_Mnemonic_rawString(%0)
+    %3 = mir.global_addr @__istr_0
+    %4 = mir.mov_imm 48 : i64
+    %5 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %6 = mir.call @mrt_alloc_with_dtor(%4, %5)
+    %7 = mir.mov_imm 0 : i64
+    mir.store %7, %6, 40 width: qword
+    mir.store %3, %6, 0 width: qword
+    %8 = mir.mov_imm 11 : i64
+    mir.store %8, %6, 8 width: qword
+    %9 = mir.mov_imm -2 : i64
+    mir.store %9, %6, 16 width: qword
+    mir.store %0, %6, 24 width: qword
+    %11 = mir.mov_imm 0 : i64
+    mir.store %11, %6, 32 width: qword
+    %13 = mir.mov_imm 16 : i64
+    %14 = mir.func_addr @__destruct_String
+    %12 = mir.call @stdlib.__mm_alloc(%13, %14)
+    mir.store %6, %12, 0 width: qword
+    mir.store %0, %12, 8 width: qword
+    %16 = mir.call @String.equals(%2, %12)
+    %38 = mir.call @mm_drop(%12)
+    %17 = mir.mov_imm 0 : i64
+    %39 = mir.call @__mm_decref_maybenull_helper(%2)
+    mir.cond_br %16 [then: shortAnd.rhs(), else: shortAnd.merge(%17)]
+  shortAnd.rhs:
+    %19 = mir.call @__enum_Mnemonic_name(%0)
+    %20 = mir.global_addr @__istr_1
+    %21 = mir.mov_imm 48 : i64
+    %22 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %23 = mir.call @mrt_alloc_with_dtor(%21, %22)
+    %24 = mir.mov_imm 0 : i64
+    mir.store %24, %23, 40 width: qword
+    mir.store %20, %23, 0 width: qword
+    %25 = mir.mov_imm 3 : i64
+    mir.store %25, %23, 8 width: qword
+    %26 = mir.mov_imm -2 : i64
+    mir.store %26, %23, 16 width: qword
+    mir.store %0, %23, 24 width: qword
+    %28 = mir.mov_imm 0 : i64
+    mir.store %28, %23, 32 width: qword
+    %30 = mir.mov_imm 16 : i64
+    %31 = mir.func_addr @__destruct_String
+    %29 = mir.call @stdlib.__mm_alloc(%30, %31)
+    mir.store %23, %29, 0 width: qword
+    mir.store %0, %29, 8 width: qword
+    %33 = mir.call @String.equals(%19, %29)
+    %41 = mir.call @__mm_decref_maybenull_helper(%19)
+    %40 = mir.call @mm_drop(%29)
+    mir.br shortAnd.merge(%33)
+  shortAnd.merge(%37: i64):
+    mir.cond_br %37 [then: ok_0(), else: ok_0.after()]
+  ok_0:
+    %35 = mir.mov_imm 3 : i64
+    mir.ret %35
+  ok_0.after:
+    mir.ret %0
+  }
+}
+---

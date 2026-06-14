@@ -114,6 +114,28 @@ function unionHasManagedPayload(project Project, unionType EnumType) returns boo
 	return false
 end 'unionHasManagedPayload'
 
+// A union is HEAP-BOXED iff `isUnion` AND at least one case carries a payload.
+// A pure-scalar union (no payload anywhere — e.g. `union Code { alpha = 1001 }`)
+// is representationally identical to an enum: a bare i64 carrying the case's
+// rawValue, never boxed, never refcount-managed. The parser registers such a
+// union exactly like an enum (top-level constants + ranged typealias + lookup
+// helpers); this predicate keeps the lowering's boxing / managed-ref / heap
+// decisions in agreement with that choice. Mirrors the C# bootstrap, where a
+// union with no associated values lowers to the plain enum representation.
+function enumTypeIsBoxedUnion(enumType EnumType) returns bool
+	if not enumType.isUnion 'notUnion'
+		return false
+	end 'notUnion'
+	return enumCasesAnyPayload(enumType.cases)
+end 'enumTypeIsBoxedUnion'
+
+function unresolvedEnumIsBoxedUnion(unresolvedEnum UnresolvedEnumType) returns bool
+	if not unresolvedEnum.isUnion 'notUnion'
+		return false
+	end 'notUnion'
+	return enumCasesAnyPayload(unresolvedEnum.cases)
+end 'unresolvedEnumIsBoxedUnion'
+
 // Phase 9 Stage 1: true when every case's rawValue equals its declaration
 // ordinal — the receiver's SSA value carries the rawValue, so on such an
 // enum the `.ordinal` accessor is a value-level no-op. Int-backed enums
@@ -2117,10 +2139,12 @@ function namedTypeIsManagedRef(project Project, id TypeNameId) returns bool
 		return name != "Promise"
 	end 'isStruct'
 	if let enumType = try project.enumTypes.get(name) 'isEnum'
-		return enumType.isUnion
+		// Only a heap-boxed union (some case carries a payload) is a managed
+		// ref; a pure-scalar union is a bare i64 like an enum.
+		return enumTypeIsBoxedUnion(enumType)
 	end 'isEnum'
 	if let unresolvedEnum = try project.unresolvedEnums.get(name) 'isUnresolvedEnum'
-		return unresolvedEnum.isUnion
+		return unresolvedEnumIsBoxedUnion(unresolvedEnum)
 	end 'isUnresolvedEnum'
 	// `project.typealiases` only maps to `StdType` (the ABI-level
 	// representation), so it cannot carry through to managed-ness here —
@@ -2215,20 +2239,18 @@ export function structNameIsHeapManaged(project Project, structName String) retu
 	if project.structTypes.contains(structName) 'isStruct'
 		return true
 	end 'isStruct'
-	// A UNION value is HEAP-BOXED (`lowerEnumConstruct` allocs every union case via
-	// `__mm_alloc`), so it is refcount-managed exactly like a struct: the BOX must be
-	// dropped at last use regardless of what the payload holds. A union with a MANAGED
-	// payload additionally gets a `__destruct_<Union>` that cascade-decrefs the live
-	// case's payload; a scalar-payload union keeps the null destructor (the free
-	// releases just the box). Unions live in `enumTypes` (not `structTypes`), so the
-	// struct check above misses them — and gating on unionHasManagedPayload here left
-	// every SCALAR-payload union value `notManaged` (classifyValue forces the class)
-	// and its field invisible to `fieldTypeIsDropTracked`, so the box leaked both as a
-	// local and as a struct field (`Drawing{shape: Shape.circle(10)}`). `isUnion` is
-	// the same discriminator the construct path and `namedTypeIsManagedRef` use; a
-	// plain (non-union) enum is a raw immediate (never boxed) and stays unmanaged.
+	// A HEAP-BOXED union value (some case carries a payload) is allocated by
+	// `lowerEnumConstruct` via `__mm_alloc`, so it is refcount-managed exactly like a
+	// struct: the BOX must be dropped at last use regardless of what the payload
+	// holds. A union with a MANAGED payload additionally gets a `__destruct_<Union>`
+	// that cascade-decrefs the live case's payload; a scalar-payload boxed union keeps
+	// the null destructor (the free releases just the box). Unions live in `enumTypes`
+	// (not `structTypes`), so the struct check above misses them — gate on
+	// `enumTypeIsBoxedUnion` (the construct path and `namedTypeIsManagedRef` use the
+	// same predicate). A PURE-SCALAR union (no payload anywhere — a bare i64 like an
+	// enum, never boxed) stays unmanaged exactly like a plain enum.
 	if let unionType = try project.enumTypes.get(structName) 'isUnion'
-		if unionType.isUnion 'boxedUnion'
+		if enumTypeIsBoxedUnion(unionType) 'boxedUnion'
 			return true
 		end 'boxedUnion'
 	end 'isUnion'
@@ -10301,9 +10323,12 @@ type MaxonToStdLowering
 			return UnionTypeLookup.miss()
 		end 'notNamed'
 		let resolved = try self.project.enumTypes.get(nameStr) otherwise return UnionTypeLookup.miss()
-		if not resolved.isUnion 'notUnion'
+		// Only a HEAP-BOXED union (some case carries a payload) loads its tag from
+		// offset 0 of the box. A pure-scalar union is a bare i64 like an enum, so
+		// it takes the plain bare-cmp path (no tag load) — miss here.
+		if not enumTypeIsBoxedUnion(resolved) 'notBoxed'
 			return UnionTypeLookup.miss()
-		end 'notUnion'
+		end 'notBoxed'
 		return UnionTypeLookup.hit(resolved)
 	end 'unionTypeForScrutinee'
 
@@ -10354,7 +10379,13 @@ type MaxonToStdLowering
 			dtorId = dtorRefId
 		end 'hasManaged'
 		self.setValueType(dtorId, t: MaxonType.integer)
-		let tagOrdinalId = self.emitConstI64(theCase.ordinal as ParsedInt, dstBlock: dstBlock)
+		// The tag stored at offset 0 is the case's rawValue (NOT its ordinal):
+		// match dispatch (`resolveUnionCaseRawValue`) compares the loaded tag
+		// against each case's rawValue, and for a boxed union that carries
+		// explicit scalar backings the rawValue diverges from the ordinal. For a
+		// bare/payload-only case rawValue equals the ordinal, so this is a no-op
+		// there. Mirrors the C# bootstrap, which stores rawValue as the tag.
+		let tagOrdinalId = self.emitConstI64(theCase.rawValue as ParsedInt, dstBlock: dstBlock)
 		self.setValueType(tagOrdinalId, t: MaxonType.integer)
 		var allocArgIds = ValueIdArray.create()
 		allocArgIds.push(sizeId)
@@ -10368,7 +10399,7 @@ type MaxonToStdLowering
 		// the eventual decref (whose `__destruct_<Union>` cascades into each managed
 		// payload field) — lowering emits NO manual incref here.
 		self.classifyValue(resultId, cls: OwnershipClass.freshRc0, valueMaxonType: unionMaxonType)
-		// Store the case ordinal at the box's offset 0 — this is what the
+		// Store the case rawValue tag at the box's offset 0 — this is what the
 		// match-side `enumTag` load reads back to dispatch on the live case.
 		self.emitStoreFieldI64(resultId, offset: 0, valueId: tagOrdinalId, dstBlock: dstBlock)
 		for i in 0 upto theCase.payloadFields.count() 'eachField'
@@ -10513,9 +10544,9 @@ type MaxonToStdLowering
 				// every match either always-fires or never-fires depending
 				// on the heap address. Mirrors `lowerEnumMatchArm`'s
 				// `unionTypeForScrutinee` tag-load.
-				if enumType.isUnion 'isUnion'
+				if enumTypeIsBoxedUnion(enumType) 'isBoxedUnion'
 					scrutineeId = self.emitLoadFieldI64(scrutineeId, offset: 0, dstBlock: dstBlock)
-				end 'isUnion'
+				end 'isBoxedUnion'
 			end 'isResolvedEnum'
 		end 'isEnumRange'
 		var combinedId = 0 as ValueId

@@ -199,6 +199,57 @@ export enum CaseOrdinalLookupError implements Error
 	notFound
 end 'CaseOrdinalLookupError'
 
+// Cross-case backing state threaded through `parseCaseBacking` while walking an
+// enum or union body. The first explicitly-backed case fixes the backing kind;
+// later cases must agree (mismatch raises E3032). Enum and union bodies share
+// this carrier so the backing-parse dispatch lives in ONE place — `union Code {
+// alpha = 1001 }` parses its scalar backings exactly the way `enum` does
+// (mirrors the C# bootstrap's single `PreScanEnum(isUnion)` code path).
+export type CaseBackingState
+	// Next auto-assigned ordinal / int rawValue for a case that omits `=`.
+	export var nextOrdinal as IntConstant
+	// Set once the first explicit `= value` is seen. Drives the
+	// "bare-case-requires-explicit-value" diagnostics on later cases of a
+	// float / string / char / struct-backed enum.
+	export var hasExplicitBacking as bool
+	export var isFloatBacked as bool
+	export var isStringBacked as bool
+	export var isCharBacked as bool
+	export var isFunctionBacked as bool
+	// Non-empty once a `= StructType{...}` / `= StructType.create(...)` case
+	// fixes the struct backing type; later cases must use the same type.
+	export var structBackingTypeName as String
+
+	export static function create() returns CaseBackingState
+		return Self{nextOrdinal: 0, hasExplicitBacking: false, isFloatBacked: false, isStringBacked: false, isCharBacked: false, isFunctionBacked: false, structBackingTypeName: ""}
+	end 'create'
+end 'CaseBackingState'
+
+// Per-case result of `parseCaseBacking`. Carries the parsed backing for one
+// case so the caller can build its `EnumCase` and (for scalar backings)
+// register the top-level constant.
+export type CaseBackingResult
+	// Runtime rawValue: the int literal for int-backed cases, the IEEE-754 bits
+	// for float-backed cases, the auto-assigned ordinal for string/char/struct/
+	// function backings and bare cases.
+	export var rawValue as IntConstant
+	export var rawIsFloat as bool
+	// `= StructType{...}` backing: declared struct type + arena root expr id.
+	export var backingStructName as String
+	export var backingStructExprId as UnresolvedConstExprId
+	// Decoded text for `= "literal"` / `= 'c'` backings; empty otherwise.
+	export var rawStringValue as String
+	// Source spelling for `= funcName` backings; empty otherwise.
+	export var rawFunctionName as String
+	// Set when a malformed backing forced an advance-past-EOF recovery; the
+	// caller breaks out of its case loop.
+	export var brokeOut as bool
+
+	export static function create(rawValue IntConstant, rawIsFloat bool, backingStructName String, backingStructExprId UnresolvedConstExprId, rawStringValue String, rawFunctionName String, brokeOut bool) returns CaseBackingResult
+		return Self{rawValue: rawValue, rawIsFloat: rawIsFloat, backingStructName: backingStructName, backingStructExprId: backingStructExprId, rawStringValue: rawStringValue, rawFunctionName: rawFunctionName, brokeOut: brokeOut}
+	end 'create'
+end 'CaseBackingResult'
+
 export type Parser
 	var project as Project
 	// Original token array kept for absolute-index lookups (e.g. "previous
@@ -4776,6 +4827,281 @@ export type Parser
 		try skipEndAndLabel()
 	end 'parseTypeDecl'
 
+	// Shared scalar / struct / function backing-parse dispatch for one enum or
+	// union case. Entry: cursor positioned right after the case name (enum) or
+	// after the optional payload list (union), i.e. at the optional `=`. Exit:
+	// cursor past the backing value (or unchanged when no `=` is present).
+	//
+	// `state` is mutated in place: it threads the cross-case backing kind so the
+	// first explicitly-backed case fixes the kind and later cases that disagree
+	// raise E3032. The returned `CaseBackingResult` carries this case's parsed
+	// backing so the caller can build its `EnumCase` and (for scalar backings)
+	// register the top-level constant — exactly the shape `parseEnumDecl` and
+	// `parseUnionDecl` both need. `kindLabel` is "enum" or "union" and only
+	// changes the bad-raw-value diagnostic wording.
+	//
+	// This is the ONE place enum and union backings are parsed; mirrors the C#
+	// bootstrap's single `PreScanEnum(isUnion)` path so a scalar-backed union
+	// (`union Code { alpha = 1001 }`) parses identically to a scalar-backed enum.
+	function parseCaseBacking(state CaseBackingState, caseToken Token, caseName String, kindLabel String) returns CaseBackingResult throws ParserError
+		var rawValue = state.nextOrdinal
+		var rawIsFloat = false
+		var caseBackingTypeName = ""
+		var caseBackingExprId = 0 as UnresolvedConstExprId
+		var rawStringValue = ""
+		var rawFunctionName = ""
+
+		if accept(TokenKind.equals) 'hasRawValue'
+			let valueToken = cursor.current()
+			// Negative numeric raw value: a unary `-` followed by an int or
+			// float literal. The lexer emits `-` as its own token, so peel it
+			// off, parse the magnitude, then negate. Mirrors how negation
+			// handles a leading-minus in expression position.
+			var rawSign = 1 as ParsedInt
+			if valueToken.kind == TokenKind.minus 'hasMinus'
+				try eat(TokenKind.minus)
+				rawSign = -1 as ParsedInt
+			end 'hasMinus'
+			let magToken = cursor.current()
+			if magToken.kind == TokenKind.intLiteral 'isInt'
+				try eat(TokenKind.intLiteral)
+				let mag = parseRawValueForEnum(magToken, kindLabel: "Integer", isFloat: false)
+				let parsed = (mag * rawSign) as ParsedInt
+				rawValue = parsed
+				rawIsFloat = false
+				if state.hasExplicitBacking and state.isFloatBacked 'mismatch'
+					reportCompileError(project, code: ErrorCode.semanticEnumRawValueTypeMismatch, message: "raw value type mismatch: 'expected float, got int'", line: caseToken.line, column: caseToken.column, filePath: filePath)
+				end 'mismatch'
+				if not state.structBackingTypeName.isEmpty() 'structVsIntMix'
+					reportCompileError(project, code: ErrorCode.semanticEnumRawValueTypeMismatch, message: "raw value type mismatch: 'expected {state.structBackingTypeName}, got int'", line: caseToken.line, column: caseToken.column, filePath: filePath)
+				end 'structVsIntMix'
+				state.hasExplicitBacking = true
+				state.nextOrdinal = parsed + 1
+			end 'isInt' else if magToken.kind == TokenKind.floatLiteral 'isFloat'
+				try eat(TokenKind.floatLiteral)
+				var bits = parseRawValueForEnum(magToken, kindLabel: "Float", isFloat: true)
+				if rawSign < 0 'negateFloat'
+					// IEEE 754 sign bit is the MSB; XOR-toggle to negate.
+					bits = (bits xor (1 shl 63)) as ParsedInt
+				end 'negateFloat'
+				rawValue = bits
+				rawIsFloat = true
+				if state.hasExplicitBacking and not state.isFloatBacked 'intMismatch'
+					reportCompileError(project, code: ErrorCode.semanticEnumRawValueTypeMismatch, message: "raw value type mismatch: 'expected int, got float'", line: caseToken.line, column: caseToken.column, filePath: filePath)
+				end 'intMismatch'
+				if not state.structBackingTypeName.isEmpty() 'structVsFloatMix'
+					reportCompileError(project, code: ErrorCode.semanticEnumRawValueTypeMismatch, message: "raw value type mismatch: 'expected {state.structBackingTypeName}, got float'", line: caseToken.line, column: caseToken.column, filePath: filePath)
+				end 'structVsFloatMix'
+				state.hasExplicitBacking = true
+				state.isFloatBacked = true
+			end 'isFloat' else if magToken.kind == TokenKind.identifier and rawSign > 0 'isIdentBacking'
+				// Disambiguate `caseName = Identifier`. Three shapes share the
+				// identifier prefix:
+				//   `Identifier{...}` / `Identifier.create(...)` — struct backing
+				//   `Identifier`                                — function backing
+				// Look one token ahead: a `{` or a `.` means struct backing,
+				// anything else (newline / comma / end / EOF) is a function
+				// reference whose signature gets resolved later by
+				// resolveFunctionBackedEnumRefs once all top-level functions
+				// are registered.
+				let nextTok = try cursor.peek(1) otherwise Token.eof()
+				let isStructForm = nextTok.kind == TokenKind.leftBrace or nextTok.kind == TokenKind.dot
+				if isStructForm 'isStructBacking'
+					// Phase 9 Stage 5: `caseName = StructType{...}` /
+					// `caseName = StructType.create(...)` — capture the per-case
+					// struct backing literal. The struct type is fixed by the
+					// first such case; subsequent cases must use the same type.
+					// The cases keep their auto-assigned ordinal as the rawValue
+					// (the runtime representation is the ordinal i64).
+					let structTypeNameForCase = magToken.value
+					if not state.structBackingTypeName.isEmpty() and structTypeNameForCase != state.structBackingTypeName 'wrongStructType'
+						reportCompileError(project, code: ErrorCode.semanticEnumRawValueTypeMismatch, message: "raw value type mismatch: 'expected {state.structBackingTypeName}, got {structTypeNameForCase}'", line: caseToken.line, column: caseToken.column, filePath: filePath)
+					end 'wrongStructType'
+					if state.hasExplicitBacking 'numericVsStruct'
+						var priorBacking = "int"
+						if state.isFloatBacked 'asFloat'
+							priorBacking = "float"
+						end 'asFloat'
+						if state.isFunctionBacked 'asFn'
+							priorBacking = "function"
+						end 'asFn'
+						reportCompileError(project, code: ErrorCode.semanticEnumRawValueTypeMismatch, message: "raw value type mismatch: 'expected {priorBacking}, got {structTypeNameForCase}'", line: caseToken.line, column: caseToken.column, filePath: filePath)
+					end 'numericVsStruct'
+					let exprId = try parseConstStructLiteralRoot()
+					caseBackingTypeName = structTypeNameForCase
+					caseBackingExprId = exprId
+					if state.structBackingTypeName.isEmpty() 'firstStruct'
+						state.structBackingTypeName = structTypeNameForCase
+					end 'firstStruct'
+					rawValue = state.nextOrdinal
+					rawIsFloat = false
+					state.nextOrdinal = state.nextOrdinal + 1
+				end 'isStructBacking' else 'isFunctionBacking'
+					// Phase 9 function backing: `caseName = funcName`. Record the
+					// bare function name for resolveFunctionBackedEnumRefs
+					// (post-prescan) to look up + validate signature uniformity
+					// across cases. Runtime representation stays the ordinal; the
+					// `.rawValue` lowering rebuilds the per-case function pointer
+					// via a compare-eq + funcRef chain over the ordinal.
+					if state.hasExplicitBacking and not state.isFunctionBacked 'fnMismatch'
+						var priorBacking = "int"
+						if state.isFloatBacked 'asFloat'
+							priorBacking = "float"
+						end 'asFloat'
+						if state.isStringBacked 'asString'
+							priorBacking = "string"
+						end 'asString'
+						if state.isCharBacked 'asChar'
+							priorBacking = "char"
+						end 'asChar'
+						reportCompileError(project, code: ErrorCode.semanticEnumRawValueTypeMismatch, message: "raw value type mismatch: 'expected {priorBacking}, got function'", line: caseToken.line, column: caseToken.column, filePath: filePath)
+					end 'fnMismatch'
+					if not state.structBackingTypeName.isEmpty() 'structVsFnMix'
+						reportCompileError(project, code: ErrorCode.semanticEnumRawValueTypeMismatch, message: "raw value type mismatch: 'expected {state.structBackingTypeName}, got function'", line: caseToken.line, column: caseToken.column, filePath: filePath)
+					end 'structVsFnMix'
+					let funcIdent = magToken.value
+					try eat(TokenKind.identifier)
+					state.hasExplicitBacking = true
+					state.isFunctionBacked = true
+					rawValue = state.nextOrdinal
+					rawIsFloat = false
+					rawFunctionName = funcIdent
+					state.nextOrdinal = state.nextOrdinal + 1
+				end 'isFunctionBacking'
+			end 'isIdentBacking' else if magToken.kind == TokenKind.stringLiteral and rawSign > 0 'isStringLit'
+				// Phase 9 (string-backed enums): `caseName = "literal"`. Runtime
+				// representation stays as the auto-incrementing ordinal so
+				// `match` / equality / hashing all compile to integer ops; the
+				// decoded string is stashed on the case and used by
+				// interpolation, `.rawValue`, and `.fromName`.
+				validateEscapes(magToken, kind: "string literal")
+				try eat(TokenKind.stringLiteral)
+				let decodedBytes = decodeStringEscapes(magToken.value)
+				let decodedString = String.from(decodedBytes)
+				if state.hasExplicitBacking and not state.isStringBacked 'stringMismatch'
+					var priorBacking = "int"
+					if state.isFloatBacked 'asFloat'
+						priorBacking = "float"
+					end 'asFloat'
+					if state.isCharBacked 'asChar'
+						priorBacking = "char"
+					end 'asChar'
+					reportCompileError(project, code: ErrorCode.semanticEnumRawValueTypeMismatch, message: "raw value type mismatch: 'expected {priorBacking}, got String'", line: caseToken.line, column: caseToken.column, filePath: filePath)
+				end 'stringMismatch'
+				if not state.structBackingTypeName.isEmpty() 'structVsStringMix'
+					reportCompileError(project, code: ErrorCode.semanticEnumRawValueTypeMismatch, message: "raw value type mismatch: 'expected {state.structBackingTypeName}, got String'", line: caseToken.line, column: caseToken.column, filePath: filePath)
+				end 'structVsStringMix'
+				state.hasExplicitBacking = true
+				state.isStringBacked = true
+				rawValue = state.nextOrdinal
+				rawIsFloat = false
+				rawStringValue = decodedString
+				state.nextOrdinal = state.nextOrdinal + 1
+			end 'isStringLit' else if magToken.kind == TokenKind.charLiteral and rawSign > 0 'isCharLit'
+				// Phase 9 (char-backed enums): `caseName = 'A'` / `caseName = 'é'`
+				// (latin small e with acute). Same shape as string-backed —
+				// runtime rep is the ordinal; the decoded codepoint bytes drive
+				// interpolation + lookup.
+				validateEscapes(magToken, kind: "character literal")
+				try eat(TokenKind.charLiteral)
+				let decodedBytes = decodeStringEscapes(magToken.value)
+				let decodedString = String.from(decodedBytes)
+				if state.hasExplicitBacking and not state.isCharBacked 'charMismatch'
+					var priorBacking = "int"
+					if state.isFloatBacked 'asFloat'
+						priorBacking = "float"
+					end 'asFloat'
+					if state.isStringBacked 'asString'
+						priorBacking = "string"
+					end 'asString'
+					reportCompileError(project, code: ErrorCode.semanticEnumRawValueTypeMismatch, message: "raw value type mismatch: 'expected {priorBacking}, got char'", line: caseToken.line, column: caseToken.column, filePath: filePath)
+				end 'charMismatch'
+				if not state.structBackingTypeName.isEmpty() 'structVsCharMix'
+					reportCompileError(project, code: ErrorCode.semanticEnumRawValueTypeMismatch, message: "raw value type mismatch: 'expected {state.structBackingTypeName}, got char'", line: caseToken.line, column: caseToken.column, filePath: filePath)
+				end 'structVsCharMix'
+				state.hasExplicitBacking = true
+				state.isCharBacked = true
+				rawValue = state.nextOrdinal
+				rawIsFloat = false
+				rawStringValue = decodedString
+				state.nextOrdinal = state.nextOrdinal + 1
+			end 'isCharLit' else 'badRawValue'
+				reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "{kindLabel} raw value must be an int, float, string, or character literal, got '{tokenValueToString(magToken.value)}'", line: magToken.line, column: magToken.column, filePath: filePath)
+				try cursor.advance() otherwise return CaseBackingResult.create(rawValue, rawIsFloat: rawIsFloat, backingStructName: caseBackingTypeName, backingStructExprId: caseBackingExprId, rawStringValue: rawStringValue, rawFunctionName: rawFunctionName, brokeOut: true)
+			end 'badRawValue'
+		end 'hasRawValue' else 'noRaw'
+			if state.hasExplicitBacking and state.isFloatBacked 'floatRequiresExplicit'
+				reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "float-backed {kindLabel} case '{caseName}' requires an explicit raw value", line: caseToken.line, column: caseToken.column, filePath: filePath)
+			end 'floatRequiresExplicit'
+			if state.isStringBacked 'stringRequiresExplicit'
+				reportCompileError(project, code: ErrorCode.semanticEnumRawValueTypeMismatch, message: "raw value type mismatch: 'expected string, got int'", line: caseToken.line, column: caseToken.column, filePath: filePath)
+			end 'stringRequiresExplicit'
+			if state.isCharBacked 'charRequiresExplicit'
+				reportCompileError(project, code: ErrorCode.semanticEnumRawValueTypeMismatch, message: "raw value type mismatch: 'expected char, got int'", line: caseToken.line, column: caseToken.column, filePath: filePath)
+			end 'charRequiresExplicit'
+			if not state.structBackingTypeName.isEmpty() 'structRequiresExplicit'
+				reportCompileError(project, code: ErrorCode.semanticEnumRawValueTypeMismatch, message: "raw value type mismatch: 'expected {state.structBackingTypeName}, got int'", line: caseToken.line, column: caseToken.column, filePath: filePath)
+			end 'structRequiresExplicit'
+			rawValue = state.nextOrdinal
+			rawIsFloat = false
+			state.nextOrdinal = state.nextOrdinal + 1
+		end 'noRaw'
+
+		return CaseBackingResult.create(rawValue, rawIsFloat: rawIsFloat, backingStructName: caseBackingTypeName, backingStructExprId: caseBackingExprId, rawStringValue: rawStringValue, rawFunctionName: rawFunctionName, brokeOut: false)
+	end 'parseCaseBacking'
+
+	// Duplicate-raw-value detection (E3031) shared by enum and union cases.
+	// Compares stored bit payloads: int/struct/function-backed cases use the
+	// integer rawValue directly, float-backed cases compare on IEEE-754 bits
+	// (`1.1 == 1.1` shares bits), string / char backings compare on the decoded
+	// text (their runtime rawValue is the ordinal, always unique, so the int
+	// field can't detect duplicate spellings). The diagnostic shows the literal
+	// text for string/char/function and the numeric bit pattern otherwise.
+	function reportDuplicateRawValueIfAny(cases EnumCaseArray, rawValue IntConstant, rawStringValue String, rawFunctionName String, state CaseBackingState, caseToken Token)
+		let dupOnString = state.isStringBacked or state.isCharBacked
+		let dupOnFunction = state.isFunctionBacked
+		for existing in cases 'checkDup'
+			var isDupHit = false
+			if dupOnString 'asString'
+				isDupHit = not rawStringValue.isEmpty() and existing.rawStringValue == rawStringValue
+			end 'asString' else if dupOnFunction 'asFn'
+				isDupHit = not rawFunctionName.isEmpty() and existing.rawFunctionName == rawFunctionName
+			end 'asFn' else 'asNumeric'
+				isDupHit = existing.rawValue == rawValue
+			end 'asNumeric'
+			if isDupHit 'isDup'
+				var dupShown = "{rawValue}"
+				if dupOnString 'shStr'
+					dupShown = rawStringValue
+				end 'shStr' else if dupOnFunction 'shFn'
+					dupShown = rawFunctionName
+				end 'shFn'
+				reportCompileError(project, code: ErrorCode.semanticEnumDuplicateRawValue, message: "duplicate raw value: '{dupShown}'", line: caseToken.line, column: caseToken.column, filePath: filePath)
+				break
+			end 'isDup'
+		end 'checkDup'
+	end 'reportDuplicateRawValueIfAny'
+
+	// Register `TypeName.caseName → rawValue` as a top-level constant so the
+	// existing `unresolvedRead → literal` rewrite resolves a bare
+	// `TypeName.case` reference. Shared by `parseEnumDecl` and the scalar-backed
+	// `parseUnionDecl` path (which are representationally identical to enums).
+	function registerCaseConstant(typeName String, caseName String, rawValue IntConstant, rawIsFloat bool, visibility Visibility)
+		let qualifiedName = "{typeName}.{caseName}"
+		var constValue = ConstantValue.intValue(rawValue)
+		if rawIsFloat 'isFloatConst'
+			constValue = ConstantValue.floatValue(rawValue)
+		end 'isFloatConst'
+		let caseEntry = TopLevelConstant.create(constValue, visibility: visibility, sourceFilePath: filePath)
+		var insertedCaseConst = true
+		try project.topLevelConstants.insert(qualifiedName, value: caseEntry) otherwise 'dupCaseConst'
+			insertedCaseConst = false
+		end 'dupCaseConst'
+		if insertedCaseConst 'recCaseConst'
+			recordTopLevelConstantInsert(project, filePath: filePath, key: qualifiedName)
+		end 'recCaseConst'
+	end 'registerCaseConstant'
+
 	// --- Enum declaration parsing ---
 	//
 	// Parse: enum Name [<cases and methods>] end 'Name'
@@ -4830,26 +5156,12 @@ export type Parser
 
 		var cases = EnumCaseArray.create()
 		var caseNames = ReferencedVarSet.create()
-		// Backing kind ('none' / 'int' / 'float' / 'string' / 'char') is
-		// lazily fixed by the first explicit raw value. Float / string /
-		// char backings are mutually exclusive with each other and with
-		// per-case `= int` values; mixing kinds raises E3032.
-		var hasExplicitBacking = false
-		var isFloatBacked = false
-		var isStringBacked = false
-		var isCharBacked = false
-		// Phase 9 function-backing: set by the first `case = funcName` case;
-		// subsequent cases must also be function-backed (E3032 on mix). The
-		// resolver pass binds every case to a single FunctionTypeId after
-		// pre-scan completes.
-		var isFunctionBacked = false
-		// Phase 9 Stage 5 (struct-backing): when a case carries
-		// `= StructType{...}`, the struct type fixes the backing for every
-		// case in the enum. Empty means no struct backing has been seen yet;
-		// the first such case populates this, and subsequent cases must
-		// match (E3032 on mismatch).
-		var enumStructBackingTypeName = ""
-		var nextOrdinal = 0 as IntConstant
+		// Cross-case backing kind ('none' / 'int' / 'float' / 'string' / 'char'
+		// / 'struct' / 'function') is lazily fixed by the first explicit raw
+		// value. Float / string / char / struct / function backings are mutually
+		// exclusive with each other and with per-case `= int` values; mixing
+		// kinds raises E3032. `parseCaseBacking` reads + mutates this carrier.
+		var backingState = CaseBackingState.create()
 		// Methods are emitted inline as the body is walked. The pre-registered
 		// (empty-cases) UnresolvedEnumType above lets a method's `match self`
 		// resolve `EnumName` as an enum even before the full case list lands.
@@ -4913,250 +5225,14 @@ export type Parser
 				caseNames.insert(caseName)
 			end 'recordCase'
 
-			var rawValue = nextOrdinal
-			var rawIsFloat = false
-			var caseBackingTypeName = ""
-			var caseBackingExprId = 0 as UnresolvedConstExprId
-			// Decoded text of a `caseName = "literal"` / `caseName = 'literal'`
-			// raw value. Empty for cases that omit `=` or carry a numeric /
-			// struct backing. Interpolation lowering reads this directly to
-			// emit the user-visible rendering; `.rawValue` / `.fromName`
-			// look it up the same way.
-			var rawStringValue = ""
-			// Source-token spelling for `caseName = funcName` cases; empty
-			// otherwise. The post-prescan resolver looks the name up against
-			// `project` and rewrites it to a fully qualified callee name that
-			// the lowering pass passes to `funcRef`.
-			var rawFunctionName = ""
+			// Parse the optional `= value` backing via the shared dispatch.
+			let backing = try parseCaseBacking(backingState, caseToken: caseToken, caseName: caseName, kindLabel: "enum")
+			if backing.brokeOut 'enumBackingBroke'
+				break
+			end 'enumBackingBroke'
 
-			if accept(TokenKind.equals) 'hasRawValue'
-				let valueToken = cursor.current()
-				// Negative numeric raw value: a unary `-` followed by an int
-				// or float literal. The lexer emits `-` as its own token, so
-				// peel it off, parse the magnitude, then negate. Mirrors how
-				// negation handles a leading-minus in expression position.
-				var rawSign = 1 as ParsedInt
-				if valueToken.kind == TokenKind.minus 'hasMinus'
-					try eat(TokenKind.minus)
-					rawSign = -1 as ParsedInt
-				end 'hasMinus'
-				let magToken = cursor.current()
-				if magToken.kind == TokenKind.intLiteral 'isInt'
-					try eat(TokenKind.intLiteral)
-					let mag = parseRawValueForEnum(magToken, kindLabel: "Integer", isFloat: false)
-					let parsed = (mag * rawSign) as ParsedInt
-					rawValue = parsed
-					rawIsFloat = false
-					if hasExplicitBacking and isFloatBacked 'mismatch'
-						reportCompileError(project, code: ErrorCode.semanticEnumRawValueTypeMismatch, message: "raw value type mismatch: 'expected float, got int'", line: caseToken.line, column: caseToken.column, filePath: filePath)
-					end 'mismatch'
-					if not enumStructBackingTypeName.isEmpty() 'structVsIntMix'
-						reportCompileError(project, code: ErrorCode.semanticEnumRawValueTypeMismatch, message: "raw value type mismatch: 'expected {enumStructBackingTypeName}, got int'", line: caseToken.line, column: caseToken.column, filePath: filePath)
-					end 'structVsIntMix'
-					hasExplicitBacking = true
-					nextOrdinal = parsed + 1
-				end 'isInt' else if magToken.kind == TokenKind.floatLiteral 'isFloat'
-					try eat(TokenKind.floatLiteral)
-					var bits = parseRawValueForEnum(magToken, kindLabel: "Float", isFloat: true)
-					if rawSign < 0 'negateFloat'
-						// IEEE 754 sign bit is the MSB; XOR-toggle to negate.
-						bits = (bits xor (1 shl 63)) as ParsedInt
-					end 'negateFloat'
-					rawValue = bits
-					rawIsFloat = true
-					if hasExplicitBacking and not isFloatBacked 'intMismatch'
-						reportCompileError(project, code: ErrorCode.semanticEnumRawValueTypeMismatch, message: "raw value type mismatch: 'expected int, got float'", line: caseToken.line, column: caseToken.column, filePath: filePath)
-					end 'intMismatch'
-					if not enumStructBackingTypeName.isEmpty() 'structVsFloatMix'
-						reportCompileError(project, code: ErrorCode.semanticEnumRawValueTypeMismatch, message: "raw value type mismatch: 'expected {enumStructBackingTypeName}, got float'", line: caseToken.line, column: caseToken.column, filePath: filePath)
-					end 'structVsFloatMix'
-					hasExplicitBacking = true
-					isFloatBacked = true
-				end 'isFloat' else if magToken.kind == TokenKind.identifier and rawSign > 0 'isIdentBacking'
-					// Disambiguate `caseName = Identifier`. Three shapes share
-					// the identifier prefix:
-					//   `Identifier{...}` / `Identifier.create(...)` — struct backing
-					//   `Identifier`                                — function backing
-					// Look one token ahead: a `{` or a `.` means struct backing,
-					// anything else (newline / comma / end / EOF) is a function
-					// reference whose signature gets resolved later by
-					// resolveFunctionBackedEnumRefs once all top-level
-					// functions are registered.
-					let nextTok = try cursor.peek(1) otherwise Token.eof()
-					let isStructForm = nextTok.kind == TokenKind.leftBrace or nextTok.kind == TokenKind.dot
-					if isStructForm 'isStructBacking'
-						// Phase 9 Stage 5: `caseName = StructType{...}` /
-						// `caseName = StructType.create(...)` — capture the per-case
-						// struct backing literal. The struct type is fixed by the
-						// first such case; subsequent cases must use the same type.
-						// The cases keep their auto-assigned ordinal as the rawValue
-						// (the runtime representation is the ordinal i64).
-						let structTypeNameForCase = magToken.value
-						if not enumStructBackingTypeName.isEmpty() and structTypeNameForCase != enumStructBackingTypeName 'wrongStructType'
-							reportCompileError(project, code: ErrorCode.semanticEnumRawValueTypeMismatch, message: "raw value type mismatch: 'expected {enumStructBackingTypeName}, got {structTypeNameForCase}'", line: caseToken.line, column: caseToken.column, filePath: filePath)
-						end 'wrongStructType'
-						if hasExplicitBacking 'numericVsStruct'
-							var priorBacking = "int"
-							if isFloatBacked 'asFloat'
-								priorBacking = "float"
-							end 'asFloat'
-							if isFunctionBacked 'asFn'
-								priorBacking = "function"
-							end 'asFn'
-							reportCompileError(project, code: ErrorCode.semanticEnumRawValueTypeMismatch, message: "raw value type mismatch: 'expected {priorBacking}, got {structTypeNameForCase}'", line: caseToken.line, column: caseToken.column, filePath: filePath)
-						end 'numericVsStruct'
-						let exprId = try parseConstStructLiteralRoot()
-						caseBackingTypeName = structTypeNameForCase
-						caseBackingExprId = exprId
-						if enumStructBackingTypeName.isEmpty() 'firstStruct'
-							enumStructBackingTypeName = structTypeNameForCase
-						end 'firstStruct'
-						rawValue = nextOrdinal
-						rawIsFloat = false
-						nextOrdinal = nextOrdinal + 1
-					end 'isStructBacking' else 'isFunctionBacking'
-						// Phase 9 function backing: `caseName = funcName`. Record
-						// the bare function name for resolveFunctionBackedEnumRefs
-						// (post-prescan) to look up + validate signature uniformity
-						// across cases. Runtime representation stays the ordinal;
-						// the `.rawValue` lowering rebuilds the per-case function
-						// pointer via a compare-eq + funcRef chain over the ordinal.
-						if hasExplicitBacking and not isFunctionBacked 'fnMismatch'
-							var priorBacking = "int"
-							if isFloatBacked 'asFloat'
-								priorBacking = "float"
-							end 'asFloat'
-							if isStringBacked 'asString'
-								priorBacking = "string"
-							end 'asString'
-							if isCharBacked 'asChar'
-								priorBacking = "char"
-							end 'asChar'
-							reportCompileError(project, code: ErrorCode.semanticEnumRawValueTypeMismatch, message: "raw value type mismatch: 'expected {priorBacking}, got function'", line: caseToken.line, column: caseToken.column, filePath: filePath)
-						end 'fnMismatch'
-						if not enumStructBackingTypeName.isEmpty() 'structVsFnMix'
-							reportCompileError(project, code: ErrorCode.semanticEnumRawValueTypeMismatch, message: "raw value type mismatch: 'expected {enumStructBackingTypeName}, got function'", line: caseToken.line, column: caseToken.column, filePath: filePath)
-						end 'structVsFnMix'
-						let funcIdent = magToken.value
-						try eat(TokenKind.identifier)
-						hasExplicitBacking = true
-						isFunctionBacked = true
-						rawValue = nextOrdinal
-						rawIsFloat = false
-						rawFunctionName = funcIdent
-						nextOrdinal = nextOrdinal + 1
-					end 'isFunctionBacking'
-				end 'isIdentBacking' else if magToken.kind == TokenKind.stringLiteral and rawSign > 0 'isStringLit'
-					// Phase 9 (string-backed enums): `caseName = "literal"`.
-					// Runtime representation stays as the auto-incrementing
-					// ordinal so `match` / equality / hashing all compile to
-					// integer ops; the decoded string is stashed on the case
-					// and used by interpolation, `.rawValue`, and `.fromName`.
-					validateEscapes(magToken, kind: "string literal")
-					try eat(TokenKind.stringLiteral)
-					let decodedBytes = decodeStringEscapes(magToken.value)
-					let decodedString = String.from(decodedBytes)
-					if hasExplicitBacking and not isStringBacked 'stringMismatch'
-						var priorBacking = "int"
-						if isFloatBacked 'asFloat'
-							priorBacking = "float"
-						end 'asFloat'
-						if isCharBacked 'asChar'
-							priorBacking = "char"
-						end 'asChar'
-						reportCompileError(project, code: ErrorCode.semanticEnumRawValueTypeMismatch, message: "raw value type mismatch: 'expected {priorBacking}, got String'", line: caseToken.line, column: caseToken.column, filePath: filePath)
-					end 'stringMismatch'
-					if not enumStructBackingTypeName.isEmpty() 'structVsStringMix'
-						reportCompileError(project, code: ErrorCode.semanticEnumRawValueTypeMismatch, message: "raw value type mismatch: 'expected {enumStructBackingTypeName}, got String'", line: caseToken.line, column: caseToken.column, filePath: filePath)
-					end 'structVsStringMix'
-					hasExplicitBacking = true
-					isStringBacked = true
-					rawValue = nextOrdinal
-					rawIsFloat = false
-					rawStringValue = decodedString
-					nextOrdinal = nextOrdinal + 1
-				end 'isStringLit' else if magToken.kind == TokenKind.charLiteral and rawSign > 0 'isCharLit'
-					// Phase 9 (char-backed enums): `caseName = 'A'` /
-					// `caseName = 'é'` (latin small e with acute).
-					// Same shape as string-backed — runtime rep is the
-					// ordinal; the decoded codepoint bytes drive
-					// interpolation + lookup.
-					validateEscapes(magToken, kind: "character literal")
-					try eat(TokenKind.charLiteral)
-					let decodedBytes = decodeStringEscapes(magToken.value)
-					let decodedString = String.from(decodedBytes)
-					if hasExplicitBacking and not isCharBacked 'charMismatch'
-						var priorBacking = "int"
-						if isFloatBacked 'asFloat'
-							priorBacking = "float"
-						end 'asFloat'
-						if isStringBacked 'asString'
-							priorBacking = "string"
-						end 'asString'
-						reportCompileError(project, code: ErrorCode.semanticEnumRawValueTypeMismatch, message: "raw value type mismatch: 'expected {priorBacking}, got char'", line: caseToken.line, column: caseToken.column, filePath: filePath)
-					end 'charMismatch'
-					if not enumStructBackingTypeName.isEmpty() 'structVsCharMix'
-						reportCompileError(project, code: ErrorCode.semanticEnumRawValueTypeMismatch, message: "raw value type mismatch: 'expected {enumStructBackingTypeName}, got char'", line: caseToken.line, column: caseToken.column, filePath: filePath)
-					end 'structVsCharMix'
-					hasExplicitBacking = true
-					isCharBacked = true
-					rawValue = nextOrdinal
-					rawIsFloat = false
-					rawStringValue = decodedString
-					nextOrdinal = nextOrdinal + 1
-				end 'isCharLit' else 'badRawValue'
-					reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "enum raw value must be an int, float, string, or character literal, got '{tokenValueToString(magToken.value)}'", line: magToken.line, column: magToken.column, filePath: filePath)
-					try cursor.advance() otherwise break
-				end 'badRawValue'
-			end 'hasRawValue' else 'noRaw'
-				if hasExplicitBacking and isFloatBacked 'floatRequiresExplicit'
-					reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "float-backed enum case '{caseName}' requires an explicit raw value", line: caseToken.line, column: caseToken.column, filePath: filePath)
-				end 'floatRequiresExplicit'
-				if isStringBacked 'stringRequiresExplicit'
-					reportCompileError(project, code: ErrorCode.semanticEnumRawValueTypeMismatch, message: "raw value type mismatch: 'expected string, got int'", line: caseToken.line, column: caseToken.column, filePath: filePath)
-				end 'stringRequiresExplicit'
-				if isCharBacked 'charRequiresExplicit'
-					reportCompileError(project, code: ErrorCode.semanticEnumRawValueTypeMismatch, message: "raw value type mismatch: 'expected char, got int'", line: caseToken.line, column: caseToken.column, filePath: filePath)
-				end 'charRequiresExplicit'
-				if not enumStructBackingTypeName.isEmpty() 'structRequiresExplicit'
-					reportCompileError(project, code: ErrorCode.semanticEnumRawValueTypeMismatch, message: "raw value type mismatch: 'expected {enumStructBackingTypeName}, got int'", line: caseToken.line, column: caseToken.column, filePath: filePath)
-				end 'structRequiresExplicit'
-				rawValue = nextOrdinal
-				rawIsFloat = false
-				nextOrdinal = nextOrdinal + 1
-			end 'noRaw'
-
-			// Duplicate-raw-value detection (E3031). Compares stored bit
-			// payloads: int-backed cases use the integer value directly,
-			// float-backed cases compare on IEEE-754 bits (which is exactly
-			// the duplicate semantics — `1.1 == 1.1` shares bits). String /
-			// char backings compare on the decoded text — the runtime
-			// rawValue is the ordinal (always unique) so the int field can't
-			// detect duplicate spellings. The diagnostic shows the raw bit
-			// pattern for floats and the literal text for string/char; the
-			// spec only requires the literal to appear in the message.
-			let dupOnString = isStringBacked or isCharBacked
-			let dupOnFunction = isFunctionBacked
-			for existing in cases 'checkDup'
-				var isDupHit = false
-				if dupOnString 'asString'
-					isDupHit = not rawStringValue.isEmpty() and existing.rawStringValue == rawStringValue
-				end 'asString' else if dupOnFunction 'asFn'
-					isDupHit = not rawFunctionName.isEmpty() and existing.rawFunctionName == rawFunctionName
-				end 'asFn' else 'asNumeric'
-					isDupHit = existing.rawValue == rawValue
-				end 'asNumeric'
-				if isDupHit 'isDup'
-					var dupShown = "{rawValue}"
-					if dupOnString 'shStr'
-						dupShown = rawStringValue
-					end 'shStr' else if dupOnFunction 'shFn'
-						dupShown = rawFunctionName
-					end 'shFn'
-					reportCompileError(project, code: ErrorCode.semanticEnumDuplicateRawValue, message: "duplicate raw value: '{dupShown}'", line: caseToken.line, column: caseToken.column, filePath: filePath)
-					break
-				end 'isDup'
-			end 'checkDup'
+			// Duplicate-raw-value detection (E3031).
+			reportDuplicateRawValueIfAny(cases, rawValue: backing.rawValue, rawStringValue: backing.rawStringValue, rawFunctionName: backing.rawFunctionName, state: backingState, caseToken: caseToken)
 
 			// Skip the push for duplicate-case names so EnumType.create's
 			// downstream unique-name invariant holds even when E3030 has
@@ -5169,26 +5245,14 @@ export type Parser
 			end 'skipDup'
 
 			let ordinalSlot = cases.count() as CaseOrdinal
-			cases.push(EnumCase.create(caseName, ordinal: ordinalSlot, rawValue: rawValue, line: caseToken.line, column: caseToken.column, backingStructName: caseBackingTypeName, backingStructExprId: caseBackingExprId, rawStringValue: rawStringValue, rawFunctionName: rawFunctionName))
+			cases.push(EnumCase.create(caseName, ordinal: ordinalSlot, rawValue: backing.rawValue, line: caseToken.line, column: caseToken.column, backingStructName: backing.backingStructName, backingStructExprId: backing.backingStructExprId, rawStringValue: backing.rawStringValue, rawFunctionName: backing.rawFunctionName))
 
 			// Register the case as a top-level constant so the existing
 			// `unresolvedRead → literal` rewrite resolves `EnumName.case`.
 			// Cases inherit the enum's visibility tier so cross-file reads
 			// of `Direction.north` succeed exactly when the enum itself is
 			// reachable from the reading file.
-			let qualifiedName = "{currentTypeName}.{caseName}"
-			var constValue = ConstantValue.intValue(rawValue)
-			if rawIsFloat 'isFloatConst'
-				constValue = ConstantValue.floatValue(rawValue)
-			end 'isFloatConst'
-			let caseEntry = TopLevelConstant.create(constValue, visibility: currentEnumVisibility, sourceFilePath: filePath)
-			var insertedCaseConst = true
-			try project.topLevelConstants.insert(qualifiedName, value: caseEntry) otherwise 'dupCaseConst'
-				insertedCaseConst = false
-			end 'dupCaseConst'
-			if insertedCaseConst 'recCaseConst'
-				recordTopLevelConstantInsert(project, filePath: filePath, key: qualifiedName)
-			end 'recCaseConst'
+			registerCaseConstant(currentTypeName, caseName: caseName, rawValue: backing.rawValue, rawIsFloat: backing.rawIsFloat, visibility: currentEnumVisibility)
 
 			try skipNewlines()
 
@@ -5204,7 +5268,7 @@ export type Parser
 		// `computeOptimalIntType` picks a signed narrow StdType for enums
 		// with negative raw values.
 		var enumTypeExpr = UnresolvedTypeExpr.rangedInt(enumIntLowerBound(cases), upper: enumIntUpperBound(cases))
-		if isFloatBacked 'asFloatExpr'
+		if backingState.isFloatBacked 'asFloatExpr'
 			enumTypeExpr = UnresolvedTypeExpr.rangedFloat(f64MinBits(), upper: f64MaxBits())
 		end 'asFloatExpr'
 		if not project.typealiases.contains(currentTypeName) and not project.unresolvedTypealiases.contains(currentTypeName) 'registerAlias'
@@ -5215,7 +5279,7 @@ export type Parser
 		// Patch the pre-registered placeholder with the full case list. The
 		// duplicate-name diagnostic was already issued above when we tried to
 		// insert the placeholder, so this upsert is unconditional.
-		let unresolvedEnum = UnresolvedEnumType.create(currentTypeName, cases: cases, isFloatBacked: isFloatBacked, visibility: visibility, line: enumNameToken.line, column: enumNameToken.column, filePath: filePath, implementedInterfaces: conformances, isStringBacked: isStringBacked, isCharBacked: isCharBacked, isFunctionBacked: isFunctionBacked)
+		let unresolvedEnum = UnresolvedEnumType.create(currentTypeName, cases: cases, isFloatBacked: backingState.isFloatBacked, visibility: visibility, line: enumNameToken.line, column: enumNameToken.column, filePath: filePath, implementedInterfaces: conformances, isStringBacked: backingState.isStringBacked, isCharBacked: backingState.isCharBacked, isFunctionBacked: backingState.isFunctionBacked)
 		project.unresolvedEnums.upsert(currentTypeName, value: unresolvedEnum)
 		recordUnresolvedEnumInsert(project, filePath: filePath, key: currentTypeName)
 
@@ -5240,8 +5304,8 @@ export type Parser
 		// against each case's declared backing literal (see
 		// `synthesizeEnumFromRawStringHelperImpl`), routed by the
 		// `isStringBacked` / `isCharBacked` flags below.
-		let skipIntFromRawHelper = (not enumStructBackingTypeName.isEmpty()) or isStringBacked or isCharBacked
-		synthesizeEnumLookupHelpers(currentTypeName, cases: cases, isFloatBacked: isFloatBacked, isStringBacked: isStringBacked, isCharBacked: isCharBacked, visibility: visibility, line: enumNameToken.line, column: enumNameToken.column, skipFromRawValue: skipIntFromRawHelper)
+		let skipIntFromRawHelper = (not backingState.structBackingTypeName.isEmpty()) or backingState.isStringBacked or backingState.isCharBacked
+		synthesizeEnumLookupHelpers(currentTypeName, cases: cases, isFloatBacked: backingState.isFloatBacked, isStringBacked: backingState.isStringBacked, isCharBacked: backingState.isCharBacked, visibility: visibility, line: enumNameToken.line, column: enumNameToken.column, skipFromRawValue: skipIntFromRawHelper)
 
 		currentTypeName = ""
 		currentEnumVisibility = Visibility.file
@@ -5298,10 +5362,16 @@ export type Parser
 
 		var cases = EnumCaseArray.create()
 		var caseNames = ReferencedVarSet.create()
-		// Phase 9 Stage 5 (struct-backing): the first case carrying
-		// `= StructType{...}` fixes the union's backing struct type. Later
-		// cases must use the same type — mismatch raises E3032.
-		var unionStructBackingTypeName = ""
+		// The post-body representation decision tells a pure-scalar union (NO
+		// payload anywhere — behaves exactly like an enum: bare i64 value,
+		// top-level constants, never heap-boxed) from a union with at least one
+		// payload case (heap-boxed `i64 tag + payload`). Each pushed `EnumCase`
+		// already carries its own `payloadFields`, so the decision reads them
+		// back from `cases` rather than tracking a parallel array.
+		// Cross-case backing state shared with the enum path. A scalar-backed
+		// union (`union Code { alpha = 1001 }`) parses its `= value` backings
+		// through the exact same dispatch as a scalar-backed enum.
+		var backingState = CaseBackingState.create()
 
 		while true 'body'
 			let bodyPrevPos = cursor.index()
@@ -5360,30 +5430,21 @@ export type Parser
 				try parseUnionCasePayload(payloadFields)
 			end 'hasPayload'
 
-			// Phase 9 Stage 5 (struct-backing): optional
-			// `= StructType{...}` / `= StructType.create(...)` after the
-			// optional payload list. Cross-case consistency is required: every
-			// case must use the same struct type.
-			var caseBackingTypeName = ""
-			var caseBackingExprId = 0 as UnresolvedConstExprId
-			if accept(TokenKind.equals) 'hasBacking'
-				let valueToken = cursor.current()
-				if valueToken.kind != TokenKind.identifier 'badBacking'
-					reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "union case backing must be 'StructType\{...\}' or 'StructType.create(...)', got '{tokenValueToString(valueToken.value)}'", line: valueToken.line, column: valueToken.column, filePath: filePath)
-					try cursor.advance() otherwise break
-				end 'badBacking' else 'isStructBacking'
-					let structTypeNameForCase = valueToken.value
-					if not unionStructBackingTypeName.isEmpty() and structTypeNameForCase != unionStructBackingTypeName 'wrongStructType'
-						reportCompileError(project, code: ErrorCode.semanticEnumRawValueTypeMismatch, message: "raw value type mismatch: 'expected {unionStructBackingTypeName}, got {structTypeNameForCase}'", line: caseToken.line, column: caseToken.column, filePath: filePath)
-					end 'wrongStructType'
-					let exprId = try parseConstStructLiteralRoot()
-					caseBackingTypeName = structTypeNameForCase
-					caseBackingExprId = exprId
-					if unionStructBackingTypeName.isEmpty() 'firstStruct'
-						unionStructBackingTypeName = structTypeNameForCase
-					end 'firstStruct'
-				end 'isStructBacking'
-			end 'hasBacking'
+			// Optional `= value` backing AFTER the optional payload list. Unions
+			// accept the full backing grammar (scalar int/float/string/char,
+			// struct, or function) through the SAME dispatch enums use; a case
+			// may carry BOTH a payload and a struct/scalar backing (see
+			// `union-struct-backing.md`). Cross-case kind consistency is checked
+			// inside the helper (E3032).
+			let backing = try parseCaseBacking(backingState, caseToken: caseToken, caseName: caseName, kindLabel: "union")
+			if backing.brokeOut 'unionBackingBroke'
+				break
+			end 'unionBackingBroke'
+
+			// Duplicate-raw-value detection (E3031) — only meaningful for cases
+			// that carry an explicit scalar/function backing; bare/payload-only
+			// cases auto-increment unique ordinals.
+			reportDuplicateRawValueIfAny(cases, rawValue: backing.rawValue, rawStringValue: backing.rawStringValue, rawFunctionName: backing.rawFunctionName, state: backingState, caseToken: caseToken)
 
 			if isDuplicateCase 'skipDup'
 				try skipNewlines()
@@ -5391,16 +5452,7 @@ export type Parser
 			end 'skipDup'
 
 			let ordinalSlot = cases.count() as CaseOrdinal
-			cases.push(EnumCase.create(caseName, ordinal: ordinalSlot, rawValue: ordinalSlot, line: caseToken.line, column: caseToken.column, payloadFields: payloadFields, backingStructName: caseBackingTypeName, backingStructExprId: caseBackingExprId))
-
-			// Phase 9 Stage 3: every union case — bare or payload-bearing —
-			// is heap-boxed so all values of the union type share a uniform
-			// `i64 tag + maxArity*8 payload` shape. The match-side tag
-			// dispatch then unconditionally loads the tag from offset 0
-			// without needing to distinguish bare vs payload cases at
-			// lowering time. Bare cases get a no-arg constructor
-			// `__construct_Union_Bare()` returning the boxed union value.
-			synthesizeUnionConstructor(currentTypeName, caseName: caseName, payloadFields: payloadFields, line: caseToken.line, column: caseToken.column, visibility: visibility)
+			cases.push(EnumCase.create(caseName, ordinal: ordinalSlot, rawValue: backing.rawValue, line: caseToken.line, column: caseToken.column, payloadFields: payloadFields, backingStructName: backing.backingStructName, backingStructExprId: backing.backingStructExprId, rawStringValue: backing.rawStringValue, rawFunctionName: backing.rawFunctionName))
 
 			try skipNewlines()
 
@@ -5409,25 +5461,71 @@ export type Parser
 			end 'caseStuck'
 		end 'body'
 
-		// Patch the pre-registered placeholder with the full case list. Union
-		// names do NOT get an int/float-ranged typealias — `internMaxonType`
-		// hands out `MaxonType.named(currentTypeName)` and lowering treats
-		// the value as an 8-byte heap pointer. The duplicate-name diagnostic
-		// was already issued above when the placeholder insert failed.
-		let unresolvedUnion = UnresolvedEnumType.create(currentTypeName, cases: cases, isFloatBacked: false, visibility: visibility, line: unionNameToken.line, column: unionNameToken.column, filePath: filePath, implementedInterfaces: conformances, isUnion: true)
+		// Representation decision (mirrors the C# bootstrap): a union with NO
+		// payload-bearing case is representationally identical to an enum — a
+		// bare i64 carrying the case's rawValue, never heap-boxed. Its cases
+		// register as top-level constants (so `Code.alpha` resolves to the int)
+		// and it gets the int/float-ranged typealias + `.fromRawValue`/`.fromName`
+		// helpers, exactly like an enum. A union with at least one payload case
+		// stays heap-boxed: every case routes through a synthesized constructor
+		// and the `.unionCases` companion is registered. The `isUnion` flag stays
+		// true in BOTH cases so the match / lowering machinery keeps treating the
+		// value as a union (the boxing decision keys off `enumTypeIsBoxedUnion`,
+		// not the bare `isUnion` flag).
+		let unionHasPayload = enumCasesAnyPayload(cases)
+
+		// Patch the pre-registered placeholder with the full case list. The
+		// duplicate-name diagnostic was already issued above when the
+		// placeholder insert failed, so this upsert is unconditional.
+		let unresolvedUnion = UnresolvedEnumType.create(currentTypeName, cases: cases, isFloatBacked: backingState.isFloatBacked, visibility: visibility, line: unionNameToken.line, column: unionNameToken.column, filePath: filePath, implementedInterfaces: conformances, isUnion: true, isStringBacked: backingState.isStringBacked, isCharBacked: backingState.isCharBacked, isFunctionBacked: backingState.isFunctionBacked)
 		project.unresolvedEnums.upsert(currentTypeName, value: unresolvedUnion)
 		recordUnresolvedEnumInsert(project, filePath: filePath, key: currentTypeName)
 
-		// Phase 9 Stage 4: synthesize the `.unionCases` companion bare-enum
-		// per `specs/union-cases.md`. One bare case per variant of the
-		// union, ordinals matching the parent union's tag values. The
-		// companion has its own MaxonType identity + typealias + per-case
-		// TopLevelConstant entries, so `Shape.unionCases.circle` resolves
-		// through the same plumbing as `Color.red` — and `.allCases` /
-		// `.allCaseNames` reuse the Stage 1 emitters automatically. Only
-		// emitted when the union has at least one payload-bearing case;
-		// plain enums already expose `.allCases` directly.
-		registerUnionCasesCompanion(currentTypeName, cases: cases, visibility: visibility, line: unionNameToken.line, column: unionNameToken.column)
+		if unionHasPayload 'boxedUnion'
+			// Heap-boxed union: each case — bare or payload-bearing — gets a
+			// synthesized constructor so all values share the uniform
+			// `i64 tag + maxArity*8 payload` box. Bare cases get a no-arg
+			// `__construct_Union_Bare()`. The match-side tag dispatch loads the
+			// tag from offset 0 and compares against each case's rawValue.
+			for i in 0 upto cases.count() 'eachCtor'
+				let c = try cases.get(i) otherwise panic("parseUnionDecl: cases.get OOB at {i}")
+				synthesizeUnionConstructor(currentTypeName, caseName: c.name, payloadFields: c.payloadFields, line: c.line, column: c.column, visibility: visibility)
+			end 'eachCtor'
+
+			// Phase 9 Stage 4: synthesize the `.unionCases` companion bare-enum
+			// per `specs/union-cases.md`. One bare case per variant of the
+			// union, ordinals matching the parent union's tag values, so
+			// `Shape.unionCases.circle` resolves through the same plumbing as
+			// `Color.red`.
+			registerUnionCasesCompanion(currentTypeName, cases: cases, visibility: visibility, line: unionNameToken.line, column: unionNameToken.column)
+		end 'boxedUnion' else 'scalarUnion'
+			// Scalar union: enum-like representation. Register the int/float-
+			// ranged typealias so parameter / return / var slots lower to a
+			// primitive width, register each case as a top-level constant, and
+			// synthesize the `.fromRawValue` / `.fromName` lookup helpers — every
+			// step mirrors `parseEnumDecl`.
+			var unionTypeExpr = UnresolvedTypeExpr.rangedInt(enumIntLowerBound(cases), upper: enumIntUpperBound(cases))
+			if backingState.isFloatBacked 'asFloatExpr'
+				unionTypeExpr = UnresolvedTypeExpr.rangedFloat(f64MinBits(), upper: f64MaxBits())
+			end 'asFloatExpr'
+			if not project.typealiases.contains(currentTypeName) and not project.unresolvedTypealiases.contains(currentTypeName) 'registerAlias'
+				project.unresolvedTypealiases.upsert(currentTypeName, value: UnresolvedTypealias.create(currentTypeName, expr: unionTypeExpr, visibility: visibility, line: unionNameToken.line, column: unionNameToken.column, filePath: filePath))
+				recordUnresolvedTypealiasUpsert(project, filePath: filePath, key: currentTypeName)
+			end 'registerAlias'
+
+			for i in 0 upto cases.count() 'eachConst'
+				let c = try cases.get(i) otherwise panic("parseUnionDecl: cases.get OOB at {i}")
+				let rawIsFloat = backingState.isFloatBacked
+				registerCaseConstant(currentTypeName, caseName: c.name, rawValue: c.rawValue, rawIsFloat: rawIsFloat, visibility: currentEnumVisibility)
+			end 'eachConst'
+
+			// String / char backings keep their runtime rawValue at the ordinal,
+			// so they get a dedicated `.fromRawValue(<String/Character>)` helper;
+			// struct-backed scalar unions skip the int `.fromRawValue` helper for
+			// the same reason enums do (raw value is a struct literal, not an int).
+			let skipIntFromRawHelper = (not backingState.structBackingTypeName.isEmpty()) or backingState.isStringBacked or backingState.isCharBacked
+			synthesizeEnumLookupHelpers(currentTypeName, cases: cases, isFloatBacked: backingState.isFloatBacked, isStringBacked: backingState.isStringBacked, isCharBacked: backingState.isCharBacked, visibility: visibility, line: unionNameToken.line, column: unionNameToken.column, skipFromRawValue: skipIntFromRawHelper)
+		end 'scalarUnion'
 
 		currentTypeName = ""
 		currentEnumVisibility = Visibility.file

@@ -1,0 +1,72 @@
+// Test: int-backed-union-match
+union Status
+	ok = 200
+	notFound = 404
+	serverError = 500
+end 'Status'
+
+function classify(s Status) returns ExitCode
+	return match s 'm'
+		ok gives 0
+		notFound gives 4
+		serverError gives 5
+	end 'm'
+end 'classify'
+
+function main() returns ExitCode
+	return classify(Status.notFound)
+end 'main'
+---
+ExitCode: 4
+---
+// CompiledIR
+module {
+  func @classify(local0: u16) -> u8 {
+  entry:
+    %14 = mir.param local0 : u16
+    %2 = mir.mov_imm 0 : i64
+    %3 = mir.mov_imm 200 : i64
+    %4 = mir.cmp eq, %14, %3
+    mir.cond_br %4 [then: m_0.case0(), else: m_0.next0()]
+  m_0.merge(%13: i64):
+    %15 = mir.mov_imm 125 : i64
+    %16 = mir.cmp ugt, %13, %15
+    mir.cond_br %16 [then: __range_panic_0(), else: __range_ok_0()]
+  m_0.case0:
+    %6 = mir.mov_imm 0 : i64
+    mir.br m_0.merge(%6)
+  m_0.next0:
+    %7 = mir.mov_imm 404 : i64
+    %8 = mir.cmp eq, %14, %7
+    mir.cond_br %8 [then: m_0.case1(), else: m_0.next1()]
+  m_0.case1:
+    %9 = mir.mov_imm 4 : i64
+    mir.br m_0.merge(%9)
+  m_0.next1:
+    %10 = mir.mov_imm 500 : i64
+    %11 = mir.cmp eq, %14, %10
+    mir.cond_br %11 [then: m_0.case2(), else: m_0.merge(%2)]
+  m_0.case2:
+    %12 = mir.mov_imm 5 : i64
+    mir.br m_0.merge(%12)
+  __range_panic_0:
+    %17 = mir.global_addr @__panic_msg_6c100dcd5c76ab64
+    %18 = mir.call @mrt_panic(%17)
+  __range_ok_0:
+    mir.ret %13
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 404 : i64
+    %1 = mir.call @classify(%0)
+    %2 = mir.mov_imm 125 : i64
+    %3 = mir.cmp ugt, %1, %2
+    mir.cond_br %3 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %4 = mir.global_addr @__panic_msg_13e74a042691de8c
+    %5 = mir.call @mrt_panic(%4)
+  __range_ok_0:
+    mir.ret %1
+  }
+}
+---
