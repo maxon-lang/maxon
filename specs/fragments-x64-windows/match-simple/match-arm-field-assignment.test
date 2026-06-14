@@ -1,0 +1,87 @@
+// Test: match-arm-field-assignment
+enum Op
+	noop
+	mark
+	done
+end 'Op'
+
+type State
+	export var flag = false
+
+	export static function make() returns State
+		return State{}
+	end 'make'
+end 'State'
+
+function scan(op Op, state State)
+	match op 'm'
+		noop then break 'm'
+		mark then state.flag = true
+		done then break 'm'
+	end 'm'
+end 'scan'
+
+function main() returns ExitCode
+	var s = State.make()
+	scan(Op.mark, state: s)
+	return 1 if s.flag else 0
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @scan(rcx: u8, rdx: i64) {
+  entry:
+    x64.test rcx, rcx
+    x64.jne m_0.next0
+  m_0.merge:
+    x64.ret
+  m_0.next0:
+    x64.cmp rcx, 1
+    x64.jne m_0.next1
+  m_0.case1:
+    x64.mov r8d, 1
+    x64.mov [rdx+0], r8 (1b)
+    x64.jmp m_0.merge
+  m_0.next1:
+    x64.mov r8d, 2
+    x64.jmp m_0.merge
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.xor edx, edx
+    x64.mov ecx, 8
+    x64.call stdlib.__mm_alloc
+    x64.mov r12, r8
+    x64.xor r8d, r8d
+    x64.mov [r12+0], r8 (1b)
+    x64.mov r13d, 1
+    x64.mov rcx, r13
+    x64.mov rdx, r12
+    x64.call scan
+    x64.movsx r13, [r12+0] (1b)
+    x64.mov rcx, r12
+    x64.call mm_drop
+    x64.xor r8d, r8d
+    x64.mov r9d, 1
+    x64.test r13, r13
+    x64.je ternary.else
+    x64.mov r8, r9
+    x64.jmp ternary.merge
+  ternary.else:
+  ternary.merge:
+    x64.mov r9d, 4294967295
+    x64.cmp r8, r9
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea r12, [rip+__panic_msg_b61264fafe92e2e7]
+    x64.mov rcx, r12
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

@@ -586,3 +586,42 @@ end 'main'
 ```maxoncstderr
 error E2029: specs/fragments/match-simple/error.match-default-not-last.test:6:3: 'default' case must be the last case in match
 ```
+
+<!-- test: match-arm-field-assignment -->
+A match arm body may be a dotted field assignment (`state.flag = true`), not
+just a bare `x = value`. The arm-body parser routes an identifier-started
+statement through the shared statement parser so every assignment shape — plain,
+dotted field-store, discard — is accepted. This mirrors the compiler's own
+`scanArm64InstrForFrame`, whose arms set `state.hasCalls = true`.
+```maxon
+enum Op
+	noop
+	mark
+	done
+end 'Op'
+
+type State
+	export var flag = false
+
+	export static function make() returns State
+		return State{}
+	end 'make'
+end 'State'
+
+function scan(op Op, state State)
+	match op 'm'
+		noop then break 'm'
+		mark then state.flag = true
+		done then break 'm'
+	end 'm'
+end 'scan'
+
+function main() returns ExitCode
+	var s = State.make()
+	scan(Op.mark, state: s)
+	return 1 if s.flag else 0
+end 'main'
+```
+```exitcode
+1
+```

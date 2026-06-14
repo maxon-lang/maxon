@@ -8190,13 +8190,18 @@ export type Parser
 			sealPanicTailWithSyntheticRet(currentBlock)
 			return MatchStmtArmBodyResult.create(currentBlock, hadReturn: false)
 		end 'isPanic'
-		if stmtToken.kind == TokenKind.identifier 'maybeAssign'
-			let peekTok = try cursor.peek(1) otherwise throw ParserError.unexpectedEof
-			if peekTok.kind == TokenKind.equals 'isAssign'
-				try parseVarAssignment(block)
-				return MatchStmtArmBodyResult.create(currentBlock, hadReturn: false)
-			end 'isAssign'
-		end 'maybeAssign'
+		// An identifier-started arm body is a statement: a plain `x = v`
+		// assignment, a dotted field-store (`state.flag = true`), a discard
+		// (`_ = call()`), or a method/function call. Route through the shared
+		// `parseIdentifierStatement` so every shape is handled — the previous
+		// narrow check only recognised a bare `IDENT =` assignment, so a
+		// dotted-target assignment (`x.field = value`) fell through to
+		// `parseExpression`, which parsed `x.field` then choked on the trailing
+		// `= value` (E2010 "Expected 'then' but got '<rhs>'").
+		if stmtToken.kind == TokenKind.identifier 'isIdentStmt'
+			try parseIdentifierStatement(currentBlock)
+			return MatchStmtArmBodyResult.create(currentBlock, hadReturn: false)
+		end 'isIdentStmt'
 		// Statement-form `try EXPR [otherwise FALLBACK]` in a match arm:
 		// route through parseTryExpression with isStatementContext=true so
 		// the void-return guard (E3059) is skipped — the call result is
