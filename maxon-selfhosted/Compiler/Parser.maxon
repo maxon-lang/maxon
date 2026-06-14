@@ -7907,6 +7907,14 @@ export type Parser
 			// module.appendOp; the function parameter is `let`-bound by
 			// callers (see `parseMatchStatement` line 7767).
 			try parsePanicStatement(currentBlock)
+			// parsePanicStatement only appends the panic op — it sets no block
+			// terminator. Seal the block with a synthetic `ret 0` (mirroring
+			// `default panic(...)` via emitDivergingDefaultArm) so the arm body
+			// reads as terminated. Without this seal the arm-reaches-merge check
+			// in parseMatchStatement counts a `then panic(...)` arm as flowing
+			// to the merge block, the merge block is never marked dead, and a
+			// match whose every arm diverges/returns falsely trips E3013.
+			sealPanicTailWithSyntheticRet(currentBlock)
 			return MatchStmtArmBodyResult.create(currentBlock, hadReturn: false)
 		end 'isPanic'
 		if stmtToken.kind == TokenKind.identifier 'maybeAssign'
@@ -7958,9 +7966,21 @@ export type Parser
 	function emitMatchUnreachableTerminator(block IrBlock)
 		let unreachableMsg = project.strings.intern("unreachable: non-exhaustive match")
 		module.appendOp(block, op: MaxonOp.panic(unreachableMsg, range: SourceRange.none()))
+		sealPanicTailWithSyntheticRet(block)
+	end 'emitMatchUnreachableTerminator'
+
+	// `panic` / `panicDynamic` is a regular op, not a block terminator — the
+	// process aborts before the op "returns", so no real terminator op is
+	// emitted by parsePanicStatement. Append a synthetic `ret 0` so the static
+	// verifier (and every isTerminated() consumer) sees the block as
+	// terminated. The runtime never reaches the ret because the panic aborts.
+	// Shared by emitMatchUnreachableTerminator, emitDivergingDefaultArm's panic
+	// branch, and the match-arm `then panic(...)` body so all three seal a
+	// panic-tail block identically.
+	function sealPanicTailWithSyntheticRet(block IrBlock)
 		let zero = emitLiteral(block, value: 0, valueType: MaxonType.integer)
 		module.setTerminator(block, op: MaxonOp.ret(zero, range: SourceRange.none()))
-	end 'emitMatchUnreachableTerminator'
+	end 'sealPanicTailWithSyntheticRet'
 
 	// Mark `block` as `Terminator.dead` (treated as terminated by isTerminated)
 	// when it has no terminator yet. Exists because the parser type-system
@@ -8112,12 +8132,7 @@ export type Parser
 	function emitDivergingDefaultArm(armBodyBlock IrBlock) throws ParserError
 		if at(TokenKind.panic) 'isPanic'
 			try parsePanicStatement(armBodyBlock)
-			// `panic` is a regular op, not a terminator — finish the
-			// block with a synthetic `ret 0` so the verifier sees a
-			// terminated CFG. The runtime never reaches the ret because
-			// `panic` aborts.
-			let zero = emitLiteral(armBodyBlock, value: 0, valueType: MaxonType.integer)
-			module.setTerminator(armBodyBlock, op: MaxonOp.ret(zero, range: SourceRange.none()))
+			sealPanicTailWithSyntheticRet(armBodyBlock)
 			return
 		end 'isPanic'
 		// `default throws Err.case [(args)]` — same source shape as a
@@ -10703,11 +10718,9 @@ export type Parser
 			return TryFallbackOutcome.terminator(fallbackBlock)
 		end 'isReturn' else if dispatchToken.kind == TokenKind.panic 'isPanic'
 			try parsePanicStatement(fallbackBlock)
-			// parsePanicStatement only appends MaxonOp.panic — block needs
-			// an explicit terminator so the verifier sees it sealed. Use a
-			// synthetic ret of zero, mirroring emitMatchUnreachableTerminator.
-			let zeroName = emitLiteral(fallbackBlock, value: 0, valueType: MaxonType.integer)
-			module.setTerminator(fallbackBlock, op: MaxonOp.ret(zeroName, range: SourceRange.ofToken(tryToken)))
+			// parsePanicStatement only appends MaxonOp.panic — the block needs
+			// an explicit terminator so the verifier sees it sealed.
+			sealPanicTailWithSyntheticRet(fallbackBlock)
 			return TryFallbackOutcome.terminator(fallbackBlock)
 		end 'isPanic' else if dispatchToken.kind == TokenKind.throw 'isThrow'
 			try parseThrowStatement(fallbackBlock)

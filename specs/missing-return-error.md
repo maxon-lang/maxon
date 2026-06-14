@@ -91,3 +91,32 @@ end 'main'
 1
 ```
 
+<!-- test: match-binding-return-plus-panic-arm -->
+A function whose body is a single `match` with a payload-binding arm that
+returns and a sibling `panic(...)` arm — every path diverges or returns and
+there is no `default` arm. The unreachable merge block must be treated as
+terminated so no missing-return (E3013) is reported.
+
+```maxon
+typealias Code = int(0 to 125)
+
+union Op
+	systemOp(x Code)
+	callOp
+end 'Op'
+
+function pick(o Op) returns Code
+	match o 'm'
+		systemOp(v) then return v
+		callOp then panic("no")
+	end 'm'
+end 'pick'
+
+function main() returns ExitCode
+	return pick(Op.systemOp(3))
+end 'main'
+```
+```exitcode
+3
+```
+

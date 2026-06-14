@@ -1,0 +1,78 @@
+// Test: match-binding-return-plus-panic-arm
+typealias Code = int(0 to 125)
+
+union Op
+	systemOp(x Code)
+	callOp
+end 'Op'
+
+function pick(o Op) returns Code
+	match o 'm'
+		systemOp(v) then return v
+		callOp then panic("no")
+	end 'm'
+end 'pick'
+
+function main() returns ExitCode
+	return pick(Op.systemOp(3))
+end 'main'
+---
+ExitCode: 3
+---
+// CompiledIR
+module {
+  func @pick(local0: i64) -> u8 {
+  entry:
+    %16 = mir.param local0 : i64
+    %2 = mir.load %16, 0 width: qword
+    %3 = mir.mov_imm 0 : i64
+    %4 = mir.cmp eq, %2, %3
+    mir.cond_br %4 [then: m_0.case0(), else: m_0.next0()]
+  m_0.case0:
+    %5 = mir.load %16, 8 width: qword
+    %17 = mir.mov_imm 125 : i64
+    %18 = mir.cmp ugt, %5, %17
+    mir.cond_br %18 [then: __range_panic_0(), else: __range_ok_0()]
+  m_0.next0:
+    %7 = mir.load %16, 0 width: qword
+    %8 = mir.mov_imm 1 : i64
+    %9 = mir.cmp eq, %7, %8
+    mir.cond_br %9 [then: m_0.case1(), else: m_0.next1()]
+  m_0.case1:
+    %10 = mir.global_addr @__panic_msg_44c4f454a24b866a
+    %11 = mir.call @mrt_panic(%10)
+    %12 = mir.mov_imm 0 : i64
+    mir.ret %12
+  m_0.next1:
+    %13 = mir.global_addr @__panic_msg_96c7daeb3f9a871f
+    %14 = mir.call @mrt_panic(%13)
+    %15 = mir.mov_imm 0 : i64
+    mir.ret %15
+  __range_panic_0:
+    %19 = mir.global_addr @__panic_msg_1a81dd9454feea36
+    %20 = mir.call @mrt_panic(%19)
+  __range_ok_0:
+    mir.ret %5
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 3 : i64
+    %3 = mir.mov_imm 16 : i64
+    %4 = mir.mov_imm 0 : i64
+    %5 = mir.mov_imm 0 : i64
+    %6 = mir.call @stdlib.__mm_alloc(%3, %4)
+    mir.store %5, %6, 0 width: qword
+    mir.store %0, %6, 8 width: qword
+    %2 = mir.call @pick(%6)
+    %7 = mir.call @mm_drop(%6)
+    %8 = mir.mov_imm 125 : i64
+    %9 = mir.cmp ugt, %2, %8
+    mir.cond_br %9 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %10 = mir.global_addr @__panic_msg_fd9c40bde945ae70
+    %11 = mir.call @mrt_panic(%10)
+  __range_ok_0:
+    mir.ret %2
+  }
+}
+---
