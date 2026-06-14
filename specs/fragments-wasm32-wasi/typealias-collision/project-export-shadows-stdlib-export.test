@@ -1,0 +1,88 @@
+// Test: project-export-shadows-stdlib-export
+export typealias StringArray = Array with String
+
+function main() returns ExitCode
+	var xs = StringArray.create()
+	xs.push("a")
+	xs.push("b")
+	return xs.count() as ExitCode
+end 'main'
+---
+ExitCode: 2
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %1 = mir.global_addr @__layout_Array_String
+    %2 = mir.call @Array.create(%1)
+    %4 = mir.global_addr @__istr_0
+    %5 = mir.mov_imm 48 : i64
+    %6 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %7 = mir.call @mrt_alloc_with_dtor(%5, %6)
+    mir.store %0, %7, 40 width: qword
+    mir.store %4, %7, 0 width: qword
+    %9 = mir.mov_imm 1 : i64
+    mir.store %9, %7, 8 width: qword
+    %10 = mir.mov_imm -2 : i64
+    mir.store %10, %7, 16 width: qword
+    mir.store %9, %7, 24 width: qword
+    mir.store %0, %7, 32 width: qword
+    %14 = mir.mov_imm 16 : i64
+    %15 = mir.func_addr @__destruct_String
+    %13 = mir.call @stdlib.__mm_alloc(%14, %15)
+    %44 = mir.call @stdlib.__mm_incref(%13)
+    mir.store %7, %13, 0 width: qword
+    mir.store %9, %13, 8 width: qword
+    %17 = mir.global_addr @__layout_Array_String
+    %18 = mir.call @Array.push(%2, %13, %17)
+    %20 = mir.global_addr @__istr_1
+    %21 = mir.mov_imm 48 : i64
+    %22 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %23 = mir.call @mrt_alloc_with_dtor(%21, %22)
+    mir.store %0, %23, 40 width: qword
+    mir.store %20, %23, 0 width: qword
+    mir.store %9, %23, 8 width: qword
+    %26 = mir.mov_imm -2 : i64
+    mir.store %26, %23, 16 width: qword
+    mir.store %9, %23, 24 width: qword
+    mir.store %0, %23, 32 width: qword
+    %30 = mir.mov_imm 16 : i64
+    %31 = mir.func_addr @__destruct_String
+    %29 = mir.call @stdlib.__mm_alloc(%30, %31)
+    %45 = mir.call @stdlib.__mm_incref(%29)
+    mir.store %23, %29, 0 width: qword
+    mir.store %9, %29, 8 width: qword
+    %33 = mir.global_addr @__layout_Array_String
+    %34 = mir.call @Array.push(%2, %29, %33)
+    %36 = mir.global_addr @__layout_Array_String
+    %37 = mir.call @Array.count(%2, %36)
+    %38 = mir.mov_imm 125 : i64
+    %39 = mir.cmp gt, %37, %38
+    mir.cond_br %39 [then: __rc_edge_0_0(), else: __cast_check_lo_0()]
+  __cast_check_lo_0:
+    %41 = mir.cmp lt, %37, %0
+    mir.cond_br %41 [then: __rc_edge_3_0(), else: __cast_ok_0()]
+  __cast_panic_0:
+    %42 = mir.global_addr @__panic_msg_ce10384592c4b6ea
+    %43 = mir.call @mrt_panic(%42)
+  __cast_ok_0:
+    %46 = mir.call @__mm_decref_maybenull_helper(%2)
+    %49 = mir.mov_imm 125 : i64
+    %50 = mir.cmp ugt, %37, %49
+    mir.cond_br %50 [then: __range_panic_0(), else: __range_ok_0()]
+  __rc_edge_0_0:
+    %47 = mir.call @__mm_decref_maybenull_helper(%2)
+    mir.br __cast_panic_0()
+  __rc_edge_3_0:
+    %48 = mir.call @__mm_decref_maybenull_helper(%2)
+    mir.br __cast_panic_0()
+  __range_panic_0:
+    %51 = mir.global_addr @__panic_msg_ce10384592c4b6ea
+    %52 = mir.call @mrt_panic(%51)
+  __range_ok_0:
+    mir.ret %37
+  }
+}
+---

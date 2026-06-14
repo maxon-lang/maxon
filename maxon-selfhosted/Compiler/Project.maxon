@@ -2088,7 +2088,7 @@ export function reachableTypealiasDefinitions(project Project, name String, read
 			let pathStr = pending.filePath.toString()
 			let isLocalPending = pending.visibility == Visibility.file and pathStr == readerPathStr
 			if hasLocalShadow and not isLocalPending 'shadowed'
-				return results
+				return narrowTypealiasCandidates(results, readerFilePath: readerFilePath)
 			end 'shadowed'
 			var dup = false
 			for prev in seenPaths 'dedupe'
@@ -2104,8 +2104,94 @@ export function reachableTypealiasDefinitions(project Project, name String, read
 			end 'addPending'
 		end 'visible'
 	end 'havePending'
-	return results
+	return narrowTypealiasCandidates(results, readerFilePath: readerFilePath)
 end 'reachableTypealiasDefinitions'
+
+// Apply the two precedence rules that keep a bare type reference unambiguous
+// even though several files declare the name. Runs just before the caller's
+// `count() > 1` E3063 check. Order matters: stdlib candidates are dropped
+// first (they never participate in project ambiguity), then the survivors are
+// narrowed to the reader's nearest enclosing directory scope.
+function narrowTypealiasCandidates(candidates ReachableTypealiasInfoArray, readerFilePath FilePath) returns ReachableTypealiasInfoArray
+	return restrictToNearestEnclosingScope(dropStdlibTypealiasCandidates(candidates), readerFilePath: readerFilePath)
+end 'narrowTypealiasCandidates'
+
+// Stdlib-origin typealiases never participate in cross-file ambiguity (E3063):
+// the C# bootstrap seeds them via `SeedFromModule` (recorded in
+// `_seededStdlibTypeAliases`) and deliberately keeps them out of the
+// `AmbiguousTypeNames` set, which is computed only across merged *project*
+// modules. So a project file that re-exports a name the stdlib also exports
+// (e.g. `StringArray`, `FilePathArray`, `ByteCount`) shadows the stdlib alias
+// for that name rather than colliding with it. Mirror that here by dropping
+// every stdlib-namespace candidate before the caller's `count() > 1` check.
+// A name exported by exactly one stdlib file and nowhere else collapses to an
+// empty list — still correct, since one definition is never ambiguous.
+function dropStdlibTypealiasCandidates(candidates ReachableTypealiasInfoArray) returns ReachableTypealiasInfoArray
+	var filtered = ReachableTypealiasInfoArray.create()
+	for info in candidates 'each'
+		if isStdlibNamespace(info.namespace) 'fromStdlib'
+			continue
+		end 'fromStdlib'
+		filtered.push(info)
+	end 'each'
+	return filtered
+end 'dropStdlibTypealiasCandidates'
+
+// Directory-as-module precedence: a declaration in the reader's own directory
+// or any ancestor directory shadows declarations sitting in unrelated
+// subtrees (a subdirectory of the reader, or a cousin module). So when the
+// compiler's own source exports `FilePathArray` from `Compiler/` and again
+// from `Compiler/Coverage/`, a reader in `Compiler/` resolves to the
+// `Compiler/` one with no ambiguity — the nested `Coverage/` export is a more
+// local name that the parent scope cannot see as a competitor. Likewise a
+// reader in `Compiler/Targets/Arm64/` prefers the `Compiler/` (ancestor)
+// `VarSlotArray` over the `Compiler/Passes/` (cousin) one. Only when no
+// candidate encloses the reader — e.g. two sibling `api/` and `legacy/`
+// modules referenced from a third `app/` file — do all candidates remain and
+// the E3063 ambiguity stands (see specs/typealias-collision.md). When at least
+// one enclosing candidate exists, narrow to the nearest (deepest) such scope.
+function restrictToNearestEnclosingScope(candidates ReachableTypealiasInfoArray, readerFilePath FilePath) returns ReachableTypealiasInfoArray
+	var hasEnclosing = false
+	var deepestDirLen = 0
+	for info in candidates 'findDeepest'
+		if not readerFileIsInModuleSubtree(info.sourceFilePath, readerFilePath: readerFilePath) 'notEnclosing'
+			continue
+		end 'notEnclosing'
+		hasEnclosing = true
+		let dirLen = declarerDirLength(info.sourceFilePath)
+		if dirLen > deepestDirLen 'deeper'
+			deepestDirLen = dirLen
+		end 'deeper'
+	end 'findDeepest'
+
+	if not hasEnclosing 'noEnclosing'
+		return candidates
+	end 'noEnclosing'
+
+	var filtered = ReachableTypealiasInfoArray.create()
+	for info in candidates 'keepNearest'
+		if not readerFileIsInModuleSubtree(info.sourceFilePath, readerFilePath: readerFilePath) 'notEnclosing'
+			continue
+		end 'notEnclosing'
+		if declarerDirLength(info.sourceFilePath) != deepestDirLen 'shallower'
+			continue
+		end 'shallower'
+		filtered.push(info)
+	end 'keepNearest'
+	return filtered
+end 'restrictToNearestEnclosingScope'
+
+typealias DirPathLength = int(0 to u64.max)
+
+// Byte length of a declaration's parent-directory path. Among candidates that
+// all enclose the reader (ancestor-or-equal directories), the deepest scope is
+// the one whose directory string is longest — a nested ancestor path always
+// extends its parent's path with an extra `/segment`. Used purely to rank
+// enclosing scopes; never compared across non-nested directories.
+function declarerDirLength(filePath FilePath) returns DirPathLength
+	let parent = try filePath.parent() otherwise return 0
+	return parent.toString().byteLength()
+end 'declarerDirLength'
 
 // Sidecar visibility info for a function. Mirrors the data on
 // `IrFunction.visibility` / `IrFunction.sourceFilePath` but is keyed by

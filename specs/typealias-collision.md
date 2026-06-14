@@ -113,6 +113,57 @@ end 'main'
 ```
 
 
+<!-- test: project-export-shadows-stdlib-export -->
+A project file exports a typealias whose bare name is *also* exported by the
+stdlib (here `StringArray`, exported from `stdlib/Json.maxon`). A bare reference
+resolves to the project definition without E3063 — a project export shadows a
+stdlib export of the same name rather than colliding with it. Stdlib aliases are
+seeded as a lower-precedence library layer, so they never participate in
+cross-file ambiguity. Regression guard for self-hosting: the compiler's own
+source re-exports `StringArray`, `FilePathArray`, and `ByteCount`, all of which
+the stdlib also exports.
+```maxon
+export typealias StringArray = Array with String
+
+function main() returns ExitCode
+	var xs = StringArray.create()
+	xs.push("a")
+	xs.push("b")
+	return xs.count() as ExitCode
+end 'main'
+```
+```exitcode
+2
+```
+
+
+<!-- test: nested-export-shadowed-by-enclosing-dir -->
+<!-- SelfhostedOnly -->
+Directory-as-module precedence: a file in `Compiler/` exports `Tally`, and a
+file in the nested `Compiler/Coverage/` subdirectory also exports `Tally`. A
+bare reference from a `Compiler/` file resolves to the enclosing-directory
+definition without E3063 — the deeper, more-local nested export is not a
+competitor from the parent scope's point of view. This mirrors the compiler's
+own source, where `Compiler/` and `Compiler/Coverage/` both export
+`FilePathArray`.
+```maxon
+// --- file: Compiler/types.maxon
+export typealias Tally = int(0 to 100)
+
+// --- file: Compiler/Coverage/types.maxon
+export typealias Tally = int(0 to 200)
+
+// --- file: Compiler/main.maxon
+function main() returns ExitCode
+	let x = 42 as Tally
+	return x
+end 'main'
+```
+```exitcode
+42
+```
+
+
 <!-- test: exported-typealias-file-private-doesnt-collide -->
 <!-- SelfhostedOnly -->
 A file-private `typealias` is invisible across files. When one file exports `Score` and another file declares a file-private `Score`, a third file using bare `Score` resolves to the exported one without ambiguity — the file-private alias isn't reachable from outside its declaring file. The C# bootstrap currently conflates file-private types across files (a single `NonExportedTypeNames` set), so this scenario only fully resolves in the self-hosted compiler.
