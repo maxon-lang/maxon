@@ -11958,7 +11958,17 @@ export type Parser
 				// from a user-defined `widget.set(idx, val)` without resolving
 				// the receiver type. `validateCallArgLabels` re-applies the
 				// rule with receiver-type awareness.
-				let (argNames, argLabels, argTypes, argRanges) = try parseCallArgsRaw(block, requireNamed: false)
+				//
+				// Pass `currentBlock`, NOT the original `block` param: when the
+				// receiver expression moved control flow (e.g. `(try f() otherwise
+				// panic(...)).clone()` lands on the try's merge block), the method
+				// call and its args must emit into THAT block, where the receiver's
+				// value is defined. `parseCallArgsRaw` re-seeds `currentBlock` from
+				// its argument, so passing the stale `block` would silently relocate
+				// the call back to the receiver's pre-try block, orphaning the merge
+				// block (left unterminated → assertAllBlocksTerminated panic).
+				let methodArgsBlock = currentBlock
+				let (argNames, argLabels, argTypes, argRanges) = try parseCallArgsRaw(methodArgsBlock, requireNamed: false)
 				let rparenToken = previousToken()
 				// Tier 4: `p.cancel()` on a promise value is the cancel intrinsic,
 				// not a user method. Emit a void `cancelPromise` op and evaluate to

@@ -150,3 +150,34 @@ end 'main'
 ```exitcode
 42
 ```
+
+<!-- test: try-otherwise-value-flow.chained-method-on-try-receiver -->
+Regression guard: a method call chained onto a `(try CALL otherwise diverge)`
+receiver, followed by another statement in the same block. The receiver's try
+moves control flow onto its merge block; the chained method call (and its arg
+parse) must emit there, not back on the pre-try block. Previously the method's
+argument parse re-seeded the emit block to the statement's entry block, leaving
+the receiver's try-merge block unterminated (assertAllBlocksTerminated panic).
+Two such statements in one block expose it — the second try overwrote the
+entry block's terminator, orphaning the first try's merge.
+```maxon
+function swapFirstTwo(rows StringArray, doSwap bool)
+	if doSwap 'swap'
+		let tmp = (try rows.get(0) otherwise panic("oob")).clone()
+		try rows.set(0, value: try rows.get(1) otherwise panic("oob")) otherwise panic("oob")
+		try rows.set(1, value: tmp) otherwise panic("oob")
+	end 'swap'
+end 'swapFirstTwo'
+
+function main() returns ExitCode
+	var rows = StringArray.create()
+	rows.push("a")
+	rows.push("b")
+	swapFirstTwo(rows, doSwap: true)
+	let first = try rows.get(0) otherwise panic("oob")
+	return first.byteLength() as ExitCode
+end 'main'
+```
+```exitcode
+1
+```
