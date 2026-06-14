@@ -3678,10 +3678,16 @@ export type Parser
 				throw ParserError.unhandledToken
 			end 'isCall'
 			// `Name.member` — could be `EnumName.caseName` or a sized-type
-			// bound (`u64.max` / `i32.min`). Capture both structurally.
+			// bound (`u64.max` / `i32.min`). Capture both structurally. The
+			// member may be a keyword-spelled enum case (`CastCategory.bool`,
+			// `MirOp.ret`) — the enum spec permits keyword tokens as case names,
+			// so accept any identifier-like token (its `.value` carries the raw
+			// spelling), not just a strict `identifier`. Without this a const
+			// struct-backing field value like `Info{cat: Cat.bool}` mis-parses,
+			// leaving `.bool` dangling (E2010 "Expected ',' ... got '.'").
 			if next.kind == TokenKind.dot 'isDotted'
 				let memberToken = try cursor.peek(2) otherwise Token.eof()
-				if memberToken.kind == TokenKind.identifier 'memberIsIdent'
+				if tokenIsIdentifierLike(memberToken) 'memberIsIdent'
 					if isSizedTypeName(token.value) and (memberToken.value == "min" or memberToken.value == "max") 'isTypeBound'
 						_ = try consume()
 						try eat(TokenKind.dot)

@@ -1,0 +1,72 @@
+// Test: struct-backing-keyword-enum-case-field
+enum Cat
+	bool
+	int
+end 'Cat'
+
+type Info
+	export let cat as Cat
+end 'Info'
+
+enum Kind
+	a = Info{cat: Cat.bool}
+	b = Info{cat: Cat.int}
+end 'Kind'
+
+function classify(k Kind) returns ExitCode
+	return match k 'm'
+		a gives 4
+		b gives 1
+	end 'm'
+end 'classify'
+
+function main() returns ExitCode
+	return classify(Kind.b)
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @classify(local0: u8) -> u8 {
+  entry:
+    %11 = mir.param local0 : u8
+    %2 = mir.mov_imm 0 : i64
+    %3 = mir.mov_imm 0 : i64
+    %4 = mir.cmp eq, %11, %3
+    mir.cond_br %4 [then: m_0.case0(), else: m_0.next0()]
+  m_0.merge(%10: i64):
+    %12 = mir.mov_imm 125 : i64
+    %13 = mir.cmp ugt, %10, %12
+    mir.cond_br %13 [then: __range_panic_0(), else: __range_ok_0()]
+  m_0.case0:
+    %6 = mir.mov_imm 4 : i64
+    mir.br m_0.merge(%6)
+  m_0.next0:
+    %7 = mir.mov_imm 1 : i64
+    %8 = mir.cmp eq, %11, %7
+    mir.cond_br %8 [then: m_0.case1(), else: m_0.merge(%2)]
+  m_0.case1:
+    %9 = mir.mov_imm 1 : i64
+    mir.br m_0.merge(%9)
+  __range_panic_0:
+    %14 = mir.global_addr @__panic_msg_6922c5961271fd0b
+    %15 = mir.call @mrt_panic(%14)
+  __range_ok_0:
+    mir.ret %10
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 1 : i64
+    %1 = mir.call @classify(%0)
+    %2 = mir.mov_imm 125 : i64
+    %3 = mir.cmp ugt, %1, %2
+    mir.cond_br %3 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %4 = mir.global_addr @__panic_msg_c5a83376af3b659f
+    %5 = mir.call @mrt_panic(%4)
+  __range_ok_0:
+    mir.ret %1
+  }
+}
+---

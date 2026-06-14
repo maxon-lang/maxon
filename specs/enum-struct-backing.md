@@ -330,3 +330,41 @@ end 'main'
 ```maxoncstderr
 error E3034: specs/fragments/enum-struct-backing/error.struct-backing-fromRawValue.test:17:15: unknown enum case: 'fromRawValue'
 ```
+
+
+<!-- test: struct-backing-keyword-enum-case-field -->
+A struct-backing field value may reference a keyword-spelled enum case
+(`Cat.bool`, `Cat.int`). The enum spec permits keyword tokens as case names, so
+a const-expression `EnumName.case` member must accept an identifier-like token
+after the dot, not only a strict identifier — otherwise the `.bool` mis-parses.
+This mirrors the compiler's own `StdType` enum, whose struct backings carry
+`CastCategory.bool` / `CastCategory.int`.
+```maxon
+enum Cat
+	bool
+	int
+end 'Cat'
+
+type Info
+	export let cat as Cat
+end 'Info'
+
+enum Kind
+	a = Info{cat: Cat.bool}
+	b = Info{cat: Cat.int}
+end 'Kind'
+
+function classify(k Kind) returns ExitCode
+	return match k 'm'
+		a gives 4
+		b gives 1
+	end 'm'
+end 'classify'
+
+function main() returns ExitCode
+	return classify(Kind.b)
+end 'main'
+```
+```exitcode
+1
+```
