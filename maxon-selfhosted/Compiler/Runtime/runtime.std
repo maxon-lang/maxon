@@ -3868,13 +3868,18 @@ func maxon_sleep 1 void
     std ret v1
 end
 
-// maxon_subprocess_resolve_on_path(name_mm) — PATH lookup. Stub returns NULL
-// (0): `Subprocess.resolveByName`'s `managedIsNull` check treats null and
-// empty identically (its miss path falls back to the bare name, which the OS
-// spawn primitive resolves itself — CreateProcessW iterates PATH+PATHEXT).
-// The previous fresh-empty-MM return leaked the 48-byte record + 1-byte
-// buffer on EVERY resolve (the caller discards a miss without releasing it,
-// and the result is deliberately unclassified).
+// maxon_subprocess_resolve_on_path(name_mm) — PATH lookup. The x64-Windows
+// backend overrides this with a real SearchPathW + %PATHEXT% resolver
+// (emitX64SubprocessResolveOnPath, whose recordLabel supersedes this label);
+// that resolver returns the ABSOLUTE path so the spawn cmdline's first token is
+// absolute and CreateProcessW skips its own fragile NULL-lpApplicationName PATH
+// walk (which fails under git-bash's MSYS-mangled PATH). This MIR stub remains
+// the fallback for wasm/arm64, which never spawn. It returns NULL (0):
+// `Subprocess.resolveByName`'s `managedIsNull` check treats null and empty
+// identically (its miss path falls back to the bare name). Returning a fresh
+// empty MM instead would leak the 48-byte record + 1-byte buffer on EVERY
+// resolve (the caller discards a miss without releasing it, and the result is
+// deliberately unclassified).
 func maxon_subprocess_resolve_on_path 1 i64
   block entry:
     v0 = std param 0 i64

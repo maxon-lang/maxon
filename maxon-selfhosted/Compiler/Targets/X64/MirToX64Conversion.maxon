@@ -2058,7 +2058,7 @@ type X64FunctionLowering
 		args.push(templateSlot)
 
 		let resultSlot = nextTempSlot
-		appendX64Op(target, block: dstBlock, op: X64Op.iatCall(resultSlot, slotIndex: iatSlotIndex(IatSlot.createFileA), argSlots: args))
+		appendX64Op(target, block: dstBlock, op: X64Op.iatCall(resultSlot, slotIndex: iatSlotIndex(IatSlot.CreateFileA), argSlots: args))
 		valueSlotMapSet(valueSlots, valueId: resultId, slot: resultSlot)
 		appendX64Op(target, block: dstBlock, op: X64Op.loadSlot(X64VReg.virtual(resultId), slotIndex: resultSlot))
 		nextTempSlot = nextTempSlot + 1
@@ -2091,7 +2091,7 @@ type X64FunctionLowering
 		args.push(nullSlot)
 
 		let resultSlot = nextTempSlot
-		appendX64Op(target, block: dstBlock, op: X64Op.iatCall(resultSlot, slotIndex: iatSlotIndex(IatSlot.writeFile), argSlots: args))
+		appendX64Op(target, block: dstBlock, op: X64Op.iatCall(resultSlot, slotIndex: iatSlotIndex(IatSlot.WriteFile), argSlots: args))
 		nextTempSlot = nextTempSlot + 1
 	end 'lowerOsWriteFdWindows'
 
@@ -2110,7 +2110,7 @@ type X64FunctionLowering
 		var args = VarSlotArray.create()
 		args.push(fdSlot)
 		let resultSlot = nextTempSlot
-		appendX64Op(target, block: dstBlock, op: X64Op.iatCall(resultSlot, slotIndex: iatSlotIndex(IatSlot.closeHandle), argSlots: args))
+		appendX64Op(target, block: dstBlock, op: X64Op.iatCall(resultSlot, slotIndex: iatSlotIndex(IatSlot.CloseHandle), argSlots: args))
 		nextTempSlot = nextTempSlot + 1
 	end 'lowerOsCloseWindows'
 
@@ -2139,7 +2139,7 @@ type X64FunctionLowering
 		args.push(outBufLenSlot)
 
 		let resultSlot = nextTempSlot
-		appendX64Op(target, block: dstBlock, op: X64Op.iatCall(resultSlot, slotIndex: iatSlotIndex(IatSlot.getEnvironmentVariableA), argSlots: args))
+		appendX64Op(target, block: dstBlock, op: X64Op.iatCall(resultSlot, slotIndex: iatSlotIndex(IatSlot.GetEnvironmentVariableA), argSlots: args))
 		valueSlotMapSet(valueSlots, valueId: resultId, slot: resultSlot)
 		appendX64Op(target, block: dstBlock, op: X64Op.loadSlot(X64VReg.virtual(resultId), slotIndex: resultSlot))
 		nextTempSlot = nextTempSlot + 1
@@ -2185,7 +2185,7 @@ type X64FunctionLowering
 		args.push(protectSlot)
 
 		let resultSlot = nextTempSlot
-		appendX64Op(target, block: dstBlock, op: X64Op.iatCall(resultSlot, slotIndex: iatSlotIndex(IatSlot.virtualAlloc), argSlots: args))
+		appendX64Op(target, block: dstBlock, op: X64Op.iatCall(resultSlot, slotIndex: iatSlotIndex(IatSlot.VirtualAlloc), argSlots: args))
 		valueSlotMapSet(valueSlots, valueId: resultId, slot: resultSlot)
 		appendX64Op(target, block: dstBlock, op: X64Op.loadSlot(X64VReg.virtual(resultId), slotIndex: resultSlot))
 		nextTempSlot = nextTempSlot + 1
@@ -2241,7 +2241,7 @@ type X64FunctionLowering
 		args.push(releaseSlot)
 
 		let resultSlot = nextTempSlot
-		appendX64Op(target, block: dstBlock, op: X64Op.iatCall(resultSlot, slotIndex: iatSlotIndex(IatSlot.virtualFree), argSlots: args))
+		appendX64Op(target, block: dstBlock, op: X64Op.iatCall(resultSlot, slotIndex: iatSlotIndex(IatSlot.VirtualFree), argSlots: args))
 		nextTempSlot = nextTempSlot + 1
 	end 'lowerOsFreePagesWindows'
 
@@ -2548,7 +2548,7 @@ type X64FunctionLowering
 	function lowerOsClockMsWindows(resultId ValueId, dstBlock IrBlock)
 		let args = VarSlotArray.create()
 		let resultSlot = nextTempSlot
-		appendX64Op(target, block: dstBlock, op: X64Op.iatCall(resultSlot, slotIndex: iatSlotIndex(IatSlot.getTickCount64), argSlots: args))
+		appendX64Op(target, block: dstBlock, op: X64Op.iatCall(resultSlot, slotIndex: iatSlotIndex(IatSlot.GetTickCount64), argSlots: args))
 		valueSlotMapSet(valueSlots, valueId: resultId, slot: resultSlot)
 		appendX64Op(target, block: dstBlock, op: X64Op.loadSlot(X64VReg.virtual(resultId), slotIndex: resultSlot))
 		nextTempSlot = nextTempSlot + 1
@@ -2656,7 +2656,7 @@ type X64FunctionLowering
 	// kernel call on the per-P system stack when on a GT (and directly otherwise).
 	function lowerOsLockInit(addrId ValueId, dstBlock IrBlock)
 		match osDesc.os 'pickOs'
-			windows then lowerOsLockCallWindows(addrId, slotIndex: iatSlotIndex(IatSlot.initializeCriticalSection), dstBlock: dstBlock)
+			windows then lowerOsLockCallWindows(addrId, slotIndex: iatSlotIndex(IatSlot.InitializeCriticalSection), dstBlock: dstBlock)
 			linux then break 'pickOs'  // mmap zero-init memory is already a valid uninit lock
 			macos then panic("osLockInit not supported on x64 macos target")
 			wasi then panic("osLockInit not supported on x64 wasi target")

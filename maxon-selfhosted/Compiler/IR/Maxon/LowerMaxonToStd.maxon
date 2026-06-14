@@ -770,6 +770,13 @@ export function registerSlabAndMmGlobalsForDataSection(globalData GlobalDataTabl
 	addSubprocessString(globalData, name: "__subp_nul_devname", bytes: b"NUL\x00\x00")
 	addSubprocessString(globalData, name: "__subp_nul_devname_w", bytes: utf16leTerminated("NUL"))
 	addSubprocessString(globalData, name: "__subp_pipe_name_prefix_w", bytes: utf16leBytes("\\\\.\\pipe\\maxon_stream_"))
+	// resolve_on_path's extension search: the UTF-16 %PATHEXT% env-var name passed
+	// to GetEnvironmentVariableW, and the Win32 default extension list used when the
+	// variable is unset/empty. Both NUL-terminated wide strings (CreateFileW shape).
+	// The default list is 20 wchars = 40 bytes incl. NUL — must match the byte count
+	// the x64 resolver's pathext_default block copies via `rep movsb`.
+	addSubprocessString(globalData, name: "__subp_pathext_name_w", bytes: utf16leTerminated("PATHEXT"))
+	addSubprocessString(globalData, name: "__subp_pathext_default_w", bytes: utf16leTerminated(".COM;.EXE;.BAT;.CMD"))
 
 	// Phase D2: kernel-supplied argc/argv stashed by `mrt_start`'s prologue on
 	// Linux/macOS. The `stashEntryArgv` backend pseudo-op writes rdi/rsi (x64)

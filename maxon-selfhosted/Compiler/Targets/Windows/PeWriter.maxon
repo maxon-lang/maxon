@@ -16,61 +16,76 @@ let DATA_SECTION_VIRTUAL_SIZE = 65536
 // Every code site that emits a call into the import table (per-target
 // `iatCall` op, hand-emitted Windows helpers in X64Backend / Arm64Win32Helpers,
 // OsDescriptor strategy variants) names the destination by enum case rather
-// than a raw integer. Renumbering happens in exactly one place — the
-// `iatSlotIndex` table below — and everything else picks the right slot via
-// the typechecker. Prior to the enum, several call sites referred to slots
-// by literal integer (`iatCall 27`, etc.), and inserting a new import in
-// the middle of the table silently broke them; the enum makes that class of
-// bug a compile error instead.
+// than a raw integer; the slot index is the case's `.ordinal` (see
+// `iatSlotIndex`). Prior to the enum, several call sites referred to slots by
+// literal integer (`iatCall 27`, etc.), and inserting a new import in the middle
+// of the table silently broke them; the enum makes that class of bug a compile
+// error instead.
 //
-// Slot ordering still matters for the PE file format (the IAT/ILT byte
-// streams in `buildImportSection` are written in slot-index order), but the
-// ordering is now a single source of truth.
-export union IatSlot
+// This is a simple enum, not a union: every case is a bare named constant with
+// no associated values. Each case is named EXACTLY as its Win32 import symbol
+// (`SearchPathW`, `getaddrinfo`, `WSAStartup`, …), so the two facets used
+// elsewhere both fall out of the case itself — no separate parallel data:
+//   - `.ordinal` — the zero-based declaration position. This IS the IAT slot
+//     index (`iatSlotIndex`). The cases run 0..N-1 with no gaps, so the ordinal
+//     is the slot. Call-site relocations, `iatSlotByteOffset`, the per-target
+//     `iatCall` op emitters, and the PE hint/IAT/ILT builder all key off it.
+//   - `.name` — the import-name string. `kernel32ImportNames` / `ws2_32ImportNames`
+//     derive their lists by slicing `IatSlot.allCases` by DLL boundary and mapping
+//     `.name`, so the name↔slot pairing has a SINGLE source of truth (the case
+//     itself) — no hand-maintained parallel array to keep in lockstep. This is why
+//     the cases break Maxon's usual camelCase convention and instead match the OS
+//     spelling verbatim, including the all-lowercase Winsock names (`bind`,
+//     `getaddrinfo`, `setsockopt`) and the mixed-case `WSA*` names.
+// A new import is therefore ALWAYS appended at the end of its DLL run — inserting
+// one mid-list would silently renumber every later slot. The DLL groups are
+// contiguous ordinal runs; see the constants below for the exact boundaries
+// (KERNEL32_IAT_END / SHELL32_IAT_START / WS2_32_IAT_START).
+export enum IatSlot
 	// kernel32 — Phase 7 / 8 baseline run.
-	exitProcess
-	getStdHandle
-	writeFile
-	readFile
-	createFileA
-	closeHandle
-	getEnvironmentVariableA
-	virtualAlloc
-	virtualFree
-	initializeCriticalSection
-	enterCriticalSection
-	leaveCriticalSection
+	ExitProcess
+	GetStdHandle
+	WriteFile
+	ReadFile
+	CreateFileA
+	CloseHandle
+	GetEnvironmentVariableA
+	VirtualAlloc
+	VirtualFree
+	InitializeCriticalSection
+	EnterCriticalSection
+	LeaveCriticalSection
 
 	// Phase 15b: command-line argument retrieval.
-	getCommandLineW
-	localFree
-	wideCharToMultiByte
+	GetCommandLineW
+	LocalFree
+	WideCharToMultiByte
 
 	// Phase 15f: executable-path retrieval. `GetModuleFileNameW` writes a
 	// UTF-16 path; the runtime helper re-encodes via WideCharToMultiByte.
-	getModuleFileNameW
+	GetModuleFileNameW
 
 	// Phase 15c Stream 3.1: Win32 file/directory I/O. All kernel32. Path-
 	// taking APIs use the wide-char (W) variants; UTF-8 paths from Maxon
 	// strings get converted via MultiByteToWideChar.
-	createFileW
-	deleteFileW
-	getFileSizeEx
-	getFileAttributesExW
-	setFilePointerEx
-	findFirstFileW
-	findNextFileW
-	findClose
-	createDirectoryW
-	getCurrentDirectoryW
-	multiByteToWideChar
-	getLastError
+	CreateFileW
+	DeleteFileW
+	GetFileSizeEx
+	GetFileAttributesExW
+	SetFilePointerEx
+	FindFirstFileW
+	FindNextFileW
+	FindClose
+	CreateDirectoryW
+	GetCurrentDirectoryW
+	MultiByteToWideChar
+	GetLastError
 
 	// kernel32!Sleep — `osSleep` lowering routes through this slot on
 	// Windows. Appended at the end of the kernel32 run; adding new kernel32
 	// imports here keeps the existing slot ordinals stable, only shifting
 	// the shell32 cases.
-	sleep
+	Sleep
 
 	// Tier 4 async: multi-OS-thread green-thread scheduler (+ reserved IOCP
 	// async-I/O slots). All kernel32. CreateThread spawns worker OS threads; the
@@ -78,21 +93,21 @@ export union IatSlot
 	// array. The IOCP APIs (createIoCompletionPort / get+postQueuedCompletionStatus),
 	// GetTickCount64 (timer heap), WaitForMultipleObjects, ResetEvent and
 	// DeleteCriticalSection are imported ahead of the async-I/O specs but are not
-	// yet referenced by emitted code — keep them in lockstep with `iatSlotIndex`.
-	createThread
-	createEventA
-	setEvent
-	resetEvent
-	waitForSingleObject
-	waitForMultipleObjects
-	getSystemInfo
-	tlsAlloc
-	tlsSetValue
-	deleteCriticalSection
-	createIoCompletionPort
-	getQueuedCompletionStatus
-	postQueuedCompletionStatus
-	getTickCount64
+	// yet referenced by emitted code.
+	CreateThread
+	CreateEventA
+	SetEvent
+	ResetEvent
+	WaitForSingleObject
+	WaitForMultipleObjects
+	GetSystemInfo
+	TlsAlloc
+	TlsSetValue
+	DeleteCriticalSection
+	CreateIoCompletionPort
+	GetQueuedCompletionStatus
+	PostQueuedCompletionStatus
+	GetTickCount64
 
 	// Tier 4 subprocess (`stdlib/Subprocess.maxon`). All kernel32. CreateProcessW
 	// spawns the child; CreatePipe / CreateNamedPipeW + SetHandleInformation wire
@@ -104,29 +119,29 @@ export union IatSlot
 	// renders the last Win32 error; GenerateConsoleCtrlEvent / ResumeThread serve
 	// signal delivery and the create-suspended spawn path. Appended at the end of
 	// the kernel32 run so existing slot ordinals stay stable.
-	createProcessW
-	createPipe
-	createNamedPipeW
-	setHandleInformation
-	getExitCodeProcess
-	terminateProcess
-	searchPathW
-	formatMessageA
-	createJobObjectW
-	assignProcessToJobObject
-	setInformationJobObject
-	terminateJobObject
-	generateConsoleCtrlEvent
-	resumeThread
-	initializeProcThreadAttributeList
-	updateProcThreadAttribute
-	deleteProcThreadAttributeList
+	CreateProcessW
+	CreatePipe
+	CreateNamedPipeW
+	SetHandleInformation
+	GetExitCodeProcess
+	TerminateProcess
+	SearchPathW
+	FormatMessageA
+	CreateJobObjectW
+	AssignProcessToJobObject
+	SetInformationJobObject
+	TerminateJobObject
+	GenerateConsoleCtrlEvent
+	ResumeThread
+	InitializeProcThreadAttributeList
+	UpdateProcThreadAttribute
+	DeleteProcThreadAttributeList
 
 	// CPU-fault diagnostics (Tier 4 fault handler). kernel32!AddVectoredException-
 	// Handler registers the runtime's VEH thunk at __gt_init time. Appended at the
 	// end of the kernel32 run so existing kernel32 slot ordinals stay stable
 	// (shell32 below shifts by one).
-	addVectoredExceptionHandler
+	AddVectoredExceptionHandler
 
 	// Tier 4 async-I/O IOCP completion machinery (x64-Windows `emitX64IoRuntime`).
 	// All kernel32. The overlapped read/write path uses SetFileCompletionNotification-
@@ -137,18 +152,34 @@ export union IatSlot
 	// (shell32 below shifts by eight). INERT until async-I/O specs submit work — the
 	// emitted IOCP functions reference these, but no lowering invokes those functions
 	// yet, so the slots are never hit at runtime.
-	setFileCompletionNotificationModes
-	getOverlappedResult
-	getFileAttributesA
-	deleteFileA
-	findFirstFileA
-	findNextFileA
-	createDirectoryA
-	getCurrentDirectoryA
+	SetFileCompletionNotificationModes
+	GetOverlappedResult
+	GetFileAttributesA
+	DeleteFileA
+	FindFirstFileA
+	FindNextFileA
+	CreateDirectoryA
+	GetCurrentDirectoryA
+
+	// Tier 4 subprocess PATH resolution (`maxon_subprocess_resolve_on_path`).
+	// kernel32!GetEnvironmentVariableW reads %PATHEXT% so the resolver can drive
+	// SearchPathW's per-extension lookup (the A-variant getEnvironmentVariableA
+	// above can't carry the wide name SearchPathW needs). Appended at the end of
+	// the kernel32 run so existing kernel32 slot ordinals stay stable (shell32 +
+	// ws2_32 below shift by one).
+	GetEnvironmentVariableW
+
+	// Tier 4 subprocess handle-list filtering (`maxon_subprocess_spawn`'s
+	// PROC_THREAD_ATTRIBUTE_HANDLE_LIST build). kernel32!GetHandleInformation
+	// queries HANDLE_FLAG_INHERIT so the spawn lists ONLY valid, inheritable
+	// handles — feeding a non-inheritable inherited std handle (mintty/ConPTY)
+	// to the list makes CreateProcessW fail with ERROR_INVALID_PARAMETER.
+	// Appended at the end of the kernel32 run so existing ordinals stay stable.
+	GetHandleInformation
 
 	// shell32 — single entry, lives at the end of the IAT in its own
 	// import-directory DLL.
-	commandLineToArgvW
+	CommandLineToArgvW
 
 	// ws2_32 - Winsock TCP networking (x64-windows `emitX64NetworkingRuntime`).
 	// Lives in its own import-directory DLL run AFTER shell32, but UNLIKE every
@@ -161,115 +192,32 @@ export union IatSlot
 	// relocations and `patchRelocationsX86` depend on, not a guarantee the import
 	// is emitted. ConnectEx is intentionally absent: it is called through the
 	// `__io_connectex_ptr` function pointer (loaded via WSAIoctl), not an IAT slot.
-	wsaStartup
-	wsaSocketW
-	wsaGetLastError
-	wsaIoctl
+	WSAStartup
+	WSASocketW
+	WSAGetLastError
+	WSAIoctl
 	bind
-	getAddrInfo
-	freeAddrInfo
-	wsaSend
-	wsaRecv
-	setSockOpt
-	closeSocket
+	getaddrinfo
+	freeaddrinfo
+	WSASend
+	WSARecv
+	setsockopt
+	closesocket
 end 'IatSlot'
 
-// Integer slot index of an `IatSlot`. Mirrors the case order above and is
-// the only place that translates the symbolic enum back to a PE-level
-// integer. `iatSlotByteOffset` (call-site relocation arithmetic), the
-// per-target `iatCall` op emitters, and the PE writer's hint/IAT/ILT
-// builder all funnel through this function.
+// Integer slot index of an `IatSlot` — its `.ordinal` (the declaration
+// position). Kept as a named adapter (rather than inlining `.ordinal` at every
+// call site) because `iatSlotByteOffset`, the per-target `iatCall` op emitters,
+// and the PE writer's hint/IAT/ILT builder all funnel through this one function.
 export function iatSlotIndex(slot IatSlot) returns MachineWord
-	return match slot 's'
-		exitProcess gives 0
-		getStdHandle gives 1
-		writeFile gives 2
-		readFile gives 3
-		createFileA gives 4
-		closeHandle gives 5
-		getEnvironmentVariableA gives 6
-		virtualAlloc gives 7
-		virtualFree gives 8
-		initializeCriticalSection gives 9
-		enterCriticalSection gives 10
-		leaveCriticalSection gives 11
-		getCommandLineW gives 12
-		localFree gives 13
-		wideCharToMultiByte gives 14
-		getModuleFileNameW gives 15
-		createFileW gives 16
-		deleteFileW gives 17
-		getFileSizeEx gives 18
-		getFileAttributesExW gives 19
-		setFilePointerEx gives 20
-		findFirstFileW gives 21
-		findNextFileW gives 22
-		findClose gives 23
-		createDirectoryW gives 24
-		getCurrentDirectoryW gives 25
-		multiByteToWideChar gives 26
-		getLastError gives 27
-		sleep gives 28
-		createThread gives 29
-		createEventA gives 30
-		setEvent gives 31
-		resetEvent gives 32
-		waitForSingleObject gives 33
-		waitForMultipleObjects gives 34
-		getSystemInfo gives 35
-		tlsAlloc gives 36
-		tlsSetValue gives 37
-		deleteCriticalSection gives 38
-		createIoCompletionPort gives 39
-		getQueuedCompletionStatus gives 40
-		postQueuedCompletionStatus gives 41
-		getTickCount64 gives 42
-		createProcessW gives 43
-		createPipe gives 44
-		createNamedPipeW gives 45
-		setHandleInformation gives 46
-		getExitCodeProcess gives 47
-		terminateProcess gives 48
-		searchPathW gives 49
-		formatMessageA gives 50
-		createJobObjectW gives 51
-		assignProcessToJobObject gives 52
-		setInformationJobObject gives 53
-		terminateJobObject gives 54
-		generateConsoleCtrlEvent gives 55
-		resumeThread gives 56
-		initializeProcThreadAttributeList gives 57
-		updateProcThreadAttribute gives 58
-		deleteProcThreadAttributeList gives 59
-		addVectoredExceptionHandler gives 60
-		setFileCompletionNotificationModes gives 61
-		getOverlappedResult gives 62
-		getFileAttributesA gives 63
-		deleteFileA gives 64
-		findFirstFileA gives 65
-		findNextFileA gives 66
-		createDirectoryA gives 67
-		getCurrentDirectoryA gives 68
-		commandLineToArgvW gives 69
-		wsaStartup gives 70
-		wsaSocketW gives 71
-		wsaGetLastError gives 72
-		wsaIoctl gives 73
-		bind gives 74
-		getAddrInfo gives 75
-		freeAddrInfo gives 76
-		wsaSend gives 77
-		wsaRecv gives 78
-		setSockOpt gives 79
-		closeSocket gives 80
-	end 's'
+	return slot.ordinal as MachineWord
 end 'iatSlotIndex'
 
 // Total IAT slot space — kernel32 run + shell32 run + ws2_32 run. Mirrors the
 // last enum case's index + 1. This is the maximum slot NUMBERING; the IAT/ILT
 // table actually emitted is sized from the present-DLL set (see
 // `emittedIatSlotCount`), which drops the ws2_32 run when networking is unused.
-let IAT_SLOT_COUNT = 81
+let IAT_SLOT_COUNT = 83
 
 type ImportSection
 	export var data as ByteArray
@@ -289,14 +237,13 @@ end 'ImportSection'
 //   IAT  [k32 entries] 0  [s32 entries] 0
 //   ILT  [k32 entries] 0  [s32 entries] 0
 // followed by the Import Directory (3 entries: kernel32, shell32, null).
-let KERNEL32_IAT_END = 69  // exclusive; slots 0..68 are kernel32
-let SHELL32_IAT_START = 69  // slot 69 is shell32 (commandLineToArgvW)
+let KERNEL32_IAT_END = 71  // exclusive; slots 0..70 are kernel32
+let SHELL32_IAT_START = 71  // slot 71 is shell32 (commandLineToArgvW)
 
-// ws2_32 run: slots 70..80 (11 imports). Emitted ONLY when a program references
+// ws2_32 run: slots 72..82 (11 imports). Emitted ONLY when a program references
 // a ws2_32 slot (see `usesWs2_32` in `writePe`); otherwise the run, its DLL
 // directory entry, and its hint-name strings are omitted entirely.
-let WS2_32_IAT_START = 70
-let WS2_32_IAT_COUNT = 11
+let WS2_32_IAT_START = 72
 
 // Number of import-directory entries actually emitted for this build: 2 when
 // ws2_32 is unused (kernel32, shell32), 3 when it is (kernel32, shell32,
@@ -338,99 +285,30 @@ function programUsesWs2_32(relocations RelocationArray) returns bool
 	return false
 end 'programUsesWs2_32'
 
-// kernel32 import names in slot order (slots 0..KERNEL32_IAT_END-1). MUST stay
-// in lockstep with `iatSlotIndex`'s kernel32 arm — same order, same count.
-function kernel32ImportNames() returns StringArray
+// Import names for the slot run `[startSlot, endSlot)`, in slot order. Each
+// `IatSlot` case is named EXACTLY as its Win32 import symbol, so the name is just
+// `.name` and the lists below stay in lockstep with the slot numbering by
+// construction — `IatSlot.allCases` is in declaration (= ordinal = slot) order.
+function importNamesForRun(startSlot MachineWord, endSlot MachineWord) returns StringArray
 	var n = StringArray.create()
-	n.push("ExitProcess")
-	n.push("GetStdHandle")
-	n.push("WriteFile")
-	n.push("ReadFile")
-	n.push("CreateFileA")
-	n.push("CloseHandle")
-	n.push("GetEnvironmentVariableA")
-	n.push("VirtualAlloc")
-	n.push("VirtualFree")
-	n.push("InitializeCriticalSection")
-	n.push("EnterCriticalSection")
-	n.push("LeaveCriticalSection")
-	n.push("GetCommandLineW")
-	n.push("LocalFree")
-	n.push("WideCharToMultiByte")
-	n.push("GetModuleFileNameW")
-	n.push("CreateFileW")
-	n.push("DeleteFileW")
-	n.push("GetFileSizeEx")
-	n.push("GetFileAttributesExW")
-	n.push("SetFilePointerEx")
-	n.push("FindFirstFileW")
-	n.push("FindNextFileW")
-	n.push("FindClose")
-	n.push("CreateDirectoryW")
-	n.push("GetCurrentDirectoryW")
-	n.push("MultiByteToWideChar")
-	n.push("GetLastError")
-	n.push("Sleep")
-	n.push("CreateThread")
-	n.push("CreateEventA")
-	n.push("SetEvent")
-	n.push("ResetEvent")
-	n.push("WaitForSingleObject")
-	n.push("WaitForMultipleObjects")
-	n.push("GetSystemInfo")
-	n.push("TlsAlloc")
-	n.push("TlsSetValue")
-	n.push("DeleteCriticalSection")
-	n.push("CreateIoCompletionPort")
-	n.push("GetQueuedCompletionStatus")
-	n.push("PostQueuedCompletionStatus")
-	n.push("GetTickCount64")
-	n.push("CreateProcessW")
-	n.push("CreatePipe")
-	n.push("CreateNamedPipeW")
-	n.push("SetHandleInformation")
-	n.push("GetExitCodeProcess")
-	n.push("TerminateProcess")
-	n.push("SearchPathW")
-	n.push("FormatMessageA")
-	n.push("CreateJobObjectW")
-	n.push("AssignProcessToJobObject")
-	n.push("SetInformationJobObject")
-	n.push("TerminateJobObject")
-	n.push("GenerateConsoleCtrlEvent")
-	n.push("ResumeThread")
-	n.push("InitializeProcThreadAttributeList")
-	n.push("UpdateProcThreadAttribute")
-	n.push("DeleteProcThreadAttributeList")
-	n.push("AddVectoredExceptionHandler")
-	n.push("SetFileCompletionNotificationModes")
-	n.push("GetOverlappedResult")
-	n.push("GetFileAttributesA")
-	n.push("DeleteFileA")
-	n.push("FindFirstFileA")
-	n.push("FindNextFileA")
-	n.push("CreateDirectoryA")
-	n.push("GetCurrentDirectoryA")
+	for slot in IatSlot.allCases 'each'
+		let idx = iatSlotIndex(slot)
+		if idx >= startSlot and idx < endSlot 'inRun'
+			n.push(slot.name)
+		end 'inRun'
+	end 'each'
 	return n
+end 'importNamesForRun'
+
+// kernel32 import names in slot order (slots 0..KERNEL32_IAT_END-1).
+function kernel32ImportNames() returns StringArray
+	return importNamesForRun(0, endSlot: KERNEL32_IAT_END)
 end 'kernel32ImportNames'
 
 // ws2_32 import names in slot order (slots WS2_32_IAT_START..IAT_SLOT_COUNT-1).
-// MUST stay in lockstep with `iatSlotIndex`'s ws2_32 arm — same order, same
-// count (`WS2_32_IAT_COUNT`). Only emitted into the PE when networking is linked.
+// Only emitted into the PE when networking is linked.
 function ws2_32ImportNames() returns StringArray
-	var n = StringArray.create()
-	n.push("WSAStartup")
-	n.push("WSASocketW")
-	n.push("WSAGetLastError")
-	n.push("WSAIoctl")
-	n.push("bind")
-	n.push("getaddrinfo")
-	n.push("freeaddrinfo")
-	n.push("WSASend")
-	n.push("WSARecv")
-	n.push("setsockopt")
-	n.push("closesocket")
-	return n
+	return importNamesForRun(WS2_32_IAT_START, endSlot: IAT_SLOT_COUNT)
 end 'ws2_32ImportNames'
 
 // Byte size of one Hint/Name table entry for `name`: 2-byte hint + name + NUL,
@@ -465,7 +343,7 @@ function buildImportSection(idataRva Rva, usesWs2_32 bool) returns ImportSection
 	data.reserve(1024)
 
 	let kernel32Names = kernel32ImportNames()
-	let shell32Name = "CommandLineToArgvW"
+	let shell32Name = IatSlot.CommandLineToArgvW.name
 	let ws2_32Names = ws2_32ImportNames()
 	let kernel32Count = kernel32Names.count()
 	let ws2_32Count = ws2_32Names.count()

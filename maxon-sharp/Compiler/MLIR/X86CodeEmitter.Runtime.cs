@@ -7911,6 +7911,23 @@ public partial class X86CodeEmitter {
     DefineSymdata("__subp_nul_devname", "NUL\0\0"u8.ToArray()); // ANSI "NUL", padded
     // UTF-16 "NUL\0" for CreateFileW
     DefineSymdata("__subp_nul_devname_w", [(byte)'N', 0, (byte)'U', 0, (byte)'L', 0, 0, 0]);
+    // UTF-16 L"PATHEXT\0" — the environment-variable name resolve_on_path reads
+    // to drive its extension search (.EXE/.BAT/...). Each ASCII char is widened
+    // to a UTF-16 code unit (low byte then zero high byte), NUL-terminated.
+    DefineSymdata("__subp_pathext_name_w", [
+      (byte)'P', 0, (byte)'A', 0, (byte)'T', 0, (byte)'H', 0,
+      (byte)'E', 0, (byte)'X', 0, (byte)'T', 0, 0, 0,
+    ]);
+    // UTF-16 L".COM;.EXE;.BAT;.CMD\0" — the fallback extension list used when
+    // %PATHEXT% is unset or empty. Mirrors the Win32 default. 19 chars + NUL,
+    // so 40 bytes (20 wchars) — must match the byte count used by the
+    // maxon_memcpy copy in resolve_on_path's pathext_default block.
+    DefineSymdata("__subp_pathext_default_w", [
+      (byte)'.', 0, (byte)'C', 0, (byte)'O', 0, (byte)'M', 0, (byte)';', 0,
+      (byte)'.', 0, (byte)'E', 0, (byte)'X', 0, (byte)'E', 0, (byte)';', 0,
+      (byte)'.', 0, (byte)'B', 0, (byte)'A', 0, (byte)'T', 0, (byte)';', 0,
+      (byte)'.', 0, (byte)'C', 0, (byte)'M', 0, (byte)'D', 0, 0, 0,
+    ]);
     // UTF-16 prefix L"\\\\.\\pipe\\maxon_stream_" — 21 wchars (no trailing null;
     // the pipe-name builder appends pid_seq_dir + null). Each ASCII char is
     // followed by a zero byte for the high half of the UTF-16 code unit.
@@ -7929,6 +7946,7 @@ public partial class X86CodeEmitter {
     EmitMaxonManagedIsNull();
     EmitMaxonSubprocessLastErrorMessage();
     EmitMaxonSubprocessResolveOnPath();
+    EmitMaxonSubprocessSearchWithExt();
     EmitMaxonSubprocessBuildCmdlineWide();
     EmitMaxonSubprocessWideAppendU64();
     EmitMaxonSubprocessBuildPipeNameWide();
@@ -8039,8 +8057,14 @@ public partial class X86CodeEmitter {
   // resolveOnPath(name_mm) — SearchPathW with PATHEXT iteration. Returns
   // an mm_raw_alloc'd UTF-8 cstring of the absolute path, or
   // __rt_empty_cstring if not found. Length 0 → managedIsNull reports
-  // null. The lookup is best-effort: it tries the raw name, then appends
-  // each ;-separated extension from PATHEXT.
+  // null. The lookup first tries the raw name (which resolves a name that
+  // already carries an extension, or any extensionless file), then walks
+  // the ;-separated extension list in %PATHEXT% — passing each extension
+  // as SearchPathW's lpExtension so e.g. "dotnet" resolves to the absolute
+  // path of "dotnet.exe". Returning the absolute path matters because the
+  // spawn cmdline's first token then becomes that quoted absolute path, so
+  // CreateProcessW never falls back to its own fragile NULL-lpApplicationName
+  // PATH walk (which fails under git-bash's MSYS-mangled PATH).
   // --------------------------------------------------------------------------
   private void EmitMaxonSubprocessResolveOnPath() {
     // Stack:
@@ -8048,11 +8072,21 @@ public partial class X86CodeEmitter {
     //   [rbp-0x10]  utf8 name cstring (buffer at managed+0)
     //   [rbp-0x18]  utf8 name length
     //   [rbp-0x20]  utf16 name buffer (mm_raw_alloc'd; null terminated)
-    //   [rbp-0x28]  utf16 result buffer (MAX_PATH wchars = 520 bytes; mm_raw_alloc'd)
+    //   [rbp-0x28]  utf16 result buffer (2048 wchars = 4096 bytes; mm_raw_alloc'd)
     //   [rbp-0x30]  utf8 result cstring (mm_raw_alloc'd)
     //   [rbp-0x38]  required wide size (chars, includes null)
     //   [rbp-0x40]  required utf8 size (bytes, includes null)
-    EmitRuntimeFunctionStart("maxon_subprocess_resolve_on_path", 1, 0x60);
+    //   [rbp-0x48]  PATHEXT utf16 buffer (mm_raw_alloc'd 1024 bytes; null at entry
+    //               so the cleanup chain can free it unconditionally)
+    //   [rbp-0x50]  PATHEXT current-token start (byte ptr into the PATHEXT buffer)
+    //   [rbp-0x58]  PATHEXT scan cursor (byte ptr; walks each token to its ';'/NUL)
+    EmitRuntimeFunctionStart("maxon_subprocess_resolve_on_path", 1, 0x70);
+
+    // Zero the PATHEXT buffer slot up front so the shared cleanup chain
+    // (rt_subp_rop_free_wide_empty) can mm_raw_free it on every exit path,
+    // including the early misses that jump before it is ever allocated.
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitMovMemReg(-0x48, X86Register.Rax, 8);
 
     // MaxonCallRuntimeOp lowering passes the __ManagedMemory's BUFFER POINTER
     // (a UTF-8 cstring), not the struct. Compute its length with maxon_strlen.
@@ -8119,9 +8153,49 @@ public partial class X86CodeEmitter {
     EmitJcc("z", "rt_subp_rop_free_wide_empty");
     EmitMovMemReg(-0x28, X86Register.Rax, 8);
 
-    // SearchPathW(NULL, lpFileName, NULL, nBufferLength=2048, lpBuffer, NULL)
-    // The 2048 is wchars (4096 bytes); we deliberately request the full
-    // buffer so SearchPathW can return long absolute paths.
+    // Allocate the PATHEXT utf16 scratch buffer (1024 bytes = 512 wchars; the
+    // env var is short). GetEnvironmentVariableW's nSize is in CHARACTERS for
+    // the W variant, so the matching count below is 512.
+    EmitMovRegImm(X86Register.Rcx, 1024);
+    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__rt_tag_cstring");
+    EmitCallRuntimeLabel("mm_raw_alloc", zeroSecondArg: !Compiler.MmTrace);
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", "rt_subp_rop_free_both_empty");
+    EmitMovMemReg(-0x48, X86Register.Rax, 8);
+
+    // GetEnvironmentVariableW(L"PATHEXT", buf, 512 chars). Returns the char
+    // count written (excl. NUL) on success, the required size (incl. NUL) if
+    // the buffer is too small, or 0 if the variable is unset.
+    EmitSystemStackEnter(0x40);
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__subp_pathext_name_w");
+    EmitMovRegMem(X86Register.Rdx, -0x48, 8);
+    EmitMovRegImm(X86Register.R8, 512);                          // nSize in wchars
+    EmitCallImport("kernel32.dll", "GetEnvironmentVariableW");
+    EmitSystemStackLeave(0x40);
+    // Treat unset (0) or "didn't fit in our 512-wchar buffer" (>= 512) as a
+    // miss and fall back to the Win32 default extension list. Anything that
+    // long isn't a real PATHEXT.
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", "rt_subp_rop_pathext_default");
+    EmitCmpRegImm(X86Register.Rax, 512);
+    EmitJcc("ge", "rt_subp_rop_pathext_default");
+    EmitJmp("rt_subp_rop_pathext_ready");
+
+    DefineLabel("rt_subp_rop_pathext_default");
+    // Copy L".COM;.EXE;.BAT;.CMD\0" (20 wchars = 40 bytes, incl. NUL) verbatim
+    // into the PATHEXT buffer so the iteration below has a NUL-terminated list.
+    EmitMovRegMem(X86Register.Rcx, -0x48, 8);
+    EmitLeaRegSymdataRel(X86Register.Rdx, "__subp_pathext_default_w");
+    EmitMovRegImm(X86Register.R8, 40);
+    EmitCallRuntimeLabel("maxon_memcpy");
+    DefineLabel("rt_subp_rop_pathext_ready");
+
+    // First attempt: the raw name with no appended extension. This resolves a
+    // name that already carries an extension (e.g. "foo.exe") and any
+    // extensionless file on PATH. lpExtension = NULL.
+    // SearchPathW(NULL, lpFileName, NULL, nBufferLength=2048, lpBuffer, NULL).
+    // The 2048 is wchars (4096 bytes); we request the full buffer so
+    // SearchPathW can return long absolute paths.
     EmitSystemStackEnter(0x40);
     EmitXorRegReg(X86Register.Rcx, X86Register.Rcx);             // lpPath = NULL (PATH)
     EmitMovRegMem(X86Register.Rdx, -0x20, 8);                    // lpFileName
@@ -8133,8 +8207,75 @@ public partial class X86CodeEmitter {
     EmitCallImport("kernel32.dll", "SearchPathW");
     EmitSystemStackLeave(0x40);
     EmitTestRegReg(X86Register.Rax, X86Register.Rax);
-    EmitJcc("z", "rt_subp_rop_free_both_empty");
+    EmitJcc("nz", "rt_subp_rop_search_hit");
+
+    // Miss on the raw name → walk %PATHEXT%, passing each ;-separated
+    // extension as SearchPathW's lpExtension. tokenStart and the scan cursor
+    // are byte pointers into the PATHEXT buffer.
+    EmitMovRegMem(X86Register.Rax, -0x48, 8);
+    EmitMovMemReg(-0x50, X86Register.Rax, 8);                    // tokenStart = buf
+    EmitMovMemReg(-0x58, X86Register.Rax, 8);                    // scanCursor = buf
+
+    DefineLabel("rt_subp_rop_pathext_scan");
+    // Read the wchar at the scan cursor to find the end of the current token.
+    EmitMovRegMem(X86Register.Rax, -0x58, 8);
+    EmitBytes(0x0F, 0xB7, 0x08);                                  // MOVZX ECX, word [RAX]
+    EmitTestRegReg(X86Register.Rcx, X86Register.Rcx);
+    EmitJcc("z", "rt_subp_rop_pathext_last");                     // NUL → final token
+    EmitCmpRegImm(X86Register.Rcx, ';');
+    EmitJcc("e", "rt_subp_rop_pathext_sep");                      // ';' → token boundary
+    // Ordinary extension char: advance the cursor by one wchar and keep scanning.
+    EmitAddRegImm(X86Register.Rax, 2);
+    EmitMovMemReg(-0x58, X86Register.Rax, 8);
+    EmitJmp("rt_subp_rop_pathext_scan");
+
+    DefineLabel("rt_subp_rop_pathext_sep");
+    // Non-empty token bounded by ';'. Temporarily NUL-terminate it in place so
+    // lpExtension sees just this one extension, search, then restore the ';'.
+    EmitMovRegMem(X86Register.Rax, -0x50, 8);                    // tokenStart
+    EmitMovRegMem(X86Register.Rcx, -0x58, 8);                    // sepPos
+    EmitCmpRegReg(X86Register.Rax, X86Register.Rcx);
+    EmitJcc("e", "rt_subp_rop_pathext_skip_empty");              // empty token (e.g. ";;")
+    EmitBytes(0x66, 0xC7, 0x01, 0x00, 0x00);                     // MOV word [RCX], 0
+    EmitMovRegMem(X86Register.Rcx, -0x20, 8);                    // lpFileName
+    EmitMovRegMem(X86Register.Rdx, -0x50, 8);                    // lpExtension = tokenStart
+    EmitMovRegMem(X86Register.R8, -0x28, 8);                     // lpBuffer
+    EmitCallRuntimeLabel("__subp_search_with_ext");
+    // Restore the ';' the search call temporarily overwrote.
+    EmitMovRegMem(X86Register.Rcx, -0x58, 8);
+    EmitBytes(0x66, 0xC7, 0x01, (byte)';', 0x00);                // MOV word [RCX], L';'
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("nz", "rt_subp_rop_search_hit");
+    DefineLabel("rt_subp_rop_pathext_skip_empty");
+    // Advance past the ';' (one wchar) to the next token and rescan.
+    EmitMovRegMem(X86Register.Rax, -0x58, 8);
+    EmitAddRegImm(X86Register.Rax, 2);
+    EmitMovMemReg(-0x50, X86Register.Rax, 8);                    // tokenStart = sep + 1 wchar
+    EmitMovMemReg(-0x58, X86Register.Rax, 8);                    // scanCursor = tokenStart
+    EmitJmp("rt_subp_rop_pathext_scan");
+
+    DefineLabel("rt_subp_rop_pathext_last");
+    // Final token (bounded by the buffer's NUL, already a valid lpExtension
+    // string). Skip it if empty (trailing ';' or empty PATHEXT).
+    EmitMovRegMem(X86Register.Rax, -0x50, 8);                    // tokenStart
+    EmitMovRegMem(X86Register.Rcx, -0x58, 8);                    // NUL pos
+    EmitCmpRegReg(X86Register.Rax, X86Register.Rcx);
+    EmitJcc("e", "rt_subp_rop_free_both_empty");                 // empty → exhausted, miss
+    EmitMovRegMem(X86Register.Rcx, -0x20, 8);                    // lpFileName
+    EmitMovRegMem(X86Register.Rdx, -0x50, 8);                    // lpExtension = tokenStart
+    EmitMovRegMem(X86Register.R8, -0x28, 8);                     // lpBuffer
+    EmitCallRuntimeLabel("__subp_search_with_ext");
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("nz", "rt_subp_rop_search_hit");
+    EmitJmp("rt_subp_rop_free_both_empty");                      // exhausted, miss
+
+    DefineLabel("rt_subp_rop_search_hit");
     EmitMovMemReg(-0x38, X86Register.Rax, 8);                    // wchars written (excludes null)
+    // Free the PATHEXT scratch buffer now that the extension walk is done.
+    EmitMovRegMem(X86Register.Rcx, -0x48, 8);
+    EmitCallRuntimeLabel("mm_raw_free", zeroSecondArg: Compiler.MmTrace);
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitMovMemReg(-0x48, X86Register.Rax, 8);                    // null so cleanup won't double-free
 
     // WideCharToMultiByte(CP_UTF8, 0, wide, wchars, NULL, 0, NULL, NULL) → utf8 bytes
     EmitSystemStackEnter(0x40);
@@ -8195,6 +8336,13 @@ public partial class X86CodeEmitter {
     DefineLabel("rt_subp_rop_free_wide_empty");
     EmitMovRegMem(X86Register.Rcx, -0x20, 8);
     EmitCallRuntimeLabel("mm_raw_free", zeroSecondArg: Compiler.MmTrace);
+    // Free the PATHEXT scratch buffer if it was allocated. The slot is zeroed
+    // at function entry, so the misses that jump here before (or instead of)
+    // allocating it carry a null and skip the free.
+    EmitMovRegMem(X86Register.Rcx, -0x48, 8);
+    EmitTestRegReg(X86Register.Rcx, X86Register.Rcx);
+    EmitJcc("z", "rt_subp_rop_empty");
+    EmitCallRuntimeLabel("mm_raw_free", zeroSecondArg: Compiler.MmTrace);
 
     DefineLabel("rt_subp_rop_empty");
     // The RuntimeCallToManaged lowering always issues a matching
@@ -8209,6 +8357,31 @@ public partial class X86CodeEmitter {
     EmitBytes(0xC6, 0x00, 0x00);                                  // MOV byte [RAX], 0
 
     DefineLabel("rt_subp_rop_done");
+    EmitRuntimeFunctionEnd();
+  }
+
+  // --------------------------------------------------------------------------
+  // __subp_search_with_ext(lpFileName_rcx, lpExtension_rdx, lpBuffer_r8) →
+  // wchars written (excl. NUL) in RAX, 0 on miss. A thin wrapper around
+  // SearchPathW(NULL, lpFileName, lpExtension, 2048, lpBuffer, NULL) factored
+  // out of resolve_on_path so the PATHEXT walk can issue the call from the
+  // ';'-bounded and NUL-bounded token sites without duplicating the 6-arg
+  // stack-shuffle. lpExtension must be a NUL-terminated wide extension that
+  // begins with '.', or NULL.
+  // --------------------------------------------------------------------------
+  private void EmitMaxonSubprocessSearchWithExt() {
+    // [rbp-0x08] lpFileName, [rbp-0x10] lpExtension, [rbp-0x18] lpBuffer
+    EmitRuntimeFunctionStart("__subp_search_with_ext", 3, 0x40);
+    EmitSystemStackEnter(0x40);
+    EmitXorRegReg(X86Register.Rcx, X86Register.Rcx);             // lpPath = NULL (PATH)
+    EmitMovRegMem(X86Register.Rdx, -0x08, 8);                    // lpFileName
+    EmitMovRegMem(X86Register.R8, -0x10, 8);                     // lpExtension
+    EmitMovRegImm(X86Register.R9, 2048);                          // nBufferLength wchars
+    EmitMovRegMem(X86Register.Rax, -0x18, 8);
+    EmitBytes(0x48, 0x89, 0x44, 0x24, 0x20);                      // lpBuffer
+    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x28, 0x00, 0x00, 0x00, 0x00); // lpFilePart=NULL
+    EmitCallImport("kernel32.dll", "SearchPathW");
+    EmitSystemStackLeave(0x40);
     EmitRuntimeFunctionEnd();
   }
 
@@ -9952,6 +10125,11 @@ public partial class X86CodeEmitter {
     const int SlotAttrListPtr = -0x108;
     const int SlotAttrListSize = -0x110;
     const int SlotHandleArray = -0x278;
+    // Count of handles actually placed in SlotHandleArray after filtering to
+    // valid + inheritable handles (see the HANDLE_LIST build). Lives below the
+    // whole frame, clear of the JOBOBJECT_EXTENDED_LIMIT_INFORMATION overrun
+    // zone. 0 → skip the attribute list and EXTENDED_STARTUPINFO_PRESENT.
+    const int SlotHandleCount = -0x288;
 
     // SECURITY_ATTRIBUTES occupies SlotSA..SlotSA+0x18, but we lay it out
     // starting at SlotSA so the base ptr is at SlotSA (24 bytes used).
@@ -9959,7 +10137,7 @@ public partial class X86CodeEmitter {
     // PROCESS_INFORMATION is 24 bytes from SlotPI upward.
     // The padded reservations give us 16-byte alignment.
 
-    EmitRuntimeFunctionStart("__subp_spawn_core", 8, 0x280);
+    EmitRuntimeFunctionStart("__subp_spawn_core", 8, 0x290);
 
     // The caller (subprocess_spawn / subprocess_detach wrapper) places the
     // 14 source args via the internal CC: args 0..7 in RCX/RDX/R8/R9/RSI/
@@ -10322,17 +10500,88 @@ public partial class X86CodeEmitter {
     DefineLabel("rt_subp_sc_job_done");
 
     // ===== Build PROC_THREAD_ATTRIBUTE_LIST with HANDLE_LIST =====
-    // CreateProcessW with bInheritHandles=TRUE inherits every handle in the
-    // parent that is currently marked HANDLE_FLAG_INHERIT. When two spawns
-    // run concurrently (separate GTs), spawn B's CreateProcessW can fire
-    // while spawn A's pipe handle is still inheritable — child B then
-    // inherits A's pipes and IPC cross-talks. STARTUPINFOEX with
-    // PROC_THREAD_ATTRIBUTE_HANDLE_LIST tells CreateProcessW to inherit
-    // exactly the handles in our explicit list and ignore the global flags,
-    // which closes the race deterministically.
+    // PROC_THREAD_ATTRIBUTE_HANDLE_LIST lets CreateProcessW inherit EXACTLY the
+    // listed handles (ignoring global HANDLE_FLAG_INHERIT), which closes the
+    // concurrent-spawn race where child B inherits child A's still-inheritable
+    // pipe ends. But the kernel rejects the whole CreateProcessW call with
+    // ERROR_INVALID_PARAMETER ("The parameter is incorrect") if ANY handle in
+    // the list is not a valid, inheritable kernel handle. In `inherit` stdio
+    // mode the std handle is the parent terminal's GetStdHandle value — under
+    // mintty / a ConPTY that is a pipe/pseudo-console handle that is NOT marked
+    // inheritable, so feeding it to the list broke every inherit-mode spawn
+    // (e.g. `maxon run`). This is the same trap Go hit in go1.17 (golang/go
+    // #49044); the fix Go/Rust both use is to list ONLY the handles we own and
+    // marked inheritable, and to fall back to a classic STARTUPINFOW with
+    // bInheritHandles=TRUE (normal inheritance) when none qualify.
     //
+    // 0) Filter the three std handles (SlotSI+0x50/0x58/0x60) into SlotHandleArray,
+    //    keeping only those that are non-NULL, not INVALID_HANDLE_VALUE, and
+    //    currently carry HANDLE_FLAG_INHERIT (GetHandleInformation). Dedup so a
+    //    handle shared across streams (e.g. the same NUL device for stdout+stderr)
+    //    is listed once. SlotHandleCount holds the survivor count.
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitMovMemReg(SlotHandleCount, X86Register.Rax, 8);
+    foreach (var stdOff in new[] { 0x50, 0x58, 0x60 }) {
+      // Load the candidate handle; skip NULL / INVALID_HANDLE_VALUE (-1).
+      EmitMovRegMem(X86Register.Rbx, SlotSI + stdOff, 8);          // RBX = candidate (callee-saved across the kernel call)
+      EmitTestRegReg(X86Register.Rbx, X86Register.Rbx);
+      EmitJcc("z", $"rt_subp_sc_hl_skip_{stdOff:x}");
+      EmitMovRegImm(X86Register.Rax, unchecked((long)-1));
+      EmitCmpRegReg(X86Register.Rbx, X86Register.Rax);
+      EmitJcc("e", $"rt_subp_sc_hl_skip_{stdOff:x}");
+      // GetHandleInformation(handle, &flags) → flags at [rbp-0x110] (reuse
+      // SlotAttrListSize as scratch; it is only read after this filter block).
+      EmitSystemStackEnter(0x30);
+      EmitMovRegReg(X86Register.Rcx, X86Register.Rbx);
+      EmitLeaRegMem(X86Register.Rdx, SlotAttrListSize);
+      EmitCallImport("kernel32.dll", "GetHandleInformation");
+      EmitSystemStackLeave(0x30);
+      EmitTestRegReg(X86Register.Rax, X86Register.Rax);           // FALSE → not a real handle, skip
+      EmitJcc("z", $"rt_subp_sc_hl_skip_{stdOff:x}");
+      EmitMovRegMem(X86Register.Rax, SlotAttrListSize, 8);        // flags
+      EmitAndRegImm(X86Register.Rax, 1);                          // HANDLE_FLAG_INHERIT
+      EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+      EmitJcc("z", $"rt_subp_sc_hl_skip_{stdOff:x}");
+      // Dedup: scan the [0, count) entries already in SlotHandleArray for RBX.
+      EmitMovRegMem(X86Register.Rcx, SlotHandleCount, 8);         // RCX = count (loop counter)
+      EmitTestRegReg(X86Register.Rcx, X86Register.Rcx);
+      EmitJcc("z", $"rt_subp_sc_hl_add_{stdOff:x}");
+      EmitLeaRegMem(X86Register.Rdx, SlotHandleArray);            // RDX = &array[0]
+      DefineLabel($"rt_subp_sc_hl_dup_{stdOff:x}");
+      EmitMovRegIndirectMem(X86Register.Rax, X86Register.Rdx, 0); // RAX = *RDX
+      EmitCmpRegReg(X86Register.Rax, X86Register.Rbx);
+      EmitJcc("e", $"rt_subp_sc_hl_skip_{stdOff:x}");             // already present → skip
+      EmitAddRegImm(X86Register.Rdx, 8);
+      EmitDecReg(X86Register.Rcx);
+      EmitJcc("nz", $"rt_subp_sc_hl_dup_{stdOff:x}");
+      DefineLabel($"rt_subp_sc_hl_add_{stdOff:x}");
+      // array[count] = RBX; count++.
+      EmitMovRegMem(X86Register.Rcx, SlotHandleCount, 8);
+      EmitLeaRegMem(X86Register.Rdx, SlotHandleArray);
+      EmitShlRegImm(X86Register.Rcx, 3);                          // count * 8
+      EmitAddRegReg(X86Register.Rdx, X86Register.Rcx);            // &array[count]
+      EmitMovIndirectMemReg(X86Register.Rdx, 0, X86Register.Rbx);
+      EmitMovRegMem(X86Register.Rcx, SlotHandleCount, 8);
+      EmitAddRegImm(X86Register.Rcx, 1);
+      EmitMovMemReg(SlotHandleCount, X86Register.Rcx, 8);
+      DefineLabel($"rt_subp_sc_hl_skip_{stdOff:x}");
+    }
+
+    // No inheritable handles qualify (the pure-inherit case): skip the whole
+    // attribute list. STARTUPINFOEX.cb stays 112 but lpAttributeList is left
+    // NULL (zeroed), and the dwCreationFlags built below omit
+    // EXTENDED_STARTUPINFO_PRESENT — so CreateProcessW reads a classic
+    // STARTUPINFOW and inherits via bInheritHandles=TRUE as usual.
+    EmitMovRegMem(X86Register.Rax, SlotHandleCount, 8);
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", "rt_subp_sc_no_attr_list");
+
     // 1) Probe required size via InitializeProcThreadAttributeList(NULL,...).
     //    Returns FALSE with ERROR_INSUFFICIENT_BUFFER and writes the size.
+    //    NOTE: the filtered handles live in SlotHandleArray; the probe/alloc/
+    //    init use a SEPARATE buffer (SlotAttrListPtr) — they must not clobber
+    //    SlotHandleArray, so the raw alloc result is stashed in SlotAttrListPtr
+    //    directly rather than reusing SlotHandleArray as scratch.
     EmitSystemStackEnter(0x30);
     EmitXorRegReg(X86Register.Rcx, X86Register.Rcx);             // lpAttributeList = NULL
     EmitMovRegImm(X86Register.Rdx, 1);                           // dwAttributeCount = 1
@@ -10341,21 +10590,16 @@ public partial class X86CodeEmitter {
     EmitCallImport("kernel32.dll", "InitializeProcThreadAttributeList");
     EmitSystemStackLeave(0x30);
 
-    // 2) Allocate the attribute list buffer. mm_raw_alloc returns the buffer
-    //    in RAX (zeroed by HEAP_ZERO_MEMORY). We use a temporary stack slot
-    //    (SlotHandleArray, not yet populated) to hold the raw pointer while
-    //    Initialize runs; SlotAttrListPtr is only set after Initialize
-    //    succeeds, so the unwind path's DeleteProcThreadAttributeList only
-    //    runs on a properly-initialized buffer (it is undefined on raw mem).
+    // 2) Allocate the attribute list buffer (zeroed by HEAP_ZERO_MEMORY).
     EmitMovRegMem(X86Register.Rcx, SlotAttrListSize, 8);
     EmitCallRuntimeLabel("mm_raw_alloc", zeroSecondArg: Compiler.MmTrace);
     EmitTestRegReg(X86Register.Rax, X86Register.Rax);
     EmitJcc("z", "rt_subp_sc_fail_attr");
-    EmitMovMemReg(SlotHandleArray, X86Register.Rax, 8);          // temp save
+    EmitMovMemReg(SlotAttrListPtr, X86Register.Rax, 8);          // raw ptr (pre-Init)
 
     // 3) Initialize the attribute list.
     EmitSystemStackEnter(0x30);
-    EmitMovRegMem(X86Register.Rcx, SlotHandleArray, 8);          // ptr
+    EmitMovRegMem(X86Register.Rcx, SlotAttrListPtr, 8);          // ptr
     EmitMovRegImm(X86Register.Rdx, 1);
     EmitXorRegReg(X86Register.R8, X86Register.R8);
     EmitLeaRegMem(X86Register.R9, SlotAttrListSize);
@@ -10363,38 +10607,29 @@ public partial class X86CodeEmitter {
     EmitSystemStackLeave(0x30);
     EmitTestRegReg(X86Register.Rax, X86Register.Rax);
     EmitJcc("nz", "rt_subp_sc_attr_init_ok");
-    // Initialize failed — free the raw buffer (no Delete because the buffer
-    // is not in the Initialize'd state DeleteProcThreadAttributeList expects).
-    EmitMovRegMem(X86Register.Rcx, SlotHandleArray, 8);
+    // Initialize failed — free the raw buffer (no Delete: buffer is not in the
+    // Initialize'd state DeleteProcThreadAttributeList expects) and clear the
+    // slot so the unwind path doesn't Delete uninitialized memory.
+    EmitMovRegMem(X86Register.Rcx, SlotAttrListPtr, 8);
     EmitCallRuntimeLabel("mm_raw_free", zeroSecondArg: Compiler.MmTrace);
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitMovMemReg(SlotAttrListPtr, X86Register.Rax, 8);
     EmitJmp("rt_subp_sc_fail_attr");
     DefineLabel("rt_subp_sc_attr_init_ok");
-    // Initialize succeeded — record SlotAttrListPtr so cleanup paths (success
-    // and unwind) will Delete + free correctly.
-    EmitMovRegMem(X86Register.Rax, SlotHandleArray, 8);
-    EmitMovMemReg(SlotAttrListPtr, X86Register.Rax, 8);
 
-    // 4) Populate the 3-handle vector at SlotHandleArray. Pulling from
-    //    STARTUPINFOW.hStdInput/hStdOutput/hStdError (SlotSI+0x50/0x58/0x60)
-    //    is correct for every stdio mode (inherit / NUL / file / legacy-pipe
-    //    / streaming) because each per-stdio branch above writes the final
-    //    child-visible handle into that slot.
-    EmitMovRegMem(X86Register.Rax, SlotSI + 0x50, 8);
-    EmitMovMemReg(SlotHandleArray + 0x00, X86Register.Rax, 8);
-    EmitMovRegMem(X86Register.Rax, SlotSI + 0x58, 8);
-    EmitMovMemReg(SlotHandleArray + 0x08, X86Register.Rax, 8);
-    EmitMovRegMem(X86Register.Rax, SlotSI + 0x60, 8);
-    EmitMovMemReg(SlotHandleArray + 0x10, X86Register.Rax, 8);
-
-    // 5) UpdateProcThreadAttribute(list, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
-    //                              &handles, 3*sizeof(HANDLE), NULL, NULL).
-    //    PROC_THREAD_ATTRIBUTE_HANDLE_LIST = 0x00020002.
+    // 4) UpdateProcThreadAttribute(list, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+    //                              &handles, count*sizeof(HANDLE), NULL, NULL).
+    //    PROC_THREAD_ATTRIBUTE_HANDLE_LIST = 0x00020002. cbSize is the FILTERED
+    //    count (count*8), not a hardcoded 3 — listing stale array slots past
+    //    `count` would re-introduce the invalid-handle failure.
     EmitSystemStackEnter(0x40);
     EmitMovRegMem(X86Register.Rcx, SlotAttrListPtr, 8);
     EmitXorRegReg(X86Register.Rdx, X86Register.Rdx);             // dwFlags = 0
     EmitMovRegImm(X86Register.R8, 0x00020002);                   // PROC_THREAD_ATTRIBUTE_HANDLE_LIST
     EmitLeaRegMem(X86Register.R9, SlotHandleArray);              // lpValue
-    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x20, 0x18, 0x00, 0x00, 0x00); // [rsp+0x20] = 24 (cbSize)
+    EmitMovRegMem(X86Register.Rax, SlotHandleCount, 8);          // cbSize = count * 8
+    EmitShlRegImm(X86Register.Rax, 3);
+    EmitMovMemRspReg(0x20, X86Register.Rax);                     // [rsp+0x20] = cbSize
     EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x28, 0x00, 0x00, 0x00, 0x00); // [rsp+0x28] = NULL lpPreviousValue
     EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x30, 0x00, 0x00, 0x00, 0x00); // [rsp+0x30] = NULL lpReturnSize
     EmitCallImport("kernel32.dll", "UpdateProcThreadAttribute");
@@ -10402,9 +10637,11 @@ public partial class X86CodeEmitter {
     EmitTestRegReg(X86Register.Rax, X86Register.Rax);
     EmitJcc("z", "rt_subp_sc_fail_attr");
 
-    // 6) Write the list pointer into STARTUPINFOEX.lpAttributeList (SlotSI+104).
+    // 5) Write the list pointer into STARTUPINFOEX.lpAttributeList (SlotSI+104).
     EmitMovRegMem(X86Register.Rax, SlotAttrListPtr, 8);
     EmitMovMemReg(SlotSI + 104, X86Register.Rax, 8);
+
+    DefineLabel("rt_subp_sc_no_attr_list");
 
     // ===== CreateProcessW =====
     // CRITICAL ORDERING: compute the stack args FIRST (which may clobber
@@ -10435,11 +10672,19 @@ public partial class X86CodeEmitter {
     // used by EmitSystemStackLeave to switch back to the GT stack.
     //
     // EXTENDED_STARTUPINFO_PRESENT (0x80000) tells CreateProcessW that
-    // lpStartupInfo points to a STARTUPINFOEX (cb=112) whose lpAttributeList
-    // gives the inheritable-handle vector. Without this flag the kernel
-    // treats the struct as classic STARTUPINFOW and our race fix has no
-    // effect.
-    EmitMovRegImm(X86Register.Rax, 0x4 | 0x80000);               // CREATE_SUSPENDED | EXTENDED_STARTUPINFO_PRESENT
+    // lpStartupInfo points to a STARTUPINFOEX whose lpAttributeList gives the
+    // inheritable-handle vector. We set it ONLY when the filtered handle list
+    // is non-empty (SlotHandleCount != 0); otherwise lpAttributeList is NULL
+    // and the kernel must read a classic STARTUPINFOW (setting the flag with a
+    // NULL/empty attribute list is itself an ERROR_INVALID_PARAMETER). Always
+    // set CREATE_SUSPENDED (0x4) so the child can be assigned to the Job Object
+    // before its main thread runs.
+    EmitMovRegImm(X86Register.Rax, 0x4);                         // CREATE_SUSPENDED
+    EmitMovRegMem(X86Register.Rcx, SlotHandleCount, 8);
+    EmitTestRegReg(X86Register.Rcx, X86Register.Rcx);
+    EmitJcc("z", "rt_subp_sc_no_extended");
+    EmitOrRegImm(X86Register.Rax, 0x80000);                     // EXTENDED_STARTUPINFO_PRESENT
+    DefineLabel("rt_subp_sc_no_extended");
     EmitMovRegMem(X86Register.Rcx, -0x70, 8);
     EmitAndRegImm(X86Register.Rcx, SpawnFlagHideWindow);
     EmitTestRegReg(X86Register.Rcx, X86Register.Rcx);
