@@ -1,0 +1,33 @@
+// Test: enum-case-named-self-allowed
+enum Marker
+	first = 1
+	self = 2
+	last = 3
+end 'Marker'
+
+function main() returns ExitCode
+	let m = Marker.self
+	return m.rawValue as ExitCode
+end 'main'
+---
+ExitCode: 2
+---
+// CompiledIR
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov r8d, 2
+  __cast_check_lo_0:
+    x64.test r8, r8
+    x64.jge __cast_ok_0
+  __cast_panic_0:
+    x64.lea r12, [rip+__panic_msg_3358a2d7cdbdef1a]
+    x64.mov rcx, r12
+    x64.call mrt_panic
+  __cast_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

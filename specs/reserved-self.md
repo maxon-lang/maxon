@@ -78,3 +78,51 @@ end 'main'
 ```maxoncstderr
 error E2010: specs/fragments/reserved-self/for-in-named-self.test:4:6: Expected identifier but got 'self'
 ```
+
+<!-- test: enum-case-named-self-allowed -->
+### An enum case named `self` IS allowed
+The `self` reservation guards the value namespace (locals, params, functions,
+types) where a binding could shadow the implicit receiver. Enum and union cases
+live in the `TypeName.case` namespace and cannot shadow it, so a case named
+`self` is accepted — exactly as the compiler's own keyword-token enum does for
+the `"self"` keyword spelling.
+```maxon
+enum Marker
+	first = 1
+	self = 2
+	last = 3
+end 'Marker'
+
+function main() returns ExitCode
+	let m = Marker.self
+	return m.rawValue as ExitCode
+end 'main'
+```
+```exitcode
+2
+```
+
+<!-- test: union-case-named-self-allowed -->
+### A union case named `self` IS allowed
+```maxon
+typealias Tally = int(0 to 125)
+
+union Node
+	leaf(value Tally)
+	self
+end 'Node'
+
+function pick(n Node) returns Tally
+	return match n 'm'
+		leaf(v) gives v
+		self gives 7
+	end 'm'
+end 'pick'
+
+function main() returns ExitCode
+	return pick(Node.self)
+end 'main'
+```
+```exitcode
+7
+```

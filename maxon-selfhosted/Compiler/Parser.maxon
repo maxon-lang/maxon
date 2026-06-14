@@ -868,7 +868,13 @@ export type Parser
 	// Call this at every site that introduces a NEW binding
 	// (function/type/typealias/field/param/let/var/match-binding). Pure
 	// references to existing __ names are fine.
-	function checkReservedDeclName(nameToken Token)
+	// `isEnumCase` exempts enum / union case names from the `self` reservation:
+	// cases live in the `TypeName.case` namespace and can't shadow the implicit
+	// instance receiver, so a case literally named `self` (e.g. a TokenKind
+	// case mapping the `"self"` keyword spelling) is allowed — matching the C#
+	// bootstrap's `CheckReservedDeclName(isEnumCase)`. The `__`-prefix reservation
+	// still applies to every declaration kind, cases included.
+	function checkReservedDeclName(nameToken Token, isEnumCase bool = false)
 		if namespace == "stdlib" and filePath.filename() == "Builtins.maxon" 'isBuiltins'
 			return
 		end 'isBuiltins'
@@ -878,7 +884,7 @@ export type Parser
 		if filePath.filename() == "stdlib-bootstrap.maxon" 'isBootstrap'
 			return
 		end 'isBootstrap'
-		if nameToken.value == "self" 'selfReserved'
+		if nameToken.value == "self" and not isEnumCase 'selfReserved'
 			reportCompileError(project, code: ErrorCode.parserReservedIdentifier, message: "identifier 'self' is reserved: it is the implicit instance receiver and cannot be bound by user code", line: nameToken.line, column: nameToken.column, filePath: filePath)
 			return
 		end 'selfReserved'
@@ -5424,7 +5430,7 @@ export type Parser
 			// but `.value` carries the raw spelling).
 			let caseToken = try consume()
 			let caseName = caseToken.value
-			checkReservedDeclName(caseToken)
+			checkReservedDeclName(caseToken, isEnumCase: true)
 
 			// Duplicate-case detection (E3030).
 			let isDuplicateCase = caseNames.contains(caseName)
@@ -5625,7 +5631,7 @@ export type Parser
 
 			let caseToken = try consume()
 			let caseName = caseToken.value
-			checkReservedDeclName(caseToken)
+			checkReservedDeclName(caseToken, isEnumCase: true)
 
 			let isDuplicateCase = caseNames.contains(caseName)
 			if isDuplicateCase 'duplicateCase'
