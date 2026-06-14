@@ -10358,10 +10358,31 @@ export type Parser
 
 			// Comparison ops produce bool; arithmetic inherits the
 			// operand's source-level type so chained expressions stay
-			// typed consistently through TypeResolution.
+			// typed consistently through TypeResolution. `and`/`or`/`xor` are
+			// dual-purpose — bitwise on ints (result int), logical on bools
+			// (result bool). `binOpOperandType` always reports `integer` for the
+			// ABI operand slot, so the result type must be corrected to bool when
+			// both operands are statically bool; otherwise a `boolA or boolB`
+			// expression reads as `Integer` and a downstream ternary condition
+			// trips E2028. When an operand type is still unresolved at parse time
+			// this stays at the (integer) operandType and TR's fillUnresolvedTypes
+			// re-derives the bool result from the resolved operand types.
+			let isLogicalWordOp = opToken.kind == TokenKind.and or opToken.kind == TokenKind.or or opToken.kind == TokenKind.xor
 			if opToken.kind == TokenKind.equalsEquals or opToken.kind == TokenKind.bangEquals or opToken.kind == TokenKind.lessThan or opToken.kind == TokenKind.lessEquals or opToken.kind == TokenKind.greaterThan or opToken.kind == TokenKind.greaterEquals 'isCmp'
 				left = ExprResult.direct(resultName, valueType: MaxonType.boolean)
-			end 'isCmp' else 'notCmp'
+			end 'isCmp' else if isLogicalWordOp and maxonTypeIsBool(leftExprType) and maxonTypeIsBool(rightExprType) 'isLogicalBool'
+				left = ExprResult.direct(resultName, valueType: MaxonType.boolean)
+			end 'isLogicalBool' else if isLogicalWordOp and (isUnresolvedType(leftExprType) or isUnresolvedType(rightExprType)) 'isLogicalUnresolved'
+				// A logical/bitwise `and`/`or`/`xor` whose operand types haven't
+				// resolved yet (e.g. `field.a or field.b` where the fieldLoads are
+				// still unresolved at parse time): leave the result `unresolved`
+				// rather than forcing the integer ABI operandType. Forcing integer
+				// here makes a `boolA or boolB` condition read as `Integer` and
+				// wrongly trip the parse-time E2028 ternary-bool check; leaving it
+				// unresolved makes that check defer to TR, which re-derives the
+				// concrete bool/int result once the operand types are known.
+				left = ExprResult.direct(resultName, valueType: MaxonType.unresolved)
+			end 'isLogicalUnresolved' else 'notCmp'
 				left = ExprResult.direct(resultName, valueType: operandType)
 			end 'notCmp'
 		end 'prattLoop'

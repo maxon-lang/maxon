@@ -427,3 +427,38 @@ end 'main'
 ```maxoncstderr
 error E2028: specs/fragments/ternary-expression/ternary-expression.error.struct-type-mismatch.test:22:23: ternary expression type mismatch: true branch is 'Cat' but false branch is 'Dog'
 ```
+
+<!-- test: ternary-expression.logical-op-condition -->
+A `bool or bool` (or `and`/`xor`) expression is a valid ternary condition. The
+`and`/`or`/`xor` operators are dual-purpose — bitwise on ints, logical on bools
+— so their result type must follow the operand kind: bool operands yield a bool
+result, not an integer. When the operand types aren't known until after type
+resolution (here `f.a` / `f.b` are field loads), the result stays unresolved and
+the condition-is-bool check defers to TypeResolution rather than wrongly reading
+as `Integer` and tripping E2028. This mirrors the compiler's own
+`useStringLiteralBacking = isStringBacked or isCharBacked` used in a ternary.
+```maxon
+type Flags
+	export let a as bool
+	export let b as bool
+
+	export static function make(a bool, b bool) returns Flags
+		return Flags{a: a, b: b}
+	end 'make'
+end 'Flags'
+
+function pick(f Flags) returns ExitCode
+	let either = f.a or f.b
+	let both = f.a and f.b
+	let one = 4 if either else 0
+	let two = 1 if both else 0
+	return (one + two) as ExitCode
+end 'pick'
+
+function main() returns ExitCode
+	return pick(Flags.make(true, b: false))
+end 'main'
+```
+```exitcode
+4
+```

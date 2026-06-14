@@ -1,0 +1,90 @@
+// Test: ternary-expression.logical-op-condition
+type Flags
+	export let a as bool
+	export let b as bool
+
+	export static function make(a bool, b bool) returns Flags
+		return Flags{a: a, b: b}
+	end 'make'
+end 'Flags'
+
+function pick(f Flags) returns ExitCode
+	let either = f.a or f.b
+	let both = f.a and f.b
+	let one = 4 if either else 0
+	let two = 1 if both else 0
+	return (one + two) as ExitCode
+end 'pick'
+
+function main() returns ExitCode
+	return pick(Flags.make(true, b: false))
+end 'main'
+---
+ExitCode: 4
+---
+// CompiledIR
+module {
+  func @pick(local0: i64) -> u8 {
+  entry:
+    %32 = mir.param local0 : i64
+    %2 = mir.load %32, 0 width: byte signed
+    %4 = mir.load %32, 1 width: byte signed
+    %5 = mir.or.i64 %2, %4
+    %7 = mir.load %32, 0 width: byte signed
+    %9 = mir.load %32, 1 width: byte signed
+    %10 = mir.and.i64 %7, %9
+    %11 = mir.mov_imm 4 : i64
+    %14 = mir.mov_imm 0 : i64
+    mir.cond_br %5 [then: ternary.merge(%11), else: ternary.else()]
+  ternary.else:
+    mir.br ternary.merge(%14)
+  ternary.merge(%30: i64):
+    %16 = mir.mov_imm 1 : i64
+    %19 = mir.mov_imm 0 : i64
+    mir.cond_br %10 [then: ternary.merge(%16), else: ternary.else()]
+  ternary.else:
+    mir.br ternary.merge(%19)
+  ternary.merge(%31: i64):
+    %23 = mir.add.i64 %30, %31
+    %24 = mir.mov_imm 125 : i64
+    %25 = mir.cmp gt, %23, %24
+    mir.cond_br %25 [then: __cast_panic_0(), else: __cast_check_lo_0()]
+  __cast_check_lo_0:
+    %26 = mir.mov_imm 0 : i64
+    %27 = mir.cmp lt, %23, %26
+    mir.cond_br %27 [then: __cast_panic_0(), else: __cast_ok_0()]
+  __cast_panic_0:
+    %28 = mir.global_addr @__panic_msg_7e6ec429ee188f7a
+    %29 = mir.call @mrt_panic(%28)
+  __cast_ok_0:
+    %33 = mir.mov_imm 125 : i64
+    %34 = mir.cmp ugt, %23, %33
+    mir.cond_br %34 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %35 = mir.global_addr @__panic_msg_7e6ec429ee188f7a
+    %36 = mir.call @mrt_panic(%35)
+  __range_ok_0:
+    mir.ret %23
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 1 : i64
+    %1 = mir.mov_imm 0 : i64
+    %4 = mir.mov_imm 8 : i64
+    %5 = mir.mov_imm 0 : i64
+    %6 = mir.call @stdlib.__mm_alloc(%4, %5)
+    mir.store %0, %6, 0 width: byte
+    mir.store %1, %6, 1 width: byte
+    %3 = mir.call @pick(%6)
+    %7 = mir.call @mm_drop(%6)
+    %8 = mir.mov_imm 125 : i64
+    %9 = mir.cmp ugt, %3, %8
+    mir.cond_br %9 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %10 = mir.global_addr @__panic_msg_19ce47e97f793a46
+    %11 = mir.call @mrt_panic(%10)
+  __range_ok_0:
+    mir.ret %3
+  }
+}
+---

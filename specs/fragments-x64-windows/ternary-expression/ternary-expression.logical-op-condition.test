@@ -1,0 +1,105 @@
+// Test: ternary-expression.logical-op-condition
+type Flags
+	export let a as bool
+	export let b as bool
+
+	export static function make(a bool, b bool) returns Flags
+		return Flags{a: a, b: b}
+	end 'make'
+end 'Flags'
+
+function pick(f Flags) returns ExitCode
+	let either = f.a or f.b
+	let both = f.a and f.b
+	let one = 4 if either else 0
+	let two = 1 if both else 0
+	return (one + two) as ExitCode
+end 'pick'
+
+function main() returns ExitCode
+	return pick(Flags.make(true, b: false))
+end 'main'
+---
+ExitCode: 4
+---
+// CompiledIR
+module {
+  func @pick(rcx: i64) -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.movsx r8, [rcx+1] (1b)
+    x64.movsx r9, [rcx+0] (1b)
+    x64.movsx rsi, [rcx+1] (1b)
+    x64.movsx rdi, [rcx+0] (1b)
+    x64.xor eax, eax
+    x64.mov ecx, 4
+    x64.and r9, r8
+    x64.or rdi, rsi
+    x64.je ternary.else
+    x64.jmp ternary.merge
+  ternary.else:
+    x64.mov rcx, rax
+  ternary.merge:
+    x64.xor r8d, r8d
+    x64.mov esi, 1
+    x64.test r9, r9
+    x64.je ternary.else
+    x64.jmp ternary.merge
+  ternary.else:
+    x64.mov rsi, r8
+  ternary.merge:
+    x64.mov r9d, 4294967295
+    x64.mov r8, rcx
+    x64.add r8, rsi
+    x64.cmp r8, r9
+    x64.jle __cast_check_lo_0
+    x64.jmp __cast_panic_0
+  __cast_check_lo_0:
+    x64.test r8, r8
+    x64.jge __cast_ok_0
+  __cast_panic_0:
+    x64.lea r12, [rip+__panic_msg_7e6ec429ee188f7a]
+    x64.mov rcx, r12
+    x64.call mrt_panic
+  __cast_ok_0:
+    x64.mov r9d, 4294967295
+    x64.cmp r8, r9
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea r12, [rip+__panic_msg_7e6ec429ee188f7a]
+    x64.mov rcx, r12
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.xor edx, edx
+    x64.mov ecx, 8
+    x64.call stdlib.__mm_alloc
+    x64.mov r12, r8
+    x64.mov r8d, 1
+    x64.mov [r12+0], r8 (1b)
+    x64.xor r8d, r8d
+    x64.mov [r12+1], r8 (1b)
+    x64.mov rcx, r12
+    x64.call pick
+    x64.mov r13, r8
+    x64.mov rcx, r12
+    x64.call mm_drop
+    x64.mov r8d, 4294967295
+    x64.cmp r13, r8
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea r12, [rip+__panic_msg_19ce47e97f793a46]
+    x64.mov rcx, r12
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov r8, r13
+    x64.epilogue
+    x64.ret
+  }
+}
+---
