@@ -778,6 +778,13 @@ export type Project
 	// TypeResolution once the arms' `varStore` value types are resolved.
 	export var pendingTernaryArmChecks as PendingTernaryArmCheckArray
 
+	// E2026 deferred enum-match-exhaustiveness checks for matches whose
+	// scrutinee type was unresolved at parse time. See
+	// PendingMatchExhaustivenessCheck. Drained by TypeResolution
+	// (`drainPendingMatchExhaustivenessChecks`) after each scrutinee's enum
+	// type is resolved via the function's enumMatchArm ops.
+	export var pendingMatchExhaustivenessChecks as PendingMatchExhaustivenessCheckArray
+
 	// Deferred unused-typealias checks (E3062). See PendingUnusedTypealias for
 	// the why. Drained after `drainPendingConstraintChecks` so an alias whose
 	// RHS failed constraint validation (E3017) doesn't double-report.
@@ -908,6 +915,7 @@ export type Project
 			pendingConstraintChecks: PendingConstraintCheckArray.create(),
 			pendingUnusedChecks: PendingUnusedCheckArray.create(),
 			pendingTernaryArmChecks: PendingTernaryArmCheckArray.create(),
+			pendingMatchExhaustivenessChecks: PendingMatchExhaustivenessCheckArray.create(),
 			pendingUnusedTypealiases: PendingUnusedTypealiasArray.create(),
 			crossFileConstReads: CrossFileConstReadArray.create(),
 			constraintFailedTypealiases: ReferencedNameSet.create(),
@@ -1187,6 +1195,60 @@ export type PendingTernaryArmCheck
 end 'PendingTernaryArmCheck'
 
 export typealias PendingTernaryArmCheckArray = Array with PendingTernaryArmCheck
+
+// One enum-case range arm (`loCaseName to|upto hiCaseName`) recorded as part
+// of a deferred match-exhaustiveness check. The raw endpoint case NAMES are
+// stored (not parser-resolved ordinals) so TypeResolution can expand the
+// range against the scrutinee's CORRECT resolved enum — the parser may have
+// misrouted the ordinal lookup to a same-case-name enum when the scrutinee's
+// type was unresolved at parse time. `hiCaseName` is empty when
+// `hasMaxSentinel` is true (`loCaseName upto max`). `isUpto` selects an
+// exclusive upper bound.
+export type PendingMatchRangeArm
+	export let loCaseName as String
+	export let hiCaseName as String
+	export let isUpto as bool
+	export let hasMaxSentinel as bool
+
+	export static function create(loCaseName String, hiCaseName String, isUpto bool, hasMaxSentinel bool) returns PendingMatchRangeArm
+		return Self{loCaseName: loCaseName, hiCaseName: hiCaseName, isUpto: isUpto, hasMaxSentinel: hasMaxSentinel}
+	end 'create'
+end 'PendingMatchRangeArm'
+
+export typealias PendingMatchRangeArmArray = Array with PendingMatchRangeArm
+
+// E2026 deferred enum-match-exhaustiveness check. The self-hosted parser is a
+// pure parser and cannot resolve a cross-file / parameter scrutinee's type at
+// parse time; for such matches `header.scrutineeType` is `MaxonType.unresolved`
+// and the parser MUST NOT guess the enum (the legacy case-name fallback
+// misrouted to whichever same-case-name enum was registered first — e.g. the
+// giant `MaxonOp` union shadowing the intended `StdControlOp`). Instead the
+// parser records the coverage data here and TypeResolution validates it AFTER
+// every scrutinee's enum type is resolved (mirrors PendingTernaryArmCheck).
+//
+// `coveredCaseNames` holds the bare enum-case arm names; `rangeArms` holds the
+// enum-case range arms whose endpoints TR expands against the resolved enum.
+// Both are recorded WITHOUT consulting the enum registry, so the deferred check
+// sees exactly the source-level coverage independent of any parser misroute.
+// `scrutineeName` (source-level variable name) plus `funcName` let TR find the
+// resolved scrutinee enum type via that function's enumMatchArm ops. The error
+// is emitted at `errorLine`/`errorColumn` (the closing `end` token captured at
+// the call site) so the diagnostic position matches the inline path exactly.
+export type PendingMatchExhaustivenessCheck
+	export let funcName as String
+	export let scrutineeName as String
+	export let coveredCaseNames as StringArray
+	export let rangeArms as PendingMatchRangeArmArray
+	export let errorLine as LineNumber
+	export let errorColumn as ColumnNumber
+	export let filePath as FilePath
+
+	export static function create(funcName String, scrutineeName String, coveredCaseNames StringArray, rangeArms PendingMatchRangeArmArray, errorLine LineNumber, errorColumn ColumnNumber, filePath FilePath) returns PendingMatchExhaustivenessCheck
+		return Self{funcName: funcName, scrutineeName: scrutineeName, coveredCaseNames: coveredCaseNames, rangeArms: rangeArms, errorLine: errorLine, errorColumn: errorColumn, filePath: filePath}
+	end 'create'
+end 'PendingMatchExhaustivenessCheck'
+
+export typealias PendingMatchExhaustivenessCheckArray = Array with PendingMatchExhaustivenessCheck
 
 // Phase 11.2: lookup table for emitted layout-descriptor bytes. Used by
 // the canonicalize pass to fold `descriptorField` reads into constants

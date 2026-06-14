@@ -1,0 +1,147 @@
+// Test: cross-file-shadowed-union
+// --- file: ops.maxon
+export union BigOp
+	condBr
+	br
+	cmp
+	call
+	ret
+end 'BigOp'
+
+export union SmallOp
+	condBr
+	br
+end 'SmallOp'
+
+// --- file: main.maxon
+typealias Code = int(0 to 125)
+
+function classify(op SmallOp) returns Code
+	return match op 'check'
+		condBr gives 1
+		br gives 2
+	end 'check'
+end 'classify'
+
+function describeBig(op BigOp) returns Code
+	return match op 'check'
+		condBr gives 10
+		br gives 20
+		cmp gives 30
+		call gives 40
+		ret gives 50
+	end 'check'
+end 'describeBig'
+
+function main() returns ExitCode
+	let small = classify(SmallOp.br)
+	let big = describeBig(BigOp.cmp)
+	if big == 30 'bigOk'
+		return small
+	end 'bigOk'
+	return 99
+end 'main'
+---
+ExitCode: 2
+---
+// CompiledIR
+module {
+  func @classify(local0: u8) -> u8 {
+  entry:
+    %11 = mir.param local0 : u8
+    %2 = mir.mov_imm 0 : i64
+    %3 = mir.mov_imm 0 : i64
+    %4 = mir.cmp eq, %11, %3
+    mir.cond_br %4 [then: check_0.case0(), else: check_0.next0()]
+  check_0.merge(%10: i64):
+    %12 = mir.mov_imm 125 : i64
+    %13 = mir.cmp ugt, %10, %12
+    mir.cond_br %13 [then: __range_panic_0(), else: __range_ok_0()]
+  check_0.case0:
+    %6 = mir.mov_imm 1 : i64
+    mir.br check_0.merge(%6)
+  check_0.next0:
+    %7 = mir.mov_imm 1 : i64
+    %8 = mir.cmp eq, %11, %7
+    mir.cond_br %8 [then: check_0.case1(), else: check_0.merge(%2)]
+  check_0.case1:
+    %9 = mir.mov_imm 2 : i64
+    mir.br check_0.merge(%9)
+  __range_panic_0:
+    %14 = mir.global_addr @__panic_msg_c8f8d7592c6e7d11
+    %15 = mir.call @mrt_panic(%14)
+  __range_ok_0:
+    mir.ret %10
+  }
+  func @describeBig(local0: u8) -> u8 {
+  entry:
+    %20 = mir.param local0 : u8
+    %2 = mir.mov_imm 0 : i64
+    %3 = mir.mov_imm 0 : i64
+    %4 = mir.cmp eq, %20, %3
+    mir.cond_br %4 [then: check_0.case0(), else: check_0.next0()]
+  check_0.merge(%19: i64):
+    %21 = mir.mov_imm 125 : i64
+    %22 = mir.cmp ugt, %19, %21
+    mir.cond_br %22 [then: __range_panic_0(), else: __range_ok_0()]
+  check_0.case0:
+    %6 = mir.mov_imm 10 : i64
+    mir.br check_0.merge(%6)
+  check_0.next0:
+    %7 = mir.mov_imm 1 : i64
+    %8 = mir.cmp eq, %20, %7
+    mir.cond_br %8 [then: check_0.case1(), else: check_0.next1()]
+  check_0.case1:
+    %9 = mir.mov_imm 20 : i64
+    mir.br check_0.merge(%9)
+  check_0.next1:
+    %10 = mir.mov_imm 2 : i64
+    %11 = mir.cmp eq, %20, %10
+    mir.cond_br %11 [then: check_0.case2(), else: check_0.next2()]
+  check_0.case2:
+    %12 = mir.mov_imm 30 : i64
+    mir.br check_0.merge(%12)
+  check_0.next2:
+    %13 = mir.mov_imm 3 : i64
+    %14 = mir.cmp eq, %20, %13
+    mir.cond_br %14 [then: check_0.case3(), else: check_0.next3()]
+  check_0.case3:
+    %15 = mir.mov_imm 40 : i64
+    mir.br check_0.merge(%15)
+  check_0.next3:
+    %16 = mir.mov_imm 4 : i64
+    %17 = mir.cmp eq, %20, %16
+    mir.cond_br %17 [then: check_0.case4(), else: check_0.merge(%2)]
+  check_0.case4:
+    %18 = mir.mov_imm 50 : i64
+    mir.br check_0.merge(%18)
+  __range_panic_0:
+    %23 = mir.global_addr @__panic_msg_692aa3b6476ef93c
+    %24 = mir.call @mrt_panic(%23)
+  __range_ok_0:
+    mir.ret %19
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 1 : i64
+    %1 = mir.call @classify(%0)
+    %2 = mir.mov_imm 2 : i64
+    %3 = mir.call @describeBig(%2)
+    %5 = mir.mov_imm 30 : i64
+    %6 = mir.cmp eq, %3, %5
+    mir.cond_br %6 [then: bigOk_0(), else: bigOk_0.after()]
+  bigOk_0:
+    %9 = mir.mov_imm 125 : i64
+    %10 = mir.cmp ugt, %1, %9
+    mir.cond_br %10 [then: __range_panic_0(), else: __range_ok_0()]
+  bigOk_0.after:
+    %8 = mir.mov_imm 99 : i64
+    mir.ret %8
+  __range_panic_0:
+    %11 = mir.global_addr @__panic_msg_640236554de5a224
+    %12 = mir.call @mrt_panic(%11)
+  __range_ok_0:
+    mir.ret %1
+  }
+}
+---

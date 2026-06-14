@@ -7679,6 +7679,169 @@ end 'buildAbiParamMaps'
 
 // Drains the project-wide unresolved-typealias registry, then walks the
 // module's ops to (1) rewrite parser-emitted `unresolvedRead` /
+// Per-function resolved scrutinee enum name, keyed by source-level scrutinee
+// variable name. Built from the function's `enumMatchArm` ops after
+// `resolveEnumMatchArms` has filled their `scrutineeType`. Unions live in
+// `project.enumTypes` too, so `enumNameFromMaxonType` resolves union scrutinees
+// as well. Names that don't resolve to a registered enum/union are omitted, so
+// the deferred check skips them (matching the C# `if enumType == null return`).
+typealias ScrutineeEnumNameMap = Map with (String, String)
+
+// Per-function scrutinee-enum maps for the deferred match-exhaustiveness drain,
+// keyed by function name. A function appearing here marks it as belonging to
+// the module currently being resolved, so its pending checks are processed and
+// dropped (rather than kept for another module's drain).
+typealias FuncScrutineeEnumMap = Map with (String, ScrutineeEnumNameMap)
+
+// E2026 deferred enum-match-exhaustiveness drain. For every pending check
+// recorded by the parser (one per match whose scrutinee type was unresolved at
+// parse time), resolve the scrutinee's enum via the owning function's
+// enumMatchArm ops, expand the recorded coverage (bare case names + range arms)
+// against that enum's cases, and emit E2026 when any case is uncovered. Runs
+// once per module after `resolveEnumMatchArms`; only processes checks whose
+// owning function exists in THIS module, and clears the queue at the end (the
+// project is shared across the stdlib and user module runs, but each function
+// belongs to exactly one module, so a single end-of-run clear is safe).
+export function drainPendingMatchExhaustivenessChecks(project Project, module MaxonModule)
+	if project.pendingMatchExhaustivenessChecks.count() == 0 'noChecks'
+		return
+	end 'noChecks'
+	// Build one map per function in THIS module: funcName -> (scrutineeName ->
+	// resolved enum name). Functions whose name doesn't appear here belong to a
+	// different module (the stdlib-cache-miss path runs runTypeResolution once
+	// per module) — their checks are KEPT for that module's own drain, never
+	// cleared here. A function with no enumMatchArm-resolved scrutinee still
+	// gets an (empty) entry so its checks count as "this module" and are dropped
+	// (they simply skip with no enum to validate against).
+	var perFuncEnums = FuncScrutineeEnumMap.create()
+	for funcIdx in 0 upto module.functions.count() 'eachFunc'
+		let func = try module.functions.get(funcIdx) otherwise panic("drainPendingMatchExhaustivenessChecks: functions.get OOB")
+		perFuncEnums.upsert(func.name, value: buildScrutineeEnumNameMap(project, module: module, func: func))
+	end 'eachFunc'
+	var kept = PendingMatchExhaustivenessCheckArray.create()
+	for check in project.pendingMatchExhaustivenessChecks 'eachCheck'
+		if let scrutineeEnums = try perFuncEnums.get(check.funcName) 'thisModule'
+			if let enumName = try scrutineeEnums.get(check.scrutineeName) 'haveEnum'
+				validateDeferredMatchExhaustiveness(project, check: check, enumName: enumName)
+			end 'haveEnum'
+		end 'thisModule' else 'otherModule'
+			kept.push(check)
+		end 'otherModule'
+	end 'eachCheck'
+	project.pendingMatchExhaustivenessChecks = kept
+end 'drainPendingMatchExhaustivenessChecks'
+
+// Scan `func`'s enumMatchArm ops and record each scrutinee variable's resolved
+// enum/union name. The scrutineeType was filled by `resolveEnumMatchArms`; a
+// scrutinee whose type didn't resolve to a registered enum is simply absent.
+function buildScrutineeEnumNameMap(project Project, module MaxonModule, func IrFunction) returns ScrutineeEnumNameMap
+	var result = ScrutineeEnumNameMap.create()
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("buildScrutineeEnumNameMap: blockRef OOB")
+		recordBlockScrutineeEnums(project, module: module, block: block, result: result)
+	end 'eachBlock'
+	return result
+end 'buildScrutineeEnumNameMap'
+
+function recordBlockScrutineeEnums(project Project, module MaxonModule, block IrBlock, result ScrutineeEnumNameMap)
+	for opIdx in block.opRefs 'eachOp'
+		let op = try module.ops.get(opIdx) otherwise panic("recordBlockScrutineeEnums: opIdx OOB")
+		recordOpScrutineeEnum(project, op: op, result: result)
+	end 'eachOp'
+	if block.hasTerminatorOp() 'hasTerm'
+		let termOp = try module.ops.get(block.terminatorIndex()) otherwise panic("recordBlockScrutineeEnums: terminator OOB")
+		recordOpScrutineeEnum(project, op: termOp, result: result)
+	end 'hasTerm'
+end 'recordBlockScrutineeEnums'
+
+function recordOpScrutineeEnum(project Project, op MaxonOp, result ScrutineeEnumNameMap)
+	if op.name != "enumMatchArm" 'notArm'
+		return
+	end 'notArm'
+	match op 'extract'
+		enumMatchArm(scrutineeName, _, scrutineeType, _, _, _, _, _, _, _) then recordScrutineeEnumEntry(project, scrutineeName: scrutineeName, scrutineeType: scrutineeType, result: result)
+		default panic("recordOpScrutineeEnum: op.name == enumMatchArm but match failed")
+	end 'extract'
+end 'recordOpScrutineeEnum'
+
+function recordScrutineeEnumEntry(project Project, scrutineeName ByteArray, scrutineeType MaxonType, result ScrutineeEnumNameMap)
+	let enumName = try enumNameFromMaxonType(project, t: scrutineeType) otherwise return
+	result.upsert(String.from(scrutineeName), value: enumName)
+end 'recordScrutineeEnumEntry'
+
+// Expand a deferred check's coverage against `enumName`'s cases and emit E2026
+// when any case is missing. The covered set is built WITHOUT any reliance on
+// the parser's (possibly misrouted) range ordinals — bare case names go in
+// directly, and each range arm is expanded against THIS enum's own case
+// positions via `caseByName`.
+function validateDeferredMatchExhaustiveness(project Project, check PendingMatchExhaustivenessCheck, enumName String)
+	var enumCases = EnumCaseArray.create()
+	var caseByName = CaseIndexMap.create()
+	var found = false
+	if let resolvedEnum = try project.enumTypes.get(enumName) 'isResolved'
+		enumCases = resolvedEnum.cases
+		caseByName = resolvedEnum.caseByName
+		found = true
+	end 'isResolved'
+	if not found 'notFound'
+		// Scrutinee didn't resolve to a registered enum/union — skip, matching
+		// the C# bootstrap's `if (enumType == null) return`.
+		return
+	end 'notFound'
+	var covered = ReferencedNameSet.create()
+	for name in check.coveredCaseNames 'eachCovered'
+		covered.insert(name)
+	end 'eachCovered'
+	for rangeArm in check.rangeArms 'eachRange'
+		expandDeferredRangeCoverage(enumCases, caseByName: caseByName, rangeArm: rangeArm, covered: covered)
+	end 'eachRange'
+	var missing = ""
+	var first = true
+	for c in enumCases 'eachCase'
+		if covered.contains(c.name) 'isCovered'
+			continue
+		end 'isCovered'
+		if first 'firstMiss'
+			missing.append(c.name)
+			first = false
+		end 'firstMiss' else 'subsequent'
+			missing.append(", ")
+			missing.append(c.name)
+		end 'subsequent'
+	end 'eachCase'
+	if missing.isEmpty() 'allCovered'
+		return
+	end 'allCovered'
+	reportCompileError(project, code: ErrorCode.parserMatchNotExhaustive, message: "match on enum '{enumName}' is not exhaustive, missing: {missing}", line: check.errorLine, column: check.errorColumn, filePath: check.filePath)
+end 'validateDeferredMatchExhaustiveness'
+
+// Insert every case name covered by a `loCaseName to|upto hiCaseName` range
+// into `covered`, expanding against THIS enum's case positions. `to` is
+// inclusive on both ends, `upto` excludes the upper bound, and a `max` sentinel
+// (`hiCaseName` empty) runs to the last case. Endpoints that don't name a case
+// of this enum are silently skipped — TR's `resolveEnumMatchArms` already
+// surfaces the canonical unknown-case diagnostic.
+function expandDeferredRangeCoverage(enumCases EnumCaseArray, caseByName CaseIndexMap, rangeArm PendingMatchRangeArm, covered ReferencedNameSet)
+	let loOrdinalRaw = try caseByName.get(rangeArm.loCaseName) otherwise return
+	let loOrdinal = loOrdinalRaw as ParsedInt
+	var hiOrdinal = (enumCases.count() - 1) as ParsedInt
+	if not rangeArm.hasMaxSentinel 'lookupHi'
+		let hiOrdinalRaw = try caseByName.get(rangeArm.hiCaseName) otherwise return
+		hiOrdinal = hiOrdinalRaw as ParsedInt
+	end 'lookupHi'
+	let upperInclusive = hiOrdinal if not rangeArm.isUpto else (hiOrdinal - 1)
+	let caseCount = enumCases.count() as ParsedInt
+	var i = loOrdinal
+	while i <= upperInclusive 'each'
+		if i >= 0 and i < caseCount 'inBounds'
+			if let c = try enumCases.get(i as ElementCount) 'haveCase'
+				covered.insert(c.name)
+			end 'haveCase'
+		end 'inBounds'
+		i = i + 1
+	end 'each'
+end 'expandDeferredRangeCoverage'
+
 // `unresolvedAssign` placeholders to their concrete forms, (2) fill any
 // `MaxonType.unresolved` operands left by the parser using a
 // producer-type map, and (3) validate convert / cmp endpoints against the
@@ -7874,6 +8037,12 @@ export function runTypeResolution(project Project, module MaxonModule, filePath 
 	// an `br(elseTarget)` after reporting the diagnostic so the block keeps
 	// a valid terminator.
 	resolveEnumMatchArms(project, module: module, filePath: filePath)
+
+	// E2026: validate deferred enum-match-exhaustiveness checks now that every
+	// scrutinee's enum type is resolved on its enumMatchArm ops. The parser
+	// recorded these for matches whose scrutinee type was unresolved at parse
+	// time (cross-file / parameter scrutinees) instead of guessing the enum.
+	drainPendingMatchExhaustivenessChecks(project, module: module)
 
 	// Specialize stringConst consumers (cmp folding, slot-aliased strings)
 	// before lowering.

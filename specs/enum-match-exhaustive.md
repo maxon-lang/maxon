@@ -386,3 +386,115 @@ end 'main'
 ```maxoncstderr
 error E3075: specs/fragments/enum-match-exhaustive/error.enum-qualified-case-name.test:11:3: use 'red' instead of 'Color.red' in match
 ```
+
+### Cross-file scrutinee shadowed by a larger same-case-name union
+
+A function parameter typed as a union declared in another file has an
+unresolved scrutinee type at parse time. The parser must NOT guess the enum by
+searching the registry for a type that declares the arms' case names — a larger
+union sharing those case names (here `BigOp`, which also has `condBr` and `br`)
+would shadow the intended `SmallOp` and emit a spurious E2026. Exhaustiveness
+is deferred to TypeResolution, where the scrutinee's real type is known, so this
+exhaustive match on `SmallOp` compiles cleanly.
+
+<!-- test: cross-file-shadowed-union -->
+```maxon
+// --- file: ops.maxon
+export union BigOp
+	condBr
+	br
+	cmp
+	call
+	ret
+end 'BigOp'
+
+export union SmallOp
+	condBr
+	br
+end 'SmallOp'
+
+// --- file: main.maxon
+typealias Code = int(0 to 125)
+
+function classify(op SmallOp) returns Code
+	return match op 'check'
+		condBr gives 1
+		br gives 2
+	end 'check'
+end 'classify'
+
+function describeBig(op BigOp) returns Code
+	return match op 'check'
+		condBr gives 10
+		br gives 20
+		cmp gives 30
+		call gives 40
+		ret gives 50
+	end 'check'
+end 'describeBig'
+
+function main() returns ExitCode
+	let small = classify(SmallOp.br)
+	let big = describeBig(BigOp.cmp)
+	if big == 30 'bigOk'
+		return small
+	end 'bigOk'
+	return 99
+end 'main'
+```
+```exitcode
+2
+```
+
+### Cross-file scrutinee with a range arm shadowed by a larger union
+
+Same shadowing hazard, but the small union is covered by a single enum-case
+range (`condBr to br`). The parser resolves range ordinals best-effort and can
+misroute them to `BigSpan` (which also contains `condBr` and `br` but with extra
+cases between them). The deferred check records the raw endpoint case names and
+expands the range against `SpanOp`'s OWN ordinals, so the match is recognized as
+exhaustive.
+
+<!-- test: cross-file-shadowed-union-range -->
+```maxon
+// --- file: spans.maxon
+export union BigSpan
+	condBr
+	cmp
+	call
+	br
+	ret
+end 'BigSpan'
+
+export union SpanOp
+	condBr
+	br
+end 'SpanOp'
+
+// --- file: main.maxon
+typealias Code = int(0 to 125)
+
+function classify(op SpanOp) returns Code
+	return match op 'check'
+		condBr to br gives 7
+	end 'check'
+end 'classify'
+
+function describeBig(op BigSpan) returns Code
+	return match op 'check'
+		condBr to ret gives 3
+	end 'check'
+end 'describeBig'
+
+function main() returns ExitCode
+	let span = classify(SpanOp.br)
+	let big = describeBig(BigSpan.call)
+	if big == 3 'bigOk'
+		return span
+	end 'bigOk'
+	return 99
+end 'main'
+```
+```exitcode
+7
+```

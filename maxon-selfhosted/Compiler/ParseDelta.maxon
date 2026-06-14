@@ -293,6 +293,7 @@ export function rollbackFileParseDelta(project Project, filePath FilePath)
 	filterPendingUnusedTypealiasesByFilePath(project, filePath: filePath)
 	filterPendingUnusedChecksByFilePath(project, filePath: filePath)
 	filterPendingTernaryArmChecksByFilePath(project, filePath: filePath)
+	filterPendingMatchExhaustivenessChecksByFilePath(project, filePath: filePath)
 
 	// Reset the delta to empty so the upcoming re-parse starts fresh.
 	_ = project.fileParseDeltas.remove(filePath)
@@ -344,6 +345,19 @@ function filterPendingTernaryArmChecksByFilePath(project Project, filePath FileP
 		i = i - 1
 	end 'scan'
 end 'filterPendingTernaryArmChecksByFilePath'
+
+// E2026 deferred match-exhaustiveness checks are filePath-attributed; drop the
+// re-parsed file's stale entries so the upcoming re-parse re-records them.
+function filterPendingMatchExhaustivenessChecksByFilePath(project Project, filePath FilePath)
+	var i = project.pendingMatchExhaustivenessChecks.count() - 1
+	while i >= 0 'scan'
+		let entry = try project.pendingMatchExhaustivenessChecks.get(i) otherwise panic("filterPendingMatchExhaustivenessChecksByFilePath: get OOB at {i}")
+		if entry.filePath.toString() == filePath.toString() 'match'
+			_ = try project.pendingMatchExhaustivenessChecks.remove(i) otherwise panic("filterPendingMatchExhaustivenessChecksByFilePath: remove failed at {i}")
+		end 'match'
+		i = i - 1
+	end 'scan'
+end 'filterPendingMatchExhaustivenessChecksByFilePath'
 
 // Marker called by `queryParseOps` at the start of every parse (whether the
 // file is new or being re-parsed after invalidation). Rolls back any prior

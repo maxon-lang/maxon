@@ -7365,7 +7365,11 @@ export type Parser
 		if not foundEnum 'unknownCase'
 			// Defer to TypeResolution: emit a fallback bare-case arm. TR
 			// will report E3005 / unknown-case when it resolves the
-			// scrutinee.
+			// scrutinee. This path only fires when NEITHER endpoint case is
+			// registered in any enum at parse time — distinct from the
+			// cross-file misroute (where a same-case-name enum IS found and
+			// `foundEnum` is true), which the deferred check handles via the
+			// raw endpoint names captured below.
 			return MatchPatternSpec.enumCase(loToken, caseName: loCaseName)
 		end 'unknownCase'
 
@@ -7377,7 +7381,7 @@ export type Parser
 			reportCompileError(project, code: ErrorCode.parserMatchDuplicatePattern, message: "range pattern '{displayName}' covers a single value; use the bare value instead", line: loToken.line, column: loToken.column, filePath: filePath)
 		end 'singleValue'
 
-		return MatchPatternSpec.enumRange(loToken, loOrdinal: loOrdinal as ParsedInt, hiOrdinal: hiOrdinal, isUpto: isUpto, hasMaxSentinel: hasMaxSentinel, displayName: displayName, enumOwnerName: ownerEnumName)
+		return MatchPatternSpec.enumRange(loToken, loOrdinal: loOrdinal as ParsedInt, hiOrdinal: hiOrdinal, isUpto: isUpto, hasMaxSentinel: hasMaxSentinel, displayName: displayName, enumOwnerName: ownerEnumName, loCaseName: loCaseName, hiCaseName: hiCaseName)
 	end 'parseEnumRangePattern'
 
 	// True when `cursor.peek(offset)` is the `to` or `upto` keyword. Used
@@ -7589,95 +7593,167 @@ export type Parser
 		end 'badFt'
 	end 'rejectFallthroughInMatchExpression'
 
-	// Enforce E2026 — every enum case must be covered when matching on an
-	// enum without a `default` arm. The caller passes the scrutinee's enum
-	// name when its `MaxonType` resolves to a known enum at parse time;
-	// otherwise we fall back to searching enum registries for `lastEnumCaseName`.
-	// The type-driven path is required once stdlib enums are restored from
-	// cache because case names like `notFound` appear in multiple enums
-	// (StringError, FileError, ...) and a pure case-name search returns the
-	// first one that hits — misrouting the diagnostic when a user enum reuses
-	// the same case name.
+	// Enforce E2026 inline — every enum case must be covered when matching on
+	// an enum without a `default` arm. Only called when the scrutinee's
+	// `MaxonType` already resolves to a known registered enum/union at parse
+	// time (`scrutineeEnumName` is non-empty). For an UNRESOLVED scrutinee
+	// type (cross-file / parameter scrutinees) the parser cannot reliably name
+	// the enum, so the check is DEFERRED to TypeResolution via
+	// `recordDeferredMatchExhaustiveness` — the old case-name-search fallback
+	// is gone because it misrouted to whichever same-case-name enum was
+	// registered first (e.g. the giant `MaxonOp` union shadowing the intended
+	// `StdControlOp`).
 	//
-	// `scrutineeIsKnownNonEnum` is the static signal that the scrutinee's
-	// MaxonType resolves to a non-enum (e.g. a `union`/`type` named type or
-	// a primitive). When that's true the case-name fallback is unsafe — the
-	// match's bare-identifier patterns are union-case names, not enum cases,
-	// and the case-search would misroute to whichever enum happens to share
-	// the name (E2026 against `__ManagedListError.empty` for a union match
-	// whose `empty` arm names the union case). Skip exhaustiveness entirely
-	// in that case; union exhaustiveness is a separate concern handled
-	// downstream.
-	function validateEnumExhaustiveness(hasEnumArm bool, hasDefault bool, lastEnumCaseName String, scrutineeEnumName String, scrutineeIsKnownNonEnum bool, seenKeys ReferencedVarSet, errorLine LineNumber, errorColumn ColumnNumber)
+	// Coverage is computed from the source-level `coveredCaseNames` + `rangeArms`
+	// expanded against THIS enum's own case positions — NOT from `seenKeys`,
+	// whose range contribution (`markEnumRangeCases`) is keyed on the parser's
+	// best-effort range owner and can misroute the ordinals to a same-case-name
+	// enum even when the scrutinee type itself resolved correctly.
+	function validateEnumExhaustiveness(hasEnumArm bool, hasDefault bool, scrutineeEnumName String, coveredCaseNames StringArray, rangeArms PendingMatchRangeArmArray, errorLine LineNumber, errorColumn ColumnNumber)
 		if not hasEnumArm 'noEnum'
 			return
 		end 'noEnum'
 		if hasDefault 'hasDefault'
 			return
 		end 'hasDefault'
-		var enumName = scrutineeEnumName
-		var usedFallback = false
-		if enumName.isEmpty() 'fallbackToCaseSearch'
-			if scrutineeIsKnownNonEnum 'nonEnumScrutinee'
-				// Bare-name arms on a non-enum scrutinee are union cases (or
-				// pattern parser catch-alls) — not enum cases. Don't search
-				// the enum registry; that would pick the first enum that
-				// happens to declare a same-named case and emit a misrouted
-				// E2026 against an unrelated type.
-				return
-			end 'nonEnumScrutinee'
-			enumName = enumScrutineeDisplayNameFromCase(lastEnumCaseName)
-			usedFallback = true
-		end 'fallbackToCaseSearch'
-		var missing = ""
 		var enumCases = EnumCaseArray.create()
+		var caseByName = CaseIndexMap.create()
 		var enumKnown = false
-		if let resolvedEnum = try project.enumTypes.get(enumName) 'isResolved'
+		if let resolvedEnum = try project.enumTypes.get(scrutineeEnumName) 'isResolved'
 			enumCases = resolvedEnum.cases
+			caseByName = resolvedEnum.caseByName
 			enumKnown = true
 		end 'isResolved' else 'tryUnresolved'
-			if let unresolvedEnum = try project.unresolvedEnums.get(enumName) 'isUnresolved'
+			if let unresolvedEnum = try project.unresolvedEnums.get(scrutineeEnumName) 'isUnresolved'
 				enumCases = unresolvedEnum.cases
+				caseByName = buildCaseByNameFromCases(unresolvedEnum.cases)
 				enumKnown = true
 			end 'isUnresolved'
 		end 'tryUnresolved'
 		if not enumKnown 'noEnumDecl'
 			return
 		end 'noEnumDecl'
-		// When the enum was picked by case-name fallback (scrutinee type
-		// unresolved), confirm every seenKey is a case of THIS enum. A
-		// mismatch means the fallback misrouted to a same-case-name enum
-		// (e.g. `empty` is a case of both `__ManagedListError` and the user's
-		// union arm); deferring to TypeResolution avoids E2026 against the
-		// wrong type.
-		if usedFallback and not allSeenKeysAreCasesOf(enumCases, seenKeys: seenKeys) 'misrouted'
-			return
-		end 'misrouted'
-		missing = enumMissingCases(enumCases, seenKeys: seenKeys)
+		let missing = missingCasesFromCoverage(enumCases, caseByName: caseByName, coveredCaseNames: coveredCaseNames, rangeArms: rangeArms)
 		if missing.isEmpty() 'allCovered'
 			return
 		end 'allCovered'
-		reportCompileError(project, code: ErrorCode.parserMatchNotExhaustive, message: "match on enum '{enumName}' is not exhaustive, missing: {missing}", line: errorLine, column: errorColumn, filePath: filePath)
+		reportCompileError(project, code: ErrorCode.parserMatchNotExhaustive, message: "match on enum '{scrutineeEnumName}' is not exhaustive, missing: {missing}", line: errorLine, column: errorColumn, filePath: filePath)
 	end 'validateEnumExhaustiveness'
 
-	// True when every name in `seenKeys` (set during arm parsing) is declared
-	// as a case of `enumCases`. Used by `validateEnumExhaustiveness` to reject
-	// a misrouted case-name fallback when the picked enum doesn't actually own
-	// the arms' patterns. Default arms (`__default`) and payload binding rows
-	// don't participate — they're already filtered out of the missing-set
-	// computation; the same shape works here.
-	function allSeenKeysAreCasesOf(enumCases EnumCaseArray, seenKeys ReferencedVarSet) returns bool
-		var caseNames = ReferencedVarSet.create()
-		for c in enumCases 'collectCases'
-			caseNames.insert(c.name)
-		end 'collectCases'
-		for key in seenKeys 'eachKey'
-			if not caseNames.contains(key) 'miss'
-				return false
-			end 'miss'
-		end 'eachKey'
-		return true
-	end 'allSeenKeysAreCasesOf'
+	// Build a case-name -> ordinal map for an unresolved enum whose `caseByName`
+	// hasn't been materialized yet. Ordinal is the case's position in `cases`,
+	// matching the resolved `EnumType.caseByName` semantics.
+	function buildCaseByNameFromCases(cases EnumCaseArray) returns CaseIndexMap
+		var result = CaseIndexMap.create()
+		for i in 0 upto cases.count() 'each'
+			let c = try cases.get(i) otherwise panic("buildCaseByNameFromCases: cases.get OOB at {i}")
+			result.upsert(c.name, value: i as CaseOrdinal)
+		end 'each'
+		return result
+	end 'buildCaseByNameFromCases'
+
+	// Comma-separated list of `enumCases` not covered by the source-level
+	// coverage (`coveredCaseNames` bare arms + `rangeArms` expanded against
+	// `caseByName`). Empty string when every case is covered. Shared shape with
+	// TypeResolution's deferred drain so inline and deferred checks agree.
+	function missingCasesFromCoverage(enumCases EnumCaseArray, caseByName CaseIndexMap, coveredCaseNames StringArray, rangeArms PendingMatchRangeArmArray) returns String
+		var covered = ReferencedVarSet.create()
+		for name in coveredCaseNames 'eachCovered'
+			covered.insert(name)
+		end 'eachCovered'
+		for rangeArm in rangeArms 'eachRange'
+			expandRangeCoverageInto(enumCases, caseByName: caseByName, rangeArm: rangeArm, covered: covered)
+		end 'eachRange'
+		var missing = ""
+		var first = true
+		for c in enumCases 'eachCase'
+			if covered.contains(c.name) 'isCovered'
+				continue
+			end 'isCovered'
+			if first 'firstMiss'
+				missing.append(c.name)
+				first = false
+			end 'firstMiss' else 'subsequent'
+				missing.append(", ")
+				missing.append(c.name)
+			end 'subsequent'
+		end 'eachCase'
+		return missing
+	end 'missingCasesFromCoverage'
+
+	// Insert every case name covered by a `loCaseName to|upto hiCaseName` range
+	// into `covered`, expanding against THIS enum's case positions. `to` is
+	// inclusive both ends; `upto` excludes the upper bound; a `max` sentinel
+	// (`hiCaseName` empty) runs to the last case. Endpoints not naming a case of
+	// this enum are skipped — TR surfaces the canonical unknown-case diagnostic.
+	function expandRangeCoverageInto(enumCases EnumCaseArray, caseByName CaseIndexMap, rangeArm PendingMatchRangeArm, covered ReferencedVarSet)
+		let loOrdinalRaw = try caseByName.get(rangeArm.loCaseName) otherwise return
+		let loOrdinal = loOrdinalRaw as ParsedInt
+		var hiOrdinal = (enumCases.count() - 1) as ParsedInt
+		if not rangeArm.hasMaxSentinel 'lookupHi'
+			let hiOrdinalRaw = try caseByName.get(rangeArm.hiCaseName) otherwise return
+			hiOrdinal = hiOrdinalRaw as ParsedInt
+		end 'lookupHi'
+		let upperInclusive = hiOrdinal if not rangeArm.isUpto else (hiOrdinal - 1)
+		let caseCount = enumCases.count() as ParsedInt
+		var i = loOrdinal
+		while i <= upperInclusive 'each'
+			if i >= 0 and i < caseCount 'inBounds'
+				if let c = try enumCases.get(i as ElementCount) 'haveCase'
+					covered.insert(c.name)
+				end 'haveCase'
+			end 'inBounds'
+			i = i + 1
+		end 'each'
+	end 'expandRangeCoverageInto'
+
+	// Decide, for a match whose scrutinee type is UNRESOLVED at parse time,
+	// whether to record a deferred E2026 check. Shared by the statement- and
+	// expression-form match loops. The check is recorded only when the match
+	// has at least one enum-case arm, has no `default`, and the scrutinee is
+	// not statically known to be a non-enum primitive. `coveredCaseNames` and
+	// `rangeArms` carry the source-level coverage (collected WITHOUT consulting
+	// the enum registry, so a parser misroute can't corrupt them); TR expands
+	// the ranges against the scrutinee's CORRECT resolved enum.
+	function recordDeferredMatchExhaustiveness(hasEnumArm bool, hasDefault bool, scrutineeIsKnownNonEnum bool, scrutineeName ByteArray, coveredCaseNames StringArray, rangeArms PendingMatchRangeArmArray, errorLine LineNumber, errorColumn ColumnNumber)
+		if not hasEnumArm 'noEnum'
+			return
+		end 'noEnum'
+		if hasDefault 'hasDefault'
+			return
+		end 'hasDefault'
+		if scrutineeIsKnownNonEnum 'nonEnumScrutinee'
+			// A statically-known non-enum scrutinee can't be exhaustiveness-
+			// checked here; union exhaustiveness is handled downstream.
+			return
+		end 'nonEnumScrutinee'
+		project.pendingMatchExhaustivenessChecks.push(PendingMatchExhaustivenessCheck.create(currentFunc.name, scrutineeName: String.from(scrutineeName), coveredCaseNames: coveredCaseNames, rangeArms: rangeArms, errorLine: errorLine, errorColumn: errorColumn, filePath: filePath))
+	end 'recordDeferredMatchExhaustiveness'
+
+	// Append this arm's source-level enum coverage to the deferred-check
+	// accumulators. Bare enum-case patterns (including `a or b` chains) add
+	// their case names; an enum-case range arm adds a `(loCaseName,
+	// hiCaseName, isUpto, hasMaxSentinel)` entry. Recorded straight from the
+	// parsed pattern WITHOUT touching the enum registry so a cross-file
+	// misroute can't poison the coverage set.
+	function collectDeferredArmCoverage(patterns MatchPatternList, coveredCaseNames StringArray, rangeArms PendingMatchRangeArmArray)
+		let firstPattern = patterns.first()
+		if firstPattern.isEnumRange 'isRange'
+			rangeArms.push(PendingMatchRangeArm.create(firstPattern.loCaseName, hiCaseName: firstPattern.hiCaseName, isUpto: firstPattern.isUpto, hasMaxSentinel: firstPattern.hasMaxSentinel))
+			return
+		end 'isRange'
+		for pattern in patterns.patterns 'eachPattern'
+			let isEnumCasePattern = match pattern.kind 'k'
+				defaultArm gives false
+				intLiteral gives false
+				enumCase gives true
+				rangeLiteral gives false
+			end 'k'
+			if isEnumCasePattern 'isEnumCase'
+				coveredCaseNames.push(pattern.caseName)
+			end 'isEnumCase'
+		end 'eachPattern'
+	end 'collectDeferredArmCoverage'
 
 	// Return the scrutinee's enum name when its MaxonType resolves to a
 	// known enum at parse time. Empty string for unresolved types or non-enum
@@ -7731,26 +7807,6 @@ export type Parser
 			i = i + 1
 		end 'each'
 	end 'markEnumRangeCases'
-
-	// Comma-separated list of case names not present in `seenKeys`. Returns
-	// an empty string when every case is covered. Used by E2026 messages.
-	function enumMissingCases(cases EnumCaseArray, seenKeys ReferencedVarSet) returns String
-		var missing = ""
-		var first = true
-		for c in cases 'eachCase'
-			if seenKeys.contains(c.name) 'isCovered'
-				continue
-			end 'isCovered'
-			if first 'firstMiss'
-				missing.append(c.name)
-				first = false
-			end 'firstMiss' else 'subsequent'
-				missing.append(", ")
-				missing.append(c.name)
-			end 'subsequent'
-		end 'eachCase'
-		return missing
-	end 'enumMissingCases'
 
 	// Emit pattern-comparison ops into `block` and return the boolean SSA name
 	// holding the combined OR of all comparisons. Caller passes a list of
@@ -8182,6 +8238,12 @@ export type Parser
 		var defaultSeen = false
 		var hasEnumArm = false
 		var lastEnumCaseName = ""
+		// Source-level enum coverage for the deferred E2026 check (used only
+		// when the scrutinee type is unresolved at parse time). Collected
+		// independently of `seenKeys` so a parser range-ordinal misroute can't
+		// poison the coverage TypeResolution validates against.
+		var deferredCoveredCaseNames = StringArray.create()
+		var deferredRangeArms = PendingMatchRangeArmArray.create()
 		// E2046 must gate on the scrutinee type, not on pattern shape:
 		// `parseOneMatchPattern`'s catch-all synthesizes an `enumCase` pattern
 		// for any non-int/non-char/non-default token (string / float literals
@@ -8226,6 +8288,8 @@ export type Parser
 				// enum exhaustiveness sees the range's contribution.
 				markEnumRangeCases(seenKeys, pattern: patterns.first())
 			end 'recordEnumRange'
+			// Accumulate source-level coverage for the deferred E2026 check.
+			collectDeferredArmCoverage(patterns, coveredCaseNames: deferredCoveredCaseNames, rangeArms: deferredRangeArms)
 			let arm = try buildMatchArmBlocks(header, armIndex: armIndex, patterns: patterns, separator: TokenKind.then)
 			if patterns.isDefault() 'recordDefault'
 				hasDefault = true
@@ -8317,13 +8381,18 @@ export type Parser
 		wireMatchFallthroughs(bodies, fallthroughs: fallthroughs, mergeBlockId: mergeBlockId)
 
 		// Enum match exhaustiveness (E2026): if the match was on an enum and
-		// no `default` arm was given, every enum case must be covered. The
-		// scrutinee's MaxonType (when known to be a named enum) wins over
-		// case-name lookup so case names that exist in multiple enums (e.g.
-		// `notFound` in both StringError and a user enum) don't misroute the
-		// diagnostic to the wrong enum.
+		// no `default` arm was given, every enum case must be covered. When the
+		// scrutinee's MaxonType resolves to a known registered enum/union at
+		// parse time, validate inline (preserves parse-time diagnostics + exact
+		// position for resolved-type scrutinees). Otherwise the scrutinee type
+		// is unresolved (cross-file / parameter) — the parser cannot name the
+		// enum without guessing, so defer the check to TypeResolution.
 		let scrutineeEnumName = enumScrutineeDisplayNameFromType(header.scrutineeType)
-		validateEnumExhaustiveness(hasEnumArm, hasDefault: hasDefault, lastEnumCaseName: lastEnumCaseName, scrutineeEnumName: scrutineeEnumName, scrutineeIsKnownNonEnum: scrutineeIsKnownNonEnum, seenKeys: seenKeys, errorLine: cursor.current().line, errorColumn: cursor.current().column)
+		if not scrutineeEnumName.isEmpty() 'inlineExhaustiveness'
+			validateEnumExhaustiveness(hasEnumArm, hasDefault: hasDefault, scrutineeEnumName: scrutineeEnumName, coveredCaseNames: deferredCoveredCaseNames, rangeArms: deferredRangeArms, errorLine: cursor.current().line, errorColumn: cursor.current().column)
+		end 'inlineExhaustiveness' else 'deferExhaustiveness'
+			recordDeferredMatchExhaustiveness(hasEnumArm, hasDefault: hasDefault, scrutineeIsKnownNonEnum: scrutineeIsKnownNonEnum, scrutineeName: header.scrutineeName, coveredCaseNames: deferredCoveredCaseNames, rangeArms: deferredRangeArms, errorLine: cursor.current().line, errorColumn: cursor.current().column)
+		end 'deferExhaustiveness'
 		// Non-enum match: every match needs an explicit `default` arm
 		// because integer / string / float / char scrutinees can't be
 		// enumerated.
@@ -8433,6 +8502,10 @@ export type Parser
 		var defaultSeen = false
 		var hasEnumArm = false
 		var lastEnumCaseName = ""
+		// Source-level enum coverage for the deferred E2026 check (see the
+		// statement-form loop for the rationale).
+		var deferredCoveredCaseNames = StringArray.create()
+		var deferredRangeArms = PendingMatchRangeArmArray.create()
 		// E2046 must gate on the scrutinee type, not on pattern shape: the
 		// pattern parser's catch-all wraps non-int/non-char/non-default tokens
 		// as `enumCase`, which would otherwise mis-fire on string scrutinees.
@@ -8470,6 +8543,8 @@ export type Parser
 				// enum exhaustiveness sees the range's contribution.
 				markEnumRangeCases(seenKeys, pattern: patterns.first())
 			end 'recordEnumRange'
+			// Accumulate source-level coverage for the deferred E2026 check.
+			collectDeferredArmCoverage(patterns, coveredCaseNames: deferredCoveredCaseNames, rangeArms: deferredRangeArms)
 			let arm = try buildMatchArmBlocks(header, armIndex: armIndex, patterns: patterns, separator: TokenKind.gives)
 			if patterns.isDefault() 'recordDefault'
 				hasDefault = true
@@ -8544,8 +8619,15 @@ export type Parser
 			module.setTerminator(currentBlock, op: MaxonOp.br(mergeBlockId, range: SourceRange.none()))
 		end 'noDefault'
 
+		// Enum match-expression exhaustiveness (E2026): inline when the
+		// scrutinee type is a known enum/union at parse time, deferred to
+		// TypeResolution otherwise (see the statement-form loop's rationale).
 		let scrutineeEnumNameExpr = enumScrutineeDisplayNameFromType(header.scrutineeType)
-		validateEnumExhaustiveness(hasEnumArm, hasDefault: hasDefault, lastEnumCaseName: lastEnumCaseName, scrutineeEnumName: scrutineeEnumNameExpr, scrutineeIsKnownNonEnum: scrutineeIsKnownNonEnum, seenKeys: seenKeys, errorLine: cursor.current().line, errorColumn: cursor.current().column)
+		if not scrutineeEnumNameExpr.isEmpty() 'inlineExhaustiveness'
+			validateEnumExhaustiveness(hasEnumArm, hasDefault: hasDefault, scrutineeEnumName: scrutineeEnumNameExpr, coveredCaseNames: deferredCoveredCaseNames, rangeArms: deferredRangeArms, errorLine: cursor.current().line, errorColumn: cursor.current().column)
+		end 'inlineExhaustiveness' else 'deferExhaustiveness'
+			recordDeferredMatchExhaustiveness(hasEnumArm, hasDefault: hasDefault, scrutineeIsKnownNonEnum: scrutineeIsKnownNonEnum, scrutineeName: header.scrutineeName, coveredCaseNames: deferredCoveredCaseNames, rangeArms: deferredRangeArms, errorLine: cursor.current().line, errorColumn: cursor.current().column)
+		end 'deferExhaustiveness'
 		// Non-enum match expression: requires an explicit `default` arm
 		// because integer / string / float / char scrutinees can't be
 		// enumerated and the expression must produce a value on every
@@ -17934,6 +18016,16 @@ export type MatchPatternSpec
 	export var isEnumRange as bool
 	// Owning enum name when `isEnumRange` is true. Empty otherwise.
 	export var enumOwnerName as String
+	// Raw source-level case names of an enum-case range's endpoints
+	// (`loCaseName to|upto hiCaseName`). Captured BEFORE ordinal
+	// resolution so the deferred exhaustiveness check in TypeResolution
+	// can expand the range against the CORRECT resolved enum even when
+	// the parser misrouted `enumOwnerName` / `loValue` / `hiValue` to a
+	// same-case-name enum (the cross-file unresolved-scrutinee case).
+	// `hiCaseName` is empty when `hasMaxSentinel` is true (`lo upto max`).
+	// Both empty for every non-enum-range kind.
+	export var loCaseName as String
+	export var hiCaseName as String
 	// Phase 9 Stage 2: parsed payload bindings for an enum-case pattern
 	// (`caseName(x, _, var y)`). Empty for bare-case arms and for every
 	// non-enum-case kind. `bindingNames` mirrors the same list as
@@ -17944,15 +18036,15 @@ export type MatchPatternSpec
 	export var bindingNames as ByteArrayArray
 
 	export static function defaultPattern(token Token) returns MatchPatternSpec
-		return Self{kind: MatchPatternKind.defaultArm, token: token, intValue: 0, caseName: "", displayName: "default", loValue: 0, hiValue: 0, isUpto: false, hasMinSentinel: false, hasMaxSentinel: false, isEnumRange: false, enumOwnerName: "", bindings: MatchPatternBindingArray.create(), bindingNames: ByteArrayArray.create()}
+		return Self{kind: MatchPatternKind.defaultArm, token: token, intValue: 0, caseName: "", displayName: "default", loValue: 0, hiValue: 0, isUpto: false, hasMinSentinel: false, hasMaxSentinel: false, isEnumRange: false, enumOwnerName: "", loCaseName: "", hiCaseName: "", bindings: MatchPatternBindingArray.create(), bindingNames: ByteArrayArray.create()}
 	end 'defaultPattern'
 
 	export static function intLiteral(token Token, value ParsedInt, displayName String) returns MatchPatternSpec
-		return Self{kind: MatchPatternKind.intLiteral, token: token, intValue: value, caseName: "", displayName: displayName, loValue: 0, hiValue: 0, isUpto: false, hasMinSentinel: false, hasMaxSentinel: false, isEnumRange: false, enumOwnerName: "", bindings: MatchPatternBindingArray.create(), bindingNames: ByteArrayArray.create()}
+		return Self{kind: MatchPatternKind.intLiteral, token: token, intValue: value, caseName: "", displayName: displayName, loValue: 0, hiValue: 0, isUpto: false, hasMinSentinel: false, hasMaxSentinel: false, isEnumRange: false, enumOwnerName: "", loCaseName: "", hiCaseName: "", bindings: MatchPatternBindingArray.create(), bindingNames: ByteArrayArray.create()}
 	end 'intLiteral'
 
 	export static function enumCase(token Token, caseName String) returns MatchPatternSpec
-		return Self{kind: MatchPatternKind.enumCase, token: token, intValue: 0, caseName: caseName, displayName: caseName, loValue: 0, hiValue: 0, isUpto: false, hasMinSentinel: false, hasMaxSentinel: false, isEnumRange: false, enumOwnerName: "", bindings: MatchPatternBindingArray.create(), bindingNames: ByteArrayArray.create()}
+		return Self{kind: MatchPatternKind.enumCase, token: token, intValue: 0, caseName: caseName, displayName: caseName, loValue: 0, hiValue: 0, isUpto: false, hasMinSentinel: false, hasMaxSentinel: false, isEnumRange: false, enumOwnerName: "", loCaseName: "", hiCaseName: "", bindings: MatchPatternBindingArray.create(), bindingNames: ByteArrayArray.create()}
 	end 'enumCase'
 
 	// Phase 9 Stage 2: enum-case pattern with payload bindings.
@@ -17960,22 +18052,22 @@ export type MatchPatternSpec
 	// flat ByteArrayArray slot consumed by the dialect-level
 	// enumMatchArm op. Both arrays are parallel and the same length.
 	export static function enumCaseWithBindings(token Token, caseName String, bindings MatchPatternBindingArray, bindingNames ByteArrayArray) returns MatchPatternSpec
-		return Self{kind: MatchPatternKind.enumCase, token: token, intValue: 0, caseName: caseName, displayName: caseName, loValue: 0, hiValue: 0, isUpto: false, hasMinSentinel: false, hasMaxSentinel: false, isEnumRange: false, enumOwnerName: "", bindings: bindings, bindingNames: bindingNames}
+		return Self{kind: MatchPatternKind.enumCase, token: token, intValue: 0, caseName: caseName, displayName: caseName, loValue: 0, hiValue: 0, isUpto: false, hasMinSentinel: false, hasMaxSentinel: false, isEnumRange: false, enumOwnerName: "", loCaseName: "", hiCaseName: "", bindings: bindings, bindingNames: bindingNames}
 	end 'enumCaseWithBindings'
 
 	// Range pattern: `loValue to|upto hiValue`. Either bound may be a
 	// `min` / `max` sentinel (open-ended), but never both. `displayName`
 	// is the source form used in duplicate / single-value diagnostics.
 	export static function rangeLiteral(token Token, loValue ParsedInt, hiValue ParsedInt, isUpto bool, hasMinSentinel bool, hasMaxSentinel bool, displayName String) returns MatchPatternSpec
-		return Self{kind: MatchPatternKind.rangeLiteral, token: token, intValue: 0, caseName: "", displayName: displayName, loValue: loValue, hiValue: hiValue, isUpto: isUpto, hasMinSentinel: hasMinSentinel, hasMaxSentinel: hasMaxSentinel, isEnumRange: false, enumOwnerName: "", bindings: MatchPatternBindingArray.create(), bindingNames: ByteArrayArray.create()}
+		return Self{kind: MatchPatternKind.rangeLiteral, token: token, intValue: 0, caseName: "", displayName: displayName, loValue: loValue, hiValue: hiValue, isUpto: isUpto, hasMinSentinel: hasMinSentinel, hasMaxSentinel: hasMaxSentinel, isEnumRange: false, enumOwnerName: "", loCaseName: "", hiCaseName: "", bindings: MatchPatternBindingArray.create(), bindingNames: ByteArrayArray.create()}
 	end 'rangeLiteral'
 
 	// Enum-case range: `caseName to|upto caseName`. The `loValue`/`hiValue`
 	// fields hold the case ordinals so lowering can compare against the
 	// integer-backed scrutinee. `enumOwnerName` identifies the enum for
 	// exhaustiveness coverage tracking.
-	export static function enumRange(token Token, loOrdinal ParsedInt, hiOrdinal ParsedInt, isUpto bool, hasMaxSentinel bool, displayName String, enumOwnerName String) returns MatchPatternSpec
-		return Self{kind: MatchPatternKind.rangeLiteral, token: token, intValue: 0, caseName: "", displayName: displayName, loValue: loOrdinal, hiValue: hiOrdinal, isUpto: isUpto, hasMinSentinel: false, hasMaxSentinel: hasMaxSentinel, isEnumRange: true, enumOwnerName: enumOwnerName, bindings: MatchPatternBindingArray.create(), bindingNames: ByteArrayArray.create()}
+	export static function enumRange(token Token, loOrdinal ParsedInt, hiOrdinal ParsedInt, isUpto bool, hasMaxSentinel bool, displayName String, enumOwnerName String, loCaseName String, hiCaseName String) returns MatchPatternSpec
+		return Self{kind: MatchPatternKind.rangeLiteral, token: token, intValue: 0, caseName: "", displayName: displayName, loValue: loOrdinal, hiValue: hiOrdinal, isUpto: isUpto, hasMinSentinel: false, hasMaxSentinel: hasMaxSentinel, isEnumRange: true, enumOwnerName: enumOwnerName, loCaseName: loCaseName, hiCaseName: hiCaseName, bindings: MatchPatternBindingArray.create(), bindingNames: ByteArrayArray.create()}
 	end 'enumRange'
 
 	export function isDefault() returns bool
