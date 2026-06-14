@@ -161,6 +161,21 @@ export type IrModule uses Op
 		return block
 	end 'createAndRegisterBlock'
 
+	// Re-fetch a block alias by its (function-local) id, scanning the
+	// function's block set. Use this instead of holding an IrBlock struct
+	// alias across other block-creating / block-mutating calls: those calls
+	// can leave a previously-captured alias stale. Mirrors how the if/else
+	// finalizer threads BlockIds rather than struct aliases.
+	export function getBlockByIdIn(func IrFunction, id BlockId) returns IrBlock throws BlockRefLookupError
+		for blockRef in func.blockRefs 'each'
+			let candidate = try self.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in self.blocks")
+			if candidate.id == id 'match'
+				return candidate
+			end 'match'
+		end 'each'
+		throw BlockRefLookupError.notInFunction
+	end 'getBlockByIdIn'
+
 	// Locate the flat blocks[] index of `block` within `func`'s block set.
 	// Used by the parser's statement-line recorder. BlockId is only unique
 	// within a single function, so restricting the scan to func.blockRefs

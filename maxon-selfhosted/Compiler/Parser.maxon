@@ -152,6 +152,53 @@ function lookupClosureRename(renames ClosureRenameArray, funcName String) return
 	return funcName
 end 'lookupClosureRename'
 
+// Per-block state for an active block-form `try 'label' ... end 'label'
+// construct. Bare throwing calls and bare `throw Enum.case` statements inside
+// the body funnel their error flag into the shared mutable slot `errorFlagSlot`
+// (encoding 0 = success, ordinal + 1 = thrown case) and branch to the shared
+// error block `errorBlockId`. `errorTypeNames` preserves insertion order of the
+// distinct error-enum names thrown by the body — Phase A only handles the
+// single-enum (degenerate) case where this list has exactly one entry; two or
+// more distinct enums is a Phase B error-union synthesis the parser rejects up
+// front (see `routeBareThrowingCallInBlock`). The throws clause of the first
+// routed throw/call (`throwsClause`) types the `(e)` handler binding.
+export type TryBlockContext
+	export var errorBlockId as BlockId
+	export var errorFlagSlot as VarSlot
+	export var blockLabel as String
+	export var errorTypeNames as StringArray
+	export var throwsClause as ThrowsClause
+
+	export static function create(errorBlockId BlockId, errorFlagSlot VarSlot, blockLabel String) returns TryBlockContext
+		return Self{errorBlockId: errorBlockId, errorFlagSlot: errorFlagSlot, blockLabel: blockLabel, errorTypeNames: StringArray.create(), throwsClause: ThrowsClause.none}
+	end 'create'
+
+	// Record a distinct error-enum name encountered while routing a bare throw
+	// or throwing call in this block. The first recorded clause types the
+	// handler binding. Returns the count of distinct enums seen so far so the
+	// caller can detect the Phase B multi-enum union case (> 1).
+	export function recordErrorType(name String, clause ThrowsClause) returns ElementCount
+		for existing in self.errorTypeNames 'each'
+			if existing == name 'seen'
+				return self.errorTypeNames.count()
+			end 'seen'
+		end 'each'
+		if self.errorTypeNames.count() == 0 'firstType'
+			self.throwsClause = clause
+		end 'firstType'
+		self.errorTypeNames.push(name)
+		return self.errorTypeNames.count()
+	end 'recordErrorType'
+end 'TryBlockContext'
+
+export typealias TryBlockContextArray = Array with TryBlockContext
+
+// Thrown by the block-form try's parse-time enum-case ordinal lookup when the
+// thrown `EnumName.caseName` can't be resolved in the enum registries.
+export enum CaseOrdinalLookupError implements Error
+	notFound
+end 'CaseOrdinalLookupError'
+
 export type Parser
 	var project as Project
 	// Original token array kept for absolute-index lookups (e.g. "previous
@@ -313,6 +360,20 @@ export type Parser
 	// the match-arm helper can see and process the fallthrough marker.
 	// Saved/restored by callers so nested matches behave correctly.
 	var inMatchArmBody as bool
+	// Stack of active block-form `try 'label' ... end` contexts (innermost on
+	// top). After parsing a try-block body, `parseTryBlock` scans the body's
+	// blocks and routes every bare throwing call / `throw` to the top context's
+	// shared error slot + error block. A stack (not a single field) so a nested
+	// `try` block inside an outer one routes to its own innermost handler.
+	var tryBlockStack as TryBlockContextArray
+	// E3084 detection state, mirroring the C# bootstrap's
+	// `_tryBlockMatchedBinding` / `_tryBlockBindingWasMatched`. While parsing a
+	// block-form `try`'s `otherwise (e) 'h'` handler body, `tryBlockMatchedBinding`
+	// holds the binding name `e` and `parseMatchHeader` sets
+	// `tryBlockBindingWasMatched` when it sees a `match` whose bare scrutinee IS
+	// that binding. An empty `tryBlockMatchedBinding` disables the check.
+	var tryBlockMatchedBinding as String
+	var tryBlockBindingWasMatched as bool
 	// Stage E (closures): set true while parsing a closure body. Toggles the
 	// capture-detection branches in `emitSelfLoad` and the bare-name read
 	// path so outer-scope references emit `closureEnvLoad` ops instead of
@@ -420,7 +481,7 @@ export type Parser
 		// before any expression is parsed.
 		let placeholderFunc = IrFunction.create("", maxonReturnType: MaxonReturnType.void, paramCount: 0, maxonParamTypes: MaxonTypeArray.create(), returnLine: 0)
 		let placeholderBlock = IrBlock.create(0, label: "")
-		return Self{project: project, tokens: tokens, cursor: cursor, filePath: filePath, rootPath: rootPath, namespace: namespace, currentTypeName: "", currentTypeParams: StringArray.create(), currentTypeConformances: ConformanceArray.create(), currentTypeVisibility: Visibility.file, currentEnumVisibility: Visibility.file, scope: Scope.create(), loopStack: LoopContextArray.create(), matchStack: MatchContextArray.create(), abortBody: false, bodyStmtParsed: false, paramLocations: ParamLocationArray.create(), localVarLocations: ParamLocationArray.create(), referencedVars: ReferencedVarSet.create(), mutableVarLocations: ParamLocationArray.create(), reassignedVars: ReferencedVarSet.create(), lastExprImmutableVarRefName: "", lastExprFromImmutableRoot: false, lastExprVarRefName: "", lastExprProducerName: ByteArray.create(), pendingVarFromImmutable: VarFromImmutableCandidateArray.create(), paramReservations: ParamReservationArray.create(), synthNameCounter: 0, paramDefaultHelperCounter: 0, synthNameCache: ByteArrayArray.create(), currentBlock: placeholderBlock, currentFunc: placeholderFunc, module: MaxonModule.create(), consumeExpectedDisplay: "more input", inMatchArmBody: false, inClosure: false, inFunctionParam: false, inForInHeader: false, atTopOfTypeAliasRhs: false, inIfCondition: false, currentInnerAliases: InnerAliasMap.create(), closureOuterScope: Scope.create(), closureCaptures: CaptureInfoArray.create(), closureOuterReferencedVars: ReferencedVarSet.create(), moduleInitName: "", moduleInitFunc: placeholderFunc, moduleInitBlock: placeholderBlock, moduleInitSynthCounter: 0, localTypealiases: LocalTypealiasArray.create(), usedTypeAliases: ReferencedVarSet.create(), letStructBackedEnumCases: StructBackedEnumCaseBindingMap.create()}
+		return Self{project: project, tokens: tokens, cursor: cursor, filePath: filePath, rootPath: rootPath, namespace: namespace, currentTypeName: "", currentTypeParams: StringArray.create(), currentTypeConformances: ConformanceArray.create(), currentTypeVisibility: Visibility.file, currentEnumVisibility: Visibility.file, scope: Scope.create(), loopStack: LoopContextArray.create(), matchStack: MatchContextArray.create(), abortBody: false, bodyStmtParsed: false, paramLocations: ParamLocationArray.create(), localVarLocations: ParamLocationArray.create(), referencedVars: ReferencedVarSet.create(), mutableVarLocations: ParamLocationArray.create(), reassignedVars: ReferencedVarSet.create(), lastExprImmutableVarRefName: "", lastExprFromImmutableRoot: false, lastExprVarRefName: "", lastExprProducerName: ByteArray.create(), pendingVarFromImmutable: VarFromImmutableCandidateArray.create(), paramReservations: ParamReservationArray.create(), synthNameCounter: 0, paramDefaultHelperCounter: 0, synthNameCache: ByteArrayArray.create(), currentBlock: placeholderBlock, currentFunc: placeholderFunc, module: MaxonModule.create(), consumeExpectedDisplay: "more input", inMatchArmBody: false, tryBlockStack: TryBlockContextArray.create(), tryBlockMatchedBinding: "", tryBlockBindingWasMatched: false, inClosure: false, inFunctionParam: false, inForInHeader: false, atTopOfTypeAliasRhs: false, inIfCondition: false, currentInnerAliases: InnerAliasMap.create(), closureOuterScope: Scope.create(), closureCaptures: CaptureInfoArray.create(), closureOuterReferencedVars: ReferencedVarSet.create(), moduleInitName: "", moduleInitFunc: placeholderFunc, moduleInitBlock: placeholderBlock, moduleInitSynthCounter: 0, localTypealiases: LocalTypealiasArray.create(), usedTypeAliases: ReferencedVarSet.create(), letStructBackedEnumCases: StructBackedEnumCaseBindingMap.create()}
 	end 'create'
 
 	export function parseModule() returns MaxonModule throws ParserError
@@ -1720,7 +1781,14 @@ export type Parser
 			end 'isPanic' else if stmtToken.kind == TokenKind.throw 'isThrow'
 				try parseThrowStatement(block)
 				lastWasReturn = true
-			end 'isThrow' else if stmtToken.kind == TokenKind.try 'isTryStmt'
+			end 'isThrow' else if stmtToken.kind == TokenKind.try and isTryBlockForm() 'isTryBlock'
+				// Block-form `try 'label' ... end 'label' otherwise (e) 'h' ... end 'h'`:
+				// a leading char-literal label after `try` disambiguates the
+				// multi-call block construct from the single-statement
+				// `try EXPR [otherwise ...]` form.
+				try parseTryBlock(block)
+				block = currentBlock
+			end 'isTryBlock' else if stmtToken.kind == TokenKind.try 'isTryStmt'
 				// Statement-form `try EXPR [otherwise FALLBACK]` — the `try`
 				// keyword itself signals the user's intent to handle (or
 				// ignore via `otherwise ignore`) any error path. The
@@ -6540,6 +6608,21 @@ export type Parser
 		let typeNameToken = try consumeExpecting("error type name")
 		try expect(TokenKind.dot)
 		let variantToken = try consumeExpecting("error variant name")
+
+		// Inside an active block-form `try`, a bare `throw Enum.case` routes to
+		// the shared `otherwise` handler instead of the function exit. Payload /
+		// associated-value throws are rejected by the interceptor (Phase B). The
+		// interceptor seals `block` with a `br` to the shared error handler.
+		// `routeBareThrowToActiveTryBlock` returns a plain bool; it must be
+		// captured and branched on directly (the `if try f() 'label'` boolean
+		// form means "enter if `f` did not throw" per the if-try spec, NOT "enter
+		// if `f` returned true" — using it here would always enter).
+		let throwHasPayload = at(TokenKind.leftParen) or enumIsAssociatedValueUnion(typeNameToken.value)
+		let routedThrow = try routeBareThrowToActiveTryBlock(block, enumName: typeNameToken.value, variantName: variantToken.value, hasPayload: throwHasPayload, range: SourceRange.between(throwToken, last: variantToken))
+		if routedThrow 'routedToTryBlock'
+			return
+		end 'routedToTryBlock'
+
 		if at(TokenKind.leftParen) 'hasPayload'
 			let ctorCall = try emitUnionThrowConstruction(block, typeNameToken: typeNameToken, variantToken: variantToken)
 			module.setTerminator(block, op: MaxonOp.throw(typeNameToken.value, variantName: variantToken.value, payloadValueName: ctorCall.resultName, range: SourceRange.between(throwToken, last: ctorCall.lastToken)))
@@ -6875,6 +6958,13 @@ export type Parser
 		var scrutineeMutable = false
 		let cur = cursor.current()
 		let nxt = try cursor.peek(1) otherwise Token.eof()
+		// E3084: a block-form `try`'s `otherwise (e)` handler must contain a
+		// `match e` on the binding. Record the sighting here, at the only point
+		// the scrutinee identifier is still visible before parseExpression
+		// consumes it.
+		if not tryBlockMatchedBinding.isEmpty() and cur.kind == TokenKind.identifier and cur.value == tryBlockMatchedBinding 'matchedTryBinding'
+			tryBlockBindingWasMatched = true
+		end 'matchedTryBinding'
 		if cur.kind == TokenKind.identifier and nxt.kind == TokenKind.charLiteral and scope.contains(cur.value) 'isBareLocal'
 			let info = scope.getInfo(cur.value)
 			scrutineeMutable = info.mutable
@@ -7882,6 +7972,17 @@ export type Parser
 		let typeNameToken = try consumeExpecting("error type name")
 		try expect(TokenKind.dot)
 		let variantToken = try consumeExpecting("error variant name")
+
+		// A `default throws` arm inside an active block-form `try` body routes to
+		// the shared `otherwise` handler, mirroring a bare `throw` statement.
+		// Capture the bool return and branch on it directly — the `if try f()`
+		// boolean form means "enter if no throw", not "enter if returned true".
+		let throwsHasPayload = at(TokenKind.leftParen) or enumIsAssociatedValueUnion(typeNameToken.value)
+		let routedThrows = try routeBareThrowToActiveTryBlock(armBodyBlock, enumName: typeNameToken.value, variantName: variantToken.value, hasPayload: throwsHasPayload, range: SourceRange.between(throwsToken, last: variantToken))
+		if routedThrows 'routedToTryBlock'
+			return
+		end 'routedToTryBlock'
+
 		if at(TokenKind.leftParen) 'hasPayload'
 			let ctorCall = try emitUnionThrowConstruction(armBodyBlock, typeNameToken: typeNameToken, variantToken: variantToken)
 			module.setTerminator(armBodyBlock, op: MaxonOp.throw(typeNameToken.value, variantName: variantToken.value, payloadValueName: ctorCall.resultName, range: SourceRange.between(throwsToken, last: ctorCall.lastToken)))
@@ -10561,6 +10662,483 @@ export type Parser
 		return TryFallbackOutcome.merges(handlerExitBlock)
 	end 'finalizeFallbackHandler'
 
+	// --- Block-form try ---
+	//
+	// Parse a `try 'label' <body> end 'label' otherwise (e) 'h' <handler> end 'h'`
+	// construct. Within the body, bare throwing calls and bare `throw Enum.case`
+	// statements do NOT require `try`; the parser routes their error to the
+	// shared `otherwise` handler instead of the function exit.
+	//
+	// Phase A: SINGLE-enum only. Every routed throw/call in the body must throw
+	// the SAME error enum type. Two or more distinct enums would require an
+	// error-union synthesis (Phase B) — the routing helpers reject that case
+	// with a clear diagnostic + abort so Phase B has an obvious hook.
+	//
+	// Control-flow shape generated for the body
+	//   try 'work'  <bodyBlock>
+	//       <pre-call-1 ops>
+	//       a = <call-1>            -- rewritten to tryCall; flag bound to $tF1
+	//       -- split here:
+	//       store errorFlagSlot, $tF1
+	//       cmp $cmp = ($tF1 == 0)
+	//       cond_br $cmp -> contBlock1, errBlock       <bodyBlock terminator>
+	//   contBlock1:
+	//       <pre-call-2 ops>
+	//       b = <call-2>            -- rewritten to tryCall; flag bound to $tF2
+	//       store errorFlagSlot, $tF2
+	//       cmp $cmp2 = ($tF2 == 0)
+	//       cond_br $cmp2 -> contBlock2, errBlock      <contBlock1 terminator>
+	//   contBlock2:
+	//       <tail ops>
+	//       br afterBlock                              <success live-tail>
+	//   errBlock:                  <shared handler>
+	//       e = errorFlagSlot - 1   -- typed-enum binding via declareErrorBindingInBlock
+	//       match e ...             -- the handler body
+	//       br afterBlock
+	//   afterBlock:                <continuation after the whole construct>
+	//
+	// A bare `throw Enum.case` in the body becomes:
+	//       $ord = unresolvedRead "Enum.case"   -- TR folds to the ordinal literal
+	//       $flag = $ord + 1
+	//       store errorFlagSlot, $flag
+	//       br errBlock                          <replaces the throw terminator>
+	//
+	// entry: cursor AT `try`. exit: cursor PAST the construct's final `end`.
+	function parseTryBlock(block IrBlock) throws ParserError
+		let tryToken = try consume()  // 'try'
+		if inMatchArmBody 'inArm'
+			reportMatchArmTryBlockForm(tryToken)
+			throw ParserError.typeError
+		end 'inArm'
+		let blockLabelToken = try consume()  // charLiteral block label
+		let blockLabel = blockLabelToken.value
+		try skipNewlines()
+
+		// Shared mutable flag slot: 0 = success, ordinal + 1 = thrown case.
+		// Declared in the enclosing scope (not a body-local) so the shared error
+		// block can read it after the body's scope has logically closed.
+		let errorFlagSlot = scope.declareShadowing("__tryBlockErr_{currentFunc.nextBlockId}", varType: MaxonType.integer, mutable: true)
+		let flagZero = emitLiteral(block, value: 0, valueType: MaxonType.integer, range: SourceRange.ofToken(tryToken))
+		module.appendOp(block, op: MaxonOp.varDecl(errorFlagSlot, value: flagZero, slotType: MaxonType.integer, range: SourceRange.ofToken(tryToken)))
+
+		let tryFilePath = filePath.toString()
+
+		// Shared error block — all routed error edges converge here. Created
+		// BEFORE the body so bare `throw`s inside the body can target its id at
+		// emit time (see parseThrowStatement / emitDivergingDefaultArm, which
+		// consult the try-block stack). Its handler body (binding + match) is
+		// filled in after the body is parsed.
+		//
+		// Only the block's *id* is retained across the body/handler parse. Holding
+		// the returned IrBlock struct alias across the many block-creating calls
+		// that follow (parseStatements, routeTryBlockBody splits, addBlockAt for
+		// the continuation, parseTryBlockOtherwise) is unsafe: a later
+		// `currentBlock = ...` field reassignment can decref the array-owned block
+		// through the stale alias, corrupting it. Re-fetch by id at each use,
+		// mirroring how the if/else finalizer threads BlockIds.
+		let errorBlockId = module.addBlockAt(currentFunc, label: "tryblock_{currentFunc.nextBlockId}.err", filePath: tryFilePath, firstLine: tryToken.line).id
+
+		// Push the context before parsing the body so a nested `try` block parses
+		// its own statements against its own innermost context.
+		var ctx = TryBlockContext.create(errorBlockId, errorFlagSlot: errorFlagSlot, blockLabel: blockLabel)
+		tryBlockStack.push(ctx)
+		scope.pushScope()
+
+		// Capture the body's first block-array index so the post-body call-routing
+		// scan knows where the body region starts. Every block created while
+		// parsing the body is appended to module.blocks at a >= index.
+		let bodyFirstBlockIndex = try module.findBlockRef(currentFunc, block: block) otherwise panic("parseTryBlock: body block not registered in currentFunc")
+
+		// The exit block parseStatements returns is the body's straight-line tail
+		// BEFORE call-routing splits run. Routing may move that tail into a fresh
+		// continuation, so we don't capture it here — `branchOpenBodyTailsToAfter`
+		// locates the post-split live tail(s) by scanning the region.
+		_ = try parseStatements(currentFunc, block: block, lastWasReturn: false)
+
+		scope.popScope()
+		_ = try tryBlockStack.pop() otherwise panic("parseTryBlock: tryBlockStack underflow — pushed ctx is missing")
+
+		// Route every bare throwing CALL in the body region to the shared slot +
+		// error block. (Bare `throw`s were already routed inline at emit time via
+		// the try-block stack.) This rewrites bare throwing `call` / `methodCall`
+		// ops to `tryCall` / `tryMethodCall` (so the post-parse E3057 scan in
+		// SemanticCheck doesn't fire) and splits their host blocks onto the
+		// success/error edges.
+		try routeTryBlockBody(ctx, bodyFirstBlockIndex: bodyFirstBlockIndex, tryToken: tryToken)
+
+		try skipEndAndLabel()  // consume `end 'work'`
+
+		// `otherwise` may sit on the same line as `end 'work'` or on the next
+		// line. The block label / handler match parser is newline-tolerant, so
+		// skip any intervening newlines before requiring `otherwise`.
+		_ = skipOptionalNewlines()
+
+		// E3083: the body routed no throwing call / throw.
+		if ctx.errorTypeNames.count() == 0 'noThrows'
+			reportCompileError(project, code: ErrorCode.semanticTryBlockNoThrows, message: "try block contains no throwing calls: '{blockLabel}'", line: tryToken.line, column: tryToken.column, filePath: filePath)
+			throw ParserError.unhandledToken
+		end 'noThrows'
+
+		// Post-construct continuation. Created after the error block so both the
+		// success live-tail and the handler tail can target it. Retain only its
+		// id (see the errorBlockId note above).
+		let afterBlockId = module.addBlockAt(currentFunc, label: "tryblock_{currentFunc.nextBlockId}.after", filePath: tryFilePath, firstLine: tryToken.line).id
+
+		// Branch every still-open body block to the continuation. Splitting a
+		// call's host block moved the success tail into a fresh continuation, so
+		// `bodyExitBlock` is no longer reliably the live tail — the routed
+		// continuation (or, for a no-call body, the body block itself) is. The
+		// shared error block and the continuation are excluded: the error block is
+		// sealed by the handler below, and the continuation is the branch target.
+		try branchOpenBodyTailsToAfter(bodyFirstBlockIndex, errorBlockId: errorBlockId, afterBlockId: afterBlockId, tryToken: tryToken)
+
+		// Parse the `otherwise (e) 'h' <handler> end 'h'` clause into the error block.
+		try parseTryBlockOtherwise(ctx, errorBlockId: errorBlockId, afterBlockId: afterBlockId, tryToken: tryToken)
+
+		currentBlock = try module.getBlockByIdIn(currentFunc, id: afterBlockId) otherwise panic("parseTryBlock: continuation block vanished")
+	end 'parseTryBlock'
+
+	// Branch every still-unterminated body-region block to the post-construct
+	// continuation. After call-routing splits, the success live-tail is whatever
+	// continuation block ends the straight-line body — locating it by "the open
+	// block in the region" is robust to however many splits happened. The shared
+	// error block (`errorBlockId`, sealed later by the handler) and the
+	// continuation itself (`afterBlock`) are skipped.
+	function branchOpenBodyTailsToAfter(bodyFirstBlockIndex BlockIndex, errorBlockId BlockId, afterBlockId BlockId, tryToken Token) throws ParserError
+		var idx = bodyFirstBlockIndex
+		while idx < module.blockCount() 'eachBlock'
+			var blk = module.getBlock(idx)
+			if blk.id != errorBlockId and blk.id != afterBlockId and not blk.isTerminated() 'openTail'
+				module.setTerminator(blk, op: MaxonOp.br(afterBlockId, range: SourceRange.ofToken(tryToken)))
+			end 'openTail'
+			idx = idx + 1
+		end 'eachBlock'
+	end 'branchOpenBodyTailsToAfter'
+
+	// Parse the `otherwise (e) 'label' <handler> end 'label'` clause of a
+	// block-form try. The handler is emitted into the shared error block
+	// (`errorBlockId`; every routed error edge branches here). Re-fetches the
+	// error block by id rather than holding a struct alias across the body
+	// parse (see the errorBlockId note in parseTryBlock). Declares the typed
+	// `(e)` binding, parses the handler body, enforces E3084 (handler must
+	// `match e`), and branches the handler's live tail to `afterBlockId`.
+	function parseTryBlockOtherwise(ctx TryBlockContext, errorBlockId BlockId, afterBlockId BlockId, tryToken Token) throws ParserError
+		if not at(TokenKind.otherwise) 'noOtherwise'
+			let tok = cursor.current()
+			reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "try block requires an 'otherwise (e) 'label'' clause", line: tok.line, column: tok.column, filePath: filePath)
+			throw ParserError.unhandledToken
+		end 'noOtherwise'
+		try eat(TokenKind.otherwise)
+
+		// Phase A requires the `(binding) 'label'` block-handler form.
+		if not at(TokenKind.leftParen) 'noBinding'
+			let tok = cursor.current()
+			reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "try block 'otherwise' requires a '(binding)' error handler, e.g. otherwise (e) 'h'", line: tok.line, column: tok.column, filePath: filePath)
+			throw ParserError.unhandledToken
+		end 'noBinding'
+		try eat(TokenKind.leftParen)
+		let bindingToken = try consumeExpecting("error binding name")
+		checkReservedDeclName(bindingToken)
+		try eat(TokenKind.rightParen)
+		let handlerLabelToken = try consumeExpecting("handler block label")
+		try skipNewlines()
+
+		// All routed error edges land in the shared error block. Declare the
+		// typed-enum binding here. `declareErrorBindingInBlock` pushes a fresh
+		// scope (popped after the handler body) and recovers the ordinal as
+		// `flag - 1` for a bare enum. For Phase A the binding type is the single
+		// recorded throws clause.
+		var errorBlock = try module.getBlockByIdIn(currentFunc, id: errorBlockId) otherwise panic("parseTryBlockOtherwise: error block vanished")
+		currentBlock = errorBlock
+		try declareErrorBindingInBlock(errorBlock, errorFlagName: bindingFlagLoadName(errorBlock, ctx: ctx, tryToken: tryToken), bindingName: bindingToken.value, bindingLine: bindingToken.line, bindingColumn: bindingToken.column, calleeThrowsTypeName: ctx.throwsClause, range: SourceRange.ofToken(tryToken))
+
+		// Parse the handler body, watching for a `match e`. E3084 fires if the
+		// handler never matches the binding.
+		let savedBinding = tryBlockMatchedBinding
+		let savedMatched = tryBlockBindingWasMatched
+		tryBlockMatchedBinding = bindingToken.value
+		tryBlockBindingWasMatched = false
+
+		let handlerExitBlock = try parseStatements(currentFunc, block: errorBlock, lastWasReturn: false)
+
+		let wasMatched = tryBlockBindingWasMatched
+		tryBlockMatchedBinding = savedBinding
+		tryBlockBindingWasMatched = savedMatched
+
+		scope.popScope()  // pops the binding scope pushed by declareErrorBindingInBlock
+
+		if not wasMatched 'noMatch'
+			reportCompileError(project, code: ErrorCode.semanticTryBlockBindingNotMatched, message: "otherwise block must contain a match on the error binding '{bindingToken.value}'", line: handlerLabelToken.line, column: handlerLabelToken.column, filePath: filePath)
+			throw ParserError.unhandledToken
+		end 'noMatch'
+
+		try skipEndAndLabel()  // consume `end 'h'`
+
+		// Branch the handler's live tail to the post-construct continuation. The
+		// handler body may have split into nested match blocks — whichever block
+		// is the parse exit is the live tail.
+		if not handlerExitBlock.isTerminated() 'handlerLiveTail'
+			module.setTerminator(handlerExitBlock, op: MaxonOp.br(afterBlockId, range: SourceRange.ofToken(tryToken)))
+		end 'handlerLiveTail'
+	end 'parseTryBlockOtherwise'
+
+	// Load the shared error-flag slot into a fresh SSA name so
+	// `declareErrorBindingInBlock` can recover the ordinal (`flag - 1`) for the
+	// bare-enum `(e)` binding. The single-statement try path hands that helper
+	// the call-bound flag SSA name directly; the block-form's flag lives in a
+	// mutable slot, so we materialize a load first.
+	function bindingFlagLoadName(targetBlock IrBlock, ctx TryBlockContext, tryToken Token) returns ByteArray
+		let loadName = freshSynthName()
+		module.appendOp(targetBlock, op: MaxonOp.varLoad(loadName, slotId: ctx.errorFlagSlot, slotType: MaxonType.integer, range: SourceRange.ofToken(tryToken)))
+		return loadName
+	end 'bindingFlagLoadName'
+
+	// Scan every block of the try-block body (block-array indices
+	// [bodyFirstBlockIndex, liveBlockCount)) and route each bare throwing
+	// `call` / `methodCall` op and each bare `throw` terminator to the shared
+	// error slot + error block. The live block count is re-read each iteration
+	// because splitting a host block appends a fresh continuation block whose
+	// own (higher) index must also be scanned.
+	function routeTryBlockBody(ctx TryBlockContext, bodyFirstBlockIndex BlockIndex, tryToken Token) throws ParserError
+		var idx = bodyFirstBlockIndex
+		while idx < module.blockCount() 'eachBodyBlock'
+			var blk = module.getBlock(idx)
+			// Skip the shared error block itself (created before the body). Other
+			// blocks are inspected even when already terminated, because a bare
+			// `throw` terminator must be redirected to the shared handler.
+			if blk.id != ctx.errorBlockId 'notErrBlock'
+				try routeOneBodyBlock(ctx, block: blk, tryToken: tryToken)
+			end 'notErrBlock'
+			idx = idx + 1
+		end 'eachBodyBlock'
+	end 'routeTryBlockBody'
+
+	// Route the first bare throwing call in `block` by splitting the block onto
+	// success/error edges. At most one call is routed here — the continuation
+	// carries any remaining calls and is scanned on a subsequent iteration of
+	// `routeTryBlockBody`. Bare `throw`s are NOT handled here; they were routed
+	// inline at emit time via the try-block stack.
+	function routeOneBodyBlock(ctx TryBlockContext, block IrBlock, tryToken Token) throws ParserError
+		let opCount = block.opRefs.count()
+		var pos = 0 as ElementCount
+		while pos < opCount 'scanOps'
+			let opRef = try block.opRefs.get(pos) otherwise break
+			let op = try module.ops.get(opRef) otherwise break
+			if isRoutableThrowingCallOp(op, opIdx: opRef) 'isRoutable'
+				try routeBareThrowingCallInBlock(ctx, block: block, callPos: pos, callOpRef: opRef, callOp: op, tryToken: tryToken)
+				return
+			end 'isRoutable'
+			pos = pos + 1
+		end 'scanOps'
+	end 'routeOneBodyBlock'
+
+	// True when `op` is a bare `call` / `methodCall` (NOT an already-routed
+	// `tryCall` / `tryMethodCall`) whose resolved callee throws. Those are the
+	// body sites that must route to the shared handler. Explicit `try EXPR
+	// otherwise ...` inside the body already rewrote its call to a tryCall, so
+	// it's skipped here (its error is consumed by its own otherwise).
+	function isRoutableThrowingCallOp(op MaxonOp, opIdx OpIndex) returns bool
+		if op.name != "call" and op.name != "methodCall" 'notACall'
+			return false
+		end 'notACall'
+		return throwsClauseIsThrowing(throwsClauseForBareCallOp(op, opIdx: opIdx))
+	end 'isRoutableThrowingCallOp'
+
+	// Resolve the ThrowsClause for a bare `call` / `methodCall` op, mirroring
+	// `qualifiedCalleeFromTryCall` + `resolveThrowsClauseForCallee` but for the
+	// pre-rewrite op shapes.
+	function throwsClauseForBareCallOp(op MaxonOp, opIdx OpIndex) returns ThrowsClause
+		return match op 'extract'
+			call(_, callee, callContext, _, _, _, _, _) gives resolveThrowsClauseForCallee(qualifyCalleeForContext(project, bare: String.from(callee), callContext: callContext, currentNamespace: namespace, readerFilePath: filePath))
+			methodCall(_, receiver, methodName, _, _, _, _, _) gives resolveThrowsClauseForCallee(qualifyMethodCalleeFromReceiver(receiver, methodName: String.from(methodName), scanFrom: opIdx))
+			default panic("throwsClauseForBareCallOp: op '{op.name}' is neither call nor methodCall")
+		end 'extract'
+	end 'throwsClauseForBareCallOp'
+
+	// Extract the source range from a bare `call` / `methodCall` op so the
+	// rewrite-to-tryCall preserves the original call-site span.
+	function bareCallOpRange(op MaxonOp) returns SourceRange
+		return match op 'extract'
+			call(_, _, _, _, _, _, _, range) gives range
+			methodCall(_, _, _, _, _, _, _, range) gives range
+			default panic("bareCallOpRange: op '{op.name}' is neither call nor methodCall")
+		end 'extract'
+	end 'bareCallOpRange'
+
+	// Rewrite the bare throwing call at `callPos` in `block` to a tryCall /
+	// tryMethodCall with a fresh per-call flag SSA name, record its error type
+	// in the context, then split `block`: the call + a flag store + a success
+	// cmp/cond_br stay in `block`; every op after the call moves to a fresh
+	// continuation block inserted immediately after `block` in layout order.
+	// The cond_br routes success -> continuation, error -> shared error block.
+	function routeBareThrowingCallInBlock(ctx TryBlockContext, block IrBlock, callPos ElementCount, callOpRef OpIndex, callOp MaxonOp, tryToken Token) throws ParserError
+		let clause = throwsClauseForBareCallOp(callOp, opIdx: callOpRef)
+		try recordTryBlockErrorType(ctx, clause: clause, line: tryToken.line, column: tryToken.column)
+
+		// Rewrite the call op in place to carry a fresh error-flag SSA name,
+		// preserving the original call's source range.
+		let flagName = freshSynthName()
+		let callRange = bareCallOpRange(callOp)
+		let rewroteCall = tryRewriteCallToTryCall(callOpRef, op: callOp, errorFlagName: flagName, tryRange: callRange)
+		if not rewroteCall 'tryMethod'
+			let rewroteMethod = tryRewriteMethodCallToTryMethodCall(callOpRef, op: callOp, errorFlagName: flagName, tryRange: callRange)
+			if not rewroteMethod 'neither'
+				panic("routeBareThrowingCallInBlock: op '{callOp.name}' was neither call nor methodCall")
+			end 'neither'
+		end 'tryMethod'
+
+		// Split off the continuation: every op after the call, plus the original
+		// terminator, moves into a fresh block inserted right after `block`.
+		let contBlock = try splitBlockAfter(block, splitPos: callPos, label: "tryblock_{currentFunc.nextBlockId}.cont")
+
+		// In `block` (now ending at the call): store the call's flag into the
+		// shared slot, compute `flag == 0`, and branch success -> continuation,
+		// error -> shared error block.
+		module.appendOp(block, op: MaxonOp.varStore(ctx.errorFlagSlot, value: flagName, range: SourceRange.ofToken(tryToken)))
+		let zeroName = emitLiteral(block, value: 0, valueType: MaxonType.integer, range: SourceRange.ofToken(tryToken))
+		let cmpName = freshSynthName()
+		module.appendOp(block, op: MaxonOp.cmp(cmpName, left: flagName, right: zeroName, predicate: CmpPredicate.eq, leftType: MaxonType.integer, rightType: MaxonType.integer, operandType: MaxonType.integer, range: SourceRange.ofToken(tryToken)))
+		module.setTerminator(block, op: MaxonOp.condBr(cmpName, thenTarget: contBlock.id, elseTarget: ctx.errorBlockId, range: SourceRange.ofToken(tryToken)))
+	end 'routeBareThrowingCallInBlock'
+
+	// Emit-time interception for a bare `throw Enum.case` inside an active
+	// block-form try body: instead of the function-exit `throw` terminator,
+	// store `ordinal + 1` into the shared error-flag slot and branch to the
+	// shared error handler. Called by parseThrowStatement / emitDivergingDefaultArm
+	// BEFORE they emit a `throw` op; returns true when routing was performed (the
+	// caller must NOT emit its own throw terminator). Returns false when no
+	// block-form try is active (or an explicit `try` shadows it), so the caller
+	// emits a normal function-exit throw.
+	//
+	// The flag is `ordinal + 1` (0 reserved for success); the handler's `match e`
+	// recovers the case via `flag - 1` (see declareErrorBindingInBlock). The
+	// ordinal is resolved at parse time from the enum registry — the thrown case
+	// names a concrete variant, so no runtime lookup is needed.
+	//
+	// Associated-value union throws inside a block-form try would need a second
+	// routing slot for the heap pointer (Phase B) — reject them up front.
+	function routeBareThrowToActiveTryBlock(block IrBlock, enumName String, variantName String, hasPayload bool, range SourceRange) returns bool throws ParserError
+		if tryBlockStack.count() == 0 'noActiveBlock'
+			return false
+		end 'noActiveBlock'
+		var ctx = try tryBlockStack.last() otherwise return false
+		if hasPayload 'assocValue'
+			reportCompileError(project, code: ErrorCode.semanticTryBlockNoThrows, message: "throwing associated-value enum '{enumName}' inside a block-form try is not yet supported (Phase B)", line: range.line, column: range.column, filePath: filePath)
+			throw ParserError.unhandledToken
+		end 'assocValue'
+		try recordTryBlockErrorType(ctx, clause: ThrowsClause.throwing(enumName), line: range.line, column: range.column)
+
+		let ordinalPlusOne = try lookupCaseOrdinalPlusOne(enumName, variantName: variantName) otherwise 'unknownCase'
+			reportCompileError(project, code: ErrorCode.semanticEnumUnknownCase, message: "unknown enum case in block-form try throw: '{enumName}.{variantName}'", line: range.line, column: range.column, filePath: filePath)
+			throw ParserError.unhandledToken
+		end 'unknownCase'
+		// Emit through `currentBlock` rather than the `block` param so the
+		// borrow/mutation analysis doesn't flag `block` as a mutated parameter —
+		// that would force every transitive caller (parseThrowStatement →
+		// parseStatements → parseMatchStatementArmBody → ...) to take a mutable
+		// block, conflicting with the `let arm = …` match-arm bindings.
+		// `currentBlock` aliases the same IrBlock the callers position here.
+		currentBlock = block
+		let flagName = emitLiteral(currentBlock, value: ordinalPlusOne, valueType: MaxonType.integer, range: range)
+		module.appendOp(currentBlock, op: MaxonOp.varStore(ctx.errorFlagSlot, value: flagName, range: range))
+		module.setTerminator(currentBlock, op: MaxonOp.br(ctx.errorBlockId, range: range))
+		return true
+	end 'routeBareThrowToActiveTryBlock'
+
+	// Resolve `EnumName.caseName` to `ordinal + 1` (the success-reserved-0
+	// flag encoding) at parse time, consulting both the resolved and unresolved
+	// enum registries. Throws when the enum or case can't be found.
+	function lookupCaseOrdinalPlusOne(enumName String, variantName String) returns ParsedInt throws CaseOrdinalLookupError
+		if let resolved = try project.enumTypes.get(enumName) 'resolvedHit'
+			return try caseOrdinalPlusOneInCases(resolved.cases, variantName: variantName)
+		end 'resolvedHit'
+		if let unresolved = try project.unresolvedEnums.get(enumName) 'unresolvedHit'
+			return try caseOrdinalPlusOneInCases(unresolved.cases, variantName: variantName)
+		end 'unresolvedHit'
+		throw CaseOrdinalLookupError.notFound
+	end 'lookupCaseOrdinalPlusOne'
+
+	function caseOrdinalPlusOneInCases(cases EnumCaseArray, variantName String) returns ParsedInt throws CaseOrdinalLookupError
+		for c in cases 'each'
+			if c.name == variantName 'match'
+				return (c.ordinal as ParsedInt) + 1
+			end 'match'
+		end 'each'
+		throw CaseOrdinalLookupError.notFound
+	end 'caseOrdinalPlusOneInCases'
+
+	// Record a distinct error-enum name on the context. Phase A handles only the
+	// single-enum (degenerate) case; two or more distinct error enums in one
+	// block-form try would require an error-union synthesis (Phase B). Reject
+	// that with a clean compile error rather than crashing — Phase B will
+	// replace this branch with the union-binding path.
+	function recordTryBlockErrorType(ctx TryBlockContext, clause ThrowsClause, line LineNumber, column ColumnNumber) throws ParserError
+		var liveCtx = ctx
+		let enumName = try throwsClauseName(clause) otherwise return
+		let distinct = liveCtx.recordErrorType(enumName, clause: clause)
+		if distinct > 1 'multiEnum'
+			reportCompileError(project, code: ErrorCode.semanticTryBlockNoThrows, message: "multi-enum error union in block-form try is not yet implemented (Phase B): the body throws two or more distinct error enum types", line: line, column: column, filePath: filePath)
+			throw ParserError.unhandledToken
+		end 'multiEnum'
+	end 'recordTryBlockErrorType'
+
+	// Split `block` after op position `splitPos` (0-based index into its
+	// opRefs): every op strictly after `splitPos`, plus the original terminator,
+	// moves into a fresh continuation block inserted immediately after `block`
+	// in `currentFunc.blockRefs` (so layout order is preserved). `block`'s
+	// terminator is reset to `unset` for the caller to re-seal. Returns the
+	// continuation block.
+	function splitBlockAfter(block IrBlock, splitPos ElementCount, label String) returns IrBlock throws ParserError
+		let blockRefPos = try positionInBlockRefs(currentFunc, block: block) otherwise panic("splitBlockAfter: block '{block.label}' not in currentFunc.blockRefs")
+		var contBlock = try module.addBlockAtPosition(currentFunc, label: label, blockRefPos: blockRefPos + 1) otherwise panic("splitBlockAfter: addBlockAtPosition OOB at pos {blockRefPos + 1}")
+
+		// Move the suffix opRefs (positions splitPos+1 .. end) into contBlock,
+		// preserving order. Collect first, then remove from the tail of `block`
+		// (back-to-front so indices stay valid), then append to contBlock.
+		let total = block.opRefs.count()
+		var suffix = OpIndexList.create()
+		var p = splitPos + 1
+		while p < total 'collect'
+			let r = try block.opRefs.get(p) otherwise break
+			suffix.append(r)
+			p = p + 1
+		end 'collect'
+		// Remove the suffix from `block` back-to-front.
+		var removeIdx = total - 1
+		while removeIdx > splitPos 'remove'
+			_ = try block.opRefs.remove(removeIdx) otherwise break
+			removeIdx = removeIdx - 1
+		end 'remove'
+		for r in suffix 'reattach'
+			contBlock.opRefs.append(r)
+		end 'reattach'
+
+		// Move the original terminator to the continuation; `block` will get a
+		// fresh terminator from the caller. The `var` alias is needed because
+		// the type system forbids in-place field mutation of a `let`-bound
+		// struct param (same reason `markBlockDeadIfUnset` exists).
+		var mutBlock = block
+		contBlock.terminator = mutBlock.terminator
+		mutBlock.terminator = Terminator.unset
+		return contBlock
+	end 'splitBlockAfter'
+
+	// Find the position (index) of `block` within `func.blockRefs`. Distinct
+	// from `module.findBlockRef`, which returns the blocks[] index stored at
+	// that position; `addBlockAtPosition` needs the list position.
+	function positionInBlockRefs(func IrFunction, block IrBlock) returns BlockRefIndex throws BlockRefLookupError
+		var pos = 0 as BlockRefIndex
+		while pos < func.blockRefs.count() 'each'
+			let blockIdx = try func.blockRefs.get(pos) otherwise throw BlockRefLookupError.notInFunction
+			let candidate = module.getBlock(blockIdx)
+			if candidate.id == block.id 'found'
+				return pos
+			end 'found'
+			pos = pos + 1
+		end 'each'
+		throw BlockRefLookupError.notInFunction
+	end 'positionInBlockRefs'
+
 	// Pattern-match the parser's just-emitted op to detect a free-call.
 	// When the inner expression of `try EXPR` ended in `MaxonOp.call`,
 	// rewrite it in place to `MaxonOp.tryCall` carrying the parser-allocated
@@ -10905,9 +11483,74 @@ export type Parser
 		end 'noMatch'
 		let bare = String.from(info.callee)
 		let qualified = qualifyCalleeForContext(project, bare: bare, callContext: info.callContext, currentNamespace: namespace, readerFilePath: filePath)
-		let returnType = try project.funcReturnTypes.get(qualified) otherwise return MaxonType.unresolved
-		return maxonReturnTypeValueOrUnresolved(returnType)
+		if let returnType = try project.funcReturnTypes.get(qualified) 'directHit'
+			return maxonReturnTypeValueOrUnresolved(returnType)
+		end 'directHit'
+		// Generic-instance static factory miss: `funcReturnTypes` is keyed by the
+		// declared (base) name `Array.create`, not the monomorphized
+		// `ScoreArray.create` a user write produces. When the call qualifier is a
+		// generic typealias (`ScoreArray = Array with Score`), retry under the
+		// base. A `Self`-returning factory (collapsed to `named(Base)` at parse)
+		// means the value's concrete type is the alias instance itself — return
+		// `named(alias)` so `maxonTypeStructName` chases it back to the base for
+		// method qualification. Without this, a bare `arr.get(...)` inside a
+		// try block can't have its `Array.get` throws clause resolved at parse,
+		// so the routing scan misses it (E3083).
+		return genericFactoryResultType(qualified)
 	end 'callResultTypeIfNameMatches'
+
+	// Resolve the result type of a `<Alias>.method` call whose qualified name
+	// missed `funcReturnTypes`, by retrying under the alias's generic base. The
+	// monomorphized name `ScoreArray.create` is never registered (only the base
+	// `Array.create` is), and at parse time generic typealiases live in
+	// `unresolvedTypealiases` (TypeResolution drains them into
+	// `genericTypealiases` later). Resolve the alias's RHS to recover the base
+	// struct name, then look up `<base>.<method>`. When that returns the base
+	// type itself (a `Self`-shaped factory like `Array.create`), the produced
+	// value's struct type IS the base, so we return `named(base)` —
+	// `maxonTypeStructName` then qualifies the bare method as `<base>.<method>`,
+	// whose throws clause IS registered. Without this, a bare `arr.get(...)`
+	// inside a try block can't have its `Array.get` throws clause resolved at
+	// parse, so the routing scan misses it (E3083).
+	function genericFactoryResultType(qualified String) returns MaxonType
+		let qualifiedBytes = qualified.toByteArray()
+		let dotIdx = lastIndexOfDotByte(qualifiedBytes)
+		if dotIdx >= qualifiedBytes.count() 'noDot'
+			return MaxonType.unresolved
+		end 'noDot'
+		let aliasName = byteSliceToString(qualifiedBytes, startIndex: 0, endIndex: dotIdx)
+		let methodName = byteSliceToString(qualifiedBytes, startIndex: dotIdx + 1, endIndex: qualifiedBytes.count())
+		let baseName = genericAliasBaseStructName(aliasName)
+		if baseName.isEmpty() 'noBase'
+			return MaxonType.unresolved
+		end 'noBase'
+		let baseReturn = try project.funcReturnTypes.get("{baseName}.{methodName}") otherwise return MaxonType.unresolved
+		let baseReturnType = maxonReturnTypeValueOrUnresolved(baseReturn)
+		// A factory returning the base type (`Self` collapsed to `named(Base)`)
+		// produces a value whose struct type is the base instance.
+		if baseReturnType.nameOrEmpty(project) == baseName 'returnsSelf'
+			return MaxonType.named(project.typeNames.intern(baseName))
+		end 'returnsSelf'
+		return baseReturnType
+	end 'genericFactoryResultType'
+
+	// Resolve a generic typealias name (`ScoreArray`) to its base struct name
+	// (`Array`) at parse time, consulting both the post-resolution
+	// `genericTypealiases` map (populated for cached stdlib) and the parse-time
+	// `unresolvedTypealiases` RHS expressions. Returns "" when the name isn't a
+	// generic typealias.
+	function genericAliasBaseStructName(aliasName String) returns String
+		if let resolved = try project.genericTypealiases.get(aliasName) 'resolvedHit'
+			return resolved.nameOrEmpty(project)
+		end 'resolvedHit'
+		if let entry = try project.unresolvedTypealiases.get(aliasName) 'unresolvedHit'
+			if isGenericAliasExpr(entry.expr) 'isGeneric'
+				let resolved = resolveGenericAliasExpr(project, expr: entry.expr, declaringTypeName: "")
+				return resolved.nameOrEmpty(project)
+			end 'isGeneric'
+		end 'unresolvedHit'
+		return ""
+	end 'genericAliasBaseStructName'
 
 	function extractCallProducerInfo(op MaxonOp, targetName ByteArray) returns CallProducerInfo
 		if op.name == "call" 'isCall'
