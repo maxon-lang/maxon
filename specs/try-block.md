@@ -1309,3 +1309,39 @@ end 'main'
 ```exitcode
 42
 ```
+
+<!-- test: try-block.bare-throw-in-nested-if -->
+Regression guard: a bare `throw` routed to the block handler from inside a
+NESTED construct (`if`/`while`/`match`) within the try body. The throw routes
+to the shared error block from the nested block, not the body's entry block.
+This shape used to crash the self-hosted compiler with an entry-block
+use-after-free: when the try body held a nested control-flow construct, the
+body's entry block was over-released by one (parseTryBlock threaded its
+borrowed `block` param into the inner `parseStatements`, whose first
+reassignment decref'd the borrow without a balancing incref) and freed while
+`module.blocks` still referenced it — a later parser pass then walked the
+dangling block. Fixed by re-fetching the body block as an owned value before
+the inner `parseStatements` (see parseTryBlock's `bodyBlock`). Flat bodies
+(no nested construct) never triggered it.
+```maxon
+enum MyError implements Error
+    failed
+end 'MyError'
+
+function main() returns ExitCode
+    var sum = 0
+    try 'work'
+        if true 'gate'
+            throw MyError.failed
+        end 'gate'
+    end 'work' otherwise (e) 'h'
+        match e 'k'
+            failed then sum = 5
+        end 'k'
+    end 'h'
+    return sum as ExitCode
+end 'main'
+```
+```exitcode
+5
+```

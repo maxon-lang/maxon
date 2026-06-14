@@ -220,11 +220,12 @@ let whitelist = ["basics",
 	// "pass-by-reference" (8/14) — primitive/struct ref mutation not propagated.
 	// "reference-identity" (1/11) — `is` diagnostic code + clone codegen crash.
 	// "throw-transfers-ownership" (1/2) — parser: `Expected '.'` on self field.
-	// "try-block" — block-form try Phase A landed (single-enum success/error/array
-	//   paths pass), but a throwing op nested inside an if/match in the body trips
-	//   an IrBlock refcount use-after-free that aborts the runner. Phase B
-	//   (multi-enum error-union synthesis) + terminal otherwise forms also pending.
-	//   Re-enable once the nested-throw crash is fixed.
+	// "try-block" (15/31) — block-form try Phase A complete: single-enum
+	//   success/error/array/nested-throw paths all pass (the nested-if/while/match
+	//   use-after-free is FIXED — see parseTryBlock's re-fetched `bodyBlock`).
+	//   Remaining 16 failures are Phase B (multi-enum error-union synthesis, the
+	//   E3083 "not yet implemented" reject) plus `array-narrow-signed` (a Phase A
+	//   ExitCode range-check edge). Re-enable once Phase B lands.
 	// "try-block-otherwise-divergent" — needs terminal `otherwise panic/throws` forms.
 	// "lazy-static" (7/9) — `from`-collection initializer + global call init.
 	// "filepath" (38/43) — join doubles the path separator.

@@ -10753,7 +10753,20 @@ export type Parser
 		// BEFORE call-routing splits run. Routing may move that tail into a fresh
 		// continuation, so we don't capture it here — `branchOpenBodyTailsToAfter`
 		// locates the post-split live tail(s) by scanning the region.
-		_ = try parseStatements(currentFunc, block: block, lastWasReturn: false)
+		//
+		// Pass a FRESHLY RE-FETCHED body block (an owned call-return value), NOT
+		// the borrowed `block` param. `parseStatements` reassigns its `block`
+		// parameter (`block = parseIfStatement(...)`, `block = currentBlock`); the
+		// bootstrap lowers a reassigned managed parameter by decref'ing the slot's
+		// prior occupant on first reassignment. When that occupant is a BORROW
+		// (parseTryBlock's `block` param), the decref over-releases the entry block
+		// — it is freed while `module.blocks` still references it (use-after-free,
+		// surfacing as a nil-deref in a later pass when the try body holds a nested
+		// if/while/match). Re-fetching by id yields a value carrying its own +1
+		// (call-return ownership), so the inner first-reassign decref consumes THAT
+		// reference instead of the array's — the entry block stays balanced.
+		var bodyBlock = try module.getBlockByIdIn(currentFunc, id: block.id) otherwise panic("parseTryBlock: body block vanished from currentFunc")
+		_ = try parseStatements(currentFunc, block: bodyBlock, lastWasReturn: false)
 
 		scope.popScope()
 		_ = try tryBlockStack.pop() otherwise panic("parseTryBlock: tryBlockStack underflow — pushed ctx is missing")
