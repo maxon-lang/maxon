@@ -873,7 +873,40 @@ end 'maxonReturnTypeName'
 // Adding a variant produces non-exhaustive-match errors on both sides
 // until the codec is updated. See specs/union-cases.md for the contract.
 
-export function writeMaxonType(project Project, buf ByteArray, t MaxonType) throws CacheCorruption
+// Phase 3.5 (library-owned id-space): the snapshot tables the cache WRITER
+// resolves every id-bearing `MaxonType` arm through. A cached `MaxonType`
+// carries ids in the CACHE's own id-space (the library prefix), not the
+// serializing project's — so `writeMaxonType` must NOT dereference
+// `project.typeNames`/`genericInstances`/… (those hold the consumer's id
+// space, which diverges for any project that isn't the dedicated cache
+// build, and re-serializing through them resolved a foreign id → wrong name
+// or out-of-range panic — the coupling that forced the persist gate off for
+// workers). These tables are the cache's own snapshots in `StdlibCacheData`
+// (`typeNameTable` + the per-registry mirrors), so resolution is
+// project-independent: any consumer can re-serialize its lazily-grown cache.
+// The read side stays project-keyed (it re-interns names into the consumer
+// as it walks), so only the WRITE direction needs this indirection.
+export type MaxonTypeWriteTables
+	export var typeNameTable as StringArray
+	export var typeParameters as TypeParamRegistry
+	export var interfaceRegistry as InterfaceTypeRegistry
+	export var functionTypes as FunctionTypeRegistry
+	export var genericInstances as GenericInstanceRegistry
+
+	export static function create(typeNameTable StringArray, typeParameters TypeParamRegistry, interfaceRegistry InterfaceTypeRegistry, functionTypes FunctionTypeRegistry, genericInstances GenericInstanceRegistry) returns MaxonTypeWriteTables
+		return Self{typeNameTable: typeNameTable, typeParameters: typeParameters, interfaceRegistry: interfaceRegistry, functionTypes: functionTypes, genericInstances: genericInstances}
+	end 'create'
+
+	// Resolve a cache-id-space TypeNameId to its name through the snapshot
+	// table. Panics on an out-of-range id because the writer only emits ids
+	// the capture path placed in the table — an OOB id signals a snapshot
+	// that wasn't kept in lockstep with the stored MaxonTypes, a codec bug.
+	export function typeName(id TypeNameId) returns String
+		return try typeNameTable.get(id) otherwise panic("MaxonTypeWriteTables.typeName: cache type-name id {id} out of range (table count={typeNameTable.count()}) — snapshot is missing entries")
+	end 'typeName'
+end 'MaxonTypeWriteTables'
+
+export function writeMaxonType(tables MaxonTypeWriteTables, buf ByteArray, t MaxonType) throws CacheCorruption
 	writeDword(buf, value: t.ordinal)
 	match t 'payload'
 		// `unresolved` is the polymorphic-slot sentinel used by builtin
@@ -887,13 +920,13 @@ export function writeMaxonType(project Project, buf ByteArray, t MaxonType) thro
 		float then break
 		string then break
 		character then break
-		named(id) then try writeString(buf, s: project.typeNames.get(id))
+		named(id) then try writeString(buf, s: tables.typeName(id))
 		// Cache v49: persist function-type signatures so stdlib functions with
 		// function-typed parameters (e.g. `Iterable.map(transform(Element)
 		// returns Element)`) survive cache round-trip. The reader re-interns
 		// the (paramTypes, returnType) pair in the destination project's
 		// `functionTypes` registry, reproducing a structurally equal id.
-		function(id) then try writeFunctionTypePayload(project, buf: buf, id: id)
+		function(id) then try writeFunctionTypePayload(tables, buf: buf, id: id)
 		// Phase 11.0 (cache v7): persist generic-aware MaxonType arms with
 		// enough payload that the read side can re-intern into the
 		// destination project's registries and reproduce the *same* MaxonType
@@ -904,9 +937,9 @@ export function writeMaxonType(project Project, buf ByteArray, t MaxonType) thro
 		// `Array.init(managed ElementMemory)` would surface a bare
 		// `MaxonType.named("ElementMemory")` that lowering's namedIdCastCategory
 		// could not resolve.
-		typeParameter(id) then try writeTypeParameterPayload(project, buf: buf, id: id)
-		genericInstance(id) then try writeGenericInstancePayload(project, buf: buf, id: id)
-		interface(id) then try writeString(buf, s: project.interfaceRegistry.getName(id))
+		typeParameter(id) then try writeTypeParameterPayload(tables, buf: buf, id: id)
+		genericInstance(id) then try writeGenericInstancePayload(tables, buf: buf, id: id)
+		interface(id) then try writeString(buf, s: tables.interfaceRegistry.getName(id))
 		// Phase 13 (sized typealiases): const-int args in generic instances.
 		// Persist the i64 payload verbatim; the reader rebuilds the same arm.
 		constInt(value) then writeQword(buf, value: value)
@@ -923,9 +956,9 @@ end 'writeMaxonType'
 // stdlib generic decls don't surface where-clauses through `funcSignatures`
 // — every constraint is enforced at declaration parse time, not at the
 // stdlib's function-call boundaries the cache replays.
-function writeTypeParameterPayload(project Project, buf ByteArray, id TypeParamId) throws CacheCorruption
-	try writeString(buf, s: project.typeParameters.getDeclaringTypeName(id))
-	try writeString(buf, s: project.typeParameters.getName(id))
+export function writeTypeParameterPayload(tables MaxonTypeWriteTables, buf ByteArray, id TypeParamId) throws CacheCorruption
+	try writeString(buf, s: tables.typeParameters.getDeclaringTypeName(id))
+	try writeString(buf, s: tables.typeParameters.getName(id))
 end 'writeTypeParameterPayload'
 
 // Phase 11 cache v7: a genericInstance is interned in
@@ -934,13 +967,13 @@ end 'writeTypeParameterPayload'
 // `readMaxonType` for each arg. Recursion bottoms out at primitive arms /
 // named arms / typeParameter arms — generic instances of bounded depth
 // only.
-function writeGenericInstancePayload(project Project, buf ByteArray, id GenericInstanceId) throws CacheCorruption
-	let (baseId, args) = project.genericInstances.get(id)
-	try writeString(buf, s: project.typeNames.get(baseId))
+function writeGenericInstancePayload(tables MaxonTypeWriteTables, buf ByteArray, id GenericInstanceId) throws CacheCorruption
+	let (baseId, args) = tables.genericInstances.get(id)
+	try writeString(buf, s: tables.typeName(baseId))
 	writeDword(buf, value: args.count())
 	for i in 0 upto args.count() 'eachArg'
 		let a = try args.get(i) otherwise panic("writeGenericInstancePayload: args.get OOB at {i}")
-		try writeMaxonType(project, buf: buf, t: a)
+		try writeMaxonType(tables, buf: buf, t: a)
 	end 'eachArg'
 end 'writeGenericInstancePayload'
 
@@ -950,14 +983,14 @@ end 'writeGenericInstancePayload'
 // equal signatures round-trip to the same FunctionTypeId in the destination
 // project. Bounded recursion: param/return types may themselves be function
 // types but only the stdlib's hand-written signatures reach the codec.
-function writeFunctionTypePayload(project Project, buf ByteArray, id FunctionTypeId) throws CacheCorruption
-	let (paramTypes, returnType) = project.functionTypes.get(id)
+function writeFunctionTypePayload(tables MaxonTypeWriteTables, buf ByteArray, id FunctionTypeId) throws CacheCorruption
+	let (paramTypes, returnType) = tables.functionTypes.get(id)
 	writeDword(buf, value: paramTypes.count())
 	for i in 0 upto paramTypes.count() 'eachParam'
 		let p = try paramTypes.get(i) otherwise panic("writeFunctionTypePayload: paramTypes.get OOB at {i}")
-		try writeMaxonType(project, buf: buf, t: p)
+		try writeMaxonType(tables, buf: buf, t: p)
 	end 'eachParam'
-	try writeMaxonReturnType(project, buf: buf, rt: returnType)
+	try writeMaxonReturnType(tables, buf: buf, rt: returnType)
 end 'writeFunctionTypePayload'
 
 function readMaxonFunctionType(project Project, buf ByteArray, offset ByteOffset) returns (MaxonType, ByteOffset) throws CacheCorruption
@@ -974,7 +1007,7 @@ function readMaxonFunctionType(project Project, buf ByteArray, offset ByteOffset
 	return (MaxonType.function(id), endPos)
 end 'readMaxonFunctionType'
 
-function readMaxonTypeNamed(project Project, buf ByteArray, offset ByteOffset) returns (MaxonType, ByteOffset) throws CacheCorruption
+export function readMaxonTypeNamed(project Project, buf ByteArray, offset ByteOffset) returns (MaxonType, ByteOffset) throws CacheCorruption
 	let (name, nextPos) = try readString(buf, offset: offset)
 	return (MaxonType.named(project.typeNames.intern(name)), nextPos)
 end 'readMaxonTypeNamed'
@@ -987,7 +1020,7 @@ end 'readMaxonTypeNamed'
 // has the side effect of registering the type-parameter binding the
 // stdlib decl used — which is exactly what `buildSubstitution` needs to
 // produce when it later resolves a generic call site.
-function readMaxonTypeParameter(project Project, buf ByteArray, offset ByteOffset) returns (MaxonType, ByteOffset) throws CacheCorruption
+export function readMaxonTypeParameter(project Project, buf ByteArray, offset ByteOffset) returns (MaxonType, ByteOffset) throws CacheCorruption
 	let (declaringTypeName, p1) = try readString(buf, offset: offset)
 	let (paramName, p2) = try readString(buf, offset: p1)
 	let id = project.typeParameters.intern(declaringTypeName, paramName: paramName)
@@ -1016,7 +1049,7 @@ end 'readMaxonGenericInstance'
 // Phase 11 cache v7: read an interface payload (name) and re-intern
 // through `Project.interfaceRegistry`. Symmetric counterpart to the
 // `interface(id)` writer arm.
-function readMaxonInterface(project Project, buf ByteArray, offset ByteOffset) returns (MaxonType, ByteOffset) throws CacheCorruption
+export function readMaxonInterface(project Project, buf ByteArray, offset ByteOffset) returns (MaxonType, ByteOffset) throws CacheCorruption
 	let (name, nextPos) = try readString(buf, offset: offset)
 	let id = project.interfaceRegistry.intern(name)
 	return (MaxonType.interface(id), nextPos)
@@ -1052,11 +1085,11 @@ export function readMaxonType(project Project, buf ByteArray, offset ByteOffset)
 	end 'tag'
 end 'readMaxonType'
 
-export function writeMaxonReturnType(project Project, buf ByteArray, rt MaxonReturnType) throws CacheCorruption
+export function writeMaxonReturnType(tables MaxonTypeWriteTables, buf ByteArray, rt MaxonReturnType) throws CacheCorruption
 	writeDword(buf, value: rt.ordinal)
 	match rt 'payload'
 		void then break
-		value(inner) then try writeMaxonType(project, buf: buf, t: inner)
+		value(inner) then try writeMaxonType(tables, buf: buf, t: inner)
 	end 'payload'
 end 'writeMaxonReturnType'
 

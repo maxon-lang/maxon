@@ -2602,17 +2602,20 @@ export typealias CrossFileConstReadArray = Array with CrossFileConstRead
 
 // --- Cache codec ---
 // Reader resolves stringValue payloads through the destination project's
-// string interner; writer dereferences through the source project's
-// strings table. The id space is per-Project and not portable across
+// string interner; writer dereferences through the cache's OWN string
+// snapshot (`constantStringTable`), NOT a project interner — so the write is
+// project-independent and a consumer (a spec-runner worker, another build)
+// can re-serialize its lazily-grown cache without holding the building
+// project's id space. The id space is per-Project and not portable across
 // caches, so we round-trip the resolved bytes. Cached entries don't carry
 // visibility / sourceFilePath — every stdlib constant is implicitly
 // `exported` and originates at the stdlib bootstrap path; readStdlibCache
 // stamps those values in.
 
-export function writeConstantValue(project Project, buf ByteArray, cv ConstantValue) throws CacheCorruption
+export function writeConstantValue(stringTable StringArray, buf ByteArray, cv ConstantValue) throws CacheCorruption
 	writeDword(buf, value: cv.ordinal)
 	match cv 'payload'
-		stringValue(stringId) then try writeString(buf, s: project.strings.get(stringId))
+		stringValue(stringId) then try writeString(buf, s: try stringTable.get(stringId) otherwise panic("writeConstantValue: stringValue id {stringId} out of range for the cache's constantStringTable (count={stringTable.count()})"))
 		intValue(value) then writeQword(buf, value: value)
 		floatValue(bits) then writeQword(buf, value: bits)
 	end 'payload'

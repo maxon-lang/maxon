@@ -927,7 +927,7 @@ function buildAndWriteStdlibCache(project Project, allModule MaxonModule, cacheP
 
 	// Write to disk and activate cache for subsequent compilations in this process
 	let writeStart = passTimerStart()
-	writeStdlibCache(project, path: cachePath, data: cacheData, target: project.target, contentChecksum: contentChecksum)
+	writeStdlibCache(cachePath, data: cacheData, target: project.target, contentChecksum: contentChecksum)
 	recordPassSince("__stdlib-writeCache", startMs: writeStart)
 	activateStdlibCache(cacheData, target: project.target)
 
@@ -1449,7 +1449,18 @@ function persistGrownStdlibCache(project Project)
 	end 'noPath'
 	let cachePath = libraryCachePath(lib, target: project.target)
 	let contentChecksum = currentStdlibChecksum(project.target)
-	writeStdlibCache(project, path: cachePath, data: lib.cacheData, target: project.target, contentChecksum: contentChecksum)
+	// v81 (Phase 3.5, Step 5): re-serialize the cache's authoritative id-space
+	// snapshots VERBATIM. They were established complete at cache-build (the whole
+	// stdlib is resolved before the signature stubs are written) and are NOT grown
+	// by the lazy work this persist follows — lazy codegen fills only name-keyed
+	// Tier-C bytecode (`cacheData.functions`), lowering already-resolved cached
+	// Std-IR to machine code without interning any new TypeNameId / StringId /
+	// GenericInstanceId into the cache. Crucially we must NOT append the project's
+	// id-space tail here: by persist time `project.genericInstances` /
+	// `project.typeNames` also carry the USER PROGRAM's ids, which do not belong in
+	// the stdlib cache. The complete-at-build snapshots in `data` are the correct,
+	// stdlib-only source (see the Step 5 note in StdlibCache.maxon).
+	writeStdlibCache(cachePath, data: lib.cacheData, target: project.target, contentChecksum: contentChecksum)
 end 'persistGrownStdlibCache'
 
 // Run the native backend tail (target lowering + regalloc + prologue/epilogue

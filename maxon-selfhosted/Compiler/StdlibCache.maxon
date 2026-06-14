@@ -259,7 +259,17 @@ let CACHE_MAGIC_3 = 0x00  // '\0'
 // v79 reader assumes every `functions` entry carries complete code, so it
 // would silently mislink a v80 stub cache; the version gate forces clean
 // regeneration.
-let CACHE_FORMAT_VERSION = 80
+// v81 (Phase 3.5, library-owned id-space): `typeNameTable` + `constantStringTable`
+// are now SERIALIZED authoritative id-space tables (written right after the
+// header), not in-memory rebuilds from the destination project's interner (the
+// old identity-mirror trick). The decode path replays them into the destination
+// project's `typeNames` / `strings` interners IN ORDER before any MaxonType is
+// read, so every `named(id)` / `stringValue(id)` lands at the id matching the
+// table position in EVERY consumer (a stable library prefix). This is what makes
+// the cache's ids directly reusable and re-serialize project-independent — a
+// v80 reader has neither the serialized tables nor the ordered pre-seed, so the
+// version gate forces clean regeneration.
+let CACHE_FORMAT_VERSION = 81
 
 // ============================================================
 // Types
@@ -450,6 +460,18 @@ export type StdlibCacheData
 	// id space, so restoreStdlibMetadata uses this map to translate captured
 	// ids back to names and re-intern them in the destination project.
 	export var typeNameTable as StringArray
+	// Snapshot of the source project's STRING interner (`project.strings`) at
+	// capture time, the string-constant analogue of `typeNameTable`. A
+	// `topLevelConstants` entry's `ConstantValue.stringValue(stringId)` embeds an
+	// interner-local id; a consumer project (a spec-runner worker, another build)
+	// has its own string id space, so `restoreStdlibMetadata` translates each
+	// captured id back to its bytes via this table and re-interns them locally.
+	// Without it the restored constant carries a FOREIGN id, which (a) resolves
+	// to the wrong / out-of-range string in the consumer and (b) panics in
+	// `writeConstantValue` (`project.strings.get(foreignId)`) if that consumer
+	// ever re-serializes its lazily-grown cache — the coupling that forced the
+	// persist gate off for workers.
+	export var constantStringTable as StringArray
 	// Discovery cache for the BuiltinArrayLiteral protocol. The parser writes
 	// `[1, 2, 3]` literals through whichever stdlib type implements
 	// `BuiltinArrayLiteral`; the discovery walk runs once, at parse time, over
@@ -546,32 +568,13 @@ export type StdlibCacheData
 	// load-time Std-DFE consults this flat table instead of re-walking the
 	// cached Std-IR snapshot to re-derive reachability). See `CachedFuncEdges`.
 	export var stdFuncEdges as CachedFuncEdgeMap
-	// In-memory only. Maps each writer-side `GenericInstanceId` (the raw
-	// qword serialized in `layoutDescriptors`/`witnessTables` payloads) to
-	// the equivalent destination-`project.genericInstances` id assigned
-	// when `readGenericInstanceRegistry` re-interned the writer's entries.
-	// Necessary because `readMaxonGenericInstance` interns args recursively
-	// before the outer entry is interned, so the destination project's id
-	// space does not preserve the writer's id ordering. Built during
-	// decode; consumed by `translateWriterGenericInstanceId` in
-	// `restoreRegistries`. Not serialised — recomputable from the on-disk
-	// registry list at every cache load.
-	export var writerGidToProjectGid as GenericInstanceIdArray
-	// In-memory only. Maps each writer-side `GenericInstanceId` to its entry
-	// in `data.genericInstances`' CURRENT id space. The two spaces coincide
-	// on the in-memory capture path (the capture mirror preserves writer
-	// ordering), but diverge on the disk path: after the read re-mirrors
-	// `data.genericInstances` from the first reading project (the
-	// identity-translation trick), writer ordering is lost there — the
-	// read-time writer→project map is the only surviving record of it.
-	// `restoreRegistries` rebuilds `writerGidToProjectGid` for each
-	// destination project by translating THIS map's data-space entries;
-	// rebuilding positionally from `data.genericInstances` instead silently
-	// attached `__layout_*` labels to the wrong generic instances whenever
-	// recursive arg interning had reordered the reader's id assignments
-	// (e.g. `Array with String` restored with `__layout_Array_SlotState`,
-	// so its element walk never ran and every element leaked).
-	export var writerGidToDataGid as GenericInstanceIdArray
+	// v81 (Phase 3.5): `writerGidToProjectGid` / `writerGidToDataGid` are DELETED.
+	// They existed only to recover the writer gid ordering that
+	// `readMaxonGenericInstance`'s recursive inner-first arg interning lost.
+	// `genericInstances` is now serialized as an ordered flat list and replayed in
+	// order, so the destination gid == the cache gid by construction
+	// (`layoutDescriptors`/`witnessTables` keep their gids verbatim) — there is no
+	// ordering to recover and nothing to translate.
 
 	export static function create() returns StdlibCacheData
 		return Self{
@@ -594,6 +597,7 @@ export type StdlibCacheData
 			enumTypes: EnumTypeMap.create(),
 			topLevelConstants: ConstantMap.create(),
 			typeNameTable: StringArray.create(),
+			constantStringTable: StringArray.create(),
 			builtinArrayLiteralTypeName: BuiltinArrayLiteralName.none,
 			builtinDictionaryLiteralTypeName: BuiltinDictionaryLiteralName.none,
 			builtinCharLiteralTypeName: BuiltinCharLiteralName.none,
@@ -616,9 +620,7 @@ export type StdlibCacheData
 			unresolvedExtensions: UnresolvedExtensionArray.create(),
 			extensionMethodWhereClauses: WhereClauseMapByName.create(),
 			inlinerStdModule: StdModule.create(),
-			stdFuncEdges: CachedFuncEdgeMap.create(),
-			writerGidToProjectGid: GenericInstanceIdArray.create(),
-			writerGidToDataGid: GenericInstanceIdArray.create()
+			stdFuncEdges: CachedFuncEdgeMap.create()
 		}
 	end 'create'
 end 'StdlibCacheData'
@@ -937,10 +939,14 @@ function writeFileAtomic(path FilePath, bytes ByteArray)
 	end 'renameErr'
 end 'writeFileAtomic'
 
-export function writeStdlibCache(project Project, path FilePath, data StdlibCacheData, target Target, contentChecksum CacheChecksum)
+// Phase 3.5: no longer takes a `project` — the encode resolves every id
+// through the cache's own snapshot tables in `data`, so the serializing
+// project's id space is irrelevant. This is what lets a consumer (worker,
+// user build) persist a lazily-grown cache without panicking on a foreign id.
+export function writeStdlibCache(path FilePath, data StdlibCacheData, target Target, contentChecksum CacheChecksum)
 	var buf = ByteArray.create()
 	buf.reserve(4096)
-	try encodeStdlibCacheBody(project, buf: buf, data: data, target: target, contentChecksum: contentChecksum) otherwise (e) 'corrupt'
+	try encodeStdlibCacheBody(buf, data: data, target: target, contentChecksum: contentChecksum) otherwise (e) 'corrupt'
 		match e 'kind'
 			absent then logError(LogCategory.compiler, message: function() gives "writeStdlibCache: unexpected `absent` from optional-string codec — skipping persist")
 			invalidEncoding then logError(LogCategory.compiler, message: function() gives "writeStdlibCache: malformed in-memory cache state (length-0 mandatory string) — skipping persist")
@@ -958,7 +964,15 @@ export function writeStdlibCache(project Project, path FilePath, data StdlibCach
 	writeFileAtomic(path, bytes: buf)
 end 'writeStdlibCache'
 
-function encodeStdlibCacheBody(project Project, buf ByteArray, data StdlibCacheData, target Target, contentChecksum CacheChecksum) throws CacheCorruption
+function encodeStdlibCacheBody(buf ByteArray, data StdlibCacheData, target Target, contentChecksum CacheChecksum) throws CacheCorruption
+	// Phase 3.5: every id-bearing MaxonType written below carries an id in the
+	// CACHE's own id-space (the library prefix), so resolve them through the
+	// cache's own snapshot tables in `data` — never `project`, whose id space
+	// diverges for any consumer that isn't the dedicated cache build. This is
+	// what makes re-serialize project-independent (a lazily-grown worker cache
+	// can be persisted without dereferencing a foreign id).
+	let writeTables = MaxonTypeWriteTables.create(data.typeNameTable, typeParameters: data.typeParameters, interfaceRegistry: data.interfaceRegistry, functionTypes: data.functionTypes, genericInstances: data.genericInstances)
+
 	// Header
 	buf.push(CACHE_MAGIC_0)
 	buf.push(CACHE_MAGIC_1)
@@ -974,6 +988,28 @@ function encodeStdlibCacheBody(project Project, buf ByteArray, data StdlibCacheD
 	writeCpuArch(buf, cpu: target.cpu)
 	writeOs(buf, os: target.os)
 	writeDword(buf, value: data.functions.count())
+
+	// v81: the authoritative id-space tables, written FIRST (right after the
+	// fixed header, before any MaxonType-bearing field) so the decoder can
+	// replay them into the destination project's interners IN ORDER before it
+	// reads the first `named(id)` / `stringValue(id)`. `typeNameTable` position
+	// == library TypeNameId; `constantStringTable` position == library StringId
+	// for constant strings. Replacing the old in-memory rebuild (identity-mirror)
+	// with an explicit serialization is the core Phase 3.5 format change.
+	try writeStringArrayAllowEmpty(buf, arr: data.typeNameTable)
+	try writeStringArrayAllowEmpty(buf, arr: data.constantStringTable)
+
+	// v81: the generic-instance registry as an ORDERED FLAT LIST, written here
+	// (before any field that embeds a `genericInstance(id)` arm) so the decoder
+	// replays it into `project.genericInstances` / `data.genericInstances` IN
+	// ORDER first — position == library gid. Every later read of a
+	// `genericInstance(id)` arm (funcReturnTypes / structTypes / …) then dedups
+	// against the already-replayed registry and recovers the SAME gid, so the
+	// destination gid == the cache gid by construction (the old
+	// `writerGidToProjectGid` translation is no longer needed). `typeNameTable`
+	// is already replayed above, so the entries' library-local baseIds + `named`
+	// args resolve correctly during this replay.
+	try writeGenericInstanceRegistry(writeTables, buf: buf, registry: data.genericInstances)
 
 	// Per-function objects
 	for func in data.functions 'eachFunc'
@@ -1132,7 +1168,7 @@ function encodeStdlibCacheBody(project Project, buf ByteArray, data StdlibCacheD
 	writeDword(buf, value: data.funcReturnTypes.count())
 	for (name, rt) in data.funcReturnTypes 'eachRt'
 		try writeString(buf, s: name)
-		try writeMaxonReturnType(project, buf: buf, rt: rt)
+		try writeMaxonReturnType(writeTables, buf: buf, rt: rt)
 	end 'eachRt'
 
 	// Function signatures (param names + types + defaults). Persisted so
@@ -1146,7 +1182,7 @@ function encodeStdlibCacheBody(project Project, buf ByteArray, data StdlibCacheD
 			try writeString(buf, s: paramName)
 		end 'eachParamName'
 		for paramType in signature.paramTypes 'eachParamType'
-			try writeMaxonType(project, buf: buf, t: paramType)
+			try writeMaxonType(writeTables, buf: buf, t: paramType)
 		end 'eachParamType'
 		for paramDefault in signature.paramDefaults 'eachParamDefault'
 			try writeParamDefault(buf, pd: paramDefault)
@@ -1204,7 +1240,7 @@ function encodeStdlibCacheBody(project Project, buf ByteArray, data StdlibCacheD
 
 		for field in st.fields 'eachField'
 			try writeString(buf, s: field.name)
-			try writeMaxonType(project, buf: buf, t: field.fieldType)
+			try writeMaxonType(writeTables, buf: buf, t: field.fieldType)
 			writeDword(buf, value: field.offset)
 			writeBoolByte(buf, b: field.isMutable)
 			// Cache v32: round-trip the layout-pass sentinel so cached fields
@@ -1225,7 +1261,7 @@ function encodeStdlibCacheBody(project Project, buf ByteArray, data StdlibCacheD
 		writeDword(buf, value: st.innerAliases.count())
 		for (aliasName, aliasType) in st.innerAliases 'eachInnerAlias'
 			try writeString(buf, s: aliasName)
-			try writeMaxonType(project, buf: buf, t: aliasType)
+			try writeMaxonType(writeTables, buf: buf, t: aliasType)
 		end 'eachInnerAlias'
 	end 'eachStruct'
 
@@ -1255,7 +1291,7 @@ function encodeStdlibCacheBody(project Project, buf ByteArray, data StdlibCacheD
 			writeDword(buf, value: ec.payloadFields.count())
 			for pf in ec.payloadFields 'eachPayload'
 				try writeString(buf, s: pf.name)
-				try writeMaxonType(project, buf: buf, t: pf.fieldType)
+				try writeMaxonType(writeTables, buf: buf, t: pf.fieldType)
 			end 'eachPayload'
 		end 'eachCase'
 	end 'eachEnum'
@@ -1266,7 +1302,7 @@ function encodeStdlibCacheBody(project Project, buf ByteArray, data StdlibCacheD
 	writeDword(buf, value: data.topLevelConstants.count())
 	for (name, entry) in data.topLevelConstants 'eachConst'
 		try writeString(buf, s: name)
-		try writeConstantValue(project, buf: buf, cv: entry.value)
+		try writeConstantValue(data.constantStringTable, buf: buf, cv: entry.value)
 	end 'eachConst'
 
 	// BuiltinArrayLiteral / BuiltinDictionaryLiteral discovery. The `none` arm
@@ -1280,19 +1316,20 @@ function encodeStdlibCacheBody(project Project, buf ByteArray, data StdlibCacheD
 	try writeBuiltinStringLiteralNameField(buf, value: data.builtinStringLiteralTypeName)
 
 	// Cache v8: Phase 11 conformance + registry state. Order matters on the
-	// read side — typeParameters / interfaceRegistry / genericInstances are
-	// interned by structural identity, so writing them here in the same order
-	// the source project recorded them makes the destination's `intern` calls
-	// hand back identical ids during restore. Other registries
-	// (interfaces, conformances, genericTypealiases, layoutDescriptors,
-	// witnessTables, staticRdataValues, livenessRoots) carry their own keys
-	// and don't depend on insertion order for correctness.
+	// read side — typeParameters / interfaceRegistry are interned by structural
+	// identity, so writing them here in the same order the source project
+	// recorded them makes the destination's `intern` calls hand back identical
+	// ids during restore. Other registries (interfaces, conformances,
+	// genericTypealiases, layoutDescriptors, witnessTables, staticRdataValues,
+	// livenessRoots) carry their own keys and don't depend on insertion order for
+	// correctness. (v81: `genericInstances` moved to the FRONT of the body — its
+	// position-based gid replay must complete before any field that embeds a
+	// `genericInstance(id)` arm is read; see the early-section write above.)
 	try writeTypeParamRegistry(buf, registry: data.typeParameters)
 	try writeInterfaceTypeRegistry(buf, registry: data.interfaceRegistry)
-	try writeGenericInstanceRegistry(project, buf: buf, registry: data.genericInstances)
-	try writeInterfaceMap(project, buf: buf, m: data.interfaces)
-	try writeConformanceRegistry(project, buf: buf, registry: data.conformances)
-	try writeGenericTypealiasMap(project, buf: buf, m: data.genericTypealiases)
+	try writeInterfaceMap(writeTables, buf: buf, m: data.interfaces)
+	try writeConformanceRegistry(writeTables, buf: buf, registry: data.conformances)
+	try writeGenericTypealiasMap(writeTables, buf: buf, m: data.genericTypealiases)
 	try writeLayoutDescriptorRegistry(buf, registry: data.layoutDescriptors)
 	try writeWitnessTableRegistry(buf, registry: data.witnessTables)
 	try writeStringArray(buf, arr: data.livenessRoots)
@@ -1301,7 +1338,7 @@ function encodeStdlibCacheBody(project Project, buf ByteArray, data StdlibCacheD
 	// for-byte, both for dead-init pruning AND for `.data` section layout.
 	try writeStringArray(buf, arr: data.moduleInitFuncs)
 	try writeInitToStoredVarsMap(buf, m: data.initToStoredVars)
-	try writeTopLevelVarMap(project, buf: buf, m: data.topLevelVars)
+	try writeTopLevelVarMap(writeTables, buf: buf, m: data.topLevelVars)
 	try writeGenericFunctionImplicitArityMap(buf, m: data.genericFunctionImplicitArity)
 	try writeStaticRdataValueMap(buf, m: data.staticRdataValues)
 	// Cache v50 (J.4c): stdlib-side extension metadata. Written before the
@@ -1356,6 +1393,136 @@ function copyBytesInto(dst ByteArray, buf ByteArray, offset ByteOffset, len Byte
 	dst.append(chunk)
 	return endIndex
 end 'copyBytesInto'
+
+// v81: replay the serialized type-name id-space into the destination project's
+// `typeNames` interner IN ORDER, so library entry k lands at TypeNameId k. The
+// project already carries the deterministic builtin-bootstrap prefix (interned
+// before this decode); that same prefix opens the serialized table, so interning
+// it back is idempotent (returns the existing id) and the stdlib names append
+// after it, exactly reproducing the cache-build order. The position == id
+// assertion turns any prefix divergence into a loud failure rather than a silent
+// MaxonType-id desync (which would surface much later as a wrong-type / leak).
+function seedTypeNameInterner(project Project, table StringArray)
+	for i in 0 upto table.count() 'eachName'
+		let name = try table.get(i) otherwise panic("seedTypeNameInterner: table.get OOB at {i} (count={table.count()})")
+		let id = project.typeNames.intern(name)
+		if id != i 'desync'
+			panic("seedTypeNameInterner: replay desync — '{name}' interned at id {id} but serialized table position is {i}; the destination project's typeName prefix diverges from the cache-build's (non-deterministic bootstrap?)")
+		end 'desync'
+	end 'eachName'
+end 'seedTypeNameInterner'
+
+// v81: replay the serialized constant-string id-space into the destination
+// project's `strings` interner IN ORDER, the string-constant analogue of
+// `seedTypeNameInterner`. Same position == id invariant.
+function seedStringInterner(project Project, table StringArray)
+	for i in 0 upto table.count() 'eachString'
+		let s = try table.get(i) otherwise panic("seedStringInterner: table.get OOB at {i} (count={table.count()})")
+		let id = project.strings.intern(s)
+		if id != i 'desync'
+			panic("seedStringInterner: replay desync — constant string interned at id {id} but serialized table position is {i}; the destination project's string prefix diverges from the cache-build's")
+		end 'desync'
+	end 'eachString'
+end 'seedStringInterner'
+
+// v81 (Phase 3.5, Step 4): replay the cache's WHOLE id-space into the
+// destination project so that, after this runs, project id == cache id for every
+// id-bearing registry — `named`/`typeParameter`/`interface`/`function`/
+// `genericInstance` arm payloads in `data.*` are then meaningful in the project
+// VERBATIM, and the old `translate*` family + `writerGid*` tables collapse to the
+// identity they always were on the disk path. This UNIFIES the two restore paths:
+//   - Disk path: `decodeStdlibCache` already replayed typeNames / strings /
+//     genericInstances into THIS project, so every loop below is idempotent
+//     (re-interning a name/pair finds the existing id).
+//   - In-memory warm path (`restoreStdlibMetadata` after `captureStdlibMetadata`,
+//     no decode): the worker project carries only the deterministic bootstrap
+//     prefix, so these loops are what establish the cache id-space in it.
+// Every registry is replayed IN CACHE ORDER (the `data.*` snapshot order), and
+// each entry's `position == returned id` is asserted, so any prefix divergence
+// (a non-deterministic bootstrap, a desynced snapshot) fails LOUDLY here instead
+// of silently mis-resolving a MaxonType id later (wrong layout → leak).
+function seedProjectFromCacheIdSpace(project Project, data StdlibCacheData)
+	seedTypeNameInterner(project, table: data.typeNameTable)
+	seedStringInterner(project, table: data.constantStringTable)
+
+	// typeParameters — name-keyed (declaringTypeName, paramName) + constraints.
+	for i in 0 upto data.typeParameters.count() 'eachTp'
+		let declName = data.typeParameters.getDeclaringTypeName(i)
+		let paramName = data.typeParameters.getName(i)
+		let id = project.typeParameters.intern(declName, paramName: paramName)
+		if id != i 'tpDesync'
+			panic("seedProjectFromCacheIdSpace: typeParameter replay desync — ('{declName}','{paramName}') interned at id {id} but cache position is {i}")
+		end 'tpDesync'
+		for c in data.typeParameters.getConstraints(i) 'eachConstraint'
+			project.typeParameters.addConstraint(id, traitName: c)
+		end 'eachConstraint'
+	end 'eachTp'
+	// Carry the source-declaration-ordered param-name lists (needed by
+	// `getParamNames` for substitution; not part of the id-space but mirrors the
+	// registry the restore would otherwise rebuild).
+	for (declName, paramNames) in data.typeParameters.declaringTypeParamLists 'eachList'
+		var copy = StringArray.create()
+		for n in paramNames 'eachName'
+			copy.push(n)
+		end 'eachName'
+		project.typeParameters.recordParamOrder(declName, paramOrder: copy)
+	end 'eachList'
+
+	// interfaceRegistry — name-keyed.
+	for i in 0 upto data.interfaceRegistry.count() 'eachIface'
+		let id = project.interfaceRegistry.intern(data.interfaceRegistry.getName(i))
+		if id != i 'ifaceDesync'
+			panic("seedProjectFromCacheIdSpace: interface replay desync — '{data.interfaceRegistry.getName(i)}' interned at id {id} but cache position is {i}")
+		end 'ifaceDesync'
+	end 'eachIface'
+
+	// functionTypes — content-addressed, appended in cache order. The
+	// (params, returnType) MaxonTypes carry cache-id-space ids that are valid
+	// VERBATIM in the project now that typeNames / typeParameters / interfaces are
+	// seeded; `append` stores them without dereferencing, so order alone fixes
+	// the FunctionTypeId. Skip entries already present (a bootstrap project may
+	// have interned a structurally identical signature) — but assert the position
+	// still lines up so a real divergence surfaces.
+	for i in 0 upto data.functionTypes.count() 'eachFt'
+		if i < project.functionTypes.count() 'alreadyPresent'
+			continue
+		end 'alreadyPresent'
+		let (params, returnType) = data.functionTypes.get(i)
+		let id = project.functionTypes.append(params, returnType: returnType)
+		if id != i 'ftDesync'
+			panic("seedProjectFromCacheIdSpace: functionType replay desync — appended at id {id} but cache position is {i}")
+		end 'ftDesync'
+	end 'eachFt'
+
+	// genericInstances — position-based gid; replay in order so each entry's
+	// `genericInstance(g)` arg (a back-ref to an earlier entry) and its
+	// named/typeParameter/interface args resolve to the just-seeded ids. The
+	// args are inserted VERBATIM (no translation) because every id they carry is
+	// now a project id by construction.
+	for i in 0 upto data.genericInstances.count() 'eachGi'
+		let (baseId, args) = data.genericInstances.get(i)
+		let id = project.genericInstances.intern(baseId, args: args)
+		if id != i 'giDesync'
+			panic("seedProjectFromCacheIdSpace: genericInstance replay desync — interned at gid {id} but cache position is {i}; the destination project's generic-instance prefix diverges from the cache-build's")
+		end 'giDesync'
+	end 'eachGi'
+end 'seedProjectFromCacheIdSpace'
+
+// v81 (Phase 3.5, Step 5): there is intentionally NO "append the worker's new
+// ids to the cache's id-space tables" step. The Tier-A metadata id-space
+// (`typeNameTable` / `constantStringTable` / `genericInstances` / …) is captured
+// COMPLETE at cache-build time — `buildAndWriteStdlibCache` resolves the WHOLE
+// stdlib before writing the signature stubs — and the lazy work a re-serialize
+// follows grows only name-keyed Tier-C bytecode (`cacheData.functions`): lazy
+// codegen lowers the already-resolved cached Std-IR (`inlinerStdModule`) to MIR
+// and machine code, interning no new TypeNameId / StringId / GenericInstanceId
+// into the cache's id-space. So the cache's snapshots are already final and a
+// re-serialize emits them verbatim (the originally-cached prefix is byte-stable).
+// A blind "append `project.*` past the prefix" would be WRONG, not just
+// redundant: by persist time the project's interners also hold the USER PROGRAM's
+// ids, which must never enter the stdlib cache. (If a future change makes stdlib
+// metadata grow lazily, the append must be sourced from a stdlib-tagged delta,
+// not the raw project tail — see this note.)
 
 function decodeStdlibCache(project Project, buf ByteArray, target Target, expectedChecksum CacheChecksum) returns StdlibCacheResult throws CacheCorruption
 	let invalid = StdlibCacheResult.create(StdlibCacheData.create(), valid: false)
@@ -1418,6 +1585,38 @@ function decodeStdlibCache(project Project, buf ByteArray, target Target, expect
 	var pos = 36
 
 	var data = StdlibCacheData.create()
+
+	// v81: read the authoritative id-space tables FIRST, then replay them into
+	// the destination project's interners IN ORDER so every subsequent
+	// `readMaxonType`'s `named(id)` and every `readConstantValue`'s
+	// `stringValue(id)` lands at the id matching the serialized table position.
+	// The destination project already carries the deterministic builtin-bootstrap
+	// prefix (`registerBuiltinTypeBootstrap` ran before this decode), and that
+	// SAME prefix opens `typeNameTable` (capture snapshotted the cache-build
+	// project's full interner, bootstrap-first), so `intern` returns the existing
+	// id for each bootstrap name and appends the stdlib names after it — exactly
+	// reproducing the cache-build order. `seedInternerFromTable` asserts position
+	// == returned id, so any divergence (a non-deterministic prefix) fails loudly
+	// instead of silently desyncing the MaxonType ids from the table.
+	let (typeNameTable, pTnt) = try readStringArrayAllowEmpty(buf, offset: pos)
+	pos = pTnt
+	data.typeNameTable = typeNameTable
+	seedTypeNameInterner(project, table: typeNameTable)
+
+	let (constantStringTable, pCst) = try readStringArrayAllowEmpty(buf, offset: pos)
+	pos = pCst
+	data.constantStringTable = constantStringTable
+	seedStringInterner(project, table: constantStringTable)
+
+	// v81: replay the generic-instance registry as an ordered flat list BEFORE
+	// any field that embeds a `genericInstance(id)` arm. The replay interns each
+	// entry into `project.genericInstances` and `data.genericInstances` in
+	// lockstep at gid == list position, so every later `readMaxonGenericInstance`
+	// dedups against it and recovers the same gid. `typeNameTable` is already
+	// pre-seeded, so the entries' baseIds + `named` args resolve here.
+	let (gInstReg, pGir) = try readGenericInstanceRegistry(project, buf: buf, offset: pos)
+	pos = pGir
+	data.genericInstances = gInstReg
 
 	// Read per-function objects
 	for _ in 0 upto functionCount 'eachFunc'
@@ -1912,16 +2111,15 @@ function decodeStdlibCache(project Project, buf ByteArray, target Target, expect
 	// re-intern named/typeParameter/genericInstance/interface arms through
 	// the destination project's registries during the walk, so by the time
 	// we reach here every captured registry is in the destination project's
-	// id space — no post-translation step needed for these fields.
+	// id space — no post-translation step needed for these fields. (v81:
+	// `genericInstances` is read in the early section above, before any
+	// `genericInstance(id)`-bearing field, so its gid replay is order-faithful.)
 	let (typeParamReg, pTpr) = try readTypeParamRegistry(buf, offset: pos)
 	pos = pTpr
 	data.typeParameters = typeParamReg
 	let (ifaceReg, pIfr) = try readInterfaceTypeRegistry(buf, offset: pos)
 	pos = pIfr
 	data.interfaceRegistry = ifaceReg
-	let (gInstReg, pGir) = try readGenericInstanceRegistry(project, buf: buf, offset: pos, writerGidMap: data.writerGidToProjectGid)
-	pos = pGir
-	data.genericInstances = gInstReg
 	let (ifaceMap, pIm) = try readInterfaceMap(project, buf: buf, offset: pos)
 	pos = pIm
 	data.interfaces = ifaceMap
@@ -1975,51 +2173,20 @@ function decodeStdlibCache(project Project, buf ByteArray, target Target, expect
 	pos = pIm2
 	data.inlinerStdModule = inlinerMod
 
-	// Populate data.typeNameTable from the destination project's interner so
-	// `restoreStdlibMetadata`'s translation step is a no-op identity. The
-	// disk format encodes named types as strings (writeMaxonType emits
-	// `(tag, name)`), and `readMaxonType` reinterns each name into the
-	// destination project — so by the time we get here, every named type id
-	// in `data.*` already points into `project.typeNames`. Mirroring those
-	// names into `data.typeNameTable` makes restore see `table[id] == name`,
-	// so the named-id translation round-trips through `intern(name)` and
-	// returns the same id. Without this, `data.typeNameTable` is empty and
-	// `restoreStdlibMetadata` panics on the first cached named return type
-	// (e.g. `Math.exp returns Real`).
-	for name in project.typeNames.names 'mirrorTable'
-		data.typeNameTable.push(name)
-	end 'mirrorTable'
+	// v81: `data.typeNameTable` and `data.constantStringTable` are no longer
+	// rebuilt here from `project.typeNames` / `project.strings` (the old
+	// identity-mirror trick). They were read authoritatively from the serialized
+	// stream at the top of this function and replayed into the project's
+	// interners IN ORDER, so `table[id] == name` and the project's id for each
+	// name == the table position — the identity the mirror used to fabricate is
+	// now a property of the ordered replay, valid in every consumer.
 
-	// Cache v19 + v44: identity-mirror trick for the generic-instance,
-	// type-parameter, and interface registries. `readMaxonType` interns
-	// nested generic instances directly into `project.genericInstances`
-	// (not `data.genericInstances`), so any cached `genericInstance(id)`
-	// payload in a MaxonType is already a project-space id. Mirror
-	// project.* into data.* here so `translateCapturedGenericInstance` can
-	// look up the project-id payload in `data.genericInstances` and get
-	// an identity round-trip. Raw writer-side gids in
-	// `layoutDescriptors`/`witnessTables` do *not* use this path — they go
-	// through `translateWriterGenericInstanceId` against the
-	// `writerGidToProjectGid` table built during the registry read, since
-	// writer-id ordering generally diverges from reader-project-id ordering
-	// once recursive arg interning reorders project assignments.
-	data.genericInstances = GenericInstanceRegistry.create()
-	for i in 0 upto project.genericInstances.count() 'mirrorGenericInstances'
-		let (baseId, args) = project.genericInstances.get(i)
-		_ = data.genericInstances.intern(baseId, args: args)
-	end 'mirrorGenericInstances'
-
-	// The mirror above re-keyed `data.genericInstances` into the reading
-	// project's id space, discarding the writer's ordering. The read-time
-	// writer→project map is the only record of that ordering — and since the
-	// mirror is an identity copy (the project registry is intern-built, so
-	// it has no structural duplicates), a project gid IS the data gid.
-	// Persist it as writer→data so `restoreRegistries` can rebuild
-	// writer→project maps for this and any later project in the process.
-	data.writerGidToDataGid.clear()
-	for projectGid in data.writerGidToProjectGid 'recordWriterToData'
-		data.writerGidToDataGid.push(projectGid)
-	end 'recordWriterToData'
+	// v81: `data.genericInstances` is no longer rebuilt from
+	// `project.genericInstances` (the old identity-mirror). The ordered flat-list
+	// replay above (`readGenericInstanceRegistry`) already built it in the library
+	// gid order, in lockstep with `project.genericInstances` (gid == list position
+	// in BOTH), so `layoutDescriptors`/`witnessTables` use their gids verbatim and
+	// the writer→project / writer→data translation tables are gone (Step 4).
 	// Rebuild `data.typeParameters` in `project.typeParameters`'s id space
 	// (so cached MaxonType.typeParameter(id) payloads round-trip identity)
 	// while preserving the constraints originally read from disk. The disk
@@ -2217,230 +2384,16 @@ end 'mergeStdlibGlobalData'
 // Restore stdlib metadata into a project for user parsing
 // ============================================================
 
-// Translate a captured MaxonType into the destination project's id space.
-// Every `named(id)` is reinterned through the destination project's typeNames
-// using `data.typeNameTable`. Generic-aware arms (`typeParameter`,
-// `genericInstance`, `interface`) recurse through the captured registries
-// (`data.typeParameters`, `data.genericInstances`, `data.interfaceRegistry`)
-// to look up the source-id's logical key (declName/paramName for
-// type parameters, baseName + arg list for generic instances, name for
-// interfaces) and re-intern that key into the destination project. This is
-// required because the in-memory stdlib `cacheData` snapshot is
-// populated by `captureStdlibMetadata` (which copies source-project ids
-// directly), and the disk-cache read path uses the same `data.*` registries
-// keyed by the warmup project's id space — neither matches the per-test
-// destination project's id space.
-function translateMaxonType(project Project, data StdlibCacheData, t MaxonType) returns MaxonType
-	return match t 'translate'
-		boolean gives MaxonType.boolean
-		integer gives MaxonType.integer
-		float gives MaxonType.float
-		string gives MaxonType.string
-		character gives MaxonType.character
-		unresolved gives MaxonType.unresolved
-		named(id) gives translateNamedTypeId(project, table: data.typeNameTable, id: id)
-		function(id) gives translateCapturedFunctionType(project, data: data, id: id)
-		typeParameter(id) gives translateCapturedTypeParameter(project, data: data, id: id)
-		genericInstance(id) gives translateCapturedGenericInstance(project, data: data, id: id)
-		interface(id) gives translateCapturedInterface(project, data: data, id: id)
-		// `constInt` arms carry a literal payload, not a registry id —
-		// no captured-data lookup needed, pass the literal through.
-		constInt gives t
-		// `opaquePointer` is payload-less; pass it through unchanged.
-		opaquePointer to cstring gives t
-	end 'translate'
-end 'translateMaxonType'
-
-// Cache v49: translate a captured `function(id)` arm into the destination
-// project's id space. Walks the captured signature from `data.functionTypes`,
-// translates each param + return type through `translateMaxonType` /
-// `translateMaxonReturnType` (which recurse into nested generic/function
-// arms), then re-interns the resulting (params, returnType) via
-// `internFunctionType` in the destination project. The returned id may
-// differ from the captured one but the structural signature is preserved.
-function translateCapturedFunctionType(project Project, data StdlibCacheData, id FunctionTypeId) returns MaxonType
-	let (sourceParams, sourceReturn) = data.functionTypes.get(id)
-	let translatedParams = translateCapturedTypeArray(project, data: data, src: sourceParams)
-	let translatedReturn = translateMaxonReturnType(project, data: data, rt: sourceReturn)
-	let newId = internFunctionType(project, paramTypes: translatedParams, returnType: translatedReturn)
-	return MaxonType.function(newId)
-end 'translateCapturedFunctionType'
-
-function translateNamedTypeId(project Project, table StringArray, id TypeNameId) returns MaxonType
-	let name = try table.get(id) otherwise panic("translateNamedTypeId: captured id {id} out of range (table count={table.count()}) — captureStdlibMetadata snapshot is missing entries")
-	return MaxonType.named(project.typeNames.intern(name))
-end 'translateNamedTypeId'
-
-// Translate a captured `typeParameter(id)`. The captured registry stores the
-// `(declaringTypeName, paramName)` pair at `id`; re-intern that pair into the
-// destination project so the result references the destination-project id
-// for the same logical type parameter.
-function translateCapturedTypeParameter(project Project, data StdlibCacheData, id TypeParamId) returns MaxonType
-	let declName = data.typeParameters.getDeclaringTypeName(id)
-	let paramName = data.typeParameters.getName(id)
-	let destId = project.typeParameters.intern(declName, paramName: paramName)
-	return MaxonType.typeParameter(destId)
-end 'translateCapturedTypeParameter'
-
-// Translate a captured `genericInstance(id)`. Wraps the shared
-// `translateCapturedGenericInstanceId` helper in `MaxonType.genericInstance`.
-function translateCapturedGenericInstance(project Project, data StdlibCacheData, id GenericInstanceId) returns MaxonType
-	return MaxonType.genericInstance(translateCapturedGenericInstanceId(project, data: data, id: id))
-end 'translateCapturedGenericInstance'
-
-// Translate a captured `interface(id)`. The captured registry is just a
-// name-keyed parallel array; re-intern the name into the destination
-// project's `interfaceRegistry`.
-function translateCapturedInterface(project Project, data StdlibCacheData, id InterfaceTypeId) returns MaxonType
-	let name = data.interfaceRegistry.getName(id)
-	let destId = project.interfaceRegistry.intern(name)
-	return MaxonType.interface(destId)
-end 'translateCapturedInterface'
-
-// Translate a captured GenericInstanceId to a destination GenericInstanceId.
-// The captured registry stores `(baseId, args)` where `baseId` indexes into
-// the captured typeNameTable and each arg is itself a captured MaxonType.
-// Re-intern the base name into the destination project's typeNames,
-// recursively translate each arg, then intern the resulting
-// `(destBaseId, destArgs)` pair into the destination project's
-// `genericInstances` registry. Shared by `translateCapturedGenericInstance`
-// (which wraps the result in MaxonType) and `LayoutDescriptorRegistry`
-// translation (which needs the bare GenericInstanceId).
-function translateCapturedGenericInstanceId(project Project, data StdlibCacheData, id GenericInstanceId) returns GenericInstanceId
-	let (sourceBaseId, sourceArgs) = data.genericInstances.get(id)
-	let baseName = try data.typeNameTable.get(sourceBaseId) otherwise panic("translateCapturedGenericInstanceId: typeNameTable.get OOB for baseId={sourceBaseId} (table count={data.typeNameTable.count()})")
-	let destBaseId = project.typeNames.intern(baseName)
-	let destArgs = translateCapturedTypeArray(project, data: data, src: sourceArgs)
-	return project.genericInstances.intern(destBaseId, args: destArgs)
-end 'translateCapturedGenericInstanceId'
-
-// Translate a writer-side `GenericInstanceId` (the raw qword payload of
-// `layoutDescriptors`/`witnessTables`) to the destination project's id
-// space by consulting the `writerGidToProjectGid` table built during
-// `readGenericInstanceRegistry`. Distinct from
-// `translateCapturedGenericInstanceId` (which works in
-// data.genericInstances' id space — post-mirror == project space) because
-// the writer's id space generally diverges from the reader's after
-// recursive arg interning reorders project assignments.
-function translateWriterGenericInstanceId(data StdlibCacheData, writerGid GenericInstanceId) returns GenericInstanceId
-	return try data.writerGidToProjectGid.get(writerGid) otherwise panic("translateWriterGenericInstanceId: writerGid={writerGid} OOB (table count={data.writerGidToProjectGid.count()}) — writer wrote a gid the read pass never saw")
-end 'translateWriterGenericInstanceId'
-
-// Translate every captured MaxonType in `src` through `translateMaxonType`
-// into a fresh MaxonTypeArray in the destination project's id space.
-function translateCapturedTypeArray(project Project, data StdlibCacheData, src MaxonTypeArray) returns MaxonTypeArray
-	var dst = MaxonTypeArray.create()
-	for t in src 'eachT'
-		dst.push(translateMaxonType(project, data: data, t: t))
-	end 'eachT'
-	return dst
-end 'translateCapturedTypeArray'
-
-// Translate a captured MaxonReturnType: void passes through; value(inner)
-// gets its inner MaxonType reinterned via translateMaxonType.
-function translateMaxonReturnType(project Project, data StdlibCacheData, rt MaxonReturnType) returns MaxonReturnType
-	return match rt 'translate'
-		void gives MaxonReturnType.void
-		value(inner) gives MaxonReturnType.value(translateMaxonType(project, data: data, t: inner))
-	end 'translate'
-end 'translateMaxonReturnType'
-
-// Translate a captured InterfaceMethodSig: paramTypes and returnType carry
-// captured MaxonTypes. Other fields (name / paramNames / throwsTypeName /
-// line / column) are name- or position-keyed and pass through unchanged.
-function translateInterfaceMethodSig(project Project, data StdlibCacheData, sig InterfaceMethodSig) returns InterfaceMethodSig
-	let destParamTypes = translateCapturedTypeArray(project, data: data, src: sig.paramTypes)
-	let destReturn = translateMaxonReturnType(project, data: data, rt: sig.returnType)
-	var translated = InterfaceMethodSig.create(sig.name, paramNames: sig.paramNames, paramTypes: destParamTypes, returnType: destReturn, throwsTypeName: sig.throwsTypeName, isStatic: sig.isStatic, line: sig.line, column: sig.column)
-	translated.sourceInterfaceName = sig.sourceInterfaceName
-	translated.directInterfaceName = sig.directInterfaceName
-	return translated
-end 'translateInterfaceMethodSig'
-
-// Translate a captured IrInterface: each method sig's paramTypes / returnType
-// MaxonTypes are reinterned through the destination project. innerAliases
-// values are translated for the same reason as `translateStructType` — they
-// embed `named` / `genericInstance` ids that index the producing run's
-// typeNames table. Other fields (name / extendsNames / usesParams /
-// visibility / filePath / line / column) pass through unchanged because
-// they're name- or position-keyed.
-function translateIrInterface(project Project, data StdlibCacheData, iface IrInterface) returns IrInterface
-	var destMethods = InterfaceMethodSigArray.create()
-	for m in iface.methods 'eachM'
-		destMethods.push(translateInterfaceMethodSig(project, data: data, sig: m))
-	end 'eachM'
-	var translatedInner = ResolvedInnerAliasMap.create()
-	for (aliasName, aliasType) in iface.innerAliases 'eachInner'
-		try translatedInner.insert(aliasName, value: translateMaxonType(project, data: data, t: aliasType)) otherwise ignore
-	end 'eachInner'
-	return IrInterface.create(iface.name, extendsNames: iface.extendsNames, usesParams: iface.usesParams, methods: destMethods, visibility: iface.visibility, line: iface.line, column: iface.column, filePath: iface.filePath, innerAliases: translatedInner)
-end 'translateIrInterface'
-
-// Translate a captured StructType: every field's MaxonType has its captured
-// ids reinterned in the destination project. innerAliases values are also
-// translated — without this, a struct's `Array.innerAliases["ArrayIter"]`
-// would retain a captured `genericInstance` whose base id pointed into the
-// source typeNames at a slot whose value differed in the destination.
-function translateStructType(project Project, data StdlibCacheData, st StructType) returns StructType
-	var fields = StructFieldArray.create()
-	for f in st.fields 'eachField'
-		fields.push(StructField.create(f.name, fieldType: translateMaxonType(project, data: data, t: f.fieldType), offset: f.offset, isMutable: f.isMutable, offsetResolved: f.offsetResolved, isExported: f.isExported))
-	end 'eachField'
-	var translatedInner = ResolvedInnerAliasMap.create()
-	for (aliasName, aliasType) in st.innerAliases 'eachInner'
-		try translatedInner.insert(aliasName, value: translateMaxonType(project, data: data, t: aliasType)) otherwise ignore
-	end 'eachInner'
-	var translatedExpected = InterfaceMethodSigArray.create()
-	for sig in st.expectedMethods 'eachExpected'
-		translatedExpected.push(translateInterfaceMethodSig(project, data: data, sig: sig))
-	end 'eachExpected'
-	return StructType.create(st.name, fields: fields, byteSize: st.byteSize, visibility: st.visibility, sourceFilePath: st.sourceFilePath, nameLine: st.nameLine, nameColumn: st.nameColumn, expectedMethods: translatedExpected, innerAliases: translatedInner)
-end 'translateStructType'
-
-// Translate a captured EnumType into the destination project's id space —
-// the enum-side counterpart of `translateStructType`. The in-memory
-// `captureStdlibMetadata` path copies each `EnumType` verbatim, so every
-// MaxonType it carries (each union case's payload-field types and the enum's
-// substituted `expectedMethods` signatures) still indexes the *source*
-// project's registries. Re-intern each through the captured `typeNameTable`
-// so a restored union references the destination project's `typeNames`. For
-// the disk path this is the same identity round-trip `translateStructType`
-// performs — the typeNameTable is mirrored from the destination interner, so
-// `intern(name)` returns the same id. Without this, a `match` on a cached
-// union (e.g. `TerminationStatus`) reads each payload field's type through a
-// stale id that lands on an unrelated type — classifying a scalar `ExitInt`
-// payload as a managed `Configuration` struct and emitting a bogus
-// `__mm_incref` on the scalar that faults at runtime.
-function translateEnumType(project Project, data StdlibCacheData, et EnumType) returns EnumType
-	var cases = EnumCaseArray.create()
-	for c in et.cases 'eachCase'
-		var payloadFields = EnumPayloadFieldArray.create()
-		for pf in c.payloadFields 'eachPayload'
-			payloadFields.push(EnumPayloadField.create(pf.name, fieldType: translateMaxonType(project, data: data, t: pf.fieldType)))
-		end 'eachPayload'
-		cases.push(EnumCase.create(c.name, ordinal: c.ordinal, rawValue: c.rawValue, line: c.line, column: c.column, payloadFields: payloadFields, backingStructName: c.backingStructName, backingStructExprId: c.backingStructExprId, rawStringValue: c.rawStringValue, rawFunctionName: c.rawFunctionName))
-	end 'eachCase'
-
-	var expectedMethods = InterfaceMethodSigArray.create()
-	for m in et.expectedMethods 'eachMethod'
-		expectedMethods.push(translateInterfaceMethodSig(project, data: data, sig: m))
-	end 'eachMethod'
-
-	// Function-backed enums share one FunctionTypeId across every case. It
-	// indexes the source project's `functionTypes`; re-intern the captured
-	// signature so the restored enum points at the destination id. Non
-	// function-backed enums keep the sentinel `0` (the disk path never sets
-	// either field, so this only fires on the in-memory capture path).
-	var functionBackingTypeId = et.functionBackingTypeId
-	if et.isFunctionBacked and functionBackingTypeId != 0 'remapFnBacking'
-		functionBackingTypeId = match translateCapturedFunctionType(project, data: data, id: et.functionBackingTypeId) 'extractId'
-			function(id) gives id
-			default panic("translateEnumType: translateCapturedFunctionType returned a non-function type for enum '{et.name}'")
-		end 'extractId'
-	end 'remapFnBacking'
-
-	return EnumType.create(et.name, cases: cases, isFloatBacked: et.isFloatBacked, visibility: et.visibility, sourceFilePath: et.sourceFilePath, nameLine: et.nameLine, nameColumn: et.nameColumn, expectedMethods: expectedMethods, isUnion: et.isUnion, isStringBacked: et.isStringBacked, isCharBacked: et.isCharBacked, isFunctionBacked: et.isFunctionBacked, functionBackingTypeId: functionBackingTypeId)
-end 'translateEnumType'
+// v81 (Phase 3.5, Step 4): the entire `translate*` family is DELETED. It existed
+// to convert a cached MaxonType's ids from the cache-build / warmup project's id
+// space into the destination project's diverging id space. Under the library-owned
+// id-space, `seedProjectFromCacheIdSpace` replays the cache's id-space into the
+// destination project so cache id == project id by construction, making every
+// `translate*` an identity no-op. The restore loops now insert the cached payloads
+// VERBATIM. `writerGidToProjectGid` / `writerGidToDataGid` (whose only purpose was
+// to recover the writer gid ordering that recursive arg interning lost — see the
+// `Array with String` → `__layout_Array_SlotState` leak) are likewise dead and
+// removed from `StdlibCacheData`.
 
 // Capture parser metadata from a project into a StdlibCacheData.
 export function captureStdlibMetadata(project Project, data StdlibCacheData)
@@ -2450,6 +2403,14 @@ export function captureStdlibMetadata(project Project, data StdlibCacheData)
 	for name in project.typeNames.names 'snapshotTypeNames'
 		data.typeNameTable.push(name)
 	end 'snapshotTypeNames'
+
+	// Snapshot the STRING interner so restoreStdlibMetadata can translate each
+	// captured `topLevelConstants` `stringValue(id)` back to its bytes and
+	// re-intern locally — the constant payloads copied below carry THIS project's
+	// string ids, meaningless in a consumer (worker) project without this table.
+	for s in project.strings.values 'snapshotConstantStrings'
+		data.constantStringTable.push(s)
+	end 'snapshotConstantStrings'
 
 	for (name, baseType) in project.typealiases 'copyAliases'
 		try data.typealiases.insert(name, value: baseType) otherwise ignore
@@ -2627,14 +2588,18 @@ function captureRegistries(project Project, data StdlibCacheData)
 		_ = data.functionTypes.append(params, returnType: returnType)
 	end 'eachFt'
 
-	// Record writer→data gid alongside the mirror. The raw gids embedded in
-	// `layoutDescriptors`/`witnessTables` below are writer-project ids, so
-	// each writer entry's data-space id must be captured for the restore-time
-	// writer→project rebuild (`restoreRegistries`).
-	data.writerGidToDataGid.clear()
+	// Snapshot `genericInstances` in `project.genericInstances` order so
+	// `data.genericInstances` position == project gid. The disk codec serializes
+	// this as the ordered flat list and the reader replays it in order, so the
+	// library gid is stable across the round-trip; the raw gids embedded in
+	// `layoutDescriptors`/`witnessTables` (project gids) therefore stay valid
+	// verbatim — no writer→data translation table is needed (Step 4).
 	for i in 0 upto project.genericInstances.count() 'eachGi'
 		let (baseId, args) = project.genericInstances.get(i)
-		data.writerGidToDataGid.push(data.genericInstances.intern(baseId, args: args))
+		let dataGid = data.genericInstances.intern(baseId, args: args)
+		if dataGid != i 'captureGiDesync'
+			panic("captureRegistries: data.genericInstances interned at gid {dataGid} but project gid is {i} — capture must preserve project gid order")
+		end 'captureGiDesync'
 	end 'eachGi'
 
 	for (name, iface) in project.interfaces 'eachInterface'
@@ -2709,6 +2674,13 @@ function captureRegistries(project Project, data StdlibCacheData)
 end 'captureRegistries'
 
 export function restoreStdlibMetadata(project Project, data StdlibCacheData)
+	// v81 (Phase 3.5, Step 4): replay the cache's whole id-space into this
+	// project FIRST, so every `data.*` MaxonType id is meaningful in the project
+	// VERBATIM (project id == cache id). Idempotent on the disk path (decode
+	// already seeded it); the establishing step on the in-memory warm path. After
+	// this, the loops below insert without any `translate*` indirection.
+	seedProjectFromCacheIdSpace(project, data: data)
+
 	// Restore typealiases
 	for (name, baseType) in data.typealiases 'restoreAliases'
 		try project.typealiases.insert(name, value: baseType) otherwise ignore
@@ -2737,22 +2709,18 @@ export function restoreStdlibMetadata(project Project, data StdlibCacheData)
 
 	// Restore function return types and seed the method-name index in
 	// lockstep so DFE's methodCall handling sees stdlib methods alongside
-	// user-defined ones without a separate post-pass. MaxonType.named ids
-	// embedded in the cached return types belong to the source project's
-	// interner, so translate each through the captured typeNameTable into a
-	// fresh id in the destination project before storing.
+	// user-defined ones without a separate post-pass. v81: the embedded
+	// MaxonType ids are already in this project's id space (cache id == project
+	// id after `seedProjectFromCacheIdSpace`), so the entry is inserted VERBATIM.
 	for (name, rt) in data.funcReturnTypes 'restoreRts'
-		let translated = translateMaxonReturnType(project, data: data, rt: rt)
-		try project.funcReturnTypes.insert(name, value: translated) otherwise ignore
+		try project.funcReturnTypes.insert(name, value: rt) otherwise ignore
 		project.methodNameIndex.record(name)
 	end 'restoreRts'
 
-	// Function signatures carry MaxonTypes embedded in paramTypes — same
-	// captured-id concern as funcReturnTypes, so each signature is rebuilt
-	// with the destination project's id space.
+	// Function signatures carry MaxonTypes in paramTypes — same id-space, so
+	// inserted verbatim.
 	for (name, sig) in data.funcSignatures 'restoreSigs'
-		let translatedTypes = translateCapturedTypeArray(project, data: data, src: sig.paramTypes)
-		try project.funcSignatures.insert(name, value: FuncSignature.create(sig.paramNames, paramTypes: translatedTypes, paramDefaults: sig.paramDefaults)) otherwise ignore
+		try project.funcSignatures.insert(name, value: sig) otherwise ignore
 	end 'restoreSigs'
 
 	// Cache v70 (Concept C): replay the stdlib argument-consume facts. No
@@ -2819,9 +2787,9 @@ export function restoreStdlibMetadata(project Project, data StdlibCacheData)
 	// register allocator.
 	rebuildOverloadedNames(project)
 
-	// Restore struct types. Field MaxonTypes carry the same captured-id
-	// problem as funcReturnTypes — translate every named id through the
-	// typeNameTable before insertion.
+	// Restore struct types. v81: field MaxonTypes are already in this project's
+	// id space (cache id == project id after `seedProjectFromCacheIdSpace`), so
+	// each struct is inserted VERBATIM.
 	//
 	// Rebuild the `structInnerAliasNames` reverse index alongside each restored
 	// struct: the parser maintains it on a from-source build (one entry per
@@ -2834,26 +2802,24 @@ export function restoreStdlibMetadata(project Project, data StdlibCacheData)
 	// param of `m.map(function(p) gives p)` loses its return-incref, diverging from
 	// the from-source build (the stdlib-map-on-map-with-function cache-only crash).
 	for (name, st) in data.structTypes 'restoreStructs'
-		let translated = translateStructType(project, data: data, st: st)
-		for (aliasName, _) in translated.innerAliases 'eachInnerAlias'
+		for (aliasName, _) in st.innerAliases 'eachInnerAlias'
 			project.structInnerAliasNames.insert(aliasName)
 		end 'eachInnerAlias'
-		try project.structTypes.insert(name, value: translated) otherwise ignore
+		try project.structTypes.insert(name, value: st) otherwise ignore
 	end 'restoreStructs'
 
 	// Cache v47: restore enum types so `match` on cached stdlib enums
-	// (MapError, ArrayError, ...) dispatches by case name. Payload-field
-	// and expectedMethod MaxonTypes carry the same captured-id problem as
-	// struct fields — the in-memory `captureStdlibMetadata` path copies each
-	// `EnumType` verbatim with the source project's ids. Translate every
-	// named id through the typeNameTable before insertion (a no-op identity
-	// on the disk path, where readMaxonType already reinterned the names).
+	// (MapError, ArrayError, ...) dispatches by case name. v81: payload-field /
+	// expectedMethod MaxonTypes are already in this project's id space, so each
+	// enum is inserted VERBATIM.
 	for (name, et) in data.enumTypes 'restoreEnums'
-		let translatedEnum = translateEnumType(project, data: data, et: et)
-		try project.enumTypes.insert(name, value: translatedEnum) otherwise ignore
+		try project.enumTypes.insert(name, value: et) otherwise ignore
 	end 'restoreEnums'
 
-	// Restore top-level constants
+	// Restore top-level constants. v81: a `stringValue` payload's StringId is
+	// already in this project's `strings` id space (the constant-string id-space
+	// was replayed by `seedProjectFromCacheIdSpace`), so the entry is inserted
+	// VERBATIM.
 	for (name, entry) in data.topLevelConstants 'restoreConsts'
 		try project.topLevelConstants.insert(name, value: entry) otherwise ignore
 	end 'restoreConsts'
@@ -2941,110 +2907,47 @@ function restoreRegistries(project Project, data StdlibCacheData)
 	// in the destination project's id space iff the destination is empty when
 	// we start. (Stdlib bootstrap pre-parsed declarations may have allocated
 	// some entries; intern still returns the right id for those.)
-	for i in 0 upto data.typeParameters.count() 'eachTp'
-		let declName = data.typeParameters.getDeclaringTypeName(i)
-		let paramName = data.typeParameters.getName(i)
-		let destId = project.typeParameters.intern(declName, paramName: paramName)
-		let cs = data.typeParameters.getConstraints(i)
-		for c in cs 'eachConstraint'
-			project.typeParameters.addConstraint(destId, traitName: c)
-		end 'eachConstraint'
-	end 'eachTp'
-	// Copy the source-declaration-ordered param-name lists into the
-	// destination registry. Without this, the destination's id space
-	// could end up in a different order than the original parse, and
-	// getParamNames would return the wrong pairing.
-	for (declName, paramNames) in data.typeParameters.declaringTypeParamLists 'eachList'
-		var copy = StringArray.create()
-		for n in paramNames 'eachName'
-			copy.push(n)
-		end 'eachName'
-		project.typeParameters.recordParamOrder(declName, paramOrder: copy)
-	end 'eachList'
+	// v81: typeParameters / interfaceRegistry / genericInstances were already
+	// replayed into this project by `seedProjectFromCacheIdSpace` (cache id ==
+	// project id), so there is nothing to re-intern or translate here — the
+	// `writerGid*` rebuild and the `translate*` family that recovered a diverging
+	// id space are gone. Everything below inserts the cached payloads VERBATIM.
 
-	for i in 0 upto data.interfaceRegistry.count() 'eachIface'
-		_ = project.interfaceRegistry.intern(data.interfaceRegistry.getName(i))
-	end 'eachIface'
-
-	// genericInstances entries reference captured `(baseId, args)` where
-	// `baseId` is a captured typeNameTable index and each arg is a captured
-	// MaxonType. Re-intern each through the destination project's registries
-	// (via the shared helper) so subsequent lookups return ids whose payload
-	// is meaningful in the destination id space.
-	//
-	// The `writerGidToProjectGid` table is rebuilt fresh on every restore so
-	// the layoutDescriptors / witnessTables loops below can translate
-	// writer-side gids (a writer-project index for the in-memory cache, a
-	// disk-encoded index for the on-disk cache) into the CURRENT destination
-	// project's gid space. The disk-read path populates the map inline in
-	// `readGenericInstanceRegistry`, but that's tied to a single project; a
-	// second compile reusing the cached data needs a fresh map keyed on the
-	// new project's `project.genericInstances`. Without this rebuild the
-	// in-memory cache path (activateStdlibCache after warmup) would see an
-	// empty map and panic in `translateWriterGenericInstanceId`.
-	//
-	// Route each writer gid through `writerGidToDataGid` — on the disk path
-	// `data.genericInstances` is a mirror of the FIRST reading project's
-	// registry, whose ordering diverges from the writer's once recursive arg
-	// interning reorders id assignments, so indexing it positionally by
-	// writer gid translates the WRONG entry (`__layout_Array_String` landed
-	// on `Array with Element` while `Array with String` got the
-	// `__layout_Array_SlotState` label, killing its element walk).
-	//
-	// Mutate the existing array in-place (clear then refill) so this works
-	// when `data` is passed as a value parameter — `.push` mutates through
-	// the array reference without requiring the enclosing struct to be a
-	// `var` binding at every call site.
-	data.writerGidToProjectGid.clear()
-	for dataGid in data.writerGidToDataGid 'eachGi'
-		let destGid = translateCapturedGenericInstanceId(project, data: data, id: dataGid)
-		data.writerGidToProjectGid.push(destGid)
-	end 'eachGi'
-
-	// IrInterface entries store method signatures whose paramTypes / returnType
-	// carry captured ids. Rebuild each method sig with translated MaxonTypes.
+	// IrInterface entries: method-sig MaxonTypes are already in this project's
+	// id space, so each interface is inserted verbatim.
 	for (name, iface) in data.interfaces 'eachInterface'
-		try project.interfaces.insert(name, value: translateIrInterface(project, data: data, iface: iface)) otherwise ignore
+		try project.interfaces.insert(name, value: iface) otherwise ignore
 	end 'eachInterface'
 
-	// Conformance withArgs are MaxonTypeArrays — translate each entry's args
-	// before interning so the destination registry's args reference
-	// destination-project ids.
+	// Conformance withArgs MaxonTypes are already in this project's id space.
 	for i in 0 upto data.conformances.count() 'eachConf'
 		let (typeName, ifaceName, withArgs) = data.conformances.get(i)
-		let destWithArgs = translateCapturedTypeArray(project, data: data, src: withArgs)
-		_ = project.conformances.intern(typeName, interfaceName: ifaceName, withArgs: destWithArgs)
+		_ = project.conformances.intern(typeName, interfaceName: ifaceName, withArgs: withArgs)
 	end 'eachConf'
 
-	// genericTypealiases values are MaxonTypes (the resolved alias target).
-	// Translate each before insertion.
+	// genericTypealiases values are MaxonTypes already in this project's id space.
 	for (name, t) in data.genericTypealiases 'eachGta'
-		try project.genericTypealiases.insert(name, value: translateMaxonType(project, data: data, t: t)) otherwise ignore
+		try project.genericTypealiases.insert(name, value: t) otherwise ignore
 	end 'eachGta'
 
-	// layoutDescriptors are keyed by GenericInstanceId. The serialized `gid`
-	// is a *writer-side* project id (raw qword payload), not a translated
-	// `data.genericInstances` index — so route it through
-	// `translateWriterGenericInstanceId` which consults the writer→project
-	// table built during `readGenericInstanceRegistry`.
+	// layoutDescriptors are keyed by GenericInstanceId. v81: the serialized gid
+	// IS this project's gid (cache gid == project gid after the ordered
+	// generic-instance replay), so it is used verbatim — no writer→project
+	// translation.
 	for i in 0 upto data.layoutDescriptors.count() 'eachLd'
-		let sourceGid = try data.layoutDescriptors.instanceIds.get(i) otherwise panic("restoreRegistries: layoutDescriptors.instanceIds.get OOB at {i}")
+		let gid = try data.layoutDescriptors.instanceIds.get(i) otherwise panic("restoreRegistries: layoutDescriptors.instanceIds.get OOB at {i}")
 		let label = try data.layoutDescriptors.labels.get(i) otherwise panic("restoreRegistries: layoutDescriptors.labels desync at {i}")
-		let destGid = translateWriterGenericInstanceId(data, writerGid: sourceGid)
-		project.layoutDescriptors.intern(destGid, label: label)
+		project.layoutDescriptors.intern(gid, label: label)
 	end 'eachLd'
 
 	for i in 0 upto data.witnessTables.count() 'eachWt'
 		let e = data.witnessTables.get(i)
 		project.witnessTables.intern(e.typeName, interfaceName: e.interfaceName, label: e.label, methodImplNames: e.methodImplNames, parentWitnessLabel: e.parentWitnessLabel, isFatBoxed: e.isFatBoxed)
 	end 'eachWt'
-	// Per-instance gid-keyed entries. Same writer-id translation as
-	// layoutDescriptors above so the user pipeline's witness loader can
-	// resolve labels for stdlib-emitted instances (e.g. `Array<Byte>`).
+	// Per-instance gid-keyed entries — gid used verbatim, same as layoutDescriptors.
 	for i in 0 upto data.witnessTables.gidCount() 'eachGidWt'
 		let g = data.witnessTables.getGid(i)
-		let destGid = translateWriterGenericInstanceId(data, writerGid: g.gid)
-		project.witnessTables.internForGid(destGid, interfaceName: g.interfaceName, label: g.label, methodImplNames: g.methodImplNames, isFatBoxed: g.isFatBoxed)
+		project.witnessTables.internForGid(g.gid, interfaceName: g.interfaceName, label: g.label, methodImplNames: g.methodImplNames, isFatBoxed: g.isFatBoxed)
 	end 'eachGidWt'
 
 	for r in data.livenessRoots 'eachRoot'
@@ -3064,23 +2967,16 @@ function restoreRegistries(project Project, data StdlibCacheData)
 		end 'eachVar'
 		try project.initToStoredVars.insert(initName, value: copiedVars) otherwise ignore
 	end 'eachInitVars'
-	// The captured `info.slotType` carries a `genericInstance`/`named`/etc. id in
-	// the cache's id-space, which generally diverges from this project's
-	// id-space (generic-instance gid numbering is assignment-order-dependent and
-	// is NOT stable across compiles — see BuildLayoutDescriptors). Insert the
-	// info RAW and you keep a stale gid: e.g. `captured` (a `TraceKeyArray =
-	// Array with TraceKey`) is `genericInstance(gid=4)` in the cache, but gid=4
-	// names a DIFFERENT instance in the user project once earlier compiles in the
-	// process interned generics in another order — so `maxonTypeIsHeapManaged`
-	// resolves the wrong base name and `patchMrtStartGlobalCleanup` skips the
-	// teardown decref, leaking the global's final occupant. Translate the
-	// slotType into this project's id-space (the same translation the rest of
-	// `restoreStdlibMetadata` applies to captured types) so the gid is stable
-	// regardless of compilation order.
+	// v81: `info.slotType`'s `genericInstance`/`named`/etc. id is already this
+	// project's id (cache id == project id after the ordered id-space replay in
+	// `seedProjectFromCacheIdSpace`), so the var info is inserted VERBATIM. The
+	// formerly-required slotType translation guarded against a gid that drifted
+	// because generic-instance numbering was assignment-order-dependent; the
+	// library-owned id-space pins that order, so the gid is stable by
+	// construction and `maxonTypeIsHeapManaged` / `patchMrtStartGlobalCleanup`
+	// resolve the correct base name (no leaked global occupant).
 	for (varName, info) in data.topLevelVars 'eachTopVar'
-		let translatedSlot = translateMaxonType(project, data: data, t: info.slotType)
-		let translatedInfo = TopLevelVarInfo.create(info.name, slotType: translatedSlot, initialValue: info.initialValue, visibility: info.visibility, sourceFilePath: info.sourceFilePath)
-		try project.topLevelVars.insert(varName, value: translatedInfo) otherwise ignore
+		try project.topLevelVars.insert(varName, value: info) otherwise ignore
 	end 'eachTopVar'
 
 	// Phase 11.4: replay the generic-function implicit-arity map so the
@@ -3203,6 +3099,33 @@ function readStringArray(buf ByteArray, offset ByteOffset) returns (StringArray,
 	return (arr, pos)
 end 'readStringArray'
 
+// v81: empty-string-tolerant StringArray codec for the authoritative id-space
+// tables. `typeNameTable` / `constantStringTable` are exact snapshots of the
+// `typeNames` / `strings` interners, which can legitimately hold an interned
+// empty string (e.g. a `""` literal interned into `project.strings`). The
+// mandatory `writeString` rejects an empty payload, so a position-faithful
+// id-space table MUST use the optional-string codec (1-byte presence tag +
+// optional length-prefixed payload), restoring `""` for the absent tag — the
+// position == id invariant requires preserving every entry, empties included.
+function writeStringArrayAllowEmpty(buf ByteArray, arr StringArray) throws CacheCorruption
+	writeDword(buf, value: arr.count())
+	for s in arr 'eachString'
+		try writeOptionalStringDefaultEmpty(buf, value: s)
+	end 'eachString'
+end 'writeStringArrayAllowEmpty'
+
+function readStringArrayAllowEmpty(buf ByteArray, offset ByteOffset) returns (StringArray, ByteOffset) throws CacheCorruption
+	let count = readDword(buf, offset: offset)
+	var pos = offset + 4
+	var arr = StringArray.create()
+	for _ in 0 upto count 'eachString'
+		let (s, p) = try readOptionalStringDefaultEmpty(buf, offset: pos)
+		pos = p
+		arr.push(s)
+	end 'eachString'
+	return (arr, pos)
+end 'readStringArrayAllowEmpty'
+
 // --- WhereClauseArray ---
 //
 // Each entry is `(paramName, requiredTraitName, declaringTypeName)`. Used by
@@ -3234,10 +3157,10 @@ function readWhereClauseArray(buf ByteArray, offset ByteOffset) returns (WhereCl
 	return (arr, pos)
 end 'readWhereClauseArray'
 
-function writeMaxonTypeArray(project Project, buf ByteArray, arr MaxonTypeArray) throws CacheCorruption
+function writeMaxonTypeArray(tables MaxonTypeWriteTables, buf ByteArray, arr MaxonTypeArray) throws CacheCorruption
 	writeDword(buf, value: arr.count())
 	for t in arr 'eachType'
-		try writeMaxonType(project, buf: buf, t: t)
+		try writeMaxonType(tables, buf: buf, t: t)
 	end 'eachType'
 end 'writeMaxonTypeArray'
 
@@ -3326,54 +3249,200 @@ function readInterfaceTypeRegistry(buf ByteArray, offset ByteOffset) returns (In
 end 'readInterfaceTypeRegistry'
 
 // --- GenericInstanceRegistry ---
+//
+// v81 (Phase 3.5): the registry is serialized as an ORDERED FLAT LIST in
+// capture order (position == library GenericInstanceId), and a generic-instance
+// arg references an EARLIER entry by its gid (a back-reference), not by its full
+// recursive payload. This is the load-bearing change. The old codec serialized
+// each arg's full recursive payload and the reader re-derived it via
+// `readMaxonGenericInstance`'s inner-first interning, which assigned the
+// destination gids in a DIFFERENT order than the writer (nested generics were
+// interned before their container) — the divergence `writerGidToProjectGid`
+// existed to paper over. Under back-referenced ordered replay the reader interns
+// each entry in the exact serialized order, so destination gid == cache gid by
+// construction; the entry whose payload is a back-ref simply looks the earlier
+// gid up. A wrong gid here is SILENT (wrong layout descriptor → element walk
+// skipped → memory LEAK, e.g. `Array with String` mislabeled
+// `__layout_Array_SlotState`), so the replay asserts position == gid.
 
-function writeGenericInstanceRegistry(project Project, buf ByteArray, registry GenericInstanceRegistry) throws CacheCorruption
+// Registry-aware MaxonType writer: identical to `writeMaxonType` EXCEPT the
+// `genericInstance(g)` arm emits the gid `g` as a back-reference (the registry
+// is in cache id-space, so `g` is already a library-local gid referencing an
+// EARLIER list entry — a strict DAG). Function-type arms recurse through this
+// same codec so a generic instance nested inside a function-typed arg is also a
+// back-ref, keeping the whole arg tree order-faithful.
+function writeGenericRegistryType(tables MaxonTypeWriteTables, buf ByteArray, t MaxonType) throws CacheCorruption
+	writeDword(buf, value: t.ordinal)
+	match t 'payload'
+		unresolved then break
+		boolean then break
+		integer then break
+		float then break
+		string then break
+		character then break
+		named(id) then try writeString(buf, s: tables.typeName(id))
+		function(id) then try writeGenericRegistryFunctionPayload(tables, buf: buf, id: id)
+		typeParameter(id) then try writeTypeParameterPayload(tables, buf: buf, id: id)
+		// The one divergence from `writeMaxonType`: emit the gid as a back-ref to
+		// an earlier list entry instead of the recursive instance payload.
+		genericInstance(g) then writeQword(buf, value: g)
+		interface(id) then try writeString(buf, s: tables.interfaceRegistry.getName(id))
+		constInt(value) then writeQword(buf, value: value)
+		opaquePointer to cstring then break
+	end 'payload'
+end 'writeGenericRegistryType'
+
+function writeGenericRegistryFunctionPayload(tables MaxonTypeWriteTables, buf ByteArray, id FunctionTypeId) throws CacheCorruption
+	let (paramTypes, returnType) = tables.functionTypes.get(id)
+	writeDword(buf, value: paramTypes.count())
+	for i in 0 upto paramTypes.count() 'eachParam'
+		let p = try paramTypes.get(i) otherwise panic("writeGenericRegistryFunctionPayload: paramTypes.get OOB at {i}")
+		try writeGenericRegistryType(tables, buf: buf, t: p)
+	end 'eachParam'
+	try writeGenericRegistryReturnType(tables, buf: buf, rt: returnType)
+end 'writeGenericRegistryFunctionPayload'
+
+function writeGenericRegistryReturnType(tables MaxonTypeWriteTables, buf ByteArray, rt MaxonReturnType) throws CacheCorruption
+	writeDword(buf, value: rt.ordinal)
+	match rt 'payload'
+		void then break
+		value(inner) then try writeGenericRegistryType(tables, buf: buf, t: inner)
+	end 'payload'
+end 'writeGenericRegistryReturnType'
+
+function writeGenericRegistryTypeArray(tables MaxonTypeWriteTables, buf ByteArray, arr MaxonTypeArray) throws CacheCorruption
+	writeDword(buf, value: arr.count())
+	for t in arr 'eachType'
+		try writeGenericRegistryType(tables, buf: buf, t: t)
+	end 'eachType'
+end 'writeGenericRegistryTypeArray'
+
+function writeGenericInstanceRegistry(tables MaxonTypeWriteTables, buf ByteArray, registry GenericInstanceRegistry) throws CacheCorruption
 	writeDword(buf, value: registry.count())
 	for i in 0 upto registry.count() 'eachInst'
 		let (baseId, args) = registry.get(i)
 		// Persist the base name (not the local id) so the reader re-interns
 		// through the destination project's `typeNames` and gets a meaningful
-		// id in its own id space.
-		try writeString(buf, s: project.typeNames.get(baseId))
-		try writeMaxonTypeArray(project, buf: buf, arr: args)
+		// id in its own id space. `baseId` is a CACHE-id-space TypeNameId, so
+		// it resolves through the cache's own `typeNameTable` snapshot (Phase
+		// 3.5: never the consuming `project`, whose id space diverges).
+		try writeString(buf, s: tables.typeName(baseId))
+		try writeGenericRegistryTypeArray(tables, buf: buf, arr: args)
 	end 'eachInst'
 end 'writeGenericInstanceRegistry'
 
-// Read the on-disk generic-instance registry. Each writer-side entry is
-// interned into the fresh `data.genericInstances` (so the i-th entry
-// keeps writer-id i — needed by raw qword gid translation for
-// `layoutDescriptors`/`witnessTables`). The writer→project mapping is
-// recorded in `writerGidMap` by interning each entry's `(baseId, args)`
-// into `project.genericInstances` (idempotent — returns the existing id
-// when the recursive arg read already created it via
-// `readMaxonGenericInstance`). Polymorphic-slot writer entries whose args
-// contain `unresolved`/`typeParameter` placeholders also surface in
-// project as a side effect; downstream emission passes filter them via
-// `gidIsConditional`.
-function readGenericInstanceRegistry(project Project, buf ByteArray, offset ByteOffset, writerGidMap GenericInstanceIdArray) returns (GenericInstanceRegistry, ByteOffset) throws CacheCorruption
+// Registry-aware MaxonType reader: the symmetric counterpart of
+// `writeGenericRegistryType`. Identical to `readMaxonType` EXCEPT the
+// `genericInstance` arm reads a back-reference gid and produces
+// `MaxonType.genericInstance(g)` directly — it does NOT recurse into
+// `readMaxonGenericInstance` (whose inner-first interning is the ordering bug).
+// `g` references an EARLIER list entry already replayed at the SAME gid in both
+// `project.genericInstances` and `data.genericInstances`, so the back-ref is
+// meaningful in the destination id space (position == gid is established by the
+// ordered replay in `readGenericInstanceRegistry`).
+function readGenericRegistryType(project Project, buf ByteArray, offset ByteOffset) returns (MaxonType, ByteOffset) throws CacheCorruption
+	let raw = readDword(buf, offset: offset)
+	let pos = offset + 4
+	let kase = try MaxonType.unionCases.fromRawValue(raw) otherwise panic("corrupt cache: unknown MaxonType tag {raw} in generic-instance registry")
+	match kase 'tag'
+		boolean then return (MaxonType.boolean, pos)
+		integer then return (MaxonType.integer, pos)
+		float then return (MaxonType.float, pos)
+		string then return (MaxonType.string, pos)
+		character then return (MaxonType.character, pos)
+		named then return try readMaxonTypeNamed(project, buf: buf, offset: pos)
+		function then return try readGenericRegistryFunctionType(project, buf: buf, offset: pos)
+		unresolved then return (MaxonType.unresolved, pos)
+		typeParameter then return try readMaxonTypeParameter(project, buf: buf, offset: pos)
+		// Back-reference: the gid of an earlier, already-replayed list entry.
+		genericInstance then return (MaxonType.genericInstance(readQword(buf, offset: pos)), pos + 8)
+		interface then return try readMaxonInterface(project, buf: buf, offset: pos)
+		constInt then return (MaxonType.constInt(readQword(buf, offset: pos)), pos + 8)
+		opaquePointer then return (MaxonType.opaquePointer, pos)
+		cstring then return (MaxonType.cstring, pos)
+	end 'tag'
+end 'readGenericRegistryType'
+
+function readGenericRegistryFunctionType(project Project, buf ByteArray, offset ByteOffset) returns (MaxonType, ByteOffset) throws CacheCorruption
+	let paramCount = readDword(buf, offset: offset)
+	var pos = offset + 4
+	var paramTypes = MaxonTypeArray.create()
+	for _ in 0 upto paramCount 'eachParam'
+		let (p, nextPos) = try readGenericRegistryType(project, buf: buf, offset: pos)
+		paramTypes.push(p)
+		pos = nextPos
+	end 'eachParam'
+	let (returnType, endPos) = try readGenericRegistryReturnType(project, buf: buf, offset: pos)
+	let id = internFunctionType(project, paramTypes: paramTypes, returnType: returnType)
+	return (MaxonType.function(id), endPos)
+end 'readGenericRegistryFunctionType'
+
+function readGenericRegistryReturnTypeValue(project Project, buf ByteArray, offset ByteOffset) returns (MaxonReturnType, ByteOffset) throws CacheCorruption
+	let (inner, nextPos) = try readGenericRegistryType(project, buf: buf, offset: offset)
+	return (MaxonReturnType.value(inner), nextPos)
+end 'readGenericRegistryReturnTypeValue'
+
+function readGenericRegistryReturnType(project Project, buf ByteArray, offset ByteOffset) returns (MaxonReturnType, ByteOffset) throws CacheCorruption
+	let raw = readDword(buf, offset: offset)
+	let pos = offset + 4
+	let kase = try MaxonReturnType.unionCases.fromRawValue(raw) otherwise panic("corrupt cache: unknown MaxonReturnType tag {raw} in generic-instance registry")
+	match kase 'tag'
+		void then return (MaxonReturnType.void, pos)
+		value then return try readGenericRegistryReturnTypeValue(project, buf: buf, offset: pos)
+	end 'tag'
+end 'readGenericRegistryReturnType'
+
+function readGenericRegistryTypeArray(project Project, buf ByteArray, offset ByteOffset) returns (MaxonTypeArray, ByteOffset) throws CacheCorruption
+	let count = readDword(buf, offset: offset)
+	var pos = offset + 4
+	var arr = MaxonTypeArray.create()
+	for _ in 0 upto count 'eachType'
+		let (t, p) = try readGenericRegistryType(project, buf: buf, offset: pos)
+		pos = p
+		arr.push(t)
+	end 'eachType'
+	return (arr, pos)
+end 'readGenericRegistryTypeArray'
+
+// Read the on-disk generic-instance registry as an ORDERED FLAT LIST and replay
+// it IN ORDER (Phase 3.5). Entry k's args reference earlier entries by gid
+// back-ref (`readGenericRegistryType`), so by the time entry k is interned every
+// gid it references is already present at its serialized position. Interning
+// each entry into the FRESH `data.genericInstances` and into
+// `project.genericInstances` in lockstep makes both land at gid k, so the
+// destination gid == the cache gid by construction — the property that lets
+// `layoutDescriptors`/`witnessTables` keep their raw gids verbatim. The
+// `position == gid` assertions turn any ordering violation (a non-DAG registry,
+// a dedup collision) into a loud failure instead of a silent wrong-layout leak.
+function readGenericInstanceRegistry(project Project, buf ByteArray, offset ByteOffset) returns (GenericInstanceRegistry, ByteOffset) throws CacheCorruption
 	let count = readDword(buf, offset: offset)
 	var pos = offset + 4
 	var registry = GenericInstanceRegistry.create()
-	for _ in 0 upto count 'eachInst'
+	for k in 0 upto count 'eachInst'
 		let (baseName, p1) = try readString(buf, offset: pos)
 		pos = p1
-		let (args, p2) = try readMaxonTypeArray(project, buf: buf, offset: pos)
+		let (args, p2) = try readGenericRegistryTypeArray(project, buf: buf, offset: pos)
 		pos = p2
 		let baseId = project.typeNames.intern(baseName)
+		let dataGid = registry.intern(baseId, args: args)
+		if dataGid != k 'dataDesync'
+			panic("readGenericInstanceRegistry: data registry replay desync — entry interned at gid {dataGid} but serialized list position is {k} (registry is not a strict DAG, or a structural dedup collided)")
+		end 'dataDesync'
 		let projectGid = project.genericInstances.intern(baseId, args: args)
-		_ = registry.intern(baseId, args: args)
-		writerGidMap.push(projectGid)
+		if projectGid != k 'projDesync'
+			panic("readGenericInstanceRegistry: project registry replay desync — entry interned at gid {projectGid} but serialized list position is {k}; the destination project's generic-instance prefix diverges from the cache-build's")
+		end 'projDesync'
 	end 'eachInst'
 	return (registry, pos)
 end 'readGenericInstanceRegistry'
 
 // --- IrInterface map ---
 
-function writeInterfaceMethodSig(project Project, buf ByteArray, sig InterfaceMethodSig) throws CacheCorruption
+function writeInterfaceMethodSig(tables MaxonTypeWriteTables, buf ByteArray, sig InterfaceMethodSig) throws CacheCorruption
 	try writeString(buf, s: sig.name)
 	try writeStringArray(buf, arr: sig.paramNames)
-	try writeMaxonTypeArray(project, buf: buf, arr: sig.paramTypes)
-	try writeMaxonReturnType(project, buf: buf, rt: sig.returnType)
+	try writeMaxonTypeArray(tables, buf: buf, arr: sig.paramTypes)
+	try writeMaxonReturnType(tables, buf: buf, rt: sig.returnType)
 	try writeThrowsClauseField(buf, clause: sig.throwsTypeName)
 	writeBoolByte(buf, b: sig.isStatic)
 	writeDword(buf, value: sig.line)
@@ -3392,7 +3461,7 @@ function readInterfaceMethodSig(project Project, buf ByteArray, offset ByteOffse
 	return (InterfaceMethodSig.create(name, paramNames: paramNames, paramTypes: paramTypes, returnType: returnType, throwsTypeName: throwsTypeName, isStatic: isStatic, line: line, column: column), p6 + 8)
 end 'readInterfaceMethodSig'
 
-function writeInterfaceMap(project Project, buf ByteArray, m IrInterfaceMap) throws CacheCorruption
+function writeInterfaceMap(tables MaxonTypeWriteTables, buf ByteArray, m IrInterfaceMap) throws CacheCorruption
 	writeDword(buf, value: m.count())
 	for (name, iface) in m 'eachIface'
 		try writeString(buf, s: name)
@@ -3401,7 +3470,7 @@ function writeInterfaceMap(project Project, buf ByteArray, m IrInterfaceMap) thr
 		try writeStringArray(buf, arr: iface.usesParams)
 		writeDword(buf, value: iface.methods.count())
 		for sig in iface.methods 'eachMethod'
-			try writeInterfaceMethodSig(project, buf: buf, sig: sig)
+			try writeInterfaceMethodSig(tables, buf: buf, sig: sig)
 		end 'eachMethod'
 		writeVisibility(buf, v: iface.visibility)
 		writeDword(buf, value: iface.line)
@@ -3414,7 +3483,7 @@ function writeInterfaceMap(project Project, buf ByteArray, m IrInterfaceMap) thr
 		writeDword(buf, value: iface.innerAliases.count())
 		for (aliasName, aliasType) in iface.innerAliases 'eachInnerAlias'
 			try writeString(buf, s: aliasName)
-			try writeMaxonType(project, buf: buf, t: aliasType)
+			try writeMaxonType(tables, buf: buf, t: aliasType)
 		end 'eachInnerAlias'
 	end 'eachIface'
 end 'writeInterfaceMap'
@@ -3468,13 +3537,13 @@ end 'readInterfaceMap'
 
 // --- ConformanceRegistry ---
 
-function writeConformanceRegistry(project Project, buf ByteArray, registry ConformanceRegistry) throws CacheCorruption
+function writeConformanceRegistry(tables MaxonTypeWriteTables, buf ByteArray, registry ConformanceRegistry) throws CacheCorruption
 	writeDword(buf, value: registry.count())
 	for i in 0 upto registry.count() 'eachConf'
 		let (typeName, ifaceName, withArgs) = registry.get(i)
 		try writeString(buf, s: typeName)
 		try writeString(buf, s: ifaceName)
-		try writeMaxonTypeArray(project, buf: buf, arr: withArgs)
+		try writeMaxonTypeArray(tables, buf: buf, arr: withArgs)
 	end 'eachConf'
 end 'writeConformanceRegistry'
 
@@ -3610,11 +3679,11 @@ end 'readWhereClauseMapByName'
 
 // --- GenericTypealiasMap ---
 
-function writeGenericTypealiasMap(project Project, buf ByteArray, m GenericTypealiasMap) throws CacheCorruption
+function writeGenericTypealiasMap(tables MaxonTypeWriteTables, buf ByteArray, m GenericTypealiasMap) throws CacheCorruption
 	writeDword(buf, value: m.count())
 	for (name, t) in m 'eachAlias'
 		try writeString(buf, s: name)
-		try writeMaxonType(project, buf: buf, t: t)
+		try writeMaxonType(tables, buf: buf, t: t)
 	end 'eachAlias'
 end 'writeGenericTypealiasMap'
 
@@ -3763,11 +3832,11 @@ end 'readGenericFunctionImplicitArityMap'
 
 // --- TopLevelVarMap (v55) ---
 
-function writeTopLevelVarMap(project Project, buf ByteArray, m TopLevelVarMap) throws CacheCorruption
+function writeTopLevelVarMap(tables MaxonTypeWriteTables, buf ByteArray, m TopLevelVarMap) throws CacheCorruption
 	writeDword(buf, value: m.count())
 	for (name, info) in m 'eachVar'
 		try writeString(buf, s: name)
-		try writeMaxonType(project, buf: buf, t: info.slotType)
+		try writeMaxonType(tables, buf: buf, t: info.slotType)
 		writeQword(buf, value: info.initialValue)
 		writeVisibility(buf, v: info.visibility)
 		try writeFilePath(buf, p: info.sourceFilePath)
