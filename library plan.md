@@ -254,7 +254,11 @@ field-by-field against `StdlibCacheData`):
   `layoutDescriptors`, `witnessTables`, `livenessRoots`, `moduleInitFuncs`, `initToStoredVars`,
   `topLevelVars`, `genericFunctionImplicitArity`, `staticRdataValues`, `unresolvedExtensions`,
   `extensionMethodWhereClauses`. (`writerGidToProjectGid` is in-memory only — recomputed on decode,
-  never serialized.)
+  never serialized — **but Phase 3.5 deletes it**: under the library-owned id-space, order-faithful
+  replay makes the consumer's gid == the cache's gid by construction, so there is nothing to translate.
+  Phase 3.5 also promotes `typeNameTable` / `constantStringTable` from in-memory rebuild to
+  **serialized authoritative** id-space tables and serializes `genericInstances` as an ordered flat
+  list — see that phase for why Tier-A must become self-contained so any consumer can persist.)
 - **Tier B — Inlinable Std IR (target-independent), stored per-function.** Today this is the
   monolithic `inlinerStdModule` (post-DCE StdModule snapshot the user inliner splices accessor
   bodies from) + `stdFuncEdges` (precomputed Std-DFE edges over it). For incremental generation
@@ -920,6 +924,101 @@ dependent target files invalidate. Plus the existing-harness gate: `cache-parity
 
 ---
 
+## Phase 3.5 — Library-owned id-space (CACHE_FORMAT_VERSION → 81): make Tier-A self-contained so any consumer can persist
+
+**Why this phase exists (the gap Phase 2 surfaced).** Once the cache lives in the shared library dir
+(Phase 2) and warming is removed, the *goal* is that any consumer — a spec-runner worker, an ordinary
+user build — reads the cache, lazily compiles the functions it first touches, and **persists** the
+grown cache so the next process reuses the bytecode. The first two work; **persist is broken by
+project-coupling in the codec.** Every id-bearing Tier-A field is serialized by resolving its dense
+id through the *consuming* `project`'s interners, not the cache's own snapshot. Ids are insertion-order
+indices (`StringInterner.intern`: `let id = values.count()`, `Project.maxon:1876`; same shape for
+`typeNames`/`genericInstances`/…), so a consumer whose id-space diverges from the cache-build project's
+**panics dereferencing a foreign id** when it re-serializes (`writeConstantValue`'s old
+`project.strings.get(foreignId)`). To avoid the panic the persist gate is forced off for every
+non-cache-build project, so the on-disk cache is stuck at **metadata-only stubs** — it never
+accumulates compiled bytecode. Spec workers each recompile stdlib from scratch every run, discarding
+the measured **~12.7× warm-build speedup** (CLI build #2 is 328 ms vs #1's 4187 ms precisely because
+the CLI path *can* persist). The fix: give the library cache its **own stable id-space** so the codec
+resolves through the cache's snapshots, never the consumer — making re-serialize project-independent.
+
+This is a **refinement of Phase 3's Tier-A format** (it changes exactly the `writerGidToProjectGid`
+serialize/recompute boundary Phase 3 defines) and a **hard prerequisite for relaxing the persist
+gate**; bring it forward here, before Phase 4's N-library restore loop. **Scope: stdlib only** — the
+mechanism generalizes to N libraries via stacked base-offset prefixes, folded into Phase 4.
+
+**The model — "library interned first → its ids are a stable reserved prefix."** Per-library *compound*
+`(library, id)` keys were rejected: `MaxonType` arms carry a bare integer (`named(id)`,
+`genericInstance(id)`, …, `MaxonDialect.maxon:69-118`), the registries are dense single-namespace
+arrays (`GenericInstanceRegistry.get(id) == baseIds.get(id)`), and **~225 read sites across 14 files**
+index `project.*` by a bare id with no owner context — compound keys would be a pervasive rewrite.
+Instead, the library's registries are interned into a fresh consumer **in the library's own
+deterministic capture order**; because interning is order-deterministic and the library is restored
+into an empty project before any user type, entry *k* lands at id `base + k` in **every** consumer.
+The cache's serialized ids are then directly meaningful after restore — no per-consumer translation.
+
+**Files.** `StdlibCache.maxon` (codec, snapshot tables, restore/replay, `CACHE_FORMAT_VERSION`,
+`writeGenericInstanceRegistry`, delete `writerGidToProjectGid`/`writerGidToDataGid` + the decode
+identity-mirror); `IR/Maxon/MaxonDialect.maxon` (`writeMaxonType` + payload writers take the cache's
+tables, not `project`); `Project.maxon` (`writeConstantValue` — already converted to take a
+`StringArray` snapshot, the template for the rest); `StdlibLoader.maxon` (relax the persist gate).
+
+**Design decisions (locked).**
+- **Replace, don't augment.** `writerGidToProjectGid`/`writerGidToDataGid` + the `translate*` family
+  exist only to recover writer gid ordering that `readMaxonGenericInstance`'s inner-first arg interning
+  loses (`StdlibCache.maxon:561-571`). Order-faithful flat replay makes destination gid == cache gid by
+  construction, so they become dead and are **deleted** (Step 4), with the mm-leak check as the cutover
+  safety net.
+- **Format bump 80 → 81.** `typeNameTable` + `constantStringTable` (today in-memory-only, rebuilt on
+  decode via the identity-mirror) become the **authoritative, serialized** id-space; `genericInstances`
+  is serialized as an **ordered flat list** (capture order; payloads reference library-local
+  TypeNameIds + earlier-entry gids, a strict DAG). One-time regeneration on first run; no migration.
+- **Lazy-append.** A consumer that lazily compiles a not-yet-cached library function may intern **new**
+  ids; they are appended at the library tail `[base+N, …)` in intern order and captured into `data` in
+  that order, so re-serialize preserves position == id. The originally-cached **prefix is never
+  perturbed**; only the freshly-appended tail can differ between two workers that race — **last-writer-
+  wins** (the loser re-reads the winning file next run), accepted (a content-key sort of the delta is a
+  deferred option if byte-identical cross-worker caches are ever needed).
+- **Unify both capture paths.** `captureStdlibMetadata` (in-memory warmup→worker path) snapshots in the
+  same library order the disk codec uses, so the `translate*`-as-identity property holds on both paths.
+
+**Incremental steps (each build + spec-green before the next).**
+1. **De-couple the remaining write sites** (`writeMaxonType` named/interface/typeParameter/
+   genericInstance/function payloads, `MaxonDialect.maxon:890-954`; `writeGenericInstanceRegistry`,
+   `StdlibCache.maxon:3400`) to resolve through the cache's `data` snapshots instead of `project` —
+   mirroring the `writeConstantValue(data.constantStringTable, …)` change already landed
+   (`StdlibCache.maxon:1282`). No format change yet (snapshots still rebuilt on decode); the win is that
+   re-serialize no longer dereferences `project`. Verify: re-serialize a cache from a non-cache-build
+   project → no panic.
+2. **Serialize `typeNameTable` + `constantStringTable`; bump `CACHE_FORMAT_VERSION` to 81.** Reader
+   loads them directly; drop the identity-mirror rebuild for these two.
+3. **(RISKIEST) Serialize `genericInstances` as an ordered flat list + order-faithful replay.** Reader
+   replays the flat list in order, interning each entry's `(baseId, args)` from already-replayed
+   entries, NOT by recursive re-derivation. **A subtle ordering bug here is silent: wrong gid → wrong
+   layout descriptor → memory LEAK** (the documented `Array with String` / `__layout_Array_SlotState`
+   failure, `StdlibCache.maxon:582-585`), so the acceptance gate for this step is the **mm-leak check**
+   (exit ≠ 101) on generic-collection tests, not just pass/fail.
+4. **Delete `writerGidToProjectGid`/`writerGidToDataGid` + the `translate*` family** for library ids +
+   the decode identity-mirror. Confirm by grep no read path still consults them.
+5. **Lazy-append:** new library ids appended at the tail in intern order, captured into `data`. Verify:
+   a worker that compiles a previously-uncompiled stdlib fn and re-serializes produces a cache whose
+   prefix is byte-identical to the input and whose tail carries the new fn's ids.
+6. **Relax the persist gate** for non-cache-build projects.
+
+**Invariants.** The library occupies id range `[base, base+N)` identically in every consumer. The codec
+resolves every id through `data`'s own tables — fully project-independent. The originally-cached prefix
+is stable across consumers and across re-serializes. The name-keyed linker (Phase A1) is untouched —
+this changes Tier-A metadata only, not Tier-C linking.
+
+**Verify (the payoff).** **Cold spec run GROWS the on-disk cache with compiled bytecode** (inspect
+`stdlib-*.mxc` size before/after a cold `run_spec_test` — it must exceed metadata-only, now carrying
+`functions`/`wasmFunctions` bodies). **A 2nd cold run reuses it** (measurably faster, no stdlib codegen
+— assert via `--log=compiler`). **Cross-worker sharing observable** (worker A's persisted bytecode is
+read by worker B, not recompiled). Plus the standard gates: full selfhosted + wasm spec green from a
+cold cache; `cache-parity.md` byte-identity preserved; generic-collection mm-leak check clean.
+
+---
+
 ## Phase 4 — Generalize linker + cross-library inlining/DFE to N library caches
 
 **Goal.** Make codegen/link consume the *union* of all registered libraries instead of the single
@@ -1297,6 +1396,7 @@ relinked by name).
 | 1 | Library type + registry; stdlib = lib#0; extract builtin bootstrap | identical to pre-change | no |
 | 2 | cache → `<libDir>/.maxon/cache`; **fingerprint-in-filename** (coexist, no auto-prune); **atomic write**; `maxon clean`; drop sticky pin | path-only, identical bytes | no |
 | 3 | split cache into 3 tiers (shared meta A+B / per-target C) | identical exe bytes | **70** |
+| 3.5 | **library-owned id-space**: codec resolves through cache's own snapshots, not the consumer; order-faithful replay; delete `writerGidToProjectGid`/`translate*`; relax persist gate so workers persist+share | cold spec run grows on-disk cache; cross-worker sharing | **81** (real version bump) |
 | 4 | linker/inliner/DFE over N caches via combined accessors | combined-of-one == stdlib-only | no |
 | 5 | `--library=DIR` + `build.maxon library("…")`; external lib compile+cache | suite identical with 0 extra libs | no |
 | 6 | per-file/per-function incremental cache update | incremental == full rebuild | **71** |
