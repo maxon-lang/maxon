@@ -498,3 +498,95 @@ end 'main'
 ```exitcode
 7
 ```
+
+### Cross-file range arm where a misrouted enum would falsely report E2027
+
+The sharpest form of the shadowing hazard: the small union (`NarrowOp`) covers a
+bare case plus a range arm that do NOT overlap in `NarrowOp`'s OWN ordinals, but
+a larger union declared earlier (`WideOp`) shares all the case names with a
+DIFFERENT ordering in which the bare case falls INSIDE the range. Here `ret` is
+ordinal 0 in `NarrowOp` (outside `call`..`param`), but ordinal 1 in `WideOp`
+(between `call` and `param`). If the parser expanded the range `call to param`
+against `WideOp` (the misroute), it would see `ret` as covered and emit a
+spurious E2027 against the prior `ret` arm. Overlap detection is deferred to
+TypeResolution, which expands the range against `NarrowOp`'s real ordinals, so
+this exhaustive non-overlapping match compiles cleanly.
+
+<!-- test: cross-file-range-no-false-overlap -->
+```maxon
+// --- file: ops.maxon
+export union WideOp
+	call
+	ret
+	param
+	extra
+end 'WideOp'
+
+export union NarrowOp
+	ret
+	call
+	param
+end 'NarrowOp'
+
+// --- file: main.maxon
+typealias Code = int(0 to 125)
+
+function classify(op NarrowOp) returns Code
+	return match op 'check'
+		ret gives 1
+		call to param gives 2
+	end 'check'
+end 'classify'
+
+function describeWide(op WideOp) returns Code
+	return match op 'check'
+		call to extra gives 9
+	end 'check'
+end 'describeWide'
+
+function main() returns ExitCode
+	let narrow = classify(NarrowOp.call)
+	let wide = describeWide(WideOp.ret)
+	if wide == 9 'wideOk'
+		return narrow
+	end 'wideOk'
+	return 99
+end 'main'
+```
+```exitcode
+2
+```
+
+### Cross-file range arm with a GENUINE overlap still reports E2027
+
+The deferral must not suppress real overlaps. Here the range `call to param`
+genuinely covers `ret` (ordinal 1) in the scrutinee's OWN union, so the trailing
+bare `ret` arm is a real overlap. TypeResolution detects it against the resolved
+enum and reports E2027 at the offending arm's line/column.
+
+<!-- test: error.cross-file-range-genuine-overlap -->
+```maxon
+// --- file: ops.maxon
+export union WideOp
+	call
+	ret
+	param
+end 'WideOp'
+
+// --- file: main.maxon
+typealias Code = int(0 to 125)
+
+function classify(op WideOp) returns Code
+	return match op 'check'
+		call to param gives 1
+		ret gives 2
+	end 'check'
+end 'classify'
+
+function main() returns ExitCode
+	return classify(WideOp.call)
+end 'main'
+```
+```maxoncstderr
+error E2027: specs/fragments/enum-match-exhaustive/error.cross-file-range-genuine-overlap.test:15:3: overlapping pattern in match: 'ret' is already covered
+```

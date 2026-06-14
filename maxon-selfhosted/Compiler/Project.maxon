@@ -1217,6 +1217,43 @@ end 'PendingMatchRangeArm'
 
 export typealias PendingMatchRangeArmArray = Array with PendingMatchRangeArm
 
+// One arm of a deferred match recorded in SOURCE ORDER for the E2027
+// overlap-detection replay in TypeResolution. Unlike `coveredCaseNames` /
+// `rangeArms` (which are unordered coverage accumulators used only for the
+// E2026 missing-case computation), the ordered `arms` list lets TR replay
+// coverage arm-by-arm against the scrutinee's CORRECT resolved enum and
+// report E2027 ("overlapping pattern") when an arm — bare or range-expanded —
+// covers a case a PRIOR arm already covered. Each arm carries its own source
+// line/column so the diagnostic lands at the offending arm, exactly like the
+// C# bootstrap (which throws at the pattern's line/col).
+//
+// A bare-case arm stores its case name(s) in `caseNames` (more than one for an
+// `a or b` chain) and leaves the range fields empty. A range arm sets
+// `isRange` and stores the raw endpoint case NAMES (`loCaseName to|upto
+// hiCaseName`); `hiCaseName` is empty when `hasMaxSentinel` is true
+// (`loCaseName upto max`). Endpoints are stored as source names (never
+// parser-resolved ordinals) so a cross-file misroute can't corrupt the replay.
+export type PendingMatchArm
+	export let isRange as bool
+	export let caseNames as StringArray
+	export let loCaseName as String
+	export let hiCaseName as String
+	export let isUpto as bool
+	export let hasMaxSentinel as bool
+	export let line as LineNumber
+	export let column as ColumnNumber
+
+	export static function bareCases(caseNames StringArray, line LineNumber, column ColumnNumber) returns PendingMatchArm
+		return Self{isRange: false, caseNames: caseNames, loCaseName: "", hiCaseName: "", isUpto: false, hasMaxSentinel: false, line: line, column: column}
+	end 'bareCases'
+
+	export static function range(loCaseName String, hiCaseName String, isUpto bool, hasMaxSentinel bool, line LineNumber, column ColumnNumber) returns PendingMatchArm
+		return Self{isRange: true, caseNames: StringArray.create(), loCaseName: loCaseName, hiCaseName: hiCaseName, isUpto: isUpto, hasMaxSentinel: hasMaxSentinel, line: line, column: column}
+	end 'range'
+end 'PendingMatchArm'
+
+export typealias PendingMatchArmArray = Array with PendingMatchArm
+
 // E2026 deferred enum-match-exhaustiveness check. The self-hosted parser is a
 // pure parser and cannot resolve a cross-file / parameter scrutinee's type at
 // parse time; for such matches `header.scrutineeType` is `MaxonType.unresolved`
@@ -1226,25 +1263,34 @@ export typealias PendingMatchRangeArmArray = Array with PendingMatchRangeArm
 // parser records the coverage data here and TypeResolution validates it AFTER
 // every scrutinee's enum type is resolved (mirrors PendingTernaryArmCheck).
 //
-// `coveredCaseNames` holds the bare enum-case arm names; `rangeArms` holds the
-// enum-case range arms whose endpoints TR expands against the resolved enum.
-// Both are recorded WITHOUT consulting the enum registry, so the deferred check
-// sees exactly the source-level coverage independent of any parser misroute.
-// `scrutineeName` (source-level variable name) plus `funcName` let TR find the
-// resolved scrutinee enum type via that function's enumMatchArm ops. The error
-// is emitted at `errorLine`/`errorColumn` (the closing `end` token captured at
-// the call site) so the diagnostic position matches the inline path exactly.
+// `arms` carries the match's enum coverage in SOURCE ORDER (one entry per arm,
+// each with its own line/column). It is the single source of truth for the
+// deferred drain: TR expands every arm against the RESOLVED scrutinee enum to
+// compute both the E2026 missing-case union AND the E2027 overlap replay. Arms
+// are recorded WITHOUT consulting the enum registry, so a parser misroute can't
+// corrupt them — the parser CANNOT expand an enum-range arm itself when the
+// scrutinee type is unresolved (it would expand against a misrouted
+// same-case-name enum). `scrutineeName` (source-level variable name) plus
+// `funcName` let TR find the resolved scrutinee enum type via that function's
+// enumMatchArm ops. The E2026 error is emitted at
+// `errorLine`/`errorColumn` (the closing `end` token captured at the call site)
+// so the missing-case diagnostic position matches the inline path exactly; the
+// E2027 error is emitted at the offending arm's own line/column.
+// `hasDefault` records whether the match had a `default` arm. The E2027
+// overlap replay runs regardless (a genuine overlap is an error even with a
+// default, matching the parser's old unconditional `markEnumRangeCases`); the
+// E2026 missing-case check is suppressed when `hasDefault` is true.
 export type PendingMatchExhaustivenessCheck
 	export let funcName as String
 	export let scrutineeName as String
-	export let coveredCaseNames as StringArray
-	export let rangeArms as PendingMatchRangeArmArray
+	export let arms as PendingMatchArmArray
+	export let hasDefault as bool
 	export let errorLine as LineNumber
 	export let errorColumn as ColumnNumber
 	export let filePath as FilePath
 
-	export static function create(funcName String, scrutineeName String, coveredCaseNames StringArray, rangeArms PendingMatchRangeArmArray, errorLine LineNumber, errorColumn ColumnNumber, filePath FilePath) returns PendingMatchExhaustivenessCheck
-		return Self{funcName: funcName, scrutineeName: scrutineeName, coveredCaseNames: coveredCaseNames, rangeArms: rangeArms, errorLine: errorLine, errorColumn: errorColumn, filePath: filePath}
+	export static function create(funcName String, scrutineeName String, arms PendingMatchArmArray, hasDefault bool, errorLine LineNumber, errorColumn ColumnNumber, filePath FilePath) returns PendingMatchExhaustivenessCheck
+		return Self{funcName: funcName, scrutineeName: scrutineeName, arms: arms, hasDefault: hasDefault, errorLine: errorLine, errorColumn: errorColumn, filePath: filePath}
 	end 'create'
 end 'PendingMatchExhaustivenessCheck'
 

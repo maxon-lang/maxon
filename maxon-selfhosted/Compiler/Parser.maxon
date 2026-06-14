@@ -7715,19 +7715,23 @@ export type Parser
 	// `rangeArms` carry the source-level coverage (collected WITHOUT consulting
 	// the enum registry, so a parser misroute can't corrupt them); TR expands
 	// the ranges against the scrutinee's CORRECT resolved enum.
-	function recordDeferredMatchExhaustiveness(hasEnumArm bool, hasDefault bool, scrutineeIsKnownNonEnum bool, scrutineeName ByteArray, coveredCaseNames StringArray, rangeArms PendingMatchRangeArmArray, errorLine LineNumber, errorColumn ColumnNumber)
+	// The check is recorded whenever the match has an enum-case arm on a
+	// not-statically-non-enum scrutinee — even WITH a `default` — because TR's
+	// drain runs the E2027 overlap replay regardless of `default` (a genuine
+	// overlap is still an error), and only skips the E2026 missing-case check
+	// when `hasDefault` is true. This replaces the parser's old unconditional
+	// `markEnumRangeCases`, which mis-expanded enum-range arms against a
+	// possibly-misrouted same-case-name enum.
+	function recordDeferredMatchExhaustiveness(hasEnumArm bool, hasDefault bool, scrutineeIsKnownNonEnum bool, scrutineeName ByteArray, arms PendingMatchArmArray, errorLine LineNumber, errorColumn ColumnNumber)
 		if not hasEnumArm 'noEnum'
 			return
 		end 'noEnum'
-		if hasDefault 'hasDefault'
-			return
-		end 'hasDefault'
 		if scrutineeIsKnownNonEnum 'nonEnumScrutinee'
 			// A statically-known non-enum scrutinee can't be exhaustiveness-
 			// checked here; union exhaustiveness is handled downstream.
 			return
 		end 'nonEnumScrutinee'
-		project.pendingMatchExhaustivenessChecks.push(PendingMatchExhaustivenessCheck.create(currentFunc.name, scrutineeName: String.from(scrutineeName), coveredCaseNames: coveredCaseNames, rangeArms: rangeArms, errorLine: errorLine, errorColumn: errorColumn, filePath: filePath))
+		project.pendingMatchExhaustivenessChecks.push(PendingMatchExhaustivenessCheck.create(currentFunc.name, scrutineeName: String.from(scrutineeName), arms: arms, hasDefault: hasDefault, errorLine: errorLine, errorColumn: errorColumn, filePath: filePath))
 	end 'recordDeferredMatchExhaustiveness'
 
 	// Append this arm's source-level enum coverage to the deferred-check
@@ -7736,12 +7740,20 @@ export type Parser
 	// hiCaseName, isUpto, hasMaxSentinel)` entry. Recorded straight from the
 	// parsed pattern WITHOUT touching the enum registry so a cross-file
 	// misroute can't poison the coverage set.
-	function collectDeferredArmCoverage(patterns MatchPatternList, coveredCaseNames StringArray, rangeArms PendingMatchRangeArmArray)
+	//
+	// The same coverage is ALSO appended to `arms` in source order (with the
+	// arm's own line/column) so TypeResolution can replay it arm-by-arm to
+	// detect E2027 overlaps against the resolved enum — the unordered
+	// `coveredCaseNames` / `rangeArms` accumulators only support the E2026
+	// missing-case computation.
+	function collectDeferredArmCoverage(patterns MatchPatternList, coveredCaseNames StringArray, rangeArms PendingMatchRangeArmArray, arms PendingMatchArmArray)
 		let firstPattern = patterns.first()
 		if firstPattern.isEnumRange 'isRange'
 			rangeArms.push(PendingMatchRangeArm.create(firstPattern.loCaseName, hiCaseName: firstPattern.hiCaseName, isUpto: firstPattern.isUpto, hasMaxSentinel: firstPattern.hasMaxSentinel))
+			arms.push(PendingMatchArm.range(firstPattern.loCaseName, hiCaseName: firstPattern.hiCaseName, isUpto: firstPattern.isUpto, hasMaxSentinel: firstPattern.hasMaxSentinel, line: firstPattern.token.line, column: firstPattern.token.column))
 			return
 		end 'isRange'
+		var armCaseNames = StringArray.create()
 		for pattern in patterns.patterns 'eachPattern'
 			let isEnumCasePattern = match pattern.kind 'k'
 				defaultArm gives false
@@ -7751,8 +7763,12 @@ export type Parser
 			end 'k'
 			if isEnumCasePattern 'isEnumCase'
 				coveredCaseNames.push(pattern.caseName)
+				armCaseNames.push(pattern.caseName)
 			end 'isEnumCase'
 		end 'eachPattern'
+		if armCaseNames.count() > 0 'hasBareCases'
+			arms.push(PendingMatchArm.bareCases(armCaseNames, line: firstPattern.token.line, column: firstPattern.token.column))
+		end 'hasBareCases'
 	end 'collectDeferredArmCoverage'
 
 	// Return the scrutinee's enum name when its MaxonType resolves to a
@@ -7789,21 +7805,57 @@ export type Parser
 		throw EnumCaseProbeError.notFound
 	end 'enumCaseNameAtOrdinal'
 
-	// Mark every case name in [loValue..hiValue] (inclusive of lo; upper
-	// inclusive for `to`, exclusive for `upto`) as covered. Used after
-	// detecting an enum-case range arm so exhaustiveness sees the
-	// ordinals the range spans.
-	function markEnumRangeCases(seenKeys ReferencedVarSet, pattern MatchPatternSpec)
-		let upperInclusive = pattern.hiValue if not pattern.isUpto else pattern.hiValue - 1
-		var i = pattern.loValue
+	// Mark every case name covered by an enum-case range arm into `seenKeys`,
+	// reporting E2027 when a covered case is already present. Used on the INLINE
+	// path only (the scrutinee enum is known at parse time — `scrutineeEnumName`).
+	//
+	// The range is expanded against the SCRUTINEE enum's own case positions,
+	// resolved from the raw endpoint case NAMES (`pattern.loCaseName` /
+	// `pattern.hiCaseName`) — NOT from `pattern.enumOwnerName` / `pattern.loValue`
+	// / `pattern.hiValue`, which `parseEnumRangePattern` may have misrouted to a
+	// DIFFERENT same-case-name enum (the E2027 bug: e.g. `Big` shadowing the
+	// intended `Small`). Endpoints that don't name a case of the scrutinee enum
+	// are skipped — TR surfaces the canonical unknown-case diagnostic.
+	function markEnumRangeCases(seenKeys ReferencedVarSet, pattern MatchPatternSpec, scrutineeEnumName String)
+		var enumCases = EnumCaseArray.create()
+		var caseByName = CaseIndexMap.create()
+		var enumKnown = false
+		if let resolvedEnum = try project.enumTypes.get(scrutineeEnumName) 'isResolved'
+			enumCases = resolvedEnum.cases
+			caseByName = resolvedEnum.caseByName
+			enumKnown = true
+		end 'isResolved' else 'tryUnresolved'
+			if let unresolvedEnum = try project.unresolvedEnums.get(scrutineeEnumName) 'isUnresolved'
+				enumCases = unresolvedEnum.cases
+				caseByName = buildCaseByNameFromCases(unresolvedEnum.cases)
+				enumKnown = true
+			end 'isUnresolved'
+		end 'tryUnresolved'
+		if not enumKnown 'noEnum'
+			return
+		end 'noEnum'
+
+		let loOrdinalRaw = try caseByName.get(pattern.loCaseName) otherwise return
+		let loOrdinal = loOrdinalRaw as ParsedInt
+		var hiOrdinal = (enumCases.count() - 1) as ParsedInt
+		if not pattern.hasMaxSentinel 'lookupHi'
+			let hiOrdinalRaw = try caseByName.get(pattern.hiCaseName) otherwise return
+			hiOrdinal = hiOrdinalRaw as ParsedInt
+		end 'lookupHi'
+
+		let upperInclusive = hiOrdinal if not pattern.isUpto else (hiOrdinal - 1)
+		let caseCount = enumCases.count() as ParsedInt
+		var i = loOrdinal
 		while i <= upperInclusive 'each'
-			if let name = try enumCaseNameAtOrdinal(pattern.enumOwnerName, ordinal: i) 'hit'
-				if seenKeys.contains(name) 'isDup'
-					reportCompileError(project, code: ErrorCode.parserMatchDuplicatePattern, message: "overlapping pattern in match: '{name}' is already covered", line: pattern.token.line, column: pattern.token.column, filePath: filePath)
-				end 'isDup' else 'newName'
-					seenKeys.insert(name)
-				end 'newName'
-			end 'hit'
+			if i >= 0 and i < caseCount 'inBounds'
+				if let c = try enumCases.get(i as ElementCount) 'hit'
+					if seenKeys.contains(c.name) 'isDup'
+						reportCompileError(project, code: ErrorCode.parserMatchDuplicatePattern, message: "overlapping pattern in match: '{c.name}' is already covered", line: pattern.token.line, column: pattern.token.column, filePath: filePath)
+					end 'isDup' else 'newName'
+						seenKeys.insert(c.name)
+					end 'newName'
+				end 'hit'
+			end 'inBounds'
 			i = i + 1
 		end 'each'
 	end 'markEnumRangeCases'
@@ -8257,13 +8309,24 @@ export type Parser
 		// when the scrutinee type is unresolved at parse time). Collected
 		// independently of `seenKeys` so a parser range-ordinal misroute can't
 		// poison the coverage TypeResolution validates against.
+		// `deferredArms` is the SOURCE-ORDERED arm list TR replays for E2027.
 		var deferredCoveredCaseNames = StringArray.create()
 		var deferredRangeArms = PendingMatchRangeArmArray.create()
+		var deferredArms = PendingMatchArmArray.create()
 		// E2046 must gate on the scrutinee type, not on pattern shape:
 		// `parseOneMatchPattern`'s catch-all synthesizes an `enumCase` pattern
 		// for any non-int/non-char/non-default token (string / float literals
 		// included), so `hasEnumArm` over-fires on non-enum scrutinees.
 		let scrutineeIsKnownNonEnum = matchScrutineeIsKnownNonEnum(header.scrutineeType)
+		// When the scrutinee type resolves to a known enum/union at parse time
+		// we expand enum-range arms inline (against the CORRECT enum, named by
+		// `scrutineeEnumNamePreLoop`); otherwise expansion is DEFERRED to TR.
+		// `markEnumRangeCases` (which reports E2027 and seeds `seenKeys`) runs on
+		// the inline path ONLY — on the deferred path it could expand against a
+		// misrouted same-case-name enum (the E2027 bug), so TR's arm-replay
+		// handles both coverage and overlap there instead.
+		let scrutineeEnumNamePreLoop = enumScrutineeDisplayNameFromType(header.scrutineeType)
+		let willDeferMatchExhaustiveness = scrutineeEnumNamePreLoop.isEmpty()
 
 		while not isMatchArmsEnd() 'arms'
 			let armPrevPos = cursor.index()
@@ -8300,11 +8363,16 @@ export type Parser
 					lastEnumCaseName = rangeCaseName
 				end 'updateLast'
 				// Mark every covered ordinal's case name in seenKeys so
-				// enum exhaustiveness sees the range's contribution.
-				markEnumRangeCases(seenKeys, pattern: patterns.first())
+				// enum exhaustiveness sees the range's contribution. INLINE PATH
+				// ONLY: on the deferred path the range's ordinals may be misrouted
+				// to a same-case-name enum (the E2027 bug), so the overlap +
+				// coverage are computed in TR's arm-replay instead.
+				if not willDeferMatchExhaustiveness 'inlineRangeMark'
+					markEnumRangeCases(seenKeys, pattern: patterns.first(), scrutineeEnumName: scrutineeEnumNamePreLoop)
+				end 'inlineRangeMark'
 			end 'recordEnumRange'
-			// Accumulate source-level coverage for the deferred E2026 check.
-			collectDeferredArmCoverage(patterns, coveredCaseNames: deferredCoveredCaseNames, rangeArms: deferredRangeArms)
+			// Accumulate source-level coverage for the deferred E2026/E2027 checks.
+			collectDeferredArmCoverage(patterns, coveredCaseNames: deferredCoveredCaseNames, rangeArms: deferredRangeArms, arms: deferredArms)
 			let arm = try buildMatchArmBlocks(header, armIndex: armIndex, patterns: patterns, separator: TokenKind.then)
 			if patterns.isDefault() 'recordDefault'
 				hasDefault = true
@@ -8398,15 +8466,14 @@ export type Parser
 		// Enum match exhaustiveness (E2026): if the match was on an enum and
 		// no `default` arm was given, every enum case must be covered. When the
 		// scrutinee's MaxonType resolves to a known registered enum/union at
-		// parse time, validate inline (preserves parse-time diagnostics + exact
-		// position for resolved-type scrutinees). Otherwise the scrutinee type
-		// is unresolved (cross-file / parameter) — the parser cannot name the
-		// enum without guessing, so defer the check to TypeResolution.
-		let scrutineeEnumName = enumScrutineeDisplayNameFromType(header.scrutineeType)
-		if not scrutineeEnumName.isEmpty() 'inlineExhaustiveness'
-			validateEnumExhaustiveness(hasEnumArm, hasDefault: hasDefault, scrutineeEnumName: scrutineeEnumName, coveredCaseNames: deferredCoveredCaseNames, rangeArms: deferredRangeArms, errorLine: cursor.current().line, errorColumn: cursor.current().column)
+		// parse time (`scrutineeEnumNamePreLoop`), validate inline (preserves
+		// parse-time diagnostics + exact position for resolved-type scrutinees).
+		// Otherwise the scrutinee type is unresolved (cross-file / parameter) —
+		// the parser cannot name the enum without guessing, so defer to TR.
+		if not willDeferMatchExhaustiveness 'inlineExhaustiveness'
+			validateEnumExhaustiveness(hasEnumArm, hasDefault: hasDefault, scrutineeEnumName: scrutineeEnumNamePreLoop, coveredCaseNames: deferredCoveredCaseNames, rangeArms: deferredRangeArms, errorLine: cursor.current().line, errorColumn: cursor.current().column)
 		end 'inlineExhaustiveness' else 'deferExhaustiveness'
-			recordDeferredMatchExhaustiveness(hasEnumArm, hasDefault: hasDefault, scrutineeIsKnownNonEnum: scrutineeIsKnownNonEnum, scrutineeName: header.scrutineeName, coveredCaseNames: deferredCoveredCaseNames, rangeArms: deferredRangeArms, errorLine: cursor.current().line, errorColumn: cursor.current().column)
+			recordDeferredMatchExhaustiveness(hasEnumArm, hasDefault: hasDefault, scrutineeIsKnownNonEnum: scrutineeIsKnownNonEnum, scrutineeName: header.scrutineeName, arms: deferredArms, errorLine: cursor.current().line, errorColumn: cursor.current().column)
 		end 'deferExhaustiveness'
 		// Non-enum match: every match needs an explicit `default` arm
 		// because integer / string / float / char scrutinees can't be
@@ -8517,14 +8584,23 @@ export type Parser
 		var defaultSeen = false
 		var hasEnumArm = false
 		var lastEnumCaseName = ""
-		// Source-level enum coverage for the deferred E2026 check (see the
-		// statement-form loop for the rationale).
+		// Source-level enum coverage for the deferred E2026/E2027 checks (see
+		// the statement-form loop for the rationale). `deferredArms` is the
+		// source-ordered arm list TR replays for E2027 overlap detection.
 		var deferredCoveredCaseNames = StringArray.create()
 		var deferredRangeArms = PendingMatchRangeArmArray.create()
+		var deferredArms = PendingMatchArmArray.create()
 		// E2046 must gate on the scrutinee type, not on pattern shape: the
 		// pattern parser's catch-all wraps non-int/non-char/non-default tokens
 		// as `enumCase`, which would otherwise mis-fire on string scrutinees.
 		let scrutineeIsKnownNonEnum = matchScrutineeIsKnownNonEnum(header.scrutineeType)
+		// See the statement-form loop: enum-range arms are expanded inline
+		// (against the CORRECT enum, named by `scrutineeEnumNamePreLoop`) only
+		// when the scrutinee type resolves at parse time; otherwise expansion is
+		// deferred to TR's arm-replay so a misrouted same-case-name enum can't
+		// drive E2027 (the bug being fixed).
+		let scrutineeEnumNamePreLoop = enumScrutineeDisplayNameFromType(header.scrutineeType)
+		let willDeferMatchExhaustiveness = scrutineeEnumNamePreLoop.isEmpty()
 
 		while not isMatchArmsEnd() 'arms'
 			let armPrevPos = cursor.index()
@@ -8555,11 +8631,16 @@ export type Parser
 					lastEnumCaseName = rangeCaseName
 				end 'updateLast'
 				// Mark every covered ordinal's case name in seenKeys so
-				// enum exhaustiveness sees the range's contribution.
-				markEnumRangeCases(seenKeys, pattern: patterns.first())
+				// enum exhaustiveness sees the range's contribution. INLINE PATH
+				// ONLY: on the deferred path the range's ordinals may be misrouted
+				// to a same-case-name enum (the E2027 bug), so the overlap +
+				// coverage are computed in TR's arm-replay instead.
+				if not willDeferMatchExhaustiveness 'inlineRangeMark'
+					markEnumRangeCases(seenKeys, pattern: patterns.first(), scrutineeEnumName: scrutineeEnumNamePreLoop)
+				end 'inlineRangeMark'
 			end 'recordEnumRange'
-			// Accumulate source-level coverage for the deferred E2026 check.
-			collectDeferredArmCoverage(patterns, coveredCaseNames: deferredCoveredCaseNames, rangeArms: deferredRangeArms)
+			// Accumulate source-level coverage for the deferred E2026/E2027 checks.
+			collectDeferredArmCoverage(patterns, coveredCaseNames: deferredCoveredCaseNames, rangeArms: deferredRangeArms, arms: deferredArms)
 			let arm = try buildMatchArmBlocks(header, armIndex: armIndex, patterns: patterns, separator: TokenKind.gives)
 			if patterns.isDefault() 'recordDefault'
 				hasDefault = true
@@ -8635,13 +8716,13 @@ export type Parser
 		end 'noDefault'
 
 		// Enum match-expression exhaustiveness (E2026): inline when the
-		// scrutinee type is a known enum/union at parse time, deferred to
-		// TypeResolution otherwise (see the statement-form loop's rationale).
-		let scrutineeEnumNameExpr = enumScrutineeDisplayNameFromType(header.scrutineeType)
-		if not scrutineeEnumNameExpr.isEmpty() 'inlineExhaustiveness'
-			validateEnumExhaustiveness(hasEnumArm, hasDefault: hasDefault, scrutineeEnumName: scrutineeEnumNameExpr, coveredCaseNames: deferredCoveredCaseNames, rangeArms: deferredRangeArms, errorLine: cursor.current().line, errorColumn: cursor.current().column)
+		// scrutinee type is a known enum/union at parse time
+		// (`scrutineeEnumNamePreLoop`), deferred to TypeResolution otherwise
+		// (see the statement-form loop's rationale).
+		if not willDeferMatchExhaustiveness 'inlineExhaustiveness'
+			validateEnumExhaustiveness(hasEnumArm, hasDefault: hasDefault, scrutineeEnumName: scrutineeEnumNamePreLoop, coveredCaseNames: deferredCoveredCaseNames, rangeArms: deferredRangeArms, errorLine: cursor.current().line, errorColumn: cursor.current().column)
 		end 'inlineExhaustiveness' else 'deferExhaustiveness'
-			recordDeferredMatchExhaustiveness(hasEnumArm, hasDefault: hasDefault, scrutineeIsKnownNonEnum: scrutineeIsKnownNonEnum, scrutineeName: header.scrutineeName, coveredCaseNames: deferredCoveredCaseNames, rangeArms: deferredRangeArms, errorLine: cursor.current().line, errorColumn: cursor.current().column)
+			recordDeferredMatchExhaustiveness(hasEnumArm, hasDefault: hasDefault, scrutineeIsKnownNonEnum: scrutineeIsKnownNonEnum, scrutineeName: header.scrutineeName, arms: deferredArms, errorLine: cursor.current().line, errorColumn: cursor.current().column)
 		end 'deferExhaustiveness'
 		// Non-enum match expression: requires an explicit `default` arm
 		// because integer / string / float / char scrutinees can't be

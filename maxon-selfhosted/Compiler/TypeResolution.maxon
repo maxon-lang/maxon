@@ -7769,11 +7769,19 @@ function recordScrutineeEnumEntry(project Project, scrutineeName ByteArray, scru
 	result.upsert(String.from(scrutineeName), value: enumName)
 end 'recordScrutineeEnumEntry'
 
-// Expand a deferred check's coverage against `enumName`'s cases and emit E2026
-// when any case is missing. The covered set is built WITHOUT any reliance on
-// the parser's (possibly misrouted) range ordinals — bare case names go in
-// directly, and each range arm is expanded against THIS enum's own case
-// positions via `caseByName`.
+// Validate a deferred match check against its resolved enum. Two diagnostics
+// are produced here because the parser could NOT compute either for an
+// unresolved scrutinee (it would have expanded enum-range arms against a
+// possibly-misrouted same-case-name enum):
+//   * E2027 (overlapping pattern) — replay the arms IN SOURCE ORDER, marking
+//     each covered case; if any arm covers a case a prior arm already covered,
+//     report at the offending arm's line/column. Runs regardless of `default`
+//     (a genuine overlap is an error even with a default), matching the
+//     parser's old unconditional `markEnumRangeCases`.
+//   * E2026 (non-exhaustive) — the union of all coverage must cover every case;
+//     suppressed when the match has a `default` arm.
+// Both expand ranges against THIS enum's own case positions via `caseByName`,
+// never the parser's range ordinals.
 function validateDeferredMatchExhaustiveness(project Project, check PendingMatchExhaustivenessCheck, enumName String)
 	var enumCases = EnumCaseArray.create()
 	var caseByName = CaseIndexMap.create()
@@ -7788,13 +7796,22 @@ function validateDeferredMatchExhaustiveness(project Project, check PendingMatch
 		// the C# bootstrap's `if (enumType == null) return`.
 		return
 	end 'notFound'
+
+	// E2027: replay arms in source order to detect a case covered twice.
+	detectDeferredMatchOverlaps(project, check: check, enumCases: enumCases, caseByName: caseByName)
+
+	// E2026: a `default` arm makes every uncovered case reachable, so skip the
+	// missing-case computation in that case (mirrors the inline path's
+	// `validateEnumExhaustiveness`, which returns early on `hasDefault`).
+	if check.hasDefault 'hasDefault'
+		return
+	end 'hasDefault'
+	// Build the union of all arm coverage from the ordered `arms` list (the
+	// single source of truth) and report every uncovered case.
 	var covered = ReferencedNameSet.create()
-	for name in check.coveredCaseNames 'eachCovered'
-		covered.insert(name)
-	end 'eachCovered'
-	for rangeArm in check.rangeArms 'eachRange'
-		expandDeferredRangeCoverage(enumCases, caseByName: caseByName, rangeArm: rangeArm, covered: covered)
-	end 'eachRange'
+	for arm in check.arms 'eachArm'
+		expandArmCoverage(enumCases, caseByName: caseByName, arm: arm, covered: covered)
+	end 'eachArm'
 	var missing = ""
 	var first = true
 	for c in enumCases 'eachCase'
@@ -7815,21 +7832,64 @@ function validateDeferredMatchExhaustiveness(project Project, check PendingMatch
 	reportCompileError(project, code: ErrorCode.parserMatchNotExhaustive, message: "match on enum '{enumName}' is not exhaustive, missing: {missing}", line: check.errorLine, column: check.errorColumn, filePath: check.filePath)
 end 'validateDeferredMatchExhaustiveness'
 
-// Insert every case name covered by a `loCaseName to|upto hiCaseName` range
-// into `covered`, expanding against THIS enum's case positions. `to` is
-// inclusive on both ends, `upto` excludes the upper bound, and a `max` sentinel
-// (`hiCaseName` empty) runs to the last case. Endpoints that don't name a case
-// of this enum are silently skipped — TR's `resolveEnumMatchArms` already
-// surfaces the canonical unknown-case diagnostic.
-function expandDeferredRangeCoverage(enumCases EnumCaseArray, caseByName CaseIndexMap, rangeArm PendingMatchRangeArm, covered ReferencedNameSet)
-	let loOrdinalRaw = try caseByName.get(rangeArm.loCaseName) otherwise return
+// E2027 overlap detection for a deferred match. Replays `check.arms` in source
+// order, expanding each arm's coverage against THIS enum's case positions. The
+// FIRST arm (bare or range-expanded) that covers an already-covered case yields
+// `overlapping pattern in match: '{caseName}' is already covered` at that arm's
+// own line/column — matching the C# bootstrap, which throws at the offending
+// pattern's position. Only one diagnostic is emitted per match (the parser's
+// `reportCompileError` path doesn't throw, so we stop after the first overlap to
+// avoid a cascade of duplicate errors for the same arm).
+function detectDeferredMatchOverlaps(project Project, check PendingMatchExhaustivenessCheck, enumCases EnumCaseArray, caseByName CaseIndexMap)
+	var covered = ReferencedNameSet.create()
+	for arm in check.arms 'eachArm'
+		var armCovered = ReferencedNameSet.create()
+		expandArmCoverage(enumCases, caseByName: caseByName, arm: arm, covered: armCovered)
+		// Report the first case this arm covers that a prior arm already did.
+		// Walk THIS enum's cases in ordinal order so the reported name is
+		// deterministic (the C# loop iterates `enumType.Cases`).
+		for c in enumCases 'eachCase'
+			if not armCovered.contains(c.name) 'notInArm'
+				continue
+			end 'notInArm'
+			if covered.contains(c.name) 'overlap'
+				reportCompileError(project, code: ErrorCode.parserMatchDuplicatePattern, message: "overlapping pattern in match: '{c.name}' is already covered", line: arm.line, column: arm.column, filePath: check.filePath)
+				return
+			end 'overlap'
+		end 'eachCase'
+		for c2 in enumCases 'mergeCovered'
+			if armCovered.contains(c2.name) 'inArm'
+				covered.insert(c2.name)
+			end 'inArm'
+		end 'mergeCovered'
+	end 'eachArm'
+end 'detectDeferredMatchOverlaps'
+
+// Insert every case name covered by one replay `arm` into `covered`, expanded
+// against THIS enum's case positions. A bare arm contributes each of its case
+// names that the enum actually declares; a range arm (`loCaseName to|upto
+// hiCaseName`) contributes the ordinal span between its endpoints (`to`
+// inclusive on both ends, `upto` exclusive on the upper; a `max` sentinel runs
+// to the last case). Endpoints / names that don't belong to this enum are
+// skipped — `resolveEnumMatchArms` surfaces the canonical unknown-case
+// diagnostic. Shared by the E2026 union build and the per-arm E2027 replay.
+function expandArmCoverage(enumCases EnumCaseArray, caseByName CaseIndexMap, arm PendingMatchArm, covered ReferencedNameSet)
+	if not arm.isRange 'isBare'
+		for caseName in arm.caseNames 'eachName'
+			if caseByName.contains(caseName) 'isKnown'
+				covered.insert(caseName)
+			end 'isKnown'
+		end 'eachName'
+		return
+	end 'isBare'
+	let loOrdinalRaw = try caseByName.get(arm.loCaseName) otherwise return
 	let loOrdinal = loOrdinalRaw as ParsedInt
 	var hiOrdinal = (enumCases.count() - 1) as ParsedInt
-	if not rangeArm.hasMaxSentinel 'lookupHi'
-		let hiOrdinalRaw = try caseByName.get(rangeArm.hiCaseName) otherwise return
+	if not arm.hasMaxSentinel 'lookupHi'
+		let hiOrdinalRaw = try caseByName.get(arm.hiCaseName) otherwise return
 		hiOrdinal = hiOrdinalRaw as ParsedInt
 	end 'lookupHi'
-	let upperInclusive = hiOrdinal if not rangeArm.isUpto else (hiOrdinal - 1)
+	let upperInclusive = hiOrdinal if not arm.isUpto else (hiOrdinal - 1)
 	let caseCount = enumCases.count() as ParsedInt
 	var i = loOrdinal
 	while i <= upperInclusive 'each'
@@ -7840,7 +7900,7 @@ function expandDeferredRangeCoverage(enumCases EnumCaseArray, caseByName CaseInd
 		end 'inBounds'
 		i = i + 1
 	end 'each'
-end 'expandDeferredRangeCoverage'
+end 'expandArmCoverage'
 
 // `unresolvedAssign` placeholders to their concrete forms, (2) fill any
 // `MaxonType.unresolved` operands left by the parser using a
