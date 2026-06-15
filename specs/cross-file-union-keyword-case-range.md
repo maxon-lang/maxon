@@ -74,3 +74,51 @@ end 'main'
 ```exitcode
 3
 ```
+
+
+<!-- test: cross-file-nested-match-result-scrutinee -->
+The result of a `match` whose arms construct values of a CROSS-FILE union is
+itself matched. A cross-file union case construction (`MyType.named(7)`,
+`MyType.unresolved`) is emitted as a constructor call, not an inline
+`enumConstruct`, so its result type only resolves once the case constructor's
+registered return type is consulted — which can lag the producer-type walk of
+the match-merge block. The merge result's type must converge to the union so the
+SECOND `match` sees an enum-typed scrutinee rather than the parser's int seed
+(otherwise E3005 "match scrutinee must be an enum-typed value"). Mirrors the
+compiler's own `returnTypeInterfaceName` / `matchLayoutLoad`:
+`let raw = match ref { ... gives Enum.case }; match raw { ... }`.
+```maxon
+// --- file: types.maxon
+export typealias Dim = int(0 to 100)
+
+export union MyType
+	unresolved
+	named(id Dim)
+	other(x Dim)
+end 'MyType'
+
+export union Wrapper
+	void
+	value(inner MyType)
+end 'Wrapper'
+
+// --- file: main.maxon
+function classify(ref Wrapper) returns Dim
+	let raw = match ref 'unwrap'
+		void gives MyType.unresolved
+		value(inner) gives inner
+	end 'unwrap'
+	return match raw 'r'
+		named(id) gives id
+		other(x) gives x
+		unresolved gives 0
+	end 'r'
+end 'classify'
+
+function main() returns ExitCode
+	return classify(Wrapper.value(MyType.named(7)))
+end 'main'
+```
+```exitcode
+7
+```

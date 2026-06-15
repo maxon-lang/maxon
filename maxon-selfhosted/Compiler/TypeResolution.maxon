@@ -5970,7 +5970,7 @@ function fillUnresolvedTypesForOp(project Project, module MaxonModule, opIdx OpI
 		selfFieldStore then return
 		unresolvedRead then return
 		unresolvedAssign then return
-		enumMatchArm(scrutineeName, caseName, scrutineeType, rawValue, isFloat, resolved, thenTarget, elseTarget, bindingNames, range) then fillEnumMatchArmType(module, opIdx: opIdx, scrutineeName: scrutineeName, caseName: caseName, scrutineeType: scrutineeType, rawValue: rawValue, isFloat: isFloat, resolved: resolved, thenTarget: thenTarget, elseTarget: elseTarget, bindingNames: bindingNames, range: range, producerTypes: producerTypes)
+		enumMatchArm(scrutineeName, caseName, scrutineeType, rawValue, isFloat, resolved, thenTarget, elseTarget, bindingNames, range) then fillEnumMatchArmType(project, module: module, opIdx: opIdx, scrutineeName: scrutineeName, caseName: caseName, scrutineeType: scrutineeType, rawValue: rawValue, isFloat: isFloat, resolved: resolved, thenTarget: thenTarget, elseTarget: elseTarget, bindingNames: bindingNames, range: range, producerTypes: producerTypes)
 		rangeMatchArm(scrutineeName, _, _, isUpto, hasMinSentinel, hasMaxSentinel, enumOwnerName, loCaseName, hiCaseName, thenTarget, elseTarget, range) then fillRangeMatchArm(project, module: module, opIdx: opIdx, scrutineeName: scrutineeName, isUpto: isUpto, hasMinSentinel: hasMinSentinel, hasMaxSentinel: hasMaxSentinel, enumOwnerName: enumOwnerName, loCaseName: loCaseName, hiCaseName: hiCaseName, thenTarget: thenTarget, elseTarget: elseTarget, range: range, producerTypes: producerTypes)
 		// Phase 9 Stage 2 plumbing: most union ops carry concrete payload
 		// types from parse-time on. `enumPayloadRead` / `enumPayloadStore`
@@ -6018,13 +6018,59 @@ end 'fillUnresolvedTypesForOp'
 // map. Resolution of the case name itself happens later in
 // `resolveEnumMatchArms` once the scrutinee's type is concrete across all
 // arm sites in the module.
-function fillEnumMatchArmType(module MaxonModule, opIdx OpIndex, scrutineeName ByteArray, caseName String, scrutineeType MaxonType, rawValue IntConstant, isFloat bool, resolved bool, thenTarget BlockId, elseTarget BlockId, bindingNames ByteArrayArray, range SourceRange, producerTypes ProducerTypeMap)
-	let filled = fillType(producerTypes, t: scrutineeType, source: scrutineeName)
-	if isUnresolvedType(filled) == isUnresolvedType(scrutineeType) and not isUnresolvedType(scrutineeType) 'noChange'
+function fillEnumMatchArmType(project Project, module MaxonModule, opIdx OpIndex, scrutineeName ByteArray, caseName String, scrutineeType MaxonType, rawValue IntConstant, isFloat bool, resolved bool, thenTarget BlockId, elseTarget BlockId, bindingNames ByteArrayArray, range SourceRange, producerTypes ProducerTypeMap)
+	var filled = fillType(producerTypes, t: scrutineeType, source: scrutineeName)
+	// Seed-refinement: an earlier fill pass may have stamped this arm's
+	// `scrutineeType` from the parser's int-zero seed (the scrutinee is the
+	// result of a `let raw = match ... { ... gives Enum.case }` whose arms
+	// construct a cross-file union — their type only resolves to `named(Enum)`
+	// after `callResultType` runs against the registered case constructor,
+	// which can lag the merge-block walk). Once concrete-but-`int`, `fillType`
+	// would leave it pinned and the second `match raw` would see a non-enum
+	// scrutinee (E3005). When the scrutinee's producer type has since refined
+	// to a registered enum/union, prefer it. Mirrors the int-seed widening the
+	// var/arg fill paths already perform.
+	if scrutineeTypeIsSeedRefinedToEnum(project, current: filled, producer: lookupProducerType(producerTypes, name: scrutineeName)) 'refine'
+		filled = lookupProducerType(producerTypes, name: scrutineeName)
+	end 'refine'
+	if isUnresolvedType(filled) == isUnresolvedType(scrutineeType) and not isUnresolvedType(scrutineeType) and maxonTypesStructurallyEqual(filled, b: scrutineeType) 'noChange'
 		return
 	end 'noChange'
 	try module.ops.set(opIdx, value: MaxonOp.enumMatchArm(scrutineeName, caseName: caseName, scrutineeType: filled, rawValue: rawValue, isFloat: isFloat, resolved: resolved, thenTarget: thenTarget, elseTarget: elseTarget, bindingNames: bindingNames, range: range)) otherwise panic("fillEnumMatchArmType: ops.set OOB at idx={opIdx}")
 end 'fillEnumMatchArmType'
+
+// True when `current` (an enumMatchArm's already-stamped scrutineeType) does
+// NOT name a registered enum/union but `producer` (the scrutinee value's
+// now-resolved producer type) DOES — the signal to re-stamp the arm from the
+// producer. Guards against clobbering an already-correct enum stamp and
+// against an unresolved producer.
+function scrutineeTypeIsSeedRefinedToEnum(project Project, current MaxonType, producer MaxonType) returns bool
+	if isUnresolvedType(producer) 'producerUnresolved'
+		return false
+	end 'producerUnresolved'
+	if maxonTypeNamesRegisteredEnum(project, t: current) 'currentAlreadyEnum'
+		return false
+	end 'currentAlreadyEnum'
+	return maxonTypeNamesRegisteredEnum(project, t: producer)
+end 'scrutineeTypeIsSeedRefinedToEnum'
+
+// True iff `t` is a `named(...)` type whose name is a registered (resolved or
+// unresolved) enum/union.
+function maxonTypeNamesRegisteredEnum(project Project, t MaxonType) returns bool
+	return match t 'check'
+		named(id) gives enumNameIsRegistered(project, name: project.typeNames.get(id))
+		boolean to float gives false
+		string gives false
+		character gives false
+		function gives false
+		unresolved gives false
+		typeParameter to cstring gives false
+	end 'check'
+end 'maxonTypeNamesRegisteredEnum'
+
+function enumNameIsRegistered(project Project, name String) returns bool
+	return project.enumTypes.contains(name) or project.unresolvedEnums.contains(name)
+end 'enumNameIsRegistered'
 
 // Resolve a cross-file enum/union range arm's owner + case ordinals.
 //
