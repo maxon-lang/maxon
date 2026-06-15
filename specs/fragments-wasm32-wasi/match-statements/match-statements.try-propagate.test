@@ -1,0 +1,58 @@
+// Test: match-statements.try-propagate
+typealias Tally = int(0 to 100)
+
+enum Err implements Error
+	bad
+end 'Err'
+
+function leaf() throws Err
+	throw Err.bad
+end 'leaf'
+
+function dispatch(kind Tally) throws Err
+	match kind 'k'
+		1 then try leaf()
+		default throws Err.bad
+	end 'k'
+end 'dispatch'
+
+function main() returns ExitCode
+	try dispatch(1) otherwise ignore
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 1 : i64
+    mir.br inlined_dispatch_0_0()
+  inlined_dispatch_0_0:
+    %10 = mir.mov_imm 1 : i64
+    %11 = mir.cmp eq, %0, %10
+    mir.cond_br %11 [then: inlined_dispatch_2_0(), else: inlined_dispatch_6_0()]
+  inlined_dispatch_2_0:
+    %15 = mir.mov_imm 1 : i64
+    mir.br inlined_dispatch_4_0()
+  inlined_dispatch_4_0:
+    %18 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%18, %15)
+  inlined_dispatch_6_0:
+    %19 = mir.mov_imm 0 : i64
+    %20 = mir.mov_imm 1 : i64
+    mir.br inline_cont_main_0(%19, %20)
+  inline_cont_main_0(%21: i64, %22: i64):
+    %3 = mir.mov_imm 0 : i64
+    %4 = mir.cmp ne, %22, %3
+    mir.cond_br %4 [then: try_0.otherwise(), else: try_0.merge(%0)]
+  try_0.otherwise:
+    %6 = mir.mov_imm 0 : i64
+    mir.br try_0.merge(%6)
+  try_0.merge(%9: i64):
+    %8 = mir.mov_imm 0 : i64
+    mir.ret %8
+  }
+}
+---

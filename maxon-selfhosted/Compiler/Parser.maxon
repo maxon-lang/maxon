@@ -7469,7 +7469,33 @@ export type Parser
 		_ = skipOptionalNewlines()
 		let baseLabel = "{userLabel}_{currentFunc.nextBlockId}"
 		let mergeBlock = module.addBlockAt(currentFunc, label: "{baseLabel}.merge", filePath: filePath.toString(), firstLine: cursor.current().line)
-		return MatchHeader.create(exprName(scrutineeResult), scrutineeType: exprType(scrutineeResult), userLabel: userLabel, baseLabel: baseLabel, mergeBlock: mergeBlock, scrutineeMutable: scrutineeMutable)
+
+		// A `Character`-typed scrutinee is a boxed 8-byte envelope (a pointer to
+		// a __ManagedMemory holding the UTF-8 bytes), so a raw i64 compare would
+		// test the POINTER, not the codepoint, and never match a char-byte
+		// pattern. Single-byte char literals used as a LOCAL scrutinee already
+		// take the int fast path (`parseCharLiteralExpr` keeps `'x'` as an i64),
+		// but a `Character` PARAMETER (or any genuinely Character-typed value)
+		// arrives boxed. Unbox it once here via `codepoint()` so every arm
+		// compares the unboxed i64 codepoint — char patterns are single-byte
+		// ASCII (multi-byte is rejected at parse time), whose codepoint equals
+		// their byte value. Mirrors the C# bootstrap, which compares the
+		// Character scrutinee's codepoint (its docs-example-8 lowers to a raw
+		// i64 `cmp`).
+		var scrutineeName = exprName(scrutineeResult)
+		var scrutineeType = exprType(scrutineeResult)
+		if matchScrutineeIsCharacter(scrutineeType) 'unboxChar'
+			let cpName = freshSynthName()
+			let noArgs = ByteArrayArray.create()
+			let noLabels = StringArray.create()
+			let noTypes = MaxonTypeArray.create()
+			let noRanges = SourceRangeArray.create()
+			module.appendOp(currentBlock, op: MaxonOp.methodCall(cpName, receiver: scrutineeName, methodName: "codepoint".toByteArray(), args: noArgs, argLabels: noLabels, argTypes: noTypes, argRanges: noRanges, range: SourceRange.ofToken(labelToken)))
+			scrutineeName = cpName
+			scrutineeType = MaxonType.integer
+		end 'unboxChar'
+
+		return MatchHeader.create(scrutineeName, scrutineeType: scrutineeType, userLabel: userLabel, baseLabel: baseLabel, mergeBlock: mergeBlock, scrutineeMutable: scrutineeMutable)
 	end 'parseMatchHeader'
 
 	// Consume `'label'` after `end`, validating it matches the expected label.
@@ -7552,6 +7578,20 @@ export type Parser
 			return MatchPatternSpec.intLiteral(litToken, value: value, displayName: "{value}")
 		end 'isInt'
 
+		// Float-literal patterns (`2.5`, `0.0 to 5.0`) compare the f64 scrutinee
+		// with `cmpF64*` ops. The bound's IEEE-754 bits ride on the pattern; the
+		// `negate` flag (a leading `-`) flips the sign bit. Mirrors the C#
+		// bootstrap's `ParseFloatPatternOrRange`.
+		if at(TokenKind.floatLiteral) 'isFloat'
+			let litToken = try consume()
+			let bits = try parseFloatBoundBits(litToken, negate: negate)
+			let loDisplay = floatPatternDisplay(litToken, negate: negate)
+			if at(TokenKind.to) or at(TokenKind.upto) 'isRange'
+				return try parseFloatRangePattern(bits, loDisplay: loDisplay, loToken: litToken, hasMinSentinel: false)
+			end 'isRange'
+			return MatchPatternSpec.floatLiteral(litToken, floatBits: bits, displayName: loDisplay)
+		end 'isFloat'
+
 		// Character literal patterns lower to integer comparisons against the
 		// scrutinee's byte value. Match machinery treats them as plain
 		// integer-valued patterns — multi-byte literals (which would
@@ -7566,6 +7606,23 @@ export type Parser
 			end 'isRange'
 			return MatchPatternSpec.intLiteral(charToken, value: value, displayName: displayName)
 		end 'isChar'
+
+		// String-literal patterns (`"alice" then ...`) on a String scrutinee.
+		// Dispatch lowers each to a String-equality comparison against the
+		// scrutinee. A string pattern is a constant — interpolation markers
+		// can't follow (a `{` would not be inside the literal token), and
+		// ranges over strings are not a thing — so we decode the single token's
+		// content and stop. A leading `-` (consumed above as `negate`) can't
+		// precede a string; reject that shape rather than silently dropping it.
+		if at(TokenKind.stringLiteral) 'isString'
+			if negate 'negatedString'
+				reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "'-' cannot precede a string pattern", line: firstToken.line, column: firstToken.column, filePath: filePath)
+			end 'negatedString'
+			let strToken = try consume()
+			validateEscapes(strToken, kind: "string pattern")
+			let decoded = String.from(decodeStringEscapes(strToken.value))
+			return MatchPatternSpec.stringLiteral(strToken, value: decoded, displayName: "\"{decoded}\"")
+		end 'isString'
 
 		// Anything else is treated as an enum case name. The lexer emits the
 		// case identifier as either `TokenKind.identifier` or — when the
@@ -7796,6 +7853,17 @@ export type Parser
 			return MatchPatternSpec.rangeLiteral(loToken, loValue: loValue, hiValue: 0, isUpto: isUpto, hasMinSentinel: hasMinSentinel, hasMaxSentinel: true, displayName: displayName)
 		end 'maxSentinel'
 
+		// Float upper bound on an int/`min` lower bound (`min to 5.0`): the
+		// scrutinee is float, so the whole range is float. Reinterpret the
+		// already-parsed integer lower bound as its f64 bits and re-dispatch
+		// through the float path. (`min` arrives here with loValue == 0, whose
+		// f64 reinterpretation is also 0.0 — the open-bound flag carries the
+		// real semantics.) Mirrors C#'s compareKind-driven float widening.
+		if upperTok.kind == TokenKind.floatLiteral 'isFloatUpper'
+			let loBits = 0 as ParsedInt if hasMinSentinel else floatBitsFromInt(loValue)
+			return try parseFloatRangeTail(loBits, loDisplay: loDisplay, loToken: loToken, hasMinSentinel: hasMinSentinel, isUpto: isUpto)
+		end 'isFloatUpper'
+
 		// Character literal upper bound: decode the literal bytes
 		// identically to `decodeCharLiteralToByte` on the lower bound.
 		var hiValue = 0 as ParsedInt
@@ -7846,6 +7914,73 @@ export type Parser
 		return MatchPatternSpec.rangeLiteral(loToken, loValue: loValue, hiValue: hiValue, isUpto: isUpto, hasMinSentinel: hasMinSentinel, hasMaxSentinel: false, displayName: displayName)
 	end 'parseRangePattern'
 
+	// Source-form display for a float-literal pattern bound, used in
+	// duplicate / single-value diagnostics. Prepends a `-` for a negated
+	// literal so `-1.5` round-trips its written form.
+	function floatPatternDisplay(token Token, negate bool) returns String
+		let raw = tokenValueToString(token.value)
+		return "-{raw}" if negate else raw
+	end 'floatPatternDisplay'
+
+	// Parse the `(FLOAT | max)` tail of a float range pattern AFTER the
+	// `to`/`upto` keyword has been consumed by the caller (which passes
+	// `isUpto`). Caller has already consumed the lower bound (a float literal,
+	// or the `min` keyword) and provides its f64-bit `loBits` and source-form
+	// `loDisplay`. Mirrors `parseRangePattern` but emits a float-flagged range
+	// so dispatch uses `cmpF64*`.
+	function parseFloatRangeTail(loBits ParsedInt, loDisplay String, loToken Token, hasMinSentinel bool, isUpto bool) returns MatchPatternSpec throws ParserError
+		let rangeKeyword = "upto" if isUpto else "to"
+
+		// Open upper bound: `X to|upto max`.
+		let upperTok = cursor.current()
+		if upperTok.kind == TokenKind.identifier and upperTok.value == "max" 'maxSentinel'
+			try cursor.advance() otherwise throw ParserError.unexpectedEof
+			let displayName = "{loDisplay} {rangeKeyword} max"
+			return MatchPatternSpec.floatRangeLiteral(loToken, loBits: loBits, hiBits: 0, isUpto: isUpto, hasMinSentinel: hasMinSentinel, hasMaxSentinel: true, displayName: displayName)
+		end 'maxSentinel'
+
+		var negateUpper = false
+		if at(TokenKind.minus) 'isNegUpper'
+			negateUpper = true
+			try cursor.advance() otherwise throw ParserError.unexpectedEof
+		end 'isNegUpper'
+
+		// Upper bound may be a float OR an int literal (`0.0 to 5`): an int
+		// endpoint is reinterpreted as float to match the scrutinee, exactly
+		// as the C# `ParseRangeEndpoint` widens an int endpoint when the
+		// compare kind is Float.
+		if not (at(TokenKind.floatLiteral) or at(TokenKind.intLiteral)) 'noUpperLit'
+			let badTok = cursor.current()
+			reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "Expected upper-bound float literal (or 'max') after '{rangeKeyword}', got '{tokenValueToString(badTok.value)}'", line: badTok.line, column: badTok.column, filePath: filePath)
+			return MatchPatternSpec.floatLiteral(loToken, floatBits: loBits, displayName: loDisplay)
+		end 'noUpperLit'
+		let hiToken = try consume()
+		let hiBits = try parseFloatBoundBits(hiToken, negate: negateUpper)
+		let hiDisplay = floatPatternDisplay(hiToken, negate: negateUpper)
+		let displayName = "{loDisplay} {rangeKeyword} {hiDisplay}"
+
+		// Single-value range rejection (E2027). `X to X` covers exactly one
+		// value. Float `upto` has no integer-adjacency notion, so only the
+		// equal-bound `to` form is a true single value. Skipped for an open
+		// lower bound (`min`).
+		if not hasMinSentinel 'checkSingleValue'
+			if not isUpto and hiBits == loBits 'singleValue'
+				reportCompileError(project, code: ErrorCode.parserMatchDuplicatePattern, message: "range pattern '{displayName}' covers a single value; use the bare value instead", line: loToken.line, column: loToken.column, filePath: filePath)
+			end 'singleValue'
+		end 'checkSingleValue'
+
+		return MatchPatternSpec.floatRangeLiteral(loToken, loBits: loBits, hiBits: hiBits, isUpto: isUpto, hasMinSentinel: hasMinSentinel, hasMaxSentinel: false, displayName: displayName)
+	end 'parseFloatRangeTail'
+
+	// Entry point for a float range whose `to`/`upto` keyword has NOT yet been
+	// consumed (the `0.0 to 5.0` lower-bound-is-float path). Consumes the
+	// keyword and delegates to `parseFloatRangeTail`.
+	function parseFloatRangePattern(loBits ParsedInt, loDisplay String, loToken Token, hasMinSentinel bool) returns MatchPatternSpec throws ParserError
+		let rangeTok = try consume()
+		let isUpto = rangeTok.kind == TokenKind.upto
+		return try parseFloatRangeTail(loBits, loDisplay: loDisplay, loToken: loToken, hasMinSentinel: hasMinSentinel, isUpto: isUpto)
+	end 'parseFloatRangePattern'
+
 	// Parse one arm's pattern list (either a single `default`, a single enum
 	// case identifier, or one or more integer literals separated by `or`).
 	// Returns the list along with whether it is a default arm. Tracks duplicate
@@ -7870,6 +8005,7 @@ export type Parser
 				defaultArm gives false
 				intLiteral gives false
 				rangeLiteral gives false
+				stringLiteral gives false
 			end 'k'
 			// Detect overlap-via-range before the generic-duplicate path
 			// so the diagnostic uses the "overlapping pattern" wording
@@ -7943,6 +8079,69 @@ export type Parser
 			opaquePointer to cstring gives true
 		end 'check'
 	end 'matchScrutineeIsKnownNonEnum'
+
+	// True when a match scrutinee carries the `Character` type — either the
+	// language-primitive `character` arm or a `named` reference to the
+	// char-literal struct (`Character`, the stdlib type implementing
+	// BuiltinCharLiteral). Both spellings reach the parser: an undiscovered
+	// builtin lowers to `character`, a discovered/declared one to
+	// `named("Character")`. Used by `parseMatchHeader` to unbox the boxed
+	// Character envelope to its codepoint before the i64 dispatch.
+	function matchScrutineeIsCharacter(t MaxonType) returns bool
+		return match t 'check'
+			character gives true
+			named(id) gives nonEmptyEquals(project.typeNames.get(id), discovered: getCachedBuiltinCharLiteralTypeName())
+			boolean gives false
+			integer gives false
+			float gives false
+			string gives false
+			function gives false
+			unresolved gives false
+			typeParameter gives false
+			genericInstance gives false
+			interface gives false
+			constInt gives false
+			opaquePointer to cstring gives false
+		end 'check'
+	end 'matchScrutineeIsCharacter'
+
+	// True when `t` is a concrete type that is definitely NOT `String` — the
+	// signal for E2028 when a string-literal pattern meets such a scrutinee
+	// (`match anInt { "one" then ... }`). A String scrutinee carries either the
+	// primitive `string` arm (pre-discovery) or `named(<BuiltinStringLiteral>)`
+	// once the struct is registered, so both must read as "is String" (false).
+	// Unresolved / type-parameter scrutinees also return false — no provable
+	// mismatch yet.
+	function scrutineeTypeIsKnownNonString(t MaxonType) returns bool
+		if maxonTypeIsTheStringType(t) 'isString'
+			return false
+		end 'isString'
+		return match t 'check'
+			boolean to float gives true
+			string gives false
+			character gives true
+			named to function gives true
+			unresolved gives false
+			typeParameter gives false
+			genericInstance to interface gives true
+			constInt gives false
+			opaquePointer to cstring gives true
+		end 'check'
+	end 'scrutineeTypeIsKnownNonString'
+
+	// True iff `t` is the String type in either representation: the primitive
+	// `string` arm or the discovered `named(<BuiltinStringLiteral struct>)`.
+	function maxonTypeIsTheStringType(t MaxonType) returns bool
+		return match t 'check'
+			string gives true
+			named(id) gives project.typeNames.get(id) == builtinStringLiteralTypeName()
+			boolean to float gives false
+			character gives false
+			function gives false
+			unresolved gives false
+			typeParameter to cstring gives false
+		end 'check'
+	end 'maxonTypeIsTheStringType'
 
 	// Companion to `matchScrutineeIsKnownNonEnum`: a `named` reference is
 	// non-enum iff it resolves to a registered struct/typealias and not an
@@ -8143,6 +8342,7 @@ export type Parser
 				intLiteral gives false
 				enumCase gives true
 				rangeLiteral gives false
+				stringLiteral gives false
 			end 'k'
 			if isEnumCasePattern 'isEnumCase'
 				coveredCaseNames.push(pattern.caseName)
@@ -8252,9 +8452,7 @@ export type Parser
 		var hasCombined = false
 		for pattern in patterns 'each'
 			let litRange = SourceRange.ofToken(pattern.token)
-			let litName = emitLiteral(block, value: pattern.intValue, valueType: MaxonType.integer, range: litRange)
-			let cmpName = freshSynthName()
-			module.appendOp(block, op: MaxonOp.cmp(cmpName, left: scrutineeName, right: litName, predicate: CmpPredicate.eq, leftType: MaxonType.integer, rightType: MaxonType.integer, operandType: MaxonType.integer, range: litRange))
+			let cmpName = emitExactPatternEq(block, scrutineeName: scrutineeName, pattern: pattern, litRange: litRange)
 			if not hasCombined 'first'
 				combined = cmpName
 				hasCombined = true
@@ -8266,6 +8464,47 @@ export type Parser
 		end 'each'
 		return combined
 	end 'emitIntPatternComparisons'
+
+	// Emit a single equality comparison `scrutinee == pattern-literal` and
+	// return the boolean SSA name. Picks the float path (`operandType: float`,
+	// f64 const literal -> `cmpF64Eq` at lowering) for `isFloat` patterns and the
+	// i64 path otherwise. Shared by the OR-chain and the direct-condBr emitters.
+	function emitExactPatternEq(block IrBlock, scrutineeName ByteArray, pattern MatchPatternSpec, litRange SourceRange) returns ByteArray
+		let litType = MaxonType.float if pattern.isFloat else MaxonType.integer
+		let litName = emitLiteral(block, value: pattern.intValue, valueType: litType, range: litRange)
+		let cmpName = freshSynthName()
+		module.appendOp(block, op: MaxonOp.cmp(cmpName, left: scrutineeName, right: litName, predicate: CmpPredicate.eq, leftType: litType, rightType: litType, operandType: litType, range: litRange))
+		return cmpName
+	end 'emitExactPatternEq'
+
+	// Emit the boolean "scrutinee matches any of these string patterns" value
+	// for a string-literal arm. Each pattern interns its decoded content as a
+	// `stringConst`, then a `cmp(eq)` with String operand types compares it to
+	// the scrutinee — `dispatchEqualityOps` in TypeResolution rewrites that cmp
+	// to a `String.equals` call. Or-patterns fold the per-pattern results with
+	// a bitwise-or, mirroring `emitIntPatternComparisons`.
+	function emitStringPatternComparisons(block IrBlock, scrutineeName ByteArray, patterns MatchPatternSpecArray) returns ByteArray
+		let stringType = builtinStringLiteralType(project)
+		var combined = ByteArray.create()
+		var hasCombined = false
+		for pattern in patterns 'each'
+			let litRange = SourceRange.ofToken(pattern.token)
+			let stringId = project.strings.intern(pattern.caseName)
+			let litName = freshSynthName()
+			module.appendOp(block, op: MaxonOp.stringConst(litName, stringId: stringId, range: litRange))
+			let cmpName = freshSynthName()
+			module.appendOp(block, op: MaxonOp.cmp(cmpName, left: scrutineeName, right: litName, predicate: CmpPredicate.eq, leftType: stringType, rightType: stringType, operandType: stringType, range: litRange))
+			if not hasCombined 'first'
+				combined = cmpName
+				hasCombined = true
+			end 'first' else 'fold'
+				let orName = freshSynthName()
+				module.appendOp(block, op: MaxonOp.binop(orName, left: combined, right: cmpName, opKind: BinOpKind.bitOr, operandType: MaxonType.boolean, range: litRange))
+				combined = orName
+			end 'fold'
+		end 'each'
+		return combined
+	end 'emitStringPatternComparisons'
 
 	// Parse a statement-form arm body, returning the exit block plus a flag
 	// signalling whether the body was a `return` (so the parser can reject
@@ -8508,6 +8747,24 @@ export type Parser
 			module.setTerminator(currentBlock, op: MaxonOp.enumMatchArm(header.scrutineeName, caseName: firstPattern.caseName, scrutineeType: MaxonType.unresolved, rawValue: 0, isFloat: false, resolved: false, thenTarget: armBodyId, elseTarget: nextArmId, bindingNames: firstPattern.bindingNames, range: SourceRange.ofToken(firstPattern.token)))
 			return
 		end 'isEnum'
+		// String-literal arms compare the scrutinee against each pattern's
+		// decoded content with a String-equality `cmp` (the equality-dispatch
+		// pass later rewrites it to `String.equals`). Or-patterns fold with a
+		// bitwise-or of the per-pattern comparison results, exactly like the
+		// integer path.
+		if firstPattern.isStringLiteral() 'isString'
+			// A string pattern only fits a String scrutinee. When the scrutinee
+			// type is a known non-String (`match someInt { "one" then ... }`),
+			// the comparison would be a category mismatch — report E2028 here
+			// with the pattern/scrutinee types rather than letting the emitted
+			// String cmp flow downstream into a generic arg-type error.
+			if scrutineeTypeIsKnownNonString(header.scrutineeType) 'typeMismatch'
+				reportCompileError(project, code: ErrorCode.parserMatchTypeMismatch, message: "pattern type 'String' does not match scrutinee type '{header.scrutineeType.toString(project)}'", line: firstPattern.token.line, column: firstPattern.token.column, filePath: filePath)
+			end 'typeMismatch'
+			let combinedCmp = emitStringPatternComparisons(currentBlock, scrutineeName: header.scrutineeName, patterns: patterns.patterns)
+			module.setTerminator(currentBlock, op: MaxonOp.condBr(combinedCmp, thenTarget: armBodyId, elseTarget: nextArmId, range: SourceRange.ofToken(firstPattern.token)))
+			return
+		end 'isString'
 		// Range patterns OR-chained with bare int literals are emitted as a
 		// sequence of branches into the arm body: each pattern gets its own
 		// comparison block, and they fall through to the next pattern on a
@@ -8645,21 +8902,69 @@ export type Parser
 	function emitOnePatternDispatch(header MatchHeader, cur IrBlock, pattern MatchPatternSpec, thenId BlockId, elseId BlockId)
 		let patRange = SourceRange.ofToken(pattern.token)
 		match pattern.kind 'kind'
-			rangeLiteral then module.setTerminator(cur, op: MaxonOp.rangeMatchArm(header.scrutineeName, loValue: pattern.loValue, hiValue: pattern.hiValue, isUpto: pattern.isUpto, hasMinSentinel: pattern.hasMinSentinel, hasMaxSentinel: pattern.hasMaxSentinel, enumOwnerName: pattern.enumOwnerName if pattern.isEnumRange else "", loCaseName: pattern.loCaseName if pattern.isEnumRange else "", hiCaseName: pattern.hiCaseName if pattern.isEnumRange else "", thenTarget: thenId, elseTarget: elseId, range: patRange))
+			rangeLiteral then emitRangePatternDispatch(header, cur: cur, pattern: pattern, thenId: thenId, elseId: elseId, patRange: patRange)
 			intLiteral then emitIntPatternCondBr(cur, scrutineeName: header.scrutineeName, pattern: pattern, thenId: thenId, elseId: elseId)
 			defaultArm then panic("emitOnePatternDispatch: default arm should be handled by buildMatchArmBlocks")
 			enumCase then panic("emitOnePatternDispatch: enum-case arm should be handled by buildMatchArmBlocks")
+			stringLiteral then panic("emitOnePatternDispatch: string-literal arm should be handled by emitArmDispatch's string branch")
 		end 'kind'
 	end 'emitOnePatternDispatch'
 
-	// Emit `const + cmp + condBr` for a single bare-int literal pattern.
-	// Mirrors a one-iteration body of `emitIntPatternComparisons` but
-	// terminates the block directly rather than threading a combined OR.
+	// Dispatch a single range-pattern arm. Integer / char / enum ranges flow
+	// through the `rangeMatchArm` op (i64 ge/le at lowering). Float ranges are
+	// emitted inline as f64 ge/le comparisons + a `condBr`, because the
+	// `rangeMatchArm` op is i64-only — mirrors the C# bootstrap's
+	// `EmitRangeComparison` with `MaxonValueKind.Float`.
+	function emitRangePatternDispatch(header MatchHeader, cur IrBlock, pattern MatchPatternSpec, thenId BlockId, elseId BlockId, patRange SourceRange)
+		if pattern.isFloat 'isFloatRange'
+			let combined = emitFloatRangeComparison(cur, scrutineeName: header.scrutineeName, pattern: pattern, patRange: patRange)
+			module.setTerminator(cur, op: MaxonOp.condBr(combined, thenTarget: thenId, elseTarget: elseId, range: patRange))
+			return
+		end 'isFloatRange'
+		module.setTerminator(cur, op: MaxonOp.rangeMatchArm(header.scrutineeName, loValue: pattern.loValue, hiValue: pattern.hiValue, isUpto: pattern.isUpto, hasMinSentinel: pattern.hasMinSentinel, hasMaxSentinel: pattern.hasMaxSentinel, enumOwnerName: pattern.enumOwnerName if pattern.isEnumRange else "", loCaseName: pattern.loCaseName if pattern.isEnumRange else "", hiCaseName: pattern.hiCaseName if pattern.isEnumRange else "", thenTarget: thenId, elseTarget: elseId, range: patRange))
+	end 'emitRangePatternDispatch'
+
+	// Emit the f64 ge/le (or lt for `upto`) comparisons for a float range and
+	// return the boolean SSA name holding their AND. `min`/`max` sentinels drop
+	// the corresponding bound (an open end is always satisfied). Mirrors
+	// `lowerRangeMatchArm`'s i64 structure but with `operandType: float`.
+	function emitFloatRangeComparison(block IrBlock, scrutineeName ByteArray, pattern MatchPatternSpec, patRange SourceRange) returns ByteArray
+		var combined = ByteArray.create()
+		var hasCombined = false
+		if not pattern.hasMinSentinel 'emitLow'
+			let loName = emitLiteral(block, value: pattern.loValue, valueType: MaxonType.float, range: patRange)
+			let geName = freshSynthName()
+			module.appendOp(block, op: MaxonOp.cmp(geName, left: scrutineeName, right: loName, predicate: CmpPredicate.ge, leftType: MaxonType.float, rightType: MaxonType.float, operandType: MaxonType.float, range: patRange))
+			combined = geName
+			hasCombined = true
+		end 'emitLow'
+		if not pattern.hasMaxSentinel 'emitHigh'
+			let hiName = emitLiteral(block, value: pattern.hiValue, valueType: MaxonType.float, range: patRange)
+			let hiPredicate = CmpPredicate.lt if pattern.isUpto else CmpPredicate.le
+			let hiCmpName = freshSynthName()
+			module.appendOp(block, op: MaxonOp.cmp(hiCmpName, left: scrutineeName, right: hiName, predicate: hiPredicate, leftType: MaxonType.float, rightType: MaxonType.float, operandType: MaxonType.float, range: patRange))
+			if hasCombined 'foldBoth'
+				let andName = freshSynthName()
+				module.appendOp(block, op: MaxonOp.binop(andName, left: combined, right: hiCmpName, opKind: BinOpKind.bitAnd, operandType: MaxonType.integer, range: patRange))
+				combined = andName
+			end 'foldBoth' else 'highOnly'
+				combined = hiCmpName
+				hasCombined = true
+			end 'highOnly'
+		end 'emitHigh'
+		if not hasCombined 'noBounds'
+			panic("emitFloatRangeComparison: both sentinels set — parser should have rejected this")
+		end 'noBounds'
+		return combined
+	end 'emitFloatRangeComparison'
+
+	// Emit `const + cmp + condBr` for a single bare exact-literal pattern (int,
+	// char-byte, or float). Mirrors a one-iteration body of
+	// `emitIntPatternComparisons` but terminates the block directly rather than
+	// threading a combined OR.
 	function emitIntPatternCondBr(block IrBlock, scrutineeName ByteArray, pattern MatchPatternSpec, thenId BlockId, elseId BlockId)
 		let litRange = SourceRange.ofToken(pattern.token)
-		let litName = emitLiteral(block, value: pattern.intValue, valueType: MaxonType.integer, range: litRange)
-		let cmpName = freshSynthName()
-		module.appendOp(block, op: MaxonOp.cmp(cmpName, left: scrutineeName, right: litName, predicate: CmpPredicate.eq, leftType: MaxonType.integer, rightType: MaxonType.integer, operandType: MaxonType.integer, range: litRange))
+		let cmpName = emitExactPatternEq(block, scrutineeName: scrutineeName, pattern: pattern, litRange: litRange)
 		module.setTerminator(block, op: MaxonOp.condBr(cmpName, thenTarget: thenId, elseTarget: elseId, range: litRange))
 	end 'emitIntPatternCondBr'
 
@@ -18660,6 +18965,10 @@ export union MatchPatternKind
 	intLiteral
 	enumCase
 	rangeLiteral
+	// A string-literal arm (`"alice" then ...`) on a String scrutinee. The
+	// literal's decoded content lives in `MatchPatternSpec.caseName`; dispatch
+	// emits a String-equality `cmp` rather than enum/int comparison.
+	stringLiteral
 end 'MatchPatternKind'
 
 // Phase 9 Stage 2: parsed payload-binding descriptor. Each entry in
@@ -18714,6 +19023,13 @@ export type MatchPatternSpec
 	// Both empty for every non-enum-range kind.
 	export var loCaseName as String
 	export var hiCaseName as String
+	// True when this is a float-valued pattern (`2.5` exact, or `0.0 to 5.0`
+	// range) matched against a float-typed scrutinee. The f64 IEEE-754 BITS
+	// of the bound(s) ride in `intValue` (exact) or `loValue`/`hiValue`
+	// (range) — `ParsedInt` is i64-wide so the 8 bytes round-trip losslessly.
+	// Dispatch emits f64 cmp ops (`operandType: MaxonType.float`) instead of
+	// the i64 path. Mirrors the C# bootstrap's `MaxonValueKind.Float` compare.
+	export var isFloat as bool
 	// Phase 9 Stage 2: parsed payload bindings for an enum-case pattern
 	// (`caseName(x, _, var y)`). Empty for bare-case arms and for every
 	// non-enum-case kind. `bindingNames` mirrors the same list as
@@ -18724,15 +19040,23 @@ export type MatchPatternSpec
 	export var bindingNames as ByteArrayArray
 
 	export static function defaultPattern(token Token) returns MatchPatternSpec
-		return Self{kind: MatchPatternKind.defaultArm, token: token, intValue: 0, caseName: "", displayName: "default", loValue: 0, hiValue: 0, isUpto: false, hasMinSentinel: false, hasMaxSentinel: false, isEnumRange: false, enumOwnerName: "", loCaseName: "", hiCaseName: "", bindings: MatchPatternBindingArray.create(), bindingNames: ByteArrayArray.create()}
+		return Self{kind: MatchPatternKind.defaultArm, token: token, intValue: 0, caseName: "", displayName: "default", loValue: 0, hiValue: 0, isUpto: false, hasMinSentinel: false, hasMaxSentinel: false, isEnumRange: false, enumOwnerName: "", loCaseName: "", hiCaseName: "", isFloat: false, bindings: MatchPatternBindingArray.create(), bindingNames: ByteArrayArray.create()}
 	end 'defaultPattern'
 
 	export static function intLiteral(token Token, value ParsedInt, displayName String) returns MatchPatternSpec
-		return Self{kind: MatchPatternKind.intLiteral, token: token, intValue: value, caseName: "", displayName: displayName, loValue: 0, hiValue: 0, isUpto: false, hasMinSentinel: false, hasMaxSentinel: false, isEnumRange: false, enumOwnerName: "", loCaseName: "", hiCaseName: "", bindings: MatchPatternBindingArray.create(), bindingNames: ByteArrayArray.create()}
+		return Self{kind: MatchPatternKind.intLiteral, token: token, intValue: value, caseName: "", displayName: displayName, loValue: 0, hiValue: 0, isUpto: false, hasMinSentinel: false, hasMaxSentinel: false, isEnumRange: false, enumOwnerName: "", loCaseName: "", hiCaseName: "", isFloat: false, bindings: MatchPatternBindingArray.create(), bindingNames: ByteArrayArray.create()}
 	end 'intLiteral'
 
+	// A string-literal arm pattern. `value` is the decoded string content (the
+	// equality target); `displayName` is the quoted source spelling used for
+	// duplicate-pattern diagnostics. Stored in `caseName` so dispatch can read
+	// it back without widening the struct with a string-only field.
+	export static function stringLiteral(token Token, value String, displayName String) returns MatchPatternSpec
+		return Self{kind: MatchPatternKind.stringLiteral, token: token, intValue: 0, caseName: value, displayName: displayName, loValue: 0, hiValue: 0, isUpto: false, hasMinSentinel: false, hasMaxSentinel: false, isEnumRange: false, enumOwnerName: "", loCaseName: "", hiCaseName: "", isFloat: false, bindings: MatchPatternBindingArray.create(), bindingNames: ByteArrayArray.create()}
+	end 'stringLiteral'
+
 	export static function enumCase(token Token, caseName String) returns MatchPatternSpec
-		return Self{kind: MatchPatternKind.enumCase, token: token, intValue: 0, caseName: caseName, displayName: caseName, loValue: 0, hiValue: 0, isUpto: false, hasMinSentinel: false, hasMaxSentinel: false, isEnumRange: false, enumOwnerName: "", loCaseName: "", hiCaseName: "", bindings: MatchPatternBindingArray.create(), bindingNames: ByteArrayArray.create()}
+		return Self{kind: MatchPatternKind.enumCase, token: token, intValue: 0, caseName: caseName, displayName: caseName, loValue: 0, hiValue: 0, isUpto: false, hasMinSentinel: false, hasMaxSentinel: false, isEnumRange: false, enumOwnerName: "", loCaseName: "", hiCaseName: "", isFloat: false, bindings: MatchPatternBindingArray.create(), bindingNames: ByteArrayArray.create()}
 	end 'enumCase'
 
 	// Phase 9 Stage 2: enum-case pattern with payload bindings.
@@ -18740,14 +19064,14 @@ export type MatchPatternSpec
 	// flat ByteArrayArray slot consumed by the dialect-level
 	// enumMatchArm op. Both arrays are parallel and the same length.
 	export static function enumCaseWithBindings(token Token, caseName String, bindings MatchPatternBindingArray, bindingNames ByteArrayArray) returns MatchPatternSpec
-		return Self{kind: MatchPatternKind.enumCase, token: token, intValue: 0, caseName: caseName, displayName: caseName, loValue: 0, hiValue: 0, isUpto: false, hasMinSentinel: false, hasMaxSentinel: false, isEnumRange: false, enumOwnerName: "", loCaseName: "", hiCaseName: "", bindings: bindings, bindingNames: bindingNames}
+		return Self{kind: MatchPatternKind.enumCase, token: token, intValue: 0, caseName: caseName, displayName: caseName, loValue: 0, hiValue: 0, isUpto: false, hasMinSentinel: false, hasMaxSentinel: false, isEnumRange: false, enumOwnerName: "", loCaseName: "", hiCaseName: "", isFloat: false, bindings: bindings, bindingNames: bindingNames}
 	end 'enumCaseWithBindings'
 
 	// Range pattern: `loValue to|upto hiValue`. Either bound may be a
 	// `min` / `max` sentinel (open-ended), but never both. `displayName`
 	// is the source form used in duplicate / single-value diagnostics.
 	export static function rangeLiteral(token Token, loValue ParsedInt, hiValue ParsedInt, isUpto bool, hasMinSentinel bool, hasMaxSentinel bool, displayName String) returns MatchPatternSpec
-		return Self{kind: MatchPatternKind.rangeLiteral, token: token, intValue: 0, caseName: "", displayName: displayName, loValue: loValue, hiValue: hiValue, isUpto: isUpto, hasMinSentinel: hasMinSentinel, hasMaxSentinel: hasMaxSentinel, isEnumRange: false, enumOwnerName: "", loCaseName: "", hiCaseName: "", bindings: MatchPatternBindingArray.create(), bindingNames: ByteArrayArray.create()}
+		return Self{kind: MatchPatternKind.rangeLiteral, token: token, intValue: 0, caseName: "", displayName: displayName, loValue: loValue, hiValue: hiValue, isUpto: isUpto, hasMinSentinel: hasMinSentinel, hasMaxSentinel: hasMaxSentinel, isEnumRange: false, enumOwnerName: "", loCaseName: "", hiCaseName: "", isFloat: false, bindings: MatchPatternBindingArray.create(), bindingNames: ByteArrayArray.create()}
 	end 'rangeLiteral'
 
 	// Enum-case range: `caseName to|upto caseName`. The `loValue`/`hiValue`
@@ -18755,8 +19079,24 @@ export type MatchPatternSpec
 	// integer-backed scrutinee. `enumOwnerName` identifies the enum for
 	// exhaustiveness coverage tracking.
 	export static function enumRange(token Token, loOrdinal ParsedInt, hiOrdinal ParsedInt, isUpto bool, hasMaxSentinel bool, displayName String, enumOwnerName String, loCaseName String, hiCaseName String) returns MatchPatternSpec
-		return Self{kind: MatchPatternKind.rangeLiteral, token: token, intValue: 0, caseName: "", displayName: displayName, loValue: loOrdinal, hiValue: hiOrdinal, isUpto: isUpto, hasMinSentinel: false, hasMaxSentinel: hasMaxSentinel, isEnumRange: true, enumOwnerName: enumOwnerName, loCaseName: loCaseName, hiCaseName: hiCaseName, bindings: MatchPatternBindingArray.create(), bindingNames: ByteArrayArray.create()}
+		return Self{kind: MatchPatternKind.rangeLiteral, token: token, intValue: 0, caseName: "", displayName: displayName, loValue: loOrdinal, hiValue: hiOrdinal, isUpto: isUpto, hasMinSentinel: false, hasMaxSentinel: hasMaxSentinel, isEnumRange: true, enumOwnerName: enumOwnerName, loCaseName: loCaseName, hiCaseName: hiCaseName, isFloat: false, bindings: MatchPatternBindingArray.create(), bindingNames: ByteArrayArray.create()}
 	end 'enumRange'
+
+	// Exact float-literal pattern (`2.5`). `floatBits` holds the f64 IEEE-754
+	// bit pattern; dispatch emits a single `cmpF64Eq` against the float
+	// scrutinee. Mirrors the C# bootstrap's `ExactFloatPattern`.
+	export static function floatLiteral(token Token, floatBits ParsedInt, displayName String) returns MatchPatternSpec
+		return Self{kind: MatchPatternKind.intLiteral, token: token, intValue: floatBits, caseName: "", displayName: displayName, loValue: 0, hiValue: 0, isUpto: false, hasMinSentinel: false, hasMaxSentinel: false, isEnumRange: false, enumOwnerName: "", loCaseName: "", hiCaseName: "", isFloat: true, bindings: MatchPatternBindingArray.create(), bindingNames: ByteArrayArray.create()}
+	end 'floatLiteral'
+
+	// Float range pattern (`0.0 to 5.0`, `0.0 upto 5.0`, `min to 5.0`, `0.0 to max`).
+	// `loBits`/`hiBits` carry the f64 IEEE-754 bit patterns of the bounds (0 when
+	// the matching `has*Sentinel` is set). Dispatch emits `cmpF64Ge` /
+	// `cmpF64Le`/`cmpF64Lt`. Mirrors the C# bootstrap's `RangePattern` of
+	// `FloatRangeBound`s.
+	export static function floatRangeLiteral(token Token, loBits ParsedInt, hiBits ParsedInt, isUpto bool, hasMinSentinel bool, hasMaxSentinel bool, displayName String) returns MatchPatternSpec
+		return Self{kind: MatchPatternKind.rangeLiteral, token: token, intValue: 0, caseName: "", displayName: displayName, loValue: loBits, hiValue: hiBits, isUpto: isUpto, hasMinSentinel: hasMinSentinel, hasMaxSentinel: hasMaxSentinel, isEnumRange: false, enumOwnerName: "", loCaseName: "", hiCaseName: "", isFloat: true, bindings: MatchPatternBindingArray.create(), bindingNames: ByteArrayArray.create()}
+	end 'floatRangeLiteral'
 
 	export function isDefault() returns bool
 		return match self.kind 'check'
@@ -18764,6 +19104,7 @@ export type MatchPatternSpec
 			intLiteral gives false
 			enumCase gives false
 			rangeLiteral gives false
+			stringLiteral gives false
 		end 'check'
 	end 'isDefault'
 
@@ -18773,8 +19114,19 @@ export type MatchPatternSpec
 			intLiteral gives false
 			enumCase gives false
 			rangeLiteral gives true
+			stringLiteral gives false
 		end 'check'
 	end 'isRange'
+
+	export function isStringLiteral() returns bool
+		return match self.kind 'check'
+			defaultArm gives false
+			intLiteral gives false
+			enumCase gives false
+			rangeLiteral gives false
+			stringLiteral gives true
+		end 'check'
+	end 'isStringLiteral'
 end 'MatchPatternSpec'
 
 export typealias MatchPatternSpecArray = Array with MatchPatternSpec
@@ -18807,6 +19159,7 @@ export type MatchPatternList
 			intLiteral gives false
 			enumCase gives true
 			rangeLiteral gives false
+			stringLiteral gives false
 		end 'check'
 	end 'isEnumCase'
 

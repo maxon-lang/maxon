@@ -1,0 +1,54 @@
+// Test: match-statements.try-otherwise-ignore
+enum Err implements Error
+	bad
+end 'Err'
+
+function leaf() throws Err
+	throw Err.bad
+end 'leaf'
+
+function dispatch(kind Tally)
+	match kind 'k'
+		1 then try leaf() otherwise ignore
+		default panic("unreachable")
+	end 'k'
+end 'dispatch'
+
+typealias Tally = int(0 to 100)
+
+function main() returns ExitCode
+	dispatch(1)
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @dispatch(local0: u8) {
+  entry:
+    %16 = mir.param local0 : u8
+    %2 = mir.mov_imm 1 : i64
+    %3 = mir.cmp eq, %16, %2
+    mir.cond_br %3 [then: try_0.otherwise(), else: k_0.case1()]
+  k_0.merge:
+    mir.ret %4
+  try_0.otherwise:
+    %10 = mir.mov_imm 0 : i64
+    mir.br try_0.merge(%10)
+  try_0.merge(%15: i64):
+    mir.br k_0.merge()
+  k_0.case1:
+    %12 = mir.global_addr @__panic_msg_6b4a0441a4eca408
+    %13 = mir.call @mrt_panic(%12)
+    mir.ret %14
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 1 : i64
+    %1 = mir.call @dispatch(%0)
+    %2 = mir.mov_imm 0 : i64
+    mir.ret %2
+  }
+}
+---

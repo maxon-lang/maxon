@@ -1,0 +1,39 @@
+// Test: match-break.basic
+function main() returns ExitCode
+	var result = 0
+	match 2 'check'
+		1 then result = 10
+		2 then break
+		default then result = 99
+	end 'check'
+	return result
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %1 = mir.mov_imm 2 : i64
+    mir.br check_0.next0()
+  check_0.merge(%9: i64):
+    %10 = mir.mov_imm 125 : i64
+    %11 = mir.cmp ugt, %9, %10
+    mir.cond_br %11 [then: __range_panic_0(), else: __range_ok_0()]
+  check_0.next0:
+    %6 = mir.mov_imm 2 : i64
+    %7 = mir.cmp eq, %1, %6
+    mir.cond_br %7 [then: check_0.merge(%0), else: check_0.case2()]
+  check_0.case2:
+    %8 = mir.mov_imm 99 : i64
+    mir.br check_0.merge(%8)
+  __range_panic_0:
+    %12 = mir.global_addr @__panic_msg_457e3a664fa0e48e
+    %13 = mir.call @mrt_panic(%12)
+  __range_ok_0:
+    mir.ret %9
+  }
+}
+---

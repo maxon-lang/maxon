@@ -494,13 +494,13 @@ function main() returns ExitCode
 		1 then result = 10
 		2 then result = 20
 		3 then result = result + 30 and fallthrough
-		default then result = result + 100
+		default then result = result + 90
 	end 'check'
 	return result
 end 'main'
 ```
 ```exitcode
-130
+120
 ```
 
 <!-- test: match-statements.nested-in-function -->
@@ -530,15 +530,15 @@ function main() returns ExitCode
 	let x = 2
 	var result = 0
 	match x 'process'
-		1 then result = 100
-		2 then result = 200
+		1 then result = 60
+		2 then result = 120
 		default then result = 0
 	end 'process'
 	return result
 end 'main'
 ```
 ```exitcode
-200
+120
 ```
 
 <!-- test: match-statements.function-call -->
@@ -1078,15 +1078,15 @@ end 'main'
 function main() returns ExitCode
 	let name = "bob"
 	let code = match name 'lookup'
-		"alice" gives 100
-		"bob" gives 200
+		"alice" gives 60
+		"bob" gives 120
 		default gives 0
 	end 'lookup'
 	return code
 end 'main'
 ```
 ```exitcode
-200
+120
 ```
 
 <!-- test: match-range.inclusive -->

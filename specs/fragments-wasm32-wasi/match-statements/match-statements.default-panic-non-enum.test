@@ -1,0 +1,70 @@
+// Test: match-statements.default-panic-non-enum
+typealias Integer = int(0 to 100)
+
+function classify(x Integer) returns Integer
+	return match x 'check'
+		1 gives 10
+		2 gives 20
+		default panic("unexpected value")
+	end 'check'
+end 'classify'
+
+function main() returns ExitCode
+	let result = classify(2)
+	if result == 20 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @classify(local0: u8) -> u8 {
+  entry:
+    %14 = mir.param local0 : u8
+    %3 = mir.mov_imm 1 : i64
+    %4 = mir.cmp eq, %14, %3
+    mir.cond_br %4 [then: check_0.case0(), else: check_0.next0()]
+  check_0.merge(%13: i64):
+    %15 = mir.mov_imm 100 : i64
+    %16 = mir.cmp ugt, %13, %15
+    mir.cond_br %16 [then: __range_panic_0(), else: __range_ok_0()]
+  check_0.case0:
+    %6 = mir.mov_imm 10 : i64
+    mir.br check_0.merge(%6)
+  check_0.next0:
+    %7 = mir.mov_imm 2 : i64
+    %8 = mir.cmp eq, %14, %7
+    mir.cond_br %8 [then: check_0.case1(), else: check_0.case2()]
+  check_0.case1:
+    %9 = mir.mov_imm 20 : i64
+    mir.br check_0.merge(%9)
+  check_0.case2:
+    %10 = mir.global_addr @__panic_msg_ebf9f0585982205f
+    %11 = mir.call @mrt_panic(%10)
+    %12 = mir.mov_imm 0 : i64
+    mir.ret %12
+  __range_panic_0:
+    %17 = mir.global_addr @__panic_msg_53a0ad8c4b80e0d9
+    %18 = mir.call @mrt_panic(%17)
+  __range_ok_0:
+    mir.ret %13
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 2 : i64
+    %1 = mir.call @classify(%0)
+    %3 = mir.mov_imm 20 : i64
+    %4 = mir.cmp eq, %1, %3
+    mir.cond_br %4 [then: check_0(), else: check_0.after()]
+  check_0:
+    %5 = mir.mov_imm 1 : i64
+    mir.ret %5
+  check_0.after:
+    %6 = mir.mov_imm 0 : i64
+    mir.ret %6
+  }
+}
+---

@@ -1,0 +1,94 @@
+// Test: docs-example-8
+typealias Score = int(i64.min to i64.max)
+
+function charType(c Character) returns Score
+	match c 'classify'
+		'a' to 'z' then return 1  // lowercase
+		'A' to 'Z' then return 2  // uppercase
+		'0' to '9' then return 3  // digit
+		default then return 0    // other
+	end 'classify'
+end 'charType'
+
+function main() returns ExitCode
+	return charType('G')
+end 'main'
+---
+ExitCode: 2
+---
+// CompiledIR
+module {
+  func @charType(local0: i64) -> i64 {
+  entry:
+    %22 = mir.param local0 : i64
+    %2 = mir.call @Character.codepoint(%22)
+    %3 = mir.mov_imm 97 : i64
+    %4 = mir.cmp ge, %2, %3
+    %5 = mir.mov_imm 122 : i64
+    %6 = mir.cmp le, %2, %5
+    %7 = mir.and.i64 %4, %6
+    mir.cond_br %7 [then: classify_0.case0(), else: classify_0.next0()]
+  classify_0.case0:
+    %8 = mir.mov_imm 1 : i64
+    mir.ret %8
+  classify_0.next0:
+    %9 = mir.mov_imm 65 : i64
+    %10 = mir.cmp ge, %2, %9
+    %11 = mir.mov_imm 90 : i64
+    %12 = mir.cmp le, %2, %11
+    %13 = mir.and.i64 %10, %12
+    mir.cond_br %13 [then: classify_0.case1(), else: classify_0.next1()]
+  classify_0.case1:
+    %14 = mir.mov_imm 2 : i64
+    mir.ret %14
+  classify_0.next1:
+    %15 = mir.mov_imm 48 : i64
+    %16 = mir.cmp ge, %2, %15
+    %17 = mir.mov_imm 57 : i64
+    %18 = mir.cmp le, %2, %17
+    %19 = mir.and.i64 %16, %18
+    mir.cond_br %19 [then: classify_0.case2(), else: classify_0.case3()]
+  classify_0.case2:
+    %20 = mir.mov_imm 3 : i64
+    mir.ret %20
+  classify_0.case3:
+    %21 = mir.mov_imm 0 : i64
+    mir.ret %21
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 71 : i64
+    %1 = mir.mov_imm 1 : i64
+    %2 = mir.call @mrt_alloc(%1)
+    mir.store %0, %2, 0 width: byte
+    %3 = mir.mov_imm 48 : i64
+    %4 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %5 = mir.call @mrt_alloc_with_dtor(%3, %4)
+    %6 = mir.mov_imm 0 : i64
+    mir.store %6, %5, 40 width: qword
+    mir.store %2, %5, 0 width: qword
+    %7 = mir.mov_imm 1 : i64
+    mir.store %7, %5, 8 width: qword
+    %8 = mir.mov_imm 1 : i64
+    mir.store %8, %5, 16 width: qword
+    %9 = mir.mov_imm 1 : i64
+    mir.store %9, %5, 24 width: qword
+    %10 = mir.mov_imm -1 : i64
+    mir.store %10, %5, 32 width: qword
+    %12 = mir.mov_imm 8 : i64
+    %13 = mir.func_addr @__destruct_Character
+    %11 = mir.call @stdlib.__mm_alloc(%12, %13)
+    mir.store %5, %11, 0 width: qword
+    %14 = mir.call @charType(%11)
+    %15 = mir.call @mm_drop(%11)
+    %16 = mir.mov_imm 125 : i64
+    %17 = mir.cmp ugt, %14, %16
+    mir.cond_br %17 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %18 = mir.global_addr @__panic_msg_56dfed08f61df001
+    %19 = mir.call @mrt_panic(%18)
+  __range_ok_0:
+    mir.ret %14
+  }
+}
+---

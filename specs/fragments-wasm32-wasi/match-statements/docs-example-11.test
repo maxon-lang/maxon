@@ -1,0 +1,33 @@
+// Test: docs-example-11
+function main() returns ExitCode
+	let x = 50
+	match x 'check'
+		1 to 10 or 90 to 100 then return 1   // extreme values
+		default then return 0
+	end 'check'
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 50 : i64
+    mir.br check_0.cmp1()
+  check_0.case0:
+    %7 = mir.mov_imm 1 : i64
+    mir.ret %7
+  check_0.cmp1:
+    %8 = mir.mov_imm 90 : i64
+    %9 = mir.cmp ge, %0, %8
+    %10 = mir.mov_imm 100 : i64
+    %11 = mir.cmp le, %0, %10
+    %12 = mir.and.i64 %9, %11
+    mir.cond_br %12 [then: check_0.case0(), else: check_0.case1()]
+  check_0.case1:
+    %13 = mir.mov_imm 0 : i64
+    mir.ret %13
+  }
+}
+---

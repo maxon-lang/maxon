@@ -1,0 +1,58 @@
+// Test: match-statements.try-otherwise-stmt
+enum Err implements Error
+	bad
+end 'Err'
+
+function leaf() throws Err
+	throw Err.bad
+end 'leaf'
+
+function dispatch(kind Tally) returns Score
+	match kind 'k'
+		1 then try leaf() otherwise return 7
+		default panic("unreachable")
+	end 'k'
+	return 99
+end 'dispatch'
+
+typealias Tally = int(0 to 100)
+typealias Score = int(0 to 100)
+
+function main() returns ExitCode
+	return dispatch(1)
+end 'main'
+---
+ExitCode: 7
+---
+// CompiledIR
+module {
+  func @dispatch(local0: u8) -> u8 {
+  entry:
+    %15 = mir.param local0 : u8
+    %2 = mir.mov_imm 1 : i64
+    %3 = mir.cmp eq, %15, %2
+    mir.cond_br %3 [then: try_0.otherwise(), else: k_0.case1()]
+  try_0.otherwise:
+    %10 = mir.mov_imm 7 : i64
+    mir.ret %10
+  k_0.case1:
+    %12 = mir.global_addr @__panic_msg_8cba9bfd97a67e29
+    %13 = mir.call @mrt_panic(%12)
+    %14 = mir.mov_imm 0 : i64
+    mir.ret %14
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 1 : i64
+    %1 = mir.call @dispatch(%0)
+    %2 = mir.mov_imm 125 : i64
+    %3 = mir.cmp ugt, %1, %2
+    mir.cond_br %3 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %4 = mir.global_addr @__panic_msg_3a7db58523103608
+    %5 = mir.call @mrt_panic(%4)
+  __range_ok_0:
+    mir.ret %1
+  }
+}
+---

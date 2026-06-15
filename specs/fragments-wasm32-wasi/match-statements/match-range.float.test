@@ -1,0 +1,31 @@
+// Test: match-range.float
+function main() returns ExitCode
+	let x = 2.5
+	match x 'check'
+		0.0 to 5.0 then return 1
+		default then return 0
+	end 'check'
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 4612811918334230528 : f64
+    %2 = mir.mov_imm 0 : f64
+    %3 = mir.cmp fge, %0, %2
+    %4 = mir.mov_imm 4617315517961601024 : f64
+    %5 = mir.cmp fle, %0, %4
+    %6 = mir.and.i64 %3, %5
+    mir.cond_br %6 [then: check_0.case0(), else: check_0.case1()]
+  check_0.case0:
+    %7 = mir.mov_imm 1 : i64
+    mir.ret %7
+  check_0.case1:
+    %8 = mir.mov_imm 0 : i64
+    mir.ret %8
+  }
+}
+---
