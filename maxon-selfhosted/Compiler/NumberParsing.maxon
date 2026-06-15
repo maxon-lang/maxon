@@ -296,6 +296,20 @@ export function parseInt(s String) returns ParsedInt throws ParserError
 	return result
 end 'parseInt'
 
+// Parse a NEGATED integer literal magnitude `s` (the digits after a leading
+// unary `-`). The magnitude `9223372036854775808` (= i64.max + 1) overflows a
+// positive i64 but `-9223372036854775808` is exactly i64.min, so it is accepted
+// here and returned as i64.min — mirroring the C# bootstrap's
+// `ParseNegatedIntegerLiteral`. Every other magnitude parses through `parseInt`
+// (which throws on a true overflow) and is negated. The caller must apply this
+// ONLY when a `-` immediately precedes the literal.
+export function parseNegatedInt(s String) returns ParsedInt throws ParserError
+	if s.replace("_", with: "") == "9223372036854775808" 'isI64Min'
+		return i64.min
+	end 'isI64Min'
+	return 0 - (try parseInt(s))
+end 'parseNegatedInt'
+
 // Parse a hex integer literal. Throws ParserError.overflow if more than 16 significant hex digits.
 function parseHexInt(s ByteArray, startIndex CharOffset) returns ParsedInt throws ParserError
 	var result = 0

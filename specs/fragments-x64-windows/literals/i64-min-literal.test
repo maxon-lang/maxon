@@ -1,0 +1,30 @@
+// Test: i64-min-literal
+typealias Big = int(i64.min to i64.max)
+
+function main() returns ExitCode
+	let lo = -9223372036854775808 as Big
+	let back = lo - i64.min
+	return back as ExitCode
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.xor r8d, r8d
+  __cast_check_lo_0:
+    x64.test r8, r8
+    x64.jge __cast_ok_0
+  __cast_panic_0:
+    x64.lea r12, [rip+__panic_msg_66982a8feaabffe9]
+    x64.mov rcx, r12
+    x64.call mrt_panic
+  __cast_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

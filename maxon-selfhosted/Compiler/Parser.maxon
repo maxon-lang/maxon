@@ -3633,6 +3633,19 @@ export type Parser
 		end 'isNot'
 
 		if accept(TokenKind.minus) 'isNeg'
+			// `- INT_LITERAL` is parsed as a single negated literal so the
+			// i64.min magnitude (`-9223372036854775808`) is accepted — parsing
+			// the bare magnitude through parseInt would overflow before the
+			// negate applied. Mirrors the C# bootstrap's ParseNegatedIntegerLiteral.
+			if at(TokenKind.intLiteral) 'isNegInt'
+				let litToken = cursor.current()
+				_ = try consume()
+				let v = try parseNegatedInt(litToken.value) otherwise 'overflow'
+					reportLiteralOverflow(litToken, message: "Integer literal '-{tokenValueToString(litToken.value)}' is outside the range of int (-9223372036854775808 to 9223372036854775807)")
+					throw ParserError.unhandledToken
+				end 'overflow'
+				return appendConstExpr(UnresolvedConstExpr.intLit(v))
+			end 'isNegInt'
 			let inner = try parseConstAtom()
 			return appendConstExpr(UnresolvedConstExpr.negate(inner))
 		end 'isNeg'
@@ -10837,6 +10850,21 @@ export type Parser
 		if at(TokenKind.minus) 'isNeg'
 			let opToken = try consume()
 			let opRange = SourceRange.ofToken(opToken)
+			// `- INT_LITERAL` is a single negated literal: parse the magnitude
+			// through `parseNegatedInt` so `-9223372036854775808` (i64.min) is
+			// accepted — parsing the bare magnitude through parsePrimary's
+			// `parseInt` overflows before the unary-neg op applies. Mirrors the
+			// C# bootstrap's ParseNegatedIntegerLiteral. Emit the folded value as
+			// a plain integer literal (no `unop neg`).
+			if at(TokenKind.intLiteral) 'isNegIntLit'
+				let litToken = try consume()
+				let negValue = try parseNegatedInt(litToken.value) otherwise 'negOverflow'
+					reportLiteralOverflow(litToken, message: "Integer literal '-{tokenValueToString(litToken.value)}' is outside the range of int (-9223372036854775808 to 9223372036854775807)")
+					return ExprResult.direct(ByteArray.create(), valueType: MaxonType.integer)
+				end 'negOverflow'
+				let litName = emitLiteral(block, value: negValue, valueType: MaxonType.integer, range: SourceRange.between(opToken, last: litToken))
+				return try parseAsCasts(block, expr: ExprResult.direct(litName, valueType: MaxonType.integer))
+			end 'isNegIntLit'
 			let operand = try parsePrimary(block)
 			let operandType = exprType(operand)
 			if maxonTypeIsFloat(operandType) 'floatNeg'

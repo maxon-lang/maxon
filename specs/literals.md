@@ -352,3 +352,21 @@ end 'main'
 ```maxoncstderr
 error E2011: specs/fragments/literals/error.float-overflow.test:3:10: Float literal '1.0e999' is outside the range of float
 ```
+
+<!-- test: i64-min-literal -->
+`-9223372036854775808` is exactly `i64.min`. Its magnitude (`9223372036854775808`
+= `i64.max + 1`) overflows a positive i64, so a negated literal must be parsed as
+a single unit: parsing the bare magnitude first would wrongly report E2011. (An
+un-negated `9223372036854775808` still overflows — see error.int-overflow above.)
+```maxon
+typealias Big = int(i64.min to i64.max)
+
+function main() returns ExitCode
+	let lo = -9223372036854775808 as Big
+	let back = lo - i64.min
+	return back as ExitCode
+end 'main'
+```
+```exitcode
+0
+```
