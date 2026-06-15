@@ -625,3 +625,49 @@ end 'main'
 ```exitcode
 1
 ```
+
+
+<!-- test: match-expr-result-from-method-call-arm -->
+A `match` expression bound to a `let` whose value-producing arm is a METHOD or
+SIBLING call (not a literal, not a free-function call) must still type the
+binding from the call's return type, so a consumer of the bound value resolves
+its receiver. The parser can't resolve a call's return type at parse time, so it
+seeds the merge slot with an int-zero placeholder; TypeResolution upgrades the
+slot from the arm's resolved producer type and must propagate that upgrade to the
+binding AND its downstream method-call/convert consumers. Here `name` is bound to
+`match t { 0 gives self.getName(0); default panic }` (a String method-call arm),
+and `name.byteLength()` must dispatch on the String receiver — otherwise the
+binding stays the int seed and the unresolved chain trips the lowering guard.
+```maxon
+typealias Idx = int(0 to 100)
+
+type Lookup
+	var names as StringArray
+
+	export static function make() returns Lookup
+		var a = StringArray.create()
+		a.push("alpha")
+		return Lookup{names: a}
+	end 'make'
+
+	export function getName(i Idx) returns String
+		return try self.names.get(i) otherwise "?"
+	end 'getName'
+
+	export function nameLen(t Idx) returns Idx
+		let name = match t 'pick'
+			0 gives self.getName(0)
+			default panic("empty")
+		end 'pick'
+		return name.byteLength() as Idx
+	end 'nameLen'
+end 'Lookup'
+
+function main() returns ExitCode
+	var l = Lookup.make()
+	return l.nameLen(0)
+end 'main'
+```
+```exitcode
+5
+```
