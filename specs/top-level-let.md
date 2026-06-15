@@ -274,6 +274,32 @@ end 'main'
 32
 ```
 
+<!-- test: file-private-same-name-cross-file -->
+A file-private (non-exported) top-level `let` is scoped to its declaring file, so two files may declare the same bare name with different values. Each file's reads resolve to its OWN constant.
+```maxon
+// --- file: featA/a.maxon
+let SHARED = 99
+
+export function getA() returns ExitCode
+	return SHARED as ExitCode
+end 'getA'
+
+// --- file: featB/b.maxon
+let SHARED = 7
+
+export function getB() returns ExitCode
+	return SHARED as ExitCode
+end 'getB'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return getA() - getB()
+end 'main'
+```
+```exitcode
+92
+```
+
 <!-- test: from-literal-initializer -->
 Top-level let with `Type from "literal"` syntax (runtime-initialized via `__module_init`).
 ```maxon

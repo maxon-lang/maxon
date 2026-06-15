@@ -2738,6 +2738,36 @@ export type Parser
 
 	// --- Top-level let / var ---
 
+	// Compute the project-global storage key for a top-level binding that
+	// folds to a compile-time CONSTANT (drained into `topLevelConstants`). A
+	// file-private BARE immutable binding (`typeName` empty, `visibility ==
+	// file`, `not mutable`) is scoped by its declaring file so two same-named
+	// file-private constants in different files don't collide; every other
+	// case keeps the plain qualified name (`name` for bare exported/module,
+	// `TypeName.name` for static fields).
+	//
+	// Scope is deliberately limited to the constant-fold paths: a constant
+	// disappears at every read site (it folds to a literal / stringConst), so
+	// the scoped key never escapes into an IR slot name. Mutable `var`s and
+	// the runtime-init / array-literal / lazy-static `let`s land in
+	// `topLevelVars` with a real .data slot whose name IS its IR identity —
+	// scoping those would require rewriting every globalLoad/globalStore +
+	// the method-receiver type-resolution lookups that key the slot by its
+	// bare name, so they keep the plain qualified name. (In practice no two
+	// file-private vars in the self-hosted/stdlib tree share a bare name.)
+	//
+	// This single helper is the only place the const-scoping decision is
+	// made — the const registration, its duplicate guards, and the read /
+	// const-fold resolution all route a bare-name read through
+	// `fileScopedTopLevelKey` first, so they stay consistent with the key
+	// chosen here.
+	function topLevelConstStorageName(typeName String, bareName String, visibility Visibility, mutable bool) returns String
+		if typeName.isEmpty() and visibility == Visibility.file and not mutable 'filePrivateBareConst'
+			return fileScopedTopLevelKey(bareName, declFilePath: filePath)
+		end 'filePrivateBareConst'
+		return qualifyName(typeName, name: bareName)
+	end 'topLevelConstStorageName'
+
 	// Parse a top-level binding:
 	//   `let NAME = <expr>`                      (top-level)
 	//   `var NAME = <expr>`                      (top-level)
@@ -2768,12 +2798,20 @@ export type Parser
 		try expect(TokenKind.equals)
 
 		let valueToken = cursor.current()
+		// Plain qualified name for the runtime-init / array-literal / lazy-
+		// static dispatches (all land in `topLevelVars` with a real .data
+		// slot keyed by this exact name — see `topLevelConstStorageName`).
 		let qualifiedName = qualifyName(typeName, name: nameToken.value)
+		// File-scoped key for the constant-fold dispatches (string literal,
+		// const-expr) when this is a file-private BARE immutable binding, so
+		// two same-named file-private constants in different files don't
+		// collide. Folds to the plain qualified name otherwise.
+		let constStorageName = topLevelConstStorageName(typeName, bareName: nameToken.value, visibility: visibility, mutable: mutable)
 
 		// String literal initializer (`let GREETING = "hello"`,
 		// `var msg = "hi"`). Captured as a `stringLit` arena node.
 		if valueToken.kind == TokenKind.stringLiteral 'isString'
-			try parseTopLevelStringDecl(nameToken, qualifiedName: qualifiedName, valueToken: valueToken, mutable: mutable, visibility: visibility)
+			try parseTopLevelStringDecl(nameToken, qualifiedName: constStorageName, valueToken: valueToken, mutable: mutable, visibility: visibility)
 			return
 		end 'isString'
 
@@ -2837,7 +2875,10 @@ export type Parser
 			return
 		end 'notConst'
 
-		registerUnresolvedTopLevelDecl(nameToken, qualifiedName: qualifiedName, rootExprId: exprId, mutable: mutable, visibility: visibility)
+		// `constStorageName` is file-scoped only for an immutable file-private
+		// bare `let`; a mutable `var` keeps the plain qualified name and the
+		// drain pass routes it to `topLevelVars` under that name.
+		registerUnresolvedTopLevelDecl(nameToken, qualifiedName: constStorageName, rootExprId: exprId, mutable: mutable, visibility: visibility)
 	end 'parseTopLevelDecl'
 
 	// Handle the `<name> = "<string>"` shape. Lifted out so the EOF /
@@ -5759,6 +5800,13 @@ export type Parser
 			// the same reason enums do (raw value is a struct literal, not an int).
 			let skipIntFromRawHelper = (not backingState.structBackingTypeName.isEmpty()) or backingState.isStringBacked or backingState.isCharBacked
 			synthesizeEnumLookupHelpers(currentTypeName, cases: cases, isFloatBacked: backingState.isFloatBacked, isStringBacked: backingState.isStringBacked, isCharBacked: backingState.isCharBacked, visibility: visibility, line: unionNameToken.line, column: unionNameToken.column, skipFromRawValue: skipIntFromRawHelper)
+
+			// `<Union>.unionCases.<member>` works on a SCALAR (payload-free)
+			// union too — the self-hosted compiler's own `StoreWidth` uses
+			// `StoreWidth.unionCases.fromRawValue(...)`. The C# bootstrap
+			// materializes the companion lazily on that access; register it
+			// eagerly here so the parse-time `.unionCases` dispatch finds it.
+			registerUnionCasesCompanion(currentTypeName, cases: cases, visibility: visibility, line: unionNameToken.line, column: unionNameToken.column)
 		end 'scalarUnion'
 
 		currentTypeName = ""
@@ -5769,20 +5817,14 @@ export type Parser
 	// Phase 9 Stage 4: register the `<UnionName>.unionCases` companion enum.
 	// One bare case per variant of the parent union; ordinals match the
 	// parent's tag values; rawValue defaults to ordinal so `.rawValue` and
-	// `.fromRawValue` round-trip cleanly. Skipped when no case carries a
-	// payload — plain enums already provide the same surface natively, and
-	// the spec only mandates the companion for unions with associated values.
+	// `.fromRawValue` round-trip cleanly. Registered for EVERY union —
+	// payload-bearing and scalar (payload-free) alike — because user code may
+	// reference `<Union>.unionCases.<case>` / `.unionCases.fromRawValue(...)`
+	// on a scalar union too (the self-hosted compiler's own `StoreWidth` does).
+	// The C# bootstrap materializes the companion lazily on first `.unionCases`
+	// access; registering eagerly here is equivalent and keeps the parser's
+	// single-pass decl handling. A re-decl is guarded below.
 	function registerUnionCasesCompanion(unionName String, cases EnumCaseArray, visibility Visibility, line LineNumber, column ColumnNumber)
-		var hasPayload = false
-		for c in cases 'scanPayload'
-			if c.payloadFields.count() > 0 'isPayloadCase'
-				hasPayload = true
-				break
-			end 'isPayloadCase'
-		end 'scanPayload'
-		if not hasPayload 'noCompanion'
-			return
-		end 'noCompanion'
 		let companionName = "{unionName}.unionCases"
 		// Avoid duplicate registration when a union is re-parsed (e.g. fragment
 		// regeneration with `--update-required`).
@@ -9884,20 +9926,29 @@ export type Parser
 		let lastExprToken = previousToken()
 		let stmtRange = SourceRange.between(kwToken, last: lastExprToken)
 
-		// `let LOCAL = "literal"` additionally registers LOCAL as a
-		// file-scope top-level constant — the only let-vs-var difference.
-		// `var` bindings are mutable so they skip the const-table entry.
-		// Both shapes share the producer-emission path below.
+		// `let LOCAL = "literal"` (a FUNCTION-LOCAL binding — `parseVarDecl`
+		// runs inside a block) additionally registers LOCAL as a file-scope
+		// string constant so a later `unresolvedRead` of the name folds to the
+		// literal. `var` bindings are mutable so they skip the const-table
+		// entry. Both shapes share the producer-emission path below.
 		//
-		// Collision rule: the entry is `Visibility.file`, so a same-named
-		// file-private entry already registered by a sibling file is unreachable
-		// from this file's reads anyway (the read-site visibility filter
-		// rejects the cross-file lookup). Treat that as a benign skip rather
-		// than E2001 — same semantics as the C# bootstrap's `TryAdd`. A real
-		// same-file duplicate is caught upstream by scope tracking; a cross-
-		// file file-private clash silently keeps the first-parsed entry.
-		// Collision with a `module`-or-`global` entry remains a hard error
-		// because the new file-private would shadow a visible decl.
+		// The entry is always file-private, so it is keyed by
+		// `fileScopedTopLevelKey` — the same scheme `parseTopLevelDecl` uses
+		// for bare file-private top-level constants. Two same-named string
+		// lets in *different* files therefore get distinct keys, and the read
+		// side (`rewriteUnresolvedRead`) tries the reader's file-scoped key
+		// first, so same-file reads fold correctly and cross-file ones never
+		// alias another file's local — closing the former bare-key hole.
+		//
+		// A collision on the scoped key means the same name was already
+		// registered by an earlier `let LOCAL = "..."` in THIS file. Because
+		// these are function-locals in independent scopes (e.g. a per-function
+		// `let lb = "\{"` repeated across formatters), that is not a
+		// redeclaration — the in-scope reads resolve to each local's own slot
+		// via `varLoad` and never consult this fold entry. Keep the first
+		// registration and skip silently; a genuine same-file *top-level*
+		// redeclaration is caught by the top-level decl guards instead.
+		//
 		// Empty-string lets (`let X = ""`) carry no folding benefit — a read
 		// of `X` would fold to the same `""` literal the parser would have
 		// emitted directly — so skip registration. This also keeps the
@@ -9906,22 +9957,14 @@ export type Parser
 		// `Serialize.writeString`'s length-0 guard.
 		if isLet and exprIsStringConst(exprResult) and not project.strings.get(exprStringConstId(exprResult)).isEmpty() 'registerLetConst'
 			let stringId = exprStringConstId(exprResult)
+			let localStrKey = fileScopedTopLevelKey(nameToken.value, declFilePath: filePath)
 			let localStrEntry = TopLevelConstant.create(ConstantValue.stringValue(stringId), visibility: Visibility.file, sourceFilePath: filePath)
 			var insertedLocalStr = true
-			try project.topLevelConstants.insert(nameToken.value, value: localStrEntry) otherwise 'dupConst3'
+			try project.topLevelConstants.insert(localStrKey, value: localStrEntry) otherwise 'dupConst3'
 				insertedLocalStr = false
-				let existing = try project.topLevelConstants.get(nameToken.value) otherwise panic("parseVarDecl: topLevelConstants.insert reported dup for '{nameToken.value}' but get failed")
-				let existingIsFilePrivate = match existing.visibility 'kind'
-					global gives false
-					module gives false
-					file gives true
-				end 'kind'
-				if not existingIsFilePrivate 'realDup'
-					reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Duplicate constant '{nameToken.value}'", line: nameToken.line, column: nameToken.column, filePath: filePath)
-				end 'realDup'
 			end 'dupConst3'
 			if insertedLocalStr 'recLocalStr'
-				recordTopLevelConstantInsert(project, filePath: filePath, key: nameToken.value)
+				recordTopLevelConstantInsert(project, filePath: filePath, key: localStrKey)
 			end 'recLocalStr'
 		end 'registerLetConst'
 
@@ -15074,13 +15117,21 @@ export type Parser
 		// is never bound — see materializeStringConstIfNeeded).
 		var elemNames = ByteArrayArray.create()
 		var elemTypes = MaxonTypeArray.create()
-		let innerMat = materializeStringConstIfNeeded(block, expr: inner, range: SourceRange.ofToken(openToken))
+		// A tuple element may be a conditional expression (`A if c else B`) or
+		// carry bool short-circuit, either of which moves `currentBlock` to a
+		// fresh merge block. Materialize / emit each element into the block it
+		// actually landed in (`currentBlock`), and build the tuple struct in
+		// the final landing block, so a ternary's merge block is the one that
+		// receives the construction + the branch the caller terminates it
+		// with. Emitting into the stale `block` would orphan the ternary merge
+		// block (left unterminated → assertAllBlocksTerminated panic).
+		let innerMat = materializeStringConstIfNeeded(currentBlock, expr: inner, range: SourceRange.ofToken(openToken))
 		elemNames.push(exprName(innerMat))
 		elemTypes.push(exprType(innerMat))
 		while accept(TokenKind.comma) 'tupleLoop'
 			let loopStart = cursor.index()
-			let nextElem = try parseExpression(block)
-			let nextMat = materializeStringConstIfNeeded(block, expr: nextElem, range: SourceRange.ofToken(openToken))
+			let nextElem = try parseExpression(currentBlock)
+			let nextMat = materializeStringConstIfNeeded(currentBlock, expr: nextElem, range: SourceRange.ofToken(openToken))
 			elemNames.push(exprName(nextMat))
 			elemTypes.push(exprType(nextMat))
 			// Stuck-guard mirrors parseCallArgsRaw: a failed inner parse
@@ -15096,11 +15147,12 @@ export type Parser
 		let baseName = "__Tuple{arity}"
 		let typeNameBytes = baseName.toByteArray()
 		let ptrName = freshSynthName()
-		module.appendOp(block, op: MaxonOp.structAlloc(ptrName, structName: typeNameBytes, range: SourceRange.ofToken(openToken)))
+		var emitBlock = currentBlock
+		module.appendOp(emitBlock, op: MaxonOp.structAlloc(ptrName, structName: typeNameBytes, range: SourceRange.ofToken(openToken)))
 		for i in 0 upto arity 'eachField'
 			let elemValue = try elemNames.get(i) otherwise panic("parseParenExpr: elemNames.get OOB at {i}")
 			let fieldName = "_{i}".toByteArray()
-			module.appendOp(block, op: MaxonOp.fieldStore(ptrName, fieldName: fieldName, value: elemValue, isInit: true, range: SourceRange.ofToken(openToken)))
+			module.appendOp(emitBlock, op: MaxonOp.fieldStore(ptrName, fieldName: fieldName, value: elemValue, isInit: true, range: SourceRange.ofToken(openToken)))
 		end 'eachField'
 		// Phase 15e: when every element has a concrete parse-time type (literal
 		// int/float/bool/string/char and named structs all qualify), intern a
@@ -17025,19 +17077,38 @@ end 'enumStringCharBacking'
 // depend on the runtime raw-value representation).
 function classifyEnumLookupForFromName(project Project, enumName String) returns EnumLookupTarget
 	if let resolved = try project.enumTypes.get(enumName) 'fromResolved'
-		if resolved.isUnion 'isUnion'
+		// `.fromName` looks a case up by its *name*, which every scalar-backed
+		// shape supports — bare enums and scalar-backed unions (string / char /
+		// int / float raw values, no payloads) alike. Only an associated-value
+		// union (some case carries payload fields) is rejected, mirroring the
+		// C# bootstrap which routes both enum and non-payload union receivers
+		// through `ParseEnumStaticMethod`.
+		if resolved.isUnion and enumCasesAnyHavePayload(resolved.cases) 'isPayloadUnion'
 			return EnumLookupTarget.rejected(EnumLookupRejectKind.associatedValueUnion)
-		end 'isUnion'
+		end 'isPayloadUnion'
 		return EnumLookupTarget.bareEnum(resolved.cases, isFloatBacked: resolved.isFloatBacked, visibility: resolved.visibility, sourceFilePath: resolved.sourceFilePath, line: resolved.nameLine, column: resolved.nameColumn)
 	end 'fromResolved'
 	if let unresolved = try project.unresolvedEnums.get(enumName) 'fromUnresolved'
-		if unresolved.isUnion 'isUnion2'
+		if unresolved.isUnion and enumCasesAnyHavePayload(unresolved.cases) 'isPayloadUnion2'
 			return EnumLookupTarget.rejected(EnumLookupRejectKind.associatedValueUnion)
-		end 'isUnion2'
+		end 'isPayloadUnion2'
 		return EnumLookupTarget.bareEnum(unresolved.cases, isFloatBacked: unresolved.isFloatBacked, visibility: unresolved.visibility, sourceFilePath: unresolved.filePath, line: unresolved.line, column: unresolved.column)
 	end 'fromUnresolved'
 	return EnumLookupTarget.notAnEnum()
 end 'classifyEnumLookupForFromName'
+
+// True when any case in `cases` carries associated-value payload fields —
+// i.e. the owning union is a true associated-value union (no `.fromName`).
+// A scalar-backed union (string / char / int / float raw values, every
+// case payload-free) returns false and keeps `.fromName`.
+function enumCasesAnyHavePayload(cases EnumCaseArray) returns bool
+	for c in cases 'scan'
+		if c.payloadFields.count() > 0 'hit'
+			return true
+		end 'hit'
+	end 'scan'
+	return false
+end 'enumCasesAnyHavePayload'
 
 // G.2: true when any case in `cases` carries a `= StructType{...}` /
 // `= StructType.create(...)` backing literal. Lifted out of the per-

@@ -2451,12 +2451,80 @@ function filePathFromString(s String, fallback FilePath) returns FilePath
 	return try FilePath.from(s) otherwise fallback
 end 'filePathFromString'
 
-function rewriteUnresolvedRead(project Project, module MaxonModule, opIdx OpIndex, result ByteArray, name String, range SourceRange, filePath FilePath)
-	if let info = try project.topLevelVars.get(name) 'isTopLevelVar'
-		if isVisibleFrom(info.visibility, declFilePath: info.sourceFilePath, readerFilePath: filePath) 'visible'
-			try module.ops.set(opIdx, value: MaxonOp.globalLoad(result, name: name, slotType: info.slotType, range: range)) otherwise panic("rewriteUnresolvedRead: ops.set OOB at idx={opIdx} (count={module.ops.count()})")
-			return
+// Resolution result for a bare-name top-level VAR lookup. `key` is the
+// project-map key the entry was found under (file-scoped for a file-
+// private var, bare/qualified otherwise) — callers use it as the slot
+// name when rewriting the `unresolvedRead`/`unresolvedAssign` op into a
+// `globalLoad`/`globalStore`, so the op references the same .data slot the
+// parser reserved.
+type TopLevelVarLookup
+	export var found as bool
+	export var key as String
+	export var info as TopLevelVarInfo
+
+	export static function miss() returns TopLevelVarLookup
+		return Self{found: false, key: "", info: TopLevelVarInfo.create("", slotType: MaxonType.unresolved, initialValue: 0 as IntConstant, visibility: Visibility.file, sourceFilePath: try FilePath.from("") otherwise panic("TopLevelVarLookup.miss: FilePath.from(\"\") failed"))}
+	end 'miss'
+
+	export static function hit(key String, info TopLevelVarInfo) returns TopLevelVarLookup
+		return Self{found: true, key: key, info: info}
+	end 'hit'
+end 'TopLevelVarLookup'
+
+type TopLevelConstLookup
+	export var found as bool
+	export var key as String
+	export var entry as TopLevelConstant
+
+	export static function miss() returns TopLevelConstLookup
+		return Self{found: false, key: "", entry: TopLevelConstant.create(ConstantValue.intValue(0), visibility: Visibility.file, sourceFilePath: try FilePath.from("") otherwise panic("TopLevelConstLookup.miss: FilePath.from(\"\") failed"))}
+	end 'miss'
+
+	export static function hit(key String, entry TopLevelConstant) returns TopLevelConstLookup
+		return Self{found: true, key: key, entry: entry}
+	end 'hit'
+end 'TopLevelConstLookup'
+
+// Resolve a bare name read from `readerFilePath` against the top-level VAR
+// map. Top-level vars are NOT file-scoped (their .data slot name is their IR
+// identity, threaded through every globalLoad/globalStore and the method-
+// receiver type-resolution lookups), so a single bare-key lookup gated by
+// `isVisibleFrom` covers file-private, module, and exported vars alike —
+// exactly as before file-scoping was introduced for constants. Returning the
+// resolved key keeps the call sites symmetric with `lookupTopLevelConst`.
+function lookupTopLevelVar(project Project, name String, readerFilePath FilePath) returns TopLevelVarLookup
+	if let info = try project.topLevelVars.get(name) 'bare'
+		if isVisibleFrom(info.visibility, declFilePath: info.sourceFilePath, readerFilePath: readerFilePath) 'visible'
+			return TopLevelVarLookup.hit(name, info: info)
 		end 'visible'
+	end 'bare'
+	return TopLevelVarLookup.miss()
+end 'lookupTopLevelVar'
+
+// Constant counterpart of `lookupTopLevelVar`: file-scoped key first (the
+// reader's own file-private constant), then the bare/qualified key for an
+// exported / module-visible constant gated by `isVisibleFrom`.
+function lookupTopLevelConst(project Project, name String, readerFilePath FilePath) returns TopLevelConstLookup
+	let scopedKey = fileScopedTopLevelKey(name, declFilePath: readerFilePath)
+	if let entry = try project.topLevelConstants.get(scopedKey) 'fileScoped'
+		return TopLevelConstLookup.hit(scopedKey, entry: entry)
+	end 'fileScoped'
+	if let entry = try project.topLevelConstants.get(name) 'bare'
+		if isVisibleFrom(entry.visibility, declFilePath: entry.sourceFilePath, readerFilePath: readerFilePath) 'visible'
+			return TopLevelConstLookup.hit(name, entry: entry)
+		end 'visible'
+	end 'bare'
+	return TopLevelConstLookup.miss()
+end 'lookupTopLevelConst'
+
+function rewriteUnresolvedRead(project Project, module MaxonModule, opIdx OpIndex, result ByteArray, name String, range SourceRange, filePath FilePath)
+	let varLookup = lookupTopLevelVar(project, name: name, readerFilePath: filePath)
+	if varLookup.found 'isTopLevelVar'
+		// Use the resolved key as the slot name: for a file-private var it is
+		// the file-scoped storage name the parser reserved the .data slot
+		// under, which differs from the bare name the read site spelled.
+		try module.ops.set(opIdx, value: MaxonOp.globalLoad(result, name: varLookup.key, slotType: varLookup.info.slotType, range: range)) otherwise panic("rewriteUnresolvedRead: ops.set OOB at idx={opIdx} (count={module.ops.count()})")
+		return
 	end 'isTopLevelVar'
 	// `name` shaped `receiver.field` where `receiver` is a top-level var
 	// (instance variable holding a struct). Rewrite to globalLoad(receiver)
@@ -2468,35 +2536,36 @@ function rewriteUnresolvedRead(project Project, module MaxonModule, opIdx OpInde
 	if tryRewriteDottedRead(project, module: module, opIdx: opIdx, result: result, name: name, range: range, filePath: filePath) 'wasInstanceField'
 		return
 	end 'wasInstanceField'
-	if let entry = try project.topLevelConstants.get(name) 'isConst'
-		if isVisibleFrom(entry.visibility, declFilePath: entry.sourceFilePath, readerFilePath: filePath) 'visible'
-			// Record this read for the `checkUnusedExports` pass. The pass runs
-			// after all rewrites finish, by which point this op will be a bare
-			// `literal` / `stringConst` carrying no reference to the constant's
-			// name — so we capture the (constantName, readerFilePath) pair here,
-			// at the only moment both are still in scope. Stdlib constants
-			// (sourceFilePath = stdlib bootstrap path) get the same treatment;
-			// the pass skips stdlib decls regardless.
-			project.crossFileConstReads.push(CrossFileConstRead.create(name, readerFilePath: filePath))
-			// Enum cases get tagged with the enclosing enum's named MaxonType so
-			// downstream consumers (varDecl slotType inference, match scrutinee
-			// type recovery) can recover the case set rather than seeing a bare
-			// integer or float literal.
-			let intValueType = enumLiteralTypeOr(project, qualifiedName: name, fallback: MaxonType.integer)
-			let floatValueType = enumLiteralTypeOr(project, qualifiedName: name, fallback: MaxonType.float)
-			match entry.value 'inline'
-				intValue(v) then rewriteToLiteral(module, opIdx: opIdx, result: result, value: v, range: range, valueType: intValueType)
-				// Float-typed top-level constants store IEEE 754 raw bits in the
-				// same i64 slot used by MaxonOp.literal for floats.
-				floatValue(bits) then rewriteToLiteral(module, opIdx: opIdx, result: result, value: bits, range: range, valueType: floatValueType)
-				// String constants resolve to a `stringConst` op carrying the
-				// interned StringId. A follow-up walk pattern-matches on
-				// `stringConst` producers to specialize cmp consumers
-				// (cmp(stringConst, stringConst) → literal fold).
-				stringValue(stringId) then rewriteToStringConst(module, opIdx: opIdx, result: result, stringId: stringId, range: range)
-			end 'inline'
-			return
-		end 'visible'
+	let constLookup = lookupTopLevelConst(project, name: name, readerFilePath: filePath)
+	if constLookup.found 'isConst'
+		let entry = constLookup.entry
+		// Record this read for the `checkUnusedExports` pass. The pass runs
+		// after all rewrites finish, by which point this op will be a bare
+		// `literal` / `stringConst` carrying no reference to the constant's
+		// name — so we capture the (constantName, readerFilePath) pair here,
+		// at the only moment both are still in scope. Stdlib constants
+		// (sourceFilePath = stdlib bootstrap path) get the same treatment;
+		// the pass skips stdlib decls regardless. The bare `name` is recorded
+		// (not the file-scoped key) so the export-usage pass keys consistently.
+		project.crossFileConstReads.push(CrossFileConstRead.create(name, readerFilePath: filePath))
+		// Enum cases get tagged with the enclosing enum's named MaxonType so
+		// downstream consumers (varDecl slotType inference, match scrutinee
+		// type recovery) can recover the case set rather than seeing a bare
+		// integer or float literal.
+		let intValueType = enumLiteralTypeOr(project, qualifiedName: name, fallback: MaxonType.integer)
+		let floatValueType = enumLiteralTypeOr(project, qualifiedName: name, fallback: MaxonType.float)
+		match entry.value 'inline'
+			intValue(v) then rewriteToLiteral(module, opIdx: opIdx, result: result, value: v, range: range, valueType: intValueType)
+			// Float-typed top-level constants store IEEE 754 raw bits in the
+			// same i64 slot used by MaxonOp.literal for floats.
+			floatValue(bits) then rewriteToLiteral(module, opIdx: opIdx, result: result, value: bits, range: range, valueType: floatValueType)
+			// String constants resolve to a `stringConst` op carrying the
+			// interned StringId. A follow-up walk pattern-matches on
+			// `stringConst` producers to specialize cmp consumers
+			// (cmp(stringConst, stringConst) → literal fold).
+			stringValue(stringId) then rewriteToStringConst(module, opIdx: opIdx, result: result, stringId: stringId, range: range)
+		end 'inline'
+		return
 	end 'isConst'
 	// Phase 9 Stage 3: a qualified read `UnionName.caseName` on a union
 	// case (bare or payload-bearing) rewrites to a no-arg call to the
@@ -2823,29 +2892,27 @@ function matchCaseFromConstantValue(constVal ConstantValue) returns EnumCaseHit
 end 'matchCaseFromConstantValue'
 
 function rewriteUnresolvedAssign(project Project, module MaxonModule, opIdx OpIndex, name String, value ByteArray, range SourceRange, filePath FilePath)
-	if let info = try project.topLevelVars.get(name) 'isTopLevelVar'
-		if isVisibleFrom(info.visibility, declFilePath: info.sourceFilePath, readerFilePath: filePath) 'visible'
-			// `let xs = [...]` parks the entry in `topLevelVars` (writable
-			// data slot needed for the runtime initializer) but the source-
-			// level binding is still immutable. Surface E2013 here so the
-			// store doesn't silently rewrite as a globalStore.
-			if project.immutableArrayLitNames.contains(name) 'immutableLet'
-				reportCompileError(project, code: ErrorCode.parserImmutableVariable, message: "cannot assign to immutable variable: '{name}'", line: range.line, column: range.column, filePath: filePath)
-				return
-			end 'immutableLet'
-			try module.ops.set(opIdx, value: MaxonOp.globalStore(name, value: value, slotType: info.slotType, range: range)) otherwise panic("rewriteUnresolvedAssign: ops.set OOB at idx={opIdx} (count={module.ops.count()})")
-			return
-		end 'visible'
-	end 'isTopLevelVar'
-	if let entry = try project.topLevelConstants.get(name) 'isConst'
-		if isVisibleFrom(entry.visibility, declFilePath: entry.sourceFilePath, readerFilePath: filePath) 'visible'
-			// Top-level lets are immutable; reassignment is rejected with
-			// the E2013 wording shared with the C# bootstrap. By the time
-			// this runs `resolveAllTopLevelDecls` has drained every let
-			// into `topLevelConstants`, so a single map check suffices.
+	let varLookup = lookupTopLevelVar(project, name: name, readerFilePath: filePath)
+	if varLookup.found 'isTopLevelVar'
+		// `let xs = [...]` parks the entry in `topLevelVars` (writable
+		// data slot needed for the runtime initializer) but the source-
+		// level binding is still immutable. Surface E2013 here so the
+		// store doesn't silently rewrite as a globalStore. The immutable
+		// set is keyed by the storage name, so probe with the resolved key.
+		if project.immutableArrayLitNames.contains(varLookup.key) 'immutableLet'
 			reportCompileError(project, code: ErrorCode.parserImmutableVariable, message: "cannot assign to immutable variable: '{name}'", line: range.line, column: range.column, filePath: filePath)
 			return
-		end 'visible'
+		end 'immutableLet'
+		try module.ops.set(opIdx, value: MaxonOp.globalStore(varLookup.key, value: value, slotType: varLookup.info.slotType, range: range)) otherwise panic("rewriteUnresolvedAssign: ops.set OOB at idx={opIdx} (count={module.ops.count()})")
+		return
+	end 'isTopLevelVar'
+	if lookupTopLevelConst(project, name: name, readerFilePath: filePath).found 'isConst'
+		// Top-level lets are immutable; reassignment is rejected with
+		// the E2013 wording shared with the C# bootstrap. By the time
+		// this runs `resolveAllTopLevelDecls` has drained every let
+		// into `topLevelConstants`, so a single map check suffices.
+		reportCompileError(project, code: ErrorCode.parserImmutableVariable, message: "cannot assign to immutable variable: '{name}'", line: range.line, column: range.column, filePath: filePath)
+		return
 	end 'isConst'
 	// `name` shaped `receiver.field` where `receiver` is a top-level var.
 	// Mirrors the read path: rewrite to globalLoad(receiver) + fieldStore.
@@ -7017,13 +7084,23 @@ function evaluateTopLevelDecl(project Project, name String, evaluating StringArr
 	let entry = try project.unresolvedTopLevelDecls.get(name) otherwise return ConstantValue.intValue(0)
 
 	if evaluating.contains(name) 'cycle'
-		let cycleNames = joinStringArray(evaluating, sep: ", ")
+		// Render each stacked storage key as its bare display name so a cycle
+		// among file-private constants lists `A, B`, not the internal file-
+		// scoped `{path}|A, {path}|B` keys. Matches the C# bootstrap's wording.
+		var displayNames = StringArray.create()
+		for k in evaluating 'eachKey'
+			displayNames.push(displayTopLevelKey(k))
+		end 'eachKey'
+		let cycleNames = joinStringArray(displayNames, sep: ", ")
 		reportCompileError(project, code: ErrorCode.parserCircularDependency, message: "Circular dependency detected among global constants: {cycleNames}", line: entry.line, column: entry.column, filePath: entry.filePath)
 		return ConstantValue.intValue(0)
 	end 'cycle'
 
 	evaluating.push(name)
-	let result = evaluateUnresolvedConstExpr(project, exprId: entry.rootExprId, evaluating: evaluating)
+	// `entry.filePath` is the declaring file; pass it as the resolution
+	// context so a `nameRef` to a file-private sibling constant resolves
+	// against this file's file-scoped key.
+	let result = evaluateUnresolvedConstExpr(project, exprId: entry.rootExprId, evaluating: evaluating, declFilePath: entry.filePath)
 	_ = try evaluating.pop() otherwise panic("evaluateTopLevelDecl: stack underflow popping '{name}'")
 
 	if entry.mutable 'asGlobal'
@@ -7039,33 +7116,49 @@ function evaluateTopLevelDecl(project Project, name String, evaluating StringArr
 	return result
 end 'evaluateTopLevelDecl'
 
+// Resolve a `nameRef(target)` to the project-map storage key it should be
+// evaluated under. A file-private sibling declared in the same file lives
+// under `fileScopedTopLevelKey(target, declFilePath)`; an exported / module
+// constant lives under the bare `target`. We probe the file-scoped key in
+// both the resolved-constant map and the still-pending map first; if
+// neither carries it, fall back to the bare name (exported / cross-file, or
+// a genuinely dangling reference the later read-site walk diagnoses).
+function resolveConstNameRefKey(project Project, target String, declFilePath FilePath) returns String
+	let scopedKey = fileScopedTopLevelKey(target, declFilePath: declFilePath)
+	if project.topLevelConstants.contains(scopedKey) or project.topLevelVars.contains(scopedKey) or project.unresolvedTopLevelDecls.contains(scopedKey) 'fileScoped'
+		return scopedKey
+	end 'fileScoped'
+	return target
+end 'resolveConstNameRefKey'
+
 // Walk the expression arena recursively. Literal arms return their value
 // directly; `nameRef(target)` recurses into `evaluateTopLevelDecl` so cycle
-// detection composes naturally.
-function evaluateUnresolvedConstExpr(project Project, exprId UnresolvedConstExprId, evaluating StringArray) returns ConstantValue
+// detection composes naturally. `declFilePath` is the file owning the
+// expression, used to resolve `nameRef`s to file-private siblings.
+function evaluateUnresolvedConstExpr(project Project, exprId UnresolvedConstExprId, evaluating StringArray, declFilePath FilePath) returns ConstantValue
 	let node = try project.unresolvedConstExprs.get(exprId) otherwise panic("evaluateUnresolvedConstExpr: arena get OOB at id={exprId}")
 	match node 'eval'
 		intLit(value) then return ConstantValue.intValue(value)
 		boolLit(value) then return ConstantValue.intValue(1 if value else 0)
 		stringLit(stringId) then return ConstantValue.stringValue(stringId)
 		floatLit(bits) then return ConstantValue.floatValue(bits)
-		nameRef(target) then return evaluateTopLevelDecl(project, name: target, evaluating: evaluating)
+		nameRef(target) then return evaluateTopLevelDecl(project, name: resolveConstNameRefKey(project, target: target, declFilePath: declFilePath), evaluating: evaluating)
 		enumCase(enumName, caseName) then return evaluateEnumCaseConst(project, enumName: enumName, caseName: caseName)
-		asCast(operand, typeName) then return evaluateAsCast(project, operandId: operand, typeName: typeName, evaluating: evaluating)
-		negate(operand) then return ConstantValue.intValue(0 - evalChildAsInt(project, exprId: operand, evaluating: evaluating))
-		notOp(operand) then return ConstantValue.intValue(not evalChildAsInt(project, exprId: operand, evaluating: evaluating))
-		add(left, right) then return ConstantValue.intValue(evalChildAsInt(project, exprId: left, evaluating: evaluating) + evalChildAsInt(project, exprId: right, evaluating: evaluating))
-		sub(left, right) then return ConstantValue.intValue(evalChildAsInt(project, exprId: left, evaluating: evaluating) - evalChildAsInt(project, exprId: right, evaluating: evaluating))
-		mul(left, right) then return ConstantValue.intValue(evalChildAsInt(project, exprId: left, evaluating: evaluating) * evalChildAsInt(project, exprId: right, evaluating: evaluating))
-		compareEq(left, right) then return ConstantValue.intValue(1 if evalChildAsInt(project, exprId: left, evaluating: evaluating) == evalChildAsInt(project, exprId: right, evaluating: evaluating) else 0)
-		compareNeq(left, right) then return ConstantValue.intValue(1 if evalChildAsInt(project, exprId: left, evaluating: evaluating) != evalChildAsInt(project, exprId: right, evaluating: evaluating) else 0)
-		compareLt(left, right) then return ConstantValue.intValue(1 if evalChildAsInt(project, exprId: left, evaluating: evaluating) < evalChildAsInt(project, exprId: right, evaluating: evaluating) else 0)
-		compareLte(left, right) then return ConstantValue.intValue(1 if evalChildAsInt(project, exprId: left, evaluating: evaluating) <= evalChildAsInt(project, exprId: right, evaluating: evaluating) else 0)
-		compareGt(left, right) then return ConstantValue.intValue(1 if evalChildAsInt(project, exprId: left, evaluating: evaluating) > evalChildAsInt(project, exprId: right, evaluating: evaluating) else 0)
-		compareGte(left, right) then return ConstantValue.intValue(1 if evalChildAsInt(project, exprId: left, evaluating: evaluating) >= evalChildAsInt(project, exprId: right, evaluating: evaluating) else 0)
-		logicalAnd(left, right) then return ConstantValue.intValue(evalChildAsInt(project, exprId: left, evaluating: evaluating) and evalChildAsInt(project, exprId: right, evaluating: evaluating))
-		logicalXor(left, right) then return ConstantValue.intValue(evalChildAsInt(project, exprId: left, evaluating: evaluating) xor evalChildAsInt(project, exprId: right, evaluating: evaluating))
-		logicalOr(left, right) then return ConstantValue.intValue(evalChildAsInt(project, exprId: left, evaluating: evaluating) or evalChildAsInt(project, exprId: right, evaluating: evaluating))
+		asCast(operand, typeName) then return evaluateAsCast(project, operandId: operand, typeName: typeName, evaluating: evaluating, declFilePath: declFilePath)
+		negate(operand) then return ConstantValue.intValue(0 - evalChildAsInt(project, exprId: operand, evaluating: evaluating, declFilePath: declFilePath))
+		notOp(operand) then return ConstantValue.intValue(not evalChildAsInt(project, exprId: operand, evaluating: evaluating, declFilePath: declFilePath))
+		add(left, right) then return ConstantValue.intValue(evalChildAsInt(project, exprId: left, evaluating: evaluating, declFilePath: declFilePath) + evalChildAsInt(project, exprId: right, evaluating: evaluating, declFilePath: declFilePath))
+		sub(left, right) then return ConstantValue.intValue(evalChildAsInt(project, exprId: left, evaluating: evaluating, declFilePath: declFilePath) - evalChildAsInt(project, exprId: right, evaluating: evaluating, declFilePath: declFilePath))
+		mul(left, right) then return ConstantValue.intValue(evalChildAsInt(project, exprId: left, evaluating: evaluating, declFilePath: declFilePath) * evalChildAsInt(project, exprId: right, evaluating: evaluating, declFilePath: declFilePath))
+		compareEq(left, right) then return ConstantValue.intValue(1 if evalChildAsInt(project, exprId: left, evaluating: evaluating, declFilePath: declFilePath) == evalChildAsInt(project, exprId: right, evaluating: evaluating, declFilePath: declFilePath) else 0)
+		compareNeq(left, right) then return ConstantValue.intValue(1 if evalChildAsInt(project, exprId: left, evaluating: evaluating, declFilePath: declFilePath) != evalChildAsInt(project, exprId: right, evaluating: evaluating, declFilePath: declFilePath) else 0)
+		compareLt(left, right) then return ConstantValue.intValue(1 if evalChildAsInt(project, exprId: left, evaluating: evaluating, declFilePath: declFilePath) < evalChildAsInt(project, exprId: right, evaluating: evaluating, declFilePath: declFilePath) else 0)
+		compareLte(left, right) then return ConstantValue.intValue(1 if evalChildAsInt(project, exprId: left, evaluating: evaluating, declFilePath: declFilePath) <= evalChildAsInt(project, exprId: right, evaluating: evaluating, declFilePath: declFilePath) else 0)
+		compareGt(left, right) then return ConstantValue.intValue(1 if evalChildAsInt(project, exprId: left, evaluating: evaluating, declFilePath: declFilePath) > evalChildAsInt(project, exprId: right, evaluating: evaluating, declFilePath: declFilePath) else 0)
+		compareGte(left, right) then return ConstantValue.intValue(1 if evalChildAsInt(project, exprId: left, evaluating: evaluating, declFilePath: declFilePath) >= evalChildAsInt(project, exprId: right, evaluating: evaluating, declFilePath: declFilePath) else 0)
+		logicalAnd(left, right) then return ConstantValue.intValue(evalChildAsInt(project, exprId: left, evaluating: evaluating, declFilePath: declFilePath) and evalChildAsInt(project, exprId: right, evaluating: evaluating, declFilePath: declFilePath))
+		logicalXor(left, right) then return ConstantValue.intValue(evalChildAsInt(project, exprId: left, evaluating: evaluating, declFilePath: declFilePath) xor evalChildAsInt(project, exprId: right, evaluating: evaluating, declFilePath: declFilePath))
+		logicalOr(left, right) then return ConstantValue.intValue(evalChildAsInt(project, exprId: left, evaluating: evaluating, declFilePath: declFilePath) or evalChildAsInt(project, exprId: right, evaluating: evaluating, declFilePath: declFilePath))
 		// Phase 9 Stage 5: `structLit` arena entries only appear as the
 		// root (or recursive sub-expression) of an enum-case struct-backing
 		// literal. Top-level let/var initializers can't construct struct
@@ -7098,8 +7191,8 @@ end 'evaluateEnumCaseConst'
 // (the cast is structurally valid; only the type name is wrong, which the
 // global-var slot-type path catches when resolveTypes touches the named
 // MaxonType).
-function evaluateAsCast(project Project, operandId UnresolvedConstExprId, typeName String, evaluating StringArray) returns ConstantValue
-	let inner = evaluateUnresolvedConstExpr(project, exprId: operandId, evaluating: evaluating)
+function evaluateAsCast(project Project, operandId UnresolvedConstExprId, typeName String, evaluating StringArray, declFilePath FilePath) returns ConstantValue
+	let inner = evaluateUnresolvedConstExpr(project, exprId: operandId, evaluating: evaluating, declFilePath: declFilePath)
 	if isBuiltinPrimitiveTypeName(typeName) 'isPrim'
 		return inner
 	end 'isPrim'
@@ -7160,8 +7253,8 @@ end 'validateIntInRange'
 // an int- or bool-typed atom (booleans are stored as `intValue(0|1)`),
 // so reaching a non-int operand here is an invariant violation, not a
 // user error.
-function evalChildAsInt(project Project, exprId UnresolvedConstExprId, evaluating StringArray) returns IntConstant
-	return match evaluateUnresolvedConstExpr(project, exprId: exprId, evaluating: evaluating) 'kind'
+function evalChildAsInt(project Project, exprId UnresolvedConstExprId, evaluating StringArray, declFilePath FilePath) returns IntConstant
+	return match evaluateUnresolvedConstExpr(project, exprId: exprId, evaluating: evaluating, declFilePath: declFilePath) 'kind'
 		intValue(x) gives x
 		default panic("const folder reached non-int operand: only intValue arms are valid for arithmetic / unary const folding")
 	end 'kind'
@@ -7222,6 +7315,20 @@ function constantValueToInitialBits(value ConstantValue) returns IntConstant
 		stringValue then panic("constantValueToInitialBits: string-typed top-level var initializer reached the global lowering path; static-variables only supports int / bool / float / enum / ranged-cast initializers")
 	end 'pack'
 end 'constantValueToInitialBits'
+
+// Render a (possibly file-scoped) top-level storage key back to the bare
+// name for diagnostics. A file-scoped key is `"{path}|{bareName}"`; return
+// the segment after the last `|`. A plain qualified name (no `|`) passes
+// through unchanged. The `|` separator can never appear in a user
+// identifier, so splitting on it is unambiguous.
+function displayTopLevelKey(key String) returns String
+	let parts = key.split("|")
+	let n = parts.count()
+	if n == 0 'noParts'
+		return key
+	end 'noParts'
+	return try parts.get(n - 1) otherwise key
+end 'displayTopLevelKey'
 
 function joinStringArray(arr StringArray, sep String) returns String
 	var result = ""

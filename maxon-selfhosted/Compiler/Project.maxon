@@ -132,6 +132,30 @@ export function isVisibleFrom(visibility Visibility, declFilePath FilePath, read
 	end 'tier'
 end 'isVisibleFrom'
 
+// Storage key for a file-private (`Visibility.file`) BARE top-level
+// CONSTANT. Two file-private constants that share a bare name in different
+// files must occupy distinct slots in the project-global
+// `topLevelConstants` / `unresolvedTopLevelDecls` maps — each is reachable
+// only from its own file. We disambiguate by prefixing the declaring file's
+// path; the `|` separator never appears in a Maxon identifier and is
+// invalid in a Windows path, so the composite can't be confused with a
+// user-written qualified name. Mirrors the C# bootstrap's per-Parser-
+// instance `_topLevelConstants` model, where file-private constants simply
+// never share a map. Exported because both Parser (write side) and
+// TypeResolution (read / const-fold side) must agree on it.
+//
+// Scope is limited to constants: they fold to a literal / stringConst at
+// every read site, so the scoped key never escapes into an IR slot name.
+// Top-level VARS (mutable `var`, plus runtime-init / array-literal / lazy-
+// static `let`s that land in `topLevelVars`) keep a plain bare/qualified
+// name because their .data slot name is their IR identity — see
+// `topLevelConstStorageName` in the Parser. Only BARE top-level names
+// (`typeName` empty) are scoped this way; a `static let` field is keyed by
+// its dotted `TypeName.field` name, which already disambiguates per type.
+export function fileScopedTopLevelKey(bareName String, declFilePath FilePath) returns String
+	return "{declFilePath.toString()}|{bareName}"
+end 'fileScopedTopLevelKey'
+
 // True iff `namespace` belongs to the stdlib namespace family. Top-level
 // stdlib files (e.g. `stdlib/Array.maxon`) parse with namespace `stdlib`;
 // helper files under subdirectories (`stdlib/helpers/string/utf8.maxon`)
@@ -3209,8 +3233,18 @@ export function resolveNamedToStdType(project Project, name String) returns StdT
 		if anyStructHasInnerAlias(project, aliasName: name) 'isInnerAlias'
 			return StdType.i64
 		end 'isInnerAlias'
+		// An interface referenced by NAME (`MaxonType.named("X")`) that
+		// survived to ABI lowering is a single-word existential: only
+		// `MaxonType.interface(_)` values are treated as 16-byte fat pointers
+		// (see `interfaceTypeIsFat`), so a `named`-form interface — e.g. an
+		// interface-typed struct FIELD that TypeResolution left as `named`,
+		// reached here via `primitiveWidth` while building the owning struct's
+		// layout descriptor — stores just the data pointer in one i64 slot.
+		// Returning i64 matches that field-store/load representation; the
+		// witness is recovered from the static type at the dispatch site. This
+		// mirrors the `interface` arm of `resolveMaxonTypeToStd`.
 		if project.interfaces.contains(name) or project.unresolvedInterfaces.contains(name) 'isInterface'
-			panic("resolveNamedToStdType: interface name '{name}' reached value-position lowering as MaxonType.named — C1.c interface fat-pointer construction was supposed to handle this; investigate the call path")
+			return StdType.i64
 		end 'isInterface'
 		// Phase 7 / Phase 11.4 partial: stdlib types that depend on
 		// not-yet-whitelisted helper files (e.g. `ByteView` from
