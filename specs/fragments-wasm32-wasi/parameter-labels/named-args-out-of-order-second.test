@@ -1,0 +1,93 @@
+// Test: named-args-out-of-order-second
+typealias Num = int(0 to 100)
+
+function pick(a Num, b String, c bool) returns Num
+	if c 'isTrue'
+		return a
+	end 'isTrue'
+	return b.byteLength() as Num
+end 'pick'
+
+function main() returns ExitCode
+	return pick(1, c: false, b: "abcde")
+end 'main'
+---
+ExitCode: 5
+---
+// CompiledIR
+module {
+  func @pick(local0: u8, local1: i64, local2: i1) -> u8 {
+  entry:
+    %13 = mir.param local0 : u8
+    %14 = mir.param local1 : i64
+    %15 = mir.param local2 : i1
+    mir.cond_br %15 [then: isTrue_0(), else: isTrue_0.after()]
+  isTrue_0:
+    %16 = mir.mov_imm 100 : i64
+    %17 = mir.cmp ugt, %13, %16
+    mir.cond_br %17 [then: __range_panic_0(), else: __range_ok_0()]
+  isTrue_0.after:
+    %6 = mir.call @String.byteLength(%14)
+    %7 = mir.mov_imm 100 : i64
+    %8 = mir.cmp gt, %6, %7
+    mir.cond_br %8 [then: __cast_panic_0(), else: __cast_check_lo_0()]
+  __cast_check_lo_0:
+    %9 = mir.mov_imm 0 : i64
+    %10 = mir.cmp lt, %6, %9
+    mir.cond_br %10 [then: __cast_panic_0(), else: __cast_ok_0()]
+  __cast_panic_0:
+    %11 = mir.global_addr @__panic_msg_088fd66d1edc20c1
+    %12 = mir.call @mrt_panic(%11)
+  __cast_ok_0:
+    %20 = mir.mov_imm 100 : i64
+    %21 = mir.cmp ugt, %6, %20
+    mir.cond_br %21 [then: __range_panic_1(), else: __range_ok_1()]
+  __range_panic_0:
+    %18 = mir.global_addr @__panic_msg_765b6f1788b1ef6b
+    %19 = mir.call @mrt_panic(%18)
+  __range_ok_0:
+    mir.ret %13
+  __range_panic_1:
+    %22 = mir.global_addr @__panic_msg_765b6f1788b1ef6b
+    %23 = mir.call @mrt_panic(%22)
+  __range_ok_1:
+    mir.ret %6
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 1 : i64
+    %1 = mir.mov_imm 0 : i64
+    %2 = mir.global_addr @__istr_0
+    %3 = mir.mov_imm 48 : i64
+    %4 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %5 = mir.call @mrt_alloc_with_dtor(%3, %4)
+    %6 = mir.mov_imm 0 : i64
+    mir.store %6, %5, 40 width: qword
+    mir.store %2, %5, 0 width: qword
+    %7 = mir.mov_imm 5 : i64
+    mir.store %7, %5, 8 width: qword
+    %8 = mir.mov_imm -2 : i64
+    mir.store %8, %5, 16 width: qword
+    %9 = mir.mov_imm 1 : i64
+    mir.store %9, %5, 24 width: qword
+    %10 = mir.mov_imm 0 : i64
+    mir.store %10, %5, 32 width: qword
+    %12 = mir.mov_imm 16 : i64
+    %13 = mir.func_addr @__destruct_String
+    %11 = mir.call @stdlib.__mm_alloc(%12, %13)
+    mir.store %5, %11, 0 width: qword
+    %14 = mir.mov_imm 1 : i64
+    mir.store %14, %11, 8 width: qword
+    %15 = mir.call @pick(%0, %11, %1)
+    %16 = mir.call @mm_drop(%11)
+    %17 = mir.mov_imm 125 : i64
+    %18 = mir.cmp ugt, %15, %17
+    mir.cond_br %18 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %19 = mir.global_addr @__panic_msg_5d95550d038f3f33
+    %20 = mir.call @mrt_panic(%19)
+  __range_ok_0:
+    mir.ret %15
+  }
+}
+---

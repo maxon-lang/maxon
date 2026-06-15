@@ -1964,34 +1964,34 @@ end 'checkCallArgumentTypes'
 function checkOneCallArgs(project Project, op MaxonOp, opIdx OpIndex, callerName String, readerFilePath FilePath)
 	if op.name == "call" 'isCall'
 		match op 'c'
-			call(result, _, _, args, _, argTypes, argRanges, _) then validateCallArgs(project, opIdx: opIdx, result: result, args: args, argTypes: argTypes, argRanges: argRanges, paramOffset: 0, callerName: callerName, readerFilePath: readerFilePath)
+			call(result, _, _, args, argLabels, argTypes, argRanges, _) then validateCallArgs(project, opIdx: opIdx, result: result, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, paramOffset: 0, callerName: callerName, readerFilePath: readerFilePath)
 			default panic("checkOneCallArgs: op.name == call but match failed")
 		end 'c'
 		return
 	end 'isCall'
 	if op.name == "tryCall" 'isTryCall'
 		match op 'tc'
-			tryCall(result, _, _, args, _, argTypes, argRanges, _, _) then validateCallArgs(project, opIdx: opIdx, result: result, args: args, argTypes: argTypes, argRanges: argRanges, paramOffset: 0, callerName: callerName, readerFilePath: readerFilePath)
+			tryCall(result, _, _, args, argLabels, argTypes, argRanges, _, _) then validateCallArgs(project, opIdx: opIdx, result: result, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, paramOffset: 0, callerName: callerName, readerFilePath: readerFilePath)
 			default panic("checkOneCallArgs: op.name == tryCall but match failed")
 		end 'tc'
 		return
 	end 'isTryCall'
 	if op.name == "methodCall" 'isMethodCall'
 		match op 'mc'
-			methodCall(result, _, _, args, _, argTypes, argRanges, _) then validateCallArgs(project, opIdx: opIdx, result: result, args: args, argTypes: argTypes, argRanges: argRanges, paramOffset: 1, callerName: callerName, readerFilePath: readerFilePath)
+			methodCall(result, _, _, args, argLabels, argTypes, argRanges, _) then validateCallArgs(project, opIdx: opIdx, result: result, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, paramOffset: 1, callerName: callerName, readerFilePath: readerFilePath)
 			default panic("checkOneCallArgs: op.name == methodCall but match failed")
 		end 'mc'
 		return
 	end 'isMethodCall'
 	if op.name == "tryMethodCall" 'isTryMethodCall'
 		match op 'tmc'
-			tryMethodCall(result, _, _, args, _, argTypes, argRanges, _, _) then validateCallArgs(project, opIdx: opIdx, result: result, args: args, argTypes: argTypes, argRanges: argRanges, paramOffset: 1, callerName: callerName, readerFilePath: readerFilePath)
+			tryMethodCall(result, _, _, args, argLabels, argTypes, argRanges, _, _) then validateCallArgs(project, opIdx: opIdx, result: result, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, paramOffset: 1, callerName: callerName, readerFilePath: readerFilePath)
 			default panic("checkOneCallArgs: op.name == tryMethodCall but match failed")
 		end 'tmc'
 	end 'isTryMethodCall'
 end 'checkOneCallArgs'
 
-function validateCallArgs(project Project, opIdx OpIndex, result ByteArray, args ByteArrayArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, paramOffset ArgIndex, callerName String, readerFilePath FilePath)
+function validateCallArgs(project Project, opIdx OpIndex, result ByteArray, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, paramOffset ArgIndex, callerName String, readerFilePath FilePath)
 	let paramTypes = try project.callParamTypes.get(opIdx) otherwise return
 	let paramNames = paramNamesForCall(project, opIdx: opIdx)
 	let effectiveOffset = effectiveParamOffset(project, opIdx: opIdx, paramOffset: paramOffset)
@@ -2007,7 +2007,16 @@ function validateCallArgs(project Project, opIdx OpIndex, result ByteArray, args
 	end 'wasBuiltins'
 
 	for i in 0 upto args.count() 'eachArg'
-		let pIdx = i + effectiveOffset
+		// Map this source-order arg to its DECLARED parameter slot. The parser
+		// keeps args in source order with a parallel `argLabels` array and only
+		// reorders them into declared order at lowering (slotArgsForCall), AFTER
+		// this check runs — so a labeled arg supplied out of declared order, or
+		// after a skipped middle default, would otherwise be compared against the
+		// wrong (positionally-shifted) param. Resolve a labeled arg to its slot
+		// via the callee's param names; an unlabeled (purely positional) arg
+		// keeps `i + offset`. Mirrors the C# bootstrap, which slots named args
+		// into declared order at parse time so its positional check is correct.
+		let pIdx = resolveArgParamSlot(argLabels, index: i, paramNames: paramNames, positionalSlot: i + effectiveOffset)
 		if pIdx >= paramTypes.count() 'paramOob'
 			continue
 		end 'paramOob'
@@ -2024,6 +2033,25 @@ function validateCallArgs(project Project, opIdx OpIndex, result ByteArray, args
 		reportArgTypeMismatch(project, message: "argument type mismatch for '{paramName}': expected '{expectedName}', got '{gotName}'", range: range, result: result, callerName: callerName, readerFilePath: readerFilePath)
 	end 'eachArg'
 end 'validateCallArgs'
+
+// Declared parameter slot for the source-order arg at `index`. When the arg
+// carries a label, find that name in the callee's `paramNames` (the declared
+// order) so out-of-order / default-skipping named calls compare against the
+// right param. An empty label (positional arg) or a label not found in
+// `paramNames` falls back to `positionalSlot`.
+function resolveArgParamSlot(argLabels StringArray, index ArgIndex, paramNames StringArray, positionalSlot ArgIndex) returns ArgIndex
+	let label = try argLabels.get(index) otherwise return positionalSlot
+	if label.isEmpty() 'positional'
+		return positionalSlot
+	end 'positional'
+	for s in 0 upto paramNames.count() 'eachParam'
+		let pn = try paramNames.get(s) otherwise continue
+		if pn == label 'hit'
+			return s as ArgIndex
+		end 'hit'
+	end 'eachParam'
+	return positionalSlot
+end 'resolveArgParamSlot'
 
 // Record an E3005 for one bad call argument and flag the enclosing call so the
 // discard lint suppresses E3064/E3065 on it. A more specific checker (e.g. the

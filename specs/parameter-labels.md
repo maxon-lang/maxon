@@ -224,3 +224,52 @@ end 'main'
 error E2052: specs/fragments/parameter-labels/error-method-first-arg-named.test:25:19: first arg cannot be named
 ```
 
+
+<!-- test: named-args-out-of-order -->
+Named arguments may be supplied in any order; the call binds each label to its
+declared parameter regardless of source position. The compiler must type-check
+each argument against the parameter its LABEL names, not the parameter at the
+argument's source position — so `pick(1, c: true, b: "x")` checks `c` against
+the `bool` param and `b` against the `String` param even though they appear in
+the opposite declared order.
+```maxon
+typealias Num = int(0 to 100)
+
+function pick(a Num, b String, c bool) returns Num
+	if c 'isTrue'
+		return a
+	end 'isTrue'
+	return b.byteLength() as Num
+end 'pick'
+
+function main() returns ExitCode
+	return pick(1, c: true, b: "longer")
+end 'main'
+```
+```exitcode
+1
+```
+
+
+<!-- test: named-args-out-of-order-second -->
+Same call with `c: false` selects the other branch, returning the byte length
+of the String argument — confirming the out-of-order labels bound to the right
+parameters at runtime, not just at the type level.
+```maxon
+typealias Num = int(0 to 100)
+
+function pick(a Num, b String, c bool) returns Num
+	if c 'isTrue'
+		return a
+	end 'isTrue'
+	return b.byteLength() as Num
+end 'pick'
+
+function main() returns ExitCode
+	return pick(1, c: false, b: "abcde")
+end 'main'
+```
+```exitcode
+5
+```
+
