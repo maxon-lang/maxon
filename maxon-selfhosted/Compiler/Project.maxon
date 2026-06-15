@@ -1069,9 +1069,18 @@ export type PendingUnusedCheck
 	export let mutableCandidates as UnusedCandidateArray
 	export let reassigned as ReferencedNameSet
 	export let varFromImmutable as VarFromImmutableCandidateArray
+	// Enclosing type + method name, recorded so the consumer can RE-evaluate
+	// `skipParamCheck` after every interface is resolved. The parser's
+	// parse-time `isInterfaceRequiredMethod` can be a false negative when the
+	// implemented interface lives in a file parsed AFTER the conformer (its
+	// methods aren't yet registered), so a method satisfying an interface
+	// signature would wrongly fail the unused-param check. Empty when the
+	// function isn't a method.
+	export let enclosingTypeName as String
+	export let methodName as String
 
-	export static function create(filePath FilePath, candidates UnusedCandidateArray, referenced ReferencedNameSet, skipParamCheck bool, paramCount ParsedInt, startLine LineNumber, endLine LineNumber, mutableCandidates UnusedCandidateArray, reassigned ReferencedNameSet, varFromImmutable VarFromImmutableCandidateArray) returns PendingUnusedCheck
-		return Self{filePath: filePath, candidates: candidates, referenced: referenced, skipParamCheck: skipParamCheck, paramCount: paramCount, startLine: startLine, endLine: endLine, mutableCandidates: mutableCandidates, reassigned: reassigned, varFromImmutable: varFromImmutable}
+	export static function create(filePath FilePath, candidates UnusedCandidateArray, referenced ReferencedNameSet, skipParamCheck bool, paramCount ParsedInt, startLine LineNumber, endLine LineNumber, mutableCandidates UnusedCandidateArray, reassigned ReferencedNameSet, varFromImmutable VarFromImmutableCandidateArray, enclosingTypeName String, methodName String) returns PendingUnusedCheck
+		return Self{filePath: filePath, candidates: candidates, referenced: referenced, skipParamCheck: skipParamCheck, paramCount: paramCount, startLine: startLine, endLine: endLine, mutableCandidates: mutableCandidates, reassigned: reassigned, varFromImmutable: varFromImmutable, enclosingTypeName: enclosingTypeName, methodName: methodName}
 	end 'create'
 end 'PendingUnusedCheck'
 

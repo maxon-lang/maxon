@@ -766,6 +766,41 @@ end 'buildWrongSignatureMessage'
 //      the first unreferenced name encountered. Reporting every unused
 //      candidate would add noise that isn't in the spec; the bootstrap
 //      throws on the first.
+// True when `typeName` implements (transitively, via `extends`) an interface
+// that declares a method named `methodName`. Evaluated against the fully-
+// resolved conformance + interface registries, so it sees interfaces parsed in
+// any file order — unlike the parser's parse-time check. Used to exempt
+// interface-dictated parameters from the unused-variable check (their names and
+// arity are fixed by the interface signature). Empty `typeName` (a free
+// function or closure) is never interface-required.
+function methodSatisfiesInterfaceSignature(project Project, typeName String, methodName String) returns bool
+	if typeName.isEmpty() 'notMethod'
+		return false
+	end 'notMethod'
+	for cid in project.conformances.idsForType(typeName) 'eachConf'
+		let (_, interfaceName, _) = project.conformances.get(cid)
+		if interfaceDeclaresMethodResolved(project, interfaceName: interfaceName, methodName: methodName) 'found'
+			return true
+		end 'found'
+	end 'eachConf'
+	return false
+end 'methodSatisfiesInterfaceSignature'
+
+// Does the resolved interface `interfaceName` (or any of its `extends`
+// ancestors) declare a method named `methodName`? The conformance registry
+// already records derived `(type, parentInterface)` rows for every ancestor
+// (see `recordParentConformancesHelper`), so a non-recursive scan of the named
+// interface's own methods suffices.
+function interfaceDeclaresMethodResolved(project Project, interfaceName String, methodName String) returns bool
+	let iface = try project.interfaces.get(interfaceName) otherwise return false
+	for m in iface.methods 'eachMethod'
+		if m.name == methodName 'match'
+			return true
+		end 'match'
+	end 'eachMethod'
+	return false
+end 'interfaceDeclaresMethodResolved'
+
 export function checkPendingUnusedVars(project Project, module MaxonModule)
 	for entry in project.pendingUnusedChecks 'eachEntry'
 		if functionHasPriorDiagnostic(project, entry: entry) 'skipFn'
@@ -778,7 +813,14 @@ export function checkPendingUnusedVars(project Project, module MaxonModule)
 		// in C#) and E3077 (var-should-be-let, the last body-finish check). The
 		// self-hosted pipeline defers all three to here, so we emit at most one
 		// per entry and stop at the first that fires.
-		let startIndex = entry.paramCount if entry.skipParamCheck else 0
+		// Re-evaluate the interface-required-method exemption against the
+		// fully-resolved registries: the parser's parse-time flag is a false
+		// negative when the implemented interface was parsed AFTER the conformer
+		// (its methods weren't registered yet, so an interface-dictated unused
+		// param — e.g. an arm64 `RegAllocTarget`/`CopyEmitter` stub — wrongly
+		// failed the param check). Only flips false→true.
+		let skipParams = entry.skipParamCheck or methodSatisfiesInterfaceSignature(project, typeName: entry.enclosingTypeName, methodName: entry.methodName)
+		let startIndex = entry.paramCount if skipParams else 0
 		let endIndex = entry.candidates.count()
 		var reported = false
 		var i = startIndex
