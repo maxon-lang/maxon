@@ -10778,9 +10778,26 @@ export type Parser
 	// mixed expressions like `foo + 1.0` retain the `float` type. The actual
 	// dispatch happens in lowerMaxonToStd after type resolution.
 	function binOpOperandType(leftType MaxonType, rightType MaxonType, kind TokenKind) returns MaxonType
-		if kind == TokenKind.or or kind == TokenKind.xor or kind == TokenKind.and or kind == TokenKind.shl or kind == TokenKind.shr or kind == TokenKind.mod 'intOnly'
+		// `shl` / `shr` / `mod` are integer-only by definition.
+		if kind == TokenKind.shl or kind == TokenKind.shr or kind == TokenKind.mod 'intOnly'
 			return MaxonType.integer
 		end 'intOnly'
+		// `and` / `or` / `xor` are bitwise on integers but LOGICAL on bools, so
+		// the operandType (which `deriveBinopResultType` returns verbatim as the
+		// result type) must follow the operands: `boolean` when either side is
+		// bool, `unresolved` when either is still unresolved at parse time (so
+		// `fillBinop`/`deriveBinopResultType` re-derive from the resolved
+		// producers), else integer. Without this a logical `f.a or f.b` on bool
+		// operands was stamped `int` and tripped E3005 against a `bool` param.
+		if kind == TokenKind.or or kind == TokenKind.xor or kind == TokenKind.and 'andOrXor'
+			if isUnresolvedType(leftType) or isUnresolvedType(rightType) 'deferLogical'
+				return MaxonType.unresolved
+			end 'deferLogical'
+			if maxonTypeIsBool(leftType) or maxonTypeIsBool(rightType) 'boolLogical'
+				return MaxonType.boolean
+			end 'boolLogical'
+			return MaxonType.integer
+		end 'andOrXor'
 		if maxonTypeIsFloat(leftType) or maxonTypeIsFloat(rightType) 'anyFloat'
 			return MaxonType.float
 		end 'anyFloat'
@@ -11139,9 +11156,16 @@ export type Parser
 	function emitBinaryOp(block IrBlock, kind TokenKind, resultName ByteArray, leftName ByteArray, rightName ByteArray, leftType MaxonType, rightType MaxonType, operandType MaxonType, range SourceRange = SourceRange.none())
 		let intType = MaxonType.integer
 		let hlOp = match kind 'emit'
-			or gives MaxonOp.binop(resultName, left: leftName, right: rightName, opKind: BinOpKind.bitOr, operandType: intType, range: range)
-			xor gives MaxonOp.binop(resultName, left: leftName, right: rightName, opKind: BinOpKind.bitXor, operandType: intType, range: range)
-			and gives MaxonOp.binop(resultName, left: leftName, right: rightName, opKind: BinOpKind.bitAnd, operandType: intType, range: range)
+			// `or` / `xor` / `and` are bitwise on ints but LOGICAL on bools —
+			// carry the caller-computed `operandType` (boolean / integer, or
+			// unresolved when the operands haven't resolved at parse time) rather
+			// than silently forcing integer. Hardcoding integer here was the bug
+			// that made a logical `f.a or f.b` on bool operands read as int and
+			// trip E3005 against a bool parameter; `deriveBinopResultType` returns
+			// this operandType verbatim as the result type.
+			or gives MaxonOp.binop(resultName, left: leftName, right: rightName, opKind: BinOpKind.bitOr, operandType: operandType, range: range)
+			xor gives MaxonOp.binop(resultName, left: leftName, right: rightName, opKind: BinOpKind.bitXor, operandType: operandType, range: range)
+			and gives MaxonOp.binop(resultName, left: leftName, right: rightName, opKind: BinOpKind.bitAnd, operandType: operandType, range: range)
 			shl gives MaxonOp.binop(resultName, left: leftName, right: rightName, opKind: BinOpKind.shl, operandType: intType, range: range)
 			shr gives MaxonOp.binop(resultName, left: leftName, right: rightName, opKind: BinOpKind.shr, operandType: intType, range: range)
 			equalsEquals gives MaxonOp.cmp(resultName, left: leftName, right: rightName, predicate: CmpPredicate.eq, leftType: leftType, rightType: rightType, operandType: operandType, range: range)

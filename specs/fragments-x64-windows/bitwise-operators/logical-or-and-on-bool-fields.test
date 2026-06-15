@@ -1,0 +1,95 @@
+// Test: logical-or-and-on-bool-fields
+typealias Tag = int(0 to 100)
+
+type Flags
+	export var a as bool
+	export var b as bool
+	export var c as bool
+
+	export static function make(a bool, b bool, c bool) returns Flags
+		return Flags{a: a, b: b, c: c}
+	end 'make'
+end 'Flags'
+
+function consume(flag bool) returns Tag
+	if flag 'isTrue'
+		return 1
+	end 'isTrue'
+	return 0
+end 'consume'
+
+function main() returns ExitCode
+	let f = Flags.make(true, b: false, c: true)
+	let orResult = consume(f.a or f.b)
+	let andResult = consume(f.a and f.c)
+	let bothFalse = consume(f.b or f.b)
+	return orResult * 4 + andResult * 2 + bothFalse
+end 'main'
+---
+ExitCode: 6
+---
+// CompiledIR
+module {
+  func @consume(rcx: i1) -> u8 {
+  entry:
+    x64.test rcx, rcx
+    x64.je isTrue_0.after
+  isTrue_0:
+    x64.mov r8d, 1
+    x64.ret
+  isTrue_0.after:
+    x64.xor r8d, r8d
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=48
+    x64.xor edx, edx
+    x64.mov ecx, 8
+    x64.call stdlib.__mm_alloc
+    x64.mov r12, r8
+    x64.mov r8d, 1
+    x64.mov [r12+0], r8 (1b)
+    x64.xor r8d, r8d
+    x64.mov [r12+1], r8 (1b)
+    x64.mov r8d, 1
+    x64.mov [r12+2], r8 (1b)
+    x64.movsx r8, [r12+1] (1b)
+    x64.movsx rcx, [r12+0] (1b)
+    x64.or rcx, r8
+    x64.call consume
+    x64.mov r13, r8
+    x64.movsx r8, [r12+2] (1b)
+    x64.movsx rcx, [r12+0] (1b)
+    x64.and rcx, r8
+    x64.call consume
+    x64.mov r14, r8
+    x64.movsx r15, [r12+1] (1b)
+    x64.movsx r8, [r12+1] (1b)
+    x64.mov [rbp+-8], r8
+    x64.mov rcx, r12
+    x64.call mm_drop
+    x64.mov rcx, [rbp+-8]
+    x64.or rcx, r15
+    x64.call consume
+    x64.mov r9d, 2
+    x64.mov esi, 4
+    x64.imul r14, r9
+    x64.imul r13, rsi
+    x64.add r13, r14
+    x64.mov r9d, 4294967295
+    x64.mov rsi, r13
+    x64.add rsi, r8
+    x64.cmp rsi, r9
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea r12, [rip+__panic_msg_b279fb035c1b058b]
+    x64.mov rcx, r12
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov r8, rsi
+    x64.epilogue
+    x64.ret
+  }
+}
+---

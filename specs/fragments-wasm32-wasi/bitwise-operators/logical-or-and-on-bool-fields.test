@@ -1,0 +1,84 @@
+// Test: logical-or-and-on-bool-fields
+typealias Tag = int(0 to 100)
+
+type Flags
+	export var a as bool
+	export var b as bool
+	export var c as bool
+
+	export static function make(a bool, b bool, c bool) returns Flags
+		return Flags{a: a, b: b, c: c}
+	end 'make'
+end 'Flags'
+
+function consume(flag bool) returns Tag
+	if flag 'isTrue'
+		return 1
+	end 'isTrue'
+	return 0
+end 'consume'
+
+function main() returns ExitCode
+	let f = Flags.make(true, b: false, c: true)
+	let orResult = consume(f.a or f.b)
+	let andResult = consume(f.a and f.c)
+	let bothFalse = consume(f.b or f.b)
+	return orResult * 4 + andResult * 2 + bothFalse
+end 'main'
+---
+ExitCode: 6
+---
+// CompiledIR
+module {
+  func @consume(local0: i1) -> u8 {
+  entry:
+    %4 = mir.param local0 : i1
+    mir.cond_br %4 [then: isTrue_0(), else: isTrue_0.after()]
+  isTrue_0:
+    %2 = mir.mov_imm 1 : i64
+    mir.ret %2
+  isTrue_0.after:
+    %3 = mir.mov_imm 0 : i64
+    mir.ret %3
+  }
+  func @main() -> u8 {
+  entry:
+    %1 = mir.mov_imm 1 : i64
+    %2 = mir.mov_imm 0 : i64
+    %3 = mir.mov_imm 1 : i64
+    %32 = mir.mov_imm 8 : i64
+    %33 = mir.mov_imm 0 : i64
+    %34 = mir.call @stdlib.__mm_alloc(%32, %33)
+    mir.store %1, %34, 0 width: byte
+    mir.store %2, %34, 1 width: byte
+    mir.store %3, %34, 2 width: byte
+    %6 = mir.load %34, 0 width: byte signed
+    %8 = mir.load %34, 1 width: byte signed
+    %9 = mir.or.i64 %6, %8
+    %10 = mir.call @consume(%9)
+    %12 = mir.load %34, 0 width: byte signed
+    %14 = mir.load %34, 2 width: byte signed
+    %15 = mir.and.i64 %12, %14
+    %16 = mir.call @consume(%15)
+    %18 = mir.load %34, 1 width: byte signed
+    %20 = mir.load %34, 1 width: byte signed
+    %35 = mir.call @mm_drop(%34)
+    %21 = mir.or.i64 %18, %20
+    %22 = mir.call @consume(%21)
+    %24 = mir.mov_imm 4 : i64
+    %25 = mir.mul.i64 %10, %24
+    %27 = mir.mov_imm 2 : i64
+    %28 = mir.mul.i64 %16, %27
+    %29 = mir.add.i64 %25, %28
+    %31 = mir.add.i64 %29, %22
+    %36 = mir.mov_imm 125 : i64
+    %37 = mir.cmp ugt, %31, %36
+    mir.cond_br %37 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %38 = mir.global_addr @__panic_msg_b279fb035c1b058b
+    %39 = mir.call @mrt_panic(%38)
+  __range_ok_0:
+    mir.ret %31
+  }
+}
+---

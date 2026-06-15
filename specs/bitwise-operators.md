@@ -365,3 +365,42 @@ end 'main'
 ```exitcode
 0
 ```
+
+
+<!-- test: logical-or-and-on-bool-fields -->
+`or` / `and` / `xor` are LOGICAL when their operands are `bool` (and bitwise on
+ints). A logical word-op over `bool` struct fields produces a `bool`, so its
+result flows into a `bool` parameter — the op must NOT silently type as `int`.
+Here `flags.a or flags.b` and `flags.a and flags.c` are passed to
+`consume(flag bool)`; both must type-check and dispatch the right branch.
+```maxon
+typealias Tag = int(0 to 100)
+
+type Flags
+	export var a as bool
+	export var b as bool
+	export var c as bool
+
+	export static function make(a bool, b bool, c bool) returns Flags
+		return Flags{a: a, b: b, c: c}
+	end 'make'
+end 'Flags'
+
+function consume(flag bool) returns Tag
+	if flag 'isTrue'
+		return 1
+	end 'isTrue'
+	return 0
+end 'consume'
+
+function main() returns ExitCode
+	let f = Flags.make(true, b: false, c: true)
+	let orResult = consume(f.a or f.b)
+	let andResult = consume(f.a and f.c)
+	let bothFalse = consume(f.b or f.b)
+	return orResult * 4 + andResult * 2 + bothFalse
+end 'main'
+```
+```exitcode
+6
+```
