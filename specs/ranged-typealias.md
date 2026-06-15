@@ -841,3 +841,19 @@ end 'main'
 ```exitcode
 7
 ```
+
+<!-- test: cast-to-stdlib-internal-typealias -->
+A typealias declared inside the stdlib is reachable as a cast target from any
+file, regardless of its source-level visibility modifier. The stdlib's internal
+ranged aliases (`ElementCount`, `NodeIndex`, …) appear in the public collection
+API, so user code must be able to name them in an `as` cast — `5 as ElementCount`
+resolves rather than failing with "Expected type name after 'as'".
+```maxon
+function main() returns ExitCode
+	let n = 5 as ElementCount
+	return n as ExitCode
+end 'main'
+```
+```exitcode
+5
+```

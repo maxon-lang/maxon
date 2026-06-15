@@ -8997,6 +8997,18 @@ end 'validateNamedTypeVisibility'
 // the type resolves to a hidden typealias / struct / enum, report
 // "Expected type name after 'as'" — same wording the C# bootstrap emits
 // when the typealias isn't in scope.
+// True iff `declFilePath` lives under the stdlib root. A stdlib-declared
+// typealias is globally reachable regardless of its source-level visibility
+// modifier (the stdlib's internal aliases flow through the public collection
+// API), matching the C# bootstrap.
+function typeAliasDeclaredInStdlib(declFilePath FilePath) returns bool
+	let stdlibRoot = findStdlibPath()
+	if stdlibRoot.isEmpty() 'noRoot'
+		return false
+	end 'noRoot'
+	return declFilePath.isInside(stdlibRoot)
+end 'typeAliasDeclaredInStdlib'
+
 function checkNamedTypeVisibility(project Project, t MaxonType, range SourceRange, readerFilePath FilePath)
 	let typeName = t.nameOrEmpty(project)
 	if typeName.isEmpty() 'notNamed'
@@ -9013,6 +9025,17 @@ function checkNamedTypeVisibility(project Project, t MaxonType, range SourceRang
 				visible = true
 				break
 			end 'thisOk'
+			// A typealias declared in the stdlib is visible to every file
+			// regardless of its source-level modifier. The stdlib's internal
+			// aliases (`ElementCount`, `NodeIndex`, …) appear in the public
+			// Array/Vector/List method signatures, so user (and compiler) code
+			// must be able to name them — e.g. `i as ElementCount`. The C#
+			// bootstrap treats every stdlib alias as globally reachable; mirror
+			// that here so a file-private stdlib alias isn't rejected as hidden.
+			if typeAliasDeclaredInStdlib(aliasInfo.sourceFilePath) 'stdlibAlias'
+				visible = true
+				break
+			end 'stdlibAlias'
 		end 'eachInfo'
 		if not visible 'aliasHidden'
 			reportCompileError(project, code: ErrorCode.parserExpectedType, message: "Expected type name after 'as'", line: range.line, column: range.column, filePath: readerFilePath)
