@@ -1,0 +1,148 @@
+// Test: interface-param-threaded-through-helpers
+typealias Tick = int(0 to 100)
+
+interface Counter
+	function value() returns Tick
+end 'Counter'
+
+type Fixed implements Counter
+	let n as Tick
+
+	static function create(n Tick) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function value() returns Tick
+		return n
+	end 'value'
+end 'Fixed'
+
+// Innermost: dispatches the interface method on a value whose static type is
+// the interface, reached only after two forwarding hops.
+function deepest(c Counter) returns Tick
+	return c.value() + c.value()
+end 'deepest'
+
+function middle(c Counter) returns Tick
+	return deepest(c)
+end 'middle'
+
+function outer(c Counter) returns Tick
+	return middle(c)
+end 'outer'
+
+function main() returns ExitCode
+	let f = Fixed.create(5)
+	return outer(f)
+end 'main'
+---
+ExitCode: 10
+---
+// CompiledIR
+module {
+  func @Fixed.value(rcx: i64) -> u8 {
+  entry:
+    x64.prologue stack_size=16
+    x64.movzx r8, [rcx+0] (1b)
+    x64.cmp r8, 100
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea r12, [rip+__panic_msg_716530e216f8b181]
+    x64.mov rcx, r12
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+  func @deepest(rcx: i64, rdx: i64) -> u8 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov [rbp-8], rcx
+    x64.mov [rbp-16], rdx
+    x64.mov r8, [rbp-16]
+    x64.mov rcx, [rbp-8]
+    x64.mov r10, [r8+24] (8b)
+    x64.call r10
+    x64.mov r12, r8
+    x64.mov r8, [rbp-16]
+    x64.mov rcx, [rbp-8]
+    x64.mov r10, [r8+24] (8b)
+    x64.call r10
+    x64.mov r9, r12
+    x64.add r9, r8
+    x64.cmp r9, 100
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea r12, [rip+__panic_msg_7287923437282079]
+    x64.mov rcx, r12
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov r8, r9
+    x64.epilogue
+    x64.ret
+  }
+  func @middle(rcx: i64, rdx: i64) -> u8 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov [rbp-16], rdx
+    x64.mov rdx, [rbp-16]
+    x64.mov rcx, [rbp-8]
+    x64.call deepest
+    x64.cmp r8, 100
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea r12, [rip+__panic_msg_6723ab5dd44b639d]
+    x64.mov rcx, r12
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+  func @outer(rcx: i64, rdx: i64) -> u8 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov [rbp-16], rdx
+    x64.mov rdx, [rbp-16]
+    x64.mov rcx, [rbp-8]
+    x64.call middle
+    x64.cmp r8, 100
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea r12, [rip+__panic_msg_b9cbab272d6f3f5c]
+    x64.mov rcx, r12
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.xor edx, edx
+    x64.mov ecx, 8
+    x64.call stdlib.__mm_alloc
+    x64.mov r12, r8
+    x64.mov r8d, 5
+    x64.mov [r12+0], r8 (1b)
+    x64.lea rdx, [rip+__witness_Fixed_Counter]
+    x64.mov rcx, r12
+    x64.call outer
+    x64.mov r13, r8
+    x64.mov rcx, r12
+    x64.call mm_drop
+    x64.mov r8d, 4294967295
+    x64.cmp r13, r8
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea r12, [rip+__panic_msg_745b94c47e759091]
+    x64.mov rcx, r12
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov r8, r13
+    x64.epilogue
+    x64.ret
+  }
+}
+---

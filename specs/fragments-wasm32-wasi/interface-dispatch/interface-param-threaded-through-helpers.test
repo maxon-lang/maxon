@@ -1,0 +1,134 @@
+// Test: interface-param-threaded-through-helpers
+typealias Tick = int(0 to 100)
+
+interface Counter
+	function value() returns Tick
+end 'Counter'
+
+type Fixed implements Counter
+	let n as Tick
+
+	static function create(n Tick) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function value() returns Tick
+		return n
+	end 'value'
+end 'Fixed'
+
+// Innermost: dispatches the interface method on a value whose static type is
+// the interface, reached only after two forwarding hops.
+function deepest(c Counter) returns Tick
+	return c.value() + c.value()
+end 'deepest'
+
+function middle(c Counter) returns Tick
+	return deepest(c)
+end 'middle'
+
+function outer(c Counter) returns Tick
+	return middle(c)
+end 'outer'
+
+function main() returns ExitCode
+	let f = Fixed.create(5)
+	return outer(f)
+end 'main'
+---
+ExitCode: 10
+---
+// CompiledIR
+module {
+  func @Fixed.value(local0: i64) -> u8 {
+  entry:
+    %3 = mir.param local0 : i64
+    %1 = mir.load %3, 0 width: byte
+    %4 = mir.mov_imm 100 : i64
+    %5 = mir.cmp ugt, %1, %4
+    mir.cond_br %5 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %6 = mir.global_addr @__panic_msg_716530e216f8b181
+    %7 = mir.call @mrt_panic(%6)
+  __range_ok_0:
+    mir.ret %1
+  }
+  func @deepest(local0: i64, local1: i64) -> u8 {
+  entry:
+    %9 = mir.param local0 : i64
+    mir.store_slot slot_0, %9
+    %10 = mir.param local1 : i64
+    mir.store_slot slot_1, %10
+    %2 = mir.load_slot slot_0
+    %3 = mir.load_slot slot_1
+    %4 = mir.witness_call %3, [0](%2)
+    %5 = mir.load_slot slot_0
+    %6 = mir.load_slot slot_1
+    %7 = mir.witness_call %6, [0](%5)
+    %8 = mir.add.i64 %4, %7
+    %11 = mir.mov_imm 100 : i64
+    %12 = mir.cmp ugt, %8, %11
+    mir.cond_br %12 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %13 = mir.global_addr @__panic_msg_7287923437282079
+    %14 = mir.call @mrt_panic(%13)
+  __range_ok_0:
+    mir.ret %8
+  }
+  func @middle(local0: i64, local1: i64) -> u8 {
+  entry:
+    %5 = mir.param local0 : i64
+    mir.store_slot slot_0, %5
+    %6 = mir.param local1 : i64
+    mir.store_slot slot_1, %6
+    %2 = mir.load_slot slot_0
+    %3 = mir.load_slot slot_1
+    %4 = mir.call @deepest(%2, %3)
+    %7 = mir.mov_imm 100 : i64
+    %8 = mir.cmp ugt, %4, %7
+    mir.cond_br %8 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %9 = mir.global_addr @__panic_msg_6723ab5dd44b639d
+    %10 = mir.call @mrt_panic(%9)
+  __range_ok_0:
+    mir.ret %4
+  }
+  func @outer(local0: i64, local1: i64) -> u8 {
+  entry:
+    %5 = mir.param local0 : i64
+    mir.store_slot slot_0, %5
+    %6 = mir.param local1 : i64
+    mir.store_slot slot_1, %6
+    %2 = mir.load_slot slot_0
+    %3 = mir.load_slot slot_1
+    %4 = mir.call @middle(%2, %3)
+    %7 = mir.mov_imm 100 : i64
+    %8 = mir.cmp ugt, %4, %7
+    mir.cond_br %8 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %9 = mir.global_addr @__panic_msg_b9cbab272d6f3f5c
+    %10 = mir.call @mrt_panic(%9)
+  __range_ok_0:
+    mir.ret %4
+  }
+  func @main() -> u8 {
+  entry:
+    %1 = mir.mov_imm 5 : i64
+    %6 = mir.mov_imm 8 : i64
+    %7 = mir.mov_imm 0 : i64
+    %8 = mir.call @stdlib.__mm_alloc(%6, %7)
+    mir.store %1, %8, 0 width: byte
+    %4 = mir.global_addr @__witness_Fixed_Counter
+    %5 = mir.call @outer(%8, %4)
+    %9 = mir.call @mm_drop(%8)
+    %10 = mir.mov_imm 125 : i64
+    %11 = mir.cmp ugt, %5, %10
+    mir.cond_br %11 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %12 = mir.global_addr @__panic_msg_745b94c47e759091
+    %13 = mir.call @mrt_panic(%12)
+  __range_ok_0:
+    mir.ret %5
+  }
+}
+---

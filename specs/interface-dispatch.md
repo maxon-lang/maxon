@@ -678,3 +678,57 @@ end 'main'
 ```exitcode
 42
 ```
+
+
+<!-- test: interface-param-threaded-through-helpers -->
+An interface-typed parameter passed down through several helper functions —
+each receiving it as a parameter and forwarding it — must still dispatch its
+method at the innermost call. When the receiver value's recorded type degrades
+to a bare `named(InterfaceName)` (as happens when an interface param is threaded
+arg→param→arg across call boundaries), the resolver's dynamic-dispatch guard
+must still recognize it as an interface receiver and route the method through
+witness dispatch rather than flagging the call as unresolved. Mirrors the
+compiler's own register allocator threading a `RegAllocTarget` interface through
+`computeLiveness → scanUseDef → scanOpUseDefPacked` before calling
+`regTarget.noteOpDefs(...)`.
+```maxon
+typealias Tick = int(0 to 100)
+
+interface Counter
+	function value() returns Tick
+end 'Counter'
+
+type Fixed implements Counter
+	let n as Tick
+
+	static function create(n Tick) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function value() returns Tick
+		return n
+	end 'value'
+end 'Fixed'
+
+// Innermost: dispatches the interface method on a value whose static type is
+// the interface, reached only after two forwarding hops.
+function deepest(c Counter) returns Tick
+	return c.value() + c.value()
+end 'deepest'
+
+function middle(c Counter) returns Tick
+	return deepest(c)
+end 'middle'
+
+function outer(c Counter) returns Tick
+	return middle(c)
+end 'outer'
+
+function main() returns ExitCode
+	let f = Fixed.create(5)
+	return outer(f)
+end 'main'
+```
+```exitcode
+10
+```

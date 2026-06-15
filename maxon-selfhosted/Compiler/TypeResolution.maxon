@@ -4174,6 +4174,18 @@ end 'normalizeReceiverInContext'
 
 function normalizeNamedReceiver(project Project, id TypeNameId, enclosingType String) returns MaxonType
 	let name = project.typeNames.get(id)
+	// A receiver whose named type is a registered interface is a fat-pointer
+	// dynamic-dispatch receiver, not a concrete struct. Some producer-type
+	// paths (notably interface-typed function parameters loaded via varLoad)
+	// record the slot as a bare `named(InterfaceName)` rather than routing
+	// through `internMaxonType`, which would have produced `interface(...)`.
+	// Canonicalize it here so both the resolver's dynamic-dispatch guard
+	// (`maxonTypeIsDynamicDispatch`) and lowering's method dispatch see the
+	// interface form. Interface names are top-level and unique, so this never
+	// shadows a struct's inner alias or a generic typealias of the same name.
+	if project.interfaces.contains(name) or project.unresolvedInterfaces.contains(name) 'isInterface'
+		return MaxonType.interface(project.interfaceRegistry.intern(name))
+	end 'isInterface'
 	// Per-struct inner-typealias lookup: when the named type is an inner
 	// alias on the enclosing struct, use the alias's resolved MaxonType
 	// (which carries the underlying generic instance).
