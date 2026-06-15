@@ -253,3 +253,56 @@ end 'main'
 ```exitcode
 42
 ```
+
+<!-- test: second-param-disambiguation-result-type -->
+Two overloads that SHARE their leading parameter type must still be told apart
+by their later parameters — the overload key mangles every parameter, not just
+the first. Here both `lookup` overloads start with `Registry`, so a resolver
+that keyed only on the first argument would collapse them to one bucket member
+and mis-type the result of the call. Because the overloads return DIFFERENT
+types (`Integer` vs `bool`), picking the wrong one would flow the wrong type
+into the downstream `use(...)` argument check. Selecting by the full signature
+keeps each result type correct.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Registry
+	export var seed as Integer
+
+	export static function make(seed Integer) returns Registry
+		return Registry{seed: seed}
+	end 'make'
+end 'Registry'
+
+function lookup(reg Registry, index Integer) returns Integer
+	return reg.seed + index
+end 'lookup'
+
+function lookup(reg Registry, present bool) returns bool
+	if present 'yes'
+		return reg.seed > 0
+	end 'yes'
+	return false
+end 'lookup'
+
+function useInt(value Integer) returns Integer
+	return value
+end 'useInt'
+
+function useBool(flag bool) returns Integer
+	if flag 'on'
+		return 1
+	end 'on'
+	return 0
+end 'useBool'
+
+function main() returns ExitCode
+	let reg = Registry.make(10)
+	let asInt = lookup(reg, index: 5)
+	let asBool = lookup(reg, present: true)
+	return useInt(asInt) + useBool(asBool)
+end 'main'
+```
+```exitcode
+16
+```

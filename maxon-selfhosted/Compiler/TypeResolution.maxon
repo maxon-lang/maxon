@@ -4345,45 +4345,58 @@ function tryAnyStructInnerAlias(project Project, name String, fallbackId TypeNam
 	return MaxonType.named(fallbackId)
 end 'tryAnyStructInnerAlias'
 
-// Resolve an overloaded callee at TypeResolution time. Mirrors
-// `resolveOverloadedCallee` in MaxonDialect but additionally consults the
-// per-function `producerTypes` map to fill in any unresolved entries in the
-// stored argTypes vector. When no variant's first-param suffix matches the
-// (possibly still-unresolved) first arg type, falls back to the first
-// registered variant so the result-type lookup at least returns a concrete
-// type — this matches the pragmatic reality that overloaded sets in the
-// Maxon stdlib uniformly return the same type across variants today.
+// Resolve an overloaded callee at TypeResolution time. Producer types are the
+// only argument-type source here (the stored `argTypes` vector is frequently
+// still `unresolved` mid-convergence), so we first materialize a resolved
+// argType vector by consulting `producerTypes` for every unresolved entry, then
+// hand it to the canonical `resolveOverloadedCallee` resolver in MaxonDialect.
+//
+// Delegating is what keeps disambiguation CORRECT across the WHOLE parameter
+// list: registration mangles every non-self param into the variant suffix
+// (`collectParamValues$StdModule$IrBlock` vs `…$StdModule$IrFunction`), so a
+// resolver that only inspects the FIRST argument cannot tell two overloads
+// apart when they share a leading param type — it silently returns the first
+// bucket member and mis-types the call's result (the `ParamValueMap` arg
+// reported as `BoolArray`). `resolveOverloadedCallee` builds the full multi-arg
+// suffix and carries the label/generic fallbacks, so it is the single source of
+// overload-resolution truth for both the codegen and type-resolution legs.
+//
+// When NO variant matches (every fallback misses), `resolveOverloadedCallee`
+// returns the bare name; we then pick the first registered variant so the
+// result-type lookup still returns a concrete type — overloaded sets in the
+// Maxon stdlib uniformly return the same type across variants today, so a
+// genuinely-ambiguous miss costs nothing.
 function resolveOverloadFromArgs(project Project, bareName String, args ByteArrayArray, argTypes MaxonTypeArray, producerTypes ProducerTypeMap, hasSelf bool) returns String
 	let variants = try project.overloadedNames.get(bareName) otherwise return bareName
-	var startIdx = 0
-	if hasSelf 'skipSelf'
-		startIdx = 1
-	end 'skipSelf'
-	if startIdx >= argTypes.count() 'zeroArg'
-		let zeroArgCandidate = "{bareName}$"
-		for v in variants 'scanZero'
-			if v == zeroArgCandidate 'hit'
-				return zeroArgCandidate
-			end 'hit'
-		end 'scanZero'
+	let resolvedArgTypes = resolveArgTypesFromProducers(args, argTypes: argTypes, producerTypes: producerTypes)
+	let resolved = resolveOverloadedCallee(project, bareQualifiedName: bareName, argTypes: resolvedArgTypes, hasSelf: hasSelf)
+	if resolved == bareName 'noVariantMatch'
 		return firstOverloadVariant(variants, fallback: bareName)
-	end 'zeroArg'
-	var firstArgType = try argTypes.get(startIdx) otherwise return bareName
-	if isUnresolvedType(firstArgType) 'fillFromProducer'
-		let argName = try args.get(startIdx) otherwise return firstOverloadVariant(variants, fallback: bareName)
-		firstArgType = lookupProducerType(producerTypes, name: argName)
-	end 'fillFromProducer'
-	if isUnresolvedType(firstArgType) 'stillUnresolved'
-		return firstOverloadVariant(variants, fallback: bareName)
-	end 'stillUnresolved'
-	let target = "{bareName}{mangleSuffixForMaxonType(project, t: firstArgType)}"
-	for v in variants 'scan'
-		if v == target 'hit'
-			return target
-		end 'hit'
-	end 'scan'
-	return firstOverloadVariant(variants, fallback: bareName)
+	end 'noVariantMatch'
+	return resolved
 end 'resolveOverloadFromArgs'
+
+// Build an argType vector where every `unresolved` entry is replaced by its
+// producer type (looked up by the arg's source-expression name). Used to feed
+// the overload resolver concrete types mid-convergence, when the parser-stored
+// `argTypes` are not yet filled.
+function resolveArgTypesFromProducers(args ByteArrayArray, argTypes MaxonTypeArray, producerTypes ProducerTypeMap) returns MaxonTypeArray
+	var resolved = MaxonTypeArray.create()
+	for i in 0 upto argTypes.count() 'eachArg'
+		let stored = try argTypes.get(i) otherwise panic("resolveArgTypesFromProducers: argTypes.get OOB at {i} despite bounds check")
+		if not isUnresolvedType(stored) 'alreadyResolved'
+			resolved.push(stored)
+			continue
+		end 'alreadyResolved'
+		if i >= args.count() 'noArgName'
+			resolved.push(stored)
+			continue
+		end 'noArgName'
+		let argName = try args.get(i) otherwise panic("resolveArgTypesFromProducers: args.get OOB at {i} despite bounds check")
+		resolved.push(lookupProducerType(producerTypes, name: argName))
+	end 'eachArg'
+	return resolved
+end 'resolveArgTypesFromProducers'
 
 function firstOverloadVariant(variants QualifiedNameArray, fallback String) returns String
 	if variants.count() == 0 'empty'

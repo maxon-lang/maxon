@@ -1,0 +1,90 @@
+// Test: second-param-disambiguation-result-type
+typealias Integer = int(i64.min to i64.max)
+
+type Registry
+	export var seed as Integer
+
+	export static function make(seed Integer) returns Registry
+		return Registry{seed: seed}
+	end 'make'
+end 'Registry'
+
+function lookup(reg Registry, index Integer) returns Integer
+	return reg.seed + index
+end 'lookup'
+
+function lookup(reg Registry, present bool) returns bool
+	if present 'yes'
+		return reg.seed > 0
+	end 'yes'
+	return false
+end 'lookup'
+
+function useInt(value Integer) returns Integer
+	return value
+end 'useInt'
+
+function useBool(flag bool) returns Integer
+	if flag 'on'
+		return 1
+	end 'on'
+	return 0
+end 'useBool'
+
+function main() returns ExitCode
+	let reg = Registry.make(10)
+	let asInt = lookup(reg, index: 5)
+	let asBool = lookup(reg, present: true)
+	return useInt(asInt) + useBool(asBool)
+end 'main'
+---
+ExitCode: 16
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %1 = mir.mov_imm 10 : i64
+    %14 = mir.mov_imm 8 : i64
+    %15 = mir.mov_imm 0 : i64
+    %16 = mir.call @stdlib.__mm_alloc(%14, %15)
+    mir.store %1, %16, 0 width: qword
+    %4 = mir.mov_imm 5 : i64
+    %17 = mir.load %16, 0 width: qword
+    %18 = mir.add.i64 %17, %4
+    %7 = mir.mov_imm 1 : i64
+    mir.br inlined_lookup$Registry$bool_0_1()
+  inlined_lookup$Registry$bool_0_1:
+    mir.cond_br %7 [then: inlined_lookup$Registry$bool_1_2(), else: inlined_lookup$Registry$bool_2_3()]
+  inlined_lookup$Registry$bool_1_2:
+    %19 = mir.load %16, 0 width: qword
+    %20 = mir.mov_imm 0 : i64
+    %21 = mir.cmp gt, %19, %20
+    mir.br inline_cont_main_0(%21)
+  inlined_lookup$Registry$bool_2_3:
+    %22 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%22)
+  inline_cont_main_0(%23: i1):
+    mir.br inlined_useBool_0_0()
+  inlined_useBool_0_0:
+    mir.cond_br %23 [then: inlined_useBool_1_0(), else: inlined_useBool_2_0()]
+  inlined_useBool_1_0:
+    %24 = mir.mov_imm 1 : i64
+    mir.br inline_cont_main_4(%24)
+  inlined_useBool_2_0:
+    %25 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_4(%25)
+  inline_cont_main_4(%26: i64):
+    %13 = mir.add.i64 %18, %26
+    %27 = mir.call @mm_drop(%16)
+    %28 = mir.mov_imm 125 : i64
+    %29 = mir.cmp ugt, %13, %28
+    mir.cond_br %29 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %30 = mir.global_addr @__panic_msg_3e67678a347b5574
+    %31 = mir.call @mrt_panic(%30)
+  __range_ok_0:
+    mir.ret %13
+  }
+}
+---

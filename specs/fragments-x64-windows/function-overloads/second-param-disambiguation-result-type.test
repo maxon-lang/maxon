@@ -1,0 +1,96 @@
+// Test: second-param-disambiguation-result-type
+typealias Integer = int(i64.min to i64.max)
+
+type Registry
+	export var seed as Integer
+
+	export static function make(seed Integer) returns Registry
+		return Registry{seed: seed}
+	end 'make'
+end 'Registry'
+
+function lookup(reg Registry, index Integer) returns Integer
+	return reg.seed + index
+end 'lookup'
+
+function lookup(reg Registry, present bool) returns bool
+	if present 'yes'
+		return reg.seed > 0
+	end 'yes'
+	return false
+end 'lookup'
+
+function useInt(value Integer) returns Integer
+	return value
+end 'useInt'
+
+function useBool(flag bool) returns Integer
+	if flag 'on'
+		return 1
+	end 'on'
+	return 0
+end 'useBool'
+
+function main() returns ExitCode
+	let reg = Registry.make(10)
+	let asInt = lookup(reg, index: 5)
+	let asBool = lookup(reg, present: true)
+	return useInt(asInt) + useBool(asBool)
+end 'main'
+---
+ExitCode: 16
+---
+// CompiledIR
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.xor edx, edx
+    x64.mov ecx, 8
+    x64.call stdlib.__mm_alloc
+    x64.mov r12, r8
+    x64.mov r8d, 10
+    x64.mov [r12+0], r8 (8b)
+    x64.mov r8, [r12+0] (8b)
+    x64.mov r9d, 1
+    x64.mov r13, r8
+    x64.add r13, 5
+  inlined_lookup$Registry$bool_0_1:
+    x64.test r9, r9
+    x64.je inlined_lookup$Registry$bool_2_3
+  inlined_lookup$Registry$bool_1_2:
+    x64.mov r8, [r12+0] (8b)
+    x64.test r8, r8
+    x64.setg r8
+    x64.jmp inline_cont_main_0
+  inlined_lookup$Registry$bool_2_3:
+    x64.xor r8d, r8d
+  inline_cont_main_0:
+  inlined_useBool_0_0:
+    x64.test r8, r8
+    x64.je inlined_useBool_2_0
+  inlined_useBool_1_0:
+    x64.mov r8d, 1
+    x64.mov r14, r8
+    x64.jmp inline_cont_main_1
+  inlined_useBool_2_0:
+    x64.xor r8d, r8d
+    x64.mov r14, r8
+  inline_cont_main_1:
+    x64.mov rcx, r12
+    x64.call mm_drop
+    x64.mov r9d, 4294967295
+    x64.mov r8, r13
+    x64.add r8, r14
+    x64.cmp r8, r9
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea r12, [rip+__panic_msg_3e67678a347b5574]
+    x64.mov rcx, r12
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+---
