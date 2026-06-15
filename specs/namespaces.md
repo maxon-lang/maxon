@@ -237,6 +237,47 @@ end 'main'
 error E3095: specs/fragments/namespaces/error.cross-file-bare-name-ambiguous.test:16:9: Ambiguous bare-name call to 'duplicate': multiple visible definitions found. Qualify with a directory name. Candidates: alpha.duplicate, beta.duplicate
 ```
 
+<!-- test: bare-sibling-instance-method-call-injects-self -->
+A bare call to a SIBLING instance method from inside another method of the same
+type binds to that method with the enclosing `self` injected as the implicit
+receiver — `bump(amount)` inside `bumpTwice` means `self.bump(amount)`. The call
+lowers to a plain `call` op carrying only the user argument; the receiver is
+supplied at lowering, not written at the call site. Argument validation must
+align the lone user arg past the implicit `__self` slot (param 1), not against
+`__self` itself, or it spuriously rejects `amount` as the wrong type for the
+receiver. Mirrors the compiler's own `IrModule.addBlock` calling its sibling
+`IrModule.createAndRegisterBlock` bare.
+```maxon
+typealias Count = int(0 to 100)
+
+type Counter
+	var total as Count
+
+	static function make() returns Counter
+		return Counter{total: 0}
+	end 'make'
+
+	function bump(amount Count) returns Count
+		self.total = self.total + amount
+		return self.total
+	end 'bump'
+
+	export function bumpTwice(amount Count) returns Count
+		let first = bump(amount)
+		return bump(first)
+	end 'bumpTwice'
+end 'Counter'
+
+function main() returns ExitCode
+	var c = Counter.make()
+	return c.bumpTwice(5)
+end 'main'
+```
+```exitcode
+10
+```
+
+
 <!-- test: bare-call-resolves-free-fn-over-different-arity-method -->
 A bare call binds a FREE function — a method (`TypeName.method`) needs an
 explicit receiver. When a same-named method has a DIFFERENT non-receiver

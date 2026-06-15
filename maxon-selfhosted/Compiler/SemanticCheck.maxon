@@ -1994,6 +1994,7 @@ end 'checkOneCallArgs'
 function validateCallArgs(project Project, opIdx OpIndex, result ByteArray, args ByteArrayArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, paramOffset ArgIndex, callerName String, readerFilePath FilePath)
 	let paramTypes = try project.callParamTypes.get(opIdx) otherwise return
 	let paramNames = paramNamesForCall(project, opIdx: opIdx)
+	let effectiveOffset = effectiveParamOffset(project, opIdx: opIdx, paramOffset: paramOffset)
 
 	// `__Builtins.*` runtime intrinsics report argument mismatches in the
 	// runtime-symbol form ("type mismatch: __Builtins.maxon_x argument N
@@ -2001,17 +2002,17 @@ function validateCallArgs(project Project, opIdx OpIndex, result ByteArray, args
 	// form — the runtime, not a Maxon signature, owns the contract. Route
 	// these through the dedicated checker and skip the generic loop so we
 	// don't emit both messages for one bad argument.
-	if validateBuiltinsIntrinsicArgs(project, opIdx: opIdx, result: result, args: args, argTypes: argTypes, argRanges: argRanges, paramOffset: paramOffset, paramTypes: paramTypes, callerName: callerName, readerFilePath: readerFilePath) 'wasBuiltins'
+	if validateBuiltinsIntrinsicArgs(project, opIdx: opIdx, result: result, args: args, argTypes: argTypes, argRanges: argRanges, paramOffset: effectiveOffset, paramTypes: paramTypes, callerName: callerName, readerFilePath: readerFilePath) 'wasBuiltins'
 		return
 	end 'wasBuiltins'
 
 	for i in 0 upto args.count() 'eachArg'
-		let pIdx = i + paramOffset
+		let pIdx = i + effectiveOffset
 		if pIdx >= paramTypes.count() 'paramOob'
 			continue
 		end 'paramOob'
 		let rawParamType = try paramTypes.get(pIdx) otherwise continue
-		let paramType = refineSelfParam(project, opIdx: opIdx, paramType: rawParamType, paramOffset: paramOffset)
+		let paramType = refineSelfParam(project, opIdx: opIdx, paramType: rawParamType, paramOffset: effectiveOffset)
 		let argType = try argTypes.get(i) otherwise continue
 		if argTypesCompatible(project, argType: argType, paramType: paramType) 'ok'
 			continue
@@ -2134,6 +2135,28 @@ function paramNamesForCall(project Project, opIdx OpIndex) returns StringArray
 	let sig = try project.funcSignatures.get(callee) otherwise return StringArray.create()
 	return sig.paramNames
 end 'paramNamesForCall'
+
+// A bare sibling-instance call (`bump(amount)` inside another method of the
+// same type) lowers to a plain `call` op — no explicit receiver in the arg
+// list, so its `paramOffset` arrives as 0. But the resolved callee's signature
+// still carries `__self` at param slot 0 (the receiver is injected implicitly
+// at lowering, not supplied as a user arg). Aligning user args to `paramTypes`
+// from slot 0 would then compare `args[0]` against `__self` and spuriously
+// fire E3005. Bump the offset to 1 so user args align past the implicit
+// receiver, exactly as the C# bootstrap does by prepending the receiver into
+// the arg list before validation. A free-function `call` keeps offset 0 (its
+// signature has no `__self`); a `methodCall` op already arrives at offset 1.
+function effectiveParamOffset(project Project, opIdx OpIndex, paramOffset ArgIndex) returns ArgIndex
+	if paramOffset != 0 'alreadyOffset'
+		return paramOffset
+	end 'alreadyOffset'
+	let callee = try project.resolvedCallees.get(opIdx) otherwise return paramOffset
+	let sig = try project.funcSignatures.get(callee) otherwise return paramOffset
+	if signatureFirstParamIsSelf(sig) 'siblingInstance'
+		return 1
+	end 'siblingInstance'
+	return paramOffset
+end 'effectiveParamOffset'
 
 function paramNameAt(paramNames StringArray, index ArgIndex) returns String
 	return try paramNames.get(index) otherwise ""
