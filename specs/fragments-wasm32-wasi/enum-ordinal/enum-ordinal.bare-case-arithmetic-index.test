@@ -1,0 +1,103 @@
+// Test: enum-ordinal.bare-case-arithmetic-index
+typealias Idx = int(0 to u64.max)
+typealias IdxArray = Array with Idx
+
+enum Col
+	a
+	b
+	c
+	COUNT
+end 'Col'
+
+enum Row
+	x
+	y
+	COUNT
+end 'Row'
+
+function lookup(table IdxArray, index Idx) returns Idx
+	return try table.get(index) otherwise 0
+end 'lookup'
+
+function main() returns ExitCode
+	var table = IdxArray.create()
+	var i = 0
+	while i < 100 'fill'
+		table.push(i)
+		i = i + 1
+	end 'fill'
+	let col = Col.b
+	let idx = Row.y * Col.COUNT + col
+	return lookup(table, index: idx)
+end 'main'
+---
+ExitCode: 4
+---
+// CompiledIR
+module {
+  func @lookup(local0: i64, local1: u64) -> u64 {
+  entry:
+    %13 = mir.param local0 : i64
+    %14 = mir.param local1 : u64
+    mir.br inlined_Array.get_0_0()
+  inlined_Array.get_0_0:
+    %15 = mir.load %13, 0 width: qword
+    %16, %17 = mir.try_call @stdlib.__managed_mem_get(%15, %14)
+    %18 = mir.mov_imm 0 : i64
+    %19 = mir.cmp ne, %17, %18
+    mir.cond_br %19 [then: inlined_Array.get_1_0(), else: inlined_Array.get_3_0()]
+  inlined_Array.get_1_0:
+    %20 = mir.mov_imm 0 : i64
+    %21 = mir.mov_imm 1 : i64
+    mir.br inline_cont_lookup_0(%20, %21)
+  inlined_Array.get_3_0:
+    %22 = mir.mov_imm 0 : i64
+    mir.br inline_cont_lookup_0(%16, %22)
+  inline_cont_lookup_0(%23: i64, %24: i64):
+    %7 = mir.mov_imm 0 : i64
+    %8 = mir.cmp ne, %24, %7
+    mir.cond_br %8 [then: try_0.otherwise(), else: try_0.merge(%23)]
+  try_0.otherwise:
+    %10 = mir.mov_imm 0 : i64
+    mir.br try_0.merge(%10)
+  try_0.merge(%12: i64):
+    %25 = mir.mov_imm -1 : i64
+    %26 = mir.cmp ugt, %12, %25
+    mir.cond_br %26 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %27 = mir.global_addr @__panic_msg_1aadd2c5c9545bb9
+    %28 = mir.call @mrt_panic(%27)
+  __range_ok_0:
+    mir.ret %12
+  }
+  func @main() -> u8 {
+  entry:
+    %1 = mir.global_addr @__layout_Array_Idx
+    %2 = mir.call @Array.create(%1)
+    %3 = mir.mov_imm 0 : i64
+    mir.br fill_0.header(%3)
+  fill_0.header(%23: i64):
+    %5 = mir.mov_imm 100 : i64
+    %6 = mir.cmp lt, %23, %5
+    mir.cond_br %6 [then: fill_0(), else: fill_0.exit()]
+  fill_0:
+    %9 = mir.global_addr @__layout_Array_Idx
+    %10 = mir.call @Array.push(%2, %23, %9)
+    %12 = mir.mov_imm 1 : i64
+    %13 = mir.add.i64 %23, %12
+    mir.br fill_0.header(%13)
+  fill_0.exit:
+    %19 = mir.mov_imm 4 : i64
+    %22 = mir.call @lookup(%2, %19)
+    %24 = mir.call @__mm_decref_maybenull_helper(%2)
+    %25 = mir.mov_imm 125 : i64
+    %26 = mir.cmp ugt, %22, %25
+    mir.cond_br %26 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %27 = mir.global_addr @__panic_msg_91e49d58c2b0ceee
+    %28 = mir.call @mrt_panic(%27)
+  __range_ok_0:
+    mir.ret %22
+  }
+}
+---

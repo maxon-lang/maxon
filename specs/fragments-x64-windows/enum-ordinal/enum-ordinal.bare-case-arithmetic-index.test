@@ -1,0 +1,110 @@
+// Test: enum-ordinal.bare-case-arithmetic-index
+typealias Idx = int(0 to u64.max)
+typealias IdxArray = Array with Idx
+
+enum Col
+	a
+	b
+	c
+	COUNT
+end 'Col'
+
+enum Row
+	x
+	y
+	COUNT
+end 'Row'
+
+function lookup(table IdxArray, index Idx) returns Idx
+	return try table.get(index) otherwise 0
+end 'lookup'
+
+function main() returns ExitCode
+	var table = IdxArray.create()
+	var i = 0
+	while i < 100 'fill'
+		table.push(i)
+		i = i + 1
+	end 'fill'
+	let col = Col.b
+	let idx = Row.y * Col.COUNT + col
+	return lookup(table, index: idx)
+end 'main'
+---
+ExitCode: 4
+---
+// CompiledIR
+module {
+  func @lookup(rcx: i64, rdx: u64) -> u64 {
+  entry:
+    x64.prologue stack_size=16
+  inlined_Array.get_0_0:
+    x64.mov r8, [rcx+0] (8b)
+    x64.mov rcx, r8
+    x64.call stdlib.__managed_mem_get
+    x64.test rdx, rdx
+    x64.je inlined_Array.get_3_0
+  inlined_Array.get_1_0:
+    x64.mov edx, 1
+    x64.xor r8d, r8d
+    x64.jmp inline_cont_lookup_0
+  inlined_Array.get_3_0:
+    x64.xor edx, edx
+  inline_cont_lookup_0:
+    x64.test rdx, rdx
+    x64.je try_0.merge
+  try_0.otherwise:
+    x64.xor r8d, r8d
+  try_0.merge:
+    x64.mov r9, -1
+    x64.cmp r8, r9
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea r12, [rip+__panic_msg_1aadd2c5c9545bb9]
+    x64.mov rcx, r12
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.lea rcx, [rip+__layout_Array_Idx]
+    x64.call Array.create
+    x64.mov r12, r8
+    x64.xor edx, edx
+    x64.mov r13, rdx
+  fill_0.header:
+    x64.cmp r13, 100
+    x64.jge fill_0.exit
+  fill_0:
+    x64.lea rax, [rip+__layout_Array_Idx]
+    x64.mov rcx, r12
+    x64.mov rdx, r13
+    x64.call Array.push
+    x64.mov rdx, r13
+    x64.add rdx, 1
+    x64.mov r13, rdx
+    x64.jmp fill_0.header
+  fill_0.exit:
+    x64.mov edx, 4
+    x64.mov rcx, r12
+    x64.call lookup
+    x64.mov r13, r8
+    x64.mov rcx, r12
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r8d, 4294967295
+    x64.cmp r13, r8
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea r12, [rip+__panic_msg_91e49d58c2b0ceee]
+    x64.mov rcx, r12
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov r8, r13
+    x64.epilogue
+    x64.ret
+  }
+}
+---

@@ -10801,6 +10801,20 @@ export type Parser
 		if maxonTypeIsFloat(leftType) or maxonTypeIsFloat(rightType) 'anyFloat'
 			return MaxonType.float
 		end 'anyFloat'
+		// True arithmetic (`+` `-` `*` `/`) on an ENUM operand is ordinal
+		// arithmetic — `DfaState.start * CharClass.COUNT + charClass` — and its
+		// result is `int`, not the enum. (`mod`/`shl`/`shr` already returned int
+		// above; `and`/`or`/`xor` are handled by the bitwise/logical branch;
+		// comparison kinds fall through to the `named` carry below so enum
+		// equality still dispatches on the enum type.) Without this the result
+		// inherits the operand's `named(Enum)` type and a later `table.get(idx)`
+		// rejects it (expected an int-index, got the enum). Mirrors the C#
+		// bootstrap, which types enum-ordinal arithmetic as int.
+		if kind == TokenKind.plus or kind == TokenKind.minus or kind == TokenKind.star or kind == TokenKind.slash 'arith'
+			if maxonTypeIsEnumName(leftType) or maxonTypeIsEnumName(rightType) 'enumArith'
+				return MaxonType.integer
+			end 'enumArith'
+		end 'arith'
 		// Non-numeric operand types that lowering must see preserved into the
 		// op's operandType slot. `named(...)` flows the receiver type through
 		// to user-defined operator dispatch; `typeParameter(...)` is the
@@ -10839,6 +10853,19 @@ export type Parser
 			genericInstance to cstring gives false
 		end 'check'
 	end 'shouldCarryAsBinopOperandType'
+
+	// True when `t` is a `named(...)` referring to a registered enum (either
+	// already-resolved in `enumTypes` or still in `unresolvedEnums` mid-parse).
+	// Used to demote enum operands of arithmetic ops to int ordinals.
+	function maxonTypeIsEnumName(t MaxonType) returns bool
+		return match t 'check'
+			named(id) gives project.enumTypes.contains(project.typeNames.get(id)) or project.unresolvedEnums.contains(project.typeNames.get(id))
+			boolean to character gives false
+			function gives false
+			unresolved gives false
+			typeParameter to cstring gives false
+		end 'check'
+	end 'maxonTypeIsEnumName'
 
 	function isNamedMaxonType(t MaxonType) returns bool
 		return match t 'check'

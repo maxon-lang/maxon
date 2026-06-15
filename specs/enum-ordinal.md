@@ -197,6 +197,53 @@ end 'main'
 1
 ```
 
+### Bare Enum Case in Arithmetic Yields int
+
+An enum case used directly as an arithmetic operand (no `.ordinal`) is its
+ordinal — an integer — so the `*` / `+` result is `int`, NOT the enum type. The
+result must flow into an int-typed parameter (here a table index): a row-major
+table lookup `state * COUNT + col` is the canonical DFA-transition-table idiom.
+If the binop result kept the operand's enum type, the `lookup(index Idx)` call
+would reject it.
+
+<!-- test: enum-ordinal.bare-case-arithmetic-index -->
+```maxon
+typealias Idx = int(0 to u64.max)
+typealias IdxArray = Array with Idx
+
+enum Col
+	a
+	b
+	c
+	COUNT
+end 'Col'
+
+enum Row
+	x
+	y
+	COUNT
+end 'Row'
+
+function lookup(table IdxArray, index Idx) returns Idx
+	return try table.get(index) otherwise 0
+end 'lookup'
+
+function main() returns ExitCode
+	var table = IdxArray.create()
+	var i = 0
+	while i < 100 'fill'
+		table.push(i)
+		i = i + 1
+	end 'fill'
+	let col = Col.b
+	let idx = Row.y * Col.COUNT + col
+	return lookup(table, index: idx)
+end 'main'
+```
+```exitcode
+4
+```
+
 ### Ordinal from Function
 
 <!-- test: enum-ordinal.from-function -->

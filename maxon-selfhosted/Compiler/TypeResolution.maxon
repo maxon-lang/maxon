@@ -5399,16 +5399,31 @@ end 'staticTypedResult'
 // see at parse time. Without the fallback, downstream consumers of the
 // binop's result observe `unresolved` and `fillBinop` can't recover the
 // operandType either.
-function deriveBinopResultType(producerTypes ProducerTypeMap, operandType MaxonType, left ByteArray, right ByteArray) returns MaxonType
+function deriveBinopResultType(project Project, producerTypes ProducerTypeMap, operandType MaxonType, left ByteArray, right ByteArray) returns MaxonType
 	if not isUnresolvedType(operandType) 'concrete'
-		return operandType
+		return demoteEnumOperandToInt(project, t: operandType)
 	end 'concrete'
 	let leftT = lookupProducerType(producerTypes, name: left)
 	if not isUnresolvedType(leftT) 'fromLeft'
-		return leftT
+		return demoteEnumOperandToInt(project, t: leftT)
 	end 'fromLeft'
-	return lookupProducerType(producerTypes, name: right)
+	return demoteEnumOperandToInt(project, t: lookupProducerType(producerTypes, name: right))
 end 'deriveBinopResultType'
+
+// An enum value used as a binop operand is its ordinal — an integer — so the
+// arithmetic/bitwise/shift result is `int`, never the enum type. Every
+// `BinOpKind` over an enum operand is ordinal arithmetic (`State.b *
+// CharClass.COUNT + charClass`); the enum has no operator that yields the enum
+// itself. Without this, the result inherits the operand's `named(Enum)` type
+// and a downstream `table.get(index)` rejects it (expected `ElementIndex`/int,
+// got the enum). Mirrors the C# bootstrap, which types enum-ordinal arithmetic
+// as int. A non-enum operand type passes through unchanged.
+function demoteEnumOperandToInt(project Project, t MaxonType) returns MaxonType
+	if maxonTypeNamesRegisteredEnum(project, t: t) 'isEnum'
+		return MaxonType.integer
+	end 'isEnum'
+	return t
+end 'demoteEnumOperandToInt'
 
 // Mirror of `deriveBinopResultType` for the single-operand case.
 function deriveUnopResultType(producerTypes ProducerTypeMap, operandType MaxonType, operand ByteArray) returns MaxonType
@@ -5574,7 +5589,7 @@ function recordOpResult(project Project, producerTypes ProducerTypeMap, slotType
 		varStore(slotId, value, _) then recordVarStore(project, producerTypes: producerTypes, slotTypes: slotTypes, slotId: slotId, value: value, enclosingType: enclosingType)
 		globalLoad(result, _, slotType, _) then recordResultType(producerTypes, name: result, t: slotType)
 		globalStore then return
-		binop(result, left, right, _, operandType, _) then recordResultType(producerTypes, name: result, t: deriveBinopResultType(producerTypes, operandType: operandType, left: left, right: right))
+		binop(result, left, right, _, operandType, _) then recordResultType(producerTypes, name: result, t: deriveBinopResultType(project, producerTypes: producerTypes, operandType: operandType, left: left, right: right))
 		unop(result, operand, _, operandType, _) then recordResultType(producerTypes, name: result, t: deriveUnopResultType(producerTypes, operandType: operandType, operand: operand))
 		convert(result, _, _, toType, _, _) then recordResultType(producerTypes, name: result, t: toType)
 		cmp(result, _, _, _, _, _, _, _) then recordResultType(producerTypes, name: result, t: MaxonType.boolean)
@@ -5978,7 +5993,7 @@ function fillUnresolvedTypesForOp(project Project, module MaxonModule, opIdx OpI
 		globalStore(name, value, slotType, range) then fillGlobalStore(module, opIdx: opIdx, name: name, value: value, slotType: slotType, range: range, producerTypes: producerTypes)
 		convert(result, operand, fromType, toType, implicit, range) then fillConvert(module, opIdx: opIdx, result: result, operand: operand, fromType: fromType, toType: toType, implicit: implicit, range: range, producerTypes: producerTypes)
 		cmp(result, left, right, predicate, leftType, rightType, operandType, range) then fillCmp(project, module: module, opIdx: opIdx, result: result, left: left, right: right, predicate: predicate, leftType: leftType, rightType: rightType, operandType: operandType, range: range, producerTypes: producerTypes)
-		binop(result, left, right, opKind, operandType, range) then fillBinop(module, opIdx: opIdx, result: result, left: left, right: right, opKind: opKind, operandType: operandType, range: range, producerTypes: producerTypes)
+		binop(result, left, right, opKind, operandType, range) then fillBinop(project, module: module, opIdx: opIdx, result: result, left: left, right: right, opKind: opKind, operandType: operandType, range: range, producerTypes: producerTypes)
 		unop(result, operand, opKind, operandType, range) then fillUnop(module, opIdx: opIdx, result: result, operand: operand, opKind: opKind, operandType: operandType, range: range, producerTypes: producerTypes)
 		call(result, callee, callContext, args, argLabels, argTypes, argRanges, range) then fillCall(project, module: module, opIdx: opIdx, result: result, callee: callee, callContext: callContext, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, range: range, producerTypes: producerTypes)
 		methodCall(result, receiver, methodName, args, argLabels, argTypes, argRanges, range) then fillMethodCall(project, module: module, opIdx: opIdx, result: result, receiver: receiver, methodName: methodName, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, range: range, producerTypes: producerTypes, enclosingType: enclosingType, funcName: funcName)
@@ -6611,12 +6626,12 @@ function pickOperandType(left MaxonType, right MaxonType, current MaxonType) ret
 	panic("pickOperandType: cmp op has unresolved operandType after fillCmp and both filled operand types are unresolved — buildProducerTypes left a real producer untyped or the cmp predates its operands' producers")
 end 'pickOperandType'
 
-function fillBinop(module MaxonModule, opIdx OpIndex, result ByteArray, left ByteArray, right ByteArray, opKind BinOpKind, operandType MaxonType, range SourceRange, producerTypes ProducerTypeMap)
+function fillBinop(project Project, module MaxonModule, opIdx OpIndex, result ByteArray, left ByteArray, right ByteArray, opKind BinOpKind, operandType MaxonType, range SourceRange, producerTypes ProducerTypeMap)
 	if not isUnresolvedType(operandType) 'noChange'
 		return
 	end 'noChange'
 
-	let filled = deriveBinopResultType(producerTypes, operandType: operandType, left: left, right: right)
+	let filled = deriveBinopResultType(project, producerTypes: producerTypes, operandType: operandType, left: left, right: right)
 	if isUnresolvedType(filled) 'stillUnresolved'
 		panic("fillBinop: binop op '{String.from(result)}' has unresolved operandType after fillUnresolvedTypes and neither operand resolves through the producer-type map — left='{String.from(left)}' right='{String.from(right)}'. Likely a missing producer entry for a synthesized operand.")
 	end 'stillUnresolved'
