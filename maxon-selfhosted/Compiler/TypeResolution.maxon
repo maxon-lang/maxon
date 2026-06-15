@@ -1065,7 +1065,7 @@ function computeExpectedMethodsForConformances(project Project, declName String,
 		// parenthesized-tuple collapse when the interface has exactly one
 		// `uses` param. This lets `Iterator with (Source, Element)` bind
 		// `Element = __Tuple2(Source, Element)` instead of erroring on arity.
-		var resolvedWithArgs = resolveConformanceWithArgs(project, conf: conf, usesCount: iface.usesParams.count())
+		var resolvedWithArgs = resolveConformanceWithArgs(project, implementerName: declName, conf: conf, usesCount: iface.usesParams.count())
 
 		// Phase 9.7: when a conformance lists 0 args but the interface
 		// inherits its `usesParams` from an `extends` parent, allow the
@@ -1654,13 +1654,22 @@ end 'validateConformancesForResolved'
 // so we don't repeat the resolved-vs-unresolved branching. Callers that
 // don't have the interface in scope (because it's missing — diagnostic
 // already emitted) pass `withArgs.count()` to disable collapse.
-function resolveConformanceWithArgs(project Project, conf Conformance, usesCount ElementCount) returns MaxonTypeArray
+// `implementerName` is the conforming type (`Array` for `Array implements
+// Iterable with (Element, ArrayIter)`). Each `with`-arg name is resolved
+// through `resolveGenericAliasArgName`, which binds it to the implementer's own
+// `uses` type parameter when the name matches one — so `Element` interns as
+// `typeParameter(Array.Element)`, not a bare `named(Element)` placeholder.
+// Without that scope binding, a later `buildSubstitutionForInstance(Array<String>)`
+// can't rewrite the withArg, and the `Iterable.Element` association escapes as
+// the unsubstituted type parameter (e.g. `for (i, v) in arr.withIterator()`
+// types `v` as `Element` instead of its concrete element type).
+function resolveConformanceWithArgs(project Project, implementerName String, conf Conformance, usesCount ElementCount) returns MaxonTypeArray
 	var result = MaxonTypeArray.create()
 	if conf.parenForm and usesCount == 1 and conf.withArgs.count() >= 2 'tupleCollapse'
 		var tupleArgs = MaxonTypeArray.create()
 		for i in 0 upto conf.withArgs.count() 'eachTupleArg'
 			let argName = try conf.withArgs.get(i) otherwise panic("resolveConformanceWithArgs: withArgs.get OOB at {i}")
-			tupleArgs.push(internMaxonType(project, name: argName))
+			tupleArgs.push(resolveGenericAliasArgName(project, declaringTypeName: implementerName, argName: argName))
 		end 'eachTupleArg'
 		ensureTupleStructRegistered(project, arity: conf.withArgs.count())
 		let baseName = "__Tuple{conf.withArgs.count()}"
@@ -1672,7 +1681,7 @@ function resolveConformanceWithArgs(project Project, conf Conformance, usesCount
 
 	for i in 0 upto conf.withArgs.count() 'eachArg'
 		let argName = try conf.withArgs.get(i) otherwise panic("resolveConformanceWithArgs: withArgs.get OOB at {i}")
-		result.push(internMaxonType(project, name: argName))
+		result.push(resolveGenericAliasArgName(project, declaringTypeName: implementerName, argName: argName))
 	end 'eachArg'
 	return result
 end 'resolveConformanceWithArgs'
@@ -1693,7 +1702,7 @@ end 'resolveConformanceWithArgs'
 // (interface-method-via-extended-interface segfaults at runtime).
 function recordConformance(project Project, typeName String, conf Conformance)
 	let usesCount = lookupInterfaceUsesParams(project, name: conf.interfaceName).count()
-	let withArgs = resolveConformanceWithArgs(project, conf: conf, usesCount: usesCount)
+	let withArgs = resolveConformanceWithArgs(project, implementerName: typeName, conf: conf, usesCount: usesCount)
 	_ = project.conformances.intern(typeName, interfaceName: conf.interfaceName, withArgs: withArgs)
 	var visited = StringSet.create()
 	recordParentConformancesHelper(project, typeName: typeName, interfaceName: conf.interfaceName, withArgs: withArgs, visited: visited)
