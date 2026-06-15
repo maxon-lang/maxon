@@ -732,3 +732,48 @@ end 'main'
 ```exitcode
 10
 ```
+
+
+<!-- test: interface-param-declared-after-consumer -->
+An interface used as a parameter type may be DECLARED LATER in source than the
+function that consumes it (or in a later-parsed file). A concrete conformer
+passed to such a parameter must compile AND dispatch correctly — the parameter
+is a fat-pointer/witness receiver regardless of whether the interface
+declaration has been seen yet when the annotation is interned. A pre-parse
+interface-name scan registers every interface name before any annotation is
+resolved (mirroring the bootstrap's prescan), so `run(q OpQuery)` here — which
+precedes both `OpQuery` and its conformer `X64Query` — interns `OpQuery` as an
+interface type and `q.value()` dispatches through the witness table rather than
+crashing for a missing witness companion. Mirrors the compiler's own
+`RegisterAllocator` consuming a `TargetOpQuery` declared in a later-parsed file.
+```maxon
+typealias Num = int(0 to 100)
+
+function run(q OpQuery) returns Num
+	return q.value()
+end 'run'
+
+type X64Query implements OpQuery
+	export var v as Num
+
+	export static function make(v Num) returns X64Query
+		return X64Query{v: v}
+	end 'make'
+
+	export function value() returns Num
+		return self.v
+	end 'value'
+end 'X64Query'
+
+interface OpQuery
+	function value() returns Num
+end 'OpQuery'
+
+function main() returns ExitCode
+	let q = X64Query.make(7)
+	return run(q)
+end 'main'
+```
+```exitcode
+7
+```

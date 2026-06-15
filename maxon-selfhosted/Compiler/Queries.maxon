@@ -182,6 +182,67 @@ export function queryParseOps(project Project, path FilePath) returns MaxonModul
 	return module
 end 'queryParseOps'
 
+// Pre-parse interface-name scan. Tokenizes every source file and records each
+// top-level `interface <Name>` declaration's name in
+// `project.prescannedInterfaceNames`, so `internMaxonType` can promote a
+// forward-referenced interface use site to its `interface(_)` arm even though
+// the parser parses file-by-file and top-to-bottom (the declaration may be
+// parsed only after a use site has already been interned). This is the
+// self-hosted analogue of maxon-sharp's `PreScan` registering all interface
+// names before any param/return annotation is resolved.
+//
+// `interface` is a keyword but is ALSO a legal parameter / variable / field
+// name (keywords-as-identifiers, see `keyword-parameter-names`), so a bare
+// `interface <ident>` match would mis-register the SECOND token in
+// `passthrough(interface StdType)` as an interface. To match only genuine
+// `[export|module] interface <Name>` declarations, the scan requires the
+// `interface` token to be (a) at parenthesis/bracket depth 0 — a param-name
+// `interface` always sits inside `(...)` — and (b) in statement position: the
+// preceding non-trivial token is a newline, `export`, the contextual `module`
+// keyword, or the file start. This mirrors how `dispatchInner` only reaches
+// `parseInterfaceDecl` from a top-level/decl-opener position. The scan is
+// name-only: the full `UnresolvedInterfaceType` is still built by
+// `parseInterfaceDecl` during the real parse, which owns duplicate detection.
+function preRegisterInterfaceNames(project Project) throws CompileError
+	for path in project.db.sourcePaths 'eachFile'
+		let tokens = try queryTokens(project, path: path)
+		let tokenCount = tokens.count()
+		var parenDepth = 0
+		for i in 0 upto tokenCount 'eachToken'
+			let token = try tokens.get(i) otherwise panic("preRegisterInterfaceNames: tokens.get OOB at {i}")
+			if token.kind == TokenKind.leftParen or token.kind == TokenKind.leftBracket 'openGroup'
+				parenDepth = parenDepth + 1
+				continue
+			end 'openGroup'
+			if token.kind == TokenKind.rightParen or token.kind == TokenKind.rightBracket 'closeGroup'
+				if parenDepth > 0 'haveOpen'
+					parenDepth = parenDepth - 1
+				end 'haveOpen'
+				continue
+			end 'closeGroup'
+			if token.kind != TokenKind.interface or parenDepth != 0 'notInterfaceDecl'
+				continue
+			end 'notInterfaceDecl'
+			// Statement-position gate: a genuine `interface` declaration follows a
+			// newline, `export`, the contextual `module` keyword, or the file
+			// start. A param/variable-name `interface` follows some other token
+			// (it is also usually inside `(...)`, already excluded by parenDepth).
+			if i > 0 'notFileStart'
+				let prev = try tokens.get(i - 1) otherwise continue
+				let prevIsModule = prev.kind == TokenKind.identifier and prev.value == "module"
+				if prev.kind != TokenKind.newline and prev.kind != TokenKind.export and not prevIsModule 'notStatementPosition'
+					continue
+				end 'notStatementPosition'
+			end 'notFileStart'
+			let nameToken = try tokens.get(i + 1) otherwise continue
+			if nameToken.kind != TokenKind.identifier 'noName'
+				continue
+			end 'noName'
+			project.prescannedInterfaceNames.insert(nameToken.value)
+		end 'eachToken'
+	end 'eachFile'
+end 'preRegisterInterfaceNames'
+
 // --- Whole-program derived query: all modules merged ---
 
 export function queryAllModule(project Project) returns MaxonModule throws CompileError
@@ -213,6 +274,15 @@ export function queryAllModule(project Project) returns MaxonModule throws Compi
 	let stdlibModule = getStdlibModule(project)
 	var allModule = MaxonModule.create()
 	allModule.merge(stdlibModule)
+
+	// Pre-parse interface-name scan (mirrors maxon-sharp's `PreScan`): register
+	// every user interface name across ALL files before any file is parsed, so
+	// `internMaxonType` interns a forward-referenced interface use site (an
+	// interface declared in a later file, or later in the same file) as
+	// `interface(_)` rather than `named(_)`. Runs after `getStdlibModule`
+	// (stdlib interfaces already live in `project.interfaces`) and before the
+	// user-file parse loop below.
+	try preRegisterInterfaceNames(project)
 
 	// Then parse user files
 	for path in project.db.sourcePaths 'eachFile'

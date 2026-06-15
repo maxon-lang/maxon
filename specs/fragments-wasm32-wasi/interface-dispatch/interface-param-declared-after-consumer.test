@@ -1,0 +1,84 @@
+// Test: interface-param-declared-after-consumer
+typealias Num = int(0 to 100)
+
+function run(q OpQuery) returns Num
+	return q.value()
+end 'run'
+
+type X64Query implements OpQuery
+	export var v as Num
+
+	export static function make(v Num) returns X64Query
+		return X64Query{v: v}
+	end 'make'
+
+	export function value() returns Num
+		return self.v
+	end 'value'
+end 'X64Query'
+
+interface OpQuery
+	function value() returns Num
+end 'OpQuery'
+
+function main() returns ExitCode
+	let q = X64Query.make(7)
+	return run(q)
+end 'main'
+---
+ExitCode: 7
+---
+// CompiledIR
+module {
+  func @run(local0: i64, local1: i64) -> u8 {
+  entry:
+    %5 = mir.param local0 : i64
+    mir.store_slot slot_0, %5
+    %6 = mir.param local1 : i64
+    mir.store_slot slot_1, %6
+    %2 = mir.load_slot slot_0
+    %3 = mir.load_slot slot_1
+    %4 = mir.witness_call %3, [0](%2)
+    %7 = mir.mov_imm 100 : i64
+    %8 = mir.cmp ugt, %4, %7
+    mir.cond_br %8 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %9 = mir.global_addr @__panic_msg_f8c7e54651b83d76
+    %10 = mir.call @mrt_panic(%9)
+  __range_ok_0:
+    mir.ret %4
+  }
+  func @X64Query.value(local0: i64) -> u8 {
+  entry:
+    %3 = mir.param local0 : i64
+    %2 = mir.load %3, 0 width: byte
+    %4 = mir.mov_imm 100 : i64
+    %5 = mir.cmp ugt, %2, %4
+    mir.cond_br %5 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %6 = mir.global_addr @__panic_msg_4f326956d564ff66
+    %7 = mir.call @mrt_panic(%6)
+  __range_ok_0:
+    mir.ret %2
+  }
+  func @main() -> u8 {
+  entry:
+    %1 = mir.mov_imm 7 : i64
+    %6 = mir.mov_imm 8 : i64
+    %7 = mir.mov_imm 0 : i64
+    %8 = mir.call @stdlib.__mm_alloc(%6, %7)
+    mir.store %1, %8, 0 width: byte
+    %4 = mir.global_addr @__witness_X64Query_OpQuery
+    %5 = mir.call @run(%8, %4)
+    %9 = mir.call @mm_drop(%8)
+    %10 = mir.mov_imm 125 : i64
+    %11 = mir.cmp ugt, %5, %10
+    mir.cond_br %11 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %12 = mir.global_addr @__panic_msg_c597a67934052d1f
+    %13 = mir.call @mrt_panic(%12)
+  __range_ok_0:
+    mir.ret %5
+  }
+}
+---

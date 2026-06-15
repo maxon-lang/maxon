@@ -518,6 +518,19 @@ export type Project
 	// that pattern.
 	export var interfaces as IrInterfaceMap
 
+	// Every interface name discovered by the pre-parse name scan
+	// (`preRegisterInterfaceNames`), populated across ALL source files before
+	// any file is parsed. The self-hosted parser parses file-by-file and
+	// top-to-bottom with no per-file forward-declaration pass, so an interface
+	// referenced before its declaration (a later file, or later in the same
+	// file) is not yet in `unresolvedInterfaces` when `internMaxonType` interns
+	// the use-site type — without this set it would intern as `named(_)` instead
+	// of `interface(_)`, and the whole fat-pointer/witness dispatch machinery
+	// (which keys off the `interface(_)` arm) would never fire. `internMaxonType`
+	// consults this set so a forward-referenced interface name is born as
+	// `interface(_)` everywhere it matters, matching maxon-sharp's `PreScan`.
+	export var prescannedInterfaceNames as PrescannedInterfaceNameSet
+
 	// Function-type interner. Every `(P1, P2) returns R` signature the parser
 	// sees in a parameter position lands here as a parallel-array entry; the
 	// `MaxonType.function(id)` arm is just a stable index into this registry.
@@ -902,6 +915,7 @@ export type Project
 			unresolvedEnums: UnresolvedEnumTypeMap.create(),
 			unresolvedInterfaces: UnresolvedInterfaceMap.create(),
 			interfaces: IrInterfaceMap.create(),
+			prescannedInterfaceNames: PrescannedInterfaceNameSet.create(),
 			functionTypes: FunctionTypeRegistry.create(),
 			typeParameters: TypeParamRegistry.create(),
 			genericInstances: GenericInstanceRegistry.create(),
@@ -3376,6 +3390,10 @@ export typealias StructTypeArray = Array with StructType
 // Reverse-index value type for `Project.structInnerAliasNames` — see the
 // field comment on `Project` for the population contract.
 export typealias InnerAliasNameSet = Set with String
+
+// Name set for `Project.prescannedInterfaceNames` — the pre-parse interface
+// name scan's output. See the field comment on `Project`.
+export typealias PrescannedInterfaceNameSet = Set with String
 
 // Phase 11.0 step 2: resolved-form of inner typealiases. Mirrors
 // `GenericTypealiasMap`'s shape; lives on `StructType` so per-type

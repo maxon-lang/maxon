@@ -1,0 +1,94 @@
+// Test: interface-param-declared-after-consumer
+typealias Num = int(0 to 100)
+
+function run(q OpQuery) returns Num
+	return q.value()
+end 'run'
+
+type X64Query implements OpQuery
+	export var v as Num
+
+	export static function make(v Num) returns X64Query
+		return X64Query{v: v}
+	end 'make'
+
+	export function value() returns Num
+		return self.v
+	end 'value'
+end 'X64Query'
+
+interface OpQuery
+	function value() returns Num
+end 'OpQuery'
+
+function main() returns ExitCode
+	let q = X64Query.make(7)
+	return run(q)
+end 'main'
+---
+ExitCode: 7
+---
+// CompiledIR
+module {
+  func @run(rcx: i64, rdx: i64) -> u8 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov [rbp-16], rdx
+    x64.mov r8, [rbp-16]
+    x64.mov rcx, [rbp-8]
+    x64.mov r10, [r8+24] (8b)
+    x64.call r10
+    x64.cmp r8, 100
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea r12, [rip+__panic_msg_f8c7e54651b83d76]
+    x64.mov rcx, r12
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+  func @X64Query.value(rcx: i64) -> u8 {
+  entry:
+    x64.prologue stack_size=16
+    x64.movzx r8, [rcx+0] (1b)
+    x64.cmp r8, 100
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea r12, [rip+__panic_msg_4f326956d564ff66]
+    x64.mov rcx, r12
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.xor edx, edx
+    x64.mov ecx, 8
+    x64.call stdlib.__mm_alloc
+    x64.mov r12, r8
+    x64.mov r8d, 7
+    x64.mov [r12+0], r8 (1b)
+    x64.lea rdx, [rip+__witness_X64Query_OpQuery]
+    x64.mov rcx, r12
+    x64.call run
+    x64.mov r13, r8
+    x64.mov rcx, r12
+    x64.call mm_drop
+    x64.mov r8d, 4294967295
+    x64.cmp r13, r8
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea r12, [rip+__panic_msg_c597a67934052d1f]
+    x64.mov rcx, r12
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov r8, r13
+    x64.epilogue
+    x64.ret
+  }
+}
+---

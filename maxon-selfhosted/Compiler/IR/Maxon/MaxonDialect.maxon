@@ -818,7 +818,13 @@ export function internMaxonType(project Project, name String) returns MaxonType
 	if name == "string" 'isString'
 		return MaxonType.string
 	end 'isString'
-	if project.interfaces.contains(name) or project.unresolvedInterfaces.contains(name) 'isInterface'
+	// `prescannedInterfaceNames` covers forward references: an interface used
+	// before its declaration is parsed (a later file, or later in the same
+	// file) is not yet in `unresolvedInterfaces` here, but the pre-parse name
+	// scan (`preRegisterInterfaceNames`) recorded it so the use-site type is
+	// still born as `interface(_)` — without it the fat-pointer/witness
+	// dispatch machinery, which keys off the `interface(_)` arm, never fires.
+	if project.interfaces.contains(name) or project.unresolvedInterfaces.contains(name) or project.prescannedInterfaceNames.contains(name) 'isInterface'
 		return MaxonType.interface(project.interfaceRegistry.intern(name))
 	end 'isInterface'
 	return MaxonType.named(project.typeNames.intern(name))

@@ -1210,6 +1210,17 @@ end 'substituteMethodSig'
 function substituteMaxonType(project Project, t MaxonType, bindings TypeBindingMap) returns MaxonType
 	match t 'kind'
 		named(id) then return substituteNamedId(project, id: id, bindings: bindings)
+		// An interface-name reference inside an interface method signature
+		// (`returns Self` / `returns <ThisInterface>` / a parent interface
+		// name) binds the same way a `named(_)` reference does — the binding
+		// map carries `(interfaceName -> implementing type)`. The interface
+		// name's use site is interned as `interface(_)` whenever it is known
+		// to be an interface at parse time (e.g. when the pre-parse name scan
+		// registered a forward-referenced interface, or `Self` resolves inside
+		// the interface's own body), so this arm must substitute too — without
+		// it, `Self` returns leak through as the bare interface type and the
+		// E3016 conformance check rejects the conformer's concrete return.
+		interface(id) then return substituteInterfaceId(project, id: id, bindings: bindings)
 		boolean then return MaxonType.boolean
 		integer then return MaxonType.integer
 		float then return MaxonType.float
@@ -1228,7 +1239,10 @@ function substituteMaxonType(project Project, t MaxonType, bindings TypeBindingM
 		// typeParameter against the binding tables — until then, every
 		// caller of substituteMaxonType only sees parser-AST inputs that
 		// don't yet carry these arms in conformance-derived signatures.
-		typeParameter to cstring then return t
+		// `interface` is handled by its own arm above, so the catch-all is
+		// split around it.
+		typeParameter to genericInstance then return t
+		constInt to cstring then return t
 	end 'kind'
 end 'substituteMaxonType'
 
@@ -1236,6 +1250,11 @@ function substituteNamedId(project Project, id TypeNameId, bindings TypeBindingM
 	let name = project.typeNames.get(id)
 	return try bindings.get(name) otherwise MaxonType.named(id)
 end 'substituteNamedId'
+
+function substituteInterfaceId(project Project, id InterfaceTypeId, bindings TypeBindingMap) returns MaxonType
+	let name = project.interfaceRegistry.getName(id)
+	return try bindings.get(name) otherwise MaxonType.interface(id)
+end 'substituteInterfaceId'
 
 // When the name carried by a `ThrowsClause.throwing(name)` matches a
 // parameter binding, resolve through the binding's concrete type and rebuild
