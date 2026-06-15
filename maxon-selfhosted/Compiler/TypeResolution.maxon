@@ -5939,7 +5939,7 @@ function fillUnresolvedTypesForOp(project Project, module MaxonModule, opIdx OpI
 		cmp(result, left, right, predicate, leftType, rightType, operandType, range) then fillCmp(project, module: module, opIdx: opIdx, result: result, left: left, right: right, predicate: predicate, leftType: leftType, rightType: rightType, operandType: operandType, range: range, producerTypes: producerTypes)
 		binop(result, left, right, opKind, operandType, range) then fillBinop(module, opIdx: opIdx, result: result, left: left, right: right, opKind: opKind, operandType: operandType, range: range, producerTypes: producerTypes)
 		unop(result, operand, opKind, operandType, range) then fillUnop(module, opIdx: opIdx, result: result, operand: operand, opKind: opKind, operandType: operandType, range: range, producerTypes: producerTypes)
-		call(result, callee, callContext, args, argLabels, argTypes, argRanges, range) then fillCall(module, opIdx: opIdx, result: result, callee: callee, callContext: callContext, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, range: range, producerTypes: producerTypes)
+		call(result, callee, callContext, args, argLabels, argTypes, argRanges, range) then fillCall(project, module: module, opIdx: opIdx, result: result, callee: callee, callContext: callContext, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, range: range, producerTypes: producerTypes)
 		methodCall(result, receiver, methodName, args, argLabels, argTypes, argRanges, range) then fillMethodCall(project, module: module, opIdx: opIdx, result: result, receiver: receiver, methodName: methodName, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, range: range, producerTypes: producerTypes, enclosingType: enclosingType, funcName: funcName)
 		tryMethodCall(result, receiver, methodName, args, argLabels, argTypes, argRanges, errorBoundName, range) then fillTryMethodCall(project, module: module, opIdx: opIdx, result: result, receiver: receiver, methodName: methodName, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, errorBoundName: errorBoundName, range: range, producerTypes: producerTypes, enclosingType: enclosingType, funcName: funcName)
 		// A literal carries its type in `valueType` with no upstream producer to
@@ -6550,24 +6550,58 @@ end 'fillUnop'
 // and whether any entry was actually filled in. Shared by fillCall and
 // fillMethodCall — the only difference between them was which op variant
 // to emit when something changes.
-function fillArgTypes(args ByteArrayArray, argTypes MaxonTypeArray, producerTypes ProducerTypeMap, callerName String) returns (MaxonTypeArray, bool)
+function fillArgTypes(args ByteArrayArray, argTypes MaxonTypeArray, producerTypes ProducerTypeMap, project Project, callerName String) returns (MaxonTypeArray, bool)
 	var changed = false
 	var newArgTypes = MaxonTypeArray.create()
 	for i in 0 upto argTypes.count() 'each'
 		let argType = try argTypes.get(i) otherwise panic("{callerName}: argTypes.get({i}) failed (count={argTypes.count()})")
+		let arg = try args.get(i) otherwise panic("{callerName}: args.get({i}) failed")
+		let filled = lookupProducerType(producerTypes, name: arg)
 		if isUnresolvedType(argType) 'fill'
-			let arg = try args.get(i) otherwise panic("{callerName}: args.get({i}) failed")
-			let filled = lookupProducerType(producerTypes, name: arg)
 			newArgTypes.push(filled)
 			if not isUnresolvedType(filled) 'wasFilled'
 				changed = true
 			end 'wasFilled'
-		end 'fill' else 'keep'
-			newArgTypes.push(argType)
-		end 'keep'
+		end 'fill' else 'maybeRefine'
+			// An earlier pass may have stamped this arg's type from the
+			// parser's int-zero seed (a match / try-fallback merge result the
+			// build walk recorded before the producing arm). Once the producer
+			// type refines to the real struct-like / string / typeParameter
+			// type a later store revealed, replace the locked-in seed — the
+			// `keep`-as-is path would otherwise pin the call arg to `int` and
+			// the consumer's E3005 arg-type check would reject the real value.
+			// Mirrors the int-seed widening `recordVarStore` / `fillVarLoad`
+			// already perform on slot types.
+			if argTypeIsSeedRefinedBy(project, current: argType, refined: filled) 'refine'
+				newArgTypes.push(filled)
+				changed = true
+			end 'refine' else 'keep'
+				newArgTypes.push(argType)
+			end 'keep'
+		end 'maybeRefine'
 	end 'each'
 	return (newArgTypes, changed)
 end 'fillArgTypes'
+
+// True when `current` is the int-zero seed category and `refined` is a concrete
+// type that an int seed can never legitimately be (a struct/generic-instance,
+// string/cstring, or an enclosing-scope type parameter) — i.e. `refined` is a
+// strictly better answer the build walk only reached on a later cycle. Used by
+// `fillArgTypes` to unlock a call-argument type that a prior pass pinned to the
+// seed. Conservative: returns false unless `current` is exactly `int` so a
+// genuine int argument is never disturbed.
+function argTypeIsSeedRefinedBy(project Project, current MaxonType, refined MaxonType) returns bool
+	if isUnresolvedType(refined) 'refinedUnresolved'
+		return false
+	end 'refinedUnresolved'
+	if convertCastCategory(project, t: current) != CastCategory.int 'notIntSeed'
+		return false
+	end 'notIntSeed'
+	if maxonTypeIsNamed(refined) or maxonTypeIsGenericInstance(refined) 'structLike'
+		return true
+	end 'structLike'
+	return maxonTypeIsStringOrCstring(refined)
+end 'argTypeIsSeedRefinedBy'
 
 // Tier 4 async: the awaited result type. The parser stamps the await op's
 // `innerType` when it can (direct `await async-result`); when it had to leave
@@ -6590,7 +6624,7 @@ end 'resolveAwaitInnerType'
 // lowering and the await sites see a concrete awaited type. Re-emits the op
 // preserving every other field.
 function fillAsyncCall(project Project, module MaxonModule, opIdx OpIndex, result ByteArray, callee ByteArray, callContext CallContext, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, innerType MaxonType, calleeThrows bool, callSourceText String, range SourceRange, producerTypes ProducerTypeMap)
-	let (newArgTypes, argsChanged) = fillArgTypes(args, argTypes: argTypes, producerTypes: producerTypes, callerName: "fillAsyncCall")
+	let (newArgTypes, argsChanged) = fillArgTypes(args, argTypes: argTypes, producerTypes: producerTypes, project: project, callerName: "fillAsyncCall")
 	var newInner = innerType
 	if isUnresolvedType(innerType) 'fillInner'
 		newInner = promiseInnerType(project, t: lookupProducerType(producerTypes, name: result))
@@ -6631,8 +6665,8 @@ function fillTryAwait(project Project, module MaxonModule, opIdx OpIndex, result
 	try module.ops.set(opIdx, value: MaxonOp.tryAwait(result, promise: promise, innerType: newInner, promiseType: promiseType, errorBoundName: errorBoundName, range: range)) otherwise panic("fillTryAwait: ops.set OOB at idx={opIdx}")
 end 'fillTryAwait'
 
-function fillCall(module MaxonModule, opIdx OpIndex, result ByteArray, callee ByteArray, callContext CallContext, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, range SourceRange, producerTypes ProducerTypeMap)
-	let (newArgTypes, changed) = fillArgTypes(args, argTypes: argTypes, producerTypes: producerTypes, callerName: "fillCall")
+function fillCall(project Project, module MaxonModule, opIdx OpIndex, result ByteArray, callee ByteArray, callContext CallContext, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, range SourceRange, producerTypes ProducerTypeMap)
+	let (newArgTypes, changed) = fillArgTypes(args, argTypes: argTypes, producerTypes: producerTypes, project: project, callerName: "fillCall")
 	if not changed 'noChange'
 		return
 	end 'noChange'
@@ -6667,7 +6701,7 @@ end 'republishMethodCallResult'
 
 function fillMethodCall(project Project, module MaxonModule, opIdx OpIndex, result ByteArray, receiver ByteArray, methodName ByteArray, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, range SourceRange, producerTypes ProducerTypeMap, enclosingType String, funcName String)
 	republishMethodCallResult(project, producerTypes: producerTypes, result: result, receiver: receiver, methodName: methodName, argTypes: argTypes, args: args, enclosingType: enclosingType, funcName: funcName)
-	let (newArgTypes, changed) = fillArgTypes(args, argTypes: argTypes, producerTypes: producerTypes, callerName: "fillMethodCall")
+	let (newArgTypes, changed) = fillArgTypes(args, argTypes: argTypes, producerTypes: producerTypes, project: project, callerName: "fillMethodCall")
 	if not changed 'noChange'
 		return
 	end 'noChange'
@@ -6685,7 +6719,7 @@ end 'fillMethodCall'
 // reads the never-bound flag.
 function fillTryMethodCall(project Project, module MaxonModule, opIdx OpIndex, result ByteArray, receiver ByteArray, methodName ByteArray, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, errorBoundName ByteArray, range SourceRange, producerTypes ProducerTypeMap, enclosingType String, funcName String)
 	republishMethodCallResult(project, producerTypes: producerTypes, result: result, receiver: receiver, methodName: methodName, argTypes: argTypes, args: args, enclosingType: enclosingType, funcName: funcName)
-	let (newArgTypes, changed) = fillArgTypes(args, argTypes: argTypes, producerTypes: producerTypes, callerName: "fillTryMethodCall")
+	let (newArgTypes, changed) = fillArgTypes(args, argTypes: argTypes, producerTypes: producerTypes, project: project, callerName: "fillTryMethodCall")
 	if not changed 'noChange'
 		return
 	end 'noChange'
@@ -8399,18 +8433,34 @@ export function runTypeResolution(project Project, module MaxonModule, filePath 
 	// on such a global receiver (`globalArr.remove(0)`) recorded an unresolved
 	// result type, leaving the consuming `let removed = ...` slot and its
 	// `removed.field` access untyped — lowering then defaulted the field
-	// receiver to `int` (E2004). Rebuild the producer/slot maps now that the
-	// globalLoad slotTypes are concrete and re-run the fill so the method-call
-	// result types and their downstream slots/fields resolve. The second pass
-	// converges rather than oscillates: every re-stamp `fillUnresolvedTypes`
-	// performs is a monotonic refinement — `unresolved` → concrete, or an int
-	// seed → the struct-like / float type a later store revealed, never the
-	// reverse — so running it twice can only improve types, never undo the
-	// first pass's work.
-	producerTypesPerFunc.clear()
-	slotTypesPerFunc.clear()
-	buildProducerTypes(project, module: module, producerTypesPerFunc: producerTypesPerFunc, slotTypesPerFunc: slotTypesPerFunc)
-	fillUnresolvedTypes(project, module: module, producerTypesPerFunc: producerTypesPerFunc, slotTypesPerFunc: slotTypesPerFunc)
+	// receiver to `int` (E2004). Rebuild the producer/slot maps and re-run the
+	// fill so the method-call result types and their downstream slots/fields
+	// resolve.
+	//
+	// One extra pass isn't always enough. Each build+fill cycle propagates a
+	// resolved type exactly ONE hop along a dependency chain, because
+	// `buildProducerTypes` walks `func.blockRefs` in block-CREATION order and a
+	// match / try-fallback merge block is created BEFORE its arm blocks — so the
+	// merge varLoad, a `let n = match ...` binding that reads it, and that
+	// binding's consumer (`firstByte(n)`) are all recorded from the parser's
+	// int-zero seed BEFORE the arm-block varStore upgrades the merge slot to the
+	// arm's real type. The type then has to flow seed -> mergeSlot -> n ->
+	// load(n) -> call-arg one cycle at a time. Run the cycle a fixed number of
+	// times to cover that depth: each cycle is a monotonic refinement
+	// (`unresolved`/int-seed -> the concrete type a later store revealed, never
+	// the reverse), so extra cycles past convergence are idempotent and only
+	// re-confirm types already stamped. Four covers the deepest binding chain a
+	// single statement produces (merge slot -> binding -> load -> consumer);
+	// `CONVERGE_PASSES` documents that bound in one place.
+	let CONVERGE_PASSES = 4
+	var pass = 0
+	while pass < CONVERGE_PASSES 'converge'
+		producerTypesPerFunc.clear()
+		slotTypesPerFunc.clear()
+		buildProducerTypes(project, module: module, producerTypesPerFunc: producerTypesPerFunc, slotTypesPerFunc: slotTypesPerFunc)
+		fillUnresolvedTypes(project, module: module, producerTypesPerFunc: producerTypesPerFunc, slotTypesPerFunc: slotTypesPerFunc)
+		pass = pass + 1
+	end 'converge'
 
 	// Stage E (closures): the parser stamps lifted closure functions with
 	// MaxonReturnType.value(MaxonType.unresolved) when the body's expression

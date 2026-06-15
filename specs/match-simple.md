@@ -671,3 +671,45 @@ end 'main'
 ```exitcode
 5
 ```
+
+
+<!-- test: match-expr-result-from-payload-binding-arm -->
+A `match` expression bound to a `let` whose value arm gives a UNION PAYLOAD
+BINDING must type the binding from the payload field's type, so a consumer of the
+bound value resolves correctly. The match-merge block is created before the arm
+blocks, so the producer-type walk records the merge load, the `let`, and the
+consumer from the int-zero seed before the arm's payload-read store upgrades the
+merge slot — the type then flows seed -> merge slot -> binding -> load -> call-arg
+over successive TypeResolution convergence cycles, and a call argument whose type
+an earlier cycle pinned to the seed must be unlocked once the real type arrives.
+Here `n` is bound to `match op { alloc(name) gives name; default panic }` where
+`name` is a `ByteArray` payload field, and `firstByte(n)` must accept it.
+```maxon
+typealias Idx = int(0 to 100)
+
+union Op
+	none
+	alloc(name ByteArray)
+end 'Op'
+
+function firstByte(b ByteArray) returns Idx
+	return try b.get(0) otherwise 0 as Idx
+end 'firstByte'
+
+function nameOf(op Op) returns Idx
+	let n = match op 'pick'
+		alloc(name) gives name
+		default panic("none")
+	end 'pick'
+	return firstByte(n)
+end 'nameOf'
+
+function main() returns ExitCode
+	var b = ByteArray.create()
+	b.push(65)
+	return nameOf(Op.alloc(b))
+end 'main'
+```
+```exitcode
+65
+```
