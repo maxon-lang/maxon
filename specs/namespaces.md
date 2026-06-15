@@ -237,3 +237,47 @@ end 'main'
 error E3095: specs/fragments/namespaces/error.cross-file-bare-name-ambiguous.test:16:9: Ambiguous bare-name call to 'duplicate': multiple visible definitions found. Qualify with a directory name. Candidates: alpha.duplicate, beta.duplicate
 ```
 
+<!-- test: bare-call-resolves-free-fn-over-different-arity-method -->
+A bare call binds a FREE function — a method (`TypeName.method`) needs an
+explicit receiver. When a same-named method has a DIFFERENT non-receiver
+signature, the bare call resolves to the free function by argument matching
+rather than colliding with the method. Here free `store(arr, index:, value:)`
+(3 params, `lib/free.maxon`) coexists with the method `Cache.store(key)` (1
+param, `lib/cache.maxon`); a bare `store(xs, index: 0, value: 9)` from a third
+file resolves to the free function. Mirrors the compiler's own `set(arr, index:,
+value:, sentinel:)` free function coexisting with the `Array.set` method.
+```maxon
+// --- file: lib/free.maxon
+typealias Code = int(0 to 125)
+
+export function store(base Code, offset Code, scale Code) returns Code
+	return base + offset + scale
+end 'store'
+
+// --- file: lib/cache.maxon
+typealias Code = int(0 to 125)
+
+export type Cache
+	export var last as Code
+
+	export static function make() returns Cache
+		return Cache{last: 0}
+	end 'make'
+
+	export function store(key Code)
+		self.last = key
+	end 'store'
+end 'Cache'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	let viaFree = store(2, offset: 3, scale: 4)
+	var c = Cache.make()
+	c.store(99)
+	return viaFree
+end 'main'
+```
+```exitcode
+9
+```
+

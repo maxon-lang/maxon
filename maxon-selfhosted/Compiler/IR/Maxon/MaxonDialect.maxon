@@ -2017,6 +2017,16 @@ export function qualifyCalleeForContextWithType(project Project, bare String, ca
 		if candidate.startsWith("__") and not readerInternals 'rejectInternalsCandidate'
 			continue
 		end 'rejectInternalsCandidate'
+		// A bare call binds a FREE function only — a method (`TypeName.method`)
+		// needs a receiver. `methodNameIndex` holds both, so without this filter
+		// a bare `set(arr, index: i, value: v, sentinel: -1)` would resolve to
+		// the 2-param `Array.set` method (first index hit) and then fail with
+		// E3036 "too many arguments", instead of the 4-param free function
+		// `Compiler.Targets.Shared.set`. Mirrors the same filter in
+		// `visibleCrossFileCandidates`.
+		if candidateIsTypeMethod(project, qualifiedName: candidate) 'isMethod'
+			continue
+		end 'isMethod'
 		let info = funcVisibilityOrDefault(project, qualifiedName: candidate)
 		if isVisibleFrom(info.visibility, declFilePath: info.sourceFilePath, readerFilePath: readerFilePath) 'visible'
 			return (candidate, MaxonType.unresolved)
@@ -2059,6 +2069,18 @@ export function visibleCrossFileCandidates(project Project, bare String, readerF
 		if candidate.startsWith("__") and not readerInternals 'rejectInternalsCandidate'
 			continue
 		end 'rejectInternalsCandidate'
+		// A bare call (no receiver) can only bind a FREE function — a method
+		// (`TypeName.method`) needs an explicit receiver. `methodNameIndex`
+		// stores both, keyed by bare name, so a candidate whose qualifier names
+		// a registered TYPE is a method and must NOT contribute to bare-call
+		// ambiguity. Without this, `allocValueId()` (free fn `Compiler.IR.
+		// allocValueId`) spuriously collides with the method `StdParser.
+		// allocValueId`, and `set()` collides with `Array.set`/`Vector.set`/…
+		// (E3095). Free functions qualify with a directory namespace, never a
+		// type name, so they survive this filter.
+		if candidateIsTypeMethod(project, qualifiedName: candidate) 'isMethod'
+			continue
+		end 'isMethod'
 		let info = funcVisibilityOrDefault(project, qualifiedName: candidate)
 		if isVisibleFrom(info.visibility, declFilePath: info.sourceFilePath, readerFilePath: readerFilePath) 'visible'
 			results.push(candidate)
@@ -2066,6 +2088,20 @@ export function visibleCrossFileCandidates(project Project, bare String, readerF
 	end 'each'
 	return results
 end 'visibleCrossFileCandidates'
+
+// True iff `qualifiedName`'s qualifier (everything before the final `.`) names
+// a registered type — i.e. the name is a METHOD (`TypeName.method`), not a free
+// function (`dir.namespace.func`). A bare-name call can only bind a free
+// function, so methods are excluded from the cross-file ambiguity candidate set.
+export function candidateIsTypeMethod(project Project, qualifiedName String) returns bool
+	let bytes = qualifiedName.toByteArray()
+	let dotIdx = lastIndexOfDotByte(bytes)
+	if dotIdx >= bytes.count() 'noQualifier'
+		return false
+	end 'noQualifier'
+	let qualifier = byteSliceToString(bytes, startIndex: 0, endIndex: dotIdx)
+	return project.structTypes.contains(qualifier) or project.unresolvedStructTypes.contains(qualifier) or project.enumTypes.contains(qualifier) or project.unresolvedEnums.contains(qualifier)
+end 'candidateIsTypeMethod'
 
 // True iff `path` is the virtual `stdlib-bootstrap.maxon` synthesis anchor.
 // Functions attributed there are compiler-synthesized helpers (struct-literal

@@ -1,0 +1,83 @@
+// Test: bare-call-resolves-free-fn-over-different-arity-method
+// --- file: lib/free.maxon
+typealias Code = int(0 to 125)
+
+export function store(base Code, offset Code, scale Code) returns Code
+	return base + offset + scale
+end 'store'
+
+// --- file: lib/cache.maxon
+typealias Code = int(0 to 125)
+
+export type Cache
+	export var last as Code
+
+	export static function make() returns Cache
+		return Cache{last: 0}
+	end 'make'
+
+	export function store(key Code)
+		self.last = key
+	end 'store'
+end 'Cache'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	let viaFree = store(2, offset: 3, scale: 4)
+	var c = Cache.make()
+	c.store(99)
+	return viaFree
+end 'main'
+---
+ExitCode: 9
+---
+// CompiledIR
+module {
+  func @lib.store(rcx: u8, rdx: u8, rax: u8) -> u8 {
+  entry:
+    x64.prologue stack_size=16
+    x64.add rcx, rdx
+    x64.mov r8, rcx
+    x64.add r8, rax
+    x64.cmp r8, 125
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea r12, [rip+__panic_msg_7a740fe0644c0ee2]
+    x64.mov rcx, r12
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov eax, 4
+    x64.mov edx, 3
+    x64.mov ecx, 2
+    x64.call lib.store
+    x64.mov r12, r8
+    x64.xor edx, edx
+    x64.mov ecx, 8
+    x64.call stdlib.__mm_alloc
+    x64.mov r13, r8
+    x64.xor r8d, r8d
+    x64.mov [r13+0], r8 (1b)
+    x64.mov r8d, 99
+    x64.mov [r13+0], r8 (1b)
+    x64.mov rcx, r13
+    x64.call mm_drop
+    x64.mov r8d, 4294967295
+    x64.cmp r12, r8
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea r12, [rip+__panic_msg_70b22a74a329a6eb]
+    x64.mov rcx, r12
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov r8, r12
+    x64.epilogue
+    x64.ret
+  }
+}
+---
