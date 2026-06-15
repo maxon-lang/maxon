@@ -251,3 +251,52 @@ end 'main'
 ```exitcode
 1
 ```
+
+
+<!-- test: try-otherwise-value-flow.field-then-method-on-try-with-break-receiver -->
+Regression guard: a FIELD access (not a method call) chained onto a
+`(try CALL otherwise break)` receiver, followed by a further method call —
+`(try pairs.get(j) otherwise break).label.count()` inside a loop. The receiver's
+`otherwise break` moves control flow onto the try's merge block, where the
+receiver value is defined; the chained `.label` fieldLoad must emit on THAT
+merge block, not the pre-try block. Previously the postfix field-load arm emitted
+into its stale `block` parameter while the method-call arm correctly used
+`currentBlock`, so the fieldLoad referenced the receiver value before its
+defining op, leaving the producer type unresolved and crashing the cmp operand
+typing (`pickOperandType` panic). Mirrors the compiler's own
+`sortSanitizedPairsByLengthDesc`.
+```maxon
+type Row
+	export var label as String
+
+	export static function create(label String) returns Row
+		return Self{label: label}
+	end 'create'
+end 'Row'
+
+typealias RowArray = Array with Row
+
+function longestLen(rows RowArray) returns ExitCode
+	var best = 0
+	var i = 0
+	while i < rows.count() 'scan'
+		let len = (try rows.get(i) otherwise break).label.count()
+		if len > best 'bigger'
+			best = len
+		end 'bigger'
+		i = i + 1
+	end 'scan'
+	return best as ExitCode
+end 'longestLen'
+
+function main() returns ExitCode
+	var rows = RowArray.create()
+	rows.push(Row.create("ab"))
+	rows.push(Row.create("abcd"))
+	rows.push(Row.create("a"))
+	return longestLen(rows)
+end 'main'
+```
+```exitcode
+4
+```

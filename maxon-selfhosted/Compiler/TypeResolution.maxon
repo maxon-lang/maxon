@@ -4332,6 +4332,20 @@ end 'callResultType'
 // Non-generic field accesses pay only the .isEmpty() check on the inner
 // alias map (always empty for non-generic types) and the substitution's
 // own short-circuit on isEmpty.
+// Backing struct name of a struct-backed enum/union (`case = Struct{...}`),
+// or "" when the enum has no struct backing. The backing struct is recorded
+// per-case; every case of a struct-backed enum shares the same struct type
+// (the parser enforces this and rejects mixed backings), so the first case
+// with a non-empty `backingStructName` is authoritative.
+function enumStructBackingName(enumDef EnumType) returns String
+	for c in enumDef.cases 'eachCase'
+		if not c.backingStructName.isEmpty() 'hasBacking'
+			return c.backingStructName
+		end 'hasBacking'
+	end 'eachCase'
+	return ""
+end 'enumStructBackingName'
+
 function fieldLoadResultType(project Project, receiverType MaxonType, fieldName ByteArray) returns MaxonType
 	let structName = try maxonTypeStructName(project, t: receiverType) otherwise return MaxonType.unresolved
 	// Phase 9 Stage 1: enum builtin accessors are not real struct fields —
@@ -4350,7 +4364,8 @@ function fieldLoadResultType(project Project, receiverType MaxonType, fieldName 
 			//   - float-backed    → float (the IEEE-754 backing literal)
 			//   - string-backed   → String (the declared string literal)
 			//   - char-backed     → Character (the declared char literal)
-			//   - int / ordinal / struct → int (the runtime SSA already carries it)
+			//   - struct-backed   → the backing struct's named type
+			//   - int / ordinal   → int (the runtime SSA already carries it)
 			let enumDef = try project.enumTypes.get(structName) otherwise return MaxonType.integer
 			if enumDef.isFunctionBacked and enumDef.functionBackingTypeId != 0 'asFn'
 				return MaxonType.function(enumDef.functionBackingTypeId)
@@ -4364,6 +4379,15 @@ function fieldLoadResultType(project Project, receiverType MaxonType, fieldName 
 			if enumDef.isCharBacked 'asChar'
 				return builtinCharLiteralType(project)
 			end 'asChar'
+			// Struct-backed enum/union (`case = StructType{...}`): `.rawValue`
+			// surfaces the backing struct value, so a chained field access like
+			// `op.rawValue.someField` resolves through that struct's layout. The
+			// backing struct name is recorded per-case (every case shares the
+			// same struct, enforced at parse time); read it from the first case.
+			let backingStructName = enumStructBackingName(enumDef)
+			if not backingStructName.isEmpty() 'asStruct'
+				return MaxonType.named(project.typeNames.intern(backingStructName))
+			end 'asStruct'
 			return MaxonType.integer
 		end 'isRaw'
 		if fieldNameStr == "ordinal" 'isOrdinal'
@@ -5863,7 +5887,7 @@ function fillUnresolvedTypesForOp(project Project, module MaxonModule, opIdx OpI
 		unresolvedRead then return
 		unresolvedAssign then return
 		enumMatchArm(scrutineeName, caseName, scrutineeType, rawValue, isFloat, resolved, thenTarget, elseTarget, bindingNames, range) then fillEnumMatchArmType(module, opIdx: opIdx, scrutineeName: scrutineeName, caseName: caseName, scrutineeType: scrutineeType, rawValue: rawValue, isFloat: isFloat, resolved: resolved, thenTarget: thenTarget, elseTarget: elseTarget, bindingNames: bindingNames, range: range, producerTypes: producerTypes)
-		rangeMatchArm then return
+		rangeMatchArm(scrutineeName, _, _, isUpto, hasMinSentinel, hasMaxSentinel, enumOwnerName, loCaseName, hiCaseName, thenTarget, elseTarget, range) then fillRangeMatchArm(project, module: module, opIdx: opIdx, scrutineeName: scrutineeName, isUpto: isUpto, hasMinSentinel: hasMinSentinel, hasMaxSentinel: hasMaxSentinel, enumOwnerName: enumOwnerName, loCaseName: loCaseName, hiCaseName: hiCaseName, thenTarget: thenTarget, elseTarget: elseTarget, range: range, producerTypes: producerTypes)
 		// Phase 9 Stage 2 plumbing: most union ops carry concrete payload
 		// types from parse-time on. `enumPayloadRead` / `enumPayloadStore`
 		// are the exceptions — the parser stamps `unresolved` because the
@@ -5917,6 +5941,39 @@ function fillEnumMatchArmType(module MaxonModule, opIdx OpIndex, scrutineeName B
 	end 'noChange'
 	try module.ops.set(opIdx, value: MaxonOp.enumMatchArm(scrutineeName, caseName: caseName, scrutineeType: filled, rawValue: rawValue, isFloat: isFloat, resolved: resolved, thenTarget: thenTarget, elseTarget: elseTarget, bindingNames: bindingNames, range: range)) otherwise panic("fillEnumMatchArmType: ops.set OOB at idx={opIdx}")
 end 'fillEnumMatchArmType'
+
+// Resolve a cross-file enum/union range arm's owner + case ordinals.
+//
+// The parser computes `enumOwnerName` / `loValue` / `hiValue` only when the
+// enum declaring the endpoint case names was already parsed at the match
+// site. With filesystem-driven load order an enum can be referenced before
+// its declaring file is parsed, so the parser leaves `enumOwnerName` empty
+// and the ordinals at -1 while still carrying the raw `loCaseName` /
+// `hiCaseName`. Recover the owner from the scrutinee's now-resolved producer
+// type and re-derive the ordinals from the case names against the registered
+// enum. Leaving this unresolved would feed -1 ordinals into the runtime range
+// check (E3005, "-1 outside ValueId range") and drop every case past the
+// start from the deferred exhaustiveness coverage (spurious E2026).
+function fillRangeMatchArm(project Project, module MaxonModule, opIdx OpIndex, scrutineeName ByteArray, isUpto bool, hasMinSentinel bool, hasMaxSentinel bool, enumOwnerName String, loCaseName String, hiCaseName String, thenTarget BlockId, elseTarget BlockId, range SourceRange, producerTypes ProducerTypeMap)
+	if not enumOwnerName.isEmpty() 'alreadyResolved'
+		return
+	end 'alreadyResolved'
+	if loCaseName.isEmpty() 'numericRange'
+		// Pure numeric-scrutinee range — nothing to resolve here.
+		return
+	end 'numericRange'
+	let scrutineeType = lookupProducerType(producerTypes, name: scrutineeName)
+	let resolvedEnumName = try enumNameFromMaxonType(project, t: scrutineeType) otherwise return
+	let resolvedEnum = try project.enumTypes.get(resolvedEnumName) otherwise return
+	let loOrdinalRaw = try resolvedEnum.caseByName.get(loCaseName) otherwise return
+	let newLo = loOrdinalRaw as ParsedInt
+	var newHi = (resolvedEnum.cases.count() - 1) as ParsedInt
+	if not hasMaxSentinel 'lookupHi'
+		let hiOrdinalRaw = try resolvedEnum.caseByName.get(hiCaseName) otherwise return
+		newHi = hiOrdinalRaw as ParsedInt
+	end 'lookupHi'
+	try module.ops.set(opIdx, value: MaxonOp.rangeMatchArm(scrutineeName, loValue: newLo, hiValue: newHi, isUpto: isUpto, hasMinSentinel: hasMinSentinel, hasMaxSentinel: hasMaxSentinel, enumOwnerName: resolvedEnumName, loCaseName: loCaseName, hiCaseName: hiCaseName, thenTarget: thenTarget, elseTarget: elseTarget, range: range)) otherwise panic("fillRangeMatchArm: ops.set OOB at idx={opIdx}")
+end 'fillRangeMatchArm'
 
 function fillVarDecl(project Project, module MaxonModule, opIdx OpIndex, slotId VarSlot, value ByteArray, slotType MaxonType, range SourceRange, producerTypes ProducerTypeMap, slotTypes SlotTypeMap)
 	let filled = fillType(producerTypes, t: slotType, source: value)
@@ -7222,19 +7279,20 @@ function validateCastInRange(project Project, value ConstantValue, range Typeali
 end 'validateCastInRange'
 
 function validateIntInRange(project Project, value IntConstant, range TypealiasRange, typeName String)
-	// Unsigned-wrapped upper: `0 to u64.max` stores `range.upper` as the
-	// wrapped value -1; with `range.lower >= 0` this represents the full
-	// unsigned span, so any non-negative `value` is in range. (Mirrors the
-	// parser's `isInvalidIntRange` unsigned-aware check.)
-	let unsignedUpper = range.lower >= 0 and range.upper < 0
-	let belowLower = value < range.lower
-	var aboveUpper = false
-	if unsignedUpper 'unsigned'
-		aboveUpper = value < 0
-	end 'unsigned' else 'signed'
-		aboveUpper = value > range.upper
-	end 'signed'
-	if belowLower or aboveUpper 'oor'
+	// When `range.lower >= 0` the whole range lives in the UNSIGNED domain:
+	// `range.upper` may be stored as a wrapped negative (e.g. `0 to u64.max`
+	// stores upper as -1 = u64.max) and a source value like `(-1) as ValueId`
+	// is the deliberate unsigned bit pattern u64.max — in range, not below
+	// zero. Compare both bounds in unsigned space there, exactly as the C#
+	// bootstrap's const-eval cast check does (2-Parser.cs ~5044). Signed
+	// ranges (negative lower) keep ordinary signed comparison.
+	var outOfRange = false
+	if range.lower >= 0 'unsignedDomain'
+		outOfRange = unsignedLessThan(value, b: range.lower) or unsignedLessThan(range.upper, b: value)
+	end 'unsignedDomain' else 'signedDomain'
+		outOfRange = value < range.lower or value > range.upper
+	end 'signedDomain'
+	if outOfRange 'oor'
 		// No exact token span is available here — the cast was folded from
 		// an UnresolvedConstExpr arena that doesn't carry source positions.
 		// Anchor the diagnostic at a synthetic `__const_eval__` virtual path
@@ -7244,6 +7302,21 @@ function validateIntInRange(project Project, value IntConstant, range TypealiasR
 		reportCompileError(project, code: ErrorCode.semanticTypeMismatch, message: "Value {value} is outside the range of '{typeName}' ({range.lower} to {range.upper})", line: 0, column: 0, filePath: bootstrapPath)
 	end 'oor'
 end 'validateIntInRange'
+
+// Unsigned `<` on i64-stored values: a negative operand represents a bit
+// pattern above i64.max, i.e. larger than any non-negative value. Mirrors
+// `ExpandCastRangeChecks.unsignedLE`, used by the const-eval cast check so a
+// deliberate `(-1) as <unsigned-alias>` sentinel validates as the wrapped
+// max value instead of tripping a spurious below-lower-bound diagnostic.
+function unsignedLessThan(a IntConstant, b IntConstant) returns bool
+	if a < 0 and b >= 0 'aLarger'
+		return false
+	end 'aLarger'
+	if a >= 0 and b < 0 'bLarger'
+		return true
+	end 'bLarger'
+	return a < b
+end 'unsignedLessThan'
 
 // Recursive helper used by every arithmetic / unary / comparison /
 // logical arm above. Composing the eval-then-unwrap pair into one call

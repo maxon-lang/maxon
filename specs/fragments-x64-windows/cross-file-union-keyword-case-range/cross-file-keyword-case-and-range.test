@@ -1,0 +1,153 @@
+// Test: cross-file-keyword-case-and-range
+// --- file: kind.maxon
+export enum Kind
+	boolean
+	integer
+	float
+	named
+	function
+	unresolved
+	other
+end 'Kind'
+
+// --- file: main.maxon
+function isScalar(k Kind) returns bool
+	return match k 'check'
+		boolean to float gives true
+		named to other gives false
+	end 'check'
+end 'isScalar'
+
+function pickFloat() returns Kind
+	return Kind.float
+end 'pickFloat'
+
+function pickBoolean() returns Kind
+	return Kind.boolean
+end 'pickBoolean'
+
+function pickNamed() returns Kind
+	return Kind.named
+end 'pickNamed'
+
+function main() returns ExitCode
+	var score = 0
+	if isScalar(pickFloat()) 'f'
+		score = score + 1
+	end 'f'
+	if isScalar(pickBoolean()) 'b'
+		score = score + 2
+	end 'b'
+	if isScalar(pickNamed()) 'n'
+		score = score + 4
+	end 'n'
+	return score as ExitCode
+end 'main'
+---
+ExitCode: 3
+---
+// CompiledIR
+module {
+  func @isScalar(rcx: u8) -> i1 {
+  entry:
+    x64.cmp rcx, 2
+    x64.setle r8
+    x64.test rcx, rcx
+    x64.setge r9
+    x64.and r9, r8
+    x64.xor r8d, r8d
+    x64.test r9, r9
+    x64.je check_0.next0
+    x64.jmp check_0.case0
+  check_0.merge:
+    x64.ret
+  check_0.case0:
+    x64.mov r8d, 1
+    x64.jmp check_0.merge
+  check_0.next0:
+    x64.cmp rcx, 6
+    x64.setle r9
+    x64.cmp rcx, 3
+    x64.setge rsi
+    x64.and rsi, r9
+    x64.je check_0.merge
+  check_0.case1:
+    x64.xor r8d, r8d
+    x64.jmp check_0.merge
+  }
+  func @pickFloat() -> u8 {
+  entry:
+    x64.mov r8d, 2
+    x64.ret
+  }
+  func @pickBoolean() -> u8 {
+  entry:
+    x64.xor r8d, r8d
+    x64.ret
+  }
+  func @pickNamed() -> u8 {
+  entry:
+    x64.mov r8d, 3
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.call pickFloat
+    x64.mov rcx, r8
+    x64.call isScalar
+    x64.xor r9d, r9d
+    x64.test r8, r8
+    x64.je __phi_trampoline_0_0
+  f_0:
+    x64.add r9, 1
+    x64.mov r12, r9
+  f_0.after:
+    x64.call pickBoolean
+    x64.mov rcx, r8
+    x64.call isScalar
+    x64.test r8, r8
+    x64.je b_0.after
+  b_0:
+    x64.add r12, 2
+  b_0.after:
+    x64.call pickNamed
+    x64.mov rcx, r8
+    x64.call isScalar
+    x64.test r8, r8
+    x64.je __phi_trampoline_4_0
+  n_0:
+    x64.add r12, 4
+    x64.mov r8, r12
+  n_0.after:
+    x64.mov r9d, 4294967295
+    x64.cmp r8, r9
+    x64.jle __cast_check_lo_0
+    x64.jmp __cast_panic_0
+  __cast_check_lo_0:
+    x64.test r8, r8
+    x64.jge __cast_ok_0
+  __cast_panic_0:
+    x64.lea r12, [rip+__panic_msg_8398bb5f8110e5df]
+    x64.mov rcx, r12
+    x64.call mrt_panic
+  __cast_ok_0:
+    x64.mov r9d, 4294967295
+    x64.cmp r8, r9
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea r12, [rip+__panic_msg_8398bb5f8110e5df]
+    x64.mov rcx, r12
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  __phi_trampoline_0_0:
+    x64.mov r12, r9
+    x64.jmp f_0.after
+  __phi_trampoline_4_0:
+    x64.mov r8, r12
+    x64.jmp n_0.after
+  }
+}
+---

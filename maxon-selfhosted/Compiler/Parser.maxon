@@ -7740,14 +7740,20 @@ export type Parser
 		end 'tryUnresolved'
 
 		if not foundEnum 'unknownCase'
-			// Defer to TypeResolution: emit a fallback bare-case arm. TR
-			// will report E3005 / unknown-case when it resolves the
-			// scrutinee. This path only fires when NEITHER endpoint case is
-			// registered in any enum at parse time — distinct from the
-			// cross-file misroute (where a same-case-name enum IS found and
-			// `foundEnum` is true), which the deferred check handles via the
-			// raw endpoint names captured below.
-			return MatchPatternSpec.enumCase(loToken, caseName: loCaseName)
+			// Cross-file forward reference: the enum/union declaring `loCaseName`
+			// (and `hiCaseName`) lives in a file not yet parsed at this match
+			// site, so neither endpoint is registered in `enumTypes` /
+			// `unresolvedEnums` yet and we cannot resolve ordinals or the owner
+			// name here. Emit an enum-range pattern carrying the raw endpoint
+			// case NAMES with sentinel -1 ordinals and an empty owner; the
+			// deferred exhaustiveness check expands coverage from the names
+			// (never the parse-time ordinals), and `lowerRangeMatchArm` re-derives
+			// the concrete ordinals + owner from the scrutinee's resolved type
+			// once every file has been parsed. Degrading to a bare `enumCase`
+			// here would silently drop every case past `loCaseName` from the
+			// range, producing spurious E2026 ("not exhaustive") and a -1 ordinal
+			// flowing into the runtime range check (E3005 ValueId).
+			return MatchPatternSpec.enumRange(loToken, loOrdinal: -1, hiOrdinal: -1, isUpto: isUpto, hasMaxSentinel: hasMaxSentinel, displayName: displayName, enumOwnerName: "", loCaseName: loCaseName, hiCaseName: hiCaseName)
 		end 'unknownCase'
 
 		// Single-value rejection: `red to red` or `red upto green` where
@@ -8639,7 +8645,7 @@ export type Parser
 	function emitOnePatternDispatch(header MatchHeader, cur IrBlock, pattern MatchPatternSpec, thenId BlockId, elseId BlockId)
 		let patRange = SourceRange.ofToken(pattern.token)
 		match pattern.kind 'kind'
-			rangeLiteral then module.setTerminator(cur, op: MaxonOp.rangeMatchArm(header.scrutineeName, loValue: pattern.loValue, hiValue: pattern.hiValue, isUpto: pattern.isUpto, hasMinSentinel: pattern.hasMinSentinel, hasMaxSentinel: pattern.hasMaxSentinel, enumOwnerName: pattern.enumOwnerName if pattern.isEnumRange else "", thenTarget: thenId, elseTarget: elseId, range: patRange))
+			rangeLiteral then module.setTerminator(cur, op: MaxonOp.rangeMatchArm(header.scrutineeName, loValue: pattern.loValue, hiValue: pattern.hiValue, isUpto: pattern.isUpto, hasMinSentinel: pattern.hasMinSentinel, hasMaxSentinel: pattern.hasMaxSentinel, enumOwnerName: pattern.enumOwnerName if pattern.isEnumRange else "", loCaseName: pattern.loCaseName if pattern.isEnumRange else "", hiCaseName: pattern.hiCaseName if pattern.isEnumRange else "", thenTarget: thenId, elseTarget: elseId, range: patRange))
 			intLiteral then emitIntPatternCondBr(cur, scrutineeName: header.scrutineeName, pattern: pattern, thenId: thenId, elseId: elseId)
 			defaultArm then panic("emitOnePatternDispatch: default arm should be handled by buildMatchArmBlocks")
 			enumCase then panic("emitOnePatternDispatch: enum-case arm should be handled by buildMatchArmBlocks")
@@ -12719,7 +12725,14 @@ export type Parser
 			end 'primitiveReceiver'
 
 			let fieldLoadName = freshSynthName()
-			module.appendOp(block, op: MaxonOp.fieldLoad(fieldLoadName, receiver: receiverName, fieldName: memberNameBytes, range: SourceRange.ofToken(memberToken)))
+			// Emit into `currentBlock`, NOT the original `block` param: when the
+			// receiver expression moved control flow (e.g.
+			// `(try f() otherwise break).field`), the receiver's value is defined
+			// on the try's merge block — the same reason the methodCall arm above
+			// emits into `currentBlock`. Passing the stale `block` would place the
+			// fieldLoad in the receiver's pre-try block, where the receiver SSA
+			// name is not yet defined (E3013 / unresolved producer-type → cmp panic).
+			module.appendOp(currentBlock, op: MaxonOp.fieldLoad(fieldLoadName, receiver: receiverName, fieldName: memberNameBytes, range: SourceRange.ofToken(memberToken)))
 			// E3078 variant 2: `var i = o.field` where `o` is an immutable
 			// (`let`) local copies a field of an immutable struct into a mutable
 			// binding. Flag the chain as immutable-rooted and stamp the producer
@@ -13041,13 +13054,25 @@ export type Parser
 		if at(TokenKind.dot) and not scope.contains(token.value) 'maybeQualifiedRead'
 			let memberToken = try cursor.peek(1) otherwise Token.eof()
 			let afterMember = try cursor.peek(2) otherwise Token.eof()
-			// Member name is normally an identifier, but enum-case spellings
-			// permit keyword tokens (`function`, `return`, `end`, `if`, …).
-			// When the prefix is a registered enum, accept any non-`(`-followed
-			// token with a non-empty value as the member name.
+			// Member name is normally an identifier, but enum/union-case
+			// spellings permit keyword tokens (`float`, `int`, `function`,
+			// `return`, …). When the prefix is a registered enum/union, accept
+			// any non-`(`-followed token with a non-empty value as the member
+			// name. The prefix may NOT be registered yet at parse time: with
+			// filesystem-driven load order, a file can reference
+			// `OtherFile.Union.float` before the declaring file is parsed, so
+			// `prefixIsEnum` is false. For a keyword-spelled case the bare-
+			// identifier gate (`memberIsIdent`) would then reject `.float`,
+			// dropping it from the qualified name and emitting an
+			// `unresolvedRead("Prefix")` that fails as "Undefined variable
+			// 'Prefix'". Accept any identifier-like keyword member when the
+			// prefix is a capitalized (type-like) name; the deferred
+			// `unresolvedRead` lets TypeResolution validate the case against the
+			// fully-populated registries, exactly as it does for a plain
+			// identifier member.
 			let prefixIsEnum = project.unresolvedEnums.contains(token.value) or project.enumTypes.contains(token.value)
 			let memberIsIdent = memberToken.kind == TokenKind.identifier
-			let memberIsEnumCaseKeyword = prefixIsEnum and not memberToken.value.isEmpty()
+			let memberIsEnumCaseKeyword = (prefixIsEnum and not memberToken.value.isEmpty()) or (tokenIsIdentifierLike(memberToken) and isCapitalizedIdent(token.value))
 			// Phase 9 Stage 1: `EnumName.allCases` / `EnumName.allCaseNames`
 			// expand to inline array literals before the catch-all qualified-
 			// read path tries (and fails) to look the dotted name up as a

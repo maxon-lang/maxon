@@ -1442,7 +1442,14 @@ export union MaxonOp
 	// case ordinals against that enum (float-backed enums need a raw→
 	// ordinal lookup at lowering since the scrutinee is the f64 raw
 	// value, not the ordinal); empty means a numeric-scrutinee range.
-	rangeMatchArm(scrutineeName ByteArray, loValue ParsedInt, hiValue ParsedInt, isUpto bool, hasMinSentinel bool, hasMaxSentinel bool, enumOwnerName String, thenTarget BlockId, elseTarget BlockId, range SourceRange)
+	// `loCaseName`/`hiCaseName` carry the raw endpoint case names for an
+	// enum/union range; they are empty for a numeric-scrutinee range. The
+	// parser fills them unconditionally for enum ranges so lowering can
+	// re-derive the ordinals (and the owning enum) when the enum was
+	// declared in a not-yet-parsed file at the match site — there the parser
+	// could not look up `loValue`/`hiValue`/`enumOwnerName` and left them at
+	// -1 / "". `hiCaseName` is empty when `hasMaxSentinel`.
+	rangeMatchArm(scrutineeName ByteArray, loValue ParsedInt, hiValue ParsedInt, isUpto bool, hasMinSentinel bool, hasMaxSentinel bool, enumOwnerName String, loCaseName String, hiCaseName String, thenTarget BlockId, elseTarget BlockId, range SourceRange)
 	// Error anchor. The parser emits this when it cannot produce a well-formed
 	// op for a given source span (expected a type and got nothing, expected an
 	// expression and got a stray keyword, etc.). Batch compile already routes
@@ -1634,7 +1641,7 @@ export function maxonOpToString(project Project, op MaxonOp, blocks IrBlockArray
 		enumTag(result, enumValName, _) gives "%{String.from(result)} = maxon.enum_tag %{String.from(enumValName)}"
 		enumPayloadRead(result, enumValName, _, fieldIndex, fieldType, _) gives "%{String.from(result)} = maxon.enum_payload_read %{String.from(enumValName)}[{fieldIndex}] : {fieldType.toString(project)}"
 		enumPayloadStore(enumValName, _, fieldIndex, fieldType, newValueName, _) gives "maxon.enum_payload_store %{String.from(enumValName)}[{fieldIndex}] = %{String.from(newValueName)} : {fieldType.toString(project)}"
-		rangeMatchArm(scrutineeName, loValue, hiValue, isUpto, hasMinSentinel, hasMaxSentinel, _, thenTarget, elseTarget, _) gives maxonRangeMatchArmToString(scrutineeName, loValue: loValue, hiValue: hiValue, isUpto: isUpto, hasMinSentinel: hasMinSentinel, hasMaxSentinel: hasMaxSentinel, thenTarget: thenTarget, elseTarget: elseTarget, blocks: blocks)
+		rangeMatchArm(scrutineeName, loValue, hiValue, isUpto, hasMinSentinel, hasMaxSentinel, _, _, _, thenTarget, elseTarget, _) gives maxonRangeMatchArmToString(scrutineeName, loValue: loValue, hiValue: hiValue, isUpto: isUpto, hasMinSentinel: hasMinSentinel, hasMaxSentinel: hasMaxSentinel, thenTarget: thenTarget, elseTarget: elseTarget, blocks: blocks)
 		error(kind, message, _) gives "maxon.error [{kind.rawValue}] \"{message}\""
 		throw (enumName, variantName, payloadValueName, _) gives maxonThrowToString(enumName, variantName: variantName, payloadValueName: payloadValueName)
 		tryCall(result, callee, callContext, args, argLabels, _, _, errorBoundName, _) gives "%{String.from(result)} = maxon.try_call @{String.from(callee)} {lb}ctx = {callContextToString(callContext)}{rb}({formatArgNamesWithLabels(args, argLabels: argLabels)}) -> err %{String.from(errorBoundName)}"

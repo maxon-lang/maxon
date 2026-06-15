@@ -810,3 +810,34 @@ end 'main'
 ```maxoncstderr
 error E2003: specs/fragments/ranged-typealias/error.bare-shorthand.test:2:21: Bare sized type 'i64' is not allowed. Use explicit range syntax, e.g. 'int(i64.min to i64.max)'
 ```
+
+### Negative sentinel cast into an unsigned-domain alias
+
+A const-expression `(-1) as Alias` where `Alias = int(0 to u64.max)` is a
+deliberate sentinel: the unsigned upper bound is stored as a wrapped negative,
+so the cast wraps -1 to the max unsigned value (`u64.max`) rather than being
+out of range. The const-eval cast check must compare both bounds in unsigned
+space when `Alias`'s lower bound is non-negative, matching the runtime cast and
+the value-load range check. Mirrors the compiler's own
+`CONSUME_NO_VALUE = (-1) as ValueId` sentinel.
+
+<!-- test: unsigned-domain-negative-sentinel-cast -->
+```maxon
+typealias Slot = int(0 to u64.max)
+
+let NO_SLOT = (-1) as Slot
+
+function isSentinel(s Slot) returns bool
+	return s == NO_SLOT
+end 'isSentinel'
+
+function main() returns ExitCode
+	if isSentinel(NO_SLOT) 'yes'
+		return 7
+	end 'yes'
+	return 0
+end 'main'
+```
+```exitcode
+7
+```

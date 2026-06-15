@@ -10245,7 +10245,7 @@ type MaxonToStdLowering
 			br(target, _) then self.stdModule.setTerminator(dstBlock, op: StdOp.control(StdControlOp.br(target, argIds: ValueIdArray.create())))
 			ret(retVal, _) then self.lowerRet(retVal, dstBlock: dstBlock)
 			enumMatchArm(scrutineeName, caseName, scrutineeType, rawValue, isFloat, resolved, thenTarget, elseTarget, _, _) then self.lowerEnumMatchArm(scrutineeName, caseName: caseName, scrutineeType: scrutineeType, rawValue: rawValue, isFloat: isFloat, resolved: resolved, thenTarget: thenTarget, elseTarget: elseTarget, dstBlock: dstBlock)
-			rangeMatchArm(scrutineeName, loValue, hiValue, isUpto, hasMinSentinel, hasMaxSentinel, enumOwnerName, thenTarget, elseTarget, _) then self.lowerRangeMatchArm(scrutineeName, loValue: loValue, hiValue: hiValue, isUpto: isUpto, hasMinSentinel: hasMinSentinel, hasMaxSentinel: hasMaxSentinel, enumOwnerName: enumOwnerName, thenTarget: thenTarget, elseTarget: elseTarget, dstBlock: dstBlock)
+			rangeMatchArm(scrutineeName, loValue, hiValue, isUpto, hasMinSentinel, hasMaxSentinel, enumOwnerName, loCaseName, hiCaseName, thenTarget, elseTarget, _) then self.lowerRangeMatchArm(scrutineeName, loValue: loValue, hiValue: hiValue, isUpto: isUpto, hasMinSentinel: hasMinSentinel, hasMaxSentinel: hasMaxSentinel, enumOwnerName: enumOwnerName, loCaseName: loCaseName, hiCaseName: hiCaseName, thenTarget: thenTarget, elseTarget: elseTarget, dstBlock: dstBlock)
 			// An error op as a block terminator shouldn't come from the parser —
 			// errors replace single statements, not block-terminating constructs.
 			// If it ever does we drop it: a diagnostic was already reported at
@@ -10522,7 +10522,15 @@ type MaxonToStdLowering
 	// corresponding comparison. The parser rejects the impossible
 	// "min ... max" form at parse time so we never reach the
 	// degenerate "always true" case here.
-	function lowerRangeMatchArm(scrutineeName ByteArray, loValue ParsedInt, hiValue ParsedInt, isUpto bool, hasMinSentinel bool, hasMaxSentinel bool, enumOwnerName String, thenTarget BlockId, elseTarget BlockId, dstBlock IrBlock)
+	function lowerRangeMatchArm(scrutineeName ByteArray, loValue ParsedInt, hiValue ParsedInt, isUpto bool, hasMinSentinel bool, hasMaxSentinel bool, enumOwnerName String, loCaseName String, hiCaseName String, thenTarget BlockId, elseTarget BlockId, dstBlock IrBlock)
+		// `loCaseName` / `hiCaseName` are kept on the op so TypeResolution can
+		// re-derive cross-file ordinals before lowering; by the time we get here
+		// the fill pass has resolved `enumOwnerName` / `loValue` / `hiValue`, so
+		// the case names themselves are not consulted at lowering. Probe them so
+		// the unused-parameter check sees an observation.
+		if loCaseName.byteLength() < 0 or hiCaseName.byteLength() < 0 'never'
+			panic("lowerRangeMatchArm: negative byteLength is impossible")
+		end 'never'
 		var scrutineeId = self.resolveName(scrutineeName)
 		// Float-backed enum range arm: parser stored case ordinals as the
 		// bounds, but the scrutinee is the f64 raw value. Range semantics
