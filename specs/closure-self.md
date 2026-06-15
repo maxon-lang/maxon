@@ -94,6 +94,41 @@ end 'main'
 10
 ```
 
+<!-- test: bare-self-field-name-in-closure -->
+### Closure body reads a self-field by bare name
+Inside an instance method, a field may be referenced by its bare name (the compiler implicitly prepends `self`). This must keep working inside a closure body: the bare name resolves to a field read on the captured `self`, identical to the explicit `self.field` form. This is the shape the compiler's own logging closures use (`function() gives "...{field}..."`).
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+typealias FnTypeAlias1 = function() returns Integer
+function callIt(f FnTypeAlias1) returns Integer
+	return f()
+end 'callIt'
+
+type Widget
+	export var n as Integer
+	export var bump as Integer
+
+	static function create(n Integer, bump Integer) returns Self
+		return Self{n: n, bump: bump}
+	end 'create'
+
+	export function compute() returns Integer
+		// `n` and `bump` are bare self-field names captured through `self`.
+		return callIt(function() gives n + bump)
+	end 'compute'
+end 'Widget'
+
+function main() returns ExitCode
+	let w = Widget.create(4, bump: 6)
+	return w.compute()
+end 'main'
+```
+```exitcode
+10
+```
+
 <!-- test: error-self-in-free-function-closure -->
 ### `self` in a free-function closure still errors
 The fix only enables `self` capture when the enclosing function actually has `self`. A closure inside a free function must still be rejected with E2001.

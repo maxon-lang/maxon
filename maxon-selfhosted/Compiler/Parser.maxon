@@ -12749,6 +12749,18 @@ export type Parser
 		// inspects that follower; tolerates EOF (falls through to the bare-
 		// variable-read tail when nothing follows).
 
+		// Stage E (closures): a bare name reached inside a closure body that is
+		// neither a closure-local nor a closure param, but IS a self-field of the
+		// enclosing instance method, must resolve to a field read on the captured
+		// `__self` receiver — NOT fall through to the global resolver (which would
+		// report E2004) or to the dotted-name paths below (which would misread
+		// `field.subfield` as a type-qualified access). Intercept first, before any
+		// dot handling, so the captured-self field load becomes the receiver of any
+		// trailing postfix chain. Mirrors the working explicit `self.field` form.
+		if inClosure and not scope.contains(token.value) and closureOuterScope.isSelfField(token.value) 'closureSelfField'
+			return try emitClosureSelfFieldLoad(block, token: token)
+		end 'closureSelfField'
+
 		// `TypeName from "literal"` / `TypeName from 'c'` / `TypeName from [..]`
 		// — initialize a type conforming to InitableFromStringLiteral /
 		// InitableFromCharLiteral / InitableFromArrayLiteral via its
@@ -13266,9 +13278,10 @@ export type Parser
 		// an outer-scope local that the lifted function captures by reference.
 		// Check the saved enclosing scope before falling through to the
 		// global/top-level resolver; on a hit, route to closureEnvLoad and
-		// register the capture. The closure cannot capture self-field aliases
-		// (their backing __self is captured separately and field access goes
-		// through the post-loaded receiver) so we exclude `isSelfField` here.
+		// register the capture. Self-field aliases are NOT captured here — they
+		// are handled by the `closureSelfField` branch at the top of this
+		// function, which captures `__self` and emits a field read on it. The
+		// `isSelfField` guard keeps this branch from double-handling them.
 		if inClosure and not scope.contains(token.value) and closureOuterScope.contains(token.value) and not closureOuterScope.isSelfField(token.value) 'captureOuter'
 			let captureType = closureOuterScope.getType(token.value)
 			let captureName = emitClosureCapture(block, name: token.value, captureType: captureType, range: SourceRange.ofToken(token))
@@ -16122,6 +16135,26 @@ export type Parser
 		module.appendOp(block, op: MaxonOp.varLoad(selfLoadName, slotId: selfSlot, slotType: selfType, range: range))
 		return selfLoadName
 	end 'emitSelfLoad'
+
+	// Stage E (closures): emit a bare self-field read (`field`) reached inside a
+	// closure body. The lifted closure has no `__self` slot of its own, so the
+	// `selfFieldLoad` op the outer-method path uses would load garbage (its
+	// lowering hardcodes slot 0). Instead we capture the enclosing method's
+	// `__self` into the closure env (via `emitSelfLoad`'s `captureSelf` branch)
+	// and emit a plain `fieldLoad` against that captured receiver — exactly the
+	// op sequence the explicit `self.field` form already produces inside a
+	// closure. The result is a normal value the postfix walker can chain on
+	// (`{mirModule.functions.count()}`), so this single helper serves both the
+	// plain-read and the dotted-receiver cases. The field's declared type comes
+	// from the enclosing scope's self-field alias so the surrounding expression
+	// sees a concrete value type rather than `<unresolved>`.
+	function emitClosureSelfFieldLoad(block IrBlock, token Token) returns ExprResult throws ParserError
+		let fieldType = closureOuterScope.getType(token.value)
+		let selfLoadName = emitSelfLoad(block, token: token, range: SourceRange.ofToken(token))
+		let resultName = freshSynthName()
+		module.appendOp(block, op: MaxonOp.fieldLoad(resultName, receiver: selfLoadName, fieldName: token.value.toByteArray(), range: SourceRange.ofToken(token)))
+		return ExprResult.direct(resultName, valueType: fieldType)
+	end 'emitClosureSelfFieldLoad'
 
 	// Stage E (closures): record (or reuse) a capture entry for `name` and
 	// emit the corresponding `closureEnvLoad` op against the current closure

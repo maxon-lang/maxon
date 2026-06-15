@@ -1,0 +1,80 @@
+// Test: bare-self-field-name-in-closure
+
+typealias Integer = int(i64.min to i64.max)
+
+typealias FnTypeAlias1 = function() returns Integer
+function callIt(f FnTypeAlias1) returns Integer
+	return f()
+end 'callIt'
+
+type Widget
+	export var n as Integer
+	export var bump as Integer
+
+	static function create(n Integer, bump Integer) returns Self
+		return Self{n: n, bump: bump}
+	end 'create'
+
+	export function compute() returns Integer
+		// `n` and `bump` are bare self-field names captured through `self`.
+		return callIt(function() gives n + bump)
+	end 'compute'
+end 'Widget'
+
+function main() returns ExitCode
+	let w = Widget.create(4, bump: 6)
+	return w.compute()
+end 'main'
+---
+ExitCode: 10
+---
+// CompiledIR
+module {
+  func @Widget.compute$closure_0(local0: i64) -> i64 {
+  entry:
+    %10 = mir.param local0 : i64
+    %2 = mir.load %10, 0 width: qword
+    %3 = mir.load %2, 0 width: qword
+    %4 = mir.load %3, 0 width: qword
+    %6 = mir.load %10, 0 width: qword
+    %7 = mir.load %6, 0 width: qword
+    %8 = mir.load %7, 8 width: qword
+    %9 = mir.add.i64 %4, %8
+    mir.ret %9
+  }
+  func @Widget.compute(local0: i64) -> i64 {
+  entry:
+    %8 = mir.param local0 : i64
+    mir.store_slot slot_0, %8
+    %1 = mir.func_addr @Widget.compute$closure_0
+    %2 = mir.stack_slot_addr slot_0
+    %3 = mir.mov_imm 8 : i64
+    %4 = mir.mov_imm 0 : i64
+    %5 = mir.call @stdlib.__mm_alloc(%3, %4)
+    mir.store %2, %5, 0 width: qword
+    %9 = mir.indirect_call %1(%5)
+    %10 = mir.call @mm_drop(%5)
+    mir.ret %9
+  }
+  func @main() -> u8 {
+  entry:
+    %1 = mir.mov_imm 4 : i64
+    %2 = mir.mov_imm 6 : i64
+    %6 = mir.mov_imm 16 : i64
+    %7 = mir.mov_imm 0 : i64
+    %8 = mir.call @stdlib.__mm_alloc(%6, %7)
+    mir.store %1, %8, 0 width: qword
+    mir.store %2, %8, 8 width: qword
+    %5 = mir.call @Widget.compute(%8)
+    %9 = mir.call @mm_drop(%8)
+    %10 = mir.mov_imm 125 : i64
+    %11 = mir.cmp ugt, %5, %10
+    mir.cond_br %11 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %12 = mir.global_addr @__panic_msg_3252cec774195a25
+    %13 = mir.call @mrt_panic(%12)
+  __range_ok_0:
+    mir.ret %5
+  }
+}
+---

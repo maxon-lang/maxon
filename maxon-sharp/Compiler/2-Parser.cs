@@ -16873,6 +16873,17 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       case ExprResult.VarRef v:
         // Captured variable inside a closure: emit env load instead of normal var ref
         if (v.Info.IsCaptured && _closureCaptures != null) {
+          // A bare self-field name (e.g. `n`, captured as a self-field alias of the
+          // enclosing instance method) must NOT capture the field's pre-loaded value:
+          // that value is an SSA result computed in the OUTER function's entry block
+          // and carries the wrong kind/struct metadata, so a downstream field-offset
+          // lookup fails ("No field offsets found for struct variable 'n'"). Instead
+          // capture `self` itself into the env and re-derive the field via a field
+          // access on the captured receiver — the same op sequence the explicit
+          // `self.field` form produces inside a closure.
+          if (v.Info.IsSelfField) {
+            return EmitClosureSelfFieldCapture(v.VarName, v.Info);
+          }
           return EmitClosureCapture(v.VarName, v.Info);
         }
         // Self-field aliases whose cache was marked stale by a preceding function
@@ -16925,6 +16936,27 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     var envLoadOp = new MaxonClosureEnvLoadOp(captureIndex, varName, info.Kind, info.StructTypeName);
     _currentBlock!.AddOp(envLoadOp);
     return envLoadOp.Result;
+  }
+
+  /// <summary>
+  /// Captures a bare self-field referenced inside a closure body. Rather than
+  /// capturing the field's pre-loaded value (which would carry the wrong metadata
+  /// and fail a downstream field-offset lookup), this captures <c>self</c> — the
+  /// enclosing instance method's receiver — into the closure environment and emits
+  /// a field access on the captured receiver. Mirrors the op sequence an explicit
+  /// <c>self.field</c> reference produces inside a closure.
+  /// </summary>
+  private MaxonValue EmitClosureSelfFieldCapture(string fieldName, VarInfo fieldInfo) {
+    if (_currentTypeName == null || !_variables.ContainsKey("self")) {
+      // No enclosing receiver to capture — fall back to the plain capture so a
+      // clean diagnostic surfaces downstream rather than a null-deref here.
+      return EmitClosureCapture(fieldName, fieldInfo);
+    }
+    var selfInfo = _variables["self"];
+    var selfValue = EmitClosureCapture("self", selfInfo);
+    var fieldAccessOp = new MaxonFieldAccessOp(selfValue, _currentTypeName, fieldName, fieldInfo.Kind, fieldInfo.StructTypeName);
+    _currentBlock!.AddOp(fieldAccessOp);
+    return fieldAccessOp.Result;
   }
 
   private abstract record ExprResult {
