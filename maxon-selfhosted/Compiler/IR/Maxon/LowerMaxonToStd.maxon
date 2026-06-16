@@ -371,7 +371,7 @@ function buildInterfaceWitnessSlotMap(func IrFunction) returns InterfaceWitnessS
 		end 'isInterface'
 	end 'count'
 	let originalSlotCount = totalSlots - localInterfaceCount
-	var nextCompanion = originalSlotCount as VarSlot
+	var nextCompanion = originalSlotCount
 	for slotId in 0 upto originalSlotCount 'pair'
 		if func.scopeSlotToAbiParamIndex.contains(slotId) 'skipParamPair'
 			continue
@@ -3282,11 +3282,11 @@ type MaxonToStdLowering
 			let closureBodyInheritsImplicits = isLiftedClosureName(srcFunc.name) and srcFunc.hasImplicitLayoutParam
 			if srcFunc.hasImplicitLayoutParam and not closureBodyInheritsImplicits 'stampLayout'
 				let constraintCount = srcFunc.implicitWitnessConstraints.count()
-				let firstWitnessIdx = (srcFunc.paramCount - constraintCount) as ValueId
+				let firstWitnessIdx = (srcFunc.paramCount - constraintCount)
 				for wIdx in 0 upto constraintCount 'eachWitness'
-					self.implicitWitnessValueIds.push((firstWitnessIdx + wIdx) as ValueId)
+					self.implicitWitnessValueIds.push((firstWitnessIdx + wIdx))
 				end 'eachWitness'
-				self.implicitLayoutValueId = (firstWitnessIdx - 1) as ValueId
+				self.implicitLayoutValueId = (firstWitnessIdx - 1)
 			end 'stampLayout'
 			for pIdx in 0 upto srcFunc.maxonParamTypes.count() 'seedParams'
 				let pType = try srcFunc.maxonParamTypes.get(pIdx) otherwise MaxonType.integer
@@ -3358,9 +3358,9 @@ type MaxonToStdLowering
 			let entryRef = try srcFunc.blockRefs.get(0) otherwise -1
 			if entryRef >= 0 and srcFunc.hasImplicitLayoutParam and not closureBodyInheritsImplicits 'emitSyntheticParams'
 				var entryBlock = try self.stdModule.blocks.get(entryRef) otherwise panic("invariant: entryRef from blockRefs not in stdModule.blocks")
-				self.stdModule.appendOp(entryBlock, op: StdOp.call(StdCallOp.param(self.implicitLayoutValueId, paramIndex: self.implicitLayoutValueId as VarSlot, paramType: StdType.i64)))
+				self.stdModule.appendOp(entryBlock, op: StdOp.call(StdCallOp.param(self.implicitLayoutValueId, paramIndex: self.implicitLayoutValueId, paramType: StdType.i64)))
 				for witnessId in self.implicitWitnessValueIds 'witnessParam'
-					self.stdModule.appendOp(entryBlock, op: StdOp.call(StdCallOp.param(witnessId, paramIndex: witnessId as VarSlot, paramType: StdType.i64)))
+					self.stdModule.appendOp(entryBlock, op: StdOp.call(StdCallOp.param(witnessId, paramIndex: witnessId, paramType: StdType.i64)))
 				end 'witnessParam'
 			end 'emitSyntheticParams'
 
@@ -3379,7 +3379,7 @@ type MaxonToStdLowering
 			// cache persists it across builds via the IrFunction codec).
 			if entryRef >= 0 and closureBodyInheritsImplicits 'emitClosureImplicitLoads'
 				var entryBlock = try self.stdModule.blocks.get(entryRef) otherwise panic("invariant: entryRef from blockRefs not in stdModule.blocks")
-				let envSlot = self.liftedEnvValueId as VarSlot
+				let envSlot = self.liftedEnvValueId
 				let envBaseId = allocValueId(self.funcIdRef)
 				self.stdModule.appendOp(entryBlock, op: StdOp.memory(StdMemoryOp.loadSlot(envBaseId, slotId: envSlot)))
 				let captureCount = countClosureCaptures(srcFunc)
@@ -4517,7 +4517,7 @@ type MaxonToStdLowering
 			// Match the runtime value the parser laid down for the case —
 			// the ordinal, which is what default / string / char backed
 			// enums store at runtime.
-			let caseConstId = self.emitConstI64(theCase.ordinal as ParsedInt, dstBlock: dstBlock)
+			let caseConstId = self.emitConstI64(theCase.ordinal, dstBlock: dstBlock)
 			let cmpId = self.emitBinaryI64(StdArithBinaryOpcode.cmpI64Eq, leftId: enumValueId, rightId: caseConstId, dstBlock: dstBlock)
 			currentBufId = self.emitArithmeticSelect(cmpId, trueVal: caseBufId, falseVal: currentBufId, dstBlock: dstBlock)
 			currentLenId = self.emitArithmeticSelect(cmpId, trueVal: caseLenId, falseVal: currentLenId, dstBlock: dstBlock)
@@ -5516,7 +5516,7 @@ type MaxonToStdLowering
 		self.setValueType(mmPtrId, t: MaxonType.integer)
 		self.storeI64Const(mmPtrId, offset: 16, value: n, dstBlock: dstBlock)
 		self.storeI64Const(mmPtrId, offset: 24, value: elementSize, dstBlock: dstBlock)
-		let totalBytes = n * (elementSize as ParsedInt)
+		let totalBytes = n * (elementSize)
 		let totalBytesId = allocValueId(self.funcIdRef)
 		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: totalBytesId, value: totalBytes))))
 		self.setValueType(totalBytesId, t: MaxonType.integer)
@@ -5953,7 +5953,7 @@ type MaxonToStdLowering
 	// a signed-shift StdOp (today's `shrI64` lowers to SHR on x64 and
 	// `i64.shr_u` on wasm).
 	function emitNarrowSignExtend(rawId ValueId, widthBytes MachineWord, dstBlock IrBlock) returns ValueId
-		let signBit = (1 shl ((widthBytes * 8 - 1) as ParsedInt))
+		let signBit = (1 shl ((widthBytes * 8 - 1)))
 		let signBitId = self.emitConstI64(signBit, dstBlock: dstBlock)
 		self.setValueType(signBitId, t: MaxonType.integer)
 		let xoredId = self.emitBinaryI64(StdArithBinaryOpcode.xorI64, leftId: rawId, rightId: signBitId, dstBlock: dstBlock)
@@ -6131,7 +6131,7 @@ type MaxonToStdLowering
 	function emitProjectedElementLayout(ordinal MachineWord, qualifiedCallee String, dstBlock IrBlock) returns ValueId
 		let aggregateLayout = self.forwardCallerLayout(qualifiedCallee)
 		let flags = self.emitLoadFieldI64(aggregateLayout, offset: LAYOUT_OFFSET_FLAGS, dstBlock: dstBlock)
-		let shiftAmount = self.emitConstI64((LAYOUT_PER_ARG_HEAPREF_SHIFT + ordinal) as ParsedInt, dstBlock: dstBlock)
+		let shiftAmount = self.emitConstI64((LAYOUT_PER_ARG_HEAPREF_SHIFT + ordinal), dstBlock: dstBlock)
 		let shifted = self.emitBinaryI64(StdArithBinaryOpcode.shrI64, leftId: flags, rightId: shiftAmount, dstBlock: dstBlock)
 		let one = self.emitConstI64(1, dstBlock: dstBlock)
 		let bit = self.emitBinaryI64(StdArithBinaryOpcode.andI64, leftId: shifted, rightId: one, dstBlock: dstBlock)
@@ -6390,7 +6390,7 @@ type MaxonToStdLowering
 		// allocator and spill-slot accounting see the right number of
 		// reserved value ids. `paramCount` was set at construction; the
 		// post-op id-frontier is the running idRef.
-		func.varSlotCount = idRef.nextId as VarSlot
+		func.varSlotCount = idRef.nextId
 
 		self.stdModule.functions.push(func)
 	end 'synthesizeOneWitnessThunk'
@@ -9357,7 +9357,7 @@ type MaxonToStdLowering
 		// panic. Mirrors the slot-load witness pairing in `lowerVarLoad`.
 		if interfaceTypeIsFat(hit.fieldType) 'pairWitness'
 			let witnessId = allocValueId(self.funcIdRef)
-			self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(witnessId, addrId: receiverId, offset: (hit.offset + 8) as FieldOffset, width: StoreWidth.qword, signed: false, isFloat: false)))
+			self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(witnessId, addrId: receiverId, offset: (hit.offset + 8), width: StoreWidth.qword, signed: false, isFloat: false)))
 			self.setValueType(witnessId, t: MaxonType.integer)
 			self.interfaceWitnessValueIds.upsert(resultId, value: witnessId)
 		end 'pairWitness'
@@ -9387,7 +9387,7 @@ type MaxonToStdLowering
 	// the std module, and restore the outer-function state captured by
 	// `beginSynthesizedFunc`.
 	function endSynthesizedFunc(func IrFunction, snapshot LoweringFuncStateSnapshot)
-		func.varSlotCount = self.funcIdRef.nextId as VarSlot
+		func.varSlotCount = self.funcIdRef.nextId
 		self.stdModule.functions.push(func)
 		self.funcIdRef = snapshot.funcIdRef
 		self.nameToId = snapshot.nameToId
@@ -9587,7 +9587,7 @@ type MaxonToStdLowering
 		let targetSig = try self.project.funcSignatures.get(targetName) otherwise panic("synthesizeOneFnRefThunk: funcSignatures.get failed for target '{targetName}' (functionRef must have referenced a registered function)")
 		let targetReturn = try self.project.funcReturnTypes.get(targetName) otherwise panic("synthesizeOneFnRefThunk: funcReturnTypes.get failed for target '{targetName}'")
 		let userParamCount = targetSig.paramTypes.count()
-		let thunkParamCount = (userParamCount + 1) as VarSlot
+		let thunkParamCount = (userParamCount + 1)
 		let thunkName = "__fnref_{targetName}"
 		var stdParamTypes = StdTypeArray.create()
 		for pIdx in 0 upto userParamCount 'eachParam'
@@ -9726,7 +9726,7 @@ type MaxonToStdLowering
 		var ordinals = TagValueArray.create()
 		for i in 0 upto unionType.cases.count() 'collectOrdinals'
 			let c = try unionType.cases.get(i) otherwise panic("synthesizeOneUnionDestructor: ordinals.get OOB at {i}")
-			ordinals.push(c.ordinal as IntConstant)
+			ordinals.push(c.ordinal)
 		end 'collectOrdinals'
 		self.emitTagSwitch(tagId, ordinals: ordinals, caseBlockIds: caseBlockIds, defaultBlockId: defaultBlock.id, entryBlock: entryBlock, func: func)
 
@@ -9783,7 +9783,7 @@ type MaxonToStdLowering
 			if not field.offsetResolved 'unresolved'
 				panic("synthesizeOneStructDestructor: field '{field.name}' on struct '{structName}' has unresolved offset — layoutAllStructs did not run")
 			end 'unresolved'
-			let fieldId = self.emitLoadFieldI64(selfId, offset: field.offset as ParsedInt, dstBlock: entryBlock)
+			let fieldId = self.emitLoadFieldI64(selfId, offset: field.offset, dstBlock: entryBlock)
 			var argIds = ValueIdArray.create()
 			argIds.push(fieldId)
 			let decrefRetId = allocValueId(self.funcIdRef)
@@ -9816,7 +9816,7 @@ type MaxonToStdLowering
 		for i in 0 upto caseCount 'eachCase'
 			let ord = try ordinals.get(i) otherwise panic("emitTagSwitch: ordinals.get OOB at {i}")
 			let caseBlockId = try caseBlockIds.get(i) otherwise panic("emitTagSwitch: caseBlockIds.get OOB at {i}")
-			let constId = self.emitConstI64(ord as ParsedInt, dstBlock: currentEntry)
+			let constId = self.emitConstI64(ord, dstBlock: currentEntry)
 			let cmpId = self.emitBinaryI64(StdArithBinaryOpcode.cmpI64Eq, leftId: tagId, rightId: constId, dstBlock: currentEntry)
 			let isLast = i == caseCount - 1
 			if isLast 'tailToDefault'
@@ -10072,7 +10072,7 @@ type MaxonToStdLowering
 		// own overwrite proofs stand down for this store.
 		let reassignsManagedField = not isInit and (maxonTypeIsHeapManaged(self.project, t: resolvedFieldType) or self.maxonTypeResolvesToManagedBacking(hit.fieldType, enclosingStructName: hit.structName))
 		if reassignsManagedField or (isInit and self.maxonTypeResolvesToManagedBacking(hit.fieldType, enclosingStructName: hit.structName)) 'synthOverwrite'
-			let oldId = self.emitLoadFieldI64(receiverId, offset: hit.offset as ParsedInt, dstBlock: dstBlock)
+			let oldId = self.emitLoadFieldI64(receiverId, offset: hit.offset, dstBlock: dstBlock)
 			var decrefArgs = ValueIdArray.create()
 			decrefArgs.push(oldId)
 			let decrefRetId = allocValueId(self.funcIdRef)
@@ -10139,7 +10139,7 @@ type MaxonToStdLowering
 			witnessId = self.materializeInterfaceWitness(concreteType, interfaceName: interfaceName, dstBlock: dstBlock)
 		end 'concrete'
 		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(receiverId, offset: offset, valueId: payloadId, width: StoreWidth.qword, isFloat: false)))
-		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(receiverId, offset: (offset + 8) as FieldOffset, valueId: witnessId, width: StoreWidth.qword, isFloat: false)))
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(receiverId, offset: (offset + 8), valueId: witnessId, width: StoreWidth.qword, isFloat: false)))
 	end 'lowerInterfaceFieldStore'
 
 	// selfFieldLoad/selfFieldStore: synthesize a fieldLoad/Store against the
@@ -10385,7 +10385,7 @@ type MaxonToStdLowering
 		// explicit scalar backings the rawValue diverges from the ordinal. For a
 		// bare/payload-only case rawValue equals the ordinal, so this is a no-op
 		// there. Mirrors the C# bootstrap, which stores rawValue as the tag.
-		let tagOrdinalId = self.emitConstI64(theCase.rawValue as ParsedInt, dstBlock: dstBlock)
+		let tagOrdinalId = self.emitConstI64(theCase.rawValue, dstBlock: dstBlock)
 		self.setValueType(tagOrdinalId, t: MaxonType.integer)
 		var allocArgIds = ValueIdArray.create()
 		allocArgIds.push(sizeId)
@@ -10595,7 +10595,7 @@ type MaxonToStdLowering
 		let loBound = 0 as ParsedInt if hasMinSentinel else loOrdinal
 		var hiBound = (caseCount - 1) as ParsedInt if hasMaxSentinel else hiOrdinal
 		if isUpto and not hasMaxSentinel 'uptoAdjust'
-			hiBound = (hiBound - 1) as ParsedInt
+			hiBound = (hiBound - 1)
 		end 'uptoAdjust'
 		var combinedId = 0 as ValueId
 		var hasCombined = false
@@ -10835,7 +10835,7 @@ type MaxonToStdLowering
 		// Recover the env-pointer ValueId by emitting a slot load of the
 		// lifted closure's hidden `__env` parameter. The parser appended
 		// it as the LAST param so its slot id is `paramCount - 1`.
-		let envSlot = self.liftedEnvValueId as VarSlot
+		let envSlot = self.liftedEnvValueId
 		let envBaseId = allocValueId(self.funcIdRef)
 		self.stdModule.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.loadSlot(envBaseId, slotId: envSlot)))
 
@@ -11429,7 +11429,7 @@ type MaxonToStdLowering
 		// here because the case ordinals are stable across that move.
 		if let resolved = try self.project.enumTypes.get(enumName) 'resolvedHit'
 			if let ord = try resolved.caseByName.get(variantName) 'caseHit'
-				return (ord as IntConstant) + 1
+				return (ord) + 1
 			end 'caseHit'
 		end 'resolvedHit'
 		if let unresolved = try self.project.unresolvedEnums.get(enumName) 'unresolvedHit'

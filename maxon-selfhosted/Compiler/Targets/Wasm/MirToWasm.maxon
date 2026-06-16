@@ -578,11 +578,11 @@ export function emitWasmPerFunction(module MirModule, globalData GlobalDataTable
 		let name = try globalData.names.get(i) otherwise panic("emitWasmPerFunction: globalData.names.get({i}) failed — names/values arrays out of sync")
 		let data = try globalData.values.get(i) otherwise panic("emitWasmPerFunction: globalData.values.get({i}) failed — names/values arrays out of sync")
 		try globalDataOffsets.insert(name, value: dataOffset) otherwise panic("emitWasmPerFunction: duplicate global data name '{name}' at offset {dataOffset}")
-		dataOffset = (dataOffset + data.count()) as Wasm32Offset
+		dataOffset = (dataOffset + data.count())
 	end 'computeOffsets'
 	for entry in globalData.dataSectionEntries 'dataEntries'
 		try globalDataOffsets.insert(entry.name, value: dataOffset) otherwise panic("emitWasmPerFunction: duplicate data section entry '{entry.name}' at offset {dataOffset}")
-		dataOffset = (dataOffset + entry.initialBytes.count()) as Wasm32Offset
+		dataOffset = (dataOffset + entry.initialBytes.count())
 		while dataOffset mod 8 != 0 'align'
 			dataOffset = dataOffset + 1
 		end 'align'
@@ -786,12 +786,12 @@ function layoutWasmGlobalData(globalData GlobalDataTable, baseOffset Wasm32Offse
 		let data = try globalData.values.get(i) otherwise panic("layoutWasmGlobalData: globalData.values.get({i}) failed — names/values arrays out of sync")
 		try offsets.insert(name, value: dataOffset) otherwise panic("layoutWasmGlobalData: duplicate global data name '{name}' at offset {dataOffset}")
 		chunks.push(WasmDataChunk.create(dataOffset, bytes: data))
-		dataOffset = (dataOffset + data.count()) as Wasm32Offset
+		dataOffset = (dataOffset + data.count())
 	end 'rdata'
 	for entry in globalData.dataSectionEntries 'dataEntries'
 		try offsets.insert(entry.name, value: dataOffset) otherwise panic("layoutWasmGlobalData: duplicate data section entry '{entry.name}' at offset {dataOffset}")
 		chunks.push(WasmDataChunk.create(dataOffset, bytes: entry.initialBytes))
-		dataOffset = (dataOffset + entry.initialBytes.count()) as Wasm32Offset
+		dataOffset = (dataOffset + entry.initialBytes.count())
 		// Pad to 8-byte alignment so the next entry starts aligned (matches
 		// `buildDataPreludeSection`). Wasm linear memory is zero-initialized,
 		// so the gap doesn't need an explicit segment.
@@ -1064,8 +1064,8 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 	writeFuncType(runType, paramTypes: ByteArray.create(), resultTypes: makeByteArray1(wasmTypeI32))
 	types.push(runType)
 
-	let cabiReallocFuncIdx = (wasiImportCount + funcCount) as Wasm32Index
-	let runFuncIdx = (wasiImportCount + funcCount + 1) as Wasm32Index
+	let cabiReallocFuncIdx = (wasiImportCount + funcCount)
+	let runFuncIdx = (wasiImportCount + funcCount + 1)
 
 	writeTypeSection(wasm, types: types)
 
@@ -1302,7 +1302,7 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 		// this loop walks the stdlib bodies.
 		for addrFix in func.funcAddrFixups 'patchAddrs'
 			let tableIdx = try lowering.funcTableIndices.get(addrFix.targetName) otherwise panic("emitWasmModule: funcAddr fixup target '{addrFix.targetName}' missing from user-build table (stdlib body '{func.name}' references it but it isn't in the final module)")
-			patchSleb128Fixed5(body, offset: addrFix.bodyOffset, value: tableIdx as ParsedInt)
+			patchSleb128Fixed5(body, offset: addrFix.bodyOffset, value: tableIdx)
 		end 'patchAddrs'
 
 		// Patch globalAddr linear-memory offsets. The stdlib cache baked
@@ -1311,7 +1311,7 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 		// final globalDataOffsets map.
 		for gAddrFix in func.globalAddrFixups 'patchGlobalAddrs'
 			let resolved = try globalDataOffsets.get(gAddrFix.targetName) otherwise panic("emitWasmModule: globalAddr fixup target '{gAddrFix.targetName}' missing from final globalDataOffsets (stdlib body '{func.name}' references it but it isn't in the merged data section)")
-			patchSleb128Fixed5(body, offset: gAddrFix.bodyOffset, value: resolved as ParsedInt)
+			patchSleb128Fixed5(body, offset: gAddrFix.bodyOffset, value: resolved)
 		end 'patchGlobalAddrs'
 
 		bodies.push(body)
@@ -1410,7 +1410,7 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 	let namedWasiImports = 5
 	let syntheticNamedFuncs = 2
 	var funcNameMap = ByteArray.create()
-	let totalFuncCount = (namedWasiImports + funcCount + syntheticNamedFuncs) as Wasm32Index
+	let totalFuncCount = (namedWasiImports + funcCount + syntheticNamedFuncs)
 	writeUleb128(funcNameMap, value: totalFuncCount)
 	// Names for the first five Preview2 WASI imports (indices 0..4), matching
 	// the import table emitted above: exit, stdout/stderr/stdin accessors, and
@@ -1871,7 +1871,7 @@ type WasmFunctionLowering
 
 		// Identity coloring so buildEdgeMoves resolves each value id to itself
 		// (== its wasm local index). Sized to cover every value id in use.
-		identityColoring = ColoringResult.identity((maxValueId + 1) as RegInt)
+		identityColoring = ColoringResult.identity((maxValueId + 1))
 
 		// Emit instructions for each block.
 		if srcFunc.blockRefs.count() == 1 'singleBlock'
@@ -2141,7 +2141,7 @@ type WasmFunctionLowering
 
 	function emitMemRefStoreSlot(slotId VarSlot, valueId ValueId)
 		// Store to linear memory at stackBase + slotId * 8
-		let slotOffset = (stackBase + (slotId * 8)) as Wasm32Offset
+		let slotOffset = (stackBase + (slotId * 8))
 		body.push(opI32Const)
 		writeSleb128(body, value: slotOffset)
 		body.push(opLocalGet)
@@ -2153,7 +2153,7 @@ type WasmFunctionLowering
 
 	function emitMemRefLoadSlot(resultId ValueId, slotId VarSlot)
 		// Load from linear memory at stackBase + slotId * 8
-		let slotOffset = (stackBase + (slotId * 8)) as Wasm32Offset
+		let slotOffset = (stackBase + (slotId * 8))
 		body.push(opI32Const)
 		writeSleb128(body, value: slotOffset)
 		body.push(opI64Load)
@@ -2243,7 +2243,7 @@ type WasmFunctionLowering
 			// Encode f64 as i64 reinterpret
 			body.push(opF64Const)
 			// Write 8 bytes of the f64 encoding (value is the raw bits)
-			writeQword(body, value: value as MachineWord)
+			writeQword(body, value: value)
 		end 'float' else 'int'
 			body.push(opI64Const)
 			writeSleb128(body, value: value)
@@ -2583,7 +2583,7 @@ type WasmFunctionLowering
 	function emitStackSlotAddr(resultId ValueId, slotId VarSlot)
 		// Stack slots map to linear memory. Each slot is 8 bytes.
 		// Stack area starts after global data.
-		let slotOffset = (stackBase + (slotId * 8)) as Wasm32Offset
+		let slotOffset = (stackBase + (slotId * 8))
 		body.push(opI64Const)
 		writeSleb128(body, value: slotOffset)
 		body.push(opLocalSet)
@@ -2603,7 +2603,7 @@ type WasmFunctionLowering
 			writeSleb128Fixed5(body, value: 0 as ParsedInt)
 		end 'cacheMode' else 'userMode'
 			let offset = try globalDataOffsets.get(name) otherwise panic("wasm: unknown global address '{name}' — not registered in globalDataOffsets")
-			writeSleb128(body, value: offset as ParsedInt)
+			writeSleb128(body, value: offset)
 		end 'userMode'
 		body.push(opLocalSet)
 		writeUleb128(body, value: resultId as Wasm32Index)
@@ -2627,9 +2627,9 @@ type WasmFunctionLowering
 	// than as nine repetitions of the same five-instruction recipe.
 	function emitWasmStoreI64Const(addr MachineWord, value MachineWord)
 		body.push(opI32Const)
-		writeSleb128(body, value: addr as ParsedInt)
+		writeSleb128(body, value: addr)
 		body.push(opI64Const)
-		writeSleb128(body, value: value as ParsedInt)
+		writeSleb128(body, value: value)
 		body.push(opI64Store)
 		body.push(0x03)
 		writeUleb128(body, value: 0)
@@ -3589,7 +3589,7 @@ end 'WasmFunctionLowering'
 // loop both call it without holding a lowering instance.
 function findFunctionIndex(funcSigs WasmFuncSigs, name String, importCount Wasm32Index) returns Wasm32Index
 	let idx = try funcSigs.indexOfBridged(name) otherwise panic("wasm: function not found: {name}")
-	return (importCount + idx) as Wasm32Index
+	return (importCount + idx)
 end 'findFunctionIndex'
 
 // ============================================================
@@ -4034,13 +4034,13 @@ function emitArgvElementFieldAddr(body ByteArray, idxLocal MachineWord, stride M
 	body.push(opLocalGet)
 	writeUleb128(body, value: idxLocal)
 	body.push(opI32Const)
-	writeSleb128(body, value: stride as ParsedInt)
+	writeSleb128(body, value: stride)
 	body.push(opI32Mul)
 	body.push(opI32Add)
 	// + fieldOffset
 	if fieldOffset != 0 'addField'
 		body.push(opI32Const)
-		writeSleb128(body, value: fieldOffset as ParsedInt)
+		writeSleb128(body, value: fieldOffset)
 		body.push(opI32Add)
 	end 'addField'
 end 'emitArgvElementFieldAddr'
@@ -4135,7 +4135,7 @@ function emitWasmMapWasiErrorCode(body ByteArray, tempLocal MachineWord, errOffs
 	// Err path. The error-code byte sits at wasiRetAreaBase + errOffset. Load
 	// and stash it (reusing tempLocal now that disc has served its purpose).
 	body.push(opI32Const)
-	writeSleb128(body, value: (wasiRetAreaBase + errOffset) as ParsedInt)
+	writeSleb128(body, value: (wasiRetAreaBase + errOffset))
 	body.push(opI32Load8U)
 	body.push(0x00)
 	writeUleb128(body, value: 0)
@@ -4176,7 +4176,7 @@ function emitWasmMapWasiErrorCode(body ByteArray, tempLocal MachineWord, errOffs
 
 	// Fallthrough: catchall flag.
 	body.push(opI64Const)
-	writeSleb128(body, value: catchallFlag as ParsedInt)
+	writeSleb128(body, value: catchallFlag)
 
 	body.push(opEnd)
 end 'emitWasmMapWasiErrorCode'
@@ -6584,7 +6584,7 @@ function emitWasmSockErrorReturn(body ByteArray, flag MachineWord)
 	body.push(opI64Const)
 	writeSleb128(body, value: 0)
 	body.push(opI64Const)
-	writeSleb128(body, value: flag as ParsedInt)
+	writeSleb128(body, value: flag)
 	body.push(opReturn)
 end 'emitWasmSockErrorReturn'
 
@@ -6963,7 +6963,7 @@ end 'emitWasmSocketTcpConnect'
 // Load a single ipv4 octet byte at `byteOffset` (zero-extended i32) into a local.
 function emitWasmSockLoadOctet(body ByteArray, dstLocal MachineWord, byteOffset MachineWord)
 	body.push(opI32Const)
-	writeSleb128(body, value: byteOffset as ParsedInt)
+	writeSleb128(body, value: byteOffset)
 	body.push(opI32Load8U)
 	body.push(0x00)
 	writeUleb128(body, value: 0)
@@ -6982,7 +6982,7 @@ function emitWasmSockStoreHandle(body ByteArray, blockLocal MachineWord, fieldOf
 	body.push(opI64ExtendI32U)
 	body.push(opI64Store)
 	body.push(0x03)
-	writeUleb128(body, value: fieldOffset as ParsedInt)
+	writeUleb128(body, value: fieldOffset)
 end 'emitWasmSockStoreHandle'
 
 // Load the i32 wasi resource handle stored (zero-extended) at the handle block's
@@ -6994,7 +6994,7 @@ function emitWasmSockLoadBlockHandle(body ByteArray, blockLocal MachineWord, fie
 	body.push(opI32WrapI64)
 	body.push(opI64Load)
 	body.push(0x03)
-	writeUleb128(body, value: fieldOffset as ParsedInt)
+	writeUleb128(body, value: fieldOffset)
 	body.push(opI32WrapI64)
 end 'emitWasmSockLoadBlockHandle'
 
@@ -7286,7 +7286,7 @@ function emitWasmSockDropHandle(body ByteArray, blockLocal MachineWord, fieldOff
 	body.push(opI32WrapI64)
 	body.push(opI64Load)
 	body.push(0x03)
-	writeUleb128(body, value: fieldOffset as ParsedInt)
+	writeUleb128(body, value: fieldOffset)
 	body.push(opI32WrapI64)
 	body.push(opCall)
 	writeUleb128(body, value: dropImport as Wasm32Index)
@@ -7460,7 +7460,7 @@ function lookupOrRegisterIndirectType(types ByteArrayArray, typeIndexMap WasmTyp
 		typeIndexMap.upsert(signatureBytes, value: newIdx)
 		return newIdx
 	end 'register'
-	return existing as Wasm32Index
+	return existing
 end 'lookupOrRegisterIndirectType'
 
 function registerIndirectCallType(types ByteArrayArray, typeIndexMap WasmTypeIndexMap, floatSet BoolArray, resultId ValueId, isVoid bool, argIds ValueIdArray, throws bool)

@@ -264,14 +264,14 @@ function repointSpawnMaskStore(module StdModule, func IrFunction, block IrBlock,
 		if nextId == NoValueIdRef 'mintRef'
 			nextId = scanMaxValueId(func, module: module) + 1
 		end 'mintRef'
-		let newConstId = nextId as ValueId
+		let newConstId = nextId
 		let constOpIdx = module.ops.count()
-		module.ops.push(StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: newConstId, value: newMask as IntConstant))))
+		module.ops.push(StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: newConstId, value: newMask))))
 		try block.opRefs.insert(pos, value: constOpIdx) otherwise panic("repointSpawnMaskStore: opRefs.insert failed at {pos}")
 		// The store shifted to pos+1; rewrite it to consume the fresh const.
 		let storeOpIdx = try block.opRefs.get(pos + 1) otherwise panic("repointSpawnMaskStore: opRefs.get OOB after insert")
 		try module.ops.set(storeOpIdx, value: StdOp.system(StdSystemOp.storeIndirect(bufValueId, offset: 8, valueId: newConstId, width: StoreWidth.qword, isFloat: false))) otherwise panic("repointSpawnMaskStore: ops.set OOB at {storeOpIdx}")
-		return (nextId + 1) as ValueIdRefHandle
+		return (nextId + 1)
 	end 'eachOp'
 	panic("repointSpawnMaskStore: no `store [buf+8]` mask store found for __gt_spawn buffer %{bufValueId}")
 end 'repointSpawnMaskStore'
@@ -328,7 +328,7 @@ end 'constValueOf'
 
 function arithConstValueOf(a StdArithOp, valueId ValueId) returns (bool, MachineWord)
 	return match a 'check'
-		const(c) gives ((c.resultId == valueId, c.value as MachineWord))
+		const(c) gives ((c.resultId == valueId, c.value))
 		unary gives (false, 0)
 		binary gives (false, 0)
 	end 'check'
@@ -914,7 +914,7 @@ end 'recordParamOp'
 
 function recordParamCall(c StdCallOp, pv ParamValueMap)
 	match c 'check'
-		param(resultId, paramIndex, _) then pv.upsert(paramIndex as NodeIndex, value: resultId)
+		param(resultId, paramIndex, _) then pv.upsert(paramIndex, value: resultId)
 		ret then break 'check'
 		call to tailCall then break 'check'
 		errorReturn then break 'check'

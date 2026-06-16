@@ -1393,7 +1393,7 @@ export type Parser
 			if decoded.count() == 1 'singleByte'
 				_ = try consume()
 				let byteVal = try decoded.get(0) otherwise panic("parseOptionalParamDefault: charLiteral decoded.count==1 but get(0) failed")
-				return ParamDefault.byteLiteral(byteVal as ParsedInt)
+				return ParamDefault.byteLiteral(byteVal)
 			end 'singleByte'
 		end 'isChar'
 
@@ -2297,7 +2297,7 @@ export type Parser
 		var i = 1
 		while i < lhsLen 'eachLhsTok'
 			let lhsTok = try cursor.peek(i as ChainPeekOffset) otherwise return
-			let rhsTok = try cursor.peek((rhsStart + i) as ChainPeekOffset) otherwise return
+			let rhsTok = try cursor.peek((rhsStart + i)) otherwise return
 			if lhsTok.kind != rhsTok.kind or lhsTok.value != rhsTok.value 'mismatch'
 				return
 			end 'mismatch'
@@ -2305,11 +2305,11 @@ export type Parser
 			i = i + 1
 		end 'eachLhsTok'
 		// LHS pos 0 vs RHS pos rhsStart
-		let leadingRhs = try cursor.peek(rhsStart as ChainPeekOffset) otherwise return
+		let leadingRhs = try cursor.peek(rhsStart) otherwise return
 		if leadingRhs.kind != TokenKind.identifier or leadingRhs.value != nameToken.value 'noMatch'
 			return
 		end 'noMatch'
-		let trailing = try cursor.peek((rhsStart + lhsLen) as ChainPeekOffset) otherwise Token.eof()
+		let trailing = try cursor.peek((rhsStart + lhsLen)) otherwise Token.eof()
 		if not tokenIsStatementTerminator(trailing) 'notTerminator'
 			return
 		end 'notTerminator'
@@ -5148,7 +5148,7 @@ export type Parser
 			if magToken.kind == TokenKind.intLiteral 'isInt'
 				try eat(TokenKind.intLiteral)
 				let mag = parseRawValueForEnum(magToken, kindLabel: "Integer", isFloat: false)
-				let parsed = (mag * rawSign) as ParsedInt
+				let parsed = (mag * rawSign)
 				rawValue = parsed
 				rawIsFloat = false
 				if state.hasExplicitBacking and state.isFloatBacked 'mismatch'
@@ -5164,7 +5164,7 @@ export type Parser
 				var bits = parseRawValueForEnum(magToken, kindLabel: "Float", isFloat: true)
 				if rawSign < 0 'negateFloat'
 					// IEEE 754 sign bit is the MSB; XOR-toggle to negate.
-					bits = (bits xor (1 shl 63)) as ParsedInt
+					bits = (bits xor (1 shl 63))
 				end 'negateFloat'
 				rawValue = bits
 				rawIsFloat = true
@@ -5843,7 +5843,7 @@ export type Parser
 			let c = try cases.get(i) otherwise panic("registerUnionCasesCompanion: cases.get OOB at {i}")
 			// Mirror the parent case's ordinal so `.rawValue` agrees with the
 			// union's tag value (the natural pairing for de/serialization).
-			companionCases.push(EnumCase.create(c.name, ordinal: c.ordinal, rawValue: c.ordinal as IntConstant, line: c.line, column: c.column, payloadFields: EnumPayloadFieldArray.create()))
+			companionCases.push(EnumCase.create(c.name, ordinal: c.ordinal, rawValue: c.ordinal, line: c.line, column: c.column, payloadFields: EnumPayloadFieldArray.create()))
 		end 'eachCase'
 		let companionUnresolved = UnresolvedEnumType.create(companionName, cases: companionCases, isFloatBacked: false, visibility: visibility, line: line, column: column, filePath: filePath, implementedInterfaces: ConformanceArray.create(), isUnion: false)
 		var insertedCompanion = true
@@ -7536,7 +7536,7 @@ export type Parser
 			return 0
 		end 'badLen'
 		let byteVal = try decoded.get(0) otherwise panic("decodeCharLiteralToByte: count==1 but get(0) failed")
-		return byteVal as ParsedInt
+		return byteVal
 	end 'decodeCharLiteralToByte'
 
 	// Parse one pattern token: an integer literal (with optional leading `-`),
@@ -8277,11 +8277,11 @@ export type Parser
 	// this enum are skipped — TR surfaces the canonical unknown-case diagnostic.
 	function expandRangeCoverageInto(enumCases EnumCaseArray, caseByName CaseIndexMap, rangeArm PendingMatchRangeArm, covered ReferencedVarSet)
 		let loOrdinalRaw = try caseByName.get(rangeArm.loCaseName) otherwise return
-		let loOrdinal = loOrdinalRaw as ParsedInt
+		let loOrdinal = loOrdinalRaw
 		var hiOrdinal = (enumCases.count() - 1) as ParsedInt
 		if not rangeArm.hasMaxSentinel 'lookupHi'
 			let hiOrdinalRaw = try caseByName.get(rangeArm.hiCaseName) otherwise return
-			hiOrdinal = hiOrdinalRaw as ParsedInt
+			hiOrdinal = hiOrdinalRaw
 		end 'lookupHi'
 		let upperInclusive = hiOrdinal if not rangeArm.isUpto else (hiOrdinal - 1)
 		let caseCount = enumCases.count() as ParsedInt
@@ -8426,11 +8426,11 @@ export type Parser
 		end 'noEnum'
 
 		let loOrdinalRaw = try caseByName.get(pattern.loCaseName) otherwise return
-		let loOrdinal = loOrdinalRaw as ParsedInt
+		let loOrdinal = loOrdinalRaw
 		var hiOrdinal = (enumCases.count() - 1) as ParsedInt
 		if not pattern.hasMaxSentinel 'lookupHi'
 			let hiOrdinalRaw = try caseByName.get(pattern.hiCaseName) otherwise return
-			hiOrdinal = hiOrdinalRaw as ParsedInt
+			hiOrdinal = hiOrdinalRaw
 		end 'lookupHi'
 
 		let upperInclusive = hiOrdinal if not pattern.isUpto else (hiOrdinal - 1)
@@ -10124,7 +10124,7 @@ export type Parser
 				reportCompileError(project, code: ErrorCode.parserImmutableVariable, message: "cannot assign to immutable variable: '{nameToken.value}'", line: nameToken.line, column: nameToken.column, filePath: filePath)
 				return
 			end 'immutableBinding'
-			module.appendOp(emitBlock, op: MaxonOp.enumPayloadStore(bindingInfo.payloadScrutineeName.toByteArray(), caseName: bindingInfo.payloadCaseName, fieldIndex: bindingInfo.payloadFieldIndex as IntConstant, fieldType: bindingInfo.varType, newValueName: exprName(materializedResult), range: stmtRange))
+			module.appendOp(emitBlock, op: MaxonOp.enumPayloadStore(bindingInfo.payloadScrutineeName.toByteArray(), caseName: bindingInfo.payloadCaseName, fieldIndex: bindingInfo.payloadFieldIndex, fieldType: bindingInfo.varType, newValueName: exprName(materializedResult), range: stmtRange))
 			return
 		end 'payloadWrite'
 		if scope.isSelfField(nameToken.value) 'selfFieldWrite'
@@ -12140,7 +12140,7 @@ export type Parser
 	function caseOrdinalPlusOneInCases(cases EnumCaseArray, variantName String) returns ParsedInt throws CaseOrdinalLookupError
 		for c in cases 'each'
 			if c.name == variantName 'match'
-				return (c.ordinal as ParsedInt) + 1
+				return (c.ordinal) + 1
 			end 'match'
 		end 'each'
 		throw CaseOrdinalLookupError.notFound
@@ -15045,7 +15045,7 @@ export type Parser
 			// lowering) can recover it without the type system having to
 			// distinguish int from byte-char everywhere.
 			let byteVal = try decoded.get(0) otherwise panic("parseCharLiteralExpr: count==1 but get(0) failed")
-			let name = emitLiteral(block, value: byteVal as ParsedInt, valueType: MaxonType.integer, range: range)
+			let name = emitLiteral(block, value: byteVal, valueType: MaxonType.integer, range: range)
 			let charKey = charByteLiteralKey(currentFunc.name, valueName: name)
 			project.charByteLiterals.insert(charKey)
 			recordCharByteLiteralInsert(project, filePath: filePath, key: charKey)

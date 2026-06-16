@@ -6176,11 +6176,11 @@ function fillRangeMatchArm(project Project, module MaxonModule, opIdx OpIndex, s
 	let resolvedEnumName = try enumNameFromMaxonType(project, t: scrutineeType) otherwise return
 	let resolvedEnum = try project.enumTypes.get(resolvedEnumName) otherwise return
 	let loOrdinalRaw = try resolvedEnum.caseByName.get(loCaseName) otherwise return
-	let newLo = loOrdinalRaw as ParsedInt
+	let newLo = loOrdinalRaw
 	var newHi = (resolvedEnum.cases.count() - 1) as ParsedInt
 	if not hasMaxSentinel 'lookupHi'
 		let hiOrdinalRaw = try resolvedEnum.caseByName.get(hiCaseName) otherwise return
-		newHi = hiOrdinalRaw as ParsedInt
+		newHi = hiOrdinalRaw
 	end 'lookupHi'
 	try module.ops.set(opIdx, value: MaxonOp.rangeMatchArm(scrutineeName, loValue: newLo, hiValue: newHi, isUpto: isUpto, hasMinSentinel: hasMinSentinel, hasMaxSentinel: hasMaxSentinel, enumOwnerName: resolvedEnumName, loCaseName: loCaseName, hiCaseName: hiCaseName, thenTarget: thenTarget, elseTarget: elseTarget, range: range)) otherwise panic("fillRangeMatchArm: ops.set OOB at idx={opIdx}")
 end 'fillRangeMatchArm'
@@ -8373,11 +8373,11 @@ function expandArmCoverage(enumCases EnumCaseArray, caseByName CaseIndexMap, arm
 		return
 	end 'isBare'
 	let loOrdinalRaw = try caseByName.get(arm.loCaseName) otherwise return
-	let loOrdinal = loOrdinalRaw as ParsedInt
+	let loOrdinal = loOrdinalRaw
 	var hiOrdinal = (enumCases.count() - 1) as ParsedInt
 	if not arm.hasMaxSentinel 'lookupHi'
 		let hiOrdinalRaw = try caseByName.get(arm.hiCaseName) otherwise return
-		hiOrdinal = hiOrdinalRaw as ParsedInt
+		hiOrdinal = hiOrdinalRaw
 	end 'lookupHi'
 	let upperInclusive = hiOrdinal if not arm.isUpto else (hiOrdinal - 1)
 	let caseCount = enumCases.count() as ParsedInt
