@@ -8,6 +8,15 @@
 
 export typealias ValueIdArray = Array with ValueId
 
+// Stage E (closures): one outer-scope slot id per capture, parallel to
+// `closureCreate`'s `capturedNames`. Captured at parse time (while the
+// outer name is still live in scope) so lowering's env-block build and
+// TypeResolution's capture-type patch don't have to re-derive the slot
+// from the outer function's final `Scope` — which `popScope` has already
+// pruned of any block-scoped (loop/if-body) local by the time those
+// passes run.
+export typealias CapturedSlotArray = Array with VarSlot
+
 // Array of name slices — used by call ops to pass the names of their
 // positional arguments. Each element is a `ByteArray` slice, typically a
 // zero-copy view over the lexer's source buffer for user-written names or
@@ -1526,11 +1535,16 @@ export union MaxonOp
 	// locals. `capturedNames` lists outer-variable names in
 	// capture-index order; `capturedTypes` is parallel and carries each
 	// capture's MaxonType so lowering can pick the correct load width
-	// when materializing dereferences. Lowered (Stage E) to mrt_alloc +
-	// per-capture stackAddr/storeIndirect plus the funcRef pair, with
-	// the env-name recorded in a per-function map keyed by the funcRef
-	// value-id so the matching indirectCall can forward the env.
-	closureCreate(result ByteArray, funcName String, fnTypeId FunctionTypeId, capturedNames StringArray, capturedTypes MaxonTypeArray, range SourceRange)
+	// when materializing dereferences. `capturedOuterSlots` is parallel
+	// too and carries each capture's outer-scope slot id, recorded at
+	// parse time so lowering's env-block build and TR's capture-type
+	// patch never re-derive it from the outer function's final `Scope`
+	// (which `popScope` prunes of block-scoped locals before those passes
+	// run). Lowered (Stage E) to mrt_alloc + per-capture
+	// stackAddr/storeIndirect plus the funcRef pair, with the env-name
+	// recorded in a per-function map keyed by the funcRef value-id so the
+	// matching indirectCall can forward the env.
+	closureCreate(result ByteArray, funcName String, fnTypeId FunctionTypeId, capturedNames StringArray, capturedTypes MaxonTypeArray, capturedOuterSlots CapturedSlotArray, range SourceRange)
 	// Stage D (closures): inside a lifted closure body, recover a captured
 	// value by indirect double-load through the hidden `__env`
 	// parameter. `captureIndex` is the env-array slot index for this
@@ -1654,7 +1668,7 @@ export function maxonOpToString(project Project, op MaxonOp, blocks IrBlockArray
 		tryMethodCall(result, receiver, methodName, args, argLabels, _, _, errorBoundName, _) gives "%{String.from(result)} = maxon.try_method_call %{String.from(receiver)}.{String.from(methodName)}({formatArgNamesWithLabels(args, argLabels: argLabels)}) -> err %{String.from(errorBoundName)}"
 		rethrow(flagName, _) gives "maxon.rethrow %{String.from(flagName)}"
 		functionRef(result, funcName, fnTypeId, _) gives "%{String.from(result)} = maxon.function_ref @{funcName} {lb}fnType = #{fnTypeId}{rb}"
-		closureCreate(result, funcName, fnTypeId, capturedNames, _, _) gives "%{String.from(result)} = maxon.closure_create @{funcName} {lb}fnType = #{fnTypeId}{rb} captures=[{formatCaptureNames(capturedNames)}]"
+		closureCreate(result, funcName, fnTypeId, capturedNames, _, _, _) gives "%{String.from(result)} = maxon.closure_create @{funcName} {lb}fnType = #{fnTypeId}{rb} captures=[{formatCaptureNames(capturedNames)}]"
 		closureEnvLoad(result, captureIndex, captureName, _, _) gives "%{String.from(result)} = maxon.closure_env_load idx={captureIndex} name={String.from(captureName)}"
 		indirectCall(result, callee, fnTypeId, args, argLabels, _, _, _) gives "%{String.from(result)} = maxon.indirect_call %{String.from(callee)}({formatArgNamesWithLabels(args, argLabels: argLabels)}) {lb}fnType = #{fnTypeId}{rb}"
 		forInIterable(iterName, _, iterType, sourceValue, sourceType, bodyBlockId, exitBlockId, label, _) gives "maxon.for_in_iterable {iterName} : {iterType.toString(project)} in %{String.from(sourceValue)} : {sourceType.toString(project)} {lb}body = {resolveBlockLabel(bodyBlockId, blocks: blocks)}, exit = {resolveBlockLabel(exitBlockId, blocks: blocks)}, label = '{label}'{rb}"

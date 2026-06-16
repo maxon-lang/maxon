@@ -88,9 +88,16 @@ export type CaptureInfo
 	export var name as String
 	export var captureType as MaxonType
 	export var index as ParsedInt
+	// Outer-scope slot id of the captured local, recorded at capture time
+	// while the name is still live in `closureOuterScope`. Carried onto the
+	// `closureCreate` op so lowering's env-block build and TR's capture-type
+	// patch resolve the slot without a post-`popScope` scope lookup that
+	// would miss any block-scoped (loop/if-body) local. See
+	// [[project_selfhost_compile_progress]].
+	export var outerSlot as VarSlot
 
-	export static function create(name String, captureType MaxonType, index ParsedInt) returns CaptureInfo
-		return Self{name: name, captureType: captureType, index: index}
+	export static function create(name String, captureType MaxonType, index ParsedInt, outerSlot VarSlot) returns CaptureInfo
+		return Self{name: name, captureType: captureType, index: index, outerSlot: outerSlot}
 	end 'create'
 end 'CaptureInfo'
 
@@ -135,7 +142,7 @@ end 'rewriteClosureNameOpRefs'
 
 function rewriteClosureCreateRef(op MaxonOp, renames ClosureRenameArray) returns MaxonOp
 	return match op 'k'
-		closureCreate(result, funcName, fnTypeId, capturedNames, capturedTypes, range) gives MaxonOp.closureCreate(result, funcName: lookupClosureRename(renames, funcName: funcName), fnTypeId: fnTypeId, capturedNames: capturedNames, capturedTypes: capturedTypes, range: range)
+		closureCreate(result, funcName, fnTypeId, capturedNames, capturedTypes, capturedOuterSlots, range) gives MaxonOp.closureCreate(result, funcName: lookupClosureRename(renames, funcName: funcName), fnTypeId: fnTypeId, capturedNames: capturedNames, capturedTypes: capturedTypes, capturedOuterSlots: capturedOuterSlots, range: range)
 		default panic("rewriteClosureCreateRef: expected closureCreate but got '{op.name}'")
 	end 'k'
 end 'rewriteClosureCreateRef'
@@ -13213,6 +13220,24 @@ export type Parser
 			// Mirrors the same identifier-like gate in parsePostfix.
 			if tokenIsIdentifierLike(memberToken) and afterMember.kind == TokenKind.leftParen 'isDotCall'
 				let memberNameBytes = memberToken.value.toByteArray()
+				// Closure capture of an outer-scope local that's the receiver
+				// of a method call (`outer.method(...)`). Without this branch
+				// the receiver — absent from the lifted body's fresh scope —
+				// falls through to the qualified-static-call arm below, which
+				// treats `outer` as a type name and emits an unresolvable
+				// `outer.method` callee (and never records the capture, so the
+				// outer `let` trips E3012). Capture the receiver first, then
+				// emit the methodCall on the env-loaded value — mirrors the
+				// `isMethodOnLocal` arm with a captured receiver. The trailing
+				// `.field` / non-call receiver case is handled by the
+				// `captureOuterReceiver` branch after this dot-call block.
+				if inClosure and not scope.contains(token.value) and closureOuterScope.contains(token.value) and not closureOuterScope.isSelfField(token.value) 'isMethodOnCapturedOuter'
+					let receiverVarType = closureOuterScope.getType(token.value)
+					let receiverLoadName = emitClosureCapture(block, name: token.value, captureType: receiverVarType, range: SourceRange.ofToken(token))
+					// No cancel-promise / reassign tracking: the receiver is an
+					// env-captured by-reference read, not a mutable local.
+					return try finishMethodCallOnReceiver(block, receiverLoadName: receiverLoadName, receiverVarType: receiverVarType, memberToken: memberToken, memberNameBytes: memberNameBytes, startToken: token, supportsCancelPromise: false, reassignName: "")
+				end 'isMethodOnCapturedOuter'
 				// `globalVar.method(...)` where `globalVar` is a registered
 				// top-level mutable var (`var x = ...` / `let xs = [...]`):
 				// emit the global load + methodCall pair. Without this branch
@@ -13223,19 +13248,11 @@ export type Parser
 				if not scope.contains(token.value) and project.topLevelVars.contains(token.value) 'isMethodOnGlobal'
 					let receiverLoadName = freshSynthName()
 					module.appendOp(block, op: MaxonOp.unresolvedRead(receiverLoadName, name: token.value, range: SourceRange.ofToken(token)))
-					try eat(TokenKind.dot)
-					_ = try consume()
-					try eat(TokenKind.leftParen)
-					// allowFirstNamed: method call on a global receiver — the
-					// receiver may be interface/type-param-typed (named first arg
-					// allowed); validateMethodCallArgLabels re-applies E2052 for
-					// concrete-struct receivers. See the parsePostfix site above.
-					let (argNames, argLabels, argTypes, argRanges) = try parseCallArgsRaw(block, requireNamed: false, allowFirstNamed: true)
-					let rparenToken = previousToken()
-					let methodResultName = freshSynthName()
-					// Emit into `currentBlock` — see emitCallAndResult for rationale.
-					module.appendOp(currentBlock, op: MaxonOp.methodCall(methodResultName, receiver: receiverLoadName, methodName: memberNameBytes, args: argNames, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, range: SourceRange.between(token, last: rparenToken)))
-					return ExprResult.direct(methodResultName, valueType: MaxonType.unresolved)
+					// Global receiver: no cancel-promise / reassign tracking, and an
+					// unresolved receiver type (TypeResolution fills the method
+					// result from the resolved global's type). See
+					// `finishMethodCallOnReceiver`.
+					return try finishMethodCallOnReceiver(block, receiverLoadName: receiverLoadName, receiverVarType: MaxonType.unresolved, memberToken: memberToken, memberNameBytes: memberNameBytes, startToken: token, supportsCancelPromise: false, reassignName: "")
 				end 'isMethodOnGlobal'
 				if scope.contains(token.value) 'isMethodOnLocal'
 					// Method call on a local-scope value receiver. The
@@ -13251,40 +13268,12 @@ export type Parser
 						let receiverSlot = lookupVariable(token.value, token: token)
 						module.appendOp(block, op: MaxonOp.varLoad(receiverLoadName, slotId: receiverSlot, slotType: receiverVarType, range: SourceRange.ofToken(token)))
 					end 'localReceiver'
-					try eat(TokenKind.dot)
-					_ = try consume()
-					try eat(TokenKind.leftParen)
-					// methodCall on a local receiver — defer the named-arg-required
-					// check (E3005) AND the first-arg-cannot-be-named check (E2052)
-					// to TypeResolution. The receiver may be interface/type-param-
-					// typed (named first arg allowed); validateMethodCallArgLabels
-					// re-applies E2052 for concrete-struct receivers. See the
-					// parsePostfix methodCall site above for rationale.
-					let (argNames, argLabels, argTypes, argRanges) = try parseCallArgsRaw(block, requireNamed: false, allowFirstNamed: true)
-					let rparenToken = previousToken()
-					// Tier 4: `p.cancel()` on a promise local is the cancel intrinsic.
-					// Emit a void `cancelPromise` op and evaluate to the (discarded)
-					// receiver load so the statement context drops a non-call value
-					// — no E3065 "result not used" fires.
-					if memberToken.value == "cancel" and argNames.count() == 0 and isPromiseType(project, t: receiverVarType) 'isCancelPromiseLocal'
-						module.appendOp(currentBlock, op: MaxonOp.cancelPromise(receiverLoadName, range: SourceRange.between(token, last: rparenToken)))
-						return ExprResult.direct(receiverLoadName, valueType: receiverVarType)
-					end 'isCancelPromiseLocal'
-					let methodResultName = freshSynthName()
-					// Emit into `currentBlock` — see emitCallAndResult for rationale.
-					module.appendOp(currentBlock, op: MaxonOp.methodCall(methodResultName, receiver: receiverLoadName, methodName: memberNameBytes, args: argNames, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, range: SourceRange.between(token, last: rparenToken)))
-					// E3077: a method call on a local receiver may mutate it
-					// (`items.push(x)`, `b.append(...)`), so the receiver `var`
-					// exercised its mutability and isn't should-be-let. See the
-					// parsePostfix method-call arm for why this is intentionally
-					// more permissive than the C# bootstrap's mutating-builtin
-					// allow-list.
-					markVarReassigned(token.value)
-					// Eager parse-time fill ONLY for the function-valued return
-					// case — see parseTimeMethodReturnTypeForFn for rationale.
-					// Other method-call result types remain `unresolved` for
-					// TypeResolution to fill from the resolved signature.
-					return ExprResult.direct(methodResultName, valueType: parseTimeMethodReturnTypeForFn(receiverVarType))
+					// methodCall on a local receiver — defers the named-arg-required
+					// (E3005) and first-arg-cannot-be-named (E2052) checks to
+					// TypeResolution, supports the `.cancel()` promise intrinsic, and
+					// marks the receiver reassigned (a mutating method may write it
+					// back). See `finishMethodCallOnReceiver`.
+					return try finishMethodCallOnReceiver(block, receiverLoadName: receiverLoadName, receiverVarType: receiverVarType, memberToken: memberToken, memberNameBytes: memberNameBytes, startToken: token, supportsCancelPromise: true, reassignName: token.value)
 				end 'isMethodOnLocal'
 				// Qualified static call: Type.method(...) — lowering resolves verbatim.
 				// Defer the named-arg-required check (E3005) to TypeResolution
@@ -15900,12 +15889,14 @@ export type Parser
 			// load-width selection at lowering time.
 			var capturedNames = StringArray.create()
 			var capturedTypes = MaxonTypeArray.create()
+			var capturedOuterSlots = CapturedSlotArray.create()
 			for i in 0 upto captureCount 'eachCap'
 				let info = try captures.get(i) otherwise panic("parseClosure: captures.get OOB at {i}")
 				capturedNames.push(info.name)
 				capturedTypes.push(info.captureType)
+				capturedOuterSlots.push(info.outerSlot)
 			end 'eachCap'
-			module.appendOp(block, op: MaxonOp.closureCreate(resultName, funcName: closureName, fnTypeId: fnTypeId, capturedNames: capturedNames, capturedTypes: capturedTypes, range: closureRange))
+			module.appendOp(block, op: MaxonOp.closureCreate(resultName, funcName: closureName, fnTypeId: fnTypeId, capturedNames: capturedNames, capturedTypes: capturedTypes, capturedOuterSlots: capturedOuterSlots, range: closureRange))
 		end 'emitCreate' else 'emitRef'
 			module.appendOp(block, op: MaxonOp.functionRef(resultName, funcName: closureName, fnTypeId: fnTypeId, range: closureRange))
 		end 'emitRef'
@@ -16537,6 +16528,51 @@ export type Parser
 		return ExprResult.direct(resultName, valueType: fieldType)
 	end 'emitClosureSelfFieldLoad'
 
+	// Shared tail for the `receiver.method(args)` forms in `parseIdentifierExpr`
+	// (local, global, and captured-outer receivers): consume `.method(`, parse
+	// the args, and emit the `methodCall`. The receiver value has already been
+	// loaded into `receiverLoadName` by the caller (the load differs per
+	// receiver kind — varLoad, unresolvedRead, or closureEnvLoad). `startToken`
+	// is the receiver token (for the call's source range). When
+	// `supportsCancelPromise` is true a zero-arg `.cancel()` on a promise
+	// receiver lowers to the `cancelPromise` intrinsic instead. When
+	// `reassignName` is non-empty the receiver name is marked reassigned (E3077
+	// mutation tracking) — callers pass it only for receivers a mutating method
+	// could write back through (a by-value local), not for env-captured reads.
+	function finishMethodCallOnReceiver(block IrBlock, receiverLoadName ByteArray, receiverVarType MaxonType, memberToken Token, memberNameBytes ByteArray, startToken Token, supportsCancelPromise bool, reassignName String) returns ExprResult throws ParserError
+		try eat(TokenKind.dot)
+		_ = try consume()
+		try eat(TokenKind.leftParen)
+		let (argNames, argLabels, argTypes, argRanges) = try parseCallArgsRaw(block, requireNamed: false, allowFirstNamed: true)
+		let rparenToken = previousToken()
+
+		// Tier 4: `p.cancel()` on a promise receiver is the cancel intrinsic.
+		// Emit a void `cancelPromise` op and evaluate to the (discarded)
+		// receiver load so the statement context drops a non-call value — no
+		// E3065 "result not used" fires.
+		if supportsCancelPromise and memberToken.value == "cancel" and argNames.count() == 0 and isPromiseType(project, t: receiverVarType) 'isCancelPromise'
+			module.appendOp(currentBlock, op: MaxonOp.cancelPromise(receiverLoadName, range: SourceRange.between(startToken, last: rparenToken)))
+			return ExprResult.direct(receiverLoadName, valueType: receiverVarType)
+		end 'isCancelPromise'
+
+		let methodResultName = freshSynthName()
+		// Emit into `currentBlock` — see emitCallAndResult for rationale.
+		module.appendOp(currentBlock, op: MaxonOp.methodCall(methodResultName, receiver: receiverLoadName, methodName: memberNameBytes, args: argNames, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, range: SourceRange.between(startToken, last: rparenToken)))
+
+		if reassignName != "" 'markReassign'
+			// E3077: a method call on a by-value local may mutate it
+			// (`items.push(x)`, `b.append(...)`), so the receiver `var`
+			// exercised its mutability and isn't should-be-let.
+			markVarReassigned(reassignName)
+		end 'markReassign'
+
+		// Eager parse-time fill ONLY for the function-valued return case —
+		// see parseTimeMethodReturnTypeForFn for rationale. Other method-call
+		// result types remain `unresolved` for TypeResolution to fill from
+		// the resolved signature.
+		return ExprResult.direct(methodResultName, valueType: parseTimeMethodReturnTypeForFn(receiverVarType))
+	end 'finishMethodCallOnReceiver'
+
 	// Stage E (closures): record (or reuse) a capture entry for `name` and
 	// emit the corresponding `closureEnvLoad` op against the current closure
 	// body block. Returns the fresh result name so callers can compose it
@@ -16556,7 +16592,13 @@ export type Parser
 		end 'scan'
 		if idx < 0 'fresh'
 			idx = closureCaptures.count()
-			closureCaptures.push(CaptureInfo.create(name, captureType: captureType, index: idx))
+			// Record the outer slot now, while `name` is still live in the
+			// enclosing scope. After the closure (and any enclosing block)
+			// finishes parsing, `popScope` removes block-scoped locals from
+			// the outer function's `Scope`, so lowering/TR can't recover the
+			// slot from the name alone — they read it back off this capture.
+			let outerSlot = closureOuterScope.getInfo(name).slot
+			closureCaptures.push(CaptureInfo.create(name, captureType: captureType, index: idx, outerSlot: outerSlot))
 		end 'fresh'
 		// Mark the outer-scope name as referenced so E3012 (unused variable)
 		// doesn't fire on a let/var that a closure captures. The capture is
@@ -16690,9 +16732,10 @@ export type Parser
 		// previous function's `func.scope` field on its IrFunction holds
 		// a reference to its Scope object — calling `scope.reset()` here
 		// would wipe that object too, breaking downstream consumers that
-		// later read the prior function's scope (Stage E's
-		// `lookupOuterSlotForCapture` walks the enclosing function's
-		// scope to resolve captured slot ids long after parsing finished).
+		// later read the prior function's scope (SemanticCheck's
+		// unused-var pass, MaxonBorrowCheck, and TypeResolution's
+		// capture-type slot fallback all walk `func.scope` long after
+		// parsing finished).
 		scope = Scope.create()
 		paramLocations = ParamLocationArray.create()
 		localVarLocations = ParamLocationArray.create()

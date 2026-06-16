@@ -3543,7 +3543,7 @@ type MaxonToStdLowering
 			// indirectCall forwards the env from `fnEnvVarNames` to the
 			// callee as the trailing arg.
 			functionRef(result, funcName, _, _) then self.lowerFunctionRef(result, funcName: funcName, dstBlock: dstBlock)
-			closureCreate(result, funcName, _, capturedNames, _, _) then self.lowerClosureCreate(result, funcName: funcName, capturedNames: capturedNames, dstBlock: dstBlock)
+			closureCreate(result, funcName, _, capturedNames, _, capturedOuterSlots, _) then self.lowerClosureCreate(result, funcName: funcName, capturedNames: capturedNames, capturedOuterSlots: capturedOuterSlots, dstBlock: dstBlock)
 			closureEnvLoad(result, captureIndex, _, captureType, _) then self.lowerClosureEnvLoad(result, captureIndex: captureIndex, captureType: captureType, dstBlock: dstBlock)
 			indirectCall(result, callee, fnTypeId, args, _, _, _, _) then self.lowerIndirectCall(result, callee: callee, fnTypeId: fnTypeId, args: args, dstBlock: dstBlock)
 			// `forInIterable` is metadata-only. The parser at
@@ -10686,22 +10686,20 @@ type MaxonToStdLowering
 	// shape lets the closure body observe outer-state mutation between
 	// creation and indirect call. The result name is bound to the fn-
 	// pointer; the env id travels alongside via `fnEnvVarNames`.
-	function lowerClosureCreate(result ByteArray, funcName String, capturedNames StringArray, dstBlock IrBlock)
+	function lowerClosureCreate(result ByteArray, funcName String, capturedNames StringArray, capturedOuterSlots CapturedSlotArray, dstBlock IrBlock)
 		let fnRefId = self.defineName(result)
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.funcRef(fnRefId, funcName: funcName)))
 
 		let captureCount = capturedNames.count()
-		// Materialize each capture's source-slot address. The captured
-		// name maps to a Maxon-level slot via the function's scope —
-		// recovered at lowering time by walking the parser's scope. The
-		// outer function's scope is preserved on the IrFunction's
-		// `scope` field, but lowerClosureCreate runs in the OUTER
-		// function's context (not the lifted body's), so `currentFunc`
-		// here is the enclosing function whose scope we need.
+		// Materialize each capture's source-slot address. The outer slot id
+		// was recorded on the `closureCreate` op at parse time (while the
+		// captured name was still live in scope), so we read it back off
+		// `capturedOuterSlots` rather than walking the outer function's
+		// `scope` — which `popScope` has already pruned of any block-scoped
+		// (loop/if-body) captured local by the time lowering runs.
 		var captureAddrs = ValueIdArray.create()
 		for i in 0 upto captureCount 'eachCap'
-			let captureName = try capturedNames.get(i) otherwise panic("lowerClosureCreate: capturedNames.get OOB at {i}")
-			let slotId = self.lookupOuterSlotForCapture(captureName)
+			let slotId = try capturedOuterSlots.get(i) otherwise panic("lowerClosureCreate: capturedOuterSlots.get OOB at {i}")
 			let addrId = allocValueId(self.funcIdRef)
 			self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.stackAddr(addrId, slotId: slotId)))
 			captureAddrs.push(addrId)
@@ -10822,22 +10820,6 @@ type MaxonToStdLowering
 	function countClosureCaptures(srcFunc IrFunction) returns ParsedInt
 		return srcFunc.closureCaptureCount as ParsedInt
 	end 'countClosureCaptures'
-
-	// Stage E (closures): recover the outer slot id for a captured name.
-	// Captures are by reference — the `stackAddr` op needs the original
-	// local's slot id, not a fresh one. The parser only emits
-	// `closureCreate` for names whose `closureOuterScope.contains(name)`
-	// returned true, and that scope is preserved on the enclosing
-	// function's IrFunction (in `currentMaxonFunc.scope`). A miss here
-	// means the parser handed us a capture name the lowering's outer
-	// function doesn't know about — a compiler bug, not a user error.
-	function lookupOuterSlotForCapture(captureName String) returns VarSlot
-		let func = self.currentMaxonFunc
-		if not func.scope.contains(captureName) 'missing'
-			panic("lowerClosureCreate: captured name '{captureName}' not found in outer scope of '{func.name}' (parser/lowering invariant violated)")
-		end 'missing'
-		return func.scope.getInfo(captureName).slot
-	end 'lookupOuterSlotForCapture'
 
 	// Stage E (closures): inside a lifted closure body, recover a captured value via
 	// two indirect loads. env[i*8] holds the captured outer slot's ADDRESS; *<that

@@ -230,3 +230,114 @@ end 'main'
 ```exitcode
 15
 ```
+
+<!-- test: closure-capture.block-local-overload-arg -->
+A `let` declared inside a `while`-loop body — a NESTED block scope — captured
+into a closure whose body passes it as an argument to an OVERLOADED function
+(`earliest(LiveRange)` vs `earliest(SlotRange)`). The block frame is popped
+once the loop finishes parsing, removing the local from the enclosing
+function's `Scope`. Historically the capture-type patch and the env-block
+build both re-derived the captured slot by NAME from that pruned scope, so the
+patch returned `unresolved` and overload resolution reported E3007 ("ambiguous
+overload"). The captured slot id is now recorded on the `closureCreate` op at
+parse time, so both passes resolve the concrete `LiveRange` type and the
+overload disambiguates. Returns `7 + 10`.
+```maxon
+typealias ValId = int(0 to u64.max)
+typealias IntThunk = function() returns ExitCode
+typealias LRArray = Array with LiveRange
+
+type LiveRange
+	export var valueId as ValId
+
+	export static function create(v ValId) returns LiveRange
+		return Self{valueId: v}
+	end 'create'
+end 'LiveRange'
+
+type SlotRange
+	export var off as ValId
+
+	export static function create(o ValId) returns SlotRange
+		return Self{off: o}
+	end 'create'
+end 'SlotRange'
+
+function earliest(r LiveRange) returns ExitCode
+	return r.valueId
+end 'earliest'
+
+function earliest(r SlotRange) returns ExitCode
+	return r.off
+end 'earliest'
+
+function callThunk(t IntThunk) returns ExitCode
+	return t()
+end 'callThunk'
+
+function allocate(ranges LRArray) returns ExitCode
+	var total = 0
+	var oi = 0
+	while oi < ranges.count() 'assign'
+		let range = try ranges.get(oi) otherwise panic("oob")
+		total = total + callThunk(function() gives earliest(range))
+		oi = oi + 1
+	end 'assign'
+	return total
+end 'allocate'
+
+function main() returns ExitCode
+	var arr = LRArray.create()
+	arr.push(LiveRange.create(7))
+	arr.push(LiveRange.create(10))
+	return allocate(arr)
+end 'main'
+```
+```exitcode
+17
+```
+
+<!-- test: closure-capture.block-local-method-receiver -->
+A `let` declared inside an `if`-block body — a nested block scope — captured
+into a closure whose body calls a METHOD on it (`b.doubled()`). Historically a
+method call on a captured outer receiver fell through `parseIdentifierExpr`'s
+dot-call handling to the qualified-static-call arm (treating `b` as a type
+name), which never recorded the capture: the outer `let b` tripped E3012
+("unused variable") and, with that silenced, lowering panicked because the
+captured name was absent from the popped outer scope. The dot-call path now
+captures an outer receiver before the static-call fallback. Returns
+`doubled(9) = 18`.
+```maxon
+typealias IntThunk = function() returns ExitCode
+
+type Box
+	export var n as ExitCode
+
+	export static function create(n ExitCode) returns Box
+		return Self{n: n}
+	end 'create'
+
+	export function doubled() returns ExitCode
+		return self.n + self.n
+	end 'doubled'
+end 'Box'
+
+function callThunk(t IntThunk) returns ExitCode
+	return t()
+end 'callThunk'
+
+function run(seed ExitCode) returns ExitCode
+	if seed > 0 'pos'
+		let b = Box.create(seed)
+		return callThunk(function() gives b.doubled())
+	end 'pos'
+	return 0
+end 'run'
+
+function main() returns ExitCode
+	return run(9)
+end 'main'
+```
+```exitcode
+18
+```

@@ -1,0 +1,158 @@
+// Test: closure-capture.block-local-method-receiver
+typealias IntThunk = function() returns ExitCode
+
+type Box
+	export var n as ExitCode
+
+	export static function create(n ExitCode) returns Box
+		return Self{n: n}
+	end 'create'
+
+	export function doubled() returns ExitCode
+		return self.n + self.n
+	end 'doubled'
+end 'Box'
+
+function callThunk(t IntThunk) returns ExitCode
+	return t()
+end 'callThunk'
+
+function run(seed ExitCode) returns ExitCode
+	if seed > 0 'pos'
+		let b = Box.create(seed)
+		return callThunk(function() gives b.doubled())
+	end 'pos'
+	return 0
+end 'run'
+
+function main() returns ExitCode
+	return run(9)
+end 'main'
+---
+ExitCode: 18
+---
+// CompiledIR
+module {
+  func @Box.doubled(rcx: i64) -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov r9, [rcx+0] (4b)
+    x64.mov r8, [rcx+0] (4b)
+    x64.mov esi, 4294967295
+    x64.add r8, r9
+    x64.cmp r8, rsi
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea r12, [rip+__panic_msg_eb49dcdb2cb20ab0]
+    x64.mov rcx, r12
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+  func @callThunk(rcx: i64, rdx: i64) -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov r12, rcx
+    x64.mov rcx, rdx
+    x64.call r12
+    x64.mov r9d, 4294967295
+    x64.cmp r8, r9
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea r12, [rip+__panic_msg_56f396bce6a6697a]
+    x64.mov rcx, r12
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+  func @run$closure_0(rcx: i64) -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov r8, [rcx+0] (8b)
+    x64.mov rcx, [r8+0] (8b)
+    x64.call Box.doubled
+    x64.mov r9d, 4294967295
+    x64.cmp r8, r9
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea r12, [rip+__panic_msg_8ac1677d3f906cf8]
+    x64.mov rcx, r12
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+  func @run(rcx: u32) -> u32 {
+  entry:
+    x64.prologue stack_size=64
+    x64.mov r12, rcx
+    x64.xor r8d, r8d
+    x64.mov [rbp-24], r8
+    x64.test r12, r12
+    x64.jle pos_0.after
+  pos_0:
+    x64.xor edx, edx
+    x64.mov ecx, 8
+    x64.call stdlib.__mm_alloc
+    x64.mov r13, r8
+    x64.mov rcx, r13
+    x64.call stdlib.__mm_incref
+    x64.mov [r13+0], r12 (4b)
+    x64.mov rcx, r9
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r9, [rbp-24]
+    x64.mov [rbp-24], r13
+    x64.xor edx, edx
+    x64.mov ecx, 8
+    x64.call stdlib.__mm_alloc
+    x64.mov r12, r8
+    x64.lea rax, [rbp-24]
+    x64.mov r8, [rbp-32]
+    x64.mov [r12+0], r8 (8b)
+    x64.lea rcx, [rip+run$closure_0]
+    x64.mov rdx, r12
+    x64.call callThunk
+    x64.mov r13, r8
+    x64.mov rcx, [rbp-24]
+    x64.call __mm_decref_maybenull_helper
+    x64.mov rcx, r12
+    x64.call mm_drop
+    x64.mov r8d, 4294967295
+    x64.cmp r13, r8
+    x64.jbe __range_ok_0
+    x64.jmp __range_panic_0
+  pos_0.after:
+    x64.mov rcx, [rbp-24]
+    x64.call __mm_decref_maybenull_helper
+    x64.xor r8d, r8d
+    x64.epilogue
+    x64.ret
+  __range_panic_0:
+    x64.lea r12, [rip+__panic_msg_8ac1677d3f906cf8]
+    x64.mov rcx, r12
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov r8, r13
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov ecx, 9
+    x64.call run
+    x64.mov r9d, 4294967295
+    x64.cmp r8, r9
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea r12, [rip+__panic_msg_c27dca9097411a19]
+    x64.mov rcx, r12
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

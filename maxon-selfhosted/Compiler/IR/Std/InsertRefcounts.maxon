@@ -305,6 +305,10 @@ function insertRefcountsInFunction(func IrFunction, module StdModule, funcParamC
 	// suppressed (`moveIntoAddressTakenSlot`), so release the slot's content here at
 	// each function return — AFTER every closure use in the body. Managed domain only.
 	if ctx.includeManaged 'addressTakenDrops'
+		// Free each overwritten occupant before its store (loop-reused capture slots)
+		// AND the final occupant at return — together they release every value the
+		// slot ever held. Both managed-domain only.
+		planAddressTakenSlotReleaseBeforeStore(ctx)
 		planAddressTakenSlotDrops(ctx)
 	end 'addressTakenDrops'
 	if ctx.includeManaged 'managedPhi'
@@ -2782,6 +2786,65 @@ function planAddressTakenSlotDrops(ctx RcContext)
 		end 'eachSlot'
 	end 'eachBlock'
 end 'planAddressTakenSlotDrops'
+
+// Release the PRIOR occupant of an address-taken managed slot immediately BEFORE
+// each `storeSlot` that overwrites it. Without this, a captured managed local
+// declared in a LOOP body leaks every iteration but the last: the slot is reused
+// each iteration, `planAddressTakenSlotDrops` frees only whatever occupies it at
+// the function return (the final iteration's value), and the SSA-store release was
+// suppressed by `moveIntoAddressTakenSlot`, so the earlier iterations' values are
+// never freed. The slot is zero-init'd at entry, so the FIRST store reads null and
+// the null-guarded decref no-ops; every later store frees the previous occupant.
+// The final occupant is still freed by `planAddressTakenSlotDrops` at return — no
+// double-free, since each release pairs with exactly one overwrite (or the return).
+function planAddressTakenSlotReleaseBeforeStore(ctx RcContext)
+	for blockRef in ctx.func.blockRefs 'eachBlock'
+		let block = try ctx.module.blocks.get(blockRef) otherwise panic("planAddressTakenSlotReleaseBeforeStore: blockRef not in module.blocks")
+		var pos = 0
+		for opIdx in block.opRefs 'eachOp'
+			let op = try ctx.module.ops.get(opIdx) otherwise panic("planAddressTakenSlotReleaseBeforeStore: opIdx not in module.ops")
+			let (isManagedCaptureStore, storedSlot) = addressTakenManagedStoreSlot(ctx, op: op)
+			if isManagedCaptureStore 'isManagedCaptureStore'
+				// Insert `loadSlot` THEN `decref(loaded)` at the store's own pos so both
+				// land BEFORE the store (same-pos ties apply in reverse plan-order — see
+				// `planAddressTakenSlotDrops` — so queue the DECREF first, the LOAD second,
+				// leaving load above decref above store). The load reads the slot's CURRENT
+				// (about-to-be-overwritten) occupant; the null-guarded decref frees it, or
+				// no-ops when the slot is still its zero-init null (first store).
+				let loadId = allocValueId(ctx.idRef)
+				let loadOpIdx = ctx.module.ops.count()
+				ctx.module.ops.push(StdOp.memory(StdMemoryOp.loadSlot(loadId, slotId: storedSlot)))
+				let decrefIdx = buildDecrefOp(ctx.module, valueId: loadId, nullGuarded: true, idRef: ctx.idRef)
+				queueInsertion(ctx, blockRef: blockRef, pos: pos, opIdx: decrefIdx)
+				queueInsertion(ctx, blockRef: blockRef, pos: pos, opIdx: loadOpIdx)
+				logTrace(LogCategory.ir, message: function() gives "RC-ADDRSLOTRELSTORE func={ctx.func.name} slot_{storedSlot} block_{block.id}")
+			end 'isManagedCaptureStore'
+			pos = pos + 1
+		end 'eachOp'
+	end 'eachBlock'
+end 'planAddressTakenSlotReleaseBeforeStore'
+
+// When `op` is a `storeSlot(slotId, value)` writing a MANAGED value into an
+// address-taken slot, return `(true, slotId)`; otherwise `(false, 0)`. The pair of
+// conditions (address-taken AND managed-store) is the same one
+// `addressTakenSlotHoldsManaged` checks per slot — this collapses them to the op so
+// the release-before-store sweep can act on each store site directly.
+function addressTakenManagedStoreSlot(ctx RcContext, op StdOp) returns (bool, VarSlot)
+	return match op 'dispatch'
+		memory(m) gives addressTakenManagedStoreSlotMem(ctx, m: m)
+		arith gives (false, 0)
+		control gives (false, 0)
+		call gives (false, 0)
+		system gives (false, 0)
+	end 'dispatch'
+end 'addressTakenManagedStoreSlot'
+
+function addressTakenManagedStoreSlotMem(ctx RcContext, m StdMemoryOp) returns (bool, VarSlot)
+	return match m 'check'
+		storeSlot(targetSlot, valueId) gives (ctx.isAddressTakenSlot(targetSlot) and ctx.isManaged(valueId), targetSlot)
+		loadSlot gives (false, 0)
+	end 'check'
+end 'addressTakenManagedStoreSlotMem'
 
 // True iff some `storeSlot(slotId, value)` in the function stores a MANAGED value into
 // slot `slotId` — i.e. the address-taken slot holds an owned managed reference needing a

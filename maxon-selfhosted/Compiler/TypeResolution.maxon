@@ -5634,7 +5634,7 @@ function recordOpResult(project Project, producerTypes ProducerTypeMap, slotType
 		// captured value's MaxonType. `indirectCall` resolves its return
 		// type via Project.functionTypes from the carried fnTypeId.
 		functionRef(result, _, fnTypeId, _) then recordResultType(producerTypes, name: result, t: MaxonType.function(fnTypeId))
-		closureCreate(result, _, fnTypeId, _, _, _) then recordResultType(producerTypes, name: result, t: MaxonType.function(fnTypeId))
+		closureCreate(result, _, fnTypeId, _, _, _, _) then recordResultType(producerTypes, name: result, t: MaxonType.function(fnTypeId))
 		closureEnvLoad(result, _, _, captureType, _) then recordResultType(producerTypes, name: result, t: captureType)
 		indirectCall(result, _, fnTypeId, _, _, _, _, _) then recordResultType(producerTypes, name: result, t: indirectCallResultType(project, returnType: functionTypeIdReturnType(project, id: fnTypeId)))
 		// Phase 11 Step 8a: derive the loop variable's element type from the
@@ -5727,7 +5727,7 @@ function maybePatchFnRegistryForOp(project Project, op MaxonOp)
 	match op 'pick'
 		literal to rethrow then return
 		functionRef(_, funcName, fnTypeId, _) then patchFnRegistryEntryIfUnresolved(project, funcName: funcName, fnTypeId: fnTypeId)
-		closureCreate(_, funcName, fnTypeId, _, _, _) then patchFnRegistryEntryIfUnresolved(project, funcName: funcName, fnTypeId: fnTypeId)
+		closureCreate(_, funcName, fnTypeId, _, _, _, _) then patchFnRegistryEntryIfUnresolved(project, funcName: funcName, fnTypeId: fnTypeId)
 		closureEnvLoad to cancelPromise then return
 	end 'pick'
 end 'maybePatchFnRegistryForOp'
@@ -5752,7 +5752,7 @@ function patchClosureEnvLoadCaptureTypes(project Project, module MaxonModule, pr
 			for opIdx in block.opRefs 'eachOp'
 				let op = try module.ops.get(opIdx) otherwise panic("patchClosureEnvLoadCaptureTypes: opIdx OOB")
 				match op 'check'
-					closureCreate(_, funcName, _, capturedNames, _, _) then patchOneClosureLifted(module, liftedName: funcName, capturedNames: capturedNames, outerFunc: outerFunc, outerSlots: outerSlots, liftedToRebuild: liftedToRebuild)
+					closureCreate(_, funcName, _, _, _, capturedOuterSlots, _) then patchOneClosureLifted(module, liftedName: funcName, capturedOuterSlots: capturedOuterSlots, outerFunc: outerFunc, outerSlots: outerSlots, liftedToRebuild: liftedToRebuild)
 					literal to functionRef then break 'check'
 					closureEnvLoad to cancelPromise then break 'check'
 				end 'check'
@@ -5777,11 +5777,12 @@ function patchClosureEnvLoadCaptureTypes(project Project, module MaxonModule, pr
 	end 'eachFunc'
 end 'patchClosureEnvLoadCaptureTypes'
 
-// Walk the lifted closure body's `closureEnvLoad` ops. For each, look
-// up the captured name's resolved type from the outer function's
-// scope (slot id) → outerSlots / outerProducers, and update the op's
-// captureType field when the parser-stamped type was unresolved.
-function patchOneClosureLifted(module MaxonModule, liftedName String, capturedNames StringArray, outerFunc IrFunction, outerSlots SlotTypeMap, liftedToRebuild StringArray)
+// Walk the lifted closure body's `closureEnvLoad` ops. For each, resolve
+// the captured value's type from its outer slot id (carried on the matching
+// `closureCreate` op via `capturedOuterSlots`, indexed by the env-load's
+// `captureIndex`) through `outerSlots`, and update the op's `captureType`
+// field when the parser-stamped type was unresolved.
+function patchOneClosureLifted(module MaxonModule, liftedName String, capturedOuterSlots CapturedSlotArray, outerFunc IrFunction, outerSlots SlotTypeMap, liftedToRebuild StringArray)
 	// Locate the lifted IrFunction by name.
 	var liftedFuncIdx = -1
 	for funcIdx in 0 upto module.functions.count() 'find'
@@ -5800,7 +5801,7 @@ function patchOneClosureLifted(module MaxonModule, liftedName String, capturedNa
 		let liftedBlock = try module.blocks.get(liftedBlockRef) otherwise panic("patchOneClosureLifted: liftedBlockRef OOB")
 		for liftedOpIdx in liftedBlock.opRefs 'eachLOp'
 			let liftedOp = try module.ops.get(liftedOpIdx) otherwise panic("patchOneClosureLifted: liftedOpIdx OOB")
-			if patchOneEnvLoadOp(module, opIdx: liftedOpIdx, op: liftedOp, capturedNames: capturedNames, outerFunc: outerFunc, outerSlots: outerSlots) 'patched'
+			if patchOneEnvLoadOp(module, opIdx: liftedOpIdx, op: liftedOp, capturedOuterSlots: capturedOuterSlots, outerFunc: outerFunc, outerSlots: outerSlots) 'patched'
 				anyPatched = true
 			end 'patched'
 		end 'eachLOp'
@@ -5814,23 +5815,28 @@ end 'patchOneClosureLifted'
 // unresolved and the outer function's resolved slot type carries a concrete
 // answer. Returns true when the op was rewritten so the caller can mark
 // the lifted body for producer-types rebuild.
-function patchOneEnvLoadOp(module MaxonModule, opIdx OpIndex, op MaxonOp, capturedNames StringArray, outerFunc IrFunction, outerSlots SlotTypeMap) returns bool
+function patchOneEnvLoadOp(module MaxonModule, opIdx OpIndex, op MaxonOp, capturedOuterSlots CapturedSlotArray, outerFunc IrFunction, outerSlots SlotTypeMap) returns bool
 	match op 'pick'
-		closureEnvLoad(result, captureIndex, captureName, captureType, range) then return patchEnvLoadIfNeeded(module, opIdx: opIdx, result: result, captureIndex: captureIndex, captureName: captureName, captureType: captureType, range: range, capturedNames: capturedNames, outerFunc: outerFunc, outerSlots: outerSlots)
+		closureEnvLoad(result, captureIndex, captureName, captureType, range) then return patchEnvLoadIfNeeded(module, opIdx: opIdx, result: result, captureIndex: captureIndex, captureName: captureName, captureType: captureType, range: range, capturedOuterSlots: capturedOuterSlots, outerFunc: outerFunc, outerSlots: outerSlots)
 		literal to closureCreate then return false
 		indirectCall to cancelPromise then return false
 	end 'pick'
 end 'patchOneEnvLoadOp'
 
-function patchEnvLoadIfNeeded(module MaxonModule, opIdx OpIndex, result ByteArray, captureIndex ParsedInt, captureName ByteArray, captureType MaxonType, range SourceRange, capturedNames StringArray, outerFunc IrFunction, outerSlots SlotTypeMap) returns bool
+function patchEnvLoadIfNeeded(module MaxonModule, opIdx OpIndex, result ByteArray, captureIndex ParsedInt, captureName ByteArray, captureType MaxonType, range SourceRange, capturedOuterSlots CapturedSlotArray, outerFunc IrFunction, outerSlots SlotTypeMap) returns bool
 	if not isUnresolvedType(captureType) 'haveConcrete'
 		return false
 	end 'haveConcrete'
-	if captureIndex >= capturedNames.count() 'idxOOB'
+	if captureIndex >= capturedOuterSlots.count() 'idxOOB'
 		return false
 	end 'idxOOB'
-	let outerName = try capturedNames.get(captureIndex) otherwise panic("patchEnvLoadIfNeeded: capturedNames.get({captureIndex}) failed despite count guard")
-	let resolved = resolveOuterCaptureType(outerFunc, outerSlots: outerSlots, captureName: outerName)
+	// Resolve the captured value's type from the OUTER slot id recorded on
+	// the `closureCreate` op at parse time — NOT from the captured name via
+	// `outerFunc.scope`. A block-scoped (loop/if-body) local has already been
+	// pruned from the outer scope by `popScope` by the time this pass runs,
+	// so a name-keyed lookup would miss it; the slot id survives on the op.
+	let outerSlot = try capturedOuterSlots.get(captureIndex) otherwise panic("patchEnvLoadIfNeeded: capturedOuterSlots.get({captureIndex}) failed despite count guard")
+	let resolved = resolveCaptureTypeFromSlot(outerFunc, outerSlots: outerSlots, outerSlot: outerSlot)
 	if isUnresolvedType(resolved) 'noFix'
 		return false
 	end 'noFix'
@@ -5838,27 +5844,30 @@ function patchEnvLoadIfNeeded(module MaxonModule, opIdx OpIndex, result ByteArra
 	return true
 end 'patchEnvLoadIfNeeded'
 
-// Find the captured name's resolved MaxonType in the outer function's
-// scope. The parser-stamped scope on `outerFunc.scope` carries the slot
-// id; `outerSlots` is the slot → resolved-type map built by `recordVarDecl`.
-function resolveOuterCaptureType(outerFunc IrFunction, outerSlots SlotTypeMap, captureName String) returns MaxonType
-	if not outerFunc.scope.contains(captureName) 'notInScope'
-		return MaxonType.unresolved
-	end 'notInScope'
-	let info = outerFunc.scope.getInfo(captureName)
-	// Slot type may have been refined past the parser's varType stamp.
-	if let slotType = try outerSlots.get(info.slot) 'fromSlot'
+// Resolve a captured value's type from its OUTER slot id (recorded on the
+// `closureCreate` op at parse time). `outerSlots` is the TR-built slot→type
+// map for the enclosing function, populated from its ops independently of the
+// parser `Scope`, so it carries the refined type even for a block-scoped local
+// the scope has already popped. The captured slot id keys it directly — no
+// name lookup that would miss a pruned block local.
+function resolveCaptureTypeFromSlot(outerFunc IrFunction, outerSlots SlotTypeMap, outerSlot VarSlot) returns MaxonType
+	if let slotType = try outerSlots.get(outerSlot) 'fromSlot'
 		if not isUnresolvedType(slotType) 'concrete'
 			return slotType
 		end 'concrete'
 	end 'fromSlot'
-	// Fall back to the parser-stamped scope varType — concrete when the
-	// parser already knew the type (parameter, explicit annotation).
-	if not isUnresolvedType(info.varType) 'fromVarInfo'
-		return info.varType
-	end 'fromVarInfo'
+	// Fall back to the parser-stamped scope varType for the same slot —
+	// concrete when the parser already knew the type (parameter, explicit
+	// annotation) but TR hasn't recorded a slot entry. Function-scope names
+	// survive in `outerFunc.scope`; a popped block local does not, but its
+	// slot type is in `outerSlots` above, so reaching here for one is benign.
+	for (_, info) in outerFunc.scope.allVars() 'eachVar'
+		if info.slot == outerSlot and not isUnresolvedType(info.varType) 'matchSlot'
+			return info.varType
+		end 'matchSlot'
+	end 'eachVar'
 	return MaxonType.unresolved
-end 'resolveOuterCaptureType'
+end 'resolveCaptureTypeFromSlot'
 
 function patchFnRegistryEntryIfUnresolved(project Project, funcName String, fnTypeId FunctionTypeId)
 	let (_, currentReturn) = project.functionTypes.get(fnTypeId)
@@ -10155,7 +10164,7 @@ function buildNameToOpIdxMap(module MaxonModule, func IrFunction) returns NameTo
 			end 'skipKind'
 			let result = match op 'extract'
 				functionRef(r, _, _, _) gives r
-				closureCreate(r, _, _, _, _, _) gives r
+				closureCreate(r, _, _, _, _, _, _) gives r
 				default panic("buildNameToOpIdxMap: op.name in [functionRef, closureCreate] but match arm not picked up")
 			end 'extract'
 			if not result.isEmpty() 'recordIt'
@@ -10257,7 +10266,7 @@ function patchOneClosureArg(project Project, module MaxonModule, producerOpIdx O
 	end 'notAClosure'
 	let (result, liftedName) = match producerOp 'extractClosure'
 		functionRef(r, n, _, _) gives (r, n)
-		closureCreate(r, n, _, _, _, _) gives (r, n)
+		closureCreate(r, n, _, _, _, _, _) gives (r, n)
 		default panic("patchOneClosureArg: producer op kind drift — pre-filter said functionRef/closureCreate but match didn't bind")
 	end 'extractClosure'
 
@@ -10364,7 +10373,7 @@ function patchOneClosureArg(project Project, module MaxonModule, producerOpIdx O
 	// preserves the captured-names/types arrays.
 	match producerOp 'rewriteOp'
 		functionRef(r, n, _, range) then rewriteFunctionRef(module, opIdx: producerOpIdx, result: r, funcName: n, fnTypeId: newFnTypeId, range: range)
-		closureCreate(r, n, _, names, types, range) then rewriteClosureCreate(module, opIdx: producerOpIdx, result: r, funcName: n, fnTypeId: newFnTypeId, capturedNames: names, capturedTypes: types, range: range)
+		closureCreate(r, n, _, names, types, outerSlots, range) then rewriteClosureCreate(module, opIdx: producerOpIdx, result: r, funcName: n, fnTypeId: newFnTypeId, capturedNames: names, capturedTypes: types, capturedOuterSlots: outerSlots, range: range)
 		default panic("patchOneClosureArg: producer op no longer functionRef/closureCreate")
 	end 'rewriteOp'
 
@@ -10418,8 +10427,8 @@ end 'rewriteFunctionRef'
 
 // Rewrite a `closureCreate` op with a new `fnTypeId`, preserving captured
 // names + types. Mirror of `rewriteFunctionRef` for the capturing variant.
-function rewriteClosureCreate(module MaxonModule, opIdx OpIndex, result ByteArray, funcName String, fnTypeId FunctionTypeId, capturedNames StringArray, capturedTypes MaxonTypeArray, range SourceRange)
-	try module.ops.set(opIdx, value: MaxonOp.closureCreate(result, funcName: funcName, fnTypeId: fnTypeId, capturedNames: capturedNames, capturedTypes: capturedTypes, range: range)) otherwise panic("rewriteClosureCreate: ops.set OOB at idx={opIdx}")
+function rewriteClosureCreate(module MaxonModule, opIdx OpIndex, result ByteArray, funcName String, fnTypeId FunctionTypeId, capturedNames StringArray, capturedTypes MaxonTypeArray, capturedOuterSlots CapturedSlotArray, range SourceRange)
+	try module.ops.set(opIdx, value: MaxonOp.closureCreate(result, funcName: funcName, fnTypeId: fnTypeId, capturedNames: capturedNames, capturedTypes: capturedTypes, capturedOuterSlots: capturedOuterSlots, range: range)) otherwise panic("rewriteClosureCreate: ops.set OOB at idx={opIdx}")
 end 'rewriteClosureCreate'
 
 // `call` ops we skip entirely — these never reach `slotArgsForCall` in
