@@ -2614,7 +2614,7 @@ function rewriteUnresolvedRead(project Project, module MaxonModule, block IrBloc
 		// Use the resolved key as the slot name: for a file-private var it is
 		// the file-scoped storage name the parser reserved the .data slot
 		// under, which differs from the bare name the read site spelled.
-		try module.ops.set(opIdx, value: MaxonOp.globalLoad(result, name: varLookup.key, slotType: varLookup.info.slotType, range: range)) otherwise panic("rewriteUnresolvedRead: ops.set OOB at idx={opIdx} (count={module.ops.count()})")
+		try setOpCounted(module, opIdx: opIdx, value: MaxonOp.globalLoad(result, name: varLookup.key, slotType: varLookup.info.slotType, range: range)) otherwise panic("rewriteUnresolvedRead: ops.set OOB at idx={opIdx} (count={module.ops.count()})")
 		return
 	end 'isTopLevelVar'
 	// `name` shaped `receiver.field` where `receiver` is a top-level var
@@ -2723,7 +2723,7 @@ function tryRewriteUnresolvedUnionCaseRead(project Project, module MaxonModule, 
 	let emptyArgLabels = StringArray.create()
 	let emptyArgTypes = MaxonTypeArray.create()
 	let emptyArgRanges = SourceRangeArray.create()
-	try module.ops.set(opIdx, value: MaxonOp.call(result, callee: calleeBytes, callContext: CallContext.qualified, args: emptyArgs, argLabels: emptyArgLabels, argTypes: emptyArgTypes, argRanges: emptyArgRanges, range: range)) otherwise panic("tryRewriteUnresolvedUnionCaseRead: ops.set OOB at idx={opIdx}")
+	try setOpCounted(module, opIdx: opIdx, value: MaxonOp.call(result, callee: calleeBytes, callContext: CallContext.qualified, args: emptyArgs, argLabels: emptyArgLabels, argTypes: emptyArgTypes, argRanges: emptyArgRanges, range: range)) otherwise panic("tryRewriteUnresolvedUnionCaseRead: ops.set OOB at idx={opIdx}")
 	return true
 end 'tryRewriteUnresolvedUnionCaseRead'
 
@@ -2796,7 +2796,7 @@ function splitQualifiedEnumName(project Project, qualifiedName String) returns Q
 end 'splitQualifiedEnumName'
 
 function rewriteToLiteral(module MaxonModule, opIdx OpIndex, result ByteArray, value IntConstant, range SourceRange, valueType MaxonType = MaxonType.integer)
-	try module.ops.set(opIdx, value: MaxonOp.literal(result, value: value, valueType: valueType, range: range)) otherwise panic("rewriteToLiteral: ops.set OOB at idx={opIdx} (count={module.ops.count()})")
+	try setOpCounted(module, opIdx: opIdx, value: MaxonOp.literal(result, value: value, valueType: valueType, range: range)) otherwise panic("rewriteToLiteral: ops.set OOB at idx={opIdx} (count={module.ops.count()})")
 end 'rewriteToLiteral'
 
 // Fill pass for a `literal` op: repair an `unresolved` valueType to a bare
@@ -2831,7 +2831,7 @@ function enumLiteralTypeOr(project Project, qualifiedName String, fallback Maxon
 end 'enumLiteralTypeOr'
 
 function rewriteToStringConst(module MaxonModule, opIdx OpIndex, result ByteArray, stringId StringId, range SourceRange)
-	try module.ops.set(opIdx, value: MaxonOp.stringConst(result, stringId: stringId, range: range)) otherwise panic("rewriteToStringConst: ops.set OOB at idx={opIdx} (count={module.ops.count()})")
+	try setOpCounted(module, opIdx: opIdx, value: MaxonOp.stringConst(result, stringId: stringId, range: range)) otherwise panic("rewriteToStringConst: ops.set OOB at idx={opIdx} (count={module.ops.count()})")
 end 'rewriteToStringConst'
 
 // --- Enum-match arm resolution ---
@@ -2860,13 +2860,13 @@ function resolveOneEnumMatchArm(project Project, module MaxonModule, opIdx OpInd
 	end 'skip'
 	let enumName = try enumNameFromMaxonType(project, t: scrutineeType) otherwise 'noEnum'
 		reportCompileError(project, code: ErrorCode.semanticTypeMismatch, message: "match scrutinee must be an enum-typed value (got non-enum type)", line: range.line, column: range.column, filePath: filePath)
-		try module.ops.set(opIdx, value: MaxonOp.br(elseTarget, range: range)) otherwise panic("resolveOneEnumMatchArm: ops.set OOB at idx={opIdx}")
+		try setOpCounted(module, opIdx: opIdx, value: MaxonOp.br(elseTarget, range: range)) otherwise panic("resolveOneEnumMatchArm: ops.set OOB at idx={opIdx}")
 		return
 	end 'noEnum'
 	let qualifiedName = "{enumName}.{caseName}"
 	if let entry = try project.topLevelConstants.get(qualifiedName) 'isCase'
 		let resolvedHit = matchCaseFromConstantValue(entry.value)
-		try module.ops.set(opIdx, value: MaxonOp.enumMatchArm(scrutineeName, caseName: caseName, scrutineeType: scrutineeType, rawValue: resolvedHit.rawValue, isFloat: resolvedHit.isFloat, resolved: true, thenTarget: thenTarget, elseTarget: elseTarget, bindingNames: bindingNames, range: range)) otherwise panic("resolveOneEnumMatchArm: ops.set OOB at idx={opIdx}")
+		try setOpCounted(module, opIdx: opIdx, value: MaxonOp.enumMatchArm(scrutineeName, caseName: caseName, scrutineeType: scrutineeType, rawValue: resolvedHit.rawValue, isFloat: resolvedHit.isFloat, resolved: true, thenTarget: thenTarget, elseTarget: elseTarget, bindingNames: bindingNames, range: range)) otherwise panic("resolveOneEnumMatchArm: ops.set OOB at idx={opIdx}")
 		return
 	end 'isCase'
 	// Phase 9 Stage 2: payload union cases never reach `topLevelConstants`
@@ -2886,11 +2886,11 @@ function resolveOneEnumMatchArm(project Project, module MaxonModule, opIdx OpInd
 				reportCompileError(project, code: ErrorCode.semanticMatchPayloadArityMismatch, message: "wrong binding count: '{caseName}'", line: range.line, column: range.column, filePath: filePath)
 			end 'arityMismatch'
 		end 'haveBindings'
-		try module.ops.set(opIdx, value: MaxonOp.enumMatchArm(scrutineeName, caseName: caseName, scrutineeType: scrutineeType, rawValue: unionCaseHit.rawValue, isFloat: false, resolved: true, thenTarget: thenTarget, elseTarget: elseTarget, bindingNames: bindingNames, range: range)) otherwise panic("resolveOneEnumMatchArm: ops.set OOB at idx={opIdx}")
+		try setOpCounted(module, opIdx: opIdx, value: MaxonOp.enumMatchArm(scrutineeName, caseName: caseName, scrutineeType: scrutineeType, rawValue: unionCaseHit.rawValue, isFloat: false, resolved: true, thenTarget: thenTarget, elseTarget: elseTarget, bindingNames: bindingNames, range: range)) otherwise panic("resolveOneEnumMatchArm: ops.set OOB at idx={opIdx}")
 		return
 	end 'isUnionCase'
 	reportCompileError(project, code: ErrorCode.semanticEnumUnknownCase, message: "unknown enum case: '{caseName}'", line: range.line, column: range.column, filePath: filePath)
-	try module.ops.set(opIdx, value: MaxonOp.br(elseTarget, range: range)) otherwise panic("resolveOneEnumMatchArm: ops.set OOB at idx={opIdx}")
+	try setOpCounted(module, opIdx: opIdx, value: MaxonOp.br(elseTarget, range: range)) otherwise panic("resolveOneEnumMatchArm: ops.set OOB at idx={opIdx}")
 end 'resolveOneEnumMatchArm'
 
 // Phase 9 Stage 2: look up a union case's tag value (ordinal) from the
@@ -2994,7 +2994,7 @@ function rewriteUnresolvedAssign(project Project, module MaxonModule, block IrBl
 			reportCompileError(project, code: ErrorCode.parserImmutableVariable, message: "cannot assign to immutable variable: '{name}'", line: range.line, column: range.column, filePath: filePath)
 			return
 		end 'immutableLet'
-		try module.ops.set(opIdx, value: MaxonOp.globalStore(varLookup.key, value: value, slotType: varLookup.info.slotType, range: range)) otherwise panic("rewriteUnresolvedAssign: ops.set OOB at idx={opIdx} (count={module.ops.count()})")
+		try setOpCounted(module, opIdx: opIdx, value: MaxonOp.globalStore(varLookup.key, value: value, slotType: varLookup.info.slotType, range: range)) otherwise panic("rewriteUnresolvedAssign: ops.set OOB at idx={opIdx} (count={module.ops.count()})")
 		return
 	end 'isTopLevelVar'
 	if lookupTopLevelConst(project, name: name, readerFilePath: filePath).found 'isConst'
@@ -3021,7 +3021,7 @@ end 'rewriteUnresolvedAssign'
 function tryRewriteDottedRead(project Project, module MaxonModule, block IrBlock, opIdx OpIndex, result ByteArray, name String, range SourceRange, filePath FilePath) returns bool
 	let resolved = try resolveDottedTopLevelReceiver(project, name: name, filePath: filePath) otherwise return false
 	let receiverName = freshGlobalLoadName(result)
-	try module.ops.set(opIdx, value: MaxonOp.globalLoad(receiverName, name: resolved.prefix, slotType: resolved.info.slotType, range: range)) otherwise panic("tryRewriteDottedRead: ops.set OOB at idx={opIdx}")
+	try setOpCounted(module, opIdx: opIdx, value: MaxonOp.globalLoad(receiverName, name: resolved.prefix, slotType: resolved.info.slotType, range: range)) otherwise panic("tryRewriteDottedRead: ops.set OOB at idx={opIdx}")
 	let fieldLoadIdx = module.ops.count()
 	module.ops.push(MaxonOp.fieldLoad(result, receiver: receiverName, fieldName: resolved.fieldName.toByteArray(), range: range))
 	spliceOpInBlock(block, anchorOpIdx: opIdx, newOpIdx: fieldLoadIdx, afterAnchor: true)
@@ -3039,7 +3039,7 @@ function tryRewriteDottedAssign(project Project, module MaxonModule, block IrBlo
 		return true
 	end 'immutableLet'
 	let receiverName = freshGlobalLoadName(value)
-	try module.ops.set(opIdx, value: MaxonOp.globalLoad(receiverName, name: resolved.prefix, slotType: resolved.info.slotType, range: range)) otherwise panic("tryRewriteDottedAssign: ops.set OOB at idx={opIdx}")
+	try setOpCounted(module, opIdx: opIdx, value: MaxonOp.globalLoad(receiverName, name: resolved.prefix, slotType: resolved.info.slotType, range: range)) otherwise panic("tryRewriteDottedAssign: ops.set OOB at idx={opIdx}")
 	let fieldStoreIdx = module.ops.count()
 	module.ops.push(MaxonOp.fieldStore(receiverName, fieldName: resolved.fieldName.toByteArray(), value: value, isInit: false, range: range))
 	spliceOpInBlock(block, anchorOpIdx: opIdx, newOpIdx: fieldStoreIdx, afterAnchor: true)
@@ -3226,7 +3226,7 @@ function maybeCoerceOneCmp(project Project, module MaxonModule, block IrBlock, o
 	end 'coerceRight'
 
 	let peerType = MaxonType.named(peerNameId)
-	try module.ops.set(opIdx, value: MaxonOp.cmp(result, left: newLeft, right: newRight, predicate: predicate, leftType: peerType, rightType: peerType, operandType: peerType, range: range)) otherwise panic("maybeCoerceOneCmp: ops.set OOB at idx={opIdx}")
+	try setOpCounted(module, opIdx: opIdx, value: MaxonOp.cmp(result, left: newLeft, right: newRight, predicate: predicate, leftType: peerType, rightType: peerType, operandType: peerType, range: range)) otherwise panic("maybeCoerceOneCmp: ops.set OOB at idx={opIdx}")
 end 'maybeCoerceOneCmp'
 
 // Phase 11.65: append a `.rawValue` fieldLoad on `operand` and splice it
@@ -5886,7 +5886,7 @@ function patchEnvLoadIfNeeded(module MaxonModule, opIdx OpIndex, result ByteArra
 	if isUnresolvedType(resolved) 'noFix'
 		return false
 	end 'noFix'
-	try module.ops.set(opIdx, value: MaxonOp.closureEnvLoad(result, captureIndex: captureIndex, captureName: captureName, captureType: resolved, range: range)) otherwise panic("patchEnvLoadIfNeeded: ops.set OOB at idx={opIdx}")
+	try setOpCounted(module, opIdx: opIdx, value: MaxonOp.closureEnvLoad(result, captureIndex: captureIndex, captureName: captureName, captureType: resolved, range: range)) otherwise panic("patchEnvLoadIfNeeded: ops.set OOB at idx={opIdx}")
 	return true
 end 'patchEnvLoadIfNeeded'
 
@@ -6011,6 +6011,26 @@ end 'retValueTypeFromProducers'
 
 // producer map. Op variants that don't carry MaxonType operands are
 // skipped.
+// Bumped by `setOpCounted` on every op rewrite in this file. The type-fill
+// convergence loop reads the delta across one build+fill pass and stops as
+// soon as a pass rewrites nothing: `buildProducerTypes` only READS ops, so
+// within a converge iteration the counter advances solely on that iteration's
+// fill mutations, and a zero delta means the monotonic one-hop propagation has
+// reached its fixpoint (further passes would be idempotent no-ops). Mutations
+// from the pre-loop fill and from other passes fall outside any loop
+// iteration's before/after window, so they never perturb the test.
+var fillMutationCount = 0
+
+// Every `module.ops.set` in TypeResolution routes through here so the
+// convergence loop can observe op rewrites without each call site having to
+// thread a "changed" flag. Throws the same `ArrayError` the underlying
+// `Array.set` does, so the existing `try … otherwise panic(...)` guard at each
+// call site keeps its semantics verbatim.
+function setOpCounted(module MaxonModule, opIdx OpIndex, value MaxonOp) throws ArrayError
+	fillMutationCount = fillMutationCount + 1
+	try module.ops.set(opIdx, value: value)
+end 'setOpCounted'
+
 function fillUnresolvedTypes(project Project, module MaxonModule, producerTypesPerFunc ProducerTypeMapArray, slotTypesPerFunc SlotTypeMapArray)
 	for funcIdx in 0 upto module.functions.count() 'eachFunc'
 		let func = try module.functions.get(funcIdx) otherwise panic("fillUnresolvedTypes: funcIdx < count but get failed")
@@ -6147,7 +6167,7 @@ function fillEnumMatchArmType(project Project, module MaxonModule, opIdx OpIndex
 	if isUnresolvedType(filled) == isUnresolvedType(scrutineeType) and not isUnresolvedType(scrutineeType) and maxonTypesStructurallyEqual(filled, b: scrutineeType) 'noChange'
 		return
 	end 'noChange'
-	try module.ops.set(opIdx, value: MaxonOp.enumMatchArm(scrutineeName, caseName: caseName, scrutineeType: filled, rawValue: rawValue, isFloat: isFloat, resolved: resolved, thenTarget: thenTarget, elseTarget: elseTarget, bindingNames: bindingNames, range: range)) otherwise panic("fillEnumMatchArmType: ops.set OOB at idx={opIdx}")
+	try setOpCounted(module, opIdx: opIdx, value: MaxonOp.enumMatchArm(scrutineeName, caseName: caseName, scrutineeType: filled, rawValue: rawValue, isFloat: isFloat, resolved: resolved, thenTarget: thenTarget, elseTarget: elseTarget, bindingNames: bindingNames, range: range)) otherwise panic("fillEnumMatchArmType: ops.set OOB at idx={opIdx}")
 end 'fillEnumMatchArmType'
 
 // True when `current` (an enumMatchArm's already-stamped scrutineeType) does
@@ -6213,7 +6233,7 @@ function fillRangeMatchArm(project Project, module MaxonModule, opIdx OpIndex, s
 		let hiOrdinalRaw = try resolvedEnum.caseByName.get(hiCaseName) otherwise return
 		newHi = hiOrdinalRaw
 	end 'lookupHi'
-	try module.ops.set(opIdx, value: MaxonOp.rangeMatchArm(scrutineeName, loValue: newLo, hiValue: newHi, isUpto: isUpto, hasMinSentinel: hasMinSentinel, hasMaxSentinel: hasMaxSentinel, enumOwnerName: resolvedEnumName, loCaseName: loCaseName, hiCaseName: hiCaseName, thenTarget: thenTarget, elseTarget: elseTarget, range: range)) otherwise panic("fillRangeMatchArm: ops.set OOB at idx={opIdx}")
+	try setOpCounted(module, opIdx: opIdx, value: MaxonOp.rangeMatchArm(scrutineeName, loValue: newLo, hiValue: newHi, isUpto: isUpto, hasMinSentinel: hasMinSentinel, hasMaxSentinel: hasMaxSentinel, enumOwnerName: resolvedEnumName, loCaseName: loCaseName, hiCaseName: hiCaseName, thenTarget: thenTarget, elseTarget: elseTarget, range: range)) otherwise panic("fillRangeMatchArm: ops.set OOB at idx={opIdx}")
 end 'fillRangeMatchArm'
 
 function fillVarDecl(project Project, module MaxonModule, opIdx OpIndex, slotId VarSlot, value ByteArray, slotType MaxonType, range SourceRange, producerTypes ProducerTypeMap, slotTypes SlotTypeMap)
@@ -6229,7 +6249,7 @@ function fillVarDecl(project Project, module MaxonModule, opIdx OpIndex, slotId 
 		// stamp here would otherwise pin slot_r's slotTypes entry to int.
 		let fromValue = lookupProducerType(producerTypes, name: value)
 		if isIntToFloatWidening(project, from: slotType, to: fromValue) 'widenInt2Float'
-			try module.ops.set(opIdx, value: MaxonOp.varDecl(slotId, value: value, slotType: fromValue, range: range)) otherwise panic("fillVarDecl: ops.set OOB at idx={opIdx}")
+			try setOpCounted(module, opIdx: opIdx, value: MaxonOp.varDecl(slotId, value: value, slotType: fromValue, range: range)) otherwise panic("fillVarDecl: ops.set OOB at idx={opIdx}")
 			slotTypes.upsert(slotId, value: fromValue)
 			return
 		end 'widenInt2Float'
@@ -6243,7 +6263,7 @@ function fillVarDecl(project Project, module MaxonModule, opIdx OpIndex, slotId 
 		let slotIsStructLike = maxonTypeIsNamed(slotType) or maxonTypeIsGenericInstance(slotType)
 		let fromIsStructLike = maxonTypeIsNamed(fromValue) or maxonTypeIsGenericInstance(fromValue)
 		if not slotIsStructLike and fromIsStructLike 'replaceSeedDecl'
-			try module.ops.set(opIdx, value: MaxonOp.varDecl(slotId, value: value, slotType: fromValue, range: range)) otherwise panic("fillVarDecl: ops.set OOB at idx={opIdx}")
+			try setOpCounted(module, opIdx: opIdx, value: MaxonOp.varDecl(slotId, value: value, slotType: fromValue, range: range)) otherwise panic("fillVarDecl: ops.set OOB at idx={opIdx}")
 			slotTypes.upsert(slotId, value: fromValue)
 			return
 		end 'replaceSeedDecl'
@@ -6256,7 +6276,7 @@ function fillVarDecl(project Project, module MaxonModule, opIdx OpIndex, slotId 
 		// int->struct `replaceSeedDecl` above; the struct rule misses it because
 		// `string` is a primitive, not a named/generic-instance type.
 		if isSeedIntToStringWidening(project, from: slotType, to: fromValue) 'replaceSeedDeclString'
-			try module.ops.set(opIdx, value: MaxonOp.varDecl(slotId, value: value, slotType: fromValue, range: range)) otherwise panic("fillVarDecl: ops.set OOB at idx={opIdx}")
+			try setOpCounted(module, opIdx: opIdx, value: MaxonOp.varDecl(slotId, value: value, slotType: fromValue, range: range)) otherwise panic("fillVarDecl: ops.set OOB at idx={opIdx}")
 			slotTypes.upsert(slotId, value: fromValue)
 			return
 		end 'replaceSeedDeclString'
@@ -6264,13 +6284,22 @@ function fillVarDecl(project Project, module MaxonModule, opIdx OpIndex, slotId 
 		// instance the parser couldn't fully resolve) to the initializer's
 		// concrete producer type, so lowering sees the resolved inner.
 		if shouldPreferRefinedGenericInstance(project, stamped: slotType, refined: fromValue) 'refineGenericArgs'
-			try module.ops.set(opIdx, value: MaxonOp.varDecl(slotId, value: value, slotType: fromValue, range: range)) otherwise panic("fillVarDecl: ops.set OOB at idx={opIdx}")
+			try setOpCounted(module, opIdx: opIdx, value: MaxonOp.varDecl(slotId, value: value, slotType: fromValue, range: range)) otherwise panic("fillVarDecl: ops.set OOB at idx={opIdx}")
 			slotTypes.upsert(slotId, value: fromValue)
 			return
 		end 'refineGenericArgs'
 		return
 	end 'noChange'
-	try module.ops.set(opIdx, value: MaxonOp.varDecl(slotId, value: value, slotType: filled, range: range)) otherwise panic("fillVarDecl: ops.set OOB at idx={opIdx}")
+	// Nothing to fill: the initializer's producer type is still unresolved (and
+	// may never resolve — e.g. an unmonomorphized generic body). Re-stamping the
+	// op with the same unresolved slotType is a no-op that nonetheless counted as
+	// a mutation on EVERY converge pass — it kept the fixpoint early-exit from
+	// firing and paid a full op rewrite per unresolved varDecl per pass. Skip it;
+	// a resolved slotType is also never downgraded to unresolved this way.
+	if isUnresolvedType(filled) 'nothingToFill'
+		return
+	end 'nothingToFill'
+	try setOpCounted(module, opIdx: opIdx, value: MaxonOp.varDecl(slotId, value: value, slotType: filled, range: range)) otherwise panic("fillVarDecl: ops.set OOB at idx={opIdx}")
 end 'fillVarDecl'
 
 // Phase A widening: rewrite varDecl ops whose recorded `slotType` is `int`
@@ -6327,7 +6356,7 @@ function widenOneVarDecl(project Project, module MaxonModule, opIdx OpIndex, slo
 	if not (widensToFloat or promotesToTypeParam) 'notWidening'
 		return
 	end 'notWidening'
-	try module.ops.set(opIdx, value: MaxonOp.varDecl(slotId, value: value, slotType: effective, range: range)) otherwise panic("widenOneVarDecl: ops.set OOB at idx={opIdx}")
+	try setOpCounted(module, opIdx: opIdx, value: MaxonOp.varDecl(slotId, value: value, slotType: effective, range: range)) otherwise panic("widenOneVarDecl: ops.set OOB at idx={opIdx}")
 end 'widenOneVarDecl'
 
 // Resolve the field type for a union case's payload at the given index.
@@ -6397,7 +6426,7 @@ function fillEnumPayloadRead(project Project, module MaxonModule, opIdx OpIndex,
 	if isUnresolvedType(filled) 'skip'
 		return
 	end 'skip'
-	try module.ops.set(opIdx, value: MaxonOp.enumPayloadRead(result, enumValName: enumValName, caseName: caseName, fieldIndex: fieldIndex, fieldType: filled, range: range)) otherwise panic("fillEnumPayloadRead: ops.set OOB at idx={opIdx}")
+	try setOpCounted(module, opIdx: opIdx, value: MaxonOp.enumPayloadRead(result, enumValName: enumValName, caseName: caseName, fieldIndex: fieldIndex, fieldType: filled, range: range)) otherwise panic("fillEnumPayloadRead: ops.set OOB at idx={opIdx}")
 end 'fillEnumPayloadRead'
 
 // Rewrite an enumPayloadStore's `fieldType` from `unresolved` to the
@@ -6407,7 +6436,7 @@ function fillEnumPayloadStore(project Project, module MaxonModule, opIdx OpIndex
 	if isUnresolvedType(filled) 'skip'
 		return
 	end 'skip'
-	try module.ops.set(opIdx, value: MaxonOp.enumPayloadStore(enumValName, caseName: caseName, fieldIndex: fieldIndex, fieldType: filled, newValueName: newValueName, range: range)) otherwise panic("fillEnumPayloadStore: ops.set OOB at idx={opIdx}")
+	try setOpCounted(module, opIdx: opIdx, value: MaxonOp.enumPayloadStore(enumValName, caseName: caseName, fieldIndex: fieldIndex, fieldType: filled, newValueName: newValueName, range: range)) otherwise panic("fillEnumPayloadStore: ops.set OOB at idx={opIdx}")
 end 'fillEnumPayloadStore'
 
 // Refine `expr(name, kind)` parts of a stringInterp op now that producer
@@ -6435,7 +6464,7 @@ function fillStringInterpKinds(project Project, module MaxonModule, opIdx OpInde
 	if not changed 'noChange'
 		return
 	end 'noChange'
-	try module.ops.set(opIdx, value: MaxonOp.stringInterp(result, parts: newParts, range: range)) otherwise panic("fillStringInterpKinds: ops.set OOB at idx={opIdx}")
+	try setOpCounted(module, opIdx: opIdx, value: MaxonOp.stringInterp(result, parts: newParts, range: range)) otherwise panic("fillStringInterpKinds: ops.set OOB at idx={opIdx}")
 end 'fillStringInterpKinds'
 
 function refineInterpExprPart(project Project, original StringInterpPart, name ByteArray, kind InterpExprKind, formatSpecId StringId, producerTypes ProducerTypeMap) returns StringInterpPart
@@ -6531,7 +6560,7 @@ function fillVarLoad(project Project, module MaxonModule, opIdx OpIndex, result 
 		if isUnresolvedType(filled) 'stillUnresolved'
 			return
 		end 'stillUnresolved'
-		try module.ops.set(opIdx, value: MaxonOp.varLoad(result, slotId: slotId, slotType: filled, range: range)) otherwise panic("fillVarLoad: ops.set OOB at idx={opIdx}")
+		try setOpCounted(module, opIdx: opIdx, value: MaxonOp.varLoad(result, slotId: slotId, slotType: filled, range: range)) otherwise panic("fillVarLoad: ops.set OOB at idx={opIdx}")
 		// Re-publish the load's producer type. `buildProducerTypes` walks
 		// blocks in `func.blockRefs` order, so a match-expression / try-fallback
 		// merge-block varLoad is recorded BEFORE the arm-block varStores upgrade
@@ -6556,7 +6585,7 @@ function fillVarLoad(project Project, module MaxonModule, opIdx OpIndex, result 
 	// wider type and producer map still says int. Downstream cmp/binop
 	// validators consult producerTypes via `widenStampedOpType`.
 	if isIntToFloatWidening(project, from: slotType, to: filled) 'widenInt2Float'
-		try module.ops.set(opIdx, value: MaxonOp.varLoad(result, slotId: slotId, slotType: filled, range: range)) otherwise panic("fillVarLoad: ops.set OOB at idx={opIdx}")
+		try setOpCounted(module, opIdx: opIdx, value: MaxonOp.varLoad(result, slotId: slotId, slotType: filled, range: range)) otherwise panic("fillVarLoad: ops.set OOB at idx={opIdx}")
 		recordResultType(producerTypes, name: result, t: filled)
 		return
 	end 'widenInt2Float'
@@ -6569,7 +6598,7 @@ function fillVarLoad(project Project, module MaxonModule, opIdx OpIndex, result 
 	// restamp above; see `isSeedIntToStringWidening` for the block-ordering
 	// rationale.
 	if isSeedIntToStringWidening(project, from: slotType, to: filled) 'widenInt2String'
-		try module.ops.set(opIdx, value: MaxonOp.varLoad(result, slotId: slotId, slotType: filled, range: range)) otherwise panic("fillVarLoad: ops.set OOB at idx={opIdx}")
+		try setOpCounted(module, opIdx: opIdx, value: MaxonOp.varLoad(result, slotId: slotId, slotType: filled, range: range)) otherwise panic("fillVarLoad: ops.set OOB at idx={opIdx}")
 		recordResultType(producerTypes, name: result, t: filled)
 		return
 	end 'widenInt2String'
@@ -6584,7 +6613,7 @@ function fillVarLoad(project Project, module MaxonModule, opIdx OpIndex, result 
 	// the typeParameter being in scope — see `recordVarStore` for the
 	// rationale.
 	if (not maxonTypeIsTypeParameter(slotType)) and typeParamBelongsToEnclosing(project, t: filled, enclosingType: enclosingType) 'promoteTypeParam'
-		try module.ops.set(opIdx, value: MaxonOp.varLoad(result, slotId: slotId, slotType: filled, range: range)) otherwise panic("fillVarLoad: ops.set OOB at idx={opIdx}")
+		try setOpCounted(module, opIdx: opIdx, value: MaxonOp.varLoad(result, slotId: slotId, slotType: filled, range: range)) otherwise panic("fillVarLoad: ops.set OOB at idx={opIdx}")
 		recordResultType(producerTypes, name: result, t: filled)
 		return
 	end 'promoteTypeParam'
@@ -6602,7 +6631,7 @@ function fillVarLoad(project Project, module MaxonModule, opIdx OpIndex, result 
 	let slotTypeIsStructLike = maxonTypeIsNamed(slotType) or maxonTypeIsGenericInstance(slotType)
 	let filledIsStructLike = maxonTypeIsNamed(filled) or maxonTypeIsGenericInstance(filled)
 	if not slotTypeIsStructLike and filledIsStructLike 'replaceSeed'
-		try module.ops.set(opIdx, value: MaxonOp.varLoad(result, slotId: slotId, slotType: filled, range: range)) otherwise panic("fillVarLoad: ops.set OOB at idx={opIdx}")
+		try setOpCounted(module, opIdx: opIdx, value: MaxonOp.varLoad(result, slotId: slotId, slotType: filled, range: range)) otherwise panic("fillVarLoad: ops.set OOB at idx={opIdx}")
 		recordResultType(producerTypes, name: result, t: filled)
 		return
 	end 'replaceSeed'
@@ -6614,7 +6643,7 @@ function fillVarLoad(project Project, module MaxonModule, opIdx OpIndex, result 
 	// `methodCallResultType`'s substitution has been recorded.
 	let promoted = promoteNamedToGenericInstance(project, raw: slotType, candidate: filled)
 	if not maxonTypesStructurallyEqual(promoted, b: slotType) 'didPromote'
-		try module.ops.set(opIdx, value: MaxonOp.varLoad(result, slotId: slotId, slotType: promoted, range: range)) otherwise panic("fillVarLoad: ops.set OOB at idx={opIdx}")
+		try setOpCounted(module, opIdx: opIdx, value: MaxonOp.varLoad(result, slotId: slotId, slotType: promoted, range: range)) otherwise panic("fillVarLoad: ops.set OOB at idx={opIdx}")
 	end 'didPromote'
 end 'fillVarLoad'
 
@@ -6626,7 +6655,7 @@ function fillGlobalStore(module MaxonModule, opIdx OpIndex, name String, value B
 	if isUnresolvedType(filled) 'stillUnresolved'
 		return
 	end 'stillUnresolved'
-	try module.ops.set(opIdx, value: MaxonOp.globalStore(name, value: value, slotType: filled, range: range)) otherwise panic("fillGlobalStore: ops.set OOB at idx={opIdx}")
+	try setOpCounted(module, opIdx: opIdx, value: MaxonOp.globalStore(name, value: value, slotType: filled, range: range)) otherwise panic("fillGlobalStore: ops.set OOB at idx={opIdx}")
 end 'fillGlobalStore'
 
 function fillConvert(module MaxonModule, opIdx OpIndex, result ByteArray, operand ByteArray, fromType MaxonType, toType MaxonType, implicit bool, range SourceRange, producerTypes ProducerTypeMap)
@@ -6637,7 +6666,7 @@ function fillConvert(module MaxonModule, opIdx OpIndex, result ByteArray, operan
 	if isUnresolvedType(filledFrom) 'stillUnresolved'
 		return
 	end 'stillUnresolved'
-	try module.ops.set(opIdx, value: MaxonOp.convert(result, operand: operand, fromType: filledFrom, toType: toType, implicit: implicit, range: range)) otherwise panic("fillConvert: ops.set OOB at idx={opIdx}")
+	try setOpCounted(module, opIdx: opIdx, value: MaxonOp.convert(result, operand: operand, fromType: filledFrom, toType: toType, implicit: implicit, range: range)) otherwise panic("fillConvert: ops.set OOB at idx={opIdx}")
 end 'fillConvert'
 
 function fillCmp(project Project, module MaxonModule, opIdx OpIndex, result ByteArray, left ByteArray, right ByteArray, predicate CmpPredicate, leftType MaxonType, rightType MaxonType, operandType MaxonType, range SourceRange, producerTypes ProducerTypeMap)
@@ -6648,7 +6677,7 @@ function fillCmp(project Project, module MaxonModule, opIdx OpIndex, result Byte
 	if unchanged 'noChange'
 		return
 	end 'noChange'
-	try module.ops.set(opIdx, value: MaxonOp.cmp(result, left: left, right: right, predicate: predicate, leftType: filledLeft, rightType: filledRight, operandType: filledOperand, range: range)) otherwise panic("fillCmp: ops.set OOB at idx={opIdx}")
+	try setOpCounted(module, opIdx: opIdx, value: MaxonOp.cmp(result, left: left, right: right, predicate: predicate, leftType: filledLeft, rightType: filledRight, operandType: filledOperand, range: range)) otherwise panic("fillCmp: ops.set OOB at idx={opIdx}")
 end 'fillCmp'
 
 // Phase A widening helper: like `fillType`, but additionally re-stamps a
@@ -6691,7 +6720,7 @@ function fillBinop(project Project, module MaxonModule, opIdx OpIndex, result By
 		panic("fillBinop: binop op '{String.from(result)}' has unresolved operandType after fillUnresolvedTypes and neither operand resolves through the producer-type map — left='{String.from(left)}' right='{String.from(right)}'. Likely a missing producer entry for a synthesized operand.")
 	end 'stillUnresolved'
 
-	try module.ops.set(opIdx, value: MaxonOp.binop(result, left: left, right: right, opKind: opKind, operandType: filled, range: range)) otherwise panic("fillBinop: ops.set OOB at idx={opIdx}")
+	try setOpCounted(module, opIdx: opIdx, value: MaxonOp.binop(result, left: left, right: right, opKind: opKind, operandType: filled, range: range)) otherwise panic("fillBinop: ops.set OOB at idx={opIdx}")
 end 'fillBinop'
 
 function fillUnop(module MaxonModule, opIdx OpIndex, result ByteArray, operand ByteArray, opKind UnaryOpKind, operandType MaxonType, range SourceRange, producerTypes ProducerTypeMap)
@@ -6699,7 +6728,7 @@ function fillUnop(module MaxonModule, opIdx OpIndex, result ByteArray, operand B
 	if isUnresolvedType(filled) == isUnresolvedType(operandType) and not isUnresolvedType(operandType) 'noChange'
 		return
 	end 'noChange'
-	try module.ops.set(opIdx, value: MaxonOp.unop(result, operand: operand, opKind: opKind, operandType: filled, range: range)) otherwise panic("fillUnop: ops.set OOB at idx={opIdx}")
+	try setOpCounted(module, opIdx: opIdx, value: MaxonOp.unop(result, operand: operand, opKind: opKind, operandType: filled, range: range)) otherwise panic("fillUnop: ops.set OOB at idx={opIdx}")
 end 'fillUnop'
 
 // Walk a call/methodCall arg-types vector and fill any unresolved entries
@@ -6754,6 +6783,16 @@ function argTypeIsSeedRefinedBy(project Project, current MaxonType, refined Maxo
 	if convertCastCategory(project, t: current) != CastCategory.int 'notIntSeed'
 		return false
 	end 'notIntSeed'
+	// A `named`/`genericInstance` `current` is an already-resolved real type —
+	// notably an int-backed enum or a ranged-int typealias, both of which report
+	// `CastCategory.int` — NOT the parser's bare `integer` int-zero seed. Treating
+	// it as a seed re-stamped the call arg to the same type on every converge
+	// pass: a no-op that never reached the fixpoint and paid a full op rewrite per
+	// such call arg per pass (the dominant cost of the converge loop). Only the
+	// bare `integer` primitive is the seed the refinement is meant to unlock.
+	if maxonTypeIsNamed(current) or maxonTypeIsGenericInstance(current) 'currentAlreadyConcrete'
+		return false
+	end 'currentAlreadyConcrete'
 	if maxonTypeIsNamed(refined) or maxonTypeIsGenericInstance(refined) 'structLike'
 		return true
 	end 'structLike'
@@ -6789,7 +6828,7 @@ function fillAsyncCall(project Project, module MaxonModule, opIdx OpIndex, resul
 	if not argsChanged and not isUnresolvedType(innerType) 'noChange'
 		return
 	end 'noChange'
-	try module.ops.set(opIdx, value: MaxonOp.asyncCall(result, callee: callee, callContext: callContext, args: args, argLabels: argLabels, argTypes: newArgTypes, argRanges: argRanges, innerType: newInner, calleeThrows: calleeThrows, callSourceText: callSourceText, range: range)) otherwise panic("fillAsyncCall: ops.set OOB at idx={opIdx}")
+	try setOpCounted(module, opIdx: opIdx, value: MaxonOp.asyncCall(result, callee: callee, callContext: callContext, args: args, argLabels: argLabels, argTypes: newArgTypes, argRanges: argRanges, innerType: newInner, calleeThrows: calleeThrows, callSourceText: callSourceText, range: range)) otherwise panic("fillAsyncCall: ops.set OOB at idx={opIdx}")
 end 'fillAsyncCall'
 
 // Tier 4 async: re-emit an `awaitPromise` op with its resolved `innerType` when
@@ -6807,7 +6846,7 @@ function fillAwait(project Project, module MaxonModule, opIdx OpIndex, result By
 	if isUnresolvedType(newInner) 'stillUnresolved'
 		return
 	end 'stillUnresolved'
-	try module.ops.set(opIdx, value: MaxonOp.awaitPromise(result, promise: promise, innerType: newInner, promiseType: promiseType, range: range)) otherwise panic("fillAwait: ops.set OOB at idx={opIdx}")
+	try setOpCounted(module, opIdx: opIdx, value: MaxonOp.awaitPromise(result, promise: promise, innerType: newInner, promiseType: promiseType, range: range)) otherwise panic("fillAwait: ops.set OOB at idx={opIdx}")
 end 'fillAwait'
 
 // As fillAwait, for `try await`.
@@ -6819,7 +6858,7 @@ function fillTryAwait(project Project, module MaxonModule, opIdx OpIndex, result
 	if isUnresolvedType(newInner) 'stillUnresolved'
 		return
 	end 'stillUnresolved'
-	try module.ops.set(opIdx, value: MaxonOp.tryAwait(result, promise: promise, innerType: newInner, promiseType: promiseType, errorBoundName: errorBoundName, range: range)) otherwise panic("fillTryAwait: ops.set OOB at idx={opIdx}")
+	try setOpCounted(module, opIdx: opIdx, value: MaxonOp.tryAwait(result, promise: promise, innerType: newInner, promiseType: promiseType, errorBoundName: errorBoundName, range: range)) otherwise panic("fillTryAwait: ops.set OOB at idx={opIdx}")
 end 'fillTryAwait'
 
 function fillCall(project Project, module MaxonModule, opIdx OpIndex, result ByteArray, callee ByteArray, callContext CallContext, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, range SourceRange, producerTypes ProducerTypeMap)
@@ -6827,7 +6866,7 @@ function fillCall(project Project, module MaxonModule, opIdx OpIndex, result Byt
 	if not changed 'noChange'
 		return
 	end 'noChange'
-	try module.ops.set(opIdx, value: MaxonOp.call(result, callee: callee, callContext: callContext, args: args, argLabels: argLabels, argTypes: newArgTypes, argRanges: argRanges, range: range)) otherwise panic("fillCall: ops.set OOB at idx={opIdx}")
+	try setOpCounted(module, opIdx: opIdx, value: MaxonOp.call(result, callee: callee, callContext: callContext, args: args, argLabels: argLabels, argTypes: newArgTypes, argRanges: argRanges, range: range)) otherwise panic("fillCall: ops.set OOB at idx={opIdx}")
 end 'fillCall'
 
 // A method call's result type is recorded once, during `buildProducerTypes`,
@@ -6862,7 +6901,7 @@ function fillMethodCall(project Project, module MaxonModule, opIdx OpIndex, resu
 	if not changed 'noChange'
 		return
 	end 'noChange'
-	try module.ops.set(opIdx, value: MaxonOp.methodCall(result, receiver: receiver, methodName: methodName, args: args, argLabels: argLabels, argTypes: newArgTypes, argRanges: argRanges, range: range)) otherwise panic("fillMethodCall: ops.set OOB at idx={opIdx}")
+	try setOpCounted(module, opIdx: opIdx, value: MaxonOp.methodCall(result, receiver: receiver, methodName: methodName, args: args, argLabels: argLabels, argTypes: newArgTypes, argRanges: argRanges, range: range)) otherwise panic("fillMethodCall: ops.set OOB at idx={opIdx}")
 end 'fillMethodCall'
 
 // Phase 5 (multi-value-return error ABI): mirror of `fillMethodCall` for
@@ -6880,7 +6919,7 @@ function fillTryMethodCall(project Project, module MaxonModule, opIdx OpIndex, r
 	if not changed 'noChange'
 		return
 	end 'noChange'
-	try module.ops.set(opIdx, value: MaxonOp.tryMethodCall(result, receiver: receiver, methodName: methodName, args: args, argLabels: argLabels, argTypes: newArgTypes, argRanges: argRanges, errorBoundName: errorBoundName, range: range)) otherwise panic("fillTryMethodCall: ops.set OOB at idx={opIdx}")
+	try setOpCounted(module, opIdx: opIdx, value: MaxonOp.tryMethodCall(result, receiver: receiver, methodName: methodName, args: args, argLabels: argLabels, argTypes: newArgTypes, argRanges: argRanges, errorBoundName: errorBoundName, range: range)) otherwise panic("fillTryMethodCall: ops.set OOB at idx={opIdx}")
 end 'fillTryMethodCall'
 
 export function isUnresolvedType(t MaxonType) returns bool
@@ -7011,7 +7050,7 @@ function specializeCmp(module MaxonModule, opIdx OpIndex, result ByteArray, left
 	if let leftId = try nameStringIds.get(left) 'leftIsStr'
 		if let rightId = try nameStringIds.get(right) 'rightIsStr'
 			let folded = stringCmpFold(predicate, leftId: leftId, rightId: rightId)
-			try module.ops.set(opIdx, value: MaxonOp.literal(result, value: folded, valueType: MaxonType.integer, range: range)) otherwise panic("specializeCmp: ops.set OOB at idx={opIdx}")
+			try setOpCounted(module, opIdx: opIdx, value: MaxonOp.literal(result, value: folded, valueType: MaxonType.integer, range: range)) otherwise panic("specializeCmp: ops.set OOB at idx={opIdx}")
 		end 'rightIsStr'
 	end 'leftIsStr'
 end 'specializeCmp'
@@ -7127,7 +7166,7 @@ function maybeRewriteCmpToEquals(project Project, module MaxonModule, block IrBl
 	equalsArgRanges.push(range)
 	let methodName = project.calleeNames.intern("equals")
 	if isEq 'eqDispatch'
-		try module.ops.set(opIdx, value: MaxonOp.methodCall(result, receiver: left, methodName: methodName, args: equalsArgs, argLabels: equalsLabels, argTypes: equalsArgTypes, argRanges: equalsArgRanges, range: range)) otherwise panic("maybeRewriteCmpToEquals: ops.set OOB at idx={opIdx}")
+		try setOpCounted(module, opIdx: opIdx, value: MaxonOp.methodCall(result, receiver: left, methodName: methodName, args: equalsArgs, argLabels: equalsLabels, argTypes: equalsArgTypes, argRanges: equalsArgRanges, range: range)) otherwise panic("maybeRewriteCmpToEquals: ops.set OOB at idx={opIdx}")
 		return
 	end 'eqDispatch'
 	// `!=`: rewrite into the methodCall first, then append a bitNot op
@@ -7137,7 +7176,7 @@ function maybeRewriteCmpToEquals(project Project, module MaxonModule, block IrBl
 	// achieve this by giving the methodCall an intermediate name and
 	// pointing the bitNot's result at the original `result`.
 	let intermediateName = freshIntermediateNameForCmp(result)
-	try module.ops.set(opIdx, value: MaxonOp.methodCall(intermediateName, receiver: left, methodName: methodName, args: equalsArgs, argLabels: equalsLabels, argTypes: equalsArgTypes, argRanges: equalsArgRanges, range: range)) otherwise panic("maybeRewriteCmpToEquals: ops.set OOB at idx={opIdx}")
+	try setOpCounted(module, opIdx: opIdx, value: MaxonOp.methodCall(intermediateName, receiver: left, methodName: methodName, args: equalsArgs, argLabels: equalsLabels, argTypes: equalsArgTypes, argRanges: equalsArgRanges, range: range)) otherwise panic("maybeRewriteCmpToEquals: ops.set OOB at idx={opIdx}")
 	// Insert bitNot directly after the methodCall in the same block.
 	insertBitNotAfter(module, block: block, opIdx: opIdx, result: result, operand: intermediateName, range: range)
 end 'maybeRewriteCmpToEquals'
@@ -8019,7 +8058,7 @@ function patchGlobalLoadSlotType(project Project, module MaxonModule, opIdx OpIn
 		if maxonTypesStructurallyEqual(info.slotType, b: slotType) 'alreadyMatches'
 			return
 		end 'alreadyMatches'
-		try module.ops.set(opIdx, value: MaxonOp.globalLoad(result, name: name, slotType: info.slotType, range: range)) otherwise panic("patchGlobalLoadSlotType: ops.set OOB at idx={opIdx}")
+		try setOpCounted(module, opIdx: opIdx, value: MaxonOp.globalLoad(result, name: name, slotType: info.slotType, range: range)) otherwise panic("patchGlobalLoadSlotType: ops.set OOB at idx={opIdx}")
 	end 'hasEntry'
 end 'patchGlobalLoadSlotType'
 
@@ -8613,15 +8652,52 @@ module function runTypeResolution(project Project, module MaxonModule, filePath 
 	// re-confirm types already stamped. Four covers the deepest binding chain a
 	// single statement produces (merge slot -> binding -> load -> consumer);
 	// `CONVERGE_PASSES` documents that bound in one place.
+	//
+	// The propagation is purely intra-function: a fill rewrites only its own
+	// function's ops, and a rebuild reads only that function's ops plus project
+	// state this loop never mutates (`funcReturnTypes` etc. are settled by here).
+	// So a function whose fill changed nothing this pass cannot change next pass
+	// either — only functions a prior pass actually mutated need re-processing.
+	// `dirty[funcIdx]` tracks that working set: pass 0 rebuilds+refills every
+	// function; each later pass touches only the functions the previous pass
+	// changed, shrinking to empty (the true fixpoint) — usually within a pass or
+	// two even on a large module, instead of re-walking every function 4×.
 	let CONVERGE_PASSES = 4
+	var dirty = BoolArray.create()
+	for _ in 0 upto module.functions.count() 'initDirty'
+		dirty.push(true)
+	end 'initDirty'
 	var pass = 0
 	let trConv = passTimerStart()
 	while pass < CONVERGE_PASSES 'converge'
-		producerTypesPerFunc.clear()
-		slotTypesPerFunc.clear()
-		buildProducerTypes(project, module: module, producerTypesPerFunc: producerTypesPerFunc, slotTypesPerFunc: slotTypesPerFunc)
-		fillUnresolvedTypes(project, module: module, producerTypesPerFunc: producerTypesPerFunc, slotTypesPerFunc: slotTypesPerFunc)
+		let mutationsBefore = fillMutationCount
+		var nextDirty = BoolArray.create()
+		for _ in 0 upto module.functions.count() 'initNext'
+			nextDirty.push(false)
+		end 'initNext'
+		for funcIdx in 0 upto module.functions.count() 'eachFunc'
+			if not (try dirty.get(funcIdx) otherwise true) 'converged'
+				continue
+			end 'converged'
+			let func = try module.functions.get(funcIdx) otherwise panic("converge: funcIdx < count but get failed")
+			var fresh = ProducerTypeMap.create()
+			var freshSlots = SlotTypeMap.create()
+			recordFuncOpResults(project, module: module, func: func, producerTypes: fresh, slotTypes: freshSlots)
+			try producerTypesPerFunc.set(funcIdx, value: fresh) otherwise panic("converge: producerTypesPerFunc.set OOB at {funcIdx}")
+			try slotTypesPerFunc.set(funcIdx, value: freshSlots) otherwise panic("converge: slotTypesPerFunc.set OOB at {funcIdx}")
+			let beforeFunc = fillMutationCount
+			runFillUnresolvedTypesForFunc(project, module: module, func: func, producerTypes: fresh, slotTypes: freshSlots)
+			if fillMutationCount != beforeFunc 'changedFunc'
+				try nextDirty.set(funcIdx, value: true) otherwise panic("converge: nextDirty.set OOB at {funcIdx}")
+			end 'changedFunc'
+		end 'eachFunc'
 		pass = pass + 1
+		// Fixpoint: no function's fill rewrote anything this pass, so the working
+		// set is empty and every remaining iteration would be an idempotent no-op.
+		if fillMutationCount == mutationsBefore 'fixpoint'
+			break
+		end 'fixpoint'
+		dirty = nextDirty
 	end 'converge'
 	recordPassSince("__tr-convergeLoop", startMs: trConv)
 
@@ -10172,12 +10248,27 @@ function propagateClosureArgTypesFromCalls(project Project, module MaxonModule, 
 	for funcIdx in 0 upto module.functions.count() 'eachFunc'
 		let func = try module.functions.get(funcIdx) otherwise panic("propagateClosureArgTypesFromCalls: funcIdx OOB")
 		var producerTypes = try producerTypesPerFunc.get(funcIdx) otherwise panic("propagateClosureArgTypesFromCalls: producerTypesPerFunc.get({funcIdx}) failed")
-		let nameToOpIdx = buildNameToOpIdxMap(module, func: func)
+		// Single walk over the function's ops. A closure-literal argument's
+		// producer (`functionRef` / `closureCreate`) is always emitted
+		// immediately before the call op that consumes it — argument
+		// expressions evaluate before the call, in the same block — so building
+		// the producer index incrementally and consulting it inline is
+		// equivalent to the former two-pass (build-full-map, then re-walk)
+		// shape. The `nameToOpIdx.count() > 0` guard pays the per-call
+		// propagation cost only for the rare functions that actually create a
+		// closure; the overwhelming majority create none, and there only the
+		// cheap producer-kind name check runs per op (formerly two full op
+		// walks per function, the dominant cost of this pass on a large build).
+		var nameToOpIdx = NameToOpIdxMap.create()
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("propagateClosureArgTypesFromCalls: blockRef OOB")
 			for opIdx in block.opRefs 'eachOp'
 				let op = try module.ops.get(opIdx) otherwise panic("propagateClosureArgTypesFromCalls: opIdx OOB")
-				maybePropagateForCallOp(project, module: module, op: op, opIdx: opIdx, producerTypes: producerTypes, nameToOpIdx: nameToOpIdx, liftedToRebuild: liftedToRebuild)
+				if op.name == "functionRef" or op.name == "closureCreate" 'isProducer'
+					recordClosureProducerOp(nameToOpIdx, op: op, opIdx: opIdx)
+				end 'isProducer' else if nameToOpIdx.count() > 0 'maybeCall'
+					maybePropagateForCallOp(project, module: module, op: op, opIdx: opIdx, producerTypes: producerTypes, nameToOpIdx: nameToOpIdx, liftedToRebuild: liftedToRebuild)
+				end 'maybeCall'
 			end 'eachOp'
 		end 'eachBlock'
 	end 'eachFunc'
@@ -10282,33 +10373,21 @@ function propagateClosureArgTypesFromCalls(project Project, module MaxonModule, 
 	patchFunctionTypeRegistryReturns(project, module: module)
 end 'propagateClosureArgTypesFromCalls'
 
-// Build a result-name → opIdx index that covers ONLY the two op kinds
-// that can produce a closure-literal value: `functionRef` and
-// `closureCreate`. The propagation pass only needs to recover producer
-// ops for these — every other op kind's result is irrelevant for closure
-// arg-type inference, so a partial index keeps this pass cheap and avoids
-// having to track the (large, churn-prone) full MaxonOp variant list.
-function buildNameToOpIdxMap(module MaxonModule, func IrFunction) returns NameToOpIdxMap
-	var nameToOpIdx = NameToOpIdxMap.create()
-	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise panic("buildNameToOpIdxMap: blockRef OOB")
-		for opIdx in block.opRefs 'eachOp'
-			let op = try module.ops.get(opIdx) otherwise panic("buildNameToOpIdxMap: opIdx OOB")
-			if op.name != "functionRef" and op.name != "closureCreate" 'skipKind'
-				continue
-			end 'skipKind'
-			let result = match op 'extract'
-				functionRef(r, _, _, _) gives r
-				closureCreate(r, _, _, _, _, _, _) gives r
-				default panic("buildNameToOpIdxMap: op.name in [functionRef, closureCreate] but match arm not picked up")
-			end 'extract'
-			if not result.isEmpty() 'recordIt'
-				nameToOpIdx.upsert(result, value: opIdx)
-			end 'recordIt'
-		end 'eachOp'
-	end 'eachBlock'
-	return nameToOpIdx
-end 'buildNameToOpIdxMap'
+// Record one closure-producer op into the result-name → opIdx index that
+// closure-arg propagation consults. ONLY `functionRef` and `closureCreate`
+// produce a `function(_)` SSA value; the propagation pass uses the index to
+// recover a closure literal's producer op from a call site's argument name.
+// Caller pre-filters on `op.name` so this only sees those two kinds.
+function recordClosureProducerOp(nameToOpIdx NameToOpIdxMap, op MaxonOp, opIdx OpIndex)
+	let result = match op 'extract'
+		functionRef(r, _, _, _) gives r
+		closureCreate(r, _, _, _, _, _, _) gives r
+		default panic("recordClosureProducerOp: op.name in [functionRef, closureCreate] but match arm not picked up")
+	end 'extract'
+	if not result.isEmpty() 'recordIt'
+		nameToOpIdx.upsert(result, value: opIdx)
+	end 'recordIt'
+end 'recordClosureProducerOp'
 
 // Inspect one op in a caller function. If it's a methodCall/call (or its
 // `try*` variant) with substituted callParamTypes registered, walk each
@@ -10550,20 +10629,20 @@ function patchVarLoadIfParamSlot(module MaxonModule, opIdx OpIndex, result ByteA
 	if isUnresolvedType(newType) 'noNewType'
 		return
 	end 'noNewType'
-	try module.ops.set(opIdx, value: MaxonOp.varLoad(result, slotId: slotId, slotType: newType, range: range)) otherwise panic("patchVarLoadIfParamSlot: ops.set OOB at idx={opIdx}")
+	try setOpCounted(module, opIdx: opIdx, value: MaxonOp.varLoad(result, slotId: slotId, slotType: newType, range: range)) otherwise panic("patchVarLoadIfParamSlot: ops.set OOB at idx={opIdx}")
 end 'patchVarLoadIfParamSlot'
 
 // Rewrite a `functionRef` op with a new `fnTypeId`. Used after re-interning
 // the closure's signature so the indirect-call producer-op carries the
 // updated id.
 function rewriteFunctionRef(module MaxonModule, opIdx OpIndex, result ByteArray, funcName String, fnTypeId FunctionTypeId, range SourceRange)
-	try module.ops.set(opIdx, value: MaxonOp.functionRef(result, funcName: funcName, fnTypeId: fnTypeId, range: range)) otherwise panic("rewriteFunctionRef: ops.set OOB at idx={opIdx}")
+	try setOpCounted(module, opIdx: opIdx, value: MaxonOp.functionRef(result, funcName: funcName, fnTypeId: fnTypeId, range: range)) otherwise panic("rewriteFunctionRef: ops.set OOB at idx={opIdx}")
 end 'rewriteFunctionRef'
 
 // Rewrite a `closureCreate` op with a new `fnTypeId`, preserving captured
 // names + types. Mirror of `rewriteFunctionRef` for the capturing variant.
 function rewriteClosureCreate(module MaxonModule, opIdx OpIndex, result ByteArray, funcName String, fnTypeId FunctionTypeId, capturedNames StringArray, capturedTypes MaxonTypeArray, capturedOuterSlots CapturedSlotArray, range SourceRange)
-	try module.ops.set(opIdx, value: MaxonOp.closureCreate(result, funcName: funcName, fnTypeId: fnTypeId, capturedNames: capturedNames, capturedTypes: capturedTypes, capturedOuterSlots: capturedOuterSlots, range: range)) otherwise panic("rewriteClosureCreate: ops.set OOB at idx={opIdx}")
+	try setOpCounted(module, opIdx: opIdx, value: MaxonOp.closureCreate(result, funcName: funcName, fnTypeId: fnTypeId, capturedNames: capturedNames, capturedTypes: capturedTypes, capturedOuterSlots: capturedOuterSlots, range: range)) otherwise panic("rewriteClosureCreate: ops.set OOB at idx={opIdx}")
 end 'rewriteClosureCreate'
 
 // `call` ops we skip entirely — these never reach `slotArgsForCall` in
