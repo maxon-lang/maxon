@@ -1,0 +1,49 @@
+// Test: managed-string-short-string-sso
+function main() returns ExitCode
+	let s = "short"
+	return s.byteLength()
+end 'main'
+---
+ExitCode: 5
+RequiredRdata: ```
+utf8 "short\0"
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %1 = mir.global_addr @__istr_0
+    %2 = mir.mov_imm 48 : i64
+    %3 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %4 = mir.call @mrt_alloc_with_dtor(%2, %3)
+    %5 = mir.mov_imm 0 : i64
+    mir.store %5, %4, 40 width: qword
+    mir.store %1, %4, 0 width: qword
+    %6 = mir.mov_imm 5 : i64
+    mir.store %6, %4, 8 width: qword
+    %7 = mir.mov_imm -2 : i64
+    mir.store %7, %4, 16 width: qword
+    %8 = mir.mov_imm 1 : i64
+    mir.store %8, %4, 24 width: qword
+    %9 = mir.mov_imm 0 : i64
+    mir.store %9, %4, 32 width: qword
+    %11 = mir.mov_imm 16 : i64
+    %12 = mir.func_addr @__destruct_String
+    %10 = mir.call @stdlib.__mm_alloc(%11, %12)
+    mir.store %4, %10, 0 width: qword
+    %13 = mir.mov_imm 1 : i64
+    mir.store %13, %10, 8 width: qword
+    %15 = mir.call @String.byteLength(%10)
+    %16 = mir.call @mm_drop(%10)
+    %17 = mir.mov_imm 125 : i64
+    %18 = mir.cmp ugt, %15, %17
+    mir.cond_br %18 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %19 = mir.global_addr @__panic_msg_d15a88794b9b275d
+    %20 = mir.call @mrt_panic(%19)
+  __range_ok_0:
+    mir.ret %15
+  }
+}
+---

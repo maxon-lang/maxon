@@ -13671,7 +13671,22 @@ export type Parser
 		// Stdlib-cache restore path: by the time user code is parsed, Vector /
 		// Array have moved out of `unresolvedStructTypes` and their
 		// conformances are recorded in `project.conformances`.
-		return project.conformances.contains(typeName, interfaceName: "BuiltinArrayLiteral")
+		if project.conformances.contains(typeName, interfaceName: "BuiltinArrayLiteral") 'directConform'
+			return true
+		end 'directConform'
+		// A generic typealias of a BAL struct (`ByteArray = Array with Byte`):
+		// chase to the base struct name (`Array`) and check ITS conformance.
+		// This is what lets `ByteArray from [...]` take the BAL fast path —
+		// which narrows each element to the alias's element type — rather than
+		// the InitableFromArrayLiteral wrap (whose `Array with int` literal then
+		// mismatches the `__ManagedMemory with Byte` init parameter, E3005).
+		// Mirrors the C# bootstrap, which resolves the alias to its `Array`
+		// struct in `_typeRegistry` before the BAL check.
+		let baseStruct = genericAliasBaseStructName(typeName)
+		if baseStruct.isEmpty() 'noBase'
+			return false
+		end 'noBase'
+		return project.conformances.contains(baseStruct, interfaceName: "BuiltinArrayLiteral")
 	end 'typeConformsToBuiltinArrayLiteral'
 
 	// `T from [...]` for `T` conforming to `BuiltinArrayLiteral`: parse
@@ -13701,6 +13716,18 @@ export type Parser
 			try parseRemainingArrayElements(block, elemNames: elemNames, elemRanges: elemRanges, firstStartPos: firstStartPos)
 			try expect(TokenKind.rightBracket)
 		end 'nonEmpty'
+
+		// Push the destination collection's element type down onto each parsed
+		// element. `ByteArray from [10, 20, 30]` (where `ByteArray = Array with
+		// Byte`) parses its elements as bare `int`; without this re-tag the
+		// produced array unifies to `Array with int` and the `init` call's
+		// `__ManagedMemory with Byte` parameter rejects it (E3005). Re-tagging
+		// each element via a `convert` mirrors the C# bootstrap's
+		// `NarrowElementToTarget` (which emits a per-element `MaxonCastOp`) — the
+		// convert result is typed to the element type, so type unification yields
+		// `Array with Byte`, and the (already convert-aware) constant-array rdata
+		// pass encodes the elements at the element type's narrow stride.
+		narrowFromLiteralElements(typeToken.value, elemNames: elemNames, elemRanges: elemRanges)
 
 		let literalRange = SourceRange.between(bracketToken, last: previousToken())
 		let mmName = emitManagedMemoryFromElements(block, elemNames: elemNames, elemRanges: elemRanges, literalRange: literalRange)
@@ -13738,6 +13765,44 @@ export type Parser
 
 		return ExprResult.direct(arrName, valueType: MaxonType.unresolved)
 	end 'parseBalFromArrayLiteral'
+
+	// Re-tag each element of a `TypeName from [...]` literal with the
+	// destination collection's element type. Resolves `typeName` (e.g.
+	// `ByteArray`) to its element MaxonType (`Byte`) and, for every element,
+	// emits a `maxon.convert %elem : <unresolved> -> <Element>` op (rewriting
+	// `elemNames[i]` to the convert's result) plus a paired `castCheck` so the
+	// post-resolution `expandCastRangeChecks` pass range-guards each element
+	// against the alias's bounds — dropping the guard for in-range literals and
+	// rejecting out-of-range ones (e.g. `ByteArray from [300]`). This mirrors
+	// the C# bootstrap's `NarrowElementToTarget` (convert + `ValidateAndEmitRangeCheck`).
+	// No-op when `typeName` isn't a single-arg generic collection alias, or when
+	// the element type is plain `int` (no narrowing needed — avoids a redundant
+	// convert).
+	function narrowFromLiteralElements(typeName String, elemNames ByteArrayArray, elemRanges SourceRangeArray)
+		let elementType = fromLiteralTargetElementType(project, typeName: typeName)
+		if isUnresolvedType(elementType) or maxonTypeIsPlainInt(elementType) 'noNarrow'
+			return
+		end 'noNarrow'
+		for i in 0 upto elemNames.count() 'eachElem'
+			let elemName = try elemNames.get(i) otherwise panic("narrowFromLiteralElements: elemNames.get OOB at {i} (count={elemNames.count()})")
+			let elemRange = try elemRanges.get(i) otherwise panic("narrowFromLiteralElements: elemRanges.get OOB at {i}")
+			let convertResult = freshSynthName()
+			module.appendOp(currentBlock, op: MaxonOp.convert(convertResult, operand: elemName, fromType: MaxonType.unresolved, toType: elementType, implicit: false, range: elemRange))
+			emitCastCheckIfNamed(currentBlock, value: convertResult, targetType: elementType, castRange: elemRange)
+			try elemNames.set(i, value: convertResult) otherwise panic("narrowFromLiteralElements: elemNames.set OOB at {i}")
+		end 'eachElem'
+	end 'narrowFromLiteralElements'
+
+	// True when `t` is the bare `int` primitive (not a named ranged alias).
+	// A `from`-literal whose element type is plain `int` needs no re-tag —
+	// the elements parse as `int` already.
+	function maxonTypeIsPlainInt(t MaxonType) returns bool
+		return match t 'pick'
+			integer gives true
+			boolean gives false
+			float to cstring gives false
+		end 'pick'
+	end 'maxonTypeIsPlainInt'
 
 	// Parse call arguments, validating named args for 2nd+ arguments.
 	// When calleeName resolves to a registered function signature, the first

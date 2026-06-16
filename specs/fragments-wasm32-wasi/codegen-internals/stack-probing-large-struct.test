@@ -1,0 +1,105 @@
+// Test: stack-probing-large-struct
+typealias Integer = int(i64.min to i64.max)
+typealias BigVec = Vector with 2048 Integer
+typealias Depth = int(-1 to 50)
+
+function recurse(n Depth) returns Depth
+	var v = BigVec.create()
+	try v.set(2047, value: n) otherwise panic("test invariant: set OOB")
+	if n <= 0 'base'
+		return 0
+	end 'base'
+	return recurse(n - 1)
+end 'recurse'
+
+function main() returns ExitCode
+	return recurse(50)
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @recurse(local0: i8) -> i8 {
+  entry:
+    %34 = mir.param local0 : i8
+    %1 = mir.mov_imm 0 : i64
+    %2 = mir.global_addr @__layout_Vector_N2048_Integer
+    %3 = mir.call @Vector.create(%2)
+    %4 = mir.load %3, 0 width: qword
+    %5 = mir.mov_imm 2048 : i64
+    mir.store %5, %4, 16 width: qword
+    %6 = mir.mov_imm 8 : i64
+    mir.store %6, %4, 24 width: qword
+    %7 = mir.mov_imm 16384 : i64
+    %8 = mir.call @mrt_alloc(%7)
+    mir.store %8, %4, 0 width: qword
+    %9 = mir.mov_imm 2048 : i64
+    mir.store %9, %4, 8 width: qword
+    %11 = mir.mov_imm 2047 : i64
+    mir.br inlined_Vector.set_0_0()
+  inlined_Vector.set_0_0:
+    %35 = mir.load %3, 0 width: qword
+    %36, %37 = mir.try_call @stdlib.__managed_mem_set(%35, %11, %34)
+    %46 = mir.call @__mm_decref_maybenull_helper(%3)
+    %38 = mir.mov_imm 0 : i64
+    %39 = mir.cmp ne, %37, %38
+    mir.cond_br %39 [then: inlined_Vector.set_1_0(), else: inlined_Vector.set_3_0()]
+  inlined_Vector.set_1_0:
+    %40 = mir.mov_imm 0 : i64
+    %41 = mir.mov_imm 1 : i64
+    mir.br inline_cont_recurse_0(%40, %41)
+  inlined_Vector.set_3_0:
+    %42 = mir.mov_imm 0 : i64
+    %43 = mir.mov_imm 0 : i64
+    mir.br inline_cont_recurse_0(%42, %43)
+  inline_cont_recurse_0(%44: i64, %45: i64):
+    %17 = mir.cmp ne, %45, %1
+    mir.cond_br %17 [then: try_0.otherwise(), else: try_0.merge()]
+  try_0.otherwise:
+    %19 = mir.global_addr @__panic_msg_5f509fca6deaf6a4
+    %20 = mir.call @mrt_panic(%19)
+    mir.ret %1
+  try_0.merge:
+    %25 = mir.cmp le, %34, %1
+    mir.cond_br %25 [then: base_0(), else: base_0.after()]
+  base_0:
+    mir.ret %1
+  base_0.after:
+    %28 = mir.mov_imm 1 : i64
+    %29 = mir.sub.i64 %34, %28
+    %30 = mir.call @recurse(%29)
+    %31 = mir.mov_imm 128 : i64
+    %32 = mir.xor.i64 %30, %31
+    %33 = mir.sub.i64 %32, %31
+    %47 = mir.mov_imm 50 : i64
+    %48 = mir.cmp le, %33, %47
+    mir.cond_br %48 [then: __range_check_lo_0(), else: __range_panic_0()]
+  __range_panic_0:
+    %51 = mir.global_addr @__panic_msg_7f508be3d21e6b53
+    %52 = mir.call @mrt_panic(%51)
+  __range_ok_0:
+    mir.ret %33
+  __range_check_lo_0:
+    %49 = mir.mov_imm -1 : i64
+    %50 = mir.cmp lt, %33, %49
+    mir.cond_br %50 [then: __range_panic_0(), else: __range_ok_0()]
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 50 : i64
+    %1 = mir.call @recurse(%0)
+    %2 = mir.mov_imm 128 : i64
+    %3 = mir.xor.i64 %1, %2
+    %4 = mir.sub.i64 %3, %2
+    %5 = mir.mov_imm 125 : i64
+    %6 = mir.cmp ugt, %4, %5
+    mir.cond_br %6 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %7 = mir.global_addr @__panic_msg_0d20f541bd20774e
+    %8 = mir.call @mrt_panic(%7)
+  __range_ok_0:
+    mir.ret %4
+  }
+}
+---

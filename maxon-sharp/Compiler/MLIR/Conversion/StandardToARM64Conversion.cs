@@ -866,11 +866,18 @@ public static class StandardToARM64Conversion {
   }
 
   private static ARM64ConditionCode FloatPredicateToCondition(string predicate) {
+    // IEEE 754: an ordered float comparison is false when either operand is
+    // NaN. AArch64 `fcmp` sets N=0,Z=0,C=1,V=1 on unordered (NaN), so the
+    // condition codes here are chosen to map NaN to false:
+    //   Mi (N==1) is false on NaN -> correct for `<`.
+    //   Ls (C==0 OR Z==1) is false on NaN (C=1,Z=0) -> correct for `<=`.
+    //   Gt/Ge are already false on NaN (they require N==V, which fails on NaN).
+    // These feed EmitSetcc's CSET, which materializes 1 iff the condition holds.
     return predicate switch {
       "oeq" or "eq" => ARM64ConditionCode.Eq,
       "one" or "ne" => ARM64ConditionCode.Ne,
-      "olt" or "lt" => ARM64ConditionCode.Lt,
-      "ole" or "le" => ARM64ConditionCode.Le,
+      "olt" or "lt" => ARM64ConditionCode.Mi,
+      "ole" or "le" => ARM64ConditionCode.Ls,
       "ogt" or "gt" => ARM64ConditionCode.Gt,
       "oge" or "ge" => ARM64ConditionCode.Ge,
       _ => throw new NotImplementedException($"Unknown float comparison predicate: {predicate}")

@@ -4079,6 +4079,33 @@ function singleGenericArgFromGid(project Project, gid GenericInstanceId) returns
 	return try args.get(0) otherwise MaxonType.unresolved
 end 'singleGenericArgFromGid'
 
+// Resolve the single element type of a collection-typealias by name, e.g.
+// `ByteArray` (= `Array with Byte`) → `MaxonType.named("Byte")`. Used by the
+// parser's `TypeName from [...]` path to push the destination's element type
+// down onto each parsed element so the literal's element type matches the
+// `init` parameter's `__ManagedMemory with Element` (otherwise the elements
+// stay `int` and the call fails E3005).
+//
+// Works both BEFORE type resolution (the common case for a user alias used in
+// `main`: the alias body is only in `unresolvedTypealiases`) and after (the
+// stdlib-cache restore path, where the alias has been drained into
+// `genericTypealiases`). Returns `unresolved` when `typeName` is not a
+// single-arg generic collection alias (string/char `from` forms, non-generic
+// types) — the caller then leaves elements untouched.
+export function fromLiteralTargetElementType(project Project, typeName String) returns MaxonType
+	if let resolved = try project.genericTypealiases.get(typeName) 'haveResolved'
+		return singleGenericArgOrUnresolved(project, t: resolved)
+	end 'haveResolved'
+	if let entry = try project.unresolvedTypealiases.get(typeName) 'haveUnresolved'
+		if not isGenericAliasExpr(entry.expr) 'notGeneric'
+			return MaxonType.unresolved
+		end 'notGeneric'
+		let gi = resolveGenericAliasExpr(project, expr: entry.expr, declaringTypeName: "")
+		return singleGenericArgOrUnresolved(project, t: gi)
+	end 'haveUnresolved'
+	return MaxonType.unresolved
+end 'fromLiteralTargetElementType'
+
 // True when `t` is an interface receiver whose interface declares both
 // `current()` and `advance()` but no `createIterator` — the user's "this
 // interface is its own iterator" pattern (e.g. `interface HasItems uses

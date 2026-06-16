@@ -1,6 +1,6 @@
 ---
 feature: codegen-internals
-status: stable
+status: selfhosted
 keywords: [rdata, cow, managed-memory, strings, stack-probing, signedness, width, i32, f32]
 category: dev
 ---
@@ -229,358 +229,96 @@ end 'main'
 i64 42
 ```
 ```RequiredIR:x64-windows
-=== maxon
-module {
-  func @main() -> i64 {
-  entry:
-    %0 = maxon.literal {value = 42 : i64}
-    maxon.assign %0 {var = __arr_0.0} {kind = i64} {decl = 1 : i1}
-    %1 = maxon.literal {value = 0 : i64}
-    %2 = maxon.literal {value = 1 : i64}
-    %3 = maxon.literal {value = 0 : i64}
-    %4 = maxon.literal {value = 8 : i64}
-    %5 = maxon.literal {value = 0 : i64}
-    %6 = maxon.struct_literal @__ManagedMemory
-    %7 = maxon.struct_literal @__Array_i64
-    maxon.assign %7 {var = arr} {decl = 1 : i1} {mut = 1 : i1}
-    %8 = maxon.struct_var_ref arr
-    %9 = maxon.literal {value = 0 : i64}
-    %10 = maxon.literal {value = 77 : i64}
-    %11 = maxon.try_call @__Array_i64.set %8, %9, %10
-    maxon.assign %11 {var = __try_error_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %12 = maxon.literal {value = 0 : i64}
-    %13 = maxon.binop %11, %12 {op = ne}
-    maxon.cond_br %13 [then: otherwise_panic_0, else: otherwise_continue_0]
-  otherwise_panic_0:
-    maxon.panic "panic at rdata-cow-mutation-copies-to-heap.test:4: test invariant: set OOB"
-  otherwise_continue_0:
-    %14 = maxon.struct_var_ref arr
-    %15 = maxon.literal {value = 0 : i64}
-    %18, %17 = maxon.try_call @__Array_i64.get %14, %15
-    %19 = maxon.literal {value = 0 : i64}
-    maxon.assign %19 {var = __try_default_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    maxon.assign %18 {var = __try_result_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %20 = maxon.literal {value = 0 : i64}
-    %21 = maxon.binop %17, %20 {op = ne}
-    maxon.cond_br %21 [then: otherwise_default_error_0, else: otherwise_default_continue_0]
-  otherwise_default_error_0:
-    %22 = maxon.var_ref {var = __try_default_0} {type = i64}
-    maxon.assign %22 {var = __try_result_0} {kind = i64} {mut = 1 : i1}
-    maxon.br otherwise_default_continue_0
-  otherwise_default_continue_0:
-    %23 = maxon.var_ref {var = __try_result_0} {type = i64}
-    %24 = maxon.literal {value = 0 : i64}
-    %25 = maxon.binop %23, %24 {op = lt}
-    %26 = maxon.literal {value = 4294967295 : i64}
-    %27 = maxon.binop %23, %26 {op = gt}
-    %28 = maxon.binop %25, %27 {op = or}
-    maxon.cond_br %28 [then: __range_panic_0, else: __range_ok_0]
-  __range_panic_0:
-    maxon.panic "panic at rdata-cow-mutation-copies-to-heap.test:5: Range check failed: value outside typealias 'ExitCode'"
-  __range_ok_0:
-    maxon.scope_end [arr, __try_error_0, __try_default_0, __try_result_0]
-    maxon.return %23
-  }
-}
-=== standard
-module {
-  func @main() -> u32 {
-  entry:
-    %1 = arith.constant {value = 0 : i64}
-    %2 = arith.constant {value = 1 : i64}
-    %3 = arith.constant {value = 0 : i64}
-    %4 = arith.constant {value = 8 : i64}
-    %5 = arith.constant {value = 0 : i64}
-    %6 = arith.constant {value = 40 : i64}
-    %7 = func.ref @__destruct___ManagedMemory
-    %8 = std.ptr_to_i64 %7
-    %9 = arith.constant {value = 1 : i64}
-    %10 = std.call_runtime @mm_alloc %6, %8, %9
-    memref.store %10, __struct_0
-    %11 = memref.load __struct_0 : i64
-    memref.store_indirect %1, %11+0
-    %12 = memref.load __struct_0 : i64
-    memref.store_indirect %2, %12+8
-    %13 = memref.load __struct_0 : i64
-    memref.store_indirect %3, %13+16
-    %14 = memref.load __struct_0 : i64
-    memref.store_indirect %4, %14+24
-    %15 = memref.load __struct_0 : i64
-    memref.store_indirect %5, %15+32
-    %16 = memref.load __struct_0 : i64
-    %17 = memref.load_indirect %16+24
-    %18 = arith.constant {value = 0 : i64}
-    %19 = memref.lea_symdata __mm_panic_element_size_zero
-    %20 = std.ptr_to_i64 %19
-    std.call_runtime @maxon_bounds_check %18, %17, %20
-    %21 = arith.constant {value = 8 : i64}
-    %22 = func.ref @__destruct___Array_i64
-    %23 = std.ptr_to_i64 %22
-    %24 = arith.constant {value = 2 : i64}
-    %25 = std.call_runtime @mm_alloc %21, %23, %24
-    memref.store %25, arr
-    %26 = memref.load __struct_0 : i64
-    %27 = memref.load arr : i64
-    memref.store_indirect %26, %27+0
-    std.call_runtime @mm_incref %26
-    %28 = memref.lea_rdata __const_array_main_arr
-    %29 = std.ptr_to_i64 %28
-    %30 = memref.load arr : i64
-    %31 = memref.load_indirect %30+0
-    memref.store_indirect %29, %31+0
-    %32 = arith.constant {value = -2 : i64}
-    memref.store_indirect %32, %31+16
-    %33 = memref.load arr : i64
-    std.call_runtime @mm_incref %33
-    %34 = arith.constant {value = 0 : i64}
-    %35 = arith.constant {value = 77 : i64}
-    %36 = memref.load arr : i64
-    %37 = func.try_call @__Array_i64.set %36, %34, %35
-    %38 = arith.constant {value = 0 : i64}
-    %39 = arith.cmpi ne %37, %38
-    cf.cond_br %39 [then: otherwise_panic_0, else: otherwise_continue_0]
-  otherwise_panic_0:
-    %40 = memref.lea_symdata __panic_msg_0
-    %41 = std.ptr_to_i64 %40
-    std.call_runtime @mrt_panic %41
-  otherwise_continue_0:
-    %42 = arith.constant {value = 0 : i64}
-    %43 = memref.load arr : i64
-    %44, %45 = func.try_call @__Array_i64.get %43, %42
-    %46 = arith.constant {value = 0 : i64}
-    memref.store %46, __try_default_0
-    memref.store %44, __try_result_0
-    %47 = arith.constant {value = 0 : i64}
-    %48 = arith.cmpi ne %45, %47
-    cf.cond_br %48 [then: otherwise_default_error_0, else: otherwise_default_continue_0]
-  otherwise_default_error_0:
-    %49 = memref.load __try_default_0 : i64
-    memref.store %49, __try_result_0
-    cf.br otherwise_default_continue_0
-  otherwise_default_continue_0:
-    %50 = memref.load __try_result_0 : i64
-    %51 = arith.constant {value = 0 : i64}
-    %52 = arith.cmpi lt %50, %51
-    %53 = arith.constant {value = 4294967295 : i64}
-    %54 = arith.cmpi gt %50, %53
-    %55 = arith.ori1 %52, %54
-    cf.cond_br %55 [then: __range_panic_0, else: __range_ok_0]
-  __range_panic_0:
-    %56 = memref.lea_symdata __panic_msg_1
-    %57 = std.ptr_to_i64 %56
-    std.call_runtime @mrt_panic %57
-  __range_ok_0:
-    %58 = memref.load arr : i64
-    std.call_runtime_if_nonnull @mm_decref %58
-    func.return %50
-  }
-  func @__destruct___ManagedMemory(ptr: i64) {
-  entry:
-    %61 = func.param ptr : StdI64
-    memref.store %61, __destr_ptr
-    %64 = memref.load __destr_ptr : i64
-    %65 = memref.load_indirect %64+16
-    %66 = arith.constant {value = -1 : i64}
-    %67 = arith.cmpi eq %65, %66
-    cf.cond_br %67 [then: slice_cleanup_0, else: check_owned_0]
-  slice_cleanup_0:
-    %68 = memref.load __destr_ptr : i64
-    %69 = memref.load_indirect %68+32
-    std.call_runtime_if_nonnull @mm_decref %69
-    cf.br skip_buf_0
-  check_owned_0:
-    %70 = memref.load __destr_ptr : i64
-    %71 = memref.load_indirect %70+16
-    %72 = arith.constant {value = -2 : i64}
-    %73 = arith.cmpi ne %71, %72
-    cf.cond_br %73 [then: free_buf_0, else: skip_buf_0]
-  free_buf_0:
-    %74 = memref.load __destr_ptr : i64
-    %75 = memref.load_indirect %74+0
-    std.call_runtime @mm_raw_free %75
-    cf.br skip_buf_0
-  skip_buf_0:
-    cf.br done
-  done:
-    func.return
-  }
-  func @__destruct___Array_i64(ptr: i64) {
-  entry:
-    %76 = func.param ptr : StdI64
-    memref.store %76, __destr_ptr
-    %77 = memref.load __destr_ptr : i64
-    %78 = memref.load_indirect %77+0
-    std.call_runtime_if_nonnull @mm_decref %78
-    cf.br done
-  done:
-    func.return
-  }
-}
-=== x86
 module {
   func @main() -> u32 {
   entry:
     x64.prologue stack_size=32
-    x64.xor eax, eax
-    x64.mov rcx, 1
+    x64.lea rdx, [rip+stdlib.__destruct___ManagedMemory]
+    x64.mov ecx, 48
+    x64.call stdlib.__mm_alloc
+    x64.mov r12, r8
+    x64.mov rcx, r12
+    x64.call stdlib.__mm_incref
+    x64.lea r8, [rip+__rdata_arr_main_0]
+    x64.mov [r12+0], r8 (8b)
+    x64.mov r8d, 1
+    x64.mov [r12+8], r8 (8b)
+    x64.mov r8, -2
+    x64.mov [r12+16], r8 (8b)
+    x64.mov r8d, 8
+    x64.mov [r12+24], r8 (8b)
+    x64.mov r8, -2
+    x64.mov [r12+32], r8 (8b)
+    x64.xor r13d, r13d
+    x64.mov [r12+40], r13 (8b)
+    x64.lea rdx, [rip+__layout_Array_Int]
+    x64.mov rcx, r12
+    x64.call Array.init
+    x64.mov r12, r8
+    x64.mov eax, 77
+  inlined_Array.set_0_0:
+    x64.mov rcx, [r12+0] (8b)
+    x64.mov rdx, r13
+    x64.call stdlib.__managed_mem_set
+    x64.test rdx, rdx
+    x64.je inlined_Array.set_3_0
+  inlined_Array.set_1_0:
+    x64.mov edx, 1
+    x64.xor r8d, r8d
+    x64.jmp inline_cont_main_0
+  inlined_Array.set_3_0:
     x64.xor edx, edx
-    x64.mov rbx, 8
-    x64.xor esi, esi
-    x64.lea_func rdi, [__destruct___ManagedMemory]
-    x64.mov r8, rdi
-    x64.mov rdx, r8
-    x64.mov rcx, 40
-    x64.mov r8, 1
-    x64.call mm_alloc
-    x64.mov [rbp-8], rax
-    x64.mov r9, [rbp-8]
-    x64.xor eax, eax
-    x64.mov [r9+0], rax
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, 1
-    x64.mov [rax+8], rcx
-    x64.mov rax, [rbp-8]
-    x64.xor ecx, ecx
-    x64.mov [rax+16], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, 8
-    x64.mov [rax+24], rcx
-    x64.mov rax, [rbp-8]
-    x64.xor ecx, ecx
-    x64.mov [rax+32], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+24]
-    x64.lea_symdata rax, [__mm_panic_element_size_zero]
-    x64.mov rdx, rax
-    x64.mov r8, rdx
-    x64.mov rdx, rcx
-    x64.xor ecx, ecx
-    x64.call maxon_bounds_check
-    x64.lea_func rax, [__destruct___Array_i64]
-    x64.mov rcx, rax
-    x64.mov rdx, rcx
-    x64.mov rcx, 8
-    x64.mov r8, 2
-    x64.call mm_alloc
-    x64.mov [rbp-16], rax
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rbp-16]
-    x64.mov [rcx+0], rax
-    x64.mov rcx, [rbp-8]
-    x64.call mm_incref
-    x64.lea_rdata rax, [__const_array_main_arr]
-    x64.mov rcx, rax
-    x64.mov rax, [rbp-16]
-    x64.mov rdx, [rax+0]
-    x64.mov [rdx+0], rcx
-    x64.mov rax, -2
-    x64.mov [rdx+16], rax
-    x64.mov rax, [rbp-16]
-    x64.mov rcx, [rbp-16]
-    x64.call mm_incref
-    x64.mov rax, [rbp-16]
-    x64.mov rcx, [rbp-16]
-    x64.xor edx, edx
-    x64.mov r8, 77
-    x64.call __Array_i64.set
-    x64.xor eax, eax
-    x64.cmp rdx, rax
-    x64.je main.otherwise_continue_0
-  otherwise_panic_0:
-    x64.lea_symdata rax, [__panic_msg_0]
-    x64.mov rcx, rax
+    x64.xor r8d, r8d
+  inline_cont_main_0:
+    x64.test rdx, rdx
+    x64.je inlined_Array.get_0_0
+  try_0.otherwise:
+    x64.mov rcx, r12
+    x64.call __mm_decref_maybenull_helper
+    x64.lea r12, [rip+__panic_msg_ae90e3f7d6f93ae6]
+    x64.mov rcx, r12
     x64.call mrt_panic
-  otherwise_continue_0:
-    x64.mov rax, [rbp-16]
-    x64.mov rcx, [rbp-16]
+    x64.mov r8, r13
+    x64.epilogue
+    x64.ret
+  inlined_Array.get_0_0:
+    x64.mov rcx, [r12+0] (8b)
+    x64.mov rdx, r13
+    x64.call stdlib.__managed_mem_get
+    x64.mov r14, r8
+    x64.test rdx, rdx
+    x64.je inlined_Array.get_3_0
+  inlined_Array.get_1_0:
+    x64.mov rcx, r12
+    x64.call __mm_decref_maybenull_helper
+    x64.mov edx, 1
+    x64.xor r8d, r8d
+    x64.jmp inline_cont_main_1
+  inlined_Array.get_3_0:
+    x64.mov rcx, r12
+    x64.call __mm_decref_maybenull_helper
     x64.xor edx, edx
-    x64.call __Array_i64.get
-    x64.xor ecx, ecx
-    x64.mov [rbp-24], rcx
-    x64.mov [rbp-32], rax
-    x64.xor eax, eax
-    x64.cmp rdx, rax
-    x64.je main.otherwise_default_continue_0
-  otherwise_default_error_0:
-    x64.mov rax, [rbp-24]
-    x64.mov [rbp-32], rax
-    x64.jmp main.otherwise_default_continue_0
-  otherwise_default_continue_0:
-    x64.mov rax, [rbp-32]
-    x64.xor ecx, ecx
-    x64.mov edx, 4294967295
-    x64.cmp rax, rdx
-    x64.jg main.__range_panic_0
-    x64.cmp rax, rcx
-    x64.jl main.__range_panic_0
-    x64.jmp main.__range_ok_0
+    x64.mov r8, r14
+  inline_cont_main_1:
+    x64.test rdx, rdx
+    x64.je try_1.ok
+    x64.mov r8, r13
+    x64.jmp try_1.merge
+  try_1.ok:
+  try_1.merge:
+    x64.mov r9d, 4294967295
+    x64.cmp r8, r9
+    x64.jbe __range_ok_0
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_1]
-    x64.mov rcx, rax
+    x64.lea r12, [rip+__panic_msg_62b6e9add79cfc21]
+    x64.mov rcx, r12
     x64.call mrt_panic
   __range_ok_0:
-    x64.mov rbx, [rbp-16]
-    x64.test rbx, rbx
-    x64.jz __nonnull_skip_0
-    x64.mov rcx, [rbp-16]
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.mov rax, [rbp-32]
-    x64.epilogue
-    x64.ret
-  }
-  func @__destruct___ManagedMemory(ptr: i64) {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+16]
-    x64.mov rdx, -1
-    x64.cmp rcx, rdx
-    x64.jne __destruct___ManagedMemory.check_owned_0
-  slice_cleanup_0:
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+32]
-    x64.mov [rbp-16], rcx
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_0
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.jmp __destruct___ManagedMemory.skip_buf_0
-  check_owned_0:
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+16]
-    x64.mov rdx, -2
-    x64.cmp rcx, rdx
-    x64.je __destruct___ManagedMemory.skip_buf_0
-  free_buf_0:
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+0]
-    x64.call mm_raw_free
-    x64.jmp __destruct___ManagedMemory.skip_buf_0
-  skip_buf_0:
-    x64.jmp __destruct___ManagedMemory.done
-  done:
-    x64.epilogue
-    x64.ret
-  }
-  func @__destruct___Array_i64(ptr: i64) {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+0]
-    x64.mov [rbp-16], rcx
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_0
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.jmp __destruct___Array_i64.done
-  done:
     x64.epilogue
     x64.ret
   }
 }
+
 ```
 ```RequiredIR:arm64-macos
 === maxon
@@ -1094,73 +832,14 @@ end 'main'
 13
 ```
 ```RequiredIR:x64-windows
-=== maxon
-module {
-  func @main() -> i64 {
-  entry:
-    %0 = maxon.literal {value = 10 : i64}
-    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1}
-    %1 = maxon.literal {value = 3 : i64}
-    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1}
-    %2 = maxon.binop %0, %1 {op = add} {optimalType = u16}
-    %3 = maxon.literal {value = 0 : i64}
-    %4 = maxon.binop %2, %3 {op = lt}
-    %5 = maxon.literal {value = 4294967295 : i64}
-    %6 = maxon.binop %2, %5 {op = gt}
-    %7 = maxon.binop %4, %6 {op = or}
-    maxon.cond_br %7 [then: __range_panic_0, else: __range_ok_0]
-  __range_panic_0:
-    maxon.panic "panic at i32-unsigned-add.test:7: Range check failed: value outside typealias 'ExitCode'"
-  __range_ok_0:
-    maxon.scope_end [a, b]
-    maxon.return %2
-  }
-}
-=== standard
 module {
   func @main() -> u32 {
   entry:
-    %0 = arith.constant {value = 10 : i64}
-    %1 = arith.constant {value = 3 : i64}
-    %2 = arith.addi %0, %1
-    %3 = arith.constant {value = 0 : i64}
-    %4 = arith.cmpi lt %2, %3
-    %5 = arith.constant {value = 4294967295 : i64}
-    %6 = arith.cmpi gt %2, %5
-    %7 = arith.ori1 %4, %6
-    cf.cond_br %7 [then: __range_panic_0, else: __range_ok_0]
-  __range_panic_0:
-    %8 = memref.lea_symdata __panic_msg_0
-    %9 = std.ptr_to_i64 %8
-    std.call_runtime @mrt_panic %9
-  __range_ok_0:
-    func.return %2
-  }
-}
-=== x86
-module {
-  func @main() -> u32 {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov rax, 10
-    x64.mov rcx, 3
-    x64.add rax, rcx
-    x64.xor edx, edx
-    x64.mov ebx, 4294967295
-    x64.cmp rax, rbx
-    x64.jg main.__range_panic_0
-    x64.cmp rax, rdx
-    x64.jl main.__range_panic_0
-    x64.jmp main.__range_ok_0
-  __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_0]
-    x64.mov rcx, rax
-    x64.call mrt_panic
-  __range_ok_0:
-    x64.epilogue
+    x64.mov r8d, 13
     x64.ret
   }
 }
+
 ```
 ```RequiredIR:arm64-macos
 === maxon
@@ -1253,74 +932,28 @@ end 'main'
 6
 ```
 ```RequiredIR:x64-windows
-=== maxon
-module {
-  func @main() -> i64 {
-  entry:
-    %0 = maxon.literal {value = 20 : i64}
-    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1}
-    %1 = maxon.literal {value = 3 : i64}
-    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1}
-    %2 = maxon.binop %0, %1 {op = div} {optimalType = u16}
-    %3 = maxon.literal {value = 0 : i64}
-    %4 = maxon.binop %2, %3 {op = lt}
-    %5 = maxon.literal {value = 4294967295 : i64}
-    %6 = maxon.binop %2, %5 {op = gt}
-    %7 = maxon.binop %4, %6 {op = or}
-    maxon.cond_br %7 [then: __range_panic_0, else: __range_ok_0]
-  __range_panic_0:
-    maxon.panic "panic at i32-unsigned-div.test:7: Range check failed: value outside typealias 'ExitCode'"
-  __range_ok_0:
-    maxon.scope_end [a, b]
-    maxon.return %2
-  }
-}
-=== standard
-module {
-  func @main() -> u32 {
-  entry:
-    %0 = arith.constant {value = 20 : i64}
-    %1 = arith.constant {value = 3 : i64}
-    %2 = arith.divui %0, %1
-    %3 = arith.constant {value = 0 : i64}
-    %4 = arith.cmpi lt %2, %3
-    %5 = arith.constant {value = 4294967295 : i64}
-    %6 = arith.cmpi gt %2, %5
-    %7 = arith.ori1 %4, %6
-    cf.cond_br %7 [then: __range_panic_0, else: __range_ok_0]
-  __range_panic_0:
-    %8 = memref.lea_symdata __panic_msg_0
-    %9 = std.ptr_to_i64 %8
-    std.call_runtime @mrt_panic %9
-  __range_ok_0:
-    func.return %2
-  }
-}
-=== x86
 module {
   func @main() -> u32 {
   entry:
     x64.prologue stack_size=16
-    x64.mov rax, 20
-    x64.mov rcx, 3
+    x64.mov r8d, 3
+    x64.mov eax, 20
     x64.xor edx, edx
-    x64.div rcx
-    x64.xor edx, edx
-    x64.mov ebx, 4294967295
-    x64.cmp rax, rbx
-    x64.jg main.__range_panic_0
-    x64.cmp rax, rdx
-    x64.jl main.__range_panic_0
-    x64.jmp main.__range_ok_0
+    x64.idiv r8
+    x64.mov r8, rax
+    x64.mov r9d, 4294967295
+    x64.cmp r8, r9
+    x64.jbe __range_ok_0
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_0]
-    x64.mov rcx, rax
+    x64.lea r12, [rip+__panic_msg_e03f78fd39cbf137]
+    x64.mov rcx, r12
     x64.call mrt_panic
   __range_ok_0:
     x64.epilogue
     x64.ret
   }
 }
+
 ```
 ```RequiredIR:arm64-macos
 === maxon
@@ -1413,84 +1046,28 @@ end 'main'
 6
 ```
 ```RequiredIR:x64-windows
-=== maxon
-module {
-  func @main() -> i64 {
-  entry:
-    %0 = maxon.literal {value = 20 : i64}
-    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1}
-    %1 = maxon.literal {value = 3 : i64}
-    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1}
-    %2 = maxon.binop %0, %1 {op = div} {optimalType = i32}
-    %3 = maxon.literal {value = 0 : i64}
-    %4 = maxon.binop %2, %3 {op = lt}
-    %5 = maxon.literal {value = 4294967295 : i64}
-    %6 = maxon.binop %2, %5 {op = gt}
-    %7 = maxon.binop %4, %6 {op = or}
-    maxon.cond_br %7 [then: __range_panic_0, else: __range_ok_0]
-  __range_panic_0:
-    maxon.panic "panic at i32-signed-div.test:7: Range check failed: value outside typealias 'ExitCode'"
-  __range_ok_0:
-    maxon.scope_end [a, b]
-    maxon.return %2
-  }
-}
-=== standard
-module {
-  func @main() -> u32 {
-  entry:
-    %0 = arith.constant {value = 20 : i64}
-    %1 = arith.constant {value = 3 : i64}
-    %2 = arith.trunci %0
-    %3 = arith.trunci %1
-    %4 = arith.divsi %2, %3
-    %5 = arith.constant {value = 0 : i64}
-    %6 = arith.extsi %4
-    %7 = arith.cmpi lt %6, %5
-    %8 = arith.constant {value = 4294967295 : i64}
-    %9 = arith.extsi %4
-    %10 = arith.cmpi gt %9, %8
-    %11 = arith.ori1 %7, %10
-    cf.cond_br %11 [then: __range_panic_0, else: __range_ok_0]
-  __range_panic_0:
-    %12 = memref.lea_symdata __panic_msg_0
-    %13 = std.ptr_to_i64 %12
-    std.call_runtime @mrt_panic %13
-  __range_ok_0:
-    func.return %4
-  }
-}
-=== x86
 module {
   func @main() -> u32 {
   entry:
     x64.prologue stack_size=16
-    x64.mov rax, 20
-    x64.mov rcx, 3
-    x64.mov edx, eax
-    x64.mov ebx, ecx
-    x64.mov [rbp-8], rdx
-    x64.mov rax, rdx
-    x64.cdq
-    x64.idiv32 rbx
-    x64.xor esi, esi
-    x64.movsxd rdi, rax
-    x64.mov r8, 4294967295
-    x64.movsxd r9, rax
-    x64.cmp r9, r8
-    x64.jg main.__range_panic_0
-    x64.cmp rdi, rsi
-    x64.jl main.__range_panic_0
-    x64.jmp main.__range_ok_0
+    x64.mov r8d, 3
+    x64.mov eax, 20
+    x64.xor edx, edx
+    x64.idiv r8
+    x64.mov r8, rax
+    x64.mov r9d, 4294967295
+    x64.cmp r8, r9
+    x64.jbe __range_ok_0
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_0]
-    x64.mov rcx, rax
+    x64.lea r12, [rip+__panic_msg_dc6712b5d40a6c5e]
+    x64.mov rcx, r12
     x64.call mrt_panic
   __range_ok_0:
     x64.epilogue
     x64.ret
   }
 }
+
 ```
 ```RequiredIR:arm64-macos
 === maxon
@@ -1592,58 +1169,14 @@ end 'main'
 1
 ```
 ```RequiredIR:x64-windows
-=== maxon
-module {
-  func @main() -> i64 {
-  entry:
-    %0 = maxon.literal {value = 10 : i64}
-    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1}
-    %1 = maxon.literal {value = 3 : i64}
-    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1}
-    %2 = maxon.binop %0, %1 {op = gt}
-    maxon.cond_br %2 [then: check_0, else: check_0.after]
-  check_0:
-    %3 = maxon.literal {value = 1 : i64}
-    maxon.scope_end [a, b]
-    maxon.return %3
-  check_0.after:
-    %4 = maxon.literal {value = 0 : i64}
-    maxon.scope_end [a, b]
-    maxon.return %4
-  }
-}
-=== standard
 module {
   func @main() -> u32 {
   entry:
-    %0 = arith.constant {value = 10 : i64}
-    %1 = arith.constant {value = 3 : i64}
-    %2 = arith.cmpi gt %0, %1
-    cf.cond_br %2 [then: check_0, else: check_0.after]
-  check_0:
-    %3 = arith.constant {value = 1 : i64}
-    func.return %3
-  check_0.after:
-    %4 = arith.constant {value = 0 : i64}
-    func.return %4
-  }
-}
-=== x86
-module {
-  func @main() -> u32 {
-  entry:
-    x64.mov rax, 10
-    x64.mov rcx, 3
-    x64.cmp rax, rcx
-    x64.jle main.check_0.after
-  check_0:
-    x64.mov rax, 1
-    x64.ret
-  check_0.after:
-    x64.xor eax, eax
+    x64.mov r8d, 1
     x64.ret
   }
 }
+
 ```
 ```RequiredIR:arm64-macos
 === maxon
@@ -1719,75 +1252,28 @@ end 'main'
 2
 ```
 ```RequiredIR:x64-windows
-=== maxon
-module {
-  func @main() -> i64 {
-  entry:
-    %0 = maxon.literal {value = 20 : i64}
-    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1}
-    %1 = maxon.literal {value = 3 : i64}
-    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1}
-    %2 = maxon.binop %0, %1 {op = mod} {optimalType = u16}
-    %3 = maxon.literal {value = 0 : i64}
-    %4 = maxon.binop %2, %3 {op = lt}
-    %5 = maxon.literal {value = 4294967295 : i64}
-    %6 = maxon.binop %2, %5 {op = gt}
-    %7 = maxon.binop %4, %6 {op = or}
-    maxon.cond_br %7 [then: __range_panic_0, else: __range_ok_0]
-  __range_panic_0:
-    maxon.panic "panic at i32-unsigned-mod.test:7: Range check failed: value outside typealias 'ExitCode'"
-  __range_ok_0:
-    maxon.scope_end [a, b]
-    maxon.return %2
-  }
-}
-=== standard
-module {
-  func @main() -> u32 {
-  entry:
-    %0 = arith.constant {value = 20 : i64}
-    %1 = arith.constant {value = 3 : i64}
-    %2 = arith.remui %0, %1
-    %3 = arith.constant {value = 0 : i64}
-    %4 = arith.cmpi lt %2, %3
-    %5 = arith.constant {value = 4294967295 : i64}
-    %6 = arith.cmpi gt %2, %5
-    %7 = arith.ori1 %4, %6
-    cf.cond_br %7 [then: __range_panic_0, else: __range_ok_0]
-  __range_panic_0:
-    %8 = memref.lea_symdata __panic_msg_0
-    %9 = std.ptr_to_i64 %8
-    std.call_runtime @mrt_panic %9
-  __range_ok_0:
-    func.return %2
-  }
-}
-=== x86
 module {
   func @main() -> u32 {
   entry:
     x64.prologue stack_size=16
-    x64.mov rax, 20
-    x64.mov rcx, 3
+    x64.mov r8d, 3
+    x64.mov eax, 20
     x64.xor edx, edx
-    x64.div rcx
-    x64.xor eax, eax
-    x64.mov ecx, 4294967295
-    x64.cmp rdx, rcx
-    x64.jg main.__range_panic_0
-    x64.cmp rdx, rax
-    x64.jl main.__range_panic_0
-    x64.jmp main.__range_ok_0
+    x64.idiv r8
+    x64.mov r8, rdx
+    x64.mov r9d, 4294967295
+    x64.cmp r8, r9
+    x64.jbe __range_ok_0
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_0]
-    x64.mov rcx, rax
+    x64.lea r12, [rip+__panic_msg_c4ba6be625f9de38]
+    x64.mov rcx, r12
     x64.call mrt_panic
   __range_ok_0:
-    x64.mov rax, rdx
     x64.epilogue
     x64.ret
   }
 }
+
 ```
 ```RequiredIR:arm64-macos
 === maxon
@@ -1881,74 +1367,28 @@ end 'main'
 6
 ```
 ```RequiredIR:x64-windows
-=== maxon
-module {
-  func @main() -> i64 {
-  entry:
-    %0 = maxon.literal {value = 20 : i64}
-    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1}
-    %1 = maxon.literal {value = 3 : i64}
-    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1}
-    %2 = maxon.binop %0, %1 {op = div} {optimalType = i64}
-    %3 = maxon.literal {value = 0 : i64}
-    %4 = maxon.binop %2, %3 {op = lt}
-    %5 = maxon.literal {value = 4294967295 : i64}
-    %6 = maxon.binop %2, %5 {op = gt}
-    %7 = maxon.binop %4, %6 {op = or}
-    maxon.cond_br %7 [then: __range_panic_0, else: __range_ok_0]
-  __range_panic_0:
-    maxon.panic "panic at i64-signed-no-narrowing.test:7: Range check failed: value outside typealias 'ExitCode'"
-  __range_ok_0:
-    maxon.scope_end [a, b]
-    maxon.return %2
-  }
-}
-=== standard
-module {
-  func @main() -> u32 {
-  entry:
-    %0 = arith.constant {value = 20 : i64}
-    %1 = arith.constant {value = 3 : i64}
-    %2 = arith.divsi %0, %1
-    %3 = arith.constant {value = 0 : i64}
-    %4 = arith.cmpi lt %2, %3
-    %5 = arith.constant {value = 4294967295 : i64}
-    %6 = arith.cmpi gt %2, %5
-    %7 = arith.ori1 %4, %6
-    cf.cond_br %7 [then: __range_panic_0, else: __range_ok_0]
-  __range_panic_0:
-    %8 = memref.lea_symdata __panic_msg_0
-    %9 = std.ptr_to_i64 %8
-    std.call_runtime @mrt_panic %9
-  __range_ok_0:
-    func.return %2
-  }
-}
-=== x86
 module {
   func @main() -> u32 {
   entry:
     x64.prologue stack_size=16
-    x64.mov rax, 20
-    x64.mov rcx, 3
-    x64.cqo
-    x64.idiv rcx
+    x64.mov r8d, 3
+    x64.mov eax, 20
     x64.xor edx, edx
-    x64.mov ebx, 4294967295
-    x64.cmp rax, rbx
-    x64.jg main.__range_panic_0
-    x64.cmp rax, rdx
-    x64.jl main.__range_panic_0
-    x64.jmp main.__range_ok_0
+    x64.idiv r8
+    x64.mov r8, rax
+    x64.mov r9d, 4294967295
+    x64.cmp r8, r9
+    x64.jbe __range_ok_0
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_0]
-    x64.mov rcx, rax
+    x64.lea r12, [rip+__panic_msg_e3b71750342575b4]
+    x64.mov rcx, r12
     x64.call mrt_panic
   __range_ok_0:
     x64.epilogue
     x64.ret
   }
 }
+
 ```
 ```RequiredIR:arm64-macos
 === maxon
@@ -2039,84 +1479,28 @@ end 'main'
 7
 ```
 ```RequiredIR:x64-windows
-=== maxon
-module {
-  func @main() -> i64 {
-  entry:
-    %0 = maxon.literal {value = 21 : i64}
-    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1}
-    %1 = maxon.literal {value = 3 : i64}
-    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1}
-    %2 = maxon.binop %0, %1 {op = div} {optimalType = u8}
-    %3 = maxon.literal {value = 0 : i64}
-    %4 = maxon.binop %2, %3 {op = lt}
-    %5 = maxon.literal {value = 4294967295 : i64}
-    %6 = maxon.binop %2, %5 {op = gt}
-    %7 = maxon.binop %4, %6 {op = or}
-    maxon.cond_br %7 [then: __range_panic_0, else: __range_ok_0]
-  __range_panic_0:
-    maxon.panic "panic at i8-range-uses-i32-arithmetic.test:7: Range check failed: value outside typealias 'ExitCode'"
-  __range_ok_0:
-    maxon.scope_end [a, b]
-    maxon.return %2
-  }
-}
-=== standard
-module {
-  func @main() -> u32 {
-  entry:
-    %0 = arith.constant {value = 21 : i64}
-    %1 = arith.constant {value = 3 : i64}
-    %2 = arith.trunci %0
-    %3 = arith.trunci %1
-    %4 = arith.divui %2, %3
-    %5 = arith.constant {value = 0 : i64}
-    %6 = arith.extui %4
-    %7 = arith.cmpi lt %6, %5
-    %8 = arith.constant {value = 4294967295 : i64}
-    %9 = arith.extui %4
-    %10 = arith.cmpi gt %9, %8
-    %11 = arith.ori1 %7, %10
-    cf.cond_br %11 [then: __range_panic_0, else: __range_ok_0]
-  __range_panic_0:
-    %12 = memref.lea_symdata __panic_msg_0
-    %13 = std.ptr_to_i64 %12
-    std.call_runtime @mrt_panic %13
-  __range_ok_0:
-    func.return %4
-  }
-}
-=== x86
 module {
   func @main() -> u32 {
   entry:
     x64.prologue stack_size=16
-    x64.mov rax, 21
-    x64.mov rcx, 3
-    x64.mov edx, eax
-    x64.mov ebx, ecx
-    x64.mov [rbp-8], rdx
-    x64.mov rax, rdx
+    x64.mov r8d, 3
+    x64.mov eax, 21
     x64.xor edx, edx
-    x64.div32 rbx
-    x64.xor esi, esi
-    x64.mov edi, rax
-    x64.mov r8, 4294967295
-    x64.mov r9, rax
-    x64.cmp r9, r8
-    x64.jg main.__range_panic_0
-    x64.cmp rdi, rsi
-    x64.jl main.__range_panic_0
-    x64.jmp main.__range_ok_0
+    x64.idiv r8
+    x64.mov r8, rax
+    x64.mov r9d, 4294967295
+    x64.cmp r8, r9
+    x64.jbe __range_ok_0
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_0]
-    x64.mov rcx, rax
+    x64.lea r12, [rip+__panic_msg_771a87d3fb99fca9]
+    x64.mov rcx, r12
     x64.call mrt_panic
   __range_ok_0:
     x64.epilogue
     x64.ret
   }
 }
+
 ```
 ```RequiredIR:arm64-macos
 === maxon
@@ -2215,77 +1599,27 @@ end 'main'
 13
 ```
 ```RequiredIR:x64-windows
-=== maxon
-module {
-  func @main() -> i64 {
-  entry:
-    %0 = maxon.literal {value = 10 : f64}
-    maxon.assign %0 {var = a} {kind = f64} {decl = 1 : i1}
-    %1 = maxon.literal {value = 3 : f64}
-    maxon.assign %1 {var = b} {kind = f64} {decl = 1 : i1}
-    %2 = maxon.binop %0, %1 {op = add} {kind = f64}
-    %3 = maxon.trunc %2
-    %4 = maxon.literal {value = 0 : i64}
-    %5 = maxon.binop %3, %4 {op = lt}
-    %6 = maxon.literal {value = 4294967295 : i64}
-    %7 = maxon.binop %3, %6 {op = gt}
-    %8 = maxon.binop %5, %7 {op = or}
-    maxon.cond_br %8 [then: __range_panic_0, else: __range_ok_0]
-  __range_panic_0:
-    maxon.panic "panic at f32-arithmetic-uses-ss-instructions.test:7: Range check failed: value outside typealias 'ExitCode'"
-  __range_ok_0:
-    maxon.scope_end [a, b]
-    maxon.return %3
-  }
-}
-=== standard
-module {
-  func @main() -> u32 {
-  entry:
-    %0 = arith.float_constant {value = 10 : f64}
-    %1 = arith.float_constant {value = 3 : f64}
-    %2 = arith.addf %0, %1
-    %3 = arith.fptosi %2
-    %4 = arith.constant {value = 0 : i64}
-    %5 = arith.cmpi lt %3, %4
-    %6 = arith.constant {value = 4294967295 : i64}
-    %7 = arith.cmpi gt %3, %6
-    %8 = arith.ori1 %5, %7
-    cf.cond_br %8 [then: __range_panic_0, else: __range_ok_0]
-  __range_panic_0:
-    %9 = memref.lea_symdata __panic_msg_0
-    %10 = std.ptr_to_i64 %9
-    std.call_runtime @mrt_panic %10
-  __range_ok_0:
-    func.return %3
-  }
-}
-=== x86
 module {
   func @main() -> u32 {
   entry:
     x64.prologue stack_size=16
-    x64.movsd xmm0, [rip+__float_10]
-    x64.movsd xmm1, [rip+__float_3]
-    x64.movsd xmm2, xmm0
-    x64.addsd xmm2, xmm1
-    x64.cvttsd2si rax, xmm2
-    x64.xor ecx, ecx
-    x64.mov edx, 4294967295
-    x64.cmp rax, rdx
-    x64.jg main.__range_panic_0
-    x64.cmp rax, rcx
-    x64.jl main.__range_panic_0
-    x64.jmp main.__range_ok_0
+    x64.movsd xmm0, [rip+__float_4613937818241073152]
+    x64.movsd xmm1, [rip+__float_4621819117588971520]
+    x64.addsd xmm1, xmm0
+    x64.mov r9d, 4294967295
+    x64.cvttsd2si r8, xmm1
+    x64.cmp r8, r9
+    x64.jbe __range_ok_0
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_0]
-    x64.mov rcx, rax
+    x64.lea r12, [rip+__panic_msg_91aa5b022612377c]
+    x64.mov rcx, r12
     x64.call mrt_panic
   __range_ok_0:
     x64.epilogue
     x64.ret
   }
 }
+
 ```
 ```RequiredIR:arm64-macos
 === maxon
@@ -2381,59 +1715,23 @@ end 'main'
 1
 ```
 ```RequiredIR:x64-windows
-=== maxon
-module {
-  func @main() -> i64 {
-  entry:
-    %0 = maxon.literal {value = 3 : f64}
-    maxon.assign %0 {var = a} {kind = f64} {decl = 1 : i1}
-    %1 = maxon.literal {value = 5 : f64}
-    maxon.assign %1 {var = b} {kind = f64} {decl = 1 : i1}
-    %2 = maxon.binop %0, %1 {op = lt} {kind = f64}
-    maxon.cond_br %2 [then: less_0, else: less_0.after]
-  less_0:
-    %3 = maxon.literal {value = 1 : i64}
-    maxon.scope_end [a, b]
-    maxon.return %3
-  less_0.after:
-    %4 = maxon.literal {value = 0 : i64}
-    maxon.scope_end [a, b]
-    maxon.return %4
-  }
-}
-=== standard
 module {
   func @main() -> u32 {
   entry:
-    %0 = arith.float_constant {value = 3 : f64}
-    %1 = arith.float_constant {value = 5 : f64}
-    %2 = arith.cmpf lt %0, %1
-    cf.cond_br %2 [then: less_0, else: less_0.after]
+    x64.movsd xmm0, [rip+__float_4617315517961601024]
+    x64.movsd xmm1, [rip+__float_4613937818241073152]
+    x64.ucomisd xmm1, xmm0
+    x64.jp less_0.after
+    x64.jae less_0.after
   less_0:
-    %3 = arith.constant {value = 1 : i64}
-    func.return %3
-  less_0.after:
-    %4 = arith.constant {value = 0 : i64}
-    func.return %4
-  }
-}
-=== x86
-module {
-  func @main() -> u32 {
-  entry:
-    x64.movsd xmm0, [rip+__float_3]
-    x64.movsd xmm1, [rip+__float_5]
-    x64.ucomisd xmm0, xmm1
-    x64.jp main.less_0.after
-    x64.jae main.less_0.after
-  less_0:
-    x64.mov rax, 1
+    x64.mov r8d, 1
     x64.ret
   less_0.after:
-    x64.xor eax, eax
+    x64.xor r8d, r8d
     x64.ret
   }
 }
+
 ```
 ```RequiredIR:arm64-macos
 === maxon
@@ -2506,69 +1804,25 @@ end 'main'
 42
 ```
 ```RequiredIR:x64-windows
-=== maxon
-module {
-  func @main() -> i64 {
-  entry:
-    %0 = maxon.literal {value = 42.9 : f64}
-    maxon.assign %0 {var = a} {kind = f64} {decl = 1 : i1}
-    %1 = maxon.trunc %0
-    %2 = maxon.literal {value = 0 : i64}
-    %3 = maxon.binop %1, %2 {op = lt}
-    %4 = maxon.literal {value = 4294967295 : i64}
-    %5 = maxon.binop %1, %4 {op = gt}
-    %6 = maxon.binop %3, %5 {op = or}
-    maxon.cond_br %6 [then: __range_panic_0, else: __range_ok_0]
-  __range_panic_0:
-    maxon.panic "panic at f32-truncation-uses-cvttss2si.test:6: Range check failed: value outside typealias 'ExitCode'"
-  __range_ok_0:
-    maxon.scope_end [a]
-    maxon.return %1
-  }
-}
-=== standard
-module {
-  func @main() -> u32 {
-  entry:
-    %0 = arith.float_constant {value = 42.9 : f64}
-    %1 = arith.fptosi %0
-    %2 = arith.constant {value = 0 : i64}
-    %3 = arith.cmpi lt %1, %2
-    %4 = arith.constant {value = 4294967295 : i64}
-    %5 = arith.cmpi gt %1, %4
-    %6 = arith.ori1 %3, %5
-    cf.cond_br %6 [then: __range_panic_0, else: __range_ok_0]
-  __range_panic_0:
-    %7 = memref.lea_symdata __panic_msg_0
-    %8 = std.ptr_to_i64 %7
-    std.call_runtime @mrt_panic %8
-  __range_ok_0:
-    func.return %1
-  }
-}
-=== x86
 module {
   func @main() -> u32 {
   entry:
     x64.prologue stack_size=16
-    x64.movsd xmm0, [rip+__float_42.9]
-    x64.cvttsd2si rax, xmm0
-    x64.xor ecx, ecx
-    x64.mov edx, 4294967295
-    x64.cmp rax, rdx
-    x64.jg main.__range_panic_0
-    x64.cmp rax, rcx
-    x64.jl main.__range_panic_0
-    x64.jmp main.__range_ok_0
+    x64.movsd xmm0, [rip+__float_4631234455559942963]
+    x64.mov r9d, 4294967295
+    x64.cvttsd2si r8, xmm0
+    x64.cmp r8, r9
+    x64.jbe __range_ok_0
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_0]
-    x64.mov rcx, rax
+    x64.lea r12, [rip+__panic_msg_74470c2bcd4c1409]
+    x64.mov rcx, r12
     x64.call mrt_panic
   __range_ok_0:
     x64.epilogue
     x64.ret
   }
 }
+
 ```
 ```RequiredIR:arm64-macos
 === maxon

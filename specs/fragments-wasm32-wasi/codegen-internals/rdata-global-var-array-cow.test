@@ -1,0 +1,77 @@
+// Test: rdata-global-var-array-cow
+var globalArr = [1, 2, 3]
+
+function main() returns ExitCode
+	try globalArr.set(0, value: 42) otherwise panic("test invariant: set OOB")
+	return try globalArr.get(0) otherwise 0
+end 'main'
+---
+ExitCode: 42
+RequiredRdata: ```
+i64[] 1, 2, 3
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.global_addr @__data_globalArr
+    %1 = mir.load %0, 0 width: qword
+    %2 = mir.mov_imm 0 : i64
+    %3 = mir.mov_imm 42 : i64
+    mir.br inlined_Array.set_0_0()
+  inlined_Array.set_0_0:
+    %26 = mir.load %1, 0 width: qword
+    %27, %28 = mir.try_call @stdlib.__managed_mem_set(%26, %2, %3)
+    %29 = mir.mov_imm 0 : i64
+    %30 = mir.cmp ne, %28, %29
+    mir.cond_br %30 [then: inlined_Array.set_1_0(), else: inlined_Array.set_3_0()]
+  inlined_Array.set_1_0:
+    %31 = mir.mov_imm 0 : i64
+    %32 = mir.mov_imm 1 : i64
+    mir.br inline_cont_main_0(%31, %32)
+  inlined_Array.set_3_0:
+    %33 = mir.mov_imm 0 : i64
+    %34 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%33, %34)
+  inline_cont_main_0(%35: i64, %36: i64):
+    %8 = mir.cmp ne, %36, %2
+    mir.cond_br %8 [then: try_0.otherwise(), else: try_0.merge()]
+  try_0.otherwise:
+    %10 = mir.global_addr @__panic_msg_3233120d166ecf5f
+    %11 = mir.call @mrt_panic(%10)
+    mir.ret %2
+  try_0.merge:
+    %14 = mir.global_addr @__data_globalArr
+    %15 = mir.load %14, 0 width: qword
+    mir.br inlined_Array.get_0_0()
+  inlined_Array.get_0_0:
+    %37 = mir.load %15, 0 width: qword
+    %38, %39 = mir.try_call @stdlib.__managed_mem_get(%37, %2)
+    %40 = mir.mov_imm 0 : i64
+    %41 = mir.cmp ne, %39, %40
+    mir.cond_br %41 [then: inlined_Array.get_1_0(), else: inlined_Array.get_3_0()]
+  inlined_Array.get_1_0:
+    %42 = mir.mov_imm 0 : i64
+    %43 = mir.mov_imm 1 : i64
+    mir.br inline_cont_main_3(%42, %43)
+  inlined_Array.get_3_0:
+    %44 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_3(%38, %44)
+  inline_cont_main_3(%45: i64, %46: i64):
+    %21 = mir.cmp ne, %46, %2
+    mir.cond_br %21 [then: try_1.merge(%2), else: try_1.ok()]
+  try_1.ok:
+    mir.br try_1.merge(%45)
+  try_1.merge(%25: i64):
+    %47 = mir.mov_imm 125 : i64
+    %48 = mir.cmp ugt, %25, %47
+    mir.cond_br %48 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %49 = mir.global_addr @__panic_msg_124f2477a7f48ff8
+    %50 = mir.call @mrt_panic(%49)
+  __range_ok_0:
+    mir.ret %25
+  }
+}
+---

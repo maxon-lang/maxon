@@ -1,0 +1,52 @@
+// Test: rdata-global-let-array-uses-rdata
+let globalArr = [10, 20, 30]
+
+function main() returns ExitCode
+	return try globalArr.get(1) otherwise 0
+end 'main'
+---
+ExitCode: 20
+RequiredRdata: ```
+i64[] 10, 20, 30
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.global_addr @__data_globalArr
+    %1 = mir.load %0, 0 width: qword
+    %2 = mir.mov_imm 1 : i64
+    mir.br inlined_Array.get_0_0()
+  inlined_Array.get_0_0:
+    %12 = mir.load %1, 0 width: qword
+    %13, %14 = mir.try_call @stdlib.__managed_mem_get(%12, %2)
+    %15 = mir.mov_imm 0 : i64
+    %16 = mir.cmp ne, %14, %15
+    mir.cond_br %16 [then: inlined_Array.get_1_0(), else: inlined_Array.get_3_0()]
+  inlined_Array.get_1_0:
+    %17 = mir.mov_imm 0 : i64
+    %18 = mir.mov_imm 1 : i64
+    mir.br inline_cont_main_0(%17, %18)
+  inlined_Array.get_3_0:
+    %19 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%13, %19)
+  inline_cont_main_0(%20: i64, %21: i64):
+    %6 = mir.mov_imm 0 : i64
+    %7 = mir.cmp ne, %21, %6
+    mir.cond_br %7 [then: try_0.otherwise(), else: try_0.merge(%20)]
+  try_0.otherwise:
+    %9 = mir.mov_imm 0 : i64
+    mir.br try_0.merge(%9)
+  try_0.merge(%11: i64):
+    %22 = mir.mov_imm 125 : i64
+    %23 = mir.cmp ugt, %11, %22
+    mir.cond_br %23 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %24 = mir.global_addr @__panic_msg_2e78620f138489ee
+    %25 = mir.call @mrt_panic(%24)
+  __range_ok_0:
+    mir.ret %11
+  }
+}
+---

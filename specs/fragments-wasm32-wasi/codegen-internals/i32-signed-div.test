@@ -1,0 +1,29 @@
+// Test: i32-signed-div
+typealias Temp = int(-100000 to 100000)
+
+function main() returns ExitCode
+	let a = 20 as Temp
+	let b = 3 as Temp
+	return a / b
+end 'main'
+---
+ExitCode: 6
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 20 : i64
+    %1 = mir.mov_imm 3 : i64
+    %4 = mir.div.i64 %0, %1
+    %5 = mir.mov_imm 125 : i64
+    %6 = mir.cmp ugt, %4, %5
+    mir.cond_br %6 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %7 = mir.global_addr @__panic_msg_dc6712b5d40a6c5e
+    %8 = mir.call @mrt_panic(%7)
+  __range_ok_0:
+    mir.ret %4
+  }
+}
+---

@@ -298,7 +298,8 @@ function isUserRdataEntry(name String) returns bool
 end 'isUserRdataEntry'
 
 // Serialize the global data table into a flat ByteArray for the .rdata section.
-// Each entry is 8-byte aligned. Populates the offset map for label-to-offset resolution.
+// Each entry is aligned per `rdataEntryAlignment` (strings/floats/etc. tight at
+// 1, `__xmmmask_*` at 16). Populates the offset map for label-to-offset resolution.
 // Emission order:
 //   1. user entries (str/istr/float/ucd/array literals), insertion order — the
 //      `RequiredRdata` golden blocks pin these at the START of the section.
@@ -391,6 +392,50 @@ export function orderedRdataNames(table GlobalDataTable) returns StringArray
 	return ordered
 end 'orderedRdataNames'
 
+// Alignment in bytes required at the START of an rdata entry, keyed off the
+// entry's label prefix. Mirrors the C# bootstrap's per-entry `RdataEntries`
+// alignment field (see `MaxonToStandardConversion.Strings.cs:23` — strings
+// align 1; `X86CodeEmitter.DefineRdata` only pads when `alignment > 1`):
+//
+//   - `__xmmmask_*` → 16. These hold 128-bit constants that SSE packed
+//     instructions (ANDPD / PCMPEQD with an m128 operand) require to be
+//     16-byte aligned, or they raise #GP. The PE rdata section starts on a
+//     SECTION_ALIGNMENT (4KB) boundary, so a 16-byte-aligned offset within
+//     rdata is 16-byte aligned at runtime.
+//   - everything else (strings `__str_*`/`__istr_*`, floats `__float_*`,
+//     panic messages `__panic_msg_*`, the named panic strings, byte-string
+//     `b"..."` data, const arrays `__rdata_arr_*`, layout/witness blobs) → 1.
+//     Scalar float loads (MOVSD/MOVSS) and per-element array loads on x64 and
+//     arm64 have no alignment requirement, so a tight (alignment-1) pack is
+//     correct — and matches the C# bootstrap, whose RequiredRdata goldens this
+//     code must reproduce byte-for-byte. A blanket 8-byte pad would insert
+//     stray zero bytes between tightly-packed user entries (e.g. two adjacent
+//     string literals), breaking the prefix the `RequiredRdata` check compares.
+//
+// Determinism: the result depends only on the label, and entries are emitted
+// in sorted label order, so the cache-on and cache-off legs produce a
+// byte-identical layout.
+function rdataEntryAlignment(name String) returns ByteCount
+	if name.startsWith("__xmmmask_") 'isMask'
+		return 16
+	end 'isMask'
+	return 1
+end 'rdataEntryAlignment'
+
+// Append one rdata entry to `rdata`: first pad up to the entry's required
+// alignment (computed from its label), then record the entry's start offset
+// and append its bytes. No trailing pad — the next entry pads itself up as
+// needed. Shared by both rdata emit passes so the alignment rule lives in
+// exactly one place.
+function emitRdataEntry(rdata ByteArray, map RdataOffsetMap, name String, data ByteArray)
+	let alignment = rdataEntryAlignment(name)
+	while rdata.count() mod alignment != 0 'align'
+		rdata.push(0)
+	end 'align'
+	map.record(name, offset: rdata.count())
+	rdata.append(data)
+end 'emitRdataEntry'
+
 // Emit panic-message entries (`__panic_msg_<hash>`) sorted by label. Separated
 // from `emitRdataPass` so the sort is isolated to these content-hashed labels —
 // `isUserRdataEntry` reports panic messages as "user" so they would otherwise
@@ -407,11 +452,7 @@ function emitSortedPanicRdataPass(rdata ByteArray, table GlobalDataTable, map Rd
 	for name in sorted 'emit'
 		let idx = try table.nameIndex.get(name) otherwise panic("emitSortedPanicRdataPass: nameIndex.get('{name}') failed")
 		let data = try table.values.get(idx) otherwise panic("emitSortedPanicRdataPass: values.get({idx}) failed")
-		map.record(name, offset: rdata.count())
-		rdata.append(data)
-		while rdata.count() mod 8 != 0 'align'
-			rdata.push(0)
-		end 'align'
+		emitRdataEntry(rdata, map: map, name: name, data: data)
 	end 'emit'
 end 'emitSortedPanicRdataPass'
 
@@ -447,22 +488,7 @@ function emitRdataPass(rdata ByteArray, table GlobalDataTable, map RdataOffsetMa
 	for name in sorted 'build'
 		let idx = try table.nameIndex.get(name) otherwise panic("emitRdataPass: nameIndex.get('{name}') failed")
 		let data = try table.values.get(idx) otherwise panic("emitRdataPass: values.get({idx}) failed (values.count={table.values.count()})")
-		// `__xmmmask_*` entries hold 128-bit constants that SSE packed
-		// instructions (ANDPD / PCMPEQD with m128 operand) require to be
-		// 16-byte aligned. The PE rdata section starts on a SECTION_ALIGNMENT
-		// (4KB) boundary, so a 16-byte aligned offset within rdata is
-		// 16-byte aligned at runtime.
-		if name.startsWith("__xmmmask_") 'mask16'
-			while rdata.count() mod 16 != 0 'align16'
-				rdata.push(0)
-			end 'align16'
-		end 'mask16'
-		map.record(name, offset: rdata.count())
-		rdata.append(data)
-		// Pad to 8-byte alignment
-		while rdata.count() mod 8 != 0 'align'
-			rdata.push(0)
-		end 'align'
+		emitRdataEntry(rdata, map: map, name: name, data: data)
 	end 'build'
 end 'emitRdataPass'
 

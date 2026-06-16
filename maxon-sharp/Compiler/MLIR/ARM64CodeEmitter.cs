@@ -186,6 +186,8 @@ public partial class ARM64CodeEmitter() {
       ARM64ConditionCode.Le => 0b1101,
       ARM64ConditionCode.Hi => 0b1000,
       ARM64ConditionCode.Ls => 0b1001,
+      ARM64ConditionCode.Mi => 0b0100,
+      ARM64ConditionCode.Pl => 0b0101,
       _ => throw new ArgumentException($"Unknown condition code: {cc}")
     };
   }

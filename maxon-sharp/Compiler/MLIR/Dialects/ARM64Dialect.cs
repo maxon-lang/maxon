@@ -37,6 +37,8 @@ public enum ARM64ConditionCode {
   Ls,  // Unsigned lower or same (C=0 || Z=1)
   Hi,  // Unsigned higher (C=1 && Z=0)
   Hs,  // Unsigned higher or same (C=1)
+  Mi,  // Negative (N=1) — used for IEEE-754 float `<` (false on NaN, N=0)
+  Pl,  // Positive or zero (N=0) — inverse of Mi
 }
 
 // --- Base class ---

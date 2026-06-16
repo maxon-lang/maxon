@@ -493,9 +493,20 @@ export type Arm64Backend implements TargetBackend
 			ugt then appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.condBranch(Arm64CondCode.ls, targetBlock: elseTarget))
 			feq then appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.condBranch(Arm64CondCode.ne, targetBlock: elseTarget))
 			fne then appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.condBranch(Arm64CondCode.eq, targetBlock: elseTarget))
-			flt then appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.condBranch(Arm64CondCode.ge, targetBlock: elseTarget))
-			fle then appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.condBranch(Arm64CondCode.gt, targetBlock: elseTarget))
+			// IEEE-754: ordered float compares are false when an operand is NaN
+			// (fcmp NaN: N=0,Z=0,C=1,V=1). These branches jump to elseTarget when
+			// the compare is false, so NaN must route to elseTarget.
+			// flt true-cond is `mi` (N==1); its jump-to-else inverse is `pl`
+			// (N==0), which is true on NaN -> NaN -> else (correct: NaN<x false).
+			flt then appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.condBranch(Arm64CondCode.pl, targetBlock: elseTarget))
+			// fle true-cond is `ls` (C==0 OR Z==1); its jump-to-else inverse is
+			// `hi` (C==1 AND Z==0), true on NaN -> NaN -> else (correct).
+			fle then appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.condBranch(Arm64CondCode.hi, targetBlock: elseTarget))
+			// fgt true-cond is `gt` (false on NaN); inverse `le` is true on NaN
+			// (Z=0, N=0,V=1 -> N!=V) -> NaN -> else (correct, unchanged).
 			fgt then appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.condBranch(Arm64CondCode.le, targetBlock: elseTarget))
+			// fge true-cond is `ge` (false on NaN); inverse `lt` (N!=V) is true
+			// on NaN -> NaN -> else (correct, unchanged).
 			fge then appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.condBranch(Arm64CondCode.lt, targetBlock: elseTarget))
 			boolTest then lowerBoolTestCondBrArm64(condId, elseTarget: elseTarget, dstBlock: dstBlock)
 		end 'emitJump'
@@ -747,8 +758,11 @@ export type Arm64Backend implements TargetBackend
 			ugt gives Arm64CondCode.hi
 			feq gives Arm64CondCode.eq
 			fne gives Arm64CondCode.ne
-			flt gives Arm64CondCode.lt
-			fle gives Arm64CondCode.le
+			// IEEE-754: ordered float compares (cset result) must be false on
+			// NaN (fcmp NaN: N=0,Z=0,C=1,V=1). `mi` (N==1) and `ls` (C==0 OR
+			// Z==1) are both false on NaN; `gt`/`ge` are already false on NaN.
+			flt gives Arm64CondCode.mi
+			fle gives Arm64CondCode.ls
 			fgt gives Arm64CondCode.gt
 			fge gives Arm64CondCode.ge
 		end 'map'

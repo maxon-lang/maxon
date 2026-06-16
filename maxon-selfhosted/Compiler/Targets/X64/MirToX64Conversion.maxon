@@ -834,12 +834,35 @@ type X64FunctionLowering
 			end 'skipMir'
 			let kind = tryMirCmpJumpKind(mirOp, condId: condBrCondId)
 			if kind != JumpKind.boolTest 'foundMir'
+				// The fused predicate jump reads the CPU flags the cmp left
+				// behind. That is only safe when the cmp result is flags-only
+				// (its sole consumer is this cond-br). When the result is ALSO
+				// materialized into a register, the setcc sequence runs first —
+				// and the float compound forms (feq/fne/flt/fle) clobber the
+				// flags with their `and`/`or`, so the fused jump would read
+				// garbage. Fall back to testing the materialized boolean.
+				if not cmpResultIsFlagsOnly(mirOp) 'notFlagsOnly'
+					return JumpKind.boolTest
+				end 'notFlagsOnly'
 				return kind
 			end 'foundMir'
 			j = j - 1
 		end 'scanBack'
 		return JumpKind.boolTest
 	end 'determineJumpKindForCond'
+
+	// True when the cmp op's result is flags-only (no setcc was materialized), so
+	// the fused predicate jump can safely read the cmp's flags. Mirrors the
+	// `isFlagsOnly` gate that decides whether `lowerCmp` emits a setcc at all.
+	function cmpResultIsFlagsOnly(mirOp MirOp) returns bool
+		return match mirOp 'check'
+			cmp(resultId, _, _, _) gives isFlagsOnly(useCounts, resultId: resultId, condBrCondId: condBrCondId)
+			movImm to unaryOp gives false
+			condBranch to loadByte gives false
+			osAllocPages to osLockRelease gives false
+			tryCall to errorReturn gives false
+		end 'check'
+	end 'cmpResultIsFlagsOnly'
 
 	// ============================================================
 	// Fallthrough jump elimination
@@ -1206,7 +1229,16 @@ type X64FunctionLowering
 			feq then emitFeqSetcc(resultId, dstBlock: dstBlock)
 			fne then emitFneSetcc(resultId, dstBlock: dstBlock)
 			eq to ugt then emitSingleSetcc(resultId, predicate: predicate, dstBlock: dstBlock)
-			flt to fge then emitSingleSetcc(resultId, predicate: predicate, dstBlock: dstBlock)
+			// flt/fle map to setb/setbe, but CF=1 is ALSO set on unordered (NaN),
+			// so a bare setb/setbe would wrongly report NaN as < / <=. AND in
+			// `setnp` to force the unordered case to false (IEEE: any ordered
+			// compare with NaN is false).
+			flt then emitOrderedRelSetcc(resultId, predicate: predicate, dstBlock: dstBlock)
+			fle then emitOrderedRelSetcc(resultId, predicate: predicate, dstBlock: dstBlock)
+			// fgt/fge map to seta/setae, which are already false on unordered
+			// (CF=1 makes `above`/`above-or-equal` false), so no parity AND needed.
+			fgt then emitSingleSetcc(resultId, predicate: predicate, dstBlock: dstBlock)
+			fge then emitSingleSetcc(resultId, predicate: predicate, dstBlock: dstBlock)
 		end 'pick'
 	end 'emitFloatCmpSetcc'
 
@@ -1230,6 +1262,17 @@ type X64FunctionLowering
 		appendX64Op(target, block: dstBlock, op: X64Op.setcc(X64VReg.virtual(resultId), condition: X64SetccCondition.ne))
 		appendX64Op(target, block: dstBlock, op: X64Op.orRegReg(X64VReg.virtual(resultId), srcReg: X64VReg.virtual(tmpId)))
 	end 'emitFneSetcc'
+
+	// flt/fle result = (relational below/below-or-equal) AND (PF=0). The bare
+	// setb/setbe is true on NaN because ucomisd sets CF=1 for unordered; ANDing
+	// `setnp` clears that so an ordered compare with NaN yields false.
+	// Sequence: `setnp tmp; set{b,be} result; and result, tmp`.
+	function emitOrderedRelSetcc(resultId ValueId, predicate MirCmpPredicate, dstBlock IrBlock)
+		let tmpId = allocScratchValueId()
+		appendX64Op(target, block: dstBlock, op: X64Op.setcc(X64VReg.virtual(tmpId), condition: X64SetccCondition.np))
+		appendX64Op(target, block: dstBlock, op: X64Op.setcc(X64VReg.virtual(resultId), condition: predicateToSetcc(predicate)))
+		appendX64Op(target, block: dstBlock, op: X64Op.andRegReg(X64VReg.virtual(resultId), srcReg: X64VReg.virtual(tmpId)))
+	end 'emitOrderedRelSetcc'
 
 	// Hand out a fresh ValueId for an X64-private scratch register. The cursor
 	// is seeded per-function in lowerFunction from scanMaxMirValueId+1, which
@@ -1560,8 +1603,10 @@ type X64FunctionLowering
 			ugt then appendX64Op(target, block: dstBlock, op: X64Op.condJump(X64JumpCondition.be, targetBlock: elseTarget))
 			feq then emitFeqCondBr(dstBlock, elseTarget: elseTarget)
 			fne then emitFneCondBr(dstBlock, thenTarget: thenTarget, elseTarget: elseTarget)
-			flt then appendX64Op(target, block: dstBlock, op: X64Op.condJump(X64JumpCondition.ae, targetBlock: elseTarget))
-			fle then appendX64Op(target, block: dstBlock, op: X64Op.condJump(X64JumpCondition.a, targetBlock: elseTarget))
+			flt then emitFltCondBr(dstBlock, elseTarget: elseTarget)
+			fle then emitFleCondBr(dstBlock, elseTarget: elseTarget)
+			// fgt/fge: NaN sets CF=1, so `be`/`b` already route unordered to
+			// elseTarget (the false branch) — no separate parity jump needed.
 			fgt then appendX64Op(target, block: dstBlock, op: X64Op.condJump(X64JumpCondition.be, targetBlock: elseTarget))
 			fge then appendX64Op(target, block: dstBlock, op: X64Op.condJump(X64JumpCondition.b, targetBlock: elseTarget))
 			boolTest then lowerBoolTestCondBr(condId, elseTarget: elseTarget, dstBlock: dstBlock)
@@ -1588,6 +1633,24 @@ type X64FunctionLowering
 		appendX64Op(target, block: dstBlock, op: X64Op.condJump(X64JumpCondition.p, targetBlock: thenTarget))
 		appendX64Op(target, block: dstBlock, op: X64Op.condJump(X64JumpCondition.e, targetBlock: elseTarget))
 	end 'emitFneCondBr'
+
+	// flt (a < b) is FALSE when either operand is NaN. ucomisd sets PF=1 on
+	// unordered AND CF=1, so the `ae` (CF=0) test alone does NOT catch NaN — it
+	// would fall through to the true branch. Route NaN to elseTarget via an
+	// explicit parity jump first, then `ae` (above-or-equal) for the ordered
+	// not-less case.
+	function emitFltCondBr(dstBlock IrBlock, elseTarget BlockId)
+		appendX64Op(target, block: dstBlock, op: X64Op.condJump(X64JumpCondition.p, targetBlock: elseTarget))
+		appendX64Op(target, block: dstBlock, op: X64Op.condJump(X64JumpCondition.ae, targetBlock: elseTarget))
+	end 'emitFltCondBr'
+
+	// fle (a <= b) is FALSE when either operand is NaN. As with flt, the `a`
+	// (above) test alone misses NaN (PF=1), so route unordered to elseTarget via
+	// an explicit parity jump first, then `a` (above) for the ordered greater case.
+	function emitFleCondBr(dstBlock IrBlock, elseTarget BlockId)
+		appendX64Op(target, block: dstBlock, op: X64Op.condJump(X64JumpCondition.p, targetBlock: elseTarget))
+		appendX64Op(target, block: dstBlock, op: X64Op.condJump(X64JumpCondition.a, targetBlock: elseTarget))
+	end 'emitFleCondBr'
 
 	function lowerBoolTestCondBr(condId ValueId, elseTarget BlockId, dstBlock IrBlock)
 		// If the previous op is an or/and/xor that defines condId, its flags are still
@@ -1649,7 +1712,7 @@ type X64FunctionLowering
 			osFileStat(resultId, cStringPtrId, statBufPtrId) then lowerOsFileStatOp(resultId, cStringPtrId: cStringPtrId, statBufPtrId: statBufPtrId, dstBlock: dstBlock)
 			osFileAccess(resultId, cStringPtrId, modeId) then lowerOsFileAccessOp(resultId, cStringPtrId: cStringPtrId, modeId: modeId, dstBlock: dstBlock)
 			osFileUnlink(resultId, cStringPtrId) then lowerOsFileUnlinkOp(resultId, cStringPtrId: cStringPtrId, dstBlock: dstBlock)
-				osFileRename(resultId, oldPathPtrId, newPathPtrId) then lowerOsFileRenameOp(resultId, oldPathPtrId: oldPathPtrId, newPathPtrId: newPathPtrId, dstBlock: dstBlock)
+			osFileRename(resultId, oldPathPtrId, newPathPtrId) then lowerOsFileRenameOp(resultId, oldPathPtrId: oldPathPtrId, newPathPtrId: newPathPtrId, dstBlock: dstBlock)
 			osDirGetdents64(resultId, fdId, bufPtrId, bufSizeId) then lowerOsDirGetdents64Op(resultId, fdId: fdId, bufPtrId: bufPtrId, bufSizeId: bufSizeId, dstBlock: dstBlock)
 			osDirGetcwd(resultId, bufPtrId, bufSizeId) then lowerOsDirGetcwdOp(resultId, bufPtrId: bufPtrId, bufSizeId: bufSizeId, dstBlock: dstBlock)
 			osDirMkdir(resultId, cStringPtrId, modeId) then lowerOsDirMkdirOp(resultId, cStringPtrId: cStringPtrId, modeId: modeId, dstBlock: dstBlock)

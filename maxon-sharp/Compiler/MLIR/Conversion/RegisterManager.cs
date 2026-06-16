@@ -396,12 +396,17 @@ public class RegisterManager : RegisterManagerBase<X86Register, X86XmmRegister, 
         block.AddOp(new X86MovzxRegOp(reg));
         break;
       case "lt":
-        block.AddOp(new X86SetccOp("b", reg));
-        block.AddOp(new X86MovzxRegOp(reg));
+        // IEEE 754: an ordered `<` is false when either operand is NaN.
+        // `ucomisd` sets CF=1 for both below AND unordered, so a bare `setb`
+        // would wrongly report true on NaN. AND in not-parity (PF=0) to
+        // exclude the unordered case: (below AND not-parity).
+        EmitCompoundSetcc(reg, "b", "np", (a, b) => new X86AndRegRegOp(a, b), block);
         break;
       case "le":
-        block.AddOp(new X86SetccOp("be", reg));
-        block.AddOp(new X86MovzxRegOp(reg));
+        // IEEE 754: an ordered `<=` is false when either operand is NaN.
+        // `setbe` (CF=1 OR ZF=1) is true on unordered (CF=ZF=1), so AND in
+        // not-parity to exclude NaN: (below-or-equal AND not-parity).
+        EmitCompoundSetcc(reg, "be", "np", (a, b) => new X86AndRegRegOp(a, b), block);
         break;
       case var unknown:
         throw new InvalidOperationException($"Unknown float comparison predicate for setcc: {unknown}");

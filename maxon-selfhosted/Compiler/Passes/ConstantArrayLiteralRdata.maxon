@@ -98,16 +98,59 @@ function collectLiteralValues(project Project, module MaxonModule, func IrFuncti
 		let block = try module.blocks.get(blockRef) otherwise panic("collectLiteralValues: blockRef OOB")
 		for opIdx in block.opRefs 'eachOp'
 			let op = try module.ops.get(opIdx) otherwise panic("collectLiteralValues: opIdx OOB at {opIdx}")
-			if op.name != "literal" 'notLit'
+			// A single forward pass over the block handles both `literal` ops
+			// and `convert` ops. A `[10 as Byte, ...]` element lowers to a
+			// `literal {10}` immediately followed by `convert %lit : int ->
+			// Byte`; the array's `set(i, value:)` receives the CONVERT result,
+			// not the raw literal. Because the literal always precedes its
+			// convert in block order, recording the literal first then folding
+			// the convert (masked to the target width) in the same pass makes
+			// the convert result a known constant the array scanner can encode.
+			if op.name == "literal" 'isLit'
+				match op 'pickLit'
+					literal(result, value, valueType, _) then maybeRecordLiteral(project, funcName: func.name, litValues: litValues, result: result, value: value, valueType: valueType)
+					default panic("collectLiteralValues: op.name == literal but match did not extract")
+				end 'pickLit'
 				continue
-			end 'notLit'
-			match op 'pickShape'
-				literal(result, value, valueType, _) then maybeRecordLiteral(project, funcName: func.name, litValues: litValues, result: result, value: value, valueType: valueType)
-				default panic("collectLiteralValues: op.name == literal but match did not extract")
-			end 'pickShape'
+			end 'isLit'
+			if op.name == "convert" 'isConvert'
+				match op 'pickConvert'
+					convert(result, operand, _, toType, _, _) then maybeRecordConvert(project, litValues: litValues, result: result, operand: operand, toType: toType)
+					default panic("collectLiteralValues: op.name == convert but match did not extract")
+				end 'pickConvert'
+				continue
+			end 'isConvert'
 		end 'eachOp'
 	end 'eachBlock'
 end 'collectLiteralValues'
+
+// Fold a `convert` whose operand is an already-recorded integer literal: record
+// the convert RESULT as a literal too, masked to the target type's storage
+// width so the byte encoding matches what a runtime narrow store would write
+// (`10 as Byte` → 0x0a in one byte). Mirrors the C# bootstrap's
+// `ConstantArrayAnalysisPass`, which sees through a `MaxonCastOp` whose input is
+// a tracked constant and records the cast result masked to the target width.
+// Converts whose operand is not a known constant are ignored (they stay absent,
+// so the array scanner treats them as non-constant and uses the runtime path).
+function maybeRecordConvert(project Project, litValues LiteralValueMap, result ByteArray, operand ByteArray, toType MaxonType)
+	let operandKey = String.from(operand)
+	let operandValue = try litValues.get(operandKey) otherwise return
+	let widthBytes = primitiveStorageWidthBytes(project, t: toType)
+	let masked = maskToWidth(operandValue, widthBytes: widthBytes)
+	let key = String.from(result)
+	litValues.upsert(key, value: masked)
+end 'maybeRecordConvert'
+
+// Mask `value` to the low `widthBytes` bytes. For an 8-byte target the mask
+// would be `(1 shl 64) - 1`, which overflows i64 left-shift, so a full-width
+// target is left unmasked (the value already fits the slot).
+function maskToWidth(value ParsedInt, widthBytes MachineWord) returns ParsedInt
+	if widthBytes >= 8 'full'
+		return value
+	end 'full'
+	let mask = (1 shl (8 * widthBytes)) - 1
+	return value and mask
+end 'maskToWidth'
 
 // Record a literal value under its result name. Only integer-shaped
 // literals are eligible for rdata encoding; float/struct/string literals
@@ -184,13 +227,25 @@ function processBlock(project Project, module MaxonModule, globalData GlobalData
 			pos = pos + 1
 			continue
 		end 'noType'
-		let widthBytes = primitiveStorageWidthBytes(project, t: elementType)
 		let count = producer.elemNames.count()
-		let bytes = encodeConstantArrayBytes(litValues, producer: producer, widthBytes: widthBytes)
+		// Boolean element arrays are BIT-PACKED in rdata (8 bools / byte), with
+		// `element_size = 0` as the sentinel the runtime `__managed_mem_*` path
+		// reads to switch to the bit-addressed get/set. This mirrors the C#
+		// bootstrap (`ConstantArrayAnalysisPass` `isBitPacked = elementSize == 0`).
+		// Non-bool elements use the narrow byte width as before.
+		var bytes = ByteArray.create()
+		var elementSizeInt = 0 as MachineWord
+		if maxonTypeIsBoolean(elementType) 'boolArray'
+			bytes = encodeBitPackedBoolBytes(litValues, producer: producer)
+			elementSizeInt = 0
+		end 'boolArray' else 'narrowArray'
+			let widthBytes = primitiveStorageWidthBytes(project, t: elementType)
+			bytes = encodeConstantArrayBytes(litValues, producer: producer, widthBytes: widthBytes)
+			elementSizeInt = widthBytes
+		end 'narrowArray'
 		let label = mintConstantArrayLabel(func.name)
 		project.staticRdataValues.upsert(label, value: bytes)
 		addNamedGlobalData(globalData, name: label, data: bytes)
-		let elementSizeInt = widthBytes
 		let rdataInfo = ConstantArrayRdataInfo.create(label, count: count, elementSize: elementSizeInt)
 		project.constantArrayRdata.upsert(opIdx, value: rdataInfo)
 		// Strip per-element set / setLength calls that target this MM.
@@ -257,8 +312,11 @@ end 'allElementsAreLiterals'
 // The producer's first element name carries the resolved element
 // MaxonType through `producerTypes` — but the pass runs after
 // `fillUnresolvedTypes` so the per-function producer-type maps have
-// been thrown away. Recover the type by inspecting the first element's
-// literal op directly (every element shares one unified type post-TR).
+// been thrown away. Recover the type by inspecting the op that DEFINES
+// the first element value (every element shares one unified type post-TR).
+// The defining op is either a `literal` (plain `[10, 20, 30]`, element type
+// = the literal's value type) or a `convert` (`[10 as Byte, ...]`, element
+// type = the convert's `toType` — e.g. Byte, yielding element_size 1).
 function lookupResolvedElementType(module MaxonModule, func IrFunction, producer ArrayLiteralProducer) returns MaxonType
 	if producer.elemNames.count() == 0 'empty'
 		return MaxonType.unresolved
@@ -268,10 +326,7 @@ function lookupResolvedElementType(module MaxonModule, func IrFunction, producer
 		let block = try module.blocks.get(blockRef) otherwise panic("lookupResolvedElementType: blockRef OOB")
 		for opIdx in block.opRefs 'eachOp'
 			let op = try module.ops.get(opIdx) otherwise panic("lookupResolvedElementType: opIdx OOB at {opIdx}")
-			if op.name != "literal" 'notLit'
-				continue
-			end 'notLit'
-			let hit = matchLiteralValueType(op, target: firstName)
+			let hit = matchElementValueType(op, target: firstName)
 			if hit.found 'gotIt'
 				return hit.valueType
 			end 'gotIt'
@@ -293,15 +348,26 @@ type LiteralValueTypeProbe
 	end 'hit'
 end 'LiteralValueTypeProbe'
 
-// Extract the literal's MaxonType when the result name matches `target`.
-// Wraps the match-on-MaxonOp + name comparison so the caller doesn't need
-// to express an if-inside-match (which the parser rejects).
-function matchLiteralValueType(op MaxonOp, target ByteArray) returns LiteralValueTypeProbe
-	match op 'pickShape'
-		literal(result, _, valueType, _) then return literalValueTypeProbeFor(result, valueType: valueType, target: target)
-		default panic("matchLiteralValueType: op.name == literal but match did not extract")
-	end 'pickShape'
-end 'matchLiteralValueType'
+// Extract the element MaxonType when `op` defines `target`. The defining op
+// is either a `literal` (value type = the literal's type) or a `convert`
+// (value type = the convert's `toType`, e.g. Byte). Wraps the match-on-MaxonOp
+// + name comparison so the caller doesn't need to express an if-inside-match
+// (which the parser rejects). Ops of any other kind miss.
+function matchElementValueType(op MaxonOp, target ByteArray) returns LiteralValueTypeProbe
+	if op.name == "literal" 'isLit'
+		match op 'pickLit'
+			literal(result, _, valueType, _) then return literalValueTypeProbeFor(result, valueType: valueType, target: target)
+			default panic("matchElementValueType: op.name == literal but match did not extract")
+		end 'pickLit'
+	end 'isLit'
+	if op.name == "convert" 'isConvert'
+		match op 'pickConvert'
+			convert(result, _, _, toType, _, _) then return literalValueTypeProbeFor(result, valueType: toType, target: target)
+			default panic("matchElementValueType: op.name == convert but match did not extract")
+		end 'pickConvert'
+	end 'isConvert'
+	return LiteralValueTypeProbe.miss()
+end 'matchElementValueType'
 
 function literalValueTypeProbeFor(result ByteArray, valueType MaxonType, target ByteArray) returns LiteralValueTypeProbe
 	if result == target 'matched'
@@ -340,6 +406,43 @@ function encodeConstantArrayBytes(litValues LiteralValueMap, producer ArrayLiter
 	end 'each'
 	return bytes
 end 'encodeConstantArrayBytes'
+
+// True when a resolved MaxonType is the primitive boolean. Booleans get the
+// bit-packed rdata representation (element_size = 0 sentinel).
+function maxonTypeIsBoolean(t MaxonType) returns bool
+	return match t 'check'
+		boolean gives true
+		integer to cstring gives false
+	end 'check'
+end 'maxonTypeIsBoolean'
+
+// Bit-pack boolean array elements into `(count + 7) / 8` bytes, LSB-first
+// within each byte (element i sets bit `i mod 8` of byte `i / 8`). A literal
+// value of 0 leaves the bit clear; any non-zero sets it. Matches the C#
+// bootstrap's bit-packed rdata layout (`[true,false,true,false]` -> `0x05`).
+function encodeBitPackedBoolBytes(litValues LiteralValueMap, producer ArrayLiteralProducer) returns ByteArray
+	let count = producer.elemNames.count()
+	let byteCount = (count + 7) / 8
+	var bytes = ByteArray.create()
+	var b = 0 as MachineWord
+	while b < byteCount 'zero'
+		bytes.push(0)
+		b = b + 1
+	end 'zero'
+	var i = 0
+	for elemName in producer.elemNames 'each'
+		let key = String.from(elemName)
+		let v = try litValues.get(key) otherwise panic("encodeBitPackedBoolBytes: missing literal for '{key}' (allElementsAreLiterals should have guarded)")
+		if v != 0 'setBit'
+			let byteIdx = i / 8
+			let bitInByte = i mod 8
+			let cur = try bytes.get(byteIdx) otherwise panic("encodeBitPackedBoolBytes: byteIdx {byteIdx} OOB (byteCount {byteCount})")
+			try bytes.set(byteIdx, value: cur or (1 shl bitInByte)) otherwise panic("encodeBitPackedBoolBytes: set byteIdx {byteIdx} OOB")
+		end 'setBit'
+		i = i + 1
+	end 'each'
+	return bytes
+end 'encodeBitPackedBoolBytes'
 
 // Append `widthBytes` little-endian bytes of `value` to `bytes`. Sign
 // handling is implicit: `ParsedInt` is i64, two's-complement, and the
