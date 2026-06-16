@@ -57,6 +57,42 @@ end 'main'
 3
 ```
 
+### rawValue field access on a non-constant receiver
+
+A `.rawValue.<field>` chain works even when the receiver is NOT a compile-time
+constant case — e.g. a function parameter, a method-call result, or a field. The
+parser can fold the access to a constant only when the receiver was bound to a
+known case (`let op = TestOp.mul`); for a runtime value the backing struct is
+reconstructed from the ordinal at runtime (a select-chain over the per-case
+constants). This exercises the runtime path.
+
+<!-- test: struct-backing-rawvalue-nonconst-receiver -->
+```maxon
+typealias Latency = int(0 to 50)
+
+type Meta
+	export let value as Latency
+end 'Meta'
+
+enum TestOp
+	add = Meta{value: 1}
+	mul = Meta{value: 3}
+end 'TestOp'
+
+// `op` is a parameter — not a compile-time-known case — so `op.rawValue.value`
+// cannot be const-folded and must materialize the backing struct at runtime.
+function latencyOf(op TestOp) returns Latency
+	return op.rawValue.value
+end 'latencyOf'
+
+function main() returns ExitCode
+	return latencyOf(TestOp.mul)
+end 'main'
+```
+```exitcode
+3
+```
+
 ### Multiple struct fields
 
 <!-- test: struct-backing-multi-field -->

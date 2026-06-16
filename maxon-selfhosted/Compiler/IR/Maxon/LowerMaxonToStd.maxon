@@ -9272,8 +9272,22 @@ type MaxonToStdLowering
 						self.lowerStringBackedEnumRawValue(result, receiverId: receiverId, enumType: enumType, dstBlock: dstBlock)
 						return
 					end 'isStringChar'
-					// int / float / ordinal / struct backings: the receiver's
-					// SSA value already carries the raw bits.
+					let structBackingName = enumStructBackingName(enumType)
+					if not structBackingName.isEmpty() 'isStructBacked'
+						// Struct-backed enum (`case = StructType{...}`): the
+						// runtime value IS the ordinal (i64), so `.rawValue`
+						// must RECONSTRUCT the per-case backing struct on the
+						// heap from that ordinal — a select-chain over the
+						// per-case field constants, mirroring the C# bootstrap's
+						// `MaxonEnumStructRawValueOp` lowering. (The parser
+						// const-fold path handles only a const-case receiver;
+						// this covers a NON-constant receiver — a parameter, a
+						// method-call result, or a field.)
+						self.lowerStructBackedEnumRawValue(result, receiverId: receiverId, enumType: enumType, backingStructName: structBackingName, dstBlock: dstBlock)
+						return
+					end 'isStructBacked'
+					// int / float / ordinal backings: the receiver's SSA value
+					// already carries the raw bits.
 					self.aliasName(result, toId: receiverId)
 					return
 				end 'isRaw'
@@ -9897,6 +9911,160 @@ type MaxonToStdLowering
 		argIds.push(receiverId)
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: helperName, argIds: argIds)))
 	end 'lowerStringBackedEnumRawValue'
+
+	// Struct-backed enum `.rawValue` for a NON-constant receiver (parameter /
+	// method-call result / field). At runtime a struct-backed enum value IS its
+	// ordinal (i64); `.rawValue` must RECONSTRUCT the case's compile-time backing
+	// struct on the heap from that ordinal. Mirrors the C# bootstrap's
+	// `MaxonEnumStructRawValueOp` lowering (MaxonToStandardConversion.cs:759 +
+	// `EmitStructRawValueFields`): allocate a fresh backing struct, then for each
+	// leaf field emit a select-chain `accumulator = (ordinal == case_i.ordinal) ?
+	// field_value_i : accumulator` over all cases (cmp*field + sum, exactly one
+	// cmp is 1) and store the selected value at the field's offset; recurse for
+	// nested struct fields (alloc nested, fill, store pointer + incref).
+	//
+	// The constant-case fast path (`let op = Enum.case; op.rawValue.f`) is folded
+	// in the parser (`parseStructBackingAccessChain`) and never reaches here.
+	function lowerStructBackedEnumRawValue(result ByteArray, receiverId ValueId, enumType EnumType, backingStructName String, dstBlock IrBlock)
+		let resultId = self.defineName(result)
+		let structType = try self.project.structTypes.get(backingStructName) otherwise 'unknownStruct'
+			self.reportLowerError(ErrorCode.parserExpectedExpression, message: "lowerMaxonToStd: struct-backed enum '{enumType.name}' references unknown backing struct '{backingStructName}'")
+			self.setValueType(resultId, t: MaxonType.integer)
+			return
+		end 'unknownStruct'
+		// A struct-backed enum is a plain ordinal-valued enum (no associated
+		// payload, never a boxed union), so the receiver's SSA value IS the
+		// ordinal directly — no heap tag-load is needed.
+		self.emitHeapStructAllocInto(resultId, structType: structType, structNameStr: backingStructName, inserterManaged: true, dstBlock: dstBlock)
+		var emptyChain = StringArray.create()
+		self.emitStructRawValueFields(resultId, structType: structType, enumType: enumType, ordinalId: receiverId, fieldPrefix: emptyChain, dstBlock: dstBlock)
+	end 'lowerStructBackedEnumRawValue'
+
+	// Recursively populate `parentId`'s fields with the per-case backing
+	// constants selected by `ordinalId`. `fieldPrefix` is the dotted field path
+	// from the backing struct's root to `structType` (empty at the top level),
+	// used to descend each case's `structLit` arena tree to the matching leaf.
+	// Mirrors C# `EmitStructRawValueFields`.
+	function emitStructRawValueFields(parentId ValueId, structType StructType, enumType EnumType, ordinalId ValueId, fieldPrefix StringArray, dstBlock IrBlock)
+		for field in structType.fields 'eachField'
+			if not field.offsetResolved 'unresolvedOffset'
+				panic("emitStructRawValueFields: field '{field.name}' on '{structType.name}' has unresolved offset — layoutAllStructs did not run")
+			end 'unresolvedOffset'
+			var qualifiedChain = fieldPrefix.clone()
+			qualifiedChain.push(field.name)
+			let nestedStructName = self.structNameOfFieldType(field.fieldType)
+			if not nestedStructName.isEmpty() 'nestedStruct'
+				// Nested struct field: allocate the nested backing struct,
+				// fill it recursively, store its pointer into the parent at the
+				// field offset, then incref (the parent now owns a reference).
+				let nestedStructType = try self.project.structTypes.get(nestedStructName) otherwise panic("emitStructRawValueFields: nested struct '{nestedStructName}' (field '{field.name}' on '{structType.name}') not registered")
+				let nestedId = allocValueId(self.funcIdRef)
+				self.emitHeapStructAllocInto(nestedId, structType: nestedStructType, structNameStr: nestedStructName, inserterManaged: false, dstBlock: dstBlock)
+				self.emitStructRawValueFields(nestedId, structType: nestedStructType, enumType: enumType, ordinalId: ordinalId, fieldPrefix: qualifiedChain, dstBlock: dstBlock)
+				self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(parentId, offset: field.offset, valueId: nestedId, width: StoreWidth.qword, isFloat: false)))
+				var increfArgs = ValueIdArray.create()
+				increfArgs.push(nestedId)
+				let increfRetId = allocValueId(self.funcIdRef)
+				self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(increfRetId, callee: "stdlib.__mm_incref", argIds: increfArgs)))
+				self.setValueType(increfRetId, t: MaxonType.integer)
+				continue
+			end 'nestedStruct'
+			// Leaf field: emit `sum += (ordinal == case_i.ordinal) * field_value_i`
+			// over every case (default 0). The select-chain result is the i64 bit
+			// pattern of the matching case's constant for this field; store it at
+			// the field's offset, narrowing to the field's width. A float field's
+			// constant already carries IEEE-754 bits, so the plain GP-width store
+			// is bit-correct (the matching float `.field` load reads the same
+			// bytes through the SSE path) — matching C#'s "store raw bits" shape.
+			let fieldStdType = maxonTypeToStdType(self.project, ref: field.fieldType)
+			let fieldWidth = storeWidthOfStdType(fieldStdType)
+			var runningSumId = self.emitConstI64(0, dstBlock: dstBlock)
+			for i in 0 upto enumType.cases.count() 'eachCase'
+				let c = try enumType.cases.get(i) otherwise panic("emitStructRawValueFields: cases.get OOB at {i}")
+				let fold = resolveStructBackingFieldChain(self.project, rootExprId: c.backingStructExprId, fieldChain: qualifiedChain)
+				if not fold.found 'foldFailed'
+					panic("emitStructRawValueFields: could not fold backing field '{self.joinFieldChain(qualifiedChain)}' for case '{enumType.name}.{c.name}' — verify the case's struct literal declares this field")
+				end 'foldFailed'
+				let leafBits = fold.floatBits if fold.isFloat else fold.intValue
+				let ordinalConstId = self.emitConstI64(c.ordinal, dstBlock: dstBlock)
+				let cmpId = self.emitBinaryI64(StdArithBinaryOpcode.cmpI64Eq, leftId: ordinalId, rightId: ordinalConstId, dstBlock: dstBlock)
+				let fieldValId = self.emitConstI64(leafBits, dstBlock: dstBlock)
+				let contribId = self.emitBinaryI64(StdArithBinaryOpcode.mulI64, leftId: cmpId, rightId: fieldValId, dstBlock: dstBlock)
+				runningSumId = self.emitBinaryI64(StdArithBinaryOpcode.addI64, leftId: runningSumId, rightId: contribId, dstBlock: dstBlock)
+			end 'eachCase'
+			self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(parentId, offset: field.offset, valueId: runningSumId, width: fieldWidth, isFloat: false)))
+		end 'eachField'
+	end 'emitStructRawValueFields'
+
+	// Join a dotted field chain for diagnostics (`a.b.c`). The chain is never
+	// empty at a leaf-fold call site, but guard the empty case to avoid an OOB.
+	function joinFieldChain(chain StringArray) returns String
+		var joined = ""
+		for i in 0 upto chain.count() 'each'
+			let part = try chain.get(i) otherwise continue
+			if i == 0 'first'
+				joined = part
+			end 'first' else 'rest'
+				joined = "{joined}.{part}"
+			end 'rest'
+		end 'each'
+		return joined
+	end 'joinFieldChain'
+
+	// If `t` names a registered struct type, return that struct's name;
+	// otherwise "". Used by `emitStructRawValueFields` to tell a nested-struct
+	// backing field (recurse + alloc) from a scalar leaf field (select-chain).
+	function structNameOfFieldType(t MaxonType) returns String
+		let name = try maxonTypeStructName(self.project, t: t) otherwise return ""
+		if self.project.structTypes.contains(name) 'isStruct'
+			return name
+		end 'isStruct'
+		return ""
+	end 'structNameOfFieldType'
+
+	// Allocate a heap backing struct into `resultId` — the non-tuple,
+	// concrete-named-struct subset of `lowerStructAlloc`: `__mm_alloc(size,
+	// destructor)` with the struct's static destructor when it is drop-tracked
+	// (nested-struct backings hold managed pointers) else a null destructor,
+	// stamp the result's value type, and auto-initialize any
+	// `__ManagedMemory`/`__ManagedList` fields. Used by the struct-backed
+	// `.rawValue` materialization, which has no source-level result name and
+	// never allocates a tuple.
+	//
+	// `inserterManaged` controls the SSA refcount classification, mirroring the
+	// C# reference's `OwnershipFlags` split:
+	//   - TRUE (top-level `.rawValue` result): classify `freshRc0` (alloc-at-0)
+	//     so the late inserter acquires the result's +1 and decrefs it at the
+	//     caller's last use (which cascades nested decrefs via the destructor).
+	//   - FALSE (a NESTED backing struct): the parent struct OWNS this nested
+	//     allocation — the caller manually increfs it into the parent's field
+	//     and the parent's destructor decrefs it at rc→0. The nested local is a
+	//     borrow, so it must NOT be inserter-managed (a `freshRc0` here would
+	//     make the inserter ALSO decref it at its last use → double release, or
+	//     leak when the manual incref tips the count — exit 101). This matches
+	//     C#'s `OwnershipFlags.Borrowed` nested temp.
+	function emitHeapStructAllocInto(resultId ValueId, structType StructType, structNameStr String, inserterManaged bool, dstBlock IrBlock)
+		let sizeId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: sizeId, value: structType.byteSize))))
+		self.setValueType(sizeId, t: MaxonType.integer)
+		let dtorPtrId = allocValueId(self.funcIdRef)
+		if structNameIsDropTracked(self.project, structName: structNameStr) 'hasDtor'
+			self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.funcRef(dtorPtrId, funcName: self.structDestructorSymbol(structNameStr))))
+		end 'hasDtor' else 'nullDtor'
+			self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: dtorPtrId, value: 0))))
+		end 'nullDtor'
+		self.setValueType(dtorPtrId, t: MaxonType.integer)
+		var allocArgIds = ValueIdArray.create()
+		allocArgIds.push(sizeId)
+		allocArgIds.push(dtorPtrId)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: "stdlib.__mm_alloc", argIds: allocArgIds)))
+		let receiverValueType = MaxonType.named(self.project.typeNames.intern(structNameStr))
+		self.setValueType(resultId, t: receiverValueType)
+		if inserterManaged 'topLevelOwned'
+			self.classifyValue(resultId, cls: OwnershipClass.freshRc0, valueMaxonType: receiverValueType)
+		end 'topLevelOwned'
+		self.synthesizeManagedFieldInits(resultId, structType: structType, dstBlock: dstBlock)
+	end 'emitHeapStructAllocInto'
 
 	// Phase 9 Stage 1: branchless `rawValue → ordinal` lookup for int/float-
 	// backed enums. Each case contributes `i * (receiverRaw == case_i.raw)` —

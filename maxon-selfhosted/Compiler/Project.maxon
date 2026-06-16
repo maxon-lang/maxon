@@ -2978,7 +2978,7 @@ end 'StructBackingFoldResult'
 // We need an explicit `found` flag because arena id 0 IS a valid entry —
 // using 0 as a sentinel would collide with the first int literal pushed
 // into the arena.
-export type StructBackingDescendResult
+type StructBackingDescendResult
 	export var found as bool
 	export var exprId as UnresolvedConstExprId
 
@@ -3071,6 +3071,178 @@ export union UnresolvedConstExpr
 end 'UnresolvedConstExpr'
 
 export typealias UnresolvedConstExprArray = Array with UnresolvedConstExpr
+
+// Phase 9 Stage 5 (struct-backing): descend a `structLit` arena tree,
+// following `fieldChain` field names, and return the resulting leaf
+// constant. Shared by the parser's compile-time const-fold path
+// (`parseStructBackingAccessChain`, for `let op = Enum.case; op.rawValue.f`)
+// AND the lowering pass's runtime select-chain materialization
+// (`emitStructRawValueFields`, for a NON-constant receiver). Both read the
+// same per-case `structLit` arena rooted at `EnumCase.backingStructExprId`,
+// so factoring the descent here keeps the two paths byte-for-byte in sync.
+// The chain is consumed left-to-right; once a leaf (`intLit`, `floatLit`,
+// `boolLit`, `enumCase`) is reached, the remaining chain must be empty.
+// Returns the `notFound` shape on any unresolved field reference.
+export function resolveStructBackingFieldChain(project Project, rootExprId UnresolvedConstExprId, fieldChain StringArray) returns StructBackingFoldResult
+	var currentExprId = rootExprId
+	var idx = 0
+	while idx < fieldChain.count() 'descend'
+		let fieldName = try fieldChain.get(idx) otherwise return StructBackingFoldResult.notFound()
+		if structBackingIsEnumCaseLeaf(project, exprId: currentExprId) and structBackingIsOrdinalLikeAccessor(fieldName) and idx == fieldChain.count() - 1 'enumCaseOrdinalLeaf'
+			return evaluateStructBackingLeaf(project, exprId: currentExprId)
+		end 'enumCaseOrdinalLeaf'
+		let descendResult = descendStructBackingLevel(project, exprId: currentExprId, fieldName: fieldName)
+		if not descendResult.found 'noField'
+			return StructBackingFoldResult.notFound()
+		end 'noField'
+		currentExprId = descendResult.exprId
+		idx = idx + 1
+	end 'descend'
+	return evaluateStructBackingLeaf(project, exprId: currentExprId)
+end 'resolveStructBackingFieldChain'
+
+function structBackingIsEnumCaseLeaf(project Project, exprId UnresolvedConstExprId) returns bool
+	let node = try project.unresolvedConstExprs.get(exprId) otherwise return false
+	return structBackingLeafIsEnumKind(node)
+end 'structBackingIsEnumCaseLeaf'
+
+function structBackingLeafIsEnumKind(node UnresolvedConstExpr) returns bool
+	match node 'k'
+		enumCase then return true
+		boolLit then return false
+		floatLit then return false
+		intLit then return false
+		stringLit then return false
+		structLit then return false
+		asCast then return false
+		nameRef then return false
+		negate then return false
+		notOp then return false
+		add then return false
+		sub then return false
+		mul then return false
+		compareEq then return false
+		compareNeq then return false
+		compareLt then return false
+		compareLte then return false
+		compareGt then return false
+		compareGte then return false
+		logicalAnd then return false
+		logicalXor then return false
+		logicalOr then return false
+	end 'k'
+end 'structBackingLeafIsEnumKind'
+
+function structBackingIsOrdinalLikeAccessor(name String) returns bool
+	return name == "ordinal" or name == "rawValue"
+end 'structBackingIsOrdinalLikeAccessor'
+
+// Look up `fieldName` inside the `structLit` arena node at `exprId` and
+// return the named field's sub-expression id. `found = false` when the
+// node is not a struct literal, the field name isn't declared on it, or
+// the arena lookup fails. We use an explicit `found` flag instead of a
+// 0 sentinel because arena id 0 IS a valid entry — the first int literal
+// pushed gets id 0, and the first user-pushed entry depends on whether
+// stdlib added any const exprs before user code.
+function descendStructBackingLevel(project Project, exprId UnresolvedConstExprId, fieldName String) returns StructBackingDescendResult
+	let node = try project.unresolvedConstExprs.get(exprId) otherwise return StructBackingDescendResult.none()
+	return structBackingFieldExprId(node, fieldName: fieldName)
+end 'descendStructBackingLevel'
+
+// Pattern-match a single arena node looking for the `structLit` arm; if
+// found, walk its field arrays for `fieldName` and return the matched
+// sub-expr id. All non-`structLit` arms return `none()`. The match must
+// enumerate every arm because the language requires exhaustive matches.
+function structBackingFieldExprId(node UnresolvedConstExpr, fieldName String) returns StructBackingDescendResult
+	match node 'matchNode'
+		structLit(_, fieldNames, fieldExprs) then return structBackingFindFieldExprId(fieldNames, fieldExprs: fieldExprs, fieldName: fieldName)
+		boolLit then return StructBackingDescendResult.none()
+		floatLit then return StructBackingDescendResult.none()
+		enumCase then return StructBackingDescendResult.none()
+		asCast then return StructBackingDescendResult.none()
+		intLit then return StructBackingDescendResult.none()
+		stringLit then return StructBackingDescendResult.none()
+		nameRef then return StructBackingDescendResult.none()
+		negate then return StructBackingDescendResult.none()
+		notOp then return StructBackingDescendResult.none()
+		add then return StructBackingDescendResult.none()
+		sub then return StructBackingDescendResult.none()
+		mul then return StructBackingDescendResult.none()
+		compareEq then return StructBackingDescendResult.none()
+		compareNeq then return StructBackingDescendResult.none()
+		compareLt then return StructBackingDescendResult.none()
+		compareLte then return StructBackingDescendResult.none()
+		compareGt then return StructBackingDescendResult.none()
+		compareGte then return StructBackingDescendResult.none()
+		logicalAnd then return StructBackingDescendResult.none()
+		logicalXor then return StructBackingDescendResult.none()
+		logicalOr then return StructBackingDescendResult.none()
+	end 'matchNode'
+end 'structBackingFieldExprId'
+
+function structBackingFindFieldExprId(fieldNames StringArray, fieldExprs UnresolvedConstExprIdArray, fieldName String) returns StructBackingDescendResult
+	for i in 0 upto fieldNames.count() 'eachField'
+		let nm = try fieldNames.get(i) otherwise continue
+		if nm == fieldName 'matched'
+			let resolvedId = try fieldExprs.get(i) otherwise return StructBackingDescendResult.none()
+			return StructBackingDescendResult.hit(resolvedId)
+		end 'matched'
+	end 'eachField'
+	return StructBackingDescendResult.none()
+end 'structBackingFindFieldExprId'
+
+// Evaluate a struct-backing arena node that is expected to be a scalar
+// leaf (int / float / bool / enumCase). Nested struct literals reached at
+// this position are not foldable through `.field` access alone (the
+// caller's fieldChain has been fully consumed) — surface as notFound so
+// the caller emits a diagnostic. Unsupported arms (`nameRef`, `negate`,
+// arithmetic ops, …) similarly surface as notFound.
+function evaluateStructBackingLeaf(project Project, exprId UnresolvedConstExprId) returns StructBackingFoldResult
+	let node = try project.unresolvedConstExprs.get(exprId) otherwise return StructBackingFoldResult.notFound()
+	match node 'leaf'
+		intLit(value) then return StructBackingFoldResult.intHit(value)
+		boolLit(value) then return structBackingFoldFromBool(value)
+		floatLit(bits) then return StructBackingFoldResult.floatHit(bits)
+		enumCase(enumName, caseName) then return evaluateStructBackingEnumCaseLeaf(project, enumName: enumName, caseName: caseName)
+		structLit then return StructBackingFoldResult.notFound()
+		asCast then return StructBackingFoldResult.notFound()
+		stringLit then return StructBackingFoldResult.notFound()
+		nameRef then return StructBackingFoldResult.notFound()
+		negate then return StructBackingFoldResult.notFound()
+		notOp then return StructBackingFoldResult.notFound()
+		add then return StructBackingFoldResult.notFound()
+		sub then return StructBackingFoldResult.notFound()
+		mul then return StructBackingFoldResult.notFound()
+		compareEq then return StructBackingFoldResult.notFound()
+		compareNeq then return StructBackingFoldResult.notFound()
+		compareLt then return StructBackingFoldResult.notFound()
+		compareLte then return StructBackingFoldResult.notFound()
+		compareGt then return StructBackingFoldResult.notFound()
+		compareGte then return StructBackingFoldResult.notFound()
+		logicalAnd then return StructBackingFoldResult.notFound()
+		logicalXor then return StructBackingFoldResult.notFound()
+		logicalOr then return StructBackingFoldResult.notFound()
+	end 'leaf'
+end 'evaluateStructBackingLeaf'
+
+function structBackingFoldFromBool(value bool) returns StructBackingFoldResult
+	if value 'asTrue'
+		return StructBackingFoldResult.intHit(1)
+	end 'asTrue'
+	return StructBackingFoldResult.intHit(0)
+end 'structBackingFoldFromBool'
+
+function evaluateStructBackingEnumCaseLeaf(project Project, enumName String, caseName String) returns StructBackingFoldResult
+	let qualified = "{enumName}.{caseName}"
+	if let entry = try project.topLevelConstants.get(qualified) 'found'
+		return match entry.value 'cv'
+			intValue(v) gives StructBackingFoldResult.intHit(v)
+			floatValue(bits) gives StructBackingFoldResult.floatHit(bits)
+			stringValue gives StructBackingFoldResult.notFound()
+		end 'cv'
+	end 'found'
+	return StructBackingFoldResult.notFound()
+end 'evaluateStructBackingEnumCaseLeaf'
 
 // One pending top-level binding awaiting evaluation. Covers both immutable
 // `let NAME = ...` constants (drained into `topLevelConstants`) and mutable
