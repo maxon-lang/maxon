@@ -1,0 +1,98 @@
+// Test: error.file-private-union-caught-cross-file
+// --- file: liberr.maxon
+typealias Code = int(i64.min to i64.max)
+
+// File-private (no `export`/`module`) error union: the catch site in another
+// file only ever learns of this type through `risky`'s `throws` clause, so it
+// is never seeded into the consumer file's type registry during pre-scan.
+union LibErr implements Error
+	bad(code Code)
+end 'LibErr'
+
+export function risky(n Code) returns Code throws LibErr
+	if n > 5 'big'
+		throw LibErr.bad(42)
+	end 'big'
+	return n
+end 'risky'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	var result = 0
+	try risky(9) otherwise (e) 'handler'
+		match e 'check'
+			bad(code) then result = code
+		end 'check'
+	end 'handler'
+	return result
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @risky(rcx: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov r12, rcx
+    x64.cmp r12, 5
+    x64.jle big_0.after
+  big_0:
+    x64.xor edx, edx
+    x64.mov ecx, 16
+    x64.call stdlib.__mm_alloc
+    x64.mov r13, r8
+    x64.xor r8d, r8d
+    x64.mov [r13+0], r8 (8b)
+    x64.mov r8d, 42
+    x64.mov [r13+8], r8 (8b)
+    x64.mov rcx, r13
+    x64.call mm_drop
+    x64.xor r8d, r8d
+    x64.mov rdx, r13
+    x64.epilogue
+    x64.ret
+  big_0.after:
+    x64.xor edx, edx
+    x64.mov r8, r12
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov ecx, 9
+    x64.call risky
+    x64.xor r9d, r9d
+    x64.test rdx, rdx
+    x64.je __phi_trampoline_0_0
+  try_0.otherwise:
+    x64.mov r8, [rdx+0] (8b)
+    x64.test r8, r8
+    x64.jne __phi_trampoline_1_0
+    x64.jmp check_0.case0
+  check_0.merge:
+    x64.jmp try_0.merge
+  check_0.case0:
+    x64.mov r8, [rdx+8] (8b)
+    x64.jmp check_0.merge
+  try_0.merge:
+    x64.mov r9d, 4294967295
+    x64.cmp r8, r9
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea r12, [rip+__panic_msg_eab258c3824993e0]
+    x64.mov rcx, r12
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  __phi_trampoline_0_0:
+    x64.xchg r8, r9
+    x64.jmp try_0.merge
+  __phi_trampoline_1_0:
+    x64.mov r8, r9
+    x64.jmp check_0.merge
+  }
+}
+---

@@ -806,6 +806,40 @@ end 'main'
 42
 ```
 
+<!-- test: error.file-private-union-caught-cross-file -->
+```maxon
+// --- file: liberr.maxon
+typealias Code = int(i64.min to i64.max)
+
+// File-private (no `export`/`module`) error union: the catch site in another
+// file only ever learns of this type through `risky`'s `throws` clause, so it
+// is never seeded into the consumer file's type registry during pre-scan.
+union LibErr implements Error
+	bad(code Code)
+end 'LibErr'
+
+export function risky(n Code) returns Code throws LibErr
+	if n > 5 'big'
+		throw LibErr.bad(42)
+	end 'big'
+	return n
+end 'risky'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	var result = 0
+	try risky(9) otherwise (e) 'handler'
+		match e 'check'
+			bad(code) then result = code
+		end 'check'
+	end 'handler'
+	return result
+end 'main'
+```
+```exitcode
+42
+```
+
 <!-- test: error.otherwise-block-reused-binding -->
 ```maxon
 

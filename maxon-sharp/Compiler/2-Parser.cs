@@ -8468,12 +8468,21 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     var loadErrorOp = new MaxonVarRefOp(errorFlagVar, MaxonValueKind.Integer);
     _currentBlock!.AddOp(loadErrorOp);
 
-    if (errorType is IrEnumType enumType) {
+    if (errorType is IrEnumType { Name: { } enumTypeName } enumType) {
+      // The caught error type may be file-private to ANOTHER file: the catch site
+      // only ever learns of it via the callee's `throws` clause, so it was never
+      // seeded into THIS file's `_typeRegistry` during PreScan. A subsequent
+      // `match e { … }` on the binding resolves the scrutinee through
+      // `_typeRegistry[enumType.Name]` (ResolveExprValue / ResolveScrutinee /
+      // SetupMatchScrutinee), which would crash with a missing-key lookup. Seed
+      // the type here, where the real IrEnumType is in hand and definitely runs
+      // before the handler body (and any match on the binding) is parsed.
+      _typeRegistry.TryAdd(enumTypeName, enumType);
       var backingKind = GetEnumBackingKind(enumType);
-      var toEnumOp = new MaxonErrorFlagToEnumOp(loadErrorOp.Result, enumType.Name, backingKind, enumType.HasAssociatedValues);
+      var toEnumOp = new MaxonErrorFlagToEnumOp(loadErrorOp.Result, enumTypeName, backingKind, enumType.HasAssociatedValues);
       _currentBlock!.AddOp(toEnumOp);
       _currentBlock!.AddOp(new MaxonAssignOp(bindingName, toEnumOp.Result, isDeclaration: true, isMutable: false, MaxonValueKind.Enum));
-      _variables.Declare(bindingName, MaxonValueKind.Enum, false, toEnumOp.Result, _currentBlock!, structTypeName: enumType.Name);
+      _variables.Declare(bindingName, MaxonValueKind.Enum, false, toEnumOp.Result, _currentBlock!, structTypeName: enumTypeName);
     } else {
       _variables.Declare(bindingName, MaxonValueKind.Integer, false, loadErrorOp.Result, _currentBlock!);
     }
