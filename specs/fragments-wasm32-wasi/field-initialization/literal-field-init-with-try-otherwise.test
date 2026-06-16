@@ -1,0 +1,72 @@
+// Test: literal-field-init-with-try-otherwise
+typealias Integer = int(i64.min to i64.max)
+
+type Inner
+	export var a as Integer
+	export var b as Integer
+
+	export static function create(a Integer, b Integer) returns Inner
+		return Self{a: a, b: b}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export var found as bool
+	export var inner as Inner
+
+	export static function miss() returns Outer
+		return Self{found: false, inner: Inner.create(0, b: try parseB() otherwise panic("miss: parseB failed"))}
+	end 'miss'
+end 'Outer'
+
+function parseB() returns Integer throws Inner
+	return 7
+end 'parseB'
+
+function main() returns ExitCode
+	let o = Outer.miss()
+	return o.inner.b
+end 'main'
+---
+ExitCode: 7
+---
+// CompiledIR
+module {
+  func @Outer.miss() -> i64 {
+  entry:
+    %0 = mir.mov_imm 16 : i64
+    %2 = mir.func_addr @__destruct_Outer
+    %1 = mir.call @stdlib.__mm_alloc(%0, %2)
+    %20 = mir.call @stdlib.__mm_incref(%1)
+    %3 = mir.mov_imm 0 : i64
+    mir.store %3, %1, 0 width: byte
+    %4 = mir.mov_imm 0 : i64
+    %15 = mir.mov_imm 7 : i64
+    mir.br try_0.merge()
+  try_0.merge:
+    %17 = mir.mov_imm 16 : i64
+    %18 = mir.mov_imm 0 : i64
+    %19 = mir.call @stdlib.__mm_alloc(%17, %18)
+    %21 = mir.call @stdlib.__mm_incref(%19)
+    mir.store %4, %19, 0 width: qword
+    mir.store %15, %19, 8 width: qword
+    mir.store %19, %1, 8 width: qword
+    mir.ret %1
+  }
+  func @main() -> u8 {
+  entry:
+    %1 = mir.call @Outer.miss()
+    %3 = mir.load %1, 8 width: qword
+    %4 = mir.load %3, 8 width: qword
+    %5 = mir.call @__mm_decref_maybenull_helper(%1)
+    %6 = mir.mov_imm 125 : i64
+    %7 = mir.cmp ugt, %4, %6
+    mir.cond_br %7 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %8 = mir.global_addr @__panic_msg_229237ff869aa703
+    %9 = mir.call @mrt_panic(%8)
+  __range_ok_0:
+    mir.ret %4
+  }
+}
+---

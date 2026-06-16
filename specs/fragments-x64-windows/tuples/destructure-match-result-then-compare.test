@@ -1,0 +1,124 @@
+// Test: destructure-match-result-then-compare
+typealias Slot = int(0 to 100)
+
+union Thing
+	alpha(s Slot, flag bool)
+	beta
+end 'Thing'
+
+function pick(t Thing) returns ExitCode
+	let (slot, flag) = match t 'm'
+		alpha(s, f) gives (s, f)
+		beta gives (0, false)
+	end 'm'
+	if slot != 5 'notFive'
+		return 1
+	end 'notFive'
+	if flag != true 'notTrue'
+		return 3
+	end 'notTrue'
+	return 2
+end 'pick'
+
+function main() returns ExitCode
+	return pick(Thing.alpha(5, flag: true))
+end 'main'
+---
+ExitCode: 2
+---
+// CompiledIR
+module {
+  func @pick(rcx: i64) -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov r8, [rcx+0] (8b)
+    x64.xor r12d, r12d
+    x64.test r8, r8
+    x64.jne m_0.next0
+    x64.jmp m_0.case0
+  m_0.merge:
+    x64.movsx r12, [rcx+8] (1b)
+    x64.movzx r13, [rcx+0] (1b)
+    x64.call __mm_decref_maybenull_helper
+    x64.cmp r13, 5
+    x64.je notFive_0.after
+    x64.jmp notFive_0
+  m_0.case0:
+    x64.mov r13, [rcx+16] (8b)
+    x64.mov r14, [rcx+8] (8b)
+    x64.mov ecx, 16
+    x64.mov rdx, r12
+    x64.call stdlib.__mm_alloc
+    x64.mov r12, r8
+    x64.mov rcx, r12
+    x64.call stdlib.__mm_incref
+    x64.mov [r12+0], r14 (8b)
+    x64.mov [r12+8], r13 (8b)
+    x64.mov rcx, r12
+    x64.jmp m_0.merge
+  m_0.next0:
+    x64.mov r8, [rcx+0] (8b)
+    x64.cmp r8, 1
+    x64.jne __phi_trampoline_3_0
+  m_0.case1:
+    x64.mov ecx, 16
+    x64.mov rdx, r12
+    x64.call stdlib.__mm_alloc
+    x64.mov r13, r8
+    x64.mov rcx, r13
+    x64.call stdlib.__mm_incref
+    x64.mov [r13+0], r12 (8b)
+    x64.mov [r13+8], r12 (1b)
+    x64.mov rcx, r13
+    x64.jmp m_0.merge
+  notFive_0:
+    x64.mov r8d, 1
+    x64.epilogue
+    x64.ret
+  notFive_0.after:
+    x64.cmp r12, 1
+    x64.je notTrue_0.after
+  notTrue_0:
+    x64.mov r8d, 3
+    x64.epilogue
+    x64.ret
+  notTrue_0.after:
+    x64.mov r8d, 2
+    x64.epilogue
+    x64.ret
+  __phi_trampoline_3_0:
+    x64.mov rcx, r12
+    x64.jmp m_0.merge
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.xor edx, edx
+    x64.mov ecx, 24
+    x64.call stdlib.__mm_alloc
+    x64.mov r12, r8
+    x64.xor r8d, r8d
+    x64.mov [r12+0], r8 (8b)
+    x64.mov r8d, 5
+    x64.mov [r12+8], r8 (8b)
+    x64.mov r8d, 1
+    x64.mov [r12+16], r8 (8b)
+    x64.mov rcx, r12
+    x64.call pick
+    x64.mov r13, r8
+    x64.mov rcx, r12
+    x64.call mm_drop
+    x64.mov r8d, 4294967295
+    x64.cmp r13, r8
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea r12, [rip+__panic_msg_1c7e18506cae61fa]
+    x64.mov rcx, r12
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov r8, r13
+    x64.epilogue
+    x64.ret
+  }
+}
+---

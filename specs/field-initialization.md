@@ -344,3 +344,47 @@ end 'main'
 ```exitcode
 42
 ```
+
+<!-- test: literal-field-init-with-try-otherwise -->
+A `Self{...}` literal whose field initializer contains control flow — here a
+`try … otherwise panic(…)` nested in a constructor call argument — splits the
+enclosing block: the `structAlloc` lands in one block and that field's
+`fieldStore` in a continuation block (after the `try` resolves). The
+field-initialization pass collected provided fields by scanning only the
+structAlloc's own block, so it missed the continuation-block store and reported
+a spurious E3086 for a field that IS provided. The pass now collects
+fieldStores on the literal's SSA-unique alloc pointer across the whole function.
+Returns `7`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Inner
+	export var a as Integer
+	export var b as Integer
+
+	export static function create(a Integer, b Integer) returns Inner
+		return Self{a: a, b: b}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export var found as bool
+	export var inner as Inner
+
+	export static function miss() returns Outer
+		return Self{found: false, inner: Inner.create(0, b: try parseB() otherwise panic("miss: parseB failed"))}
+	end 'miss'
+end 'Outer'
+
+function parseB() returns Integer throws Inner
+	return 7
+end 'parseB'
+
+function main() returns ExitCode
+	let o = Outer.miss()
+	return o.inner.b
+end 'main'
+```
+```exitcode
+7
+```

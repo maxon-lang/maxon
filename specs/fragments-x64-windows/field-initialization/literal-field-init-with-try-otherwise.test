@@ -1,0 +1,83 @@
+// Test: literal-field-init-with-try-otherwise
+typealias Integer = int(i64.min to i64.max)
+
+type Inner
+	export var a as Integer
+	export var b as Integer
+
+	export static function create(a Integer, b Integer) returns Inner
+		return Self{a: a, b: b}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export var found as bool
+	export var inner as Inner
+
+	export static function miss() returns Outer
+		return Self{found: false, inner: Inner.create(0, b: try parseB() otherwise panic("miss: parseB failed"))}
+	end 'miss'
+end 'Outer'
+
+function parseB() returns Integer throws Inner
+	return 7
+end 'parseB'
+
+function main() returns ExitCode
+	let o = Outer.miss()
+	return o.inner.b
+end 'main'
+---
+ExitCode: 7
+---
+// CompiledIR
+module {
+  func @Outer.miss() -> i64 {
+  entry:
+    x64.prologue stack_size=32
+    x64.lea rdx, [rip+__destruct_Outer]
+    x64.mov ecx, 16
+    x64.call stdlib.__mm_alloc
+    x64.mov r12, r8
+    x64.mov rcx, r12
+    x64.call stdlib.__mm_incref
+    x64.xor r8d, r8d
+    x64.mov [r12+0], r8 (1b)
+    x64.mov r13d, 7
+    x64.xor r14d, r14d
+  try_0.merge:
+    x64.xor edx, edx
+    x64.mov ecx, 16
+    x64.call stdlib.__mm_alloc
+    x64.mov r15, r8
+    x64.mov rcx, r15
+    x64.call stdlib.__mm_incref
+    x64.mov [r15+0], r14 (8b)
+    x64.mov [r15+8], r13 (8b)
+    x64.mov [r12+8], r15 (8b)
+    x64.mov r8, r12
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.call Outer.miss
+    x64.mov r9, [r8+8] (8b)
+    x64.mov r12, [r9+8] (8b)
+    x64.mov rcx, r8
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r8d, 4294967295
+    x64.cmp r12, r8
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea r12, [rip+__panic_msg_229237ff869aa703]
+    x64.mov rcx, r12
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov r8, r12
+    x64.epilogue
+    x64.ret
+  }
+}
+---

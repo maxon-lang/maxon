@@ -1,0 +1,103 @@
+// Test: destructure-match-result-then-compare
+typealias Slot = int(0 to 100)
+
+union Thing
+	alpha(s Slot, flag bool)
+	beta
+end 'Thing'
+
+function pick(t Thing) returns ExitCode
+	let (slot, flag) = match t 'm'
+		alpha(s, f) gives (s, f)
+		beta gives (0, false)
+	end 'm'
+	if slot != 5 'notFive'
+		return 1
+	end 'notFive'
+	if flag != true 'notTrue'
+		return 3
+	end 'notTrue'
+	return 2
+end 'pick'
+
+function main() returns ExitCode
+	return pick(Thing.alpha(5, flag: true))
+end 'main'
+---
+ExitCode: 2
+---
+// CompiledIR
+module {
+  func @pick(local0: i64) -> u8 {
+  entry:
+    %38 = mir.param local0 : i64
+    %1 = mir.mov_imm 0 : i64
+    %5 = mir.load %38, 0 width: qword
+    %7 = mir.cmp eq, %5, %1
+    mir.cond_br %7 [then: m_0.case0(), else: m_0.next0()]
+  m_0.merge(%37: i64):
+    %10 = mir.load %37, 0 width: byte
+    %12 = mir.load %37, 8 width: byte signed
+    %41 = mir.call @__mm_decref_maybenull_helper(%37)
+    %14 = mir.mov_imm 5 : i64
+    %15 = mir.cmp ne, %10, %14
+    mir.cond_br %15 [then: notFive_0(), else: notFive_0.after()]
+  m_0.case0:
+    %16 = mir.load %38, 8 width: qword
+    %17 = mir.load %38, 16 width: qword
+    %20 = mir.mov_imm 16 : i64
+    %21 = mir.call @stdlib.__mm_alloc(%20, %1)
+    %39 = mir.call @stdlib.__mm_incref(%21)
+    mir.store %16, %21, 0 width: qword
+    mir.store %17, %21, 8 width: qword
+    mir.br m_0.merge(%21)
+  m_0.next0:
+    %23 = mir.load %38, 0 width: qword
+    %24 = mir.mov_imm 1 : i64
+    %25 = mir.cmp eq, %23, %24
+    mir.cond_br %25 [then: m_0.case1(), else: m_0.merge(%1)]
+  m_0.case1:
+    %28 = mir.mov_imm 16 : i64
+    %29 = mir.call @stdlib.__mm_alloc(%28, %1)
+    %40 = mir.call @stdlib.__mm_incref(%29)
+    mir.store %1, %29, 0 width: qword
+    mir.store %1, %29, 8 width: byte
+    mir.br m_0.merge(%29)
+  notFive_0:
+    %31 = mir.mov_imm 1 : i64
+    mir.ret %31
+  notFive_0.after:
+    %33 = mir.mov_imm 1 : i64
+    %34 = mir.cmp ne, %12, %33
+    mir.cond_br %34 [then: notTrue_0(), else: notTrue_0.after()]
+  notTrue_0:
+    %35 = mir.mov_imm 3 : i64
+    mir.ret %35
+  notTrue_0.after:
+    %36 = mir.mov_imm 2 : i64
+    mir.ret %36
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 5 : i64
+    %1 = mir.mov_imm 1 : i64
+    %4 = mir.mov_imm 24 : i64
+    %5 = mir.mov_imm 0 : i64
+    %6 = mir.mov_imm 0 : i64
+    %7 = mir.call @stdlib.__mm_alloc(%4, %5)
+    mir.store %6, %7, 0 width: qword
+    mir.store %0, %7, 8 width: qword
+    mir.store %1, %7, 16 width: qword
+    %3 = mir.call @pick(%7)
+    %8 = mir.call @mm_drop(%7)
+    %9 = mir.mov_imm 125 : i64
+    %10 = mir.cmp ugt, %3, %9
+    mir.cond_br %10 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %11 = mir.global_addr @__panic_msg_1c7e18506cae61fa
+    %12 = mir.call @mrt_panic(%11)
+  __range_ok_0:
+    mir.ret %3
+  }
+}
+---

@@ -346,14 +346,14 @@ function processLiterals(project Project, module MaxonModule, func IrFunction, i
 				continue
 			end 'next'
 			if op.name == "structAlloc" 'isAlloc'
-				processOneLiteral(project, module: module, block: block, allocOpIdx: opIdx, allocOp: op, isStdlib: isStdlib, isFactory: isFactory, reachability: reachability, filePath: filePath)
+				processOneLiteral(project, module: module, func: func, block: block, allocOpIdx: opIdx, allocOp: op, isStdlib: isStdlib, isFactory: isFactory, reachability: reachability, filePath: filePath)
 			end 'isAlloc'
 			i = i + 1
 		end 'eachOp'
 	end 'eachBlock'
 end 'processLiterals'
 
-function processOneLiteral(project Project, module MaxonModule, block IrBlock, allocOpIdx OpIndex, allocOp MaxonOp, isStdlib bool, isFactory bool, reachability FieldReachability, filePath FilePath)
+function processOneLiteral(project Project, module MaxonModule, func IrFunction, block IrBlock, allocOpIdx OpIndex, allocOp MaxonOp, isStdlib bool, isFactory bool, reachability FieldReachability, filePath FilePath)
 	let typeName = match allocOp 'a'
 		structAlloc(_, structName, _) gives String.from(structName)
 		default panic("processOneLiteral: op.name == structAlloc but match failed")
@@ -373,7 +373,7 @@ function processOneLiteral(project Project, module MaxonModule, block IrBlock, a
 
 	// Fields the literal provides explicitly (an `isInit` fieldStore on the
 	// struct pointer after the structAlloc).
-	let provided = providedFieldsAfterAlloc(module, block: block, allocOpIdx: allocOpIdx, ptrName: allocResult)
+	let provided = providedFieldsAfterAlloc(module, func: func, block: block, allocOpIdx: allocOpIdx, ptrName: allocResult)
 
 	// Is this the return literal of the enclosing factory? If so, consult its
 	// reaching set; otherwise no self-assignment can cover a field.
@@ -469,26 +469,40 @@ end 'spliceFieldInit'
 
 // The set of field names written by an `isInit` fieldStore on `ptrName` after
 // the structAlloc within the same block.
-function providedFieldsAfterAlloc(module MaxonModule, block IrBlock, allocOpIdx OpIndex, ptrName ByteArray) returns FieldNameSet
+function providedFieldsAfterAlloc(module MaxonModule, func IrFunction, block IrBlock, allocOpIdx OpIndex, ptrName ByteArray) returns FieldNameSet
 	var provided = FieldNameSet.create()
-	var seenAlloc = false
-	for opIdx in block.opRefs 'eachOp'
-		if opIdx == allocOpIdx 'atAlloc'
-			seenAlloc = true
-			continue
-		end 'atAlloc'
-		if not seenAlloc 'beforeAlloc'
-			continue
-		end 'beforeAlloc'
-		let op = try module.ops.get(opIdx) otherwise continue
-		if op.name != "fieldStore" 'notStore'
-			continue
-		end 'notStore'
-		match op 'fs'
-			fieldStore(receiver, fieldName, _, _, _) then recordIfReceiverMatches(provided, receiver: receiver, fieldName: fieldName, ptrName: ptrName)
-			default panic("providedFieldsAfterAlloc: op.name == fieldStore but match failed")
-		end 'fs'
-	end 'eachOp'
+	// Collect every `fieldStore` on this literal's alloc pointer across the
+	// WHOLE function, not just the alloc's own block. A field initializer that
+	// contains control flow — `Self{f: g(try h() otherwise panic(...))}` — splits
+	// the block: the structAlloc lands in one block and that field's fieldStore
+	// in a continuation block, so a single-block scan would miss it and report a
+	// spurious E3086. The alloc result is an SSA-unique pointer, so any
+	// fieldStore whose receiver is `ptrName` belongs to this literal regardless
+	// of which block holds it. (The alloc's own block still uses the seen-alloc
+	// gate so a name reuse before the alloc — none today, but defensively — can't
+	// leak in; other blocks are strictly later in the CFG.)
+	for blockRef in func.blockRefs 'eachBlock'
+		let b = try module.blocks.get(blockRef) otherwise continue
+		let isAllocBlock = b.id == block.id
+		var seenAlloc = not isAllocBlock
+		for opIdx in b.opRefs 'eachOp'
+			if isAllocBlock and opIdx == allocOpIdx 'atAlloc'
+				seenAlloc = true
+				continue
+			end 'atAlloc'
+			if not seenAlloc 'beforeAlloc'
+				continue
+			end 'beforeAlloc'
+			let op = try module.ops.get(opIdx) otherwise continue
+			if op.name != "fieldStore" 'notStore'
+				continue
+			end 'notStore'
+			match op 'fs'
+				fieldStore(receiver, fieldName, _, _, _) then recordIfReceiverMatches(provided, receiver: receiver, fieldName: fieldName, ptrName: ptrName)
+				default panic("providedFieldsAfterAlloc: op.name == fieldStore but match failed")
+			end 'fs'
+		end 'eachOp'
+	end 'eachBlock'
 	return provided
 end 'providedFieldsAfterAlloc'
 
@@ -607,13 +621,13 @@ function lowerStaticFactory(project Project, module MaxonModule, func IrFunction
 		let block = try module.blocks.get(blockRef) otherwise continue
 		let allocOpIdx = try returnLiteralStructAllocOp(module, block: block) otherwise continue
 		let reaching = try reachability.byStructAllocOp.get(allocOpIdx) otherwise continue
-		spliceFactoryFieldReads(module, block: block, allocOpIdx: allocOpIdx, reaching: reaching, fieldSlots: fieldSlots, structType: structType)
+		spliceFactoryFieldReads(module, func: func, block: block, allocOpIdx: allocOpIdx, reaching: reaching, fieldSlots: fieldSlots, structType: structType)
 	end 'eachReturnBlock'
 end 'lowerStaticFactory'
 
-function spliceFactoryFieldReads(module MaxonModule, block IrBlock, allocOpIdx OpIndex, reaching FieldNameSet, fieldSlots FieldSlotMap, structType StructType)
+function spliceFactoryFieldReads(module MaxonModule, func IrFunction, block IrBlock, allocOpIdx OpIndex, reaching FieldNameSet, fieldSlots FieldSlotMap, structType StructType)
 	let allocResult = allocResultName(module, allocOpIdx: allocOpIdx)
-	let provided = providedFieldsAfterAlloc(module, block: block, allocOpIdx: allocOpIdx, ptrName: allocResult)
+	let provided = providedFieldsAfterAlloc(module, func: func, block: block, allocOpIdx: allocOpIdx, ptrName: allocResult)
 
 	// Position of the structAlloc within the block's opRefs; splice reads right
 	// after it (and after any default-init fieldStores keep source order via the

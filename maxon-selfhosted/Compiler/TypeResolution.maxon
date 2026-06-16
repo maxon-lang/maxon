@@ -4522,7 +4522,22 @@ function fieldLoadResultType(project Project, receiverType MaxonType, fieldName 
 	let structType = try project.structTypes.get(structName) otherwise return MaxonType.unresolved
 	let fieldIdx = try structType.fieldByName.get(String.from(fieldName)) otherwise return MaxonType.unresolved
 	let field = try structType.fields.get(fieldIdx) otherwise return MaxonType.unresolved
-	return resolveFieldTypeInContext(project, fieldType: field.fieldType, structType: structType, receiverType: receiverType)
+	let resolvedFieldType = resolveFieldTypeInContext(project, fieldType: field.fieldType, structType: structType, receiverType: receiverType)
+	// A `__TupleN._N` read whose substitution left a bare `_TN` type-parameter
+	// (the receiver was still the unspecialised `named(__TupleN)` when this ran —
+	// e.g. a tuple destructure off a `match`-expression result whose merge slot
+	// refines to `genericInstance(__TupleN, [...])` only on a later converge pass)
+	// must stay UNRESOLVED, not record the placeholder. A tuple element always
+	// has a concrete type once the tuple is built, so the unsubstituted `_TN` is
+	// never the final answer; recording it freezes the binding (and any cmp on it
+	// — `pickOperandType` keeps the first non-unresolved stamp) at the type-param,
+	// tripping the cmp-constraint validator (E3005 "needs Equatable"/category
+	// mismatch). Returning unresolved lets convergence fill the concrete element
+	// type once the receiver refines.
+	if isTupleStructName(structName) and maxonTypeIsTypeParameter(resolvedFieldType) 'unsubstitutedTupleField'
+		return MaxonType.unresolved
+	end 'unsubstitutedTupleField'
+	return resolvedFieldType
 end 'fieldLoadResultType'
 
 // Phase 11.0 Step 8a: resolve a selfFieldLoad's result type. The implicit

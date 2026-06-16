@@ -194,3 +194,45 @@ end 'main'
 ```exitcode
 42
 ```
+
+<!-- test: destructure-match-result-then-compare -->
+Destructuring `let (a, b) = match X { … gives (x, y) }` binds the elements of a
+tuple produced by a match-expression arm, then COMPARES each binding. The
+match-result merge slot refines to `genericInstance(__Tuple2, [Slot, bool])`
+only on a later type-resolution converge pass; before that, the destructure's
+`tmp._0` / `tmp._1` field reads off the still-unspecialised `named(__Tuple2)`
+receiver yield the bare `_T0` / `_T1` tuple type-parameters. Recording those
+froze the bindings (and the cmps on them — the operand-type stamp is kept once
+non-unresolved) at the placeholders, so `slot != 5` demanded `_T0 is Equatable`
+and `flag != true` reported a category mismatch. The tuple field-load now stays
+unresolved until the receiver refines, so both bindings resolve to their
+concrete element types. Returns `2`.
+```maxon
+typealias Slot = int(0 to 100)
+
+union Thing
+	alpha(s Slot, flag bool)
+	beta
+end 'Thing'
+
+function pick(t Thing) returns ExitCode
+	let (slot, flag) = match t 'm'
+		alpha(s, f) gives (s, f)
+		beta gives (0, false)
+	end 'm'
+	if slot != 5 'notFive'
+		return 1
+	end 'notFive'
+	if flag != true 'notTrue'
+		return 3
+	end 'notTrue'
+	return 2
+end 'pick'
+
+function main() returns ExitCode
+	return pick(Thing.alpha(5, flag: true))
+end 'main'
+```
+```exitcode
+2
+```
