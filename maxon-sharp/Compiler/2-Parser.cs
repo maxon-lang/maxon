@@ -5599,19 +5599,14 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // Determine backing type name for method dispatch
     string backingTypeName;
     if (useTag) backingTypeName = "int";
-    // String/char-backed enums store the case ordinal (i64) at runtime; two
-    // values are equal iff they're the same case iff they have the same
-    // ordinal (rawValues are unique, ValidateUniqueRawValue). Hash/equal on the
-    // ordinal directly via int.* — identical result to comparing the rawValue
-    // strings, but an integer compare instead of a rawValue-string
-    // materialization + String.equals/String.hash on every comparison. Mirrors
-    // the struct-/function-backed path below.
-    else if (enumType.BackingType is IrStringBackingType) backingTypeName = "int";
-    else if (enumType.BackingType is IrCharBackingType) backingTypeName = "int";
-    else if (enumType.BackingType is IrStructBackingType) backingTypeName = "int";
-    // Function-backed enums hash/equal on the case ordinal (i64), matching the
-    // runtime representation; two cases are equal iff they're the same case.
-    else if (enumType.BackingType is IrFunctionBackingType) backingTypeName = "int";
+    // String/char/struct/function-backed enums all hash and compare on the case
+    // ordinal (i64): the runtime value IS the ordinal, and two cases are equal
+    // iff they share one (rawValues are unique — ValidateUniqueRawValue). For
+    // string/char this is an integer hash/compare on the ordinal instead of a
+    // rawValue-string materialization + String.hash/String.equals on every
+    // comparison — identical result, no heap allocation.
+    else if (enumType.BackingType is IrStringBackingType or IrCharBackingType
+             or IrStructBackingType or IrFunctionBackingType) backingTypeName = "int";
     else if (enumType.BackingType == IrType.F64) backingTypeName = "float";
     else if (enumType.BackingType == IrType.I64 || enumType.BackingType == null) backingTypeName = "int";
     else throw new InvalidOperationException($"Unsupported enum backing type for Hashable: {enumType.BackingType}");
