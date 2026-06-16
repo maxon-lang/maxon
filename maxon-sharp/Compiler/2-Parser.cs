@@ -5599,8 +5599,15 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // Determine backing type name for method dispatch
     string backingTypeName;
     if (useTag) backingTypeName = "int";
-    else if (enumType.BackingType is IrStringBackingType) backingTypeName = "String";
-    else if (enumType.BackingType is IrCharBackingType) backingTypeName = "Character";
+    // String/char-backed enums store the case ordinal (i64) at runtime; two
+    // values are equal iff they're the same case iff they have the same
+    // ordinal (rawValues are unique, ValidateUniqueRawValue). Hash/equal on the
+    // ordinal directly via int.* — identical result to comparing the rawValue
+    // strings, but an integer compare instead of a rawValue-string
+    // materialization + String.equals/String.hash on every comparison. Mirrors
+    // the struct-/function-backed path below.
+    else if (enumType.BackingType is IrStringBackingType) backingTypeName = "int";
+    else if (enumType.BackingType is IrCharBackingType) backingTypeName = "int";
     else if (enumType.BackingType is IrStructBackingType) backingTypeName = "int";
     // Function-backed enums hash/equal on the case ordinal (i64), matching the
     // runtime representation; two cases are equal iff they're the same case.
@@ -5631,17 +5638,15 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       var tagOp = new MaxonEnumTagOp(selfParam.Result, enumName);
       hashBlock.AddOp(tagOp);
       hashValue = tagOp.Result;
-    } else if (enumType.BackingType is IrStructBackingType) {
-      // Struct-backed enums: hash/equals uses the ordinal directly (selfParam is already the ordinal i64)
+    } else if (enumType.BackingType is IrStructBackingType
+               or IrStringBackingType or IrCharBackingType) {
+      // Struct/string/char-backed enums: hash on the ordinal directly
+      // (selfParam is already the ordinal i64). For string/char this replaces a
+      // rawValue-string materialization + String.hash with int.hash(ordinal) —
+      // equal values share an ordinal so hash stays consistent with equals.
       hashValue = selfParam.Result;
     } else {
       hashValue = EmitEnumRawValueExtraction(hashBlock, selfParam.Result, enumType, enumName, backingKind);
-      // For string/char backing, the raw value is a heap-allocated struct that must be cleaned up
-      if (enumType.BackingType is IrStringBackingType or IrCharBackingType) {
-        var rawVarName = "__hash_raw";
-        hashBlock.AddOp(new MaxonAssignOp(rawVarName, hashValue, isDeclaration: true, isMutable: true, MaxonValueKind.Struct));
-        scopeEndVars.Add(rawVarName);
-      }
     }
 
     // Call backingType.hash(hashValue)
@@ -5675,18 +5680,18 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       var otherTag = new MaxonEnumTagOp(otherParam.Result, enumName);
       equalsBlock.AddOp(otherTag);
       otherCmp = otherTag.Result;
-    } else if (enumType.BackingType is IrStructBackingType) {
-      // Struct-backed enums: compare ordinals directly
+    } else if (enumType.BackingType is IrStructBackingType
+               or IrStringBackingType or IrCharBackingType) {
+      // Struct/string/char-backed enums: compare ordinals directly (the
+      // runtime value IS the ordinal i64; equal cases share an ordinal since
+      // rawValues are unique). For string/char this replaces materializing both
+      // rawValue strings + String.equals with a single int.equals(ordinal,
+      // ordinal) — identical result, no heap allocation, integer-speed.
       selfCmp = selfParam2.Result;
       otherCmp = otherParam.Result;
     } else {
       selfCmp = EmitEnumRawValueExtraction(equalsBlock, selfParam2.Result, enumType, enumName, backingKind);
       otherCmp = EmitEnumRawValueExtraction(equalsBlock, otherParam.Result, enumType, enumName, backingKind);
-      if (enumType.BackingType is IrStringBackingType or IrCharBackingType) {
-        equalsBlock.AddOp(new MaxonAssignOp("__eq_self_raw", selfCmp, isDeclaration: true, isMutable: true, MaxonValueKind.Struct));
-        equalsBlock.AddOp(new MaxonAssignOp("__eq_other_raw", otherCmp, isDeclaration: true, isMutable: true, MaxonValueKind.Struct));
-        eqScopeEndVars.AddRange(["__eq_self_raw", "__eq_other_raw"]);
-      }
     }
 
     // Call backingType.equals(selfCmp, otherCmp)
@@ -14095,12 +14100,28 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       MaxonValue lhsVal = ResolveExprValue(lhs);
       MaxonValue rhsVal = ResolveExprValue(rhs);
 
+      // For ==/!= between two values of the SAME enum type, skip the rawValue
+      // coercion below: the runtime value is the case ordinal (i64), so the
+      // fall-through integer-comparison path (kind == Enum → GetEnumBackingKind
+      // → Integer) compares ordinals directly — an identical result to comparing
+      // the rawValue strings (rawValues are unique, ValidateUniqueRawValue) but a
+      // single integer compare instead of materializing both rawValue strings +
+      // String.equals on every comparison. The coercion is still required for
+      // enum-vs-String/Character and for ordering (< > <= >=), which compare the
+      // backing value lexically.
+      bool sameEnumEquality =
+        (entry.Op is MaxonBinOperator.Eq or MaxonBinOperator.Ne)
+        && lhsVal is MaxonEnum lhsEnumEq && rhsVal is MaxonEnum rhsEnumEq
+        && lhsEnumEq.TypeName == rhsEnumEq.TypeName;
+
       // Coerce string/char-backed constants to their backing struct type so struct
       // equality/ordering checks below can match them against plain String/Character values.
-      if (lhsVal is MaxonEnum && TryCoerceConstantsToBackingType(lhsVal, out var lhsCoerced, out _) && lhsCoerced is MaxonStruct)
-        lhsVal = lhsCoerced!;
-      if (rhsVal is MaxonEnum && TryCoerceConstantsToBackingType(rhsVal, out var rhsCoerced, out _) && rhsCoerced is MaxonStruct)
-        rhsVal = rhsCoerced!;
+      if (!sameEnumEquality) {
+        if (lhsVal is MaxonEnum && TryCoerceConstantsToBackingType(lhsVal, out var lhsCoerced, out _) && lhsCoerced is MaxonStruct)
+          lhsVal = lhsCoerced!;
+        if (rhsVal is MaxonEnum && TryCoerceConstantsToBackingType(rhsVal, out var rhsCoerced, out _) && rhsCoerced is MaxonStruct)
+          rhsVal = rhsCoerced!;
+      }
 
       // Coerce character literals to codepoint integers when the other operand is an integer
       {
@@ -14266,6 +14287,13 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       var binOp = new MaxonBinOp(resolvedOp, promotedLhs, promotedRhs, kind, optimalType);
       _currentBlock!.AddOp(binOp);
       lhs = new ExprResult.Direct(binOp.Result);
+      // A comparison yields a bool, which carries no ranged-primitive identity:
+      // clear any stale `_lastRangedTypeName` left by an operand so a following
+      // `LITERAL as Ranged` cast is not mis-flagged as unneeded (E3010). This was
+      // previously masked for string/char-backed enum == by the String.equals
+      // call path (which reset the field via ResolveCallReturnRangedType); the
+      // direct integer comparison the enum fast-path now emits must reset it too.
+      if (IsComparisonOp(resolvedOp)) _lastRangedTypeName = null;
     }
 
     // Range expression: `start to end` / `start upto end` in expression position.

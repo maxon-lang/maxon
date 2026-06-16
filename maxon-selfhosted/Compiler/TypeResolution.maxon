@@ -3202,6 +3202,22 @@ function maybeCoerceOneCmp(project Project, module MaxonModule, block IrBlock, o
 		return
 	end 'neitherEnum'
 
+	// Both operands are string/char-backed enums → same-enum equality (a
+	// comparison between two different enum types is a type error caught
+	// earlier). The runtime value IS the case ordinal (i64) and rawValues are
+	// unique, so two values are equal iff they share an ordinal: restamp the
+	// cmp's operand types to integer and let it compare the ordinals directly —
+	// an integer cmp instead of materializing both rawValue strings + a
+	// String.equals byte loop (with two heap allocations) on every comparison.
+	// Identical result, integer-speed. Mirrors the C# bootstrap's enum-eq fast
+	// path; this is the hot path behind every `token.kind == TokenKind.X` in the
+	// parser.
+	if leftIsEnum and rightIsEnum 'bothEnum'
+		let intType = MaxonType.integer
+		try setOpCounted(module, opIdx: opIdx, value: MaxonOp.cmp(result, left: left, right: right, predicate: predicate, leftType: intType, rightType: intType, operandType: intType, range: range)) otherwise panic("maybeCoerceOneCmp: ops.set OOB at idx={opIdx}")
+		return
+	end 'bothEnum'
+
 	// The scalar peer for the whole comparison. Both sides agree (a string-
 	// backed enum is only ever compared against String, a char-backed enum
 	// against Character) — pick whichever side is the enum. Intern from the
