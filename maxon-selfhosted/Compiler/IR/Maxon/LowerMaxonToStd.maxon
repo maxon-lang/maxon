@@ -12507,6 +12507,19 @@ function resolvedCalleeParamFromNamed(project Project, id TypeNameId) returns Re
 	if let aliasTarget = try project.genericTypealiases.get(bareName) 'genericAlias'
 		return resolvedCalleeParamFromMaxonType(project, t: aliasTarget)
 	end 'genericAlias'
+	// INNER aliases (e.g. `Array.innerAliases["ArrayIter"] = ArrayIterator with
+	// Element`) aren't in `genericTypealiases`, but a constrained generic call
+	// can bind a witness param to one (`for x in arr` → `arr.createIterator()`
+	// returns a value typed `ArrayIter`, passed where `I: Iterator` is
+	// required). The per-instance witness table is interned under the resolved
+	// `ArrayIterator` gid, NOT the bare alias `ArrayIter`, so look the alias up
+	// across every struct/interface body and recurse on its expansion.
+	// `tryAnyStructInnerAlias` returns `named(id)` unchanged when `bareName`
+	// isn't an inner alias, so the primitive/struct fallback below still runs.
+	let innerExpanded = tryAnyStructInnerAlias(project, name: bareName, fallbackId: id)
+	if not maxonTypesStructurallyEqual(innerExpanded, b: MaxonType.named(id)) 'isInnerAlias'
+		return resolvedCalleeParamFromMaxonType(project, t: innerExpanded)
+	end 'isInnerAlias'
 	let aliasName = try primitiveExtensionTypeNameWithProject(project, t: MaxonType.named(id)) otherwise return ResolvedCalleeParam.concrete(bareName)
 	return ResolvedCalleeParam.concrete(aliasName)
 end 'resolvedCalleeParamFromNamed'
@@ -12516,8 +12529,22 @@ end 'resolvedCalleeParamFromNamed'
 // instantiation. The bare-name `concrete` arm stays in service for
 // primitives and non-generic struct conformers (which share a single
 // `__witness_<TypeName>_<InterfaceName>` blob across the project).
+//
+// A CONDITIONAL gid — one whose args still mention a type-parameter (e.g.
+// `ArrayIterator with Element` inside a function generic over `Element`, the
+// shape `for x in arr` produces when `arr`'s element type is the caller's own
+// type-param) — has NO per-instance witness table: `BuildWitnessTables` only
+// emits tables for fully-concrete instances. Such a binding must FORWARD the
+// caller's own implicit witness slot (the caller is itself generic and was
+// handed the witness by ITS caller), exactly as `materializeLayoutForGid`
+// forwards the caller's layout for a conditional gid. Returning `concreteGid`
+// here would route to `emitLoadWitnessTableForGid` and panic on the missing
+// per-instance table.
 function resolvedCalleeParamFromGenericInstance(project Project, gid GenericInstanceId) returns ResolvedCalleeParam
-	let (baseId, _) = project.genericInstances.get(gid)
+	let (baseId, args) = project.genericInstances.get(gid)
+	if anyMaxonTypeIsConditional(args) 'conditional'
+		return ResolvedCalleeParam.forwardFromCaller("")
+	end 'conditional'
 	return ResolvedCalleeParam.concreteGid(project.typeNames.get(baseId), gid: gid)
 end 'resolvedCalleeParamFromGenericInstance'
 
