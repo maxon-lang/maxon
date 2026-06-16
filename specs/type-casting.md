@@ -544,3 +544,30 @@ end 'main'
 error E3010: specs/fragments/type-casting/error.unneeded.multiple-across-functions.test:6:12: unneeded cast: 'Byte' already fits in 'Byte'
 error E3010: specs/fragments/type-casting/error.unneeded.multiple-across-functions.test:11:12: unneeded cast: 'Byte' already fits in 'Byte'
 ```
+
+### Cast applied to a control-flow expression
+
+<!-- test: cast-on-ternary-expression -->
+```maxon
+typealias Mask = int(i64.min to i64.max)
+
+// The cast operand is a ternary whose result is defined in a merge block, so
+// `currentBlock` advances past the block the cast started in. The `convert`
+// (and its `castCheck`) must emit into the merge block where the operand value
+// is bound — emitting into the original block referenced the value before its
+// definition and tripped E3013 "unresolved value name" at lowering.
+function maskFor(negate bool) returns Mask
+	return (1 if negate else (0 - 1)) as Mask
+end 'maskFor'
+
+function main() returns ExitCode
+	let m = maskFor(false)
+	if m < 0 'neg'
+		return 2
+	end 'neg'
+	return 1
+end 'main'
+```
+```exitcode
+2
+```

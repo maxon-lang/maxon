@@ -341,3 +341,28 @@ end 'main'
 ```exitcode
 18
 ```
+
+### Closure body that is a bare string literal
+
+<!-- test: closure-capture.string-literal-body -->
+```maxon
+
+typealias Msg = function(Integer) returns String
+typealias Integer = int(i64.min to i64.max)
+
+function apply(f Msg, x Integer) returns String
+	return f(x)
+end 'apply'
+
+// The closure body is a bare string literal — not a capture. The literal comes
+// back as a deferred `stringConst` (no backing op), so the lifted closure's
+// `ret` referenced an unbound value until the body materializes it. The closure
+// captures nothing; it just returns "hi".
+function main() returns ExitCode
+	let s = apply(function(_ Integer) gives "hi", x: 0)
+	return s.byteLength()
+end 'main'
+```
+```exitcode
+2
+```

@@ -2390,9 +2390,13 @@ export type Parser
 		try eat(TokenKind.equals)
 
 		currentBlock = block
-		let exprResult = try parseExpression(block)
+		let parsedRhs = try parseExpression(block)
 		var emitBlock = currentBlock
 		let stmtRange = SourceRange.between(nameToken, last: previousToken())
+		// A bare string-literal RHS (`x.f = "..."`) is a DEFERRED stringConst
+		// with no backing op; materialize it into the emit block so the
+		// fieldStore references a bound value (else E3013 at lowering).
+		let exprResult = materializeStringConstIfNeeded(emitBlock, expr: parsedRhs, range: stmtRange)
 		module.appendOp(emitBlock, op: MaxonOp.fieldStore(receiverName, fieldName: computeFieldNameForMemberToken(lastFieldTok).toByteArray(), value: exprName(exprResult), isInit: false, range: stmtRange))
 		// E3077: writing through `x.f = …` mutates the base binding `x`, so the
 		// base `var` exercised its mutability (mirrors the C# field-assign site).
@@ -2431,9 +2435,12 @@ export type Parser
 		try eat(TokenKind.equals)
 
 		currentBlock = block
-		let exprResult = try parseExpression(block)
+		let parsedRhs = try parseExpression(block)
 		var emitBlock = currentBlock
 		let stmtRange = SourceRange.between(nameToken, last: previousToken())
+		// Materialize a deferred string-literal RHS so the fieldStore references
+		// a bound value (see parseLocalFieldAssignment).
+		let exprResult = materializeStringConstIfNeeded(emitBlock, expr: parsedRhs, range: stmtRange)
 		module.appendOp(emitBlock, op: MaxonOp.fieldStore(receiverName, fieldName: computeFieldNameForMemberToken(lastFieldTok).toByteArray(), value: exprName(exprResult), isInit: false, range: stmtRange))
 	end 'parseGlobalChainedFieldAssignment'
 
@@ -11116,7 +11123,7 @@ export type Parser
 					return ExprResult.direct(ByteArray.create(), valueType: MaxonType.integer)
 				end 'negOverflow'
 				let litName = emitLiteral(block, value: negValue, valueType: MaxonType.integer, range: SourceRange.between(opToken, last: litToken))
-				return try parseAsCasts(block, expr: ExprResult.direct(litName, valueType: MaxonType.integer))
+				return try parseAsCasts(ExprResult.direct(litName, valueType: MaxonType.integer))
 			end 'isNegIntLit'
 			let operand = try parsePrimary(block)
 			let operandType = exprType(operand)
@@ -11130,13 +11137,13 @@ export type Parser
 				module.appendOp(block, op: MaxonOp.literal(zeroName, value: 0, valueType: MaxonType.float, range: SourceRange.none()))
 				let resultName = freshSynthName()
 				module.appendOp(block, op: MaxonOp.binop(resultName, left: zeroName, right: exprName(operand), opKind: BinOpKind.sub, operandType: MaxonType.float, range: opRange))
-				return try parseAsCasts(block, expr: ExprResult.direct(resultName, valueType: MaxonType.float))
+				return try parseAsCasts(ExprResult.direct(resultName, valueType: MaxonType.float))
 			end 'floatNeg'
 			// For named or integer operands, emit the integer unary-neg op and
 			// let lowerMaxonToStd pick the concrete StdType.
 			let resultName = freshSynthName()
 			module.appendOp(block, op: MaxonOp.unop(resultName, operand: exprName(operand), opKind: UnaryOpKind.neg, operandType: operandType, range: opRange))
-			return try parseAsCasts(block, expr: ExprResult.direct(resultName, valueType: operandType))
+			return try parseAsCasts(ExprResult.direct(resultName, valueType: operandType))
 		end 'isNeg' else if at(TokenKind.not) 'isNot'
 			let notToken = try consume()
 			let notRange = SourceRange.ofToken(notToken)
@@ -11158,7 +11165,7 @@ export type Parser
 			return ExprResult.direct(resultName, valueType: MaxonType.unresolved)
 		end 'isNot'
 
-		return try parseAsCasts(block, expr: try parsePostfix(block, expr: try parsePrimary(block)))
+		return try parseAsCasts(try parsePostfix(block, expr: try parsePrimary(block)))
 	end 'parseUnary'
 
 	// Parse a `try EXPR [otherwise FALLBACK]` expression. The inner EXPR
@@ -12621,7 +12628,12 @@ export type Parser
 	// whose fromType/toType drive width selection during lowering. Cast
 	// validity (widening rules, narrowing rejection) is checked by the
 	// TypeResolution pass after all named types have been resolved.
-	function parseAsCasts(block IrBlock, expr ExprResult) returns ExprResult throws ParserError
+	// The operand `expr` was already parsed by the caller, so control flow sits
+	// in `currentBlock`; the cast ops emit there (see the in-loop comment). No
+	// `block` param is needed — a moved-control-flow operand (ternary / bool
+	// short-circuit) leaves `currentBlock` at its merge block, which is exactly
+	// where the convert must land.
+	function parseAsCasts(expr ExprResult) returns ExprResult throws ParserError
 		var result = expr
 		while at(TokenKind.as) 'castLoop'
 			let asToken = try consume()
@@ -12630,7 +12642,16 @@ export type Parser
 			let fromMaxonType = exprType(result)
 			let resultName = freshSynthName()
 			let castRange = SourceRange.between(asToken, last: targetLastToken)
-			module.appendOp(block, op: MaxonOp.convert(resultName, operand: exprName(result), fromType: fromMaxonType, toType: targetMaxonType, implicit: false, range: castRange))
+			// Emit into `currentBlock`, NOT the `block` the cast started in: when
+			// the cast operand is an expression that moved control flow — a
+			// ternary (`(a if c else b) as T`) or a bool short-circuit — its
+			// result is defined in the merge block, so `currentBlock` advanced
+			// past `block`. Appending the convert to the stale `block` would
+			// reference the operand's value BEFORE its defining block, tripping
+			// E3013 "unresolved value name" at lowering. (Mirrors parseStringLiteral's
+			// interp op emitting into currentBlock for the same reason.)
+			var castBlock = currentBlock
+			module.appendOp(castBlock, op: MaxonOp.convert(resultName, operand: exprName(result), fromType: fromMaxonType, toType: targetMaxonType, implicit: false, range: castRange))
 			// Pair every named-type cast with a `castCheck` placeholder so
 			// the post-resolution `expandCastRangeChecks` pass can splice
 			// in a runtime range guard once the alias's bounds are known.
@@ -12640,7 +12661,7 @@ export type Parser
 			// are also skipped — the value is already constrained to the
 			// alias's range by an earlier check at its definition site.
 			if not maxonTypesStructurallyEqual(fromMaxonType, b: targetMaxonType) 'differentTypes'
-				emitCastCheckIfNamed(block, value: resultName, targetType: targetMaxonType, castRange: castRange)
+				emitCastCheckIfNamed(castBlock, value: resultName, targetType: targetMaxonType, castRange: castRange)
 			end 'differentTypes'
 			result = ExprResult.direct(resultName, valueType: targetMaxonType)
 		end 'castLoop'
@@ -15605,7 +15626,15 @@ export type Parser
 		// feature.)
 
 		// Parse the body expression into the lifted function's entry block.
-		let bodyResult = try parseExpression(currentBlock)
+		let parsedBody = try parseExpression(currentBlock)
+		// A bare string-literal body (`function(...) gives "msg"`) comes back as
+		// a DEFERRED `stringConst` ExprResult — a parser-internal synth name with
+		// NO backing op (parseStringLiteral's no-interp fast path). The `ret`
+		// below would then reference an unbound name and lowering aborts with
+		// E3013 "unresolved value name". Force the backing `stringConst` op to be
+		// emitted into the lifted body now, exactly as the string-interpolation
+		// fragment path does via the same helper.
+		let bodyResult = materializeStringConstIfNeeded(currentBlock, expr: parsedBody, range: closureRange)
 		let bodyType = exprType(bodyResult)
 		let bodyName = exprName(bodyResult)
 

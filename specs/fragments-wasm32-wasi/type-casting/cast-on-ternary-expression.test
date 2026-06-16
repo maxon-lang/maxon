@@ -1,0 +1,49 @@
+// Test: cast-on-ternary-expression
+typealias Mask = int(i64.min to i64.max)
+
+// The cast operand is a ternary whose result is defined in a merge block, so
+// `currentBlock` advances past the block the cast started in. The `convert`
+// (and its `castCheck`) must emit into the merge block where the operand value
+// is bound — emitting into the original block referenced the value before its
+// definition and tripped E3013 "unresolved value name" at lowering.
+function maskFor(negate bool) returns Mask
+	return (1 if negate else (0 - 1)) as Mask
+end 'maskFor'
+
+function main() returns ExitCode
+	let m = maskFor(false)
+	if m < 0 'neg'
+		return 2
+	end 'neg'
+	return 1
+end 'main'
+---
+ExitCode: 2
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    mir.br inlined_maskFor_0_0()
+  inlined_maskFor_0_0:
+    %7 = mir.mov_imm 1 : i64
+    %8 = mir.mov_imm -1 : i64
+    mir.cond_br %0 [then: inlined_maskFor_3_5(%7), else: inlined_maskFor_2_0()]
+  inlined_maskFor_2_0:
+    mir.br inlined_maskFor_3_5(%8)
+  inlined_maskFor_3_5(%9: i64):
+    mir.br inline_cont_main_0(%9)
+  inline_cont_main_0(%10: i64):
+    %3 = mir.mov_imm 0 : i64
+    %4 = mir.cmp lt, %10, %3
+    mir.cond_br %4 [then: neg_0(), else: neg_0.after()]
+  neg_0:
+    %5 = mir.mov_imm 2 : i64
+    mir.ret %5
+  neg_0.after:
+    %6 = mir.mov_imm 1 : i64
+    mir.ret %6
+  }
+}
+---
