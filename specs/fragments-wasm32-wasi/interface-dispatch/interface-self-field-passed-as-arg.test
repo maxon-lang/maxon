@@ -1,0 +1,108 @@
+// Test: interface-self-field-passed-as-arg
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Tagged
+	function tag() returns Integer
+end 'Tagged'
+
+type Marker implements Tagged
+	let n as Integer
+
+	function tag() returns Integer
+		return n
+	end 'tag'
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Marker'
+
+function callTag(t Tagged) returns Integer
+	return t.tag()
+end 'callTag'
+
+// Holder reads its OWN interface-typed field via a bare `tagged` reference
+// inside a method (a selfFieldLoad) and passes it to a function expecting the
+// interface. selfFieldLoad must pair the field's witness half (offset+8) the
+// same way an explicit `h.field` load does — else passing it as an interface
+// arg panics in `witnessForInterfaceArg` with "no witness paired".
+type Holder
+	let tagged as Tagged
+
+	function dispatch() returns Integer
+		return callTag(tagged)
+	end 'dispatch'
+
+	static function create(tagged Tagged) returns Self
+		return Self{tagged: tagged}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create(Marker.create(9))
+	return h.dispatch()
+end 'main'
+---
+ExitCode: 9
+---
+// CompiledIR
+module {
+  func @Marker.tag(local0: i64) -> i64 {
+  entry:
+    %3 = mir.param local0 : i64
+    %1 = mir.load %3, 0 width: qword
+    mir.ret %1
+  }
+  func @callTag(local0: i64, local1: i64) -> i64 {
+  entry:
+    %5 = mir.param local0 : i64
+    mir.store_slot slot_0, %5
+    %6 = mir.param local1 : i64
+    mir.store_slot slot_1, %6
+    %2 = mir.load_slot slot_0
+    %3 = mir.load_slot slot_1
+    %4 = mir.witness_call %3, [0](%2)
+    mir.ret %4
+  }
+  func @Holder.create(local0: i64, local1: i64) -> i64 {
+  entry:
+    %7 = mir.param local0 : i64
+    mir.store_slot slot_0, %7
+    %8 = mir.param local1 : i64
+    mir.store_slot slot_1, %8
+    %2 = mir.mov_imm 16 : i64
+    %4 = mir.mov_imm 0 : i64
+    %3 = mir.call @stdlib.__mm_alloc(%2, %4)
+    %9 = mir.call @stdlib.__mm_incref(%3)
+    %5 = mir.load_slot slot_0
+    %6 = mir.load_slot slot_1
+    mir.store %5, %3, 0 width: qword
+    mir.store %6, %3, 8 width: qword
+    mir.ret %3
+  }
+  func @main() -> u8 {
+  entry:
+    %1 = mir.mov_imm 9 : i64
+    %7 = mir.mov_imm 8 : i64
+    %8 = mir.mov_imm 0 : i64
+    %9 = mir.call @stdlib.__mm_alloc(%7, %8)
+    mir.store %1, %9, 0 width: qword
+    %3 = mir.global_addr @__witness_Marker_Tagged
+    %4 = mir.call @Holder.create(%9, %3)
+    %13 = mir.call @mm_drop(%9)
+    %10 = mir.load %4, 0 width: qword
+    %11 = mir.load %4, 8 width: qword
+    %12 = mir.call @callTag(%10, %11)
+    %14 = mir.call @__mm_decref_maybenull_helper(%4)
+    %15 = mir.mov_imm 125 : i64
+    %16 = mir.cmp ugt, %12, %15
+    mir.cond_br %16 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %17 = mir.global_addr @__panic_msg_875eeda17181a65d
+    %18 = mir.call @mrt_panic(%17)
+  __range_ok_0:
+    mir.ret %12
+  }
+}
+---

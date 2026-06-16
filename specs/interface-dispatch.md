@@ -777,3 +777,54 @@ end 'main'
 ```exitcode
 7
 ```
+
+<!-- test: interface-self-field-passed-as-arg -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Tagged
+	function tag() returns Integer
+end 'Tagged'
+
+type Marker implements Tagged
+	let n as Integer
+
+	function tag() returns Integer
+		return n
+	end 'tag'
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Marker'
+
+function callTag(t Tagged) returns Integer
+	return t.tag()
+end 'callTag'
+
+// Holder reads its OWN interface-typed field via a bare `tagged` reference
+// inside a method (a selfFieldLoad) and passes it to a function expecting the
+// interface. selfFieldLoad must pair the field's witness half (offset+8) the
+// same way an explicit `h.field` load does — else passing it as an interface
+// arg panics in `witnessForInterfaceArg` with "no witness paired".
+type Holder
+	let tagged as Tagged
+
+	function dispatch() returns Integer
+		return callTag(tagged)
+	end 'dispatch'
+
+	static function create(tagged Tagged) returns Self
+		return Self{tagged: tagged}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create(Marker.create(9))
+	return h.dispatch()
+end 'main'
+```
+```exitcode
+9
+```

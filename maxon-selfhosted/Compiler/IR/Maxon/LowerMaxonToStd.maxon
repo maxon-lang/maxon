@@ -8727,13 +8727,43 @@ type MaxonToStdLowering
 			self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.witnessTryCall(resultId, witnessAddrId: witnessAddrId, methodIndex: methodIdx, isVoid: isVoid, argIds: argIds, errorFlagId: flagId)))
 			self.emitFlagBind(errorBoundName, codeValueId: flagId)
 		end 'throwingMethod' else 'nonThrowingMethod'
-			self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.witnessCall(resultId, witnessAddrId: witnessAddrId, methodIndex: methodIdx, isVoid: isVoid, argIds: argIds)))
-			self.bindErrorFlagToZero(errorBoundName, dstBlock: dstBlock)
+			// An interface-RETURNING (non-throwing) witness dispatch yields a fat
+			// pointer: payload in the primary register, witness in the secondary
+			// register — the same ABI a concrete interface-returning call uses
+			// (emitCallWithArgs' `fatCall` arm), where the secondary register
+			// normally carries the error flag. Capture it via `witnessTryCall`
+			// and pair it in `interfaceWitnessValueIds` so a downstream
+			// fat-pointer store / arg-pass / re-dispatch recovers the witness
+			// instead of panicking in `lowerInterfaceSlotStore`. (A throwing
+			// interface-returning method would need a third register for the
+			// flag — structurally absent today, same as the direct-call path.)
+			let returnInterfaceName = returnTypeInterfaceName(self.project, ref: returnType)
+			if not returnInterfaceName.isEmpty() 'fatReturn'
+				let witnessOutId = allocValueId(self.funcIdRef)
+				self.setValueType(witnessOutId, t: MaxonType.integer)
+				self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.witnessTryCall(resultId, witnessAddrId: witnessAddrId, methodIndex: methodIdx, isVoid: isVoid, argIds: argIds, errorFlagId: witnessOutId)))
+				self.interfaceWitnessValueIds.upsert(resultId, value: witnessOutId)
+				self.bindErrorFlagToZero(errorBoundName, dstBlock: dstBlock)
+			end 'fatReturn' else 'plainReturn'
+				self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.witnessCall(resultId, witnessAddrId: witnessAddrId, methodIndex: methodIdx, isVoid: isVoid, argIds: argIds)))
+				self.bindErrorFlagToZero(errorBoundName, dstBlock: dstBlock)
+			end 'plainReturn'
 		end 'nonThrowingMethod'
 		match returnType 'stamp'
 			void then break 'stamp'
 			value(inner) then self.setValueType(resultId, t: inner)
 		end 'stamp'
+		// NOTE: an interface-RETURNING witness dispatch that yields a FRESH
+		// owning interface value (e.g. `factory.make()` constructing a new
+		// conformer) currently leaks its boxed payload under the leak gate —
+		// the codebase has no witness-based destruction for interface values
+		// (`maxonTypeIsManagedRef(interface) == false`; neither InsertRefcounts
+		// nor InjectDrops releases an interface value). Interface values are
+		// treated as borrowed (their concrete owner lives elsewhere), which
+		// holds for every current self-compile site. Implementing owning-
+		// interface-value destruction (a dynamic decref through the witness's
+		// destroy slot) is tracked with the deferred managed-payload-release
+		// work; the witness PAIRING above is what the self-compile needs today.
 	end 'emitWitnessDispatch'
 
 	// Build the `[receiver, args...]` ValueId list every witness-dispatch
@@ -10358,6 +10388,18 @@ type MaxonToStdLowering
 		self.classifyValue(resultId, cls: OwnershipClass.incomingOwner, valueMaxonType: classifyType)
 		// Drop-tracking: a self-field read is an alias of the field's owner.
 		self.markAliasValue(resultId)
+		// Interface-typed self-field: same fat-pointer witness pairing as
+		// `lowerFieldLoad` — load the witness half at `offset + 8` and pair it
+		// so a downstream slot-store / arg-pass / dispatch recovers the witness
+		// instead of panicking. Without this, `self.opQuery` (an interface field)
+		// passed as an interface arg hit the no-pairing panic in
+		// `witnessForInterfaceArg`.
+		if interfaceTypeIsFat(hit.fieldType) 'pairWitness'
+			let witnessId = allocValueId(self.funcIdRef)
+			self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(witnessId, addrId: selfId, offset: (hit.offset + 8), width: StoreWidth.qword, signed: false, isFloat: false)))
+			self.setValueType(witnessId, t: MaxonType.integer)
+			self.interfaceWitnessValueIds.upsert(resultId, value: witnessId)
+		end 'pairWitness'
 	end 'lowerSelfFieldLoad'
 
 	function lowerSelfFieldStore(fieldName ByteArray, value ByteArray, dstBlock IrBlock)
