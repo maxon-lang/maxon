@@ -57,8 +57,8 @@ let USER_CHUNK_MAGIC_1 = 0x43      // 'C'
 let USER_CHUNK_MAGIC_2 = 0x43      // 'C'
 let USER_CHUNK_MAGIC_3 = 0x00
 
-export typealias OptionsHash = int(0 to u64.max)
-export typealias UpstreamApiHash = int(0 to u64.max)
+typealias OptionsHash = int(0 to u64.max)
+typealias UpstreamApiHash = int(0 to u64.max)
 typealias InstalledChunkCount = int(0 to u64.max)
 typealias UserChunkNameSet = Set with String
 
@@ -72,7 +72,7 @@ typealias UserChunkNameSet = Set with String
 // changes emitted bytes, and the user chunk cache stores fully-emitted
 // functions, so a `--coverage` build must never reuse non-instrumented chunks).
 // Folding all options into one hash means a future codegen flag is one line.
-export function compileOptionsHash(project Project) returns OptionsHash
+function compileOptionsHash(project Project) returns OptionsHash
 	var h = FNV_OFFSET_BASIS
 	var coverageByte = 0
 	if project.coverageEnabled 'cov'
@@ -105,7 +105,7 @@ var upstreamApiHashMemoKey = 0 as MachineWord
 var upstreamApiHashMemoValue = 0 as UpstreamApiHash
 var upstreamApiHashMemoValid = false
 
-export function upstreamApiHash(project Project) returns UpstreamApiHash
+function upstreamApiHash(project Project) returns UpstreamApiHash
 	let metaKey = getStdlibCacheMetaHash()
 	// metaKey == 0 means no meta-hash is recorded (a cold from-source stdlib
 	// build) — there's no stable identity to key the memo on, so recompute.
@@ -640,7 +640,7 @@ end 'userChunkFunctionNames'
 // can tally PERSISTABLE chunk misses separately — a build whose only miss is the
 // per-compile `mrt_start` (not persistable) leaves the on-disk set unchanged and
 // must still take the store's no-op fast path.
-export function isPersistableUserChunkName(name String) returns bool
+module function isPersistableUserChunkName(name String) returns bool
 	return not isLibraryOwnedFunctionName(name)
 end 'isPersistableUserChunkName'
 

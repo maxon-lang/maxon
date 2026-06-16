@@ -186,13 +186,15 @@ function queryParseOps(project Project, path FilePath) returns MaxonModule throw
 	return module
 end 'queryParseOps'
 
-// Pre-parse interface-name scan. Tokenizes every source file and records each
-// top-level `interface <Name>` declaration's name in
-// `project.prescannedInterfaceNames`, so `internMaxonType` can promote a
-// forward-referenced interface use site to its `interface(_)` arm even though
-// the parser parses file-by-file and top-to-bottom (the declaration may be
-// parsed only after a use site has already been interned). This is the
-// self-hosted analogue of maxon-sharp's `PreScan` registering all interface
+// Pre-parse declaration-name scan. Tokenizes every source file and records each
+// top-level `interface <Name>` in `project.prescannedInterfaceNames` (so
+// `internMaxonType` can promote a forward-referenced interface use site to its
+// `interface(_)` arm) and each top-level `union <Name>` in
+// `project.prescannedUnionNames` (so `enumIsAssociatedValueUnion` recognises a
+// forward / cross-file union before its declaring file is parsed). Both close
+// the same gap: the parser parses file-by-file, top-to-bottom, so a declaration
+// may be parsed only after a use site elsewhere has already been resolved. This
+// is the self-hosted analogue of maxon-sharp's `PreScan` registering all type
 // names before any param/return annotation is resolved.
 //
 // `interface` is a keyword but is ALSO a legal parameter / variable / field
@@ -224,13 +226,19 @@ function preRegisterInterfaceNames(project Project) throws CompileError
 				end 'haveOpen'
 				continue
 			end 'closeGroup'
-			if token.kind != TokenKind.interface or parenDepth != 0 'notInterfaceDecl'
+			// We scan for two declaration keywords: `interface <Name>` and
+			// `union <Name>`. Both are also legal as parameter / variable names
+			// (keywords-as-identifiers), so require depth 0 (a param-name keyword
+			// always sits inside `(...)`) and the statement-position gate below.
+			let isInterfaceKw = token.kind == TokenKind.interface
+			let isUnionKw = token.kind == TokenKind.union
+			if (not isInterfaceKw and not isUnionKw) or parenDepth != 0 'notDecl'
 				continue
-			end 'notInterfaceDecl'
-			// Statement-position gate: a genuine `interface` declaration follows a
-			// newline, `export`, the contextual `module` keyword, or the file
-			// start. A param/variable-name `interface` follows some other token
-			// (it is also usually inside `(...)`, already excluded by parenDepth).
+			end 'notDecl'
+			// Statement-position gate: a genuine declaration follows a newline,
+			// `export`, the contextual `module` keyword, or the file start. A
+			// param/variable-name keyword follows some other token (it is also
+			// usually inside `(...)`, already excluded by parenDepth).
 			if i > 0 'notFileStart'
 				let prev = try tokens.get(i - 1) otherwise continue
 				let prevIsModule = prev.kind == TokenKind.identifier and prev.value == "module"
@@ -242,10 +250,35 @@ function preRegisterInterfaceNames(project Project) throws CompileError
 			if nameToken.kind != TokenKind.identifier 'noName'
 				continue
 			end 'noName'
-			project.prescannedInterfaceNames.insert(nameToken.value)
+			if isInterfaceKw 'recordInterface'
+				project.prescannedInterfaceNames.insert(nameToken.value)
+			end 'recordInterface' else 'recordUnion'
+				project.prescannedUnionNames.insert(nameToken.value)
+			end 'recordUnion'
 		end 'eachToken'
 	end 'eachFile'
 end 'preRegisterInterfaceNames'
+
+// Pre-parse throws-clause scan. For every source file, run the parser's
+// throws-header prescan so `project.funcThrowsTypes` is seeded for EVERY
+// throwing function in the project before any file's body is parsed. The
+// per-file `parseModule` already prescans its own file, but that only helps a
+// SAME-file forward reference: a `try X() otherwise (e)` whose callee `X` lives
+// in a DIFFERENT file is parsed against a `funcThrowsTypes` that may not yet
+// (or no longer, after that file's `beginFileParse` rollback) hold X's clause,
+// so the `(e)` binding falls back to `integer` and the downstream `match e`
+// reports E3005 "match scrutinee must be an enum-typed value". Running the
+// prescan across all files up front closes that cross-file gap. Each file's
+// entries are recorded under its own parse delta (via `recordFuncThrowsInsert`
+// inside the prescan), so incremental re-parse rolls them back correctly.
+// Mirrors `preRegisterInterfaceNames`; runs alongside it before the parse loop.
+function preRegisterFunctionThrows(project Project) throws CompileError
+	for path in project.db.sourcePaths 'eachFile'
+		let tokens = try queryTokens(project, path: path)
+		var parser = try Parser.create(project, tokens: tokens, filePath: path, rootPath: project.rootPath, namespace: deriveNamespace(path, rootPath: project.rootPath)) otherwise continue
+		parser.prescanThrowsHeaders()
+	end 'eachFile'
+end 'preRegisterFunctionThrows'
 
 // --- Whole-program derived query: all modules merged ---
 
@@ -297,6 +330,13 @@ function queryAllModule(project Project) returns MaxonModule throws CompileError
 	// (stdlib interfaces already live in `project.interfaces`) and before the
 	// user-file parse loop below.
 	try preRegisterInterfaceNames(project)
+
+	// Pre-parse throws-clause scan across ALL files (mirrors maxon-sharp's
+	// `PreScanFunction`): seed `funcThrowsTypes` for every throwing function so a
+	// cross-file `try X() otherwise (e)` recovers the callee's error union at
+	// parse time regardless of file order, keeping the `(e)` binding typed (and
+	// its `match e` enum-resolvable) instead of falling back to `integer`.
+	try preRegisterFunctionThrows(project)
 
 	// Then parse user files
 	for path in project.db.sourcePaths 'eachFile'

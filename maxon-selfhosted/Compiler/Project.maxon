@@ -530,6 +530,12 @@ export type Project
 	// consults this set so a forward-referenced interface name is born as
 	// `interface(_)` everywhere it matters, matching maxon-sharp's `PreScan`.
 	export var prescannedInterfaceNames as PrescannedInterfaceNameSet
+	// Pre-parse scan output: every top-level `union <Name>` declaration across
+	// all files. Lets `enumIsAssociatedValueUnion` recognise a cross-file /
+	// forward-referenced union before its declaring file is parsed, so a caught
+	// error union binding (`try X() otherwise (e)` where the union is declared
+	// later) binds to the box pointer and reads payloads at the correct offset.
+	export var prescannedUnionNames as PrescannedUnionNameSet
 
 	// Function-type interner. Every `(P1, P2) returns R` signature the parser
 	// sees in a parameter position lands here as a parallel-array entry; the
@@ -942,6 +948,7 @@ export type Project
 			unresolvedInterfaces: UnresolvedInterfaceMap.create(),
 			interfaces: IrInterfaceMap.create(),
 			prescannedInterfaceNames: PrescannedInterfaceNameSet.create(),
+			prescannedUnionNames: PrescannedUnionNameSet.create(),
 			functionTypes: FunctionTypeRegistry.create(),
 			typeParameters: TypeParamRegistry.create(),
 			genericInstances: GenericInstanceRegistry.create(),
@@ -3444,6 +3451,15 @@ export typealias InnerAliasNameSet = Set with String
 // Name set for `Project.prescannedInterfaceNames` — the pre-parse interface
 // name scan's output. See the field comment on `Project`.
 export typealias PrescannedInterfaceNameSet = Set with String
+
+// Name set for `Project.prescannedUnionNames` — every top-level `union <Name>`
+// declaration across all files, recorded by the pre-parse scan before any body
+// is parsed. `enumIsAssociatedValueUnion` consults it so a forward / cross-file
+// `union` reference (e.g. a caught error union `try X() otherwise (e)` whose
+// `union` is declared in a later-parsed file) is correctly treated as a
+// heap-boxed union — binding `e` to the box pointer and reading payloads at the
+// right offset — instead of falling back to the bare-ordinal enum path.
+export typealias PrescannedUnionNameSet = Set with String
 
 // Phase 11.0 step 2: resolved-form of inner typealiases. Mirrors
 // `GenericTypealiasMap`'s shape; lives on `StructType` so per-type

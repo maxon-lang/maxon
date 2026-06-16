@@ -1,0 +1,93 @@
+// Test: error.cross-file-throws-caught-later-file
+// --- file: app.maxon
+// The throwing callee `risky` is declared in `zzz.maxon`, which sorts AFTER
+// this file. The single-pass parser parses `app.maxon` first, so without a
+// project-wide throws-clause prescan the `(e)` binding here can't recover
+// `risky`'s error union — it falls back to `integer` and the `match e` below
+// reports E3005 "match scrutinee must be an enum-typed value". Seeding every
+// file's `throws` clause before any body is parsed keeps `e` typed as `Woe`.
+function main() returns ExitCode
+	var result = 0
+	try risky(9) otherwise (e) 'handler'
+		match e 'check'
+			tooBig(by) then result = by
+			negative then result = 1
+		end 'check'
+	end 'handler'
+	return result
+end 'main'
+
+// --- file: zzz.maxon
+typealias Code = int(i64.min to i64.max)
+
+export union Woe implements Error
+	tooBig(by Code)
+	negative
+end 'Woe'
+
+export function risky(n Code) returns Code throws Woe
+	if n > 5 'big'
+		throw Woe.tooBig(7)
+	end 'big'
+	return n
+end 'risky'
+---
+ExitCode: 7
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %2 = mir.mov_imm 9 : i64
+    mir.br inlined_risky_0_0()
+  inlined_risky_0_0:
+    %24 = mir.mov_imm 5 : i64
+    %25 = mir.cmp gt, %2, %24
+    mir.cond_br %25 [then: inlined_risky_1_0(), else: inlined_risky_2_0()]
+  inlined_risky_1_0:
+    %26 = mir.mov_imm 7 : i64
+    %32 = mir.mov_imm 16 : i64
+    %33 = mir.mov_imm 0 : i64
+    %34 = mir.mov_imm 0 : i64
+    %35 = mir.call @stdlib.__mm_alloc(%32, %33)
+    mir.store %34, %35, 0 width: qword
+    mir.store %26, %35, 8 width: qword
+    %28 = mir.mov_imm 0 : i64
+    %36 = mir.call @mm_drop(%35)
+    mir.br inline_cont_main_0(%28, %35)
+  inlined_risky_2_0:
+    %29 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%2, %29)
+  inline_cont_main_0(%30: i64, %31: i64):
+    %6 = mir.cmp ne, %31, %0
+    mir.cond_br %6 [then: try_0.otherwise(), else: try_0.merge(%0, %30)]
+  try_0.otherwise:
+    %9 = mir.load %31, 0 width: qword
+    %11 = mir.cmp eq, %9, %0
+    mir.cond_br %11 [then: check_0.case0(), else: check_0.next0()]
+  check_0.merge(%21: i64):
+    mir.br try_0.merge(%21, %0)
+  check_0.case0:
+    %13 = mir.load %31, 8 width: qword
+    mir.br check_0.merge(%13)
+  check_0.next0:
+    %15 = mir.load %31, 0 width: qword
+    %16 = mir.mov_imm 1 : i64
+    %17 = mir.cmp eq, %15, %16
+    mir.cond_br %17 [then: check_0.case1(), else: check_0.merge(%0)]
+  check_0.case1:
+    %18 = mir.mov_imm 1 : i64
+    mir.br check_0.merge(%18)
+  try_0.merge(%22: i64, %23: i64):
+    %37 = mir.mov_imm 125 : i64
+    %38 = mir.cmp ugt, %22, %37
+    mir.cond_br %38 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %39 = mir.global_addr @__panic_msg_994c23b3b64fd85b
+    %40 = mir.call @mrt_panic(%39)
+  __range_ok_0:
+    mir.ret %22
+  }
+}
+---

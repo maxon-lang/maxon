@@ -249,7 +249,7 @@ end 'combinedLibraryCache'
 //     the union NOW (after the grow) so they are present.
 // Keyed on the live registry's valid-library count, NOT on `preLink`, so the
 // decision matches how `combinedLibraryCache` would assemble the cache right now.
-export function libraryLinkCacheAfterLazyGrow(preLink StdlibCacheData) returns StdlibCacheData
+module function libraryLinkCacheAfterLazyGrow(preLink StdlibCacheData) returns StdlibCacheData
 	if findSoleValidLibrary().kind == SoleValidLibraryKind.one 'singleLibrary'
 		return preLink
 	end 'singleLibrary'
@@ -302,7 +302,7 @@ end 'combinedInlinerStdModule'
 // from any library's cache. One valid library returns its map verbatim; N>1
 // unions each (stdlib first). Edge keys are fully-qualified function names,
 // unique across libraries, so the union never collides.
-export function combinedFuncEdges() returns CachedFuncEdgeMap
+module function combinedFuncEdges() returns CachedFuncEdgeMap
 	let sole = findSoleValidLibrary()
 	if sole.kind == SoleValidLibraryKind.one 'fastPath'
 		return (try libraryRegistry.libs.get(sole.index) otherwise panic("combinedFuncEdges: sole index vanished")).funcEdges
@@ -324,7 +324,7 @@ end 'combinedFuncEdges'
 // generalized form of `isStdlibCacheValid()` gating the cache-on link /
 // runtime-trim path. True iff at least one library's cache is populated and
 // valid for the active target.
-export function anyLibraryCacheValid() returns bool
+module function anyLibraryCacheValid() returns bool
 	for lib in libraryRegistry.libs 'eachLib'
 		if lib.cacheValid 'valid'
 			return true
@@ -1165,7 +1165,7 @@ end 'registeredLibraryCount'
 // `isStdlibNamespace`. Used to gate library-only behaviors (e.g. the Internals
 // carve-out stays stdlib-only via `isStdlib`, but namespace-level checks use
 // this).
-export function isLibraryNamespace(namespace String) returns bool
+function isLibraryNamespace(namespace String) returns bool
 	for i in 0 upto libraryRegistry.libs.count() 'eachLib'
 		let lib = try libraryRegistry.libs.get(i) otherwise continue
 		if lib.name == namespace or namespace.startsWith("{lib.name}.") 'match'

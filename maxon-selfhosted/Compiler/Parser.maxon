@@ -626,6 +626,20 @@ export type Parser
 		return module
 	end 'parseModule'
 
+	// Project-wide pre-parse entry point: run ONLY the throws-clause header
+	// prescan, without parsing any bodies. `queryAllModule` calls this for every
+	// source file before the per-file body parse loop, so a `try X() otherwise
+	// (e)` whose callee `X` is declared in a file parsed LATER (or earlier, but
+	// whose `funcThrowsTypes` were rolled back by that file's own
+	// `beginFileParse`) can still recover the throws type at parse time. Without
+	// it, a cross-file caught error union's `(e)` binding falls back to `integer`
+	// and the downstream `match e` reports E3005 "match scrutinee must be an
+	// enum-typed value". Mirrors how `preRegisterInterfaceNames` seeds interface
+	// names across all files before any parse.
+	export function prescanThrowsHeaders()
+		prescanFunctionThrows()
+	end 'prescanThrowsHeaders'
+
 	// Header prescan that registers `funcThrowsTypes` for every throwing
 	// `function`/method declared in this file, so the single-pass main parse can
 	// resolve a try-block body call to a forward-declared throwing sibling/free
@@ -6015,7 +6029,13 @@ export type Parser
 		if let unresolved = try project.unresolvedEnums.get(enumName) 'isUnresolved'
 			return unresolved.isUnion
 		end 'isUnresolved'
-		return false
+		// Cross-file / forward reference: the union is declared in a file not yet
+		// parsed, so it's absent from `enumTypes`/`unresolvedEnums`. The pre-parse
+		// scan recorded every `union <Name>` across all files, so consult it as a
+		// last resort. Without this, a caught error union whose declaration sorts
+		// after the catch site is mis-bound to the bare-ordinal enum path and its
+		// payloads read at the wrong offset (returning garbage / 0).
+		return project.prescannedUnionNames.contains(enumName)
 	end 'enumIsAssociatedValueUnion'
 
 	// Declare an error-value binding for an `(e)` clause on a fallback /

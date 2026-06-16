@@ -840,6 +840,45 @@ end 'main'
 42
 ```
 
+<!-- test: error.cross-file-throws-caught-later-file -->
+```maxon
+// --- file: app.maxon
+// The throwing callee `risky` is declared in `zzz.maxon`, which sorts AFTER
+// this file. The single-pass parser parses `app.maxon` first, so without a
+// project-wide throws-clause prescan the `(e)` binding here can't recover
+// `risky`'s error union — it falls back to `integer` and the `match e` below
+// reports E3005 "match scrutinee must be an enum-typed value". Seeding every
+// file's `throws` clause before any body is parsed keeps `e` typed as `Woe`.
+function main() returns ExitCode
+	var result = 0
+	try risky(9) otherwise (e) 'handler'
+		match e 'check'
+			tooBig(by) then result = by
+			negative then result = 1
+		end 'check'
+	end 'handler'
+	return result
+end 'main'
+
+// --- file: zzz.maxon
+typealias Code = int(i64.min to i64.max)
+
+export union Woe implements Error
+	tooBig(by Code)
+	negative
+end 'Woe'
+
+export function risky(n Code) returns Code throws Woe
+	if n > 5 'big'
+		throw Woe.tooBig(7)
+	end 'big'
+	return n
+end 'risky'
+```
+```exitcode
+7
+```
+
 <!-- test: error.otherwise-block-reused-binding -->
 ```maxon
 
