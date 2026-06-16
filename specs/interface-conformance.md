@@ -429,3 +429,43 @@ end 'main'
 ```maxoncstderr
 error E3012: specs/fragments/interface-conformance/interface-method-local-var-still-errors.test:13:7: unused variable: 'unusedLocal'
 ```
+
+<!-- test: interface-impl-ignore-param-name -->
+An interface-implementing method may name a parameter `_` (the ignore name) even
+when the interface declares it with a real name. The impl doesn't use the
+argument; callers through the interface still pass it by the interface's name,
+which they can see, so an `_` impl param satisfies any expected name — it can
+never be the bound name. Without this carve-out the conformance check reports a
+spurious E3016 "wrong signature" (`greet(_ bool)` vs `greet(loud bool)`).
+Returns `7`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Greeter
+	function greet(loud bool) returns Integer
+end 'Greeter'
+
+type Quiet implements Greeter
+	let value as Integer
+
+	function greet(_ bool) returns Integer
+		return value
+	end 'greet'
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Quiet'
+
+function useGreeter(g Greeter) returns Integer
+	return g.greet(loud: true)
+end 'useGreeter'
+
+function main() returns ExitCode
+	let q = Quiet.create(7)
+	return useGreeter(q)
+end 'main'
+```
+```exitcode
+7
+```

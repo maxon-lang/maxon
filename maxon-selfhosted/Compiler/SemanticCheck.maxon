@@ -530,7 +530,12 @@ function signatureMatches(project Project, expected InterfaceMethodSig, actualPa
 		let expType = try expected.paramTypes.get(i) otherwise panic("signatureMatches: expected.paramTypes.get OOB at {i}")
 		let actName = try actualParamNames.get(i + skipSelf) otherwise panic("signatureMatches: actualParamNames.get OOB at {i}")
 		let actType = try actualParamTypes.get(i + skipSelf) otherwise panic("signatureMatches: actualParamTypes.get OOB at {i}")
-		if expName != actName 'nameMismatch'
+		// `_` is the ignore-this-argument name: the implementer declares it
+		// doesn't use the parameter. Callers through the interface still pass it
+		// by the interface's name (which they can see), so an `_` impl param
+		// satisfies any expected name — it can never be the bound name itself.
+		// Matches the C# bootstrap, which doesn't compare a `_` impl param name.
+		if expName != actName and actName != "_" 'nameMismatch'
 			return false
 		end 'nameMismatch'
 		if not maxonTypesMatchForConformance(project, expected: expType, actual: actType) 'typeMismatch'
@@ -1036,11 +1041,12 @@ function checkAsyncYielding(project Project, module MaxonModule)
 			let block = try module.blocks.get(blockRef) otherwise panic("checkAsyncYielding: blockRef OOB")
 			for opIdx in block.opRefs 'eachOp'
 				let op = try module.ops.get(opIdx) otherwise panic("checkAsyncYielding: opIdx OOB")
-				classifyYieldOp(project, op: op, func: func, yields: yields, callees: callees)
+				classifyYieldOp(project, opIdx: opIdx, op: op, func: func, yields: yields, callees: callees)
 			end 'eachOp'
 			if block.hasTerminatorOp() 'hasTerm'
-				let termOp = try module.ops.get(block.terminatorIndex()) otherwise panic("checkAsyncYielding: termIdx OOB")
-				classifyYieldOp(project, op: termOp, func: func, yields: yields, callees: callees)
+				let termIdx = block.terminatorIndex()
+				let termOp = try module.ops.get(termIdx) otherwise panic("checkAsyncYielding: termIdx OOB")
+				classifyYieldOp(project, opIdx: termIdx, op: termOp, func: func, yields: yields, callees: callees)
 			end 'hasTerm'
 		end 'eachBlock'
 		edges.upsert(func.name, value: callees)
@@ -1102,7 +1108,7 @@ end 'moduleHasAsyncCall'
 // Classify one op for the yields walk: async/await ops make the containing
 // function yield; call/tryCall ops either mark a yield (I/O stub callee) or
 // contribute a qualified callee edge for the fixed-point.
-function classifyYieldOp(project Project, op MaxonOp, func IrFunction, yields StringSet, callees FuncNameArray)
+function classifyYieldOp(project Project, opIdx OpIndex, op MaxonOp, func IrFunction, yields StringSet, callees FuncNameArray)
 	if op.name == "awaitPromise" or op.name == "tryAwait" 'isAwait'
 		yields.insert(func.name)
 		return
@@ -1128,7 +1134,51 @@ function classifyYieldOp(project Project, op MaxonOp, func IrFunction, yields St
 		end 't'
 		return
 	end 'isTryCall'
+	// A `recv.method(...)` / `try recv.method(...)` call: at the Maxon tier the
+	// callee is still a `methodCall`/`tryMethodCall` (not yet lowered to a
+	// qualified `call`), so resolve `{ReceiverType}.{methodName}` from
+	// `resolvedReceiverTypes` and route it through the same edge handler. Without
+	// this the yield walk can't see `child.readStdoutLine()` reach the
+	// `__Builtins.subprocessReadStdoutLine` I/O stub inside the method body, so an
+	// `async`-spawned thunk that yields only via a method call wrongly trips E3073.
+	if op.name == "methodCall" 'isMethodCall'
+		match op 'mc'
+			methodCall(_, _, methodName, _, _, _, _, _) then handleYieldMethodEdge(project, opIdx: opIdx, methodName: methodName, func: func, yields: yields, callees: callees)
+			default panic("classifyYieldOp: op.name == methodCall but match failed")
+		end 'mc'
+		return
+	end 'isMethodCall'
+	if op.name == "tryMethodCall" 'isTryMethodCall'
+		match op 'tmc'
+			tryMethodCall(_, _, methodName, _, _, _, _, _, _) then handleYieldMethodEdge(project, opIdx: opIdx, methodName: methodName, func: func, yields: yields, callees: callees)
+			default panic("classifyYieldOp: op.name == tryMethodCall but match failed")
+		end 'tmc'
+		return
+	end 'isTryMethodCall'
 end 'classifyYieldOp'
+
+// Method-call yield edge: resolve the receiver's type from `resolvedReceiverTypes`
+// (keyed by opIdx) to `{ReceiverTypeName}.{methodName}`. If that qualified method
+// is a known yield stub, mark the caller yielding directly — the method body
+// lives in the stdlib, which the user-pipeline yield walk doesn't have in
+// `module.functions`, so the transitive edge alone can't reach the I/O stub the
+// method ultimately calls (e.g. `StreamingSubprocess.readStdoutLine` →
+// `__Builtins.subprocessReadStdoutLine`). Always push the edge too, so a method
+// whose body IS in the module still propagates via the fixed-point. No-ops when
+// the receiver type isn't recorded — an unresolved method can't be a known edge.
+function handleYieldMethodEdge(project Project, opIdx OpIndex, methodName ByteArray, func IrFunction, yields StringSet, callees FuncNameArray)
+	if let receiverType = try project.resolvedReceiverTypes.get(opIdx) 'haveReceiver'
+		let typeName = receiverType.nameOrEmpty(project)
+		if not typeName.isEmpty() 'haveName'
+			let qualified = "{typeName}.{String.from(methodName)}"
+			if isAsyncYieldStub(qualified) 'isStub'
+				yields.insert(func.name)
+				return
+			end 'isStub'
+			callees.push(qualified)
+		end 'haveName'
+	end 'haveReceiver'
+end 'handleYieldMethodEdge'
 
 // An async-call op also makes its containing function yield (it awaits the
 // spawned promise's completion implicitly), so route the spawn-site callee
@@ -1169,7 +1219,7 @@ function isAsyncYieldStub(name String) returns bool
 	// is legitimate. `TcpClient.connect/send/recv` are the user-facing yield
 	// functions; the `mrt_managed_socket_*` runtime helpers are the lowered
 	// targets a transitive walk may reach.
-	let stubs = ["File.exists", "File.read", "File.delete", "maxon_file_exists", "maxon_file_read", "maxon_file_delete", "maxon_sleep", "stdlib.sleep", "Subprocess.run", "maxon_subprocess_wait_collect", "TcpClient.connect", "TcpClient.send", "TcpClient.recv", "mrt_managed_socket_tcp_connect", "mrt_managed_socket_send", "mrt_managed_socket_recv"]
+	let stubs = ["File.exists", "File.read", "File.delete", "maxon_file_exists", "maxon_file_read", "maxon_file_delete", "maxon_sleep", "stdlib.sleep", "Subprocess.run", "maxon_subprocess_wait_collect", "TcpClient.connect", "TcpClient.send", "TcpClient.recv", "mrt_managed_socket_tcp_connect", "mrt_managed_socket_send", "mrt_managed_socket_recv", "__Builtins.subprocessReadStdoutLine", "__Builtins.subprocessReadStderrLine", "__Builtins.subprocessWriteStdinAll", "__Builtins.subprocessWaitExit", "__Builtins.subprocessSpawnStreaming", "StreamingSubprocess.readStdoutLine", "StreamingSubprocess.readStdoutLineCapped", "StreamingSubprocess.readStderrLine", "StreamingSubprocess.readStderrLineCapped", "StreamingSubprocess.writeStdinAll", "StreamingSubprocess.waitExit"]
 	for s in stubs 'each'
 		if name == s 'hit'
 			return true
@@ -1680,6 +1730,12 @@ end 'stripCalleeMangling'
 // runtime names and listing each one would rot.
 typealias ImpureCalleeSet = Set with String
 
+// Value names (SSA result names) derived from a parameter or `self`, and the
+// set of parameter scope-slot ids. Used by the param/self mutation detection
+// inside `isFunctionDirectlyImpure`.
+typealias TaintedNameSet = Set with String
+typealias ParamSlotSet = Set with VarSlot
+
 function buildImpureCalleeSet() returns ImpureCalleeSet
 	var s = ImpureCalleeSet.create()
 	// I/O intrinsics. `print(s)` lowers to `Print.print` which calls
@@ -1707,27 +1763,35 @@ function buildImpureCalleeSet() returns ImpureCalleeSet
 end 'buildImpureCalleeSet'
 
 // Did `func`'s body contain any op that makes it directly impure?
-// Inspects each op for the impurity shapes called out in C# PurityAnalysisPass:
+// Inspects each op for the impurity shapes called out in C# PurityAnalysisPass
+// + ParameterMutationAnalysisPass:
 //   - globalStore: mutates a top-level `var`.
 //   - selfFieldStore: writes `self.x = ...` inside an instance method.
-//     The C# bootstrap detects this via a separate ParameterMutationAnalysis
-//     pass; self-hosted infers it from the op directly because every
-//     self-field write lowers to this dedicated op.
 //   - rangeCheckPanic: routes to a runtime call that aborts.
 //   - call/tryCall whose callee is in the impure-callee set OR has the
 //     `mrt_` runtime prefix.
+//   - a MUTATING METHOD CALL on a PARAMETER- or SELF-derived receiver
+//     (`arr.remove(i)`, `module.ops.push(x)`, `self.members.push(v)`) —
+//     mutates state reachable through a param, so the function is impure
+//     (its result is `_=`-discardable, E3065, not must-use, E3064). The
+//     receiver may be the bare param, a self-field, or a `.field` chain off
+//     either; we taint-track those value names so a derived receiver counts.
+//     Mirrors C# ParameterMutationAnalysisPass; `methodCall` ops are not call
+//     edges and the mutating stdlib method (`Array.remove`) isn't in the user
+//     module to propagate from, so name-based detection is needed here.
 function isFunctionDirectlyImpure(module MaxonModule, func IrFunction, impureCallees ImpureCalleeSet) returns bool
+	let tainted = buildParamSelfTaintedNames(module, func: func)
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("isFunctionDirectlyImpure: blockRef {blockRef} OOB")
 		for opIdx in block.opRefs 'eachOp'
 			let op = try module.ops.get(opIdx) otherwise panic("isFunctionDirectlyImpure: opIdx OOB")
-			if isOpDirectlyImpure(op, impureCallees: impureCallees) 'impure'
+			if isOpDirectlyImpure(op, impureCallees: impureCallees, tainted: tainted) 'impure'
 				return true
 			end 'impure'
 		end 'eachOp'
 		if block.hasTerminatorOp() 'hasTerm'
 			let termOp = try module.ops.get(block.terminatorIndex()) otherwise panic("isFunctionDirectlyImpure: termIdx OOB")
-			if isOpDirectlyImpure(termOp, impureCallees: impureCallees) 'termImpure'
+			if isOpDirectlyImpure(termOp, impureCallees: impureCallees, tainted: tainted) 'termImpure'
 				return true
 			end 'termImpure'
 		end 'hasTerm'
@@ -1735,7 +1799,67 @@ function isFunctionDirectlyImpure(module MaxonModule, func IrFunction, impureCal
 	return false
 end 'isFunctionDirectlyImpure'
 
-function isOpDirectlyImpure(op MaxonOp, impureCallees ImpureCalleeSet) returns bool
+// Value names derived from a parameter or from `self`: a `varLoad` of a param
+// slot, a `selfFieldLoad` (always self-derived), or a `fieldLoad` chained off
+// an already-tainted receiver. A mutating method on any of these mutates state
+// reachable through a param. Single forward pass over the body — a `fieldLoad`
+// always follows its receiver's load in op order, so one pass is sufficient.
+function buildParamSelfTaintedNames(module MaxonModule, func IrFunction) returns TaintedNameSet
+	var tainted = TaintedNameSet.create()
+	var paramSlots = ParamSlotSet.create()
+	for res in func.paramReservations 'eachParam'
+		paramSlots.insert(res.paramSlot)
+	end 'eachParam'
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("buildParamSelfTaintedNames: blockRef OOB")
+		for opIdx in block.opRefs 'eachOp'
+			let op = try module.ops.get(opIdx) otherwise panic("buildParamSelfTaintedNames: opIdx OOB")
+			taintIfDerived(tainted, paramSlots: paramSlots, op: op)
+		end 'eachOp'
+	end 'eachBlock'
+	return tainted
+end 'buildParamSelfTaintedNames'
+
+function taintIfDerived(tainted TaintedNameSet, paramSlots ParamSlotSet, op MaxonOp)
+	// `op.name`-gated single-arm destructures avoid an exhaustive MaxonOp match
+	// (most op kinds are irrelevant here). A `selfFieldLoad` result is always
+	// self-derived; a `varLoad` is param-derived iff its slot is a param slot;
+	// a `fieldLoad` is derived iff its receiver already is.
+	if op.name == "varLoad" 'isVarLoad'
+		match op 'vl'
+			varLoad(result, slotId, _, _) then taintIfParamSlot(tainted, paramSlots: paramSlots, result: result, slotId: slotId)
+			default panic("taintIfDerived: op.name == varLoad but match failed")
+		end 'vl'
+		return
+	end 'isVarLoad'
+	if op.name == "selfFieldLoad" 'isSelfFieldLoad'
+		match op 'sfl'
+			selfFieldLoad(result, _, _) then tainted.insert(String.from(result))
+			default panic("taintIfDerived: op.name == selfFieldLoad but match failed")
+		end 'sfl'
+		return
+	end 'isSelfFieldLoad'
+	if op.name == "fieldLoad" 'isFieldLoad'
+		match op 'fl'
+			fieldLoad(result, receiver, _, _) then taintIfReceiverTainted(tainted, result: result, receiver: receiver)
+			default panic("taintIfDerived: op.name == fieldLoad but match failed")
+		end 'fl'
+	end 'isFieldLoad'
+end 'taintIfDerived'
+
+function taintIfParamSlot(tainted TaintedNameSet, paramSlots ParamSlotSet, result ByteArray, slotId VarSlot)
+	if paramSlots.contains(slotId) 'isParam'
+		tainted.insert(String.from(result))
+	end 'isParam'
+end 'taintIfParamSlot'
+
+function taintIfReceiverTainted(tainted TaintedNameSet, result ByteArray, receiver ByteArray)
+	if tainted.contains(String.from(receiver)) 'derived'
+		tainted.insert(String.from(result))
+	end 'derived'
+end 'taintIfReceiverTainted'
+
+function isOpDirectlyImpure(op MaxonOp, impureCallees ImpureCalleeSet, tainted TaintedNameSet) returns bool
 	// globalStore — every `topLevelVar = expr` reassignment.
 	if op.name == "globalStore" 'isGlobalStore'
 		return true
@@ -1745,6 +1869,10 @@ function isOpDirectlyImpure(op MaxonOp, impureCallees ImpureCalleeSet) returns b
 	if op.name == "selfFieldStore" 'isSelfStore'
 		return true
 	end 'isSelfStore'
+	// A mutating method on a param/self-derived receiver mutates reachable state.
+	if isMutatingMethodOnTaintedReceiver(op, tainted: tainted) 'mutatingMethod'
+		return true
+	end 'mutatingMethod'
 	// Any call/tryCall to a known impure callee. Extract the callee bytes
 	// first; the call/tryCall match expressions can't carry side-effecting
 	// `return`s in `gives`-arms, so the helper makes the shape destructure
@@ -1755,6 +1883,40 @@ function isOpDirectlyImpure(op MaxonOp, impureCallees ImpureCalleeSet) returns b
 	end 'noCallee'
 	return calleeIsImpure(calleeName, impureCallees: impureCallees)
 end 'isOpDirectlyImpure'
+
+function isMutatingMethodOnTaintedReceiver(op MaxonOp, tainted TaintedNameSet) returns bool
+	if op.name == "methodCall" 'isMethodCall'
+		return match op 'mc'
+			methodCall(_, receiver, methodName, _, _, _, _, _) gives methodMutatesTaintedReceiver(receiver, methodName: methodName, tainted: tainted)
+			default panic("isMutatingMethodOnTaintedReceiver: op.name == methodCall but match failed")
+		end 'mc'
+	end 'isMethodCall'
+	if op.name == "tryMethodCall" 'isTryMethodCall'
+		return match op 'tmc'
+			tryMethodCall(_, receiver, methodName, _, _, _, _, _, _) gives methodMutatesTaintedReceiver(receiver, methodName: methodName, tainted: tainted)
+			default panic("isMutatingMethodOnTaintedReceiver: op.name == tryMethodCall but match failed")
+		end 'tmc'
+	end 'isTryMethodCall'
+	return false
+end 'isMutatingMethodOnTaintedReceiver'
+
+function methodMutatesTaintedReceiver(receiver ByteArray, methodName ByteArray, tainted TaintedNameSet) returns bool
+	if not tainted.contains(String.from(receiver)) 'notTainted'
+		return false
+	end 'notTainted'
+	return isMutatingMethodName(String.from(methodName))
+end 'methodMutatesTaintedReceiver'
+
+// Method names that mutate their receiver's reachable data. Mirrors the C#
+// bootstrap's `ParameterMutationAnalysisPass.IsMutatingMethodName`, plus the
+// container-insertion names the self-hosted stdlib uses (`add` on a set,
+// `upsert` on a map) — C# catches those transitively via the call graph, but
+// the self-hosted pass detects mutation by method name (a `methodCall` op is
+// not a call edge here). Read-only methods (`count`, `get`, `slice`, …) are
+// absent so a function that only reads through a param stays pure.
+function isMutatingMethodName(methodName String) returns bool
+	return methodName == "push" or methodName == "pop" or methodName == "insert" or methodName == "remove" or methodName == "set" or methodName == "clear" or methodName == "resize" or methodName == "reserve" or methodName == "append" or methodName == "ensureCapacity" or methodName == "add" or methodName == "upsert"
+end 'isMutatingMethodName'
 
 // Return the callee name from a call/tryCall op, or "" for any other op.
 // Used by both the direct-impurity and the call-edge collection passes.
@@ -2691,6 +2853,16 @@ function maybeReportDiscarded(project Project, module MaxonModule, result ByteAr
 	if isChainableCallee(project, module: module, calleeName: bareCallee) 'chainable'
 		return
 	end 'chainable'
+	// A callee that doesn't resolve to a user function in this module is a
+	// builtin intrinsic (`__Builtins.subprocessKill`) or a cache-restored
+	// stdlib helper — never a discard-lint target. C#'s CheckDiscardedResults
+	// `continue`s when `funcLookup.TryGetValue(callee)` misses; mirror that so a
+	// bare statement-position intrinsic call (whose int result is routinely
+	// ignored) doesn't fire a spurious E3065. The genuinely-undefined-user-call
+	// case is reported as E2004 elsewhere, not here.
+	if not calleeResolvesToModuleFunction(module, calleeName: bareCallee, callerNamespace: callerNamespace) 'unresolvedCallee'
+		return
+	end 'unresolvedCallee'
 	// Look up callee purity. Same lookup strategy as the transitive pass.
 	let calleePure = lookupCalleePurityForReport(module, bareCallee: bareCallee, callerNamespace: callerNamespace, impureCallees: impureCallees)
 	let displayName = formatCalleeNameForDiscard(bareCallee)
@@ -2865,3 +3037,25 @@ end 'maxonTypeBareName'
 function lookupCalleePurityForReport(module MaxonModule, bareCallee String, callerNamespace String, impureCallees ImpureCalleeSet) returns bool
 	return lookupCalleePurityImpl(module, calleeName: bareCallee, callerNamespace: callerNamespace, impureCallees: impureCallees, unresolvedDefault: false)
 end 'lookupCalleePurityForReport'
+
+// True iff `calleeName` resolves to a user function in this module (bare or
+// namespace-qualified). The discard lint only fires for such callees — C#'s
+// CheckDiscardedResults skips any callee missing from its `funcLookup` (builtin
+// intrinsics like `__Builtins.subprocessKill`, cache-restored stdlib helpers).
+// The print-family / impure-builtin I/O entrypoints are likewise not module
+// functions; their results are void or routinely-ignored, so skipping them here
+// matches C# (they were never discard-lint targets).
+function calleeResolvesToModuleFunction(module MaxonModule, calleeName String, callerNamespace String) returns bool
+	for func in module.functions 'each'
+		if func.name == calleeName 'directHit'
+			return true
+		end 'directHit'
+		if callerNamespace != "" 'hasNs'
+			let qualified = "{callerNamespace}.{calleeName}"
+			if func.name == qualified 'qualifiedHit'
+				return true
+			end 'qualifiedHit'
+		end 'hasNs'
+	end 'each'
+	return false
+end 'calleeResolvesToModuleFunction'

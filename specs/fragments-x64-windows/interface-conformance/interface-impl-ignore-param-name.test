@@ -1,0 +1,79 @@
+// Test: interface-impl-ignore-param-name
+typealias Integer = int(i64.min to i64.max)
+
+interface Greeter
+	function greet(loud bool) returns Integer
+end 'Greeter'
+
+type Quiet implements Greeter
+	let value as Integer
+
+	function greet(_ bool) returns Integer
+		return value
+	end 'greet'
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Quiet'
+
+function useGreeter(g Greeter) returns Integer
+	return g.greet(loud: true)
+end 'useGreeter'
+
+function main() returns ExitCode
+	let q = Quiet.create(7)
+	return useGreeter(q)
+end 'main'
+---
+ExitCode: 7
+---
+// CompiledIR
+module {
+  func @Quiet.greet(rcx: i64, rdx: i1) -> i64 {
+  entry:
+    x64.mov r8, [rcx+0] (8b)
+    x64.ret
+  }
+  func @useGreeter(rcx: i64, rdx: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov [rbp-16], rdx
+    x64.mov r8, [rbp-16]
+    x64.mov rcx, [rbp-8]
+    x64.mov edx, 1
+    x64.mov r10, [r8+24] (8b)
+    x64.call r10
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.xor edx, edx
+    x64.mov ecx, 8
+    x64.call stdlib.__mm_alloc
+    x64.mov r12, r8
+    x64.mov r8d, 7
+    x64.mov [r12+0], r8 (8b)
+    x64.lea rdx, [rip+__witness_Quiet_Greeter]
+    x64.mov rcx, r12
+    x64.call useGreeter
+    x64.mov r13, r8
+    x64.mov rcx, r12
+    x64.call mm_drop
+    x64.mov r8d, 4294967295
+    x64.cmp r13, r8
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea r12, [rip+__panic_msg_7d4231ea364f363f]
+    x64.mov rcx, r12
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov r8, r13
+    x64.epilogue
+    x64.ret
+  }
+}
+---

@@ -419,3 +419,40 @@ end 'main'
 ```exitcode
 0
 ```
+
+<!-- test: param-mutating-method-is-impure -->
+A function that mutates a parameter through a mutating method (`arr.remove(i)`)
+is IMPURE — even though it neither writes a global nor calls a known impure
+builtin directly. Its `bool` result is therefore `_=`-discardable (E3065-style),
+not must-use (E3064): the purity pass taints param-derived receivers and treats
+a mutating method (`push`/`pop`/`insert`/`remove`/`set`/`add`/…) on one as a
+side effect. The first `_ = removeFirst(...)` discard must compile; the function
+removes `2` from `[2, 5]`, leaving one element. Returns `1`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function removeFirst(arr IntArray, value Integer) returns bool
+	var i = 0
+	while i < arr.count() 'scan'
+		let cur = try arr.get(i) otherwise panic("oob")
+		if cur == value 'hit'
+			_ = try arr.remove(i) otherwise panic("remove failed")
+			return true
+		end 'hit'
+		i = i + 1
+	end 'scan'
+	return false
+end 'removeFirst'
+
+function main() returns ExitCode
+	var a = IntArray.create()
+	a.push(2)
+	a.push(5)
+	_ = removeFirst(a, value: 2)
+	return a.count()
+end 'main'
+```
+```exitcode
+1
+```
