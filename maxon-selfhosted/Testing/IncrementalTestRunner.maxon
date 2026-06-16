@@ -718,8 +718,19 @@ function runPerFunctionRebuildScenario(sourcePath FilePath, exePath FilePath) re
 	// queryMirForFunction) over-invalidating and forcing more work upstream
 	// of the chunk cache. `--profile-passes` on a failing run names the
 	// dominant offender.
-	let meanBudget = 400 as DurationMs
-	let maxBudget = 600 as DurationMs
+	//
+	// Phase 5 (persistent user chunk cache) raised the floor: a single-edit
+	// rebuild now also reads the on-disk chunk file and re-writes the merged
+	// set (1 changed of ~100 chunks) under an atomic rename — real I/O the
+	// pre-persistence path didn't pay. Measured incremental mean settled at
+	// ~490ms (was ~325ms in-memory-only); the budget moved to 700/850 to
+	// cover persistence + noise while staying well under the ~740ms off-tier
+	// baseline, so it still gates a genuine over-invalidation regression. (A
+	// fully-warm no-edit rebuild skips the write entirely — see
+	// `storeUserChunkCache`'s no-change short-circuit — so only the edit case
+	// pays the merge.)
+	let meanBudget = 700 as DurationMs
+	let maxBudget = 850 as DurationMs
 	if fullResult.incrementalMean > meanBudget 'meanOver'
 		print("  Scenario F: incremental mean {fullResult.incrementalMean}ms exceeds {meanBudget}ms budget\n")
 		return false

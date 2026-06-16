@@ -1,7 +1,7 @@
 // Convenience wrapper: compiles a file or directory and returns the output executable path.
 // When `irDump.enabled()` is true, the project-wide query cache is bypassed
 // so the pipeline re-runs and the printer hooks observe fresh modules.
-export function compile(path FilePath, target Target, coverage bool = false, irDump IrDumpOptions = IrDumpOptions.disabled(), irOutputPath FilePath = FilePath from "", leakCheck bool = false) returns FilePath throws CompileError
+export function compile(path FilePath, target Target, coverage bool = false, irDump IrDumpOptions = IrDumpOptions.disabled(), irOutputPath FilePath = FilePath from "", leakCheck bool = false, cacheStats bool = false, cacheRoot FilePath = FilePath from "", libraryDirs StringArray = StringArray.create()) returns FilePath throws CompileError
 	// Persisting the lazily-grown stdlib cache back to disk is safe from ANY
 	// project (Phase 3.5 made the cache codec project-independent — it resolves
 	// through the cache's own snapshot tables, not the consumer's interner), so
@@ -12,6 +12,17 @@ export function compile(path FilePath, target Target, coverage bool = false, irD
 	// binary exits 101 if any allocation is live at exit. Standalone equivalent of
 	// the spec runner's per-fragment leak gate; does NOT bypass the stdlib cache.
 	project.leakCheckEnabled = leakCheck
+	// `--cache-stats` / `--cache-root=DIR` (internal, drives `maxon test-lib-cache`):
+	// print the post-build CACHE_STATS line and/or redirect the library cache to a
+	// throwaway temp dir. Both default off / empty, so a normal build is unchanged.
+	project.cacheStatsEnabled = cacheStats
+	project.cacheRootOverride = cacheRoot
+	// Phase 6: the external libraries to link = `--library=DIR` flags
+	// (`libraryDirs`) ∪ `build.maxon` `library("...")` manifest entries, deduped
+	// by absolute path. The manifest is resolved against the project DIRECTORY
+	// (`userProjectDir`, the file's parent for a single-file build) — NOT
+	// `rootPath`, which for `maxon build foo.maxon` is the file itself.
+	project.libraryDirs = resolveProjectLibraryDirs(userProjectDir(project), cliDirs: libraryDirs)
 	project.irDump = irDump
 	let outputPath = try compileProject(project)
 
@@ -56,7 +67,7 @@ function finalIrString(project Project, codeResult CodeResult, skipStdlib bool) 
 		ir = targetModuleToString(codeResult.targetModule, skipStdlib: skipStdlib, cpu: project.target.cpu)
 	end 'isNative'
 	if not skipStdlib 'appendStdlib'
-		let stdlibModule = getCachedStdlibStdModule()
+		let stdlibModule = combinedInlinerStdModule()
 		if stdlibModule.functions.count() > 0 'haveStdlib'
 			let reachable = collectReachableStdlibFunctions(codeResult, stdlibModule: stdlibModule)
 			if reachable.count() > 0 'haveReachable'
@@ -129,6 +140,8 @@ function collectReachableStdlibFunctions(codeResult CodeResult, stdlibModule Std
 end 'collectReachableStdlibFunctions'
 
 typealias StdlibFuncByName = Map with (String, IrFunction)
+// Phase 6: absolute-path dedup set for `resolveProjectLibraryDirs`.
+typealias StringSet = Set with String
 
 function extractStaticCalleeName(op StdCallOp) returns String
 	return match op 'shape'
@@ -261,12 +274,22 @@ end 'compileMultiFileSourceWithIr'
 // write the executable, emit the covmap, and capture IR.
 function finishInMemoryCompile(project Project, outputPath FilePath, covMapPath FilePath, includeStdlibIr bool = false) returns CompileWithIrResult throws CompileError
 	logInfo(LogCategory.compiler, message: function() gives "Starting in-memory compilation")
+	// This path captures `finalIrString` from `codeResult.targetModule`, which
+	// the chunk-driven incremental backend only populates with the MISS set
+	// (cache-hit functions are served from `db.codePerFunc` and never re-lowered
+	// into `targetModule`). A persisted user-chunk-cache hit would therefore
+	// leave the dumped `CompiledIR` missing those functions. The whole-module
+	// emitter lowers every function into `targetModule`, so disable the
+	// incremental path (and, transitively, the user chunk cache, which gates on
+	// `enableIncremental`) for any IR-capturing in-memory compile. Byte-output
+	// is identical either way (the spec matrix guarantees chunk == whole-module).
+	project.db.enableIncremental = false
 	let codeStart = passTimerStart()
 	let codeResult = try queryCodeResult(project)
 	recordPassSince("__queryCodeResult", startMs: codeStart)
 
 	let writeStart = passTimerStart()
-	writeExecutable(outputPath, codeResult: codeResult, target: project.target, stdlibCache: getStdlibCacheData())
+	writeExecutable(outputPath, codeResult: codeResult, target: project.target, stdlibCache: combinedLibraryCache())
 	recordPassSince("__writeExecutable", startMs: writeStart)
 	logInfo(LogCategory.compiler, message: function() gives "Wrote {codeResult.code.count()} bytes code to {outputPath}")
 
@@ -298,14 +321,43 @@ export function compileProject(project Project) returns FilePath throws CompileE
 	let ext = executableExtension(project.target)
 	let outputPath = try resolveBuildOutputPath(project, ext: ext)
 
-	writeExecutable(outputPath, codeResult: codeResult, target: project.target, stdlibCache: getStdlibCacheData())
+	writeExecutable(outputPath, codeResult: codeResult, target: project.target, stdlibCache: combinedLibraryCache())
 
 	logInfo(LogCategory.compiler, message: function() gives "Wrote {codeResult.code.count()} bytes code to {outputPath}")
 
 	writeCovMapTo(project, covMapPath: outputPath.changeExtension(".covmap"))
 
+	if project.cacheStatsEnabled 'emitCacheStats'
+		emitCacheStatsLine(project)
+	end 'emitCacheStats'
+
 	return outputPath
 end 'compileProject'
+
+// Print the machine-readable `CACHE_STATS …` line the `maxon test-lib-cache`
+// harness parses. Emitted on stdout after a `--cache-stats` build. Fields:
+//   regalloc_hits / regalloc_misses — the per-function code-chunk (regalloc +
+//     emit) cache hits/misses for the USER program this build (`project.db`).
+//     A from-scratch build is all misses; a same-source rebuild is all hits.
+//   stdlib_funcs — count of stdlib functions that carry real machine code in the
+//     active cache (lazily-compiled bodies; the rest are deferred stubs).
+//   stdlib_valid — whether the stdlib library cache is valid for this target
+//     after the build (hit-or-just-written; the harness pairs this with its own
+//     pre-build File.exists check to distinguish a cold build from a hit).
+function emitCacheStatsLine(project Project)
+	let hits = project.db.codePerFuncHits
+	let misses = project.db.codePerFuncMisses
+	let stdlibFuncs = countCompiledStdlibFunctions(getStdlibCacheData())
+	var stdlibValid = "no"
+	if isStdlibCacheValid() 'v'
+		stdlibValid = "yes"
+	end 'v'
+	// v84 (Phase 7): the count of unchanged stdlib function bodies preserved
+	// (Tier-C bytecode reused instead of re-regalloc'd / re-emitted) on the most
+	// recent stdlib rebuild this process. 0 on a cache hit or a first-ever cold
+	// build; >0 after a source edit that left most functions unchanged.
+	print("CACHE_STATS regalloc_hits={hits} regalloc_misses={misses} stdlib_funcs={stdlibFuncs} stdlib_valid={stdlibValid} phase7_preserved={lastPreservedTierCCount}\n")
+end 'emitCacheStatsLine'
 
 // Resolves the output path: uses build name if available, otherwise falls back to first source file.
 function resolveBuildOutputPath(project Project, ext String) returns FilePath throws CompileError
@@ -319,8 +371,10 @@ end 'resolveBuildOutputPath'
 // Parses build.maxon in the project root to extract the build name.
 // Throws `BuildNameError.notFound` if no build.maxon or no build("...") call
 // is present — callers use `if let` to take the named-build path and fall
-// through to deriving the output name from the first source file.
-function parseBuildName(projectRoot FilePath) returns String throws BuildNameError
+// through to deriving the output name from the first source file. Exported so
+// the Phase-5 user-program chunk cache (UserChunkCache.maxon) names its cache
+// file after the same build name.
+export function parseBuildName(projectRoot FilePath) returns String throws BuildNameError
 	let buildPath = projectRoot.join("build.maxon")
 	let content = try File.readText(buildPath) otherwise throw BuildNameError.notFound
 	let marker = "build(\""
@@ -337,6 +391,120 @@ end 'parseBuildName'
 enum BuildNameError implements Error
 	notFound
 end 'BuildNameError'
+
+// Phase 6: scan `build.maxon` for every `library("...")` manifest entry and
+// return the referenced directories resolved against the project root. Scans
+// `build.maxon` LINE BY LINE — one `library("...")` per line (the manifest
+// convention, matching `build("...")`) — and extracts the first quoted path on
+// any line containing the marker. Line-based scanning keeps each iteration's
+// string locals to fresh `let` bindings off the `for` iterator, with no
+// heap-managed local reassigned across the loop back-edge (a slice-derived-from-
+// self reassignment leaks under the current SSA refcount inserter). A relative
+// path is resolved against `projectRoot`; an absolute path is used as-is.
+// Returns an empty array when there is no `build.maxon` or no `library(...)`
+// entry.
+export function parseLibraryDirs(projectRoot FilePath) returns FilePathArray
+	var dirs = FilePathArray.create()
+	let buildPath = projectRoot.join("build.maxon")
+	let content = try File.readText(buildPath) otherwise return dirs
+	for line in content.split("\n") 'eachLine'
+		if let pathStr = try extractLibraryPath(line) 'hasPath'
+			if not pathStr.isEmpty() 'nonEmpty'
+				dirs.push(resolveLibraryDir(projectRoot, pathStr: pathStr))
+			end 'nonEmpty'
+		end 'hasPath'
+	end 'eachLine'
+	return dirs
+end 'parseLibraryDirs'
+
+// Extract the quoted path from a single `library("PATH")` manifest line, or
+// throw `BuildNameError.notFound` if the line has no `library("` marker. Pure
+// per-line slicing with no loop-carried state.
+function extractLibraryPath(line String) returns String throws BuildNameError
+	let marker = "library(\""
+	var nameStart = try line.findFirst(marker) otherwise throw BuildNameError.notFound
+	for _ in 0 upto marker.count() 'skipMarker'
+		nameStart = try line.indexAfter(nameStart) otherwise throw BuildNameError.notFound
+	end 'skipMarker'
+	let afterMarker = line.slice(nameStart, endIndex: line.endIndex())
+	let nameEnd = try afterMarker.findFirst("\"") otherwise throw BuildNameError.notFound
+	return afterMarker.slice(afterMarker.startIndex(), endIndex: nameEnd)
+end 'extractLibraryPath'
+
+// Resolve a manifest/CLI library path string against the project root: absolute
+// paths pass through, relative paths join onto `projectRoot`.
+export function resolveLibraryDir(projectRoot FilePath, pathStr String) returns FilePath
+	let p = try FilePath.from(pathStr) otherwise return projectRoot.join(pathStr)
+	if p.isAbsolute() 'abs'
+		return p
+	end 'abs'
+	return projectRoot.join(pathStr)
+end 'resolveLibraryDir'
+
+// Phase 6: the full external-library dir set for a build — the CLI
+// `--library=DIR` strings (`cliDirs`) unioned with the `build.maxon`
+// `library("...")` manifest entries, deduped by normalized-path string (a dir
+// named both ways is linked once). CLI dirs resolve against the CURRENT WORKING
+// DIRECTORY (matching how the positional source path is interpreted); manifest
+// dirs resolve against `projectRoot` (relative to the `build.maxon` that names
+// them). Order: CLI dirs first (in argument order), then manifest dirs, skipping
+// any already present. The registry registers them in this order after stdlib.
+export function resolveProjectLibraryDirs(projectRoot FilePath, cliDirs StringArray) returns FilePathArray
+	var resolved = FilePathArray.create()
+	var seen = StringSet.create()
+	let cwd = Directory.currentPath()
+	for s in cliDirs 'eachCli'
+		appendLibraryDirDeduped(resolveLibraryDir(cwd, pathStr: s), into: resolved, seen: seen)
+	end 'eachCli'
+	for dir in parseLibraryDirs(projectRoot) 'eachManifest'
+		appendLibraryDirDeduped(dir, into: resolved, seen: seen)
+	end 'eachManifest'
+	return resolved
+end 'resolveProjectLibraryDirs'
+
+// Append `dir` to `into` unless its absolute-path string is already in `seen`.
+function appendLibraryDirDeduped(dir FilePath, into FilePathArray, seen StringSet)
+	let key = absolutePathKey(dir)
+	if seen.contains(key) 'dup'
+		return
+	end 'dup'
+	seen.insert(key)
+	into.push(dir)
+end 'appendLibraryDirDeduped'
+
+// The dedup key for a library dir: its normalized path string (so `foo/../foo`
+// and `foo`, or differing separators, collapse). The dirs are already absolute
+// or root-joined by `resolveLibraryDir`, so normalization is enough to dedupe.
+function absolutePathKey(dir FilePath) returns String
+	return dir.normalize().toString()
+end 'absolutePathKey'
+
+// Phase 6: register every external library this project links into the library
+// registry (stdlib-first is preserved because stdlib is auto-registered at
+// index 0 by `getStdlibModule` BEFORE this runs in `queryAllModule`). The set is
+// `project.libraryDirs` (the CLI `--library=DIR` dirs ∪ the `build.maxon`
+// `library("...")` manifest dirs, already merged + absolute-path-deduped by the
+// build driver). Each dir is parsed under its own namespace anchor, built/loaded
+// to its own shared cache, and surfaced through the Phase-4 combined accessors.
+// A missing directory or a duplicate basename is reported as a diagnostic and
+// fails the build (no silent skip). With an empty `libraryDirs` this is a no-op
+// and the registry stays stdlib-only (Phase-4 byte parity).
+export function registerProjectLibraries(project Project) throws CompileError
+	for dir in project.libraryDirs 'eachLib'
+		if not Directory.exists(dir) 'missing'
+			reportSemanticError(project, code: ErrorCode.semanticLibraryNotFound, message: "library directory not found: {dir}")
+			throw CompileError.directoryNotFound(dir)
+		end 'missing'
+		try registerExternalLibrary(project, rootDir: dir, target: project.target) otherwise (e) 'libErr'
+			match e 'kind'
+				duplicateName(n) then reportSemanticError(project, code: ErrorCode.semanticLibraryDuplicateName, message: "two libraries resolve to the same name '{n}' — library directory basenames must be unique")
+				directoryNotFound(p) then reportSemanticError(project, code: ErrorCode.semanticLibraryNotFound, message: "library directory not found: {p}")
+				parseError(p) then logError(LogCategory.compiler, message: function() gives "library parse failed in {p} (see diagnostics above)")
+			end 'kind'
+			throw CompileError.compileError
+		end 'libErr'
+	end 'eachLib'
+end 'registerProjectLibraries'
 
 // --- Source file loading ---
 

@@ -47,19 +47,22 @@ let fnvOffsetBasisHigh = 3422053188 as ContentHash
 let fnvOffsetBasisLow = 2216829733 as ContentHash
 let fnvPrime = 1099511628211 as ContentHash
 
-function fnvOffsetBasis() returns ContentHash
+// Exported so the Phase-5 upstream-API digest (UserChunkCache.maxon) seeds its
+// per-entry hashes with the same 64-bit FNV basis the content hash uses.
+export function fnvOffsetBasis() returns ContentHash
 	return (fnvOffsetBasisHigh shl 32) or fnvOffsetBasisLow
 end 'fnvOffsetBasis'
 
-// Mix one 64-bit value into the running hash.
-function mix(state ContentHash, value ContentHash) returns ContentHash
+// Mix one 64-bit value into the running hash. Exported for the Phase-5
+// upstream-API digest (UserChunkCache.maxon).
+export function mix(state ContentHash, value ContentHash) returns ContentHash
 	var s = state xor value
 	s = s * fnvPrime
 	return s as ContentHash
 end 'mix'
 
-// Mix every byte of `s` into the running hash.
-function mixString(state ContentHash, s String) returns ContentHash
+// Mix every byte of `s` into the running hash. Exported alongside `mix`.
+export function mixString(state ContentHash, s String) returns ContentHash
 	var h = state
 	let n = s.byteLength()
 	var i = 0
@@ -82,13 +85,18 @@ export function hashString64(s String) returns ContentHash
 end 'hashString64'
 
 // Mix a MaxonType into the hash. Uses the mangled string form so that
-// equivalent types hash identically across compiles.
-function mixMaxonType(state ContentHash, project Project, t MaxonType) returns ContentHash
+// equivalent types hash identically across compiles. Exported so the
+// Phase-5 upstream-API digest (UserChunkCache.maxon) can hash a library's
+// signature `paramTypes` with the exact same type-equivalence semantics the
+// per-function content hash uses.
+export function mixMaxonType(state ContentHash, project Project, t MaxonType) returns ContentHash
 	let suffix = mangleSuffixForMaxonType(project, t: t)
 	return mixString(state, s: suffix)
 end 'mixMaxonType'
 
-function mixMaxonReturnType(state ContentHash, project Project, ret MaxonReturnType) returns ContentHash
+// Exported alongside `mixMaxonType` for the upstream-API digest's return-type
+// component.
+export function mixMaxonReturnType(state ContentHash, project Project, ret MaxonReturnType) returns ContentHash
 	return match ret 'r'
 		void gives mix(state, value: 0)
 		value(inner) gives mixMaxonType(mix(state, value: 1), project: project, t: inner)

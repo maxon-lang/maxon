@@ -688,6 +688,32 @@ export type Project
 	// Off by default — production binaries don't pay the exit-time check.
 	export var leakCheckEnabled as bool
 
+	// True when `maxon build --cache-stats <file>` should print a `CACHE_STATS …`
+	// line after the build (per-function regalloc hits/misses, stdlib cache
+	// hit/miss, compiled-function count). Read by the `maxon test-lib-cache`
+	// harness to assert cold-build-writes / second-build-hits / delete-rebuilds
+	// behaviour. Off by default; carries no cost on a normal build.
+	export var cacheStatsEnabled as bool
+
+	// `maxon build --cache-root=DIR <file>` redirects this build's library cache
+	// to `DIR/.maxon/cache/` instead of the library's own on-disk location, so a
+	// scenario can drive a cold/hit/delete sequence against a throwaway temp dir
+	// WITHOUT disturbing the persistent shared cache the real spec runner depends
+	// on. Empty = use each library's own `cacheDirRoot` (the normal path). This is
+	// a per-Project field, NOT a process global, because the persistent spec
+	// workers reuse one process across many jobs — a global would bleed a stale
+	// override into a worker's real spec builds. Internal/testing use only.
+	export var cacheRootOverride as FilePath
+
+	// Phase 6: external library directories this build links (from `--library=DIR`
+	// flags ∪ `build.maxon` `library("...")` manifest entries, deduped by absolute
+	// path). Each is registered into the library registry — parsed under its own
+	// namespace anchor, built/loaded to its own shared cache, and surfaced through
+	// the Phase-4 combined accessors — BEFORE `queryCodeResult` runs. Empty on a
+	// normal stdlib-only build (so the registry stays stdlib-only and byte-parity
+	// holds).
+	export var libraryDirs as FilePathArray
+
 	// Populated by the InstrumentCoverage pass: one CovSite per instrumented
 	// block. Chunk E serializes this to a .covmap file next to the executable;
 	// Chunk D only builds the in-memory table.
@@ -938,6 +964,9 @@ export type Project
 			coverageEnabled: false,
 			asyncTraceEnabled: false,
 			leakCheckEnabled: false,
+			cacheStatsEnabled: false,
+			cacheRootOverride: FilePath from "",
+			libraryDirs: FilePathArray.create(),
 			covSites: CovSiteTable.create(),
 			irDump: IrDumpOptions.disabled(),
 			layoutDescriptors: LayoutDescriptorRegistry.create(),
@@ -2467,23 +2496,23 @@ function writeParamDefaultEnumPayload(buf ByteArray, typeName String, caseName S
 	try writeString(buf, s: caseName)
 end 'writeParamDefaultEnumPayload'
 
-function readParamDefaultIntLiteral(buf ByteArray, offset ByteOffset) returns (ParamDefault, ByteOffset)
-	let value = readQword(buf, offset: offset)
+function readParamDefaultIntLiteral(buf ByteArray, offset ByteOffset) returns (ParamDefault, ByteOffset) throws CacheCorruption
+	let value = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	return (ParamDefault.intLiteral(value), offset + 8)
 end 'readParamDefaultIntLiteral'
 
-function readParamDefaultFloatLiteralBits(buf ByteArray, offset ByteOffset) returns (ParamDefault, ByteOffset)
-	let bits = readQword(buf, offset: offset)
+function readParamDefaultFloatLiteralBits(buf ByteArray, offset ByteOffset) returns (ParamDefault, ByteOffset) throws CacheCorruption
+	let bits = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	return (ParamDefault.floatLiteralBits(bits), offset + 8)
 end 'readParamDefaultFloatLiteralBits'
 
-function readParamDefaultBoolLiteral(buf ByteArray, offset ByteOffset) returns (ParamDefault, ByteOffset)
-	let raw = readDword(buf, offset: offset)
+function readParamDefaultBoolLiteral(buf ByteArray, offset ByteOffset) returns (ParamDefault, ByteOffset) throws CacheCorruption
+	let raw = try readDword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	return (ParamDefault.boolLiteral(raw != 0), offset + 4)
 end 'readParamDefaultBoolLiteral'
 
-function readParamDefaultByteLiteral(buf ByteArray, offset ByteOffset) returns (ParamDefault, ByteOffset)
-	let value = readQword(buf, offset: offset)
+function readParamDefaultByteLiteral(buf ByteArray, offset ByteOffset) returns (ParamDefault, ByteOffset) throws CacheCorruption
+	let value = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	return (ParamDefault.byteLiteral(value), offset + 8)
 end 'readParamDefaultByteLiteral'
 
@@ -2499,15 +2528,15 @@ function readParamDefaultHelper(buf ByteArray, offset ByteOffset) returns (Param
 end 'readParamDefaultHelper'
 
 export function readParamDefault(buf ByteArray, offset ByteOffset) returns (ParamDefault, ByteOffset) throws CacheCorruption
-	let raw = readDword(buf, offset: offset)
+	let raw = try readDword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	let pos = offset + 4
-	let kase = try ParamDefault.unionCases.fromRawValue(raw) otherwise panic("corrupt cache: unknown ParamDefault tag {raw}")
+	let kase = try ParamDefault.unionCases.fromRawValue(raw) otherwise throw CacheCorruption.invalidEncoding
 	match kase 'tag'
 		none then return (ParamDefault.none, pos)
-		intLiteral then return readParamDefaultIntLiteral(buf, offset: pos)
-		floatLiteralBits then return readParamDefaultFloatLiteralBits(buf, offset: pos)
-		boolLiteral then return readParamDefaultBoolLiteral(buf, offset: pos)
-		byteLiteral then return readParamDefaultByteLiteral(buf, offset: pos)
+		intLiteral then return try readParamDefaultIntLiteral(buf, offset: pos)
+		floatLiteralBits then return try readParamDefaultFloatLiteralBits(buf, offset: pos)
+		boolLiteral then return try readParamDefaultBoolLiteral(buf, offset: pos)
+		byteLiteral then return try readParamDefaultByteLiteral(buf, offset: pos)
 		enumCase then return try readParamDefaultEnumCase(buf, offset: pos)
 		helper then return try readParamDefaultHelper(buf, offset: pos)
 	end 'tag'
@@ -2868,15 +2897,28 @@ function readConstantValueString(project Project, buf ByteArray, offset ByteOffs
 end 'readConstantValueString'
 
 export function readConstantValue(project Project, buf ByteArray, offset ByteOffset) returns (ConstantValue, ByteOffset) throws CacheCorruption
-	let raw = readDword(buf, offset: offset)
+	let raw = try readDword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	let pos = offset + 4
-	let kase = try ConstantValue.unionCases.fromRawValue(raw) otherwise panic("corrupt cache: unknown ConstantValue tag {raw}")
+	let kase = try ConstantValue.unionCases.fromRawValue(raw) otherwise throw CacheCorruption.invalidEncoding
 	match kase 'tag'
 		stringValue then return try readConstantValueString(project, buf: buf, offset: pos)
-		intValue then return (ConstantValue.intValue(readQword(buf, offset: pos)), pos + 8)
-		floatValue then return (ConstantValue.floatValue(readQword(buf, offset: pos)), pos + 8)
+		intValue then return try readConstantValueInt(buf, offset: pos)
+		floatValue then return try readConstantValueFloat(buf, offset: pos)
 	end 'tag'
 end 'readConstantValue'
+
+// Read the qword payload of an `intValue` / `floatValue` ConstantValue arm.
+// Split out because a match arm is a single expression and the qword read must
+// translate an OOB (corrupt/truncated cache) into CacheCorruption, not panic.
+function readConstantValueInt(buf ByteArray, offset ByteOffset) returns (ConstantValue, ByteOffset) throws CacheCorruption
+	let iv = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
+	return (ConstantValue.intValue(iv), offset + 8)
+end 'readConstantValueInt'
+
+function readConstantValueFloat(buf ByteArray, offset ByteOffset) returns (ConstantValue, ByteOffset) throws CacheCorruption
+	let fv = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
+	return (ConstantValue.floatValue(fv), offset + 8)
+end 'readConstantValueFloat'
 
 // --- Unresolved top-level decl representation ---
 // Mirrors the UnresolvedTypealias pattern: the parser captures every

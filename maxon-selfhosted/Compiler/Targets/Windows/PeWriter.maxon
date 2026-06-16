@@ -751,7 +751,7 @@ function patchRelocationsArm64(code ByteArray, relocations RelocationArray, text
 		let immlo = pageOffShifted and 0x3
 		let immhi = (pageOffShifted shr 2) and 0x7FFFF
 		// Patch ADRP: preserve Rd, encode page offset
-		let origAdrp = readDword(code, offset: reloc.codeOffset)
+		let origAdrp = try readDword(code, offset: reloc.codeOffset) otherwise panic("PeWriter: reloc.codeOffset {reloc.codeOffset} past end of emitted code (count={code.count()}) — relocation/emitter bug")
 		let rd = origAdrp and 0x1F
 		let patchedAdrp = (immlo shl 29) or 0x90000000 or (immhi shl 5) or rd
 		patchDword(code, offset: reloc.codeOffset, value: patchedAdrp)
@@ -759,7 +759,7 @@ function patchRelocationsArm64(code ByteArray, relocations RelocationArray, text
 		// Patch LDR: encode page offset within the 4KB page, scaled by 8
 		let pageOffset = iatEntryRva and 0xFFF
 		let ldrOffset = reloc.codeOffset + 4
-		let origLdr = readDword(code, offset: ldrOffset)
+		let origLdr = try readDword(code, offset: ldrOffset) otherwise panic("PeWriter: ldrOffset {ldrOffset} past end of emitted code (count={code.count()}) — relocation/emitter bug")
 		let ldrImm = (pageOffset / 8) and 0xFFF
 		let patchedLdr = (origLdr and 0xFFC003FF) or (ldrImm shl 10)
 		patchDword(code, offset: ldrOffset, value: patchedLdr)

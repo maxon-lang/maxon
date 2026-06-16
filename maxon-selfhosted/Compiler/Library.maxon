@@ -93,6 +93,13 @@ export type Library
 	export var cacheCpuOrd as MachineWord
 	export var cacheOsOrd as MachineWord
 
+	// Phase 3: the content-hash of the shared META file (Tier A+B) this library's
+	// in-memory `cacheData` corresponds to. Recorded when the meta file is written
+	// (cold build) or read (cache hit), so a later cross-compile to another target
+	// can pair its per-target file with the SAME meta file, and a lazy-grown
+	// re-serialize can stamp the target file without re-reading the meta. 0 = unset.
+	export var cacheMetaHash as MachineWord
+
 	// The post-DCE Std-IR snapshot the user pipeline's inliner splices accessor
 	// bodies from (cross-module inlining).
 	export var inlinerStdModule as StdModule
@@ -135,6 +142,7 @@ export type Library
 			cacheTargetSet: false,
 			cacheCpuOrd: 0,
 			cacheOsOrd: 0,
+			cacheMetaHash: 0,
 			inlinerStdModule: StdModule.create(),
 			funcEdges: CachedFuncEdgeMap.create(),
 			builtinArrayLiteralTypeName: ByteArray.create(),

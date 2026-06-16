@@ -332,6 +332,8 @@ let initialMemoryPages = 16
 
 typealias GlobalDataOffsetMap = Map with (String, Wasm32Offset)
 typealias FuncNameIndexMap = Map with (String, Wasm32Index)
+// Phase 6: external-library "own function names" emit filter.
+typealias StringSet = Set with String
 
 // Per-function map from a MIR block id to its position in func.blockRefs.
 // Populated once at function entry; queried by every branch / cond_branch
@@ -392,6 +394,12 @@ type WasmFuncSigs
 	export function indexOf(name String) returns Wasm32Index throws WasmFuncSigError
 		return try self.nameIndex.get(name) otherwise throw WasmFuncSigError.notFound
 	end 'indexOf'
+
+	// True iff `name` is already registered (exact match). Used by the
+	// external-library emit to avoid double-registering a callee signature.
+	export function contains(name String) returns bool
+		return self.nameIndex.contains(name)
+	end 'contains'
 
 	// Like `indexOf`, but bridges a BARE name to its `stdlib.`-qualified table
 	// entry the way the native linkers do (x64 `recordLabel`/`calleeNameMatches`
@@ -555,9 +563,32 @@ end 'compileWasm'
 // Each function body is emitted with 5-byte fixed-width ULEB128 for call
 // instructions, and call fixups are recorded for post-hoc patching.
 export function emitWasmPerFunction(module MirModule, globalData GlobalDataTable) returns WasmObjectFunctionArray
+	return emitWasmPerFunctionFiltered(module, globalData: globalData, onlyOwnNames: StringSet.create(), emitAll: true, extraCalleeSigs: stubEmptyWasmFunctions())
+end 'emitWasmPerFunction'
+
+// An empty wasm-function array — the default "no extra callee signatures" for
+// the stdlib path of `emitWasmPerFunctionFiltered` (stdlib's own module already
+// defines every callee it references).
+function stubEmptyWasmFunctions() returns WasmObjectFunctionArray
+	return WasmObjectFunctionArray.create()
+end 'stubEmptyWasmFunctions'
+
+// Phase 6: emit per-function wasm bytecode, optionally for an EXTERNAL LIBRARY
+// (a subset of `module.functions`). When `emitAll` is false, only functions in
+// `onlyOwnNames` get a body emitted (the library's own functions) — stdlib
+// bodies the library's pipeline pulled into `module` are NOT re-emitted (they
+// live in stdlib's own cache and resolve by name at final link). `module`'s
+// functions still all seed `funcSigs` so direct-call placeholder indices can be
+// minted at emit time (the real index is fixed up at final link by name).
+// `extraCalleeSigs` additionally seeds `funcSigs` with callees that are NOT in
+// `module` but ARE referenced by the library's bodies (e.g. a stdlib function
+// whose body was not pulled into the library's MIR) so `findFunctionIndex`
+// doesn't panic minting their throwaway placeholder — those names resolve to the
+// combined stdlib+library table at final link.
+export function emitWasmPerFunctionFiltered(module MirModule, globalData GlobalDataTable, onlyOwnNames StringSet, emitAll bool, extraCalleeSigs WasmObjectFunctionArray) returns WasmObjectFunctionArray
 	var result = WasmObjectFunctionArray.create()
 
-	// Build funcNames + funcSigs for the stdlib module (same as emitWasmModule)
+	// Build funcNames + funcSigs for the module (same as emitWasmModule)
 	var funcNames = StringArray.create()
 	var funcSigs = WasmFuncSigs.create()
 
@@ -565,6 +596,15 @@ export function emitWasmPerFunction(module MirModule, globalData GlobalDataTable
 		funcNames.push(func.name)
 		funcSigs.pushFunc(func.name, returnType: func.returnType, throwsTypeName: func.throwsTypeName)
 	end 'collectNames'
+	// Seed any referenced-but-not-in-module callees (external-library path) so
+	// their placeholder index can be minted; the value is overwritten at final
+	// link via callFixups (resolved by name against the merged table).
+	for sig in extraCalleeSigs 'collectExtra'
+		if not funcSigs.contains(sig.name) 'new'
+			funcNames.push(sig.name)
+			funcSigs.pushFunc(sig.name, returnType: sig.returnType, throwsTypeName: sig.throwsTypeName)
+		end 'new'
+	end 'collectExtra'
 
 	// Compute global data offsets (same layout as `layoutWasmGlobalData`).
 	// Both rdata blobs (values/names) AND writable .data entries
@@ -574,9 +614,12 @@ export function emitWasmPerFunction(module MirModule, globalData GlobalDataTable
 	var globalDataOffsets = GlobalDataOffsetMap.create()
 	var dataOffset = scratchEnd as Wasm32Offset
 
-	for i in 0 upto globalData.values.count() 'computeOffsets'
-		let name = try globalData.names.get(i) otherwise panic("emitWasmPerFunction: globalData.names.get({i}) failed — names/values arrays out of sync")
-		let data = try globalData.values.get(i) otherwise panic("emitWasmPerFunction: globalData.values.get({i}) failed — names/values arrays out of sync")
+	// Same canonical native order as `layoutWasmGlobalData` (and the native rdata
+	// sort) — NOT insertion order — so the offsets computed here match the offsets
+	// the data segments are emitted at, identically across cache legs.
+	for name in orderedRdataNames(globalData) 'computeOffsets'
+		let idx = try globalData.nameIndex.get(name) otherwise panic("emitWasmPerFunction: nameIndex.get('{name}') failed")
+		let data = try globalData.values.get(idx) otherwise panic("emitWasmPerFunction: globalData.values.get({idx}) failed — names/values arrays out of sync")
 		try globalDataOffsets.insert(name, value: dataOffset) otherwise panic("emitWasmPerFunction: duplicate global data name '{name}' at offset {dataOffset}")
 		dataOffset = (dataOffset + data.count())
 	end 'computeOffsets'
@@ -589,9 +632,13 @@ export function emitWasmPerFunction(module MirModule, globalData GlobalDataTable
 	end 'dataEntries'
 	let stackBase = alignUp(dataOffset, alignment: 16) as Wasm32Offset
 
-	// Emit each function body with fixable call indices
+	// Emit each function body with fixable call indices. On the external-library
+	// path (`emitAll` false) only the library's OWN functions get a body.
 	var lowering = WasmFunctionLowering.create(module, funcNames: funcNames, funcSigs: funcSigs, globalDataOffsets: globalDataOffsets, stackBase: stackBase, fixedCalls: true)
 	for func in module.functions 'eachFunc'
+		if not emitAll and not onlyOwnNames.contains(func.name) 'notOwn'
+			continue
+		end 'notOwn'
 		var objFunc = WasmObjectFunction.create(func.name, returnType: func.returnType, paramCount: func.paramCount, paramTypes: func.paramTypes, throwsTypeName: func.throwsTypeName)
 
 		let body = lowering.lowerFunction(func, fixups: objFunc.callFixups, tyFixups: objFunc.typeFixups, addrFixups: objFunc.funcAddrFixups, gaddrFixups: objFunc.globalAddrFixups)
@@ -601,7 +648,7 @@ export function emitWasmPerFunction(module MirModule, globalData GlobalDataTable
 	end 'eachFunc'
 
 	return result
-end 'emitWasmPerFunction'
+end 'emitWasmPerFunctionFiltered'
 
 // Compute which stdlib WASM functions are needed by analyzing user MIR call
 // ops AND every `funcAbs64InRdata` reloc target. The reloc seeds matter
@@ -781,9 +828,14 @@ end 'patchOneFuncAbs64InRdataWasm'
 function layoutWasmGlobalData(globalData GlobalDataTable, baseOffset Wasm32Offset, offsets GlobalDataOffsetMap) returns (WasmDataChunkArray, Wasm32Offset)
 	var chunks = WasmDataChunkArray.create()
 	var dataOffset = baseOffset
-	for i in 0 upto globalData.values.count() 'rdata'
-		let name = try globalData.names.get(i) otherwise panic("layoutWasmGlobalData: globalData.names.get({i}) failed — names/values arrays out of sync")
-		let data = try globalData.values.get(i) otherwise panic("layoutWasmGlobalData: globalData.values.get({i}) failed — names/values arrays out of sync")
+	// Walk the rdata entries in the canonical native order (`orderedRdataNames`),
+	// NOT raw insertion order, so wasm's data-section layout is identical across
+	// the cache-off / cache-on legs — matching the native rdata sort. Must stay in
+	// lockstep with `emitWasmPerFunction`'s offset computation (same order → same
+	// offsets).
+	for name in orderedRdataNames(globalData) 'rdata'
+		let idx = try globalData.nameIndex.get(name) otherwise panic("layoutWasmGlobalData: nameIndex.get('{name}') failed")
+		let data = try globalData.values.get(idx) otherwise panic("layoutWasmGlobalData: globalData.values.get({idx}) failed — names/values arrays out of sync")
 		try offsets.insert(name, value: dataOffset) otherwise panic("layoutWasmGlobalData: duplicate global data name '{name}' at offset {dataOffset}")
 		chunks.push(WasmDataChunk.create(dataOffset, bytes: data))
 		dataOffset = (dataOffset + data.count())
@@ -6841,8 +6893,15 @@ function emitWasmSocketTcpConnect(funcSigs WasmFuncSigs) returns ByteArray
 	// Wait for connect completion, bounded by a timer so an unroutable peer (e.g.
 	// TEST-NET-1 192.0.2.1) does not stall for the multi-second OS connect timeout.
 	// sockPoll = tcp-socket.subscribe(sock); timerPoll = monotonic-clock.
-	// subscribe-duration(2s). poll([sockPoll, timerPoll]) blocks until EITHER is
+	// subscribe-duration(1s). poll([sockPoll, timerPoll]) blocks until EITHER is
 	// ready; then finish-connect reports success or the connect error.
+	//
+	// The bound is 1s (not the OS default's multiple seconds): it is our OWN
+	// connect timeout, kept comfortably under the per-fragment spec-runner budget
+	// (testProcessTimeoutMs = 2s) so a black-hole-address connect surfaces
+	// `connectFailed` and the program exits cleanly BEFORE the runner force-kills
+	// it. A 2s bound raced the runner's 2s kill (the test process died before the
+	// timer fired); 1s leaves a full second of margin.
 	body.push(opLocalGet)
 	writeUleb128(body, value: localSock)
 	body.push(opCall)
@@ -6850,7 +6909,7 @@ function emitWasmSocketTcpConnect(funcSigs WasmFuncSigs) returns ByteArray
 	body.push(opLocalSet)
 	writeUleb128(body, value: localSockPoll)
 	body.push(opI64Const)
-	writeSleb128(body, value: 2000000000)  // 2s in nanoseconds
+	writeSleb128(body, value: 1000000000)  // 1s in nanoseconds
 	body.push(opCall)
 	writeUleb128(body, value: wasiMonotonicSubscribeDuration as Wasm32Index)
 	body.push(opLocalSet)

@@ -81,6 +81,10 @@ export type X64Backend implements TargetBackend
 
 		// Resolve intra-function block jumps using chunk-local offsets.
 		resolveBlockFixups(chunk.code, blockOffsets: blockOffsets, blockFixups: blockFixups)
+		// Capture the float/xmm-mask rdata constants op emission just registered
+		// into `globalData`, so a later cache hit can replay them (op emission is
+		// skipped on a hit). See `captureChunkRdataConstants`.
+		captureChunkRdataConstants(chunk, globalData: globalData)
 		return chunk
 	end 'emitFunctionChunk'
 
@@ -255,9 +259,9 @@ export function concatX64FunctionChunks(project Project, chunks FunctionCodeChun
 	// functions, and the linker (via `ensureStdlibFunctionsCompiled`) is what
 	// fills them. The old count gate would skip the link pass on a cold cache
 	// and leave every stdlib call unresolved. A cache-invalid build
-	// (`isStdlibCacheValid() == false`) is still skipped here, with stdlib
+	// (`anyLibraryCacheValid() == false`) is still skipped here, with stdlib
 	// supplied from the user module instead.
-	if isStdlibCacheValid() 'hasStdlib'
+	if anyLibraryCacheValid() 'hasStdlib'
 		linkX64StdlibFunctionsConcat(project, code: code, labelNames: funcLabelNames, labelOffsets: funcLabelOffsets, labelOffsetMap: funcLabelOffsetMap, callFixups: callFixups, rdataRelocs: rdataRelocs, relocations: relocations, globalData: globalData, stdlibCache: stdlibCache, os: os)
 	end 'hasStdlib'
 
@@ -394,6 +398,12 @@ end 'appendX64EagerFloorSeeds'
 // `ensureStdlibFunctionsCompiled` to lazily compile any reachable stdlib
 // function the metadata-only cold cache hasn't emitted yet, then runs the
 // name-keyed reachability closure + appends each needed function's bytecode.
+// `stdlibCache` is the cache snapshotted BEFORE the backend ran (it aliases the
+// registry's stdlib array on the N=1 fast path). This function re-derives the
+// combined cache AFTER its own lazy compile (see the re-derive comment below),
+// because that snapshot would miss lazily-grown stdlib bodies on the N>1
+// (external-library) union path — so the param is the link's STARTING point but
+// the post-lazy `linkedCache` is what is actually linked.
 function linkX64StdlibFunctionsConcat(project Project, code ByteArray, labelNames StringArray, labelOffsets CodeOffsetArray, labelOffsetMap CodeLabelOffsetMap, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, relocations RelocationArray, globalData GlobalDataTable, stdlibCache StdlibCacheData, os Os)
 	var seeds = StringArray.create()
 	for fixup in callFixups 'collectSeeds'
@@ -413,11 +423,21 @@ function linkX64StdlibFunctionsConcat(project Project, code ByteArray, labelName
 	// v80 lazy codegen: on a metadata-only cold cache (and any partial warm
 	// cache) the functions transitively reachable from `seeds` may not yet have
 	// emitted bytecode. Compile (regalloc + emit) exactly those — and only those
-	// — into `stdlibCache.functions` BEFORE `computeNeededStdlibFunctions` reads
-	// it. No-op when the cache already carries every reachable function.
+	// — into the registry's stdlib `cacheData.functions` (index 0) BEFORE the
+	// link reads it. No-op when the cache already carries every reachable function.
 	ensureStdlibFunctionsCompiled(project, seeds: seeds)
 
-	var needed = computeNeededStdlibFunctions(seeds, stdlibCache: stdlibCache)
+	// The cache to LINK from must reflect the bodies `ensureStdlibFunctionsCompiled`
+	// just grew in place in the registry's stdlib array. The `stdlibCache` param
+	// was snapshotted up front (Queries.maxon): on the N=1 fast path it ALIASES
+	// that array (the lazy grow is visible through it), so use it directly and
+	// stay byte-identical. With an external library registered (N>1), the combined
+	// cache is a DETACHED union COPY taken BEFORE the grow, so its lazily-grown
+	// stdlib bodies (e.g. `__slab_arena_init`, pulled in transitively) are missing
+	// — re-derive the union HERE, after the grow, or the closure + link loop drop
+	// them and the program crashes at runtime startup.
+	var linkedCache = libraryLinkCacheAfterLazyGrow(stdlibCache)
+	var needed = computeNeededStdlibFunctions(seeds, stdlibCache: linkedCache)
 
 	// Networking late-emission seed: the hand-rolled `emitX64NetworkingRuntime`
 	// helper `mrt_managed_socket_tcp_connect` (which OVERRIDES the runtime.std
@@ -432,10 +452,11 @@ function linkX64StdlibFunctionsConcat(project Project, code ByteArray, labelName
 	if os == Os.windows and needed.contains("mrt_managed_socket_tcp_connect") 'netHelpers'
 		seeds.push("mrt_cstr_from_mm")
 		ensureStdlibFunctionsCompiled(project, seeds: seeds)
-		needed = computeNeededStdlibFunctions(seeds, stdlibCache: stdlibCache)
+		linkedCache = libraryLinkCacheAfterLazyGrow(stdlibCache)
+		needed = computeNeededStdlibFunctions(seeds, stdlibCache: linkedCache)
 	end 'netHelpers'
 
-	for func in stdlibCache.functions 'linkFuncs'
+	for func in linkedCache.functions 'linkFuncs'
 		if not needed.contains(func.name) 'skip'
 			continue
 		end 'skip'
@@ -461,8 +482,8 @@ function linkX64StdlibFunctionsConcat(project Project, code ByteArray, labelName
 		end 'adjustRelocs'
 	end 'linkFuncs'
 
-	mergeStdlibGlobalData(globalData, rdataRelocs: rdataRelocs, stdlibCache: stdlibCache)
-	logInfo(LogCategory.compiler, message: function() gives "Linked {needed.count()} stdlib functions ({stdlibCache.functions.count()} available)")
+	mergeStdlibGlobalData(globalData, rdataRelocs: rdataRelocs, stdlibCache: linkedCache)
+	logInfo(LogCategory.compiler, message: function() gives "Linked {needed.count()} stdlib functions ({linkedCache.functions.count()} available)")
 end 'linkX64StdlibFunctionsConcat'
 
 // Block jump fixup: records where a jump instruction needs its target patched.

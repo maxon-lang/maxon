@@ -17,8 +17,9 @@ function main() returns ExitCode
 		build gives runBuild(args)
 		specTest gives runSpecTests(args)
 		testIncremental gives runIncrementalTests()
+		testLibCache gives runLibCacheTests()
 		coverageReport gives runCoverageReportCli(args)
-		clean gives runClean()
+		clean gives runClean(args)
 		unknown gives unknownCommand()
 	end 'cmd'
 
@@ -44,13 +45,30 @@ function runCoverageReportCli(args MaxonArgs) returns ExitCode
 end 'runCoverageReportCli'
 
 // `maxon clean` — delete the on-disk caches for every library this project
-// uses (Phase 2: stdlib only; Phase 5 extends it to the project's external
-// libraries). Removes all `*.mxc` (every fingerprint × target) and stray
-// `*.tmp` under each library's `.maxon/cache/`. Because libraries are shared,
-// cleaning a shared lib's cache also affects other projects' next build —
-// expected for an explicit clean.
-function runClean() returns ExitCode
-	let deleted = cleanLibraryCaches()
+// uses (Phase 2: stdlib; Phase 5: the project's own user-program chunk cache;
+// Phase 6 extends to external libraries). Removes all `*.mxc` (every
+// fingerprint × target × options combo) and stray `*.tmp` under the shared
+// stdlib `.maxon/cache/` AND the project's own `.maxon/cache/`. The project dir
+// is `args.path` (resolved to a directory) or the current working directory.
+// Because the stdlib cache is shared, cleaning it also affects other projects'
+// next build — expected for an explicit clean.
+function runClean(args MaxonArgs) returns ExitCode
+	let projectDir = resolveCleanProjectDir(args)
+	// Forward any `--library=DIR` flags (resolved against cwd, like a build) so
+	// clean sweeps those external libraries' caches too, in addition to the
+	// `build.maxon` manifest entries `cleanLibraryCaches` discovers itself.
+	var extraLibDirs = FilePathArray.create()
+	let cwd = Directory.currentPath()
+	for s in args.libraries 'eachCliLib'
+		extraLibDirs.push(resolveLibraryDir(cwd, pathStr: s))
+	end 'eachCliLib'
+	var deleted = cleanLibraryCaches(projectDir, extraLibraryDirs: extraLibDirs)
+	// Also sweep the spec-test run-skip caches (`specs/fragments-*/.spec-cache/
+	// <spec>/run-cache.bin`) so a clean forces a full re-run. No-op outside the
+	// maxon-libraries dev repo (no `specs/` tree).
+	for path in cleanSpecRunCaches(projectDir) 'eachRunCache'
+		deleted.push(path)
+	end 'eachRunCache'
 	if deleted.count() == 0 'nothing'
 		print("maxon clean: no cache files to remove\n")
 	end 'nothing' else 'some'
@@ -62,6 +80,20 @@ function runClean() returns ExitCode
 	return 0
 end 'runClean'
 
+// The project directory `maxon clean` targets: the `args.path` argument
+// resolved to a directory (a single-file `foo.maxon` arg → its parent), or the
+// current working directory when no path is given.
+function resolveCleanProjectDir(args MaxonArgs) returns FilePath
+	if args.path.isEmpty() 'noArg'
+		return Directory.currentPath()
+	end 'noArg'
+	let argPath = try FilePath.from(args.path) otherwise return Directory.currentPath()
+	if Directory.exists(argPath) 'isDir'
+		return argPath
+	end 'isDir'
+	return try argPath.parent() otherwise argPath
+end 'resolveCleanProjectDir'
+
 function printUsage()
 	print("Usage: maxon <command> [options]\n")
 	print("\n")
@@ -70,6 +102,7 @@ function printUsage()
 	print("  run <file|directory>     Build and run\n")
 	print("  spec-test [options]      Run spec tests\n")
 	print("  test-incremental         Run incremental compilation tests\n")
+	print("  test-lib-cache           Run library-cache tests (cold/hit/delete, fingerprint coexistence, fault injection)\n")
 	print("  coverage report <exe>    Aggregate <exe>.covmap + <exe>*.covdata into <exe>.lcov\n")
 	print("  clean                    Delete this project's library caches (stdlib .maxon/cache)\n")
 	print("\n")
@@ -80,6 +113,7 @@ function printUsage()
 	print("  --dump-stages-stdlib[=NAMES]  Like --dump-stages but include the full stdlib IR in each stage file\n")
 	print("  --track-allocs           Track heap allocations and print memory stats\n")
 	print("  --coverage               Emit a coverage-instrumented executable + .covmap\n")
+	print("  --cache-stats            Print a CACHE_STATS line after the build (library-cache hit/miss diagnostics)\n")
 	print("\n")
 	print("Spec test options:\n")
 	print("  --filter=PATTERN         Run only tests matching pattern\n")
@@ -114,8 +148,15 @@ function runBuild(args MaxonArgs) returns ExitCode
 		irOutputPath = fp.changeExtension(".ir")
 	end 'wantIr'
 
+	// `--cache-root=DIR` (internal, testing): empty string → empty FilePath →
+	// normal per-library cache path; non-empty redirects the cache to DIR.
+	var cacheRoot = FilePath from ""
+	if not args.cacheRoot.isEmpty() 'hasCacheRoot'
+		cacheRoot = try FilePath.from(args.cacheRoot) otherwise panic("invalid --cache-root path: {args.cacheRoot}")
+	end 'hasCacheRoot'
+
 	let startMs = Clock.nowMs()
-	let outputPath = try compile(fp, target: args.target(), coverage: args.coverage, irDump: irDump, irOutputPath: irOutputPath, leakCheck: args.leakCheck) otherwise (e) 'err'
+	let outputPath = try compile(fp, target: args.target(), coverage: args.coverage, irDump: irDump, irOutputPath: irOutputPath, leakCheck: args.leakCheck, cacheStats: args.cacheStats, cacheRoot: cacheRoot, libraryDirs: args.libraries) otherwise (e) 'err'
 		match e 'report'
 			fileNotFound(p) then printError("error: file not found: {p}\n")
 			directoryNotFound(p) then printError("error: directory not found: {p}\n")

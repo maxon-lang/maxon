@@ -352,6 +352,45 @@ export function sortStringsAscending(names StringArray) returns StringArray
 	return out
 end 'sortStringsAscending'
 
+// The canonical, cache-leg-independent ORDER for the `names`/`values` rdata
+// entries of a GlobalDataTable: user entries sorted by label, then panic
+// messages sorted, then infra entries sorted — the exact group order + intra-
+// group sort `buildRdataSection` emits. Factored out so BOTH the native rdata
+// emitter and the wasm data-section layout (`layoutWasmGlobalData` /
+// `emitWasmPerFunction`) walk the table in one identical order — without this,
+// wasm walked `values` in raw INSERTION order, which diverges between the
+// cache-off leg (stdlib rdata lowered inline) and the cache-on leg (stdlib rdata
+// merged after the user entries), reintroducing the cold-vs-warm binary
+// divergence on wasm that the native sort removes. (The `dataSectionEntries`
+// `.data` prelude is NOT included here — it is appended after, in declaration
+// order, on both native and wasm.)
+export function orderedRdataNames(table GlobalDataTable) returns StringArray
+	var userNames = StringArray.create()
+	var panicNames = StringArray.create()
+	var infraNames = StringArray.create()
+	for i in 0 upto table.names.count() 'partition'
+		let name = try table.names.get(i) otherwise panic("orderedRdataNames: names.get({i}) failed")
+		if name.startsWith("__panic_msg_") 'isPanic'
+			panicNames.push(name)
+		end 'isPanic' else if isUserRdataEntry(name) 'isUser'
+			userNames.push(name)
+		end 'isUser' else 'isInfra'
+			infraNames.push(name)
+		end 'isInfra'
+	end 'partition'
+	var ordered = StringArray.create()
+	for n in sortStringsAscending(userNames) 'emitUser'
+		ordered.push(n)
+	end 'emitUser'
+	for n in sortStringsAscending(panicNames) 'emitPanic'
+		ordered.push(n)
+	end 'emitPanic'
+	for n in sortStringsAscending(infraNames) 'emitInfra'
+		ordered.push(n)
+	end 'emitInfra'
+	return ordered
+end 'orderedRdataNames'
+
 // Emit panic-message entries (`__panic_msg_<hash>`) sorted by label. Separated
 // from `emitRdataPass` so the sort is isolated to these content-hashed labels —
 // `isUserRdataEntry` reports panic messages as "user" so they would otherwise
@@ -376,19 +415,38 @@ function emitSortedPanicRdataPass(rdata ByteArray, table GlobalDataTable, map Rd
 	end 'emit'
 end 'emitSortedPanicRdataPass'
 
+// Emit one rdata group (user or infra) SORTED by label, mirroring
+// `emitSortedPanicRdataPass`. Sorting (rather than the array's insertion order)
+// is the cache-parity fix for these groups too: a `__float_`/`__str_` constant
+// that `main` registers interleaves with the merged stdlib rdata differently in
+// the cache-off leg (stdlib lowered inline) vs the cache-on leg (stdlib rdata
+// merged via `mergeStdlibGlobalData` after the user constants), so insertion
+// order diverges and shifts every later entry's offset — producing a
+// byte-different `.text`/`.rdata` for the same program. Emitting each group in
+// label order makes both legs identical by construction (the labels are
+// content-derived: `__float_<bits>`, `__istr_<id>`, content-hashed panic
+// labels). The three groups stay separate and in order (user → panic → infra),
+// so RequiredRdata's "user entries grouped at the section start" semantics hold
+// — they are now sorted WITHIN the user group rather than insertion-ordered.
 function emitRdataPass(rdata ByteArray, table GlobalDataTable, map RdataOffsetMap, count ByteCount, wantUser bool)
-	for i in 0 upto count 'build'
+	var names = StringArray.create()
+	for i in 0 upto count 'collect'
 		let name = try table.names.get(i) otherwise panic("emitRdataPass: i < count = table.names.count() but get({i}) failed")
 		// Panic messages are emitted by `emitSortedPanicRdataPass` (sorted, between
-		// the user and infra passes), so skip them in both insertion-order passes.
+		// the user and infra passes), so skip them in both groups here.
 		if name.startsWith("__panic_msg_") 'skipPanic'
 			continue
 		end 'skipPanic'
-		let isUser = isUserRdataEntry(name)
-		if isUser != wantUser 'skipPass'
+		if isUserRdataEntry(name) != wantUser 'skipPass'
 			continue
 		end 'skipPass'
-		var data = try table.values.get(i) otherwise panic("emitRdataPass: names and values kept parallel but values.get({i}) failed (values.count={table.values.count()})")
+		names.push(name)
+	end 'collect'
+
+	let sorted = sortStringsAscending(names)
+	for name in sorted 'build'
+		let idx = try table.nameIndex.get(name) otherwise panic("emitRdataPass: nameIndex.get('{name}') failed")
+		let data = try table.values.get(idx) otherwise panic("emitRdataPass: values.get({idx}) failed (values.count={table.values.count()})")
 		// `__xmmmask_*` entries hold 128-bit constants that SSE packed
 		// instructions (ANDPD / PCMPEQD with m128 operand) require to be
 		// 16-byte aligned. The PE rdata section starts on a SECTION_ALIGNMENT

@@ -1,0 +1,754 @@
+// Phase 5: the user program's persistent Tier-C chunk cache.
+//
+// The in-process incremental backend (`emitBackendIncrementalWith`) already
+// stamps each user function a `FunctionCodeChunk` carrying its target-lowered,
+// register-allocated bytes into `db.codePerFunc`, keyed by the post-inline
+// `computeChunkKeyHash`. That cache is lost at process exit. This module
+// SERIALIZES it to disk and re-validates it on load, so across separate
+// `maxon build` invocations an unchanged user function is reused verbatim — no
+// re-inline, no re-lowering, no regalloc (the dominant warm-build cost).
+//
+// SOUNDNESS. A persisted chunk is reused only when BOTH hold:
+//   (a) its own `keyHash` matches the freshly-recomputed POST-INLINE keyHash —
+//       the complete per-chunk gate. Because the inliner re-runs every build
+//       and the keyHash is hashed AFTER inlining, an inlined callee's ops are
+//       physically embedded in the caller's blocks at hash time, so a change to
+//       any body it inlined — at any depth — flips the keyHash. (The plan's
+//       additional `callerInlineDepsUnchanged` defense-in-depth is omitted: it
+//       is redundant here, since load runs after the inliner, AND its per-callee
+//       `computeStdContentHashFor` is not cross-process stable — see
+//       `loadUserChunkCache`. The post-inline keyHash is necessary and
+//       sufficient.) AND
+//   (b) the file-level validity key matches: format version + source checksum
+//       (of the user program) + compiler fingerprint + target + the
+//       `compileOptionsHash` (coverage etc.) + the `upstreamApiHash` (a digest
+//       of the depended-on libraries' signatures, closing the non-inlined
+//       signature-change gap).
+//
+// (a) is per-chunk and runs at install time; (b) is the file header check and
+// gates the whole file. Body-only changes to a *non-inlined* library callee do
+// NOT invalidate (the call resolves by name at link time against the rebuilt
+// library bytecode) — so the upstream-API hash covers signatures, not bodies.
+//
+// The store path uses read-modify-write *merge* (re-read on-disk, union, atomic
+// rename) from day one so concurrent builds don't clobber each other's growth.
+
+// Distinct file format from the library `CACHE_FORMAT_VERSION` (this is a
+// per-chunk store, not a library cache). Bump on any chunk-record layout change.
+// v2: chunk records now carry their lazy float/xmm-mask rdata constants
+// (name→bytes) so a cross-process hit can replay them into globalData (a hit
+// skips op emission, which is what registers those constants — without this the
+// reloaded chunk's rdataRelocs resolved to a missing rdata entry → wrong
+// constant → corrupt binary).
+let USER_CHUNK_CACHE_VERSION = 2
+
+// Fixed 32-byte header: magic(4)@0 + version(4)@4 + sourceChecksum(4)@8 +
+// optsHash(4)@12 + upstreamApiHash(4)@16 + compilerFp(4)@20 [folded size+mtime] +
+// chunkCount(4)@24 + totalLength(4)@28. CPU/OS are folded into the filename's
+// <target> component (a wrong-target file simply won't exist under the
+// target-keyed name). The total-length integrity field is the last dword,
+// patched once the body is complete.
+let USER_CHUNK_HEADER_SIZE = 32
+let USER_CHUNK_CHUNK_COUNT_OFFSET = 24
+let USER_CHUNK_TOTAL_LEN_OFFSET = 28
+
+let USER_CHUNK_MAGIC_0 = 0x55      // 'U'
+let USER_CHUNK_MAGIC_1 = 0x43      // 'C'
+let USER_CHUNK_MAGIC_2 = 0x43      // 'C'
+let USER_CHUNK_MAGIC_3 = 0x00
+
+export typealias OptionsHash = int(0 to u64.max)
+export typealias UpstreamApiHash = int(0 to u64.max)
+typealias InstalledChunkCount = int(0 to u64.max)
+typealias UserChunkNameSet = Set with String
+
+// ============================================================
+// Validity-key hashes
+// ============================================================
+
+// Digest of every codegen-affecting build option, folded into the chunk-cache
+// filename + header. A mismatch is a cache miss → all chunks rebuild. Today the
+// only self-hosted contributor is `coverageEnabled` (coverage instrumentation
+// changes emitted bytes, and the user chunk cache stores fully-emitted
+// functions, so a `--coverage` build must never reuse non-instrumented chunks).
+// Folding all options into one hash means a future codegen flag is one line.
+export function compileOptionsHash(project Project) returns OptionsHash
+	var h = FNV_OFFSET_BASIS
+	var coverageByte = 0
+	if project.coverageEnabled 'cov'
+		coverageByte = 1
+	end 'cov'
+	h = fnvUpdate(h, b: coverageByte)
+	return h
+end 'compileOptionsHash'
+
+// Digest of the API surface of every library the user program links — its
+// functions' SIGNATURES (param types/names + return type + throws clause),
+// NOT their bodies. Closes the non-inlined signature-change gap: if a library
+// function the user CALLS (not inlines) changes its signature, the user's
+// post-inline body is unchanged so (a)/(b) wouldn't fire — but this hash flips,
+// invalidating the chunk cache so the new ABI is relinked. Body-only changes to
+// a non-inlined callee leave this hash unchanged (relinked by name).
+//
+// Accumulated COMMUTATIVELY (sum of per-entry hashes) so the digest never
+// depends on map iteration order — a false invalidation from a reordered map
+// would silently defeat the cross-process reuse this whole phase delivers.
+//
+// Memoized per process keyed by the stdlib cache's meta-hash: walking every
+// library signature with string mangling is ~1000+ entries, and this is
+// computed for BOTH the load- and store-side validity keys on every build, so
+// recomputing it each time dominated the incremental-rebuild budget. The
+// digest is a pure function of the loaded library content, which the
+// meta-hash identifies (and the mangling is project-independent — name-based,
+// not interner-id-based — so the memo is valid across projects in one process).
+var upstreamApiHashMemoKey = 0 as MachineWord
+var upstreamApiHashMemoValue = 0 as UpstreamApiHash
+var upstreamApiHashMemoValid = false
+
+export function upstreamApiHash(project Project) returns UpstreamApiHash
+	let metaKey = getStdlibCacheMetaHash()
+	// metaKey == 0 means no meta-hash is recorded (a cold from-source stdlib
+	// build) — there's no stable identity to key the memo on, so recompute.
+	if metaKey != 0 and upstreamApiHashMemoValid and upstreamApiHashMemoKey == metaKey 'memoHit'
+		return upstreamApiHashMemoValue
+	end 'memoHit'
+	let computed = computeUpstreamApiHash(project)
+	if metaKey != 0 'recordMemo'
+		upstreamApiHashMemoKey = metaKey
+		upstreamApiHashMemoValue = computed
+		upstreamApiHashMemoValid = true
+	end 'recordMemo'
+	return computed
+end 'upstreamApiHash'
+
+function computeUpstreamApiHash(project Project) returns UpstreamApiHash
+	let cache = combinedLibraryCache()
+	var acc = 0 as UpstreamApiHash
+
+	for (name, sig) in cache.funcSignatures 'eachSig'
+		var h = fnvOffsetBasis()
+		h = mixString(h, s: name)
+		h = mix(h, value: sig.paramTypes.count())
+		for pn in sig.paramNames 'eachParamName'
+			h = mixString(h, s: pn)
+		end 'eachParamName'
+		for pt in sig.paramTypes 'eachParamType'
+			h = mixMaxonType(h, project: project, t: pt)
+		end 'eachParamType'
+		acc = acc + h
+	end 'eachSig'
+
+	for (name, ret) in cache.funcReturnTypes 'eachRet'
+		var h = fnvOffsetBasis()
+		h = mixString(h, s: name)
+		h = mixMaxonReturnType(h, project: project, ret: ret)
+		acc = acc + h
+	end 'eachRet'
+
+	for (name, clause) in cache.funcThrowsTypes 'eachThrows'
+		var h = fnvOffsetBasis()
+		h = mixString(h, s: name)
+		h = match clause 'c'
+			none gives mix(h, value: 0)
+			throwing(tn) gives mixString(mix(h, value: 1), s: tn)
+		end 'c'
+		acc = acc + h
+	end 'eachThrows'
+
+	// Fold the 64-bit commutative accumulator down to the 32-bit width the
+	// header field stores.
+	return fnvFoldWord(FNV_OFFSET_BASIS, word: acc)
+end 'computeUpstreamApiHash'
+
+// ============================================================
+// Header
+// ============================================================
+
+// The full validity key for one user-chunk-cache file, computed fresh each
+// build and compared against the on-disk header.
+type UserChunkValidityKey
+	export let sourceChecksum as CacheChecksum
+	export let optsHash as OptionsHash
+	export let upstreamApiHash as UpstreamApiHash
+	export let compilerFp as CacheChecksum
+
+	export static function compute(project Project) returns UserChunkValidityKey
+		let (size, mtime) = getCompilerFingerprint()
+		var fp = FNV_OFFSET_BASIS
+		fp = fnvFoldWord(fp, word: size)
+		fp = fnvFoldWord(fp, word: mtime)
+		return Self{
+			sourceChecksum: userProgramSourceChecksum(project),
+			optsHash: compileOptionsHash(project),
+			upstreamApiHash: upstreamApiHash(project),
+			compilerFp: fp
+		}
+	end 'compute'
+end 'UserChunkValidityKey'
+
+// FNV over the user program's own source files (the project's source paths),
+// so any edit to the program — even one that produces an identical chunk set —
+// flips the file's validity key. Per-chunk keyHashes already gate individual
+// reuse; this is the coarse file-level guard that mirrors the stdlib cache's
+// source checksum.
+function userProgramSourceChecksum(project Project) returns CacheChecksum
+	var checksum = FNV_OFFSET_BASIS
+	for path in project.db.sourcePaths 'eachFile'
+		let bytes = try File.readBinary(path) otherwise continue
+		for b in bytes 'eachByte'
+			checksum = fnvUpdate(checksum, b: b)
+		end 'eachByte'
+		checksum = fnvUpdate(checksum, b: 0)
+	end 'eachFile'
+	return checksum
+end 'userProgramSourceChecksum'
+
+function writeUserChunkHeader(buf ByteArray, key UserChunkValidityKey, chunkCount MachineWord)
+	buf.push(USER_CHUNK_MAGIC_0)
+	buf.push(USER_CHUNK_MAGIC_1)
+	buf.push(USER_CHUNK_MAGIC_2)
+	buf.push(USER_CHUNK_MAGIC_3)
+	writeDword(buf, value: USER_CHUNK_CACHE_VERSION)
+	writeDword(buf, value: key.sourceChecksum)
+	writeDword(buf, value: key.optsHash)
+	writeDword(buf, value: key.upstreamApiHash)
+	writeDword(buf, value: key.compilerFp)
+	writeDword(buf, value: chunkCount)
+	// Total-file-length integrity field, patched in `finalizeUserChunkCache`.
+	writeDword(buf, value: 0)
+end 'writeUserChunkHeader'
+
+// Result of validating a user-chunk-cache header: valid + the chunk count to
+// read. Invalid (`ok: false`) means the file is stale/corrupt → cold rebuild.
+type UserChunkHeaderCheck
+	export let valid as bool
+	export let chunkCount as MachineWord
+
+	export static function ok(chunkCount MachineWord) returns UserChunkHeaderCheck
+		return Self{valid: true, chunkCount: chunkCount}
+	end 'ok'
+
+	export static function invalid() returns UserChunkHeaderCheck
+		return Self{valid: false, chunkCount: 0}
+	end 'invalid'
+end 'UserChunkHeaderCheck'
+
+// Validate magic + version + the full validity key + the total-length integrity
+// field. Never panics — every read throws `CacheCorruption` on OOB, surfaced as
+// a clean miss by the caller's catch boundary.
+function validateUserChunkHeader(buf ByteArray, key UserChunkValidityKey) returns UserChunkHeaderCheck throws CacheCorruption
+	if buf.count() < USER_CHUNK_HEADER_SIZE 'tooShort'
+		return UserChunkHeaderCheck.invalid()
+	end 'tooShort'
+
+	let m0 = try buf.get(0) otherwise throw CacheCorruption.invalidEncoding
+	let m1 = try buf.get(1) otherwise throw CacheCorruption.invalidEncoding
+	let m2 = try buf.get(2) otherwise throw CacheCorruption.invalidEncoding
+	let m3 = try buf.get(3) otherwise throw CacheCorruption.invalidEncoding
+	if m0 != USER_CHUNK_MAGIC_0 or m1 != USER_CHUNK_MAGIC_1 or m2 != USER_CHUNK_MAGIC_2 or m3 != USER_CHUNK_MAGIC_3 'badMagic'
+		return UserChunkHeaderCheck.invalid()
+	end 'badMagic'
+
+	let version = try readDword(buf, offset: 4) otherwise throw CacheCorruption.invalidEncoding
+	if version != USER_CHUNK_CACHE_VERSION 'badVersion'
+		return UserChunkHeaderCheck.invalid()
+	end 'badVersion'
+
+	let sourceChecksum = try readDword(buf, offset: 8) otherwise throw CacheCorruption.invalidEncoding
+	let optsHash = try readDword(buf, offset: 12) otherwise throw CacheCorruption.invalidEncoding
+	let apiHash = try readDword(buf, offset: 16) otherwise throw CacheCorruption.invalidEncoding
+	let compilerFp = try readDword(buf, offset: 20) otherwise throw CacheCorruption.invalidEncoding
+	if sourceChecksum != key.sourceChecksum or optsHash != key.optsHash or apiHash != key.upstreamApiHash or compilerFp != key.compilerFp 'keyMismatch'
+		return UserChunkHeaderCheck.invalid()
+	end 'keyMismatch'
+
+	let chunkCount = try readDword(buf, offset: USER_CHUNK_CHUNK_COUNT_OFFSET) otherwise throw CacheCorruption.invalidEncoding
+	let totalLen = try readDword(buf, offset: USER_CHUNK_TOTAL_LEN_OFFSET) otherwise throw CacheCorruption.invalidEncoding
+	if totalLen != buf.count() 'truncated'
+		return UserChunkHeaderCheck.invalid()
+	end 'truncated'
+
+	return UserChunkHeaderCheck.ok(chunkCount)
+end 'validateUserChunkHeader'
+
+// ============================================================
+// Per-chunk record codec
+// ============================================================
+
+// One persisted record = the function's name, its post-inline `keyHash` (the
+// complete validity key — see `loadUserChunkCache`), and its
+// `FunctionCodeChunk` bytes + fixups.
+//
+// The inline-dep fingerprint (caller→callee + splice-time callee body hash) is
+// intentionally NOT persisted. It would serve as defense-in-depth, but the
+// per-callee `computeStdContentHashFor` is not cross-process stable today (a
+// cold build hashes the callee's freshly-compiled Std-IR, a warm build the
+// cached Tier-B rendering — different value/string ids), so a persisted callee
+// hash never matches across the cold→warm transition and is useless as a gate.
+// The post-inline keyHash already covers the full inline cascade soundly.
+// Phase 7 (per-function, cross-process-deterministic Tier B) is the
+// prerequisite for re-adding the inline-dep fingerprint as a real gate.
+function encodeUserChunkRecord(buf ByteArray, funcName String, memo CodeChunkMemo) throws CacheCorruption
+	let chunk = memo.value
+	try writeString(buf, s: funcName)
+	writeQword(buf, value: memo.keyHash)
+
+	// FunctionCodeChunk body
+	writeDword(buf, value: chunk.entryOffset)
+	writeDword(buf, value: chunk.code.count())
+	buf.append(chunk.code)
+
+	// Call fixups
+	writeDword(buf, value: chunk.callFixups.count())
+	for fixup in chunk.callFixups 'eachFixup'
+		writeDword(buf, value: fixup.codeOffset)
+		try writeString(buf, s: fixup.targetName)
+	end 'eachFixup'
+
+	// Rdata relocations
+	writeDword(buf, value: chunk.rdataRelocs.count())
+	for reloc in chunk.rdataRelocs 'eachRdata'
+		writeDword(buf, value: reloc.codeOffset)
+		try writeString(buf, s: reloc.rdataLabel)
+		writeRdataRelocKind(buf, kind: reloc.kind)
+	end 'eachRdata'
+
+	// IAT/GOT relocations
+	writeDword(buf, value: chunk.iatRelocs.count())
+	for reloc in chunk.iatRelocs 'eachReloc'
+		writeDword(buf, value: reloc.codeOffset)
+		writeDword(buf, value: reloc.slotIndex)
+	end 'eachReloc'
+
+	// ARM64 ADR fixups
+	writeDword(buf, value: chunk.arm64AdrFixups.count())
+	for fixup in chunk.arm64AdrFixups 'eachAdr'
+		writeDword(buf, value: fixup.instrOffset)
+		writeDword(buf, value: fixup.destReg)
+		try writeString(buf, s: fixup.targetName)
+	end 'eachAdr'
+
+	// Lazy float/xmm-mask rdata constants (name → bytes) the chunk references.
+	// MUST be persisted: a cross-process cache hit skips op emission, so these
+	// would otherwise be absent from globalData → the chunk's rdataRelocs resolve
+	// to a missing entry → corrupt binary. Replayed by
+	// `reregisterChunkRdataConstants` on load.
+	writeDword(buf, value: chunk.rdataConstants.names.count())
+	for ci in 0 upto chunk.rdataConstants.names.count() 'eachConst'
+		let name = try chunk.rdataConstants.names.get(ci) otherwise continue
+		let value = try chunk.rdataConstants.values.get(ci) otherwise continue
+		try writeString(buf, s: name)
+		writeDword(buf, value: value.count())
+		buf.append(value)
+	end 'eachConst'
+end 'encodeUserChunkRecord'
+
+// Decoded record: the reconstructed chunk + its stored post-inline keyHash.
+type DecodedUserChunk
+	export var funcName as String
+	export var chunk as FunctionCodeChunk
+	export var keyHash as ContentHash
+
+	export static function create(funcName String, chunk FunctionCodeChunk, keyHash ContentHash) returns DecodedUserChunk
+		return Self{funcName: funcName, chunk: chunk, keyHash: keyHash}
+	end 'create'
+end 'DecodedUserChunk'
+
+function decodeUserChunkRecord(buf ByteArray, offset ByteOffset) returns (DecodedUserChunk, ByteOffset) throws CacheCorruption
+	var pos = offset
+	let (funcName, p1) = try readString(buf, offset: pos)
+	pos = p1
+	let keyHash = try readQword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
+	pos = pos + 8
+
+	var chunk = FunctionCodeChunk.create(funcName)
+	chunk.entryOffset = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
+	pos = pos + 4
+	let codeLen = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
+	pos = pos + 4
+	chunk.code.reserve(codeLen)
+	pos = try copyBytesInto(chunk.code, buf: buf, offset: pos, len: codeLen)
+
+	let fixupCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
+	pos = pos + 4
+	for _ in 0 upto fixupCount 'eachFixup'
+		let codeOffset = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
+		pos = pos + 4
+		let (targetName, p2) = try readString(buf, offset: pos)
+		pos = p2
+		chunk.callFixups.push(CallFixup.create(codeOffset, targetName: targetName))
+	end 'eachFixup'
+
+	let rdataCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
+	pos = pos + 4
+	for _ in 0 upto rdataCount 'eachRdata'
+		let codeOffset = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
+		pos = pos + 4
+		let (rdataLabel, p3) = try readString(buf, offset: pos)
+		pos = p3
+		let (kind, p4) = try readRdataRelocKind(buf, offset: pos)
+		pos = p4
+		chunk.rdataRelocs.push(RdataRelocation.create(codeOffset, rdataLabel: rdataLabel, kind: kind))
+	end 'eachRdata'
+
+	let relocCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
+	pos = pos + 4
+	for _ in 0 upto relocCount 'eachReloc'
+		let codeOffset = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
+		pos = pos + 4
+		let slotIndex = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
+		pos = pos + 4
+		chunk.iatRelocs.push(Relocation.create(codeOffset, slotIndex: slotIndex))
+	end 'eachReloc'
+
+	let adrCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
+	pos = pos + 4
+	for _ in 0 upto adrCount 'eachAdr'
+		let instrOffset = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
+		pos = pos + 4
+		let destReg = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
+		pos = pos + 4
+		let (targetName, p5) = try readString(buf, offset: pos)
+		pos = p5
+		chunk.arm64AdrFixups.push(Arm64AdrFixup.create(instrOffset, destReg: destReg, targetName: targetName))
+	end 'eachAdr'
+
+	// Lazy float/xmm-mask rdata constants (name → bytes).
+	let constCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
+	pos = pos + 4
+	for _ in 0 upto constCount 'eachConst'
+		let (name, pc) = try readString(buf, offset: pos)
+		pos = pc
+		let valLen = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
+		pos = pos + 4
+		var value = ByteArray.create()
+		value.reserve(valLen)
+		pos = try copyBytesInto(value, buf: buf, offset: pos, len: valLen)
+		addNamedGlobalData(chunk.rdataConstants, name: name, data: value)
+	end 'eachConst'
+
+	return (DecodedUserChunk.create(funcName, chunk: chunk, keyHash: keyHash), pos)
+end 'decodeUserChunkRecord'
+
+// ============================================================
+// File read / write
+// ============================================================
+
+function finalizeUserChunkCache(path FilePath, buf ByteArray)
+	patchDword(buf, offset: USER_CHUNK_TOTAL_LEN_OFFSET, value: buf.count())
+	let parentDir = try path.parent() otherwise FilePath from ""
+	if not parentDir.isEmpty() 'hasParent'
+		_ = Directory.create(parentDir)
+	end 'hasParent'
+	writeFileAtomic(path, bytes: buf)
+end 'finalizeUserChunkCache'
+
+// Decoded file contents: every record, ready to install or merge.
+type DecodedUserChunkCache
+	export var records as DecodedUserChunkArray
+
+	export static function empty() returns DecodedUserChunkCache
+		return Self{records: DecodedUserChunkArray.create()}
+	end 'empty'
+end 'DecodedUserChunkCache'
+
+typealias DecodedUserChunkArray = Array with DecodedUserChunk
+
+// Read + validate a user-chunk-cache file. The catch boundary turns any
+// corruption (truncation, bad tag, OOB) into an empty result (cold rebuild),
+// never a panic.
+function readUserChunkCache(path FilePath, key UserChunkValidityKey) returns DecodedUserChunkCache
+	let result = try readUserChunkCacheInner(path, key: key) otherwise (e) 'corrupt'
+		match e 'kind'
+			absent then logInfo(LogCategory.compiler, message: function() gives "User chunk cache absent/unreadable at {path}")
+			invalidEncoding then logInfo(LogCategory.compiler, message: function() gives "User chunk cache corrupt at {path} — cold rebuild")
+		end 'kind'
+		return DecodedUserChunkCache.empty()
+	end 'corrupt'
+	return result
+end 'readUserChunkCache'
+
+function readUserChunkCacheInner(path FilePath, key UserChunkValidityKey) returns DecodedUserChunkCache throws CacheCorruption
+	let buf = try File.readBinary(path) otherwise return DecodedUserChunkCache.empty()
+	let header = try validateUserChunkHeader(buf, key: key)
+	if not header.valid 'invalid'
+		return DecodedUserChunkCache.empty()
+	end 'invalid'
+
+	var out = DecodedUserChunkCache.empty()
+	var pos = USER_CHUNK_HEADER_SIZE as ByteOffset
+	for _ in 0 upto header.chunkCount 'eachRecord'
+		let (record, next) = try decodeUserChunkRecord(buf, offset: pos)
+		pos = next
+		out.records.push(record)
+	end 'eachRecord'
+	return out
+end 'readUserChunkCacheInner'
+
+// ============================================================
+// Load (head of code emit): install validated disk chunks into db.codePerFunc
+// ============================================================
+
+// Populate `db.codePerFunc` from the on-disk cache. Must run AFTER `queryAllMid`
+// and BEFORE the incremental backend, whose hit-predicate then reuses the
+// installed chunks for free.
+//
+// Each disk record is installed with its STORED `keyHash` (the post-inline body
+// hash captured when it was compiled). We do NOT re-validate per-record here:
+// the incremental backend's `isCachedChunkValid` re-stamps each function's
+// fresh post-inline keyHash and compares it to `memo.keyHash`, so a stale
+// installed chunk is automatically a backend MISS and recompiles. Validating in
+// the load path would just duplicate that work — and the backend is the
+// authoritative gate. (The file-level validity key (c) was already checked by
+// `readUserChunkCache`; the per-chunk post-inline keyHash (a) is the complete
+// soundness gate. The plan's inline-dep defense-in-depth (b) is intentionally
+// omitted — see `encodeUserChunkRecord`: it isn't cross-process stable.)
+export function loadUserChunkCache(project Project) returns InstalledChunkCount throws CompileError
+	if not userChunkCacheEnabled(project) 'disabled'
+		return 0
+	end 'disabled'
+
+	let key = UserChunkValidityKey.compute(project)
+	let path = userChunkCachePath(project)
+	let decoded = readUserChunkCache(path, key: key)
+	if decoded.records.count() == 0 'noneToInstall'
+		return 0
+	end 'noneToInstall'
+
+	var installed = 0 as InstalledChunkCount
+	for record in decoded.records 'eachRecord'
+		let memo = CodeChunkMemo.create(record.chunk, keyHash: record.keyHash, computedAt: project.db.currentRevision, verifiedAt: project.db.currentRevision)
+		project.db.codePerFunc.upsert(record.funcName, value: memo)
+		installed = installed + 1
+	end 'eachRecord'
+
+	logInfo(LogCategory.compiler, message: function() gives "User chunk cache: installed {installed} persisted chunk(s)")
+	return installed
+end 'loadUserChunkCache'
+
+// ============================================================
+// Store (tail of code emit): atomic read-modify-write merge to disk
+// ============================================================
+
+// Serialize the in-memory `db.codePerFunc` (user functions only) to disk,
+// MERGED with whatever is already on disk: re-read the on-disk records, union
+// them with the current in-memory chunks (in-memory wins on a key collision —
+// it is at least as fresh), and atomic-write the union. The merge keeps
+// concurrent builds from clobbering each other's growth (the stdlib cache's
+// known parallel-clobber defect, avoided here from day one).
+export function storeUserChunkCache(project Project, missesBefore Revision) throws CompileError
+	if not userChunkCacheEnabled(project) 'disabled'
+		return
+	end 'disabled'
+
+	let key = UserChunkValidityKey.compute(project)
+	let path = userChunkCachePath(project)
+
+	// Skip the rewrite when no PERSISTABLE (user-owned) function was recompiled
+	// this build AND a valid file is already on disk: the persisted chunk set
+	// then equals what's already stored, so the read-modify-write merge would
+	// just re-emit identical bytes. `userChunkMisses` (not `codePerFuncMisses`)
+	// excludes the per-compile runtime entry (`mrt_start`), which misses on
+	// EVERY build and is never persisted — without this distinction a warm
+	// rebuild of a fully-cached program would needlessly rewrite the file every
+	// time. A persistable miss or an absent file falls through to a real write.
+	if project.db.userChunkMisses == missesBefore and File.exists(path) 'noChange'
+		return
+	end 'noChange'
+
+	// Collect the in-memory user-function chunks worth persisting.
+	var names = userChunkFunctionNames(project)
+	if names.count() == 0 'nothingToStore'
+		return
+	end 'nothingToStore'
+
+	// Read-modify-write: start from the on-disk records (validated against the
+	// same key — a stale file yields nothing to merge), then overlay the
+	// in-memory chunks. A `Set` of in-memory names lets the disk pass skip any
+	// record the in-memory snapshot supersedes.
+	let onDisk = readUserChunkCache(path, key: key)
+	var inMemoryNames = UserChunkNameSet.create()
+	for name in names 'collectNames'
+		inMemoryNames.insert(name)
+	end 'collectNames'
+
+	var buf = ByteArray.create()
+	buf.reserve(4096)
+	// Placeholder header; chunk count patched after we know the merged total.
+	writeUserChunkHeader(buf, key: key, chunkCount: 0)
+
+	var written = 0 as MachineWord
+
+	// In-memory records first (authoritative on collision).
+	for name in names 'eachInMemory'
+		let memo = try project.db.codePerFunc.get(name) otherwise continue
+		if memo.computedAt == 0 'notReal'
+			continue
+		end 'notReal'
+		try encodeUserChunkRecord(buf, funcName: name, memo: memo) otherwise (e) 'encErr'
+			match e 'kind'
+				absent then logError(LogCategory.compiler, message: function() gives "storeUserChunkCache: absent encoding '{name}'")
+				invalidEncoding then logError(LogCategory.compiler, message: function() gives "storeUserChunkCache: invalid encoding '{name}'")
+			end 'kind'
+			return
+		end 'encErr'
+		written = written + 1
+	end 'eachInMemory'
+
+	// On-disk records the in-memory snapshot didn't supersede.
+	for record in onDisk.records 'eachDisk'
+		if inMemoryNames.contains(record.funcName) 'superseded'
+			continue
+		end 'superseded'
+		let memo = CodeChunkMemo.create(record.chunk, keyHash: record.keyHash, computedAt: project.db.currentRevision, verifiedAt: project.db.currentRevision)
+		try encodeUserChunkRecord(buf, funcName: record.funcName, memo: memo) otherwise (e) 'encErr2'
+			match e 'kind'
+				absent then logError(LogCategory.compiler, message: function() gives "storeUserChunkCache: absent re-encoding '{record.funcName}'")
+				invalidEncoding then logError(LogCategory.compiler, message: function() gives "storeUserChunkCache: invalid re-encoding '{record.funcName}'")
+			end 'kind'
+			return
+		end 'encErr2'
+		written = written + 1
+	end 'eachDisk'
+
+	patchDword(buf, offset: USER_CHUNK_CHUNK_COUNT_OFFSET, value: written)
+	finalizeUserChunkCache(path, buf: buf)
+	logInfo(LogCategory.compiler, message: function() gives "User chunk cache: persisted {written} chunk(s) to {path}")
+end 'storeUserChunkCache'
+
+// The set of `db.codePerFunc` names that belong to the USER program (not
+// stdlib/runtime helpers) and carry real compiled bytes. Only these are
+// persisted: stdlib/runtime bodies come from the library cache, and a
+// signature-only stub (`computedAt == 0`) has no bytecode to reuse.
+function userChunkFunctionNames(project Project) returns StringArray
+	var names = StringArray.create()
+	for (name, memo) in project.db.codePerFunc 'each'
+		if memo.computedAt == 0 'stub'
+			continue
+		end 'stub'
+		if not isPersistableUserChunkName(name) 'notPersistable'
+			continue
+		end 'notPersistable'
+		names.push(name)
+	end 'each'
+	return sortStringsAscending(names)
+end 'userChunkFunctionNames'
+
+// Whether a function name is a USER-program body the chunk cache persists (vs.
+// a library-owned helper or per-compile runtime entry served elsewhere). The
+// inverse of `isLibraryOwnedFunctionName`. Exported so the incremental backend
+// can tally PERSISTABLE chunk misses separately — a build whose only miss is the
+// per-compile `mrt_start` (not persistable) leaves the on-disk set unchanged and
+// must still take the store's no-op fast path.
+export function isPersistableUserChunkName(name String) returns bool
+	return not isLibraryOwnedFunctionName(name)
+end 'isPersistableUserChunkName'
+
+// A function name owned by a linked library (stdlib today): a runtime/builtin
+// helper (`mrt_*`, `mm_*`, `__slab_*`, `__mm_*`, …) or a `stdlib.`-namespaced
+// body. Such names are served from the library cache, never persisted in the
+// user chunk cache.
+function isLibraryOwnedFunctionName(name String) returns bool
+	if name.startsWith("stdlib.") 'stdlibNs'
+		return true
+	end 'stdlibNs'
+	if name.startsWith("mrt_") or name.startsWith("mm_") or name.startsWith("__mm_") or name.startsWith("__slab_") or name.startsWith("__managed_") 'runtime'
+		return true
+	end 'runtime'
+	return false
+end 'isLibraryOwnedFunctionName'
+
+// ============================================================
+// Enablement + path
+// ============================================================
+
+// The user chunk cache is active only for native (PE/Mach-O/ELF) incremental
+// builds with a known project root and a resolvable build name. WASM uses the
+// whole-module emitter (no chunk path), and a `db.enableIncremental == false`
+// build (debugging / classical-counter tests) bypasses the chunk machinery
+// entirely, so persistence would be dead weight.
+function userChunkCacheEnabled(project Project) returns bool
+	if project.target.cpu == CpuArch.wasm32 'isWasm'
+		return false
+	end 'isWasm'
+	if not project.db.enableIncremental 'noIncremental'
+		return false
+	end 'noIncremental'
+	// An IR-dump build must compile every function fresh so the dumped module
+	// shows real bodies — exactly why `queryCodeResult`/`queryAllMid` bypass
+	// their memos under `irDump.enabled()`. Installing cached chunks would serve
+	// functions from the cache and empty the dumped `CompiledIR`; persisting
+	// from a dump build would store an atypical snapshot. Disable both.
+	if project.irDump.enabled() 'irDump'
+		return false
+	end 'irDump'
+	if project.rootPath.isEmpty() 'noRoot'
+		return false
+	end 'noRoot'
+	return true
+end 'userChunkCacheEnabled'
+
+// The user program's chunk-cache file, project-private (in the project's own
+// `.maxon/cache/`, never shared between projects), keyed by build name +
+// target + compiler-fingerprint + options-hash so distinct compilers / option
+// sets coexist. Honors the `--cache-root=DIR` testing override.
+//
+// `<buildName>-chunks-<target>-<fp>-<optsHash>.mxc`
+function userChunkCachePath(project Project) returns FilePath
+	let cacheDir = userProjectCacheRoot(project).join(".maxon").join("cache")
+	let buildName = userChunkBuildName(project)
+	let fp = compilerFingerprintToken()
+	let optsToken = toHex8(compileOptionsHash(project))
+	return cacheDir.join("{buildName}-chunks-{targetToString(project.target)}-{fp}-{optsToken}.mxc")
+end 'userChunkCachePath'
+
+// The directory the user-program cache lives under: the `--cache-root=DIR`
+// override when set, else the project's own directory.
+function userProjectCacheRoot(project Project) returns FilePath
+	if not project.cacheRootOverride.isEmpty() 'override'
+		return project.cacheRootOverride
+	end 'override'
+	return userProjectDir(project)
+end 'userProjectCacheRoot'
+
+// The project's root resolved to a DIRECTORY. A single-file
+// `maxon build foo.maxon` sets `rootPath` to the file itself, so fall back to
+// its parent — otherwise paths derived from it (the cache dir, the `build.maxon`
+// lookup) would treat the source file as a directory. Exported because Phase 6's
+// library discovery also resolves `build.maxon library("...")` against this dir.
+export function userProjectDir(project Project) returns FilePath
+	let root = project.rootPath
+	if Directory.exists(root) 'isDir'
+		return root
+	end 'isDir'
+	return try root.parent() otherwise root
+end 'userProjectDir'
+
+// The user program's library name for cache-file naming. Priority:
+//   1. the `build.maxon` `build("…")` name (a real multi-file project);
+//   2. else, for a single-file `maxon build foo.maxon`, the source file's stem
+//      (`foo`) — so two distinct single-file programs sharing a directory get
+//      distinct cache files instead of both keying on a generic `program` name
+//      and clobbering each other (a ping-pong of cold rebuilds — correctness is
+//      still safe via the source-checksum key, but reuse would be lost);
+//   3. else `program` (a directory build with no `build.maxon`).
+// Never throws — every fallback keeps the cache usable.
+function userChunkBuildName(project Project) returns String
+	if let name = try parseBuildName(userProjectDir(project)) 'haveBuildName'
+		if not name.isEmpty() 'nonEmpty'
+			return name
+		end 'nonEmpty'
+	end 'haveBuildName'
+
+	// Single-file build: `rootPath` is the source FILE — use its stem (`foo`
+	// from `foo.maxon`).
+	let root = project.rootPath
+	if not Directory.exists(root) 'isFile'
+		let stem = root.stem()
+		if not stem.isEmpty() 'haveStem'
+			return stem
+		end 'haveStem'
+	end 'isFile'
+
+	return "program"
+end 'userChunkBuildName'

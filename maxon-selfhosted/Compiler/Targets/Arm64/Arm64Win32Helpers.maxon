@@ -141,7 +141,7 @@ end 'arm64Win32FinalizeHelper'
 function arm64Win32PatchBranch(code ByteArray, instrOffset Arm64Offset, targetOffset Arm64Offset)
 	let relBytes = targetOffset - instrOffset
 	let relInsns = relBytes / 4
-	let origInsn = readDword(code, offset: instrOffset)
+	let origInsn = try readDword(code, offset: instrOffset) otherwise panic("arm64Win32PatchBranch: instrOffset {instrOffset} past end of emitted code (count={code.count()}) — emitter bug")
 	let patched = (origInsn and 0xFC000000) or (relInsns and 0x3FFFFFF)
 	patchDword(code, offset: instrOffset, value: patched)
 end 'arm64Win32PatchBranch'
@@ -150,7 +150,7 @@ end 'arm64Win32PatchBranch'
 function arm64Win32PatchCondBranch(code ByteArray, instrOffset Arm64Offset, targetOffset Arm64Offset)
 	let relBytes = targetOffset - instrOffset
 	let relInsns = relBytes / 4
-	let origInsn = readDword(code, offset: instrOffset)
+	let origInsn = try readDword(code, offset: instrOffset) otherwise panic("arm64Win32PatchCondBranch: instrOffset {instrOffset} past end of emitted code (count={code.count()}) — emitter bug")
 	let condBits = origInsn and 0xF
 	let patched = 0x54000000 or ((relInsns and 0x7FFFF) shl 5) or condBits
 	patchDword(code, offset: instrOffset, value: patched)

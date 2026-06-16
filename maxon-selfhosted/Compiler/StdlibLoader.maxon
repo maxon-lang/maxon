@@ -3,6 +3,11 @@
 // at index 0. Later phases push the user program + external libraries.
 var libraryRegistry = LibraryRegistry.create()
 
+// Phase 6: set of an external library's own function names (its emit filter).
+typealias StringSet = Set with String
+// Phase 7: wasm function lookup by name for incremental preservation.
+typealias WasmObjectFunctionByName = Map with (String, WasmObjectFunction)
+
 // Fetch-or-create the stdlib Library (always index 0). Created lazily because
 // `findStdlibPath()` walks the filesystem; the anchors are filled in on first
 // access. `rootPath` is the parent of `stdlib/` (namespace anchor, so
@@ -26,32 +31,98 @@ function setStdlibLib(lib Library)
 	try libraryRegistry.libs.set(0, value: lib) otherwise panic("setStdlibLib: registry index 0 missing")
 end 'setStdlibLib'
 
-// Compute the on-disk cache path for `lib` and `target` (Phase 2). The cache
-// lives in the library's OWN directory (`<cacheDirRoot>/.maxon/cache/`), shared
-// across every project that resolves this library, and the filename carries the
-// target AND the compiler-fingerprint token so two compiler versions sharing
+// The `<cacheDirRoot>/.maxon/cache/` directory a library's cache files live in,
+// honoring the `--cache-root=DIR` testing override (empty = the library's own
+// root). Shared by the per-target and meta path computations below.
+//
+// `cacheRootOverride` (from `project.cacheRootOverride`, set by the internal
+// `maxon build --cache-root=DIR` testing flag) redirects the cache to
+// `DIR/.maxon/cache/` so the `maxon test-lib-cache` harness can isolate a
+// cold/hit/delete sequence in a throwaway temp dir.
+function libraryCacheDir(lib Library, cacheRootOverride FilePath) returns FilePath
+	var root = lib.cacheDirRoot
+	if not cacheRootOverride.isEmpty() 'override'
+		root = cacheRootOverride
+	end 'override'
+	return root.join(".maxon").join("cache")
+end 'libraryCacheDir'
+
+// Phase 3: the PER-TARGET cache file (Tier C — linkable bytecode + globalData).
+// Lives in the library's own dir, shared across projects; the filename carries
+// the target AND the compiler-fingerprint token so two compiler versions sharing
 // the dir write distinct, coexisting files instead of stomping each other (see
-// *Cache validity key* in the libraries plan). The `<optsHash>` filename
-// component lands in Phase 3 with the three-tier split; Phase 2's filename is
-// `<lib>-<target>-<fp>.mxc`.
-function libraryCachePath(lib Library, target Target) returns FilePath
-	let cacheDir = lib.cacheDirRoot.join(".maxon").join("cache")
+// *Cache validity key*). Filename `<lib>-<target>-<fp>.mxc`. (The `<optsHash>`
+// component is deferred to Phase 5 — no stdlib option varies its bytes today.)
+function libraryCachePath(lib Library, target Target, cacheRootOverride FilePath = FilePath from "") returns FilePath
+	let cacheDir = libraryCacheDir(lib, cacheRootOverride: cacheRootOverride)
 	let fp = compilerFingerprintToken()
 	return cacheDir.join("{lib.name}-{targetToString(target)}-{fp}.mxc")
 end 'libraryCachePath'
 
-// Delete the on-disk caches for every library this project uses (backs the
-// `maxon clean` command). Phase 2 resolves only stdlib; Phase 5 extends the set
-// to the project's external libraries. For each library, removes every `*.mxc`
-// (all fingerprint × target combinations) and any stray `*.tmp` left by a
-// crashed/aborted atomic write under `<cacheDirRoot>/.maxon/cache/`. Returns the
-// paths actually removed (for the CLI to report). A missing cache dir or an
-// unreadable/undeletable file is skipped silently — clean is best-effort.
-export function cleanLibraryCaches() returns StringArray
+// Phase 3: the META cache file (Tier A library metadata + Tier B inlinable Std
+// IR). Filename `<lib>-meta-<target>-<fp>.mxc`. PER-TARGET, not shared across
+// targets: Tier A+B is NOT target-independent — `layoutDescriptors` /
+// `structTypes` byte sizes bake in the pointer width (wasm32 = 4 bytes, x64/arm64
+// = 8), so the meta content legitimately differs by target. (The original plan
+// hoped for one shared meta file; the target-independence guard proved x64 ≠
+// wasm32, so this is the plan's documented per-target fallback — correctness over
+// the dedup win. The split still cleanly separates the bulky Tier A+B metadata
+// from the per-target Tier C bytecode, each reused across rebuilds of the SAME
+// target.) The `-meta-` infix distinguishes it from the Tier-C file
+// `<lib>-<target>-<fp>.mxc`; the Tier-C file stores this file's content hash so
+// the two stay paired.
+function libraryMetaCachePath(lib Library, target Target, cacheRootOverride FilePath = FilePath from "") returns FilePath
+	let cacheDir = libraryCacheDir(lib, cacheRootOverride: cacheRootOverride)
+	let fp = compilerFingerprintToken()
+	return cacheDir.join("{lib.name}-meta-{targetToString(target)}-{fp}.mxc")
+end 'libraryMetaCachePath'
+
+// Delete the on-disk caches the project at `projectDir` uses (backs the
+// `maxon clean` command). Sweeps the shared stdlib cache dir AND the project's
+// OWN `.maxon/cache/` (the Phase-5 user-program chunk cache lives there,
+// project-private). Phase 6 extends the set to the project's external
+// libraries. For each location, removes every `*.mxc` (all fingerprint × target
+// × options combinations) and any stray `*.tmp` left by a crashed/aborted
+// atomic write. Returns the paths actually removed (for the CLI to report). A
+// missing cache dir or an unreadable/undeletable file is skipped silently —
+// clean is best-effort.
+export function cleanLibraryCaches(projectDir FilePath, extraLibraryDirs FilePathArray = FilePathArray.create()) returns StringArray
 	var deleted = StringArray.create()
-	deleteCacheFilesUnder(stdlibLib().cacheDirRoot, into: deleted)
+	var swept = StringSet.create()
+	sweepCacheDirOnce(stdlibLib().cacheDirRoot, swept: swept, into: deleted)
+	// The project's own cache dir (the Phase-5 user-program chunk cache).
+	if not projectDir.isEmpty() 'hasProjectDir'
+		sweepCacheDirOnce(projectDir, swept: swept, into: deleted)
+	end 'hasProjectDir'
+	// Phase 6: every external library this project links — the `build.maxon`
+	// `library("...")` manifest entries ∪ the CLI `--library=DIR` dirs the caller
+	// forwards. Cleaning a shared lib's cache also affects other projects' next
+	// build (expected for an explicit clean). `swept` dedups so a dir named twice
+	// (or coinciding with stdlib/projectDir) is only walked once.
+	for dir in parseLibraryDirs(projectDir) 'eachManifestLib'
+		sweepCacheDirOnce(dir, swept: swept, into: deleted)
+	end 'eachManifestLib'
+	for dir in extraLibraryDirs 'eachExtraLib'
+		sweepCacheDirOnce(dir, swept: swept, into: deleted)
+	end 'eachExtraLib'
 	return deleted
 end 'cleanLibraryCaches'
+
+// Sweep one library cache root's `.maxon/cache/` exactly once: skip if its
+// normalized root is already in `swept` (so stdlib / the project dir / a
+// repeated library dir aren't double-walked), then delegate to
+// `deleteCacheFilesUnder`.
+function sweepCacheDirOnce(cacheDirRoot FilePath, swept StringSet, into StringArray)
+	if cacheDirRoot.isEmpty() 'empty'
+		return
+	end 'empty'
+	let key = cacheDirRoot.normalize().toString()
+	if swept.contains(key) 'already'
+		return
+	end 'already'
+	swept.insert(key)
+	deleteCacheFilesUnder(cacheDirRoot, into: into)
+end 'sweepCacheDirOnce'
 
 // Delete `*.mxc` + `*.tmp` directly under `<libCacheDirRoot>/.maxon/cache/`,
 // appending each removed path to `out`. Non-recursive: cache files live flat in
@@ -76,13 +147,191 @@ function deleteCacheFilesUnder(libCacheDirRoot FilePath, into StringArray)
 	end 'eachEntry'
 end 'deleteCacheFilesUnder'
 
-export function getCachedStdlibStdModule() returns StdModule
-	return stdlibLib().inlinerStdModule
-end 'getCachedStdlibStdModule'
+// =============================================================================
+// Phase 4: combined (union-of-N-libraries) accessors
+// =============================================================================
+//
+// Codegen + link consume the *union* of every registered library's cache
+// instead of the single stdlib cache. Today the registry holds only stdlib
+// (the user program + external libs land in Phases 5/6), so each accessor
+// short-circuits the single-valid-library case and returns that library's
+// exact value — making the union machinery a provable no-op at N=1
+// (byte-identical exe vs the Phase-3 binary). The N>1 merge path
+// (stdlib-first, registration-order-stable) is dormant until Phase 6
+// populates the registry.
+//
+// `restoreStdlibMetadata` is NOT folded into the combined cache: id-space
+// translation is per-`StdlibCacheData` and re-interns into the destination
+// project, so metadata is restored one library at a time by
+// `restoreLibraryMetadata` (the sequential-restore correctness argument).
+// The combined cache therefore carries only what the linker / backend read
+// directly off it: the Tier C arrays (`functions` / `wasmFunctions` /
+// `globalData`).
 
-module function cachedStdFuncEdges() returns CachedFuncEdgeMap
-	return stdlibLib().funcEdges
-end 'cachedStdFuncEdges'
+// Tri-state result of `findSoleValidLibrary`: zero valid library caches, one
+// (with its registry index — the byte-identical fast path), or several
+// (forcing the union merge). Avoids a `-1` sentinel index.
+type SoleValidLibrary
+	export let kind as SoleValidLibraryKind
+	export let index as LibraryIndex
+
+	export static function none() returns SoleValidLibrary
+		return Self{kind: SoleValidLibraryKind.none, index: 0}
+	end 'none'
+
+	export static function one(index LibraryIndex) returns SoleValidLibrary
+		return Self{kind: SoleValidLibraryKind.one, index: index}
+	end 'one'
+
+	export static function several() returns SoleValidLibrary
+		return Self{kind: SoleValidLibraryKind.several, index: 0}
+	end 'several'
+end 'SoleValidLibrary'
+
+enum SoleValidLibraryKind
+	none
+	one
+	several
+end 'SoleValidLibraryKind'
+
+typealias LibraryIndex = int(0 to u64.max)
+
+// Classify how many registered libraries have a valid cache. Exactly one is
+// the byte-identical fast path taken throughout Phases 1-5 (the registry holds
+// only stdlib): its cache value flows through the combined accessors verbatim
+// with no copy or merge, so the emitted layout is bit-for-bit unchanged.
+function findSoleValidLibrary() returns SoleValidLibrary
+	var result = SoleValidLibrary.none()
+	for i in 0 upto libraryRegistry.libs.count() 'eachLib'
+		let lib = try libraryRegistry.libs.get(i) otherwise continue
+		if not lib.cacheValid 'invalid'
+			continue
+		end 'invalid'
+		match result.kind 'tally'
+			none then result = SoleValidLibrary.one(i)
+			one to several then result = SoleValidLibrary.several()
+		end 'tally'
+	end 'eachLib'
+	return result
+end 'findSoleValidLibrary'
+
+// The union of every registered library's linkable cache (Tier C), stdlib
+// first. With exactly one valid library this returns its `cacheData`
+// verbatim — no copy, no merge — so the single-library layout the linker
+// emits is bit-for-bit unchanged. With N>1 (Phase 6) it concatenates each
+// library's `functions` / `wasmFunctions` and unions their `globalData` into
+// a fresh combined value, stdlib first.
+export function combinedLibraryCache() returns StdlibCacheData
+	let sole = findSoleValidLibrary()
+	if sole.kind == SoleValidLibraryKind.one 'fastPath'
+		return (try libraryRegistry.libs.get(sole.index) otherwise panic("combinedLibraryCache: sole index vanished")).cacheData
+	end 'fastPath'
+
+	var combined = StdlibCacheData.create()
+	for lib in libraryRegistry.libs 'eachLib'
+		if not lib.cacheValid 'invalid'
+			continue
+		end 'invalid'
+		mergeLibraryTierCInto(combined, source: lib.cacheData)
+	end 'eachLib'
+	return combined
+end 'combinedLibraryCache'
+
+// The cache a native linker should LINK FROM, given the `preLink` snapshot it was
+// handed before the backend ran. The link path lazily compiles stdlib bodies in
+// place into the registry's stdlib array (`ensureStdlibFunctionsCompiled`), so the
+// linked-from cache must reflect that growth:
+//   - N=1 (only stdlib valid): `preLink` IS the registry's stdlib `cacheData`
+//     (the `combinedLibraryCache` fast path returns it by reference), so the
+//     in-place grow is already visible — return it unchanged for byte-identity.
+//   - N>1 (an external library is registered): `preLink` was a DETACHED union
+//     COPY taken before the grow, so it misses the lazily-grown bodies; re-derive
+//     the union NOW (after the grow) so they are present.
+// Keyed on the live registry's valid-library count, NOT on `preLink`, so the
+// decision matches how `combinedLibraryCache` would assemble the cache right now.
+export function libraryLinkCacheAfterLazyGrow(preLink StdlibCacheData) returns StdlibCacheData
+	if findSoleValidLibrary().kind == SoleValidLibraryKind.one 'singleLibrary'
+		return preLink
+	end 'singleLibrary'
+	return combinedLibraryCache()
+end 'libraryLinkCacheAfterLazyGrow'
+
+// Concatenate one library's Tier C (linkable bytecode + rdata) into the
+// destination combined cache. Native + wasm function arrays append in
+// registration order; `globalData` entries are unioned by name (skipping
+// duplicates) so shared rdata labels collapse to one entry. Names are unique
+// across libraries (each library is namespace-anchored; un-namespaced
+// runtime/builtin helpers live only in stdlib's cache), so concatenation is
+// collision-free — a genuine duplicate fully-qualified symbol is a hard error
+// caught upstream at metadata restore.
+function mergeLibraryTierCInto(dest StdlibCacheData, source StdlibCacheData)
+	dest.functions.append(source.functions)
+	dest.wasmFunctions.append(source.wasmFunctions)
+	for i in 0 upto source.globalData.names.count() 'eachGlobal'
+		let name = try source.globalData.names.get(i) otherwise continue
+		if dest.globalData.nameIndex.contains(name) 'alreadyPresent'
+			continue
+		end 'alreadyPresent'
+		let value = try source.globalData.values.get(i) otherwise continue
+		addNamedGlobalData(dest.globalData, name: name, data: value)
+	end 'eachGlobal'
+end 'mergeLibraryTierCInto'
+
+// The union of every registered library's post-dce Std-IR snapshot, the
+// inliner's source of inlinable bodies across libraries. One valid library
+// returns its snapshot verbatim; N>1 merges each (stdlib first) so a user
+// call site can inline a body from any library.
+export function combinedInlinerStdModule() returns StdModule
+	let sole = findSoleValidLibrary()
+	if sole.kind == SoleValidLibraryKind.one 'fastPath'
+		return (try libraryRegistry.libs.get(sole.index) otherwise panic("combinedInlinerStdModule: sole index vanished")).inlinerStdModule
+	end 'fastPath'
+
+	var combined = StdModule.create()
+	for lib in libraryRegistry.libs 'eachLib'
+		if not lib.cacheValid 'invalid'
+			continue
+		end 'invalid'
+		combined.merge(lib.inlinerStdModule)
+	end 'eachLib'
+	return combined
+end 'combinedInlinerStdModule'
+
+// The union of every registered library's precomputed Std-DFE edge table, so
+// load-time dead-function elimination follows the call graph of bodies served
+// from any library's cache. One valid library returns its map verbatim; N>1
+// unions each (stdlib first). Edge keys are fully-qualified function names,
+// unique across libraries, so the union never collides.
+export function combinedFuncEdges() returns CachedFuncEdgeMap
+	let sole = findSoleValidLibrary()
+	if sole.kind == SoleValidLibraryKind.one 'fastPath'
+		return (try libraryRegistry.libs.get(sole.index) otherwise panic("combinedFuncEdges: sole index vanished")).funcEdges
+	end 'fastPath'
+
+	var combined = CachedFuncEdgeMap.create()
+	for lib in libraryRegistry.libs 'eachLib'
+		if not lib.cacheValid 'invalid'
+			continue
+		end 'invalid'
+		for (name, edges) in lib.funcEdges 'eachEdge'
+			combined.upsert(name, value: edges)
+		end 'eachEdge'
+	end 'eachLib'
+	return combined
+end 'combinedFuncEdges'
+
+// Whether any registered library has a valid linkable cache — the
+// generalized form of `isStdlibCacheValid()` gating the cache-on link /
+// runtime-trim path. True iff at least one library's cache is populated and
+// valid for the active target.
+export function anyLibraryCacheValid() returns bool
+	for lib in libraryRegistry.libs 'eachLib'
+		if lib.cacheValid 'valid'
+			return true
+		end 'valid'
+	end 'eachLib'
+	return false
+end 'anyLibraryCacheValid'
 
 // v80 lazy codegen: process-wide memo of the reconstructed, fully-lowered
 // stdlib MIR module that `ensureStdlibFunctionsCompiled` codegens subsets
@@ -449,6 +698,37 @@ function parseStdlibSource(project Project, allModule MaxonModule, filePath File
 	allModule.merge(parsed)
 end 'parseStdlibSource'
 
+// Phase 6: parse one EXTERNAL-library source file. Same namespace-anchoring as
+// `parseStdlibSource`, but external library code is USER input, not trusted
+// bundled stdlib — a lex/parse error must surface as a diagnostic + clean build
+// failure, never a compiler-bug panic. Returns false (with diagnostics already
+// reported by the lexer/parser, or one minted here) on any failure so the caller
+// can stop the build; true on a clean parse.
+function parseLibrarySource(project Project, allModule MaxonModule, filePath FilePath, rootPath FilePath, content String) returns bool
+	logDebug(LogCategory.compiler, message: function() gives "  Parsing library file {filePath}")
+	let tokens = try tokenize(content) otherwise 'lexErr'
+		reportSemanticError(project, code: ErrorCode.semanticLibraryNotFound, message: "lexer error in library file {filePath}")
+		return false
+	end 'lexErr'
+	let ns = deriveNamespace(filePath, rootPath: rootPath)
+	var parser = try Parser.create(project, tokens: tokens, filePath: filePath, rootPath: rootPath, namespace: ns) otherwise 'createErr'
+		reportSemanticError(project, code: ErrorCode.semanticLibraryNotFound, message: "empty or malformed library file {filePath}")
+		return false
+	end 'createErr'
+	let parsed = try parser.parseModule() otherwise 'parseErr'
+		// The parser already pushed precise per-site diagnostics; this is the
+		// build-stopping signal.
+		return false
+	end 'parseErr'
+	if hasErrors(project) 'parseErrors'
+		// Per-site diagnostics already reported by the parser.
+		return false
+	end 'parseErrors'
+	parsed.assertAllBlocksTerminated()
+	allModule.merge(parsed)
+	return true
+end 'parseLibrarySource'
+
 // Seed the allocator/MM boundary functions the runtime calls into as stdlib-DFE
 // liveness roots. The runtime bodies (`mrt_start` + the runtime.std MM/container
 // helpers) are merged into the user module AFTER the stdlib DFE runs (see
@@ -509,19 +789,7 @@ export function getStdlibModule(project Project) returns MaxonModule
 		let warmLib = stdlibLib()
 		// Restore metadata into the new project
 		if warmLib.cacheValid 'restoreFromCache'
-			// `restoreStdlibMetadata` mutates its `data` parameter (all writes
-			// go through `cacheData`'s reference-backed Maps/Arrays, e.g. the
-			// `writerGidToProjectGid` rebuild), so it needs a mutable
-			// `StdlibCacheData` binding passed directly. Pull the registry's
-			// `cacheData` from the registry array (a `try`-expression result,
-			// not a `let`-field copy — E3078 rejects binding a `var` from the
-			// immutable `warmLib.cacheData` field). Its reference-backed
-			// Maps/Arrays alias the registry's shared heap storage, so the
-			// mutations persist without an explicit set-back — matching the old
-			// global `cachedStdlibCacheData`.
-			var cacheData = (try libraryRegistry.libs.get(0) otherwise panic("getStdlibModule: stdlib registry empty on warm restore")).cacheData
-			restoreStdlibMetadata(project, data: cacheData)
-			seedModuleInitFuncsFromLivenessRoots(project)
+			restoreLibraryMetadata(project, libIndex: 0)
 		end 'restoreFromCache' else 'restoreFromParse'
 			for (name, baseType) in warmLib.typealiases 'restoreAliases'
 				try project.typealiases.insert(name, value: baseType) otherwise ignore
@@ -566,15 +834,17 @@ export function getStdlibModule(project Project) returns MaxonModule
 	// coexistence. The path no longer depends on the user project, so the old
 	// per-project `.maxon/cache/` location, the single-file parent resolution,
 	// and the sticky `stdlibCacheProjectDirs` pin are all gone.
-	let cachePath = libraryCachePath(stdlibLib(), target: project.target)
+	let metaPath = libraryMetaCachePath(stdlibLib(), target: project.target, cacheRootOverride: project.cacheRootOverride)
+	let cachePath = libraryCachePath(stdlibLib(), target: project.target, cacheRootOverride: project.cacheRootOverride)
 	let checksumStart = passTimerStart()
 	let contentChecksum = currentStdlibChecksum(project.target)
 	recordPassSince("__stdlib-checksum", startMs: checksumStart)
-	let cacheResult = readStdlibCache(project, path: cachePath, target: project.target, expectedChecksum: contentChecksum)
+	let cacheResult = readStdlibCache(project, metaPath: metaPath, targetPath: cachePath, target: project.target, expectedChecksum: contentChecksum)
 
 	if cacheResult.valid 'cacheHit'
 		logInfo(LogCategory.compiler, message: function() gives "Stdlib cache hit: {countCompiledStdlibFunctions(cacheResult.data)} functions cached")
 		activateStdlibCache(cacheResult.data, target: project.target)
+		setStdlibCacheMetaHash(cacheResult.metaHash)
 
 		// Read a single mutable snapshot of the just-activated stdlib Library.
 		// `cacheData` is reference-backed, so `restoreStdlibMetadata`'s in-place
@@ -583,12 +853,10 @@ export function getStdlibModule(project Project) returns MaxonModule
 		// `setStdlibLib` writes back the scalar / field-slot changes below.
 		var hitLib = stdlibLib()
 
-		// Restore parser metadata so user code can reference stdlib types.
-		// Route through the registry's `cacheData` (just populated by
-		// `activateStdlibCache`) rather than the immutable `cacheResult.data`
-		// binding, which can't be passed to a mutating-parameter function.
-		restoreStdlibMetadata(project, data: hitLib.cacheData)
-		seedModuleInitFuncsFromLivenessRoots(project)
+		// Restore parser metadata so user code can reference stdlib types,
+		// routing through the registry's just-activated `cacheData` (the
+		// per-library restore seam; index 0 is stdlib).
+		restoreLibraryMetadata(project, libIndex: 0)
 
 		// Phase 11.6 cross-module inlining: republish the stdlib StdModule
 		// snapshot pulled from disk so the user pipeline's inliner pass can
@@ -659,23 +927,11 @@ export function getStdlibModule(project Project) returns MaxonModule
 	// sandbox project and is invariant against downstream pipeline
 	// mutation.
 
-	// Snapshot stdlib typealiases into separate maps
-	for (name, baseType) in project.typealiases 'cacheAliases'
-		missLib.typealiases.upsert(name, value: baseType)
-	end 'cacheAliases'
-	for (name, infos) in project.typealiasVisibilities 'cacheAliasVis'
-		var copied = TypealiasVisibilityInfoArray.create()
-		for info in infos 'eachInfo'
-			copied.push(info)
-		end 'eachInfo'
-		missLib.typealiasVisibilities.upsert(name, value: copied)
-	end 'cacheAliasVis'
-	for (name, range) in project.typealiasRanges 'cacheRanges'
-		missLib.typealiasRanges.upsert(name, value: range)
-	end 'cacheRanges'
-	for (name, category) in project.typealiasCastCategories 'cacheCategories'
-		missLib.typealiasCastCategories.upsert(name, value: category)
-	end 'cacheCategories'
+	// Snapshot the just-parsed library's typealiases (+ visibility / range /
+	// cast-category sidecars) off `project` into the Library so a same-process
+	// cache hit can restore them without re-parsing (the `restoreFromParse` leg
+	// in `getStdlibModule`). Shared with `registerExternalLibrary`.
+	snapshotTypealiasesInto(missLib, project: project)
 	setStdlibLib(missLib)
 
 	// Build and write the stdlib cache for next time, then switch to cached
@@ -683,7 +939,7 @@ export function getStdlibModule(project Project) returns MaxonModule
 	// consistently use the pre-compiled path. `buildAndWriteStdlibCache`
 	// mutates the registry (cacheData / inlinerStdModule / funcEdges), so
 	// re-read a fresh snapshot afterward before the final scalar writes.
-	buildAndWriteStdlibCache(project, allModule: allModule, cachePath: cachePath, contentChecksum: contentChecksum)
+	buildAndWriteStdlibCache(project, allModule: allModule, metaPath: metaPath, cachePath: cachePath, contentChecksum: contentChecksum)
 	var doneLib = stdlibLib()
 	doneLib.loaded = true
 
@@ -698,21 +954,283 @@ export function getStdlibModule(project Project) returns MaxonModule
 	return stdlibLib().cachedModule
 end 'getStdlibModule'
 
+// Snapshot a just-parsed library's typealiases and their visibility / range /
+// cast-category sidecars off `project` into `lib`'s own maps (mutated in place;
+// the caller writes `lib` back into the registry). On a same-process cache hit
+// these are restored without re-parsing (the `restoreFromParse` leg of
+// `getStdlibModule`). Factored out of the stdlib miss path so
+// `registerExternalLibrary` reuses exactly the same capture.
+function snapshotTypealiasesInto(lib Library, project Project)
+	for (name, baseType) in project.typealiases 'cacheAliases'
+		lib.typealiases.upsert(name, value: baseType)
+	end 'cacheAliases'
+	for (name, infos) in project.typealiasVisibilities 'cacheAliasVis'
+		var copied = TypealiasVisibilityInfoArray.create()
+		for info in infos 'eachInfo'
+			copied.push(info)
+		end 'eachInfo'
+		lib.typealiasVisibilities.upsert(name, value: copied)
+	end 'cacheAliasVis'
+	for (name, range) in project.typealiasRanges 'cacheRanges'
+		lib.typealiasRanges.upsert(name, value: range)
+	end 'cacheRanges'
+	for (name, category) in project.typealiasCastCategories 'cacheCategories'
+		lib.typealiasCastCategories.upsert(name, value: category)
+	end 'cacheCategories'
+end 'snapshotTypealiasesInto'
+
+// ============================================================
+// Phase 6: external library discovery
+// ============================================================
+
+// Recursively collect every `.maxon` file under an external library's root, in
+// the same DETERMINISTIC byte-wise-lexicographic order `collectStdlibFiles`
+// uses (spike A2) so the cache build is reproducible across machines/checkouts.
+function collectLibraryFiles(rootDir FilePath) returns FilePathArray
+	var files = FilePathArray.create()
+	if rootDir.isEmpty() or not Directory.exists(rootDir) 'noDir'
+		return files
+	end 'noDir'
+	collectMaxonFilesUnder(rootDir, into: files)
+	return sortFilePathsAscending(files)
+end 'collectLibraryFiles'
+
+// Cache key for an external library: an FNV over every `.maxon` file the walk
+// surfaces. Unlike the stdlib checksum it folds in NO runtime.std — external
+// libraries carry no runtime bodies (they resolve `mrt_*`/`mm_*` by name against
+// stdlib's cache via the Phase-4 union), so only their own sources affect their
+// bytes. Empty `runtimePath` keeps `computeStdlibChecksum`'s runtime byte-mix a
+// no-op.
+function currentLibraryChecksum(rootDir FilePath) returns CacheChecksum
+	return computeStdlibChecksum(collectLibraryFiles(rootDir), runtimePath: FilePath from "")
+end 'currentLibraryChecksum'
+
+// Result of `findLibraryByName`: found (with its registry index) or absent.
+// Avoids a `-1` sentinel index (mirrors `SoleValidLibrary`).
+type LibraryLookup
+	export let found as bool
+	export let index as LibraryIndex
+
+	export static function missing() returns LibraryLookup
+		return Self{found: false, index: 0}
+	end 'missing'
+
+	export static function at(index LibraryIndex) returns LibraryLookup
+		return Self{found: true, index: index}
+	end 'at'
+end 'LibraryLookup'
+
+// Find a registered library by name. Linear scan over the handful of
+// registered libraries.
+function findLibraryByName(name String) returns LibraryLookup
+	for i in 0 upto libraryRegistry.libs.count() 'eachLib'
+		let lib = try libraryRegistry.libs.get(i) otherwise continue
+		if lib.name == name 'match'
+			return LibraryLookup.at(i)
+		end 'match'
+	end 'eachLib'
+	return LibraryLookup.missing()
+end 'findLibraryByName'
+
+// Raised when two distinct library directories resolve to the same basename
+// (their dir-derived namespaces would alias, so symbols can't be disambiguated).
+export union LibraryError implements Error
+	duplicateName(name String)
+	directoryNotFound(path FilePath)
+	parseError(path FilePath)
+end 'LibraryError'
+
+// Phase 6: discover, build/load, and register an external library so its
+// `export` symbols become globally visible to the user build (implicit import —
+// no new syntax) and its bytecode/metadata flow through the Phase-4 combined
+// accessors. Idempotent per process: a second call for an already-registered
+// library (same basename) is a no-op. Throws `LibraryError.duplicateName` if a
+// DIFFERENT directory already claimed this basename (the name-collision hard
+// rule — dir-derived namespaces mean a basename clash would alias two
+// libraries' namespaces).
+//
+// The library's cache lives in its OWN dir (`<rootDir>/.maxon/cache/`), shared
+// across projects, mirroring stdlib. `rootDir` is BOTH the namespace anchor
+// (its basename is the top namespace segment) and the cache-dir root.
+export function registerExternalLibrary(project Project, rootDir FilePath, target Target) throws LibraryError
+	let name = rootDir.filename()
+	let existing = findLibraryByName(name)
+	if existing.found 'already'
+		let other = try libraryRegistry.libs.get(existing.index) otherwise panic("registerExternalLibrary: index {existing.index} vanished")
+		// Same dir re-registered → idempotent no-op. Different dir, same
+		// basename → a hard collision (the namespaces would alias).
+		if other.rootPath.toString() == rootDir.toString() 'sameDir'
+			return
+		end 'sameDir'
+		throw LibraryError.duplicateName(name)
+	end 'already'
+
+	// The user-program registry slot is NOT pre-allocated (the user program is
+	// not a registry entry — Phase 5's chunk cache is project-private), so an
+	// external library is pushed at the current tail. stdlib is index 0; the
+	// first external library is index 1, etc.
+	let libIndex = libraryRegistry.libs.count()
+	libraryRegistry.libs.push(Library.create(name, rootPath: rootDir, cacheDirRoot: rootDir, isStdlib: false))
+
+	// `registerBuiltinTypeBootstrap` is the language runtime surface (every
+	// project needs it) and is idempotent, so it's already been applied by the
+	// stdlib path on this project; calling it again is a safe no-op. We do NOT
+	// call `registerInternalsIntrinsicSignatures` / `seedRuntimeBootstrapStdlibRoots`
+	// (both stdlib-only).
+	registerBuiltinTypeBootstrap(project)
+
+	let metaPath = libraryMetaCachePath(try libraryRegistry.libs.get(libIndex) otherwise panic("registerExternalLibrary: index {libIndex} vanished"), target: target, cacheRootOverride: project.cacheRootOverride)
+	let cachePath = libraryCachePath(try libraryRegistry.libs.get(libIndex) otherwise panic("registerExternalLibrary: index {libIndex} vanished"), target: target, cacheRootOverride: project.cacheRootOverride)
+	let contentChecksum = currentLibraryChecksum(rootDir)
+	let cacheResult = readStdlibCache(project, metaPath: metaPath, targetPath: cachePath, target: target, expectedChecksum: contentChecksum)
+
+	if cacheResult.valid 'cacheHit'
+		logInfo(LogCategory.compiler, message: function() gives "Library cache hit ({name}): {countCompiledStdlibFunctions(cacheResult.data)} functions cached")
+		activateLibraryCache(libIndex, data: cacheResult.data, target: target)
+		setLibraryCacheMetaHash(libIndex, metaHash: cacheResult.metaHash)
+		restoreLibraryMetadata(project, libIndex: libIndex)
+		var hitLib = try libraryRegistry.libs.get(libIndex) otherwise panic("registerExternalLibrary: index {libIndex} vanished at hit publish")
+		hitLib.inlinerStdModule = cacheResult.data.inlinerStdModule
+		hitLib.funcEdges = cacheResult.data.stdFuncEdges
+		hitLib.cachedModule = MaxonModule.create()
+		hitLib.loaded = true
+		try libraryRegistry.libs.set(libIndex, value: hitLib) otherwise panic("registerExternalLibrary: index {libIndex} vanished at hit publish")
+		return
+	end 'cacheHit'
+
+	logInfo(LogCategory.compiler, message: function() gives "Library cache miss ({name}): compiling from source")
+
+	let libFiles = collectLibraryFiles(rootDir)
+	var allModule = MaxonModule.create()
+	for fp in libFiles 'eachFile'
+		if File.exists(fp) 'exists'
+			let content = try File.readText(fp) otherwise 'readErr'
+				logDebug(LogCategory.compiler, message: function() gives "  Failed to read {fp}")
+				continue
+			end 'readErr'
+			// External library files parse with the library's own root as the
+			// namespace anchor (so `<lib>/api/types.maxon` → namespace `<lib>.api`).
+			// UNLIKE stdlib, external library source is USER input, not trusted —
+			// a lex/parse error is a user error to diagnose, not a compiler-bug
+			// panic. `parseLibrarySource` reports diagnostics and returns false on
+			// failure; we surface the first failure to the caller as a thrown
+			// `directoryNotFound`-style error so the build stops cleanly.
+			let ok = parseLibrarySource(project, allModule: allModule, filePath: fp, rootPath: rootDir, content: content)
+			if not ok 'parseFailed'
+				throw LibraryError.parseError(fp)
+			end 'parseFailed'
+		end 'exists'
+	end 'eachFile'
+	applyPendingFuncRenames(project, allModule: allModule)
+	validateEnumLookupCalls(project, allModule: allModule)
+
+	var missLib = try libraryRegistry.libs.get(libIndex) otherwise panic("registerExternalLibrary: index {libIndex} vanished at parse")
+	missLib.cachedModule = allModule
+	snapshotTypealiasesInto(missLib, project: project)
+	try libraryRegistry.libs.set(libIndex, value: missLib) otherwise panic("registerExternalLibrary: index {libIndex} vanished at parse")
+
+	buildAndWriteLibraryCache(project, allModule: allModule, metaPath: metaPath, cachePath: cachePath, contentChecksum: contentChecksum, libIndex: libIndex)
+	// Restore the freshly-built library's metadata into THIS project so the
+	// user pipeline can name + type-check against it (the cache-hit path above
+	// restores it from disk; the from-source path restores it from the just-
+	// activated in-memory cacheData — same seam).
+	restoreLibraryMetadata(project, libIndex: libIndex)
+
+	var doneLib = try libraryRegistry.libs.get(libIndex) otherwise panic("registerExternalLibrary: index {libIndex} vanished at done")
+	doneLib.loaded = true
+	// Like stdlib, the external library is linked from its pre-compiled cache,
+	// so its parsed module must NOT flow into the user pipeline (it would emit
+	// every function twice). Return an empty module from `getLibraryModule`.
+	doneLib.cachedModule = MaxonModule.create()
+	try libraryRegistry.libs.set(libIndex, value: doneLib) otherwise panic("registerExternalLibrary: index {libIndex} vanished at done")
+end 'registerExternalLibrary'
+
+// The (empty) module an already-registered external library contributes to
+// `queryAllModule`. Libraries are linked from their cache, so — exactly like
+// stdlib — they return an empty MaxonModule (their functions live in the cache,
+// not the user pipeline's IR). Present as a seam for symmetry with
+// `getStdlibModule` and a future lazy-parse path.
+export function getLibraryModule(libIndex LibraryIndex) returns MaxonModule
+	return (try libraryRegistry.libs.get(libIndex) otherwise panic("getLibraryModule: registry index {libIndex} missing")).cachedModule
+end 'getLibraryModule'
+
+// The number of registered libraries (stdlib + every external library). Drives
+// `queryAllModule`'s per-library merge loop and `maxon clean`'s full-set sweep.
+export function registeredLibraryCount() returns ElementCount
+	return libraryRegistry.libs.count()
+end 'registeredLibraryCount'
+
+// True when `namespace` is the namespace anchor (or a sub-namespace) of any
+// registered library — stdlib OR an external library. Generalizes
+// `isStdlibNamespace`. Used to gate library-only behaviors (e.g. the Internals
+// carve-out stays stdlib-only via `isStdlib`, but namespace-level checks use
+// this).
+export function isLibraryNamespace(namespace String) returns bool
+	for i in 0 upto libraryRegistry.libs.count() 'eachLib'
+		let lib = try libraryRegistry.libs.get(i) otherwise continue
+		if lib.name == namespace or namespace.startsWith("{lib.name}.") 'match'
+			return true
+		end 'match'
+	end 'eachLib'
+	return false
+end 'isLibraryNamespace'
+
 // Build the stdlib cache by compiling the parsed MaxonModule through the mid
 // pipeline + metadata capture. v80: on NATIVE targets it writes the cache
 // metadata-only (signature stubs, no eager regalloc — the ~7.8s backend tail
 // over ~992 functions is deferred to lazy per-function codegen at link time),
 // then eagerly compiles just the universal runtime floor; on WASM it emits
 // every function eagerly (wasm has no lazy path — see the emit block below).
-function buildAndWriteStdlibCache(project Project, allModule MaxonModule, cachePath FilePath, contentChecksum CacheChecksum)
+// Phase-2 backward-compat wrapper: the stdlib is the library at registry index
+// 0. `getStdlibModule` / `loadCacheForTarget` call this name unchanged; it
+// delegates to the index-parameterized `buildAndWriteLibraryCache` so the
+// stdlib build path stays byte-untouched.
+function buildAndWriteStdlibCache(project Project, allModule MaxonModule, metaPath FilePath, cachePath FilePath, contentChecksum CacheChecksum)
+	buildAndWriteLibraryCache(project, allModule: allModule, metaPath: metaPath, cachePath: cachePath, contentChecksum: contentChecksum, libIndex: 0)
+end 'buildAndWriteStdlibCache'
+
+// Phase 6: build and write a registered library's cache (Tier A metadata + Tier
+// B inlinable Std IR + Tier C linkable bytecode) by compiling its parsed
+// MaxonModule through the mid pipeline + metadata capture. Generalizes the old
+// stdlib-only `buildAndWriteStdlibCache` over the registry index. The library's
+// `isStdlib` flag (read from the registry) gates the three stdlib-only legs:
+//   - the native runtime-body splice (external libs resolve `mrt_*`/`mm_*` by
+//     name against stdlib's cache through the Phase-4 union — they carry no
+//     runtime bodies of their own),
+//   - the metadata-only signature-stub + lazy-floor native emit (v80 lazy
+//     codegen is stdlib-pinned process-global state; external libs emit their
+//     full native bytecode eagerly here instead),
+//   - the eager runtime FLOOR compile (stdlib-only — external libs have no
+//     floor).
+// Everything else — the shared mid/late pass pipeline, metadata capture, and
+// the two-file cache write — is identical for every library. At `libIndex == 0`
+// with `isStdlib == true` the behavior is byte-identical to the old function.
+function buildAndWriteLibraryCache(project Project, allModule MaxonModule, metaPath FilePath, cachePath FilePath, contentChecksum CacheChecksum, libIndex LibraryIndex)
+	let buildingLib = try libraryRegistry.libs.get(libIndex) otherwise panic("buildAndWriteLibraryCache: registry index {libIndex} missing")
+	let isStdlib = buildingLib.isStdlib
+	let libName = buildingLib.name
 	var globalData = createGlobalDataTable()
 	let sourceFileName = ""
 
-	// Stdlib pipeline is flagged `isStdlib: true` so that lowerMaxonToStd
-	// prefixes its panic-message labels with `__stdlib_panic_msg_` instead
-	// of `__panic_msg_`, keeping stdlib and user panic labels in disjoint
-	// link-time namespaces.
-	var pipeline = PassPipeline.create(allModule, project: project, globalData: globalData, target: project.target, sourceFileName: sourceFileName, isStdlib: true)
+	// Capture the external library's OWN function names BEFORE the pipeline runs.
+	// The pipeline pulls in stdlib bodies (monomorphized generics, inlined
+	// accessors) via the project's restored stdlib state, so `pipeline.mirModule`
+	// after lowering carries far more than the library defines. Those stdlib
+	// functions already live in stdlib's cache; re-emitting them into THIS
+	// library's cache would duplicate definitions at link. So an external lib
+	// emits only the functions it declares (`ownFuncNames`). (stdlib is the base
+	// library — it emits everything, so this set is unused on the stdlib path.)
+	var ownFuncNames = StringSet.create()
+	if not isStdlib 'collectOwn'
+		for func in allModule.functions 'eachOwn'
+			ownFuncNames.insert(func.name)
+		end 'eachOwn'
+	end 'collectOwn'
+
+	// `isStdlib` gates the semantic-check skips (stdlib source is trusted and
+	// has no `main()`); it no longer affects panic-message labels (those are
+	// content-hashed and dedupe across pipelines — see `panicLabelFor`).
+	var pipeline = PassPipeline.create(allModule, project: project, globalData: globalData, target: project.target, sourceFileName: sourceFileName, isStdlib: isStdlib)
 
 	// Phases 2-5: shared across all targets (through MIR)
 	// resolveTypes drains the unresolvedTypealiases registry (populated by
@@ -810,7 +1328,11 @@ function buildAndWriteStdlibCache(project Project, allModule MaxonModule, cacheP
 	// `emitWasmModule`'s type-section build. The win on wasm is also
 	// smaller because wasm doesn't go through commuteForCoalescing /
 	// scheduleInstructions / lowerMirToTarget / allocateRegisters.
-	if not isWasm 'spliceRuntime'
+	// STDLIB-ONLY: only stdlib's cache carries the project-independent runtime
+	// bodies. External libraries' calls into `mrt_*`/`mm_*`/`__slab_*` resolve
+	// by name against stdlib's cache through the Phase-4 combined union at link
+	// time, so they must NOT splice (or re-emit) runtime bodies of their own.
+	if isStdlib and not isWasm 'spliceRuntime'
 		let runtimeForCache = buildCacheSideRuntime(loadRuntimeModule())
 		pipeline.stdModule.merge(runtimeForCache)
 	end 'spliceRuntime'
@@ -851,10 +1373,10 @@ function buildAndWriteStdlibCache(project Project, allModule MaxonModule, cacheP
 	// immediately-following user pipeline run) and into the cache buffer (for
 	// next-run cache hits).
 	let stdFuncEdges = buildStdFuncEdgeMap(pipeline.stdModulePostDceSnapshot)
-	var edgeLib = stdlibLib()
+	var edgeLib = try libraryRegistry.libs.get(libIndex) otherwise panic("buildAndWriteLibraryCache: registry index {libIndex} missing at edge publish")
 	edgeLib.inlinerStdModule = pipeline.stdModulePostDceSnapshot
 	edgeLib.funcEdges = stdFuncEdges
-	setStdlibLib(edgeLib)
+	try libraryRegistry.libs.set(libIndex, value: edgeLib) otherwise panic("buildAndWriteLibraryCache: registry index {libIndex} vanished at edge publish")
 
 	// Build cache data
 	let metaStart = passTimerStart()
@@ -863,6 +1385,12 @@ function buildAndWriteStdlibCache(project Project, allModule MaxonModule, cacheP
 	captureStdlibMetadata(project, data: cacheData)
 	cacheData.inlinerStdModule = pipeline.stdModulePostDceSnapshot
 	cacheData.stdFuncEdges = stdFuncEdges
+	// v84 (Phase 7): record each function's post-inline content hash + declaring
+	// file so a later incremental rebuild can PRESERVE the Tier-C bytecode of
+	// functions whose hash is unchanged (`preserveUnchangedTierC`). Iterates the
+	// SAME `pipeline.mirModule` the stub/emit pass below iterates, so the keyspace
+	// matches the cache's `functions` / `wasmFunctions` exactly.
+	captureFuncContentHashes(project, data: cacheData)
 	recordPassSince("__stdlib-captureMetadata", startMs: metaStart)
 
 	// Emit per-function bytecode (dispatched by target).
@@ -901,38 +1429,130 @@ function buildAndWriteStdlibCache(project Project, allModule MaxonModule, cacheP
 	// Wasm stays EAGER: its runtime sigs come from the user pipeline's
 	// `injectRuntimeSignatures` (not the cache), so the native signature-stub +
 	// lazy-backend mechanism doesn't apply. Emit every wasm function now.
-	if isWasm 'emitWasm'
+	if isWasm and isStdlib 'emitWasmStdlib'
 		let wasmEmitStart = passTimerStart()
-		cacheData.wasmFunctions = emitWasmPerFunction(pipeline.mirModule, globalData: pipeline.globalData).filter(function(func) gives not isRuntimeFunctionName(func.name))
+		// stdlib emits every non-runtime function (its module defines every callee
+		// it references). v84 (Phase 7): on a REBUILD, PRESERVE the unchanged wasm
+		// bodies from the prior on-disk cache (gated on the per-function content
+		// hash) and EMIT only the changed/new functions — the wasm analogue of the
+		// native preservation. Wasm is eager (no lazy path), so the preserved bodies
+		// are full bytecode; their name-keyed fixups re-resolve at final link.
+		cacheData.wasmFunctions = preserveUnchangedWasm(pipeline.mirModule, globalData: pipeline.globalData, newHashes: cacheData.funcContentHash, oldTargetPath: cachePath, target: project.target)
 		recordPassSince("__stdlib-emitWasm", startMs: wasmEmitStart)
-		logInfo(LogCategory.compiler, message: function() gives "Wrote stdlib cache: {cacheData.wasmFunctions.count()} WASM functions to {cachePath}")
-	end 'emitWasm' else 'nativeStubs'
+		logInfo(LogCategory.compiler, message: function() gives "Wrote library cache ({libName}): {cacheData.wasmFunctions.count()} WASM functions to {cachePath}")
+	end 'emitWasmStdlib' else if isWasm 'emitWasmExternal'
+		// EXTERNAL LIBRARY wasm: emit ONLY the library's own functions. The
+		// pipeline pulled stdlib bodies into `pipeline.mirModule`, but those live
+		// in stdlib's own cache — re-emitting would double-define at link. Wasm
+		// cached functions are name-relocatable: their `callFixups` / `typeFixups`
+		// / `funcAddrFixups` / `globalAddrFixups` store NAMES (not baked indices)
+		// and are re-resolved at final link (`emitWasmModule`) against the merged
+		// function / type / data tables, so the library's functions link against
+		// stdlib's separately-cached bodies by name — exactly like the native path.
+		// Seed `extraCalleeSigs` from stdlib's cached wasm functions so a callee a
+		// library body references but that wasn't pulled into the library's MIR
+		// still gets a placeholder index minted at emit time (overwritten at link).
+		let wasmEmitStart = passTimerStart()
+		let stdlibWasm = (try libraryRegistry.libs.get(0) otherwise panic("buildAndWriteLibraryCache: stdlib (index 0) not registered for wasm extern emit")).cacheData.wasmFunctions
+		cacheData.wasmFunctions = emitWasmPerFunctionFiltered(pipeline.mirModule, globalData: pipeline.globalData, onlyOwnNames: ownFuncNames, emitAll: false, extraCalleeSigs: stdlibWasm).filter(function(func) gives not isRuntimeFunctionName(func.name))
+		recordPassSince("__stdlib-emitWasm", startMs: wasmEmitStart)
+		logInfo(LogCategory.compiler, message: function() gives "Wrote library cache ({libName}): {cacheData.wasmFunctions.count()} WASM functions to {cachePath}")
+	end 'emitWasmExternal' else if isStdlib 'nativeStubs'
+		// STDLIB native: write SIGNATURE-ONLY stubs (v80 lazy codegen). The user
+		// build fills each reached stub's real bytecode on demand at link time.
 		cacheData.functions = buildSignatureStubs(pipeline.mirModule)
+		// v84 (Phase 7): on a REBUILD (the old target file is still on disk at
+		// `cachePath` until the write below overwrites it), preserve the
+		// lazily-compiled Tier-C bytecode of every function whose content hash is
+		// unchanged — filling its fresh stub slot with the real body instead of
+		// throwing it away and forcing a re-regalloc. The per-function content
+		// hash is the gate (a changed function's hash flips; an inlined-callee
+		// change flips the caller's hash too, because the hash is op-content-deep
+		// over the post-DCE Std IR the body lowers from). No-op on a first-ever
+		// cold build (no old file).
+		preserveUnchangedTierC(cacheData, oldTargetPath: cachePath, target: project.target)
 		logInfo(LogCategory.compiler, message: function() gives "Wrote stdlib cache (metadata-only): {cacheData.functions.count()} signature stubs, bytecode compiled lazily on demand -> {cachePath}")
-	end 'nativeStubs'
+	end 'nativeStubs' else 'nativeEager'
+		// EXTERNAL LIBRARY native: emit every function's full bytecode EAGERLY.
+		// The v80 lazy-codegen machinery is stdlib-pinned process-global state
+		// (`lazyStdlibMir*`), so an external lib cannot use the signature-stub +
+		// lazy-fill path. Eager emit is sound: an external function's calls into
+		// stdlib/runtime resolve by name through `combinedLibraryCache()`'s
+		// name-keyed union at link time, and the external lib carries no runtime
+		// bodies of its own. (Phase 7 generalizes the lazy state per-library.)
+		cacheData.functions = emitLibraryNativeEager(pipeline.mirModule, target: project.target, globalData: pipeline.globalData, ownFuncNames: ownFuncNames)
+		logInfo(LogCategory.compiler, message: function() gives "Wrote library cache ({libName}): {cacheData.functions.count()} native functions to {cachePath}")
+	end 'nativeEager'
 
-	// Write to disk and activate cache for subsequent compilations in this process
+	// Write to disk and activate cache for subsequent compilations in this process.
+	// Phase 3: the cold build produces full Tier A+B+C, so it writes BOTH files —
+	// the shared meta file first (returning the content-hash) and the per-target
+	// file stamped with that hash. The meta-hash is recorded on the stdlib Library
+	// so a later cross-compile to another target can pair its target file with the
+	// SAME meta file (see `loadCacheForTarget`).
 	let writeStart = passTimerStart()
-	writeStdlibCache(cachePath, data: cacheData, target: project.target, contentChecksum: contentChecksum)
+	let metaHash = writeLibraryMetaCache(metaPath, data: cacheData, target: project.target, contentChecksum: contentChecksum)
+	if metaHash != 0 'metaWritten'
+		writeLibraryTargetCache(cachePath, data: cacheData, target: project.target, contentChecksum: contentChecksum, metaHash: metaHash)
+	end 'metaWritten'
+	setLibraryCacheMetaHash(libIndex, metaHash: metaHash)
 	recordPassSince("__stdlib-writeCache", startMs: writeStart)
-	activateStdlibCache(cacheData, target: project.target)
+	activateLibraryCache(libIndex, data: cacheData, target: project.target)
 
-	// v80: on native, eagerly compile the universal runtime FLOOR (the functions
-	// every native program links — the `mrt_*`/`mm_*`/`__slab_*` runtime + entry
-	// machinery) into the just-written cache. This runs in the STDLIB BUILD
-	// project, whose interner holds the metadata's constant string ids, so the
-	// re-serialize (inside `ensureStdlibFunctionsCompiled`, when persist is
-	// allowed) is safe. The payoff: the very next build of ANY program finds the
-	// floor already compiled on disk and lazily compiles nothing for a
+	// STDLIB-ONLY: on native, eagerly compile the universal runtime FLOOR (the
+	// functions every native program links — the `mrt_*`/`mm_*`/`__slab_*`
+	// runtime + entry machinery) into the just-written cache. This runs in the
+	// STDLIB BUILD project, whose interner holds the metadata's constant string
+	// ids, so the re-serialize (inside `ensureStdlibFunctionsCompiled`, when
+	// persist is allowed) is safe. The payoff: the very next build of ANY program
+	// finds the floor already compiled on disk and lazily compiles nothing for a
 	// stdlib-free program — a sub-500ms warm `return 0`. Program-specific
-	// functions a user build reaches beyond the floor are compiled (and, on a
-	// CLI build, persisted) lazily by the user-build link path.
-	if not isWasm 'eagerFloor'
+	// functions a user build reaches beyond the floor are compiled (and, on a CLI
+	// build, persisted) lazily by the user-build link path. External libraries
+	// emit all their bytecode eagerly above and have no runtime floor, so they
+	// skip this entirely.
+	if isStdlib and not isWasm 'eagerFloor'
 		var floorSeeds = StringArray.create()
 		appendX64EagerFloorSeeds(floorSeeds, os: project.target.os)
 		ensureStdlibFunctionsCompiled(project, seeds: floorSeeds)
 	end 'eagerFloor'
-end 'buildAndWriteStdlibCache'
+end 'buildAndWriteLibraryCache'
+
+// Emit full native bytecode for every function in an external library's lowered
+// MIR module (no lazy stubs — see the `nativeEager` branch in
+// `buildAndWriteLibraryCache`). Runs the same per-function backend tail the v80
+// lazy stdlib path uses (`runNativeBackendTail`: lower → regalloc →
+// prologue/epilogue → emit), but over the WHOLE module at once and against an
+// EMPTY `stdlibFunctions` table — the external lib defines none of stdlib's
+// functions; its calls into them resolve by name through the Phase-4 union at
+// link time. Runtime functions are filtered out (the external lib carries none;
+// the filter is defensive, mirroring the wasm path).
+function emitLibraryNativeEager(mirModule MirModule, target Target, globalData GlobalDataTable, ownFuncNames StringSet) returns ObjectFunctionArray
+	// Emit ONLY the library's own functions. The pipeline pulls stdlib bodies
+	// (monomorphized generics, inlined accessors) into `mirModule`; those already
+	// live in stdlib's cache, so re-emitting them here would double-define them at
+	// link. Runtime functions are excluded too (the external lib carries none).
+	var funcsToLower = IrFunctionArray.create()
+	for func in mirModule.functions 'eachFunc'
+		if isRuntimeFunctionName(func.name) or not ownFuncNames.contains(func.name) 'notOwn'
+			continue
+		end 'notOwn'
+		funcsToLower.push(func)
+	end 'eachFunc'
+	// The backend resolves each callee's param types from the `stdlibFunctions`
+	// table (`lookupFuncParamTypes`). An external library's functions call into
+	// stdlib (and may pull stdlib generics transitively), so pass stdlib's cached
+	// function table — the signature stubs are enough for callee-signature
+	// resolution; the actual stdlib bodies are linked by name at the final
+	// `writeExecutable` via the Phase-4 union. (Index 0 is stdlib, already
+	// activated before any external library is registered.)
+	let stdlibFuncs = (try libraryRegistry.libs.get(0) otherwise panic("emitLibraryNativeEager: stdlib (index 0) not registered")).cacheData.functions
+	match target.cpu 'arch'
+		x64 then return runNativeBackendTail(X64Backend.create(mirModule, target: target, globalData: globalData, stdlibFunctions: stdlibFuncs), funcsToLower: funcsToLower, target: target)
+		arm64 then return runNativeBackendTail(Arm64Backend.create(mirModule, target: target, globalData: globalData, stdlibFunctions: stdlibFuncs), funcsToLower: funcsToLower, target: target)
+		default panic("emitLibraryNativeEager: non-native target reached eager native emit")
+	end 'arch'
+end 'emitLibraryNativeEager'
 
 // Load `runtime.std` and push signature-only entries (name, paramCount,
 // paramTypes, returnType) for every runtime function into the stdlib
@@ -1017,16 +1637,20 @@ function loadCacheForTarget(project Project)
 		return
 	end 'noStdlib'
 
-	// Phase 2: same library-owned cache dir as the initial load, now keyed by
-	// the NEW target (cross-compile switch) plus the compiler fingerprint.
-	let cachePath = libraryCachePath(stdlibLib(), target: project.target)
+	// Phase 3: same library-owned cache dir, keyed by the NEW target for the
+	// per-target (Tier C) file; the shared meta (Tier A+B) file is
+	// target-independent, so a previous target's build already wrote it and this
+	// cross-compile reads + reuses it (case 2 of the cold/partial lifecycle).
+	let metaPath = libraryMetaCachePath(stdlibLib(), target: project.target, cacheRootOverride: project.cacheRootOverride)
+	let cachePath = libraryCachePath(stdlibLib(), target: project.target, cacheRootOverride: project.cacheRootOverride)
 	let contentChecksum = currentStdlibChecksum(project.target)
 
-	let cacheResult = readStdlibCache(project, path: cachePath, target: project.target, expectedChecksum: contentChecksum)
+	let cacheResult = readStdlibCache(project, metaPath: metaPath, targetPath: cachePath, target: project.target, expectedChecksum: contentChecksum)
 
 	if cacheResult.valid 'cacheHit'
 		logInfo(LogCategory.compiler, message: function() gives "Stdlib cache hit for {targetToString(project.target)}: {countCompiledStdlibFunctions(cacheResult.data)} of {cacheResult.data.functions.count()} native functions have bytecode (rest deferred stubs) + {cacheResult.data.wasmFunctions.count()} WASM functions")
 		activateStdlibCache(cacheResult.data, target: project.target)
+		setStdlibCacheMetaHash(cacheResult.metaHash)
 		return
 	end 'cacheHit'
 
@@ -1055,7 +1679,7 @@ function loadCacheForTarget(project Project)
 	validateEnumLookupCalls(project, allModule: allModule)
 
 	logInfo(LogCategory.compiler, message: function() gives "Stdlib cache miss for {targetToString(project.target)}: building")
-	buildAndWriteStdlibCache(project, allModule: allModule, cachePath: cachePath, contentChecksum: contentChecksum)
+	buildAndWriteStdlibCache(project, allModule: allModule, metaPath: metaPath, cachePath: cachePath, contentChecksum: contentChecksum)
 end 'loadCacheForTarget'
 
 export function getStdlibCacheData() returns StdlibCacheData
@@ -1063,14 +1687,63 @@ export function getStdlibCacheData() returns StdlibCacheData
 end 'getStdlibCacheData'
 
 function activateStdlibCache(data StdlibCacheData, target Target)
-	var lib = stdlibLib()
+	activateLibraryCache(0, data: data, target: target)
+end 'activateStdlibCache'
+
+// Phase 6: activate a registered library's just-loaded / just-built cache for
+// the current target. Generalizes `activateStdlibCache` over the registry
+// index — stdlib is index 0 (so `activateStdlibCache` is the index-0 delegate
+// above, keeping every stdlib call site byte-untouched); external libraries use
+// their own index. Mutates the registry's Library in place (value-type copy
+// semantics — read, mutate scalars, set back).
+function activateLibraryCache(libIndex LibraryIndex, data StdlibCacheData, target Target)
+	var lib = try libraryRegistry.libs.get(libIndex) otherwise panic("activateLibraryCache: registry index {libIndex} missing")
 	lib.cacheData = data
 	lib.cacheValid = true
 	lib.cacheCpuOrd = target.cpu.ordinal
 	lib.cacheOsOrd = target.os.ordinal
 	lib.cacheTargetSet = true
-	setStdlibLib(lib)
-end 'activateStdlibCache'
+	try libraryRegistry.libs.set(libIndex, value: lib) otherwise panic("activateLibraryCache: registry index {libIndex} vanished")
+end 'activateLibraryCache'
+
+// Phase 4: restore one registered library's cached parser metadata into
+// `project`, then seed its module-init funcs from its liveness roots. This is
+// the per-library seam Phase 6 loops over (stdlib-first); today the only
+// registered library is stdlib at index 0, so it's called once with that
+// index. Pulling `cacheData` from the registry array (rather than a
+// `lib.cacheData` field copy) yields a mutable binding `restoreStdlibMetadata`
+// can write its `writerGidToProjectGid` rebuild through — the reference-backed
+// Maps/Arrays alias the registry's shared heap storage, so the mutations
+// persist without a set-back. The library's `cacheData` must already be
+// activated for `libIndex`.
+function restoreLibraryMetadata(project Project, libIndex LibraryIndex)
+	var cacheData = (try libraryRegistry.libs.get(libIndex) otherwise panic("restoreLibraryMetadata: registry index {libIndex} missing")).cacheData
+	restoreStdlibMetadata(project, data: cacheData)
+	seedModuleInitFuncsFromLivenessRoots(project)
+end 'restoreLibraryMetadata'
+
+// Phase 3: record / read the META file content-hash the stdlib's in-memory
+// `cacheData` corresponds to (see `Library.cacheMetaHash`).
+function setStdlibCacheMetaHash(metaHash MachineWord)
+	setLibraryCacheMetaHash(0, metaHash: metaHash)
+end 'setStdlibCacheMetaHash'
+
+// Phase 6: record the META file content-hash a registered library's in-memory
+// `cacheData` corresponds to (see `Library.cacheMetaHash`). Generalizes
+// `setStdlibCacheMetaHash` over the registry index; stdlib is index 0.
+function setLibraryCacheMetaHash(libIndex LibraryIndex, metaHash MachineWord)
+	var lib = try libraryRegistry.libs.get(libIndex) otherwise panic("setLibraryCacheMetaHash: registry index {libIndex} missing")
+	lib.cacheMetaHash = metaHash
+	try libraryRegistry.libs.set(libIndex, value: lib) otherwise panic("setLibraryCacheMetaHash: registry index {libIndex} vanished")
+end 'setLibraryCacheMetaHash'
+
+// Exported so the Phase-5 user chunk cache memoizes its upstream-API digest
+// keyed by the loaded stdlib's meta-hash (the content identity of the library
+// API it digests). 0 means no meta-hash is recorded yet (cold from-source
+// build) — the caller treats 0 as "don't memoize".
+export function getStdlibCacheMetaHash() returns MachineWord
+	return stdlibLib().cacheMetaHash
+end 'getStdlibCacheMetaHash'
 
 module function isStdlibCacheValid() returns bool
 	return stdlibLib().cacheValid
@@ -1097,6 +1770,27 @@ end 'buildStdFuncEdgeMap'
 // ============================================================
 // v80 lazy per-function stdlib codegen
 // ============================================================
+
+// v84 (Phase 7): record each library function's Std-IR content hash into the
+// cache, for incremental Tier-C preservation across a source edit.
+//
+// The gate hash MUST be over the exact Std IR that produces the function's
+// Tier-C bytecode. Native lazy codegen reconstructs its MIR from
+// `inlinerStdModule` (the post-DCE Std snapshot, `ensureLazyStdlibMir` ~1796) and
+// the cache-side runtime splice, then lowers each function to MIR + regalloc. So
+// `F`'s bytecode is a deterministic function of `F`'s body in `inlinerStdModule`
+// (or the runtime module). We hash each snapshot function via
+// `computeStdContentHashFor` — the op-content-deep Std hash. Functions present
+// in the MIR module but absent from the snapshot are the spliced RUNTIME bodies
+// (`mrt_*`/`mm_*`/`__slab_*`): project-independent and invariant across stdlib
+// SOURCE edits, so they carry no hash entry and are always preserved by the
+// "no old hash AND no new hash → unchanged" rule in `preserveUnchangedTierC`.
+function captureFuncContentHashes(project Project, data StdlibCacheData)
+	let snapshot = data.inlinerStdModule
+	for func in snapshot.functions 'eachSnap'
+		data.funcContentHash.upsert(func.name, value: computeStdContentHashFor(project, module: snapshot, func: func))
+	end 'eachSnap'
+end 'captureFuncContentHashes'
 
 // Build signature-only `ObjectFunction` stubs (name + return type + param
 // count/types, empty code/fixups) from the lowered MIR module, one per
@@ -1264,7 +1958,7 @@ end 'syncLazyCompiledNames'
 // opposed to v80 signature-only stubs (empty `code`, bytecode still deferred).
 // Used for honest cache-hit logging — `functions.count()` alone counts stubs
 // as if they were compiled.
-function countCompiledStdlibFunctions(data StdlibCacheData) returns MachineWord
+export function countCompiledStdlibFunctions(data StdlibCacheData) returns MachineWord
 	var n = 0
 	for func in data.functions 'eachFunc'
 		if func.code.count() > 0 'hasCode'
@@ -1412,8 +2106,10 @@ module function ensureStdlibFunctionsCompiled(project Project, seeds StringArray
 	// spec runner's cross-project workers — reuses the just-compiled bytecode
 	// (zero regalloc). Safe from any project since Phase 3.5 made the cache codec
 	// project-independent. Only reached when functions were actually compiled
-	// (the fully-warm hit returns early above), so steady state writes nothing;
-	// `writeFileAtomic` makes concurrent writers last-writer-wins, never torn.
+	// (the fully-warm hit returns early above), so steady state writes nothing.
+	// `persistGrownStdlibCache` re-reads + merges the on-disk Tier-C set before
+	// the atomic write, so concurrent writers converge to the UNION of every
+	// project's lazily-grown functions instead of clobbering each other.
 	persistGrownStdlibCache(project)
 
 	recordPassSince("__stdlib-lazyCodegen", startMs: lazyStart)
@@ -1433,21 +2129,252 @@ function persistGrownStdlibCache(project Project)
 	if lib.cacheDirRoot.isEmpty() 'noPath'
 		return
 	end 'noPath'
-	let cachePath = libraryCachePath(lib, target: project.target)
+	let cachePath = libraryCachePath(lib, target: project.target, cacheRootOverride: project.cacheRootOverride)
 	let contentChecksum = currentStdlibChecksum(project.target)
-	// v81 (Phase 3.5, Step 5): re-serialize the cache's authoritative id-space
-	// snapshots VERBATIM. They were established complete at cache-build (the whole
-	// stdlib is resolved before the signature stubs are written) and are NOT grown
-	// by the lazy work this persist follows — lazy codegen fills only name-keyed
-	// Tier-C bytecode (`cacheData.functions`), lowering already-resolved cached
-	// Std-IR to machine code without interning any new TypeNameId / StringId /
-	// GenericInstanceId into the cache. Crucially we must NOT append the project's
-	// id-space tail here: by persist time `project.genericInstances` /
-	// `project.typeNames` also carry the USER PROGRAM's ids, which do not belong in
-	// the stdlib cache. The complete-at-build snapshots in `data` are the correct,
-	// stdlib-only source (see the Step 5 note in StdlibCache.maxon).
-	writeStdlibCache(cachePath, data: lib.cacheData, target: project.target, contentChecksum: contentChecksum)
+	// Phase 3: lazy codegen fills ONLY name-keyed Tier-C bytecode
+	// (`cacheData.functions`) — it lowers already-resolved cached Std IR to machine
+	// code without interning any new TypeNameId / StringId / GenericInstanceId, so
+	// Tier A+B (the meta file) is unchanged. We therefore rewrite ONLY the
+	// per-target (Tier C) file, pairing it with the meta file we already loaded via
+	// its recorded content-hash. (v81 Phase 3.5 note: `data`'s id-space snapshots
+	// are the complete-at-build, stdlib-only source — we must NOT append the
+	// project's id-space tail, which by persist time also carries the user
+	// program's ids.)
+	let metaHash = getStdlibCacheMetaHash()
+	if metaHash == 0 'noMetaHash'
+		// No meta-hash on record (the cache was never read/written this process):
+		// can't safely pair a target file to a meta file, so skip the persist. The
+		// next from-source build regenerates both.
+		return
+	end 'noMetaHash'
+
+	// Read-modify-write MERGE (cross-project convergence fix): another process
+	// may have grown the on-disk cache with DIFFERENT functions since we loaded
+	// it (project A compiled `Array.concat`, we compiled `Map.insert`). A plain
+	// whole-file overwrite is last-writer-wins and drops the other's growth, so
+	// the shared cache oscillates instead of accumulating the union every project
+	// needs. Re-read the on-disk Tier-C bytecode and adopt any real-code function
+	// we still hold only as a stub, so the file we write is the UNION.
+	mergeOnDiskGrownStdlibFunctions(project.target, cacheRootOverride: project.cacheRootOverride, contentChecksum: contentChecksum, metaHash: metaHash)
+
+	writeLibraryTargetCache(cachePath, data: lib.cacheData, target: project.target, contentChecksum: contentChecksum, metaHash: metaHash)
 end 'persistGrownStdlibCache'
+
+// v84 (Phase 7): the count of bodies the most recent `preserveUnchangedTierC`
+// call adopted from the prior on-disk cache. Exported for the test harness /
+// CACHE_STATS so a scenario can assert preservation actually happened (and how
+// much). Reset at the top of each `preserveUnchangedTierC`.
+export var lastPreservedTierCCount = 0 as ElementCount
+
+// v84 (Phase 7): on a stdlib REBUILD, adopt the lazily-compiled Tier-C bodies of
+// every function whose CONTENT HASH is unchanged from the prior on-disk cache,
+// filling its fresh signature stub with the real (post-regalloc) body instead of
+// discarding it and forcing a re-regalloc on the next link. `cacheData` carries
+// the freshly-built stubs + the NEW `funcContentHash` map; `oldTargetPath` is the
+// prior target file (still on disk until the write that follows this call).
+//
+// Gate: the per-function content hash. `data.funcContentHash[name]` (new) ==
+// `old.funcContentHash[name]` (old) means the function's post-DCE Std IR — the
+// exact input to its lazy lower+regalloc — is identical, so its already-compiled
+// bytecode is byte-compatible and adopted. A changed function's hash flips; a
+// function that inlined a changed callee flips too (the hash is op-content-deep
+// over the post-DCE body). Runtime bodies carry no hash entry on either side, so
+// the `try ... otherwise continue` skips them (they are project-independent and
+// recompiled fresh — cheap, and not the target of this optimization).
+//
+// Like `mergeOnDiskGrownStdlibFunctions`, this fills EXISTING stub slots by name
+// (no reorder → stub-ordered `.text` parity preserved) and unions the old
+// globalData so adopted bodies' `rdataRelocs` resolve. It also seeds
+// `lazyCompiledStdlibNames` so the subsequent lazy fill skips the adopted bodies.
+// No-op on a first-ever cold build (no old file → empty read).
+function preserveUnchangedTierC(cacheData StdlibCacheData, oldTargetPath FilePath, target Target)
+	lastPreservedTierCCount = 0
+	let old = readOldTierCForPreserve(oldTargetPath, target: target)
+	if old.functions.count() == 0 'noOld'
+		return
+	end 'noOld'
+
+	// Index the fresh stubs by name (cacheData is a local, not yet in the
+	// registry, so `buildCacheFuncIndex` — which reads the registry — can't serve).
+	var index = StdlibFuncIndexMap.create()
+	for (iter, func) in cacheData.functions.withIterator() 'eachStub'
+		index.upsert(func.name, value: iter.index())
+	end 'eachStub'
+
+	var adoptedAny = false
+	for oldFunc in old.functions 'eachOld'
+		if oldFunc.code.count() == 0 'oldStub'
+			continue
+		end 'oldStub'
+		let oldHash = try old.funcContentHash.get(oldFunc.name) otherwise continue
+		let newHash = try cacheData.funcContentHash.get(oldFunc.name) otherwise continue
+		if oldHash != newHash 'changed'
+			continue
+		end 'changed'
+		if let slot = try index.get(oldFunc.name) 'fill'
+			try cacheData.functions.set(slot, value: oldFunc) otherwise continue
+			lazyCompiledStdlibNames.insert(oldFunc.name)
+			lastPreservedTierCCount = lastPreservedTierCCount + 1
+			adoptedAny = true
+		end 'fill'
+	end 'eachOld'
+
+	if adoptedAny 'unionGlobals'
+		mergeGrownGlobalDataInto(cacheData, source: old.globalData)
+	end 'unionGlobals'
+
+	if lastPreservedTierCCount > 0 'logIt'
+		logInfo(LogCategory.compiler, message: function() gives "Phase 7: preserved {lastPreservedTierCCount} unchanged stdlib function bodies across rebuild (skipped re-regalloc)")
+	end 'logIt'
+end 'preserveUnchangedTierC'
+
+// v84 (Phase 7): the WASM analogue of `preserveUnchangedTierC`. Wasm emits
+// eagerly (no lazy path), so on a REBUILD we PRESERVE the unchanged wasm bodies
+// from the prior on-disk cache and EMIT only the changed/new functions, then
+// return the union. Gate: the per-function content hash (a function whose new
+// hash == its old hash has identical post-DCE Std IR → identical wasm bytecode →
+// adopt the old body; a missing old hash, missing old body, or hash change → it
+// is in the recompute set and gets re-emitted). Wasm cached bodies are
+// name-relocatable (call/type/funcAddr/globalAddr fixups store names, resolved at
+// final link), so a preserved body links correctly alongside re-emitted siblings.
+// On a first-ever cold build (no old file) every function is "changed" → full
+// emit, identical to the pre-Phase-7 behavior.
+function preserveUnchangedWasm(mirModule MirModule, globalData GlobalDataTable, newHashes FuncContentHashMap, oldTargetPath FilePath, target Target) returns WasmObjectFunctionArray
+	lastPreservedTierCCount = 0
+	let old = readOldTierCForPreserve(oldTargetPath, target: target)
+
+	// Build the set of names to RE-EMIT: a function whose new hash differs from
+	// (or is absent in) the old cache, OR whose old wasm body is missing. The
+	// complement (present old body + unchanged hash) is preserved.
+	var oldWasmByName = WasmObjectFunctionByName.create()
+	for f in old.wasmFunctions 'indexOld'
+		oldWasmByName.upsert(f.name, value: f)
+	end 'indexOld'
+
+	// First pass: decide preserve-vs-recompute per function, in `mirModule` order.
+	var recompute = StringSet.create()
+	for func in mirModule.functions 'eachFunc'
+		if isRuntimeFunctionName(func.name) 'isRuntime'
+			continue
+		end 'isRuntime'
+		let newHash = try newHashes.get(func.name) otherwise 'noNewHash'
+			// No content hash → cannot reason per-function; re-emit to be safe.
+			recompute.insert(func.name)
+			continue
+		end 'noNewHash'
+		if old.funcContentHash.contains(func.name) and oldWasmByName.contains(func.name) 'haveOld'
+			let oldHash = try old.funcContentHash.get(func.name) otherwise 0 as ContentHash
+			if oldHash == newHash 'unchanged'
+				continue
+			end 'unchanged'
+		end 'haveOld'
+		recompute.insert(func.name)
+	end 'eachFunc'
+
+	// Emit ONLY the recompute set (everything on a cold build with no old data).
+	// `extraCalleeSigs` empty: the stdlib module defines every callee.
+	var emittedByName = WasmObjectFunctionByName.create()
+	for f in emitWasmPerFunctionFiltered(mirModule, globalData: globalData, onlyOwnNames: recompute, emitAll: false, extraCalleeSigs: WasmObjectFunctionArray.create()) 'indexEmitted'
+		emittedByName.upsert(f.name, value: f)
+	end 'indexEmitted'
+
+	// Second pass: assemble the result in `mirModule` order (IDENTICAL ordering to
+	// a full `emitWasmPerFunction`, so the target cache is byte-parity-safe vs a
+	// from-scratch rebuild). Each non-runtime function is either freshly emitted
+	// (recompute set) or its preserved old body.
+	var result = WasmObjectFunctionArray.create()
+	for func in mirModule.functions 'assemble'
+		if isRuntimeFunctionName(func.name) 'isRuntime2'
+			continue
+		end 'isRuntime2'
+		if let emitted = try emittedByName.get(func.name) 'wasEmitted'
+			result.push(emitted)
+		end 'wasEmitted' else 'preserve'
+			let oldFunc = try oldWasmByName.get(func.name) otherwise continue
+			result.push(oldFunc)
+			lastPreservedTierCCount = lastPreservedTierCCount + 1
+		end 'preserve'
+	end 'assemble'
+
+	if lastPreservedTierCCount > 0 'logIt'
+		logInfo(LogCategory.compiler, message: function() gives "Phase 7: preserved {lastPreservedTierCCount} unchanged stdlib wasm function bodies across rebuild (skipped re-emit)")
+	end 'logIt'
+	return result
+end 'preserveUnchangedWasm'
+
+// Adopt every real-code function from the on-disk Tier-C cache that the
+// in-memory `cacheData` still holds as a signature-only stub, so a concurrent
+// writer's lazily-grown bodies survive our write (the union, not last-writer-
+// wins). Reads ONLY the Tier-C payload (`readOnDiskTargetTierC`) — it must NOT
+// re-run `readStdlibCache`'s meta decode, which re-seeds the live project's
+// interners mid-build and corrupts the id-space (miscompiling bodies that
+// reference interned constants).
+//
+// Unions BOTH `functions` AND `globalData`: a Tier-C body is NOT self-contained
+// — math functions (`sqrt`/`pow`/`floor`/…) reference float constants via
+// `rdataRelocs` into the cache's `globalData`, which itself grows lazily. A
+// worker that adopts another worker's `sqrt` body without ALSO adopting its
+// float-constant globalData entry links the wrong constant → garbage result
+// (the parallel-only math-function regression). So every adopted body's
+// globalData label must come with it; we union the entire on-disk globalData by
+// name (a superset is harmless — unreferenced rdata blobs are pruned by DFE).
+//
+// Validity: the on-disk file is validated against our exact key (source
+// checksum, target, meta-hash via `readOnDiskTargetTierC`), so an adopted body
+// is byte-compatible by construction; filling EXISTING stub slots by name (no
+// reorder) preserves the stub-ordered `.text` layout and byte parity. A missing
+// / corrupt / key-mismatched file yields nothing → we write our own grown set.
+function mergeOnDiskGrownStdlibFunctions(target Target, cacheRootOverride FilePath, contentChecksum CacheChecksum, metaHash MachineWord)
+	let lib = stdlibLib()
+	let cachePath = libraryCachePath(lib, target: target, cacheRootOverride: cacheRootOverride)
+	let disk = readOnDiskTargetTierC(cachePath, target: target, expectedChecksum: contentChecksum, expectedMetaHash: metaHash)
+	if disk.functions.count() == 0 'noOnDisk'
+		return
+	end 'noOnDisk'
+
+	let index = buildCacheFuncIndex()
+	let cacheData = (try libraryRegistry.libs.get(0) otherwise panic("mergeOnDiskGrownStdlibFunctions: stdlib registry empty")).cacheData
+
+	// Track whether we actually adopted any body — only then is unioning the
+	// on-disk globalData worthwhile (and only the adopted bodies' labels matter,
+	// but unioning the whole table is simpler and a harmless superset).
+	var adoptedAny = false
+	for diskFunc in disk.functions 'eachDisk'
+		if diskFunc.code.count() == 0 'diskStub'
+			continue
+		end 'diskStub'
+		if lazyCompiledStdlibNames.contains(diskFunc.name) 'haveReal'
+			continue
+		end 'haveReal'
+		if let slot = try index.get(diskFunc.name) 'fillStub'
+			try cacheData.functions.set(slot, value: diskFunc) otherwise continue
+			lazyCompiledStdlibNames.insert(diskFunc.name)
+			adoptedAny = true
+		end 'fillStub'
+	end 'eachDisk'
+
+	if adoptedAny 'unionGlobals'
+		mergeGrownGlobalDataInto(cacheData, source: disk.globalData)
+	end 'unionGlobals'
+end 'mergeOnDiskGrownStdlibFunctions'
+
+// Union the on-disk Tier-C `globalData` rdata entries into `cacheData`'s table by
+// name (skip any already present), so an adopted body's `rdataRelocs` resolve to
+// the same constant the body was emitted against. Mirrors Phase 4's
+// `mergeLibraryTierCInto` globalData union. Takes `cacheData` (the reference-
+// backed registry value) and mutates its `globalData` field through the
+// reference — the same in-place pattern the function-stub fill uses, so a
+// `let`-bound `cacheData` suffices.
+function mergeGrownGlobalDataInto(cacheData StdlibCacheData, source GlobalDataTable)
+	for i in 0 upto source.names.count() 'eachGlobal'
+		let name = try source.names.get(i) otherwise continue
+		if cacheData.globalData.nameIndex.contains(name) 'present'
+			continue
+		end 'present'
+		let value = try source.values.get(i) otherwise continue
+		addNamedGlobalData(cacheData.globalData, name: name, data: value)
+	end 'eachGlobal'
+end 'mergeGrownGlobalDataInto'
 
 // Run the native backend tail (target lowering + regalloc + prologue/epilogue
 // + emit) over a SUBSET of the lazy MIR module's functions, returning their

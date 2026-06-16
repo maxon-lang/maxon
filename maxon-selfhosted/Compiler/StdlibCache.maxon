@@ -11,7 +11,7 @@ export typealias StdlibFuncIndexMap = Map with (String, MachineWord)
 export typealias StdlibFuncNameSet = Set with String
 
 // `decodeStdlibCache`'s id-space rebuild snapshots per-(declaringType,param)
-// constraints into a flat lookup so the rebuild can re-attach them at the
+// constraints into this flat lookup so the rebuild can re-attach them at the
 // project-aligned ids without mutating the cached registry.
 typealias CachedConstraintMap = Map with (String, StringArray)
 
@@ -269,7 +269,31 @@ let CACHE_MAGIC_3 = 0x00  // '\0'
 // the cache's ids directly reusable and re-serialize project-independent — a
 // v80 reader has neither the serialized tables nor the ordered pre-seed, so the
 // version gate forces clean regeneration.
-let CACHE_FORMAT_VERSION = 81
+// v83 (Phase 3): the single flat per-target file splits into a shared
+// target-independent META file (`<lib>-meta-<fp>.mxc`: header + id-space tables +
+// Tier A metadata + Tier B inlinable Std IR) and a per-target TARGET file
+// (`<lib>-<target>-<fp>.mxc`: header + meta content-hash + Tier C bytecode). A v82
+// reader sees neither file shape, so the version gate forces clean regeneration.
+// v84 (Phase 7): the META body gains two per-function identity maps —
+// `funcContentHash` (funcName → post-inline keyHash) and `funcSourceFile`
+// (funcName → declaring relPath). They drive the incremental rebuild's
+// preservation of unchanged functions' Tier-C bytecode across a source edit
+// (`preserveUnchangedTierC`). A v83 reader lacks the two maps at the tail of the
+// Tier-AB body, so the version gate forces clean regeneration.
+let CACHE_FORMAT_VERSION = 84
+
+// Byte offset of the total-file-length integrity dword in the fixed header, and
+// the resulting header size. The length field is stamped with the final
+// `buf.count()` after the body is encoded and validated against the actual buffer
+// length on decode. This is what makes a TRUNCATED cache file (valid header
+// prefix, body cut short) a clean cache miss → cold rebuild, instead of a panic
+// deep in a body reader that runs off the end of the buffer. The body starts
+// immediately after it. Both the meta and target files share this fixed header
+// shape; the target file then writes the meta content-hash as its first body
+// dword (offset CACHE_HEADER_SIZE), the meta file's body starts with the id-space
+// tables there.
+let CACHE_TOTAL_LEN_OFFSET = 36
+let CACHE_HEADER_SIZE = 40
 
 // ============================================================
 // Types
@@ -351,6 +375,10 @@ end 'CachedFuncEdges'
 
 // Name → precomputed Std-DFE edge record for every cached stdlib function.
 export typealias CachedFuncEdgeMap = Map with (String, CachedFuncEdges)
+
+// v84 (Phase 7): the funcName → Std-IR content-hash map (gates Tier-C
+// preservation), stored in the TARGET body alongside the bodies it gates.
+export typealias FuncContentHashMap = Map with (String, ContentHash)
 
 // Discovery cache for the BuiltinArrayLiteral protocol. The `none` arm
 // records "no implementing type was observed in this stdlib build" without
@@ -568,6 +596,13 @@ export type StdlibCacheData
 	// load-time Std-DFE consults this flat table instead of re-walking the
 	// cached Std-IR snapshot to re-derive reachability). See `CachedFuncEdges`.
 	export var stdFuncEdges as CachedFuncEdgeMap
+	// v84 (Phase 7): per-function content-hash map for incremental preservation.
+	// Maps each function name → its Std-IR content hash (op-content-deep over the
+	// post-DCE body it lazily lowers from); on a source edit, a function whose new
+	// hash equals its cached hash keeps its already-compiled Tier-C bytecode
+	// instead of being re-register-allocated (`preserveUnchangedTierC`). Lives in
+	// the (per-target) TARGET body, co-located with the Tier-C bodies it gates.
+	export var funcContentHash as FuncContentHashMap
 	// v81 (Phase 3.5): `writerGidToProjectGid` / `writerGidToDataGid` are DELETED.
 	// They existed only to recover the writer gid ordering that
 	// `readMaxonGenericInstance`'s recursive inner-first arg interning lost.
@@ -620,19 +655,27 @@ export type StdlibCacheData
 			unresolvedExtensions: UnresolvedExtensionArray.create(),
 			extensionMethodWhereClauses: WhereClauseMapByName.create(),
 			inlinerStdModule: StdModule.create(),
-			stdFuncEdges: CachedFuncEdgeMap.create()
+			stdFuncEdges: CachedFuncEdgeMap.create(),
+			funcContentHash: FuncContentHashMap.create()
 		}
 	end 'create'
 end 'StdlibCacheData'
 
-// Result of loading a cache file.
+// Result of loading a cache file. Phase 3: `metaHash` carries the META file's
+// content-hash on a valid hit, so the loader can record it (for cross-compile +
+// lazy-grown re-serialize pairing). 0 when invalid or unset.
 export type StdlibCacheResult
 	export var data as StdlibCacheData
 	export var valid as bool
+	export var metaHash as MetaContentHash
 
 	export static function create(data StdlibCacheData, valid bool) returns StdlibCacheResult
-		return Self{data: data, valid: valid}
+		return Self{data: data, valid: valid, metaHash: 0}
 	end 'create'
+
+	export static function createWithMeta(data StdlibCacheData, metaHash MetaContentHash) returns StdlibCacheResult
+		return Self{data: data, valid: true, metaHash: metaHash}
+	end 'createWithMeta'
 end 'StdlibCacheResult'
 
 // ============================================================
@@ -650,13 +693,39 @@ end 'StdlibCacheResult'
 // runtimePath may be empty (no runtime found / cross-tooling); in that case
 // only stdlib files + bootstrap participate, which still matches the build
 // path's behavior of skipping signature injection when runtime is absent.
-let FNV_OFFSET_BASIS = 0x811C9DC5
+// Exported (alongside `fnvUpdate`/`fnvFoldWord`/`toHex8`) so the Phase-5
+// user-program chunk cache (UserChunkCache.maxon) computes its 32-bit
+// header/source-checksum/filename hashes with the exact same FNV-1a the
+// library cache uses.
+export let FNV_OFFSET_BASIS = 0x811C9DC5
 let FNV_PRIME = 0x01000193
 
-function fnvUpdate(state CacheChecksum, b MachineWord) returns CacheChecksum
+export function fnvUpdate(state CacheChecksum, b MachineWord) returns CacheChecksum
 	let mixed = state xor b
 	return (mixed * FNV_PRIME) and 0xFFFFFFFF
 end 'fnvUpdate'
+
+// Content hash of a META file's body — the FNV-1a of every byte from
+// `CACHE_HEADER_SIZE` to the end of `buf` (i.e. the id-space tables + Tier A +
+// Tier B, excluding the fixed header whose total-length/checksum fields vary
+// independently of the content). Phase 3: the meta file stamps this into its own
+// header and the per-target file stores it, so a target file is only reused
+// against a META file whose Tier A+B content matches — and the same Tier A+B
+// produced for a second target hashes identically (the target-independence
+// guard), confirming one shared meta file is legitimate.
+export typealias MetaContentHash = int(0 to u64.max)
+
+function computeMetaContentHash(buf ByteArray) returns MetaContentHash
+	var h = FNV_OFFSET_BASIS
+	var i = CACHE_HEADER_SIZE
+	let n = buf.count()
+	while i < n 'eachByte'
+		let b = try buf.get(i) otherwise panic("computeMetaContentHash: i < buf.count() but get({i}) failed")
+		h = fnvUpdate(h, b: b)
+		i = i + 1
+	end 'eachByte'
+	return h
+end 'computeMetaContentHash'
 
 export function computeStdlibChecksum(files FilePathArray, runtimePath FilePath) returns CacheChecksum
 	var checksum = FNV_OFFSET_BASIS
@@ -679,7 +748,7 @@ export function computeStdlibChecksum(files FilePathArray, runtimePath FilePath)
 end 'computeStdlibChecksum'
 
 // Get compiler executable fingerprint: file size and modification time.
-function getCompilerFingerprint() returns (MachineWord, MachineWord)
+export function getCompilerFingerprint() returns (MachineWord, MachineWord)
 	let exePath = try Process.executablePath() otherwise return (0, 0)
 	let info = try File.info(exePath) otherwise return (0, 0)
 
@@ -709,7 +778,7 @@ end 'compilerFingerprintToken'
 
 // Fold a full machine word into an FNV-1a state byte-by-byte (8 bytes,
 // little-endian), so both halves of a 64-bit input affect the 32-bit result.
-function fnvFoldWord(state CacheChecksum, word MachineWord) returns CacheChecksum
+export function fnvFoldWord(state CacheChecksum, word MachineWord) returns CacheChecksum
 	var s = state
 	var shift = 0
 	while shift < 64 'eachByte'
@@ -723,7 +792,7 @@ end 'fnvFoldWord'
 // (most-significant nibble first). No stdlib hex formatter exists, so this
 // nibble-walks a digit table. Counts UP (0..8) and shifts from the high nibble
 // down so the index variable never goes negative (MachineWord is unsigned).
-function toHex8(value MachineWord) returns String
+export function toHex8(value MachineWord) returns String
 	let digits = "0123456789abcdef"
 	var out = ByteArray.create()
 	var i = 0
@@ -919,7 +988,9 @@ end 'nextAtomicTempSeq'
 // wasted work, never corruption). The `.tmp` extension keeps the deleter's
 // `*.tmp` sweep and `maxon clean` matching it. (No pid accessor exists, so the
 // ms+counter pair is the unique-enough stand-in.)
-function writeFileAtomic(path FilePath, bytes ByteArray)
+// Exported so the Phase-5 user-program chunk cache (UserChunkCache.maxon)
+// reuses the exact temp-uniquifier + atomic-rename discipline.
+export function writeFileAtomic(path FilePath, bytes ByteArray)
 	let stamp = Clock.nowMs()
 	let seq = nextAtomicTempSeq()
 	// Appending a suffix to an already-validated path can't introduce a new
@@ -939,41 +1010,13 @@ function writeFileAtomic(path FilePath, bytes ByteArray)
 	end 'renameErr'
 end 'writeFileAtomic'
 
-// Phase 3.5: no longer takes a `project` — the encode resolves every id
-// through the cache's own snapshot tables in `data`, so the serializing
-// project's id space is irrelevant. This is what lets a consumer (worker,
-// user build) persist a lazily-grown cache without panicking on a foreign id.
-export function writeStdlibCache(path FilePath, data StdlibCacheData, target Target, contentChecksum CacheChecksum)
-	var buf = ByteArray.create()
-	buf.reserve(4096)
-	try encodeStdlibCacheBody(buf, data: data, target: target, contentChecksum: contentChecksum) otherwise (e) 'corrupt'
-		match e 'kind'
-			absent then logError(LogCategory.compiler, message: function() gives "writeStdlibCache: unexpected `absent` from optional-string codec — skipping persist")
-			invalidEncoding then logError(LogCategory.compiler, message: function() gives "writeStdlibCache: malformed in-memory cache state (length-0 mandatory string) — skipping persist")
-		end 'kind'
-		return
-	end 'corrupt'
-
-	// Ensure parent directory (and any missing ancestors) exist
-	let parentDir = try path.parent() otherwise FilePath from ""
-	if not parentDir.isEmpty() 'hasParent'
-		_ = Directory.create(parentDir)
-	end 'hasParent'
-
-	// Publish atomically: a reader racing the write never sees a torn cache file.
-	writeFileAtomic(path, bytes: buf)
-end 'writeStdlibCache'
-
-function encodeStdlibCacheBody(buf ByteArray, data StdlibCacheData, target Target, contentChecksum CacheChecksum) throws CacheCorruption
-	// Phase 3.5: every id-bearing MaxonType written below carries an id in the
-	// CACHE's own id-space (the library prefix), so resolve them through the
-	// cache's own snapshot tables in `data` — never `project`, whose id space
-	// diverges for any consumer that isn't the dedicated cache build. This is
-	// what makes re-serialize project-independent (a lazily-grown worker cache
-	// can be persisted without dereferencing a foreign id).
-	let writeTables = MaxonTypeWriteTables.create(data.typeNameTable, typeParameters: data.typeParameters, interfaceRegistry: data.interfaceRegistry, functionTypes: data.functionTypes, genericInstances: data.genericInstances)
-
-	// Header
+// Write the fixed 40-byte header (magic, version, source checksum, compiler
+// fingerprint, cpu/os, one aux dword, total-length placeholder) shared by BOTH
+// the meta and target files. `auxDword` is file-type-specific: the target file
+// passes its `functions.count()`, the meta file passes 0 (it carries no Tier C).
+// `cpu`/`os` are the build target's; the META decoder ignores them (it is
+// target-independent), the TARGET decoder validates them.
+function writeCacheHeader(buf ByteArray, target Target, contentChecksum CacheChecksum, auxDword MachineWord)
 	buf.push(CACHE_MAGIC_0)
 	buf.push(CACHE_MAGIC_1)
 	buf.push(CACHE_MAGIC_2)
@@ -987,15 +1030,85 @@ function encodeStdlibCacheBody(buf ByteArray, data StdlibCacheData, target Targe
 
 	writeCpuArch(buf, cpu: target.cpu)
 	writeOs(buf, os: target.os)
-	writeDword(buf, value: data.functions.count())
+	writeDword(buf, value: auxDword)
+
+	// Total-file-length integrity field (offset CACHE_TOTAL_LEN_OFFSET), patched
+	// to the real `buf.count()` once the body is complete. The body starts at
+	// CACHE_HEADER_SIZE.
+	writeDword(buf, value: 0)
+end 'writeCacheHeader'
+
+// Finalize a freshly-encoded cache buffer: stamp the total-length integrity
+// field, ensure the parent dir exists, and publish atomically (a reader racing
+// the write never sees a torn file).
+function finalizeAndWriteCache(path FilePath, buf ByteArray)
+	patchDword(buf, offset: CACHE_TOTAL_LEN_OFFSET, value: buf.count())
+	let parentDir = try path.parent() otherwise FilePath from ""
+	if not parentDir.isEmpty() 'hasParent'
+		_ = Directory.create(parentDir)
+	end 'hasParent'
+	writeFileAtomic(path, bytes: buf)
+end 'finalizeAndWriteCache'
+
+// Phase 3: write the SHARED META file (Tier A metadata + Tier B inlinable Std
+// IR), target-independent. Returns the meta content-hash the per-target file
+// must store. Phase 3.5: resolves every id through the cache's OWN snapshot
+// tables in `data` (not a consuming project), so any consumer can persist.
+// `cacheError` (output via the return sentinel 0) — on a codec error the meta is
+// not written and the hash is 0; callers must treat 0 as "skip target write too".
+export function writeLibraryMetaCache(path FilePath, data StdlibCacheData, target Target, contentChecksum CacheChecksum) returns MetaContentHash
+	var buf = ByteArray.create()
+	buf.reserve(4096)
+	writeCacheHeader(buf, target: target, contentChecksum: contentChecksum, auxDword: 0)
+	try encodeLibraryMetaBody(buf, data: data) otherwise (e) 'corrupt'
+		match e 'kind'
+			absent then logError(LogCategory.compiler, message: function() gives "writeLibraryMetaCache: unexpected `absent` from optional-string codec — skipping persist")
+			invalidEncoding then logError(LogCategory.compiler, message: function() gives "writeLibraryMetaCache: malformed in-memory cache state (length-0 mandatory string) — skipping persist")
+		end 'kind'
+		return 0
+	end 'corrupt'
+	let metaHash = computeMetaContentHash(buf)
+	finalizeAndWriteCache(path, buf: buf)
+	return metaHash
+end 'writeLibraryMetaCache'
+
+// Phase 3: write the PER-TARGET file (Tier C linkable bytecode + globalData).
+// Its first body dword is `metaHash` — the content hash of the meta file it was
+// produced alongside — so a target file is only valid against a matching meta.
+export function writeLibraryTargetCache(path FilePath, data StdlibCacheData, target Target, contentChecksum CacheChecksum, metaHash MetaContentHash)
+	var buf = ByteArray.create()
+	buf.reserve(4096)
+	writeCacheHeader(buf, target: target, contentChecksum: contentChecksum, auxDword: data.functions.count())
+	writeDword(buf, value: metaHash)
+	try encodeLibraryTargetBody(buf, data: data) otherwise (e) 'corrupt'
+		match e 'kind'
+			absent then logError(LogCategory.compiler, message: function() gives "writeLibraryTargetCache: unexpected `absent` from optional-string codec — skipping persist")
+			invalidEncoding then logError(LogCategory.compiler, message: function() gives "writeLibraryTargetCache: malformed in-memory cache state — skipping persist")
+		end 'kind'
+		return
+	end 'corrupt'
+	finalizeAndWriteCache(path, buf: buf)
+end 'writeLibraryTargetCache'
+
+// Phase 3: the META file body (id-space tables + Tier A metadata + Tier B
+// inlinable Std IR), written after the shared header. Target-INDEPENDENT — it
+// carries nothing from Tier C (`functions`/`wasmFunctions`/`globalData`).
+//
+// Phase 3.5: every id-bearing MaxonType written below carries an id in the
+// CACHE's own id-space (the library prefix), so resolve them through the cache's
+// own snapshot tables in `data` — never `project`, whose id space diverges for
+// any consumer that isn't the dedicated cache build. This is what makes
+// re-serialize project-independent (a lazily-grown worker cache can be persisted
+// without dereferencing a foreign id).
+function encodeLibraryMetaBody(buf ByteArray, data StdlibCacheData) throws CacheCorruption
+	let writeTables = MaxonTypeWriteTables.create(data.typeNameTable, typeParameters: data.typeParameters, interfaceRegistry: data.interfaceRegistry, functionTypes: data.functionTypes, genericInstances: data.genericInstances)
 
 	// v81: the authoritative id-space tables, written FIRST (right after the
 	// fixed header, before any MaxonType-bearing field) so the decoder can
 	// replay them into the destination project's interners IN ORDER before it
 	// reads the first `named(id)` / `stringValue(id)`. `typeNameTable` position
 	// == library TypeNameId; `constantStringTable` position == library StringId
-	// for constant strings. Replacing the old in-memory rebuild (identity-mirror)
-	// with an explicit serialization is the core Phase 3.5 format change.
+	// for constant strings.
 	try writeStringArrayAllowEmpty(buf, arr: data.typeNameTable)
 	try writeStringArrayAllowEmpty(buf, arr: data.constantStringTable)
 
@@ -1011,6 +1124,18 @@ function encodeStdlibCacheBody(buf ByteArray, data StdlibCacheData, target Targe
 	// args resolve correctly during this replay.
 	try writeGenericInstanceRegistry(writeTables, buf: buf, registry: data.genericInstances)
 
+	// Tier A + Tier B fields follow (typealiases … inlinerStdModule). Tier C
+	// (functions/wasmFunctions/globalData) is NOT written here — it goes in the
+	// per-target file via `encodeLibraryTargetBody`.
+	try encodeLibraryTierAB(buf, data: data, writeTables: writeTables)
+end 'encodeLibraryMetaBody'
+
+// Phase 3: the PER-TARGET file body (Tier C — native `functions`, `wasmFunctions`,
+// and `globalData`), written after the shared header + the meta content-hash.
+// Self-describing: every reference is name-keyed (call/rdata/adr fixups) or a
+// target-independent `StdType` tag, so this decodes standalone WITHOUT the meta
+// file's id-space seeding.
+function encodeLibraryTargetBody(buf ByteArray, data StdlibCacheData) throws CacheCorruption
 	// Per-function objects
 	for func in data.functions 'eachFunc'
 		try writeString(buf, s: func.name)
@@ -1128,6 +1253,19 @@ function encodeStdlibCacheBody(buf ByteArray, data StdlibCacheData, target Targe
 		buf.append(value)
 	end 'eachGlobal'
 
+	// v84 (Phase 7): the per-function content-hash map, co-located with the
+	// Tier-C bodies it gates so the incremental rebuild reads bodies + hashes in
+	// ONE narrow pass (no meta decode / interner re-seed — see
+	// `preserveUnchangedTierC`).
+	try writeFuncContentHashMap(buf, m: data.funcContentHash)
+end 'encodeLibraryTargetBody'
+
+// Phase 3: Tier A (library metadata) + Tier B (inlinable Std IR) writers, the
+// body of the META file after its id-space tables. Factored out of the old
+// monolithic `encodeStdlibCacheBody` so it is written ONCE into the shared meta
+// file. `writeTables` resolves id-bearing MaxonTypes through the cache's own
+// snapshots (Phase 3.5), so this is project-independent.
+function encodeLibraryTierAB(buf ByteArray, data StdlibCacheData, writeTables MaxonTypeWriteTables) throws CacheCorruption
 	// Typealiases
 	writeDword(buf, value: data.typealiases.count())
 	for (name, baseType) in data.typealiases 'eachAlias'
@@ -1351,45 +1489,148 @@ function encodeStdlibCacheBody(buf ByteArray, data StdlibCacheData, target Targe
 	// decode still happens last and the decoder's pos chain stays linear.
 	try writeStdFuncEdgeMap(buf, m: data.stdFuncEdges)
 	// Cache v10: the stdlib's post-dce StdModule snapshot for cross-
-	// module inlining at user pipeline time.
+	// module inlining at user pipeline time. (Tier B — monolithic blob.)
+	// v84 (Phase 7): the per-function CONTENT HASH map lives in the TARGET tier
+	// (co-located with the Tier-C bodies it gates), so nothing per-function is
+	// added to the meta body.
 	try writeStdModule(buf, module: data.inlinerStdModule)
-end 'encodeStdlibCacheBody'
+end 'encodeLibraryTierAB'
+
+// v84: serialize the funcName → post-inline content-hash map. dword count, then
+// per entry `writeString(name)` + `writeQword(hash)`.
+function writeFuncContentHashMap(buf ByteArray, m FuncContentHashMap) throws CacheCorruption
+	writeDword(buf, value: m.count())
+	for (name, hash) in m 'each'
+		try writeString(buf, s: name)
+		writeQword(buf, value: hash)
+	end 'each'
+end 'writeFuncContentHashMap'
+
 
 // ============================================================
 // Read cache
 // ============================================================
 
-// Step 8 boundary: any `readString` / `readOptionalString` call beneath
-// this entry point can throw `CacheCorruption.invalidEncoding` if the cache
-// file is malformed. We catch the throw, log an informational diagnostic
-// identifying the cache as corrupt, and return the existing
-// `StdlibCacheResult { valid: false }` sentinel — the loader treats this
-// the same as a missing cache file and falls back to the cold path.
-export function readStdlibCache(project Project, path FilePath, target Target, expectedChecksum CacheChecksum) returns StdlibCacheResult
+// Phase 3: read the two-file split cache — the shared META file (`metaPath`:
+// Tier A+B) then the PER-TARGET file (`targetPath`: Tier C) — and reassemble a
+// single `StdlibCacheData`. A miss on EITHER file (absent, header mismatch, or
+// meta-hash mismatch) returns the `valid:false` sentinel so the loader falls
+// back to the cold path. This is the catch boundary: any malformed-byte
+// `CacheCorruption` thrown beneath here is logged and treated as a clean miss.
+export function readStdlibCache(project Project, metaPath FilePath, targetPath FilePath, target Target, expectedChecksum CacheChecksum) returns StdlibCacheResult
 	let invalid = StdlibCacheResult.create(StdlibCacheData.create(), valid: false)
 
-	let buf = try File.readBinary(path) otherwise return invalid
-
-	let result = try decodeStdlibCache(project, buf: buf, target: target, expectedChecksum: expectedChecksum) otherwise (e) 'corrupt'
+	let result = try readStdlibCacheInner(project, metaPath: metaPath, targetPath: targetPath, target: target, expectedChecksum: expectedChecksum) otherwise (e) 'corrupt'
 		match e 'kind'
-			absent then logInfo(LogCategory.compiler, message: function() gives "Stdlib cache at {path} reports unexpected `absent` from optional-string codec; treating as corrupt and rebuilding")
-			invalidEncoding then logInfo(LogCategory.compiler, message: function() gives "Stdlib cache at {path} is corrupt (CacheCorruption.invalidEncoding); rebuilding from source")
+			absent then logInfo(LogCategory.compiler, message: function() gives "Stdlib cache reports unexpected `absent` from optional-string codec; treating as corrupt and rebuilding")
+			invalidEncoding then logInfo(LogCategory.compiler, message: function() gives "Stdlib cache is corrupt (CacheCorruption.invalidEncoding); rebuilding from source")
 		end 'kind'
 		return invalid
 	end 'corrupt'
 	return result
 end 'readStdlibCache'
 
+// The throwing inner half of `readStdlibCache`: read + decode the meta file, then
+// the target file, reassembling them into one `StdlibCacheData`. Separated so the
+// catch boundary above stays a thin wrapper.
+function readStdlibCacheInner(project Project, metaPath FilePath, targetPath FilePath, target Target, expectedChecksum CacheChecksum) returns StdlibCacheResult throws CacheCorruption
+	let invalid = StdlibCacheResult.create(StdlibCacheData.create(), valid: false)
+
+	// `data` is owned here (a `var`) and filled in two passes: `decodeLibraryMeta`
+	// writes Tier A+B, then `decodeLibraryTarget` writes Tier C — both mutating it.
+	var data = StdlibCacheData.create()
+
+	let metaBuf = try File.readBinary(metaPath) otherwise return invalid
+	let metaResult = try decodeLibraryMeta(project, buf: metaBuf, expectedChecksum: expectedChecksum, data: data)
+	if not metaResult.valid 'metaMiss'
+		return invalid
+	end 'metaMiss'
+
+	let targetBuf = try File.readBinary(targetPath) otherwise return invalid
+	let targetOk = try decodeLibraryTarget(targetBuf, data: data, target: target, expectedChecksum: expectedChecksum, expectedMetaHash: metaResult.metaHash)
+	if not targetOk 'targetMiss'
+		return invalid
+	end 'targetMiss'
+
+	return StdlibCacheResult.createWithMeta(data, metaHash: metaResult.metaHash)
+end 'readStdlibCacheInner'
+
+// Read ONLY the Tier-C linkable payload (functions + their globalData) from a
+// per-target cache file, WITHOUT decoding the meta file and WITHOUT touching any
+// project state. `persistGrownStdlibCache`'s read-modify-write merge needs the
+// on-disk grown bodies to union with its in-memory set, but must NOT re-run the
+// meta-tier id-space replay (`decodeLibraryMeta` re-seeds the project's
+// interners — calling it a second time mid-build double-seeds and corrupts the
+// live id-space, miscompiling every body that references an interned constant).
+//
+// Returns a `StdlibCacheData` carrying ONLY `functions` + `globalData` (the rest
+// default-empty). The caller MUST union BOTH: a Tier-C body is NOT
+// self-contained — math functions reference float/rational constants via
+// `rdataRelocs` into `globalData`, so adopting a body without its globalData
+// entries links the wrong constant (garbage results). An empty `functions` array
+// on the returned value signals any failure (absent / corrupt / target mismatch
+// / meta-hash mismatch) — the caller then merges nothing.
+export function readOnDiskTargetTierC(targetPath FilePath, target Target, expectedChecksum CacheChecksum, expectedMetaHash MetaContentHash) returns StdlibCacheData
+	let result = try readOnDiskTargetTierCInner(targetPath, target: target, expectedChecksum: expectedChecksum, expectedMetaHash: expectedMetaHash) otherwise StdlibCacheData.create()
+	return result
+end 'readOnDiskTargetTierC'
+
+function readOnDiskTargetTierCInner(targetPath FilePath, target Target, expectedChecksum CacheChecksum, expectedMetaHash MetaContentHash) returns StdlibCacheData throws CacheCorruption
+	let targetBuf = try File.readBinary(targetPath) otherwise return StdlibCacheData.create()
+	var data = StdlibCacheData.create()
+	let ok = try decodeLibraryTarget(targetBuf, data: data, target: target, expectedChecksum: expectedChecksum, expectedMetaHash: expectedMetaHash)
+	if not ok 'invalid'
+		return StdlibCacheData.create()
+	end 'invalid'
+	return data
+end 'readOnDiskTargetTierCInner'
+
+// v84 (Phase 7): read the OLD (pre-edit) target file's Tier-C bodies + per-
+// function content-hash map for incremental preservation, validating the file
+// against ITS OWN stored checksum + meta-hash (NOT the current build's, which
+// differ after a source edit). The per-function content hash — not the source
+// checksum or meta-hash — is the validity gate for an individual body, so a
+// body byte-compatible with the unchanged Std IR is adopted regardless of how
+// many sibling functions changed. The version gate in `validateCacheHeader`
+// still applies, so a pre-v84 file (no per-function hashes) yields nothing —
+// correct, since it can't be reasoned about per-function. Returns an empty
+// `StdlibCacheData` on any absence / corruption / version mismatch. Does NOT
+// re-seed interners (target decode is interner-free).
+export function readOldTierCForPreserve(targetPath FilePath, target Target) returns StdlibCacheData
+	let result = try readOldTierCForPreserveInner(targetPath, target: target) otherwise StdlibCacheData.create()
+	return result
+end 'readOldTierCForPreserve'
+
+function readOldTierCForPreserveInner(targetPath FilePath, target Target) returns StdlibCacheData throws CacheCorruption
+	let buf = try File.readBinary(targetPath) otherwise return StdlibCacheData.create()
+	if buf.count() < CACHE_HEADER_SIZE + 4 'tooSmall'
+		return StdlibCacheData.create()
+	end 'tooSmall'
+	// The file's OWN source checksum (header offset 8) and OWN meta-hash (first
+	// body dword) — decode self-validated so a post-edit checksum/meta change
+	// doesn't reject the old file (per-function hash is the real gate).
+	let ownChecksum = try readDword(buf, offset: 8) otherwise throw CacheCorruption.invalidEncoding
+	let ownMetaHash = try readDword(buf, offset: CACHE_HEADER_SIZE) otherwise throw CacheCorruption.invalidEncoding
+	var data = StdlibCacheData.create()
+	let ok = try decodeLibraryTarget(buf, data: data, target: target, expectedChecksum: ownChecksum, expectedMetaHash: ownMetaHash)
+	if not ok 'invalid'
+		return StdlibCacheData.create()
+	end 'invalid'
+	return data
+end 'readOldTierCForPreserveInner'
+
 // Slice `len` bytes out of `buf` starting at `offset`, append them to
 // `dst`, and return the new offset. Replaces the per-byte loop pattern
 // `for _ in 0 upto len 'copy' { dst.push(try buf.get(pos)); pos += 1 }`.
-// Panics on OOB — caller must have validated `offset + len <= buf.count()`
-// either explicitly or by reading the length prefix from a well-formed
-// buffer (the caller's invariant is the same one that justifies the
-// per-byte panic in the loop form).
-function copyBytesInto(dst ByteArray, buf ByteArray, offset ByteOffset, len ByteOffset) returns ByteOffset
+// Throws `CacheCorruption.invalidEncoding` if the slice runs past the buffer:
+// a truncated/corrupt cache carries a bogus length prefix here, and the decode
+// path must surface that as a clean cache miss, never a panic.
+// Exported so the Phase-5 user-program chunk-cache reader (UserChunkCache.maxon)
+// reuses the same bounds-checked byte-block copy that surfaces a truncated/corrupt
+// length prefix as `CacheCorruption.invalidEncoding` rather than a panic.
+export function copyBytesInto(dst ByteArray, buf ByteArray, offset ByteOffset, len ByteOffset) returns ByteOffset throws CacheCorruption
 	let endIndex = offset + len
-	let chunk = try buf.slice(offset, endIndex: endIndex) otherwise panic("copyBytesInto: slice OOB (offset={offset}, len={len}, buf.count={buf.count()})")
+	let chunk = try buf.slice(offset, endIndex: endIndex) otherwise throw CacheCorruption.invalidEncoding
 	dst.append(chunk)
 	return endIndex
 end 'copyBytesInto'
@@ -1524,15 +1765,76 @@ end 'seedProjectFromCacheIdSpace'
 // metadata grow lazily, the append must be sourced from a stdlib-tagged delta,
 // not the raw project tail — see this note.)
 
-function decodeStdlibCache(project Project, buf ByteArray, target Target, expectedChecksum CacheChecksum) returns StdlibCacheResult throws CacheCorruption
-	let invalid = StdlibCacheResult.create(StdlibCacheData.create(), valid: false)
+// Snapshot the cached type-parameter registry's `where`-clause constraints into
+// a flat `(declName::paramName) -> traitNames` lookup, so the id-space rebuild
+// can re-attach them at the project-aligned ids without mutating the cached
+// registry (whose ids are about to be replaced).
+function snapshotCachedConstraints(cachedTypeParams TypeParamRegistry) returns CachedConstraintMap
+	var out = CachedConstraintMap.create()
+	for ci in 0 upto cachedTypeParams.count() 'eachParam'
+		let cDecl = cachedTypeParams.getDeclaringTypeName(ci)
+		let cParam = cachedTypeParams.getName(ci)
+		let cs = cachedTypeParams.getConstraints(ci)
+		if cs.count() == 0 'noneToSnapshot'
+			continue
+		end 'noneToSnapshot'
+		var copy = StringArray.create()
+		for c in cs 'eachTrait'
+			copy.push(c)
+		end 'eachTrait'
+		try out.insert("{cDecl}::{cParam}", value: copy) otherwise ignore
+	end 'eachParam'
+	return out
+end 'snapshotCachedConstraints'
 
-	// Validate header
-	if buf.count() < 36 'tooSmall'
-		return invalid
+// Outcome of validating a cache file's fixed 40-byte header. `valid` is false
+// for a benign mismatch (wrong magic/version/checksum/compiler/length — a clean
+// cache miss → rebuild); a malformed read throws `CacheCorruption`. On success,
+// `auxDword` carries the header's file-type-specific field (the target file's
+// `functions.count()`; 0 for the meta file).
+type CacheHeaderCheck
+	export var valid as bool
+	export var cachedCpu as CpuArch
+	export var cachedOs as Os
+	export var auxDword as MachineWord
+
+	export static function ok(cachedCpu CpuArch, cachedOs Os, auxDword MachineWord) returns CacheHeaderCheck
+		return Self{valid: true, cachedCpu: cachedCpu, cachedOs: cachedOs, auxDword: auxDword}
+	end 'ok'
+
+	export static function invalid() returns CacheHeaderCheck
+		return Self{valid: false, cachedCpu: CpuArch.x64, cachedOs: Os.linux, auxDword: 0}
+	end 'invalid'
+end 'CacheHeaderCheck'
+
+// Result of decoding the meta file: whether it was a valid hit + the recomputed
+// meta content-hash a per-target file must match. The decoded Tier-A+B fields are
+// written into the `data` the caller passes in (so the caller owns the mutable
+// binding the per-target decode also fills). `valid` false = benign miss.
+type MetaDecodeResult
+	export var metaHash as MetaContentHash
+	export var valid as bool
+
+	export static function ok(metaHash MetaContentHash) returns MetaDecodeResult
+		return Self{metaHash: metaHash, valid: true}
+	end 'ok'
+
+	export static function invalid() returns MetaDecodeResult
+		return Self{metaHash: 0, valid: false}
+	end 'invalid'
+end 'MetaDecodeResult'
+
+// Validate the fixed header shared by the meta and target files: magic, version,
+// source checksum, compiler fingerprint, and the total-file-length integrity
+// field. Does NOT check cpu/os (the meta file is target-independent — the caller
+// decides whether to match the target). Returns the parsed cpu/os + auxDword so
+// the target-file caller can do its own target match.
+function validateCacheHeader(buf ByteArray, expectedChecksum CacheChecksum) returns CacheHeaderCheck throws CacheCorruption
+	if buf.count() < CACHE_HEADER_SIZE 'tooSmall'
+		return CacheHeaderCheck.invalid()
 	end 'tooSmall'
 
-	// buf.count() >= 36 just verified, so the four magic-byte reads share one invariant.
+	// buf.count() >= CACHE_HEADER_SIZE just verified, so the four magic reads share one invariant.
 	var m0 = 0
 	var m1 = 0
 	var m2 = 0
@@ -1544,47 +1846,66 @@ function decodeStdlibCache(project Project, buf ByteArray, target Target, expect
 		m3 = buf.get(3)
 	end 'readMagic' otherwise (e) 'badMagic2'
 		match e 'kind'
-			indexOutOfBounds then panic("loadCache: buf.count() >= 36 just verified but magic-byte read OOB")
+			indexOutOfBounds then panic("loadCache: buf.count() >= CACHE_HEADER_SIZE just verified but magic-byte read OOB")
 			emptySlot then panic("loadCache: magic byte slot empty (push-init invariant)")
 		end 'kind'
 	end 'badMagic2'
 
 	if m0 != CACHE_MAGIC_0 or m1 != CACHE_MAGIC_1 or m2 != CACHE_MAGIC_2 or m3 != CACHE_MAGIC_3 'badMagic'
-		return invalid
+		return CacheHeaderCheck.invalid()
 	end 'badMagic'
 
-	let version = readDword(buf, offset: 4)
+	let version = try readDword(buf, offset: 4) otherwise throw CacheCorruption.invalidEncoding
 	if version != CACHE_FORMAT_VERSION 'badVersion'
 		logInfo(LogCategory.compiler, message: function() gives "Stdlib cache version mismatch (found {version}, expected {CACHE_FORMAT_VERSION}); regenerating")
-		return invalid
+		return CacheHeaderCheck.invalid()
 	end 'badVersion'
 
-	let checksum = readDword(buf, offset: 8)
+	let checksum = try readDword(buf, offset: 8) otherwise throw CacheCorruption.invalidEncoding
 	if checksum != expectedChecksum 'badChecksum'
-		return invalid
+		return CacheHeaderCheck.invalid()
 	end 'badChecksum'
 
-	// Compiler fingerprint
-	let cachedCompilerSize = readDword(buf, offset: 12)
-	let cachedCompilerMtime = readQword(buf, offset: 16)
+	let cachedCompilerSize = try readDword(buf, offset: 12) otherwise throw CacheCorruption.invalidEncoding
+	let cachedCompilerMtime = try readQword(buf, offset: 16) otherwise throw CacheCorruption.invalidEncoding
 	let (currentCompilerSize, currentCompilerMtime) = getCompilerFingerprint()
 
 	if cachedCompilerSize != currentCompilerSize or cachedCompilerMtime != currentCompilerMtime 'staleCompiler'
-		return invalid
+		return CacheHeaderCheck.invalid()
 	end 'staleCompiler'
 
-	// Target
-	let (cachedCpu, _) = readCpuArch(buf, offset: 24)
-	let (cachedOs, _) = readOs(buf, offset: 28)
+	let (cachedCpu, _) = try readCpuArch(buf, offset: 24)
+	let (cachedOs, _) = try readOs(buf, offset: 28)
+	let auxDword = try readDword(buf, offset: 32) otherwise throw CacheCorruption.invalidEncoding
 
-	if cachedCpu.rawValue != target.cpu.rawValue or cachedOs.rawValue != target.os.rawValue 'badTarget'
-		return invalid
-	end 'badTarget'
+	// Total-file-length integrity check (catches truncation before any body read;
+	// the stored value is the writer's final `buf.count()`).
+	let storedTotalLen = try readDword(buf, offset: CACHE_TOTAL_LEN_OFFSET) otherwise throw CacheCorruption.invalidEncoding
+	if storedTotalLen != buf.count() 'truncated'
+		logInfo(LogCategory.compiler, message: function() gives "Stdlib cache length mismatch (header says {storedTotalLen} bytes, file is {buf.count()}); treating as truncated and rebuilding")
+		return CacheHeaderCheck.invalid()
+	end 'truncated'
 
-	let functionCount = readDword(buf, offset: 32)
-	var pos = 36
+	return CacheHeaderCheck.ok(cachedCpu, cachedOs: cachedOs, auxDword: auxDword)
+end 'validateCacheHeader'
 
-	var data = StdlibCacheData.create()
+// Phase 3: decode the SHARED META file into a fresh `StdlibCacheData` (Tier A
+// metadata + Tier B inlinable Std IR, plus the id-space replay into `project`).
+// Tier C is left empty — it comes from the per-target file. Returns the result +
+// the meta content-hash (recomputed over the on-disk bytes) so the caller can
+// validate the per-target file against it. On a benign header mismatch returns
+// `valid:false`; on malformed bytes throws `CacheCorruption`.
+function decodeLibraryMeta(project Project, buf ByteArray, expectedChecksum CacheChecksum, data StdlibCacheData) returns MetaDecodeResult throws CacheCorruption
+	let header = try validateCacheHeader(buf, expectedChecksum: expectedChecksum)
+	if not header.valid 'badHeader'
+		return MetaDecodeResult.invalid()
+	end 'badHeader'
+
+	// The meta file is target-independent — cpu/os in its header are the build
+	// target's and are NOT matched here.
+	let metaHash = computeMetaContentHash(buf)
+
+	var pos = CACHE_HEADER_SIZE
 
 	// v81: read the authoritative id-space tables FIRST, then replay them into
 	// the destination project's interners IN ORDER so every subsequent
@@ -1618,212 +1939,25 @@ function decodeStdlibCache(project Project, buf ByteArray, target Target, expect
 	pos = pGir
 	data.genericInstances = gInstReg
 
-	// Read per-function objects
-	for _ in 0 upto functionCount 'eachFunc'
-		let (name, p1) = try readString(buf, offset: pos)
-		pos = p1
-		let (returnType, p1b) = readStdReturnType(buf, offset: pos)
-		pos = p1b
-		let paramCount = readDword(buf, offset: pos)
-		pos = pos + 4
-
-		var func = ObjectFunction.create(name, returnType: returnType, paramCount: paramCount)
-
-		// Param types
-		let paramTypeCount = readDword(buf, offset: pos)
-		pos = pos + 4
-
-		for _ in 0 upto paramTypeCount 'eachParamType'
-			let (pt, ptPos) = readStdTypeTag(buf, offset: pos)
-			pos = ptPos
-			func.paramTypes.push(pt)
-		end 'eachParamType'
-
-		// Code bytes
-		let codeLen = readDword(buf, offset: pos)
-		pos = pos + 4
-
-		func.code.reserve(codeLen)
-		pos = copyBytesInto(func.code, buf: buf, offset: pos, len: codeLen)
-
-		// Call fixups
-		let fixupCount = readDword(buf, offset: pos)
-		pos = pos + 4
-
-		for _ in 0 upto fixupCount 'eachFixup'
-			let codeOffset = readDword(buf, offset: pos)
-			pos = pos + 4
-			let (targetName, p2) = try readString(buf, offset: pos)
-			pos = p2
-			func.callFixups.push(CallFixup.create(codeOffset, targetName: targetName))
-		end 'eachFixup'
-
-		// Rdata relocations
-		let rdataCount = readDword(buf, offset: pos)
-		pos = pos + 4
-
-		for _ in 0 upto rdataCount 'eachRdata'
-			let codeOffset = readDword(buf, offset: pos)
-			pos = pos + 4
-			let (rdataLabel, p3) = try readString(buf, offset: pos)
-			pos = p3
-			let (kind, p4) = readRdataRelocKind(buf, offset: pos)
-			pos = p4
-			func.rdataRelocs.push(RdataRelocation.create(codeOffset, rdataLabel: rdataLabel, kind: kind))
-		end 'eachRdata'
-
-		// IAT/GOT relocations
-		let relocCount = readDword(buf, offset: pos)
-		pos = pos + 4
-
-		for _ in 0 upto relocCount 'eachReloc'
-			let codeOffset = readDword(buf, offset: pos)
-			pos = pos + 4
-			let slotIndex = readDword(buf, offset: pos)
-			pos = pos + 4
-			func.relocations.push(Relocation.create(codeOffset, slotIndex: slotIndex))
-		end 'eachReloc'
-
-		// ARM64 ADR fixups
-		let adrCount = readDword(buf, offset: pos)
-		pos = pos + 4
-
-		for _ in 0 upto adrCount 'eachAdr'
-			let instrOffset = readDword(buf, offset: pos)
-			pos = pos + 4
-			let destReg = readDword(buf, offset: pos)
-			pos = pos + 4
-			let (targetName, p2b) = try readString(buf, offset: pos)
-			pos = p2b
-			func.adrFixups.push(CachedAdrFixup.create(instrOffset, destReg: destReg, targetName: targetName))
-		end 'eachAdr'
-
-		data.functions.push(func)
-	end 'eachFunc'
-
-	// WASM per-function objects
-	let wasmFuncCount = readDword(buf, offset: pos)
-	pos = pos + 4
-
-	for _ in 0 upto wasmFuncCount 'eachWasmFunc'
-		let (wName, wp1) = try readString(buf, offset: pos)
-		pos = wp1
-		let (wReturnType, wp2) = readStdReturnType(buf, offset: pos)
-		pos = wp2
-		let wParamCount = readDword(buf, offset: pos)
-		pos = pos + 4
-		let wParamTypeCount = readDword(buf, offset: pos)
-		pos = pos + 4
-
-		var wFunc = WasmObjectFunction.create(wName, returnType: wReturnType, paramCount: wParamCount, paramTypes: StdTypeArray.create())
-
-		for _ in 0 upto wParamTypeCount 'eachParamType'
-			let (pt, wp3) = readStdTypeTag(buf, offset: pos)
-			pos = wp3
-			wFunc.paramTypes.push(pt)
-		end 'eachParamType'
-
-		let (wThrowsClause, wpThrows) = try readThrowsClauseField(buf, offset: pos)
-		pos = wpThrows
-		wFunc.throwsTypeName = wThrowsClause
-
-		// Body bytes
-		let wBodyLen = readDword(buf, offset: pos)
-		pos = pos + 4
-		wFunc.body.reserve(wBodyLen)
-		pos = copyBytesInto(wFunc.body, buf: buf, offset: pos, len: wBodyLen)
-
-		// WASM call fixups
-		let wFixupCount = readDword(buf, offset: pos)
-		pos = pos + 4
-		for _ in 0 upto wFixupCount 'eachFixup'
-			let wOffset = readDword(buf, offset: pos)
-			pos = pos + 4
-			let (wTarget, wp4) = try readString(buf, offset: pos)
-			pos = wp4
-			wFunc.callFixups.push(WasmCallFixup.create(wOffset, targetName: wTarget))
-		end 'eachFixup'
-
-		// WASM type-section fixups (one per indirect-call site in the
-		// cached body). Mirrors the writer; bodyOffset is the position of
-		// the 5-byte fixed ULEB128 placeholder, signatureBytes is the
-		// encoded function-type the user-build resolves against its own
-		// type section.
-		let wTyFixCount = readDword(buf, offset: pos)
-		pos = pos + 4
-		for _ in 0 upto wTyFixCount 'eachTyFix'
-			let tyOffset = readDword(buf, offset: pos)
-			pos = pos + 4
-			let sigLen = readDword(buf, offset: pos)
-			pos = pos + 4
-			var sigBytes = ByteArray.create()
-			sigBytes.reserve(sigLen)
-			pos = copyBytesInto(sigBytes, buf: buf, offset: pos, len: sigLen)
-			wFunc.typeFixups.push(WasmTypeFixup.create(tyOffset, signatureBytes: sigBytes))
-		end 'eachTyFix'
-
-		// Cache v29: funcAddr fixups (targetName → final table index, patched
-		// at user-build link time). Mirrors the writer's layout.
-		let wAddrFixCount = readDword(buf, offset: pos)
-		pos = pos + 4
-		for _ in 0 upto wAddrFixCount 'eachAddrFix'
-			let addrOffset = readDword(buf, offset: pos)
-			pos = pos + 4
-			let (addrTarget, ap1) = try readString(buf, offset: pos)
-			pos = ap1
-			wFunc.funcAddrFixups.push(WasmFuncAddrFixup.create(addrOffset, targetName: addrTarget))
-		end 'eachAddrFix'
-
-		// Cache v46: globalAddr linear-memory offset fixups.
-		let wGAddrFixCount = readDword(buf, offset: pos)
-		pos = pos + 4
-		for _ in 0 upto wGAddrFixCount 'eachGAddrFix'
-			let gOffset = readDword(buf, offset: pos)
-			pos = pos + 4
-			let (gTarget, gp1) = try readString(buf, offset: pos)
-			pos = gp1
-			wFunc.globalAddrFixups.push(WasmGlobalAddrFixup.create(gOffset, targetName: gTarget))
-		end 'eachGAddrFix'
-
-		data.wasmFunctions.push(wFunc)
-	end 'eachWasmFunc'
-
-	// GlobalData
-	let globalCount = readDword(buf, offset: pos)
-	pos = pos + 4
-
-	for _ in 0 upto globalCount 'eachGlobal'
-		let (name, p5) = try readString(buf, offset: pos)
-		pos = p5
-		let dataLen = readDword(buf, offset: pos)
-		pos = pos + 4
-
-		var bytes = ByteArray.create()
-		bytes.reserve(dataLen)
-		pos = copyBytesInto(bytes, buf: buf, offset: pos, len: dataLen)
-
-		addNamedGlobalData(data.globalData, name: name, data: bytes)
-	end 'eachGlobal'
-
 	// Typealiases
-	let aliasCount = readDword(buf, offset: pos)
+	let aliasCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
 	pos = pos + 4
 
 	for _ in 0 upto aliasCount 'eachAlias'
 		let (name, p6) = try readString(buf, offset: pos)
 		pos = p6
-		let (stdType, p7) = readStdTypeTag(buf, offset: pos)
+		let (stdType, p7) = try readStdTypeTag(buf, offset: pos)
 		pos = p7
 		try data.typealiases.insert(name, value: stdType) otherwise ignore
 	end 'eachAlias'
 
 	// Cache v17: typealias visibility sidecar.
-	let aliasVisCount = readDword(buf, offset: pos)
+	let aliasVisCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
 	pos = pos + 4
 	for _ in 0 upto aliasVisCount 'eachAliasVis'
 		let (name, pVisName) = try readString(buf, offset: pos)
 		pos = pVisName
-		let entryCount = readDword(buf, offset: pos)
+		let entryCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
 		pos = pos + 4
 		var infos = TypealiasVisibilityInfoArray.create()
 		for _ in 0 upto entryCount 'eachVisEntry'
@@ -1838,34 +1972,34 @@ function decodeStdlibCache(project Project, buf ByteArray, target Target, expect
 	end 'eachAliasVis'
 
 	// Typealias ranges
-	let rangeCount = readDword(buf, offset: pos)
+	let rangeCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
 	pos = pos + 4
 
 	for _ in 0 upto rangeCount 'eachRange'
 		let (name, p8) = try readString(buf, offset: pos)
 		pos = p8
-		let lower = readQword(buf, offset: pos)
+		let lower = try readQword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
 		pos = pos + 8
-		let upper = readQword(buf, offset: pos)
+		let upper = try readQword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
 		pos = pos + 8
 		try data.typealiasRanges.insert(name, value: TypealiasRange.create(lower, upper: upper)) otherwise ignore
 	end 'eachRange'
 
 	// Typealias cast categories
-	let categoryCount = readDword(buf, offset: pos)
+	let categoryCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
 	pos = pos + 4
 
 	for _ in 0 upto categoryCount 'eachCategory'
 		let (name, pCatName) = try readString(buf, offset: pos)
 		pos = pCatName
-		let categoryTag = readDword(buf, offset: pos)
+		let categoryTag = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
 		pos = pos + 4
-		let category = try CastCategory.allCases.get(categoryTag) otherwise panic("readStdlibCache: unknown CastCategory tag {categoryTag}")
+		let category = try CastCategory.allCases.get(categoryTag) otherwise throw CacheCorruption.invalidEncoding
 		try data.typealiasCastCategories.insert(name, value: category) otherwise ignore
 	end 'eachCategory'
 
 	// Function return types
-	let rtCount = readDword(buf, offset: pos)
+	let rtCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
 	pos = pos + 4
 
 	for _ in 0 upto rtCount 'eachRt'
@@ -1877,13 +2011,13 @@ function decodeStdlibCache(project Project, buf ByteArray, target Target, expect
 	end 'eachRt'
 
 	// Function signatures
-	let sigCount = readDword(buf, offset: pos)
+	let sigCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
 	pos = pos + 4
 
 	for _ in 0 upto sigCount 'eachSig'
 		let (sigName, pSig0) = try readString(buf, offset: pos)
 		pos = pSig0
-		let paramCount = readDword(buf, offset: pos)
+		let paramCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
 		pos = pos + 4
 		var paramNames = StringArray.create()
 		for _ in 0 upto paramCount 'eachParamName'
@@ -1908,22 +2042,22 @@ function decodeStdlibCache(project Project, buf ByteArray, target Target, expect
 
 	// Cache v70 (Concept C): argument-consume bits, then the transparent-wrapper
 	// name set. Read in the exact order written above.
-	let consumeCount = readDword(buf, offset: pos)
+	let consumeCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
 	pos = pos + 4
 	for _ in 0 upto consumeCount 'eachConsume'
 		let (consumeName, pC0) = try readString(buf, offset: pos)
 		pos = pC0
-		let bitCount = readDword(buf, offset: pos)
+		let bitCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
 		pos = pos + 4
 		var bits = BoolArray.create()
 		for _ in 0 upto bitCount 'eachConsumeBit'
-			let (b, pC1) = readBoolByte(buf, offset: pos)
+			let (b, pC1) = try readBoolByte(buf, offset: pos)
 			pos = pC1
 			bits.push(b)
 		end 'eachConsumeBit'
 		data.funcParamConsumes.upsert(consumeName, value: bits)
 	end 'eachConsume'
-	let wrapperCount = readDword(buf, offset: pos)
+	let wrapperCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
 	pos = pos + 4
 	for _ in 0 upto wrapperCount 'eachWrapper'
 		let (wrapperName, pW0) = try readString(buf, offset: pos)
@@ -1932,7 +2066,7 @@ function decodeStdlibCache(project Project, buf ByteArray, target Target, expect
 	end 'eachWrapper'
 
 	// Cache v72: return-borrow function-name set (read in write order).
-	let borrowCount = readDword(buf, offset: pos)
+	let borrowCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
 	pos = pos + 4
 	for _ in 0 upto borrowCount 'eachBorrow'
 		let (borrowName, pB0) = try readString(buf, offset: pos)
@@ -1941,7 +2075,7 @@ function decodeStdlibCache(project Project, buf ByteArray, target Target, expect
 	end 'eachBorrow'
 
 	// Cache v77: receiver-interior return set (read in write order).
-	let interiorCount = readDword(buf, offset: pos)
+	let interiorCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
 	pos = pos + 4
 	for _ in 0 upto interiorCount 'eachInterior'
 		let (interiorName, pI0) = try readString(buf, offset: pos)
@@ -1950,7 +2084,7 @@ function decodeStdlibCache(project Project, buf ByteArray, target Target, expect
 	end 'eachInterior'
 
 	// Cache v73: element-loader chain-boundary function-name set (read in write order).
-	let loaderCount = readDword(buf, offset: pos)
+	let loaderCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
 	pos = pos + 4
 	for _ in 0 upto loaderCount 'eachLoader'
 		let (loaderName, pL0) = try readString(buf, offset: pos)
@@ -1960,7 +2094,7 @@ function decodeStdlibCache(project Project, buf ByteArray, target Target, expect
 
 	// Cache v47: function throws-clause entries. Mirrors the
 	// funcReturnTypes loop above — string key + ThrowsClause value.
-	let throwsCount = readDword(buf, offset: pos)
+	let throwsCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
 	pos = pos + 4
 	for _ in 0 upto throwsCount 'eachThrows'
 		let (throwsName, pTh0) = try readString(buf, offset: pos)
@@ -1979,15 +2113,15 @@ function decodeStdlibCache(project Project, buf ByteArray, target Target, expect
 	let stdlibBootstrapPath = try FilePath.from("stdlib-bootstrap.maxon") otherwise panic("readStdlibCache: bootstrap path rejected")
 
 	// Struct types
-	let structCount = readDword(buf, offset: pos)
+	let structCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
 	pos = pos + 4
 
 	for _ in 0 upto structCount 'eachStruct'
 		let (name, p11) = try readString(buf, offset: pos)
 		pos = p11
-		let byteSize = readDword(buf, offset: pos)
+		let byteSize = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
 		pos = pos + 4
-		let fieldCount = readDword(buf, offset: pos)
+		let fieldCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
 		pos = pos + 4
 
 		var fields = StructFieldArray.create()
@@ -1997,17 +2131,17 @@ function decodeStdlibCache(project Project, buf ByteArray, target Target, expect
 			pos = p12
 			let (fieldType, p13) = try readMaxonType(project, buf: buf, offset: pos)
 			pos = p13
-			let fieldOffset = readDword(buf, offset: pos)
+			let fieldOffset = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
 			pos = pos + 4
-			let (isMutable, pIm) = readBoolByte(buf, offset: pos)
+			let (isMutable, pIm) = try readBoolByte(buf, offset: pos)
 			pos = pIm
 			// Cache v32: read back the layout-pass sentinel. Cached struct
 			// fields carry real offsets, so this is always `true` once the
 			// producing run has executed `layoutAllStructs`.
-			let (offsetResolved, pOr) = readBoolByte(buf, offset: pos)
+			let (offsetResolved, pOr) = try readBoolByte(buf, offset: pos)
 			pos = pOr
 			// Cache v35: read back the per-field `export` flag.
-			let (isExported, pEx) = readBoolByte(buf, offset: pos)
+			let (isExported, pEx) = try readBoolByte(buf, offset: pos)
 			pos = pEx
 			fields.push(StructField.create(fieldName, fieldType: fieldType, offset: fieldOffset, isMutable: isMutable, offsetResolved: offsetResolved, isExported: isExported))
 		end 'eachField'
@@ -2017,7 +2151,7 @@ function decodeStdlibCache(project Project, buf ByteArray, target Target, expect
 		// project's registries by `readMaxonType` above, so the resulting
 		// map is directly usable by `applyInnerAliasIfNamed` without any
 		// translation step.
-		let innerAliasCount = readDword(buf, offset: pos)
+		let innerAliasCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
 		pos = pos + 4
 		var innerAliases = ResolvedInnerAliasMap.create()
 		for _ in 0 upto innerAliasCount 'eachInnerAlias'
@@ -2036,34 +2170,34 @@ function decodeStdlibCache(project Project, buf ByteArray, target Target, expect
 	// sourceFilePath stamp `global` + the stdlib bootstrap path the same
 	// way structTypes does, and `expectedMethods` stays empty because the
 	// cache-hit pipeline doesn't re-check enum conformance.
-	let enumCount = readDword(buf, offset: pos)
+	let enumCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
 	pos = pos + 4
 	for _ in 0 upto enumCount 'eachEnum'
 		let (enumName, pEn0) = try readString(buf, offset: pos)
 		pos = pEn0
-		let (isFloatBacked, pEn1) = readBoolByte(buf, offset: pos)
+		let (isFloatBacked, pEn1) = try readBoolByte(buf, offset: pos)
 		pos = pEn1
-		let (isStringBacked, pEn2) = readBoolByte(buf, offset: pos)
+		let (isStringBacked, pEn2) = try readBoolByte(buf, offset: pos)
 		pos = pEn2
-		let (isCharBacked, pEn3) = readBoolByte(buf, offset: pos)
+		let (isCharBacked, pEn3) = try readBoolByte(buf, offset: pos)
 		pos = pEn3
-		let (isUnion, pEn4) = readBoolByte(buf, offset: pos)
+		let (isUnion, pEn4) = try readBoolByte(buf, offset: pos)
 		pos = pEn4
-		let caseCount = readDword(buf, offset: pos)
+		let caseCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
 		pos = pos + 4
 		var cases = EnumCaseArray.create()
 		for _ in 0 upto caseCount 'eachCase'
 			let (caseName, pCa0) = try readString(buf, offset: pos)
 			pos = pCa0
-			let ordinal = readDword(buf, offset: pos)
+			let ordinal = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
 			pos = pos + 4
-			let rawValue = readQword(buf, offset: pos)
+			let rawValue = try readQword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
 			pos = pos + 8
 			let (rawStringValue, pCa1) = try readOptionalStringDefaultEmpty(buf, offset: pos)
 			pos = pCa1
 			let (backingStructName, pCa2) = try readOptionalStringDefaultEmpty(buf, offset: pos)
 			pos = pCa2
-			let payloadCount = readDword(buf, offset: pos)
+			let payloadCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
 			pos = pos + 4
 			var payloadFields = EnumPayloadFieldArray.create()
 			for _ in 0 upto payloadCount 'eachPayload'
@@ -2080,7 +2214,7 @@ function decodeStdlibCache(project Project, buf ByteArray, target Target, expect
 	end 'eachEnum'
 
 	// Top-level constants
-	let constCount = readDword(buf, offset: pos)
+	let constCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
 	pos = pos + 4
 
 	for _ in 0 upto constCount 'eachConst'
@@ -2168,7 +2302,8 @@ function decodeStdlibCache(project Project, buf ByteArray, target Target, expect
 	pos = pSfe
 	data.stdFuncEdges = sfe
 	// Cache v10: read the stdlib's post-dce StdModule for the user
-	// pipeline's inliner pass.
+	// pipeline's inliner pass. (v84: the per-function content-hash map lives in
+	// the target tier — nothing per-function in the meta body.)
 	let (inlinerMod, pIm2) = try readStdModule(buf, offset: pos)
 	pos = pIm2
 	data.inlinerStdModule = inlinerMod
@@ -2197,21 +2332,8 @@ function decodeStdlibCache(project Project, buf ByteArray, target Target, expect
 	// registry as a flat `(declName, paramName) -> constraints` view first
 	// and consulting it during the id-space rebuild preserves the payload
 	// at the new ids.
-	var cachedConstraints = CachedConstraintMap.create()
 	let cachedTypeParams = data.typeParameters
-	for ci in 0 upto cachedTypeParams.count() 'snapshotCached'
-		let cDecl = cachedTypeParams.getDeclaringTypeName(ci)
-		let cParam = cachedTypeParams.getName(ci)
-		let cs = cachedTypeParams.getConstraints(ci)
-		if cs.count() == 0 'noneToSnapshot'
-			continue
-		end 'noneToSnapshot'
-		var copy = StringArray.create()
-		for c in cs 'eachTrait'
-			copy.push(c)
-		end 'eachTrait'
-		try cachedConstraints.insert("{cDecl}::{cParam}", value: copy) otherwise ignore
-	end 'snapshotCached'
+	let cachedConstraints = snapshotCachedConstraints(cachedTypeParams)
 	let savedParamLists = cachedTypeParams.declaringTypeParamLists
 	data.typeParameters = TypeParamRegistry.create()
 	for i in 0 upto project.typeParameters.count() 'mirrorTypeParams'
@@ -2268,8 +2390,232 @@ function decodeStdlibCache(project Project, buf ByteArray, target Target, expect
 		_ = data.functionTypes.append(params, returnType: returnType)
 	end 'mirrorFunctionTypes'
 
-	return StdlibCacheResult.create(data, valid: true)
-end 'decodeStdlibCache'
+	return MetaDecodeResult.ok(metaHash)
+end 'decodeLibraryMeta'
+
+// Phase 3: decode the PER-TARGET file's Tier C (native `functions`,
+// `wasmFunctions`, `globalData`) INTO an existing `data` (already populated
+// with Tier A+B from the meta file). Validates the target header (incl. the
+// cpu/os match) and asserts the stored meta content-hash equals
+// `expectedMetaHash`, so a target file is only paired with the meta file it
+// was produced alongside. Returns false on a benign mismatch; throws
+// `CacheCorruption` on malformed bytes.
+function decodeLibraryTarget(buf ByteArray, data StdlibCacheData, target Target, expectedChecksum CacheChecksum, expectedMetaHash MetaContentHash) returns bool throws CacheCorruption
+	let header = try validateCacheHeader(buf, expectedChecksum: expectedChecksum)
+	if not header.valid 'badHeader'
+		return false
+	end 'badHeader'
+
+	// The target file IS per-target — its cpu/os must match the requested target.
+	if header.cachedCpu.rawValue != target.cpu.rawValue or header.cachedOs.rawValue != target.os.rawValue 'badTarget'
+		return false
+	end 'badTarget'
+
+	let functionCount = header.auxDword
+
+	// First body dword is the meta content-hash this target file was paired with.
+	let storedMetaHash = try readDword(buf, offset: CACHE_HEADER_SIZE) otherwise throw CacheCorruption.invalidEncoding
+	if storedMetaHash != expectedMetaHash 'metaMismatch'
+		logInfo(LogCategory.compiler, message: function() gives "Stdlib target cache meta-hash mismatch (target says {storedMetaHash}, meta is {expectedMetaHash}); regenerating target tier")
+		return false
+	end 'metaMismatch'
+
+	var pos = CACHE_HEADER_SIZE + 4
+
+	// Read per-function objects
+	for _ in 0 upto functionCount 'eachFunc'
+		let (name, p1) = try readString(buf, offset: pos)
+		pos = p1
+		let (returnType, p1b) = try readStdReturnType(buf, offset: pos)
+		pos = p1b
+		let paramCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
+		pos = pos + 4
+
+		var func = ObjectFunction.create(name, returnType: returnType, paramCount: paramCount)
+
+		// Param types
+		let paramTypeCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
+		pos = pos + 4
+
+		for _ in 0 upto paramTypeCount 'eachParamType'
+			let (pt, ptPos) = try readStdTypeTag(buf, offset: pos)
+			pos = ptPos
+			func.paramTypes.push(pt)
+		end 'eachParamType'
+
+		// Code bytes
+		let codeLen = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
+		pos = pos + 4
+
+		func.code.reserve(codeLen)
+		pos = try copyBytesInto(func.code, buf: buf, offset: pos, len: codeLen)
+
+		// Call fixups
+		let fixupCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
+		pos = pos + 4
+
+		for _ in 0 upto fixupCount 'eachFixup'
+			let codeOffset = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
+			pos = pos + 4
+			let (targetName, p2) = try readString(buf, offset: pos)
+			pos = p2
+			func.callFixups.push(CallFixup.create(codeOffset, targetName: targetName))
+		end 'eachFixup'
+
+		// Rdata relocations
+		let rdataCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
+		pos = pos + 4
+
+		for _ in 0 upto rdataCount 'eachRdata'
+			let codeOffset = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
+			pos = pos + 4
+			let (rdataLabel, p3) = try readString(buf, offset: pos)
+			pos = p3
+			let (kind, p4) = try readRdataRelocKind(buf, offset: pos)
+			pos = p4
+			func.rdataRelocs.push(RdataRelocation.create(codeOffset, rdataLabel: rdataLabel, kind: kind))
+		end 'eachRdata'
+
+		// IAT/GOT relocations
+		let relocCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
+		pos = pos + 4
+
+		for _ in 0 upto relocCount 'eachReloc'
+			let codeOffset = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
+			pos = pos + 4
+			let slotIndex = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
+			pos = pos + 4
+			func.relocations.push(Relocation.create(codeOffset, slotIndex: slotIndex))
+		end 'eachReloc'
+
+		// ARM64 ADR fixups
+		let adrCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
+		pos = pos + 4
+
+		for _ in 0 upto adrCount 'eachAdr'
+			let instrOffset = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
+			pos = pos + 4
+			let destReg = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
+			pos = pos + 4
+			let (targetName, p2b) = try readString(buf, offset: pos)
+			pos = p2b
+			func.adrFixups.push(CachedAdrFixup.create(instrOffset, destReg: destReg, targetName: targetName))
+		end 'eachAdr'
+
+		data.functions.push(func)
+	end 'eachFunc'
+
+	// WASM per-function objects
+	let wasmFuncCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
+	pos = pos + 4
+
+	for _ in 0 upto wasmFuncCount 'eachWasmFunc'
+		let (wName, wp1) = try readString(buf, offset: pos)
+		pos = wp1
+		let (wReturnType, wp2) = try readStdReturnType(buf, offset: pos)
+		pos = wp2
+		let wParamCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
+		pos = pos + 4
+		let wParamTypeCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
+		pos = pos + 4
+
+		var wFunc = WasmObjectFunction.create(wName, returnType: wReturnType, paramCount: wParamCount, paramTypes: StdTypeArray.create())
+
+		for _ in 0 upto wParamTypeCount 'eachParamType'
+			let (pt, wp3) = try readStdTypeTag(buf, offset: pos)
+			pos = wp3
+			wFunc.paramTypes.push(pt)
+		end 'eachParamType'
+
+		let (wThrowsClause, wpThrows) = try readThrowsClauseField(buf, offset: pos)
+		pos = wpThrows
+		wFunc.throwsTypeName = wThrowsClause
+
+		// Body bytes
+		let wBodyLen = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
+		pos = pos + 4
+		wFunc.body.reserve(wBodyLen)
+		pos = try copyBytesInto(wFunc.body, buf: buf, offset: pos, len: wBodyLen)
+
+		// WASM call fixups
+		let wFixupCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
+		pos = pos + 4
+		for _ in 0 upto wFixupCount 'eachFixup'
+			let wOffset = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
+			pos = pos + 4
+			let (wTarget, wp4) = try readString(buf, offset: pos)
+			pos = wp4
+			wFunc.callFixups.push(WasmCallFixup.create(wOffset, targetName: wTarget))
+		end 'eachFixup'
+
+		// WASM type-section fixups (one per indirect-call site in the
+		// cached body). Mirrors the writer; bodyOffset is the position of
+		// the 5-byte fixed ULEB128 placeholder, signatureBytes is the
+		// encoded function-type the user-build resolves against its own
+		// type section.
+		let wTyFixCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
+		pos = pos + 4
+		for _ in 0 upto wTyFixCount 'eachTyFix'
+			let tyOffset = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
+			pos = pos + 4
+			let sigLen = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
+			pos = pos + 4
+			var sigBytes = ByteArray.create()
+			sigBytes.reserve(sigLen)
+			pos = try copyBytesInto(sigBytes, buf: buf, offset: pos, len: sigLen)
+			wFunc.typeFixups.push(WasmTypeFixup.create(tyOffset, signatureBytes: sigBytes))
+		end 'eachTyFix'
+
+		// Cache v29: funcAddr fixups (targetName → final table index, patched
+		// at user-build link time). Mirrors the writer's layout.
+		let wAddrFixCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
+		pos = pos + 4
+		for _ in 0 upto wAddrFixCount 'eachAddrFix'
+			let addrOffset = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
+			pos = pos + 4
+			let (addrTarget, ap1) = try readString(buf, offset: pos)
+			pos = ap1
+			wFunc.funcAddrFixups.push(WasmFuncAddrFixup.create(addrOffset, targetName: addrTarget))
+		end 'eachAddrFix'
+
+		// Cache v46: globalAddr linear-memory offset fixups.
+		let wGAddrFixCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
+		pos = pos + 4
+		for _ in 0 upto wGAddrFixCount 'eachGAddrFix'
+			let gOffset = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
+			pos = pos + 4
+			let (gTarget, gp1) = try readString(buf, offset: pos)
+			pos = gp1
+			wFunc.globalAddrFixups.push(WasmGlobalAddrFixup.create(gOffset, targetName: gTarget))
+		end 'eachGAddrFix'
+
+		data.wasmFunctions.push(wFunc)
+	end 'eachWasmFunc'
+
+	// GlobalData
+	let globalCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
+	pos = pos + 4
+
+	for _ in 0 upto globalCount 'eachGlobal'
+		let (name, p5) = try readString(buf, offset: pos)
+		pos = p5
+		let dataLen = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
+		pos = pos + 4
+
+		var bytes = ByteArray.create()
+		bytes.reserve(dataLen)
+		pos = try copyBytesInto(bytes, buf: buf, offset: pos, len: dataLen)
+
+		addNamedGlobalData(data.globalData, name: name, data: bytes)
+	end 'eachGlobal'
+
+	// v84 (Phase 7): the per-function content-hash map (gates preservation).
+	let (fch, pFch) = try readFuncContentHashMap(buf, offset: pos)
+	pos = pFch
+	data.funcContentHash = fch
+
+	return true
+end 'decodeLibraryTarget'
 
 // ============================================================
 // Linker: reachability analysis (shared across all targets)
@@ -3020,7 +3366,7 @@ function writeVisibility(buf ByteArray, v Visibility)
 end 'writeVisibility'
 
 function readVisibility(buf ByteArray, offset ByteOffset) returns (Visibility, ByteOffset) throws CacheCorruption
-	let raw = readDword(buf, offset: offset)
+	let raw = try readDword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	let v = try Visibility.fromRawValue(raw) otherwise throw CacheCorruption.invalidEncoding
 	return (v, offset + 4)
 end 'readVisibility'
@@ -3032,7 +3378,7 @@ function writeOwnershipClass(buf ByteArray, c OwnershipClass)
 end 'writeOwnershipClass'
 
 function readOwnershipClass(buf ByteArray, offset ByteOffset) returns (OwnershipClass, ByteOffset) throws CacheCorruption
-	let raw = readDword(buf, offset: offset)
+	let raw = try readDword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	let c = try OwnershipClass.fromRawValue(raw) otherwise throw CacheCorruption.invalidEncoding
 	return (c, offset + 4)
 end 'readOwnershipClass'
@@ -3088,7 +3434,7 @@ function writeStringArray(buf ByteArray, arr StringArray) throws CacheCorruption
 end 'writeStringArray'
 
 function readStringArray(buf ByteArray, offset ByteOffset) returns (StringArray, ByteOffset) throws CacheCorruption
-	let count = readDword(buf, offset: offset)
+	let count = try readDword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	var pos = offset + 4
 	var arr = StringArray.create()
 	for _ in 0 upto count 'eachString'
@@ -3115,7 +3461,7 @@ function writeStringArrayAllowEmpty(buf ByteArray, arr StringArray) throws Cache
 end 'writeStringArrayAllowEmpty'
 
 function readStringArrayAllowEmpty(buf ByteArray, offset ByteOffset) returns (StringArray, ByteOffset) throws CacheCorruption
-	let count = readDword(buf, offset: offset)
+	let count = try readDword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	var pos = offset + 4
 	var arr = StringArray.create()
 	for _ in 0 upto count 'eachString'
@@ -3142,7 +3488,7 @@ function writeWhereClauseArray(buf ByteArray, arr WhereClauseArray) throws Cache
 end 'writeWhereClauseArray'
 
 function readWhereClauseArray(buf ByteArray, offset ByteOffset) returns (WhereClauseArray, ByteOffset) throws CacheCorruption
-	let count = readDword(buf, offset: offset)
+	let count = try readDword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	var pos = offset + 4
 	var arr = WhereClauseArray.create()
 	for _ in 0 upto count 'eachClause'
@@ -3165,7 +3511,7 @@ function writeMaxonTypeArray(tables MaxonTypeWriteTables, buf ByteArray, arr Max
 end 'writeMaxonTypeArray'
 
 function readMaxonTypeArray(project Project, buf ByteArray, offset ByteOffset) returns (MaxonTypeArray, ByteOffset) throws CacheCorruption
-	let count = readDword(buf, offset: offset)
+	let count = try readDword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	var pos = offset + 4
 	var arr = MaxonTypeArray.create()
 	for _ in 0 upto count 'eachType'
@@ -3199,7 +3545,7 @@ function writeTypeParamRegistry(buf ByteArray, registry TypeParamRegistry) throw
 end 'writeTypeParamRegistry'
 
 function readTypeParamRegistry(buf ByteArray, offset ByteOffset) returns (TypeParamRegistry, ByteOffset) throws CacheCorruption
-	let count = readDword(buf, offset: offset)
+	let count = try readDword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	var pos = offset + 4
 	var registry = TypeParamRegistry.create()
 	for _ in 0 upto count 'eachEntry'
@@ -3215,7 +3561,7 @@ function readTypeParamRegistry(buf ByteArray, offset ByteOffset) returns (TypePa
 		end 'eachConstraint'
 	end 'eachEntry'
 	// Cache v28: read the per-type ordered param-name lists.
-	let listCount = readDword(buf, offset: pos)
+	let listCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
 	pos = pos + 4
 	for _ in 0 upto listCount 'eachList'
 		let (declName, p4) = try readString(buf, offset: pos)
@@ -3237,7 +3583,7 @@ function writeInterfaceTypeRegistry(buf ByteArray, registry InterfaceTypeRegistr
 end 'writeInterfaceTypeRegistry'
 
 function readInterfaceTypeRegistry(buf ByteArray, offset ByteOffset) returns (InterfaceTypeRegistry, ByteOffset) throws CacheCorruption
-	let count = readDword(buf, offset: offset)
+	let count = try readDword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	var pos = offset + 4
 	var registry = InterfaceTypeRegistry.create()
 	for _ in 0 upto count 'eachName'
@@ -3340,10 +3686,23 @@ end 'writeGenericInstanceRegistry'
 // `project.genericInstances` and `data.genericInstances`, so the back-ref is
 // meaningful in the destination id space (position == gid is established by the
 // ordered replay in `readGenericInstanceRegistry`).
+// Read the qword payload of a `genericInstance` / `constInt` arm of
+// `readGenericRegistryType`. Split out because a match arm is a single
+// expression and the qword read must translate an OOB into CacheCorruption.
+function readGenericRegistryGenericInstance(buf ByteArray, offset ByteOffset) returns (MaxonType, ByteOffset) throws CacheCorruption
+	let gid = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
+	return (MaxonType.genericInstance(gid), offset + 8)
+end 'readGenericRegistryGenericInstance'
+
+function readGenericRegistryConstInt(buf ByteArray, offset ByteOffset) returns (MaxonType, ByteOffset) throws CacheCorruption
+	let ci = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
+	return (MaxonType.constInt(ci), offset + 8)
+end 'readGenericRegistryConstInt'
+
 function readGenericRegistryType(project Project, buf ByteArray, offset ByteOffset) returns (MaxonType, ByteOffset) throws CacheCorruption
-	let raw = readDword(buf, offset: offset)
+	let raw = try readDword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	let pos = offset + 4
-	let kase = try MaxonType.unionCases.fromRawValue(raw) otherwise panic("corrupt cache: unknown MaxonType tag {raw} in generic-instance registry")
+	let kase = try MaxonType.unionCases.fromRawValue(raw) otherwise throw CacheCorruption.invalidEncoding
 	match kase 'tag'
 		boolean then return (MaxonType.boolean, pos)
 		integer then return (MaxonType.integer, pos)
@@ -3355,16 +3714,16 @@ function readGenericRegistryType(project Project, buf ByteArray, offset ByteOffs
 		unresolved then return (MaxonType.unresolved, pos)
 		typeParameter then return try readMaxonTypeParameter(project, buf: buf, offset: pos)
 		// Back-reference: the gid of an earlier, already-replayed list entry.
-		genericInstance then return (MaxonType.genericInstance(readQword(buf, offset: pos)), pos + 8)
+		genericInstance then return try readGenericRegistryGenericInstance(buf, offset: pos)
 		interface then return try readMaxonInterface(project, buf: buf, offset: pos)
-		constInt then return (MaxonType.constInt(readQword(buf, offset: pos)), pos + 8)
+		constInt then return try readGenericRegistryConstInt(buf, offset: pos)
 		opaquePointer then return (MaxonType.opaquePointer, pos)
 		cstring then return (MaxonType.cstring, pos)
 	end 'tag'
 end 'readGenericRegistryType'
 
 function readGenericRegistryFunctionType(project Project, buf ByteArray, offset ByteOffset) returns (MaxonType, ByteOffset) throws CacheCorruption
-	let paramCount = readDword(buf, offset: offset)
+	let paramCount = try readDword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	var pos = offset + 4
 	var paramTypes = MaxonTypeArray.create()
 	for _ in 0 upto paramCount 'eachParam'
@@ -3383,9 +3742,9 @@ function readGenericRegistryReturnTypeValue(project Project, buf ByteArray, offs
 end 'readGenericRegistryReturnTypeValue'
 
 function readGenericRegistryReturnType(project Project, buf ByteArray, offset ByteOffset) returns (MaxonReturnType, ByteOffset) throws CacheCorruption
-	let raw = readDword(buf, offset: offset)
+	let raw = try readDword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	let pos = offset + 4
-	let kase = try MaxonReturnType.unionCases.fromRawValue(raw) otherwise panic("corrupt cache: unknown MaxonReturnType tag {raw} in generic-instance registry")
+	let kase = try MaxonReturnType.unionCases.fromRawValue(raw) otherwise throw CacheCorruption.invalidEncoding
 	match kase 'tag'
 		void then return (MaxonReturnType.void, pos)
 		value then return try readGenericRegistryReturnTypeValue(project, buf: buf, offset: pos)
@@ -3393,7 +3752,7 @@ function readGenericRegistryReturnType(project Project, buf ByteArray, offset By
 end 'readGenericRegistryReturnType'
 
 function readGenericRegistryTypeArray(project Project, buf ByteArray, offset ByteOffset) returns (MaxonTypeArray, ByteOffset) throws CacheCorruption
-	let count = readDword(buf, offset: offset)
+	let count = try readDword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	var pos = offset + 4
 	var arr = MaxonTypeArray.create()
 	for _ in 0 upto count 'eachType'
@@ -3415,7 +3774,7 @@ end 'readGenericRegistryTypeArray'
 // `position == gid` assertions turn any ordering violation (a non-DAG registry,
 // a dedup collision) into a loud failure instead of a silent wrong-layout leak.
 function readGenericInstanceRegistry(project Project, buf ByteArray, offset ByteOffset) returns (GenericInstanceRegistry, ByteOffset) throws CacheCorruption
-	let count = readDword(buf, offset: offset)
+	let count = try readDword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	var pos = offset + 4
 	var registry = GenericInstanceRegistry.create()
 	for k in 0 upto count 'eachInst'
@@ -3455,9 +3814,9 @@ function readInterfaceMethodSig(project Project, buf ByteArray, offset ByteOffse
 	let (paramTypes, p3) = try readMaxonTypeArray(project, buf: buf, offset: p2)
 	let (returnType, p4) = try readMaxonReturnType(project, buf: buf, offset: p3)
 	let (throwsTypeName, p5) = try readThrowsClauseField(buf, offset: p4)
-	let (isStatic, p6) = readBoolByte(buf, offset: p5)
-	let line = readDword(buf, offset: p6)
-	let column = readDword(buf, offset: p6 + 4)
+	let (isStatic, p6) = try readBoolByte(buf, offset: p5)
+	let line = try readDword(buf, offset: p6) otherwise throw CacheCorruption.invalidEncoding
+	let column = try readDword(buf, offset: p6 + 4) otherwise throw CacheCorruption.invalidEncoding
 	return (InterfaceMethodSig.create(name, paramNames: paramNames, paramTypes: paramTypes, returnType: returnType, throwsTypeName: throwsTypeName, isStatic: isStatic, line: line, column: column), p6 + 8)
 end 'readInterfaceMethodSig'
 
@@ -3489,7 +3848,7 @@ function writeInterfaceMap(tables MaxonTypeWriteTables, buf ByteArray, m IrInter
 end 'writeInterfaceMap'
 
 function readInterfaceMap(project Project, buf ByteArray, offset ByteOffset) returns (IrInterfaceMap, ByteOffset) throws CacheCorruption
-	let count = readDword(buf, offset: offset)
+	let count = try readDword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	var pos = offset + 4
 	var m = IrInterfaceMap.create()
 	for _ in 0 upto count 'eachIface'
@@ -3501,7 +3860,7 @@ function readInterfaceMap(project Project, buf ByteArray, offset ByteOffset) ret
 		pos = p3
 		let (usesParams, p4) = try readStringArray(buf, offset: pos)
 		pos = p4
-		let methodCount = readDword(buf, offset: pos)
+		let methodCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
 		pos = pos + 4
 		var methods = InterfaceMethodSigArray.create()
 		for _ in 0 upto methodCount 'eachMethod'
@@ -3511,15 +3870,15 @@ function readInterfaceMap(project Project, buf ByteArray, offset ByteOffset) ret
 		end 'eachMethod'
 		let (visibility, p6) = try readVisibility(buf, offset: pos)
 		pos = p6
-		let line = readDword(buf, offset: pos)
+		let line = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
 		pos = pos + 4
-		let column = readDword(buf, offset: pos)
+		let column = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
 		pos = pos + 4
 		let (filePath, p7) = try readFilePath(buf, offset: pos)
 		pos = p7
 		// Cache v48: read the per-interface inner-typealias map. Same
 		// shape as the struct innerAliases reader.
-		let innerCount = readDword(buf, offset: pos)
+		let innerCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
 		pos = pos + 4
 		var innerAliases = ResolvedInnerAliasMap.create()
 		for _ in 0 upto innerCount 'eachInner'
@@ -3548,7 +3907,7 @@ function writeConformanceRegistry(tables MaxonTypeWriteTables, buf ByteArray, re
 end 'writeConformanceRegistry'
 
 function readConformanceRegistry(project Project, buf ByteArray, offset ByteOffset) returns (ConformanceRegistry, ByteOffset) throws CacheCorruption
-	let count = readDword(buf, offset: offset)
+	let count = try readDword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	var pos = offset + 4
 	var registry = ConformanceRegistry.create()
 	for _ in 0 upto count 'eachConf'
@@ -3584,7 +3943,7 @@ function writeConformanceArray(buf ByteArray, arr ConformanceArray) throws Cache
 end 'writeConformanceArray'
 
 function readConformanceArray(buf ByteArray, offset ByteOffset) returns (ConformanceArray, ByteOffset) throws CacheCorruption
-	let count = readDword(buf, offset: offset)
+	let count = try readDword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	var pos = offset + 4
 	var arr = ConformanceArray.create()
 	for _ in 0 upto count 'eachConf'
@@ -3592,11 +3951,11 @@ function readConformanceArray(buf ByteArray, offset ByteOffset) returns (Conform
 		pos = p1
 		let (withArgs, p2) = try readStringArray(buf, offset: pos)
 		pos = p2
-		let (parenForm, p3) = readBoolByte(buf, offset: pos)
+		let (parenForm, p3) = try readBoolByte(buf, offset: pos)
 		pos = p3
-		let line = readDword(buf, offset: pos)
+		let line = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
 		pos = pos + 4
-		let column = readDword(buf, offset: pos)
+		let column = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
 		pos = pos + 4
 		arr.push(Conformance.create(interfaceName, withArgs: withArgs, parenForm: parenForm, line: line, column: column))
 	end 'eachConf'
@@ -3624,7 +3983,7 @@ function writeUnresolvedExtensionArray(buf ByteArray, arr UnresolvedExtensionArr
 end 'writeUnresolvedExtensionArray'
 
 function readUnresolvedExtensionArray(buf ByteArray, offset ByteOffset) returns (UnresolvedExtensionArray, ByteOffset) throws CacheCorruption
-	let count = readDword(buf, offset: offset)
+	let count = try readDword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	var pos = offset + 4
 	var arr = UnresolvedExtensionArray.create()
 	for _ in 0 upto count 'eachExt'
@@ -3638,9 +3997,9 @@ function readUnresolvedExtensionArray(buf ByteArray, offset ByteOffset) returns 
 		pos = p4
 		let (visibility, p5) = try readVisibility(buf, offset: pos)
 		pos = p5
-		let line = readDword(buf, offset: pos)
+		let line = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
 		pos = pos + 4
-		let column = readDword(buf, offset: pos)
+		let column = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
 		pos = pos + 4
 		let (filePath, p6) = try readFilePath(buf, offset: pos)
 		pos = p6
@@ -3664,7 +4023,7 @@ function writeWhereClauseMapByName(buf ByteArray, m WhereClauseMapByName) throws
 end 'writeWhereClauseMapByName'
 
 function readWhereClauseMapByName(buf ByteArray, offset ByteOffset) returns (WhereClauseMapByName, ByteOffset) throws CacheCorruption
-	let count = readDword(buf, offset: offset)
+	let count = try readDword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	var pos = offset + 4
 	var m = WhereClauseMapByName.create()
 	for _ in 0 upto count 'eachEntry'
@@ -3688,7 +4047,7 @@ function writeGenericTypealiasMap(tables MaxonTypeWriteTables, buf ByteArray, m 
 end 'writeGenericTypealiasMap'
 
 function readGenericTypealiasMap(project Project, buf ByteArray, offset ByteOffset) returns (GenericTypealiasMap, ByteOffset) throws CacheCorruption
-	let count = readDword(buf, offset: offset)
+	let count = try readDword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	var pos = offset + 4
 	var m = GenericTypealiasMap.create()
 	for _ in 0 upto count 'eachAlias'
@@ -3714,11 +4073,11 @@ function writeLayoutDescriptorRegistry(buf ByteArray, registry LayoutDescriptorR
 end 'writeLayoutDescriptorRegistry'
 
 function readLayoutDescriptorRegistry(buf ByteArray, offset ByteOffset) returns (LayoutDescriptorRegistry, ByteOffset) throws CacheCorruption
-	let count = readDword(buf, offset: offset)
+	let count = try readDword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	var pos = offset + 4
 	var registry = LayoutDescriptorRegistry.create()
 	for _ in 0 upto count 'eachLd'
-		let gid = readQword(buf, offset: pos)
+		let gid = try readQword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
 		pos = pos + 8
 		let (label, p) = try readString(buf, offset: pos)
 		pos = p
@@ -3765,7 +4124,7 @@ function writeWitnessTableRegistry(buf ByteArray, registry WitnessTableRegistry)
 end 'writeWitnessTableRegistry'
 
 function readWitnessTableRegistry(buf ByteArray, offset ByteOffset) returns (WitnessTableRegistry, ByteOffset) throws CacheCorruption
-	let count = readDword(buf, offset: offset)
+	let count = try readDword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	var pos = offset + 4
 	var registry = WitnessTableRegistry.create()
 	for _ in 0 upto count 'eachWt'
@@ -3779,15 +4138,15 @@ function readWitnessTableRegistry(buf ByteArray, offset ByteOffset) returns (Wit
 		pos = p4
 		let (parentLabel, p5) = try readParentWitnessLabelField(buf, offset: pos)
 		pos = p5
-		let isFatRaw = readDword(buf, offset: pos)
+		let isFatRaw = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
 		pos = pos + 4
 		let isFatBoxed = isFatRaw != 0
 		registry.intern(typeName, interfaceName: ifaceName, label: label, methodImplNames: methodImplNames, parentWitnessLabel: parentLabel, isFatBoxed: isFatBoxed)
 	end 'eachWt'
-	let gidCount = readDword(buf, offset: pos)
+	let gidCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
 	pos = pos + 4
 	for _ in 0 upto gidCount 'eachGidEntry'
-		let gidRaw = readDword(buf, offset: pos)
+		let gidRaw = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
 		pos = pos + 4
 		let (gIfaceName, p1) = try readString(buf, offset: pos)
 		pos = p1
@@ -3795,7 +4154,7 @@ function readWitnessTableRegistry(buf ByteArray, offset ByteOffset) returns (Wit
 		pos = p2
 		let (gMethodImpls, p3) = try readStringArray(buf, offset: pos)
 		pos = p3
-		let gIsFatRaw = readDword(buf, offset: pos)
+		let gIsFatRaw = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
 		pos = pos + 4
 		let gIsFat = gIsFatRaw != 0
 		registry.internForGid(gidRaw, interfaceName: gIfaceName, label: gLabel, methodImplNames: gMethodImpls, isFatBoxed: gIsFat)
@@ -3815,13 +4174,13 @@ function writeGenericFunctionImplicitArityMap(buf ByteArray, m GenericFunctionIm
 end 'writeGenericFunctionImplicitArityMap'
 
 function readGenericFunctionImplicitArityMap(buf ByteArray, offset ByteOffset) returns (GenericFunctionImplicitArityMap, ByteOffset) throws CacheCorruption
-	let count = readDword(buf, offset: offset)
+	let count = try readDword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	var pos = offset + 4
 	var m = GenericFunctionImplicitArityMap.create()
 	for _ in 0 upto count 'eachEntry'
 		let (name, p1) = try readString(buf, offset: pos)
 		pos = p1
-		let (hasLayout, p2) = readBoolByte(buf, offset: pos)
+		let (hasLayout, p2) = try readBoolByte(buf, offset: pos)
 		pos = p2
 		let (witnessConstraints, p3) = try readWhereClauseArray(buf, offset: pos)
 		pos = p3
@@ -3844,7 +4203,7 @@ function writeTopLevelVarMap(tables MaxonTypeWriteTables, buf ByteArray, m TopLe
 end 'writeTopLevelVarMap'
 
 function readTopLevelVarMap(project Project, buf ByteArray, offset ByteOffset) returns (TopLevelVarMap, ByteOffset) throws CacheCorruption
-	let count = readDword(buf, offset: offset)
+	let count = try readDword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	var pos = offset + 4
 	var m = TopLevelVarMap.create()
 	for _ in 0 upto count 'eachVar'
@@ -3852,7 +4211,7 @@ function readTopLevelVarMap(project Project, buf ByteArray, offset ByteOffset) r
 		pos = p1
 		let (slotType, p2) = try readMaxonType(project, buf: buf, offset: pos)
 		pos = p2
-		let initialValue = readQword(buf, offset: pos)
+		let initialValue = try readQword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
 		pos = pos + 8
 		let (visibility, p3) = try readVisibility(buf, offset: pos)
 		pos = p3
@@ -3877,13 +4236,13 @@ function writeInitToStoredVarsMap(buf ByteArray, m InitToStoredVarsMap) throws C
 end 'writeInitToStoredVarsMap'
 
 function readInitToStoredVarsMap(buf ByteArray, offset ByteOffset) returns (InitToStoredVarsMap, ByteOffset) throws CacheCorruption
-	let count = readDword(buf, offset: offset)
+	let count = try readDword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	var pos = offset + 4
 	var m = InitToStoredVarsMap.create()
 	for _ in 0 upto count 'eachInit'
 		let (initName, p1) = try readString(buf, offset: pos)
 		pos = p1
-		let varCount = readDword(buf, offset: pos)
+		let varCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
 		pos = pos + 4
 		var vars = StoredVarNameSet.create()
 		for _ in 0 upto varCount 'eachVar'
@@ -3913,7 +4272,7 @@ function writeStdFuncEdgeMap(buf ByteArray, m CachedFuncEdgeMap) throws CacheCor
 end 'writeStdFuncEdgeMap'
 
 function readStdFuncEdgeMap(buf ByteArray, offset ByteOffset) returns (CachedFuncEdgeMap, ByteOffset) throws CacheCorruption
-	let count = readDword(buf, offset: offset)
+	let count = try readDword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	var pos = offset + 4
 	var m = CachedFuncEdgeMap.create()
 	for _ in 0 upto count 'eachFunc'
@@ -3934,6 +4293,22 @@ function readStdFuncEdgeMap(buf ByteArray, offset ByteOffset) returns (CachedFun
 	return (m, pos)
 end 'readStdFuncEdgeMap'
 
+// v84: deserialize the funcName → post-inline content-hash map.
+function readFuncContentHashMap(buf ByteArray, offset ByteOffset) returns (FuncContentHashMap, ByteOffset) throws CacheCorruption
+	let count = try readDword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
+	var pos = offset + 4
+	var m = FuncContentHashMap.create()
+	for _ in 0 upto count 'each'
+		let (name, p1) = try readString(buf, offset: pos)
+		pos = p1
+		let hash = try readQword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
+		pos = pos + 8
+		m.upsert(name, value: hash)
+	end 'each'
+	return (m, pos)
+end 'readFuncContentHashMap'
+
+
 // --- StaticRdataValueMap ---
 
 function writeStaticRdataValueMap(buf ByteArray, m StaticRdataValueMap) throws CacheCorruption
@@ -3946,17 +4321,17 @@ function writeStaticRdataValueMap(buf ByteArray, m StaticRdataValueMap) throws C
 end 'writeStaticRdataValueMap'
 
 function readStaticRdataValueMap(buf ByteArray, offset ByteOffset) returns (StaticRdataValueMap, ByteOffset) throws CacheCorruption
-	let count = readDword(buf, offset: offset)
+	let count = try readDword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	var pos = offset + 4
 	var m = StaticRdataValueMap.create()
 	for _ in 0 upto count 'eachEntry'
 		let (label, p1) = try readString(buf, offset: pos)
 		pos = p1
-		let len = readDword(buf, offset: pos)
+		let len = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
 		pos = pos + 4
 		var bytes = ByteArray.create()
 		bytes.reserve(len)
-		pos = copyBytesInto(bytes, buf: buf, offset: pos, len: len)
+		pos = try copyBytesInto(bytes, buf: buf, offset: pos, len: len)
 		try m.insert(label, value: bytes) otherwise ignore
 	end 'eachEntry'
 	return (m, pos)
@@ -3989,8 +4364,8 @@ function writeBoolByte(buf ByteArray, b bool)
 	end 'isFalse'
 end 'writeBoolByte'
 
-function readBoolByte(buf ByteArray, offset ByteOffset) returns (bool, ByteOffset)
-	let b = try buf.get(offset) otherwise panic("readBoolByte: buf truncated at {offset}")
+function readBoolByte(buf ByteArray, offset ByteOffset) returns (bool, ByteOffset) throws CacheCorruption
+	let b = try buf.get(offset) otherwise throw CacheCorruption.invalidEncoding
 	return (b != 0, offset + 1)
 end 'readBoolByte'
 
@@ -4003,12 +4378,12 @@ function writeValueIdArrayCodec(buf ByteArray, arr ValueIdArray)
 	end 'each'
 end 'writeValueIdArrayCodec'
 
-function readValueIdArrayCodec(buf ByteArray, offset ByteOffset) returns (ValueIdArray, ByteOffset)
-	let count = readDword(buf, offset: offset)
+function readValueIdArrayCodec(buf ByteArray, offset ByteOffset) returns (ValueIdArray, ByteOffset) throws CacheCorruption
+	let count = try readDword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	var pos = offset + 4
 	var arr = ValueIdArray.create()
 	for _ in 0 upto count 'each'
-		let v = readQword(buf, offset: pos)
+		let v = try readQword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
 		pos = pos + 8
 		arr.push(v)
 	end 'each'
@@ -4024,12 +4399,12 @@ function writeStdTypeArrayCodec(buf ByteArray, arr StdTypeArray)
 	end 'each'
 end 'writeStdTypeArrayCodec'
 
-function readStdTypeArrayCodec(buf ByteArray, offset ByteOffset) returns (StdTypeArray, ByteOffset)
-	let count = readDword(buf, offset: offset)
+function readStdTypeArrayCodec(buf ByteArray, offset ByteOffset) returns (StdTypeArray, ByteOffset) throws CacheCorruption
+	let count = try readDword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	var pos = offset + 4
 	var arr = StdTypeArray.create()
 	for _ in 0 upto count 'each'
-		let (t, p) = readStdTypeTag(buf, offset: pos)
+		let (t, p) = try readStdTypeTag(buf, offset: pos)
 		pos = p
 		arr.push(t)
 	end 'each'
@@ -4045,10 +4420,10 @@ function writeStdArithConst(buf ByteArray, c StdArithConst)
 end 'writeStdArithConst'
 
 function readStdArithConst(buf ByteArray, offset ByteOffset) returns (StdArithConst, ByteOffset) throws CacheCorruption
-	let opRaw = readDword(buf, offset: offset)
+	let opRaw = try readDword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	let opcode = try liftStdArithConstOpcode(opRaw)
-	let resultId = readQword(buf, offset: offset + 4)
-	let value = readQword(buf, offset: offset + 12)
+	let resultId = try readQword(buf, offset: offset + 4) otherwise throw CacheCorruption.invalidEncoding
+	let value = try readQword(buf, offset: offset + 12) otherwise throw CacheCorruption.invalidEncoding
 	return (StdArithConst.create(opcode, resultId: resultId, value: value), offset + 20)
 end 'readStdArithConst'
 
@@ -4067,10 +4442,10 @@ function writeStdArithUnaryOp(buf ByteArray, u StdArithUnaryOp)
 end 'writeStdArithUnaryOp'
 
 function readStdArithUnaryOp(buf ByteArray, offset ByteOffset) returns (StdArithUnaryOp, ByteOffset) throws CacheCorruption
-	let opRaw = readDword(buf, offset: offset)
+	let opRaw = try readDword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	let opcode = try liftStdArithUnaryOpcode(opRaw)
-	let resultId = readQword(buf, offset: offset + 4)
-	let operandId = readQword(buf, offset: offset + 12)
+	let resultId = try readQword(buf, offset: offset + 4) otherwise throw CacheCorruption.invalidEncoding
+	let operandId = try readQword(buf, offset: offset + 12) otherwise throw CacheCorruption.invalidEncoding
 	return (StdArithUnaryOp.create(opcode, resultId: resultId, operandId: operandId), offset + 20)
 end 'readStdArithUnaryOp'
 
@@ -4099,11 +4474,11 @@ function writeStdArithBinaryOp(buf ByteArray, b StdArithBinaryOp)
 end 'writeStdArithBinaryOp'
 
 function readStdArithBinaryOp(buf ByteArray, offset ByteOffset) returns (StdArithBinaryOp, ByteOffset) throws CacheCorruption
-	let opRaw = readDword(buf, offset: offset)
+	let opRaw = try readDword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	let opcode = try liftStdArithBinaryOpcode(opRaw)
-	let resultId = readQword(buf, offset: offset + 4)
-	let leftId = readQword(buf, offset: offset + 12)
-	let rightId = readQword(buf, offset: offset + 20)
+	let resultId = try readQword(buf, offset: offset + 4) otherwise throw CacheCorruption.invalidEncoding
+	let leftId = try readQword(buf, offset: offset + 12) otherwise throw CacheCorruption.invalidEncoding
+	let rightId = try readQword(buf, offset: offset + 20) otherwise throw CacheCorruption.invalidEncoding
 	return (StdArithBinaryOp.create(opcode, resultId: resultId, leftId: leftId, rightId: rightId), offset + 28)
 end 'readStdArithBinaryOp'
 
@@ -4155,7 +4530,7 @@ function writeStdArithOp(buf ByteArray, op StdArithOp)
 end 'writeStdArithOp'
 
 function readStdArithOp(buf ByteArray, offset ByteOffset) returns (StdArithOp, ByteOffset) throws CacheCorruption
-	let raw = readDword(buf, offset: offset)
+	let raw = try readDword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	let kase = try StdArithOp.unionCases.fromRawValue(raw) otherwise throw CacheCorruption.invalidEncoding
 	return match kase 'arith'
 		const gives try readStdArithOpConst(buf, offset: offset + 4)
@@ -4203,26 +4578,26 @@ function writeStdControlCondBr(buf ByteArray, condId ValueId, thenTarget BlockId
 end 'writeStdControlCondBr'
 
 function readStdControlOp(buf ByteArray, offset ByteOffset) returns (StdControlOp, ByteOffset) throws CacheCorruption
-	let raw = readDword(buf, offset: offset)
+	let raw = try readDword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	let kase = try StdControlOp.unionCases.fromRawValue(raw) otherwise throw CacheCorruption.invalidEncoding
 	return match kase 'cf'
-		br gives readStdControlOpBr(buf, offset: offset + 4)
-		condBr gives readStdControlOpCondBr(buf, offset: offset + 4)
+		br gives try readStdControlOpBr(buf, offset: offset + 4)
+		condBr gives try readStdControlOpCondBr(buf, offset: offset + 4)
 	end 'cf'
 end 'readStdControlOp'
 
-function readStdControlOpBr(buf ByteArray, offset ByteOffset) returns (StdControlOp, ByteOffset)
-	let target = readQword(buf, offset: offset)
-	let (argIds, p) = readValueIdArrayCodec(buf, offset: offset + 8)
+function readStdControlOpBr(buf ByteArray, offset ByteOffset) returns (StdControlOp, ByteOffset) throws CacheCorruption
+	let target = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
+	let (argIds, p) = try readValueIdArrayCodec(buf, offset: offset + 8)
 	return (StdControlOp.br(target, argIds: argIds), p)
 end 'readStdControlOpBr'
 
-function readStdControlOpCondBr(buf ByteArray, offset ByteOffset) returns (StdControlOp, ByteOffset)
-	let condId = readQword(buf, offset: offset)
-	let thenTarget = readQword(buf, offset: offset + 8)
-	let (thenArgIds, p1) = readValueIdArrayCodec(buf, offset: offset + 16)
-	let elseTarget = readQword(buf, offset: p1)
-	let (elseArgIds, p2) = readValueIdArrayCodec(buf, offset: p1 + 8)
+function readStdControlOpCondBr(buf ByteArray, offset ByteOffset) returns (StdControlOp, ByteOffset) throws CacheCorruption
+	let condId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
+	let thenTarget = try readQword(buf, offset: offset + 8) otherwise throw CacheCorruption.invalidEncoding
+	let (thenArgIds, p1) = try readValueIdArrayCodec(buf, offset: offset + 16)
+	let elseTarget = try readQword(buf, offset: p1) otherwise throw CacheCorruption.invalidEncoding
+	let (elseArgIds, p2) = try readValueIdArrayCodec(buf, offset: p1 + 8)
 	return (StdControlOp.condBr(condId, thenTarget: thenTarget, thenArgIds: thenArgIds, elseTarget: elseTarget, elseArgIds: elseArgIds), p2)
 end 'readStdControlOpCondBr'
 
@@ -4309,95 +4684,97 @@ function writeStdCallErrorReturn(buf ByteArray, retValId ValueId, errorFlagId Va
 end 'writeStdCallErrorReturn'
 
 function readStdCallOp(buf ByteArray, offset ByteOffset) returns (StdCallOp, ByteOffset) throws CacheCorruption
-	let raw = readDword(buf, offset: offset)
+	let raw = try readDword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	let kase = try StdCallOp.unionCases.fromRawValue(raw) otherwise throw CacheCorruption.invalidEncoding
 	return match kase 'call'
-		ret gives readStdCallRet(buf, offset: offset + 4)
+		ret gives try readStdCallRet(buf, offset: offset + 4)
 		call gives try readStdCallCall(buf, offset: offset + 4)
 		tryCall gives try readStdCallTryCall(buf, offset: offset + 4)
-		indirectCall gives readStdCallIndirect(buf, offset: offset + 4)
-		witnessCall gives readStdCallWitness(buf, offset: offset + 4)
-		witnessTryCall gives readStdCallWitnessTry(buf, offset: offset + 4)
+		indirectCall gives try readStdCallIndirect(buf, offset: offset + 4)
+		witnessCall gives try readStdCallWitness(buf, offset: offset + 4)
+		witnessTryCall gives try readStdCallWitnessTry(buf, offset: offset + 4)
 		funcRef gives try readStdCallFuncRef(buf, offset: offset + 4)
 		tailCall gives try readStdCallTail(buf, offset: offset + 4)
-		param gives readStdCallParam(buf, offset: offset + 4)
-		errorReturn gives readStdCallErrorReturn(buf, offset: offset + 4)
+		param gives try readStdCallParam(buf, offset: offset + 4)
+		errorReturn gives try readStdCallErrorReturn(buf, offset: offset + 4)
 	end 'call'
 end 'readStdCallOp'
 
-function readStdCallRet(buf ByteArray, offset ByteOffset) returns (StdCallOp, ByteOffset)
-	let retValId = readQword(buf, offset: offset)
+function readStdCallRet(buf ByteArray, offset ByteOffset) returns (StdCallOp, ByteOffset) throws CacheCorruption
+	let retValId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	return (StdCallOp.ret(retValId), offset + 8)
 end 'readStdCallRet'
 
 function readStdCallCall(buf ByteArray, offset ByteOffset) returns (StdCallOp, ByteOffset) throws CacheCorruption
-	let resultId = readQword(buf, offset: offset)
+	let resultId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	let (callee, p1) = try readString(buf, offset: offset + 8)
-	let (argIds, p2) = readValueIdArrayCodec(buf, offset: p1)
+	let (argIds, p2) = try readValueIdArrayCodec(buf, offset: p1)
 	return (StdCallOp.call(resultId, callee: callee, argIds: argIds), p2)
 end 'readStdCallCall'
 
 function readStdCallTryCall(buf ByteArray, offset ByteOffset) returns (StdCallOp, ByteOffset) throws CacheCorruption
-	let resultId = readQword(buf, offset: offset)
+	let resultId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	let (callee, p1) = try readString(buf, offset: offset + 8)
-	let (argIds, p2) = readValueIdArrayCodec(buf, offset: p1)
-	let errorFlagId = readQword(buf, offset: p2)
+	let (argIds, p2) = try readValueIdArrayCodec(buf, offset: p1)
+	let errorFlagId = try readQword(buf, offset: p2) otherwise throw CacheCorruption.invalidEncoding
 	return (StdCallOp.tryCall(resultId, callee: callee, argIds: argIds, errorFlagId: errorFlagId), p2 + 8)
 end 'readStdCallTryCall'
 
-function readStdCallIndirect(buf ByteArray, offset ByteOffset) returns (StdCallOp, ByteOffset)
-	let resultId = readQword(buf, offset: offset)
-	let calleeId = readQword(buf, offset: offset + 8)
-	let isVoid = readQword(buf, offset: offset + 16) != 0
-	let isThrowing = readQword(buf, offset: offset + 24) != 0
-	let errorFlagId = readQword(buf, offset: offset + 32)
-	let (argIds, p) = readValueIdArrayCodec(buf, offset: offset + 40)
+function readStdCallIndirect(buf ByteArray, offset ByteOffset) returns (StdCallOp, ByteOffset) throws CacheCorruption
+	let resultId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
+	let calleeId = try readQword(buf, offset: offset + 8) otherwise throw CacheCorruption.invalidEncoding
+	let isVoidRaw = try readQword(buf, offset: offset + 16) otherwise throw CacheCorruption.invalidEncoding
+	let isVoid = isVoidRaw != 0
+	let isThrowingRaw = try readQword(buf, offset: offset + 24) otherwise throw CacheCorruption.invalidEncoding
+	let isThrowing = isThrowingRaw != 0
+	let errorFlagId = try readQword(buf, offset: offset + 32) otherwise throw CacheCorruption.invalidEncoding
+	let (argIds, p) = try readValueIdArrayCodec(buf, offset: offset + 40)
 	return (StdCallOp.indirectCall(resultId, calleeId: calleeId, argIds: argIds, isVoid: isVoid, isThrowing: isThrowing, errorFlagId: errorFlagId), p)
 end 'readStdCallIndirect'
 
-function readStdCallWitness(buf ByteArray, offset ByteOffset) returns (StdCallOp, ByteOffset)
-	let resultId = readQword(buf, offset: offset)
-	let witnessAddrId = readQword(buf, offset: offset + 8)
-	let methodIndex = readQword(buf, offset: offset + 16)
-	let isVoidFlag = readQword(buf, offset: offset + 24)
+function readStdCallWitness(buf ByteArray, offset ByteOffset) returns (StdCallOp, ByteOffset) throws CacheCorruption
+	let resultId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
+	let witnessAddrId = try readQword(buf, offset: offset + 8) otherwise throw CacheCorruption.invalidEncoding
+	let methodIndex = try readQword(buf, offset: offset + 16) otherwise throw CacheCorruption.invalidEncoding
+	let isVoidFlag = try readQword(buf, offset: offset + 24) otherwise throw CacheCorruption.invalidEncoding
 	let isVoid = isVoidFlag != 0
-	let (argIds, p) = readValueIdArrayCodec(buf, offset: offset + 32)
+	let (argIds, p) = try readValueIdArrayCodec(buf, offset: offset + 32)
 	return (StdCallOp.witnessCall(resultId, witnessAddrId: witnessAddrId, methodIndex: methodIndex, isVoid: isVoid, argIds: argIds), p)
 end 'readStdCallWitness'
 
-function readStdCallWitnessTry(buf ByteArray, offset ByteOffset) returns (StdCallOp, ByteOffset)
-	let resultId = readQword(buf, offset: offset)
-	let witnessAddrId = readQword(buf, offset: offset + 8)
-	let methodIndex = readQword(buf, offset: offset + 16)
-	let isVoidFlag = readQword(buf, offset: offset + 24)
+function readStdCallWitnessTry(buf ByteArray, offset ByteOffset) returns (StdCallOp, ByteOffset) throws CacheCorruption
+	let resultId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
+	let witnessAddrId = try readQword(buf, offset: offset + 8) otherwise throw CacheCorruption.invalidEncoding
+	let methodIndex = try readQword(buf, offset: offset + 16) otherwise throw CacheCorruption.invalidEncoding
+	let isVoidFlag = try readQword(buf, offset: offset + 24) otherwise throw CacheCorruption.invalidEncoding
 	let isVoid = isVoidFlag != 0
-	let (argIds, p) = readValueIdArrayCodec(buf, offset: offset + 32)
-	let errorFlagId = readQword(buf, offset: p)
+	let (argIds, p) = try readValueIdArrayCodec(buf, offset: offset + 32)
+	let errorFlagId = try readQword(buf, offset: p) otherwise throw CacheCorruption.invalidEncoding
 	return (StdCallOp.witnessTryCall(resultId, witnessAddrId: witnessAddrId, methodIndex: methodIndex, isVoid: isVoid, argIds: argIds, errorFlagId: errorFlagId), p + 8)
 end 'readStdCallWitnessTry'
 
 function readStdCallFuncRef(buf ByteArray, offset ByteOffset) returns (StdCallOp, ByteOffset) throws CacheCorruption
-	let resultId = readQword(buf, offset: offset)
+	let resultId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	let (funcName, p) = try readString(buf, offset: offset + 8)
 	return (StdCallOp.funcRef(resultId, funcName: funcName), p)
 end 'readStdCallFuncRef'
 
 function readStdCallTail(buf ByteArray, offset ByteOffset) returns (StdCallOp, ByteOffset) throws CacheCorruption
 	let (callee, p1) = try readString(buf, offset: offset)
-	let (argIds, p2) = readValueIdArrayCodec(buf, offset: p1)
+	let (argIds, p2) = try readValueIdArrayCodec(buf, offset: p1)
 	return (StdCallOp.tailCall(callee, argIds: argIds), p2)
 end 'readStdCallTail'
 
-function readStdCallParam(buf ByteArray, offset ByteOffset) returns (StdCallOp, ByteOffset)
-	let resultId = readQword(buf, offset: offset)
-	let paramIndex = readQword(buf, offset: offset + 8)
-	let (paramType, p) = readStdTypeTag(buf, offset: offset + 16)
+function readStdCallParam(buf ByteArray, offset ByteOffset) returns (StdCallOp, ByteOffset) throws CacheCorruption
+	let resultId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
+	let paramIndex = try readQword(buf, offset: offset + 8) otherwise throw CacheCorruption.invalidEncoding
+	let (paramType, p) = try readStdTypeTag(buf, offset: offset + 16)
 	return (StdCallOp.param(resultId, paramIndex: paramIndex, paramType: paramType), p)
 end 'readStdCallParam'
 
-function readStdCallErrorReturn(buf ByteArray, offset ByteOffset) returns (StdCallOp, ByteOffset)
-	let retValId = readQword(buf, offset: offset)
-	let errorFlagId = readQword(buf, offset: offset + 8)
+function readStdCallErrorReturn(buf ByteArray, offset ByteOffset) returns (StdCallOp, ByteOffset) throws CacheCorruption
+	let retValId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
+	let errorFlagId = try readQword(buf, offset: offset + 8) otherwise throw CacheCorruption.invalidEncoding
 	return (StdCallOp.errorReturn(retValId, errorFlagId: errorFlagId), offset + 16)
 end 'readStdCallErrorReturn'
 
@@ -4422,23 +4799,23 @@ function writeStdMemoryLoad(buf ByteArray, resultId ValueId, slotId VarSlot)
 end 'writeStdMemoryLoad'
 
 function readStdMemoryOp(buf ByteArray, offset ByteOffset) returns (StdMemoryOp, ByteOffset) throws CacheCorruption
-	let raw = readDword(buf, offset: offset)
+	let raw = try readDword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	let kase = try StdMemoryOp.unionCases.fromRawValue(raw) otherwise throw CacheCorruption.invalidEncoding
 	return match kase 'mem'
-		storeSlot gives readStdMemoryStore(buf, offset: offset + 4)
-		loadSlot gives readStdMemoryLoad(buf, offset: offset + 4)
+		storeSlot gives try readStdMemoryStore(buf, offset: offset + 4)
+		loadSlot gives try readStdMemoryLoad(buf, offset: offset + 4)
 	end 'mem'
 end 'readStdMemoryOp'
 
-function readStdMemoryStore(buf ByteArray, offset ByteOffset) returns (StdMemoryOp, ByteOffset)
-	let slotId = readQword(buf, offset: offset)
-	let valueId = readQword(buf, offset: offset + 8)
+function readStdMemoryStore(buf ByteArray, offset ByteOffset) returns (StdMemoryOp, ByteOffset) throws CacheCorruption
+	let slotId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
+	let valueId = try readQword(buf, offset: offset + 8) otherwise throw CacheCorruption.invalidEncoding
 	return (StdMemoryOp.storeSlot(slotId, valueId: valueId), offset + 16)
 end 'readStdMemoryStore'
 
-function readStdMemoryLoad(buf ByteArray, offset ByteOffset) returns (StdMemoryOp, ByteOffset)
-	let resultId = readQword(buf, offset: offset)
-	let slotId = readQword(buf, offset: offset + 8)
+function readStdMemoryLoad(buf ByteArray, offset ByteOffset) returns (StdMemoryOp, ByteOffset) throws CacheCorruption
+	let resultId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
+	let slotId = try readQword(buf, offset: offset + 8) otherwise throw CacheCorruption.invalidEncoding
 	return (StdMemoryOp.loadSlot(resultId, slotId: slotId), offset + 16)
 end 'readStdMemoryLoad'
 
@@ -4749,408 +5126,408 @@ function writeStdSysDropTypeParam(buf ByteArray, slotValueId ValueId, layoutValu
 end 'writeStdSysDropTypeParam'
 
 function readStdSystemOp(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset) throws CacheCorruption
-	let raw = readDword(buf, offset: offset)
+	let raw = try readDword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	let kase = try StdSystemOp.unionCases.fromRawValue(raw) otherwise throw CacheCorruption.invalidEncoding
 	let pos = offset + 4
 	return match kase 'sys'
 		globalAddr gives try readStdSysGlobalAddr(buf, offset: pos)
-		memcpy gives readStdSysMemcpy(buf, offset: pos)
-		stackAddr gives readStdSysStackAddr(buf, offset: pos)
-		storeByte gives readStdSysStoreByte(buf, offset: pos)
-		loadByte gives readStdSysLoadByte(buf, offset: pos)
-		osExit gives readStdSysOsExit(buf, offset: pos)
-		osSleep gives readStdSysOsSleep(buf, offset: pos)
-		osWrite gives readStdSysOsWrite(buf, offset: pos)
-		free gives readStdSysFree(buf, offset: pos)
-		osWriteErr gives readStdSysOsWriteErr(buf, offset: pos)
-		osRead gives readStdSysOsRead(buf, offset: pos)
-		osOpenWrite gives readStdSysOsOpenWrite(buf, offset: pos)
-		osWriteFd gives readStdSysOsWriteFd(buf, offset: pos)
-		osClose gives readStdSysOsClose(buf, offset: pos)
-		osGetEnv gives readStdSysOsGetEnv(buf, offset: pos)
-		osGetArgc gives readStdSysOsGetArgc(buf, offset: pos)
-		osClockMs gives readStdSysOsClockMs(buf, offset: pos)
-		osGetArgv gives readStdSysOsGetArgv(buf, offset: pos)
-		osGetExecutablePath gives readStdSysOsGetExecutablePath(buf, offset: pos)
-		loadFramePtr gives readStdSysLoadFramePtr(buf, offset: pos)
-		loadIndirect gives readStdSysLoadIndirect(buf, offset: pos)
+		memcpy gives try readStdSysMemcpy(buf, offset: pos)
+		stackAddr gives try readStdSysStackAddr(buf, offset: pos)
+		storeByte gives try readStdSysStoreByte(buf, offset: pos)
+		loadByte gives try readStdSysLoadByte(buf, offset: pos)
+		osExit gives try readStdSysOsExit(buf, offset: pos)
+		osSleep gives try readStdSysOsSleep(buf, offset: pos)
+		osWrite gives try readStdSysOsWrite(buf, offset: pos)
+		free gives try readStdSysFree(buf, offset: pos)
+		osWriteErr gives try readStdSysOsWriteErr(buf, offset: pos)
+		osRead gives try readStdSysOsRead(buf, offset: pos)
+		osOpenWrite gives try readStdSysOsOpenWrite(buf, offset: pos)
+		osWriteFd gives try readStdSysOsWriteFd(buf, offset: pos)
+		osClose gives try readStdSysOsClose(buf, offset: pos)
+		osGetEnv gives try readStdSysOsGetEnv(buf, offset: pos)
+		osGetArgc gives try readStdSysOsGetArgc(buf, offset: pos)
+		osClockMs gives try readStdSysOsClockMs(buf, offset: pos)
+		osGetArgv gives try readStdSysOsGetArgv(buf, offset: pos)
+		osGetExecutablePath gives try readStdSysOsGetExecutablePath(buf, offset: pos)
+		loadFramePtr gives try readStdSysLoadFramePtr(buf, offset: pos)
+		loadIndirect gives try readStdSysLoadIndirect(buf, offset: pos)
 		funcAddr gives try readStdSysFuncAddr(buf, offset: pos)
-		storeIndirect gives readStdSysStoreIndirect(buf, offset: pos)
-		drop gives readStdSysDrop(buf, offset: pos)
-		osAllocPages gives readStdSysOsAllocPages(buf, offset: pos)
-		osAllocPagesLarge gives readStdSysOsAllocPagesLarge(buf, offset: pos)
-		osFreePages gives readStdSysOsFreePages(buf, offset: pos)
-		osFileOpen gives readStdSysOsFileOpen(buf, offset: pos)
-		osFileRead gives readStdSysOsFileRead(buf, offset: pos)
-		osFileWrite gives readStdSysOsFileWrite(buf, offset: pos)
-		osFileClose gives readStdSysOsFileClose(buf, offset: pos)
-		osFileLseek gives readStdSysOsFileLseek(buf, offset: pos)
-		osFileStat gives readStdSysOsFileStat(buf, offset: pos)
-		osFileAccess gives readStdSysOsFileAccess(buf, offset: pos)
-		osFileUnlink gives readStdSysOsFileUnlink(buf, offset: pos)
-		osFileRename gives readStdSysOsFileRename(buf, offset: pos)
-		osDirGetdents64 gives readStdSysOsDirGetdents64(buf, offset: pos)
-		osDirGetcwd gives readStdSysOsDirGetcwd(buf, offset: pos)
-		osDirMkdir gives readStdSysOsDirMkdir(buf, offset: pos)
-		atomicInc gives readStdSysAtomicInc(buf, offset: pos)
-		atomicDec gives readStdSysAtomicDec(buf, offset: pos)
-		atomicXadd gives readStdSysAtomicXadd(buf, offset: pos)
-		atomicCas gives readStdSysAtomicCas(buf, offset: pos)
-		osLockInit gives readStdSysOsLockInit(buf, offset: pos)
-		osLockAcquire gives readStdSysOsLockAcquire(buf, offset: pos)
-		osLockRelease gives readStdSysOsLockRelease(buf, offset: pos)
-		boxValue gives readStdSysBoxValue(buf, offset: pos)
-		unboxValue gives readStdSysUnboxValue(buf, offset: pos)
+		storeIndirect gives try readStdSysStoreIndirect(buf, offset: pos)
+		drop gives try readStdSysDrop(buf, offset: pos)
+		osAllocPages gives try readStdSysOsAllocPages(buf, offset: pos)
+		osAllocPagesLarge gives try readStdSysOsAllocPagesLarge(buf, offset: pos)
+		osFreePages gives try readStdSysOsFreePages(buf, offset: pos)
+		osFileOpen gives try readStdSysOsFileOpen(buf, offset: pos)
+		osFileRead gives try readStdSysOsFileRead(buf, offset: pos)
+		osFileWrite gives try readStdSysOsFileWrite(buf, offset: pos)
+		osFileClose gives try readStdSysOsFileClose(buf, offset: pos)
+		osFileLseek gives try readStdSysOsFileLseek(buf, offset: pos)
+		osFileStat gives try readStdSysOsFileStat(buf, offset: pos)
+		osFileAccess gives try readStdSysOsFileAccess(buf, offset: pos)
+		osFileUnlink gives try readStdSysOsFileUnlink(buf, offset: pos)
+		osFileRename gives try readStdSysOsFileRename(buf, offset: pos)
+		osDirGetdents64 gives try readStdSysOsDirGetdents64(buf, offset: pos)
+		osDirGetcwd gives try readStdSysOsDirGetcwd(buf, offset: pos)
+		osDirMkdir gives try readStdSysOsDirMkdir(buf, offset: pos)
+		atomicInc gives try readStdSysAtomicInc(buf, offset: pos)
+		atomicDec gives try readStdSysAtomicDec(buf, offset: pos)
+		atomicXadd gives try readStdSysAtomicXadd(buf, offset: pos)
+		atomicCas gives try readStdSysAtomicCas(buf, offset: pos)
+		osLockInit gives try readStdSysOsLockInit(buf, offset: pos)
+		osLockAcquire gives try readStdSysOsLockAcquire(buf, offset: pos)
+		osLockRelease gives try readStdSysOsLockRelease(buf, offset: pos)
+		boxValue gives try readStdSysBoxValue(buf, offset: pos)
+		unboxValue gives try readStdSysUnboxValue(buf, offset: pos)
 		loadLayoutDescriptor gives try readStdSysLoadLayoutDescriptor(buf, offset: pos)
 		loadWitnessTable gives try readStdSysLoadWitnessTable(buf, offset: pos)
 		descriptorField gives try readStdSysDescriptorField(buf, offset: pos)
-		witnessMethod gives readStdSysWitnessMethod(buf, offset: pos)
-		dropTypeParam gives readStdSysDropTypeParam(buf, offset: pos)
+		witnessMethod gives try readStdSysWitnessMethod(buf, offset: pos)
+		dropTypeParam gives try readStdSysDropTypeParam(buf, offset: pos)
 	end 'sys'
 end 'readStdSystemOp'
 
 function readStdSysGlobalAddr(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset) throws CacheCorruption
-	let resultId = readQword(buf, offset: offset)
+	let resultId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	let (name, p) = try readString(buf, offset: offset + 8)
 	return (StdSystemOp.globalAddr(resultId, name: name), p)
 end 'readStdSysGlobalAddr'
 
-function readStdSysMemcpy(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
-	let dstId = readQword(buf, offset: offset)
-	let srcId = readQword(buf, offset: offset + 8)
-	let lenId = readQword(buf, offset: offset + 16)
+function readStdSysMemcpy(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset) throws CacheCorruption
+	let dstId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
+	let srcId = try readQword(buf, offset: offset + 8) otherwise throw CacheCorruption.invalidEncoding
+	let lenId = try readQword(buf, offset: offset + 16) otherwise throw CacheCorruption.invalidEncoding
 	return (StdSystemOp.memcpy(dstId, srcId: srcId, lenId: lenId), offset + 24)
 end 'readStdSysMemcpy'
 
-function readStdSysStackAddr(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
-	let resultId = readQword(buf, offset: offset)
-	let slotId = readQword(buf, offset: offset + 8)
+function readStdSysStackAddr(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset) throws CacheCorruption
+	let resultId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
+	let slotId = try readQword(buf, offset: offset + 8) otherwise throw CacheCorruption.invalidEncoding
 	return (StdSystemOp.stackAddr(resultId, slotId: slotId), offset + 16)
 end 'readStdSysStackAddr'
 
-function readStdSysStoreByte(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
-	let baseId = readQword(buf, offset: offset)
-	let offsetId = readQword(buf, offset: offset + 8)
-	let byteId = readQword(buf, offset: offset + 16)
+function readStdSysStoreByte(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset) throws CacheCorruption
+	let baseId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
+	let offsetId = try readQword(buf, offset: offset + 8) otherwise throw CacheCorruption.invalidEncoding
+	let byteId = try readQword(buf, offset: offset + 16) otherwise throw CacheCorruption.invalidEncoding
 	return (StdSystemOp.storeByte(baseId, offsetId: offsetId, byteId: byteId), offset + 24)
 end 'readStdSysStoreByte'
 
-function readStdSysLoadByte(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
-	let resultId = readQword(buf, offset: offset)
-	let baseId = readQword(buf, offset: offset + 8)
-	let offsetId = readQword(buf, offset: offset + 16)
+function readStdSysLoadByte(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset) throws CacheCorruption
+	let resultId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
+	let baseId = try readQword(buf, offset: offset + 8) otherwise throw CacheCorruption.invalidEncoding
+	let offsetId = try readQword(buf, offset: offset + 16) otherwise throw CacheCorruption.invalidEncoding
 	return (StdSystemOp.loadByte(resultId, baseId: baseId, offsetId: offsetId), offset + 24)
 end 'readStdSysLoadByte'
 
-function readStdSysOsExit(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
-	let codeId = readQword(buf, offset: offset)
+function readStdSysOsExit(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset) throws CacheCorruption
+	let codeId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	return (StdSystemOp.osExit(codeId), offset + 8)
 end 'readStdSysOsExit'
 
-function readStdSysOsSleep(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
-	let msId = readQword(buf, offset: offset)
+function readStdSysOsSleep(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset) throws CacheCorruption
+	let msId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	return (StdSystemOp.osSleep(msId), offset + 8)
 end 'readStdSysOsSleep'
 
-function readStdSysOsWrite(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
-	let ptrId = readQword(buf, offset: offset)
-	let lenId = readQword(buf, offset: offset + 8)
+function readStdSysOsWrite(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset) throws CacheCorruption
+	let ptrId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
+	let lenId = try readQword(buf, offset: offset + 8) otherwise throw CacheCorruption.invalidEncoding
 	return (StdSystemOp.osWrite(ptrId, lenId: lenId), offset + 16)
 end 'readStdSysOsWrite'
 
-function readStdSysFree(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
-	let ptrId = readQword(buf, offset: offset)
+function readStdSysFree(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset) throws CacheCorruption
+	let ptrId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	return (StdSystemOp.free(ptrId), offset + 8)
 end 'readStdSysFree'
 
-function readStdSysOsWriteErr(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
-	let ptrId = readQword(buf, offset: offset)
-	let lenId = readQword(buf, offset: offset + 8)
+function readStdSysOsWriteErr(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset) throws CacheCorruption
+	let ptrId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
+	let lenId = try readQword(buf, offset: offset + 8) otherwise throw CacheCorruption.invalidEncoding
 	return (StdSystemOp.osWriteErr(ptrId, lenId: lenId), offset + 16)
 end 'readStdSysOsWriteErr'
 
-function readStdSysOsRead(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
-	let resultId = readQword(buf, offset: offset)
-	let ptrId = readQword(buf, offset: offset + 8)
-	let lenId = readQword(buf, offset: offset + 16)
+function readStdSysOsRead(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset) throws CacheCorruption
+	let resultId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
+	let ptrId = try readQword(buf, offset: offset + 8) otherwise throw CacheCorruption.invalidEncoding
+	let lenId = try readQword(buf, offset: offset + 16) otherwise throw CacheCorruption.invalidEncoding
 	return (StdSystemOp.osRead(resultId, ptrId: ptrId, lenId: lenId), offset + 24)
 end 'readStdSysOsRead'
 
-function readStdSysOsOpenWrite(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
-	let resultId = readQword(buf, offset: offset)
-	let pathPtrId = readQword(buf, offset: offset + 8)
-	let pathLenId = readQword(buf, offset: offset + 16)
+function readStdSysOsOpenWrite(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset) throws CacheCorruption
+	let resultId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
+	let pathPtrId = try readQword(buf, offset: offset + 8) otherwise throw CacheCorruption.invalidEncoding
+	let pathLenId = try readQword(buf, offset: offset + 16) otherwise throw CacheCorruption.invalidEncoding
 	return (StdSystemOp.osOpenWrite(resultId, pathPtrId: pathPtrId, pathLenId: pathLenId), offset + 24)
 end 'readStdSysOsOpenWrite'
 
-function readStdSysOsWriteFd(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
-	let fdId = readQword(buf, offset: offset)
-	let ptrId = readQword(buf, offset: offset + 8)
-	let lenId = readQword(buf, offset: offset + 16)
+function readStdSysOsWriteFd(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset) throws CacheCorruption
+	let fdId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
+	let ptrId = try readQword(buf, offset: offset + 8) otherwise throw CacheCorruption.invalidEncoding
+	let lenId = try readQword(buf, offset: offset + 16) otherwise throw CacheCorruption.invalidEncoding
 	return (StdSystemOp.osWriteFd(fdId, ptrId: ptrId, lenId: lenId), offset + 24)
 end 'readStdSysOsWriteFd'
 
-function readStdSysOsClose(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
-	let fdId = readQword(buf, offset: offset)
+function readStdSysOsClose(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset) throws CacheCorruption
+	let fdId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	return (StdSystemOp.osClose(fdId), offset + 8)
 end 'readStdSysOsClose'
 
-function readStdSysOsGetEnv(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
-	let resultId = readQword(buf, offset: offset)
-	let namePtrId = readQword(buf, offset: offset + 8)
-	let nameLenId = readQword(buf, offset: offset + 16)
-	let outBufPtrId = readQword(buf, offset: offset + 24)
-	let outBufLenId = readQword(buf, offset: offset + 32)
+function readStdSysOsGetEnv(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset) throws CacheCorruption
+	let resultId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
+	let namePtrId = try readQword(buf, offset: offset + 8) otherwise throw CacheCorruption.invalidEncoding
+	let nameLenId = try readQword(buf, offset: offset + 16) otherwise throw CacheCorruption.invalidEncoding
+	let outBufPtrId = try readQword(buf, offset: offset + 24) otherwise throw CacheCorruption.invalidEncoding
+	let outBufLenId = try readQword(buf, offset: offset + 32) otherwise throw CacheCorruption.invalidEncoding
 	return (StdSystemOp.osGetEnv(resultId, namePtrId: namePtrId, nameLenId: nameLenId, outBufPtrId: outBufPtrId, outBufLenId: outBufLenId), offset + 40)
 end 'readStdSysOsGetEnv'
 
-function readStdSysOsGetArgc(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
-	let resultId = readQword(buf, offset: offset)
+function readStdSysOsGetArgc(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset) throws CacheCorruption
+	let resultId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	return (StdSystemOp.osGetArgc(resultId), offset + 8)
 end 'readStdSysOsGetArgc'
 
-function readStdSysOsClockMs(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
-	let resultId = readQword(buf, offset: offset)
+function readStdSysOsClockMs(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset) throws CacheCorruption
+	let resultId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	return (StdSystemOp.osClockMs(resultId), offset + 8)
 end 'readStdSysOsClockMs'
 
-function readStdSysOsGetArgv(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
-	let resultId = readQword(buf, offset: offset)
-	let indexId = readQword(buf, offset: offset + 8)
+function readStdSysOsGetArgv(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset) throws CacheCorruption
+	let resultId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
+	let indexId = try readQword(buf, offset: offset + 8) otherwise throw CacheCorruption.invalidEncoding
 	return (StdSystemOp.osGetArgv(resultId, indexId: indexId), offset + 16)
 end 'readStdSysOsGetArgv'
 
-function readStdSysOsGetExecutablePath(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
-	let resultId = readQword(buf, offset: offset)
-	let bufPtrId = readQword(buf, offset: offset + 8)
-	let bufSizeId = readQword(buf, offset: offset + 16)
+function readStdSysOsGetExecutablePath(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset) throws CacheCorruption
+	let resultId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
+	let bufPtrId = try readQword(buf, offset: offset + 8) otherwise throw CacheCorruption.invalidEncoding
+	let bufSizeId = try readQword(buf, offset: offset + 16) otherwise throw CacheCorruption.invalidEncoding
 	return (StdSystemOp.osGetExecutablePath(resultId, bufPtrId: bufPtrId, bufSizeId: bufSizeId), offset + 24)
 end 'readStdSysOsGetExecutablePath'
 
-function readStdSysLoadFramePtr(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
-	let resultId = readQword(buf, offset: offset)
+function readStdSysLoadFramePtr(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset) throws CacheCorruption
+	let resultId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	return (StdSystemOp.loadFramePtr(resultId), offset + 8)
 end 'readStdSysLoadFramePtr'
 
-function readStdSysLoadIndirect(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
-	let resultId = readQword(buf, offset: offset)
-	let addrId = readQword(buf, offset: offset + 8)
-	let off = readQword(buf, offset: offset + 16)
-	let (width, posAfterWidth) = readStoreWidthTag(buf, offset: offset + 24)
-	let (signed, posAfterSigned) = readBoolByte(buf, offset: posAfterWidth)
-	let (isFloat, p) = readBoolByte(buf, offset: posAfterSigned)
+function readStdSysLoadIndirect(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset) throws CacheCorruption
+	let resultId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
+	let addrId = try readQword(buf, offset: offset + 8) otherwise throw CacheCorruption.invalidEncoding
+	let off = try readQword(buf, offset: offset + 16) otherwise throw CacheCorruption.invalidEncoding
+	let (width, posAfterWidth) = try readStoreWidthTag(buf, offset: offset + 24)
+	let (signed, posAfterSigned) = try readBoolByte(buf, offset: posAfterWidth)
+	let (isFloat, p) = try readBoolByte(buf, offset: posAfterSigned)
 	return (StdSystemOp.loadIndirect(resultId, addrId: addrId, offset: off, width: width, signed: signed, isFloat: isFloat), p)
 end 'readStdSysLoadIndirect'
 
 function readStdSysFuncAddr(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset) throws CacheCorruption
-	let resultId = readQword(buf, offset: offset)
+	let resultId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	let (name, p) = try readString(buf, offset: offset + 8)
 	return (StdSystemOp.funcAddr(resultId, name: name), p)
 end 'readStdSysFuncAddr'
 
-function readStdSysStoreIndirect(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
-	let addrId = readQword(buf, offset: offset)
-	let off = readQword(buf, offset: offset + 8)
-	let valueId = readQword(buf, offset: offset + 16)
-	let (width, posAfterWidth) = readStoreWidthTag(buf, offset: offset + 24)
-	let (isFloat, p) = readBoolByte(buf, offset: posAfterWidth)
+function readStdSysStoreIndirect(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset) throws CacheCorruption
+	let addrId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
+	let off = try readQword(buf, offset: offset + 8) otherwise throw CacheCorruption.invalidEncoding
+	let valueId = try readQword(buf, offset: offset + 16) otherwise throw CacheCorruption.invalidEncoding
+	let (width, posAfterWidth) = try readStoreWidthTag(buf, offset: offset + 24)
+	let (isFloat, p) = try readBoolByte(buf, offset: posAfterWidth)
 	return (StdSystemOp.storeIndirect(addrId, offset: off, valueId: valueId, width: width, isFloat: isFloat), p)
 end 'readStdSysStoreIndirect'
 
-function readStdSysDrop(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
-	let valueId = readQword(buf, offset: offset)
+function readStdSysDrop(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset) throws CacheCorruption
+	let valueId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	return (StdSystemOp.drop(valueId), offset + 8)
 end 'readStdSysDrop'
 
-function readStdSysOsAllocPages(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
-	let resultId = readQword(buf, offset: offset)
-	let sizeId = readQword(buf, offset: offset + 8)
+function readStdSysOsAllocPages(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset) throws CacheCorruption
+	let resultId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
+	let sizeId = try readQword(buf, offset: offset + 8) otherwise throw CacheCorruption.invalidEncoding
 	return (StdSystemOp.osAllocPages(resultId, sizeId: sizeId), offset + 16)
 end 'readStdSysOsAllocPages'
 
-function readStdSysOsAllocPagesLarge(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
-	let resultId = readQword(buf, offset: offset)
-	let sizeId = readQword(buf, offset: offset + 8)
+function readStdSysOsAllocPagesLarge(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset) throws CacheCorruption
+	let resultId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
+	let sizeId = try readQword(buf, offset: offset + 8) otherwise throw CacheCorruption.invalidEncoding
 	return (StdSystemOp.osAllocPagesLarge(resultId, sizeId: sizeId), offset + 16)
 end 'readStdSysOsAllocPagesLarge'
 
-function readStdSysOsFreePages(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
-	let ptrId = readQword(buf, offset: offset)
-	let sizeId = readQword(buf, offset: offset + 8)
+function readStdSysOsFreePages(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset) throws CacheCorruption
+	let ptrId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
+	let sizeId = try readQword(buf, offset: offset + 8) otherwise throw CacheCorruption.invalidEncoding
 	return (StdSystemOp.osFreePages(ptrId, sizeId: sizeId), offset + 16)
 end 'readStdSysOsFreePages'
 
-function readStdSysOsFileOpen(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
-	let resultId = readQword(buf, offset: offset)
-	let cStringPtrId = readQword(buf, offset: offset + 8)
-	let flagsId = readQword(buf, offset: offset + 16)
-	let fileModeId = readQword(buf, offset: offset + 24)
+function readStdSysOsFileOpen(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset) throws CacheCorruption
+	let resultId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
+	let cStringPtrId = try readQword(buf, offset: offset + 8) otherwise throw CacheCorruption.invalidEncoding
+	let flagsId = try readQword(buf, offset: offset + 16) otherwise throw CacheCorruption.invalidEncoding
+	let fileModeId = try readQword(buf, offset: offset + 24) otherwise throw CacheCorruption.invalidEncoding
 	return (StdSystemOp.osFileOpen(resultId, cStringPtrId: cStringPtrId, flagsId: flagsId, fileModeId: fileModeId), offset + 32)
 end 'readStdSysOsFileOpen'
 
-function readStdSysOsFileRead(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
-	let resultId = readQword(buf, offset: offset)
-	let fdId = readQword(buf, offset: offset + 8)
-	let bufPtrId = readQword(buf, offset: offset + 16)
-	let countId = readQword(buf, offset: offset + 24)
+function readStdSysOsFileRead(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset) throws CacheCorruption
+	let resultId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
+	let fdId = try readQword(buf, offset: offset + 8) otherwise throw CacheCorruption.invalidEncoding
+	let bufPtrId = try readQword(buf, offset: offset + 16) otherwise throw CacheCorruption.invalidEncoding
+	let countId = try readQword(buf, offset: offset + 24) otherwise throw CacheCorruption.invalidEncoding
 	return (StdSystemOp.osFileRead(resultId, fdId: fdId, bufPtrId: bufPtrId, countId: countId), offset + 32)
 end 'readStdSysOsFileRead'
 
-function readStdSysOsFileWrite(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
-	let resultId = readQword(buf, offset: offset)
-	let fdId = readQword(buf, offset: offset + 8)
-	let bufPtrId = readQword(buf, offset: offset + 16)
-	let countId = readQword(buf, offset: offset + 24)
+function readStdSysOsFileWrite(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset) throws CacheCorruption
+	let resultId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
+	let fdId = try readQword(buf, offset: offset + 8) otherwise throw CacheCorruption.invalidEncoding
+	let bufPtrId = try readQword(buf, offset: offset + 16) otherwise throw CacheCorruption.invalidEncoding
+	let countId = try readQword(buf, offset: offset + 24) otherwise throw CacheCorruption.invalidEncoding
 	return (StdSystemOp.osFileWrite(resultId, fdId: fdId, bufPtrId: bufPtrId, countId: countId), offset + 32)
 end 'readStdSysOsFileWrite'
 
-function readStdSysOsFileClose(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
-	let resultId = readQword(buf, offset: offset)
-	let fdId = readQword(buf, offset: offset + 8)
+function readStdSysOsFileClose(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset) throws CacheCorruption
+	let resultId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
+	let fdId = try readQword(buf, offset: offset + 8) otherwise throw CacheCorruption.invalidEncoding
 	return (StdSystemOp.osFileClose(resultId, fdId: fdId), offset + 16)
 end 'readStdSysOsFileClose'
 
-function readStdSysOsFileLseek(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
-	let resultId = readQword(buf, offset: offset)
-	let fdId = readQword(buf, offset: offset + 8)
-	let offsetArg = readQword(buf, offset: offset + 16)
-	let whenceId = readQword(buf, offset: offset + 24)
+function readStdSysOsFileLseek(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset) throws CacheCorruption
+	let resultId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
+	let fdId = try readQword(buf, offset: offset + 8) otherwise throw CacheCorruption.invalidEncoding
+	let offsetArg = try readQword(buf, offset: offset + 16) otherwise throw CacheCorruption.invalidEncoding
+	let whenceId = try readQword(buf, offset: offset + 24) otherwise throw CacheCorruption.invalidEncoding
 	return (StdSystemOp.osFileLseek(resultId, fdId: fdId, offsetId: offsetArg, whenceId: whenceId), offset + 32)
 end 'readStdSysOsFileLseek'
 
-function readStdSysOsFileStat(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
-	let resultId = readQword(buf, offset: offset)
-	let cStringPtrId = readQword(buf, offset: offset + 8)
-	let statBufPtrId = readQword(buf, offset: offset + 16)
+function readStdSysOsFileStat(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset) throws CacheCorruption
+	let resultId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
+	let cStringPtrId = try readQword(buf, offset: offset + 8) otherwise throw CacheCorruption.invalidEncoding
+	let statBufPtrId = try readQword(buf, offset: offset + 16) otherwise throw CacheCorruption.invalidEncoding
 	return (StdSystemOp.osFileStat(resultId, cStringPtrId: cStringPtrId, statBufPtrId: statBufPtrId), offset + 24)
 end 'readStdSysOsFileStat'
 
-function readStdSysOsFileAccess(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
-	let resultId = readQword(buf, offset: offset)
-	let cStringPtrId = readQword(buf, offset: offset + 8)
-	let modeId = readQword(buf, offset: offset + 16)
+function readStdSysOsFileAccess(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset) throws CacheCorruption
+	let resultId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
+	let cStringPtrId = try readQword(buf, offset: offset + 8) otherwise throw CacheCorruption.invalidEncoding
+	let modeId = try readQword(buf, offset: offset + 16) otherwise throw CacheCorruption.invalidEncoding
 	return (StdSystemOp.osFileAccess(resultId, cStringPtrId: cStringPtrId, modeId: modeId), offset + 24)
 end 'readStdSysOsFileAccess'
 
-function readStdSysOsFileUnlink(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
-	let resultId = readQword(buf, offset: offset)
-	let cStringPtrId = readQword(buf, offset: offset + 8)
+function readStdSysOsFileUnlink(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset) throws CacheCorruption
+	let resultId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
+	let cStringPtrId = try readQword(buf, offset: offset + 8) otherwise throw CacheCorruption.invalidEncoding
 	return (StdSystemOp.osFileUnlink(resultId, cStringPtrId: cStringPtrId), offset + 16)
 end 'readStdSysOsFileUnlink'
 
-function readStdSysOsFileRename(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
-	let resultId = readQword(buf, offset: offset)
-	let oldPathPtrId = readQword(buf, offset: offset + 8)
-	let newPathPtrId = readQword(buf, offset: offset + 16)
+function readStdSysOsFileRename(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset) throws CacheCorruption
+	let resultId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
+	let oldPathPtrId = try readQword(buf, offset: offset + 8) otherwise throw CacheCorruption.invalidEncoding
+	let newPathPtrId = try readQword(buf, offset: offset + 16) otherwise throw CacheCorruption.invalidEncoding
 	return (StdSystemOp.osFileRename(resultId, oldPathPtrId: oldPathPtrId, newPathPtrId: newPathPtrId), offset + 24)
 end 'readStdSysOsFileRename'
 
-function readStdSysOsDirGetdents64(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
-	let resultId = readQword(buf, offset: offset)
-	let fdId = readQword(buf, offset: offset + 8)
-	let bufPtrId = readQword(buf, offset: offset + 16)
-	let bufSizeId = readQword(buf, offset: offset + 24)
+function readStdSysOsDirGetdents64(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset) throws CacheCorruption
+	let resultId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
+	let fdId = try readQword(buf, offset: offset + 8) otherwise throw CacheCorruption.invalidEncoding
+	let bufPtrId = try readQword(buf, offset: offset + 16) otherwise throw CacheCorruption.invalidEncoding
+	let bufSizeId = try readQword(buf, offset: offset + 24) otherwise throw CacheCorruption.invalidEncoding
 	return (StdSystemOp.osDirGetdents64(resultId, fdId: fdId, bufPtrId: bufPtrId, bufSizeId: bufSizeId), offset + 32)
 end 'readStdSysOsDirGetdents64'
 
-function readStdSysOsDirGetcwd(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
-	let resultId = readQword(buf, offset: offset)
-	let bufPtrId = readQword(buf, offset: offset + 8)
-	let bufSizeId = readQword(buf, offset: offset + 16)
+function readStdSysOsDirGetcwd(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset) throws CacheCorruption
+	let resultId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
+	let bufPtrId = try readQword(buf, offset: offset + 8) otherwise throw CacheCorruption.invalidEncoding
+	let bufSizeId = try readQword(buf, offset: offset + 16) otherwise throw CacheCorruption.invalidEncoding
 	return (StdSystemOp.osDirGetcwd(resultId, bufPtrId: bufPtrId, bufSizeId: bufSizeId), offset + 24)
 end 'readStdSysOsDirGetcwd'
 
-function readStdSysOsDirMkdir(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
-	let resultId = readQword(buf, offset: offset)
-	let cStringPtrId = readQword(buf, offset: offset + 8)
-	let modeId = readQword(buf, offset: offset + 16)
+function readStdSysOsDirMkdir(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset) throws CacheCorruption
+	let resultId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
+	let cStringPtrId = try readQword(buf, offset: offset + 8) otherwise throw CacheCorruption.invalidEncoding
+	let modeId = try readQword(buf, offset: offset + 16) otherwise throw CacheCorruption.invalidEncoding
 	return (StdSystemOp.osDirMkdir(resultId, cStringPtrId: cStringPtrId, modeId: modeId), offset + 24)
 end 'readStdSysOsDirMkdir'
 
-function readStdSysAtomicInc(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
-	let addrId = readQword(buf, offset: offset)
+function readStdSysAtomicInc(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset) throws CacheCorruption
+	let addrId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	return (StdSystemOp.atomicInc(addrId), offset + 8)
 end 'readStdSysAtomicInc'
 
-function readStdSysAtomicDec(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
-	let addrId = readQword(buf, offset: offset)
+function readStdSysAtomicDec(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset) throws CacheCorruption
+	let addrId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	return (StdSystemOp.atomicDec(addrId), offset + 8)
 end 'readStdSysAtomicDec'
 
-function readStdSysAtomicXadd(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
-	let resultId = readQword(buf, offset: offset)
-	let addrId = readQword(buf, offset: offset + 8)
-	let valId = readQword(buf, offset: offset + 16)
+function readStdSysAtomicXadd(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset) throws CacheCorruption
+	let resultId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
+	let addrId = try readQword(buf, offset: offset + 8) otherwise throw CacheCorruption.invalidEncoding
+	let valId = try readQword(buf, offset: offset + 16) otherwise throw CacheCorruption.invalidEncoding
 	return (StdSystemOp.atomicXadd(resultId, addrId: addrId, valId: valId), offset + 24)
 end 'readStdSysAtomicXadd'
 
-function readStdSysAtomicCas(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
-	let resultId = readQword(buf, offset: offset)
-	let addrId = readQword(buf, offset: offset + 8)
-	let oldId = readQword(buf, offset: offset + 16)
-	let newId = readQword(buf, offset: offset + 24)
+function readStdSysAtomicCas(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset) throws CacheCorruption
+	let resultId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
+	let addrId = try readQword(buf, offset: offset + 8) otherwise throw CacheCorruption.invalidEncoding
+	let oldId = try readQword(buf, offset: offset + 16) otherwise throw CacheCorruption.invalidEncoding
+	let newId = try readQword(buf, offset: offset + 24) otherwise throw CacheCorruption.invalidEncoding
 	return (StdSystemOp.atomicCas(resultId, addrId: addrId, oldId: oldId, newId: newId), offset + 32)
 end 'readStdSysAtomicCas'
 
-function readStdSysOsLockInit(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
-	let addrId = readQword(buf, offset: offset)
+function readStdSysOsLockInit(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset) throws CacheCorruption
+	let addrId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	return (StdSystemOp.osLockInit(addrId), offset + 8)
 end 'readStdSysOsLockInit'
 
-function readStdSysOsLockAcquire(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
-	let addrId = readQword(buf, offset: offset)
+function readStdSysOsLockAcquire(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset) throws CacheCorruption
+	let addrId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	return (StdSystemOp.osLockAcquire(addrId), offset + 8)
 end 'readStdSysOsLockAcquire'
 
-function readStdSysOsLockRelease(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
-	let addrId = readQword(buf, offset: offset)
+function readStdSysOsLockRelease(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset) throws CacheCorruption
+	let addrId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	return (StdSystemOp.osLockRelease(addrId), offset + 8)
 end 'readStdSysOsLockRelease'
 
-function readStdSysBoxValue(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
-	let resultId = readQword(buf, offset: offset)
-	let valueId = readQword(buf, offset: offset + 8)
-	let sizeId = readQword(buf, offset: offset + 16)
+function readStdSysBoxValue(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset) throws CacheCorruption
+	let resultId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
+	let valueId = try readQword(buf, offset: offset + 8) otherwise throw CacheCorruption.invalidEncoding
+	let sizeId = try readQword(buf, offset: offset + 16) otherwise throw CacheCorruption.invalidEncoding
 	return (StdSystemOp.boxValue(resultId, valueId: valueId, sizeId: sizeId), offset + 24)
 end 'readStdSysBoxValue'
 
-function readStdSysUnboxValue(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
-	let resultId = readQword(buf, offset: offset)
-	let ptrId = readQword(buf, offset: offset + 8)
-	let sizeId = readQword(buf, offset: offset + 16)
+function readStdSysUnboxValue(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset) throws CacheCorruption
+	let resultId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
+	let ptrId = try readQword(buf, offset: offset + 8) otherwise throw CacheCorruption.invalidEncoding
+	let sizeId = try readQword(buf, offset: offset + 16) otherwise throw CacheCorruption.invalidEncoding
 	return (StdSystemOp.unboxValue(resultId, ptrId: ptrId, sizeId: sizeId), offset + 24)
 end 'readStdSysUnboxValue'
 
 function readStdSysLoadLayoutDescriptor(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset) throws CacheCorruption
-	let resultId = readQword(buf, offset: offset)
+	let resultId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	let (label, p) = try readString(buf, offset: offset + 8)
 	return (StdSystemOp.loadLayoutDescriptor(resultId, label: label), p)
 end 'readStdSysLoadLayoutDescriptor'
 
 function readStdSysLoadWitnessTable(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset) throws CacheCorruption
-	let resultId = readQword(buf, offset: offset)
+	let resultId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	let (label, p) = try readString(buf, offset: offset + 8)
 	return (StdSystemOp.loadWitnessTable(resultId, label: label), p)
 end 'readStdSysLoadWitnessTable'
 
 function readStdSysDescriptorField(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset) throws CacheCorruption
-	let resultId = readQword(buf, offset: offset)
-	let descAddrId = readQword(buf, offset: offset + 8)
-	let fieldRaw = readDword(buf, offset: offset + 16)
+	let resultId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
+	let descAddrId = try readQword(buf, offset: offset + 8) otherwise throw CacheCorruption.invalidEncoding
+	let fieldRaw = try readDword(buf, offset: offset + 16) otherwise throw CacheCorruption.invalidEncoding
 	let field = try DescriptorField.allCases.get(fieldRaw) otherwise throw CacheCorruption.invalidEncoding
 	return (StdSystemOp.descriptorField(resultId, descAddrId: descAddrId, field: field), offset + 20)
 end 'readStdSysDescriptorField'
 
-function readStdSysWitnessMethod(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
-	let resultId = readQword(buf, offset: offset)
-	let witnessAddrId = readQword(buf, offset: offset + 8)
-	let methodIndex = readQword(buf, offset: offset + 16)
+function readStdSysWitnessMethod(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset) throws CacheCorruption
+	let resultId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
+	let witnessAddrId = try readQword(buf, offset: offset + 8) otherwise throw CacheCorruption.invalidEncoding
+	let methodIndex = try readQword(buf, offset: offset + 16) otherwise throw CacheCorruption.invalidEncoding
 	return (StdSystemOp.witnessMethod(resultId, witnessAddrId: witnessAddrId, methodIndex: methodIndex), offset + 24)
 end 'readStdSysWitnessMethod'
 
-function readStdSysDropTypeParam(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
-	let slotValueId = readQword(buf, offset: offset)
-	let layoutValueId = readQword(buf, offset: offset + 8)
+function readStdSysDropTypeParam(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset) throws CacheCorruption
+	let slotValueId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
+	let layoutValueId = try readQword(buf, offset: offset + 8) otherwise throw CacheCorruption.invalidEncoding
 	return (StdSystemOp.dropTypeParam(slotValueId, layoutValueId: layoutValueId), offset + 16)
 end 'readStdSysDropTypeParam'
 
@@ -5168,7 +5545,7 @@ function writeStdOp(buf ByteArray, op StdOp) throws CacheCorruption
 end 'writeStdOp'
 
 function readStdOp(buf ByteArray, offset ByteOffset) returns (StdOp, ByteOffset) throws CacheCorruption
-	let raw = readDword(buf, offset: offset)
+	let raw = try readDword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	let kase = try StdOp.unionCases.fromRawValue(raw) otherwise throw CacheCorruption.invalidEncoding
 	let pos = offset + 4
 	return match kase 'outer'
@@ -5218,19 +5595,19 @@ function writeIrTerminator(buf ByteArray, term Terminator)
 end 'writeIrTerminator'
 
 function readIrTerminator(buf ByteArray, offset ByteOffset) returns (Terminator, ByteOffset) throws CacheCorruption
-	let raw = readDword(buf, offset: offset)
+	let raw = try readDword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	let kase = try Terminator.unionCases.fromRawValue(raw) otherwise throw CacheCorruption.invalidEncoding
 	let pos = offset + 4
 	return match kase 'term'
 		unset gives (Terminator.unset, pos)
 		dead gives (Terminator.dead, pos)
 		fallthrough gives (Terminator.fallthrough, pos)
-		opIndex gives readIrTerminatorOpIndex(buf, offset: pos)
+		opIndex gives try readIrTerminatorOpIndex(buf, offset: pos)
 	end 'term'
 end 'readIrTerminator'
 
-function readIrTerminatorOpIndex(buf ByteArray, offset ByteOffset) returns (Terminator, ByteOffset)
-	let index = readQword(buf, offset: offset)
+function readIrTerminatorOpIndex(buf ByteArray, offset ByteOffset) returns (Terminator, ByteOffset) throws CacheCorruption
+	let index = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	return (Terminator.opIndex(index), offset + 8)
 end 'readIrTerminatorOpIndex'
 
@@ -5243,9 +5620,9 @@ function writeIrBlockArg(buf ByteArray, arg IrBlockArg)
 end 'writeIrBlockArg'
 
 function readIrBlockArg(buf ByteArray, offset ByteOffset) returns (IrBlockArg, ByteOffset) throws CacheCorruption
-	let valueId = readQword(buf, offset: offset)
-	let (argType, p) = readStdTypeTag(buf, offset: offset + 8)
-	let roleTag = readDword(buf, offset: p)
+	let valueId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
+	let (argType, p) = try readStdTypeTag(buf, offset: offset + 8)
+	let roleTag = try readDword(buf, offset: p) otherwise throw CacheCorruption.invalidEncoding
 	let role = try blockArgReturnRoleFromTag(roleTag)
 	return (IrBlockArg.create(valueId, argType: argType, returnRole: role), p + 4)
 end 'readIrBlockArg'
@@ -5287,22 +5664,22 @@ function writeIrBlock(buf ByteArray, block IrBlock) throws CacheCorruption
 end 'writeIrBlock'
 
 function readIrBlock(buf ByteArray, offset ByteOffset) returns (IrBlock, ByteOffset) throws CacheCorruption
-	let id = readQword(buf, offset: offset)
+	let id = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	var pos = offset + 8
 	let (label, p1) = try readString(buf, offset: pos)
 	pos = p1
 	var block = IrBlock.create(id, label: label)
-	let opRefCount = readDword(buf, offset: pos)
+	let opRefCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
 	pos = pos + 4
 	for _ in 0 upto opRefCount 'eachOpRef'
-		let opIdx = readQword(buf, offset: pos)
+		let opIdx = try readQword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
 		pos = pos + 8
 		block.opRefs.append(opIdx)
 	end 'eachOpRef'
 	let (term, p2) = try readIrTerminator(buf, offset: pos)
 	pos = p2
 	block.terminator = term
-	let argCount = readDword(buf, offset: pos)
+	let argCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
 	pos = pos + 4
 	for _ in 0 upto argCount 'eachArg'
 		let (arg, p3) = try readIrBlockArg(buf, offset: pos)
@@ -5389,61 +5766,61 @@ function readStdIrFunction(buf ByteArray, offset ByteOffset) returns (IrFunction
 	pos = p3
 	let (sourceFilePath, p4) = try readOptionalFilePath(buf, offset: pos)
 	pos = p4
-	let paramCount = readDword(buf, offset: pos)
+	let paramCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
 	pos = pos + 4
-	let (returnType, p5) = readStdReturnType(buf, offset: pos)
+	let (returnType, p5) = try readStdReturnType(buf, offset: pos)
 	pos = p5
-	let (paramTypes, p6) = readStdTypeArrayCodec(buf, offset: pos)
+	let (paramTypes, p6) = try readStdTypeArrayCodec(buf, offset: pos)
 	pos = p6
 	var func = IrFunction.createFromStd(name, returnType: returnType, paramCount: paramCount, paramTypes: paramTypes, returnLine: 0)
 	func.namespace = namespace
 	func.visibility = visibility
 	func.sourceFilePath = sourceFilePath
-	let blockRefCount = readDword(buf, offset: pos)
+	let blockRefCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
 	pos = pos + 4
 	for _ in 0 upto blockRefCount 'eachBlockRef'
-		let br = readQword(buf, offset: pos)
+		let br = try readQword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
 		pos = pos + 8
 		func.blockRefs.append(br)
 	end 'eachBlockRef'
-	let nextBlockId = readQword(buf, offset: pos)
+	let nextBlockId = try readQword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
 	pos = pos + 8
 	func.nextBlockId = nextBlockId
-	let (hasLayout, p7) = readBoolByte(buf, offset: pos)
+	let (hasLayout, p7) = try readBoolByte(buf, offset: pos)
 	pos = p7
 	let (witnessConstraints, p8) = try readWhereClauseArray(buf, offset: pos)
 	pos = p8
 	func.hasImplicitLayoutParam = hasLayout
 	func.implicitWitnessConstraints = witnessConstraints
-	let captureCount = readQword(buf, offset: pos)
+	let captureCount = try readQword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
 	pos = pos + 8
 	func.closureCaptureCount = captureCount
 	// Cache v74: restore the four refcount-insertion per-value side-tables in the
 	// exact order written. Index-ordered restore is exact because the setters
 	// grow the parallel array on demand (see writeStdIrFunction for why these must
 	// round-trip — the cache-parity inlined-alloc leak).
-	let ownershipCount = readDword(buf, offset: pos)
+	let ownershipCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
 	pos = pos + 4
 	for i in 0 upto ownershipCount 'restoreOwnership'
 		let (cls, pNext) = try readOwnershipClass(buf, offset: pos)
 		pos = pNext
 		func.setValueOwnership(i, cls: cls)
 	end 'restoreOwnership'
-	let managedCount = readDword(buf, offset: pos)
+	let managedCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
 	pos = pos + 4
 	for i in 0 upto managedCount 'restoreManaged'
-		let (m, pNext) = readBoolByte(buf, offset: pos)
+		let (m, pNext) = try readBoolByte(buf, offset: pos)
 		pos = pNext
 		func.setValueManaged(i, managed: m)
 	end 'restoreManaged'
-	let typeParamCount = readDword(buf, offset: pos)
+	let typeParamCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
 	pos = pos + 4
 	for i in 0 upto typeParamCount 'restoreTypeParam'
-		let (tp, pNext) = readBoolByte(buf, offset: pos)
+		let (tp, pNext) = try readBoolByte(buf, offset: pos)
 		pos = pNext
 		func.setValueTypeParam(i, isTypeParam: tp)
 	end 'restoreTypeParam'
-	let typeParamNameCount = readDword(buf, offset: pos)
+	let typeParamNameCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
 	pos = pos + 4
 	for i in 0 upto typeParamNameCount 'restoreTypeParamName'
 		let (tpName, pNext) = try readOptionalStringDefaultEmpty(buf, offset: pos)
@@ -5473,14 +5850,14 @@ end 'writeStdModule'
 function readStdModule(buf ByteArray, offset ByteOffset) returns (StdModule, ByteOffset) throws CacheCorruption
 	var module = StdModule.create()
 	var pos = offset
-	let funcCount = readDword(buf, offset: pos)
+	let funcCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
 	pos = pos + 4
 	for _ in 0 upto funcCount 'eachFunc'
 		let (f, p) = try readStdIrFunction(buf, offset: pos)
 		pos = p
 		module.functions.push(f)
 	end 'eachFunc'
-	let blockCount = readDword(buf, offset: pos)
+	let blockCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
 	pos = pos + 4
 	for _ in 0 upto blockCount 'eachBlock'
 		let (blk, p) = try readIrBlock(buf, offset: pos)
@@ -5493,7 +5870,7 @@ function readStdModule(buf ByteArray, offset ByteOffset) returns (StdModule, Byt
 		// functions get dropped before instrumentCoverage runs.
 		module.blockSourceInfo.push(BlockSourceInfo.empty())
 	end 'eachBlock'
-	let opCount = readDword(buf, offset: pos)
+	let opCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
 	pos = pos + 4
 	for _ in 0 upto opCount 'eachOp'
 		let (op, p) = try readStdOp(buf, offset: pos)

@@ -49,6 +49,7 @@ function queryTokens(project Project, path FilePath) returns TokenArray throws C
 	// the gate at queryAllMid stops the pipeline before parsing consumes
 	// partial tokens. Then return an empty token stream so the caller's
 	// downstream logic doesn't crash on truncated input.
+	let lexStart = passTimerStart()
 	let tokens = try tokenize(content) otherwise (lerr) 'lexFail'
 		match lerr 'kind'
 			unterminatedString(line, column) then reportCompileError(project, code: ErrorCode.lexerUnterminatedString, message: "Unterminated string literal", line: line, column: column, filePath: path)
@@ -60,6 +61,7 @@ function queryTokens(project Project, path FilePath) returns TokenArray throws C
 		popQuery(project)
 		return TokenArray.create()
 	end 'lexFail'
+	recordPassSince("__lex", startMs: lexStart)
 
 	popQuery(project)
 
@@ -134,6 +136,7 @@ function queryParseOps(project Project, path FilePath) returns MaxonModule throw
 	beginFileParse(project, filePath: path)
 
 	let tokens = try queryTokens(project, path: path)
+	let parseStart = passTimerStart()
 	let errorCountBefore = project.diagnostics.count()
 	// Empty or whitespace-only source produces an empty token stream and the
 	// Parser.create attempt fails. That isn't an error — an empty file is
@@ -165,6 +168,7 @@ function queryParseOps(project Project, path FilePath) returns MaxonModule throw
 		popQuery(project)
 		return MaxonModule.create()
 	end 'parseModuleFail'
+	recordPassSince("__parse", startMs: parseStart)
 
 	popQuery(project)
 
@@ -274,6 +278,16 @@ function queryAllModule(project Project) returns MaxonModule throws CompileError
 	let stdlibModule = getStdlibModule(project)
 	var allModule = MaxonModule.create()
 	allModule.merge(stdlibModule)
+
+	// Phase 6: register every external library this project links (--library=DIR
+	// ∪ build.maxon library("...")) AFTER stdlib (so stdlib stays index 0) and
+	// BEFORE the user files, then merge each library's (empty — cache-linked)
+	// module. With no external libraries this loop is a no-op and the registry
+	// stays stdlib-only, preserving Phase-4 byte parity.
+	try registerProjectLibraries(project)
+	for i in 1 upto registeredLibraryCount() 'eachLib'
+		allModule.merge(getLibraryModule(i))
+	end 'eachLib'
 
 	// Pre-parse interface-name scan (mirrors maxon-sharp's `PreScan`): register
 	// every user interface name across ALL files before any file is parsed, so
@@ -428,10 +442,36 @@ export function queryCodeResult(project Project) returns CodeResult throws Compi
 		throw CompileError.compileError
 	end 'midErrors'
 	var globalData = project.globalData
-	let stdlibCache = getStdlibCacheData()
+	let stdlibCache = combinedLibraryCache()
+
+	// Phase 5: install validated persisted user-function chunks into
+	// `db.codePerFunc` before the incremental backend runs, so a same-source
+	// rebuild in a fresh process reuses each chunk (no re-lower, no regalloc).
+	// Runs AFTER queryAllMid (midPerFunc keyHashes + fresh inlineEdges ready)
+	// and BEFORE emit; each install is re-validated per-chunk against this
+	// build's fresh post-inline state.
+	let loadStart = passTimerStart()
+	try loadUserChunkCache(project)
+	recordPassSince("__loadUserChunkCache", startMs: loadStart)
+
+	// Snapshot the persistable-chunk miss counter so the store can tell whether
+	// any USER-owned function was actually (re)compiled this build. A fully-warm
+	// rebuild that reused every user chunk produces no new persistable misses
+	// (the per-compile `mrt_start` miss doesn't count) → the on-disk file is
+	// already current → skip the rewrite entirely (the read-modify-write merge
+	// of a large chunk set is pure I/O overhead when nothing changed).
+	let missesBefore = project.db.userChunkMisses
+
 	let backendStart = passTimerStart()
 	let result = try dispatchBackendEmit(midModule, target: project.target, globalData: globalData, project: project, stdlibCache: stdlibCache)
 	recordPassSince("__emitBackend", startMs: backendStart)
+
+	// Phase 5: persist the (possibly grown) user-function chunk cache, merged
+	// with whatever is on disk (atomic read-modify-write — concurrent builds
+	// don't clobber each other). Skipped when nothing was recompiled.
+	let storeStart = passTimerStart()
+	try storeUserChunkCache(project, missesBefore: missesBefore)
+	recordPassSince("__storeUserChunkCache", startMs: storeStart)
 
 	// Final --dump-stages file for the target-lowering phase. emitBackend runs
 	// Phase 7 (lowerMirToTarget, regalloc, prologue/epilogue) outside the

@@ -100,6 +100,10 @@ export type Arm64Backend implements TargetBackend
 		for fixup in callFixupsLocal 'liftCalls'
 			chunk.callFixups.push(CallFixup.create(fixup.instrOffset, targetName: fixup.targetName))
 		end 'liftCalls'
+		// Capture the float rdata constants op emission just registered into
+		// `globalData`, so a later cache hit can replay them (op emission is
+		// skipped on a hit). See `captureChunkRdataConstants`.
+		captureChunkRdataConstants(chunk, globalData: globalData)
 		return chunk
 	end 'emitFunctionChunk'
 
@@ -2022,8 +2026,8 @@ export function concatArm64FunctionChunks(project Project, chunks FunctionCodeCh
 	// VALIDITY, not `functions.count() > 0` — a metadata-only cold cache is
 	// valid but starts empty, and `linkArm64StdlibFunctions` (via
 	// `ensureStdlibFunctionsCompiled`) fills it. The cache-bypassed path is
-	// `isStdlibCacheValid() == false` → skipped, stdlib from the user module.
-	if isStdlibCacheValid() 'hasStdlib'
+	// `anyLibraryCacheValid() == false` → skipped, stdlib from the user module.
+	if anyLibraryCacheValid() 'hasStdlib'
 		linkArm64StdlibFunctions(project, code: code, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, callFixups: callFixups, adrFixups: adrFixups, rdataRelocs: rdataRelocs, relocations: relocations, globalData: globalData, stdlibCache: stdlibCache)
 	end 'hasStdlib'
 

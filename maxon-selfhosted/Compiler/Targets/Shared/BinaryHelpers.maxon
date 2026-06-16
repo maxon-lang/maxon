@@ -51,29 +51,45 @@ export function padTo(buf ByteArray, size ByteCount)
 	end 'pad'
 end 'padTo'
 
-export function readDword(buf ByteArray, offset ByteOffset) returns MachineWord
-	// Caller's contract: offset+4 <= buf.count(). All four byte reads share this single invariant.
-	var b0 = 0
-	var b1 = 0
-	var b2 = 0
-	var b3 = 0
+// Raised when a byte-reader would run past the end of its buffer. Readers
+// deserialize data that may be CORRUPT or TRUNCATED (e.g. a damaged on-disk
+// cache file), so an out-of-range read is a recoverable condition the caller
+// must decide on — NOT a panic buried in the helper. Each caller handles it
+// explicitly: code emitters, where a short buffer is a guaranteed compiler bug,
+// use `otherwise panic(...)` so the bug surfaces at the call site with context;
+// deserializers of untrusted bytes (the cache decoder) translate it into their
+// own recoverable error (e.g. `CacheCorruption.invalidEncoding`) and rebuild.
+export union ByteReadError implements Error
+	// A read crossed `buf.count()`. `offset`/`width`/`available` pin down the
+	// overrun for the caller's panic/log message.
+	outOfRange(offset ByteOffset, width ByteCount, available ByteCount)
+end 'ByteReadError'
+
+export function readDword(buf ByteArray, offset ByteOffset) returns MachineWord throws ByteReadError
+	if offset + 4 > buf.count() 'oob'
+		throw ByteReadError.outOfRange(offset, width: 4, available: buf.count())
+	end 'oob'
+	var result = 0
 	try 'readBytes'
-		b0 = buf.get(offset)
-		b1 = buf.get(offset + 1)
-		b2 = buf.get(offset + 2)
-		b3 = buf.get(offset + 3)
+		let b0 = buf.get(offset)
+		let b1 = buf.get(offset + 1)
+		let b2 = buf.get(offset + 2)
+		let b3 = buf.get(offset + 3)
+		result = b0 or (b1 shl 8) or (b2 shl 16) or (b3 shl 24)
 	end 'readBytes' otherwise (e) 'badRead'
 		match e 'kind'
-			indexOutOfBounds then panic("readDword: caller must ensure offset+4 <= buf.count() (offset={offset}, buf.count={buf.count()})")
+			// Bounds were just checked, so an OOB here is impossible; an empty slot
+			// would be a push-init invariant break, which IS a local bug.
+			indexOutOfBounds then panic("readDword: offset+4 <= buf.count() checked but get OOB (offset={offset}, buf.count={buf.count()})")
 			emptySlot then panic("readDword: byte slot empty (push-init invariant)")
 		end 'kind'
 	end 'badRead'
-	return b0 or (b1 shl 8) or (b2 shl 16) or (b3 shl 24)
+	return result
 end 'readDword'
 
-export function readQword(buf ByteArray, offset ByteOffset) returns MachineWord
-	let lo = readDword(buf, offset: offset)
-	let hi = readDword(buf, offset: offset + 4)
+export function readQword(buf ByteArray, offset ByteOffset) returns MachineWord throws ByteReadError
+	let lo = try readDword(buf, offset: offset)
+	let hi = try readDword(buf, offset: offset + 4)
 	return lo or (hi shl 32)
 end 'readQword'
 
@@ -131,7 +147,7 @@ export function patchArm64Adr(code ByteArray, codeOffset CodeOffset, instrAddr M
 	let byteOff = targetAddr - instrAddr
 	let immlo = byteOff and 0x3
 	let immhi = (byteOff shr 2) and 0x7FFFF
-	let origInsn = readDword(code, offset: codeOffset)
+	let origInsn = try readDword(code, offset: codeOffset) otherwise panic("patchArm64Adr: codeOffset {codeOffset} past end of emitted code (count={code.count()}) — emitter bug")
 	let rd = origInsn and 0x1F
 	let patched = (immlo shl 29) or 0x10000000 or (immhi shl 5) or rd
 	patchDword(code, offset: codeOffset, value: patched)
@@ -142,7 +158,7 @@ export function patchArm64LdrLiteral(code ByteArray, codeOffset CodeOffset, inst
 	let byteOff = targetAddr - instrAddr
 	let wordOff = byteOff / 4
 	let imm19 = wordOff and 0x7FFFF
-	let origInsn = readDword(code, offset: codeOffset)
+	let origInsn = try readDword(code, offset: codeOffset) otherwise panic("patchArm64LdrLiteral: codeOffset {codeOffset} past end of emitted code (count={code.count()}) — emitter bug")
 	let patched = (origInsn and 0xFF00001F) or (imm19 shl 5)
 	patchDword(code, offset: codeOffset, value: patched)
 end 'patchArm64LdrLiteral'

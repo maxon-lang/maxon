@@ -417,7 +417,7 @@ export function augmentWithRuntime(module StdModule, project Project) returns St
 	// runtime bodies (call_indirect's inline type-section index would need
 	// a fixup mechanism to be portable across cache and link), so on wasm
 	// we always merge the full filtered runtime.
-	let cacheHasRuntimeBodies = isStdlibCacheValid() and project.target.cpu != CpuArch.wasm32
+	let cacheHasRuntimeBodies = anyLibraryCacheValid() and project.target.cpu != CpuArch.wasm32
 	if cacheHasRuntimeBodies 'trimToPerCompile'
 		augmented.merge(buildUserSideRuntime(filteredRuntime))
 		augmented.merge(module)
@@ -971,7 +971,7 @@ function filterRuntimeByReachability(runtime StdModule, userModule StdModule, ta
 	// Walking the entire cache would re-anchor runtime helpers via stdlib
 	// functions the user never reaches (e.g. a Math.pow-only program would
 	// otherwise pull in `mm_alloc` via every cached String / Map helper).
-	if isStdlibCacheValid() 'cacheValid'
+	if anyLibraryCacheValid() 'cacheValid'
 		var userCalleeSeeds = collectUserCalleeSeeds(userModule)
 		// Layout/witness descriptor entries reach cached thunk bodies via
 		// `funcAbs64InRdata` relocs registered by BuildLayoutDescriptors /
@@ -1055,7 +1055,7 @@ end 'seedRuntimeReachName'
 // reachability so programs that never reach an allocator-touching stdlib
 // helper don't carry the slab/MM runtime along for the ride.
 function seedFromCacheCallees(cpu CpuArch, userCalleeSeeds StringArray, runtimeMap RuntimeFuncByName, seen RuntimeReachSet, worklist StringArray)
-	let cacheData = getStdlibCacheData()
+	let cacheData = combinedLibraryCache()
 	match cpu 'arch'
 		x64 to arm64 then seedFromNativeCacheFixups(cacheData.functions, needed: computeNeededStdlibFunctions(userCalleeSeeds, stdlibCache: cacheData), runtimeMap: runtimeMap, seen: seen, worklist: worklist)
 		wasm32 then seedFromWasmCacheFixups(cacheData.wasmFunctions, needed: computeNeededStdlibFunctionsWasm(userCalleeSeeds, stdlibCache: cacheData), runtimeMap: runtimeMap, seen: seen, worklist: worklist)
@@ -1187,7 +1187,37 @@ function seedRuntimeBackendEdgesWasm(funcName String, runtimeMap RuntimeFuncByNa
 		seedRuntimeReachName("__managed_mem_create", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
 	end 'isCmdLineArg' else if funcName == "mrt_command_line_count" 'isCmdLineCount'
 		seedRuntimeReachName("mrt_alloc", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
-	end 'isCmdLineCount'
+	end 'isCmdLineCount' else if funcName == "mrt_file_stat" 'isFileStat'
+		// emitWasmFileStat carves its 48-byte stat buffer with mrt_alloc.
+		seedRuntimeReachName("mrt_alloc", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
+	end 'isFileStat' else if funcName == "mrt_file_stat_free" 'isFileStatFree'
+		seedRuntimeReachName("mm_decref", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
+	end 'isFileStatFree' else if funcName == "mrt_directory_open_search" 'isDirOpenSearch'
+		// emitWasmDirectoryOpenSearch allocates the search-state block (mrt_alloc)
+		// and refills it through the mrt_directory_next helper.
+		seedRuntimeReachName("mrt_alloc", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
+		seedRuntimeReachName("mrt_directory_next", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
+	end 'isDirOpenSearch' else if funcName == "mrt_directory_next" 'isDirNext'
+		seedRuntimeReachName("mrt_alloc", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
+		seedRuntimeReachName("mm_decref", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
+	end 'isDirNext' else if funcName == "mrt_directory_current_path" 'isDirCurrentPath'
+		seedRuntimeReachName("__managed_mem_create", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
+	end 'isDirCurrentPath' else if funcName == "mrt_directory_filename" 'isDirFilename'
+		seedRuntimeReachName("__managed_mem_create", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
+	end 'isDirFilename' else if funcName == "mrt_directory_close" 'isDirClose'
+		// emitWasmDirectoryClose / __destruct___ManagedDirectory release handles
+		// via emitWasmDirectoryReleaseHandles, which mm_decref's the name buffer.
+		seedRuntimeReachName("mm_decref", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
+	end 'isDirClose' else if funcName == "__destruct___ManagedDirectory" 'isDirDestruct'
+		seedRuntimeReachName("mm_decref", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
+	end 'isDirDestruct' else if funcName == "mrt_managed_socket_tcp_connect" 'isSockConnect'
+		// emitWasmSocketTcpConnect carves the 40-byte handle block + 8-byte
+		// __ManagedSocket wrapper with mrt_alloc. The runtime.std body is a
+		// sentinel errorReturn stub (no mrt_alloc edge), so DCE needs this wired.
+		seedRuntimeReachName("mrt_alloc", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
+	end 'isSockConnect' else if funcName == "mrt_managed_socket_close" 'isSockClose'
+		seedRuntimeReachName("mm_decref", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
+	end 'isSockClose'
 end 'seedRuntimeBackendEdgesWasm'
 
 // Walk every op in `func`'s body. For each call/tryCall/tailCall/funcRef/
@@ -1713,6 +1743,11 @@ function emitBackendIncrementalWith(pipeline PassPipeline, stdlibCache StdlibCac
 	for func in pipeline.mirModule.functions 'collect'
 		let freshKeyHash = try freshKeyHashByName.get(func.name) otherwise panic("emitBackendIncrementalWith: freshKeyHashByName missing entry for '{func.name}'")
 		if let hit = try lookupCachedChunkByKeyHash(pipeline.project, funcName: func.name, freshKeyHash: freshKeyHash) 'cached'
+			// A cache hit skips op emission, which is what would normally register
+			// this function's lazy float/xmm-mask rdata constants into globalData.
+			// Replay the chunk's captured constants so its `rdataRelocs` resolve to
+			// the correct bytes (otherwise: missing rdata entry → corrupt binary).
+			reregisterChunkRdataConstants(hit, globalData: pipeline.globalData)
 			chunks.push(hit)
 			continue
 		end 'cached'
@@ -1724,6 +1759,13 @@ function emitBackendIncrementalWith(pipeline PassPipeline, stdlibCache StdlibCac
 		// so the cost is negligible.
 		let targetFunc = try findTargetFuncByName(pipeline.targetModule, name: func.name) otherwise panic("emitBackendIncrementalWith: missing target func '{func.name}' after prepareTargetModuleForFunctions ({pipeline.targetModule.functions.count()} lowered)")
 		pipeline.project.db.codePerFuncMisses = pipeline.project.db.codePerFuncMisses + 1
+		// Phase 5: track misses of PERSISTABLE (user-owned) functions separately
+		// so a fully-warm rebuild whose only miss is a per-compile runtime entry
+		// (`mrt_start`, never persisted) still takes the store's no-op fast path
+		// instead of re-writing an identical chunk file every build.
+		if isPersistableUserChunkName(func.name) 'persistableMiss'
+			pipeline.project.db.userChunkMisses = pipeline.project.db.userChunkMisses + 1
+		end 'persistableMiss'
 		let chunk = backend.emitFunctionChunk(targetFunc)
 		stampChunkMemo(pipeline.project, funcName: func.name, chunk: chunk)
 		chunks.push(chunk)

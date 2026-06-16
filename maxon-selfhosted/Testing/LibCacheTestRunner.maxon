@@ -1,0 +1,1261 @@
+// Library-cache test runner (`maxon test-lib-cache`).
+//
+// Phase 0 of the libraries design (see `library plan.md`). Exercises the
+// on-disk library cache END-TO-END by driving the compiler binary itself as a
+// subprocess, so the assertions cover the real read/write/validate/atomic-rename
+// path — not an in-process reimplementation of it.
+//
+// Isolation: every scenario builds into its OWN throwaway temp cache dir via the
+// internal `--cache-root=DIR` flag, so it controls the cold/hit/delete sequence
+// completely and NEVER touches the persistent shared stdlib cache that the real
+// spec runner relies on for speed. The harness reconstructs the exact `.mxc`
+// filename (`stdlib-<target>-<fp>.mxc`) from `compilerFingerprintToken()` +
+// `targetToString(detectHostTarget())`, the same key `libraryCachePath` uses, so
+// it can inspect / delete / corrupt the precise file a build reads and writes.
+//
+// What each scenario asserts:
+//   cold        — first build into an empty cache dir SUCCEEDS and WRITES the .mxc
+//   hit         — a second build over the same dir SUCCEEDS with the .mxc present
+//   delete      — deleting the .mxc forces the next build to REBUILD it
+//   coexistence — two distinct cache roots don't interfere (independent files)
+//   corrupt     — a garbage / truncated / zeroed .mxc does NOT crash the build;
+//                 the reader rejects it and falls back to a cold rebuild (exit 0)
+//   stray-tmp   — a leftover `*.tmp` from an aborted atomic write is ignored
+//
+// The `CACHE_STATS` line emitted by `--cache-stats` is parsed for the
+// `stdlib_valid` flag and the per-function regalloc hit/miss counters; combined
+// with the harness's own pre-build `File.exists` check on the .mxc it pins down
+// cold-vs-hit precisely (a successful build always ends `stdlib_valid=yes`, so
+// the file's prior existence is the real discriminator).
+
+// A subprocess exit code, mirroring Subprocess's file-private `ExitInt` range
+// (signed: Unix signals / Windows NTSTATUS read as i64). Declared here because
+// `ExitInt` is not exported. `-1` doubles as this harness's spawn-failure
+// sentinel — safe because only `0` is ever treated as success.
+typealias ProcessExitCode = int(i64.min to i64.max)
+
+// Per-build result parsed from a `maxon build --cache-stats --cache-root=…` run.
+// Only `stdlib_valid` is consumed: across SUBPROCESS builds the user program's
+// in-memory per-function regalloc cache always starts empty (fresh process), so
+// the `regalloc_hits/misses` counters can't tell cold from hit — the harness's
+// own pre-build `File.exists` check on the .mxc is the real discriminator. The
+// counters still appear in the emitted `CACHE_STATS` line for human diagnostics;
+// they're just not asserted on here.
+type LibCacheBuildResult
+	export var exitCode as ProcessExitCode
+	export var spawnOk as bool
+	export var stdlibValid as bool
+	// Phase 5: per-function regalloc hit/miss from the CACHE_STATS line. Unlike
+	// the stdlib cache (whose in-memory regalloc cache starts empty every fresh
+	// process, so these were uninformative across subprocesses), the persistent
+	// USER chunk cache makes `regalloc_hits` non-zero on a cross-process warm
+	// rebuild — that is the headline Phase-5 signal, asserted by the chunk
+	// scenarios.
+	export var regallocHits as ProcessExitCode
+	export var regallocMisses as ProcessExitCode
+	export var stdout as String
+	export var stderr as String
+
+	export static function create(exitCode ProcessExitCode, stdout String, stderr String) returns LibCacheBuildResult
+		return Self{exitCode: exitCode, spawnOk: true, stdlibValid: false, regallocHits: 0, regallocMisses: 0, stdout: stdout, stderr: stderr}
+	end 'create'
+
+	export static function failed(spawnReason String) returns LibCacheBuildResult
+		return Self{exitCode: -1, spawnOk: false, stdlibValid: false, regallocHits: 0, regallocMisses: 0, stdout: "", stderr: spawnReason}
+	end 'failed'
+end 'LibCacheBuildResult'
+
+export function runLibCacheTests() returns ExitCode
+	logInfo(LogCategory.testing, message: function() gives "Running library-cache tests...")
+
+	let projectRoot = try findSpecsRoot() otherwise 'noRoot'
+		print("Could not find project root\n")
+		return 1
+	end 'noRoot'
+
+	// The running compiler IS the compiler under test. Its fingerprint token is
+	// the one its own `--cache-root` builds will write, so the harness uses it to
+	// name the .mxc it inspects.
+	let compilerExe = try Process.executablePath() otherwise 'noExe'
+		print("Could not resolve compiler executable path\n")
+		return 1
+	end 'noExe'
+
+	let target = detectHostTarget()
+	// Phase 3: the cache is two files — the per-target Tier-C file and the
+	// per-target meta (Tier A+B) file (meta is per-target because layout/struct
+	// byte sizes bake in pointer width).
+	let cacheFileName = "stdlib-{targetToString(target)}-{compilerFingerprintToken()}.mxc"
+	let metaFileName = "stdlib-meta-{targetToString(target)}-{compilerFingerprintToken()}.mxc"
+
+	// Each scenario gets its own subdir under temp/libcache/ so a stale dir from a
+	// previous run never bleeds into a fresh assertion. The source program is a
+	// trivial leaf so the build is fast and the regalloc counters are stable.
+	let baseDir = projectRoot.join("temp").join("libcache")
+	_ = Directory.create(baseDir)
+
+	var totalPassed = 0
+	var totalFailed = 0
+
+	// Direct dispatch by index keeps the runner free of function-valued fields
+	// (each scenario is a plain function); the `match` is exhaustive so adding a
+	// scenario forces updating `scenarioCount()` and the arm list together.
+	var i = 0
+	while i < scenarioCount() 'eachScenario'
+		let ctx = LibCacheCtx.create(baseDir, compilerExe: compilerExe, target: target, cacheFileName: cacheFileName, metaFileName: metaFileName, name: scenarioName(i))
+		let passed = runScenario(i, ctx: ctx)
+		if passed 'pass'
+			print("[PASS] {ctx.name}\n")
+			totalPassed = totalPassed + 1
+		end 'pass' else 'fail'
+			print("[FAIL] {ctx.name}\n")
+			totalFailed = totalFailed + 1
+		end 'fail'
+		i = i + 1
+	end 'eachScenario'
+
+	print("\nLibrary-cache tests: {totalPassed} passed, {totalFailed} failed\n")
+	if totalFailed > 0 'someFailed'
+		return 1
+	end 'someFailed'
+	return 0
+end 'runLibCacheTests'
+
+// ----------------------------------------------------------------------------
+// Scenario table (index-dispatched; no function-valued fields)
+// ----------------------------------------------------------------------------
+
+typealias ScenarioIndex = int(0 to 20)
+
+function scenarioCount() returns ScenarioIndex
+	return 20
+end 'scenarioCount'
+
+function scenarioName(index ScenarioIndex) returns String
+	return match index 'name'
+		0 gives "cold-build-writes-cache"
+		1 gives "second-build-is-hit"
+		2 gives "delete-forces-rebuild"
+		3 gives "distinct-roots-coexist"
+		4 gives "corrupt-cache-falls-back"
+		5 gives "truncated-cache-falls-back"
+		6 gives "zeroed-cache-falls-back"
+		7 gives "mid-body-garbage-falls-back"
+		8 gives "stray-tmp-ignored"
+		9 gives "meta-and-target-both-written"
+		10 gives "corrupt-meta-falls-back"
+		11 gives "delete-meta-forces-rebuild"
+		12 gives "user-chunk-reuse-across-processes"
+		13 gives "user-chunk-warm-equals-cold-parity"
+		14 gives "user-chunk-source-edit-invalidates"
+		15 gives "user-chunk-coverage-keys-separately"
+		16 gives "external-library-via-flag"
+		17 gives "external-library-via-manifest"
+		18 gives "external-library-duplicate-name-rejected"
+		19 gives "external-library-wasm-builds"
+		default panic("scenarioName: index {index} out of range")
+	end 'name'
+end 'scenarioName'
+
+function runScenario(index ScenarioIndex, ctx LibCacheCtx) returns bool
+	return match index 'run'
+		0 gives scenarioColdBuildWritesCache(ctx)
+		1 gives scenarioSecondBuildIsHit(ctx)
+		2 gives scenarioDeleteForcesRebuild(ctx)
+		3 gives scenarioDistinctRootsCoexist(ctx)
+		4 gives scenarioCorruptCacheFallsBack(ctx)
+		5 gives scenarioTruncatedCacheFallsBack(ctx)
+		6 gives scenarioZeroedCacheFallsBack(ctx)
+		7 gives scenarioMidBodyGarbageFallsBack(ctx)
+		8 gives scenarioStrayTmpIgnored(ctx)
+		9 gives scenarioMetaAndTargetBothWritten(ctx)
+		10 gives scenarioCorruptMetaFallsBack(ctx)
+		11 gives scenarioDeleteMetaForcesRebuild(ctx)
+		12 gives scenarioUserChunkReuseAcrossProcesses(ctx)
+		13 gives scenarioUserChunkWarmEqualsColdParity(ctx)
+		14 gives scenarioUserChunkSourceEditInvalidates(ctx)
+		15 gives scenarioUserChunkCoverageKeysSeparately(ctx)
+		16 gives scenarioExternalLibraryViaFlag(ctx)
+		17 gives scenarioExternalLibraryViaManifest(ctx)
+		18 gives scenarioExternalLibraryDuplicateNameRejected(ctx)
+		19 gives scenarioExternalLibraryWasmBuilds(ctx)
+		default panic("runScenario: index {index} out of range")
+	end 'run'
+end 'runScenario'
+
+// Shared per-scenario context: the running compiler, the host target, the .mxc
+// filename, and the scenario's private cache+source directory under baseDir.
+type LibCacheCtx
+	export var baseDir as FilePath
+	export var compilerExe as FilePath
+	export var target as Target
+	export var cacheFileName as String
+	export var metaFileName as String
+	export var name as String
+
+	export static function create(baseDir FilePath, compilerExe FilePath, target Target, cacheFileName String, metaFileName String, name String) returns LibCacheCtx
+		return Self{baseDir: baseDir, compilerExe: compilerExe, target: target, cacheFileName: cacheFileName, metaFileName: metaFileName, name: name}
+	end 'create'
+
+	// The scenario's private working dir (cache root + source live here). Named
+	// after the scenario so each is isolated and inspectable after a failure.
+	export function scenarioDir() returns FilePath
+		return self.baseDir.join("{self.name}")
+	end 'scenarioDir'
+end 'LibCacheCtx'
+
+// ----------------------------------------------------------------------------
+// Scenarios
+// ----------------------------------------------------------------------------
+
+// Cold: an empty cache dir → the first build must succeed AND leave the .mxc on
+// disk. The whole point of the on-disk cache is that a from-scratch build
+// persists it for the next consumer.
+function scenarioColdBuildWritesCache(ctx LibCacheCtx) returns bool
+	let dir = try prepareScenarioDir(ctx) otherwise return false
+	let cachePath = cacheFilePathFor(dir, fileName: ctx.cacheFileName)
+
+	if File.exists(cachePath) 'preExists'
+		print("  FAIL: cache file already present in a freshly-prepared dir: {cachePath}\n")
+		return false
+	end 'preExists'
+
+	let result = buildWithCacheRoot(ctx, cacheRoot: dir)
+	if not assertBuildSucceeded(result, label: "cold build") 'buildFail'
+		return false
+	end 'buildFail'
+
+	if not File.exists(cachePath) 'noWrite'
+		print("  FAIL: cold build did not write the cache file {cachePath}\n")
+		return false
+	end 'noWrite'
+
+	if not result.stdlibValid 'notValid'
+		print("  FAIL: cold build reported stdlib_valid=no (expected yes after a successful build)\n")
+		return false
+	end 'notValid'
+
+	return true
+end 'scenarioColdBuildWritesCache'
+
+// Phase 3 two-file layout: a cold build leaves BOTH the shared meta file (Tier
+// A+B) and the per-target file (Tier C) on disk. This pins the split's basic
+// shape — neither file is enough alone.
+function scenarioMetaAndTargetBothWritten(ctx LibCacheCtx) returns bool
+	let dir = try prepareScenarioDir(ctx) otherwise return false
+	let cachePath = cacheFilePathFor(dir, fileName: ctx.cacheFileName)
+	let metaPath = cacheFilePathFor(dir, fileName: ctx.metaFileName)
+
+	let result = buildWithCacheRoot(ctx, cacheRoot: dir)
+	if not assertBuildSucceeded(result, label: "cold build") 'buildFail'
+		return false
+	end 'buildFail'
+
+	if not File.exists(metaPath) 'noMeta'
+		print("  FAIL: cold build did not write the shared meta file {metaPath}\n")
+		return false
+	end 'noMeta'
+	if not File.exists(cachePath) 'noTarget'
+		print("  FAIL: cold build did not write the per-target file {cachePath}\n")
+		return false
+	end 'noTarget'
+
+	return true
+end 'scenarioMetaAndTargetBothWritten'
+
+// Corrupt the shared META file (Tier A+B) with garbage while leaving the
+// per-target file intact. The build must reject the bad meta (header / length /
+// codec) and fall back to a clean cold rebuild — never crash — re-writing a valid
+// meta. The per-target file's meta-hash reference then re-validates on the next
+// build (self-heal).
+function scenarioCorruptMetaFallsBack(ctx LibCacheCtx) returns bool
+	let dir = try prepareScenarioDir(ctx) otherwise return false
+	let metaPath = cacheFilePathFor(dir, fileName: ctx.metaFileName)
+
+	let warm = buildWithCacheRoot(ctx, cacheRoot: dir)
+	if not assertBuildSucceeded(warm, label: "warm build") 'warmFail'
+		return false
+	end 'warmFail'
+	if not File.exists(metaPath) 'noMeta'
+		print("  FAIL: warm build did not write the meta file {metaPath}\n")
+		return false
+	end 'noMeta'
+
+	if not scrambleMidBody(metaPath) 'corruptFail'
+		print("  FAIL: could not corrupt the meta file {metaPath}\n")
+		return false
+	end 'corruptFail'
+
+	let afterCorrupt = buildWithCacheRoot(ctx, cacheRoot: dir)
+	if not assertBuildSucceeded(afterCorrupt, label: "build over corrupt meta") 'corruptBuildFail'
+		return false
+	end 'corruptBuildFail'
+
+	let healed = buildWithCacheRoot(ctx, cacheRoot: dir)
+	if not assertBuildSucceeded(healed, label: "build after meta self-heal") 'healFail'
+		return false
+	end 'healFail'
+
+	return true
+end 'scenarioCorruptMetaFallsBack'
+
+// Delete the shared META file but leave the per-target file. The build must
+// rebuild the meta (and re-pair the target) transparently — proving the meta is
+// recoverable and the target file is not trusted without a matching meta.
+function scenarioDeleteMetaForcesRebuild(ctx LibCacheCtx) returns bool
+	let dir = try prepareScenarioDir(ctx) otherwise return false
+	let metaPath = cacheFilePathFor(dir, fileName: ctx.metaFileName)
+
+	let warm = buildWithCacheRoot(ctx, cacheRoot: dir)
+	if not assertBuildSucceeded(warm, label: "warm build") 'warmFail'
+		return false
+	end 'warmFail'
+	if not File.exists(metaPath) 'noMeta'
+		print("  FAIL: warm build did not write the meta file {metaPath}\n")
+		return false
+	end 'noMeta'
+
+	try File.delete(metaPath) otherwise 'delFail'
+		print("  FAIL: could not delete the meta file {metaPath}\n")
+		return false
+	end 'delFail'
+
+	let rebuilt = buildWithCacheRoot(ctx, cacheRoot: dir)
+	if not assertBuildSucceeded(rebuilt, label: "rebuild after meta delete") 'rebuildFail'
+		return false
+	end 'rebuildFail'
+	if not File.exists(metaPath) 'noRewrite'
+		print("  FAIL: build after meta delete did not re-create the meta file {metaPath}\n")
+		return false
+	end 'noRewrite'
+
+	return true
+end 'scenarioDeleteMetaForcesRebuild'
+
+// Hit: build twice into the same dir. The first build writes the .mxc; the
+// second must find it already present and still succeed. (A successful build
+// always ends stdlib_valid=yes, so the file's pre-existence on the second build
+// is the cold-vs-hit discriminator the harness keys on.)
+function scenarioSecondBuildIsHit(ctx LibCacheCtx) returns bool
+	let dir = try prepareScenarioDir(ctx) otherwise return false
+	let cachePath = cacheFilePathFor(dir, fileName: ctx.cacheFileName)
+
+	let first = buildWithCacheRoot(ctx, cacheRoot: dir)
+	if not assertBuildSucceeded(first, label: "first (cold) build") 'firstFail'
+		return false
+	end 'firstFail'
+	if not File.exists(cachePath) 'noWrite'
+		print("  FAIL: first build did not write the cache file {cachePath}\n")
+		return false
+	end 'noWrite'
+
+	let second = buildWithCacheRoot(ctx, cacheRoot: dir)
+	if not assertBuildSucceeded(second, label: "second (hit) build") 'secondFail'
+		return false
+	end 'secondFail'
+	if not File.exists(cachePath) 'gone'
+		print("  FAIL: cache file vanished after the second build {cachePath}\n")
+		return false
+	end 'gone'
+	if not second.stdlibValid 'notValid'
+		print("  FAIL: second build reported stdlib_valid=no\n")
+		return false
+	end 'notValid'
+
+	return true
+end 'scenarioSecondBuildIsHit'
+
+// ----------------------------------------------------------------------------
+// Phase 5: user-program persistent Tier-C chunk cache
+// ----------------------------------------------------------------------------
+
+// The core promise: a user function compiled in one process is REUSED (no
+// regalloc) in a fresh process. Build cold (all misses), then warm in a new
+// subprocess — the warm build must report `regalloc_hits > 0` AND leave the
+// `*-chunks-*.mxc` file on disk. This is the signal the stdlib cache alone
+// could never produce across subprocesses (its in-memory regalloc cache resets
+// every process); only the persisted user chunk cache makes it non-zero.
+function scenarioUserChunkReuseAcrossProcesses(ctx LibCacheCtx) returns bool
+	let dir = try prepareScenarioDir(ctx) otherwise return false
+
+	let cold = buildWithCacheRoot(ctx, cacheRoot: dir)
+	if not assertBuildSucceeded(cold, label: "cold build") 'coldFail'
+		return false
+	end 'coldFail'
+	if cold.regallocHits != 0 'coldHadHits'
+		print("  FAIL: cold build reported regalloc_hits={cold.regallocHits} (expected 0 — nothing persisted yet)\n")
+		return false
+	end 'coldHadHits'
+	if not userChunkFileExists(dir) 'noChunk'
+		print("  FAIL: cold build did not write a user-chunk cache file under {dir}\n")
+		return false
+	end 'noChunk'
+
+	let warm = buildWithCacheRoot(ctx, cacheRoot: dir)
+	if not assertBuildSucceeded(warm, label: "warm build") 'warmFail'
+		return false
+	end 'warmFail'
+	if warm.regallocHits == 0 'noReuse'
+		print("  FAIL: warm rebuild reused 0 chunks (regalloc_hits=0) — cross-process persistence not working\n")
+		return false
+	end 'noReuse'
+
+	return true
+end 'scenarioUserChunkReuseAcrossProcesses'
+
+// Warm == cold byte parity across processes: a from-scratch cold build and a
+// chunk-cache-warm rebuild of the SAME sources must produce byte-identical
+// executables. Builds cold (capturing the exe), warms (reusing chunks), and
+// byte-compares the two exes.
+function scenarioUserChunkWarmEqualsColdParity(ctx LibCacheCtx) returns bool
+	let dir = try prepareScenarioDir(ctx) otherwise return false
+	let exePath = userProgramExePath(dir)
+
+	let cold = buildWithCacheRoot(ctx, cacheRoot: dir)
+	if not assertBuildSucceeded(cold, label: "cold build") 'coldFail'
+		return false
+	end 'coldFail'
+	let coldBytes = try File.readBinary(exePath) otherwise 'noColdExe'
+		print("  FAIL: cold build produced no exe at {exePath}\n")
+		return false
+	end 'noColdExe'
+
+	let warm = buildWithCacheRoot(ctx, cacheRoot: dir)
+	if not assertBuildSucceeded(warm, label: "warm build") 'warmFail'
+		return false
+	end 'warmFail'
+	if warm.regallocHits == 0 'noReuse'
+		print("  FAIL: warm rebuild did not reuse any chunk (regalloc_hits=0) — parity check would be vacuous\n")
+		return false
+	end 'noReuse'
+	let warmBytes = try File.readBinary(exePath) otherwise 'noWarmExe'
+		print("  FAIL: warm build produced no exe at {exePath}\n")
+		return false
+	end 'noWarmExe'
+
+	if not byteArraysEqual(coldBytes, b: warmBytes) 'differ'
+		print("  FAIL: warm-rebuild exe differs from cold exe ({coldBytes.count()} vs {warmBytes.count()} bytes) — chunk reuse broke byte parity\n")
+		return false
+	end 'differ'
+
+	return true
+end 'scenarioUserChunkWarmEqualsColdParity'
+
+// A source edit invalidates the chunk cache: build cold, then edit the program
+// and rebuild — the rebuild must NOT reuse the stale chunk for the edited
+// function (its keyHash changes) and the new exe must reflect the edit (a
+// different exit code). The file-level source checksum also flips, so the
+// whole file is a fresh key; either way the edited function recompiles.
+function scenarioUserChunkSourceEditInvalidates(ctx LibCacheCtx) returns bool
+	let dir = try prepareScenarioDir(ctx) otherwise return false
+	let sourcePath = dir.join("prog.maxon")
+
+	let cold = buildWithCacheRoot(ctx, cacheRoot: dir)
+	if not assertBuildSucceeded(cold, label: "cold build") 'coldFail'
+		return false
+	end 'coldFail'
+
+	// Edit the program: change main's returned value so the post-mid body (and
+	// thus the chunk keyHash) differs.
+	let editedSource = "function main() returns ExitCode\n\tlet msg = \"libcache edited {1}\"\n\tprint(msg)\n\treturn 7\nend 'main'\n"
+	try File.writeText(sourcePath, content: editedSource) otherwise 'editFail'
+		print("  FAIL: could not rewrite the program source\n")
+		return false
+	end 'editFail'
+
+	let rebuilt = buildWithCacheRoot(ctx, cacheRoot: dir)
+	if not assertBuildSucceeded(rebuilt, label: "rebuild after edit") 'rebuildFail'
+		return false
+	end 'rebuildFail'
+
+	// The edited `main` must be a chunk MISS (it recompiled): with only `main`
+	// + the entry function in the program, an edit to `main` means at most the
+	// unedited entry could be a hit, so we require at least one miss.
+	if rebuilt.regallocMisses == 0 'noMiss'
+		print("  FAIL: edited rebuild had 0 regalloc misses — the edited function was wrongly served from a stale chunk\n")
+		return false
+	end 'noMiss'
+
+	// The produced binary must reflect the edit: run it and check exit code 7.
+	let exePath = userProgramExePath(dir)
+	let runResult = try Subprocess.run(Executable.path(exePath), arguments: StringArray.create(), workingDirectory: dir, timeoutMs: 30000) otherwise (err) 'runFail'
+		print("  FAIL: could not run the rebuilt exe: {err.displayReason()}\n")
+		return false
+	end 'runFail'
+	if runResult.exitCode() != 7 'wrongExit'
+		print("  FAIL: rebuilt exe exit code {runResult.exitCode()} (expected 7 — the edit didn't take effect)\n")
+		return false
+	end 'wrongExit'
+
+	return true
+end 'scenarioUserChunkSourceEditInvalidates'
+
+// Coverage keys a SEPARATE chunk set: a non-coverage cold build and a
+// `--coverage` build must not share chunks (their `compileOptionsHash` differs,
+// so the filenames differ and the coverage build is a cold miss). Asserts two
+// distinct `*-chunks-*.mxc` files coexist and the coverage build reused nothing
+// from the non-coverage build.
+function scenarioUserChunkCoverageKeysSeparately(ctx LibCacheCtx) returns bool
+	let dir = try prepareScenarioDir(ctx) otherwise return false
+
+	let plain = buildWithCacheRoot(ctx, cacheRoot: dir)
+	if not assertBuildSucceeded(plain, label: "non-coverage build") 'plainFail'
+		return false
+	end 'plainFail'
+	let plainChunkCount = userChunkFileCount(dir)
+	if plainChunkCount != 1 'notOnePlain'
+		print("  FAIL: non-coverage build produced {plainChunkCount} chunk file(s) (expected 1)\n")
+		return false
+	end 'notOnePlain'
+
+	let cov = buildWithCacheRootCoverage(ctx, cacheRoot: dir)
+	if not assertBuildSucceeded(cov, label: "coverage build") 'covFail'
+		return false
+	end 'covFail'
+	// The coverage build must be a cold miss against the non-coverage chunks
+	// (separate options-hash keyed file), so it reuses nothing.
+	if cov.regallocHits != 0 'covReused'
+		print("  FAIL: coverage build reused {cov.regallocHits} non-coverage chunk(s) — coverage must key separately\n")
+		return false
+	end 'covReused'
+	// Two coexisting chunk files now: one per options-hash.
+	let bothChunkCount = userChunkFileCount(dir)
+	if bothChunkCount != 2 'notTwo'
+		print("  FAIL: expected 2 coexisting chunk files (coverage + non-coverage), found {bothChunkCount}\n")
+		return false
+	end 'notTwo'
+
+	return true
+end 'scenarioUserChunkCoverageKeysSeparately'
+
+// Delete: warm the cache, delete the .mxc, then build again — the build must
+// transparently rebuild and re-persist the file (proving deletion is recoverable
+// and the build never assumes a stale in-memory copy is on disk).
+function scenarioDeleteForcesRebuild(ctx LibCacheCtx) returns bool
+	let dir = try prepareScenarioDir(ctx) otherwise return false
+	let cachePath = cacheFilePathFor(dir, fileName: ctx.cacheFileName)
+
+	let warm = buildWithCacheRoot(ctx, cacheRoot: dir)
+	if not assertBuildSucceeded(warm, label: "warm build") 'warmFail'
+		return false
+	end 'warmFail'
+	if not File.exists(cachePath) 'noWrite'
+		print("  FAIL: warm build did not write the cache file {cachePath}\n")
+		return false
+	end 'noWrite'
+
+	try File.delete(cachePath) otherwise 'delFail'
+		print("  FAIL: could not delete cache file {cachePath}\n")
+		return false
+	end 'delFail'
+	if File.exists(cachePath) 'stillThere'
+		print("  FAIL: cache file still present after delete {cachePath}\n")
+		return false
+	end 'stillThere'
+
+	let rebuilt = buildWithCacheRoot(ctx, cacheRoot: dir)
+	if not assertBuildSucceeded(rebuilt, label: "rebuild after delete") 'rebuildFail'
+		return false
+	end 'rebuildFail'
+	if not File.exists(cachePath) 'noRewrite'
+		print("  FAIL: build after delete did not re-create the cache file {cachePath}\n")
+		return false
+	end 'noRewrite'
+
+	return true
+end 'scenarioDeleteForcesRebuild'
+
+// Coexistence: two different cache roots are fully independent. Build into A,
+// then into a fresh B — B starts cold (no file) and writes its own copy, while
+// A's file is untouched. This is the property that lets every test worker and
+// every compiler fingerprint share one directory without clobbering.
+function scenarioDistinctRootsCoexist(ctx LibCacheCtx) returns bool
+	let dir = try prepareScenarioDir(ctx) otherwise return false
+	let rootA = dir.join("a")
+	let rootB = dir.join("b")
+	_ = Directory.create(rootA)
+	_ = Directory.create(rootB)
+	let cacheA = cacheFilePathFor(rootA, fileName: ctx.cacheFileName)
+	let cacheB = cacheFilePathFor(rootB, fileName: ctx.cacheFileName)
+
+	let buildA = buildWithCacheRoot(ctx, cacheRoot: rootA)
+	if not assertBuildSucceeded(buildA, label: "build into root A") 'aFail'
+		return false
+	end 'aFail'
+	if not File.exists(cacheA) 'noA'
+		print("  FAIL: build A did not write {cacheA}\n")
+		return false
+	end 'noA'
+	if File.exists(cacheB) 'bLeaked'
+		print("  FAIL: build A leaked a file into root B at {cacheB}\n")
+		return false
+	end 'bLeaked'
+
+	let buildB = buildWithCacheRoot(ctx, cacheRoot: rootB)
+	if not assertBuildSucceeded(buildB, label: "build into root B") 'bFail'
+		return false
+	end 'bFail'
+	if not File.exists(cacheB) 'noB'
+		print("  FAIL: build B did not write {cacheB}\n")
+		return false
+	end 'noB'
+	if not File.exists(cacheA) 'aGone'
+		print("  FAIL: build B disturbed root A's file {cacheA}\n")
+		return false
+	end 'aGone'
+
+	return true
+end 'scenarioDistinctRootsCoexist'
+
+// Corrupt: warm the cache, overwrite the .mxc with garbage bytes, then build.
+// A bad cache file must be REJECTED by the reader (checksum / format / id-space
+// mismatch) and the build must transparently fall back to a cold rebuild — never
+// crash, never produce a bad executable. Exit 0 is the contract.
+function scenarioCorruptCacheFallsBack(ctx LibCacheCtx) returns bool
+	return faultInjectionScenario(ctx, fault: CacheFault.garbage)
+end 'scenarioCorruptCacheFallsBack'
+
+// Truncated: same contract, but the fault is a half-written file (the classic
+// torn-write / interrupted-download shape) rather than random bytes.
+function scenarioTruncatedCacheFallsBack(ctx LibCacheCtx) returns bool
+	return faultInjectionScenario(ctx, fault: CacheFault.truncated)
+end 'scenarioTruncatedCacheFallsBack'
+
+// Zeroed: a zero-length .mxc (e.g. a `creat` that never got its bytes). The
+// reader must treat an empty file as a miss, not a valid empty cache.
+function scenarioZeroedCacheFallsBack(ctx LibCacheCtx) returns bool
+	return faultInjectionScenario(ctx, fault: CacheFault.zeroed)
+end 'scenarioZeroedCacheFallsBack'
+
+// Mid-body garbage: corrupt bytes deep in the body, length intact, so the damage
+// slips past the header/length gates and reaches the body decoders. The decode
+// path must throw CacheCorruption (clean rebuild), not panic in a byte reader.
+// This is the direct regression guard for the readDword/readQword "never panic"
+// change.
+function scenarioMidBodyGarbageFallsBack(ctx LibCacheCtx) returns bool
+	return faultInjectionScenario(ctx, fault: CacheFault.midBodyGarbage)
+end 'scenarioMidBodyGarbageFallsBack'
+
+// Stray tmp: a leftover `<cacheFile>.tmp` from a crashed atomic write must be
+// ignored — the real .mxc is still authoritative and the build is a clean hit,
+// and the stray file does not derail the next persist.
+function scenarioStrayTmpIgnored(ctx LibCacheCtx) returns bool
+	let dir = try prepareScenarioDir(ctx) otherwise return false
+	let cachePath = cacheFilePathFor(dir, fileName: ctx.cacheFileName)
+
+	let warm = buildWithCacheRoot(ctx, cacheRoot: dir)
+	if not assertBuildSucceeded(warm, label: "warm build") 'warmFail'
+		return false
+	end 'warmFail'
+	if not File.exists(cachePath) 'noWrite'
+		print("  FAIL: warm build did not write the cache file {cachePath}\n")
+		return false
+	end 'noWrite'
+
+	// Drop a stray .tmp next to the real cache file, named exactly as an aborted
+	// `writeFileAtomic` would leave it (`<cacheFile>.<stamp>.<seq>.tmp`), so the
+	// deleter's `*.tmp` sweep and `maxon clean` would match it.
+	let strayTmp = try FilePath.from("{cachePath.path}.0.0.tmp") otherwise 'badTmpPath'
+		print("  FAIL: could not form stray tmp path for {cachePath}\n")
+		return false
+	end 'badTmpPath'
+	if not writeGarbageFile(strayTmp) 'tmpWriteFail'
+		print("  FAIL: could not create stray tmp file {strayTmp}\n")
+		return false
+	end 'tmpWriteFail'
+
+	let afterStray = buildWithCacheRoot(ctx, cacheRoot: dir)
+	if not assertBuildSucceeded(afterStray, label: "build with stray tmp present") 'strayFail'
+		return false
+	end 'strayFail'
+	if not File.exists(cachePath) 'realGone'
+		print("  FAIL: the real cache file was disturbed by the stray tmp {cachePath}\n")
+		return false
+	end 'realGone'
+
+	return true
+end 'scenarioStrayTmpIgnored'
+
+// The ways a fault-injection scenario damages the on-disk .mxc.
+union CacheFault
+	garbage
+	truncated
+	zeroed
+	// Flip a run of bytes deep in the BODY while leaving the file length (and the
+	// header's length-integrity field) intact, so the damage passes the cheap
+	// header gates and reaches the body decoders. This is the case the
+	// readDword/readQword "throw, never panic" + CacheCorruption propagation
+	// protects: a bad internal length prefix or tag must surface as a clean miss,
+	// not a panic running off the end of the buffer.
+	midBodyGarbage
+end 'CacheFault'
+
+// Shared body for the three fault-injection scenarios: warm → corrupt → build
+// must still exit 0 (cold-rebuild fallback). `fault` selects how the on-disk
+// .mxc is damaged.
+function faultInjectionScenario(ctx LibCacheCtx, fault CacheFault) returns bool
+	let dir = try prepareScenarioDir(ctx) otherwise return false
+	let cachePath = cacheFilePathFor(dir, fileName: ctx.cacheFileName)
+
+	let warm = buildWithCacheRoot(ctx, cacheRoot: dir)
+	if not assertBuildSucceeded(warm, label: "warm build") 'warmFail'
+		return false
+	end 'warmFail'
+	if not File.exists(cachePath) 'noWrite'
+		print("  FAIL: warm build did not write the cache file {cachePath}\n")
+		return false
+	end 'noWrite'
+
+	if not damageCacheFile(cachePath, fault: fault) 'mutateFail'
+		print("  FAIL: could not damage the cache file {cachePath}\n")
+		return false
+	end 'mutateFail'
+
+	let afterDamage = buildWithCacheRoot(ctx, cacheRoot: dir)
+	if not assertBuildSucceeded(afterDamage, label: "build over damaged cache") 'damageFail'
+		return false
+	end 'damageFail'
+	// The reader rejected the damaged file and rebuilt; the rebuild re-persists a
+	// valid file, so a third build is a clean hit. This proves the fallback heals
+	// the cache rather than leaving it permanently poisoned.
+	let healed = buildWithCacheRoot(ctx, cacheRoot: dir)
+	if not assertBuildSucceeded(healed, label: "build after self-heal") 'healFail'
+		return false
+	end 'healFail'
+
+	return true
+end 'faultInjectionScenario'
+
+// ----------------------------------------------------------------------------
+// Build driver + assertions
+// ----------------------------------------------------------------------------
+
+// Spawn `<compiler> build --cache-stats --cache-root=<root> <source>` and parse
+// ----------------------------------------------------------------------------
+// Phase 6: external library discovery
+// ----------------------------------------------------------------------------
+
+// `--library=DIR`: an external library with one exported function is discovered
+// via the CLI flag; the program calls it with NO import syntax (implicit
+// import); the build succeeds, runs to the library's value, and writes the
+// library's OWN cache files (meta + per-target) under `<libDir>/.maxon/cache/`.
+function scenarioExternalLibraryViaFlag(ctx LibCacheCtx) returns bool
+	let dir = try prepareLibScenarioDir(ctx, withManifest: false) otherwise return false
+	let libDir = dir.join("mylib")
+
+	let result = buildAppWithLibrary(ctx, libDir: libDir, useManifest: false)
+	if not assertBuildSucceeded(result, label: "external-lib via --library") 'buildFail'
+		return false
+	end 'buildFail'
+
+	// The build runs with `--cache-root=scenarioDir`, which redirects EVERY
+	// library's cache (stdlib AND the external lib) to `<scenarioDir>/.maxon/
+	// cache/`, so the external lib's `mylib-*.mxc` files land there, not under
+	// `libDir`. Assert they were written at the redirected location.
+	if not libCacheFilesPresent(dir, ctx: ctx) 'noLibCache'
+		print("  FAIL: external library cache files were not written under the cache root {dir}\n")
+		return false
+	end 'noLibCache'
+
+	if not assertExeReturns(dir, expected: 42, label: "via --library") 'wrongExit'
+		return false
+	end 'wrongExit'
+
+	// A second build is a library cache HIT and stays correct + byte-identical.
+	let cold = try File.readBinary(libAppExePath(dir)) otherwise 'noCold'
+		print("  FAIL: could not read cold exe for parity\n")
+		return false
+	end 'noCold'
+	let warm = buildAppWithLibrary(ctx, libDir: libDir, useManifest: false)
+	if not assertBuildSucceeded(warm, label: "external-lib warm rebuild") 'warmFail'
+		return false
+	end 'warmFail'
+	let warmBytes = try File.readBinary(libAppExePath(dir)) otherwise 'noWarm'
+		print("  FAIL: could not read warm exe for parity\n")
+		return false
+	end 'noWarm'
+	if not byteArraysEqual(cold, b: warmBytes) 'parityFail'
+		print("  FAIL: warm (lib-cache-hit) exe differs from cold exe\n")
+		return false
+	end 'parityFail'
+
+	return true
+end 'scenarioExternalLibraryViaFlag'
+
+// `build.maxon library("...")`: the SAME external library discovered via a
+// manifest entry instead of the CLI flag. Also guards the manifest-scan path
+// (`parseLibraryDirs`) against the loop-carried-slice MM leak (exit 101) — a
+// leak would fail `assertBuildSucceeded`.
+function scenarioExternalLibraryViaManifest(ctx LibCacheCtx) returns bool
+	let dir = try prepareLibScenarioDir(ctx, withManifest: true) otherwise return false
+	let libDir = dir.join("mylib")
+
+	let result = buildAppWithLibrary(ctx, libDir: libDir, useManifest: true)
+	if not assertBuildSucceeded(result, label: "external-lib via manifest") 'buildFail'
+		return false
+	end 'buildFail'
+
+	if not assertExeReturns(dir, expected: 42, label: "via manifest") 'wrongExit'
+		return false
+	end 'wrongExit'
+
+	return true
+end 'scenarioExternalLibraryViaManifest'
+
+// Two library directories that resolve to the SAME basename must be rejected
+// (E3090) — their dir-derived namespaces would alias. The build must FAIL.
+function scenarioExternalLibraryDuplicateNameRejected(ctx LibCacheCtx) returns bool
+	let dir = try prepareLibScenarioDir(ctx, withManifest: false) otherwise return false
+	// Two libs named `mylib` under different parents.
+	let libA = dir.join("a").join("mylib")
+	let libB = dir.join("b").join("mylib")
+	_ = Directory.create(dir.join("a"))
+	_ = Directory.create(dir.join("b"))
+	_ = Directory.create(libA)
+	_ = Directory.create(libB)
+	try File.writeText(libA.join("x.maxon"), content: "export function fa() returns ExitCode\n\treturn 1\nend 'fa'\n") otherwise return false
+	try File.writeText(libB.join("y.maxon"), content: "export function fb() returns ExitCode\n\treturn 2\nend 'fb'\n") otherwise return false
+
+	var args = StringArray.create()
+	args.push("build")
+	args.push("--cache-root={dir.toString()}")
+	args.push("--library={libA.toString()}")
+	args.push("--library={libB.toString()}")
+	args.push(dir.join("prog.maxon").toString())
+	let result = try Subprocess.run(Executable.path(ctx.compilerExe), arguments: args, workingDirectory: dir, timeoutMs: 120000) otherwise (err) 'spawnFail'
+		print("  FAIL: duplicate-name build spawn failed: {err.displayReason()}\n")
+		return false
+	end 'spawnFail'
+
+	if result.exitCode() == 0 'unexpectedSuccess'
+		print("  FAIL: duplicate library basename was accepted (expected a hard error)\n")
+		return false
+	end 'unexpectedSuccess'
+
+	return true
+end 'scenarioExternalLibraryDuplicateNameRejected'
+
+// Wasm external-library linking: build the same program for `wasm32-wasi` with
+// `--library=mylib`. Wasm cached functions are name-relocatable (their
+// call/type/funcAddr/globalAddr fixups store names, re-resolved at final link),
+// so the library's `libDouble` links against stdlib's separately-cached wasm
+// bodies just like the native path. The build must SUCCEED and the library's
+// own `mylib-wasm32-wasi-*.mxc` cache file must be written. (Running the .wasm
+// is covered by the wasm spec suite's wasmtime path; this scenario asserts the
+// link succeeds — the original blocker that made external libs wasm-unsupported.)
+function scenarioExternalLibraryWasmBuilds(ctx LibCacheCtx) returns bool
+	let dir = try prepareLibScenarioDir(ctx, withManifest: false) otherwise return false
+	let libDir = dir.join("mylib")
+
+	let result = buildAppWithLibraryForTarget(ctx, libDir: libDir, targetFlag: "wasm32-wasi")
+	if not assertBuildSucceeded(result, label: "external-lib wasm build") 'buildFail'
+		return false
+	end 'buildFail'
+
+	// The library's wasm cache file (under the cache root) must exist.
+	let wasmCache = cacheFilePathFor(dir, fileName: "mylib-wasm32-wasi-{compilerFingerprintToken()}.mxc")
+	if not File.exists(wasmCache) 'noWasmCache'
+		print("  FAIL: external library wasm cache file was not written: {wasmCache}\n")
+		return false
+	end 'noWasmCache'
+
+	return true
+end 'scenarioExternalLibraryWasmBuilds'
+
+// Create a clean Phase-6 scenario dir holding `prog.maxon` (which calls the
+// library's exported `libDouble`) and a `mylib/` external library defining it.
+// When `withManifest`, also writes a `build.maxon` with a `library("mylib")`
+// entry so the build discovers the library without a `--library` flag.
+function prepareLibScenarioDir(ctx LibCacheCtx, withManifest bool) returns FilePath throws LibCacheSetupError
+	let dir = ctx.scenarioDir()
+	_ = Directory.create(dir)
+	wipeCacheTree(dir)
+	let libDir = dir.join("mylib")
+	wipeCacheTree(libDir)
+	_ = Directory.create(libDir)
+
+	// The external library: one exported function, no generics, no stdlib pull-in.
+	try File.writeText(libDir.join("greet.maxon"), content: "export function libDouble(n ExitCode) returns ExitCode\n\treturn n + n\nend 'libDouble'\n") otherwise throw LibCacheSetupError.writeFailed
+	// The program calls the library's export with NO import syntax.
+	try File.writeText(dir.join("prog.maxon"), content: "function main() returns ExitCode\n\treturn libDouble(21)\nend 'main'\n") otherwise throw LibCacheSetupError.writeFailed
+	if withManifest 'manifest'
+		try File.writeText(dir.join("build.maxon"), content: "build(\"prog\")\nlibrary(\"mylib\")\n") otherwise throw LibCacheSetupError.writeFailed
+	end 'manifest'
+	return dir
+end 'prepareLibScenarioDir'
+
+// Build `<dir>/prog.maxon` linking the external library: via `--library=DIR`
+// when `not useManifest`, or via the `build.maxon library(...)` entry (no flag)
+// otherwise. The library cache lands in `<libDir>/.maxon/cache/` (NOT the
+// `--cache-root` override, which only redirects the *consuming project's* cache
+// — an external lib caches in its own dir). Subprocess-isolated.
+function buildAppWithLibrary(ctx LibCacheCtx, libDir FilePath, useManifest bool) returns LibCacheBuildResult
+	let dir = ctx.scenarioDir()
+	var args = StringArray.create()
+	args.push("build")
+	args.push("--cache-stats")
+	args.push("--cache-root={dir.toString()}")
+	if not useManifest 'flag'
+		args.push("--library={libDir.toString()}")
+	end 'flag'
+	args.push(dir.join("prog.maxon").toString())
+
+	let result = try Subprocess.run(Executable.path(ctx.compilerExe), arguments: args, workingDirectory: dir, timeoutMs: 120000) otherwise (err) 'spawnFail'
+		return LibCacheBuildResult.failed("external-lib subprocess spawn failed: {err.displayReason()}")
+	end 'spawnFail'
+	return parseBuildResult(result)
+end 'buildAppWithLibrary'
+
+// Build `<dir>/prog.maxon` linking the external library via `--library=DIR` for
+// an explicit `--target=` (e.g. wasm32-wasi). Used by the wasm scenario.
+function buildAppWithLibraryForTarget(ctx LibCacheCtx, libDir FilePath, targetFlag String) returns LibCacheBuildResult
+	let dir = ctx.scenarioDir()
+	var args = StringArray.create()
+	args.push("build")
+	args.push("--cache-stats")
+	args.push("--cache-root={dir.toString()}")
+	args.push("--library={libDir.toString()}")
+	args.push("--target={targetFlag}")
+	args.push(dir.join("prog.maxon").toString())
+
+	let result = try Subprocess.run(Executable.path(ctx.compilerExe), arguments: args, workingDirectory: dir, timeoutMs: 180000) otherwise (err) 'spawnFail'
+		return LibCacheBuildResult.failed("external-lib {targetFlag} subprocess spawn failed: {err.displayReason()}")
+	end 'spawnFail'
+	return parseBuildResult(result)
+end 'buildAppWithLibraryForTarget'
+
+// The exe a Phase-6 `prog.maxon` build produces.
+function libAppExePath(dir FilePath) returns FilePath
+	return dir.join("prog").changeExtension(executableExtension(detectHostTarget()))
+end 'libAppExePath'
+
+// True when the external library wrote both its per-target (Tier C) and meta
+// (Tier A+B) cache files under `<libDir>/.maxon/cache/`, named the same way
+// `libraryCachePath` / `libraryMetaCachePath` name them (basename = `mylib`).
+function libCacheFilesPresent(libDir FilePath, ctx LibCacheCtx) returns bool
+	let fp = compilerFingerprintToken()
+	let t = targetToString(ctx.target)
+	let targetFile = cacheFilePathFor(libDir, fileName: "mylib-{t}-{fp}.mxc")
+	let metaFile = cacheFilePathFor(libDir, fileName: "mylib-meta-{t}-{fp}.mxc")
+	return File.exists(targetFile) and File.exists(metaFile)
+end 'libCacheFilesPresent'
+
+// Run the produced exe and assert its exit code. The library function
+// `libDouble(21)` returns 42, so a correct link + run exits 42.
+function assertExeReturns(dir FilePath, expected ProcessExitCode, label String) returns bool
+	let exePath = libAppExePath(dir)
+	let run = try Subprocess.run(Executable.path(exePath), arguments: StringArray.create(), workingDirectory: dir, timeoutMs: 30000) otherwise (err) 'runFail'
+		print("  FAIL: {label}: could not run produced exe: {err.displayReason()}\n")
+		return false
+	end 'runFail'
+	if run.exitCode() != expected 'wrong'
+		print("  FAIL: {label}: exe returned {run.exitCode()}, expected {expected}\n")
+		return false
+	end 'wrong'
+	return true
+end 'assertExeReturns'
+
+// the result. Subprocess-isolated so a compile-time panic in the build can't
+// take down the test runner.
+function buildWithCacheRoot(ctx LibCacheCtx, cacheRoot FilePath) returns LibCacheBuildResult
+	let dir = ctx.scenarioDir()
+	let sourcePath = dir.join("prog.maxon")
+
+	var args = StringArray.create()
+	args.push("build")
+	args.push("--cache-stats")
+	args.push("--cache-root={cacheRoot.toString()}")
+	args.push(sourcePath.toString())
+
+	let result = try Subprocess.run(Executable.path(ctx.compilerExe), arguments: args, workingDirectory: dir, timeoutMs: 120000) otherwise (err) 'spawnFail'
+		return LibCacheBuildResult.failed("subprocess spawn failed: {err.displayReason()}")
+	end 'spawnFail'
+
+	return parseBuildResult(result)
+end 'buildWithCacheRoot'
+
+// Phase 5: a `--coverage` variant of `buildWithCacheRoot`. Coverage changes
+// emitted bytes and is folded into `compileOptionsHash`, so a coverage build
+// reads/writes a DIFFERENT chunk file — the coverage-keying scenario asserts the
+// two never share chunks.
+function buildWithCacheRootCoverage(ctx LibCacheCtx, cacheRoot FilePath) returns LibCacheBuildResult
+	let dir = ctx.scenarioDir()
+	let sourcePath = dir.join("prog.maxon")
+
+	var args = StringArray.create()
+	args.push("build")
+	args.push("--coverage")
+	args.push("--cache-stats")
+	args.push("--cache-root={cacheRoot.toString()}")
+	args.push(sourcePath.toString())
+
+	let result = try Subprocess.run(Executable.path(ctx.compilerExe), arguments: args, workingDirectory: dir, timeoutMs: 120000) otherwise (err) 'spawnFail'
+		return LibCacheBuildResult.failed("coverage subprocess spawn failed: {err.displayReason()}")
+	end 'spawnFail'
+
+	return parseBuildResult(result)
+end 'buildWithCacheRootCoverage'
+
+// Parse a CollectedOutput into a LibCacheBuildResult: keep the exit code, scan
+// stdout for the `CACHE_STATS …` line, and pull the named fields out of it.
+function parseBuildResult(output CollectedOutput) returns LibCacheBuildResult
+	var result = LibCacheBuildResult.create(output.exitCode(), stdout: output.stdout, stderr: output.stderr)
+
+	for line in output.stdout.split("\n") 'eachLine'
+		if not line.startsWith("CACHE_STATS ") 'notStats'
+			continue
+		end 'notStats'
+		for field in line.split(" ") 'eachField'
+			applyStatsField(result, field: field)
+		end 'eachField'
+	end 'eachLine'
+
+	return result
+end 'parseBuildResult'
+
+// Apply one `key=value` token from the CACHE_STATS line to the result. Only
+// `stdlib_valid` is consumed (see LibCacheBuildResult); the head `CACHE_STATS`
+// token (no `=`) and every other field — including the diagnostic regalloc/func
+// counters — are ignored, so the line can grow new fields without breaking this
+// parser.
+function applyStatsField(result LibCacheBuildResult, field String)
+	let parts = field.split("=")
+	if parts.count() != 2 'notKv'
+		return
+	end 'notKv'
+	let key = try parts.get(0) otherwise return
+	let value = try parts.get(1) otherwise return
+
+	if key == "stdlib_valid" 'valid'
+		result.stdlibValid = value == "yes"
+	end 'valid'
+	if key == "regalloc_hits" 'hits'
+		result.regallocHits = parseStatsInt(value)
+	end 'hits'
+	if key == "regalloc_misses" 'misses'
+		result.regallocMisses = parseStatsInt(value)
+	end 'misses'
+end 'applyStatsField'
+
+// Parse a non-negative decimal CACHE_STATS counter from its raw bytes. A
+// malformed value yields 0 (the field is diagnostic; a parse failure shouldn't
+// crash the harness).
+function parseStatsInt(s String) returns ProcessExitCode
+	var acc = 0 as ProcessExitCode
+	let n = s.byteLength()
+	var i = 0
+	while i < n 'eachDigit'
+		let b = try s.managed.byteAt(i) otherwise return 0
+		if b < 48 or b > 57 'notDigit'
+			return 0
+		end 'notDigit'
+		acc = (acc * 10) + (b - 48)
+		i = i + 1
+	end 'eachDigit'
+	return acc
+end 'parseStatsInt'
+
+// A build "succeeded" iff the subprocess spawned and exited 0. Exit 101 (a
+// leaked allocation in the produced binary's build) and any compile failure are
+// surfaced with the captured stderr so a failure is diagnosable.
+function assertBuildSucceeded(result LibCacheBuildResult, label String) returns bool
+	if not result.spawnOk 'noSpawn'
+		print("  FAIL: {label}: {result.stderr}\n")
+		return false
+	end 'noSpawn'
+	if result.exitCode != 0 'badExit'
+		print("  FAIL: {label}: exit code {result.exitCode}\n")
+		print("    stdout: {result.stdout}\n")
+		print("    stderr: {result.stderr}\n")
+		return false
+	end 'badExit'
+	return true
+end 'assertBuildSucceeded'
+
+// ----------------------------------------------------------------------------
+// Scenario dir + source setup
+// ----------------------------------------------------------------------------
+
+// Create a clean, empty scenario dir (deleting any stale cache/source files from
+// a prior run) and write the trivial source program the build compiles. Returns
+// the scenario dir, or throws so the caller can fail the scenario.
+function prepareScenarioDir(ctx LibCacheCtx) returns FilePath throws LibCacheSetupError
+	let dir = ctx.scenarioDir()
+	_ = Directory.create(dir)
+	wipeCacheTree(dir)
+
+	let sourcePath = dir.join("prog.maxon")
+	try File.writeText(sourcePath, content: trivialProgramSource()) otherwise throw LibCacheSetupError.writeFailed
+	return dir
+end 'prepareScenarioDir'
+
+enum LibCacheSetupError implements Error
+	writeFailed
+end 'LibCacheSetupError'
+
+// The program every scenario compiles: a single leaf that exercises enough of
+// the stdlib (string interpolation → containers) that a real stdlib cache is
+// built and linked, but is otherwise trivial so the build is fast and
+// deterministic.
+function trivialProgramSource() returns String
+	return "function main() returns ExitCode\n\tlet msg = \"libcache {1}\"\n\tprint(msg)\n\treturn 0\nend 'main'\n"
+end 'trivialProgramSource'
+
+// Recursively remove the `.maxon/cache/` subtree under `dir` plus any nested
+// per-root cache dirs (a/ and b/ for the coexistence scenario). Best-effort:
+// a file that can't be deleted is left in place. There is no Directory.delete in
+// the stdlib, so this walks and deletes the cache files directly — that is all a
+// scenario needs, since cache files live flat in `<root>/.maxon/cache/`.
+function wipeCacheTree(dir FilePath)
+	deleteCacheFilesIn(dir)
+	deleteCacheFilesIn(dir.join("a"))
+	deleteCacheFilesIn(dir.join("b"))
+end 'wipeCacheTree'
+
+function deleteCacheFilesIn(root FilePath)
+	let cacheDir = root.join(".maxon").join("cache")
+	if not Directory.exists(cacheDir) 'noDir'
+		return
+	end 'noDir'
+	let entries = try Directory.list(cacheDir) otherwise return
+	for entry in entries 'each'
+		try File.delete(entry) otherwise continue
+	end 'each'
+end 'deleteCacheFilesIn'
+
+// The on-disk cache file a build with `--cache-root=root` reads/writes, named
+// exactly as `libraryCachePath` names it.
+function cacheFilePathFor(root FilePath, fileName String) returns FilePath
+	return root.join(".maxon").join("cache").join(fileName)
+end 'cacheFilePathFor'
+
+// The exe a `<root>/prog.maxon` build produces. The harness builds the single
+// source `prog.maxon`, so the output sits next to it as `prog.<ext>`.
+function userProgramExePath(dir FilePath) returns FilePath
+	return dir.join("prog").changeExtension(executableExtension(detectHostTarget()))
+end 'userProgramExePath'
+
+// Count the Phase-5 user-program chunk-cache files (`*-chunks-*.mxc`) under
+// `<root>/.maxon/cache/`. Each distinct compiler-fp × options-hash combo is its
+// own file, so the coverage-keying scenario asserts the count.
+function userChunkFileCount(root FilePath) returns ProcessExitCode
+	let cacheDir = root.join(".maxon").join("cache")
+	if not Directory.exists(cacheDir) 'noDir'
+		return 0
+	end 'noDir'
+	let entries = try Directory.list(cacheDir) otherwise return 0
+	var count = 0 as ProcessExitCode
+	for entry in entries 'each'
+		let name = entry.filename()
+		if name.contains("-chunks-") and name.endsWith(".mxc") 'isChunk'
+			count = count + 1
+		end 'isChunk'
+	end 'each'
+	return count
+end 'userChunkFileCount'
+
+function userChunkFileExists(root FilePath) returns bool
+	return userChunkFileCount(root) > 0
+end 'userChunkFileExists'
+
+// Byte-exact array equality for the warm==cold parity check.
+function byteArraysEqual(a ByteArray, b ByteArray) returns bool
+	if a.count() != b.count() 'lenDiff'
+		return false
+	end 'lenDiff'
+	for i in 0 upto a.count() 'each'
+		let av = try a.get(i) otherwise return false
+		let bv = try b.get(i) otherwise return false
+		if av != bv 'diff'
+			return false
+		end 'diff'
+	end 'each'
+	return true
+end 'byteArraysEqual'
+
+// ----------------------------------------------------------------------------
+// Fault injection
+// ----------------------------------------------------------------------------
+
+// Damage the on-disk .mxc per the selected fault. Returns false only if the
+// mutation's own I/O failed (so the scenario can distinguish a setup failure
+// from the behaviour under test).
+function damageCacheFile(path FilePath, fault CacheFault) returns bool
+	return match fault 'kind'
+		garbage gives writeGarbageFile(path)
+		truncated gives truncateToHalf(path)
+		zeroed gives zeroLength(path)
+		midBodyGarbage gives scrambleMidBody(path)
+	end 'kind'
+end 'damageCacheFile'
+
+// Overwrite the file with a short run of non-cache bytes — a valid file the
+// reader must reject on format/checksum grounds. Also used to materialise the
+// stray-tmp fixture.
+function writeGarbageFile(path FilePath) returns bool
+	var bytes = ByteArray.create()
+	var i = 0
+	while i < 64 'fill'
+		bytes.push(((i * 7) and 0xFF) as Byte)
+		i = i + 1
+	end 'fill'
+	try File.writeBinary(path, content: bytes) otherwise return false
+	return true
+end 'writeGarbageFile'
+
+// Truncate the file to its first half — a torn write. Read the real bytes, keep
+// the front portion, write it back.
+function truncateToHalf(path FilePath) returns bool
+	let original = try File.readBinary(path) otherwise return false
+	let keep = original.count() / 2
+	var head = ByteArray.create()
+	var i = 0
+	while i < keep 'copy'
+		let b = try original.get(i) otherwise return false
+		head.push(b)
+		i = i + 1
+	end 'copy'
+	try File.writeBinary(path, content: head) otherwise return false
+	return true
+end 'truncateToHalf'
+
+// Replace the file with a zero-length file.
+function zeroLength(path FilePath) returns bool
+	let empty = ByteArray.create()
+	try File.writeBinary(path, content: empty) otherwise return false
+	return true
+end 'zeroLength'
+
+// Scramble a run of bytes in the MIDDLE of the file (the body), preserving the
+// total length so the header's length-integrity field still matches. This drives
+// the body decoders over deliberately-wrong tags / length prefixes — the case
+// that must surface as CacheCorruption (clean miss), never a reader panicking
+// past the end of the buffer. Leaves the first quarter (header + early id-space
+// tables) intact so the file still parses far enough to reach deep body readers.
+function scrambleMidBody(path FilePath) returns bool
+	let original = try File.readBinary(path) otherwise return false
+	let total = original.count()
+	if total < 64 'tooSmallToScramble'
+		// Degenerate: nothing meaningful to corrupt mid-body. Fall back to a
+		// whole-file garbage overwrite so the scenario still asserts something.
+		return writeGarbageFile(path)
+	end 'tooSmallToScramble'
+
+	let start = total / 4
+	let scrambleEnd = total / 2
+	var out = ByteArray.create()
+	var i = 0
+	while i < total 'rebuild'
+		let b = try original.get(i) otherwise return false
+		if i >= start and i < scrambleEnd 'scramble'
+			// XOR with a non-zero constant: guaranteed to change the byte while
+			// keeping the file the same length.
+			out.push((b xor 0xA5) as Byte)
+		end 'scramble' else 'keep'
+			out.push(b)
+		end 'keep'
+		i = i + 1
+	end 'rebuild'
+	try File.writeBinary(path, content: out) otherwise return false
+	return true
+end 'scrambleMidBody'

@@ -538,7 +538,7 @@ end 'arm64EmitMovReg'
 function arm64PatchBranch(code ByteArray, instrOffset Arm64Offset, targetOffset Arm64Offset)
 	let relBytes = targetOffset - instrOffset
 	let relInsns = relBytes / 4
-	let origInsn = readDword(code, offset: instrOffset)
+	let origInsn = try readDword(code, offset: instrOffset) otherwise panic("arm64PatchBranch: instrOffset {instrOffset} past end of emitted code (count={code.count()}) — emitter bug")
 	let patched = (origInsn and 0xFC000000) or (relInsns and 0x3FFFFFF)
 	patchDword(code, offset: instrOffset, value: patched)
 end 'arm64PatchBranch'
@@ -547,7 +547,7 @@ end 'arm64PatchBranch'
 function arm64PatchCondBranch(code ByteArray, instrOffset Arm64Offset, targetOffset Arm64Offset)
 	let relBytes = targetOffset - instrOffset
 	let relInsns = relBytes / 4
-	let origInsn = readDword(code, offset: instrOffset)
+	let origInsn = try readDword(code, offset: instrOffset) otherwise panic("arm64PatchCondBranch: instrOffset {instrOffset} past end of emitted code (count={code.count()}) — emitter bug")
 	let condBits = origInsn and 0xF
 	let patched = 0x54000000 or ((relInsns and 0x7FFFF) shl 5) or condBits
 	patchDword(code, offset: instrOffset, value: patched)
@@ -1155,7 +1155,10 @@ export function emitArm64PerFunction(module TargetModule, globalData GlobalDataT
 	return result
 end 'emitArm64PerFunction'
 
-// Link pre-compiled stdlib functions into the ARM64 code output.
+// Link pre-compiled stdlib functions into the ARM64 code output. `stdlibCache`
+// is the pre-link snapshot; this function links from the post-lazy-grow cache
+// (`libraryLinkCacheAfterLazyGrow`) so external-library (N>1) builds don't miss
+// lazily-grown stdlib bodies — see the X64 `linkX64StdlibFunctionsConcat` mirror.
 export function linkArm64StdlibFunctions(project Project, code ByteArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap, callFixups Arm64CallFixupArray, adrFixups Arm64AdrFixupArray, rdataRelocs RdataRelocationArray, relocations RelocationArray, globalData GlobalDataTable, stdlibCache StdlibCacheData)
 	// Collect seed names from user call fixups and adr fixups
 	var seeds = StringArray.create()
@@ -1179,15 +1182,23 @@ export function linkArm64StdlibFunctions(project Project, code ByteArray, labelN
 	appendFuncAbs64Seeds(seeds, relocs: globalData.pendingRdataRelocs)
 
 	// v80 lazy codegen: compile (regalloc + emit) every function reachable from
-	// `seeds` that the metadata-only cold cache hasn't emitted yet, into
-	// `stdlibCache.functions`, before the closure reads it. Mirrors the x64
-	// concat path. No-op once the cache carries every reachable function.
+	// `seeds` that the metadata-only cold cache hasn't emitted yet, into the
+	// registry's stdlib `cacheData.functions` (index 0), before the closure reads
+	// it. Mirrors the x64 concat path. No-op once the cache carries every
+	// reachable function.
 	ensureStdlibFunctionsCompiled(project, seeds: seeds)
 
-	let needed = computeNeededStdlibFunctions(seeds, stdlibCache: stdlibCache)
+	// Link from the post-lazy-grow cache (mirrors X64Backend): the threaded
+	// `stdlibCache` aliases the registry's stdlib array only on the N=1 fast path;
+	// with an external library registered it is a detached union COPY that does
+	// NOT see the lazily-grown stdlib bodies, so the closure + link loop would
+	// miss them (crash at runtime startup). `libraryLinkCacheAfterLazyGrow` uses
+	// the param directly on N=1 (byte-identical) and re-derives on N>1.
+	let linkedCache = libraryLinkCacheAfterLazyGrow(stdlibCache)
+	let needed = computeNeededStdlibFunctions(seeds, stdlibCache: linkedCache)
 
 	// Append each needed function's code and fixups
-	for func in stdlibCache.functions 'linkFuncs'
+	for func in linkedCache.functions 'linkFuncs'
 		if not needed.contains(func.name) 'skip'
 			continue
 		end 'skip'
@@ -1218,8 +1229,8 @@ export function linkArm64StdlibFunctions(project Project, code ByteArray, labelN
 		end 'adjustRelocs'
 	end 'linkFuncs'
 
-	mergeStdlibGlobalData(globalData, rdataRelocs: rdataRelocs, stdlibCache: stdlibCache)
-	logInfo(LogCategory.compiler, message: function() gives "Linked {needed.count()} stdlib functions ({stdlibCache.functions.count()} available)")
+	mergeStdlibGlobalData(globalData, rdataRelocs: rdataRelocs, stdlibCache: linkedCache)
+	logInfo(LogCategory.compiler, message: function() gives "Linked {needed.count()} stdlib functions ({linkedCache.functions.count()} available)")
 end 'linkArm64StdlibFunctions'
 
 // Emit a single target op by index.

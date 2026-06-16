@@ -4,6 +4,7 @@ export union Command
 	build
 	specTest
 	testIncremental
+	testLibCache
 	coverageReport
 	clean
 	unknown
@@ -59,6 +60,24 @@ export type MaxonArgs
 	// Print per-pass wall-clock timings at the end of the run. Useful for
 	// understanding where compile time is being spent during spec runs.
 	export var profilePasses as bool
+	// `maxon build --cache-stats <file>`: print a `CACHE_STATS …` line after the
+	// build reporting per-function regalloc hits/misses, the stdlib cache
+	// hit/miss, and the compiled-function count. Drives the `maxon test-lib-cache`
+	// harness's assertions (cold build writes / 2nd build hits / delete rebuilds).
+	export var cacheStats as bool
+	// `maxon build --cache-root=DIR <file>`: redirect this build's library cache
+	// to `DIR/.maxon/cache/` instead of the library's own on-disk location, so a
+	// test scenario can run a cold/hit/delete sequence in a throwaway temp dir
+	// without disturbing the persistent shared cache. Empty = use each library's
+	// own root (the normal path). Internal/testing use only.
+	export var cacheRoot as String
+	// `maxon build --library=DIR <file>` (repeatable): link an external library
+	// rooted at DIR. Its `export` symbols become globally visible to the program
+	// (implicit import — no syntax), and it is compiled+cached to its own
+	// `<DIR>/.maxon/cache/`. Combined with any `build.maxon` `library("...")`
+	// manifest entries (deduped by absolute path) by the build driver. Empty on a
+	// normal stdlib-only build.
+	export var libraries as StringArray
 	// Number of parallel persistent-worker processes (default 12). 1 = serial.
 	export var workers as WorkerCount
 	// Internal flag set by the parent dispatcher to launch a long-lived worker
@@ -95,6 +114,9 @@ export type MaxonArgs
 			coverage: false,
 			leakCheck: false,
 			profilePasses: false,
+			cacheStats: false,
+			cacheRoot: "",
+			libraries: StringArray.create(),
 			workers: 12,
 			workerPersistent: false,
 			workerSpec: "",
@@ -117,7 +139,9 @@ export type MaxonArgs
 			args.command = Command.specTest
 		end 'isSpec' else if cmdStr == "test-incremental" 'isInc'
 			args.command = Command.testIncremental
-		end 'isInc' else if cmdStr == "clean" 'isClean'
+		end 'isInc' else if cmdStr == "test-lib-cache" 'isLibCache'
+			args.command = Command.testLibCache
+		end 'isLibCache' else if cmdStr == "clean" 'isClean'
 			args.command = Command.clean
 		end 'isClean' else if cmdStr == "coverage" 'isCov'
 			// Sentinel: user may type "coverage" alone; empty string flows to the 'notReport' else below.
@@ -182,7 +206,19 @@ export type MaxonArgs
 				args.coverage = true
 			end 'isCoverage' else if arg == "--profile-passes" 'isProfilePasses'
 				args.profilePasses = true
-			end 'isProfilePasses' else if arg.startsWith("--workers=") 'isWorkers'
+			end 'isProfilePasses' else if arg == "--cache-stats" 'isCacheStats'
+				args.cacheStats = true
+			end 'isCacheStats' else if arg.startsWith("--cache-root=") 'isCacheRoot'
+				// Sentinel: empty value flows to runBuild, which leaves the override
+				// empty (normal cache path) rather than redirecting to bare cwd.
+				args.cacheRoot = try CommandLine.optionValue(arg) otherwise ""
+			end 'isCacheRoot' else if arg.startsWith("--library=") 'isLibrary'
+				// Repeatable: each `--library=DIR` appends one external library dir.
+				let libDir = try CommandLine.optionValue(arg) otherwise ""
+				if not libDir.isEmpty() 'nonEmpty'
+					args.libraries.push(libDir)
+				end 'nonEmpty'
+			end 'isLibrary' else if arg.startsWith("--workers=") 'isWorkers'
 				let workersStr = try CommandLine.optionValue(arg) otherwise ""
 				let w = try int.fromString(workersStr) otherwise throw ArgError.invalidOption(arg)
 				if w < 1 'badWorkers'
@@ -210,6 +246,7 @@ export type MaxonArgs
 			build gives true
 			specTest gives true
 			testIncremental gives true
+			testLibCache gives true
 			coverageReport gives false
 			clean gives true
 			unknown gives true

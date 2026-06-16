@@ -1009,7 +1009,7 @@ function writeFunctionTypePayload(tables MaxonTypeWriteTables, buf ByteArray, id
 end 'writeFunctionTypePayload'
 
 function readMaxonFunctionType(project Project, buf ByteArray, offset ByteOffset) returns (MaxonType, ByteOffset) throws CacheCorruption
-	let paramCount = readDword(buf, offset: offset)
+	let paramCount = try readDword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	var pos = offset + 4
 	var paramTypes = MaxonTypeArray.create()
 	for _ in 0 upto paramCount 'eachParam'
@@ -1048,7 +1048,7 @@ end 'readMaxonTypeParameter'
 // rebuilt with the destination project's id space.
 function readMaxonGenericInstance(project Project, buf ByteArray, offset ByteOffset) returns (MaxonType, ByteOffset) throws CacheCorruption
 	let (baseName, p1) = try readString(buf, offset: offset)
-	let argCount = readDword(buf, offset: p1)
+	let argCount = try readDword(buf, offset: p1) otherwise throw CacheCorruption.invalidEncoding
 	var pos = p1 + 4
 	var args = MaxonTypeArray.create()
 	for _ in 0 upto argCount 'eachArg'
@@ -1070,10 +1070,18 @@ export function readMaxonInterface(project Project, buf ByteArray, offset ByteOf
 	return (MaxonType.interface(id), nextPos)
 end 'readMaxonInterface'
 
+// Read the qword payload of a `constInt` MaxonType arm. Split out because a
+// match arm is a single expression and the qword read must translate an OOB
+// (corrupt/truncated cache) into CacheCorruption rather than panic.
+function readMaxonConstIntPayload(buf ByteArray, offset ByteOffset) returns (MaxonType, ByteOffset) throws CacheCorruption
+	let constVal = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
+	return (MaxonType.constInt(constVal), offset + 8)
+end 'readMaxonConstIntPayload'
+
 export function readMaxonType(project Project, buf ByteArray, offset ByteOffset) returns (MaxonType, ByteOffset) throws CacheCorruption
-	let raw = readDword(buf, offset: offset)
+	let raw = try readDword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	let pos = offset + 4
-	let kase = try MaxonType.unionCases.fromRawValue(raw) otherwise panic("corrupt cache: unknown MaxonType tag {raw}")
+	let kase = try MaxonType.unionCases.fromRawValue(raw) otherwise throw CacheCorruption.invalidEncoding
 	match kase 'tag'
 		boolean then return (MaxonType.boolean, pos)
 		integer then return (MaxonType.integer, pos)
@@ -1093,7 +1101,7 @@ export function readMaxonType(project Project, buf ByteArray, offset ByteOffset)
 		genericInstance then return try readMaxonGenericInstance(project, buf: buf, offset: pos)
 		interface then return try readMaxonInterface(project, buf: buf, offset: pos)
 		// Phase 13 (sized typealiases): mirror writer's constInt payload.
-		constInt then return (MaxonType.constInt(readQword(buf, offset: pos)), pos + 8)
+		constInt then return try readMaxonConstIntPayload(buf, offset: pos)
 		// Synthetic ABI-bookkeeping slot. No payload; mirror writer.
 		opaquePointer then return (MaxonType.opaquePointer, pos)
 		cstring then return (MaxonType.cstring, pos)
@@ -1114,9 +1122,9 @@ function readMaxonReturnTypeValue(project Project, buf ByteArray, offset ByteOff
 end 'readMaxonReturnTypeValue'
 
 export function readMaxonReturnType(project Project, buf ByteArray, offset ByteOffset) returns (MaxonReturnType, ByteOffset) throws CacheCorruption
-	let raw = readDword(buf, offset: offset)
+	let raw = try readDword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	let pos = offset + 4
-	let kase = try MaxonReturnType.unionCases.fromRawValue(raw) otherwise panic("corrupt cache: unknown MaxonReturnType tag {raw}")
+	let kase = try MaxonReturnType.unionCases.fromRawValue(raw) otherwise throw CacheCorruption.invalidEncoding
 	match kase 'tag'
 		void then return (MaxonReturnType.void, pos)
 		value then return try readMaxonReturnTypeValue(project, buf: buf, offset: pos)
@@ -2058,10 +2066,39 @@ end 'qualifyCalleeForContextWithType'
 // True when `readerFilePath` is one of the stdlib internals files that may
 // reference `__`-prefixed stdlib functions by bare name. Matches the
 // declaration-side exemption list in `Parser.checkReservedDeclName`.
+//
+// Phase 6: tightened from filename-only to ALSO require the real on-disk files
+// (`Internals.maxon` / `Builtins.maxon`) to live UNDER the stdlib root, so an
+// EXTERNAL library shipping its own `Internals.maxon` cannot call `__Internals.*`
+// — its file is under the library's dir, not stdlib's, and is rejected. The
+// synthesized `stdlib-bootstrap.maxon` anchor has no on-disk dir (a bare relative
+// path), so it stays filename-gated.
 export function readerCanCallStdlibInternals(readerFilePath FilePath) returns bool
 	let name = readerFilePath.filename()
-	return name == "Internals.maxon" or name == "Builtins.maxon" or name == "stdlib-bootstrap.maxon"
+	if name == "stdlib-bootstrap.maxon" 'isBootstrap'
+		return true
+	end 'isBootstrap'
+	if name != "Internals.maxon" and name != "Builtins.maxon" 'notInternalsFile'
+		return false
+	end 'notInternalsFile'
+	return pathIsUnderStdlibRoot(readerFilePath)
 end 'readerCanCallStdlibInternals'
+
+// True when `path` lies under the discovered stdlib directory. Compares
+// normalized path strings (prefix match on the stdlib root + a separator) so a
+// sibling dir whose name merely starts with the stdlib dir's name doesn't match.
+// When no stdlib is discoverable (e.g. an isolated sandbox), returns true so the
+// stdlib parse itself is never wrongly gated — the filename check above already
+// limited us to the two real internals files.
+function pathIsUnderStdlibRoot(path FilePath) returns bool
+	let stdlibRoot = findStdlibPath()
+	if stdlibRoot.isEmpty() 'noStdlib'
+		return true
+	end 'noStdlib'
+	let rootStr = stdlibRoot.normalize().toString()
+	let pathStr = path.normalize().toString()
+	return pathStr == rootStr or pathStr.startsWith("{rootStr}/") or pathStr.startsWith("{rootStr}\\")
+end 'pathIsUnderStdlibRoot'
 
 // E3095 ambiguity detection: re-walks the same candidate set the cross-file
 // fallback in `qualifyCalleeForContextWithType` considers, but collects ALL

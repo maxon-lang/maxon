@@ -30,9 +30,9 @@ export function writeCpuArch(buf ByteArray, cpu CpuArch)
 	writeDword(buf, value: cpu.rawValue)
 end 'writeCpuArch'
 
-export function readCpuArch(buf ByteArray, offset ByteOffset) returns (CpuArch, ByteOffset)
-	let raw = readDword(buf, offset: offset)
-	let cpu = try CpuArch.fromRawValue(raw) otherwise panic("corrupt cache: unknown CpuArch tag {raw}")
+export function readCpuArch(buf ByteArray, offset ByteOffset) returns (CpuArch, ByteOffset) throws CacheCorruption
+	let raw = try readDword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
+	let cpu = try CpuArch.fromRawValue(raw) otherwise throw CacheCorruption.invalidEncoding
 	return (cpu, offset + 4)
 end 'readCpuArch'
 
@@ -40,9 +40,9 @@ export function writeOs(buf ByteArray, os Os)
 	writeDword(buf, value: os.rawValue)
 end 'writeOs'
 
-export function readOs(buf ByteArray, offset ByteOffset) returns (Os, ByteOffset)
-	let raw = readDword(buf, offset: offset)
-	let os = try Os.fromRawValue(raw) otherwise panic("corrupt cache: unknown Os tag {raw}")
+export function readOs(buf ByteArray, offset ByteOffset) returns (Os, ByteOffset) throws CacheCorruption
+	let raw = try readDword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
+	let os = try Os.fromRawValue(raw) otherwise throw CacheCorruption.invalidEncoding
 	return (os, offset + 4)
 end 'readOs'
 

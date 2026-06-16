@@ -1,0 +1,266 @@
+// Spec-test run-skip cache: a per-spec, on-disk record of which compiled
+// binaries have already PASSED, keyed by the binary's content hash plus its run
+// inputs (test args, stdin, target). After the spec runner compiles a test, if
+// the produced binary is byte-identical (and the run inputs are identical) to a
+// prior PASSING run, the subprocess run is SKIPPED and the prior PASS is
+// replayed. The compile still happens every run (its IR/lowering/rdata are
+// re-validated against the spec's Required* blocks); only the subprocess
+// EXECUTION is elided.
+//
+// SOUNDNESS. The binary embeds everything that determines its run outcome —
+// codegen, the linked stdlib bytes, the runtime. The chunk/stdlib caches produce
+// a byte-identical binary for an unchanged test regardless of cache state
+// (Property 1, verified before this module was written), so the binary hash is a
+// stable key: an unchanged test re-produces the same binary → the same hash → a
+// hit. Because the key is the binary content (not a compiler fingerprint), a hit
+// survives a compiler rebuild that doesn't alter THIS test's binary — the
+// powerful dev-loop property.
+//
+// ONLY PASS verdicts are recorded (presence of a key == "this exact binary, run
+// with these inputs, passed"). A failing test is never cached, so it re-runs
+// every time until it passes. A corrupt/truncated/version-skewed file is treated
+// as empty (every lookup misses → re-run + re-record) — a damaged file must
+// never manufacture a false hit.
+//
+// CAVEAT (accepted): a binary-identical HIT replays the prior verdict without
+// re-exercising the program, so a *flaky* test that passed once is not re-run
+// while its binary is unchanged. Acceptable for the dev loop; a full re-exercise
+// is always available by starting cold (delete the cache, e.g. `maxon clean`).
+//
+// CONCURRENCY. The parallel worker pool dispatches each spec as one job to
+// exactly one worker, so only one process writes a given spec's file during a
+// run. Across runs, the write is a read-modify-merge (union of keys) under atomic
+// rename (`writeFileAtomic`), so last-writer-wins never loses keys — the same
+// pattern `mergeOnDiskGrownStdlibFunctions` uses for the stdlib cache.
+
+// File format (`.spec-cache/<spec>/run-cache.bin`):
+//   magic "MRTC" (4) + version(1) + count(4, u32 LE) + count × { keyHi(4) keyLo(4) }
+// Bump on any layout change OR key-derivation change; an on-disk version
+// mismatch reads as empty. v2: the key now folds the run-outcome expectation
+// into `lo` (see computeRunCacheKey), so v1 keys are stale and must be
+// discarded rather than lingering as dead (harmless-but-confusing) entries.
+let RUN_CACHE_FORMAT_VERSION = 2
+
+let RUN_CACHE_MAGIC_0 = 0x4D       // 'M'
+let RUN_CACHE_MAGIC_1 = 0x52       // 'R'
+let RUN_CACHE_MAGIC_2 = 0x54       // 'T'
+let RUN_CACHE_MAGIC_3 = 0x43       // 'C'
+
+// magic(4) + version(1) + count(4). The count is the last header field, read
+// back as a plain dword.
+let RUN_CACHE_HEADER_SIZE = 9
+let RUN_CACHE_COUNT_OFFSET = 5
+
+// ============================================================
+// Key
+// ============================================================
+
+// A 64-bit run-skip key, carried as two 32-bit FNV-1a words to push the
+// birthday-collision bound out of reach for the few-dozen-binaries-per-spec
+// population. `hi` hashes the binary's bytes; `lo` hashes the run inputs (test
+// args + stdin + target).
+export type RunCacheKey
+	export var hi as MachineWord
+	export var lo as MachineWord
+
+	export static function create(hi MachineWord, lo MachineWord) returns RunCacheKey
+		return Self{hi: hi, lo: lo}
+	end 'create'
+
+	export function equals(other RunCacheKey) returns bool
+		return self.hi == other.hi and self.lo == other.lo
+	end 'equals'
+end 'RunCacheKey'
+
+export typealias RunCacheKeyArray = Array with RunCacheKey
+
+// Hash the binary bytes into the `hi` word and the run inputs into the `lo`
+// word. `testArgs` is the spec's raw `Args:` string (the only run-affecting
+// argv the test controls; the wasm runner's constant wasmtime flags don't vary
+// per test and are already implied by `targetKey`). `stdin` is "" today (no spec
+// feeds stdin) but is hashed so the key stays correct if that changes.
+//
+// `expectationKey` folds the test's RUN-OUTCOME oracle (expected exit code /
+// stdout / runtime stderr, plus the asyncTrace normalization flag) into the key.
+// This is LOAD-BEARING: those expectations live in the spec markdown AFTER the
+// source, so they are NOT compiled into the binary — without them in the key,
+// editing only a test's expected output leaves the binary byte-identical, a
+// stale PASS key HITs, the run is skipped, and a now-failing test is reported
+// PASS. (The Required* compile-artifact checks are re-validated on a hit, but
+// the runtime oracle isn't, so it must be in the key.) The caller builds the
+// string; encoding it here would couple this module to the Fragment type.
+//
+// Each component is followed by a `0` length-separator so a byte shifted across
+// a boundary can't collide with a different split (the anti-splice trick from
+// `computeStdlibChecksum`).
+export function computeRunCacheKey(binaryBytes ByteArray, testArgs String, stdin String, targetKey String, expectationKey String) returns RunCacheKey
+	var hi = FNV_OFFSET_BASIS
+	for b in binaryBytes 'eachBinaryByte'
+		hi = fnvUpdate(hi, b: b)
+	end 'eachBinaryByte'
+
+	var lo = FNV_OFFSET_BASIS
+	lo = fnvMixString(lo, s: testArgs)
+	lo = fnvMixString(lo, s: stdin)
+	lo = fnvMixString(lo, s: targetKey)
+	lo = fnvMixString(lo, s: expectationKey)
+
+	return RunCacheKey.create(hi, lo: lo)
+end 'computeRunCacheKey'
+
+// Fold a string's UTF-8 bytes into an FNV-1a state, terminated by a `0`
+// length-separator so concatenated fields can't splice into a colliding stream.
+function fnvMixString(state MachineWord, s String) returns MachineWord
+	var h = state
+	for b in s.toByteArray() 'eachByte'
+		h = fnvUpdate(h, b: b)
+	end 'eachByte'
+	return fnvUpdate(h, b: 0)
+end 'fnvMixString'
+
+// ============================================================
+// In-memory cache
+// ============================================================
+
+// The set of PASS keys for one spec, loaded from disk and/or accumulated this
+// run. A linear scan is fine — a spec has at most a few dozen tests.
+export type RunResultCache
+	export var keys as RunCacheKeyArray
+
+	export static function empty() returns RunResultCache
+		return Self{keys: RunCacheKeyArray.create()}
+	end 'empty'
+
+	export function contains(key RunCacheKey) returns bool
+		for existing in self.keys 'eachKey'
+			if existing.equals(key) 'match'
+				return true
+			end 'match'
+		end 'eachKey'
+		return false
+	end 'contains'
+
+	// Insert if absent (the keys form a set).
+	export function insert(key RunCacheKey)
+		if self.contains(key) 'present'
+			return
+		end 'present'
+		self.keys.push(key)
+	end 'insert'
+end 'RunResultCache'
+
+// True iff `key` is a recorded PASS — the run-skip predicate.
+export function runCacheLookup(cache RunResultCache, key RunCacheKey) returns bool
+	return cache.contains(key)
+end 'runCacheLookup'
+
+// ============================================================
+// Paths
+// ============================================================
+
+function runCacheFilePath(specCacheDir FilePath, specName String) returns FilePath
+	return specCacheDir.join(specName).join("run-cache.bin")
+end 'runCacheFilePath'
+
+// ============================================================
+// Read
+// ============================================================
+
+// Load the PASS-key set for one spec. ANY read/validate failure (missing file,
+// bad magic/version, truncation, count overflow) yields an EMPTY cache — a
+// damaged file must never produce a false hit; the worst case is a needless
+// re-run that re-records the keys.
+export function loadRunResultCache(specCacheDir FilePath, specName String) returns RunResultCache
+	let path = runCacheFilePath(specCacheDir, specName: specName)
+	let result = try decodeRunResultCache(path) otherwise (e) 'corrupt'
+		match e 'kind'
+			absent then logDebug(LogCategory.testing, message: function() gives "Run-skip cache absent at {path}")
+			invalidEncoding then logInfo(LogCategory.testing, message: function() gives "Run-skip cache corrupt at {path} — treating as empty")
+		end 'kind'
+		return RunResultCache.empty()
+	end 'corrupt'
+	return result
+end 'loadRunResultCache'
+
+function decodeRunResultCache(path FilePath) returns RunResultCache throws CacheCorruption
+	let buf = try File.readBinary(path) otherwise return RunResultCache.empty()
+	if buf.count() < RUN_CACHE_HEADER_SIZE 'tooShort'
+		// An empty/absent file is the common cold-cache case, not corruption.
+		if buf.count() == 0 'empty'
+			return RunResultCache.empty()
+		end 'empty'
+		throw CacheCorruption.invalidEncoding
+	end 'tooShort'
+
+	if not runCacheMagicOk(buf) 'badMagic'
+		throw CacheCorruption.invalidEncoding
+	end 'badMagic'
+	let version = try buf.get(4) otherwise throw CacheCorruption.invalidEncoding
+	if version != RUN_CACHE_FORMAT_VERSION 'versionSkew'
+		throw CacheCorruption.invalidEncoding
+	end 'versionSkew'
+
+	let count = try readDword(buf, offset: RUN_CACHE_COUNT_OFFSET) otherwise throw CacheCorruption.invalidEncoding
+	let bodyBytes = count * 8
+	if RUN_CACHE_HEADER_SIZE + bodyBytes > buf.count() 'truncated'
+		throw CacheCorruption.invalidEncoding
+	end 'truncated'
+
+	var cache = RunResultCache.empty()
+	var pos = RUN_CACHE_HEADER_SIZE as ByteOffset
+	for _ in 0 upto count 'eachKey'
+		let hi = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
+		let lo = try readDword(buf, offset: pos + 4) otherwise throw CacheCorruption.invalidEncoding
+		pos = pos + 8
+		cache.insert(RunCacheKey.create(hi, lo: lo))
+	end 'eachKey'
+	return cache
+end 'decodeRunResultCache'
+
+function runCacheMagicOk(buf ByteArray) returns bool
+	let m0 = try buf.get(0) otherwise return false
+	let m1 = try buf.get(1) otherwise return false
+	let m2 = try buf.get(2) otherwise return false
+	let m3 = try buf.get(3) otherwise return false
+	return m0 == RUN_CACHE_MAGIC_0 and m1 == RUN_CACHE_MAGIC_1 and m2 == RUN_CACHE_MAGIC_2 and m3 == RUN_CACHE_MAGIC_3
+end 'runCacheMagicOk'
+
+// ============================================================
+// Merge-and-write
+// ============================================================
+
+// Commit newly-observed PASS keys for one spec: re-read the on-disk set, union
+// the new keys in, and atomic-write the result. Re-reading inside the write
+// (rather than writing the in-memory set directly) makes concurrent runs safe —
+// last-writer-wins under atomic rename never drops a key, because every writer
+// starts from the current on-disk union. A no-op when `keysToCommit` is empty.
+export function mergeAndWriteRunResultCache(specCacheDir FilePath, specName String, keysToCommit RunCacheKeyArray)
+	if keysToCommit.count() == 0 'nothingToCommit'
+		return
+	end 'nothingToCommit'
+
+	let path = runCacheFilePath(specCacheDir, specName: specName)
+	var merged = loadRunResultCache(specCacheDir, specName: specName)
+	for key in keysToCommit 'eachNew'
+		merged.insert(key)
+	end 'eachNew'
+
+	var buf = ByteArray.create()
+	buf.reserve(RUN_CACHE_HEADER_SIZE + merged.keys.count() * 8)
+	buf.push(RUN_CACHE_MAGIC_0)
+	buf.push(RUN_CACHE_MAGIC_1)
+	buf.push(RUN_CACHE_MAGIC_2)
+	buf.push(RUN_CACHE_MAGIC_3)
+	buf.push(RUN_CACHE_FORMAT_VERSION)
+	writeDword(buf, value: merged.keys.count())
+	for key in merged.keys 'eachMerged'
+		writeDword(buf, value: key.hi)
+		writeDword(buf, value: key.lo)
+	end 'eachMerged'
+
+	let parentDir = try path.parent() otherwise FilePath from ""
+	if not parentDir.isEmpty() 'hasParent'
+		_ = Directory.create(parentDir)
+	end 'hasParent'
+	writeFileAtomic(path, bytes: buf)
+end 'mergeAndWriteRunResultCache'

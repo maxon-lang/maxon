@@ -107,10 +107,10 @@ export function writeRdataRelocKind(buf ByteArray, kind RdataRelocKind)
 	end 'k'
 end 'writeRdataRelocKind'
 
-export function readRdataRelocKind(buf ByteArray, offset ByteOffset) returns (RdataRelocKind, ByteOffset)
-	let raw = readDword(buf, offset: offset)
+export function readRdataRelocKind(buf ByteArray, offset ByteOffset) returns (RdataRelocKind, ByteOffset) throws CacheCorruption
+	let raw = try readDword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	let pos = offset + 4
-	let kase = try RdataRelocKind.unionCases.fromRawValue(raw) otherwise panic("corrupt cache: unknown RdataRelocKind tag {raw}")
+	let kase = try RdataRelocKind.unionCases.fromRawValue(raw) otherwise throw CacheCorruption.invalidEncoding
 	match kase 'tag'
 		ripRelDisp32 then return (RdataRelocKind.ripRelDisp32, pos)
 		symdataRipRelDisp32 then return (RdataRelocKind.symdataRipRelDisp32, pos)
@@ -121,7 +121,9 @@ export function readRdataRelocKind(buf ByteArray, offset ByteOffset) returns (Rd
 		symdataArm64Adr then return (RdataRelocKind.symdataArm64Adr, pos)
 		dataSectionArm64Adr then return (RdataRelocKind.dataSectionArm64Adr, pos)
 		covdataArm64Adr then return (RdataRelocKind.covdataArm64Adr, pos)
-		funcAbs64InRdata then panic("readRdataRelocKind: funcAbs64InRdata never serializes into the per-function cache stream")
+		// funcAbs64InRdata is rdata-internal and never serialized into the
+		// per-function cache stream; seeing its tag means the bytes are corrupt.
+		funcAbs64InRdata then throw CacheCorruption.invalidEncoding
 	end 'tag'
 end 'readRdataRelocKind'
 
@@ -218,6 +220,20 @@ export type FunctionCodeChunk
 	// type so the per-function cache memo carries every fixup needed to
 	// reconstruct the binary without a parallel per-architecture array.
 	export var arm64AdrFixups as Arm64AdrFixupArray
+	// Float / XMM-mask rdata constants this chunk's code references. These are
+	// the ONLY rdata entries registered LAZILY during target lowering
+	// (`registerFloatConstant` / `registerXmmMaskConstant`) — every other rdata
+	// kind (string literals via `addInternedString`, panic messages via
+	// `registerPanicStrings`) is registered eagerly at Maxon→Std lowering or
+	// once per build, so it's present in `globalData` regardless of whether this
+	// function compiled fresh or hit the chunk cache. The lazy float/mask
+	// constants, by contrast, are added as a SIDE EFFECT of emitting the
+	// function's ops — so a cache HIT (which skips op emission) would otherwise
+	// leave them OUT of `globalData`, and the chunk's `rdataRelocs` would resolve
+	// against a missing rdata entry (wrong constant → corrupt binary). We
+	// therefore capture them HERE at emit time and re-register them on reuse
+	// (`reregisterChunkRdataConstants`). Keyed name→bytes via GlobalDataTable.
+	export var rdataConstants as GlobalDataTable
 
 	export static function create(funcName String) returns FunctionCodeChunk
 		return Self{
@@ -227,7 +243,8 @@ export type FunctionCodeChunk
 			callFixups: CallFixupArray.create(),
 			rdataRelocs: RdataRelocationArray.create(),
 			iatRelocs: RelocationArray.create(),
-			arm64AdrFixups: Arm64AdrFixupArray.create()
+			arm64AdrFixups: Arm64AdrFixupArray.create(),
+			rdataConstants: GlobalDataTable.create()
 		}
 	end 'create'
 end 'FunctionCodeChunk'

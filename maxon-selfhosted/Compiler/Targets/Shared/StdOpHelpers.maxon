@@ -413,6 +413,56 @@ export function registerXmmMaskConstant(rawBitsLo ParsedInt, rawBitsHi ParsedInt
 	return label
 end 'registerXmmMaskConstant'
 
+// Whether `name` is a rdata constant registered LAZILY during target lowering
+// (as a side effect of emitting an op). These are the only entries a cache-hit
+// chunk must re-register, because emitting its ops is what would normally add
+// them. `__float_<bits>` (registerFloatConstant) and `__xmmmask_<lo>_<hi>`
+// (registerXmmMaskConstant) are the complete set; string/panic rdata is
+// registered eagerly elsewhere and is always present.
+export function isLazyChunkRdataConstant(name String) returns bool
+	return name.startsWith("__float_") or name.startsWith("__xmmmask_")
+end 'isLazyChunkRdataConstant'
+
+// Capture into `chunk.rdataConstants` every lazily-registered float/xmm-mask
+// constant the freshly-emitted chunk references, copying its bytes out of
+// `globalData` (where op emission just added them). Called at the end of each
+// backend's `emitFunctionChunk`. On a later cache hit (which skips op emission),
+// `reregisterChunkRdataConstants` replays these into the build's globalData so
+// the chunk's `rdataRelocs` resolve to the correct constant.
+export function captureChunkRdataConstants(chunk FunctionCodeChunk, globalData GlobalDataTable)
+	for reloc in chunk.rdataRelocs 'eachReloc'
+		let label = reloc.rdataLabel
+		if not isLazyChunkRdataConstant(label) 'notLazy'
+			continue
+		end 'notLazy'
+		if chunk.rdataConstants.nameIndex.contains(label) 'alreadyCaptured'
+			continue
+		end 'alreadyCaptured'
+		let value = lookupGlobalData(globalData, name: label)
+		if value.count() == 0 'absent'
+			continue
+		end 'absent'
+		addNamedGlobalData(chunk.rdataConstants, name: label, data: value)
+	end 'eachReloc'
+end 'captureChunkRdataConstants'
+
+// Replay a reused chunk's captured float/xmm-mask rdata constants into the
+// build's `globalData`, so the chunk's `rdataRelocs` resolve to the right bytes.
+// Idempotent: skips a label already present (the cold/first-emit path, or a
+// constant another function already registered). This closes the gap where a
+// cache HIT skips op emission and would otherwise leave its lazy float/mask
+// constants out of globalData (corrupt binary).
+export function reregisterChunkRdataConstants(chunk FunctionCodeChunk, globalData GlobalDataTable)
+	for i in 0 upto chunk.rdataConstants.names.count() 'eachConst'
+		let name = try chunk.rdataConstants.names.get(i) otherwise continue
+		if lookupGlobalData(globalData, name: name).count() > 0 'present'
+			continue
+		end 'present'
+		let value = try chunk.rdataConstants.values.get(i) otherwise continue
+		addNamedGlobalData(globalData, name: name, data: value)
+	end 'eachConst'
+end 'reregisterChunkRdataConstants'
+
 // ============================================================
 // MIR ValueId ceiling scan (MIR phase)
 // ============================================================

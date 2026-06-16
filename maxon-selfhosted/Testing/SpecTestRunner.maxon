@@ -421,79 +421,53 @@ end 'effectiveWhitelist'
 // Signed elapsed time in milliseconds (deltas between Clock.nowMs() reads).
 typealias Millis = int(i64.min to i64.max)
 
-// Signed process exit code: typically 0..255 / u32.max, but Subprocess.run
-// surfaces NTSTATUS-class codes for abnormal termination, so the field has
-// to accommodate the full i64 range.
-typealias ProcessExitCode = int(i64.min to i64.max)
-
 typealias TestCount = int(0 to u64.max)
 
 // Per-test-process wall-clock budget. Test fragments hitting this limit are
 // terminated by the runtime's processWait kill-on-timeout path so a runaway
-// child (e.g. an infinite-loop fragment) can't pin the runner. Tuned for
-// fast feedback on local runs; raise if a legitimately heavy test trips it.
-let testProcessTimeoutMs = 2000
-
-// Process-exit code returned by `mrt_leak_check` (the leak gate wired into
-// leak-checked binaries) when an allocation is still live at exit. Matches the
-// `101` constant the runtime's `mrt_leak_check` returns. A test that expects a
-// non-101 exit but gets this has leaked.
-let SPEC_LEAK_EXIT_CODE = 101 as ProcessExitCode
-
-// Batch-process wall-clock budget. A batch binary runs every test in a spec
-// sequentially in ONE process, so its budget has to scale with the test count,
-// not stay pinned at the single-fragment `testProcessTimeoutMs` — a spec whose
-// fragments are individually fast can still take far longer than one fragment's
-// budget once dozens run back-to-back. The `subprocess` spec is the clearest
-// case: each of its 12 fragments spawns a real child process (`cmd /c ...`), and
-// process creation + pipe drain on Windows costs enough that the serial batch
-// blows past 2 s even though every fragment passes comfortably on its own.
+// child (e.g. an infinite-loop fragment) can't pin the runner. Tuned for fast
+// feedback on local runs; raise if a legitimately heavy test trips it.
 //
-// We therefore scale the budget by the test count: each included test gets a
-// per-test allotment within the shared run. Native uses the single-fragment
-// `testProcessTimeoutMs`; wasm32-wasi uses a larger per-test factor because
-// every function is Asyncify-instrumented (the always-asyncify model), adding
-// per-call prologue overhead to the whole module so a wasm batch runs several
-// times slower than native.
-//
-// The result is clamped to [testProcessTimeoutMs, batchTimeoutCeilingMs]: the
-// floor keeps a single-test batch at the full single-fragment allotment; the
-// ceiling stays comfortably under the parallel dispatcher's per-worker watchdog
-// (`workerJobTimeoutMs`) so a large batch's own run timeout fires (and triggers
-// the graceful per-fragment reroute below) BEFORE the watchdog force-kills the
-// whole worker. Without the ceiling a 77-test wasm batch would compute a budget
-// far past the watchdog, which would kill the worker first and abort the run.
-//
-// If a batch still times out (a legitimately slow spec, or a real hang), the
-// run-failure path in `runSpecBatch` reroutes its tests to the per-fragment path
-// rather than aborting — so a too-tight budget degrades to slower-but-correct,
-// never a hard failure.
-let batchTimeoutCeilingMs = 30000 as DurationMs
+// wasm gets a much larger budget: a wasm binary runs under wasmtime (process
+// startup + module instantiation) and every function is Asyncify-instrumented,
+// so a wasm test process runs several times slower than native — and under the
+// fully-saturated parallel worker pool (12 contending wasmtime invocations) the
+// tail of otherwise-fast tests creeps just past a 2 s budget (observed
+// async-await / conditional-extensions timing out at ~2.2-2.5 s in the full
+// suite while passing in ~well under a second standalone). The budget stays well
+// above the wasm socket helper's own 1 s connect timeout so a bounded
+// connect-failure still surfaces in-process before this kill fires.
+function testProcessTimeoutMs(target Target) returns DurationMs
+	if target.os == Os.wasi 'isWasm'
+		return 8000
+	end 'isWasm'
+	return 2000
+end 'testProcessTimeoutMs'
 
-function batchProcessTimeoutMs(target Target, testCount TestCount) returns DurationMs
-	// Per-target per-test allotment and floor. wasm's Asyncify overhead makes
-	// each test several times slower, so it gets a larger per-test factor and
-	// retains its previously-proven 20 s minimum (which already covered the
-	// heaviest wasm batch, string-type's 77 fragments).
-	let perTestMs = 800 as DurationMs if target.os == Os.wasi else testProcessTimeoutMs
-	let floorMs = 20000 as DurationMs if target.os == Os.wasi else testProcessTimeoutMs
-	let scaled = testCount * perTestMs
-	if scaled < floorMs 'belowFloor'
-		return floorMs
-	end 'belowFloor'
-	if scaled > batchTimeoutCeilingMs 'aboveCeiling'
-		return batchTimeoutCeilingMs
+// Per-worker-job wall-clock budget, scaled by the spec's test count. A worker
+// that doesn't emit WORKER_READY within its job's budget of receiving the JOB
+// line is force-killed via subprocessKill; the resulting EOF makes the drain GT
+// throw, which aborts the run via abortOnCrashedWorker just like a panic does.
+//
+// A `JOB:singles:<spec>` compiles AND runs every test in the spec serially in
+// one worker, so the budget has to scale with the test count — a 40-test spec
+// like `array-sort` (~20 s standalone) runs several times slower under a fully
+// saturated worker pool (12 heavy compiles contending for CPU), far past any
+// fixed single-fragment budget. The floor keeps small specs at the
+// previously-proven flat budget; the ceiling stays high enough that no real
+// spec reaches it but a genuinely hung worker (compiler infinite loop) is still
+// caught.
+let workerJobTimeoutFloorMs = 60000 as Millis
+let workerJobTimeoutCeilingMs = 360000 as Millis
+let workerJobPerTestMs = 5000 as Millis
+
+function workerJobTimeoutMs(testCount TestCount) returns Millis
+	let scaled = workerJobTimeoutFloorMs + (testCount as Millis) * workerJobPerTestMs
+	if scaled > workerJobTimeoutCeilingMs 'aboveCeiling'
+		return workerJobTimeoutCeilingMs
 	end 'aboveCeiling'
 	return scaled
-end 'batchProcessTimeoutMs'
-
-// Per-worker-job wall-clock budget. If a worker doesn't emit WORKER_READY
-// within this many ms of receiving a JOB line, the dispatcher force-kills it
-// via subprocessKill; the resulting EOF makes the drain GT throw, which
-// aborts the run via abortOnCrashedWorker just like a panic does. Sized for the
-// heaviest spec (stdlib-array singles) plus headroom; raise if a legitimately
-// heavy spec starts tripping it.
-let workerJobTimeoutMs = 60000 as Millis
+end 'workerJobTimeoutMs'
 
 var totalCompileMs = 0
 
@@ -823,12 +797,12 @@ type SpecRunOutcome
 end 'SpecRunOutcome'
 
 // Run one spec end-to-end on the in-process serial path: parse the spec file,
-// partition tests, run the batched compile, then run any non-batchable tests
-// per-fragment. Logs the per-spec [FAIL] header inline so callers don't repeat
+// select its tests, then run each per-fragment via the shared `runSingleTests`
+// machinery. Logs the per-spec [FAIL] header inline so callers don't repeat
 // the formatting. Returns ran=false when the spec file is missing or the spec
 // is in draft status — those cases must NOT clear an entry from the failure
 // state file.
-function runOneSpecSerial(specName String, specDir FilePath, fragmentDir FilePath, specCacheDir FilePath, root FilePath, target Target, filter String, targetKey String, verbose bool) returns SpecRunOutcome
+function runOneSpecSerial(specName String, specDir FilePath, fragmentDir FilePath, specCacheDir FilePath, root FilePath, target Target, filter String, targetKey String, verbose bool, updateRequired bool) returns SpecRunOutcome
 	let specPath = specDir.join("{specName}.md")
 	let content = try File.readText(specPath) otherwise 'readErr'
 		logError(LogCategory.testing, message: function() gives "Could not read spec: {specPath}")
@@ -842,7 +816,7 @@ function runOneSpecSerial(specName String, specDir FilePath, fragmentDir FilePat
 	end 'isDraft'
 
 	let tests = parseSpecFile(content, targetKey: targetKey)
-	var unit = partitionSpecTests(tests, specName: specName, filter: filter, targetKey: targetKey)
+	let unit = partitionSpecTests(tests, specName: specName, filter: filter, targetKey: targetKey)
 	let totalTests = unit.totalCount()
 
 	// If the filter excluded every test (or the spec genuinely has none), we
@@ -853,62 +827,13 @@ function runOneSpecSerial(specName String, specDir FilePath, fragmentDir FilePat
 		return SpecRunOutcome.notRun()
 	end 'noTests'
 
-	var specPassed = 0 as TestCount
-	var specFailed = unit.missingLoweringCount
-	var specFailures = TextLineArray.create()
-	for msg in unit.missingLoweringFailures 'copyMissing'
-		specFailures.push(msg)
-	end 'copyMissing'
-
-	if unit.batchable.count() > 0 'hasBatch'
-		let batchOutcome = runSpecBatch(unit.batchable, specName: specName, fragmentDir: fragmentDir, specCacheDir: specCacheDir, target: target)
-		specPassed = specPassed + batchOutcome.passed
-		if verbose 'showBatch'
-			for verboseLine in batchOutcome.verboseLines 'eachVerbose'
-				logInfo(LogCategory.testing, message: function() gives verboseLine)
-			end 'eachVerbose'
-		end 'showBatch'
-		appendSkippedToFallback(unit.nonBatchable, batchable: unit.batchable, skippedNames: batchOutcome.skippedTestNames)
-	end 'hasBatch'
-
-	var fragmentsWritten = 0 as TestCount
-	for test in unit.nonBatchable 'eachSingle'
-		let testPath = "{specName}/{test.name}"
-		let fragPath = fragmentDir.join(specName).join("{test.name}.test")
-		writeFragment(fragmentDir, specName: specName, test: test, compileIr: "")
-		fragmentsWritten = fragmentsWritten + 1
-
-		let fragment = try parseFragment(fragPath) otherwise 'parseFailed'
-			logError(LogCategory.testing, message: function() gives "[FAIL] {testPath} - could not parse fragment")
-			specFailed = specFailed + 1
-			specFailures.push(fragPath.toString())
-			specFailures.push("  Failed to parse fragment file")
-			continue
-		end 'parseFailed'
-
-		let result = runTestFromFragment(fragment, projectRoot: root, target: target, specName: specName, specCacheDir: specCacheDir)
-
-		if not result.compileIr.isEmpty() 'hasIr'
-			writeFragment(fragmentDir, specName: specName, test: test, compileIr: result.compileIr)
-		end 'hasIr'
-		if result.passed 'pass'
-			specPassed = specPassed + 1
-		end 'pass' else 'fail'
-			specFailed = specFailed + 1
-			specFailures.push(fragPath.toString())
-			if not result.errorMessage.isEmpty() 'hasErr'
-				specFailures.push("  {result.errorMessage}")
-			end 'hasErr'
-		end 'fail'
-
-		if verbose 'showTest'
-			if result.passed 'showPass'
-				logInfo(LogCategory.testing, message: function() gives "[PASS] {testPath}")
-			end 'showPass' else 'showFail'
-				logInfo(LogCategory.testing, message: function() gives "[FAIL] {testPath}")
-			end 'showFail'
-		end 'showTest'
-	end 'eachSingle'
+	// Same per-fragment machinery the parallel workers use, so serial and
+	// parallel runs share one code path. Every selected test writes one
+	// fragment, so the written count is just the selected-test count.
+	let fragmentsWritten = unit.selectedTests.count()
+	// `--update-required` just rewrote the Required* blocks, so re-exercise every
+	// test (disable the run-skip cache for this pass).
+	let (specPassed, specFailed, specFailures, _) = runSingleTests(unit, root: root, fragmentDir: fragmentDir, specCacheDir: specCacheDir, target: target, verbose: verbose, useRunCache: not updateRequired)
 
 	if specFailed > 0 'hasSpecFail'
 		let specTotal = specPassed + specFailed
@@ -942,7 +867,7 @@ export function runAllSpecTests(filter String, target Target, updateRequired boo
 		_ = Directory.create(fragmentDir)
 	end 'noFragDir'
 
-	// Tests run with cwd = projectRoot/temp (see runSpecBatch / runTestFromFragment).
+	// Tests run with cwd = projectRoot/temp (see runTestFromFragment).
 	// Matches TestRunner.cs:93 in the bootstrap C# runner.
 	if not Directory.exists(tempDir) 'noTempDir'
 		_ = Directory.create(tempDir)
@@ -979,7 +904,7 @@ export function runAllSpecTests(filter String, target Target, updateRequired boo
 	var totalFragmentsWritten = 0
 
 	for specName in effectiveWhitelist(target) 'eachSpec'
-		let outcome = runOneSpecSerial(specName, specDir: specDir, fragmentDir: fragmentDir, specCacheDir: specCacheDir, root: root, target: target, filter: filter, targetKey: targetKey, verbose: verbose)
+		let outcome = runOneSpecSerial(specName, specDir: specDir, fragmentDir: fragmentDir, specCacheDir: specCacheDir, root: root, target: target, filter: filter, targetKey: targetKey, verbose: verbose, updateRequired: updateRequired)
 		if not outcome.ran 'skipped'
 			continue
 		end 'skipped'
@@ -1012,306 +937,6 @@ export function runAllSpecTests(filter String, target Target, updateRequired boo
 	end 'hasFail'
 	return 0
 end 'runAllSpecTests'
-
-// Outcome of running one spec's batch. Only PASS results survive batching:
-// any failure shape forces the affected tests onto the per-fragment path via
-// `skippedTestNames`, so the caller — not this type — produces FAIL records
-// for those tests.
-type BatchOutcome
-	export var passed as TestCount
-	export var verboseLines as TextLineArray
-	// Tests that must be re-run via the per-fragment path: those the rewriter
-	// rejected up front, plus (when any batched test fails) every batchable
-	// test in the spec. The batched dispatcher omits the rewriter-rejected
-	// tests entirely; rerouting failures keeps batching invisible in reports.
-	export var skippedTestNames as StringArray
-
-	export static function create() returns BatchOutcome
-		return Self{passed: 0, verboseLines: TextLineArray.create(), skippedTestNames: StringArray.create()}
-	end 'create'
-end 'BatchOutcome'
-
-// True if `name` appears in the rewriter's skipped-names list. Used to
-// suppress the dispatcher's run/result accounting for tests that aren't
-// part of the batched binary — they're already routed through the
-// per-fragment path by the caller.
-function isSkippedTestName(skippedNames StringArray, name String) returns bool
-	for skipName in skippedNames 'each'
-		if skipName == name 'match'
-			return true
-		end 'match'
-	end 'each'
-	return false
-end 'isSkippedTestName'
-
-// Mark every test that the rewriter accepted (i.e., NOT in `alreadySkipped`)
-// for the per-fragment fallback path. Used when the shared batched binary
-// fails in any way that can't be cleanly attributed to one test — the user
-// sees real per-test pass/fail instead of a batch-flavored error.
-function pushBatchableForFallback(outcome BatchOutcome, tests SpecTestArray, alreadySkipped StringArray)
-	for test in tests 'each'
-		if isSkippedTestName(alreadySkipped, name: test.name) 'skip'
-			continue
-		end 'skip'
-		outcome.skippedTestNames.push(test.name.clone())
-	end 'each'
-end 'pushBatchableForFallback'
-
-// Build a batched source for `tests`, compile it once to a shared exe, then
-// run the exe ONCE: the dispatcher runs every included test in sequence and
-// prints BEGIN/END markers around each so we can slice the output into
-// per-test stdout and exit code. Tests rejected by the rewriter are returned
-// in `outcome.skippedTestNames` for the caller to run via the per-fragment
-// path. A batched-compile failure marks every test in the batch failed with
-// a clear error message — the runner deliberately does NOT fall back
-// silently, so a developer notices and either fixes the rewriter or adjusts
-// the spec.
-function runSpecBatch(tests SpecTestArray, specName String, fragmentDir FilePath, specCacheDir FilePath, target Target) returns BatchOutcome
-	var outcome = BatchOutcome.create()
-
-	let buildResult = buildBatchSource(specName, tests: tests)
-	for skipName in buildResult.skippedNames 'collectSkipped'
-		outcome.skippedTestNames.push(skipName.clone())
-	end 'collectSkipped'
-	for reason in buildResult.skippedReasons 'logSkipped'
-		logDebug(LogCategory.testing, message: function() gives "[BATCH SKIP] {reason}")
-	end 'logSkipped'
-
-	if not buildResult.hasSource 'allRejected'
-		// No batchable tests survived the rewriter. The caller will run them
-		// all via the per-fragment path; outcome stays empty here.
-		return outcome
-	end 'allRejected'
-
-	// Compile the batched source to <specCacheDir>/<spec>/<spec>_batch<ext>
-	let cacheSpecDir = specCacheDir.join(specName)
-	if not Directory.exists(cacheSpecDir) 'noCacheDir'
-		_ = Directory.create(cacheSpecDir)
-	end 'noCacheDir'
-
-	let ext = executableExtension(target)
-	let batchBaseName = batchFragmentBaseName(specName)
-	let batchExePath = cacheSpecDir.join("{batchBaseName}{ext}")
-
-	// Virtual path for the batched source used when invoking the compiler.
-	// Use the spec name (not `<spec>_batch`) as the stem so the parser-derived
-	// namespace matches a non-batched compile — otherwise per-test IR slices
-	// inherit `<spec>_batch.<name>` qualifiers that leak the batching detail.
-	let virtualPath = fragmentDir.join(specName).join("{specName}.maxon")
-
-	startCapturingErrors()
-	let compileStart = Clock.nowMs()
-	let batchedSource = buildResult.source
-	let covMapPath = batchExePath.changeExtension(".covmap")
-	emitWorkerCompiling("{specName} (batch of {tests.count()})")
-	// leakCheck: true wires the process-exit leak gate into the batched binary, so a
-	// batch that leaks ANY allocation exits 101 — matching the per-fragment path. The
-	// gate is cumulative (one `mrt_leak_check` at the dispatcher's exit, after every
-	// test's main ran), so it cannot attribute the leak to a single test; the run
-	// handler below detects the 101 batch exit and re-runs EVERY batched test via the
-	// per-fragment path, where each runs in isolation under its own leak gate and the
-	// real leaker is reported. Without this the batch silently passed leaking tests
-	// (the leak only surfaced when a sibling crash truncated the batch and forced
-	// fallback) — so a test's pass/fail depended on batch ordering.
-	let cr = try compileSourceWithIr(batchedSource, virtualPath: virtualPath, target: target, outputPath: batchExePath, coverage: false, covMapPath: covMapPath, leakCheck: true) otherwise 'batchCompileFailed'
-		totalCompileMs = totalCompileMs + (Clock.nowMs() - compileStart)
-		let capturedErrors = stopCapturingErrors()
-		// The shared compile didn't identify any single test — re-run every
-		// batchable test via the per-fragment path so callers see real
-		// individual pass/fail instead of a generic batch-flavored error.
-		logDebug(LogCategory.testing, message: function() gives "[BATCH FALLBACK] {specName}: batch compile failed: {capturedErrors}")
-		pushBatchableForFallback(outcome, tests: tests, alreadySkipped: buildResult.skippedNames)
-		return outcome
-	end 'batchCompileFailed'
-	totalCompileMs = totalCompileMs + (Clock.nowMs() - compileStart)
-	cancelCapturingErrors()
-	logDebug(LogCategory.testing, message: function() gives "[BATCH OK] {specName} compiled to {cr.outputPath}")
-
-	// Run the batched binary ONCE. The dispatcher runs every included test
-	// in sequence and emits BEGIN/END markers around each so we can slice
-	// the binary's stdout into per-test stdout and per-test exit code.
-	// cwd = projectRoot/temp (matches the bootstrap test runner). The
-	// fragmentDir is `{projectRoot}/specs/fragments-{arch}-{os}` so its
-	// grandparent is the project root.
-	let runCommand = buildRunCommand(batchExePath, target: target, testArgs: "")
-	let projectRoot = try fragmentDir.parent() otherwise panic("runSpecBatch: fragmentDir has no parent")
-	let projectRootUp = try projectRoot.parent() otherwise panic("runSpecBatch: specs dir has no parent")
-	let batchTempDir = projectRootUp.join("temp")
-	let runResult = try Subprocess.run(runCommand.exe, arguments: runCommand.argv, workingDirectory: batchTempDir, timeoutMs: batchProcessTimeoutMs(target, testCount: tests.count())) otherwise (err) 'batchRun'
-		// The batched binary failed to run cleanly — most commonly a timeout
-		// (the whole spec runs sequentially in one process, so a spec full of
-		// slow tests, e.g. subprocess fragments each spawning a child process,
-		// can exceed the batch budget even when every test passes on its own).
-		// A run failure yields no per-test slices, so we can't attribute it to
-		// any single test. Mirror the batch-compile-failure path: reroute every
-		// batchable test to the per-fragment path, where each runs in its own
-		// process under the per-fragment `testProcessTimeoutMs` budget and a run
-		// failure is reported as a normal per-test failure. Do NOT panic — a
-		// batch-run failure must not abort the whole test run.
-		logDebug(LogCategory.testing, message: function() gives "[BATCH FALLBACK] {specName}: batch run failed ({err.displayReason()}); re-running batchable tests individually")
-		pushBatchableForFallback(outcome, tests: tests, alreadySkipped: buildResult.skippedNames)
-		return outcome
-	end 'batchRun'
-
-	// Leak gate: the batched binary is compiled with `leakCheck: true`, so its
-	// cumulative process-exit `mrt_leak_check` returns SPEC_LEAK_EXIT_CODE (101) when
-	// ANY test left an allocation live. That verdict is whole-process — it can't say
-	// WHICH test leaked — so re-run every batched test via the per-fragment path,
-	// where each runs in isolation under its own leak gate and the real leaker is
-	// attributed. Without this, batched tests skipped the leak gate that per-fragment
-	// tests enforce, so a leaking test silently passed in a batch (surfacing only when
-	// a sibling crash happened to force fallback) — making pass/fail depend on batch
-	// composition. The per-test stdout/exit-code slices are still valid here (the gate
-	// runs after every test's main), but a leaking batch must not commit any PASS that
-	// the honest per-fragment path would fail.
-	if runResult.exitCode() == SPEC_LEAK_EXIT_CODE 'batchLeaked'
-		logDebug(LogCategory.testing, message: function() gives "[BATCH FALLBACK] {specName}: batch leaked (exit {SPEC_LEAK_EXIT_CODE}); re-running batchable tests individually to attribute the leak")
-		pushBatchableForFallback(outcome, tests: tests, alreadySkipped: buildResult.skippedNames)
-		return outcome
-	end 'batchLeaked'
-
-	// First pass: check each batchable test's slice. Tests with a present and
-	// passing slice are committed as PASS immediately; tests with a missing
-	// slice or a stdout/exit-code mismatch get pushed onto `outcome.skippedTestNames`
-	// so the caller re-runs *just those tests* via the per-fragment path. Tests
-	// that succeeded in the batch are NOT re-run — that would double the work
-	// every time a single sibling test happens to fail.
-	var pendingPassed = TextLineArray.create()
-	var failedNames = StringArray.create()
-	for test in tests 'firstPass'
-		if isSkippedTestName(buildResult.skippedNames, name: test.name) 'skipRun'
-			continue
-		end 'skipRun'
-
-		let slice = parseBatchSlice(runResult.stdout, testName: test.name)
-		if not slice.found 'noSlice'
-			failedNames.push(test.name.clone())
-			continue
-		end 'noSlice'
-
-		var passed = true
-		if test.expectation.hasExitCode 'checkEcBatch'
-			if slice.exitCode != test.expectation.exitCode 'ecMismatchBatch'
-				passed = false
-			end 'ecMismatchBatch'
-		end 'checkEcBatch'
-
-		if test.expectation.hasStdout 'checkStdoutBatch'
-			let expectedOut = trimWhitespace(test.expectation.stdout.replace("\r\n", with: "\n"))
-			let actualOut = trimWhitespace(slice.stdout.replace("\r\n", with: "\n"))
-			if actualOut != expectedOut 'stdoutMismatchBatch'
-				passed = false
-			end 'stdoutMismatchBatch'
-		end 'checkStdoutBatch'
-
-		if passed 'passBatch'
-			pendingPassed.push("[PASS] {specName}/{test.name}")
-		end 'passBatch' else 'failBatch'
-			failedNames.push(test.name.clone())
-		end 'failBatch'
-	end 'firstPass'
-
-	if failedNames.count() > 0 'someFailed'
-		logDebug(LogCategory.testing, message: function() gives "[BATCH FALLBACK] {specName}: re-running {failedNames.count()} failing batchable test(s) individually")
-	end 'someFailed'
-
-	// Commit passes regardless of whether any tests failed — the failed ones
-	// will be re-run via the per-fragment path, but the passes are real.
-	for line in pendingPassed 'commitPassed'
-		outcome.passed = outcome.passed + 1
-		outcome.verboseLines.push(line)
-	end 'commitPassed'
-
-	// Route only the failed tests (plus rewriter-rejected ones) to the
-	// fallback path. The rewriter-rejected names were appended at the top
-	// of this function; we add the per-test failures here.
-	for failName in failedNames 'addFailedToSkipped'
-		outcome.skippedTestNames.push(failName)
-	end 'addFailedToSkipped'
-
-	// Slice the batched IR text into per-test snippets and write a fragment
-	// file for each batchable test. Inspection aid only — the IR may differ
-	// from a per-fragment compile because batched optimization decisions
-	// aren't identical.
-	writePerTestFragmentsFromBatch(tests, fragmentDir: fragmentDir, specName: specName, batchedIr: cr.ir, skippedNames: buildResult.skippedNames)
-
-	return outcome
-end 'runSpecBatch'
-
-// After a successful batched compile, slice the batched IR text into per-test
-// snippets and write a fragment file for each batchable test. Tests rejected
-// by the rewriter aren't in the binary; the caller reruns those via the
-// per-fragment path which writes its own fragment.
-function writePerTestFragmentsFromBatch(tests SpecTestArray, fragmentDir FilePath, specName String, batchedIr String, skippedNames StringArray)
-	let slices = splitBatchedIr(batchedIr, tests: tests, specName: specName)
-	for test in tests 'eachTest'
-		if isSkippedTestName(skippedNames, name: test.name) 'skipRewriterRejected'
-			continue
-		end 'skipRewriterRejected'
-		let ir = lookupSliceIr(slices, testName: test.name)
-		writeFragment(fragmentDir, specName: specName, test: test, compileIr: ir)
-	end 'eachTest'
-end 'writePerTestFragmentsFromBatch'
-
-// Find the IR snippet for `testName` in a BatchIrSliceArray. Returns "" when
-// no slice was attributed to the test (e.g. the rewriter renamed all of its
-// declarations away from any `_b_<sanitized>_` form).
-function lookupSliceIr(slices BatchIrSliceArray, testName String) returns String
-	for slice in slices 'each'
-		if slice.testName == testName 'match'
-			return slice.ir
-		end 'match'
-	end 'each'
-	return ""
-end 'lookupSliceIr'
-
-// Per-test slice of a batched binary's output. Used by parseBatchSlice.
-type BatchSlice
-	export var stdout as String
-	export var exitCode as ProcessExitCode
-	export var found as bool
-
-	export static function missing() returns BatchSlice
-		return Self{stdout: "", exitCode: 0, found: false}
-	end 'missing'
-
-	export static function present(stdout String, exitCode ProcessExitCode) returns BatchSlice
-		return Self{stdout: stdout, exitCode: exitCode, found: true}
-	end 'present'
-end 'BatchSlice'
-
-// Walk the batched binary's stdout looking for the BEGIN/END marker pair
-// belonging to `testName`. Returns the test's per-test stdout (the bytes
-// between the BEGIN line and the END line) plus the exit code its
-// renamed-main returned. If either marker is missing, returns
-// `BatchSlice.missing()` — the caller treats that as "did not run".
-function parseBatchSlice(stdout String, testName String) returns BatchSlice
-	let beginTag = "{batchTestBeginMarker}{testName}{batchMarkerSuffix}"
-	let endTagPrefix = "{batchTestEndMarker}{testName}:"
-
-	let beginIdx = try stdout.findFirst(beginTag) otherwise return BatchSlice.missing()
-	// Skip to the character after the BEGIN tag.
-	let stdoutStart = beginIdx.bytePos() + beginTag.count()
-	let bodyAfterBegin = sliceFromBytePos(stdout, bytePos: stdoutStart)
-	let endIdx = try bodyAfterBegin.findFirst(endTagPrefix) otherwise return BatchSlice.missing()
-	let testStdoutRaw = bodyAfterBegin.slice(bodyAfterBegin.startIndex(), endIndex: endIdx)
-
-	// Read the exit code: from the char after `:` up to the marker suffix.
-	// The dispatcher emits this verbatim from a captured `let ec_<name> =
-	// renamedMain()` so the format is fully under our control — a parse
-	// failure here means the dispatcher template has drifted from this
-	// parser, not a runtime condition.
-	let afterEndTagPrefix = sliceFromBytePos(bodyAfterBegin, bytePos: endIdx.bytePos() + endTagPrefix.count())
-	let suffixIdx = try afterEndTagPrefix.findFirst(batchMarkerSuffix) otherwise return BatchSlice.missing()
-	let exitStr = afterEndTagPrefix.slice(afterEndTagPrefix.startIndex(), endIndex: suffixIdx)
-	let ec = try int.fromString(exitStr) otherwise panic("batch dispatcher emitted non-integer exit code '{exitStr}' for {testName}")
-
-	// Trim leading/trailing whitespace that came from the marker lines.
-	// (The test's own stdout content gets compared after another trim at the
-	// expectation site, so this is symmetric.)
-	let cleaned = trimWhitespace(testStdoutRaw)
-	return BatchSlice.present(cleaned, exitCode: ec)
-end 'parseBatchSlice'
 
 // Return the substring of `s` starting at byte position `bytePos`. Falls
 // back to "" if the position is out of range.
@@ -1354,8 +979,34 @@ function compileFragmentInMemory(fragment Fragment, virtualSourcePath FilePath, 
 	return try compileMultiFileSourceWithIr(virtualFiles, projectRoot: fragmentDir, target: target, outputPath: outputExe, coverage: false, covMapPath: covMapPath, includeStdlibIr: fragment.includeStdlibIr, asyncTrace: fragment.asyncTrace, leakCheck: leakCheck)
 end 'compileFragmentInMemory'
 
+// Canonical string encoding of the RUN-OUTCOME oracle a test asserts — what the
+// post-run verdict compares against (exit code, stdout, runtime stderr, and the
+// asyncTrace flag that changes stderr normalization). Folded into the run-skip
+// key (`computeRunCacheKey`) so editing ONLY a test's expected output forces a
+// cache miss (the expectation isn't compiled into the binary). Each field is
+// tagged with a presence marker distinct from its absent form, so toggling a
+// `has*` flag — not just the value — also changes the key. The `0` separators
+// `fnvMixString` appends downstream keep field boundaries unambiguous.
+function runExpectationKey(exp TestExpectation) returns String
+	let ec = "E{exp.exitCode}" if exp.hasExitCode else "E-"
+	let out = "O{exp.stdout}" if exp.hasStdout else "O-"
+	let err = "S{exp.runtimeStderr}" if exp.hasRuntimeStderr else "S-"
+	let asyncFlag = "A1" if exp.asyncTrace else "A0"
+	return "{ec} {out} {err} {asyncFlag}"
+end 'runExpectationKey'
+
 // Run a single test from a parsed fragment. Returns TestResult.
-function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Target, captureTrace bool = false, specName String, specCacheDir FilePath) returns TestResult
+//
+// Run-skip cache: `runCache` holds the PASS keys recorded for this spec on a
+// prior run. After compiling (which ALWAYS happens — its IR/lowering/rdata feed
+// the Required* checks), if the produced binary + run inputs hash to a recorded
+// PASS, the subprocess RUN is skipped and the prior PASS is replayed; the
+// compile-artifact checks still run, so a Required* regression is never masked.
+// On a MISS that passes, the key is appended to `newPassKeys` (caller-owned,
+// merge-written once per spec). `skippedBox` tallies skipped runs for the
+// CACHE_STATS summary. Pass an EMPTY `runCache` to force every test to run
+// (e.g. `--update-required`, which must re-exercise every test).
+function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Target, captureTrace bool = false, specName String, specCacheDir FilePath, runCache RunResultCache, newPassKeys RunCacheKeyArray, skippedBox VarHolder) returns TestResult
 	let tempDir = projectRoot.join("temp")
 	// virtualPath ends up embedded in compiler error messages, so point it at
 	// the on-disk fragment we just wrote — readers can open the path verbatim.
@@ -1389,8 +1040,8 @@ function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Tar
 	let compileStart = Clock.nowMs()
 	emitWorkerCompiling("{specName}/{testName}")
 	// Enable the process-exit leak gate for success tests (compiler-error tests
-	// never run an exe). A leaking program then exits 101 and the exitcode oracle
-	// catches it — the per-fragment equivalent of the batch dispatcher's leak diff.
+	// never run an exe). A leaking program then exits 101, which the exit-code
+	// oracle catches (the test expects its own exit code, not 101).
 	let wantLeakCheck = not fragment.expectation.hasCompilerStderr
 	let compileResult = try compileFragmentInMemory(fragment, virtualSourcePath: virtualSourcePath, target: target, outputExe: outputExe, leakCheck: wantLeakCheck) otherwise 'compileFailed'
 		totalCompileMs = totalCompileMs + (Clock.nowMs() - compileStart)
@@ -1432,81 +1083,108 @@ function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Tar
 		return TestResult.create(testName, passed: false, errorMessage: "Expected compilation error but compilation succeeded", filePath: fragment.filePath, loweringLog: "", compileIr: "")
 	end 'unexpectedSuccess'
 
-	// Run the compiled executable. Use projectRoot/temp as cwd so tests
-	// that resolve relative paths like `../bin` see the same layout the
-	// bootstrap test runner uses (see maxon-sharp/Testing/TestRunner.cs:
-	// _tempDir is project_root/temp).
-	let runCommand = buildRunCommand(outputPath, target: target, testArgs: fragment.args)
-	let runResult = try Subprocess.run(runCommand.exe, arguments: runCommand.argv, workingDirectory: tempDir, timeoutMs: testProcessTimeoutMs) otherwise (err) 'runFail'
-		cleanup(outputExe)
-		return TestResult.create(testName, passed: false, errorMessage: "Run failed: {err.displayReason()}", filePath: fragment.filePath, loweringLog: loweringLog, compileIr: compileIr)
-	end 'runFail'
-	let runStdout = runResult.stdout
-	let runStderr = runResult.stderr
-	let runEc = runResult.exitCode()
-
 	var passed = true
 	var errorMsg = ""
 
-	// Check exit code (skip for tests that expect stderr — panic exit codes are platform-dependent)
-	if fragment.expectation.hasExitCode and not fragment.expectation.hasRuntimeStderr 'checkEc'
-		if runEc != fragment.expectation.exitCode 'ecMismatch'
-			passed = false
-			errorMsg = "Expected exit code {fragment.expectation.exitCode}, got {runEc}"
-		end 'ecMismatch'
-	end 'checkEc'
+	// Run-skip cache key: FNV(binary bytes) + FNV(test args + stdin + target +
+	// expectation). Computed AFTER the compile (whose output we hash) and BEFORE
+	// the run. A failed binary read falls through to a normal run (key absent) —
+	// we never skip on a hash we couldn't compute. `stdin` is "" (no spec feeds
+	// stdin). The expectation (exit code / stdout / runtime stderr / asyncTrace)
+	// MUST be in the key: it lives in the spec markdown after the source, so it
+	// is NOT in the binary — without it, editing only a test's expected output
+	// would byte-match a stale PASS key and wrongly skip the now-failing run.
+	let targetKey = targetToString(target)
+	let expectationKey = runExpectationKey(fragment.expectation)
+	var runKey = RunCacheKey.create(0, lo: 0)
+	var haveKey = false
+	let binBytes = try File.readBinary(outputPath) otherwise ByteArray.create()
+	if binBytes.count() > 0 'gotBin'
+		runKey = computeRunCacheKey(binBytes, testArgs: fragment.args, stdin: "", targetKey: targetKey, expectationKey: expectationKey)
+		haveKey = true
+	end 'gotBin'
+	let cacheHit = haveKey and runCacheLookup(runCache, key: runKey)
 
-	// Check stdout
-	if fragment.expectation.hasStdout 'checkStdout'
-		let expectedOut = trimWhitespace(fragment.expectation.stdout)
-		let actualOut = trimWhitespace(runStdout)
-		if actualOut != expectedOut 'stdoutMismatch'
-			passed = false
-			if errorMsg.isEmpty() 'firstStdout'
-				errorMsg = "Stdout mismatch:\nExpected: {expectedOut}\nActual: {actualOut}"
-			end 'firstStdout' else 'appendStdout'
-				errorMsg = "{errorMsg}\nStdout mismatch:\nExpected: {expectedOut}\nActual: {actualOut}"
-			end 'appendStdout'
-		end 'stdoutMismatch'
-	end 'checkStdout'
+	if not cacheHit 'doRun'
+		// Run the compiled executable. Use projectRoot/temp as cwd so tests
+		// that resolve relative paths like `../bin` see the same layout the
+		// bootstrap test runner uses (see maxon-sharp/Testing/TestRunner.cs:
+		// _tempDir is project_root/temp).
+		let runCommand = buildRunCommand(outputPath, target: target, testArgs: fragment.args)
+		let runResult = try Subprocess.run(runCommand.exe, arguments: runCommand.argv, workingDirectory: tempDir, timeoutMs: testProcessTimeoutMs(target)) otherwise (err) 'runFail'
+			cleanup(outputExe)
+			return TestResult.create(testName, passed: false, errorMessage: "Run failed: {err.displayReason()}", filePath: fragment.filePath, loweringLog: loweringLog, compileIr: compileIr)
+		end 'runFail'
+		let runStdout = runResult.stdout
+		let runStderr = runResult.stderr
+		let runEc = runResult.exitCode()
 
-	// Check runtime stderr
-	if fragment.expectation.hasRuntimeStderr 'checkStderr'
-		var expectedErr = trimWhitespace(fragment.expectation.runtimeStderr)
-		// CPU-fault panics now carry an " at rip=0xHEX" suffix that varies per
-		// build; strip it so spec expectations match the panic message itself.
-		var actualErr = trimWhitespace(stripFaultRipSuffix(runStderr))
-		// Convert wasmtime trap output into Maxon-style stack trace
-		if target.os == Os.wasi 'convertWasmtimeOutput'
-			actualErr = convertWasmtimeStderr(actualErr)
-		end 'convertWasmtimeOutput'
-		// AsyncTrace fragments: strip the timing-dependent worker-lifecycle lines from
-		// both sides so the genuine multi-OS-thread scheduler's nondeterministic worker
-		// output is compared only on its deterministic spawn/io/await subset.
-		if fragment.expectation.asyncTrace 'asyncTraceNorm'
-			expectedErr = normalizeAsyncTraceStderr(expectedErr)
-			actualErr = normalizeAsyncTraceStderr(actualErr)
-		end 'asyncTraceNorm'
-		if actualErr != expectedErr 'stderrMismatch'
-			passed = false
-			if errorMsg.isEmpty() 'firstStderr'
-				errorMsg = "Stderr mismatch:\nExpected: {expectedErr}\nActual: {actualErr}"
-			end 'firstStderr' else 'appendStderr'
-				errorMsg = "{errorMsg}\nStderr mismatch:\nExpected: {expectedErr}\nActual: {actualErr}"
-			end 'appendStderr'
-		end 'stderrMismatch'
-	end 'checkStderr' else 'noExpectedStderr'
-		// Unexpected stderr detection
-		let trimmedStderr = trimWhitespace(runStderr)
-		if not trimmedStderr.isEmpty() 'unexpectedStderr'
-			passed = false
-			if errorMsg.isEmpty() 'firstUnexpected'
-				errorMsg = "Unexpected stderr output:\n{trimmedStderr}"
-			end 'firstUnexpected' else 'appendUnexpected'
-				errorMsg = "{errorMsg}\nUnexpected stderr output:\n{trimmedStderr}"
-			end 'appendUnexpected'
-		end 'unexpectedStderr'
-	end 'noExpectedStderr'
+		// Check exit code (skip for tests that expect stderr — panic exit codes are platform-dependent)
+		if fragment.expectation.hasExitCode and not fragment.expectation.hasRuntimeStderr 'checkEc'
+			if runEc != fragment.expectation.exitCode 'ecMismatch'
+				passed = false
+				errorMsg = "Expected exit code {fragment.expectation.exitCode}, got {runEc}"
+			end 'ecMismatch'
+		end 'checkEc'
+
+		// Check stdout
+		if fragment.expectation.hasStdout 'checkStdout'
+			let expectedOut = trimWhitespace(fragment.expectation.stdout)
+			let actualOut = trimWhitespace(runStdout)
+			if actualOut != expectedOut 'stdoutMismatch'
+				passed = false
+				if errorMsg.isEmpty() 'firstStdout'
+					errorMsg = "Stdout mismatch:\nExpected: {expectedOut}\nActual: {actualOut}"
+				end 'firstStdout' else 'appendStdout'
+					errorMsg = "{errorMsg}\nStdout mismatch:\nExpected: {expectedOut}\nActual: {actualOut}"
+				end 'appendStdout'
+			end 'stdoutMismatch'
+		end 'checkStdout'
+
+		// Check runtime stderr
+		if fragment.expectation.hasRuntimeStderr 'checkStderr'
+			var expectedErr = trimWhitespace(fragment.expectation.runtimeStderr)
+			// CPU-fault panics now carry an " at rip=0xHEX" suffix that varies per
+			// build; strip it so spec expectations match the panic message itself.
+			var actualErr = trimWhitespace(stripFaultRipSuffix(runStderr))
+			// Convert wasmtime trap output into Maxon-style stack trace
+			if target.os == Os.wasi 'convertWasmtimeOutput'
+				actualErr = convertWasmtimeStderr(actualErr)
+			end 'convertWasmtimeOutput'
+			// AsyncTrace fragments: strip the timing-dependent worker-lifecycle lines from
+			// both sides so the genuine multi-OS-thread scheduler's nondeterministic worker
+			// output is compared only on its deterministic spawn/io/await subset.
+			if fragment.expectation.asyncTrace 'asyncTraceNorm'
+				expectedErr = normalizeAsyncTraceStderr(expectedErr)
+				actualErr = normalizeAsyncTraceStderr(actualErr)
+			end 'asyncTraceNorm'
+			if actualErr != expectedErr 'stderrMismatch'
+				passed = false
+				if errorMsg.isEmpty() 'firstStderr'
+					errorMsg = "Stderr mismatch:\nExpected: {expectedErr}\nActual: {actualErr}"
+				end 'firstStderr' else 'appendStderr'
+					errorMsg = "{errorMsg}\nStderr mismatch:\nExpected: {expectedErr}\nActual: {actualErr}"
+				end 'appendStderr'
+			end 'stderrMismatch'
+		end 'checkStderr' else 'noExpectedStderr'
+			// Unexpected stderr detection
+			let trimmedStderr = trimWhitespace(runStderr)
+			if not trimmedStderr.isEmpty() 'unexpectedStderr'
+				passed = false
+				if errorMsg.isEmpty() 'firstUnexpected'
+					errorMsg = "Unexpected stderr output:\n{trimmedStderr}"
+				end 'firstUnexpected' else 'appendUnexpected'
+					errorMsg = "{errorMsg}\nUnexpected stderr output:\n{trimmedStderr}"
+				end 'appendUnexpected'
+			end 'unexpectedStderr'
+		end 'noExpectedStderr'
+	end 'doRun' else 'skipRun'
+		// Cache HIT: a byte-identical binary with identical run inputs passed on
+		// a prior run. Skip the subprocess; `passed` stays true and the
+		// compile-artifact checks below still run (so a Required* regression
+		// from a same-binary compile-text change is still caught).
+		skippedBox.value = skippedBox.value + 1
+	end 'skipRun'
 
 	// Check RequiredLowering
 	if fragment.expectation.hasRequiredLowering 'checkLowering'
@@ -1557,6 +1235,13 @@ function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Tar
 	if passed 'didPass'
 		logDebug(LogCategory.testing, message: function() gives "[PASS] {testName}")
 	end 'didPass'
+
+	// Record the run-skip key on a MISS that passed (only PASS keys are cached,
+	// and only when we actually ran — a cache HIT already has the key on disk).
+	// The caller merge-writes `newPassKeys` once per spec.
+	if passed and not cacheHit and haveKey 'recordPass'
+		newPassKeys.push(runKey)
+	end 'recordPass'
 
 	// Keep the exe only for passing success tests (cached for future runs)
 	if not passed or fragment.expectation.hasCompilerStderr 'cleanupExe'
@@ -2549,10 +2234,7 @@ function updateLoweringBlock(specContent String, testName String, targetKey Stri
 	return result2
 end 'updateLoweringBlock'
 
-// ─── Parallel batch infrastructure ───────────────────────────────────────────
-
-// Prefix for the machine-readable result line a batch worker emits to stdout.
-let workerBatchResultMarker = "WORKER_BATCH_RESULT:"
+// ─── Parallel worker infrastructure ──────────────────────────────────────────
 
 // Print one spec's failure messages, separating each failure with a blank
 // line. Failure groups start with the fragment path (no leading spaces);
@@ -2567,30 +2249,6 @@ function logSpecFailureMessages(failures TextLineArray)
 		logError(LogCategory.testing, message: function() gives failMsg)
 	end 'eachFailure'
 end 'logSpecFailureMessages'
-
-// Join a StringArray with "|" separators (used for encoding skipped test names).
-function joinPipe(names StringArray) returns String
-	var result = ""
-	var first = true
-	for name in names 'each'
-		if first 'isFirst'
-			result = name
-			first = false
-		end 'isFirst' else 'notFirst'
-			result = "{result}|{name}"
-		end 'notFirst'
-	end 'each'
-	return result
-end 'joinPipe'
-
-// Emit one WORKER_BATCH_RESULT line on stdout. Format:
-//   WORKER_BATCH_RESULT:{specName}:{passed}:compileMs:{ms}:skipped:{name1|name2|...}
-// The fixed `compileMs:` and `skipped:` markers let parseBatchWorkerResult skip
-// over them positionally, isolating the parser from accidental colons in names.
-function emitWorkerResult(specName String, passed TestCount, compileMs Millis, skippedNames StringArray)
-	let skippedStr = joinPipe(skippedNames)
-	print("{workerBatchResultMarker}{specName}:{passed}:compileMs:{compileMs}:skipped:{skippedStr}\n")
-end 'emitWorkerResult'
 
 // Set up the on-disk fragment + spec-cache directories the workers all share.
 // Called once at worker startup; idempotent so a re-spawned worker after a
@@ -2633,33 +2291,6 @@ function loadSpecTests(root FilePath, specName String, targetKey String) returns
 	return parseSpecFile(content, targetKey: targetKey)
 end 'loadSpecTests'
 
-// Process one spec's batch and emit exactly one WORKER_BATCH_RESULT line.
-// Invoked from the persistent worker for each JOB:batch:<spec> line.
-function runOneBatchJob(specName String, root FilePath, fragmentDir FilePath, specCacheDir FilePath, target Target, targetKey String, filter String, verbose bool)
-	ensurePerSpecCacheDirs(fragmentDir, specCacheDir: specCacheDir, specName: specName)
-
-	let tests = loadSpecTests(root, specName: specName, targetKey: targetKey)
-	let unit = partitionSpecTests(tests, specName: specName, filter: filter, targetKey: targetKey)
-	let batchable = unit.batchable
-
-	if batchable.count() == 0 'noBatch'
-		emitWorkerResult(specName, passed: 0, compileMs: 0, skippedNames: StringArray.create())
-		return
-	end 'noBatch'
-
-	// Reset per-spec so the result line reports this spec's compile time only.
-	totalCompileMs = 0
-	let outcome = runSpecBatch(batchable, specName: specName, fragmentDir: fragmentDir, specCacheDir: specCacheDir, target: target)
-
-	if verbose 'showBatch'
-		for verboseLine in outcome.verboseLines 'eachVerbose'
-			logInfo(LogCategory.testing, message: function() gives verboseLine)
-		end 'eachVerbose'
-	end 'showBatch'
-
-	emitWorkerResult(specName, passed: outcome.passed, compileMs: totalCompileMs, skippedNames: outcome.skippedTestNames)
-end 'runOneBatchJob'
-
 // Markers for the singles worker protocol. The `FAIL` lines carry one fragment-
 // failure message each (verbatim after the prefix); the `RESULT` line summarises
 // pass/fail counts and compile time for a spec.
@@ -2668,9 +2299,8 @@ let workerSingleResultMarker = "WORKER_SINGLE_RESULT:"
 
 // Breadcrumb marker workers emit on stderr right before each compile. The
 // parent uses the most recent one to identify which compile triggered a panic.
-// Format: `WORKER_COMPILING:<label>\n` where label is `spec/test` for single
-// fragments, `spec (batch of N)` for batch compiles. Stripped by the parent
-// before forwarding stderr so they don't pollute normal test output.
+// Format: `WORKER_COMPILING:<label>\n` where label is `spec/test`. Stripped by
+// the parent before forwarding stderr so they don't pollute normal test output.
 let workerCompilingMarker = "WORKER_COMPILING:"
 
 // Emit the breadcrumb. Workers call this immediately before each compile so
@@ -2829,9 +2459,11 @@ function abortOnCrashedWorker(workerLabel String, job SpecJob, child StreamingSu
 end 'abortOnCrashedWorker'
 
 // Emit one WORKER_SINGLE_RESULT summary line for a spec.
-// Format: WORKER_SINGLE_RESULT:{specName}:{passed}:{failed}:compileMs:{ms}
-function emitWorkerSinglesResult(specName String, passed TestCount, failed TestCount, compileMs Millis)
-	print("{workerSingleResultMarker}{specName}:{passed}:{failed}:compileMs:{compileMs}\n")
+// Format: WORKER_SINGLE_RESULT:{specName}:{passed}:{failed}:compileMs:{ms}:skipped:{n}
+// The fixed `compileMs:`/`skipped:` markers let the parser skip over them
+// positionally, so a future field append stays backward-tolerant.
+function emitWorkerSinglesResult(specName String, passed TestCount, failed TestCount, compileMs Millis, skipped TestCount = 0)
+	print("{workerSingleResultMarker}{specName}:{passed}:{failed}:compileMs:{compileMs}:skipped:{skipped}\n")
 end 'emitWorkerSinglesResult'
 
 // Emit one failure line for the given spec. The remainder of the line after the
@@ -2886,8 +2518,8 @@ function decodeFailPayload(s String) returns String
 	return String.from(result)
 end 'decodeFailPayload'
 
-// Process one spec's non-batchable (single) tests and emit zero+
-// WORKER_SINGLE_FAIL lines followed by exactly one WORKER_SINGLE_RESULT line.
+// Process one spec's tests and emit zero+ WORKER_SINGLE_FAIL lines followed by
+// exactly one WORKER_SINGLE_RESULT line.
 // Invoked from the persistent worker for each JOB:singles:<spec> line. A panic
 // in compile-pipeline code is contained to this worker process: the parent
 // observes a missing/short result stream, marks the spec as failed, and
@@ -2899,129 +2531,52 @@ function runOneSinglesJob(specName String, root FilePath, fragmentDir FilePath, 
 	let tests = loadSpecTests(root, specName: specName, targetKey: targetKey)
 	let unit = partitionSpecTests(tests, specName: specName, filter: filter, targetKey: targetKey)
 
-	if unit.nonBatchable.count() == 0 and unit.missingLoweringCount == 0 'noSingles'
-		emitWorkerSinglesResult(specName, passed: 0, failed: 0, compileMs: 0)
+	if unit.selectedTests.count() == 0 and unit.missingLoweringCount == 0 'noSingles'
+		emitWorkerSinglesResult(specName, passed: 0, failed: 0, compileMs: 0, skipped: 0)
 		return
 	end 'noSingles'
 
 	totalCompileMs = 0
-	let (sp, sf, failures) = runSingleTests(unit, root: root, fragmentDir: fragmentDir, specCacheDir: specCacheDir, target: target, verbose: verbose)
+	let (sp, sf, failures, skipped) = runSingleTests(unit, root: root, fragmentDir: fragmentDir, specCacheDir: specCacheDir, target: target, verbose: verbose)
 
 	for failLine in failures 'eachFailure'
 		emitWorkerSinglesFail(specName, line: failLine)
 	end 'eachFailure'
 
-	emitWorkerSinglesResult(specName, passed: sp, failed: sf, compileMs: totalCompileMs)
+	emitWorkerSinglesResult(specName, passed: sp, failed: sf, compileMs: totalCompileMs, skipped: skipped)
 end 'runOneSinglesJob'
-
-// Process the given list of test names from one spec via the per-fragment
-// path, emitting zero+ WORKER_SINGLE_FAIL lines and exactly one
-// WORKER_SINGLE_RESULT line. Invoked from the persistent worker for each
-// JOB:fallback:<spec>:<test1>|<test2>|... line. The known-broken list still
-// gates so the parent's crashed-batch retry path doesn't rerun a test we
-// deliberately partitioned out.
-function runOneFallbackJob(specName String, testNames StringArray, root FilePath, fragmentDir FilePath, specCacheDir FilePath, target Target, targetKey String, verbose bool)
-	ensurePerSpecCacheDirs(fragmentDir, specCacheDir: specCacheDir, specName: specName)
-
-	let allTests = loadSpecTests(root, specName: specName, targetKey: targetKey)
-	var selected = SpecTestArray.create()
-	for tn in testNames 'eachName'
-		let trimmedName = trimWhitespace(tn)
-		if trimmedName.isEmpty() 'emptyName'
-			continue
-		end 'emptyName'
-		if isSelfHostedKnownBroken(specName, testName: trimmedName) 'skipKnown'
-			continue
-		end 'skipKnown'
-		if isNetworkingExcludedFragment(specName, testName: trimmedName) 'skipNetExcluded'
-			continue
-		end 'skipNetExcluded'
-		for t in allTests 'findTest'
-			if t.name == trimmedName 'matched'
-				selected.push(t)
-				break
-			end 'matched'
-		end 'findTest'
-	end 'eachName'
-
-	if selected.count() == 0 'noSelected'
-		emitWorkerSinglesResult(specName, passed: 0, failed: 0, compileMs: 0)
-		return
-	end 'noSelected'
-
-	let unit = SpecWorkUnit.create(specName, nonBatchable: selected, batchable: SpecTestArray.create(), missingLoweringFailures: TextLineArray.create(), missingLoweringCount: 0 as TestCount)
-	totalCompileMs = 0
-	let (sp, sf, failures) = runSingleTests(unit, root: root, fragmentDir: fragmentDir, specCacheDir: specCacheDir, target: target, verbose: verbose)
-
-	for failLine in failures 'eachFailure'
-		emitWorkerSinglesFail(specName, line: failLine)
-	end 'eachFailure'
-
-	emitWorkerSinglesResult(specName, passed: sp, failed: sf, compileMs: totalCompileMs)
-end 'runOneFallbackJob'
 
 // Marker emitted once at worker startup and again after every job completes.
 // The parent dispatcher uses it as the "send me work" signal in the streaming
 // work-stealing protocol.
 let workerReadyMarker = "WORKER_READY"
 
-// Job-line prefixes for the persistent worker protocol. Each prefix is matched
-// by `startsWith` so the remainder of the line is the prefix-stripped payload.
-let persistentJobBatchPrefix = "JOB:batch:"
+// Job-line prefix for the persistent worker protocol, matched by `startsWith`
+// so the remainder of the line is the prefix-stripped spec name. Every spec is
+// dispatched as one `JOB:singles:<spec>` since batching was removed.
 let persistentJobSinglesPrefix = "JOB:singles:"
-let persistentJobFallbackPrefix = "JOB:fallback:"
 let persistentExitCommand = "EXIT"
 
 function emitWorkerReady()
 	print("{workerReadyMarker}\n")
 end 'emitWorkerReady'
 
-// Dispatch one parsed job line to the appropriate per-spec helper. Unknown
-// lines surface on stderr so the parent's stderr forwarding shows the bad
-// payload — silently dropping them would deadlock the dispatcher waiting for
-// a WORKER_READY that wouldn't otherwise be paired with a result line.
+// Dispatch one parsed job line to the per-spec singles helper. Unknown lines
+// surface on stderr so the parent's stderr forwarding shows the bad payload —
+// silently dropping them would deadlock the dispatcher waiting for a
+// WORKER_READY that wouldn't otherwise be paired with a result line.
 //
-// Prefixes (`JOB:batch:`, etc.) are pure ASCII, so byte position equals
-// character position — `sliceFromBytePos` is safe even though the spec name
-// or test names that follow may not be.
+// The `JOB:singles:` prefix is pure ASCII, so byte position equals character
+// position — `sliceFromBytePos` is safe even though the spec name that follows
+// may not be.
 function dispatchPersistentJob(line String, root FilePath, fragmentDir FilePath, specCacheDir FilePath, target Target, targetKey String, filter String, verbose bool)
-	let batchPrefix = persistentJobBatchPrefix
 	let singlesPrefix = persistentJobSinglesPrefix
-	let fallbackPrefix = persistentJobFallbackPrefix
-	if line.startsWith(batchPrefix) 'isBatch'
-		let prefixLen = batchPrefix.count()
-		let specName = sliceFromBytePos(line, bytePos: prefixLen)
-		runOneBatchJob(specName, root: root, fragmentDir: fragmentDir, specCacheDir: specCacheDir, target: target, targetKey: targetKey, filter: filter, verbose: verbose)
-		return
-	end 'isBatch'
 	if line.startsWith(singlesPrefix) 'isSingles'
 		let prefixLen = singlesPrefix.count()
 		let specName = sliceFromBytePos(line, bytePos: prefixLen)
 		runOneSinglesJob(specName, root: root, fragmentDir: fragmentDir, specCacheDir: specCacheDir, target: target, targetKey: targetKey, filter: filter, verbose: verbose)
 		return
 	end 'isSingles'
-	if line.startsWith(fallbackPrefix) 'isFallback'
-		let prefixLen = fallbackPrefix.count()
-		let rest = sliceFromBytePos(line, bytePos: prefixLen)
-		// `rest` is `specName:test1|test2|...`. Test names may contain colons
-		// in principle (spec authors are unconstrained), so split on the FIRST
-		// colon only and treat the rest as the pipe-joined test list.
-		let colonIdx = try rest.findFirst(":") otherwise 'noColon'
-			printError("[PERSISTENT WORKER] malformed fallback job (no colon): {line}\n")
-			emitWorkerSinglesResult("", passed: 0, failed: 0, compileMs: 0)
-			return
-		end 'noColon'
-		let specName = rest.slice(rest.startIndex(), endIndex: colonIdx)
-		let afterColon = try rest.indexAfter(colonIdx) otherwise 'noAfter'
-			printError("[PERSISTENT WORKER] malformed fallback job (truncated): {line}\n")
-			emitWorkerSinglesResult(specName, passed: 0, failed: 0, compileMs: 0)
-			return
-		end 'noAfter'
-		let namesPart = rest.slice(afterColon, endIndex: rest.endIndex())
-		let testNames = namesPart.split("|")
-		runOneFallbackJob(specName, testNames: testNames, root: root, fragmentDir: fragmentDir, specCacheDir: specCacheDir, target: target, targetKey: targetKey, verbose: verbose)
-		return
-	end 'isFallback'
 	// Unknown line. Surface to the parent via stderr so the diagnostic is
 	// visible; do not emit a fake result line because we don't know which
 	// result shape the parent is expecting.
@@ -3033,18 +2588,15 @@ end 'dispatchPersistentJob'
 // cache loads lazily on the first job and is reused by every later job.
 //
 // Protocol:
-//   in :  JOB:batch:<spec>
-//         JOB:singles:<spec>
-//         JOB:fallback:<spec>:<test1>|<test2>|...
+//   in :  JOB:singles:<spec>
 //         EXIT
 //   out:  WORKER_READY                    (at startup + after every job)
-//         WORKER_BATCH_RESULT:...         (one per batch job)
-//         WORKER_SINGLE_RESULT:...        (one per singles/fallback job)
-//         WORKER_SINGLE_FAIL:...          (zero+ per singles/fallback job, before RESULT)
+//         WORKER_SINGLE_RESULT:...        (one per singles job)
+//         WORKER_SINGLE_FAIL:...          (zero+ per singles job, before RESULT)
 //
 // The worker shuts down cleanly on `EXIT` or on stdin EOF. Result-line
-// formats match what `parseBatchWorkerResult`, `parseSinglesResultLine`, and
-// `parseSinglesFailLine` consume on the parent side.
+// formats match what `parseSinglesResultLine` and `parseSinglesFailLine`
+// consume on the parent side.
 export function runPersistentWorker(filter String, target Target, verbose bool) returns ExitCode
 	let root = try findSpecsRoot() otherwise 'noRoot'
 		logError(LogCategory.testing, message: function() gives "Could not find project root (no specs/ directory found)")
@@ -3092,23 +2644,25 @@ type SinglesWorkerResult
 	export var passed as TestCount
 	export var failed as TestCount
 	export var compileMs as Millis
+	export var skipped as TestCount
 	export var failures as TextLineArray
 	export var valid as bool
 
 	export static function invalid() returns SinglesWorkerResult
-		return Self{specName: "", passed: 0, failed: 0, compileMs: 0, failures: TextLineArray.create(), valid: false}
+		return Self{specName: "", passed: 0, failed: 0, compileMs: 0, skipped: 0, failures: TextLineArray.create(), valid: false}
 	end 'invalid'
 
-	export static function create(specName String, passed TestCount, failed TestCount, compileMs Millis, failures TextLineArray) returns SinglesWorkerResult
-		return Self{specName: specName, passed: passed, failed: failed, compileMs: compileMs, failures: failures, valid: true}
+	export static function create(specName String, passed TestCount, failed TestCount, compileMs Millis, skipped TestCount, failures TextLineArray) returns SinglesWorkerResult
+		return Self{specName: specName, passed: passed, failed: failed, compileMs: compileMs, skipped: skipped, failures: failures, valid: true}
 	end 'create'
 end 'SinglesWorkerResult'
 
 // Parse one WORKER_SINGLE_RESULT line. Returns invalid() on any parse failure.
-// Format: WORKER_SINGLE_RESULT:{specName}:{passed}:{failed}:compileMs:{ms}
+// Format: WORKER_SINGLE_RESULT:{specName}:{passed}:{failed}:compileMs:{ms}:skipped:{n}
 function parseSinglesResultLine(line String) returns SinglesWorkerResult
 	let parts = line.split(":")
-	if parts.count() < 6 'tooFew'
+	// [0]=tag [1]=spec [2]=passed [3]=failed [4]=compileMs [5]=ms [6]=skipped [7]=n
+	if parts.count() < 8 'tooFew'
 		return SinglesWorkerResult.invalid()
 	end 'tooFew'
 	let tag = try parts.get(0) otherwise return SinglesWorkerResult.invalid()
@@ -3125,7 +2679,9 @@ function parseSinglesResultLine(line String) returns SinglesWorkerResult
 	let failed = try int.fromString(failedStr) otherwise return SinglesWorkerResult.invalid()
 	let compileMsStr = try parts.get(5) otherwise return SinglesWorkerResult.invalid()
 	let compileMs = try int.fromString(compileMsStr) otherwise return SinglesWorkerResult.invalid()
-	return SinglesWorkerResult.create(specName, passed: passed as TestCount, failed: failed, compileMs: compileMs, failures: TextLineArray.create())
+	let skippedStr = try parts.get(7) otherwise return SinglesWorkerResult.invalid()
+	let skipped = try int.fromString(skippedStr) otherwise return SinglesWorkerResult.invalid()
+	return SinglesWorkerResult.create(specName, passed: passed as TestCount, failed: failed, compileMs: compileMs, skipped: skipped, failures: TextLineArray.create())
 end 'parseSinglesResultLine'
 
 // Extract the failure-text payload from a WORKER_SINGLE_FAIL line, given the
@@ -3163,91 +2719,28 @@ function logSpecFailuresFor(owners StringArray, payloads TextLineArray, specName
 	end 'each'
 end 'logSpecFailuresFor'
 
-// Parsed outcome from one spec's WORKER_BATCH_RESULT stdout line.
-type BatchWorkerResult
-	export var specName as String
-	export var passed as TestCount
-	export var compileMs as Millis
-	export var skippedNames as StringArray
-	export var valid as bool
-
-	export static function invalid() returns BatchWorkerResult
-		return Self{specName: "", passed: 0, compileMs: 0, skippedNames: StringArray.create(), valid: false}
-	end 'invalid'
-
-	export static function create(specName String, passed TestCount, compileMs Millis, skippedNames StringArray) returns BatchWorkerResult
-		return Self{specName: specName, passed: passed, compileMs: compileMs, skippedNames: skippedNames, valid: true}
-	end 'create'
-end 'BatchWorkerResult'
-
-// Parse WORKER_BATCH_RESULT:{specName}:{passed}:compileMs:{ms}:skipped:{name1|name2|...}
-// Returns invalid() on any parse failure; the caller then routes all batchable
-// tests for this spec to the per-fragment fallback path.
-function parseBatchWorkerResult(line String) returns BatchWorkerResult
-	let parts = line.split(":")
-	// [0]=WORKER_BATCH_RESULT [1]=specName [2]=passed [3]=compileMs [4]=ms [5]=skipped [6]=pipe-names
-	if parts.count() < 7 'tooFew'
-		return BatchWorkerResult.invalid()
-	end 'tooFew'
-	let tag = try parts.get(0) otherwise return BatchWorkerResult.invalid()
-	if tag != "WORKER_BATCH_RESULT" 'wrongTag'
-		return BatchWorkerResult.invalid()
-	end 'wrongTag'
-	let specName = try parts.get(1) otherwise return BatchWorkerResult.invalid()
-	if specName.isEmpty() 'noSpec'
-		return BatchWorkerResult.invalid()
-	end 'noSpec'
-	let passedStr = try parts.get(2) otherwise return BatchWorkerResult.invalid()
-	let passed = try int.fromString(passedStr) otherwise return BatchWorkerResult.invalid()
-	let compileMsStr = try parts.get(4) otherwise return BatchWorkerResult.invalid()
-	let compileMs = try int.fromString(compileMsStr) otherwise return BatchWorkerResult.invalid()
-	let skippedStr = try parts.get(6) otherwise return BatchWorkerResult.invalid()
-	var skippedNames = StringArray.create()
-	if not skippedStr.isEmpty() 'hasSkipped'
-		let nameList = skippedStr.split("|")
-		for rawName in nameList 'eachName'
-			let name = trimWhitespace(rawName)
-			if not name.isEmpty() 'nonEmpty'
-				skippedNames.push(name)
-			end 'nonEmpty'
-		end 'eachName'
-	end 'hasSkipped'
-	return BatchWorkerResult.create(specName, passed: passed as TestCount, compileMs: compileMs, skippedNames: skippedNames)
-end 'parseBatchWorkerResult'
-
-// Find a SpecWorkUnit by spec name. Panics if not found — callers only query
-// for names they previously inserted into `units`.
-function findUnitByName(units SpecWorkUnitArray, specName String) returns SpecWorkUnit
-	for unit in units 'each'
-		if unit.specName == specName 'match'
-			return unit
-		end 'match'
-	end 'each'
-	panic("findUnitByName: spec '{specName}' not found in units")
-end 'findUnitByName'
-
-// Per-spec work unit: partitioned tests and pre-computed missing-lowering failures.
+// Per-spec work unit: selected tests and pre-computed missing-lowering failures.
 type SpecWorkUnit
 	export var specName as String
-	export var nonBatchable as SpecTestArray
-	export var batchable as SpecTestArray
+	export var selectedTests as SpecTestArray
 	export var missingLoweringFailures as TextLineArray
 	// Count of tests that failed due to missing RequiredLowering blocks.
 	export var missingLoweringCount as TestCount
 
-	export static function create(specName String, nonBatchable SpecTestArray, batchable SpecTestArray, missingLoweringFailures TextLineArray, missingLoweringCount TestCount) returns SpecWorkUnit
-		return Self{specName: specName, nonBatchable: nonBatchable, batchable: batchable, missingLoweringFailures: missingLoweringFailures, missingLoweringCount: missingLoweringCount}
+	export static function create(specName String, selectedTests SpecTestArray, missingLoweringFailures TextLineArray, missingLoweringCount TestCount) returns SpecWorkUnit
+		return Self{specName: specName, selectedTests: selectedTests, missingLoweringFailures: missingLoweringFailures, missingLoweringCount: missingLoweringCount}
 	end 'create'
 
 	// Total number of tests this unit will report (passed + failed combined).
 	export function totalCount() returns TestCount
-		return self.batchable.count() + self.nonBatchable.count() + self.missingLoweringCount
+		return self.selectedTests.count() + self.missingLoweringCount
 	end 'totalCount'
 end 'SpecWorkUnit'
 
 export typealias SpecWorkUnitArray = Array with SpecWorkUnit
 
-// Partition a spec's parsed tests into batchable / non-batchable / missing-lowering buckets.
+// Select a spec's runnable tests, dropping filtered-out / wrong-target /
+// known-broken ones and recording missing-RequiredLowering failures separately.
 // `filter`, when non-empty, restricts to tests whose "{specName}/{test.name}" path contains it.
 // A test that authors a RequiredLowering block for some target must author one for THIS
 // target too — otherwise lowering changes that affect this target slip through unobserved
@@ -3356,8 +2849,7 @@ function testRunsOnTarget(test SpecTest, targetKey String) returns bool
 end 'testRunsOnTarget'
 
 function partitionSpecTests(tests SpecTestArray, specName String, filter String, targetKey String) returns SpecWorkUnit
-	var batchable = SpecTestArray.create()
-	var nonBatchable = SpecTestArray.create()
+	var selected = SpecTestArray.create()
 	var missingLoweringFailures = TextLineArray.create()
 	var missingLoweringCount = 0 as TestCount
 
@@ -3382,33 +2874,24 @@ function partitionSpecTests(tests SpecTestArray, specName String, filter String,
 			missingLoweringCount = missingLoweringCount + 1
 			continue
 		end 'missingTargetLowering'
-		if isBatchable(specName, test: test) 'isBatch'
-			batchable.push(test)
-		end 'isBatch' else 'isSingle'
-			nonBatchable.push(test)
-		end 'isSingle'
+		selected.push(test)
 	end 'partition'
 
-	return SpecWorkUnit.create(specName, nonBatchable: nonBatchable, batchable: batchable, missingLoweringFailures: missingLoweringFailures, missingLoweringCount: missingLoweringCount)
+	return SpecWorkUnit.create(specName, selectedTests: selected, missingLoweringFailures: missingLoweringFailures, missingLoweringCount: missingLoweringCount)
 end 'partitionSpecTests'
-
-// Look up tests in `batchable` by name and append matches to `dest`. Used to
-// route tests the batch rewriter rejected (or that a batch-wide failure forced
-// off the batched path) onto the per-fragment fallback path.
-function appendSkippedToFallback(dest SpecTestArray, batchable SpecTestArray, skippedNames StringArray)
-	for skipName in skippedNames 'eachSkipped'
-		for test in batchable 'findTest'
-			if test.name == skipName 'matchTest'
-				dest.push(test)
-			end 'matchTest'
-		end 'findTest'
-	end 'eachSkipped'
-end 'appendSkippedToFallback'
 
 // Run per-fragment tests for `unit`. Also counts pre-computed missing-lowering
 // failures toward the returned failed count.
-// Returns (passed, failed, failureMessages).
-function runSingleTests(unit SpecWorkUnit, root FilePath, fragmentDir FilePath, specCacheDir FilePath, target Target, verbose bool) returns (TestCount, TestCount, TextLineArray)
+// Returns (passed, failed, failureMessages, skippedRuns).
+//
+// Run-skip cache: the spec's recorded PASS keys are loaded once up front; each
+// test that re-produces a byte-identical binary (and identical run inputs) to a
+// recorded PASS skips its subprocess run. Newly-passing tests accumulate in
+// `newPassKeys` and are merge-written to disk once at the end (one read-modify-
+// union-write per spec — concurrency-safe via the atomic-rename merge). When
+// `useRunCache` is false (e.g. `--update-required`) an empty cache is used so
+// every test runs, and nothing is recorded.
+function runSingleTests(unit SpecWorkUnit, root FilePath, fragmentDir FilePath, specCacheDir FilePath, target Target, verbose bool, useRunCache bool = true) returns (TestCount, TestCount, TextLineArray, TestCount)
 	let specName = unit.specName
 	var specPassed = 0 as TestCount
 	var specFailed = unit.missingLoweringCount
@@ -3418,7 +2901,12 @@ function runSingleTests(unit SpecWorkUnit, root FilePath, fragmentDir FilePath, 
 		specFailures.push(msg)
 	end 'copyMissing'
 
-	for test in unit.nonBatchable 'eachSingle'
+	// Run-skip cache state for this spec.
+	let runCache = loadRunResultCache(specCacheDir, specName: specName) if useRunCache else RunResultCache.empty()
+	var newPassKeys = RunCacheKeyArray.create()
+	var skippedBox = VarHolder.create(0 as TestCount)
+
+	for test in unit.selectedTests 'eachSingle'
 		let testPath = "{specName}/{test.name}"
 		let fragPath = fragmentDir.join(specName).join("{test.name}.test")
 		writeFragment(fragmentDir, specName: specName, test: test, compileIr: "")
@@ -3431,7 +2919,7 @@ function runSingleTests(unit SpecWorkUnit, root FilePath, fragmentDir FilePath, 
 			continue
 		end 'parseFailed'
 
-		let result = runTestFromFragment(fragment, projectRoot: root, target: target, specName: specName, specCacheDir: specCacheDir)
+		let result = runTestFromFragment(fragment, projectRoot: root, target: target, specName: specName, specCacheDir: specCacheDir, runCache: runCache, newPassKeys: newPassKeys, skippedBox: skippedBox)
 
 		if not result.compileIr.isEmpty() 'hasIr'
 			writeFragment(fragmentDir, specName: specName, test: test, compileIr: result.compileIr)
@@ -3456,7 +2944,14 @@ function runSingleTests(unit SpecWorkUnit, root FilePath, fragmentDir FilePath, 
 		end 'showTest'
 	end 'eachSingle'
 
-	return (specPassed, specFailed, specFailures)
+	// Merge-write the freshly-passed keys once per spec (no-op when empty, e.g.
+	// every test was a cache hit or the cache was disabled). The merge re-reads
+	// the on-disk set and unions, so concurrent runs never lose keys.
+	if useRunCache 'persist'
+		mergeAndWriteRunResultCache(specCacheDir, specName: specName, keysToCommit: newPassKeys)
+	end 'persist'
+
+	return (specPassed, specFailed, specFailures, skippedBox.value)
 end 'runSingleTests'
 
 // ─── Work-stealing dispatcher: types + helpers ───────────────────────────────
@@ -3465,63 +2960,41 @@ end 'runSingleTests'
 // table; the upper bound is generous so cast sites don't have to constrain.
 typealias WorkerId = int(0 to u32.max)
 
-// One spec's worth of work assigned to the unified job queue. A spec may
-// generate up to two jobs (one batch + one singles) plus an optional fallback
-// job that's enqueued at runtime when a batch worker reports rewriter-rejected
-// tests. `weight` orders the queue slowest-first so the long-pole tests start
+// One spec's worth of work on the job queue — exactly one `JOB:singles:<spec>`
+// per spec. `weight` orders the queue slowest-first so the long-pole specs start
 // early and overlap with the rest of the run instead of gating wall time.
+// `testCount` sizes the per-job watchdog budget (a spec compiles+runs all its
+// tests serially in one worker, so its budget must scale with the count).
 type SpecJob
-	export var kind as String  // "batch" | "singles" | "fallback"
 	export var specName as String
-	export var fallbackTests as StringArray  // populated only when kind == "fallback"
 	export var weight as TestCount  // estimated cost; larger = dispatch first
+	export var testCount as TestCount  // number of tests in this spec's job
 
-	export static function createBatch(specName String, weight TestCount) returns SpecJob
-		return Self{kind: "batch", specName: specName, fallbackTests: StringArray.create(), weight: weight}
-	end 'createBatch'
-
-	export static function createSingles(specName String, weight TestCount) returns SpecJob
-		return Self{kind: "singles", specName: specName, fallbackTests: StringArray.create(), weight: weight}
+	export static function createSingles(specName String, weight TestCount, testCount TestCount) returns SpecJob
+		return Self{specName: specName, weight: weight, testCount: testCount}
 	end 'createSingles'
 
-	export static function createFallback(specName String, tests StringArray, weight TestCount) returns SpecJob
-		return Self{kind: "fallback", specName: specName, fallbackTests: tests, weight: weight}
-	end 'createFallback'
-
-	// Empty-marker job. Returned by helpers as the "no follow-up needed" or
-	// "queue empty" sentinel. Callers test `kind != ""` before using the value.
+	// Empty-marker job. Used to pre-fill the per-slot `currentJobs` array and
+	// returned by `popHeaviestJob` when the queue is empty. Callers test
+	// `specName != ""` before using the value.
 	export static function empty() returns SpecJob
-		return Self{kind: "", specName: "", fallbackTests: StringArray.create(), weight: 0 as TestCount}
+		return Self{specName: "", weight: 0 as TestCount, testCount: 0}
 	end 'empty'
 
-	// Deep copy: clones the inner fallbackTests so the result does not borrow
-	// from `self`. Used by popHeaviestJob to materialise a return value before
-	// mutating the source array.
+	// Shallow copy. Used by popHeaviestJob to materialise a return value before
+	// mutating the source array (cuts the borrow on `queue`'s storage).
 	export function clone() returns SpecJob
-		var testsCopy = StringArray.create()
-		for t in fallbackTests 'each'
-			testsCopy.push(t)
-		end 'each'
-		return Self{kind: kind, specName: specName, fallbackTests: testsCopy, weight: weight}
+		return Self{specName: specName, weight: weight, testCount: testCount}
 	end 'clone'
 
 	// Render the wire-format job line the persistent worker reads from stdin.
 	export function toJobLine() returns String
-		if kind == "batch" 'isBatch'
-			return "{persistentJobBatchPrefix}{specName}"
-		end 'isBatch'
-		if kind == "singles" 'isSingles'
-			return "{persistentJobSinglesPrefix}{specName}"
-		end 'isSingles'
-		if kind == "fallback" 'isFallback'
-			return "{persistentJobFallbackPrefix}{specName}:{joinPipe(fallbackTests)}"
-		end 'isFallback'
-		panic("SpecJob.toJobLine: unknown kind '{kind}'")
+		return "{persistentJobSinglesPrefix}{specName}"
 	end 'toJobLine'
 
 	// Diagnostic label for logs / panic messages.
 	export function label() returns String
-		return "{kind}:{specName}"
+		return "singles:{specName}"
 	end 'label'
 end 'SpecJob'
 
@@ -3563,8 +3036,8 @@ end 'popHeaviestJob'
 //
 // Protocol invariant exploited here: workers never emit empty stdout lines.
 // The only `print(...)` calls in the worker entry points are WORKER_READY,
-// WORKER_BATCH_RESULT, WORKER_SINGLE_RESULT, and WORKER_SINGLE_FAIL — all
-// non-empty. So an empty line from readStdoutLine() reliably means EOF.
+// WORKER_SINGLE_RESULT, and WORKER_SINGLE_FAIL — all non-empty. So an empty
+// line from readStdoutLine() reliably means EOF.
 //
 // Lives as a free function (not a method on PersistentWorkerHandle) so the
 // dispatcher can launch it via `async drainResultsThunk(...)`. Calling
@@ -3694,24 +3167,13 @@ end 'PersistentWorkerHandle'
 
 typealias PersistentWorkerHandleArray = Array with PersistentWorkerHandle
 
-// Maximum fallback tests packed into a single follow-up job. A batch that
-// the rewriter rejected often produces 60+ tests; running them all in one
-// worker can take 10+ seconds, gating wall time on a single late-arriving
-// long-pole. Splitting into chunks of this size lets several workers crunch
-// the fallback concurrently. 8 is a compromise: small enough that 75 tests
-// fan out across ~10 chunks (covers a 12-worker pool), large enough that
-// the per-job IPC overhead (~5ms send + stdout drain) stays a small
-// fraction of each chunk's actual compile work (~1-2s).
-let maxFallbackChunk = 8 as TestCount
-
 // Fixed weight bonus for tests that re-compile the world. See the comment
 // in `runAllSpecTestsParallel` next to the call site for the rationale.
 let stdlibBurden = 16384 as TestCount
 
 // Sum the weighted source bytes of a list of tests, applying `stdlibBurden`
-// to any test that triggers a re-compile-the-world path. Shared by the
-// batch and singles queue-weight computations so both observe the same
-// scoring model.
+// to any test that triggers a re-compile-the-world path — the per-spec
+// queue-weight used to order the slowest-first job queue.
 function sumTestWeight(tests SpecTestArray) returns TestCount
 	var total = 0 as TestCount
 	for t in tests 'eachTest'
@@ -3724,16 +3186,14 @@ function sumTestWeight(tests SpecTestArray) returns TestCount
 	return total
 end 'sumTestWeight'
 
-// Pop-style helper for routing one worker's drained stdout into the dispatcher's
-// accumulators. Mutates the accumulators in place; returns any follow-up
-// SpecJobs that should be re-queued as a result of this job's output — used
-// when a batch job reports rewriter-rejected tests, which are repacked into
-// per-`maxFallbackChunk` fallback jobs for the same spec.
-function processWorkerResults(resultLines StringArray, job SpecJob, units SpecWorkUnitArray, totalPassed_io VarHolder, totalFailed_io VarHolder, failOwners StringArray, failPayloads TextLineArray) returns SpecJobArray
+// Route one worker's drained stdout into the dispatcher's accumulators,
+// mutating them in place. Every job is a singles job now (batching was
+// removed), so the only result shapes are WORKER_SINGLE_FAIL (zero+) and
+// exactly one WORKER_SINGLE_RESULT per job.
+function processWorkerResults(resultLines StringArray, job SpecJob, totalPassed_io VarHolder, totalFailed_io VarHolder, totalSkipped_io VarHolder, failOwners StringArray, failPayloads TextLineArray)
 	// VarHolder dance is a workaround for the runner not having out-params for
 	// primitive locals; the caller boxes its accumulators and we update through
 	// the boxes.
-	var followups = SpecJobArray.create()
 	for line in resultLines 'eachLine'
 		let trimmedLine = trimWhitespace(line)
 		if trimmedLine.startsWith(workerSingleFailMarker) 'isFail'
@@ -3746,53 +3206,16 @@ function processWorkerResults(resultLines StringArray, job SpecJob, units SpecWo
 			end 'orphan'
 			continue
 		end 'isFail'
-		if trimmedLine.startsWith(workerBatchResultMarker) 'isBatchResult'
-			let parsed = parseBatchWorkerResult(trimmedLine)
-			if not parsed.valid 'invalidBatch'
-				logError(LogCategory.testing, message: function() gives "[DISPATCH ERROR] malformed batch result for {job.label()}: {trimmedLine}")
-				continue
-			end 'invalidBatch'
-			totalCompileMs = totalCompileMs + parsed.compileMs
-			totalPassed_io.value = totalPassed_io.value + parsed.passed
-			if parsed.skippedNames.count() > 0 'hasSkipped'
-				// Filter through the unit's batchable list so test names invented
-				// by the rewriter (none today) don't get re-issued as fallback
-				// work. Pack the surviving names into chunks of `maxFallbackChunk`
-				// each, weighted by their source bytes, so several workers can
-				// process the chunks concurrently instead of one worker
-				// serialising the whole spec's rejected-tests list.
-				let unit = findUnitByName(units, specName: parsed.specName)
-				var chunkNames = StringArray.create()
-				var chunkBytes = 0 as TestCount
-				for skipName in parsed.skippedNames 'eachSkip'
-					for t in unit.batchable 'findTest'
-						if t.name == skipName 'matched'
-							chunkNames.push(skipName)
-							chunkBytes = chunkBytes + t.source.byteLength()
-							break
-						end 'matched'
-					end 'findTest'
-					if chunkNames.count() >= maxFallbackChunk 'flushChunk'
-						followups.push(SpecJob.createFallback(parsed.specName, tests: chunkNames, weight: chunkBytes))
-						chunkNames = StringArray.create()
-						chunkBytes = 0 as TestCount
-					end 'flushChunk'
-				end 'eachSkip'
-				if chunkNames.count() > 0 'tailChunk'
-					followups.push(SpecJob.createFallback(parsed.specName, tests: chunkNames, weight: chunkBytes))
-				end 'tailChunk'
-			end 'hasSkipped'
-			continue
-		end 'isBatchResult'
 		if trimmedLine.startsWith(workerSingleResultMarker) 'isSingleResult'
 			let result = parseSinglesResultLine(trimmedLine)
 			if not result.valid 'invalidSingle'
-				logError(LogCategory.testing, message: function() gives "[DISPATCH ERROR] malformed singles/fallback result for {job.label()}: {trimmedLine}")
+				logError(LogCategory.testing, message: function() gives "[DISPATCH ERROR] malformed singles result for {job.label()}: {trimmedLine}")
 				continue
 			end 'invalidSingle'
 			totalCompileMs = totalCompileMs + result.compileMs
 			totalPassed_io.value = totalPassed_io.value + result.passed
 			totalFailed_io.value = totalFailed_io.value + result.failed
+			totalSkipped_io.value = totalSkipped_io.value + result.skipped
 			if result.failed > 0 'hasFail'
 				let specTotal = result.passed + result.failed
 				logError(LogCategory.testing, message: function() gives "[FAIL] {result.specName} ({result.passed}/{specTotal})")
@@ -3804,7 +3227,6 @@ function processWorkerResults(resultLines StringArray, job SpecJob, units SpecWo
 		// throw because the result lines we did parse already updated counters.
 		logError(LogCategory.testing, message: function() gives "[DISPATCH ERROR] unknown result line for {job.label()}: {trimmedLine}")
 	end 'eachLine'
-	return followups
 end 'processWorkerResults'
 
 // Boxed primitive so we can pass mutable accumulators through helper functions
@@ -3819,9 +3241,9 @@ type VarHolder
 end 'VarHolder'
 
 // Run spec tests with a work-stealing pool of persistent worker subprocesses.
-// Each worker stays alive across many JOB:... lines, amortising its stdlib-cache
-// warmup over every spec it handles. Jobs come off a single slowest-first queue
-// (batch + singles + dynamically-added fallback), so the long-pole tests start
+// Each worker stays alive across many JOB:singles: lines, amortising its
+// stdlib-cache warmup over every spec it handles. Jobs come off a single
+// slowest-first queue (one singles job per spec), so the long-pole specs start
 // first and the OS-level parallelism gates wall time on the heaviest individual
 // compile rather than on a static round-robin chunk.
 export function runAllSpecTestsParallel(filter String, target Target, workerCount WorkerCount, updateRequired bool = false, verbose bool = false) returns ExitCode
@@ -3846,7 +3268,7 @@ export function runAllSpecTestsParallel(filter String, target Target, workerCoun
 		_ = Directory.create(fragmentDir)
 	end 'noFragDir'
 
-	// Tests run with cwd = projectRoot/temp (see runSpecBatch / runTestFromFragment).
+	// Tests run with cwd = projectRoot/temp (see runTestFromFragment).
 	// The bootstrap C# runner creates this in TestRunner.cs:93 before dispatching
 	// any work; without it, Subprocess.run fails with "directory name is invalid"
 	// on a fresh checkout that has never run the bootstrap runner first.
@@ -3887,7 +3309,7 @@ export function runAllSpecTestsParallel(filter String, target Target, workerCoun
 	var totalTests = 0
 	var totalFragmentsWritten = 0
 
-	// Phase 1: Parse all specs and partition tests into batchable / non-batchable.
+	// Phase 1: Parse all specs and select each one's runnable tests.
 	var units = SpecWorkUnitArray.create()
 
 	for specName in effectiveWhitelist(target) 'parseSpecs'
@@ -3914,12 +3336,10 @@ export function runAllSpecTestsParallel(filter String, target Target, workerCoun
 		return 0
 	end 'noTests'
 
-	// Phase 2: Build the unified slowest-first job queue. A spec contributes up
-	// to two jobs (batch + singles); fallback jobs join the queue dynamically
-	// inside the dispatch loop when a batch result reports rewriter-rejected
-	// tests. Weight orders the queue so the heaviest workloads start first and
-	// overlap with the rest of the run, gating wall time on the long pole
-	// instead of a static round-robin chunk boundary.
+	// Phase 2: Build the slowest-first job queue — one `JOB:singles:<spec>` per
+	// spec that has runnable tests. Weight orders the queue so the heaviest
+	// workloads start first and overlap with the rest of the run, gating wall
+	// time on the long pole instead of a static round-robin chunk boundary.
 	let exePath = (try Process.executablePath() otherwise panic("runAllSpecTestsParallel: cannot determine executable path")).toString()
 	let targetStr = targetToString(target)
 
@@ -3933,14 +3353,10 @@ export function runAllSpecTestsParallel(filter String, target Target, workerCoun
 	// behind 50-test-but-tiny-test specs.
 	var jobQueue = SpecJobArray.create()
 	for unit in units 'enqueueJobs'
-		let batchBytes = sumTestWeight(unit.batchable)
-		let singlesBytes = sumTestWeight(unit.nonBatchable)
-		if unit.batchable.count() > 0 'hasBatch'
-			jobQueue.push(SpecJob.createBatch(unit.specName, weight: batchBytes))
-		end 'hasBatch'
-		if unit.nonBatchable.count() > 0 or unit.missingLoweringCount > 0 'hasSingles'
-			jobQueue.push(SpecJob.createSingles(unit.specName, weight: singlesBytes))
-			totalFragmentsWritten = totalFragmentsWritten + unit.nonBatchable.count()
+		let singlesBytes = sumTestWeight(unit.selectedTests)
+		if unit.selectedTests.count() > 0 or unit.missingLoweringCount > 0 'hasSingles'
+			jobQueue.push(SpecJob.createSingles(unit.specName, weight: singlesBytes, testCount: unit.selectedTests.count()))
+			totalFragmentsWritten = totalFragmentsWritten + unit.selectedTests.count()
 		end 'hasSingles'
 	end 'enqueueJobs'
 
@@ -4022,6 +3438,7 @@ export function runAllSpecTestsParallel(filter String, target Target, workerCoun
 	var failPayloads = TextLineArray.create()
 	var passedBox = VarHolder.create(0 as TestCount)
 	var failedBox = VarHolder.create(0 as TestCount)
+	var skippedBox = VarHolder.create(0 as TestCount)
 
 	// Counters for the post-run invariant check: every job dispatched must be
 	// accounted for either via a result line or via crash recovery. Mismatches
@@ -4168,7 +3585,9 @@ export function runAllSpecTestsParallel(filter String, target Target, workerCoun
 				end 'wSkipIdle'
 				let started = try dispatchStartMs.get(wi) otherwise panic("watchdog: dispatchStartMs.get({wi}) failed on busy slot")
 				let elapsed = watchdogNow - started
-				if elapsed <= workerJobTimeoutMs 'wWithinBudget'
+				let wJob = try currentJobs.get(wi) otherwise panic("watchdog: currentJobs.get({wi}) failed")
+				let budget = workerJobTimeoutMs(wJob.testCount)
+				if elapsed <= budget 'wWithinBudget'
 					continue
 				end 'wWithinBudget'
 				// Re-stamp BEFORE killing so we don't re-kill the same slot on
@@ -4177,8 +3596,7 @@ export function runAllSpecTestsParallel(filter String, target Target, workerCoun
 				// in the 'workerDied branch as soon as we await its drain.
 				try dispatchStartMs.set(wi, value: watchdogNow) otherwise panic("watchdog: dispatchStartMs.set({wi}) failed")
 				let wh = try workers.get(wi) otherwise panic("watchdog: workers.get({wi}) failed")
-				let wJob = try currentJobs.get(wi) otherwise panic("watchdog: currentJobs.get({wi}) failed")
-				logError(LogCategory.testing, message: function() gives "[TIMEOUT] worker {wh.workerId} exceeded {workerJobTimeoutMs}ms on '{wJob.label()}' — killing")
+				logError(LogCategory.testing, message: function() gives "[TIMEOUT] worker {wh.workerId} exceeded {budget}ms on '{wJob.label()}' — killing")
 				__Builtins.subprocessKill(wh.child.handle, 1)
 			end 'watchdog'
 			// Nothing ready — yield this GT so the scheduler can run other GTs
@@ -4241,10 +3659,7 @@ export function runAllSpecTestsParallel(filter String, target Target, workerCoun
 			try busy.set(drainIdx, value: false) otherwise panic("dispatch: busy.set after drain")
 		end 'slotIdleAfter'
 
-		let followups = processWorkerResults(lines, job: job, units: units, totalPassed_io: passedBox, totalFailed_io: failedBox, failOwners: failOwners, failPayloads: failPayloads)
-		for fj in followups 'eachFollowup'
-			jobQueue.push(fj)
-		end 'eachFollowup'
+		processWorkerResults(lines, job: job, totalPassed_io: passedBox, totalFailed_io: failedBox, totalSkipped_io: skippedBox, failOwners: failOwners, failPayloads: failPayloads)
 		jobsCompleted = jobsCompleted + 1
 		let nextDrain = drainIdx + 1
 		drainCursor = nextDrain - (nextDrain / liveWorkerCount) * liveWorkerCount
@@ -4299,6 +3714,14 @@ export function runAllSpecTestsParallel(filter String, target Target, workerCoun
 	let elapsedMs = Clock.nowMs() - startTime
 	logInfo(LogCategory.testing, message: function() gives "Total compile time: {totalCompileMs}ms")
 
+	// Run-skip cache: how many subprocess RUNS were skipped this run because the
+	// produced binary (+ inputs) byte-matched a recorded PASS. Compiles still
+	// happened for every test; only executions were elided.
+	let totalSkipped = skippedBox.value
+	if totalSkipped > 0 'showCacheStats'
+		logInfo(LogCategory.testing, message: function() gives "CACHE_STATS: skipped {totalSkipped} of {totalTests} runs (binary-identical to a prior pass)")
+	end 'showCacheStats'
+
 	if totalFailed == 0 'allPass'
 		logInfo(LogCategory.testing, message: function() gives "Tests: {totalPassed} passed (total: {totalTests}) in {elapsedMs}ms")
 	end 'allPass' else 'someFail'
@@ -4319,3 +3742,51 @@ export function runAllSpecTestsParallel(filter String, target Target, workerCoun
 
 	return 0
 end 'runAllSpecTestsParallel'
+
+// `maxon clean` sweep of the spec-test run-skip caches: delete every
+// `run-cache.bin` (and stray `*.tmp`) under
+// `<projectDir>/specs/fragments-<target>/.spec-cache/<spec>/`, returning each
+// removed path. Best-effort: a missing tree / list failure / per-file delete
+// failure is skipped (the cache self-invalidates on a binary-hash mismatch, so
+// a stale file is harmless; this just gives `maxon clean` the least-surprising
+// "all caches gone" behavior and a clean way to force a full re-run). Only the
+// maxon-libraries dev repo has a `specs/` tree, so this is a no-op elsewhere.
+export function cleanSpecRunCaches(projectDir FilePath) returns StringArray
+	var deleted = StringArray.create()
+	if projectDir.isEmpty() 'noDir'
+		return deleted
+	end 'noDir'
+	let specsDir = projectDir.join("specs")
+	if not Directory.exists(specsDir) 'noSpecs'
+		return deleted
+	end 'noSpecs'
+	let fragDirs = try Directory.list(specsDir) otherwise return deleted
+	for fragDir in fragDirs 'eachFragDir'
+		if not fragDir.filename().startsWith("fragments-") 'notFragDir'
+			continue
+		end 'notFragDir'
+		let specCacheDir = fragDir.join(".spec-cache")
+		if not Directory.exists(specCacheDir) 'noSpecCache'
+			continue
+		end 'noSpecCache'
+		let specDirs = try Directory.list(specCacheDir) otherwise continue
+		for specDir in specDirs 'eachSpecDir'
+			deleteRunCacheFilesUnder(specDir, into: deleted)
+		end 'eachSpecDir'
+	end 'eachFragDir'
+	return deleted
+end 'cleanSpecRunCaches'
+
+// Delete `run-cache.bin` + stray `*.tmp` directly under one
+// `.spec-cache/<spec>/` directory, appending each removed path to `out`.
+function deleteRunCacheFilesUnder(specDir FilePath, into StringArray)
+	let entries = try Directory.list(specDir) otherwise return
+	for entry in entries 'eachEntry'
+		let name = entry.filename()
+		if not (name == "run-cache.bin" or name.endsWith(".tmp")) 'notRunCache'
+			continue
+		end 'notRunCache'
+		try File.delete(entry) otherwise continue
+		into.push(entry.toString())
+	end 'eachEntry'
+end 'deleteRunCacheFilesUnder'

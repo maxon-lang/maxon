@@ -168,9 +168,9 @@ export function writeStoreWidthTag(buf ByteArray, w StoreWidth)
 	writeDword(buf, value: w.ordinal)
 end 'writeStoreWidthTag'
 
-export function readStoreWidthTag(buf ByteArray, offset ByteOffset) returns (StoreWidth, ByteOffset)
-	let raw = readDword(buf, offset: offset)
-	let kase = try StoreWidth.unionCases.fromRawValue(raw) otherwise panic("corrupt cache: unknown StoreWidth tag {raw}")
+export function readStoreWidthTag(buf ByteArray, offset ByteOffset) returns (StoreWidth, ByteOffset) throws CacheCorruption
+	let raw = try readDword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
+	let kase = try StoreWidth.unionCases.fromRawValue(raw) otherwise throw CacheCorruption.invalidEncoding
 	let w = match kase 'lift'
 		byte gives StoreWidth.byte
 		halfword gives StoreWidth.halfword
@@ -191,9 +191,9 @@ export function writeStdTypeTag(buf ByteArray, t StdType)
 	writeDword(buf, value: t.ordinal)
 end 'writeStdTypeTag'
 
-export function readStdTypeTag(buf ByteArray, offset ByteOffset) returns (StdType, ByteOffset)
-	let tag = readDword(buf, offset: offset)
-	let t = try StdType.allCases.get(tag) otherwise panic("corrupt cache: unknown StdType tag {tag}")
+export function readStdTypeTag(buf ByteArray, offset ByteOffset) returns (StdType, ByteOffset) throws CacheCorruption
+	let tag = try readDword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
+	let t = try StdType.allCases.get(tag) otherwise throw CacheCorruption.invalidEncoding
 	return (t, offset + 4)
 end 'readStdTypeTag'
 
@@ -205,18 +205,18 @@ export function writeStdReturnType(buf ByteArray, rt StdReturnType)
 	end 'payload'
 end 'writeStdReturnType'
 
-function readStdReturnTypeValue(buf ByteArray, offset ByteOffset) returns (StdReturnType, ByteOffset)
-	let (inner, nextPos) = readStdTypeTag(buf, offset: offset)
+function readStdReturnTypeValue(buf ByteArray, offset ByteOffset) returns (StdReturnType, ByteOffset) throws CacheCorruption
+	let (inner, nextPos) = try readStdTypeTag(buf, offset: offset)
 	return (StdReturnType.value(inner), nextPos)
 end 'readStdReturnTypeValue'
 
-export function readStdReturnType(buf ByteArray, offset ByteOffset) returns (StdReturnType, ByteOffset)
-	let raw = readDword(buf, offset: offset)
+export function readStdReturnType(buf ByteArray, offset ByteOffset) returns (StdReturnType, ByteOffset) throws CacheCorruption
+	let raw = try readDword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	let pos = offset + 4
-	let kase = try StdReturnType.unionCases.fromRawValue(raw) otherwise panic("corrupt cache: unknown StdReturnType tag {raw}")
+	let kase = try StdReturnType.unionCases.fromRawValue(raw) otherwise throw CacheCorruption.invalidEncoding
 	match kase 'tag'
 		void then return (StdReturnType.void, pos)
-		value then return readStdReturnTypeValue(buf, offset: pos)
+		value then return try readStdReturnTypeValue(buf, offset: pos)
 	end 'tag'
 end 'readStdReturnType'
 

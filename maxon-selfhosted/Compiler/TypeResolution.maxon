@@ -1350,11 +1350,18 @@ function resolveAllStructTypes(project Project)
 		end 'eachInner'
 
 		let st = StructType.create(entry.name, fields: entry.fields, byteSize: entry.byteSize, visibility: entry.visibility, sourceFilePath: entry.filePath, nameLine: entry.line, nameColumn: entry.column, expectedMethods: expected, innerAliases: resolvedInnerAliases)
-		// Parser rejects duplicates against the unresolved map before
-		// inserting; collisions with the resolved map (e.g. stdlib-cached
-		// structs reusing a name) are silently ignored here so cache restore
-		// continues to win.
-		try project.structTypes.insert(name, value: st) otherwise ignore
+		// UPSERT (mirrors `resolveAllEnumTypes`): a USER struct whose bare name
+		// collides with a stdlib struct (e.g. a test-local `type List`) must
+		// SHADOW the entry `restoreStdlibMetadata` (cache-hit) or the stdlib's
+		// own from-source resolution pre-populated — an insert-ignore here
+		// silently dropped the user's declaration while still removing it from
+		// `unresolvedStructTypes`, so a later `self.head` field check resolved
+		// against the stdlib `List` (which has no `head`) → E2004 "Unknown
+		// field". This matches the C# bootstrap, where the user type shadows the
+		// stdlib one in its own scope. Two USER structs with one name can't reach
+		// this point: the second declaration already failed parse ("Duplicate
+		// type") against `unresolvedStructTypes`.
+		project.structTypes.upsert(name, value: st)
 		// Persist source-declaration order so `getParamNames` returns the
 		// right pairing for `resolveCalleeParamToConcreteType` regardless
 		// of what order the registry's id space got populated.
@@ -1364,7 +1371,17 @@ function resolveAllStructTypes(project Project)
 				paramOrderCopy.push(n)
 			end 'copyTypeParams'
 			project.typeParameters.recordParamOrder(entry.name, paramOrder: paramOrderCopy)
-		end 'hasTypeParams'
+		end 'hasTypeParams' else 'noTypeParams'
+			// A NON-generic user struct shadowing a GENERIC stdlib struct of the
+			// same name (e.g. user `type List` vs stdlib `type List uses Element`)
+			// must also clear the stdlib's recorded type-param order — otherwise
+			// `getParamNames(name)` still returns the stdlib params and lowering
+			// treats the user struct's static-method calls as generic, demanding
+			// an implicit layout arg the non-generic caller can't supply
+			// (forwardCallerLayout panic in LowerMaxonToStd). Recording an empty
+			// order overrides the stale stdlib entry.
+			project.typeParameters.recordParamOrder(entry.name, paramOrder: StringArray.create())
+		end 'noTypeParams'
 		resolvedNames.push(name)
 	end 'sweep'
 
@@ -2481,25 +2498,34 @@ function rewriteUnresolvedOpsPerFunction(project Project, module MaxonModule, fa
 		let funcFilePath = filePathFromString(funcFilePathStr, fallback: fallbackFilePath)
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
-			for opIdx in block.opRefs 'eachOp'
+			// Snapshot opRefs: a dotted-read/assign rewrite splices a follow-up
+			// fieldLoad/fieldStore into this same block (block-local, O(block
+			// length)), so iterating the live list would shift under us.
+			var anchors = OpIndexList.create()
+			for posIdx in 0 upto block.opRefs.count() 'snapshot'
+				let ref = try block.opRefs.get(posIdx) otherwise panic("rewriteUnresolvedOpsPerFunction: opRefs.get OOB")
+				anchors.append(ref)
+			end 'snapshot'
+			for aIdx in 0 upto anchors.count() 'eachOp'
+				let opIdx = try anchors.get(aIdx) otherwise panic("rewriteUnresolvedOpsPerFunction: anchors.get OOB")
 				let op = try module.ops.get(opIdx) otherwise panic("invariant: opIdx from block.opRefs not in module.ops")
-				rewriteOneUnresolvedOp(project, module: module, opIdx: opIdx, op: op, filePath: funcFilePath)
+				rewriteOneUnresolvedOp(project, module: module, block: block, opIdx: opIdx, op: op, filePath: funcFilePath)
 			end 'eachOp'
 		end 'eachBlock'
 	end 'eachFunc'
 end 'rewriteUnresolvedOpsPerFunction'
 
-function rewriteOneUnresolvedOp(project Project, module MaxonModule, opIdx OpIndex, op MaxonOp, filePath FilePath)
+function rewriteOneUnresolvedOp(project Project, module MaxonModule, block IrBlock, opIdx OpIndex, op MaxonOp, filePath FilePath)
 	if op.name == "unresolvedRead" 'isUnresolvedRead'
 		match op 'extract'
-			unresolvedRead(result, name, range) then rewriteUnresolvedRead(project, module: module, opIdx: opIdx, result: result, name: name, range: range, filePath: filePath)
+			unresolvedRead(result, name, range) then rewriteUnresolvedRead(project, module: module, block: block, opIdx: opIdx, result: result, name: name, range: range, filePath: filePath)
 			default panic("unreachable: already checked name == unresolvedRead")
 		end 'extract'
 		return
 	end 'isUnresolvedRead'
 	if op.name == "unresolvedAssign" 'isUnresolvedAssign'
 		match op 'extract'
-			unresolvedAssign(name, value, range) then rewriteUnresolvedAssign(project, module: module, opIdx: opIdx, name: name, value: value, range: range, filePath: filePath)
+			unresolvedAssign(name, value, range) then rewriteUnresolvedAssign(project, module: module, block: block, opIdx: opIdx, name: name, value: value, range: range, filePath: filePath)
 			default panic("unreachable: already checked name == unresolvedAssign")
 		end 'extract'
 	end 'isUnresolvedAssign'
@@ -2582,7 +2608,7 @@ function lookupTopLevelConst(project Project, name String, readerFilePath FilePa
 	return TopLevelConstLookup.miss()
 end 'lookupTopLevelConst'
 
-function rewriteUnresolvedRead(project Project, module MaxonModule, opIdx OpIndex, result ByteArray, name String, range SourceRange, filePath FilePath)
+function rewriteUnresolvedRead(project Project, module MaxonModule, block IrBlock, opIdx OpIndex, result ByteArray, name String, range SourceRange, filePath FilePath)
 	let varLookup = lookupTopLevelVar(project, name: name, readerFilePath: filePath)
 	if varLookup.found 'isTopLevelVar'
 		// Use the resolved key as the slot name: for a file-private var it is
@@ -2598,7 +2624,7 @@ function rewriteUnresolvedRead(project Project, module MaxonModule, opIdx OpInde
 	// (`TypeName.staticField` registered with the dotted qualifiedName) was
 	// caught by the prior topLevelVars lookup, so falling through here means
 	// the dotted form is NOT a registered global itself.
-	if tryRewriteDottedRead(project, module: module, opIdx: opIdx, result: result, name: name, range: range, filePath: filePath) 'wasInstanceField'
+	if tryRewriteDottedRead(project, module: module, block: block, opIdx: opIdx, result: result, name: name, range: range, filePath: filePath) 'wasInstanceField'
 		return
 	end 'wasInstanceField'
 	let constLookup = lookupTopLevelConst(project, name: name, readerFilePath: filePath)
@@ -2956,7 +2982,7 @@ function matchCaseFromConstantValue(constVal ConstantValue) returns EnumCaseHit
 	end 'unwrap'
 end 'matchCaseFromConstantValue'
 
-function rewriteUnresolvedAssign(project Project, module MaxonModule, opIdx OpIndex, name String, value ByteArray, range SourceRange, filePath FilePath)
+function rewriteUnresolvedAssign(project Project, module MaxonModule, block IrBlock, opIdx OpIndex, name String, value ByteArray, range SourceRange, filePath FilePath)
 	let varLookup = lookupTopLevelVar(project, name: name, readerFilePath: filePath)
 	if varLookup.found 'isTopLevelVar'
 		// `let xs = [...]` parks the entry in `topLevelVars` (writable
@@ -2981,7 +3007,7 @@ function rewriteUnresolvedAssign(project Project, module MaxonModule, opIdx OpIn
 	end 'isConst'
 	// `name` shaped `receiver.field` where `receiver` is a top-level var.
 	// Mirrors the read path: rewrite to globalLoad(receiver) + fieldStore.
-	if tryRewriteDottedAssign(project, module: module, opIdx: opIdx, name: name, value: value, range: range, filePath: filePath) 'wasInstanceField'
+	if tryRewriteDottedAssign(project, module: module, block: block, opIdx: opIdx, name: name, value: value, range: range, filePath: filePath) 'wasInstanceField'
 		return
 	end 'wasInstanceField'
 	reportUnknownName(project, name: name, range: range, filePath: filePath)
@@ -2992,13 +3018,13 @@ end 'rewriteUnresolvedAssign'
 // the receiver and inserts a fieldLoad after it carrying the original
 // result name. Returns true on success so the caller skips the not-found
 // diagnostic.
-function tryRewriteDottedRead(project Project, module MaxonModule, opIdx OpIndex, result ByteArray, name String, range SourceRange, filePath FilePath) returns bool
+function tryRewriteDottedRead(project Project, module MaxonModule, block IrBlock, opIdx OpIndex, result ByteArray, name String, range SourceRange, filePath FilePath) returns bool
 	let resolved = try resolveDottedTopLevelReceiver(project, name: name, filePath: filePath) otherwise return false
 	let receiverName = freshGlobalLoadName(result)
 	try module.ops.set(opIdx, value: MaxonOp.globalLoad(receiverName, name: resolved.prefix, slotType: resolved.info.slotType, range: range)) otherwise panic("tryRewriteDottedRead: ops.set OOB at idx={opIdx}")
 	let fieldLoadIdx = module.ops.count()
 	module.ops.push(MaxonOp.fieldLoad(result, receiver: receiverName, fieldName: resolved.fieldName.toByteArray(), range: range))
-	insertOpAfter(module, anchorOpIdx: opIdx, newOpIdx: fieldLoadIdx)
+	spliceOpInBlock(block, anchorOpIdx: opIdx, newOpIdx: fieldLoadIdx, afterAnchor: true)
 	return true
 end 'tryRewriteDottedRead'
 
@@ -3006,7 +3032,7 @@ end 'tryRewriteDottedRead'
 // top-level var. Replaces the unresolvedAssign with a globalLoad and
 // inserts a fieldStore after it. Reports E2013 (without rewriting) when
 // the receiver was bound via `let`.
-function tryRewriteDottedAssign(project Project, module MaxonModule, opIdx OpIndex, name String, value ByteArray, range SourceRange, filePath FilePath) returns bool
+function tryRewriteDottedAssign(project Project, module MaxonModule, block IrBlock, opIdx OpIndex, name String, value ByteArray, range SourceRange, filePath FilePath) returns bool
 	let resolved = try resolveDottedTopLevelReceiver(project, name: name, filePath: filePath) otherwise return false
 	if project.immutableArrayLitNames.contains(resolved.prefix) 'immutableLet'
 		reportCompileError(project, code: ErrorCode.parserImmutableVariable, message: "cannot assign to immutable variable: '{resolved.prefix}'", line: range.line, column: range.column, filePath: filePath)
@@ -3016,7 +3042,7 @@ function tryRewriteDottedAssign(project Project, module MaxonModule, opIdx OpInd
 	try module.ops.set(opIdx, value: MaxonOp.globalLoad(receiverName, name: resolved.prefix, slotType: resolved.info.slotType, range: range)) otherwise panic("tryRewriteDottedAssign: ops.set OOB at idx={opIdx}")
 	let fieldStoreIdx = module.ops.count()
 	module.ops.push(MaxonOp.fieldStore(receiverName, fieldName: resolved.fieldName.toByteArray(), value: value, isInit: false, range: range))
-	insertOpAfter(module, anchorOpIdx: opIdx, newOpIdx: fieldStoreIdx)
+	spliceOpInBlock(block, anchorOpIdx: opIdx, newOpIdx: fieldStoreIdx, afterAnchor: true)
 	return true
 end 'tryRewriteDottedAssign'
 
@@ -3056,51 +3082,36 @@ function resolveDottedTopLevelReceiver(project Project, name String, filePath Fi
 	return ResolvedDottedReceiver.create(prefix, fieldName: fieldName, info: info)
 end 'resolveDottedTopLevelReceiver'
 
-// Splice `newOpIdx` into whichever block's opRefs currently holds
-// `anchorOpIdx`. `afterAnchor` selects placement immediately after the anchor
-// (the `.rawValue`/`.fieldStore` rewrites) versus immediately before it (the
-// `coerceEnumRawValueCompareOperands` fieldLoad that the cmp consumes). Every
-// op produced during type-resolution rewrites lives in exactly one block, so
-// the linear scan is bounded by that block's own length.
-function spliceOpAtAnchor(module MaxonModule, anchorOpIdx OpIndex, newOpIdx OpIndex, afterAnchor bool)
-	for blockRef in 0 upto module.blocks.count() 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise panic("spliceOpAtAnchor: blockRef OOB")
-		var insertPos = -1 as ParsedInt
-		for posIdx in 0 upto block.opRefs.count() 'eachOpRef'
-			let ref = try block.opRefs.get(posIdx) otherwise panic("spliceOpAtAnchor: posIdx OOB")
-			if ref == anchorOpIdx 'foundAnchor'
-				insertPos = posIdx
-				break
-			end 'foundAnchor'
-		end 'eachOpRef'
-		if insertPos >= 0 'doInsert'
-			// Explicit `if` rather than `insertPos + 1 if afterAnchor else
-			// insertPos`: the inline conditional miscompiles here in the
-			// self-hosted compiler (the consuming op is emitted before the
-			// inserted producer → E3013 on string/char enum comparisons). Pinned
-			// by `specs/ternary-expression.md::error.arith-ternary-as-index`.
-			var target = insertPos
-			if afterAnchor 'after'
-				target = insertPos + 1
-			end 'after'
-			try block.opRefs.insert(target, value: newOpIdx) otherwise panic("spliceOpAtAnchor: opRefs.insert OOB")
-			return
-		end 'doInsert'
-	end 'eachBlock'
-	panic("spliceOpAtAnchor: anchor op at idx={anchorOpIdx} not registered in any block")
-end 'spliceOpAtAnchor'
-
-// Splice `newOpIdx` immediately after `anchorOpIdx` in its block's opRefs.
-function insertOpAfter(module MaxonModule, anchorOpIdx OpIndex, newOpIdx OpIndex)
-	spliceOpAtAnchor(module, anchorOpIdx: anchorOpIdx, newOpIdx: newOpIdx, afterAnchor: true)
-end 'insertOpAfter'
-
-// Splice `newOpIdx` immediately before `anchorOpIdx` in its block's opRefs —
-// used by `coerceEnumRawValueCompareOperands` to place a `.rawValue` fieldLoad
-// ahead of the cmp that consumes it.
-function insertOpBefore(module MaxonModule, anchorOpIdx OpIndex, newOpIdx OpIndex)
-	spliceOpAtAnchor(module, anchorOpIdx: anchorOpIdx, newOpIdx: newOpIdx, afterAnchor: false)
-end 'insertOpBefore'
+// Block-local splice: insert `newOpIdx` adjacent to `anchorOpIdx` within
+// `block`'s own opRefs. O(block length) — the caller already knows which block
+// holds the anchor, so there is no module-wide block scan. Panics if the anchor
+// isn't in this block (caller contract violation). `afterAnchor` selects
+// placement immediately after the anchor (the `.fieldStore`/`bitNot` follow-up
+// rewrites) versus immediately before it (the `coerceEnumRawValueCompareOperands`
+// `.rawValue` fieldLoad the cmp consumes).
+function spliceOpInBlock(block IrBlock, anchorOpIdx OpIndex, newOpIdx OpIndex, afterAnchor bool)
+	var insertPos = -1 as ParsedInt
+	for posIdx in 0 upto block.opRefs.count() 'eachOpRef'
+		let ref = try block.opRefs.get(posIdx) otherwise panic("spliceOpInBlock: posIdx OOB")
+		if ref == anchorOpIdx 'foundAnchor'
+			insertPos = posIdx
+			break
+		end 'foundAnchor'
+	end 'eachOpRef'
+	if insertPos < 0 'notHere'
+		panic("spliceOpInBlock: anchor op at idx={anchorOpIdx} not in block '{block.label}'")
+	end 'notHere'
+	// Explicit `if` rather than `insertPos + 1 if afterAnchor else insertPos`:
+	// the inline conditional miscompiles here in the self-hosted compiler (the
+	// consuming op is emitted before the inserted producer → E3013 on string/char
+	// enum comparisons). Pinned by
+	// `specs/ternary-expression.md::error.arith-ternary-as-index`.
+	var target = insertPos
+	if afterAnchor 'after'
+		target = insertPos + 1
+	end 'after'
+	try block.opRefs.insert(target, value: newOpIdx) otherwise panic("spliceOpInBlock: opRefs.insert OOB")
+end 'spliceOpInBlock'
 
 // Phase 11.65: classify a comparison operand's type for the string/char-
 // backed enum rewrite. Returns the scalar peer type name (`String` /
@@ -3137,23 +3148,43 @@ end 'freshEnumRawValueName'
 // `String.equals` / `Character.equals`. Walks `module.ops` by index; inserted
 // fieldLoads are appended (existing indices stay valid).
 function coerceEnumRawValueCompareOperands(project Project, module MaxonModule)
-	let opCountBefore = module.ops.count()
-	for opIdx in 0 upto opCountBefore 'eachOp'
-		let op = try module.ops.get(opIdx) otherwise panic("coerceEnumRawValueCompareOperands: ops.get OOB at {opIdx}")
-		if op.name != "cmp" 'notCmp'
-			continue
-		end 'notCmp'
-		match op 'extractCmp'
-			cmp(result, left, right, predicate, leftType, rightType, _, range) then maybeCoerceOneCmp(project, module: module, opIdx: opIdx, result: result, left: left, right: right, predicate: predicate, leftType: leftType, rightType: rightType, range: range)
-			default panic("coerceEnumRawValueCompareOperands: op.name == 'cmp' but match fell through")
-		end 'extractCmp'
-	end 'eachOp'
+	// Walk per-function/per-block (not a flat `module.ops` scan) so the
+	// `.rawValue` fieldLoad each match inserts goes into the cmp's own block in
+	// O(block length) via `spliceOpInBlock` — the former flat scan had to
+	// recover the block with a module-wide search per match, making the pass
+	// O(matches × total blocks) (the dominant cost in a self-hosted build).
+	for funcIdx in 0 upto module.functions.count() 'eachFunc'
+		let func = try module.functions.get(funcIdx) otherwise panic("coerceEnumRawValueCompareOperands: funcIdx OOB")
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("coerceEnumRawValueCompareOperands: blockRef OOB")
+			// Snapshot the original opRefs: a match inserts a new fieldLoad ref
+			// ahead of the cmp in this same block, so iterating the live list
+			// would re-visit shifting positions. The snapshot's anchor opIdx
+			// values stay valid (insertion changes positions, not op identities).
+			var anchors = OpIndexList.create()
+			for posIdx in 0 upto block.opRefs.count() 'snapshot'
+				let ref = try block.opRefs.get(posIdx) otherwise panic("coerceEnumRawValueCompareOperands: opRefs.get OOB")
+				anchors.append(ref)
+			end 'snapshot'
+			for aIdx in 0 upto anchors.count() 'eachAnchor'
+				let opIdx = try anchors.get(aIdx) otherwise panic("coerceEnumRawValueCompareOperands: anchors.get OOB")
+				let op = try module.ops.get(opIdx) otherwise panic("coerceEnumRawValueCompareOperands: ops.get OOB at {opIdx}")
+				if op.name != "cmp" 'notCmp'
+					continue
+				end 'notCmp'
+				match op 'extractCmp'
+					cmp(result, left, right, predicate, leftType, rightType, _, range) then maybeCoerceOneCmp(project, module: module, block: block, opIdx: opIdx, result: result, left: left, right: right, predicate: predicate, leftType: leftType, rightType: rightType, range: range)
+					default panic("coerceEnumRawValueCompareOperands: op.name == 'cmp' but match fell through")
+				end 'extractCmp'
+			end 'eachAnchor'
+		end 'eachBlock'
+	end 'eachFunc'
 end 'coerceEnumRawValueCompareOperands'
 
 // Phase 11.65: per-cmp rewrite. Gates to eq/ne and to at least one string/
 // char-backed enum operand; inserts `.rawValue` fieldLoads and restamps the
 // cmp in place.
-function maybeCoerceOneCmp(project Project, module MaxonModule, opIdx OpIndex, result ByteArray, left ByteArray, right ByteArray, predicate CmpPredicate, leftType MaxonType, rightType MaxonType, range SourceRange)
+function maybeCoerceOneCmp(project Project, module MaxonModule, block IrBlock, opIdx OpIndex, result ByteArray, left ByteArray, right ByteArray, predicate CmpPredicate, leftType MaxonType, rightType MaxonType, range SourceRange)
 	let isEquality = match predicate 'eqNe'
 		eq gives true
 		ne gives true
@@ -3186,12 +3217,12 @@ function maybeCoerceOneCmp(project Project, module MaxonModule, opIdx OpIndex, r
 
 	var newLeft = left
 	if leftIsEnum 'coerceLeft'
-		newLeft = insertRawValueLoad(module, anchorOpIdx: opIdx, operand: left, side: "l", range: range)
+		newLeft = insertRawValueLoad(module, block: block, anchorOpIdx: opIdx, operand: left, side: "l", range: range)
 	end 'coerceLeft'
 
 	var newRight = right
 	if rightIsEnum 'coerceRight'
-		newRight = insertRawValueLoad(module, anchorOpIdx: opIdx, operand: right, side: "r", range: range)
+		newRight = insertRawValueLoad(module, block: block, anchorOpIdx: opIdx, operand: right, side: "r", range: range)
 	end 'coerceRight'
 
 	let peerType = MaxonType.named(peerNameId)
@@ -3200,11 +3231,11 @@ end 'maybeCoerceOneCmp'
 
 // Phase 11.65: append a `.rawValue` fieldLoad on `operand` and splice it
 // before the cmp at `anchorOpIdx`. Returns the fresh result name.
-function insertRawValueLoad(module MaxonModule, anchorOpIdx OpIndex, operand ByteArray, side String, range SourceRange) returns ByteArray
+function insertRawValueLoad(module MaxonModule, block IrBlock, anchorOpIdx OpIndex, operand ByteArray, side String, range SourceRange) returns ByteArray
 	let rawName = freshEnumRawValueName(operand, side: side)
 	let newOpIdx = module.ops.count()
 	module.ops.push(MaxonOp.fieldLoad(rawName, receiver: operand, fieldName: "rawValue".toByteArray(), range: range))
-	insertOpBefore(module, anchorOpIdx: anchorOpIdx, newOpIdx: newOpIdx)
+	spliceOpInBlock(block, anchorOpIdx: anchorOpIdx, newOpIdx: newOpIdx, afterAnchor: false)
 	return rawName
 end 'insertRawValueLoad'
 
@@ -7029,17 +7060,27 @@ end 'dispatchEqualityOps'
 function dispatchFuncEqualityOps(project Project, module MaxonModule, func IrFunction, producerTypes ProducerTypeMap, filePath FilePath)
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("dispatchFuncEqualityOps: blockRef OOB")
-		for opIdx in block.opRefs 'eachOp'
+		// Snapshot opRefs: a `!=`-on-ref rewrite splices a follow-up logicalNot
+		// into this same block ahead of later positions, so iterating the live
+		// list would shift under us. Op identities (the snapshotted indices)
+		// remain valid across the insertion.
+		var anchors = OpIndexList.create()
+		for posIdx in 0 upto block.opRefs.count() 'snapshot'
+			let ref = try block.opRefs.get(posIdx) otherwise panic("dispatchFuncEqualityOps: opRefs.get OOB")
+			anchors.append(ref)
+		end 'snapshot'
+		for aIdx in 0 upto anchors.count() 'eachOp'
+			let opIdx = try anchors.get(aIdx) otherwise panic("dispatchFuncEqualityOps: anchors.get OOB")
 			let op = try module.ops.get(opIdx) otherwise panic("dispatchFuncEqualityOps: opIdx OOB")
-			dispatchEqualityForOp(project, module: module, opIdx: opIdx, op: op, producerTypes: producerTypes, filePath: filePath)
+			dispatchEqualityForOp(project, module: module, block: block, opIdx: opIdx, op: op, producerTypes: producerTypes, filePath: filePath)
 		end 'eachOp'
 	end 'eachBlock'
 end 'dispatchFuncEqualityOps'
 
-function dispatchEqualityForOp(project Project, module MaxonModule, opIdx OpIndex, op MaxonOp, producerTypes ProducerTypeMap, filePath FilePath)
+function dispatchEqualityForOp(project Project, module MaxonModule, block IrBlock, opIdx OpIndex, op MaxonOp, producerTypes ProducerTypeMap, filePath FilePath)
 	if op.name == "cmp" 'isCmp'
 		match op 'extract'
-			cmp(result, left, right, predicate, leftType, rightType, _, range) then maybeRewriteCmpToEquals(project, module: module, opIdx: opIdx, result: result, left: left, right: right, predicate: predicate, leftType: leftType, rightType: rightType, range: range)
+			cmp(result, left, right, predicate, leftType, rightType, _, range) then maybeRewriteCmpToEquals(project, module: module, block: block, opIdx: opIdx, result: result, left: left, right: right, predicate: predicate, leftType: leftType, rightType: rightType, range: range)
 			default panic("unreachable: already checked name == cmp")
 		end 'extract'
 		return
@@ -7052,7 +7093,7 @@ function dispatchEqualityForOp(project Project, module MaxonModule, opIdx OpInde
 	end 'isRefEq'
 end 'dispatchEqualityForOp'
 
-function maybeRewriteCmpToEquals(project Project, module MaxonModule, opIdx OpIndex, result ByteArray, left ByteArray, right ByteArray, predicate CmpPredicate, leftType MaxonType, rightType MaxonType, range SourceRange)
+function maybeRewriteCmpToEquals(project Project, module MaxonModule, block IrBlock, opIdx OpIndex, result ByteArray, left ByteArray, right ByteArray, predicate CmpPredicate, leftType MaxonType, rightType MaxonType, range SourceRange)
 	if not maxonTypeIsRef(project, t: leftType) 'leftPrim'
 		return
 	end 'leftPrim'
@@ -7098,7 +7139,7 @@ function maybeRewriteCmpToEquals(project Project, module MaxonModule, opIdx OpIn
 	let intermediateName = freshIntermediateNameForCmp(result)
 	try module.ops.set(opIdx, value: MaxonOp.methodCall(intermediateName, receiver: left, methodName: methodName, args: equalsArgs, argLabels: equalsLabels, argTypes: equalsArgTypes, argRanges: equalsArgRanges, range: range)) otherwise panic("maybeRewriteCmpToEquals: ops.set OOB at idx={opIdx}")
 	// Insert bitNot directly after the methodCall in the same block.
-	insertBitNotAfter(module, opIdx: opIdx, result: result, operand: intermediateName, range: range)
+	insertBitNotAfter(module, block: block, opIdx: opIdx, result: result, operand: intermediateName, range: range)
 end 'maybeRewriteCmpToEquals'
 
 function freshIntermediateNameForCmp(result ByteArray) returns ByteArray
@@ -7109,31 +7150,16 @@ function freshIntermediateNameForCmp(result ByteArray) returns ByteArray
 	return synth.toByteArray()
 end 'freshIntermediateNameForCmp'
 
-function insertBitNotAfter(module MaxonModule, opIdx OpIndex, result ByteArray, operand ByteArray, range SourceRange)
+function insertBitNotAfter(module MaxonModule, block IrBlock, opIdx OpIndex, result ByteArray, operand ByteArray, range SourceRange)
 	// Append a logicalNot op into the module's ops array AND register it
-	// in whichever block owned the original cmp. We find the block by
-	// scanning blockRefs — the cmp's index is in exactly one block's
-	// opRefs. Logical-NOT (not bitwise) is required here: the operand is
-	// the bool result of `equals`, and the consumer expects 0/1 — bitNot
-	// on bool would produce -1/-2, both truthy.
+	// directly after the original cmp in `block` (the caller already knows
+	// the owning block, so no module-wide scan is needed). Logical-NOT (not
+	// bitwise) is required here: the operand is the bool result of `equals`,
+	// and the consumer expects 0/1 — bitNot on bool would produce -1/-2, both
+	// truthy.
 	let bitNotIdx = module.ops.count()
 	module.ops.push(MaxonOp.unop(result, operand: operand, opKind: UnaryOpKind.logicalNot, operandType: MaxonType.boolean, range: range))
-	for blockRef in 0 upto module.blocks.count() 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise panic("insertBitNotAfter: blockRef OOB")
-		var insertPos = -1 as ParsedInt
-		for posIdx in 0 upto block.opRefs.count() 'eachOpRef'
-			let ref = try block.opRefs.get(posIdx) otherwise panic("insertBitNotAfter: posIdx OOB")
-			if ref == opIdx 'foundCmp'
-				insertPos = posIdx
-				break
-			end 'foundCmp'
-		end 'eachOpRef'
-		if insertPos >= 0 'doInsert'
-			try block.opRefs.insert(insertPos + 1, value: bitNotIdx) otherwise panic("insertBitNotAfter: opRefs.insert OOB")
-			return
-		end 'doInsert'
-	end 'eachBlock'
-	panic("insertBitNotAfter: cmp op at idx={opIdx} not registered in any block")
+	spliceOpInBlock(block, anchorOpIdx: opIdx, newOpIdx: bitNotIdx, afterAnchor: true)
 end 'insertBitNotAfter'
 
 // `is` / `is not` (refEq) requires both operands to be reference (struct)
@@ -8417,6 +8443,7 @@ module function runTypeResolution(project Project, module MaxonModule, filePath 
 	// because their target type hadn't been parsed yet. Must run before the
 	// interface/struct drains so the aliases promote into the resolved
 	// inner-alias maps. See drainPendingExtensionInnerAliases.
+	let trEarly = passTimerStart()
 	drainPendingExtensionInnerAliases(project)
 	resolveAllTypealiases(project)
 	// E2012: a generic typealias that references itself directly
@@ -8491,7 +8518,11 @@ module function runTypeResolution(project Project, module MaxonModule, filePath 
 	// one MaxonModule, `filePath` (the runTypeResolution param) only
 	// names the first source. Ops from other files would visibility-
 	// check against the wrong path otherwise.
+	recordPassSince("__tr-earlyDrains", startMs: trEarly)
+
+	let trRewrite = passTimerStart()
 	rewriteUnresolvedOpsPerFunction(project, module: module, fallbackFilePath: filePath)
+	recordPassSince("__tr-rewriteUnresolvedOps", startMs: trRewrite)
 
 	// Now that every named-alias param type has resolved, expand each
 	// function's ABI param vector with env/witness companions (driven by
@@ -8499,7 +8530,9 @@ module function runTypeResolution(project Project, module MaxonModule, filePath 
 	// maps. Runs before buildProducerTypes (the first fnTypeId/param
 	// consumer) and before lowering, so every consumer sees the final
 	// ABI shape + maps. See buildAbiParamMaps.
+	let trAbi = passTimerStart()
 	buildAbiParamMaps(project, module: module)
+	recordPassSince("__tr-buildAbiParamMaps", startMs: trAbi)
 
 	// Resolve indirect-call sites the parser emitted with the sentinel
 	// fnTypeId=0 (callee was a `named(alias)` whose typealias hadn't
@@ -8518,7 +8551,9 @@ module function runTypeResolution(project Project, module MaxonModule, filePath 
 	// synthetic names ($t0, $t1, ...) and slot ids reset between functions.
 	var producerTypesPerFunc = ProducerTypeMapArray.create()
 	var slotTypesPerFunc = SlotTypeMapArray.create()
+	let tr0 = passTimerStart()
 	buildProducerTypes(project, module: module, producerTypesPerFunc: producerTypesPerFunc, slotTypesPerFunc: slotTypesPerFunc)
+	recordPassSince("__tr-buildProducerTypes", startMs: tr0)
 	// Stage E (closures): the parser records each `closureEnvLoad`'s
 	// `captureType` from the outer scope's parser-recorded var type. When
 	// that type was `unresolved` at parse time (typical for locals whose
@@ -8580,6 +8615,7 @@ module function runTypeResolution(project Project, module MaxonModule, filePath 
 	// `CONVERGE_PASSES` documents that bound in one place.
 	let CONVERGE_PASSES = 4
 	var pass = 0
+	let trConv = passTimerStart()
 	while pass < CONVERGE_PASSES 'converge'
 		producerTypesPerFunc.clear()
 		slotTypesPerFunc.clear()
@@ -8587,6 +8623,7 @@ module function runTypeResolution(project Project, module MaxonModule, filePath 
 		fillUnresolvedTypes(project, module: module, producerTypesPerFunc: producerTypesPerFunc, slotTypesPerFunc: slotTypesPerFunc)
 		pass = pass + 1
 	end 'converge'
+	recordPassSince("__tr-convergeLoop", startMs: trConv)
 
 	// Stage E (closures): the parser stamps lifted closure functions with
 	// MaxonReturnType.value(MaxonType.unresolved) when the body's expression
@@ -8595,6 +8632,7 @@ module function runTypeResolution(project Project, module MaxonModule, filePath 
 	// patch each function's `maxonReturnType` from its `ret` op's value-name
 	// producer type. Idempotent on already-concrete types — the patch only
 	// runs when the existing return type is unresolved.
+	let trTail = passTimerStart()
 	resolveUnresolvedFunctionReturnTypes(project, module: module, producerTypesPerFunc: producerTypesPerFunc)
 
 	// With every scrutinee's MaxonType now filled, resolve enumMatchArm
@@ -8684,7 +8722,9 @@ module function runTypeResolution(project Project, module MaxonModule, filePath 
 	// Must run after `fillUnresolvedTypes` (so receiver types in
 	// `producerTypesPerFunc` are concrete) and after `validateCallArities`
 	// (so arity errors are reported before any panic tripwire could fire).
+	let trCalls = passTimerStart()
 	resolveAllCalls(project, module: module, producerTypesPerFunc: producerTypesPerFunc)
+	recordPassSince("__tr-resolveAllCalls", startMs: trCalls)
 
 	// J.4f.2: closure literals with untyped parameters (`m.map(function(p) gives p)`)
 	// stamp `MaxonType.unresolved` on the lifted function's param slot at
@@ -8758,6 +8798,7 @@ module function runTypeResolution(project Project, module MaxonModule, filePath 
 	// propagation chain left a hole — surface it now with a source range
 	// instead of letting `lowerMethodCall` / `lowerCall` panic later.
 	validateAllCallsResolved(project, module: module, producerTypesPerFunc: producerTypesPerFunc, filePath: filePath)
+	recordPassSince("__tr-tailValidation", startMs: trTail)
 end 'runTypeResolution'
 
 // Walk every function's `convert` ops, looking for compile-time literal

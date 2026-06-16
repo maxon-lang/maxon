@@ -241,6 +241,12 @@ export type QueryDatabase
 	export var mirPerFuncMisses as Revision
 	export var codePerFuncHits as Revision
 	export var codePerFuncMisses as Revision
+	// Phase 5: count of PERSISTABLE (user-owned) chunk recompiles this process —
+	// `codePerFuncMisses` minus the per-compile runtime entries (`mrt_start`)
+	// that are never persisted. The user chunk cache's store path uses the delta
+	// of this counter across a build to decide whether the on-disk file actually
+	// needs rewriting (a runtime-only miss leaves the persisted set unchanged).
+	export var userChunkMisses as Revision
 
 	export static function create(emptyMaxonMemo MaxonModuleMemo, emptyStdMemo StdModuleMemo, emptyCodeMemo CodeMemo) returns QueryDatabase
 		return Self{
@@ -266,7 +272,8 @@ export type QueryDatabase
 			codePerFunc: CodeChunkCacheMap.create(),
 			midPerFuncHits: 0, midPerFuncMisses: 0,
 			mirPerFuncHits: 0, mirPerFuncMisses: 0,
-			codePerFuncHits: 0, codePerFuncMisses: 0
+			codePerFuncHits: 0, codePerFuncMisses: 0,
+			userChunkMisses: 0
 		}
 	end 'create'
 end 'QueryDatabase'

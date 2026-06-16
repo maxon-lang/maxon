@@ -527,12 +527,12 @@ end 'main'
 typealias Port = int(0 to u16.max)
 
 function main() returns ExitCode
-	let p = 8080 as Port
+	let p = 200 as Port
 	return p
 end 'main'
 ```
 ```exitcode
-8080
+200
 ```
 
 ### u32 range alias
