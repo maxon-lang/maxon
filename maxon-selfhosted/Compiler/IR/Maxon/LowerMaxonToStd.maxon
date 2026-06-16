@@ -9325,7 +9325,20 @@ type MaxonToStdLowering
 		// extension method on `Array`, the receiver still mentions
 		// `typeParameter(Element)`) where the substitution would return
 		// `MaxonType.unresolved` and break downstream lowering.
-		let resolvedFieldType = pickFieldTypeViaReceiver(self.project, raw: hit.fieldType, receiverType: receiverType)
+		// Normalize the receiver to its underlying generic instance before
+		// substituting the field type. `lowerFieldLoad` reads `receiverType`
+		// straight from the value-type map, so a receiver typed via a generic
+		// typealias (`stdlibModule StdModule`, where `StdModule = IrModule with
+		// StdOp`) arrives as the bare `named(StdModule)` rather than the
+		// `genericInstance(IrModule, [StdOp])` form. `pickFieldTypeViaReceiver`
+		// only substitutes through a concrete generic instance, so without this
+		// chase an inner-alias field type like `OpArray = Array with Op` stays
+		// `Array with Op` (Op unbound) — and a downstream `.get` on that value
+		// hits the conditional-gid layout path with nothing to forward, panicking
+		// in `forwardCallerLayout`. `lowerMethodCall` already normalizes its
+		// receiver the same way (step 8b); this mirrors it for field loads.
+		let normalizedReceiverType = normalizeReceiverInContext(self.project, t: receiverType, enclosingType: self.currentTypeName)
+		let resolvedFieldType = pickFieldTypeViaReceiver(self.project, raw: hit.fieldType, receiverType: normalizedReceiverType)
 		let fieldStdType = maxonTypeToStdType(self.project, ref: resolvedFieldType)
 		let fieldWidth = storeWidthOfStdType(fieldStdType)
 		let fieldSigned = stdTypeIsSigned(fieldStdType)
