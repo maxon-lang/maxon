@@ -679,7 +679,7 @@ export function computeStdlibChecksum(files FilePathArray, runtimePath FilePath)
 end 'computeStdlibChecksum'
 
 // Get compiler executable fingerprint: file size and modification time.
-export function getCompilerFingerprint() returns (MachineWord, MachineWord)
+function getCompilerFingerprint() returns (MachineWord, MachineWord)
 	let exePath = try Process.executablePath() otherwise return (0, 0)
 	let info = try File.info(exePath) otherwise return (0, 0)
 
@@ -2296,7 +2296,7 @@ function resolveStdlibCacheKey(name String, funcNameToIndex StdlibFuncIndexMap) 
 	return ""
 end 'resolveStdlibCacheKey'
 
-export function computeNeededStdlibFunctions(seeds StringArray, stdlibCache StdlibCacheData) returns StdlibFuncNameSet
+module function computeNeededStdlibFunctions(seeds StringArray, stdlibCache StdlibCacheData) returns StdlibFuncNameSet
 	var funcNameToIndex = StdlibFuncIndexMap.create()
 
 	for (iter, func) in stdlibCache.functions.withIterator() 'buildIndex'
@@ -2358,7 +2358,7 @@ export function computeNeededStdlibFunctions(seeds StringArray, stdlibCache Stdl
 end 'computeNeededStdlibFunctions'
 
 // Merge global data entries referenced by the linked stdlib functions.
-export function mergeStdlibGlobalData(globalData GlobalDataTable, rdataRelocs RdataRelocationArray, stdlibCache StdlibCacheData)
+module function mergeStdlibGlobalData(globalData GlobalDataTable, rdataRelocs RdataRelocationArray, stdlibCache StdlibCacheData)
 	var neededGlobals = StdlibFuncNameSet.create()
 
 	for fixup in rdataRelocs 'findGlobals'

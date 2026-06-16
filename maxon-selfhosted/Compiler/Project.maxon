@@ -2407,7 +2407,7 @@ export typealias ParamDefaultArray = Array with ParamDefault
 // Result of unwrapping a ParamDefault into a concrete integer value. Used by
 // the parser's call-site default-fill loop so the control-flow between
 // "has a default" and "no default" can stay in an ordinary `if`.
-export type ParamDefaultValue
+type ParamDefaultValue
 	export var hasValue as bool
 	export var value as IntConstant
 
@@ -2420,7 +2420,7 @@ export type ParamDefaultValue
 	end 'empty'
 end 'ParamDefaultValue'
 
-export function paramDefaultAsIntLiteral(paramDefault ParamDefault) returns ParamDefaultValue
+function paramDefaultAsIntLiteral(paramDefault ParamDefault) returns ParamDefaultValue
 	return match paramDefault 'unwrap'
 		intLiteral(value) gives ParamDefaultValue.some(value)
 		byteLiteral(value) gives ParamDefaultValue.some(value)
@@ -3167,7 +3167,7 @@ end 'hasStructuralErrors'
 // etc.) flow through the same path: the parser records MaxonType.named(id)
 // and the later TypeResolution pass validates that the id maps to a known
 // type.
-export function resolveType(project Project, name String) returns MaxonType
+function resolveType(project Project, name String) returns MaxonType
 	return internMaxonType(project, name: name)
 end 'resolveType'
 
@@ -3281,7 +3281,7 @@ export function resolveNamedToStdType(project Project, name String) returns StdT
 	return aliased
 end 'resolveNamedToStdType'
 
-export function resolveNamedIdToStdType(project Project, id TypeNameId) returns StdType
+function resolveNamedIdToStdType(project Project, id TypeNameId) returns StdType
 	return resolveNamedToStdType(project, name: project.typeNames.get(id))
 end 'resolveNamedIdToStdType'
 
@@ -3337,7 +3337,6 @@ export type StructField
 end 'StructField'
 
 export typealias FieldOffset = int(0 to 65520)
-export typealias FieldCount = int(0 to 64)
 export typealias StructFieldArray = Array with StructField
 export typealias FieldIndex = int(0 to 64)
 export typealias FieldNameIndexMap = Map with (String, FieldIndex)
@@ -3503,7 +3502,7 @@ end 'enumCasesAnyPayload'
 // stringification (explicit backing), matching the bootstrap behavior
 // where `enum Color { red = 1; green = 2 }` prints "1" / "2" but
 // `enum Direction { north; south; east; west }` prints "north" etc.
-export function enumHasExplicitBacking(enumDef EnumType) returns bool
+module function enumHasExplicitBacking(enumDef EnumType) returns bool
 	if enumDef.isFloatBacked or enumDef.isStringBacked or enumDef.isCharBacked or enumDef.isFunctionBacked 'asNonInt'
 		return true
 	end 'asNonInt'
@@ -3652,7 +3651,7 @@ export typealias UnresolvedEnumTypeMap = Map with (String, UnresolvedEnumType)
 // lifted body up to its enclosing context. The new naming makes the
 // outer name self-describing, so the map (and its cache serialization,
 // and its `project.closureCounter` ordinal source) all drop out.
-export function enclosingFuncOfClosure(closureName String) returns String
+module function enclosingFuncOfClosure(closureName String) returns String
 	let markerIdx = try closureName.findFirst("$closure_") otherwise return ""
 	return closureName.slice(closureName.startIndex(), endIndex: markerIdx)
 end 'enclosingFuncOfClosure'

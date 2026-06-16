@@ -37,7 +37,7 @@ end 'UseKindTag'
 // types, typealiases, top-level constants and top-level vars; the tag
 // disambiguates the namespace and `aliasPath` keeps two typealiases of the
 // same name (declared in different files) distinct.
-export type UseKey implements Hashable, Equatable
+type UseKey implements Hashable, Equatable
 	export var tag as UseKindTag
 	export var name as String
 	export var aliasPath as String
@@ -62,7 +62,7 @@ export type UseKey implements Hashable, Equatable
 end 'UseKey'
 
 // One declaration's reader scope.
-export type UseScope
+type UseScope
 	export var declFilePath as FilePath
 	export var declDirStr as String
 	export var sawOutsideFile as bool
@@ -81,7 +81,7 @@ typealias IndexOrMissing = int(i64.min to i64.max)
 
 // (ownerName, methodName) split on the last '.' byte of a qualified name.
 // `dotIndex = -1` when no dot is present.
-export type LastDotSplit
+type LastDotSplit
 	export var dotIndex as IndexOrMissing
 	export var owner as String
 	export var method as String
@@ -111,7 +111,7 @@ end 'isStdlibSourcePath'
 
 // Combined check: skip stdlib bootstrap symbols AND real stdlib source-file
 // declarations.
-export function isStdlibDecl(p FilePath) returns bool
+module function isStdlibDecl(p FilePath) returns bool
 	if isStdlibBootstrapPath(p) 'bootstrap'
 		return true
 	end 'bootstrap'
@@ -503,6 +503,23 @@ function recordNamedTypeUse(project Project, scopes UseScopeMap, name String, re
 			propagateFieldTypeUse(project, scopes: scopes, t: field.fieldType, readerFilePath: readerFilePath)
 		end 'eachField'
 	end 'haveStruct'
+	// Enums / unions propagate the same way: matching a `StdOp` value and
+	// destructuring `call(c)` reads `c`'s payload type, and reading the
+	// struct-backing of a case (`c.rawValue.<field>` on `X64Op.add =
+	// X64OpMeta{...}`) reads the backing struct — neither appears as a
+	// `named(...)` op in the reader's body. Without this hop a union case's
+	// payload or backing struct typed in another file is wrongly reported
+	// unused (E3092) even though the union is referenced everywhere.
+	if let et = try project.enumTypes.get(name) 'haveEnum'
+		for enumCase in et.cases 'eachCase'
+			for payload in enumCase.payloadFields 'eachPayload'
+				propagateFieldTypeUse(project, scopes: scopes, t: payload.fieldType, readerFilePath: readerFilePath)
+			end 'eachPayload'
+			if not enumCase.backingStructName.isEmpty() 'haveBacking'
+				propagateFieldTypeNamed(project, scopes: scopes, name: enumCase.backingStructName, readerFilePath: readerFilePath)
+			end 'haveBacking'
+		end 'eachCase'
+	end 'haveEnum'
 end 'recordNamedTypeUse'
 
 // Propagate field-type uses one level deep. Same recursion concern as
@@ -656,6 +673,17 @@ function recordCallOpRefs(project Project, scopes UseScopeMap, opIdx OpIndex, op
 		if let throwsClause = try project.funcThrowsTypes.get(callee) 'haveThrows'
 			recordThrowsUses(project, scopes: scopes, throws: throwsClause, readerFilePath: readerFilePath)
 		end 'haveThrows'
+
+		// Calling a function references its RETURN type from THIS file, for the
+		// same reason as the throws clause above: `match argvCacheTeardown(t) …`
+		// in another file consumes a value of the callee's return type and
+		// matches on its cases, yet no `named(ArgvCacheTeardown)` op carries the
+		// type into the caller's body — the return type lives only on the
+		// callee's declaration. Without this an enum/union whose only cross-file
+		// use is as a returned-then-matched value is wrongly reported unused (E3092).
+		if let retType = try project.funcReturnTypes.get(callee) 'haveRet'
+			recordReturnTypeUses(project, scopes: scopes, ret: retType, readerFilePath: readerFilePath)
+		end 'haveRet'
 	end 'haveCallee'
 	if let recvType = try project.resolvedReceiverTypes.get(opIdx) 'haveRecv'
 		recordTypeUses(project, scopes: scopes, t: recvType, readerFilePath: readerFilePath)
@@ -791,7 +819,7 @@ end 'emitDiagnostics'
 
 // Pass entry point. Wired into `PassPipeline.dispatch` for
 // `PassKind.checkUnusedExports`.
-export function runCheckUnusedExports(project Project, module MaxonModule)
+function runCheckUnusedExports(project Project, module MaxonModule)
 	if projectHasStructuralErrors(project) 'gated'
 		return
 	end 'gated'
@@ -814,7 +842,7 @@ end 'runCheckUnusedExports'
 // Pipeline-side shim. Forwards to `runCheckUnusedExports` unless the
 // pipeline is the stdlib sandbox compile, in which case the audit is a
 // no-op — see the comment at the call site.
-export function runCheckUnusedExportsIfNotStdlib(project Project, module MaxonModule, isStdlib bool)
+module function runCheckUnusedExportsIfNotStdlib(project Project, module MaxonModule, isStdlib bool)
 	if isStdlib 'skip'
 		return
 	end 'skip'

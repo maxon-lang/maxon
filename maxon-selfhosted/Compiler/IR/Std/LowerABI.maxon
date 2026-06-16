@@ -7,14 +7,14 @@
 // -- ABI infrastructure types --
 
 // How a parameter is passed at the ABI level.
-export union ABIParamClass
+union ABIParamClass
 	register
 	stack
 	indirect
 end 'ABIParamClass'
 
 // Supported calling conventions.
-export union ABIConvention
+union ABIConvention
 	windowsX64
 	sysVAmd64
 	aapcs64
@@ -22,7 +22,7 @@ export union ABIConvention
 end 'ABIConvention'
 
 // Recorded info about a call site.
-export type ABICallInfo
+type ABICallInfo
 	export let callee as String
 	export let argCount as VarSlot
 	export let hasReturn as bool
@@ -37,7 +37,7 @@ export typealias ABICallInfoArray = Array with ABICallInfo
 // -- ABI helper functions --
 
 // Map a compilation target to its calling convention.
-export function getABIConvention(target Target) returns ABIConvention
+function getABIConvention(target Target) returns ABIConvention
 	return match target.cpu 'cpuMatch'
 		x64 gives getX86Convention(target)
 		arm64 gives ABIConvention.aapcs64
@@ -70,7 +70,7 @@ end 'getX86Convention'
 // Similarly, fat returns are deferred until a multi-register `ret` op
 // shape is wired through the dialect; today's `ret` carries a single
 // ValueId and an interface-typed return is structurally absent.
-export function classifyParam(paramIndex VarSlot, convention ABIConvention) returns ABIParamClass
+function classifyParam(paramIndex VarSlot, convention ABIConvention) returns ABIParamClass
 	let regLimit = match convention 'limit'
 		windowsX64 gives 4
 		sysVAmd64 gives 6

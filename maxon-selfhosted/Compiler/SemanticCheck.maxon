@@ -16,7 +16,7 @@ typealias OpIndexOrMissing = int(i64.min to i64.max)
 // Argument / parameter position index for the E3005 arg-type check.
 typealias ArgIndex = int(0 to u64.max)
 
-export function runSemanticChecks(project Project, module MaxonModule, isStdlib bool = false)
+module function runSemanticChecks(project Project, module MaxonModule, isStdlib bool = false)
 	logDebug(LogCategory.semantic, message: function() gives "semcheck: functions={module.functions.count()}")
 
 	// Phase 3b: enforce E3016 — every type with a non-empty
@@ -806,7 +806,7 @@ function interfaceDeclaresMethodResolved(project Project, interfaceName String, 
 	return false
 end 'interfaceDeclaresMethodResolved'
 
-export function checkPendingUnusedVars(project Project, module MaxonModule)
+module function checkPendingUnusedVars(project Project, module MaxonModule)
 	for entry in project.pendingUnusedChecks 'eachEntry'
 		if functionHasPriorDiagnostic(project, entry: entry) 'skipFn'
 			continue
@@ -1985,7 +1985,7 @@ function collectCalleeName(op MaxonOp, calleesOut FuncNameArray)
 	end 'hasName'
 end 'collectCalleeName'
 
-export function computePurity(project Project, module MaxonModule)
+function computePurity(project Project, module MaxonModule)
 	let impureCallees = buildImpureCalleeSet()
 
 	// Step 1: direct-impurity classification. Default `isPure: true` (from
@@ -2148,7 +2148,7 @@ end 'lookupCalleePurityImpl'
 // unresolved / a type parameter / an interface / a bare base collection (a
 // `Self` param whose substitution dropped the element) — those defer to
 // lowering and never produce a false E3005.
-export function checkCallArgumentTypes(project Project, module MaxonModule)
+module function checkCallArgumentTypes(project Project, module MaxonModule)
 	for func in module.functions 'eachFunc'
 		if isStdlibFunctionPath(func.sourceFilePath) 'isStdlib'
 			continue
@@ -2714,7 +2714,7 @@ function aliasNameForGenericType(project Project, t MaxonType) returns String
 	return ""
 end 'aliasNameForGenericType'
 
-export function checkDiscardedResults(project Project, module MaxonModule)
+function checkDiscardedResults(project Project, module MaxonModule)
 	// Short-circuit if the parser never tagged any discards. Avoids the
 	// per-function walk on the common all-results-used case.
 	if project.discardedBareCallResults.count() == 0 and project.discardedLetCallResults.count() == 0 'noTags'
@@ -2745,7 +2745,7 @@ end 'checkDiscardedResults'
 // True when `path` points at a stdlib source file (bootstrap or any of the
 // whitelisted `stdlib/*.maxon` files). Used to keep the discarded-results
 // check (and other user-only diagnostics) from firing on stdlib internals.
-export function isStdlibFunctionPath(path FilePath) returns bool
+module function isStdlibFunctionPath(path FilePath) returns bool
 	let s = path.toString()
 	if s == "stdlib-bootstrap.maxon" 'isBootstrap'
 		return true

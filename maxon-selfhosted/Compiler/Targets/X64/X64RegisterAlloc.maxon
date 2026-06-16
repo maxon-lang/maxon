@@ -3,7 +3,7 @@
 
 // --- Ordinal conversion ---
 
-export function ordinalToX64(ordinal RegOrdinal) returns X64Register
+function ordinalToX64(ordinal RegOrdinal) returns X64Register
 	return try X64Register.fromRawValue(ordinal) otherwise panic("ordinalToX64: invalid ordinal {ordinal}")
 end 'ordinalToX64'
 
@@ -11,79 +11,79 @@ export function x64RegToOrdinal(reg X64Register) returns RegOrdinal
 	return reg.rawValue
 end 'x64RegToOrdinal'
 
-export function ordinalToXmm(ordinal RegOrdinal) returns X64XmmRegister
+function ordinalToXmm(ordinal RegOrdinal) returns X64XmmRegister
 	return try X64XmmRegister.fromRawValue(ordinal) otherwise panic("ordinalToXmm: invalid ordinal {ordinal}")
 end 'ordinalToXmm'
 
 // --- GPR emission ---
 
-export function emitSpillX64(module TargetModule, dstBlock IrBlock, regOrdinal RegOrdinal, stackOffset RegInt)
+function emitSpillX64(module TargetModule, dstBlock IrBlock, regOrdinal RegOrdinal, stackOffset RegInt)
 	appendX64Op(module, block: dstBlock, op: X64Op.spillToStack(stackOffset, srcReg: physReg(ordinalToX64(regOrdinal))))
 end 'emitSpillX64'
 
-export function emitReloadX64(module TargetModule, dstBlock IrBlock, regOrdinal RegOrdinal, stackOffset RegInt)
+function emitReloadX64(module TargetModule, dstBlock IrBlock, regOrdinal RegOrdinal, stackOffset RegInt)
 	appendX64Op(module, block: dstBlock, op: X64Op.reloadFromStack(physReg(ordinalToX64(regOrdinal)), offset: stackOffset))
 end 'emitReloadX64'
 
-export function emitMovImmX64(module TargetModule, dstBlock IrBlock, regOrdinal RegOrdinal, value RegInt)
+function emitMovImmX64(module TargetModule, dstBlock IrBlock, regOrdinal RegOrdinal, value RegInt)
 	appendIntImmToReg(module, dstBlock: dstBlock, dest: physReg(ordinalToX64(regOrdinal)), value: value)
 end 'emitMovImmX64'
 
-export function emitMovRegX64(module TargetModule, dstBlock IrBlock, destOrd RegOrdinal, srcOrd RegOrdinal)
+function emitMovRegX64(module TargetModule, dstBlock IrBlock, destOrd RegOrdinal, srcOrd RegOrdinal)
 	appendX64Op(module, block: dstBlock, op: X64Op.movRegReg(physReg(ordinalToX64(destOrd)), srcReg: physReg(ordinalToX64(srcOrd))))
 end 'emitMovRegX64'
 
 // --- FP emission ---
 
-export function emitSpillFpX64(module TargetModule, dstBlock IrBlock, fpOrdinal RegOrdinal, stackOffset RegInt)
+function emitSpillFpX64(module TargetModule, dstBlock IrBlock, fpOrdinal RegOrdinal, stackOffset RegInt)
 	appendX64Op(module, block: dstBlock, op: X64Op.spillXmmToStack(stackOffset, src: physFpReg(ordinalToXmm(fpOrdinal)), precision: FloatPrecision.f64))
 end 'emitSpillFpX64'
 
-export function emitReloadFpX64(module TargetModule, dstBlock IrBlock, fpOrdinal RegOrdinal, stackOffset RegInt)
+function emitReloadFpX64(module TargetModule, dstBlock IrBlock, fpOrdinal RegOrdinal, stackOffset RegInt)
 	appendX64Op(module, block: dstBlock, op: X64Op.reloadXmmFromStack(physFpReg(ordinalToXmm(fpOrdinal)), offset: stackOffset, precision: FloatPrecision.f64))
 end 'emitReloadFpX64'
 
-export function emitMovFpX64(module TargetModule, dstBlock IrBlock, destOrd RegOrdinal, srcOrd RegOrdinal)
+function emitMovFpX64(module TargetModule, dstBlock IrBlock, destOrd RegOrdinal, srcOrd RegOrdinal)
 	appendX64Op(module, block: dstBlock, op: X64Op.movXmmXmm(physFpReg(ordinalToXmm(destOrd)), src: physFpReg(ordinalToXmm(srcOrd)), precision: FloatPrecision.f64))
 end 'emitMovFpX64'
 
-export function emitGprToFpX64(module TargetModule, dstBlock IrBlock, fpOrdinal RegOrdinal, gprOrdinal RegOrdinal)
+function emitGprToFpX64(module TargetModule, dstBlock IrBlock, fpOrdinal RegOrdinal, gprOrdinal RegOrdinal)
 	appendX64Op(module, block: dstBlock, op: X64Op.movqGprToXmm(physFpReg(ordinalToXmm(fpOrdinal)), src: physReg(ordinalToX64(gprOrdinal))))
 end 'emitGprToFpX64'
 
 // --- Call/stack emission ---
 
-export function emitCallDirectX64(module TargetModule, dstBlock IrBlock, callee String)
+function emitCallDirectX64(module TargetModule, dstBlock IrBlock, callee String)
 	appendX64Op(module, block: dstBlock, op: X64Op.callDirect(callee))
 end 'emitCallDirectX64'
 
-export function emitCallIndirectX64(module TargetModule, dstBlock IrBlock, regOrd RegOrdinal)
+function emitCallIndirectX64(module TargetModule, dstBlock IrBlock, regOrd RegOrdinal)
 	appendX64Op(module, block: dstBlock, op: X64Op.callIndirect(physReg(ordinalToX64(regOrd))))
 end 'emitCallIndirectX64'
 
-export function emitSubSpX64(module TargetModule, dstBlock IrBlock, amount RegInt)
+function emitSubSpX64(module TargetModule, dstBlock IrBlock, amount RegInt)
 	appendX64Op(module, block: dstBlock, op: X64Op.subRspImm(amount))
 end 'emitSubSpX64'
 
-export function emitAddSpX64(module TargetModule, dstBlock IrBlock, amount RegInt)
+function emitAddSpX64(module TargetModule, dstBlock IrBlock, amount RegInt)
 	appendX64Op(module, block: dstBlock, op: X64Op.addRspImm(amount))
 end 'emitAddSpX64'
 
-export function emitStoreToSpOffsetX64(module TargetModule, dstBlock IrBlock, regOrd RegOrdinal, offset RegInt)
+function emitStoreToSpOffsetX64(module TargetModule, dstBlock IrBlock, regOrd RegOrdinal, offset RegInt)
 	appendX64Op(module, block: dstBlock, op: X64Op.movRspOffsetReg(offset, srcReg: physReg(ordinalToX64(regOrd))))
 end 'emitStoreToSpOffsetX64'
 
-export function emitXchgX64(module TargetModule, dstBlock IrBlock, ord1 RegOrdinal, ord2 RegOrdinal)
+function emitXchgX64(module TargetModule, dstBlock IrBlock, ord1 RegOrdinal, ord2 RegOrdinal)
 	appendX64Op(module, block: dstBlock, op: X64Op.xchgRegReg(physReg(ordinalToX64(ord1)), reg2: physReg(ordinalToX64(ord2))))
 end 'emitXchgX64'
 
-export function emitEpilogueX64(module TargetModule, dstBlock IrBlock)
+function emitEpilogueX64(module TargetModule, dstBlock IrBlock)
 	appendX64Op(module, block: dstBlock, op: X64Op.epilogue)
 end 'emitEpilogueX64'
 
 // --- Register pool configuration ---
 
-export function createX64GprPool() returns RegIntArray
+function createX64GprPool() returns RegIntArray
 	// Ordered for the SSA picker:
 	//   * rax/rcx/rdx last (clobbered by cqo/idiv/shift; deferring lets the
 	//     scheduler keep them free for those implicit uses).
@@ -109,27 +109,27 @@ end 'createX64GprPool'
 // Caller-saved: rax=0, rcx=1, rdx=2, rsi=6, rdi=7, r8=8, r9=9
 // Callee-saved: rbx=3, r12=12, r13=13, r14=14, r15=15
 // Not in pool: rsp=4, rbp=5, r10=10, r11=11
-export function createX64CallerSavedGprs(_ Os) returns RegIntArray
+function createX64CallerSavedGprs(_ Os) returns RegIntArray
 	return [0, 1, 2, 6, 7, 8, 9]
 end 'createX64CallerSavedGprs'
 
-export function createX64CallConvGprs() returns RegIntArray
+function createX64CallConvGprs() returns RegIntArray
 	// Internal calling convention order: rcx=1, rdx=2, rax=0, r9=9, rsi=6, rdi=7, rbx=3
 	// R8 (ordinal 8) is reserved for return values.
 	return [1, 2, 0, 9, 6, 7, 3]
 end 'createX64CallConvGprs'
 
-export function createX64FpPool() returns RegIntArray
+function createX64FpPool() returns RegIntArray
 	// XMM0-7 for allocation (XMM8-15 available but not currently allocated)
 	return [0, 1, 2, 3, 4, 5, 6, 7]
 end 'createX64FpPool'
 
-export function createX64CallerSavedFps() returns RegIntArray
+function createX64CallerSavedFps() returns RegIntArray
 	// XMM0-7 are caller-saved
 	return [0, 1, 2, 3, 4, 5, 6, 7]
 end 'createX64CallerSavedFps'
 
-export function createX64CallConvFps() returns RegIntArray
+function createX64CallConvFps() returns RegIntArray
 	// XMM0-7 for FP arguments
 	return [0, 1, 2, 3, 4, 5, 6, 7]
 end 'createX64CallConvFps'
@@ -152,7 +152,7 @@ end 'createX64RegState'
 
 // --- Register name ---
 
-export function regNameX64(ord RegOrdinal) returns String
+function regNameX64(ord RegOrdinal) returns String
 	return match ord 'x64name'
 		0 gives "rax"
 		1 gives "rcx"
@@ -197,7 +197,7 @@ function isVirtualFpReg(vreg X64FpVReg) returns bool
 end 'isVirtualFpReg'
 
 // Check whether a single X64Op contains any virtual registers.
-export function x64OpHasVirtualRegs(op X64Op) returns bool
+function x64OpHasVirtualRegs(op X64Op) returns bool
 	return match op 'check'
 		prologue to ret gives false
 		movRegImm(dest, _) gives isVirtualGpr(dest)
@@ -440,7 +440,7 @@ end 'x64FpVRegId'
 // ============================================================
 
 // Collect read VReg IDs from an X64 op and record their last use at opIdx.
-export function countX64OpReads(counts RegIntArray, x64Op X64Op)
+function countX64OpReads(counts RegIntArray, x64Op X64Op)
 	match x64Op 'scan'
 		prologue to ret then break 'scan'
 		movRegImm to movRegImm32 then break 'scan'
@@ -529,7 +529,7 @@ end 'countX64OpReads'
 
 // Record the block index where each value is defined.
 // defBlocks[valueId] = blockIdx (using set).
-export function noteX64OpDefs(defBlocks RegIntArray, blockIdx RegInt, x64Op X64Op)
+function noteX64OpDefs(defBlocks RegIntArray, blockIdx RegInt, x64Op X64Op)
 	let pat = x64Op.rawValue.pattern
 	match pat 'patDef'
 		passThrough then break 'patDef'
@@ -749,7 +749,7 @@ end 'noteX64Shift'
 // the phys mask of the GPR dest (a virtual dest contributes 0 via
 // `x64PhysRegMask`). FP-dest patterns contribute 0 — XMM clobbers are not
 // GPR constraints.
-export function x64OpPhysGprDestMask(x64Op X64Op) returns RegMask
+function x64OpPhysGprDestMask(x64Op X64Op) returns RegMask
 	let pat = x64Op.rawValue.pattern
 	return match pat 'patMask'
 		passThrough gives 0
@@ -910,7 +910,7 @@ end 'countX64MixedReads'
 
 // Record the last use position for each read operand of an X64 op.
 // Mirrors countX64OpReads but calls recordLastUse instead of incUse.
-export function recordX64OpLastUses(positions RegIntArray, x64Op X64Op, opIdx RegInt)
+function recordX64OpLastUses(positions RegIntArray, x64Op X64Op, opIdx RegInt)
 	match x64Op 'scan'
 		prologue to ret then break 'scan'
 		movRegImm to movRegImm32 then break 'scan'
@@ -1015,7 +1015,7 @@ end 'recordX64MixedLastUses'
 // Classify an X64 op's reads as sink or non-sink.
 // Sink: movRegReg where dest is physical (call arg / return value setup).
 // Non-sink: everything else that reads a virtual register.
-export function classifyX64OpReads(sinkOnly RegIntArray, usedByNonSink RegIntArray, x64Op X64Op)
+function classifyX64OpReads(sinkOnly RegIntArray, usedByNonSink RegIntArray, x64Op X64Op)
 	if x64Op.rawValue.pattern == OpPattern.movRegReg 'isMov'
 		match x64Op 'extractMov'
 			movRegReg(destReg, srcReg) then classifyX64MovRegReg(sinkOnly, usedByNonSink: usedByNonSink, destReg: destReg, srcReg: srcReg)
@@ -1054,7 +1054,7 @@ end 'isX64RetTerminator'
 // X64 param pre-seeding
 // ============================================================
 
-export function preSeedX64ParamRegisters(module TargetModule, state RegState, srcFunc IrFunction)
+function preSeedX64ParamRegisters(module TargetModule, state RegState, srcFunc IrFunction)
 	if srcFunc.blockRefs.count() == 0 'noBlocks'
 		return
 	end 'noBlocks'
@@ -1162,7 +1162,7 @@ end 'preSeedFpParam'
 // X64 block arg slot homes
 // ============================================================
 
-export function preRecordBlockArgSlotHomes(module TargetModule, state RegState, srcBlock IrBlock)
+function preRecordBlockArgSlotHomes(module TargetModule, state RegState, srcBlock IrBlock)
 	var opIdx = 0
 	let opCount = srcBlock.opRefs.count()
 	while opIdx < opCount 'scanOps'
@@ -1767,7 +1767,7 @@ end 'pushX64ToList'
 
 // Substitute virtual registers in an X64 op with physical register assignments.
 // Pushes the rewritten op(s) to the ops list. Identity moves are eliminated.
-export function colorX64Op(module TargetModule, x64Op X64Op, coloring ColoringResult, opRefs OpIndexList)
+function colorX64Op(module TargetModule, x64Op X64Op, coloring ColoringResult, opRefs OpIndexList)
 	let pattern = x64Op.rawValue.pattern
 
 	match pattern 'dispatch'
@@ -2108,7 +2108,7 @@ function remapFpReg(vreg X64FpVReg, remap RegIntArray) returns X64FpVReg
 end 'remapFpReg'
 
 // Remap all virtual register IDs in an X64Op.
-export function remapX64Op(x64Op X64Op, remap RegIntArray) returns X64Op
+function remapX64Op(x64Op X64Op, remap RegIntArray) returns X64Op
 	let pat = x64Op.rawValue.pattern
 
 	return match pat 'dispatch'
@@ -2542,7 +2542,7 @@ end 'foldCmpToMem'
 // Concrete CopyEmitter for x64 phi / call-arg parallel-copy resolution. Stores
 // concrete module/block/desc (no interface field) and calls the free x64 emit
 // functions, appending movRegReg / movXmmXmm / xchg ops into `dstBlock`.
-export type X64CopyEmitter implements CopyEmitter
+type X64CopyEmitter implements CopyEmitter
 	export var module as TargetModule
 	export var dstBlock as IrBlock
 	export var desc as TargetRegAlloc

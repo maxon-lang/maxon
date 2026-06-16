@@ -561,7 +561,7 @@ end 'unpackSingletonMirModule'
 // `dce` → `stdModulePostDceSnapshot` capture for the cross-module inliner)
 // drive it through the dispatch site in `PassPipeline.dispatch` — see the
 // `dce` arm there.
-export function runStdPassPerFunction(pipeline PassPipeline, kind PassKind)
+function runStdPassPerFunction(pipeline PassPipeline, kind PassKind)
 	var dstFuncs = IrFunctionArray.create()
 	for funcIdx in 0 upto pipeline.stdModule.functions.count() 'eachFunc'
 		let func = try pipeline.stdModule.functions.get(funcIdx) otherwise panic("runStdPassPerFunction: functions.get OOB at {funcIdx}")
@@ -587,7 +587,7 @@ end 'runStdPassPerFunction'
 // `pipeline.stdModulePostDceSnapshot` for the cross-module inliner. The
 // snapshot covers every function in one read, so it runs once after the
 // per-function loop completes.
-export function runDcePerFunctionAndSnapshot(pipeline PassPipeline)
+function runDcePerFunctionAndSnapshot(pipeline PassPipeline)
 	runStdPassPerFunction(pipeline, kind: PassKind.dce)
 	pipeline.stdModulePostDceSnapshot = pipeline.stdModule
 end 'runDcePerFunctionAndSnapshot'
@@ -599,7 +599,7 @@ end 'runDcePerFunctionAndSnapshot'
 // iteration order matches the historical whole-module entry, preserving
 // the order ops are appended into `mirModule.ops` and therefore byte
 // parity with the pre-refactor shape.
-export function runLowerStdToMirPerFunction(pipeline PassPipeline)
+function runLowerStdToMirPerFunction(pipeline PassPipeline)
 	var lowering = prepareMirSkeleton(pipeline.stdModule)
 	for srcFunc in pipeline.stdModule.functions 'eachFunc'
 		lowerStdFunctionToMir(lowering, srcFunc: srcFunc)
@@ -609,7 +609,7 @@ end 'runLowerStdToMirPerFunction'
 
 // Run one MIR-tier `perFunction`-classified pass through the singleton-wrap
 // loop. Mirrors `runStdPassPerFunction` with MIR types.
-export function runMirPassPerFunction(pipeline PassPipeline, kind PassKind)
+function runMirPassPerFunction(pipeline PassPipeline, kind PassKind)
 	var dstFuncs = IrFunctionArray.create()
 	for funcIdx in 0 upto pipeline.mirModule.functions.count() 'eachFunc'
 		let func = try pipeline.mirModule.functions.get(funcIdx) otherwise panic("runMirPassPerFunction: functions.get OOB at {funcIdx}")
@@ -637,7 +637,7 @@ end 'runMirPassPerFunction'
 //
 // `moduleFixup` runs only after every per-function pass has finished,
 // linking per-function code chunks back into the final `.text`.
-export enum PassClassification
+enum PassClassification
 	wholeModule
 	perFunction
 	moduleFixup
@@ -650,7 +650,7 @@ end 'PassClassification'
 // semanticCheck, deadFunctionElimination, buildLayoutDescriptors,
 // buildWitnessTables, augmentWithRuntime. instrumentCoverage is whole-
 // module today because the coverage globals are registered up-front.
-export function classifyPass(pass PassKind) returns PassClassification
+function classifyPass(pass PassKind) returns PassClassification
 	return match pass 'classify'
 		resolveTypes gives PassClassification.wholeModule
 		semanticCheck gives PassClassification.wholeModule
@@ -802,7 +802,7 @@ end 'buildMidPipeline'
 // Returns the backend pipeline (phases 5-6).
 // Phase 7 (target lowering, regalloc, prologue/epilogue) is handled
 // directly by the backend in emitBackendWith / buildStdlibNativeWith.
-export function buildBackendPipeline() returns PassKindArray
+function buildBackendPipeline() returns PassKindArray
 	var passes = PassKindArray.create()
 	// Phase 5: Std → MIR
 	passes.push(PassKind.augmentWithRuntime)
@@ -827,7 +827,7 @@ export function buildWasmBackendPipeline() returns PassKindArray
 end 'buildWasmBackendPipeline'
 
 // Returns the full pipeline (phases 2-7): mid + backend.
-export function buildDefaultPipeline(project Project) returns PassKindArray
+function buildDefaultPipeline(project Project) returns PassKindArray
 	var passes = buildMidPipeline(project)
 	passes.append(buildBackendPipeline())
 	return passes
@@ -925,7 +925,7 @@ export function passTimingsActive() returns bool
 	return passTimingsEnabled
 end 'passTimingsActive'
 
-export function recordPassTime(passName String, elapsedMs PassMillis)
+function recordPassTime(passName String, elapsedMs PassMillis)
 	let prev = try passTimings.get(passName) otherwise 0 as PassMillis
 	passTimings.upsert(passName, value: prev + elapsedMs)
 	let prevCount = try passInvocations.get(passName) otherwise 0 as PassMillis
@@ -1000,7 +1000,7 @@ export function dumpPassTimings()
 end 'dumpPassTimings'
 
 // Returns a human-readable name for a pass, used for logging.
-export function passKindToString(pass PassKind) returns String
+function passKindToString(pass PassKind) returns String
 	return match pass 'name'
 		resolveTypes gives "resolve-types"
 		semanticCheck gives "semantic-check"

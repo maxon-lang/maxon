@@ -66,7 +66,7 @@ end 'loadRuntimeModule'
 var cachedWasmGtRuntime = StdModule.create()
 var wasmGtRuntimeLoaded = false
 
-export function loadWasmGtRuntime() returns StdModule
+function loadWasmGtRuntime() returns StdModule
 	if wasmGtRuntimeLoaded 'cached'
 		return cachedWasmGtRuntime
 	end 'cached'
@@ -164,7 +164,7 @@ end 'isRuntimeFunctionName'
 // `mrt_start`'s entry block (`patchMrtStartWithModuleInits`) — caching a
 // pre-patched body would bind it to whichever project's inits ran during
 // the cache build.
-export function isStartFunctionName(name String) returns bool
+function isStartFunctionName(name String) returns bool
 	return name == "mrt_start" or name == "mrt_start_with_coverage"
 end 'isStartFunctionName'
 
@@ -1808,7 +1808,7 @@ function dumpTargetSummary(module TargetModule, passName String) returns String
 	return dumpModuleSummary(module.functions.count(), blockCount: module.blocks.count(), opCount: module.x64Ops.count() + module.arm64Ops.count(), dialect: module.cpu.name, passName: passName)
 end 'dumpTargetSummary'
 
-export function createLatencyTable(target Target) returns TargetLatencyTable
+module function createLatencyTable(target Target) returns TargetLatencyTable
 	return match target.cpu 'cpu'
 		x64 gives X64Backend.createLatencyTable()
 		arm64 gives Arm64Backend.createLatencyTable()
@@ -1818,7 +1818,7 @@ end 'createLatencyTable'
 
 // Latency lookup for a MIR op by its index in the MirModule. The instruction
 // scheduler calls this per op to drive its critical-path heuristic.
-export function getMirLatencyPacked(module MirModule, packed OpIndex, table TargetLatencyTable) returns Latency
+module function getMirLatencyPacked(module MirModule, packed OpIndex, table TargetLatencyTable) returns Latency
 	let mirOp = try module.ops.get(packed) otherwise panic("invariant: packed opIdx not in module.ops")
 	return getMirLatency(mirOp, table: table)
 end 'getMirLatencyPacked'

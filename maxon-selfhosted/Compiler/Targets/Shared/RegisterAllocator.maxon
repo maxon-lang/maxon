@@ -150,7 +150,7 @@ export type RegState
 end 'RegState'
 
 // Snapshot of register allocator state for carrying assignments across diverging blocks.
-export type RegSnapshot
+type RegSnapshot
 	export var registerContents as RegIntArray
 	export var values as ValueInfoArray
 	export var fpContents as RegIntArray
@@ -186,13 +186,13 @@ export function getValueInfo(state RegState, valueId RegInt) returns ValueInfo
 end 'getValueInfo'
 
 // Save current register allocator state for later restoration.
-export function saveState(state RegState) returns RegSnapshot
+function saveState(state RegState) returns RegSnapshot
 	return RegSnapshot.create(state.registerContents.clone(), values: copyValueInfoArray(state.values), fpContents: state.fpContents.clone(), nextSpillOffset: state.nextSpillOffset, minSpillOffset: state.minSpillOffset)
 end 'saveState'
 
 // Restore register allocator state from a snapshot.
 // Preserves spill offset watermarks if the saved offsets are more allocated.
-export function restoreState(state RegState, snapshot RegSnapshot)
+function restoreState(state RegState, snapshot RegSnapshot)
 	state.registerContents = snapshot.registerContents.clone()
 	state.values = copyValueInfoArray(snapshot.values)
 	state.fpContents = snapshot.fpContents.clone()
@@ -205,7 +205,7 @@ end 'restoreState'
 
 // Restore register state but preserve spill watermarks from both paths.
 // Used for condBr targets where both paths are live (unlike diverging blocks).
-export function restoreStatePreserveSpills(state RegState, snapshot RegSnapshot)
+function restoreStatePreserveSpills(state RegState, snapshot RegSnapshot)
 	state.registerContents = snapshot.registerContents.clone()
 	state.values = copyValueInfoArray(snapshot.values)
 	state.fpContents = snapshot.fpContents.clone()
@@ -307,7 +307,7 @@ end 'set'
 // iteration's freshly-minted reload vregs into the allocator's cumulative
 // reload set, which buildLiveRanges then consults to assign
 // SPILL_WEIGHT_INFINITE to those ranges.
-export function unionReloadIds(dest BoolArray, source BoolArray)
+function unionReloadIds(dest BoolArray, source BoolArray)
 	let n = source.count()
 	while dest.count() < n 'grow'
 		dest.push(false)
@@ -324,7 +324,7 @@ end 'unionReloadIds'
 
 // --- Core state operations ---
 
-export function assign(state RegState, regOrdinal RegOrdinal, valueId RegInt)
+function assign(state RegState, regOrdinal RegOrdinal, valueId RegInt)
 	// If this value was previously in a different register, clear that old mapping
 	// to prevent stale registerContents entries (e.g. after pre-seeded param moves).
 	var info = getValueInfo(state, valueId: valueId)
@@ -343,13 +343,13 @@ export function assign(state RegState, regOrdinal RegOrdinal, valueId RegInt)
 	try state.lastUsed.set(regOrdinal, value: state.currentOpIndex) otherwise panic("invariant: state.lastUsed.set OOB")
 end 'assign'
 
-export function recordConstant(state RegState, valueId RegInt, value RegInt)
+function recordConstant(state RegState, valueId RegInt, value RegInt)
 	var info = getValueInfo(state, valueId: valueId)
 	info.constantValue = value
 	info.isConstant = true
 end 'recordConstant'
 
-export function advanceOp(state RegState)
+function advanceOp(state RegState)
 	state.currentOpIndex = state.currentOpIndex + 1
 end 'advanceOp'
 
@@ -386,7 +386,7 @@ end 'updateSpillWatermark'
 // spillBaseOffset is where spills start; minSpillOffset tracks the watermark
 // (lowest offset for downward growth, highest for upward). The absolute
 // distance between them is the spill extent, rounded up to 16-byte alignment.
-export function totalStackSize(state RegState) returns RegInt
+function totalStackSize(state RegState) returns RegInt
 	updateSpillWatermark(state)
 	let raw = trunc(abs(state.spillBaseOffset - state.minSpillOffset))
 	if raw > 0 'hasSpills'
@@ -397,7 +397,7 @@ end 'totalStackSize'
 
 // --- FP register assignment ---
 
-export function assignFp(state RegState, fpOrdinal RegOrdinal, valueId RegInt)
+function assignFp(state RegState, fpOrdinal RegOrdinal, valueId RegInt)
 	try state.fpContents.set(fpOrdinal, value: valueId) otherwise panic("invariant: state.fpContents.set OOB")
 	var vi = getValueInfo(state, valueId: valueId)
 	vi.fpOrdinal = fpOrdinal
@@ -406,7 +406,7 @@ end 'assignFp'
 
 // --- Value lifetime ---
 
-export function noteValueDead(state RegState, valueId RegInt)
+function noteValueDead(state RegState, valueId RegInt)
 	var info = getValueInfo(state, valueId: valueId)
 	let regOrd = info.gprOrdinal
 	if regOrd != RM_NONE 'inReg'
@@ -423,7 +423,7 @@ export function noteValueDead(state RegState, valueId RegInt)
 	end 'inFp'
 end 'noteValueDead'
 
-export function noteStoreToStack(state RegState, valueId RegInt, stackOffset RegInt)
+function noteStoreToStack(state RegState, valueId RegInt, stackOffset RegInt)
 	var vi = getValueInfo(state, valueId: valueId)
 	vi.stackHome = stackOffset
 end 'noteStoreToStack'
@@ -431,7 +431,7 @@ end 'noteStoreToStack'
 // Clear the virtual register mapping for a physical register.
 // Used after instructions that clobber a register with a new value
 // (e.g., IDIV writing quotient to RAX and remainder to RDX).
-export function clearRegisterContents(state RegState, regOrdinal RegOrdinal)
+function clearRegisterContents(state RegState, regOrdinal RegOrdinal)
 	let occupant = getOr(state.registerContents, index: regOrdinal, fallback: RM_NONE)
 	if occupant != RM_NONE 'hasOccupant'
 		var occVI = getValueInfo(state, valueId: occupant)
@@ -441,7 +441,7 @@ export function clearRegisterContents(state RegState, regOrdinal RegOrdinal)
 	end 'hasOccupant'
 end 'clearRegisterContents'
 
-export function clearRegisterMapping(state RegState, valueId RegInt)
+function clearRegisterMapping(state RegState, valueId RegInt)
 	var info = getValueInfo(state, valueId: valueId)
 	if info.gprOrdinal != RM_NONE 'hasMapping'
 		info.gprOrdinal = RM_NONE
@@ -466,7 +466,7 @@ export function terminatorIsConditionalBranch(module TargetModule, packed OpInde
 	end 'dispatch'
 end 'terminatorIsConditionalBranch'
 
-export function terminatorIsCondBrX64(module TargetModule, packed OpIndex) returns bool
+function terminatorIsCondBrX64(module TargetModule, packed OpIndex) returns bool
 	let x64Op = try module.x64Ops.get(packed) otherwise panic("invariant: packed opIdx not in module.x64Ops")
 	return match x64Op 'check'
 		condJump gives true
@@ -475,7 +475,7 @@ export function terminatorIsCondBrX64(module TargetModule, packed OpIndex) retur
 	end 'check'
 end 'terminatorIsCondBrX64'
 
-export function terminatorIsCondBrArm64(module TargetModule, packed OpIndex) returns bool
+function terminatorIsCondBrArm64(module TargetModule, packed OpIndex) returns bool
 	let a64Op = try module.arm64Ops.get(packed) otherwise panic("invariant: packed opIdx not in module.arm64Ops")
 	return match a64Op 'check'
 		condBranch gives true

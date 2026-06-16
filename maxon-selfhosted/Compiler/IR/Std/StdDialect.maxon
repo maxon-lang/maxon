@@ -684,7 +684,7 @@ export function stdOpToString(op StdOp, blocks IrBlockArray) returns String
 	end 'outer'
 end 'stdOpToString'
 
-export function arithOpToString(op StdArithOp) returns String
+function arithOpToString(op StdArithOp) returns String
 	return match op 'dispatch'
 		const(c) gives arithConstToString(c)
 		unary(u) gives arithUnaryOpToString(u)
@@ -715,7 +715,7 @@ function arithUnaryOpToString(op StdArithUnaryOp) returns String
 	end 'toString'
 end 'arithUnaryOpToString'
 
-export function cfOpToString(op StdControlOp, blocks IrBlockArray) returns String
+function cfOpToString(op StdControlOp, blocks IrBlockArray) returns String
 	return match op 'print'
 		br(target, argIds) gives cfBrToString(target, argIds: argIds, blocks: blocks)
 		condBr(condId, thenTarget, thenArgIds, elseTarget, elseArgIds) gives cfCondBrToString(condId, thenTarget: thenTarget, thenArgIds: thenArgIds, elseTarget: elseTarget, elseArgIds: elseArgIds, blocks: blocks)
@@ -770,7 +770,7 @@ function funcOpWitnessTryCallToString(resultId ValueId, witnessAddrId ValueId, m
 	return "%{resultId}, %{errorFlagId} = func.witness_try_call %{witnessAddrId}, [{methodIndex}]({formatArgIds(argIds)})"
 end 'funcOpWitnessTryCallToString'
 
-export function funcOpToString(op StdCallOp) returns String
+function funcOpToString(op StdCallOp) returns String
 	return match op 'print'
 		ret(retValId) gives "func.return %{retValId}"
 		call(resultId, callee, argIds) gives "%{resultId} = func.call @{callee}({formatArgIds(argIds)})"
@@ -785,14 +785,14 @@ export function funcOpToString(op StdCallOp) returns String
 	end 'print'
 end 'funcOpToString'
 
-export function memRefOpToString(op StdMemoryOp) returns String
+function memRefOpToString(op StdMemoryOp) returns String
 	return match op 'print'
 		storeSlot(slotId, valueId) gives "memref.store %{valueId}, slot_{slotId}"
 		loadSlot(resultId, slotId) gives "%{resultId} = memref.load slot_{slotId}"
 	end 'print'
 end 'memRefOpToString'
 
-export function sysOpToString(op StdSystemOp) returns String
+function sysOpToString(op StdSystemOp) returns String
 	return match op 'print'
 		globalAddr(resultId, name) gives "%{resultId} = sys.global_addr @{name}"
 		memcpy(dstId, srcId, lenId) gives "sys.memcpy %{dstId}, %{srcId}, %{lenId}"

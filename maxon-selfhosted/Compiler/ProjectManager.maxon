@@ -4,7 +4,7 @@
 
 export typealias FilePathArray = Array with FilePath
 
-export type ProjectManager
+type ProjectManager
 	// Parallel arrays: keys[i] is the path key for projects[i]
 	export var keys as FilePathArray
 	export var projects as ProjectArray
@@ -17,14 +17,14 @@ export type ProjectManager
 	end 'create'
 end 'ProjectManager'
 
-export function createProjectManager() returns ProjectManager
+function createProjectManager() returns ProjectManager
 	return ProjectManager.create()
 end 'createProjectManager'
 
 // Returns the project that owns filePath, creating one if needed.
 // Walks up from filePath looking for build.maxon to determine project root.
 // Falls back to a single-file project if no build.maxon is found.
-export function getOrCreateProject(mgr ProjectManager, filePath FilePath) returns Project throws CompileError
+function getOrCreateProject(mgr ProjectManager, filePath FilePath) returns Project throws CompileError
 	// Check if an existing project already contains this file
 	let existing = try findProjectForFile(mgr, filePath: filePath) otherwise return try createNewProject(mgr, filePath: filePath)
 	return existing
@@ -69,7 +69,7 @@ end 'createNewProject'
 
 // Searches all managed projects for one that contains filePath.
 // Throws CompileError if no project contains the file.
-export function findProjectForFile(mgr ProjectManager, filePath FilePath) returns Project throws CompileError
+function findProjectForFile(mgr ProjectManager, filePath FilePath) returns Project throws CompileError
 	for project in mgr.projects 'scan'
 		if filePath.startsWith(project.rootPath) 'contains'
 			return project
@@ -80,7 +80,7 @@ end 'findProjectForFile'
 
 // Walks up from filePath's directory looking for build.maxon.
 // Returns the directory containing build.maxon, or empty FilePath if not found.
-export function findProjectRoot(filePath FilePath) returns FilePath
+function findProjectRoot(filePath FilePath) returns FilePath
 	var dir = try filePath.parent() otherwise return FilePath from ""
 	for _ in 0 upto 20 'search'
 		let buildPath = dir.join("build.maxon")

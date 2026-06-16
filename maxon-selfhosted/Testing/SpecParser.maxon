@@ -93,7 +93,7 @@ end 'SpecTest'
 
 export typealias SpecTestArray = Array with SpecTest
 
-export type SpecFile
+type SpecFile
 	export var filePath as String
 	export var frontmatter as SpecFrontmatter
 	export var tests as SpecTestArray
@@ -190,7 +190,7 @@ end 'stripTrailingFence'
 // included in the block. Without this, the reader greedily swallows the next
 // test's source until it finds a standalone ``` line, mis-attributing the
 // neighbour's exitcode/stdout to the malformed test.
-export function readCodeBlock(lines TextLineArray, startLine LineNumber, lineCount LineNumber) returns String
+function readCodeBlock(lines TextLineArray, startLine LineNumber, lineCount LineNumber) returns String
 	var result = ""
 	var first = true
 	for i in startLine upto lineCount 'read'
@@ -220,7 +220,7 @@ export function readCodeBlock(lines TextLineArray, startLine LineNumber, lineCou
 end 'readCodeBlock'
 
 // Skip past a code block's closing ```.
-export function skipCodeBlock(lines TextLineArray, startLine LineNumber, lineCount LineNumber) returns LineNumber
+function skipCodeBlock(lines TextLineArray, startLine LineNumber, lineCount LineNumber) returns LineNumber
 	for i in startLine upto lineCount 'scan'
 		let line = try lines.get(i) otherwise break
 		if line.startsWith("```") 'endBlock'
@@ -332,7 +332,7 @@ end 'splitMultiFileSource'
 // it names (comma-separated, each trimmed). Returns an empty array if the
 // content between `targets:` and ` -->` is missing or blank, which the caller
 // treats the same as "no restriction" (run on all targets).
-export function parseTargetsDirective(line String) returns TargetKeyArray
+function parseTargetsDirective(line String) returns TargetKeyArray
 	var result = TargetKeyArray.create()
 
 	// Advance past the literal "targets:" (8 chars) to the start of the value.
@@ -677,7 +677,7 @@ export function parseSpecFile(content String, targetKey String) returns SpecTest
 end 'parseSpecFile'
 
 // Extract executable examples from the ## Documentation section.
-export function extractDocExamples(content String) returns SpecTestArray
+function extractDocExamples(content String) returns SpecTestArray
 	var tests = SpecTestArray.create()
 	let lines = content.split("\n")
 	let lineCount = lines.count()

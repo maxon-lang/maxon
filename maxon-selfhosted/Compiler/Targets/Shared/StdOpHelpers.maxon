@@ -49,7 +49,7 @@ export function valueSlotMapSet(m ValueSlotMap, valueId ValueId, slot VarSlot)
 	try m.set(valueId, value: slot) otherwise panic("invariant: m.set OOB")
 end 'valueSlotMapSet'
 
-export function maxOf(a SlotIndex, b SlotIndex) returns SlotIndex
+function maxOf(a SlotIndex, b SlotIndex) returns SlotIndex
 	if a > b 'aGreater'
 		return a
 	end 'aGreater'
@@ -96,7 +96,7 @@ end 'determineJumpKindInBlock'
 // Determine the jump kind, optionally verifying the comparison defines condId.
 // If condId >= 0, only a comparison that defines condId is accepted.
 // If condId < 0, the first comparison found (scanning backward) is used.
-export function determineJumpKindForCond(module MirModule, block IrBlock, condId ValueId) returns JumpKind
+function determineJumpKindForCond(module MirModule, block IrBlock, condId ValueId) returns JumpKind
 	var j = block.opRefs.count() - 1
 	while j >= 0 'scanBack'
 		let opIdx = try block.opRefs.get(j) otherwise 'skipBack'
@@ -174,7 +174,7 @@ end 'mirPredicateToJumpKind'
 // Body SSA valueIds are small (typically < 100), so 1000000+ won't conflict.
 let PARAM_SENTINEL_BASE = 1000000
 
-export function paramSentinel(slotIdx VarSlot) returns RegInt
+function paramSentinel(slotIdx VarSlot) returns RegInt
 	return PARAM_SENTINEL_BASE + slotIdx
 end 'paramSentinel'
 
@@ -245,7 +245,7 @@ end 'computeOverflowStackOffset'
 // carry a `stdlib.` prefix from Maxon-phase qualification. The linker resolves the
 // two by the bare symbol, but pre-link backend param/return type lookups need this
 // bridge to find the qualified definition.
-export function calleeNameMatches(funcName String, callee String) returns bool
+function calleeNameMatches(funcName String, callee String) returns bool
 	if funcName == callee 'exact'
 		return true
 	end 'exact'
@@ -445,7 +445,7 @@ export function scanMaxMirValueId(module MirModule, func IrFunction) returns Val
 	return maxId
 end 'scanMaxMirValueId'
 
-export function scanMaxMirValueIdForOp(module MirModule, packed OpIndex) returns ValueId
+function scanMaxMirValueIdForOp(module MirModule, packed OpIndex) returns ValueId
 	let op = try module.ops.get(packed) otherwise panic("scanMaxMirValueIdForOp: packed opIdx not in module.ops")
 	return mirOpMaxValueId(op)
 end 'scanMaxMirValueIdForOp'
@@ -453,7 +453,7 @@ end 'scanMaxMirValueIdForOp'
 // Compute the maximum ValueId defined or used by a single MIR op. Operates
 // directly on `MirOp`, so callers that already hold the op (e.g. ISel
 // dispatchers) can skip the module.ops indirection.
-export function mirOpMaxValueId(op MirOp) returns ValueId
+function mirOpMaxValueId(op MirOp) returns ValueId
 	return match op 'pick'
 		movImm(resultId, _, _) gives resultId
 		movReg(resultId, srcId) gives maxOfTwoValueIds(resultId, b: srcId)
@@ -519,11 +519,11 @@ export function mirOpMaxValueId(op MirOp) returns ValueId
 	end 'pick'
 end 'mirOpMaxValueId'
 
-export function maxOfTwoValueIds(a ValueId, b ValueId) returns ValueId
+function maxOfTwoValueIds(a ValueId, b ValueId) returns ValueId
 	return a if a >= b else b
 end 'maxOfTwoValueIds'
 
-export function maxOfThreeValueIds(a ValueId, b ValueId, c ValueId) returns ValueId
+function maxOfThreeValueIds(a ValueId, b ValueId, c ValueId) returns ValueId
 	return maxOfTwoValueIds(maxOfTwoValueIds(a, b: b), b: c)
 end 'maxOfThreeValueIds'
 

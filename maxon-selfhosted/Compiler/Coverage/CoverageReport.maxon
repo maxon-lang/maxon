@@ -11,13 +11,13 @@
 // Both paths share the same parseCovMap, parseCovData, accumulate, and
 // writeLcov primitives.
 
-export typealias HitCount = int(0 to u64.max)
+typealias HitCount = int(0 to u64.max)
 export typealias CovNumSites = int(0 to 1_000_000)
 
 // One row of a .covmap file. siteId indexes into the counters[] array from
 // the matching .covdata, and filePath + lines tells us which source lines
 // receive the count.
-export type CovMapEntry
+type CovMapEntry
 	export var siteId as CovSiteId
 	export var filePath as String
 	export var lines as LineNumberArray
@@ -31,7 +31,7 @@ export typealias CovMapEntryArray = Array with CovMapEntry
 
 // Result of parsing a .covdata file. `counters.count()` must equal the
 // emitting exe's numSites; bad files return a zero-length counters array.
-export type CovDataResult
+type CovDataResult
 	export var numSites as CovNumSites
 	export var counters as HitCountArray
 
@@ -45,7 +45,7 @@ export typealias HitCountArray = Array with HitCount
 // Per-line hit record used inside the aggregator. Separate fields (rather
 // than a tuple) so it can serve as the element type of a typealias'd Array
 // that the Map inlines cleanly.
-export type LineHit
+type LineHit
 	export var line as LineNumber
 	export var count as HitCount
 
@@ -62,7 +62,7 @@ export typealias LineNumberIndexMap = Map with (LineNumber, MachineWord)
 // LineNumber so accumulate / findLineCount can reach a given entry in O(1)
 // instead of scanning the whole array. Both views are kept in sync by
 // `recordHit`; downstream consumers only read the array.
-export type FileHits
+type FileHits
 	export var lines as LineHitArray
 	export var lineIndex as LineNumberIndexMap
 
@@ -94,7 +94,7 @@ export type FileHits
 	end 'lookupCount'
 end 'FileHits'
 
-export enum NotInstrumented implements Error
+enum NotInstrumented implements Error
 	notInstrumented
 end 'NotInstrumented'
 
@@ -104,7 +104,7 @@ export typealias FileHitsMap = Map with (String, FileHits)
 // Parse a covmap text file. Each line is "{siteId}\t{filePath}\t{l1,l2,...}".
 // Empty line arrays are preserved so the siteId sequence stays dense — the
 // aggregator just skips entries whose lines array is empty.
-export function parseCovMap(path FilePath) returns CovMapEntryArray throws FileReadError
+function parseCovMap(path FilePath) returns CovMapEntryArray throws FileReadError
 	let text = try File.readText(path)
 	var entries = CovMapEntryArray.create()
 	let rows = text.split("\n")
@@ -137,7 +137,7 @@ end 'parseCovMap'
 // + numSites*8 bytes LE counters. Bad magic or truncation yields an empty
 // counters array rather than an error — a missing/corrupt file shouldn't
 // abort an otherwise-working coverage report.
-export function parseCovData(path FilePath) returns CovDataResult throws FileReadError
+function parseCovData(path FilePath) returns CovDataResult throws FileReadError
 	let bytes = try File.readBinary(path)
 	let len = bytes.count()
 	if len < 8 'tooShort'
@@ -180,7 +180,7 @@ end 'parseCovData'
 // are u64 so additions across many test runs stay exact. Sites whose covmap
 // entry has an empty lines array contribute nothing — they exist only to
 // keep the siteId sequence dense.
-export function accumulate(entries CovMapEntryArray, counters HitCountArray, agg FileHitsMap)
+function accumulate(entries CovMapEntryArray, counters HitCountArray, agg FileHitsMap)
 	for entry in entries 'entry'
 		if entry.siteId >= counters.count() 'outOfRange'
 			continue
@@ -301,7 +301,7 @@ end 'countHits'
 // If a source file can't be read (e.g. a cleaned-up .test fragment) the
 // per-file page still renders with a "source not available" placeholder so
 // the index link never dangles. The aggregator itself is read-only.
-export function writeHtml(agg FileHitsMap, outputDir FilePath) throws FileWriteError
+function writeHtml(agg FileHitsMap, outputDir FilePath) throws FileWriteError
 	if not Directory.exists(outputDir) 'noDir'
 		_ = Directory.create(outputDir)
 	end 'noDir'
@@ -467,7 +467,7 @@ end 'sortCoverageRows'
 // Emit a standard LCOV tracefile. We only use the SF / DA / end_of_record
 // triplet — sufficient for genhtml and every LCOV viewer — so the output is
 // minimal but fully compatible.
-export function writeLcov(agg FileHitsMap, path FilePath) throws FileWriteError
+function writeLcov(agg FileHitsMap, path FilePath) throws FileWriteError
 	var buf = ""
 	for (filePath, hits) in agg 'each'
 		buf.append("SF:{filePath}\n")
@@ -486,7 +486,7 @@ end 'writeLcov'
 // Return (hitLines, totalLines) across every file in the accumulator. We
 // count distinct (file, line) pairs so repeated hits on the same line stay
 // one line in the denominator.
-export function coverageSummary(agg FileHitsMap) returns (HitCount, HitCount)
+function coverageSummary(agg FileHitsMap) returns (HitCount, HitCount)
 	var hit = 0
 	var total = 0
 	for (_, hits) in agg 'each'
@@ -606,14 +606,14 @@ export typealias FilePathArray = Array with FilePath
 
 // Compute an integer percentage (0..100) for display. Zero-line reports
 // render as 0% so callers don't need to special-case them.
-export function coveragePercent(hit HitCount, total HitCount) returns CoveragePct
+function coveragePercent(hit HitCount, total HitCount) returns CoveragePct
 	if total == 0 'empty'
 		return 0
 	end 'empty'
 	return trunc((hit * 100) / total) as CoveragePct
 end 'coveragePercent'
 
-export typealias CoveragePct = int(0 to 100)
+typealias CoveragePct = int(0 to 100)
 
 function readU32LE(bytes ByteArray, offset ByteOffset) returns CovNumSites
 	// Caller's contract: offset+4 <= bytes.count(). All four reads share this invariant.

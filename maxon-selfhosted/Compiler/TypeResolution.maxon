@@ -158,7 +158,7 @@ end 'isGenericAliasExpr'
 // True iff `expr` is a `functionAlias(...)` arm. Mirrors `isGenericAliasExpr`
 // so the drain pass can route function-type aliases into `genericTypealiases`
 // via their own fast path (the carried MaxonType is already fully resolved).
-export function isFunctionAliasExpr(expr UnresolvedTypeExpr) returns bool
+function isFunctionAliasExpr(expr UnresolvedTypeExpr) returns bool
 	return match expr 'check'
 		functionAlias gives true
 		genericAlias gives false
@@ -260,7 +260,7 @@ end 'buildGenericInstanceType'
 // the arg names without registry validation and resolves them lazily, so
 // the existence check has to wait until every type registry is populated
 // (typealiases, structs, enums, type parameters of the enclosing decl).
-export function drainPendingConstraintChecks(project Project)
+function drainPendingConstraintChecks(project Project)
 	for check in project.pendingConstraintChecks 'eachCheck'
 		// Snapshot the diagnostic count so we can detect whether this
 		// alias's validation emitted any error (E3017 / E2003 / E3015 /
@@ -286,7 +286,7 @@ end 'drainPendingConstraintChecks'
 // validation has been recorded in `constraintFailedTypealiases` and we
 // can drop its E3062 — matches the bootstrap's single-diagnostic shape
 // when a `typealias X = Base with BadArg` triggers E3017.
-export function drainPendingUnusedTypealiases(project Project)
+function drainPendingUnusedTypealiases(project Project)
 	for entry in project.pendingUnusedTypealiases 'eachEntry'
 		if project.constraintFailedTypealiases.contains(entry.name) 'hadConstraintError'
 			continue
@@ -433,7 +433,7 @@ end 'builtinStringLiteralType'
 // parse time and cached (see the stdlib Library's `builtinArrayLiteralTypeName` field
 // and the parser's `discoverBuiltinArrayLiteralType`). Panics if undiscovered (an array
 // literal cannot be lowered without an implementing type).
-export function builtinArrayLiteralTypeName() returns String
+module function builtinArrayLiteralTypeName() returns String
 	return requireDiscoveredLiteralTypeName(getCachedBuiltinArrayLiteralTypeName(), protocol: "BuiltinArrayLiteral", literalKind: "array/byte-string literals")
 end 'builtinArrayLiteralTypeName'
 
@@ -531,7 +531,7 @@ function validateConstraintsFor(project Project, baseName String, args StringArr
 	end 'eachClause'
 end 'validateConstraintsFor'
 
-export function lookupTypeParamsForBase(project Project, baseName String) returns StringArray
+module function lookupTypeParamsForBase(project Project, baseName String) returns StringArray
 	if let unresolved = try project.unresolvedStructTypes.get(baseName) 'unresolvedHit'
 		return unresolved.typeParams
 	end 'unresolvedHit'
@@ -1415,7 +1415,7 @@ end 'resolveAllEnumTypes'
 // and stamp the enum's `functionBackingTypeId` with the shared
 // `FunctionTypeId`. On failure: report a diagnostic and leave the enum
 // in its placeholder state.
-export function resolveFunctionBackedEnumRefs(project Project)
+function resolveFunctionBackedEnumRefs(project Project)
 	// Collect the work first, then mutate the map after — Maxon for-in
 	// tuple bindings are immutable, so we can't update enumDef in place
 	// during the iteration. The map.upsert at the end writes the resolved
@@ -1523,7 +1523,7 @@ end 'roundUpToMultiple'
 // Structs whose fields are all already `offsetResolved: true` (i.e.
 // loaded from the stdlib cache, or synthesized at lowering time with
 // hand-baked offsets) are left untouched.
-export function layoutAllStructs(project Project)
+function layoutAllStructs(project Project)
 	// Iterating `project.structTypes` by value yields immutable copies of
 	// each StructType, so we accumulate the rebuilt entries and `upsert`
 	// them after the walk. Mutating in-place would be cheaper but the map
@@ -2033,7 +2033,7 @@ function isAliasFullRange(project Project, aliasName String, range TypealiasRang
 	return range.lower <= i64.min and range.upper == i64.max
 end 'isAliasFullRange'
 
-export type LiteralProducer
+module type LiteralProducer
 	export var found as bool
 	export var value as ParsedInt
 
@@ -2063,7 +2063,7 @@ end 'LiteralProducer'
 // constants. Constrained to function-local ops because synthetic names
 // (`$t1`, …) repeat across functions and a flat module-wide walk would
 // alias unrelated literals.
-export function findLiteralProducerInFunc(project Project, module MaxonModule, func IrFunction, operandName ByteArray) returns LiteralProducer
+module function findLiteralProducerInFunc(project Project, module MaxonModule, func IrFunction, operandName ByteArray) returns LiteralProducer
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("findLiteralProducerInFunc: blockRef OOB")
 		for opIdx in block.opRefs 'eachOp'
@@ -3665,7 +3665,7 @@ end 'typeParamBelongsToEnclosing'
 // context at parse time); call sites that learn the receiver's
 // `genericInstance(EnclosingType, [Args])` later in the pipeline pass
 // it as `candidate` to recover the binding.
-export function promoteNamedToGenericInstance(project Project, raw MaxonType, candidate MaxonType) returns MaxonType
+module function promoteNamedToGenericInstance(project Project, raw MaxonType, candidate MaxonType) returns MaxonType
 	if not maxonTypeIsNamed(raw) 'rawNotNamed'
 		return raw
 	end 'rawNotNamed'
@@ -4244,7 +4244,7 @@ end 'applyInnerAliasFromReceiver'
 // and try to apply it to `t`. First hit wins — alias names are
 // project-wide unique within the stdlib so there's no ambiguity in
 // practice. Returns `t` unchanged when no conformance hit.
-export function applyInnerAliasFromInterfaces(project Project, t MaxonType, receiverStructName String) returns MaxonType
+module function applyInnerAliasFromInterfaces(project Project, t MaxonType, receiverStructName String) returns MaxonType
 	for confId in project.conformances.idsForType(receiverStructName) 'scan'
 		let interfaceName = try project.conformances.interfaceNames.get(confId) otherwise panic("applyInnerAliasFromInterfaces: interfaceNames.get OOB at {confId}")
 		let iface = try project.interfaces.get(interfaceName) otherwise continue
@@ -4264,7 +4264,7 @@ end 'applyInnerAliasFromInterfaces'
 // global generic typealiases. Lets `Self.managed` (declared as
 // `ElementMemory`) flow downstream as `genericInstance(__ManagedMemory,
 // [Element])` so call-site result-type lookups can find the struct.
-export function normalizeReceiverInContext(project Project, t MaxonType, enclosingType String) returns MaxonType
+module function normalizeReceiverInContext(project Project, t MaxonType, enclosingType String) returns MaxonType
 	return match t 'norm'
 		named(id) gives normalizeNamedReceiver(project, id: id, enclosingType: enclosingType)
 		boolean to character gives t
@@ -4601,7 +4601,7 @@ end 'firstGenericArg'
 // for generic types we build a `genericInstance(typeName, [typeParam, ...])`
 // keyed on the type's declared `usesParams` so substitution upstream
 // correctly carries `typeParameter(...)` ids through the body.
-export function synthesizeSelfReceiver(project Project, typeName String) returns MaxonType
+function synthesizeSelfReceiver(project Project, typeName String) returns MaxonType
 	let baseId = project.typeNames.intern(typeName)
 	let paramNames = project.typeParameters.getParamNames(typeName)
 	if paramNames.count() == 0 'nonGeneric'
@@ -4626,7 +4626,7 @@ end 'synthesizeSelfReceiver'
 //   2. Type-parameter substitution: if the receiver is a
 //      `genericInstance`, build the (paramName -> concrete) substitution
 //      from its args and apply through `substituteType`.
-export function resolveFieldTypeInContext(project Project, fieldType MaxonType, structType StructType, receiverType MaxonType) returns MaxonType
+function resolveFieldTypeInContext(project Project, fieldType MaxonType, structType StructType, receiverType MaxonType) returns MaxonType
 	let aliasResolved = applyInnerAliasIfNamed(project, t: fieldType, innerAliases: structType.innerAliases)
 	let subst = buildSubstitutionForInstance(project, t: receiverType)
 	if subst.isEmpty() 'noSubst'
@@ -4638,7 +4638,7 @@ end 'resolveFieldTypeInContext'
 // Phase 11.1 step 5e: when `t` is a `MaxonType.named(name)` and `name`
 // matches an inner-typealias on the surrounding struct, return the
 // resolved MaxonType. Otherwise pass through unchanged.
-export function applyInnerAliasIfNamed(project Project, t MaxonType, innerAliases ResolvedInnerAliasMap) returns MaxonType
+module function applyInnerAliasIfNamed(project Project, t MaxonType, innerAliases ResolvedInnerAliasMap) returns MaxonType
 	if innerAliases.count() == 0 'empty'
 		return t
 	end 'empty'
@@ -4702,7 +4702,7 @@ end 'lookupInnerAliasOrPassThrough'
 // on a registered struct (e.g. free functions), when the receiver carries
 // no generic args (non-generic struct), and the inner-alias map is empty —
 // the cheap-path for non-generic call sites pays only one map lookup.
-export function resolveCalleeParamTypeInContext(project Project, paramType MaxonType, calleeQualifiedName String, receiverType MaxonType) returns MaxonType
+function resolveCalleeParamTypeInContext(project Project, paramType MaxonType, calleeQualifiedName String, receiverType MaxonType) returns MaxonType
 	if let enclosingType = try enclosingTypeNameForCallee(project, callee: calleeQualifiedName) 'haveEnclosing'
 		// Inner-aliases may live on a struct OR an interface (when the method
 		// is declared inside `extension SomeInterface`). Try the struct registry
@@ -4751,7 +4751,7 @@ end 'resolveCalleeParamTypeInContext'
 // interfaces. The interface paths exist so methods declared inside an
 // `extension <SomeInterface> ... end` block get their enclosing type
 // resolved the same way a method declared on a struct does.
-export function enclosingTypeNameForCallee(project Project, callee String) returns String throws EnclosingTypeError
+function enclosingTypeNameForCallee(project Project, callee String) returns String throws EnclosingTypeError
 	let bytes = callee.toByteArray()
 	let count = bytes.count()
 	let dotIdx = lastIndexOfDotByte(bytes)
@@ -4771,7 +4771,7 @@ export function enclosingTypeNameForCallee(project Project, callee String) retur
 	throw EnclosingTypeError.notAMethod
 end 'enclosingTypeNameForCallee'
 
-export enum EnclosingTypeError implements Error
+module enum EnclosingTypeError implements Error
 	notAMethod
 end 'EnclosingTypeError'
 
@@ -4921,7 +4921,7 @@ end 'stringConstResultType'
 // (i8/u8) via the consuming typealias, not the MaxonType encoding.
 // Exported so `LowerMaxonToStd.lowerByteStringLiteral` can pin the
 // per-function value-type map to the identical gid the resolver wrote.
-export function byteStringLiteralResultType(project Project) returns MaxonType
+module function byteStringLiteralResultType(project Project) returns MaxonType
 	return internSingleArgGenericInstance(project, baseTypeName: builtinArrayLiteralTypeName(), elementType: MaxonType.integer)
 end 'byteStringLiteralResultType'
 
@@ -5994,7 +5994,7 @@ end 'fillUnresolvedTypes'
 // (which discovers newly-cloned monomorphization bodies after the module-wide
 // fill has already run) can reuse the same per-op fill discipline without
 // rebuilding the perFunc maps just to dispatch into the inner walk.
-export function runFillUnresolvedTypesForFunc(project Project, module MaxonModule, func IrFunction, producerTypes ProducerTypeMap, slotTypes SlotTypeMap)
+function runFillUnresolvedTypesForFunc(project Project, module MaxonModule, func IrFunction, producerTypes ProducerTypeMap, slotTypes SlotTypeMap)
 	let enclosingType = try enclosingTypeNameForCallee(project, callee: func.name) otherwise ""
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("runFillUnresolvedTypesForFunc: blockRef OOB")
@@ -7274,7 +7274,7 @@ end 'validateSelfFields'
 
 // Throws when the function name has no `.` (free function rather than a
 // method). Caller uses `if let` to take the method-on-struct path.
-export function enclosingTypeName(funcName String) returns String throws EnclosingTypeError
+module function enclosingTypeName(funcName String) returns String throws EnclosingTypeError
 	let dotIdx = try funcName.findLast(".") otherwise throw EnclosingTypeError.notAMethod
 	return funcName.slice(funcName.startIndex(), endIndex: dotIdx)
 end 'enclosingTypeName'
@@ -8192,7 +8192,7 @@ typealias FuncScrutineeEnumMap = Map with (String, ScrutineeEnumNameMap)
 // owning function exists in THIS module, and clears the queue at the end (the
 // project is shared across the stdlib and user module runs, but each function
 // belongs to exactly one module, so a single end-of-run clear is safe).
-export function drainPendingMatchExhaustivenessChecks(project Project, module MaxonModule)
+function drainPendingMatchExhaustivenessChecks(project Project, module MaxonModule)
 	if project.pendingMatchExhaustivenessChecks.count() == 0 'noChecks'
 		return
 	end 'noChecks'
@@ -8398,7 +8398,7 @@ end 'expandArmCoverage'
 // now-fully-typed ops. The typealias drain is idempotent: only the first
 // module's call does real work, every later module-level call walks an
 // empty map.
-export function runTypeResolution(project Project, module MaxonModule, filePath FilePath)
+module function runTypeResolution(project Project, module MaxonModule, filePath FilePath)
 	// `resolvedCallees` and `callParamTypes` are keyed by OpIndex, which is
 	// per-module. When the cache-miss stdlib build path runs `runTypeResolution`
 	// on the stdlib MaxonModule, those maps get populated with entries keyed

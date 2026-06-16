@@ -90,7 +90,7 @@ end 'rejectWasmSubprocess'
 // The caller has already gated on the target (`targetSupportsSubprocess`); this
 // helper assumes rejection applies. Pure analysis — emits diagnostics, leaves the
 // module unchanged. Exported/generic so a future capability-less API can reuse it.
-export function rejectApiCallsOnUnsupportedTarget(project Project, module MaxonModule, entryPoints ApiEntrySet, code ErrorCode, message String)
+function rejectApiCallsOnUnsupportedTarget(project Project, module MaxonModule, entryPoints ApiEntrySet, code ErrorCode, message String)
 	for func in module.functions 'eachFunc'
 		// Stdlib-internal helpers call each other; never report those — the wasm
 		// stdlib cache build compiles them from source and must pass.
@@ -135,7 +135,7 @@ end 'checkCallOpForApi'
 // The source range of a resolved-invocation op (call / tryCall / methodCall /
 // tryMethodCall). The caller has already filtered to these four shapes. Exported
 // (generic) for reuse by any future API-rejection pass.
-export function callOpSourceRange(op MaxonOp) returns SourceRange
+function callOpSourceRange(op MaxonOp) returns SourceRange
 	return match op 'r'
 		call(_, _, _, _, _, _, _, range) gives range
 		tryCall(_, _, _, _, _, _, _, _, range) gives range

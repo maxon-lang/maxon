@@ -79,7 +79,7 @@ export function lookupGlobalData(table GlobalDataTable, name String) returns Byt
 	return try table.values.get(idx) otherwise ByteArray.create()
 end 'lookupGlobalData'
 
-export function addGlobalData(table GlobalDataTable, data ByteArray) returns String
+function addGlobalData(table GlobalDataTable, data ByteArray) returns String
 	// Deduplicate via the byte-payload → name map so identical strings
 	// share a single .rdata entry across the whole module. Hash lookup,
 	// not a per-entry scan.
@@ -141,7 +141,7 @@ end 'addInternedString'
 // corrupting every other alias of it (e.g. a `funcReturnTypes`/`funcSignatures`
 // map key that happens to be the same interned String). Callers that need to
 // append a terminator must build over this owned copy, never the raw view.
-export function ownedStringByteCopy(s String) returns ByteArray
+function ownedStringByteCopy(s String) returns ByteArray
 	var bytes = ByteArray.create()
 	for b in s.toByteArray() 'copyByte'
 		bytes.push(b)
@@ -265,7 +265,7 @@ end 'RdataOffsetMap'
 
 // Look up an rdata offset by label name. Returns 0 if not found.
 // O(1) via the offset map's `index`.
-export function lookupRdataOffset(map RdataOffsetMap, name String) returns CodeOffset
+function lookupRdataOffset(map RdataOffsetMap, name String) returns CodeOffset
 	return try map.index.get(name) otherwise 0
 end 'lookupRdataOffset'
 
@@ -444,7 +444,7 @@ end 'registerPanicStrings'
 // its own writable section (separate RVA from the .data heap arena) so it can
 // grow independently. The final offset is resolved by buildCovDataSection when
 // the backend emits code.
-export function addCovDataEntry(table GlobalDataTable, name String, sizeBytes ByteCount, initialBytes ByteArray)
+function addCovDataEntry(table GlobalDataTable, name String, sizeBytes ByteCount, initialBytes ByteArray)
 	table.covDataEntries.push(CovDataEntry.create(name, sizeBytes: sizeBytes, initialBytes: initialBytes))
 end 'addCovDataEntry'
 

@@ -177,7 +177,7 @@ end 'encodeI64LE'
 // build. The exported function name keeps "Globals" because the data
 // section itself is link-time-global storage; the source-level decls that
 // land here may or may not be `export`ed.
-export function registerGlobalVarsForDataSection(project Project, globalData GlobalDataTable)
+function registerGlobalVarsForDataSection(project Project, globalData GlobalDataTable)
 	for (_, info) in project.topLevelVars 'eachVar'
 		let symbol = dataSymbolName(info.name)
 		let initialBytes = encodeI64LE(info.initialValue)
@@ -410,7 +410,7 @@ end 'buildInterfaceWitnessSlotMap'
 // Hard error on miss: a missing method name means upstream conformance
 // validation failed to detect it, so we surface the bug here rather than
 // emit a witness load against a stale offset.
-export function methodIndexInInterface(project Project, interfaceName String, methodName String) returns MachineWord
+function methodIndexInInterface(project Project, interfaceName String, methodName String) returns MachineWord
 	let iface = try project.interfaces.get(interfaceName) otherwise panic("methodIndexInInterface: interface '{interfaceName}' not in project.interfaces (resolveAllInterfaces drained or never seeded)")
 	for i in 0 upto iface.methods.count() 'scan'
 		let m = try iface.methods.get(i) otherwise panic("methodIndexInInterface: methods.get OOB at {i}")
@@ -453,7 +453,7 @@ end 'typeParameterIdOf'
 // drained. Used by the for-in createIterator passthrough below to detect
 // "this interface is itself iterator-shaped (declares current+advance) and
 // has no createIterator of its own."
-export function interfaceDeclaresMethodTransitive(project Project, interfaceName String, methodName String) returns bool
+function interfaceDeclaresMethodTransitive(project Project, interfaceName String, methodName String) returns bool
 	var visited = StringArray.create()
 	return interfaceDeclaresMethodTransitiveHelper(project, interfaceName: interfaceName, methodName: methodName, visited: visited)
 end 'interfaceDeclaresMethodTransitive'
@@ -467,7 +467,7 @@ end 'interfaceDeclaresMethodTransitive'
 // would fall through to a missing `<ReceiverType>.createIterator`
 // dispatch and panic in lowering. The struct-side mirror of the
 // interface-receiver passthrough in `lowerMethodCall`.
-export function receiverImplementsIteratorShapedInterface(project Project, receiverTypeName String) returns bool
+function receiverImplementsIteratorShapedInterface(project Project, receiverTypeName String) returns bool
 	for confId in project.conformances.idsForType(receiverTypeName) 'eachConf'
 		let (_, ifaceName, _) = project.conformances.get(confId)
 		let declaresCreateIterator = interfaceDeclaresMethodTransitive(project, interfaceName: ifaceName, methodName: "createIterator")
@@ -507,7 +507,7 @@ end 'interfaceDeclaresMethodTransitiveHelper'
 // methodCall result lands with the right MaxonType. Used by the
 // interface-dispatch lowering to stamp the result ValueId. Same lookup
 // rules as `methodIndexInInterface`; missing names are an upstream bug.
-export function interfaceMethodReturnType(project Project, interfaceName String, methodName String) returns MaxonReturnType
+function interfaceMethodReturnType(project Project, interfaceName String, methodName String) returns MaxonReturnType
 	let iface = try project.interfaces.get(interfaceName) otherwise panic("interfaceMethodReturnType: interface '{interfaceName}' not in project.interfaces")
 	for i in 0 upto iface.methods.count() 'scan'
 		let m = try iface.methods.get(i) otherwise panic("interfaceMethodReturnType: methods.get OOB at {i}")
@@ -523,7 +523,7 @@ end 'interfaceMethodReturnType'
 // caller's `try` can observe the throw; non-throwing methods drop straight to
 // the single-result witnessCall path. Same lookup rules as
 // `interfaceMethodReturnType`; missing names are an upstream bug.
-export function interfaceMethodThrows(project Project, interfaceName String, methodName String) returns bool
+function interfaceMethodThrows(project Project, interfaceName String, methodName String) returns bool
 	let iface = try project.interfaces.get(interfaceName) otherwise panic("interfaceMethodThrows: interface '{interfaceName}' not in project.interfaces")
 	for i in 0 upto iface.methods.count() 'scan'
 		let m = try iface.methods.get(i) otherwise panic("interfaceMethodThrows: methods.get OOB at {i}")
@@ -542,7 +542,7 @@ end 'interfaceMethodThrows'
 // (void, primitive, struct, generic-instance, etc.). Used by the return-site
 // and call-site lowerings to decide whether to emit a fat-pointer return
 // (errorReturn-shaped) or capture a fat-pointer result (tryCall-shaped).
-export function returnTypeInterfaceName(project Project, ref MaxonReturnType) returns String
+function returnTypeInterfaceName(project Project, ref MaxonReturnType) returns String
 	let raw = match ref 'unwrap'
 		void gives MaxonType.unresolved
 		value(inner) gives inner
@@ -561,7 +561,7 @@ end 'returnTypeInterfaceName'
 // `extends`) aren't seeded by today's BuildWitnessTables, and primitive
 // conformances are deferred to C1.e. Throws so the caller can fall back
 // rather than hard-crashing the build. Direct conformances always succeed.
-export function resolveWitnessLabel(project Project, concreteType MaxonType, interfaceName String) returns String throws WitnessLabelError
+function resolveWitnessLabel(project Project, concreteType MaxonType, interfaceName String) returns String throws WitnessLabelError
 	let typeName = match concreteType 'pickName'
 		boolean gives "bool"
 		integer gives "int"
@@ -585,7 +585,7 @@ export function resolveWitnessLabel(project Project, concreteType MaxonType, int
 	return project.witnessTables.labelFor(typeName, interfaceName: interfaceName)
 end 'resolveWitnessLabel'
 
-export enum WitnessLabelError implements Error
+enum WitnessLabelError implements Error
 	notResolved
 end 'WitnessLabelError'
 
@@ -622,7 +622,7 @@ end 'zeroBytesOfSize'
 // runtime.std's lock acquire/release helpers are no-ops while the runtime is
 // single-threaded. When threading lands, register one 8-byte slot per class
 // here and wire the helpers in `__slab_refill_mcache` to a real CAS loop.
-export function registerSlabAndMmGlobalsForDataSection(globalData GlobalDataTable, asyncTraceEnabled bool = false)
+function registerSlabAndMmGlobalsForDataSection(globalData GlobalDataTable, asyncTraceEnabled bool = false)
 	// Slab bottom-layer state (step 6a.12).
 	addDataSectionEntry(globalData, name: "__slab_init_done", initialBytes: zeroBytesOfSize(8))
 	addDataSectionEntry(globalData, name: "__slab_arena_list_head", initialBytes: zeroBytesOfSize(8))
@@ -2187,7 +2187,7 @@ end 'maxonTypeIsDropTracked'
 // struct (it was allocated untracked via `mrt_alloc`); the C# reference keeps
 // them separate (IsHeapAllocated for all structs vs a destructor only when
 // there are managed fields). Use this predicate ONLY for destructor decisions.
-export function structNameIsDropTracked(project Project, structName String) returns bool
+function structNameIsDropTracked(project Project, structName String) returns bool
 	var visiting = DropTrackVisitSet.create()
 	return structNameIsDropTrackedRec(project, structName: structName, visiting: visiting)
 end 'structNameIsDropTracked'
@@ -11690,11 +11690,11 @@ end 'isMathIntrinsic'
 // Throws on unknown name so callers can `try ... otherwise` to fall through
 // to the next matcher in `lowerInternalsIntrinsic`'s dispatch.
 
-export enum InternalsBridgeLookupError implements Error
+enum InternalsBridgeLookupError implements Error
 	notBridge
 end 'InternalsBridgeLookupError'
 
-export type InternalsRuntimeCallHit
+type InternalsRuntimeCallHit
 	export var callee as String
 	export var arity as VarSlot
 
@@ -11704,7 +11704,7 @@ export type InternalsRuntimeCallHit
 end 'InternalsRuntimeCallHit'
 
 // `__Internals.<globalAddrBridge>()` -> globalAddr <runtimeGlobalName>.
-export function lookupInternalsGlobalAddrTarget(methodName String) returns String throws InternalsBridgeLookupError
+function lookupInternalsGlobalAddrTarget(methodName String) returns String throws InternalsBridgeLookupError
 	if methodName == "mmAllocCountAddr" 'a'
 		return "__mm_alloc_count"
 	end 'a'
@@ -11763,7 +11763,7 @@ export function lookupInternalsGlobalAddrTarget(methodName String) returns Strin
 end 'lookupInternalsGlobalAddrTarget'
 
 // `__Internals.<funcAddrBridge>()` -> funcAddr <runtimeFuncName>.
-export function lookupInternalsFuncAddrTarget(methodName String) returns String throws InternalsBridgeLookupError
+function lookupInternalsFuncAddrTarget(methodName String) returns String throws InternalsBridgeLookupError
 	if methodName == "mrtStartAddr" 'a'
 		return "mrt_start"
 	end 'a'
@@ -11786,7 +11786,7 @@ end 'lookupInternalsFuncAddrTarget'
 // bridge accepts). TypeResolution validated the call shape against the
 // registered intrinsic signature, so the lowering helper just consumes that
 // many SSA names from the args array.
-export function lookupInternalsRuntimeCallTarget(methodName String) returns InternalsRuntimeCallHit throws InternalsBridgeLookupError
+function lookupInternalsRuntimeCallTarget(methodName String) returns InternalsRuntimeCallHit throws InternalsBridgeLookupError
 	if methodName == "slabAlloc" 'a'
 		return InternalsRuntimeCallHit.create("__slab_alloc", arity: 1 as VarSlot)
 	end 'a'
@@ -11994,7 +11994,7 @@ end 'EntryBlockFilePathError'
 // through that name. Throws `NotPrimitiveExtension.notPrimitive` for any
 // non-primitive arm — callers use `if let` to take the primitive-extension
 // dispatch path and fall through to the regular struct-name path otherwise.
-export function primitiveExtensionTypeName(t MaxonType) returns String throws NotPrimitiveExtension
+function primitiveExtensionTypeName(t MaxonType) returns String throws NotPrimitiveExtension
 	return match t 'p'
 		integer gives "int"
 		float gives "float"
@@ -12097,7 +12097,7 @@ end 'implicitlyConvertible'
 // values). Used by Phase A auto-widening at sites where narrowing would be
 // unsafe — struct field stores, match arm result-slot unification — and the
 // C# bootstrap parser only inserts widening casts.
-export function isWideningCategory(from CastCategory, to CastCategory) returns bool
+function isWideningCategory(from CastCategory, to CastCategory) returns bool
 	if from == CastCategory.int and to == CastCategory.float 'intToFloat'
 		return true
 	end 'intToFloat'

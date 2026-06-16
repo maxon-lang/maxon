@@ -66,7 +66,7 @@ export function detectHostTarget() returns Target
 	return Target.create(hostCpu, os: hostOs)
 end 'detectHostTarget'
 
-export function parseTarget(s String) returns Target
+function parseTarget(s String) returns Target
 	var cpu = CpuArch.x64
 	var os = Os.windows
 
@@ -162,7 +162,7 @@ end 'targetSupportsSubprocess'
 // `augmentWithRuntime` injects a call to the named helper before `osExit` so a
 // `CommandLine.args()` program doesn't read as a permanent `__mm_alloc_count`
 // leak. The `helper` arm names a function the corresponding backend defines.
-export union ArgvCacheTeardown
+module union ArgvCacheTeardown
 	none
 	helper(name String)
 end 'ArgvCacheTeardown'
@@ -172,7 +172,7 @@ end 'ArgvCacheTeardown'
 // silently skip the teardown the way wasm once did. Only the two targets that
 // actually allocate a process-lifetime argv cache name a helper; everything else
 // (kernel argv on x64 posix, skeleton-stub argv on arm64) allocates nothing.
-export function argvCacheTeardown(t Target) returns ArgvCacheTeardown
+module function argvCacheTeardown(t Target) returns ArgvCacheTeardown
 	return match t.cpu 'cpu'
 		x64 gives argvCacheTeardownX64(t.os)
 		wasm32 gives argvCacheTeardownWasm(t.os)

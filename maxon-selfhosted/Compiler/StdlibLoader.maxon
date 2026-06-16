@@ -80,7 +80,7 @@ export function getCachedStdlibStdModule() returns StdModule
 	return stdlibLib().inlinerStdModule
 end 'getCachedStdlibStdModule'
 
-export function cachedStdFuncEdges() returns CachedFuncEdgeMap
+module function cachedStdFuncEdges() returns CachedFuncEdgeMap
 	return stdlibLib().funcEdges
 end 'cachedStdFuncEdges'
 
@@ -128,7 +128,7 @@ var lazyCompiledStdlibNames = StdlibFuncNameSet.create()
 // the caller's project on every call via `translateStdlibParsedModule`.
 // The first call in a process triggers the lazy parse; subsequent calls
 // re-use the cached sandbox snapshot.
-export function getStdlibParsedModule(userProject Project) returns MaxonModule
+module function getStdlibParsedModule(userProject Project) returns MaxonModule
 	if stdlibLib().parsedSnapshot.count() == 0 'needsParse'
 		ensureStdlibSandboxParsed(userProject.target)
 	end 'needsParse'
@@ -293,7 +293,7 @@ end 'resetLazyStdlibState'
 // stdlib Library and every cached/parsed/typealias/literal field it carries is
 // recreated lazily on the next access) and clear the v80 lazy-codegen memo. The
 // public entry point for a clean-slate reload within a process.
-export function resetStdlibLoaderState()
+function resetStdlibLoaderState()
 	libraryRegistry = LibraryRegistry.create()
 	resetLazyStdlibState()
 end 'resetStdlibLoaderState'
@@ -1072,7 +1072,7 @@ function activateStdlibCache(data StdlibCacheData, target Target)
 	setStdlibLib(lib)
 end 'activateStdlibCache'
 
-export function isStdlibCacheValid() returns bool
+module function isStdlibCacheValid() returns bool
 	return stdlibLib().cacheValid
 end 'isStdlibCacheValid'
 
@@ -1264,7 +1264,7 @@ end 'syncLazyCompiledNames'
 // opposed to v80 signature-only stubs (empty `code`, bytecode still deferred).
 // Used for honest cache-hit logging — `functions.count()` alone counts stubs
 // as if they were compiled.
-export function countCompiledStdlibFunctions(data StdlibCacheData) returns MachineWord
+function countCompiledStdlibFunctions(data StdlibCacheData) returns MachineWord
 	var n = 0
 	for func in data.functions 'eachFunc'
 		if func.code.count() > 0 'hasCode'
@@ -1320,7 +1320,7 @@ end 'buildCacheFuncIndex'
 // additions without threading a `mutates` annotation up through
 // `queryCodeResult`. Maxon `Array` is reference-backed, so a push on the
 // registry's array is visible through every alias.
-export function ensureStdlibFunctionsCompiled(project Project, seeds StringArray)
+module function ensureStdlibFunctionsCompiled(project Project, seeds StringArray)
 	syncLazyCompiledNames()
 
 	let lazyStart = passTimerStart()

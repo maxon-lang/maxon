@@ -320,7 +320,7 @@ end 'interfaceTypeIsFat'
 // slot (closure env, interface witness companion). Used by the lowering
 // to recognize slots that should not be iterated as user-visible scope
 // entries.
-export function isOpaquePointerMaxonType(t MaxonType) returns bool
+function isOpaquePointerMaxonType(t MaxonType) returns bool
 	return match t 'check'
 		opaquePointer gives true
 		boolean to constInt gives false
@@ -541,7 +541,7 @@ function promiseInnerTypeById(project Project, id GenericInstanceId) returns Max
 	return try args.get(0) otherwise MaxonType.unresolved
 end 'promiseInnerTypeById'
 
-export function genericInstanceToString(project Project, baseId TypeNameId, args MaxonTypeArray) returns String
+function genericInstanceToString(project Project, baseId TypeNameId, args MaxonTypeArray) returns String
 	let baseName = project.typeNames.get(baseId)
 	if args.count() == 0 'noArgs'
 		return "{baseName} with ()"
@@ -769,7 +769,7 @@ function matchesConstIntArm(b MaxonType, valueA IntConstant) returns bool
 	end 'm'
 end 'matchesConstIntArm'
 
-export function maxonReturnTypesStructurallyEqual(a MaxonReturnType, b MaxonReturnType) returns bool
+function maxonReturnTypesStructurallyEqual(a MaxonReturnType, b MaxonReturnType) returns bool
 	return match a 'lhs'
 		void gives returnTypeIsVoid(b)
 		value(innerA) gives returnTypeMatchesValue(b, innerA: innerA)
@@ -851,7 +851,7 @@ end 'MaxonReturnType'
 
 // Parse a source-level return type token. An empty/missing token or the
 // literal "void" means the function returns nothing.
-export function internMaxonReturnType(project Project, name String) returns MaxonReturnType
+function internMaxonReturnType(project Project, name String) returns MaxonReturnType
 	if name == "void" or name == "" 'isVoid'
 		return MaxonReturnType.void
 	end 'isVoid'
@@ -1730,7 +1730,7 @@ end 'refEqMnemonic'
 // Phase 7 step 5: cold-path printer for `MaxonOp.stringInterp` parts.
 // Renders each part as either `"...lit..." #id` for literals or
 // `%name : kind` for expression parts.
-export function formatStringInterpParts(project Project, parts StringInterpPartArray) returns String
+function formatStringInterpParts(project Project, parts StringInterpPartArray) returns String
 	var out = ""
 	for i in 0 upto parts.count() 'each'
 		let part = try parts.get(i) otherwise panic("formatStringInterpParts: parts.get OOB at {i}")
@@ -1785,7 +1785,7 @@ end 'formatArgIds'
 
 // Name-slice variant of the above, used by the new call printer. Converts
 // each ByteArray operand to a String for display (cold path).
-export function formatArgNames(args ByteArrayArray) returns String
+function formatArgNames(args ByteArrayArray) returns String
 	var result = ""
 	for i in 0 upto args.count() 'each'
 		let arg = try args.get(i) otherwise panic("invariant: i < args.count() but get failed")
@@ -1799,7 +1799,7 @@ end 'formatArgNames'
 
 // Like formatArgNames, but prefixes each arg with its source label when one
 // is present (empty label = positional). Used by call/methodCall printers.
-export function formatArgNamesWithLabels(args ByteArrayArray, argLabels StringArray) returns String
+function formatArgNamesWithLabels(args ByteArrayArray, argLabels StringArray) returns String
 	var result = ""
 	for i in 0 upto args.count() 'each'
 		let arg = try args.get(i) otherwise panic("invariant: i < args.count() but get failed")
@@ -1820,7 +1820,7 @@ end 'formatArgNamesWithLabels'
 // stores capture names as plain `String` (not the byte-slice ByteArray used
 // for source identifiers), so this is a straight join — no `String.from`
 // conversion needed.
-export function formatCaptureNames(names StringArray) returns String
+function formatCaptureNames(names StringArray) returns String
 	var result = ""
 	for i in 0 upto names.count() 'each'
 		let n = try names.get(i) otherwise panic("invariant: i < names.count() but get failed")
@@ -1833,7 +1833,7 @@ export function formatCaptureNames(names StringArray) returns String
 end 'formatCaptureNames'
 
 // Pretty-print a CallContext for IR dumps. Cold path.
-export function callContextToString(ctx CallContext) returns String
+function callContextToString(ctx CallContext) returns String
 	return match ctx 'show'
 		free gives "free"
 		sibling(typeName) gives "sibling({typeName})"
@@ -2113,7 +2113,7 @@ end 'visibleCrossFileCandidates'
 // a registered type — i.e. the name is a METHOD (`TypeName.method`), not a free
 // function (`dir.namespace.func`). A bare-name call can only bind a free
 // function, so methods are excluded from the cross-file ambiguity candidate set.
-export function candidateIsTypeMethod(project Project, qualifiedName String) returns bool
+function candidateIsTypeMethod(project Project, qualifiedName String) returns bool
 	let bytes = qualifiedName.toByteArray()
 	let dotIdx = lastIndexOfDotByte(bytes)
 	if dotIdx >= bytes.count() 'noQualifier'
@@ -2307,7 +2307,7 @@ end 'lookupUnionCasePayloadArity'
 // method declared inside `extension <SomeInterface> ... end` can resolve
 // inner-typealias names captured by `mergeExtensionInnerAliases` the same
 // way a struct extension does.
-export function chaseTypealiasNameToType(project Project, name String, enclosingType String) returns MaxonType throws TypealiasChaseError
+function chaseTypealiasNameToType(project Project, name String, enclosingType String) returns MaxonType throws TypealiasChaseError
 	if not enclosingType.isEmpty() 'tryInner'
 		if let st = try project.structTypes.get(enclosingType) 'haveStruct'
 			if let inner = try st.innerAliases.get(name) 'haveInner'
@@ -2353,7 +2353,7 @@ function resolveInterfaceInnerAliasExpr(project Project, declaringTypeName Strin
 	return internMaxonType(project, name: aliasName)
 end 'resolveInterfaceInnerAliasExpr'
 
-export typealias ByteSliceIndex = int(0 to u64.max)
+typealias ByteSliceIndex = int(0 to u64.max)
 
 // Copy a half-open byte slice [startIndex, endIndex) out of `bytes` and
 // return it as a String. Both bounds must already be validated by the
@@ -2990,7 +2990,7 @@ function resolveOverloadByLabels(project Project, variants QualifiedNameArray, a
 	return matched
 end 'resolveOverloadByLabels'
 
-export enum OverloadLabelError implements Error
+enum OverloadLabelError implements Error
 	noMatch
 	ambiguous
 end 'OverloadLabelError'

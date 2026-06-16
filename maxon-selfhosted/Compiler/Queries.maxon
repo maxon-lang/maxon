@@ -12,7 +12,7 @@
 
 // --- Input query: source file content ---
 
-export function querySourceFile(project Project, path FilePath) returns String throws CompileError
+function querySourceFile(project Project, path FilePath) returns String throws CompileError
 	recordDependency(project, dependency: QueryKey.sourceFile(path))
 	let entry = try project.db.sourceFiles.get(path) otherwise throw CompileError.fileNotFound(path)
 	return entry.content
@@ -20,7 +20,7 @@ end 'querySourceFile'
 
 // --- Per-file derived query: tokenize ---
 
-export function queryTokens(project Project, path FilePath) returns TokenArray throws CompileError
+function queryTokens(project Project, path FilePath) returns TokenArray throws CompileError
 	let key = QueryKey.tokens(path)
 	recordDependency(project, dependency: key)
 
@@ -101,7 +101,7 @@ end 'deriveNamespace'
 
 // --- Per-file derived query: parse ---
 
-export function queryParseOps(project Project, path FilePath) returns MaxonModule throws CompileError
+function queryParseOps(project Project, path FilePath) returns MaxonModule throws CompileError
 	let key = QueryKey.parseOps(path)
 	recordDependency(project, dependency: key)
 
@@ -245,7 +245,7 @@ end 'preRegisterInterfaceNames'
 
 // --- Whole-program derived query: all modules merged ---
 
-export function queryAllModule(project Project) returns MaxonModule throws CompileError
+function queryAllModule(project Project) returns MaxonModule throws CompileError
 	let key = QueryKey.allModule
 	recordDependency(project, dependency: key)
 
@@ -317,7 +317,7 @@ end 'queryAllModule'
 //
 // Runs phases 2-4 (Maxon → Std). Returns the optimized StdModule.
 
-export function queryAllMid(project Project) returns StdModule throws CompileError
+function queryAllMid(project Project) returns StdModule throws CompileError
 	let key = QueryKey.allMid
 	recordDependency(project, dependency: key)
 
@@ -484,7 +484,7 @@ end 'queryCodeResult'
 // labels — none of which change when a literal value flips, so two
 // materially-different functions hashed identically and the per-function
 // chunk cache served stale bytes.
-export function computeStdContentHashFor(project Project, module StdModule, func IrFunction) returns ContentHash
+module function computeStdContentHashFor(project Project, module StdModule, func IrFunction) returns ContentHash
 	var h = computeFunctionSignatureHash(project, func: func)
 	h = mix(h, value: func.varSlotCount as ContentHash)
 	h = mix(h, value: func.blockRefs.count())
@@ -653,7 +653,7 @@ let mirPassVersion = 1 as ContentHash
 // and the MIR-tier passes through the per-function dispatch shims in
 // `PassPipeline.dispatch`, then this query projects the named function out
 // of the resulting `MirModule`.
-export function queryMirForFunction(project Project, funcName String) returns IrFunction throws CompileError
+function queryMirForFunction(project Project, funcName String) returns IrFunction throws CompileError
 	let key = QueryKey.mirForFunction(funcName)
 	recordDependency(project, dependency: key)
 
@@ -731,7 +731,7 @@ let backendVersion = 2 as ContentHash
 // folds in the upstream MidFuncMemo keyHash (or 0 when the mid memo hasn't
 // been stamped yet — cold compile before any per-function queries fired),
 // then mirPassVersion, then backendVersion.
-export function computeChunkKeyHash(project Project, funcName String) returns ContentHash
+module function computeChunkKeyHash(project Project, funcName String) returns ContentHash
 	var keyHash = 0 as ContentHash
 	if let m = try project.db.midPerFunc.get(funcName) 'mid'
 		keyHash = m.keyHash
@@ -748,7 +748,7 @@ end 'computeChunkKeyHash'
 // to its own recompute path. Keeping the miss signal as a throw lets both
 // call sites share the lookup-and-validate logic without out-parameters or
 // tuple unpacking.
-export union ChunkCacheLookupError implements Error
+module union ChunkCacheLookupError implements Error
 	miss
 end 'ChunkCacheLookupError'
 
@@ -766,7 +766,7 @@ end 'ChunkCacheLookupError'
 // never invokes other tracked queries, so the dep bucket would always be
 // empty and `areDepsValid` would unconditionally return true (the Step 3.5a
 // bug Step 4 caught: 100 stale hits, edited bytes never re-emitted).
-export function lookupCachedChunkByKeyHash(project Project, funcName String, freshKeyHash ContentHash) returns FunctionCodeChunk throws ChunkCacheLookupError
+module function lookupCachedChunkByKeyHash(project Project, funcName String, freshKeyHash ContentHash) returns FunctionCodeChunk throws ChunkCacheLookupError
 	if let memo = try project.db.codePerFunc.get(funcName) 'checkCache'
 		if memo.computedAt > 0 'hasValue'
 			if memo.keyHash == freshKeyHash 'keyMatch'
@@ -784,7 +784,7 @@ end 'lookupCachedChunkByKeyHash'
 // the two code paths that recompute a chunk (whole-module emit's per-function
 // stamp loop and `emitBackendIncrementalWith`'s direct-emit miss tail) so the
 // memo shape stays in lockstep across both writers.
-export function stampChunkMemo(project Project, funcName String, chunk FunctionCodeChunk)
+module function stampChunkMemo(project Project, funcName String, chunk FunctionCodeChunk)
 	let keyHash = computeChunkKeyHash(project, funcName: funcName)
 	let memo = CodeChunkMemo.create(chunk, keyHash: keyHash, computedAt: project.db.currentRevision, verifiedAt: project.db.currentRevision)
 	project.db.codePerFunc.upsert(funcName, value: memo)
@@ -805,7 +805,7 @@ end 'stampChunkMemo'
 // The chunk-driven path needs per-function granularity inside a single
 // revision, so it bypasses the wrapper's `verifiedAt`/dep arms entirely
 // and writes the freshly-computed hash straight into the memo.
-export function refreshMidContentHashForFunction(project Project, funcName String) throws CompileError
+module function refreshMidContentHashForFunction(project Project, funcName String) throws CompileError
 	// Reuse the already-computed mid module from `allMidCache` rather than
 	// re-invoking `queryAllMid`. By the time the incremental backend's
 	// per-function precheck loop calls this, `queryCodeResult` -> `queryAllMid`

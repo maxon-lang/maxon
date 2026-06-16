@@ -25,7 +25,7 @@
 // One-stop result of monomorphizing a single (receiverType, ifaceCallee)
 // pair. The `qualifiedName` is the registered key for the new function;
 // callers re-point `resolvedCallees[opIdx]` at it.
-export type MonomorphResult
+type MonomorphResult
 	export var qualifiedName as String
 
 	export static function create(qualifiedName String) returns MonomorphResult
@@ -160,7 +160,7 @@ end 'monomorphizeInterfaceExtension'
 
 // Linear scan over module.functions to find a function by qualified name.
 // Returns the index; throws when not found.
-export function findFunctionIndexByName(module MaxonModule, name String) returns FuncIndex throws MonomorphError
+function findFunctionIndexByName(module MaxonModule, name String) returns FuncIndex throws MonomorphError
 	for i in 0 upto module.functions.count() 'scan'
 		let f = try module.functions.get(i) otherwise panic("findFunctionIndexByName: functions.get OOB at {i}")
 		if f.name == name 'hit'
@@ -518,7 +518,7 @@ end 'relocateTerminator'
 // renumber down by the count of witness slots dropped to their left.
 // Implemented as a parallel-array since per-function slot counts are
 // small.
-export type SlotRemap
+type SlotRemap
 	export var srcIds as VarSlotArray
 	export var dstIds as VarSlotArray
 
@@ -605,7 +605,7 @@ end 'buildSlotRemap'
 
 // Apply substitution + interface→named folding to a MaxonType. Centralized
 // so every call site rewrites types through a single helper.
-export function substituteWithIfaceFold(project Project, t MaxonType, subst TypeSubstitution, ifaceType MaxonType, receiverNamed MaxonType) returns MaxonType
+function substituteWithIfaceFold(project Project, t MaxonType, subst TypeSubstitution, ifaceType MaxonType, receiverNamed MaxonType) returns MaxonType
 	let substituted = substituteType(project, t: t, subst: subst)
 	return foldInterfaceToReceiver(substituted, ifaceType: ifaceType, receiverNamed: receiverNamed)
 end 'substituteWithIfaceFold'
@@ -680,7 +680,7 @@ end 'cloneScopeWithSubst'
 
 // Result shape for `findFieldOnStruct`: the field's substituted type plus
 // the receiver-struct offset that `selfFieldLoad`/`selfFieldStore` need.
-export type FieldInfoForClone
+type FieldInfoForClone
 	export var fieldType as MaxonType
 	export var offset as FieldOffset
 
@@ -689,7 +689,7 @@ export type FieldInfoForClone
 	end 'create'
 end 'FieldInfoForClone'
 
-export enum MonomorphFieldLookupError implements Error
+enum MonomorphFieldLookupError implements Error
 	notFound
 end 'MonomorphFieldLookupError'
 
@@ -717,7 +717,7 @@ end 'findFieldOnStruct'
 // body may live in a different module than the parent it was discovered in
 // — same fallback the parent uses at monomorphizeInterfaceExtension's
 // `tryStdlib` branch.
-export type ClosureSpecEntry
+type ClosureSpecEntry
 	export var srcName as String
 	export var specName as String
 	export var srcFunc as IrFunction
@@ -734,7 +734,7 @@ export typealias ClosureSpecArray = Array with ClosureSpecEntry
 // `project.resolvedCallees` entry re-keyed under the new opIdx with the
 // receiver-substituted callee. Collected during the op-clone walk;
 // drained by `rewriteClonedResolvedCallees` once the walk completes.
-export type OpIndexPair
+type OpIndexPair
 	export var srcOpIdx as OpIndex
 	export var dstOpIdx as OpIndex
 

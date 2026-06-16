@@ -108,7 +108,7 @@ export typealias CaptureInfoArray = Array with CaptureInfo
 // rename of its parent. Used by `rekeyExistingFunction` to collect every
 // rename before walking `module.ops` to update `closureCreate`/`functionRef`
 // references that still point at the now-vacated old name.
-export type ClosureRename
+type ClosureRename
 	export var oldName as String
 	export var newName as String
 
@@ -124,7 +124,7 @@ export typealias ClosureRenameArray = Array with ClosureRename
 // closures. Linear in op count and rename count, but both are small
 // per-overload-pair and this only runs when the parser actually
 // rekeyed at least one closure.
-export function rewriteClosureNameOpRefs(module MaxonModule, renames ClosureRenameArray)
+function rewriteClosureNameOpRefs(module MaxonModule, renames ClosureRenameArray)
 	for i in 0 upto module.ops.count() 'eachOp'
 		let op = try module.ops.get(i) otherwise continue
 		let n = op.name
@@ -206,7 +206,7 @@ export typealias TryBlockContextArray = Array with TryBlockContext
 
 // Thrown by the block-form try's parse-time enum-case ordinal lookup when the
 // thrown `EnumName.caseName` can't be resolved in the enum registries.
-export enum CaseOrdinalLookupError implements Error
+enum CaseOrdinalLookupError implements Error
 	notFound
 end 'CaseOrdinalLookupError'
 
@@ -216,7 +216,7 @@ end 'CaseOrdinalLookupError'
 // this carrier so the backing-parse dispatch lives in ONE place — `union Code {
 // alpha = 1001 }` parses its scalar backings exactly the way `enum` does
 // (mirrors the C# bootstrap's single `PreScanEnum(isUnion)` code path).
-export type CaseBackingState
+type CaseBackingState
 	// Next auto-assigned ordinal / int rawValue for a case that omits `=`.
 	export var nextOrdinal as IntConstant
 	// Set once the first explicit `= value` is seen. Drives the
@@ -239,7 +239,7 @@ end 'CaseBackingState'
 // Per-case result of `parseCaseBacking`. Carries the parsed backing for one
 // case so the caller can build its `EnumCase` and (for scalar backings)
 // register the top-level constant.
-export type CaseBackingResult
+type CaseBackingResult
 	// Runtime rawValue: the int literal for int-backed cases, the IEEE-754 bits
 	// for float-backed cases, the auto-assigned ordinal for string/char/struct/
 	// function backings and bare cases.
@@ -17041,7 +17041,7 @@ end 'Parser'
 // representation can't be reconstructed from an integer at runtime; per
 // the spec they reject `.fromRawValue(...)` outright (E3034) and the
 // validation pass emits that diagnostic when it finds a call site.
-export function synthesizeEnumLookupHelpersImpl(project Project, module MaxonModule, namespace String, filePath FilePath, enumName String, cases EnumCaseArray, isFloatBacked bool, isStringBacked bool, isCharBacked bool, visibility Visibility, line LineNumber, column ColumnNumber, skipFromRawValue bool = false)
+function synthesizeEnumLookupHelpersImpl(project Project, module MaxonModule, namespace String, filePath FilePath, enumName String, cases EnumCaseArray, isFloatBacked bool, isStringBacked bool, isCharBacked bool, visibility Visibility, line LineNumber, column ColumnNumber, skipFromRawValue bool = false)
 	if cases.count() == 0 'noCases'
 		// Degenerate enum: skip helper synthesis. The empty-case enum is
 		// already an E3030 / E2004 violation surfaced upstream; emitting
@@ -17073,7 +17073,7 @@ end 'synthesizeEnumLookupHelpersImpl'
 // local synth-name counter — the helper is self-contained (its names
 // only reference values within the synthesized function body), so there
 // is no need to thread the parser's process-wide counter through.
-export function synthesizeEnumFromRawValueHelperImpl(project Project, module MaxonModule, namespace String, filePath FilePath, enumName String, cases EnumCaseArray, isFloatBacked bool, visibility Visibility, line LineNumber, column ColumnNumber)
+function synthesizeEnumFromRawValueHelperImpl(project Project, module MaxonModule, namespace String, filePath FilePath, enumName String, cases EnumCaseArray, isFloatBacked bool, visibility Visibility, line LineNumber, column ColumnNumber)
 	let funcName = enumFromRawValueSymbolName(enumName)
 	if project.funcReturnTypes.contains(funcName) 'alreadyRegistered'
 		return
@@ -17194,7 +17194,7 @@ end 'synthesizeEnumFromRawValueHelperImpl'
 // comparison is `name.equals("<caseName>")` (a methodCall the String
 // extension intercepts at lowering) instead of a primitive cmp.
 // Returns the case's rawValue on a hit.
-export function synthesizeEnumFromNameHelperImpl(project Project, module MaxonModule, namespace String, filePath FilePath, enumName String, cases EnumCaseArray, isFloatBacked bool, visibility Visibility, line LineNumber, column ColumnNumber)
+function synthesizeEnumFromNameHelperImpl(project Project, module MaxonModule, namespace String, filePath FilePath, enumName String, cases EnumCaseArray, isFloatBacked bool, visibility Visibility, line LineNumber, column ColumnNumber)
 	let funcName = enumFromNameSymbolName(enumName)
 	if project.funcReturnTypes.contains(funcName) 'alreadyRegistered'
 		return
@@ -17311,7 +17311,7 @@ end 'synthesizeEnumFromNameHelperImpl'
 // runtime representation of a string/char-backed enum value). For char-backed
 // enums the param is `Character` and the per-case literal is a `charLiteral`;
 // for string-backed it is `String` and a `stringConst`.
-export function synthesizeEnumFromRawStringHelperImpl(project Project, module MaxonModule, namespace String, filePath FilePath, enumName String, cases EnumCaseArray, isCharBacked bool, visibility Visibility, line LineNumber, column ColumnNumber)
+function synthesizeEnumFromRawStringHelperImpl(project Project, module MaxonModule, namespace String, filePath FilePath, enumName String, cases EnumCaseArray, isCharBacked bool, visibility Visibility, line LineNumber, column ColumnNumber)
 	let funcName = enumFromRawValueSymbolName(enumName)
 	if project.funcReturnTypes.contains(funcName) 'alreadyRegistered'
 		return
@@ -18495,7 +18495,7 @@ end 'maxonTypeStructName'
 // caller propagate the same conservative miss. Shared by the resolved-alias
 // (`genericTypealiases`) and parse-time-alias (`unresolvedTypealiases`) chase
 // branches of `maxonTypeStructName`.
-export function structOrEnumNameForAliasBase(project Project, aliasedName String) returns String throws MaxonTypeStructNameError
+function structOrEnumNameForAliasBase(project Project, aliasedName String) returns String throws MaxonTypeStructNameError
 	if aliasedName.isEmpty() 'noName'
 		throw MaxonTypeStructNameError.notAStruct
 	end 'noName'
@@ -18644,7 +18644,7 @@ end 'qualifyName'
 // declaration as `namespace.bare`, with root-level (empty-namespace)
 // declarations shown as `(root).bare` so a bare-name file isn't displayed as
 // just `.Score`. Mirrors `renderCrossFileCandidateList` in TypeResolution.
-export function renderTypealiasCandidateList(reachable ReachableTypealiasInfoArray, bare String) returns String
+function renderTypealiasCandidateList(reachable ReachableTypealiasInfoArray, bare String) returns String
 	var out = ""
 	for i in 0 upto reachable.count() 'each'
 		let info = try reachable.get(i) otherwise continue
@@ -18691,7 +18691,7 @@ end 'infixBindingPower'
 
 // --- Type bound parsing helpers ---
 
-export typealias BoundValue = int(i64.min to i64.max)
+typealias BoundValue = int(i64.min to i64.max)
 
 // Captured parse result for a single int/float range bound — the integer
 // value (or IEEE-754 i64 bit pattern, for floats) plus the source-level
@@ -18734,13 +18734,13 @@ end 'resolveFloatTypeBound'
 // `.min`/`.max` bound expressions exist in `typeBoundsTable`. Inlined at
 // each runtime call site for years; kept as a helper now that the const
 // expression parser also needs the same predicate.
-export function isSizedTypeName(name String) returns bool
+function isSizedTypeName(name String) returns bool
 	return name == "u8" or name == "u16" or name == "u32" or name == "u64" or name == "i8" or name == "i16" or name == "i32" or name == "i64"
 end 'isSizedTypeName'
 
 // True when `expr` is the `invalid` sentinel arm. Suppresses the unused-
 // typealias cascade so a single E3005 reaches the user.
-export function isInvalidTypealiasExpr(expr UnresolvedTypeExpr) returns bool
+function isInvalidTypealiasExpr(expr UnresolvedTypeExpr) returns bool
 	return match expr 'check'
 		invalid gives true
 		boolPrim gives false
@@ -18877,7 +18877,7 @@ end 'computeOptimalIntType'
 // lexer's source buffer (for a user-written variable) or a synthetic name
 // (`$tN`) minted by the parser for an intermediate. SSA numbering is assigned
 // only when the Maxon dialect is lowered to Std.
-export union ExprResult
+union ExprResult
 	// Computed value — already emitted as an op
 	direct(name ByteArray, valueType MaxonType)
 	// Compile-time string constant — carries the interned StringId so
@@ -19055,7 +19055,7 @@ end 'MatchArmBlocks'
 // kind so existing `.isEnumCase()` predicates continue to fire for bare
 // and bound forms alike. `bindingNames` holds the source-level binding
 // names (with `_` for discards) and parallels `bindingIsVar` / `bindingIsDiscard`.
-export union MatchPatternKind
+union MatchPatternKind
 	defaultArm
 	intLiteral
 	enumCase
@@ -19073,7 +19073,7 @@ end 'MatchPatternKind'
 // a named binding so downstream consumers don't trip over an empty name;
 // `isVar` distinguishes `var name` (mutable) from `name` (immutable).
 // Location captured for E3035 / E3081 anchoring.
-export type MatchPatternBinding
+type MatchPatternBinding
 	export var name as String
 	export var isDiscard as bool
 	export var isVar as bool
@@ -19087,7 +19087,7 @@ end 'MatchPatternBinding'
 
 export typealias MatchPatternBindingArray = Array with MatchPatternBinding
 
-export type MatchPatternSpec
+type MatchPatternSpec
 	export var kind as MatchPatternKind
 	export var token as Token
 	export var intValue as ParsedInt
@@ -19233,7 +19233,7 @@ export typealias MatchPatternSpecArray = Array with MatchPatternSpec
 // chains `or`-separated literals, never mixing literals with enum cases or
 // `default` — a mix would mean a single arm is matching a heterogeneous set
 // of values, which the language explicitly disallows).
-export type MatchPatternList
+type MatchPatternList
 	export var patterns as MatchPatternSpecArray
 
 	export static function create(patterns MatchPatternSpecArray) returns MatchPatternList
@@ -19267,7 +19267,7 @@ end 'MatchPatternList'
 // landed on after the body statement plus a flag indicating whether the
 // statement was a `return` (so the parser can reject `return ... and
 // fallthrough` per E2025).
-export type MatchStmtArmBodyResult
+type MatchStmtArmBodyResult
 	export var exitBlock as IrBlock
 	export var hadReturn as bool
 
