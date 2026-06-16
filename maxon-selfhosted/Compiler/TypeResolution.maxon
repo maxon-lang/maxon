@@ -10098,6 +10098,67 @@ end 'substituteParamTypes'
 // producer doesn't have to re-scan the function for every argument.
 typealias NameToOpIdxMap = Map with (ByteArray, OpIndex)
 
+// True iff `func` has a call-shaped op that the re-resolve loop could still
+// FIX — i.e. one without a `resolvedCallees` entry whose non-resolution is NOT
+// permanent. This drives the loop's fast skip: a function with nothing fixable
+// left needs neither a producer rebuild nor a re-resolve.
+//
+// "Permanently unresolved" calls (which must NOT keep a function in the loop):
+//   * call / tryCall on a `shouldSkipCallSite` callee (math intrinsics etc.) —
+//     never resolved by design.
+//   * methodCall / tryMethodCall on an interface or type-parameter (or generic-
+//     with-type-parameter) receiver — dispatched dynamically; never resolved.
+// A methodCall on an `unresolved` receiver is treated as FIXABLE (not skipped):
+// that is exactly the case the loop exists to repair once backfill / closure
+// refinement makes the receiver concrete. (`callOpHasIntentionalDynamicDispatch`
+// lumps `unresolved` in with the dynamic shapes, so it is deliberately not used
+// here — using it would skip the very calls this loop must fix.)
+function funcHasUnresolvedCall(project Project, module MaxonModule, func IrFunction, producerTypes ProducerTypeMap) returns bool
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("funcHasUnresolvedCall: blockRef OOB")
+		for opIdx in block.opRefs 'eachOp'
+			let op = try module.ops.get(opIdx) otherwise panic("funcHasUnresolvedCall: opIdx OOB")
+			if not isCallShapedOpName(op.name) 'notCall'
+				continue
+			end 'notCall'
+			if project.resolvedCallees.contains(opIdx) 'resolved'
+				continue
+			end 'resolved'
+			if callUnresolvedIsPermanent(project, op: op, producerTypes: producerTypes) 'permanent'
+				continue
+			end 'permanent'
+			return true
+		end 'eachOp'
+	end 'eachBlock'
+	return false
+end 'funcHasUnresolvedCall'
+
+// True when a call-shaped op left without a `resolvedCallees` entry is
+// permanently unresolved (dynamic dispatch or an intrinsic) and so cannot be
+// repaired by the re-resolve loop — as opposed to an `unresolved`-receiver
+// methodCall, which the loop CAN repair once the receiver becomes concrete.
+function callUnresolvedIsPermanent(project Project, op MaxonOp, producerTypes ProducerTypeMap) returns bool
+	if op.name == "methodCall" or op.name == "tryMethodCall" 'isMethodShape'
+		let receiverName = extractMethodCallReceiverName(op)
+		let receiverType = lookupProducerType(producerTypes, name: receiverName)
+		// interface / typeParameter / generic-with-typeparam → permanent dynamic
+		// dispatch. `unresolved` and concrete `named` → still fixable.
+		return match receiverType 'recv'
+			interface gives true
+			typeParameter gives true
+			genericInstance(gid) gives genericInstanceArgsContainTypeParameter(project, gid: gid)
+			unresolved gives false
+			boolean to character gives false
+			function gives false
+			named gives false
+			constInt to cstring gives false
+		end 'recv'
+	end 'isMethodShape'
+	// call / tryCall: only intrinsics (shouldSkipCallSite) are permanently
+	// unresolved; any other free/qualified callee left unresolved is fixable.
+	return shouldSkipCallSite(extractCallCalleeName(op))
+end 'callUnresolvedIsPermanent'
+
 // J.4f.2 implementation: walk every methodCall/call/tryMethodCall/tryCall
 // op in `module`. For each closure-typed argument whose lifted-function
 // `paramTypes` still contain `MaxonType.unresolved`, copy the concrete
@@ -10172,8 +10233,26 @@ function propagateClosureArgTypesFromCalls(project Project, module MaxonModule, 
 	// walker is idempotent (`resolveOneCallOp` overwrites entries) and
 	// covers both cases without having to track which functions were
 	// touched by which refinement pass.
+	//
+	// Fast skip: a function whose call-shaped ops ALL already have a
+	// `resolvedCallees` entry has nothing left for this loop to fix — the
+	// re-resolve would no-op under `resolveCallSite`/`resolveMethodCallSite`'s
+	// idempotency guard, and the only consumer of the rebuilt producer map for
+	// such a function (the unresolved-call arm of `validateAllCallsResolved`)
+	// is never reached because every call resolved. So we skip the expensive
+	// `recordFuncOpResults` rebuild + re-resolve for already-fully-resolved
+	// functions, which is the overwhelming majority on a large module. We still
+	// process functions that (a) have an unresolved call (the real fix target),
+	// or (b) lack a per-func map (on-demand clones appended by `resolveAllCalls`).
 	for funcIdx in 0 upto module.functions.count() 'reresolveLoop'
 		let func = try module.functions.get(funcIdx) otherwise panic("propagateClosureArgTypesFromCalls: reresolve funcIdx OOB")
+		let hasMap = funcIdx < producerTypesPerFunc.count()
+		if hasMap 'maybeSkip'
+			let existingProducers = try producerTypesPerFunc.get(funcIdx) otherwise panic("propagateClosureArgTypesFromCalls: producerTypesPerFunc.get({funcIdx}) failed")
+			if not funcHasUnresolvedCall(project, module: module, func: func, producerTypes: existingProducers) 'alreadyResolved'
+				continue
+			end 'alreadyResolved'
+		end 'maybeSkip'
 		var freshProducers = ProducerTypeMap.create()
 		var freshSlots = SlotTypeMap.create()
 		recordFuncOpResults(project, module: module, func: func, producerTypes: freshProducers, slotTypes: freshSlots)
