@@ -647,6 +647,15 @@ function recordCallOpRefs(project Project, scopes UseScopeMap, opIdx OpIndex, op
 		if split.dotIndex >= 0 'hasOwner'
 			recordNamedTypeUse(project, scopes: scopes, name: split.owner, readerFilePath: readerFilePath)
 		end 'hasOwner'
+		// Calling a throwing function references its error type from THIS file:
+		// `try MaxonArgs.parse() otherwise (e)` in another file catches and
+		// matches on `ArgError`, so the union is used cross-file even though no
+		// `named(ArgError)` op or arg type carries it in the caller's body (the
+		// throws clause lives on the callee's declaration). Without this the
+		// error union is wrongly reported unused/over-exported (E3092).
+		if let throwsClause = try project.funcThrowsTypes.get(callee) 'haveThrows'
+			recordThrowsUses(project, scopes: scopes, throws: throwsClause, readerFilePath: readerFilePath)
+		end 'haveThrows'
 	end 'haveCallee'
 	if let recvType = try project.resolvedReceiverTypes.get(opIdx) 'haveRecv'
 		recordTypeUses(project, scopes: scopes, t: recvType, readerFilePath: readerFilePath)
