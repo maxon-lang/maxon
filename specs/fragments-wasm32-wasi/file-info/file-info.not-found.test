@@ -1,0 +1,113 @@
+// Test: file-info.not-found
+function main() returns ExitCode
+	let fi = try File.info(FilePath from "nonexistent_fi_xyz.txt") otherwise 'e'
+		print("not found")
+		return 42
+	end 'e'
+	print("unexpected: size={fi.size}")
+	return 0
+end 'main'
+---
+ExitCode: 42
+Stdout: ```
+not found
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %2 = mir.global_addr @__istr_0
+    %3 = mir.mov_imm 48 : i64
+    %4 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %5 = mir.call @mrt_alloc_with_dtor(%3, %4)
+    mir.store %0, %5, 40 width: qword
+    mir.store %2, %5, 0 width: qword
+    %7 = mir.mov_imm 22 : i64
+    mir.store %7, %5, 8 width: qword
+    %8 = mir.mov_imm -2 : i64
+    mir.store %8, %5, 16 width: qword
+    %9 = mir.mov_imm 1 : i64
+    mir.store %9, %5, 24 width: qword
+    mir.store %0, %5, 32 width: qword
+    %12 = mir.mov_imm 16 : i64
+    %13 = mir.func_addr @__destruct_String
+    %11 = mir.call @stdlib.__mm_alloc(%12, %13)
+    %76 = mir.call @stdlib.__mm_incref(%11)
+    mir.store %5, %11, 0 width: qword
+    mir.store %9, %11, 8 width: qword
+    %15 = mir.call @FilePath.init(%11)
+    %16, %17 = mir.try_call @File.info(%15)
+    %77 = mir.call @__mm_decref_maybenull_helper(%15)
+    %19 = mir.cmp ne, %17, %0
+    mir.cond_br %19 [then: try_0.otherwise(), else: try_0.merge()]
+  try_0.otherwise:
+    %21 = mir.global_addr @__istr_1
+    %22 = mir.mov_imm 48 : i64
+    %23 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %24 = mir.call @mrt_alloc_with_dtor(%22, %23)
+    mir.store %0, %24, 40 width: qword
+    mir.store %21, %24, 0 width: qword
+    %26 = mir.mov_imm 9 : i64
+    mir.store %26, %24, 8 width: qword
+    %27 = mir.mov_imm -2 : i64
+    mir.store %27, %24, 16 width: qword
+    mir.store %9, %24, 24 width: qword
+    mir.store %0, %24, 32 width: qword
+    %31 = mir.mov_imm 16 : i64
+    %32 = mir.func_addr @__destruct_String
+    %30 = mir.call @stdlib.__mm_alloc(%31, %32)
+    mir.store %24, %30, 0 width: qword
+    mir.store %9, %30, 8 width: qword
+    %68 = mir.load %30, 0 width: qword
+    %69 = mir.load %68, 0 width: qword
+    %70 = mir.load %68, 8 width: qword
+    %71 = mir.call @mrt_write_stdout(%69, %70)
+    %78 = mir.call @mm_drop(%30)
+    %35 = mir.mov_imm 42 : i64
+    mir.ret %35
+  try_0.merge:
+    %38 = mir.load %16, 0 width: qword
+    %39 = mir.global_addr @__istr_2
+    %40 = mir.mov_imm 17 : i64
+    %41 = mir.mov_imm 21 : i64
+    %42 = mir.call @mrt_alloc(%41)
+    %43 = mir.call @mrt_i64_to_string(%38, %42)
+    %79 = mir.call @__mm_decref_maybenull_helper(%16)
+    %44 = mir.global_addr @__istr_3
+    %47 = mir.mov_imm 17 : i64
+    %48 = mir.add.i64 %47, %43
+    %49 = mir.add.i64 %48, %0
+    %51 = mir.add.i64 %49, %9
+    %52 = mir.call @mrt_alloc(%51)
+    mir.memcpy %52, %39, %40
+    %53 = mir.add.i64 %52, %40
+    mir.memcpy %53, %42, %43
+    %54 = mir.add.i64 %53, %43
+    mir.memcpy %54, %44, %0
+    %56 = mir.call @stdlib.__mm_decref(%42)
+    %57 = mir.mov_imm 48 : i64
+    %58 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %59 = mir.call @mrt_alloc_with_dtor(%57, %58)
+    mir.store %0, %59, 40 width: qword
+    mir.store %52, %59, 0 width: qword
+    mir.store %49, %59, 8 width: qword
+    mir.store %49, %59, 16 width: qword
+    mir.store %9, %59, 24 width: qword
+    %62 = mir.mov_imm -1 : i64
+    mir.store %62, %59, 32 width: qword
+    %64 = mir.mov_imm 16 : i64
+    %65 = mir.func_addr @__destruct_String
+    %63 = mir.call @stdlib.__mm_alloc(%64, %65)
+    mir.store %59, %63, 0 width: qword
+    mir.store %0, %63, 8 width: qword
+    %72 = mir.load %63, 0 width: qword
+    %73 = mir.load %72, 0 width: qword
+    %74 = mir.load %72, 8 width: qword
+    %75 = mir.call @mrt_write_stdout(%73, %74)
+    %80 = mir.call @mm_drop(%63)
+    mir.ret %0
+  }
+}
+---
