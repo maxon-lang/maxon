@@ -2407,7 +2407,7 @@ function decodeLibraryTarget(buf ByteArray, data StdlibCacheData, target Target,
 	end 'badHeader'
 
 	// The target file IS per-target — its cpu/os must match the requested target.
-	if header.cachedCpu.rawValue != target.cpu.rawValue or header.cachedOs.rawValue != target.os.rawValue 'badTarget'
+	if header.cachedCpu != target.cpu or header.cachedOs != target.os 'badTarget'
 		return false
 	end 'badTarget'
 
@@ -4421,19 +4421,11 @@ end 'writeStdArithConst'
 
 function readStdArithConst(buf ByteArray, offset ByteOffset) returns (StdArithConst, ByteOffset) throws CacheCorruption
 	let opRaw = try readDword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
-	let opcode = try liftStdArithConstOpcode(opRaw)
+	let opcode = try stdArithConstOpcodeFromRaw(opRaw)
 	let resultId = try readQword(buf, offset: offset + 4) otherwise throw CacheCorruption.invalidEncoding
 	let value = try readQword(buf, offset: offset + 12) otherwise throw CacheCorruption.invalidEncoding
 	return (StdArithConst.create(opcode, resultId: resultId, value: value), offset + 20)
 end 'readStdArithConst'
-
-function liftStdArithConstOpcode(raw MachineWord) returns StdArithConstOpcode throws CacheCorruption
-	let kase = try StdArithConstOpcode.unionCases.fromRawValue(raw) otherwise throw CacheCorruption.invalidEncoding
-	return match kase 'oc'
-		constI64 gives StdArithConstOpcode.constI64
-		constF64 gives StdArithConstOpcode.constF64
-	end 'oc'
-end 'liftStdArithConstOpcode'
 
 function writeStdArithUnaryOp(buf ByteArray, u StdArithUnaryOp)
 	writeDword(buf, value: u.opcode.ordinal)

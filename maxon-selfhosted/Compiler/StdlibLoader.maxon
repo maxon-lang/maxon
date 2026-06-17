@@ -809,7 +809,7 @@ export function getStdlibModule(project Project) returns MaxonModule
 		recordPassSince("__restoreStdlibMetadata", startMs: restoreStart)
 
 		// If the target changed, try loading the disk cache for the new target
-		let targetChanged = not warmLib.cacheTargetSet or project.target.cpu.ordinal != warmLib.cacheCpuOrd or project.target.os.ordinal != warmLib.cacheOsOrd
+		let targetChanged = not warmLib.cacheTargetSet or project.target.cpu != warmLib.cacheCpu or project.target.os != warmLib.cacheOs
 		if targetChanged 'loadNewTarget'
 			loadCacheForTarget(project)
 		end 'loadNewTarget'
@@ -1700,8 +1700,8 @@ function activateLibraryCache(libIndex LibraryIndex, data StdlibCacheData, targe
 	var lib = try libraryRegistry.libs.get(libIndex) otherwise panic("activateLibraryCache: registry index {libIndex} missing")
 	lib.cacheData = data
 	lib.cacheValid = true
-	lib.cacheCpuOrd = target.cpu.ordinal
-	lib.cacheOsOrd = target.os.ordinal
+	lib.cacheCpu = target.cpu
+	lib.cacheOs = target.os
 	lib.cacheTargetSet = true
 	try libraryRegistry.libs.set(libIndex, value: lib) otherwise panic("activateLibraryCache: registry index {libIndex} vanished")
 end 'activateLibraryCache'

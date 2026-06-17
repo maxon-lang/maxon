@@ -859,7 +859,7 @@ export type Parser
 	function fileHasTypealiasDiagnostic() returns bool
 		let myPath = filePath.toString()
 		for d in project.diagnostics 'eachDiag'
-			if d.code.rawValue == ErrorCode.semanticDuplicateTypeAlias.rawValue and d.filePath.toString() == myPath 'isMatch'
+			if d.code == ErrorCode.semanticDuplicateTypeAlias and d.filePath.toString() == myPath 'isMatch'
 				return true
 			end 'isMatch'
 		end 'eachDiag'
@@ -8698,7 +8698,7 @@ export type Parser
 	// runtime-interpolated). Pulled out as a free predicate so callers
 	// stay short.
 	function isPanicOp(op MaxonOp) returns bool
-		return op.name == "panic" or op.name == "panicDynamic"
+		return op.rawValue.category == OpCategory.panicking
 	end 'isPanicOp'
 
 	// Allocate the per-arm body and "next" (cmp-or-fallback) blocks and emit
@@ -12017,10 +12017,11 @@ export type Parser
 	// otherwise ...` inside the body already rewrote its call to a tryCall, so
 	// it's skipped here (its error is consumed by its own otherwise).
 	function isRoutableThrowingCallOp(op MaxonOp, opIdx OpIndex) returns bool
-		if op.name != "call" and op.name != "methodCall" 'notACall'
-			return false
-		end 'notACall'
-		return throwsClauseIsThrowing(throwsClauseForBareCallOp(op, opIdx: opIdx))
+		return match op 'extract'
+			literal to br gives false
+			call to methodCall gives throwsClauseIsThrowing(throwsClauseForBareCallOp(op, opIdx: opIdx))
+			ret to cancelPromise gives false
+		end 'extract'
 	end 'isRoutableThrowingCallOp'
 
 	// Resolve the ThrowsClause for a bare `call` / `methodCall` op, mirroring
@@ -12226,12 +12227,10 @@ export type Parser
 	// rewrite, false when the op is some other shape (method call, postfix
 	// chain, etc.) — the caller falls back to `tryRewriteMethodCallToTryMethodCall`.
 	function tryRewriteCallToTryCall(opIdx OpIndex, op MaxonOp, errorFlagName ByteArray, tryRange SourceRange) returns bool
-		if op.name != "call" 'notACall'
-			return false
-		end 'notACall'
-		match op 'shape'
-			call(callResult, callee, callContext, args, argLabels, argTypes, argRanges, _) then return rewriteCallOpToTryCall(opIdx, callResult: callResult, callee: callee, callContext: callContext, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, errorFlagName: errorFlagName, range: tryRange)
-			default panic("tryRewriteCallToTryCall: op.name == 'call' but match did not extract")
+		return match op 'shape'
+			literal to br gives false
+			call(callResult, callee, callContext, args, argLabels, argTypes, argRanges, _) gives rewriteCallOpToTryCall(opIdx, callResult: callResult, callee: callee, callContext: callContext, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, errorFlagName: errorFlagName, range: tryRange)
+			methodCall to cancelPromise gives false
 		end 'shape'
 	end 'tryRewriteCallToTryCall'
 
@@ -12279,24 +12278,20 @@ export type Parser
 	end 'parseAsyncExpression'
 
 	function tryRewriteCallToAsyncCall(opIdx OpIndex, op MaxonOp, innerType MaxonType, sourceText String, asyncRange SourceRange) returns bool
-		if op.name != "call" 'notACall'
-			return false
-		end 'notACall'
-		match op 'shape'
-			call(callResult, callee, callContext, args, argLabels, argTypes, argRanges, _) then return rewriteCallOpToAsyncCall(opIdx, callResult: callResult, callee: callee, callContext: callContext, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, innerType: innerType, sourceText: sourceText, range: asyncRange)
-			default panic("tryRewriteCallToAsyncCall: op.name == 'call' but match did not extract")
+		return match op 'shape'
+			literal to br gives false
+			call(callResult, callee, callContext, args, argLabels, argTypes, argRanges, _) gives rewriteCallOpToAsyncCall(opIdx, callResult: callResult, callee: callee, callContext: callContext, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, innerType: innerType, sourceText: sourceText, range: asyncRange)
+			methodCall to cancelPromise gives false
 		end 'shape'
 	end 'tryRewriteCallToAsyncCall'
 
 	// Tier 4: rewrite a terminal `awaitPromise` op into a `tryAwait` so `try
 	// await p` binds the post-await error flag (mirrors tryRewriteCallToTryCall).
 	function tryRewriteAwaitToTryAwait(opIdx OpIndex, op MaxonOp, errorFlagName ByteArray, tryRange SourceRange) returns bool
-		if op.name != "awaitPromise" 'notAwait'
-			return false
-		end 'notAwait'
-		match op 'shape'
-			awaitPromise(result, promise, innerType, promiseType, _) then return rewriteAwaitOpToTryAwait(opIdx, result: result, promise: promise, innerType: innerType, promiseType: promiseType, errorBoundName: errorFlagName, range: tryRange)
-			default panic("tryRewriteAwaitToTryAwait: op.name == awaitPromise but match did not extract")
+		return match op 'shape'
+			literal to asyncCall gives false
+			awaitPromise(result, promise, innerType, promiseType, _) gives rewriteAwaitOpToTryAwait(opIdx, result: result, promise: promise, innerType: innerType, promiseType: promiseType, errorBoundName: errorFlagName, range: tryRange)
+			tryAwait to cancelPromise gives false
 		end 'shape'
 	end 'tryRewriteAwaitToTryAwait'
 
@@ -12346,12 +12341,10 @@ export type Parser
 	// ABI (RDX/X1). Mirrors `tryRewriteCallToTryCall`'s relationship to
 	// `tryCall`.
 	function tryRewriteMethodCallToTryMethodCall(opIdx OpIndex, op MaxonOp, errorFlagName ByteArray, tryRange SourceRange) returns bool
-		if op.name != "methodCall" 'notAMethodCall'
-			return false
-		end 'notAMethodCall'
-		match op 'shape'
-			methodCall(methodResult, receiver, methodName, args, argLabels, argTypes, argRanges, _) then return rewriteMethodCallOpToTryMethodCall(opIdx, methodResult: methodResult, receiver: receiver, methodName: methodName, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, errorFlagName: errorFlagName, range: tryRange)
-			default panic("tryRewriteMethodCallToTryMethodCall: op.name == 'methodCall' but match did not extract")
+		return match op 'shape'
+			literal to call gives false
+			methodCall(methodResult, receiver, methodName, args, argLabels, argTypes, argRanges, _) gives rewriteMethodCallOpToTryMethodCall(opIdx, methodResult: methodResult, receiver: receiver, methodName: methodName, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, errorFlagName: errorFlagName, range: tryRange)
+			ret to cancelPromise gives false
 		end 'shape'
 	end 'tryRewriteMethodCallToTryMethodCall'
 
@@ -12466,13 +12459,15 @@ export type Parser
 			if not isUnresolvedType(producerType) 'haveType'
 				return producerType
 			end 'haveType'
-			if op.name == "varLoad" 'isVarLoadMatch'
-				let chainedType = chaseVarLoadProducerType(op, targetName: targetName, scanFrom: idx, depth: depth)
-				if not isUnresolvedType(chainedType) 'chained'
-					return chainedType
-				end 'chained'
+			let chainedType = match op 'isVarLoadMatch'
+				literal to varDecl gives MaxonType.unresolved
+				varLoad gives chaseVarLoadProducerType(op, targetName: targetName, scanFrom: idx, depth: depth)
+				varStore to cancelPromise gives MaxonType.unresolved
 			end 'isVarLoadMatch'
-			if op.name == "call" or op.name == "tryCall" 'isCallMatch'
+			if not isUnresolvedType(chainedType) 'chained'
+				return chainedType
+			end 'chained'
+			if op.rawValue.category == OpCategory.callFree 'isCallMatch'
 				let callType = callResultTypeIfNameMatches(op, targetName: targetName)
 				if not isUnresolvedType(callType) 'haveCallType'
 					return callType
@@ -12505,12 +12500,14 @@ export type Parser
 		var declIdx = scanFrom - 1
 		while true 'findDecl'
 			let prevOp = try module.ops.get(declIdx) otherwise return MaxonType.unresolved
-			if prevOp.name == "varDecl" 'isDecl'
-				let declMatch = extractVarDeclValueIfSlot(prevOp, slotId: slotInfo.slot)
-				if declMatch.matched 'found'
-					return scanProducerTypeForNameWithDepth(declMatch.value, scanFrom: declIdx, depth: depth + 1)
-				end 'found'
+			let declMatch = match prevOp 'isDecl'
+				literal to stringInterp gives VarDeclValueInfo.notMatched()
+				varDecl gives extractVarDeclValueIfSlot(prevOp, slotId: slotInfo.slot)
+				varLoad to cancelPromise gives VarDeclValueInfo.notMatched()
 			end 'isDecl'
+			if declMatch.matched 'found'
+				return scanProducerTypeForNameWithDepth(declMatch.value, scanFrom: declIdx, depth: depth + 1)
+			end 'found'
 			if declIdx == 0 'atStart'
 				return MaxonType.unresolved
 			end 'atStart'
@@ -12630,19 +12627,13 @@ export type Parser
 	end 'genericAliasBaseStructName'
 
 	function extractCallProducerInfo(op MaxonOp, targetName ByteArray) returns CallProducerInfo
-		if op.name == "call" 'isCall'
-			return match op 'shape'
-				call(result, calleeName, ctx, _, _, _, _, _) gives callProducerInfoIfResultMatch(result, target: targetName, callee: calleeName, callContext: ctx)
-				default panic("extractCallProducerInfo: op.name == 'call' but match did not extract")
-			end 'shape'
-		end 'isCall'
-		if op.name == "tryCall" 'isTryCall'
-			return match op 'tryShape'
-				tryCall(result, calleeName, ctx, _, _, _, _, _, _) gives callProducerInfoIfResultMatch(result, target: targetName, callee: calleeName, callContext: ctx)
-				default panic("extractCallProducerInfo: op.name == 'tryCall' but match did not extract")
-			end 'tryShape'
-		end 'isTryCall'
-		return CallProducerInfo.notMatched()
+		return match op 'shape'
+			literal to br gives CallProducerInfo.notMatched()
+			call(result, calleeName, ctx, _, _, _, _, _) gives callProducerInfoIfResultMatch(result, target: targetName, callee: calleeName, callContext: ctx)
+			methodCall to throw gives CallProducerInfo.notMatched()
+			tryCall(result, calleeName, ctx, _, _, _, _, _, _) gives callProducerInfoIfResultMatch(result, target: targetName, callee: calleeName, callContext: ctx)
+			tryMethodCall to cancelPromise gives CallProducerInfo.notMatched()
+		end 'shape'
 	end 'extractCallProducerInfo'
 
 	function callProducerInfoIfResultMatch(result ByteArray, target ByteArray, callee ByteArray, callContext CallContext) returns CallProducerInfo
@@ -12660,48 +12651,25 @@ export type Parser
 	// enumerating every MaxonOp constructor while still complying with the
 	// "no silent default" invariant.
 	function producerTypeIfNameMatches(op MaxonOp, targetName ByteArray) returns MaxonType
-		if op.name == "varLoad" 'isVarLoad'
-			return match op 'shape'
-				varLoad(name, _, slotType, _) gives typeIfNamesEqual(name, target: targetName, t: slotType)
-				default panic("producerTypeIfNameMatches: op.name == 'varLoad' but match did not extract")
-			end 'shape'
-		end 'isVarLoad'
-		if op.name == "structAlloc" 'isStructAlloc'
-			return match op 'shape'
-				structAlloc(result, structName, _) gives typeIfNamesEqual(result, target: targetName, t: MaxonType.named(project.typeNames.intern(String.from(structName))))
-				default panic("producerTypeIfNameMatches: op.name == 'structAlloc' but match did not extract")
-			end 'shape'
-		end 'isStructAlloc'
-		if op.name == "literal" 'isLiteral'
-			return match op 'shape'
-				literal(result, _, valueType, _) gives typeIfNamesEqual(result, target: targetName, t: valueType)
-				default panic("producerTypeIfNameMatches: op.name == 'literal' but match did not extract")
-			end 'shape'
-		end 'isLiteral'
-		if op.name == "convert" 'isConvert'
-			return match op 'shape'
-				convert(result, _, _, toType, _, _) gives typeIfNamesEqual(result, target: targetName, t: toType)
-				default panic("producerTypeIfNameMatches: op.name == 'convert' but match did not extract")
-			end 'shape'
-		end 'isConvert'
-		if op.name == "globalLoad" 'isGlobalLoad'
-			return match op 'shape'
-				globalLoad(result, _, slotType, _) gives typeIfNamesEqual(result, target: targetName, t: slotType)
-				default panic("producerTypeIfNameMatches: op.name == 'globalLoad' but match did not extract")
-			end 'shape'
-		end 'isGlobalLoad'
 		// Phase D: `self.field.method() otherwise (e)` — the receiver `field`
 		// is loaded via selfFieldLoad before the methodCall, so producer-type
 		// scanning must walk the enclosing struct's field list to recover the
 		// receiver MaxonType. Without this, `(e)` falls back to integer and
 		// the subsequent match on a typed-error variant trips E3005.
-		if op.name == "selfFieldLoad" 'isSelfFieldLoad'
-			return match op 'shape'
-				selfFieldLoad(result, fieldName, _) gives selfFieldTypeIfNamesEqual(result, target: targetName, fieldName: fieldName)
-				default panic("producerTypeIfNameMatches: op.name == 'selfFieldLoad' but match did not extract")
-			end 'shape'
-		end 'isSelfFieldLoad'
-		return MaxonType.unresolved
+		return match op 'shape'
+			literal(result, _, valueType, _) gives typeIfNamesEqual(result, target: targetName, t: valueType)
+			stringConst to varDecl gives MaxonType.unresolved
+			varLoad(name, _, slotType, _) gives typeIfNamesEqual(name, target: targetName, t: slotType)
+			varStore gives MaxonType.unresolved
+			globalLoad(result, _, slotType, _) gives typeIfNamesEqual(result, target: targetName, t: slotType)
+			globalStore to unop gives MaxonType.unresolved
+			convert(result, _, _, toType, _, _) gives typeIfNamesEqual(result, target: targetName, t: toType)
+			castCheck to panicDynamic gives MaxonType.unresolved
+			structAlloc(result, structName, _) gives typeIfNamesEqual(result, target: targetName, t: MaxonType.named(project.typeNames.intern(String.from(structName))))
+			fieldLoad to fieldStore gives MaxonType.unresolved
+			selfFieldLoad(result, fieldName, _) gives selfFieldTypeIfNamesEqual(result, target: targetName, fieldName: fieldName)
+			selfFieldStore to cancelPromise gives MaxonType.unresolved
+		end 'shape'
 	end 'producerTypeIfNameMatches'
 
 	// Resolve a selfFieldLoad's result to its field's declared MaxonType by
@@ -15005,22 +14973,32 @@ export type Parser
 		end 'noPrev'
 		let lastIdx = opCount - 1
 		let lastOp = try module.ops.get(lastIdx) otherwise panic("emitErrorFlagDrain: ops.get OOB at last idx={lastIdx}")
-		if lastOp.name == "call" 'isCall'
-			let rewrote = tryRewriteCallToTryCall(lastIdx, op: lastOp, errorFlagName: drainName, tryRange: range)
-			if not rewrote 'failedCallRewrite'
-				panic("emitErrorFlagDrain: tryRewriteCallToTryCall returned false on lastOp.name=='call'")
-			end 'failedCallRewrite'
-			return
-		end 'isCall'
-		if lastOp.name == "methodCall" 'isMethodCall'
-			let rewrote = tryRewriteMethodCallToTryMethodCall(lastIdx, op: lastOp, errorFlagName: drainName, tryRange: range)
-			if not rewrote 'failedMethodRewrite'
-				panic("emitErrorFlagDrain: tryRewriteMethodCallToTryMethodCall returned false on lastOp.name=='methodCall'")
-			end 'failedMethodRewrite'
-			return
-		end 'isMethodCall'
-		panic("emitErrorFlagDrain: preceding op kind '{lastOp.name}' is neither call nor methodCall")
+		match lastOp 'shape'
+			literal to br then panic("emitErrorFlagDrain: preceding op is neither call nor methodCall")
+			call then drainCallErrorFlag(lastIdx, op: lastOp, drainName: drainName, range: range)
+			methodCall then drainMethodCallErrorFlag(lastIdx, op: lastOp, drainName: drainName, range: range)
+			ret to cancelPromise then panic("emitErrorFlagDrain: preceding op is neither call nor methodCall")
+		end 'shape'
 	end 'emitErrorFlagDrain'
+
+	// Rewrite the preceding `call` op in place to its `tryCall` form, binding
+	// the drain name as the (never-read) error flag. The rewrite cannot fail
+	// here: the match arm already proved the op is a `call`.
+	function drainCallErrorFlag(lastIdx OpIndex, op MaxonOp, drainName ByteArray, range SourceRange)
+		let rewrote = tryRewriteCallToTryCall(lastIdx, op: op, errorFlagName: drainName, tryRange: range)
+		if not rewrote 'failedCallRewrite'
+			panic("emitErrorFlagDrain: tryRewriteCallToTryCall returned false on call op")
+		end 'failedCallRewrite'
+	end 'drainCallErrorFlag'
+
+	// Rewrite the preceding `methodCall` op in place to its `tryMethodCall`
+	// form. Cannot fail: the match arm already proved the op is a `methodCall`.
+	function drainMethodCallErrorFlag(lastIdx OpIndex, op MaxonOp, drainName ByteArray, range SourceRange)
+		let rewrote = tryRewriteMethodCallToTryMethodCall(lastIdx, op: op, errorFlagName: drainName, tryRange: range)
+		if not rewrote 'failedMethodRewrite'
+			panic("emitErrorFlagDrain: tryRewriteMethodCallToTryMethodCall returned false on methodCall op")
+		end 'failedMethodRewrite'
+	end 'drainMethodCallErrorFlag'
 
 	// Single-quote literal in expression position. The lexer also produces
 	// charLiteral tokens for block labels (`'loop'`); the parser
@@ -15978,7 +15956,7 @@ export type Parser
 		// itself. Mirrors the split between FormatTokenValueForError and raw
 		// `Current().Value` in the C# bootstrap.
 		var displayValue = tokenValueToString(token.value)
-		if wrongKindCode.rawValue == ErrorCode.parserExpectedExpression.rawValue 'expressionForm'
+		if wrongKindCode == ErrorCode.parserExpectedExpression 'expressionForm'
 			displayValue = formatExpressionTokenValue(token.value)
 		end 'expressionForm'
 		reportCompileError(project, code: wrongKindCode, message: "Expected {expectedDisplay} but got '{displayValue}'", line: token.line, column: token.column, filePath: filePath)
@@ -16922,7 +16900,7 @@ export type Parser
 		var idx = opCountAfter - 1
 		while idx >= opCountBefore 'scanBack'
 			let op = try module.ops.get(idx) otherwise return
-			if op.name == "call" or op.name == "tryCall" or op.name == "methodCall" or op.name == "tryMethodCall" 'isCallShape'
+			if op.rawValue.category == OpCategory.callFree or op.rawValue.category == OpCategory.callMethod 'isCallShape'
 				tagDiscardedCallResult(callOpResultName(op), isBare: isBare)
 				return
 			end 'isCallShape'
@@ -16937,31 +16915,15 @@ export type Parser
 	// an empty ByteArray for non-call ops so callers can rely on a
 	// `count() > 0` membership probe to skip them.
 	function callOpResultName(op MaxonOp) returns ByteArray
-		if op.name == "call" 'isCall'
-			return match op 'callShape'
-				call(result, _, _, _, _, _, _, _) gives result
-				default panic("callOpResultName: op.name == call but match failed")
-			end 'callShape'
-		end 'isCall'
-		if op.name == "tryCall" 'isTryCall'
-			return match op 'tryCallShape'
-				tryCall(result, _, _, _, _, _, _, _, _) gives result
-				default panic("callOpResultName: op.name == tryCall but match failed")
-			end 'tryCallShape'
-		end 'isTryCall'
-		if op.name == "methodCall" 'isMethodCall'
-			return match op 'methodCallShape'
-				methodCall(result, _, _, _, _, _, _, _) gives result
-				default panic("callOpResultName: op.name == methodCall but match failed")
-			end 'methodCallShape'
-		end 'isMethodCall'
-		if op.name == "tryMethodCall" 'isTryMethodCall'
-			return match op 'tryMethodCallShape'
-				tryMethodCall(result, _, _, _, _, _, _, _, _) gives result
-				default panic("callOpResultName: op.name == tryMethodCall but match failed")
-			end 'tryMethodCallShape'
-		end 'isTryMethodCall'
-		return ByteArray.create()
+		return match op 'callShape'
+			literal to br gives ByteArray.create()
+			call(result, _, _, _, _, _, _, _) gives result
+			methodCall(result, _, _, _, _, _, _, _) gives result
+			ret to throw gives ByteArray.create()
+			tryCall(result, _, _, _, _, _, _, _, _) gives result
+			tryMethodCall(result, _, _, _, _, _, _, _, _) gives result
+			rethrow to cancelPromise gives ByteArray.create()
+		end 'callShape'
 	end 'callOpResultName'
 
 	function lookupVariable(name String, token Token) returns VarSlot
@@ -17430,6 +17392,14 @@ function mintSynthName(counter ParsedInt) returns ByteArray
 	return "$t{counter}".toByteArray()
 end 'mintSynthName'
 
+// Empty match-arm body for the `to`-range arms that name the MaxonOp (or other
+// union) variants a pass deliberately skips. A bare `default` arm is disallowed
+// (it would silently swallow unhandled cases), so every irrelevant variant is
+// named via a `to`-range arm whose body is this no-op. Shared across the
+// Compiler namespace so each skip-heavy dispatch doesn't redeclare it.
+module function noOp()
+end 'noOp'
+
 // G.2: classification of an `__enum_<X>_fromRawValue` / `_fromName` call
 // target after the post-parse validation pass inspects `project`'s enum
 // tables. Drives whether `validateEnumLookupCalls` synthesizes the helper,
@@ -17614,24 +17584,12 @@ export function validateEnumLookupCalls(project Project, allModule MaxonModule)
 					panic("validateEnumLookupCalls: opIdx={opIdx} out of bounds (opCount={opCount}) during collect")
 				end 'oobCollect'
 				let op = try allModule.ops.get(opIdx) otherwise panic("validateEnumLookupCalls: ops.get OOB at {opIdx} during collect")
-				if op.name == "literal" 'isLiteral'
-					match op 'extractLiteral'
-						literal(litResult, _, _, _) then litProducerMap.upsert(litResult, value: opIdx)
-						default panic("validateEnumLookupCalls: op.name == 'literal' but match fell through")
-					end 'extractLiteral'
-				end 'isLiteral'
-				if op.name == "stringConst" 'isStringConst'
-					match op 'extractStringConst'
-						stringConst(strResult, _, _) then litProducerMap.upsert(strResult, value: opIdx)
-						default panic("validateEnumLookupCalls: op.name == 'stringConst' but match fell through")
-					end 'extractStringConst'
-				end 'isStringConst'
-				if op.name == "charLiteral" 'isCharLiteral'
-					match op 'extractCharLiteral'
-						charLiteral(chResult, _, _) then litProducerMap.upsert(chResult, value: opIdx)
-						default panic("validateEnumLookupCalls: op.name == 'charLiteral' but match fell through")
-					end 'extractCharLiteral'
-				end 'isCharLiteral'
+				match op 'extractLiteralProducer'
+					literal(litResult, _, _, _) then litProducerMap.upsert(litResult, value: opIdx)
+					stringConst(strResult, _, _) then litProducerMap.upsert(strResult, value: opIdx)
+					charLiteral(chResult, _, _) then litProducerMap.upsert(chResult, value: opIdx)
+					byteStringLiteral to cancelPromise then noOp()
+				end 'extractLiteralProducer'
 			end 'collectOps'
 		end 'collectBlocks'
 		for blockRef in func.blockRefs 'eachBlockRef'
@@ -17648,18 +17606,13 @@ export function validateEnumLookupCalls(project Project, allModule MaxonModule)
 				// an `errorBoundName` that gets preserved across the
 				// "callee restored to natural form" branch via
 				// `maybeValidateOneEnumLookupTryCall`.
-				if op.name == "call" 'isCall'
-					match op 'extractCall'
-						call(result, callee, callContext, args, argLabels, argTypes, argRanges, range) then maybeValidateOneEnumLookupCall(project, module: allModule, opIdx: opIdx, result: result, callee: callee, callContext: callContext, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, range: range, callerFilePath: callerFilePath, callerFuncName: func.name, rawValuePrefix: rawValuePrefix, rawValueSuffix: rawValueSuffix, fromNameSuffix: fromNameSuffix, litProducerMap: litProducerMap)
-						default panic("validateEnumLookupCalls: op.name == 'call' but match fell through")
-					end 'extractCall'
-				end 'isCall'
-				if op.name == "tryCall" 'isTryCall'
-					match op 'extractTry'
-						tryCall(result, callee, callContext, args, argLabels, argTypes, argRanges, errorBoundName, range) then maybeValidateOneEnumLookupTryCall(project, module: allModule, opIdx: opIdx, result: result, callee: callee, callContext: callContext, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, errorBoundName: errorBoundName, range: range, callerFilePath: callerFilePath, callerFuncName: func.name, rawValuePrefix: rawValuePrefix, rawValueSuffix: rawValueSuffix, fromNameSuffix: fromNameSuffix, litProducerMap: litProducerMap)
-						default panic("validateEnumLookupCalls: op.name == 'tryCall' but match fell through")
-					end 'extractTry'
-				end 'isTryCall'
+				match op 'extractEnumLookupCall'
+					literal to br then noOp()
+					call(result, callee, callContext, args, argLabels, argTypes, argRanges, range) then maybeValidateOneEnumLookupCall(project, module: allModule, opIdx: opIdx, result: result, callee: callee, callContext: callContext, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, range: range, callerFilePath: callerFilePath, callerFuncName: func.name, rawValuePrefix: rawValuePrefix, rawValueSuffix: rawValueSuffix, fromNameSuffix: fromNameSuffix, litProducerMap: litProducerMap)
+					methodCall to throw then noOp()
+					tryCall(result, callee, callContext, args, argLabels, argTypes, argRanges, errorBoundName, range) then maybeValidateOneEnumLookupTryCall(project, module: allModule, opIdx: opIdx, result: result, callee: callee, callContext: callContext, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, errorBoundName: errorBoundName, range: range, callerFilePath: callerFilePath, callerFuncName: func.name, rawValuePrefix: rawValuePrefix, rawValueSuffix: rawValueSuffix, fromNameSuffix: fromNameSuffix, litProducerMap: litProducerMap)
+					tryMethodCall to cancelPromise then noOp()
+				end 'extractEnumLookupCall'
 			end 'eachOp'
 		end 'eachBlockRef'
 	end 'eachFunc'
@@ -17771,12 +17724,11 @@ export function validateIndirectCallLabels(project Project, allModule MaxonModul
 					panic("validateIndirectCallLabels: opIdx={opIdx} out of bounds (opCount={opCount}) during collect")
 				end 'oobCollect'
 				let op = try allModule.ops.get(opIdx) otherwise panic("validateIndirectCallLabels: ops.get OOB at {opIdx} during collect")
-				if op.name == "varLoad" 'isVarLoad'
-					match op 'extractVarLoad'
-						varLoad(result, _, _, _) then varLoadOpIdx.upsert(result, value: opIdx)
-						default panic("validateIndirectCallLabels: op.name == 'varLoad' but match fell through")
-					end 'extractVarLoad'
-				end 'isVarLoad'
+				match op 'extractVarLoad'
+					literal to varDecl then noOp()
+					varLoad(result, _, _, _) then varLoadOpIdx.upsert(result, value: opIdx)
+					varStore to cancelPromise then noOp()
+				end 'extractVarLoad'
 			end 'collectOps'
 		end 'collectBlocks'
 		// Second sub-pass: act on indirectCall ops with the sentinel
@@ -17790,12 +17742,11 @@ export function validateIndirectCallLabels(project Project, allModule MaxonModul
 					panic("validateIndirectCallLabels: opIdx={opIdx} out of bounds (opCount={opCount}) during patch")
 				end 'oobPatch'
 				let op = try allModule.ops.get(opIdx) otherwise panic("validateIndirectCallLabels: ops.get OOB at {opIdx} during patch")
-				if op.name == "indirectCall" 'isIndirect'
-					match op 'extractIndirect'
-						indirectCall(result, callee, fnTypeId, args, argLabels, argTypes, argRanges, range) then maybePatchOneIndirectCall(project, module: allModule, opIdx: opIdx, result: result, callee: callee, fnTypeId: fnTypeId, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, range: range, callerFilePath: callerFilePath, varLoadOpIdx: varLoadOpIdx)
-						default panic("validateIndirectCallLabels: op.name == 'indirectCall' but match fell through")
-					end 'extractIndirect'
-				end 'isIndirect'
+				match op 'extractIndirect'
+					literal to closureEnvLoad then noOp()
+					indirectCall(result, callee, fnTypeId, args, argLabels, argTypes, argRanges, range) then maybePatchOneIndirectCall(project, module: allModule, opIdx: opIdx, result: result, callee: callee, fnTypeId: fnTypeId, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, range: range, callerFilePath: callerFilePath, varLoadOpIdx: varLoadOpIdx)
+					forInIterable to cancelPromise then noOp()
+				end 'extractIndirect'
 			end 'patchOps'
 		end 'patchBlocks'
 	end 'eachFunc'
@@ -18247,7 +18198,7 @@ function propagateCharByteForOp(project Project, op MaxonOp, funcName String, ch
 	// Cheap pre-filter on op tag avoids exhaustively listing every other
 	// MaxonOp arm just to skip them. The three arms below are the only ones
 	// that participate in char-byte slot taint flow.
-	if op.name != "varDecl" and op.name != "varLoad" and op.name != "varStore" 'unrelated'
+	if op.rawValue.category != OpCategory.varAccess 'unrelated'
 		return
 	end 'unrelated'
 	match op 'rec'

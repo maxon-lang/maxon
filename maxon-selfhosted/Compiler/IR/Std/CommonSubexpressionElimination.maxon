@@ -141,7 +141,7 @@ function hoistDuplicateConstantsToEntry(module StdModule, func IrFunction, remap
 			canonicalIds.upsert(key, value: existing)
 		end 'haveEntryDef' else 'needsFresh'
 			let parts = splitConstKey(key)
-			let opcode = constOpcodeFromOrdinal(parts.opcodeOrd)
+			let opcode = try stdArithConstOpcodeFromRaw(parts.opcodeOrd) otherwise panic("hoistDuplicateConstantsToEntry: unknown const opcode ordinal {parts.opcodeOrd}")
 			let resultId = allocValueId(nextValueIdRef)
 			let newOp = StdOp.arith(StdArithOp.const(StdArithConst.create(opcode, resultId: resultId, value: parts.value)))
 			let newOpIdx = module.ops.count()
@@ -222,16 +222,6 @@ function splitConstKey(key String) returns ConstKeyParts
 	let value = try int.fromString(valueStr) otherwise panic("splitConstKey: value '{valueStr}' not an int (key={key})")
 	return ConstKeyParts.create(opcodeOrd, value: value)
 end 'splitConstKey'
-
-function constOpcodeFromOrdinal(opcodeOrd ValueId) returns StdArithConstOpcode
-	if opcodeOrd == StdArithConstOpcode.constI64.ordinal 'isI64'
-		return StdArithConstOpcode.constI64
-	end 'isI64'
-	if opcodeOrd == StdArithConstOpcode.constF64.ordinal 'isF64'
-		return StdArithConstOpcode.constF64
-	end 'isF64'
-	panic("constOpcodeFromOrdinal: unknown ordinal {opcodeOrd}")
-end 'constOpcodeFromOrdinal'
 
 // Position of the first non-param op in `opRefs`. Stage A inserts the
 // hoisted const ops here so they sit after the function's `param` ops

@@ -900,15 +900,14 @@ function bindingSlotTypeIsReferenceType(project Project, module MaxonModule, fun
 			let block = try module.blocks.get(blockRef) otherwise panic("bindingSlotTypeIsReferenceType: blockRef OOB")
 			for opIdx in block.opRefs 'eachOp'
 				let op = try module.ops.get(opIdx) otherwise panic("bindingSlotTypeIsReferenceType: opIdx OOB")
-				if op.name == "varDecl" 'isVarDecl'
-					let isMatch = match op 'declShape'
-						varDecl(declSlot, _, slotType, _) gives declSlot == slotId and maxonTypeIsReferenceType(project, t: slotType)
-						default panic("bindingSlotTypeIsReferenceType: op.name == varDecl but match failed")
-					end 'declShape'
-					if isMatch 'found'
-						return true
-					end 'found'
-				end 'isVarDecl'
+				let isMatch = match op 'declShape'
+					varDecl(declSlot, _, slotType, _) gives declSlot == slotId and maxonTypeIsReferenceType(project, t: slotType)
+					literal to stringInterp gives false
+					varLoad to cancelPromise gives false
+				end 'declShape'
+				if isMatch 'found'
+					return true
+				end 'found'
 			end 'eachOp'
 		end 'eachBlock'
 		return false
@@ -987,30 +986,15 @@ function checkErrorHandlingRules(project Project, module MaxonModule)
 			let block = try module.blocks.get(blockRef) otherwise panic("checkErrorHandlingRules: blockRef OOB")
 			for opIdx in block.opRefs 'eachOp'
 				let op = try module.ops.get(opIdx) otherwise panic("checkErrorHandlingRules: opIdx OOB")
-				if op.name == "call" 'isCall'
-					match op 'checkCallOp'
-						call(_, callee, callContext, _, _, _, _, range) then checkCallForThrowsViolation(project, callee: callee, callContext: callContext, funcNamespace: func.namespace, readerFilePath: readerFilePath, range: range)
-						default panic("checkErrorHandlingRules: op.name == call but match failed")
-					end 'checkCallOp'
-				end 'isCall'
-				if op.name == "tryCall" 'isTryCall'
-					match op 'checkTryCallOp'
-						tryCall(_, callee, callContext, _, _, _, _, _, range) then checkTryCallForNonThrowingViolation(project, callee: callee, callContext: callContext, funcNamespace: func.namespace, readerFilePath: readerFilePath, range: range)
-						default panic("checkErrorHandlingRules: op.name == tryCall but match failed")
-					end 'checkTryCallOp'
-				end 'isTryCall'
-				if op.name == "methodCall" 'isMethodCall'
-					match op 'checkMethodCallOp'
-						methodCall(result, _, methodName, _, _, _, _, range) then checkMethodCallForThrowsViolation(project, opIdx: opIdx, result: result, methodName: methodName, readerFilePath: readerFilePath, range: range)
-						default panic("checkErrorHandlingRules: op.name == methodCall but match failed")
-					end 'checkMethodCallOp'
-				end 'isMethodCall'
-				if op.name == "tryMethodCall" 'isTryMethodCall'
-					match op 'checkTryMethodCallOp'
-						tryMethodCall(_, _, _, _, _, _, _, _, range) then checkTryMethodCallForNonThrowingViolation(project, opIdx: opIdx, readerFilePath: readerFilePath, range: range)
-						default panic("checkErrorHandlingRules: op.name == tryMethodCall but match failed")
-					end 'checkTryMethodCallOp'
-				end 'isTryMethodCall'
+				match op 'checkCallOp'
+					call(_, callee, callContext, _, _, _, _, range) then checkCallForThrowsViolation(project, callee: callee, callContext: callContext, funcNamespace: func.namespace, readerFilePath: readerFilePath, range: range)
+					methodCall(result, _, methodName, _, _, _, _, range) then checkMethodCallForThrowsViolation(project, opIdx: opIdx, result: result, methodName: methodName, readerFilePath: readerFilePath, range: range)
+					tryCall(_, callee, callContext, _, _, _, _, _, range) then checkTryCallForNonThrowingViolation(project, callee: callee, callContext: callContext, funcNamespace: func.namespace, readerFilePath: readerFilePath, range: range)
+					tryMethodCall(_, _, _, _, _, _, _, _, range) then checkTryMethodCallForNonThrowingViolation(project, opIdx: opIdx, readerFilePath: readerFilePath, range: range)
+					literal to br then noOp()
+					ret to throw then noOp()
+					rethrow to cancelPromise then noOp()
+				end 'checkCallOp'
 			end 'eachOp'
 		end 'eachBlock'
 	end 'eachFunc'
@@ -1096,8 +1080,10 @@ function moduleHasAsyncCall(module MaxonModule) returns bool
 			let block = try module.blocks.get(blockRef) otherwise panic("moduleHasAsyncCall: blockRef OOB")
 			for opIdx in block.opRefs 'eachOp'
 				let op = try module.ops.get(opIdx) otherwise panic("moduleHasAsyncCall: opIdx OOB")
-				if op.name == "asyncCall" 'found'
-					return true
+				match op 'found'
+					asyncCall then return true
+					literal to forInIterable then noOp()
+					awaitPromise to cancelPromise then noOp()
 				end 'found'
 			end 'eachOp'
 		end 'eachBlock'
@@ -1109,31 +1095,10 @@ end 'moduleHasAsyncCall'
 // function yield; call/tryCall ops either mark a yield (I/O stub callee) or
 // contribute a qualified callee edge for the fixed-point.
 function classifyYieldOp(project Project, opIdx OpIndex, op MaxonOp, func IrFunction, yields StringSet, callees FuncNameArray)
-	if op.name == "awaitPromise" or op.name == "tryAwait" 'isAwait'
+	if op.rawValue.category == OpCategory.awaiting 'isAwait'
 		yields.insert(func.name)
 		return
 	end 'isAwait'
-	if op.name == "asyncCall" 'isAsync'
-		match op 'a'
-			asyncCall(_, callee, callContext, _, _, _, _, _, _, _, _) then handleYieldCallEdge(project, callee: callee, callContext: callContext, func: func, yields: yields, callees: callees)
-			default panic("classifyYieldOp: op.name == asyncCall but match failed")
-		end 'a'
-		return
-	end 'isAsync'
-	if op.name == "call" 'isCall'
-		match op 'c'
-			call(_, callee, callContext, _, _, _, _, _) then handleYieldCallEdge(project, callee: callee, callContext: callContext, func: func, yields: yields, callees: callees)
-			default panic("classifyYieldOp: op.name == call but match failed")
-		end 'c'
-		return
-	end 'isCall'
-	if op.name == "tryCall" 'isTryCall'
-		match op 't'
-			tryCall(_, callee, callContext, _, _, _, _, _, _) then handleYieldCallEdge(project, callee: callee, callContext: callContext, func: func, yields: yields, callees: callees)
-			default panic("classifyYieldOp: op.name == tryCall but match failed")
-		end 't'
-		return
-	end 'isTryCall'
 	// A `recv.method(...)` / `try recv.method(...)` call: at the Maxon tier the
 	// callee is still a `methodCall`/`tryMethodCall` (not yet lowered to a
 	// qualified `call`), so resolve `{ReceiverType}.{methodName}` from
@@ -1141,20 +1106,17 @@ function classifyYieldOp(project Project, opIdx OpIndex, op MaxonOp, func IrFunc
 	// this the yield walk can't see `child.readStdoutLine()` reach the
 	// `__Builtins.subprocessReadStdoutLine` I/O stub inside the method body, so an
 	// `async`-spawned thunk that yields only via a method call wrongly trips E3073.
-	if op.name == "methodCall" 'isMethodCall'
-		match op 'mc'
-			methodCall(_, _, methodName, _, _, _, _, _) then handleYieldMethodEdge(project, opIdx: opIdx, methodName: methodName, func: func, yields: yields, callees: callees)
-			default panic("classifyYieldOp: op.name == methodCall but match failed")
-		end 'mc'
-		return
-	end 'isMethodCall'
-	if op.name == "tryMethodCall" 'isTryMethodCall'
-		match op 'tmc'
-			tryMethodCall(_, _, methodName, _, _, _, _, _, _) then handleYieldMethodEdge(project, opIdx: opIdx, methodName: methodName, func: func, yields: yields, callees: callees)
-			default panic("classifyYieldOp: op.name == tryMethodCall but match failed")
-		end 'tmc'
-		return
-	end 'isTryMethodCall'
+	match op 'dispatch'
+		call(_, callee, callContext, _, _, _, _, _) then handleYieldCallEdge(project, callee: callee, callContext: callContext, func: func, yields: yields, callees: callees)
+		methodCall(_, _, methodName, _, _, _, _, _) then handleYieldMethodEdge(project, opIdx: opIdx, methodName: methodName, func: func, yields: yields, callees: callees)
+		tryCall(_, callee, callContext, _, _, _, _, _, _) then handleYieldCallEdge(project, callee: callee, callContext: callContext, func: func, yields: yields, callees: callees)
+		tryMethodCall(_, _, methodName, _, _, _, _, _, _) then handleYieldMethodEdge(project, opIdx: opIdx, methodName: methodName, func: func, yields: yields, callees: callees)
+		asyncCall(_, callee, callContext, _, _, _, _, _, _, _, _) then handleYieldCallEdge(project, callee: callee, callContext: callContext, func: func, yields: yields, callees: callees)
+		literal to br then noOp()
+		ret to throw then noOp()
+		rethrow to forInIterable then noOp()
+		awaitPromise to cancelPromise then noOp()
+	end 'dispatch'
 end 'classifyYieldOp'
 
 // Method-call yield edge: resolve the receiver's type from `resolvedReceiverTypes`
@@ -1193,12 +1155,10 @@ function handleYieldCallEdge(project Project, callee ByteArray, callContext Call
 end 'handleYieldCallEdge'
 
 function maybeReportNonYieldingAsync(project Project, op MaxonOp, func IrFunction, yields StringSet)
-	if op.name != "asyncCall" 'notAsync'
-		return
-	end 'notAsync'
 	match op 'k'
 		asyncCall(_, callee, callContext, _, _, _, _, _, _, callSourceText, range) then reportIfNonYielding(project, callee: callee, callContext: callContext, callSourceText: callSourceText, range: range, func: func, yields: yields)
-		default panic("maybeReportNonYieldingAsync: op.name == asyncCall but match failed")
+		literal to forInIterable then return
+		awaitPromise to cancelPromise then return
 	end 'k'
 end 'maybeReportNonYieldingAsync'
 
@@ -1322,12 +1282,10 @@ function checkRedundantContainsGet(project Project, module MaxonModule)
 			end 'noTerm'
 			let termIdx = block.terminatorIndex()
 			let termOp = try module.ops.get(termIdx) otherwise panic("checkRedundantContainsGet: terminator opIdx OOB")
-			if termOp.name != "condBr" 'notCondBr'
-				continue
-			end 'notCondBr'
 			match termOp 'unwrapCondBr'
 				condBr(cond, thenTarget, _, _) then maybeEmitRedundantContainsGet(project, module: module, func: func, block: block, condName: cond, thenTarget: thenTarget)
-				default panic("checkRedundantContainsGet: op.name == condBr but match failed")
+				literal to refEq then continue
+				br to cancelPromise then continue
 			end 'unwrapCondBr'
 		end 'eachBlock'
 	end 'eachFunc'
@@ -1440,7 +1398,7 @@ function extractMethodCallInfo(op MaxonOp) returns MethodCallInfo
 end 'extractMethodCallInfo'
 
 function isMethodCallVariant(op MaxonOp) returns bool
-	return op.name == "methodCall" or op.name == "tryMethodCall"
+	return op.rawValue.category == OpCategory.callMethod
 end 'isMethodCallVariant'
 
 // True when `op` writes to one of the names/fields the membership probe
@@ -1449,34 +1407,19 @@ end 'isMethodCallVariant'
 // name). Used by the then-block scan to stop early before a stale
 // `contains` answer can flow into a `get` call.
 function storeInvalidatesGuards(op MaxonOp, slotNames SlotNameArray, guardedSlotNames StringSet, guardedFields StringSet) returns bool
-	// Dispatch by op.name to avoid an exhaustive MaxonOp match: only the
-	// four store-shaped ops can invalidate the membership probe; every
-	// other op shape is harmless and returns false unconditionally.
-	if op.name == "varStore" 'isVarStore'
-		return match op 'extract'
-			varStore(slotId, _, _) gives slotIsGuarded(slotId, slotNames: slotNames, guards: guardedSlotNames)
-			default panic("storeInvalidatesGuards: name==varStore but match arm missed it")
-		end 'extract'
-	end 'isVarStore'
-	if op.name == "fieldStore" 'isFieldStore'
-		return match op 'extract'
-			fieldStore(_, fieldName, _, _, _) gives guardedFields.contains(String.from(fieldName))
-			default panic("storeInvalidatesGuards: name==fieldStore but match arm missed it")
-		end 'extract'
-	end 'isFieldStore'
-	if op.name == "selfFieldStore" 'isSelfFieldStore'
-		return match op 'extract'
-			selfFieldStore(fieldName, _, _) gives guardedFields.contains(String.from(fieldName))
-			default panic("storeInvalidatesGuards: name==selfFieldStore but match arm missed it")
-		end 'extract'
-	end 'isSelfFieldStore'
-	if op.name == "globalStore" 'isGlobalStore'
-		return match op 'extract'
-			globalStore(name, _, _, _) gives guardedSlotNames.contains(name)
-			default panic("storeInvalidatesGuards: name==globalStore but match arm missed it")
-		end 'extract'
-	end 'isGlobalStore'
-	return false
+	// Only the four store-shaped ops can invalidate the membership probe;
+	// every other op shape is harmless and gives false unconditionally.
+	return match op 'extract'
+		varStore(slotId, _, _) gives slotIsGuarded(slotId, slotNames: slotNames, guards: guardedSlotNames)
+		fieldStore(_, fieldName, _, _, _) gives guardedFields.contains(String.from(fieldName))
+		selfFieldStore(fieldName, _, _) gives guardedFields.contains(String.from(fieldName))
+		globalStore(name, _, _, _) gives guardedSlotNames.contains(name)
+		literal to varLoad gives false
+		globalLoad gives false
+		binop to fieldLoad gives false
+		selfFieldLoad gives false
+		unresolvedRead to cancelPromise gives false
+	end 'extract'
 end 'storeInvalidatesGuards'
 
 // Thrown by findMethodCallProducingName when no methodCall in `block`
@@ -1493,12 +1436,10 @@ end 'ProducerLookupError'
 function findMethodCallProducingName(module MaxonModule, block IrBlock, name ByteArray) returns OpIndex throws ProducerLookupError
 	for opIdx in block.opRefs 'scan'
 		let op = try module.ops.get(opIdx) otherwise panic("findMethodCallProducingName: opRefs entry OOB")
-		if op.name != "methodCall" 'notMethodCall'
-			continue
-		end 'notMethodCall'
 		let matches = match op 'mc'
 			methodCall(result, _, _, _, _, _, _, _) gives byteArraysEqual(result, b: name)
-			default panic("findMethodCallProducingName: name==methodCall guard above already filtered other shapes")
+			literal to call gives false
+			ret to cancelPromise gives false
 		end 'mc'
 		if matches 'hit'
 			return opIdx
@@ -1568,33 +1509,19 @@ function buildAccessPath(module MaxonModule, block IrBlock, name ByteArray, limi
 	end 'noProducer'
 
 	let producer = try module.ops.get(producerIdx) otherwise panic("buildAccessPath: producerIdx OOB after found=true")
-	// Dispatch by op.name: only four producer shapes encode a canonical
-	// access path; anything else returns "" so the lint stays conservative.
-	if producer.name == "varLoad" 'isVarLoad'
-		return match producer 'extract'
-			varLoad(_, slotId, _, _) gives slotPathFromTable(slotNames, slotId: slotId)
-			default panic("buildAccessPath: name==varLoad but match arm missed it")
-		end 'extract'
-	end 'isVarLoad'
-	if producer.name == "selfFieldLoad" 'isSelfFieldLoad'
-		return match producer 'extract'
-			selfFieldLoad(_, fieldName, _) gives "self.{String.from(fieldName)}"
-			default panic("buildAccessPath: name==selfFieldLoad but match arm missed it")
-		end 'extract'
-	end 'isSelfFieldLoad'
-	if producer.name == "fieldLoad" 'isFieldLoad'
-		return match producer 'extract'
-			fieldLoad(_, recv, fieldName, _) gives fieldChainPath(module, block: block, recv: recv, fieldName: fieldName, limitOpIdx: producerIdx, slotNames: slotNames)
-			default panic("buildAccessPath: name==fieldLoad but match arm missed it")
-		end 'extract'
-	end 'isFieldLoad'
-	if producer.name == "globalLoad" 'isGlobalLoad'
-		return match producer 'extract'
-			globalLoad(_, gname, _, _) gives gname
-			default panic("buildAccessPath: name==globalLoad but match arm missed it")
-		end 'extract'
-	end 'isGlobalLoad'
-	return ""
+	// Only four producer shapes encode a canonical access path; anything
+	// else gives "" so the lint stays conservative.
+	return match producer 'extract'
+		varLoad(_, slotId, _, _) gives slotPathFromTable(slotNames, slotId: slotId)
+		selfFieldLoad(_, fieldName, _) gives "self.{String.from(fieldName)}"
+		fieldLoad(_, recv, fieldName, _) gives fieldChainPath(module, block: block, recv: recv, fieldName: fieldName, limitOpIdx: producerIdx, slotNames: slotNames)
+		globalLoad(_, gname, _, _) gives gname
+		literal to varDecl gives ""
+		varStore gives ""
+		globalStore to structAlloc gives ""
+		fieldStore gives ""
+		selfFieldStore to cancelPromise gives ""
+	end 'extract'
 end 'buildAccessPath'
 
 function fieldChainPath(module MaxonModule, block IrBlock, recv ByteArray, fieldName ByteArray, limitOpIdx OpIndexOrMissing, slotNames SlotNameArray) returns String
@@ -1620,31 +1547,17 @@ end 'slotPathFromTable'
 // other producers are treated as `default false`, which routes their
 // users through the "unresolvable" tail of buildAccessPath.
 function opProducesName(op MaxonOp, name ByteArray) returns bool
-	if op.name == "varLoad" 'isVarLoad'
-		return match op 'extract'
-			varLoad(result, _, _, _) gives byteArraysEqual(result, b: name)
-			default panic("opProducesName: name==varLoad guard above already filtered other shapes")
-		end 'extract'
-	end 'isVarLoad'
-	if op.name == "selfFieldLoad" 'isSelfFieldLoad'
-		return match op 'extract'
-			selfFieldLoad(result, _, _) gives byteArraysEqual(result, b: name)
-			default panic("opProducesName: name==selfFieldLoad guard above already filtered other shapes")
-		end 'extract'
-	end 'isSelfFieldLoad'
-	if op.name == "fieldLoad" 'isFieldLoad'
-		return match op 'extract'
-			fieldLoad(result, _, _, _) gives byteArraysEqual(result, b: name)
-			default panic("opProducesName: name==fieldLoad guard above already filtered other shapes")
-		end 'extract'
-	end 'isFieldLoad'
-	if op.name == "globalLoad" 'isGlobalLoad'
-		return match op 'extract'
-			globalLoad(result, _, _, _) gives byteArraysEqual(result, b: name)
-			default panic("opProducesName: name==globalLoad guard above already filtered other shapes")
-		end 'extract'
-	end 'isGlobalLoad'
-	return false
+	return match op 'extract'
+		varLoad(result, _, _, _) gives byteArraysEqual(result, b: name)
+		selfFieldLoad(result, _, _) gives byteArraysEqual(result, b: name)
+		fieldLoad(result, _, _, _) gives byteArraysEqual(result, b: name)
+		globalLoad(result, _, _, _) gives byteArraysEqual(result, b: name)
+		literal to varDecl gives false
+		varStore gives false
+		globalStore to structAlloc gives false
+		fieldStore gives false
+		selfFieldStore to cancelPromise gives false
+	end 'extract'
 end 'opProducesName'
 
 // Split `path` ("root.f1.f2" or "root") into the leading root segment
@@ -1821,30 +1734,18 @@ function buildParamSelfTaintedNames(module MaxonModule, func IrFunction) returns
 end 'buildParamSelfTaintedNames'
 
 function taintIfDerived(tainted TaintedNameSet, paramSlots ParamSlotSet, op MaxonOp)
-	// `op.name`-gated single-arm destructures avoid an exhaustive MaxonOp match
-	// (most op kinds are irrelevant here). A `selfFieldLoad` result is always
-	// self-derived; a `varLoad` is param-derived iff its slot is a param slot;
-	// a `fieldLoad` is derived iff its receiver already is.
-	if op.name == "varLoad" 'isVarLoad'
-		match op 'vl'
-			varLoad(result, slotId, _, _) then taintIfParamSlot(tainted, paramSlots: paramSlots, result: result, slotId: slotId)
-			default panic("taintIfDerived: op.name == varLoad but match failed")
-		end 'vl'
-		return
-	end 'isVarLoad'
-	if op.name == "selfFieldLoad" 'isSelfFieldLoad'
-		match op 'sfl'
-			selfFieldLoad(result, _, _) then tainted.insert(String.from(result))
-			default panic("taintIfDerived: op.name == selfFieldLoad but match failed")
-		end 'sfl'
-		return
-	end 'isSelfFieldLoad'
-	if op.name == "fieldLoad" 'isFieldLoad'
-		match op 'fl'
-			fieldLoad(result, receiver, _, _) then taintIfReceiverTainted(tainted, result: result, receiver: receiver)
-			default panic("taintIfDerived: op.name == fieldLoad but match failed")
-		end 'fl'
-	end 'isFieldLoad'
+	// A `selfFieldLoad` result is always self-derived; a `varLoad` is
+	// param-derived iff its slot is a param slot; a `fieldLoad` is derived
+	// iff its receiver already is. Every other op kind is irrelevant.
+	match op 'derive'
+		varLoad(result, slotId, _, _) then taintIfParamSlot(tainted, paramSlots: paramSlots, result: result, slotId: slotId)
+		fieldLoad(result, receiver, _, _) then taintIfReceiverTainted(tainted, result: result, receiver: receiver)
+		selfFieldLoad(result, _, _) then tainted.insert(String.from(result))
+		literal to varDecl then noOp()
+		varStore to structAlloc then noOp()
+		fieldStore then noOp()
+		selfFieldStore to cancelPromise then noOp()
+	end 'derive'
 end 'taintIfDerived'
 
 function taintIfParamSlot(tainted TaintedNameSet, paramSlots ParamSlotSet, result ByteArray, slotId VarSlot)
@@ -1860,15 +1761,19 @@ function taintIfReceiverTainted(tainted TaintedNameSet, result ByteArray, receiv
 end 'taintIfReceiverTainted'
 
 function isOpDirectlyImpure(op MaxonOp, impureCallees ImpureCalleeSet, tainted TaintedNameSet) returns bool
-	// globalStore — every `topLevelVar = expr` reassignment.
-	if op.name == "globalStore" 'isGlobalStore'
+	// A store to module-level state (`topLevelVar = expr`) or to a field of
+	// `self` (`self.x = expr`, param-mutation through the implicit `self`
+	// param) is directly impure; every other op shape is judged below.
+	let isStoreMutation = match op 'storeMut'
+		globalStore gives true
+		selfFieldStore gives true
+		literal to globalLoad gives false
+		binop to selfFieldLoad gives false
+		unresolvedRead to cancelPromise gives false
+	end 'storeMut'
+	if isStoreMutation 'storeMutation'
 		return true
-	end 'isGlobalStore'
-	// selfFieldStore — `self.x = expr` inside a method. Treated as
-	// param-mutation (the receiver is the implicit `self` param).
-	if op.name == "selfFieldStore" 'isSelfStore'
-		return true
-	end 'isSelfStore'
+	end 'storeMutation'
 	// A mutating method on a param/self-derived receiver mutates reachable state.
 	if isMutatingMethodOnTaintedReceiver(op, tainted: tainted) 'mutatingMethod'
 		return true
@@ -1885,19 +1790,13 @@ function isOpDirectlyImpure(op MaxonOp, impureCallees ImpureCalleeSet, tainted T
 end 'isOpDirectlyImpure'
 
 function isMutatingMethodOnTaintedReceiver(op MaxonOp, tainted TaintedNameSet) returns bool
-	if op.name == "methodCall" 'isMethodCall'
-		return match op 'mc'
-			methodCall(_, receiver, methodName, _, _, _, _, _) gives methodMutatesTaintedReceiver(receiver, methodName: methodName, tainted: tainted)
-			default panic("isMutatingMethodOnTaintedReceiver: op.name == methodCall but match failed")
-		end 'mc'
-	end 'isMethodCall'
-	if op.name == "tryMethodCall" 'isTryMethodCall'
-		return match op 'tmc'
-			tryMethodCall(_, receiver, methodName, _, _, _, _, _, _) gives methodMutatesTaintedReceiver(receiver, methodName: methodName, tainted: tainted)
-			default panic("isMutatingMethodOnTaintedReceiver: op.name == tryMethodCall but match failed")
-		end 'tmc'
-	end 'isTryMethodCall'
-	return false
+	return match op 'methodMut'
+		methodCall(_, receiver, methodName, _, _, _, _, _) gives methodMutatesTaintedReceiver(receiver, methodName: methodName, tainted: tainted)
+		tryMethodCall(_, receiver, methodName, _, _, _, _, _, _) gives methodMutatesTaintedReceiver(receiver, methodName: methodName, tainted: tainted)
+		literal to call gives false
+		ret to tryCall gives false
+		rethrow to cancelPromise gives false
+	end 'methodMut'
 end 'isMutatingMethodOnTaintedReceiver'
 
 function methodMutatesTaintedReceiver(receiver ByteArray, methodName ByteArray, tainted TaintedNameSet) returns bool
@@ -1921,19 +1820,13 @@ end 'isMutatingMethodName'
 // Return the callee name from a call/tryCall op, or "" for any other op.
 // Used by both the direct-impurity and the call-edge collection passes.
 function calleeNameFromOp(op MaxonOp) returns String
-	if op.name == "call" 'isCall'
-		return match op 'callShape'
-			call(_, callee, _, _, _, _, _, _) gives String.from(callee)
-			default panic("calleeNameFromOp: op.name == call but match failed")
-		end 'callShape'
-	end 'isCall'
-	if op.name == "tryCall" 'isTryCall'
-		return match op 'tryCallShape'
-			tryCall(_, callee, _, _, _, _, _, _, _) gives String.from(callee)
-			default panic("calleeNameFromOp: op.name == tryCall but match failed")
-		end 'tryCallShape'
-	end 'isTryCall'
-	return ""
+	return match op 'callShape'
+		call(_, callee, _, _, _, _, _, _) gives String.from(callee)
+		tryCall(_, callee, _, _, _, _, _, _, _) gives String.from(callee)
+		literal to br gives ""
+		methodCall to throw gives ""
+		tryMethodCall to cancelPromise gives ""
+	end 'callShape'
 end 'calleeNameFromOp'
 
 // True when the unqualified callee name is in the static impure list OR
@@ -2166,33 +2059,15 @@ end 'checkCallArgumentTypes'
 // One call op. The receiver offset is 1 for method calls (param 0 is the
 // implicit receiver, which has no user-arg) and 0 for plain calls.
 function checkOneCallArgs(project Project, op MaxonOp, opIdx OpIndex, callerName String, readerFilePath FilePath)
-	if op.name == "call" 'isCall'
-		match op 'c'
-			call(result, _, _, args, argLabels, argTypes, argRanges, _) then validateCallArgs(project, opIdx: opIdx, result: result, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, paramOffset: 0, callerName: callerName, readerFilePath: readerFilePath)
-			default panic("checkOneCallArgs: op.name == call but match failed")
-		end 'c'
-		return
-	end 'isCall'
-	if op.name == "tryCall" 'isTryCall'
-		match op 'tc'
-			tryCall(result, _, _, args, argLabels, argTypes, argRanges, _, _) then validateCallArgs(project, opIdx: opIdx, result: result, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, paramOffset: 0, callerName: callerName, readerFilePath: readerFilePath)
-			default panic("checkOneCallArgs: op.name == tryCall but match failed")
-		end 'tc'
-		return
-	end 'isTryCall'
-	if op.name == "methodCall" 'isMethodCall'
-		match op 'mc'
-			methodCall(result, _, _, args, argLabels, argTypes, argRanges, _) then validateCallArgs(project, opIdx: opIdx, result: result, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, paramOffset: 1, callerName: callerName, readerFilePath: readerFilePath)
-			default panic("checkOneCallArgs: op.name == methodCall but match failed")
-		end 'mc'
-		return
-	end 'isMethodCall'
-	if op.name == "tryMethodCall" 'isTryMethodCall'
-		match op 'tmc'
-			tryMethodCall(result, _, _, args, argLabels, argTypes, argRanges, _, _) then validateCallArgs(project, opIdx: opIdx, result: result, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, paramOffset: 1, callerName: callerName, readerFilePath: readerFilePath)
-			default panic("checkOneCallArgs: op.name == tryMethodCall but match failed")
-		end 'tmc'
-	end 'isTryMethodCall'
+	match op 'argCheck'
+		call(result, _, _, args, argLabels, argTypes, argRanges, _) then validateCallArgs(project, opIdx: opIdx, result: result, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, paramOffset: 0, callerName: callerName, readerFilePath: readerFilePath)
+		tryCall(result, _, _, args, argLabels, argTypes, argRanges, _, _) then validateCallArgs(project, opIdx: opIdx, result: result, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, paramOffset: 0, callerName: callerName, readerFilePath: readerFilePath)
+		methodCall(result, _, _, args, argLabels, argTypes, argRanges, _) then validateCallArgs(project, opIdx: opIdx, result: result, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, paramOffset: 1, callerName: callerName, readerFilePath: readerFilePath)
+		tryMethodCall(result, _, _, args, argLabels, argTypes, argRanges, _, _) then validateCallArgs(project, opIdx: opIdx, result: result, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, paramOffset: 1, callerName: callerName, readerFilePath: readerFilePath)
+		literal to br then noOp()
+		ret to throw then noOp()
+		rethrow to cancelPromise then noOp()
+	end 'argCheck'
 end 'checkOneCallArgs'
 
 function validateCallArgs(project Project, opIdx OpIndex, result ByteArray, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, paramOffset ArgIndex, callerName String, readerFilePath FilePath)
@@ -2276,7 +2151,7 @@ end 'reportArgTypeMismatch'
 // an argument a more specific checker already flagged.
 function hasTypeMismatchDiagnosticAt(project Project, filePath FilePath, line LineNumber, column ColumnNumber) returns bool
 	for d in project.diagnostics 'each'
-		if d.code.rawValue == ErrorCode.semanticTypeMismatch.rawValue and d.line == line and d.column == column and d.filePath == filePath 'hit'
+		if d.code == ErrorCode.semanticTypeMismatch and d.line == line and d.column == column and d.filePath == filePath 'hit'
 			return true
 		end 'hit'
 	end 'each'
@@ -2755,30 +2630,15 @@ module function isStdlibFunctionPath(path FilePath) returns bool
 end 'isStdlibFunctionPath'
 
 function checkOneCallForDiscard(project Project, module MaxonModule, opIdx OpIndex, op MaxonOp, callerName String, callerNamespace String, readerFilePath FilePath, impureCallees ImpureCalleeSet)
-	if op.name == "call" 'isCall'
-		match op 'callShape'
-			call(result, callee, _, _, _, _, _, range) then maybeReportDiscarded(project, module: module, result: result, callee: callee, callerName: callerName, callerNamespace: callerNamespace, range: range, readerFilePath: readerFilePath, impureCallees: impureCallees)
-			default panic("checkOneCallForDiscard: op.name == call but match failed")
-		end 'callShape'
-	end 'isCall'
-	if op.name == "tryCall" 'isTryCall'
-		match op 'tryCallShape'
-			tryCall(result, callee, _, _, _, _, _, _, range) then maybeReportDiscarded(project, module: module, result: result, callee: callee, callerName: callerName, callerNamespace: callerNamespace, range: range, readerFilePath: readerFilePath, impureCallees: impureCallees)
-			default panic("checkOneCallForDiscard: op.name == tryCall but match failed")
-		end 'tryCallShape'
-	end 'isTryCall'
-	if op.name == "methodCall" 'isMethodCall'
-		match op 'methodCallShape'
-			methodCall(result, _, methodName, _, _, _, _, range) then maybeReportDiscardedMethodCall(project, module: module, opIdx: opIdx, result: result, methodName: methodName, callerName: callerName, callerNamespace: callerNamespace, range: range, readerFilePath: readerFilePath, impureCallees: impureCallees)
-			default panic("checkOneCallForDiscard: op.name == methodCall but match failed")
-		end 'methodCallShape'
-	end 'isMethodCall'
-	if op.name == "tryMethodCall" 'isTryMethodCall'
-		match op 'tryMethodCallShape'
-			tryMethodCall(result, _, methodName, _, _, _, _, _, range) then maybeReportDiscardedMethodCall(project, module: module, opIdx: opIdx, result: result, methodName: methodName, callerName: callerName, callerNamespace: callerNamespace, range: range, readerFilePath: readerFilePath, impureCallees: impureCallees)
-			default panic("checkOneCallForDiscard: op.name == tryMethodCall but match failed")
-		end 'tryMethodCallShape'
-	end 'isTryMethodCall'
+	match op 'discardCheck'
+		call(result, callee, _, _, _, _, _, range) then maybeReportDiscarded(project, module: module, result: result, callee: callee, callerName: callerName, callerNamespace: callerNamespace, range: range, readerFilePath: readerFilePath, impureCallees: impureCallees)
+		tryCall(result, callee, _, _, _, _, _, _, range) then maybeReportDiscarded(project, module: module, result: result, callee: callee, callerName: callerName, callerNamespace: callerNamespace, range: range, readerFilePath: readerFilePath, impureCallees: impureCallees)
+		methodCall(result, _, methodName, _, _, _, _, range) then maybeReportDiscardedMethodCall(project, module: module, opIdx: opIdx, result: result, methodName: methodName, callerName: callerName, callerNamespace: callerNamespace, range: range, readerFilePath: readerFilePath, impureCallees: impureCallees)
+		tryMethodCall(result, _, methodName, _, _, _, _, _, range) then maybeReportDiscardedMethodCall(project, module: module, opIdx: opIdx, result: result, methodName: methodName, callerName: callerName, callerNamespace: callerNamespace, range: range, readerFilePath: readerFilePath, impureCallees: impureCallees)
+		literal to br then noOp()
+		ret to throw then noOp()
+		rethrow to cancelPromise then noOp()
+	end 'discardCheck'
 end 'checkOneCallForDiscard'
 
 // Method-call variant of `maybeReportDiscarded` that first exempts calls whose
@@ -3018,12 +2878,10 @@ function maxonReturnTypeName(project Project, rt MaxonReturnType) returns String
 end 'maxonReturnTypeName'
 
 function maxonTypeBareName(project Project, t MaxonType) returns String
-	if t.name != "named" 'notNamed'
-		return ""
-	end 'notNamed'
 	match t 'pickName'
 		named(id) then return project.typeNames.get(id)
-		default panic("maxonTypeBareName: name guard but match failed")
+		boolean to character then return ""
+		function to cstring then return ""
 	end 'pickName'
 end 'maxonTypeBareName'
 

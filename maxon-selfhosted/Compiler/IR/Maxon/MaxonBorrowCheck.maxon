@@ -261,48 +261,22 @@ function collectFacts(module MaxonModule, func IrFunction, facts BorrowFacts)
 	end 'eachBlock'
 end 'collectFacts'
 
-// Dispatch on op name (not a full-enum match) so unrelated ops contribute no
-// facts without an enum `default` arm. Each guarded match destructures exactly
-// the one op variant its name selects.
+// Dispatch on op variant so unrelated ops contribute no facts. Each handled
+// arm destructures exactly the op variant it cares about; every other variant
+// is covered by a `to`-range no-op arm so the match stays exhaustive without a
+// `default`.
 function recordOpFacts(op MaxonOp, gi GlobalOpIndex, facts BorrowFacts)
-	if op.name == "varLoad" 'isVarLoad'
-		match op 'vl'
-			varLoad(result, slotId, slotType, _) then recordVarLoad(result, slotId: slotId, slotType: slotType, gi: gi, facts: facts)
-			default panic("recordOpFacts: op.name == varLoad but match failed")
-		end 'vl'
-		return
-	end 'isVarLoad'
-
-	if op.name == "varDecl" 'isVarDecl'
-		match op 'vd'
-			varDecl(slotId, value, _, _) then recordVarDecl(slotId, value: value, gi: gi, facts: facts)
-			default panic("recordOpFacts: op.name == varDecl but match failed")
-		end 'vd'
-		return
-	end 'isVarDecl'
-
-	if op.name == "varStore" 'isVarStore'
-		match op 'vs'
-			varStore(slotId, value, _) then facts.storeSlotByValue.upsert(String.from(value), value: slotId)
-			default panic("recordOpFacts: op.name == varStore but match failed")
-		end 'vs'
-		return
-	end 'isVarStore'
-
-	if op.name == "methodCall" 'isMethodCall'
-		match op 'mc'
-			methodCall(result, receiver, methodName, _, _, _, _, range) then recordCallSite(facts, gi: gi, receiver: receiver, methodName: methodName, result: result, range: range)
-			default panic("recordOpFacts: op.name == methodCall but match failed")
-		end 'mc'
-		return
-	end 'isMethodCall'
-
-	if op.name == "tryMethodCall" 'isTryMethodCall'
-		match op 'tmc'
-			tryMethodCall(result, receiver, methodName, _, _, _, _, _, range) then recordCallSite(facts, gi: gi, receiver: receiver, methodName: methodName, result: result, range: range)
-			default panic("recordOpFacts: op.name == tryMethodCall but match failed")
-		end 'tmc'
-	end 'isTryMethodCall'
+	match op 'op'
+		literal to stringInterp then return
+		varDecl(slotId, value, _, _) then recordVarDecl(slotId, value: value, gi: gi, facts: facts)
+		varLoad(result, slotId, slotType, _) then recordVarLoad(result, slotId: slotId, slotType: slotType, gi: gi, facts: facts)
+		varStore(slotId, value, _) then facts.storeSlotByValue.upsert(String.from(value), value: slotId)
+		globalLoad to call then return
+		methodCall(result, receiver, methodName, _, _, _, _, range) then recordCallSite(facts, gi: gi, receiver: receiver, methodName: methodName, result: result, range: range)
+		ret to tryCall then return
+		tryMethodCall(result, receiver, methodName, _, _, _, _, _, range) then recordCallSite(facts, gi: gi, receiver: receiver, methodName: methodName, result: result, range: range)
+		rethrow to cancelPromise then return
+	end 'op'
 end 'recordOpFacts'
 
 // Append a method-call site. Shared by the methodCall / tryMethodCall arms,

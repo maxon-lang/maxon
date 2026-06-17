@@ -798,8 +798,7 @@ end 'substituteCallContext'
 // containing function is cloned for a specific receiver? True for every
 // `call` / `methodCall` shape; false for everything else.
 function opNeedsResolvedCalleeRewrite(op MaxonOp) returns bool
-	let n = op.name
-	return n == "call" or n == "methodCall" or n == "tryCall" or n == "tryMethodCall"
+	return op.rawValue.category == OpCategory.callFree or op.rawValue.category == OpCategory.callMethod
 end 'opNeedsResolvedCalleeRewrite'
 
 // For every cloned call op, copy `project.resolvedCallees[srcOpIdx]` to
@@ -885,20 +884,13 @@ type CalleeAndContext
 end 'CalleeAndContext'
 
 function extractCalleeAndContext(op MaxonOp) returns CalleeAndContext
-	let n = op.name
-	if n == "call" 'isCall'
-		match op 'm'
-			call(_, callee, callContext, _, _, _, _, _) then return CalleeAndContext.create(String.from(callee), context: callContext)
-			default panic("extractCalleeAndContext: name=call but match failed")
-		end 'm'
-	end 'isCall'
-	if n == "tryCall" 'isTryCall'
-		match op 'm'
-			tryCall(_, callee, callContext, _, _, _, _, _, _) then return CalleeAndContext.create(String.from(callee), context: callContext)
-			default panic("extractCalleeAndContext: name=tryCall but match failed")
-		end 'm'
-	end 'isTryCall'
-	return CalleeAndContext.none()
+	match op 'm'
+		literal to br then return CalleeAndContext.none()
+		call(_, callee, callContext, _, _, _, _, _) then return CalleeAndContext.create(String.from(callee), context: callContext)
+		methodCall to throw then return CalleeAndContext.none()
+		tryCall(_, callee, callContext, _, _, _, _, _, _) then return CalleeAndContext.create(String.from(callee), context: callContext)
+		tryMethodCall to cancelPromise then return CalleeAndContext.none()
+	end 'm'
 end 'extractCalleeAndContext'
 
 // Compute the receiver-specialized name for a closure and, if not already

@@ -10,15 +10,19 @@ end 'getName'
 
 function main() returns ExitCode
 	let p = Planet.mars
+	// Print the `.rawValue` and the dynamically-computed string; identical
+	// output shows they match (comparing the accessor with `==` is E3097).
 	let name = p.rawValue
 	let expected = getName()
-	if name == expected 'check'
-		return 1
-	end 'check'
+	print("{name}\n{expected}\n")
 	return 0
 end 'main'
 ---
-ExitCode: 1
+ExitCode: 0
+Stdout: ```
+Mars
+Mars
+```
 ---
 // CompiledIR
 module {
@@ -50,19 +54,63 @@ module {
   }
   func @main() -> u8 {
   entry:
+    %0 = mir.mov_imm 0 : i64
     %2 = mir.mov_imm 1 : i64
     %4 = mir.call @__enum_Planet_rawString(%2)
     %5 = mir.call @getName()
-    %8 = mir.call @String.equals(%4, %5)
-    %12 = mir.call @__mm_decref_maybenull_helper(%4)
-    %11 = mir.call @__mm_decref_maybenull_helper(%5)
-    mir.cond_br %8 [then: check_0(), else: check_0.after()]
-  check_0:
-    %9 = mir.mov_imm 1 : i64
-    mir.ret %9
-  check_0.after:
-    %10 = mir.mov_imm 0 : i64
-    mir.ret %10
+    %8 = mir.global_addr @__istr_1
+    %10 = mir.load %4, 0 width: qword
+    %11 = mir.load %10, 0 width: qword
+    %12 = mir.load %10, 8 width: qword
+    %13 = mir.global_addr @__istr_2
+    %14 = mir.mov_imm 1 : i64
+    %15 = mir.load %5, 0 width: qword
+    %16 = mir.load %15, 0 width: qword
+    %17 = mir.load %15, 8 width: qword
+    %18 = mir.global_addr @__istr_2
+    %19 = mir.mov_imm 1 : i64
+    %22 = mir.add.i64 %0, %12
+    %23 = mir.add.i64 %22, %14
+    %24 = mir.add.i64 %23, %17
+    %25 = mir.add.i64 %24, %19
+    %26 = mir.mov_imm 1 : i64
+    %27 = mir.add.i64 %25, %26
+    %28 = mir.call @mrt_alloc(%27)
+    mir.memcpy %28, %8, %0
+    %29 = mir.add.i64 %28, %0
+    mir.memcpy %29, %11, %12
+    %30 = mir.add.i64 %29, %12
+    %50 = mir.call @__mm_decref_maybenull_helper(%4)
+    mir.memcpy %30, %13, %14
+    %31 = mir.add.i64 %30, %14
+    mir.memcpy %31, %16, %17
+    %32 = mir.add.i64 %31, %17
+    %51 = mir.call @__mm_decref_maybenull_helper(%5)
+    mir.memcpy %32, %18, %19
+    %34 = mir.mov_imm 48 : i64
+    %35 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %36 = mir.call @mrt_alloc_with_dtor(%34, %35)
+    mir.store %0, %36, 40 width: qword
+    mir.store %28, %36, 0 width: qword
+    mir.store %25, %36, 8 width: qword
+    mir.store %25, %36, 16 width: qword
+    %38 = mir.mov_imm 1 : i64
+    mir.store %38, %36, 24 width: qword
+    %39 = mir.mov_imm -1 : i64
+    mir.store %39, %36, 32 width: qword
+    %41 = mir.mov_imm 16 : i64
+    %42 = mir.func_addr @__destruct_String
+    %40 = mir.call @stdlib.__mm_alloc(%41, %42)
+    mir.store %36, %40, 0 width: qword
+    mir.store %0, %40, 8 width: qword
+    %45 = mir.load %40, 0 width: qword
+    %49 = mir.call @stdlib.__mm_incref(%45)
+    %46 = mir.load %45, 0 width: qword
+    %47 = mir.load %45, 8 width: qword
+    %48 = mir.call @mrt_write_stdout(%46, %47)
+    %53 = mir.call @mm_drop(%40)
+    %52 = mir.call @__mm_decref_maybenull_helper(%45)
+    mir.ret %0
   }
 }
 ---

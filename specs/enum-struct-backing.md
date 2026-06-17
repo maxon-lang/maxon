@@ -138,14 +138,17 @@ end 'Op'
 
 function main() returns ExitCode
 	let op = Op.write
-	if op.name == "write" 'check'
-		return 1
-	end 'check'
+	// `.name` on a struct-backed enum is still the case name; print it
+	// (comparing the accessor is E3097).
+	print("{op.name}\n")
 	return 0
 end 'main'
 ```
 ```exitcode
-1
+0
+```
+```stdout
+write
 ```
 
 ### Match on struct-backed enum

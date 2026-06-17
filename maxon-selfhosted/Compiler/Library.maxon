@@ -88,10 +88,11 @@ export type Library
 	// reuse).
 	export var cacheTargetSet as bool
 
-	// The CPU / OS ordinals of the target `cacheData` was built/loaded for, so
-	// a target change triggers a per-target cache reload.
-	export var cacheCpuOrd as MachineWord
-	export var cacheOsOrd as MachineWord
+	// The CPU / OS of the target `cacheData` was built/loaded for, so a target
+	// change triggers a per-target cache reload. In-memory only (not serialized);
+	// `cacheTargetSet` guards reads before the first write.
+	export var cacheCpu as CpuArch
+	export var cacheOs as Os
 
 	// Phase 3: the content-hash of the shared META file (Tier A+B) this library's
 	// in-memory `cacheData` corresponds to. Recorded when the meta file is written
@@ -140,8 +141,8 @@ export type Library
 			cacheData: StdlibCacheData.create(),
 			cacheValid: false,
 			cacheTargetSet: false,
-			cacheCpuOrd: 0,
-			cacheOsOrd: 0,
+			cacheCpu: CpuArch.x64,
+			cacheOs: Os.windows,
 			cacheMetaHash: 0,
 			inlinerStdModule: StdModule.create(),
 			funcEdges: CachedFuncEdgeMap.create(),

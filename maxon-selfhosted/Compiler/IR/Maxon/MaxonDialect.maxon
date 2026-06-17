@@ -1248,16 +1248,38 @@ export typealias StringInterpPartArray = Array with StringInterpPart
 // assigned later, at the Maxon→Std lowering boundary, so the Maxon dialect
 // stays source-proximate and LSP-queryable.
 
+// Coarse category an op belongs to, for membership tests that span several
+// variants (e.g. "is this any kind of call?"). Backed onto every MaxonOp
+// variant via MaxonOpMeta and read as `op.rawValue.category`, so a membership
+// test is `op.rawValue.category == OpCategory.callFree` — a typed enum compare
+// instead of a string `op.name == "call"`. The struct backing is required, so a
+// new MaxonOp variant cannot be added without declaring its category here.
+// Mirrors the X64Op / X64OpMeta pattern.
+export enum OpCategory
+	callFree         // call, tryCall
+	callMethod       // methodCall, tryMethodCall
+	panicking        // panic, panicDynamic
+	varAccess        // varDecl, varLoad, varStore
+	awaiting         // awaitPromise, tryAwait
+	closureProducer  // functionRef, closureCreate
+	plain            // everything else (the op stands alone; matched by variant)
+end 'OpCategory'
+
+// Per-variant static metadata backing for MaxonOp (read via `op.rawValue`).
+export type MaxonOpMeta
+	export let category as OpCategory
+end 'MaxonOpMeta'
+
 export union MaxonOp
 	// Literals
-	literal(result ByteArray, value ParsedInt, valueType MaxonType, range SourceRange)
+	literal(result ByteArray, value ParsedInt, valueType MaxonType, range SourceRange) = MaxonOpMeta{category: OpCategory.plain}
 	// String literal materialization. Carries an interned StringId into
 	// `project.strings`. Produced by TypeResolution when an
 	// `unresolvedRead` resolves to a string-typed top-level constant.
 	// Consumers downstream (cmp folding, varDecl with string-typed
 	// initializer) read the StringId back from the producer-type map.
 	// Result has type MaxonType.string.
-	stringConst(result ByteArray, stringId StringId, range SourceRange)
+	stringConst(result ByteArray, stringId StringId, range SourceRange) = MaxonOpMeta{category: OpCategory.plain}
 	// Phase 7 step 6: multi-byte character literal materialization. Emitted
 	// by `parseCharLiteralExpr` only when the decoded char literal exceeds
 	// one byte; the single-byte fast path stays as an integer literal so
@@ -1266,14 +1288,14 @@ export union MaxonOp
 	// allocates a fresh Character struct (8 bytes: managed@0 ptr to MM) over
 	// an rdata-resident __ManagedMemory record. Result type is
 	// MaxonType.named("Character").
-	charLiteral(result ByteArray, stringId StringId, range SourceRange)
+	charLiteral(result ByteArray, stringId StringId, range SourceRange) = MaxonOpMeta{category: OpCategory.plain}
 	// Phase 7 step 7: byte-string literal `b"..."` materialization. The
 	// bytes are interned via `project.strings`. Lowering produces an
 	// rdata-backed __ManagedMemory pointer (capacity = -2, elementSize = 1,
 	// parentPtr = 0) — no outer wrapper struct. Result type is
 	// MaxonType.named("__ManagedMemory") which TypeResolution treats as
 	// alias-compatible with the user-visible `ByteArray` typealias.
-	byteStringLiteral(result ByteArray, stringId StringId, range SourceRange)
+	byteStringLiteral(result ByteArray, stringId StringId, range SourceRange) = MaxonOpMeta{category: OpCategory.plain}
 	// Phase 7 step 5: interpolated-string materialization in expression
 	// position. `parts` is a parallel sequence of literal fragments and
 	// expression operands, in left-to-right source order. Lowering allocates
@@ -1282,27 +1304,27 @@ export union MaxonOp
 	// expressions; rdata addr + length for literals; double-load for string
 	// expressions), memcopies them into the final buffer, and binds `result`
 	// to the outer String pointer. Result has type MaxonType.string.
-	stringInterp(result ByteArray, parts StringInterpPartArray, range SourceRange)
+	stringInterp(result ByteArray, parts StringInterpPartArray, range SourceRange) = MaxonOpMeta{category: OpCategory.plain}
 	// Variables
-	varDecl(slotId VarSlot, value ByteArray, slotType MaxonType, range SourceRange)
-	varLoad(result ByteArray, slotId VarSlot, slotType MaxonType, range SourceRange)
-	varStore(slotId VarSlot, value ByteArray, range SourceRange)
+	varDecl(slotId VarSlot, value ByteArray, slotType MaxonType, range SourceRange) = MaxonOpMeta{category: OpCategory.varAccess}
+	varLoad(result ByteArray, slotId VarSlot, slotType MaxonType, range SourceRange) = MaxonOpMeta{category: OpCategory.varAccess}
+	varStore(slotId VarSlot, value ByteArray, range SourceRange) = MaxonOpMeta{category: OpCategory.varAccess}
 	// Mutable top-level / static-field globals. `name` is the symbol used by
 	// the data-section relocation (`__data_<qualifiedName>`); slotType drives
 	// load width selection at lowering time.
-	globalLoad(result ByteArray, name String, slotType MaxonType, range SourceRange)
-	globalStore(name String, value ByteArray, slotType MaxonType, range SourceRange)
+	globalLoad(result ByteArray, name String, slotType MaxonType, range SourceRange) = MaxonOpMeta{category: OpCategory.plain}
+	globalStore(name String, value ByteArray, slotType MaxonType, range SourceRange) = MaxonOpMeta{category: OpCategory.plain}
 	// Arithmetic and bitwise binary ops
-	binop(result ByteArray, left ByteArray, right ByteArray, opKind BinOpKind, operandType MaxonType, range SourceRange)
+	binop(result ByteArray, left ByteArray, right ByteArray, opKind BinOpKind, operandType MaxonType, range SourceRange) = MaxonOpMeta{category: OpCategory.plain}
 	// Unary ops
-	unop(result ByteArray, operand ByteArray, opKind UnaryOpKind, operandType MaxonType, range SourceRange)
+	unop(result ByteArray, operand ByteArray, opKind UnaryOpKind, operandType MaxonType, range SourceRange) = MaxonOpMeta{category: OpCategory.plain}
 	// Type conversion. Both fromType and toType are explicit; lowerMaxonToStd
 	// picks the right StdArithUnaryOpcode based on the type pair. `implicit` is
 	// true for compiler-inserted conversions (e.g. `trunc(float)` → int) which
 	// bypass the widening-only validation. Source location was formerly carried
 	// by `line` / `column` fields on this variant specifically; it now flows
 	// through the uniform `range` field along with every other op.
-	convert(result ByteArray, operand ByteArray, fromType MaxonType, toType MaxonType, implicit bool, range SourceRange)
+	convert(result ByteArray, operand ByteArray, fromType MaxonType, toType MaxonType, implicit bool, range SourceRange) = MaxonOpMeta{category: OpCategory.plain}
 	// Runtime range-check placeholder for `EXPR as RangedAlias`. Emitted by
 	// the parser immediately after a `convert` whose target is a named type
 	// — the parser has no way to know yet whether the alias has a narrow
@@ -1312,17 +1334,17 @@ export union MaxonOp
 	// splits the host block into a comparison + condBr + panic guard.
 	// Lowering must never see this op — the expander rewrites every
 	// instance before LowerMaxonToStd runs.
-	castCheck(value ByteArray, aliasName String, range SourceRange)
+	castCheck(value ByteArray, aliasName String, range SourceRange) = MaxonOpMeta{category: OpCategory.plain}
 	// Comparisons. leftType and rightType carry each operand's source-level type
 	// so TypeResolution can diagnose mismatched comparisons (E3005) and lowering
 	// can pick the correct opcode family. operandType is the advisory "joined"
 	// type used by lowering for opcode selection.
-	cmp(result ByteArray, left ByteArray, right ByteArray, predicate CmpPredicate, leftType MaxonType, rightType MaxonType, operandType MaxonType, range SourceRange)
+	cmp(result ByteArray, left ByteArray, right ByteArray, predicate CmpPredicate, leftType MaxonType, rightType MaxonType, operandType MaxonType, range SourceRange) = MaxonOpMeta{category: OpCategory.plain}
 	// Reference identity (pointer comparison)
-	refEq(result ByteArray, left ByteArray, right ByteArray, negate bool, range SourceRange)
+	refEq(result ByteArray, left ByteArray, right ByteArray, negate bool, range SourceRange) = MaxonOpMeta{category: OpCategory.plain}
 	// Control flow (terminators — placed as block terminators, not regular ops)
-	condBr(cond ByteArray, thenTarget BlockId, elseTarget BlockId, range SourceRange)
-	br(target BlockId, range SourceRange)
+	condBr(cond ByteArray, thenTarget BlockId, elseTarget BlockId, range SourceRange) = MaxonOpMeta{category: OpCategory.plain}
+	br(target BlockId, range SourceRange) = MaxonOpMeta{category: OpCategory.plain}
 	// Functions. `callee` is a ByteArray slice over the call-site name
 	// token — the *unqualified* name as written. Parser does NOT consult
 	// the function registry; lowering qualifies the callee per `callContext`
@@ -1338,7 +1360,7 @@ export union MaxonOp
 	// expression rather than the call site as a whole. Lowering performs
 	// the signature-driven slot fill, default insertion, and implicit
 	// conversion the parser used to do at parse time.
-	call(result ByteArray, callee ByteArray, callContext CallContext, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, range SourceRange)
+	call(result ByteArray, callee ByteArray, callContext CallContext, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, range SourceRange) = MaxonOpMeta{category: OpCategory.callFree}
 	// Method call on a value receiver: `receiver.methodName(args)`. Parser
 	// emits this for any postfix `.identifier(` form on a value receiver.
 	// Lowering looks up the receiver's struct type via the per-function
@@ -1346,14 +1368,14 @@ export union MaxonOp
 	// callee, prepends the receiver as the implicit __self argument, then
 	// lowers as a normal call. `argTypes` and `argRanges` carry the same
 	// parser-inferred per-arg metadata as `call` (see above).
-	methodCall(result ByteArray, receiver ByteArray, methodName ByteArray, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, range SourceRange)
-	ret(retVal ByteArray, range SourceRange)
+	methodCall(result ByteArray, receiver ByteArray, methodName ByteArray, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, range SourceRange) = MaxonOpMeta{category: OpCategory.callMethod}
+	ret(retVal ByteArray, range SourceRange) = MaxonOpMeta{category: OpCategory.plain}
 	// Range check panic (emitted by parser, lowered to std.system.globalAddr +
 	// std.call in lowerMaxonToStd). The panic-message label (`__panic_msg_N`)
 	// used by the Std dialect is assigned at lowering time from a lowering-
 	// pass-local counter, not from an SSA ValueId — the Maxon op itself just
 	// carries the interned id of the message text via `project.strings`.
-	panic(stringId StringId, range SourceRange)
+	panic(stringId StringId, range SourceRange) = MaxonOpMeta{category: OpCategory.panicking}
 	// Runtime-formatted panic message. `stringValue` is a ByteArray name
 	// referring to the SSA value of a `String` struct produced by an upstream
 	// `stringInterp` op (the heap-allocated message + null terminator). The
@@ -1363,7 +1385,7 @@ export union MaxonOp
 	// already includes the location prefix and trailing newline (those are
 	// baked into the leading/trailing fragments of the interpolation by the
 	// parser), so this lowering does no further mutation of the buffer.
-	panicDynamic(stringValue ByteArray, range SourceRange)
+	panicDynamic(stringValue ByteArray, range SourceRange) = MaxonOpMeta{category: OpCategory.panicking}
 	// Struct operations. All carry source-level *names*, not pre-computed
 	// offsets/sizes — lowering walks `project.structTypes` to resolve.
 	//   - structAlloc: `structName` is the source-level type name. Lowering
@@ -1377,15 +1399,15 @@ export union MaxonOp
 	//     method (`self.x` or just `x` when `x` is a self-field). Lowering
 	//     recovers the enclosing type from `func.name` (which is always
 	//     `Type.method`), then resolves the field as for fieldLoad/Store.
-	structAlloc(result ByteArray, structName ByteArray, range SourceRange)
-	fieldLoad(result ByteArray, receiver ByteArray, fieldName ByteArray, range SourceRange)
+	structAlloc(result ByteArray, structName ByteArray, range SourceRange) = MaxonOpMeta{category: OpCategory.plain}
+	fieldLoad(result ByteArray, receiver ByteArray, fieldName ByteArray, range SourceRange) = MaxonOpMeta{category: OpCategory.plain}
 	// `isInit` distinguishes a struct-literal field initialization (where
 	// writing a `let`-declared field is part of construction) from a post-
 	// construction reassignment (where `let` rejects with E2013). Lowering
 	// only enforces immutability when `isInit == false`.
-	fieldStore(receiver ByteArray, fieldName ByteArray, value ByteArray, isInit bool, range SourceRange)
-	selfFieldLoad(result ByteArray, fieldName ByteArray, range SourceRange)
-	selfFieldStore(fieldName ByteArray, value ByteArray, range SourceRange)
+	fieldStore(receiver ByteArray, fieldName ByteArray, value ByteArray, isInit bool, range SourceRange) = MaxonOpMeta{category: OpCategory.plain}
+	selfFieldLoad(result ByteArray, fieldName ByteArray, range SourceRange) = MaxonOpMeta{category: OpCategory.plain}
+	selfFieldStore(fieldName ByteArray, value ByteArray, range SourceRange) = MaxonOpMeta{category: OpCategory.plain}
 	// Parser-emitted placeholder for a bare or qualified name read whose
 	// kind the parser can't decide without cross-file knowledge:
 	//   - bare `name`   → may be a global var read or a top-level constant
@@ -1395,7 +1417,7 @@ export union MaxonOp
 	// substitutes a literal value when it resolves to a top-level constant,
 	// or emits a `semanticUnknownName` diagnostic. Lowering must never see
 	// this op.
-	unresolvedRead(result ByteArray, name String, range SourceRange)
+	unresolvedRead(result ByteArray, name String, range SourceRange) = MaxonOpMeta{category: OpCategory.plain}
 	// Parser-emitted placeholder for an LHS write whose kind the parser
 	// can't decide without cross-file knowledge:
 	//   - bare `name = expr`        → may be a global var write
@@ -1405,7 +1427,7 @@ export union MaxonOp
 	// or emits a `semanticUnknownName` diagnostic. Top-level constants are
 	// not assignable, so a write that resolves to one becomes a diagnostic.
 	// Lowering must never see this op.
-	unresolvedAssign(name String, value ByteArray, range SourceRange)
+	unresolvedAssign(name String, value ByteArray, range SourceRange) = MaxonOpMeta{category: OpCategory.plain}
 	// Parser-emitted block terminator for one match arm's dispatch:
 	// "if scrutinee == EnumName.caseName then thenTarget else elseTarget".
 	// The parser cannot resolve the case name to its raw value at parse
@@ -1425,19 +1447,19 @@ export union MaxonOp
 	// rather than a richer struct so this stays a pure plumbing extension;
 	// the parser writes empty for discards and the binding's varDecl owns
 	// the type info on the read side.
-	enumMatchArm(scrutineeName ByteArray, caseName String, scrutineeType MaxonType, rawValue IntConstant, isFloat bool, resolved bool, thenTarget BlockId, elseTarget BlockId, bindingNames ByteArrayArray, range SourceRange)
+	enumMatchArm(scrutineeName ByteArray, caseName String, scrutineeType MaxonType, rawValue IntConstant, isFloat bool, resolved bool, thenTarget BlockId, elseTarget BlockId, bindingNames ByteArrayArray, range SourceRange) = MaxonOpMeta{category: OpCategory.plain}
 	// Phase 9 Stage 2: union value construction. Emitted inside the body
 	// of each synthesized `__construct_{UnionName}_{caseName}` function.
 	// Stage 3 lowers to `mm_alloc(size, destructorPtr, tag) + tag-store +
 	// per-field stores`. Stage 2 leaves the constructor bodies empty
 	// (single `error` placeholder), so no production site emits this op
 	// yet — it's reserved here as part of the dialect skeleton.
-	enumConstruct(result ByteArray, enumName String, caseName String, payloadValues ByteArrayArray, range SourceRange)
+	enumConstruct(result ByteArray, enumName String, caseName String, payloadValues ByteArrayArray, range SourceRange) = MaxonOpMeta{category: OpCategory.plain}
 	// Phase 9 Stage 2: load the tag (case ordinal) from a union value.
 	// Stage 3 lowers to `loadIndirect i64 [enumValName + 0]`. Used by the
 	// match-arm dispatch path and by `__destruct_{UnionName}` (Stage 4)
 	// to branch on the live variant.
-	enumTag(result ByteArray, enumValName ByteArray, range SourceRange)
+	enumTag(result ByteArray, enumValName ByteArray, range SourceRange) = MaxonOpMeta{category: OpCategory.plain}
 	// Phase 9 Stage 2: read one payload field from a union value. Stage 3
 	// lowers to `loadIndirect <fieldType> [enumValName + 8 + fieldIndex*8]`
 	// plus a refcount-bump for managed types. `fieldType` carries the
@@ -1447,13 +1469,13 @@ export union MaxonOp
 	// TR uses it to resolve `fieldType` when the parser left it
 	// `unresolved`, since the field's type depends on the case (different
 	// cases of the same union have independent payload field types).
-	enumPayloadRead(result ByteArray, enumValName ByteArray, caseName String, fieldIndex IntConstant, fieldType MaxonType, range SourceRange)
+	enumPayloadRead(result ByteArray, enumValName ByteArray, caseName String, fieldIndex IntConstant, fieldType MaxonType, range SourceRange) = MaxonOpMeta{category: OpCategory.plain}
 	// Phase 9 Stage 2: write one payload field of a union value.
 	// Reserved for Stage 4 (match-binding write-back): an assignment
 	// `value = 42` inside an arm body on a `var` scrutinee rewrites
 	// to this op. Stage 2 declares it but never emits it; lowering
 	// panics on a stray sighting to surface a misordered pipeline early.
-	enumPayloadStore(enumValName ByteArray, caseName String, fieldIndex IntConstant, fieldType MaxonType, newValueName ByteArray, range SourceRange)
+	enumPayloadStore(enumValName ByteArray, caseName String, fieldIndex IntConstant, fieldType MaxonType, newValueName ByteArray, range SourceRange) = MaxonOpMeta{category: OpCategory.plain}
 	// Phase 9 Stage 0: range match-arm terminator. Lowers to
 	// `scrutinee >= lo AND scrutinee <= hi (or < hi for upto)` plus
 	// `cond_br thenTarget elseTarget`. `loValue` / `hiValue` are
@@ -1472,7 +1494,7 @@ export union MaxonOp
 	// declared in a not-yet-parsed file at the match site — there the parser
 	// could not look up `loValue`/`hiValue`/`enumOwnerName` and left them at
 	// -1 / "". `hiCaseName` is empty when `hasMaxSentinel`.
-	rangeMatchArm(scrutineeName ByteArray, loValue ParsedInt, hiValue ParsedInt, isUpto bool, hasMinSentinel bool, hasMaxSentinel bool, enumOwnerName String, loCaseName String, hiCaseName String, thenTarget BlockId, elseTarget BlockId, range SourceRange)
+	rangeMatchArm(scrutineeName ByteArray, loValue ParsedInt, hiValue ParsedInt, isUpto bool, hasMinSentinel bool, hasMaxSentinel bool, enumOwnerName String, loCaseName String, hiCaseName String, thenTarget BlockId, elseTarget BlockId, range SourceRange) = MaxonOpMeta{category: OpCategory.plain}
 	// Error anchor. The parser emits this when it cannot produce a well-formed
 	// op for a given source span (expected a type and got nothing, expected an
 	// expression and got a stray keyword, etc.). Batch compile already routes
@@ -1481,7 +1503,7 @@ export union MaxonOp
 	// attach its squiggle to at the op's `range`. `LowerMaxonToStd` emits no
 	// Std op for this variant and simply continues — later passes pattern-match
 	// `error` in their `default`/`literal to refEq` bounds and skip it too.
-	error(kind MaxonErrorKind, message String, range SourceRange)
+	error(kind MaxonErrorKind, message String, range SourceRange) = MaxonOpMeta{category: OpCategory.plain}
 	// Phase 4: throw a typed enum variant. Terminator. `enumName` is the
 	// bare error-enum name as written (e.g. "FileError"); `variantName` is
 	// the bare case name (e.g. "notFound"). LowerMaxonToStd resolves the
@@ -1500,7 +1522,7 @@ export union MaxonOp
 	// ABI — the value slot's MEANING flips from "default placeholder" to
 	// "union pointer" while the slot count stays at two (option-1 ABI from
 	// the Phase 9 plan).
-	throw(enumName String, variantName String, payloadValueName ByteArray, range SourceRange)
+	throw(enumName String, variantName String, payloadValueName ByteArray, range SourceRange) = MaxonOpMeta{category: OpCategory.plain}
 	// Phase 4: throwing call. Same shape as `call` plus an `errorBoundName`
 	// — the synthetic name the parser allocated to receive the post-call
 	// error flag. LowerMaxonToStd emits a single `StdCallOp.tryCall` whose
@@ -1508,7 +1530,7 @@ export union MaxonOp
 	// backend lowers tryCall to a call that picks up the flag from the
 	// secondary return register (RDX/X1). Subsequent parser-emitted ops
 	// (cmp + condBr) branch on that flag to either propagate or fall through.
-	tryCall(result ByteArray, callee ByteArray, callContext CallContext, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, errorBoundName ByteArray, range SourceRange)
+	tryCall(result ByteArray, callee ByteArray, callContext CallContext, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, errorBoundName ByteArray, range SourceRange) = MaxonOpMeta{category: OpCategory.callFree}
 	// Phase 5 (multi-value-return error ABI): throwing method call. Same
 	// shape as `methodCall` plus an `errorBoundName` - the synthetic name
 	// the parser allocated to receive the post-call error flag. The parser
@@ -1520,7 +1542,7 @@ export union MaxonOp
 	// (multi-value-return) — mirroring `tryCall`'s relationship to `call`.
 	// The backend picks up the flag from the secondary return register
 	// (RDX/X1) and binds it to `errorBoundName`.
-	tryMethodCall(result ByteArray, receiver ByteArray, methodName ByteArray, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, errorBoundName ByteArray, range SourceRange)
+	tryMethodCall(result ByteArray, receiver ByteArray, methodName ByteArray, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, errorBoundName ByteArray, range SourceRange) = MaxonOpMeta{category: OpCategory.callMethod}
 	// Phase 5: re-publish a runtime-bound error flag and return. Terminator.
 	// `parseTryPropagation` emits this for the propagation arm of `try EXPR`
 	// (no `otherwise`): the flag bound by the preceding tryCall /
@@ -1528,7 +1550,7 @@ export union MaxonOp
 	// emits `StdCallOp.errorReturn(zeroDefault, errorFlagId: resolveName(flagName))`
 	// - same shape as `MaxonOp.throw`'s lowering except the flag value is a
 	// runtime SSA name rather than a compile-time-known variant ordinal.
-	rethrow(flagName ByteArray, range SourceRange)
+	rethrow(flagName ByteArray, range SourceRange) = MaxonOpMeta{category: OpCategory.plain}
 	// Stage D (closures): address-of a named function with no captured env.
 	// Emitted by parseClosure when the closure body references no outer
 	// locals. `funcName` is the qualified name of the lifted function
@@ -1537,7 +1559,7 @@ export union MaxonOp
 	// for type-flow propagation. Lowered (Stage E) to an StdCallOp.funcRef
 	// paired with a null env so a downstream indirectCall passes a 0
 	// env-pointer through the standard ABI slot.
-	functionRef(result ByteArray, funcName String, fnTypeId FunctionTypeId, range SourceRange)
+	functionRef(result ByteArray, funcName String, fnTypeId FunctionTypeId, range SourceRange) = MaxonOpMeta{category: OpCategory.closureProducer}
 	// Stage D (closures): construct a closure value as a function pointer
 	// plus a heap-allocated env block holding addresses of captured outer
 	// locals. `capturedNames` lists outer-variable names in
@@ -1552,7 +1574,7 @@ export union MaxonOp
 	// stackAddr/storeIndirect plus the funcRef pair, with the env-name
 	// recorded in a per-function map keyed by the funcRef value-id so the
 	// matching indirectCall can forward the env.
-	closureCreate(result ByteArray, funcName String, fnTypeId FunctionTypeId, capturedNames StringArray, capturedTypes MaxonTypeArray, capturedOuterSlots CapturedSlotArray, range SourceRange)
+	closureCreate(result ByteArray, funcName String, fnTypeId FunctionTypeId, capturedNames StringArray, capturedTypes MaxonTypeArray, capturedOuterSlots CapturedSlotArray, range SourceRange) = MaxonOpMeta{category: OpCategory.closureProducer}
 	// Stage D (closures): inside a lifted closure body, recover a captured
 	// value by indirect double-load through the hidden `__env`
 	// parameter. `captureIndex` is the env-array slot index for this
@@ -1563,7 +1585,7 @@ export union MaxonOp
 	// from the env layout. Lowered (Stage E) to two loadIndirect ops:
 	// the first reads the captured slot's address from the env array,
 	// the second dereferences it to recover the live value.
-	closureEnvLoad(result ByteArray, captureIndex ParsedInt, captureName ByteArray, captureType MaxonType, range SourceRange)
+	closureEnvLoad(result ByteArray, captureIndex ParsedInt, captureName ByteArray, captureType MaxonType, range SourceRange) = MaxonOpMeta{category: OpCategory.plain}
 	// Stage D (closures): call through a function-typed value. `callee`
 	// is the value-name holding the function pointer (always the result
 	// of an upstream functionRef or closureCreate); `fnTypeId` resolves
@@ -1573,7 +1595,7 @@ export union MaxonOp
 	// matching `__env_<callee>` slot as the trailing arg before the
 	// user-visible args, so `apply(f, x)` and a closure-with-captures
 	// share one compiled body via the paired-pointer ABI.
-	indirectCall(result ByteArray, callee ByteArray, fnTypeId FunctionTypeId, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, range SourceRange)
+	indirectCall(result ByteArray, callee ByteArray, fnTypeId FunctionTypeId, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, range SourceRange) = MaxonOpMeta{category: OpCategory.plain}
 	// Phase 11 Step 9 (parser-only): a `for X in iterable 'label'` loop whose
 	// source is an arbitrary expression (not a `to`/`upto` range). The
 	// parser emits this placeholder as a regular op so the body still
@@ -1592,7 +1614,7 @@ export union MaxonOp
 	//   - bodyBlockId: first block of the parsed loop body
 	//   - exitBlockId: post-loop join block (target of break)
 	//   - label: source-level loop label (already without surrounding `'`)
-	forInIterable(iterName String, iterSlot VarSlot, iterType MaxonType, sourceValue ByteArray, sourceType MaxonType, bodyBlockId BlockId, exitBlockId BlockId, label String, range SourceRange)
+	forInIterable(iterName String, iterSlot VarSlot, iterType MaxonType, sourceValue ByteArray, sourceType MaxonType, bodyBlockId BlockId, exitBlockId BlockId, label String, range SourceRange) = MaxonOpMeta{category: OpCategory.plain}
 	// Tier 4 async/await. `asyncCall` spawns a green thread running `callee(args)`
 	// and binds `result` to an i64 promise handle (the green-thread pointer).
 	// Shape mirrors `call` plus: `innerType` is the spawned function's return
@@ -1602,27 +1624,27 @@ export union MaxonOp
 	// LowerMaxonToStd lowers this to an arg buffer + `__gt_spawn` call; managed
 	// args are incref'd at the spawn site (see plan). The async-yielding check
 	// (checkAsyncYielding) verifies `callee` transitively yields before lowering.
-	asyncCall(result ByteArray, callee ByteArray, callContext CallContext, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, innerType MaxonType, calleeThrows bool, callSourceText String, range SourceRange)
+	asyncCall(result ByteArray, callee ByteArray, callContext CallContext, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, innerType MaxonType, calleeThrows bool, callSourceText String, range SourceRange) = MaxonOpMeta{category: OpCategory.plain}
 	// Tier 4: `await promise`. Suspends the current green thread until `promise`
 	// completes, then binds `result` to its value. `result` is empty for a
 	// void-returning awaited function. `innerType` is the awaited result type.
 	// `promiseType` is the operand's parser/TR-inferred type, retained so the
 	// non-promise diagnostic (E3005) can name the offending kind. LowerMaxonToStd
 	// lowers to a `__gt_await` call.
-	awaitPromise(result ByteArray, promise ByteArray, innerType MaxonType, promiseType MaxonType, range SourceRange)
+	awaitPromise(result ByteArray, promise ByteArray, innerType MaxonType, promiseType MaxonType, range SourceRange) = MaxonOpMeta{category: OpCategory.awaiting}
 	// Tier 4: `try await promise` on a throwing async function. Same as
 	// awaitPromise plus an `errorBoundName` (the synthetic name receiving the
 	// post-await error flag), mirroring `tryCall`'s relationship to `call`.
 	// LowerMaxonToStd lowers to a two-result `tryCall` to `__gt_await` whose
 	// captured error flag (rdx — the awaited green thread's `threw` bit) binds
 	// `errorBoundName`.
-	tryAwait(result ByteArray, promise ByteArray, innerType MaxonType, promiseType MaxonType, errorBoundName ByteArray, range SourceRange)
+	tryAwait(result ByteArray, promise ByteArray, innerType MaxonType, promiseType MaxonType, errorBoundName ByteArray, range SourceRange) = MaxonOpMeta{category: OpCategory.awaiting}
 	// Tier 4: `promise.cancel()`. Requests cancellation of the green thread
 	// associated with `promise`. LowerMaxonToStd currently lowers this to a
 	// no-op: in the cooperative scheduler a promise whose spawner never yields
 	// never runs, so there is nothing to stop. Preemptive cancellation (a real
 	// `__gt_cancel`) lands with the IOCP-driven async-I/O work.
-	cancelPromise(promise ByteArray, range SourceRange)
+	cancelPromise(promise ByteArray, range SourceRange) = MaxonOpMeta{category: OpCategory.plain}
 end 'MaxonOp'
 
 export typealias MaxonOpArray = Array with MaxonOp

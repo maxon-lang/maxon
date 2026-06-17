@@ -14095,6 +14095,20 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       MaxonValue lhsVal = ResolveExprValue(lhs);
       MaxonValue rhsVal = ResolveExprValue(rhs);
 
+      // `value == Type.case` is the canonical case test; comparing an enum/union's
+      // derived `.name` / `.ordinal` / `.rawValue` with `==`/`!=` re-implements it
+      // via a string/int compare AND is blind to new cases (adding a variant won't
+      // break the comparison). Reject it: compare the value directly, or `match`
+      // it (so a new union case forces every site to handle it).
+      if (entry.Op is MaxonBinOperator.Eq or MaxonBinOperator.Ne) {
+        var accessor = EnumAccessorOperandKind(lhsVal) ?? EnumAccessorOperandKind(rhsVal);
+        if (accessor != null) {
+          _errors.Add(new CompileError(ErrorCode.SemanticEnumAccessorComparison,
+            $"cannot compare an enum's '.{accessor}' with '{(entry.Op == MaxonBinOperator.Eq ? "==" : "!=")}' — compare the value directly (e.g. `value == Type.case`), or use `match` for a union variant",
+            opToken.Line, opToken.Column) { FilePath = _sourceFilePath });
+        }
+      }
+
       // For ==/!= between two values of the SAME enum type, skip the rawValue
       // coercion below: the runtime value is the case ordinal (i64), so the
       // fall-through integer-comparison path (kind == Enum → GetEnumBackingKind
@@ -17292,6 +17306,25 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       }
     }
     return false;
+  }
+
+  // If `value` was produced in the current block by an enum accessor
+  // (`.name` / `.ordinal` / `.rawValue` in any backing form), return the
+  // accessor's display name; otherwise null. Scans back like
+  // IsSmallEnumConstant — the producer of a comparison operand is a recent op.
+  private string? EnumAccessorOperandKind(MaxonValue value) {
+    var ops = _currentBlock!.Operations;
+    for (int i = ops.Count - 1; i >= 0; i--) {
+      switch (ops[i]) {
+        case MaxonEnumNameOp n when n.Result == value: return "name";
+        case MaxonEnumOrdinalOp o when o.Result == value: return "ordinal";
+        case MaxonEnumRawValueOp r when r.Result == value: return "rawValue";
+        case MaxonEnumStringRawValueOp sr when sr.Result == value: return "rawValue";
+        case MaxonEnumStructRawValueOp st when st.Result == value: return "rawValue";
+        case MaxonEnumFunctionRawValueOp f when f.Result == value: return "rawValue";
+      }
+    }
+    return null;
   }
 
   private static bool IsIntegerLikeKind(MaxonValueKind kind) =>

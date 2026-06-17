@@ -122,6 +122,16 @@ public enum ErrorCode {
   // Symbol declared with the `module` keyword (visible to the declaring directory
   // subtree only) but accessed from outside that subtree.
   SemanticSymbolNotInModuleScope = 3088,
+  // `==`/`!=` against an enum/union's `.name`, `.ordinal`, or `.rawValue`
+  // accessor. Such a comparison is checking which case a value is, which must
+  // be done on the value itself: `value == Type.case` for a payload-free case,
+  // or `match value` for a union variant (so adding a case forces every site
+  // to handle it instead of silently slipping through). Comparing the derived
+  // string/int accessor bypasses that and is a string/int compare to boot.
+  // 3097: 3089-3096 are taken by the self-hosted compiler's own semantic
+  // diagnostics (semanticTypeResolutionLeak..semanticAmbiguousCrossFileCall),
+  // so this shared diagnostic takes the next code free on both sides.
+  SemanticEnumAccessorComparison = 3097,
 
   // IR pipeline errors (4xxx) - Stage 4
   IrUnsupportedExpression = 4001,

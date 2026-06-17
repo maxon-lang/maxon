@@ -98,12 +98,9 @@ function collectLiteralValues(project Project, module MaxonModule, func IrFuncti
 		let block = try module.blocks.get(blockRef) otherwise panic("collectLiteralValues: blockRef OOB")
 		for opIdx in block.opRefs 'eachOp'
 			let op = try module.ops.get(opIdx) otherwise panic("collectLiteralValues: opIdx OOB at {opIdx}")
-			if op.name != "literal" 'notLit'
-				continue
-			end 'notLit'
 			match op 'pickShape'
 				literal(result, value, valueType, _) then maybeRecordLiteral(project, funcName: func.name, litValues: litValues, result: result, value: value, valueType: valueType)
-				default panic("collectLiteralValues: op.name == literal but match did not extract")
+				stringConst to cancelPromise then continue
 			end 'pickShape'
 		end 'eachOp'
 	end 'eachBlock'
@@ -206,7 +203,7 @@ end 'processBlock'
 // rewrites the `call` into `tryCall` immediately after emission — but
 // dead-code elimination or other passes may not preserve the try-form.
 function extractMmCreateInfo(project Project, op MaxonOp) returns MmCreateInfo
-	if op.name != "tryCall" and op.name != "call" 'notCall'
+	if op.rawValue.category != OpCategory.callFree 'notCall'
 		return MmCreateInfo.none()
 	end 'notCall'
 	let createName = project.calleeNames.intern("__ManagedMemory.create")
@@ -268,10 +265,10 @@ function lookupResolvedElementType(module MaxonModule, func IrFunction, producer
 		let block = try module.blocks.get(blockRef) otherwise panic("lookupResolvedElementType: blockRef OOB")
 		for opIdx in block.opRefs 'eachOp'
 			let op = try module.ops.get(opIdx) otherwise panic("lookupResolvedElementType: opIdx OOB at {opIdx}")
-			if op.name != "literal" 'notLit'
-				continue
-			end 'notLit'
-			let hit = matchLiteralValueType(op, target: firstName)
+			let hit = match op 'pickShape'
+				literal(result, _, valueType, _) gives literalValueTypeProbeFor(result, valueType: valueType, target: firstName)
+				stringConst to cancelPromise gives LiteralValueTypeProbe.miss()
+			end 'pickShape'
 			if hit.found 'gotIt'
 				return hit.valueType
 			end 'gotIt'
@@ -293,16 +290,9 @@ type LiteralValueTypeProbe
 	end 'hit'
 end 'LiteralValueTypeProbe'
 
-// Extract the literal's MaxonType when the result name matches `target`.
-// Wraps the match-on-MaxonOp + name comparison so the caller doesn't need
-// to express an if-inside-match (which the parser rejects).
-function matchLiteralValueType(op MaxonOp, target ByteArray) returns LiteralValueTypeProbe
-	match op 'pickShape'
-		literal(result, _, valueType, _) then return literalValueTypeProbeFor(result, valueType: valueType, target: target)
-		default panic("matchLiteralValueType: op.name == literal but match did not extract")
-	end 'pickShape'
-end 'matchLiteralValueType'
-
+// True when `result` matches the target element name, packaging the
+// literal's MaxonType into a probe hit. Called from the `literal` arm of
+// `lookupResolvedElementType`'s `match op`.
 function literalValueTypeProbeFor(result ByteArray, valueType MaxonType, target ByteArray) returns LiteralValueTypeProbe
 	if result == target 'matched'
 		return LiteralValueTypeProbe.hit(valueType)
@@ -408,7 +398,11 @@ function eraseSetCallsForMm(module MaxonModule, block IrBlock, mmName ByteArray,
 		end 'isTarget'
 		// Index / count literals interleaved with the set calls — leave
 		// in place (later DCE drops their dead defs).
-		if op.name == "literal" 'isLiteral'
+		let isIndexLiteral = match op 'classify'
+			literal gives true
+			stringConst to cancelPromise gives false
+		end 'classify'
+		if isIndexLiteral 'isLiteral'
 			pos = pos + 1
 			continue
 		end 'isLiteral'
@@ -425,7 +419,7 @@ end 'eraseSetCallsForMm'
 function isSetOrSetLengthOnMm(op MaxonOp, mmName ByteArray) returns bool
 	let setName = "set".toByteArray()
 	let setLengthName = "setLength".toByteArray()
-	if op.name != "tryMethodCall" and op.name != "methodCall" 'notMethodCall'
+	if op.rawValue.category != OpCategory.callMethod 'notMethodCall'
 		return false
 	end 'notMethodCall'
 	match op 'shape'
