@@ -13596,6 +13596,17 @@ export type Parser
 					try eat(TokenKind.dot)
 					_ = try consume()
 					let accessRange = SourceRange.between(token, last: memberToken)
+					// `.allCases` is not available on unions — a union's
+					// associated-value cases have no single ordinal/raw value to
+					// enumerate. Mirrors the C# bootstrap's E4006 reject
+					// (2-Parser.cs:14974). Report and recover with an empty array
+					// so the surrounding expression stays well-formed;
+					// reportCompileError's first-error gate then suppresses any
+					// follow-on E3012 (unused loop variable) in the same function.
+					if enumIsAssociatedValueUnion(token.value) 'allCasesOnUnion'
+						reportCompileError(project, code: ErrorCode.irInvalidFieldAccess, message: "allCases is not available on unions", line: token.line, column: token.column, filePath: filePath)
+						return try emitArrayLiteralResult(currentBlock, elemNames: ByteArrayArray.create(), elemRanges: SourceRangeArray.create(), literalRange: accessRange, bracketToken: cursor.current())
+					end 'allCasesOnUnion'
 					return try emitEnumAllCases(token.value, accessRange: accessRange)
 				end 'isAllCases'
 				if memberToken.value == "allCaseNames" 'isAllCaseNames'
