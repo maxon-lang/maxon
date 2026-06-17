@@ -1870,6 +1870,12 @@ function registerManagedListMethods(project Project)
 	registerManagedListMethod(project, methodName: "create", paramNames: StringArray.create(), paramTypes: MaxonTypeArray.create(), returnType: mlReturn)
 end 'registerManagedListMethods'
 
+// Byte offset of a `__ManagedListNode`'s value slot (see the layout comment
+// below). The Maxon-level `setValue` refcount rebalance loads/stores the slot
+// directly via this offset; keep in sync with the struct registration and the
+// runtime helpers in runtime.std.
+module let NODE_VALUE_OFFSET = 24
+
 // Phase C: register the `__ManagedListNode` builtin struct and its 4 instance
 // methods. The node struct mirrors the C# bootstrap layout
 // (maxon-sharp Compiler/2-Parser.cs:1060-1069):
@@ -7894,6 +7900,31 @@ type MaxonToStdLowering
 			allArgIds.push(self.emitListElemManagedBit(createReceiverType, dstBlock: dstBlock))
 		end 'listCreateFlag'
 
+		// `__ManagedListNode.setValue(v)` with a MANAGED element must release the
+		// payload the node currently holds before the new one overwrites the slot.
+		// The node OWNS its value (its +1 was moved into the slot at insert time —
+		// `mrt_managed_list_alloc_node` stores without increfing because the inserter
+		// CONSUMES the value arg, see `seedIntrinsicLeafConsumers`). `setValue` is
+		// likewise seeded as consuming its value arg, so the NEW value's +1 is moved
+		// into the slot for free — no incref-new is emitted here (that is the
+		// self-hosted move ABI, and is why this differs from the C# bootstrap's
+		// `LowerManagedListNodeSetValue`, which increfs the new value and keeps the
+		// caller's temp). What the runtime helper canNOT do is drop the OLD payload
+		// (it has no element-managedness info), so without this decref the displaced
+		// value leaks (never reaches rc=0 — the set-value-decrefs-old leak). The old
+		// slot is read and released via the null-guarded helper: a node can legitimately
+		// hold a null/zero slot before its first real value. Primitive-element lists
+		// skip this — the slot is a bare i64 with no reference to balance.
+		let isNodeSetValue = receiverName == "__ManagedListNode" and methodName == "setValue"
+		if isNodeSetValue and self.nodeSetValueElementIsManaged(argTypes) 'setValueDecrefOld'
+			let oldValueId = self.emitLoadFieldI64(receiverId, offset: NODE_VALUE_OFFSET, dstBlock: dstBlock)
+			var decrefArgs = ValueIdArray.create()
+			decrefArgs.push(oldValueId)
+			let decrefRetId = allocValueId(self.funcIdRef)
+			self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(decrefRetId, callee: "__mm_decref_maybenull_helper", argIds: decrefArgs)))
+			self.setValueType(decrefRetId, t: MaxonType.integer)
+		end 'setValueDecrefOld'
+
 		let helperName = try managedHandleHelperFor(receiverName, methodName: methodName) otherwise 'noHelper'
 			self.reportUnknownManagedHandleMethod(result, qualifiedName: qualifiedName, dstBlock: dstBlock)
 			return true
@@ -11437,6 +11468,23 @@ type MaxonToStdLowering
 		end 'noArgs'
 		return not anyMaxonTypeIsConditional(gidArgs)
 	end 'listInstanceElemIsConcrete'
+
+	// Whether a `__ManagedListNode.setValue(v)` call's element is a MANAGED ref
+	// (struct/string/boxed-union/generic-instance) and therefore needs the node's
+	// value-slot reference rebalanced (decref old, incref new). `argTypes[0]` is
+	// the new value's source type — concrete at every call site, because the only
+	// callers of `setValue` are direct user code (the stdlib `List`/`ListIterator`
+	// wrappers never mutate a node's value in place; they only read it via
+	// `node.value()` and re-link via insert/remove). A type-parameter element
+	// therefore cannot reach here; were one to, `maxonTypeIsManagedRef` answers
+	// false (conservative: no refcount ops), which is sound for a primitive but
+	// would under-count a managed type-param — flagged here so a future generic
+	// caller is forced to extend this with a layout-bit fallback (as
+	// `emitListElemManagedBit` does for `create`).
+	function nodeSetValueElementIsManaged(argTypes MaxonTypeArray) returns bool
+		let newValueType = try argTypes.get(0) otherwise panic("nodeSetValueElementIsManaged: setValue missing new-value arg type")
+		return maxonTypeIsManagedRef(self.project, t: newValueType)
+	end 'nodeSetValueElementIsManaged'
 
 	// For each field on `structType` whose declared type resolves to the
 	// `__ManagedMemory` builtin, allocate a 40-byte __ManagedMemory record

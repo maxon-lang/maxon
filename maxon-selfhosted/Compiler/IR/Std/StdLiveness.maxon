@@ -800,6 +800,21 @@ end 'calleeConsumesReceiver'
 // has retained the element, so the borrow-retain increfs a freed header
 // (garbage-tag UAF).
 function calleeReturnsReceiverBorrow(callee String) returns bool
+	// The `*_insert_*_value` helpers allocate a fresh node and LINK it into arg-0
+	// (the list), returning the node as a chain-owned borrow (classified
+	// `borrowed` by `managedHandleResultClass` — the node's +1 lives in the chain
+	// links, not the caller). The returned node is therefore an interior borrow of
+	// the list exactly like `head`/`tail`/`node_next`: recording `node → list`
+	// couples the list's live range to every later node use (`node.value()`,
+	// `node.next()`, `list.reinsertFirst(node)`), so the inserter releases the list
+	// only AFTER the borrowed nodes are dead. Without the edge a list with no
+	// further DIRECT use (`let n = list.insertLast(v); … n.next()`) was freed at the
+	// insert call, whose destructor `clear`s the chain — zeroing every node's
+	// next/prev links, so a later `n.next()` read a null/garbage pointer (the
+	// node.next-prev + reinsert nav crashes).
+	if callee == "mrt_managed_list_insert_first_value" or callee == "mrt_managed_list_insert_last_value" or callee == "mrt_managed_list_insert_after_value" or callee == "mrt_managed_list_insert_before_value" 'insertNode'
+		return true
+	end 'insertNode'
 	return callee == "mrt_managed_list_head" or callee == "mrt_managed_list_tail" or callee == "mrt_managed_list_node_next" or callee == "mrt_managed_list_node_prev" or callee == "mrt_managed_list_node_value" or callee == "stdlib.__managed_mem_cursor_current" or callee == "__managed_mem_cursor_current" or callee == "stdlib.__managed_mem_get" or callee == "__managed_mem_get"
 end 'calleeReturnsReceiverBorrow'
 

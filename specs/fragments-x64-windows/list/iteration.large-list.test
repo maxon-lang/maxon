@@ -20,116 +20,129 @@ ExitCode: 0
 module {
   func @main() -> u32 {
   entry:
-    x64.prologue stack_size=64
-    x64.call IntList.create
-    x64.mov [rbp-8], rax
-    x64.mov rax, 1
-    x64.mov rcx, 100
-    x64.mov [rbp-16], rcx
-    x64.mov [rbp-24], rax
-    x64.jmp main.build_0.header
+    x64.prologue stack_size=32
+    x64.lea rdx, [rip+__destruct_List]
+    x64.mov ecx, 8
+    x64.call stdlib.__mm_alloc
+    x64.mov r12, r8
+    x64.mov r8, r12
+    x64.sub r8, 8
+    x64.lock inc qword ptr [r8]
+    x64.lea r8, [rip+__layout_List_Integer]
+    x64.mov rcx, [r8+24] (8b)
+    x64.mov r8d, 1
+    x64.and rcx, r8
+    x64.call mrt_managed_list_create
+    x64.mov [r12+0], r8 (8b)
+    x64.mov edx, 1
+    x64.mov r13, rdx
   build_0.header:
-    x64.mov rax, [rbp-24]
-    x64.mov rcx, [rbp-16]
-    x64.cmp rax, rcx
-    x64.jg main.build_0.exit
+    x64.cmp r13, 100
+    x64.jg build_0.exit
   build_0:
-    x64.mov rax, [rbp-24]
-    x64.mov rcx, [rbp-8]
-    x64.mov rdx, [rbp-24]
-    x64.call IntList.append
-    x64.jmp main.build_0.incr
-  build_0.incr:
-    x64.mov rax, 1
-    x64.mov rcx, [rbp-24]
-    x64.add rcx, rax
-    x64.mov [rbp-24], rcx
-    x64.jmp main.build_0.header
+    x64.mov rcx, [r12+0] (8b)
+    x64.mov rdx, r13
+    x64.call mrt_managed_list_insert_last_value
+  build_0.step:
+    x64.mov rdx, r13
+    x64.add rdx, 1
+    x64.mov r13, rdx
+    x64.jmp build_0.header
   build_0.exit:
-    x64.xor eax, eax
-    x64.mov [rbp-32], rax
-    x64.mov rcx, [rbp-8]
-    x64.call IntList.createIterator
-    x64.mov [rbp-40], rax
-    x64.xor eax, eax
-    x64.cmp rdx, rax
-    x64.jne main.loop_0.exit
-  loop_0.preamble:
-    x64.jmp main.loop_0
-  loop_0.header:
-    x64.mov rax, [rbp-40]
-    x64.mov rcx, [rbp-40]
-    x64.call __ListIterator_Integer.advance
+    x64.xor r13d, r13d
+  inlined_List.createIterator_0_0:
+    x64.mov rcx, [r12+0] (8b)
+  inlined_ListIterator.create_0_0:
+    x64.call mrt_managed_list_head
+    x64.mov r14, r8
+    x64.xor r15d, r15d
+    x64.test rdx, rdx
+    x64.je inlined_ListIterator.create_3_0
+  inlined_ListIterator.create_1_0:
+    x64.mov edx, 1
+    x64.mov rcx, r15
+    x64.mov r14, rdx
+    x64.jmp inline_cont_main_0
+  inlined_ListIterator.create_3_0:
+    x64.lea rdx, [rip+__destruct_ListIterator]
+    x64.mov ecx, 8
+    x64.call stdlib.__mm_alloc
+    x64.mov r9, r14
+    x64.sub r9, 8
+    x64.lock inc qword ptr [r9]
+    x64.mov r9, r8
+    x64.sub r9, 8
+    x64.lock inc qword ptr [r9]
+    x64.mov [r8+0], r14 (8b)
+    x64.mov rcx, r8
+    x64.mov r14, r15
+  inline_cont_main_0:
+    x64.test r14, r14
+    x64.je inlined_List.createIterator_2_0
+  inlined_List.createIterator_1_0:
+    x64.call __mm_decref_maybenull_helper
     x64.xor ecx, ecx
-    x64.cmp rdx, rcx
-    x64.jne main.loop_0.exit
+    x64.mov r8, r14
+    x64.mov r14, rcx
+    x64.jmp inline_cont_main_1
+  inlined_List.createIterator_2_0:
+    x64.xor r8d, r8d
+    x64.mov r14, rcx
+  inline_cont_main_1:
+    x64.test r8, r8
+    x64.je loop_0
+    x64.jmp __rc_edge_12_0
+  inlined_ListIterator.advance_0_0:
+    x64.mov rcx, [r14+0] (8b)
+    x64.call mrt_managed_list_node_next
+    x64.xor r15d, r15d
+    x64.test rdx, rdx
+    x64.je inlined_ListIterator.advance_3_0
+  inlined_ListIterator.advance_1_0:
+    x64.mov edx, 1
+    x64.jmp inline_cont_main_2
+  inlined_ListIterator.advance_3_0:
+    x64.mov r9, r8
+    x64.sub r9, 8
+    x64.lock inc qword ptr [r9]
+    x64.mov rcx, [r14+0] (8b)
+    x64.mov [r14+0], r8 (8b)
+    x64.call __mm_decref_maybenull_helper
+    x64.mov rdx, r15
+  inline_cont_main_2:
+    x64.test rdx, rdx
+    x64.je loop_0
+    x64.jmp __rc_edge_16_0
   loop_0:
-    x64.mov rax, [rbp-40]
-    x64.mov rcx, [rbp-40]
-    x64.call __ListIterator_Integer.current
-    x64.mov [rbp-48], rax
-    x64.mov rcx, [rbp-48]
-    x64.mov rdx, [rbp-32]
-    x64.add rdx, rcx
-    x64.mov [rbp-32], rdx
-    x64.jmp main.loop_0.header
+    x64.mov rcx, [r14+0] (8b)
+    x64.call mrt_managed_list_node_value
+    x64.add r13, r8
+    x64.jmp inlined_ListIterator.advance_0_0
   loop_0.exit:
-    x64.mov rax, 5050
-    x64.mov rcx, [rbp-32]
-    x64.sub rcx, rax
-    x64.xor edx, edx
-    x64.mov ebx, 4294967295
-    x64.cmp rcx, rbx
-    x64.jg main.__range_panic_0
-    x64.cmp rcx, rdx
-    x64.jl main.__range_panic_0
-    x64.jmp main.__range_ok_0
+    x64.mov r9d, 4294967295
+    x64.sub r8, 5050
+    x64.cmp r8, r9
+    x64.jbe __range_ok_0
+    x64.jmp __range_panic_0
+  __rc_edge_12_0:
+    x64.mov rcx, r14
+    x64.call __mm_decref_maybenull_helper
+    x64.mov rcx, r12
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r8, r13
+    x64.jmp loop_0.exit
+  __rc_edge_16_0:
+    x64.mov rcx, r14
+    x64.call __mm_decref_maybenull_helper
+    x64.mov rcx, r12
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r8, r13
+    x64.jmp loop_0.exit
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_0]
-    x64.mov rcx, rax
+    x64.lea r12, [rip+__panic_msg_5fed063665761795]
+    x64.mov rcx, r12
     x64.call mrt_panic
   __range_ok_0:
-    x64.mov rax, [rbp-40]
-    x64.mov [rbp-56], rcx
-    x64.test rax, rax
-    x64.jz __nonnull_skip_0
-    x64.mov rcx, [rbp-40]
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.mov rcx, [rbp-8]
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_1
-    x64.call mm_decref
-    x64.label __nonnull_skip_1
-    x64.mov rax, [rbp-56]
-    x64.epilogue
-    x64.ret
-  }
-  func @__destruct___ManagedList_Integer(ptr: i64) {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rbp-8]
-    x64.call maxon_managed_list_clear
-    x64.jmp __destruct___ManagedList_Integer.done
-  done:
-    x64.epilogue
-    x64.ret
-  }
-  func @__destruct_IntList(ptr: i64) {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+0]
-    x64.mov [rbp-16], rcx
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_0
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.jmp __destruct_IntList.done
-  done:
     x64.epilogue
     x64.ret
   }

@@ -4977,6 +4977,18 @@ end
 //   slot 0 = list_ptr (arg)
 //   slot 1 = node_ptr (arg)
 //   slot 2 = old_list (node.list before detach)
+// REFCOUNT ORDERING: the node arrives holding exactly the OLD list's owned
+// reference (the user binding is a chain-owned borrow that takes no ref of its
+// own — see managedHandleResultClass). `link_first` increfs the node (the NEW
+// list's reference), so the move must drop the OLD list's reference — but the
+// drop has to run AFTER the relink, never before: a decref BEFORE link_first
+// took the lone ref to rc 0, FREEING the node, so the subsequent link wrote
+// links through (and incref'd) freed memory (the reinsert nil-deref). The fix:
+// unlink (no decref — unlink never decrefs), relink (+1), THEN decref (-1). The
+// node passes through rc 2 between link and decref, so it is never reclaimed.
+// A node that is ALREADY detached (node.list == 0, e.g. after `detach()`) holds
+// no list ref; it gains one from the relink and must NOT be decref'd — gated on
+// the saved old-list pointer.
 func mrt_managed_list_reinsert_first 2 void
   block entry:
     v0 = std param 0 i64
@@ -4984,30 +4996,43 @@ func mrt_managed_list_reinsert_first 2 void
     v1 = std param 1 i64
     std storeSlot 1 v1
 
-    // Auto-detach: if node.list != 0, unlink and drop the old list's ref.
+    // Auto-detach: if node.list != 0, unlink from the old list (without dropping
+    // its ref yet — the post-relink decref below balances it).
     v2 = std loadIndirect v1 16
     std storeSlot 2 v2
     v3 = std constI64 0
     v4 = std cmpI64Eq v2 v3
-    std condBr v4 no_detach do_detach
+    std condBr v4 relink do_detach
 
   block do_detach:
     v5 = std loadSlot 2
     v6 = std loadSlot 1
     v7 = std call mrt_managed_list_unlink v5 v6
-    v8 = std loadSlot 1
-    v9 = std call mm_decref v8
-    std br no_detach
+    std br relink
 
-  block no_detach:
+  block relink:
     v10 = std loadSlot 0
     v11 = std loadSlot 1
     v12 = std call mrt_managed_list_link_first v10 v11
-    v13 = std constI64 0
-    std ret v13
+    // Drop the OLD list's reference (now that the node is safely re-linked and
+    // the new list's incref has landed) — only when the node was attached.
+    v13 = std loadSlot 2
+    v14 = std constI64 0
+    v15 = std cmpI64Eq v13 v14
+    std condBr v15 done post_decref
+
+  block post_decref:
+    v16 = std loadSlot 1
+    v17 = std call mm_decref v16
+    std br done
+
+  block done:
+    v18 = std constI64 0
+    std ret v18
 end
 
-// mrt_managed_list_reinsert_last(list, node).
+// mrt_managed_list_reinsert_last(list, node). Same refcount ordering as
+// reinsert_first (see its header) — relink before the old-list decref.
 func mrt_managed_list_reinsert_last 2 void
   block entry:
     v0 = std param 0 i64
@@ -5019,25 +5044,36 @@ func mrt_managed_list_reinsert_last 2 void
     std storeSlot 2 v2
     v3 = std constI64 0
     v4 = std cmpI64Eq v2 v3
-    std condBr v4 no_detach do_detach
+    std condBr v4 relink do_detach
 
   block do_detach:
     v5 = std loadSlot 2
     v6 = std loadSlot 1
     v7 = std call mrt_managed_list_unlink v5 v6
-    v8 = std loadSlot 1
-    v9 = std call mm_decref v8
-    std br no_detach
+    std br relink
 
-  block no_detach:
+  block relink:
     v10 = std loadSlot 0
     v11 = std loadSlot 1
     v12 = std call mrt_managed_list_link_last v10 v11
-    v13 = std constI64 0
-    std ret v13
+    v13 = std loadSlot 2
+    v14 = std constI64 0
+    v15 = std cmpI64Eq v13 v14
+    std condBr v15 done post_decref
+
+  block post_decref:
+    v16 = std loadSlot 1
+    v17 = std call mm_decref v16
+    std br done
+
+  block done:
+    v18 = std constI64 0
+    std ret v18
 end
 
-// mrt_managed_list_reinsert_after(list, target, node).
+// mrt_managed_list_reinsert_after(list, target, node). Same refcount ordering as
+// reinsert_first (see its header) — relink before the old-list decref. Here the
+// node is slot 2 (target is slot 1) and the saved old-list is slot 3.
 func mrt_managed_list_reinsert_after 3 void
   block entry:
     v0 = std param 0 i64
@@ -5051,26 +5087,36 @@ func mrt_managed_list_reinsert_after 3 void
     std storeSlot 3 v3
     v4 = std constI64 0
     v5 = std cmpI64Eq v3 v4
-    std condBr v5 no_detach do_detach
+    std condBr v5 relink do_detach
 
   block do_detach:
     v6 = std loadSlot 3
     v7 = std loadSlot 2
     v8 = std call mrt_managed_list_unlink v6 v7
-    v9 = std loadSlot 2
-    v10 = std call mm_decref v9
-    std br no_detach
+    std br relink
 
-  block no_detach:
+  block relink:
     v11 = std loadSlot 0
     v12 = std loadSlot 1
     v13 = std loadSlot 2
     v14 = std call mrt_managed_list_link_after v11 v12 v13
-    v15 = std constI64 0
-    std ret v15
+    v15 = std loadSlot 3
+    v16 = std constI64 0
+    v17 = std cmpI64Eq v15 v16
+    std condBr v17 done post_decref
+
+  block post_decref:
+    v18 = std loadSlot 2
+    v19 = std call mm_decref v18
+    std br done
+
+  block done:
+    v20 = std constI64 0
+    std ret v20
 end
 
-// mrt_managed_list_reinsert_before(list, target, node).
+// mrt_managed_list_reinsert_before(list, target, node). Same refcount ordering
+// as reinsert_after.
 func mrt_managed_list_reinsert_before 3 void
   block entry:
     v0 = std param 0 i64
@@ -5084,23 +5130,32 @@ func mrt_managed_list_reinsert_before 3 void
     std storeSlot 3 v3
     v4 = std constI64 0
     v5 = std cmpI64Eq v3 v4
-    std condBr v5 no_detach do_detach
+    std condBr v5 relink do_detach
 
   block do_detach:
     v6 = std loadSlot 3
     v7 = std loadSlot 2
     v8 = std call mrt_managed_list_unlink v6 v7
-    v9 = std loadSlot 2
-    v10 = std call mm_decref v9
-    std br no_detach
+    std br relink
 
-  block no_detach:
+  block relink:
     v11 = std loadSlot 0
     v12 = std loadSlot 1
     v13 = std loadSlot 2
     v14 = std call mrt_managed_list_link_before v11 v12 v13
-    v15 = std constI64 0
-    std ret v15
+    v15 = std loadSlot 3
+    v16 = std constI64 0
+    v17 = std cmpI64Eq v15 v16
+    std condBr v17 done post_decref
+
+  block post_decref:
+    v18 = std loadSlot 2
+    v19 = std call mm_decref v18
+    std br done
+
+  block done:
+    v20 = std constI64 0
+    std ret v20
 end
 
 // mrt_managed_list_detach(list, node): unlink `node` from `list`. The node
