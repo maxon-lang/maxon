@@ -330,10 +330,16 @@ let whitelist = ["basics",
 	"optimizer-refcount",
 	"managed-memory-element-size",
 	"array-cursor",
-	// "list" (16/23) — `memory.*` / `value-survives-clear*` fragments need
-	//   E3070 borrow-check diagnostics + runtime stderr instrumentation.
-	// "managed-list" (25/34) — borrow-check / stderr-instrumentation fragments.
-	// "ownership-edge-cases" (32/88) — extensive runtime-stderr fragments.
+	// "list" (29/31) — 2 `memory.value-survives-clear*` fragments EXPECT E3070
+	//   borrow-conflict (value borrowed from list outlives a clear via helper);
+	//   self-hosted's borrow checker doesn't fire for the via-helper case.
+	// "managed-list" (25/34) — self-hosted's borrow checker FALSE-POSITIVES here:
+	//   it emits E3070 on legitimate `list.remove(node)`-while-holding-a-node-ref
+	//   (core.remove*, 4 tests), plus real nil-pointer crashes in reinsert/node
+	//   ops (core.reinsert-*, node.*). Tangled borrow-check + codegen bugs.
+	// "ownership-edge-cases" (87/88) — 1 leak (exit 101) in
+	//   rc-managed-list-node-set-value-decrefs-old (managed-list-node set-value
+	//   doesn't decref the old payload). Real refcount bug.
 	// "memory-safety" — HANGS/slow (heavy runtime-stderr fragment set).
 	// "refcount" — HANGS/slow (heavy runtime-stderr fragment set).
 	// "code-review-timings" — docs-only spec, generates no test fragments.
