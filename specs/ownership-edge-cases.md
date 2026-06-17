@@ -1815,14 +1815,17 @@ end 'Color'
 
 function main() returns ExitCode
 	let c = Color.Green
-	if c.name == "Green" 'check'
-		return 1
-	end 'check'
+	// Printing `.name` still allocates + frees the name String (the leak check);
+	// the value can't be compared directly (E3097).
+	print("{c.name}\n")
 	return 0
 end 'main'
 ```
 ```exitcode
-1
+0
+```
+```stdout
+Green
 ```
 
 <!-- test: rc-enum-name-reassign-no-leak -->
@@ -1837,14 +1840,15 @@ end 'Status'
 function main() returns ExitCode
 	var s = Status.pending
 	s = Status.done
-	if s.name == "done" 'check'
-		return 1
-	end 'check'
+	print("{s.name}\n")
 	return 0
 end 'main'
 ```
 ```exitcode
-1
+0
+```
+```stdout
+done
 ```
 
 <!-- test: rc-array-of-structs-get-no-leak -->

@@ -782,15 +782,18 @@ end 'HttpStatus'
 
 function main() returns ExitCode
 	let status = HttpStatus.notFound
+	// Binding `.rawValue` to a name and using it as data (here, printing) is
+	// fine; comparing that value with `==` is still E3097.
 	let code = status.rawValue
-	if code == 404 'check'
-		return 1
-	end 'check'
+	print("{code}\n")
 	return 0
 end 'main'
 ```
 ```exitcode
-1
+0
+```
+```stdout
+404
 ```
 
 <!-- test: raw-value-int -->
@@ -803,14 +806,16 @@ end 'HttpStatus'
 
 function main() returns ExitCode
 	let status = HttpStatus.ok
-	if status.rawValue == 200 'check'
-		return 1
-	end 'check'
+	// `.rawValue` may be observed as data but not compared (E3097); print it.
+	print("{status.rawValue}\n")
 	return 0
 end 'main'
 ```
 ```exitcode
-1
+0
+```
+```stdout
+200
 ```
 
 <!-- test: raw-value-int-comparison -->
@@ -863,15 +868,18 @@ end 'Planet'
 
 function main() returns ExitCode
 	let p = Planet.mars
+	// Binding `.rawValue` and using it as data (printing) is fine; comparing
+	// that value with `==` is E3097.
 	let name = p.rawValue
-	if name == "Mars" 'check'
-		return 1
-	end 'check'
+	print("{name}\n")
 	return 0
 end 'main'
 ```
 ```exitcode
-1
+0
+```
+```stdout
+Mars
 ```
 
 <!-- test: explicit-char-backed-rawvalue -->
@@ -885,14 +893,15 @@ end 'CardSuit'
 function main() returns ExitCode
 	let suit = CardSuit.Diamonds
 	let ch = suit.rawValue
-	if ch == 'D' 'check'
-		return 1
-	end 'check'
+	print("{ch}\n")
 	return 0
 end 'main'
 ```
 ```exitcode
-1
+0
+```
+```stdout
+D
 ```
 
 <!-- test: string-rawvalue-dynamic-comparison -->
@@ -908,16 +917,20 @@ end 'getName'
 
 function main() returns ExitCode
 	let p = Planet.mars
+	// Print the `.rawValue` and the dynamically-computed string; identical
+	// output shows they match (comparing the accessor with `==` is E3097).
 	let name = p.rawValue
 	let expected = getName()
-	if name == expected 'check'
-		return 1
-	end 'check'
+	print("{name}\n{expected}\n")
 	return 0
 end 'main'
 ```
 ```exitcode
-1
+0
+```
+```stdout
+Mars
+Mars
 ```
 
 <!-- test: string-rawvalue-after-reassign -->
@@ -931,14 +944,15 @@ function main() returns ExitCode
 	var p = Planet.earth
 	p = Planet.mars
 	let name = p.rawValue
-	if name == "Mars" 'check'
-		return 1
-	end 'check'
+	print("{name}\n")
 	return 0
 end 'main'
 ```
 ```exitcode
-1
+0
+```
+```stdout
+Mars
 ```
 
 <!-- test: float-rawvalue-in-function -->
@@ -1058,14 +1072,15 @@ end 'Color'
 function main() returns ExitCode
 	let c = Color.green
 	let n = c.name
-	if n == "green" 'check'
-		return 1
-	end 'check'
+	print("{n}\n")
 	return 0
 end 'main'
 ```
 ```exitcode
-1
+0
+```
+```stdout
+green
 ```
 
 <!-- test: name-int-backed -->
@@ -1077,14 +1092,16 @@ end 'HttpStatus'
 
 function main() returns ExitCode
 	let s = HttpStatus.notFound
-	if s.name == "notFound" 'check'
-		return 1
-	end 'check'
+	// `.name` may be observed as data but not compared (E3097); print it.
+	print("{s.name}\n")
 	return 0
 end 'main'
 ```
 ```exitcode
-1
+0
+```
+```stdout
+notFound
 ```
 
 <!-- test: name-string-backed -->
@@ -1096,15 +1113,16 @@ end 'Planet'
 
 function main() returns ExitCode
 	let p = Planet.mars
-	// rawValue is "Mars", name is "mars"
-	if p.name == "mars" 'check'
-		return 1
-	end 'check'
+	// rawValue is "Mars", name is "mars" — print the name (comparing it is E3097).
+	print("{p.name}\n")
 	return 0
 end 'main'
 ```
 ```exitcode
-1
+0
+```
+```stdout
+mars
 ```
 
 <!-- test: name-from-function -->
@@ -1144,14 +1162,15 @@ end 'Status'
 function main() returns ExitCode
 	var s = Status.pending
 	s = Status.done
-	if s.name == "done" 'check'
-		return 1
-	end 'check'
+	print("{s.name}\n")
 	return 0
 end 'main'
 ```
 ```exitcode
-1
+0
+```
+```stdout
+done
 ```
 
 <!-- test: name-float-backed -->
@@ -1164,14 +1183,15 @@ end 'Weights'
 
 function main() returns ExitCode
 	let w = Weights.heavy
-	if w.name == "heavy" 'check'
-		return 1
-	end 'check'
+	print("{w.name}\n")
 	return 0
 end 'main'
 ```
 ```exitcode
-1
+0
+```
+```stdout
+heavy
 ```
 
 <!-- test: name-char-backed -->
@@ -1184,14 +1204,44 @@ end 'CardSuit'
 
 function main() returns ExitCode
 	let s = CardSuit.Diamonds
-	if s.name == "Diamonds" 'check'
+	print("{s.name}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+Diamonds
+```
+
+### Accessor Comparison Is Rejected
+
+Comparing an enum/union value's `.name`, `.ordinal`, or `.rawValue` accessor
+with `==`/`!=` is a compile error (E3097). Checking which case a value is must
+be done on the value itself (`value == Type.case` for a payload-free case) or
+via `match` for a union — so adding a case forces every site to handle it
+rather than silently slipping through. The accessors remain available to
+*observe* a case's name/position/backing as data (print, serialize, etc.).
+
+<!-- test: error.enum-accessor-comparison -->
+```maxon
+enum Color
+	red
+	green
+	blue
+end 'Color'
+
+function main() returns ExitCode
+	let c = Color.green
+	if c.ordinal == 1 'check'
 		return 1
 	end 'check'
 	return 0
 end 'main'
 ```
-```exitcode
-1
+```maxoncstderr
+error E3097: specs/fragments/constants/error.enum-accessor-comparison.test:10:15: cannot compare an enum's '.ordinal' with '==' — compare the value directly (e.g. `value == Type.case`), or use `match` for a union variant
 ```
 
 ### fromRawValue Tests
@@ -1437,14 +1487,17 @@ end 'HttpStatus'
 
 function main() returns ExitCode
 	let status = try HttpStatus.fromName("notFound") otherwise HttpStatus.ok
-	if status.rawValue == 404 'check'
-		return 1
-	end 'check'
+	// fromName resolved to notFound (rawValue 404); the `otherwise` fallback
+	// would print 200 instead. Comparing `.rawValue` directly is E3097.
+	print("{status.rawValue}\n")
 	return 0
 end 'main'
 ```
 ```exitcode
-1
+0
+```
+```stdout
+404
 ```
 
 <!-- test: fromName-dynamic -->

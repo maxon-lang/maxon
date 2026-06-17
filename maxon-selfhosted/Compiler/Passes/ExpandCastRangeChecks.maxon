@@ -64,12 +64,10 @@ function reportUnneededCastsInBlock(project Project, module MaxonModule, blockRe
 	let block = try module.blocks.get(blockRef) otherwise panic("reportUnneededCastsInBlock: blockRef OOB")
 	for opIdx in block.opRefs 'eachOp'
 		let op = try module.ops.get(opIdx) otherwise panic("reportUnneededCastsInBlock: opIdx OOB")
-		if op.name != "convert" 'notConvert'
-			continue
-		end 'notConvert'
 		match op 'check'
+			literal to unop then noOp()
 			convert(_, _, fromType, toType, implicit, range) then checkConvertForUnneededCast(project, fromType: fromType, toType: toType, implicit: implicit, range: range, sourcePath: sourcePath)
-			default panic("reportUnneededCastsInBlock: op.name == convert but match did not extract")
+			castCheck to sizeofType then noOp()
 		end 'check'
 	end 'eachOp'
 end 'reportUnneededCastsInBlock'
@@ -149,7 +147,12 @@ function processCastChecksInBlock(project Project, module MaxonModule, func IrFu
 	while pos < hostBlockOpCount(module, blockRef: hostBlockRef) 'walk'
 		let opIdx = readBlockOpIdx(module, blockRef: hostBlockRef, pos: pos)
 		let op = try module.ops.get(opIdx) otherwise panic("processCastChecksInBlock: opIdx OOB")
-		if op.name != "castCheck" 'notCheck'
+		let isCastCheck = match op 'classify'
+			castCheck gives true
+			literal to convert gives false
+			cmp to sizeofType gives false
+		end 'classify'
+		if not isCastCheck 'notCheck'
 			pos = pos + 1
 			continue
 		end 'notCheck'

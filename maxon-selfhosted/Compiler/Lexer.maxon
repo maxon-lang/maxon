@@ -617,39 +617,40 @@ type Lexer
 	end 'stepDfa'
 
 	function dispatchAction(action Action, dfaState DfaState, startLine LineNumber, startCol ColumnNumber, lastChar bool) throws CursorError
-		let a = action.rawValue
-		if a == Action.skip.rawValue 'isSkip'
-			return
-		end 'isSkip' else if a == Action.skipCr.rawValue 'isSkipCr'
-			column = column - 1
-		end 'isSkipCr' else if a == Action.newline.rawValue 'isNewline'
-			newline(startLine, startCol: startCol)
-		end 'isNewline' else if a == Action.emit.rawValue 'isEmit'
-			emitFixedToken(dfaState.rawValue, tokens: tokens, line: startLine, column: startCol)
-		end 'isEmit' else if a == Action.emit2.rawValue 'isEmit2'
-			try handleEmit2(dfaState, startLine: startLine, startCol: startCol)
-		end 'isEmit2' else if a == Action.enterStrSq.rawValue 'isStrSq'
-			try scanSingleQuoteString(startLine, startCol: startCol)
-		end 'isStrSq' else if a == Action.enterStrDq.rawValue 'isStrDq'
-			try scanDoubleQuoteString(startLine, startCol: startCol)
-		end 'isStrDq' else if a == Action.enterNumber.rawValue 'isNumber'
-			if not lastChar 'numRetreat'
-				try retreat()
-			end 'numRetreat'
-			try scanNumber(startLine, startCol: startCol)
-		end 'isNumber' else if a == Action.enterIdent.rawValue 'isIdent'
-			if not lastChar 'identRetreat'
-				try retreat()
-			end 'identRetreat'
-			try scanIdentifier(startLine, startCol: startCol)
-		end 'isIdent' else if a == Action.enterComment.rawValue 'isComment'
-			try handleEnterComment()
-		end 'isComment' else if a == Action.enterBlockComment.rawValue 'isBlockComment'
-			try handleEnterBlockComment(startLine, startCol: startCol)
-		end 'isBlockComment' else 'unknown'
-			panic("Lexer: unhandled action {action}")
-		end 'unknown'
+		match action 'dispatch'
+			skip then return
+			skipCr then column = column - 1
+			newline then newline(startLine, startCol: startCol)
+			emit then emitFixedToken(dfaState.rawValue, tokens: tokens, line: startLine, column: startCol)
+			emit2 then try handleEmit2(dfaState, startLine: startLine, startCol: startCol)
+			enterStrSq then try scanSingleQuoteString(startLine, startCol: startCol)
+			enterStrDq then try scanDoubleQuoteString(startLine, startCol: startCol)
+			enterNumber then try scanNumberFromDfa(lastChar, startLine: startLine, startCol: startCol)
+			enterIdent then try scanIdentifierFromDfa(lastChar, startLine: startLine, startCol: startCol)
+			enterComment then try handleEnterComment()
+			enterBlockComment then try handleEnterBlockComment(startLine, startCol: startCol)
+			default panic("Lexer: unhandled action {action}")
+		end 'dispatch'
 	end 'dispatchAction'
+
+	// On enterNumber/enterIdent the DFA has already consumed the token's first
+	// character; retreat so the dedicated scanner re-reads it from the start —
+	// unless it was the final char of input, where there is nothing to back over.
+	function retreatUnlessLast(lastChar bool) throws CursorError
+		if not lastChar 'retreat'
+			try retreat()
+		end 'retreat'
+	end 'retreatUnlessLast'
+
+	function scanNumberFromDfa(lastChar bool, startLine LineNumber, startCol ColumnNumber) throws CursorError
+		try retreatUnlessLast(lastChar)
+		try scanNumber(startLine, startCol: startCol)
+	end 'scanNumberFromDfa'
+
+	function scanIdentifierFromDfa(lastChar bool, startLine LineNumber, startCol ColumnNumber) throws CursorError
+		try retreatUnlessLast(lastChar)
+		try scanIdentifier(startLine, startCol: startCol)
+	end 'scanIdentifierFromDfa'
 
 	// --- Sub-scanners ---
 
@@ -1144,7 +1145,7 @@ type Lexer
 		let nameBytes = try bytes.slice(nameStart, endIndex: nameEnd) otherwise panic("Lexer.scanDirective: invariant violated")
 		let name = String.from(nameBytes)
 		let kind = classifyDirective(name)
-		if kind.rawValue == TokenKind.identifier.rawValue 'unknown'
+		if kind == TokenKind.identifier 'unknown'
 			// Unknown directive name — stash a distinct lexer error so the
 			// diagnostic can quote the offending name; run()'s caller maps
 			// this to ErrorCode.lexerUnexpectedCharacter.

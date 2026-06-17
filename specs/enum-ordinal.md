@@ -49,10 +49,9 @@ end 'Color'
 
 function main() returns ExitCode
 	let c = Color.green
-	if c.ordinal == 1 'check'
-		return 1
-	end 'check'
-	return 0
+	// `.ordinal` may only be observed as data, not compared (E3097) — surface
+	// it as the exit code; green is the second case, so ordinal 1.
+	return c.ordinal as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -75,14 +74,16 @@ function main() returns ExitCode
 	let s = Direction.south
 	let e = Direction.east
 	let w = Direction.west
-	if n.ordinal == 0 and s.ordinal == 1 and e.ordinal == 2 and w.ordinal == 3 'check'
-		return 1
-	end 'check'
+	// Ordinals follow declaration order; print all four (comparing them is E3097).
+	print("{n.ordinal}{s.ordinal}{e.ordinal}{w.ordinal}\n")
 	return 0
 end 'main'
 ```
 ```exitcode
-1
+0
+```
+```stdout
+0123
 ```
 
 ### Int-Backed Enum
@@ -98,14 +99,11 @@ end 'HttpStatus'
 function main() returns ExitCode
 	let s = HttpStatus.serverError
 	// ordinal is 2 (third case), not 500 (the raw value)
-	if s.ordinal == 2 'check'
-		return 1
-	end 'check'
-	return 0
+	return s.ordinal as ExitCode
 end 'main'
 ```
 ```exitcode
-1
+2
 ```
 
 ### Float-Backed Enum
@@ -120,14 +118,11 @@ end 'Threshold'
 
 function main() returns ExitCode
 	let t = Threshold.high
-	if t.ordinal == 2 'check'
-		return 1
-	end 'check'
-	return 0
+	return t.ordinal as ExitCode
 end 'main'
 ```
 ```exitcode
-1
+2
 ```
 
 ### String-Backed Enum
@@ -142,10 +137,7 @@ end 'ContentType'
 
 function main() returns ExitCode
 	let ct = ContentType.html
-	if ct.ordinal == 1 'check'
-		return 1
-	end 'check'
-	return 0
+	return ct.ordinal as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -164,14 +156,11 @@ end 'Grade'
 
 function main() returns ExitCode
 	let g = Grade.c
-	if g.ordinal == 2 'check'
-		return 1
-	end 'check'
-	return 0
+	return g.ordinal as ExitCode
 end 'main'
 ```
 ```exitcode
-1
+2
 ```
 
 ### Ordinal in Arithmetic

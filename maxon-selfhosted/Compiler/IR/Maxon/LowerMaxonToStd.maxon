@@ -259,26 +259,18 @@ function collectSlotMaxonTypes(func IrFunction, maxonModule MaxonModule, project
 end 'collectSlotMaxonTypes'
 
 function recordSlotTypeFromOp(op MaxonOp, slotMaxonTypes MaxonTypeArray, nextSlot VarSlot, project Project)
-	if op.name == "varDecl" 'isVarDecl'
-		match op 'd'
-			varDecl(slotId, _, slotType, _) then recordSlotType(slotMaxonTypes, slotId: slotId, slotType: slotType, nextSlot: nextSlot)
-			default panic("recordSlotTypeFromOp: op.name == varDecl but match did not extract")
-		end 'd'
-		return
-	end 'isVarDecl'
 	// Drop-tracking: a `varDecl` may declare a slot with a placeholder type
 	// (the try-result temp is declared `int` but actually holds a
 	// __ManagedFile). A `varLoad` carries the slot's real value type, so
 	// upgrade the recorded type to a drop-tracked one whenever a load reveals
 	// it — this is what makes the temp get zero-init'd and decref'd at scope
 	// exit, releasing the producer reference the let-binding copied from.
-	if op.name == "varLoad" 'isVarLoad'
-		match op 'l'
-			varLoad(_, slotId, slotType, _) then upgradeSlotTypeIfDropTracked(slotMaxonTypes, slotId: slotId, slotType: slotType, nextSlot: nextSlot, project: project)
-			default panic("recordSlotTypeFromOp: op.name == varLoad but match did not extract")
-		end 'l'
-		return
-	end 'isVarLoad'
+	match op 'pick'
+		literal to stringInterp then return
+		varDecl(slotId, _, slotType, _) then recordSlotType(slotMaxonTypes, slotId: slotId, slotType: slotType, nextSlot: nextSlot)
+		varLoad(_, slotId, slotType, _) then upgradeSlotTypeIfDropTracked(slotMaxonTypes, slotId: slotId, slotType: slotType, nextSlot: nextSlot, project: project)
+		varStore to sizeofType then return
+	end 'pick'
 end 'recordSlotTypeFromOp'
 
 function recordSlotType(slotMaxonTypes MaxonTypeArray, slotId VarSlot, slotType MaxonType, nextSlot VarSlot)

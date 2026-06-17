@@ -97,12 +97,16 @@ end 'Mnemonic'
 
 function main() returns ExitCode
 	let m = Mnemonic.sub
-	if m.rawValue == "mir.sub.i64" and m.name == "sub" 'ok'
-		return 3
-	end 'ok'
-	return 1
+	// `.rawValue` (decoded string) and `.name` (case spelling) are observed by
+	// printing; comparing either accessor directly is E3097.
+	print("{m.rawValue}\n{m.name}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
-3
+0
+```
+```stdout
+mir.sub.i64
+sub
 ```

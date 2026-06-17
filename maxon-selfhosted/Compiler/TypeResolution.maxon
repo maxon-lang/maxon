@@ -28,6 +28,13 @@
 // keeps the per-step `contains` check at O(1) rather than O(visited).
 typealias StringSet = Set with String
 
+// Empty statement body for the "do nothing" arms of an exhaustive `match op`
+// over MaxonOp variants this pass deliberately skips. A bare `default` arm is
+// disallowed (it would silently swallow unhandled cases), so every irrelevant
+// variant is named via a `to`-range arm whose body is this no-op.
+function skipOpArm()
+end 'skipOpArm'
+
 // Extract the bare typealias name from a registry key. The key is either
 // bare (`Score`) or namespace-qualified (`api.Score`, `stdlib.fmt.Score`)
 // — qualified keys are staged by `parseTopLevelTypealias` when a cross-file
@@ -2085,39 +2092,47 @@ module function findLiteralProducerInFunc(project Project, module MaxonModule, f
 		let block = try module.blocks.get(blockRef) otherwise panic("findLiteralProducerInFunc: blockRef OOB")
 		for opIdx in block.opRefs 'eachOp'
 			let op = try module.ops.get(opIdx) otherwise panic("findLiteralProducerInFunc: opIdx OOB")
-			if op.name == "literal" 'isLit'
-				let hit = matchLiteralProducer(op, operandName: operandName)
-				if hit.found 'gotIt'
-					return hit
-				end 'gotIt'
-			end 'isLit'
-			if op.name == "unop" 'isUnop'
-				let inner = matchUnopNegProducer(op, operandName: operandName)
-				if inner.found 'gotInner'
-					let nested = findLiteralProducerInFunc(project, module: module, func: func, operandName: inner.innerName)
-					if nested.found 'recurseHit'
-						return LiteralProducer.hit(0 - nested.value)
-					end 'recurseHit'
-					return LiteralProducer.miss()
-				end 'gotInner'
-			end 'isUnop'
-			if op.name == "convert" 'isConvert'
-				let inner = matchConvertProducer(project, op: op, operandName: operandName)
-				if inner.found 'gotConvert'
-					return findLiteralProducerInFunc(project, module: module, func: func, operandName: inner.innerName)
-				end 'gotConvert'
-			end 'isConvert'
+			let candidate = match op 'classifyProducer'
+				literal(result, value, _, _) gives literalProducerHitIfMatch(result, operandName: operandName, value: value)
+				unop(result, operand, opKind, _, _) gives negLiteralProducerFromUnop(project, module: module, func: func, operandName: operandName, result: result, operand: operand, opKind: opKind)
+				convert(result, operand, fromType, toType, _, _) gives convertLiteralProducer(project, module: module, func: func, operandName: operandName, result: result, operand: operand, fromType: fromType, toType: toType)
+				stringConst to binop gives LiteralProducer.miss()
+				castCheck to sizeofType gives LiteralProducer.miss()
+			end 'classifyProducer'
+			if candidate.found 'gotProducer'
+				return candidate
+			end 'gotProducer'
 		end 'eachOp'
 	end 'eachBlock'
 	return LiteralProducer.miss()
 end 'findLiteralProducerInFunc'
 
-function matchConvertProducer(project Project, op MaxonOp, operandName ByteArray) returns UnopHit
-	match op 'extract'
-		convert(result, operand, fromType, toType, _, _) then return convertHitIfKindPreserving(project, result: result, operandName: operandName, operand: operand, fromType: fromType, toType: toType)
-		default panic("unreachable: caller checked name == convert")
-	end 'extract'
-end 'matchConvertProducer'
+// `unop` arm of the literal-producer walk: when the op is a negation of
+// `operandName`, recurse into the negated inner operand and flip the sign of
+// the literal it resolves to. Returns miss for non-negation unops or when the
+// inner operand has no constant literal producer.
+function negLiteralProducerFromUnop(project Project, module MaxonModule, func IrFunction, operandName ByteArray, result ByteArray, operand ByteArray, opKind UnaryOpKind) returns LiteralProducer
+	let inner = unopHitIfNegMatch(result, operandName: operandName, operand: operand, opKind: opKind)
+	if not inner.found 'notNeg'
+		return LiteralProducer.miss()
+	end 'notNeg'
+	let nested = findLiteralProducerInFunc(project, module: module, func: func, operandName: inner.innerName)
+	if nested.found 'recurseHit'
+		return LiteralProducer.hit(0 - nested.value)
+	end 'recurseHit'
+	return LiteralProducer.miss()
+end 'negLiteralProducerFromUnop'
+
+// `convert` arm of the literal-producer walk: when the op is a kind-preserving
+// convert of `operandName`, recurse into the converted operand (the literal
+// value is unchanged across same-kind converts). Returns miss otherwise.
+function convertLiteralProducer(project Project, module MaxonModule, func IrFunction, operandName ByteArray, result ByteArray, operand ByteArray, fromType MaxonType, toType MaxonType) returns LiteralProducer
+	let inner = convertHitIfKindPreserving(project, result: result, operandName: operandName, operand: operand, fromType: fromType, toType: toType)
+	if not inner.found 'notConvert'
+		return LiteralProducer.miss()
+	end 'notConvert'
+	return findLiteralProducerInFunc(project, module: module, func: func, operandName: inner.innerName)
+end 'convertLiteralProducer'
 
 // Only recurse through `convert` ops that preserve the value's "kind" —
 // int↔int and float↔float. A float→int convert truncates (different
@@ -2193,13 +2208,6 @@ function castCategoryNumericKind(category CastCategory) returns NumericKind
 	end 'pick'
 end 'castCategoryNumericKind'
 
-function matchLiteralProducer(op MaxonOp, operandName ByteArray) returns LiteralProducer
-	match op 'extract'
-		literal(result, value, _, _) then return literalProducerHitIfMatch(result, operandName: operandName, value: value)
-		default panic("unreachable: caller checked name == literal")
-	end 'extract'
-end 'matchLiteralProducer'
-
 function literalProducerHitIfMatch(result ByteArray, operandName ByteArray, value ParsedInt) returns LiteralProducer
 	if byteArraysEqual(result, b: operandName) 'match'
 		return LiteralProducer.hit(value)
@@ -2219,13 +2227,6 @@ type UnopHit
 		return Self{found: true, innerName: innerName}
 	end 'hit'
 end 'UnopHit'
-
-function matchUnopNegProducer(op MaxonOp, operandName ByteArray) returns UnopHit
-	match op 'extract'
-		unop(result, operand, opKind, _, _) then return unopHitIfNegMatch(result, operandName: operandName, operand: operand, opKind: opKind)
-		default panic("unreachable: caller checked name == unop")
-	end 'extract'
-end 'matchUnopNegProducer'
 
 function unopHitIfNegMatch(result ByteArray, operandName ByteArray, operand ByteArray, opKind UnaryOpKind) returns UnopHit
 	if not byteArraysEqual(result, b: operandName) 'noMatch'
@@ -2352,17 +2353,187 @@ function validateTypeParamComparisonConstraints(project Project, module MaxonMod
 			let block = try module.blocks.get(blockRef) otherwise panic("validateTypeParamComparisonConstraints: blockRef OOB")
 			for opIdx in block.opRefs 'eachOp'
 				let op = try module.ops.get(opIdx) otherwise panic("validateTypeParamComparisonConstraints: opIdx OOB")
-				if op.name != "cmp" 'notCmp'
-					continue
-				end 'notCmp'
 				match op 'extract'
 					cmp(_, _, _, predicate, _, _, operandType, range) then checkTypeParamComparison(project, predicate: predicate, operandType: operandType, range: range, filePath: filePath, structConstraints: structConstraints, extClauses: extClauses)
-					default panic("validateTypeParamComparisonConstraints: cmp op shape mismatch")
+					literal to castCheck then continue
+					refEq to sizeofType then continue
 				end 'extract'
 			end 'eachOp'
 		end 'eachBlock'
 	end 'eachFunc'
 end 'validateTypeParamComparisonConstraints'
+
+// Tracks how a value originated, for E3097. `kind` is "name"/"ordinal"/
+// "rawValue" when the value came from an enum/union accessor (else "" for a
+// non-accessor value); `range` is the source location of that access, used for
+// the diagnostic when the consuming op carries no range of its own (the
+// `.equals` desugar of String `==` is range-less).
+type EnumAccessorOrigin
+	export let kind as String
+	export let range as SourceRange
+
+	export static function accessor(kind String, range SourceRange) returns EnumAccessorOrigin
+		return Self{kind: kind, range: range}
+	end 'accessor'
+
+	export static function none() returns EnumAccessorOrigin
+		return Self{kind: "", range: SourceRange.none()}
+	end 'none'
+end 'EnumAccessorOrigin'
+
+typealias EnumAccessorOriginMap = Map with (ByteArray, EnumAccessorOrigin)
+typealias SlotAccessorOriginMap = Map with (VarSlot, EnumAccessorOrigin)
+
+// E3097: reject `==`/`!=` against an enum/union value's `.name`, `.ordinal`, or
+// `.rawValue` accessor. Checking which case a value is must be done on the value
+// itself (`value == Type.case`) or via `match` (so a newly-added union case
+// forces every site to handle it instead of slipping through a default).
+// Mirrors the C# bootstrap's `SemanticEnumAccessorComparison`.
+//
+// MUST run before `coerceEnumRawValueCompareOperands`: that pass lowers a
+// legitimate `enumVal == "str"` by synthesizing its OWN `.rawValue` fieldLoad,
+// so detecting afterward would false-positive on compiler-inserted loads. Here
+// only user-written accessor field loads are present.
+//
+// Block-local forward walk: within a block, defs precede uses, so an accessor
+// fieldLoad (and any `let`/`var` that copies its result) is seen before the op
+// that consumes it. `valueOrigins` maps a value name to its accessor origin;
+// `slotOrigins` carries that origin across a `let`/`var` binding so the indirect
+// form `let n = e.name; if n == "x"` is caught too — matching the C# bootstrap,
+// whose value-model aliases the binding to the accessor op's result. Both maps
+// reset per block (the C# scan is likewise block-local). Two comparison shapes
+// are flagged: a `cmp` op (int/ordinal/char accessors) and a `.equals` method
+// call (String `==`/`!=` desugars to `accessor.equals(...)` — `.name` is always
+// a String, so this is the path behind `op.name == "binop"`). The receiver-type
+// gate (must name a registered enum/union) separates a synthetic enum accessor
+// from an ordinary struct field that happens to be named one of the three.
+function validateEnumAccessorComparisons(project Project, module MaxonModule, filePath FilePath, producerTypesPerFunc ProducerTypeMapArray)
+	for funcIdx in 0 upto module.functions.count() 'eachFunc'
+		let func = try module.functions.get(funcIdx) otherwise panic("validateEnumAccessorComparisons: functions.get OOB at {funcIdx}")
+		let producerTypes = try producerTypesPerFunc.get(funcIdx) otherwise panic("validateEnumAccessorComparisons: producerTypesPerFunc.get OOB at {funcIdx}")
+		// Attribute the diagnostic to the function's OWN source file, not the
+		// module-wide `filePath`: a MaxonModule aggregates functions from every
+		// file in the project, so the module path would mis-report a comparison
+		// that lives in (say) Parser.maxon as Compiler.maxon — with a line number
+		// that overruns the wrong file. Synthesized functions with no recorded
+		// source file fall back to the module-wide path. (Mirrors the E3010 walk
+		// in ExpandCastRangeChecks.)
+		let diagPath = filePath if func.sourceFilePath.isEmpty() else func.sourceFilePath
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("validateEnumAccessorComparisons: blockRef OOB")
+			var valueOrigins = EnumAccessorOriginMap.create()
+			var slotOrigins = SlotAccessorOriginMap.create()
+			for opIdx in block.opRefs 'eachOp'
+				let op = try module.ops.get(opIdx) otherwise panic("validateEnumAccessorComparisons: opIdx OOB")
+				scanOpForEnumAccessorComparison(project, producerTypes: producerTypes, valueOrigins: valueOrigins, slotOrigins: slotOrigins, op: op, filePath: diagPath)
+			end 'eachOp'
+		end 'eachBlock'
+	end 'eachFunc'
+end 'validateEnumAccessorComparisons'
+
+// One forward step of the block walk. Records accessor fieldLoad results,
+// threads the origin through `let`/`var` slots, and flags both comparison shapes.
+function scanOpForEnumAccessorComparison(project Project, producerTypes ProducerTypeMap, valueOrigins EnumAccessorOriginMap, slotOrigins SlotAccessorOriginMap, op MaxonOp, filePath FilePath)
+	match op 'scan'
+		literal to stringInterp then skipOpArm()
+		varDecl(slotId, value, _, _) then propagateSlotOrigin(valueOrigins, slotOrigins: slotOrigins, slotId: slotId, value: value)
+		varLoad(result, slotId, _, _) then propagateVarLoadOrigin(valueOrigins, slotOrigins: slotOrigins, result: result, slotId: slotId)
+		varStore(slotId, value, _) then propagateSlotOrigin(valueOrigins, slotOrigins: slotOrigins, slotId: slotId, value: value)
+		globalLoad to castCheck then skipOpArm()
+		cmp(_, left, right, predicate, _, _, _, range) then flagEnumAccessorCmp(project, valueOrigins: valueOrigins, left: left, right: right, predicate: predicate, range: range, filePath: filePath)
+		refEq to call then skipOpArm()
+		methodCall(_, receiver, methodName, args, _, _, _, _) then flagEnumAccessorEqualsCall(project, valueOrigins: valueOrigins, receiver: receiver, methodName: methodName, args: args, filePath: filePath)
+		ret to structAlloc then skipOpArm()
+		fieldLoad(result, receiver, fieldName, range) then recordEnumAccessorFieldLoad(project, producerTypes: producerTypes, valueOrigins: valueOrigins, result: result, receiver: receiver, fieldName: fieldName, range: range)
+		fieldStore to sizeofType then skipOpArm()
+	end 'scan'
+end 'scanOpForEnumAccessorComparison'
+
+// Record an accessor origin for `result` when this fieldLoad is a synthetic
+// enum/union accessor (the field name is one of the three AND the receiver
+// value's type names a registered enum/union). A real struct field of the same
+// name is skipped because its receiver is a struct, not an enum.
+function recordEnumAccessorFieldLoad(project Project, producerTypes ProducerTypeMap, valueOrigins EnumAccessorOriginMap, result ByteArray, receiver ByteArray, fieldName ByteArray, range SourceRange)
+	let fieldNameStr = String.from(fieldName)
+	let isAccessorField = fieldNameStr == "name" or fieldNameStr == "ordinal" or fieldNameStr == "rawValue"
+	if not isAccessorField 'notAccessorField'
+		return
+	end 'notAccessorField'
+	let receiverType = lookupProducerType(producerTypes, name: receiver)
+	if not maxonTypeNamesRegisteredEnum(project, t: receiverType) 'notEnumReceiver'
+		return
+	end 'notEnumReceiver'
+	valueOrigins.upsert(result, value: EnumAccessorOrigin.accessor(fieldNameStr, range: range))
+end 'recordEnumAccessorFieldLoad'
+
+// A `let`/`var` init or reassignment copies `value` into `slotId`. The slot
+// inherits `value`'s origin, or a `none` origin when `value` is not accessor-
+// derived — that explicitly clears any stale taint so a later
+// `var x = nonAccessor` drops it (matching the C# value-model rebind).
+function propagateSlotOrigin(valueOrigins EnumAccessorOriginMap, slotOrigins SlotAccessorOriginMap, slotId VarSlot, value ByteArray)
+	let origin = try valueOrigins.get(value) otherwise EnumAccessorOrigin.none()
+	slotOrigins.upsert(slotId, value: origin)
+end 'propagateSlotOrigin'
+
+// A varLoad reads `slotId` into `result`; carry a non-empty slot origin onto the
+// loaded value so a downstream comparison on `result` is caught.
+function propagateVarLoadOrigin(valueOrigins EnumAccessorOriginMap, slotOrigins SlotAccessorOriginMap, result ByteArray, slotId VarSlot)
+	let origin = try slotOrigins.get(slotId) otherwise EnumAccessorOrigin.none()
+	if not origin.kind.isEmpty() 'tainted'
+		valueOrigins.upsert(result, value: origin)
+	end 'tainted'
+end 'propagateVarLoadOrigin'
+
+// Emit E3097 when an eq/ne `cmp` compares an enum-accessor-derived value (the
+// int/ordinal/char path). `opStr` is the comparison spelling for the message, or
+// "" for the ordering predicates (lt/le/gt/ge) — which doubles as the
+// "not an equality" guard. Uses the cmp's own range (the `==`/`!=` location).
+function flagEnumAccessorCmp(project Project, valueOrigins EnumAccessorOriginMap, left ByteArray, right ByteArray, predicate CmpPredicate, range SourceRange, filePath FilePath)
+	let opStr = match predicate 'eqNe'
+		eq gives "=="
+		ne gives "!="
+		lt to ge gives ""
+	end 'eqNe'
+	if opStr.isEmpty() 'notEquality'
+		return
+	end 'notEquality'
+	let leftOrigin = try valueOrigins.get(left) otherwise EnumAccessorOrigin.none()
+	if not leftOrigin.kind.isEmpty() 'leftHit'
+		reportEnumAccessorComparison(project, accessor: leftOrigin.kind, opStr: opStr, range: range, filePath: filePath)
+		return
+	end 'leftHit'
+	let rightOrigin = try valueOrigins.get(right) otherwise EnumAccessorOrigin.none()
+	if not rightOrigin.kind.isEmpty() 'rightHit'
+		reportEnumAccessorComparison(project, accessor: rightOrigin.kind, opStr: opStr, range: range, filePath: filePath)
+	end 'rightHit'
+end 'flagEnumAccessorCmp'
+
+// Emit E3097 when an accessor-derived value is the receiver or an argument of a
+// `.equals` method call — the shape String `==`/`!=` desugars to (the `!=` form
+// wraps it in a logicalNot). This is the path that catches `enumVal.name == "x"`
+// and string-backed `enumVal.rawValue == "y"`. The desugared call has no source
+// range, so the diagnostic uses the accessor's own recorded range.
+function flagEnumAccessorEqualsCall(project Project, valueOrigins EnumAccessorOriginMap, receiver ByteArray, methodName ByteArray, args ByteArrayArray, filePath FilePath)
+	if not (String.from(methodName) == "equals") 'notEquals'
+		return
+	end 'notEquals'
+	let receiverOrigin = try valueOrigins.get(receiver) otherwise EnumAccessorOrigin.none()
+	if not receiverOrigin.kind.isEmpty() 'receiverHit'
+		reportEnumAccessorComparison(project, accessor: receiverOrigin.kind, opStr: "==", range: receiverOrigin.range, filePath: filePath)
+		return
+	end 'receiverHit'
+	for arg in args 'eachArg'
+		let argOrigin = try valueOrigins.get(arg) otherwise EnumAccessorOrigin.none()
+		if not argOrigin.kind.isEmpty() 'argHit'
+			reportEnumAccessorComparison(project, accessor: argOrigin.kind, opStr: "==", range: argOrigin.range, filePath: filePath)
+			return
+		end 'argHit'
+	end 'eachArg'
+end 'flagEnumAccessorEqualsCall'
+
+function reportEnumAccessorComparison(project Project, accessor String, opStr String, range SourceRange, filePath FilePath)
+	reportCompileError(project, code: ErrorCode.semanticEnumAccessorComparison, message: "cannot compare an enum's '.{accessor}' with '{opStr}' — compare the value directly (e.g. `value == Type.case`), or use `match` for a union variant", line: range.line, column: range.column, filePath: filePath)
+end 'reportEnumAccessorComparison'
 
 // Non-throwing variant of `enclosingTypeName` — returns empty string for free
 // functions. Used by passes that walk every function (method or not) and want
@@ -2516,19 +2687,12 @@ function rewriteUnresolvedOpsPerFunction(project Project, module MaxonModule, fa
 end 'rewriteUnresolvedOpsPerFunction'
 
 function rewriteOneUnresolvedOp(project Project, module MaxonModule, block IrBlock, opIdx OpIndex, op MaxonOp, filePath FilePath)
-	if op.name == "unresolvedRead" 'isUnresolvedRead'
-		match op 'extract'
-			unresolvedRead(result, name, range) then rewriteUnresolvedRead(project, module: module, block: block, opIdx: opIdx, result: result, name: name, range: range, filePath: filePath)
-			default panic("unreachable: already checked name == unresolvedRead")
-		end 'extract'
-		return
-	end 'isUnresolvedRead'
-	if op.name == "unresolvedAssign" 'isUnresolvedAssign'
-		match op 'extract'
-			unresolvedAssign(name, value, range) then rewriteUnresolvedAssign(project, module: module, block: block, opIdx: opIdx, name: name, value: value, range: range, filePath: filePath)
-			default panic("unreachable: already checked name == unresolvedAssign")
-		end 'extract'
-	end 'isUnresolvedAssign'
+	match op 'rewriteUnresolved'
+		unresolvedRead(result, name, range) then rewriteUnresolvedRead(project, module: module, block: block, opIdx: opIdx, result: result, name: name, range: range, filePath: filePath)
+		unresolvedAssign(name, value, range) then rewriteUnresolvedAssign(project, module: module, block: block, opIdx: opIdx, name: name, value: value, range: range, filePath: filePath)
+		literal to selfFieldStore then skipOpArm()
+		enumMatchArm to sizeofType then skipOpArm()
+	end 'rewriteUnresolved'
 end 'rewriteOneUnresolvedOp'
 
 // Bridge `BlockSourceInfo.filePath` (a String) into a FilePath. Empty
@@ -2845,12 +3009,11 @@ end 'rewriteToStringConst'
 function resolveEnumMatchArms(project Project, module MaxonModule, filePath FilePath)
 	for opIdx in 0 upto module.ops.count() 'each'
 		let op = try module.ops.get(opIdx) otherwise panic("resolveEnumMatchArms: opIdx OOB")
-		if op.name == "enumMatchArm" 'isArm'
-			match op 'extract'
-				enumMatchArm(scrutineeName, caseName, scrutineeType, _, _, resolved, thenTarget, elseTarget, bindingNames, range) then resolveOneEnumMatchArm(project, module: module, opIdx: opIdx, scrutineeName: scrutineeName, caseName: caseName, scrutineeType: scrutineeType, alreadyResolved: resolved, thenTarget: thenTarget, elseTarget: elseTarget, bindingNames: bindingNames, range: range, filePath: filePath)
-				default panic("unreachable: already checked op.name == enumMatchArm")
-			end 'extract'
-		end 'isArm'
+		match op 'extract'
+			enumMatchArm(scrutineeName, caseName, scrutineeType, _, _, resolved, thenTarget, elseTarget, bindingNames, range) then resolveOneEnumMatchArm(project, module: module, opIdx: opIdx, scrutineeName: scrutineeName, caseName: caseName, scrutineeType: scrutineeType, alreadyResolved: resolved, thenTarget: thenTarget, elseTarget: elseTarget, bindingNames: bindingNames, range: range, filePath: filePath)
+			literal to unresolvedAssign then skipOpArm()
+			enumConstruct to sizeofType then skipOpArm()
+		end 'extract'
 	end 'each'
 end 'resolveEnumMatchArms'
 
@@ -3169,12 +3332,10 @@ function coerceEnumRawValueCompareOperands(project Project, module MaxonModule)
 			for aIdx in 0 upto anchors.count() 'eachAnchor'
 				let opIdx = try anchors.get(aIdx) otherwise panic("coerceEnumRawValueCompareOperands: anchors.get OOB")
 				let op = try module.ops.get(opIdx) otherwise panic("coerceEnumRawValueCompareOperands: ops.get OOB at {opIdx}")
-				if op.name != "cmp" 'notCmp'
-					continue
-				end 'notCmp'
 				match op 'extractCmp'
 					cmp(result, left, right, predicate, leftType, rightType, _, range) then maybeCoerceOneCmp(project, module: module, block: block, opIdx: opIdx, result: result, left: left, right: right, predicate: predicate, leftType: leftType, rightType: rightType, range: range)
-					default panic("coerceEnumRawValueCompareOperands: op.name == 'cmp' but match fell through")
+					literal to castCheck then continue
+					refEq to sizeofType then continue
 				end 'extractCmp'
 			end 'eachAnchor'
 		end 'eachBlock'
@@ -4900,6 +5061,28 @@ function recordFuncOpResults(project Project, module MaxonModule, func IrFunctio
 	checkPendingTernaryArmTypes(project, module: module, func: func, producerTypes: producerTypes)
 end 'recordFuncOpResults'
 
+enum VarStoreSlotMiss implements Error
+	notMatchingStore
+end 'VarStoreSlotMiss'
+
+// Returns the stored value name when `op` is a `varStore` into `slot`; throws
+// otherwise. Lets the ternary-arm walk use `try ... otherwise continue` to skip
+// non-store ops and stores into unrelated slots in one step.
+function varStoreValueForSlot(op MaxonOp, slot VarSlot) returns ByteArray throws VarStoreSlotMiss
+	match op 'store'
+		varStore(slotId, value, _) then return try storeValueIfSlotMatches(slotId, value: value, slot: slot)
+		literal to varLoad then throw VarStoreSlotMiss.notMatchingStore
+		globalLoad to sizeofType then throw VarStoreSlotMiss.notMatchingStore
+	end 'store'
+end 'varStoreValueForSlot'
+
+function storeValueIfSlotMatches(slotId VarSlot, value ByteArray, slot VarSlot) returns ByteArray throws VarStoreSlotMiss
+	if slotId != slot 'otherSlot'
+		throw VarStoreSlotMiss.notMatchingStore
+	end 'otherSlot'
+	return value
+end 'storeValueIfSlotMatches'
+
 // Drain the parser-recorded ternary arm-match entries that belong to `func`.
 // For each pinned result slot we collect the resolved value type of every
 // `varStore` targeting that slot (the two ternary arms write exactly one
@@ -4923,17 +5106,8 @@ function checkPendingTernaryArmTypes(project Project, module MaxonModule, func I
 			let block = try module.blocks.get(blockRef) otherwise panic("checkPendingTernaryArmTypes: blockRef OOB")
 			for opIdx in block.opRefs 'scanOps'
 				let op = try module.ops.get(opIdx) otherwise panic("checkPendingTernaryArmTypes: opIdx OOB")
-				if op.name != "varStore" 'notStore'
-					continue
-				end 'notStore'
-				let (storeSlot, value) = match op 'storeMatch'
-					varStore(slotId, val, _) gives (slotId, val)
-					default panic("checkPendingTernaryArmTypes: op.name == varStore but match failed")
-				end 'storeMatch'
-				if storeSlot != entry.slot 'otherSlot'
-					continue
-				end 'otherSlot'
-				let armName = registeredRefNameOrEmpty(project, t: lookupProducerType(producerTypes, name: value))
+				let storeValue = try varStoreValueForSlot(op, slot: entry.slot) otherwise continue
+				let armName = registeredRefNameOrEmpty(project, t: lookupProducerType(producerTypes, name: storeValue))
 				if seen == 0 'firstArm'
 					trueArmName = armName
 				end 'firstArm' else 'secondArm'
@@ -6374,12 +6548,10 @@ function widenVarDeclTypesFromSlotTypes(project Project, module MaxonModule, slo
 			let block = try module.blocks.get(blockRef) otherwise panic("widenVarDeclTypesFromSlotTypes: blockRef OOB")
 			for opIdx in block.opRefs 'eachOp'
 				let op = try module.ops.get(opIdx) otherwise panic("widenVarDeclTypesFromSlotTypes: opIdx OOB")
-				if op.name != "varDecl" 'notVarDecl'
-					continue
-				end 'notVarDecl'
 				match op 'widen'
 					varDecl(slotId, value, slotType, range) then widenOneVarDecl(project, module: module, opIdx: opIdx, slotId: slotId, value: value, slotType: slotType, range: range, slotTypes: slotTypes, enclosingType: enclosingType)
-					default panic("widenVarDeclTypesFromSlotTypes: unreachable — op.name == varDecl but match did not extract")
+					literal to stringInterp then continue
+					varLoad to sizeofType then continue
 				end 'widen'
 			end 'eachOp'
 		end 'eachBlock'
@@ -6602,10 +6774,35 @@ function interpPartsEqual(a StringInterpPart, b StringInterpPart) returns bool
 		end 'mB1'
 		expr(_, kindA, fmtA) gives match b 'mB2'
 			literal gives false
-			expr(_, kindB, fmtB) gives kindA.ordinal == kindB.ordinal and fmtA == fmtB
+			expr(_, kindB, fmtB) gives interpExprKindsEqual(kindA, b: kindB) and fmtA == fmtB
 		end 'mB2'
 	end 'mA'
 end 'interpPartsEqual'
+
+// Stable discriminant for each `InterpExprKind` variant, used to compare two
+// kind values for equality without the (now-banned) union `==`.
+typealias InterpExprKindOrdinal = int(0 to 8)
+
+// `InterpExprKind` is a bare-case union, so its values can't be compared with
+// `==`. Project each to a stable integer discriminant and compare those — the
+// variants carry no payload, so discriminant equality is value equality.
+function interpExprKindsEqual(a InterpExprKind, b InterpExprKind) returns bool
+	return interpExprKindDiscriminant(a) == interpExprKindDiscriminant(b)
+end 'interpExprKindsEqual'
+
+function interpExprKindDiscriminant(kind InterpExprKind) returns InterpExprKindOrdinal
+	return match kind 'pick'
+		i64 gives 0
+		u64 gives 1
+		f64 gives 2
+		bool gives 3
+		string gives 4
+		character gives 5
+		stringable gives 6
+		enumName gives 7
+		charByte gives 8
+	end 'pick'
+end 'interpExprKindDiscriminant'
 
 function fillVarLoad(project Project, module MaxonModule, opIdx OpIndex, result ByteArray, slotId VarSlot, slotType MaxonType, range SourceRange, producerTypes ProducerTypeMap, slotTypes SlotTypeMap, enclosingType String)
 	let filled = try slotTypes.get(slotId) otherwise MaxonType.unresolved
@@ -7174,19 +7371,12 @@ function dispatchFuncEqualityOps(project Project, module MaxonModule, func IrFun
 end 'dispatchFuncEqualityOps'
 
 function dispatchEqualityForOp(project Project, module MaxonModule, block IrBlock, opIdx OpIndex, op MaxonOp, producerTypes ProducerTypeMap, filePath FilePath)
-	if op.name == "cmp" 'isCmp'
-		match op 'extract'
-			cmp(result, left, right, predicate, leftType, rightType, _, range) then maybeRewriteCmpToEquals(project, module: module, block: block, opIdx: opIdx, result: result, left: left, right: right, predicate: predicate, leftType: leftType, rightType: rightType, range: range)
-			default panic("unreachable: already checked name == cmp")
-		end 'extract'
-		return
-	end 'isCmp'
-	if op.name == "refEq" 'isRefEq'
-		match op 'extract'
-			refEq(_, left, right, _, range) then validateRefEqOperands(project, left: left, right: right, producerTypes: producerTypes, range: range, filePath: filePath)
-			default panic("unreachable: already checked name == refEq")
-		end 'extract'
-	end 'isRefEq'
+	match op 'dispatchEq'
+		cmp(result, left, right, predicate, leftType, rightType, _, range) then maybeRewriteCmpToEquals(project, module: module, block: block, opIdx: opIdx, result: result, left: left, right: right, predicate: predicate, leftType: leftType, rightType: rightType, range: range)
+		refEq(_, left, right, _, range) then validateRefEqOperands(project, left: left, right: right, producerTypes: producerTypes, range: range, filePath: filePath)
+		literal to castCheck then skipOpArm()
+		condBr to sizeofType then skipOpArm()
+	end 'dispatchEq'
 end 'dispatchEqualityForOp'
 
 function maybeRewriteCmpToEquals(project Project, module MaxonModule, block IrBlock, opIdx OpIndex, result ByteArray, left ByteArray, right ByteArray, predicate CmpPredicate, leftType MaxonType, rightType MaxonType, range SourceRange)
@@ -7296,12 +7486,10 @@ function validateBinopOperandTypes(project Project, module MaxonModule, producer
 			let block = try module.blocks.get(blockRef) otherwise panic("validateBinopOperandTypes: blockRef OOB")
 			for opIdx in block.opRefs 'eachOp'
 				let op = try module.ops.get(opIdx) otherwise panic("validateBinopOperandTypes: opIdx OOB")
-				if op.name != "binop" 'notBinop'
-					continue
-				end 'notBinop'
 				match op 'extract'
 					binop(_, left, right, opKind, operandType, range) then checkBinopOperands(project, left: left, right: right, opKind: opKind, operandType: operandType, range: range, producerTypes: producerTypes, filePath: filePath)
-					default panic("unreachable: already checked name == binop")
+					literal to globalStore then continue
+					unop to sizeofType then continue
 				end 'extract'
 			end 'eachOp'
 		end 'eachBlock'
@@ -7412,19 +7600,12 @@ function validateFuncSelfFields(project Project, module MaxonModule, func IrFunc
 end 'validateFuncSelfFields'
 
 function validateSelfFieldOp(project Project, op MaxonOp, typeName String, structType StructType, filePath FilePath)
-	if op.name == "selfFieldLoad" 'isLoad'
-		match op 'extract'
-			selfFieldLoad(_, fieldName, range) then validateSelfField(project, fieldName: String.from(fieldName), typeName: typeName, structType: structType, range: range, filePath: filePath)
-			default panic("unreachable: already checked name == selfFieldLoad")
-		end 'extract'
-		return
-	end 'isLoad'
-	if op.name == "selfFieldStore" 'isStore'
-		match op 'extract'
-			selfFieldStore(fieldName, _, range) then validateSelfField(project, fieldName: String.from(fieldName), typeName: typeName, structType: structType, range: range, filePath: filePath)
-			default panic("unreachable: already checked name == selfFieldStore")
-		end 'extract'
-	end 'isStore'
+	match op 'validateSelfField'
+		selfFieldLoad(_, fieldName, range) then validateSelfField(project, fieldName: String.from(fieldName), typeName: typeName, structType: structType, range: range, filePath: filePath)
+		selfFieldStore(fieldName, _, range) then validateSelfField(project, fieldName: String.from(fieldName), typeName: typeName, structType: structType, range: range, filePath: filePath)
+		literal to fieldStore then skipOpArm()
+		unresolvedRead to sizeofType then skipOpArm()
+	end 'validateSelfField'
 end 'validateSelfFieldOp'
 
 function validateSelfField(project Project, fieldName String, typeName String, structType StructType, range SourceRange, filePath FilePath)
@@ -7464,17 +7645,12 @@ function validateFieldVisibility(project Project, module MaxonModule, producerTy
 			let block = try module.blocks.get(blockRef) otherwise panic("validateFieldVisibility: blockRef OOB")
 			for opIdx in block.opRefs 'eachOp'
 				let op = try module.ops.get(opIdx) otherwise panic("validateFieldVisibility: opIdx OOB")
-				if op.name == "fieldLoad" 'isLoad'
-					match op 'extract'
-						fieldLoad(_, receiver, fieldName, range) then validateFieldVisibilityOp(project, receiver: receiver, fieldName: String.from(fieldName), isInit: false, enclosingType: enclosingType, producerTypes: producerTypes, range: range, filePath: funcFilePath)
-						default panic("unreachable: already checked name == fieldLoad")
-					end 'extract'
-				end 'isLoad' else if op.name == "fieldStore" 'isStore'
-					match op 'extract'
-						fieldStore(receiver, fieldName, _, isInit, range) then validateFieldVisibilityOp(project, receiver: receiver, fieldName: String.from(fieldName), isInit: isInit, enclosingType: enclosingType, producerTypes: producerTypes, range: range, filePath: funcFilePath)
-						default panic("unreachable: already checked name == fieldStore")
-					end 'extract'
-				end 'isStore'
+				match op 'validateFieldVis'
+					fieldLoad(_, receiver, fieldName, range) then validateFieldVisibilityOp(project, receiver: receiver, fieldName: String.from(fieldName), isInit: false, enclosingType: enclosingType, producerTypes: producerTypes, range: range, filePath: funcFilePath)
+					fieldStore(receiver, fieldName, _, isInit, range) then validateFieldVisibilityOp(project, receiver: receiver, fieldName: String.from(fieldName), isInit: isInit, enclosingType: enclosingType, producerTypes: producerTypes, range: range, filePath: funcFilePath)
+					literal to structAlloc then skipOpArm()
+					selfFieldLoad to sizeofType then skipOpArm()
+				end 'validateFieldVis'
 			end 'eachOp'
 		end 'eachBlock'
 	end 'eachFunc'
@@ -7874,12 +8050,10 @@ function preResolveArrayLiteralSlotTypes(project Project, module MaxonModule)
 			let block = try module.blocks.get(blockRef) otherwise panic("preResolveArrayLiteralSlotTypes: blockRef OOB")
 			for opIdx in block.opRefs 'eachOp'
 				let op = try module.ops.get(opIdx) otherwise panic("preResolveArrayLiteralSlotTypes: ops.get OOB")
-				if op.name != "globalStore" 'notStore'
-					continue
-				end 'notStore'
 				match op 'pickStore'
 					globalStore(name, value, _, _) then preResolveSlotFromGlobalStore(project, module: module, func: func, name: name, value: value)
-					default panic("preResolveArrayLiteralSlotTypes: globalStore match failed")
+					literal to globalLoad then continue
+					binop to sizeofType then continue
 				end 'pickStore'
 			end 'eachOp'
 		end 'eachBlock'
@@ -7932,7 +8106,7 @@ function preResolveSlotFromGlobalStore(project Project, module MaxonModule, func
 		let block = try module.blocks.get(blockRef) otherwise panic("preResolveSlotFromGlobalStore: blockRef OOB")
 		for opIdx in block.opRefs 'eachOp'
 			let op = try module.ops.get(opIdx) otherwise panic("preResolveSlotFromGlobalStore: ops.get OOB")
-			if op.name != "call" and op.name != "tryCall" 'notCallShape'
+			if op.rawValue.category != OpCategory.callFree 'notCallShape'
 				continue
 			end 'notCallShape'
 			match op 'extractCall'
@@ -7974,12 +8148,10 @@ function backfillTopLevelVarSlotTypes(project Project, module MaxonModule)
 			let block = try module.blocks.get(blockRef) otherwise panic("backfillTopLevelVarSlotTypes: blockRef OOB")
 			for opIdx in block.opRefs 'eachOp'
 				let op = try module.ops.get(opIdx) otherwise panic("backfillTopLevelVarSlotTypes: ops.get OOB at idx={opIdx}")
-				if op.name != "globalStore" 'notGlobalStore'
-					continue
-				end 'notGlobalStore'
 				match op 'pickShape'
 					globalStore(name, value, slotType, _) then refineTopLevelArrayLiteralSlotType(project, module: module, func: func, name: name, value: value, fallbackSlotType: slotType)
-					default panic("backfillTopLevelVarSlotTypes: op.name == globalStore but match did not extract")
+					literal to globalLoad then continue
+					binop to sizeofType then continue
 				end 'pickShape'
 			end 'eachOp'
 		end 'eachBlock'
@@ -7993,12 +8165,10 @@ function backfillTopLevelVarSlotTypes(project Project, module MaxonModule)
 	// slotType into lowering and trip `resolveMaxonTypeToStd`'s invariant.
 	for opIdx in 0 upto module.ops.count() 'eachLoad'
 		let op = try module.ops.get(opIdx) otherwise panic("backfillTopLevelVarSlotTypes: ops.get OOB at idx={opIdx}")
-		if op.name != "globalLoad" 'notGlobalLoad'
-			continue
-		end 'notGlobalLoad'
 		match op 'pickShape'
 			globalLoad(result, name, slotType, range) then patchGlobalLoadSlotType(project, module: module, opIdx: opIdx, result: result, name: name, slotType: slotType, range: range)
-			default panic("backfillTopLevelVarSlotTypes: op.name == globalLoad but match did not extract")
+			literal to varStore then continue
+			globalStore to sizeofType then continue
 		end 'pickShape'
 	end 'eachLoad'
 end 'backfillTopLevelVarSlotTypes'
@@ -8367,12 +8537,10 @@ function recordBlockScrutineeEnums(project Project, module MaxonModule, block Ir
 end 'recordBlockScrutineeEnums'
 
 function recordOpScrutineeEnum(project Project, op MaxonOp, result ScrutineeEnumNameMap)
-	if op.name != "enumMatchArm" 'notArm'
-		return
-	end 'notArm'
 	match op 'extract'
 		enumMatchArm(scrutineeName, _, scrutineeType, _, _, _, _, _, _, _) then recordScrutineeEnumEntry(project, scrutineeName: scrutineeName, scrutineeType: scrutineeType, result: result)
-		default panic("recordOpScrutineeEnum: op.name == enumMatchArm but match failed")
+		literal to unresolvedAssign then return
+		enumConstruct to sizeofType then return
 	end 'extract'
 end 'recordOpScrutineeEnum'
 
@@ -8870,6 +9038,12 @@ module function runTypeResolution(project Project, module MaxonModule, filePath 
 	// body and trip the `resolveMaxonTypeToStd` sentinel guard.
 	propagateClosureArgTypesFromCalls(project, module: module, producerTypesPerFunc: producerTypesPerFunc, slotTypesPerFunc: slotTypesPerFunc)
 
+	// E3097: reject `enumVal.name`/`.ordinal`/`.rawValue` `==`/`!=` comparisons.
+	// Runs BEFORE coerceEnumRawValueCompareOperands so its synthetic `.rawValue`
+	// loads (inserted to lower a legitimate `enumVal == "str"`) are never misread
+	// as a user-written accessor comparison.
+	validateEnumAccessorComparisons(project, module: module, filePath: filePath, producerTypesPerFunc: producerTypesPerFunc)
+
 	// Phase 11.65: an `==`/`!=` comparison between a string/char-backed enum
 	// value and a `String`/`Character` (or another such enum) must compare the
 	// enum's declared backing literal, not its runtime ordinal. Rewrite each
@@ -8881,12 +9055,11 @@ module function runTypeResolution(project Project, module MaxonModule, filePath 
 
 	for opIdx in 0 upto module.ops.count() 'validateOps'
 		let op = try module.ops.get(opIdx) otherwise panic("invariant: opIdx < module.ops.count() but get failed")
-		if op.name == "cmp" 'isCmp'
-			match op 'extract'
-				cmp(_, _, _, _, leftType, rightType, _, range) then validateCompareOp(project, leftType: leftType, rightType: rightType, range: range, filePath: filePath)
-				default panic("unreachable: already checked name == cmp")
-			end 'extract'
-		end 'isCmp'
+		match op 'extract'
+			cmp(_, _, _, _, leftType, rightType, _, range) then validateCompareOp(project, leftType: leftType, rightType: rightType, range: range, filePath: filePath)
+			literal to castCheck then skipOpArm()
+			refEq to sizeofType then skipOpArm()
+		end 'extract'
 	end 'validateOps'
 
 	// Phase 11.7: a comparison operator on a type-parameter-typed operand
@@ -8945,9 +9118,11 @@ function validateConvertOpsPerFunc(project Project, module MaxonModule, filePath
 			let block = try module.blocks.get(blockRef) otherwise panic("validateConvertOpsPerFunc: blockRef OOB")
 			for opIdx in block.opRefs 'eachOp'
 				let op = try module.ops.get(opIdx) otherwise panic("validateConvertOpsPerFunc: opIdx OOB")
-				if op.name == "convert" 'isConvert'
-					dispatchConvertValidation(project, module: module, func: func, op: op, filePath: funcFilePath)
-				end 'isConvert'
+				match op 'classifyConvert'
+					convert then dispatchConvertValidation(project, module: module, func: func, op: op, filePath: funcFilePath)
+					literal to unop then skipOpArm()
+					castCheck to sizeofType then skipOpArm()
+				end 'classifyConvert'
 			end 'eachOp'
 		end 'eachBlock'
 	end 'eachFunc'
@@ -9002,9 +9177,11 @@ function validateReturnLiterals(project Project, module MaxonModule, filePath Fi
 			end 'noTerm'
 			let termIdx = block.terminatorIndex()
 			let termOp = try module.ops.get(termIdx) otherwise panic("validateReturnLiterals: termIdx OOB")
-			if termOp.name == "ret" 'isRet'
-				checkReturnLiteralOp(project, module: module, func: func, op: termOp, aliasName: aliasName, typealiasRange: typealiasRange, isFloat: isFloat, filePath: funcFilePath)
-			end 'isRet'
+			match termOp 'classifyTerm'
+				ret then checkReturnLiteralOp(project, module: module, func: func, op: termOp, aliasName: aliasName, typealiasRange: typealiasRange, isFloat: isFloat, filePath: funcFilePath)
+				literal to methodCall then skipOpArm()
+				panic to sizeofType then skipOpArm()
+			end 'classifyTerm'
 		end 'eachBlock'
 	end 'eachFunc'
 end 'validateReturnLiterals'
@@ -9046,7 +9223,7 @@ function validateNoUnresolvedAfterTypeResolution(project Project, module MaxonMo
 				let paramTypes = try project.callParamTypes.get(opIdx) otherwise continue
 				let op = try module.ops.get(opIdx) otherwise panic("validateNoUnresolvedAfterTypeResolution: opIdx OOB")
 				// Phase 7: skip stale entries pointing at non-call ops.
-				if op.name != "call" and op.name != "tryCall" and op.name != "methodCall" and op.name != "tryMethodCall" 'staleEntry'
+				if op.rawValue.category != OpCategory.callFree and op.rawValue.category != OpCategory.callMethod 'staleEntry'
 					continue
 				end 'staleEntry'
 				let calleeName = callOpDisplayName(project, opIdx: opIdx, op: op)
@@ -9125,7 +9302,7 @@ end 'isCallShapedOpName'
 //   * call / tryCall whose callee bytes match `shouldSkipCallSite`
 //     (math intrinsics, `__mm_alloc_count`).
 function callOpHasIntentionalDynamicDispatch(project Project, op MaxonOp, producerTypes ProducerTypeMap, enclosingType String) returns bool
-	if op.name == "methodCall" or op.name == "tryMethodCall" 'isMethodShape'
+	if op.rawValue.category == OpCategory.callMethod 'isMethodShape'
 		let receiverName = extractMethodCallReceiverName(op)
 		let rawReceiverType = lookupProducerType(producerTypes, name: receiverName)
 		// Normalize through the same chase the resolver runs so a typealias
@@ -9135,7 +9312,7 @@ function callOpHasIntentionalDynamicDispatch(project Project, op MaxonOp, produc
 		let receiverType = normalizeReceiverInContext(project, t: rawReceiverType, enclosingType: enclosingType)
 		return maxonTypeIsDynamicDispatch(project, t: receiverType)
 	end 'isMethodShape'
-	if op.name == "call" or op.name == "tryCall" 'isCallShape'
+	if op.rawValue.category == OpCategory.callFree 'isCallShape'
 		let bareCallee = extractCallCalleeName(op)
 		return shouldSkipCallSite(bareCallee)
 	end 'isCallShape'
@@ -9282,19 +9459,18 @@ function validateCallVisibility(project Project, module MaxonModule, fallbackFil
 			let block = try module.blocks.get(blockRef) otherwise panic("validateCallVisibility: blockRef OOB")
 			for opIdx in block.opRefs 'eachOp'
 				let op = try module.ops.get(opIdx) otherwise panic("validateCallVisibility: opIdx OOB")
-				if op.name == "call" 'isCall'
-					match op 'extractCall'
-						call(_, callee, callContext, _, _, _, _, range) then checkCallVisibility(project, callee: callee, callContext: callContext, currentNamespace: func.namespace, readerFilePath: readerPath, range: range)
-						default panic("unreachable: already checked name == call")
-					end 'extractCall'
-				end 'isCall'
+				match op 'extractCall'
+					call(_, callee, callContext, _, _, _, _, range) then checkCallVisibility(project, callee: callee, callContext: callContext, currentNamespace: func.namespace, readerFilePath: readerPath, range: range)
+					literal to br then skipOpArm()
+					methodCall to sizeofType then skipOpArm()
+				end 'extractCall'
 				// Instance method dispatch: the receiver type is already
 				// visible (we hold a value of it), so the function's own
 				// visibility tier applies. The resolved callee is in
 				// `resolvedCallees`; missing entries mean type-resolution
 				// gave up earlier and downstream diagnostics will surface
 				// the underlying type error — nothing to validate here.
-				if op.name == "methodCall" or op.name == "tryMethodCall" 'isMethodCall'
+				if op.rawValue.category == OpCategory.callMethod 'isMethodCall'
 					match op 'extractMethod'
 						methodCall(_, _, _, _, _, _, _, range) then checkMethodCallVisibility(project, opIdx: opIdx, readerFilePath: readerPath, range: range)
 						tryMethodCall(_, _, _, _, _, _, _, _, range) then checkMethodCallVisibility(project, opIdx: opIdx, readerFilePath: readerPath, range: range)
@@ -9482,12 +9658,11 @@ function validateNamedTypeVisibility(project Project, module MaxonModule, fallba
 			let block = try module.blocks.get(blockRef) otherwise panic("validateNamedTypeVisibility: blockRef OOB")
 			for opIdx in block.opRefs 'eachOp'
 				let op = try module.ops.get(opIdx) otherwise panic("validateNamedTypeVisibility: opIdx OOB")
-				if op.name == "convert" 'isConvert'
-					match op 'extractConvert'
-						convert(_, _, _, toType, _, range) then checkNamedTypeVisibility(project, t: toType, range: range, readerFilePath: readerPath)
-						default panic("unreachable: already checked name == convert")
-					end 'extractConvert'
-				end 'isConvert'
+				match op 'extractConvert'
+					convert(_, _, _, toType, _, range) then checkNamedTypeVisibility(project, t: toType, range: range, readerFilePath: readerPath)
+					literal to unop then skipOpArm()
+					castCheck to sizeofType then skipOpArm()
+				end 'extractConvert'
 			end 'eachOp'
 		end 'eachBlock'
 	end 'eachFunc'
@@ -9657,50 +9832,26 @@ end 'resolveAllCallsForFunc'
 // walker above shape-agnostic and lets future op shapes (Stage E
 // indirect calls) hook in with a single arm.
 function resolveOneCallOp(project Project, module MaxonModule, op MaxonOp, opIdx OpIndex, producerTypes ProducerTypeMap, currentNamespace String, readerFilePath FilePath, enclosingTypeName String, funcName String)
-	if op.name == "call" 'isCall'
-		match op 'extract'
-			call(result, callee, callContext, args, argLabels, argTypes, _, range) then resolveCallSite(project, opIdx: opIdx, callee: callee, callContext: callContext, args: args, argLabels: argLabels, argTypes: argTypes, result: result, producerTypes: producerTypes, currentNamespace: currentNamespace, readerFilePath: readerFilePath, enclosingTypeName: enclosingTypeName, funcName: funcName, range: range)
-			default panic("unreachable: already checked op.name == call")
-		end 'extract'
-		return
-	end 'isCall'
-	if op.name == "methodCall" 'isMethodCall'
-		match op 'extract'
-			methodCall(_, receiver, methodName, args, argLabels, argTypes, _, range) then resolveMethodCallSite(project, module: module, opIdx: opIdx, receiver: receiver, methodName: methodName, args: args, argLabels: argLabels, argTypes: argTypes, producerTypes: producerTypes, enclosingTypeName: enclosingTypeName, readerFilePath: readerFilePath, funcName: funcName, range: range)
-			default panic("unreachable: already checked op.name == methodCall")
-		end 'extract'
-		return
-	end 'isMethodCall'
-	// `tryCall` shares `call`'s shape (with an extra error-binding name we
-	// don't need for resolution) and lowers via `lowerCall`, so it needs the
-	// same sidetable entries.
-	if op.name == "tryCall" 'isTryCall'
-		match op 'extract'
-			tryCall(result, callee, callContext, args, argLabels, argTypes, _, _, range) then resolveCallSite(project, opIdx: opIdx, callee: callee, callContext: callContext, args: args, argLabels: argLabels, argTypes: argTypes, result: result, producerTypes: producerTypes, currentNamespace: currentNamespace, readerFilePath: readerFilePath, enclosingTypeName: enclosingTypeName, funcName: funcName, range: range)
-			default panic("unreachable: already checked op.name == tryCall")
-		end 'extract'
-		return
-	end 'isTryCall'
-	// `tryMethodCall` shares `methodCall`'s shape (with an extra error-binding
-	// name we don't need for resolution) and lowers via `lowerMethodCall`, so
-	// it needs the same sidetable entries.
-	if op.name == "tryMethodCall" 'isTryMethodCall'
-		match op 'extract'
-			tryMethodCall(_, receiver, methodName, args, argLabels, argTypes, _, _, range) then resolveMethodCallSite(project, module: module, opIdx: opIdx, receiver: receiver, methodName: methodName, args: args, argLabels: argLabels, argTypes: argTypes, producerTypes: producerTypes, enclosingTypeName: enclosingTypeName, readerFilePath: readerFilePath, funcName: funcName, range: range)
-			default panic("unreachable: already checked op.name == tryMethodCall")
-		end 'extract'
-		return
-	end 'isTryMethodCall'
-	// Tier 4: `asyncCall` carries `call`'s callee shape and lowers through the
-	// resolved callee (the spawned `__gt_spawn` target), so it needs the same
-	// `resolvedCallees` sidetable entry as a plain `call`.
-	if op.name == "asyncCall" 'isAsyncCall'
-		match op 'extract'
-			asyncCall(result, callee, callContext, args, argLabels, argTypes, _, _, _, _, range) then resolveCallSite(project, opIdx: opIdx, callee: callee, callContext: callContext, args: args, argLabels: argLabels, argTypes: argTypes, result: result, producerTypes: producerTypes, currentNamespace: currentNamespace, readerFilePath: readerFilePath, enclosingTypeName: enclosingTypeName, funcName: funcName, range: range)
-			default panic("unreachable: already checked op.name == asyncCall")
-		end 'extract'
-		return
-	end 'isAsyncCall'
+	match op 'resolveCall'
+		call(result, callee, callContext, args, argLabels, argTypes, _, range) then resolveCallSite(project, opIdx: opIdx, callee: callee, callContext: callContext, args: args, argLabels: argLabels, argTypes: argTypes, result: result, producerTypes: producerTypes, currentNamespace: currentNamespace, readerFilePath: readerFilePath, enclosingTypeName: enclosingTypeName, funcName: funcName, range: range)
+		methodCall(_, receiver, methodName, args, argLabels, argTypes, _, range) then resolveMethodCallSite(project, module: module, opIdx: opIdx, receiver: receiver, methodName: methodName, args: args, argLabels: argLabels, argTypes: argTypes, producerTypes: producerTypes, enclosingTypeName: enclosingTypeName, readerFilePath: readerFilePath, funcName: funcName, range: range)
+		// `tryCall` shares `call`'s shape (with an extra error-binding name we
+		// don't need for resolution) and lowers via `lowerCall`, so it needs the
+		// same sidetable entries.
+		tryCall(result, callee, callContext, args, argLabels, argTypes, _, _, range) then resolveCallSite(project, opIdx: opIdx, callee: callee, callContext: callContext, args: args, argLabels: argLabels, argTypes: argTypes, result: result, producerTypes: producerTypes, currentNamespace: currentNamespace, readerFilePath: readerFilePath, enclosingTypeName: enclosingTypeName, funcName: funcName, range: range)
+		// `tryMethodCall` shares `methodCall`'s shape (with an extra error-binding
+		// name we don't need for resolution) and lowers via `lowerMethodCall`, so
+		// it needs the same sidetable entries.
+		tryMethodCall(_, receiver, methodName, args, argLabels, argTypes, _, _, range) then resolveMethodCallSite(project, module: module, opIdx: opIdx, receiver: receiver, methodName: methodName, args: args, argLabels: argLabels, argTypes: argTypes, producerTypes: producerTypes, enclosingTypeName: enclosingTypeName, readerFilePath: readerFilePath, funcName: funcName, range: range)
+		// Tier 4: `asyncCall` carries `call`'s callee shape and lowers through the
+		// resolved callee (the spawned `__gt_spawn` target), so it needs the same
+		// `resolvedCallees` sidetable entry as a plain `call`.
+		asyncCall(result, callee, callContext, args, argLabels, argTypes, _, _, _, _, range) then resolveCallSite(project, opIdx: opIdx, callee: callee, callContext: callContext, args: args, argLabels: argLabels, argTypes: argTypes, result: result, producerTypes: producerTypes, currentNamespace: currentNamespace, readerFilePath: readerFilePath, enclosingTypeName: enclosingTypeName, funcName: funcName, range: range)
+		literal to br then skipOpArm()
+		ret to throw then skipOpArm()
+		rethrow to forInIterable then skipOpArm()
+		awaitPromise to sizeofType then skipOpArm()
+	end 'resolveCall'
 end 'resolveOneCallOp'
 
 // `call` op resolution. Free / qualified callees (no implicit receiver):
@@ -10275,7 +10426,7 @@ end 'funcHasUnresolvedCall'
 // repaired by the re-resolve loop — as opposed to an `unresolved`-receiver
 // methodCall, which the loop CAN repair once the receiver becomes concrete.
 function callUnresolvedIsPermanent(project Project, op MaxonOp, producerTypes ProducerTypeMap) returns bool
-	if op.name == "methodCall" or op.name == "tryMethodCall" 'isMethodShape'
+	if op.rawValue.category == OpCategory.callMethod 'isMethodShape'
 		let receiverName = extractMethodCallReceiverName(op)
 		let receiverType = lookupProducerType(producerTypes, name: receiverName)
 		// interface / typeParameter / generic-with-typeparam → permanent dynamic
@@ -10325,7 +10476,7 @@ function propagateClosureArgTypesFromCalls(project Project, module MaxonModule, 
 			let block = try module.blocks.get(blockRef) otherwise panic("propagateClosureArgTypesFromCalls: blockRef OOB")
 			for opIdx in block.opRefs 'eachOp'
 				let op = try module.ops.get(opIdx) otherwise panic("propagateClosureArgTypesFromCalls: opIdx OOB")
-				if op.name == "functionRef" or op.name == "closureCreate" 'isProducer'
+				if op.rawValue.category == OpCategory.closureProducer 'isProducer'
 					recordClosureProducerOp(nameToOpIdx, op: op, opIdx: opIdx)
 				end 'isProducer' else if nameToOpIdx.count() > 0 'maybeCall'
 					maybePropagateForCallOp(project, module: module, op: op, opIdx: opIdx, producerTypes: producerTypes, nameToOpIdx: nameToOpIdx, liftedToRebuild: liftedToRebuild)
@@ -10459,7 +10610,7 @@ function maybePropagateForCallOp(project Project, module MaxonModule, op MaxonOp
 	// the four call shapes that participate in callParamTypes; a wildcard
 	// `default` arm on the union would have to choose between throwing
 	// and panicking, neither of which fits "skip this op".
-	if op.name != "methodCall" and op.name != "tryMethodCall" and op.name != "call" and op.name != "tryCall" 'notACall'
+	if op.rawValue.category != OpCategory.callFree and op.rawValue.category != OpCategory.callMethod 'notACall'
 		return
 	end 'notACall'
 	let (args, argTypes) = match op 'extract'
@@ -10536,7 +10687,7 @@ function patchOneClosureArg(project Project, module MaxonModule, producerOpIdx O
 	// e.g. a varLoad of a function-typed local — patching the original
 	// closure literal would have already happened when its source call
 	// site was visited, so there's nothing to do here.
-	if producerOp.name != "functionRef" and producerOp.name != "closureCreate" 'notAClosure'
+	if producerOp.rawValue.category != OpCategory.closureProducer 'notAClosure'
 		return
 	end 'notAClosure'
 	let (result, liftedName) = match producerOp 'extractClosure'
@@ -10665,12 +10816,10 @@ end 'patchOneClosureArg'
 // slot AND the parser-stamped slotType was unresolved. Other ops pass
 // through untouched.
 function patchVarLoadSlotTypeIfMatches(module MaxonModule, opIdx OpIndex, op MaxonOp, newUserParams MaxonTypeArray)
-	if op.name != "varLoad" 'notVarLoad'
-		return
-	end 'notVarLoad'
 	match op 'check'
 		varLoad(r, slotId, slotType, range) then patchVarLoadIfParamSlot(module, opIdx: opIdx, result: r, slotId: slotId, slotType: slotType, range: range, newUserParams: newUserParams)
-		default panic("patchVarLoadSlotTypeIfMatches: op.name was varLoad but match arm didn't bind — variant drift?")
+		literal to varDecl then return
+		varStore to sizeofType then return
 	end 'check'
 end 'patchVarLoadSlotTypeIfMatches'
 
@@ -10786,14 +10935,14 @@ function validateCallArgLabels(project Project, module MaxonModule, producerType
 			let block = try module.blocks.get(blockRef) otherwise panic("validateCallArgLabels: blockRef OOB")
 			for opIdx in block.opRefs 'eachOp'
 				let op = try module.ops.get(opIdx) otherwise panic("validateCallArgLabels: opIdx OOB")
-				if op.name == "methodCall" or op.name == "tryMethodCall" 'isMethodCall'
+				if op.rawValue.category == OpCategory.callMethod 'isMethodCall'
 					match op 'extractMC'
 						methodCall(_, receiver, _, args, argLabels, _, argRanges, _) then validateMethodCallArgLabels(project, receiver: receiver, args: args, argLabels: argLabels, argRanges: argRanges, producerTypes: producerTypes, filePath: filePath)
 						tryMethodCall(_, receiver, _, args, argLabels, _, argRanges, _, _) then validateMethodCallArgLabels(project, receiver: receiver, args: args, argLabels: argLabels, argRanges: argRanges, producerTypes: producerTypes, filePath: filePath)
 						default panic("unreachable: already checked name in [methodCall, tryMethodCall]")
 					end 'extractMC'
 				end 'isMethodCall'
-				if op.name == "call" or op.name == "tryCall" 'isCall'
+				if op.rawValue.category == OpCategory.callFree 'isCall'
 					match op 'extractC'
 						call(_, callee, _, args, argLabels, _, argRanges, _) then validateQualifiedCallArgLabels(project, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, filePath: filePath)
 						tryCall(_, callee, _, args, argLabels, _, argRanges, _, _) then validateQualifiedCallArgLabels(project, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, filePath: filePath)
@@ -11072,13 +11221,11 @@ function collectTryCallResults(module MaxonModule, func IrFunction, results TryC
 		let block = try module.blocks.get(blockRef) otherwise panic("collectTryCallResults: blockRef OOB")
 		for opIdx in block.opRefs 'eachOp'
 			let op = try module.ops.get(opIdx) otherwise panic("collectTryCallResults: opIdx OOB")
-			if op.name != "tryCall" and op.name != "tryMethodCall" 'notTryCall'
-				continue
-			end 'notTryCall'
 			match op 'extract'
 				tryCall(result, _, _, _, _, _, _, _, _) then results.insert(result)
 				tryMethodCall(result, _, _, _, _, _, _, _, _) then results.insert(result)
-				default panic("unreachable: already checked name in [tryCall, tryMethodCall]")
+				literal to throw then continue
+				rethrow to sizeofType then continue
 			end 'extract'
 		end 'eachOp'
 	end 'eachBlock'
@@ -11089,12 +11236,10 @@ function recordSuccessStoreCategories(project Project, module MaxonModule, func 
 		let block = try module.blocks.get(blockRef) otherwise panic("recordSuccessStoreCategories: blockRef OOB")
 		for opIdx in block.opRefs 'eachOp'
 			let op = try module.ops.get(opIdx) otherwise panic("recordSuccessStoreCategories: opIdx OOB")
-			if op.name != "varStore" 'notStore'
-				continue
-			end 'notStore'
 			match op 'extract'
 				varStore(slotId, value, range) then recordExpectedTryCategory(project, slotId: slotId, value: value, range: range, producerTypes: producerTypes, index: index)
-				default panic("unreachable: already checked name == varStore")
+				literal to varLoad then continue
+				globalLoad to sizeofType then continue
 			end 'extract'
 		end 'eachOp'
 	end 'eachBlock'
@@ -11105,12 +11250,10 @@ function validateFallbackStoreCategories(project Project, module MaxonModule, fu
 		let block = try module.blocks.get(blockRef) otherwise panic("validateFallbackStoreCategories: blockRef OOB")
 		for opIdx in block.opRefs 'eachOp'
 			let op = try module.ops.get(opIdx) otherwise panic("validateFallbackStoreCategories: opIdx OOB")
-			if op.name != "varStore" 'notStore'
-				continue
-			end 'notStore'
 			match op 'extract'
 				varStore(slotId, value, range) then validateFallbackCategory(project, module: module, func: func, slotId: slotId, value: value, range: range, producerTypes: producerTypes, index: index, filePath: filePath)
-				default panic("unreachable: already checked name == varStore")
+				literal to varLoad then continue
+				globalLoad to sizeofType then continue
 			end 'extract'
 		end 'eachOp'
 	end 'eachBlock'
@@ -11212,24 +11355,14 @@ function checkFallbackLiteralRange(project Project, module MaxonModule, func IrF
 end 'checkFallbackLiteralRange'
 
 function validateCallArityOp(project Project, op MaxonOp, producerTypes ProducerTypeMap, currentNamespace String, readerFilePath FilePath, filePath FilePath)
-	if op.name == "call" 'isCall'
-		match op 'extractCall'
-			call(_, callee, callContext, args, argLabels, _, _, range) then checkFreeCallArity(project, qualifiedCallee: qualifyCalleeForContext(project, bare: String.from(callee), callContext: callContext, currentNamespace: currentNamespace, readerFilePath: readerFilePath), args: args, argLabels: argLabels, range: range, filePath: filePath)
-			default panic("unreachable: already checked name == call")
-		end 'extractCall'
-	end 'isCall'
-	if op.name == "methodCall" 'isMethodCall'
-		match op 'extractMethod'
-			methodCall(_, receiver, methodName, args, argLabels, _, _, range) then checkMethodCallArity(project, receiverType: lookupProducerType(producerTypes, name: receiver), methodName: methodName, args: args, argLabels: argLabels, range: range, filePath: filePath)
-			default panic("unreachable: already checked name == methodCall")
-		end 'extractMethod'
-	end 'isMethodCall'
-	if op.name == "tryMethodCall" 'isTryMethodCall'
-		match op 'extractTryMethod'
-			tryMethodCall(_, receiver, methodName, args, argLabels, _, _, _, range) then checkMethodCallArity(project, receiverType: lookupProducerType(producerTypes, name: receiver), methodName: methodName, args: args, argLabels: argLabels, range: range, filePath: filePath)
-			default panic("unreachable: already checked name == tryMethodCall")
-		end 'extractTryMethod'
-	end 'isTryMethodCall'
+	match op 'validateArity'
+		call(_, callee, callContext, args, argLabels, _, _, range) then checkFreeCallArity(project, qualifiedCallee: qualifyCalleeForContext(project, bare: String.from(callee), callContext: callContext, currentNamespace: currentNamespace, readerFilePath: readerFilePath), args: args, argLabels: argLabels, range: range, filePath: filePath)
+		methodCall(_, receiver, methodName, args, argLabels, _, _, range) then checkMethodCallArity(project, receiverType: lookupProducerType(producerTypes, name: receiver), methodName: methodName, args: args, argLabels: argLabels, range: range, filePath: filePath)
+		tryMethodCall(_, receiver, methodName, args, argLabels, _, _, _, range) then checkMethodCallArity(project, receiverType: lookupProducerType(producerTypes, name: receiver), methodName: methodName, args: args, argLabels: argLabels, range: range, filePath: filePath)
+		literal to br then skipOpArm()
+		ret to tryCall then skipOpArm()
+		rethrow to sizeofType then skipOpArm()
+	end 'validateArity'
 end 'validateCallArityOp'
 
 function checkMethodCallArity(project Project, receiverType MaxonType, methodName ByteArray, args ByteArrayArray, argLabels StringArray, range SourceRange, filePath FilePath)

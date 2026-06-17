@@ -47,7 +47,7 @@ type UseKey implements Hashable, Equatable
 	end 'create'
 
 	export function equals(other UseKey) returns bool
-		if self.tag.ordinal != other.tag.ordinal 'tagMismatch'
+		if self.tag != other.tag 'tagMismatch'
 			return false
 		end 'tagMismatch'
 		if self.name != other.name 'nameMismatch'
@@ -283,7 +283,7 @@ function seedFunctions(project Project, scopes UseScopeMap)
 		if isStdlibDecl(info.sourceFilePath) 'stdlib'
 			continue
 		end 'stdlib'
-		if info.visibility.ordinal == Visibility.file.ordinal 'filePrivate'
+		if info.visibility == Visibility.file 'filePrivate'
 			continue
 		end 'filePrivate'
 		if isSyntheticName(qualifiedName) 'synth'
@@ -331,7 +331,7 @@ function seedStructs(project Project, scopes UseScopeMap)
 		if isStdlibDecl(st.sourceFilePath) 'stdlibT'
 			continue
 		end 'stdlibT'
-		if st.visibility.ordinal == Visibility.file.ordinal 'filePrivateT'
+		if st.visibility == Visibility.file 'filePrivateT'
 			continue
 		end 'filePrivateT'
 		if isSyntheticName(name) 'synthT'
@@ -346,7 +346,7 @@ function seedEnums(project Project, scopes UseScopeMap)
 		if isStdlibDecl(et.sourceFilePath) 'stdlibE'
 			continue
 		end 'stdlibE'
-		if et.visibility.ordinal == Visibility.file.ordinal 'filePrivateE'
+		if et.visibility == Visibility.file 'filePrivateE'
 			continue
 		end 'filePrivateE'
 		if isSyntheticName(name) 'synthE'
@@ -362,7 +362,7 @@ function seedTypealiases(project Project, scopes UseScopeMap)
 			if isStdlibDecl(entry.sourceFilePath) 'stdlibA'
 				continue
 			end 'stdlibA'
-			if entry.visibility.ordinal == Visibility.file.ordinal 'filePrivateA'
+			if entry.visibility == Visibility.file 'filePrivateA'
 				continue
 			end 'filePrivateA'
 			if isSyntheticName(name) 'synthA'
@@ -393,7 +393,7 @@ function seedConstants(project Project, scopes UseScopeMap)
 		if isStdlibDecl(entry.sourceFilePath) 'stdlibC'
 			continue
 		end 'stdlibC'
-		if entry.visibility.ordinal == Visibility.file.ordinal 'filePrivateC'
+		if entry.visibility == Visibility.file 'filePrivateC'
 			continue
 		end 'filePrivateC'
 		if isSyntheticName(name) 'synthC'
@@ -427,7 +427,7 @@ function seedVars(project Project, scopes UseScopeMap)
 		if isStdlibDecl(info.sourceFilePath) 'stdlibV'
 			continue
 		end 'stdlibV'
-		if info.visibility.ordinal == Visibility.file.ordinal 'filePrivateV'
+		if info.visibility == Visibility.file 'filePrivateV'
 			continue
 		end 'filePrivateV'
 		if isSyntheticName(name) 'synthV'
@@ -625,27 +625,26 @@ function recordThrowsUses(project Project, scopes UseScopeMap, throws ThrowsClau
 end 'recordThrowsUses'
 
 function recordRefsFromOp(project Project, scopes UseScopeMap, opIdx OpIndex, op MaxonOp, readerFilePath FilePath)
-	let n = op.name
-	if n == "call" or n == "methodCall" or n == "tryCall" or n == "tryMethodCall" 'isCallShape'
-		recordCallOpRefs(project, scopes: scopes, opIdx: opIdx, op: op, readerFilePath: readerFilePath)
-		return
-	end 'isCallShape'
-	if n == "globalLoad" 'isGlobalLoad'
-		recordGlobalLoadRef(project, scopes: scopes, op: op, readerFilePath: readerFilePath)
-		return
-	end 'isGlobalLoad'
-	if n == "globalStore" 'isGlobalStore'
-		recordGlobalStoreRef(project, scopes: scopes, op: op, readerFilePath: readerFilePath)
-		return
-	end 'isGlobalStore'
-	if n == "convert" 'isConvert'
-		recordConvertOpRefs(project, scopes: scopes, op: op, readerFilePath: readerFilePath)
-		return
-	end 'isConvert'
-	if n == "structAlloc" 'isStructAlloc'
-		recordStructAllocRef(scopes, op: op, readerFilePath: readerFilePath)
-		return
-	end 'isStructAlloc'
+	// The four resolved-invocation shapes (callFree/callMethod categories) share
+	// one handler; the rest are single-variant. Comparing `op.name` is E3097, so
+	// dispatch via an exhaustive `match` (non-call/global/convert/structAlloc ops
+	// are no-ops). The two call-shape arms can't merge — call/methodCall and
+	// tryCall/tryMethodCall are not contiguous in the union.
+	match op 'dispatch'
+		literal to varStore then noOp()
+		globalLoad then recordGlobalLoadRef(project, scopes: scopes, op: op, readerFilePath: readerFilePath)
+		globalStore then recordGlobalStoreRef(project, scopes: scopes, op: op, readerFilePath: readerFilePath)
+		binop to unop then noOp()
+		convert then recordConvertOpRefs(project, scopes: scopes, op: op, readerFilePath: readerFilePath)
+		castCheck to br then noOp()
+		call to methodCall then recordCallOpRefs(project, scopes: scopes, opIdx: opIdx, op: op, readerFilePath: readerFilePath)
+		ret to panicDynamic then noOp()
+		structAlloc then recordStructAllocRef(scopes, op: op, readerFilePath: readerFilePath)
+		fieldLoad to throw then noOp()
+		tryCall to tryMethodCall then recordCallOpRefs(project, scopes: scopes, opIdx: opIdx, op: op, readerFilePath: readerFilePath)
+		rethrow then noOp()
+		functionRef to sizeofType then noOp()
+	end 'dispatch'
 end 'recordRefsFromOp'
 
 // Extract a call-shape op's argTypes and resolved callee, and record both.

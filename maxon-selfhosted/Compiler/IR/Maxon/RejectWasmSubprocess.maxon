@@ -115,11 +115,11 @@ end 'checkUserFunctionForApi'
 
 function checkCallOpForApi(project Project, module MaxonModule, opIdx OpIndex, entryPoints ApiEntrySet, filePath FilePath, code ErrorCode, message String)
 	let op = try module.ops.get(opIdx) otherwise panic("rejectApiCallsOnUnsupportedTarget: opIdx not in module.ops")
-	let n = op.name
 	// Only the four resolved-invocation shapes carry a `resolvedCallees` entry
 	// (TypeResolution populates them keyed by op index — same contract
 	// UnusedExportCheck relies on). Any other op cannot name an API entry point.
-	if n != "call" and n != "tryCall" and n != "methodCall" and n != "tryMethodCall" 'notCallShape'
+	// callFree = {call, tryCall}, callMethod = {methodCall, tryMethodCall}.
+	if op.rawValue.category != OpCategory.callFree and op.rawValue.category != OpCategory.callMethod 'notCallShape'
 		return
 	end 'notCallShape'
 

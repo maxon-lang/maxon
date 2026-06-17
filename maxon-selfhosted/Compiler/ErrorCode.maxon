@@ -8,7 +8,7 @@
 // - 4xxx: IR pipeline errors
 // - 5xxx: Code emitter errors
 // - 6xxx: PE writer errors
-export union ErrorCode
+export enum ErrorCode
 	lexerUnexpectedCharacter = 1001
 	lexerUnterminatedString = 1002
 	lexerInvalidEscape = 1004
@@ -176,6 +176,16 @@ export union ErrorCode
 	// the cross-file fallback in `qualifyCalleeForContextWithType` when
 	// `methodNameIndex` returns multiple distinct visible candidates.
 	semanticAmbiguousCrossFileCall = 3095
+	// E3097: `==`/`!=` against an enum/union value's `.name`, `.ordinal`, or
+	// `.rawValue` accessor. Such a comparison is checking which case a value
+	// is, which must be done on the value itself (`value == Type.case` for a
+	// payload-free case, or `match value` for a union variant — so adding a
+	// case forces every site to handle it instead of silently slipping
+	// through). Comparing the derived string/int accessor bypasses that.
+	// 3089-3096 are taken on the self-hosted side (semanticTypeResolutionLeak
+	// onward), so this shared diagnostic takes the next code free on both
+	// sides. Mirrors the C# bootstrap's `SemanticEnumAccessorComparison`.
+	semanticEnumAccessorComparison = 3097
 	// E3070: borrow conflict — a collection was mutated (e.g. `arr.push(x)`)
 	// while a reference into its backing buffer is still live (e.g.
 	// `let s = try arr.get(0) ...`). A growth could reallocate the buffer

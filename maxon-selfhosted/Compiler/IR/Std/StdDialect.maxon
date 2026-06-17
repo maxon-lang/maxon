@@ -255,6 +255,18 @@ export union StdArithConstOpcode
 	constF64
 end 'StdArithConstOpcode'
 
+// Reconstruct a StdArithConstOpcode from its raw ordinal — the inverse of
+// `.ordinal`. Shared by the cache reader (`readStdArithConst`) and CSE's
+// const-key round-trip so the case->value mapping lives in exactly one place
+// rather than being duplicated as an ordinal-comparison ladder at each site.
+export function stdArithConstOpcodeFromRaw(raw MachineWord) returns StdArithConstOpcode throws CacheCorruption
+	let kase = try StdArithConstOpcode.unionCases.fromRawValue(raw) otherwise throw CacheCorruption.invalidEncoding
+	return match kase 'oc'
+		constI64 gives StdArithConstOpcode.constI64
+		constF64 gives StdArithConstOpcode.constF64
+	end 'oc'
+end 'stdArithConstOpcodeFromRaw'
+
 export type StdArithConst
 	export let opcode as StdArithConstOpcode
 	export let resultId as ValueId

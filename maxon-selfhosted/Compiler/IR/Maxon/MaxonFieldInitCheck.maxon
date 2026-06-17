@@ -245,28 +245,38 @@ function returnLiteralStructAllocOp(module MaxonModule, block IrBlock) returns O
 		throw ReturnLiteralError.notReturnLiteral
 	end 'noTerm'
 	let termOp = try module.ops.get(block.terminatorIndex()) otherwise throw ReturnLiteralError.notReturnLiteral
-	if termOp.name != "ret" 'notRet'
-		throw ReturnLiteralError.notReturnLiteral
-	end 'notRet'
-	let retOperand = match termOp 'r'
-		ret(operand, _) gives operand
-		default panic("returnLiteralStructAllocOp: op.name == ret but match failed")
+	match termOp 'r'
+		literal to br then throw ReturnLiteralError.notReturnLiteral
+		call to methodCall then throw ReturnLiteralError.notReturnLiteral
+		ret(retOperand, _) then return try findReturnAllocOp(module, block: block, retOperand: retOperand)
+		panic to sizeofType then throw ReturnLiteralError.notReturnLiteral
 	end 'r'
+end 'returnLiteralStructAllocOp'
+
+// Find the `structAlloc` op in `block` whose result is `retOperand` (the value
+// the block's `ret` returns). Throws when no structAlloc produces that operand.
+function findReturnAllocOp(module MaxonModule, block IrBlock, retOperand ByteArray) returns OpIndex throws ReturnLiteralError
 	for opIdx in block.opRefs 'findAlloc'
 		let op = try module.ops.get(opIdx) otherwise continue
-		if op.name != "structAlloc" 'notAlloc'
+		let allocResult = structAllocResultOrEmpty(op)
+		if allocResult.isEmpty() 'notAlloc'
 			continue
 		end 'notAlloc'
-		let allocResult = match op 'a'
-			structAlloc(allocRes, _, _) gives allocRes
-			default panic("returnLiteralStructAllocOp: op.name == structAlloc but match failed")
-		end 'a'
 		if byteArraysEqual(allocResult, b: retOperand) 'isReturnAlloc'
 			return opIdx
 		end 'isReturnAlloc'
 	end 'findAlloc'
 	throw ReturnLiteralError.notReturnLiteral
-end 'returnLiteralStructAllocOp'
+end 'findReturnAllocOp'
+
+// The result name a `structAlloc` op binds, or an empty ByteArray for any other op.
+function structAllocResultOrEmpty(op MaxonOp) returns ByteArray
+	match op 'a'
+		literal to panicDynamic then return ByteArray.create()
+		structAlloc(allocResult, _, _) then return allocResult
+		fieldLoad to sizeofType then return ByteArray.create()
+	end 'a'
+end 'structAllocResultOrEmpty'
 
 union ReturnLiteralError implements Error
 	notReturnLiteral
@@ -305,17 +315,12 @@ function blockSuccessors(module MaxonModule, block IrBlock) returns BlockIdArray
 		return out
 	end 'noTerm'
 	let termOp = try module.ops.get(block.terminatorIndex()) otherwise return out
-	if termOp.name == "br" 'isBr'
-		match termOp 'b'
-			br(target, _) then out.push(target)
-			default panic("blockSuccessors: op.name == br but match failed")
-		end 'b'
-	end 'isBr' else if termOp.name == "condBr" 'isCondBr'
-		match termOp 'cb'
-			condBr(_, thenTarget, elseTarget, _) then appendTwoTargets(out, a: thenTarget, b: elseTarget)
-			default panic("blockSuccessors: op.name == condBr but match failed")
-		end 'cb'
-	end 'isCondBr'
+	match termOp 'term'
+		literal to refEq then break 'term'
+		condBr(_, thenTarget, elseTarget, _) then appendTwoTargets(out, a: thenTarget, b: elseTarget)
+		br(target, _) then out.push(target)
+		call to sizeofType then break 'term'
+	end 'term'
 	return out
 end 'blockSuccessors'
 
@@ -345,8 +350,10 @@ function processLiterals(project Project, module MaxonModule, func IrFunction, i
 				i = i + 1
 				continue
 			end 'next'
-			if op.name == "structAlloc" 'isAlloc'
-				processOneLiteral(project, module: module, func: func, block: block, allocOpIdx: opIdx, allocOp: op, isStdlib: isStdlib, isFactory: isFactory, reachability: reachability, filePath: filePath)
+			match op 'isAlloc'
+				literal to panicDynamic then break 'isAlloc'
+				structAlloc then processOneLiteral(project, module: module, func: func, block: block, allocOpIdx: opIdx, allocOp: op, isStdlib: isStdlib, isFactory: isFactory, reachability: reachability, filePath: filePath)
+				fieldLoad to sizeofType then break 'isAlloc'
 			end 'isAlloc'
 			i = i + 1
 		end 'eachOp'
@@ -494,12 +501,10 @@ function providedFieldsAfterAlloc(module MaxonModule, func IrFunction, block IrB
 				continue
 			end 'beforeAlloc'
 			let op = try module.ops.get(opIdx) otherwise continue
-			if op.name != "fieldStore" 'notStore'
-				continue
-			end 'notStore'
 			match op 'fs'
+				literal to fieldLoad then continue
 				fieldStore(receiver, fieldName, _, _, _) then recordIfReceiverMatches(provided, receiver: receiver, fieldName: fieldName, ptrName: ptrName)
-				default panic("providedFieldsAfterAlloc: op.name == fieldStore but match failed")
+				selfFieldLoad to sizeofType then continue
 			end 'fs'
 		end 'eachOp'
 	end 'eachBlock'
@@ -672,12 +677,10 @@ end 'spliceFactoryFieldReads'
 
 // The field name a `selfFieldStore` op writes, or "" for any other op.
 function selfFieldStoreField(op MaxonOp) returns String
-	if op.name != "selfFieldStore" 'notStore'
-		return ""
-	end 'notStore'
-	return match op 's'
-		selfFieldStore(fieldName, _, _) gives String.from(fieldName)
-		default panic("selfFieldStoreField: op.name == selfFieldStore but match failed")
+	match op 's'
+		literal to selfFieldLoad then return ""
+		selfFieldStore(fieldName, _, _) then return String.from(fieldName)
+		unresolvedRead to sizeofType then return ""
 	end 's'
 end 'selfFieldStoreField'
 
