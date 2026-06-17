@@ -238,7 +238,13 @@ let whitelist = ["basics",
 	//   `throw Inner.exhausted` literal is a FULLY-bare union whose heap-box
 	//   constructor is gated on a payload-bearing case (parseUnionDecl's
 	//   `unionHasPayload`); a separate no-payload-union-constructor gap.
-	// "pass-by-reference" (8/14) — primitive/struct ref mutation not propagated.
+	// "pass-by-reference" (8/14) — caller doesn't observe param mutation. Needs
+	//   real pass-by-reference: mutated scalar/struct/enum params must be spilled
+	//   + passed by ADDRESS with write-back (C# aliases the caller var at the IR
+	//   level; the self-hosted backend emits machine code, so it needs the
+	//   address-passing convention). Also closure-capture-by-ref + the
+	//   let-to-mutating-param E-diagnostic. Large core calling-convention feature
+	//   spanning lowering + x64 + wasm; not a quick fix.
 	// "try-block" (15/31) — block-form try Phase A complete: single-enum
 	//   success/error/array/nested-throw paths all pass (the nested-if/while/match
 	//   use-after-free is FIXED — see parseTryBlock's re-fetched `bodyBlock`).
