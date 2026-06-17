@@ -31,34 +31,29 @@ ExitCode: 42
 ---
 // CompiledIR
 module {
-  func @main() -> u32 {
+  func @main() -> u8 {
   entry:
-    x64.prologue stack_size=32
-    x64.xor edx, edx
-    x64.mov ecx, 16
-    x64.call stdlib.__mm_alloc
-    x64.mov r12, r8
-    x64.mov r8d, 10
-    x64.mov [r12+0], r8 (8b)
-    x64.mov r8d, 20
-    x64.mov [r12+8], r8 (8b)
-    x64.mov r13, [r12+8] (8b)
-    x64.mov r14, [r12+0] (8b)
-    x64.mov rcx, r12
-    x64.call mm_drop
-    x64.add r14, r13
-    x64.mov r9d, 4294967295
-    x64.mov r8, r14
-    x64.add r8, 12
-    x64.cmp r8, r9
-    x64.jbe __range_ok_0
+    %1 = mir.mov_imm 10 : i64
+    %2 = mir.mov_imm 20 : i64
+    %12 = mir.mov_imm 16 : i64
+    %13 = mir.mov_imm 0 : i64
+    %14 = mir.call @stdlib.__mm_alloc(%12, %13)
+    mir.store %1, %14, 0 width: qword
+    mir.store %2, %14, 8 width: qword
+    %15 = mir.load %14, 0 width: qword
+    %16 = mir.load %14, 8 width: qword
+    %17 = mir.add.i64 %15, %16
+    %18 = mir.mov_imm 12 : i64
+    %11 = mir.add.i64 %17, %18
+    %19 = mir.call @mm_drop(%14)
+    %20 = mir.mov_imm 125 : i64
+    %21 = mir.cmp ugt, %11, %20
+    mir.cond_br %21 [then: __range_panic_0(), else: __range_ok_0()]
   __range_panic_0:
-    x64.lea r12, [rip+__panic_msg_f33d516363c5cdb9]
-    x64.mov rcx, r12
-    x64.call mrt_panic
+    %22 = mir.global_addr @__panic_msg_f33d516363c5cdb9
+    %23 = mir.call @mrt_panic(%22)
   __range_ok_0:
-    x64.epilogue
-    x64.ret
+    mir.ret %11
   }
 }
 ---

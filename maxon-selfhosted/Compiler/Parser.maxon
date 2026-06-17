@@ -1895,12 +1895,25 @@ export type Parser
 			if resolution.isOverload 'isOverload'
 				registrationName = resolution.mangledName
 			end 'isOverload' else 'realDup'
-				funcIsDuplicate = true
-				// Show the qualified name for both methods and non-main free
-				// functions ("Type.method" or "namespace.func") so the user sees
-				// the same key the compiler keys on. `main` stays bare because
-				// `qualifiedName` is already just "main" for the entry function.
-				reportDuplicateFunction(qualifiedName, nameToken: nameToken)
+				// Same param suffix, but a type may legitimately declare BOTH a
+				// static and an instance method of one name (`Type.foo()` static
+				// vs `instance.foo()` instance). Route the static member to
+				// `Type.foo~static` and keep the instance on the bare name before
+				// treating this as a real duplicate. Only method-on-type
+				// declarations can form such a pair — a free-function duplicate
+				// (`helper`/`helper`, `main`/`main`) is never static/instance and
+				// must fall straight through to E3006.
+				let staticInstance = tryResolveStaticInstanceCollision(qualifiedName, newDeclIsMethod: isMethod, newDeclIsInstance: isInstance, returnType: returnType)
+				if staticInstance.resolved 'staticInstancePair'
+					registrationName = staticInstance.registrationName
+				end 'staticInstancePair' else 'genuineDup'
+					funcIsDuplicate = true
+					// Show the qualified name for both methods and non-main free
+					// functions ("Type.method" or "namespace.func") so the user sees
+					// the same key the compiler keys on. `main` stays bare because
+					// `qualifiedName` is already just "main" for the entry function.
+					reportDuplicateFunction(qualifiedName, nameToken: nameToken)
+				end 'genuineDup'
 			end 'realDup'
 		end 'registerOverload'
 		if insertedFuncReturnType 'recordRt'
@@ -2615,6 +2628,60 @@ export type Parser
 		recordFuncReturnTypeInsert(project, filePath: filePath, key: newMangled)
 		return OverloadResolution.overload(newMangled)
 	end 'commitOverloadMember'
+
+	// Resolve a same-name static/instance method collision. Reached from
+	// parseFunction's `realDup` branch when `tryRegisterOverload` reported a
+	// duplicate (same param suffix). A type may legitimately declare BOTH a
+	// static `function foo(...)` and an instance `function foo(...)`: the call
+	// syntax disambiguates (`Type.foo()` static vs `instance.foo()` instance).
+	// The invariant is that the instance method keeps the bare `Type.foo`
+	// registration name and the static method gets `Type.foo~static`,
+	// regardless of which was declared first.
+	//
+	// The collision is only a static/instance pair when the NEW declaration is
+	// a method (`newDeclIsMethod`). A free-function duplicate (`helper`/`helper`,
+	// `main`/`main`) shares the same bare key but is never a static/instance
+	// pair, so it bails immediately and the caller reports E3006. For a method,
+	// `newDeclIsInstance` gives its static-ness directly; the colliding existing
+	// function still owns the bare `qualifiedName`, so its self-ness (and
+	// therefore static-ness) is read from its registered FuncSignature. When the
+	// two share the same kind (both static or both instance), this is a real
+	// duplicate — returns `unresolved()`. Otherwise it commits the `~static`
+	// keying and returns the name the NEW declaration must register under.
+	function tryResolveStaticInstanceCollision(qualifiedName String, newDeclIsMethod bool, newDeclIsInstance bool, returnType MaxonReturnType) returns StaticInstanceResolution
+		if not newDeclIsMethod 'notAMethod'
+			return StaticInstanceResolution.unresolved()
+		end 'notAMethod'
+
+		let existingSig = try project.funcSignatures.get(qualifiedName) otherwise return StaticInstanceResolution.unresolved()
+		let newDeclIsStatic = not newDeclIsInstance
+		let existingDeclIsStatic = not signatureFirstParamIsSelf(existingSig)
+		// Same kind (static+static or instance+instance) with an identical
+		// param suffix is a genuine duplicate, not a static/instance pair.
+		if newDeclIsStatic == existingDeclIsStatic 'sameKind'
+			return StaticInstanceResolution.unresolved()
+		end 'sameKind'
+
+		let staticName = staticVariantName(qualifiedName)
+		if newDeclIsStatic 'newIsStatic'
+			// The existing instance method keeps the bare name; register the
+			// new static one under `Type.foo~static`. Insert-only — the bare
+			// key is untouched, so this never re-enters the overload path.
+			try project.funcReturnTypes.insert(staticName, value: returnType) otherwise panic("tryResolveStaticInstanceCollision: '{staticName}' already registered")
+			recordFuncReturnTypeInsert(project, filePath: filePath, key: staticName)
+			return StaticInstanceResolution.staticVariant(staticName)
+		end 'newIsStatic'
+
+		// The existing function is the static one (declared first, holding the
+		// bare name). Re-key it to `Type.foo~static` so the new instance method
+		// can take the bare name. `rekeyExistingFunction` vacates the bare entry
+		// from every sidetable, so the bare `funcReturnTypes` slot is free for
+		// the new instance's entry below.
+		rekeyExistingFunction(qualifiedName, mangledName: staticName)
+		try project.funcReturnTypes.insert(qualifiedName, value: returnType) otherwise panic("tryResolveStaticInstanceCollision: bare '{qualifiedName}' still occupied after rekey to '{staticName}'")
+		recordFuncReturnTypeInsert(project, filePath: filePath, key: qualifiedName)
+		return StaticInstanceResolution.staticVariant(qualifiedName)
+	end 'tryResolveStaticInstanceCollision'
 
 	// True when `mangled` is already a member of the overload `bucket`.
 	function bucketContainsMangled(bucket QualifiedNameArray, mangled String) returns bool

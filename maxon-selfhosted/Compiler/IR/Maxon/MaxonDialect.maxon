@@ -1907,6 +1907,24 @@ end 'qualifyCalleeForContext'
 // instead of re-chasing the resolved name.
 export function qualifyCalleeForContextWithType(project Project, bare String, callContext CallContext, currentNamespace String, readerFilePath FilePath, enclosingType String = "") returns (String, MaxonType)
 	if isQualifiedCallContext(callContext) 'isQualified'
+		// Same-name static/instance disambiguation. A `Type.method()` qualified
+		// call always names the STATIC member when the type declares both a
+		// static and an instance method of that name: the static one was
+		// registered under `Type.method~static` while the instance kept the bare
+		// name. Probe `~static` FIRST so every qualified-call consumer (DFE
+		// rooting, call-result typing, dispatch, arity/throws checks) routes
+		// through this single chokepoint and binds the static body. Instance
+		// `recv.method()` dispatch never reaches here — it resolves via
+		// `resolveMethodCallSite` against the bare name — so the asymmetry that
+		// drives the whole feature lives in exactly this branch. A no-op when no
+		// `~static` variant exists (the common lone-static-factory case).
+		let staticVariant = staticVariantName(bare)
+		if project.funcReturnTypes.contains(staticVariant) 'isStaticVariant'
+			return (staticVariant, MaxonType.unresolved)
+		end 'isStaticVariant'
+		if project.overloadedNames.contains(staticVariant) 'isStaticVariantOverloaded'
+			return (staticVariant, MaxonType.unresolved)
+		end 'isStaticVariantOverloaded'
 		// Phase 5: directory-as-module qualified-call resolution. The head
 		// of `head.tail` may itself name a namespace, with `tail` a
 		// registered function under it. Probe the full callee first
@@ -2834,6 +2852,19 @@ export function mangleSuffixForParamNames(paramNames StringArray, hasSelf bool) 
 	end 'eachParam'
 	return suffix
 end 'mangleSuffixForParamNames'
+
+// Disambiguation suffix for the STATIC member of a same-name static+instance
+// method pair. A type may declare both `static function foo(...)` and an
+// instance `function foo(...)`; the instance keeps the bare `Type.foo`
+// registration name while the static one is registered under `Type.foo~static`.
+// `~` is illegal in a user identifier, so this can never collide with a real
+// function name, and it carries no `.` so namespace/method splitting (which
+// keys on the last `.`) is unaffected. Both the parser's registration path and
+// TypeResolution's dispatch path route through this single helper so the keying
+// stays consistent.
+export function staticVariantName(qualifiedName String) returns String
+	return "{qualifiedName}~static"
+end 'staticVariantName'
 
 // Resolve a call's qualified callee against the overload registry. When the
 // bare qualified name has overload variants registered, pick the one whose

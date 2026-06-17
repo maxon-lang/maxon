@@ -188,6 +188,11 @@ function addCalleesFromOpIndex(project Project, module MaxonModule, opIdx OpInde
 end 'addCalleesFromOpIndex'
 
 function markCalleeFromCall(project Project, callee ByteArray, callContext CallContext, currentNamespace String, readerFilePath FilePath, worklist StringArray, seen StringSet)
+	// `qualifyCalleeForContext` prefers the `~static` variant for a
+	// `Type.method()` qualified call against a same-name static/instance pair,
+	// so DFE roots the static body the call actually binds to. Without that the
+	// bare instance method would be rooted instead, the static body dropped, and
+	// lowering would emit a call to the eliminated `~static` function.
 	let qualified = qualifyCalleeForContext(project, bare: String.from(callee), callContext: callContext, currentNamespace: currentNamespace, readerFilePath: readerFilePath)
 	// Overloaded callee: the bare qualified name has no funcReturnTypes entry
 	// (the parser rekeyed each variant under a mangled suffix). Mark every

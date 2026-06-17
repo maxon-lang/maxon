@@ -4507,6 +4507,10 @@ function callResultType(project Project, callee ByteArray, callContext CallConte
 	// `MyArr` is declared inside `Foo`) chases through the enclosing
 	// struct's `innerAliases` to land on `Array.create` — the actual
 	// `funcReturnTypes` key.
+	// `qualifyCalleeForContextWithType` already prefers the `~static` variant for
+	// a `Type.method()` qualified call against a same-name static/instance pair,
+	// so the result type is read from the static body (e.g. `Counter.reset()`'s
+	// static `reset` returning `Counter` rather than the void instance `reset`).
 	let (qualifiedRaw, _) = qualifyCalleeForContextWithType(project, bare: bareCallee, callContext: callContext, currentNamespace: currentNamespace, readerFilePath: readerFilePath, enclosingType: enclosingType)
 	let qualified = resolveOverloadFromArgs(project, bareName: qualifiedRaw, args: args, argTypes: argTypes, producerTypes: producerTypes, hasSelf: false)
 	let returnType = try project.funcReturnTypes.get(qualified) otherwise return MaxonType.unresolved
@@ -9736,6 +9740,10 @@ function resolveCallSite(project Project, opIdx OpIndex, callee ByteArray, callC
 	// `arrayLiteralResultType`, so the typed result carries the element
 	// binding the chase couldn't recover from the bare callee.
 	receiverType = promoteNamedToGenericInstance(project, raw: receiverType, candidate: lookupProducerType(producerTypes, name: result))
+	// `chased` already carries the `~static` variant for a `Type.method()`
+	// call against a same-name static/instance pair: qualifyCalleeForContext
+	// probes `Type.method~static` first for qualified contexts, so the static
+	// body is bound here without a second preference pass.
 	var resolved = resolveOverloadedCallee(project, bareQualifiedName: chased, argTypes: argTypes, hasSelf: false, argLabels: argLabels)
 	// Char-byte disambiguation: when the integer-fast-path char literal `'e'`
 	// flows into an overload set that has both String and Character variants,

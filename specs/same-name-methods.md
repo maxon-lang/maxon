@@ -49,7 +49,7 @@ type Box
 	end 'create'
 
 	static function getValue() returns Integer
-		return 99
+		return 9
 	end 'getValue'
 
 	function getValue() returns Integer
@@ -65,7 +65,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```exitcode
-141
+51
 ```
 
 <!-- test: same-name-methods.with-params -->

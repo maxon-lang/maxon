@@ -2284,6 +2284,30 @@ create(label: "bar")   // calls second overload
 
 If the compiler cannot determine which overload to call based on argument types alone, it requires named arguments. Calling an ambiguous overload without named arguments produces error **E3007**.
 
+#### Same-Name Static and Instance Methods
+
+A type may define both a `static` method and an instance method with the same name. They are disambiguated by call syntax, not by parameter signature, so the two may even share identical parameters:
+
+```maxon
+type Box
+		export var value as Integer
+
+		static function getValue() returns Integer
+				return 9
+		end 'getValue'
+
+		function getValue() returns Integer
+				return value
+		end 'getValue'
+end 'Box'
+
+let b = Box.create(42)
+b.getValue()      // instance — returns 42
+Box.getValue()    // static   — returns 9
+```
+
+`Type.method()` always calls the static method; `instance.method()` always calls the instance method. Declaring two methods of the *same* kind (both static or both instance) with an identical signature is still a duplicate-definition error (**E3006**).
+
 ### Examples
 
 **No Parameters**

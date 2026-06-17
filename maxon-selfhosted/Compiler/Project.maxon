@@ -2657,6 +2657,29 @@ export type OverloadResolution
 	end 'duplicate'
 end 'OverloadResolution'
 
+// Result of the parser's same-name static/instance collision handler. A type
+// may declare BOTH `static function foo(...)` and an instance `function
+// foo(...)`; they are disambiguated by call syntax (`Type.foo()` -> static,
+// `instance.foo()` -> instance). The instance method keeps the bare
+// `Type.foo` registration name; the static method is registered (or re-keyed)
+// under `Type.foo~static`. `resolved` is true only when exactly one of the
+// colliding pair is static — a genuine same-kind duplicate leaves `resolved`
+// false so the caller still reports E3006. `registrationName` is the name the
+// NEW declaration must register under (bare when the new decl is the
+// instance, `~static` when the new decl is the static one).
+export type StaticInstanceResolution
+	export var resolved as bool
+	export var registrationName as String
+
+	export static function staticVariant(registrationName String) returns StaticInstanceResolution
+		return Self{resolved: true, registrationName: registrationName}
+	end 'staticVariant'
+
+	export static function unresolved() returns StaticInstanceResolution
+		return Self{resolved: false, registrationName: ""}
+	end 'unresolved'
+end 'StaticInstanceResolution'
+
 export typealias ProjectArray = Array with Project
 export typealias RangeBound = int(i64.min to i64.max)
 export typealias IntConstant = int(i64.min to i64.max)
