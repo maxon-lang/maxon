@@ -180,7 +180,14 @@ public class ARM64RegisterManager : RegisterManagerBase<ARM64Register, ARM64Floa
   public void EmitStoreToStack(StdValue value, int offset, int sizeInBytes, IrBlock<ARM64Op> block) {
     var srcReg = EnsureInRegister(value, block);
     block.AddOp(new ARM64StoreToStackOp(offset, srcReg, sizeInBytes));
-    NoteStoreToStack(value, offset);
+    // Only record 8-byte stack homes — the reload path (EmitReloadGprFromStack)
+    // always uses an 8-byte LDUR/LDR. A sub-8-byte store (e.g. bool/i1 via STURB)
+    // leaves the upper bytes of the slot undefined, so registering it as the
+    // value's home would make a later 8-byte reload read stale garbage. If the
+    // value is evicted, the allocator spills the full 64-bit register to a fresh
+    // 8-byte slot instead. Mirrors the x86 backend (RegisterManager.EmitStoreToStack).
+    if (sizeInBytes == 8)
+      NoteStoreToStack(value, offset);
   }
 
   public void EmitLoadFromStack(StdValue result, int offset, int sizeInBytes, IrBlock<ARM64Op> block) {

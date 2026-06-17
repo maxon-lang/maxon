@@ -114,6 +114,21 @@ public partial class ARM64CodeEmitter {
     EmitBranchLink("mm_raw_alloc");
   }
 
+  /// Emit mmap(NULL, X1, PROT_READ|PROT_WRITE, MAP_ANON|MAP_PRIVATE, -1, 0).
+  /// The byte count must already be in X1; the base pointer is returned in X0.
+  /// Process-lifetime runtime memory (the P*[] array, the P structs, and the
+  /// per-P system stacks) uses this rather than mm_raw_alloc so it is OS-backed
+  /// and never counted by the MM leak checker — mirroring the x86 backend, which
+  /// VirtualAlloc's the very same structures (see X86 __gt_init).
+  private void EmitMmapAnon() {
+    EmitMovRegImm(ARM64Register.X0, 0);       // addr = NULL
+    EmitMovRegImm(ARM64Register.X2, 3);       // PROT_READ|PROT_WRITE
+    EmitMovRegImm(ARM64Register.X3, 0x1002);  // MAP_ANON|MAP_PRIVATE
+    EmitMovRegImm(ARM64Register.X4, -1);      // fd = -1
+    EmitMovRegImm(ARM64Register.X5, 0);       // offset = 0
+    EmitCallImport("mmap");
+  }
+
   // --- GMP scheduler TLS helpers ---
 
   /// Emit code to load P* (ProcContext) into the given register.
@@ -2758,35 +2773,18 @@ public partial class ARM64CodeEmitter {
     // Get d_name pointer = entry_ptr + 21
     EmitAddSubImm(ARM64Register.X6, ARM64Register.X3, DirentName, isAdd: true);
 
-    // Skip "." and ".." entries
-    // Load first byte
-    EmitWord(0x39400000 | (Reg(ARM64Register.X6) << 5) | Reg(ARM64Register.X7)); // LDRB W7, [X6]
-    EmitMovRegImm(ARM64Register.X8, 0x2E); // '.'
-    EmitWord(0xEB00001F | (Reg(ARM64Register.X8) << 16) | (Reg(ARM64Register.X7) << 5)); // CMP byte, '.'
-    _condBranchFixups.Add((_code.Count, foundLabel));
-    EmitWord(0x54000000 | CondCode(ARM64ConditionCode.Ne)); // B.NE found (not a dot entry)
-
-    // First char is '.', check second char
-    EmitWord(0x39400400 | (Reg(ARM64Register.X6) << 5) | Reg(ARM64Register.X7)); // LDRB W7, [X6, #1]
-    // If second char is 0, it's "." → skip
-    EmitWord(0xF100001F | (Reg(ARM64Register.X7) << 5)); // CMP byte2, #0
-    _condBranchFixups.Add((_code.Count, retryLabel));
-    EmitWord(0x54000000 | CondCode(ARM64ConditionCode.Eq)); // B.EQ retry
-
-    // If second char is '.', check third
-    EmitWord(0xEB00001F | (Reg(ARM64Register.X8) << 16) | (Reg(ARM64Register.X7) << 5)); // CMP byte2, '.'
-    _condBranchFixups.Add((_code.Count, foundLabel));
-    EmitWord(0x54000000 | CondCode(ARM64ConditionCode.Ne)); // B.NE found (not "..")
-
-    // Second is '.', check third char
-    EmitWord(0x39400800 | (Reg(ARM64Register.X6) << 5) | Reg(ARM64Register.X7)); // LDRB W7, [X6, #2]
-    EmitWord(0xF100001F | (Reg(ARM64Register.X7) << 5)); // CMP byte3, #0
-    _condBranchFixups.Add((_code.Count, retryLabel));
-    EmitWord(0x54000000 | CondCode(ARM64ConditionCode.Eq)); // B.EQ retry (it's "..")
-
-    // It's a name starting with ".." but not ".." itself → it's a valid entry
-    _branchFixups.Add((_code.Count, foundLabel));
-    EmitWord(0x14000000);
+    // NOTE: "." and ".." are deliberately NOT skipped here. The stdlib
+    // (Directory.list) filters them itself and — crucially — assumes the OS
+    // always yields at least one entry per open so its read-then-advance loop's
+    // `hasEntry = true` priming is valid (it reads the current name before the
+    // first `next()`). The x86/Windows backend returns "." / ".." verbatim from
+    // FindFirstFile/FindNextFile, so an empty directory still surfaces "." and
+    // ".." (which the stdlib drops) rather than a stale/empty name buffer.
+    // Skipping them here made an empty directory (only "." and "..") return zero
+    // OS entries with an uninitialised name buffer, which the stdlib then pushed
+    // as a spurious "<dir>/" entry — causing collectMaxonFilesUnder to recurse
+    // forever. Returning every entry matches x86 and lets the stdlib do the
+    // filtering.
 
     DefineLabel(foundLabel);
     // Copy filename to name buffer in block
@@ -2991,6 +2989,7 @@ public partial class ARM64CodeEmitter {
     EmitGtTrampoline();
     EmitGtContextSwitch();
     EmitGtAwait();
+    EmitGtIsComplete();
     EmitGtTryAwait();
     EmitGtYield();
     EmitGtCancel();
@@ -3036,11 +3035,13 @@ public partial class ARM64CodeEmitter {
     EmitGlobalStoreReg(ARM64Register.X0, "__sched_max_procs");
     EmitGlobalStoreReg(ARM64Register.X0, "__sched_num_procs");
 
-    // Step 3: Allocate P*[] array — mm_raw_alloc(max_procs * 8)
+    // Step 3: Allocate P*[] array — mmap(max_procs * 8). OS-backed (see
+    // EmitMmapAnon) to match x86's VirtualAlloc and stay off the MM leak ledger.
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 32, 8);
     // LSL X0, X0, #3  (multiply by 8)
     EmitWord(0xD37DF000);
-    EmitCallMmRawAlloc();
+    EmitMovRegReg(ARM64Register.X1, ARM64Register.X0); // X1 = byte count for mmap
+    EmitMmapAnon();
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 24, 8); // [x29+24] = procs_array
     EmitGlobalStoreReg(ARM64Register.X0, "__sched_procs");
 
@@ -3054,9 +3055,9 @@ public partial class ARM64CodeEmitter {
     EmitWord(0xEB01001F);
     EmitBranchCond(ARM64ConditionCode.Hs, "__sched_init_ploop_done"); // i >= max_procs → done
 
-    // Allocate P[i] struct
-    EmitMovRegImm(ARM64Register.X0, PStructSize);
-    EmitCallMmRawAlloc();
+    // Allocate P[i] struct — mmap (OS-backed; see EmitMmapAnon)
+    EmitMovRegImm(ARM64Register.X1, PStructSize);
+    EmitMmapAnon();
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 48, 8); // [x29+48] = P[i]
 
     // Store P[i] into procs_array[i]
@@ -3082,14 +3083,9 @@ public partial class ARM64CodeEmitter {
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X9, ARM64Register.X29, 48, 8); // P[i]
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, POffWakeSemaphore, 8);
 
-    // Allocate system stack: mmap(NULL, PSystemStackSize, PROT_READ|PROT_WRITE, MAP_ANON|MAP_PRIVATE, -1, 0)
-    EmitMovRegImm(ARM64Register.X0, 0);
+    // Allocate system stack via mmap (OS-backed; see EmitMmapAnon)
     EmitMovRegImm(ARM64Register.X1, PSystemStackSize);
-    EmitMovRegImm(ARM64Register.X2, 3);       // PROT_READ|PROT_WRITE
-    EmitMovRegImm(ARM64Register.X3, 0x1002);  // MAP_ANON|MAP_PRIVATE
-    EmitMovRegImm(ARM64Register.X4, -1);
-    EmitMovRegImm(ARM64Register.X5, 0);
-    EmitCallImport("mmap");
+    EmitMmapAnon();
     // Store top of system stack (base + size) in P->systemStackSP
     EmitAddSubImm(ARM64Register.X0, ARM64Register.X0, PSystemStackSize, isAdd: true);
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X9, ARM64Register.X29, 48, 8); // P[i]
@@ -3745,6 +3741,27 @@ public partial class ARM64CodeEmitter {
     DefineLabel("__gt_await_recycle_done");
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 24, 8); // restore result
 
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// __gt_is_complete(promise_x0) -> 1 if the GT has reached completed status,
+  /// 0 otherwise. Non-blocking peek used by the spec-test dispatcher to find the
+  /// first-ready promise out of N concurrent drains without head-of-line
+  /// blocking on a slow worker. Mirrors x86 EmitGtIsComplete.
+  /// </summary>
+  private void EmitGtIsComplete() {
+    EmitRuntimeFunctionStart("__gt_is_complete", 1, 0x20);
+    // [x29+16] = promise (arg 0)
+    EmitReloadArg(0); // X0 = promise
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X0, GtOffStatus, 8); // X1 = promise.status
+    EmitCmpImm(ARM64Register.X1, GtStatusCompleted);
+    EmitBranchCond(ARM64ConditionCode.Eq, "__gt_is_complete_yes");
+    EmitMovRegImm(ARM64Register.X0, 0);
+    EmitBranch("__gt_is_complete_done");
+    DefineLabel("__gt_is_complete_yes");
+    EmitMovRegImm(ARM64Register.X0, 1);
+    DefineLabel("__gt_is_complete_done");
     EmitRuntimeFunctionEnd();
   }
 
@@ -6529,6 +6546,15 @@ public partial class ARM64CodeEmitter {
     EmitSubprocessIntStub("maxon_subprocess_result_stderr", 1, returnValue: 0);
     EmitSubprocessIntStub("maxon_subprocess_result_duration_ms", 1, returnValue: 0);
     EmitSubprocessVoidStub("maxon_subprocess_result_release", 1);
+    // Streaming subprocess API (persistent-worker pool). Stubbed for now so the
+    // self-hosted binary links; real posix implementations land alongside the
+    // attached spawn/wait path.
+    EmitSubprocessIntStub("maxon_subprocess_spawn_streaming", 4, returnValue: -1);
+    EmitSubprocessIntStub("maxon_subprocess_write_stdin_all", 2, returnValue: -1);
+    EmitSubprocessIntStub("maxon_subprocess_read_stdout_line", 2, returnValue: 0);
+    EmitSubprocessIntStub("maxon_subprocess_read_stderr_line", 2, returnValue: 0);
+    EmitSubprocessVoidStub("maxon_subprocess_close_stdin", 1);
+    EmitSubprocessIntStub("maxon_subprocess_wait_exit", 2, returnValue: -1);
   }
 
   /// Emit a stub that loads `returnValue` into x0 and returns. argCount is
