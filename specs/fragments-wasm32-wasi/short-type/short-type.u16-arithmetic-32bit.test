@@ -1,0 +1,67 @@
+// Test: short-type.u16-arithmetic-32bit
+typealias U16 = int(0 to 65535)
+
+function main() returns ExitCode
+	let a = 1000 as U16
+	let b = 500 as U16
+	// 1000 - 500 = 500 (printed, not returned: 500 > the valid ExitCode
+	// range of 0..125 on the wasm target)
+	print("{a - b}\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+500
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %4 = mir.mov_imm 500 : i64
+    %5 = mir.global_addr @__istr_0
+    %6 = mir.mov_imm 0 : i64
+    %7 = mir.mov_imm 21 : i64
+    %8 = mir.call @mrt_alloc(%7)
+    %9 = mir.call @mrt_i64_to_string(%4, %8)
+    %10 = mir.global_addr @__istr_1
+    %11 = mir.mov_imm 1 : i64
+    %14 = mir.add.i64 %6, %9
+    %15 = mir.add.i64 %14, %11
+    %16 = mir.mov_imm 1 : i64
+    %17 = mir.add.i64 %15, %16
+    %18 = mir.call @mrt_alloc(%17)
+    mir.memcpy %18, %5, %6
+    %19 = mir.add.i64 %18, %6
+    mir.memcpy %19, %8, %9
+    %20 = mir.add.i64 %19, %9
+    mir.memcpy %20, %10, %11
+    %22 = mir.call @stdlib.__mm_decref(%8)
+    %23 = mir.mov_imm 48 : i64
+    %24 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %25 = mir.call @mrt_alloc_with_dtor(%23, %24)
+    mir.store %6, %25, 40 width: qword
+    mir.store %18, %25, 0 width: qword
+    mir.store %15, %25, 8 width: qword
+    mir.store %15, %25, 16 width: qword
+    %27 = mir.mov_imm 1 : i64
+    mir.store %27, %25, 24 width: qword
+    %28 = mir.mov_imm -1 : i64
+    mir.store %28, %25, 32 width: qword
+    %30 = mir.mov_imm 16 : i64
+    %31 = mir.func_addr @__destruct_String
+    %29 = mir.call @stdlib.__mm_alloc(%30, %31)
+    mir.store %25, %29, 0 width: qword
+    mir.store %6, %29, 8 width: qword
+    %34 = mir.load %29, 0 width: qword
+    %38 = mir.call @stdlib.__mm_incref(%34)
+    %35 = mir.load %34, 0 width: qword
+    %36 = mir.load %34, 8 width: qword
+    %37 = mir.call @mrt_write_stdout(%35, %36)
+    %40 = mir.call @mm_drop(%29)
+    %39 = mir.call @__mm_decref_maybenull_helper(%34)
+    mir.ret %6
+  }
+}
+---

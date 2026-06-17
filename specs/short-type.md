@@ -33,10 +33,16 @@ function main() returns ExitCode
 	let a = try arr.get(0) otherwise 0
 	let b = try arr.get(1) otherwise 0
 	let c = try arr.get(2) otherwise 0
-	return a + b + c
+	// 100 + 200 + 300 = 600 (printed, not returned: 600 > the valid
+	// ExitCode range of 0..125 on the wasm target)
+	print("{a + b + c}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
+0
+```
+```stdout
 600
 ```
 
@@ -55,10 +61,16 @@ function main() returns ExitCode
 	let arr = [65535 as U16, 0 as U16, 1 as U16]
 	let a = try arr.get(0) otherwise 0
 	let b = try arr.get(2) otherwise 0
-	return sumWide(a, b: b)
+	// 65535 + 1 = 65536 (printed, not returned: 65536 > the valid
+	// ExitCode range of 0..125 on the wasm target)
+	print("{sumWide(a, b: b)}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
+0
+```
+```stdout
 65536
 ```
 
@@ -72,10 +84,16 @@ function main() returns ExitCode
 	let arr = [100 as I16, -50 as I16, 200 as I16]
 	let a = try arr.get(0) otherwise 0
 	let c = try arr.get(2) otherwise 0
-	return a + c
+	// 100 + 200 = 300 (printed, not returned: 300 > the valid ExitCode
+	// range of 0..125 on the wasm target)
+	print("{a + c}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
+0
+```
+```stdout
 300
 ```
 
@@ -119,10 +137,16 @@ typealias U16 = int(0 to 65535)
 function main() returns ExitCode
 	let a = 1000 as U16
 	let b = 500 as U16
-	return a - b
+	// 1000 - 500 = 500 (printed, not returned: 500 > the valid ExitCode
+	// range of 0..125 on the wasm target)
+	print("{a - b}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
+0
+```
+```stdout
 500
 ```
 
