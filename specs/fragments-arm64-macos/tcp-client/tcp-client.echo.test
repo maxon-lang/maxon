@@ -1,0 +1,346 @@
+// Test: tcp-client.echo
+function runEcho() returns ExitCode throws NetworkError
+	let client = try TcpClient.connect("tcpbin.com", port: 4242)
+	let msg = "Hello Maxon\n"
+	_ = try client.send(msg)
+	let response = try client.recv(1024)
+	print(response)
+	return 0
+end 'runEcho'
+
+function main() returns ExitCode
+	let result = try runEcho() otherwise 1
+	return result
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+Hello Maxon
+```
+---
+// CompiledIR
+module {
+  func @runEcho() -> u8 {
+  entry:
+    arm64.prologue stack_size=224
+    arm64.adrp_add_rdata x0, __str_0
+    arm64.mov x1, x0
+    arm64.mov x2, #10
+    arm64.adrp_add_func x3, __destruct_String
+    arm64.mov x4, x3
+    arm64.str x1, [x29, #-104]
+    arm64.mov x1, x4
+    arm64.mov x0, #16
+    arm64.mov x2, #1
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.adrp_add_func x5, __destruct___ManagedMemory
+    arm64.mov x6, x5
+    arm64.mov x1, x6
+    arm64.mov x0, #40
+    arm64.mov x2, #4
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-16]
+    arm64.mov x7, #-2
+    arm64.mov x8, #1
+    arm64.mov x9, #0
+    arm64.ldr x10, [x29, #-16]
+    arm64.ldr x11, [x29, #-104]
+    arm64.str x11, [x10, #0]
+    arm64.ldr x12, [x29, #-16]
+    arm64.mov x13, #10
+    arm64.str x13, [x12, #8]
+    arm64.ldr x14, [x29, #-16]
+    arm64.str x7, [x14, #16]
+    arm64.ldr x15, [x29, #-16]
+    arm64.str x8, [x15, #24]
+    arm64.ldr x0, [x29, #-16]
+    arm64.str x9, [x0, #32]
+    arm64.ldr x0, [x29, #-16]
+    arm64.ldr x1, [x29, #-8]
+    arm64.str x0, [x1, #0]
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_incref
+    arm64.mov x0, #1
+    arm64.ldr x1, [x29, #-8]
+    arm64.str x0, [x1, #8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #4242
+    arm64.bl stdlib.TcpClient.connect
+    arm64.str x1, [x29, #-24]
+    arm64.str x0, [x29, #-32]
+    arm64.mov x0, #0
+    arm64.cmp x1, x0
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne runEcho.propagate_error_0
+    arm64.b runEcho.try_continue_0
+  propagate_error_0:
+    arm64.ldr x0, [x29, #-24]
+    arm64.ldr x1, [x29, #-32]
+    arm64.cmp x1, #0
+    arm64.b.eq runEcho.__skip_guarded_48
+    arm64.ldr x0, [x29, #-32]
+    arm64.bl mm_decref
+    arm64.label runEcho.__skip_guarded_48
+    arm64.ldr x2, [x29, #-8]
+    arm64.cmp x2, #0
+    arm64.b.eq runEcho.__skip_guarded_50
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label runEcho.__skip_guarded_50
+    arm64.ldr x1, [x29, #-24]
+    arm64.mov x0, #0
+    arm64.epilogue stack_size=224
+    arm64.ret
+  try_continue_0:
+    arm64.ldr x0, [x29, #-32]
+    arm64.str x0, [x29, #-40]
+    arm64.ldr x1, [x29, #-40]
+    arm64.ldr x0, [x29, #-40]
+    arm64.bl mm_incref
+    arm64.adrp_add_rdata x2, __str_1
+    arm64.mov x3, x2
+    arm64.mov x4, #12
+    arm64.adrp_add_func x5, __destruct_String
+    arm64.mov x6, x5
+    arm64.str x3, [x29, #-104]
+    arm64.mov x1, x6
+    arm64.mov x0, #16
+    arm64.mov x2, #1
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-48]
+    arm64.adrp_add_func x7, __destruct___ManagedMemory
+    arm64.mov x8, x7
+    arm64.mov x1, x8
+    arm64.mov x0, #40
+    arm64.mov x2, #4
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-56]
+    arm64.mov x9, #-2
+    arm64.mov x10, #1
+    arm64.mov x11, #0
+    arm64.ldr x12, [x29, #-56]
+    arm64.ldr x13, [x29, #-104]
+    arm64.str x13, [x12, #0]
+    arm64.ldr x14, [x29, #-56]
+    arm64.mov x15, #12
+    arm64.str x15, [x14, #8]
+    arm64.ldr x0, [x29, #-56]
+    arm64.str x9, [x0, #16]
+    arm64.ldr x0, [x29, #-56]
+    arm64.str x10, [x0, #24]
+    arm64.ldr x0, [x29, #-56]
+    arm64.str x11, [x0, #32]
+    arm64.ldr x0, [x29, #-56]
+    arm64.ldr x1, [x29, #-48]
+    arm64.str x0, [x1, #0]
+    arm64.ldr x0, [x29, #-56]
+    arm64.bl mm_incref
+    arm64.mov x0, #1
+    arm64.ldr x1, [x29, #-48]
+    arm64.str x0, [x1, #8]
+    arm64.ldr x0, [x29, #-48]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-48]
+    arm64.str x0, [x29, #-64]
+    arm64.ldr x0, [x29, #-64]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-40]
+    arm64.ldr x1, [x29, #-64]
+    arm64.bl stdlib.TcpClient.send
+    arm64.str x1, [x29, #-72]
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.b.ne runEcho.propagate_error_1
+    arm64.b runEcho.try_continue_1
+  propagate_error_1:
+    arm64.ldr x0, [x29, #-72]
+    arm64.ldr x1, [x29, #-48]
+    arm64.cmp x1, #0
+    arm64.b.eq runEcho.__skip_guarded_106
+    arm64.ldr x0, [x29, #-48]
+    arm64.bl mm_decref
+    arm64.label runEcho.__skip_guarded_106
+    arm64.ldr x2, [x29, #-32]
+    arm64.cmp x2, #0
+    arm64.b.eq runEcho.__skip_guarded_108
+    arm64.ldr x0, [x29, #-32]
+    arm64.bl mm_decref
+    arm64.label runEcho.__skip_guarded_108
+    arm64.ldr x3, [x29, #-8]
+    arm64.cmp x3, #0
+    arm64.b.eq runEcho.__skip_guarded_110
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label runEcho.__skip_guarded_110
+    arm64.ldr x4, [x29, #-64]
+    arm64.cmp x4, #0
+    arm64.b.eq runEcho.__skip_guarded_112
+    arm64.ldr x0, [x29, #-64]
+    arm64.bl mm_decref
+    arm64.label runEcho.__skip_guarded_112
+    arm64.ldr x5, [x29, #-40]
+    arm64.cmp x5, #0
+    arm64.b.eq runEcho.__skip_guarded_114
+    arm64.ldr x0, [x29, #-40]
+    arm64.bl mm_decref
+    arm64.label runEcho.__skip_guarded_114
+    arm64.ldr x1, [x29, #-72]
+    arm64.mov x0, #0
+    arm64.epilogue stack_size=224
+    arm64.ret
+  try_continue_1:
+    arm64.ldr x0, [x29, #-40]
+    arm64.mov x1, #1024
+    arm64.bl stdlib.TcpClient.recv
+    arm64.str x1, [x29, #-80]
+    arm64.str x0, [x29, #-88]
+    arm64.mov x0, #0
+    arm64.cmp x1, x0
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne runEcho.propagate_error_2
+    arm64.b runEcho.try_continue_2
+  propagate_error_2:
+    arm64.ldr x0, [x29, #-80]
+    arm64.ldr x1, [x29, #-88]
+    arm64.cmp x1, #0
+    arm64.b.eq runEcho.__skip_guarded_126
+    arm64.ldr x0, [x29, #-88]
+    arm64.bl mm_decref
+    arm64.label runEcho.__skip_guarded_126
+    arm64.ldr x2, [x29, #-48]
+    arm64.cmp x2, #0
+    arm64.b.eq runEcho.__skip_guarded_128
+    arm64.ldr x0, [x29, #-48]
+    arm64.bl mm_decref
+    arm64.label runEcho.__skip_guarded_128
+    arm64.ldr x3, [x29, #-32]
+    arm64.cmp x3, #0
+    arm64.b.eq runEcho.__skip_guarded_130
+    arm64.ldr x0, [x29, #-32]
+    arm64.bl mm_decref
+    arm64.label runEcho.__skip_guarded_130
+    arm64.ldr x4, [x29, #-8]
+    arm64.cmp x4, #0
+    arm64.b.eq runEcho.__skip_guarded_132
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label runEcho.__skip_guarded_132
+    arm64.ldr x5, [x29, #-64]
+    arm64.cmp x5, #0
+    arm64.b.eq runEcho.__skip_guarded_134
+    arm64.ldr x0, [x29, #-64]
+    arm64.bl mm_decref
+    arm64.label runEcho.__skip_guarded_134
+    arm64.ldr x6, [x29, #-40]
+    arm64.cmp x6, #0
+    arm64.b.eq runEcho.__skip_guarded_136
+    arm64.ldr x0, [x29, #-40]
+    arm64.bl mm_decref
+    arm64.label runEcho.__skip_guarded_136
+    arm64.ldr x1, [x29, #-80]
+    arm64.mov x0, #0
+    arm64.epilogue stack_size=224
+    arm64.ret
+  try_continue_2:
+    arm64.ldr x0, [x29, #-88]
+    arm64.str x0, [x29, #-96]
+    arm64.ldr x1, [x29, #-96]
+    arm64.ldr x0, [x29, #-96]
+    arm64.bl mm_incref
+    arm64.ldr x2, [x29, #-96]
+    arm64.ldr x0, [x29, #-96]
+    arm64.bl stdlib.print
+    arm64.ldr x3, [x29, #-88]
+    arm64.cmp x3, #0
+    arm64.b.eq runEcho.__skip_guarded_146
+    arm64.ldr x0, [x29, #-88]
+    arm64.bl mm_decref
+    arm64.label runEcho.__skip_guarded_146
+    arm64.ldr x4, [x29, #-48]
+    arm64.cmp x4, #0
+    arm64.b.eq runEcho.__skip_guarded_148
+    arm64.ldr x0, [x29, #-48]
+    arm64.bl mm_decref
+    arm64.label runEcho.__skip_guarded_148
+    arm64.ldr x5, [x29, #-32]
+    arm64.cmp x5, #0
+    arm64.b.eq runEcho.__skip_guarded_150
+    arm64.ldr x0, [x29, #-32]
+    arm64.bl mm_decref
+    arm64.label runEcho.__skip_guarded_150
+    arm64.ldr x6, [x29, #-8]
+    arm64.cmp x6, #0
+    arm64.b.eq runEcho.__skip_guarded_152
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label runEcho.__skip_guarded_152
+    arm64.ldr x7, [x29, #-96]
+    arm64.cmp x7, #0
+    arm64.b.eq runEcho.__skip_guarded_154
+    arm64.ldr x0, [x29, #-96]
+    arm64.bl mm_decref
+    arm64.label runEcho.__skip_guarded_154
+    arm64.ldr x8, [x29, #-64]
+    arm64.cmp x8, #0
+    arm64.b.eq runEcho.__skip_guarded_156
+    arm64.ldr x0, [x29, #-64]
+    arm64.bl mm_decref
+    arm64.label runEcho.__skip_guarded_156
+    arm64.ldr x9, [x29, #-40]
+    arm64.cmp x9, #0
+    arm64.b.eq runEcho.__skip_guarded_158
+    arm64.ldr x0, [x29, #-40]
+    arm64.bl mm_decref
+    arm64.label runEcho.__skip_guarded_158
+    arm64.mov x0, #0
+    arm64.mov x1, #0
+    arm64.epilogue stack_size=224
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.bl runEcho
+    arm64.mov x2, #1
+    arm64.str x2, [x29, #-8]
+    arm64.str x0, [x29, #-16]
+    arm64.mov x0, #0
+    arm64.cmp x1, x0
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne main.otherwise_default_error_0
+    arm64.b main.otherwise_default_continue_0
+  otherwise_default_error_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.str x0, [x29, #-16]
+    arm64.b main.otherwise_default_continue_0
+  otherwise_default_continue_0:
+    arm64.ldr x0, [x29, #-16]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x3, #255
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_0
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+---

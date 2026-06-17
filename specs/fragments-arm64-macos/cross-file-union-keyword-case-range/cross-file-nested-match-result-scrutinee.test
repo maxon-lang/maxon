@@ -1,0 +1,335 @@
+// Test: cross-file-nested-match-result-scrutinee
+// --- file: types.maxon
+export typealias Dim = int(0 to 100)
+
+export union MyType
+	unresolved
+	named(id Dim)
+	other(x Dim)
+end 'MyType'
+
+export union Wrapper
+	void
+	value(inner MyType)
+end 'Wrapper'
+
+// --- file: main.maxon
+function classify(ref Wrapper) returns Dim
+	let raw = match ref 'unwrap'
+		void gives MyType.unresolved
+		value(inner) gives inner
+	end 'unwrap'
+	return match raw 'r'
+		named(id) gives id
+		other(x) gives x
+		unresolved gives 0
+	end 'r'
+end 'classify'
+
+function main() returns ExitCode
+	return classify(Wrapper.value(MyType.named(7)))
+end 'main'
+---
+ExitCode: 7
+---
+// CompiledIR
+module {
+  func @classify(ref: i64) -> u8 {
+  entry:
+    arm64.prologue stack_size=192
+    arm64.mov x1, #0
+    arm64.str x1, [x29, #-8]
+    arm64.str x0, [x29, #-16]
+    arm64.ldr x1, [x29, #-16]
+    arm64.ldr x2, [x1, #0]
+    arm64.str x0, [x29, #-24]
+    arm64.ldr x0, [x29, #-24]
+    arm64.str x2, [x29, #-88]
+    arm64.bl mm_incref
+    arm64.mov x1, #0
+    arm64.str x1, [x29, #-32]
+    arm64.ldr x2, [x29, #-88]
+    arm64.str x2, [x29, #-40]
+    arm64.b classify.unwrap_0.cmp0
+  unwrap_0.cmp0:
+    arm64.ldr x0, [x29, #-40]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne classify.unwrap_0.case0
+    arm64.b classify.unwrap_0.cmp1
+  unwrap_0.case0:
+    arm64.mov x0, #16
+    arm64.mov x1, #0
+    arm64.mov x2, #1
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.str x1, [x0, #0]
+    arm64.mov x1, #0
+    arm64.str x1, [x0, #8]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-32]
+    arm64.cmp x0, #0
+    arm64.b.eq classify.__skip_guarded_28
+    arm64.bl mm_decref
+    arm64.label classify.__skip_guarded_28
+    arm64.ldr x1, [x29, #-8]
+    arm64.str x1, [x29, #-32]
+    arm64.ldr x2, [x29, #-32]
+    arm64.ldr x0, [x29, #-32]
+    arm64.bl mm_incref
+    arm64.b classify.unwrap_0.merge
+  unwrap_0.cmp1:
+    arm64.ldr x0, [x29, #-40]
+    arm64.mov x1, #1
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne classify.unwrap_0.case1
+    arm64.b classify.unwrap_0.merge
+  unwrap_0.case1:
+    arm64.ldr x0, [x29, #-24]
+    arm64.ldr x1, [x0, #8]
+    arm64.str x1, [x29, #-48]
+    arm64.ldr x2, [x29, #-48]
+    arm64.ldr x0, [x29, #-48]
+    arm64.bl mm_incref
+    arm64.ldr x3, [x29, #-32]
+    arm64.cmp x3, #0
+    arm64.b.eq classify.__skip_guarded_43
+    arm64.ldr x0, [x29, #-32]
+    arm64.bl mm_decref
+    arm64.label classify.__skip_guarded_43
+    arm64.ldr x4, [x29, #-48]
+    arm64.str x4, [x29, #-32]
+    arm64.ldr x5, [x29, #-32]
+    arm64.ldr x0, [x29, #-32]
+    arm64.bl mm_incref
+    arm64.ldr x6, [x29, #-48]
+    arm64.cmp x6, #0
+    arm64.b.eq classify.__skip_guarded_48
+    arm64.ldr x0, [x29, #-48]
+    arm64.bl mm_decref
+    arm64.label classify.__skip_guarded_48
+    arm64.ldr x7, [x29, #-8]
+    arm64.cmp x7, #0
+    arm64.b.eq classify.__skip_guarded_50
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label classify.__skip_guarded_50
+    arm64.mov x8, #0
+    arm64.str x8, [x29, #-8]
+    arm64.b classify.unwrap_0.merge
+  unwrap_0.merge:
+    arm64.ldr x0, [x29, #-32]
+    arm64.str x0, [x29, #-56]
+    arm64.ldr x1, [x29, #-56]
+    arm64.ldr x0, [x29, #-56]
+    arm64.bl mm_incref
+    arm64.ldr x2, [x29, #-56]
+    arm64.ldr x3, [x2, #0]
+    arm64.ldr x4, [x29, #-56]
+    arm64.str x4, [x29, #-64]
+    arm64.mov x5, #0
+    arm64.str x5, [x29, #-72]
+    arm64.str x3, [x29, #-80]
+    arm64.b classify.r_0.cmp0
+  r_0.cmp0:
+    arm64.ldr x0, [x29, #-80]
+    arm64.mov x1, #1
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne classify.r_0.case0
+    arm64.b classify.r_0.cmp1
+  r_0.case0:
+    arm64.ldr x0, [x29, #-64]
+    arm64.ldr x1, [x0, #8]
+    arm64.str x1, [x29, #-72]
+    arm64.ldr x2, [x29, #-8]
+    arm64.cmp x2, #0
+    arm64.b.eq classify.__skip_guarded_73
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label classify.__skip_guarded_73
+    arm64.mov x3, #0
+    arm64.str x3, [x29, #-8]
+    arm64.b classify.r_0.merge
+  r_0.cmp1:
+    arm64.ldr x0, [x29, #-80]
+    arm64.mov x1, #2
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne classify.r_0.case1
+    arm64.b classify.r_0.cmp2
+  r_0.case1:
+    arm64.ldr x0, [x29, #-64]
+    arm64.ldr x1, [x0, #8]
+    arm64.str x1, [x29, #-72]
+    arm64.ldr x2, [x29, #-8]
+    arm64.cmp x2, #0
+    arm64.b.eq classify.__skip_guarded_85
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label classify.__skip_guarded_85
+    arm64.mov x3, #0
+    arm64.str x3, [x29, #-8]
+    arm64.b classify.r_0.merge
+  r_0.cmp2:
+    arm64.ldr x0, [x29, #-80]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne classify.r_0.case2
+    arm64.b classify.r_0.merge
+  r_0.case2:
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-72]
+    arm64.b classify.r_0.merge
+  r_0.merge:
+    arm64.ldr x0, [x29, #-72]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x3, #100
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne classify.__range_panic_0
+    arm64.b classify.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_0
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.ldr x1, [x29, #-24]
+    arm64.cmp x1, #0
+    arm64.b.eq classify.__skip_guarded_107
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl mm_decref
+    arm64.label classify.__skip_guarded_107
+    arm64.ldr x0, [x29, #-56]
+    arm64.cmp x0, #0
+    arm64.b.eq classify.__skip_guarded_109
+    arm64.bl mm_decref
+    arm64.label classify.__skip_guarded_109
+    arm64.ldr x1, [x29, #-32]
+    arm64.cmp x1, #0
+    arm64.b.eq classify.__skip_guarded_111
+    arm64.ldr x0, [x29, #-32]
+    arm64.bl mm_decref
+    arm64.label classify.__skip_guarded_111
+    arm64.ldr x2, [x29, #-8]
+    arm64.cmp x2, #0
+    arm64.b.eq classify.__skip_guarded_113
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label classify.__skip_guarded_113
+    arm64.ldr x0, [x29, #-72]
+    arm64.epilogue stack_size=192
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=64
+    arm64.mov x0, #7
+    arm64.mov x0, #16
+    arm64.mov x1, #0
+    arm64.mov x2, #1
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.mov x1, #1
+    arm64.str x1, [x0, #0]
+    arm64.mov x2, #7
+    arm64.str x2, [x0, #8]
+    arm64.bl mm_incref
+    arm64.adrp_add_func x3, __destruct_Wrapper
+    arm64.mov x4, x3
+    arm64.mov x1, x4
+    arm64.mov x0, #16
+    arm64.mov x2, #2
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-16]
+    arm64.mov x5, #1
+    arm64.str x5, [x0, #0]
+    arm64.ldr x6, [x29, #-8]
+    arm64.str x6, [x0, #8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_incref
+    arm64.ldr x7, [x29, #-16]
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl classify
+    arm64.mov x8, #0
+    arm64.cmp x0, x8
+    arm64.cset x9, lt
+    arm64.mov x10, #255
+    arm64.cmp x0, x10
+    arm64.cset x11, gt
+    arm64.orr x12, x9, x11
+    arm64.cmp x12, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_1
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.ldr x1, [x29, #-8]
+    arm64.str x0, [x29, #-24]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_34
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_34
+    arm64.ldr x0, [x29, #-16]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_36
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_36
+    arm64.ldr x0, [x29, #-24]
+    arm64.epilogue stack_size=64
+    arm64.ret
+  }
+  func @__destruct_MyType(ptr: i64) {
+  entry:
+    arm64.b __destruct_MyType.done
+  done:
+    arm64.ret
+  }
+  func @__destruct_Wrapper(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.mov x2, #1
+    arm64.cmp x1, x2
+    arm64.cset x3, eq
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct_Wrapper.case_0
+    arm64.b __destruct_Wrapper.done
+  case_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #8]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct_Wrapper.__skip_guarded_9
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct_Wrapper.__skip_guarded_9
+    arm64.b __destruct_Wrapper.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+---

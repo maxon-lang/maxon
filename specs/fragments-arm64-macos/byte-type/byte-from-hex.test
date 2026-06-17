@@ -1,0 +1,35 @@
+// Test: byte-from-hex
+
+typealias Byte = int(0 to u8.max)
+
+function main() returns ExitCode
+	let b = 0xff as Byte
+	if b == 255 'ok'
+		return 0
+	end 'ok' else 'fail'
+		return 1
+	end 'fail'
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.mov x0, #255
+    arm64.mov x1, #255
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne main.ok_0
+    arm64.b main.fail_0
+  ok_0:
+    arm64.mov x0, #0
+    arm64.ret
+  fail_0:
+    arm64.mov x0, #1
+    arm64.ret
+  }
+}
+---

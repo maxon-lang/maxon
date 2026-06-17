@@ -1,0 +1,159 @@
+// Test: method-call-on-call-result
+
+typealias Integer = int(i64.min to i64.max)
+
+type Value
+	var n as Integer
+
+	function get() returns Integer
+		return n
+	end 'get'
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Value'
+
+function main() returns ExitCode
+	let a = Value.create(3)
+	let b = Value.create(5)
+	match a.get().compare(b.get()) 'check'
+		lessThan then return 0
+		equalTo then return 1
+		greaterThan then return 2
+	end 'check'
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @Value.get(__self_ptr: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.mov x0, x1
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @Value.create(n: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-16]
+    arm64.mov x0, #8
+    arm64.mov x1, #0
+    arm64.mov x2, #6
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-16]
+    arm64.str x1, [x0, #0]
+    arm64.ldr x2, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x3, [x29, #-8]
+    arm64.mov x0, x3
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=80
+    arm64.mov x0, #3
+    arm64.bl Value.create
+    arm64.str x0, [x29, #-8]
+    arm64.mov x0, #5
+    arm64.bl Value.create
+    arm64.str x0, [x29, #-16]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl Value.get
+    arm64.ldr x1, [x29, #-16]
+    arm64.str x0, [x29, #-32]
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl Value.get
+    arm64.mov x1, x0
+    arm64.ldr x0, [x29, #-32]
+    arm64.bl stdlib.int.compare
+    arm64.str x0, [x29, #-24]
+    arm64.b main.check_0.cmp0
+  check_0.cmp0:
+    arm64.ldr x0, [x29, #-24]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne main.check_0.case0
+    arm64.b main.check_0.cmp1
+  check_0.case0:
+    arm64.ldr x0, [x29, #-16]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_19
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_19
+    arm64.ldr x1, [x29, #-8]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_21
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_21
+    arm64.mov x0, #0
+    arm64.epilogue stack_size=80
+    arm64.ret
+  check_0.cmp1:
+    arm64.ldr x0, [x29, #-24]
+    arm64.mov x1, #1
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne main.check_0.case1
+    arm64.b main.check_0.cmp2
+  check_0.case1:
+    arm64.ldr x0, [x29, #-16]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_29
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_29
+    arm64.ldr x1, [x29, #-8]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_31
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_31
+    arm64.mov x0, #1
+    arm64.epilogue stack_size=80
+    arm64.ret
+  check_0.cmp2:
+    arm64.ldr x0, [x29, #-24]
+    arm64.mov x1, #2
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne main.check_0.case2
+    arm64.b main.check_0.merge
+  check_0.case2:
+    arm64.ldr x0, [x29, #-16]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_39
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_39
+    arm64.ldr x1, [x29, #-8]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_41
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_41
+    arm64.mov x0, #2
+    arm64.epilogue stack_size=80
+    arm64.ret
+  check_0.merge:
+  }
+  func @__destruct_Value(ptr: i64) {
+  entry:
+    arm64.b __destruct_Value.done
+  done:
+    arm64.ret
+  }
+}
+---

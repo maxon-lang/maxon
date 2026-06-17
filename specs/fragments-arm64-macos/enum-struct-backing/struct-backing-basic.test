@@ -1,0 +1,92 @@
+// Test: struct-backing-basic
+typealias Latency = int(0 to 50)
+
+type Meta
+	export let value as Latency
+
+	static function create(value Latency) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Meta'
+
+enum TestOp
+	add = Meta.create(1)
+	mul = Meta.create(3)
+end 'TestOp'
+
+function main() returns ExitCode
+	let op = TestOp.mul
+	return op.rawValue.value
+end 'main'
+---
+ExitCode: 3
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=80
+    arm64.mov x0, #1
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-8]
+    arm64.mov x0, #8
+    arm64.mov x1, #0
+    arm64.mov x2, #1
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-16]
+    arm64.mov x2, #0
+    arm64.mov x3, #0
+    arm64.ldr x4, [x29, #-8]
+    arm64.cmp x4, x3
+    arm64.cset x5, eq
+    arm64.mov x6, #1
+    arm64.cmp x5, #0
+    arm64.csel x7, x6, x2, ne
+    arm64.mov x8, #1
+    arm64.cmp x4, x8
+    arm64.cset x9, eq
+    arm64.mov x10, #3
+    arm64.cmp x9, #0
+    arm64.csel x11, x10, x7, ne
+    arm64.ldr x12, [x29, #-16]
+    arm64.str x11, [x12, #0]
+    arm64.str x0, [x29, #-24]
+    arm64.ldr x13, [x29, #-24]
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl mm_incref
+    arm64.ldr x14, [x29, #-24]
+    arm64.ldr x15, [x14, #0]
+    arm64.mov x0, #0
+    arm64.cmp x15, x0
+    arm64.cset x1, lt
+    arm64.mov x0, #255
+    arm64.cmp x15, x0
+    arm64.cset x2, gt
+    arm64.orr x0, x1, x2
+    arm64.cmp x0, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_0
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.ldr x0, [x29, #-24]
+    arm64.str x15, [x29, #-32]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_34
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_34
+    arm64.ldr x0, [x29, #-32]
+    arm64.epilogue stack_size=80
+    arm64.ret
+  }
+  func @__destruct_Meta(ptr: i64) {
+  entry:
+    arm64.b __destruct_Meta.done
+  done:
+    arm64.ret
+  }
+}
+---

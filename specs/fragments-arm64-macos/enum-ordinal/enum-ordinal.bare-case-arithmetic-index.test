@@ -1,0 +1,189 @@
+// Test: enum-ordinal.bare-case-arithmetic-index
+typealias Idx = int(0 to u64.max)
+typealias IdxArray = Array with Idx
+
+enum Col
+	a
+	b
+	c
+	COUNT
+end 'Col'
+
+enum Row
+	x
+	y
+	COUNT
+end 'Row'
+
+function lookup(table IdxArray, index Idx) returns Idx
+	return try table.get(index) otherwise 0
+end 'lookup'
+
+function main() returns ExitCode
+	var table = IdxArray.create()
+	var i = 0
+	while i < 100 'fill'
+		table.push(i)
+		i = i + 1
+	end 'fill'
+	let col = Col.b
+	let idx = Row.y * Col.COUNT + col
+	return lookup(table, index: idx)
+end 'main'
+---
+ExitCode: 4
+---
+// CompiledIR
+module {
+  func @lookup(table: i64, index: i64) -> u64 {
+  entry:
+    arm64.prologue stack_size=80
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl IdxArray.get
+    arm64.mov x2, #0
+    arm64.str x2, [x29, #-16]
+    arm64.str x0, [x29, #-24]
+    arm64.mov x0, #0
+    arm64.cmp x1, x0
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne lookup.otherwise_default_error_0
+    arm64.b lookup.otherwise_default_continue_0
+  otherwise_default_error_0:
+    arm64.ldr x0, [x29, #-16]
+    arm64.str x0, [x29, #-24]
+    arm64.b lookup.otherwise_default_continue_0
+  otherwise_default_continue_0:
+    arm64.ldr x0, [x29, #-24]
+    arm64.epilogue stack_size=80
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=80
+    arm64.bl IdxArray.create
+    arm64.str x0, [x29, #-8]
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-16]
+    arm64.b main.fill_0.header
+  fill_0.header:
+    arm64.mov x0, #100
+    arm64.ldr x1, [x29, #-16]
+    arm64.cmp x1, x0
+    arm64.cset x2, lt
+    arm64.cmp x2, #0
+    arm64.b.ne main.fill_0
+    arm64.b main.fill_0.exit
+  fill_0:
+    arm64.ldr x0, [x29, #-16]
+    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-16]
+    arm64.bl IdxArray.push
+    arm64.mov x2, #1
+    arm64.ldr x3, [x29, #-16]
+    arm64.add x4, x3, x2
+    arm64.str x4, [x29, #-16]
+    arm64.b main.fill_0.header
+  fill_0.exit:
+    arm64.mov x0, #1
+    arm64.str x0, [x29, #-24]
+    arm64.mov x1, #1
+    arm64.mov x2, #3
+    arm64.mul x3, x1, x2
+    arm64.ldr x4, [x29, #-24]
+    arm64.add x5, x3, x4
+    arm64.ldr x6, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, x5
+    arm64.bl lookup
+    arm64.mov x7, #0
+    arm64.cmp x0, x7
+    arm64.cset x8, lt
+    arm64.mov x9, #255
+    arm64.cmp x0, x9
+    arm64.cset x10, gt
+    arm64.orr x11, x8, x10
+    arm64.cmp x11, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_0
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.ldr x1, [x29, #-8]
+    arm64.str x0, [x29, #-32]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_36
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_36
+    arm64.ldr x0, [x29, #-32]
+    arm64.epilogue stack_size=80
+    arm64.ret
+  }
+  func @__destruct___ManagedMemory_Idx(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #16]
+    arm64.mov x2, #-1
+    arm64.cmp x1, x2
+    arm64.cset x3, eq
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct___ManagedMemory_Idx.slice_cleanup_0
+    arm64.b __destruct___ManagedMemory_Idx.check_owned_0
+  slice_cleanup_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #32]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct___ManagedMemory_Idx.__skip_guarded_9
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct___ManagedMemory_Idx.__skip_guarded_9
+    arm64.b __destruct___ManagedMemory_Idx.skip_buf_0
+  check_owned_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #16]
+    arm64.mov x2, #-2
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct___ManagedMemory_Idx.free_buf_0
+    arm64.b __destruct___ManagedMemory_Idx.skip_buf_0
+  free_buf_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.mov x0, x1
+    arm64.bl mm_raw_free
+    arm64.b __destruct___ManagedMemory_Idx.skip_buf_0
+  skip_buf_0:
+    arm64.b __destruct___ManagedMemory_Idx.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__destruct_IdxArray(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct_IdxArray.__skip_guarded_4
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct_IdxArray.__skip_guarded_4
+    arm64.b __destruct_IdxArray.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+---

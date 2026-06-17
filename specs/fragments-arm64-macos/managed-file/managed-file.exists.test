@@ -1,0 +1,865 @@
+// Test: managed-file.exists
+export enum TestFileError implements Error
+	openFailed
+end 'TestFileError'
+
+type TestFile
+	export var file as __ManagedFile
+
+	export static function openWrite(path __ManagedMemory) returns TestFile throws TestFileError
+		let handle = try __ManagedFile.openWrite(path) otherwise 'fail'
+			throw TestFileError.openFailed
+		end 'fail'
+		return TestFile{file: handle}
+	end 'openWrite'
+end 'TestFile'
+
+function createEmptyFile(path String) throws TestFileError
+	var f = try TestFile.openWrite(path.managed)
+	f.file.close()
+end 'createEmptyFile'
+
+function main() returns ExitCode
+	// Non-existent file
+	let e1 = __ManagedFile.exists("nonexistent_xyz_managed_12345.txt".managed)
+	if e1 != 0 'check1'
+		return 1
+	end 'check1'
+
+	// Create a file, check exists, delete it
+	let path = "test_managed_exists.txt"
+	try createEmptyFile(path) otherwise 'createFail'
+		return 10
+	end 'createFail'
+	let e2 = __ManagedFile.exists(path.managed)
+	if e2 != 1 'check2'
+		return 2
+	end 'check2'
+	try __ManagedFile.delete(path.managed) otherwise 'delErr'
+		return 4
+	end 'delErr'
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @TestFile.openWrite(path: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=208
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.ldr x2, [x29, #-8]
+    arm64.ldr x3, [x2, #8]
+    arm64.add x4, x1, x3
+    arm64.ldrb x5, [x4, #0]
+    arm64.mov x6, #0
+    arm64.cmp x5, x6
+    arm64.cset x7, eq
+    arm64.cmp x7, #0
+    arm64.b.ne TestFile.openWrite.__cstr_ok_0
+    arm64.b TestFile.openWrite.__cstr_fix_0
+  __cstr_ok_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.str x1, [x29, #-16]
+    arm64.b TestFile.openWrite.__cstr_done_0
+  __cstr_fix_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #24]
+    arm64.ldr x2, [x29, #-8]
+    arm64.ldr x3, [x2, #16]
+    arm64.ldr x4, [x29, #-8]
+    arm64.ldr x5, [x4, #8]
+    arm64.str x5, [x29, #-24]
+    arm64.str x3, [x29, #-32]
+    arm64.ldr x6, [x29, #-8]
+    arm64.ldr x7, [x6, #0]
+    arm64.str x7, [x29, #-40]
+    arm64.ldr x8, [x29, #-8]
+    arm64.mul x9, x5, x1
+    arm64.ldr x10, [x29, #-8]
+    arm64.ldr x11, [x10, #0]
+    arm64.mov x0, x11
+    arm64.ldr x1, [x29, #-32]
+    arm64.mov x2, x9
+    arm64.ldr x3, [x29, #-8]
+    arm64.bl maxon_cow_check
+    arm64.ldr x12, [x29, #-8]
+    arm64.str x0, [x12, #0]
+    arm64.ldr x13, [x29, #-32]
+    arm64.ldr x14, [x29, #-40]
+    arm64.cmp x14, x0
+    arm64.cset x15, ne
+    arm64.ldr x0, [x29, #-24]
+    arm64.cmp x15, #0
+    arm64.csel x1, x0, x13, ne
+    arm64.ldr x0, [x29, #-8]
+    arm64.str x1, [x0, #16]
+    arm64.mov x0, #-1
+    arm64.cmp x13, x0
+    arm64.cset x1, eq
+    arm64.and x0, x15, x1
+    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x2, [x1, #32]
+    arm64.mov x1, #0
+    arm64.cmp x0, #0
+    arm64.csel x3, x2, x1, ne
+    arm64.str x0, [x29, #-80]
+    arm64.str x2, [x29, #-88]
+    arm64.str x3, [x29, #-96]
+    arm64.cmp x3, #0
+    arm64.b.eq TestFile.openWrite.__skip_guarded_47
+    arm64.ldr x0, [x29, #-96]
+    arm64.bl mm_decref
+    arm64.label TestFile.openWrite.__skip_guarded_47
+    arm64.mov x0, #0
+    arm64.ldr x1, [x29, #-88]
+    arm64.ldr x2, [x29, #-80]
+    arm64.cmp x2, #0
+    arm64.csel x3, x0, x1, ne
+    arm64.ldr x0, [x29, #-8]
+    arm64.str x3, [x0, #32]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x2, [x0, #8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x3, [x0, #16]
+    arm64.mov x0, #1
+    arm64.add x4, x2, x0
+    arm64.str x4, [x29, #-104]
+    arm64.mov x0, x1
+    arm64.mov x1, x2
+    arm64.mov x2, x3
+    arm64.ldr x3, [x29, #-104]
+    arm64.bl maxon_string_ensure_cap
+    arm64.ldr x1, [x29, #-8]
+    arm64.str x0, [x1, #0]
+    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x2, [x29, #-104]
+    arm64.str x2, [x1, #16]
+    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x2, [x1, #8]
+    arm64.add x1, x0, x2
+    arm64.mov x2, #0
+    arm64.strb x2, [x1, #0]
+    arm64.str x0, [x29, #-16]
+    arm64.b TestFile.openWrite.__cstr_done_0
+  __cstr_done_0:
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl maxon_managed_file_open_write
+    arm64.mov x1, #-1
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.str x0, [x29, #-80]
+    arm64.str x2, [x29, #-88]
+    arm64.bl __io_get_last_error
+    arm64.mov x3, #3
+    arm64.mov x4, #2
+    arm64.cmp x0, x4
+    arm64.cset x5, eq
+    arm64.mov x6, #1
+    arm64.cmp x5, #0
+    arm64.csel x7, x6, x3, ne
+    arm64.mov x8, #13
+    arm64.cmp x0, x8
+    arm64.cset x9, eq
+    arm64.mov x10, #2
+    arm64.cmp x9, #0
+    arm64.csel x11, x10, x7, ne
+    arm64.mov x12, #0
+    arm64.ldr x13, [x29, #-88]
+    arm64.cmp x13, #0
+    arm64.csel x14, x11, x12, ne
+    arm64.cmp x13, #0
+    arm64.str x14, [x29, #-96]
+    arm64.b.ne TestFile.openWrite.__mf_open_err_alloc_0
+    arm64.b TestFile.openWrite.__mf_open_ok_0
+  __mf_open_err_alloc_0:
+    arm64.adrp_add_func x0, __destruct___ManagedFile
+    arm64.mov x1, x0
+    arm64.mov x0, #8
+    arm64.mov x2, #3
+    arm64.bl mm_alloc
+    arm64.mov x2, #0
+    arm64.str x2, [x0, #0]
+    arm64.str x0, [x29, #-48]
+    arm64.b TestFile.openWrite.__mf_open_done_0
+  __mf_open_ok_0:
+    arm64.ldr x0, [x29, #-80]
+    arm64.str x0, [x29, #-48]
+    arm64.b TestFile.openWrite.__mf_open_done_0
+  __mf_open_done_0:
+    arm64.ldr x0, [x29, #-48]
+    arm64.str x0, [x29, #-56]
+    arm64.ldr x1, [x29, #-56]
+    arm64.ldr x0, [x29, #-56]
+    arm64.bl mm_incref
+    arm64.mov x2, #0
+    arm64.ldr x3, [x29, #-96]
+    arm64.cmp x3, x2
+    arm64.cset x4, ne
+    arm64.cmp x4, #0
+    arm64.b.ne TestFile.openWrite.otherwise_error_0
+    arm64.b TestFile.openWrite.otherwise_continue_0
+  otherwise_error_0:
+    arm64.mov x0, #0
+    arm64.ldr x1, [x29, #-56]
+    arm64.cmp x1, #0
+    arm64.b.eq TestFile.openWrite.__skip_guarded_108
+    arm64.ldr x0, [x29, #-56]
+    arm64.bl mm_decref
+    arm64.label TestFile.openWrite.__skip_guarded_108
+    arm64.mov x2, #1
+    arm64.mov x3, #0
+    arm64.add x4, x3, x2
+    arm64.mov x1, x4
+    arm64.mov x0, #0
+    arm64.epilogue stack_size=208
+    arm64.ret
+  otherwise_continue_0:
+    arm64.ldr x0, [x29, #-56]
+    arm64.str x0, [x29, #-64]
+    arm64.ldr x1, [x29, #-64]
+    arm64.ldr x0, [x29, #-64]
+    arm64.bl mm_incref
+    arm64.adrp_add_func x2, __destruct_TestFile
+    arm64.mov x3, x2
+    arm64.mov x1, x3
+    arm64.mov x0, #8
+    arm64.mov x2, #5
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-72]
+    arm64.ldr x4, [x29, #-64]
+    arm64.ldr x5, [x29, #-72]
+    arm64.str x4, [x5, #0]
+    arm64.ldr x0, [x29, #-64]
+    arm64.bl mm_incref
+    arm64.ldr x6, [x29, #-56]
+    arm64.cmp x6, #0
+    arm64.b.eq TestFile.openWrite.__skip_guarded_127
+    arm64.ldr x0, [x29, #-56]
+    arm64.bl mm_decref
+    arm64.label TestFile.openWrite.__skip_guarded_127
+    arm64.ldr x7, [x29, #-64]
+    arm64.cmp x7, #0
+    arm64.b.eq TestFile.openWrite.__skip_guarded_129
+    arm64.ldr x0, [x29, #-64]
+    arm64.bl mm_decref
+    arm64.label TestFile.openWrite.__skip_guarded_129
+    arm64.ldr x8, [x29, #-72]
+    arm64.ldr x0, [x29, #-72]
+    arm64.bl mm_incref
+    arm64.ldr x9, [x29, #-72]
+    arm64.mov x0, x9
+    arm64.mov x1, #0
+    arm64.epilogue stack_size=208
+    arm64.ret
+  }
+  func @createEmptyFile(path: i64) {
+  entry:
+    arm64.prologue stack_size=112
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.str x1, [x29, #-16]
+    arm64.ldr x2, [x29, #-16]
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl TestFile.openWrite
+    arm64.str x1, [x29, #-24]
+    arm64.str x0, [x29, #-32]
+    arm64.mov x3, #0
+    arm64.cmp x1, x3
+    arm64.cset x4, ne
+    arm64.cmp x4, #0
+    arm64.b.ne createEmptyFile.propagate_error_0
+    arm64.b createEmptyFile.try_continue_0
+  propagate_error_0:
+    arm64.ldr x0, [x29, #-24]
+    arm64.ldr x1, [x29, #-32]
+    arm64.cmp x1, #0
+    arm64.b.eq createEmptyFile.__skip_guarded_14
+    arm64.ldr x0, [x29, #-32]
+    arm64.bl mm_decref
+    arm64.label createEmptyFile.__skip_guarded_14
+    arm64.ldr x1, [x29, #-24]
+    arm64.mov x0, #0
+    arm64.epilogue stack_size=112
+    arm64.ret
+  try_continue_0:
+    arm64.ldr x0, [x29, #-32]
+    arm64.str x0, [x29, #-40]
+    arm64.ldr x1, [x29, #-40]
+    arm64.ldr x0, [x29, #-40]
+    arm64.bl mm_incref
+    arm64.ldr x2, [x29, #-40]
+    arm64.ldr x3, [x2, #0]
+    arm64.str x3, [x29, #-48]
+    arm64.ldr x4, [x29, #-48]
+    arm64.ldr x0, [x29, #-48]
+    arm64.bl maxon_file_close
+    arm64.ldr x5, [x29, #-32]
+    arm64.cmp x5, #0
+    arm64.b.eq createEmptyFile.__skip_guarded_26
+    arm64.ldr x0, [x29, #-32]
+    arm64.bl mm_decref
+    arm64.label createEmptyFile.__skip_guarded_26
+    arm64.ldr x6, [x29, #-40]
+    arm64.cmp x6, #0
+    arm64.b.eq createEmptyFile.__skip_guarded_28
+    arm64.ldr x0, [x29, #-40]
+    arm64.bl mm_decref
+    arm64.label createEmptyFile.__skip_guarded_28
+    arm64.mov x1, #0
+    arm64.epilogue stack_size=112
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=368
+    arm64.adrp_add_rdata x0, __str_6
+    arm64.mov x1, x0
+    arm64.mov x2, #33
+    arm64.adrp_add_func x3, __destruct_String
+    arm64.mov x4, x3
+    arm64.str x1, [x29, #-168]
+    arm64.mov x1, x4
+    arm64.mov x0, #16
+    arm64.mov x2, #1
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.adrp_add_func x5, __destruct___ManagedMemory
+    arm64.mov x6, x5
+    arm64.mov x1, x6
+    arm64.mov x0, #40
+    arm64.mov x2, #2
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-16]
+    arm64.mov x7, #-2
+    arm64.mov x8, #1
+    arm64.mov x9, #0
+    arm64.ldr x10, [x29, #-16]
+    arm64.ldr x11, [x29, #-168]
+    arm64.str x11, [x10, #0]
+    arm64.ldr x12, [x29, #-16]
+    arm64.mov x13, #33
+    arm64.str x13, [x12, #8]
+    arm64.ldr x14, [x29, #-16]
+    arm64.str x7, [x14, #16]
+    arm64.ldr x15, [x29, #-16]
+    arm64.str x8, [x15, #24]
+    arm64.ldr x0, [x29, #-16]
+    arm64.str x9, [x0, #32]
+    arm64.ldr x0, [x29, #-16]
+    arm64.ldr x1, [x29, #-8]
+    arm64.str x0, [x1, #0]
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_incref
+    arm64.mov x0, #1
+    arm64.ldr x1, [x29, #-8]
+    arm64.str x0, [x1, #8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.str x1, [x29, #-24]
+    arm64.ldr x0, [x29, #-24]
+    arm64.ldr x1, [x0, #0]
+    arm64.ldr x0, [x29, #-24]
+    arm64.ldr x2, [x0, #8]
+    arm64.add x0, x1, x2
+    arm64.ldrb x1, [x0, #0]
+    arm64.mov x0, #0
+    arm64.cmp x1, x0
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne main.__cstr_ok_0
+    arm64.b main.__cstr_fix_0
+  __cstr_ok_0:
+    arm64.ldr x0, [x29, #-24]
+    arm64.ldr x1, [x0, #0]
+    arm64.str x1, [x29, #-32]
+    arm64.b main.__cstr_done_0
+  __cstr_fix_0:
+    arm64.ldr x0, [x29, #-24]
+    arm64.ldr x1, [x0, #24]
+    arm64.ldr x2, [x29, #-24]
+    arm64.ldr x3, [x2, #16]
+    arm64.ldr x4, [x29, #-24]
+    arm64.ldr x5, [x4, #8]
+    arm64.str x5, [x29, #-40]
+    arm64.str x3, [x29, #-48]
+    arm64.ldr x6, [x29, #-24]
+    arm64.ldr x7, [x6, #0]
+    arm64.str x7, [x29, #-56]
+    arm64.ldr x8, [x29, #-24]
+    arm64.mul x9, x5, x1
+    arm64.ldr x10, [x29, #-24]
+    arm64.ldr x11, [x10, #0]
+    arm64.mov x0, x11
+    arm64.ldr x1, [x29, #-48]
+    arm64.mov x2, x9
+    arm64.ldr x3, [x29, #-24]
+    arm64.bl maxon_cow_check
+    arm64.ldr x12, [x29, #-24]
+    arm64.str x0, [x12, #0]
+    arm64.ldr x13, [x29, #-48]
+    arm64.ldr x14, [x29, #-56]
+    arm64.cmp x14, x0
+    arm64.cset x15, ne
+    arm64.ldr x0, [x29, #-40]
+    arm64.cmp x15, #0
+    arm64.csel x1, x0, x13, ne
+    arm64.ldr x0, [x29, #-24]
+    arm64.str x1, [x0, #16]
+    arm64.mov x0, #-1
+    arm64.cmp x13, x0
+    arm64.cset x1, eq
+    arm64.and x0, x15, x1
+    arm64.ldr x1, [x29, #-24]
+    arm64.ldr x2, [x1, #32]
+    arm64.mov x1, #0
+    arm64.cmp x0, #0
+    arm64.csel x3, x2, x1, ne
+    arm64.str x0, [x29, #-168]
+    arm64.str x2, [x29, #-176]
+    arm64.str x3, [x29, #-184]
+    arm64.cmp x3, #0
+    arm64.b.eq main.__skip_guarded_86
+    arm64.ldr x0, [x29, #-184]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_86
+    arm64.mov x0, #0
+    arm64.ldr x1, [x29, #-176]
+    arm64.ldr x2, [x29, #-168]
+    arm64.cmp x2, #0
+    arm64.csel x3, x0, x1, ne
+    arm64.ldr x0, [x29, #-24]
+    arm64.str x3, [x0, #32]
+    arm64.ldr x0, [x29, #-24]
+    arm64.ldr x1, [x0, #0]
+    arm64.ldr x0, [x29, #-24]
+    arm64.ldr x2, [x0, #8]
+    arm64.ldr x0, [x29, #-24]
+    arm64.ldr x3, [x0, #16]
+    arm64.mov x0, #1
+    arm64.add x4, x2, x0
+    arm64.str x4, [x29, #-192]
+    arm64.mov x0, x1
+    arm64.mov x1, x2
+    arm64.mov x2, x3
+    arm64.ldr x3, [x29, #-192]
+    arm64.bl maxon_string_ensure_cap
+    arm64.ldr x1, [x29, #-24]
+    arm64.str x0, [x1, #0]
+    arm64.ldr x1, [x29, #-24]
+    arm64.ldr x2, [x29, #-192]
+    arm64.str x2, [x1, #16]
+    arm64.ldr x1, [x29, #-24]
+    arm64.ldr x2, [x1, #8]
+    arm64.add x1, x0, x2
+    arm64.mov x2, #0
+    arm64.strb x2, [x1, #0]
+    arm64.str x0, [x29, #-32]
+    arm64.b main.__cstr_done_0
+  __cstr_done_0:
+    arm64.ldr x0, [x29, #-32]
+    arm64.bl maxon_file_exists
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne main.check1_0
+    arm64.b main.check1_0.after
+  check1_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_117
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_117
+    arm64.mov x0, #1
+    arm64.epilogue stack_size=368
+    arm64.ret
+  check1_0.after:
+    arm64.adrp_add_rdata x0, __str_7
+    arm64.mov x1, x0
+    arm64.mov x2, #23
+    arm64.adrp_add_func x3, __destruct_String
+    arm64.mov x4, x3
+    arm64.str x1, [x29, #-168]
+    arm64.mov x1, x4
+    arm64.mov x0, #16
+    arm64.mov x2, #1
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-64]
+    arm64.adrp_add_func x5, __destruct___ManagedMemory
+    arm64.mov x6, x5
+    arm64.mov x1, x6
+    arm64.mov x0, #40
+    arm64.mov x2, #2
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-72]
+    arm64.mov x7, #-2
+    arm64.mov x8, #1
+    arm64.mov x9, #0
+    arm64.ldr x10, [x29, #-72]
+    arm64.ldr x11, [x29, #-168]
+    arm64.str x11, [x10, #0]
+    arm64.ldr x12, [x29, #-72]
+    arm64.mov x13, #23
+    arm64.str x13, [x12, #8]
+    arm64.ldr x14, [x29, #-72]
+    arm64.str x7, [x14, #16]
+    arm64.ldr x15, [x29, #-72]
+    arm64.str x8, [x15, #24]
+    arm64.ldr x0, [x29, #-72]
+    arm64.str x9, [x0, #32]
+    arm64.ldr x0, [x29, #-72]
+    arm64.ldr x1, [x29, #-64]
+    arm64.str x0, [x1, #0]
+    arm64.ldr x0, [x29, #-72]
+    arm64.bl mm_incref
+    arm64.mov x0, #1
+    arm64.ldr x1, [x29, #-64]
+    arm64.str x0, [x1, #8]
+    arm64.ldr x0, [x29, #-64]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-64]
+    arm64.str x0, [x29, #-80]
+    arm64.ldr x0, [x29, #-80]
+    arm64.bl createEmptyFile
+    arm64.mov x0, #0
+    arm64.cmp x1, x0
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne main.otherwise_error_0
+    arm64.b main.otherwise_continue_0
+  otherwise_error_0:
+    arm64.ldr x0, [x29, #-64]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_165
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_165
+    arm64.ldr x1, [x29, #-8]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_167
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_167
+    arm64.mov x0, #10
+    arm64.epilogue stack_size=368
+    arm64.ret
+  otherwise_continue_0:
+    arm64.ldr x0, [x29, #-80]
+    arm64.ldr x1, [x0, #0]
+    arm64.str x1, [x29, #-88]
+    arm64.ldr x2, [x29, #-88]
+    arm64.ldr x3, [x2, #0]
+    arm64.ldr x4, [x29, #-88]
+    arm64.ldr x5, [x4, #8]
+    arm64.add x6, x3, x5
+    arm64.ldrb x7, [x6, #0]
+    arm64.mov x8, #0
+    arm64.cmp x7, x8
+    arm64.cset x9, eq
+    arm64.cmp x9, #0
+    arm64.b.ne main.__cstr_ok_1
+    arm64.b main.__cstr_fix_1
+  __cstr_ok_1:
+    arm64.ldr x0, [x29, #-88]
+    arm64.ldr x1, [x0, #0]
+    arm64.str x1, [x29, #-96]
+    arm64.b main.__cstr_done_1
+  __cstr_fix_1:
+    arm64.ldr x0, [x29, #-88]
+    arm64.ldr x1, [x0, #24]
+    arm64.ldr x2, [x29, #-88]
+    arm64.ldr x3, [x2, #16]
+    arm64.ldr x4, [x29, #-88]
+    arm64.ldr x5, [x4, #8]
+    arm64.str x5, [x29, #-104]
+    arm64.str x3, [x29, #-112]
+    arm64.ldr x6, [x29, #-88]
+    arm64.ldr x7, [x6, #0]
+    arm64.str x7, [x29, #-120]
+    arm64.ldr x8, [x29, #-88]
+    arm64.mul x9, x5, x1
+    arm64.ldr x10, [x29, #-88]
+    arm64.ldr x11, [x10, #0]
+    arm64.mov x0, x11
+    arm64.ldr x1, [x29, #-112]
+    arm64.mov x2, x9
+    arm64.ldr x3, [x29, #-88]
+    arm64.bl maxon_cow_check
+    arm64.ldr x12, [x29, #-88]
+    arm64.str x0, [x12, #0]
+    arm64.ldr x13, [x29, #-112]
+    arm64.ldr x14, [x29, #-120]
+    arm64.cmp x14, x0
+    arm64.cset x15, ne
+    arm64.ldr x0, [x29, #-104]
+    arm64.cmp x15, #0
+    arm64.csel x1, x0, x13, ne
+    arm64.ldr x0, [x29, #-88]
+    arm64.str x1, [x0, #16]
+    arm64.mov x0, #-1
+    arm64.cmp x13, x0
+    arm64.cset x1, eq
+    arm64.and x0, x15, x1
+    arm64.ldr x1, [x29, #-88]
+    arm64.ldr x2, [x1, #32]
+    arm64.mov x1, #0
+    arm64.cmp x0, #0
+    arm64.csel x3, x2, x1, ne
+    arm64.str x0, [x29, #-168]
+    arm64.str x2, [x29, #-176]
+    arm64.str x3, [x29, #-184]
+    arm64.cmp x3, #0
+    arm64.b.eq main.__skip_guarded_217
+    arm64.ldr x0, [x29, #-184]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_217
+    arm64.mov x0, #0
+    arm64.ldr x1, [x29, #-176]
+    arm64.ldr x2, [x29, #-168]
+    arm64.cmp x2, #0
+    arm64.csel x3, x0, x1, ne
+    arm64.ldr x0, [x29, #-88]
+    arm64.str x3, [x0, #32]
+    arm64.ldr x0, [x29, #-88]
+    arm64.ldr x1, [x0, #0]
+    arm64.ldr x0, [x29, #-88]
+    arm64.ldr x2, [x0, #8]
+    arm64.ldr x0, [x29, #-88]
+    arm64.ldr x3, [x0, #16]
+    arm64.mov x0, #1
+    arm64.add x4, x2, x0
+    arm64.str x4, [x29, #-192]
+    arm64.mov x0, x1
+    arm64.mov x1, x2
+    arm64.mov x2, x3
+    arm64.ldr x3, [x29, #-192]
+    arm64.bl maxon_string_ensure_cap
+    arm64.ldr x1, [x29, #-88]
+    arm64.str x0, [x1, #0]
+    arm64.ldr x1, [x29, #-88]
+    arm64.ldr x2, [x29, #-192]
+    arm64.str x2, [x1, #16]
+    arm64.ldr x1, [x29, #-88]
+    arm64.ldr x2, [x1, #8]
+    arm64.add x1, x0, x2
+    arm64.mov x2, #0
+    arm64.strb x2, [x1, #0]
+    arm64.str x0, [x29, #-96]
+    arm64.b main.__cstr_done_1
+  __cstr_done_1:
+    arm64.ldr x0, [x29, #-96]
+    arm64.bl maxon_file_exists
+    arm64.mov x1, #1
+    arm64.cmp x0, x1
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne main.check2_0
+    arm64.b main.check2_0.after
+  check2_0:
+    arm64.ldr x0, [x29, #-64]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_248
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_248
+    arm64.ldr x1, [x29, #-8]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_250
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_250
+    arm64.mov x0, #2
+    arm64.epilogue stack_size=368
+    arm64.ret
+  check2_0.after:
+    arm64.ldr x0, [x29, #-80]
+    arm64.ldr x1, [x0, #0]
+    arm64.str x1, [x29, #-128]
+    arm64.ldr x2, [x29, #-128]
+    arm64.ldr x3, [x2, #0]
+    arm64.ldr x4, [x29, #-128]
+    arm64.ldr x5, [x4, #8]
+    arm64.add x6, x3, x5
+    arm64.ldrb x7, [x6, #0]
+    arm64.mov x8, #0
+    arm64.cmp x7, x8
+    arm64.cset x9, eq
+    arm64.cmp x9, #0
+    arm64.b.ne main.__cstr_ok_2
+    arm64.b main.__cstr_fix_2
+  __cstr_ok_2:
+    arm64.ldr x0, [x29, #-128]
+    arm64.ldr x1, [x0, #0]
+    arm64.str x1, [x29, #-136]
+    arm64.b main.__cstr_done_2
+  __cstr_fix_2:
+    arm64.ldr x0, [x29, #-128]
+    arm64.ldr x1, [x0, #24]
+    arm64.ldr x2, [x29, #-128]
+    arm64.ldr x3, [x2, #16]
+    arm64.ldr x4, [x29, #-128]
+    arm64.ldr x5, [x4, #8]
+    arm64.str x5, [x29, #-144]
+    arm64.str x3, [x29, #-152]
+    arm64.ldr x6, [x29, #-128]
+    arm64.ldr x7, [x6, #0]
+    arm64.str x7, [x29, #-160]
+    arm64.ldr x8, [x29, #-128]
+    arm64.mul x9, x5, x1
+    arm64.ldr x10, [x29, #-128]
+    arm64.ldr x11, [x10, #0]
+    arm64.mov x0, x11
+    arm64.ldr x1, [x29, #-152]
+    arm64.mov x2, x9
+    arm64.ldr x3, [x29, #-128]
+    arm64.bl maxon_cow_check
+    arm64.ldr x12, [x29, #-128]
+    arm64.str x0, [x12, #0]
+    arm64.ldr x13, [x29, #-152]
+    arm64.ldr x14, [x29, #-160]
+    arm64.cmp x14, x0
+    arm64.cset x15, ne
+    arm64.ldr x0, [x29, #-144]
+    arm64.cmp x15, #0
+    arm64.csel x1, x0, x13, ne
+    arm64.ldr x0, [x29, #-128]
+    arm64.str x1, [x0, #16]
+    arm64.mov x0, #-1
+    arm64.cmp x13, x0
+    arm64.cset x1, eq
+    arm64.and x0, x15, x1
+    arm64.ldr x1, [x29, #-128]
+    arm64.ldr x2, [x1, #32]
+    arm64.mov x1, #0
+    arm64.cmp x0, #0
+    arm64.csel x3, x2, x1, ne
+    arm64.str x0, [x29, #-168]
+    arm64.str x2, [x29, #-176]
+    arm64.str x3, [x29, #-184]
+    arm64.cmp x3, #0
+    arm64.b.eq main.__skip_guarded_300
+    arm64.ldr x0, [x29, #-184]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_300
+    arm64.mov x0, #0
+    arm64.ldr x1, [x29, #-176]
+    arm64.ldr x2, [x29, #-168]
+    arm64.cmp x2, #0
+    arm64.csel x3, x0, x1, ne
+    arm64.ldr x0, [x29, #-128]
+    arm64.str x3, [x0, #32]
+    arm64.ldr x0, [x29, #-128]
+    arm64.ldr x1, [x0, #0]
+    arm64.ldr x0, [x29, #-128]
+    arm64.ldr x2, [x0, #8]
+    arm64.ldr x0, [x29, #-128]
+    arm64.ldr x3, [x0, #16]
+    arm64.mov x0, #1
+    arm64.add x4, x2, x0
+    arm64.str x4, [x29, #-192]
+    arm64.mov x0, x1
+    arm64.mov x1, x2
+    arm64.mov x2, x3
+    arm64.ldr x3, [x29, #-192]
+    arm64.bl maxon_string_ensure_cap
+    arm64.ldr x1, [x29, #-128]
+    arm64.str x0, [x1, #0]
+    arm64.ldr x1, [x29, #-128]
+    arm64.ldr x2, [x29, #-192]
+    arm64.str x2, [x1, #16]
+    arm64.ldr x1, [x29, #-128]
+    arm64.ldr x2, [x1, #8]
+    arm64.add x1, x0, x2
+    arm64.mov x2, #0
+    arm64.strb x2, [x1, #0]
+    arm64.str x0, [x29, #-136]
+    arm64.b main.__cstr_done_2
+  __cstr_done_2:
+    arm64.ldr x0, [x29, #-136]
+    arm64.bl maxon_file_delete
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, ne
+    arm64.str x2, [x29, #-168]
+    arm64.bl __io_get_last_error
+    arm64.mov x3, #7
+    arm64.mov x4, #2
+    arm64.cmp x0, x4
+    arm64.cset x5, eq
+    arm64.mov x6, #1
+    arm64.cmp x5, #0
+    arm64.csel x7, x6, x3, ne
+    arm64.mov x8, #13
+    arm64.cmp x0, x8
+    arm64.cset x9, eq
+    arm64.mov x10, #2
+    arm64.cmp x9, #0
+    arm64.csel x11, x10, x7, ne
+    arm64.mov x12, #0
+    arm64.ldr x13, [x29, #-168]
+    arm64.cmp x13, #0
+    arm64.csel x14, x11, x12, ne
+    arm64.mov x15, #0
+    arm64.cmp x14, x15
+    arm64.cset x0, ne
+    arm64.cmp x0, #0
+    arm64.b.ne main.otherwise_error_1
+    arm64.b main.otherwise_continue_1
+  otherwise_error_1:
+    arm64.ldr x0, [x29, #-64]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_345
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_345
+    arm64.ldr x1, [x29, #-8]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_347
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_347
+    arm64.mov x0, #4
+    arm64.epilogue stack_size=368
+    arm64.ret
+  otherwise_continue_1:
+    arm64.ldr x0, [x29, #-64]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_351
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_351
+    arm64.ldr x1, [x29, #-8]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_353
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_353
+    arm64.mov x0, #42
+    arm64.epilogue stack_size=368
+    arm64.ret
+  }
+  func @__destruct_TestFile(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct_TestFile.__skip_guarded_4
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct_TestFile.__skip_guarded_4
+    arm64.b __destruct_TestFile.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+---

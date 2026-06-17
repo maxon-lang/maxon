@@ -1,0 +1,277 @@
+// Test: memory.qualified-field-overwrite-frees-old
+typealias Integer = int(i64.min to i64.max)
+
+type Right
+	export var left as Integer
+
+	static function create(left Integer) returns Self
+		return Self{left: left}
+	end 'create'
+end 'Right'
+
+type Pair
+	export var left as Integer
+	export var right as Right
+
+	static function create(left Integer, right Right) returns Self
+		return Self{left: left, right: right}
+	end 'create'
+end 'Pair'
+
+function testAssign()
+	var p = Pair.create(5, right: Right.create(10))
+	p.right = Right.create(20)
+	print("{p.right.left}\n")
+end 'testAssign'
+
+function main() returns ExitCode
+	testAssign()
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+20
+```
+---
+// CompiledIR
+module {
+  func @Right.create(left: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-16]
+    arm64.mov x0, #8
+    arm64.mov x1, #0
+    arm64.mov x2, #10
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-16]
+    arm64.str x1, [x0, #0]
+    arm64.ldr x2, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x3, [x29, #-8]
+    arm64.mov x0, x3
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @Pair.create(left: i64, right: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=64
+    arm64.str x1, [x29, #-8]
+    arm64.adrp_add_func x1, __destruct_Pair
+    arm64.mov x2, x1
+    arm64.str x0, [x29, #-24]
+    arm64.mov x1, x2
+    arm64.mov x0, #16
+    arm64.mov x2, #11
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-16]
+    arm64.ldr x0, [x29, #-16]
+    arm64.ldr x1, [x29, #-24]
+    arm64.str x1, [x0, #0]
+    arm64.ldr x2, [x29, #-8]
+    arm64.ldr x3, [x29, #-16]
+    arm64.str x2, [x3, #8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x4, [x29, #-16]
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_incref
+    arm64.ldr x5, [x29, #-16]
+    arm64.mov x0, x5
+    arm64.epilogue stack_size=64
+    arm64.ret
+  }
+  func @testAssign() {
+  entry:
+    arm64.prologue stack_size=304
+    arm64.mov x0, #10
+    arm64.bl Right.create
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-8]
+    arm64.mov x0, #5
+    arm64.bl Pair.create
+    arm64.str x0, [x29, #-16]
+    arm64.mov x0, #20
+    arm64.bl Right.create
+    arm64.str x0, [x29, #-24]
+    arm64.ldr x1, [x29, #-24]
+    arm64.ldr x2, [x29, #-16]
+    arm64.ldr x3, [x2, #8]
+    arm64.str x3, [x29, #-120]
+    arm64.cmp x3, #0
+    arm64.b.eq testAssign.__skip_guarded_13
+    arm64.ldr x0, [x29, #-120]
+    arm64.bl mm_decref
+    arm64.label testAssign.__skip_guarded_13
+    arm64.ldr x4, [x29, #-16]
+    arm64.ldr x5, [x29, #-24]
+    arm64.str x5, [x4, #8]
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl mm_incref
+    arm64.ldr x6, [x29, #-16]
+    arm64.ldr x7, [x6, #8]
+    arm64.str x7, [x29, #-32]
+    arm64.ldr x8, [x29, #-32]
+    arm64.ldr x9, [x8, #0]
+    arm64.str x9, [x29, #-128]
+    arm64.mov x0, #21
+    arm64.bl mm_raw_alloc
+    arm64.str x0, [x29, #-40]
+    arm64.ldr x0, [x29, #-128]
+    arm64.ldr x1, [x29, #-40]
+    arm64.bl maxon_i64_to_string
+    arm64.ldr x10, [x29, #-40]
+    arm64.adrp_add_rdata x11, __interp_lit_0
+    arm64.mov x12, x11
+    arm64.mov x13, #1
+    arm64.add x14, x0, x13
+    arm64.adrp_add_func x15, __destruct_String
+    arm64.mov x1, x15
+    arm64.str x0, [x29, #-136]
+    arm64.str x12, [x29, #-144]
+    arm64.str x14, [x29, #-152]
+    arm64.mov x0, #16
+    arm64.mov x2, #8
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-48]
+    arm64.adrp_add_func x0, __destruct___ManagedMemory
+    arm64.mov x1, x0
+    arm64.mov x0, #40
+    arm64.mov x2, #9
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-56]
+    arm64.mov x0, #1
+    arm64.ldr x1, [x29, #-152]
+    arm64.add x2, x1, x0
+    arm64.mov x0, x2
+    arm64.bl mm_raw_alloc
+    arm64.mov x1, #0
+    arm64.str x1, [x29, #-64]
+    arm64.str x0, [x29, #-72]
+    arm64.ldr x0, [x29, #-152]
+    arm64.str x0, [x29, #-80]
+    arm64.ldr x0, [x29, #-40]
+    arm64.str x0, [x29, #-88]
+    arm64.ldr x0, [x29, #-136]
+    arm64.str x0, [x29, #-96]
+    arm64.ldr x0, [x29, #-144]
+    arm64.str x0, [x29, #-104]
+    arm64.mov x0, #1
+    arm64.str x0, [x29, #-112]
+    arm64.ldr x0, [x29, #-72]
+    arm64.ldr x1, [x29, #-64]
+    arm64.add x2, x0, x1
+    arm64.ldr x0, [x29, #-88]
+    arm64.ldr x1, [x29, #-96]
+    arm64.str x2, [x29, #-160]
+    arm64.ldr x0, [x29, #-160]
+    arm64.ldr x1, [x29, #-88]
+    arm64.ldr x2, [x29, #-96]
+    arm64.memcpy
+    arm64.ldr x0, [x29, #-64]
+    arm64.ldr x1, [x29, #-96]
+    arm64.add x2, x0, x1
+    arm64.str x2, [x29, #-64]
+    arm64.ldr x0, [x29, #-72]
+    arm64.ldr x1, [x29, #-64]
+    arm64.add x2, x0, x1
+    arm64.ldr x0, [x29, #-104]
+    arm64.ldr x1, [x29, #-112]
+    arm64.str x2, [x29, #-168]
+    arm64.ldr x0, [x29, #-168]
+    arm64.ldr x1, [x29, #-104]
+    arm64.ldr x2, [x29, #-112]
+    arm64.memcpy
+    arm64.ldr x0, [x29, #-72]
+    arm64.ldr x1, [x29, #-80]
+    arm64.add x2, x0, x1
+    arm64.mov x0, #0
+    arm64.strb x0, [x2, #0]
+    arm64.ldr x0, [x29, #-40]
+    arm64.bl mm_raw_free
+    arm64.ldr x0, [x29, #-72]
+    arm64.ldr x1, [x29, #-80]
+    arm64.mov x2, #1
+    arm64.mov x3, #0
+    arm64.ldr x4, [x29, #-56]
+    arm64.str x0, [x4, #0]
+    arm64.ldr x0, [x29, #-56]
+    arm64.str x1, [x0, #8]
+    arm64.ldr x0, [x29, #-56]
+    arm64.str x1, [x0, #16]
+    arm64.ldr x0, [x29, #-56]
+    arm64.str x2, [x0, #24]
+    arm64.ldr x0, [x29, #-56]
+    arm64.str x3, [x0, #32]
+    arm64.ldr x0, [x29, #-56]
+    arm64.ldr x1, [x29, #-48]
+    arm64.str x0, [x1, #0]
+    arm64.ldr x0, [x29, #-56]
+    arm64.bl mm_incref
+    arm64.mov x0, #0
+    arm64.ldr x1, [x29, #-48]
+    arm64.str x0, [x1, #8]
+    arm64.ldr x0, [x29, #-48]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-48]
+    arm64.bl stdlib.print
+    arm64.ldr x0, [x29, #-48]
+    arm64.cmp x0, #0
+    arm64.b.eq testAssign.__skip_guarded_104
+    arm64.bl mm_decref
+    arm64.label testAssign.__skip_guarded_104
+    arm64.ldr x0, [x29, #-24]
+    arm64.cmp x0, #0
+    arm64.b.eq testAssign.__skip_guarded_106
+    arm64.bl mm_decref
+    arm64.label testAssign.__skip_guarded_106
+    arm64.ldr x0, [x29, #-8]
+    arm64.cmp x0, #0
+    arm64.b.eq testAssign.__skip_guarded_108
+    arm64.bl mm_decref
+    arm64.label testAssign.__skip_guarded_108
+    arm64.ldr x0, [x29, #-16]
+    arm64.cmp x0, #0
+    arm64.b.eq testAssign.__skip_guarded_110
+    arm64.bl mm_decref
+    arm64.label testAssign.__skip_guarded_110
+    arm64.epilogue stack_size=304
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.bl testAssign
+    arm64.mov x0, #0
+    arm64.epilogue stack_size=16
+    arm64.ret
+  }
+  func @__destruct_Right(ptr: i64) {
+  entry:
+    arm64.b __destruct_Right.done
+  done:
+    arm64.ret
+  }
+  func @__destruct_Pair(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #8]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct_Pair.__skip_guarded_4
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct_Pair.__skip_guarded_4
+    arm64.b __destruct_Pair.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+---

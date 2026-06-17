@@ -1,0 +1,164 @@
+// Test: match-enum-typed-binding-pass-to-function
+enum Direction
+		north
+		south
+		east
+		west
+end 'Direction'
+
+union Move
+		walk(dir Direction)
+		stay
+end 'Move'
+
+function directionValue(d Direction) returns ExitCode
+		match d 'check'
+				north then return 1
+				south then return 2
+				east then return 3
+				west then return 4
+		end 'check'
+end 'directionValue'
+
+function main() returns ExitCode
+		let m = Move.walk(Direction.east)
+		match m 'act'
+				walk(dir) then return directionValue(dir)
+				stay then return 0
+		end 'act'
+end 'main'
+---
+ExitCode: 3
+---
+// CompiledIR
+module {
+  func @directionValue(d: i64) -> u8 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.jump_table x0, 4 cases, default=directionValue.check_0.merge
+  check_0.case0:
+    arm64.mov x0, #1
+    arm64.epilogue stack_size=48
+    arm64.ret
+  check_0.case1:
+    arm64.mov x0, #2
+    arm64.epilogue stack_size=48
+    arm64.ret
+  check_0.case2:
+    arm64.mov x0, #3
+    arm64.epilogue stack_size=48
+    arm64.ret
+  check_0.case3:
+    arm64.mov x0, #4
+    arm64.epilogue stack_size=48
+    arm64.ret
+  check_0.merge:
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=96
+    arm64.mov x0, #2
+    arm64.mov x0, #16
+    arm64.mov x1, #0
+    arm64.mov x2, #1
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.str x1, [x0, #0]
+    arm64.mov x2, #2
+    arm64.str x2, [x0, #8]
+    arm64.ldr x3, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x4, [x29, #-8]
+    arm64.ldr x5, [x4, #0]
+    arm64.ldr x6, [x29, #-8]
+    arm64.str x6, [x29, #-16]
+    arm64.ldr x7, [x29, #-16]
+    arm64.str x5, [x29, #-40]
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_incref
+    arm64.ldr x8, [x29, #-40]
+    arm64.str x8, [x29, #-24]
+    arm64.b main.act_0.cmp0
+  act_0.cmp0:
+    arm64.ldr x0, [x29, #-24]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne main.act_0.case0
+    arm64.b main.act_0.cmp1
+  act_0.case0:
+    arm64.ldr x0, [x29, #-16]
+    arm64.ldr x1, [x0, #8]
+    arm64.str x1, [x29, #-32]
+    arm64.ldr x2, [x29, #-32]
+    arm64.ldr x0, [x29, #-32]
+    arm64.bl directionValue
+    arm64.mov x3, #0
+    arm64.cmp x0, x3
+    arm64.cset x4, lt
+    arm64.mov x5, #255
+    arm64.cmp x0, x5
+    arm64.cset x6, gt
+    arm64.orr x7, x4, x6
+    arm64.cmp x7, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_0
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.ldr x1, [x29, #-16]
+    arm64.str x0, [x29, #-40]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_37
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_37
+    arm64.ldr x0, [x29, #-8]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_39
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_39
+    arm64.ldr x0, [x29, #-40]
+    arm64.epilogue stack_size=96
+    arm64.ret
+  act_0.cmp1:
+    arm64.ldr x0, [x29, #-24]
+    arm64.mov x1, #1
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne main.act_0.case1
+    arm64.b main.act_0.merge
+  act_0.case1:
+    arm64.ldr x0, [x29, #-16]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_47
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_47
+    arm64.ldr x1, [x29, #-8]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_49
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_49
+    arm64.mov x0, #0
+    arm64.epilogue stack_size=96
+    arm64.ret
+  act_0.merge:
+  }
+  func @__destruct_Move(ptr: i64) {
+  entry:
+    arm64.b __destruct_Move.done
+  done:
+    arm64.ret
+  }
+}
+---

@@ -1,0 +1,86 @@
+// Test: function-backing.forward-reference
+
+typealias Integer = int(i64.min to i64.max)
+
+enum Op
+	doubleOp = doubleFn
+	tripleOp = tripleFn
+end 'Op'
+
+function doubleFn(x Integer) returns Integer
+	return x * 2
+end 'doubleFn'
+
+function tripleFn(x Integer) returns Integer
+	return x * 3
+end 'tripleFn'
+
+function main() returns ExitCode
+	let f = Op.doubleOp.rawValue
+	return f(21)
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @doubleFn(x: i64) -> i64 {
+  entry:
+    arm64.mov x1, #2
+    arm64.mul x2, x0, x1
+    arm64.mov x0, x2
+    arm64.ret
+  }
+  func @tripleFn(x: i64) -> i64 {
+  entry:
+    arm64.mov x1, #3
+    arm64.mul x2, x0, x1
+    arm64.mov x0, x2
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.mov x0, #0
+    arm64.mov x1, #0
+    arm64.mov x2, #0
+    arm64.cmp x0, x2
+    arm64.cset x3, eq
+    arm64.adrp_add_func x4, doubleFn
+    arm64.mov x5, x4
+    arm64.cmp x3, #0
+    arm64.csel x6, x5, x1, ne
+    arm64.mov x7, #1
+    arm64.cmp x0, x7
+    arm64.cset x8, eq
+    arm64.adrp_add_func x9, tripleFn
+    arm64.mov x10, x9
+    arm64.cmp x8, #0
+    arm64.csel x11, x10, x6, ne
+    arm64.mov x12, #21
+    arm64.mov x13, #0
+    arm64.str x11, [x29, #-8]
+    arm64.mov x0, x12
+    arm64.mov x1, x13
+    arm64.blr x11
+    arm64.mov x14, #0
+    arm64.cmp x0, x14
+    arm64.cset x15, lt
+    arm64.mov x1, #255
+    arm64.cmp x0, x1
+    arm64.cset x2, gt
+    arm64.orr x1, x15, x2
+    arm64.cmp x1, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_4
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue stack_size=32
+    arm64.ret
+  }
+}
+---

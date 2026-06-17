@@ -1,0 +1,68 @@
+// Test: ternary-expression.chained
+function main() returns ExitCode
+	let a = false
+	let b = true
+	let x = 1 if a else 2 if b else 3
+	return x
+end 'main'
+---
+ExitCode: 2
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x0, #0
+    arm64.mov x1, #1
+    arm64.mov x2, #1
+    arm64.mov x3, #2
+    arm64.mov x4, #3
+    arm64.cmp x1, #0
+    arm64.b.ne main.ternary_0.true
+    arm64.b main.ternary_0.false
+  ternary_0.true:
+    arm64.mov x0, #2
+    arm64.str x0, [x29, #-8]
+    arm64.b main.ternary_0.merge
+  ternary_0.false:
+    arm64.mov x0, #3
+    arm64.str x0, [x29, #-8]
+    arm64.b main.ternary_0.merge
+  ternary_0.merge:
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.cmp x1, #0
+    arm64.b.ne main.ternary_1.true
+    arm64.b main.ternary_1.false
+  ternary_1.true:
+    arm64.mov x0, #1
+    arm64.str x0, [x29, #-16]
+    arm64.b main.ternary_1.merge
+  ternary_1.false:
+    arm64.ldr x0, [x29, #-8]
+    arm64.str x0, [x29, #-16]
+    arm64.b main.ternary_1.merge
+  ternary_1.merge:
+    arm64.ldr x0, [x29, #-16]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x3, #255
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_5
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+---

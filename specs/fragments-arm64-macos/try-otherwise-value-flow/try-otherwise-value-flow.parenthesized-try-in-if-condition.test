@@ -1,0 +1,193 @@
+// Test: try-otherwise-value-flow.parenthesized-try-in-if-condition
+typealias Tally = int(0 to 125)
+typealias BoolArray = Array with bool
+
+function countSet(bits BoolArray) returns Tally
+	var n = 0
+	for i in 0 upto bits.count() 'each'
+		if (try bits.get(i) otherwise false) 'set'
+			n = n + 1
+		end 'set'
+	end 'each'
+	return n as Tally
+end 'countSet'
+
+function main() returns ExitCode
+	var b = BoolArray.create()
+	b.push(true)
+	b.push(false)
+	b.push(true)
+	b.push(true)
+	return countSet(b)
+end 'main'
+---
+ExitCode: 3
+---
+// CompiledIR
+module {
+  func @countSet(bits: i64) -> u8 {
+  entry:
+    arm64.prologue stack_size=112
+    arm64.str x0, [x29, #-8]
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-16]
+    arm64.mov x1, #0
+    arm64.ldr x2, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl BoolArray.count
+    arm64.str x0, [x29, #-24]
+    arm64.mov x3, #0
+    arm64.str x3, [x29, #-32]
+    arm64.b countSet.each_0.header
+  each_0.header:
+    arm64.ldr x0, [x29, #-32]
+    arm64.ldr x1, [x29, #-24]
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.cmp x2, #0
+    arm64.b.ne countSet.each_0
+    arm64.b countSet.each_0.exit
+  each_0:
+    arm64.ldr x0, [x29, #-32]
+    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-32]
+    arm64.bl BoolArray.get
+    arm64.mov x2, #0
+    arm64.str x2, [x29, #-40]
+    arm64.str x0, [x29, #-48]
+    arm64.mov x3, #0
+    arm64.cmp x1, x3
+    arm64.cset x4, ne
+    arm64.cmp x4, #0
+    arm64.b.ne countSet.otherwise_default_error_0
+    arm64.b countSet.otherwise_default_continue_0
+  otherwise_default_error_0:
+    arm64.ldr x0, [x29, #-40]
+    arm64.str x0, [x29, #-48]
+    arm64.b countSet.otherwise_default_continue_0
+  otherwise_default_continue_0:
+    arm64.ldr x0, [x29, #-48]
+    arm64.cmp x0, #0
+    arm64.b.ne countSet.set_0
+    arm64.b countSet.set_0.merge
+  set_0:
+    arm64.mov x0, #1
+    arm64.ldr x1, [x29, #-16]
+    arm64.add x2, x1, x0
+    arm64.str x2, [x29, #-16]
+    arm64.b countSet.set_0.merge
+  set_0.merge:
+    arm64.b countSet.each_0.incr
+  each_0.incr:
+    arm64.mov x0, #1
+    arm64.ldr x1, [x29, #-32]
+    arm64.add x2, x1, x0
+    arm64.str x2, [x29, #-32]
+    arm64.b countSet.each_0.header
+  each_0.exit:
+    arm64.ldr x0, [x29, #-16]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x3, #125
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne countSet.__range_panic_0
+    arm64.b countSet.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_16
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x1, #125
+    arm64.cmp x0, x1
+    arm64.cset x3, gt
+    arm64.orr x1, x2, x3
+    arm64.cmp x1, #0
+    arm64.b.ne countSet.__range_panic_1
+    arm64.b countSet.__range_ok_1
+  __range_panic_1:
+    arm64.adrp_add_symdata x0, __panic_msg_16
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_1:
+    arm64.epilogue stack_size=112
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.bl BoolArray.create
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #1
+    arm64.bl BoolArray.push
+    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.bl BoolArray.push
+    arm64.ldr x2, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #1
+    arm64.bl BoolArray.push
+    arm64.ldr x3, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #1
+    arm64.bl BoolArray.push
+    arm64.ldr x4, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl countSet
+    arm64.mov x5, #0
+    arm64.cmp x0, x5
+    arm64.cset x6, lt
+    arm64.mov x7, #255
+    arm64.cmp x0, x7
+    arm64.cset x8, gt
+    arm64.orr x9, x6, x8
+    arm64.cmp x9, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_17
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.ldr x1, [x29, #-8]
+    arm64.str x0, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_26
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_26
+    arm64.ldr x0, [x29, #-16]
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__destruct_BoolArray(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct_BoolArray.__skip_guarded_4
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct_BoolArray.__skip_guarded_4
+    arm64.b __destruct_BoolArray.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+---

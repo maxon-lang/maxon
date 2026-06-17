@@ -1,0 +1,108 @@
+// Test: otherwise-panic.not-hit
+typealias Integer = int(i64.min to i64.max)
+
+enum PanicNotHitError implements Error
+	bad
+end 'PanicNotHitError'
+
+function maybeFail(b bool) returns Integer throws PanicNotHitError
+	if b 'c'
+		throw PanicNotHitError.bad
+	end 'c'
+	return 7
+end 'maybeFail'
+
+function main() returns ExitCode
+	var total = 0
+	try 'work'
+		let a = maybeFail(false)
+		let b = maybeFail(false)
+		total = a + b
+	end 'work'
+	otherwise panic("should not happen")
+	return total
+end 'main'
+---
+ExitCode: 14
+---
+// CompiledIR
+module {
+  func @maybeFail(b: i1) -> i64 {
+  entry:
+    arm64.cmp x0, #0
+    arm64.b.ne maybeFail.c_0
+    arm64.b maybeFail.c_0.after
+  c_0:
+    arm64.mov x0, #0
+    arm64.mov x1, #1
+    arm64.add x2, x0, x1
+    arm64.mov x1, x2
+    arm64.mov x0, #0
+    arm64.ret
+  c_0.after:
+    arm64.mov x0, #7
+    arm64.mov x1, #0
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=80
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-8]
+    arm64.mov x0, #0
+    arm64.bl maybeFail
+    arm64.str x0, [x29, #-16]
+    arm64.mov x0, #0
+    arm64.cmp x1, x0
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne main.try_block_continue_0
+    arm64.b main.try_block_err_0
+  try_block_continue_0:
+    arm64.ldr x0, [x29, #-16]
+    arm64.str x0, [x29, #-24]
+    arm64.mov x0, #0
+    arm64.bl maybeFail
+    arm64.str x0, [x29, #-32]
+    arm64.mov x0, #0
+    arm64.cmp x1, x0
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne main.try_block_continue_1
+    arm64.b main.try_block_throw_0
+  try_block_continue_1:
+    arm64.ldr x0, [x29, #-32]
+    arm64.ldr x1, [x29, #-24]
+    arm64.add x2, x1, x0
+    arm64.str x2, [x29, #-8]
+    arm64.b main.try_block_after_0
+  try_block_throw_0:
+    arm64.b main.try_block_err_0
+  try_block_err_0:
+    arm64.adrp_add_symdata x0, __panic_msg_0
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  try_block_after_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x3, #255
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_1
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue stack_size=80
+    arm64.ret
+  }
+}
+---

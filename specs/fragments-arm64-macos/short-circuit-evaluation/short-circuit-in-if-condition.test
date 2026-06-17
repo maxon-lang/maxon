@@ -1,0 +1,92 @@
+// Test: short-circuit-in-if-condition
+typealias Integer = int(0 to u64.max)
+
+var trace = 0 as Integer
+
+function setFlag(bit Integer) returns bool
+	trace = trace or bit
+	return false
+end 'setFlag'
+
+function main() returns ExitCode
+	if setFlag(1) and setFlag(2) 'never'
+		return 99
+	end 'never'
+	return trace as ExitCode
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @setFlag(bit: i64) -> i1 {
+  entry:
+    arm64.global_load x1, [trace]
+    arm64.orr x2, x1, x0
+    arm64.global_store [trace], x2
+    arm64.mov x0, #0
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x0, #1
+    arm64.bl setFlag
+    arm64.mov x1, #0
+    arm64.str x1, [x29, #-8]
+    arm64.cmp x0, #0
+    arm64.b.ne main.shortAnd_0.rhs
+    arm64.b main.shortAnd_0.merge
+  shortAnd_0.rhs:
+    arm64.mov x0, #2
+    arm64.bl setFlag
+    arm64.str x0, [x29, #-8]
+    arm64.b main.shortAnd_0.merge
+  shortAnd_0.merge:
+    arm64.ldr x0, [x29, #-8]
+    arm64.cmp x0, #0
+    arm64.b.ne main.never_0
+    arm64.b main.never_0.after
+  never_0:
+    arm64.mov x0, #99
+    arm64.epilogue stack_size=48
+    arm64.ret
+  never_0.after:
+    arm64.global_load x0, [trace]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x3, #255
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_7
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x1, #255
+    arm64.cmp x0, x1
+    arm64.cset x3, gt
+    arm64.orr x1, x2, x3
+    arm64.cmp x1, #0
+    arm64.b.ne main.__range_panic_1
+    arm64.b main.__range_ok_1
+  __range_panic_1:
+    arm64.adrp_add_symdata x0, __panic_msg_7
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_1:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+---

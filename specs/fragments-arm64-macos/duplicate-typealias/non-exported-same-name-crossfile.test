@@ -1,0 +1,107 @@
+// Test: non-exported-same-name-crossfile
+// --- file: a.maxon
+typealias MyInt = int(0 to 1000)
+
+export function doubleIt(x MyInt) returns MyInt
+	return x + x
+end 'doubleIt'
+
+// --- file: b.maxon
+typealias MyInt = int(0 to 1000)
+
+export function tripleIt(x MyInt) returns MyInt
+	return x + x + x
+end 'tripleIt'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let a = doubleIt(5)
+	let b = tripleIt(3)
+	return a + b
+end 'main'
+---
+ExitCode: 19
+---
+// CompiledIR
+module {
+  func @doubleIt(x: i64) -> u16 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.add x1, x0, x0
+    arm64.mov x0, #0
+    arm64.cmp x1, x0
+    arm64.cset x2, lt
+    arm64.mov x0, #1000
+    arm64.cmp x1, x0
+    arm64.cset x3, gt
+    arm64.orr x0, x2, x3
+    arm64.cmp x0, #0
+    arm64.b.ne doubleIt.__range_panic_0
+    arm64.b doubleIt.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_0
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x0, x1
+    arm64.epilogue stack_size=16
+    arm64.ret
+  }
+  func @tripleIt(x: i64) -> u16 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.add x1, x0, x0
+    arm64.add x2, x1, x0
+    arm64.mov x0, #0
+    arm64.cmp x2, x0
+    arm64.cset x1, lt
+    arm64.mov x0, #1000
+    arm64.cmp x2, x0
+    arm64.cset x3, gt
+    arm64.orr x0, x1, x3
+    arm64.cmp x0, #0
+    arm64.b.ne tripleIt.__range_panic_0
+    arm64.b tripleIt.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_1
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x0, x2
+    arm64.epilogue stack_size=16
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.mov x0, #5
+    arm64.bl doubleIt
+    arm64.str x0, [x29, #-8]
+    arm64.mov x0, #3
+    arm64.bl tripleIt
+    arm64.ldr x1, [x29, #-8]
+    arm64.add x2, x1, x0
+    arm64.mov x0, #0
+    arm64.cmp x2, x0
+    arm64.cset x1, lt
+    arm64.mov x0, #255
+    arm64.cmp x2, x0
+    arm64.cset x3, gt
+    arm64.orr x0, x1, x3
+    arm64.cmp x0, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_2
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x0, x2
+    arm64.epilogue stack_size=32
+    arm64.ret
+  }
+}
+---

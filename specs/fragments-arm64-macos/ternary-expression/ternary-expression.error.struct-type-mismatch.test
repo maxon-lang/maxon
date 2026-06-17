@@ -1,0 +1,30 @@
+// Test: ternary-expression.error.struct-type-mismatch
+typealias Integer = int(i64.min to i64.max)
+
+type Cat
+	export var legs as Integer
+
+	static function create() returns Self
+		return Self{legs: 4}
+	end 'create'
+end 'Cat'
+
+type Dog
+	export var tails as Integer
+
+	static function create() returns Self
+		return Self{tails: 1}
+	end 'create'
+end 'Dog'
+
+function main() returns ExitCode
+	let flag = true
+	let x = Cat.create() if flag else Dog.create()
+	return x.legs
+end 'main'
+---
+MaxoncStderr: ```
+error E2028: specs/fragments/ternary-expression/ternary-expression.error.struct-type-mismatch.test:22:23: ternary expression type mismatch: true branch is 'Cat' but false branch is 'Dog'
+```
+---
+---

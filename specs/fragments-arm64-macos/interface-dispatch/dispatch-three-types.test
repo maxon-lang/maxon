@@ -1,0 +1,233 @@
+// Test: dispatch-three-types
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Valued
+	function value() returns Integer
+end 'Valued'
+
+type One implements Valued
+	function value() returns Integer
+		return 1
+	end 'value'
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+end 'One'
+
+type Two implements Valued
+	function value() returns Integer
+		return 2
+	end 'value'
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Two'
+
+type Three implements Valued
+	function value() returns Integer
+		return 3
+	end 'value'
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Three'
+
+function getValue(v Valued) returns Integer
+	return v.value()
+end 'getValue'
+
+function main() returns ExitCode
+	let a = One.create()
+	let b = Two.create()
+	let c = Three.create()
+	return getValue(a) + getValue(b) + getValue(c)
+end 'main'
+---
+ExitCode: 6
+---
+// CompiledIR
+module {
+  func @One.value(__self_ptr: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.mov x1, #1
+    arm64.str x0, [x29, #-8]
+    arm64.mov x0, x1
+    arm64.epilogue stack_size=32
+    arm64.ret
+  }
+  func @One.create() -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x0, #8
+    arm64.mov x1, #0
+    arm64.mov x2, #14
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x1, [x29, #-8]
+    arm64.mov x0, x1
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @Two.value(__self_ptr: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.mov x1, #2
+    arm64.str x0, [x29, #-8]
+    arm64.mov x0, x1
+    arm64.epilogue stack_size=32
+    arm64.ret
+  }
+  func @Two.create() -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x0, #8
+    arm64.mov x1, #0
+    arm64.mov x2, #15
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x1, [x29, #-8]
+    arm64.mov x0, x1
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @Three.value(__self_ptr: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.mov x1, #3
+    arm64.str x0, [x29, #-8]
+    arm64.mov x0, x1
+    arm64.epilogue stack_size=32
+    arm64.ret
+  }
+  func @Three.create() -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x0, #8
+    arm64.mov x1, #0
+    arm64.mov x2, #16
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x1, [x29, #-8]
+    arm64.mov x0, x1
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=96
+    arm64.bl One.create
+    arm64.str x0, [x29, #-8]
+    arm64.bl Two.create
+    arm64.str x0, [x29, #-16]
+    arm64.bl Three.create
+    arm64.str x0, [x29, #-24]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl getValue$One
+    arm64.ldr x1, [x29, #-16]
+    arm64.str x0, [x29, #-32]
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl getValue$Two
+    arm64.ldr x2, [x29, #-32]
+    arm64.add x3, x2, x0
+    arm64.ldr x4, [x29, #-24]
+    arm64.str x3, [x29, #-40]
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl getValue$Three
+    arm64.ldr x5, [x29, #-40]
+    arm64.add x6, x5, x0
+    arm64.mov x7, #0
+    arm64.cmp x6, x7
+    arm64.cset x8, lt
+    arm64.mov x9, #255
+    arm64.cmp x6, x9
+    arm64.cset x10, gt
+    arm64.orr x11, x8, x10
+    arm64.cmp x11, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_7
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.ldr x0, [x29, #-24]
+    arm64.str x6, [x29, #-48]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_24
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_24
+    arm64.ldr x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_26
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_26
+    arm64.ldr x2, [x29, #-8]
+    arm64.cmp x2, #0
+    arm64.b.eq main.__skip_guarded_28
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_28
+    arm64.ldr x0, [x29, #-48]
+    arm64.epilogue stack_size=96
+    arm64.ret
+  }
+  func @getValue$One(v: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl One.value
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @getValue$Two(v: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl Two.value
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @getValue$Three(v: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl Three.value
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__destruct_One(ptr: i64) {
+  entry:
+    arm64.b __destruct_One.done
+  done:
+    arm64.ret
+  }
+  func @__destruct_Two(ptr: i64) {
+  entry:
+    arm64.b __destruct_Two.done
+  done:
+    arm64.ret
+  }
+  func @__destruct_Three(ptr: i64) {
+  entry:
+    arm64.b __destruct_Three.done
+  done:
+    arm64.ret
+  }
+}
+---

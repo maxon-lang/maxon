@@ -1,0 +1,146 @@
+// Test: error.rethrow-caught-binding
+
+typealias Integer = int(i64.min to i64.max)
+
+// Re-throw a caught `(e)` binding from an expression-form `try ... otherwise (e)`
+// handler. `outer` catches `inner`'s error into `e`, then `throw e` re-publishes
+// the SAME error to `outer`'s caller. The propagated variant must survive the
+// hop: `main` distinguishes `low` (1) from `high` (7) by re-throwing it again
+// and matching at the top, proving the ordinal carries through every re-throw.
+enum Fault implements Error
+	low
+	high
+end 'Fault'
+
+function inner() returns Integer throws Fault
+	throw Fault.high
+end 'inner'
+
+function outer() returns Integer throws Fault
+	return try inner() otherwise (e) 'h'
+		throw e
+	end 'h'
+end 'outer'
+
+function main() returns ExitCode
+	var code = 0 as ExitCode
+	try outer() otherwise (e) 'top'
+		match e 'm'
+			low then code = 1
+			high then code = 7
+		end 'm'
+	end 'top'
+	return code
+end 'main'
+---
+ExitCode: 7
+---
+// CompiledIR
+module {
+  func @inner() -> i64 {
+  entry:
+    arm64.mov x0, #1
+    arm64.mov x1, #1
+    arm64.add x2, x0, x1
+    arm64.mov x1, x2
+    arm64.mov x0, #0
+    arm64.ret
+  }
+  func @outer() -> i64 {
+  entry:
+    arm64.prologue stack_size=80
+    arm64.bl inner
+    arm64.str x1, [x29, #-8]
+    arm64.str x0, [x29, #-16]
+    arm64.mov x0, #0
+    arm64.cmp x1, x0
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne outer.otherwise_error_0
+    arm64.b outer.otherwise_continue_0
+  otherwise_error_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #1
+    arm64.sub x2, x0, x1
+    arm64.str x2, [x29, #-24]
+    arm64.ldr x3, [x29, #-24]
+    arm64.mov x4, #1
+    arm64.add x5, x3, x4
+    arm64.mov x1, x5
+    arm64.mov x0, #0
+    arm64.epilogue stack_size=80
+    arm64.ret
+  otherwise_continue_0:
+    arm64.ldr x0, [x29, #-16]
+    arm64.mov x1, #0
+    arm64.epilogue stack_size=80
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=80
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-8]
+    arm64.bl outer
+    arm64.str x1, [x29, #-16]
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.b.ne main.otherwise_error_0
+    arm64.b main.otherwise_continue_0
+  otherwise_error_0:
+    arm64.ldr x0, [x29, #-16]
+    arm64.mov x1, #1
+    arm64.sub x2, x0, x1
+    arm64.str x2, [x29, #-24]
+    arm64.b main.m_0.cmp0
+  m_0.cmp0:
+    arm64.ldr x0, [x29, #-24]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne main.m_0.case0
+    arm64.b main.m_0.cmp1
+  m_0.case0:
+    arm64.mov x0, #1
+    arm64.str x0, [x29, #-8]
+    arm64.b main.m_0.merge
+  m_0.cmp1:
+    arm64.ldr x0, [x29, #-24]
+    arm64.mov x1, #1
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne main.m_0.case1
+    arm64.b main.m_0.merge
+  m_0.case1:
+    arm64.mov x0, #7
+    arm64.str x0, [x29, #-8]
+    arm64.b main.m_0.merge
+  m_0.merge:
+    arm64.b main.otherwise_continue_0
+  otherwise_continue_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x3, #255
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_15
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue stack_size=80
+    arm64.ret
+  }
+}
+---

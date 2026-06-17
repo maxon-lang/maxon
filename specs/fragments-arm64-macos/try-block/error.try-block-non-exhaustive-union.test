@@ -1,0 +1,46 @@
+// Test: error.try-block-non-exhaustive-union
+typealias Score = int(0 to 100)
+
+enum ErrA implements Error
+    kaboom
+    bang
+end 'ErrA'
+
+enum ErrB implements Error
+    splat
+end 'ErrB'
+
+function callA(x bool) returns Score throws ErrA
+    if x 'c'
+        throw ErrA.kaboom
+    end 'c'
+    return 5
+end 'callA'
+
+function callB(x bool) returns Score throws ErrB
+    if x 'c'
+        throw ErrB.splat
+    end 'c'
+    return 6
+end 'callB'
+
+function main() returns ExitCode
+    var x = 0
+    try 'work'
+        let a = callA(false)
+        let b = callB(false)
+        x = a + b
+    end 'work'
+    otherwise (e) 'h'
+        match e 'k'
+            ErrA.kaboom then x = 1
+        end 'k'
+    end 'h'
+    return x
+end 'main'
+---
+MaxoncStderr: ```
+error E2026: specs/fragments/try-block/error.try-block-non-exhaustive-union.test:37:9: match on error union is not exhaustive, missing: ErrA.bang, ErrB.splat
+```
+---
+---

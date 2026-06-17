@@ -1,0 +1,102 @@
+// Test: match-statements.default-panic-non-enum
+typealias Integer = int(0 to 100)
+
+function classify(x Integer) returns Integer
+	return match x 'check'
+		1 gives 10
+		2 gives 20
+		default panic("unexpected value")
+	end 'check'
+end 'classify'
+
+function main() returns ExitCode
+	let result = classify(2)
+	if result == 20 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @classify(x: i64) -> u8 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x1, #0
+    arm64.str x1, [x29, #-8]
+    arm64.str x0, [x29, #-16]
+    arm64.b classify.check_0.cmp0
+  check_0.cmp0:
+    arm64.ldr x0, [x29, #-16]
+    arm64.mov x1, #1
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne classify.check_0.case0
+    arm64.b classify.check_0.cmp1
+  check_0.case0:
+    arm64.mov x0, #10
+    arm64.str x0, [x29, #-8]
+    arm64.b classify.check_0.merge
+  check_0.cmp1:
+    arm64.ldr x0, [x29, #-16]
+    arm64.mov x1, #2
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne classify.check_0.case1
+    arm64.b classify.check_0.case2
+  check_0.case1:
+    arm64.mov x0, #20
+    arm64.str x0, [x29, #-8]
+    arm64.b classify.check_0.merge
+  check_0.case2:
+    arm64.adrp_add_symdata x0, __panic_msg_26
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  check_0.merge:
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x3, #100
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne classify.__range_panic_0
+    arm64.b classify.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_27
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x0, #2
+    arm64.bl classify
+    arm64.mov x1, #20
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne main.check_0
+    arm64.b main.check_0.after
+  check_0:
+    arm64.mov x0, #1
+    arm64.epilogue stack_size=16
+    arm64.ret
+  check_0.after:
+    arm64.mov x0, #0
+    arm64.epilogue stack_size=16
+    arm64.ret
+  }
+}
+---

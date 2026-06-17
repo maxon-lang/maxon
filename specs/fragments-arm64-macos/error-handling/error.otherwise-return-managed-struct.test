@@ -1,0 +1,173 @@
+// Test: error.otherwise-return-managed-struct
+
+typealias Integer = int(i64.min to i64.max)
+
+// Regression: when a try call returns a heap-managed struct and the otherwise
+// branch returns early, the uninitialized __try_result_ slot must not be
+// decref'd on the error path (would crash mm_decref with garbage pointer).
+enum MyError implements Error
+	failed
+end 'MyError'
+
+type Box
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Box'
+
+function makeBox(flag bool) returns Box throws MyError
+	if flag 'check'
+		throw MyError.failed
+	end 'check'
+	return Box.create(7)
+end 'makeBox'
+
+function getBoxValue(flag bool) returns Integer
+	let box = try makeBox(flag) otherwise return -1
+	return box.value
+end 'getBoxValue'
+
+function main() returns ExitCode
+	let good = getBoxValue(false)
+	if good == 7 'g'
+		let bad = getBoxValue(true)
+		if bad == -1 'b'
+			return 0
+		end 'b'
+	end 'g'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @Box.create(value: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-16]
+    arm64.mov x0, #8
+    arm64.mov x1, #0
+    arm64.mov x2, #4
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-16]
+    arm64.str x1, [x0, #0]
+    arm64.ldr x2, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x3, [x29, #-8]
+    arm64.mov x0, x3
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @makeBox(flag: i1) -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.cmp x0, #0
+    arm64.b.ne makeBox.check_0
+    arm64.b makeBox.check_0.after
+  check_0:
+    arm64.mov x0, #0
+    arm64.mov x1, #1
+    arm64.add x2, x0, x1
+    arm64.mov x1, x2
+    arm64.mov x0, #0
+    arm64.epilogue stack_size=48
+    arm64.ret
+  check_0.after:
+    arm64.mov x0, #7
+    arm64.bl Box.create
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @getBoxValue(flag: i1) -> i64 {
+  entry:
+    arm64.prologue stack_size=64
+    arm64.bl makeBox
+    arm64.str x0, [x29, #-8]
+    arm64.mov x0, #0
+    arm64.cmp x1, x0
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne getBoxValue.otherwise_stmt_0
+    arm64.b getBoxValue.otherwise_continue_0
+  otherwise_stmt_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.cmp x0, #0
+    arm64.b.eq getBoxValue.__skip_guarded_8
+    arm64.bl mm_decref
+    arm64.label getBoxValue.__skip_guarded_8
+    arm64.mov x0, #-1
+    arm64.epilogue stack_size=64
+    arm64.ret
+  otherwise_continue_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.str x0, [x29, #-16]
+    arm64.ldr x1, [x29, #-16]
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_incref
+    arm64.ldr x2, [x29, #-16]
+    arm64.ldr x3, [x2, #0]
+    arm64.ldr x4, [x29, #-8]
+    arm64.str x3, [x29, #-24]
+    arm64.cmp x4, #0
+    arm64.b.eq getBoxValue.__skip_guarded_17
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label getBoxValue.__skip_guarded_17
+    arm64.ldr x5, [x29, #-16]
+    arm64.cmp x5, #0
+    arm64.b.eq getBoxValue.__skip_guarded_19
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label getBoxValue.__skip_guarded_19
+    arm64.ldr x0, [x29, #-24]
+    arm64.epilogue stack_size=64
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x0, #0
+    arm64.bl getBoxValue
+    arm64.mov x1, #7
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne main.g_0
+    arm64.b main.g_0.merge
+  g_0:
+    arm64.mov x0, #1
+    arm64.bl getBoxValue
+    arm64.mov x1, #-1
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne main.b_0
+    arm64.b main.b_0.after
+  b_0:
+    arm64.mov x0, #0
+    arm64.epilogue stack_size=16
+    arm64.ret
+  b_0.after:
+    arm64.b main.g_0.merge
+  g_0.merge:
+    arm64.mov x0, #1
+    arm64.epilogue stack_size=16
+    arm64.ret
+  }
+  func @__destruct_Box(ptr: i64) {
+  entry:
+    arm64.b __destruct_Box.done
+  done:
+    arm64.ret
+  }
+}
+---

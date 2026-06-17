@@ -1,0 +1,190 @@
+// Test: lazy-static.multiple-fields
+typealias Count = int(0 to u64.max)
+
+type Cache
+	static var a = Cache.buildA()
+	static var b = Cache.buildB()
+	export var n as Count
+
+	static function buildA() returns Cache
+		return Cache{n: 10}
+	end 'buildA'
+
+	static function buildB() returns Cache
+		return Cache{n: 20}
+	end 'buildB'
+
+	export static function sum() returns Count
+		return Cache.a.n + Cache.b.n
+	end 'sum'
+end 'Cache'
+
+function main() returns ExitCode
+	return Cache.sum()
+end 'main'
+---
+ExitCode: 30
+---
+// CompiledIR
+module {
+  func @Cache.buildA() -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x0, #10
+    arm64.mov x0, #8
+    arm64.mov x1, #0
+    arm64.mov x2, #12
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-8]
+    arm64.mov x2, #10
+    arm64.str x2, [x1, #0]
+    arm64.ldr x3, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x4, [x29, #-8]
+    arm64.mov x0, x4
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @Cache.buildB() -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x0, #20
+    arm64.mov x0, #8
+    arm64.mov x1, #0
+    arm64.mov x2, #12
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-8]
+    arm64.mov x2, #20
+    arm64.str x2, [x1, #0]
+    arm64.ldr x3, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x4, [x29, #-8]
+    arm64.mov x0, x4
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @Cache.sum() -> u64 {
+  entry:
+    arm64.prologue stack_size=64
+    arm64.global_load x0, [Cache.a.__initialized]
+    arm64.cmp x0, #0
+    arm64.b.ne Cache.sum.__lazy_merge_0
+    arm64.b Cache.sum.__lazy_init_0
+  __lazy_merge_0:
+    arm64.global_load x0, [Cache.a]
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x2, [x1, #0]
+    arm64.global_load x3, [Cache.b.__initialized]
+    arm64.cmp x3, #0
+    arm64.str x2, [x29, #-24]
+    arm64.b.ne Cache.sum.__lazy_merge_1
+    arm64.b Cache.sum.__lazy_init_1
+  __lazy_init_0:
+    arm64.bl Cache.a.__lazy_init
+    arm64.b Cache.sum.__lazy_merge_0
+  __lazy_merge_1:
+    arm64.global_load x0, [Cache.b]
+    arm64.str x0, [x29, #-16]
+    arm64.ldr x1, [x29, #-16]
+    arm64.ldr x2, [x1, #0]
+    arm64.ldr x3, [x29, #-24]
+    arm64.add x4, x3, x2
+    arm64.mov x0, x4
+    arm64.epilogue stack_size=64
+    arm64.ret
+  __lazy_init_1:
+    arm64.bl Cache.b.__lazy_init
+    arm64.b Cache.sum.__lazy_merge_1
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.bl Cache.sum
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x1, #255
+    arm64.cmp x0, x1
+    arm64.cset x3, gt
+    arm64.orr x1, x2, x3
+    arm64.cmp x1, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_1
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue stack_size=16
+    arm64.ret
+  }
+  func @Cache.a.__lazy_init() {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x0, #1
+    arm64.global_store [Cache.a.__initialized], x0
+    arm64.bl Cache.buildA
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-8]
+    arm64.global_load x2, [Cache.a]
+    arm64.str x2, [x29, #-16]
+    arm64.cmp x2, #0
+    arm64.b.eq Cache.a.__lazy_init.__skip_guarded_6
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label Cache.a.__lazy_init.__skip_guarded_6
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x3, [x29, #-8]
+    arm64.global_store [Cache.a], x3
+    arm64.ldr x4, [x29, #-8]
+    arm64.cmp x4, #0
+    arm64.b.eq Cache.a.__lazy_init.__skip_guarded_10
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label Cache.a.__lazy_init.__skip_guarded_10
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @Cache.b.__lazy_init() {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x0, #1
+    arm64.global_store [Cache.b.__initialized], x0
+    arm64.bl Cache.buildB
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-8]
+    arm64.global_load x2, [Cache.b]
+    arm64.str x2, [x29, #-16]
+    arm64.cmp x2, #0
+    arm64.b.eq Cache.b.__lazy_init.__skip_guarded_6
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label Cache.b.__lazy_init.__skip_guarded_6
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x3, [x29, #-8]
+    arm64.global_store [Cache.b], x3
+    arm64.ldr x4, [x29, #-8]
+    arm64.cmp x4, #0
+    arm64.b.eq Cache.b.__lazy_init.__skip_guarded_10
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label Cache.b.__lazy_init.__skip_guarded_10
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__destruct_Cache(ptr: i64) {
+  entry:
+    arm64.b __destruct_Cache.done
+  done:
+    arm64.ret
+  }
+}
+---

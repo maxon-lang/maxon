@@ -1,0 +1,141 @@
+// Test: bare-call-resolves-free-fn-over-different-arity-method
+// --- file: lib/free.maxon
+typealias Code = int(0 to 125)
+
+export function store(base Code, offset Code, scale Code) returns Code
+	return base + offset + scale
+end 'store'
+
+// --- file: lib/cache.maxon
+typealias Code = int(0 to 125)
+
+export type Cache
+	export var last as Code
+
+	export static function make() returns Cache
+		return Cache{last: 0}
+	end 'make'
+
+	export function store(key Code)
+		self.last = key
+	end 'store'
+end 'Cache'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	let viaFree = store(2, offset: 3, scale: 4)
+	var c = Cache.make()
+	c.store(99)
+	return viaFree
+end 'main'
+---
+ExitCode: 9
+---
+// CompiledIR
+module {
+  func @lib.store(base: i64, offset: i64, scale: i64) -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x3, x0
+    arm64.mov x0, x1
+    arm64.add x1, x3, x0
+    arm64.mov x0, x2
+    arm64.add x2, x1, x0
+    arm64.mov x3, #0
+    arm64.mov x4, x2
+    arm64.cmp x4, x3
+    arm64.cset x5, lt
+    arm64.mov x6, #125
+    arm64.mov x7, x2
+    arm64.cmp x7, x6
+    arm64.cset x8, gt
+    arm64.orr x9, x5, x8
+    arm64.cmp x9, #0
+    arm64.b.ne lib.store.__range_panic_0
+    arm64.b lib.store.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_0
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x0, x2
+    arm64.epilogue stack_size=16
+    arm64.ret
+  }
+  func @lib.Cache.make() -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x0, #0
+    arm64.mov x0, #8
+    arm64.mov x1, #0
+    arm64.mov x2, #1
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-8]
+    arm64.mov x2, #0
+    arm64.str x2, [x1, #0]
+    arm64.ldr x3, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x4, [x29, #-8]
+    arm64.mov x0, x4
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @lib.Cache.store(__self_ptr: i64, key: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.str x1, [x0, #0]
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x0, #2
+    arm64.mov x1, #3
+    arm64.mov x2, #4
+    arm64.bl lib.store
+    arm64.str x0, [x29, #-16]
+    arm64.bl lib.Cache.make
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #99
+    arm64.bl lib.Cache.store
+    arm64.mov x1, #0
+    arm64.ldr x2, [x29, #-16]
+    arm64.cmp x2, x1
+    arm64.cset x3, lt
+    arm64.mov x4, #255
+    arm64.cmp x2, x4
+    arm64.cset x5, gt
+    arm64.orr x6, x3, x5
+    arm64.cmp x6, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_1
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_19
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_19
+    arm64.ldr x0, [x29, #-16]
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__destruct_Cache(ptr: i64) {
+  entry:
+    arm64.b __destruct_Cache.done
+  done:
+    arm64.ret
+  }
+}
+---

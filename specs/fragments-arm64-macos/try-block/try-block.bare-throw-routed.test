@@ -1,0 +1,242 @@
+// Test: try-block.bare-throw-routed
+typealias Count = int(0 to 1000)
+
+enum Kind
+    alpha
+    beta
+    gamma
+end 'Kind'
+
+enum MyError implements Error
+    fooErr
+    barErr
+end 'MyError'
+
+function dispatch(k Kind) returns Count throws MyError
+    var result = 0
+    try 'd'
+        match k 'm'
+            alpha then result = 1
+            beta then throw MyError.barErr
+            default throws MyError.fooErr
+        end 'm'
+    end 'd' otherwise (e) 'h'
+        match e 'he'
+            fooErr then result = 100
+            barErr then result = 200
+        end 'he'
+    end 'h'
+    return result
+end 'dispatch'
+
+function main() returns ExitCode
+    let a = try dispatch(Kind.alpha) otherwise panic("alpha escaped")
+    let b = try dispatch(Kind.beta) otherwise panic("beta escaped")
+    let c = try dispatch(Kind.gamma) otherwise panic("gamma escaped")
+    return a + b + c
+end 'main'
+---
+ExitCode: 301
+---
+// CompiledIR
+module {
+  func @dispatch(k: i64) -> u16 {
+  entry:
+    arm64.prologue stack_size=80
+    arm64.mov x1, #0
+    arm64.str x1, [x29, #-8]
+    arm64.str x0, [x29, #-16]
+    arm64.b dispatch.m_0.cmp0
+  m_0.cmp0:
+    arm64.ldr x0, [x29, #-16]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne dispatch.m_0.case0
+    arm64.b dispatch.m_0.cmp1
+  m_0.case0:
+    arm64.mov x0, #1
+    arm64.str x0, [x29, #-8]
+    arm64.b dispatch.m_0.merge
+  m_0.cmp1:
+    arm64.ldr x0, [x29, #-16]
+    arm64.mov x1, #1
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne dispatch.m_0.case1
+    arm64.b dispatch.m_0.case2
+  m_0.case1:
+    arm64.mov x0, #1
+    arm64.mov x1, #0
+    arm64.mov x2, #0
+    arm64.cmp x0, x2
+    arm64.cset x3, eq
+    arm64.mov x4, #0
+    arm64.cmp x3, #0
+    arm64.csel x5, x4, x1, ne
+    arm64.mov x6, #1
+    arm64.cmp x0, x6
+    arm64.cset x7, eq
+    arm64.mov x8, #1
+    arm64.cmp x7, #0
+    arm64.csel x9, x8, x5, ne
+    arm64.mov x10, #1
+    arm64.add x11, x9, x10
+    arm64.str x11, [x29, #-24]
+    arm64.b dispatch.try_block_err_0
+  m_0.case2:
+    arm64.mov x0, #0
+    arm64.mov x1, #0
+    arm64.mov x2, #0
+    arm64.cmp x0, x2
+    arm64.cset x3, eq
+    arm64.mov x4, #0
+    arm64.cmp x3, #0
+    arm64.csel x5, x4, x1, ne
+    arm64.mov x6, #1
+    arm64.cmp x0, x6
+    arm64.cset x7, eq
+    arm64.mov x8, #1
+    arm64.cmp x7, #0
+    arm64.csel x9, x8, x5, ne
+    arm64.mov x10, #1
+    arm64.add x11, x9, x10
+    arm64.str x11, [x29, #-24]
+    arm64.b dispatch.try_block_err_0
+  m_0.merge:
+    arm64.b dispatch.try_block_after_0
+  try_block_err_0:
+    arm64.ldr x0, [x29, #-24]
+    arm64.mov x1, #1
+    arm64.sub x2, x0, x1
+    arm64.str x2, [x29, #-32]
+    arm64.b dispatch.he_0.cmp0
+  he_0.cmp0:
+    arm64.ldr x0, [x29, #-32]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne dispatch.he_0.case0
+    arm64.b dispatch.he_0.cmp1
+  he_0.case0:
+    arm64.mov x0, #100
+    arm64.str x0, [x29, #-8]
+    arm64.b dispatch.he_0.merge
+  he_0.cmp1:
+    arm64.ldr x0, [x29, #-32]
+    arm64.mov x1, #1
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne dispatch.he_0.case1
+    arm64.b dispatch.he_0.merge
+  he_0.case1:
+    arm64.mov x0, #200
+    arm64.str x0, [x29, #-8]
+    arm64.b dispatch.he_0.merge
+  he_0.merge:
+    arm64.b dispatch.try_block_after_0
+  try_block_after_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x3, #1000
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne dispatch.__range_panic_0
+    arm64.b dispatch.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_0
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x1, #0
+    arm64.epilogue stack_size=80
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=112
+    arm64.mov x0, #0
+    arm64.bl dispatch
+    arm64.str x0, [x29, #-8]
+    arm64.mov x0, #0
+    arm64.cmp x1, x0
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne main.otherwise_panic_0
+    arm64.b main.otherwise_continue_0
+  otherwise_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_1
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  otherwise_continue_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.str x0, [x29, #-16]
+    arm64.mov x0, #1
+    arm64.bl dispatch
+    arm64.str x0, [x29, #-24]
+    arm64.mov x0, #0
+    arm64.cmp x1, x0
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne main.otherwise_panic_1
+    arm64.b main.otherwise_continue_1
+  otherwise_panic_1:
+    arm64.adrp_add_symdata x0, __panic_msg_2
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  otherwise_continue_1:
+    arm64.ldr x0, [x29, #-24]
+    arm64.str x0, [x29, #-32]
+    arm64.mov x0, #2
+    arm64.bl dispatch
+    arm64.str x0, [x29, #-40]
+    arm64.mov x0, #0
+    arm64.cmp x1, x0
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne main.otherwise_panic_2
+    arm64.b main.otherwise_continue_2
+  otherwise_panic_2:
+    arm64.adrp_add_symdata x0, __panic_msg_3
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  otherwise_continue_2:
+    arm64.ldr x0, [x29, #-40]
+    arm64.ldr x1, [x29, #-16]
+    arm64.ldr x2, [x29, #-32]
+    arm64.add x3, x1, x2
+    arm64.add x4, x3, x0
+    arm64.mov x5, #0
+    arm64.cmp x4, x5
+    arm64.cset x6, lt
+    arm64.mov x7, #255
+    arm64.cmp x4, x7
+    arm64.cset x8, gt
+    arm64.orr x9, x6, x8
+    arm64.cmp x9, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_4
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x0, x4
+    arm64.epilogue stack_size=112
+    arm64.ret
+  }
+}
+---

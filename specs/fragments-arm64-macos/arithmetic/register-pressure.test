@@ -1,0 +1,87 @@
+// Test: register-pressure
+
+typealias Integer = int(i64.min to i64.max)
+
+function manyVars(a Integer, b Integer, c Integer, d Integer, e Integer, f Integer) returns Integer
+	let v1 = a + 1
+	let v2 = b + 2
+	let v3 = c + 3
+	let v4 = d + 4
+	let v5 = e + 5
+	let v6 = f + 6
+	let v7 = v1 + v2
+	let v8 = v3 + v4
+	let v9 = v5 + v6
+	let v10 = v7 + v8
+	let v11 = v9 + v10
+	let v12 = v11 + v1 + v2 + v3 + v4 + v5 + v6
+	return v12
+end 'manyVars'
+
+function main() returns ExitCode
+	return manyVars(1, b: 2, c: 3, d: 4, e: 5, f: 6)
+end 'main'
+---
+ExitCode: 84
+---
+// CompiledIR
+module {
+  func @manyVars(a: i64, b: i64, c: i64, d: i64, e: i64, f: i64) -> i64 {
+  entry:
+    arm64.mov x6, #1
+    arm64.add x7, x0, x6
+    arm64.mov x0, #2
+    arm64.add x6, x1, x0
+    arm64.mov x1, #3
+    arm64.add x0, x2, x1
+    arm64.mov x2, #4
+    arm64.add x1, x3, x2
+    arm64.mov x3, #5
+    arm64.add x2, x4, x3
+    arm64.mov x4, #6
+    arm64.add x3, x5, x4
+    arm64.add x5, x7, x6
+    arm64.add x4, x0, x1
+    arm64.add x8, x2, x3
+    arm64.add x9, x5, x4
+    arm64.add x4, x8, x9
+    arm64.add x5, x4, x7
+    arm64.add x4, x5, x6
+    arm64.add x6, x4, x0
+    arm64.add x7, x6, x1
+    arm64.add x8, x7, x2
+    arm64.add x9, x8, x3
+    arm64.mov x0, x9
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x0, #1
+    arm64.mov x1, #2
+    arm64.mov x2, #3
+    arm64.mov x3, #4
+    arm64.mov x4, #5
+    arm64.mov x5, #6
+    arm64.bl manyVars
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x1, #255
+    arm64.cmp x0, x1
+    arm64.cset x3, gt
+    arm64.orr x1, x2, x3
+    arm64.cmp x1, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_11
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue stack_size=16
+    arm64.ret
+  }
+}
+---

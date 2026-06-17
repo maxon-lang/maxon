@@ -1,0 +1,106 @@
+// Test: try-block.bare-throw-in-nested-if
+enum MyError implements Error
+    failed
+end 'MyError'
+
+function main() returns ExitCode
+    var sum = 0
+    try 'work'
+        if true 'gate'
+            throw MyError.failed
+        end 'gate'
+    end 'work' otherwise (e) 'h'
+        match e 'k'
+            failed then sum = 5
+        end 'k'
+    end 'h'
+    return sum as ExitCode
+end 'main'
+---
+ExitCode: 5
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=80
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-8]
+    arm64.mov x1, #1
+    arm64.cmp x1, #0
+    arm64.b.ne main.gate_0
+    arm64.b main.gate_0.after
+  gate_0:
+    arm64.mov x0, #0
+    arm64.mov x1, #0
+    arm64.mov x2, #0
+    arm64.cmp x0, x2
+    arm64.cset x3, eq
+    arm64.mov x4, #0
+    arm64.cmp x3, #0
+    arm64.csel x5, x4, x1, ne
+    arm64.mov x6, #1
+    arm64.add x7, x5, x6
+    arm64.str x7, [x29, #-16]
+    arm64.b main.try_block_err_0
+  gate_0.after:
+    arm64.b main.try_block_after_0
+  try_block_err_0:
+    arm64.ldr x0, [x29, #-16]
+    arm64.mov x1, #1
+    arm64.sub x2, x0, x1
+    arm64.str x2, [x29, #-24]
+    arm64.b main.k_0.cmp0
+  k_0.cmp0:
+    arm64.ldr x0, [x29, #-24]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne main.k_0.case0
+    arm64.b main.k_0.merge
+  k_0.case0:
+    arm64.mov x0, #5
+    arm64.str x0, [x29, #-8]
+    arm64.b main.k_0.merge
+  k_0.merge:
+    arm64.b main.try_block_after_0
+  try_block_after_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x3, #255
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_0
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x1, #255
+    arm64.cmp x0, x1
+    arm64.cset x3, gt
+    arm64.orr x1, x2, x3
+    arm64.cmp x1, #0
+    arm64.b.ne main.__range_panic_1
+    arm64.b main.__range_ok_1
+  __range_panic_1:
+    arm64.adrp_add_symdata x0, __panic_msg_0
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_1:
+    arm64.epilogue stack_size=80
+    arm64.ret
+  }
+}
+---

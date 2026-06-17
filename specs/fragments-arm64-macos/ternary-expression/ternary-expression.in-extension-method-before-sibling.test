@@ -1,0 +1,259 @@
+// Test: ternary-expression.in-extension-method-before-sibling
+typealias Small = int(0 to 1000)
+
+interface Bounded
+	function lo() returns Small
+	function hi() returns Small
+end 'Bounded'
+
+extension Bounded
+	function pickSmaller() returns Small
+		let smaller = self.lo() if self.lo() < self.hi() else self.hi()
+		return smaller
+	end 'pickSmaller'
+
+	function describe() returns Small
+		return self.hi() - self.lo()
+	end 'describe'
+end 'Bounded'
+
+type Pair implements Bounded
+	let l as Small
+	let h as Small
+
+	function lo() returns Small
+		return l
+	end 'lo'
+
+	function hi() returns Small
+		return h
+	end 'hi'
+
+	static function create(l Small, h Small) returns Self
+		return Self{l: l, h: h}
+	end 'create'
+end 'Pair'
+
+function main() returns ExitCode
+	let p = Pair.create(7, h: 12)
+	let s = p.pickSmaller()
+	let d = p.describe()
+	return s + d
+end 'main'
+---
+ExitCode: 12
+---
+// CompiledIR
+module {
+  func @Pair.pickSmaller(__self_ptr: i64) -> u16 {
+  entry:
+    arm64.prologue stack_size=80
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl Pair.lo
+    arm64.ldr x1, [x29, #-8]
+    arm64.str x0, [x29, #-24]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl Pair.lo
+    arm64.ldr x2, [x29, #-8]
+    arm64.str x0, [x29, #-32]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl Pair.hi
+    arm64.ldr x3, [x29, #-32]
+    arm64.cmp x3, x0
+    arm64.cset x4, lt
+    arm64.ldr x5, [x29, #-8]
+    arm64.str x4, [x29, #-40]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl Pair.hi
+    arm64.ldr x6, [x29, #-40]
+    arm64.cmp x6, #0
+    arm64.str x0, [x29, #-48]
+    arm64.b.ne Pair.pickSmaller.ternary_0.true
+    arm64.b Pair.pickSmaller.ternary_0.false
+  ternary_0.true:
+    arm64.ldr x0, [x29, #-24]
+    arm64.str x0, [x29, #-16]
+    arm64.b Pair.pickSmaller.ternary_0.merge
+  ternary_0.false:
+    arm64.ldr x0, [x29, #-48]
+    arm64.str x0, [x29, #-16]
+    arm64.b Pair.pickSmaller.ternary_0.merge
+  ternary_0.merge:
+    arm64.ldr x0, [x29, #-16]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x3, #1000
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne Pair.pickSmaller.__range_panic_0
+    arm64.b Pair.pickSmaller.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_9
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue stack_size=80
+    arm64.ret
+  }
+  func @Pair.describe(__self_ptr: i64) -> u16 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl Pair.hi
+    arm64.ldr x1, [x29, #-8]
+    arm64.str x0, [x29, #-16]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl Pair.lo
+    arm64.ldr x2, [x29, #-16]
+    arm64.sub x3, x2, x0
+    arm64.mov x4, #0
+    arm64.cmp x3, x4
+    arm64.cset x5, lt
+    arm64.mov x6, #1000
+    arm64.cmp x3, x6
+    arm64.cset x7, gt
+    arm64.orr x8, x5, x7
+    arm64.cmp x8, #0
+    arm64.b.ne Pair.describe.__range_panic_0
+    arm64.b Pair.describe.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_10
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x0, x3
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @Pair.lo(__self_ptr: i64) -> u16 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x3, lt
+    arm64.mov x4, #1000
+    arm64.cmp x1, x4
+    arm64.cset x5, gt
+    arm64.orr x6, x3, x5
+    arm64.cmp x6, #0
+    arm64.b.ne Pair.lo.__range_panic_0
+    arm64.b Pair.lo.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_11
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x0, x1
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @Pair.hi(__self_ptr: i64) -> u16 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #8]
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x3, lt
+    arm64.mov x4, #1000
+    arm64.cmp x1, x4
+    arm64.cset x5, gt
+    arm64.orr x6, x3, x5
+    arm64.cmp x6, #0
+    arm64.b.ne Pair.hi.__range_panic_0
+    arm64.b Pair.hi.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_12
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x0, x1
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @Pair.create(l: i64, h: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=64
+    arm64.str x0, [x29, #-16]
+    arm64.str x1, [x29, #-24]
+    arm64.mov x0, #16
+    arm64.mov x1, #0
+    arm64.mov x2, #3
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-16]
+    arm64.str x1, [x0, #0]
+    arm64.ldr x2, [x29, #-8]
+    arm64.ldr x3, [x29, #-24]
+    arm64.str x3, [x2, #8]
+    arm64.ldr x4, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x5, [x29, #-8]
+    arm64.mov x0, x5
+    arm64.epilogue stack_size=64
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=64
+    arm64.mov x0, #7
+    arm64.mov x1, #12
+    arm64.bl Pair.create
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl Pair.pickSmaller
+    arm64.ldr x1, [x29, #-8]
+    arm64.str x0, [x29, #-16]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl Pair.describe
+    arm64.ldr x2, [x29, #-16]
+    arm64.add x3, x2, x0
+    arm64.mov x4, #0
+    arm64.cmp x3, x4
+    arm64.cset x5, lt
+    arm64.mov x6, #255
+    arm64.cmp x3, x6
+    arm64.cset x7, gt
+    arm64.orr x8, x5, x7
+    arm64.cmp x8, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_13
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.str x3, [x29, #-24]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_19
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_19
+    arm64.ldr x0, [x29, #-24]
+    arm64.epilogue stack_size=64
+    arm64.ret
+  }
+  func @__destruct_Pair(ptr: i64) {
+  entry:
+    arm64.b __destruct_Pair.done
+  done:
+    arm64.ret
+  }
+}
+---

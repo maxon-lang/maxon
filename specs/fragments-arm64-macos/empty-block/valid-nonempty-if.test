@@ -1,0 +1,27 @@
+// Test: valid-nonempty-if
+function main() returns ExitCode
+	if true 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.mov x0, #1
+    arm64.cmp x0, #0
+    arm64.b.ne main.check_0
+    arm64.b main.check_0.after
+  check_0:
+    arm64.mov x0, #1
+    arm64.ret
+  check_0.after:
+    arm64.mov x0, #0
+    arm64.ret
+  }
+}
+---

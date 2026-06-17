@@ -1,0 +1,99 @@
+// Test: struct-backing-match
+typealias Latency = int(0 to 50)
+
+type Meta
+	export let latency as Latency
+
+	static function create(latency Latency) returns Self
+		return Self{latency: latency}
+	end 'create'
+end 'Meta'
+
+enum TestOp
+	add = Meta.create(1)
+	sub = Meta.create(1)
+	mul = Meta.create(3)
+end 'TestOp'
+
+function main() returns ExitCode
+	let op = TestOp.sub
+	return match op 'dispatch'
+		add gives 10
+		sub gives 20
+		mul gives 30
+	end 'dispatch'
+end 'main'
+---
+ExitCode: 20
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=80
+    arm64.mov x0, #1
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-8]
+    arm64.mov x2, #0
+    arm64.str x2, [x29, #-16]
+    arm64.str x1, [x29, #-24]
+    arm64.b main.dispatch_0.cmp0
+  dispatch_0.cmp0:
+    arm64.ldr x0, [x29, #-24]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne main.dispatch_0.case0
+    arm64.b main.dispatch_0.cmp1
+  dispatch_0.case0:
+    arm64.mov x0, #10
+    arm64.str x0, [x29, #-16]
+    arm64.b main.dispatch_0.merge
+  dispatch_0.cmp1:
+    arm64.ldr x0, [x29, #-24]
+    arm64.mov x1, #1
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne main.dispatch_0.case1
+    arm64.b main.dispatch_0.cmp2
+  dispatch_0.case1:
+    arm64.mov x0, #20
+    arm64.str x0, [x29, #-16]
+    arm64.b main.dispatch_0.merge
+  dispatch_0.cmp2:
+    arm64.ldr x0, [x29, #-24]
+    arm64.mov x1, #2
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne main.dispatch_0.case2
+    arm64.b main.dispatch_0.merge
+  dispatch_0.case2:
+    arm64.mov x0, #30
+    arm64.str x0, [x29, #-16]
+    arm64.b main.dispatch_0.merge
+  dispatch_0.merge:
+    arm64.ldr x0, [x29, #-16]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x3, #255
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_3
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue stack_size=80
+    arm64.ret
+  }
+}
+---

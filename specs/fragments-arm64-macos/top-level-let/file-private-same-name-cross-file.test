@@ -1,0 +1,64 @@
+// Test: file-private-same-name-cross-file
+// --- file: featA/a.maxon
+let SHARED = 99
+
+export function getA() returns ExitCode
+	return SHARED as ExitCode
+end 'getA'
+
+// --- file: featB/b.maxon
+let SHARED = 7
+
+export function getB() returns ExitCode
+	return SHARED as ExitCode
+end 'getB'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return getA() - getB()
+end 'main'
+---
+ExitCode: 92
+---
+// CompiledIR
+module {
+  func @featA.getA() -> u8 {
+  entry:
+    arm64.mov x0, #99
+    arm64.ret
+  }
+  func @featB.getB() -> u8 {
+  entry:
+    arm64.mov x0, #7
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.bl featA.getA
+    arm64.str x0, [x29, #-8]
+    arm64.bl featB.getB
+    arm64.ldr x1, [x29, #-8]
+    arm64.sub x2, x1, x0
+    arm64.mov x0, #0
+    arm64.cmp x2, x0
+    arm64.cset x1, lt
+    arm64.mov x0, #255
+    arm64.cmp x2, x0
+    arm64.cset x3, gt
+    arm64.orr x0, x1, x3
+    arm64.cmp x0, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_0
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x0, x2
+    arm64.epilogue stack_size=32
+    arm64.ret
+  }
+}
+---

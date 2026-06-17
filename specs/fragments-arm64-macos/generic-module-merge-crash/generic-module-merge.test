@@ -1,0 +1,619 @@
+// Test: generic-module-merge
+typealias Count = int(0 to u64.max)
+typealias Integer = int(i64.min to i64.max)
+
+interface Mergeable uses Func
+	function itemCount() returns Count
+	function getItem(index Count) returns Func
+	function pushItem(item Func)
+	function opsCount() returns Count
+	function appendOps(source Self)
+	function cloneItem(src Func) returns Func
+end 'Mergeable'
+
+extension Mergeable
+	export function merge(source Self)
+		self.appendOps(source)
+		for i in 0 upto source.itemCount() 'eachItem'
+			let src = source.getItem(i)
+			let copy = self.cloneItem(src)
+			self.pushItem(copy)
+		end 'eachItem'
+	end 'merge'
+end 'Mergeable'
+
+type Wrapper
+	export var value as Integer
+	export static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Wrapper'
+
+typealias WrapperArray = Array with Wrapper
+
+type Container uses Op implements Mergeable with Wrapper
+	typealias OpArray = Array with Op
+
+	export var ops as OpArray
+	export var items as WrapperArray
+
+	export static function create() returns Self
+		return Self{
+			ops: OpArray.create(),
+			items: WrapperArray.create()
+		}
+	end 'create'
+
+	export function opsCount() returns Count
+		return self.ops.count()
+	end 'opsCount'
+
+	export function appendOps(source Self)
+		self.ops.append(source.ops)
+	end 'appendOps'
+
+	export function itemCount() returns Count
+		return self.items.count()
+	end 'itemCount'
+
+	export function getItem(index Count) returns Wrapper
+		return try self.items.get(index) otherwise 'unreachable'
+			panic("getItem: index out of bounds")
+		end 'unreachable'
+	end 'getItem'
+
+	export function pushItem(item Wrapper)
+		self.items.push(item)
+	end 'pushItem'
+
+	export function cloneItem(src Wrapper) returns Wrapper
+		return Wrapper.create(src.value)
+	end 'cloneItem'
+
+	export function pushOp(op Op)
+		self.ops.push(op)
+	end 'pushOp'
+end 'Container'
+
+typealias IntContainer = Container with Integer
+
+typealias ExitCode = int(0 to 125)
+
+function main() returns ExitCode
+	var a = IntContainer.create()
+	a.pushOp(10)
+	a.pushOp(20)
+	a.pushItem(Wrapper.create(99))
+
+	var b = IntContainer.create()
+	b.merge(a)
+
+	if b.opsCount() == 2 and b.itemCount() == 1 'check'
+		let item = b.getItem(0)
+		if item.value == 99 'valueCheck'
+			return 0
+		end 'valueCheck'
+	end 'check'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @Wrapper.create(value: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-16]
+    arm64.mov x0, #8
+    arm64.mov x1, #0
+    arm64.mov x2, #1
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-16]
+    arm64.str x1, [x0, #0]
+    arm64.ldr x2, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x3, [x29, #-8]
+    arm64.mov x0, x3
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=112
+    arm64.bl IntContainer.create
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #10
+    arm64.bl IntContainer.pushOp
+    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #20
+    arm64.bl IntContainer.pushOp
+    arm64.mov x0, #99
+    arm64.bl Wrapper.create
+    arm64.str x0, [x29, #-16]
+    arm64.ldr x2, [x29, #-8]
+    arm64.ldr x3, [x29, #-16]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-16]
+    arm64.bl IntContainer.pushItem
+    arm64.bl IntContainer.create
+    arm64.str x0, [x29, #-24]
+    arm64.ldr x4, [x29, #-24]
+    arm64.ldr x5, [x29, #-8]
+    arm64.ldr x0, [x29, #-24]
+    arm64.ldr x1, [x29, #-8]
+    arm64.bl IntContainer.merge
+    arm64.ldr x6, [x29, #-24]
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl IntContainer.opsCount
+    arm64.mov x7, #2
+    arm64.cmp x0, x7
+    arm64.cset x8, eq
+    arm64.mov x9, #0
+    arm64.str x9, [x29, #-32]
+    arm64.cmp x8, #0
+    arm64.b.ne main.shortAnd_0.rhs
+    arm64.b main.shortAnd_0.merge
+  shortAnd_0.rhs:
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl IntContainer.itemCount
+    arm64.mov x1, #1
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.str x2, [x29, #-32]
+    arm64.b main.shortAnd_0.merge
+  shortAnd_0.merge:
+    arm64.ldr x0, [x29, #-32]
+    arm64.cmp x0, #0
+    arm64.b.ne main.check_0
+    arm64.b main.check_0.merge
+  check_0:
+    arm64.ldr x0, [x29, #-24]
+    arm64.mov x1, #0
+    arm64.bl IntContainer.getItem
+    arm64.str x0, [x29, #-40]
+    arm64.ldr x1, [x29, #-40]
+    arm64.ldr x2, [x1, #0]
+    arm64.mov x3, #99
+    arm64.cmp x2, x3
+    arm64.cset x4, eq
+    arm64.cmp x4, #0
+    arm64.b.ne main.valueCheck_0
+    arm64.b main.valueCheck_0.after
+  valueCheck_0:
+    arm64.ldr x0, [x29, #-16]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_45
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_45
+    arm64.ldr x1, [x29, #-40]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_47
+    arm64.ldr x0, [x29, #-40]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_47
+    arm64.ldr x2, [x29, #-24]
+    arm64.cmp x2, #0
+    arm64.b.eq main.__skip_guarded_49
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_49
+    arm64.ldr x3, [x29, #-8]
+    arm64.cmp x3, #0
+    arm64.b.eq main.__skip_guarded_51
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_51
+    arm64.mov x0, #0
+    arm64.epilogue stack_size=112
+    arm64.ret
+  valueCheck_0.after:
+    arm64.ldr x0, [x29, #-40]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_54
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_54
+    arm64.b main.check_0.merge
+  check_0.merge:
+    arm64.ldr x0, [x29, #-16]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_58
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_58
+    arm64.ldr x1, [x29, #-24]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_60
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_60
+    arm64.ldr x2, [x29, #-8]
+    arm64.cmp x2, #0
+    arm64.b.eq main.__skip_guarded_62
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_62
+    arm64.mov x0, #1
+    arm64.epilogue stack_size=112
+    arm64.ret
+  }
+  func @IntContainer.merge(__self_ptr: i64, source: i64) {
+  entry:
+    arm64.prologue stack_size=112
+    arm64.str x0, [x29, #-8]
+    arm64.str x1, [x29, #-16]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-16]
+    arm64.bl IntContainer.appendOps
+    arm64.mov x2, #0
+    arm64.ldr x3, [x29, #-16]
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl IntContainer.itemCount
+    arm64.str x0, [x29, #-24]
+    arm64.mov x4, #0
+    arm64.str x4, [x29, #-32]
+    arm64.b IntContainer.merge.eachItem_0.header
+  eachItem_0.header:
+    arm64.ldr x0, [x29, #-32]
+    arm64.ldr x1, [x29, #-24]
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.cmp x2, #0
+    arm64.b.ne IntContainer.merge.eachItem_0
+    arm64.b IntContainer.merge.eachItem_0.exit
+  eachItem_0:
+    arm64.ldr x0, [x29, #-32]
+    arm64.ldr x1, [x29, #-16]
+    arm64.ldr x0, [x29, #-16]
+    arm64.ldr x1, [x29, #-32]
+    arm64.bl IntContainer.getItem
+    arm64.str x0, [x29, #-40]
+    arm64.ldr x2, [x29, #-8]
+    arm64.ldr x3, [x29, #-40]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-40]
+    arm64.bl IntContainer.cloneItem
+    arm64.str x0, [x29, #-48]
+    arm64.ldr x4, [x29, #-8]
+    arm64.ldr x5, [x29, #-48]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-48]
+    arm64.bl IntContainer.pushItem
+    arm64.ldr x6, [x29, #-48]
+    arm64.cmp x6, #0
+    arm64.b.eq IntContainer.merge.__skip_guarded_29
+    arm64.ldr x0, [x29, #-48]
+    arm64.bl mm_decref
+    arm64.label IntContainer.merge.__skip_guarded_29
+    arm64.ldr x7, [x29, #-40]
+    arm64.cmp x7, #0
+    arm64.b.eq IntContainer.merge.__skip_guarded_31
+    arm64.ldr x0, [x29, #-40]
+    arm64.bl mm_decref
+    arm64.label IntContainer.merge.__skip_guarded_31
+    arm64.b IntContainer.merge.eachItem_0.incr
+  eachItem_0.incr:
+    arm64.mov x0, #1
+    arm64.ldr x1, [x29, #-32]
+    arm64.add x2, x1, x0
+    arm64.str x2, [x29, #-32]
+    arm64.b IntContainer.merge.eachItem_0.header
+  eachItem_0.exit:
+    arm64.epilogue stack_size=112
+    arm64.ret
+  }
+  func @IntContainer.create() -> i64 {
+  entry:
+    arm64.prologue stack_size=80
+    arm64.bl Array_Integer.create
+    arm64.str x0, [x29, #-8]
+    arm64.bl WrapperArray.create
+    arm64.str x0, [x29, #-16]
+    arm64.adrp_add_func x0, __destruct_IntContainer
+    arm64.mov x1, x0
+    arm64.mov x0, #16
+    arm64.mov x2, #8
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-24]
+    arm64.ldr x2, [x29, #-8]
+    arm64.ldr x3, [x29, #-24]
+    arm64.str x2, [x3, #0]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x4, [x29, #-16]
+    arm64.ldr x5, [x29, #-24]
+    arm64.str x4, [x5, #8]
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_incref
+    arm64.ldr x6, [x29, #-16]
+    arm64.cmp x6, #0
+    arm64.b.eq IntContainer.create.__skip_guarded_19
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label IntContainer.create.__skip_guarded_19
+    arm64.ldr x7, [x29, #-8]
+    arm64.cmp x7, #0
+    arm64.b.eq IntContainer.create.__skip_guarded_21
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label IntContainer.create.__skip_guarded_21
+    arm64.ldr x8, [x29, #-24]
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl mm_incref
+    arm64.ldr x9, [x29, #-24]
+    arm64.mov x0, x9
+    arm64.epilogue stack_size=80
+    arm64.ret
+  }
+  func @IntContainer.opsCount(__self_ptr: i64) -> u64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.str x1, [x29, #-16]
+    arm64.ldr x2, [x29, #-16]
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl Array_Integer.count
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @IntContainer.appendOps(__self_ptr: i64, source: i64) {
+  entry:
+    arm64.prologue stack_size=80
+    arm64.str x0, [x29, #-8]
+    arm64.str x1, [x29, #-16]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.str x1, [x29, #-24]
+    arm64.ldr x2, [x29, #-16]
+    arm64.ldr x3, [x2, #0]
+    arm64.str x3, [x29, #-32]
+    arm64.ldr x4, [x29, #-24]
+    arm64.ldr x5, [x29, #-32]
+    arm64.ldr x0, [x29, #-24]
+    arm64.ldr x1, [x29, #-32]
+    arm64.bl Array_Integer.append
+    arm64.epilogue stack_size=80
+    arm64.ret
+  }
+  func @IntContainer.itemCount(__self_ptr: i64) -> u64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #8]
+    arm64.str x1, [x29, #-16]
+    arm64.ldr x2, [x29, #-16]
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl WrapperArray.count
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @IntContainer.getItem(__self_ptr: i64, index: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=80
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x2, [x0, #8]
+    arm64.str x2, [x29, #-16]
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl WrapperArray.get
+    arm64.str x0, [x29, #-24]
+    arm64.mov x0, #0
+    arm64.cmp x1, x0
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne IntContainer.getItem.otherwise_error_0
+    arm64.b IntContainer.getItem.otherwise_continue_0
+  otherwise_error_0:
+    arm64.adrp_add_symdata x0, __panic_msg_0
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  otherwise_continue_0:
+    arm64.ldr x0, [x29, #-24]
+    arm64.epilogue stack_size=80
+    arm64.ret
+  }
+  func @IntContainer.pushItem(__self_ptr: i64, item: i64) {
+  entry:
+    arm64.prologue stack_size=80
+    arm64.str x0, [x29, #-8]
+    arm64.str x1, [x29, #-16]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #8]
+    arm64.str x1, [x29, #-24]
+    arm64.ldr x2, [x29, #-24]
+    arm64.ldr x3, [x29, #-16]
+    arm64.ldr x0, [x29, #-24]
+    arm64.ldr x1, [x29, #-16]
+    arm64.bl WrapperArray.push
+    arm64.epilogue stack_size=80
+    arm64.ret
+  }
+  func @IntContainer.cloneItem(__self_ptr: i64, src: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=64
+    arm64.str x1, [x29, #-8]
+    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x2, [x1, #0]
+    arm64.str x0, [x29, #-24]
+    arm64.mov x0, x2
+    arm64.bl Wrapper.create
+    arm64.str x0, [x29, #-16]
+    arm64.ldr x0, [x29, #-16]
+    arm64.epilogue stack_size=64
+    arm64.ret
+  }
+  func @IntContainer.pushOp(__self_ptr: i64, op: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x2, [x0, #0]
+    arm64.str x2, [x29, #-16]
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl Array_Integer.push
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__destruct_Wrapper(ptr: i64) {
+  entry:
+    arm64.b __destruct_Wrapper.done
+  done:
+    arm64.ret
+  }
+  func @__destruct___ManagedMemory_Wrapper(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #16]
+    arm64.mov x2, #-1
+    arm64.cmp x1, x2
+    arm64.cset x3, eq
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct___ManagedMemory_Wrapper.slice_cleanup_0
+    arm64.b __destruct___ManagedMemory_Wrapper.check_owned_0
+  slice_cleanup_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #32]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct___ManagedMemory_Wrapper.__skip_guarded_9
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct___ManagedMemory_Wrapper.__skip_guarded_9
+    arm64.b __destruct___ManagedMemory_Wrapper.skip_buf_0
+  check_owned_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #16]
+    arm64.mov x2, #-2
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct___ManagedMemory_Wrapper.free_buf_0
+    arm64.b __destruct___ManagedMemory_Wrapper.skip_buf_0
+  free_buf_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref_managed_elements
+    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x2, [x1, #0]
+    arm64.mov x0, x2
+    arm64.bl mm_raw_free
+    arm64.b __destruct___ManagedMemory_Wrapper.skip_buf_0
+  skip_buf_0:
+    arm64.b __destruct___ManagedMemory_Wrapper.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__destruct_WrapperArray(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct_WrapperArray.__skip_guarded_4
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct_WrapperArray.__skip_guarded_4
+    arm64.b __destruct_WrapperArray.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__destruct___ManagedMemory_Integer(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #16]
+    arm64.mov x2, #-1
+    arm64.cmp x1, x2
+    arm64.cset x3, eq
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct___ManagedMemory_Integer.slice_cleanup_0
+    arm64.b __destruct___ManagedMemory_Integer.check_owned_0
+  slice_cleanup_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #32]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct___ManagedMemory_Integer.__skip_guarded_9
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct___ManagedMemory_Integer.__skip_guarded_9
+    arm64.b __destruct___ManagedMemory_Integer.skip_buf_0
+  check_owned_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #16]
+    arm64.mov x2, #-2
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct___ManagedMemory_Integer.free_buf_0
+    arm64.b __destruct___ManagedMemory_Integer.skip_buf_0
+  free_buf_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.mov x0, x1
+    arm64.bl mm_raw_free
+    arm64.b __destruct___ManagedMemory_Integer.skip_buf_0
+  skip_buf_0:
+    arm64.b __destruct___ManagedMemory_Integer.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__destruct_Array_Integer(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct_Array_Integer.__skip_guarded_4
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct_Array_Integer.__skip_guarded_4
+    arm64.b __destruct_Array_Integer.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__destruct_IntContainer(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=64
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct_IntContainer.__skip_guarded_4
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct_IntContainer.__skip_guarded_4
+    arm64.ldr x2, [x29, #-8]
+    arm64.ldr x3, [x2, #8]
+    arm64.str x3, [x29, #-24]
+    arm64.cmp x3, #0
+    arm64.b.eq __destruct_IntContainer.__skip_guarded_7
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl mm_decref
+    arm64.label __destruct_IntContainer.__skip_guarded_7
+    arm64.b __destruct_IntContainer.done
+  done:
+    arm64.epilogue stack_size=64
+    arm64.ret
+  }
+}
+---

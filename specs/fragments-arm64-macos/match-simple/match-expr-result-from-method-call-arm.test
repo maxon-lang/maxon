@@ -1,0 +1,354 @@
+// Test: match-expr-result-from-method-call-arm
+typealias Idx = int(0 to 100)
+
+type Lookup
+	var names as StringArray
+
+	export static function make() returns Lookup
+		var a = StringArray.create()
+		a.push("alpha")
+		return Lookup{names: a}
+	end 'make'
+
+	export function getName(i Idx) returns String
+		return try self.names.get(i) otherwise "?"
+	end 'getName'
+
+	export function nameLen(t Idx) returns Idx
+		let name = match t 'pick'
+			0 gives self.getName(0)
+			default panic("empty")
+		end 'pick'
+		return name.byteLength() as Idx
+	end 'nameLen'
+end 'Lookup'
+
+function main() returns ExitCode
+	var l = Lookup.make()
+	return l.nameLen(0)
+end 'main'
+---
+ExitCode: 5
+---
+// CompiledIR
+module {
+  func @Lookup.make() -> i64 {
+  entry:
+    arm64.prologue stack_size=96
+    arm64.bl StringArray.create
+    arm64.str x0, [x29, #-8]
+    arm64.adrp_add_rdata x0, __str_0
+    arm64.mov x1, x0
+    arm64.mov x2, #5
+    arm64.adrp_add_func x3, __destruct_String
+    arm64.mov x4, x3
+    arm64.str x1, [x29, #-40]
+    arm64.mov x1, x4
+    arm64.mov x0, #16
+    arm64.mov x2, #2
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-16]
+    arm64.adrp_add_func x5, __destruct___ManagedMemory
+    arm64.mov x6, x5
+    arm64.mov x1, x6
+    arm64.mov x0, #40
+    arm64.mov x2, #3
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-24]
+    arm64.mov x7, #-2
+    arm64.mov x8, #1
+    arm64.mov x9, #0
+    arm64.ldr x10, [x29, #-24]
+    arm64.ldr x11, [x29, #-40]
+    arm64.str x11, [x10, #0]
+    arm64.ldr x12, [x29, #-24]
+    arm64.mov x13, #5
+    arm64.str x13, [x12, #8]
+    arm64.ldr x14, [x29, #-24]
+    arm64.str x7, [x14, #16]
+    arm64.ldr x15, [x29, #-24]
+    arm64.str x8, [x15, #24]
+    arm64.ldr x0, [x29, #-24]
+    arm64.str x9, [x0, #32]
+    arm64.ldr x0, [x29, #-24]
+    arm64.ldr x1, [x29, #-16]
+    arm64.str x0, [x1, #0]
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl mm_incref
+    arm64.mov x0, #1
+    arm64.ldr x1, [x29, #-16]
+    arm64.str x0, [x1, #8]
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-16]
+    arm64.bl StringArray.push
+    arm64.adrp_add_func x0, __destruct_Lookup
+    arm64.mov x1, x0
+    arm64.mov x0, #8
+    arm64.mov x2, #4
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-32]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-32]
+    arm64.str x0, [x1, #0]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-16]
+    arm64.cmp x0, #0
+    arm64.b.eq Lookup.make.__skip_guarded_54
+    arm64.bl mm_decref
+    arm64.label Lookup.make.__skip_guarded_54
+    arm64.ldr x0, [x29, #-8]
+    arm64.cmp x0, #0
+    arm64.b.eq Lookup.make.__skip_guarded_56
+    arm64.bl mm_decref
+    arm64.label Lookup.make.__skip_guarded_56
+    arm64.ldr x0, [x29, #-32]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-32]
+    arm64.epilogue stack_size=96
+    arm64.ret
+  }
+  func @Lookup.getName(__self_ptr: i64, i: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=128
+    arm64.mov x2, #0
+    arm64.str x2, [x29, #-8]
+    arm64.mov x2, #0
+    arm64.str x2, [x29, #-16]
+    arm64.str x0, [x29, #-24]
+    arm64.ldr x0, [x29, #-24]
+    arm64.ldr x2, [x0, #0]
+    arm64.str x2, [x29, #-32]
+    arm64.ldr x0, [x29, #-32]
+    arm64.bl StringArray.get
+    arm64.str x0, [x29, #-40]
+    arm64.mov x0, #0
+    arm64.cmp x1, x0
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne Lookup.getName.otherwise_default_error_0
+    arm64.b Lookup.getName.otherwise_default_success_0
+  otherwise_default_error_0:
+    arm64.adrp_add_rdata x0, __str_1
+    arm64.mov x1, x0
+    arm64.mov x2, #1
+    arm64.adrp_add_func x3, __destruct_String
+    arm64.mov x4, x3
+    arm64.str x1, [x29, #-56]
+    arm64.mov x1, x4
+    arm64.mov x0, #16
+    arm64.mov x2, #2
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.adrp_add_func x5, __destruct___ManagedMemory
+    arm64.mov x6, x5
+    arm64.mov x1, x6
+    arm64.mov x0, #40
+    arm64.mov x2, #3
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-48]
+    arm64.mov x7, #-2
+    arm64.mov x8, #1
+    arm64.mov x9, #0
+    arm64.ldr x10, [x29, #-48]
+    arm64.ldr x11, [x29, #-56]
+    arm64.str x11, [x10, #0]
+    arm64.ldr x12, [x29, #-48]
+    arm64.mov x13, #1
+    arm64.str x13, [x12, #8]
+    arm64.ldr x14, [x29, #-48]
+    arm64.str x7, [x14, #16]
+    arm64.ldr x15, [x29, #-48]
+    arm64.str x8, [x15, #24]
+    arm64.ldr x0, [x29, #-48]
+    arm64.str x9, [x0, #32]
+    arm64.ldr x0, [x29, #-48]
+    arm64.ldr x1, [x29, #-8]
+    arm64.str x0, [x1, #0]
+    arm64.ldr x0, [x29, #-48]
+    arm64.bl mm_incref
+    arm64.mov x0, #1
+    arm64.ldr x1, [x29, #-8]
+    arm64.str x0, [x1, #8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-8]
+    arm64.str x0, [x29, #-16]
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_incref
+    arm64.b Lookup.getName.otherwise_default_continue_0
+  otherwise_default_success_0:
+    arm64.ldr x0, [x29, #-16]
+    arm64.cmp x0, #0
+    arm64.b.eq Lookup.getName.__skip_guarded_59
+    arm64.bl mm_decref
+    arm64.label Lookup.getName.__skip_guarded_59
+    arm64.ldr x1, [x29, #-40]
+    arm64.str x1, [x29, #-16]
+    arm64.b Lookup.getName.otherwise_default_continue_0
+  otherwise_default_continue_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.cmp x0, #0
+    arm64.b.eq Lookup.getName.__skip_guarded_64
+    arm64.bl mm_decref
+    arm64.label Lookup.getName.__skip_guarded_64
+    arm64.ldr x1, [x29, #-16]
+    arm64.mov x0, x1
+    arm64.epilogue stack_size=128
+    arm64.ret
+  }
+  func @Lookup.nameLen(__self_ptr: i64, t: i64) -> u8 {
+  entry:
+    arm64.prologue stack_size=112
+    arm64.str x0, [x29, #-8]
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-16]
+    arm64.str x1, [x29, #-24]
+    arm64.b Lookup.nameLen.pick_0.cmp0
+  pick_0.cmp0:
+    arm64.ldr x0, [x29, #-24]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne Lookup.nameLen.pick_0.case0
+    arm64.b Lookup.nameLen.pick_0.case1
+  pick_0.case0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.bl Lookup.getName
+    arm64.str x0, [x29, #-32]
+    arm64.ldr x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq Lookup.nameLen.__skip_guarded_16
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label Lookup.nameLen.__skip_guarded_16
+    arm64.ldr x2, [x29, #-32]
+    arm64.str x2, [x29, #-16]
+    arm64.ldr x3, [x29, #-16]
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_incref
+    arm64.ldr x4, [x29, #-32]
+    arm64.cmp x4, #0
+    arm64.b.eq Lookup.nameLen.__skip_guarded_21
+    arm64.ldr x0, [x29, #-32]
+    arm64.bl mm_decref
+    arm64.label Lookup.nameLen.__skip_guarded_21
+    arm64.b Lookup.nameLen.pick_0.merge
+  pick_0.case1:
+    arm64.ldr x0, [x29, #-16]
+    arm64.cmp x0, #0
+    arm64.b.eq Lookup.nameLen.__skip_guarded_24
+    arm64.bl mm_decref
+    arm64.label Lookup.nameLen.__skip_guarded_24
+    arm64.mov x1, #0
+    arm64.str x1, [x29, #-16]
+    arm64.adrp_add_symdata x2, __panic_msg_12
+    arm64.mov x3, x2
+    arm64.mov x0, x3
+    arm64.bl mrt_panic
+  pick_0.merge:
+    arm64.ldr x0, [x29, #-16]
+    arm64.str x0, [x29, #-40]
+    arm64.ldr x1, [x29, #-40]
+    arm64.ldr x0, [x29, #-40]
+    arm64.bl stdlib.String.byteLength
+    arm64.mov x2, #0
+    arm64.cmp x0, x2
+    arm64.cset x3, lt
+    arm64.mov x4, #100
+    arm64.cmp x0, x4
+    arm64.cset x5, gt
+    arm64.orr x6, x3, x5
+    arm64.cmp x6, #0
+    arm64.b.ne Lookup.nameLen.__range_panic_0
+    arm64.b Lookup.nameLen.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_13
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x1, #100
+    arm64.cmp x0, x1
+    arm64.cset x3, gt
+    arm64.orr x1, x2, x3
+    arm64.cmp x1, #0
+    arm64.b.ne Lookup.nameLen.__range_panic_1
+    arm64.b Lookup.nameLen.__range_ok_1
+  __range_panic_1:
+    arm64.adrp_add_symdata x0, __panic_msg_13
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_1:
+    arm64.ldr x1, [x29, #-16]
+    arm64.str x0, [x29, #-48]
+    arm64.cmp x1, #0
+    arm64.b.eq Lookup.nameLen.__skip_guarded_53
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label Lookup.nameLen.__skip_guarded_53
+    arm64.ldr x0, [x29, #-48]
+    arm64.epilogue stack_size=112
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.bl Lookup.make
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.bl Lookup.nameLen
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x3, #255
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_14
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.ldr x1, [x29, #-8]
+    arm64.str x0, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_15
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_15
+    arm64.ldr x0, [x29, #-16]
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__destruct_Lookup(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct_Lookup.__skip_guarded_4
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct_Lookup.__skip_guarded_4
+    arm64.b __destruct_Lookup.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+---

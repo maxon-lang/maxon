@@ -1,0 +1,98 @@
+// Test: enum-exhaustive.default-throws
+enum Color
+		red
+		green
+		blue
+end 'Color'
+
+enum AppError
+		unmatched
+end 'AppError'
+
+typealias ColorCode = int(0 to 10)
+
+function checkColor(c Color) returns ColorCode throws AppError
+	match c 'check'
+		red then return 1
+		default throws AppError.unmatched
+	end 'check'
+end 'checkColor'
+
+function main() returns ExitCode
+	let result = try checkColor(Color.red) otherwise 'err'
+		return 99
+	end 'err'
+	return result
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @checkColor(c: i64) -> u8 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.b checkColor.check_0.cmp0
+  check_0.cmp0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne checkColor.check_0.case0
+    arm64.b checkColor.check_0.case1
+  check_0.case0:
+    arm64.mov x0, #1
+    arm64.mov x1, #0
+    arm64.epilogue stack_size=48
+    arm64.ret
+  check_0.case1:
+    arm64.mov x0, #0
+    arm64.mov x1, #1
+    arm64.add x2, x0, x1
+    arm64.mov x1, x2
+    arm64.mov x0, #0
+    arm64.epilogue stack_size=48
+    arm64.ret
+  check_0.merge:
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x0, #0
+    arm64.bl checkColor
+    arm64.str x0, [x29, #-8]
+    arm64.mov x0, #0
+    arm64.cmp x1, x0
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne main.otherwise_error_0
+    arm64.b main.otherwise_continue_0
+  otherwise_error_0:
+    arm64.mov x0, #99
+    arm64.epilogue stack_size=48
+    arm64.ret
+  otherwise_continue_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x3, #255
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_1
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+---

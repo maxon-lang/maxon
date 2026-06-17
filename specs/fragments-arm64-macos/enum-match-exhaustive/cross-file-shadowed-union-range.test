@@ -1,0 +1,178 @@
+// Test: cross-file-shadowed-union-range
+// --- file: spans.maxon
+export union BigSpan
+	condBr
+	cmp
+	call
+	br
+	ret
+end 'BigSpan'
+
+export union SpanOp
+	condBr
+	br
+end 'SpanOp'
+
+// --- file: main.maxon
+typealias Code = int(0 to 125)
+
+function classify(op SpanOp) returns Code
+	return match op 'check'
+		condBr to br gives 7
+	end 'check'
+end 'classify'
+
+function describeBig(op BigSpan) returns Code
+	return match op 'check'
+		condBr to ret gives 3
+	end 'check'
+end 'describeBig'
+
+function main() returns ExitCode
+	let span = classify(SpanOp.br)
+	let big = describeBig(BigSpan.call)
+	if big == 3 'bigOk'
+		return span
+	end 'bigOk'
+	return 99
+end 'main'
+---
+ExitCode: 7
+---
+// CompiledIR
+module {
+  func @classify(op: i64) -> u8 {
+  entry:
+    arm64.prologue stack_size=80
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.str x1, [x29, #-16]
+    arm64.str x0, [x29, #-24]
+    arm64.b classify.check_0.cmp0
+  check_0.cmp0:
+    arm64.ldr x0, [x29, #-24]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, ge
+    arm64.ldr x3, [x29, #-24]
+    arm64.mov x4, #1
+    arm64.cmp x3, x4
+    arm64.cset x5, le
+    arm64.and x6, x2, x5
+    arm64.cmp x6, #0
+    arm64.b.ne classify.check_0.case0
+    arm64.b classify.check_0.merge
+  check_0.case0:
+    arm64.mov x0, #7
+    arm64.str x0, [x29, #-16]
+    arm64.b classify.check_0.merge
+  check_0.merge:
+    arm64.ldr x0, [x29, #-16]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x3, #125
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne classify.__range_panic_0
+    arm64.b classify.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_0
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue stack_size=80
+    arm64.ret
+  }
+  func @describeBig(op: i64) -> u8 {
+  entry:
+    arm64.prologue stack_size=80
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.str x1, [x29, #-16]
+    arm64.str x0, [x29, #-24]
+    arm64.b describeBig.check_0.cmp0
+  check_0.cmp0:
+    arm64.ldr x0, [x29, #-24]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, ge
+    arm64.ldr x3, [x29, #-24]
+    arm64.mov x4, #4
+    arm64.cmp x3, x4
+    arm64.cset x5, le
+    arm64.and x6, x2, x5
+    arm64.cmp x6, #0
+    arm64.b.ne describeBig.check_0.case0
+    arm64.b describeBig.check_0.merge
+  check_0.case0:
+    arm64.mov x0, #3
+    arm64.str x0, [x29, #-16]
+    arm64.b describeBig.check_0.merge
+  check_0.merge:
+    arm64.ldr x0, [x29, #-16]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x3, #125
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne describeBig.__range_panic_0
+    arm64.b describeBig.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_1
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue stack_size=80
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x0, #1
+    arm64.bl classify
+    arm64.str x0, [x29, #-8]
+    arm64.mov x0, #2
+    arm64.bl describeBig
+    arm64.mov x1, #3
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne main.bigOk_0
+    arm64.b main.bigOk_0.after
+  bigOk_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x3, #255
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_2
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  bigOk_0.after:
+    arm64.mov x0, #99
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+---

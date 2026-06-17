@@ -1,0 +1,116 @@
+// Test: union-cases.match-exhaustive
+typealias Integer = int(i64.min to i64.max)
+
+union Shape
+	circle(radius Integer)
+	square(side Integer)
+	point
+end 'Shape'
+
+function describe(k Shape.unionCases) returns Integer
+	match k 'tag'
+		circle then return 100
+		square then return 200
+		point then return 300
+	end 'tag'
+end 'describe'
+
+function main() returns ExitCode
+	let c = Shape.unionCases.circle
+	let s = Shape.unionCases.square
+	let p = Shape.unionCases.point
+	let total = describe(c) + describe(s) + describe(p)
+	if total == 600 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @describe(k: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.b describe.tag_0.cmp0
+  tag_0.cmp0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne describe.tag_0.case0
+    arm64.b describe.tag_0.cmp1
+  tag_0.case0:
+    arm64.mov x0, #100
+    arm64.epilogue stack_size=48
+    arm64.ret
+  tag_0.cmp1:
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #1
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne describe.tag_0.case1
+    arm64.b describe.tag_0.cmp2
+  tag_0.case1:
+    arm64.mov x0, #200
+    arm64.epilogue stack_size=48
+    arm64.ret
+  tag_0.cmp2:
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #2
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne describe.tag_0.case2
+    arm64.b describe.tag_0.merge
+  tag_0.case2:
+    arm64.mov x0, #300
+    arm64.epilogue stack_size=48
+    arm64.ret
+  tag_0.merge:
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=96
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-8]
+    arm64.mov x1, #1
+    arm64.str x1, [x29, #-16]
+    arm64.mov x2, #2
+    arm64.str x2, [x29, #-24]
+    arm64.ldr x3, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl describe
+    arm64.ldr x4, [x29, #-16]
+    arm64.str x0, [x29, #-32]
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl describe
+    arm64.ldr x5, [x29, #-32]
+    arm64.add x6, x5, x0
+    arm64.ldr x7, [x29, #-24]
+    arm64.str x6, [x29, #-40]
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl describe
+    arm64.ldr x8, [x29, #-40]
+    arm64.add x9, x8, x0
+    arm64.mov x10, #600
+    arm64.cmp x9, x10
+    arm64.cset x11, eq
+    arm64.cmp x11, #0
+    arm64.b.ne main.check_0
+    arm64.b main.check_0.after
+  check_0:
+    arm64.mov x0, #0
+    arm64.epilogue stack_size=96
+    arm64.ret
+  check_0.after:
+    arm64.mov x0, #1
+    arm64.epilogue stack_size=96
+    arm64.ret
+  }
+}
+---

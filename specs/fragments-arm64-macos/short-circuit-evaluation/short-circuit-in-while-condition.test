@@ -1,0 +1,93 @@
+// Test: short-circuit-in-while-condition
+var trace = 0
+
+function check() returns bool
+	trace = trace + 1
+	return trace < 3
+end 'check'
+
+function alwaysFalse() returns bool
+	trace = trace + 100
+	return false
+end 'alwaysFalse'
+
+function main() returns ExitCode
+	while check() and alwaysFalse() 'loop'
+		return 99
+	end 'loop'
+	return trace
+end 'main'
+---
+ExitCode: 101
+---
+// CompiledIR
+module {
+  func @check() -> i1 {
+  entry:
+    arm64.global_load x0, [trace]
+    arm64.mov x1, #1
+    arm64.add x2, x0, x1
+    arm64.global_store [trace], x2
+    arm64.global_load x3, [trace]
+    arm64.mov x4, #3
+    arm64.cmp x3, x4
+    arm64.cset x5, lt
+    arm64.mov x0, x5
+    arm64.ret
+  }
+  func @alwaysFalse() -> i1 {
+  entry:
+    arm64.global_load x0, [trace]
+    arm64.mov x1, #100
+    arm64.add x2, x0, x1
+    arm64.global_store [trace], x2
+    arm64.mov x0, #0
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.b main.loop_0.header
+  loop_0.header:
+    arm64.bl check
+    arm64.mov x1, #0
+    arm64.str x1, [x29, #-8]
+    arm64.cmp x0, #0
+    arm64.b.ne main.shortAnd_0.rhs
+    arm64.b main.shortAnd_0.merge
+  shortAnd_0.rhs:
+    arm64.bl alwaysFalse
+    arm64.str x0, [x29, #-8]
+    arm64.b main.shortAnd_0.merge
+  shortAnd_0.merge:
+    arm64.ldr x0, [x29, #-8]
+    arm64.cmp x0, #0
+    arm64.b.ne main.loop_0
+    arm64.b main.loop_0.exit
+  loop_0:
+    arm64.mov x0, #99
+    arm64.epilogue stack_size=48
+    arm64.ret
+  loop_0.exit:
+    arm64.global_load x0, [trace]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x3, #255
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_8
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+---

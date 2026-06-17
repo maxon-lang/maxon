@@ -1,0 +1,116 @@
+// Test: function-backing.two-args
+
+typealias Integer = int(i64.min to i64.max)
+
+function addFn(a Integer, b Integer) returns Integer
+	return a + b
+end 'addFn'
+
+function subFn(a Integer, b Integer) returns Integer
+	return a - b
+end 'subFn'
+
+enum BinOp
+	add = addFn
+	sub = subFn
+end 'BinOp'
+
+function main() returns ExitCode
+	let addF = BinOp.add.rawValue
+	let subF = BinOp.sub.rawValue
+	return addF(30, 15) - subF(5, 2)
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @addFn(a: i64, b: i64) -> i64 {
+  entry:
+    arm64.add x2, x0, x1
+    arm64.mov x0, x2
+    arm64.ret
+  }
+  func @subFn(a: i64, b: i64) -> i64 {
+  entry:
+    arm64.sub x2, x0, x1
+    arm64.mov x0, x2
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x0, #0
+    arm64.mov x1, #0
+    arm64.mov x2, #0
+    arm64.cmp x0, x2
+    arm64.cset x3, eq
+    arm64.adrp_add_func x4, addFn
+    arm64.mov x5, x4
+    arm64.cmp x3, #0
+    arm64.csel x6, x5, x1, ne
+    arm64.mov x7, #1
+    arm64.cmp x0, x7
+    arm64.cset x8, eq
+    arm64.adrp_add_func x9, subFn
+    arm64.mov x10, x9
+    arm64.cmp x8, #0
+    arm64.csel x11, x10, x6, ne
+    arm64.mov x12, #1
+    arm64.mov x13, #0
+    arm64.mov x14, #0
+    arm64.cmp x12, x14
+    arm64.cset x15, eq
+    arm64.adrp_add_func x0, addFn
+    arm64.mov x1, x0
+    arm64.cmp x15, #0
+    arm64.csel x0, x1, x13, ne
+    arm64.mov x1, #1
+    arm64.cmp x12, x1
+    arm64.cset x2, eq
+    arm64.adrp_add_func x1, subFn
+    arm64.mov x3, x1
+    arm64.cmp x2, #0
+    arm64.csel x1, x3, x0, ne
+    arm64.mov x0, #30
+    arm64.mov x2, #15
+    arm64.mov x3, #0
+    arm64.str x1, [x29, #-8]
+    arm64.str x11, [x29, #-16]
+    arm64.mov x1, x2
+    arm64.mov x2, x3
+    arm64.blr x11
+    arm64.mov x1, #5
+    arm64.mov x2, #2
+    arm64.mov x3, #0
+    arm64.str x0, [x29, #-24]
+    arm64.ldr x4, [x29, #-8]
+    arm64.mov x9, x4
+    arm64.mov x0, x1
+    arm64.mov x1, x2
+    arm64.mov x2, x3
+    arm64.blr x9
+    arm64.ldr x1, [x29, #-24]
+    arm64.sub x2, x1, x0
+    arm64.mov x0, #0
+    arm64.cmp x2, x0
+    arm64.cset x1, lt
+    arm64.mov x0, #255
+    arm64.cmp x2, x0
+    arm64.cset x3, gt
+    arm64.orr x0, x1, x3
+    arm64.cmp x0, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_3
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x0, x2
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+---

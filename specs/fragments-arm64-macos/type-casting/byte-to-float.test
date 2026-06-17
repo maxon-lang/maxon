@@ -1,0 +1,54 @@
+// Test: byte-to-float
+
+typealias Float = float(f64.min to f64.max)
+typealias Byte = int(0 to u8.max)
+
+function toFloat(b Byte) returns Float
+	return b + 0.0
+end 'toFloat'
+
+function main() returns ExitCode
+	let b = 50 as Byte
+	let f = toFloat(b)
+	return trunc(f)
+end 'main'
+---
+ExitCode: 50
+---
+// CompiledIR
+module {
+  func @toFloat(b: i64) -> f64 {
+  entry:
+    arm64.fldr d0, [__float_0]
+    arm64.scvtf d1, x0
+    arm64.fadd d2, d1, d0
+    arm64.fmov d0, d2
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x0, #50
+    arm64.bl toFloat
+    arm64.fcvtzs x0, d0
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x3, #255
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_0
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue stack_size=16
+    arm64.ret
+  }
+}
+---

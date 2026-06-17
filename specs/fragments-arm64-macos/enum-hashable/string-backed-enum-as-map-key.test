@@ -1,0 +1,251 @@
+// Test: string-backed-enum-as-map-key
+enum Planet
+	earth = "Earth"
+	mars = "Mars"
+	venus = "Venus"
+end 'Planet'
+
+typealias Int = int(i64.min to i64.max)
+typealias PlanetMap = Map with (Planet, Int)
+
+function main() returns ExitCode
+	var m = PlanetMap.create()
+	try m.insert(Planet.earth, value: 1) otherwise ignore
+	try m.insert(Planet.mars, value: 2) otherwise ignore
+	try m.insert(Planet.venus, value: 3) otherwise ignore
+	let result = try m.get(Planet.mars) otherwise 0
+	return result
+end 'main'
+---
+ExitCode: 2
+---
+// CompiledIR
+module {
+  func @Planet.hash(self: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.bl stdlib.int.hash
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.epilogue stack_size=16
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=96
+    arm64.bl PlanetMap.create
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.mov x2, #1
+    arm64.bl PlanetMap.insert
+    arm64.ldr x0, [x29, #-8]
+    arm64.str x1, [x29, #-32]
+    arm64.mov x1, #1
+    arm64.mov x2, #2
+    arm64.bl PlanetMap.insert
+    arm64.ldr x0, [x29, #-8]
+    arm64.str x1, [x29, #-40]
+    arm64.mov x1, #2
+    arm64.mov x2, #3
+    arm64.bl PlanetMap.insert
+    arm64.ldr x0, [x29, #-8]
+    arm64.str x1, [x29, #-48]
+    arm64.mov x1, #1
+    arm64.bl PlanetMap.get
+    arm64.mov x2, #0
+    arm64.str x2, [x29, #-16]
+    arm64.str x0, [x29, #-24]
+    arm64.mov x0, #0
+    arm64.cmp x1, x0
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne main.otherwise_default_error_0
+    arm64.b main.otherwise_default_continue_0
+  otherwise_default_error_0:
+    arm64.ldr x0, [x29, #-16]
+    arm64.str x0, [x29, #-24]
+    arm64.b main.otherwise_default_continue_0
+  otherwise_default_continue_0:
+    arm64.ldr x0, [x29, #-24]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x3, #255
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_1
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.ldr x1, [x29, #-8]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_37
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_37
+    arm64.ldr x0, [x29, #-24]
+    arm64.epilogue stack_size=96
+    arm64.ret
+  }
+  func @__destruct___ManagedMemory_Planet(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #16]
+    arm64.mov x2, #-1
+    arm64.cmp x1, x2
+    arm64.cset x3, eq
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct___ManagedMemory_Planet.slice_cleanup_0
+    arm64.b __destruct___ManagedMemory_Planet.check_owned_0
+  slice_cleanup_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #32]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct___ManagedMemory_Planet.__skip_guarded_9
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct___ManagedMemory_Planet.__skip_guarded_9
+    arm64.b __destruct___ManagedMemory_Planet.skip_buf_0
+  check_owned_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #16]
+    arm64.mov x2, #-2
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct___ManagedMemory_Planet.free_buf_0
+    arm64.b __destruct___ManagedMemory_Planet.skip_buf_0
+  free_buf_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.mov x0, x1
+    arm64.bl mm_raw_free
+    arm64.b __destruct___ManagedMemory_Planet.skip_buf_0
+  skip_buf_0:
+    arm64.b __destruct___ManagedMemory_Planet.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__destruct_Array_Planet(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct_Array_Planet.__skip_guarded_4
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct_Array_Planet.__skip_guarded_4
+    arm64.b __destruct_Array_Planet.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__destruct___ManagedMemory_Int(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #16]
+    arm64.mov x2, #-1
+    arm64.cmp x1, x2
+    arm64.cset x3, eq
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct___ManagedMemory_Int.slice_cleanup_0
+    arm64.b __destruct___ManagedMemory_Int.check_owned_0
+  slice_cleanup_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #32]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct___ManagedMemory_Int.__skip_guarded_9
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct___ManagedMemory_Int.__skip_guarded_9
+    arm64.b __destruct___ManagedMemory_Int.skip_buf_0
+  check_owned_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #16]
+    arm64.mov x2, #-2
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct___ManagedMemory_Int.free_buf_0
+    arm64.b __destruct___ManagedMemory_Int.skip_buf_0
+  free_buf_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.mov x0, x1
+    arm64.bl mm_raw_free
+    arm64.b __destruct___ManagedMemory_Int.skip_buf_0
+  skip_buf_0:
+    arm64.b __destruct___ManagedMemory_Int.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__destruct_Array_Int(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct_Array_Int.__skip_guarded_4
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct_Array_Int.__skip_guarded_4
+    arm64.b __destruct_Array_Int.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__destruct_PlanetMap(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=64
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct_PlanetMap.__skip_guarded_4
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct_PlanetMap.__skip_guarded_4
+    arm64.ldr x2, [x29, #-8]
+    arm64.ldr x3, [x2, #8]
+    arm64.str x3, [x29, #-24]
+    arm64.cmp x3, #0
+    arm64.b.eq __destruct_PlanetMap.__skip_guarded_7
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl mm_decref
+    arm64.label __destruct_PlanetMap.__skip_guarded_7
+    arm64.ldr x4, [x29, #-8]
+    arm64.ldr x5, [x4, #16]
+    arm64.str x5, [x29, #-32]
+    arm64.cmp x5, #0
+    arm64.b.eq __destruct_PlanetMap.__skip_guarded_10
+    arm64.ldr x0, [x29, #-32]
+    arm64.bl mm_decref
+    arm64.label __destruct_PlanetMap.__skip_guarded_10
+    arm64.b __destruct_PlanetMap.done
+  done:
+    arm64.epilogue stack_size=64
+    arm64.ret
+  }
+}
+---

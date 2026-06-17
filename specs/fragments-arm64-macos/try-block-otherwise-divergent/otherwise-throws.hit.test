@@ -1,0 +1,124 @@
+// Test: otherwise-throws.hit
+typealias Integer = int(i64.min to i64.max)
+
+enum ThrowsHitInner implements Error
+	bad
+end 'ThrowsHitInner'
+
+enum ThrowsHitOuter implements Error
+	failed
+end 'ThrowsHitOuter'
+
+function maybeFail(b bool) returns Integer throws ThrowsHitInner
+	if b 'c'
+		throw ThrowsHitInner.bad
+	end 'c'
+	return 5
+end 'maybeFail'
+
+function compute() returns Integer throws ThrowsHitOuter
+	var total = 0
+	try 'work'
+		let a = maybeFail(true)
+		total = a
+	end 'work'
+	otherwise throws ThrowsHitOuter.failed
+	return total
+end 'compute'
+
+function main() returns ExitCode
+	let r = try compute() otherwise 99
+	return r
+end 'main'
+---
+ExitCode: 99
+---
+// CompiledIR
+module {
+  func @maybeFail(b: i1) -> i64 {
+  entry:
+    arm64.cmp x0, #0
+    arm64.b.ne maybeFail.c_0
+    arm64.b maybeFail.c_0.after
+  c_0:
+    arm64.mov x0, #0
+    arm64.mov x1, #1
+    arm64.add x2, x0, x1
+    arm64.mov x1, x2
+    arm64.mov x0, #0
+    arm64.ret
+  c_0.after:
+    arm64.mov x0, #5
+    arm64.mov x1, #0
+    arm64.ret
+  }
+  func @compute() -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x0, #1
+    arm64.bl maybeFail
+    arm64.str x0, [x29, #-8]
+    arm64.mov x0, #0
+    arm64.cmp x1, x0
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne compute.try_block_continue_0
+    arm64.b compute.try_block_err_0
+  try_block_continue_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.str x0, [x29, #-16]
+    arm64.b compute.try_block_after_0
+  try_block_err_0:
+    arm64.mov x0, #0
+    arm64.mov x1, #1
+    arm64.add x2, x0, x1
+    arm64.mov x1, x2
+    arm64.mov x0, #0
+    arm64.epilogue stack_size=48
+    arm64.ret
+  try_block_after_0:
+    arm64.ldr x0, [x29, #-16]
+    arm64.mov x1, #0
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.bl compute
+    arm64.mov x2, #99
+    arm64.str x2, [x29, #-8]
+    arm64.str x0, [x29, #-16]
+    arm64.mov x0, #0
+    arm64.cmp x1, x0
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne main.otherwise_default_error_0
+    arm64.b main.otherwise_default_continue_0
+  otherwise_default_error_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.str x0, [x29, #-16]
+    arm64.b main.otherwise_default_continue_0
+  otherwise_default_continue_0:
+    arm64.ldr x0, [x29, #-16]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x3, #255
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_3
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+---

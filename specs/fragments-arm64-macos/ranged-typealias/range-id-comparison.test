@@ -1,0 +1,31 @@
+// Test: range-id-comparison
+function main() returns ExitCode
+	let x = i32.max
+	if x == 2147483647 'isMax'
+		return 1
+	end 'isMax'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.mov x0, #2147483647
+    arm64.mov x1, #2147483647
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne main.isMax_0
+    arm64.b main.isMax_0.after
+  isMax_0:
+    arm64.mov x0, #1
+    arm64.ret
+  isMax_0.after:
+    arm64.mov x0, #0
+    arm64.ret
+  }
+}
+---

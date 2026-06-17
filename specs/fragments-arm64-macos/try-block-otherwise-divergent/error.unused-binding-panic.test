@@ -1,0 +1,29 @@
+// Test: error.unused-binding-panic
+typealias Integer = int(i64.min to i64.max)
+
+enum UnusedBindingError implements Error
+	bad
+end 'UnusedBindingError'
+
+function maybeFail(b bool) returns Integer throws UnusedBindingError
+	if b 'c'
+		throw UnusedBindingError.bad
+	end 'c'
+	return 7
+end 'maybeFail'
+
+function main() returns ExitCode
+	var total = 0
+	try 'work'
+		let a = maybeFail(true)
+		total = a
+	end 'work'
+	otherwise (e) panic("never read e")
+	return total
+end 'main'
+---
+MaxoncStderr: ```
+error E3012: specs/fragments/try-block-otherwise-divergent/error.unused-binding-panic.test:21:13: unused variable: 'e'
+```
+---
+---

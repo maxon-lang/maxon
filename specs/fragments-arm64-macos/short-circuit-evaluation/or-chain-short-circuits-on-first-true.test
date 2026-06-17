@@ -1,0 +1,93 @@
+// Test: or-chain-short-circuits-on-first-true
+var sideEffectCount = 0
+
+function trackAndReturn(result bool) returns bool
+	sideEffectCount = sideEffectCount + 1
+	return result
+end 'trackAndReturn'
+
+function main() returns ExitCode
+	let result = trackAndReturn(false) or trackAndReturn(true) or trackAndReturn(false)
+	if not result 'r'
+		return 99
+	end 'r'
+	return sideEffectCount
+end 'main'
+---
+ExitCode: 2
+---
+// CompiledIR
+module {
+  func @trackAndReturn(result: i1) -> i1 {
+  entry:
+    arm64.global_load x1, [sideEffectCount]
+    arm64.mov x2, #1
+    arm64.add x3, x1, x2
+    arm64.global_store [sideEffectCount], x3
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x0, #0
+    arm64.bl trackAndReturn
+    arm64.mov x1, #1
+    arm64.str x1, [x29, #-8]
+    arm64.mov x1, #1
+    arm64.eor x2, x0, x1
+    arm64.cmp x2, #0
+    arm64.b.ne main.shortOr_0.rhs
+    arm64.b main.shortOr_0.merge
+  shortOr_0.rhs:
+    arm64.mov x0, #1
+    arm64.bl trackAndReturn
+    arm64.str x0, [x29, #-8]
+    arm64.b main.shortOr_0.merge
+  shortOr_0.merge:
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #1
+    arm64.str x1, [x29, #-16]
+    arm64.mov x2, #1
+    arm64.eor x3, x0, x2
+    arm64.cmp x3, #0
+    arm64.b.ne main.shortOr_1.rhs
+    arm64.b main.shortOr_1.merge
+  shortOr_1.rhs:
+    arm64.mov x0, #0
+    arm64.bl trackAndReturn
+    arm64.str x0, [x29, #-16]
+    arm64.b main.shortOr_1.merge
+  shortOr_1.merge:
+    arm64.ldr x0, [x29, #-16]
+    arm64.mov x1, #1
+    arm64.eor x2, x0, x1
+    arm64.cmp x2, #0
+    arm64.b.ne main.r_0
+    arm64.b main.r_0.after
+  r_0:
+    arm64.mov x0, #99
+    arm64.epilogue stack_size=48
+    arm64.ret
+  r_0.after:
+    arm64.global_load x0, [sideEffectCount]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x3, #255
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_5
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+---

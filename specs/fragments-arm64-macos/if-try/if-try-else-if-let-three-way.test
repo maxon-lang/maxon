@@ -1,0 +1,107 @@
+// Test: if-try-else-if-let-three-way
+
+typealias Integer = int(i64.min to i64.max)
+
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function tryA() returns Integer throws MyError
+	throw MyError.failed
+end 'tryA'
+
+function tryB() returns Integer throws MyError
+	throw MyError.failed
+end 'tryB'
+
+function main() returns ExitCode
+	var result = 0
+	if let a = try tryA() 'a'
+		result = a
+	end 'a' else if let b = try tryB() 'b'
+		result = b
+	end 'b' else 'fallback'
+		result = 7
+	end 'fallback'
+	return result
+end 'main'
+---
+ExitCode: 7
+---
+// CompiledIR
+module {
+  func @tryA() -> i64 {
+  entry:
+    arm64.mov x0, #0
+    arm64.mov x1, #1
+    arm64.add x2, x0, x1
+    arm64.mov x1, x2
+    arm64.mov x0, #0
+    arm64.ret
+  }
+  func @tryB() -> i64 {
+  entry:
+    arm64.mov x0, #0
+    arm64.mov x1, #1
+    arm64.add x2, x0, x1
+    arm64.mov x1, x2
+    arm64.mov x0, #0
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=80
+    arm64.bl tryA
+    arm64.str x0, [x29, #-8]
+    arm64.mov x0, #0
+    arm64.cmp x1, x0
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne main.a_0
+    arm64.b main.a_0.elseif
+  a_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.str x0, [x29, #-16]
+    arm64.b main.a_0.merge
+  a_0.elseif:
+    arm64.bl tryB
+    arm64.str x0, [x29, #-24]
+    arm64.mov x0, #0
+    arm64.cmp x1, x0
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne main.b_0
+    arm64.b main.fallback_0
+  b_0:
+    arm64.ldr x0, [x29, #-24]
+    arm64.str x0, [x29, #-16]
+    arm64.b main.b_0.merge
+  fallback_0:
+    arm64.mov x0, #7
+    arm64.str x0, [x29, #-16]
+    arm64.b main.b_0.merge
+  b_0.merge:
+    arm64.b main.a_0.merge
+  a_0.merge:
+    arm64.ldr x0, [x29, #-16]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x3, #255
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_18
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue stack_size=80
+    arm64.ret
+  }
+}
+---

@@ -1,0 +1,211 @@
+// Test: remove-from-end
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+function main() returns ExitCode
+	var arr = IntArray.create()
+	arr.push(10)
+	arr.push(20)
+	arr.push(30)
+
+	let removed = try arr.remove(2) otherwise 'err'
+		return 99
+	end 'err'
+
+	if removed != 30 'val'
+		return 1
+	end 'val'
+
+	if arr.count() != 2 'cnt'
+		return 2
+	end 'cnt'
+
+	let v1 = try arr.get(1) otherwise -1
+	if v1 != 20 'c1'
+		return 3
+	end 'c1'
+
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=80
+    arm64.bl IntArray.create
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #10
+    arm64.bl IntArray.push
+    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #20
+    arm64.bl IntArray.push
+    arm64.ldr x2, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #30
+    arm64.bl IntArray.push
+    arm64.ldr x3, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #2
+    arm64.bl IntArray.remove
+    arm64.str x0, [x29, #-16]
+    arm64.mov x4, #0
+    arm64.cmp x1, x4
+    arm64.cset x5, ne
+    arm64.cmp x5, #0
+    arm64.b.ne main.otherwise_error_0
+    arm64.b main.otherwise_continue_0
+  otherwise_error_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_20
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_20
+    arm64.mov x0, #99
+    arm64.epilogue stack_size=80
+    arm64.ret
+  otherwise_continue_0:
+    arm64.ldr x0, [x29, #-16]
+    arm64.mov x1, #30
+    arm64.cmp x0, x1
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne main.val_0
+    arm64.b main.val_0.after
+  val_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_28
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_28
+    arm64.mov x0, #1
+    arm64.epilogue stack_size=80
+    arm64.ret
+  val_0.after:
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl IntArray.count
+    arm64.mov x1, #2
+    arm64.cmp x0, x1
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne main.cnt_0
+    arm64.b main.cnt_0.after
+  cnt_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_37
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_37
+    arm64.mov x0, #2
+    arm64.epilogue stack_size=80
+    arm64.ret
+  cnt_0.after:
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #1
+    arm64.bl IntArray.get
+    arm64.mov x2, #-1
+    arm64.str x2, [x29, #-24]
+    arm64.str x0, [x29, #-32]
+    arm64.mov x0, #0
+    arm64.cmp x1, x0
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne main.otherwise_default_error_0
+    arm64.b main.otherwise_default_continue_0
+  otherwise_default_error_0:
+    arm64.ldr x0, [x29, #-24]
+    arm64.str x0, [x29, #-32]
+    arm64.b main.otherwise_default_continue_0
+  otherwise_default_continue_0:
+    arm64.ldr x0, [x29, #-32]
+    arm64.mov x1, #20
+    arm64.cmp x0, x1
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne main.c1_0
+    arm64.b main.c1_0.after
+  c1_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_57
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_57
+    arm64.mov x0, #3
+    arm64.epilogue stack_size=80
+    arm64.ret
+  c1_0.after:
+    arm64.ldr x0, [x29, #-8]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_61
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_61
+    arm64.mov x0, #0
+    arm64.epilogue stack_size=80
+    arm64.ret
+  }
+  func @__destruct___ManagedMemory_Int(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #16]
+    arm64.mov x2, #-1
+    arm64.cmp x1, x2
+    arm64.cset x3, eq
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct___ManagedMemory_Int.slice_cleanup_0
+    arm64.b __destruct___ManagedMemory_Int.check_owned_0
+  slice_cleanup_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #32]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct___ManagedMemory_Int.__skip_guarded_9
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct___ManagedMemory_Int.__skip_guarded_9
+    arm64.b __destruct___ManagedMemory_Int.skip_buf_0
+  check_owned_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #16]
+    arm64.mov x2, #-2
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct___ManagedMemory_Int.free_buf_0
+    arm64.b __destruct___ManagedMemory_Int.skip_buf_0
+  free_buf_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.mov x0, x1
+    arm64.bl mm_raw_free
+    arm64.b __destruct___ManagedMemory_Int.skip_buf_0
+  skip_buf_0:
+    arm64.b __destruct___ManagedMemory_Int.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__destruct_IntArray(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct_IntArray.__skip_guarded_4
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct_IntArray.__skip_guarded_4
+    arm64.b __destruct_IntArray.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+---

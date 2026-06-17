@@ -1,0 +1,285 @@
+// Test: dispatch-transitive-leak
+
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+interface Worker
+	function process(values IntArray) returns Integer
+end 'Worker'
+
+type SumWorker implements Worker
+	let tag as Integer
+
+	function process(values IntArray) returns Integer
+		var total = 0
+		var i = 0
+		while i < values.count() 'loop'
+			let v = try values.get(i) otherwise 0
+			total = total + v
+			i = i + 1
+		end 'loop'
+		return total
+	end 'process'
+
+	export static function create() returns Self
+		return Self{tag: 0}
+	end 'create'
+end 'SumWorker'
+
+// Level 3: leaf function that uses the interface and creates temporaries
+function processOne(w Worker, value Integer) returns Integer
+	var arr = IntArray.create()
+	arr.push(value)
+	return w.process(arr)
+end 'processOne'
+
+// Level 2: intermediate function that calls level 3
+function processTwo(w Worker, a Integer, b Integer) returns Integer
+	let r1 = processOne(w, value: a)
+	let r2 = processOne(w, value: b)
+	return r1 + r2
+end 'processTwo'
+
+// Level 1: entry point that creates the concrete type and passes through
+function doWork(w Worker) returns Integer
+	return processTwo(w, a: 10, b: 32)
+end 'doWork'
+
+function main() returns ExitCode
+	let worker = SumWorker.create()
+	return doWork(worker)
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @SumWorker.process(__self_ptr: i64, values: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=112
+    arm64.str x1, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.str x1, [x29, #-16]
+    arm64.mov x1, #0
+    arm64.str x1, [x29, #-24]
+    arm64.b SumWorker.process.loop_0.header
+  loop_0.header:
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl IntArray.count
+    arm64.ldr x1, [x29, #-24]
+    arm64.cmp x1, x0
+    arm64.cset x2, lt
+    arm64.cmp x2, #0
+    arm64.b.ne SumWorker.process.loop_0
+    arm64.b SumWorker.process.loop_0.exit
+  loop_0:
+    arm64.ldr x0, [x29, #-24]
+    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-24]
+    arm64.bl IntArray.get
+    arm64.mov x2, #0
+    arm64.str x2, [x29, #-32]
+    arm64.str x0, [x29, #-40]
+    arm64.mov x3, #0
+    arm64.cmp x1, x3
+    arm64.cset x4, ne
+    arm64.cmp x4, #0
+    arm64.b.ne SumWorker.process.otherwise_default_error_0
+    arm64.b SumWorker.process.otherwise_default_continue_0
+  otherwise_default_error_0:
+    arm64.ldr x0, [x29, #-32]
+    arm64.str x0, [x29, #-40]
+    arm64.b SumWorker.process.otherwise_default_continue_0
+  otherwise_default_continue_0:
+    arm64.ldr x0, [x29, #-40]
+    arm64.ldr x1, [x29, #-16]
+    arm64.add x2, x1, x0
+    arm64.str x2, [x29, #-16]
+    arm64.mov x3, #1
+    arm64.ldr x4, [x29, #-24]
+    arm64.add x5, x4, x3
+    arm64.str x5, [x29, #-24]
+    arm64.b SumWorker.process.loop_0.header
+  loop_0.exit:
+    arm64.ldr x0, [x29, #-16]
+    arm64.epilogue stack_size=112
+    arm64.ret
+  }
+  func @SumWorker.create() -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x0, #0
+    arm64.mov x0, #8
+    arm64.mov x1, #0
+    arm64.mov x2, #19
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-8]
+    arm64.mov x2, #0
+    arm64.str x2, [x1, #0]
+    arm64.ldr x3, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x4, [x29, #-8]
+    arm64.mov x0, x4
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.bl SumWorker.create
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl doWork$SumWorker
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x3, #255
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_9
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.ldr x1, [x29, #-8]
+    arm64.str x0, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_14
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_14
+    arm64.ldr x0, [x29, #-16]
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @doWork$SumWorker(w: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #10
+    arm64.mov x2, #32
+    arm64.bl processTwo$SumWorker
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @processTwo$SumWorker(w: i64, a: i64, b: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=64
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.str x2, [x29, #-16]
+    arm64.bl processOne$SumWorker
+    arm64.ldr x1, [x29, #-8]
+    arm64.str x0, [x29, #-24]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-16]
+    arm64.bl processOne$SumWorker
+    arm64.ldr x2, [x29, #-24]
+    arm64.add x3, x2, x0
+    arm64.mov x0, x3
+    arm64.epilogue stack_size=64
+    arm64.ret
+  }
+  func @processOne$SumWorker(w: i64, value: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=64
+    arm64.str x0, [x29, #-8]
+    arm64.str x1, [x29, #-24]
+    arm64.bl IntArray.create
+    arm64.str x0, [x29, #-16]
+    arm64.ldr x0, [x29, #-16]
+    arm64.ldr x1, [x29, #-24]
+    arm64.bl IntArray.push
+    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x2, [x29, #-16]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-16]
+    arm64.bl SumWorker.process
+    arm64.ldr x3, [x29, #-16]
+    arm64.str x0, [x29, #-32]
+    arm64.cmp x3, #0
+    arm64.b.eq processOne$SumWorker.__skip_guarded_11
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label processOne$SumWorker.__skip_guarded_11
+    arm64.ldr x0, [x29, #-32]
+    arm64.epilogue stack_size=64
+    arm64.ret
+  }
+  func @__destruct_SumWorker(ptr: i64) {
+  entry:
+    arm64.b __destruct_SumWorker.done
+  done:
+    arm64.ret
+  }
+  func @__destruct___ManagedMemory_Integer(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #16]
+    arm64.mov x2, #-1
+    arm64.cmp x1, x2
+    arm64.cset x3, eq
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct___ManagedMemory_Integer.slice_cleanup_0
+    arm64.b __destruct___ManagedMemory_Integer.check_owned_0
+  slice_cleanup_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #32]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct___ManagedMemory_Integer.__skip_guarded_9
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct___ManagedMemory_Integer.__skip_guarded_9
+    arm64.b __destruct___ManagedMemory_Integer.skip_buf_0
+  check_owned_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #16]
+    arm64.mov x2, #-2
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct___ManagedMemory_Integer.free_buf_0
+    arm64.b __destruct___ManagedMemory_Integer.skip_buf_0
+  free_buf_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.mov x0, x1
+    arm64.bl mm_raw_free
+    arm64.b __destruct___ManagedMemory_Integer.skip_buf_0
+  skip_buf_0:
+    arm64.b __destruct___ManagedMemory_Integer.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__destruct_IntArray(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct_IntArray.__skip_guarded_4
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct_IntArray.__skip_guarded_4
+    arm64.b __destruct_IntArray.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+---

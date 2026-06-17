@@ -1,0 +1,40 @@
+// Test: byte-enum-comparison.byte-ne-enum
+
+typealias Byte = int(0 to u8.max)
+
+enum Ascii
+	underscore = 95
+	space = 32
+	zero = 48
+end 'Ascii'
+
+function main() returns ExitCode
+	let b = 95 as Byte
+	if b == Ascii.space 'noMatch'
+		return 1
+	end 'noMatch'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.mov x0, #95
+    arm64.mov x1, #32
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne main.noMatch_0
+    arm64.b main.noMatch_0.after
+  noMatch_0:
+    arm64.mov x0, #1
+    arm64.ret
+  noMatch_0.after:
+    arm64.mov x0, #0
+    arm64.ret
+  }
+}
+---
