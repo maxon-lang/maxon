@@ -473,6 +473,14 @@ export type Project
 	// bucket.
 	export var structInnerAliasNames as InnerAliasNameSet
 
+	// Dotted per-instance ranged inner-alias names (`IntWrapper.Idx`,
+	// `StrWrapper.Idx`) registered by `registerPerInstanceInnerAliases`. Used by
+	// the cross-instance argument check to reject passing a `WrapperA.Idx` value
+	// where a `WrapperB.Idx` is expected — both are in this set, so a name
+	// mismatch is a nominal type error (E3005). Plain ranged aliases and stdlib
+	// inner aliases are NOT in this set, so they never trip the check.
+	export var perInstanceAliasNames as PerInstanceAliasNameSet
+
 	// Phase 11.0 step 4: parser-recorded `extension TargetType ... end`
 	// blocks. Method bodies inside each extension are registered as
 	// qualified `TargetType.methodName` callees at parse time; this
@@ -956,6 +964,7 @@ export type Project
 			structTypes: StructTypeMap.create(),
 			unresolvedStructTypes: UnresolvedStructTypeMap.create(),
 			structInnerAliasNames: InnerAliasNameSet.create(),
+			perInstanceAliasNames: PerInstanceAliasNameSet.create(),
 			unresolvedExtensions: UnresolvedExtensionArray.create(),
 			pendingExtensionInnerAliases: PendingExtensionInnerAliasMap.create(),
 			enumTypes: EnumTypeMap.create(),
@@ -3683,6 +3692,7 @@ export typealias StructTypeArray = Array with StructType
 // Reverse-index value type for `Project.structInnerAliasNames` — see the
 // field comment on `Project` for the population contract.
 export typealias InnerAliasNameSet = Set with String
+export typealias PerInstanceAliasNameSet = Set with String
 
 // Name set for `Project.prescannedInterfaceNames` — the pre-parse interface
 // name scan's output. See the field comment on `Project`.

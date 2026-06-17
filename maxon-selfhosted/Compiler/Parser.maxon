@@ -1152,6 +1152,19 @@ export type Parser
 				usedTypeAliases.insert(matchedName)
 				return internMaxonType(project, name: matchedName)
 			end 'consumeMatched'
+			// Per-instance member typealias: `StrWrapper.Idx` where `StrWrapper =
+			// Wrapper with String` is a generic-instance alias and `Idx` is a
+			// ranged inner typealias declared inside `type Wrapper`. The dotted
+			// name is NOT yet in any registry at parse time (TypeResolution
+			// registers it via `registerPerInstanceInnerAliases` after structs
+			// resolve), so the `matchedSegments` walk above can't claim it. Defer:
+			// when the prefix is a generic-instance alias and exactly one
+			// `.identifier` follows, consume it and intern the dotted name; the
+			// per-instance registration makes it resolvable downstream.
+			let deferred = try deferPerInstanceMemberType(typeToken) otherwise MaxonType.unresolved
+			if not isUnresolvedType(deferred) 'deferredHit'
+				return deferred
+			end 'deferredHit'
 		end 'maybeDottedType'
 
 		// E3063 ambiguity detection: bare-name type reference with two or more
@@ -12765,6 +12778,70 @@ export type Parser
 		return ""
 	end 'genericAliasBaseStructName'
 
+	// Per-instance inner-typealias member access in a type position: parse
+	// `Prefix.Member` where `Prefix` (the already-consumed `prefixToken`) is a
+	// generic-instance alias (`StrWrapper = Wrapper with String`) and `Member`
+	// is a ranged inner typealias declared in the generic body. Returns the
+	// interned `MaxonType.named("Prefix.Member")` after consuming the `.Member`
+	// tokens, or `MaxonType.unresolved` (without consuming anything) when the
+	// shape doesn't apply — so the caller falls through to its bare-name path.
+	//
+	// The dotted name is not registered at parse time; TypeResolution's
+	// `registerPerInstanceInnerAliases` adds it to `typealiases`/
+	// `typealiasRanges` after structs resolve. Deferring here keeps the parser
+	// from rejecting the trailing `.Member` (E2010 / E2003) while leaving
+	// resolution to the registration pass.
+	function deferPerInstanceMemberType(prefixToken Token) returns MaxonType throws ParserError
+		let dotTok = try cursor.peek(0) otherwise return MaxonType.unresolved
+		if dotTok.kind != TokenKind.dot 'noDot'
+			return MaxonType.unresolved
+		end 'noDot'
+		let memberTok = try cursor.peek(1) otherwise return MaxonType.unresolved
+		if memberTok.kind != TokenKind.identifier 'noMember'
+			return MaxonType.unresolved
+		end 'noMember'
+		let baseName = genericAliasBaseStructName(prefixToken.value)
+		if baseName.isEmpty() 'notGenericAlias'
+			return MaxonType.unresolved
+		end 'notGenericAlias'
+		// Confirm `Member` is a ranged inner alias on the base struct so we only
+		// claim `.Member` for genuine per-instance aliases — a generic-instance
+		// alias followed by an unrelated `.something` (e.g. a static-member read)
+		// must not be swallowed here.
+		if not baseStructHasRangedInnerAlias(baseName, innerName: memberTok.value) 'notInnerAlias'
+			return MaxonType.unresolved
+		end 'notInnerAlias'
+		try eat(TokenKind.dot)
+		_ = try consume()
+		let dotName = "{prefixToken.value}.{memberTok.value}"
+		usedTypeAliases.insert(prefixToken.value)
+		return internMaxonType(project, name: dotName)
+	end 'deferPerInstanceMemberType'
+
+	// True when generic base `baseName` declares a ranged inner typealias named
+	// `innerName` (e.g. `type Wrapper uses T` with `typealias Idx = int(...)`).
+	// Consulted at parse time from `unresolvedStructTypes` (TypeResolution
+	// hasn't drained them yet) — only ranged inner aliases get a per-instance
+	// nominal identity, mirroring the C# bootstrap's `InnerRangedAliases`.
+	function baseStructHasRangedInnerAlias(baseName String, innerName String) returns bool
+		let st = try project.unresolvedStructTypes.get(baseName) otherwise return false
+		let innerExpr = try st.innerAliases.get(innerName) otherwise return false
+		return innerAliasExprIsRanged(innerExpr)
+	end 'baseStructHasRangedInnerAlias'
+
+	function innerAliasExprIsRanged(expr UnresolvedTypeExpr) returns bool
+		return match expr 'shape'
+			rangedInt gives true
+			rangedFloat gives true
+			boolPrim gives false
+			aliasName gives false
+			functionAlias gives false
+			genericAlias gives false
+			sizedGenericAlias gives false
+			invalid gives false
+		end 'shape'
+	end 'innerAliasExprIsRanged'
+
 	function extractCallProducerInfo(op MaxonOp, targetName ByteArray) returns CallProducerInfo
 		return match op 'shape'
 			literal to br gives CallProducerInfo.notMatched()
@@ -13002,6 +13079,14 @@ export type Parser
 					usedTypeAliases.insert(matchedName)
 					return internMaxonType(project, name: matchedName)
 				end 'consumeMatched'
+				// Per-instance member typealias (`x as StrWrapper.Idx`) — same
+				// deferral as parseTypeRef: the dotted name isn't registered at
+				// parse time, so claim `.Member` when the prefix is a generic-
+				// instance alias and `Member` is a ranged inner alias.
+				let deferred = try deferPerInstanceMemberType(typeToken) otherwise MaxonType.unresolved
+				if not isUnresolvedType(deferred) 'deferredHit'
+					return deferred
+				end 'deferredHit'
 			end 'maybeDotted'
 			// E3063 ambiguity detection: bare-name typealias reference at the
 			// cast target with two or more reachable declarations. Mirrors the

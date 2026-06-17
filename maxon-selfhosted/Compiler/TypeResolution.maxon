@@ -699,6 +699,60 @@ function drainResolvableTypealiases(project Project) returns ParsedInt
 	return resolvedNames.count()
 end 'drainResolvableTypealiases'
 
+// Per-instance ranged inner typealiases. A ranged typealias declared inside a
+// generic type body (`type Wrapper uses T ... typealias Idx = int(0 to ...)`)
+// becomes a nominally distinct alias per instantiation: `IntWrapper.Idx` and
+// `StrWrapper.Idx` for `IntWrapper = Wrapper with Integer` / `StrWrapper =
+// Wrapper with String`. This pass registers each such dotted member name as a
+// ranged-primitive typealias (into `typealiases` / `typealiasRanges` /
+// `typealiasCastCategories`) so the parser-deferred `named("IntWrapper.Idx")`
+// references (see deferPerInstanceMemberType) resolve, the cast-range-check
+// pass finds the bounds, and `project.perInstanceAliasNames` marks them for the
+// cross-instance argument check. Mirrors the C# bootstrap's per-instance
+// `IrRangedPrimitiveType` registration in RegisterConcreteStructAlias.
+//
+// Only RANGED inner aliases get a per-instance identity (matching the
+// bootstrap's `InnerRangedAliases`); non-ranged inner aliases (`Entry`,
+// `ArrayIter`) keep their shared resolution. Reads inner-alias ranges from the
+// still-undrained `unresolvedStructTypes` — must run before resolveAllStructTypes.
+function registerPerInstanceInnerAliases(project Project)
+	for (aliasName, instanceType) in project.genericTypealiases 'eachAlias'
+		let baseName = try genericInstanceBaseName(project, t: instanceType) otherwise continue
+		let st = try project.unresolvedStructTypes.get(baseName) otherwise continue
+		for (innerName, innerExpr) in st.innerAliases 'eachInner'
+			let result = tryResolveTypeExpr(project, expr: innerExpr)
+			if not result.success or not result.hasRange 'notRanged'
+				continue
+			end 'notRanged'
+			let dotName = "{aliasName}.{innerName}"
+			try project.typealiases.insert(dotName, value: result.stdType) otherwise ignore
+			try project.typealiasRanges.insert(dotName, value: result.range) otherwise ignore
+			let declared = declaredCastCategoryFor(innerExpr)
+			if declared.present 'recordCategory'
+				try project.typealiasCastCategories.insert(dotName, value: declared.category) otherwise ignore
+			end 'recordCategory'
+			project.perInstanceAliasNames.insert(dotName)
+		end 'eachInner'
+	end 'eachAlias'
+end 'registerPerInstanceInnerAliases'
+
+enum PerInstanceLookupError implements Error
+	notInstance
+end 'PerInstanceLookupError'
+
+// Recover the base struct name of a `genericInstance` MaxonType, throwing
+// `PerInstanceLookupError.notInstance` for any other shape so callers can
+// `otherwise continue` past non-instance generic typealiases (function-type
+// aliases land in `genericTypealiases` too).
+function genericInstanceBaseName(project Project, t MaxonType) returns String throws PerInstanceLookupError
+	let giid = match t 'pickGid'
+		genericInstance(id) gives id
+		default throws PerInstanceLookupError.notInstance
+	end 'pickGid'
+	let (baseId, _) = project.genericInstances.get(giid)
+	return project.typeNames.get(baseId)
+end 'genericInstanceBaseName'
+
 // Project-wide fixed-point typealias resolution. Runs zero or more drain
 // passes until either the unresolved map is empty (success) or a pass
 // produces no progress (failure — emit diagnostics for what's left).
@@ -3991,6 +4045,13 @@ function methodCallResultType(project Project, receiverType MaxonType, methodNam
 	// no-op and the receiver's `Element → String` binding never reaches
 	// the alias body. Applying `applyInnerAliasIfNamed` first promotes the
 	// alias to its `genericInstance(...)` form so substitution flows.
+	// Use the ORIGINAL `receiverType` (which still carries the instance alias
+	// name `WrapperA`), not `normReceiver` — normalizeReceiverInContext chases
+	// the alias to its shared `genericInstance(giid)`, dropping the name.
+	let perInstance = perInstanceReturnType(project, raw: raw, receiverType: receiverType)
+	if not isUnresolvedType(perInstance) 'perInstanceHit'
+		return perInstance
+	end 'perInstanceHit'
 	let aliasResolved = applyInnerAliasFromReceiver(project, t: raw, receiverStructName: structName)
 	let selfResolved = promoteSelfReturnToReceiver(project, raw: aliasResolved, receiverType: normReceiver, receiverStructName: structName)
 	// When promoteSelfReturnToReceiver swapped in the receiver type
@@ -4446,6 +4507,28 @@ function promoteSelfReturnToReceiver(project Project, raw MaxonType, receiverTyp
 	return promoteNamedToGenericInstance(project, raw: raw, candidate: receiverType)
 end 'promoteSelfReturnToReceiver'
 
+// Per-instance inner-alias return type. When a method's declared return `raw`
+// is a bare named inner alias (`Idx`) and the receiver is a per-instance
+// INSTANCE alias (`named("WrapperA")` such that `WrapperA.Idx` was registered
+// by registerPerInstanceInnerAliases), return `named("WrapperA.Idx")` so the
+// value carries its per-instance nominal identity. Returns `unresolved` for
+// every other shape so the caller falls through to the shared resolution.
+function perInstanceReturnType(project Project, raw MaxonType, receiverType MaxonType) returns MaxonType
+	let rawName = raw.nameOrEmpty(project)
+	if rawName.isEmpty() 'noRawName'
+		return MaxonType.unresolved
+	end 'noRawName'
+	let receiverName = receiverType.nameOrEmpty(project)
+	if receiverName.isEmpty() 'noReceiverName'
+		return MaxonType.unresolved
+	end 'noReceiverName'
+	let dotName = "{receiverName}.{rawName}"
+	if not project.perInstanceAliasNames.contains(dotName) 'notPerInstance'
+		return MaxonType.unresolved
+	end 'notPerInstance'
+	return internMaxonType(project, name: dotName)
+end 'perInstanceReturnType'
+
 // Resolve a `named(name)` MaxonType against the named struct's
 // `innerAliases` map. Returns `t` unchanged when:
 //   - `t` is not a named arm
@@ -4675,11 +4758,58 @@ function callResultType(project Project, callee ByteArray, callContext CallConte
 	let (qualifiedRaw, _) = qualifyCalleeForContextWithType(project, bare: bareCallee, callContext: callContext, currentNamespace: currentNamespace, readerFilePath: readerFilePath, enclosingType: enclosingType)
 	let qualified = resolveOverloadFromArgs(project, bareName: qualifiedRaw, args: args, argTypes: argTypes, producerTypes: producerTypes, hasSelf: false)
 	let returnType = try project.funcReturnTypes.get(qualified) otherwise return MaxonType.unresolved
-	return match returnType 'unwrap'
+	let resultRaw = match returnType 'unwrap'
 		void gives MaxonType.unresolved
 		value(inner) gives inner
 	end 'unwrap'
+	// Per-instance factory: `WrapperA.create(...)` returns `Self`, which is
+	// registered against the BASE (`Wrapper.create` → `named("Wrapper")`). When
+	// the call qualifier was a per-instance INSTANCE alias and the base declares
+	// ranged inner aliases, keep the value typed as the instance alias
+	// (`named("WrapperA")`) so its `.Idx` accesses qualify per-instance. See
+	// perInstanceReturnType / checkPerInstanceAliasArgs.
+	return perInstanceFactoryResult(project, callee: callee, resultRaw: resultRaw)
 end 'callResultType'
+
+// When `resultRaw` is the base struct of a per-instance generic alias factory
+// call (`WrapperA.create` returning `named("Wrapper")`), return the instance
+// alias (`named("WrapperA")`) so per-instance identity survives. Otherwise
+// returns `resultRaw` unchanged. The instance alias is the part of `callee`
+// before the last `.`; it qualifies only when it has registered per-instance
+// member aliases (`WrapperA.Idx` ∈ perInstanceAliasNames).
+function perInstanceFactoryResult(project Project, callee ByteArray, resultRaw MaxonType) returns MaxonType
+	if project.perInstanceAliasNames.count() == 0 'noPerInstance'
+		return resultRaw
+	end 'noPerInstance'
+	let resultName = resultRaw.nameOrEmpty(project)
+	if resultName.isEmpty() 'noResultName'
+		return resultRaw
+	end 'noResultName'
+	let dotIdx = lastIndexOfDotByte(callee)
+	if dotIdx >= callee.count() 'noDot'
+		return resultRaw
+	end 'noDot'
+	let aliasName = byteSliceToString(callee, startIndex: 0, endIndex: dotIdx)
+	if aliasName == resultName 'notAlias'
+		return resultRaw
+	end 'notAlias'
+	if not aliasHasPerInstanceMember(project, aliasName: aliasName) 'noMember'
+		return resultRaw
+	end 'noMember'
+	return internMaxonType(project, name: aliasName)
+end 'perInstanceFactoryResult'
+
+// True when any per-instance member alias `{aliasName}.X` was registered for
+// the generic instance alias `aliasName` (e.g. `WrapperA.Idx`).
+function aliasHasPerInstanceMember(project Project, aliasName String) returns bool
+	let prefix = "{aliasName}."
+	for memberName in project.perInstanceAliasNames 'eachMember'
+		if memberName.startsWith(prefix) 'hasPrefix'
+			return true
+		end 'hasPrefix'
+	end 'eachMember'
+	return false
+end 'aliasHasPerInstanceMember'
 
 // Resolve a fieldLoad's result type by walking the receiver's struct fields.
 // Phase 11.1 step 5d/5e: when the receiver is a `genericInstance`, the
@@ -5232,6 +5362,13 @@ function refineStaticReturnFromQualifiedCallee(project Project, returnType Maxon
 	if not isQualifiedCallContext(callContext) 'notQualified'
 		return returnType
 	end 'notQualified'
+	// Per-instance factory result (`named("WrapperA")`): keep the instance alias
+	// name. Promoting it to the shared `genericInstance(giid)` would erase which
+	// instance the value belongs to (WrapperA and WrapperB share one giid), so
+	// downstream `.Idx` accesses could no longer qualify per-instance.
+	if aliasHasPerInstanceMember(project, aliasName: returnType.nameOrEmpty(project)) 'perInstanceResult'
+		return returnType
+	end 'perInstanceResult'
 	let bareCallee = String.from(callee)
 	// Forward the caller's enclosingType so an inner typealias declared on
 	// the enclosing struct (e.g. `Foo.typealias MyArr = Array with String`,
@@ -7547,6 +7684,82 @@ function blameStructIfRegistered(project Project, id TypeNameId) returns String
 	return ""
 end 'blameStructIfRegistered'
 
+// Per-instance ranged-typealias cross-instance argument check (E3005). Two
+// generic instantiations that share a structural `Base with Args` are still
+// nominally distinct (`WrapperA = Wrapper with Integer`, `WrapperB = Wrapper
+// with Integer`): a `WrapperA.Idx` value must not be passed where a
+// `WrapperB.Idx` is expected. Walks every method-call op; for each argument
+// whose declared parameter is a bare per-instance inner alias (`Idx`) the
+// EXPECTED per-instance name is `{receiverAlias}.Idx` (the receiver value's
+// instance alias, recovered from its producer type). The arg's per-instance
+// name comes from its own producer type (set by `perInstanceReturnType`). When
+// both are registered per-instance names and they differ, emit E3005 — mirrors
+// the C# bootstrap's per-argument nominal check. Same-instance and literal
+// (non-per-instance producer) args never trip the check.
+function checkPerInstanceAliasArgs(project Project, module MaxonModule, producerTypesPerFunc ProducerTypeMapArray, filePath FilePath)
+	if project.perInstanceAliasNames.count() == 0 'noPerInstance'
+		return
+	end 'noPerInstance'
+	for funcIdx in 0 upto module.functions.count() 'eachFunc'
+		let func = try module.functions.get(funcIdx) otherwise panic("checkPerInstanceAliasArgs: functions.get OOB at {funcIdx}")
+		let producerTypes = try producerTypesPerFunc.get(funcIdx) otherwise panic("checkPerInstanceAliasArgs: producerTypesPerFunc.get({funcIdx}) failed")
+		let diagPath = filePath if func.sourceFilePath.isEmpty() else func.sourceFilePath
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("checkPerInstanceAliasArgs: blockRef OOB")
+			for opIdx in block.opRefs 'eachOp'
+				let op = try module.ops.get(opIdx) otherwise panic("checkPerInstanceAliasArgs: opIdx OOB")
+				match op 'extract'
+					methodCall(_, receiver, methodName, args, _, _, argRanges, range) then checkPerInstanceMethodCallArgs(project, receiver: receiver, methodName: methodName, args: args, argRanges: argRanges, range: range, producerTypes: producerTypes, filePath: diagPath)
+					literal to call then continue
+					ret to sizeofType then continue
+				end 'extract'
+			end 'eachOp'
+		end 'eachBlock'
+	end 'eachFunc'
+end 'checkPerInstanceAliasArgs'
+
+function checkPerInstanceMethodCallArgs(project Project, receiver ByteArray, methodName ByteArray, args ByteArrayArray, argRanges SourceRangeArray, range SourceRange, producerTypes ProducerTypeMap, filePath FilePath)
+	let receiverType = lookupProducerType(producerTypes, name: receiver)
+	let receiverAlias = receiverType.nameOrEmpty(project)
+	if receiverAlias.isEmpty() 'noReceiverAlias'
+		return
+	end 'noReceiverAlias'
+	// The receiver must itself be a per-instance INSTANCE alias for any of its
+	// inner aliases to participate — `{receiverAlias}.X` registered marks it.
+	let baseStruct = try maxonTypeStructName(project, t: receiverType) otherwise return
+	let sig = try project.funcSignatures.get("{baseStruct}.{String.from(methodName)}") otherwise return
+	// Instance-method signatures carry the implicit `self` receiver as param 0,
+	// but the methodCall op's `args` lists only the explicit arguments. Align
+	// from the end so `args[i]` pairs with the correct declared parameter.
+	if args.count() > sig.paramTypes.count() 'tooManyArgs'
+		return
+	end 'tooManyArgs'
+	let selfOffset = sig.paramTypes.count() - args.count()
+	for i in 0 upto args.count() 'eachArg'
+		let paramType = try sig.paramTypes.get(i + selfOffset) otherwise panic("checkPerInstanceMethodCallArgs: paramTypes.get OOB at {i + selfOffset}")
+		let paramInner = paramType.nameOrEmpty(project)
+		if paramInner.isEmpty() 'paramNotNamed'
+			continue
+		end 'paramNotNamed'
+		let expected = "{receiverAlias}.{paramInner}"
+		if not project.perInstanceAliasNames.contains(expected) 'paramNotPerInstance'
+			continue
+		end 'paramNotPerInstance'
+		let argName = try args.get(i) otherwise panic("checkPerInstanceMethodCallArgs: args.get OOB at {i}")
+		let argType = lookupProducerType(producerTypes, name: argName)
+		let gotName = argType.nameOrEmpty(project)
+		if not project.perInstanceAliasNames.contains(gotName) 'argNotPerInstance'
+			continue
+		end 'argNotPerInstance'
+		if gotName == expected 'sameInstance'
+			continue
+		end 'sameInstance'
+		let paramLabel = try sig.paramNames.get(i + selfOffset) otherwise paramInner
+		let argRange = try argRanges.get(i) otherwise range
+		reportCompileError(project, code: ErrorCode.semanticTypeMismatch, message: "argument type mismatch for '{paramLabel}': expected '{expected}', got '{gotName}'", line: argRange.line, column: argRange.column, filePath: filePath)
+	end 'eachArg'
+end 'checkPerInstanceMethodCallArgs'
+
 function binOpKindToSymbol(opKind BinOpKind) returns String
 	return match opKind 'sym'
 		add gives "+"
@@ -8743,6 +8956,13 @@ module function runTypeResolution(project Project, module MaxonModule, filePath 
 	// unused-typealias queue. Aliases whose RHS failed validation are
 	// suppressed to match the bootstrap's single-diagnostic shape.
 	drainPendingUnusedTypealiases(project)
+	// Per-instance ranged inner typealiases: for each generic-instance alias
+	// (`IntWrapper = Wrapper with Integer`), register the dotted member names
+	// (`IntWrapper.Idx`) as ranged-primitive aliases so the parser-deferred
+	// `named("IntWrapper.Idx")` references resolve. Runs BEFORE
+	// `resolveAllStructTypes` (which drains `unresolvedStructTypes`) because the
+	// inner-alias ranges are read from the unresolved struct entries.
+	registerPerInstanceInnerAliases(project)
 	resolveAllStructTypes(project)
 	resolveAllEnumTypes(project)
 	// Phase 9 function-backed enums: every case's bare function identifier
@@ -8967,6 +9187,12 @@ module function runTypeResolution(project Project, module MaxonModule, filePath 
 	// `unresolved` then), so the check lives here after fillUnresolvedTypes
 	// has filled in the concrete operand types.
 	validateBinopOperandTypes(project, module: module, producerTypesPerFunc: producerTypesPerFunc, filePath: filePath)
+
+	// E3005: reject passing a value of one per-instance ranged inner alias
+	// (`WrapperA.Idx`) where a different instance's alias (`WrapperB.Idx`) is
+	// expected. Runs after producer types are concrete so each value carries its
+	// instance alias name (set by perInstanceReturnType / genericFactoryResultType).
+	checkPerInstanceAliasArgs(project, module: module, producerTypesPerFunc: producerTypesPerFunc, filePath: filePath)
 
 	validateSelfFields(project, module: module, filePath: filePath)
 

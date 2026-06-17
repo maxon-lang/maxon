@@ -1,0 +1,75 @@
+// Test: as-conversion
+typealias Integer = int(i64.min to i64.max)
+
+type Wrapper uses T
+	export typealias Idx = int(0 to u64.max)
+
+	export var value as T
+	export var tag as Idx
+
+	export static function create(value T, tag Idx) returns Self
+		return Self{value: value, tag: tag}
+	end 'create'
+end 'Wrapper'
+
+typealias IntWrapper = Wrapper with Integer
+typealias StrWrapper = Wrapper with String
+
+function takeStrTag(t StrWrapper.Idx) returns StrWrapper.Idx
+	return t
+end 'takeStrTag'
+
+function main() returns ExitCode
+	let iw = IntWrapper.create(1, tag: 7)
+	let intTag = iw.tag
+	let strTag = intTag as StrWrapper.Idx
+	let result = takeStrTag(strTag)
+	if result == 7 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @takeStrTag(local0: u64) -> u64 {
+  entry:
+    %2 = mir.param local0 : u64
+    %3 = mir.mov_imm -1 : i64
+    %4 = mir.cmp ugt, %2, %3
+    mir.cond_br %4 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %5 = mir.global_addr @__panic_msg_f8c0763078cb3665
+    %6 = mir.call @mrt_panic(%5)
+  __range_ok_0:
+    mir.ret %2
+  }
+  func @main() -> u8 {
+  entry:
+    %1 = mir.mov_imm 1 : i64
+    %2 = mir.mov_imm 7 : i64
+    %3 = mir.global_addr @__layout_Wrapper_Integer
+    %17 = mir.mov_imm 16 : i64
+    %18 = mir.load %3, 40 width: qword
+    %19 = mir.call @stdlib.__mm_alloc(%17, %18)
+    mir.store %1, %19, 0 width: qword
+    mir.store %2, %19, 8 width: qword
+    %6 = mir.load %19, 8 width: qword
+    mir.br __cast_ok_0()
+  __cast_ok_0:
+    %11 = mir.call @takeStrTag(%6)
+    %13 = mir.mov_imm 7 : i64
+    %14 = mir.cmp eq, %11, %13
+    %20 = mir.call @mm_drop(%19)
+    mir.cond_br %14 [then: check_0(), else: check_0.after()]
+  check_0:
+    %15 = mir.mov_imm 0 : i64
+    mir.ret %15
+  check_0.after:
+    %16 = mir.mov_imm 1 : i64
+    mir.ret %16
+  }
+}
+---

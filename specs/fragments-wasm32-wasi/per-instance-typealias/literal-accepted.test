@@ -31,31 +31,27 @@ ExitCode: 0
 ---
 // CompiledIR
 module {
-  func @main() -> u32 {
+  func @main() -> u8 {
   entry:
-    x64.prologue stack_size=16
-    x64.lea r8, [rip+__layout_Wrapper_Integer]
-    x64.mov rdx, [r8+40] (8b)
-    x64.mov ecx, 16
-    x64.call stdlib.__mm_alloc
-    x64.mov r12, r8
-    x64.mov r8d, 42
-    x64.mov [r12+0], r8 (8b)
-    x64.mov r8d, 5
-    x64.mov [r12+8], r8 (8b)
-    x64.mov r13, [r12+8] (8b)
-    x64.mov rcx, r12
-    x64.call mm_drop
-    x64.cmp r13, 5
-    x64.jne check_0.after
+    %1 = mir.mov_imm 42 : i64
+    %2 = mir.mov_imm 5 : i64
+    %3 = mir.global_addr @__layout_Wrapper_Integer
+    %13 = mir.mov_imm 16 : i64
+    %14 = mir.load %3, 40 width: qword
+    %15 = mir.call @stdlib.__mm_alloc(%13, %14)
+    mir.store %1, %15, 0 width: qword
+    mir.store %2, %15, 8 width: qword
+    %16 = mir.load %15, 8 width: qword
+    %9 = mir.mov_imm 5 : i64
+    %10 = mir.cmp eq, %16, %9
+    %17 = mir.call @mm_drop(%15)
+    mir.cond_br %10 [then: check_0(), else: check_0.after()]
   check_0:
-    x64.xor r8d, r8d
-    x64.epilogue
-    x64.ret
+    %11 = mir.mov_imm 0 : i64
+    mir.ret %11
   check_0.after:
-    x64.mov r8d, 1
-    x64.epilogue
-    x64.ret
+    %12 = mir.mov_imm 1 : i64
+    mir.ret %12
   }
 }
 ---

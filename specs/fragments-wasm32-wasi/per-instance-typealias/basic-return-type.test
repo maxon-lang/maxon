@@ -1,0 +1,71 @@
+// Test: basic-return-type
+typealias Integer = int(i64.min to i64.max)
+
+type Wrapper uses T
+	export typealias Idx = int(0 to u64.max)
+
+	export var value as T
+	export var tag as Idx
+
+	export static function create(value T) returns Self
+		return Self{value: value, tag: 0}
+	end 'create'
+
+	export function getTag() returns Idx
+		return self.tag
+	end 'getTag'
+
+	export function withTag(t Idx) returns Self
+		return Self{value: self.value, tag: t}
+	end 'withTag'
+end 'Wrapper'
+
+typealias IntWrapper = Wrapper with Integer
+
+function main() returns ExitCode
+	var w = IntWrapper.create(42)
+	w = w.withTag(7)
+	let t = w.getTag()
+	if t == 7 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %1 = mir.mov_imm 42 : i64
+    %2 = mir.global_addr @__layout_Wrapper_Integer
+    %16 = mir.mov_imm 16 : i64
+    %17 = mir.load %2, 40 width: qword
+    %18 = mir.call @stdlib.__mm_alloc(%16, %17)
+    mir.store %1, %18, 0 width: qword
+    %19 = mir.mov_imm 0 : i64
+    mir.store %19, %18, 8 width: qword
+    %5 = mir.mov_imm 7 : i64
+    %6 = mir.global_addr @__layout_Wrapper_Integer
+    %20 = mir.mov_imm 16 : i64
+    %21 = mir.load %6, 40 width: qword
+    %22 = mir.call @stdlib.__mm_alloc(%20, %21)
+    %23 = mir.load %18, 0 width: qword
+    mir.store %23, %22, 0 width: qword
+    mir.store %5, %22, 8 width: qword
+    %24 = mir.load %22, 8 width: qword
+    %12 = mir.mov_imm 7 : i64
+    %13 = mir.cmp eq, %24, %12
+    %26 = mir.call @mm_drop(%18)
+    %25 = mir.call @mm_drop(%22)
+    mir.cond_br %13 [then: check_0(), else: check_0.after()]
+  check_0:
+    %14 = mir.mov_imm 0 : i64
+    mir.ret %14
+  check_0.after:
+    %15 = mir.mov_imm 1 : i64
+    mir.ret %15
+  }
+}
+---
