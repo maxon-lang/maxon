@@ -1,0 +1,55 @@
+// Test: clone-isolates-mutation
+typealias Integer = int(i64.min to i64.max)
+
+type Point
+	export var x as Integer
+	export var y as Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
+end 'Point'
+
+function main() returns ExitCode
+	let a = Point.create(1, y: 2)
+	var b = a.clone()
+	b.x = 99
+	return a.x
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %2 = mir.mov_imm 1 : i64
+    %3 = mir.mov_imm 2 : i64
+    %11 = mir.mov_imm 16 : i64
+    %12 = mir.mov_imm 0 : i64
+    %13 = mir.call @stdlib.__mm_alloc(%11, %12)
+    mir.store %2, %13, 0 width: qword
+    mir.store %3, %13, 8 width: qword
+    %14 = mir.mov_imm 16 : i64
+    %15 = mir.mov_imm 0 : i64
+    %16 = mir.call @stdlib.__mm_alloc(%14, %15)
+    %17 = mir.load %13, 0 width: qword
+    mir.store %17, %16, 0 width: qword
+    %18 = mir.load %13, 8 width: qword
+    mir.store %18, %16, 8 width: qword
+    %8 = mir.mov_imm 99 : i64
+    mir.store %8, %16, 0 width: qword
+    %19 = mir.call @mm_drop(%16)
+    %10 = mir.load %13, 0 width: qword
+    %20 = mir.call @mm_drop(%13)
+    %21 = mir.mov_imm 125 : i64
+    %22 = mir.cmp ugt, %10, %21
+    mir.cond_br %22 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %23 = mir.global_addr @__panic_msg_b5fb7159bc1173ba
+    %24 = mir.call @mrt_panic(%23)
+  __range_ok_0:
+    mir.ret %10
+  }
+}
+---

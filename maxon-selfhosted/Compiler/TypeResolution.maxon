@@ -7602,7 +7602,7 @@ function validateRefEqOperands(project Project, left ByteArray, right ByteArray,
 	if maxonTypeIsRef(project, t: leftType) and maxonTypeIsRef(project, t: rightType) 'bothRef'
 		return
 	end 'bothRef'
-	reportCompileError(project, code: ErrorCode.semanticTypeMismatch, message: "'is' requires reference types (structs), not primitive values", line: range.line, column: range.column, filePath: filePath)
+	reportCompileError(project, code: ErrorCode.semanticRefIdentityOnPrimitive, message: "'is' requires reference types (structs), not primitive values", line: range.line, column: range.column, filePath: filePath)
 end 'validateRefEqOperands'
 
 // --- Arithmetic / bitwise binop operand-type validation ---
@@ -8978,6 +8978,18 @@ module function runTypeResolution(project Project, module MaxonModule, filePath 
 	// `buildLayoutDescriptors` and the fieldLoad/Store lowering in
 	// `LowerMaxonToStd`).
 	layoutAllStructs(project)
+	// Auto-synthesize `<Struct>.clone(__self) returns Self` for every user
+	// struct whose fields are all cloneable (mirrors the C# bootstrap's
+	// auto-Cloneable conformance). Deferred to here — NOT parse time — because
+	// a field's `MaxonType` is only `named(id)` at parse time and isn't
+	// classifiable (struct vs enum vs ranged alias) until the struct/enum
+	// registries are drained by `resolveAllStructTypes` / `resolveAllEnumTypes`
+	// above. Each synthesized function is pushed onto `module.functions` here,
+	// before `rewriteUnresolvedOpsPerFunction` / `buildAbiParamMaps` /
+	// `buildProducerTypes`, so its body flows through the same downstream
+	// resolution + lowering passes as a user-written method. See
+	// `synthesizeAllStructClones`.
+	synthesizeAllStructClones(project, module: module)
 	// Top-level decls (lets and vars together) depend on enums (cases
 	// registered as constants) and typealiases (`as TypeName` casts), so
 	// they sequence after both drains. Lets and vars share one drain pass

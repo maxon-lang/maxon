@@ -1,0 +1,45 @@
+// Test: self-identity
+typealias Integer = int(i64.min to i64.max)
+
+type Point
+	export var x as Integer
+	export var y as Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
+end 'Point'
+
+function main() returns ExitCode
+	let a = Point.create(1, y: 2)
+	if a is a 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %1 = mir.mov_imm 1 : i64
+    %2 = mir.mov_imm 2 : i64
+    %9 = mir.mov_imm 16 : i64
+    %10 = mir.mov_imm 0 : i64
+    %11 = mir.call @stdlib.__mm_alloc(%9, %10)
+    mir.store %1, %11, 0 width: qword
+    mir.store %2, %11, 8 width: qword
+    %6 = mir.cmp eq, %11, %11
+    %12 = mir.call @mm_drop(%11)
+    mir.cond_br %6 [then: check_0(), else: check_0.after()]
+  check_0:
+    %7 = mir.mov_imm 1 : i64
+    mir.ret %7
+  check_0.after:
+    %8 = mir.mov_imm 0 : i64
+    mir.ret %8
+  }
+}
+---

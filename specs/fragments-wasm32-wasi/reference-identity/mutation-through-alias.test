@@ -1,0 +1,50 @@
+// Test: mutation-through-alias
+typealias Integer = int(i64.min to i64.max)
+
+type Point
+	export var x as Integer
+	export var y as Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
+end 'Point'
+
+function main() returns ExitCode
+	var a = Point.create(1, y: 2)
+	a.x = 1
+	var b = a
+	b.x = 99
+	return a.x
+end 'main'
+---
+ExitCode: 99
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %2 = mir.mov_imm 1 : i64
+    %3 = mir.mov_imm 2 : i64
+    %12 = mir.mov_imm 16 : i64
+    %13 = mir.mov_imm 0 : i64
+    %14 = mir.call @stdlib.__mm_alloc(%12, %13)
+    mir.store %2, %14, 0 width: qword
+    mir.store %3, %14, 8 width: qword
+    %6 = mir.mov_imm 1 : i64
+    mir.store %6, %14, 0 width: qword
+    %9 = mir.mov_imm 99 : i64
+    mir.store %9, %14, 0 width: qword
+    %11 = mir.load %14, 0 width: qword
+    %15 = mir.call @mm_drop(%14)
+    %16 = mir.mov_imm 125 : i64
+    %17 = mir.cmp ugt, %11, %16
+    mir.cond_br %17 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %18 = mir.global_addr @__panic_msg_6a34dfaf7ac9cf9a
+    %19 = mir.call @mrt_panic(%18)
+  __range_ok_0:
+    mir.ret %11
+  }
+}
+---

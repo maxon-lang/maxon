@@ -17866,21 +17866,22 @@ function synthesizeEnumHashAndEqualsImpl(project Project, module MaxonModule, na
 	synthesizeEnumEqualsMethod(project, module: module, namespace: namespace, filePath: filePath, funcName: equalsName, enumMaxonType: enumMaxonType, valueType: valueType, visibility: visibility, line: line, column: column)
 end 'synthesizeEnumHashAndEqualsImpl'
 
-// Register a synthesized enum method's signature, return type, visibility,
+// Register a synthesized method's signature, return type, visibility,
 // non-throwing clause, and method-name index — the shared bookkeeping every
-// `synthesize*` helper performs before building a body. `paramNames` /
-// `paramTypes` describe the full param list (including the implicit `__self`
-// at slot 0). Returns the freshly-created IrFunction with its metadata set,
-// ready for the caller to append blocks/ops and push to `module.functions`.
-function registerSynthEnumMethod(project Project, namespace String, filePath FilePath, funcName String, paramNames StringArray, paramTypes MaxonTypeArray, returnType MaxonReturnType, visibility Visibility, line LineNumber, column ColumnNumber) returns IrFunction
+// `synthesize*` helper (enum hash/equals AND struct clone) performs before
+// building a body. `paramNames` / `paramTypes` describe the full param list
+// (including the implicit `__self` at slot 0). Returns the freshly-created
+// IrFunction with its metadata set, ready for the caller to append
+// blocks/ops and push to `module.functions`.
+function registerSynthMethod(project Project, namespace String, filePath FilePath, funcName String, paramNames StringArray, paramTypes MaxonTypeArray, returnType MaxonReturnType, visibility Visibility, line LineNumber, column ColumnNumber) returns IrFunction
 	var paramDefaults = ParamDefaultArray.create()
 	for _ in 0 upto paramTypes.count() 'fillDefaults'
 		paramDefaults.push(ParamDefault.none)
 	end 'fillDefaults'
 
-	try project.funcReturnTypes.insert(funcName, value: returnType) otherwise panic("registerSynthEnumMethod: funcReturnTypes collision on '{funcName}'")
+	try project.funcReturnTypes.insert(funcName, value: returnType) otherwise panic("registerSynthMethod: funcReturnTypes collision on '{funcName}'")
 	recordFuncReturnTypeInsert(project, filePath: filePath, key: funcName)
-	try project.funcSignatures.insert(funcName, value: FuncSignature.create(paramNames, paramTypes: paramTypes, paramDefaults: paramDefaults)) otherwise panic("registerSynthEnumMethod: funcSignatures collision on '{funcName}'")
+	try project.funcSignatures.insert(funcName, value: FuncSignature.create(paramNames, paramTypes: paramTypes, paramDefaults: paramDefaults)) otherwise panic("registerSynthMethod: funcSignatures collision on '{funcName}'")
 	recordFuncSignatureInsert(project, filePath: filePath, key: funcName)
 	project.methodNameIndex.record(funcName)
 	recordMethodNameIndexInsert(project, filePath: filePath, qualifiedName: funcName)
@@ -17906,7 +17907,7 @@ function registerSynthEnumMethod(project Project, namespace String, filePath Fil
 	func.nameLine = line
 	func.nameColumn = column
 	return func
-end 'registerSynthEnumMethod'
+end 'registerSynthMethod'
 
 // Build `<EnumName>.hash(__self) returns HashValue`. The `__self` param is
 // typed to the enum so user call sites type-check; the body reinterprets it
@@ -17933,7 +17934,7 @@ function synthesizeEnumHashMethod(project Project, module MaxonModule, namespace
 	paramTypes.push(enumMaxonType)
 	let returnType = MaxonReturnType.value(MaxonType.integer)
 
-	var func = registerSynthEnumMethod(project, namespace: namespace, filePath: filePath, funcName: funcName, paramNames: paramNames, paramTypes: paramTypes, returnType: returnType, visibility: visibility, line: line, column: column)
+	var func = registerSynthMethod(project, namespace: namespace, filePath: filePath, funcName: funcName, paramNames: paramNames, paramTypes: paramTypes, returnType: returnType, visibility: visibility, line: line, column: column)
 
 	var synthCounter = 0 as ParsedInt
 	let selfSlot = func.scope.declareShadowing("__self", varType: enumMaxonType, mutable: false)
@@ -17966,7 +17967,7 @@ function synthesizeEnumEqualsMethod(project Project, module MaxonModule, namespa
 	paramTypes.push(enumMaxonType)
 	let returnType = MaxonReturnType.value(MaxonType.boolean)
 
-	var func = registerSynthEnumMethod(project, namespace: namespace, filePath: filePath, funcName: funcName, paramNames: paramNames, paramTypes: paramTypes, returnType: returnType, visibility: visibility, line: line, column: column)
+	var func = registerSynthMethod(project, namespace: namespace, filePath: filePath, funcName: funcName, paramNames: paramNames, paramTypes: paramTypes, returnType: returnType, visibility: visibility, line: line, column: column)
 
 	var synthCounter = 0 as ParsedInt
 	let selfSlot = func.scope.declareShadowing("__self", varType: enumMaxonType, mutable: false)
@@ -18019,6 +18020,293 @@ end 'emitEnumSelfAsPrimitive'
 function mintSynthName(counter ParsedInt) returns ByteArray
 	return "$t{counter}".toByteArray()
 end 'mintSynthName'
+
+// How a struct field is reproduced when synthesizing `<Struct>.clone`. A
+// field is either copied verbatim (value semantics), deep-cloned via a
+// recursive `field.clone()` call (managed reference: nested struct, String,
+// Array, ...), or it disqualifies the enclosing struct from auto-clone
+// entirely (a field whose type has no meaningful clone — union payloads,
+// interface existentials, function values).
+enum StructFieldCloneKind
+	valueCopy
+	cloneRef
+	disqualify
+end 'StructFieldCloneKind'
+
+// Classify a resolved struct-field type for clone synthesis. Mirrors the C#
+// bootstrap's auto-Cloneable field rules: value types (primitives, ranged-int
+// aliases, scalar enums) copy by value; managed reference types (user structs,
+// String, generic-instance containers like Array/List) deep-clone via a
+// recursive `.clone()`; anything else (unions, interfaces, function types)
+// disqualifies the struct so no broken clone body is emitted.
+//
+// Runs post-`resolveAllStructTypes`, so `project.structTypes` / `enumTypes`
+// are fully populated and a `named(id)` field can be classified by registry
+// lookup rather than the parse-time placeholder it carried.
+function classifyStructFieldForClone(project Project, fieldType MaxonType) returns StructFieldCloneKind
+	return match fieldType 'classify'
+		// Scalar primitives are stored inline — a fieldStore of the loaded
+		// value is already an independent copy.
+		boolean to float gives StructFieldCloneKind.valueCopy
+		// A String is a managed heap pointer; deep-clone it so the cloned
+		// struct doesn't alias the source's buffer (matches C#, where String
+		// is a struct field that recurses to stdlib `String.clone`).
+		string gives StructFieldCloneKind.cloneRef
+		// A char value is an immutable managed literal; like the C# bootstrap
+		// treats it, copying the pointer is sufficient (no observable mutation
+		// to isolate).
+		character gives StructFieldCloneKind.valueCopy
+		// Named types resolve through the registries: ranged-int aliases and
+		// scalar enums/unions copy by value; user structs deep-clone.
+		named(id) gives classifyNamedFieldForClone(project, name: project.typeNames.get(id))
+		// Function values, type parameters, and the parser-internal
+		// `unresolved` arm have no meaningful field-level clone — skip the
+		// enclosing struct rather than emit a body that can't lower.
+		function to typeParameter gives StructFieldCloneKind.disqualify
+		// Generic-instance containers (Array/List with Element) are managed
+		// structs with their own `.clone`; deep-clone them. (This arm sits
+		// between `typeParameter` and `interface` in the union, so the two
+		// disqualify ranges flank it without overlapping.)
+		genericInstance gives StructFieldCloneKind.cloneRef
+		// Interface existentials and the synthetic ABI arms (constInt /
+		// opaquePointer / cstring) likewise disqualify the struct.
+		interface to cstring gives StructFieldCloneKind.disqualify
+	end 'classify'
+end 'classifyStructFieldForClone'
+
+// Resolve a `named(...)` struct-field type name to its clone kind. A name
+// registered as a struct deep-clones; an enum/union or a ranged-int / scalar
+// typealias copies by value; an unknown name disqualifies (the field type
+// never resolved, so no safe clone exists).
+function classifyNamedFieldForClone(project Project, name String) returns StructFieldCloneKind
+	if project.structTypes.contains(name) 'isStruct'
+		return StructFieldCloneKind.cloneRef
+	end 'isStruct'
+	// A union carries a heap payload that would need per-variant deep cloning;
+	// the synthesizer doesn't model that, so a union field disqualifies the
+	// enclosing struct (matching C#, where `IsUnion` is excluded from the
+	// inherently-Cloneable value kinds). A plain (scalar) enum copies by value.
+	if let enumType = try project.enumTypes.get(name) 'isEnum'
+		if enumType.isUnion 'isUnion'
+			return StructFieldCloneKind.disqualify
+		end 'isUnion'
+
+		return StructFieldCloneKind.valueCopy
+	end 'isEnum'
+	// A ranged-int / primitive typealias resolves to a scalar — copy by value.
+	if project.typealiasRanges.contains(name) or project.typealiases.contains(name) 'isAlias'
+		return StructFieldCloneKind.valueCopy
+	end 'isAlias'
+
+	return StructFieldCloneKind.disqualify
+end 'classifyNamedFieldForClone'
+
+// The set of struct names proven auto-cloneable by the clone-synthesis
+// fixed-point. Membership grows monotonically each iteration; a nested-struct
+// field is cloneable once its type is a member.
+typealias CloneableStructSet = Set with String
+
+// The compiler-builtin managed struct names. These carry an opaque runtime
+// handle, are never user-constructed, and have no `.clone` — a field of one of
+// these types disqualifies the enclosing struct from auto-clone, and the type
+// itself is never given a synthesized clone. Mirrors the parser-instance
+// `isBuiltinManagedTypeName`; kept as a top-level helper so the (parser-instance-
+// free) clone synthesis pass can consult it.
+function isBuiltinManagedStructName(name String) returns bool
+	return name == "__ManagedMemory" or name == "__ManagedMemoryCursor" or name == "__ManagedFile" or name == "__ManagedDirectory" or name == "__ManagedSocket" or name == "__ManagedList" or name == "__ManagedListNode"
+end 'isBuiltinManagedStructName'
+
+// Auto-synthesize `<Struct>.clone(__self) returns Self` for every user struct
+// whose fields are all cloneable. Mirrors the C# bootstrap's auto-Cloneable
+// conformance (`SynthesizeStructClone` + `ResolveAutoCloneableConformance`),
+// but runs as a TypeResolution pass rather than at parse time: a field's
+// `MaxonType` is only `named(id)` at parse time and isn't classifiable (struct
+// vs enum vs alias) until the struct/enum registries are drained. Runs after
+// `resolveAllStructTypes` and `layoutAllStructs`, before
+// `rewriteUnresolvedOpsPerFunction` / `buildAbiParamMaps` / `buildProducerTypes`
+// so each synthesized function flows through the same downstream resolution +
+// lowering passes as a user-written method.
+//
+// A struct is auto-cloneable only when EVERY field is cloneable: a value field
+// (primitive / scalar enum / ranged alias) always is; a managed-reference field
+// is cloneable only if its type itself has a `.clone` (a stdlib type like
+// String/Array/List, or another auto-cloneable user struct). This is a
+// topological fixed-point: a struct containing a nested struct can't be settled
+// until the nested struct is, so the set grows until it stops changing —
+// exactly the C# bootstrap's iterative `ResolveAutoConformance`.
+module function synthesizeAllStructClones(project Project, module MaxonModule)
+	var cloneable = CloneableStructSet.create()
+	var changed = true
+	while changed 'fixpoint'
+		changed = false
+		for (structName, st) in project.structTypes 'eachStruct'
+			if cloneable.contains(structName) 'already'
+				continue
+			end 'already'
+			if structIsAutoCloneable(project, structName: structName, st: st, cloneable: cloneable) 'isCloneable'
+				cloneable.insert(structName)
+				changed = true
+			end 'isCloneable'
+		end 'eachStruct'
+	end 'fixpoint'
+
+	for (structName, st) in project.structTypes 'synthEach'
+		if not cloneable.contains(structName) 'notCloneable'
+			continue
+		end 'notCloneable'
+		// A `<Struct>.clone` already present — user-written (registered at parse
+		// time) or restored from cache — is left untouched; the cloneable set
+		// already accounts for it as a satisfied dependency.
+		if project.funcReturnTypes.contains("{structName}.clone") 'haveClone'
+			continue
+		end 'haveClone'
+		synthesizeStructCloneImpl(project, module: module, structName: structName, st: st)
+	end 'synthEach'
+end 'synthesizeAllStructClones'
+
+// Decide whether `structName` is auto-cloneable given the structs already known
+// cloneable. A builtin managed handle type is never auto-cloneable (no `.clone`).
+// Every field must be value-copy or a managed reference whose type is cloneable
+// (see `fieldTypeIsCloneable`).
+function structIsAutoCloneable(project Project, structName String, st StructType, cloneable CloneableStructSet) returns bool
+	if isBuiltinManagedStructName(structName) 'isBuiltin'
+		return false
+	end 'isBuiltin'
+
+	for fieldIdx in 0 upto st.fields.count() 'eachField'
+		let field = try st.fields.get(fieldIdx) otherwise panic("structIsAutoCloneable: fields.get OOB at {fieldIdx}")
+		let kind = classifyStructFieldForClone(project, fieldType: field.fieldType)
+		if kind == StructFieldCloneKind.disqualify 'fieldDisqualifies'
+			return false
+		end 'fieldDisqualifies'
+		if kind == StructFieldCloneKind.cloneRef and not fieldTypeIsCloneable(project, fieldType: field.fieldType, cloneable: cloneable) 'refNotCloneable'
+			return false
+		end 'refNotCloneable'
+	end 'eachField'
+
+	return true
+end 'structIsAutoCloneable'
+
+// Whether a managed-reference field can be deep-cloned: its clone-receiver type
+// must have (or be slated to gain) a `.clone`. String/Array/List and other
+// stdlib types already expose one (`project.funcReturnTypes` has the qualified
+// key); a user struct field is cloneable iff it is in the in-progress
+// `cloneable` set. A type with no clone-receiver name (or a builtin managed
+// handle) is never cloneable.
+function fieldTypeIsCloneable(project Project, fieldType MaxonType, cloneable CloneableStructSet) returns bool
+	let receiverName = fieldCloneReceiverName(project, fieldType: fieldType)
+	if receiverName.isEmpty() 'noReceiver'
+		return false
+	end 'noReceiver'
+	if cloneable.contains(receiverName) 'pendingSynth'
+		return true
+	end 'pendingSynth'
+
+	return project.funcReturnTypes.contains("{receiverName}.clone")
+end 'fieldTypeIsCloneable'
+
+// The type name a managed-reference field's `.clone()` dispatches against, or
+// "" when the field type is not a clone-bearing reference. String → "String";
+// a named struct → its name; a generic-instance container (Array/List with
+// Element) → its base type name. Builtin managed handles have no clone.
+function fieldCloneReceiverName(project Project, fieldType MaxonType) returns String
+	return match fieldType 'receiver'
+		string gives "String"
+		named(id) gives namedFieldCloneReceiverName(project, name: project.typeNames.get(id))
+		genericInstance(id) gives genericInstanceIdBaseName(project, id: id)
+		boolean to float gives ""
+		character gives ""
+		function to typeParameter gives ""
+		interface to cstring gives ""
+	end 'receiver'
+end 'fieldCloneReceiverName'
+
+// The clone-receiver name for a `named(...)` field — a struct (but never a
+// builtin managed handle) clones against its own name; anything else has none.
+function namedFieldCloneReceiverName(project Project, name String) returns String
+	if isBuiltinManagedStructName(name) 'isBuiltin'
+		return ""
+	end 'isBuiltin'
+	if project.structTypes.contains(name) 'isStruct'
+		return name
+	end 'isStruct'
+
+	return ""
+end 'namedFieldCloneReceiverName'
+
+// Build the clone body for a single resolved struct. The caller has already
+// confirmed the struct is auto-cloneable and has no pre-existing `.clone`.
+function synthesizeStructCloneImpl(project Project, module MaxonModule, structName String, st StructType)
+	let cloneName = "{structName}.clone"
+	let structMaxonType = internMaxonType(project, name: structName)
+	let returnType = MaxonReturnType.value(structMaxonType)
+	let visibility = st.visibility
+	let line = st.nameLine
+	let column = st.nameColumn
+
+	var paramNames = StringArray.create()
+	paramNames.push("__self")
+	var paramTypes = MaxonTypeArray.create()
+	paramTypes.push(structMaxonType)
+
+	var func = registerSynthMethod(project, namespace: "", filePath: st.sourceFilePath, funcName: cloneName, paramNames: paramNames, paramTypes: paramTypes, returnType: returnType, visibility: visibility, line: line, column: column)
+
+	let selfSlot = func.scope.declareShadowing("__self", varType: structMaxonType, mutable: false)
+	var entryBlock = module.addBlockAt(func, label: "entry", filePath: st.sourceFilePath.toString(), firstLine: line)
+
+	var synthCounter = 0 as ParsedInt
+	let newPtrName = mintSynthName(synthCounter)
+	synthCounter = synthCounter + 1
+	module.appendOp(entryBlock, op: MaxonOp.structAlloc(newPtrName, structName: structName.toByteArray(), range: SourceRange.none()))
+
+	// For each field: load it from `__self`, then either copy the loaded value
+	// or deep-clone it (recursive `field.clone()`), then store the result into
+	// the freshly-allocated struct. The InsertRefcounts pass supplies the
+	// container incref (the fieldStore takes a reference) and releases any
+	// nested-clone temp at its last use — no manual scope tracking needed (see
+	// the rc-nested-struct-clone-no-leak golden).
+	for fieldIdx in 0 upto st.fields.count() 'eachField'
+		let field = try st.fields.get(fieldIdx) otherwise panic("synthesizeStructCloneImpl: fields.get OOB at {fieldIdx}")
+		let fieldNameBytes = field.name.toByteArray()
+
+		let selfLoadName = mintSynthName(synthCounter)
+		synthCounter = synthCounter + 1
+		module.appendOp(entryBlock, op: MaxonOp.varLoad(selfLoadName, slotId: selfSlot, slotType: structMaxonType, range: SourceRange.none()))
+
+		let fieldValName = mintSynthName(synthCounter)
+		synthCounter = synthCounter + 1
+		module.appendOp(entryBlock, op: MaxonOp.fieldLoad(fieldValName, receiver: selfLoadName, fieldName: fieldNameBytes, range: SourceRange.none()))
+
+		// A managed-reference field deep-clones via `field.clone()`; a value
+		// field stores the loaded value directly. The cloned-temp's own +1 is
+		// released at its last use by InsertRefcounts (the fieldStore takes the
+		// container's reference) — no manual scope tracking needed.
+		let storedValName = mintCloneFieldStoreValue(module, block: entryBlock, fieldValName: fieldValName, fieldKind: classifyStructFieldForClone(project, fieldType: field.fieldType), synthCounter: synthCounter)
+		synthCounter = synthCounter + 1
+
+		module.appendOp(entryBlock, op: MaxonOp.fieldStore(newPtrName, fieldName: fieldNameBytes, value: storedValName, isInit: true, range: SourceRange.none()))
+	end 'eachField'
+
+	module.setTerminator(entryBlock, op: MaxonOp.ret(newPtrName, range: SourceRange.none()))
+	module.functions.push(func)
+end 'synthesizeStructCloneImpl'
+
+// Produce the SSA name to store into a cloned struct's field. A value field
+// reuses the already-loaded value verbatim; a managed-reference field emits a
+// recursive `field.clone()` methodCall (minting a fresh result name from
+// `synthCounter`) and returns that. `synthCounter` names the slot the
+// methodCall result takes when a clone is emitted; the caller advances past it
+// unconditionally (an unused slot in the value-copy case is harmless — `$tN`
+// names only need to be unique within the function body).
+function mintCloneFieldStoreValue(module MaxonModule, block IrBlock, fieldValName ByteArray, fieldKind StructFieldCloneKind, synthCounter ParsedInt) returns ByteArray
+	if fieldKind == StructFieldCloneKind.cloneRef 'deepClone'
+		let clonedName = mintSynthName(synthCounter)
+		module.appendOp(block, op: MaxonOp.methodCall(clonedName, receiver: fieldValName, methodName: "clone".toByteArray(), args: ByteArrayArray.create(), argLabels: StringArray.create(), argTypes: MaxonTypeArray.create(), argRanges: SourceRangeArray.create(), range: SourceRange.none()))
+		return clonedName
+	end 'deepClone'
+
+	return fieldValName
+end 'mintCloneFieldStoreValue'
 
 // Empty match-arm body for the `to`-range arms that name the MaxonOp (or other
 // union) variants a pass deliberately skips. A bare `default` arm is disallowed

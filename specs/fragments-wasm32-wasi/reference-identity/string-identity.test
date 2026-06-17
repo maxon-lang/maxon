@@ -1,0 +1,86 @@
+// Test: string-identity
+function main() returns ExitCode
+	let a = "hello"
+	let b = "hello"
+	var result = 0
+	if a is a 'self'
+		result = result + 1
+	end 'self'
+	if a is b 'diff'
+		result = result + 10
+	end 'diff'
+	return result
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %2 = mir.global_addr @__istr_0
+    %3 = mir.mov_imm 48 : i64
+    %4 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %5 = mir.call @mrt_alloc_with_dtor(%3, %4)
+    mir.store %0, %5, 40 width: qword
+    mir.store %2, %5, 0 width: qword
+    %7 = mir.mov_imm 5 : i64
+    mir.store %7, %5, 8 width: qword
+    %8 = mir.mov_imm -2 : i64
+    mir.store %8, %5, 16 width: qword
+    %9 = mir.mov_imm 1 : i64
+    mir.store %9, %5, 24 width: qword
+    mir.store %0, %5, 32 width: qword
+    %12 = mir.mov_imm 16 : i64
+    %13 = mir.func_addr @__destruct_String
+    %11 = mir.call @stdlib.__mm_alloc(%12, %13)
+    mir.store %5, %11, 0 width: qword
+    %14 = mir.mov_imm 1 : i64
+    mir.store %14, %11, 8 width: qword
+    %15 = mir.global_addr @__istr_0
+    %16 = mir.mov_imm 48 : i64
+    %17 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %18 = mir.call @mrt_alloc_with_dtor(%16, %17)
+    mir.store %0, %18, 40 width: qword
+    mir.store %15, %18, 0 width: qword
+    %20 = mir.mov_imm 5 : i64
+    mir.store %20, %18, 8 width: qword
+    %21 = mir.mov_imm -2 : i64
+    mir.store %21, %18, 16 width: qword
+    %22 = mir.mov_imm 1 : i64
+    mir.store %22, %18, 24 width: qword
+    mir.store %0, %18, 32 width: qword
+    %25 = mir.mov_imm 16 : i64
+    %26 = mir.func_addr @__destruct_String
+    %24 = mir.call @stdlib.__mm_alloc(%25, %26)
+    mir.store %18, %24, 0 width: qword
+    %27 = mir.mov_imm 1 : i64
+    mir.store %27, %24, 8 width: qword
+    %31 = mir.cmp eq, %11, %11
+    mir.cond_br %31 [then: self_0(), else: self_0.after(%0)]
+  self_0:
+    %33 = mir.mov_imm 1 : i64
+    %34 = mir.add.i64 %0, %33
+    mir.br self_0.after(%34)
+  self_0.after(%43: i64):
+    %37 = mir.cmp eq, %11, %24
+    %45 = mir.call @mm_drop(%24)
+    %44 = mir.call @mm_drop(%11)
+    mir.cond_br %37 [then: diff_0(), else: diff_0.after(%43)]
+  diff_0:
+    %39 = mir.mov_imm 10 : i64
+    %40 = mir.add.i64 %43, %39
+    mir.br diff_0.after(%40)
+  diff_0.after(%42: i64):
+    %46 = mir.mov_imm 125 : i64
+    %47 = mir.cmp ugt, %42, %46
+    mir.cond_br %47 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %48 = mir.global_addr @__panic_msg_4ddd81e37aa9ffa3
+    %49 = mir.call @mrt_panic(%48)
+  __range_ok_0:
+    mir.ret %42
+  }
+}
+---
