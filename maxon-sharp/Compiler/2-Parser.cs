@@ -14095,6 +14095,19 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       MaxonValue lhsVal = ResolveExprValue(lhs);
       MaxonValue rhsVal = ResolveExprValue(rhs);
 
+      // Fast-path `enumValue.name == "literal"` / `!= "literal"`: the `.name`
+      // access materializes the variant-name String (a select chain + two heap
+      // allocations) which `String.equals` then byte-compares against the
+      // literal — but a value's `.name` is exactly its variant, so this is a tag
+      // comparison. Rewrite to `tag(enumValue) == ordinal` (integer compare) when
+      // the literal names a known variant. This is the hot path behind every
+      // `op.name == "binop"` / `!= "call"` filter in the compiler's own passes.
+      if ((entry.Op is MaxonBinOperator.Eq or MaxonBinOperator.Ne)
+          && TryRewriteEnumNameComparison(lhsVal, rhsVal, entry.Op, out var enumNameCmp)) {
+        lhs = new ExprResult.Direct(enumNameCmp);
+        continue;
+      }
+
       // For ==/!= between two values of the SAME enum type, skip the rawValue
       // coercion below: the runtime value is the case ordinal (i64), so the
       // fall-through integer-comparison path (kind == Enum → GetEnumBackingKind
@@ -17292,6 +17305,114 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       }
     }
     return false;
+  }
+
+  // Rewrite `enumValue.name == "literal"` / `!= "literal"` to an integer tag
+  // comparison. The `.name` access (MaxonEnumNameOp) materializes the variant
+  // name as a heap String; comparing it to a literal via String.equals is the
+  // same as comparing the value's tag to the named variant's ordinal. Emitting
+  // the tag compare directly avoids the string materialization on both sides;
+  // the now-unused MaxonEnumNameOp + string-literal ops are pruned by DCE.
+  // Returns false (caller keeps the generic String path) unless exactly one
+  // operand is an enum `.name` result and the other is a compile-time string
+  // literal whose enum type is known.
+  private bool TryRewriteEnumNameComparison(MaxonValue lhsVal, MaxonValue rhsVal, MaxonBinOperator op, out MaxonValue result) {
+    result = lhsVal;
+    MaxonEnumNameOp? nameOp;
+    MaxonStringLiteralOp? litOp;
+    if (FindEnumNameOp(lhsVal) is { } ln && FindStringLiteralOp(rhsVal) is { } rl) { nameOp = ln; litOp = rl; }
+    else if (FindEnumNameOp(rhsVal) is { } rn && FindStringLiteralOp(lhsVal) is { } ll) { nameOp = rn; litOp = ll; }
+    else return false;
+
+    if (!_typeRegistry.TryGetValue(nameOp.EnumTypeName, out var td) || td is not IrEnumType enumType) return false;
+
+    // The `.name` String and the literal String are both about to be replaced by
+    // an integer tag compare. They are produced inline and consumed only by this
+    // comparison (FindEnumNameOp/FindStringLiteralOp match the operand's own
+    // producer op), so drop their materialization + scope-cleanup temps —
+    // otherwise the dead heap allocations survive (DCE can't remove a managed
+    // alloc that the scope-end decref still references).
+    RemoveDeadManagedLiteral(nameOp, nameOp.Result);
+    RemoveDeadManagedLiteral(litOp, litOp.Result);
+
+    var matched = enumType.GetCase(litOp.Value);
+    if (matched == null) {
+      // A value's `.name` is always one of its declared variants, so comparing
+      // against a name no variant has is a compile-time constant: `==` is always
+      // false, `!=` always true.
+      var constOp = new MaxonLiteralOp(op == MaxonBinOperator.Ne);
+      _currentBlock!.AddOp(constOp);
+      result = constOp.Result;
+      return true;
+    }
+
+    // The enum value whose name was being compared (not the materialized String).
+    var enumValue = nameOp.EnumValue;
+    // Compare the runtime discriminant against the matched variant's runtime
+    // value: for associated-value enums (unions) the tag in the heap block (an
+    // ordinal); for float-backed enums the f64 rawValue; otherwise the i64
+    // GetCaseTagValue (the rawValue for int-backed, the ordinal for
+    // simple/string/char/struct/function-backed — exactly what the value holds).
+    MaxonValue tagVal;
+    MaxonValue cmpConst;
+    MaxonValueKind cmpKind;
+    if (enumType.HasAssociatedValues) {
+      var tagOp = new MaxonEnumTagOp(enumValue, nameOp.EnumTypeName);
+      _currentBlock!.AddOp(tagOp);
+      tagVal = tagOp.Result;
+      var ord = new MaxonLiteralOp((long)matched.Ordinal);
+      _currentBlock!.AddOp(ord);
+      cmpConst = ord.Result;
+      cmpKind = MaxonValueKind.Integer;
+    } else if (GetEnumBackingKind(enumType) == MaxonValueKind.Float) {
+      tagVal = enumValue;
+      var f = new MaxonLiteralOp(Convert.ToDouble(matched.RawValue));
+      _currentBlock!.AddOp(f);
+      cmpConst = f.Result;
+      cmpKind = MaxonValueKind.Float;
+    } else {
+      tagVal = enumValue;
+      var iv = new MaxonLiteralOp(GetCaseTagValue(matched));
+      _currentBlock!.AddOp(iv);
+      cmpConst = iv.Result;
+      cmpKind = MaxonValueKind.Integer;
+    }
+
+    var cmpOp = new MaxonBinOp(op, tagVal, cmpConst, cmpKind);
+    _currentBlock!.AddOp(cmpOp);
+    result = cmpOp.Result;
+    return true;
+  }
+
+  // The MaxonEnumNameOp (`.name` access) that produced `value` in the current
+  // block, or null. Scans back from the end like IsSmallEnumConstant — the
+  // producer of a comparison operand is a recent op.
+  private MaxonEnumNameOp? FindEnumNameOp(MaxonValue value) {
+    var ops = _currentBlock!.Operations;
+    for (int i = ops.Count - 1; i >= 0; i--) {
+      if (ops[i] is MaxonEnumNameOp nameOp && nameOp.Result == value) return nameOp;
+    }
+    return null;
+  }
+
+  // The `"..."` literal op that produced `value` in the current block, or null.
+  private MaxonStringLiteralOp? FindStringLiteralOp(MaxonValue value) {
+    var ops = _currentBlock!.Operations;
+    for (int i = ops.Count - 1; i >= 0; i--) {
+      if (ops[i] is MaxonStringLiteralOp lit && lit.Result == value) return lit;
+    }
+    return null;
+  }
+
+  // Drop a just-emitted, now-dead managed temp: the producing op, its
+  // EmitLiteralTempAssign binding, and the scope-cleanup variable. Safe only
+  // when `result` is consumed solely by the rewritten comparison.
+  private void RemoveDeadManagedLiteral(MaxonOp producer, MaxonStruct result) {
+    var ops = _currentBlock!.Operations;
+    ops.Remove(producer);
+    var tempName = $"__lit_tmp_{result.Id}";
+    ops.RemoveAll(o => o is MaxonAssignOp a && a.VarName == tempName);
+    _variables.Remove(tempName);
   }
 
   private static bool IsIntegerLikeKind(MaxonValueKind kind) =>
