@@ -1,0 +1,90 @@
+// Test: last-empty-slot
+typealias Integer = int(i64.min to i64.max)
+
+type Slot
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Slot'
+
+typealias SlotArray = Array with Slot
+
+function main() returns ExitCode
+	var arr = SlotArray.create()
+	arr.push(Slot.create(1))
+	arr.resize(3)
+	let result = try arr.last() otherwise Slot.create(55)
+	return result.value
+end 'main'
+---
+ExitCode: 55
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %3 = mir.global_addr @__layout_Array_Slot
+    %4 = mir.call @Array.create(%3)
+    %6 = mir.mov_imm 1 : i64
+    %27 = mir.mov_imm 8 : i64
+    %28 = mir.mov_imm 0 : i64
+    %29 = mir.call @stdlib.__mm_alloc(%27, %28)
+    %47 = mir.call @stdlib.__mm_incref(%29)
+    mir.store %6, %29, 0 width: qword
+    %8 = mir.global_addr @__layout_Array_Slot
+    %9 = mir.call @Array.push(%4, %29, %8)
+    %11 = mir.mov_imm 3 : i64
+    %12 = mir.global_addr @__layout_Array_Slot
+    %13 = mir.call @Array.resize(%4, %11, %12)
+    mir.br inlined_Array.last_0_0()
+  inlined_Array.last_0_0:
+    %30 = mir.load %4, 0 width: qword
+    %31 = mir.load %30, 8 width: qword
+    %32 = mir.load %4, 0 width: qword
+    %33 = mir.mov_imm 1 : i64
+    %34 = mir.sub.i64 %31, %33
+    %35, %36 = mir.try_call @stdlib.__managed_mem_get(%32, %34)
+    %37 = mir.mov_imm 0 : i64
+    %38 = mir.cmp ne, %36, %37
+    mir.cond_br %38 [then: inlined_Array.last_1_0(), else: inlined_Array.last_3_0()]
+  inlined_Array.last_1_0:
+    %50 = mir.call @__mm_decref_maybenull_helper(%4)
+    %39 = mir.mov_imm 0 : i64
+    %40 = mir.mov_imm 1 : i64
+    mir.br inline_cont_main_0(%39, %40)
+  inlined_Array.last_3_0:
+    %41 = mir.mov_imm 0 : i64
+    mir.br __rc_edge_6_0()
+  inline_cont_main_0(%42: i64, %43: i64):
+    %18 = mir.mov_imm 0 : i64
+    %19 = mir.cmp ne, %43, %18
+    mir.cond_br %19 [then: try_0.otherwise(), else: try_0.merge(%42)]
+  try_0.otherwise:
+    %51 = mir.call @__mm_decref_maybenull_helper(%42)
+    %21 = mir.mov_imm 55 : i64
+    %44 = mir.mov_imm 8 : i64
+    %45 = mir.mov_imm 0 : i64
+    %46 = mir.call @stdlib.__mm_alloc(%44, %45)
+    %48 = mir.call @stdlib.__mm_incref(%46)
+    mir.store %21, %46, 0 width: qword
+    mir.br try_0.merge(%46)
+  try_0.merge(%26: i64):
+    %25 = mir.load %26, 0 width: qword
+    %49 = mir.call @__mm_decref_maybenull_helper(%26)
+    %54 = mir.mov_imm 125 : i64
+    %55 = mir.cmp ugt, %25, %54
+    mir.cond_br %55 [then: __range_panic_0(), else: __range_ok_0()]
+  __rc_edge_6_0:
+    %52 = mir.call @stdlib.__mm_incref(%35)
+    %53 = mir.call @__mm_decref_maybenull_helper(%4)
+    mir.br inline_cont_main_0(%35, %41)
+  __range_panic_0:
+    %56 = mir.global_addr @__panic_msg_0d342e1e42da34ef
+    %57 = mir.call @mrt_panic(%56)
+  __range_ok_0:
+    mir.ret %25
+  }
+}
+---

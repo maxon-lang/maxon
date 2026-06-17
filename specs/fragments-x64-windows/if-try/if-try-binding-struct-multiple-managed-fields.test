@@ -131,7 +131,7 @@ module {
   }
   func @main() -> u32 {
   entry:
-    x64.prologue stack_size=64
+    x64.prologue stack_size=48
     x64.xor r12d, r12d
     x64.mov r13, r12
     x64.mov r14, r12
@@ -141,6 +141,7 @@ module {
   loop_0:
     x64.mov ecx, 1
     x64.call mayFail
+    x64.mov r15, r8
     x64.test rdx, rdx
     x64.jne check_0.after
     x64.jmp check_0
@@ -150,117 +151,26 @@ module {
     x64.jbe __range_ok_0
     x64.jmp __range_panic_0
   check_0:
-    x64.mov r9, [r8+0] (8b)
+    x64.mov r8, [r15+0] (8b)
   inlined_Array.get_0_0:
-    x64.mov rsi, [r9+0] (8b)
-  inlined_stdlib.__managed_mem_get_0_0:
-    x64.xor r15d, r15d
-    x64.test r12, r12
-    x64.jge inlined_stdlib.__managed_mem_get_2_0
-  inlined_stdlib.__managed_mem_get_1_0:
-    x64.mov rcx, r8
-    x64.call __mm_decref_maybenull_helper
-    x64.mov edx, 1
-    x64.jmp inline_cont_main_1
-  inlined_stdlib.__managed_mem_get_2_0:
-    x64.mov r9, rsi
-    x64.add r9, 8
-    x64.mov rdi, [r9+0] (8b)
-    x64.cmp r12, rdi
-    x64.jl inlined_stdlib.__managed_mem_get_4_0
-  inlined_stdlib.__managed_mem_get_3_0:
-    x64.mov rcx, r8
-    x64.call __mm_decref_maybenull_helper
-    x64.mov edx, 1
-    x64.jmp inline_cont_main_1
-  inlined_stdlib.__managed_mem_get_4_0:
-    x64.mov r9, rsi
-    x64.add r9, 24
-    x64.mov rdi, [r9+0] (8b)
-    x64.mov r9, [rsi+0] (8b)
-    x64.test rdi, rdi
-    x64.jne inlined_stdlib.__managed_mem_get_6_0
-  inlined_stdlib.__managed_mem_get_5_0:
-    x64.mov ecx, 3
-    x64.mov rsi, r12
-    x64.shr rsi, rsi, rcx
-    x64.xor edi, edi
-    x64.add r9, rsi
-    x64.mov [rbp-8], r9
-    x64.mov [rbp-16], rdi
-    x64.movzx rax, byte ptr [rax+0]
-    x64.mov r9, [rbp-24]
-    x64.mov [rbp+-32], r9
-    x64.mov rcx, r8
-    x64.call __mm_decref_maybenull_helper
-    x64.mov r8d, 7
-    x64.mov rcx, r12
-    x64.and rcx, r8
-    x64.mov r8d, 1
-    x64.mov r9, [rbp+-32]
-    x64.shr r9, r9, rcx
-    x64.and r9, r8
-    x64.mov rdx, r15
-    x64.mov r15, r9
-    x64.jmp inline_cont_main_1
-  inlined_stdlib.__managed_mem_get_6_0:
-    x64.mov rsi, rdi
-    x64.imul rsi, r12
-    x64.add r9, rsi
-  inlined_stdlib.__managed_mem_load_sized_0_0:
-    x64.cmp rdi, 1
-    x64.jne inlined_stdlib.__managed_mem_load_sized_2_0
-  inlined_stdlib.__managed_mem_load_sized_1_0:
-    x64.xor esi, esi
-    x64.mov [rbp-8], r9
-    x64.mov [rbp-16], rsi
-    x64.movzx rax, byte ptr [rax+0]
-    x64.mov r9, [rbp-24]
-    x64.mov [rbp+-32], r9
-    x64.mov rcx, r8
-    x64.call __mm_decref_maybenull_helper
-    x64.mov r8, [rbp+-32]
-    x64.jmp inline_cont_main_0
-  inlined_stdlib.__managed_mem_load_sized_2_0:
-    x64.cmp rdi, 2
-    x64.jne inlined_stdlib.__managed_mem_load_sized_4_0
-  inlined_stdlib.__managed_mem_load_sized_3_0:
-    x64.movzx rsi, [r9+0] (2b)
-    x64.mov [rbp+-32], rsi
-    x64.mov rcx, r8
-    x64.call __mm_decref_maybenull_helper
-    x64.mov r8, [rbp+-32]
-    x64.jmp inline_cont_main_0
-  inlined_stdlib.__managed_mem_load_sized_4_0:
-    x64.cmp rdi, 4
-    x64.jne inlined_stdlib.__managed_mem_load_sized_6_0
-  inlined_stdlib.__managed_mem_load_sized_5_0:
-    x64.mov rsi, [r9+0] (4b)
-    x64.mov [rbp+-32], rsi
-    x64.mov rcx, r8
-    x64.call __mm_decref_maybenull_helper
-    x64.mov r8, [rbp+-32]
-    x64.jmp inline_cont_main_0
-  inlined_stdlib.__managed_mem_load_sized_6_0:
-    x64.mov rsi, [r9+0] (8b)
-    x64.mov [rbp+-32], rsi
-    x64.mov rcx, r8
-    x64.call __mm_decref_maybenull_helper
-    x64.mov r8, [rbp+-32]
-  inline_cont_main_0:
-    x64.mov rdx, r15
-    x64.mov r15, r8
-  inline_cont_main_1:
+    x64.mov rcx, [r8+0] (8b)
+    x64.mov rdx, r12
+    x64.call stdlib.__managed_mem_get
+    x64.mov [rbp+-8], r8
     x64.test rdx, rdx
     x64.je inlined_Array.get_3_0
   inlined_Array.get_1_0:
+    x64.mov rcx, r15
+    x64.call __mm_decref_maybenull_helper
     x64.mov edx, 1
     x64.xor r8d, r8d
-    x64.jmp inline_cont_main_2
+    x64.jmp inline_cont_main_0
   inlined_Array.get_3_0:
+    x64.mov rcx, r15
+    x64.call __mm_decref_maybenull_helper
     x64.xor edx, edx
-    x64.mov r8, r15
-  inline_cont_main_2:
+    x64.mov r8, [rbp+-8]
+  inline_cont_main_0:
     x64.test rdx, rdx
     x64.je try_0.ok
     x64.mov r8, r12

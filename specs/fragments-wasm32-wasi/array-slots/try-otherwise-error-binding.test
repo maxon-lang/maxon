@@ -1,0 +1,80 @@
+// Test: try-otherwise-error-binding
+typealias Integer = int(i64.min to i64.max)
+
+type Slot
+	export var value as Integer
+end 'Slot'
+
+typealias SlotArray = Array with Slot
+
+function main() returns ExitCode
+	var arr = SlotArray.create()
+	arr.resize(2)
+	try arr.get(0) otherwise (e) 'handler'
+		match e 'check'
+			emptySlot then return 42
+			indexOutOfBounds then return 99
+		end 'check'
+	end 'handler'
+	return 0
+end 'main'
+---
+ExitCode: 99
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %2 = mir.global_addr @__layout_Array_Slot
+    %3 = mir.call @Array.create(%2)
+    %5 = mir.mov_imm 2 : i64
+    %6 = mir.global_addr @__layout_Array_Slot
+    %7 = mir.call @Array.resize(%3, %5, %6)
+    mir.br inlined_Array.get_0_0()
+  inlined_Array.get_0_0:
+    %27 = mir.load %3, 0 width: qword
+    %28, %29 = mir.try_call @stdlib.__managed_mem_get(%27, %0)
+    %30 = mir.mov_imm 0 : i64
+    %31 = mir.cmp ne, %29, %30
+    mir.cond_br %31 [then: inlined_Array.get_1_0(), else: inlined_Array.get_3_0()]
+  inlined_Array.get_1_0:
+    %38 = mir.call @__mm_decref_maybenull_helper(%3)
+    %32 = mir.mov_imm 0 : i64
+    %33 = mir.mov_imm 1 : i64
+    mir.br inline_cont_main_0(%32, %33)
+  inlined_Array.get_3_0:
+    %34 = mir.mov_imm 0 : i64
+    mir.br __rc_edge_11_0()
+  inline_cont_main_0(%35: i64, %36: i64):
+    %37 = mir.call @__mm_decref_maybenull_helper(%35)
+    %14 = mir.cmp ne, %36, %0
+    mir.cond_br %14 [then: try_0.otherwise(), else: try_0.merge()]
+  try_0.otherwise:
+    %16 = mir.mov_imm 1 : i64
+    %17 = mir.sub.i64 %36, %16
+    %19 = mir.mov_imm 1 : i64
+    %20 = mir.cmp eq, %17, %19
+    mir.cond_br %20 [then: check_0.case0(), else: check_0.next0()]
+  check_0.case0:
+    %21 = mir.mov_imm 42 : i64
+    mir.ret %21
+  check_0.next0:
+    %23 = mir.cmp eq, %17, %0
+    mir.cond_br %23 [then: check_0.case1(), else: check_0.next1()]
+  check_0.case1:
+    %24 = mir.mov_imm 99 : i64
+    mir.ret %24
+  check_0.next1:
+    %25 = mir.global_addr @__panic_msg_96c7daeb3f9a871f
+    %26 = mir.call @mrt_panic(%25)
+    mir.ret %0
+  try_0.merge:
+    mir.ret %0
+  __rc_edge_11_0:
+    %39 = mir.call @stdlib.__mm_incref(%28)
+    %40 = mir.call @__mm_decref_maybenull_helper(%3)
+    mir.br inline_cont_main_0(%28, %34)
+  }
+}
+---

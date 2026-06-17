@@ -1345,7 +1345,20 @@ function __managed_mem_get(self MachineWord, idx MachineWord) returns MachineWor
 	if elemSize == 0 'bit'
 		return __managed_mem_read_bit(buffer, idx: idx)
 	end 'bit'
-	return __managed_mem_load_sized(buffer + idx * elemSize, elemSize: elemSize)
+	let loaded = __managed_mem_load_sized(buffer + idx * elemSize, elemSize: elemSize)
+	// Empty-slot detection for managed-pointer (struct/string/union/array)
+	// elements only: `element_destroy != 0` marks a slot that holds a refcounted
+	// heap pointer. resize()/remove() zero such slots; reading one back as a live
+	// pointer and dereferencing it (or increfing it) would fault on null. Report
+	// it as `emptySlot` so `try arr.get(i) otherwise …` handles sparse arrays.
+	// Primitive slots (element_destroy == 0) store values inline — a 0 there is a
+	// valid element, never an empty slot. Mirrors the C# bootstrap's
+	// `LowerManagedMemGet` null-slot guard.
+	let elementDestroy = __Internals.loadIndirect(self + MM_OFFSET_ELEMENT_DESTROY)
+	if elementDestroy != 0 and loaded == 0 'emptyManagedSlot'
+		throw __ManagedMemoryError.emptySlot
+	end 'emptyManagedSlot'
+	return loaded
 end '__managed_mem_get'
 
 // set(self, idx, value) — bounds-check idx ∈ [0, capacity) (push() reserves
