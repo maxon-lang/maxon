@@ -125,7 +125,15 @@ public static partial class SpecParser {
       ValidateCodeBlockLanguages(testName, testSection);
 
       var exitCode = ExtractCodeBlock(testSection, "exitcode");
-      var stdout = ExtractCodeBlock(testSection, "stdout");
+      // Prefer a target-qualified `Stdout:{targetKey}` block over the bare
+      // ```stdout block, mirroring the RequiredIR resolution below. This lets a
+      // single test pin different expected output per target (e.g. FilePath's
+      // `\`-separated Windows output vs `/`-separated posix output). When the
+      // current target has no matching block, fall back to the portable bare
+      // stdout; if neither exists, stdout stays null and no stdout check runs.
+      var stdout = targetKey != null
+        ? ExtractCodeBlock(testSection, $"Stdout:{targetKey}") ?? ExtractCodeBlock(testSection, "stdout")
+        : ExtractCodeBlock(testSection, "stdout");
       var runtimeStderr = ExtractCodeBlock(testSection, "stderr");
       var compilerStderr = ExtractCodeBlock(testSection, "maxoncstderr");
 
@@ -263,7 +271,7 @@ public static partial class SpecParser {
   ];
 
   private static readonly HashSet<string> KnownCodeBlockPrefixes = [
-    "RequiredIR", "RequiredLowering"
+    "RequiredIR", "RequiredLowering", "Stdout"
   ];
 
   private static void ValidateCodeBlockLanguages(string testName, string testSection) {

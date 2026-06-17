@@ -1,0 +1,105 @@
+// Test: filepath-regular-string-unchanged
+function main() returns ExitCode
+	let p = try FilePath.from("C:\\Users\\normal\\path.txt") otherwise panic("bad path")
+	print("{p}\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+C:/Users/normal/path.txt
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %2 = mir.global_addr @__istr_0
+    %3 = mir.mov_imm 48 : i64
+    %4 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %5 = mir.call @mrt_alloc_with_dtor(%3, %4)
+    mir.store %0, %5, 40 width: qword
+    mir.store %2, %5, 0 width: qword
+    %7 = mir.mov_imm 24 : i64
+    mir.store %7, %5, 8 width: qword
+    %8 = mir.mov_imm -2 : i64
+    mir.store %8, %5, 16 width: qword
+    %9 = mir.mov_imm 1 : i64
+    mir.store %9, %5, 24 width: qword
+    mir.store %0, %5, 32 width: qword
+    %12 = mir.mov_imm 16 : i64
+    %13 = mir.func_addr @__destruct_String
+    %11 = mir.call @stdlib.__mm_alloc(%12, %13)
+    %67 = mir.call @stdlib.__mm_incref(%11)
+    mir.store %5, %11, 0 width: qword
+    %14 = mir.mov_imm 1 : i64
+    mir.store %14, %11, 8 width: qword
+    mir.br inlined_FilePath.from_0_0()
+  inlined_FilePath.from_0_0:
+    %55, %56 = mir.try_call @FilePath.create(%11)
+    %57 = mir.mov_imm 0 : i64
+    %58 = mir.cmp ne, %56, %57
+    mir.cond_br %58 [then: inlined_FilePath.from_1_0(), else: inlined_FilePath.from_2_0()]
+  inlined_FilePath.from_1_0:
+    %59 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%59, %56)
+  inlined_FilePath.from_2_0:
+    %60 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%55, %60)
+  inline_cont_main_0(%61: i64, %62: i64):
+    %18 = mir.cmp ne, %62, %0
+    mir.cond_br %18 [then: try_0.otherwise(), else: try_0.merge()]
+  try_0.otherwise:
+    %73 = mir.call @__mm_decref_maybenull_helper(%61)
+    %20 = mir.global_addr @__panic_msg_a8876899cd0eff55
+    %21 = mir.call @mrt_panic(%20)
+    mir.ret %0
+  try_0.merge:
+    %25 = mir.global_addr @__istr_1
+    %27 = mir.global_addr @__witness_FilePath_Stringable
+    %28 = mir.witness_call %27, [0](%61)
+    %69 = mir.call @__mm_decref_maybenull_helper(%61)
+    %29 = mir.load %28, 0 width: qword
+    %30 = mir.load %29, 0 width: qword
+    %31 = mir.load %29, 8 width: qword
+    %32 = mir.global_addr @__istr_2
+    %33 = mir.mov_imm 1 : i64
+    %36 = mir.add.i64 %0, %31
+    %37 = mir.add.i64 %36, %33
+    %38 = mir.mov_imm 1 : i64
+    %39 = mir.add.i64 %37, %38
+    %40 = mir.call @mrt_alloc(%39)
+    mir.memcpy %40, %25, %0
+    %41 = mir.add.i64 %40, %0
+    mir.memcpy %41, %30, %31
+    %42 = mir.add.i64 %41, %31
+    %70 = mir.call @__mm_decref_maybenull_helper(%28)
+    mir.memcpy %42, %32, %33
+    %44 = mir.mov_imm 48 : i64
+    %45 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %46 = mir.call @mrt_alloc_with_dtor(%44, %45)
+    mir.store %0, %46, 40 width: qword
+    mir.store %40, %46, 0 width: qword
+    mir.store %37, %46, 8 width: qword
+    mir.store %37, %46, 16 width: qword
+    %48 = mir.mov_imm 1 : i64
+    mir.store %48, %46, 24 width: qword
+    %49 = mir.mov_imm -1 : i64
+    mir.store %49, %46, 32 width: qword
+    %51 = mir.mov_imm 16 : i64
+    %52 = mir.func_addr @__destruct_String
+    %50 = mir.call @stdlib.__mm_alloc(%51, %52)
+    mir.store %46, %50, 0 width: qword
+    mir.store %0, %50, 8 width: qword
+    %63 = mir.load %50, 0 width: qword
+    %68 = mir.call @stdlib.__mm_incref(%63)
+    %64 = mir.load %63, 0 width: qword
+    %65 = mir.load %63, 8 width: qword
+    %66 = mir.call @mrt_write_stdout(%64, %65)
+    %72 = mir.call @mm_drop(%50)
+    %71 = mir.call @__mm_decref_maybenull_helper(%63)
+    mir.ret %0
+  }
+}
+---

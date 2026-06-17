@@ -1,0 +1,86 @@
+// Test: filepath-normalize
+function main() returns ExitCode
+	let p = FilePath from "C:/Users/test"
+	let n = p.normalize()
+	print("{n}\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+C:/Users/test
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %2 = mir.global_addr @__istr_0
+    %3 = mir.mov_imm 48 : i64
+    %4 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %5 = mir.call @mrt_alloc_with_dtor(%3, %4)
+    mir.store %0, %5, 40 width: qword
+    mir.store %2, %5, 0 width: qword
+    %7 = mir.mov_imm 13 : i64
+    mir.store %7, %5, 8 width: qword
+    %8 = mir.mov_imm -2 : i64
+    mir.store %8, %5, 16 width: qword
+    %9 = mir.mov_imm 1 : i64
+    mir.store %9, %5, 24 width: qword
+    mir.store %0, %5, 32 width: qword
+    %12 = mir.mov_imm 16 : i64
+    %13 = mir.func_addr @__destruct_String
+    %11 = mir.call @stdlib.__mm_alloc(%12, %13)
+    %53 = mir.call @stdlib.__mm_incref(%11)
+    mir.store %5, %11, 0 width: qword
+    %14 = mir.mov_imm 1 : i64
+    mir.store %14, %11, 8 width: qword
+    %15 = mir.call @FilePath.init(%11)
+    %19 = mir.global_addr @__istr_1
+    %21 = mir.global_addr @__witness_FilePath_Stringable
+    %22 = mir.witness_call %21, [0](%15)
+    %55 = mir.call @__mm_decref_maybenull_helper(%15)
+    %23 = mir.load %22, 0 width: qword
+    %24 = mir.load %23, 0 width: qword
+    %25 = mir.load %23, 8 width: qword
+    %26 = mir.global_addr @__istr_2
+    %27 = mir.mov_imm 1 : i64
+    %30 = mir.add.i64 %0, %25
+    %31 = mir.add.i64 %30, %27
+    %32 = mir.mov_imm 1 : i64
+    %33 = mir.add.i64 %31, %32
+    %34 = mir.call @mrt_alloc(%33)
+    mir.memcpy %34, %19, %0
+    %35 = mir.add.i64 %34, %0
+    mir.memcpy %35, %24, %25
+    %36 = mir.add.i64 %35, %25
+    %56 = mir.call @__mm_decref_maybenull_helper(%22)
+    mir.memcpy %36, %26, %27
+    %38 = mir.mov_imm 48 : i64
+    %39 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %40 = mir.call @mrt_alloc_with_dtor(%38, %39)
+    mir.store %0, %40, 40 width: qword
+    mir.store %34, %40, 0 width: qword
+    mir.store %31, %40, 8 width: qword
+    mir.store %31, %40, 16 width: qword
+    %42 = mir.mov_imm 1 : i64
+    mir.store %42, %40, 24 width: qword
+    %43 = mir.mov_imm -1 : i64
+    mir.store %43, %40, 32 width: qword
+    %45 = mir.mov_imm 16 : i64
+    %46 = mir.func_addr @__destruct_String
+    %44 = mir.call @stdlib.__mm_alloc(%45, %46)
+    mir.store %40, %44, 0 width: qword
+    mir.store %0, %44, 8 width: qword
+    %49 = mir.load %44, 0 width: qword
+    %54 = mir.call @stdlib.__mm_incref(%49)
+    %50 = mir.load %49, 0 width: qword
+    %51 = mir.load %49, 8 width: qword
+    %52 = mir.call @mrt_write_stdout(%50, %51)
+    %58 = mir.call @mm_drop(%44)
+    %57 = mir.call @__mm_decref_maybenull_helper(%49)
+    mir.ret %0
+  }
+}
+---

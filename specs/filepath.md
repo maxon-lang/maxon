@@ -89,8 +89,11 @@ end 'main'
 ```exitcode
 0
 ```
-```stdout
+```Stdout:x64-windows
 C:\test.txt
+```
+```Stdout:wasm32-wasi
+C:/test.txt
 ```
 
 <!-- test: filepath-from-method -->
@@ -227,8 +230,11 @@ end 'main'
 ```exitcode
 0
 ```
-```stdout
+```Stdout:x64-windows
 C:\Users
+```
+```Stdout:wasm32-wasi
+C:/Users
 ```
 
 <!-- test: filepath-parent-fwd -->
@@ -243,8 +249,11 @@ end 'main'
 ```exitcode
 0
 ```
-```stdout
+```Stdout:x64-windows
 C:\Users
+```
+```Stdout:wasm32-wasi
+C:/Users
 ```
 
 <!-- test: filepath-parent-none -->
@@ -277,8 +286,11 @@ end 'main'
 ```exitcode
 0
 ```
-```stdout
+```Stdout:x64-windows
 C:\Users\test
+```
+```Stdout:wasm32-wasi
+C:/Users/test
 ```
 
 <!-- test: filepath-join-trailing-sep -->
@@ -293,8 +305,11 @@ end 'main'
 ```exitcode
 0
 ```
-```stdout
+```Stdout:x64-windows
 C:\Users\test
+```
+```Stdout:wasm32-wasi
+C:/Users/test
 ```
 
 <!-- test: filepath-join-chain -->
@@ -309,8 +324,11 @@ end 'main'
 ```exitcode
 0
 ```
-```stdout
+```Stdout:x64-windows
 C:\Users\docs\readme.md
+```
+```Stdout:wasm32-wasi
+C:/Users/docs/readme.md
 ```
 
 <!-- test: filepath-is-absolute-drive -->
@@ -408,8 +426,11 @@ end 'main'
 ```exitcode
 0
 ```
-```stdout
+```Stdout:x64-windows
 C:\Users\file.md
+```
+```Stdout:wasm32-wasi
+C:/Users/file.md
 ```
 
 <!-- test: filepath-normalize -->
@@ -424,8 +445,11 @@ end 'main'
 ```exitcode
 0
 ```
-```stdout
+```Stdout:x64-windows
 C:\Users\test
+```
+```Stdout:wasm32-wasi
+C:/Users/test
 ```
 
 <!-- test: filepath-equality -->
@@ -506,8 +530,11 @@ end 'main'
 ```exitcode
 0
 ```
-```stdout
+```Stdout:x64-windows
 \
+```
+```Stdout:wasm32-wasi
+/
 ```
 
 <!-- test: filepath-resolve-relative -->
@@ -523,8 +550,11 @@ end 'main'
 ```exitcode
 0
 ```
-```stdout
+```Stdout:x64-windows
 C:\Users\docs
+```
+```Stdout:wasm32-wasi
+C:/Users/docs
 ```
 
 <!-- test: filepath-resolve-absolute-unchanged -->
@@ -540,8 +570,11 @@ end 'main'
 ```exitcode
 0
 ```
-```stdout
+```Stdout:x64-windows
 C:\Users\file.txt
+```
+```Stdout:wasm32-wasi
+C:/Other/C:/Users/file.txt
 ```
 
 <!-- test: filepath-path-immutable -->
@@ -572,8 +605,11 @@ end 'main'
 ```exitcode
 0
 ```
-```stdout
+```Stdout:x64-windows
 C:\Users\docs
+```
+```Stdout:wasm32-wasi
+C:/Users/docs
 ```
 
 <!-- test: filepath-join-empty-base -->
@@ -621,8 +657,11 @@ end 'main'
 ```exitcode
 0
 ```
-```stdout
+```Stdout:x64-windows
 C:\valid\path.txt
+```
+```Stdout:wasm32-wasi
+C:/valid/path.txt
 ```
 
 ### File URL Support
@@ -640,8 +679,11 @@ end 'main'
 ```exitcode
 0
 ```
-```stdout
+```Stdout:x64-windows
 \tmp\test.txt
+```
+```Stdout:wasm32-wasi
+/tmp/test.txt
 ```
 
 <!-- test: filepath-file-url-init -->
@@ -655,8 +697,11 @@ end 'main'
 ```exitcode
 0
 ```
-```stdout
+```Stdout:x64-windows
 \tmp\test.txt
+```
+```Stdout:wasm32-wasi
+/tmp/test.txt
 ```
 
 <!-- test: filepath-file-url-unix-path -->
@@ -670,8 +715,11 @@ end 'main'
 ```exitcode
 0
 ```
-```stdout
+```Stdout:x64-windows
 \home\user\file.txt
+```
+```Stdout:wasm32-wasi
+/home/user/file.txt
 ```
 
 <!-- test: filepath-not-file-url -->
@@ -702,8 +750,11 @@ end 'main'
 ```exitcode
 0
 ```
-```stdout
+```Stdout:x64-windows
 C:\Users\normal\path.txt
+```
+```Stdout:wasm32-wasi
+C:/Users/normal/path.txt
 ```
 
 <!-- test: filepath-file-url-empty-path -->
@@ -718,7 +769,11 @@ end 'main'
 ```exitcode
 0
 ```
-```stdout
+```Stdout:x64-windows
 path='\'
+empty=false
+```
+```Stdout:wasm32-wasi
+path='/'
 empty=false
 ```

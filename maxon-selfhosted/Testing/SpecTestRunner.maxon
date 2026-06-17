@@ -248,18 +248,7 @@ let whitelist = ["basics",
 	//   ExitCode range-check edge). Re-enable once Phase B lands.
 	// "try-block-otherwise-divergent" — needs terminal `otherwise panic/throws` forms.
 	// "lazy-static" (7/9) — `from`-collection initializer + global call init.
-	// "filepath" (39/43) — top-level string-escape fix took it 34→39; remaining 4
-	//   are an INLINER+refcount over-release in FilePath `==`/`!=` + a
-	//   normalize/resolve leak. When `FilePath.equals` (→ `canonicalForCompare`,
-	//   `s.clone().toLower()`) is INLINED into a caller that holds the two
-	//   FilePaths as `let`s, the inlined body's param-consume decrefs the
-	//   receiver/arg FilePaths, and the caller ALSO decrefs them at scope exit →
-	//   `__mm_decref: over-release` (Internals.maxon:60). Does NOT reproduce with
-	//   an equivalent USER struct (only the real stdlib FilePath + inline path),
-	//   so it's an inliner/InsertRefcounts param-consume-vs-borrow interaction.
-	//   Needs the inliner to suppress the caller's owner-decref for args the
-	//   inlined body consumes (or not treat borrowed `==` operands as consumed).
-	//   Enable once that lands.
+	"filepath",
 	// "file-info" — x64 passes, but wasm worker crashes on the fragment batch.
 
 	// --- Tier 3: larger features / runtime / multi-file ---

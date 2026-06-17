@@ -1126,12 +1126,49 @@ end 'threadReturnPhiOwnership'
 // A guard that skipped the preserve for every borrow-set callee was tried and
 // measured to REGRESS: it also erased load-bearing call-site classes on
 // element-loader splices.)
-function preserveCallSiteOwnership(caller IrFunction, oldResultId ValueId, newId ValueId)
+//
+// CONVERSELY, when the call site says NOT managed (a PRIOR inline round demoted
+// it to `notManaged` because the merged body now carries a verbatim release of
+// the call result — the `FilePath.equals` double-inline of `canonicalForCompare`:
+// round 1 splices `equals` and releases its two `canonicalForCompare` results
+// in-body, threading them `notManaged`; rounds 2/3 splice each
+// `canonicalForCompare`, whose returned `toLower` result is `callReturnRc1`) but
+// the inlined return value says managed, demote the inlined value to `notManaged`:
+// the spliced body decref already owns the single release, so the inserter must
+// NOT plan a second one (over-release — refcount already 0). This mirrors the
+// multi-block `threadReturnPhiOwnership` guard (`if caller.isValueManaged(callResultId)`)
+// which leaves a `notManaged` old result unclassed; the call-site class is
+// authoritative in BOTH directions, not only managed→raw.
+function preserveCallSiteOwnership(module StdModule, caller IrFunction, oldResultId ValueId, newId ValueId)
 	if caller.isValueManaged(oldResultId) and not caller.isValueManaged(newId) 'blindCallee'
 		caller.setValueManaged(newId, managed: true)
 		caller.setValueOwnership(newId, cls: caller.ownershipOfValue(oldResultId))
-	end 'blindCallee'
+	end 'blindCallee' else if not caller.isValueManaged(oldResultId) and caller.isValueManaged(newId) and callerBodyReleasesValue(module, fn: caller, valueId: oldResultId) 'releasedByPriorInline'
+		// The body-release check is LOAD-BEARING: a call result can be notManaged
+		// for reasons OTHER than a prior-inline splice (e.g. a managed allocator
+		// inlined once into a site whose result is notManaged for an unrelated
+		// reason — Factory.make -> Widget.create). Demoting THAT would suppress a
+		// release the body does NOT carry -> under-release/leak (the
+		// interface-dispatch regression). Only when the body actually releases
+		// oldResultId is the demotion safe (the spliced body decref owns the
+		// single release; the inserter must not add a second).
+		caller.setValueManaged(newId, managed: false)
+		caller.setValueOwnership(newId, cls: OwnershipClass.notManaged)
+	end 'releasedByPriorInline'
 end 'preserveCallSiteOwnership'
+
+// True when `fn`'s body contains a release-family call (`mm_drop` / `__mm_decref`
+// / `__mm_decref_maybenull_helper`) whose argument is `valueId`. Lets
+// `preserveCallSiteOwnership` confirm a `notManaged` call result was demoted
+// because a prior inline round spliced a verbatim release of it. Reuses the same
+// release-arg detection as `collectCalleeRcCallArgs`.
+function callerBodyReleasesValue(module StdModule, fn IrFunction, valueId ValueId) returns bool
+	let releasedArgs = collectCalleeRcCallArgs(module, callee: fn, kind: RcCallKind.release)
+	if valueId < 0 or valueId >= releasedArgs.count() 'outOfRange'
+		return false
+	end 'outOfRange'
+	return try releasedArgs.get(valueId) otherwise false
+end 'callerBodyReleasesValue'
 
 // True for container methods that TRANSFER a managed element out of the collection
 // (the slot relinquishes its +1 to the returned value). These must NOT be inlined — the
@@ -1211,7 +1248,11 @@ function performInline(module StdModule, project Project, caller IrFunction, blo
 	if removedIdx != opIdx 'mismatch'
 		panic("performInline: removed opIdx {removedIdx} != expected {opIdx}")
 	end 'mismatch'
-	_ = emitInlinedBody(module, callerBlock: block, calleeBlock: calleeBlock, remap: remap, insertAt: posInBlock)
+	// Elide the spliced `return self`/`return <param>` return-incref when the
+	// returned param aliases the caller-managed receiver (see
+	// `collectReturnSelfIncrefSkips`).
+	let increfSkips = collectReturnSelfIncrefSkips(module, callee: callee, caller: caller, remap: remap, callerOrigMaxId: callerOrigMaxId)
+	_ = emitInlinedBody(module, callerBlock: block, calleeBlock: calleeBlock, remap: remap, insertAt: posInBlock, increfSkips: increfSkips)
 
 	// Phase 3: rewrite the caller's existing ops so any reference to the
 	// call's old resultId now reads the inlined return value. Two cases:
@@ -1227,7 +1268,7 @@ function performInline(module StdModule, project Project, caller IrFunction, blo
 			panic("performInline: ret ValueId {retValId} not bound by callee body walk")
 		end 'unmapped'
 
-		preserveCallSiteOwnership(caller, oldResultId: callShape.resultId, newId: inlinedRet)
+		preserveCallSiteOwnership(module, caller: caller, oldResultId: callShape.resultId, newId: inlinedRet)
 		substituteCallResultInCaller(module, caller: caller, oldId: callShape.resultId, newId: inlinedRet)
 	end 'hasReturn'
 
@@ -1358,7 +1399,11 @@ function performMultiBlockInline(module StdModule, project Project, caller IrFun
 	// Body ops are remapped through ValueId+BlockId; `ret` becomes a
 	// `br continuationBlock [retVal]`; `errorReturn` becomes a
 	// `br continuationBlock [retVal, errorFlag]`.
-	emitMultiBlockInlinedBlocks(module, callee: callee, valueRemap: remap, blockRemap: blockRemap, continuationBlockId: continuationBlockId, returnsValue: needsPrimaryPhi, isTryCallSite: isTryCallSite)
+	// Elide the spliced `return self`/`return <param>` return-incref of a returned
+	// param that aliases the caller-managed receiver (the already-absolute
+	// `FilePath.resolve` arm). See `collectReturnSelfIncrefSkips`.
+	let increfSkips = collectReturnSelfIncrefSkips(module, callee: callee, caller: caller, remap: remap, callerOrigMaxId: callerOrigMaxId)
+	emitMultiBlockInlinedBlocks(module, callee: callee, valueRemap: remap, blockRemap: blockRemap, continuationBlockId: continuationBlockId, returnsValue: needsPrimaryPhi, isTryCallSite: isTryCallSite, increfSkips: increfSkips)
 
 	// Phase 5: register the new blocks (inlined + continuation) on the
 	// caller. Insert the spliced sub-CFG immediately AFTER the call-site
@@ -1491,7 +1536,7 @@ end 'splitCallerBlock'
 // continuationBlockId` carrying the remapped return value (when the
 // callee returns a value). `param` ops are skipped — their resultIds
 // were already bound to the call-site args.
-function emitMultiBlockInlinedBlocks(module StdModule, callee IrFunction, valueRemap ValueIdArray, blockRemap BlockIdArray, continuationBlockId BlockId, returnsValue bool, isTryCallSite bool)
+function emitMultiBlockInlinedBlocks(module StdModule, callee IrFunction, valueRemap ValueIdArray, blockRemap BlockIdArray, continuationBlockId BlockId, returnsValue bool, isTryCallSite bool, increfSkips ValueIdArray)
 	for cBlockRef in callee.blockRefs 'eachCalleeBlock'
 		let cBlock = try module.blocks.get(cBlockRef) otherwise panic("emitMultiBlockInlinedBlocks: blockRef {cBlockRef} not in module")
 		let newBlockId = try blockRemap.get(cBlock.id) otherwise panic("emitMultiBlockInlinedBlocks: blockRemap missing id {cBlock.id}")
@@ -1521,6 +1566,9 @@ function emitMultiBlockInlinedBlocks(module StdModule, callee IrFunction, valueR
 			if isParamOpStd(op) 'skipParam'
 				continue
 			end 'skipParam'
+			if valueIdArrayContainsInl(increfSkips, vid: srcOpIdx) 'skipReturnIncref'
+				continue
+			end 'skipReturnIncref'
 			let rewritten = rewriteOpWithBlocks(op, valueRemap: valueRemap, blockRemap: blockRemap)
 			let newIdx = module.ops.count()
 			module.ops.push(rewritten)
@@ -2103,16 +2151,240 @@ end 'OpPositionError'
 // callee-source order, so the spliced body reads the same way as the
 // original — earlier ops dominate later ones.
 
+// =====================================================================
+// `return self` / `return <param>` return-incref elision
+// =====================================================================
+//
+// A callee that hands back a BORROWED parameter unchanged (`return self`,
+// `FilePath.normalize`; or a `return self` ARM of a branching method,
+// `FilePath.resolve`'s already-absolute path) is refcounted STANDALONE with a
+// RETURN-INCREF before the `ret` (`InsertRefcounts.planReturnIncrefs`): the
+// callee still holds only the caller's borrowed reference, so it mints a FRESH
+// +1 for the caller to own and release. Standalone this is correct and balanced
+// — the caller binds the result and releases it at last use.
+//
+// When that callee is INLINED, the returned parameter remaps to the call-site
+// ARG (a PRE-EXISTING caller value, not a fresh body id), and the call result is
+// substituted onto that same value: the result and the receiver ALIAS one SSA
+// value. The receiver value already carries its own lifecycle (the caller's
+// `insertRefcounts` releases it exactly once at its own last use), so the
+// spliced return-incref is an UNBALANCED extra +1 — incref'd twice (caller's own
+// bind + the spliced return-incref) but released once → a leak (`let n =
+// p.normalize()` / `let r = abs.resolve(base)` under `--leak-check`).
+//
+// The fix ELIDES the spliced return-incref of such a returned param. The result
+// aliases the receiver, and the caller's `insertRefcounts` already releases the
+// receiver exactly once at its (now-extended) last use, so the spliced
+// return-incref is a redundant extra +1.
+//
+// The elision is gated narrowly to keep it CORRECT for the case where the
+// returned param is NOT an owned receiver but a transient BORROW. The motivating
+// counter-example is `FilePath.canonicalForCompare` on a non-Windows target,
+// whose body is literally `return s` (`#else return s`): inlined into
+// `FilePath.equals`, `s` remaps to a LOADED `.path` FIELD value. That loaded
+// value owns NO independent +1 — the field is owned by the FilePath struct — so
+// the return-incref is the value's ONLY +1, balanced by the caller's single
+// decref of the comparison operand. Eliding it there double-frees the field via
+// the FilePath destructor (a wasm over-release crash). So the elision fires ONLY
+// when the remapped caller value INDEPENDENTLY owns a releasable +1 the inserter
+// will drop on its own — class `callReturnRc1` (a call result, e.g. the
+// `FilePath.init` receiver local) or `freshRc0` (a fresh allocation). For those,
+// the receiver's own +1 covers the merged lifecycle and the return-incref is the
+// surplus; for a `borrowed` / loaded `incomingOwner` / param receiver the
+// return-incref is load-bearing and KEPT.
+//
+// Two further gates: the returned param must remap onto a PRE-EXISTING caller
+// value (a fresh body-id return — an allocation / loaded alias — keeps its
+// acquire, threaded by `threadInlinedOwnership`); and only the return-incref
+// inside the SAME block as the `ret(param)` is elided (the `planReturnIncrefs`
+// placement, right before the terminator), so a field-store incref of the same
+// param elsewhere in the body is left untouched. The elision recognizes BOTH
+// refcount-op spellings the stdlib body may carry: the `stdlib.__mm_incref(param)`
+// CALL form and the inlined `subi param, 8; atomic_inc` form (the incref itself
+// gets inlined during the stdlib build).
+
+// Collect the GLOBAL `module.ops` indices of every spliced return-incref that
+// must be elided for this inline (see the block comment above). Empty when the
+// callee returns no pre-existing-caller-value param.
+function collectReturnSelfIncrefSkips(module StdModule, callee IrFunction, caller IrFunction, remap ValueIdArray, callerOrigMaxId ValueId) returns ValueIdArray
+	var skips = ValueIdArray.create()
+	for blockRef in callee.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("collectReturnSelfIncrefSkips: blockRef not in module.blocks")
+		if not block.hasTerminatorOp() 'noTerm'
+			continue
+		end 'noTerm'
+		let term = try module.ops.get(block.terminatorIndex()) otherwise panic("collectReturnSelfIncrefSkips: terminatorIndex not in module.ops")
+		let retValId = retValueIdOrSentinel(term)
+		if retValId == REMAP_INVALID 'notRet'
+			continue
+		end 'notRet'
+		if not calleeValueIsParam(module, callee: callee, valueId: retValId) 'notParam'
+			continue
+		end 'notParam'
+		let mapped = lookupRemap(remap, key: retValId)
+		// The returned param must remap onto a PRE-EXISTING caller value (the
+		// call-site arg). A fresh body id (> callerOrigMaxId) means the returned
+		// value was minted by the callee body, not aliased onto the receiver, so
+		// its acquire stays (threaded by `threadInlinedOwnership`).
+		if mapped == REMAP_INVALID or mapped > callerOrigMaxId 'notPreExisting'
+			continue
+		end 'notPreExisting'
+		// The aliased caller value must INDEPENDENTLY own a releasable +1 the
+		// inserter drops on its own (so the return-incref is the surplus). A
+		// loaded borrow / param receiver relies on the return-incref for its
+		// only +1 — leave it (see the block comment's `canonicalForCompare` case).
+		if not callerValueOwnsIndependentPlusOne(caller, valueId: mapped) 'noIndependentOwner'
+			continue
+		end 'noIndependentOwner'
+		collectReturnIncrefOpsInBlock(module, block: block, retValId: retValId, skips: skips)
+	end 'eachBlock'
+	return skips
+end 'collectReturnSelfIncrefSkips'
+
+// True iff caller value `valueId` owns an independent releasable +1 that the
+// caller's `insertRefcounts` will drop regardless of any inlined-result alias:
+// a `callReturnRc1` call result (owns the transferred +1) or a `freshRc0`
+// allocation (acquires its own +1 at def). A `borrowed` view, a loaded
+// `incomingOwner` field/slot read, a param, or an unmanaged value does NOT —
+// the spliced return-incref is that value's only +1 and must be kept.
+function callerValueOwnsIndependentPlusOne(caller IrFunction, valueId ValueId) returns bool
+	if not caller.isValueManaged(valueId) 'notManaged'
+		return false
+	end 'notManaged'
+	return match caller.ownershipOfValue(valueId) 'cls'
+		callReturnRc1 or freshRc0 gives true
+		notManaged or selfReturnBorrow or incomingOwner or borrowed gives false
+	end 'cls'
+end 'callerValueOwnsIndependentPlusOne'
+
+// Add the op indices of `retValId`'s return-incref within `block` to `skips`.
+// Two spellings: a `__mm_incref(retValId)` call, or the inlined `subi retValId, 8`
+// / `atomic_inc(<that result>)` pair. The `subi`'s `const 8` is left in place
+// (dead after the elision, removed by the post-inline DCE pass).
+function collectReturnIncrefOpsInBlock(module StdModule, block IrBlock, retValId ValueId, skips ValueIdArray)
+	var headerAddrId = REMAP_INVALID
+	for opIdx in block.opRefs 'eachOp'
+		let op = try module.ops.get(opIdx) otherwise panic("collectReturnIncrefOpsInBlock: opIdx not in module.ops")
+		if opIsIncrefCallOfArg(op, vid: retValId) 'callForm'
+			skips.push(opIdx)
+		end 'callForm'
+		let subResult = opSubtractsConstFrom(op, vid: retValId)
+		if subResult != REMAP_INVALID 'headerSub'
+			headerAddrId = subResult
+			skips.push(opIdx)
+		end 'headerSub'
+		if headerAddrId != REMAP_INVALID and opIsAtomicIncOfAddr(op, addrId: headerAddrId) 'inlinedForm'
+			skips.push(opIdx)
+		end 'inlinedForm'
+	end 'eachOp'
+end 'collectReturnIncrefOpsInBlock'
+
+// True iff callee value `valueId` is defined by a `param` op.
+function calleeValueIsParam(module StdModule, callee IrFunction, valueId ValueId) returns bool
+	for blockRef in callee.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("calleeValueIsParam: blockRef not in module.blocks")
+		for opIdx in block.opRefs 'eachOp'
+			let op = try module.ops.get(opIdx) otherwise panic("calleeValueIsParam: opIdx not in module.ops")
+			let pinfo = paramInfo(op)
+			if pinfo.paramIndex >= 0 and pinfo.resultId == valueId 'hit'
+				return true
+			end 'hit'
+		end 'eachOp'
+	end 'eachBlock'
+	return false
+end 'calleeValueIsParam'
+
+// True iff `op` is a static call to an incref runtime entry with `vid` as arg 0.
+function opIsIncrefCallOfArg(op StdOp, vid ValueId) returns bool
+	return match op 'dispatch'
+		call(c) gives callIsIncrefOfArg(c, vid: vid)
+		arith gives false
+		control gives false
+		memory gives false
+		system gives false
+	end 'dispatch'
+end 'opIsIncrefCallOfArg'
+
+function callIsIncrefOfArg(c StdCallOp, vid ValueId) returns bool
+	return match c 'check'
+		call(_, callee, argIds) gives calleeNameIsIncrefOp(callee) and firstArgIs(argIds, vid: vid)
+		ret gives false
+		tryCall to errorReturn gives false
+	end 'check'
+end 'callIsIncrefOfArg'
+
+function calleeNameIsIncrefOp(callee String) returns bool
+	return callee == "stdlib.__mm_incref" or callee == "__mm_incref" or callee == "mm_incref"
+end 'calleeNameIsIncrefOp'
+
+function firstArgIs(argIds ValueIdArray, vid ValueId) returns bool
+	let first = try argIds.get(0) otherwise return false
+	return first == vid
+end 'firstArgIs'
+
+// If `op` is `arith.subi vid, <const>` (the refcount-header address computation
+// of the inlined incref body), return its result id; else REMAP_INVALID.
+function opSubtractsConstFrom(op StdOp, vid ValueId) returns ValueId
+	return match op 'dispatch'
+		arith(a) gives arithSubtractsConstFrom(a, vid: vid)
+		call gives REMAP_INVALID
+		control gives REMAP_INVALID
+		memory gives REMAP_INVALID
+		system gives REMAP_INVALID
+	end 'dispatch'
+end 'opSubtractsConstFrom'
+
+function arithSubtractsConstFrom(a StdArithOp, vid ValueId) returns ValueId
+	return match a 'check'
+		binary(b) gives binarySubtractsConstFrom(b, vid: vid)
+		const gives REMAP_INVALID
+		unary gives REMAP_INVALID
+	end 'check'
+end 'arithSubtractsConstFrom'
+
+function binarySubtractsConstFrom(b StdArithBinaryOp, vid ValueId) returns ValueId
+	let isSub = match b.opcode 'opc'
+		subI64 gives true
+		addI64 gives false
+		mulI64 to cmpF64Ge gives false
+	end 'opc'
+	if not isSub or b.leftId != vid 'notHeaderSub'
+		return REMAP_INVALID
+	end 'notHeaderSub'
+	return b.resultId
+end 'binarySubtractsConstFrom'
+
+function opIsAtomicIncOfAddr(op StdOp, addrId ValueId) returns bool
+	return match op 'dispatch'
+		system(s) gives sysIsAtomicIncOfAddr(s, addrId: addrId)
+		arith gives false
+		call gives false
+		control gives false
+		memory gives false
+	end 'dispatch'
+end 'opIsAtomicIncOfAddr'
+
+function sysIsAtomicIncOfAddr(s StdSystemOp, addrId ValueId) returns bool
+	return match s 'check'
+		atomicInc(target) gives target == addrId
+		globalAddr to osDirMkdir gives false
+		atomicDec to dropTypeParam gives false
+	end 'check'
+end 'sysIsAtomicIncOfAddr'
+
 // Splice the callee's body ops into `callerBlock` at `insertAt`, returning the
 // position just AFTER the last spliced op (so the caller can append post-body
 // trace ops there).
-function emitInlinedBody(module StdModule, callerBlock IrBlock, calleeBlock IrBlock, remap ValueIdArray, insertAt ParsedInt) returns ParsedInt
+function emitInlinedBody(module StdModule, callerBlock IrBlock, calleeBlock IrBlock, remap ValueIdArray, insertAt ParsedInt, increfSkips ValueIdArray) returns ParsedInt
 	var pos = insertAt
 	for opIdx in calleeBlock.opRefs 'eachOp'
 		let op = try module.ops.get(opIdx) otherwise continue
 		if isParamOpStd(op) 'skipParam'
 			continue
 		end 'skipParam'
+		if valueIdArrayContainsInl(increfSkips, vid: opIdx) 'skipReturnIncref'
+			continue
+		end 'skipReturnIncref'
 		let rewritten = rewriteOp(op, remap: remap)
 		let newIdx = module.ops.count()
 		module.ops.push(rewritten)
@@ -2121,6 +2393,16 @@ function emitInlinedBody(module StdModule, callerBlock IrBlock, calleeBlock IrBl
 	end 'eachOp'
 	return pos
 end 'emitInlinedBody'
+
+// Local `contains` over a ValueIdArray used as an op-index skip set.
+function valueIdArrayContainsInl(arr ValueIdArray, vid ValueId) returns bool
+	for v in arr 'each'
+		if v == vid 'hit'
+			return true
+		end 'hit'
+	end 'each'
+	return false
+end 'valueIdArrayContainsInl'
 
 // Rewrite an op so every ValueId reference (define or operand) is mapped
 // through `remap`. Pass-through arms run their integer fields untouched

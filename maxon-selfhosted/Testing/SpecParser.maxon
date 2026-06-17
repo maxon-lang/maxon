@@ -20,6 +20,12 @@ export type TestExpectation
 	export var hasExitCode as bool
 	export var stdout as String
 	export var hasStdout as bool
+	// True once a target-qualified `Stdout:<currentTarget>` block has populated
+	// `stdout`. Mirrors RequiredIR's per-target precedence: once a block for the
+	// current target wins, a bare ```stdout block must NOT overwrite it, and the
+	// target-qualified block overwrites any bare stdout seen earlier. This makes
+	// resolution order-independent regardless of which block appears first.
+	export var stdoutIsTargetQualified as bool
 	export var compilerStderr as String
 	export var hasCompilerStderr as bool
 	export var runtimeStderr as String
@@ -55,7 +61,7 @@ export type TestExpectation
 	export var includeStdlibIr as bool
 
 	export static function create() returns TestExpectation
-		return Self{exitCode: 0, hasExitCode: false, stdout: "", hasStdout: false, compilerStderr: "", hasCompilerStderr: false, runtimeStderr: "", hasRuntimeStderr: false, requiredLowering: "", hasRequiredLowering: false, hasAnyRequiredLowering: false, requiredIr: "", hasRequiredIr: false, hasAnyRequiredIr: false, requiredRdata: "", hasRequiredRdata: false, requiredData: "", hasRequiredData: false, asyncTrace: false, includeStdlibIr: false}
+		return Self{exitCode: 0, hasExitCode: false, stdout: "", hasStdout: false, stdoutIsTargetQualified: false, compilerStderr: "", hasCompilerStderr: false, runtimeStderr: "", hasRuntimeStderr: false, requiredLowering: "", hasRequiredLowering: false, hasAnyRequiredLowering: false, requiredIr: "", hasRequiredIr: false, hasAnyRequiredIr: false, requiredRdata: "", hasRequiredRdata: false, requiredData: "", hasRequiredData: false, asyncTrace: false, includeStdlibIr: false}
 	end 'create'
 end 'TestExpectation'
 
@@ -572,11 +578,41 @@ export function parseSpecFile(content String, targetKey String) returns SpecTest
 					continue
 				end 'isExitCode'
 
+				// Target-qualified `Stdout:<target>` — mirrors RequiredIR's per-target
+				// handling. The block matching the current target WINS over a bare
+				// ```stdout regardless of file order: once it sets the flag below, the
+				// bare-stdout branch is gated off, and reaching this branch overwrites
+				// any bare stdout already captured.
+				if not targetKey.isEmpty() 'hasTargetKeyStdout'
+					if blockLine.startsWith("```Stdout:{targetKey}") 'isTargetStdout'
+						i = i + 1
+						let targetStdoutBlock = readCodeBlock(lines, startLine: i, lineCount: lineCount)
+						expectation.stdout = targetStdoutBlock
+						expectation.hasStdout = true
+						expectation.stdoutIsTargetQualified = true
+						i = skipCodeBlock(lines, startLine: i, lineCount: lineCount)
+						continue
+					end 'isTargetStdout'
+				end 'hasTargetKeyStdout'
+
+				// A `Stdout:<otherTarget>` block — skip its body. The current target
+				// asserts only its own output (or none, if it has no matching block),
+				// exactly like RequiredIR's non-matching `isOtherIr` branch.
+				if blockLine.startsWith("```Stdout:") 'isOtherStdout'
+					i = skipCodeBlock(lines, startLine: i + 1, lineCount: lineCount)
+					continue
+				end 'isOtherStdout'
+
+				// Bare ```stdout — the portable/fallback case. A target-qualified
+				// block for the current target takes precedence: if one already won
+				// (stdoutIsTargetQualified), keep its value and skip this block.
 				if blockLine.startsWith("```stdout") 'isStdout'
 					i = i + 1
 					let stdoutBlock = readCodeBlock(lines, startLine: i, lineCount: lineCount)
-					expectation.stdout = stdoutBlock
-					expectation.hasStdout = true
+					if not expectation.stdoutIsTargetQualified 'bareWins'
+						expectation.stdout = stdoutBlock
+						expectation.hasStdout = true
+					end 'bareWins'
 					i = skipCodeBlock(lines, startLine: i, lineCount: lineCount)
 					continue
 				end 'isStdout'

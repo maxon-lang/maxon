@@ -1,0 +1,102 @@
+// Test: filepath-equality
+function main() returns ExitCode
+	let a = FilePath from "C:\\test.txt"
+	let b = FilePath from "C:\\test.txt"
+	if a == b 'eq'
+		print("equal\n")
+	end 'eq'
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+equal
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %2 = mir.global_addr @__istr_0
+    %3 = mir.mov_imm 48 : i64
+    %4 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %5 = mir.call @mrt_alloc_with_dtor(%3, %4)
+    mir.store %0, %5, 40 width: qword
+    mir.store %2, %5, 0 width: qword
+    %7 = mir.mov_imm 11 : i64
+    mir.store %7, %5, 8 width: qword
+    %8 = mir.mov_imm -2 : i64
+    mir.store %8, %5, 16 width: qword
+    %9 = mir.mov_imm 1 : i64
+    mir.store %9, %5, 24 width: qword
+    mir.store %0, %5, 32 width: qword
+    %12 = mir.mov_imm 16 : i64
+    %13 = mir.func_addr @__destruct_String
+    %11 = mir.call @stdlib.__mm_alloc(%12, %13)
+    %64 = mir.call @stdlib.__mm_incref(%11)
+    mir.store %5, %11, 0 width: qword
+    mir.store %9, %11, 8 width: qword
+    %15 = mir.call @FilePath.init(%11)
+    %16 = mir.global_addr @__istr_0
+    %17 = mir.mov_imm 48 : i64
+    %18 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %19 = mir.call @mrt_alloc_with_dtor(%17, %18)
+    mir.store %0, %19, 40 width: qword
+    mir.store %16, %19, 0 width: qword
+    %21 = mir.mov_imm 11 : i64
+    mir.store %21, %19, 8 width: qword
+    %22 = mir.mov_imm -2 : i64
+    mir.store %22, %19, 16 width: qword
+    mir.store %9, %19, 24 width: qword
+    mir.store %0, %19, 32 width: qword
+    %26 = mir.mov_imm 16 : i64
+    %27 = mir.func_addr @__destruct_String
+    %25 = mir.call @stdlib.__mm_alloc(%26, %27)
+    %65 = mir.call @stdlib.__mm_incref(%25)
+    mir.store %19, %25, 0 width: qword
+    mir.store %9, %25, 8 width: qword
+    %29 = mir.call @FilePath.init(%25)
+    %47 = mir.load %15, 0 width: qword
+    %60 = mir.mov_imm 8 : i64
+    %61 = mir.sub.i64 %47, %60
+    mir.atomic_inc %61
+    %49 = mir.load %29, 0 width: qword
+    %62 = mir.mov_imm 8 : i64
+    %63 = mir.sub.i64 %49, %62
+    mir.atomic_inc %63
+    %51 = mir.call @String.equals(%47, %49)
+    %52 = mir.call @__mm_decref_maybenull_helper(%47)
+    %53 = mir.call @__mm_decref_maybenull_helper(%49)
+    %67 = mir.call @__mm_decref_maybenull_helper(%15)
+    %66 = mir.call @__mm_decref_maybenull_helper(%29)
+    mir.cond_br %51 [then: eq_0(), else: eq_0.after()]
+  eq_0:
+    %33 = mir.global_addr @__istr_1
+    %34 = mir.mov_imm 48 : i64
+    %35 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %36 = mir.call @mrt_alloc_with_dtor(%34, %35)
+    mir.store %0, %36, 40 width: qword
+    mir.store %33, %36, 0 width: qword
+    %38 = mir.mov_imm 6 : i64
+    mir.store %38, %36, 8 width: qword
+    %39 = mir.mov_imm -2 : i64
+    mir.store %39, %36, 16 width: qword
+    mir.store %9, %36, 24 width: qword
+    mir.store %0, %36, 32 width: qword
+    %43 = mir.mov_imm 16 : i64
+    %44 = mir.func_addr @__destruct_String
+    %42 = mir.call @stdlib.__mm_alloc(%43, %44)
+    mir.store %36, %42, 0 width: qword
+    mir.store %9, %42, 8 width: qword
+    %54 = mir.load %42, 0 width: qword
+    %55 = mir.load %54, 0 width: qword
+    %56 = mir.load %54, 8 width: qword
+    %57 = mir.call @mrt_write_stdout(%55, %56)
+    %68 = mir.call @mm_drop(%42)
+    mir.br eq_0.after()
+  eq_0.after:
+    mir.ret %0
+  }
+}
+---

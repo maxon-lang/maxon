@@ -1,0 +1,61 @@
+// Test: filepath-separator
+function main() returns ExitCode
+	print("{FilePath.separator()}\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+/
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.call @FilePath.separator()
+    %1 = mir.global_addr @__istr_0
+    %2 = mir.mov_imm 0 : i64
+    %3 = mir.load %0, 0 width: qword
+    %4 = mir.load %3, 0 width: qword
+    %5 = mir.load %3, 8 width: qword
+    %6 = mir.global_addr @__istr_1
+    %7 = mir.mov_imm 1 : i64
+    %10 = mir.add.i64 %2, %5
+    %11 = mir.add.i64 %10, %7
+    %12 = mir.mov_imm 1 : i64
+    %13 = mir.add.i64 %11, %12
+    %14 = mir.call @mrt_alloc(%13)
+    mir.memcpy %14, %1, %2
+    %15 = mir.add.i64 %14, %2
+    mir.memcpy %15, %4, %5
+    %16 = mir.add.i64 %15, %5
+    %34 = mir.call @__mm_decref_maybenull_helper(%0)
+    mir.memcpy %16, %6, %7
+    %18 = mir.mov_imm 48 : i64
+    %19 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %20 = mir.call @mrt_alloc_with_dtor(%18, %19)
+    mir.store %2, %20, 40 width: qword
+    mir.store %14, %20, 0 width: qword
+    mir.store %11, %20, 8 width: qword
+    mir.store %11, %20, 16 width: qword
+    %22 = mir.mov_imm 1 : i64
+    mir.store %22, %20, 24 width: qword
+    %23 = mir.mov_imm -1 : i64
+    mir.store %23, %20, 32 width: qword
+    %25 = mir.mov_imm 16 : i64
+    %26 = mir.func_addr @__destruct_String
+    %24 = mir.call @stdlib.__mm_alloc(%25, %26)
+    mir.store %20, %24, 0 width: qword
+    mir.store %2, %24, 8 width: qword
+    %29 = mir.load %24, 0 width: qword
+    %33 = mir.call @stdlib.__mm_incref(%29)
+    %30 = mir.load %29, 0 width: qword
+    %31 = mir.load %29, 8 width: qword
+    %32 = mir.call @mrt_write_stdout(%30, %31)
+    %36 = mir.call @mm_drop(%24)
+    %35 = mir.call @__mm_decref_maybenull_helper(%29)
+    mir.ret %2
+  }
+}
+---

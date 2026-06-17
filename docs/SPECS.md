@@ -72,6 +72,22 @@ end 'main'
 42
 ```
 
+#### Per-target stdout
+
+When a program's stdout differs by target (e.g. `FilePath` prints `\` on
+x64-windows but `/` on wasm32-wasi), use target-qualified `Stdout:<target>`
+blocks instead of the bare `stdout` block. The runner picks the block matching
+the target under test; a bare `stdout` block, if also present, is the fallback
+for targets without a qualified block. This mirrors the `RequiredIR:<target>`
+mechanism.
+
+```Stdout:x64-windows
+C:\Users\test
+```
+```Stdout:wasm32-wasi
+C:/Users/test
+```
+
 Runtime stderr (e.g., panic messages with stack traces) can be verified with a `stderr` block:
 
 ```maxon
