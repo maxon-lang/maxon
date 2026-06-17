@@ -1,0 +1,61 @@
+// Test: short-circuit-in-if-condition
+typealias Integer = int(0 to u64.max)
+
+var trace = 0 as Integer
+
+function setFlag(bit Integer) returns bool
+	trace = trace or bit
+	return false
+end 'setFlag'
+
+function main() returns ExitCode
+	if setFlag(1) and setFlag(2) 'never'
+		return 99
+	end 'never'
+	return trace as ExitCode
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 1 : i64
+    %16 = mir.global_addr @__data_trace
+    %17 = mir.load %16, 0 width: qword
+    %18 = mir.or.i64 %17, %0
+    %19 = mir.global_addr @__data_trace
+    mir.store %18, %19, 0 width: qword
+    %2 = mir.mov_imm 0 : i64
+    mir.br shortAnd.merge(%2)
+  shortAnd.merge(%15: i64):
+    mir.cond_br %15 [then: never_0(), else: never_0.after()]
+  never_0:
+    %6 = mir.mov_imm 99 : i64
+    mir.ret %6
+  never_0.after:
+    %7 = mir.global_addr @__data_trace
+    %8 = mir.load %7, 0 width: qword
+    %9 = mir.mov_imm 125 : i64
+    %10 = mir.cmp gt, %8, %9
+    mir.cond_br %10 [then: __cast_panic_0(), else: __cast_check_lo_0()]
+  __cast_check_lo_0:
+    %11 = mir.mov_imm 0 : i64
+    %12 = mir.cmp lt, %8, %11
+    mir.cond_br %12 [then: __cast_panic_0(), else: __cast_ok_0()]
+  __cast_panic_0:
+    %13 = mir.global_addr @__panic_msg_aa639d198ea517a8
+    %14 = mir.call @mrt_panic(%13)
+  __cast_ok_0:
+    %20 = mir.mov_imm 125 : i64
+    %21 = mir.cmp ugt, %8, %20
+    mir.cond_br %21 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %22 = mir.global_addr @__panic_msg_692456e1c504ac6e
+    %23 = mir.call @mrt_panic(%22)
+  __range_ok_0:
+    mir.ret %8
+  }
+}
+---

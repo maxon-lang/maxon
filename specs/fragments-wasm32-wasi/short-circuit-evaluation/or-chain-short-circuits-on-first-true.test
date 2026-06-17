@@ -1,0 +1,70 @@
+// Test: or-chain-short-circuits-on-first-true
+var sideEffectCount = 0
+
+function trackAndReturn(result bool) returns bool
+	sideEffectCount = sideEffectCount + 1
+	return result
+end 'trackAndReturn'
+
+function main() returns ExitCode
+	let result = trackAndReturn(false) or trackAndReturn(true) or trackAndReturn(false)
+	if not result 'r'
+		return 99
+	end 'r'
+	return sideEffectCount
+end 'main'
+---
+ExitCode: 2
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %22 = mir.global_addr @__data_sideEffectCount
+    %23 = mir.load %22, 0 width: qword
+    %24 = mir.mov_imm 1 : i64
+    %25 = mir.add.i64 %23, %24
+    %26 = mir.global_addr @__data_sideEffectCount
+    mir.store %25, %26, 0 width: qword
+    %2 = mir.mov_imm 1 : i64
+    mir.br shortOr.rhs()
+  shortOr.rhs:
+    %27 = mir.global_addr @__data_sideEffectCount
+    %28 = mir.load %27, 0 width: qword
+    %29 = mir.mov_imm 1 : i64
+    %30 = mir.add.i64 %28, %29
+    %31 = mir.global_addr @__data_sideEffectCount
+    mir.store %30, %31, 0 width: qword
+    mir.br shortOr.merge(%2)
+  shortOr.merge(%20: i64):
+    %10 = mir.xor.i64 %20, %2
+    mir.cond_br %10 [then: shortOr.rhs(), else: shortOr.merge(%2)]
+  shortOr.rhs:
+    %11 = mir.mov_imm 0 : i64
+    %32 = mir.global_addr @__data_sideEffectCount
+    %33 = mir.load %32, 0 width: qword
+    %34 = mir.mov_imm 1 : i64
+    %35 = mir.add.i64 %33, %34
+    %36 = mir.global_addr @__data_sideEffectCount
+    mir.store %35, %36, 0 width: qword
+    mir.br shortOr.merge(%11)
+  shortOr.merge(%21: i64):
+    %16 = mir.xor.i64 %21, %2
+    mir.cond_br %16 [then: r_0(), else: r_0.after()]
+  r_0:
+    %17 = mir.mov_imm 99 : i64
+    mir.ret %17
+  r_0.after:
+    %18 = mir.global_addr @__data_sideEffectCount
+    %19 = mir.load %18, 0 width: qword
+    %37 = mir.mov_imm 125 : i64
+    %38 = mir.cmp ugt, %19, %37
+    mir.cond_br %38 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %39 = mir.global_addr @__panic_msg_94c604424cea6190
+    %40 = mir.call @mrt_panic(%39)
+  __range_ok_0:
+    mir.ret %19
+  }
+}
+---

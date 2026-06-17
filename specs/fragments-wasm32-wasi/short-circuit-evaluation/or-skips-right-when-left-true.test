@@ -1,0 +1,51 @@
+// Test: or-skips-right-when-left-true
+var sideEffectCount = 0
+
+function trackAndReturn(result bool) returns bool
+	sideEffectCount = sideEffectCount + 1
+	return result
+end 'trackAndReturn'
+
+function main() returns ExitCode
+	let result = trackAndReturn(true) or trackAndReturn(false)
+	if not result 'r'
+		return 99
+	end 'r'
+	return sideEffectCount
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %15 = mir.global_addr @__data_sideEffectCount
+    %16 = mir.load %15, 0 width: qword
+    %17 = mir.mov_imm 1 : i64
+    %18 = mir.add.i64 %16, %17
+    %19 = mir.global_addr @__data_sideEffectCount
+    mir.store %18, %19, 0 width: qword
+    %2 = mir.mov_imm 1 : i64
+    mir.br shortOr.merge(%2)
+  shortOr.merge(%14: i64):
+    %9 = mir.mov_imm 1 : i64
+    %10 = mir.xor.i64 %14, %9
+    mir.cond_br %10 [then: r_0(), else: r_0.after()]
+  r_0:
+    %11 = mir.mov_imm 99 : i64
+    mir.ret %11
+  r_0.after:
+    %12 = mir.global_addr @__data_sideEffectCount
+    %13 = mir.load %12, 0 width: qword
+    %20 = mir.mov_imm 125 : i64
+    %21 = mir.cmp ugt, %13, %20
+    mir.cond_br %21 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %22 = mir.global_addr @__panic_msg_de900b2d17b26f7e
+    %23 = mir.call @mrt_panic(%22)
+  __range_ok_0:
+    mir.ret %13
+  }
+}
+---

@@ -536,6 +536,14 @@ export type Project
 	// error union binding (`try X() otherwise (e)` where the union is declared
 	// later) binds to the box pointer and reads payloads at the correct offset.
 	export var prescannedUnionNames as PrescannedUnionNameSet
+	// Pre-parse scan output: the qualified name of every function whose header
+	// declares `returns bool`, across all files. Lets the parser pin a
+	// bool-returning call's result type at the `and`/`or` short-circuit gate
+	// (`parseTimeReturnTypeForCallee`) even when the callee is declared AFTER
+	// the caller — `funcReturnTypes` isn't populated for a forward / cross-file
+	// callee until its own body is parsed. Mirrors maxon-sharp's `PreScanFunction`
+	// signature prepass, which registers every return type before any body.
+	export var prescannedReturnBoolNames as PrescannedReturnBoolNameSet
 
 	// Function-type interner. Every `(P1, P2) returns R` signature the parser
 	// sees in a parameter position lands here as a parallel-array entry; the
@@ -949,6 +957,7 @@ export type Project
 			interfaces: IrInterfaceMap.create(),
 			prescannedInterfaceNames: PrescannedInterfaceNameSet.create(),
 			prescannedUnionNames: PrescannedUnionNameSet.create(),
+			prescannedReturnBoolNames: PrescannedReturnBoolNameSet.create(),
 			functionTypes: FunctionTypeRegistry.create(),
 			typeParameters: TypeParamRegistry.create(),
 			genericInstances: GenericInstanceRegistry.create(),
@@ -3632,6 +3641,12 @@ export typealias PrescannedInterfaceNameSet = Set with String
 // heap-boxed union — binding `e` to the box pointer and reading payloads at the
 // right offset — instead of falling back to the bare-ordinal enum path.
 export typealias PrescannedUnionNameSet = Set with String
+
+// Qualified names of functions declaring `returns bool`, recorded by the
+// pre-parse header scan so a forward / cross-file bool-returning callee can be
+// pinned to `bool` at the `and`/`or` short-circuit gate. See
+// `Project.prescannedReturnBoolNames`.
+export typealias PrescannedReturnBoolNameSet = Set with String
 
 // Phase 11.0 step 2: resolved-form of inner typealiases. Mirrors
 // `GenericTypealiasMap`'s shape; lives on `StructType` so per-type

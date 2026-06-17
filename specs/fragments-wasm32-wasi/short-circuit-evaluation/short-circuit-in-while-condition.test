@@ -1,0 +1,71 @@
+// Test: short-circuit-in-while-condition
+var trace = 0
+
+function check() returns bool
+	trace = trace + 1
+	return trace < 3
+end 'check'
+
+function alwaysFalse() returns bool
+	trace = trace + 100
+	return false
+end 'alwaysFalse'
+
+function main() returns ExitCode
+	while check() and alwaysFalse() 'loop'
+		return 99
+	end 'loop'
+	return trace
+end 'main'
+---
+ExitCode: 101
+---
+// CompiledIR
+module {
+  func @check() -> i1 {
+  entry:
+    %0 = mir.global_addr @__data_trace
+    %1 = mir.load %0, 0 width: qword
+    %2 = mir.mov_imm 1 : i64
+    %3 = mir.add.i64 %1, %2
+    %4 = mir.global_addr @__data_trace
+    mir.store %3, %4, 0 width: qword
+    %5 = mir.global_addr @__data_trace
+    %6 = mir.load %5, 0 width: qword
+    %7 = mir.mov_imm 3 : i64
+    %8 = mir.cmp lt, %6, %7
+    mir.ret %8
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.call @check()
+    %1 = mir.mov_imm 0 : i64
+    mir.cond_br %0 [then: shortAnd.rhs(), else: shortAnd.merge(%1)]
+  shortAnd.rhs:
+    %8 = mir.global_addr @__data_trace
+    %9 = mir.load %8, 0 width: qword
+    %10 = mir.mov_imm 100 : i64
+    %11 = mir.add.i64 %9, %10
+    %12 = mir.global_addr @__data_trace
+    mir.store %11, %12, 0 width: qword
+    %13 = mir.mov_imm 0 : i64
+    mir.br shortAnd.merge(%13)
+  shortAnd.merge(%7: i64):
+    mir.cond_br %7 [then: loop_0(), else: loop_0.exit()]
+  loop_0:
+    %4 = mir.mov_imm 99 : i64
+    mir.ret %4
+  loop_0.exit:
+    %5 = mir.global_addr @__data_trace
+    %6 = mir.load %5, 0 width: qword
+    %14 = mir.mov_imm 125 : i64
+    %15 = mir.cmp ugt, %6, %14
+    mir.cond_br %15 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %16 = mir.global_addr @__panic_msg_79bc5ebb1f28952c
+    %17 = mir.call @mrt_panic(%16)
+  __range_ok_0:
+    mir.ret %6
+  }
+}
+---

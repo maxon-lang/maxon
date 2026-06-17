@@ -789,13 +789,23 @@ export type Parser
 			return
 		end 'noParams'
 		// After the parameter list: scan the remaining header tokens (up to the
-		// terminating newline) for a `throws E` clause. `returns T` and `where ...`
-		// may sit in between; we only act on the `throws` keyword.
+		// terminating newline) for a `throws E` clause and a `returns bool` clause.
+		// `returns T` and `where ...` may sit in between; we act on `throws` and on
+		// `returns bool` (the latter pins a forward / cross-file bool-returning
+		// callee's result type for the `and`/`or` short-circuit gate — see
+		// `parseTimeReturnTypeForCallee`).
 		while j < tokenCount 'header'
 			let tok = try tokens.get(j) otherwise return
 			if tok.kind == TokenKind.newline 'endOfHeader'
 				return
 			end 'endOfHeader'
+			if tok.kind == TokenKind.returns 'haveReturns'
+				let retTok = try tokens.get(j + 1) otherwise return
+				if retTok.kind == TokenKind.bool 'returnsBool'
+					let qualifiedBool = prescanQualifiedFuncName(nameToken.value, owningType: owningType)
+					project.prescannedReturnBoolNames.insert(qualifiedBool)
+				end 'returnsBool'
+			end 'haveReturns'
 			if tok.kind == TokenKind.throws 'haveThrows'
 				let errTok = try tokens.get(j + 1) otherwise return
 				if errTok.kind != TokenKind.identifier 'noErrName'
@@ -14124,23 +14134,61 @@ export type Parser
 	// [String, function(id)])` to its binding. Surfacing that as a return
 	// type here lets the receiver's slot type carry the generic instance so
 	// downstream `m.get("d")` site can see the function-typed Value.
+	// Extract the parse-time-usable type from a recorded callee return type.
+	// Returns the function type (for the indirect-call machinery) OR `bool`
+	// (so a bool-returning call's `and`/`or` short-circuit gate fires at the
+	// Pratt loop — see emitShortCircuit). Any other concrete return type is
+	// left to TypeResolution and reported as `unresolved` here; bool is special
+	// because the short-circuit-vs-bitwise decision happens at parse time and
+	// needs the operand's bool-ness pinned, exactly as the C# bootstrap does via
+	// its signature prepass.
+	// `allowBool` is false when the callee name is overloaded: the return type
+	// then depends on argument-based overload resolution (a TypeResolution job),
+	// so a single recorded `bool` would be wrong for an int-returning sibling
+	// overload of the same name (E3005). The function-type path is always
+	// allowed — it feeds the indirect-call machinery, not the bool gate.
+	function parseTimeCalleeReturnType(rt MaxonReturnType, allowBool bool) returns MaxonType
+		let chased = chaseTypealiasToFunctionType(project, t: maxonReturnTypeValueOrUnresolved(rt))
+		if isFunctionMaxonType(chased) 'isFn'
+			return chased
+		end 'isFn'
+		if allowBool and maxonTypeIsBool(chased) 'isBool'
+			return MaxonType.boolean
+		end 'isBool'
+		return MaxonType.unresolved
+	end 'parseTimeCalleeReturnType'
+
 	function parseTimeReturnTypeForCallee(calleeName String) returns MaxonType
 		// `funcReturnTypes` is keyed by qualified name; try the namespace-
 		// prefixed form first, then the bare name as a fallback for stdlib /
 		// non-namespaced callees.
 		let qualified = qualifyName(namespace, name: calleeName)
+		// Only pin a `bool` return (for the short-circuit gate) when the callee is
+		// NOT overloaded — an overloaded name's return type is argument-dependent
+		// and must be left to TypeResolution's overload resolution.
+		let allowBool = not project.overloadedNames.contains(qualified) and not project.overloadedNames.contains(calleeName)
 		if let rt = try project.funcReturnTypes.get(qualified) 'fromQualified'
-			let chased = chaseTypealiasToFunctionType(project, t: maxonReturnTypeValueOrUnresolved(rt))
-			if isFunctionMaxonType(chased) 'isFn'
-				return chased
-			end 'isFn'
+			let parseTimeType = parseTimeCalleeReturnType(rt, allowBool: allowBool)
+			if not isUnresolvedType(parseTimeType) 'haveType'
+				return parseTimeType
+			end 'haveType'
 		end 'fromQualified'
 		if let rt = try project.funcReturnTypes.get(calleeName) 'fromBare'
-			let chased = chaseTypealiasToFunctionType(project, t: maxonReturnTypeValueOrUnresolved(rt))
-			if isFunctionMaxonType(chased) 'isFn'
-				return chased
-			end 'isFn'
+			let parseTimeType = parseTimeCalleeReturnType(rt, allowBool: allowBool)
+			if not isUnresolvedType(parseTimeType) 'haveType'
+				return parseTimeType
+			end 'haveType'
 		end 'fromBare'
+		// Forward / cross-file callee: `funcReturnTypes` isn't populated until the
+		// callee's own body is parsed, but the pre-parse header scan recorded every
+		// `returns bool` function in `prescannedReturnBoolNames`. Consult it so a
+		// bool-returning call's `and`/`or` short-circuit gate fires regardless of
+		// declaration order (matching the C# bootstrap's signature prepass). Same
+		// overload guard as above: a name with multiple overloads is left to
+		// TypeResolution.
+		if allowBool and (project.prescannedReturnBoolNames.contains(qualified) or project.prescannedReturnBoolNames.contains(calleeName)) 'prescannedBool'
+			return MaxonType.boolean
+		end 'prescannedBool'
 		// Union case construction: `UnionName.caseName(args)` parses as a
 		// qualified call with literal callee `UnionName.caseName`. The
 		// constructor is registered as `__construct_UnionName_caseName` by
