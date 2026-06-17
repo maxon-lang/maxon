@@ -1,0 +1,73 @@
+// Test: arm-panic.interpolated-message
+function main() returns ExitCode
+	let x = 7
+	let result = match x 'eval'
+		7 panic("got value {x}")
+		default gives 0
+	end 'eval'
+	return result
+end 'main'
+---
+ExitCode: 1
+Stderr: ```
+panic at arm-panic.interpolated-message.test:5: got value 7
+Stack trace:
+  in main
+  in mrt_start
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 7 : i64
+    %2 = mir.mov_imm 0 : i64
+    mir.br eval_0.case0()
+  eval_0.case0:
+    %8 = mir.global_addr @__istr_0
+    %9 = mir.mov_imm 58 : i64
+    %10 = mir.mov_imm 21 : i64
+    %11 = mir.call @mrt_alloc(%10)
+    %12 = mir.call @mrt_i64_to_string(%0, %11)
+    %13 = mir.global_addr @__istr_1
+    %15 = mir.global_addr @__istr_2
+    %16 = mir.mov_imm 1 : i64
+    %18 = mir.mov_imm 58 : i64
+    %19 = mir.add.i64 %18, %12
+    %20 = mir.add.i64 %19, %2
+    %21 = mir.add.i64 %20, %16
+    %22 = mir.mov_imm 1 : i64
+    %23 = mir.add.i64 %21, %22
+    %24 = mir.call @mrt_alloc(%23)
+    mir.memcpy %24, %8, %9
+    %25 = mir.add.i64 %24, %9
+    mir.memcpy %25, %11, %12
+    %26 = mir.add.i64 %25, %12
+    mir.memcpy %26, %13, %2
+    %27 = mir.add.i64 %26, %2
+    mir.memcpy %27, %15, %16
+    %29 = mir.call @stdlib.__mm_decref(%11)
+    %30 = mir.mov_imm 48 : i64
+    %31 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %32 = mir.call @mrt_alloc_with_dtor(%30, %31)
+    mir.store %2, %32, 40 width: qword
+    mir.store %24, %32, 0 width: qword
+    mir.store %21, %32, 8 width: qword
+    mir.store %21, %32, 16 width: qword
+    %34 = mir.mov_imm 1 : i64
+    mir.store %34, %32, 24 width: qword
+    %35 = mir.mov_imm -1 : i64
+    mir.store %35, %32, 32 width: qword
+    %37 = mir.mov_imm 16 : i64
+    %38 = mir.func_addr @__destruct_String
+    %36 = mir.call @stdlib.__mm_alloc(%37, %38)
+    mir.store %32, %36, 0 width: qword
+    mir.store %2, %36, 8 width: qword
+    %40 = mir.load %36, 0 width: qword
+    %41 = mir.load %40, 0 width: qword
+    %42 = mir.call @mrt_panic(%41)
+    %43 = mir.call @mm_drop(%36)
+    mir.ret %2
+  }
+}
+---

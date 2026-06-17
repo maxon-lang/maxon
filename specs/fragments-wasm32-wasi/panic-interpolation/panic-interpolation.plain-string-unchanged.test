@@ -1,0 +1,25 @@
+// Test: panic-interpolation.plain-string-unchanged
+function main() returns ExitCode
+		panic("simple message")
+		return 0
+end 'main'
+---
+ExitCode: 1
+Stderr: ```
+panic at panic-interpolation.plain-string-unchanged.test:3: simple message
+Stack trace:
+  in main
+  in mrt_start
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.global_addr @__panic_msg_adfed5c0ad72dc4f
+    %1 = mir.call @mrt_panic(%0)
+    %2 = mir.mov_imm 0 : i64
+    mir.ret %2
+  }
+}
+---

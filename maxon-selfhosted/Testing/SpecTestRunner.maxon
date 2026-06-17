@@ -256,16 +256,11 @@ let whitelist = ["basics",
 	"sizeof",
 	// "short-type" (1/2) — `u16-rdata` writes 168 bytes vs expected 6
 	//   (panic-message rdata bleeds in; needs RequiredRdata slice support).
-	// "block-scoping" (11/12) — all diagnostics now fire; one fragment
-	//   (`local-shadows-prior-field-access`) needs panic-string interpolation
-	//   (shared blocker with `panic-interpolation`, `match-expr-arm-divergent`,
-	//   `optimizer-refcount`).
-	// "panic-interpolation" — needs a runtime helper that formats interpolated
-	//   values into a panic message buffer; blocks block-scoping,
-	//   match-expr-arm-divergent, optimizer-refcount.
+	"block-scoping",
+	"panic-interpolation",
 	"match-statements",
 	"match-jump-table",
-	// "match-expr-arm-divergent" (1/2) — needs panic-string interpolation.
+	"match-expr-arm-divergent",
 	// "enum-hashable" / "enum-match-only" / "enum-full" — bare-enum-as-map-key
 	//   needs a Hashable witness BuildWitnessTables doesn't emit (Phase-5
 	//   witness-table registration for primitive-conforming enums).
@@ -322,7 +317,12 @@ let whitelist = ["basics",
 	// "heap-field-assignment" (3/5) — runtime stderr for field-overwrite frees.
 	// "reference-identity" (1/11) — `is` diagnostic code + clone codegen crash.
 	// "stack-promotion" (0/6) — stack-promotion stderr not emitted.
-	// "optimizer-refcount" — needs panic-string interpolation; optimizer trace.
+	// "optimizer-refcount" — panic-interpolation is no longer the blocker (it's
+	//   enabled + passing). The `try-call-borrow-only-window` fragment CRASHES
+	//   the backend: `lookupFuncParamTypes: callee '__construct_BoxError_negative'
+	//   not registered in funcSignatures` — a union error-constructor (`throw
+	//   BoxError.negative` inside a try-call-borrow window) isn't registered when
+	//   the backend lowers it. A distinct union-constructor-registration bug.
 	// "managed-memory-element-size" — x64 passes, but wasm fragment expects
 	//   exit 150 (> wasm ExitCode max of 125 → range-check panic).
 	// "array-cursor" — x64 passes, but wasm fragments expect exit 210/1101
@@ -1349,10 +1349,15 @@ function convertWasmtimeStderr(s String) returns String
 	// Extract the program's stderr (before wasmtime's error)
 	let programStderr = s.slice(s.startIndex(), endIndex: markerIdx)
 
-	// Extract function names from wasmtime backtrace lines
-	// Each line looks like: "           0:  0x445 - <unknown>!funcname"
+	// Extract function names from wasmtime backtrace lines. Each frame line looks
+	// like: "           0:  0x445 - <module>!funcname". Scan ONLY the region AFTER
+	// the `Error: failed to run` marker (the wasm backtrace), NOT the program
+	// stderr before it — the panic MESSAGE can itself contain `!` (e.g.
+	// `panic at ...: 10 != 20`), and splitting that on `!` would mis-parse
+	// `!= 20` into a bogus `in = 20` stack frame.
+	let backtraceRegion = s.slice(markerIdx, endIndex: s.endIndex())
 	var trace = "\nStack trace:"
-	let lines = s.split("\n")
+	let lines = backtraceRegion.split("\n")
 	for line in lines 'eachLine'
 		let bangIdx = try line.findFirst("!") otherwise continue
 		let afterBangIdx = try line.indexAfter(bangIdx) otherwise continue

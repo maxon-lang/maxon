@@ -1,0 +1,85 @@
+// Test: panic-interpolation.multiple-values
+function main() returns ExitCode
+		let a = 10
+		let b = 20
+		panic("{a} != {b}")
+		return 0
+end 'main'
+---
+ExitCode: 1
+Stderr: ```
+panic at panic-interpolation.multiple-values.test:5: 10 != 20
+Stack trace:
+  in main
+  in mrt_start
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 10 : i64
+    %1 = mir.mov_imm 20 : i64
+    %4 = mir.global_addr @__istr_0
+    %5 = mir.mov_imm 53 : i64
+    %6 = mir.mov_imm 21 : i64
+    %7 = mir.call @mrt_alloc(%6)
+    %8 = mir.call @mrt_i64_to_string(%0, %7)
+    %9 = mir.global_addr @__istr_1
+    %10 = mir.mov_imm 4 : i64
+    %11 = mir.mov_imm 21 : i64
+    %12 = mir.call @mrt_alloc(%11)
+    %13 = mir.call @mrt_i64_to_string(%1, %12)
+    %14 = mir.global_addr @__istr_2
+    %15 = mir.mov_imm 0 : i64
+    %16 = mir.global_addr @__istr_3
+    %17 = mir.mov_imm 1 : i64
+    %19 = mir.mov_imm 53 : i64
+    %20 = mir.add.i64 %19, %8
+    %21 = mir.add.i64 %20, %10
+    %22 = mir.add.i64 %21, %13
+    %23 = mir.add.i64 %22, %15
+    %24 = mir.add.i64 %23, %17
+    %25 = mir.mov_imm 1 : i64
+    %26 = mir.add.i64 %24, %25
+    %27 = mir.call @mrt_alloc(%26)
+    mir.memcpy %27, %4, %5
+    %28 = mir.add.i64 %27, %5
+    mir.memcpy %28, %7, %8
+    %29 = mir.add.i64 %28, %8
+    mir.memcpy %29, %9, %10
+    %30 = mir.add.i64 %29, %10
+    mir.memcpy %30, %12, %13
+    %31 = mir.add.i64 %30, %13
+    mir.memcpy %31, %14, %15
+    %32 = mir.add.i64 %31, %15
+    mir.memcpy %32, %16, %17
+    %34 = mir.call @stdlib.__mm_decref(%7)
+    %35 = mir.call @stdlib.__mm_decref(%12)
+    %36 = mir.mov_imm 48 : i64
+    %37 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %38 = mir.call @mrt_alloc_with_dtor(%36, %37)
+    %39 = mir.mov_imm 0 : i64
+    mir.store %39, %38, 40 width: qword
+    mir.store %27, %38, 0 width: qword
+    mir.store %24, %38, 8 width: qword
+    mir.store %24, %38, 16 width: qword
+    %40 = mir.mov_imm 1 : i64
+    mir.store %40, %38, 24 width: qword
+    %41 = mir.mov_imm -1 : i64
+    mir.store %41, %38, 32 width: qword
+    %43 = mir.mov_imm 16 : i64
+    %44 = mir.func_addr @__destruct_String
+    %42 = mir.call @stdlib.__mm_alloc(%43, %44)
+    mir.store %38, %42, 0 width: qword
+    %45 = mir.mov_imm 0 : i64
+    mir.store %45, %42, 8 width: qword
+    %46 = mir.load %42, 0 width: qword
+    %47 = mir.load %46, 0 width: qword
+    %48 = mir.call @mrt_panic(%47)
+    %50 = mir.call @mm_drop(%42)
+    %49 = mir.mov_imm 0 : i64
+    mir.ret %49
+  }
+}
+---
