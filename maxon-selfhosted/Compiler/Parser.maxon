@@ -2927,7 +2927,15 @@ export type Parser
 			return
 		end 'isSingleQuoteString'
 
-		if rejectCallInitializer(valueToken) 'wasCall'
+		// A free-function call (`buildPair()`) is only rejected for a genuine
+		// file-scope global (`typeName == ""`), where calls are never constant.
+		// Inside a `type` body (`typeName != ""`) a `static let X = f()` is a
+		// lazy static field whose initializer may be any call — it falls through
+		// to `isRuntimeInitInitializer` below and is materialized in the file's
+		// `__module_init_<n>`. This mirrors the C# split between
+		// `IsComplexInitializer` (globals) and `IsComplexStaticInitializer`
+		// (static fields, which additionally allow a bare `Identifier(` call).
+		if typeName == "" and rejectCallInitializer(valueToken) 'wasCall'
 			return
 		end 'wasCall'
 
@@ -3363,10 +3371,26 @@ export type Parser
 			return false
 		end 'notIdent'
 		let nextTok = try cursor.peek(1) otherwise Token.eof()
+
+		// `Identifier from "literal"` / `Identifier from 'c'` / `Identifier from [..]`
+		// — InitableFrom{String,Char,Array}Literal sugar. The array-collection
+		// form (`CharSet from ['a', ...]`) lowers through the same
+		// `parseFromLiteralCall` path as the string/char forms; `parseExpression`
+		// inside the module-init context handles all three.
 		if nextTok.kind == TokenKind.from 'isFromLiteral'
 			let litTok = try cursor.peek(2) otherwise Token.eof()
-			return litTok.kind == TokenKind.stringLiteral or litTok.kind == TokenKind.charLiteral
+			return litTok.kind == TokenKind.stringLiteral or litTok.kind == TokenKind.charLiteral or litTok.kind == TokenKind.leftBracket
 		end 'isFromLiteral'
+
+		// Free-function call (`buildPair()`). Only reaches here for a static
+		// field — a file-scope global was already rejected by
+		// `rejectCallInitializer`. Materialized in `__module_init_<n>` exactly
+		// like the `Type.method(...)` form below.
+		if nextTok.kind == TokenKind.leftParen 'isFreeCall'
+			return true
+		end 'isFreeCall'
+
+		// Static-method / qualified call: `Identifier.member(`.
 		let memberTok = try cursor.peek(2) otherwise Token.eof()
 		let parenTok = try cursor.peek(3) otherwise Token.eof()
 		return nextTok.kind == TokenKind.dot and memberTok.kind == TokenKind.identifier and parenTok.kind == TokenKind.leftParen

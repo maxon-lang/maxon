@@ -1,0 +1,61 @@
+// Test: lazy-static.multiple-fields
+typealias Count = int(0 to u64.max)
+
+type Cache
+	static var a = Cache.buildA()
+	static var b = Cache.buildB()
+	export var n as Count
+
+	static function buildA() returns Cache
+		return Cache{n: 10}
+	end 'buildA'
+
+	static function buildB() returns Cache
+		return Cache{n: 20}
+	end 'buildB'
+
+	export static function sum() returns Count
+		return Cache.a.n + Cache.b.n
+	end 'sum'
+end 'Cache'
+
+function main() returns ExitCode
+	return Cache.sum()
+end 'main'
+---
+ExitCode: 30
+---
+// CompiledIR
+module {
+  func @Cache.sum() -> u64 {
+  entry:
+    %0 = mir.global_addr @__data_Cache.a
+    %1 = mir.load %0, 0 width: qword
+    %2 = mir.load %1, 0 width: qword
+    %3 = mir.global_addr @__data_Cache.b
+    %4 = mir.load %3, 0 width: qword
+    %5 = mir.load %4, 0 width: qword
+    %6 = mir.add.i64 %2, %5
+    %7 = mir.mov_imm -1 : i64
+    %8 = mir.cmp ugt, %6, %7
+    mir.cond_br %8 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %9 = mir.global_addr @__panic_msg_1071998218daa1f3
+    %10 = mir.call @mrt_panic(%9)
+  __range_ok_0:
+    mir.ret %6
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.call @Cache.sum()
+    %1 = mir.mov_imm 125 : i64
+    %2 = mir.cmp ugt, %0, %1
+    mir.cond_br %2 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %3 = mir.global_addr @__panic_msg_5bfea45a97435444
+    %4 = mir.call @mrt_panic(%3)
+  __range_ok_0:
+    mir.ret %0
+  }
+}
+---

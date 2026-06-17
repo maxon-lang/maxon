@@ -23,22 +23,19 @@ ExitCode: 42
 ---
 // CompiledIR
 module {
-  func @main() -> u32 {
+  func @main() -> u8 {
   entry:
-    x64.prologue stack_size=16
-    x64.lea r8, [rip+__data_Config.value]
-    x64.mov r9, [r8+0] (8b)
-    x64.mov r8, [r9+0] (8b)
-    x64.mov r9d, 4294967295
-    x64.cmp r8, r9
-    x64.jbe __range_ok_0
+    %4 = mir.global_addr @__data_Config.value
+    %5 = mir.load %4, 0 width: qword
+    %3 = mir.load %5, 0 width: qword
+    %6 = mir.mov_imm 125 : i64
+    %7 = mir.cmp ugt, %3, %6
+    mir.cond_br %7 [then: __range_panic_0(), else: __range_ok_0()]
   __range_panic_0:
-    x64.lea r12, [rip+__panic_msg_b9e28ea05edf259d]
-    x64.mov rcx, r12
-    x64.call mrt_panic
+    %8 = mir.global_addr @__panic_msg_b9e28ea05edf259d
+    %9 = mir.call @mrt_panic(%8)
   __range_ok_0:
-    x64.epilogue
-    x64.ret
+    mir.ret %3
   }
 }
 ---

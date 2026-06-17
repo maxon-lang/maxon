@@ -1,0 +1,128 @@
+// Test: lazy-static.cross-type-return
+typealias Count = int(0 to u64.max)
+
+type Pair
+	export var x as Count
+	export var y as Count
+
+	static function create(x Count, y Count) returns Self
+		return Self{x: x, y: y}
+	end 'create'
+end 'Pair'
+
+type Registry
+	static let cachedPair = buildPair()
+
+	export static function getX() returns Count
+		return Registry.cachedPair.x
+	end 'getX'
+
+	export static function getY() returns Count
+		return Registry.cachedPair.y
+	end 'getY'
+end 'Registry'
+
+function buildPair() returns Pair
+	return Pair.create(11, y: 22)
+end 'buildPair'
+
+function main() returns ExitCode
+	print("{Registry.getX()} {Registry.getY()}")
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+11 22
+```
+---
+// CompiledIR
+module {
+  func @Registry.getX() -> u64 {
+  entry:
+    %0 = mir.global_addr @__data_Registry.cachedPair
+    %1 = mir.load %0, 0 width: qword
+    %2 = mir.load %1, 0 width: qword
+    %3 = mir.mov_imm -1 : i64
+    %4 = mir.cmp ugt, %2, %3
+    mir.cond_br %4 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %5 = mir.global_addr @__panic_msg_067062382bb104ee
+    %6 = mir.call @mrt_panic(%5)
+  __range_ok_0:
+    mir.ret %2
+  }
+  func @Registry.getY() -> u64 {
+  entry:
+    %0 = mir.global_addr @__data_Registry.cachedPair
+    %1 = mir.load %0, 0 width: qword
+    %2 = mir.load %1, 8 width: qword
+    %3 = mir.mov_imm -1 : i64
+    %4 = mir.cmp ugt, %2, %3
+    mir.cond_br %4 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %5 = mir.global_addr @__panic_msg_e53b40d3ec25ea1b
+    %6 = mir.call @mrt_panic(%5)
+  __range_ok_0:
+    mir.ret %2
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.call @Registry.getX()
+    %1 = mir.call @Registry.getY()
+    %2 = mir.global_addr @__istr_0
+    %3 = mir.mov_imm 0 : i64
+    %4 = mir.mov_imm 21 : i64
+    %5 = mir.call @mrt_alloc(%4)
+    %6 = mir.call @mrt_i64_to_string(%0, %5)
+    %7 = mir.global_addr @__istr_1
+    %8 = mir.mov_imm 1 : i64
+    %9 = mir.mov_imm 21 : i64
+    %10 = mir.call @mrt_alloc(%9)
+    %11 = mir.call @mrt_i64_to_string(%1, %10)
+    %12 = mir.global_addr @__istr_0
+    %16 = mir.add.i64 %3, %6
+    %17 = mir.add.i64 %16, %8
+    %18 = mir.add.i64 %17, %11
+    %19 = mir.add.i64 %18, %3
+    %20 = mir.mov_imm 1 : i64
+    %21 = mir.add.i64 %19, %20
+    %22 = mir.call @mrt_alloc(%21)
+    mir.memcpy %22, %2, %3
+    %23 = mir.add.i64 %22, %3
+    mir.memcpy %23, %5, %6
+    %24 = mir.add.i64 %23, %6
+    mir.memcpy %24, %7, %8
+    %25 = mir.add.i64 %24, %8
+    mir.memcpy %25, %10, %11
+    %26 = mir.add.i64 %25, %11
+    mir.memcpy %26, %12, %3
+    %28 = mir.call @stdlib.__mm_decref(%5)
+    %29 = mir.call @stdlib.__mm_decref(%10)
+    %30 = mir.mov_imm 48 : i64
+    %31 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %32 = mir.call @mrt_alloc_with_dtor(%30, %31)
+    mir.store %3, %32, 40 width: qword
+    mir.store %22, %32, 0 width: qword
+    mir.store %19, %32, 8 width: qword
+    mir.store %19, %32, 16 width: qword
+    %34 = mir.mov_imm 1 : i64
+    mir.store %34, %32, 24 width: qword
+    %35 = mir.mov_imm -1 : i64
+    mir.store %35, %32, 32 width: qword
+    %37 = mir.mov_imm 16 : i64
+    %38 = mir.func_addr @__destruct_String
+    %36 = mir.call @stdlib.__mm_alloc(%37, %38)
+    mir.store %32, %36, 0 width: qword
+    mir.store %3, %36, 8 width: qword
+    %41 = mir.load %36, 0 width: qword
+    %45 = mir.call @stdlib.__mm_incref(%41)
+    %42 = mir.load %41, 0 width: qword
+    %43 = mir.load %41, 8 width: qword
+    %44 = mir.call @mrt_write_stdout(%42, %43)
+    %47 = mir.call @mm_drop(%36)
+    %46 = mir.call @__mm_decref_maybenull_helper(%41)
+    mir.ret %3
+  }
+}
+---

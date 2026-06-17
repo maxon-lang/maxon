@@ -1,0 +1,173 @@
+// Test: lazy-static.charset-cache
+type WSCache
+	static var ws = CharacterSet.whitespacesAndNewlines()
+
+	export static function isWhitespace(c Character) returns bool
+		return WSCache.ws.contains(c)
+	end 'isWhitespace'
+end 'WSCache'
+
+function main() returns ExitCode
+	if WSCache.isWhitespace(' ') 'c1'
+		print("space ")
+	end 'c1'
+	if WSCache.isWhitespace('a') 'c2'
+		print("FAIL")
+	end 'c2'
+	if WSCache.isWhitespace('\t') 'c3'
+		print("tab")
+	end 'c3'
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+space tab
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 32 : i64
+    %1 = mir.mov_imm 1 : i64
+    %2 = mir.call @mrt_alloc(%1)
+    mir.store %0, %2, 0 width: byte
+    %3 = mir.mov_imm 48 : i64
+    %4 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %5 = mir.call @mrt_alloc_with_dtor(%3, %4)
+    %6 = mir.mov_imm 0 : i64
+    mir.store %6, %5, 40 width: qword
+    mir.store %2, %5, 0 width: qword
+    mir.store %1, %5, 8 width: qword
+    mir.store %1, %5, 16 width: qword
+    mir.store %1, %5, 24 width: qword
+    %10 = mir.mov_imm -1 : i64
+    mir.store %10, %5, 32 width: qword
+    %12 = mir.mov_imm 8 : i64
+    %13 = mir.func_addr @__destruct_Character
+    %11 = mir.call @stdlib.__mm_alloc(%12, %13)
+    %108 = mir.call @stdlib.__mm_incref(%11)
+    mir.store %5, %11, 0 width: qword
+    %87 = mir.global_addr @__data_WSCache.ws
+    %88 = mir.load %87, 0 width: qword
+    %89 = mir.call @CharacterSet.contains(%88, %11)
+    mir.cond_br %89 [then: c1_0(), else: c1_0.after()]
+  c1_0:
+    %15 = mir.global_addr @__istr_0
+    %17 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %18 = mir.call @mrt_alloc_with_dtor(%3, %17)
+    mir.store %6, %18, 40 width: qword
+    mir.store %15, %18, 0 width: qword
+    %20 = mir.mov_imm 6 : i64
+    mir.store %20, %18, 8 width: qword
+    %21 = mir.mov_imm -2 : i64
+    mir.store %21, %18, 16 width: qword
+    mir.store %1, %18, 24 width: qword
+    mir.store %6, %18, 32 width: qword
+    %25 = mir.mov_imm 16 : i64
+    %26 = mir.func_addr @__destruct_String
+    %24 = mir.call @stdlib.__mm_alloc(%25, %26)
+    mir.store %18, %24, 0 width: qword
+    mir.store %1, %24, 8 width: qword
+    %90 = mir.load %24, 0 width: qword
+    %91 = mir.load %90, 0 width: qword
+    %92 = mir.load %90, 8 width: qword
+    %93 = mir.call @mrt_write_stdout(%91, %92)
+    %111 = mir.call @mm_drop(%24)
+    mir.br c1_0.after()
+  c1_0.after:
+    %29 = mir.mov_imm 97 : i64
+    %31 = mir.call @mrt_alloc(%1)
+    mir.store %29, %31, 0 width: byte
+    %33 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %34 = mir.call @mrt_alloc_with_dtor(%3, %33)
+    mir.store %6, %34, 40 width: qword
+    mir.store %31, %34, 0 width: qword
+    mir.store %1, %34, 8 width: qword
+    mir.store %1, %34, 16 width: qword
+    mir.store %1, %34, 24 width: qword
+    %39 = mir.mov_imm -1 : i64
+    mir.store %39, %34, 32 width: qword
+    %41 = mir.mov_imm 8 : i64
+    %42 = mir.func_addr @__destruct_Character
+    %40 = mir.call @stdlib.__mm_alloc(%41, %42)
+    %109 = mir.call @stdlib.__mm_incref(%40)
+    mir.store %34, %40, 0 width: qword
+    %94 = mir.global_addr @__data_WSCache.ws
+    %95 = mir.load %94, 0 width: qword
+    %96 = mir.call @CharacterSet.contains(%95, %40)
+    mir.cond_br %96 [then: c2_0(), else: c2_0.after()]
+  c2_0:
+    %44 = mir.global_addr @__istr_1
+    %46 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %47 = mir.call @mrt_alloc_with_dtor(%3, %46)
+    mir.store %6, %47, 40 width: qword
+    mir.store %44, %47, 0 width: qword
+    %49 = mir.mov_imm 4 : i64
+    mir.store %49, %47, 8 width: qword
+    %50 = mir.mov_imm -2 : i64
+    mir.store %50, %47, 16 width: qword
+    mir.store %1, %47, 24 width: qword
+    mir.store %6, %47, 32 width: qword
+    %54 = mir.mov_imm 16 : i64
+    %55 = mir.func_addr @__destruct_String
+    %53 = mir.call @stdlib.__mm_alloc(%54, %55)
+    mir.store %47, %53, 0 width: qword
+    mir.store %1, %53, 8 width: qword
+    %97 = mir.load %53, 0 width: qword
+    %98 = mir.load %97, 0 width: qword
+    %99 = mir.load %97, 8 width: qword
+    %100 = mir.call @mrt_write_stdout(%98, %99)
+    %112 = mir.call @mm_drop(%53)
+    mir.br c2_0.after()
+  c2_0.after:
+    %58 = mir.mov_imm 9 : i64
+    %60 = mir.call @mrt_alloc(%1)
+    mir.store %58, %60, 0 width: byte
+    %62 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %63 = mir.call @mrt_alloc_with_dtor(%3, %62)
+    mir.store %6, %63, 40 width: qword
+    mir.store %60, %63, 0 width: qword
+    mir.store %1, %63, 8 width: qword
+    mir.store %1, %63, 16 width: qword
+    mir.store %1, %63, 24 width: qword
+    %68 = mir.mov_imm -1 : i64
+    mir.store %68, %63, 32 width: qword
+    %70 = mir.mov_imm 8 : i64
+    %71 = mir.func_addr @__destruct_Character
+    %69 = mir.call @stdlib.__mm_alloc(%70, %71)
+    %110 = mir.call @stdlib.__mm_incref(%69)
+    mir.store %63, %69, 0 width: qword
+    %101 = mir.global_addr @__data_WSCache.ws
+    %102 = mir.load %101, 0 width: qword
+    %103 = mir.call @CharacterSet.contains(%102, %69)
+    mir.cond_br %103 [then: c3_0(), else: c3_0.after()]
+  c3_0:
+    %73 = mir.global_addr @__istr_2
+    %75 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %76 = mir.call @mrt_alloc_with_dtor(%3, %75)
+    mir.store %6, %76, 40 width: qword
+    mir.store %73, %76, 0 width: qword
+    %78 = mir.mov_imm 3 : i64
+    mir.store %78, %76, 8 width: qword
+    %79 = mir.mov_imm -2 : i64
+    mir.store %79, %76, 16 width: qword
+    mir.store %1, %76, 24 width: qword
+    mir.store %6, %76, 32 width: qword
+    %83 = mir.mov_imm 16 : i64
+    %84 = mir.func_addr @__destruct_String
+    %82 = mir.call @stdlib.__mm_alloc(%83, %84)
+    mir.store %76, %82, 0 width: qword
+    mir.store %1, %82, 8 width: qword
+    %104 = mir.load %82, 0 width: qword
+    %105 = mir.load %104, 0 width: qword
+    %106 = mir.load %104, 8 width: qword
+    %107 = mir.call @mrt_write_stdout(%105, %106)
+    %113 = mir.call @mm_drop(%82)
+    mir.br c3_0.after()
+  c3_0.after:
+    mir.ret %6
+  }
+}
+---
