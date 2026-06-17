@@ -6056,6 +6056,31 @@ export type Parser
 		return project.prescannedUnionNames.contains(enumName)
 	end 'enumIsAssociatedValueUnion'
 
+	// True when `enumName` is a HEAP-BOXED union — a union with at least one
+	// payload-bearing case (`enumCasesAnyPayload`). These are the unions that
+	// `parseUnionDecl` lowers to the `i64 tag + payload` box and for which it
+	// synthesizes `__construct_Union_case` constructors. A payload-free
+	// (bare-case-only) union takes `parseUnionDecl`'s SCALAR arm instead — it is
+	// representationally an enum (case constants, ordinal+1 throw ABI) with NO
+	// constructors. `enumIsAssociatedValueUnion` conflates the two (it returns
+	// true for ANY union via the `.isUnion` flag), so the heap-box paths
+	// (throw-construction, the union-pointer `(e)` binding) must gate on THIS
+	// predicate to avoid calling a `__construct_*` that was never synthesized.
+	function unionIsBoxed(enumName String) returns bool
+		if let resolved = try project.enumTypes.get(enumName) 'isResolved'
+			return resolved.isUnion and enumCasesAnyPayload(resolved.cases)
+		end 'isResolved'
+		if let unresolved = try project.unresolvedEnums.get(enumName) 'isUnresolved'
+			return unresolved.isUnion and enumCasesAnyPayload(unresolved.cases)
+		end 'isUnresolved'
+		// Cross-file forward reference not yet parsed: the prescan only records
+		// the union NAME, not its cases, so payload-ness is unknown here. Treat as
+		// boxed (the conservative pre-existing behavior) — a payload-free union
+		// declared in a not-yet-parsed file is the rare case, and the scalar-throw
+		// fast path is an optimization, not a correctness requirement, for it.
+		return project.prescannedUnionNames.contains(enumName)
+	end 'unionIsBoxed'
+
 	// Declare an error-value binding for an `(e)` clause on a fallback /
 	// else-after-if-try handler block. Discriminates between bare-enum throws
 	// (the runtime stores `ordinal + 1`, so emit `flag - 1` to recover the
@@ -7103,7 +7128,11 @@ export type Parser
 		// that small integer as a pointer (0xC0000005). Plain bare enums keep
 		// the ordinal+1 ABI: their `(e)` binding recovers the ordinal via
 		// `flag - 1` and never treats the flag as a pointer.
-		if enumIsAssociatedValueUnion(typeNameToken.value) 'bareUnionCase'
+		// Only a HEAP-BOXED union (one with payload cases) routes its bare case
+		// through `__construct_Union_Bare()` — that constructor exists only for
+		// boxed unions. A payload-free union is scalar (enum-like): it falls
+		// through to the ordinal+1 throw ABI below, exactly like a plain enum.
+		if unionIsBoxed(typeNameToken.value) 'bareUnionCase'
 			let ctorName = unionConstructorSymbolName(typeNameToken.value, caseName: variantToken.value)
 			let ctorResult = emitCallAndResult(ctorName, args: ByteArrayArray.create(), argLabels: StringArray.create(), argTypes: MaxonTypeArray.create(), argRanges: SourceRangeArray.create(), callContext: CallContext.qualified, range: SourceRange.between(throwToken, last: variantToken))
 			module.setTerminator(block, op: MaxonOp.throw(typeNameToken.value, variantName: variantToken.value, payloadValueName: exprName(ctorResult), range: SourceRange.between(throwToken, last: variantToken)))
