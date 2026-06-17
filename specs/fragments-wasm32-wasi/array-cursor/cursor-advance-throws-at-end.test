@@ -1,0 +1,90 @@
+// Test: cursor-advance-throws-at-end
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function main() returns ExitCode
+	var arr = ByteArray.create()
+	arr.push(10)
+	arr.push(20)
+
+	let cursor = try arr.cursor() otherwise 'fail'
+		return 99
+	end 'fail'
+
+	// Advance to last element
+	try cursor.advance() otherwise 'done'
+		return 88
+	end 'done'
+
+	// Try to advance past end — should throw
+	try cursor.advance() otherwise 'caught'
+		return 1
+	end 'caught'
+
+	// Should not reach here
+	return 77
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %3 = mir.global_addr @__layout_Array_Byte
+    %4 = mir.call @Array.create(%3)
+    %6 = mir.mov_imm 10 : i64
+    %7 = mir.global_addr @__layout_Array_Byte
+    %8 = mir.call @Array.push(%4, %6, %7)
+    %10 = mir.mov_imm 20 : i64
+    %11 = mir.global_addr @__layout_Array_Byte
+    %12 = mir.call @Array.push(%4, %10, %11)
+    %14 = mir.global_addr @__layout_Array_Byte
+    mir.br inlined_Array.cursor_0_0()
+  inlined_Array.cursor_0_0:
+    %41 = mir.load %4, 0 width: qword
+    %42, %43 = mir.try_call @ArrayIterator.create(%41, %14)
+    %44 = mir.mov_imm 0 : i64
+    %45 = mir.cmp ne, %43, %44
+    mir.cond_br %45 [then: inlined_Array.cursor_1_0(), else: inlined_Array.cursor_2_0()]
+  inlined_Array.cursor_1_0:
+    %46 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%46, %43)
+  inlined_Array.cursor_2_0:
+    %47 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%42, %47)
+  inline_cont_main_0(%48: i64, %49: i64):
+    %18 = mir.cmp ne, %49, %0
+    mir.cond_br %18 [then: try_0.otherwise(), else: try_0.merge()]
+  try_0.otherwise:
+    %53 = mir.call @__mm_decref_maybenull_helper(%4)
+    %52 = mir.call @__mm_decref_maybenull_helper(%48)
+    %20 = mir.mov_imm 99 : i64
+    mir.ret %20
+  try_0.merge:
+    %23 = mir.global_addr @__layout_ArrayIterator_Byte
+    %24, %25 = mir.try_call @ArrayIterator.advance(%48, %23)
+    %27 = mir.cmp ne, %25, %0
+    mir.cond_br %27 [then: try_1.otherwise(), else: try_1.merge()]
+  try_1.otherwise:
+    %55 = mir.call @__mm_decref_maybenull_helper(%4)
+    %54 = mir.call @__mm_decref_maybenull_helper(%48)
+    %29 = mir.mov_imm 88 : i64
+    mir.ret %29
+  try_1.merge:
+    %32 = mir.global_addr @__layout_ArrayIterator_Byte
+    %33, %34 = mir.try_call @ArrayIterator.advance(%48, %32)
+    %51 = mir.call @__mm_decref_maybenull_helper(%4)
+    %50 = mir.call @__mm_decref_maybenull_helper(%48)
+    %36 = mir.cmp ne, %34, %0
+    mir.cond_br %36 [then: try_2.otherwise(), else: try_2.merge()]
+  try_2.otherwise:
+    %38 = mir.mov_imm 1 : i64
+    mir.ret %38
+  try_2.merge:
+    %40 = mir.mov_imm 77 : i64
+    mir.ret %40
+  }
+}
+---

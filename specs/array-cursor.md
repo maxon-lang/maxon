@@ -64,10 +64,16 @@ function main() returns ExitCode
 	try cursor.advance() otherwise ignore
 	let i2 = cursor.index()
 
-	return i0 + i1 * 10 + i2 * 100
+	// 0 + 1*10 + 2*100 = 210 (printed, not returned: 210 > the valid
+	// ExitCode range of 0..125 on the wasm target)
+	print("{i0 + i1 * 10 + i2 * 100}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
+0
+```
+```stdout
 210
 ```
 
@@ -410,9 +416,15 @@ function main() returns ExitCode
 		count = count + 10000
 	end 'c4'
 
-	return count
+	// true,false,true,true,false → 1 + 100 + 1000 = 1101 (printed, not
+	// returned: 1101 > the valid ExitCode range of 0..125 on the wasm target)
+	print("{count}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
+0
+```
+```stdout
 1101
 ```

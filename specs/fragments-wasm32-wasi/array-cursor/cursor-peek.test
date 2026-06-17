@@ -1,0 +1,95 @@
+// Test: cursor-peek
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function main() returns ExitCode
+	var arr = ByteArray.create()
+	arr.push(10)
+	arr.push(20)
+	arr.push(30)
+
+	let cursor = try arr.cursor() otherwise 'fail'
+		return 99
+	end 'fail'
+
+	let cur = cursor.current()
+	let p1 = try cursor.peek(1) otherwise 0
+	let p2 = try cursor.peek(2) otherwise 0
+
+	return cur + p1 + p2
+end 'main'
+---
+ExitCode: 60
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %3 = mir.global_addr @__layout_Array_Byte
+    %4 = mir.call @Array.create(%3)
+    %6 = mir.mov_imm 10 : i64
+    %7 = mir.global_addr @__layout_Array_Byte
+    %8 = mir.call @Array.push(%4, %6, %7)
+    %10 = mir.mov_imm 20 : i64
+    %11 = mir.global_addr @__layout_Array_Byte
+    %12 = mir.call @Array.push(%4, %10, %11)
+    %14 = mir.mov_imm 30 : i64
+    %15 = mir.global_addr @__layout_Array_Byte
+    %16 = mir.call @Array.push(%4, %14, %15)
+    %18 = mir.global_addr @__layout_Array_Byte
+    mir.br inlined_Array.cursor_0_0()
+  inlined_Array.cursor_0_0:
+    %56 = mir.load %4, 0 width: qword
+    %57, %58 = mir.try_call @ArrayIterator.create(%56, %18)
+    %59 = mir.mov_imm 0 : i64
+    %60 = mir.cmp ne, %58, %59
+    mir.cond_br %60 [then: inlined_Array.cursor_1_0(), else: inlined_Array.cursor_2_0()]
+  inlined_Array.cursor_1_0:
+    %61 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%61, %58)
+  inlined_Array.cursor_2_0:
+    %62 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%57, %62)
+  inline_cont_main_0(%63: i64, %64: i64):
+    %22 = mir.cmp ne, %64, %0
+    mir.cond_br %22 [then: try_0.otherwise(), else: try_0.merge()]
+  try_0.otherwise:
+    %70 = mir.call @__mm_decref_maybenull_helper(%4)
+    %69 = mir.call @__mm_decref_maybenull_helper(%63)
+    %24 = mir.mov_imm 99 : i64
+    mir.ret %24
+  try_0.merge:
+    %65 = mir.load %63, 0 width: qword
+    %66 = mir.call @stdlib.__managed_mem_cursor_current(%65)
+    %30 = mir.mov_imm 1 : i64
+    %31 = mir.global_addr @__layout_ArrayIterator_Byte
+    %32, %33 = mir.try_call @ArrayIterator.peek(%63, %30, %31)
+    %35 = mir.cmp ne, %33, %0
+    mir.cond_br %35 [then: try_1.merge(%0), else: try_1.ok()]
+  try_1.ok:
+    mir.br try_1.merge(%32)
+  try_1.merge(%54: i64):
+    %40 = mir.mov_imm 2 : i64
+    %41 = mir.global_addr @__layout_ArrayIterator_Byte
+    %42, %43 = mir.try_call @ArrayIterator.peek(%63, %40, %41)
+    %45 = mir.cmp ne, %43, %0
+    mir.cond_br %45 [then: try_2.merge(%0), else: try_2.ok()]
+  try_2.ok:
+    mir.br try_2.merge(%42)
+  try_2.merge(%55: i64):
+    %51 = mir.add.i64 %66, %54
+    %53 = mir.add.i64 %51, %55
+    %68 = mir.call @__mm_decref_maybenull_helper(%4)
+    %67 = mir.call @__mm_decref_maybenull_helper(%63)
+    %71 = mir.mov_imm 125 : i64
+    %72 = mir.cmp ugt, %53, %71
+    mir.cond_br %72 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %73 = mir.global_addr @__panic_msg_f4bf9839f08bb613
+    %74 = mir.call @mrt_panic(%73)
+  __range_ok_0:
+    mir.ret %53
+  }
+}
+---

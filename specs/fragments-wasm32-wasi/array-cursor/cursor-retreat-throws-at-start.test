@@ -1,0 +1,89 @@
+// Test: cursor-retreat-throws-at-start
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function main() returns ExitCode
+	var arr = ByteArray.create()
+	arr.push(10)
+
+	let cursor = try arr.cursor() otherwise 'fail'
+		return 99
+	end 'fail'
+
+	// Try to retreat at position 0 — should throw
+	try cursor.retreat() otherwise 'caught'
+		return 1
+	end 'caught'
+
+	// Should not reach here
+	return 77
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %3 = mir.global_addr @__layout_Array_Byte
+    %4 = mir.call @Array.create(%3)
+    %6 = mir.mov_imm 10 : i64
+    %7 = mir.global_addr @__layout_Array_Byte
+    %8 = mir.call @Array.push(%4, %6, %7)
+    %10 = mir.global_addr @__layout_Array_Byte
+    mir.br inlined_Array.cursor_0_0()
+  inlined_Array.cursor_0_0:
+    %28 = mir.load %4, 0 width: qword
+    %29, %30 = mir.try_call @ArrayIterator.create(%28, %10)
+    %31 = mir.mov_imm 0 : i64
+    %32 = mir.cmp ne, %30, %31
+    mir.cond_br %32 [then: inlined_Array.cursor_1_0(), else: inlined_Array.cursor_2_0()]
+  inlined_Array.cursor_1_0:
+    %33 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%33, %30)
+  inlined_Array.cursor_2_0:
+    %34 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%29, %34)
+  inline_cont_main_0(%35: i64, %36: i64):
+    %14 = mir.cmp ne, %36, %0
+    mir.cond_br %14 [then: try_0.otherwise(), else: inlined_ArrayIterator.retreat_0_0()]
+  try_0.otherwise:
+    %57 = mir.call @__mm_decref_maybenull_helper(%4)
+    %56 = mir.call @__mm_decref_maybenull_helper(%35)
+    %16 = mir.mov_imm 99 : i64
+    mir.ret %16
+  inlined_ArrayIterator.retreat_0_0:
+    %37 = mir.load %35, 0 width: qword
+    %38 = mir.load %37, 8 width: qword
+    %39 = mir.mov_imm 1 : i64
+    %40 = mir.sub.i64 %38, %39
+    %41 = mir.mov_imm 0 : i64
+    %42 = mir.cmp ge, %40, %41
+    %43 = mir.sub.i64 %40, %38
+    %44 = mir.mul.i64 %42, %43
+    %45 = mir.add.i64 %38, %44
+    mir.store %45, %37, 8 width: qword
+    %55 = mir.call @__mm_decref_maybenull_helper(%4)
+    %54 = mir.call @__mm_decref_maybenull_helper(%35)
+    %46 = mir.mov_imm 1 : i64
+    %47 = mir.sub.i64 %46, %42
+    %48 = mir.mov_imm 2 : i64
+    %49 = mir.mul.i64 %47, %48
+    %50 = mir.cmp ne, %49, %41
+    mir.cond_br %50 [then: inlined_ArrayIterator.retreat_1_0(), else: inline_cont_main_3(%41, %41)]
+  inlined_ArrayIterator.retreat_1_0:
+    %51 = mir.mov_imm 2 : i64
+    mir.br inline_cont_main_3(%41, %51)
+  inline_cont_main_3(%52: i64, %53: i64):
+    %23 = mir.cmp ne, %53, %0
+    mir.cond_br %23 [then: try_1.otherwise(), else: try_1.merge()]
+  try_1.otherwise:
+    %25 = mir.mov_imm 1 : i64
+    mir.ret %25
+  try_1.merge:
+    %27 = mir.mov_imm 77 : i64
+    mir.ret %27
+  }
+}
+---

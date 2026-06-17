@@ -26,151 +26,195 @@ ExitCode: 30
 module {
   func @main() -> u32 {
   entry:
-    x64.prologue stack_size=48
-    x64.call ByteArray.create
-    x64.mov [rbp-8], rax
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rbp-8]
-    x64.mov rdx, 10
-    x64.call ByteArray.push
-    x64.mov rcx, [rbp-8]
-    x64.mov rdx, 20
-    x64.call ByteArray.push
-    x64.mov rdx, [rbp-8]
-    x64.mov rcx, [rbp-8]
-    x64.mov rdx, 30
-    x64.call ByteArray.push
-    x64.mov rbx, [rbp-8]
-    x64.mov rcx, [rbp-8]
-    x64.mov rdx, 40
-    x64.call ByteArray.push
-    x64.mov rsi, [rbp-8]
-    x64.mov rcx, [rbp-8]
-    x64.mov rdx, 50
-    x64.call ByteArray.push
-    x64.mov rdi, [rbp-8]
-    x64.mov rcx, [rbp-8]
-    x64.call ByteArray.cursor
-    x64.mov [rbp-16], rax
-    x64.xor r8d, r8d
-    x64.cmp rdx, r8
-    x64.je main.otherwise_continue_0
-  otherwise_error_0:
-    x64.mov rax, [rbp-16]
-    x64.test rax, rax
-    x64.jz __nonnull_skip_0
-    x64.mov rcx, [rbp-16]
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.mov rcx, [rbp-8]
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_1
-    x64.call mm_decref
-    x64.label __nonnull_skip_1
-    x64.mov rax, 99
+    x64.prologue stack_size=32
+    x64.lea rcx, [rip+__layout_Array_Byte]
+    x64.call Array.create
+    x64.mov r12, r8
+    x64.lea rax, [rip+__layout_Array_Byte]
+    x64.mov edx, 10
+    x64.mov rcx, r12
+    x64.call Array.push
+    x64.lea rax, [rip+__layout_Array_Byte]
+    x64.mov edx, 20
+    x64.mov rcx, r12
+    x64.call Array.push
+    x64.lea rax, [rip+__layout_Array_Byte]
+    x64.mov edx, 30
+    x64.mov rcx, r12
+    x64.call Array.push
+    x64.lea rax, [rip+__layout_Array_Byte]
+    x64.mov edx, 40
+    x64.mov rcx, r12
+    x64.call Array.push
+    x64.lea rax, [rip+__layout_Array_Byte]
+    x64.mov edx, 50
+    x64.mov rcx, r12
+    x64.call Array.push
+    x64.lea rdx, [rip+__layout_Array_Byte]
+    x64.xor r13d, r13d
+  inlined_Array.cursor_0_0:
+    x64.mov rcx, [r12+0] (8b)
+    x64.call ArrayIterator.create
+    x64.test rdx, rdx
+    x64.je inlined_Array.cursor_2_0
+  inlined_Array.cursor_1_0:
+    x64.xor ecx, ecx
+    x64.mov r14, rcx
+    x64.jmp inline_cont_main_0
+  inlined_Array.cursor_2_0:
+    x64.xor r9d, r9d
+    x64.mov r14, r8
+    x64.mov rdx, r9
+  inline_cont_main_0:
+    x64.test rdx, rdx
+    x64.je try_0.merge
+  try_0.otherwise:
+    x64.mov rcx, r12
+    x64.call __mm_decref_maybenull_helper
+    x64.mov rcx, r14
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r8d, 99
     x64.epilogue
     x64.ret
-  otherwise_continue_0:
-    x64.mov rax, [rbp-16]
-    x64.mov [rbp-24], rax
-    x64.mov rcx, [rbp-24]
-    x64.call mm_incref
-    x64.mov rdx, [rbp-24]
-    x64.mov rcx, [rbp-24]
-    x64.mov rdx, 4
-    x64.call __ArrayIterator_Byte.advanceBy
-    x64.mov rbx, [rbp-24]
-    x64.mov [rbp-32], rdx
-    x64.mov rcx, [rbp-24]
-    x64.mov rdx, 2
-    x64.call __ArrayIterator_Byte.retreatBy
-    x64.mov rsi, [rbp-24]
-    x64.mov [rbp-40], rdx
-    x64.mov rcx, [rbp-24]
-    x64.call __ArrayIterator_Byte.current
-    x64.xor edi, edi
-    x64.mov r8, 4294967295
-    x64.cmp rax, r8
-    x64.jg main.__range_panic_0
-    x64.cmp rax, rdi
-    x64.jl main.__range_panic_0
-    x64.jmp main.__range_ok_0
-  __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_0]
+  try_0.merge:
+  inlined_ArrayIterator.advanceBy_0_0:
+    x64.xor r8d, r8d
+  inlined_ArrayIterator.advanceBy_1_0:
+    x64.cmp r8, 4
+    x64.jge inlined_ArrayIterator.advanceBy_3_0
+  inlined_ArrayIterator.advance_0_0:
+    x64.mov r9, [r14+0] (8b)
+    x64.mov rsi, [r9+8] (8b)
+    x64.mov rdi, [r9+16] (8b)
+    x64.mov rax, rsi
+    x64.add rax, 1
     x64.mov rcx, rax
+    x64.sub rcx, rsi
+    x64.cmp rax, rdi
+    x64.setl rdi
+    x64.mov rax, rdi
+    x64.imul rax, rcx
+    x64.mov ecx, 1
+    x64.mov edx, 1
+    x64.sub rcx, rdi
+    x64.imul rcx, rdx
+    x64.add rsi, rax
+    x64.mov [r9+8], rsi (8b)
+    x64.xor r9d, r9d
+    x64.test rcx, rcx
+    x64.je __phi_trampoline_28_0
+  inlined_ArrayIterator.advance_1_0:
+    x64.mov edx, 1
+  inline_cont_main_1:
+    x64.test rdx, rdx
+    x64.je inlined_ArrayIterator.advanceBy_5_0
+    x64.jmp inlined_ArrayIterator.advanceBy_4_0
+  inlined_ArrayIterator.advanceBy_3_0:
+    x64.xor edx, edx
+    x64.xor r8d, r8d
+    x64.jmp inline_cont_main_2
+  inlined_ArrayIterator.advanceBy_4_0:
+    x64.xor r8d, r8d
+    x64.jmp inline_cont_main_2
+  inlined_ArrayIterator.advanceBy_5_0:
+    x64.add r8, 1
+    x64.jmp inlined_ArrayIterator.advanceBy_1_0
+  inline_cont_main_2:
+    x64.test rdx, rdx
+    x64.je try_1.ok
+    x64.mov rcx, r13
+    x64.jmp try_1.merge
+  try_1.ok:
+    x64.jmp __rc_edge_5_0
+  try_1.merge:
+    x64.call __mm_decref_maybenull_helper
+  inlined_ArrayIterator.retreatBy_0_0:
+    x64.xor r8d, r8d
+  inlined_ArrayIterator.retreatBy_1_0:
+    x64.cmp r8, 2
+    x64.jge inlined_ArrayIterator.retreatBy_3_0
+  inlined_ArrayIterator.retreat_0_0:
+    x64.mov r9, [r14+0] (8b)
+    x64.mov rsi, [r9+8] (8b)
+    x64.mov rdi, rsi
+    x64.sub rdi, 1
+    x64.xor eax, eax
+    x64.mov rcx, rdi
+    x64.sub rcx, rsi
+    x64.test rdi, rdi
+    x64.setge rdi
+    x64.mov rdx, rdi
+    x64.imul rdx, rcx
+    x64.mov ecx, 1
+    x64.mov ebx, 2
+    x64.sub rcx, rdi
+    x64.imul rcx, rbx
+    x64.add rsi, rdx
+    x64.mov [r9+8], rsi (8b)
+    x64.test rcx, rcx
+    x64.je __phi_trampoline_32_0
+  inlined_ArrayIterator.retreat_1_0:
+    x64.mov edx, 2
+    x64.mov r9, rax
+  inline_cont_main_3:
+    x64.test rdx, rdx
+    x64.je inlined_ArrayIterator.retreatBy_5_0
+    x64.jmp inlined_ArrayIterator.retreatBy_4_0
+  inlined_ArrayIterator.retreatBy_3_0:
+    x64.xor edx, edx
+    x64.xor r8d, r8d
+    x64.jmp inline_cont_main_4
+  inlined_ArrayIterator.retreatBy_4_0:
+    x64.xor r8d, r8d
+    x64.jmp inline_cont_main_4
+  inlined_ArrayIterator.retreatBy_5_0:
+    x64.add r8, 1
+    x64.jmp inlined_ArrayIterator.retreatBy_1_0
+  inline_cont_main_4:
+    x64.test rdx, rdx
+    x64.je try_2.ok
+    x64.mov rcx, r13
+    x64.jmp try_2.merge
+  try_2.ok:
+    x64.jmp __rc_edge_8_0
+  try_2.merge:
+    x64.call __mm_decref_maybenull_helper
+    x64.mov rcx, [r14+0] (8b)
+    x64.call stdlib.__managed_mem_cursor_current
+    x64.mov r13, r8
+    x64.mov rcx, r12
+    x64.call __mm_decref_maybenull_helper
+    x64.mov rcx, r14
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r8d, 4294967295
+    x64.cmp r13, r8
+    x64.jbe __range_ok_0
+    x64.jmp __range_panic_0
+  __rc_edge_5_0:
+    x64.mov rcx, r14
+    x64.call stdlib.__mm_incref
+    x64.mov rcx, r14
+    x64.jmp try_1.merge
+  __rc_edge_8_0:
+    x64.mov rcx, r14
+    x64.call stdlib.__mm_incref
+    x64.mov rcx, r14
+    x64.jmp try_2.merge
+  __range_panic_0:
+    x64.lea r12, [rip+__panic_msg_6cb700b41bdc5dff]
+    x64.mov rcx, r12
     x64.call mrt_panic
   __range_ok_0:
-    x64.mov rcx, [rbp-16]
-    x64.mov [rbp-48], rax
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_2
-    x64.call mm_decref
-    x64.label __nonnull_skip_2
-    x64.mov rax, [rbp-24]
-    x64.test rax, rax
-    x64.jz __nonnull_skip_3
-    x64.mov rcx, [rbp-24]
-    x64.call mm_decref
-    x64.label __nonnull_skip_3
-    x64.mov rcx, [rbp-8]
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_4
-    x64.call mm_decref
-    x64.label __nonnull_skip_4
-    x64.mov rax, [rbp-48]
+    x64.mov r8, r13
     x64.epilogue
     x64.ret
-  }
-  func @__destruct___ManagedMemory_Byte(ptr: i64) {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+16]
-    x64.mov rdx, -1
-    x64.cmp rcx, rdx
-    x64.jne __destruct___ManagedMemory_Byte.check_owned_0
-  slice_cleanup_0:
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+32]
-    x64.mov [rbp-16], rcx
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_0
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.jmp __destruct___ManagedMemory_Byte.skip_buf_0
-  check_owned_0:
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+16]
-    x64.mov rdx, -2
-    x64.cmp rcx, rdx
-    x64.je __destruct___ManagedMemory_Byte.skip_buf_0
-  free_buf_0:
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+0]
-    x64.call mm_raw_free
-    x64.jmp __destruct___ManagedMemory_Byte.skip_buf_0
-  skip_buf_0:
-    x64.jmp __destruct___ManagedMemory_Byte.done
-  done:
-    x64.epilogue
-    x64.ret
-  }
-  func @__destruct_ByteArray(ptr: i64) {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+0]
-    x64.mov [rbp-16], rcx
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_0
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.jmp __destruct_ByteArray.done
-  done:
-    x64.epilogue
-    x64.ret
+  __phi_trampoline_28_0:
+    x64.mov rdx, r9
+    x64.jmp inline_cont_main_1
+  __phi_trampoline_32_0:
+    x64.mov r9, rax
+    x64.mov rdx, rax
+    x64.jmp inline_cont_main_3
   }
 }
 ---

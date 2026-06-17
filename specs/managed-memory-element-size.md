@@ -61,10 +61,15 @@ function main() returns ExitCode
 	sum = sum + (try arr.get(4) otherwise 0)
 	sum = sum + (try arr.get(5) otherwise 0)
 
-	// 10 + 20 + 30 + 40 + 50 = 150
-	return sum
+	// 10 + 20 + 30 + 40 + 50 = 150 (printed, not returned: 150 > the
+	// valid ExitCode range of 0..125 on the wasm target)
+	print("{sum}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
+0
+```
+```stdout
 150
 ```
