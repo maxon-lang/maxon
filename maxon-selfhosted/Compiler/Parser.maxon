@@ -127,16 +127,12 @@ export typealias ClosureRenameArray = Array with ClosureRename
 function rewriteClosureNameOpRefs(module MaxonModule, renames ClosureRenameArray)
 	for i in 0 upto module.ops.count() 'eachOp'
 		let op = try module.ops.get(i) otherwise continue
-		let n = op.name
-		if n == "closureCreate" 'isCC'
-			let rewritten = rewriteClosureCreateRef(op, renames: renames)
-			try module.ops.set(i, value: rewritten) otherwise ignore
-			continue
-		end 'isCC'
-		if n == "functionRef" 'isFR'
-			let rewritten = rewriteFunctionRefRef(op, renames: renames)
-			try module.ops.set(i, value: rewritten) otherwise ignore
-		end 'isFR'
+		match op 'rewrite'
+			literal to rethrow then noOp()
+			functionRef then try module.ops.set(i, value: rewriteFunctionRefRef(op, renames: renames)) otherwise ignore
+			closureCreate then try module.ops.set(i, value: rewriteClosureCreateRef(op, renames: renames)) otherwise ignore
+			closureEnvLoad to cancelPromise then noOp()
+		end 'rewrite'
 	end 'eachOp'
 end 'rewriteClosureNameOpRefs'
 

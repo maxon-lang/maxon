@@ -2411,13 +2411,21 @@ function validateEnumAccessorComparisons(project Project, module MaxonModule, fi
 	for funcIdx in 0 upto module.functions.count() 'eachFunc'
 		let func = try module.functions.get(funcIdx) otherwise panic("validateEnumAccessorComparisons: functions.get OOB at {funcIdx}")
 		let producerTypes = try producerTypesPerFunc.get(funcIdx) otherwise panic("validateEnumAccessorComparisons: producerTypesPerFunc.get OOB at {funcIdx}")
+		// Attribute the diagnostic to the function's OWN source file, not the
+		// module-wide `filePath`: a MaxonModule aggregates functions from every
+		// file in the project, so the module path would mis-report a comparison
+		// that lives in (say) Parser.maxon as Compiler.maxon — with a line number
+		// that overruns the wrong file. Synthesized functions with no recorded
+		// source file fall back to the module-wide path. (Mirrors the E3010 walk
+		// in ExpandCastRangeChecks.)
+		let diagPath = filePath if func.sourceFilePath.isEmpty() else func.sourceFilePath
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("validateEnumAccessorComparisons: blockRef OOB")
 			var valueOrigins = EnumAccessorOriginMap.create()
 			var slotOrigins = SlotAccessorOriginMap.create()
 			for opIdx in block.opRefs 'eachOp'
 				let op = try module.ops.get(opIdx) otherwise panic("validateEnumAccessorComparisons: opIdx OOB")
-				scanOpForEnumAccessorComparison(project, producerTypes: producerTypes, valueOrigins: valueOrigins, slotOrigins: slotOrigins, op: op, filePath: filePath)
+				scanOpForEnumAccessorComparison(project, producerTypes: producerTypes, valueOrigins: valueOrigins, slotOrigins: slotOrigins, op: op, filePath: diagPath)
 			end 'eachOp'
 		end 'eachBlock'
 	end 'eachFunc'

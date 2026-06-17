@@ -625,27 +625,26 @@ function recordThrowsUses(project Project, scopes UseScopeMap, throws ThrowsClau
 end 'recordThrowsUses'
 
 function recordRefsFromOp(project Project, scopes UseScopeMap, opIdx OpIndex, op MaxonOp, readerFilePath FilePath)
-	let n = op.name
-	if n == "call" or n == "methodCall" or n == "tryCall" or n == "tryMethodCall" 'isCallShape'
-		recordCallOpRefs(project, scopes: scopes, opIdx: opIdx, op: op, readerFilePath: readerFilePath)
-		return
-	end 'isCallShape'
-	if n == "globalLoad" 'isGlobalLoad'
-		recordGlobalLoadRef(project, scopes: scopes, op: op, readerFilePath: readerFilePath)
-		return
-	end 'isGlobalLoad'
-	if n == "globalStore" 'isGlobalStore'
-		recordGlobalStoreRef(project, scopes: scopes, op: op, readerFilePath: readerFilePath)
-		return
-	end 'isGlobalStore'
-	if n == "convert" 'isConvert'
-		recordConvertOpRefs(project, scopes: scopes, op: op, readerFilePath: readerFilePath)
-		return
-	end 'isConvert'
-	if n == "structAlloc" 'isStructAlloc'
-		recordStructAllocRef(scopes, op: op, readerFilePath: readerFilePath)
-		return
-	end 'isStructAlloc'
+	// The four resolved-invocation shapes (callFree/callMethod categories) share
+	// one handler; the rest are single-variant. Comparing `op.name` is E3097, so
+	// dispatch via an exhaustive `match` (non-call/global/convert/structAlloc ops
+	// are no-ops). The two call-shape arms can't merge — call/methodCall and
+	// tryCall/tryMethodCall are not contiguous in the union.
+	match op 'dispatch'
+		literal to varStore then noOp()
+		globalLoad then recordGlobalLoadRef(project, scopes: scopes, op: op, readerFilePath: readerFilePath)
+		globalStore then recordGlobalStoreRef(project, scopes: scopes, op: op, readerFilePath: readerFilePath)
+		binop to unop then noOp()
+		convert then recordConvertOpRefs(project, scopes: scopes, op: op, readerFilePath: readerFilePath)
+		castCheck to br then noOp()
+		call to methodCall then recordCallOpRefs(project, scopes: scopes, opIdx: opIdx, op: op, readerFilePath: readerFilePath)
+		ret to panicDynamic then noOp()
+		structAlloc then recordStructAllocRef(scopes, op: op, readerFilePath: readerFilePath)
+		fieldLoad to throw then noOp()
+		tryCall to tryMethodCall then recordCallOpRefs(project, scopes: scopes, opIdx: opIdx, op: op, readerFilePath: readerFilePath)
+		rethrow then noOp()
+		functionRef to cancelPromise then noOp()
+	end 'dispatch'
 end 'recordRefsFromOp'
 
 // Extract a call-shape op's argTypes and resolved callee, and record both.
