@@ -331,13 +331,19 @@ export type Arm64Backend implements TargetBackend
 		var i = 0
 		while i < blockCount - 1 'eachBlock'
 			let blockRef = try func.blockRefs.get(i) otherwise panic("invariant: i < blockCount but func.blockRefs.get failed")
-			var block = try mirModule.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in mirModule.blocks")
+			// `func` is the lowered targetFunc, so its blockRefs index
+			// targetModule.blocks — NOT mirModule.blocks. Reading the MIR blocks
+			// here returned an unrelated block whose terminatorIndex points into
+			// mirModule.ops, which then mis-indexes targetModule.arm64Ops (it
+			// crashed lowering __slab_init, whose stale index 109 overran the 92
+			// real arm64 ops). The x64 backend reads targetModule.blocks here.
+			var block = try targetModule.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in targetModule.blocks")
 			if not block.hasTerminatorOp() 'noTerm'
 				i = i + 1
 				continue
 			end 'noTerm'
 			let nextBlockRef = try func.blockRefs.get(i + 1) otherwise panic("invariant: i+1 < blockCount but func.blockRefs.get failed")
-			let nextBlock = try mirModule.blocks.get(nextBlockRef) otherwise panic("invariant: nextBlockRef from func.blockRefs not in mirModule.blocks")
+			let nextBlock = try targetModule.blocks.get(nextBlockRef) otherwise panic("invariant: nextBlockRef from func.blockRefs not in targetModule.blocks")
 			let termOp = try targetModule.arm64Ops.get(block.terminatorIndex()) otherwise panic("invariant: block.terminatorIndex not in targetModule.arm64Ops")
 			let targetId = match termOp 'check'
 				branch(blk) gives blk
@@ -1661,7 +1667,7 @@ export type Arm64Backend implements TargetBackend
 		match osDesc.os 'osPick'
 			linux then return lowerOsAllocPagesLinuxArm64(resultId, sizeId: sizeId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
 			windows then panic("ARM64 osAllocPages not yet implemented for Windows")
-			macos then panic("ARM64 osAllocPages not yet implemented for macOS")
+			macos then return lowerOsAllocPagesMacosArm64(resultId, sizeId: sizeId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
 			wasi then panic("ARM64 osAllocPages not supported on WASI")
 		end 'osPick'
 	end 'lowerOsAllocPagesArm64'
@@ -1725,12 +1731,68 @@ export type Arm64Backend implements TargetBackend
 		return tempSlot + 1
 	end 'lowerOsAllocPagesLinuxArm64'
 
+	// macOS: mmap(NULL, size, PROT_READ|PROT_WRITE, MAP_ANON|MAP_PRIVATE, -1, 0)
+	// via the libSystem `_mmap` dyld import (Apple disallows raw syscalls). macOS
+	// flag values differ from Linux: MAP_ANON|MAP_PRIVATE = 0x1002 (vs 0x22).
+	function lowerOsAllocPagesMacosArm64(resultId ValueId, sizeId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+		var tempSlot = nextTempSlot
+
+		// addr = 0
+		let addrSlot = tempSlot
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movImm(arm64PhysReg(Arm64Register.x0), value: 0))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.strToSlot(addrSlot, src: arm64PhysReg(Arm64Register.x0)))
+		tempSlot = tempSlot + 1
+
+		// len = size
+		let lenSlot = ensureValueInSlotArm64(sizeId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
+		if lenSlot == tempSlot 'usedTempLen'
+			tempSlot = tempSlot + 1
+		end 'usedTempLen'
+
+		// prot = PROT_READ | PROT_WRITE = 3
+		let protSlot = tempSlot
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movImm(arm64PhysReg(Arm64Register.x0), value: 3))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.strToSlot(protSlot, src: arm64PhysReg(Arm64Register.x0)))
+		tempSlot = tempSlot + 1
+
+		// flags = MAP_ANON | MAP_PRIVATE = 0x1002 on macOS
+		let flagsSlot = tempSlot
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movImm(arm64PhysReg(Arm64Register.x0), value: 0x1002))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.strToSlot(flagsSlot, src: arm64PhysReg(Arm64Register.x0)))
+		tempSlot = tempSlot + 1
+
+		// fd = -1
+		let fdSlot = tempSlot
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movImm(arm64PhysReg(Arm64Register.x0), value: -1))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.strToSlot(fdSlot, src: arm64PhysReg(Arm64Register.x0)))
+		tempSlot = tempSlot + 1
+
+		// offset = 0
+		let offsetSlot = tempSlot
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movImm(arm64PhysReg(Arm64Register.x0), value: 0))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.strToSlot(offsetSlot, src: arm64PhysReg(Arm64Register.x0)))
+		tempSlot = tempSlot + 1
+
+		var argSlots = VarSlotArray.create()
+		argSlots.push(addrSlot)
+		argSlots.push(lenSlot)
+		argSlots.push(protSlot)
+		argSlots.push(flagsSlot)
+		argSlots.push(fdSlot)
+		argSlots.push(offsetSlot)
+		let resultSlot = tempSlot
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.iatCall(resultSlot, slotIndex: MACHO_IMPORT_SLOT_MMAP, argSlots: argSlots))
+		valueSlotMapSet(valueSlots, valueId: resultId, slot: resultSlot)
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.ldrFromSlot(Arm64VReg.virtual(resultId), slotIndex: resultSlot))
+		return tempSlot + 1
+	end 'lowerOsAllocPagesMacosArm64'
+
 	// Page release. ARM64-Linux: munmap(ptr, size) via syscall 215.
 	function lowerOsFreePagesArm64(ptrId ValueId, sizeId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
 		match osDesc.os 'osPick'
 			linux then return lowerOsFreePagesLinuxArm64(ptrId, sizeId: sizeId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
 			windows then panic("ARM64 osFreePages not yet implemented for Windows")
-			macos then panic("ARM64 osFreePages not yet implemented for macOS")
+			macos then return lowerOsFreePagesMacosArm64(ptrId, sizeId: sizeId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
 			wasi then panic("ARM64 osFreePages not supported on WASI")
 		end 'osPick'
 	end 'lowerOsFreePagesArm64'
@@ -1756,6 +1818,28 @@ export type Arm64Backend implements TargetBackend
 		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.syscall(resultSlot, number: 215, argSlots: argSlots))
 		return tempSlot + 1
 	end 'lowerOsFreePagesLinuxArm64'
+
+	// macOS: munmap(ptr, size) via the libSystem `_munmap` dyld import.
+	function lowerOsFreePagesMacosArm64(ptrId ValueId, sizeId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+		var tempSlot = nextTempSlot
+		let ptrSlot = ensureValueInSlotArm64(ptrId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
+		if ptrSlot == tempSlot 'usedTempPtr'
+			tempSlot = tempSlot + 1
+		end 'usedTempPtr'
+		let lenSlot = ensureValueInSlotArm64(sizeId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
+		if lenSlot == tempSlot 'usedTempLen'
+			tempSlot = tempSlot + 1
+		end 'usedTempLen'
+
+		var argSlots = VarSlotArray.create()
+		argSlots.push(ptrSlot)
+		argSlots.push(lenSlot)
+		// munmap returns int but the caller discards it; reserve a result slot so
+		// the emitter's accounting stays in sync with mirTempCountArm64.
+		let resultSlot = tempSlot
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.iatCall(resultSlot, slotIndex: MACHO_IMPORT_SLOT_MUNMAP, argSlots: argSlots))
+		return tempSlot + 1
+	end 'lowerOsFreePagesMacosArm64'
 
 	// ============================================================
 	// Phase 15c Stream 4.1: file/directory I/O op lowerings (ARM64).

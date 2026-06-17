@@ -60,7 +60,40 @@ let DYLD_CHAINED_IMPORT = 1
 let MACHO_IMPORT_SLOT_EXIT = 0
 let MACHO_IMPORT_SLOT_WRITE = 1
 export let MACHO_IMPORT_SLOT_NSGETEXECUTABLEPATH = 2
-let MACHO_IMPORT_COUNT = 3
+export let MACHO_IMPORT_SLOT_MMAP = 3
+export let MACHO_IMPORT_SLOT_MUNMAP = 4
+export let MACHO_IMPORT_SLOT_OPEN = 5
+export let MACHO_IMPORT_SLOT_CLOSE = 6
+export let MACHO_IMPORT_SLOT_READ = 7
+export let MACHO_IMPORT_SLOT_GETENV = 8
+export let MACHO_IMPORT_SLOT_GETTIMEOFDAY = 9
+export let MACHO_IMPORT_SLOT_NANOSLEEP = 10
+export let MACHO_IMPORT_SLOT_RENAME = 11
+let MACHO_IMPORT_COUNT = 12
+
+// libSystem symbols imported via dyld chained-fixup binds, in slot order (see
+// MACHO_IMPORT_SLOT_* above). buildChainedFixups iterates this to emit both the
+// import table and the symbol pool, so adding an import is three edits: append
+// its "_name" here, add a MACHO_IMPORT_SLOT_* constant, and bump
+// MACHO_IMPORT_COUNT.
+function machoImportNames() returns StringArray
+	var names = StringArray.create()
+	names.push("_exit")
+	names.push("_write")
+	// C source name is `_NSGetExecutablePath`; the Mach-O symbol carries the
+	// extra C-ABI leading underscore, so it is `__NSGetExecutablePath`.
+	names.push("__NSGetExecutablePath")
+	names.push("_mmap")
+	names.push("_munmap")
+	names.push("_open")
+	names.push("_close")
+	names.push("_read")
+	names.push("_getenv")
+	names.push("_gettimeofday")
+	names.push("_nanosleep")
+	names.push("_rename")
+	return names
+end 'machoImportNames'
 
 // nlist_64 type/sect bits used for debug symbols.
 let N_EXT = 0x01
@@ -169,25 +202,24 @@ function buildChainedFixups(dataSegmentFileOff MachineWord, gotSectionOffsetInSe
 	// begins with a leading NUL byte; that's why each name offset starts
 	// at the byte after the previous `_name\0` (6 bytes for `_exit\0`,
 	// 7 bytes for `_write\0`, 21 bytes for `_NSGetExecutablePath\0`).
-	let exitNameOff = 1
-	let writeNameOff = exitNameOff + 6
-	let nsGetExecutablePathNameOff = writeNameOff + 7
+	// Import entries (4 bytes each): lib_ordinal=1, weak=0, name_offset. Symbol
+	// offsets are counted from the start of the symbol pool, which begins with a
+	// leading NUL byte, so the first real name sits at offset 1 and each
+	// subsequent name follows the previous `_name\0`.
+	let importNames = machoImportNames()
+	var nameOff = 1
+	for name in importNames 'eachImport'
+		let importEntry = 1 or (0 shl 8) or (nameOff shl 9)
+		writeDword(cf, value: importEntry)
+		nameOff = nameOff + name.byteLength() + 1
+	end 'eachImport'
 
-	// Import MACHO_IMPORT_SLOT_EXIT: _exit
-	let importExit = 1 or (0 shl 8) or (exitNameOff shl 9)
-	writeDword(cf, value: importExit)
-	// Import MACHO_IMPORT_SLOT_WRITE: _write
-	let importWrite = 1 or (0 shl 8) or (writeNameOff shl 9)
-	writeDword(cf, value: importWrite)
-	// Import MACHO_IMPORT_SLOT_NSGETEXECUTABLEPATH: _NSGetExecutablePath
-	let importNsGetExecutablePath = 1 or (0 shl 8) or (nsGetExecutablePathNameOff shl 9)
-	writeDword(cf, value: importNsGetExecutablePath)
-
-	// Symbol pool
+	// Symbol pool: leading NUL then each `_name\0`.
 	cf.push(0)  // leading null
-	cf.append(b"_exit\x00")
-	cf.append(b"_write\x00")
-	cf.append(b"_NSGetExecutablePath\x00")
+	for name in importNames 'eachSymbol'
+		cf.append(name.toByteArray())
+		cf.push(0)
+	end 'eachSymbol'
 
 	// Align to 8
 	while cf.count() mod 8 != 0 'alignCf'
@@ -250,7 +282,7 @@ end 'patchRelocationsMachO'
 
 // --- Code signature builder ---
 
-function buildCodeSignature(fileData ByteArray, codeLimit MachineWord, identifierStr String) returns ByteArray
+function buildCodeSignature(fileData ByteArray, codeLimit MachineWord, execSegLimit MachineWord, identifierStr String) returns ByteArray
 	let hashPageSize = 1 shl CS_PAGE_SIZE_LOG2
 	let nCodeSlots = (codeLimit + hashPageSize - 1) / hashPageSize
 
@@ -303,8 +335,8 @@ function buildCodeSignature(fileData ByteArray, codeLimit MachineWord, identifie
 	writeDwordBE(sig, value: 0)  // teamOffset
 	writeDwordBE(sig, value: 0)  // spare3
 	writeQwordBE(sig, value: 0)  // codeLimit64
-	writeQwordBE(sig, value: 0)  // execSegBase
-	writeQwordBE(sig, value: 0)  // execSegLimit (filled below)
+	writeQwordBE(sig, value: 0)  // execSegBase (__TEXT starts at file offset 0)
+	writeQwordBE(sig, value: execSegLimit)  // execSegLimit = __TEXT file size; AMFI rejects a 0-length exec segment
 	writeQwordBE(sig, value: 0x1)  // execSegFlags (CS_EXECSEG_MAIN_BINARY)
 
 	// Identifier (null-terminated)
@@ -514,9 +546,12 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 	patchFuncAbs64InRdata(codeResult.rdata, rdataRelocs: codeResult.rdataRelocations, textAbsBase: textSectionVMAddr, debugSymbols: codeResult.debugSymbols)
 
 	let entryOff = textSectionOffset + codeResult.mainCallFixupOffset
-	// MH_PIE intentionally omitted — the funcAbs64InRdata patches above
-	// bake absolute VAs that depend on the image not being slid.
-	let flags = MH_DYLDLINK or MH_TWOLEVEL
+	// macOS arm64 requires PIE (the kernel kills a non-PIE main executable with
+	// SIGKILL). MH_PIE lets dyld slide the image; PC-relative code (ADRP/ADD) is
+	// slide-safe, but the absolute funcAbs64InRdata pointers baked above are NOT
+	// — they need chained-fixup rebases (a follow-up). This is correct for
+	// programs with no such pointers; managed-type programs need the rebase work.
+	let flags = MH_DYLDLINK or MH_TWOLEVEL or MH_PIE
 
 	// --- Build Mach-O buffer ---
 	var macho = ByteArray.create()
@@ -681,7 +716,7 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 	padTo(macho, size: codeSignatureOff)
 
 	// === Build code signature ===
-	let sig = buildCodeSignature(macho, codeLimit: codeSignatureOff, identifierStr: "maxon-output")
+	let sig = buildCodeSignature(macho, codeLimit: codeSignatureOff, execSegLimit: textSegmentFileSize, identifierStr: "maxon-output")
 
 	// Append code signature
 	macho.append(sig)

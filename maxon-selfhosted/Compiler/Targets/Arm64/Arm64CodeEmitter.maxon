@@ -562,17 +562,46 @@ end 'arm64PatchCondBranch'
 
 export typealias Arm64LabelOffsetMap = Map with (String, Arm64Offset)
 
+// Strip a leading `stdlib.` namespace prefix, giving the bare symbol that a
+// runtime.std (Std-IR) call site references. Returns the input unchanged when
+// there is no such prefix. Mirrors the x64 backend's stripStdlibPrefix.
+function arm64StripStdlibPrefix(name String) returns String
+	let prefix = "stdlib."
+	if not name.startsWith(prefix) 'noPrefix'
+		return name
+	end 'noPrefix'
+	var idx = name.startIndex()
+	for _ in 0 upto prefix.byteLength() 'advance'
+		idx = try name.indexAfter(idx) otherwise return name
+	end 'advance'
+	return name.slice(idx, endIndex: name.endIndex())
+end 'arm64StripStdlibPrefix'
+
 export function arm64RecordLabel(labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap, name String, offset Arm64Offset)
 	logTrace(LogCategory.codegen, message: function() gives "ARM64 Label '{name}' at code offset {offset}")
 	labelNames.push(name)
 	labelOffsets.push(offset)
 	labelOffsetMap.upsert(name, value: offset)
+	// Bare alias for a `stdlib.`-qualified definition so a bare call site (from
+	// runtime.std Std-IR, which has no namespace form — e.g. mrt_start's call to
+	// `__slab_init` or a refcount pass's `__mm_decref`) resolves to the
+	// Maxon-phase Internals function recorded under its `stdlib.`-qualified name.
+	// Mirrors the x64 backend's recordLabel.
+	if name.startsWith("stdlib.") 'qualified'
+		labelOffsetMap.upsert(arm64StripStdlibPrefix(name), value: offset)
+	end 'qualified'
 end 'arm64RecordLabel'
 
 export function arm64LookupLabel(labelOffsetMap Arm64LabelOffsetMap, name String) returns Arm64Offset
 	let offset = try labelOffsetMap.get(name) otherwise 'missing'
-		logError(LogCategory.codegen, message: function() gives "ARM64 unresolved label '{name}'")
-		return 0
+		// Bare callee -> `stdlib.`-qualified def fallback: a bare call may target a
+		// function whose definition was recorded only under its `stdlib.`-qualified
+		// name. Mirrors the x64 backend's lookupLabel.
+		let qualifiedOffset = try labelOffsetMap.get("stdlib.{name}") otherwise 'stillMissing'
+			logError(LogCategory.codegen, message: function() gives "ARM64 unresolved label '{name}'")
+			return 0
+		end 'stillMissing'
+		return qualifiedOffset
 	end 'missing'
 	return offset
 end 'arm64LookupLabel'
@@ -1396,7 +1425,8 @@ end 'arm64EmitSyscallOp'
 function arm64EmitIatCallOp(code ByteArray, relocations RelocationArray, resultSlot VarSlot, slotIndex MachineWord, argSlots VarSlotArray)
 	let argCount = argSlots.count()
 
-	// Load args into x0-x3 (first 4)
+	// Load args into x0-x7 (AAPCS64 integer arg registers). mmap needs all six
+	// of x0-x5; functions like _NSGetExecutablePath use two.
 	if argCount >= 1 'arg0'
 		let slot0 = try argSlots.get(0) otherwise panic("arm64EmitIatCallOp.arg0: argCount >= 1 just checked but get(0) failed")
 		arm64EmitLdrSlot(code, rt: 0, slotIndex: slot0)
@@ -1417,6 +1447,18 @@ function arm64EmitIatCallOp(code ByteArray, relocations RelocationArray, resultS
 		let slot4 = try argSlots.get(4) otherwise panic("arm64EmitIatCallOp.arg4: argCount >= 5 just checked but get(4) failed")
 		arm64EmitLdrSlot(code, rt: 4, slotIndex: slot4)
 	end 'arg4'
+	if argCount >= 6 'arg5'
+		let slot5 = try argSlots.get(5) otherwise panic("arm64EmitIatCallOp.arg5: argCount >= 6 just checked but get(5) failed")
+		arm64EmitLdrSlot(code, rt: 5, slotIndex: slot5)
+	end 'arg5'
+	if argCount >= 7 'arg6'
+		let slot6 = try argSlots.get(6) otherwise panic("arm64EmitIatCallOp.arg6: argCount >= 7 just checked but get(6) failed")
+		arm64EmitLdrSlot(code, rt: 6, slotIndex: slot6)
+	end 'arg6'
+	if argCount >= 8 'arg7'
+		let slot7 = try argSlots.get(7) otherwise panic("arm64EmitIatCallOp.arg7: argCount >= 8 just checked but get(7) failed")
+		arm64EmitLdrSlot(code, rt: 7, slotIndex: slot7)
+	end 'arg7'
 
 	// Load IAT slot address via ADRP + LDR, then BLR
 	relocations.push(Relocation.create(code.count(), slotIndex: slotIndex))
