@@ -1,0 +1,79 @@
+// Test: multi-exit-match-arm-brackets
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Box'
+
+union Tag
+	first
+	second
+end 'Tag'
+
+function main() returns ExitCode
+	@heap let a = Box.create(42)
+	let tag = Tag.first
+	var total = 0
+	if true 'inner'
+		let b = a
+		match tag 'branch'
+			first then total = b.value
+			second then total = b.value + 1
+		end 'branch'
+	end 'inner'
+	return total
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %2 = mir.mov_imm 42 : i64
+    %22 = mir.mov_imm 8 : i64
+    %23 = mir.mov_imm 0 : i64
+    %24 = mir.call @stdlib.__mm_alloc(%22, %23)
+    mir.store %2, %24, 0 width: qword
+    %4 = mir.mov_imm 0 : i64
+    %5 = mir.mov_imm 0 : i64
+    mir.br inner_0()
+  inner_0:
+    %9 = mir.mov_imm 0 : i64
+    %10 = mir.cmp eq, %4, %9
+    mir.cond_br %10 [then: branch_0.case0(), else: branch_0.next0()]
+  branch_0.merge(%20: i64):
+    mir.br inner_0.after(%20)
+  branch_0.case0:
+    %12 = mir.load %24, 0 width: qword
+    %25 = mir.call @mm_drop(%24)
+    mir.br branch_0.merge(%12)
+  branch_0.next0:
+    %13 = mir.mov_imm 1 : i64
+    %14 = mir.cmp eq, %4, %13
+    mir.cond_br %14 [then: branch_0.case1(), else: __rc_edge_4_0()]
+  branch_0.case1:
+    %16 = mir.load %24, 0 width: qword
+    %17 = mir.mov_imm 1 : i64
+    %18 = mir.add.i64 %16, %17
+    %26 = mir.call @mm_drop(%24)
+    mir.br branch_0.merge(%18)
+  inner_0.after(%21: i64):
+    %28 = mir.mov_imm 125 : i64
+    %29 = mir.cmp ugt, %21, %28
+    mir.cond_br %29 [then: __range_panic_0(), else: __range_ok_0()]
+  __rc_edge_4_0:
+    %27 = mir.call @mm_drop(%24)
+    mir.br branch_0.merge(%5)
+  __range_panic_0:
+    %30 = mir.global_addr @__panic_msg_45e3f24af717f791
+    %31 = mir.call @mrt_panic(%30)
+  __range_ok_0:
+    mir.ret %21
+  }
+}
+---

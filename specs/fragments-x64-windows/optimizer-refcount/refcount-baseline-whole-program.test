@@ -175,4046 +175,1488 @@ function main() returns ExitCode
 end 'main'
 ---
 ExitCode: 0
-RequiredIR: ```
-=== maxon
+RequiredIRSelfhosted: ```
 module {
-  func @Point.create(x: i64, y: i64) -> Point {
-  entry:
-    %0 = maxon.param {index = 0 : i32} {name = x} {type = i64}
-    %1 = maxon.param {index = 1 : i32} {name = y} {type = i64}
-    %2 = maxon.struct_literal @Point
-    maxon.scope_end [x, y]
-    maxon.return %2
-  }
-  func @Person.create(name: String, age: i64) -> Person {
-  entry:
-    %17 = maxon.struct_param @String
-    %18 = maxon.param {index = 1 : i32} {name = age} {type = i64}
-    %19 = maxon.struct_var_ref name
-    %20 = maxon.struct_literal @Person
-    maxon.scope_end [name, age]
-    maxon.return %20
-  }
-  func @sum_point(p: Point) -> i64 {
-  entry:
-    %36 = maxon.struct_param @Point
-    %37 = maxon.struct_var_ref p
-    %38 = maxon.field_access .x %37
-    %39 = maxon.struct_var_ref p
-    %40 = maxon.field_access .y %39
-    %41 = maxon.binop %38, %40 {op = add}
-    maxon.scope_end [p]
-    maxon.return %41
-  }
-  func @make_point(x: i64, y: i64) -> Point {
-  entry:
-    %42 = maxon.param {index = 0 : i32} {name = x} {type = i64}
-    %43 = maxon.param {index = 1 : i32} {name = y} {type = i64}
-    %44 = maxon.call @Point.create %42, %43
-    maxon.assign %44 {var = __call_tmp_0} {decl = 1 : i1}
-    maxon.scope_end [x, y, __call_tmp_0]
-    maxon.return %44
-  }
-  func @describe(s: Shape) -> i64 {
-  entry:
-    %45 = maxon.enum_param @Shape
-    %46 = maxon.enum_var_ref s
-    %47 = maxon.enum_tag @Shape %46
-    maxon.assign %46 {var = __match_enum_describe_0} {decl = 1 : i1}
-    %48 = maxon.literal {value = 0 : i64}
-    maxon.assign %48 {var = __matchexpr_describe_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    maxon.assign %47 {var = __match_describe_0} {kind = i64} {decl = 1 : i1}
-    maxon.br describe_0.cmp0
-  describe_0.cmp0:
-    %49 = maxon.var_ref {var = __match_describe_0} {type = i64}
-    %50 = maxon.literal {value = 0 : i64}
-    %51 = maxon.binop %49, %50 {op = eq}
-    maxon.cond_br %51 [then: describe_0.case0, else: describe_0.cmp1]
-  describe_0.case0:
-    %52 = maxon.enum_var_ref __match_enum_describe_0
-    %53 = maxon.enum_payload @Shape[0] %52
-    maxon.assign %53 {var = label} {decl = 1 : i1}
-    %54 = maxon.struct_var_ref label
-    %55 = maxon.call @stdlib.String.count %54
-    maxon.assign %55 {var = __matchexpr_describe_0} {kind = i64} {mut = 1 : i1}
-    maxon.scope_end [label]
-    maxon.br describe_0.merge
-  describe_0.cmp1:
-    %56 = maxon.var_ref {var = __match_describe_0} {type = i64}
-    %57 = maxon.literal {value = 1 : i64}
-    %58 = maxon.binop %56, %57 {op = eq}
-    maxon.cond_br %58 [then: describe_0.case1, else: describe_0.cmp2]
-  describe_0.case1:
-    %59 = maxon.enum_var_ref __match_enum_describe_0
-    %60 = maxon.enum_payload @Shape[0] %59
-    maxon.assign %60 {var = label} {decl = 1 : i1}
-    %61 = maxon.struct_var_ref label
-    %62 = maxon.call @stdlib.String.count %61
-    maxon.assign %62 {var = __matchexpr_describe_0} {kind = i64} {mut = 1 : i1}
-    maxon.scope_end [label]
-    maxon.br describe_0.merge
-  describe_0.cmp2:
-    %63 = maxon.var_ref {var = __match_describe_0} {type = i64}
-    %64 = maxon.literal {value = 2 : i64}
-    %65 = maxon.binop %63, %64 {op = eq}
-    maxon.cond_br %65 [then: describe_0.case2, else: describe_0.merge]
-  describe_0.case2:
-    %66 = maxon.literal {value = 0 : i64}
-    maxon.assign %66 {var = __matchexpr_describe_0} {kind = i64} {mut = 1 : i1}
-    maxon.br describe_0.merge
-  describe_0.merge:
-    %67 = maxon.var_ref {var = __matchexpr_describe_0} {type = i64}
-    maxon.scope_end [s, __matchexpr_describe_0, __match_enum_describe_0, __match_describe_0]
-    maxon.return %67
-  }
-  func @apply(f: fn(Integer) returns Integer, x: i64) -> i64 {
-  entry:
-    %68 = maxon.function_param
-    %69 = maxon.param {index = 1 : i32} {name = x} {type = i64}
-    %70 = maxon.indirect_call %68, %69
-    maxon.scope_end [f, x]
-    maxon.return %70
-  }
-  func @names_total(arr: StringArray) -> i64 {
-  entry:
-    %71 = maxon.struct_param @StringArray
-    %72 = maxon.struct_var_ref arr
-    %73 = maxon.call @StringArray.count %72
-    maxon.scope_end [arr]
-    maxon.return %73
-  }
-  func @row_total(arr: IntArray) -> i64 {
-  entry:
-    %74 = maxon.struct_param @IntArray
-    %75 = maxon.literal {value = 0 : i64}
-    maxon.assign %75 {var = sum} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %76 = maxon.struct_var_ref arr
-    %279 = maxon.field_access .managed %76
-    maxon.assign %279 {var = __for_mm_0} {decl = 1 : i1}
-    %280 = maxon.struct_var_ref __for_mm_0
-    %281 = maxon.field_access .length %280
-    maxon.assign %281 {var = __for_len_0} {kind = i64} {decl = 1 : i1}
-    %282 = maxon.literal {value = 0 : i64}
-    maxon.assign %282 {var = __for_idx_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    maxon.br iter_0.header
-  iter_0.header:
-    %283 = maxon.var_ref {var = __for_idx_0} {type = i64}
-    %284 = maxon.var_ref {var = __for_len_0} {type = i64}
-    %285 = maxon.binop %283, %284 {op = lt}
-    maxon.cond_br %285 [then: iter_0, else: iter_0.exit]
-  iter_0:
-    %286 = maxon.struct_var_ref __for_mm_0
-    %287 = maxon.var_ref {var = __for_idx_0} {type = i64}
-    %288 = maxon.managed_mem_get %286, %287
-    maxon.assign %288 {var = __forin_result_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %87 = maxon.var_ref {var = __forin_result_0} {type = i64}
-    maxon.assign %87 {var = v} {kind = i64} {decl = 1 : i1}
-    %88 = maxon.var_ref {var = sum} {type = i64}
-    %89 = maxon.binop %88, %87 {op = add}
-    maxon.assign %89 {var = sum} {kind = i64} {mut = 1 : i1}
-    %289 = maxon.var_ref {var = __for_idx_0} {type = i64}
-    %290 = maxon.literal {value = 1 : i64}
-    %291 = maxon.binop %289, %290 {op = add}
-    maxon.assign %291 {var = __for_idx_0} {kind = i64} {mut = 1 : i1}
-    maxon.scope_end [__forin_result_0, v]
-    maxon.br iter_0.header
-  iter_0.exit:
-    %90 = maxon.var_ref {var = sum} {type = i64}
-    maxon.scope_end [arr, sum, __try_error_0, __for_mm_0]
-    maxon.return %90
-  }
-  func @matrix_total(m: Matrix) -> i64 {
-  entry:
-    %91 = maxon.struct_param @Matrix
-    %92 = maxon.literal {value = 0 : i64}
-    maxon.assign %92 {var = sum} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %93 = maxon.struct_var_ref m
-    %95, %94 = maxon.try_call @Matrix.createIterator %93
-    maxon.assign %95 {var = __for_iter_0} {decl = 1 : i1} {mut = 1 : i1}
-    %96 = maxon.literal {value = 0 : i64}
-    %97 = maxon.binop %94, %96 {op = eq}
-    maxon.cond_br %97 [then: iter_0.preamble, else: iter_0.exit]
-  iter_0.preamble:
-    maxon.br iter_0
-  iter_0.header:
-    %98 = maxon.struct_var_ref __for_iter_0
-    %99 = maxon.try_call @__ArrayIterator_IntArray.advance %98
-    maxon.assign %99 {var = __try_error_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %100 = maxon.literal {value = 0 : i64}
-    %101 = maxon.binop %99, %100 {op = eq}
-    maxon.cond_br %101 [then: iter_0, else: iter_0.exit]
-  iter_0:
-    %102 = maxon.struct_var_ref __for_iter_0
-    %103 = maxon.call @__ArrayIterator_IntArray.current %102
-    maxon.assign %103 {var = __forin_result_0} {decl = 1 : i1} {mut = 1 : i1}
-    %104 = maxon.struct_var_ref __forin_result_0
-    maxon.assign %104 {var = row} {decl = 1 : i1}
-    %105 = maxon.struct_var_ref row
-    %106 = maxon.call @row_total %105
-    %107 = maxon.var_ref {var = sum} {type = i64}
-    %108 = maxon.binop %107, %106 {op = add}
-    maxon.assign %108 {var = sum} {kind = i64} {mut = 1 : i1}
-    maxon.scope_end [__forin_result_0, row]
-    maxon.br iter_0.header
-  iter_0.exit:
-    %109 = maxon.var_ref {var = sum} {type = i64}
-    maxon.scope_end [m, sum, __try_error_0, __for_iter_0]
-    maxon.return %109
-  }
-  func @points_x_sum(pts: PointArray) -> i64 {
-  entry:
-    %110 = maxon.struct_param @PointArray
-    %111 = maxon.literal {value = 0 : i64}
-    maxon.assign %111 {var = sum} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %112 = maxon.struct_var_ref pts
-    %114, %113 = maxon.try_call @PointArray.createIterator %112
-    maxon.assign %114 {var = __for_iter_0} {decl = 1 : i1} {mut = 1 : i1}
-    %115 = maxon.literal {value = 0 : i64}
-    %116 = maxon.binop %113, %115 {op = eq}
-    maxon.cond_br %116 [then: iter_0.preamble, else: iter_0.exit]
-  iter_0.preamble:
-    maxon.br iter_0
-  iter_0.header:
-    %117 = maxon.struct_var_ref __for_iter_0
-    %118 = maxon.try_call @__ArrayIterator_Point.advance %117
-    maxon.assign %118 {var = __try_error_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %119 = maxon.literal {value = 0 : i64}
-    %120 = maxon.binop %118, %119 {op = eq}
-    maxon.cond_br %120 [then: iter_0, else: iter_0.exit]
-  iter_0:
-    %121 = maxon.struct_var_ref __for_iter_0
-    %122 = maxon.call @__ArrayIterator_Point.current %121
-    maxon.assign %122 {var = __forin_result_0} {decl = 1 : i1} {mut = 1 : i1}
-    %123 = maxon.struct_var_ref __forin_result_0
-    maxon.assign %123 {var = p} {decl = 1 : i1}
-    %124 = maxon.struct_var_ref p
-    %125 = maxon.field_access .x %124
-    %126 = maxon.var_ref {var = sum} {type = i64}
-    %127 = maxon.binop %126, %125 {op = add}
-    maxon.assign %127 {var = sum} {kind = i64} {mut = 1 : i1}
-    maxon.scope_end [__forin_result_0, p]
-    maxon.br iter_0.header
-  iter_0.exit:
-    %128 = maxon.var_ref {var = sum} {type = i64}
-    maxon.scope_end [pts, sum, __try_error_0, __for_iter_0]
-    maxon.return %128
-  }
-  func @main() -> i64 {
-  entry:
-    %129 = maxon.literal {value = 0 : i64}
-    maxon.assign %129 {var = total} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %130 = maxon.literal {value = 1 : i64}
-    %131 = maxon.literal {value = 2 : i64}
-    %132 = maxon.call @Point.create %130, %131
-    maxon.assign %132 {var = __call_tmp_0} {decl = 1 : i1}
-    maxon.assign %132 {var = a} {decl = 1 : i1} {mut = 1 : i1}
-    %133 = maxon.struct_var_ref a
-    maxon.assign %133 {var = b} {decl = 1 : i1} {mut = 1 : i1}
-    %134 = maxon.struct_var_ref b
-    %135 = maxon.literal {value = 99 : i64}
-    maxon.field_assign .x %134, %135
-    %136 = maxon.struct_var_ref b
-    maxon.assign %136 {var = a} {mut = 1 : i1}
-    %137 = maxon.struct_var_ref a
-    %138 = maxon.field_access .x %137
-    %139 = maxon.binop %129, %138 {op = add}
-    maxon.assign %139 {var = total} {kind = i64} {mut = 1 : i1}
-    %140 = maxon.literal {value = 3 : i64}
-    %141 = maxon.literal {value = 4 : i64}
-    %142 = maxon.call @Point.create %140, %141
-    maxon.assign %142 {var = __call_tmp_1} {decl = 1 : i1}
-    %143 = maxon.call @sum_point %142
-    %144 = maxon.binop %139, %143 {op = add}
-    maxon.assign %144 {var = total} {kind = i64} {mut = 1 : i1}
-    %145 = maxon.literal {value = 5 : i64}
-    %146 = maxon.literal {value = 6 : i64}
-    %147 = maxon.call @Point.create %145, %146
-    maxon.assign %147 {var = __call_tmp_2} {decl = 1 : i1}
-    %148 = maxon.call @sum_point %147
-    %149 = maxon.binop %144, %148 {op = add}
-    maxon.assign %149 {var = total} {kind = i64} {mut = 1 : i1}
-    %150 = maxon.call @StringArray.create
-    maxon.assign %150 {var = __call_tmp_3} {decl = 1 : i1}
-    maxon.assign %150 {var = names} {decl = 1 : i1} {mut = 1 : i1}
-    %151 = maxon.literal {value = 0 : i64}
-    %152 = maxon.literal {value = 5 : i64}
-    maxon.assign %152 {var = __range_end_0} {kind = i64} {decl = 1 : i1}
-    maxon.assign %151 {var = __range_current_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    maxon.br names_loop_0.header
-  names_loop_0.header:
-    %153 = maxon.var_ref {var = __range_current_0} {type = i64}
-    %154 = maxon.var_ref {var = __range_end_0} {type = i64}
-    %155 = maxon.binop %153, %154 {op = lt}
-    maxon.cond_br %155 [then: names_loop_0, else: names_loop_0.exit]
-  names_loop_0:
-    %156 = maxon.var_ref {var = __range_current_0} {type = i64}
-    maxon.assign %156 {var = i} {kind = i64} {decl = 1 : i1}
-    %157 = maxon.string_interp
-    maxon.assign %157 {var = __lit_tmp_0} {decl = 1 : i1}
-    maxon.call @StringArray.push %150, %157
-    maxon.scope_end [i, __lit_tmp_0]
-    maxon.br names_loop_0.incr
-  names_loop_0.incr:
-    %158 = maxon.literal {value = 1 : i64}
-    %159 = maxon.var_ref {var = __range_current_0} {type = i64}
-    %160 = maxon.binop %159, %158 {op = add}
-    maxon.assign %160 {var = __range_current_0} {kind = i64} {mut = 1 : i1}
-    maxon.br names_loop_0.header
-  names_loop_0.exit:
-    %161 = maxon.struct_var_ref names
-    %162 = maxon.call @names_total %161
-    %163 = maxon.var_ref {var = total} {type = i64}
-    %164 = maxon.binop %163, %162 {op = add}
-    maxon.assign %164 {var = total} {kind = i64} {mut = 1 : i1}
-    %165 = maxon.call @IntArray.create
-    maxon.assign %165 {var = __call_tmp_4} {decl = 1 : i1}
-    maxon.assign %165 {var = row1} {decl = 1 : i1} {mut = 1 : i1}
-    %166 = maxon.literal {value = 1 : i64}
-    maxon.call @IntArray.push %165, %166
-    %167 = maxon.literal {value = 2 : i64}
-    maxon.call @IntArray.push %165, %167
-    %168 = maxon.call @IntArray.create
-    maxon.assign %168 {var = __call_tmp_5} {decl = 1 : i1}
-    maxon.assign %168 {var = row2} {decl = 1 : i1} {mut = 1 : i1}
-    %169 = maxon.literal {value = 3 : i64}
-    maxon.call @IntArray.push %168, %169
-    %170 = maxon.literal {value = 4 : i64}
-    maxon.call @IntArray.push %168, %170
-    %171 = maxon.call @Matrix.create
-    maxon.assign %171 {var = __call_tmp_6} {decl = 1 : i1}
-    maxon.assign %171 {var = matrix} {decl = 1 : i1} {mut = 1 : i1}
-    %172 = maxon.struct_var_ref row1
-    maxon.call @Matrix.push %171, %172
-    %173 = maxon.struct_var_ref row2
-    maxon.call @Matrix.push %171, %173
-    %174 = maxon.struct_var_ref matrix
-    %175 = maxon.call @matrix_total %174
-    %176 = maxon.binop %164, %175 {op = add}
-    maxon.assign %176 {var = total} {kind = i64} {mut = 1 : i1}
-    %177 = maxon.literal {value = 0 : i64}
-    %178 = maxon.literal {value = 0 : i64}
-    %179 = maxon.call @Point.create %177, %178
-    maxon.assign %179 {var = __call_tmp_7} {decl = 1 : i1}
-    maxon.assign %179 {var = origin} {decl = 1 : i1} {mut = 1 : i1}
-    %180 = maxon.struct_var_ref origin
-    %181 = maxon.call @sum_point %180
-    %182 = maxon.binop %176, %181 {op = add}
-    maxon.assign %182 {var = total} {kind = i64} {mut = 1 : i1}
-    %183 = maxon.struct_var_ref origin
-    %184 = maxon.call @sum_point %183
-    %185 = maxon.binop %182, %184 {op = add}
-    maxon.assign %185 {var = total} {kind = i64} {mut = 1 : i1}
-    %186 = maxon.literal {value = 10 : i64}
-    %187 = maxon.literal {value = 20 : i64}
-    %188 = maxon.call @make_point %186, %187
-    maxon.assign %188 {var = __call_tmp_8} {decl = 1 : i1}
-    maxon.assign %188 {var = made} {decl = 1 : i1}
-    %189 = maxon.struct_var_ref made
-    %190 = maxon.field_access .x %189
-    %191 = maxon.binop %185, %190 {op = add}
-    maxon.assign %191 {var = total} {kind = i64} {mut = 1 : i1}
-    %192 = maxon.string_literal "alice"
-    maxon.assign %192 {var = __lit_tmp_1} {decl = 1 : i1}
-    %193 = maxon.literal {value = 30 : i64}
-    %194 = maxon.call @Person.create %192, %193
-    maxon.assign %194 {var = __call_tmp_9} {decl = 1 : i1}
-    maxon.assign %194 {var = person} {decl = 1 : i1} {mut = 1 : i1}
-    %195 = maxon.struct_var_ref person
-    %196 = maxon.string_literal "bob"
-    maxon.assign %196 {var = __lit_tmp_2} {decl = 1 : i1}
-    maxon.field_assign .name %195, %196
-    %197 = maxon.struct_var_ref person
-    %198 = maxon.string_literal "carol"
-    maxon.assign %198 {var = __lit_tmp_3} {decl = 1 : i1}
-    maxon.field_assign .name %197, %198
-    %199 = maxon.struct_var_ref person
-    %200 = maxon.field_access .age %199
-    %201 = maxon.binop %191, %200 {op = add}
-    maxon.assign %201 {var = total} {kind = i64} {mut = 1 : i1}
-    %202 = maxon.string_literal "ring"
-    maxon.assign %202 {var = __lit_tmp_4} {decl = 1 : i1}
-    %203 = maxon.enum_construct @Shape.circle %202
-    maxon.assign %203 {var = shape1} {decl = 1 : i1}
-    %204 = maxon.string_literal "box"
-    maxon.assign %204 {var = __lit_tmp_5} {decl = 1 : i1}
-    %205 = maxon.enum_construct @Shape.square %204
-    maxon.assign %205 {var = shape2} {decl = 1 : i1}
-    %206 = maxon.enum_construct @Shape.blank
-    maxon.assign %206 {var = shape3} {decl = 1 : i1}
-    %207 = maxon.enum_var_ref shape1
-    %208 = maxon.call @describe %207
-    %209 = maxon.binop %201, %208 {op = add}
-    maxon.assign %209 {var = total} {kind = i64} {mut = 1 : i1}
-    %210 = maxon.enum_var_ref shape2
-    %211 = maxon.call @describe %210
-    %212 = maxon.binop %209, %211 {op = add}
-    maxon.assign %212 {var = total} {kind = i64} {mut = 1 : i1}
-    %213 = maxon.enum_var_ref shape3
-    %214 = maxon.call @describe %213
-    %215 = maxon.binop %212, %214 {op = add}
-    maxon.assign %215 {var = total} {kind = i64} {mut = 1 : i1}
-    %216 = maxon.string_literal "pfx_"
-    maxon.assign %216 {var = __lit_tmp_6} {decl = 1 : i1}
-    maxon.assign %216 {var = prefix} {decl = 1 : i1}
-    %222 = maxon.closure_create @_$closure_0 %216
-    maxon.assign %222 {var = builder} {decl = 1 : i1}
-    %223 = maxon.literal {value = 7 : i64}
-    %224 = maxon.call @apply %222, %223
-    %225 = maxon.binop %215, %224 {op = add}
-    maxon.assign %225 {var = total} {kind = i64} {mut = 1 : i1}
-    %226 = maxon.literal {value = 8 : i64}
-    %227 = maxon.call @apply %222, %226
-    %228 = maxon.binop %225, %227 {op = add}
-    maxon.assign %228 {var = total} {kind = i64} {mut = 1 : i1}
-    %229 = maxon.call @PointArray.create
-    maxon.assign %229 {var = __call_tmp_10} {decl = 1 : i1}
-    maxon.assign %229 {var = points} {decl = 1 : i1} {mut = 1 : i1}
-    %230 = maxon.literal {value = 1 : i64}
-    %231 = maxon.literal {value = 2 : i64}
-    %232 = maxon.call @Point.create %230, %231
-    maxon.assign %232 {var = __call_tmp_11} {decl = 1 : i1}
-    maxon.call @PointArray.push %229, %232
-    %233 = maxon.literal {value = 3 : i64}
-    %234 = maxon.literal {value = 4 : i64}
-    %235 = maxon.call @Point.create %233, %234
-    maxon.assign %235 {var = __call_tmp_12} {decl = 1 : i1}
-    maxon.call @PointArray.push %229, %235
-    %236 = maxon.literal {value = 5 : i64}
-    %237 = maxon.literal {value = 6 : i64}
-    %238 = maxon.call @Point.create %236, %237
-    maxon.assign %238 {var = __call_tmp_13} {decl = 1 : i1}
-    maxon.call @PointArray.push %229, %238
-    %239 = maxon.struct_var_ref points
-    %240 = maxon.call @points_x_sum %239
-    %241 = maxon.binop %228, %240 {op = add}
-    maxon.assign %241 {var = total} {kind = i64} {mut = 1 : i1}
-    %242 = maxon.call @PointArray.create
-    maxon.assign %242 {var = __call_tmp_14} {decl = 1 : i1}
-    maxon.assign %242 {var = triplet} {decl = 1 : i1} {mut = 1 : i1}
-    %243 = maxon.literal {value = 7 : i64}
-    %244 = maxon.literal {value = 8 : i64}
-    %245 = maxon.call @Point.create %243, %244
-    maxon.assign %245 {var = __call_tmp_15} {decl = 1 : i1}
-    maxon.call @PointArray.push %242, %245
-    %246 = maxon.literal {value = 9 : i64}
-    %247 = maxon.literal {value = 10 : i64}
-    %248 = maxon.call @Point.create %246, %247
-    maxon.assign %248 {var = __call_tmp_16} {decl = 1 : i1}
-    maxon.call @PointArray.push %242, %248
-    %249 = maxon.literal {value = 11 : i64}
-    %250 = maxon.literal {value = 12 : i64}
-    %251 = maxon.call @Point.create %249, %250
-    maxon.assign %251 {var = __call_tmp_17} {decl = 1 : i1}
-    maxon.call @PointArray.push %242, %251
-    %252 = maxon.literal {value = 0 : i64}
-    %253 = maxon.literal {value = 3 : i64}
-    maxon.assign %253 {var = __range_end_1} {kind = i64} {decl = 1 : i1}
-    maxon.assign %252 {var = __range_current_1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    maxon.br alias_loop_0.header
-  alias_loop_0.header:
-    %254 = maxon.var_ref {var = __range_current_1} {type = i64}
-    %255 = maxon.var_ref {var = __range_end_1} {type = i64}
-    %256 = maxon.binop %254, %255 {op = lt}
-    maxon.cond_br %256 [then: alias_loop_0, else: alias_loop_0.exit]
-  alias_loop_0:
-    %257 = maxon.var_ref {var = __range_current_1} {type = i64}
-    maxon.assign %257 {var = i} {kind = i64} {decl = 1 : i1}
-    %258 = maxon.struct_var_ref triplet
-    %261, %260 = maxon.try_call @PointArray.get %258, %257
-    maxon.assign %260 {var = __try_error_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    maxon.assign %261 {var = __try_result_0} {decl = 1 : i1} {mut = 1 : i1}
-    %262 = maxon.literal {value = 0 : i64}
-    %263 = maxon.binop %260, %262 {op = ne}
-    maxon.cond_br %263 [then: otherwise_error_0, else: otherwise_continue_0]
-  otherwise_error_0:
-    %264 = maxon.var_ref {var = i} {type = i64}
-    %265 = maxon.string_interp
-    maxon.panic_dynamic %265
-  otherwise_continue_0:
-    %266 = maxon.struct_var_ref __try_result_0
-    maxon.assign %266 {var = p} {decl = 1 : i1}
-    %267 = maxon.struct_var_ref p
-    %268 = maxon.call @sum_point %267
-    %269 = maxon.var_ref {var = total} {type = i64}
-    %270 = maxon.binop %269, %268 {op = add}
-    maxon.assign %270 {var = total} {kind = i64} {mut = 1 : i1}
-    maxon.scope_end [i, __try_error_0, __try_result_0, p]
-    maxon.br alias_loop_0.incr
-  alias_loop_0.incr:
-    %271 = maxon.literal {value = 1 : i64}
-    %272 = maxon.var_ref {var = __range_current_1} {type = i64}
-    %273 = maxon.binop %272, %271 {op = add}
-    maxon.assign %273 {var = __range_current_1} {kind = i64} {mut = 1 : i1}
-    maxon.br alias_loop_0.header
-  alias_loop_0.exit:
-    %274 = maxon.literal {value = 0 : i64}
-    %275 = maxon.var_ref {var = total} {type = i64}
-    %276 = maxon.binop %275, %274 {op = lt}
-    maxon.cond_br %276 [then: guard_0, else: guard_0.after]
-  guard_0:
-    %277 = maxon.literal {value = 1 : i64}
-    maxon.scope_end [total, b, a, __range_end_0, names, __range_current_0, row1, row2, matrix, origin, made, person, shape1, shape2, shape3, prefix, builder, points, triplet, __range_end_1, __range_current_1, __call_tmp_1, __call_tmp_2, __lit_tmp_1, __lit_tmp_2, __lit_tmp_3, __lit_tmp_4, __lit_tmp_5, __lit_tmp_6, __call_tmp_11, __call_tmp_12, __call_tmp_13, __call_tmp_15, __call_tmp_16, __call_tmp_17]
-    maxon.return %277
-  guard_0.after:
-    %278 = maxon.literal {value = 0 : i64}
-    maxon.scope_end [total, b, a, __range_end_0, names, __range_current_0, row1, row2, matrix, origin, made, person, shape1, shape2, shape3, prefix, builder, points, triplet, __range_end_1, __range_current_1, __call_tmp_1, __call_tmp_2, __lit_tmp_1, __lit_tmp_2, __lit_tmp_3, __lit_tmp_4, __lit_tmp_5, __lit_tmp_6, __call_tmp_11, __call_tmp_12, __call_tmp_13, __call_tmp_15, __call_tmp_16, __call_tmp_17]
-    maxon.return %278
-  }
-  func @_$closure_0(n: i64, __env: i64) -> i64 {
-  entry:
-    %221 = maxon.param {index = 1 : i32} {name = __env} {type = i64}
-    %217 = maxon.param {index = 0 : i32} {name = n} {type = i64}
-    %218 = maxon.closure_env_load prefix[0]
-    %219 = maxon.string_interp
-    maxon.assign %219 {var = __lit_tmp_7} {decl = 1 : i1}
-    %220 = maxon.call @stdlib.String.count %219
-    maxon.scope_end [n, total, b, a, __range_end_0, names, __range_current_0, row1, row2, matrix, origin, made, person, shape1, shape2, shape3, prefix, __call_tmp_1, __call_tmp_2, __lit_tmp_1, __lit_tmp_2, __lit_tmp_3, __lit_tmp_4, __lit_tmp_5, __lit_tmp_6, __lit_tmp_7]
-    maxon.return %220
-  }
-}
-=== standard
-module {
-  func @Point.create(x: i64, y: i64) -> i64 {
-  entry:
-    %0 = func.param x : StdI64
-    %1 = func.param y : StdI64
-    %2 = arith.constant {value = 16 : i64}
-    %3 = arith.constant {value = 0 : i64}
-    %4 = arith.constant {value = 4 : i64}
-    %5 = std.call_runtime @mm_alloc %2, %3, %4
-    memref.store %5, __struct_0
-    %6 = memref.load __struct_0 : i64
-    memref.store_indirect %0, %6+0
-    %7 = memref.load __struct_0 : i64
-    memref.store_indirect %1, %7+8
-    %8 = memref.load __struct_0 : i64
-    std.call_runtime @mm_incref %8
-    %9 = memref.load __struct_0 : i64
-    func.return %9
-  }
-  func @Person.create(name: i64, age: i64) -> i64 {
-  entry:
-    %10 = func.param name : StdHeapPtr
-    memref.store %10, name
-    %11 = func.param age : StdI64
-    %12 = arith.constant {value = 16 : i64}
-    %13 = func.ref @__destruct_Person
-    %14 = std.ptr_to_i64 %13
-    %15 = arith.constant {value = 5 : i64}
-    %16 = std.call_runtime @mm_alloc %12, %14, %15
-    memref.store %16, __struct_0
-    %17 = memref.load name : i64
-    %18 = memref.load __struct_0 : i64
-    memref.store_indirect %17, %18+0
-    std.call_runtime @mm_incref %17
-    %19 = memref.load __struct_0 : i64
-    memref.store_indirect %11, %19+8
-    %20 = memref.load __struct_0 : i64
-    std.call_runtime @mm_incref %20
-    %21 = memref.load __struct_0 : i64
-    func.return %21
-  }
-  func @sum_point(p: i64) -> i64 {
-  entry:
-    %22 = func.param p : StdHeapPtr
-    memref.store %22, p
-    %23 = memref.load p : i64
-    %24 = memref.load_indirect %23+0
-    %25 = memref.load p : i64
-    %26 = memref.load_indirect %25+8
-    %27 = arith.addi %24, %26
-    func.return %27
-  }
-  func @make_point(x: i64, y: i64) -> i64 {
-  entry:
-    %28 = func.param x : StdI64
-    %29 = func.param y : StdI64
-    %30 = func.call @Point.create %28, %29
-    memref.store %30, __call_tmp_0
-    %32 = memref.load __call_tmp_0 : i64
-    func.return %32
-  }
-  func @describe(s: i64) -> i64 {
-  entry:
-    %70 = arith.constant {value = 0 : i64}
-    memref.store %70, label
-    %34 = func.param s : StdI64
-    memref.store %34, s
-    %35 = memref.load s : i64
-    %36 = memref.load_indirect %35+0
-    memref.store %34, __match_enum_describe_0
-    %39 = arith.constant {value = 0 : i64}
-    memref.store %39, __matchexpr_describe_0
-    memref.store %36, __match_describe_0
-    cf.br describe_0.cmp0
-  describe_0.cmp0:
-    %40 = memref.load __match_describe_0 : i64
-    %41 = arith.constant {value = 0 : i64}
-    %42 = arith.cmpi eq %40, %41
-    cf.cond_br %42 [then: describe_0.case0, else: describe_0.cmp1]
-  describe_0.case0:
-    %43 = memref.load __match_enum_describe_0 : i64
-    %44 = memref.load_indirect %43+8
-    memref.store %44, label
-    %47 = memref.load label : i64
-    %48 = func.call @stdlib.String.count %47
-    memref.store %48, __matchexpr_describe_0
-    cf.br describe_0.merge
-  describe_0.cmp1:
-    %51 = memref.load __match_describe_0 : i64
-    %52 = arith.constant {value = 1 : i64}
-    %53 = arith.cmpi eq %51, %52
-    cf.cond_br %53 [then: describe_0.case1, else: describe_0.cmp2]
-  describe_0.case1:
-    %54 = memref.load __match_enum_describe_0 : i64
-    %55 = memref.load_indirect %54+8
-    %56 = memref.load label : i64
-    std.call_runtime_if_nonnull @mm_decref %56
-    memref.store %55, label
-    %59 = memref.load label : i64
-    %60 = func.call @stdlib.String.count %59
-    memref.store %60, __matchexpr_describe_0
-    cf.br describe_0.merge
-  describe_0.cmp2:
-    %63 = memref.load __match_describe_0 : i64
-    %64 = arith.constant {value = 2 : i64}
-    %65 = arith.cmpi eq %63, %64
-    cf.cond_br %65 [then: describe_0.case2, else: describe_0.merge]
-  describe_0.case2:
-    %66 = arith.constant {value = 0 : i64}
-    memref.store %66, __matchexpr_describe_0
-    cf.br describe_0.merge
-  describe_0.merge:
-    %67 = memref.load __matchexpr_describe_0 : i64
-    func.return %67
-  }
-  func @apply(f: i64, __env_f: i64, x: i64) -> i64 {
-  entry:
-    %72 = func.param f : StdPtr
-    %73 = func.param __env_f : StdI64
-    %74 = func.param x : StdI64
-    %75 = func.indirect_call %72, %74, %73
-    func.return %75
-  }
-  func @names_total(arr: i64) -> i64 {
-  entry:
-    %76 = func.param arr : StdHeapPtr
-    memref.store %76, arr
-    %77 = memref.load arr : i64
-    %78 = func.call @StringArray.count %77
-    func.return %78
-  }
-  func @row_total(arr: i64) -> i64 {
-  entry:
-    %79 = func.param arr : StdHeapPtr
-    memref.store %79, arr
-    %80 = arith.constant {value = 0 : i64}
-    memref.store %80, sum
-    %81 = memref.load arr : i64
-    %82 = memref.load_indirect %81+0
-    memref.store %82, __for_mm_0
-    %85 = memref.load __for_mm_0 : i64
-    %86 = memref.load_indirect %85+8
-    memref.store %86, __for_len_0
-    %87 = arith.constant {value = 0 : i64}
-    memref.store %87, __for_idx_0
-    cf.br iter_0.header
-  iter_0.header:
-    %88 = memref.load __for_idx_0 : i64
-    %89 = memref.load __for_len_0 : i64
-    %90 = arith.cmpi lt %88, %89
-    cf.cond_br %90 [then: iter_0, else: iter_0.exit]
-  iter_0:
-    %91 = memref.load __for_idx_0 : i64
-    %92 = memref.load __for_mm_0 : i64
-    %93 = memref.load_indirect %92+24
-    %94 = memref.load __for_mm_0 : i64
-    %95 = memref.load_indirect %94+0
-    %96 = arith.muli %91, %93
-    %97 = arith.addi %95, %96
-    %98 = memref.load_indirect %97+0
-    memref.store %98, __forin_result_0
-    %99 = memref.load __forin_result_0 : i64
-    %100 = memref.load sum : i64
-    %101 = arith.addi %100, %99
-    memref.store %101, sum
-    %102 = memref.load __for_idx_0 : i64
-    %103 = arith.constant {value = 1 : i64}
-    %104 = arith.addi %102, %103
-    memref.store %104, __for_idx_0
-    cf.br iter_0.header
-  iter_0.exit:
-    %105 = memref.load sum : i64
-    func.return %105
-  }
-  func @matrix_total(m: i64) -> i64 {
-  entry:
-    %109 = func.param m : StdHeapPtr
-    memref.store %109, m
-    %110 = arith.constant {value = 0 : i64}
-    memref.store %110, sum
-    %111 = memref.load m : i64
-    %112, %113 = func.try_call @Matrix.createIterator %111
-    memref.store %112, __for_iter_0
-    %115 = arith.constant {value = 0 : i64}
-    %116 = arith.cmpi eq %113, %115
-    cf.cond_br %116 [then: iter_0.preamble, else: iter_0.exit]
-  iter_0.preamble:
-    cf.br iter_0
-  iter_0.header:
-    %117 = memref.load __for_iter_0 : i64
-    %118 = func.try_call @__ArrayIterator_IntArray.advance %117
-    %119 = arith.constant {value = 0 : i64}
-    %120 = arith.cmpi eq %118, %119
-    cf.cond_br %120 [then: iter_0, else: iter_0.exit]
-  iter_0:
-    %121 = memref.load __for_iter_0 : i64
-    %122 = func.call @__ArrayIterator_IntArray.current %121
-    memref.store %122, __forin_result_0
-    memref.store %122, row
-    %126 = memref.load row : i64
-    %127 = func.call @row_total %126
-    %128 = memref.load sum : i64
-    %129 = arith.addi %128, %127
-    memref.store %129, sum
-    %132 = memref.load __forin_result_0 : i64
-    std.call_runtime_if_nonnull @mm_decref %132
-    cf.br iter_0.header
-  iter_0.exit:
-    %134 = memref.load sum : i64
-    %135 = memref.load __for_iter_0 : i64
-    std.call_runtime_if_nonnull @mm_decref %135
-    func.return %134
-  }
-  func @points_x_sum(pts: i64) -> i64 {
-  entry:
-    %140 = func.param pts : StdHeapPtr
-    memref.store %140, pts
-    %141 = arith.constant {value = 0 : i64}
-    memref.store %141, sum
-    %142 = memref.load pts : i64
-    %143, %144 = func.try_call @PointArray.createIterator %142
-    memref.store %143, __for_iter_0
-    %146 = arith.constant {value = 0 : i64}
-    %147 = arith.cmpi eq %144, %146
-    cf.cond_br %147 [then: iter_0.preamble, else: iter_0.exit]
-  iter_0.preamble:
-    cf.br iter_0
-  iter_0.header:
-    %148 = memref.load __for_iter_0 : i64
-    %149 = func.try_call @__ArrayIterator_Point.advance %148
-    %150 = arith.constant {value = 0 : i64}
-    %151 = arith.cmpi eq %149, %150
-    cf.cond_br %151 [then: iter_0, else: iter_0.exit]
-  iter_0:
-    %152 = memref.load __for_iter_0 : i64
-    %153 = func.call @__ArrayIterator_Point.current %152
-    memref.store %153, __forin_result_0
-    memref.store %153, p
-    %157 = memref.load p : i64
-    %158 = memref.load_indirect %157+0
-    %159 = memref.load sum : i64
-    %160 = arith.addi %159, %158
-    memref.store %160, sum
-    %163 = memref.load __forin_result_0 : i64
-    std.call_runtime_if_nonnull @mm_decref %163
-    cf.br iter_0.header
-  iter_0.exit:
-    %165 = memref.load sum : i64
-    %166 = memref.load __for_iter_0 : i64
-    std.call_runtime_if_nonnull @mm_decref %166
-    func.return %165
-  }
-  func @main() -> u32 {
-  entry:
-    %835 = arith.constant {value = 0 : i64}
-    memref.store %835, prefix
-    %172 = arith.constant {value = 1 : i64}
-    %173 = arith.constant {value = 2 : i64}
-    %174 = func.call @Point.create %172, %173
-    memref.store %174, a
-    memref.store %174, b
-    %178 = memref.load b : i64
-    std.call_runtime @mm_incref %178
-    %179 = arith.constant {value = 99 : i64}
-    %180 = memref.load b : i64
-    memref.store_indirect %179, %180+0
-    %181 = memref.load a : i64
-    std.call_runtime_if_nonnull @mm_decref %181
-    memref.store %174, a
-    %183 = memref.load a : i64
-    std.call_runtime @mm_incref %183
-    %184 = memref.load a : i64
-    %185 = memref.load_indirect %184+0
-    %186 = arith.constant {value = 3 : i64}
-    %187 = arith.constant {value = 4 : i64}
-    %188 = func.call @Point.create %186, %187
-    memref.store %188, __call_tmp_0
-    %190 = memref.load __call_tmp_0 : i64
-    %191 = func.call @sum_point %190
-    %192 = arith.addi %185, %191
-    %193 = arith.constant {value = 5 : i64}
-    %194 = arith.constant {value = 6 : i64}
-    %195 = func.call @Point.create %193, %194
-    memref.store %195, __call_tmp_1
-    %197 = memref.load __call_tmp_1 : i64
-    %198 = func.call @sum_point %197
-    %199 = arith.addi %192, %198
-    memref.store %199, total
-    %200 = func.call @StringArray.create
-    memref.store %200, names
-    %203 = arith.constant {value = 0 : i64}
-    %204 = arith.constant {value = 5 : i64}
-    memref.store %204, __range_end_0
-    memref.store %203, __range_current_0
-    cf.br names_loop_0.header
-  names_loop_0.header:
-    %205 = memref.load __range_current_0 : i64
-    %206 = memref.load __range_end_0 : i64
-    %207 = arith.cmpi lt %205, %206
-    cf.cond_br %207 [then: names_loop_0, else: names_loop_0.exit]
-  names_loop_0:
-    %208 = memref.load __range_current_0 : i64
-    %209 = memref.lea_rdata __interp_lit_0
-    %210 = std.ptr_to_i64 %209
-    %211 = arith.constant {value = 5 : i64}
-    %212 = arith.constant {value = 21 : i64}
-    %213 = std.call_runtime @mm_raw_alloc %212
-    memref.store %213, __tostr_buf_0
-    %214 = std.call_runtime @maxon_i64_to_string %208, %213
-    %215 = memref.load __tostr_buf_0 : i64
-    %216 = arith.addi %211, %214
-    %217 = arith.constant {value = 16 : i64}
-    %218 = func.ref @__destruct_String
-    %219 = std.ptr_to_i64 %218
-    %220 = arith.constant {value = 6 : i64}
-    %221 = std.call_runtime @mm_alloc %217, %219, %220
-    memref.store %221, __lit_tmp_0
-    %222 = arith.constant {value = 40 : i64}
-    %223 = func.ref @__destruct___ManagedMemory
-    %224 = std.ptr_to_i64 %223
-    %225 = arith.constant {value = 7 : i64}
-    %226 = std.call_runtime @mm_alloc %222, %224, %225
-    memref.store %226, __interp_managed_0
-    %227 = arith.constant {value = 1 : i64}
-    %228 = arith.addi %216, %227
-    %229 = std.call_runtime @mm_raw_alloc %228
-    %230 = arith.constant {value = 0 : i64}
-    memref.store %230, __interp_offset_0
-    memref.store %229, __interp_buf_0
-    memref.store %216, __interp_totallen_0
-    memref.store %210, __interp_partbuf_157_0
-    memref.store %211, __interp_partlen_157_0
-    memref.store %215, __interp_partbuf_157_1
-    memref.store %214, __interp_partlen_157_1
-    %231 = memref.load __interp_buf_0 : i64
-    %232 = memref.load __interp_offset_0 : i64
-    %233 = arith.addi %231, %232
-    %234 = memref.load __interp_partbuf_157_0 : i64
-    %235 = memref.load __interp_partlen_157_0 : i64
-    std.memcopy %234, %233, %235
-    %236 = memref.load __interp_offset_0 : i64
-    %237 = memref.load __interp_partlen_157_0 : i64
-    %238 = arith.addi %236, %237
-    memref.store %238, __interp_offset_0
-    %239 = memref.load __interp_buf_0 : i64
-    %240 = memref.load __interp_offset_0 : i64
-    %241 = arith.addi %239, %240
-    %242 = memref.load __interp_partbuf_157_1 : i64
-    %243 = memref.load __interp_partlen_157_1 : i64
-    std.memcopy %242, %241, %243
-    %247 = memref.load __interp_buf_0 : i64
-    %248 = memref.load __interp_totallen_0 : i64
-    %249 = arith.addi %247, %248
-    %250 = arith.constant {value = 0 : i64}
-    memref.store_indirect %250, %249+0
-    %251 = memref.load __tostr_buf_0 : i64
-    std.call_runtime @mm_raw_free %251
-    %252 = memref.load __interp_buf_0 : i64
-    %253 = memref.load __interp_totallen_0 : i64
-    %254 = arith.constant {value = 1 : i64}
-    %255 = arith.constant {value = 0 : i64}
-    %256 = memref.load __interp_managed_0 : i64
-    memref.store_indirect %252, %256+0
-    %257 = memref.load __interp_managed_0 : i64
-    memref.store_indirect %253, %257+8
-    %258 = memref.load __interp_managed_0 : i64
-    memref.store_indirect %253, %258+16
-    %259 = memref.load __interp_managed_0 : i64
-    memref.store_indirect %254, %259+24
-    %260 = memref.load __interp_managed_0 : i64
-    memref.store_indirect %255, %260+32
-    %261 = memref.load __interp_managed_0 : i64
-    %262 = memref.load __lit_tmp_0 : i64
-    memref.store_indirect %261, %262+0
-    %263 = memref.load __interp_managed_0 : i64
-    std.call_runtime @mm_incref %263
-    %264 = arith.constant {value = 0 : i64}
-    %265 = memref.load __lit_tmp_0 : i64
-    memref.store_indirect %264, %265+8
-    %266 = memref.load __lit_tmp_0 : i64
-    std.call_runtime @mm_incref %266
-    %267 = memref.load names : i64
-    %268 = memref.load __lit_tmp_0 : i64
-    func.call @StringArray.push %267, %268
-    %269 = memref.load __lit_tmp_0 : i64
-    std.call_runtime_if_nonnull @mm_decref %269
-    cf.br names_loop_0.incr
-  names_loop_0.incr:
-    %271 = arith.constant {value = 1 : i64}
-    %272 = memref.load __range_current_0 : i64
-    %273 = arith.addi %272, %271
-    memref.store %273, __range_current_0
-    cf.br names_loop_0.header
-  names_loop_0.exit:
-    %274 = memref.load names : i64
-    %275 = func.call @names_total %274
-    %276 = memref.load total : i64
-    %277 = arith.addi %276, %275
-    %278 = func.call @IntArray.create
-    memref.store %278, row1
-    %281 = arith.constant {value = 1 : i64}
-    %282 = memref.load row1 : i64
-    func.call @IntArray.push %282, %281
-    %283 = arith.constant {value = 2 : i64}
-    %284 = memref.load row1 : i64
-    func.call @IntArray.push %284, %283
-    %285 = func.call @IntArray.create
-    memref.store %285, row2
-    %288 = arith.constant {value = 3 : i64}
-    %289 = memref.load row2 : i64
-    func.call @IntArray.push %289, %288
-    %290 = arith.constant {value = 4 : i64}
-    %291 = memref.load row2 : i64
-    func.call @IntArray.push %291, %290
-    %292 = func.call @Matrix.create
-    memref.store %292, matrix
-    %295 = memref.load matrix : i64
-    %296 = memref.load row1 : i64
-    func.call @Matrix.push %295, %296
-    %297 = memref.load matrix : i64
-    %298 = memref.load row2 : i64
-    func.call @Matrix.push %297, %298
-    %299 = memref.load matrix : i64
-    %300 = func.call @matrix_total %299
-    %301 = arith.addi %277, %300
-    %302 = arith.constant {value = 0 : i64}
-    %303 = arith.constant {value = 0 : i64}
-    %304 = func.call @Point.create %302, %303
-    memref.store %304, origin
-    %307 = memref.load origin : i64
-    %308 = func.call @sum_point %307
-    %309 = arith.addi %301, %308
-    %310 = memref.load origin : i64
-    %311 = func.call @sum_point %310
-    %312 = arith.addi %309, %311
-    %313 = arith.constant {value = 10 : i64}
-    %314 = arith.constant {value = 20 : i64}
-    %315 = func.call @make_point %313, %314
-    memref.store %315, made
-    %318 = memref.load made : i64
-    %319 = memref.load_indirect %318+0
-    %320 = arith.addi %312, %319
-    %321 = memref.lea_rdata __str_1
-    %322 = std.ptr_to_i64 %321
-    %323 = arith.constant {value = 5 : i64}
-    %324 = arith.constant {value = 16 : i64}
-    %325 = func.ref @__destruct_String
-    %326 = std.ptr_to_i64 %325
-    %327 = arith.constant {value = 6 : i64}
-    %328 = std.call_runtime @mm_alloc %324, %326, %327
-    memref.store %328, __lit_tmp_1
-    %329 = arith.constant {value = 40 : i64}
-    %330 = func.ref @__destruct___ManagedMemory
-    %331 = std.ptr_to_i64 %330
-    %332 = arith.constant {value = 7 : i64}
-    %333 = std.call_runtime @mm_alloc %329, %331, %332
-    memref.store %333, __strtmp_managed_0
-    %334 = arith.constant {value = -2 : i64}
-    %335 = arith.constant {value = 1 : i64}
-    %336 = arith.constant {value = 0 : i64}
-    %337 = memref.load __strtmp_managed_0 : i64
-    memref.store_indirect %322, %337+0
-    %338 = memref.load __strtmp_managed_0 : i64
-    memref.store_indirect %323, %338+8
-    %339 = memref.load __strtmp_managed_0 : i64
-    memref.store_indirect %334, %339+16
-    %340 = memref.load __strtmp_managed_0 : i64
-    memref.store_indirect %335, %340+24
-    %341 = memref.load __strtmp_managed_0 : i64
-    memref.store_indirect %336, %341+32
-    %342 = memref.load __strtmp_managed_0 : i64
-    %343 = memref.load __lit_tmp_1 : i64
-    memref.store_indirect %342, %343+0
-    %344 = memref.load __strtmp_managed_0 : i64
-    std.call_runtime @mm_incref %344
-    %345 = arith.constant {value = 1 : i64}
-    %346 = memref.load __lit_tmp_1 : i64
-    memref.store_indirect %345, %346+8
-    %347 = memref.load __lit_tmp_1 : i64
-    std.call_runtime @mm_incref %347
-    %348 = arith.constant {value = 30 : i64}
-    %349 = memref.load __lit_tmp_1 : i64
-    %350 = func.call @Person.create %349, %348
-    memref.store %350, person
-    %353 = memref.lea_rdata __str_2
-    %354 = std.ptr_to_i64 %353
-    %355 = arith.constant {value = 3 : i64}
-    %356 = arith.constant {value = 16 : i64}
-    %357 = func.ref @__destruct_String
-    %358 = std.ptr_to_i64 %357
-    %359 = arith.constant {value = 6 : i64}
-    %360 = std.call_runtime @mm_alloc %356, %358, %359
-    memref.store %360, __lit_tmp_2
-    %361 = arith.constant {value = 40 : i64}
-    %362 = func.ref @__destruct___ManagedMemory
-    %363 = std.ptr_to_i64 %362
-    %364 = arith.constant {value = 7 : i64}
-    %365 = std.call_runtime @mm_alloc %361, %363, %364
-    memref.store %365, __strtmp_managed_1
-    %366 = arith.constant {value = -2 : i64}
-    %367 = arith.constant {value = 1 : i64}
-    %368 = arith.constant {value = 0 : i64}
-    %369 = memref.load __strtmp_managed_1 : i64
-    memref.store_indirect %354, %369+0
-    %370 = memref.load __strtmp_managed_1 : i64
-    memref.store_indirect %355, %370+8
-    %371 = memref.load __strtmp_managed_1 : i64
-    memref.store_indirect %366, %371+16
-    %372 = memref.load __strtmp_managed_1 : i64
-    memref.store_indirect %367, %372+24
-    %373 = memref.load __strtmp_managed_1 : i64
-    memref.store_indirect %368, %373+32
-    %374 = memref.load __strtmp_managed_1 : i64
-    %375 = memref.load __lit_tmp_2 : i64
-    memref.store_indirect %374, %375+0
-    %376 = memref.load __strtmp_managed_1 : i64
-    std.call_runtime @mm_incref %376
-    %377 = arith.constant {value = 1 : i64}
-    %378 = memref.load __lit_tmp_2 : i64
-    memref.store_indirect %377, %378+8
-    %379 = memref.load __lit_tmp_2 : i64
-    std.call_runtime @mm_incref %379
-    %380 = memref.load __lit_tmp_2 : i64
-    %381 = memref.load person : i64
-    %382 = memref.load_indirect %381+0
-    std.call_runtime_if_nonnull @mm_decref %382
-    %383 = memref.load person : i64
-    memref.store_indirect %380, %383+0
-    std.call_runtime @mm_incref %380
-    %384 = memref.lea_rdata __str_3
-    %385 = std.ptr_to_i64 %384
-    %386 = arith.constant {value = 5 : i64}
-    %387 = arith.constant {value = 16 : i64}
-    %388 = func.ref @__destruct_String
-    %389 = std.ptr_to_i64 %388
-    %390 = arith.constant {value = 6 : i64}
-    %391 = std.call_runtime @mm_alloc %387, %389, %390
-    memref.store %391, __lit_tmp_3
-    %392 = arith.constant {value = 40 : i64}
-    %393 = func.ref @__destruct___ManagedMemory
-    %394 = std.ptr_to_i64 %393
-    %395 = arith.constant {value = 7 : i64}
-    %396 = std.call_runtime @mm_alloc %392, %394, %395
-    memref.store %396, __strtmp_managed_2
-    %397 = arith.constant {value = -2 : i64}
-    %398 = arith.constant {value = 1 : i64}
-    %399 = arith.constant {value = 0 : i64}
-    %400 = memref.load __strtmp_managed_2 : i64
-    memref.store_indirect %385, %400+0
-    %401 = memref.load __strtmp_managed_2 : i64
-    memref.store_indirect %386, %401+8
-    %402 = memref.load __strtmp_managed_2 : i64
-    memref.store_indirect %397, %402+16
-    %403 = memref.load __strtmp_managed_2 : i64
-    memref.store_indirect %398, %403+24
-    %404 = memref.load __strtmp_managed_2 : i64
-    memref.store_indirect %399, %404+32
-    %405 = memref.load __strtmp_managed_2 : i64
-    %406 = memref.load __lit_tmp_3 : i64
-    memref.store_indirect %405, %406+0
-    %407 = memref.load __strtmp_managed_2 : i64
-    std.call_runtime @mm_incref %407
-    %408 = arith.constant {value = 1 : i64}
-    %409 = memref.load __lit_tmp_3 : i64
-    memref.store_indirect %408, %409+8
-    %410 = memref.load __lit_tmp_3 : i64
-    std.call_runtime @mm_incref %410
-    %411 = memref.load __lit_tmp_3 : i64
-    %412 = memref.load person : i64
-    %413 = memref.load_indirect %412+0
-    std.call_runtime_if_nonnull @mm_decref %413
-    %414 = memref.load person : i64
-    memref.store_indirect %411, %414+0
-    std.call_runtime @mm_incref %411
-    %415 = memref.load person : i64
-    %416 = memref.load_indirect %415+8
-    %417 = arith.addi %320, %416
-    %418 = memref.lea_rdata __str_4
-    %419 = std.ptr_to_i64 %418
-    %420 = arith.constant {value = 4 : i64}
-    %421 = arith.constant {value = 16 : i64}
-    %422 = func.ref @__destruct_String
-    %423 = std.ptr_to_i64 %422
-    %424 = arith.constant {value = 6 : i64}
-    %425 = std.call_runtime @mm_alloc %421, %423, %424
-    memref.store %425, __lit_tmp_4
-    %426 = arith.constant {value = 40 : i64}
-    %427 = func.ref @__destruct___ManagedMemory
-    %428 = std.ptr_to_i64 %427
-    %429 = arith.constant {value = 7 : i64}
-    %430 = std.call_runtime @mm_alloc %426, %428, %429
-    memref.store %430, __strtmp_managed_3
-    %431 = arith.constant {value = -2 : i64}
-    %432 = arith.constant {value = 1 : i64}
-    %433 = arith.constant {value = 0 : i64}
-    %434 = memref.load __strtmp_managed_3 : i64
-    memref.store_indirect %419, %434+0
-    %435 = memref.load __strtmp_managed_3 : i64
-    memref.store_indirect %420, %435+8
-    %436 = memref.load __strtmp_managed_3 : i64
-    memref.store_indirect %431, %436+16
-    %437 = memref.load __strtmp_managed_3 : i64
-    memref.store_indirect %432, %437+24
-    %438 = memref.load __strtmp_managed_3 : i64
-    memref.store_indirect %433, %438+32
-    %439 = memref.load __strtmp_managed_3 : i64
-    %440 = memref.load __lit_tmp_4 : i64
-    memref.store_indirect %439, %440+0
-    %441 = memref.load __strtmp_managed_3 : i64
-    std.call_runtime @mm_incref %441
-    %442 = arith.constant {value = 1 : i64}
-    %443 = memref.load __lit_tmp_4 : i64
-    memref.store_indirect %442, %443+8
-    %444 = memref.load __lit_tmp_4 : i64
-    std.call_runtime @mm_incref %444
-    %445 = arith.constant {value = 16 : i64}
-    %446 = func.ref @__destruct_Shape
-    %447 = std.ptr_to_i64 %446
-    %448 = arith.constant {value = 8 : i64}
-    %449 = std.call_runtime @mm_alloc %445, %447, %448
-    memref.store %449, shape1
-    %450 = arith.constant {value = 0 : i64}
-    memref.store_indirect %450, %449+0
-    %451 = memref.load __lit_tmp_4 : i64
-    memref.store_indirect %451, %449+8
-    std.call_runtime @mm_incref %451
-    %452 = memref.load shape1 : i64
-    std.call_runtime @mm_incref %452
-    %453 = memref.lea_rdata __str_5
-    %454 = std.ptr_to_i64 %453
-    %455 = arith.constant {value = 3 : i64}
-    %456 = arith.constant {value = 16 : i64}
-    %457 = func.ref @__destruct_String
-    %458 = std.ptr_to_i64 %457
-    %459 = arith.constant {value = 6 : i64}
-    %460 = std.call_runtime @mm_alloc %456, %458, %459
-    memref.store %460, __lit_tmp_5
-    %461 = arith.constant {value = 40 : i64}
-    %462 = func.ref @__destruct___ManagedMemory
-    %463 = std.ptr_to_i64 %462
-    %464 = arith.constant {value = 7 : i64}
-    %465 = std.call_runtime @mm_alloc %461, %463, %464
-    memref.store %465, __strtmp_managed_4
-    %466 = arith.constant {value = -2 : i64}
-    %467 = arith.constant {value = 1 : i64}
-    %468 = arith.constant {value = 0 : i64}
-    %469 = memref.load __strtmp_managed_4 : i64
-    memref.store_indirect %454, %469+0
-    %470 = memref.load __strtmp_managed_4 : i64
-    memref.store_indirect %455, %470+8
-    %471 = memref.load __strtmp_managed_4 : i64
-    memref.store_indirect %466, %471+16
-    %472 = memref.load __strtmp_managed_4 : i64
-    memref.store_indirect %467, %472+24
-    %473 = memref.load __strtmp_managed_4 : i64
-    memref.store_indirect %468, %473+32
-    %474 = memref.load __strtmp_managed_4 : i64
-    %475 = memref.load __lit_tmp_5 : i64
-    memref.store_indirect %474, %475+0
-    %476 = memref.load __strtmp_managed_4 : i64
-    std.call_runtime @mm_incref %476
-    %477 = arith.constant {value = 1 : i64}
-    %478 = memref.load __lit_tmp_5 : i64
-    memref.store_indirect %477, %478+8
-    %479 = memref.load __lit_tmp_5 : i64
-    std.call_runtime @mm_incref %479
-    %480 = arith.constant {value = 16 : i64}
-    %481 = func.ref @__destruct_Shape
-    %482 = std.ptr_to_i64 %481
-    %483 = arith.constant {value = 8 : i64}
-    %484 = std.call_runtime @mm_alloc %480, %482, %483
-    memref.store %484, shape2
-    %485 = arith.constant {value = 1 : i64}
-    memref.store_indirect %485, %484+0
-    %486 = memref.load __lit_tmp_5 : i64
-    memref.store_indirect %486, %484+8
-    std.call_runtime @mm_incref %486
-    %487 = memref.load shape2 : i64
-    std.call_runtime @mm_incref %487
-    %488 = arith.constant {value = 16 : i64}
-    %489 = func.ref @__destruct_Shape
-    %490 = std.ptr_to_i64 %489
-    %491 = arith.constant {value = 8 : i64}
-    %492 = std.call_runtime @mm_alloc %488, %490, %491
-    memref.store %492, shape3
-    %493 = arith.constant {value = 2 : i64}
-    memref.store_indirect %493, %492+0
-    %494 = arith.constant {value = 0 : i64}
-    memref.store_indirect %494, %492+8
-    %495 = memref.load shape3 : i64
-    std.call_runtime @mm_incref %495
-    %496 = memref.load shape1 : i64
-    %497 = func.call @describe %496
-    %498 = arith.addi %417, %497
-    %499 = memref.load shape2 : i64
-    %500 = func.call @describe %499
-    %501 = arith.addi %498, %500
-    %502 = memref.load shape3 : i64
-    %503 = func.call @describe %502
-    %504 = arith.addi %501, %503
-    %505 = memref.lea_rdata __str_6
-    %506 = std.ptr_to_i64 %505
-    %507 = arith.constant {value = 4 : i64}
-    %508 = arith.constant {value = 16 : i64}
-    %509 = func.ref @__destruct_String
-    %510 = std.ptr_to_i64 %509
-    %511 = arith.constant {value = 6 : i64}
-    %512 = std.call_runtime @mm_alloc %508, %510, %511
-    memref.store %512, __lit_tmp_6
-    %513 = arith.constant {value = 40 : i64}
-    %514 = func.ref @__destruct___ManagedMemory
-    %515 = std.ptr_to_i64 %514
-    %516 = arith.constant {value = 7 : i64}
-    %517 = std.call_runtime @mm_alloc %513, %515, %516
-    memref.store %517, __strtmp_managed_5
-    %518 = arith.constant {value = -2 : i64}
-    %519 = arith.constant {value = 1 : i64}
-    %520 = arith.constant {value = 0 : i64}
-    %521 = memref.load __strtmp_managed_5 : i64
-    memref.store_indirect %506, %521+0
-    %522 = memref.load __strtmp_managed_5 : i64
-    memref.store_indirect %507, %522+8
-    %523 = memref.load __strtmp_managed_5 : i64
-    memref.store_indirect %518, %523+16
-    %524 = memref.load __strtmp_managed_5 : i64
-    memref.store_indirect %519, %524+24
-    %525 = memref.load __strtmp_managed_5 : i64
-    memref.store_indirect %520, %525+32
-    %526 = memref.load __strtmp_managed_5 : i64
-    %527 = memref.load __lit_tmp_6 : i64
-    memref.store_indirect %526, %527+0
-    %528 = memref.load __strtmp_managed_5 : i64
-    std.call_runtime @mm_incref %528
-    %529 = arith.constant {value = 1 : i64}
-    %530 = memref.load __lit_tmp_6 : i64
-    memref.store_indirect %529, %530+8
-    %531 = memref.load __lit_tmp_6 : i64
-    std.call_runtime @mm_incref %531
-    memref.store %512, prefix
-    %533 = memref.load prefix : i64
-    std.call_runtime @mm_incref %533
-    %534 = func.ref @_$closure_0
-    %535 = arith.constant {value = 8 : i64}
-    %536 = arith.constant {value = 0 : i64}
-    %537 = arith.constant {value = 9 : i64}
-    %538 = std.call_runtime @mm_alloc %535, %536, %537
-    %539 = memref.lea prefix
-    %540 = std.ptr_to_i64 %539
-    memref.store_indirect %540, %538+0
-    memref.store %538, __env_0
-    std.call_runtime @mm_incref %538
-    %541 = arith.constant {value = 7 : i64}
-    %542 = memref.load __env_0 : i64
-    %543 = func.call @apply %534, %542, %541
-    %544 = arith.addi %504, %543
-    %545 = arith.constant {value = 8 : i64}
-    %546 = memref.load __env_0 : i64
-    %547 = func.call @apply %534, %546, %545
-    %548 = arith.addi %544, %547
-    %549 = func.call @PointArray.create
-    memref.store %549, points
-    %552 = arith.constant {value = 1 : i64}
-    %553 = arith.constant {value = 2 : i64}
-    %554 = func.call @Point.create %552, %553
-    memref.store %554, __call_tmp_2
-    %556 = memref.load points : i64
-    %557 = memref.load __call_tmp_2 : i64
-    func.call @PointArray.push %556, %557
-    %558 = arith.constant {value = 3 : i64}
-    %559 = arith.constant {value = 4 : i64}
-    %560 = func.call @Point.create %558, %559
-    memref.store %560, __call_tmp_3
-    %562 = memref.load points : i64
-    %563 = memref.load __call_tmp_3 : i64
-    func.call @PointArray.push %562, %563
-    %564 = arith.constant {value = 5 : i64}
-    %565 = arith.constant {value = 6 : i64}
-    %566 = func.call @Point.create %564, %565
-    memref.store %566, __call_tmp_4
-    %568 = memref.load points : i64
-    %569 = memref.load __call_tmp_4 : i64
-    func.call @PointArray.push %568, %569
-    %570 = memref.load points : i64
-    %571 = func.call @points_x_sum %570
-    %572 = arith.addi %548, %571
-    memref.store %572, total
-    %573 = func.call @PointArray.create
-    memref.store %573, triplet
-    %576 = arith.constant {value = 7 : i64}
-    %577 = arith.constant {value = 8 : i64}
-    %578 = func.call @Point.create %576, %577
-    memref.store %578, __call_tmp_5
-    %580 = memref.load triplet : i64
-    %581 = memref.load __call_tmp_5 : i64
-    func.call @PointArray.push %580, %581
-    %582 = arith.constant {value = 9 : i64}
-    %583 = arith.constant {value = 10 : i64}
-    %584 = func.call @Point.create %582, %583
-    memref.store %584, __call_tmp_6
-    %586 = memref.load triplet : i64
-    %587 = memref.load __call_tmp_6 : i64
-    func.call @PointArray.push %586, %587
-    %588 = arith.constant {value = 11 : i64}
-    %589 = arith.constant {value = 12 : i64}
-    %590 = func.call @Point.create %588, %589
-    memref.store %590, __call_tmp_7
-    %592 = memref.load triplet : i64
-    %593 = memref.load __call_tmp_7 : i64
-    func.call @PointArray.push %592, %593
-    %594 = arith.constant {value = 0 : i64}
-    %595 = arith.constant {value = 3 : i64}
-    memref.store %595, __range_end_1
-    memref.store %594, __range_current_1
-    cf.br alias_loop_0.header
-  alias_loop_0.header:
-    %596 = memref.load __range_current_1 : i64
-    %597 = memref.load __range_end_1 : i64
-    %598 = arith.cmpi lt %596, %597
-    cf.cond_br %598 [then: alias_loop_0, else: alias_loop_0.exit]
-  alias_loop_0:
-    %599 = memref.load __range_current_1 : i64
-    memref.store %599, i
-    %600 = memref.load triplet : i64
-    %601, %602 = func.try_call @PointArray.get %600, %599
-    memref.store %601, __try_result_0
-    %604 = arith.constant {value = 0 : i64}
-    %605 = arith.cmpi ne %602, %604
-    cf.cond_br %605 [then: otherwise_error_0, else: otherwise_continue_0]
-  otherwise_error_0:
-    %606 = memref.load i : i64
-    %607 = memref.lea_rdata __interp_lit_7
-    %608 = std.ptr_to_i64 %607
-    %609 = arith.constant {value = 75 : i64}
-    %610 = arith.constant {value = 21 : i64}
-    %611 = std.call_runtime @mm_raw_alloc %610
-    memref.store %611, __tostr_buf_1
-    %612 = std.call_runtime @maxon_i64_to_string %606, %611
-    %613 = memref.load __tostr_buf_1 : i64
-    %614 = memref.lea_rdata __interp_lit_8
-    %615 = std.ptr_to_i64 %614
-    %616 = arith.constant {value = 21 : i64}
-    %617 = arith.addi %609, %612
-    %618 = arith.addi %617, %616
-    %619 = arith.constant {value = 16 : i64}
-    %620 = func.ref @__destruct_String
-    %621 = std.ptr_to_i64 %620
-    %622 = arith.constant {value = 6 : i64}
-    %623 = std.call_runtime @mm_alloc %619, %621, %622
-    memref.store %623, __interptmp_0
-    %624 = arith.constant {value = 40 : i64}
-    %625 = func.ref @__destruct___ManagedMemory
-    %626 = std.ptr_to_i64 %625
-    %627 = arith.constant {value = 7 : i64}
-    %628 = std.call_runtime @mm_alloc %624, %626, %627
-    memref.store %628, __interp_managed_1
-    %629 = arith.constant {value = 1 : i64}
-    %630 = arith.addi %618, %629
-    %631 = std.call_runtime @mm_raw_alloc %630
-    %632 = arith.constant {value = 0 : i64}
-    memref.store %632, __interp_offset_1
-    memref.store %631, __interp_buf_1
-    memref.store %618, __interp_totallen_1
-    memref.store %608, __interp_partbuf_265_0
-    memref.store %609, __interp_partlen_265_0
-    memref.store %613, __interp_partbuf_265_1
-    memref.store %612, __interp_partlen_265_1
-    memref.store %615, __interp_partbuf_265_2
-    memref.store %616, __interp_partlen_265_2
-    %633 = memref.load __interp_buf_1 : i64
-    %634 = memref.load __interp_offset_1 : i64
-    %635 = arith.addi %633, %634
-    %636 = memref.load __interp_partbuf_265_0 : i64
-    %637 = memref.load __interp_partlen_265_0 : i64
-    std.memcopy %636, %635, %637
-    %638 = memref.load __interp_offset_1 : i64
-    %639 = memref.load __interp_partlen_265_0 : i64
-    %640 = arith.addi %638, %639
-    memref.store %640, __interp_offset_1
-    %641 = memref.load __interp_buf_1 : i64
-    %642 = memref.load __interp_offset_1 : i64
-    %643 = arith.addi %641, %642
-    %644 = memref.load __interp_partbuf_265_1 : i64
-    %645 = memref.load __interp_partlen_265_1 : i64
-    std.memcopy %644, %643, %645
-    %646 = memref.load __interp_offset_1 : i64
-    %647 = memref.load __interp_partlen_265_1 : i64
-    %648 = arith.addi %646, %647
-    memref.store %648, __interp_offset_1
-    %649 = memref.load __interp_buf_1 : i64
-    %650 = memref.load __interp_offset_1 : i64
-    %651 = arith.addi %649, %650
-    %652 = memref.load __interp_partbuf_265_2 : i64
-    %653 = memref.load __interp_partlen_265_2 : i64
-    std.memcopy %652, %651, %653
-    %657 = memref.load __interp_buf_1 : i64
-    %658 = memref.load __interp_totallen_1 : i64
-    %659 = arith.addi %657, %658
-    %660 = arith.constant {value = 0 : i64}
-    memref.store_indirect %660, %659+0
-    %661 = memref.load __tostr_buf_1 : i64
-    std.call_runtime @mm_raw_free %661
-    %662 = memref.load __interp_buf_1 : i64
-    %663 = memref.load __interp_totallen_1 : i64
-    %664 = arith.constant {value = 1 : i64}
-    %665 = arith.constant {value = 0 : i64}
-    %666 = memref.load __interp_managed_1 : i64
-    memref.store_indirect %662, %666+0
-    %667 = memref.load __interp_managed_1 : i64
-    memref.store_indirect %663, %667+8
-    %668 = memref.load __interp_managed_1 : i64
-    memref.store_indirect %663, %668+16
-    %669 = memref.load __interp_managed_1 : i64
-    memref.store_indirect %664, %669+24
-    %670 = memref.load __interp_managed_1 : i64
-    memref.store_indirect %665, %670+32
-    %671 = memref.load __interp_managed_1 : i64
-    %672 = memref.load __interptmp_0 : i64
-    memref.store_indirect %671, %672+0
-    %673 = memref.load __interp_managed_1 : i64
-    std.call_runtime @mm_incref %673
-    %674 = arith.constant {value = 0 : i64}
-    %675 = memref.load __interptmp_0 : i64
-    memref.store_indirect %674, %675+8
-    %676 = memref.load __interptmp_0 : i64
-    %677 = memref.load_indirect %676+0
-    memref.store %677, __panic_managed_0
-    %678 = memref.load __panic_managed_0 : i64
-    %679 = memref.load_indirect %678+0
-    std.call_runtime @mrt_panic %679
-  otherwise_continue_0:
-    %680 = memref.load __try_result_0 : i64
-    memref.store %680, p
-    %682 = memref.load p : i64
-    %683 = func.call @sum_point %682
-    %684 = memref.load total : i64
-    %685 = arith.addi %684, %683
-    memref.store %685, total
-    %688 = memref.load __try_result_0 : i64
-    std.call_runtime_if_nonnull @mm_decref %688
-    %690 = memref.load __env_0 : i64
-    std.call_runtime_if_nonnull @mm_decref %690
-    %691 = arith.constant {value = 0 : i64}
-    memref.store %691, __env_0
-    cf.br alias_loop_0.incr
-  alias_loop_0.incr:
-    %692 = arith.constant {value = 1 : i64}
-    %693 = memref.load __range_current_1 : i64
-    %694 = arith.addi %693, %692
-    memref.store %694, __range_current_1
-    cf.br alias_loop_0.header
-  alias_loop_0.exit:
-    %695 = arith.constant {value = 0 : i64}
-    %696 = memref.load total : i64
-    %697 = arith.cmpi lt %696, %695
-    cf.cond_br %697 [then: guard_0, else: guard_0.after]
-  guard_0:
-    %698 = arith.constant {value = 1 : i64}
-    %699 = memref.load __call_tmp_7 : i64
-    std.call_runtime_if_nonnull @mm_decref %699
-    %701 = memref.load __call_tmp_6 : i64
-    std.call_runtime_if_nonnull @mm_decref %701
-    %703 = memref.load __call_tmp_5 : i64
-    std.call_runtime_if_nonnull @mm_decref %703
-    %705 = memref.load __call_tmp_4 : i64
-    std.call_runtime_if_nonnull @mm_decref %705
-    %707 = memref.load __call_tmp_3 : i64
-    std.call_runtime_if_nonnull @mm_decref %707
-    %709 = memref.load __call_tmp_2 : i64
-    std.call_runtime_if_nonnull @mm_decref %709
-    %711 = memref.load __lit_tmp_6 : i64
-    std.call_runtime_if_nonnull @mm_decref %711
-    %713 = memref.load __lit_tmp_5 : i64
-    std.call_runtime_if_nonnull @mm_decref %713
-    %715 = memref.load __lit_tmp_4 : i64
-    std.call_runtime_if_nonnull @mm_decref %715
-    %717 = memref.load __lit_tmp_3 : i64
-    std.call_runtime_if_nonnull @mm_decref %717
-    %719 = memref.load __lit_tmp_2 : i64
-    std.call_runtime_if_nonnull @mm_decref %719
-    %721 = memref.load __lit_tmp_1 : i64
-    std.call_runtime_if_nonnull @mm_decref %721
-    %723 = memref.load __call_tmp_1 : i64
-    std.call_runtime_if_nonnull @mm_decref %723
-    %725 = memref.load __call_tmp_0 : i64
-    std.call_runtime_if_nonnull @mm_decref %725
-    %727 = memref.load triplet : i64
-    std.call_runtime_if_nonnull @mm_decref %727
-    %729 = memref.load points : i64
-    std.call_runtime_if_nonnull @mm_decref %729
-    %731 = memref.load prefix : i64
-    std.call_runtime_if_nonnull @mm_decref %731
-    %732 = arith.constant {value = 0 : i64}
-    memref.store %732, prefix
-    %733 = memref.load shape3 : i64
-    std.call_runtime_if_nonnull @mm_decref %733
-    %735 = memref.load shape2 : i64
-    std.call_runtime_if_nonnull @mm_decref %735
-    %737 = memref.load shape1 : i64
-    std.call_runtime_if_nonnull @mm_decref %737
-    %739 = memref.load person : i64
-    std.call_runtime_if_nonnull @mm_decref %739
-    %741 = memref.load made : i64
-    std.call_runtime_if_nonnull @mm_decref %741
-    %743 = memref.load origin : i64
-    std.call_runtime_if_nonnull @mm_decref %743
-    %745 = memref.load matrix : i64
-    std.call_runtime_if_nonnull @mm_decref %745
-    %747 = memref.load row2 : i64
-    std.call_runtime_if_nonnull @mm_decref %747
-    %749 = memref.load row1 : i64
-    std.call_runtime_if_nonnull @mm_decref %749
-    %751 = memref.load names : i64
-    std.call_runtime_if_nonnull @mm_decref %751
-    %753 = memref.load a : i64
-    std.call_runtime_if_nonnull @mm_decref %753
-    %755 = memref.load b : i64
-    std.call_runtime_if_nonnull @mm_decref %755
-    %757 = memref.load __env_0 : i64
-    std.call_runtime_if_nonnull @mm_decref %757
-    func.return %698
-  guard_0.after:
-    %759 = arith.constant {value = 0 : i64}
-    %760 = memref.load __call_tmp_7 : i64
-    std.call_runtime_if_nonnull @mm_decref %760
-    %762 = memref.load __call_tmp_6 : i64
-    std.call_runtime_if_nonnull @mm_decref %762
-    %764 = memref.load __call_tmp_5 : i64
-    std.call_runtime_if_nonnull @mm_decref %764
-    %766 = memref.load __call_tmp_4 : i64
-    std.call_runtime_if_nonnull @mm_decref %766
-    %768 = memref.load __call_tmp_3 : i64
-    std.call_runtime_if_nonnull @mm_decref %768
-    %770 = memref.load __call_tmp_2 : i64
-    std.call_runtime_if_nonnull @mm_decref %770
-    %772 = memref.load __lit_tmp_6 : i64
-    std.call_runtime_if_nonnull @mm_decref %772
-    %774 = memref.load __lit_tmp_5 : i64
-    std.call_runtime_if_nonnull @mm_decref %774
-    %776 = memref.load __lit_tmp_4 : i64
-    std.call_runtime_if_nonnull @mm_decref %776
-    %778 = memref.load __lit_tmp_3 : i64
-    std.call_runtime_if_nonnull @mm_decref %778
-    %780 = memref.load __lit_tmp_2 : i64
-    std.call_runtime_if_nonnull @mm_decref %780
-    %782 = memref.load __lit_tmp_1 : i64
-    std.call_runtime_if_nonnull @mm_decref %782
-    %784 = memref.load __call_tmp_1 : i64
-    std.call_runtime_if_nonnull @mm_decref %784
-    %786 = memref.load __call_tmp_0 : i64
-    std.call_runtime_if_nonnull @mm_decref %786
-    %788 = memref.load triplet : i64
-    std.call_runtime_if_nonnull @mm_decref %788
-    %790 = memref.load points : i64
-    std.call_runtime_if_nonnull @mm_decref %790
-    %792 = memref.load prefix : i64
-    std.call_runtime_if_nonnull @mm_decref %792
-    %793 = arith.constant {value = 0 : i64}
-    memref.store %793, prefix
-    %794 = memref.load shape3 : i64
-    std.call_runtime_if_nonnull @mm_decref %794
-    %796 = memref.load shape2 : i64
-    std.call_runtime_if_nonnull @mm_decref %796
-    %798 = memref.load shape1 : i64
-    std.call_runtime_if_nonnull @mm_decref %798
-    %800 = memref.load person : i64
-    std.call_runtime_if_nonnull @mm_decref %800
-    %802 = memref.load made : i64
-    std.call_runtime_if_nonnull @mm_decref %802
-    %804 = memref.load origin : i64
-    std.call_runtime_if_nonnull @mm_decref %804
-    %806 = memref.load matrix : i64
-    std.call_runtime_if_nonnull @mm_decref %806
-    %808 = memref.load row2 : i64
-    std.call_runtime_if_nonnull @mm_decref %808
-    %810 = memref.load row1 : i64
-    std.call_runtime_if_nonnull @mm_decref %810
-    %812 = memref.load names : i64
-    std.call_runtime_if_nonnull @mm_decref %812
-    %814 = memref.load a : i64
-    std.call_runtime_if_nonnull @mm_decref %814
-    %816 = memref.load b : i64
-    std.call_runtime_if_nonnull @mm_decref %816
-    %818 = memref.load __env_0 : i64
-    std.call_runtime_if_nonnull @mm_decref %818
-    func.return %759
-  }
-  func @_$closure_0(n: i64, __env: i64) -> i64 {
-  entry:
-    %853 = func.param __env : StdI64
-    memref.store %853, __env
-    %854 = func.param n : StdI64
-    %855 = memref.load __env : i64
-    %856 = memref.load_indirect %855+0
-    %857 = memref.load_indirect %856+0
-    memref.store %857, __capture_prefix
-    %858 = memref.load __capture_prefix : i64
-    %859 = memref.load_indirect %858+0
-    memref.store %859, __interp_managed_ptr_0
-    %860 = memref.load __interp_managed_ptr_0 : i64
-    %861 = memref.load_indirect %860+0
-    %862 = memref.load __interp_managed_ptr_0 : i64
-    %863 = memref.load_indirect %862+8
-    %864 = arith.constant {value = 21 : i64}
-    %865 = std.call_runtime @mm_raw_alloc %864
-    memref.store %865, __tostr_buf_2
-    %866 = std.call_runtime @maxon_i64_to_string %854, %865
-    %867 = memref.load __tostr_buf_2 : i64
-    %868 = arith.addi %863, %866
-    %869 = arith.constant {value = 16 : i64}
-    %870 = func.ref @__destruct_String
-    %871 = std.ptr_to_i64 %870
-    %872 = arith.constant {value = 6 : i64}
-    %873 = std.call_runtime @mm_alloc %869, %871, %872
-    memref.store %873, __lit_tmp_7
-    %874 = arith.constant {value = 40 : i64}
-    %875 = func.ref @__destruct___ManagedMemory
-    %876 = std.ptr_to_i64 %875
-    %877 = arith.constant {value = 7 : i64}
-    %878 = std.call_runtime @mm_alloc %874, %876, %877
-    memref.store %878, __interp_managed_2
-    %879 = arith.constant {value = 1 : i64}
-    %880 = arith.addi %868, %879
-    %881 = std.call_runtime @mm_raw_alloc %880
-    %882 = arith.constant {value = 0 : i64}
-    memref.store %882, __interp_offset_2
-    memref.store %881, __interp_buf_2
-    memref.store %868, __interp_totallen_2
-    memref.store %861, __interp_partbuf_219_0
-    memref.store %863, __interp_partlen_219_0
-    memref.store %867, __interp_partbuf_219_1
-    memref.store %866, __interp_partlen_219_1
-    %883 = memref.load __interp_buf_2 : i64
-    %884 = memref.load __interp_offset_2 : i64
-    %885 = arith.addi %883, %884
-    %886 = memref.load __interp_partbuf_219_0 : i64
-    %887 = memref.load __interp_partlen_219_0 : i64
-    std.memcopy %886, %885, %887
-    %888 = memref.load __interp_offset_2 : i64
-    %889 = memref.load __interp_partlen_219_0 : i64
-    %890 = arith.addi %888, %889
-    memref.store %890, __interp_offset_2
-    %891 = memref.load __interp_buf_2 : i64
-    %892 = memref.load __interp_offset_2 : i64
-    %893 = arith.addi %891, %892
-    %894 = memref.load __interp_partbuf_219_1 : i64
-    %895 = memref.load __interp_partlen_219_1 : i64
-    std.memcopy %894, %893, %895
-    %899 = memref.load __interp_buf_2 : i64
-    %900 = memref.load __interp_totallen_2 : i64
-    %901 = arith.addi %899, %900
-    %902 = arith.constant {value = 0 : i64}
-    memref.store_indirect %902, %901+0
-    %903 = memref.load __tostr_buf_2 : i64
-    std.call_runtime @mm_raw_free %903
-    %904 = memref.load __interp_buf_2 : i64
-    %905 = memref.load __interp_totallen_2 : i64
-    %906 = arith.constant {value = 1 : i64}
-    %907 = arith.constant {value = 0 : i64}
-    %908 = memref.load __interp_managed_2 : i64
-    memref.store_indirect %904, %908+0
-    %909 = memref.load __interp_managed_2 : i64
-    memref.store_indirect %905, %909+8
-    %910 = memref.load __interp_managed_2 : i64
-    memref.store_indirect %905, %910+16
-    %911 = memref.load __interp_managed_2 : i64
-    memref.store_indirect %906, %911+24
-    %912 = memref.load __interp_managed_2 : i64
-    memref.store_indirect %907, %912+32
-    %913 = memref.load __interp_managed_2 : i64
-    %914 = memref.load __lit_tmp_7 : i64
-    memref.store_indirect %913, %914+0
-    %915 = memref.load __interp_managed_2 : i64
-    std.call_runtime @mm_incref %915
-    %916 = arith.constant {value = 0 : i64}
-    %917 = memref.load __lit_tmp_7 : i64
-    memref.store_indirect %916, %917+8
-    %918 = memref.load __lit_tmp_7 : i64
-    std.call_runtime @mm_incref %918
-    %919 = memref.load __lit_tmp_7 : i64
-    %920 = func.call @stdlib.String.count %919
-    %921 = memref.load __lit_tmp_7 : i64
-    std.call_runtime_if_nonnull @mm_decref %921
-    func.return %920
-  }
-  func @__destruct_GraphemeState(ptr: i64) {
-  entry:
-    %924 = func.param ptr : StdI64
-    cf.br done
-  done:
-    func.return
-  }
-  func @__destruct___ManagedMemoryCursor(ptr: i64) {
-  entry:
-    %925 = func.param ptr : StdI64
-    memref.store %925, __destr_ptr
-    %926 = memref.load __destr_ptr : i64
-    %927 = memref.load_indirect %926+32
-    std.call_runtime_if_nonnull @mm_decref %927
-    cf.br done
-  done:
-    func.return
-  }
-  func @__destruct_ArrayIterator(ptr: i64) {
-  entry:
-    %928 = func.param ptr : StdI64
-    memref.store %928, __destr_ptr
-    %929 = memref.load __destr_ptr : i64
-    %930 = memref.load_indirect %929+0
-    std.call_runtime_if_nonnull @mm_decref %930
-    cf.br done
-  done:
-    func.return
-  }
-  func @__destruct_Point(ptr: i64) {
-  entry:
-    %931 = func.param ptr : StdI64
-    cf.br done
-  done:
-    func.return
-  }
-  func @__destruct_Person(ptr: i64) {
-  entry:
-    %932 = func.param ptr : StdI64
-    memref.store %932, __destr_ptr
-    %933 = memref.load __destr_ptr : i64
-    %934 = memref.load_indirect %933+0
-    std.call_runtime_if_nonnull @mm_decref %934
-    cf.br done
-  done:
-    func.return
-  }
-  func @__destruct_String(ptr: i64) {
-  entry:
-    %935 = func.param ptr : StdI64
-    memref.store %935, __destr_ptr
-    %936 = memref.load __destr_ptr : i64
-    %937 = memref.load_indirect %936+0
-    std.call_runtime_if_nonnull @mm_decref %937
-    cf.br done
-  done:
-    func.return
-  }
-  func @__destruct___ManagedMemory(ptr: i64) {
-  entry:
-    %938 = func.param ptr : StdI64
-    memref.store %938, __destr_ptr
-    %941 = memref.load __destr_ptr : i64
-    %942 = memref.load_indirect %941+16
-    %943 = arith.constant {value = -1 : i64}
-    %944 = arith.cmpi eq %942, %943
-    cf.cond_br %944 [then: slice_cleanup_0, else: check_owned_0]
-  slice_cleanup_0:
-    %945 = memref.load __destr_ptr : i64
-    %946 = memref.load_indirect %945+32
-    std.call_runtime_if_nonnull @mm_decref %946
-    cf.br skip_buf_0
-  check_owned_0:
-    %947 = memref.load __destr_ptr : i64
-    %948 = memref.load_indirect %947+16
-    %949 = arith.constant {value = -2 : i64}
-    %950 = arith.cmpi ne %948, %949
-    cf.cond_br %950 [then: free_buf_0, else: skip_buf_0]
-  free_buf_0:
-    %951 = memref.load __destr_ptr : i64
-    %952 = memref.load_indirect %951+0
-    std.call_runtime @mm_raw_free %952
-    cf.br skip_buf_0
-  skip_buf_0:
-    cf.br done
-  done:
-    func.return
-  }
-  func @__destruct_Shape(ptr: i64) {
-  entry:
-    %953 = func.param ptr : StdI64
-    memref.store %953, __destr_ptr
-    %954 = memref.load __destr_ptr : i64
-    %955 = memref.load_indirect %954+0
-    %956 = arith.constant {value = 0 : i64}
-    %957 = arith.cmpi eq %955, %956
-    cf.cond_br %957 [then: case_0, else: check_0]
-  case_0:
-    %958 = memref.load __destr_ptr : i64
-    %959 = memref.load_indirect %958+8
-    std.call_runtime_if_nonnull @mm_decref %959
-    cf.br done
-  check_0:
-    %960 = memref.load __destr_ptr : i64
-    %961 = memref.load_indirect %960+0
-    %962 = arith.constant {value = 1 : i64}
-    %963 = arith.cmpi eq %961, %962
-    cf.cond_br %963 [then: case_1, else: check_1]
-  case_1:
-    %964 = memref.load __destr_ptr : i64
-    %965 = memref.load_indirect %964+8
-    std.call_runtime_if_nonnull @mm_decref %965
-    cf.br done
-  check_1:
-    cf.br done
-  done:
-    func.return
-  }
-  func @__destruct___ManagedMemory_String(ptr: i64) {
-  entry:
-    %966 = func.param ptr : StdI64
-    memref.store %966, __destr_ptr
-    %969 = memref.load __destr_ptr : i64
-    %970 = memref.load_indirect %969+16
-    %971 = arith.constant {value = -1 : i64}
-    %972 = arith.cmpi eq %970, %971
-    cf.cond_br %972 [then: slice_cleanup_0, else: check_owned_0]
-  slice_cleanup_0:
-    %973 = memref.load __destr_ptr : i64
-    %974 = memref.load_indirect %973+32
-    std.call_runtime_if_nonnull @mm_decref %974
-    cf.br skip_buf_0
-  check_owned_0:
-    %975 = memref.load __destr_ptr : i64
-    %976 = memref.load_indirect %975+16
-    %977 = arith.constant {value = -2 : i64}
-    %978 = arith.cmpi ne %976, %977
-    cf.cond_br %978 [then: free_buf_0, else: skip_buf_0]
-  free_buf_0:
-    %979 = memref.load __destr_ptr : i64
-    std.call_runtime @mm_decref_managed_elements %979
-    %980 = memref.load __destr_ptr : i64
-    %981 = memref.load_indirect %980+0
-    std.call_runtime @mm_raw_free %981
-    cf.br skip_buf_0
-  skip_buf_0:
-    cf.br done
-  done:
-    func.return
-  }
-  func @__destruct_StringArray(ptr: i64) {
-  entry:
-    %982 = func.param ptr : StdI64
-    memref.store %982, __destr_ptr
-    %983 = memref.load __destr_ptr : i64
-    %984 = memref.load_indirect %983+0
-    std.call_runtime_if_nonnull @mm_decref %984
-    cf.br done
-  done:
-    func.return
-  }
-  func @__destruct___ManagedMemory_Integer(ptr: i64) {
-  entry:
-    %985 = func.param ptr : StdI64
-    memref.store %985, __destr_ptr
-    %988 = memref.load __destr_ptr : i64
-    %989 = memref.load_indirect %988+16
-    %990 = arith.constant {value = -1 : i64}
-    %991 = arith.cmpi eq %989, %990
-    cf.cond_br %991 [then: slice_cleanup_0, else: check_owned_0]
-  slice_cleanup_0:
-    %992 = memref.load __destr_ptr : i64
-    %993 = memref.load_indirect %992+32
-    std.call_runtime_if_nonnull @mm_decref %993
-    cf.br skip_buf_0
-  check_owned_0:
-    %994 = memref.load __destr_ptr : i64
-    %995 = memref.load_indirect %994+16
-    %996 = arith.constant {value = -2 : i64}
-    %997 = arith.cmpi ne %995, %996
-    cf.cond_br %997 [then: free_buf_0, else: skip_buf_0]
-  free_buf_0:
-    %998 = memref.load __destr_ptr : i64
-    %999 = memref.load_indirect %998+0
-    std.call_runtime @mm_raw_free %999
-    cf.br skip_buf_0
-  skip_buf_0:
-    cf.br done
-  done:
-    func.return
-  }
-  func @__destruct_IntArray(ptr: i64) {
-  entry:
-    %1000 = func.param ptr : StdI64
-    memref.store %1000, __destr_ptr
-    %1001 = memref.load __destr_ptr : i64
-    %1002 = memref.load_indirect %1001+0
-    std.call_runtime_if_nonnull @mm_decref %1002
-    cf.br done
-  done:
-    func.return
-  }
-  func @__destruct___ManagedMemory_IntArray(ptr: i64) {
-  entry:
-    %1003 = func.param ptr : StdI64
-    memref.store %1003, __destr_ptr
-    %1006 = memref.load __destr_ptr : i64
-    %1007 = memref.load_indirect %1006+16
-    %1008 = arith.constant {value = -1 : i64}
-    %1009 = arith.cmpi eq %1007, %1008
-    cf.cond_br %1009 [then: slice_cleanup_0, else: check_owned_0]
-  slice_cleanup_0:
-    %1010 = memref.load __destr_ptr : i64
-    %1011 = memref.load_indirect %1010+32
-    std.call_runtime_if_nonnull @mm_decref %1011
-    cf.br skip_buf_0
-  check_owned_0:
-    %1012 = memref.load __destr_ptr : i64
-    %1013 = memref.load_indirect %1012+16
-    %1014 = arith.constant {value = -2 : i64}
-    %1015 = arith.cmpi ne %1013, %1014
-    cf.cond_br %1015 [then: free_buf_0, else: skip_buf_0]
-  free_buf_0:
-    %1016 = memref.load __destr_ptr : i64
-    std.call_runtime @mm_decref_managed_elements %1016
-    %1017 = memref.load __destr_ptr : i64
-    %1018 = memref.load_indirect %1017+0
-    std.call_runtime @mm_raw_free %1018
-    cf.br skip_buf_0
-  skip_buf_0:
-    cf.br done
-  done:
-    func.return
-  }
-  func @__destruct_Matrix(ptr: i64) {
-  entry:
-    %1019 = func.param ptr : StdI64
-    memref.store %1019, __destr_ptr
-    %1020 = memref.load __destr_ptr : i64
-    %1021 = memref.load_indirect %1020+0
-    std.call_runtime_if_nonnull @mm_decref %1021
-    cf.br done
-  done:
-    func.return
-  }
-  func @__destruct___ManagedMemory_Point(ptr: i64) {
-  entry:
-    %1022 = func.param ptr : StdI64
-    memref.store %1022, __destr_ptr
-    %1025 = memref.load __destr_ptr : i64
-    %1026 = memref.load_indirect %1025+16
-    %1027 = arith.constant {value = -1 : i64}
-    %1028 = arith.cmpi eq %1026, %1027
-    cf.cond_br %1028 [then: slice_cleanup_0, else: check_owned_0]
-  slice_cleanup_0:
-    %1029 = memref.load __destr_ptr : i64
-    %1030 = memref.load_indirect %1029+32
-    std.call_runtime_if_nonnull @mm_decref %1030
-    cf.br skip_buf_0
-  check_owned_0:
-    %1031 = memref.load __destr_ptr : i64
-    %1032 = memref.load_indirect %1031+16
-    %1033 = arith.constant {value = -2 : i64}
-    %1034 = arith.cmpi ne %1032, %1033
-    cf.cond_br %1034 [then: free_buf_0, else: skip_buf_0]
-  free_buf_0:
-    %1035 = memref.load __destr_ptr : i64
-    std.call_runtime @mm_decref_managed_elements %1035
-    %1036 = memref.load __destr_ptr : i64
-    %1037 = memref.load_indirect %1036+0
-    std.call_runtime @mm_raw_free %1037
-    cf.br skip_buf_0
-  skip_buf_0:
-    cf.br done
-  done:
-    func.return
-  }
-  func @__destruct_PointArray(ptr: i64) {
-  entry:
-    %1038 = func.param ptr : StdI64
-    memref.store %1038, __destr_ptr
-    %1039 = memref.load __destr_ptr : i64
-    %1040 = memref.load_indirect %1039+0
-    std.call_runtime_if_nonnull @mm_decref %1040
-    cf.br done
-  done:
-    func.return
-  }
-}
-=== x86
-module {
-  func @Point.create(x: i64, y: i64) -> i64 {
-  entry:
-    x64.prologue stack_size=32
-    x64.mov [rbp-16], rcx
-    x64.mov [rbp-24], rdx
-    x64.mov rcx, 16
-    x64.xor edx, edx
-    x64.mov r8, 4
-    x64.call mm_alloc
-    x64.mov [rbp-8], rax
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rbp-16]
-    x64.mov [rax+0], rcx
-    x64.mov rdx, [rbp-8]
-    x64.mov rbx, [rbp-24]
-    x64.mov [rdx+8], rbx
-    x64.mov rsi, [rbp-8]
-    x64.mov rcx, [rbp-8]
-    x64.call mm_incref
-    x64.mov rax, [rbp-8]
-    x64.epilogue
-    x64.ret
-  }
-  func @Person.create(name: i64, age: i64) -> i64 {
-  entry:
-    x64.prologue stack_size=32
-    x64.mov [rbp-8], rcx
-    x64.lea_func rax, [__destruct_Person]
-    x64.mov rbx, rax
-    x64.mov [rbp-24], rdx
-    x64.mov rdx, rbx
-    x64.mov rcx, 16
-    x64.mov r8, 5
-    x64.call mm_alloc
-    x64.mov [rbp-16], rax
-    x64.mov rcx, [rbp-8]
-    x64.mov rdx, [rbp-16]
-    x64.mov [rdx+0], rcx
-    x64.call mm_incref
-    x64.mov rbx, [rbp-16]
-    x64.mov rsi, [rbp-24]
-    x64.mov [rbx+8], rsi
-    x64.mov rdi, [rbp-16]
-    x64.mov rcx, [rbp-16]
-    x64.call mm_incref
-    x64.mov rax, [rbp-16]
-    x64.epilogue
-    x64.ret
-  }
-  func @sum_point(p: i64) -> i64 {
+  func @describe(rcx: i64) -> i64 {
   entry:
     x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rdx, [rax+0]
-    x64.mov rax, [rbp-8]
-    x64.mov rbx, [rax+8]
-    x64.lea rax, [rdx + rbx]
-    x64.epilogue
-    x64.ret
-  }
-  func @make_point(x: i64, y: i64) -> i64 {
-  entry:
-    x64.prologue stack_size=16
-    x64.call Point.create
-    x64.mov [rbp-8], rax
-    x64.mov rax, [rbp-8]
-    x64.epilogue
-    x64.ret
-  }
-  func @describe(s: i64) -> i64 {
-  entry:
-    x64.prologue stack_size=48
-    x64.mov [rbp-16], rcx
-    x64.xor eax, eax
-    x64.mov [rbp-8], rax
-    x64.mov rax, [rbp-16]
-    x64.mov rdx, [rax+0]
-    x64.mov [rbp-24], rcx
-    x64.xor ecx, ecx
-    x64.mov [rbp-32], rcx
-    x64.mov [rbp-40], rdx
-    x64.jmp describe.describe_0.cmp0
-  describe_0.cmp0:
-    x64.mov rax, [rbp-40]
-    x64.xor ecx, ecx
-    x64.cmp rax, rcx
-    x64.jne describe.describe_0.cmp1
-  describe_0.case0:
-    x64.mov rax, [rbp-24]
-    x64.mov rcx, [rax+8]
-    x64.mov [rbp-8], rcx
-    x64.mov rdx, [rbp-8]
-    x64.mov rcx, [rbp-8]
-    x64.call stdlib.String.count
-    x64.mov [rbp-32], rax
-    x64.jmp describe.describe_0.merge
-  describe_0.cmp1:
-    x64.mov rax, [rbp-40]
-    x64.mov rcx, 1
-    x64.cmp rax, rcx
-    x64.jne describe.describe_0.cmp2
-  describe_0.case1:
-    x64.mov rax, [rbp-24]
-    x64.mov rcx, [rax+8]
-    x64.mov rdx, [rbp-8]
-    x64.mov [rbp-48], rcx
-    x64.test rdx, rdx
-    x64.jz __nonnull_skip_0
-    x64.mov rcx, [rbp-8]
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.mov rbx, [rbp-48]
-    x64.mov [rbp-8], rbx
-    x64.mov rsi, [rbp-8]
-    x64.mov rcx, [rbp-8]
-    x64.call stdlib.String.count
-    x64.mov [rbp-32], rax
-    x64.jmp describe.describe_0.merge
-  describe_0.cmp2:
-    x64.mov rax, [rbp-40]
-    x64.mov rcx, 2
-    x64.cmp rax, rcx
-    x64.jne describe.describe_0.merge
-  describe_0.case2:
-    x64.xor eax, eax
-    x64.mov [rbp-32], rax
-    x64.jmp describe.describe_0.merge
+    x64.mov r12, rcx
+    x64.mov r9, [r12+0] (8b)
+    x64.xor r8d, r8d
+    x64.test r9, r9
+    x64.jne describe_0.next0
+    x64.jmp describe_0.case0
   describe_0.merge:
-    x64.mov rax, [rbp-32]
     x64.epilogue
     x64.ret
+  describe_0.case0:
+    x64.mov rcx, [r12+8] (8b)
+    x64.call String.count
+    x64.jmp describe_0.merge
+  describe_0.next0:
+    x64.mov r9, [r12+0] (8b)
+    x64.cmp r9, 1
+    x64.jne describe_0.next1
+  describe_0.case1:
+    x64.mov rcx, [r12+8] (8b)
+    x64.call String.count
+    x64.jmp describe_0.merge
+  describe_0.next1:
+    x64.mov r9, [r12+0] (8b)
+    x64.cmp r9, 2
+    x64.jne describe_0.merge
+  describe_0.case2:
+    x64.xor r8d, r8d
+    x64.jmp describe_0.merge
   }
-  func @apply(f: i64, __env_f: i64, x: i64) -> i64 {
+  func @row_total(rcx: i64) -> i64 {
   entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov r10, rcx
+    x64.prologue stack_size=64
+    x64.lea rdx, [rip+__layout_Array_Integer]
+    x64.xor r12d, r12d
+  inlined_Array.createIterator_0_0:
+    x64.mov r8, [rcx+0] (8b)
     x64.mov rcx, r8
-    x64.call r10
-    x64.epilogue
-    x64.ret
-  }
-  func @names_total(arr: i64) -> i64 {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rcx, [rbp-8]
-    x64.epilogue
-    x64.jmp StringArray.count
-  }
-  func @row_total(arr: i64) -> i64 {
-  entry:
-    x64.prologue stack_size=48
-    x64.mov [rbp-8], rcx
-    x64.xor eax, eax
-    x64.mov [rbp-16], rax
-    x64.mov rax, [rbp-8]
-    x64.mov rdx, [rax+0]
-    x64.mov [rbp-24], rdx
-    x64.mov rax, [rbp-24]
-    x64.mov rdx, [rax+8]
-    x64.mov [rbp-32], rdx
-    x64.xor eax, eax
-    x64.mov [rbp-40], rax
-    x64.jmp row_total.iter_0.header
-  iter_0.header:
-    x64.mov rax, [rbp-40]
-    x64.mov rcx, [rbp-32]
-    x64.cmp rax, rcx
-    x64.jge row_total.iter_0.exit
+    x64.call ArrayIterator.create
+    x64.test rdx, rdx
+    x64.je inlined_Array.createIterator_2_0
+  inlined_Array.createIterator_1_0:
+    x64.xor ecx, ecx
+    x64.mov r13, rcx
+    x64.jmp inline_cont_row_total_0
+  inlined_Array.createIterator_2_0:
+    x64.xor r9d, r9d
+    x64.mov r13, r8
+    x64.mov rdx, r9
+  inline_cont_row_total_0:
+    x64.test rdx, rdx
+    x64.je __phi_trampoline_8_0
+    x64.jmp __rc_edge_8_0
+  inlined_ArrayIterator.advance_0_0:
+    x64.mov r8, [r13+0] (8b)
+    x64.mov r9, [r8+8] (8b)
+    x64.mov rsi, [r8+16] (8b)
+    x64.mov rdi, r9
+    x64.add rdi, 1
+    x64.mov rax, rdi
+    x64.sub rax, r9
+    x64.cmp rdi, rsi
+    x64.setl rsi
+    x64.mov rdi, rsi
+    x64.imul rdi, rax
+    x64.mov eax, 1
+    x64.mov ecx, 1
+    x64.sub rax, rsi
+    x64.imul rax, rcx
+    x64.add r9, rdi
+    x64.mov [r8+8], r9 (8b)
+    x64.xor r8d, r8d
+    x64.test rax, rax
+    x64.je __phi_trampoline_9_0
+  inlined_ArrayIterator.advance_1_0:
+    x64.mov edx, 1
+  inline_cont_row_total_1:
+    x64.test rdx, rdx
+    x64.je __phi_trampoline_12_0
+    x64.jmp __rc_edge_12_0
   iter_0:
-    x64.mov rax, [rbp-40]
-    x64.mov rcx, [rbp-24]
-    x64.mov rdx, [rcx+24]
-    x64.mov rbx, [rbp-24]
-    x64.mov rsi, [rbx+0]
-    x64.imul rax, rdx
-    x64.add rsi, rax
-    x64.mov rdi, [rsi+0]
-    x64.mov [rbp-48], rdi
-    x64.mov r8, [rbp-48]
-    x64.mov r9, [rbp-16]
-    x64.add r9, r8
-    x64.mov [rbp-16], r9
-    x64.mov rax, [rbp-40]
-    x64.mov rcx, 1
-    x64.add rax, rcx
-    x64.mov [rbp-40], rax
-    x64.jmp row_total.iter_0.header
+    x64.mov r8, [r13+0] (8b)
+  inlined_stdlib.__managed_mem_cursor_current_0_0:
+    x64.mov rsi, r8
+    x64.add rsi, 24
+    x64.mov rdi, [rsi+0] (8b)
+    x64.mov rsi, r8
+    x64.add rsi, 8
+    x64.mov rbx, [rsi+0] (8b)
+    x64.mov rsi, [r8+0] (8b)
+    x64.test rdi, rdi
+    x64.jne inlined_stdlib.__managed_mem_cursor_current_2_0
+  inlined_stdlib.__managed_mem_cursor_current_1_0:
+    x64.mov ecx, 3
+    x64.mov r8, rbx
+    x64.shr r8, r8, rcx
+    x64.xor edi, edi
+    x64.add rsi, r8
+    x64.mov [rbp-8], rsi
+    x64.mov [rbp-16], rdi
+    x64.movzx rax, byte ptr [rax+0]
+    x64.mov r8, [rbp-24]
+    x64.mov esi, 7
+    x64.mov rcx, rbx
+    x64.and rcx, rsi
+    x64.mov esi, 1
+    x64.shr r8, r8, rcx
+    x64.and r8, rsi
+    x64.jmp inline_cont_row_total_3
+  inlined_stdlib.__managed_mem_cursor_current_2_0:
+    x64.imul rbx, rdi
+    x64.add rsi, rbx
+  inlined_stdlib.__managed_mem_load_sized_0_0:
+    x64.cmp rdi, 1
+    x64.jne inlined_stdlib.__managed_mem_load_sized_2_0
+  inlined_stdlib.__managed_mem_load_sized_1_0:
+    x64.xor r8d, r8d
+    x64.mov [rbp-8], rsi
+    x64.mov [rbp-16], r8
+    x64.movzx rax, byte ptr [rax+0]
+    x64.mov r8, [rbp-24]
+    x64.jmp inline_cont_row_total_2
+  inlined_stdlib.__managed_mem_load_sized_2_0:
+    x64.cmp rdi, 2
+    x64.jne inlined_stdlib.__managed_mem_load_sized_4_0
+  inlined_stdlib.__managed_mem_load_sized_3_0:
+    x64.movzx r8, [rsi+0] (2b)
+    x64.jmp inline_cont_row_total_2
+  inlined_stdlib.__managed_mem_load_sized_4_0:
+    x64.cmp rdi, 4
+    x64.jne inlined_stdlib.__managed_mem_load_sized_6_0
+  inlined_stdlib.__managed_mem_load_sized_5_0:
+    x64.mov r8, [rsi+0] (4b)
+    x64.jmp inline_cont_row_total_2
+  inlined_stdlib.__managed_mem_load_sized_6_0:
+    x64.mov r8, [rsi+0] (8b)
+  inline_cont_row_total_2:
+  inline_cont_row_total_3:
+    x64.mov r14, r9
+    x64.add r14, r8
+    x64.jmp inlined_ArrayIterator.advance_0_0
   iter_0.exit:
-    x64.mov rax, [rbp-16]
     x64.epilogue
     x64.ret
+  __rc_edge_8_0:
+    x64.mov rcx, r13
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r8, r12
+    x64.jmp iter_0.exit
+  __rc_edge_12_0:
+    x64.mov rcx, r13
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r8, r14
+    x64.jmp iter_0.exit
+  __phi_trampoline_8_0:
+    x64.mov r9, r12
+    x64.jmp iter_0
+  __phi_trampoline_9_0:
+    x64.mov rdx, r8
+    x64.jmp inline_cont_row_total_1
+  __phi_trampoline_12_0:
+    x64.mov r9, r14
+    x64.jmp iter_0
   }
-  func @matrix_total(m: i64) -> i64 {
+  func @matrix_total(rcx: i64) -> i64 {
   entry:
-    x64.prologue stack_size=48
-    x64.mov [rbp-8], rcx
-    x64.xor eax, eax
-    x64.mov [rbp-16], rax
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rbp-8]
-    x64.call Matrix.createIterator
-    x64.mov [rbp-24], rax
+    x64.prologue stack_size=64
+    x64.lea rdx, [rip+__layout_Array_IntArray]
+    x64.xor r12d, r12d
+  inlined_Array.createIterator_0_0:
+    x64.mov r8, [rcx+0] (8b)
+    x64.mov rcx, r8
+    x64.call ArrayIterator.create
+    x64.test rdx, rdx
+    x64.je inlined_Array.createIterator_2_0
+  inlined_Array.createIterator_1_0:
     x64.xor ecx, ecx
-    x64.cmp rdx, rcx
-    x64.jne matrix_total.iter_0.exit
-  iter_0.preamble:
-    x64.jmp matrix_total.iter_0
-  iter_0.header:
-    x64.mov rax, [rbp-24]
-    x64.mov rcx, [rbp-24]
-    x64.call __ArrayIterator_IntArray.advance
-    x64.xor ecx, ecx
-    x64.cmp rdx, rcx
-    x64.jne matrix_total.iter_0.exit
+    x64.mov r13, rcx
+    x64.jmp inline_cont_matrix_total_0
+  inlined_Array.createIterator_2_0:
+    x64.xor r9d, r9d
+    x64.mov r13, r8
+    x64.mov rdx, r9
+  inline_cont_matrix_total_0:
+    x64.test rdx, rdx
+    x64.je __phi_trampoline_8_0
+    x64.jmp __rc_edge_8_0
+  inlined_ArrayIterator.advance_0_0:
+    x64.mov r8, [r13+0] (8b)
+    x64.mov r9, [r8+8] (8b)
+    x64.mov rsi, [r8+16] (8b)
+    x64.mov rdi, r9
+    x64.add rdi, 1
+    x64.mov rax, rdi
+    x64.sub rax, r9
+    x64.cmp rdi, rsi
+    x64.setl rsi
+    x64.mov rdi, rsi
+    x64.imul rdi, rax
+    x64.mov eax, 1
+    x64.mov ecx, 1
+    x64.sub rax, rsi
+    x64.imul rax, rcx
+    x64.add r9, rdi
+    x64.mov [r8+8], r9 (8b)
+    x64.xor r8d, r8d
+    x64.test rax, rax
+    x64.je __phi_trampoline_9_0
+  inlined_ArrayIterator.advance_1_0:
+    x64.mov edx, 1
+  inline_cont_matrix_total_1:
+    x64.test rdx, rdx
+    x64.je iter_0
+    x64.jmp __rc_edge_12_0
   iter_0:
-    x64.mov rax, [rbp-24]
-    x64.mov rcx, [rbp-24]
-    x64.call __ArrayIterator_IntArray.current
-    x64.mov [rbp-32], rax
-    x64.mov [rbp-40], rax
-    x64.mov rcx, [rbp-40]
-    x64.call row_total
-    x64.mov rdx, [rbp-16]
-    x64.add rdx, rax
-    x64.mov [rbp-16], rdx
-    x64.mov rbx, [rbp-32]
-    x64.test rbx, rbx
-    x64.jz __nonnull_skip_0
-    x64.mov rcx, [rbp-32]
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.jmp matrix_total.iter_0.header
-  iter_0.exit:
-    x64.mov rax, [rbp-16]
-    x64.mov rcx, [rbp-24]
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_1
-    x64.call mm_decref
-    x64.label __nonnull_skip_1
-    x64.mov rax, [rbp-16]
-    x64.epilogue
-    x64.ret
-  }
-  func @points_x_sum(pts: i64) -> i64 {
-  entry:
-    x64.prologue stack_size=48
-    x64.mov [rbp-8], rcx
-    x64.xor eax, eax
-    x64.mov [rbp-16], rax
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rbp-8]
-    x64.call PointArray.createIterator
-    x64.mov [rbp-24], rax
-    x64.xor ecx, ecx
-    x64.cmp rdx, rcx
-    x64.jne points_x_sum.iter_0.exit
-  iter_0.preamble:
-    x64.jmp points_x_sum.iter_0
-  iter_0.header:
-    x64.mov rax, [rbp-24]
-    x64.mov rcx, [rbp-24]
-    x64.call __ArrayIterator_Point.advance
-    x64.xor ecx, ecx
-    x64.cmp rdx, rcx
-    x64.jne points_x_sum.iter_0.exit
-  iter_0:
-    x64.mov rax, [rbp-24]
-    x64.mov rcx, [rbp-24]
-    x64.call __ArrayIterator_Point.current
-    x64.mov [rbp-32], rax
-    x64.mov [rbp-40], rax
-    x64.mov rcx, [rbp-40]
-    x64.mov rdx, [rcx+0]
-    x64.mov rbx, [rbp-16]
-    x64.add rbx, rdx
-    x64.mov [rbp-16], rbx
-    x64.mov rsi, [rbp-32]
+    x64.mov r8, [r13+0] (8b)
+  inlined_stdlib.__managed_mem_cursor_current_0_0:
+    x64.mov r9, r8
+    x64.add r9, 24
+    x64.mov rsi, [r9+0] (8b)
+    x64.mov r9, r8
+    x64.add r9, 8
+    x64.mov rdi, [r9+0] (8b)
+    x64.mov r9, [r8+0] (8b)
     x64.test rsi, rsi
-    x64.jz __nonnull_skip_0
-    x64.mov rcx, [rbp-32]
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.jmp points_x_sum.iter_0.header
-  iter_0.exit:
-    x64.mov rax, [rbp-16]
+    x64.jne inlined_stdlib.__managed_mem_cursor_current_2_0
+  inlined_stdlib.__managed_mem_cursor_current_1_0:
+    x64.mov ecx, 3
+    x64.mov r8, rdi
+    x64.shr r8, r8, rcx
+    x64.xor esi, esi
+    x64.add r9, r8
+    x64.mov [rbp-8], r9
+    x64.mov [rbp-16], rsi
+    x64.movzx rax, byte ptr [rax+0]
+    x64.mov r8, [rbp-24]
+    x64.mov r9d, 7
+    x64.mov rcx, rdi
+    x64.and rcx, r9
+    x64.mov r9d, 1
+    x64.shr r8, r8, rcx
+    x64.mov r15, r8
+    x64.and r15, r9
+    x64.jmp __rc_edge_14_0
+  inlined_stdlib.__managed_mem_cursor_current_2_0:
+    x64.imul rdi, rsi
+    x64.add r9, rdi
+  inlined_stdlib.__managed_mem_load_sized_0_0:
+    x64.cmp rsi, 1
+    x64.jne inlined_stdlib.__managed_mem_load_sized_2_0
+  inlined_stdlib.__managed_mem_load_sized_1_0:
+    x64.xor r8d, r8d
+    x64.mov [rbp-8], r9
+    x64.mov [rbp-16], r8
+    x64.movzx rax, byte ptr [rax+0]
     x64.mov rcx, [rbp-24]
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_1
-    x64.call mm_decref
-    x64.label __nonnull_skip_1
-    x64.mov rax, [rbp-16]
+    x64.mov r15, rcx
+    x64.jmp inline_cont_matrix_total_2
+  inlined_stdlib.__managed_mem_load_sized_2_0:
+    x64.cmp rsi, 2
+    x64.jne inlined_stdlib.__managed_mem_load_sized_4_0
+  inlined_stdlib.__managed_mem_load_sized_3_0:
+    x64.movzx rcx, [r9+0] (2b)
+    x64.mov r15, rcx
+    x64.jmp inline_cont_matrix_total_2
+  inlined_stdlib.__managed_mem_load_sized_4_0:
+    x64.cmp rsi, 4
+    x64.jne inlined_stdlib.__managed_mem_load_sized_6_0
+  inlined_stdlib.__managed_mem_load_sized_5_0:
+    x64.mov rcx, [r9+0] (4b)
+    x64.mov r15, rcx
+    x64.jmp inline_cont_matrix_total_2
+  inlined_stdlib.__managed_mem_load_sized_6_0:
+    x64.mov rcx, [r9+0] (8b)
+    x64.mov r15, rcx
+  inline_cont_matrix_total_2:
+    x64.jmp __rc_edge_24_0
+  inline_cont_matrix_total_3:
+    x64.mov rcx, r15
+    x64.call row_total
+    x64.mov [rbp+-32], r8
+    x64.mov rcx, r15
+    x64.call __mm_decref_maybenull_helper
+    x64.add r14, [rbp+-32]
+    x64.jmp inlined_ArrayIterator.advance_0_0
+  iter_0.exit:
+    x64.epilogue
+    x64.ret
+  __rc_edge_8_0:
+    x64.mov rcx, r13
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r8, r12
+    x64.jmp iter_0.exit
+  __rc_edge_12_0:
+    x64.mov rcx, r13
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r8, r14
+    x64.jmp iter_0.exit
+  __rc_edge_14_0:
+    x64.mov rcx, r15
+    x64.call stdlib.__mm_incref
+    x64.jmp inline_cont_matrix_total_3
+  __rc_edge_24_0:
+    x64.mov rcx, r15
+    x64.call stdlib.__mm_incref
+    x64.jmp inline_cont_matrix_total_3
+  __phi_trampoline_8_0:
+    x64.mov r14, r12
+    x64.jmp iter_0
+  __phi_trampoline_9_0:
+    x64.mov rdx, r8
+    x64.jmp inline_cont_matrix_total_1
+  }
+  func @points_x_sum(rcx: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=64
+    x64.lea rdx, [rip+__layout_Array_Point]
+    x64.xor r12d, r12d
+  inlined_Array.createIterator_0_0:
+    x64.mov r8, [rcx+0] (8b)
+    x64.mov rcx, r8
+    x64.call ArrayIterator.create
+    x64.test rdx, rdx
+    x64.je inlined_Array.createIterator_2_0
+  inlined_Array.createIterator_1_0:
+    x64.xor ecx, ecx
+    x64.mov r13, rcx
+    x64.jmp inline_cont_points_x_sum_0
+  inlined_Array.createIterator_2_0:
+    x64.xor r9d, r9d
+    x64.mov r13, r8
+    x64.mov rdx, r9
+  inline_cont_points_x_sum_0:
+    x64.test rdx, rdx
+    x64.je __phi_trampoline_8_0
+    x64.jmp __rc_edge_8_0
+  inlined_ArrayIterator.advance_0_0:
+    x64.mov r8, [r13+0] (8b)
+    x64.mov r9, [r8+8] (8b)
+    x64.mov rsi, [r8+16] (8b)
+    x64.mov rdi, r9
+    x64.add rdi, 1
+    x64.mov rax, rdi
+    x64.sub rax, r9
+    x64.cmp rdi, rsi
+    x64.setl rsi
+    x64.mov rdi, rsi
+    x64.imul rdi, rax
+    x64.mov eax, 1
+    x64.mov ecx, 1
+    x64.sub rax, rsi
+    x64.imul rax, rcx
+    x64.add r9, rdi
+    x64.mov [r8+8], r9 (8b)
+    x64.xor r8d, r8d
+    x64.test rax, rax
+    x64.je __phi_trampoline_9_0
+  inlined_ArrayIterator.advance_1_0:
+    x64.mov edx, 1
+  inline_cont_points_x_sum_1:
+    x64.test rdx, rdx
+    x64.je iter_0
+    x64.jmp __rc_edge_12_0
+  iter_0:
+    x64.mov r8, [r13+0] (8b)
+  inlined_stdlib.__managed_mem_cursor_current_0_0:
+    x64.mov r9, r8
+    x64.add r9, 24
+    x64.mov rsi, [r9+0] (8b)
+    x64.mov r9, r8
+    x64.add r9, 8
+    x64.mov rdi, [r9+0] (8b)
+    x64.mov r9, [r8+0] (8b)
+    x64.test rsi, rsi
+    x64.jne inlined_stdlib.__managed_mem_cursor_current_2_0
+  inlined_stdlib.__managed_mem_cursor_current_1_0:
+    x64.mov ecx, 3
+    x64.mov r8, rdi
+    x64.shr r8, r8, rcx
+    x64.xor esi, esi
+    x64.add r9, r8
+    x64.mov [rbp-8], r9
+    x64.mov [rbp-16], rsi
+    x64.movzx rax, byte ptr [rax+0]
+    x64.mov r8, [rbp-24]
+    x64.mov r9d, 7
+    x64.mov rcx, rdi
+    x64.and rcx, r9
+    x64.mov r9d, 1
+    x64.shr r8, r8, rcx
+    x64.mov r15, r8
+    x64.and r15, r9
+    x64.jmp __rc_edge_14_0
+  inlined_stdlib.__managed_mem_cursor_current_2_0:
+    x64.imul rdi, rsi
+    x64.add r9, rdi
+  inlined_stdlib.__managed_mem_load_sized_0_0:
+    x64.cmp rsi, 1
+    x64.jne inlined_stdlib.__managed_mem_load_sized_2_0
+  inlined_stdlib.__managed_mem_load_sized_1_0:
+    x64.xor r8d, r8d
+    x64.mov [rbp-8], r9
+    x64.mov [rbp-16], r8
+    x64.movzx rax, byte ptr [rax+0]
+    x64.mov rcx, [rbp-24]
+    x64.mov r15, rcx
+    x64.jmp inline_cont_points_x_sum_2
+  inlined_stdlib.__managed_mem_load_sized_2_0:
+    x64.cmp rsi, 2
+    x64.jne inlined_stdlib.__managed_mem_load_sized_4_0
+  inlined_stdlib.__managed_mem_load_sized_3_0:
+    x64.movzx rcx, [r9+0] (2b)
+    x64.mov r15, rcx
+    x64.jmp inline_cont_points_x_sum_2
+  inlined_stdlib.__managed_mem_load_sized_4_0:
+    x64.cmp rsi, 4
+    x64.jne inlined_stdlib.__managed_mem_load_sized_6_0
+  inlined_stdlib.__managed_mem_load_sized_5_0:
+    x64.mov rcx, [r9+0] (4b)
+    x64.mov r15, rcx
+    x64.jmp inline_cont_points_x_sum_2
+  inlined_stdlib.__managed_mem_load_sized_6_0:
+    x64.mov rcx, [r9+0] (8b)
+    x64.mov r15, rcx
+  inline_cont_points_x_sum_2:
+    x64.jmp __rc_edge_24_0
+  inline_cont_points_x_sum_3:
+    x64.mov r15, [rcx+0] (8b)
+    x64.call __mm_decref_maybenull_helper
+    x64.add r14, r15
+    x64.jmp inlined_ArrayIterator.advance_0_0
+  iter_0.exit:
+    x64.epilogue
+    x64.ret
+  __rc_edge_8_0:
+    x64.mov rcx, r13
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r8, r12
+    x64.jmp iter_0.exit
+  __rc_edge_12_0:
+    x64.mov rcx, r13
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r8, r14
+    x64.jmp iter_0.exit
+  __rc_edge_14_0:
+    x64.mov rcx, r15
+    x64.call stdlib.__mm_incref
+    x64.mov rcx, r15
+    x64.jmp inline_cont_points_x_sum_3
+  __rc_edge_24_0:
+    x64.mov rcx, r15
+    x64.call stdlib.__mm_incref
+    x64.mov rcx, r15
+    x64.jmp inline_cont_points_x_sum_3
+  __phi_trampoline_8_0:
+    x64.mov r14, r12
+    x64.jmp iter_0
+  __phi_trampoline_9_0:
+    x64.mov rdx, r8
+    x64.jmp inline_cont_points_x_sum_1
+  }
+  func @main$closure_0(rcx: i64, rdx: i64) -> u64 {
+  entry:
+    x64.prologue stack_size=96
+    x64.mov r12, rcx
+    x64.mov r8, [rdx+0] (8b)
+    x64.mov r9, [r8+0] (8b)
+    x64.mov r8, [r9+0] (8b)
+    x64.mov r13, [r8+8] (8b)
+    x64.mov r14, [r8+0] (8b)
+    x64.mov r8d, 21
+    x64.mov rcx, r8
+    x64.call mrt_alloc
+    x64.mov r15, r8
+    x64.mov rcx, r12
+    x64.mov rdx, r15
+    x64.call mrt_i64_to_string
+    x64.mov r12, r8
+    x64.xor r8d, r8d
+    x64.mov [rbp+-40], r8
+    x64.mov r8, r13
+    x64.add r8, 0
+    x64.add r8, 0
+    x64.add r8, r12
+    x64.mov [rbp+-48], r8
+    x64.mov r8, [rbp+-48]
+    x64.add r8, 0
+    x64.mov [rbp+-48], r8
+    x64.mov r8, [rbp+-48]
+    x64.add r8, 1
+    x64.mov rcx, r8
+    x64.call mrt_alloc
+    x64.mov [rbp+-56], r8
+    x64.lea r8, [rip+__istr_0]
+    x64.mov r9, [rbp+-56]
+    x64.mov [rbp-8], r9
+    x64.mov [rbp-16], r8
+    x64.mov r8, [rbp+-40]
+    x64.mov [rbp-24], r8
+    x64.rep_movsb
+    x64.mov r9, [rbp+-56]
+    x64.add r9, 0
+    x64.mov [rbp-8], r9
+    x64.mov [rbp-16], r14
+    x64.mov [rbp-32], r13
+    x64.rep_movsb
+    x64.lea rsi, [rip+__istr_0]
+    x64.add r9, r13
+    x64.mov [rbp-8], r9
+    x64.mov [rbp-16], rsi
+    x64.mov [rbp-24], r8
+    x64.rep_movsb
+    x64.add r9, 0
+    x64.mov [rbp-8], r9
+    x64.mov [rbp-16], r15
+    x64.mov [rbp-32], r12
+    x64.rep_movsb
+    x64.lea rsi, [rip+__istr_0]
+    x64.add r9, r12
+    x64.mov [rbp-8], r9
+    x64.mov [rbp-16], rsi
+    x64.mov [rbp-24], r8
+    x64.rep_movsb
+    x64.mov rcx, r15
+    x64.call stdlib.__mm_decref
+    x64.lea rdx, [rip+stdlib.__destruct___ManagedMemory]
+    x64.mov ecx, 48
+    x64.call mrt_alloc_with_dtor
+    x64.mov r12, r8
+    x64.mov r8, [rbp+-40]
+    x64.mov [r12+40], r8 (8b)
+    x64.mov r8, [rbp+-56]
+    x64.mov [r12+0], r8 (8b)
+    x64.mov r8, [rbp+-48]
+    x64.mov [r12+8], r8 (8b)
+    x64.mov [r12+16], r8 (8b)
+    x64.mov r8d, 1
+    x64.mov [r12+24], r8 (8b)
+    x64.mov r8, -1
+    x64.mov [r12+32], r8 (8b)
+    x64.lea rdx, [rip+__destruct_String]
+    x64.mov ecx, 16
+    x64.call stdlib.__mm_alloc
+    x64.mov r13, r8
+    x64.mov [r13+0], r12 (8b)
+    x64.mov r8, [rbp+-40]
+    x64.mov [r13+8], r8 (8b)
+    x64.mov rcx, r13
+    x64.call String.count
+    x64.mov r12, r8
+    x64.mov rcx, r13
+    x64.call mm_drop
+    x64.mov r8, -1
+    x64.cmp r12, r8
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea r12, [rip+__panic_msg_8e407baaf3c984cf]
+    x64.mov rcx, r12
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov r8, r12
     x64.epilogue
     x64.ret
   }
   func @main() -> u32 {
   entry:
-    x64.prologue stack_size=704
-    x64.xor eax, eax
-    x64.mov [rbp-8], rax
-    x64.mov rcx, 1
-    x64.mov rdx, 2
-    x64.call Point.create
-    x64.mov [rbp-16], rax
-    x64.mov [rbp-24], rax
-    x64.mov rcx, [rbp-24]
-    x64.call mm_incref
-    x64.mov rdx, 99
-    x64.mov rbx, [rbp-24]
-    x64.mov [rbx+0], rdx
-    x64.mov rsi, [rbp-16]
-    x64.test rsi, rsi
-    x64.jz __nonnull_skip_0
-    x64.mov rcx, [rbp-16]
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.mov rdi, [rbp-24]
-    x64.mov [rbp-16], rdi
-    x64.mov r8, [rbp-16]
-    x64.mov rcx, [rbp-16]
-    x64.call mm_incref
-    x64.mov r9, [rbp-16]
-    x64.mov rax, [r9+0]
-    x64.mov [rbp-544], rax
-    x64.mov rcx, 3
-    x64.mov rdx, 4
-    x64.call Point.create
-    x64.mov [rbp-32], rax
-    x64.mov rax, [rbp-32]
-    x64.mov rcx, [rbp-32]
-    x64.call sum_point
-    x64.mov rcx, [rbp-544]
-    x64.add rcx, rax
-    x64.mov [rbp-552], rcx
-    x64.mov rcx, 5
-    x64.mov rdx, 6
-    x64.call Point.create
-    x64.mov [rbp-40], rax
-    x64.mov rax, [rbp-40]
-    x64.mov rcx, [rbp-40]
-    x64.call sum_point
-    x64.mov rcx, [rbp-552]
-    x64.add rcx, rax
-    x64.mov [rbp-48], rcx
-    x64.call StringArray.create
-    x64.mov [rbp-56], rax
-    x64.xor eax, eax
-    x64.mov rcx, 5
-    x64.mov [rbp-64], rcx
-    x64.mov [rbp-72], rax
-    x64.jmp main.names_loop_0.header
+    x64.prologue stack_size=944
+    x64.xor r8d, r8d
+    x64.mov [rbp+-912], r8
+    x64.mov r8, [rbp+-912]
+    x64.mov [rbp-128], r8
+    x64.xor edx, edx
+    x64.mov ecx, 16
+    x64.call stdlib.__mm_alloc
+    x64.mov r12, r8
+    x64.mov r13d, 1
+    x64.mov [r12+0], r13 (8b)
+    x64.mov r8d, 2
+    x64.mov [r12+8], r8 (8b)
+    x64.mov r8d, 99
+    x64.mov [r12+0], r8 (8b)
+    x64.mov r14, [r12+0] (8b)
+    x64.mov rcx, r12
+    x64.call mm_drop
+    x64.xor edx, edx
+    x64.mov ecx, 16
+    x64.call stdlib.__mm_alloc
+    x64.mov r12, r8
+    x64.mov r8d, 3
+    x64.mov r8, 3
+    x64.mov [r12+0], r8 (8b)
+    x64.mov r8d, 4
+    x64.mov [r12+8], r8 (8b)
+    x64.mov r8, [r12+8] (8b)
+    x64.mov [rbp+-744], r8
+    x64.mov r8, [r12+0] (8b)
+    x64.mov [rbp+-752], r8
+    x64.mov rcx, r12
+    x64.call mm_drop
+    x64.xor edx, edx
+    x64.mov ecx, 16
+    x64.call stdlib.__mm_alloc
+    x64.mov r12, r8
+    x64.mov r8d, 5
+    x64.mov r8, 5
+    x64.mov [r12+0], r8 (8b)
+    x64.mov r8d, 6
+    x64.mov [r12+8], r8 (8b)
+    x64.mov r8, [r12+8] (8b)
+    x64.mov [rbp+-760], r8
+    x64.mov r8, [r12+0] (8b)
+    x64.mov [rbp+-768], r8
+    x64.mov rcx, r12
+    x64.mov r8, 5
+    x64.mov r8, 5
+    x64.call mm_drop
+    x64.lea rcx, [rip+__layout_Array_String]
+    x64.call Array.create
+    x64.mov r12, r8
+    x64.mov r8, [rbp+-752]
+    x64.add r8, [rbp+-744]
+    x64.add r14, 0
+    x64.mov r9, [rbp+-768]
+    x64.add r9, [rbp+-760]
+    x64.add r14, r8
+    x64.add r14, r9
+    x64.mov r8d, 48
+    x64.mov r8d, 16
+    x64.mov r8, -2
+    x64.mov r8, [rbp+-912]
   names_loop_0.header:
-    x64.mov rax, [rbp-72]
-    x64.mov rcx, [rbp-64]
-    x64.cmp rax, rcx
-    x64.jge main.names_loop_0.exit
+    x64.mov [rbp+-760], r8
+    x64.mov r8, [rbp+-760]
+    x64.cmp r8, 5
+    x64.jge names_loop_0.exit
   names_loop_0:
-    x64.mov rax, [rbp-72]
-    x64.lea_rdata rcx, [__interp_lit_0]
-    x64.mov rdx, rcx
-    x64.mov rbx, 5
-    x64.mov [rbp-544], rdx
-    x64.mov rcx, 21
-    x64.call mm_raw_alloc
-    x64.mov [rbp-80], rax
-    x64.mov rcx, [rbp-72]
-    x64.mov rdx, [rbp-80]
-    x64.call maxon_i64_to_string
-    x64.mov rsi, [rbp-80]
-    x64.mov rdi, 5
-    x64.lea r8, [rdi + rax]
-    x64.lea_func r9, [__destruct_String]
-    x64.mov rcx, r9
-    x64.mov [rbp-552], rax
-    x64.mov [rbp-560], r8
-    x64.mov rdx, rcx
-    x64.mov rcx, 16
-    x64.mov r8, 6
-    x64.call mm_alloc
-    x64.mov [rbp-88], rax
-    x64.lea_func rax, [__destruct___ManagedMemory]
-    x64.mov rcx, rax
-    x64.mov rdx, rcx
-    x64.mov rcx, 40
-    x64.mov r8, 7
-    x64.call mm_alloc
-    x64.mov [rbp-96], rax
-    x64.mov rax, 1
-    x64.mov rcx, [rbp-560]
-    x64.lea rdx, [rcx + rax]
-    x64.mov rcx, rdx
-    x64.call mm_raw_alloc
-    x64.xor ecx, ecx
-    x64.mov [rbp-104], rcx
-    x64.mov [rbp-112], rax
-    x64.mov rax, [rbp-560]
-    x64.mov [rbp-120], rax
-    x64.mov rax, [rbp-544]
-    x64.mov [rbp-128], rax
-    x64.mov rax, 5
-    x64.mov [rbp-136], rax
-    x64.mov rax, [rbp-80]
-    x64.mov [rbp-144], rax
-    x64.mov rax, [rbp-552]
-    x64.mov [rbp-152], rax
-    x64.mov rax, [rbp-112]
-    x64.mov rcx, [rbp-104]
-    x64.add rax, rcx
-    x64.mov rcx, [rbp-128]
-    x64.mov rdx, [rbp-136]
-    x64.mov rsi, rcx
-    x64.mov rdi, rax
-    x64.mov rcx, rdx
+    x64.mov ecx, 21
+    x64.call mrt_alloc
+    x64.mov rdx, r8
+    x64.mov rcx, [rbp+-760]
+    x64.mov [rbp+-744], r8
+    x64.call mrt_i64_to_string
+    x64.mov [rbp+-752], r8
+    x64.mov r8, [rbp+-752]
+    x64.add r8, 5
+    x64.mov [rbp+-768], r8
+    x64.mov r8, [rbp+-768]
+    x64.add r8, 0
+    x64.mov [rbp+-768], r8
+    x64.mov rcx, [rbp+-768]
+    x64.add rcx, 1
+    x64.call mrt_alloc
+    x64.mov [rbp+-776], r8
+    x64.lea r8, [rip+__istr_1]
+    x64.mov r9, [rbp+-776]
+    x64.mov [rbp-136], r9
+    x64.mov [rbp-144], r8
+    x64.mov r8, 5
+    x64.mov [rbp-152], r8
     x64.rep_movsb
-    x64.mov rax, [rbp-104]
-    x64.mov rcx, [rbp-136]
-    x64.add rax, rcx
-    x64.mov [rbp-104], rax
-    x64.mov rax, [rbp-112]
-    x64.mov rcx, [rbp-104]
-    x64.add rax, rcx
-    x64.mov rcx, [rbp-144]
-    x64.mov rdx, [rbp-152]
-    x64.mov rsi, rcx
-    x64.mov rdi, rax
-    x64.mov rcx, rdx
+    x64.mov r8, [rbp+-776]
+    x64.add r8, 5
+    x64.mov [rbp-160], r8
+    x64.mov r9, [rbp+-744]
+    x64.mov [rbp-168], r9
+    x64.mov r9, [rbp+-752]
+    x64.mov [rbp-176], r9
     x64.rep_movsb
-    x64.mov rax, [rbp-112]
-    x64.mov rcx, [rbp-120]
-    x64.add rax, rcx
-    x64.xor ecx, ecx
-    x64.mov byte ptr [rax+0], rcxb
-    x64.mov rax, [rbp-80]
-    x64.mov rcx, [rbp-80]
-    x64.call mm_raw_free
-    x64.mov rax, [rbp-112]
-    x64.mov rcx, [rbp-120]
-    x64.mov rdx, 1
-    x64.xor ebx, ebx
-    x64.mov rsi, [rbp-96]
-    x64.mov [rsi+0], rax
-    x64.mov rax, [rbp-96]
-    x64.mov [rax+8], rcx
-    x64.mov rax, [rbp-96]
-    x64.mov [rax+16], rcx
-    x64.mov rax, [rbp-96]
-    x64.mov [rax+24], rdx
-    x64.mov rax, [rbp-96]
-    x64.mov [rax+32], rbx
-    x64.mov rax, [rbp-96]
-    x64.mov rcx, [rbp-88]
-    x64.mov [rcx+0], rax
-    x64.mov rax, [rbp-96]
-    x64.mov rcx, [rbp-96]
-    x64.call mm_incref
-    x64.xor eax, eax
-    x64.mov rcx, [rbp-88]
-    x64.mov [rcx+8], rax
-    x64.mov rax, [rbp-88]
-    x64.mov rcx, [rbp-88]
-    x64.call mm_incref
-    x64.mov rax, [rbp-56]
-    x64.mov rcx, [rbp-88]
-    x64.mov rcx, [rbp-56]
-    x64.mov rdx, [rbp-88]
-    x64.call StringArray.push
-    x64.mov rax, [rbp-88]
-    x64.test rax, rax
-    x64.jz __nonnull_skip_1
-    x64.mov rcx, [rbp-88]
-    x64.call mm_decref
-    x64.label __nonnull_skip_1
-    x64.jmp main.names_loop_0.incr
-  names_loop_0.incr:
-    x64.mov rax, 1
-    x64.mov rcx, [rbp-72]
-    x64.add rcx, rax
-    x64.mov [rbp-72], rcx
-    x64.jmp main.names_loop_0.header
+    x64.lea r9, [rip+__istr_0]
+    x64.add r8, [rbp+-752]
+    x64.mov [rbp-184], r8
+    x64.mov [rbp-192], r9
+    x64.mov r8, [rbp+-912]
+    x64.mov [rbp-200], r8
+    x64.rep_movsb
+    x64.mov rcx, [rbp+-744]
+    x64.call stdlib.__mm_decref
+    x64.mov r8, [rbp+-744]
+    x64.lea rdx, [rip+stdlib.__destruct___ManagedMemory]
+    x64.mov rcx, 48
+    x64.call mrt_alloc_with_dtor
+    x64.mov [rbp+-744], r8
+    x64.mov r8, [rbp+-744]
+    x64.mov r9, [rbp+-912]
+    x64.mov [r8+40], r9 (8b)
+    x64.mov r9, [rbp+-776]
+    x64.mov [r8+0], r9 (8b)
+    x64.mov r9, [rbp+-768]
+    x64.mov [r8+8], r9 (8b)
+    x64.mov [r8+16], r9 (8b)
+    x64.mov [r8+24], r13 (8b)
+    x64.mov r9, -1
+    x64.mov [r8+32], r9 (8b)
+    x64.lea r8, [rip+__destruct_String]
+    x64.mov [rbp+-752], r8
+  inlined_stdlib.__mm_alloc_0_0:
+    x64.xor r8d, r8d
+    x64.mov [rbp+-768], r8
+    x64.mov r8, 16
+    x64.cmp r8, 1
+    x64.mov r8, 16
+    x64.jge inlined_stdlib.__mm_alloc_2_0
+  inlined_stdlib.__mm_alloc_1_0:
+    x64.mov r8d, 1
+  inlined_stdlib.__mm_alloc_2_0:
+    x64.mov [rbp+-776], r8
+    x64.lea r8, [rip+__mm_alloc_count]
+    x64.lock inc qword ptr [r8]
+    x64.mov rcx, [rbp+-776]
+    x64.add rcx, 32
+    x64.call stdlib.__slab_alloc
+    x64.mov r9, [rbp+-768]
+    x64.mov [r8+0], r9 (8b)
+    x64.mov rsi, r8
+    x64.add rsi, 8
+    x64.mov rdi, [rbp+-752]
+    x64.mov [rsi+0], rdi (8b)
+    x64.mov rsi, r8
+    x64.add rsi, 16
+    x64.mov rdi, [rbp+-776]
+    x64.mov [rsi+0], rdi (8b)
+    x64.mov rsi, r8
+    x64.add rsi, 24
+    x64.mov [rsi+0], r9 (8b)
+    x64.mov [rbp+-752], r8
+    x64.mov r8, [rbp+-752]
+    x64.add r8, 32
+    x64.mov [rbp+-752], r8
+    x64.mov r8, [rbp+-752]
+  inline_cont_main_0:
+    x64.mov [rbp+-768], r8
+    x64.mov rcx, [rbp+-752]
+    x64.call stdlib.__mm_incref
+    x64.mov r8, [rbp+-752]
+    x64.mov r8, [rbp+-744]
+    x64.mov r9, [rbp+-768]
+    x64.mov [r9+0], r8 (8b)
+    x64.mov r8, [rbp+-912]
+    x64.mov [r9+8], r8 (8b)
+    x64.lea rax, [rip+__layout_Array_String]
+    x64.mov rcx, r12
+    x64.mov rdx, [rbp+-768]
+    x64.call Array.push
+  names_loop_0.step:
+    x64.mov r8, [rbp+-760]
+    x64.add r8, 1
+    x64.jmp names_loop_0.header
   names_loop_0.exit:
-    x64.mov rax, [rbp-56]
-    x64.mov rcx, [rbp-56]
-    x64.call names_total
-    x64.mov rcx, [rbp-48]
-    x64.add rcx, rax
-    x64.mov [rbp-544], rcx
-    x64.call IntArray.create
-    x64.mov [rbp-160], rax
-    x64.mov rdx, [rbp-160]
-    x64.mov rcx, [rbp-160]
-    x64.mov rdx, 1
-    x64.call IntArray.push
-    x64.mov rbx, [rbp-160]
-    x64.mov rcx, [rbp-160]
+    x64.lea rdx, [rip+__layout_Array_String]
+    x64.mov rcx, r12
+    x64.call Array.count
+    x64.mov [rbp+-752], r8
+    x64.mov rcx, r12
+    x64.call __mm_decref_maybenull_helper
+    x64.lea rcx, [rip+__layout_Array_Integer]
+    x64.lea r12, [rip+__layout_Array_Integer]
+    x64.lea r8, [rip+__layout_Array_Integer]
+    x64.mov [rbp+-744], r8
+    x64.mov r8d, 2
+    x64.lea r8, [rip+__layout_Array_Integer]
+    x64.mov [rbp+-760], r8
+    x64.lea r8, [rip+__layout_Array_Integer]
+    x64.mov [rbp+-768], r8
+    x64.lea r8, [rip+__layout_Array_Integer]
+    x64.mov [rbp+-776], r8
+    x64.mov r8d, 4
+    x64.lea r8, [rip+__layout_Array_IntArray]
+    x64.mov [rbp+-800], r8
+    x64.lea r8, [rip+__layout_Array_IntArray]
+    x64.mov [rbp+-808], r8
+    x64.lea r8, [rip+__layout_Array_IntArray]
+    x64.mov [rbp+-816], r8
+    x64.call Array.create
+    x64.mov [rbp+-824], r8
+    x64.mov rdx, r13
+    x64.mov rax, r12
+    x64.mov rcx, [rbp+-824]
+    x64.call Array.push
+    x64.mov r8, [rbp+-824]
+    x64.mov rcx, [rbp+-824]
     x64.mov rdx, 2
-    x64.call IntArray.push
-    x64.call IntArray.create
-    x64.mov [rbp-168], rax
-    x64.mov rsi, [rbp-168]
-    x64.mov rcx, [rbp-168]
+    x64.mov rax, [rbp+-744]
+    x64.call Array.push
+    x64.mov r8, [rbp+-824]
+    x64.mov rcx, [rbp+-760]
+    x64.call Array.create
+    x64.mov r12, r8
+    x64.mov rcx, r12
     x64.mov rdx, 3
-    x64.call IntArray.push
-    x64.mov rdi, [rbp-168]
-    x64.mov rcx, [rbp-168]
+    x64.mov rax, [rbp+-768]
+    x64.call Array.push
+    x64.mov rcx, r12
     x64.mov rdx, 4
-    x64.call IntArray.push
-    x64.call Matrix.create
-    x64.mov [rbp-176], rax
-    x64.mov r8, [rbp-176]
-    x64.mov r9, [rbp-160]
-    x64.mov rcx, [rbp-176]
-    x64.mov rdx, [rbp-160]
-    x64.call Matrix.push
-    x64.mov rax, [rbp-176]
-    x64.mov rcx, [rbp-168]
-    x64.mov rcx, [rbp-176]
-    x64.mov rdx, [rbp-168]
-    x64.call Matrix.push
-    x64.mov rax, [rbp-176]
-    x64.mov rcx, [rbp-176]
+    x64.mov rax, [rbp+-776]
+    x64.call Array.push
+    x64.mov rcx, [rbp+-800]
+    x64.call Array.create
+    x64.mov [rbp+-744], r8
+    x64.mov rcx, [rbp+-744]
+    x64.mov rdx, [rbp+-824]
+    x64.mov rax, [rbp+-808]
+    x64.call Array.push
+    x64.mov r8, [rbp+-744]
+    x64.mov rdx, r12
+    x64.mov rcx, [rbp+-744]
+    x64.mov rax, [rbp+-816]
+    x64.call Array.push
+    x64.mov r8, [rbp+-744]
+    x64.mov rcx, [rbp+-744]
     x64.call matrix_total
-    x64.mov rcx, [rbp-544]
-    x64.add rcx, rax
-    x64.mov [rbp-552], rcx
-    x64.xor ecx, ecx
+    x64.mov r12, r8
+    x64.mov rcx, [rbp+-744]
+    x64.call __mm_decref_maybenull_helper
     x64.xor edx, edx
-    x64.call Point.create
-    x64.mov [rbp-184], rax
-    x64.mov rax, [rbp-184]
-    x64.mov rcx, [rbp-184]
-    x64.call sum_point
-    x64.mov rcx, [rbp-552]
-    x64.add rcx, rax
-    x64.mov rax, [rbp-184]
-    x64.mov [rbp-560], rcx
-    x64.mov rcx, [rbp-184]
-    x64.call sum_point
-    x64.mov rcx, [rbp-560]
-    x64.add rcx, rax
-    x64.mov [rbp-568], rcx
-    x64.mov rcx, 10
-    x64.mov rdx, 20
-    x64.call make_point
-    x64.mov [rbp-192], rax
-    x64.mov rax, [rbp-192]
-    x64.mov rcx, [rax+0]
-    x64.mov rax, [rbp-568]
-    x64.add rax, rcx
-    x64.lea_rdata rcx, [__str_0]
-    x64.mov rdx, rcx
-    x64.mov rcx, 5
-    x64.lea_func rbx, [__destruct_String]
-    x64.mov rsi, rbx
-    x64.mov [rbp-576], rax
-    x64.mov [rbp-584], rdx
-    x64.mov rdx, rsi
-    x64.mov rcx, 16
-    x64.mov r8, 6
-    x64.call mm_alloc
-    x64.mov [rbp-200], rax
-    x64.lea_func rax, [__destruct___ManagedMemory]
-    x64.mov rcx, rax
-    x64.mov rdx, rcx
-    x64.mov rcx, 40
-    x64.mov r8, 7
-    x64.call mm_alloc
-    x64.mov [rbp-208], rax
-    x64.mov rax, -2
-    x64.mov rcx, 1
+    x64.mov ecx, 16
+    x64.call stdlib.__mm_alloc
+    x64.mov [rbp+-744], r8
+    x64.mov r8, [rbp+-744]
+    x64.mov r9, [rbp+-912]
+    x64.mov [r8+0], r9 (8b)
+    x64.mov [r8+8], r9 (8b)
+    x64.mov r9, [r8+8] (8b)
+    x64.mov [rbp+-760], r9
+    x64.mov r9, [r8+0] (8b)
+    x64.mov [rbp+-768], r9
+    x64.mov r9, [r8+8] (8b)
+    x64.mov [rbp+-776], r9
+    x64.mov r9, [r8+0] (8b)
+    x64.mov [rbp+-800], r9
+    x64.mov rcx, [rbp+-744]
+    x64.call mm_drop
+    x64.mov r8, [rbp+-744]
     x64.xor edx, edx
-    x64.mov rbx, [rbp-208]
-    x64.mov rsi, [rbp-584]
-    x64.mov [rbx+0], rsi
-    x64.mov rbx, [rbp-208]
+    x64.mov ecx, 16
+    x64.mov r8d, 10
+    x64.mov r8d, 20
+    x64.call stdlib.__mm_alloc
+    x64.mov [rbp+-744], r8
+    x64.mov r8, 10
+    x64.mov r9, [rbp+-744]
+    x64.mov [r9+0], r8 (8b)
+    x64.mov r8, 20
+    x64.mov [r9+8], r8 (8b)
+    x64.mov r8, [r9+0] (8b)
+    x64.mov [rbp+-808], r8
+    x64.mov rcx, [rbp+-744]
+    x64.call mm_drop
+    x64.mov r8, [rbp+-744]
+    x64.lea rdx, [rip+stdlib.__destruct___ManagedMemory]
+    x64.lea r8, [rip+__istr_2]
+    x64.mov [rbp+-744], r8
+    x64.lea r8, [rip+__destruct_String]
+    x64.mov [rbp+-816], r8
+    x64.lea r8, [rip+__destruct_Person]
+    x64.mov [rbp+-824], r8
+    x64.mov r8d, 16
+    x64.mov r8d, 30
+    x64.lea r8, [rip+stdlib.__destruct___ManagedMemory]
+    x64.mov [rbp+-832], r8
+    x64.lea r8, [rip+__istr_3]
+    x64.mov [rbp+-840], r8
+    x64.lea r8, [rip+__destruct_String]
+    x64.mov [rbp+-848], r8
+    x64.mov rcx, 48
+    x64.call mrt_alloc_with_dtor
+    x64.mov [rbp+-856], r8
+    x64.mov r8, [rbp+-856]
+    x64.mov r9, [rbp+-912]
+    x64.mov [r8+40], r9 (8b)
+    x64.mov rsi, [rbp+-744]
+    x64.mov [r8+0], rsi (8b)
     x64.mov rsi, 5
-    x64.mov [rbx+8], rsi
-    x64.mov rbx, [rbp-208]
-    x64.mov [rbx+16], rax
-    x64.mov rax, [rbp-208]
-    x64.mov [rax+24], rcx
-    x64.mov rax, [rbp-208]
-    x64.mov [rax+32], rdx
-    x64.mov rax, [rbp-208]
-    x64.mov rcx, [rbp-200]
-    x64.mov [rcx+0], rax
-    x64.mov rax, [rbp-208]
-    x64.mov rcx, [rbp-208]
-    x64.call mm_incref
-    x64.mov rax, 1
-    x64.mov rcx, [rbp-200]
-    x64.mov [rcx+8], rax
-    x64.mov rax, [rbp-200]
-    x64.mov rcx, [rbp-200]
-    x64.call mm_incref
-    x64.mov rax, [rbp-200]
-    x64.mov rcx, [rbp-200]
-    x64.mov rdx, 30
-    x64.call Person.create
-    x64.mov [rbp-216], rax
-    x64.lea_rdata rax, [__str_1]
-    x64.mov rcx, rax
-    x64.mov rax, 3
-    x64.lea_func rdx, [__destruct_String]
-    x64.mov rbx, rdx
-    x64.mov [rbp-592], rcx
-    x64.mov rdx, rbx
+    x64.mov [r8+8], rsi (8b)
+    x64.mov rsi, -2
+    x64.mov [r8+16], rsi (8b)
+    x64.mov [r8+24], r13 (8b)
+    x64.mov [r8+32], r9 (8b)
     x64.mov rcx, 16
-    x64.mov r8, 6
-    x64.call mm_alloc
-    x64.mov [rbp-224], rax
-    x64.lea_func rax, [__destruct___ManagedMemory]
-    x64.mov rcx, rax
-    x64.mov rdx, rcx
-    x64.mov rcx, 40
-    x64.mov r8, 7
-    x64.call mm_alloc
-    x64.mov [rbp-232], rax
-    x64.mov rax, -2
-    x64.mov rcx, 1
-    x64.xor edx, edx
-    x64.mov rbx, [rbp-232]
-    x64.mov rsi, [rbp-592]
-    x64.mov [rbx+0], rsi
-    x64.mov rbx, [rbp-232]
+    x64.mov rdx, [rbp+-816]
+    x64.call stdlib.__mm_alloc
+    x64.mov [rbp+-744], r8
+    x64.mov rcx, [rbp+-744]
+    x64.call stdlib.__mm_incref
+    x64.mov r8, [rbp+-744]
+    x64.mov r8, [rbp+-856]
+    x64.mov r9, [rbp+-744]
+    x64.mov [r9+0], r8 (8b)
+    x64.mov [r9+8], r13 (8b)
+    x64.mov rcx, 16
+    x64.mov rdx, [rbp+-824]
+    x64.call stdlib.__mm_alloc
+    x64.mov [rbp+-816], r8
+    x64.mov r8, [rbp+-744]
+    x64.mov r9, [rbp+-816]
+    x64.mov [r9+0], r8 (8b)
+    x64.mov r8, 30
+    x64.mov [r9+8], r8 (8b)
+    x64.mov rcx, 48
+    x64.mov rdx, [rbp+-832]
+    x64.call mrt_alloc_with_dtor
+    x64.mov [rbp+-744], r8
+    x64.mov r8, [rbp+-744]
+    x64.mov r9, [rbp+-912]
+    x64.mov [r8+40], r9 (8b)
+    x64.mov rsi, [rbp+-840]
+    x64.mov [r8+0], rsi (8b)
     x64.mov rsi, 3
-    x64.mov [rbx+8], rsi
-    x64.mov rbx, [rbp-232]
-    x64.mov [rbx+16], rax
-    x64.mov rax, [rbp-232]
-    x64.mov [rax+24], rcx
-    x64.mov rax, [rbp-232]
-    x64.mov [rax+32], rdx
-    x64.mov rax, [rbp-232]
-    x64.mov rcx, [rbp-224]
-    x64.mov [rcx+0], rax
-    x64.mov rax, [rbp-232]
-    x64.mov rcx, [rbp-232]
-    x64.call mm_incref
-    x64.mov rax, 1
-    x64.mov rcx, [rbp-224]
-    x64.mov [rcx+8], rax
-    x64.mov rax, [rbp-224]
-    x64.mov rcx, [rbp-224]
-    x64.call mm_incref
-    x64.mov rax, [rbp-224]
-    x64.mov rcx, [rbp-216]
-    x64.mov rdx, [rcx+0]
-    x64.mov [rbp-600], rdx
-    x64.test rdx, rdx
-    x64.jz __nonnull_skip_2
-    x64.mov rcx, [rbp-600]
-    x64.call mm_decref
-    x64.label __nonnull_skip_2
-    x64.mov rax, [rbp-216]
-    x64.mov rcx, [rbp-224]
-    x64.mov [rax+0], rcx
-    x64.call mm_incref
-    x64.lea_rdata rax, [__str_2]
-    x64.mov rcx, rax
-    x64.mov rax, 5
-    x64.lea_func rdx, [__destruct_String]
-    x64.mov rbx, rdx
-    x64.mov [rbp-608], rcx
-    x64.mov rdx, rbx
+    x64.mov [r8+8], rsi (8b)
+    x64.mov rsi, -2
+    x64.mov [r8+16], rsi (8b)
+    x64.mov [r8+24], r13 (8b)
+    x64.mov [r8+32], r9 (8b)
     x64.mov rcx, 16
-    x64.mov r8, 6
-    x64.call mm_alloc
-    x64.mov [rbp-240], rax
-    x64.lea_func rax, [__destruct___ManagedMemory]
-    x64.mov rcx, rax
-    x64.mov rdx, rcx
-    x64.mov rcx, 40
-    x64.mov r8, 7
-    x64.call mm_alloc
-    x64.mov [rbp-248], rax
-    x64.mov rax, -2
-    x64.mov rcx, 1
-    x64.xor edx, edx
-    x64.mov rbx, [rbp-248]
-    x64.mov rsi, [rbp-608]
-    x64.mov [rbx+0], rsi
-    x64.mov rbx, [rbp-248]
+    x64.mov rdx, [rbp+-848]
+    x64.call stdlib.__mm_alloc
+    x64.mov [rbp+-824], r8
+    x64.mov rcx, [rbp+-824]
+    x64.call stdlib.__mm_incref
+    x64.mov r8, [rbp+-824]
+    x64.mov r8, [rbp+-744]
+    x64.mov r9, [rbp+-824]
+    x64.mov [r9+0], r8 (8b)
+    x64.mov [r9+8], r13 (8b)
+    x64.mov r8, [rbp+-816]
+    x64.mov rcx, [r8+0] (8b)
+    x64.lea r8, [rip+stdlib.__destruct___ManagedMemory]
+    x64.mov [rbp+-744], r8
+    x64.lea r8, [rip+__istr_4]
+    x64.mov [rbp+-832], r8
+    x64.lea r8, [rip+__destruct_String]
+    x64.mov [rbp+-840], r8
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r8, [rbp+-824]
+    x64.mov r9, [rbp+-816]
+    x64.mov [r9+0], r8 (8b)
+    x64.mov rcx, 48
+    x64.mov rdx, [rbp+-744]
+    x64.call mrt_alloc_with_dtor
+    x64.mov [rbp+-744], r8
+    x64.mov r8, [rbp+-744]
+    x64.mov r9, [rbp+-912]
+    x64.mov [r8+40], r9 (8b)
+    x64.mov rsi, [rbp+-832]
+    x64.mov [r8+0], rsi (8b)
     x64.mov rsi, 5
-    x64.mov [rbx+8], rsi
-    x64.mov rbx, [rbp-248]
-    x64.mov [rbx+16], rax
-    x64.mov rax, [rbp-248]
-    x64.mov [rax+24], rcx
-    x64.mov rax, [rbp-248]
-    x64.mov [rax+32], rdx
-    x64.mov rax, [rbp-248]
-    x64.mov rcx, [rbp-240]
-    x64.mov [rcx+0], rax
-    x64.mov rax, [rbp-248]
-    x64.mov rcx, [rbp-248]
-    x64.call mm_incref
-    x64.mov rax, 1
-    x64.mov rcx, [rbp-240]
-    x64.mov [rcx+8], rax
-    x64.mov rax, [rbp-240]
-    x64.mov rcx, [rbp-240]
-    x64.call mm_incref
-    x64.mov rax, [rbp-240]
-    x64.mov rcx, [rbp-216]
-    x64.mov rdx, [rcx+0]
-    x64.mov [rbp-616], rdx
-    x64.test rdx, rdx
-    x64.jz __nonnull_skip_3
-    x64.mov rcx, [rbp-616]
-    x64.call mm_decref
-    x64.label __nonnull_skip_3
-    x64.mov rax, [rbp-216]
-    x64.mov rcx, [rbp-240]
-    x64.mov [rax+0], rcx
-    x64.call mm_incref
-    x64.mov rax, [rbp-216]
-    x64.mov rcx, [rax+8]
-    x64.mov rax, [rbp-576]
-    x64.add rax, rcx
-    x64.lea_rdata rcx, [__str_3]
-    x64.mov rdx, rcx
-    x64.mov rcx, 4
-    x64.lea_func rbx, [__destruct_String]
-    x64.mov rsi, rbx
-    x64.mov [rbp-624], rax
-    x64.mov [rbp-632], rdx
-    x64.mov rdx, rsi
+    x64.mov [r8+8], rsi (8b)
+    x64.mov rsi, -2
+    x64.mov [r8+16], rsi (8b)
+    x64.mov [r8+24], r13 (8b)
+    x64.mov [r8+32], r9 (8b)
     x64.mov rcx, 16
-    x64.mov r8, 6
-    x64.call mm_alloc
-    x64.mov [rbp-256], rax
-    x64.lea_func rax, [__destruct___ManagedMemory]
-    x64.mov rcx, rax
-    x64.mov rdx, rcx
-    x64.mov rcx, 40
-    x64.mov r8, 7
-    x64.call mm_alloc
-    x64.mov [rbp-264], rax
-    x64.mov rax, -2
-    x64.mov rcx, 1
-    x64.xor edx, edx
-    x64.mov rbx, [rbp-264]
-    x64.mov rsi, [rbp-632]
-    x64.mov [rbx+0], rsi
-    x64.mov rbx, [rbp-264]
+    x64.mov rdx, [rbp+-840]
+    x64.call stdlib.__mm_alloc
+    x64.mov [rbp+-824], r8
+    x64.mov rcx, [rbp+-824]
+    x64.call stdlib.__mm_incref
+    x64.mov r8, [rbp+-824]
+    x64.mov r8, [rbp+-744]
+    x64.mov r9, [rbp+-824]
+    x64.mov [r9+0], r8 (8b)
+    x64.mov [r9+8], r13 (8b)
+    x64.mov r8, [rbp+-816]
+    x64.mov rcx, [r8+0] (8b)
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r8, [rbp+-824]
+    x64.mov r9, [rbp+-816]
+    x64.mov [r9+0], r8 (8b)
+    x64.mov r8, [r9+8] (8b)
+    x64.mov [rbp+-824], r8
+    x64.mov rcx, [rbp+-816]
+    x64.call mm_drop
+    x64.mov r8, [rbp+-816]
+    x64.lea rdx, [rip+stdlib.__destruct___ManagedMemory]
+    x64.lea r8, [rip+__istr_5]
+    x64.mov [rbp+-744], r8
+    x64.mov r8d, 4
+    x64.lea r8, [rip+__destruct_String]
+    x64.mov [rbp+-816], r8
+    x64.lea r8, [rip+__destruct_Shape]
+    x64.mov [rbp+-832], r8
+    x64.mov r8d, 16
+    x64.xor r8d, r8d
+    x64.mov [rbp+-840], r8
+    x64.lea r8, [rip+stdlib.__destruct___ManagedMemory]
+    x64.mov [rbp+-848], r8
+    x64.lea r8, [rip+__istr_6]
+    x64.mov [rbp+-856], r8
+    x64.lea r8, [rip+__destruct_String]
+    x64.mov [rbp+-864], r8
+    x64.lea r8, [rip+__destruct_Shape]
+    x64.mov [rbp+-872], r8
+    x64.mov r8d, 16
+    x64.mov r8d, 1
+    x64.lea r8, [rip+__destruct_Shape]
+    x64.mov [rbp+-880], r8
+    x64.mov r8d, 16
+    x64.mov r8d, 2
+    x64.xor r8d, r8d
+    x64.mov [rbp+-888], r8
+    x64.mov rcx, 48
+    x64.call mrt_alloc_with_dtor
+    x64.mov [rbp+-896], r8
+    x64.mov r8, [rbp+-896]
+    x64.mov r9, [rbp+-912]
+    x64.mov [r8+40], r9 (8b)
+    x64.mov rsi, [rbp+-744]
+    x64.mov [r8+0], rsi (8b)
     x64.mov rsi, 4
-    x64.mov [rbx+8], rsi
-    x64.mov rbx, [rbp-264]
-    x64.mov [rbx+16], rax
-    x64.mov rax, [rbp-264]
-    x64.mov [rax+24], rcx
-    x64.mov rax, [rbp-264]
-    x64.mov [rax+32], rdx
-    x64.mov rax, [rbp-264]
-    x64.mov rcx, [rbp-256]
-    x64.mov [rcx+0], rax
-    x64.mov rax, [rbp-264]
-    x64.mov rcx, [rbp-264]
-    x64.call mm_incref
-    x64.mov rax, 1
-    x64.mov rcx, [rbp-256]
-    x64.mov [rcx+8], rax
-    x64.mov rax, [rbp-256]
-    x64.mov rcx, [rbp-256]
-    x64.call mm_incref
-    x64.lea_func rax, [__destruct_Shape]
-    x64.mov rcx, rax
-    x64.mov rdx, rcx
+    x64.mov [r8+8], rsi (8b)
+    x64.mov rsi, -2
+    x64.mov [r8+16], rsi (8b)
+    x64.mov [r8+24], r13 (8b)
+    x64.mov [r8+32], r9 (8b)
     x64.mov rcx, 16
-    x64.mov r8, 8
-    x64.call mm_alloc
-    x64.mov [rbp-272], rax
-    x64.xor ecx, ecx
-    x64.mov [rax+0], rcx
-    x64.mov rcx, [rbp-256]
-    x64.mov [rax+8], rcx
-    x64.call mm_incref
-    x64.mov rax, [rbp-272]
-    x64.mov rcx, [rbp-272]
-    x64.call mm_incref
-    x64.lea_rdata rax, [__str_4]
-    x64.mov rcx, rax
-    x64.mov rax, 3
-    x64.lea_func rdx, [__destruct_String]
-    x64.mov rbx, rdx
-    x64.mov [rbp-640], rcx
-    x64.mov rdx, rbx
+    x64.mov rdx, [rbp+-816]
+    x64.call stdlib.__mm_alloc
+    x64.mov [rbp+-744], r8
+    x64.mov rcx, [rbp+-744]
+    x64.call stdlib.__mm_incref
+    x64.mov r8, [rbp+-744]
+    x64.mov r8, [rbp+-896]
+    x64.mov r9, [rbp+-744]
+    x64.mov [r9+0], r8 (8b)
+    x64.mov [r9+8], r13 (8b)
     x64.mov rcx, 16
-    x64.mov r8, 6
-    x64.call mm_alloc
-    x64.mov [rbp-280], rax
-    x64.lea_func rax, [__destruct___ManagedMemory]
-    x64.mov rcx, rax
-    x64.mov rdx, rcx
-    x64.mov rcx, 40
-    x64.mov r8, 7
-    x64.call mm_alloc
-    x64.mov [rbp-288], rax
-    x64.mov rax, -2
-    x64.mov rcx, 1
-    x64.xor edx, edx
-    x64.mov rbx, [rbp-288]
-    x64.mov rsi, [rbp-640]
-    x64.mov [rbx+0], rsi
-    x64.mov rbx, [rbp-288]
+    x64.mov rdx, [rbp+-832]
+    x64.call stdlib.__mm_alloc
+    x64.mov [rbp+-816], r8
+    x64.mov r8, [rbp+-840]
+    x64.mov r9, [rbp+-816]
+    x64.mov [r9+0], r8 (8b)
+    x64.mov r8, [rbp+-744]
+    x64.mov [r9+8], r8 (8b)
+    x64.mov rcx, 48
+    x64.mov rdx, [rbp+-848]
+    x64.call mrt_alloc_with_dtor
+    x64.mov [rbp+-744], r8
+    x64.mov r8, [rbp+-744]
+    x64.mov r9, [rbp+-912]
+    x64.mov [r8+40], r9 (8b)
+    x64.mov rsi, [rbp+-856]
+    x64.mov [r8+0], rsi (8b)
     x64.mov rsi, 3
-    x64.mov [rbx+8], rsi
-    x64.mov rbx, [rbp-288]
-    x64.mov [rbx+16], rax
-    x64.mov rax, [rbp-288]
-    x64.mov [rax+24], rcx
-    x64.mov rax, [rbp-288]
-    x64.mov [rax+32], rdx
-    x64.mov rax, [rbp-288]
-    x64.mov rcx, [rbp-280]
-    x64.mov [rcx+0], rax
-    x64.mov rax, [rbp-288]
-    x64.mov rcx, [rbp-288]
-    x64.call mm_incref
-    x64.mov rax, 1
-    x64.mov rcx, [rbp-280]
-    x64.mov [rcx+8], rax
-    x64.mov rax, [rbp-280]
-    x64.mov rcx, [rbp-280]
-    x64.call mm_incref
-    x64.lea_func rax, [__destruct_Shape]
-    x64.mov rcx, rax
-    x64.mov rdx, rcx
+    x64.mov [r8+8], rsi (8b)
+    x64.mov rsi, -2
+    x64.mov [r8+16], rsi (8b)
+    x64.mov [r8+24], r13 (8b)
+    x64.mov [r8+32], r9 (8b)
     x64.mov rcx, 16
-    x64.mov r8, 8
-    x64.call mm_alloc
-    x64.mov [rbp-296], rax
-    x64.mov rcx, 1
-    x64.mov [rax+0], rcx
-    x64.mov rcx, [rbp-280]
-    x64.mov [rax+8], rcx
-    x64.call mm_incref
-    x64.mov rax, [rbp-296]
-    x64.mov rcx, [rbp-296]
-    x64.call mm_incref
-    x64.lea_func rax, [__destruct_Shape]
-    x64.mov rcx, rax
-    x64.mov rdx, rcx
+    x64.mov rdx, [rbp+-864]
+    x64.call stdlib.__mm_alloc
+    x64.mov [rbp+-832], r8
+    x64.mov rcx, [rbp+-832]
+    x64.call stdlib.__mm_incref
+    x64.mov r8, [rbp+-832]
+    x64.mov r8, [rbp+-744]
+    x64.mov r9, [rbp+-832]
+    x64.mov [r9+0], r8 (8b)
+    x64.mov [r9+8], r13 (8b)
     x64.mov rcx, 16
-    x64.mov r8, 8
-    x64.call mm_alloc
-    x64.mov [rbp-304], rax
-    x64.mov rcx, 2
-    x64.mov [rax+0], rcx
-    x64.xor ecx, ecx
-    x64.mov [rax+8], rcx
-    x64.mov rax, [rbp-304]
-    x64.mov rcx, [rbp-304]
-    x64.call mm_incref
-    x64.mov rax, [rbp-272]
-    x64.mov rcx, [rbp-272]
-    x64.call describe
-    x64.mov rcx, [rbp-624]
-    x64.add rcx, rax
-    x64.mov rax, [rbp-296]
-    x64.mov [rbp-648], rcx
-    x64.mov rcx, [rbp-296]
-    x64.call describe
-    x64.mov rcx, [rbp-648]
-    x64.add rcx, rax
-    x64.mov rax, [rbp-304]
-    x64.mov [rbp-656], rcx
-    x64.mov rcx, [rbp-304]
-    x64.call describe
-    x64.mov rcx, [rbp-656]
-    x64.add rcx, rax
-    x64.lea_rdata rax, [__str_5]
-    x64.mov rdx, rax
-    x64.mov rax, 4
-    x64.lea_func rbx, [__destruct_String]
-    x64.mov rsi, rbx
-    x64.mov [rbp-664], rcx
-    x64.mov [rbp-672], rdx
-    x64.mov rdx, rsi
+    x64.mov rdx, [rbp+-872]
+    x64.call stdlib.__mm_alloc
+    x64.mov [rbp+-744], r8
+    x64.mov r8, 1
+    x64.mov r9, [rbp+-744]
+    x64.mov [r9+0], r8 (8b)
+    x64.mov r8, [rbp+-832]
+    x64.mov [r9+8], r8 (8b)
     x64.mov rcx, 16
-    x64.mov r8, 6
-    x64.call mm_alloc
-    x64.mov [rbp-312], rax
-    x64.lea_func rcx, [__destruct___ManagedMemory]
-    x64.mov rdx, rcx
-    x64.mov rcx, 40
-    x64.mov r8, 7
-    x64.call mm_alloc
-    x64.mov [rbp-320], rax
-    x64.mov rax, -2
-    x64.mov rcx, 1
-    x64.xor edx, edx
-    x64.mov rbx, [rbp-320]
-    x64.mov rsi, [rbp-672]
-    x64.mov [rbx+0], rsi
-    x64.mov rbx, [rbp-320]
+    x64.mov rdx, [rbp+-880]
+    x64.call stdlib.__mm_alloc
+    x64.mov [rbp+-832], r8
+    x64.mov r8, 2
+    x64.mov r9, [rbp+-832]
+    x64.mov [r9+0], r8 (8b)
+    x64.mov r8, [rbp+-888]
+    x64.mov [r9+8], r8 (8b)
+    x64.mov rcx, [rbp+-816]
+    x64.call describe
+    x64.mov [rbp+-840], r8
+    x64.mov rcx, [rbp+-816]
+    x64.call mm_drop
+    x64.mov r8, [rbp+-816]
+    x64.mov rcx, [rbp+-744]
+    x64.call describe
+    x64.mov [rbp+-816], r8
+    x64.mov rcx, [rbp+-744]
+    x64.call mm_drop
+    x64.mov r8, [rbp+-744]
+    x64.mov rcx, [rbp+-832]
+    x64.call describe
+    x64.mov [rbp+-848], r8
+    x64.mov rcx, [rbp+-832]
+    x64.call mm_drop
+    x64.mov r8, [rbp+-832]
+    x64.lea rdx, [rip+stdlib.__destruct___ManagedMemory]
+    x64.lea r8, [rip+__istr_7]
+    x64.mov [rbp+-744], r8
+    x64.mov r8d, 4
+    x64.lea r8, [rip+__destruct_String]
+    x64.mov [rbp+-832], r8
+    x64.mov rcx, 48
+    x64.call mrt_alloc_with_dtor
+    x64.mov [rbp+-856], r8
+    x64.mov r8, [rbp+-856]
+    x64.mov r9, [rbp+-912]
+    x64.mov [r8+40], r9 (8b)
+    x64.mov rsi, [rbp+-744]
+    x64.mov [r8+0], rsi (8b)
     x64.mov rsi, 4
-    x64.mov [rbx+8], rsi
-    x64.mov rbx, [rbp-320]
-    x64.mov [rbx+16], rax
-    x64.mov rax, [rbp-320]
-    x64.mov [rax+24], rcx
-    x64.mov rax, [rbp-320]
-    x64.mov [rax+32], rdx
-    x64.mov rax, [rbp-320]
-    x64.mov rcx, [rbp-312]
-    x64.mov [rcx+0], rax
-    x64.mov rax, [rbp-320]
-    x64.mov rcx, [rbp-320]
-    x64.call mm_incref
-    x64.mov rax, 1
-    x64.mov rcx, [rbp-312]
-    x64.mov [rcx+8], rax
-    x64.mov rax, [rbp-312]
-    x64.mov rcx, [rbp-312]
-    x64.call mm_incref
-    x64.mov rax, [rbp-312]
-    x64.mov [rbp-8], rax
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rbp-8]
-    x64.call mm_incref
-    x64.lea_func rax, [_$closure_0]
-    x64.mov [rbp-680], rax
+    x64.mov [r8+8], rsi (8b)
+    x64.mov rsi, -2
+    x64.mov [r8+16], rsi (8b)
+    x64.mov [r8+24], r13 (8b)
+    x64.mov [r8+32], r9 (8b)
+    x64.mov rcx, 16
+    x64.mov rdx, [rbp+-832]
+    x64.call stdlib.__mm_alloc
+    x64.mov [rbp+-744], r8
+    x64.mov rcx, [rbp+-744]
+    x64.call stdlib.__mm_incref
+    x64.mov r8, [rbp+-744]
+    x64.mov r8, [rbp+-856]
+    x64.mov r9, [rbp+-744]
+    x64.mov [r9+0], r8 (8b)
+    x64.mov [r9+8], r13 (8b)
+    x64.mov rcx, [rbp-128]
+    x64.mov r8d, 8
+    x64.lea rax, [rbp-128]
+    x64.mov r8, [rbp-208]
+    x64.mov [rbp+-832], r8
+    x64.mov r8d, 7
+    x64.lea r8, [rip+main$closure_0]
+    x64.mov [rbp+-856], r8
+    x64.mov r8d, 8
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r8, [rbp+-744]
+    x64.mov [rbp-128], r8
     x64.mov rcx, 8
-    x64.xor edx, edx
-    x64.mov r8, 9
-    x64.call mm_alloc
-    x64.lea rcx, [rbp-8]
-    x64.mov rdx, rcx
-    x64.mov [rax+0], rdx
-    x64.mov [rbp-328], rax
-    x64.mov rcx, [rbp-328]
-    x64.call mm_incref
-    x64.mov rax, [rbp-328]
-    x64.mov rcx, [rbp-680]
-    x64.mov rdx, [rbp-328]
-    x64.mov r8, 7
-    x64.call apply
-    x64.mov rcx, [rbp-664]
-    x64.add rcx, rax
-    x64.mov rax, [rbp-328]
-    x64.mov [rbp-688], rcx
-    x64.mov rcx, [rbp-680]
-    x64.mov rdx, [rbp-328]
-    x64.mov r8, 8
-    x64.call apply
-    x64.mov rcx, [rbp-688]
-    x64.add rcx, rax
-    x64.mov [rbp-696], rcx
-    x64.call PointArray.create
-    x64.mov [rbp-336], rax
-    x64.mov rcx, 1
-    x64.mov rdx, 2
-    x64.call Point.create
-    x64.mov [rbp-344], rax
-    x64.mov rax, [rbp-336]
-    x64.mov rcx, [rbp-344]
-    x64.mov rcx, [rbp-336]
-    x64.mov rdx, [rbp-344]
-    x64.call PointArray.push
-    x64.mov rcx, 3
-    x64.mov rdx, 4
-    x64.call Point.create
-    x64.mov [rbp-352], rax
-    x64.mov rax, [rbp-336]
-    x64.mov rcx, [rbp-352]
-    x64.mov rcx, [rbp-336]
-    x64.mov rdx, [rbp-352]
-    x64.call PointArray.push
-    x64.mov rcx, 5
-    x64.mov rdx, 6
-    x64.call Point.create
-    x64.mov [rbp-360], rax
-    x64.mov rax, [rbp-336]
-    x64.mov rcx, [rbp-360]
-    x64.mov rcx, [rbp-336]
-    x64.mov rdx, [rbp-360]
-    x64.call PointArray.push
-    x64.mov rax, [rbp-336]
-    x64.mov rcx, [rbp-336]
-    x64.call points_x_sum
-    x64.mov rcx, [rbp-696]
-    x64.add rcx, rax
-    x64.mov [rbp-48], rcx
-    x64.call PointArray.create
-    x64.mov [rbp-368], rax
+    x64.mov rdx, [rbp+-912]
+    x64.call stdlib.__mm_alloc
+    x64.mov [rbp+-744], r8
+    x64.mov r8, [rbp+-832]
+    x64.mov r9, [rbp+-744]
+    x64.mov [r9+0], r8 (8b)
     x64.mov rcx, 7
-    x64.mov rdx, 8
-    x64.call Point.create
-    x64.mov [rbp-376], rax
-    x64.mov rax, [rbp-368]
-    x64.mov rcx, [rbp-376]
-    x64.mov rcx, [rbp-368]
-    x64.mov rdx, [rbp-376]
-    x64.call PointArray.push
-    x64.mov rcx, 9
-    x64.mov rdx, 10
-    x64.call Point.create
-    x64.mov [rbp-384], rax
-    x64.mov rax, [rbp-368]
-    x64.mov rcx, [rbp-384]
-    x64.mov rcx, [rbp-368]
-    x64.mov rdx, [rbp-384]
-    x64.call PointArray.push
-    x64.mov rcx, 11
-    x64.mov rdx, 12
-    x64.call Point.create
-    x64.mov [rbp-392], rax
-    x64.mov rax, [rbp-368]
-    x64.mov rcx, [rbp-392]
-    x64.mov rcx, [rbp-368]
-    x64.mov rdx, [rbp-392]
-    x64.call PointArray.push
-    x64.xor eax, eax
-    x64.mov rcx, 3
-    x64.mov [rbp-400], rcx
-    x64.mov [rbp-408], rax
-    x64.jmp main.alias_loop_0.header
-  alias_loop_0.header:
-    x64.mov rax, [rbp-408]
-    x64.mov rcx, [rbp-400]
-    x64.cmp rax, rcx
-    x64.jge main.alias_loop_0.exit
-  alias_loop_0:
-    x64.mov rax, [rbp-408]
-    x64.mov [rbp-416], rax
-    x64.mov rcx, [rbp-368]
-    x64.mov rdx, [rbp-416]
-    x64.call PointArray.get
-    x64.mov [rbp-424], rax
-    x64.xor eax, eax
-    x64.cmp rdx, rax
-    x64.je main.otherwise_continue_0
-  otherwise_error_0:
-    x64.mov rax, [rbp-416]
-    x64.lea_rdata rcx, [__interp_lit_1]
-    x64.mov rdx, rcx
-    x64.mov rbx, 75
-    x64.mov [rbp-544], rdx
-    x64.mov rcx, 21
-    x64.call mm_raw_alloc
-    x64.mov [rbp-432], rax
-    x64.mov rcx, [rbp-416]
-    x64.mov rdx, [rbp-432]
-    x64.call maxon_i64_to_string
-    x64.mov rsi, [rbp-432]
-    x64.lea_rdata rdi, [__interp_lit_2]
-    x64.mov r8, rdi
-    x64.mov r9, 21
-    x64.mov rcx, 75
-    x64.lea rdx, [rcx + rax]
-    x64.add rdx, r9
-    x64.lea_func rbx, [__destruct_String]
-    x64.mov rdi, rbx
-    x64.mov [rbp-552], rax
-    x64.mov [rbp-560], rdx
-    x64.mov [rbp-568], r8
-    x64.mov rdx, rdi
+    x64.mov rdx, [rbp+-744]
+    x64.mov r15, [rbp+-856]
+    x64.call r15
+    x64.mov [rbp+-832], r8
+    x64.mov rcx, 8
+    x64.mov rdx, [rbp+-744]
+    x64.mov r15, [rbp+-856]
+    x64.call r15
+    x64.mov [rbp+-856], r8
+    x64.mov rcx, [rbp+-744]
+    x64.call mm_drop
+    x64.mov r8, [rbp+-744]
+    x64.lea rcx, [rip+__layout_Array_Point]
+    x64.xor r8d, r8d
+    x64.mov [rbp+-744], r8
+    x64.mov r8d, 16
+    x64.mov r8d, 2
+    x64.lea r8, [rip+__layout_Array_Point]
+    x64.mov [rbp+-864], r8
+    x64.xor r8d, r8d
+    x64.mov [rbp+-872], r8
+    x64.mov r8d, 16
+    x64.mov r8d, 4
+    x64.lea r8, [rip+__layout_Array_Point]
+    x64.mov [rbp+-880], r8
+    x64.xor r8d, r8d
+    x64.mov [rbp+-888], r8
+    x64.mov r8d, 16
+    x64.mov r8d, 6
+    x64.lea r8, [rip+__layout_Array_Point]
+    x64.mov [rbp+-896], r8
+    x64.call Array.create
+    x64.mov [rbp+-904], r8
     x64.mov rcx, 16
+    x64.mov rdx, [rbp+-744]
+    x64.call stdlib.__mm_alloc
+    x64.mov [rbp+-744], r8
+    x64.mov rcx, [rbp+-744]
+    x64.call stdlib.__mm_incref
+    x64.mov r8, [rbp+-744]
+    x64.mov r8, [rbp+-744]
+    x64.mov [r8+0], r13 (8b)
+    x64.mov r9, 2
+    x64.mov [r8+8], r9 (8b)
+    x64.mov rcx, [rbp+-904]
+    x64.mov rdx, [rbp+-744]
+    x64.mov rax, [rbp+-864]
+    x64.call Array.push
+    x64.mov r8, [rbp+-904]
+    x64.mov rcx, 16
+    x64.mov rdx, [rbp+-872]
+    x64.call stdlib.__mm_alloc
+    x64.mov [rbp+-744], r8
+    x64.mov rcx, [rbp+-744]
+    x64.call stdlib.__mm_incref
+    x64.mov r8, [rbp+-744]
+    x64.mov r8, 3
+    x64.mov r9, [rbp+-744]
+    x64.mov [r9+0], r8 (8b)
+    x64.mov r8, 4
+    x64.mov [r9+8], r8 (8b)
+    x64.mov rcx, [rbp+-904]
+    x64.mov rdx, [rbp+-744]
+    x64.mov rax, [rbp+-880]
+    x64.call Array.push
+    x64.mov r8, [rbp+-904]
+    x64.mov rcx, 16
+    x64.mov rdx, [rbp+-888]
+    x64.call stdlib.__mm_alloc
+    x64.mov [rbp+-744], r8
+    x64.mov rcx, [rbp+-744]
+    x64.call stdlib.__mm_incref
+    x64.mov r8, [rbp+-744]
+    x64.mov r8, 5
+    x64.mov r9, [rbp+-744]
+    x64.mov [r9+0], r8 (8b)
     x64.mov r8, 6
-    x64.call mm_alloc
-    x64.mov [rbp-440], rax
-    x64.lea_func rax, [__destruct___ManagedMemory]
-    x64.mov rcx, rax
-    x64.mov rdx, rcx
-    x64.mov rcx, 40
-    x64.mov r8, 7
-    x64.call mm_alloc
-    x64.mov [rbp-448], rax
-    x64.mov rax, 1
-    x64.mov rcx, [rbp-560]
-    x64.lea rdx, [rcx + rax]
-    x64.mov rcx, rdx
-    x64.call mm_raw_alloc
-    x64.xor ecx, ecx
-    x64.mov [rbp-456], rcx
-    x64.mov [rbp-464], rax
-    x64.mov rax, [rbp-560]
-    x64.mov [rbp-472], rax
-    x64.mov rax, [rbp-544]
-    x64.mov [rbp-480], rax
-    x64.mov rax, 75
-    x64.mov [rbp-488], rax
-    x64.mov rax, [rbp-432]
-    x64.mov [rbp-496], rax
-    x64.mov rax, [rbp-552]
-    x64.mov [rbp-504], rax
-    x64.mov rax, [rbp-568]
-    x64.mov [rbp-512], rax
-    x64.mov rax, 21
-    x64.mov [rbp-520], rax
-    x64.mov rax, [rbp-464]
-    x64.mov rcx, [rbp-456]
-    x64.add rax, rcx
-    x64.mov rcx, [rbp-480]
-    x64.mov rdx, [rbp-488]
-    x64.mov rsi, rcx
-    x64.mov rdi, rax
-    x64.mov rcx, rdx
-    x64.rep_movsb
-    x64.mov rax, [rbp-456]
-    x64.mov rcx, [rbp-488]
-    x64.add rax, rcx
-    x64.mov [rbp-456], rax
-    x64.mov rax, [rbp-464]
-    x64.mov rcx, [rbp-456]
-    x64.add rax, rcx
-    x64.mov rcx, [rbp-496]
-    x64.mov rdx, [rbp-504]
-    x64.mov rsi, rcx
-    x64.mov rdi, rax
-    x64.mov rcx, rdx
-    x64.rep_movsb
-    x64.mov rax, [rbp-456]
-    x64.mov rcx, [rbp-504]
-    x64.add rax, rcx
-    x64.mov [rbp-456], rax
-    x64.mov rax, [rbp-464]
-    x64.mov rcx, [rbp-456]
-    x64.add rax, rcx
-    x64.mov rcx, [rbp-512]
-    x64.mov rdx, [rbp-520]
-    x64.mov rsi, rcx
-    x64.mov rdi, rax
-    x64.mov rcx, rdx
-    x64.rep_movsb
-    x64.mov rax, [rbp-464]
-    x64.mov rcx, [rbp-472]
-    x64.add rax, rcx
-    x64.xor ecx, ecx
-    x64.mov byte ptr [rax+0], rcxb
-    x64.mov rax, [rbp-432]
-    x64.mov rcx, [rbp-432]
-    x64.call mm_raw_free
-    x64.mov rax, [rbp-464]
-    x64.mov rcx, [rbp-472]
-    x64.mov rdx, 1
-    x64.xor ebx, ebx
-    x64.mov rsi, [rbp-448]
-    x64.mov [rsi+0], rax
-    x64.mov rax, [rbp-448]
-    x64.mov [rax+8], rcx
-    x64.mov rax, [rbp-448]
-    x64.mov [rax+16], rcx
-    x64.mov rax, [rbp-448]
-    x64.mov [rax+24], rdx
-    x64.mov rax, [rbp-448]
-    x64.mov [rax+32], rbx
-    x64.mov rax, [rbp-448]
-    x64.mov rcx, [rbp-440]
-    x64.mov [rcx+0], rax
-    x64.mov rax, [rbp-448]
-    x64.mov rcx, [rbp-448]
-    x64.call mm_incref
-    x64.xor eax, eax
-    x64.mov rcx, [rbp-440]
-    x64.mov [rcx+8], rax
-    x64.mov rax, [rbp-440]
-    x64.mov rcx, [rax+0]
-    x64.mov [rbp-528], rcx
-    x64.mov rax, [rbp-528]
-    x64.mov rcx, [rax+0]
-    x64.call mrt_panic
-  otherwise_continue_0:
-    x64.mov rax, [rbp-424]
-    x64.mov [rbp-536], rax
-    x64.mov rcx, [rbp-536]
-    x64.call sum_point
-    x64.mov rdx, [rbp-48]
-    x64.add rdx, rax
-    x64.mov [rbp-48], rdx
-    x64.mov rbx, [rbp-424]
-    x64.test rbx, rbx
-    x64.jz __nonnull_skip_4
-    x64.mov rcx, [rbp-424]
-    x64.call mm_decref
-    x64.label __nonnull_skip_4
-    x64.mov rsi, [rbp-328]
-    x64.test rsi, rsi
-    x64.jz __nonnull_skip_5
-    x64.mov rcx, [rbp-328]
-    x64.call mm_decref
-    x64.label __nonnull_skip_5
-    x64.xor edi, edi
-    x64.mov [rbp-328], rdi
-    x64.jmp main.alias_loop_0.incr
-  alias_loop_0.incr:
-    x64.mov rax, 1
-    x64.mov rcx, [rbp-408]
-    x64.add rcx, rax
-    x64.mov [rbp-408], rcx
-    x64.jmp main.alias_loop_0.header
-  alias_loop_0.exit:
-    x64.xor eax, eax
-    x64.mov rcx, [rbp-48]
-    x64.cmp rcx, rax
-    x64.jge main.guard_0.after
-  guard_0:
-    x64.mov rax, [rbp-392]
-    x64.test rax, rax
-    x64.jz __nonnull_skip_6
-    x64.mov rcx, [rbp-392]
-    x64.call mm_decref
-    x64.label __nonnull_skip_6
-    x64.mov rcx, [rbp-384]
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_7
-    x64.call mm_decref
-    x64.label __nonnull_skip_7
-    x64.mov rdx, [rbp-376]
+    x64.mov [r9+8], r8 (8b)
+    x64.mov rcx, [rbp+-904]
+    x64.mov rdx, [rbp+-744]
+    x64.mov rax, [rbp+-896]
+    x64.call Array.push
+    x64.mov r8, [rbp+-904]
+    x64.mov rcx, [rbp+-904]
+    x64.call points_x_sum
+    x64.mov [rbp+-864], r8
+    x64.mov rcx, [rbp+-904]
+    x64.call __mm_decref_maybenull_helper
+    x64.lea rcx, [rip+__layout_Array_Point]
+    x64.call Array.create
+    x64.mov [rbp+-744], r8
+    x64.xor edx, edx
+    x64.mov ecx, 16
+    x64.call stdlib.__mm_alloc
+    x64.mov [rbp+-872], r8
+    x64.mov rcx, [rbp+-872]
+    x64.call stdlib.__mm_incref
+    x64.mov r8, [rbp+-872]
+    x64.mov r8d, 7
+    x64.mov r9, [rbp+-872]
+    x64.mov [r9+0], r8 (8b)
+    x64.mov r8d, 8
+    x64.mov [r9+8], r8 (8b)
+    x64.lea rax, [rip+__layout_Array_Point]
+    x64.mov rcx, [rbp+-744]
+    x64.mov rdx, [rbp+-872]
+    x64.call Array.push
+    x64.mov r8, [rbp+-744]
+    x64.xor edx, edx
+    x64.mov ecx, 16
+    x64.call stdlib.__mm_alloc
+    x64.mov [rbp+-872], r8
+    x64.mov rcx, [rbp+-872]
+    x64.call stdlib.__mm_incref
+    x64.mov r8, [rbp+-872]
+    x64.mov r8d, 9
+    x64.mov r9, [rbp+-872]
+    x64.mov [r9+0], r8 (8b)
+    x64.mov r8d, 10
+    x64.mov [r9+8], r8 (8b)
+    x64.lea rax, [rip+__layout_Array_Point]
+    x64.mov rcx, [rbp+-744]
+    x64.mov rdx, [rbp+-872]
+    x64.call Array.push
+    x64.mov r8, [rbp+-744]
+    x64.xor edx, edx
+    x64.mov ecx, 16
+    x64.call stdlib.__mm_alloc
+    x64.mov [rbp+-872], r8
+    x64.mov rcx, [rbp+-872]
+    x64.call stdlib.__mm_incref
+    x64.mov r8, [rbp+-872]
+    x64.mov r8d, 11
+    x64.add r14, [rbp+-752]
+    x64.mov r9, [rbp+-872]
+    x64.mov [r9+0], r8 (8b)
+    x64.mov r8, [rbp+-800]
+    x64.add r8, [rbp+-776]
+    x64.add r14, r12
+    x64.mov rsi, [rbp+-768]
+    x64.add rsi, [rbp+-760]
+    x64.add r14, r8
+    x64.mov r8d, 12
+    x64.add r14, rsi
+    x64.mov [r9+8], r8 (8b)
+    x64.add r14, [rbp+-808]
+    x64.add r14, [rbp+-824]
+    x64.lea rax, [rip+__layout_Array_Point]
+    x64.add r14, [rbp+-840]
+    x64.mov rcx, [rbp+-744]
+    x64.mov rdx, [rbp+-872]
+    x64.call Array.push
+    x64.mov r8, [rbp+-744]
+    x64.add r14, [rbp+-816]
+    x64.add r14, [rbp+-848]
+    x64.add r14, [rbp+-832]
+    x64.add r14, [rbp+-856]
+    x64.add r14, [rbp+-864]
+    x64.mov rdx, [rbp+-912]
+    x64.mov r12, rdx
+  alias_loop_0.header:
+    x64.cmp r12, 3
+    x64.jge alias_loop_0.exit
+  inlined_Array.get_0_0:
+    x64.mov r8, [rbp+-744]
+    x64.mov rcx, [r8+0] (8b)
+    x64.mov rdx, r12
+    x64.call stdlib.__managed_mem_get
+    x64.mov [rbp+-784], r8
     x64.test rdx, rdx
-    x64.jz __nonnull_skip_8
-    x64.mov rcx, [rbp-376]
-    x64.call mm_decref
-    x64.label __nonnull_skip_8
-    x64.mov rbx, [rbp-360]
-    x64.test rbx, rbx
-    x64.jz __nonnull_skip_9
-    x64.mov rcx, [rbp-360]
-    x64.call mm_decref
-    x64.label __nonnull_skip_9
-    x64.mov rsi, [rbp-352]
-    x64.test rsi, rsi
-    x64.jz __nonnull_skip_10
-    x64.mov rcx, [rbp-352]
-    x64.call mm_decref
-    x64.label __nonnull_skip_10
-    x64.mov rdi, [rbp-344]
-    x64.test rdi, rdi
-    x64.jz __nonnull_skip_11
-    x64.mov rcx, [rbp-344]
-    x64.call mm_decref
-    x64.label __nonnull_skip_11
-    x64.mov r8, [rbp-312]
-    x64.test r8, r8
-    x64.jz __nonnull_skip_12
-    x64.mov rcx, [rbp-312]
-    x64.call mm_decref
-    x64.label __nonnull_skip_12
-    x64.mov r9, [rbp-280]
-    x64.test r9, r9
-    x64.jz __nonnull_skip_13
-    x64.mov rcx, [rbp-280]
-    x64.call mm_decref
-    x64.label __nonnull_skip_13
-    x64.mov rax, [rbp-256]
-    x64.test rax, rax
-    x64.jz __nonnull_skip_14
-    x64.mov rcx, [rbp-256]
-    x64.call mm_decref
-    x64.label __nonnull_skip_14
-    x64.mov rax, [rbp-240]
-    x64.test rax, rax
-    x64.jz __nonnull_skip_15
-    x64.mov rcx, [rbp-240]
-    x64.call mm_decref
-    x64.label __nonnull_skip_15
-    x64.mov rax, [rbp-224]
-    x64.test rax, rax
-    x64.jz __nonnull_skip_16
-    x64.mov rcx, [rbp-224]
-    x64.call mm_decref
-    x64.label __nonnull_skip_16
-    x64.mov rax, [rbp-200]
-    x64.test rax, rax
-    x64.jz __nonnull_skip_17
-    x64.mov rcx, [rbp-200]
-    x64.call mm_decref
-    x64.label __nonnull_skip_17
-    x64.mov rax, [rbp-40]
-    x64.test rax, rax
-    x64.jz __nonnull_skip_18
-    x64.mov rcx, [rbp-40]
-    x64.call mm_decref
-    x64.label __nonnull_skip_18
-    x64.mov rax, [rbp-32]
-    x64.test rax, rax
-    x64.jz __nonnull_skip_19
-    x64.mov rcx, [rbp-32]
-    x64.call mm_decref
-    x64.label __nonnull_skip_19
-    x64.mov rax, [rbp-368]
-    x64.test rax, rax
-    x64.jz __nonnull_skip_20
-    x64.mov rcx, [rbp-368]
-    x64.call mm_decref
-    x64.label __nonnull_skip_20
-    x64.mov rax, [rbp-336]
-    x64.test rax, rax
-    x64.jz __nonnull_skip_21
-    x64.mov rcx, [rbp-336]
-    x64.call mm_decref
-    x64.label __nonnull_skip_21
-    x64.mov rax, [rbp-8]
-    x64.test rax, rax
-    x64.jz __nonnull_skip_22
-    x64.mov rcx, [rbp-8]
-    x64.call mm_decref
-    x64.label __nonnull_skip_22
-    x64.xor eax, eax
-    x64.mov [rbp-8], rax
-    x64.mov rax, [rbp-304]
-    x64.test rax, rax
-    x64.jz __nonnull_skip_23
-    x64.mov rcx, [rbp-304]
-    x64.call mm_decref
-    x64.label __nonnull_skip_23
-    x64.mov rax, [rbp-296]
-    x64.test rax, rax
-    x64.jz __nonnull_skip_24
-    x64.mov rcx, [rbp-296]
-    x64.call mm_decref
-    x64.label __nonnull_skip_24
-    x64.mov rax, [rbp-272]
-    x64.test rax, rax
-    x64.jz __nonnull_skip_25
-    x64.mov rcx, [rbp-272]
-    x64.call mm_decref
-    x64.label __nonnull_skip_25
-    x64.mov rax, [rbp-216]
-    x64.test rax, rax
-    x64.jz __nonnull_skip_26
-    x64.mov rcx, [rbp-216]
-    x64.call mm_decref
-    x64.label __nonnull_skip_26
-    x64.mov rax, [rbp-192]
-    x64.test rax, rax
-    x64.jz __nonnull_skip_27
-    x64.mov rcx, [rbp-192]
-    x64.call mm_decref
-    x64.label __nonnull_skip_27
-    x64.mov rax, [rbp-184]
-    x64.test rax, rax
-    x64.jz __nonnull_skip_28
-    x64.mov rcx, [rbp-184]
-    x64.call mm_decref
-    x64.label __nonnull_skip_28
-    x64.mov rax, [rbp-176]
-    x64.test rax, rax
-    x64.jz __nonnull_skip_29
-    x64.mov rcx, [rbp-176]
-    x64.call mm_decref
-    x64.label __nonnull_skip_29
-    x64.mov rax, [rbp-168]
-    x64.test rax, rax
-    x64.jz __nonnull_skip_30
-    x64.mov rcx, [rbp-168]
-    x64.call mm_decref
-    x64.label __nonnull_skip_30
-    x64.mov rax, [rbp-160]
-    x64.test rax, rax
-    x64.jz __nonnull_skip_31
-    x64.mov rcx, [rbp-160]
-    x64.call mm_decref
-    x64.label __nonnull_skip_31
-    x64.mov rax, [rbp-56]
-    x64.test rax, rax
-    x64.jz __nonnull_skip_32
-    x64.mov rcx, [rbp-56]
-    x64.call mm_decref
-    x64.label __nonnull_skip_32
-    x64.mov rax, [rbp-16]
-    x64.test rax, rax
-    x64.jz __nonnull_skip_33
-    x64.mov rcx, [rbp-16]
-    x64.call mm_decref
-    x64.label __nonnull_skip_33
-    x64.mov rax, [rbp-24]
-    x64.test rax, rax
-    x64.jz __nonnull_skip_34
-    x64.mov rcx, [rbp-24]
-    x64.call mm_decref
-    x64.label __nonnull_skip_34
-    x64.mov rax, [rbp-328]
-    x64.test rax, rax
-    x64.jz __nonnull_skip_35
-    x64.mov rcx, [rbp-328]
-    x64.call mm_decref
-    x64.label __nonnull_skip_35
-    x64.mov rax, 1
+    x64.je inlined_Array.get_3_0
+  inlined_Array.get_1_0:
+    x64.mov edx, 1
+    x64.xor ecx, ecx
+    x64.jmp inline_cont_main_1
+  inlined_Array.get_3_0:
+    x64.xor r8d, r8d
+    x64.mov [rbp+-792], r8
+    x64.jmp __rc_edge_20_0
+  inline_cont_main_1:
+    x64.test rdx, rdx
+    x64.je try_0.merge
+    x64.jmp try_0.otherwise
+  alias_loop_0.step:
+    x64.mov rdx, r12
+    x64.add rdx, 1
+    x64.mov r12, rdx
+    x64.jmp alias_loop_0.header
+  alias_loop_0.exit:
+    x64.mov rcx, [rbp+-744]
+    x64.call __mm_decref_maybenull_helper
+    x64.test r14, r14
+    x64.jge guard_0.after
+    x64.jmp guard_0
+  try_0.otherwise:
+    x64.call __mm_decref_maybenull_helper
+    x64.mov ecx, 21
+    x64.call mrt_alloc
+    x64.mov r14, r8
+    x64.mov rcx, r12
+    x64.mov rdx, r14
+    x64.call mrt_i64_to_string
+    x64.mov r12, r8
+    x64.mov r8d, 20
+    x64.mov r8, r12
+    x64.add r8, 75
+    x64.add r8, 20
+    x64.mov [rbp+-744], r8
+    x64.mov r8, [rbp+-744]
+    x64.add r8, 1
+    x64.mov [rbp+-744], r8
+    x64.mov rcx, [rbp+-744]
+    x64.add rcx, 1
+    x64.call mrt_alloc
+    x64.mov [rbp+-752], r8
+    x64.mov r8d, 75
+    x64.lea r9, [rip+__istr_8]
+    x64.mov rsi, [rbp+-752]
+    x64.mov [rbp-216], rsi
+    x64.mov [rbp-224], r9
+    x64.mov [rbp-232], r8
+    x64.rep_movsb
+    x64.mov r8, [rbp+-752]
+    x64.add r8, 75
+    x64.mov [rbp-240], r8
+    x64.mov [rbp-248], r14
+    x64.mov [rbp-256], r12
+    x64.rep_movsb
+    x64.lea r9, [rip+__istr_9]
+    x64.add r8, r12
+    x64.mov [rbp-264], r8
+    x64.mov [rbp-272], r9
+    x64.mov r9, 20
+    x64.mov [rbp-280], r9
+    x64.rep_movsb
+    x64.lea r9, [rip+__istr_10]
+    x64.add r8, 20
+    x64.mov [rbp-288], r8
+    x64.mov [rbp-296], r9
+    x64.mov [rbp-304], r13
+    x64.rep_movsb
+    x64.mov rcx, r14
+    x64.call stdlib.__mm_decref
+    x64.lea rdx, [rip+stdlib.__destruct___ManagedMemory]
+    x64.mov rcx, 48
+    x64.call mrt_alloc_with_dtor
+    x64.mov r12, r8
+    x64.mov r8, [rbp+-912]
+    x64.mov [r12+40], r8 (8b)
+    x64.mov r8, [rbp+-752]
+    x64.mov [r12+0], r8 (8b)
+    x64.mov r8, [rbp+-744]
+    x64.mov [r12+8], r8 (8b)
+    x64.mov [r12+16], r8 (8b)
+    x64.mov [r12+24], r13 (8b)
+    x64.mov r8, -1
+    x64.mov [r12+32], r8 (8b)
+    x64.lea r13, [rip+__destruct_String]
+  inlined_stdlib.__mm_alloc_0_1:
+    x64.xor r14d, r14d
+    x64.mov r8, 16
+    x64.cmp r8, 1
+    x64.mov r8, 16
+    x64.jge inlined_stdlib.__mm_alloc_2_1
+  inlined_stdlib.__mm_alloc_1_1:
+    x64.mov r8d, 1
+  inlined_stdlib.__mm_alloc_2_1:
+    x64.mov [rbp+-744], r8
+    x64.lea r8, [rip+__mm_alloc_count]
+    x64.lock inc qword ptr [r8]
+    x64.mov rcx, [rbp+-744]
+    x64.add rcx, 32
+    x64.call stdlib.__slab_alloc
+    x64.mov [r8+0], r14 (8b)
+    x64.mov r9, r8
+    x64.add r9, 8
+    x64.mov [r9+0], r13 (8b)
+    x64.mov r9, r8
+    x64.add r9, 16
+    x64.mov rsi, [rbp+-744]
+    x64.mov [r9+0], rsi (8b)
+    x64.mov r9, r8
+    x64.add r9, 24
+    x64.mov [r9+0], r14 (8b)
+    x64.mov r13, r8
+    x64.add r13, 32
+    x64.mov r14, r13
+  inline_cont_main_2:
+    x64.mov rcx, r13
+    x64.call stdlib.__mm_incref
+    x64.mov [r14+0], r12 (8b)
+    x64.mov r8, [rbp+-912]
+    x64.mov [r14+8], r8 (8b)
+    x64.mov r8, [r14+0] (8b)
+    x64.mov r12, [r8+0] (8b)
+    x64.mov rcx, r12
+    x64.call mrt_panic
+    x64.mov rcx, r14
+    x64.call mm_drop
+    x64.mov rcx, [rbp+-912]
+  try_0.merge:
+    x64.mov r8, [rcx+8] (8b)
+    x64.mov [rbp+-752], r8
+    x64.mov r8, [rcx+0] (8b)
+    x64.mov [rbp+-760], r8
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r8, [rbp+-760]
+    x64.add r8, [rbp+-752]
+    x64.add r14, r8
+    x64.jmp alias_loop_0.step
+  guard_0:
+    x64.mov rcx, [rbp-128]
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r8, r13
     x64.epilogue
     x64.ret
   guard_0.after:
-    x64.mov rax, [rbp-392]
-    x64.test rax, rax
-    x64.jz __nonnull_skip_36
-    x64.mov rcx, [rbp-392]
-    x64.call mm_decref
-    x64.label __nonnull_skip_36
-    x64.mov rcx, [rbp-384]
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_37
-    x64.call mm_decref
-    x64.label __nonnull_skip_37
-    x64.mov rdx, [rbp-376]
-    x64.test rdx, rdx
-    x64.jz __nonnull_skip_38
-    x64.mov rcx, [rbp-376]
-    x64.call mm_decref
-    x64.label __nonnull_skip_38
-    x64.mov rbx, [rbp-360]
-    x64.test rbx, rbx
-    x64.jz __nonnull_skip_39
-    x64.mov rcx, [rbp-360]
-    x64.call mm_decref
-    x64.label __nonnull_skip_39
-    x64.mov rsi, [rbp-352]
-    x64.test rsi, rsi
-    x64.jz __nonnull_skip_40
-    x64.mov rcx, [rbp-352]
-    x64.call mm_decref
-    x64.label __nonnull_skip_40
-    x64.mov rdi, [rbp-344]
-    x64.test rdi, rdi
-    x64.jz __nonnull_skip_41
-    x64.mov rcx, [rbp-344]
-    x64.call mm_decref
-    x64.label __nonnull_skip_41
-    x64.mov r8, [rbp-312]
-    x64.test r8, r8
-    x64.jz __nonnull_skip_42
-    x64.mov rcx, [rbp-312]
-    x64.call mm_decref
-    x64.label __nonnull_skip_42
-    x64.mov r9, [rbp-280]
-    x64.test r9, r9
-    x64.jz __nonnull_skip_43
-    x64.mov rcx, [rbp-280]
-    x64.call mm_decref
-    x64.label __nonnull_skip_43
-    x64.mov rax, [rbp-256]
-    x64.test rax, rax
-    x64.jz __nonnull_skip_44
-    x64.mov rcx, [rbp-256]
-    x64.call mm_decref
-    x64.label __nonnull_skip_44
-    x64.mov rax, [rbp-240]
-    x64.test rax, rax
-    x64.jz __nonnull_skip_45
-    x64.mov rcx, [rbp-240]
-    x64.call mm_decref
-    x64.label __nonnull_skip_45
-    x64.mov rax, [rbp-224]
-    x64.test rax, rax
-    x64.jz __nonnull_skip_46
-    x64.mov rcx, [rbp-224]
-    x64.call mm_decref
-    x64.label __nonnull_skip_46
-    x64.mov rax, [rbp-200]
-    x64.test rax, rax
-    x64.jz __nonnull_skip_47
-    x64.mov rcx, [rbp-200]
-    x64.call mm_decref
-    x64.label __nonnull_skip_47
-    x64.mov rax, [rbp-40]
-    x64.test rax, rax
-    x64.jz __nonnull_skip_48
-    x64.mov rcx, [rbp-40]
-    x64.call mm_decref
-    x64.label __nonnull_skip_48
-    x64.mov rax, [rbp-32]
-    x64.test rax, rax
-    x64.jz __nonnull_skip_49
-    x64.mov rcx, [rbp-32]
-    x64.call mm_decref
-    x64.label __nonnull_skip_49
-    x64.mov rax, [rbp-368]
-    x64.test rax, rax
-    x64.jz __nonnull_skip_50
-    x64.mov rcx, [rbp-368]
-    x64.call mm_decref
-    x64.label __nonnull_skip_50
-    x64.mov rax, [rbp-336]
-    x64.test rax, rax
-    x64.jz __nonnull_skip_51
-    x64.mov rcx, [rbp-336]
-    x64.call mm_decref
-    x64.label __nonnull_skip_51
-    x64.mov rax, [rbp-8]
-    x64.test rax, rax
-    x64.jz __nonnull_skip_52
-    x64.mov rcx, [rbp-8]
-    x64.call mm_decref
-    x64.label __nonnull_skip_52
-    x64.xor eax, eax
-    x64.mov [rbp-8], rax
-    x64.mov rax, [rbp-304]
-    x64.test rax, rax
-    x64.jz __nonnull_skip_53
-    x64.mov rcx, [rbp-304]
-    x64.call mm_decref
-    x64.label __nonnull_skip_53
-    x64.mov rax, [rbp-296]
-    x64.test rax, rax
-    x64.jz __nonnull_skip_54
-    x64.mov rcx, [rbp-296]
-    x64.call mm_decref
-    x64.label __nonnull_skip_54
-    x64.mov rax, [rbp-272]
-    x64.test rax, rax
-    x64.jz __nonnull_skip_55
-    x64.mov rcx, [rbp-272]
-    x64.call mm_decref
-    x64.label __nonnull_skip_55
-    x64.mov rax, [rbp-216]
-    x64.test rax, rax
-    x64.jz __nonnull_skip_56
-    x64.mov rcx, [rbp-216]
-    x64.call mm_decref
-    x64.label __nonnull_skip_56
-    x64.mov rax, [rbp-192]
-    x64.test rax, rax
-    x64.jz __nonnull_skip_57
-    x64.mov rcx, [rbp-192]
-    x64.call mm_decref
-    x64.label __nonnull_skip_57
-    x64.mov rax, [rbp-184]
-    x64.test rax, rax
-    x64.jz __nonnull_skip_58
-    x64.mov rcx, [rbp-184]
-    x64.call mm_decref
-    x64.label __nonnull_skip_58
-    x64.mov rax, [rbp-176]
-    x64.test rax, rax
-    x64.jz __nonnull_skip_59
-    x64.mov rcx, [rbp-176]
-    x64.call mm_decref
-    x64.label __nonnull_skip_59
-    x64.mov rax, [rbp-168]
-    x64.test rax, rax
-    x64.jz __nonnull_skip_60
-    x64.mov rcx, [rbp-168]
-    x64.call mm_decref
-    x64.label __nonnull_skip_60
-    x64.mov rax, [rbp-160]
-    x64.test rax, rax
-    x64.jz __nonnull_skip_61
-    x64.mov rcx, [rbp-160]
-    x64.call mm_decref
-    x64.label __nonnull_skip_61
-    x64.mov rax, [rbp-56]
-    x64.test rax, rax
-    x64.jz __nonnull_skip_62
-    x64.mov rcx, [rbp-56]
-    x64.call mm_decref
-    x64.label __nonnull_skip_62
-    x64.mov rax, [rbp-16]
-    x64.test rax, rax
-    x64.jz __nonnull_skip_63
-    x64.mov rcx, [rbp-16]
-    x64.call mm_decref
-    x64.label __nonnull_skip_63
-    x64.mov rax, [rbp-24]
-    x64.test rax, rax
-    x64.jz __nonnull_skip_64
-    x64.mov rcx, [rbp-24]
-    x64.call mm_decref
-    x64.label __nonnull_skip_64
-    x64.mov rax, [rbp-328]
-    x64.test rax, rax
-    x64.jz __nonnull_skip_65
-    x64.mov rcx, [rbp-328]
-    x64.call mm_decref
-    x64.label __nonnull_skip_65
-    x64.xor eax, eax
+    x64.mov rcx, [rbp-128]
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r8, [rbp+-912]
     x64.epilogue
     x64.ret
-  }
-  func @_$closure_0(n: i64, __env: i64) -> i64 {
-  entry:
-    x64.prologue stack_size=160
-    x64.mov [rbp-8], rdx
-    x64.mov rax, [rbp-8]
-    x64.mov rbx, [rax+0]
-    x64.mov rax, [rbx+0]
-    x64.mov [rbp-16], rax
-    x64.mov rax, [rbp-16]
-    x64.mov rbx, [rax+0]
-    x64.mov [rbp-24], rbx
-    x64.mov rax, [rbp-24]
-    x64.mov rbx, [rax+0]
-    x64.mov rax, [rbp-24]
-    x64.mov rsi, [rax+8]
-    x64.mov [rbp-112], rcx
-    x64.mov [rbp-120], rbx
-    x64.mov [rbp-128], rsi
-    x64.mov rcx, 21
-    x64.call mm_raw_alloc
-    x64.mov [rbp-32], rax
-    x64.mov rcx, [rbp-112]
-    x64.mov rdx, [rbp-32]
-    x64.call maxon_i64_to_string
-    x64.mov rcx, [rbp-32]
-    x64.mov rdx, [rbp-128]
-    x64.lea rbx, [rdx + rax]
-    x64.lea_func rsi, [__destruct_String]
-    x64.mov rdi, rsi
-    x64.mov [rbp-136], rax
-    x64.mov [rbp-144], rbx
-    x64.mov rdx, rdi
-    x64.mov rcx, 16
-    x64.mov r8, 6
-    x64.call mm_alloc
-    x64.mov [rbp-40], rax
-    x64.lea_func r8, [__destruct___ManagedMemory]
-    x64.mov r9, r8
-    x64.mov rdx, r9
-    x64.mov rcx, 40
-    x64.mov r8, 7
-    x64.call mm_alloc
-    x64.mov [rbp-48], rax
-    x64.mov rax, 1
-    x64.mov rcx, [rbp-144]
-    x64.lea rdx, [rcx + rax]
-    x64.mov rcx, rdx
-    x64.call mm_raw_alloc
-    x64.xor ecx, ecx
-    x64.mov [rbp-56], rcx
-    x64.mov [rbp-64], rax
-    x64.mov rax, [rbp-144]
-    x64.mov [rbp-72], rax
-    x64.mov rax, [rbp-120]
-    x64.mov [rbp-80], rax
-    x64.mov rax, [rbp-128]
-    x64.mov [rbp-88], rax
-    x64.mov rax, [rbp-32]
-    x64.mov [rbp-96], rax
-    x64.mov rax, [rbp-136]
-    x64.mov [rbp-104], rax
-    x64.mov rax, [rbp-64]
-    x64.mov rcx, [rbp-56]
-    x64.add rax, rcx
-    x64.mov rcx, [rbp-80]
-    x64.mov rdx, [rbp-88]
-    x64.mov rsi, rcx
-    x64.mov rdi, rax
-    x64.mov rcx, rdx
-    x64.rep_movsb
-    x64.mov rax, [rbp-56]
-    x64.mov rcx, [rbp-88]
-    x64.add rax, rcx
-    x64.mov [rbp-56], rax
-    x64.mov rax, [rbp-64]
-    x64.mov rcx, [rbp-56]
-    x64.add rax, rcx
-    x64.mov rcx, [rbp-96]
-    x64.mov rdx, [rbp-104]
-    x64.mov rsi, rcx
-    x64.mov rdi, rax
-    x64.mov rcx, rdx
-    x64.rep_movsb
-    x64.mov rax, [rbp-64]
-    x64.mov rcx, [rbp-72]
-    x64.add rax, rcx
-    x64.xor ecx, ecx
-    x64.mov byte ptr [rax+0], rcxb
-    x64.mov rax, [rbp-32]
-    x64.mov rcx, [rbp-32]
-    x64.call mm_raw_free
-    x64.mov rax, [rbp-64]
-    x64.mov rcx, [rbp-72]
-    x64.mov rdx, 1
-    x64.xor ebx, ebx
-    x64.mov rsi, [rbp-48]
-    x64.mov [rsi+0], rax
-    x64.mov rax, [rbp-48]
-    x64.mov [rax+8], rcx
-    x64.mov rax, [rbp-48]
-    x64.mov [rax+16], rcx
-    x64.mov rax, [rbp-48]
-    x64.mov [rax+24], rdx
-    x64.mov rax, [rbp-48]
-    x64.mov [rax+32], rbx
-    x64.mov rax, [rbp-48]
-    x64.mov rcx, [rbp-40]
-    x64.mov [rcx+0], rax
-    x64.mov rax, [rbp-48]
-    x64.mov rcx, [rbp-48]
-    x64.call mm_incref
-    x64.xor eax, eax
-    x64.mov rcx, [rbp-40]
-    x64.mov [rcx+8], rax
-    x64.mov rax, [rbp-40]
-    x64.mov rcx, [rbp-40]
-    x64.call mm_incref
-    x64.mov rax, [rbp-40]
-    x64.mov rcx, [rbp-40]
-    x64.call stdlib.String.count
-    x64.mov rcx, [rbp-40]
-    x64.mov [rbp-152], rax
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_66
-    x64.call mm_decref
-    x64.label __nonnull_skip_66
-    x64.mov rax, [rbp-152]
-    x64.epilogue
-    x64.ret
-  }
-  func @__destruct_GraphemeState(ptr: i64) {
-  entry:
-    x64.jmp __destruct_GraphemeState.done
-  done:
-    x64.ret
-  }
-  func @__destruct___ManagedMemoryCursor(ptr: i64) {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+32]
-    x64.mov [rbp-16], rcx
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_0
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.jmp __destruct___ManagedMemoryCursor.done
-  done:
-    x64.epilogue
-    x64.ret
-  }
-  func @__destruct_ArrayIterator(ptr: i64) {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+0]
-    x64.mov [rbp-16], rcx
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_0
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.jmp __destruct_ArrayIterator.done
-  done:
-    x64.epilogue
-    x64.ret
-  }
-  func @__destruct_Point(ptr: i64) {
-  entry:
-    x64.jmp __destruct_Point.done
-  done:
-    x64.ret
-  }
-  func @__destruct_Person(ptr: i64) {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+0]
-    x64.mov [rbp-16], rcx
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_0
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.jmp __destruct_Person.done
-  done:
-    x64.epilogue
-    x64.ret
-  }
-  func @__destruct_String(ptr: i64) {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+0]
-    x64.mov [rbp-16], rcx
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_0
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.jmp __destruct_String.done
-  done:
-    x64.epilogue
-    x64.ret
-  }
-  func @__destruct___ManagedMemory(ptr: i64) {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+16]
-    x64.mov rdx, -1
-    x64.cmp rcx, rdx
-    x64.jne __destruct___ManagedMemory.check_owned_0
-  slice_cleanup_0:
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+32]
-    x64.mov [rbp-16], rcx
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_0
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.jmp __destruct___ManagedMemory.skip_buf_0
-  check_owned_0:
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+16]
-    x64.mov rdx, -2
-    x64.cmp rcx, rdx
-    x64.je __destruct___ManagedMemory.skip_buf_0
-  free_buf_0:
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+0]
-    x64.call mm_raw_free
-    x64.jmp __destruct___ManagedMemory.skip_buf_0
-  skip_buf_0:
-    x64.jmp __destruct___ManagedMemory.done
-  done:
-    x64.epilogue
-    x64.ret
-  }
-  func @__destruct_Shape(ptr: i64) {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+0]
-    x64.xor edx, edx
-    x64.cmp rcx, rdx
-    x64.jne __destruct_Shape.check_0
-  case_0:
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+8]
-    x64.mov [rbp-16], rcx
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_0
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.jmp __destruct_Shape.done
-  check_0:
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+0]
-    x64.mov rdx, 1
-    x64.cmp rcx, rdx
-    x64.jne __destruct_Shape.check_1
-  case_1:
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+8]
-    x64.mov [rbp-16], rcx
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_1
-    x64.call mm_decref
-    x64.label __nonnull_skip_1
-    x64.jmp __destruct_Shape.done
-  check_1:
-    x64.jmp __destruct_Shape.done
-  done:
-    x64.epilogue
-    x64.ret
-  }
-  func @__destruct___ManagedMemory_String(ptr: i64) {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+16]
-    x64.mov rdx, -1
-    x64.cmp rcx, rdx
-    x64.jne __destruct___ManagedMemory_String.check_owned_0
-  slice_cleanup_0:
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+32]
-    x64.mov [rbp-16], rcx
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_0
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.jmp __destruct___ManagedMemory_String.skip_buf_0
-  check_owned_0:
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+16]
-    x64.mov rdx, -2
-    x64.cmp rcx, rdx
-    x64.je __destruct___ManagedMemory_String.skip_buf_0
-  free_buf_0:
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rbp-8]
-    x64.call mm_decref_managed_elements
-    x64.mov rcx, [rbp-8]
-    x64.mov rdx, [rcx+0]
-    x64.mov rcx, rdx
-    x64.call mm_raw_free
-    x64.jmp __destruct___ManagedMemory_String.skip_buf_0
-  skip_buf_0:
-    x64.jmp __destruct___ManagedMemory_String.done
-  done:
-    x64.epilogue
-    x64.ret
-  }
-  func @__destruct_StringArray(ptr: i64) {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+0]
-    x64.mov [rbp-16], rcx
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_0
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.jmp __destruct_StringArray.done
-  done:
-    x64.epilogue
-    x64.ret
-  }
-  func @__destruct___ManagedMemory_Integer(ptr: i64) {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+16]
-    x64.mov rdx, -1
-    x64.cmp rcx, rdx
-    x64.jne __destruct___ManagedMemory_Integer.check_owned_0
-  slice_cleanup_0:
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+32]
-    x64.mov [rbp-16], rcx
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_0
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.jmp __destruct___ManagedMemory_Integer.skip_buf_0
-  check_owned_0:
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+16]
-    x64.mov rdx, -2
-    x64.cmp rcx, rdx
-    x64.je __destruct___ManagedMemory_Integer.skip_buf_0
-  free_buf_0:
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+0]
-    x64.call mm_raw_free
-    x64.jmp __destruct___ManagedMemory_Integer.skip_buf_0
-  skip_buf_0:
-    x64.jmp __destruct___ManagedMemory_Integer.done
-  done:
-    x64.epilogue
-    x64.ret
-  }
-  func @__destruct_IntArray(ptr: i64) {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+0]
-    x64.mov [rbp-16], rcx
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_0
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.jmp __destruct_IntArray.done
-  done:
-    x64.epilogue
-    x64.ret
-  }
-  func @__destruct___ManagedMemory_IntArray(ptr: i64) {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+16]
-    x64.mov rdx, -1
-    x64.cmp rcx, rdx
-    x64.jne __destruct___ManagedMemory_IntArray.check_owned_0
-  slice_cleanup_0:
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+32]
-    x64.mov [rbp-16], rcx
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_0
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.jmp __destruct___ManagedMemory_IntArray.skip_buf_0
-  check_owned_0:
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+16]
-    x64.mov rdx, -2
-    x64.cmp rcx, rdx
-    x64.je __destruct___ManagedMemory_IntArray.skip_buf_0
-  free_buf_0:
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rbp-8]
-    x64.call mm_decref_managed_elements
-    x64.mov rcx, [rbp-8]
-    x64.mov rdx, [rcx+0]
-    x64.mov rcx, rdx
-    x64.call mm_raw_free
-    x64.jmp __destruct___ManagedMemory_IntArray.skip_buf_0
-  skip_buf_0:
-    x64.jmp __destruct___ManagedMemory_IntArray.done
-  done:
-    x64.epilogue
-    x64.ret
-  }
-  func @__destruct_Matrix(ptr: i64) {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+0]
-    x64.mov [rbp-16], rcx
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_0
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.jmp __destruct_Matrix.done
-  done:
-    x64.epilogue
-    x64.ret
-  }
-  func @__destruct___ManagedMemory_Point(ptr: i64) {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+16]
-    x64.mov rdx, -1
-    x64.cmp rcx, rdx
-    x64.jne __destruct___ManagedMemory_Point.check_owned_0
-  slice_cleanup_0:
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+32]
-    x64.mov [rbp-16], rcx
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_0
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.jmp __destruct___ManagedMemory_Point.skip_buf_0
-  check_owned_0:
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+16]
-    x64.mov rdx, -2
-    x64.cmp rcx, rdx
-    x64.je __destruct___ManagedMemory_Point.skip_buf_0
-  free_buf_0:
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rbp-8]
-    x64.call mm_decref_managed_elements
-    x64.mov rcx, [rbp-8]
-    x64.mov rdx, [rcx+0]
-    x64.mov rcx, rdx
-    x64.call mm_raw_free
-    x64.jmp __destruct___ManagedMemory_Point.skip_buf_0
-  skip_buf_0:
-    x64.jmp __destruct___ManagedMemory_Point.done
-  done:
-    x64.epilogue
-    x64.ret
-  }
-  func @__destruct_PointArray(ptr: i64) {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+0]
-    x64.mov [rbp-16], rcx
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_0
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.jmp __destruct_PointArray.done
-  done:
-    x64.epilogue
-    x64.ret
+  __rc_edge_20_0:
+    x64.mov rcx, [rbp+-784]
+    x64.call stdlib.__mm_incref
+    x64.mov r8, [rbp+-784]
+    x64.mov rcx, [rbp+-784]
+    x64.mov rdx, [rbp+-792]
+    x64.jmp inline_cont_main_1
   }
 }
+
 ```
 ---
 ---

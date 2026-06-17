@@ -1,0 +1,53 @@
+// Test: global-struct-load-borrow
+typealias Integer = int(i64.min to i64.max)
+
+type Config
+	export var threshold as Integer
+
+	static function create(threshold Integer) returns Self
+		return Self{threshold: threshold}
+	end 'create'
+end 'Config'
+
+var cfg = Config.create(10)
+
+function check(value Integer) returns Integer
+	if value > cfg.threshold 'high'
+		return value
+	end 'high'
+	return 0
+end 'check'
+
+function main() returns ExitCode
+	return check(42)
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 42 : i64
+    mir.br inlined_check_0_0()
+  inlined_check_0_0:
+    %2 = mir.global_addr @__data_cfg
+    %3 = mir.load %2, 0 width: qword
+    %4 = mir.load %3, 0 width: qword
+    %5 = mir.cmp gt, %0, %4
+    mir.cond_br %5 [then: inline_cont_main_0(%0), else: inlined_check_2_0()]
+  inlined_check_2_0:
+    %6 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%6)
+  inline_cont_main_0(%7: i64):
+    %8 = mir.mov_imm 125 : i64
+    %9 = mir.cmp ugt, %7, %8
+    mir.cond_br %9 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %10 = mir.global_addr @__panic_msg_104fdf22d8330c92
+    %11 = mir.call @mrt_panic(%10)
+  __range_ok_0:
+    mir.ret %7
+  }
+}
+---

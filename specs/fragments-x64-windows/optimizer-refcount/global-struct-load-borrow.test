@@ -26,68 +26,29 @@ ExitCode: 42
 ---
 // CompiledIR
 module {
-  func @Config.create(threshold: i64) -> i64 {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-16], rcx
-    x64.mov rcx, 8
-    x64.xor edx, edx
-    x64.mov r8, 8
-    x64.call mm_alloc
-    x64.mov [rbp-8], rax
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rbp-16]
-    x64.mov [rax+0], rcx
-    x64.mov rdx, [rbp-8]
-    x64.mov rcx, [rbp-8]
-    x64.call mm_incref
-    x64.mov rax, [rbp-8]
-    x64.epilogue
-    x64.ret
-  }
-  func @check(value: i64) -> i64 {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, qword [rip+cfg]
-    x64.mov [rbp-16], rax
-    x64.mov rax, [rbp-16]
-    x64.mov rdx, [rax+0]
-    x64.cmp rcx, rdx
-    x64.jle check.high_0.after
-  high_0:
-    x64.mov rax, [rbp-8]
-    x64.epilogue
-    x64.ret
-  high_0.after:
-    x64.xor eax, eax
-    x64.epilogue
-    x64.ret
-  }
   func @main() -> u32 {
   entry:
     x64.prologue stack_size=16
-    x64.mov rcx, 42
-    x64.call check
-    x64.xor ecx, ecx
-    x64.mov edx, 4294967295
-    x64.cmp rax, rdx
-    x64.jg main.__range_panic_0
-    x64.cmp rax, rcx
-    x64.jl main.__range_panic_0
-    x64.jmp main.__range_ok_0
+    x64.mov r8d, 42
+  inlined_check_0_0:
+    x64.lea r9, [rip+__data_cfg]
+    x64.mov rsi, [r9+0] (8b)
+    x64.mov r9, [rsi+0] (8b)
+    x64.cmp r8, r9
+    x64.jle inlined_check_2_0
+    x64.jmp inline_cont_main_0
+  inlined_check_2_0:
+    x64.xor r8d, r8d
+  inline_cont_main_0:
+    x64.mov r9d, 4294967295
+    x64.cmp r8, r9
+    x64.jbe __range_ok_0
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_0]
-    x64.mov rcx, rax
+    x64.lea r12, [rip+__panic_msg_104fdf22d8330c92]
+    x64.mov rcx, r12
     x64.call mrt_panic
   __range_ok_0:
     x64.epilogue
-    x64.ret
-  }
-  func @__destruct_Config(ptr: i64) {
-  entry:
-    x64.jmp __destruct_Config.done
-  done:
     x64.ret
   }
 }
