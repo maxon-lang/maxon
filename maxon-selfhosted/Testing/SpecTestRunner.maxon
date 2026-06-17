@@ -217,8 +217,15 @@ let whitelist = ["basics",
 	// "enum-allcases" — `error-enum` fragment needs a Hashable witness for a
 	//   primitive-conforming enum (the same Phase-5 gap as enum-hashable below).
 	"collection-contains",
-	// "array-contains" — stdlib `Array.contains` routes `item == element`
-	//   through stdlib-extension machinery (J.4c).
+	// "array-contains" (0/1) — `ByteArrayArray.push(b"hello")` rejected E3005:
+	//   a `b"..."` byte-string literal is typed `Array with int` (a DELIBERATE
+	//   design: byte-string element type is the single integer arm, byte-ness
+	//   conveyed at StdDialect level — see byteStringLiteralResultType's comment),
+	//   so it doesn't match a `ByteArray` (`Array with Byte`) element param. C#
+	//   accepts it. Fix belongs in arg coercion (treat `Array with int` byte-
+	//   string literal as compatible with `Array with Byte`), not in retyping the
+	//   literal — needs care not to regress byte-string-literal or int/byte
+	//   coercion elsewhere. Deferred.
 	"array-of-bytearray",
 	"array-slots",
 	// "with-iterator" — HANGS the runner (worker never returns).
