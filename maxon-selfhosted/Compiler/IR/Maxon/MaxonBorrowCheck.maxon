@@ -28,6 +28,10 @@
 // branching, so a per-block index would mis-expire them).
 typealias GlobalOpIndex = int(0 to u64.max)
 
+// Cursor into one of the per-function call-site arrays during the merged
+// (method + free) conflict walk in `checkConflicts`.
+typealias CallSiteCursor = int(0 to u64.max)
+
 typealias MethodNameSet = Set with String
 
 // Mutating collection method names. A method call whose receiver is a borrowed
@@ -38,6 +42,261 @@ typealias MethodNameSet = Set with String
 function mutatingMethodNames() returns MethodNameSet
 	return MethodNameSet from ["push", "pop", "insert", "remove", "set", "clear", "resize", "reserve", "append", "ensureCapacity"]
 end 'mutatingMethodNames'
+
+// ============================================================
+// Parameter-mutation analysis (E3070 via-helper detection)
+// ============================================================
+//
+// A free-function call `clearList(list)` where `clearList` mutates its
+// parameter `list` (its body runs `list.clear()`) mutates the collection just
+// as `list.clear()` would — so it conflicts with a live borrow of `list`. The
+// C# BorrowCheckPass detects this through `IrFunction.MutatedParamIndices`
+// (computed by a dedicated `ParameterMutationAnalysisPass`): `DetectMutationConflict`
+// loops over EVERY call argument and reports the conflict when the callee
+// mutates the matching parameter index (`DoesMutateArg`). The self-hosted IR has
+// no separate pass for this, so this section computes the same fact in the
+// borrow pass: for every function, which 0-based USER-parameter positions does
+// its body mutate, propagated transitively through call edges to a fixpoint.
+//
+// Positions are USER-parameter ordinals (the declaration order recorded in
+// `paramReservations`), NOT ABI indices — they align with a `call` op's `args`
+// list at this Maxon tier (companion/env/witness ABI expansion happens later in
+// lowering), which is exactly the index `DetectMutationConflict` consults.
+
+typealias ParamIndexSet = Set with ParamCount
+
+// Whole-module mutated-parameter facts as a FLAT key set: one `"funcName::idx"`
+// entry per (function, mutated user-parameter position). A flat set (rather than
+// a `Map` of per-function `Set`s) keeps both the local-collection stage and the
+// transitive fixpoint to plain `insert`/`contains` — no get-modify-upsert of a
+// map-stored collection (which would itself trip this borrow pass on the
+// returned-collection-then-mutate-the-map pattern).
+typealias MutatedParamsKeySet = Set with String
+
+// The `"funcName::paramIndex"` key for one mutated parameter.
+function mutatedParamKey(funcName String, paramIndex ParamCount) returns String
+	return "{funcName}::{paramIndex}"
+end 'mutatedParamKey'
+
+// Slot -> user-parameter ordinal for one function, inverted from
+// `paramReservations` (entry k backs declared param k). Empty for synthesized /
+// restored functions with no reservations.
+typealias SlotToParamIndexMap = Map with (VarSlot, ParamCount)
+
+function buildSlotToParamIndex(func IrFunction) returns SlotToParamIndexMap
+	var m = SlotToParamIndexMap.create()
+	for k in 0 upto func.paramReservations.count() 'eachParam'
+		let res = try func.paramReservations.get(k) otherwise panic("buildSlotToParamIndex: paramReservations.get OOB at {k}")
+		m.upsert(res.paramSlot, value: k as ParamCount)
+	end 'eachParam'
+	return m
+end 'buildSlotToParamIndex'
+
+// Compute, per function name, the set of user-parameter positions its body
+// mutates. Two stages mirroring `ParameterMutationAnalysisPass`:
+//   1. Local: a `varStore` to a param slot (direct reassignment) or a mutating
+//      method call (`isMutatingMethodName`) on a param-derived receiver marks
+//      that param's position mutated.
+//   2. Transitive: a function that passes its own parameter P as the argument
+//      for a callee parameter the callee mutates, mutates P too. Iterated to a
+//      fixpoint over the (caller, argPos, calleePos) call edges.
+function computeMutatedParams(module MaxonModule) returns MutatedParamsKeySet
+	var mutated = MutatedParamsKeySet.create()
+
+	// Stage 1: local mutation per function.
+	for func in module.functions 'eachFunc'
+		let slotToParam = buildSlotToParamIndex(func)
+		if slotToParam.count() == 0 'noParams'
+			continue
+		end 'noParams'
+		var indices = ParamIndexSet.create()
+		collectLocalParamMutations(module, func: func, slotToParam: slotToParam, indicesOut: indices)
+		for idx in indices 'eachIdx'
+			mutated.insert(mutatedParamKey(func.name, paramIndex: idx))
+		end 'eachIdx'
+	end 'eachFunc'
+
+	// Stage 2: transitive propagation to a fixpoint.
+	propagateMutatedParams(module, mutated: mutated)
+
+	return mutated
+end 'computeMutatedParams'
+
+// Stage-1 local scan: record every user-parameter position `func` mutates
+// directly (param reassignment or a mutating method on a param-derived value).
+function collectLocalParamMutations(module MaxonModule, func IrFunction, slotToParam SlotToParamIndexMap, indicesOut ParamIndexSet)
+	// SSA value names derived from a parameter (a `varLoad` of a param slot, or a
+	// `fieldLoad` chained off an already-tainted value). A mutating method on such
+	// a receiver mutates the parameter it derives from. Maps the tainted value
+	// name to the originating param position so the mutation is attributed to the
+	// right parameter.
+	var taintedParam = ParamTaintMap.create()
+
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("collectLocalParamMutations: blockRef OOB")
+		for opIdx in block.opRefs 'eachOp'
+			let op = try module.ops.get(opIdx) otherwise panic("collectLocalParamMutations: opIdx OOB")
+			recordParamMutationFacts(op, slotToParam: slotToParam, taintedParam: taintedParam, indicesOut: indicesOut)
+		end 'eachOp'
+		if block.hasTerminatorOp() 'hasTerm'
+			let termOp = try module.ops.get(block.terminatorIndex()) otherwise panic("collectLocalParamMutations: termIdx OOB")
+			recordParamMutationFacts(termOp, slotToParam: slotToParam, taintedParam: taintedParam, indicesOut: indicesOut)
+		end 'hasTerm'
+	end 'eachBlock'
+end 'collectLocalParamMutations'
+
+// SSA value name -> the user-parameter ordinal it derives from.
+typealias ParamTaintMap = Map with (String, ParamCount)
+
+// One op's contribution to the local param-mutation scan. A single forward pass
+// suffices: a `fieldLoad` always follows its receiver's load, and a mutating
+// method follows the load of its receiver, in op order.
+function recordParamMutationFacts(op MaxonOp, slotToParam SlotToParamIndexMap, taintedParam ParamTaintMap, indicesOut ParamIndexSet)
+	match op 'op'
+		varLoad(result, slotId, _, _) then taintParamVarLoad(result, slotId: slotId, slotToParam: slotToParam, taintedParam: taintedParam)
+		varStore(slotId, _, _) then markParamStore(slotId, slotToParam: slotToParam, indicesOut: indicesOut)
+		methodCall(_, receiver, methodName, _, _, _, _, _) then markParamMethodMutation(receiver, methodName: methodName, taintedParam: taintedParam, indicesOut: indicesOut)
+		fieldLoad(result, receiver, _, _) then taintParamFieldLoad(result, receiver: receiver, taintedParam: taintedParam)
+		tryMethodCall(_, receiver, methodName, _, _, _, _, _, _) then markParamMethodMutation(receiver, methodName: methodName, taintedParam: taintedParam, indicesOut: indicesOut)
+		literal to varDecl then return
+		globalLoad to call then return
+		ret to structAlloc then return
+		fieldStore to tryCall then return
+		rethrow to sizeofType then return
+	end 'op'
+end 'recordParamMutationFacts'
+
+function taintParamVarLoad(result ByteArray, slotId VarSlot, slotToParam SlotToParamIndexMap, taintedParam ParamTaintMap)
+	if let idx = try slotToParam.get(slotId) 'isParam'
+		taintedParam.upsert(String.from(result), value: idx)
+	end 'isParam'
+end 'taintParamVarLoad'
+
+function taintParamFieldLoad(result ByteArray, receiver ByteArray, taintedParam ParamTaintMap)
+	if let idx = try taintedParam.get(String.from(receiver)) 'derived'
+		taintedParam.upsert(String.from(result), value: idx)
+	end 'derived'
+end 'taintParamFieldLoad'
+
+// A `varStore` to a param slot is a direct reassignment of that parameter.
+function markParamStore(slotId VarSlot, slotToParam SlotToParamIndexMap, indicesOut ParamIndexSet)
+	if let idx = try slotToParam.get(slotId) 'isParam'
+		indicesOut.insert(idx)
+	end 'isParam'
+end 'markParamStore'
+
+// A mutating method on a param-derived receiver mutates the parameter it derives from.
+function markParamMethodMutation(receiver ByteArray, methodName ByteArray, taintedParam ParamTaintMap, indicesOut ParamIndexSet)
+	let idx = try taintedParam.get(String.from(receiver)) otherwise return
+	if isBorrowCheckMutatingMethod(String.from(methodName)) 'mutating'
+		indicesOut.insert(idx)
+	end 'mutating'
+end 'markParamMethodMutation'
+
+// Method names that mutate their receiver's reachable state, for the parameter-
+// mutation analysis. Two groups:
+//   - the collection mutators (`push`/`pop`/`clear`/…) — the same set the borrow
+//     conflict walk treats as mutating (`mutatingMethodNames`); and
+//   - the `__ManagedList` node-mutating methods (`insertFirst`/`insertLast`/…),
+//     which mirror the dedicated `MaxonManagedList*Op` mutation ops the C#
+//     `ParameterMutationAnalysisPass` recognizes structurally.
+// A function whose body calls any of these on a parameter-derived receiver
+// mutates that parameter. Spelled as an `or`-chain (not a per-call `Set`) to
+// match the self-hosted `SemanticCheck.isMutatingMethodName` convention.
+function isBorrowCheckMutatingMethod(methodName String) returns bool
+	return methodName == "push" or methodName == "pop" or methodName == "insert" or methodName == "remove" or methodName == "set" or methodName == "clear" or methodName == "resize" or methodName == "reserve" or methodName == "append" or methodName == "ensureCapacity" or methodName == "insertFirst" or methodName == "insertLast" or methodName == "insertAfter" or methodName == "insertBefore" or methodName == "detach" or methodName == "setValue"
+end 'isBorrowCheckMutatingMethod'
+
+// Stage-2 transitive propagation: a function that forwards its own parameter to
+// a callee parameter the callee mutates, mutates its own parameter too. Iterate
+// the call edges to a fixpoint (monotonic — entries are only added — so the loop
+// terminates in at most #functions rounds).
+function propagateMutatedParams(module MaxonModule, mutated MutatedParamsKeySet)
+	var changed = true
+	while changed 'fixpoint'
+		changed = false
+		for caller in module.functions 'eachCaller'
+			let callerSlotToParam = buildSlotToParamIndex(caller)
+			if callerSlotToParam.count() == 0 'noParams'
+				continue
+			end 'noParams'
+			if propagateThroughCalls(module, caller: caller, callerSlotToParam: callerSlotToParam, mutated: mutated) 'grew'
+				changed = true
+			end 'grew'
+		end 'eachCaller'
+	end 'fixpoint'
+end 'propagateMutatedParams'
+
+// Walk `caller`'s free `call` ops; for each argument that is a load of one of
+// the caller's own parameters, if the callee mutates the parameter position the
+// argument lands in, mark the caller's parameter mutated. Returns true if any
+// new mutation was recorded (drives the fixpoint).
+function propagateThroughCalls(module MaxonModule, caller IrFunction, callerSlotToParam SlotToParamIndexMap, mutated MutatedParamsKeySet) returns bool
+	// Map each of the caller's SSA value names to the parameter ordinal it loads
+	// from, so a call argument naming that value resolves to the caller param.
+	var argValueToCallerParam = ParamTaintMap.create()
+	for blockRef in caller.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("propagateThroughCalls: blockRef OOB")
+		for opIdx in block.opRefs 'eachOp'
+			let op = try module.ops.get(opIdx) otherwise panic("propagateThroughCalls: opIdx OOB")
+			recordArgValueParamSource(op, callerSlotToParam: callerSlotToParam, argValueToCallerParam: argValueToCallerParam)
+		end 'eachOp'
+		if block.hasTerminatorOp() 'hasTerm'
+			let termOp = try module.ops.get(block.terminatorIndex()) otherwise panic("propagateThroughCalls: termIdx OOB")
+			recordArgValueParamSource(termOp, callerSlotToParam: callerSlotToParam, argValueToCallerParam: argValueToCallerParam)
+		end 'hasTerm'
+	end 'eachBlock'
+
+	var grew = false
+	for blockRef in caller.blockRefs 'eachBlock2'
+		let block = try module.blocks.get(blockRef) otherwise panic("propagateThroughCalls: blockRef2 OOB")
+		for opIdx in block.opRefs 'eachOp2'
+			let op = try module.ops.get(opIdx) otherwise panic("propagateThroughCalls: opIdx2 OOB")
+			if propagateOneCall(op, caller: caller, argValueToCallerParam: argValueToCallerParam, mutated: mutated) 'callGrew'
+				grew = true
+			end 'callGrew'
+		end 'eachOp2'
+	end 'eachBlock2'
+	return grew
+end 'propagateThroughCalls'
+
+// A `varLoad` of a caller-param slot makes its result name resolve to that
+// caller parameter ordinal — the source a `call` argument naming it carries.
+function recordArgValueParamSource(op MaxonOp, callerSlotToParam SlotToParamIndexMap, argValueToCallerParam ParamTaintMap)
+	match op 'op'
+		varLoad(result, slotId, _, _) then taintParamVarLoad(result, slotId: slotId, slotToParam: callerSlotToParam, taintedParam: argValueToCallerParam)
+		literal to varDecl then return
+		varStore to sizeofType then return
+	end 'op'
+end 'recordArgValueParamSource'
+
+// Propagate one free `call`: for each argument that names a caller-param-derived
+// value, if the callee mutates that argument's position, record the caller's
+// parameter as mutated. Returns true if a new entry was added.
+function propagateOneCall(op MaxonOp, caller IrFunction, argValueToCallerParam ParamTaintMap, mutated MutatedParamsKeySet) returns bool
+	return match op 'op'
+		call(_, callee, _, args, _, _, _, _) gives propagateFreeCall(String.from(callee), args: args, caller: caller, argValueToCallerParam: argValueToCallerParam, mutated: mutated)
+		literal to br gives false
+		methodCall to sizeofType gives false
+	end 'op'
+end 'propagateOneCall'
+
+function propagateFreeCall(callee String, args ByteArrayArray, caller IrFunction, argValueToCallerParam ParamTaintMap, mutated MutatedParamsKeySet) returns bool
+	var grew = false
+	for argPos in 0 upto args.count() 'eachArg'
+		if not mutated.contains(mutatedParamKey(callee, paramIndex: argPos)) 'notMutatedHere'
+			continue
+		end 'notMutatedHere'
+		let argName = try args.get(argPos) otherwise panic("propagateFreeCall: args.get OOB at {argPos}")
+		let callerParam = try argValueToCallerParam.get(String.from(argName)) otherwise continue
+		let key = mutatedParamKey(caller.name, paramIndex: callerParam)
+		if not mutated.contains(key) 'newFact'
+			mutated.insert(key)
+			grew = true
+		end 'newFact'
+	end 'eachArg'
+	return grew
+end 'propagateFreeCall'
 
 // A pending or active borrow: the borrowing variable's slot borrows from the
 // source collection's slot. `borrowLine` is the source line of the `.get()`
@@ -82,6 +341,10 @@ typealias ValueToIndexMap = Map with (String, GlobalOpIndex)
 // A method-call site flattened to the fields the borrow check consumes.
 typealias MethodCallSiteArray = Array with MethodCallSite
 
+// A free-call site flattened to the fields the via-helper conflict check
+// consumes.
+typealias FreeCallSiteArray = Array with FreeCallSite
+
 // All per-function facts the borrow analysis collects in one linear pass,
 // gathered into a struct so the recorders share one parameter instead of a
 // long positional list. Mirrors the C# pass's per-function analysis state.
@@ -102,6 +365,8 @@ type BorrowFacts
 	export var loadValueBySlot as SlotToValueMap
 	// Every method-call / try-method-call site in program order.
 	export var callSites as MethodCallSiteArray
+	// Every free `call` site in program order (the via-helper conflict source).
+	export var freeCallSites as FreeCallSiteArray
 
 	export static function create() returns BorrowFacts
 		return Self{
@@ -112,7 +377,8 @@ type BorrowFacts
 			declIndexByValue: ValueToIndexMap.create(),
 			storeSlotByValue: ValueToSlotMap.create(),
 			loadValueBySlot: SlotToValueMap.create(),
-			callSites: MethodCallSiteArray.create()
+			callSites: MethodCallSiteArray.create(),
+			freeCallSites: FreeCallSiteArray.create()
 		}
 	end 'create'
 end 'BorrowFacts'
@@ -133,13 +399,37 @@ type MethodCallSite
 	end 'create'
 end 'MethodCallSite'
 
+// One free `call` op, recovered from the `call` variant, paired with its global
+// op index. `callee` is the called function name; `argNames` are the SSA value
+// names of the positional arguments (their order is the user-arg ordinal, which
+// matches a callee's mutated-param positions). Used by the via-helper conflict
+// check: a call whose argument is a borrowed-from source AND whose callee
+// mutates that argument's position conflicts with the live borrow.
+type FreeCallSite
+	export var globalIndex as GlobalOpIndex
+	export var callee as String
+	export var argNames as StringArray
+	export var line as LineNumber
+	export var column as ColumnNumber
+
+	export static function create(globalIndex GlobalOpIndex, callee String, argNames StringArray, line LineNumber, column ColumnNumber) returns FreeCallSite
+		return Self{globalIndex: globalIndex, callee: callee, argNames: argNames, line: line, column: column}
+	end 'create'
+end 'FreeCallSite'
+
 // ============================================================
 // Entry point
 // ============================================================
 
 export function runMaxonBorrowCheck(project Project, module MaxonModule) returns MaxonModule
+	// Whole-module parameter-mutation facts (which user-parameter positions each
+	// function mutates), consulted at every free-call conflict site. Computed
+	// once because a callee's facts depend on the whole module (transitive
+	// propagation); the per-function conflict walk is a read-only consumer.
+	let mutatedParams = computeMutatedParams(module)
+
 	for func in module.functions 'eachFunc'
-		checkFunction(project, func: func, module: module)
+		checkFunction(project, func: func, module: module, mutatedParams: mutatedParams)
 	end 'eachFunc'
 
 	// Analysis-only pass: return the module unchanged.
@@ -150,7 +440,7 @@ end 'runMaxonBorrowCheck'
 // Per-function analysis
 // ============================================================
 
-function checkFunction(project Project, func IrFunction, module MaxonModule)
+function checkFunction(project Project, func IrFunction, module MaxonModule, mutatedParams MutatedParamsKeySet)
 	// Build slot -> VarInfo by inverting the function's symbol table. Empty
 	// for stdlib-restored / synthesized functions (no scope), which makes the
 	// borrow scan a no-op there — exactly right, since user code can't fix
@@ -184,7 +474,7 @@ function checkFunction(project Project, func IrFunction, module MaxonModule)
 	// Pass 3: walk call sites in order; activate borrows at their binding
 	// index, expire them past last use, and flag mutating calls on a still-
 	// borrowed source.
-	checkConflicts(project, func: func, facts: facts, pending: pending, mutators: mutators)
+	checkConflicts(project, func: func, facts: facts, pending: pending, mutators: mutators, mutatedParams: mutatedParams)
 end 'checkFunction'
 
 // E3019 (SemanticImmutableRefToMutatingParam): report a mutating method call
@@ -271,7 +561,8 @@ function recordOpFacts(op MaxonOp, gi GlobalOpIndex, facts BorrowFacts)
 		varDecl(slotId, value, _, _) then recordVarDecl(slotId, value: value, gi: gi, facts: facts)
 		varLoad(result, slotId, slotType, _) then recordVarLoad(result, slotId: slotId, slotType: slotType, gi: gi, facts: facts)
 		varStore(slotId, value, _) then facts.storeSlotByValue.upsert(String.from(value), value: slotId)
-		globalLoad to call then return
+		globalLoad to br then return
+		call(_, callee, _, args, _, _, _, range) then recordFreeCallSite(facts, gi: gi, callee: callee, args: args, range: range)
 		methodCall(result, receiver, methodName, _, _, _, _, range) then recordCallSite(facts, gi: gi, receiver: receiver, methodName: methodName, result: result, range: range)
 		ret to tryCall then return
 		tryMethodCall(result, receiver, methodName, _, _, _, _, _, range) then recordCallSite(facts, gi: gi, receiver: receiver, methodName: methodName, result: result, range: range)
@@ -284,6 +575,17 @@ end 'recordOpFacts'
 function recordCallSite(facts BorrowFacts, gi GlobalOpIndex, receiver ByteArray, methodName ByteArray, result ByteArray, range SourceRange)
 	facts.callSites.push(MethodCallSite.create(gi, receiverName: String.from(receiver), methodName: String.from(methodName), resultName: String.from(result), line: range.line, column: range.column))
 end 'recordCallSite'
+
+// Append a free-call site, copying the positional argument SSA names. The via-
+// helper conflict check (`reportFreeCallConflict`) consults these against the
+// callee's mutated-param positions.
+function recordFreeCallSite(facts BorrowFacts, gi GlobalOpIndex, callee ByteArray, args ByteArrayArray, range SourceRange)
+	var argNames = StringArray.create()
+	for arg in args 'eachArg'
+		argNames.push(String.from(arg))
+	end 'eachArg'
+	facts.freeCallSites.push(FreeCallSite.create(gi, callee: String.from(callee), argNames: argNames, line: range.line, column: range.column))
+end 'recordFreeCallSite'
 
 // A varLoad binds an SSA name to its source slot, records the slot's load-site
 // SSA name (for the store→load→decl chain), captures the TypeResolution-stamped
@@ -323,9 +625,13 @@ function detectBorrows(project Project, facts BorrowFacts, slotToVarInfo SlotToV
 		// references into a movable backing buffer. Plain structs return value
 		// copies from method calls and cannot dangle. Use the TypeResolution-
 		// stamped varLoad type, not the scope's pre-resolution VarInfo type.
-		let sourceType = try facts.slotTypes.get(sourceSlot) otherwise 'noType'
+		// Chase a collection typealias to its generic instance first — a
+		// PARAMETER's slotType keeps the source-level alias (`list StringList`),
+		// which `isGenericCollectionType` would otherwise reject.
+		let rawSourceType = try facts.slotTypes.get(sourceSlot) otherwise 'noType'
 			continue
 		end 'noType'
+		let sourceType = resolveCollectionAlias(project, t: rawSourceType)
 		if not isGenericCollectionType(sourceType) 'notCollection'
 			continue
 		end 'notCollection'
@@ -349,10 +655,19 @@ function detectBorrows(project Project, facts BorrowFacts, slotToVarInfo SlotToV
 		// The borrow must produce a heap-allocated value (a pointer into the
 		// buffer); primitive/value returns are copies. Use the resolved load
 		// type of the borrowing slot, falling back to its declared type.
-		let borrowingType = try facts.slotTypes.get(activation.boundSlot) otherwise borrowingInfo.varType
+		let rawBorrowingType = try facts.slotTypes.get(activation.boundSlot) otherwise borrowingInfo.varType
+		let borrowingType = resolveCollectionAlias(project, t: rawBorrowingType)
 		if not typeIsHeapAllocated(project, t: borrowingType) 'valueCopy'
 			continue
 		end 'valueCopy'
+
+		// A builtin managed-handle result (`__ManagedListNode`) is an INDEPENDENT,
+		// refcounted node — not a view into the receiver's storage — so mutating
+		// the receiver (`list.remove(other)`) cannot dangle it. Exclude it from
+		// the buffer-aliasing borrow rule (see `isBuiltinManagedHandleType`).
+		if isBuiltinManagedHandleType(project, t: borrowingType) 'independentHandle'
+			continue
+		end 'independentHandle'
 
 		// Skip methods that return the same collection type as the receiver
 		// (`.slice()`, `.clone()`, builder-pattern chains). Those produce a new,
@@ -405,6 +720,28 @@ function resolveActivation(facts BorrowFacts, resultName String) returns MbcActi
 	throw MbcActivationLookup.notFound
 end 'resolveActivation'
 
+// Resolve a `named(alias)` collection typealias to its underlying generic
+// instance (`StringList` -> `List with String`). The C# pass reads the resolved
+// `callee.ParamTypes[0]` so it always sees the structural `IrStructType`; the
+// self-hosted pass reads the `varLoad.slotType`, which for a PARAMETER keeps the
+// source-level alias the user wrote (`list StringList`) rather than the resolved
+// generic instance. Chase the alias through `genericTypealiases` so a param-typed
+// receiver is recognized as a collection (the borrow conflict inside a helper
+// like `clearList(list StringList)` depends on this). A non-alias / unregistered
+// type passes through unchanged. Bounded loop handles alias-to-alias chains.
+function resolveCollectionAlias(project Project, t MaxonType) returns MaxonType
+	var resolved = t
+	for _ in 0 upto 8 'unwrap'
+		let name = resolved.namedAliasNameOrEmpty(project)
+		if name.isEmpty() 'notNamed'
+			return resolved
+		end 'notNamed'
+		let next = try project.genericTypealiases.get(name) otherwise return resolved
+		resolved = next
+	end 'unwrap'
+	return resolved
+end 'resolveCollectionAlias'
+
 // True when a type is a generic collection (Array / Map / Set / List / Vector)
 // — a parameterized type whose method calls can return interior references.
 function isGenericCollectionType(t MaxonType) returns bool
@@ -414,6 +751,26 @@ function isGenericCollectionType(t MaxonType) returns bool
 		interface to cstring gives false
 	end 'gc'
 end 'isGenericCollectionType'
+
+// True when `t` is a builtin compiler-managed handle (`__ManagedList`,
+// `__ManagedListNode`, `__ManagedMemory`) — its base name is in the
+// `isBuiltinManagedTypeName` set. A `genericInstance` whose base is such a
+// handle is NOT a contiguous-buffer collection: `__ManagedList` is a doubly-
+// linked chain of individually heap-allocated, refcounted nodes, and a node
+// accessor (`insertLast`/`head`/`first`) returns an INDEPENDENT
+// `__ManagedListNode` handle, not a pointer into a movable backing buffer.
+// Removing one node never reallocates or dangles another node handle, so a
+// node result must not be treated as a borrow into the list (the C# bootstrap
+// reaches the same outcome because the node-producing methods mutate `self`
+// and so are classified non-borrow producers; here we encode the structural
+// reason directly — the produced value is an owned handle, not a buffer view).
+function isBuiltinManagedHandleType(project Project, t MaxonType) returns bool
+	return match t 'bm'
+		genericInstance(id) gives isBuiltinManagedTypeName(genericInstanceIdBaseName(project, id: id))
+		boolean to typeParameter gives false
+		interface to cstring gives false
+	end 'bm'
+end 'isBuiltinManagedHandleType'
 
 // True when a value of type `t` is heap-allocated (a reference into managed
 // memory) rather than a copied primitive. Strings and struct/collection types
@@ -447,7 +804,7 @@ end 'namedTypeIsHeapAllocated'
 // Pass 3: conflict checking
 // ============================================================
 
-function checkConflicts(project Project, func IrFunction, facts BorrowFacts, pending MbcBorrowArray, mutators MethodNameSet)
+function checkConflicts(project Project, func IrFunction, facts BorrowFacts, pending MbcBorrowArray, mutators MethodNameSet, mutatedParams MutatedParamsKeySet)
 	var active = MbcBorrowArray.create()
 	// Tracks which pending borrows have already moved into `active`, so each
 	// borrow activates exactly once even though the walk only visits call
@@ -458,22 +815,101 @@ function checkConflicts(project Project, func IrFunction, facts BorrowFacts, pen
 		activated.push(false)
 	end 'seedActivated'
 
-	for site in facts.callSites 'eachSite'
-		// Activate any pending borrow bound at or before this call's index.
-		activatePendingUpTo(pending, active: active, activated: activated, currentIndex: site.globalIndex)
-
-		// Expire borrows whose borrowing variable's last use is before this op.
-		expireDeadBorrows(active, lastUse: facts.lastUse, currentIndex: site.globalIndex)
-
-		// A mutating method on a still-borrowed source is a conflict.
-		if mutators.contains(site.methodName) 'isMutating'
-			let mutatedSlot = try facts.ssaToSlot.get(site.receiverName) otherwise 'noSlot'
-				continue
-			end 'noSlot'
-			reportConflictIfBorrowed(project, func: func, active: active, mutatedSlot: mutatedSlot, methodName: site.methodName, line: site.line, column: site.column)
-		end 'isMutating'
-	end 'eachSite'
+	// Walk method-call and free-call sites together in global-op-index order
+	// (both arrays are already in op order). Activation/expiry must see ALL
+	// calls in order, so a borrow active at a free call (`clearList(list)`) is
+	// flagged just like one at a direct mutating method (`list.clear()`).
+	var mi = 0 as CallSiteCursor
+	var fi = 0 as CallSiteCursor
+	while mi < facts.callSites.count() or fi < facts.freeCallSites.count() 'walk'
+		let nextIsMethod = freeCallComesAfterMethod(facts, mi: mi, fi: fi)
+		if nextIsMethod 'methodSite'
+			let site = try facts.callSites.get(mi) otherwise panic("checkConflicts: callSites.get OOB at {mi}")
+			mi = mi + 1
+			advanceBorrowState(facts, pending: pending, active: active, activated: activated, currentIndex: site.globalIndex)
+			checkMethodCallConflict(project, func: func, facts: facts, active: active, mutators: mutators, site: site)
+		end 'methodSite' else 'freeSite'
+			let site = try facts.freeCallSites.get(fi) otherwise panic("checkConflicts: freeCallSites.get OOB at {fi}")
+			fi = fi + 1
+			advanceBorrowState(facts, pending: pending, active: active, activated: activated, currentIndex: site.globalIndex)
+			checkFreeCallConflict(project, func: func, facts: facts, active: active, mutatedParams: mutatedParams, site: site)
+		end 'freeSite'
+	end 'walk'
 end 'checkConflicts'
+
+// True when the next site to process (lowest global index) is the method-call
+// site. When one stream is exhausted the other wins; on a tie the method-call
+// site is processed first (deterministic, and the two never share an index).
+function freeCallComesAfterMethod(facts BorrowFacts, mi CallSiteCursor, fi CallSiteCursor) returns bool
+	if fi >= facts.freeCallSites.count() 'noMoreFree'
+		return true
+	end 'noMoreFree'
+	if mi >= facts.callSites.count() 'noMoreMethod'
+		return false
+	end 'noMoreMethod'
+	let mSite = try facts.callSites.get(mi) otherwise panic("freeCallComesAfterMethod: callSites.get OOB at {mi}")
+	let fSite = try facts.freeCallSites.get(fi) otherwise panic("freeCallComesAfterMethod: freeCallSites.get OOB at {fi}")
+	return mSite.globalIndex <= fSite.globalIndex
+end 'freeCallComesAfterMethod'
+
+// Activate pending borrows bound at/before this op and expire dead ones —
+// the per-site bookkeeping shared by both call-site kinds.
+function advanceBorrowState(facts BorrowFacts, pending MbcBorrowArray, active MbcBorrowArray, activated BoolArray, currentIndex GlobalOpIndex)
+	activatePendingUpTo(pending, active: active, activated: activated, currentIndex: currentIndex)
+	expireDeadBorrows(active, lastUse: facts.lastUse, currentIndex: currentIndex)
+end 'advanceBorrowState'
+
+// A mutating method on a still-borrowed source is a conflict.
+function checkMethodCallConflict(project Project, func IrFunction, facts BorrowFacts, active MbcBorrowArray, mutators MethodNameSet, site MethodCallSite)
+	if not mutators.contains(site.methodName) 'notMutating'
+		return
+	end 'notMutating'
+	let mutatedSlot = try facts.ssaToSlot.get(site.receiverName) otherwise return
+	reportConflictIfBorrowed(project, func: func, active: active, mutatedSlot: mutatedSlot, methodName: site.methodName, line: site.line, column: site.column)
+end 'checkMethodCallConflict'
+
+// A free call whose argument is a still-borrowed source AND whose callee mutates
+// that argument's parameter position is a conflict (the via-helper case:
+// `clearList(list)` where `clearList` runs `list.clear()`). Mirrors the C# pass's
+// `DetectMutationConflict` arg-loop over `DoesMutateArg(call, argIdx)`. The
+// message names the CALLEE (display-trimmed of any namespace prefix), matching
+// the C# `FormatMethodName` form (`StringList.clear` -> `clear`, `clearList` ->
+// `clearList`).
+function checkFreeCallConflict(project Project, func IrFunction, facts BorrowFacts, active MbcBorrowArray, mutatedParams MutatedParamsKeySet, site FreeCallSite)
+	let methodDisplay = formatCalleeDisplay(site.callee)
+	for argPos in 0 upto site.argNames.count() 'eachArg'
+		if not mutatedParams.contains(mutatedParamKey(site.callee, paramIndex: argPos)) 'notMutatedHere'
+			continue
+		end 'notMutatedHere'
+		let argName = try site.argNames.get(argPos) otherwise panic("checkFreeCallConflict: argNames.get OOB at {argPos}")
+		let mutatedSlot = try facts.ssaToSlot.get(argName) otherwise continue
+		reportConflictIfBorrowed(project, func: func, active: active, mutatedSlot: mutatedSlot, methodName: methodDisplay, line: site.line, column: site.column)
+	end 'eachArg'
+end 'checkFreeCallConflict'
+
+// Trim a callee name to its display form: everything after the LAST `.` (so a
+// qualified callee `ns.helper` displays as `helper`); an unqualified free
+// function (`clearList`) is returned verbatim. Mirrors the C# pass's
+// `FormatMethodName` for the cases the borrow check reports — a bare free-
+// function name has no dot, so both agree (`clearList` -> `clearList`).
+function formatCalleeDisplay(callee String) returns String
+	let bytes = callee.toByteArray()
+	let dotByte = 0x2E
+	var lastDot = -1
+	var i = 0
+	while i < bytes.count() 'scan'
+		let b = try bytes.get(i) otherwise panic("formatCalleeDisplay: bytes.get OOB at {i}")
+		if b == dotByte 'hit'
+			lastDot = i
+		end 'hit'
+		i = i + 1
+	end 'scan'
+	if lastDot < 0 'noDot'
+		return callee
+	end 'noDot'
+	let tail = try bytes.slice(lastDot + 1, endIndex: bytes.count()) otherwise panic("formatCalleeDisplay: slice failed past last dot")
+	return String.from(tail)
+end 'formatCalleeDisplay'
 
 // Move every not-yet-activated pending borrow whose binding index is at or
 // before `currentIndex` into the active set. A borrow becomes live once its
