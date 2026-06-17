@@ -1,0 +1,74 @@
+// Test: int-while-loop-multiple-accumulators
+function main() returns ExitCode
+	var even_sum = 0
+	var odd_sum = 0
+	var count = 0
+	var i = 0
+	while i < 20 'loop'
+		if i mod 2 == 0 'even'
+			even_sum = even_sum + i
+			count = count + 1
+		end 'even' else 'odd'
+			odd_sum = odd_sum + i
+		end 'odd'
+		i = i + 1
+	end 'loop'
+	return (even_sum + odd_sum + count) and 125
+end 'main'
+---
+ExitCode: 72
+RequiredIRSelfhosted: ```
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.xor eax, eax
+    x64.xor r8d, r8d
+    x64.xor r9d, r9d
+    x64.xor esi, esi
+    x64.mov rdi, rax
+  loop_0.header:
+    x64.cmp rdi, 20
+    x64.jge loop_0.exit
+  loop_0:
+    x64.mov ecx, 2
+    x64.mov rax, rdi
+    x64.cqo
+    x64.idiv rcx
+    x64.test rdx, rdx
+    x64.jne odd_0
+    x64.jmp even_0
+  loop_0.exit:
+    x64.add rsi, r9
+    x64.mov r9d, 125
+    x64.add rsi, r8
+    x64.mov edi, 4294967295
+    x64.mov r8, rsi
+    x64.and r8, r9
+    x64.cmp r8, rdi
+    x64.jbe __range_ok_0
+    x64.jmp __range_panic_0
+  even_0:
+    x64.add r8, 1
+    x64.add rsi, rdi
+    x64.jmp even_0.merge
+  odd_0:
+    x64.add r9, rdi
+  even_0.merge:
+    x64.mov rax, rdi
+    x64.add rax, 1
+    x64.mov rdi, rax
+    x64.jmp loop_0.header
+  __range_panic_0:
+    x64.lea r12, [rip+__panic_msg_e449517a4b4af179]
+    x64.mov rcx, r12
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+
+```
+---
+---

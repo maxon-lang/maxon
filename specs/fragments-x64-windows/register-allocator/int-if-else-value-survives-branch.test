@@ -1,0 +1,39 @@
+// Test: int-if-else-value-survives-branch
+function main() returns ExitCode
+	let base = 40
+	let cond = 1
+	var extra = 0
+	if cond == 1 'check'
+		extra = 2
+	end 'check' else 'other'
+		extra = 100
+	end 'other'
+	return base + extra
+end 'main'
+---
+ExitCode: 42
+RequiredIRSelfhosted: ```
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+  check_0:
+    x64.mov r8d, 2
+  check_0.merge:
+    x64.mov r9d, 4294967295
+    x64.add r8, 40
+    x64.cmp r8, r9
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea r12, [rip+__panic_msg_9083dd3838d7ca20]
+    x64.mov rcx, r12
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+
+```
+---
+---

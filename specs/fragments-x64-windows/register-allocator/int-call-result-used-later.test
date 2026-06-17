@@ -1,0 +1,27 @@
+// Test: int-call-result-used-later
+
+typealias Integer = int(i64.min to i64.max)
+
+function compute() returns Integer
+	return 100
+end 'compute'
+
+function main() returns ExitCode
+	let a = compute()
+	let b = compute()
+	return (a + b) and 125
+end 'main'
+---
+ExitCode: 72
+RequiredIRSelfhosted: ```
+module {
+  func @main() -> u32 {
+  entry:
+    x64.mov r8d, 72
+    x64.ret
+  }
+}
+
+```
+---
+---

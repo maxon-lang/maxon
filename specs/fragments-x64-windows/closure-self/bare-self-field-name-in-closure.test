@@ -30,107 +30,65 @@ ExitCode: 10
 ---
 // CompiledIR
 module {
-  func @callIt(f: i64, __env_f: i64) -> i64 {
+  func @Widget.compute$closure_0(rcx: i64) -> i64 {
   entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov r10, rcx
-    x64.mov rcx, rdx
-    x64.call r10
-    x64.epilogue
+    x64.mov r8, [rcx+0] (8b)
+    x64.mov r9, [rcx+0] (8b)
+    x64.mov rsi, [r8+0] (8b)
+    x64.mov r8, [r9+0] (8b)
+    x64.mov r9, [rsi+8] (8b)
+    x64.mov rsi, [r8+0] (8b)
+    x64.mov r8, rsi
+    x64.add r8, r9
     x64.ret
   }
-  func @Widget.create(n: i64, bump: i64) -> i64 {
+  func @Widget.compute(rcx: i64) -> i64 {
   entry:
-    x64.prologue stack_size=32
-    x64.mov [rbp-16], rcx
-    x64.mov [rbp-24], rdx
-    x64.mov rcx, 16
-    x64.xor edx, edx
-    x64.mov r8, 4
-    x64.call mm_alloc
-    x64.mov [rbp-8], rax
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rbp-16]
-    x64.mov [rax+0], rcx
-    x64.mov rdx, [rbp-8]
-    x64.mov rbx, [rbp-24]
-    x64.mov [rdx+8], rbx
-    x64.mov rsi, [rbp-8]
-    x64.mov rcx, [rbp-8]
-    x64.call mm_incref
-    x64.mov rax, [rbp-8]
-    x64.epilogue
-    x64.ret
-  }
-  func @Widget.compute(__self_ptr: i64) -> i64 {
-  entry:
-    x64.prologue stack_size=32
+    x64.prologue stack_size=48
     x64.mov [rbp-8], rcx
-    x64.lea_func rax, [_$closure_2]
-    x64.mov [rbp-24], rax
-    x64.mov rcx, 8
     x64.xor edx, edx
-    x64.mov r8, 2
-    x64.call mm_alloc
-    x64.lea rcx, [rbp-8]
-    x64.mov rdx, rcx
-    x64.mov [rax+0], rdx
-    x64.mov [rbp-16], rax
-    x64.mov rcx, [rbp-16]
-    x64.call mm_incref
-    x64.mov rbx, [rbp-16]
-    x64.mov rcx, [rbp-24]
-    x64.mov rdx, [rbp-16]
-    x64.call callIt
-    x64.mov rsi, [rbp-16]
-    x64.mov [rbp-32], rax
-    x64.test rsi, rsi
-    x64.jz __nonnull_skip_0
-    x64.mov rcx, [rbp-16]
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.mov rax, [rbp-32]
+    x64.mov ecx, 8
+    x64.call stdlib.__mm_alloc
+    x64.mov r12, r8
+    x64.lea rax, [rbp-8]
+    x64.mov r8, [rbp-16]
+    x64.mov [r12+0], r8 (8b)
+    x64.lea r13, [rip+Widget.compute$closure_0]
+    x64.mov rcx, r12
+    x64.call r13
+    x64.mov r13, r8
+    x64.mov rcx, r12
+    x64.call mm_drop
+    x64.mov r8, r13
     x64.epilogue
     x64.ret
   }
   func @main() -> u32 {
   entry:
     x64.prologue stack_size=16
-    x64.mov rcx, 4
-    x64.mov rdx, 6
-    x64.call Widget.create
-    x64.mov [rbp-8], rax
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rbp-8]
+    x64.xor edx, edx
+    x64.mov ecx, 16
+    x64.call stdlib.__mm_alloc
+    x64.mov r12, r8
+    x64.mov r8d, 4
+    x64.mov [r12+0], r8 (8b)
+    x64.mov r8d, 6
+    x64.mov [r12+8], r8 (8b)
+    x64.mov rcx, r12
     x64.call Widget.compute
-    x64.xor ecx, ecx
-    x64.mov edx, 4294967295
-    x64.cmp rax, rdx
-    x64.jg main.__range_panic_0
-    x64.cmp rax, rcx
-    x64.jl main.__range_panic_0
-    x64.jmp main.__range_ok_0
+    x64.mov r13, r8
+    x64.mov rcx, r12
+    x64.call mm_drop
+    x64.mov r8d, 4294967295
+    x64.cmp r13, r8
+    x64.jbe __range_ok_0
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_0]
-    x64.mov rcx, rax
+    x64.lea r12, [rip+__panic_msg_a3647bbe4947a96c]
+    x64.mov rcx, r12
     x64.call mrt_panic
   __range_ok_0:
-    x64.mov rbx, [rbp-8]
-    x64.mov [rbp-16], rax
-    x64.test rbx, rbx
-    x64.jz __nonnull_skip_0
-    x64.mov rcx, [rbp-8]
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.mov rax, [rbp-16]
+    x64.mov r8, r13
     x64.epilogue
-    x64.ret
-  }
-  func @__destruct_Widget(ptr: i64) {
-  entry:
-    x64.jmp __destruct_Widget.done
-  done:
     x64.ret
   }
 }

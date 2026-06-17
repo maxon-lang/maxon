@@ -35,133 +35,74 @@ ExitCode: 4
 ---
 // CompiledIR
 module {
-  func @lookup(table: i64, index: i64) -> u64 {
+  func @lookup(rcx: i64, rdx: u64) -> u64 {
   entry:
-    x64.prologue stack_size=32
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rbp-8]
-    x64.call IdxArray.get
-    x64.xor ecx, ecx
-    x64.mov [rbp-16], rcx
-    x64.mov [rbp-24], rax
-    x64.xor eax, eax
-    x64.cmp rdx, rax
-    x64.je lookup.otherwise_default_continue_0
-  otherwise_default_error_0:
-    x64.mov rax, [rbp-16]
-    x64.mov [rbp-24], rax
-    x64.jmp lookup.otherwise_default_continue_0
-  otherwise_default_continue_0:
-    x64.mov rax, [rbp-24]
+    x64.prologue stack_size=16
+  inlined_Array.get_0_0:
+    x64.mov r8, [rcx+0] (8b)
+    x64.mov rcx, r8
+    x64.call stdlib.__managed_mem_get
+    x64.test rdx, rdx
+    x64.je inlined_Array.get_3_0
+  inlined_Array.get_1_0:
+    x64.mov edx, 1
+    x64.xor r8d, r8d
+    x64.jmp inline_cont_lookup_0
+  inlined_Array.get_3_0:
+    x64.xor edx, edx
+  inline_cont_lookup_0:
+    x64.test rdx, rdx
+    x64.je try_0.merge
+  try_0.otherwise:
+    x64.xor r8d, r8d
+  try_0.merge:
+    x64.mov r9, -1
+    x64.cmp r8, r9
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea r12, [rip+__panic_msg_f8f95e909c9cdfa3]
+    x64.mov rcx, r12
+    x64.call mrt_panic
+  __range_ok_0:
     x64.epilogue
     x64.ret
   }
   func @main() -> u32 {
   entry:
-    x64.prologue stack_size=32
-    x64.call IdxArray.create
-    x64.mov [rbp-8], rax
-    x64.xor eax, eax
-    x64.mov [rbp-16], rax
-    x64.jmp main.fill_0.header
+    x64.prologue stack_size=16
+    x64.lea rcx, [rip+__layout_Array_Idx]
+    x64.call Array.create
+    x64.mov r12, r8
+    x64.xor edx, edx
+    x64.mov r13, rdx
   fill_0.header:
-    x64.mov rax, 100
-    x64.mov rcx, [rbp-16]
-    x64.cmp rcx, rax
-    x64.jge main.fill_0.exit
+    x64.cmp r13, 100
+    x64.jge fill_0.exit
   fill_0:
-    x64.mov rax, [rbp-16]
-    x64.mov rcx, [rbp-8]
-    x64.mov rdx, [rbp-16]
-    x64.call IdxArray.push
-    x64.mov rdx, 1
-    x64.mov rbx, [rbp-16]
-    x64.add rbx, rdx
-    x64.mov [rbp-16], rbx
-    x64.jmp main.fill_0.header
+    x64.lea rax, [rip+__layout_Array_Idx]
+    x64.mov rcx, r12
+    x64.mov rdx, r13
+    x64.call Array.push
+    x64.mov rdx, r13
+    x64.add rdx, 1
+    x64.mov r13, rdx
+    x64.jmp fill_0.header
   fill_0.exit:
-    x64.mov rax, 1
-    x64.mov [rbp-24], rax
-    x64.mov rcx, 1
-    x64.mov rdx, 3
-    x64.imul rcx, rdx
-    x64.mov rbx, [rbp-24]
-    x64.add rcx, rbx
-    x64.mov rsi, [rbp-8]
-    x64.mov rdx, rcx
-    x64.mov rcx, [rbp-8]
+    x64.mov edx, 4
+    x64.mov rcx, r12
     x64.call lookup
-    x64.xor edi, edi
-    x64.mov r8, 4294967295
-    x64.cmp rax, r8
-    x64.jg main.__range_panic_0
-    x64.cmp rax, rdi
-    x64.jl main.__range_panic_0
-    x64.jmp main.__range_ok_0
+    x64.mov r13, r8
+    x64.mov rcx, r12
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r8d, 4294967295
+    x64.cmp r13, r8
+    x64.jbe __range_ok_0
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_0]
-    x64.mov rcx, rax
+    x64.lea r12, [rip+__panic_msg_62e1d8ffde0f4622]
+    x64.mov rcx, r12
     x64.call mrt_panic
   __range_ok_0:
-    x64.mov rcx, [rbp-8]
-    x64.mov [rbp-32], rax
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_0
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.mov rax, [rbp-32]
-    x64.epilogue
-    x64.ret
-  }
-  func @__destruct___ManagedMemory_Idx(ptr: i64) {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+16]
-    x64.mov rdx, -1
-    x64.cmp rcx, rdx
-    x64.jne __destruct___ManagedMemory_Idx.check_owned_0
-  slice_cleanup_0:
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+32]
-    x64.mov [rbp-16], rcx
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_0
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.jmp __destruct___ManagedMemory_Idx.skip_buf_0
-  check_owned_0:
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+16]
-    x64.mov rdx, -2
-    x64.cmp rcx, rdx
-    x64.je __destruct___ManagedMemory_Idx.skip_buf_0
-  free_buf_0:
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+0]
-    x64.call mm_raw_free
-    x64.jmp __destruct___ManagedMemory_Idx.skip_buf_0
-  skip_buf_0:
-    x64.jmp __destruct___ManagedMemory_Idx.done
-  done:
-    x64.epilogue
-    x64.ret
-  }
-  func @__destruct_IdxArray(ptr: i64) {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+0]
-    x64.mov [rbp-16], rcx
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_0
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.jmp __destruct_IdxArray.done
-  done:
+    x64.mov r8, r13
     x64.epilogue
     x64.ret
   }

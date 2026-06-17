@@ -10,28 +10,32 @@ ExitCode: 42
 module {
   func @main() -> u32 {
   entry:
-    x64.prologue stack_size=16
-    x64.mov rax, 40
-    x64.movsd xmm0, [rip+__float_2.5]
-    x64.mov [rbp-16], rax
-    x64.movsd [rbp-8], xmm0
-    x64.mov rcx, [rbp-16]
-    x64.movsd xmm1, [rbp-8]
-    x64.cvttsd2si rdx, xmm1
-    x64.add rcx, rdx
-    x64.xor ebx, ebx
+    x64.prologue stack_size=32
+    x64.xor edx, edx
+    x64.mov ecx, 16
+    x64.call stdlib.__mm_alloc
+    x64.mov r12, r8
+    x64.mov r8d, 40
+    x64.mov [r12+0], r8 (8b)
+    x64.movsd xmm0, [rip+__float_4612811918334230528]
+    x64.movsd [r12+8], xmm0
+    x64.movsd xmm0, [r12+8]
+    x64.movsd [rbp+-8], xmm0
+    x64.mov r13, [r12+0] (8b)
+    x64.mov rcx, r12
+    x64.call mm_drop
+    x64.movsd xmm0, [rbp+-8]
+    x64.cvttsd2si r9, xmm0
     x64.mov esi, 4294967295
-    x64.cmp rcx, rsi
-    x64.jg main.__range_panic_0
-    x64.cmp rcx, rbx
-    x64.jl main.__range_panic_0
-    x64.jmp main.__range_ok_0
+    x64.mov r8, r13
+    x64.add r8, r9
+    x64.cmp r8, rsi
+    x64.jbe __range_ok_0
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_0]
-    x64.mov rcx, rax
+    x64.lea r12, [rip+__panic_msg_646944d75df65835]
+    x64.mov rcx, r12
     x64.call mrt_panic
   __range_ok_0:
-    x64.mov rax, rcx
     x64.epilogue
     x64.ret
   }

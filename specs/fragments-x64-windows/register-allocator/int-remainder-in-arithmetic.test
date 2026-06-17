@@ -1,0 +1,38 @@
+// Test: int-remainder-in-arithmetic
+function main() returns ExitCode
+	let a = 100
+	let b = 7
+	let c = 10
+	let rem = a mod b
+	return rem * c
+end 'main'
+---
+ExitCode: 20
+RequiredIRSelfhosted: ```
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov r8d, 7
+    x64.mov eax, 100
+    x64.xor edx, edx
+    x64.idiv r8
+    x64.mov r9d, 10
+    x64.mov r8, rdx
+    x64.imul r8, r9
+    x64.mov r9d, 4294967295
+    x64.cmp r8, r9
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea r12, [rip+__panic_msg_bf3600189d269600]
+    x64.mov rcx, r12
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+
+```
+---
+---

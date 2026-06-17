@@ -1,0 +1,25 @@
+// Test: exported-typealias-collision-multi-segment-namespace
+// --- file: lib/fmt/types.maxon
+export typealias Score = int(0 to 50)
+
+// --- file: legacy/types.maxon
+export typealias Score = int(0 to 100)
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	let a = 10 as lib.fmt.Score
+	let b = 65 as legacy.Score
+	return a + b
+end 'main'
+---
+ExitCode: 75
+---
+// CompiledIR
+module {
+  func @main() -> u32 {
+  entry:
+    x64.mov r8d, 75
+    x64.ret
+  }
+}
+---

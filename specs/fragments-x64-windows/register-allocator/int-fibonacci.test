@@ -1,0 +1,51 @@
+// Test: int-fibonacci
+function main() returns ExitCode
+	var a = 0
+	var b = 1
+	var i = 0
+	while i < 13 'loop'
+		let temp = a + b
+		a = b
+		b = temp
+		i = i + 1
+	end 'loop'
+	return a and 125
+end 'main'
+---
+ExitCode: 105
+RequiredIRSelfhosted: ```
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.xor r8d, r8d
+    x64.mov r9d, 1
+    x64.xor esi, esi
+  loop_0.header:
+    x64.cmp r8, 13
+    x64.jge loop_0.exit
+  loop_0:
+    x64.add r8, 1
+    x64.add rsi, r9
+    x64.xchg rsi, r9
+    x64.jmp loop_0.header
+  loop_0.exit:
+    x64.mov r9d, 125
+    x64.mov edi, 4294967295
+    x64.mov r8, rsi
+    x64.and r8, r9
+    x64.cmp r8, rdi
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea r12, [rip+__panic_msg_5ffb4c10096b25df]
+    x64.mov rcx, r12
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+
+```
+---
+---

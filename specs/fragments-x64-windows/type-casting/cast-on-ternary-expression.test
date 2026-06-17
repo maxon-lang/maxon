@@ -22,44 +22,27 @@ ExitCode: 2
 ---
 // CompiledIR
 module {
-  func @maskFor(negate: i1) -> i64 {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov rax, 1
-    x64.xor edx, edx
-    x64.mov rbx, 1
-    x64.sub rdx, rbx
-    x64.test rcx, rcx
-    x64.mov [rbp-16], rdx
-    x64.je maskFor.ternary_0.false
-  ternary_0.true:
-    x64.mov rax, 1
-    x64.mov [rbp-8], rax
-    x64.jmp maskFor.ternary_0.merge
-  ternary_0.false:
-    x64.mov rax, [rbp-16]
-    x64.mov [rbp-8], rax
-    x64.jmp maskFor.ternary_0.merge
-  ternary_0.merge:
-    x64.mov rax, [rbp-8]
-    x64.epilogue
-    x64.ret
-  }
   func @main() -> u32 {
   entry:
-    x64.prologue stack_size=16
-    x64.xor ecx, ecx
-    x64.call maskFor
-    x64.xor ecx, ecx
-    x64.cmp rax, rcx
-    x64.jge main.neg_0.after
+    x64.xor r8d, r8d
+  inlined_maskFor_0_0:
+    x64.mov r9, -1
+    x64.mov esi, 1
+    x64.test r8, r8
+    x64.je inlined_maskFor_2_0
+    x64.jmp inlined_maskFor_3_0
+  inlined_maskFor_2_0:
+    x64.mov rsi, r9
+  inlined_maskFor_3_0:
+    x64.mov r8, rsi
+  inline_cont_main_0:
+    x64.test r8, r8
+    x64.jge neg_0.after
   neg_0:
-    x64.mov rax, 2
-    x64.epilogue
+    x64.mov r8d, 2
     x64.ret
   neg_0.after:
-    x64.mov rax, 1
-    x64.epilogue
+    x64.mov r8d, 1
     x64.ret
   }
 }

@@ -1,0 +1,118 @@
+// Test: stack-probing-large-struct
+typealias Integer = int(i64.min to i64.max)
+typealias BigVec = Vector with 2048 Integer
+typealias Depth = int(-1 to 50)
+
+function recurse(n Depth) returns Depth
+	var v = BigVec.create()
+	try v.set(2047, value: n) otherwise panic("test invariant: set OOB")
+	if n <= 0 'base'
+		return 0
+	end 'base'
+	return recurse(n - 1)
+end 'recurse'
+
+function main() returns ExitCode
+	return recurse(50)
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @recurse(rcx: i8) -> i8 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov r12, rcx
+    x64.lea rcx, [rip+__layout_Vector_N2048_Integer]
+    x64.call Vector.create
+    x64.mov r13, r8
+    x64.mov r14, [r13+0] (8b)
+    x64.mov r8d, 2048
+    x64.mov [r14+16], r8 (8b)
+    x64.mov r8d, 8
+    x64.mov [r14+24], r8 (8b)
+    x64.mov ecx, 16384
+    x64.call mrt_alloc
+    x64.mov [r14+0], r8 (8b)
+    x64.mov r8d, 2048
+    x64.mov [r14+8], r8 (8b)
+    x64.mov edx, 2047
+    x64.xor r14d, r14d
+  inlined_Vector.set_0_0:
+    x64.mov rcx, [r13+0] (8b)
+    x64.mov rax, r12
+    x64.call stdlib.__managed_mem_set
+    x64.mov r15, rdx
+    x64.mov rcx, r13
+    x64.call __mm_decref_maybenull_helper
+    x64.test r15, r15
+    x64.je inlined_Vector.set_3_0
+  inlined_Vector.set_1_0:
+    x64.mov edx, 1
+    x64.xor r8d, r8d
+    x64.jmp inline_cont_recurse_0
+  inlined_Vector.set_3_0:
+    x64.xor edx, edx
+    x64.xor r8d, r8d
+  inline_cont_recurse_0:
+    x64.test rdx, rdx
+    x64.je try_0.merge
+  try_0.otherwise:
+    x64.lea r12, [rip+__panic_msg_5f509fca6deaf6a4]
+    x64.mov rcx, r12
+    x64.call mrt_panic
+    x64.mov r8, r14
+    x64.epilogue
+    x64.ret
+  try_0.merge:
+    x64.test r12, r12
+    x64.jg base_0.after
+  base_0:
+    x64.mov r8, r14
+    x64.epilogue
+    x64.ret
+  base_0.after:
+    x64.mov rcx, r12
+    x64.sub rcx, 1
+    x64.call recurse
+    x64.mov r9d, 128
+    x64.xor r8, r9
+    x64.sub r8, 128
+    x64.cmp r8, 50
+    x64.jg __range_panic_0
+    x64.jmp __range_check_lo_0
+  __range_panic_0:
+    x64.lea r12, [rip+__panic_msg_7f508be3d21e6b53]
+    x64.mov rcx, r12
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  __range_check_lo_0:
+    x64.mov r9, -1
+    x64.cmp r8, r9
+    x64.jge __range_ok_0
+    x64.jmp __range_panic_0
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov ecx, 50
+    x64.call recurse
+    x64.mov r9d, 128
+    x64.xor r8, r9
+    x64.mov r9d, 4294967295
+    x64.sub r8, 128
+    x64.cmp r8, r9
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea r12, [rip+__panic_msg_0d20f541bd20774e]
+    x64.mov rcx, r12
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

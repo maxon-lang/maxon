@@ -203,7 +203,17 @@ let whitelist = ["basics",
 	// --- Tier 2: moderate semantics / known small gaps ---
 	"short-circuit-evaluation",
 	"same-name-methods",
-	// "enum-match-range" (8/9) — range-covers-all-associated non-exhaustive.
+	// "enum-match-range" (8/9) — `range-covers-all-associated`: a SINGLE range
+	//   arm (`a to c`) covering every case of an all-payload union lowers the
+	//   range cmp against the raw box POINTER instead of the loaded tag, so it
+	//   never matches → runtime "non-exhaustive match" panic. lowerRangeMatchArm
+	//   DOES enter the boxed-union tag-load branch (enumOwnerName/boxed both
+	//   correct), but the emitted load_indirect is dropped before codegen (the
+	//   `cmp r12, 2` on the pointer survives). Root cause is upstream of the
+	//   tag-load (a value-id / op-survival issue that is sensitive to source
+	//   line position — adding a leading comment flips it), not the lowering
+	//   gate itself. Needs deeper tracing of why the load_indirect op is
+	//   eliminated. The other 8 (incl. multi-range, upto, statement-form) pass.
 	// "enum-allcases" — `error-enum` fragment needs a Hashable witness for a
 	//   primitive-conforming enum (the same Phase-5 gap as enum-hashable below).
 	"collection-contains",

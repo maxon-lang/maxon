@@ -1,0 +1,35 @@
+// Test: float-var-if-else
+function main() returns ExitCode
+	let x = 3.14
+	if x == 3.14 'check'
+		return 1
+	end 'check' else 'other'
+		return 0
+	end 'other'
+end 'main'
+---
+ExitCode: 1
+RequiredIRSelfhosted: ```
+module {
+  func @main() -> u32 {
+  entry:
+    x64.movsd xmm0, [rip+__float_4614253070214989087]
+    x64.movsd xmm1, [rip+__float_4614253070214989087]
+    x64.ucomisd xmm1, xmm0
+    x64.jp other_0
+    x64.jne other_0
+  check_0:
+    x64.mov r8d, 1
+    x64.ret
+  other_0:
+    x64.xor r8d, r8d
+    x64.ret
+  }
+}
+
+```
+RequiredRdata: ```
+f64 3.14
+```
+---
+---

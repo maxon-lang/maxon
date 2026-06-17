@@ -53,295 +53,299 @@ ExitCode: 17
 ---
 // CompiledIR
 module {
-  func @LiveRange.create(v: i64) -> i64 {
+  func @earliest$LiveRange(rcx: i64) -> u32 {
   entry:
     x64.prologue stack_size=16
-    x64.mov [rbp-16], rcx
-    x64.mov rcx, 8
-    x64.xor edx, edx
-    x64.mov r8, 8
-    x64.call mm_alloc
-    x64.mov [rbp-8], rax
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rbp-16]
-    x64.mov [rax+0], rcx
-    x64.mov rdx, [rbp-8]
-    x64.mov rcx, [rbp-8]
-    x64.call mm_incref
-    x64.mov rax, [rbp-8]
-    x64.epilogue
-    x64.ret
-  }
-  func @earliest$r_LiveRange(r: i64) -> u32 {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rdx, [rax+0]
-    x64.xor eax, eax
-    x64.mov ebx, 4294967295
-    x64.cmp rdx, rbx
-    x64.jg earliest$r_LiveRange.__range_panic_0
-    x64.cmp rdx, rax
-    x64.jl earliest$r_LiveRange.__range_panic_0
-    x64.jmp earliest$r_LiveRange.__range_ok_0
+    x64.mov r8, [rcx+0] (8b)
+    x64.mov r9d, 4294967295
+    x64.cmp r8, r9
+    x64.jbe __range_ok_0
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_0]
-    x64.mov rcx, rax
+    x64.lea r12, [rip+__panic_msg_496cbcf4eb68c51f]
+    x64.mov rcx, r12
     x64.call mrt_panic
   __range_ok_0:
-    x64.mov rax, rdx
     x64.epilogue
     x64.ret
   }
-  func @callThunk(t: i64, __env_t: i64) -> u32 {
+  func @callThunk(rcx: i64, rdx: i64) -> u32 {
   entry:
     x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov r10, rcx
+    x64.mov r12, rcx
     x64.mov rcx, rdx
-    x64.call r10
-    x64.xor ecx, ecx
-    x64.mov edx, 4294967295
-    x64.cmp rax, rdx
-    x64.jg callThunk.__range_panic_0
-    x64.cmp rax, rcx
-    x64.jl callThunk.__range_panic_0
-    x64.jmp callThunk.__range_ok_0
+    x64.call r12
+    x64.mov r9d, 4294967295
+    x64.cmp r8, r9
+    x64.jbe __range_ok_0
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_1]
-    x64.mov rcx, rax
+    x64.lea r12, [rip+__panic_msg_d6284dc77a07e35a]
+    x64.mov rcx, r12
     x64.call mrt_panic
   __range_ok_0:
     x64.epilogue
     x64.ret
   }
-  func @allocate(ranges: i64) -> u32 {
+  func @allocate$closure_0(rcx: i64) -> u32 {
   entry:
-    x64.prologue stack_size=64
-    x64.mov [rbp-24], rcx
-    x64.xor eax, eax
-    x64.mov [rbp-8], rax
-    x64.xor eax, eax
-    x64.mov [rbp-16], rax
-    x64.xor eax, eax
-    x64.mov [rbp-32], rax
-    x64.xor eax, eax
-    x64.mov [rbp-40], rax
-    x64.jmp allocate.assign_0.header
-  assign_0.header:
-    x64.mov rax, [rbp-24]
-    x64.mov rcx, [rbp-24]
-    x64.call LRArray.count
-    x64.mov rcx, [rbp-40]
-    x64.cmp rcx, rax
-    x64.jge allocate.assign_0.exit
-  assign_0:
-    x64.mov rax, [rbp-40]
-    x64.mov rcx, [rbp-24]
-    x64.mov rdx, [rbp-40]
-    x64.call LRArray.get
-    x64.mov [rbp-48], rax
-    x64.xor eax, eax
-    x64.cmp rdx, rax
-    x64.je allocate.otherwise_continue_0
-  otherwise_panic_0:
-    x64.lea_symdata rax, [__panic_msg_2]
-    x64.mov rcx, rax
-    x64.call mrt_panic
-  otherwise_continue_0:
-    x64.mov rax, [rbp-48]
-    x64.mov [rbp-8], rax
-    x64.mov rcx, [rbp-8]
-    x64.call mm_incref
-    x64.lea_func rdx, [_$closure_8]
-    x64.mov [rbp-56], rdx
-    x64.mov rcx, 8
-    x64.xor edx, edx
-    x64.mov r8, 1
-    x64.call mm_alloc
-    x64.lea rbx, [rbp-8]
-    x64.mov rsi, rbx
-    x64.mov [rax+0], rsi
-    x64.mov [rbp-16], rax
-    x64.mov rcx, [rbp-16]
-    x64.call mm_incref
-    x64.mov rdi, [rbp-16]
-    x64.mov rcx, [rbp-56]
-    x64.mov rdx, [rbp-16]
-    x64.call callThunk
-    x64.mov r8, rax
-    x64.mov r9, [rbp-32]
-    x64.add r9, r8
-    x64.mov [rbp-32], r9
-    x64.mov rax, 1
-    x64.mov rcx, [rbp-40]
-    x64.add rcx, rax
-    x64.mov [rbp-40], rcx
-    x64.mov rax, [rbp-8]
-    x64.test rax, rax
-    x64.jz __nonnull_skip_0
-    x64.mov rcx, [rbp-8]
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.xor eax, eax
-    x64.mov [rbp-8], rax
-    x64.mov rax, [rbp-48]
-    x64.test rax, rax
-    x64.jz __nonnull_skip_1
-    x64.mov rcx, [rbp-48]
-    x64.call mm_decref
-    x64.label __nonnull_skip_1
-    x64.mov rax, [rbp-16]
-    x64.test rax, rax
-    x64.jz __nonnull_skip_2
-    x64.mov rcx, [rbp-16]
-    x64.call mm_decref
-    x64.label __nonnull_skip_2
-    x64.xor eax, eax
-    x64.mov [rbp-16], rax
-    x64.jmp allocate.assign_0.header
-  assign_0.exit:
-    x64.mov rax, [rbp-32]
-    x64.xor ecx, ecx
-    x64.mov edx, 4294967295
-    x64.cmp rax, rdx
-    x64.jg allocate.__range_panic_0
-    x64.cmp rax, rcx
-    x64.jl allocate.__range_panic_0
-    x64.jmp allocate.__range_ok_0
+    x64.prologue stack_size=16
+    x64.mov r8, [rcx+0] (8b)
+    x64.mov rcx, [r8+0] (8b)
+    x64.call earliest$LiveRange
+    x64.mov r9d, 4294967295
+    x64.cmp r8, r9
+    x64.jbe __range_ok_0
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_3]
-    x64.mov rcx, rax
+    x64.lea r12, [rip+__panic_msg_595aaa2bc74899c2]
+    x64.mov rcx, r12
     x64.call mrt_panic
   __range_ok_0:
-    x64.mov rbx, [rbp-16]
-    x64.test rbx, rbx
-    x64.jz __nonnull_skip_3
-    x64.mov rcx, [rbp-16]
-    x64.call mm_decref
-    x64.label __nonnull_skip_3
-    x64.mov rax, [rbp-32]
+    x64.epilogue
+    x64.ret
+  }
+  func @allocate(rcx: i64) -> u32 {
+  entry:
+    x64.prologue stack_size=192
+    x64.mov r12, rcx
+    x64.xor r13d, r13d
+    x64.mov [rbp-40], r13
+    x64.mov r14, r13
+    x64.mov r15, r13
+  assign_0.header:
+    x64.lea rdx, [rip+__layout_Array_LiveRange]
+    x64.mov rcx, r12
+    x64.call Array.count
+    x64.cmp r15, r8
+    x64.jge assign_0.exit
+  inlined_Array.get_0_0:
+    x64.mov r8, [r12+0] (8b)
+  inlined_stdlib.__managed_mem_get_0_0:
+    x64.xor r9d, r9d
+    x64.test r15, r15
+    x64.jge inlined_stdlib.__managed_mem_get_2_0
+  inlined_stdlib.__managed_mem_get_1_0:
+    x64.mov edx, 1
+    x64.mov r8, r9
+    x64.jmp inline_cont_allocate_1
+  inlined_stdlib.__managed_mem_get_2_0:
+    x64.mov rsi, r8
+    x64.add rsi, 8
+    x64.mov rdi, [rsi+0] (8b)
+    x64.cmp r15, rdi
+    x64.jl inlined_stdlib.__managed_mem_get_4_0
+  inlined_stdlib.__managed_mem_get_3_0:
+    x64.mov edx, 1
+    x64.mov r8, r9
+    x64.jmp inline_cont_allocate_1
+  inlined_stdlib.__managed_mem_get_4_0:
+    x64.mov rsi, r8
+    x64.add rsi, 24
+    x64.mov rdi, [rsi+0] (8b)
+    x64.mov rsi, [r8+0] (8b)
+    x64.test rdi, rdi
+    x64.jne inlined_stdlib.__managed_mem_get_6_0
+  inlined_stdlib.__managed_mem_get_5_0:
+    x64.mov ecx, 3
+    x64.mov r8, r15
+    x64.shr r8, r8, rcx
+    x64.xor edi, edi
+    x64.add rsi, r8
+    x64.mov [rbp-48], rsi
+    x64.mov [rbp-56], rdi
+    x64.movzx rax, byte ptr [rax+0]
+    x64.mov r8, [rbp-64]
+    x64.mov esi, 7
+    x64.mov rcx, r15
+    x64.and rcx, rsi
+    x64.mov esi, 1
+    x64.shr r8, r8, rcx
+    x64.and r8, rsi
+    x64.mov rdx, r9
+    x64.jmp inline_cont_allocate_1
+  inlined_stdlib.__managed_mem_get_6_0:
+    x64.mov r8, r15
+    x64.imul r8, rdi
+    x64.add rsi, r8
+  inlined_stdlib.__managed_mem_load_sized_0_0:
+    x64.cmp rdi, 1
+    x64.jne inlined_stdlib.__managed_mem_load_sized_2_0
+  inlined_stdlib.__managed_mem_load_sized_1_0:
+    x64.xor r8d, r8d
+    x64.mov [rbp-72], rsi
+    x64.mov [rbp-80], r8
+    x64.movzx rax, byte ptr [rax+0]
+    x64.mov r8, [rbp-88]
+    x64.jmp inline_cont_allocate_0
+  inlined_stdlib.__managed_mem_load_sized_2_0:
+    x64.cmp rdi, 2
+    x64.jne inlined_stdlib.__managed_mem_load_sized_4_0
+  inlined_stdlib.__managed_mem_load_sized_3_0:
+    x64.movzx r8, [rsi+0] (2b)
+    x64.jmp inline_cont_allocate_0
+  inlined_stdlib.__managed_mem_load_sized_4_0:
+    x64.cmp rdi, 4
+    x64.jne inlined_stdlib.__managed_mem_load_sized_6_0
+  inlined_stdlib.__managed_mem_load_sized_5_0:
+    x64.mov r8, [rsi+0] (4b)
+    x64.jmp inline_cont_allocate_0
+  inlined_stdlib.__managed_mem_load_sized_6_0:
+    x64.mov r8, [rsi+0] (8b)
+  inline_cont_allocate_0:
+    x64.mov rdx, r9
+  inline_cont_allocate_1:
+    x64.mov [rbp+-136], r8
+    x64.test rdx, rdx
+    x64.je inlined_Array.get_3_0
+  inlined_Array.get_1_0:
+    x64.mov edx, 1
+    x64.xor r8d, r8d
+    x64.jmp inline_cont_allocate_2
+  inlined_Array.get_3_0:
+    x64.xor r8d, r8d
+    x64.mov [rbp+-128], r8
+    x64.jmp __rc_edge_9_0
+  inline_cont_allocate_2:
+    x64.mov [rbp+-128], r8
+    x64.test rdx, rdx
+    x64.je try_0.merge
+    x64.jmp try_0.otherwise
+  assign_0.exit:
+    x64.mov rcx, [rbp-40]
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r8d, 4294967295
+    x64.cmp r14, r8
+    x64.jbe __range_ok_0
+    x64.jmp __range_panic_0
+  try_0.otherwise:
+    x64.mov rcx, [rbp+-128]
+    x64.call __mm_decref_maybenull_helper
+    x64.lea r12, [rip+__panic_msg_f9826cda98d1f979]
+    x64.mov rcx, r12
+    x64.call mrt_panic
+    x64.mov rcx, [rbp-40]
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r8, r13
+    x64.epilogue
+    x64.ret
+  try_0.merge:
+    x64.mov rcx, [rbp-40]
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r8, [rbp+-128]
+    x64.mov [rbp-40], r8
+    x64.mov r8d, 8
+    x64.lea rax, [rbp-40]
+    x64.mov r9, [rbp-96]
+    x64.mov [rbp+-136], r9
+    x64.lea r9, [rip+allocate$closure_0]
+    x64.mov [rbp+-128], r9
+  inlined_stdlib.__mm_alloc_0_0:
+    x64.xor r9d, r9d
+    x64.mov [rbp+-144], r9
+    x64.cmp r8, 1
+    x64.jge inlined_stdlib.__mm_alloc_2_0
+  inlined_stdlib.__mm_alloc_1_0:
+    x64.mov r8d, 1
+  inlined_stdlib.__mm_alloc_2_0:
+    x64.mov [rbp+-152], r8
+    x64.lea r8, [rip+__mm_alloc_count]
+    x64.lock inc qword ptr [r8]
+    x64.mov rcx, [rbp+-152]
+    x64.add rcx, 32
+    x64.call stdlib.__slab_alloc
+    x64.mov r9, [rbp+-144]
+    x64.mov [r8+0], r9 (8b)
+    x64.mov rsi, r8
+    x64.add rsi, 8
+    x64.mov [rsi+0], r13 (8b)
+    x64.mov rsi, r8
+    x64.add rsi, 16
+    x64.mov rdi, [rbp+-152]
+    x64.mov [rsi+0], rdi (8b)
+    x64.mov rsi, r8
+    x64.add rsi, 24
+    x64.mov [rsi+0], r9 (8b)
+    x64.mov [rbp+-144], r8
+    x64.mov r8, [rbp+-144]
+    x64.add r8, 32
+    x64.mov [rbp+-144], r8
+    x64.mov r8, [rbp+-144]
+  inline_cont_allocate_3:
+    x64.mov [rbp+-152], r8
+    x64.mov rcx, [rbp+-144]
+    x64.call stdlib.__mm_incref
+    x64.mov r8, [rbp+-144]
+    x64.mov r8, [rbp+-136]
+    x64.mov r9, [rbp+-152]
+    x64.mov [r9+0], r8 (8b)
+    x64.mov rcx, [rbp+-128]
+    x64.mov rdx, [rbp+-152]
+    x64.call callThunk
+    x64.mov [rbp+-128], r8
+    x64.mov rcx, [rbp+-152]
+    x64.call mm_drop
+    x64.mov r8, [rbp+-152]
+    x64.add r15, 1
+    x64.add r14, [rbp+-128]
+    x64.jmp assign_0.header
+  __rc_edge_9_0:
+    x64.mov rcx, [rbp+-136]
+    x64.call stdlib.__mm_incref
+    x64.mov r8, [rbp+-136]
+    x64.mov r8, [rbp+-136]
+    x64.mov rdx, [rbp+-128]
+    x64.jmp inline_cont_allocate_2
+  __range_panic_0:
+    x64.lea r12, [rip+__panic_msg_4cf6b3f7b56fa9b4]
+    x64.mov rcx, r12
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov r8, r14
     x64.epilogue
     x64.ret
   }
   func @main() -> u32 {
   entry:
-    x64.prologue stack_size=32
-    x64.call LRArray.create
-    x64.mov [rbp-8], rax
-    x64.mov rcx, 7
-    x64.call LiveRange.create
-    x64.mov [rbp-16], rax
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rbp-16]
-    x64.mov rcx, [rbp-8]
-    x64.mov rdx, [rbp-16]
-    x64.call LRArray.push
-    x64.mov rcx, 10
-    x64.call LiveRange.create
-    x64.mov [rbp-24], rax
-    x64.mov rdx, [rbp-8]
-    x64.mov rbx, [rbp-24]
-    x64.mov rcx, [rbp-8]
-    x64.mov rdx, [rbp-24]
-    x64.call LRArray.push
-    x64.mov rsi, [rbp-8]
-    x64.mov rcx, [rbp-8]
+    x64.prologue stack_size=16
+    x64.lea rcx, [rip+__layout_Array_LiveRange]
+    x64.call Array.create
+    x64.mov r12, r8
+    x64.xor edx, edx
+    x64.mov ecx, 8
+    x64.call stdlib.__mm_alloc
+    x64.mov r13, r8
+    x64.mov rcx, r13
+    x64.call stdlib.__mm_incref
+    x64.mov r8d, 7
+    x64.mov [r13+0], r8 (8b)
+    x64.lea rax, [rip+__layout_Array_LiveRange]
+    x64.mov rcx, r12
+    x64.mov rdx, r13
+    x64.call Array.push
+    x64.xor edx, edx
+    x64.mov ecx, 8
+    x64.call stdlib.__mm_alloc
+    x64.mov r13, r8
+    x64.mov rcx, r13
+    x64.call stdlib.__mm_incref
+    x64.mov r8d, 10
+    x64.mov [r13+0], r8 (8b)
+    x64.lea rax, [rip+__layout_Array_LiveRange]
+    x64.mov rcx, r12
+    x64.mov rdx, r13
+    x64.call Array.push
+    x64.mov rcx, r12
     x64.call allocate
-    x64.mov edi, rax
-    x64.xor r8d, r8d
-    x64.mov r9, 4294967295
-    x64.cmp rdi, r9
-    x64.jg main.__range_panic_0
-    x64.cmp rdi, r8
-    x64.jl main.__range_panic_0
-    x64.jmp main.__range_ok_0
+    x64.mov r13, r8
+    x64.mov rcx, r12
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r8d, 4294967295
+    x64.cmp r13, r8
+    x64.jbe __range_ok_0
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_4]
-    x64.mov rcx, rax
+    x64.lea r12, [rip+__panic_msg_bd94ada893ba2def]
+    x64.mov rcx, r12
     x64.call mrt_panic
   __range_ok_0:
-    x64.mov rax, [rbp-24]
-    x64.mov [rbp-32], rdi
-    x64.test rax, rax
-    x64.jz __nonnull_skip_0
-    x64.mov rcx, [rbp-24]
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.mov rcx, [rbp-16]
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_1
-    x64.call mm_decref
-    x64.label __nonnull_skip_1
-    x64.mov rdx, [rbp-8]
-    x64.test rdx, rdx
-    x64.jz __nonnull_skip_2
-    x64.mov rcx, [rbp-8]
-    x64.call mm_decref
-    x64.label __nonnull_skip_2
-    x64.mov rax, [rbp-32]
-    x64.epilogue
-    x64.ret
-  }
-  func @__destruct_LiveRange(ptr: i64) {
-  entry:
-    x64.jmp __destruct_LiveRange.done
-  done:
-    x64.ret
-  }
-  func @__destruct___ManagedMemory_LiveRange(ptr: i64) {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+16]
-    x64.mov rdx, -1
-    x64.cmp rcx, rdx
-    x64.jne __destruct___ManagedMemory_LiveRange.check_owned_0
-  slice_cleanup_0:
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+32]
-    x64.mov [rbp-16], rcx
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_0
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.jmp __destruct___ManagedMemory_LiveRange.skip_buf_0
-  check_owned_0:
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+16]
-    x64.mov rdx, -2
-    x64.cmp rcx, rdx
-    x64.je __destruct___ManagedMemory_LiveRange.skip_buf_0
-  free_buf_0:
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rbp-8]
-    x64.call mm_decref_managed_elements
-    x64.mov rcx, [rbp-8]
-    x64.mov rdx, [rcx+0]
-    x64.mov rcx, rdx
-    x64.call mm_raw_free
-    x64.jmp __destruct___ManagedMemory_LiveRange.skip_buf_0
-  skip_buf_0:
-    x64.jmp __destruct___ManagedMemory_LiveRange.done
-  done:
-    x64.epilogue
-    x64.ret
-  }
-  func @__destruct_LRArray(ptr: i64) {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+0]
-    x64.mov [rbp-16], rcx
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_0
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.jmp __destruct_LRArray.done
-  done:
+    x64.mov r8, r13
     x64.epilogue
     x64.ret
   }
