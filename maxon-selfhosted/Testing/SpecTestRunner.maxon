@@ -211,8 +211,6 @@ let whitelist = ["basics",
 	//   through stdlib-extension machinery (J.4c).
 	"array-of-bytearray",
 	// "array-slots" (2/7) — empty-slot get crashes; non-enum match scrutinee.
-	// "array-cursor" — x64 passes, but wasm fragments expect exit 210/1101
-	//   (> wasm ExitCode max of 125 → range-check panic).
 	// "with-iterator" — HANGS the runner (worker never returns).
 	"struct-array-get-refcount",
 	"free-function-from-method",
@@ -224,9 +222,7 @@ let whitelist = ["basics",
 	//   `throw Inner.exhausted` literal is a FULLY-bare union whose heap-box
 	//   constructor is gated on a payload-bearing case (parseUnionDecl's
 	//   `unionHasPayload`); a separate no-payload-union-constructor gap.
-	// "heap-field-assignment" (3/5) — runtime stderr for field-overwrite frees.
 	// "pass-by-reference" (8/14) — primitive/struct ref mutation not propagated.
-	// "reference-identity" (1/11) — `is` diagnostic code + clone codegen crash.
 	// "try-block" (15/31) — block-form try Phase A complete: single-enum
 	//   success/error/array/nested-throw paths all pass (the nested-if/while/match
 	//   use-after-free is FIXED — see parseTryBlock's re-fetched `bodyBlock`).
@@ -253,7 +249,6 @@ let whitelist = ["basics",
 	"match-statements",
 	"match-jump-table",
 	// "match-expr-arm-divergent" (1/2) — needs panic-string interpolation.
-	// "optimizer-refcount" — needs panic-string interpolation.
 	// "enum-hashable" / "enum-match-only" / "enum-full" — bare-enum-as-map-key
 	//   needs a Hashable witness BuildWitnessTables doesn't emit (Phase-5
 	//   witness-table registration for primitive-conforming enums).
@@ -263,22 +258,12 @@ let whitelist = ["basics",
 	// "generic-module-merge-pattern" — HANGS the runner (worker never returns).
 	// "generic-module-merge-crash" — HANGS the runner (worker never returns).
 	"monomorphization-recursive-type",
-	// "stack-promotion" (0/6) — stack-promotion stderr not emitted.
 	"slice-memory",
-	// "managed-memory-element-size" — x64 passes, but wasm fragment expects
-	//   exit 150 (> wasm ExitCode max of 125 → range-check panic).
 	"managed-memory-methods",
-	// "list" (16/23) — `memory.*` / `value-survives-clear*` fragments need
-	//   E3070 borrow-check diagnostics + runtime stderr instrumentation.
-	// "managed-list" (25/34) — borrow-check / stderr-instrumentation fragments.
-	// "ownership-edge-cases" (32/88) — extensive runtime-stderr fragments.
-	// "memory-safety" — HANGS/slow (heavy runtime-stderr fragment set).
 	// "safety" — ENABLED (see the active whitelist above): CPU-fault diagnostics now
 	//   land via the x64-Windows VEH handler + __Builtins.forceSegfault.
 	"leak-checker",
-	// "refcount" — HANGS/slow (heavy runtime-stderr fragment set).
 	"sha256",
-	// "code-review-timings" — docs-only spec, generates no test fragments.
 	"advent",
 	// "url" is categorized Tier 4 (stdlib "network"), but RFC 3986 parsing is
 	// pure string computation — no async / socket / subprocess runtime — so it
@@ -304,6 +289,35 @@ let whitelist = ["basics",
 	// `trace-yield` worker-thread scheduling trace (compared after the timing-dependent
 	// worker-lifecycle lines are dropped by normalizeAsyncTraceStderr).
 	"async-await",
+
+	// =====================================================================
+	// DEFERRED — UNLIKELY NEEDED FOR SELF-HOSTING. These specs validate the
+	// compiler's RUNTIME BEHAVIOR / DIAGNOSTICS (memory-management stderr
+	// instrumentation, borrow-check messages, optimizer/stack-promotion
+	// traces, `is` reference identity, async filesystem) rather than language
+	// features the self-hosted compiler's OWN source exercises. They are real
+	// gaps worth closing eventually, but enabling them does not advance the
+	// self-compile goal, so they sit below the self-hosting-relevant work.
+	// (Contrast: tuple-assign / sizeof / with-iterator / try-block multi-enum /
+	// enum-hashable / panic-interpolation ARE used by the compiler's own source
+	// — verified by grep — so they stay in the tiers above.)
+	// =====================================================================
+	// "heap-field-assignment" (3/5) — runtime stderr for field-overwrite frees.
+	// "reference-identity" (1/11) — `is` diagnostic code + clone codegen crash.
+	// "stack-promotion" (0/6) — stack-promotion stderr not emitted.
+	// "optimizer-refcount" — needs panic-string interpolation; optimizer trace.
+	// "managed-memory-element-size" — x64 passes, but wasm fragment expects
+	//   exit 150 (> wasm ExitCode max of 125 → range-check panic).
+	// "array-cursor" — x64 passes, but wasm fragments expect exit 210/1101
+	//   (> wasm ExitCode max of 125 → range-check panic).
+	// "list" (16/23) — `memory.*` / `value-survives-clear*` fragments need
+	//   E3070 borrow-check diagnostics + runtime stderr instrumentation.
+	// "managed-list" (25/34) — borrow-check / stderr-instrumentation fragments.
+	// "ownership-edge-cases" (32/88) — extensive runtime-stderr fragments.
+	// "memory-safety" — HANGS/slow (heavy runtime-stderr fragment set).
+	// "refcount" — HANGS/slow (heavy runtime-stderr fragment set).
+	// "code-review-timings" — docs-only spec, generates no test fragments.
+	// "async-filesystem" — async filesystem; compiler I/O is synchronous.
 
 	// --- Tier 4: async / IO / network / subprocess (need real runtime) ---
 	"sleep",
@@ -360,8 +374,7 @@ let whitelist = ["basics",
 	//   See `networkingSpecsEnabled` / `effectiveWhitelist` below. Their live-host
 	//   fragments (tcpbin.com / httpbin.org) are excluded as CI-flaky by
 	//   `isNetworkingExcludedFragment`. async-filesystem still needs work and
-	//   stays off.
-	// "async-filesystem",
+	//   stays off (see the self-hosting-deferred section above).
 ]
 
 // Whether the `subprocess` spec is wired into the host-only whitelist. All
