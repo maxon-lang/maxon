@@ -26,114 +26,79 @@ ExitCode: 102
 ---
 // CompiledIR
 module {
-  func @main() -> u32 {
+  func @classify(x: i64) -> i64 {
   entry:
     x64.prologue stack_size=16
-    x64.xor r8d, r8d
-  inlined_classify_0_0:
-    x64.test r8, r8
-    x64.jne inlined_classify_2_0
-  inlined_classify_1_0:
-    x64.xor r8d, r8d
-    x64.jmp inline_cont_main_0
-  inlined_classify_2_0:
-    x64.cmp r8, 10
-    x64.jge inlined_classify_4_0
-  inlined_classify_3_0:
-    x64.mov r8d, 1
-    x64.jmp inline_cont_main_0
-  inlined_classify_4_0:
-    x64.cmp r8, 100
-    x64.jge inlined_classify_6_0
-  inlined_classify_5_0:
-    x64.mov r8d, 2
-    x64.jmp inline_cont_main_0
-  inlined_classify_6_0:
-    x64.mov r8d, 3
-  inline_cont_main_0:
-    x64.mov r9d, 5
-  inlined_classify_0_1:
-    x64.test r9, r9
-    x64.jne inlined_classify_2_1
-  inlined_classify_1_1:
-    x64.xor r9d, r9d
-    x64.jmp inline_cont_main_1
-  inlined_classify_2_1:
-    x64.cmp r9, 10
-    x64.jge inlined_classify_4_1
-  inlined_classify_3_1:
-    x64.mov r9d, 1
-    x64.jmp inline_cont_main_1
-  inlined_classify_4_1:
-    x64.cmp r9, 100
-    x64.jge inlined_classify_6_1
-  inlined_classify_5_1:
-    x64.mov r9d, 2
-    x64.jmp inline_cont_main_1
-  inlined_classify_6_1:
-    x64.mov r9d, 3
-  inline_cont_main_1:
-    x64.mov esi, 50
-  inlined_classify_0_2:
-    x64.test rsi, rsi
-    x64.jne inlined_classify_2_2
-  inlined_classify_1_2:
-    x64.xor esi, esi
-    x64.jmp inline_cont_main_2
-  inlined_classify_2_2:
-    x64.cmp rsi, 10
-    x64.jge inlined_classify_4_2
-  inlined_classify_3_2:
-    x64.mov esi, 1
-    x64.jmp inline_cont_main_2
-  inlined_classify_4_2:
-    x64.cmp rsi, 100
-    x64.jge inlined_classify_6_2
-  inlined_classify_5_2:
-    x64.mov esi, 2
-    x64.jmp inline_cont_main_2
-  inlined_classify_6_2:
-    x64.mov esi, 3
-  inline_cont_main_2:
-    x64.mov edi, 200
-  inlined_classify_0_3:
-    x64.test rdi, rdi
-    x64.jne inlined_classify_2_3
-  inlined_classify_1_3:
-    x64.xor edi, edi
-    x64.jmp inline_cont_main_3
-  inlined_classify_2_3:
-    x64.cmp rdi, 10
-    x64.jge inlined_classify_4_3
-  inlined_classify_3_3:
-    x64.mov edi, 1
-    x64.jmp inline_cont_main_3
-  inlined_classify_4_3:
-    x64.cmp rdi, 100
-    x64.jge inlined_classify_6_3
-  inlined_classify_5_3:
-    x64.mov edi, 2
-    x64.jmp inline_cont_main_3
-  inlined_classify_6_3:
-    x64.mov edi, 3
-  inline_cont_main_3:
-    x64.mov eax, 3
-    x64.imul r9, rax
-    x64.mov eax, 9
-    x64.imul rsi, rax
-    x64.mov eax, 27
-    x64.imul rdi, rax
-    x64.add r8, r9
-    x64.add r8, rsi
-    x64.mov r9d, 4294967295
-    x64.add r8, rdi
-    x64.cmp r8, r9
-    x64.jbe __range_ok_0
+    x64.mov [rbp-8], rcx
+    x64.xor eax, eax
+    x64.cmp rcx, rax
+    x64.jne classify.zero_0.elseif
+  zero_0:
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  zero_0.elseif:
+    x64.mov rax, 10
+    x64.mov rcx, [rbp-8]
+    x64.cmp rcx, rax
+    x64.jge classify.small_0.elseif
+  small_0:
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  small_0.elseif:
+    x64.mov rax, 100
+    x64.mov rcx, [rbp-8]
+    x64.cmp rcx, rax
+    x64.jge classify.large_0
+  medium_0:
+    x64.mov rax, 2
+    x64.epilogue
+    x64.ret
+  large_0:
+    x64.mov rax, 3
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.xor ecx, ecx
+    x64.call classify
+    x64.mov [rbp-8], rax
+    x64.mov rcx, 5
+    x64.call classify
+    x64.mov [rbp-16], rax
+    x64.mov rcx, 50
+    x64.call classify
+    x64.mov [rbp-24], rax
+    x64.mov rcx, 200
+    x64.call classify
+    x64.mov rcx, 3
+    x64.mov rdx, [rbp-16]
+    x64.imul rdx, rcx
+    x64.mov rcx, [rbp-8]
+    x64.add rcx, rdx
+    x64.mov rdx, 9
+    x64.mov rbx, [rbp-24]
+    x64.imul rbx, rdx
+    x64.add rcx, rbx
+    x64.mov rdx, 27
+    x64.imul rax, rdx
+    x64.add rcx, rax
+    x64.xor eax, eax
+    x64.mov edx, 4294967295
+    x64.cmp rcx, rdx
+    x64.jg main.__range_panic_0
+    x64.cmp rcx, rax
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
   __range_panic_0:
-    x64.lea r12, [rip+__panic_msg_dffe3b400b7daefe]
-    x64.mov rcx, r12
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_0:
+    x64.mov rax, rcx
     x64.epilogue
     x64.ret
   }

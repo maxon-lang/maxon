@@ -34,112 +34,276 @@ ExitCode: 7
 ---
 // CompiledIR
 module {
-  func @classify(rcx: i64) -> u8 {
+  func @classify(ref: i64) -> u8 {
   entry:
-    x64.prologue stack_size=16
-    x64.mov r8, [rcx+0] (8b)
-    x64.xor r12d, r12d
-    x64.test r8, r8
-    x64.jne unwrap_0.next0
-    x64.jmp unwrap_0.case0
-  unwrap_0.merge:
-    x64.mov r8, [rcx+0] (8b)
-    x64.cmp r8, 1
-    x64.jne r_0.next0
-    x64.jmp r_0.case0
-  unwrap_0.case0:
+    x64.prologue stack_size=96
+    x64.mov [rbp-16], rcx
+    x64.xor eax, eax
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-16]
+    x64.mov rdx, [rax+0]
+    x64.mov [rbp-24], rcx
+    x64.mov rcx, [rbp-24]
+    x64.mov [rbp-88], rdx
+    x64.call mm_incref
     x64.xor edx, edx
-    x64.mov ecx, 16
-    x64.call stdlib.__mm_alloc
-    x64.mov r13, r8
-    x64.mov rcx, r13
-    x64.call stdlib.__mm_incref
-    x64.xor r8d, r8d
-    x64.mov [r13+0], r8 (8b)
-    x64.xor r8d, r8d
-    x64.mov [r13+8], r8 (8b)
-    x64.mov rcx, r13
-    x64.jmp unwrap_0.merge
-  unwrap_0.next0:
-    x64.mov r8, [rcx+0] (8b)
-    x64.cmp r8, 1
-    x64.jne __phi_trampoline_3_0
+    x64.mov [rbp-32], rdx
+    x64.mov rbx, [rbp-88]
+    x64.mov [rbp-40], rbx
+    x64.jmp classify.unwrap_0.cmp0
+  unwrap_0.cmp0:
+    x64.mov rax, [rbp-40]
+    x64.xor ecx, ecx
+    x64.cmp rax, rcx
+    x64.jne classify.unwrap_0.cmp1
+  unwrap_0.case0:
+    x64.mov rcx, 16
+    x64.xor edx, edx
+    x64.mov r8, 1
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.xor ecx, ecx
+    x64.mov [rax+0], rcx
+    x64.xor ecx, ecx
+    x64.mov [rax+8], rcx
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-32]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-32]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rcx, [rbp-8]
+    x64.mov [rbp-32], rcx
+    x64.mov rdx, [rbp-32]
+    x64.mov rcx, [rbp-32]
+    x64.call mm_incref
+    x64.jmp classify.unwrap_0.merge
+  unwrap_0.cmp1:
+    x64.mov rax, [rbp-40]
+    x64.mov rcx, 1
+    x64.cmp rax, rcx
+    x64.jne classify.unwrap_0.merge
   unwrap_0.case1:
-    x64.mov r13, [rcx+8] (8b)
-    x64.jmp __rc_edge_4_0
-  r_0.merge:
-    x64.cmp r8, 100
-    x64.jbe __range_ok_0
-    x64.jmp __range_panic_0
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, [rax+8]
+    x64.mov [rbp-48], rcx
+    x64.mov rdx, [rbp-48]
+    x64.mov rcx, [rbp-48]
+    x64.call mm_incref
+    x64.mov rbx, [rbp-32]
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_1
+    x64.mov rcx, [rbp-32]
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.mov rsi, [rbp-48]
+    x64.mov [rbp-32], rsi
+    x64.mov rdi, [rbp-32]
+    x64.mov rcx, [rbp-32]
+    x64.call mm_incref
+    x64.mov r8, [rbp-48]
+    x64.test r8, r8
+    x64.jz __nonnull_skip_2
+    x64.mov rcx, [rbp-48]
+    x64.call mm_decref
+    x64.label __nonnull_skip_2
+    x64.mov r9, [rbp-8]
+    x64.test r9, r9
+    x64.jz __nonnull_skip_3
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_3
+    x64.xor eax, eax
+    x64.mov [rbp-8], rax
+    x64.jmp classify.unwrap_0.merge
+  unwrap_0.merge:
+    x64.mov rax, [rbp-32]
+    x64.mov [rbp-56], rax
+    x64.mov rcx, [rbp-56]
+    x64.call mm_incref
+    x64.mov rdx, [rbp-56]
+    x64.mov rbx, [rdx+0]
+    x64.mov rsi, [rbp-56]
+    x64.mov [rbp-64], rsi
+    x64.xor edi, edi
+    x64.mov [rbp-72], rdi
+    x64.mov [rbp-80], rbx
+    x64.jmp classify.r_0.cmp0
+  r_0.cmp0:
+    x64.mov rax, [rbp-80]
+    x64.mov rcx, 1
+    x64.cmp rax, rcx
+    x64.jne classify.r_0.cmp1
   r_0.case0:
-    x64.mov r12, [rcx+8] (8b)
-    x64.call __mm_decref_maybenull_helper
-    x64.mov r8, r12
-    x64.jmp r_0.merge
-  r_0.next0:
-    x64.mov r8, [rcx+0] (8b)
-    x64.cmp r8, 2
-    x64.jne r_0.next1
+    x64.mov rax, [rbp-64]
+    x64.mov rcx, [rax+8]
+    x64.mov [rbp-72], rcx
+    x64.mov rdx, [rbp-8]
+    x64.test rdx, rdx
+    x64.jz __nonnull_skip_4
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_4
+    x64.xor ebx, ebx
+    x64.mov [rbp-8], rbx
+    x64.jmp classify.r_0.merge
+  r_0.cmp1:
+    x64.mov rax, [rbp-80]
+    x64.mov rcx, 2
+    x64.cmp rax, rcx
+    x64.jne classify.r_0.cmp2
   r_0.case1:
-    x64.mov r12, [rcx+8] (8b)
-    x64.call __mm_decref_maybenull_helper
-    x64.mov r8, r12
-    x64.jmp r_0.merge
-  r_0.next1:
-    x64.mov r8, [rcx+0] (8b)
-    x64.call __mm_decref_maybenull_helper
-    x64.mov r8, r12
-    x64.jmp r_0.merge
-  __rc_edge_4_0:
-    x64.mov rcx, r13
-    x64.call stdlib.__mm_incref
-    x64.mov rcx, r13
-    x64.jmp unwrap_0.merge
+    x64.mov rax, [rbp-64]
+    x64.mov rcx, [rax+8]
+    x64.mov [rbp-72], rcx
+    x64.mov rdx, [rbp-8]
+    x64.test rdx, rdx
+    x64.jz __nonnull_skip_5
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_5
+    x64.xor ebx, ebx
+    x64.mov [rbp-8], rbx
+    x64.jmp classify.r_0.merge
+  r_0.cmp2:
+    x64.mov rax, [rbp-80]
+    x64.xor ecx, ecx
+    x64.cmp rax, rcx
+    x64.jne classify.r_0.merge
+  r_0.case2:
+    x64.xor eax, eax
+    x64.mov [rbp-72], rax
+    x64.jmp classify.r_0.merge
+  r_0.merge:
+    x64.mov rax, [rbp-72]
+    x64.xor ecx, ecx
+    x64.mov rdx, 100
+    x64.cmp rax, rdx
+    x64.jg classify.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl classify.__range_panic_0
+    x64.jmp classify.__range_ok_0
   __range_panic_0:
-    x64.lea r12, [rip+__panic_msg_a64dc03adc7dc708]
-    x64.mov rcx, r12
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_0:
+    x64.mov rbx, [rbp-24]
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_6
+    x64.mov rcx, [rbp-24]
+    x64.call mm_decref
+    x64.label __nonnull_skip_6
+    x64.mov rax, [rbp-56]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_7
+    x64.mov rcx, [rbp-56]
+    x64.call mm_decref
+    x64.label __nonnull_skip_7
+    x64.mov rcx, [rbp-32]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_8
+    x64.call mm_decref
+    x64.label __nonnull_skip_8
+    x64.mov rdx, [rbp-8]
+    x64.test rdx, rdx
+    x64.jz __nonnull_skip_9
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_9
+    x64.mov rax, [rbp-72]
     x64.epilogue
     x64.ret
-  __phi_trampoline_3_0:
-    x64.mov rcx, r12
-    x64.jmp unwrap_0.merge
   }
   func @main() -> u32 {
   entry:
-    x64.prologue stack_size=16
+    x64.prologue stack_size=32
+    x64.mov rax, 7
+    x64.mov rcx, 16
     x64.xor edx, edx
-    x64.mov ecx, 16
-    x64.call stdlib.__mm_alloc
-    x64.mov r12, r8
-    x64.mov rcx, r12
-    x64.call stdlib.__mm_incref
-    x64.mov r8d, 1
-    x64.mov [r12+0], r8 (8b)
-    x64.mov r8d, 7
-    x64.mov [r12+8], r8 (8b)
-    x64.lea rdx, [rip+__destruct_Wrapper]
-    x64.mov ecx, 16
-    x64.call stdlib.__mm_alloc
-    x64.mov r13, r8
-    x64.mov r8d, 1
-    x64.mov [r13+0], r8 (8b)
-    x64.mov [r13+8], r12 (8b)
-    x64.mov rcx, r13
+    x64.mov r8, 1
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rcx, 1
+    x64.mov [rax+0], rcx
+    x64.mov rdx, 7
+    x64.mov [rax+8], rdx
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.lea_func rbx, [__destruct_Wrapper]
+    x64.mov rsi, rbx
+    x64.mov rdx, rsi
+    x64.mov rcx, 16
+    x64.mov r8, 2
+    x64.call mm_alloc
+    x64.mov [rbp-16], rax
+    x64.mov rdi, 1
+    x64.mov [rax+0], rdi
+    x64.mov r8, [rbp-8]
+    x64.mov [rax+8], r8
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.mov r9, [rbp-16]
+    x64.mov rcx, [rbp-16]
     x64.call classify
-    x64.mov r12, r8
-    x64.mov rcx, r13
-    x64.call mm_drop
-    x64.mov r8d, 4294967295
-    x64.cmp r12, r8
-    x64.jbe __range_ok_0
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
   __range_panic_0:
-    x64.lea r12, [rip+__panic_msg_e185a128b4abc92a]
-    x64.mov rcx, r12
+    x64.lea_symdata rax, [__panic_msg_1]
+    x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_0:
-    x64.mov r8, r12
+    x64.mov rbx, [rbp-8]
+    x64.mov [rbp-24], rax
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rax, [rbp-16]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_1
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.mov rax, [rbp-24]
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_MyType(ptr: i64) {
+  entry:
+    x64.jmp __destruct_MyType.done
+  done:
+    x64.ret
+  }
+  func @__destruct_Wrapper(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov rdx, 1
+    x64.cmp rcx, rdx
+    x64.jne __destruct_Wrapper.done
+  case_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+8]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_0
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.jmp __destruct_Wrapper.done
+  done:
     x64.epilogue
     x64.ret
   }

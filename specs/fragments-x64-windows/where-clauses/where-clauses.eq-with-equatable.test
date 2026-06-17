@@ -29,30 +29,73 @@ module {
   func @main() -> u32 {
   entry:
     x64.prologue stack_size=16
-    x64.lea r8, [rip+__layout_Box_Int]
-    x64.mov rdx, [r8+40] (8b)
-    x64.mov ecx, 8
-    x64.call stdlib.__mm_alloc
-    x64.mov r12, r8
-    x64.mov r8d, 42
-    x64.mov [r12+0], r8 (8b)
-    x64.mov rcx, [r12+0] (8b)
-    x64.mov edx, 42
-    x64.lea r8, [rip+__witness_int_Equatable]
-    x64.mov r10, [r8+24] (8b)
-    x64.call r10
-    x64.mov r13, r8
-    x64.mov rcx, r12
-    x64.call mm_drop
-    x64.test r13, r13
-    x64.je yes_0.after
+    x64.mov rcx, 42
+    x64.call IntBox.create
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, 42
+    x64.call IntBox.eq
+    x64.test rax, rax
+    x64.je main.yes_0.after
   yes_0:
-    x64.mov r8d, 1
+    x64.mov rax, [rbp-8]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rax, 1
     x64.epilogue
     x64.ret
   yes_0.after:
-    x64.xor r8d, r8d
+    x64.mov rax, [rbp-8]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_1
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.xor eax, eax
     x64.epilogue
+    x64.ret
+  }
+  func @IntBox.create(item: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-16], rcx
+    x64.mov rcx, 8
+    x64.xor edx, edx
+    x64.mov r8, 16
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.mov [rax+0], rcx
+    x64.mov rdx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @IntBox.eq(__self_ptr: i64, other: i64) -> i1 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rbx, [rax+0]
+    x64.mov [rbp-16], rbx
+    x64.mov rax, [rbp-16]
+    x64.cmp rax, rdx
+    x64.sete rax
+    x64.movzx rax, raxb
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_IntBox(ptr: i64) {
+  entry:
+    x64.jmp __destruct_IntBox.done
+  done:
     x64.ret
   }
 }

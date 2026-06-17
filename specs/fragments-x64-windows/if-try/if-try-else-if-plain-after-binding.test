@@ -27,26 +27,56 @@ ExitCode: 22
 ---
 // CompiledIR
 module {
+  func @mayFail() -> i64 {
+  entry:
+    x64.xor eax, eax
+    x64.mov rcx, 1
+    x64.add rax, rcx
+    x64.mov rdx, rax
+    x64.xor eax, eax
+    x64.ret
+  }
   func @main() -> u32 {
   entry:
-    x64.prologue stack_size=16
-    x64.mov r8d, 2
-  check_0.else:
-    x64.cmp r8, 2
-    x64.jne fallback_0
+    x64.prologue stack_size=32
+    x64.mov rax, 2
+    x64.mov [rbp-8], rax
+    x64.call mayFail
+    x64.mov [rbp-16], rax
+    x64.xor ecx, ecx
+    x64.cmp rdx, rcx
+    x64.jne main.check_0.elseif
+  check_0:
+    x64.mov rax, [rbp-16]
+    x64.mov [rbp-24], rax
+    x64.jmp main.check_0.merge
+  check_0.elseif:
+    x64.mov rax, 2
+    x64.mov rcx, [rbp-8]
+    x64.cmp rcx, rax
+    x64.jne main.fallback_0
   two_0:
-    x64.mov r8d, 22
-    x64.jmp two_0.merge
+    x64.mov rax, 22
+    x64.mov [rbp-24], rax
+    x64.jmp main.two_0.merge
   fallback_0:
-    x64.mov r8d, 99
+    x64.mov rax, 99
+    x64.mov [rbp-24], rax
+    x64.jmp main.two_0.merge
   two_0.merge:
+    x64.jmp main.check_0.merge
   check_0.merge:
-    x64.mov r9d, 4294967295
-    x64.cmp r8, r9
-    x64.jbe __range_ok_0
+    x64.mov rax, [rbp-24]
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
   __range_panic_0:
-    x64.lea r12, [rip+__panic_msg_23d37fd3571e151f]
-    x64.mov rcx, r12
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_0:
     x64.epilogue

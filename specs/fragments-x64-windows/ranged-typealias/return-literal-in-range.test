@@ -15,19 +15,23 @@ ExitCode: 42
 module {
   func @getScore() -> u8 {
   entry:
-    x64.mov r8d, 42
+    x64.mov rax, 42
     x64.ret
   }
   func @main() -> u32 {
   entry:
     x64.prologue stack_size=16
     x64.call getScore
-    x64.mov r9d, 4294967295
-    x64.cmp r8, r9
-    x64.jbe __range_ok_0
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
   __range_panic_0:
-    x64.lea r12, [rip+__panic_msg_af5024afd4d9c642]
-    x64.mov rcx, r12
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_0:
     x64.epilogue

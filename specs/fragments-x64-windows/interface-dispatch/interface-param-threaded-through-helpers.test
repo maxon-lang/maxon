@@ -40,108 +40,155 @@ ExitCode: 10
 ---
 // CompiledIR
 module {
-  func @Fixed.value(rcx: i64) -> u8 {
+  func @Fixed.create(n: i64) -> i64 {
   entry:
     x64.prologue stack_size=16
-    x64.movzx r8, [rcx+0] (1b)
-    x64.cmp r8, 100
-    x64.jbe __range_ok_0
-  __range_panic_0:
-    x64.lea r12, [rip+__panic_msg_2ce2a299cc8df8c9]
-    x64.mov rcx, r12
-    x64.call mrt_panic
-  __range_ok_0:
+    x64.mov [rbp-16], rcx
+    x64.mov rcx, 8
+    x64.xor edx, edx
+    x64.mov r8, 20
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.mov [rax+0], rcx
+    x64.mov rdx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
     x64.epilogue
     x64.ret
   }
-  func @deepest(rcx: i64, rdx: i64) -> u8 {
-  entry:
-    x64.prologue stack_size=32
-    x64.mov [rbp-8], rcx
-    x64.mov [rbp-16], rdx
-    x64.mov r8, [rbp-16]
-    x64.mov rcx, [rbp-8]
-    x64.mov r10, [r8+24] (8b)
-    x64.call r10
-    x64.mov r12, r8
-    x64.mov r8, [rbp-16]
-    x64.mov rcx, [rbp-8]
-    x64.mov r10, [r8+24] (8b)
-    x64.call r10
-    x64.mov r9, r12
-    x64.add r9, r8
-    x64.cmp r9, 100
-    x64.jbe __range_ok_0
-  __range_panic_0:
-    x64.lea r12, [rip+__panic_msg_9e9298e262ff9b81]
-    x64.mov rcx, r12
-    x64.call mrt_panic
-  __range_ok_0:
-    x64.mov r8, r9
-    x64.epilogue
-    x64.ret
-  }
-  func @middle(rcx: i64, rdx: i64) -> u8 {
+  func @Fixed.value(__self_ptr: i64) -> u8 {
   entry:
     x64.prologue stack_size=16
     x64.mov [rbp-8], rcx
-    x64.mov [rbp-16], rdx
-    x64.mov rdx, [rbp-16]
-    x64.mov rcx, [rbp-8]
-    x64.call deepest
-    x64.cmp r8, 100
-    x64.jbe __range_ok_0
+    x64.mov rax, [rbp-8]
+    x64.mov rdx, [rax+0]
+    x64.xor eax, eax
+    x64.mov rbx, 100
+    x64.cmp rdx, rbx
+    x64.jg Fixed.value.__range_panic_0
+    x64.cmp rdx, rax
+    x64.jl Fixed.value.__range_panic_0
+    x64.jmp Fixed.value.__range_ok_0
   __range_panic_0:
-    x64.lea r12, [rip+__panic_msg_ff46f71737ddb675]
-    x64.mov rcx, r12
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_0:
-    x64.epilogue
-    x64.ret
-  }
-  func @outer(rcx: i64, rdx: i64) -> u8 {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov [rbp-16], rdx
-    x64.mov rdx, [rbp-16]
-    x64.mov rcx, [rbp-8]
-    x64.call middle
-    x64.cmp r8, 100
-    x64.jbe __range_ok_0
-  __range_panic_0:
-    x64.lea r12, [rip+__panic_msg_6ec55eea10b838e0]
-    x64.mov rcx, r12
-    x64.call mrt_panic
-  __range_ok_0:
+    x64.mov rax, rdx
     x64.epilogue
     x64.ret
   }
   func @main() -> u32 {
   entry:
     x64.prologue stack_size=16
-    x64.xor edx, edx
-    x64.mov ecx, 8
-    x64.call stdlib.__mm_alloc
-    x64.mov r12, r8
-    x64.mov r8d, 5
-    x64.mov [r12+0], r8 (1b)
-    x64.lea rdx, [rip+__witness_Fixed_Counter]
-    x64.mov rcx, r12
-    x64.call outer
-    x64.mov r13, r8
-    x64.mov rcx, r12
-    x64.call mm_drop
-    x64.mov r8d, 4294967295
-    x64.cmp r13, r8
-    x64.jbe __range_ok_0
+    x64.mov rcx, 5
+    x64.call Fixed.create
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call outer$Fixed
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
   __range_panic_0:
-    x64.lea r12, [rip+__panic_msg_7a1d8a2ce0687fbb]
-    x64.mov rcx, r12
+    x64.lea_symdata rax, [__panic_msg_1]
+    x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_0:
-    x64.mov r8, r13
+    x64.mov rbx, [rbp-8]
+    x64.mov [rbp-16], rax
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rax, [rbp-16]
     x64.epilogue
+    x64.ret
+  }
+  func @outer$Fixed(c: i64) -> u8 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call middle$Fixed
+    x64.xor ecx, ecx
+    x64.mov rdx, 100
+    x64.cmp rax, rdx
+    x64.jg outer$Fixed.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl outer$Fixed.__range_panic_0
+    x64.jmp outer$Fixed.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_2]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+  func @middle$Fixed(c: i64) -> u8 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call deepest$Fixed
+    x64.xor ecx, ecx
+    x64.mov rdx, 100
+    x64.cmp rax, rdx
+    x64.jg middle$Fixed.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl middle$Fixed.__range_panic_0
+    x64.jmp middle$Fixed.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_3]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+  func @deepest$Fixed(c: i64) -> u8 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call Fixed.value
+    x64.mov rcx, [rbp-8]
+    x64.mov [rbp-16], rax
+    x64.call Fixed.value
+    x64.mov rdx, [rbp-16]
+    x64.add rdx, rax
+    x64.xor ebx, ebx
+    x64.mov rsi, 100
+    x64.cmp rdx, rsi
+    x64.jg deepest$Fixed.__range_panic_0
+    x64.cmp rdx, rbx
+    x64.jl deepest$Fixed.__range_panic_0
+    x64.jmp deepest$Fixed.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_4]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rax, rdx
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Fixed(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Fixed.done
+  done:
     x64.ret
   }
 }

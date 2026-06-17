@@ -12,15 +12,19 @@ module {
   func @main() -> u32 {
   entry:
     x64.prologue stack_size=16
-    x64.movsd xmm0, [rip+__float_4614162998222441677]
-    x64.roundsd xmm1, xmm0, 10
-    x64.mov r9d, 4294967295
-    x64.cvttsd2si r8, xmm1
-    x64.cmp r8, r9
-    x64.jbe __range_ok_0
+    x64.movsd xmm0, [rip+__float_3.1]
+    x64.roundsd xmm1, xmm0, 2
+    x64.cvttsd2si rax, xmm1
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
   __range_panic_0:
-    x64.lea r12, [rip+__panic_msg_8e42b97e5aa7b282]
-    x64.mov rcx, r12
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_0:
     x64.epilogue
