@@ -1,21 +1,30 @@
 // Phase 11.2: per-instantiation layout descriptors.
 //
 // Every concrete `genericInstance(gid)` MaxonType the project mentions
-// gets one fixed-shape 56-byte blob in rdata under a stable mangled label
+// gets one fixed-shape 64-byte blob in rdata under a stable mangled label
 // (`__layout_Array_Int`, `__layout_Pair_Int_String`, …). Phase 11.4's
 // generic body lowering emits constant-offset loads against this layout —
 // so the byte shape is part of the ABI between BuildLayoutDescriptors
 // (writer) and LowerMaxonToStd's `descriptorField` op (reader). Changing
 // any field offset requires updating both ends in lockstep.
 //
-// Byte layout (size 56 bytes, 8-byte aligned):
-//   +0   size            u64
-//   +8   alignment       u64
-//   +16  elementSize     u64    (0 for non-container types)
-//   +24  flags           u64    (bit 0 = hasHeapRefs)
-//   +32  copyFunc        u64    (zero on disk; patched by funcAbs64InRdata)
-//   +40  destroyFunc     u64    (zero on disk; patched by funcAbs64InRdata)
-//   +48  fieldOffsetsPtr u64    (rdata-rel ptr; 0 if no struct fields)
+// Byte layout (size 64 bytes, 8-byte aligned):
+//   +0   size              u64
+//   +8   alignment         u64
+//   +16  elementSize       u64    (storage width of the single type arg — a
+//                                  pointer-width 8 for struct/string elements;
+//                                  0 for non-container types. Drives buffer
+//                                  sizing for managed containers.)
+//   +24  flags             u64    (bit 0 = hasHeapRefs)
+//   +32  copyFunc          u64    (zero on disk; patched by funcAbs64InRdata)
+//   +40  destroyFunc       u64    (zero on disk; patched by funcAbs64InRdata)
+//   +48  fieldOffsetsPtr   u64    (rdata-rel ptr; 0 if no struct fields)
+//   +56  elementLogicalSize u64   (the source-level `sizeof` of the single type
+//                                  arg — a struct's full byteSize (fieldCount*8),
+//                                  NOT its pointer-width storage. Read by
+//                                  `sizeof(T)` lowering inside a generic body
+//                                  where T is the enclosing type's parameter.
+//                                  0 for non-single-arg / non-container types.)
 //
 // Layout-descriptor identity is keyed by the GenericInstanceId only — a
 // type that conditionally implements `Hashable where Element: Hashable`
@@ -23,7 +32,7 @@
 // descriptor is shared across all conformance variations of the same
 // `(baseId, args)`.
 
-let LAYOUT_DESCRIPTOR_BYTE_SIZE = 56
+let LAYOUT_DESCRIPTOR_BYTE_SIZE = 64
 let LAYOUT_FLAG_HAS_HEAP_REFS = 1
 
 // Per-type-arg HAS_HEAP_REFS bits are packed into the same `flags@24` qword,
@@ -53,16 +62,19 @@ export let LAYOUT_ELEM_RAW_LABEL = "__layout_elem_raw"
 // `flags@24` bit 0 (`hasHeapRefs`). All sizing/func/field-offset slots are 0 —
 // the generic Array body never reads them through a forwarded layout.
 export function elementLayoutSingleton(hasHeapRefs bool) returns LayoutDescriptor
-	return LayoutDescriptor.create(0, alignment: 0, elementSize: 0, hasHeapRefs: hasHeapRefs, perArgHeapRefBits: 0, copyFuncName: "", destroyFuncName: "", fieldOffsetsPtr: "")
+	return LayoutDescriptor.create(0, alignment: 0, elementSize: 0, hasHeapRefs: hasHeapRefs, perArgHeapRefBits: 0, copyFuncName: "", destroyFuncName: "", fieldOffsetsPtr: "", elementLogicalSize: 0)
 end 'elementLayoutSingleton'
 
 let LAYOUT_OFFSET_SIZE = 0
 let LAYOUT_OFFSET_ALIGNMENT = 8
 let LAYOUT_OFFSET_ELEMENT_SIZE = 16
+
 module let LAYOUT_OFFSET_FLAGS = 24
+
 export let LAYOUT_OFFSET_COPY_FUNC = 32
 export let LAYOUT_OFFSET_DESTROY_FUNC = 40
 let LAYOUT_OFFSET_FIELD_OFFSETS_PTR = 48
+export let LAYOUT_OFFSET_ELEMENT_LOGICAL_SIZE = 56
 
 export type LayoutDescriptor
 	export var size as MachineWord
@@ -80,8 +92,12 @@ export type LayoutDescriptor
 	// per-field byte offsets. Empty string when the type has no struct
 	// fields (primitives, arrays, function-shaped containers).
 	export var fieldOffsetsPtr as String
+	// Source-level `sizeof` of the single type arg — a struct's full byteSize
+	// (fieldCount*8), NOT its pointer-width storage. Read by `sizeof(T)`
+	// lowering inside a generic body. 0 for non-single-arg instances.
+	export var elementLogicalSize as MachineWord
 
-	export static function create(size MachineWord, alignment MachineWord, elementSize MachineWord, hasHeapRefs bool, perArgHeapRefBits MachineWord, copyFuncName String, destroyFuncName String, fieldOffsetsPtr String) returns LayoutDescriptor
+	export static function create(size MachineWord, alignment MachineWord, elementSize MachineWord, hasHeapRefs bool, perArgHeapRefBits MachineWord, copyFuncName String, destroyFuncName String, fieldOffsetsPtr String, elementLogicalSize MachineWord = 0) returns LayoutDescriptor
 		return Self{
 			size: size,
 			alignment: alignment,
@@ -90,15 +106,17 @@ export type LayoutDescriptor
 			perArgHeapRefBits: perArgHeapRefBits,
 			copyFuncName: copyFuncName,
 			destroyFuncName: destroyFuncName,
-			fieldOffsetsPtr: fieldOffsetsPtr
+			fieldOffsetsPtr: fieldOffsetsPtr,
+			elementLogicalSize: elementLogicalSize
 		}
 	end 'create'
 end 'LayoutDescriptor'
 
-// Encode a LayoutDescriptor into its fixed 56-byte rdata image. The two
+// Encode a LayoutDescriptor into its fixed 64-byte rdata image. The two
 // function-pointer slots (+32 copyFunc, +40 destroyFunc) and the optional
 // fieldOffsetsPtr (+48) are zero on disk; the writer patches them at link
-// time via funcAbs64InRdata / ripRelDisp32 relocations.
+// time via funcAbs64InRdata / ripRelDisp32 relocations. The +56
+// elementLogicalSize slot is written inline.
 export function encodeLayoutDescriptor(d LayoutDescriptor) returns ByteArray
 	var buf = ByteArray.create()
 	buf.reserve(LAYOUT_DESCRIPTOR_BYTE_SIZE)
@@ -115,9 +133,13 @@ export function encodeLayoutDescriptor(d LayoutDescriptor) returns ByteArray
 	// and masking with 1 — see `materializeLayoutForGid`.
 	flags = flags or (d.perArgHeapRefBits shl LAYOUT_PER_ARG_HEAPREF_SHIFT)
 	writeQword(buf, value: flags)
+	// +32 copyFunc, +40 destroyFunc, +48 fieldOffsetsPtr — zero on disk,
+	// patched at link time via funcAbs64InRdata / ripRelDisp32 relocations.
 	writeQword(buf, value: 0)
 	writeQword(buf, value: 0)
 	writeQword(buf, value: 0)
+	// +56 elementLogicalSize — the source-level sizeof of the single type arg.
+	writeQword(buf, value: d.elementLogicalSize)
 	return buf
 end 'encodeLayoutDescriptor'
 

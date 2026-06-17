@@ -183,7 +183,10 @@ function addCalleesFromOpIndex(project Project, module MaxonModule, opIdx OpInde
 		// name, so they root nothing (the spawning asyncCall already kept the
 		// spawned body alive).
 		asyncCall(_, callee, callContext, _, _, _, _, _, _, _, _) then markCalleeFromCall(project, callee: callee, callContext: callContext, currentNamespace: currentNamespace, readerFilePath: readerFilePath, worklist: worklist, seen: seen)
-		awaitPromise to cancelPromise then return
+		// `sizeofType` references a TYPE operand, not a callee or value — it
+		// roots no function. The type's size is resolved at lowering through the
+		// struct/enum/typealias registries, which DFE does not manage.
+		awaitPromise to sizeofType then return
 	end 'op'
 end 'addCalleesFromOpIndex'
 

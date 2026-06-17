@@ -1623,6 +1623,16 @@ export union MaxonOp
 	// never runs, so there is nothing to stop. Preemptive cancellation (a real
 	// `__gt_cancel`) lands with the IOCP-driven async-I/O work.
 	cancelPromise(promise ByteArray, range SourceRange)
+	// `sizeof(TypeName)` — compile-time type-size query. The parser emits this
+	// op carrying the type operand verbatim (a primitive, a named type, a
+	// type parameter, or a generic instance). Monomorphization substitutes
+	// `operandType` when it is a `typeParameter` (mirroring the C# bootstrap's
+	// `MaxonSizeofOp.TypeName` rename), so by the time LowerMaxonToStd runs the
+	// operand is always concrete. Lowering resolves the operand to its byte size
+	// and emits an i64 const — the size folds to a compile-time literal that
+	// participates in arithmetic and let-bindings like any other integer.
+	// TypeResolution records the result as `MaxonType.integer`.
+	sizeofType(result ByteArray, operandType MaxonType, range SourceRange)
 end 'MaxonOp'
 
 export typealias MaxonOpArray = Array with MaxonOp
@@ -1684,6 +1694,7 @@ export function maxonOpToString(project Project, op MaxonOp, blocks IrBlockArray
 		awaitPromise(result, promise, innerType, _, _) gives "%{String.from(result)} = maxon.await %{String.from(promise)} : {innerType.toString(project)}"
 		tryAwait(result, promise, innerType, _, errorBoundName, _) gives "%{String.from(result)} = maxon.try_await %{String.from(promise)} : {innerType.toString(project)} -> err %{String.from(errorBoundName)}"
 		cancelPromise(promise, _) gives "maxon.cancel_promise %{String.from(promise)}"
+		sizeofType(result, operandType, _) gives "%{String.from(result)} = maxon.sizeof {lb}type = {operandType.toString(project)}{rb}"
 	end 'print'
 end 'maxonOpToString'
 

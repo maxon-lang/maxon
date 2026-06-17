@@ -1231,6 +1231,63 @@ export type Parser
 		return chased
 	end 'parseTypeRef'
 
+	// Parse `sizeof(TypeName)` (the leading `sizeof` identifier already
+	// consumed by the caller, cursor on the `(`). The argument is a TYPE, not
+	// a value expression.
+	//
+	// Primitives whose size is fixed at compile time — `int`/`float` (8),
+	// `bool` (1), and the bare `byte` keyword-identifier (1) — fold to an
+	// integer literal immediately, exactly as the C# bootstrap does (it emits a
+	// `MaxonLiteralOp` for every concrete type and reserves the sizeof op for
+	// type parameters). Bare `int`/`float`/`byte` are rejected by `parseTypeRef`
+	// outside a typealias RHS, so they are handled here directly instead of
+	// routing through it.
+	//
+	// Named types (structs, enums, primitive typealiases), type parameters
+	// (`sizeof(T)`), and generic instances defer to `MaxonOp.sizeofType`: their
+	// byte size is resolved at lowering, after monomorphization has substituted
+	// any type parameter with a concrete type. Every case yields an
+	// `ExprResult.direct` of `MaxonType.integer`.
+	function parseSizeofExpr(block IrBlock, sizeofToken Token) returns ExprResult throws ParserError
+		try eat(TokenKind.leftParen)
+		let argToken = cursor.current()
+
+		if argToken.kind == TokenKind.int or argToken.kind == TokenKind.float 'primFloatWord'
+			try eat(argToken.kind)
+			return try emitSizeofLiteral(block, sizeofToken: sizeofToken, size: 8)
+		end 'primFloatWord'
+
+		if argToken.kind == TokenKind.bool 'primBool'
+			try eat(TokenKind.bool)
+			return try emitSizeofLiteral(block, sizeofToken: sizeofToken, size: 1)
+		end 'primBool'
+
+		// `byte` is not a keyword token (the lexer emits it as a plain
+		// identifier); it is the source-level spelling of a 1-byte primitive,
+		// equivalent to the stdlib's `typealias Byte = int(0 to u8.max)`.
+		if argToken.kind == TokenKind.identifier and argToken.value == "byte" 'primByte'
+			try eat(TokenKind.identifier)
+			return try emitSizeofLiteral(block, sizeofToken: sizeofToken, size: 1)
+		end 'primByte'
+
+		let operandType = try parseTypeRef()
+		try expect(TokenKind.rightParen)
+		let rparenToken = previousToken()
+		let resultName = freshSynthName()
+		module.appendOp(block, op: MaxonOp.sizeofType(resultName, operandType: operandType, range: SourceRange.between(sizeofToken, last: rparenToken)))
+		return ExprResult.direct(resultName, valueType: MaxonType.integer)
+	end 'parseSizeofExpr'
+
+	// Consume the closing `)` of a `sizeof(...)` call and emit an integer
+	// literal of `size`. Shared by the compile-time-known primitive arms of
+	// `parseSizeofExpr`.
+	function emitSizeofLiteral(block IrBlock, sizeofToken Token, size ParsedInt) returns ExprResult throws ParserError
+		try expect(TokenKind.rightParen)
+		let rparenToken = previousToken()
+		let name = emitLiteral(block, value: size, valueType: MaxonType.integer, range: SourceRange.between(sizeofToken, last: rparenToken))
+		return ExprResult.direct(name, valueType: MaxonType.integer)
+	end 'emitSizeofLiteral'
+
 	// Phase 11.0: True iff `name` is one of the in-scope type-parameter bare
 	// names (collected from a `uses` clause on the enclosing type/extension).
 	// `currentTypeParams` is empty outside generic bodies, so the loop
@@ -13106,6 +13163,16 @@ export type Parser
 		if inClosure and not scope.contains(token.value) and closureOuterScope.isSelfField(token.value) 'closureSelfField'
 			return try emitClosureSelfFieldLoad(block, token: token)
 		end 'closureSelfField'
+
+		// `sizeof(TypeName)` — compile-time type-size intrinsic. The argument is
+		// a TYPE reference, not an expression, so it must be intercepted before
+		// the normal identifier-call dispatch tries to parse `int` / `Point` /
+		// `T` as a value (which fails as E2004 "Expected expression"). Guarded by
+		// `not scope.contains` so a user binding named `sizeof` still shadows the
+		// intrinsic. Mirrors the C# bootstrap's `sizeof` dispatch in 2-Parser.cs.
+		if token.value == "sizeof" and at(TokenKind.leftParen) and not scope.contains(token.value) 'isSizeof'
+			return try parseSizeofExpr(block, sizeofToken: token)
+		end 'isSizeof'
 
 		// `TypeName from "literal"` / `TypeName from 'c'` / `TypeName from [..]`
 		// — initialize a type conforming to InitableFromStringLiteral /

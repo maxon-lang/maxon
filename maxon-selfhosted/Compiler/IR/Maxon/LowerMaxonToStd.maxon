@@ -155,6 +155,23 @@ function enumIsOrdinalBacked(enumType EnumType) returns bool
 	return true
 end 'enumIsOrdinalBacked'
 
+// Byte size of an enum / union value as reported by `sizeof`. A plain enum
+// (and a bare-case union) is a single 8-byte tag word; an associated-value
+// union is heap-boxed as the tag word plus 8 bytes for each payload slot of
+// the widest case. Mirrors the C# bootstrap's `IrEnumType.SizeInBytes`
+// (`8 + maxCasePayloadCount * 8` when it has associated values, else `8`).
+function enumSizeInBytes(enumType EnumType) returns ParsedInt
+	var maxPayload = 0 as ParsedInt
+	for i in 0 upto enumType.cases.count() 'each'
+		let c = try enumType.cases.get(i) otherwise panic("enumSizeInBytes: cases.get OOB at {i}")
+		let payloadCount = c.payloadFields.count() as ParsedInt
+		if payloadCount > maxPayload 'wider'
+			maxPayload = payloadCount
+		end 'wider'
+	end 'each'
+	return 8 + maxPayload * 8
+end 'enumSizeInBytes'
+
 // Convert a source-level qualified name into the linker symbol that backs the
 // global in the writable .data section. The `__data_` prefix is what the x64
 // and arm64 backends pattern-match on to pick the dataSection relocation kind
@@ -3571,6 +3588,10 @@ type MaxonToStdLowering
 			awaitPromise(result, promise, innerType, _, _) then self.lowerAwaitReal(result, promise: promise, innerType: innerType, dstBlock: dstBlock)
 			tryAwait(result, promise, innerType, _, errorBoundName, _) then self.lowerTryAwaitReal(result, promise: promise, innerType: innerType, errorBoundName: errorBoundName, dstBlock: dstBlock)
 			cancelPromise(promise, _) then self.lowerCancelPromise(promise, dstBlock: dstBlock)
+			// `sizeof(TypeName)` — resolve the operand type to its byte size and
+			// emit an i64 const. Monomorphization has already substituted any
+			// type parameter with a concrete type, so the operand is concrete.
+			sizeofType(result, operandType, _) then self.lowerSizeofType(result, operandType: operandType, dstBlock: dstBlock)
 		end 'lower'
 	end 'lowerOp'
 
@@ -3591,6 +3612,92 @@ type MaxonToStdLowering
 		self.setIsFloat(resultId, isFloat: isFloat)
 		self.setValueType(resultId, t: litType)
 	end 'lowerLiteral'
+
+	// `sizeof(TypeName)` — bind `result` to the operand's byte size.
+	//
+	// A concrete operand folds to an i64 compile-time const (its
+	// `sizeofTypeByteSize`). A bare `typeParameter` operand — `sizeof(T)` inside
+	// a generic body whose `T` is bound only per call site — has no single
+	// compile-time answer, so it lowers to a runtime load of the enclosing
+	// type's layout descriptor `elementLogicalSize@56` slot (the source-level
+	// sizeof of the single type arg, stamped per genericInstance by
+	// BuildLayoutDescriptors). This mirrors how `__ManagedMemory.create` reads
+	// the descriptor's `elementSize` for buffer sizing — the same dictionary-
+	// passing model the self-hosted compiler uses instead of cloning generic
+	// bodies per instantiation. The C# bootstrap, which fully monomorphizes,
+	// folds the same value to a literal.
+	function lowerSizeofType(result ByteArray, operandType MaxonType, dstBlock IrBlock)
+		if maxonTypeIsTypeParameter(operandType) 'fromDescriptor'
+			self.lowerSizeofTypeParameter(result, dstBlock: dstBlock)
+			return
+		end 'fromDescriptor'
+		let size = self.sizeofTypeByteSize(operandType)
+		let resultId = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: resultId, value: size))))
+		self.setValueType(resultId, t: MaxonType.integer)
+	end 'lowerSizeofType'
+
+	// `sizeof(T)` where `T` is the enclosing generic type's parameter: read
+	// `elementLogicalSize@56` from the function's implicit layout descriptor.
+	// A generic body that references `T` always carries the descriptor param
+	// (`hasImplicitLayoutParam`); reaching here without one is a pipeline bug.
+	function lowerSizeofTypeParameter(result ByteArray, dstBlock IrBlock)
+		let resultId = self.defineName(result)
+		if not self.currentMaxonFunc.hasImplicitLayoutParam 'noLayout'
+			self.reportLowerError(ErrorCode.semanticMissingReturn, message: "lowerSizeofType: sizeof(T) in '{self.currentFuncName}' but the function carries no implicit layout descriptor — the generic-method detection did not flag this body")
+			self.setValueType(resultId, t: MaxonType.integer)
+			return
+		end 'noLayout'
+		let sizeId = self.emitLoadFieldI64(self.implicitLayoutValueId, offset: LAYOUT_OFFSET_ELEMENT_LOGICAL_SIZE, dstBlock: dstBlock)
+		self.nameToId.upsert(result, value: sizeId)
+		self.setValueType(sizeId, t: MaxonType.integer)
+	end 'lowerSizeofTypeParameter'
+
+	// Byte size of a concrete `sizeof` operand. Primitive scalars follow their
+	// natural width (bool 1, int/float 8); a `named` type resolves through the
+	// struct / enum / typealias registries (`sizeofNamedByteSize`). Pointer-
+	// shaped operands (string, character, function, genericInstance, cstring,
+	// opaquePointer, constInt) are one i64 word; an interface value is a 16-byte
+	// fat pointer. `typeParameter` is handled by `lowerSizeofTypeParameter`
+	// before this is reached; `unresolved` is a TypeResolution bug.
+	function sizeofTypeByteSize(t MaxonType) returns ParsedInt
+		return match t 'k'
+			boolean gives 1
+			integer gives 8
+			float gives 8
+			string gives 8
+			character gives 8
+			named(id) gives self.sizeofNamedByteSize(project.typeNames.get(id))
+			function gives 8
+			unresolved panic("lowerSizeofType: MaxonType.unresolved operand survived past TypeResolution")
+			typeParameter panic("lowerSizeofType: typeParameter operand should have been routed to lowerSizeofTypeParameter")
+			genericInstance gives 8
+			interface gives 16
+			constInt gives 8
+			opaquePointer gives 8
+			cstring gives 8
+		end 'k'
+	end 'sizeofTypeByteSize'
+
+	// Byte size of a `named` sizeof operand. A struct is its full laid-out
+	// `byteSize` (each field an 8-byte slot, padded to 8 — see
+	// `layoutAllStructs`); an enum / union is 8 (the tag word) plus the widest
+	// case payload (8 bytes per associated value), matching the C# bootstrap's
+	// `IrEnumType.SizeInBytes`. Anything else is a primitive typealias
+	// (`Integer = int(...)`, `Byte = int(0 to u8.max)`), whose size is the
+	// store width of its resolved StdType (8 for an int/float range, 1 for a
+	// byte range).
+	function sizeofNamedByteSize(name String) returns ParsedInt
+		if let structType = try project.structTypes.get(name) 'isStruct'
+			return structType.byteSize
+		end 'isStruct'
+		if let enumType = try project.enumTypes.get(name) 'isEnum'
+			return enumSizeInBytes(enumType)
+		end 'isEnum'
+		// `storeWidthBytes` is a MachineWord (0 to u64.max); the store-width
+		// results are only 1/2/4/8 so the value always fits ParsedInt.
+		return storeWidthBytes(storeWidthOfStdType(resolveNamedToStdType(project, name: name))) as ParsedInt
+	end 'sizeofNamedByteSize'
 
 	// Tier 4 real green-thread lowering: `async f(args)` builds an argument
 	// buffer `[count | managed_mask | arg0 | …]` (allocated via the untracked

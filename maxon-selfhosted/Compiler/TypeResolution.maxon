@@ -5471,7 +5471,7 @@ function staticTypeFromOpIfMatches(project Project, op MaxonOp, name ByteArray) 
 		stringConst(result, _, _) then return try staticTypedResult(name, result: result, t: stringConstResultType(project))
 		charLiteral(result, _, _) then return try staticTypedResult(name, result: result, t: builtinCharLiteralType(project))
 		byteStringLiteral(result, _, _) then return try staticTypedResult(name, result: result, t: byteStringLiteralResultType(project))
-		stringInterp to cancelPromise then throw ArrayLiteralLookupError.notFound
+		stringInterp to sizeofType then throw ArrayLiteralLookupError.notFound
 	end 'pick'
 end 'staticTypeFromOpIfMatches'
 
@@ -5746,6 +5746,9 @@ function recordOpResult(project Project, producerTypes ProducerTypeMap, slotType
 		awaitPromise(result, promise, innerType, _, _) then recordResultType(producerTypes, name: result, t: resolveAwaitInnerType(project, producerTypes: producerTypes, promise: promise, innerType: innerType))
 		tryAwait(result, promise, innerType, _, _, _) then recordResultType(producerTypes, name: result, t: resolveAwaitInnerType(project, producerTypes: producerTypes, promise: promise, innerType: innerType))
 		cancelPromise then return
+		// `sizeof(TypeName)` always yields a compile-time integer constant; its
+		// result type is `integer` regardless of the operand type.
+		sizeofType(result, _, _) then recordResultType(producerTypes, name: result, t: MaxonType.integer)
 	end 'rec'
 end 'recordOpResult'
 
@@ -5821,7 +5824,7 @@ function maybePatchFnRegistryForOp(project Project, op MaxonOp)
 		literal to rethrow then return
 		functionRef(_, funcName, fnTypeId, _) then patchFnRegistryEntryIfUnresolved(project, funcName: funcName, fnTypeId: fnTypeId)
 		closureCreate(_, funcName, fnTypeId, _, _, _, _) then patchFnRegistryEntryIfUnresolved(project, funcName: funcName, fnTypeId: fnTypeId)
-		closureEnvLoad to cancelPromise then return
+		closureEnvLoad to sizeofType then return
 	end 'pick'
 end 'maybePatchFnRegistryForOp'
 
@@ -5847,7 +5850,7 @@ function patchClosureEnvLoadCaptureTypes(project Project, module MaxonModule, pr
 				match op 'check'
 					closureCreate(_, funcName, _, _, _, capturedOuterSlots, _) then patchOneClosureLifted(module, liftedName: funcName, capturedOuterSlots: capturedOuterSlots, outerFunc: outerFunc, outerSlots: outerSlots, liftedToRebuild: liftedToRebuild)
 					literal to functionRef then break 'check'
-					closureEnvLoad to cancelPromise then break 'check'
+					closureEnvLoad to sizeofType then break 'check'
 				end 'check'
 			end 'eachOp'
 		end 'eachBlock'
@@ -5912,7 +5915,7 @@ function patchOneEnvLoadOp(module MaxonModule, opIdx OpIndex, op MaxonOp, captur
 	match op 'pick'
 		closureEnvLoad(result, captureIndex, captureName, captureType, range) then return patchEnvLoadIfNeeded(module, opIdx: opIdx, result: result, captureIndex: captureIndex, captureName: captureName, captureType: captureType, range: range, capturedOuterSlots: capturedOuterSlots, outerFunc: outerFunc, outerSlots: outerSlots)
 		literal to closureCreate then return false
-		indirectCall to cancelPromise then return false
+		indirectCall to sizeofType then return false
 	end 'pick'
 end 'patchOneEnvLoadOp'
 
@@ -6053,6 +6056,9 @@ function retValueTypeFromProducers(op MaxonOp, producerTypes ProducerTypeMap) re
 		awaitPromise gives MaxonType.unresolved
 		tryAwait gives MaxonType.unresolved
 		cancelPromise gives MaxonType.unresolved
+		// Only the `ret` arm yields a concrete producer type; `sizeofType` is not
+		// a terminator, so it returns unresolved like every non-`ret` op here.
+		sizeofType gives MaxonType.unresolved
 	end 'pick'
 end 'retValueTypeFromProducers'
 
@@ -6189,6 +6195,10 @@ function fillUnresolvedTypesForOp(project Project, module MaxonModule, opIdx OpI
 		awaitPromise(result, promise, innerType, promiseType, range) then fillAwait(project, module: module, opIdx: opIdx, result: result, promise: promise, innerType: innerType, promiseType: promiseType, range: range, producerTypes: producerTypes)
 		tryAwait(result, promise, innerType, promiseType, errorBoundName, range) then fillTryAwait(project, module: module, opIdx: opIdx, result: result, promise: promise, innerType: innerType, promiseType: promiseType, errorBoundName: errorBoundName, range: range, producerTypes: producerTypes)
 		cancelPromise then return
+		// `sizeofType`'s operand is a TYPE literal, not a value sourced from the
+		// producer map — there is nothing to fill. Its `integer` result was
+		// already recorded by `recordOpResult`.
+		sizeofType then return
 	end 'fill'
 end 'fillUnresolvedTypesForOp'
 
@@ -7077,7 +7087,7 @@ function specializeOp(module MaxonModule, opIdx OpIndex, op MaxonOp, nameStringI
 		forInIterable then return
 		castCheck then return
 		// Tier 4 async: no async op carries a string-const operand to specialize.
-		asyncCall to cancelPromise then return
+		asyncCall to sizeofType then return
 	end 'specialize'
 end 'specializeOp'
 

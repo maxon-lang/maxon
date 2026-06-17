@@ -294,10 +294,47 @@ function computeLayoutDescriptor(project Project, gid GenericInstanceId, copyNam
 		end 'minAlign'
 	end 'isStruct'
 	let elementSize = primitiveElementSize(project, args: args)
+	let elementLogicalSize = singleArgLogicalSize(project, args: args)
 	let hasHeapRefs = instanceHasHeapRefs(project, args: args)
 	let perArgHeapRefBits = computePerArgHeapRefBits(project, args: args)
-	return LayoutDescriptor.create(size, alignment: alignment, elementSize: elementSize, hasHeapRefs: hasHeapRefs, perArgHeapRefBits: perArgHeapRefBits, copyFuncName: copyName, destroyFuncName: destroyName, fieldOffsetsPtr: "")
+	return LayoutDescriptor.create(size, alignment: alignment, elementSize: elementSize, hasHeapRefs: hasHeapRefs, perArgHeapRefBits: perArgHeapRefBits, copyFuncName: copyName, destroyFuncName: destroyName, fieldOffsetsPtr: "", elementLogicalSize: elementLogicalSize)
 end 'computeLayoutDescriptor'
+
+// Source-level `sizeof` of the single type arg, for the descriptor's
+// `elementLogicalSize@56` slot. Unlike `primitiveElementSize` (storage width
+// — a pointer-width 8 for struct elements), this reports a struct's FULL
+// byteSize so `sizeof(T)` inside a generic body where `T` binds to a struct
+// yields the struct's logical size (fieldCount*8), matching the C# bootstrap.
+// 0 for non-singleton instances (matches the `elementSize` invariant).
+function singleArgLogicalSize(project Project, args MaxonTypeArray) returns MachineWord
+	if args.count() != 1 'notSingleton'
+		return 0
+	end 'notSingleton'
+	let only = try args.get(0) otherwise panic("singleArgLogicalSize: args.get(0) failed despite count==1")
+	return maxonTypeLogicalSizeof(project, t: only)
+end 'singleArgLogicalSize'
+
+// The source-level `sizeof` of a concrete type: a struct's full byteSize, an
+// enum's tag+payload size, a primitive's natural width. Mirrors
+// `MaxonToStdLowering.sizeofTypeByteSize` (the concrete-operand path) so the
+// runtime descriptor value a generic `sizeof(T)` reads matches what a direct
+// `sizeof(ConcreteType)` folds to.
+export function maxonTypeLogicalSizeof(project Project, t MaxonType) returns MachineWord
+	// Only a genuinely `named` type can name a user struct; a genericInstance's
+	// base name (e.g. "Array") must NOT be looked up as a struct here (its
+	// values are pointer-shaped, handled by `primitiveWidth`).
+	let named = match t 'pick'
+		named(id) gives project.typeNames.get(id)
+		boolean to character gives ""
+		function to cstring gives ""
+	end 'pick'
+	if not named.isEmpty() 'isNamed'
+		if let st = try project.structTypes.get(named) 'isStruct'
+			return st.byteSize
+		end 'isStruct'
+	end 'isNamed'
+	return primitiveWidth(project, t: t)
+end 'maxonTypeLogicalSizeof'
 
 // Pack one HAS_HEAP_REFS bit per type-arg: bit i is set iff `args[i]` is a
 // heap-managed type. The aggregate descriptor's `flags@24` carries these

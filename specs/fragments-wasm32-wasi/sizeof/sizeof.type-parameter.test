@@ -1,0 +1,48 @@
+// Test: sizeof.type-parameter
+typealias Integer = int(i64.min to i64.max)
+
+type Sizer uses T
+	export var dummy as T
+
+	export static function create(dummy T) returns Self
+		return Self{dummy: dummy}
+	end 'create'
+
+	export function typeSize() returns Integer
+		return sizeof(T)
+	end 'typeSize'
+end 'Sizer'
+
+typealias BoolSizer = Sizer with bool
+
+function main() returns ExitCode
+	let s = BoolSizer.create(false)
+	return s.typeSize()
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %1 = mir.mov_imm 0 : i64
+    %2 = mir.global_addr @__layout_Sizer_Bool
+    %7 = mir.mov_imm 8 : i64
+    %8 = mir.load %2, 40 width: qword
+    %9 = mir.call @stdlib.__mm_alloc(%7, %8)
+    mir.store %1, %9, 0 width: qword
+    %11 = mir.call @mm_drop(%9)
+    %5 = mir.global_addr @__layout_Sizer_Bool
+    %10 = mir.load %5, 56 width: qword
+    %12 = mir.mov_imm 125 : i64
+    %13 = mir.cmp ugt, %10, %12
+    mir.cond_br %13 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %14 = mir.global_addr @__panic_msg_5fc2eaa1829b94f4
+    %15 = mir.call @mrt_panic(%14)
+  __range_ok_0:
+    mir.ret %10
+  }
+}
+---
