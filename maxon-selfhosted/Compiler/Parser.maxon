@@ -3002,7 +3002,14 @@ export type Parser
 			synchronize()
 			return
 		end 'hasInterp'
-		let strId = project.strings.intern(valueToken.value)
+		// Decode escape sequences (`\\`, `\n`, `\xNN`, …) before interning, exactly
+		// as the local string-literal path does. Without this a top-level
+		// `let sep = "\\"` interns the raw two-byte `\\` instead of the single
+		// backslash it denotes — every consumer (e.g. FilePath.separator) then
+		// emits a doubled separator.
+		validateEscapes(valueToken, kind: "string literal")
+		let decoded = String.from(decodeStringEscapes(valueToken.value))
+		let strId = project.strings.intern(decoded)
 		let exprId = appendConstExpr(UnresolvedConstExpr.stringLit(strId))
 		registerUnresolvedTopLevelDecl(nameToken, qualifiedName: qualifiedName, rootExprId: exprId, mutable: mutable, visibility: visibility)
 		logTrace(LogCategory.parser, message: function() gives "parser: const string '{qualifiedName}'")

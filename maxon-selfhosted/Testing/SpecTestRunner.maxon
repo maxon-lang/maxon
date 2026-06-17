@@ -248,7 +248,10 @@ let whitelist = ["basics",
 	//   ExitCode range-check edge). Re-enable once Phase B lands.
 	// "try-block-otherwise-divergent" — needs terminal `otherwise panic/throws` forms.
 	// "lazy-static" (7/9) — `from`-collection initializer + global call init.
-	// "filepath" (38/43) — join doubles the path separator.
+	// "filepath" (39/43) — top-level string-escape fix took it 34→39; remaining 4
+	//   are a refcount over-release in FilePath `==`/`!=` (case-insensitive
+	//   clone+toLower+equals double-decrefs its temps) + a normalize/resolve leak.
+	//   Enable once the FilePath-equality refcount bug is fixed.
 	// "file-info" — x64 passes, but wasm worker crashes on the fragment batch.
 
 	// --- Tier 3: larger features / runtime / multi-file ---
