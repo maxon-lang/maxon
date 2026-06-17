@@ -16,32 +16,17 @@ ExitCode: 1
 ---
 // CompiledIR
 module {
-  func @Direction.hash(self: i64) -> i64 {
-  entry:
-    x64.prologue stack_size=16
-    x64.call stdlib.int.hash
-    x64.mov ecx, rax
-    x64.mov rax, rcx
-    x64.epilogue
-    x64.ret
-  }
   func @main() -> u32 {
   entry:
     x64.prologue stack_size=16
-    x64.mov rax, 1
-    x64.mov [rbp-8], rax
-    x64.mov rcx, [rbp-8]
-    x64.call Direction.hash
-    x64.xor edx, edx
-    x64.mov ebx, 4294967295
-    x64.cmp rax, rbx
-    x64.jg main.__range_panic_0
-    x64.cmp rax, rdx
-    x64.jl main.__range_panic_0
-    x64.jmp main.__range_ok_0
+    x64.mov ecx, 1
+    x64.call int.hash
+    x64.mov r9d, 4294967295
+    x64.cmp r8, r9
+    x64.jbe __range_ok_0
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_0]
-    x64.mov rcx, rax
+    x64.lea r12, [rip+__panic_msg_df773d2760ad513e]
+    x64.mov rcx, r12
     x64.call mrt_panic
   __range_ok_0:
     x64.epilogue

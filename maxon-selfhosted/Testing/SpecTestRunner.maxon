@@ -259,9 +259,15 @@ let whitelist = ["basics",
 	"match-statements",
 	"match-jump-table",
 	"match-expr-arm-divergent",
-	// "enum-hashable" / "enum-match-only" / "enum-full" — bare-enum-as-map-key
-	//   needs a Hashable witness BuildWitnessTables doesn't emit (Phase-5
-	//   witness-table registration for primitive-conforming enums).
+	"enum-hashable",
+	// "enum-match-only" / "enum-full" — need E3066 (union `==`/`!=` rejected,
+	//   "use match instead"). The check is simple, BUT enforcing it breaks the
+	//   self-hosted compiler's OWN source: many internal `union`s (CmpPredicate,
+	//   etc.) are payload-free and compared with `==` throughout. Enabling E3066
+	//   requires first rewriting every internal `union ==` to `match` (or
+	//   reclassifying payload-free internal unions as `enum`s) — a large,
+	//   separate refactor. enum-hashable's hash/equals synthesis (now landed) is
+	//   the complementary half and is unaffected.
 	"per-instance-typealias",
 	"generic-type-inner-alias-multifile",
 	"generic-type-nested-array-typealias",

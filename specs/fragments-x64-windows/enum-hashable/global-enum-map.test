@@ -48,308 +48,117 @@ ExitCode: 1
 ---
 // CompiledIR
 module {
-  func @LogCategory.hash(self: i64) -> i64 {
+  func @setCategoryLevel(rcx: u8, rdx: u8) {
   entry:
     x64.prologue stack_size=16
-    x64.call stdlib.int.hash
-    x64.mov ecx, rax
-    x64.mov rax, rcx
-    x64.epilogue
-    x64.ret
-  }
-  func @setCategoryLevel(category: i64, level: i64) {
-  entry:
-    x64.prologue stack_size=32
-    x64.mov [rbp-8], rcx
-    x64.mov [rbp-16], rdx
-    x64.mov rax, qword [rip+categoryLevels]
-    x64.mov [rbp-24], rax
-    x64.mov rax, [rbp-24]
-    x64.mov rcx, [rbp-24]
-    x64.call mm_incref
-    x64.mov rcx, [rbp-8]
-    x64.mov rdx, [rbp-16]
-    x64.mov rbx, [rbp-24]
-    x64.mov rcx, [rbp-24]
-    x64.mov rdx, [rbp-8]
-    x64.mov r8, [rbp-16]
-    x64.call CategoryLevelMap.insert
-    x64.mov rsi, [rbp-24]
-    x64.mov [rbp-32], rdx
-    x64.test rsi, rsi
-    x64.jz __nonnull_skip_0
-    x64.mov rcx, [rbp-24]
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.epilogue
-    x64.ret
-  }
-  func @getCategoryLevel(category: i64) -> i64 {
-  entry:
-    x64.prologue stack_size=32
-    x64.mov [rbp-8], rcx
-    x64.mov rax, qword [rip+categoryLevels]
-    x64.mov [rbp-16], rax
-    x64.mov rax, [rbp-8]
-    x64.mov rdx, [rbp-16]
-    x64.mov rcx, [rbp-16]
-    x64.mov rdx, [rbp-8]
-    x64.call CategoryLevelMap.get
+    x64.mov r8, rcx
+    x64.mov rax, rdx
+    x64.lea r9, [rip+__data_categoryLevels]
+    x64.mov r12, [r9+0] (8b)
+    x64.lea rdi, [rip+__witness_int_Equatable]
+    x64.lea rsi, [rip+__witness_int_Hashable]
+    x64.lea r9, [rip+__layout_Map_LogCategory_LogLevel]
+    x64.mov rcx, r12
+    x64.mov rdx, r8
+    x64.call Map.insert
+    x64.test rdx, rdx
+    x64.je __rc_edge_0_0
+  try_0.otherwise:
     x64.xor ecx, ecx
-    x64.mov [rbp-24], rcx
-    x64.mov [rbp-32], rax
-    x64.xor eax, eax
-    x64.cmp rdx, rax
-    x64.je getCategoryLevel.otherwise_default_continue_0
-  otherwise_default_error_0:
-    x64.mov rax, [rbp-24]
-    x64.mov [rbp-32], rax
-    x64.jmp getCategoryLevel.otherwise_default_continue_0
-  otherwise_default_continue_0:
-    x64.mov rax, [rbp-32]
+  try_0.merge:
+    x64.call __mm_decref_maybenull_helper
+    x64.epilogue
+    x64.ret
+  __rc_edge_0_0:
+    x64.mov rcx, r12
+    x64.call stdlib.__mm_incref
+    x64.mov rcx, r12
+    x64.jmp try_0.merge
+  }
+  func @getCategoryLevel(rcx: u8) -> u8 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov r8, rcx
+    x64.lea r9, [rip+__data_categoryLevels]
+    x64.mov rcx, [r9+0] (8b)
+    x64.lea rsi, [rip+__witness_int_Equatable]
+    x64.lea r9, [rip+__witness_int_Hashable]
+    x64.lea rax, [rip+__layout_Map_LogCategory_LogLevel]
+    x64.mov rdx, r8
+    x64.call Map.get
+    x64.test rdx, rdx
+    x64.je try_0.merge
+  try_0.otherwise:
+    x64.xor r8d, r8d
+  try_0.merge:
+    x64.cmp r8, 2
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea r12, [rip+__panic_msg_3d500312f6111870]
+    x64.mov rcx, r12
+    x64.call mrt_panic
+  __range_ok_0:
     x64.epilogue
     x64.ret
   }
   func @main() -> u32 {
   entry:
-    x64.prologue stack_size=64
-    x64.xor ecx, ecx
-    x64.mov rdx, 2
+    x64.prologue stack_size=32
+    x64.mov edx, 2
+    x64.xor r12d, r12d
+    x64.mov rcx, r12
     x64.call setCategoryLevel
-    x64.mov rcx, 1
-    x64.mov rdx, 1
+    x64.mov r13d, 1
+    x64.mov rcx, r13
+    x64.mov rdx, r13
     x64.call setCategoryLevel
-    x64.xor ecx, ecx
+    x64.mov rcx, r12
     x64.call getCategoryLevel
-    x64.mov [rbp-8], rax
-    x64.mov rcx, 1
+    x64.mov r14, r8
+    x64.mov rcx, r13
     x64.call getCategoryLevel
-    x64.mov [rbp-16], rax
-    x64.mov rax, [rbp-8]
-    x64.xor ecx, ecx
-    x64.mov [rbp-24], rcx
-    x64.mov [rbp-32], rax
-    x64.jmp main.c_0.cmp0
-  c_0.cmp0:
-    x64.mov rax, [rbp-32]
-    x64.mov rcx, 2
-    x64.cmp rax, rcx
-    x64.jne main.c_0.cmp1
-  c_0.case0:
-    x64.mov rax, 1
-    x64.mov [rbp-24], rax
-    x64.jmp main.c_0.merge
-  c_0.cmp1:
-    x64.mov rax, [rbp-32]
-    x64.xor ecx, ecx
-    x64.cmp rax, rcx
-    x64.jne main.c_0.cmp2
-  c_0.case1:
-    x64.xor eax, eax
-    x64.mov [rbp-24], rax
-    x64.jmp main.c_0.merge
-  c_0.cmp2:
-    x64.mov rax, [rbp-32]
-    x64.mov rcx, 1
-    x64.cmp rax, rcx
-    x64.jne main.c_0.merge
-  c_0.case2:
-    x64.xor eax, eax
-    x64.mov [rbp-24], rax
-    x64.jmp main.c_0.merge
+    x64.cmp r14, 2
+    x64.jne c_0.next0
+    x64.mov r9, r13
+    x64.jmp c_0.merge
   c_0.merge:
-    x64.mov rax, [rbp-24]
-    x64.mov [rbp-33], rax
-    x64.mov rcx, [rbp-16]
-    x64.xor edx, edx
-    x64.mov [rbp-41], rdx
-    x64.mov [rbp-49], rcx
-    x64.jmp main.l_0.cmp0
-  l_0.cmp0:
-    x64.mov rax, [rbp-49]
-    x64.mov rcx, 1
-    x64.cmp rax, rcx
-    x64.jne main.l_0.cmp1
-  l_0.case0:
-    x64.mov rax, 1
-    x64.mov [rbp-41], rax
-    x64.jmp main.l_0.merge
-  l_0.cmp1:
-    x64.mov rax, [rbp-49]
-    x64.xor ecx, ecx
-    x64.cmp rax, rcx
-    x64.jne main.l_0.cmp2
-  l_0.case1:
-    x64.xor eax, eax
-    x64.mov [rbp-41], rax
-    x64.jmp main.l_0.merge
-  l_0.cmp2:
-    x64.mov rax, [rbp-49]
-    x64.mov rcx, 2
-    x64.cmp rax, rcx
-    x64.jne main.l_0.merge
-  l_0.case2:
-    x64.xor eax, eax
-    x64.mov [rbp-41], rax
-    x64.jmp main.l_0.merge
+    x64.cmp r8, 1
+    x64.jne l_0.next0
+    x64.mov r8, r13
+    x64.jmp l_0.merge
+  c_0.next0:
+    x64.test r14, r14
+    x64.sete r9
+    x64.mov r9, r12
+    x64.jmp c_0.merge
   l_0.merge:
-    x64.mov rax, [rbp-41]
-    x64.mov [rbp-50], rax
-    x64.mov rcx, [rbp-33]
-    x64.xor edx, edx
-    x64.mov [rbp-51], rdx
-    x64.test rcx, rcx
-    x64.je main.shortAnd_0.merge
-  shortAnd_0.rhs:
-    x64.mov rax, [rbp-50]
-    x64.mov [rbp-51], rax
-    x64.jmp main.shortAnd_0.merge
-  shortAnd_0.merge:
-    x64.mov rax, [rbp-51]
-    x64.test rax, rax
-    x64.je main.both_0.after
+    x64.test r9, r9
+    x64.je __phi_trampoline_8_0
+    x64.jmp shortAnd.rhs
+  l_0.next0:
+    x64.test r8, r8
+    x64.jne l_0.next1
+    x64.mov r8, r12
+    x64.jmp l_0.merge
+  l_0.next1:
+    x64.mov r8d, 2
+    x64.mov r8, r12
+    x64.jmp l_0.merge
+  shortAnd.rhs:
+  shortAnd.merge:
+    x64.test r8, r8
+    x64.je both_0.after
   both_0:
-    x64.mov rax, 1
+    x64.mov r8, r13
     x64.epilogue
     x64.ret
   both_0.after:
-    x64.xor eax, eax
+    x64.mov r8, r12
     x64.epilogue
     x64.ret
-  }
-  func @__destruct___ManagedMemory_LogCategory(ptr: i64) {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+16]
-    x64.mov rdx, -1
-    x64.cmp rcx, rdx
-    x64.jne __destruct___ManagedMemory_LogCategory.check_owned_0
-  slice_cleanup_0:
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+32]
-    x64.mov [rbp-16], rcx
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_0
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.jmp __destruct___ManagedMemory_LogCategory.skip_buf_0
-  check_owned_0:
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+16]
-    x64.mov rdx, -2
-    x64.cmp rcx, rdx
-    x64.je __destruct___ManagedMemory_LogCategory.skip_buf_0
-  free_buf_0:
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+0]
-    x64.call mm_raw_free
-    x64.jmp __destruct___ManagedMemory_LogCategory.skip_buf_0
-  skip_buf_0:
-    x64.jmp __destruct___ManagedMemory_LogCategory.done
-  done:
-    x64.epilogue
-    x64.ret
-  }
-  func @__destruct_Array_LogCategory(ptr: i64) {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+0]
-    x64.mov [rbp-16], rcx
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_0
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.jmp __destruct_Array_LogCategory.done
-  done:
-    x64.epilogue
-    x64.ret
-  }
-  func @__destruct___ManagedMemory_LogLevel(ptr: i64) {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+16]
-    x64.mov rdx, -1
-    x64.cmp rcx, rdx
-    x64.jne __destruct___ManagedMemory_LogLevel.check_owned_0
-  slice_cleanup_0:
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+32]
-    x64.mov [rbp-16], rcx
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_0
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.jmp __destruct___ManagedMemory_LogLevel.skip_buf_0
-  check_owned_0:
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+16]
-    x64.mov rdx, -2
-    x64.cmp rcx, rdx
-    x64.je __destruct___ManagedMemory_LogLevel.skip_buf_0
-  free_buf_0:
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+0]
-    x64.call mm_raw_free
-    x64.jmp __destruct___ManagedMemory_LogLevel.skip_buf_0
-  skip_buf_0:
-    x64.jmp __destruct___ManagedMemory_LogLevel.done
-  done:
-    x64.epilogue
-    x64.ret
-  }
-  func @__destruct_Array_LogLevel(ptr: i64) {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+0]
-    x64.mov [rbp-16], rcx
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_0
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.jmp __destruct_Array_LogLevel.done
-  done:
-    x64.epilogue
-    x64.ret
-  }
-  func @__destruct_CategoryLevelMap(ptr: i64) {
-  entry:
-    x64.prologue stack_size=32
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+0]
-    x64.mov [rbp-16], rcx
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_0
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.mov rdx, [rbp-8]
-    x64.mov rbx, [rdx+8]
-    x64.mov [rbp-24], rbx
-    x64.test rbx, rbx
-    x64.jz __nonnull_skip_1
-    x64.mov rcx, [rbp-24]
-    x64.call mm_decref
-    x64.label __nonnull_skip_1
-    x64.mov rsi, [rbp-8]
-    x64.mov rdi, [rsi+16]
-    x64.mov [rbp-32], rdi
-    x64.test rdi, rdi
-    x64.jz __nonnull_skip_2
-    x64.mov rcx, [rbp-32]
-    x64.call mm_decref
-    x64.label __nonnull_skip_2
-    x64.jmp __destruct_CategoryLevelMap.done
-  done:
-    x64.epilogue
-    x64.ret
+  __phi_trampoline_8_0:
+    x64.mov r8, r12
+    x64.jmp shortAnd.merge
   }
 }
 ---

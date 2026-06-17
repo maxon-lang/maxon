@@ -959,9 +959,32 @@ function functionHasPriorDiagnostic(project Project, entry PendingUnusedCheck) r
 		if d.line >= entry.startLine and d.line <= entry.endLine 'insideRange'
 			return true
 		end 'insideRange'
+		// A primary error anchored EARLIER in the same file than this function
+		// (e.g. an E3017 constraint violation on a `typealias ... = Map with
+		// (...)` declaration above `main`) would have aborted the C# bootstrap
+		// before its throw-on-first-error pipeline ever reached this body's
+		// finish-time unused-var check — so it suppresses this function's E3012.
+		// The in-range gate above misses it because a decl-site error lands
+		// outside every function body. Excluding the deferred body-finish
+		// diagnostics from the trigger keeps an earlier clean function's own
+		// E3012 / E3077 / E3078 from chain-suppressing a later one (the C#
+		// bootstrap reports each, since each is the FIRST issue in its own body
+		// — see `void-function-unused`).
+		if d.line < entry.startLine and not diagnosticIsDeferredBodyFinish(d) 'priorTopLevelError'
+			return true
+		end 'priorTopLevelError'
 	end 'eachDiag'
 	return false
 end 'functionHasPriorDiagnostic'
+
+// True when `d` is one of the deferred body-finish diagnostics this drain
+// itself emits (E3012 unused-variable, E3077 var-should-be-let, E3078
+// var-from-immutable). `functionHasPriorDiagnostic`'s earlier-error gate
+// excludes these so one function's body-finish diagnostic doesn't suppress a
+// later function's — only a genuine upstream/primary error does.
+function diagnosticIsDeferredBodyFinish(d Diagnostic) returns bool
+	return d.code == ErrorCode.semanticUnusedVariable or d.code == ErrorCode.semanticVarShouldBeLet or d.code == ErrorCode.semanticVarFromImmutable
+end 'diagnosticIsDeferredBodyFinish'
 
 // Phase 4e error-handling rules.
 // Walks every function in the module and checks:

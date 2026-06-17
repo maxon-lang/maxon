@@ -22,18 +22,20 @@ ExitCode: 1
 ---
 // CompiledIR
 module {
-  func @main() -> u32 {
+  func @main() -> u8 {
   entry:
-    x64.mov r8d, 1
+    %0 = mir.mov_imm 1 : i64
+    %2 = mir.mov_imm 0 : i64
+    mir.br eq_0()
   eq_0:
-    x64.test r8, r8
-    x64.jne neq_0.after
+    %13 = mir.cmp eq, %0, %2
+    mir.cond_br %13 [then: neq_0(), else: neq_0.after()]
   neq_0:
-    x64.xor r8d, r8d
-    x64.ret
+    %9 = mir.mov_imm 0 : i64
+    mir.ret %9
   neq_0.after:
-    x64.mov r8d, 1
-    x64.ret
+    %10 = mir.mov_imm 1 : i64
+    mir.ret %10
   }
 }
 ---

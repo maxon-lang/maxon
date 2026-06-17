@@ -5608,6 +5608,12 @@ export type Parser
 		let skipIntFromRawHelper = (not backingState.structBackingTypeName.isEmpty()) or backingState.isStringBacked or backingState.isCharBacked
 		synthesizeEnumLookupHelpers(currentTypeName, cases: cases, isFloatBacked: backingState.isFloatBacked, isStringBacked: backingState.isStringBacked, isCharBacked: backingState.isCharBacked, visibility: visibility, line: enumNameToken.line, column: enumNameToken.column, skipFromRawValue: skipIntFromRawHelper)
 
+		// Auto-conform every enum to Hashable / Equatable by synthesizing
+		// `<Enum>.hash` / `<Enum>.equals` (mirrors the C# bootstrap). A
+		// user-written method of the same name would already occupy the
+		// signature key; the synthesizer's idempotency guard skips in that case.
+		synthesizeEnumHashAndEquals(currentTypeName, cases: cases, isFloatBacked: backingState.isFloatBacked, visibility: visibility, line: enumNameToken.line, column: enumNameToken.column)
+
 		currentTypeName = ""
 		currentEnumVisibility = Visibility.file
 		try skipEndAndLabel()
@@ -5826,6 +5832,13 @@ export type Parser
 			// the same reason enums do (raw value is a struct literal, not an int).
 			let skipIntFromRawHelper = (not backingState.structBackingTypeName.isEmpty()) or backingState.isStringBacked or backingState.isCharBacked
 			synthesizeEnumLookupHelpers(currentTypeName, cases: cases, isFloatBacked: backingState.isFloatBacked, isStringBacked: backingState.isStringBacked, isCharBacked: backingState.isCharBacked, visibility: visibility, line: unionNameToken.line, column: unionNameToken.column, skipFromRawValue: skipIntFromRawHelper)
+
+			// A scalar (payload-free) union is representationally an enum, so it
+			// auto-conforms to Hashable / Equatable the same way — its rawValue
+			// is the i64 the value carries. The heap-boxed (payload-bearing)
+			// arm above deliberately omits this so associated-value unions stay
+			// non-Hashable (E3017 when used as a Map key).
+			synthesizeEnumHashAndEquals(currentTypeName, cases: cases, isFloatBacked: backingState.isFloatBacked, visibility: visibility, line: unionNameToken.line, column: unionNameToken.column)
 
 			// `<Union>.unionCases.<member>` works on a SCALAR (payload-free)
 			// union too — the self-hosted compiler's own `StoreWidth` uses
@@ -6096,6 +6109,27 @@ export type Parser
 	function synthesizeEnumLookupHelpers(enumName String, cases EnumCaseArray, isFloatBacked bool, isStringBacked bool, isCharBacked bool, visibility Visibility, line LineNumber, column ColumnNumber, skipFromRawValue bool = false)
 		synthesizeEnumLookupHelpersImpl(project, module: module, namespace: namespace, filePath: filePath, enumName: enumName, cases: cases, isFloatBacked: isFloatBacked, isStringBacked: isStringBacked, isCharBacked: isCharBacked, visibility: visibility, line: line, column: column, skipFromRawValue: skipFromRawValue)
 	end 'synthesizeEnumLookupHelpers'
+
+	// Synthesize the `<EnumName>.hash` / `<EnumName>.equals` method bodies so a
+	// payload-free enum (or a scalar, payload-free union) auto-conforms to
+	// `Hashable` / `Equatable` — letting it be used as a `Map` key and call
+	// `.hash()` / `.equals(other)` directly. Mirrors the C# bootstrap's
+	// `SynthesizeEnumHashAndEquals`; the bodies delegate to the backing
+	// primitive's `int.hash` / `int.equals` (or `float.*` for float-backed
+	// enums) on the runtime value, which for a payload-free enum IS the case
+	// ordinal / rawValue. Body shape and registration live in the top-level
+	// `synthesizeEnumHashAndEqualsImpl` so they sit beside the other helper
+	// synthesizers; the wrapper just forwards the parser-instance context.
+	//
+	// Only ever called for payload-free types: enums and scalar unions both
+	// register an int/float-ranged typealias, so they satisfy the structural
+	// `Hashable` lookup (which chases the alias to a primitive). Payload-
+	// bearing unions register NO such alias and therefore correctly fail the
+	// constraint with E3017 — so `parseUnionDecl` calls this from the scalar
+	// arm only, never the heap-boxed arm.
+	function synthesizeEnumHashAndEquals(enumName String, cases EnumCaseArray, isFloatBacked bool, visibility Visibility, line LineNumber, column ColumnNumber)
+		synthesizeEnumHashAndEqualsImpl(project, module: module, namespace: namespace, filePath: filePath, enumName: enumName, cases: cases, isFloatBacked: isFloatBacked, visibility: visibility, line: line, column: column)
+	end 'synthesizeEnumHashAndEquals'
 
 	// Synthesize `__enum_<EnumName>_fromRawValue(raw <RawType>) returns
 	// <EnumName> throws <EnumName>`. Body shape and ABI live in the
@@ -17751,6 +17785,201 @@ function synthesizeEnumFromRawStringHelperImpl(project Project, module MaxonModu
 
 	module.functions.push(func)
 end 'synthesizeEnumFromRawStringHelperImpl'
+
+// Synthesize `<EnumName>.hash() returns HashValue` and
+// `<EnumName>.equals(other) returns bool` so a payload-free enum / scalar
+// union auto-conforms to Hashable / Equatable. Mirrors the C# bootstrap's
+// `SynthesizeEnumHashAndEquals`.
+//
+// The runtime value of a payload-free enum IS its rawValue (the case ordinal
+// for bare / string / char / struct backings, the i64 raw value for explicit
+// int backings, the f64 bits for float backings). So `hash` / `equals` just
+// delegate to the backing primitive's own `hash` / `equals` on that value
+// (`int.*`, or `float.*` for float-backed). Two cases are equal iff they
+// share a rawValue (rawValues are unique per case), so the integer compare is
+// consistent with the integer hash.
+//
+// Both methods take the enum's named MaxonType as the implicit `__self`
+// (and, for equals, `other`) parameter — exactly how a user-written enum
+// instance method registers its receiver (see `parseFunction`'s
+// `addSelfParam`). Dispatch (`d.hash()` → `<EnumName>.hash`) keys off the
+// enum name via `maxonTypeStructName`, so the funcSignatures key is the bare
+// `<EnumName>.hash` / `<EnumName>.equals`.
+//
+// Top-level form (no parser instance) so it sits beside the sibling helper
+// synthesizers and can use a local synth-name counter — the bodies only
+// reference values within themselves.
+function synthesizeEnumHashAndEqualsImpl(project Project, module MaxonModule, namespace String, filePath FilePath, enumName String, cases EnumCaseArray, isFloatBacked bool, visibility Visibility, line LineNumber, column ColumnNumber)
+	if cases.count() == 0 'noCases'
+		// Degenerate enum: skip — an empty enum is already an upstream
+		// violation, and a no-case enum has no value to hash or compare.
+		return
+	end 'noCases'
+
+	let hashName = "{enumName}.hash"
+	let equalsName = "{enumName}.equals"
+	// Idempotency: a cache restore (or a user-written `function hash()` /
+	// `equals()` on the enum) already occupies the key. Skip rather than
+	// collide — a user method wins, matching "user override beats synthesis".
+	if project.funcReturnTypes.contains(hashName) and project.funcReturnTypes.contains(equalsName) 'alreadyRegistered'
+		return
+	end 'alreadyRegistered'
+
+	// The params are typed to the enum's named MaxonType so user call sites
+	// (`a.equals(b)` with `a`, `b : Color`) type-check. The body reinterprets
+	// each receiver to its backing primitive — an f64 for float-backed enums,
+	// otherwise the i64 ordinal / rawValue — before dispatching to the
+	// primitive's own hash / equals (see the method builders).
+	let enumMaxonType = internMaxonType(project, name: enumName)
+	let valueType = MaxonType.float if isFloatBacked else MaxonType.integer
+
+	synthesizeEnumHashMethod(project, module: module, namespace: namespace, filePath: filePath, funcName: hashName, enumMaxonType: enumMaxonType, valueType: valueType, visibility: visibility, line: line, column: column)
+	synthesizeEnumEqualsMethod(project, module: module, namespace: namespace, filePath: filePath, funcName: equalsName, enumMaxonType: enumMaxonType, valueType: valueType, visibility: visibility, line: line, column: column)
+end 'synthesizeEnumHashAndEqualsImpl'
+
+// Register a synthesized enum method's signature, return type, visibility,
+// non-throwing clause, and method-name index — the shared bookkeeping every
+// `synthesize*` helper performs before building a body. `paramNames` /
+// `paramTypes` describe the full param list (including the implicit `__self`
+// at slot 0). Returns the freshly-created IrFunction with its metadata set,
+// ready for the caller to append blocks/ops and push to `module.functions`.
+function registerSynthEnumMethod(project Project, namespace String, filePath FilePath, funcName String, paramNames StringArray, paramTypes MaxonTypeArray, returnType MaxonReturnType, visibility Visibility, line LineNumber, column ColumnNumber) returns IrFunction
+	var paramDefaults = ParamDefaultArray.create()
+	for _ in 0 upto paramTypes.count() 'fillDefaults'
+		paramDefaults.push(ParamDefault.none)
+	end 'fillDefaults'
+
+	try project.funcReturnTypes.insert(funcName, value: returnType) otherwise panic("registerSynthEnumMethod: funcReturnTypes collision on '{funcName}'")
+	recordFuncReturnTypeInsert(project, filePath: filePath, key: funcName)
+	try project.funcSignatures.insert(funcName, value: FuncSignature.create(paramNames, paramTypes: paramTypes, paramDefaults: paramDefaults)) otherwise panic("registerSynthEnumMethod: funcSignatures collision on '{funcName}'")
+	recordFuncSignatureInsert(project, filePath: filePath, key: funcName)
+	project.methodNameIndex.record(funcName)
+	recordMethodNameIndexInsert(project, filePath: filePath, qualifiedName: funcName)
+	var insertedVis = true
+	try project.funcVisibilities.insert(funcName, value: FuncVisibilityInfo.create(visibility, sourceFilePath: filePath)) otherwise 'dupVis'
+		insertedVis = false
+	end 'dupVis'
+	if insertedVis 'recVis'
+		recordFuncVisibilityInsert(project, filePath: filePath, key: funcName)
+	end 'recVis'
+	var insertedTh = true
+	try project.funcThrowsTypes.insert(funcName, value: ThrowsClause.none) otherwise 'dupTh'
+		insertedTh = false
+	end 'dupTh'
+	if insertedTh 'recTh'
+		recordFuncThrowsInsert(project, filePath: filePath, key: funcName)
+	end 'recTh'
+
+	var func = IrFunction.create(funcName, maxonReturnType: returnType, paramCount: paramTypes.count(), maxonParamTypes: paramTypes, returnLine: line, throwsTypeName: ThrowsClause.none)
+	func.namespace = namespace
+	func.visibility = visibility
+	func.sourceFilePath = filePath
+	func.nameLine = line
+	func.nameColumn = column
+	return func
+end 'registerSynthEnumMethod'
+
+// Build `<EnumName>.hash(__self) returns HashValue`. The `__self` param is
+// typed to the enum so user call sites type-check; the body reinterprets it
+// to its backing primitive (`int` / `float`) with an implicit `convert` — the
+// enum's runtime representation IS that primitive (the case ordinal /
+// rawValue) — then dispatches `value.hash()` as a primitive method call,
+// which `lowerMethodCall` routes to `int.hash` / `float.hash`.
+//
+// The reinterpret is essential: dispatching on the enum-typed receiver
+// directly would re-resolve to `<EnumName>.hash` (infinite recursion), since
+// `maxonTypeStructName` maps an enum name back to itself. A `methodCall`
+// (rather than a direct qualified `call int.hash(...)`) is used because a
+// qualified call whose callee's first param is `__self` is mis-handled as a
+// sibling-instance call — it would inject the OUTER `__self` via
+// `loadSelfPointer` instead of the converted value.
+function synthesizeEnumHashMethod(project Project, module MaxonModule, namespace String, filePath FilePath, funcName String, enumMaxonType MaxonType, valueType MaxonType, visibility Visibility, line LineNumber, column ColumnNumber)
+	if project.funcReturnTypes.contains(funcName) 'alreadyRegistered'
+		return
+	end 'alreadyRegistered'
+
+	var paramNames = StringArray.create()
+	paramNames.push("__self")
+	var paramTypes = MaxonTypeArray.create()
+	paramTypes.push(enumMaxonType)
+	let returnType = MaxonReturnType.value(MaxonType.integer)
+
+	var func = registerSynthEnumMethod(project, namespace: namespace, filePath: filePath, funcName: funcName, paramNames: paramNames, paramTypes: paramTypes, returnType: returnType, visibility: visibility, line: line, column: column)
+
+	var synthCounter = 0 as ParsedInt
+	let selfSlot = func.scope.declareShadowing("__self", varType: enumMaxonType, mutable: false)
+	var entryBlock = module.addBlockAt(func, label: "entry", filePath: filePath.toString(), firstLine: line)
+	let primName = emitEnumSelfAsPrimitive(module, block: entryBlock, slot: selfSlot, enumMaxonType: enumMaxonType, valueType: valueType, synthCounter: synthCounter)
+	synthCounter = synthCounter + 2
+
+	let hashResultName = mintSynthName(synthCounter)
+	synthCounter = synthCounter + 1
+	module.appendOp(entryBlock, op: MaxonOp.methodCall(hashResultName, receiver: primName, methodName: "hash".toByteArray(), args: ByteArrayArray.create(), argLabels: StringArray.create(), argTypes: MaxonTypeArray.create(), argRanges: SourceRangeArray.create(), range: SourceRange.none()))
+	module.setTerminator(entryBlock, op: MaxonOp.ret(hashResultName, range: SourceRange.none()))
+
+	module.functions.push(func)
+end 'synthesizeEnumHashMethod'
+
+// Build `<EnumName>.equals(__self, other) returns bool`. Both params are typed
+// to the enum (so `a.equals(b)` type-checks); the body reinterprets each to
+// its backing primitive and dispatches `selfPrim.equals(otherPrim)` as a
+// primitive method call — see `synthesizeEnumHashMethod` for the rationale.
+function synthesizeEnumEqualsMethod(project Project, module MaxonModule, namespace String, filePath FilePath, funcName String, enumMaxonType MaxonType, valueType MaxonType, visibility Visibility, line LineNumber, column ColumnNumber)
+	if project.funcReturnTypes.contains(funcName) 'alreadyRegistered'
+		return
+	end 'alreadyRegistered'
+
+	var paramNames = StringArray.create()
+	paramNames.push("__self")
+	paramNames.push("other")
+	var paramTypes = MaxonTypeArray.create()
+	paramTypes.push(enumMaxonType)
+	paramTypes.push(enumMaxonType)
+	let returnType = MaxonReturnType.value(MaxonType.boolean)
+
+	var func = registerSynthEnumMethod(project, namespace: namespace, filePath: filePath, funcName: funcName, paramNames: paramNames, paramTypes: paramTypes, returnType: returnType, visibility: visibility, line: line, column: column)
+
+	var synthCounter = 0 as ParsedInt
+	let selfSlot = func.scope.declareShadowing("__self", varType: enumMaxonType, mutable: false)
+	let otherSlot = func.scope.declareShadowing("other", varType: enumMaxonType, mutable: false)
+	var entryBlock = module.addBlockAt(func, label: "entry", filePath: filePath.toString(), firstLine: line)
+
+	let selfPrimName = emitEnumSelfAsPrimitive(module, block: entryBlock, slot: selfSlot, enumMaxonType: enumMaxonType, valueType: valueType, synthCounter: synthCounter)
+	synthCounter = synthCounter + 2
+	let otherPrimName = emitEnumSelfAsPrimitive(module, block: entryBlock, slot: otherSlot, enumMaxonType: enumMaxonType, valueType: valueType, synthCounter: synthCounter)
+	synthCounter = synthCounter + 2
+
+	let equalsResultName = mintSynthName(synthCounter)
+	synthCounter = synthCounter + 1
+	var equalsArgs = ByteArrayArray.create()
+	equalsArgs.push(otherPrimName)
+	var equalsArgLabels = StringArray.create()
+	equalsArgLabels.push("")
+	var equalsArgTypes = MaxonTypeArray.create()
+	equalsArgTypes.push(valueType)
+	var equalsArgRanges = SourceRangeArray.create()
+	equalsArgRanges.push(SourceRange.none())
+	module.appendOp(entryBlock, op: MaxonOp.methodCall(equalsResultName, receiver: selfPrimName, methodName: "equals".toByteArray(), args: equalsArgs, argLabels: equalsArgLabels, argTypes: equalsArgTypes, argRanges: equalsArgRanges, range: SourceRange.none()))
+	module.setTerminator(entryBlock, op: MaxonOp.ret(equalsResultName, range: SourceRange.none()))
+
+	module.functions.push(func)
+end 'synthesizeEnumEqualsMethod'
+
+// Load an enum-typed param slot and reinterpret it to its backing primitive
+// (`int` / `float`) via an implicit `convert`. Returns the SSA name of the
+// primitive value, ready to be the receiver of a primitive `hash` / `equals`
+// method call. Consumes two synth-name slots (the varLoad and the convert),
+// so callers advance their counter by 2.
+function emitEnumSelfAsPrimitive(module MaxonModule, block IrBlock, slot VarSlot, enumMaxonType MaxonType, valueType MaxonType, synthCounter ParsedInt) returns ByteArray
+	var counter = synthCounter
+	let loadedName = mintSynthName(counter)
+	counter = counter + 1
+	module.appendOp(block, op: MaxonOp.varLoad(loadedName, slotId: slot, slotType: enumMaxonType, range: SourceRange.none()))
+	let primName = mintSynthName(counter)
+	counter = counter + 1
+	module.appendOp(block, op: MaxonOp.convert(primName, operand: loadedName, fromType: enumMaxonType, toType: valueType, implicit: true, range: SourceRange.none()))
+	return primName
+end 'emitEnumSelfAsPrimitive'
 
 // Mint a fresh synthetic SSA name for an externally-driven helper
 // synthesis. Uses the same `$t<n>` shape the parser's per-instance
