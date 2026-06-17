@@ -669,6 +669,13 @@ export type Project
 	// ParameterMutationAnalysisPass.
 	export var paramMutatingFunctions as DiscardedCallResultSet
 
+	// Deferred tuple-assignment arity checks (E3005). One entry per statement-
+	// level `(targets...) = expr`; validated by SemanticCheck after the
+	// destructure temp's slot type resolves to its concrete `__TupleN` shape.
+	// Not serialized to the stdlib cache — the check is user-code-only (same
+	// rationale as the discarded-result sidecars above).
+	export var tupleAssignArityChecks as TupleAssignArityCheckArray
+
 	// Project metadata
 	export var rootPath as FilePath
 	// Compilation target
@@ -973,6 +980,7 @@ export type Project
 			forInSourceCallResults: DiscardedCallResultSet.create(),
 			callsWithArgErrors: DiscardedCallResultSet.create(),
 			paramMutatingFunctions: DiscardedCallResultSet.create(),
+			tupleAssignArityChecks: TupleAssignArityCheckArray.create(),
 			rootPath: rootPath,
 			target: target,
 			diagnostics: DiagnosticArray.create(),
@@ -1076,6 +1084,30 @@ export type VarFromImmutableCandidate
 end 'VarFromImmutableCandidate'
 
 export typealias VarFromImmutableCandidateArray = Array with VarFromImmutableCandidate
+
+// One deferred tuple-assignment arity check (E3005). Recorded by the parser at
+// every statement-level `(targets...) = expr` site, validated by SemanticCheck
+// once TypeResolution has filled the destructure temp's slot type with the
+// RHS's concrete `__TupleN` shape. `bindingCount` is the number of targets the
+// user wrote; `tempSlotId` identifies the hidden temp holding the RHS tuple so
+// the check can read its resolved arity. Line/column anchor the diagnostic at
+// the opening paren, mirroring the C# bootstrap's `ParseTupleRhs`.
+export typealias TupleBindingCount = int(0 to u64.max)
+
+export type TupleAssignArityCheck
+	export let funcName as String
+	export let tempSlotId as VarSlot
+	export let bindingCount as TupleBindingCount
+	export let line as LineNumber
+	export let column as ColumnNumber
+	export let filePath as FilePath
+
+	export static function create(funcName String, tempSlotId VarSlot, bindingCount TupleBindingCount, line LineNumber, column ColumnNumber, filePath FilePath) returns TupleAssignArityCheck
+		return Self{funcName: funcName, tempSlotId: tempSlotId, bindingCount: bindingCount, line: line, column: column, filePath: filePath}
+	end 'create'
+end 'TupleAssignArityCheck'
+
+export typealias TupleAssignArityCheckArray = Array with TupleAssignArityCheck
 
 // One deferred unused-variable check: the parser captures every parameter
 // and local declaration in a function body along with the names referenced

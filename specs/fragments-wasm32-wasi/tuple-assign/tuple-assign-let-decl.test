@@ -1,0 +1,41 @@
+// Test: tuple-assign-let-decl
+typealias Integer = int(i64.min to i64.max)
+
+function makePair(a Integer, b Integer) returns (Integer, Integer)
+	return (a, b)
+end 'makePair'
+
+function main() returns ExitCode
+	var x = 0
+	(x, let y) = makePair(10, b: 32)
+	return x + y
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %2 = mir.mov_imm 10 : i64
+    %3 = mir.mov_imm 32 : i64
+    %12 = mir.mov_imm 16 : i64
+    %13 = mir.mov_imm 0 : i64
+    %14 = mir.call @stdlib.__mm_alloc(%12, %13)
+    mir.store %2, %14, 0 width: qword
+    mir.store %3, %14, 8 width: qword
+    %6 = mir.load %14, 0 width: qword
+    %8 = mir.load %14, 8 width: qword
+    %11 = mir.add.i64 %6, %8
+    %15 = mir.call @mm_drop(%14)
+    %16 = mir.mov_imm 125 : i64
+    %17 = mir.cmp ugt, %11, %16
+    mir.cond_br %17 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %18 = mir.global_addr @__panic_msg_5bd1828920cd4211
+    %19 = mir.call @mrt_panic(%18)
+  __range_ok_0:
+    mir.ret %11
+  }
+}
+---

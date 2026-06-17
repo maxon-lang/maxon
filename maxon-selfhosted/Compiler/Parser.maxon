@@ -2196,14 +2196,17 @@ export type Parser
 			end 'isIdent' else if stmtToken.kind == TokenKind.self 'isSelfStmt'
 				try parseSelfStatement(block)
 				block = currentBlock
-			end 'isSelfStmt' else if stmtToken.kind == TokenKind.leftParen and isTupleDestructureDiscard() 'isTupleDiscard'
-				// Phase 15a: `(_, _, ...) = EXPR` — every binding is `_`, so
-				// the whole tuple result is discarded. Spec
-				// `discarded-results.tuple-all-discard-pure` requires this
-				// shape to fire E3064 when EXPR is a pure-function call.
-				try parseTupleAllDiscardAssignment(block)
+			end 'isSelfStmt' else if stmtToken.kind == TokenKind.leftParen and isTupleAssignment() 'isTupleAssign'
+				// Statement-level tuple assignment / destructure:
+				// `(t1, t2, ...) = EXPR` where each target is an existing var
+				// (reassigned), `_` (discarded), or a `var`/`let` declaration of
+				// a new binding. Disambiguated from a parenthesised-expression
+				// statement by `isTupleAssignment`, which confirms the balanced
+				// `( <target-list> ) =` shape. The all-`_` case additionally
+				// fires E3064 when EXPR is a pure call (discarded result).
+				try parseTupleAssignment(block)
 				block = currentBlock
-			end 'isTupleDiscard' else 'unexpectedToken'
+			end 'isTupleAssign' else 'unexpectedToken'
 				reportUnexpectedToken()
 			end 'unexpectedToken'
 
@@ -9966,27 +9969,33 @@ export type Parser
 		return innermostCtx.continueBlockId
 	end 'resolveContinueTarget'
 
-	// --- Discard assignment ---
+	// --- Tuple assignment ---
 
-	// Phase 15a: probe whether the upcoming `(...) = ...` is a tuple
-	// destructure in which every binding is `_`. The cursor is AT the `(`
-	// and we walk it through the parenthesised list without consuming
-	// tokens (peek-only) — a non-`_` identifier, a missing `,`/`)`, or a
-	// missing trailing `=` all bail out. Used to disambiguate from a
-	// grouped expression (`(a + b)`) at statement-position.
-	function isTupleDestructureDiscard() returns bool
-		// peek(0) is the `(`. We start probing at peek(1).
-		// Bound the scan so a malformed source can't lock the parser into
-		// an unbounded probe — 64 commas is well beyond any realistic
-		// tuple arity. Returning false from the bound check makes the
-		// outer dispatcher fall through to the unexpectedToken arm, which
-		// then surfaces a clean diagnostic.
+	// Probe whether the upcoming `(...) = ...` at statement position is a
+	// tuple assignment, as opposed to a parenthesised-expression statement
+	// (e.g. `(a + b).method()`). The cursor is AT the `(`; we walk the
+	// parenthesised list peek-only, requiring every element to be a tuple-
+	// assignment target shape — `_`, a bare identifier, or `var`/`let`
+	// followed by an identifier — separated by commas, then `)` `=`. Any
+	// other token (an operator, a literal, a call) means it is an expression
+	// and we bail so the dispatcher's expression path handles it.
+	//
+	// Bounded so malformed source can't lock the parser into an unbounded
+	// probe; the bound is well beyond any realistic tuple arity.
+	function isTupleAssignment() returns bool
+		// peek(0) is the `(`. Start probing at peek(1).
 		var i = 1
-		while i < 128 'scan'
-			let t = try cursor.peek(i) otherwise return false
-			if t.kind != TokenKind.identifier or t.value != "_" 'notUnderscore'
+		while i < 256 'scan'
+			var t = try cursor.peek(i) otherwise return false
+			// A `var`/`let` qualifier introduces a fresh-binding target; the
+			// next token must be its name identifier.
+			if t.kind == TokenKind.var or t.kind == TokenKind.let 'declQualifier'
+				i = i + 1
+				t = try cursor.peek(i) otherwise return false
+			end 'declQualifier'
+			if t.kind != TokenKind.identifier 'notTarget'
 				return false
-			end 'notUnderscore'
+			end 'notTarget'
 			i = i + 1
 			let sep = try cursor.peek(i) otherwise return false
 			if sep.kind == TokenKind.rightParen 'doneList'
@@ -10000,36 +10009,157 @@ export type Parser
 			i = i + 1
 		end 'scan'
 		return false
-	end 'isTupleDestructureDiscard'
+	end 'isTupleAssignment'
 
-	// Parse: (_, _, ..., _) = expr — every binding is `_`, so the whole
-	// tuple-typed call result is discarded. Same lowering shape as
-	// `parseDiscardAssignment`: emit the RHS expression, bind its value
-	// into a synthetic discard slot, and tag the underlying call op for
-	// E3064/E3065. Spec `tuple-all-discard-pure` requires E3064 to fire
-	// against the call (here, `makePair`).
-	function parseTupleAllDiscardAssignment(block IrBlock) throws ParserError
+	// Parse a statement-level tuple assignment / destructure:
+	//   `(t1, t2, ...) = EXPR`
+	// where each `ti` is an existing var (reassign), `_` (discard), or a
+	// `var name` / `let name` declaration of a new binding. The RHS tuple is
+	// evaluated exactly once into a hidden temp; each target then reads its
+	// element via `temp._i` and assigns / declares / discards accordingly.
+	//
+	// Mirrors the C# bootstrap's `ParseTupleAssignment` + `ParseTupleRhs` +
+	// `EmitTupleFieldAssignments`. Arity validation (E3005) is deferred to
+	// SemanticCheck because element types are unresolved at parse time; the
+	// temp's slot and the binding count are recorded into
+	// `project.tupleAssignArityChecks`. When every target is `_`, the call's
+	// result is fully discarded, so it is tagged for the E3064/E3065
+	// discarded-result lint (matching `tuple-assign-discard-all`).
+	function parseTupleAssignment(block IrBlock) throws ParserError
 		let openParen = cursor.current()
 		try eat(TokenKind.leftParen)
-		while true 'consumeList'
-			try eat(TokenKind.identifier)  // each `_`
-			if at(TokenKind.rightParen) 'doneList'
+
+		var targetKinds = TupleTargetKindArray.create()
+		var targetTokens = TokenArray.create()
+		while true 'collect'
+			var isDecl = false
+			var isMutable = false
+			if accept(TokenKind.var) 'isVarDecl'
+				isDecl = true
+				isMutable = true
+			end 'isVarDecl' else if accept(TokenKind.let) 'isLetDecl'
+				isDecl = true
+			end 'isLetDecl'
+
+			let nameTok = try consumeExpecting("identifier")
+			if nameTok.kind != TokenKind.identifier 'badIdent'
+				reportTokenMismatch(nameTok, expectedDisplay: "identifier")
+				synchronize()
+				return
+			end 'badIdent'
+
+			if isDecl 'declTarget'
+				checkReservedDeclName(nameTok)
+				targetKinds.push(TupleTargetKind.declaration(isMutable))
+			end 'declTarget' else if nameTok.value == "_" 'discardTarget'
+				targetKinds.push(TupleTargetKind.discard)
+			end 'discardTarget' else 'existingTarget'
+				targetKinds.push(TupleTargetKind.existing)
+			end 'existingTarget'
+			targetTokens.push(nameTok)
+
+			if at(TokenKind.rightParen) 'doneCollect'
 				break
-			end 'doneList'
-			try eat(TokenKind.comma)
-		end 'consumeList'
-		try eat(TokenKind.rightParen)
-		try eat(TokenKind.equals)
+			end 'doneCollect'
+			try expect(TokenKind.comma)
+		end 'collect'
+
+		try expect(TokenKind.rightParen)
+		try expect(TokenKind.equals)
 		currentBlock = block
+
 		let opCountBeforeRhs = module.ops.count()
 		let exprResult = try parseExpression(block)
 		var emitBlock = currentBlock
-		let discardName = "__discard_tuple_{openParen.line}_{openParen.column}"
-		let slot = defineVariableWithType(discardName, varType: exprType(exprResult))
-		module.appendOp(emitBlock, op: MaxonOp.varDecl(slot, value: exprName(exprResult), slotType: exprType(exprResult), range: SourceRange.ofToken(openParen)))
-		tagDiscardedCallResult(exprName(exprResult), isBare: true)
-		tagLastCallResultInRange(opCountBeforeRhs, isBare: true)
-	end 'parseTupleAllDiscardAssignment'
+		let stmtRange = SourceRange.between(openParen, last: previousToken())
+
+		// Bind the RHS tuple to a hidden temp so each element read sources from
+		// `temp._i`. The temp is mutable so element write-backs and later reads
+		// stay well-formed. Named per source position so it never collides.
+		let tmpName = "__tupleassign_{openParen.line}_{openParen.column}"
+		let tmpType = exprType(exprResult)
+		let tmpSlot = scope.declareShadowing(tmpName, varType: tmpType, mutable: true)
+		module.appendOp(emitBlock, op: MaxonOp.varDecl(tmpSlot, value: exprName(exprResult), slotType: tmpType, range: stmtRange))
+
+		let bindingCount = targetKinds.count()
+
+		// Defer the tuple-arity check (E3005) to SemanticCheck, where the
+		// temp's slot type has resolved to the RHS's concrete `__TupleN`.
+		project.tupleAssignArityChecks.push(TupleAssignArityCheck.create(currentFunc.name, tempSlotId: tmpSlot, bindingCount: bindingCount, line: openParen.line, column: openParen.column, filePath: filePath))
+
+		var allDiscard = true
+		for i in 0 upto bindingCount 'eachTarget'
+			let kind = try targetKinds.get(i) otherwise panic("parseTupleAssignment: targetKinds.get OOB at {i}")
+			let nameTok = try targetTokens.get(i) otherwise panic("parseTupleAssignment: targetTokens.get OOB at {i}")
+
+			if tupleTargetIsDiscard(kind) 'discard'
+				continue
+			end 'discard'
+			allDiscard = false
+
+			// Read element `i` from the temp: `temp._i`.
+			let tmpLoadName = freshSynthName()
+			module.appendOp(emitBlock, op: MaxonOp.varLoad(tmpLoadName, slotId: tmpSlot, slotType: MaxonType.unresolved, range: stmtRange))
+			let fieldLoadName = freshSynthName()
+			let fieldBytes = "_{i}".toByteArray()
+			module.appendOp(emitBlock, op: MaxonOp.fieldLoad(fieldLoadName, receiver: tmpLoadName, fieldName: fieldBytes, range: stmtRange))
+
+			try emitTupleAssignTarget(emitBlock, kind: kind, nameTok: nameTok, valueName: fieldLoadName, range: stmtRange)
+		end 'eachTarget'
+
+		// `(_, _, ...) = pureCall()` discards every element, so the call's
+		// result is unused: tag it for the discarded-result lint (E3064 on a
+		// pure callee). Mirrors the C# `ParseTupleRhs` all-discard path.
+		if allDiscard 'allDiscarded'
+			tagDiscardedCallResult(exprName(exprResult), isBare: true)
+			tagLastCallResultInRange(opCountBeforeRhs, isBare: true)
+		end 'allDiscarded'
+	end 'parseTupleAssignment'
+
+	// Lower one non-discard tuple-assignment target. `valueName` is the SSA
+	// name of the element read (`temp._i`). For an `existing` target, store
+	// into the already-declared var after a mutability check (E2013); for a
+	// `declaration` target, declare a fresh binding with the user's
+	// `var`/`let` mutability.
+	function emitTupleAssignTarget(block IrBlock, kind TupleTargetKind, nameTok Token, valueName ByteArray, range SourceRange) throws ParserError
+		if tupleTargetIsDeclaration(kind) 'newBinding'
+			let isMutable = tupleTargetDeclarationMutable(kind)
+			if nameTok.value != "_" 'recordLocal'
+				localVarLocations.push(ParamLocation.create(nameTok.value, line: nameTok.line, column: nameTok.column))
+				// E3077: a never-reassigned `var` element should be a `let`.
+				if isMutable 'recordMutable'
+					mutableVarLocations.push(ParamLocation.create(nameTok.value, line: nameTok.line, column: nameTok.column))
+				end 'recordMutable'
+			end 'recordLocal'
+			let elemSlot = declareCheckedLocal(nameTok.value, varType: MaxonType.unresolved, mutable: isMutable, line: nameTok.line, column: nameTok.column)
+			module.appendOp(block, op: MaxonOp.varDecl(elemSlot, value: valueName, slotType: MaxonType.unresolved, range: range))
+			return
+		end 'newBinding'
+
+		// Existing-variable target: assign through the regular var-store path,
+		// after confirming the binding is mutable. A bare name not in scope may
+		// be a top-level `var` — emit an `unresolvedAssign` and let
+		// TypeResolution bind it to a global store (or diagnose).
+		if not scope.contains(nameTok.value) 'maybeGlobalWrite'
+			module.appendOp(block, op: MaxonOp.unresolvedAssign(nameTok.value, value: valueName, range: range))
+			return
+		end 'maybeGlobalWrite'
+
+		tagParamMutationIfApplicable(nameTok.value)
+		let slot = lookupVariable(nameTok.value, token: nameTok)
+		let bindingInfo = scope.getInfo(nameTok.value)
+		if not bindingInfo.mutable 'immutableLocal'
+			reportCompileError(project, code: ErrorCode.parserImmutableVariable, message: "cannot assign to immutable variable: '{nameTok.value}'", line: nameTok.line, column: nameTok.column, filePath: filePath)
+			return
+		end 'immutableLocal'
+
+		if scope.isSelfField(nameTok.value) 'selfFieldWrite'
+			emitSelfFieldStore(block, fieldName: nameTok.value, valueName: valueName, range: range)
+		end 'selfFieldWrite' else 'localWrite'
+			module.appendOp(block, op: MaxonOp.varStore(slot, value: valueName, range: range))
+			markVarReassigned(nameTok.value)
+		end 'localWrite'
+	end 'emitTupleAssignTarget'
 
 	// Parse: _ = expression (discard function result)
 	// Uses parserNextSlot as a unique suffix since it increments with each variable
@@ -19203,6 +19333,42 @@ end 'MatchArmBlocks'
 // kind so existing `.isEnumCase()` predicates continue to fire for bare
 // and bound forms alike. `bindingNames` holds the source-level binding
 // names (with `_` for discards) and parallels `bindingIsVar` / `bindingIsDiscard`.
+// One target in a statement-level tuple assignment `(t1, t2, ...) = EXPR`.
+// `discard` drops the element (`_`); `existing` reassigns an already-declared
+// var; `declaration(isMutable)` declares a fresh `var`/`let` binding.
+union TupleTargetKind
+	discard
+	existing
+	declaration(isMutable bool)
+end 'TupleTargetKind'
+
+export typealias TupleTargetKindArray = Array with TupleTargetKind
+
+function tupleTargetIsDiscard(kind TupleTargetKind) returns bool
+	return match kind 'k'
+		discard gives true
+		existing gives false
+		declaration gives false
+	end 'k'
+end 'tupleTargetIsDiscard'
+
+function tupleTargetIsDeclaration(kind TupleTargetKind) returns bool
+	return match kind 'k'
+		declaration gives true
+		discard gives false
+		existing gives false
+	end 'k'
+end 'tupleTargetIsDeclaration'
+
+// Only valid when `tupleTargetIsDeclaration(kind)` is true: the user's
+// `var`/`let` mutability choice.
+function tupleTargetDeclarationMutable(kind TupleTargetKind) returns bool
+	return match kind 'k'
+		declaration(isMutable) gives isMutable
+		default panic("tupleTargetDeclarationMutable called on non-declaration tuple target")
+	end 'k'
+end 'tupleTargetDeclarationMutable'
+
 union MatchPatternKind
 	defaultArm
 	intLiteral

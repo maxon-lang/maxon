@@ -81,6 +81,7 @@ module function runSemanticChecks(project Project, module MaxonModule, isStdlib 
 		// Purity is required by the discard check, so it runs first.
 		computePurity(project, module: module)
 		checkDiscardedResults(project, module: module)
+		checkTupleAssignArity(project, module: module)
 	end 'userOnly'
 
 	for func in module.functions 'scan'
@@ -2741,6 +2742,72 @@ function checkDiscardedResults(project Project, module MaxonModule)
 		end 'eachBlock'
 	end 'eachFunc'
 end 'checkDiscardedResults'
+
+// E3005 tuple-assignment arity check. The parser records one entry per
+// statement-level `(targets...) = expr` into `project.tupleAssignArityChecks`.
+// Now that TypeResolution has filled the destructure temp's slot type with the
+// RHS's concrete `__TupleN`, read that type back off the temp's `varDecl` op,
+// compare its arity against the user's binding count, and emit E3005 on a
+// mismatch. Mirrors the C# bootstrap's parse-time `ParseTupleRhs` check
+// (deferred here because element types are unresolved at parse time).
+function checkTupleAssignArity(project Project, module MaxonModule)
+	if project.tupleAssignArityChecks.count() == 0 'noChecks'
+		return
+	end 'noChecks'
+	for chk in project.tupleAssignArityChecks 'eachCheck'
+		let tempType = tupleAssignTempType(module, funcName: chk.funcName, tempSlotId: chk.tempSlotId)
+		let arity = tupleStructArity(tempType.nameOrEmpty(project))
+		// arity == 0 means the temp's type never resolved to a known
+		// `__TupleN` — the RHS wasn't a tuple at all, or resolution failed for
+		// an unrelated reason that already produced its own diagnostic. Don't
+		// double-report; the matching-arity and the unknown-type cases both
+		// fall through silently here.
+		if arity == 0 'notKnownTuple'
+			continue
+		end 'notKnownTuple'
+		if arity != chk.bindingCount 'mismatch'
+			reportCompileError(project, code: ErrorCode.semanticTypeMismatch, message: "Tuple has {arity} elements but destructuring has {chk.bindingCount} bindings", line: chk.line, column: chk.column, filePath: chk.filePath)
+		end 'mismatch'
+	end 'eachCheck'
+end 'checkTupleAssignArity'
+
+// Find the resolved slot type of the tuple-assignment destructure temp by
+// locating its `varDecl` op (the only op writing `tempSlotId` in `funcName`).
+// Returns `MaxonType.unresolved` if the function or op can't be found — the
+// caller treats an unresolvable temp as "not a known tuple" and skips it.
+function tupleAssignTempType(module MaxonModule, funcName String, tempSlotId VarSlot) returns MaxonType
+	for func in module.functions 'eachFunc'
+		if func.name != funcName 'notTarget'
+			continue
+		end 'notTarget'
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("tupleAssignTempType: blockRef OOB")
+			for opIdx in block.opRefs 'eachOp'
+				let op = try module.ops.get(opIdx) otherwise panic("tupleAssignTempType: opIdx OOB")
+				if op.name == "varDecl" 'isVarDecl'
+					let found = match op 'vd'
+						varDecl(slotId, _, slotType, _) gives tupleAssignTempTypeIfMatch(slotId, target: tempSlotId, slotType: slotType)
+						default panic("tupleAssignTempType: op.name == varDecl but match failed")
+					end 'vd'
+					if not isUnresolvedType(found) 'haveType'
+						return found
+					end 'haveType'
+				end 'isVarDecl'
+			end 'eachOp'
+		end 'eachBlock'
+		return MaxonType.unresolved
+	end 'eachFunc'
+	return MaxonType.unresolved
+end 'tupleAssignTempType'
+
+// Return `slotType` when `slotId` is the temp we're after, else unresolved.
+// Pulled out so the `varDecl` match arm stays a single expression.
+function tupleAssignTempTypeIfMatch(slotId VarSlot, target VarSlot, slotType MaxonType) returns MaxonType
+	if slotId == target 'isMatch'
+		return slotType
+	end 'isMatch'
+	return MaxonType.unresolved
+end 'tupleAssignTempTypeIfMatch'
 
 // True when `path` points at a stdlib source file (bootstrap or any of the
 // whitelisted `stdlib/*.maxon` files). Used to keep the discarded-results

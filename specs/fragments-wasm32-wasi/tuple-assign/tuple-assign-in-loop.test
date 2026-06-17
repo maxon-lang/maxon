@@ -1,0 +1,89 @@
+// Test: tuple-assign-in-loop
+typealias Integer = int(i64.min to i64.max)
+
+function step(n Integer) returns (Integer, Integer)
+	return (n + 1, n * 2)
+end 'step'
+
+function main() returns ExitCode
+	var a = 0
+	var b = 0
+	var i = 0
+	while i < 3 'loop'
+		(a, b) = step(a)
+		i = i + 1
+	end 'loop'
+	return b
+end 'main'
+---
+ExitCode: 4
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %1 = mir.mov_imm 0 : i64
+    %2 = mir.mov_imm 0 : i64
+    %3 = mir.mov_imm 0 : i64
+    mir.br loop_0.header(%1, %2, %3)
+  loop_0.header(%17: i64, %18: i64, %19: i64):
+    %5 = mir.mov_imm 3 : i64
+    %6 = mir.cmp lt, %19, %5
+    mir.cond_br %6 [then: loop_0(), else: loop_0.exit()]
+  loop_0:
+    %20 = mir.mov_imm 1 : i64
+    %21 = mir.add.i64 %17, %20
+    %22 = mir.mov_imm 2 : i64
+    %23 = mir.mul.i64 %17, %22
+    %24 = mir.mov_imm 16 : i64
+    %25 = mir.mov_imm 0 : i64
+    mir.br inlined_stdlib.__mm_alloc_0_0()
+  inlined_stdlib.__mm_alloc_0_0:
+    %27 = mir.mov_imm 0 : i64
+    %28 = mir.mov_imm 1 : i64
+    %29 = mir.cmp lt, %24, %28
+    mir.cond_br %29 [then: inlined_stdlib.__mm_alloc_1_0(), else: inlined_stdlib.__mm_alloc_2_6(%24)]
+  inlined_stdlib.__mm_alloc_1_0:
+    %30 = mir.mov_imm 1 : i64
+    mir.br inlined_stdlib.__mm_alloc_2_6(%30)
+  inlined_stdlib.__mm_alloc_2_6(%31: i64):
+    %32 = mir.global_addr @__mm_alloc_count
+    mir.atomic_inc %32
+    %33 = mir.mov_imm 32 : i64
+    %34 = mir.add.i64 %31, %33
+    %35 = mir.call @stdlib.__slab_alloc(%34)
+    mir.store %27, %35, 0 width: qword
+    %36 = mir.mov_imm 8 : i64
+    %37 = mir.add.i64 %35, %36
+    mir.store %25, %37, 0 width: qword
+    %38 = mir.mov_imm 16 : i64
+    %39 = mir.add.i64 %35, %38
+    mir.store %31, %39, 0 width: qword
+    %40 = mir.mov_imm 24 : i64
+    %41 = mir.add.i64 %35, %40
+    mir.store %27, %41, 0 width: qword
+    %42 = mir.mov_imm 32 : i64
+    %43 = mir.add.i64 %35, %42
+    mir.br inline_cont_main_2(%43)
+  inline_cont_main_2(%44: i64):
+    %46 = mir.call @stdlib.__mm_incref(%43)
+    mir.store %21, %44, 0 width: qword
+    mir.store %23, %44, 8 width: qword
+    %10 = mir.load %44, 0 width: qword
+    %12 = mir.load %44, 8 width: qword
+    %14 = mir.mov_imm 1 : i64
+    %15 = mir.add.i64 %19, %14
+    %45 = mir.call @mm_drop(%44)
+    mir.br loop_0.header(%10, %12, %15)
+  loop_0.exit:
+    %47 = mir.mov_imm 125 : i64
+    %48 = mir.cmp ugt, %18, %47
+    mir.cond_br %48 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %49 = mir.global_addr @__panic_msg_8f3448e48b141f0b
+    %50 = mir.call @mrt_panic(%49)
+  __range_ok_0:
+    mir.ret %18
+  }
+}
+---
