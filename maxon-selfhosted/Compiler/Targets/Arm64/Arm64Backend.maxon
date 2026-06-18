@@ -30,6 +30,11 @@ export type Arm64Backend implements TargetBackend
 	var globalData as GlobalDataTable
 	var stdlibFunctions as ObjectFunctionArray
 	export var targetModule as TargetModule = TargetModule.create(CpuArch.arm64)
+	// Outgoing-stack-arg budget for the function currently being lowered.
+	// `emitArm64DirectCall` bumps this whenever a call site passes more than 8
+	// GPR args; `lowerFunctionToArm64` reads it back to set the function's
+	// `outgoingArgSize` so the prologue reserves the area. Reset per function.
+	var currentOutgoingArgSize as StackSize = 0
 
 	export static function create(module MirModule, target Target, globalData GlobalDataTable, stdlibFunctions ObjectFunctionArray) returns Self
 		return Self{mirModule: module, target: target, globalData: globalData, stdlibFunctions: stdlibFunctions}
@@ -73,6 +78,7 @@ export type Arm64Backend implements TargetBackend
 		var stackTracker = Arm64StackTracker.create()
 		stackTracker.calleeSavedGprs = func.calleeSavedGprs
 		stackTracker.calleeSavedFps = func.calleeSavedFps
+		stackTracker.outgoingArgSize = func.outgoingArgSize
 
 		var jumpFixups = BlockIdFixupArray.create()
 		var blockOffsets = BlockOffsetMap.create()
@@ -178,6 +184,10 @@ export type Arm64Backend implements TargetBackend
 	end 'emitPerFunction'
 
 	function lowerFunctionToArm64(srcFunc IrFunction, osDesc OsDescriptor, allFunctions IrFunctionArray)
+		// Reset the per-function outgoing-stack-arg budget before lowering any
+		// call sites in this function.
+		currentOutgoingArgSize = 0
+
 		// Phase 1: Compute variable stack space from memref slots.
 		let loadedSlots = scanLoadedSlots(mirModule, func: srcFunc)
 		var liveSlotCount = 0
@@ -258,6 +268,12 @@ export type Arm64Backend implements TargetBackend
 		// regalloc and prologue passes will add their own contributions later;
 		// the prologue pass just reads func.stackSize and aligns it.
 		targetFunc.stackSize = targetFunc.stackSize + targetFunc.varSlotCount * 8
+
+		// Record the outgoing-stack-arg budget. Unlike x64 (where it folds into
+		// stackSize), arm64 keeps it separate: the area sits BELOW the saved
+		// frame record, so `[x29 + 16 + slot]` slot addressing stays unchanged
+		// and only the prologue/epilogue and incoming-arg loads consult it.
+		targetFunc.outgoingArgSize = currentOutgoingArgSize
 
 		renumberArm64SlotsForFunction(targetModule, func: targetFunc)
 
@@ -817,6 +833,7 @@ export type Arm64Backend implements TargetBackend
 		var argIdx = 0
 		var gprIdx = 0
 		var fpIdx = 0
+		var stackSlotIdx = 0
 		while argIdx < argIds.count() 'moveArgs'
 			let argId = try argIds.get(argIdx) otherwise 'skipArg'
 				argIdx = argIdx + 1
@@ -827,13 +844,34 @@ export type Arm64Backend implements TargetBackend
 				let fpReg = getArm64CallConvFp(fpIdx)
 				appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.fmovRegReg(arm64PhysFpReg(fpReg), src: Arm64FpVReg.virtual(argId), precision: FloatPrecision.f64))
 				fpIdx = fpIdx + 1
-			end 'fpRegArg' else if gprIdx < 8 'gprRegArg'
+			end 'fpRegArg' else if (not stdTypeIsFloat(paramType)) and gprIdx < 8 'gprRegArg'
 				let ccReg = getArm64CallConvGpr(gprIdx)
 				appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movRegReg(arm64PhysReg(ccReg), src: Arm64VReg.virtual(argId)))
 				gprIdx = gprIdx + 1
-			end 'gprRegArg'
+			end 'gprRegArg' else 'stackArg'
+				// Out-of-register arg — store to the caller's outgoing-arg area at
+				// `[sp + stackSlotIdx*8]`. The prologue pre-reserves the largest
+				// such block (currentOutgoingArgSize) at the bottom of the frame,
+				// so each call site only writes the bytes; sp never moves per call.
+				// FP overflow params travel through the same int-typed store path
+				// only if int-typed; genuine FP overflow is not yet supported (no
+				// FP-to-[sp] store op), matching the x64 callee-side limitation.
+				if stdTypeIsFloat(paramType) 'fpStackArg'
+					panic("emitArm64DirectCall: FP overflow args not yet supported (callee '{callee}', argIdx {argIdx})")
+				end 'fpStackArg'
+				appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.strToSpOffset(stackSlotIdx * 8, src: Arm64VReg.virtual(argId)))
+				stackSlotIdx = stackSlotIdx + 1
+			end 'stackArg'
 			argIdx = argIdx + 1
 		end 'moveArgs'
+
+		// Reserve outgoing stack-arg space at the function level — the prologue
+		// pre-allocates the largest block seen so every call site lands its
+		// stores in already-reserved bytes.
+		let bytesForThisCall = stackSlotIdx * 8
+		if bytesForThisCall > currentOutgoingArgSize 'recordMaxOutgoing'
+			currentOutgoingArgSize = bytesForThisCall
+		end 'recordMaxOutgoing'
 
 		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.branchLink(callee))
 
@@ -966,12 +1004,21 @@ export type Arm64Backend implements TargetBackend
 		if stdTypeIsFloat(paramType) and slotIdx < 8 'fpRegParam'
 			let fpReg = getArm64CallConvFp(slotIdx)
 			appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.fmovRegReg(Arm64FpVReg.virtual(resultId), src: arm64PhysFpReg(fpReg), precision: FloatPrecision.f64))
-		end 'fpRegParam' else if slotIdx < 8 'gprRegParam'
+		end 'fpRegParam' else if (not stdTypeIsFloat(paramType)) and slotIdx < 8 'gprRegParam'
 			let ccReg = getArm64CallConvGpr(slotIdx)
 			appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movRegReg(Arm64VReg.virtual(resultId), src: arm64PhysReg(ccReg)))
-		end 'gprRegParam' else 'slotOob'
-			panic("lowerParamArm64: slotIdx {slotIdx} exceeds register count")
-		end 'slotOob'
+		end 'gprRegParam' else 'stackParam'
+			// Overflow param passed on the caller's stack. The byte offset from
+			// x29 depends on the final frame size (not known until emit), so we
+			// emit a loadIncomingArg carrying the overflow index; the code emitter
+			// resolves the offset. FP overflow params are not yet supported (the
+			// load targets a GPR), matching the caller-side and x64 limitations.
+			if stdTypeIsFloat(paramType) 'fpStackParam'
+				panic("lowerParamArm64: FP overflow params not yet supported (paramIndex {paramIndex})")
+			end 'fpStackParam'
+			let overflowIdx = computeOverflowArgIndex(paramIndex, paramTypes: funcParamTypes, gprRegCount: 8, fpRegCount: 8)
+			appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.loadIncomingArg(Arm64VReg.virtual(resultId), argIndex: overflowIdx))
+		end 'stackParam'
 	end 'lowerParamArm64'
 
 	// MIR system-like ops (stackSlotAddr, globalAddr, osExit, etc.)

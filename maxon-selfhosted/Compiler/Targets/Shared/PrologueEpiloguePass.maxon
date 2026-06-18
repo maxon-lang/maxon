@@ -26,15 +26,24 @@ end 'alignTo16'
 // ARM64's prologue-necessity check.
 export type FrameScanState
 	export var hasCalls as bool
+	// Set when the function reads an incoming overflow (stack-passed) param.
+	// Such a function MUST have a frame even if it makes no calls and has no
+	// locals/spills: the stack-param load is relative to the frame pointer
+	// (x29 / rbp), which is only valid once the prologue establishes it. A
+	// frameless leaf would otherwise read the param through the CALLER's frame
+	// pointer and get garbage.
+	export var needsFrame as bool
 
 	static function create() returns FrameScanState
-		return Self{hasCalls: false}
+		return Self{hasCalls: false, needsFrame: false}
 	end 'create'
 end 'FrameScanState'
 
-// Detect whether a function makes any call. Used by the empty-frame fallback
-// and ARM64's prologue-necessity check. Cheap one-pass scan.
-function detectHasCalls(module TargetModule, func IrFunction, backend TargetBackend) returns bool
+// Scan a function for the frame-relevant facts the prologue decision needs:
+// whether it makes any call (x30/rbp must be saved) and whether it reads any
+// incoming stack-passed param (the frame pointer must be established). Cheap
+// one-pass scan returning the populated state.
+function detectFrameInfo(module TargetModule, func IrFunction, backend TargetBackend) returns FrameScanState
 	let state = FrameScanState.create()
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
@@ -45,8 +54,8 @@ function detectHasCalls(module TargetModule, func IrFunction, backend TargetBack
 			backend.scanOpForFrameInfo(block.terminatorIndex(), state: state)
 		end 'hasTerm'
 	end 'eachBlock'
-	return state.hasCalls
-end 'detectHasCalls'
+	return state
+end 'detectFrameInfo'
 
 // ============================================================
 // Shared driver
@@ -62,7 +71,8 @@ end 'detectHasCalls'
 export function insertPrologueEpilogueShared(module TargetModule, func IrFunction, backend TargetBackend, opQuery TargetOpQuery)
 	backend.detectCalleeSavedRegs(func)
 
-	let hasCalls = detectHasCalls(module, func: func, backend: backend)
+	let frameInfo = detectFrameInfo(module, func: func, backend: backend)
+	let hasCalls = frameInfo.hasCalls
 	// Any function with calls needs a frame so the unwinder can walk rbp/x29.
 	// If func.stackSize is already non-zero (locals, spills, or callee-saves),
 	// the prologue is emitted on those merits. Only force a 16-byte minimum
@@ -75,7 +85,11 @@ export function insertPrologueEpilogueShared(module TargetModule, func IrFunctio
 	let varArea = func.varSlotCount * 8
 	let preSaveTotal = varArea + func.spillSize
 	logTrace(LogCategory.ir, message: function() gives "  frame: var={varArea} spill={func.spillSize} total={preSaveTotal} aligned={alignTo16(preSaveTotal)}")
-	let needsPrologue = backend.needsPrologue(adjustedStackSize, hasCalls: hasCalls)
+	// Force a prologue when the function reads incoming stack params even if the
+	// backend's own rule (locals/spills/calls) wouldn't — the param load needs a
+	// valid frame pointer. The backend's prologue emit derives the frame size
+	// from the same stack size, so the param-load offset stays consistent.
+	let needsPrologue = backend.needsPrologue(adjustedStackSize, hasCalls: hasCalls) or frameInfo.needsFrame
 
 	var isFirstBlock = true
 	for blockRef in func.blockRefs 'eachBlock'

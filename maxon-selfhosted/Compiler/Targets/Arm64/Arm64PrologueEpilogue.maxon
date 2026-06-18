@@ -18,6 +18,7 @@ export function scanArm64InstrForFrame(op Arm64Op, state FrameScanState)
 		prologue to branch then break 'scan'
 		branchLink then state.hasCalls = true
 		ret to reloadFromStack then break 'scan'
+		loadIncomingArg then state.needsFrame = true
 		branchLinkReg then state.hasCalls = true
 		subSpImm to xorRegImm then break 'scan'
 	end 'scan'
@@ -136,6 +137,7 @@ function arm64ScanOpForCalleeSaved(op Arm64Op, gprSeen RegIntArray, fpSeen RegIn
 		movRegReg(dest, src) then arm64ScanTwoGprs(gprSeen, a: dest, b: src)
 		spillToStack(_, src) then arm64MarkGprIfCalleeSaved(gprSeen, vreg: src)
 		reloadFromStack(dest, _) then arm64MarkGprIfCalleeSaved(gprSeen, vreg: dest)
+		loadIncomingArg(dest, _) then arm64MarkGprIfCalleeSaved(gprSeen, vreg: dest)
 		branchLinkReg(reg) then arm64MarkGprIfCalleeSaved(gprSeen, vreg: reg)
 		subSpImm to addSpImm then break 'scan'
 		strToSpOffset(_, src) then arm64MarkGprIfCalleeSaved(gprSeen, vreg: src)

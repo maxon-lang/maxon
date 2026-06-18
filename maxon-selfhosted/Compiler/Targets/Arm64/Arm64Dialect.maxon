@@ -188,6 +188,13 @@ export union Arm64Op
 	movRegReg(dest Arm64VReg, src Arm64VReg) = Arm64OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false, setsFlags: false, pattern: OpPattern.movRegReg, implicitGprReads: 0, implicitGprDefs: 0}
 	spillToStack(offset MachineWord, src Arm64VReg) = Arm64OpMeta{latency: 3, isMemory: true, isStore: true, isCall: false, setsFlags: false, pattern: OpPattern.singleUse, implicitGprReads: 0, implicitGprDefs: 0}
 	reloadFromStack(dest Arm64VReg, offset MachineWord) = Arm64OpMeta{latency: 4, isMemory: true, isStore: false, isCall: false, setsFlags: false, pattern: OpPattern.singleDef, implicitGprReads: 0, implicitGprDefs: 0}
+	// Load an incoming overflow (>8th GPR) parameter from the caller's outgoing
+	// stack-arg area. `argIndex` is the 0-based position among stack-passed
+	// params; the code emitter resolves it to `[x29 + (frameSize - outgoingArgSize)
+	// + argIndex*8]` — a frame-size-dependent offset only known at emit time,
+	// which is why this can't reuse `reloadFromStack` (whose offset is baked at
+	// lowering). Pure def, like reloadFromStack.
+	loadIncomingArg(dest Arm64VReg, argIndex MachineWord) = Arm64OpMeta{latency: 4, isMemory: true, isStore: false, isCall: false, setsFlags: false, pattern: OpPattern.singleDef, implicitGprReads: 0, implicitGprDefs: 0}
 	// Call support ops
 	branchLinkReg(reg Arm64VReg) = Arm64OpMeta{latency: 5, isMemory: true, isStore: false, isCall: true, setsFlags: false, pattern: OpPattern.callIndirect, implicitGprReads: 0, implicitGprDefs: 65535}
 	subSpImm(value StackSize) = Arm64OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false, setsFlags: false, pattern: OpPattern.passThrough, implicitGprReads: 0, implicitGprDefs: 0}
@@ -318,6 +325,7 @@ export function arm64OpToString(op Arm64Op, blocks IrBlockArray) returns String
 		movRegReg(dest, src) gives "arm64.mov {arm64VRegToString(dest)}, {arm64VRegToString(src)}"
 		spillToStack(offset, src) gives "arm64.str {arm64VRegToString(src)}, [x29, #{offset}]"
 		reloadFromStack(dest, offset) gives "arm64.ldr {arm64VRegToString(dest)}, [x29, #{offset}]"
+		loadIncomingArg(dest, argIndex) gives "arm64.ldr {arm64VRegToString(dest)}, [x29, #incoming_arg({argIndex})]"
 		branchLinkReg(reg) gives "arm64.blr {arm64VRegToString(reg)}"
 		subSpImm(value) gives "arm64.sub sp, sp, #{value}"
 		addSpImm(value) gives "arm64.add sp, sp, #{value}"

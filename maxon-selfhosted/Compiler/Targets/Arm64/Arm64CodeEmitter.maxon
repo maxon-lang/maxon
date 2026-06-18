@@ -347,6 +347,19 @@ function arm64EmitReloadFromStack(code ByteArray, rt MachineWord, byteOffset Mac
 	arm64EmitInsn(code, insn: insn)
 end 'arm64EmitReloadFromStack'
 
+// LDR Xt, [X29, #incomingOffset] — load an incoming overflow stack param.
+// The caller wrote it into its outgoing-arg area, which sits just above this
+// frame at `[x29 + (frameSize - outgoingArgSize) + argIndex*8]`. Uses the LDR
+// unsigned-offset form (scaled imm12, up to 32760) rather than the LDUR simm9
+// the spill reload uses — incoming-arg offsets routinely exceed the 256-byte
+// signed range.
+function arm64EmitLoadIncomingArg(code ByteArray, rt MachineWord, argIndex MachineWord, tracker Arm64StackTracker)
+	let outgoing = tracker.outgoingArgSize
+	let frameSize = arm64ComputeFrameSize(tracker.currentStackSize, outgoingArgSize: outgoing)
+	let incomingOffset = frameSize - outgoing + argIndex * 8
+	arm64EmitLdrRegOffset(code, rt: rt, baseReg: 29, offset: incomingOffset)
+end 'arm64EmitLoadIncomingArg'
+
 // STR Xt, [SP, #offset] — store to unsigned byte offset from stack pointer
 function arm64EmitStrSpOffset(code ByteArray, rt MachineWord, byteOffset MachineWord)
 	// STR (unsigned offset): 0xF9000000 | (imm12 << 10) | (Rn << 5) | Rt
@@ -967,16 +980,41 @@ end 'arm64EmitI64ToString'
 
 // --- Prologue/Epilogue for user functions ---
 
-function arm64ComputeFrameSize(stackSize StackSize) returns StackSize
-	let raw = 16 + stackSize
+// Total frame size = saved frame record (16) + the var/spill/callee-save area
+// (`stackSize`) + the outgoing-stack-arg area reserved at the bottom, rounded
+// up to the 16-byte sp alignment. `outgoingArgSize` is 0 for the vast majority
+// of functions (those that never pass >8 GPR args).
+function arm64ComputeFrameSize(stackSize StackSize, outgoingArgSize StackSize) returns StackSize
+	let raw = 16 + stackSize + outgoingArgSize
 	let aligned = (raw + 15) and not 15
 	return aligned
 end 'arm64ComputeFrameSize'
 
+// Frame layout (low → high address). When `outgoingArgSize == 0` the bottom
+// outgoing-arg block is empty and the prologue collapses to the original
+// pre-indexed form, leaving every existing function's encoding unchanged:
+//
+//   [sp + 0 .. outgoingArgSize)         outgoing call args (written by THIS fn's calls)
+//   [sp + outgoingArgSize]              saved x29   = [x29 + 0]
+//   [sp + outgoingArgSize + 8]          saved x30   = [x29 + 8]
+//   [x29 + 16 .. )                      var/spill/callee-save area
+//   [x29 + (frameSize - outgoingArgSize) .. )   incoming args (caller's outgoing area)
+//
+// x29 always points at the saved frame record, so `[x29 + 16 + slot]` slot
+// addressing and the callee-save base are independent of outgoingArgSize.
 function arm64EmitPrologue(code ByteArray, stackSize StackSize, tracker Arm64StackTracker)
-	let frameSize = arm64ComputeFrameSize(stackSize)
-	arm64EmitStpPreIndex(code, frameSize: frameSize)
-	arm64EmitMovFpSp(code)
+	let outgoing = tracker.outgoingArgSize
+	let frameSize = arm64ComputeFrameSize(stackSize, outgoingArgSize: outgoing)
+	if outgoing == 0 'noOutgoing'
+		arm64EmitStpPreIndex(code, frameSize: frameSize)
+		arm64EmitMovFpSp(code)
+	end 'noOutgoing' else 'withOutgoing'
+		// Reserve the whole frame, then place the frame record ABOVE the
+		// outgoing-arg block and point x29 at it.
+		arm64EmitSubImm(code, rd: 31, rn: 31, imm12: frameSize)
+		arm64EmitStpOffset(code, rt1: 29, rt2: 30, baseReg: 31, offset: outgoing)
+		arm64EmitAddImm(code, rd: 29, rn: 31, imm12: outgoing)
+	end 'withOutgoing'
 	// Save callee-saved registers after frame setup.
 	// They are stored at the end of the frame, after the var+spill area.
 	let calleeSaveBase = arm64CalleeSaveBaseOffset(stackSize, tracker: tracker)
@@ -984,11 +1022,17 @@ function arm64EmitPrologue(code ByteArray, stackSize StackSize, tracker Arm64Sta
 end 'arm64EmitPrologue'
 
 function arm64EmitEpilogue(code ByteArray, stackSize StackSize, tracker Arm64StackTracker)
-	let frameSize = arm64ComputeFrameSize(stackSize)
+	let outgoing = tracker.outgoingArgSize
+	let frameSize = arm64ComputeFrameSize(stackSize, outgoingArgSize: outgoing)
 	// Restore callee-saved registers before frame teardown.
 	let calleeSaveBase = arm64CalleeSaveBaseOffset(stackSize, tracker: tracker)
 	arm64EmitCalleeSavedRestores(code, tracker: tracker, baseOffset: calleeSaveBase)
-	arm64EmitLdpPostIndex(code, frameSize: frameSize)
+	if outgoing == 0 'noOutgoing'
+		arm64EmitLdpPostIndex(code, frameSize: frameSize)
+	end 'noOutgoing' else 'withOutgoing'
+		arm64EmitLdpOffset(code, rt1: 29, rt2: 30, baseReg: 31, offset: outgoing)
+		arm64EmitAddImm(code, rd: 31, rn: 31, imm12: frameSize)
+	end 'withOutgoing'
 	arm64EmitRet(code)
 end 'arm64EmitEpilogue'
 
@@ -1105,9 +1149,14 @@ export type Arm64StackTracker
 	export var currentStackSize as StackSize
 	export var calleeSavedGprs as RegIntArray
 	export var calleeSavedFps as RegIntArray
+	// Bytes reserved at the bottom of the frame for outgoing (>8th GPR) call
+	// args. Zero for the overwhelming majority of functions; non-zero only when
+	// some call site passes more than 8 GPR args. Drives the prologue/epilogue
+	// frame layout and the incoming-arg load offset.
+	export var outgoingArgSize as StackSize
 
 	export static function create() returns Arm64StackTracker
-		return Self{currentStackSize: 0, calleeSavedGprs: RegIntArray.create(), calleeSavedFps: RegIntArray.create()}
+		return Self{currentStackSize: 0, calleeSavedGprs: RegIntArray.create(), calleeSavedFps: RegIntArray.create(), outgoingArgSize: 0}
 	end 'create'
 end 'Arm64StackTracker'
 
@@ -1150,6 +1199,7 @@ export function emitArm64PerFunction(module TargetModule, globalData GlobalDataT
 
 		stackTracker.calleeSavedGprs = func.calleeSavedGprs
 		stackTracker.calleeSavedFps = func.calleeSavedFps
+		stackTracker.outgoingArgSize = func.outgoingArgSize
 
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
@@ -1309,6 +1359,7 @@ function emitArm64Instruction(op Arm64Op, code ByteArray, jumpFixups BlockIdFixu
 		movRegReg(dest, src) then arm64EmitMovRegReg(code, rd: resolveArm64Gpr(dest).rawValue, rn: resolveArm64Gpr(src).rawValue)
 		spillToStack(offset, src) then arm64EmitSpillToStack(code, rt: resolveArm64Gpr(src).rawValue, byteOffset: offset)
 		reloadFromStack(dest, offset) then arm64EmitReloadFromStack(code, rt: resolveArm64Gpr(dest).rawValue, byteOffset: offset)
+		loadIncomingArg(dest, argIndex) then arm64EmitLoadIncomingArg(code, rt: resolveArm64Gpr(dest).rawValue, argIndex: argIndex, tracker: stackTracker)
 		branchLinkReg(reg) then arm64EmitBlr(code, rn: resolveArm64Gpr(reg).rawValue)
 		subSpImm(value) then arm64EmitSubImm(code, rd: 31, rn: 31, imm12: value)
 		addSpImm(value) then arm64EmitAddImm(code, rd: 31, rn: 31, imm12: value)

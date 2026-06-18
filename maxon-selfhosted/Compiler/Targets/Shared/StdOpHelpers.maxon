@@ -195,19 +195,17 @@ export function computeParamSlotIndex(paramIndex VarSlot, paramTypes StdTypeArra
 	return slotIdx
 end 'computeParamSlotIndex'
 
-// Compute the `[rbp + offset]` byte offset for an overflow stack param. The
-// caller has already determined that this param doesn't fit in the per-domain
-// register file. Counts how many preceding params overflowed (i.e., didn't
-// fit) and adds the X64 stack-arg base offset (saved RBP + return address).
-// `gprRegCount` / `fpRegCount` are the per-domain register-file sizes — same
-// thresholds the caller-side packing in `emitDirectCall` uses.
-export function computeOverflowStackOffset(paramIndex VarSlot, paramTypes StdTypeArray) returns StackSize
-	let baseOffset = 0x10 as StackSize
+// Compute the overflow-arg index — the 0-based position of `paramIndex` among
+// only the stack-passed (register-overflowing) params. The caller-side packing
+// (`emitDirectCall`/`emitArm64DirectCall`) and the callee-side param lowering
+// both consult this so their slot assignments agree. `gprRegCount` / `fpRegCount`
+// are the per-domain register-file sizes (x64: 7/8, arm64: 8/8). Counts how many
+// preceding params overflowed before this one. Panics if the param itself fits
+// in a register — callers must check before calling.
+export function computeOverflowArgIndex(paramIndex VarSlot, paramTypes StdTypeArray, gprRegCount VarSlot, fpRegCount VarSlot) returns VarSlot
 	var overflowIdx = 0
 	var gprIdx = 0
 	var fpIdx = 0
-	let gprRegCount = 7
-	let fpRegCount = 8
 	var i = 0
 	while i <= paramIndex 'walk'
 		let pt = try paramTypes.get(i) otherwise panic("unreachable: param index out of bounds")
@@ -226,13 +224,23 @@ export function computeOverflowStackOffset(paramIndex VarSlot, paramTypes StdTyp
 		end 'isGpr'
 		if not fitsInReg 'overflowSlot'
 			if i == paramIndex 'thisParam'
-				return baseOffset + overflowIdx * 8
+				return overflowIdx
 			end 'thisParam'
 			overflowIdx = overflowIdx + 1
 		end 'overflowSlot'
 		i = i + 1
 	end 'walk'
-	panic("computeOverflowStackOffset: paramIndex {paramIndex} fits in a register; caller must check before calling")
+	panic("computeOverflowArgIndex: paramIndex {paramIndex} fits in a register; caller must check before calling")
+end 'computeOverflowArgIndex'
+
+// Compute the `[rbp + offset]` byte offset for an overflow stack param on x64.
+// The caller has already determined that this param doesn't fit in the
+// per-domain register file. The X64 stack-arg base offset (0x10 = saved RBP +
+// return address) plus the overflow index scaled by 8.
+export function computeOverflowStackOffset(paramIndex VarSlot, paramTypes StdTypeArray) returns StackSize
+	let baseOffset = 0x10 as StackSize
+	let overflowIdx = computeOverflowArgIndex(paramIndex, paramTypes: paramTypes, gprRegCount: 7, fpRegCount: 8)
+	return baseOffset + overflowIdx * 8
 end 'computeOverflowStackOffset'
 
 // Look up a callee's parameter types from the MIR-phase function list,

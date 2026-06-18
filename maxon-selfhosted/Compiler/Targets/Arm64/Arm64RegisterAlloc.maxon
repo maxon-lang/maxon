@@ -178,6 +178,7 @@ function classifyArm64CallArgSetup(a64Op Arm64Op, coloring ColoringResult) retur
 	return match a64Op 'classify'
 		movRegReg(dest, src) gives classifyArm64MovForCall(dest, src: src, coloring: coloring)
 		reloadFromStack(dest, offset) gives classifyArm64Reload(dest, offset: offset)
+		loadIncomingArg gives CallArgKind.none
 		strToSpOffset(offset, src) gives classifyArm64StackWrite(offset, src: src, coloring: coloring)
 		fmovRegReg(dest, src, _) gives classifyArm64FpMovForCall(dest, src: src, coloring: coloring)
 		reloadFpFromStack(dest, offset, _) gives classifyArm64FpReload(dest, offset: offset)
@@ -282,6 +283,7 @@ function arm64OpHasVirtualRegs(op Arm64Op) returns bool
 		movRegReg(dest, src) gives isVirtualArm64Gpr(dest) or isVirtualArm64Gpr(src)
 		spillToStack(_, src) gives isVirtualArm64Gpr(src)
 		reloadFromStack(dest, _) gives isVirtualArm64Gpr(dest)
+		loadIncomingArg(dest, _) gives isVirtualArm64Gpr(dest)
 		branchLinkReg(reg) gives isVirtualArm64Gpr(reg)
 		subSpImm to addSpImm gives false
 		strToSpOffset(_, src) gives isVirtualArm64Gpr(src)
@@ -381,6 +383,7 @@ function countArm64OpReads(counts RegIntArray, a64Op Arm64Op)
 		movRegReg(_, src) then incUse(counts, id: arm64VRegId(src))
 		spillToStack(_, src) then incUse(counts, id: arm64VRegId(src))
 		reloadFromStack then break 'scan'
+		loadIncomingArg then break 'scan'
 		branchLinkReg(reg) then incUse(counts, id: arm64VRegId(reg))
 		subSpImm to addSpImm then break 'scan'
 		strToSpOffset(_, src) then incUse(counts, id: arm64VRegId(src))
@@ -547,6 +550,7 @@ function noteArm64SingleDef(defBlocks RegIntArray, blockIdx RegInt, op Arm64Op)
 	match op 'extract'
 		ldrFromSlot(dest, _) then noteArm64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
 		reloadFromStack(dest, _) then noteArm64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		loadIncomingArg(dest, _) then noteArm64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
 		globalLoad(dest, _, _) then noteArm64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
 		leaFromStack(dest, _) then noteArm64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
 		leaRdata(dest, _) then noteArm64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
@@ -587,6 +591,7 @@ function arm64PhysMaskSingleDef(op Arm64Op) returns RegMask
 	return match op 'extract'
 		ldrFromSlot(dest, _) gives arm64PhysRegMask(dest)
 		reloadFromStack(dest, _) gives arm64PhysRegMask(dest)
+		loadIncomingArg(dest, _) gives arm64PhysRegMask(dest)
 		globalLoad(dest, _, _) gives arm64PhysRegMask(dest)
 		leaFromStack(dest, _) gives arm64PhysRegMask(dest)
 		leaRdata(dest, _) gives arm64PhysRegMask(dest)
@@ -733,6 +738,7 @@ function recordArm64OpLastUses(positions RegIntArray, a64Op Arm64Op, opIdx RegIn
 		movRegReg(_, src) then recordLastUse(positions, id: arm64VRegId(src), opIdx: opIdx)
 		spillToStack(_, src) then recordLastUse(positions, id: arm64VRegId(src), opIdx: opIdx)
 		reloadFromStack then break 'scan'
+		loadIncomingArg then break 'scan'
 		branchLinkReg(reg) then recordLastUse(positions, id: arm64VRegId(reg), opIdx: opIdx)
 		subSpImm to addSpImm then break 'scan'
 		strToSpOffset(_, src) then recordLastUse(positions, id: arm64VRegId(src), opIdx: opIdx)
@@ -881,6 +887,7 @@ function arm64OpGprDest(op Arm64Op) returns Arm64VReg
 	return match op 'getDest'
 		ldrFromSlot(dest, _) gives dest
 		reloadFromStack(dest, _) gives dest
+		loadIncomingArg(dest, _) gives dest
 		globalLoad(dest, _, _) gives dest
 		leaFromStack(dest, _) gives dest
 		leaRdata(dest, _) gives dest
@@ -895,6 +902,7 @@ function arm64OpWithPhysDest(op Arm64Op, d RegOrdinal) returns Arm64Op
 	return match op 'rebuild'
 		ldrFromSlot(_, slotIndex) gives Arm64Op.ldrFromSlot(dp, slotIndex: slotIndex)
 		reloadFromStack(_, offset) gives Arm64Op.reloadFromStack(dp, offset: offset)
+		loadIncomingArg(_, argIndex) gives Arm64Op.loadIncomingArg(dp, argIndex: argIndex)
 		globalLoad(_, name, size) gives Arm64Op.globalLoad(dp, name: name, size: size)
 		leaFromStack(_, stackOffset) gives Arm64Op.leaFromStack(dp, stackOffset: stackOffset)
 		leaRdata(_, rdataLabel) gives Arm64Op.leaRdata(dp, rdataLabel: rdataLabel)
@@ -1595,6 +1603,7 @@ function remapA64SingleDef(a64Op Arm64Op, remap RegIntArray) returns Arm64Op
 	return match a64Op 'remap'
 		ldrFromSlot(dest, slotIndex) gives Arm64Op.ldrFromSlot(remapArm64Gpr(dest, remap: remap), slotIndex: slotIndex)
 		reloadFromStack(dest, offset) gives Arm64Op.reloadFromStack(remapArm64Gpr(dest, remap: remap), offset: offset)
+		loadIncomingArg(dest, argIndex) gives Arm64Op.loadIncomingArg(remapArm64Gpr(dest, remap: remap), argIndex: argIndex)
 		globalLoad(dest, name, size) gives Arm64Op.globalLoad(remapArm64Gpr(dest, remap: remap), name: name, size: size)
 		leaFromStack(dest, stackOffset) gives Arm64Op.leaFromStack(remapArm64Gpr(dest, remap: remap), stackOffset: stackOffset)
 		leaRdata(dest, rdataLabel) gives Arm64Op.leaRdata(remapArm64Gpr(dest, remap: remap), rdataLabel: rdataLabel)
