@@ -1918,22 +1918,30 @@ function arm64EmitAtomicDecMem(code ByteArray, addrReg Arm64VReg)
 end 'arm64EmitAtomicDecMem'
 
 // atomicXaddMem(resultReg, addrReg, valReg):
-//   .loop:
-//     LDAXR x16, [Xaddr]            ; x16 = prev (preserved across loop)
-//     ADD   x17, x16, Xval          ; x17 = new
-//     STLXR w18, x17, [Xaddr]       ; w18 = status (separate from x16/x17)
-//     CBNZ  w18, .loop
-//     MOV   Xresult, x16            ; result = prior value
+//   LDR x16, [Xaddr]              ; x16 = prev
+//   ADD x17, x16, Xval           ; x17 = new
+//   STR x17, [Xaddr]             ; *addr = new
+//   MOV Xresult, x16             ; result = prior value
+//
+// A non-atomic load-add-store (mirrors the C# bootstrap's `AtomicXadd`). The
+// LL/SC form this replaced needed a THIRD scratch register beyond the x16/x17
+// the inc/dec/cas emitters use, and reached for x18 — but x18 is the reserved
+// platform register on arm64-macos (the Apple ABI forbids touching it), so
+// clobbering it corrupted thread state and silently corrupted the heap (the
+// slab allocator double-allocated slots). Refcount xadd runs under the
+// cooperative green-thread model where this counter has a single writer at a
+// time, so true atomicity is unnecessary here — same trade-off the bootstrap
+// makes. Only x16/x17 (outside the regalloc pool) are scratched, so no
+// implicit defs need tracking, matching inc/dec/cas.
 function arm64EmitAtomicXaddMem(code ByteArray, resultReg Arm64VReg, addrReg Arm64VReg, valReg Arm64VReg)
 	let rd = resolveArm64Gpr(resultReg).rawValue
 	let rn = resolveArm64Gpr(addrReg).rawValue
 	let rv = resolveArm64Gpr(valReg).rawValue
-	arm64EmitLdaxr(code, rt: 16, rn: rn)
+	arm64EmitLdrImm(code, rt: 16, rn: rn, imm12: 0)
 	arm64EmitAdd(code, rd: 17, rn: 16, rm: rv)
-	arm64EmitStlxr(code, rs: 18, rt: 17, rn: rn)
-	// CBNZ W18, -3 instructions back to LDAXR.
-	arm64EmitCbnzW(code, rn: 18, imm19: 0x7FFFD)
-	// MOV Xresult, X16 (ORR Xresult, XZR, X16)
+	arm64EmitStrRegOffset(code, rt: 17, baseReg: rn, offset: 0)
+	// MOV Xresult, X16 (ORR Xresult, XZR, X16) — result = prior value. Emitted
+	// last, so rd aliasing rn/rv is harmless (both are dead by here).
 	arm64EmitMovRegReg(code, rd: rd, rn: 16)
 end 'arm64EmitAtomicXaddMem'
 
