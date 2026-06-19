@@ -599,9 +599,23 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 	let rdataPages = rdataAreaSize / MACHO_PAGE_SIZE
 	let gotOffsetInData = rdataAreaSize
 	let gotSectionVMAddr = dataSegmentVMAddr + gotOffsetInData
-	let dataSegmentFileSize = alignUp(gotOffsetInData + gotSize, alignment: MACHO_PAGE_SIZE)
-	// __heap is placed at the end of the file-backed region in virtual memory
-	let heapSectionVMAddr = dataSegmentVMAddr + dataSegmentFileSize
+	// __const + __got occupy the first file-backed, page-aligned span. Keeping
+	// this span unchanged preserves the funcAbs64 chained-fixup page_starts,
+	// which index only the rdata + got pages — the prelude lands on a fresh page
+	// beyond the fixup table and carries no rebased pointers.
+	let constGotFileSize = alignUp(gotOffsetInData + gotSize, alignment: MACHO_PAGE_SIZE)
+	// __heap holds the top-level / static globals' initial values (the
+	// dataPrelude). It MUST be FILE-BACKED so those values survive into the
+	// image — a zerofill heap silently zeroed every global (the static-variables
+	// miscompile: `var a = 5; return a` returned 0). The runtime allocator mmaps
+	// its own arenas (osAllocPages), so the section only needs to cover the
+	// globals; a zerofill tail is still provided via the segment's vmsize.
+	let heapSectionVMAddr = dataSegmentVMAddr + constGotFileSize
+	let preludeSize = codeResult.dataPrelude.count()
+	let hasPrelude = preludeSize > 0
+	let heapFileOffset = dataSegmentFileOff + constGotFileSize
+	let heapDataFileSize = alignUp(preludeSize, alignment: MACHO_PAGE_SIZE) if hasPrelude else 0
+	let dataSegmentFileSize = constGotFileSize + heapDataFileSize
 	let heapVirtualSize = 65536
 	let dataSegmentVMSize = dataSegmentFileSize + heapVirtualSize
 
@@ -714,7 +728,13 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 		writeMachOSectionHeader(macho, sectname: "__const", segname: "__DATA", addr: constSectionVMAddr, size: rdataSize, offset: dataSegmentFileOff, alignVal: 3, flags: S_REGULAR)
 	end 'writeConstHeader'
 	writeMachOSectionHeader(macho, sectname: "__got", segname: "__DATA", addr: gotSectionVMAddr, size: gotSize, offset: dataSegmentFileOff + gotOffsetInData, alignVal: 3, flags: S_REGULAR)
-	writeMachOSectionHeader(macho, sectname: "__heap", segname: "__DATA", addr: heapSectionVMAddr, size: heapVirtualSize, offset: 0, alignVal: 3, flags: S_ZEROFILL)
+	if hasPrelude 'fileBackedHeap'
+		// File-backed: the prelude bytes (global initial values) live in the image.
+		writeMachOSectionHeader(macho, sectname: "__heap", segname: "__DATA", addr: heapSectionVMAddr, size: preludeSize, offset: heapFileOffset, alignVal: 3, flags: S_REGULAR)
+	end 'fileBackedHeap' else 'zerofillHeap'
+		// No globals: keep the historic zerofill heap (no file content).
+		writeMachOSectionHeader(macho, sectname: "__heap", segname: "__DATA", addr: heapSectionVMAddr, size: heapVirtualSize, offset: 0, alignVal: 3, flags: S_ZEROFILL)
+	end 'zerofillHeap'
 
 	// === __LINKEDIT ===
 	writeSegmentCommand(macho, segname: "__LINKEDIT", vmaddr: linkeditVMAddr, vmsize: linkeditFileSize, fileoff: linkeditFileOff, filesize: linkeditFileSize, maxprot: VM_PROT_READ, initprot: VM_PROT_READ, nsects: 0)
@@ -811,6 +831,11 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 	end 'writeConst'
 	padTo(macho, size: dataSegmentFileOff + gotOffsetInData)
 	macho.append(got)
+	// __heap: file-backed top-level / static globals' initial values.
+	if hasPrelude 'writePrelude'
+		padTo(macho, size: heapFileOffset)
+		macho.append(codeResult.dataPrelude)
+	end 'writePrelude'
 	padTo(macho, size: dataSegmentFileOff + dataSegmentFileSize)
 
 	// === __LINKEDIT content ===
