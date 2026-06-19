@@ -144,19 +144,45 @@ end 'RdataRelocation'
 
 export typealias RdataRelocationArray = Array with RdataRelocation
 
-// Phase 11.2/11.3: walk an RdataRelocationArray and append every
-// `funcAbs64InRdata` target name to `seeds`. The DFE/livenessRoots path
-// already keeps user-defined witness/layout-thunk impls alive through the
-// Maxon stage, but the per-target stdlib linker only seeds from `call`
-// fixups by default — without this helper, a stdlib method (e.g.
-// `Range.createIterator` referenced via a witness slot) would never make
-// it into `.text` and the PE/ELF/Mach-O writer would panic at link time.
-export function appendFuncAbs64Seeds(seeds StringArray, relocs RdataRelocationArray)
+// A funcAbs64InRdata reloc resolved to the three fields the seed/patch/rebase
+// passes need. Collecting once keeps the reloc-walk + funcAbs64 match idiom in a
+// single place instead of repeating it at every consumer.
+export type FuncAbs64Slot
+	export let funcName as String
+	export let rdataOffset as CodeOffset
+	export let offsetInLabel as ByteOffset
+
+	export static function create(funcName String, rdataOffset CodeOffset, offsetInLabel ByteOffset) returns Self
+		return Self{funcName: funcName, rdataOffset: rdataOffset, offsetInLabel: offsetInLabel}
+	end 'create'
+end 'FuncAbs64Slot'
+
+export typealias FuncAbs64SlotArray = Array with FuncAbs64Slot
+
+// Walk an RdataRelocationArray and collect every funcAbs64InRdata reloc. The
+// `ripRelDisp32 to covdataArm64Adr` arm covers all the non-funcAbs64 kinds, so
+// the match stays exhaustive over RdataRelocKind while isolating the one case
+// the seed/patch/rebase passes care about.
+export function collectFuncAbs64Slots(relocs RdataRelocationArray) returns FuncAbs64SlotArray
+	var slots = FuncAbs64SlotArray.create()
 	for reloc in relocs 'each'
 		match reloc.kind 'k'
 			ripRelDisp32 to covdataArm64Adr then break 'k'
-			funcAbs64InRdata(funcName, _, _) then seeds.push(funcName)
+			funcAbs64InRdata(funcName, _, offsetInLabel) then slots.push(FuncAbs64Slot.create(funcName, rdataOffset: reloc.rdataOffset, offsetInLabel: offsetInLabel))
 		end 'k'
+	end 'each'
+	return slots
+end 'collectFuncAbs64Slots'
+
+// Phase 11.2/11.3: append every funcAbs64InRdata target name to `seeds`. The
+// DFE/livenessRoots path already keeps user-defined witness/layout-thunk impls
+// alive through the Maxon stage, but the per-target stdlib linker only seeds
+// from `call` fixups by default — without this helper, a stdlib method (e.g.
+// `Range.createIterator` referenced via a witness slot) would never make it into
+// `.text` and the PE/ELF/Mach-O writer would panic at link time.
+export function appendFuncAbs64Seeds(seeds StringArray, relocs RdataRelocationArray)
+	for slot in collectFuncAbs64Slots(relocs) 'each'
+		seeds.push(slot.funcName)
 	end 'each'
 end 'appendFuncAbs64Seeds'
 
@@ -164,7 +190,7 @@ end 'appendFuncAbs64Seeds'
 // `patchFuncAbs64InRdata` walks every reloc and would otherwise do a linear
 // scan of `debugSymbols` per reloc — at scale (thousands of relocs against
 // thousands of symbols) that's quadratic.
-function buildDebugSymbolIndex(debugSymbols DebugSymbolArray) returns DebugSymbolIndexMap
+export function buildDebugSymbolIndex(debugSymbols DebugSymbolArray) returns DebugSymbolIndexMap
 	var index = DebugSymbolIndexMap.create()
 	for sym in debugSymbols 'each'
 		index.upsert(sym.name, value: sym.codeOffset)
@@ -172,26 +198,26 @@ function buildDebugSymbolIndex(debugSymbols DebugSymbolArray) returns DebugSymbo
 	return index
 end 'buildDebugSymbolIndex'
 
+// Resolve a funcAbs64InRdata reloc's target to its .text code offset. Shared by
+// the absolute-VA patcher (PE/ELF) and the Mach-O PIE rebaser; both fail the
+// same way when BuildLayoutDescriptors emitted a reloc to a function that was
+// never compiled into .text.
+export function resolveFuncAbs64Symbol(symbolIndex DebugSymbolIndexMap, funcName String) returns CodeOffset
+	return try symbolIndex.get(funcName) otherwise panic("resolveFuncAbs64Symbol: no .text symbol named '{funcName}' (BuildLayoutDescriptors emitted a reloc to a function that wasn't compiled)")
+end 'resolveFuncAbs64Symbol'
+
 // Patch every funcAbs64InRdata reloc by writing the absolute VA of the
-// referenced .text function into the rdata slot. Format-neutral: callers
-// pass `textAbsBase` already collapsed for their target (PE: imageBase +
-// textRva; ELF: textVAddr; Mach-O: textSectionVMAddr).
+// referenced .text function into the rdata slot. Format-neutral: callers pass
+// `textAbsBase` already collapsed for their target (PE: imageBase + textRva;
+// ELF: textVAddr). Mach-O uses PIE chained-fixup rebases instead of this
+// absolute-VA bake (see writeMachoFuncAbs64Rebases).
 export function patchFuncAbs64InRdata(rdata ByteArray, rdataRelocs RdataRelocationArray, textAbsBase MachineWord, debugSymbols DebugSymbolArray)
 	let symbolIndex = buildDebugSymbolIndex(debugSymbols)
-	for reloc in rdataRelocs 'patch'
-		match reloc.kind 'k'
-			ripRelDisp32 to covdataArm64Adr then break 'k'
-			funcAbs64InRdata(funcName, _, offsetInLabel) then patchOneFuncAbs64InRdata(rdata, descriptorOffset: reloc.rdataOffset, offsetInLabel: offsetInLabel, funcName: funcName, textAbsBase: textAbsBase, symbolIndex: symbolIndex)
-		end 'k'
+	for slot in collectFuncAbs64Slots(rdataRelocs) 'patch'
+		let absVa = textAbsBase + resolveFuncAbs64Symbol(symbolIndex, funcName: slot.funcName)
+		patchQword(rdata, offset: slot.rdataOffset + slot.offsetInLabel, value: absVa)
 	end 'patch'
 end 'patchFuncAbs64InRdata'
-
-function patchOneFuncAbs64InRdata(rdata ByteArray, descriptorOffset CodeOffset, offsetInLabel ByteOffset, funcName String, textAbsBase MachineWord, symbolIndex DebugSymbolIndexMap)
-	let funcCodeOffset = try symbolIndex.get(funcName) otherwise panic("patchOneFuncAbs64InRdata: no .text symbol named '{funcName}' (BuildLayoutDescriptors emitted a reloc to a function that wasn't compiled)")
-	let absVa = textAbsBase + funcCodeOffset
-	let slot = descriptorOffset + offsetInLabel
-	patchQword(rdata, offset: slot, value: absVa)
-end 'patchOneFuncAbs64InRdata'
 
 // Phase 11.5: per-function code chunk. The incremental backend emits one
 // chunk per function, then the module-level fixup pass concatenates them

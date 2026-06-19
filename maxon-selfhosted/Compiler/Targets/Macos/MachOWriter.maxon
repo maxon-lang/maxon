@@ -49,9 +49,16 @@ let CS_HASHTYPE_SHA256 = 2
 let CS_SHA256_LEN = 32
 let CS_PAGE_SIZE_LOG2 = 12
 
-// Chained fixup constants
-let DYLD_CHAINED_PTR_64 = 6
+// Chained fixup constants. Pointer format 6 is DYLD_CHAINED_PTR_64_OFFSET (the
+// plain DYLD_CHAINED_PTR_64 is value 2): a rebase entry's `target` field holds
+// the runtime OFFSET from the image base, and dyld computes the final pointer as
+// mach_header_address + target (so it is slide-safe). Bind entries are identical
+// across both 64-bit formats (they use the ordinal field, not target).
+let DYLD_CHAINED_PTR_64_OFFSET = 6
 let DYLD_CHAINED_IMPORT = 1
+
+// page_start sentinel: this page of the segment carries no fixups.
+let DYLD_CHAINED_PTR_START_NONE = 0xFFFF
 
 // Import names for macOS dyld chained-fixup imports. The Mach-O writer
 // currently targets arm64-macos only; x64-macos has no Mach-O writer yet
@@ -149,7 +156,12 @@ end 'writeMachOSectionHeader'
 
 // --- Chained fixups builder ---
 
-function buildChainedFixups(dataSegmentFileOff MachineWord, gotSectionOffsetInSeg MachineWord) returns ByteArray
+// `pageStarts` has one entry per file-backed page of the __DATA segment, in
+// page order: the leading rdata pages (each holding the in-page byte offset of
+// the first funcAbs64 rebase, or DYLD_CHAINED_PTR_START_NONE) followed by the
+// __got page (offset of the first import bind). dyld walks each page's chain
+// from this start via the per-entry `next` field.
+function buildChainedFixups(dataSegmentFileOff MachineWord, pageStarts CodeOffsetArray) returns ByteArray
 	var cf = ByteArray.create()
 	cf.reserve(256)
 
@@ -157,7 +169,10 @@ function buildChainedFixups(dataSegmentFileOff MachineWord, gotSectionOffsetInSe
 	let startsOffset = 0x20
 	let segCount = 4
 	let startsSize = 4 + segCount * 4
-	let dataSegStartsSize = 4 + 2 + 2 + 8 + 4 + 2 + 2
+	let pageCount = pageStarts.count()
+	// dyld_chained_starts_in_segment: size(4)+page_size(2)+pointer_format(2)+
+	// segment_offset(8)+max_valid_pointer(4)+page_count(2)+page_start[pageCount].
+	let dataSegStartsSize = 22 + 2 * pageCount
 	let dataSegStartsOffset = startsSize
 
 	let importsOffset = alignUp(startsOffset + startsSize + dataSegStartsSize, alignment: 4)
@@ -186,11 +201,13 @@ function buildChainedFixups(dataSegmentFileOff MachineWord, gotSectionOffsetInSe
 	// DATA segment starts
 	writeDword(cf, value: dataSegStartsSize)
 	writeWord(cf, value: MACHO_PAGE_SIZE)
-	writeWord(cf, value: DYLD_CHAINED_PTR_64)
+	writeWord(cf, value: DYLD_CHAINED_PTR_64_OFFSET)
 	writeQword(cf, value: dataSegmentFileOff)
 	writeDword(cf, value: 0)  // max_valid_pointer
-	writeWord(cf, value: 1)  // page_count
-	writeWord(cf, value: gotSectionOffsetInSeg)  // page_start[0]
+	writeWord(cf, value: pageCount)
+	for ps in pageStarts 'eachPageStart'
+		writeWord(cf, value: ps)
+	end 'eachPageStart'
 
 	// Pad to imports offset
 	while cf.count() < importsOffset 'padToImports'
@@ -394,6 +411,113 @@ function patchMachORdataRelocations(code ByteArray, rdataRelocs RdataRelocationA
 	end 'patch'
 end 'patchMachORdataRelocations'
 
+// --- funcAbs64 PIE rebase emission (dyld chained fixups) ---
+
+// macOS arm64 forces MH_PIE, so dyld slides the image at launch. The funcAbs64
+// function pointers baked into witness tables / layout descriptors must be
+// rebased (not baked as fixed absolute VAs) or every witness/layout dispatch
+// jumps to an unslid address and crashes. The writer places the rdata image at
+// the front of the writable __DATA segment and threads these slots into the
+// dyld chained-fixup chains. Slots are tracked in two parallel primitive arrays
+// (offset, preferred-VA target) — primitive reads are copies, so the in-place
+// insertion sort has no get/set borrow conflict.
+
+// Insertion-sort the parallel (offset, target) arrays by ascending slot offset
+// so consecutive slots can be threaded into per-page chains and the page_start
+// table can take the first slot in each page. Counts are tiny (a handful of
+// witness/layout pointers).
+function sortMachoRebases(offsets CodeOffsetArray, targets CodeOffsetArray)
+	let n = offsets.count()
+	var i = 1
+	while i < n 'outer'
+		let keyOffset = try offsets.get(i) otherwise panic("sortMachoRebases.outer: i < n by loop guard but offsets.get({i}) failed")
+		let keyTarget = try targets.get(i) otherwise panic("sortMachoRebases.outer: targets.get({i}) failed")
+		var j = i - 1
+		while j >= 0 'inner'
+			let valOffset = try offsets.get(j) otherwise panic("sortMachoRebases.inner: 0 <= j < i but offsets.get({j}) failed")
+			if valOffset <= keyOffset 'done'
+				break
+			end 'done'
+			let valTarget = try targets.get(j) otherwise panic("sortMachoRebases.inner: targets.get({j}) failed")
+			try offsets.set(j + 1, value: valOffset) otherwise panic("invariant: offsets.set OOB")
+			try targets.set(j + 1, value: valTarget) otherwise panic("invariant: targets.set OOB")
+			j = j - 1
+		end 'inner'
+		try offsets.set(j + 1, value: keyOffset) otherwise panic("invariant: offsets.set OOB")
+		try targets.set(j + 1, value: keyTarget) otherwise panic("invariant: targets.set OOB")
+		i = i + 1
+	end 'outer'
+end 'sortMachoRebases'
+
+// Replace the non-PIE absolute-VA baking with dyld chained-fixup REBASE entries
+// for every funcAbs64InRdata slot. Each slot becomes a DYLD_CHAINED_PTR_64_OFFSET
+// rebase: bits 0-35 hold the target's OFFSET from the image base (dyld re-adds
+// the runtime base), bits 51-62 hold `next` (4-byte stride to the following
+// fixup IN THE SAME PAGE), bit 63 (bind) is 0. `textImageOffset` is the __text
+// section's offset from the image base. Returns the slot offsets ascending so
+// the caller can build the segment's page_start table.
+function writeMachoFuncAbs64Rebases(rdata ByteArray, rdataRelocs RdataRelocationArray, textImageOffset MachineWord, debugSymbols DebugSymbolArray) returns CodeOffsetArray
+	let symbolIndex = buildDebugSymbolIndex(debugSymbols)
+
+	var offsets = CodeOffsetArray.create()
+	var targets = CodeOffsetArray.create()
+	// `target` is the function's OFFSET from the image base (textImageOffset +
+	// funcCodeOffset); dyld re-adds the runtime base under the
+	// DYLD_CHAINED_PTR_64_OFFSET pointer format.
+	for slot in collectFuncAbs64Slots(rdataRelocs) 'collect'
+		let funcCodeOffset = resolveFuncAbs64Symbol(symbolIndex, funcName: slot.funcName)
+		offsets.push(slot.rdataOffset + slot.offsetInLabel)
+		targets.push(textImageOffset + funcCodeOffset)
+	end 'collect'
+
+	sortMachoRebases(offsets, targets: targets)
+
+	let count = offsets.count()
+	var idx = 0
+	while idx < count 'write'
+		let slotOffset = try offsets.get(idx) otherwise panic("writeMachoFuncAbs64Rebases: idx < count but offsets.get({idx}) failed")
+		let target = try targets.get(idx) otherwise panic("writeMachoFuncAbs64Rebases: targets.get({idx}) failed")
+		var nextField = 0
+		if idx + 1 < count 'hasNext'
+			let followingOffset = try offsets.get(idx + 1) otherwise panic("writeMachoFuncAbs64Rebases: idx+1 < count but offsets.get({idx + 1}) failed")
+			// next only links within a page; a cross-page successor ends this chain.
+			if followingOffset / MACHO_PAGE_SIZE == slotOffset / MACHO_PAGE_SIZE 'samePage'
+				nextField = (followingOffset - slotOffset) / 4
+			end 'samePage'
+		end 'hasNext'
+		let entry = (nextField shl 51) or (target and 0xFFFFFFFFF)
+		patchQword(rdata, offset: slotOffset, value: entry)
+		idx = idx + 1
+	end 'write'
+
+	return offsets
+end 'writeMachoFuncAbs64Rebases'
+
+// Build the __DATA segment's page_start table from the ascending rebase slot
+// offsets. The first `rdataPages` entries cover the rdata image (each the
+// in-page offset of the first rebase, or START_NONE); the final entry covers
+// the __got page, which begins at the page-aligned `gotOffsetInData`.
+function buildMachoDataPageStarts(sortedRebaseOffsets CodeOffsetArray, rdataPages CodeOffset, gotOffsetInData CodeOffset) returns CodeOffsetArray
+	var pageStarts = CodeOffsetArray.create()
+	var p = 0
+	while p < rdataPages 'rdataPage'
+		let pageBase = p * MACHO_PAGE_SIZE
+		let pageEnd = pageBase + MACHO_PAGE_SIZE
+		var start = DYLD_CHAINED_PTR_START_NONE
+		for slotOffset in sortedRebaseOffsets 'find'
+			if slotOffset >= pageBase and slotOffset < pageEnd 'inPage'
+				start = slotOffset - pageBase
+				break
+			end 'inPage'
+		end 'find'
+		pageStarts.push(start)
+		p = p + 1
+	end 'rdataPage'
+	// __got is page-aligned, so its first bind sits at in-page offset 0.
+	pageStarts.push(gotOffsetInData mod MACHO_PAGE_SIZE)
+	return pageStarts
+end 'buildMachoDataPageStarts'
+
 // --- Main Mach-O writer ---
 
 export function writeMachO(outputPath FilePath, codeResult CodeResult, target Target)
@@ -405,21 +529,25 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 	let symdataSize = codeResult.symdata.count()
 	let hasRdata = rdataSize > 0
 	let hasSymdata = symdataSize > 0
+	// __TEXT holds __text and (optionally) __symtab. rdata (__const) lives in the
+	// writable __DATA segment now (so its funcAbs64 pointers can be PIE-rebased),
+	// so __DATA holds (optionally) __const plus __got and __heap.
 	var textSectionCount = 1
-	if hasRdata 'setSecCount'
+	if hasSymdata 'setSecCount'
 		textSectionCount = textSectionCount + 1
 	end 'setSecCount'
-	if hasSymdata 'setSecCount2'
-		textSectionCount = textSectionCount + 1
-	end 'setSecCount2'
+	var dataSectionCount = 2  // __got + __heap
+	if hasRdata 'setDataSecCount'
+		dataSectionCount = dataSectionCount + 1  // __const
+	end 'setDataSecCount'
 
 	// --- Compute layout ---
 
 	// Load command sizes
 	let segCmdBase = 72
 	let sectionSize = 80
-	let textCmdSize = segCmdBase + (sectionSize * textSectionCount)  // __text + optionally __const + __symtab
-	let dataCmdSize = segCmdBase + (sectionSize * 2)  // 2 sections: __got + __heap
+	let textCmdSize = segCmdBase + (sectionSize * textSectionCount)  // __text + optionally __symtab
+	let dataCmdSize = segCmdBase + (sectionSize * dataSectionCount)  // optionally __const + __got + __heap
 	let symtabCmdSize = 24
 	let dysymtabCmdSize = 80
 	let mainCmdSize = 24
@@ -438,34 +566,40 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 	let headerSize = 32
 
 	let textSectionOffset = alignUp(headerSize + loadCommandsSize, alignment: 4)
-	// __const section placed after __text, aligned to 8 bytes
-	let constSectionOffset = alignUp(textSectionOffset + codeSize, alignment: 8)
-	let constSectionVMAddr = MACHO_TEXT_VM_ADDR + constSectionOffset
-	// __symtab section placed after __const, aligned to 8 bytes
-	var symdataSectionOffset = alignUp(constSectionOffset + rdataSize, alignment: 8)
-	if not hasRdata 'noRdata'
-		symdataSectionOffset = alignUp(textSectionOffset + codeSize, alignment: 8)
-	end 'noRdata'
+	let textSectionVMAddr = MACHO_TEXT_VM_ADDR + textSectionOffset
+	// __symtab section placed after __text, aligned to 8 bytes. rdata (__const)
+	// is no longer in __TEXT — it moved to writable __DATA so dyld can rebase its
+	// funcAbs64 pointers under PIE slide (see writeMachoFuncAbs64Rebases).
+	let symdataSectionOffset = alignUp(textSectionOffset + codeSize, alignment: 8)
 	let symdataSectionVMAddr = MACHO_TEXT_VM_ADDR + symdataSectionOffset
 	var textSegmentContentEnd = textSectionOffset + codeSize
-	if hasRdata 'setContentEnd'
-		textSegmentContentEnd = constSectionOffset + rdataSize
-	end 'setContentEnd'
-	if hasSymdata 'setContentEnd2'
+	if hasSymdata 'setContentEnd'
 		textSegmentContentEnd = symdataSectionOffset + symdataSize
-	end 'setContentEnd2'
+	end 'setContentEnd'
 	let textSegmentFileSize = alignUp(textSegmentContentEnd, alignment: MACHO_PAGE_SIZE)
 
 	// GOT
 	let got = buildGot()
 	let gotSize = got.count()
 
-	// DATA segment: __got section (file-backed) + __heap section (S_ZEROFILL, no file backing)
+	// === __DATA layout: __const (rebased rdata) | __got | __heap ===
+	// __const goes first so it stays the closest __DATA section to __text — the
+	// heap/data ADRs already reach further, so the single-ADR (+/-1MB) rdata
+	// references remain in range. It must be writable for dyld to apply the
+	// funcAbs64 rebases.
 	let dataSegmentFileOff = textSegmentFileSize
 	let dataSegmentVMAddr = MACHO_TEXT_VM_ADDR + textSegmentFileSize
-	let gotSectionOffset = 0
-	let gotSectionVMAddr = dataSegmentVMAddr + gotSectionOffset
-	let dataSegmentFileSize = alignUp(gotSize, alignment: MACHO_PAGE_SIZE)
+	let constSectionVMAddr = dataSegmentVMAddr
+	// Page-align the rdata image so __got starts on a fresh page; that isolates
+	// the import-bind chain on its own page from the rdata rebase chains.
+	var rdataAreaSize = 0
+	if hasRdata 'rdataArea'
+		rdataAreaSize = alignUp(rdataSize, alignment: MACHO_PAGE_SIZE)
+	end 'rdataArea'
+	let rdataPages = rdataAreaSize / MACHO_PAGE_SIZE
+	let gotOffsetInData = rdataAreaSize
+	let gotSectionVMAddr = dataSegmentVMAddr + gotOffsetInData
+	let dataSegmentFileSize = alignUp(gotOffsetInData + gotSize, alignment: MACHO_PAGE_SIZE)
 	// __heap is placed at the end of the file-backed region in virtual memory
 	let heapSectionVMAddr = dataSegmentVMAddr + dataSegmentFileSize
 	let heapVirtualSize = 65536
@@ -475,8 +609,15 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 	let linkeditFileOff = dataSegmentFileOff + dataSegmentFileSize
 	let linkeditVMAddr = dataSegmentVMAddr + alignUp(dataSegmentVMSize, alignment: MACHO_PAGE_SIZE)
 
-	// Build chained fixups data
-	let chainedFixupsData = buildChainedFixups(dataSegmentFileOff, gotSectionOffsetInSeg: gotSectionOffset)
+	// Emit funcAbs64 PIE rebases into the rdata image, then build the __DATA
+	// page_start table (one entry per rdata page + the __got page) and the
+	// chained-fixups payload that threads both the rebases and the import binds.
+	// textSectionOffset is __text's file offset, which equals its offset from the
+	// image base (the mach header sits at file 0 / image base) — exactly the
+	// OFFSET form DYLD_CHAINED_PTR_64_OFFSET rebases require.
+	let rebaseSlots = writeMachoFuncAbs64Rebases(codeResult.rdata, rdataRelocs: codeResult.rdataRelocations, textImageOffset: textSectionOffset, debugSymbols: codeResult.debugSymbols)
+	let dataPageStarts = buildMachoDataPageStarts(rebaseSlots, rdataPages: rdataPages, gotOffsetInData: gotOffsetInData)
+	let chainedFixupsData = buildChainedFixups(dataSegmentFileOff, pageStarts: dataPageStarts)
 
 	// Exports trie (minimal empty trie)
 	var exportsTrieData = ByteArray.create()
@@ -530,27 +671,17 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 	let linkeditFileSize = alignUp(linkeditEnd - linkeditFileOff, alignment: MACHO_PAGE_SIZE)
 
 	// Patch ADRP+LDR relocations in code
-	let textSectionVMAddr = MACHO_TEXT_VM_ADDR + textSectionOffset
 	patchRelocationsMachO(code, relocations: codeResult.relocations, textSectionVMAddr: textSectionVMAddr, gotSectionVMAddr: gotSectionVMAddr)
 
-	// Patch rdata relocations in code (ADR/LDR-literal -> __const section)
+	// Patch rdata relocations in code (ADR/LDR-literal -> __const section, now in __DATA)
 	patchMachORdataRelocations(code, rdataRelocs: codeResult.rdataRelocations, textSectionVMAddr: textSectionVMAddr, constSectionVMAddr: constSectionVMAddr, symdataSectionVMAddr: symdataSectionVMAddr, heapSectionVMAddr: heapSectionVMAddr)
-
-	// Phase 11.2: bake absolute VAs of layout-descriptor copy/destroy thunks
-	// into the on-disk __const image (rdata). Mach-O is dyld-linked but
-	// Maxon does NOT set MH_PIE (see flags below) so the loader honours
-	// the fixed __TEXT VM addr (0x100000000) we pin via MACHO_TEXT_VM_ADDR.
-	// A future PIE-enabled Mach-O writer would replace this with
-	// X86_64_RELOC_UNSIGNED / ARM64_RELOC_UNSIGNED entries in a __DATA
-	// __got-style table.
-	patchFuncAbs64InRdata(codeResult.rdata, rdataRelocs: codeResult.rdataRelocations, textAbsBase: textSectionVMAddr, debugSymbols: codeResult.debugSymbols)
 
 	let entryOff = textSectionOffset + codeResult.mainCallFixupOffset
 	// macOS arm64 requires PIE (the kernel kills a non-PIE main executable with
 	// SIGKILL). MH_PIE lets dyld slide the image; PC-relative code (ADRP/ADD) is
-	// slide-safe, but the absolute funcAbs64InRdata pointers baked above are NOT
-	// — they need chained-fixup rebases (a follow-up). This is correct for
-	// programs with no such pointers; managed-type programs need the rebase work.
+	// slide-safe, and the absolute funcAbs64 function pointers in rdata are made
+	// slide-safe by the DYLD_CHAINED_PTR_64_OFFSET rebases emitted into the
+	// writable __DATA __const section above (see writeMachoFuncAbs64Rebases).
 	let flags = MH_DYLDLINK or MH_TWOLEVEL or MH_PIE
 
 	// --- Build Mach-O buffer ---
@@ -573,16 +704,16 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 	// === __TEXT ===
 	writeSegmentCommand(macho, segname: "__TEXT", vmaddr: MACHO_TEXT_VM_ADDR, vmsize: textSegmentFileSize, fileoff: 0, filesize: textSegmentFileSize, maxprot: VM_PROT_READ or VM_PROT_EXECUTE, initprot: VM_PROT_READ or VM_PROT_EXECUTE, nsects: textSectionCount)
 	writeMachOSectionHeader(macho, sectname: "__text", segname: "__TEXT", addr: textSectionVMAddr, size: codeSize, offset: textSectionOffset, alignVal: 2, flags: S_ATTR_PURE_INSTRUCTIONS or S_ATTR_SOME_INSTRUCTIONS or S_REGULAR)
-	if hasRdata 'writeConstHeader'
-		writeMachOSectionHeader(macho, sectname: "__const", segname: "__TEXT", addr: constSectionVMAddr, size: rdataSize, offset: constSectionOffset, alignVal: 3, flags: S_REGULAR)
-	end 'writeConstHeader'
 	if hasSymdata 'writeSymtabHeader'
 		writeMachOSectionHeader(macho, sectname: "__symtab", segname: "__TEXT", addr: symdataSectionVMAddr, size: symdataSize, offset: symdataSectionOffset, alignVal: 2, flags: S_REGULAR)
 	end 'writeSymtabHeader'
 
 	// === __DATA ===
-	writeSegmentCommand(macho, segname: "__DATA", vmaddr: dataSegmentVMAddr, vmsize: dataSegmentVMSize, fileoff: dataSegmentFileOff, filesize: dataSegmentFileSize, maxprot: VM_PROT_READ or VM_PROT_WRITE, initprot: VM_PROT_READ or VM_PROT_WRITE, nsects: 2)
-	writeMachOSectionHeader(macho, sectname: "__got", segname: "__DATA", addr: gotSectionVMAddr, size: gotSize, offset: dataSegmentFileOff + gotSectionOffset, alignVal: 3, flags: S_REGULAR)
+	writeSegmentCommand(macho, segname: "__DATA", vmaddr: dataSegmentVMAddr, vmsize: dataSegmentVMSize, fileoff: dataSegmentFileOff, filesize: dataSegmentFileSize, maxprot: VM_PROT_READ or VM_PROT_WRITE, initprot: VM_PROT_READ or VM_PROT_WRITE, nsects: dataSectionCount)
+	if hasRdata 'writeConstHeader'
+		writeMachOSectionHeader(macho, sectname: "__const", segname: "__DATA", addr: constSectionVMAddr, size: rdataSize, offset: dataSegmentFileOff, alignVal: 3, flags: S_REGULAR)
+	end 'writeConstHeader'
+	writeMachOSectionHeader(macho, sectname: "__got", segname: "__DATA", addr: gotSectionVMAddr, size: gotSize, offset: dataSegmentFileOff + gotOffsetInData, alignVal: 3, flags: S_REGULAR)
 	writeMachOSectionHeader(macho, sectname: "__heap", segname: "__DATA", addr: heapSectionVMAddr, size: heapVirtualSize, offset: 0, alignVal: 3, flags: S_ZEROFILL)
 
 	// === __LINKEDIT ===
@@ -664,12 +795,6 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 	// === __text section ===
 	macho.append(code)
 
-	// === __const section (rdata) ===
-	if hasRdata 'writeConst'
-		padTo(macho, size: constSectionOffset)
-		macho.append(codeResult.rdata)
-	end 'writeConst'
-
 	// === __symtab section (symbol table) ===
 	if hasSymdata 'writeSymtab'
 		padTo(macho, size: symdataSectionOffset)
@@ -679,7 +804,12 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 	// === Pad __TEXT segment to page boundary ===
 	padTo(macho, size: textSegmentFileSize)
 
-	// === __DATA segment: __got section ===
+	// === __DATA segment: __const (rebased rdata) then __got ===
+	if hasRdata 'writeConst'
+		padTo(macho, size: dataSegmentFileOff)
+		macho.append(codeResult.rdata)
+	end 'writeConst'
+	padTo(macho, size: dataSegmentFileOff + gotOffsetInData)
 	macho.append(got)
 	padTo(macho, size: dataSegmentFileOff + dataSegmentFileSize)
 
