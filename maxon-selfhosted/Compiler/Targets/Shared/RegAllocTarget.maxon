@@ -178,4 +178,15 @@ export interface RegAllocTarget
 	// Source virtuals are resolved through the target's coloring helpers,
 	// so the result is fully physical-ordinal and ready for the sequencer.
 	function classifyCallArgSetup(module TargetModule, packed OpIndex, coloring ColoringResult) returns CallArgKind
+
+	// Classify `packed` as a post-call RESULT-CAPTURE op for the buffered walk
+	// in ApplyColoring. Returns CallArgKind.none for anything that is not a
+	// `mov virtualDest, physReturnReg` (the value/error-flag captures a tryCall
+	// emits after the call). The recognized form resolves to
+	// regToReg(srcOrd: returnReg, dstOrd: color(virtualDest)) — the INVERSE of a
+	// call-arg mov (fixed SOURCE, colored DEST) — so the shared parallel-copy
+	// sequencer can break the swap/chain the colorer may introduce between the
+	// two return registers. A virtual source (the void-result receiver alias) or
+	// a non-return physical source returns none.
+	function classifyCallResultCapture(module TargetModule, packed OpIndex, coloring ColoringResult) returns CallArgKind
 end 'RegAllocTarget'
