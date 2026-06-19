@@ -1537,21 +1537,13 @@ function arm64EmitIatCallOp(code ByteArray, relocations RelocationArray, resultS
 end 'arm64EmitIatCallOp'
 
 // sys.globalAddr: ADR X0, rdata/data label — patched by binary writer after layout.
-// `__data_cov_*` globals live in .covdata; other `__data_*` globals and the
-// slab/MM allocator globals (`__slab_*` and `__mm_*` registered by
-// `registerSlabAndMmGlobalsForDataSection`) live in the writable .data heap
-// arena; everything else resolves against .rdata. The .covdata check must come
-// first because its prefix is a superset of __data_.
+// The label's output section (writable .data heap arena vs read-only .rdata vs
+// .covdata) is decided by the shared classifyGlobalLabel (via
+// arm64RelocKindForLabel) so the data-section global set matches the x64 backend
+// and never silently drops a mutable-global prefix into read-only .rdata.
 function arm64EmitGlobalAddrOp(code ByteArray, rdataRelocs RdataRelocationArray, resultSlot VarSlot, name String)
 	// Record relocation at this instruction offset
-	var relocKind = RdataRelocKind.arm64Adr
-	if name.startsWith("__data_cov_") 'isCovData'
-		relocKind = RdataRelocKind.covdataArm64Adr
-	end 'isCovData' else if name.startsWith("__data_") 'isDataSection'
-		relocKind = RdataRelocKind.dataSectionArm64Adr
-	end 'isDataSection' else if name.startsWith("__slab_") or name.startsWith("__mm_") 'isAllocatorGlobal'
-		relocKind = RdataRelocKind.dataSectionArm64Adr
-	end 'isAllocatorGlobal'
+	let relocKind = arm64RelocKindForLabel(name)
 	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: name, kind: relocKind))
 	// Emit placeholder ADR X0, #0
 	arm64EmitAdr(code, rd: 0, offset: 0)
@@ -2092,16 +2084,14 @@ end 'arm64EmitGlobalStoreOp'
 // then the allocator/runtime mutable-global prefixes (`__slab_`, `__mm_`,
 // `__mrt_`), with everything else falling through to read-only .rdata.
 function arm64RelocKindForLabel(label String) returns RdataRelocKind
-	if label.startsWith("__data_cov_") 'isCovData'
-		return RdataRelocKind.covdataArm64Adr
-	end 'isCovData'
-	if label.startsWith("__data_") 'isDataSection'
-		return RdataRelocKind.dataSectionArm64Adr
-	end 'isDataSection'
-	if label.startsWith("__slab_") or label.startsWith("__mm_") or label.startsWith("__mrt_") 'isMutableGlobal'
-		return RdataRelocKind.dataSectionArm64Adr
-	end 'isMutableGlobal'
-	return RdataRelocKind.arm64Adr
+	// Section class is shared with the x64 backend via classifyGlobalLabel so the
+	// writable-.data global set (incl. __sched_/__gt_/__at_/__subp_/__io_, which an
+	// earlier hand-maintained list here omitted) stays consistent across targets.
+	return match classifyGlobalLabel(label) 'cls'
+		covData gives RdataRelocKind.covdataArm64Adr
+		dataSection gives RdataRelocKind.dataSectionArm64Adr
+		rdata gives RdataRelocKind.arm64Adr
+	end 'cls'
 end 'arm64RelocKindForLabel'
 
 function arm64EmitGlobalLoadFloatOp(code ByteArray, dest Arm64FpVReg, name String, precision FloatPrecision)

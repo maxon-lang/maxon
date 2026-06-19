@@ -2094,49 +2094,15 @@ end 'emitLeaRipRelOp'
 // in the writable .data section, not read-only .rdata. Everything else
 // resolves against .rdata.
 function relocKindForLabel(label String) returns RdataRelocKind
-	if label.startsWith("__data_cov_") 'isCovData'
-		return RdataRelocKind.covdataRipRelDisp32
-	end 'isCovData'
-	if label.startsWith("__data_") 'isDataSection'
-		return RdataRelocKind.dataSectionRipRelDisp32
-	end 'isDataSection'
-	if label.startsWith("__slab_") or label.startsWith("__mm_") 'isAllocatorGlobal'
-		return RdataRelocKind.dataSectionRipRelDisp32
-	end 'isAllocatorGlobal'
-	// Phase B3: the lazy-init argv cache globals used by hand-rolled
-	// `mrt_win32_get_argc` / `mrt_win32_get_argv` are mutable counters and
-	// pointers — they live in writable .data alongside the slab/MM globals.
-	if label.startsWith("__mrt_") 'isMrtGlobal'
-		return RdataRelocKind.dataSectionRipRelDisp32
-	end 'isMrtGlobal'
-	// Tier 4 green-thread runtime state (`__gt_current_p`, run-queue head/tail,
-	// init flag) are mutable .data globals, same as the slab/MM globals.
-	if label.startsWith("__gt_") 'isGtGlobal'
-		return RdataRelocKind.dataSectionRipRelDisp32
-	end 'isGtGlobal'
-	// Tier 4 multi-thread scheduler globals (`__sched_*`: the P array, counters,
-	// flags, CRITICAL_SECTIONs, TLS index) and the async-trace counter/critical
-	// section / tag strings (`__at_*`) are mutable (or, for tag strings, simply
-	// addressed by the runtime) and live in writable .data.
-	if label.startsWith("__sched_") or label.startsWith("__at_") 'isSchedOrTraceGlobal'
-		return RdataRelocKind.dataSectionRipRelDisp32
-	end 'isSchedOrTraceGlobal'
-	// Tier 4 subprocess runtime state (`__subp_last_error`, the FormatMessageA
-	// scratch buffer, the streaming-pipe sequence counter) and its addressed
-	// string constants (`__subp_err_*`, `__subp_nul_*`, `__subp_pipe_name_*`)
-	// all live in writable .data — the mutable ones are written by the runtime,
-	// the strings are merely LEA'd (same model as the `__at_` tag strings).
-	if label.startsWith("__subp_") 'isSubprocessGlobal'
-		return RdataRelocKind.dataSectionRipRelDisp32
-	end 'isSubprocessGlobal'
-	// Tier 4 async-I/O IOCP machinery state (`__io_iocp`, the thread HANDLEs, the
-	// two queue head/tail + CRITICAL_SECTION + Event slots, the ConnectEx pointer)
-	// plus the addressed `__io_panic_msg` string — all registered in writable .data
-	// by `registerSlabAndMmGlobalsForDataSection`, same model as the `__subp_` set.
-	if label.startsWith("__io_") 'isIoGlobal'
-		return RdataRelocKind.dataSectionRipRelDisp32
-	end 'isIoGlobal'
-	return RdataRelocKind.ripRelDisp32
+	// Section class (which prefixes are writable-.data globals) is shared with the
+	// arm64 backend via classifyGlobalLabel — see its doc for the full set
+	// (__data_/__slab_/__mm_/__mrt_/__gt_/__sched_/__at_/__subp_/__io_ are .data;
+	// __data_cov_ is .covdata; everything else .rdata).
+	return match classifyGlobalLabel(label) 'cls'
+		covData gives RdataRelocKind.covdataRipRelDisp32
+		dataSection gives RdataRelocKind.dataSectionRipRelDisp32
+		rdata gives RdataRelocKind.ripRelDisp32
+	end 'cls'
 end 'relocKindForLabel'
 
 // --- LEA func addr: lea dest, [rip+funcName] ---
