@@ -94,9 +94,17 @@ export function determineJumpKindInBlock(module MirModule, block IrBlock) return
 end 'determineJumpKindInBlock'
 
 // Determine the jump kind, optionally verifying the comparison defines condId.
-// If condId >= 0, only a comparison that defines condId is accepted.
+// If condId >= 0, the fused comparison jumpKind is returned ONLY when the last
+// comparison before the branch (first found scanning back — intervening
+// cset/mov/orr leave the flags from that compare intact) is the op that produced
+// condId. If condId came from a later combinator instead (e.g. an or-pattern's
+// `(x==a) | (x==b) | (x==c)`), the stale compare flags do NOT reflect condId, so
+// a fused flags-branch would test the wrong thing — fall back to boolTest, which
+// emits an explicit `cmp condId, #0`. On x64 the combining `or` sets ZF so the
+// fused branch is correct there; arm64's `orr` leaves NZCV untouched, which is
+// why the pinned-condId form is needed for the arm64 lowering.
 // If condId < 0, the first comparison found (scanning backward) is used.
-function determineJumpKindForCond(module MirModule, block IrBlock, condId ValueId) returns JumpKind
+export function determineJumpKindForCond(module MirModule, block IrBlock, condId ValueId) returns JumpKind
 	var j = block.opRefs.count() - 1
 	while j >= 0 'scanBack'
 		let opIdx = try block.opRefs.get(j) otherwise 'skipBack'
@@ -107,15 +115,13 @@ function determineJumpKindForCond(module MirModule, block IrBlock, condId ValueI
 			j = j - 1
 			continue
 		end 'notCmp'
-		// If condId specified, verify this comparison defines it
+		// This is the last flag-setting comparison before the branch. When condId
+		// is pinned, the fused branch is valid only if THIS compare produced it;
+		// otherwise the live flags belong to a different value -> boolTest.
 		if condId >= 0 'checkResultId'
-			let defId = try getCmpResultIdFromOpIdx(module, opIdx: opIdx) otherwise 'noResultId'
-				j = j - 1
-				continue
-			end 'noResultId'
+			let defId = try getCmpResultIdFromOpIdx(module, opIdx: opIdx) otherwise return JumpKind.boolTest
 			if defId != condId 'wrongCmp'
-				j = j - 1
-				continue
+				return JumpKind.boolTest
 			end 'wrongCmp'
 		end 'checkResultId'
 		return kind

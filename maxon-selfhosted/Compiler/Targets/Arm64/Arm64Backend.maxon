@@ -24,6 +24,33 @@ union Arm64FloatBinKind
 	max
 end 'Arm64FloatBinKind'
 
+// Pick the conditional-branch jump kind for a block's terminator. Only a
+// condBranch consumes a fused comparison jumpKind, and the fusion is valid ONLY
+// when the branch's condId is the DIRECT result of the last comparison. Pinning
+// condId routes or-pattern conditions (`(x==a) | (x==b) | (x==c)`, whose result
+// arm64 builds with `orr` — which leaves NZCV untouched) to boolTest, so the
+// branch tests the OR result via an explicit `cmp #0` instead of the last
+// alternative's stale compare flags. Non-condBranch terminators never use the
+// jumpKind, so boolTest is a safe default for them.
+function arm64BlockJumpKind(mirModule MirModule, srcBlock IrBlock) returns JumpKind
+	if not srcBlock.hasTerminatorOp() 'noTerm'
+		return JumpKind.boolTest
+	end 'noTerm'
+	let termOp = try mirModule.ops.get(srcBlock.terminatorIndex()) otherwise panic("arm64BlockJumpKind: terminator op not in mirModule.ops")
+	// Only condBranch consumes a fused comparison jumpKind. Cover every other
+	// MirOp variant with range patterns (mirroring stashMirEdgesArm64) so the
+	// match stays exhaustive without a `default` — all of them yield boolTest,
+	// which the terminator lowering ignores for non-condBranch terminators.
+	match termOp 'term'
+		condBranch(condId, _, _, _, _) then return determineJumpKindForCond(mirModule, block: srcBlock, condId: condId)
+		branch then return JumpKind.boolTest
+		movImm to cmp then return JumpKind.boolTest
+		call to loadByte then return JumpKind.boolTest
+		osAllocPages to osLockRelease then return JumpKind.boolTest
+		tryCall to errorReturn then return JumpKind.boolTest
+	end 'term'
+end 'arm64BlockJumpKind'
+
 export type Arm64Backend implements TargetBackend
 	var mirModule as MirModule
 	var target as Target
@@ -256,7 +283,7 @@ export type Arm64Backend implements TargetBackend
 			let srcBlock = try mirModule.blocks.get(blockRef) otherwise panic("invariant: blockRef from srcFunc.blockRefs not in mirModule.blocks")
 			var dstBlock = try blockByBlockId.get(srcBlock.id) otherwise panic("invariant: blockByBlockId not populated for srcBlock.id (createBlocks loop sets it for every srcBlock)")
 
-			let condBrJumpKind = determineJumpKindInBlock(mirModule, block: srcBlock)
+			let condBrJumpKind = arm64BlockJumpKind(mirModule, srcBlock: srcBlock)
 
 			// Stash outgoing branch args on the target block's edges.
 			if srcBlock.hasTerminatorOp() 'stashEdges'
