@@ -197,6 +197,27 @@ export type Arm64Backend implements TargetBackend
 			end 'updateMax'
 		end 'countLive'
 
+		// Reserve the SCRATCH-BUFFER footprint of address-taken (escaped) slots.
+		// A stdlib runtime helper that takes `&slot` (e.g. `mrt_i64_to_string`'s
+		// `stackAddr 2`) uses it as the base of a multi-slot byte buffer (the
+		// 21-byte decimal encoding spans slots 2..4). arm64 lays slots out UPWARD
+		// from x29 (`x29 + 16 + slot*8`), so the buffer grows into the slots that
+		// follow it; if temp/spill slots started right after the escaped slot they
+		// would alias the buffer and get clobbered mid-write — corrupting the high
+		// digits and leaving a half-built String that over-releases on destroy.
+		// Bumping liveSlotCount past the buffer pushes `nextTempSlot` (and, via
+		// varSlotCount, the spill base) above it. x64 grows slots DOWNWARD, so its
+		// buffer extends toward the already-reserved param slots and needs no
+		// reservation. SCRATCH_BUFFER_SLOTS covers the largest stdlib scratch (the
+		// 21-byte i64/f64 decimal buffers → slots S, S+1, S+2).
+		let SCRATCH_BUFFER_SLOTS = 3
+		for slot in scanEscapedSlots(mirModule, func: srcFunc) 'reserveEscaped'
+			let neededCount = slot + SCRATCH_BUFFER_SLOTS
+			if neededCount > liveSlotCount 'bumpEscaped'
+				liveSlotCount = neededCount
+			end 'bumpEscaped'
+		end 'reserveEscaped'
+
 		var sysOpTempCount = 0
 		for blockRef in srcFunc.blockRefs 'countSysTemps'
 			let block = try mirModule.blocks.get(blockRef) otherwise panic("invariant: blockRef from srcFunc.blockRefs not in mirModule.blocks")

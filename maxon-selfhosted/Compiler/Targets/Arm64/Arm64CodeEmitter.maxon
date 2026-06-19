@@ -331,20 +331,35 @@ function arm64EmitMovRegReg(code ByteArray, rd MachineWord, rn MachineWord)
 	arm64EmitInsn(code, insn: insn)
 end 'arm64EmitMovRegReg'
 
-// STUR Xt, [X29, #offset] — store to signed byte offset from frame pointer
+// Store a spilled register to [X29 + byteOffset]. Spill offsets are positive and
+// 8-byte aligned (see `computeStackOffset`). Small offsets use the unscaled STUR
+// (simm9, signed -256..255); LARGER frames MUST use the scaled unsigned STR
+// (imm12 * 8, range 0..32760) — STUR's 9-bit field silently truncates any offset
+// >= 256, so a frame past ~256 bytes (e.g. a function with many string/int
+// interpolations) would spill to the WRONG slot and corrupt live data. The
+// reload path mirrors this exactly.
 function arm64EmitSpillToStack(code ByteArray, rt MachineWord, byteOffset MachineWord)
-	// STUR Xt, [Xn, #simm9]: 0xF8000000 | (imm9 << 12) | (Xn << 5) | Xt
-	let imm9 = byteOffset and 0x1FF
-	let insn = 0xF8000000 or (imm9 shl 12) or (29 shl 5) or rt
-	arm64EmitInsn(code, insn: insn)
+	if byteOffset < 256 'fitsSimm9'
+		// STUR Xt, [X29, #simm9]: 0xF8000000 | (imm9 << 12) | (Xn << 5) | Xt
+		let insn = 0xF8000000 or ((byteOffset and 0x1FF) shl 12) or (29 shl 5) or rt
+		arm64EmitInsn(code, insn: insn)
+	end 'fitsSimm9' else 'scaled'
+		// STR Xt, [X29, #imm12*8] (scaled unsigned offset)
+		arm64EmitStrRegOffset(code, rt: rt, baseReg: 29, offset: byteOffset)
+	end 'scaled'
 end 'arm64EmitSpillToStack'
 
-// LDUR Xt, [X29, #offset] — load from signed byte offset from frame pointer
+// Reload a spilled register from [X29 + byteOffset]. See `arm64EmitSpillToStack`
+// for the simm9-vs-scaled offset rationale.
 function arm64EmitReloadFromStack(code ByteArray, rt MachineWord, byteOffset MachineWord)
-	// LDUR Xt, [Xn, #simm9]: 0xF8400000 | (imm9 << 12) | (Xn << 5) | Xt
-	let imm9 = byteOffset and 0x1FF
-	let insn = 0xF8400000 or (imm9 shl 12) or (29 shl 5) or rt
-	arm64EmitInsn(code, insn: insn)
+	if byteOffset < 256 'fitsSimm9'
+		// LDUR Xt, [X29, #simm9]: 0xF8400000 | (imm9 << 12) | (Xn << 5) | Xt
+		let insn = 0xF8400000 or ((byteOffset and 0x1FF) shl 12) or (29 shl 5) or rt
+		arm64EmitInsn(code, insn: insn)
+	end 'fitsSimm9' else 'scaled'
+		// LDR Xt, [X29, #imm12*8] (scaled unsigned offset)
+		arm64EmitLdrRegOffset(code, rt: rt, baseReg: 29, offset: byteOffset)
+	end 'scaled'
 end 'arm64EmitReloadFromStack'
 
 // LDR Xt, [X29, #incomingOffset] — load an incoming overflow stack param.

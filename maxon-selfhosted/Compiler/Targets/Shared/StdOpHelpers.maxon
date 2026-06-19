@@ -358,6 +358,32 @@ export function scanLoadedSlots(module MirModule, func IrFunction) returns VarSl
 	return loaded
 end 'scanLoadedSlots'
 
+// Slots whose ADDRESS is taken via `stackSlotAddr`. The stdlib runtime helpers
+// use such a slot as the base of a multi-slot SCRATCH BUFFER addressed by
+// pointer arithmetic (e.g. `mrt_i64_to_string`'s 21-byte decimal buffer at
+// `stackAddr 2`, spanning slots 2..4). Callers must reserve the buffer's full
+// footprint so other slots/spills don't alias it — see the arm64 backend's
+// escaped-slot reservation.
+export function scanEscapedSlots(module MirModule, func IrFunction) returns VarSlotArray
+	var escaped = VarSlotArray.create()
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
+		for opIdx in block.opRefs 'eachOp'
+			let mirOp = try module.ops.get(opIdx) otherwise panic("invariant: opIdx from block.opRefs not in module.ops")
+			match mirOp 'checkMir'
+				stackSlotAddr(_, slotId) then escaped.push(slotId)
+				loadSlot then break 'checkMir'
+				storeSlot then break 'checkMir'
+				movImm to store then break 'checkMir'
+				globalAddr to loadByte then break 'checkMir'
+				osAllocPages to osLockRelease then break 'checkMir'
+				tryCall to errorReturn then break 'checkMir'
+			end 'checkMir'
+		end 'eachOp'
+	end 'eachBlock'
+	return escaped
+end 'scanEscapedSlots'
+
 // ============================================================
 // Diverging block detection (MIR phase)
 // ============================================================
