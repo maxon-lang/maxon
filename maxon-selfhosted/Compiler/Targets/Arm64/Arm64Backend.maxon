@@ -2628,6 +2628,13 @@ export function concatArm64FunctionChunks(project Project, chunks FunctionCodeCh
 	end 'checkMacos'
 	if isMacosOs 'emitMacosSubprocess'
 		emitArm64MacosSubprocess(code, relocations: relocations, callFixups: callFixups, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+		// arm64-macos green-thread (async/await + cooperative sleep) runtime:
+		// hand-emit the `__gt_*` / `maxon_sleep` bodies (single-OS-thread cooperative
+		// scheduler) so they override the signature-only stubs in runtime.std. Emitted
+		// in the same post-stdlib-link position as the subprocess runtime; the recorded
+		// labels win via upsert. Needs rdataRelocs (global ADRs) + adrFixups
+		// (__gt_trampoline's func-address ADR) beyond the subprocess emitter's args.
+		emitArm64MacosGreenThread(code, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs, adrFixups: adrFixups, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
 	end 'emitMacosSubprocess'
 
 	let symdata = buildSymbolTable(labelNames, funcLabelOffsets: labelOffsets)
