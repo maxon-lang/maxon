@@ -2243,8 +2243,59 @@ export type Arm64Backend implements TargetBackend
 		var argIds = ValueIdArray.create()
 		argIds.push(cStringPtrId)
 		argIds.push(statBufPtrId)
-		return lowerFileIoOpArm64(resultId, opName: "osFileStat", valueArgIds: argIds, prependAtFdCwd: true, appendZeroFlags: true, linuxSyscallNum: 79, winCallee: "mrt_win32_stat", macosImportSlot: MACHO_IMPORT_SLOT_STAT, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
+		let afterCall = lowerFileIoOpArm64(resultId, opName: "osFileStat", valueArgIds: argIds, prependAtFdCwd: true, appendZeroFlags: true, linuxSyscallNum: 79, winCallee: "mrt_win32_stat", macosImportSlot: MACHO_IMPORT_SLOT_STAT, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
+		// macOS `_stat` fills the BSD struct stat (arm64, 64-bit-inode), whose
+		// field offsets differ from the Linux layout that `mrt_file_stat`
+		// (runtime.std) reads. Repack the fields the runtime consumes into the
+		// Linux offsets in-place, mirroring how the open() path translates flag
+		// bits in the backend rather than making runtime.std OS-conditional.
+		return match osDesc.os 'os'
+			macos gives emitMacosStatRepackArm64(statBufPtrId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: afterCall)
+			linux gives afterCall
+			windows gives afterCall
+			wasi gives afterCall
+		end 'os'
 	end 'lowerOsFileStatArm64'
+
+	// Repack the macOS struct stat at [statBuf] into the Linux field offsets that
+	// `mrt_file_stat` reads. Source (macOS BSD, 64-bit-inode): st_mode@4 (u16),
+	// st_atimespec.tv_sec@32, st_mtimespec.tv_sec@48, st_ctimespec.tv_sec@64,
+	// st_size@96. Destination (Linux): st_mode@24, st_atim@72, st_mtim@88,
+	// st_ctim@104, st_size@48. ALL FIVE source fields are read into registers
+	// FIRST because the Linux size store (@48) overwrites the macOS mtime source
+	// (@48); the destination offsets the runtime never reads are free to clobber.
+	// Runs unconditionally — on a stat failure mrt_file_stat takes its error path
+	// without reading the buffer, so repacking the (heap-allocated, always-mapped)
+	// 144-byte buffer's garbage is harmless.
+	function emitMacosStatRepackArm64(statBufPtrId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+		let bufSlot = ensureValueInSlotArm64(statBufPtrId, valueSlots: valueSlots, nextTempSlot: nextTempSlot, dstBlock: dstBlock)
+		var tempSlot = nextTempSlot
+		if bufSlot == nextTempSlot 'usedTemp'
+			tempSlot = tempSlot + 1
+		end 'usedTemp'
+
+		let base = arm64PhysReg(Arm64Register.x9)
+		let mode = arm64PhysReg(Arm64Register.x10)
+		let size = arm64PhysReg(Arm64Register.x11)
+		let atime = arm64PhysReg(Arm64Register.x12)
+		let mtime = arm64PhysReg(Arm64Register.x13)
+		let ctime = arm64PhysReg(Arm64Register.x14)
+
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.ldrFromSlot(base, slotIndex: bufSlot))
+		// Read all five macOS-layout fields first.
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.loadIndirect(mode, baseReg: base, offset: 4, width: StoreWidth.halfword, signed: false))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.loadIndirect(size, baseReg: base, offset: 96, width: StoreWidth.qword, signed: false))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.loadIndirect(atime, baseReg: base, offset: 32, width: StoreWidth.qword, signed: false))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.loadIndirect(mtime, baseReg: base, offset: 48, width: StoreWidth.qword, signed: false))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.loadIndirect(ctime, baseReg: base, offset: 64, width: StoreWidth.qword, signed: false))
+		// Write them to the Linux offsets the runtime reads.
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.storeIndirect(base, offset: 24, srcReg: mode, width: StoreWidth.qword))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.storeIndirect(base, offset: 48, srcReg: size, width: StoreWidth.qword))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.storeIndirect(base, offset: 72, srcReg: atime, width: StoreWidth.qword))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.storeIndirect(base, offset: 88, srcReg: mtime, width: StoreWidth.qword))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.storeIndirect(base, offset: 104, srcReg: ctime, width: StoreWidth.qword))
+		return tempSlot
+	end 'emitMacosStatRepackArm64'
 
 	function lowerOsFileAccessArm64(resultId ValueId, cStringPtrId ValueId, modeId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
 		var argIds = ValueIdArray.create()
