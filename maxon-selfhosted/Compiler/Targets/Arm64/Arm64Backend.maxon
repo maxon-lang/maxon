@@ -2203,9 +2203,13 @@ export type Arm64Backend implements TargetBackend
 		argSlots.push(macFlagsSlot)
 		let resultSlot = tempSlot
 		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.iatCall(resultSlot, slotIndex: MACHO_IMPORT_SLOT_OPEN, argSlots: argSlots))
+		tempSlot = tempSlot + 1
+		// Map a -1 failure to -errno so DirectoryOpenSearchError / FileOpenError
+		// classify (notFound, accessDenied, ...) instead of always hitting catchAll.
+		tempSlot = emitMacosErrnoFixupArm64(resultSlot, dstBlock: dstBlock, nextTempSlot: tempSlot)
 		valueSlotMapSet(valueSlots, valueId: resultId, slot: resultSlot)
 		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.ldrFromSlot(Arm64VReg.virtual(resultId), slotIndex: resultSlot))
-		return tempSlot + 1
+		return tempSlot
 	end 'lowerOsFileOpenMacosArm64'
 
 	// Branchless translation of canonical (Linux) open() flags to macOS bit
@@ -2215,6 +2219,7 @@ export type Arm64Backend implements TargetBackend
 	//            | ((lin & 0x200) << 1)      // O_TRUNC  0x200 -> 0x400
 	//            | ((lin & 0x400) >> 7)      // O_APPEND 0x400 -> 0x8
 	//            | ((lin & 0x80)  << 4)      // O_EXCL   0x80  -> 0x800
+	//            | ((lin & 0x10000) << 4)    // O_DIRECTORY 0x10000 -> 0x100000
 	// x0=lin (preserved), x1=acc, x2=tmp, x3=mask/shift scratch.
 	function emitMacosOpenFlagXlateArm64(linFlagsSlot VarSlot, macFlagsSlot VarSlot, dstBlock IrBlock)
 		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.ldrFromSlot(arm64PhysReg(Arm64Register.x0), slotIndex: linFlagsSlot))
@@ -2225,6 +2230,7 @@ export type Arm64Backend implements TargetBackend
 		emitMacosOpenFlagTermArm64(0x200, shift: 1, shiftLeft: true, dstBlock: dstBlock)
 		emitMacosOpenFlagTermArm64(0x400, shift: 7, shiftLeft: false, dstBlock: dstBlock)
 		emitMacosOpenFlagTermArm64(0x80, shift: 4, shiftLeft: true, dstBlock: dstBlock)
+		emitMacosOpenFlagTermArm64(0x10000, shift: 4, shiftLeft: true, dstBlock: dstBlock)
 		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.strToSlot(macFlagsSlot, src: arm64PhysReg(Arm64Register.x1)))
 	end 'emitMacosOpenFlagXlateArm64'
 
@@ -2241,6 +2247,33 @@ export type Arm64Backend implements TargetBackend
 		end 'right'
 		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.orrRegs(arm64PhysReg(Arm64Register.x1), src1: arm64PhysReg(Arm64Register.x1), src2: arm64PhysReg(Arm64Register.x2)))
 	end 'emitMacosOpenFlagTermArm64'
+
+	// Rewrite a libSystem failure return (-1) in `resultSlot` into Linux-style
+	// -errno, leaving any non-negative success value untouched. macOS libc sets
+	// the thread-local errno and returns -1; the shared runtime classifiers
+	// (e.g. mrt_select_io_error_flag) decode the Linux `-errno` convention, so
+	// without this an open() of a missing path reports EPERM (-(-1)=1) instead of
+	// notFound (ENOENT=2). errno is `*___error()`. Branchless: result = (result <
+	// 0) ? -errno : result. Uses scratch x9..x13. Returns the bumped temp slot.
+	function emitMacosErrnoFixupArm64(resultSlot VarSlot, dstBlock IrBlock, nextTempSlot SlotIndex) returns SlotIndex
+		let errPtrSlot = nextTempSlot
+		let argSlots = VarSlotArray.create()
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.iatCall(errPtrSlot, slotIndex: MACHO_IMPORT_SLOT_ERROR, argSlots: argSlots))
+		let base = arm64PhysReg(Arm64Register.x9)
+		let errnoReg = arm64PhysReg(Arm64Register.x10)
+		let negErrno = arm64PhysReg(Arm64Register.x11)
+		let result = arm64PhysReg(Arm64Register.x12)
+		let zero = arm64PhysReg(Arm64Register.x13)
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.ldrFromSlot(base, slotIndex: errPtrSlot))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.loadIndirect(errnoReg, baseReg: base, offset: 0, width: StoreWidth.word, signed: true))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.negReg(negErrno, src: errnoReg))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.ldrFromSlot(result, slotIndex: resultSlot))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movImm(zero, value: 0))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.cmpRegs(result, src2: zero))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.csel(result, src1: negErrno, src2: result, condition: Arm64CondCode.lt))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.strToSlot(resultSlot, src: result))
+		return nextTempSlot + 1
+	end 'emitMacosErrnoFixupArm64'
 
 	function lowerOsFileReadArm64(resultId ValueId, fdId ValueId, bufPtrId ValueId, countId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
 		var argIds = ValueIdArray.create()
@@ -2410,12 +2443,76 @@ export type Arm64Backend implements TargetBackend
 
 	// `mrt_win32_getdents64` — see runtime.std for wrapper-block layout.
 	function lowerOsDirGetdents64Arm64(resultId ValueId, fdId ValueId, bufPtrId ValueId, bufSizeId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
+		let getdentsOnMacos = match osDesc.os 'os'
+			macos gives true
+			linux gives false
+			windows gives false
+			wasi gives false
+		end 'os'
+		if getdentsOnMacos 'macos'
+			return lowerOsDirGetdents64MacosArm64(resultId, fdId: fdId, bufPtrId: bufPtrId, bufSizeId: bufSizeId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+		end 'macos'
+
 		var argIds = ValueIdArray.create()
 		argIds.push(fdId)
 		argIds.push(bufPtrId)
 		argIds.push(bufSizeId)
 		return lowerFileIoOpArm64(resultId, opName: "osDirGetdents64", valueArgIds: argIds, prependAtFdCwd: false, appendZeroFlags: false, linuxSyscallNum: 61, winCallee: "mrt_win32_getdents64", macosImportSlot: -1, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
 	end 'lowerOsDirGetdents64Arm64'
+
+	// macOS directory read. macOS arm64 has no usable `getdirentries`/`getdents64`
+	// export, so we call the lower-level `___getdirentries64(fd, buf, nbytes,
+	// &basep)` (4 args; the 4th is a `long*` seek cookie the kernel writes). The
+	// returned BSD dirent records (d_reclen u16@16, d_namlen u16@18, d_type u8@20,
+	// d_name@21) differ from the Linux dirent64 layout (d_name@19) that the shared
+	// `mrt_directory_next` parser expects, so the buffer is relaid out in place by
+	// the `mrt_macos_dirent_relayout` runtime helper (kept alive for arm64-macos by
+	// `seedRuntimeBackendEdges`). The helper returns the byte count unchanged, so
+	// the op's result still reports bytes-filled exactly like Linux getdents64.
+	function lowerOsDirGetdents64MacosArm64(resultId ValueId, fdId ValueId, bufPtrId ValueId, bufSizeId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+		var tempSlot = nextTempSlot
+		let (fdSlot, afterFd) = reserveValueArm64(fdId, valueSlots: valueSlots, tempSlot: tempSlot, dstBlock: dstBlock)
+		tempSlot = afterFd
+		let (bufSlot, afterBuf) = reserveValueArm64(bufPtrId, valueSlots: valueSlots, tempSlot: tempSlot, dstBlock: dstBlock)
+		tempSlot = afterBuf
+		let (countSlot, afterCount) = reserveValueArm64(bufSizeId, valueSlots: valueSlots, tempSlot: tempSlot, dstBlock: dstBlock)
+		tempSlot = afterCount
+
+		// basep: a single i64 stack slot, zero-initialized (the kernel reads it as
+		// an in/out seek cookie; sequential reads advance the fd offset anyway).
+		let basepSlot = tempSlot
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movImm(arm64PhysReg(Arm64Register.x0), value: 0))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.strToSlot(basepSlot, src: arm64PhysReg(Arm64Register.x0)))
+		tempSlot = tempSlot + 1
+		let basepAddrSlot = tempSlot
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.stackAddrOp(basepAddrSlot, targetSlot: basepSlot))
+		tempSlot = tempSlot + 1
+
+		// ___getdirentries64(fd, buf, nbytes, &basep) -> bytes filled (or -1).
+		var argSlots = VarSlotArray.create()
+		argSlots.push(fdSlot)
+		argSlots.push(bufSlot)
+		argSlots.push(countSlot)
+		argSlots.push(basepAddrSlot)
+		let resultSlot = tempSlot
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.iatCall(resultSlot, slotIndex: MACHO_IMPORT_SLOT_GETDIRENTRIES64, argSlots: argSlots))
+		valueSlotMapSet(valueSlots, valueId: resultId, slot: resultSlot)
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.ldrFromSlot(Arm64VReg.virtual(resultId), slotIndex: resultSlot))
+		tempSlot = tempSlot + 1
+
+		// Relayout BSD dirents -> Linux dirent64 layout in place via the runtime
+		// helper mrt_macos_dirent_relayout(buf, nbytes). It mutates `buf` in place
+		// and returns nbytes unchanged, so the call is purely for its side effect:
+		// `resultId` already holds nbytes (the getdents result == the helper's
+		// return) and is defined exactly once above. Args are moved from virtual
+		// registers (the proven emitArm64DirectCallHandRolled pattern); the return
+		// value in x0 is discarded. resultId is live across the call and spilled by
+		// the register allocator (branchLink clobbers all caller-saved GPRs).
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movRegReg(arm64PhysReg(Arm64Register.x0), src: Arm64VReg.virtual(bufPtrId)))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movRegReg(arm64PhysReg(Arm64Register.x1), src: Arm64VReg.virtual(resultId)))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.branchLink("mrt_macos_dirent_relayout"))
+		return tempSlot
+	end 'lowerOsDirGetdents64MacosArm64'
 
 	function lowerOsDirGetcwdArm64(resultId ValueId, bufPtrId ValueId, bufSizeId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
 		var argIds = ValueIdArray.create()

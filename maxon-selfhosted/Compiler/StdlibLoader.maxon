@@ -1920,6 +1920,26 @@ function lazyNeededClosure(project Project, seeds StringArray) returns StdlibFun
 				end 'eachImpl'
 			end 'haveBucket'
 		end 'eachCondRoot'
+
+		// Backend-synthesized runtime edges (e.g. arm64-macos osDirGetdents64 ->
+		// mrt_macos_dirent_relayout): the per-arch lowering emits the `bl`, so no
+		// Std-IR `call` op records the edge and the callee would otherwise stay a
+		// 0-byte signature stub. Mirror the runtime DCE filter's seedNativeBackendEdges.
+		// A leaf callee (no outgoing calls) is absent from `lazyStdlibFuncEdges`, so
+		// `resolveLazyEdgeKey` returns "" for it — fall back to the raw name, which
+		// still matches its `lazyStdlibMir` entry so the fill selects it (without this
+		// the callee never leaves stub state and the caller's `bl` lands on the next
+		// function's bytes).
+		for callee in backendSynthesizedRuntimeEdges(name, target: project.target) 'backendEdge'
+			var backendName = resolveLazyEdgeKey(callee)
+			if backendName.isEmpty() 'noEdge'
+				backendName = callee
+			end 'noEdge'
+			if not needed.contains(backendName) 'newBackendDep'
+				needed.insert(backendName)
+				worklist.push(backendName)
+			end 'newBackendDep'
+		end 'backendEdge'
 	end 'walk'
 
 	return needed

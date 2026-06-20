@@ -1009,7 +1009,7 @@ function filterRuntimeByReachability(runtime StdModule, userModule StdModule, ta
 		if let func = try runtimeMap.get(name) 'isRuntime'
 			collectRuntimeReachFromFunc(runtime, func: func, runtimeMap: runtimeMap, seen: seen, worklist: worklist)
 		end 'isRuntime'
-		seedRuntimeBackendEdges(name, cpu: cpu, runtimeMap: runtimeMap, seen: seen, worklist: worklist)
+		seedRuntimeBackendEdges(name, target: target, runtimeMap: runtimeMap, seen: seen, worklist: worklist)
 		i = i + 1
 	end 'walk'
 
@@ -1166,12 +1166,43 @@ end 'appendCalleeFromStdSystemOp'
 // their caller does. Native (x64-windows / x64-linux / arm64-macos)
 // emits the bodies as written, so the IR walk catches every edge and
 // this hook is a no-op there.
-function seedRuntimeBackendEdges(funcName String, cpu CpuArch, runtimeMap RuntimeFuncByName, seen RuntimeReachSet, worklist StringArray)
-	match cpu 'arch'
-		x64 to arm64 then return
+function seedRuntimeBackendEdges(funcName String, target Target, runtimeMap RuntimeFuncByName, seen RuntimeReachSet, worklist StringArray)
+	match target.cpu 'arch'
+		x64 to arm64 then seedNativeBackendEdges(funcName, target: target, runtimeMap: runtimeMap, seen: seen, worklist: worklist)
 		wasm32 then seedRuntimeBackendEdgesWasm(funcName, runtimeMap: runtimeMap, seen: seen, worklist: worklist)
 	end 'arch'
 end 'seedRuntimeBackendEdges'
+
+function seedNativeBackendEdges(funcName String, target Target, runtimeMap RuntimeFuncByName, seen RuntimeReachSet, worklist StringArray)
+	for callee in backendSynthesizedRuntimeEdges(funcName, target: target) 'edge'
+		seedRuntimeReachName(callee, runtimeMap: runtimeMap, seen: seen, worklist: worklist)
+	end 'edge'
+end 'seedNativeBackendEdges'
+
+// Backend-synthesized runtime call edges that no Std-IR `call` op records: a
+// per-arch lowering emits a `bl`/`call` into these helpers, so the callee has no
+// IR-level caller for any reachability walk to follow. On arm64-macos the
+// osDirGetdents64 lowering branches into `mrt_macos_dirent_relayout` after the
+// ___getdirentries64 import (Linux/Windows arm64 lower it without that call, so
+// the edge is macOS-gated). EVERY reachability closure must add these or the
+// callee compiles/links as a 0-byte signature stub: the runtime DCE filter
+// (seedNativeBackendEdges) AND the v80 lazy-codegen needed-closure
+// (lazyNeededClosure) both consume this. Native only — wasm edges live in
+// seedRuntimeBackendEdgesWasm (wasm always merges the full runtime, so its lazy
+// path never strands a helper).
+export function backendSynthesizedRuntimeEdges(funcName String, target Target) returns StringArray
+	var edges = StringArray.create()
+	let isMacos = match target.os 'os'
+		macos gives true
+		windows gives false
+		linux gives false
+		wasi gives false
+	end 'os'
+	if target.cpu == CpuArch.arm64 and isMacos and funcName == "mrt_directory_next" 'dirRelayout'
+		edges.push("mrt_macos_dirent_relayout")
+	end 'dirRelayout'
+	return edges
+end 'backendSynthesizedRuntimeEdges'
 
 function seedRuntimeBackendEdgesWasm(funcName String, runtimeMap RuntimeFuncByName, seen RuntimeReachSet, worklist StringArray)
 	// MirToWasm's emitWasm* helpers synthesize calls into other runtime

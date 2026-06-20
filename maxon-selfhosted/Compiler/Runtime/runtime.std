@@ -2493,6 +2493,81 @@ func mrt_file_size 1 i64
     std errorReturn v16 v17
 end
 
+// mrt_strip_trailing_dir_glob(cstr) -> cstr. stdlib Directory.list / openSearch
+// build the search pattern as "<dir><sep>*"; on POSIX targets <sep> is '/', so
+// the pattern ends in "/*". POSIX open() needs the bare directory path, so this
+// truncates a trailing "/*" by writing a NUL over the '/'. Windows patterns end
+// in "\*" (separator differs), so they never match and are left intact to drive
+// FindFirstFileW. The cstr is the fresh, owned buffer from mrt_cstr_from_mm, so
+// truncating it in place is safe. Returns the same pointer.
+//
+// Slot usage:
+//   slot 0 = cstr
+//   slot 1 = scan index / length
+func mrt_strip_trailing_dir_glob 1 i64
+  block entry:
+    v0 = std param 0 i64
+    std storeSlot 0 v0
+    v1 = std constI64 0
+    std storeSlot 1 v1
+    std br scan
+
+  block scan:
+    v2 = std loadSlot 0
+    v3 = std loadSlot 1
+    v4 = std loadByte v2 v3
+    v5 = std constI64 0
+    v6 = std cmpI64Eq v4 v5
+    std condBr v6 check incr
+
+  block incr:
+    v7 = std loadSlot 1
+    v8 = std constI64 1
+    v9 = std addI64 v7 v8
+    std storeSlot 1 v9
+    std br scan
+
+  block check:
+    // Need len >= 2 to hold a trailing "/*".
+    v10 = std loadSlot 1
+    v11 = std constI64 2
+    v12 = std cmpI64Lt v10 v11
+    std condBr v12 done test_star
+
+  block test_star:
+    v13 = std loadSlot 0
+    v14 = std loadSlot 1
+    v15 = std constI64 1
+    v16 = std subI64 v14 v15
+    v17 = std loadByte v13 v16
+    v18 = std constI64 42
+    v19 = std cmpI64Eq v17 v18
+    std condBr v19 test_slash done
+
+  block test_slash:
+    v20 = std loadSlot 0
+    v21 = std loadSlot 1
+    v22 = std constI64 2
+    v23 = std subI64 v21 v22
+    v24 = std loadByte v20 v23
+    v25 = std constI64 47
+    v26 = std cmpI64Eq v24 v25
+    std condBr v26 do_strip done
+
+  block do_strip:
+    v27 = std loadSlot 0
+    v28 = std loadSlot 1
+    v29 = std constI64 2
+    v30 = std subI64 v28 v29
+    v31 = std constI64 0
+    std storeByte v27 v30 v31
+    std br done
+
+  block done:
+    v32 = std loadSlot 0
+    std ret v32
+end
+
 // mrt_directory_open_search(pattern) throws -> __ManagedDirectory ptr.
 // On Linux directory enumeration uses opendir/readdir-equivalent (open +
 // getdents64). We allocate a 40-byte handle block:
@@ -2518,6 +2593,10 @@ func mrt_directory_open_search 1 i64
 
     v1 = std call mrt_cstr_from_mm v0
     std storeSlot 1 v1
+
+    // Drop the stdlib-appended "/*" glob suffix (POSIX wants the bare dir path;
+    // Windows "\*" patterns are left intact). In-place truncation on the owned cstr.
+    v27 = std call mrt_strip_trailing_dir_glob v1
 
     // open(path, O_RDONLY|O_DIRECTORY = 0|65536 = 65536).
     v2 = std loadSlot 1
@@ -2781,6 +2860,16 @@ func mrt_directory_next 1 i64
     v20 = std andI64 v18 v19
     std storeSlot 5 v20
 
+    // A zero-length record can never advance the cursor (cursor += reclen would
+    // stall), so a malformed/zero reclen would spin the check_buffer -> read_entry
+    // loop forever. Treat reclen == 0 as end-of-iteration. This also bounds the
+    // loop if a getdents buffer ever reports more bytes than it filled (the
+    // trailing region of a freshly mmap'd buffer reads back as zero).
+    v43 = std constI64 0
+    v44 = std cmpI64Eq v20 v43
+    std condBr v44 done_no_more read_entry_body
+
+  block read_entry_body:
     // Compute entry name ptr = base + cursor + 19.
     v21 = std constI64 19
     v22 = std addI64 v17 v21
@@ -2835,6 +2924,100 @@ func mrt_directory_next 1 i64
     std storeIndirect v0 32 v41
     v42 = std constI64 0
     std errorReturn v41 v42
+end
+
+// mrt_macos_dirent_relayout(buf, nbytes) -> nbytes. macOS-only helper invoked
+// from the arm64-macos osDirGetdents64 lowering (and kept alive for that target
+// by seedRuntimeBackendEdges). ___getdirentries64 fills `buf` with BSD dirent
+// records (d_reclen u16@16, d_namlen u16@18, d_type u8@20, d_name@21), but the
+// shared mrt_directory_next parser reads names at the Linux dirent64 offset
+// (d_name@19). For each record this shifts the name (namlen+1 bytes, incl. the
+// NUL) two bytes left from +21 to +19, leaving d_reclen (the record stride)
+// untouched. dest < src so the forward byte copy is overlap-safe. Returns the
+// byte count unchanged.
+//
+// Slot usage:
+//   slot 0 = buf
+//   slot 1 = nbytes
+//   slot 2 = cursor
+//   slot 3 = record ptr (buf + cursor)
+//   slot 4 = reclen
+//   slot 5 = namlen
+//   slot 6 = copy index i
+func mrt_macos_dirent_relayout 2 i64
+  block entry:
+    v0 = std param 0 i64
+    std storeSlot 0 v0
+    v1 = std param 1 i64
+    std storeSlot 1 v1
+    v2 = std constI64 0
+    std storeSlot 2 v2
+    std br loop_head
+
+  block loop_head:
+    v3 = std loadSlot 2
+    v4 = std loadSlot 1
+    v5 = std cmpI64Lt v3 v4
+    std condBr v5 read_rec done
+
+  block read_rec:
+    v6 = std loadSlot 0
+    v7 = std loadSlot 2
+    v8 = std addI64 v6 v7
+    std storeSlot 3 v8
+
+    // reclen = u16 @ rec+16
+    v9 = std loadIndirect v8 16
+    v10 = std constI64 0xFFFF
+    v11 = std andI64 v9 v10
+    std storeSlot 4 v11
+
+    // namlen = byte @ rec+18 (NAME_MAX 255 fits one byte).
+    v12 = std constI64 18
+    v13 = std loadByte v8 v12
+    std storeSlot 5 v13
+
+    v14 = std constI64 0
+    std storeSlot 6 v14
+    std br copy_head
+
+  block copy_head:
+    v15 = std loadSlot 6
+    v16 = std loadSlot 5
+    v17 = std cmpI64Le v15 v16
+    std condBr v17 copy_body advance
+
+  block copy_body:
+    v18 = std loadSlot 3
+    v19 = std loadSlot 6
+    v20 = std constI64 21
+    v21 = std addI64 v19 v20
+    v22 = std loadByte v18 v21
+    v23 = std constI64 19
+    v24 = std addI64 v19 v23
+    std storeByte v18 v24 v22
+    v25 = std constI64 1
+    v26 = std addI64 v19 v25
+    std storeSlot 6 v26
+    std br copy_head
+
+  block advance:
+    // Defensive: a zero reclen would loop forever; bail to EOF instead.
+    v27 = std loadSlot 4
+    v28 = std constI64 0
+    v29 = std cmpI64Eq v27 v28
+    std condBr v29 done bump
+
+  block bump:
+    v30 = std loadSlot 2
+    v31 = std loadSlot 4
+    v32 = std addI64 v30 v31
+    std storeSlot 2 v32
+    std br loop_head
+
+  block done:
+    v33 = std loadSlot 1
+    std ret v33
 end
 
 // mrt_directory_filename(self) -> __ManagedMemory. Reads the NUL-

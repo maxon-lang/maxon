@@ -84,7 +84,9 @@ export let MACHO_IMPORT_SLOT_GETCWD = 16
 export let MACHO_IMPORT_SLOT_MKDIR = 17
 export let MACHO_IMPORT_SLOT_USLEEP = 18
 export let MACHO_IMPORT_SLOT_TIME = 19
-let MACHO_IMPORT_COUNT = 20
+export let MACHO_IMPORT_SLOT_GETDIRENTRIES64 = 20
+export let MACHO_IMPORT_SLOT_ERROR = 21
+let MACHO_IMPORT_COUNT = 22
 
 // libSystem symbols imported via dyld chained-fixup binds, in slot order (see
 // MACHO_IMPORT_SLOT_* above). buildChainedFixups iterates this to emit both the
@@ -122,6 +124,17 @@ function machoImportNames() returns StringArray
 	// osClockMs → time(NULL) seconds (single-arg libcall; avoids gettimeofday's
 	// timeval struct). slot 19.
 	names.push("_time")
+	// Directory enumeration (osDirGetdents64). macOS arm64 dropped the usable
+	// `getdirentries`/`getdirentries$INODE64` exports for the 64-bit-inode world
+	// (they resolve to a link-time "not available" stub), so we call the
+	// lower-level 64-bit-inode entry `___getdirentries64(fd, buf, nbytes, &basep)`.
+	// slot 20.
+	names.push("___getdirentries64")
+	// errno access: libSystem sets the thread-local errno on failure and returns
+	// -1 (not Linux's -errno). `___error()` returns &errno so the file-op
+	// lowerings can rebuild the Linux -errno convention the runtime classifiers
+	// expect. slot 21.
+	names.push("___error")
 	return names
 end 'machoImportNames'
 
