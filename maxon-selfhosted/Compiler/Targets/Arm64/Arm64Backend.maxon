@@ -1985,15 +1985,41 @@ export type Arm64Backend implements TargetBackend
 	// user-supplied args (the `mrt_win32_*` helpers have no IR signature
 	// for `lookupFuncParamTypes`). `opName` is used only in macOS/wasi panic
 	// messages.
-	function lowerFileIoOpArm64(resultId ValueId, opName String, valueArgIds ValueIdArray, prependAtFdCwd bool, appendZeroFlags bool, linuxSyscallNum MachineWord, winCallee String, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
+	function lowerFileIoOpArm64(resultId ValueId, opName String, valueArgIds ValueIdArray, prependAtFdCwd bool, appendZeroFlags bool, linuxSyscallNum MachineWord, winCallee String, macosImportSlot MachineWord, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
 		match osDesc.os 'os'
 			windows then emitArm64DirectCallHandRolled(resultId, callee: winCallee, argIds: valueArgIds, dstBlock: dstBlock)
 			linux then return emitLinuxFileSyscallArm64(resultId, linuxSyscallNum: linuxSyscallNum, valueArgIds: valueArgIds, prependAtFdCwd: prependAtFdCwd, appendZeroFlags: appendZeroFlags, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-			macos then panic("ARM64 {opName} not supported on macos target")
+			macos then return emitMacosFileImportArm64(resultId, opName: opName, importSlot: macosImportSlot, valueArgIds: valueArgIds, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
 			wasi then panic("ARM64 {opName} should not reach the backend on wasi — MirToWasm intercepts")
 		end 'os'
 		return nextTempSlot
 	end 'lowerFileIoOpArm64'
+
+	// macOS-import body for `lowerFileIoOpArm64`. macOS forbids raw syscalls, so
+	// file I/O calls the libSystem entry points through the GOT (same model as
+	// `_mmap`). The user-supplied args map directly to the libc function's
+	// parameters — there is no AT_FDCWD prefix or zero-flags suffix (those exist
+	// only for Linux's *at-family syscalls). `importSlot < 0` marks an op with no
+	// macOS import wired yet (currently only getdents64, whose macOS shape —
+	// getdirentries(4 args) + the BSD dirent layout — differs enough to need its
+	// own port); it panics rather than miscompiling.
+	function emitMacosFileImportArm64(resultId ValueId, opName String, importSlot MachineWord, valueArgIds ValueIdArray, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+		if importSlot < 0 'noImport'
+			panic("ARM64 {opName} not yet ported to macos (no libSystem import slot)")
+		end 'noImport'
+		var tempSlot = nextTempSlot
+		var argSlots = VarSlotArray.create()
+		for valueArgId in valueArgIds 'eachArg'
+			let (slot, bumped) = reserveValueArm64(valueArgId, valueSlots: valueSlots, tempSlot: tempSlot, dstBlock: dstBlock)
+			tempSlot = bumped
+			argSlots.push(slot)
+		end 'eachArg'
+		let resultSlot = tempSlot
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.iatCall(resultSlot, slotIndex: importSlot, argSlots: argSlots))
+		valueSlotMapSet(valueSlots, valueId: resultId, slot: resultSlot)
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.ldrFromSlot(Arm64VReg.virtual(resultId), slotIndex: resultSlot))
+		return tempSlot + 1
+	end 'emitMacosFileImportArm64'
 
 	// Linux-syscall body for `lowerFileIoOpArm64`. Walks `valueArgIds`,
 	// reserving a slot for each, then emits the syscall + result capture.
@@ -2032,7 +2058,7 @@ export type Arm64Backend implements TargetBackend
 		argIds.push(cStringPtrId)
 		argIds.push(flagsId)
 		argIds.push(fileModeId)
-		return lowerFileIoOpArm64(resultId, opName: "osFileOpen", valueArgIds: argIds, prependAtFdCwd: true, appendZeroFlags: false, linuxSyscallNum: 56, winCallee: "mrt_win32_open", dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
+		return lowerFileIoOpArm64(resultId, opName: "osFileOpen", valueArgIds: argIds, prependAtFdCwd: true, appendZeroFlags: false, linuxSyscallNum: 56, winCallee: "mrt_win32_open", macosImportSlot: MACHO_IMPORT_SLOT_OPEN, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
 	end 'lowerOsFileOpenArm64'
 
 	function lowerOsFileReadArm64(resultId ValueId, fdId ValueId, bufPtrId ValueId, countId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
@@ -2040,7 +2066,7 @@ export type Arm64Backend implements TargetBackend
 		argIds.push(fdId)
 		argIds.push(bufPtrId)
 		argIds.push(countId)
-		return lowerFileIoOpArm64(resultId, opName: "osFileRead", valueArgIds: argIds, prependAtFdCwd: false, appendZeroFlags: false, linuxSyscallNum: 63, winCallee: "mrt_win32_read", dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
+		return lowerFileIoOpArm64(resultId, opName: "osFileRead", valueArgIds: argIds, prependAtFdCwd: false, appendZeroFlags: false, linuxSyscallNum: 63, winCallee: "mrt_win32_read", macosImportSlot: MACHO_IMPORT_SLOT_READ, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
 	end 'lowerOsFileReadArm64'
 
 	function lowerOsFileWriteArm64(resultId ValueId, fdId ValueId, bufPtrId ValueId, countId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
@@ -2048,13 +2074,13 @@ export type Arm64Backend implements TargetBackend
 		argIds.push(fdId)
 		argIds.push(bufPtrId)
 		argIds.push(countId)
-		return lowerFileIoOpArm64(resultId, opName: "osFileWrite", valueArgIds: argIds, prependAtFdCwd: false, appendZeroFlags: false, linuxSyscallNum: 64, winCallee: "mrt_win32_write", dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
+		return lowerFileIoOpArm64(resultId, opName: "osFileWrite", valueArgIds: argIds, prependAtFdCwd: false, appendZeroFlags: false, linuxSyscallNum: 64, winCallee: "mrt_win32_write", macosImportSlot: MACHO_IMPORT_SLOT_WRITE, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
 	end 'lowerOsFileWriteArm64'
 
 	function lowerOsFileCloseArm64(resultId ValueId, fdId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
 		var argIds = ValueIdArray.create()
 		argIds.push(fdId)
-		return lowerFileIoOpArm64(resultId, opName: "osFileClose", valueArgIds: argIds, prependAtFdCwd: false, appendZeroFlags: false, linuxSyscallNum: 57, winCallee: "mrt_win32_close", dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
+		return lowerFileIoOpArm64(resultId, opName: "osFileClose", valueArgIds: argIds, prependAtFdCwd: false, appendZeroFlags: false, linuxSyscallNum: 57, winCallee: "mrt_win32_close", macosImportSlot: MACHO_IMPORT_SLOT_CLOSE, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
 	end 'lowerOsFileCloseArm64'
 
 	function lowerOsFileLseekArm64(resultId ValueId, fdId ValueId, offsetId ValueId, whenceId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
@@ -2062,27 +2088,27 @@ export type Arm64Backend implements TargetBackend
 		argIds.push(fdId)
 		argIds.push(offsetId)
 		argIds.push(whenceId)
-		return lowerFileIoOpArm64(resultId, opName: "osFileLseek", valueArgIds: argIds, prependAtFdCwd: false, appendZeroFlags: false, linuxSyscallNum: 62, winCallee: "mrt_win32_lseek", dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
+		return lowerFileIoOpArm64(resultId, opName: "osFileLseek", valueArgIds: argIds, prependAtFdCwd: false, appendZeroFlags: false, linuxSyscallNum: 62, winCallee: "mrt_win32_lseek", macosImportSlot: MACHO_IMPORT_SLOT_LSEEK, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
 	end 'lowerOsFileLseekArm64'
 
 	function lowerOsFileStatArm64(resultId ValueId, cStringPtrId ValueId, statBufPtrId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
 		var argIds = ValueIdArray.create()
 		argIds.push(cStringPtrId)
 		argIds.push(statBufPtrId)
-		return lowerFileIoOpArm64(resultId, opName: "osFileStat", valueArgIds: argIds, prependAtFdCwd: true, appendZeroFlags: true, linuxSyscallNum: 79, winCallee: "mrt_win32_stat", dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
+		return lowerFileIoOpArm64(resultId, opName: "osFileStat", valueArgIds: argIds, prependAtFdCwd: true, appendZeroFlags: true, linuxSyscallNum: 79, winCallee: "mrt_win32_stat", macosImportSlot: MACHO_IMPORT_SLOT_STAT, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
 	end 'lowerOsFileStatArm64'
 
 	function lowerOsFileAccessArm64(resultId ValueId, cStringPtrId ValueId, modeId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
 		var argIds = ValueIdArray.create()
 		argIds.push(cStringPtrId)
 		argIds.push(modeId)
-		return lowerFileIoOpArm64(resultId, opName: "osFileAccess", valueArgIds: argIds, prependAtFdCwd: true, appendZeroFlags: true, linuxSyscallNum: 48, winCallee: "mrt_win32_access", dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
+		return lowerFileIoOpArm64(resultId, opName: "osFileAccess", valueArgIds: argIds, prependAtFdCwd: true, appendZeroFlags: true, linuxSyscallNum: 48, winCallee: "mrt_win32_access", macosImportSlot: MACHO_IMPORT_SLOT_ACCESS, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
 	end 'lowerOsFileAccessArm64'
 
 	function lowerOsFileUnlinkArm64(resultId ValueId, cStringPtrId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
 		var argIds = ValueIdArray.create()
 		argIds.push(cStringPtrId)
-		return lowerFileIoOpArm64(resultId, opName: "osFileUnlink", valueArgIds: argIds, prependAtFdCwd: true, appendZeroFlags: true, linuxSyscallNum: 35, winCallee: "mrt_win32_unlink", dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
+		return lowerFileIoOpArm64(resultId, opName: "osFileUnlink", valueArgIds: argIds, prependAtFdCwd: true, appendZeroFlags: true, linuxSyscallNum: 35, winCallee: "mrt_win32_unlink", macosImportSlot: MACHO_IMPORT_SLOT_UNLINK, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
 	end 'lowerOsFileUnlinkArm64'
 
 	// rename(oldpath, newpath). ARM64 has no plain `rename`; the only entry
@@ -2095,10 +2121,19 @@ export type Arm64Backend implements TargetBackend
 		match osDesc.os 'os'
 			windows then return lowerOsFileRenameWin32Arm64(resultId, oldPathPtrId: oldPathPtrId, newPathPtrId: newPathPtrId, dstBlock: dstBlock, nextTempSlot: nextTempSlot)
 			linux then return emitLinuxRenameatArm64(resultId, oldPathPtrId: oldPathPtrId, newPathPtrId: newPathPtrId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-			macos then panic("ARM64 osFileRename not supported on macos target")
+			macos then return lowerOsFileRenameMacosArm64(resultId, oldPathPtrId: oldPathPtrId, newPathPtrId: newPathPtrId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
 			wasi then panic("ARM64 osFileRename should not reach the backend on wasi — MirToWasm intercepts")
 		end 'os'
 	end 'lowerOsFileRenameArm64'
+
+	// macOS: plain `rename(old, new)` via the libSystem `_rename` import (macOS
+	// has the BSD `rename`, so no AT_FDCWD interleaving like Linux's renameat).
+	function lowerOsFileRenameMacosArm64(resultId ValueId, oldPathPtrId ValueId, newPathPtrId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+		var argIds = ValueIdArray.create()
+		argIds.push(oldPathPtrId)
+		argIds.push(newPathPtrId)
+		return emitMacosFileImportArm64(resultId, opName: "osFileRename", importSlot: MACHO_IMPORT_SLOT_RENAME, valueArgIds: argIds, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+	end 'lowerOsFileRenameMacosArm64'
 
 	// Windows arm: call the `mrt_win32_rename` helper with both path args. The
 	// arm64-windows helper is an ENOSYS skeleton (file I/O is stubbed on that
@@ -2147,21 +2182,21 @@ export type Arm64Backend implements TargetBackend
 		argIds.push(fdId)
 		argIds.push(bufPtrId)
 		argIds.push(bufSizeId)
-		return lowerFileIoOpArm64(resultId, opName: "osDirGetdents64", valueArgIds: argIds, prependAtFdCwd: false, appendZeroFlags: false, linuxSyscallNum: 61, winCallee: "mrt_win32_getdents64", dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
+		return lowerFileIoOpArm64(resultId, opName: "osDirGetdents64", valueArgIds: argIds, prependAtFdCwd: false, appendZeroFlags: false, linuxSyscallNum: 61, winCallee: "mrt_win32_getdents64", macosImportSlot: -1, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
 	end 'lowerOsDirGetdents64Arm64'
 
 	function lowerOsDirGetcwdArm64(resultId ValueId, bufPtrId ValueId, bufSizeId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
 		var argIds = ValueIdArray.create()
 		argIds.push(bufPtrId)
 		argIds.push(bufSizeId)
-		return lowerFileIoOpArm64(resultId, opName: "osDirGetcwd", valueArgIds: argIds, prependAtFdCwd: false, appendZeroFlags: false, linuxSyscallNum: 17, winCallee: "mrt_win32_getcwd", dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
+		return lowerFileIoOpArm64(resultId, opName: "osDirGetcwd", valueArgIds: argIds, prependAtFdCwd: false, appendZeroFlags: false, linuxSyscallNum: 17, winCallee: "mrt_win32_getcwd", macosImportSlot: MACHO_IMPORT_SLOT_GETCWD, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
 	end 'lowerOsDirGetcwdArm64'
 
 	function lowerOsDirMkdirArm64(resultId ValueId, cStringPtrId ValueId, modeId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
 		var argIds = ValueIdArray.create()
 		argIds.push(cStringPtrId)
 		argIds.push(modeId)
-		return lowerFileIoOpArm64(resultId, opName: "osDirMkdir", valueArgIds: argIds, prependAtFdCwd: true, appendZeroFlags: false, linuxSyscallNum: 34, winCallee: "mrt_win32_mkdir", dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
+		return lowerFileIoOpArm64(resultId, opName: "osDirMkdir", valueArgIds: argIds, prependAtFdCwd: true, appendZeroFlags: false, linuxSyscallNum: 34, winCallee: "mrt_win32_mkdir", macosImportSlot: MACHO_IMPORT_SLOT_MKDIR, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
 	end 'lowerOsDirMkdirArm64'
 
 	function lowerLoadFramePtrArm64(resultId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
