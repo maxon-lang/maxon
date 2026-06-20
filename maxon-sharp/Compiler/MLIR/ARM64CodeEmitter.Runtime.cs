@@ -2100,10 +2100,16 @@ public partial class ARM64CodeEmitter {
   // the two paths, so no third argument slot is needed.
   private void EmitMaxonFileRename() {
     EmitRuntimeFunctionStart("maxon_file_rename", 2, 0x30);
-    EmitReloadArg(0);
+    // EmitReloadArg(i) loads AbiArgRegs[i], so EmitReloadArg(1) lands the new
+    // path in X1 (NOT X0). Reload both args first, then shuffle: __io_submit_sync
+    // wants arg0 (old) in X1 and arg1 (new) in X2. The earlier code reloaded
+    // arg1 into X1 and then copied the stale X0 (still the old path) into X2,
+    // submitting rename(new, old) — the not-yet-existent new path as the source,
+    // so rename(2) returned ENOENT and every atomic cache write failed.
+    EmitReloadArg(0);                                  // X0 = old path
+    EmitReloadArg(1);                                  // X1 = new path
+    EmitMovRegReg(ARM64Register.X2, ARM64Register.X1); // arg1 = new path
     EmitMovRegReg(ARM64Register.X1, ARM64Register.X0); // arg0 = old path
-    EmitReloadArg(1);
-    EmitMovRegReg(ARM64Register.X2, ARM64Register.X0); // arg1 = new path
     EmitMovRegImm(ARM64Register.X0, SyncOpFileRename);
     EmitBranchLink("__io_submit_sync");
     EmitRuntimeFunctionEnd();
