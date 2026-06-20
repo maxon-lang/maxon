@@ -1552,9 +1552,24 @@ export type Arm64Backend implements TargetBackend
 		match osDesc.sleep 'strategy'
 			syscall then panic("ARM64 osSleep: nanosleep syscall lowering not yet implemented — needs timespec marshalling on the stack")
 			iatCall(slotIdx) then return lowerSingleArgIatCallArm64(msSlot, slotIdx: slotIdx, dstBlock: dstBlock, nextTempSlot: tempSlot)
-			libcall then panic("ARM64 osSleep: macOS libcall nanosleep lowering not yet implemented — needs timespec marshalling on the stack")
+			libcall then return lowerOsSleepMacosArm64(msSlot, dstBlock: dstBlock, nextTempSlot: tempSlot)
 		end 'strategy'
 	end 'lowerOsSleepArm64'
+
+	// macOS osSleep: `usleep(ms * 1000)`. usleep takes MICROSECONDS in a single
+	// register, so — unlike nanosleep — no `struct timespec` has to be marshalled
+	// onto the stack. The ms→µs scale is a plain register multiply (sleeps in the
+	// specs are small, well within useconds_t range).
+	function lowerOsSleepMacosArm64(msSlot VarSlot, dstBlock IrBlock, nextTempSlot SlotIndex) returns SlotIndex
+		var tempSlot = nextTempSlot
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.ldrFromSlot(arm64PhysReg(Arm64Register.x0), slotIndex: msSlot))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movImm(arm64PhysReg(Arm64Register.x1), value: 1000))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.mulRegs(arm64PhysReg(Arm64Register.x0), src1: arm64PhysReg(Arm64Register.x0), src2: arm64PhysReg(Arm64Register.x1)))
+		let usSlot = tempSlot
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.strToSlot(usSlot, src: arm64PhysReg(Arm64Register.x0)))
+		tempSlot = tempSlot + 1
+		return lowerSingleArgIatCallArm64(usSlot, slotIdx: MACHO_IMPORT_SLOT_USLEEP, dstBlock: dstBlock, nextTempSlot: tempSlot)
+	end 'lowerOsSleepMacosArm64'
 
 	function lowerOsWriteSyscallArm64(ptrSlot VarSlot, lenSlot VarSlot, writeNum MachineWord, fd MachineWord, dstBlock IrBlock, nextTempSlot SlotIndex) returns SlotIndex
 		// fd constant -> temp slot
@@ -1989,7 +2004,7 @@ export type Arm64Backend implements TargetBackend
 		match osDesc.os 'os'
 			windows then emitArm64DirectCallHandRolled(resultId, callee: winCallee, argIds: valueArgIds, dstBlock: dstBlock)
 			linux then return emitLinuxFileSyscallArm64(resultId, linuxSyscallNum: linuxSyscallNum, valueArgIds: valueArgIds, prependAtFdCwd: prependAtFdCwd, appendZeroFlags: appendZeroFlags, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-			macos then return emitMacosFileImportArm64(resultId, opName: opName, importSlot: macosImportSlot, valueArgIds: valueArgIds, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+			macos then return emitMacosFileImportArm64(resultId, importSlot: macosImportSlot, valueArgIds: valueArgIds, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
 			wasi then panic("ARM64 {opName} should not reach the backend on wasi — MirToWasm intercepts")
 		end 'os'
 		return nextTempSlot
@@ -2001,11 +2016,20 @@ export type Arm64Backend implements TargetBackend
 	// parameters — there is no AT_FDCWD prefix or zero-flags suffix (those exist
 	// only for Linux's *at-family syscalls). `importSlot < 0` marks an op with no
 	// macOS import wired yet (currently only getdents64, whose macOS shape —
-	// getdirentries(4 args) + the BSD dirent layout — differs enough to need its
-	// own port); it panics rather than miscompiling.
-	function emitMacosFileImportArm64(resultId ValueId, opName String, importSlot MachineWord, valueArgIds ValueIdArray, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+	// getdirentries(4 args) + the BSD dirent layout — differs enough to need a
+	// dedicated runtime port). Rather than panic (which crashes the in-process
+	// spec-test compiler and masks every later spec), it returns -1: the
+	// directory-read loop in mrt_directory_next treats `<= 0` as EOF, so a listing
+	// degrades to "empty" instead of crashing. Directory specs fail cleanly until
+	// the getdirentries port lands.
+	function emitMacosFileImportArm64(resultId ValueId, importSlot MachineWord, valueArgIds ValueIdArray, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
 		if importSlot < 0 'noImport'
-			panic("ARM64 {opName} not yet ported to macos (no libSystem import slot)")
+			let errSlot = nextTempSlot
+			appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movImm(arm64PhysReg(Arm64Register.x0), value: -1))
+			appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.strToSlot(errSlot, src: arm64PhysReg(Arm64Register.x0)))
+			valueSlotMapSet(valueSlots, valueId: resultId, slot: errSlot)
+			appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.ldrFromSlot(Arm64VReg.virtual(resultId), slotIndex: errSlot))
+			return nextTempSlot + 1
 		end 'noImport'
 		var tempSlot = nextTempSlot
 		var argSlots = VarSlotArray.create()
@@ -2132,7 +2156,7 @@ export type Arm64Backend implements TargetBackend
 		var argIds = ValueIdArray.create()
 		argIds.push(oldPathPtrId)
 		argIds.push(newPathPtrId)
-		return emitMacosFileImportArm64(resultId, opName: "osFileRename", importSlot: MACHO_IMPORT_SLOT_RENAME, valueArgIds: argIds, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+		return emitMacosFileImportArm64(resultId, importSlot: MACHO_IMPORT_SLOT_RENAME, valueArgIds: argIds, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
 	end 'lowerOsFileRenameMacosArm64'
 
 	// Windows arm: call the `mrt_win32_rename` helper with both path args. The
