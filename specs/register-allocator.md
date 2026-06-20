@@ -2786,7 +2786,8 @@ module {
     arm64.cmp x0, x2
     arm64.cset x0, eq
     arm64.orr x2, x0, x1
-    arm64.b.ne check_0.case2
+    arm64.cmp x2, #0
+    arm64.b.eq check_0.case2
   check_0.case1:
     arm64.mov x0, #20
     arm64.ret
@@ -3037,7 +3038,8 @@ module {
     arm64.cmp x0, x2
     arm64.cset x0, eq
     arm64.orr x2, x0, x1
-    arm64.b.ne eval_0.case2
+    arm64.cmp x2, #0
+    arm64.b.eq eval_0.case2
   eval_0.case1:
     arm64.mov x0, #20
     arm64.b eval_0.merge
