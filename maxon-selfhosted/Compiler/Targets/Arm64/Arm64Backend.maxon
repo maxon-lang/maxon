@@ -462,8 +462,9 @@ export type Arm64Backend implements TargetBackend
 			// slot-count figures here mirror the file-I/O band so the slot
 			// accounting is correct once real emitters land.
 			osGetArgc gives 8
-			// osClockMs: zero-arg call + result slot; mirrors the X64 budget.
-			osClockMs gives 4
+			// osClockMs (macOS): 2-slot timeval buffer + &tv + null + gettimeofday
+			// result + ms result. Linux/Windows use fewer; 8 covers the max with headroom.
+			osClockMs gives 8
 			osGetArgv gives 8
 			osGetExecutablePath gives 8
 			// Page allocation, atomics, and locks (added with the slab allocator).
@@ -1588,23 +1589,55 @@ export type Arm64Backend implements TargetBackend
 	// (NULL out-param), so no `struct timeval` marshalling like gettimeofday —
 	// coarse (1s) resolution but monotonic and, crucially, hang-safe for any
 	// busy-wait-until-clock-advances loop. Sub-ms timing would need gettimeofday.
+	// macOS: gettimeofday(&tv, NULL) → ms = tv.tv_sec*1000 + tv.tv_usec/1000.
+	// `_time` (whole seconds) was too coarse: clock.elapsed-after-sleep does a
+	// 30ms sleep then asserts elapsed > 0, but two 1s-resolution readings inside
+	// the same second yield elapsed == 0. struct timeval (arm64-macOS) is
+	// {tv_sec @0 (8B), tv_usec @8 (4B)} = 16B, occupying two contiguous slots;
+	// its address is taken with stackAddrOp and passed to the `_gettimeofday`
+	// import (slot 9, already wired), so no new import is needed. Mirrors the
+	// &-out-param + offset-load pattern in emitMacosStatRepackArm64.
 	function lowerOsClockMsMacosArm64(resultId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
 		var tempSlot = nextTempSlot
-		// arg0 = NULL
+
+		// Two contiguous slots for `struct timeval` (tv_sec @0, tv_usec @8).
+		let tvSlot = tempSlot
+		tempSlot = tempSlot + 2
+
+		// arg0 = &tv.
+		let tvAddrSlot = tempSlot
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.stackAddrOp(tvAddrSlot, targetSlot: tvSlot))
+		tempSlot = tempSlot + 1
+
+		// arg1 = NULL (timezone).
 		let nullSlot = tempSlot
 		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movImm(arm64PhysReg(Arm64Register.x0), value: 0))
 		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.strToSlot(nullSlot, src: arm64PhysReg(Arm64Register.x0)))
 		tempSlot = tempSlot + 1
-		// secs = time(NULL)
+
+		// gettimeofday(&tv, NULL) — return value (0/-1) is ignored.
 		var argSlots = VarSlotArray.create()
+		argSlots.push(tvAddrSlot)
 		argSlots.push(nullSlot)
-		let secSlot = tempSlot
-		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.iatCall(secSlot, slotIndex: MACHO_IMPORT_SLOT_TIME, argSlots: argSlots))
+		let rcSlot = tempSlot
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.iatCall(rcSlot, slotIndex: MACHO_IMPORT_SLOT_GETTIMEOFDAY, argSlots: argSlots))
 		tempSlot = tempSlot + 1
-		// ms = secs * 1000
-		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.ldrFromSlot(arm64PhysReg(Arm64Register.x0), slotIndex: secSlot))
-		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movImm(arm64PhysReg(Arm64Register.x1), value: 1000))
-		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.mulRegs(arm64PhysReg(Arm64Register.x0), src1: arm64PhysReg(Arm64Register.x0), src2: arm64PhysReg(Arm64Register.x1)))
+
+		// Load the timeval fields from the buffer base (tvAddrSlot still holds &tv).
+		let base = arm64PhysReg(Arm64Register.x9)
+		let sec = arm64PhysReg(Arm64Register.x10)
+		let usec = arm64PhysReg(Arm64Register.x11)
+		let thousand = arm64PhysReg(Arm64Register.x12)
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.ldrFromSlot(base, slotIndex: tvAddrSlot))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.loadIndirect(sec, baseReg: base, offset: 0, width: StoreWidth.qword, signed: false))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.loadIndirect(usec, baseReg: base, offset: 8, width: StoreWidth.word, signed: false))
+
+		// ms = sec*1000 + usec/1000
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movImm(thousand, value: 1000))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.mulRegs(sec, src1: sec, src2: thousand))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.sdivRegs(usec, src1: usec, src2: thousand))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.addRegs(arm64PhysReg(Arm64Register.x0), src1: sec, src2: usec))
+
 		let msSlot = tempSlot
 		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.strToSlot(msSlot, src: arm64PhysReg(Arm64Register.x0)))
 		valueSlotMapSet(valueSlots, valueId: resultId, slot: msSlot)
