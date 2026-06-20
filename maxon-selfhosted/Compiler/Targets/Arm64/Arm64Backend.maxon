@@ -1087,7 +1087,7 @@ export type Arm64Backend implements TargetBackend
 			osClose then panic("osClose not yet implemented for arm64 (Phase 3)")
 			osGetEnv then panic("osGetEnv not yet implemented for arm64 (Phase 3)")
 			osGetArgc(resultId) then result = lowerOsGetArgcArm64(resultId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
-			osClockMs then panic("osClockMs not yet implemented for arm64 — clock runtime is scoped to x64-windows + wasm32-wasi")
+			osClockMs(resultId) then result = lowerOsClockMsArm64(resultId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
 			osGetArgv(resultId, indexId) then result = lowerOsGetArgvArm64(resultId, indexId: indexId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
 			osGetExecutablePath(resultId, bufPtrId, bufSizeId) then result = lowerOsGetExecutablePathArm64(resultId, bufPtrId: bufPtrId, bufSizeId: bufSizeId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
 			memcpy(dstId, srcId, lenId) then result = lowerMemcpyArm64(dstId, srcId: srcId, lenId: lenId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
@@ -1570,6 +1570,45 @@ export type Arm64Backend implements TargetBackend
 		tempSlot = tempSlot + 1
 		return lowerSingleArgIatCallArm64(usSlot, slotIdx: MACHO_IMPORT_SLOT_USLEEP, dstBlock: dstBlock, nextTempSlot: tempSlot)
 	end 'lowerOsSleepMacosArm64'
+
+	// `osClockMs` (wall-clock milliseconds). Only the macOS path is wired; arm64
+	// linux/windows clock support is still pending (was a blanket panic before).
+	function lowerOsClockMsArm64(resultId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
+		match osDesc.os 'os'
+			macos then return lowerOsClockMsMacosArm64(resultId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+			linux then panic("osClockMs not yet implemented for arm64-linux")
+			windows then panic("osClockMs not yet implemented for arm64-windows")
+			wasi then panic("osClockMs should not reach the arm64 backend on wasi")
+		end 'os'
+	end 'lowerOsClockMsArm64'
+
+	// macOS: time(NULL) * 1000. time() returns whole seconds in a single call
+	// (NULL out-param), so no `struct timeval` marshalling like gettimeofday —
+	// coarse (1s) resolution but monotonic and, crucially, hang-safe for any
+	// busy-wait-until-clock-advances loop. Sub-ms timing would need gettimeofday.
+	function lowerOsClockMsMacosArm64(resultId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+		var tempSlot = nextTempSlot
+		// arg0 = NULL
+		let nullSlot = tempSlot
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movImm(arm64PhysReg(Arm64Register.x0), value: 0))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.strToSlot(nullSlot, src: arm64PhysReg(Arm64Register.x0)))
+		tempSlot = tempSlot + 1
+		// secs = time(NULL)
+		var argSlots = VarSlotArray.create()
+		argSlots.push(nullSlot)
+		let secSlot = tempSlot
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.iatCall(secSlot, slotIndex: MACHO_IMPORT_SLOT_TIME, argSlots: argSlots))
+		tempSlot = tempSlot + 1
+		// ms = secs * 1000
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.ldrFromSlot(arm64PhysReg(Arm64Register.x0), slotIndex: secSlot))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movImm(arm64PhysReg(Arm64Register.x1), value: 1000))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.mulRegs(arm64PhysReg(Arm64Register.x0), src1: arm64PhysReg(Arm64Register.x0), src2: arm64PhysReg(Arm64Register.x1)))
+		let msSlot = tempSlot
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.strToSlot(msSlot, src: arm64PhysReg(Arm64Register.x0)))
+		valueSlotMapSet(valueSlots, valueId: resultId, slot: msSlot)
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.ldrFromSlot(Arm64VReg.virtual(resultId), slotIndex: msSlot))
+		return tempSlot + 1
+	end 'lowerOsClockMsMacosArm64'
 
 	function lowerOsWriteSyscallArm64(ptrSlot VarSlot, lenSlot VarSlot, writeNum MachineWord, fd MachineWord, dstBlock IrBlock, nextTempSlot SlotIndex) returns SlotIndex
 		// fd constant -> temp slot
