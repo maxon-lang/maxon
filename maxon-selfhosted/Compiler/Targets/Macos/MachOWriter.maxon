@@ -87,7 +87,25 @@ export let MACHO_IMPORT_SLOT_TIME = 19
 export let MACHO_IMPORT_SLOT_GETDIRENTRIES64 = 20
 export let MACHO_IMPORT_SLOT_ERROR = 21
 export let MACHO_IMPORT_SLOT_STRLEN = 22
-let MACHO_IMPORT_COUNT = 23
+// Subprocess runtime (arm64-macos): posix_spawn + pipes + waitpid. The
+// hand-emitted maxon_subprocess_* helpers (Arm64MacosSubprocess.maxon) call
+// these via iatCall, mirroring the C# bootstrap's arm64 subprocess.
+export let MACHO_IMPORT_SLOT_PIPE = 23
+export let MACHO_IMPORT_SLOT_POSIX_SPAWN = 24
+export let MACHO_IMPORT_SLOT_SPAWN_FA_INIT = 25
+export let MACHO_IMPORT_SLOT_SPAWN_FA_ADDDUP2 = 26
+export let MACHO_IMPORT_SLOT_SPAWN_FA_ADDCLOSE = 27
+export let MACHO_IMPORT_SLOT_SPAWN_FA_ADDOPEN = 28
+export let MACHO_IMPORT_SLOT_SPAWN_FA_ADDCHDIR = 29
+export let MACHO_IMPORT_SLOT_SPAWN_FA_DESTROY = 30
+export let MACHO_IMPORT_SLOT_WAITPID = 31
+export let MACHO_IMPORT_SLOT_NSGETENVIRON = 32
+// kill(pid, sig): used by maxon_subprocess_wait_collect's timeout path (SIGKILL
+// the child once the deadline elapses) and by maxon_subprocess_kill.
+export let MACHO_IMPORT_SLOT_KILL = 33
+// usleep(microseconds) is already imported at slot 18 (MACHO_IMPORT_SLOT_USLEEP);
+// the wait-collect timeout poll loop reuses it for its inter-poll sleep.
+let MACHO_IMPORT_COUNT = 34
 
 // libSystem symbols imported via dyld chained-fixup binds, in slot order (see
 // MACHO_IMPORT_SLOT_* above). buildChainedFixups iterates this to emit both the
@@ -142,6 +160,20 @@ function machoImportNames() returns StringArray
 	// lowering calls `_strlen(buf)` after the call to recover the real path
 	// length. slot 22.
 	names.push("_strlen")
+	// Subprocess runtime (slots 23..32). The Mach-O symbol is the C name with a
+	// leading underscore; `_NSGetEnviron`'s C name already starts with one so it
+	// doubles to `__NSGetEnviron` (same as `__NSGetExecutablePath`).
+	names.push("_pipe")
+	names.push("_posix_spawn")
+	names.push("_posix_spawn_file_actions_init")
+	names.push("_posix_spawn_file_actions_adddup2")
+	names.push("_posix_spawn_file_actions_addclose")
+	names.push("_posix_spawn_file_actions_addopen")
+	names.push("_posix_spawn_file_actions_addchdir_np")
+	names.push("_posix_spawn_file_actions_destroy")
+	names.push("_waitpid")
+	names.push("__NSGetEnviron")
+	names.push("_kill")
 	return names
 end 'machoImportNames'
 

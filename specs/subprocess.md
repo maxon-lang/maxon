@@ -30,11 +30,17 @@ and stderr-only collection.
 <!-- test: subprocess-run-collect -->
 ```maxon
 function main() returns ExitCode
+	#if os(Windows)
 	let exe = Executable.name("cmd")
 	var argv = StringArray.create()
 	argv.push("/c")
 	argv.push("echo")
 	argv.push("hello")
+	#else
+	let exe = Executable.path(try FilePath.from("/bin/echo") otherwise return 2)
+	var argv = StringArray.create()
+	argv.push("hello")
+	#endif
 	let result = try Subprocess.run(exe, arguments: argv) otherwise return 2
 	if not result.succeeded() 'check-success'
 		return 3
@@ -62,11 +68,17 @@ end 'main'
 <!-- test: subprocess-run-path -->
 ```maxon
 function main() returns ExitCode
+	#if os(Windows)
 	let exe = Executable.path(try FilePath.from("C:/Windows/System32/cmd.exe") otherwise return 2)
 	var argv = StringArray.create()
 	argv.push("/c")
 	argv.push("echo")
 	argv.push("via-path")
+	#else
+	let exe = Executable.path(try FilePath.from("/bin/echo") otherwise return 2)
+	var argv = StringArray.create()
+	argv.push("via-path")
+	#endif
 	let result = try Subprocess.run(exe, arguments: argv) otherwise return 3
 	if not result.succeeded() 'check-success'
 		return 4
@@ -85,15 +97,21 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let cwd = Directory.currentPath()
+	#if os(Windows)
 	let exe = Executable.name("cmd")
 	var argv = StringArray.create()
 	argv.push("/c")
 	argv.push("cd")
+	#else
+	let exe = Executable.path(try FilePath.from("/bin/pwd") otherwise return 2)
+	var argv = StringArray.create()
+	#endif
 	let result = try Subprocess.run(exe, arguments: argv, workingDirectory: cwd) otherwise return 2
 	if not result.succeeded() 'check-success'
 		return 3
 	end 'check-success'
-	// `cmd /c cd` prints the working directory it inherited from us.
+	// `cmd /c cd` (Windows) / `pwd` (POSIX) prints the working directory it
+	// inherited from us.
 	if not result.stdout.contains(cwd.path) 'check-cwd'
 		return 4
 	end 'check-cwd'
@@ -107,10 +125,14 @@ end 'main'
 <!-- test: subprocess-stdin-bytes -->
 ```maxon
 function main() returns ExitCode
-	// `findstr .` echoes any line containing at least one character — i.e.
-	// every non-empty line of stdin. We feed it two lines and expect both
-	// back on stdout.
+	// `findstr .` (Windows) / `grep .` (POSIX) echoes any line containing at
+	// least one character — i.e. every non-empty line of stdin. We feed it two
+	// lines and expect both back on stdout.
+	#if os(Windows)
 	var c = Configuration.create(Executable.name("findstr"))
+	#else
+	var c = Configuration.create(Executable.path(try FilePath.from("/usr/bin/grep") otherwise return 2))
+	#endif
 	var argv = StringArray.create()
 	argv.push(".")
 	c.arguments = argv
@@ -135,7 +157,9 @@ end 'main'
 <!-- test: subprocess-timeout-kill -->
 ```maxon
 function main() returns ExitCode
-	// `ping 127.0.0.1 -n 30` waits ~29 seconds; we kill it after 200ms.
+	// `ping 127.0.0.1 -n 30` (Windows) / `sleep 30` (POSIX) waits ~30 seconds;
+	// we kill it after 200ms.
+	#if os(Windows)
 	let exe = Executable.name("cmd")
 	var argv = StringArray.create()
 	argv.push("/c")
@@ -143,6 +167,11 @@ function main() returns ExitCode
 	argv.push("127.0.0.1")
 	argv.push("-n")
 	argv.push("30")
+	#else
+	let exe = Executable.path(try FilePath.from("/bin/sleep") otherwise return 1)
+	var argv = StringArray.create()
+	argv.push("30")
+	#endif
 	let cwd = Directory.currentPath()
 	var sawTimeout = false
 	try Subprocess.run(exe, arguments: argv, workingDirectory: cwd, timeoutMs: 200) otherwise (e) 'handler'
@@ -196,10 +225,17 @@ end 'main'
 <!-- test: subprocess-exit-code -->
 ```maxon
 function main() returns ExitCode
+	#if os(Windows)
 	let exe = Executable.name("cmd")
 	var argv = StringArray.create()
 	argv.push("/c")
 	argv.push("exit 42")
+	#else
+	let exe = Executable.path(try FilePath.from("/bin/sh") otherwise return 2)
+	var argv = StringArray.create()
+	argv.push("-c")
+	argv.push("exit 42")
+	#endif
 	let result = try Subprocess.run(exe, arguments: argv) otherwise return 2
 	if result.exitCode() != 42 'check-exit'
 		return 3
@@ -224,11 +260,19 @@ end 'main'
 <!-- test: subprocess-stderr-collect -->
 ```maxon
 function main() returns ExitCode
+	// `echo err 1>&2` writes "err" to stderr only (shell redirection works the
+	// same in cmd and sh).
+	#if os(Windows)
 	let exe = Executable.name("cmd")
 	var argv = StringArray.create()
 	argv.push("/c")
-	// `echo err 1>&2` writes "err" to stderr only.
 	argv.push("echo err 1>&2")
+	#else
+	let exe = Executable.path(try FilePath.from("/bin/sh") otherwise return 2)
+	var argv = StringArray.create()
+	argv.push("-c")
+	argv.push("echo err 1>&2")
+	#endif
 	let result = try Subprocess.run(exe, arguments: argv) otherwise return 2
 	if not result.succeeded() 'check-success'
 		return 3

@@ -57,7 +57,7 @@ end 'blockOffsetMapSet'
 
 // --- Instruction emit helper ---
 
-function arm64EmitInsn(code ByteArray, insn MachineWord)
+export function arm64EmitInsn(code ByteArray, insn MachineWord)
 	code.push(insn and 0xFF)
 	code.push((insn shr 8) and 0xFF)
 	code.push((insn shr 16) and 0xFF)
@@ -126,14 +126,14 @@ function arm64EmitFpLdpOffset(code ByteArray, rt1 MachineWord, rt2 MachineWord, 
 end 'arm64EmitFpLdpOffset'
 
 // STR Xt, [Xn, #offset] (single GPR store, unsigned offset)
-function arm64EmitStrRegOffset(code ByteArray, rt MachineWord, baseReg MachineWord, offset MachineWord)
+export function arm64EmitStrRegOffset(code ByteArray, rt MachineWord, baseReg MachineWord, offset MachineWord)
 	let imm12 = (offset / 8) and 0xFFF
 	let insn = 0xF9000000 or (imm12 shl 10) or (baseReg shl 5) or rt
 	arm64EmitInsn(code, insn: insn)
 end 'arm64EmitStrRegOffset'
 
 // LDR Xt, [Xn, #offset] (single GPR load, unsigned offset)
-function arm64EmitLdrRegOffset(code ByteArray, rt MachineWord, baseReg MachineWord, offset MachineWord)
+export function arm64EmitLdrRegOffset(code ByteArray, rt MachineWord, baseReg MachineWord, offset MachineWord)
 	let imm12 = (offset / 8) and 0xFFF
 	let insn = 0xF9400000 or (imm12 shl 10) or (baseReg shl 5) or rt
 	arm64EmitInsn(code, insn: insn)
@@ -333,7 +333,7 @@ function arm64EmitRem(code ByteArray, rd MachineWord, rn MachineWord, rm Machine
 end 'arm64EmitRem'
 
 // MOV Xd, Xn => ORR Xd, XZR, Xn
-function arm64EmitMovRegReg(code ByteArray, rd MachineWord, rn MachineWord)
+export function arm64EmitMovRegReg(code ByteArray, rd MachineWord, rn MachineWord)
 	// ORR Xd, XZR, Xn: 0xAA0003E0 | (rn << 16) | rd
 	let insn = 0xAA0003E0 or (rn shl 16) or rd
 	arm64EmitInsn(code, insn: insn)
@@ -463,7 +463,7 @@ export function arm64EmitBranch(code ByteArray)
 end 'arm64EmitBranch'
 
 // BL (branch and link) with imm26 placeholder (patched later)
-function arm64EmitBranchLink(code ByteArray)
+export function arm64EmitBranchLink(code ByteArray)
 	code.append(b"\x00\x00\x00\x94")
 end 'arm64EmitBranchLink'
 
@@ -497,13 +497,13 @@ export function arm64EmitLdrImm(code ByteArray, rt MachineWord, rn MachineWord, 
 end 'arm64EmitLdrImm'
 
 // STRB Wt, [Xn, #offset] (unsigned offset, unscaled byte)
-function arm64EmitStrb(code ByteArray, rt MachineWord, rn MachineWord, offset MachineWord)
+export function arm64EmitStrb(code ByteArray, rt MachineWord, rn MachineWord, offset MachineWord)
 	let insn = 0x39000000 or ((offset and 0xFFF) shl 10) or (rn shl 5) or rt
 	arm64EmitInsn(code, insn: insn)
 end 'arm64EmitStrb'
 
 // LDRB Wt, [Xn, #offset]
-function arm64EmitLdrb(code ByteArray, rt MachineWord, rn MachineWord, offset MachineWord)
+export function arm64EmitLdrb(code ByteArray, rt MachineWord, rn MachineWord, offset MachineWord)
 	let insn = 0x39400000 or ((offset and 0xFFF) shl 10) or (rn shl 5) or rt
 	arm64EmitInsn(code, insn: insn)
 end 'arm64EmitLdrb'
@@ -517,13 +517,13 @@ function arm64EmitAdr(code ByteArray, rd MachineWord, offset MachineWord)
 end 'arm64EmitAdr'
 
 // SUB Xd, Xn, #imm12 (immediate)
-function arm64EmitSubImm(code ByteArray, rd MachineWord, rn MachineWord, imm12 MachineWord)
+export function arm64EmitSubImm(code ByteArray, rd MachineWord, rn MachineWord, imm12 MachineWord)
 	let insn = 0xD1000000 or ((imm12 and 0xFFF) shl 10) or (rn shl 5) or rd
 	arm64EmitInsn(code, insn: insn)
 end 'arm64EmitSubImm'
 
 // ADD Xd, Xn, #imm12 (immediate)
-function arm64EmitAddImm(code ByteArray, rd MachineWord, rn MachineWord, imm12 MachineWord)
+export function arm64EmitAddImm(code ByteArray, rd MachineWord, rn MachineWord, imm12 MachineWord)
 	let insn = 0x91000000 or ((imm12 and 0xFFF) shl 10) or (rn shl 5) or rd
 	arm64EmitInsn(code, insn: insn)
 end 'arm64EmitAddImm'
@@ -604,13 +604,13 @@ function arm64EmitStackFree(code ByteArray, amount StackSize)
 end 'arm64EmitStackFree'
 
 // CBZ Xn, #offset (compare and branch if zero)
-function arm64EmitCbz(code ByteArray, rn MachineWord, imm19 MachineWord)
+export function arm64EmitCbz(code ByteArray, rn MachineWord, imm19 MachineWord)
 	let insn = 0xB4000000 or ((imm19 and 0x7FFFF) shl 5) or rn
 	arm64EmitInsn(code, insn: insn)
 end 'arm64EmitCbz'
 
 // CBNZ Xn, #offset (compare and branch if not zero)
-function arm64EmitCbnz(code ByteArray, rn MachineWord, imm19 MachineWord)
+export function arm64EmitCbnz(code ByteArray, rn MachineWord, imm19 MachineWord)
 	let insn = 0xB5000000 or ((imm19 and 0x7FFFF) shl 5) or rn
 	arm64EmitInsn(code, insn: insn)
 end 'arm64EmitCbnz'

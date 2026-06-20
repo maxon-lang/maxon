@@ -1201,6 +1201,17 @@ export function backendSynthesizedRuntimeEdges(funcName String, target Target) r
 	if target.cpu == CpuArch.arm64 and isMacos and funcName == "mrt_directory_next" 'dirRelayout'
 		edges.push("mrt_macos_dirent_relayout")
 	end 'dirRelayout'
+	// arm64-macos subprocess runtime: the hand-emitted maxon_subprocess_spawn /
+	// wait_collect / result-stream-copy bodies (Arm64MacosSubprocess.maxon) BL
+	// directly into the slab allocator + managed-mem helper. Those call fixups are
+	// appended AFTER the stdlib link pass, so the reachability/lazy closures can't
+	// see them — seed the edge here off maxon_subprocess_spawn (itself reachable
+	// whenever a program calls Subprocess.run). EVERY closure consumes this.
+	if target.cpu == CpuArch.arm64 and isMacos and funcName == "maxon_subprocess_spawn" 'macosSubprocess'
+		for name in arm64MacosSubprocessRuntimeNames() 'eachSeed'
+			edges.push(name)
+		end 'eachSeed'
+	end 'macosSubprocess'
 	return edges
 end 'backendSynthesizedRuntimeEdges'
 

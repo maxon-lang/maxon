@@ -2616,6 +2616,20 @@ export function concatArm64FunctionChunks(project Project, chunks FunctionCodeCh
 		emitArm64Win32Helpers(code, relocations: relocations, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
 	end 'emitHelpers'
 
+	// arm64-macos subprocess runtime: hand-emit the `maxon_subprocess_*` bodies
+	// (posix_spawn + pipes + waitpid) so they override the signature-only stubs in
+	// runtime.std, mirroring the C# bootstrap's arm64 subprocess. Emitted after the
+	// stdlib link pass like the win32 helpers; the recorded labels win via upsert.
+	let isMacosOs = match target.os 'checkMacos'
+		windows gives false
+		linux gives false
+		macos gives true
+		wasi gives false
+	end 'checkMacos'
+	if isMacosOs 'emitMacosSubprocess'
+		emitArm64MacosSubprocess(code, relocations: relocations, callFixups: callFixups, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+	end 'emitMacosSubprocess'
+
 	let symdata = buildSymbolTable(labelNames, funcLabelOffsets: labelOffsets)
 
 	arm64ResolveCallFixups(code, labelOffsetMap: labelOffsetMap, callFixups: callFixups)
