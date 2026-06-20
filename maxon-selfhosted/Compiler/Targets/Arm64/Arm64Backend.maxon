@@ -2117,12 +2117,95 @@ export type Arm64Backend implements TargetBackend
 	end 'emitLinuxFileSyscallArm64'
 
 	function lowerOsFileOpenArm64(resultId ValueId, cStringPtrId ValueId, flagsId ValueId, fileModeId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
+		// The open-flag bit values are CANONICALLY the Linux ones (baked into
+		// mrt_file_open_write etc.), and macOS's O_CREAT/O_TRUNC/O_APPEND/O_EXCL
+		// live at different bits — so the macOS path must translate before _open,
+		// or a write open silently lands O_ASYNC instead of O_TRUNC and "write open
+		// failed". Read opens (flags 0) translate to 0, so this is safe for all.
+		let openOnMacos = match osDesc.os 'os'
+			macos gives true
+			linux gives false
+			windows gives false
+			wasi gives false
+		end 'os'
+		if openOnMacos 'macos'
+			return lowerOsFileOpenMacosArm64(resultId, cStringPtrId: cStringPtrId, flagsId: flagsId, fileModeId: fileModeId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+		end 'macos'
+
 		var argIds = ValueIdArray.create()
 		argIds.push(cStringPtrId)
 		argIds.push(flagsId)
 		argIds.push(fileModeId)
 		return lowerFileIoOpArm64(resultId, opName: "osFileOpen", valueArgIds: argIds, prependAtFdCwd: true, appendZeroFlags: false, linuxSyscallNum: 56, winCallee: "mrt_win32_open", macosImportSlot: MACHO_IMPORT_SLOT_OPEN, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
 	end 'lowerOsFileOpenArm64'
+
+	// macOS open(path, flags, mode): translate the canonical (Linux) open flags to
+	// macOS bit values, then call _open. See emitMacosOpenFlagXlateArm64.
+	function lowerOsFileOpenMacosArm64(resultId ValueId, cStringPtrId ValueId, flagsId ValueId, fileModeId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+		var tempSlot = nextTempSlot
+		let (pathSlot, afterPath) = reserveValueArm64(cStringPtrId, valueSlots: valueSlots, tempSlot: tempSlot, dstBlock: dstBlock)
+		tempSlot = afterPath
+		let (linFlagsSlot, afterFlags) = reserveValueArm64(flagsId, valueSlots: valueSlots, tempSlot: tempSlot, dstBlock: dstBlock)
+		tempSlot = afterFlags
+		let macFlagsSlot = tempSlot
+		tempSlot = tempSlot + 1
+		emitMacosOpenFlagXlateArm64(linFlagsSlot, macFlagsSlot: macFlagsSlot, dstBlock: dstBlock)
+		let (modeSlot, afterMode) = reserveValueArm64(fileModeId, valueSlots: valueSlots, tempSlot: tempSlot, dstBlock: dstBlock)
+		tempSlot = afterMode
+		// open()'s `mode` is a VARIADIC argument (`int open(const char*, int, ...)`).
+		// The macOS arm64 ABI passes variadic args on the STACK, not in registers —
+		// so mode must land at [sp+0], not x2 (passing it in x2 made open read the
+		// mode from uninitialized stack and create files with garbage perms, e.g.
+		// read-only 0500, which then blocked every re-open-for-write). path + oflag
+		// are NAMED params and stay in x0/x1.
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.ldrFromSlot(arm64PhysReg(Arm64Register.x9), slotIndex: modeSlot))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.strToSpOffset(0, src: arm64PhysReg(Arm64Register.x9)))
+		if 8 > currentOutgoingArgSize 'reserveVariadicSlot'
+			currentOutgoingArgSize = 8
+		end 'reserveVariadicSlot'
+		var argSlots = VarSlotArray.create()
+		argSlots.push(pathSlot)
+		argSlots.push(macFlagsSlot)
+		let resultSlot = tempSlot
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.iatCall(resultSlot, slotIndex: MACHO_IMPORT_SLOT_OPEN, argSlots: argSlots))
+		valueSlotMapSet(valueSlots, valueId: resultId, slot: resultSlot)
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.ldrFromSlot(Arm64VReg.virtual(resultId), slotIndex: resultSlot))
+		return tempSlot + 1
+	end 'lowerOsFileOpenMacosArm64'
+
+	// Branchless translation of canonical (Linux) open() flags to macOS bit
+	// values, reading `linFlagsSlot` and writing the result to `macFlagsSlot`:
+	//   macFlags = (lin & 3)                 // O_RDONLY/WRONLY/RDWR — same bits
+	//            | ((lin & 0x40)  << 3)      // O_CREAT  0x40  -> 0x200
+	//            | ((lin & 0x200) << 1)      // O_TRUNC  0x200 -> 0x400
+	//            | ((lin & 0x400) >> 7)      // O_APPEND 0x400 -> 0x8
+	//            | ((lin & 0x80)  << 4)      // O_EXCL   0x80  -> 0x800
+	// x0=lin (preserved), x1=acc, x2=tmp, x3=mask/shift scratch.
+	function emitMacosOpenFlagXlateArm64(linFlagsSlot VarSlot, macFlagsSlot VarSlot, dstBlock IrBlock)
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.ldrFromSlot(arm64PhysReg(Arm64Register.x0), slotIndex: linFlagsSlot))
+		// acc = lin & 3
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movImm(arm64PhysReg(Arm64Register.x1), value: 3))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.andRegs(arm64PhysReg(Arm64Register.x1), src1: arm64PhysReg(Arm64Register.x0), src2: arm64PhysReg(Arm64Register.x1)))
+		emitMacosOpenFlagTermArm64(0x40, shift: 3, shiftLeft: true, dstBlock: dstBlock)
+		emitMacosOpenFlagTermArm64(0x200, shift: 1, shiftLeft: true, dstBlock: dstBlock)
+		emitMacosOpenFlagTermArm64(0x400, shift: 7, shiftLeft: false, dstBlock: dstBlock)
+		emitMacosOpenFlagTermArm64(0x80, shift: 4, shiftLeft: true, dstBlock: dstBlock)
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.strToSlot(macFlagsSlot, src: arm64PhysReg(Arm64Register.x1)))
+	end 'emitMacosOpenFlagXlateArm64'
+
+	// One flag-translation term: acc |= ((lin & mask) shifted). lin stays in x0,
+	// acc in x1; x2/x3 are scratch.
+	function emitMacosOpenFlagTermArm64(mask MachineWord, shift MachineWord, shiftLeft bool, dstBlock IrBlock)
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movImm(arm64PhysReg(Arm64Register.x2), value: mask))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.andRegs(arm64PhysReg(Arm64Register.x2), src1: arm64PhysReg(Arm64Register.x0), src2: arm64PhysReg(Arm64Register.x2)))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movImm(arm64PhysReg(Arm64Register.x3), value: shift))
+		if shiftLeft 'left'
+			appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.lslRegs(arm64PhysReg(Arm64Register.x2), src1: arm64PhysReg(Arm64Register.x2), src2: arm64PhysReg(Arm64Register.x3)))
+		end 'left' else 'right'
+			appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.lsrRegs(arm64PhysReg(Arm64Register.x2), src1: arm64PhysReg(Arm64Register.x2), src2: arm64PhysReg(Arm64Register.x3)))
+		end 'right'
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.orrRegs(arm64PhysReg(Arm64Register.x1), src1: arm64PhysReg(Arm64Register.x1), src2: arm64PhysReg(Arm64Register.x2)))
+	end 'emitMacosOpenFlagTermArm64'
 
 	function lowerOsFileReadArm64(resultId ValueId, fdId ValueId, bufPtrId ValueId, countId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
 		var argIds = ValueIdArray.create()
