@@ -11507,6 +11507,26 @@ type MaxonToStdLowering
 			// resolved base name (not just the managed-backing predicate).
 			let fieldBaseName = self.fieldBackingBaseName(field.fieldType, enclosingStructName: structType.name)
 			if fieldBaseName != "__ManagedMemory" and fieldBaseName != "__ManagedList" 'notManaged'
+				// A drop-tracked managed-pointer field that is NOT a `__ManagedMemory`/
+				// `__ManagedList` auto-init kind (e.g. `FilePath.path : String`, a `Box`,
+				// a nested user struct) must still be NULL-initialized here. `__mm_alloc`
+				// hands back a reused slab slot holding the prior occupant's bytes; until
+				// the explicit `Self{field: ...}` fieldStore lands, the field holds that
+				// stale value (often an old heap pointer). The struct is already
+				// drop-tracked (rc-managed with `__destruct_<S>`), so if it is dropped
+				// before the field store — or its destructor runs — the synthesized
+				// destructor's `__mm_decref_maybenull_helper(field)` decrefs that stale
+				// pointer (the maybenull guard only tolerates 0, not garbage) → a heap
+				// fault. Zero it so the guard skips it; the explicit fieldStore overwrites
+				// the 0, exactly like the `__ManagedMemory` auto-init below. (Surfaced as
+				// the non-deterministic arm64-macos `Directory.list` crash: a freshly
+				// allocated `FilePath` whose stale `path` slot was decref'd at teardown.)
+				if not field.offsetResolved 'unresolvedNull'
+					panic("synthesizeManagedFieldInits: field '{field.name}' on struct '{structType.name}' has unresolved offset — layoutAllStructs pass did not run")
+				end 'unresolvedNull'
+				if fieldTypeIsDropTracked(self.project, structType: structType, field: field) 'dropTrackedField'
+					self.storeI64Const(parentId, offset: field.offset, value: 0, dstBlock: dstBlock)
+				end 'dropTrackedField'
 				continue
 			end 'notManaged'
 			// Same sentinel check as `lookupFieldByStructName` — see the
