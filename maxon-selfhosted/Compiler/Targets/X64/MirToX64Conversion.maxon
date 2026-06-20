@@ -2545,31 +2545,35 @@ type X64FunctionLowering
 		let rax = physReg(X64Register.rax)
 		let rdi = physReg(X64Register.rdi)
 
-		// rcx = index
+		// rcx = index (preserved across the whole sequence: needed for BOTH the
+		// clamp compare and the final result compare).
 		appendX64Op(target, block: dstBlock, op: X64Op.movRegReg(rcx, srcReg: X64VReg.virtual(indexId)))
-		// r10 = argc
+		// r10 = argc ; r11 = argv base ; rdi = 0 (clamp + OOB replacement value)
 		appendX64Op(target, block: dstBlock, op: X64Op.globalLoad(r10, name: "__mrt_argc", size: 8))
-		// r11 = argv base pointer
 		appendX64Op(target, block: dstBlock, op: X64Op.globalLoad(r11, name: "__mrt_argv", size: 8))
-		// rax = index, then rax = index * 8
-		appendX64Op(target, block: dstBlock, op: X64Op.movRegReg(rax, srcReg: rcx))
-		// Multiply by 8 via three left shifts. `shlRegCl` shifts by `cl`, so
-		// materialize 3 into rcx first — but rcx still holds `index` for the
-		// upcoming compare. Use a chained `add rax, rax` instead: each add
-		// doubles rax and is exempt from the shift-count register requirement.
-		appendX64Op(target, block: dstBlock, op: X64Op.addRegReg(rax, srcReg: rax))
-		appendX64Op(target, block: dstBlock, op: X64Op.addRegReg(rax, srcReg: rax))
-		appendX64Op(target, block: dstBlock, op: X64Op.addRegReg(rax, srcReg: rax))
-		// rax = argv + index*8
-		appendX64Op(target, block: dstBlock, op: X64Op.addRegReg(rax, srcReg: r11))
-		// rax = [rax + 0] = argv[index] (may load garbage if index OOB; cmov
-		// below masks the value, but the load is not actually suppressed).
-		appendX64Op(target, block: dstBlock, op: X64Op.loadIndirect(rax, baseReg: rax, offset: 0, width: StoreWidth.qword, signed: false))
-		// rdi = 0 (OOB replacement value)
 		appendX64Op(target, block: dstBlock, op: X64Op.xorRegRegSelf(rdi))
-		// Compare index vs argc (unsigned). `cmovae` triggers when CF=0,
-		// i.e. index >= argc — also catches the "index < 0" sign-extended
-		// case because a negative i64 is huge when interpreted unsigned.
+		// The load MUST NOT run for an out-of-bounds index — `argv + index*8`
+		// would address unmapped memory and fault (mrt_command_line_arg probes
+		// index 9999). Clamp the index to 0 first so the load address is always
+		// valid (argv[0] exists: argc >= 1), then mask the result to 0 below.
+		// cmp index, argc (unsigned): `ae` (CF=0) means index >= argc, OOB — also
+		// catches a negative index (huge unsigned).
+		appendX64Op(target, block: dstBlock, op: X64Op.cmpRegReg(rcx, rhsReg: r10))
+		// rax = clamped index = (index >= argc) ? 0 : index. (mov does not touch
+		// flags, so the cmov still sees the cmp result.)
+		appendX64Op(target, block: dstBlock, op: X64Op.movRegReg(rax, srcReg: rcx))
+		appendX64Op(target, block: dstBlock, op: X64Op.cmov(rax, src: rdi, condition: X64CmovCondition.ae))
+		// rax = clampedIndex * 8 via chained `add rax, rax` (doubles each time;
+		// avoids the shift-count `cl` register requirement). These ADDs SET flags
+		// on x86, clobbering the compare above — so the result compare is redone.
+		appendX64Op(target, block: dstBlock, op: X64Op.addRegReg(rax, srcReg: rax))
+		appendX64Op(target, block: dstBlock, op: X64Op.addRegReg(rax, srcReg: rax))
+		appendX64Op(target, block: dstBlock, op: X64Op.addRegReg(rax, srcReg: rax))
+		// rax = argv + clampedIndex*8 ; rax = argv[clampedIndex] (always valid).
+		appendX64Op(target, block: dstBlock, op: X64Op.addRegReg(rax, srcReg: r11))
+		appendX64Op(target, block: dstBlock, op: X64Op.loadIndirect(rax, baseReg: rax, offset: 0, width: StoreWidth.qword, signed: false))
+		// Re-compare the ORIGINAL index (still in rcx) and mask the result to 0
+		// when OOB: result = (index >= argc) ? 0 : argv[index].
 		appendX64Op(target, block: dstBlock, op: X64Op.cmpRegReg(rcx, rhsReg: r10))
 		appendX64Op(target, block: dstBlock, op: X64Op.cmov(rax, src: rdi, condition: X64CmovCondition.ae))
 		// Move result into the value's virtual register.

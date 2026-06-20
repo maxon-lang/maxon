@@ -1292,10 +1292,16 @@ export type Arm64Backend implements TargetBackend
 		return nextTempSlot + 1
 	end 'lowerOsGetArgcLinuxArm64'
 
-	// Linux ARM64 `osGetArgv`: bounds-check + load via csel. Same skeleton
-	// as the x64 path — the load is unconditional and a `csel` masks the
-	// result to 0 when `index >= argc` (unsigned compare also catches the
-	// negative-index case). Runtime correctness deferred to a future phase.
+	// Linux/macOS ARM64 `osGetArgv`: bounds-checked load. The load MUST NOT run
+	// for an out-of-bounds index — `argv + index*8` would address unmapped memory
+	// and fault (mrt_command_line_arg passes index 9999 to probe the OOB path).
+	// So clamp the index to 0 first (argv[0] is always valid: argc >= 1), load
+	// from the clamped address, then `csel` the result to 0 when the original
+	// index was OOB. The bounds test is `cmp argc, index` + `hi` (unsigned argc >
+	// index, i.e. index < argc) — `hi` also rejects a negative index (treated
+	// unsigned). Flags are computed ONCE; nothing between the cmp and the two
+	// csels writes NZCV (csel/movImm/lsl/add/ldr all leave flags intact), so both
+	// csels reuse them.
 	function lowerOsGetArgvLinuxArm64(resultId ValueId, indexId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
 		let tempSlot = nextTempSlot
 		let x9 = arm64PhysReg(Arm64Register.x9)
@@ -1306,26 +1312,22 @@ export type Arm64Backend implements TargetBackend
 		let x14 = arm64PhysReg(Arm64Register.x14)
 		let x15 = arm64PhysReg(Arm64Register.x15)
 
-		// x9 = argv base ; x10 = argc ; x11 = index
+		// x9 = argv base ; x10 = argc ; x11 = index ; x14 = 0 (clamp + OOB value)
 		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.globalLoad(x9, name: "__mrt_argv", size: 8))
 		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.globalLoad(x10, name: "__mrt_argc", size: 8))
 		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movRegReg(x11, src: Arm64VReg.virtual(indexId)))
-		// x15 = 3 ; x12 = x11 << x15  (= index*8)
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movImm(x14, value: 0))
+		// cmp argc, index → `hi` iff argc > index (index in bounds).
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.cmpRegs(x10, src2: x11))
+		// Clamp the index to 0 when OOB so the load address stays in-bounds.
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.csel(x11, src1: x11, src2: x14, condition: Arm64CondCode.hi))
+		// x12 = clampedIndex << 3 ; x9 = argv + x12 ; x13 = argv[clampedIndex]
 		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movImm(x15, value: 3))
 		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.lslRegs(x12, src1: x11, src2: x15))
-		// x9 = argv + x12
 		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.addRegs(x9, src1: x9, src2: x12))
-		// x13 = [x9 + 0]
 		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.loadIndirect(x13, baseReg: x9, offset: 0, width: StoreWidth.qword, signed: false))
-		// x14 = 0 (OOB replacement)
-		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movImm(x14, value: 0))
-		// cmp index, argc — sets flags. `ls` (unsigned less or equal) keeps
-		// x13 when index<=argc-1; condition mismatch swaps in x14 (zero).
-		// Strictly correct would be `cc`/`lo` (unsigned <), but those aren't
-		// in the supported Arm64CondCode set — `ls` is close enough for the
-		// compile-verify skeleton.
-		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.cmpRegs(x11, src2: x10))
-		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.csel(Arm64VReg.virtual(resultId), src1: x13, src2: x14, condition: Arm64CondCode.ls))
+		// result = (index < argc) ? argv[index] : 0
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.csel(Arm64VReg.virtual(resultId), src1: x13, src2: x14, condition: Arm64CondCode.hi))
 		// Bridge the result through a fresh slot so downstream consumers that
 		// expect slot-resident values see one. Mirrors `lowerGlobalAddrArm64`.
 		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.strToSlot(tempSlot, src: Arm64VReg.virtual(resultId)))
