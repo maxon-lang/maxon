@@ -562,6 +562,32 @@ function arm64EmitStackAlloc(code ByteArray, amount StackSize)
 	end 'hasLow'
 end 'arm64EmitStackAlloc'
 
+// ADD Xd, Xn, #imm for an immediate that may exceed the 12-bit ADD field.
+// The single-instruction arm64EmitAddImm masks imm to 12 bits, silently
+// truncating any value >= 0x1000 — which corrupts the computed address of a
+// stack slot whose byte offset reaches 0x1000 (slot index >= ~510, hit by
+// functions with large frames like mrt_executable_path's 4 KiB path buffer).
+// Splits into a high (<<12) and low part exactly like arm64EmitStackAlloc.
+// `rd` doubles as the intermediate, so this is safe even when rd == rn.
+function arm64EmitAddImmWide(code ByteArray, rd MachineWord, rn MachineWord, imm MachineWord)
+	if imm > 0xFFFFFF 'tooLarge'
+		panic("arm64EmitAddImmWide: immediate exceeds 24-bit encodable range")
+	end 'tooLarge'
+	let high = (imm shr 12) and 0xFFF
+	let low = imm and 0xFFF
+	if high == 0 'smallImm'
+		arm64EmitAddImm(code, rd: rd, rn: rn, imm12: low)
+		return
+	end 'smallImm'
+	// ADD rd, rn, #high, lsl #12 — sh field (bit 22) set, mirroring the
+	// shifted SUB/ADD-SP helpers above.
+	let insnHigh = 0x91400000 or (high shl 10) or (rn shl 5) or rd
+	arm64EmitInsn(code, insn: insnHigh)
+	if low > 0 'hasLow'
+		arm64EmitAddImm(code, rd: rd, rn: rd, imm12: low)
+	end 'hasLow'
+end 'arm64EmitAddImmWide'
+
 // Free `amount` bytes of stack (SP += amount). Mirror of `arm64EmitStackAlloc`.
 function arm64EmitStackFree(code ByteArray, amount StackSize)
 	if amount > 0xFFFFFF 'tooLarge'
@@ -1683,8 +1709,10 @@ end 'arm64EmitLeaFuncAddrOp'
 // sys.stackAddr: ADD Xd, X29, #offset to get address of a stack slot
 function arm64EmitStackAddrOp(code ByteArray, resultSlot VarSlot, targetSlot VarSlot)
 	let offset = 16 + targetSlot * 8
-	// ADD X0, X29, #offset
-	arm64EmitAddImm(code, rd: 0, rn: 29, imm12: offset)
+	// ADD X0, X29, #offset — wide form: `offset` reaches past 0xFFF for
+	// high slot indices (e.g. mrt_executable_path's slot-522 path buffer),
+	// which a plain 12-bit ADD would truncate.
+	arm64EmitAddImmWide(code, rd: 0, rn: 29, imm: offset)
 	arm64EmitStrSlot(code, rt: 0, slotIndex: resultSlot)
 end 'arm64EmitStackAddrOp'
 
@@ -2111,7 +2139,9 @@ end 'arm64EmitAtomicCasMem'
 // leaFromStack: ADD Xd, X29, #stackOffset (PC-neutral address materialization).
 function arm64EmitLeaFromStackOp(code ByteArray, dest Arm64VReg, stackOffset MachineWord)
 	let rd = resolveArm64Gpr(dest).rawValue
-	arm64EmitAddImm(code, rd: rd, rn: 29, imm12: stackOffset and 0xFFF)
+	// Wide ADD: a plain 12-bit immediate truncates `stackOffset` past 0xFFF,
+	// producing a wrong slot address in large frames (see arm64EmitStackAddrOp).
+	arm64EmitAddImmWide(code, rd: rd, rn: 29, imm: stackOffset)
 end 'arm64EmitLeaFromStackOp'
 
 // leaRdata: ADRP+ADD materialization of an rdata label address.

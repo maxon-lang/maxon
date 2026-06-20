@@ -86,7 +86,8 @@ export let MACHO_IMPORT_SLOT_USLEEP = 18
 export let MACHO_IMPORT_SLOT_TIME = 19
 export let MACHO_IMPORT_SLOT_GETDIRENTRIES64 = 20
 export let MACHO_IMPORT_SLOT_ERROR = 21
-let MACHO_IMPORT_COUNT = 22
+export let MACHO_IMPORT_SLOT_STRLEN = 22
+let MACHO_IMPORT_COUNT = 23
 
 // libSystem symbols imported via dyld chained-fixup binds, in slot order (see
 // MACHO_IMPORT_SLOT_* above). buildChainedFixups iterates this to emit both the
@@ -135,6 +136,12 @@ function machoImportNames() returns StringArray
 	// lowerings can rebuild the Linux -errno convention the runtime classifiers
 	// expect. slot 21.
 	names.push("___error")
+	// strlen: osGetExecutablePath calls `_NSGetExecutablePath`, which
+	// NUL-terminates the buffer but leaves `*bufsize` unchanged on success
+	// (unlike Linux readlink, which returns the byte count). The arm64-macos
+	// lowering calls `_strlen(buf)` after the call to recover the real path
+	// length. slot 22.
+	names.push("_strlen")
 	return names
 end 'machoImportNames'
 

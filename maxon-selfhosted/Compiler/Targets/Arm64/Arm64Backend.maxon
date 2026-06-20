@@ -1373,16 +1373,17 @@ export type Arm64Backend implements TargetBackend
 	//
 	// _NSGetExecutablePath signature:
 	//   int _NSGetExecutablePath(char *buf, uint32_t *bufsize)
-	// Returns 0 on success (and updates *bufsize to the actual length-1
-	// including NUL terminator), or -1 if the buffer was too small (in which
-	// case *bufsize is set to the required size).
+	// Returns 0 on success (NUL-terminating `buf`; *bufsize is left UNCHANGED,
+	// contrary to a common misreading), or -1 if the buffer was too small (in
+	// which case *bufsize is set to the required size).
 	//
 	// This lowering translates the return convention to the bytes-written /
 	// -errno shape expected by `mrt_executable_path`:
-	//   success → return the user-supplied bufSize as a rough upper bound
-	//             (skeleton-level — a proper NUL-scan loop would replace
-	//             this with the exact byte count; runtime correctness is
-	//             out of scope for this phase).
+	//   success → strlen(buf), the exact path byte count. Returning the raw
+	//             input bufSize instead would hand `mrt_executable_path` a
+	//             4096-byte "path" of NUL + uninitialised stack bytes, which
+	//             memcpy then copies wholesale (heap corruption + a bogus
+	//             4096-long String).
 	//   failure → return -34 (-ERANGE).
 	function lowerOsGetExecutablePathMacosArm64(resultId ValueId, bufPtrId ValueId, bufSizeId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
 		var tempSlot = nextTempSlot
@@ -1417,21 +1418,32 @@ export type Arm64Backend implements TargetBackend
 		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.iatCall(callResultSlot, slotIndex: MACHO_IMPORT_SLOT_NSGETEXECUTABLEPATH, argSlots: argSlots))
 		tempSlot = tempSlot + 1
 
-		// Translate the (0 / -1) return into (bufSize / -34) using csel on a
-		// zero compare. x9 = call result, x10 = bufSize, x11 = -34.
+		// Recover the exact path length with strlen(buf). _NSGetExecutablePath
+		// NUL-terminates the buffer regardless of outcome, so strlen is always
+		// safe to call here; the csel below discards its value on the error
+		// path. Done unconditionally (rather than branching) so the lowering
+		// stays straight-line, matching the surrounding csel style.
+		var strlenArgs = VarSlotArray.create()
+		strlenArgs.push(bufSlot)
+		let strlenResultSlot = tempSlot
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.iatCall(strlenResultSlot, slotIndex: MACHO_IMPORT_SLOT_STRLEN, argSlots: strlenArgs))
+		tempSlot = tempSlot + 1
+
+		// Translate the (0 / -1) return into (strlen / -34) using csel on a
+		// zero compare. x9 = call result, x10 = strlen, x11 = -34.
 		let x9 = arm64PhysReg(Arm64Register.x9)
 		let x10 = arm64PhysReg(Arm64Register.x10)
 		let x11 = arm64PhysReg(Arm64Register.x11)
 		let x12 = arm64PhysReg(Arm64Register.x12)
 		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.ldrFromSlot(x9, slotIndex: callResultSlot))
-		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.ldrFromSlot(x10, slotIndex: sizeSlot))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.ldrFromSlot(x10, slotIndex: strlenResultSlot))
 		// x11 = -34. movImm takes an unsigned word; encode -34 as the
 		// twos-complement 64-bit pattern.
 		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movImm(x11, value: 0xFFFFFFFFFFFFFFDE))
 		// cmp call_result, 0 (via cmp x9, x12 where x12=0)
 		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movImm(x12, value: 0))
 		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.cmpRegs(x9, src2: x12))
-		// If result == 0 (eq condition), pick x10 (bufSize); else pick x11
+		// If result == 0 (eq condition), pick x10 (strlen); else pick x11
 		// (-34). `Arm64CondCode.eq` selects src1 when equal.
 		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.csel(Arm64VReg.virtual(resultId), src1: x10, src2: x11, condition: Arm64CondCode.eq))
 

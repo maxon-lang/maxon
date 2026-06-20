@@ -3329,63 +3329,54 @@ end
 
 // mrt_executable_path(): returns a __ManagedMemory holding the UTF-8 bytes
 // of the running executable's path. On error (osGetExecutablePath returned a
-// negative errno-style value) produces an empty MM. The stack buffer holds
-// up to 4096 bytes — well past PATH_MAX on every supported system.
+// negative errno-style value) produces an empty MM.
+//
+// The scratch buffer is the managed-mem's own HEAP data region (4096+1 bytes),
+// NOT a stack buffer. A stack buffer would have to be addressed via the
+// runtime's x64-centric "stack addresses go DOWN as the slot index goes up"
+// convention (see mrt_cov_dump), which is inverted on arm64 (slots grow UP
+// from x29) — so a stackAddr-based 4 KB buffer writes off the wrong end there.
+// Writing the path straight into the result mm's heap buffer and then setting
+// its length is architecture-neutral and avoids a second alloc + memcpy.
 //
 // Slot usage:
-//   slot 0 = osGetExecutablePath return value (bytes written or -errno)
-//   slot 1 = mm pointer
-//   slot 2 = mm[0] buffer pointer
-//   slots 11..522 = 512-qword (4096-byte) UTF-8 path buffer
+//   slot 0 = mm pointer
+//   slot 1 = mm[0] buffer pointer
+//   slot 2 = osGetExecutablePath return value (bytes written or -errno)
 func mrt_executable_path 0 i64
   block entry:
-    // Stack-allocate the path buffer at slot 522 (low-address end of a
-    // 4096-byte region extending toward slot 11; the slot allocator reserves
-    // the frame).
-    v0 = std stackAddr 522
-    v1 = std constI64 4096
-    v2 = std osGetExecutablePath v0 v1
+    // __managed_mem_create(4096 + 1, 1): a heap buffer with NUL headroom.
+    v0 = std constI64 4097
+    v1 = std constI64 1
+    v2 = std call __managed_mem_create v0 v1
     std storeSlot 0 v2
 
-    // Error path: result < 0 → return empty MM.
-    v3 = std constI64 0
-    v4 = std cmpI64Lt v2 v3
-    std condBr v4 err_path ok_path
+    // buf = mm[0]; write the path directly into it.
+    v3 = std loadIndirect v2 0
+    std storeSlot 1 v3
+    v4 = std constI64 4096
+    v5 = std osGetExecutablePath v3 v4
+    std storeSlot 2 v5
+
+    // Error path: result < 0 → return the buffer as an empty MM (length 0).
+    v6 = std constI64 0
+    v7 = std cmpI64Lt v5 v6
+    std condBr v7 err_path ok_path
 
   block ok_path:
-    // __managed_mem_create(bytes + 1, 1). The +1 reserves NUL space; memcpy
-    // below copies only `bytes` data bytes.
-    v5 = std loadSlot 0
-    v6 = std constI64 1
-    v7 = std addI64 v5 v6
-    v8 = std constI64 1
-    v9 = std call __managed_mem_create v7 v8
-    std storeSlot 1 v9
-
-    // dst = mm[0].
-    v10 = std loadSlot 1
-    v11 = std loadIndirect v10 0
-    std storeSlot 2 v11
-
-    // memcpy(dst, stackBuf, bytes).
-    v12 = std loadSlot 2
-    v13 = std stackAddr 522
-    v14 = std loadSlot 0
-    std memcpy v12 v13 v14
-
-    // Store length = bytes at mm[8].
-    v15 = std loadSlot 0
-    v16 = std loadSlot 1
-    std storeIndirect v16 8 v15
-
-    v17 = std loadSlot 1
-    std ret v17
+    // Set the managed-mem length = actual path bytes (mm[8]).
+    v8 = std loadSlot 0
+    v9 = std loadSlot 2
+    std storeIndirect v8 8 v9
+    v10 = std loadSlot 0
+    std ret v10
 
   block err_path:
-    v18 = std constI64 1
-    v19 = std constI64 1
-    v20 = std call __managed_mem_create v18 v19
-    std ret v20
+    v11 = std loadSlot 0
+    v12 = std constI64 0
+    std storeIndirect v11 8 v12
+    v13 = std loadSlot 0
+    std ret v13
 end
 
 // mrt_cov_hit(siteId): increments __data_cov_counters[siteId].
