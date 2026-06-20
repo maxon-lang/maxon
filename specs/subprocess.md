@@ -328,11 +328,17 @@ save/restore in `EmitCallImportOnSystemStack` keep state consistent
 across the green-thread entry to Win32.
 ```maxon
 function main() returns ExitCode
+	#if os(Windows)
 	let exe = Executable.name("cmd")
 	var argv = StringArray.create()
 	argv.push("/c")
 	argv.push("echo")
 	argv.push("hello")
+	#else
+	let exe = Executable.path(try FilePath.from("/bin/echo") otherwise return 2)
+	var argv = StringArray.create()
+	argv.push("hello")
+	#endif
 	let p = async Subprocess.run(exe, arguments: argv)
 	let result = try await p otherwise return 2
 	if not result.succeeded() 'check-success'
@@ -368,15 +374,21 @@ typealias SubP = Promise with CollectedOutput
 typealias SubPArray = Array with SubP
 
 function main() returns ExitCode
+	#if os(Windows)
 	let exe = Executable.name("cmd")
+	#else
+	let exe = Executable.path(try FilePath.from("/bin/echo") otherwise return 7)
+	#endif
 	let count = 4
 	var promises = SubPArray.create()
 
 	var i = 0
 	while i < count 'spawn'
 		var argv = StringArray.create()
+		#if os(Windows)
 		argv.push("/c")
 		argv.push("echo")
+		#endif
 		argv.push("child-{i}")
 		promises.push(async Subprocess.run(exe, arguments: argv))
 		i = i + 1
@@ -424,7 +436,11 @@ typealias SubP = Promise with CollectedOutput
 typealias SubPArray = Array with SubP
 
 function main() returns ExitCode
+	#if os(Windows)
 	let exe = Executable.name("cmd")
+	#else
+	let exe = Executable.path(try FilePath.from("/bin/sleep") otherwise return 7)
+	#endif
 	let count = 4
 	var promises = SubPArray.create()
 
@@ -432,11 +448,15 @@ function main() returns ExitCode
 	var i = 0
 	while i < count 'spawn'
 		var argv = StringArray.create()
+		#if os(Windows)
 		argv.push("/c")
 		argv.push("ping")
 		argv.push("127.0.0.1")
 		argv.push("-n")
 		argv.push("2")
+		#else
+		argv.push("1")
+		#endif
 		promises.push(async Subprocess.run(exe, arguments: argv))
 		i = i + 1
 	end 'spawn'
