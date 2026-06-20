@@ -342,6 +342,7 @@ export function emitArm64MacosGreenThread(code ByteArray, relocations Relocation
 	emitArm64GtSpawn(code, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs, adrFixups: adrFixups, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
 	emitArm64GtTrampoline(code, callFixups: callFixups, rdataRelocs: rdataRelocs, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
 	emitArm64GtProcessPendingWaiter(code, callFixups: callFixups, rdataRelocs: rdataRelocs, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+	emitArm64GtYield(code, callFixups: callFixups, rdataRelocs: rdataRelocs, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
 	emitArm64GtAwait(code, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
 	emitArm64GtIsComplete(code, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
 	emitArm64GtCancel(code, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
@@ -910,6 +911,63 @@ function emitArm64GtProcessPendingWaiter(code ByteArray, callFixups Arm64CallFix
 	arm64GtEpilogue(code, frameSize: frameSize)
 	arm64GtFinalize(code, state: state)
 end 'emitArm64GtProcessPendingWaiter'
+
+// =============================================================================
+// __gt_yield() -> x0 (1 if it switched to another GT, 0 if no other GT was ready).
+// A cooperative reschedule point for a green thread that wants to let siblings run
+// without becoming a waiter (used by the subprocess wait_collect poll loop so the
+// single-OS-thread scheduler can run the other green threads while one is blocked on
+// waitpid). The simpler sibling of __gt_await: it re-enqueues self as ready instead
+// of marking it waiting, mirroring __gt_await's dequeue + context_switch sequence so
+// the scheduling invariants match.
+//   next = __gt_dequeue(); if next == 0 → return 0 (no other runnable GT).
+//   self = P.currentGt; self.status = ready; __gt_enqueue(self).
+//   next.status = running; __gt_context_switch(from=self, to=next, p=P).
+//   (resumed later by the scheduler) → return 1.
+// Frame: next@0x10 self@0x18.
+// =============================================================================
+function emitArm64GtYield(code ByteArray, callFixups Arm64CallFixupArray, rdataRelocs RdataRelocationArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
+	arm64RecordLabel(labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "__gt_yield", offset: code.count())
+	let frameSize = 0x20
+	var state = Arm64MacosGtState.create(1)
+	arm64GtPrologue(code, frameSize: frameSize, argCount: 0)
+
+	let noneBlock = 0
+
+	// next = __gt_dequeue(); if null → no other runnable GT, return 0.
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__gt_dequeue")
+	arm64GtCbz(code, state: state, rn: 0, targetBlock: noneBlock)
+	arm64GtStore(code, disp: 0x10, src: 0)  // next
+
+	// self = P.currentGt ; self.status = ready ; __gt_enqueue(self).
+	arm64GtLoadCurrentP(code, rdataRelocs: rdataRelocs, dest: 9)
+	arm64GtLoadField(code, dest: 9, baseReg: 9, disp: GtPOffCurrentGt)
+	arm64GtStore(code, disp: 0x18, src: 9)  // self
+	arm64EmitMovImm(code, rd: 0, value: GtStatusReady)
+	arm64GtStoreField(code, baseReg: 9, disp: GtGtOffStatus, src: 0)
+	arm64GtLoad(code, dest: 0, disp: 0x18)
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__gt_enqueue")
+
+	// next.status = running ; context_switch(from=self, to=next, p=P).
+	arm64GtLoad(code, dest: 9, disp: 0x10)  // next
+	arm64EmitMovImm(code, rd: 0, value: GtStatusRunning)
+	arm64GtStoreField(code, baseReg: 9, disp: GtGtOffStatus, src: 0)
+	arm64GtLoad(code, dest: 0, disp: 0x18)  // from = self
+	arm64GtLoad(code, dest: 1, disp: 0x10)  // to = next
+	arm64GtLoadCurrentP(code, rdataRelocs: rdataRelocs, dest: 2)  // p = P
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__gt_context_switch")
+
+	// Resumed later by the scheduler: we switched, so return 1.
+	arm64EmitMovImm(code, rd: 0, value: 1)
+	arm64GtEpilogue(code, frameSize: frameSize)
+
+	// No other runnable GT: return 0.
+	arm64GtMarkBlock(state, code: code, blockId: noneBlock)
+	arm64EmitMovImm(code, rd: 0, value: 0)
+	arm64GtEpilogue(code, frameSize: frameSize)
+
+	arm64GtFinalize(code, state: state)
+end 'emitArm64GtYield'
 
 // =============================================================================
 // __gt_await(promise=x0) -> x0 (result), x1 (threw flag). If the promise GT has

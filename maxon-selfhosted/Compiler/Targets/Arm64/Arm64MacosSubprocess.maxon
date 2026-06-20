@@ -722,8 +722,20 @@ end 'emitArm64SubpCloseFdIfValid'
 // maxon_subprocess_wait_collect(handle, timeoutMs) -> result | -1.
 // Poll waitpid(WNOHANG) up to the deadline (timeoutMs > 0), kill(SIGKILL)+reap
 // on timeout, then drain stdout/stderr (safe — child is reaped), decode status,
-// build the result. timeoutMs <= 0 blocks until exit. Ports C#
+// build the result. timeoutMs <= 0 waits cooperatively until exit. Ports C#
 // EmitMaxonSubprocessWaitCollectPosix + the timeout/kill extension.
+//
+// COOPERATIVE WAIT (single-OS-thread green-thread model). Both wait paths poll
+// waitpid(WNOHANG) and __gt_yield() between polls so a green thread blocked on a
+// child lets its siblings run (the round-robin that makes `async Subprocess.run`
+// of N children run concurrently rather than serially). The no-timeout path: poll;
+// if the child exited (waitpid == pid) or errored (< 0) we're done; else __gt_yield
+// — and if it returns 0 (we're the only runnable GT) fall back to a single blocking
+// waitpid(0) (efficient block, no spin) since no sibling needs the OS thread. The
+// timeout path keeps its usleep(1000) deadline budget but also yields each iter so a
+// timed async wait still round-robins. pid + &status are reloaded from frame slots
+// after every __gt_yield because __gt_context_switch preserves only callee-saved
+// regs + SP — caller-saved scratch does not survive the switch.
 //
 // Frame: 0x18 handle  0x28 outScratch  0x30 outLen  0x38 errScratch  0x40 errLen
 //   0x48 statusSlot  0x58 outBuf  0x60 errBuf  0x68 kind  0x70 code
@@ -749,6 +761,8 @@ function emitArm64SubprocessWaitCollect(code ByteArray, relocations RelocationAr
 	let pollExited = 11
 	let pollTimeout = 12
 	let waitReaped = 13
+	let coopLoop = 15  // no-timeout cooperative poll loop (14 = timedOutStatus, used below)
+	let coopBlock = 16  // fall-back blocking wait when no sibling GT is runnable
 
 	// Read timeoutMs (arg1) into 0x78 FIRST: arg1's home slot is [x29+0x18], which
 	// is also our `handle` local — store the handle only AFTER saving timeoutMs.
@@ -762,10 +776,10 @@ function emitArm64SubprocessWaitCollect(code ByteArray, relocations RelocationAr
 	arm64EmitMovImm(code, rd: 0, value: 0)
 	arm64MacosSubpStore(code, disp: 0x80, src: 0)
 
-	// If timeoutMs <= 0 → blocking waitpid; else poll loop.
+	// If timeoutMs <= 0 → cooperative wait loop; else timed poll loop.
 	arm64MacosSubpLoad(code, dest: 0, disp: 0x78)
 	arm64MacosSubpCmpImm(code, rn: 0, imm12: 0)
-	arm64MacosSubpCondBranch(code, state: state, cond: SUBP_COND_LE, targetBlock: blockingWait)
+	arm64MacosSubpCondBranch(code, state: state, cond: SUBP_COND_LE, targetBlock: coopLoop)
 
 	// poll loop: iter from 0; each iter waitpid(pid, &status, WNOHANG=1); if it
 	// returns the pid the child exited → reaped. usleep(1000) between polls; after
@@ -784,7 +798,11 @@ function emitArm64SubprocessWaitCollect(code ByteArray, relocations RelocationAr
 	arm64MacosSubpCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_WAITPID)
 	arm64MacosSubpCmpImm(code, rn: 0, imm12: 0)
 	arm64MacosSubpCondBranch(code, state: state, cond: SUBP_COND_GT, targetBlock: pollExited)  // returned pid → exited
-	// usleep(1000) — 1ms inter-poll sleep.
+	// __gt_yield() — let sibling green threads run so a timed async wait still
+	// round-robins (no register state to preserve here; pid/&status are reloaded
+	// from frame slots at the top of pollLoop on the next iteration).
+	arm64MacosSubpBranchLink(code, callFixups: callFixups, name: "__gt_yield")
+	// usleep(1000) — 1ms inter-poll sleep (deadline budget).
 	arm64EmitMovImm(code, rd: 0, value: 1000)
 	arm64MacosSubpCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_USLEEP)
 	arm64MacosSubpLoad(code, dest: 9, disp: 0x88)
@@ -804,6 +822,31 @@ function emitArm64SubprocessWaitCollect(code ByteArray, relocations RelocationAr
 
 	arm64MacosSubpMarkBlock(state, code: code, blockId: pollExited)
 	arm64MacosSubpBranch(code, state: state, targetBlock: waitReaped)
+
+	// no-timeout cooperative wait loop. Each iteration: poll waitpid(WNOHANG=1);
+	// if it returned the pid the child exited (status valid) → reaped; if it
+	// returned < 0 (ECHILD etc.) → treat as done/reaped; else __gt_yield() to let
+	// siblings run. If __gt_yield returns 0 we are the only runnable GT, so block
+	// efficiently with a single waitpid(0) (no busy spin) — no sibling needs the OS
+	// thread. pid + &status are reloaded from frame slots each iteration because
+	// __gt_yield → __gt_context_switch clobbers caller-saved scratch.
+	arm64MacosSubpMarkBlock(state, code: code, blockId: coopLoop)
+	arm64MacosSubpLoad(code, dest: 0, disp: 0x18)  // handle
+	arm64MacosSubpLoadField(code, dest: 0, baseReg: 0, disp: SUBP_OFF_PID)  // pid
+	arm64MacosSubpLeaFrame(code, rd: 1, disp: 0x48)  // &status
+	arm64EmitMovImm(code, rd: 2, value: 1)  // WNOHANG
+	arm64MacosSubpCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_WAITPID)
+	arm64MacosSubpCmpImm(code, rn: 0, imm12: 0)
+	arm64MacosSubpCondBranch(code, state: state, cond: SUBP_COND_GT, targetBlock: waitReaped)  // returned pid → exited
+	arm64MacosSubpCondBranch(code, state: state, cond: SUBP_COND_LT, targetBlock: waitReaped)  // error (ECHILD) → done
+	// child still running → yield to siblings.
+	arm64MacosSubpBranchLink(code, callFixups: callFixups, name: "__gt_yield")
+	arm64MacosSubpCmpImm(code, rn: 0, imm12: 0)
+	arm64MacosSubpCondBranch(code, state: state, cond: SUBP_COND_EQ, targetBlock: coopBlock)  // only GT → block
+	arm64MacosSubpBranch(code, state: state, targetBlock: coopLoop)  // came back from yield → re-poll
+
+	// coopBlock: no other runnable GT → block efficiently on waitpid(0).
+	arm64MacosSubpMarkBlock(state, code: code, blockId: coopBlock)
 
 	// blocking waitpid(pid, &status, 0)
 	arm64MacosSubpMarkBlock(state, code: code, blockId: blockingWait)
