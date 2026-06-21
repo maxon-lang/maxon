@@ -3513,7 +3513,7 @@ public partial class ARM64CodeEmitter {
     // No standard prologue — we are entered via context switch LDP/RET
     // Set up a frame for local use
     // STP x29, x30, [sp, #-0x70]!
-    var frameSize = 0x70; // 112 bytes
+    var frameSize = 0x90; // 144 bytes (adds slots: managed_mask@112, result@120, threw@128)
     var imm7 = unchecked((uint)(-frameSize / 8)) & 0x7Fu;
     EmitWord(0xA9800000 | (imm7 << 15) | (30u << 10) | (31u << 5) | 29u);
     EmitMovRegReg(ARM64Register.X29, ARM64Register.Sp);
@@ -3532,13 +3532,18 @@ public partial class ARM64CodeEmitter {
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X11, ARM64Register.X10, 0, 8); // X11 = arg_count
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X11, ARM64Register.X29, 40, 8); // [x29+40] = arg_count
 
+    // Load managed_mask from [arg_buf + 8] now, before arg_buf is freed below;
+    // the post-call decref loop walks it to drop the spawn-time increfs.
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X10, ARM64Register.X29, 32, 8); // X10 = arg_buf
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X11, ARM64Register.X10, 8, 8);   // X11 = managed_mask
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X11, ARM64Register.X29, 112, 8); // [x29+112] = managed_mask
+
     // Load args from buffer into AAPCS64 calling convention registers (X0-X7).
     // Args are at [arg_buf + 16 + i*8] — count at +0, managed_mask at +8, args
     // start at +16. See LowerAsyncCall (Compiler/MLIR/Conversion) for the
     // matching producer-side layout and the spawn-site incref that this
-    // trampoline's mm_decref-by-mask drops once the function returns.
-    // TODO(arm64-async-managed-decref): mirror the x64 trampoline's
-    // managed-mask decref loop so cross-target async semantics match.
+    // trampoline's mm_decref-by-mask (the loop after the call below) drops once
+    // the function returns.
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X11, ARM64Register.X29, 40, 8); // X11 = arg_count
     for (int i = 0; i < 8; i++) {
       var skipLabel = $"__gt_tramp_skip_arg{i}";
@@ -3568,13 +3573,34 @@ public partial class ARM64CodeEmitter {
     // BLR X9
     EmitWord(0xD63F0120);
 
-    // Store result (X0) and threw flag (X1) to gt struct
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 48, 8); // save result
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X29, 56, 8); // save threw
+    // Save result (X0) + threw (X1) to dedicated slots: mm_decref below clobbers
+    // X0/X1, and the decref loop reads the saved-arg slots [x29+48..104], so
+    // result/threw must not reuse those (they aliased args 0/1 pre-fix).
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 120, 8); // [x29+120] = result
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X29, 128, 8); // [x29+128] = threw
+
+    // Drop the spawn-time incref on managed args (mirrors the x64 trampoline's
+    // managed-mask decref loop). For each set bit in managed_mask, mm_decref the
+    // matching saved-arg slot, skipping NULL (mm_decref panics on NULL). Without
+    // this the spawn-site incref in LowerAsyncCall leaks the arg — the per-worker
+    // drain-Promise leak that tripped the parent's exit leak gate.
+    for (int i = 0; i < 8; i++) {
+      var decrefSkip = $"__gt_tramp_decref_skip_arg{i}";
+      EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, 112, 8); // X1 = managed_mask
+      EmitMovRegImm(ARM64Register.X2, 1L << i);
+      EmitAluRegReg(0x8A000000, ARM64Register.X1, ARM64Register.X1, ARM64Register.X2);   // AND X1, X1, X2 (test bit i)
+      EmitCbz(ARM64Register.X1, decrefSkip);
+      EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 48 + i * 8, 8); // X0 = saved arg i
+      EmitCbz(ARM64Register.X0, decrefSkip);
+      EmitBranchLink("mm_decref", zeroSecondArg: Compiler.MmTrace);
+      DefineLabel(decrefSkip);
+    }
+
+    // Store result + threw to the gt struct.
     EmitLoadCurrentGt(ARM64Register.X9);
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 48, 8);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 120, 8); // result
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, GtOffResult, 8);
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 56, 8);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 128, 8); // threw
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, GtOffThrew, 8);
 
     // Decrement live thread count
