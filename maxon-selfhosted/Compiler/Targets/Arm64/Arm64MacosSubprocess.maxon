@@ -28,15 +28,24 @@
 //     runs AFTER the child is reaped so a still-running child (e.g. `sleep 30`)
 //     holding a pipe write end can't block read() forever.
 //
-// Handle struct (__slab_alloc, 0x20):
-//   +0  pid   +8 outReadFd   +16 errReadFd   +24 argv[]
-// Result struct (__slab_alloc, 0x38):
+// Handle struct (__slab_alloc, 0x70) — unified sync + streaming, see the
+// SUBP_OFF_* constants below. Result struct (__slab_alloc, 0x38):
 //   +0 statusKind  +8 statusCode  +16 stdoutBuf  +24 stdoutLen
 //   +32 stderrBuf  +40 stderrLen  +48 durationMs
 // outReadFd/errReadFd hold -1 when that stream is not collected. stdoutBuf/
 // stderrBuf are __slab_alloc'd raw byte buffers (0/len 0 when empty).
-// result_release frees the raw buffers + the result struct; release_handle frees
-// argv[] + the handle struct.
+// result_release frees the raw buffers + the result struct; release_handle closes
+// any fd >= 0, frees any non-null line buffer, then frees argv[] + the handle struct.
+//
+// Streaming API (maxon_subprocess_spawn_streaming + write_stdin_all / close_stdin /
+// read_stdout_line / read_stderr_line / wait_exit): the C# bootstrap parks the
+// per-worker drain GTs on kqueue (__io_submit_read) so they multiplex without an OS
+// thread blocking in read(). The self-hosted arm64-macos green-thread runtime is
+// single-OS-thread cooperative with NO kqueue, so the streaming line reader instead
+// sets the pipe read ends O_NONBLOCK (fcntl at spawn) and refills via a
+// non-blocking read() + __gt_yield poll loop (the same poll+yield shape the sync
+// wait_collect uses for waitpid). read_*_line returns a fresh __ManagedMemory
+// (returnsManaged), built exactly like maxon_subprocess_result_stdout.
 //
 // Calling convention (AAPCS64): args x0..x7, return x0. Scratch: x9..x15 and
 // x16/x17 (IP0/IP1). The frame layout (slot displacements) mirrors the C#
@@ -53,12 +62,37 @@
 // wait_collect. Matches the C# reference's SubpScratchCap.
 let SUBP_SCRATCH_CAP = 8 * 1024 * 1024
 
-// Handle-struct field offsets.
+// Unified handle-struct field offsets (0x70). Shared by the synchronous
+// Subprocess.run path and the streaming API so the single maxon_subprocess_release_handle
+// cleans up either shape (mirrors the C# bootstrap's unified handle):
+//   +0x00 pid  +0x08 outReadFd  +0x10 errReadFd  +0x18 argv[]
+//   +0x20 stdinWriteFd (-1 for sync spawns / once close_stdin runs)
+//   +0x28 outBuf-quad {buf,len,cap,eof}   +0x48 errBuf-quad {buf,len,cap,eof}
+// Sync spawns set stdinWriteFd=-1 and leave both line-buffer quads zeroed;
+// release_handle closes any fd >= 0 and frees any non-null line buffer + argv + struct.
 let SUBP_OFF_PID = 0
 let SUBP_OFF_OUT_READ_FD = 8
 let SUBP_OFF_ERR_READ_FD = 16
 let SUBP_OFF_ARGV = 24
-let SUBP_HANDLE_SIZE = 0x20
+let SUBP_OFF_STDIN_FD = 0x20
+let SUBP_OFF_OUT_BUF = 0x28
+let SUBP_OFF_ERR_BUF = 0x48
+let SUBP_HANDLE_SIZE = 0x70
+
+// Line-buffer quad sub-offsets (relative to OUT_BUF / ERR_BUF base).
+let SUBP_QUAD_BUF = 0
+let SUBP_QUAD_LEN = 8
+let SUBP_QUAD_CAP = 16
+let SUBP_QUAD_EOF = 24
+
+// Initial line-buffer capacity, and the free-space floor below which the reader
+// re-grows so one read() can deliver a useful chunk. Match the C# reference.
+let SUBP_STREAM_LINE_INIT_CAP = 4096
+let SUBP_STREAM_LINE_GROW_FLOOR = 512
+
+// fcntl(fd, F_SETFL, O_NONBLOCK) constants (macOS): F_SETFL=4, O_NONBLOCK=4.
+let SUBP_F_SETFL = 4
+let SUBP_O_NONBLOCK = 4
 
 // Result-struct field offsets.
 let SUBP_RES_OFF_STATUS_KIND = 0
@@ -301,6 +335,7 @@ end 'arm64MacosSubpPatchImm19'
 // the stdlib link pass, so these labels override the runtime.std stubs.
 // =============================================================================
 export function emitArm64MacosSubprocess(code ByteArray, relocations RelocationArray, callFixups Arm64CallFixupArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
+	emitArm64SubpBuildArgv(code, callFixups: callFixups, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
 	emitArm64SubpDrain(code, relocations: relocations, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
 	emitArm64SubprocessSpawn(code, relocations: relocations, callFixups: callFixups, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
 	emitArm64SubprocessWaitCollect(code, relocations: relocations, callFixups: callFixups, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
@@ -311,18 +346,25 @@ export function emitArm64MacosSubprocess(code ByteArray, relocations RelocationA
 	emitArm64SubpResultStreamCopy(code, callFixups: callFixups, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "maxon_subprocess_result_stderr", bufOff: SUBP_RES_OFF_STDERR_BUF, lenOff: SUBP_RES_OFF_STDERR_LEN)
 	emitArm64SubpResultAccessor(code, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "maxon_subprocess_result_duration_ms", fieldOffset: SUBP_RES_OFF_DURATION_MS)
 	emitArm64SubprocessResultRelease(code, callFixups: callFixups, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
-	emitArm64SubprocessReleaseHandle(code, callFixups: callFixups, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+	emitArm64SubprocessReleaseHandle(code, relocations: relocations, callFixups: callFixups, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
 
-	// NOT overridden here (unlike the C# reference, which emits every runtime
-	// function itself): the still-stubbed subprocess functions — resolve_on_path,
-	// last_error_message, kill, send_signal, detach, managed_is_null, and the
-	// streaming API (spawn_streaming / write_stdin_all / read_stdout_line /
-	// read_stderr_line / close_stdin / wait_exit) — keep their runtime.std
-	// bodies, which the self-hosted compiler already compiles and links. Those
-	// bodies are correct for the non-spawn paths (e.g. last_error_message /
-	// read_*_line return a valid empty `__ManagedMemory`, not a raw 0 that would
-	// crash `String.init`; managed_is_null already returns 1-if-null), so
-	// re-emitting them as constant-return stubs would only risk divergence.
+	// Streaming API (persistent-worker pool): the parent drives stdin/stdout/stderr
+	// pipes. The line readers refill cooperatively (non-blocking read + __gt_yield)
+	// since the single-thread runtime has no kqueue. See the file header.
+	emitArm64SubprocessSpawnStreaming(code, relocations: relocations, callFixups: callFixups, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+	emitArm64SubprocessWriteStdinAll(code, relocations: relocations, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+	emitArm64SubprocessCloseStdin(code, relocations: relocations, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+	emitArm64SubpStreamEmitLine(code, callFixups: callFixups, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+	emitArm64SubpStreamReadLine(code, relocations: relocations, callFixups: callFixups, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+	emitArm64SubprocessReadLineWrapper(code, callFixups: callFixups, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "maxon_subprocess_read_stdout_line", fdOff: SUBP_OFF_OUT_READ_FD, bufOff: SUBP_OFF_OUT_BUF)
+	emitArm64SubprocessReadLineWrapper(code, callFixups: callFixups, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "maxon_subprocess_read_stderr_line", fdOff: SUBP_OFF_ERR_READ_FD, bufOff: SUBP_OFF_ERR_BUF)
+	emitArm64SubprocessWaitExit(code, relocations: relocations, callFixups: callFixups, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+	emitArm64SubprocessKill(code, relocations: relocations, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+
+	// Still NOT overridden (kept on their runtime.std bodies, correct for the
+	// non-spawn paths): resolve_on_path, last_error_message, send_signal, detach,
+	// managed_is_null. Re-emitting them as constant-return stubs would only risk
+	// divergence from the .std definitions.
 end 'emitArm64MacosSubprocess'
 
 // The macOS subprocess runtime function names whose call fixups originate in the
@@ -400,9 +442,9 @@ function emitArm64SubprocessSpawn(code ByteArray, relocations RelocationArray, c
 	var state = Arm64MacosSubpState.create(20)
 	arm64MacosSubpPrologue(code, frameSize: frameSize, argCount: 8)
 
-	let walkLoop = 0
-	let walkNext = 1
-	let walkDone = 2
+	// The argv build is factored into the shared __subp_build_argv helper, so
+	// the walk/repack block ids that lived here are gone; block ids start at the
+	// stdio-pipe branches.
 	let skipOutPipe = 3
 	let skipErrPipe = 4
 	let skipInPipe = 5
@@ -422,83 +464,16 @@ function emitArm64SubprocessSpawn(code ByteArray, relocations RelocationArray, c
 	arm64MacosSubpStoreW(code, disp: 0x58, src: 0)
 	arm64MacosSubpStoreW(code, disp: 0xC0, src: 0)
 
-	// --- argv build ---
-	// arg0 (argvBlob.managed) is the __ManagedMemory STRUCT pointer (the
-	// self-hosted lowering passes it as-is, unlike the C# backend which extracts
-	// the buffer). The argc NUL-separated strings live in an `Array with Byte`
-	// whose backend layout uses an 8-byte element STRIDE (MM[24] = elemSize), not
-	// the packed 1-byte the C# bootstrap assumes (see the X64 self-hosted
-	// __subp_build_cmdline_wide). So first repack the strided blob into a packed
-	// 1-byte buffer, then build argv[] pointers into the packed copy.
-	//   MM[0] = srcBuf  MM[8] = blobLen (byte count)  MM[24] = elemSize.
+	// --- argv build (shared with the streaming spawn via __subp_build_argv) ---
+	// arg0 (argvBlob.managed) is the __ManagedMemory struct ptr; the helper
+	// repacks its strided byte blob and returns argv[] whose argv[0] is the packed
+	// base (doubles as the exec path; the buffer release_handle frees).
 	arm64MacosSubpReloadArg(code, argIndex: 0)  // MM struct ptr → x0
-	arm64MacosSubpLoadField(code, dest: 1, baseReg: 0, disp: 8)  // blobLen
-	arm64MacosSubpStore(code, disp: 0xE0, src: 1)
-	arm64MacosSubpLoadField(code, dest: 1, baseReg: 0, disp: 24)  // elemSize
-	arm64MacosSubpStore(code, disp: 0xD8, src: 1)
-	arm64MacosSubpLoadField(code, dest: 1, baseReg: 0, disp: 0)  // srcBuf
-	arm64MacosSubpStore(code, disp: 0xE8, src: 1)
-	arm64MacosSubpLoad(code, dest: 0, disp: 0x18)  // argc (homed arg1)
-	arm64MacosSubpStore(code, disp: 0xB8, src: 0)
-
-	// packed = __slab_alloc(blobLen). The packed buffer doubles as argv[0]/path
-	// and is the base release_handle frees (argv[0] points at it).
-	arm64MacosSubpLoad(code, dest: 0, disp: 0xE0)
-	arm64MacosSubpBranchLink(code, callFixups: callFixups, name: "__slab_alloc")
-	arm64MacosSubpStore(code, disp: 0x90, src: 0)  // packed base
-	// repack: for i in 0..blobLen: packed[i] = srcBuf[i*elemSize] (low byte).
-	// x9=i x10=srcBuf x11=elemSize x12=packed x13=blobLen.
-	arm64EmitMovImm(code, rd: 9, value: 0)
-	arm64MacosSubpLoad(code, dest: 10, disp: 0xE8)
-	arm64MacosSubpLoad(code, dest: 11, disp: 0xD8)
-	arm64MacosSubpLoad(code, dest: 12, disp: 0x90)
-	arm64MacosSubpLoad(code, dest: 13, disp: 0xE0)
-	let repackLoop = 15
-	let repackDone = 16
-	arm64MacosSubpMarkBlock(state, code: code, blockId: repackLoop)
-	arm64EmitCmp(code, rn: 9, rm: 13)
-	arm64MacosSubpCondBranch(code, state: state, cond: SUBP_COND_GE, targetBlock: repackDone)
-	arm64MacosSubpAlu(code, opcode: SUBP_ALU_ADD, rd: 14, rn: 12, rm: 9)  // &packed[i]
-	arm64EmitLdrb(code, rt: 17, rn: 10, offset: 0)  // low byte of srcBuf[i*elemSize]
-	arm64EmitStrb(code, rt: 17, rn: 14, offset: 0)
-	arm64MacosSubpAlu(code, opcode: SUBP_ALU_ADD, rd: 10, rn: 10, rm: 11)  // srcBuf += elemSize
-	arm64EmitAddImm(code, rd: 9, rn: 9, imm12: 1)
-	arm64MacosSubpBranch(code, state: state, targetBlock: repackLoop)
-	arm64MacosSubpMarkBlock(state, code: code, blockId: repackDone)
-
-	// argv[] = __slab_alloc((argc+1)*8)
-	arm64MacosSubpLoad(code, dest: 0, disp: 0xB8)
-	arm64EmitAddImm(code, rd: 0, rn: 0, imm12: 1)
-	arm64MacosSubpLslImm(code, rd: 0, rn: 0, shift: 3)  // (argc+1)*8
-	arm64MacosSubpBranchLink(code, callFixups: callFixups, name: "__slab_alloc")  // x0 = argv[]
-	arm64MacosSubpStore(code, disp: 0x78, src: 0)
-	arm64MacosSubpLoad(code, dest: 1, disp: 0x90)
-	arm64MacosSubpStoreField(code, baseReg: 0, disp: 0, src: 1)  // argv[0] = packed base
-	// walk the PACKED buffer (1-byte stride): x9=idx x10=p x13=argc x14=argv
-	arm64EmitMovImm(code, rd: 9, value: 1)
-	arm64MacosSubpLoad(code, dest: 10, disp: 0x90)  // p = packed base
-	arm64MacosSubpLoad(code, dest: 13, disp: 0xB8)  // argc
-	arm64MacosSubpLoad(code, dest: 14, disp: 0x78)  // argv
-
-	arm64MacosSubpMarkBlock(state, code: code, blockId: walkLoop)
-	arm64EmitCmp(code, rn: 9, rm: 13)
-	arm64MacosSubpCondBranch(code, state: state, cond: SUBP_COND_GE, targetBlock: walkDone)  // idx >= argc
-	arm64EmitLdrb(code, rt: 16, rn: 10, offset: 0)  // byte = [p]
-	arm64MacosSubpCmpImm(code, rn: 16, imm12: 0)
-	arm64MacosSubpCondBranch(code, state: state, cond: SUBP_COND_NE, targetBlock: walkNext)
-	arm64EmitAddImm(code, rd: 15, rn: 10, imm12: 1)  // next string = p+1
-	arm64MacosSubpLslImm(code, rd: 17, rn: 9, shift: 3)
-	arm64MacosSubpAlu(code, opcode: SUBP_ALU_ADD, rd: 17, rn: 14, rm: 17)  // &argv[idx]
-	arm64MacosSubpStoreField(code, baseReg: 17, disp: 0, src: 15)
-	arm64EmitAddImm(code, rd: 9, rn: 9, imm12: 1)  // idx++
-	arm64MacosSubpMarkBlock(state, code: code, blockId: walkNext)
-	arm64EmitAddImm(code, rd: 10, rn: 10, imm12: 1)  // p++
-	arm64MacosSubpBranch(code, state: state, targetBlock: walkLoop)
-
-	arm64MacosSubpMarkBlock(state, code: code, blockId: walkDone)
-	arm64MacosSubpLslImm(code, rd: 17, rn: 13, shift: 3)
-	arm64MacosSubpAlu(code, opcode: SUBP_ALU_ADD, rd: 17, rn: 14, rm: 17)
-	arm64MacosSubpStoreField(code, baseReg: 17, disp: 0, src: SUBP_REG_XZR)  // argv[argc] = NULL
+	arm64MacosSubpLoad(code, dest: 1, disp: 0x18)  // argc (homed arg1) → x1
+	arm64MacosSubpBranchLink(code, callFixups: callFixups, name: "__subp_build_argv")
+	arm64MacosSubpStore(code, disp: 0x78, src: 0)  // argv[]
+	arm64MacosSubpLoadField(code, dest: 1, baseReg: 0, disp: 0)  // packed = argv[0]
+	arm64MacosSubpStore(code, disp: 0x90, src: 1)  // packed base / exec path
 
 	// --- stdio kinds ---
 	arm64MacosSubpLoad(code, dest: 0, disp: 0x48)  // stdoutKind (homed arg7)
@@ -669,7 +644,8 @@ function emitArm64SubprocessSpawn(code ByteArray, relocations RelocationArray, c
 	arm64MacosSubpCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_CLOSE)
 	arm64MacosSubpMarkBlock(state, code: code, blockId: skipWriteStdin)
 
-	// build handle (__slab_alloc 0x20): pid, outReadFd, errReadFd, argv.
+	// build handle (__slab_alloc 0x70): pid, outReadFd, errReadFd, argv + the
+	// streaming-only fields zeroed for a sync spawn.
 	arm64EmitMovImm(code, rd: 0, value: SUBP_HANDLE_SIZE)
 	arm64MacosSubpBranchLink(code, callFixups: callFixups, name: "__slab_alloc")
 	arm64EmitMovRegReg(code, rd: 9, rn: 0)  // handle (no calls follow)
@@ -681,11 +657,19 @@ function emitArm64SubprocessSpawn(code ByteArray, relocations RelocationArray, c
 	arm64MacosSubpStoreField(code, baseReg: 9, disp: SUBP_OFF_ERR_READ_FD, src: 1)
 	arm64MacosSubpLoad(code, dest: 1, disp: 0x78)  // argv
 	arm64MacosSubpStoreField(code, baseReg: 9, disp: SUBP_OFF_ARGV, src: 1)
+	// Streaming-only fields are unused by a sync spawn: stdinWriteFd = -1 (so
+	// release_handle skips it); both line-buffer quads left null (so it skips
+	// the frees). The other quad words don't matter while buf is null.
+	arm64EmitMovImm(code, rd: 1, value: -1)
+	arm64MacosSubpStoreField(code, baseReg: 9, disp: SUBP_OFF_STDIN_FD, src: 1)
+	arm64MacosSubpStoreField(code, baseReg: 9, disp: SUBP_OFF_OUT_BUF + SUBP_QUAD_BUF, src: SUBP_REG_XZR)
+	arm64MacosSubpStoreField(code, baseReg: 9, disp: SUBP_OFF_ERR_BUF + SUBP_QUAD_BUF, src: SUBP_REG_XZR)
 	arm64EmitMovRegReg(code, rd: 0, rn: 9)
 	arm64MacosSubpEpilogue(code, frameSize: frameSize)
 
-	// failure: destroy fa, close any open pipe ends, free argv + packed blob,
-	// return -1.
+	// failure: destroy fa, close any open pipe ends, free argv[] AND the packed
+	// argv[0] blob (__subp_build_argv allocates it — see emitArm64SubpFreeArgvChain),
+	// return -1. Block ids 15/16 are free in this function's create(20) pool.
 	arm64MacosSubpMarkBlock(state, code: code, blockId: spawnFail)
 	arm64MacosSubpLeaFrame(code, rd: 0, disp: 0x60)
 	arm64MacosSubpCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_SPAWN_FA_DESTROY)
@@ -695,8 +679,7 @@ function emitArm64SubprocessSpawn(code ByteArray, relocations RelocationArray, c
 	emitArm64SubpCloseFdIfValid(code, relocations: relocations, disp: 0x5C)
 	emitArm64SubpCloseFdIfValid(code, relocations: relocations, disp: 0xC0)
 	emitArm64SubpCloseFdIfValid(code, relocations: relocations, disp: 0xC4)
-	arm64MacosSubpLoad(code, dest: 0, disp: 0x78)
-	arm64MacosSubpBranchLink(code, callFixups: callFixups, name: "__slab_free")
+	emitArm64SubpFreeArgvChain(code, state: state, callFixups: callFixups, argvSlot: 0x78, noPackedBlock: 15, doneBlock: 16)
 	arm64EmitMovImm(code, rd: 0, value: -1)
 	arm64MacosSubpEpilogue(code, frameSize: frameSize)
 
@@ -761,7 +744,8 @@ function emitArm64SubprocessWaitCollect(code ByteArray, relocations RelocationAr
 	let pollExited = 11
 	let pollTimeout = 12
 	let waitReaped = 13
-	let coopLoop = 15  // no-timeout cooperative poll loop (14 = timedOutStatus, used below)
+	let timedOutStatus = 14  // status-decode entry for the timeout-kill path
+	let coopLoop = 15  // no-timeout cooperative poll loop
 	let coopBlock = 16  // fall-back blocking wait when no sibling GT is runnable
 
 	// Read timeoutMs (arg1) into 0x78 FIRST: arg1's home slot is [x29+0x18], which
@@ -881,6 +865,11 @@ function emitArm64SubprocessWaitCollect(code ByteArray, relocations RelocationAr
 	arm64MacosSubpLoad(code, dest: 0, disp: 0x18)
 	arm64MacosSubpLoadField(code, dest: 0, baseReg: 0, disp: SUBP_OFF_OUT_READ_FD)
 	arm64MacosSubpCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_CLOSE)
+	// null the read fd in the handle so the unified release_handle (which now
+	// closes any fd >= 0) does not double-close this already-closed descriptor.
+	arm64MacosSubpLoad(code, dest: 0, disp: 0x18)
+	arm64EmitMovImm(code, rd: 1, value: -1)
+	arm64MacosSubpStoreField(code, baseReg: 0, disp: SUBP_OFF_OUT_READ_FD, src: 1)
 	arm64MacosSubpMarkBlock(state, code: code, blockId: skipDrainOut)
 
 	// drain stderr if errReadFd >= 0
@@ -900,12 +889,16 @@ function emitArm64SubprocessWaitCollect(code ByteArray, relocations RelocationAr
 	arm64MacosSubpLoad(code, dest: 0, disp: 0x18)
 	arm64MacosSubpLoadField(code, dest: 0, baseReg: 0, disp: SUBP_OFF_ERR_READ_FD)
 	arm64MacosSubpCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_CLOSE)
+	// null the read fd (see the stdout drain above) so release_handle skips it.
+	arm64MacosSubpLoad(code, dest: 0, disp: 0x18)
+	arm64EmitMovImm(code, rd: 1, value: -1)
+	arm64MacosSubpStoreField(code, baseReg: 0, disp: SUBP_OFF_ERR_READ_FD, src: 1)
 	arm64MacosSubpMarkBlock(state, code: code, blockId: skipDrainErr)
 
 	// decode status. If timedOutFlag → timedOut(2)/sentinel. Else POSIX wait status.
 	arm64MacosSubpLoad(code, dest: 0, disp: 0x80)
 	arm64MacosSubpCmpImm(code, rn: 0, imm12: 0)
-	arm64MacosSubpCondBranch(code, state: state, cond: SUBP_COND_NE, targetBlock: 14)  // timedOutStatus
+	arm64MacosSubpCondBranch(code, state: state, cond: SUBP_COND_NE, targetBlock: timedOutStatus)
 	// W status (low 4 bytes of statusSlot) → x9.
 	let statusInsn = 0xB9400000 or (((0x48 / 4) and 0xFFF) shl 10) or (SUBP_REG_X29 shl 5) or 9
 	arm64EmitInsn(code, insn: statusInsn)
@@ -928,7 +921,6 @@ function emitArm64SubprocessWaitCollect(code ByteArray, relocations RelocationAr
 	arm64MacosSubpBranch(code, state: state, targetBlock: statusDone)
 
 	// timedOut status: kind=2 (timedOut), code=124 sentinel.
-	let timedOutStatus = 14
 	arm64MacosSubpMarkBlock(state, code: code, blockId: timedOutStatus)
 	arm64EmitMovImm(code, rd: 12, value: 2)
 	arm64MacosSubpStore(code, disp: 0x68, src: 12)
@@ -1163,27 +1155,66 @@ function emitArm64SubprocessResultRelease(code ByteArray, callFixups Arm64CallFi
 	arm64MacosSubpFinalize(code, state: state)
 end 'emitArm64SubprocessResultRelease'
 
+// Close the i64 fd field at handle-field `fdOff` if it is >= 0, then jump past
+// the close to `afterBlock`. The handle ptr lives at frame slot 0x18. Shared by
+// the three fd fields (outReadFd / errReadFd / stdinWriteFd) in release_handle.
+function emitArm64SubpReleaseCloseFd(code ByteArray, state Arm64MacosSubpState, relocations RelocationArray, fdOff MachineWord, afterBlock BlockId)
+	arm64MacosSubpLoad(code, dest: 0, disp: 0x18)  // handle
+	arm64MacosSubpLoadField(code, dest: 1, baseReg: 0, disp: fdOff)
+	arm64MacosSubpCmpImm(code, rn: 1, imm12: 0)
+	arm64MacosSubpCondBranch(code, state: state, cond: SUBP_COND_LT, targetBlock: afterBlock)
+	arm64EmitMovRegReg(code, rd: 0, rn: 1)
+	arm64MacosSubpCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_CLOSE)
+	arm64MacosSubpMarkBlock(state, code: code, blockId: afterBlock)
+end 'emitArm64SubpReleaseCloseFd'
+
+// __slab_free the pointer at handle-field `fieldOff` if it is non-null, then jump
+// past the free to `afterBlock`. Shared by the stdout/stderr line-buffer frees.
+function emitArm64SubpReleaseFreeField(code ByteArray, state Arm64MacosSubpState, callFixups Arm64CallFixupArray, fieldOff MachineWord, afterBlock BlockId)
+	arm64MacosSubpLoad(code, dest: 0, disp: 0x18)  // handle
+	arm64MacosSubpLoadField(code, dest: 0, baseReg: 0, disp: fieldOff)
+	arm64MacosSubpCbz(code, state: state, rn: 0, targetBlock: afterBlock)
+	arm64MacosSubpBranchLink(code, callFixups: callFixups, name: "__slab_free")
+	arm64MacosSubpMarkBlock(state, code: code, blockId: afterBlock)
+end 'emitArm64SubpReleaseFreeField'
+
 // =============================================================================
-// maxon_subprocess_release_handle(handle) — free the packed argv blob (argv[0]'s
-// backing), then argv[], then the handle struct. Void. Null-guarded. Extends C#
-// EmitMaxonSubprocessReleaseHandlePosix with the packed-blob free (the C# blob
-// is the caller-owned __ManagedMemory buffer; ours is a __slab_alloc'd repack
-// owned by the handle — see the spawn argv build).
-// Frame: 0x18 handle.
+// maxon_subprocess_release_handle(handle) — close any still-open pipe fd
+// (outReadFd / errReadFd / stdinWriteFd >= 0; streaming handles, and sync handles
+// whose wait_collect was skipped), free any non-null line buffer (streaming),
+// then free the packed argv blob (argv[0]'s backing), argv[], and the handle
+// struct. Void. Null-guarded. The unified handle (sync + streaming) leaves the
+// streaming fields -1/null on a sync spawn, so those closes/frees are skipped.
+// Frame: 0x18 handle, 0x20 argv.
 // =============================================================================
-function emitArm64SubprocessReleaseHandle(code ByteArray, callFixups Arm64CallFixupArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
+function emitArm64SubprocessReleaseHandle(code ByteArray, relocations RelocationArray, callFixups Arm64CallFixupArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
 	arm64RecordLabel(labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "maxon_subprocess_release_handle", offset: code.count())
 	let frameSize = 0x30
-	var state = Arm64MacosSubpState.create(3)
+	var state = Arm64MacosSubpState.create(8)
 	arm64MacosSubpPrologue(code, frameSize: frameSize, argCount: 1)
 
 	let doneBlock = 0
-	let noArgv = 1
-	let noPacked = 2
+	let afterCloseOut = 1
+	let afterCloseErr = 2
+	let afterCloseStdin = 3
+	let afterFreeOutBuf = 4
+	let afterFreeErrBuf = 5
+	let noArgv = 6
+	let noPacked = 7
 
 	arm64MacosSubpReloadArg(code, argIndex: 0)
 	arm64MacosSubpCbz(code, state: state, rn: 0, targetBlock: doneBlock)
 	arm64MacosSubpStore(code, disp: 0x18, src: 0)
+
+	// Close any still-open pipe fds (streaming, or a sync handle never waited on).
+	emitArm64SubpReleaseCloseFd(code, state: state, relocations: relocations, fdOff: SUBP_OFF_OUT_READ_FD, afterBlock: afterCloseOut)
+	emitArm64SubpReleaseCloseFd(code, state: state, relocations: relocations, fdOff: SUBP_OFF_ERR_READ_FD, afterBlock: afterCloseErr)
+	emitArm64SubpReleaseCloseFd(code, state: state, relocations: relocations, fdOff: SUBP_OFF_STDIN_FD, afterBlock: afterCloseStdin)
+	// Free any non-null streaming line buffers.
+	emitArm64SubpReleaseFreeField(code, state: state, callFixups: callFixups, fieldOff: SUBP_OFF_OUT_BUF + SUBP_QUAD_BUF, afterBlock: afterFreeOutBuf)
+	emitArm64SubpReleaseFreeField(code, state: state, callFixups: callFixups, fieldOff: SUBP_OFF_ERR_BUF + SUBP_QUAD_BUF, afterBlock: afterFreeErrBuf)
+
+	arm64MacosSubpLoad(code, dest: 0, disp: 0x18)
 	arm64MacosSubpLoadField(code, dest: 0, baseReg: 0, disp: SUBP_OFF_ARGV)  // argv[]
 	arm64MacosSubpCbz(code, state: state, rn: 0, targetBlock: noArgv)
 	arm64MacosSubpStore(code, disp: 0x20, src: 0)  // stash argv ptr
@@ -1202,3 +1233,733 @@ function emitArm64SubprocessReleaseHandle(code ByteArray, callFixups Arm64CallFi
 	arm64MacosSubpEpilogue(code, frameSize: frameSize)
 	arm64MacosSubpFinalize(code, state: state)
 end 'emitArm64SubprocessReleaseHandle'
+
+// =============================================================================
+// __subp_build_argv(blobMM_x0, argc_x1) -> argv_x0. Shared by the sync and
+// streaming spawns. arg0 is the __ManagedMemory struct ptr for the argv blob
+// (MM[0]=srcBuf, MM[8]=blobLen, MM[24]=elemSize); the strings are stored with an
+// 8-byte element STRIDE, so first repack into a packed 1-byte buffer, then build
+// argv[] pointers into it. argv[0] is the packed base (doubles as the exec path
+// and is the buffer release_handle frees). Ports C# __subp_build_argv, with the
+// strided-blob repack the self-hosted layout needs.
+// Frame: 0x20 blobLen, 0x28 elemSize, 0x30 srcBuf, 0x38 argc, 0x40 packed, 0x48 argv.
+// =============================================================================
+function emitArm64SubpBuildArgv(code ByteArray, callFixups Arm64CallFixupArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
+	arm64RecordLabel(labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "__subp_build_argv", offset: code.count())
+	let frameSize = 0x60
+	var state = Arm64MacosSubpState.create(5)
+	arm64MacosSubpPrologue(code, frameSize: frameSize, argCount: 2)
+
+	let repackLoop = 0
+	let repackDone = 1
+	let walkLoop = 2
+	let walkNext = 3
+	let walkDone = 4
+
+	arm64MacosSubpReloadArg(code, argIndex: 0)  // MM struct ptr → x0
+	arm64MacosSubpLoadField(code, dest: 1, baseReg: 0, disp: 8)  // blobLen
+	arm64MacosSubpStore(code, disp: 0x20, src: 1)
+	arm64MacosSubpLoadField(code, dest: 1, baseReg: 0, disp: 24)  // elemSize
+	arm64MacosSubpStore(code, disp: 0x28, src: 1)
+	arm64MacosSubpLoadField(code, dest: 1, baseReg: 0, disp: 0)  // srcBuf
+	arm64MacosSubpStore(code, disp: 0x30, src: 1)
+	arm64MacosSubpLoad(code, dest: 0, disp: 0x18)  // argc (homed arg1)
+	arm64MacosSubpStore(code, disp: 0x38, src: 0)
+
+	// packed = __slab_alloc(blobLen)
+	arm64MacosSubpLoad(code, dest: 0, disp: 0x20)
+	arm64MacosSubpBranchLink(code, callFixups: callFixups, name: "__slab_alloc")
+	arm64MacosSubpStore(code, disp: 0x40, src: 0)
+	// repack: for i in 0..blobLen: packed[i] = srcBuf[i*elemSize] (low byte).
+	// x9=i x10=srcBuf x11=elemSize x12=packed x13=blobLen.
+	arm64EmitMovImm(code, rd: 9, value: 0)
+	arm64MacosSubpLoad(code, dest: 10, disp: 0x30)
+	arm64MacosSubpLoad(code, dest: 11, disp: 0x28)
+	arm64MacosSubpLoad(code, dest: 12, disp: 0x40)
+	arm64MacosSubpLoad(code, dest: 13, disp: 0x20)
+	arm64MacosSubpMarkBlock(state, code: code, blockId: repackLoop)
+	arm64EmitCmp(code, rn: 9, rm: 13)
+	arm64MacosSubpCondBranch(code, state: state, cond: SUBP_COND_GE, targetBlock: repackDone)
+	arm64MacosSubpAlu(code, opcode: SUBP_ALU_ADD, rd: 14, rn: 12, rm: 9)  // &packed[i]
+	arm64EmitLdrb(code, rt: 17, rn: 10, offset: 0)  // low byte of srcBuf[i*elemSize]
+	arm64EmitStrb(code, rt: 17, rn: 14, offset: 0)
+	arm64MacosSubpAlu(code, opcode: SUBP_ALU_ADD, rd: 10, rn: 10, rm: 11)  // srcBuf += elemSize
+	arm64EmitAddImm(code, rd: 9, rn: 9, imm12: 1)
+	arm64MacosSubpBranch(code, state: state, targetBlock: repackLoop)
+	arm64MacosSubpMarkBlock(state, code: code, blockId: repackDone)
+
+	// argv[] = __slab_alloc((argc+1)*8)
+	arm64MacosSubpLoad(code, dest: 0, disp: 0x38)
+	arm64EmitAddImm(code, rd: 0, rn: 0, imm12: 1)
+	arm64MacosSubpLslImm(code, rd: 0, rn: 0, shift: 3)  // (argc+1)*8
+	arm64MacosSubpBranchLink(code, callFixups: callFixups, name: "__slab_alloc")
+	arm64MacosSubpStore(code, disp: 0x48, src: 0)
+	arm64MacosSubpLoad(code, dest: 1, disp: 0x40)
+	arm64MacosSubpStoreField(code, baseReg: 0, disp: 0, src: 1)  // argv[0] = packed base
+	// walk the PACKED buffer (1-byte stride): x9=idx x10=p x13=argc x14=argv
+	arm64EmitMovImm(code, rd: 9, value: 1)
+	arm64MacosSubpLoad(code, dest: 10, disp: 0x40)
+	arm64MacosSubpLoad(code, dest: 13, disp: 0x38)
+	arm64MacosSubpLoad(code, dest: 14, disp: 0x48)
+	arm64MacosSubpMarkBlock(state, code: code, blockId: walkLoop)
+	arm64EmitCmp(code, rn: 9, rm: 13)
+	arm64MacosSubpCondBranch(code, state: state, cond: SUBP_COND_GE, targetBlock: walkDone)  // idx >= argc
+	arm64EmitLdrb(code, rt: 16, rn: 10, offset: 0)  // byte = [p]
+	arm64MacosSubpCmpImm(code, rn: 16, imm12: 0)
+	arm64MacosSubpCondBranch(code, state: state, cond: SUBP_COND_NE, targetBlock: walkNext)
+	arm64EmitAddImm(code, rd: 15, rn: 10, imm12: 1)  // next string = p+1
+	arm64MacosSubpLslImm(code, rd: 17, rn: 9, shift: 3)
+	arm64MacosSubpAlu(code, opcode: SUBP_ALU_ADD, rd: 17, rn: 14, rm: 17)  // &argv[idx]
+	arm64MacosSubpStoreField(code, baseReg: 17, disp: 0, src: 15)
+	arm64EmitAddImm(code, rd: 9, rn: 9, imm12: 1)  // idx++
+	arm64MacosSubpMarkBlock(state, code: code, blockId: walkNext)
+	arm64EmitAddImm(code, rd: 10, rn: 10, imm12: 1)  // p++
+	arm64MacosSubpBranch(code, state: state, targetBlock: walkLoop)
+	arm64MacosSubpMarkBlock(state, code: code, blockId: walkDone)
+	arm64MacosSubpLslImm(code, rd: 17, rn: 13, shift: 3)
+	arm64MacosSubpAlu(code, opcode: SUBP_ALU_ADD, rd: 17, rn: 14, rm: 17)
+	arm64MacosSubpStoreField(code, baseReg: 17, disp: 0, src: SUBP_REG_XZR)  // argv[argc] = NULL
+
+	arm64MacosSubpLoad(code, dest: 0, disp: 0x48)  // return argv
+	arm64MacosSubpEpilogue(code, frameSize: frameSize)
+	arm64MacosSubpFinalize(code, state: state)
+end 'emitArm64SubpBuildArgv'
+
+// posix_spawn_file_actions_adddup2(&fa@x29+0x60, pipeFd@frame-slot, targetFd).
+function emitArm64SubpStreamAddDup2(code ByteArray, relocations RelocationArray, fdSlot MachineWord, targetFd MachineWord)
+	arm64MacosSubpLeaFrame(code, rd: 0, disp: 0x60)
+	arm64MacosSubpLoadSw(code, dest: 1, disp: fdSlot)
+	arm64EmitMovImm(code, rd: 2, value: targetFd)
+	arm64MacosSubpCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_SPAWN_FA_ADDDUP2)
+end 'emitArm64SubpStreamAddDup2'
+
+// posix_spawn_file_actions_addclose(&fa@x29+0x60, pipeFd@frame-slot).
+function emitArm64SubpStreamAddClose(code ByteArray, relocations RelocationArray, fdSlot MachineWord)
+	arm64MacosSubpLeaFrame(code, rd: 0, disp: 0x60)
+	arm64MacosSubpLoadSw(code, dest: 1, disp: fdSlot)
+	arm64MacosSubpCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_SPAWN_FA_ADDCLOSE)
+end 'emitArm64SubpStreamAddClose'
+
+// Initialise the {buf,len,cap,eof} line-buffer quad at handle+bufOff. Handle is
+// reloaded from frame slot `handleSlot` (the alloc clobbers it). Allocates an
+// initial-capacity buffer; len=0, cap=INIT, eof=0.
+function emitArm64SubpStreamInitLineBuf(code ByteArray, callFixups Arm64CallFixupArray, handleSlot MachineWord, bufOff MachineWord)
+	arm64EmitMovImm(code, rd: 0, value: SUBP_STREAM_LINE_INIT_CAP)
+	arm64MacosSubpBranchLink(code, callFixups: callFixups, name: "__slab_alloc")
+	arm64MacosSubpLoad(code, dest: 9, disp: handleSlot)  // reload handle
+	arm64MacosSubpStoreField(code, baseReg: 9, disp: bufOff + SUBP_QUAD_BUF, src: 0)
+	arm64MacosSubpStoreField(code, baseReg: 9, disp: bufOff + SUBP_QUAD_LEN, src: SUBP_REG_XZR)
+	arm64EmitMovImm(code, rd: 1, value: SUBP_STREAM_LINE_INIT_CAP)
+	arm64MacosSubpStoreField(code, baseReg: 9, disp: bufOff + SUBP_QUAD_CAP, src: 1)
+	arm64MacosSubpStoreField(code, baseReg: 9, disp: bufOff + SUBP_QUAD_EOF, src: SUBP_REG_XZR)
+end 'emitArm64SubpStreamInitLineBuf'
+
+// =============================================================================
+// maxon_subprocess_spawn_streaming(argvBlobMM, argc, cwd, flags) -> handle | -1.
+// posix_spawn the child with three pipes (parent writes stdin, reads stdout +
+// stderr). `flags` is ignored (streaming never detaches, always inherits env).
+// The parent's read ends are set O_NONBLOCK so the cooperative line reader can
+// poll-read + __gt_yield. Ports C# EmitMaxonSubprocessSpawnStreamingPosix.
+// Frame: inPipe(rd@0x40,wr@0x44) outPipe(rd@0x48,wr@0x4C) errPipe(rd@0x50,wr@0x54)
+//   fa@0x60 pid@0x68 handle@0x70 argv@0x78 path@0x90 envp@0xA0.
+// =============================================================================
+function emitArm64SubprocessSpawnStreaming(code ByteArray, relocations RelocationArray, callFixups Arm64CallFixupArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
+	arm64RecordLabel(labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "maxon_subprocess_spawn_streaming", offset: code.count())
+	let frameSize = 0x100
+	var state = Arm64MacosSubpState.create(4)
+	arm64MacosSubpPrologue(code, frameSize: frameSize, argCount: 4)
+
+	let skipChdir = 0
+	let spawnFail = 1
+	let noPackedFree = 2
+	let noArgvFree = 3
+
+	// Pre-seed pipe fd slots to -1 (8-byte stores cover each rd+wr pair) so the
+	// failure path closes only real fds.
+	arm64EmitMovImm(code, rd: 0, value: -1)
+	arm64MacosSubpStore(code, disp: 0x40, src: 0)
+	arm64MacosSubpStore(code, disp: 0x48, src: 0)
+	arm64MacosSubpStore(code, disp: 0x50, src: 0)
+
+	// argv = __subp_build_argv(MM, argc); path = argv[0].
+	arm64MacosSubpReloadArg(code, argIndex: 0)  // MM → x0
+	arm64MacosSubpLoad(code, dest: 1, disp: 0x18)  // argc → x1
+	arm64MacosSubpBranchLink(code, callFixups: callFixups, name: "__subp_build_argv")
+	arm64MacosSubpStore(code, disp: 0x78, src: 0)  // argv
+	arm64MacosSubpLoadField(code, dest: 1, baseReg: 0, disp: 0)  // packed = argv[0]
+	arm64MacosSubpStore(code, disp: 0x90, src: 1)  // exec path
+
+	// three pipes
+	arm64MacosSubpLeaFrame(code, rd: 0, disp: 0x40)
+	arm64MacosSubpCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_PIPE)
+	arm64MacosSubpLeaFrame(code, rd: 0, disp: 0x48)
+	arm64MacosSubpCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_PIPE)
+	arm64MacosSubpLeaFrame(code, rd: 0, disp: 0x50)
+	arm64MacosSubpCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_PIPE)
+
+	// file actions
+	arm64MacosSubpLeaFrame(code, rd: 0, disp: 0x60)
+	arm64MacosSubpCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_SPAWN_FA_INIT)
+
+	// dup2 child ends: inRd→0, outWr→1, errWr→2
+	emitArm64SubpStreamAddDup2(code, relocations: relocations, fdSlot: 0x40, targetFd: 0)
+	emitArm64SubpStreamAddDup2(code, relocations: relocations, fdSlot: 0x4C, targetFd: 1)
+	emitArm64SubpStreamAddDup2(code, relocations: relocations, fdSlot: 0x54, targetFd: 2)
+	// close all six pipe originals in the child (it keeps only 0/1/2).
+	emitArm64SubpStreamAddClose(code, relocations: relocations, fdSlot: 0x40)
+	emitArm64SubpStreamAddClose(code, relocations: relocations, fdSlot: 0x44)
+	emitArm64SubpStreamAddClose(code, relocations: relocations, fdSlot: 0x48)
+	emitArm64SubpStreamAddClose(code, relocations: relocations, fdSlot: 0x4C)
+	emitArm64SubpStreamAddClose(code, relocations: relocations, fdSlot: 0x50)
+	emitArm64SubpStreamAddClose(code, relocations: relocations, fdSlot: 0x54)
+
+	// chdir if cwd (homed arg2) non-empty
+	arm64MacosSubpLoad(code, dest: 0, disp: 0x20)
+	arm64EmitLdrb(code, rt: 1, rn: 0, offset: 0)
+	arm64MacosSubpCmpImm(code, rn: 1, imm12: 0)
+	arm64MacosSubpCondBranch(code, state: state, cond: SUBP_COND_EQ, targetBlock: skipChdir)
+	arm64EmitMovRegReg(code, rd: 1, rn: 0)  // path
+	arm64MacosSubpLeaFrame(code, rd: 0, disp: 0x60)
+	arm64MacosSubpCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_SPAWN_FA_ADDCHDIR)
+	arm64MacosSubpMarkBlock(state, code: code, blockId: skipChdir)
+
+	// environ
+	arm64MacosSubpCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_NSGETENVIRON)
+	arm64MacosSubpLoadField(code, dest: 0, baseReg: 0, disp: 0)
+	arm64MacosSubpStore(code, disp: 0xA0, src: 0)
+
+	// posix_spawn(&pid, path, &fa, NULL, argv, envp)
+	arm64MacosSubpLeaFrame(code, rd: 0, disp: 0x68)
+	arm64MacosSubpLoad(code, dest: 1, disp: 0x90)
+	arm64MacosSubpLeaFrame(code, rd: 2, disp: 0x60)
+	arm64EmitMovImm(code, rd: 3, value: 0)
+	arm64MacosSubpLoad(code, dest: 4, disp: 0x78)
+	arm64MacosSubpLoad(code, dest: 5, disp: 0xA0)
+	arm64MacosSubpCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_POSIX_SPAWN)
+	arm64MacosSubpCmpImm(code, rn: 0, imm12: 0)
+	arm64MacosSubpCondBranch(code, state: state, cond: SUBP_COND_NE, targetBlock: spawnFail)
+
+	// success: destroy fa, close the parent's copies of the child ends.
+	arm64MacosSubpLeaFrame(code, rd: 0, disp: 0x60)
+	arm64MacosSubpCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_SPAWN_FA_DESTROY)
+	emitArm64SubpCloseFdSlot(code, relocations: relocations, fdSlot: 0x40)  // inRd
+	emitArm64SubpCloseFdSlot(code, relocations: relocations, fdSlot: 0x4C)  // outWr
+	emitArm64SubpCloseFdSlot(code, relocations: relocations, fdSlot: 0x54)  // errWr
+
+	// Set both parent read ends O_NONBLOCK for the cooperative line reader.
+	emitArm64SubpStreamSetNonBlocking(code, relocations: relocations, fdSlot: 0x48)  // outRd
+	emitArm64SubpStreamSetNonBlocking(code, relocations: relocations, fdSlot: 0x50)  // errRd
+
+	// build unified handle (0x70)
+	arm64EmitMovImm(code, rd: 0, value: SUBP_HANDLE_SIZE)
+	arm64MacosSubpBranchLink(code, callFixups: callFixups, name: "__slab_alloc")
+	arm64MacosSubpStore(code, disp: 0x70, src: 0)
+	arm64MacosSubpLoad(code, dest: 9, disp: 0x70)  // handle
+	arm64MacosSubpLoadSw(code, dest: 1, disp: 0x68)  // pid
+	arm64MacosSubpStoreField(code, baseReg: 9, disp: SUBP_OFF_PID, src: 1)
+	arm64MacosSubpLoadSw(code, dest: 1, disp: 0x48)  // outRd
+	arm64MacosSubpStoreField(code, baseReg: 9, disp: SUBP_OFF_OUT_READ_FD, src: 1)
+	arm64MacosSubpLoadSw(code, dest: 1, disp: 0x50)  // errRd
+	arm64MacosSubpStoreField(code, baseReg: 9, disp: SUBP_OFF_ERR_READ_FD, src: 1)
+	arm64MacosSubpLoad(code, dest: 1, disp: 0x78)  // argv
+	arm64MacosSubpStoreField(code, baseReg: 9, disp: SUBP_OFF_ARGV, src: 1)
+	arm64MacosSubpLoadSw(code, dest: 1, disp: 0x44)  // inWr → stdinWriteFd
+	arm64MacosSubpStoreField(code, baseReg: 9, disp: SUBP_OFF_STDIN_FD, src: 1)
+	emitArm64SubpStreamInitLineBuf(code, callFixups: callFixups, handleSlot: 0x70, bufOff: SUBP_OFF_OUT_BUF)
+	emitArm64SubpStreamInitLineBuf(code, callFixups: callFixups, handleSlot: 0x70, bufOff: SUBP_OFF_ERR_BUF)
+	arm64MacosSubpLoad(code, dest: 0, disp: 0x70)  // return handle
+	arm64MacosSubpEpilogue(code, frameSize: frameSize)
+
+	// failure: destroy fa, close any open pipe fd, free argv[0]+argv, return -1.
+	arm64MacosSubpMarkBlock(state, code: code, blockId: spawnFail)
+	arm64MacosSubpLeaFrame(code, rd: 0, disp: 0x60)
+	arm64MacosSubpCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_SPAWN_FA_DESTROY)
+	emitArm64SubpCloseFdIfValid(code, relocations: relocations, disp: 0x40)
+	emitArm64SubpCloseFdIfValid(code, relocations: relocations, disp: 0x44)
+	emitArm64SubpCloseFdIfValid(code, relocations: relocations, disp: 0x48)
+	emitArm64SubpCloseFdIfValid(code, relocations: relocations, disp: 0x4C)
+	emitArm64SubpCloseFdIfValid(code, relocations: relocations, disp: 0x50)
+	emitArm64SubpCloseFdIfValid(code, relocations: relocations, disp: 0x54)
+	emitArm64SubpFreeArgvChain(code, state: state, callFixups: callFixups, argvSlot: 0x78, noPackedBlock: noPackedFree, doneBlock: noArgvFree)
+	arm64EmitMovImm(code, rd: 0, value: -1)
+	arm64MacosSubpEpilogue(code, frameSize: frameSize)
+	arm64MacosSubpFinalize(code, state: state)
+end 'emitArm64SubprocessSpawnStreaming'
+
+// =============================================================================
+// maxon_subprocess_write_stdin_all(handle, dataCstr) -> 0 | -1. Blocking write
+// loop; streaming job lines are small and the child drains stdin promptly, so a
+// single write fits the pipe buffer and never blocks the OS thread in practice.
+// Ports C# EmitMaxonSubprocessWriteStdinAllPosix.
+// Frame: 0x20 fd, 0x28 cursor, 0x30 remaining.
+// =============================================================================
+function emitArm64SubprocessWriteStdinAll(code ByteArray, relocations RelocationArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
+	arm64RecordLabel(labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "maxon_subprocess_write_stdin_all", offset: code.count())
+	let frameSize = 0x40
+	var state = Arm64MacosSubpState.create(5)
+	arm64MacosSubpPrologue(code, frameSize: frameSize, argCount: 2)
+
+	let bad = 0
+	let ok = 1
+	let slenLoop = 2
+	let slenDone = 3
+	let loop = 4
+
+	arm64MacosSubpReloadArg(code, argIndex: 0)  // handle
+	arm64MacosSubpCbz(code, state: state, rn: 0, targetBlock: bad)
+	arm64MacosSubpLoadField(code, dest: 1, baseReg: 0, disp: SUBP_OFF_STDIN_FD)
+	arm64MacosSubpCmpImm(code, rn: 1, imm12: 0)
+	arm64MacosSubpCondBranch(code, state: state, cond: SUBP_COND_LT, targetBlock: bad)
+	arm64MacosSubpStore(code, disp: 0x20, src: 1)  // fd
+	arm64MacosSubpLoad(code, dest: 0, disp: 0x18)  // data cstr (homed arg1)
+	arm64MacosSubpCbz(code, state: state, rn: 0, targetBlock: ok)  // null → nothing
+	arm64MacosSubpStore(code, disp: 0x28, src: 0)  // cursor = data
+	// remaining = strlen(data): x9=p x10=len
+	arm64EmitMovRegReg(code, rd: 9, rn: 0)
+	arm64EmitMovImm(code, rd: 10, value: 0)
+	arm64MacosSubpMarkBlock(state, code: code, blockId: slenLoop)
+	arm64MacosSubpAlu(code, opcode: SUBP_ALU_ADD, rd: 11, rn: 9, rm: 10)
+	arm64EmitLdrb(code, rt: 12, rn: 11, offset: 0)
+	arm64MacosSubpCbz(code, state: state, rn: 12, targetBlock: slenDone)
+	arm64EmitAddImm(code, rd: 10, rn: 10, imm12: 1)
+	arm64MacosSubpBranch(code, state: state, targetBlock: slenLoop)
+	arm64MacosSubpMarkBlock(state, code: code, blockId: slenDone)
+	arm64MacosSubpStore(code, disp: 0x30, src: 10)  // remaining
+	arm64MacosSubpMarkBlock(state, code: code, blockId: loop)
+	arm64MacosSubpLoad(code, dest: 0, disp: 0x30)
+	arm64MacosSubpCmpImm(code, rn: 0, imm12: 0)
+	arm64MacosSubpCondBranch(code, state: state, cond: SUBP_COND_LE, targetBlock: ok)
+	arm64MacosSubpLoad(code, dest: 0, disp: 0x20)  // fd
+	arm64MacosSubpLoad(code, dest: 1, disp: 0x28)  // cursor
+	arm64MacosSubpLoad(code, dest: 2, disp: 0x30)  // remaining
+	arm64MacosSubpCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_WRITE)
+	arm64MacosSubpCmpImm(code, rn: 0, imm12: 0)
+	arm64MacosSubpCondBranch(code, state: state, cond: SUBP_COND_LE, targetBlock: bad)
+	arm64MacosSubpLoad(code, dest: 1, disp: 0x28)
+	arm64MacosSubpAlu(code, opcode: SUBP_ALU_ADD, rd: 1, rn: 1, rm: 0)
+	arm64MacosSubpStore(code, disp: 0x28, src: 1)
+	arm64MacosSubpLoad(code, dest: 1, disp: 0x30)
+	arm64MacosSubpAlu(code, opcode: SUBP_ALU_SUB, rd: 1, rn: 1, rm: 0)
+	arm64MacosSubpStore(code, disp: 0x30, src: 1)
+	arm64MacosSubpBranch(code, state: state, targetBlock: loop)
+	arm64MacosSubpMarkBlock(state, code: code, blockId: ok)
+	arm64EmitMovImm(code, rd: 0, value: 0)
+	arm64MacosSubpEpilogue(code, frameSize: frameSize)
+	arm64MacosSubpMarkBlock(state, code: code, blockId: bad)
+	arm64EmitMovImm(code, rd: 0, value: -1)
+	arm64MacosSubpEpilogue(code, frameSize: frameSize)
+	arm64MacosSubpFinalize(code, state: state)
+end 'emitArm64SubprocessWriteStdinAll'
+
+// =============================================================================
+// maxon_subprocess_close_stdin(handle) -> void. Close the parent write end of
+// the child's stdin (signals EOF) and mark the slot -1 (idempotent; release_handle
+// then skips it). Ports C# EmitMaxonSubprocessCloseStdinPosix.
+// Frame: 0x18 handle.
+// =============================================================================
+function emitArm64SubprocessCloseStdin(code ByteArray, relocations RelocationArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
+	arm64RecordLabel(labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "maxon_subprocess_close_stdin", offset: code.count())
+	let frameSize = 0x30
+	var state = Arm64MacosSubpState.create(1)
+	arm64MacosSubpPrologue(code, frameSize: frameSize, argCount: 1)
+
+	let done = 0
+
+	arm64MacosSubpReloadArg(code, argIndex: 0)
+	arm64MacosSubpCbz(code, state: state, rn: 0, targetBlock: done)
+	arm64MacosSubpStore(code, disp: 0x18, src: 0)
+	arm64MacosSubpLoadField(code, dest: 1, baseReg: 0, disp: SUBP_OFF_STDIN_FD)
+	arm64MacosSubpCmpImm(code, rn: 1, imm12: 0)
+	arm64MacosSubpCondBranch(code, state: state, cond: SUBP_COND_LT, targetBlock: done)
+	arm64EmitMovRegReg(code, rd: 0, rn: 1)
+	arm64MacosSubpCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_CLOSE)
+	arm64MacosSubpLoad(code, dest: 9, disp: 0x18)
+	arm64EmitMovImm(code, rd: 0, value: -1)
+	arm64MacosSubpStoreField(code, baseReg: 9, disp: SUBP_OFF_STDIN_FD, src: 0)
+	arm64MacosSubpMarkBlock(state, code: code, blockId: done)
+	arm64MacosSubpEpilogue(code, frameSize: frameSize)
+	arm64MacosSubpFinalize(code, state: state)
+end 'emitArm64SubprocessCloseStdin'
+
+// =============================================================================
+// __subp_stream_emit_line(quadBase, lineLen, consume) -> __ManagedMemory.
+// Copies quad.buf[0..lineLen) into a fresh MM (MM[0]=buffer, MM[8]=lineLen — the
+// returnsManaged shape, like result_stdout), then shifts quad.buf[consume..len)
+// down to the front and sets quad.len = len-consume. consume is lineLen+1 (drop
+// the LF) for a complete line, or lineLen for a truncated/EOF emit.
+// Frame: 0x28 mm, 0x30 buf, 0x38 len.
+// =============================================================================
+function emitArm64SubpStreamEmitLine(code ByteArray, callFixups Arm64CallFixupArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
+	arm64RecordLabel(labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "__subp_stream_emit_line", offset: code.count())
+	let frameSize = 0x70
+	var state = Arm64MacosSubpState.create(2)
+	arm64MacosSubpPrologue(code, frameSize: frameSize, argCount: 3)
+
+	let shiftLoop = 0
+	let shiftDone = 1
+
+	// quad.buf, quad.len (quadBase homed at 0x10, lineLen 0x18, consume 0x20).
+	arm64MacosSubpLoad(code, dest: 9, disp: 0x10)
+	arm64MacosSubpLoadField(code, dest: 0, baseReg: 9, disp: SUBP_QUAD_BUF)
+	arm64MacosSubpStore(code, disp: 0x30, src: 0)  // buf
+	arm64MacosSubpLoadField(code, dest: 0, baseReg: 9, disp: SUBP_QUAD_LEN)
+	arm64MacosSubpStore(code, disp: 0x38, src: 0)  // len
+	// mm = __managed_mem_create(lineLen+1, 1)
+	arm64MacosSubpLoad(code, dest: 0, disp: 0x18)
+	arm64EmitAddImm(code, rd: 0, rn: 0, imm12: 1)
+	arm64EmitMovImm(code, rd: 1, value: 1)
+	arm64MacosSubpBranchLink(code, callFixups: callFixups, name: "__managed_mem_create")
+	arm64MacosSubpStore(code, disp: 0x28, src: 0)  // mm
+	// memcpy(mm.buffer, buf, lineLen)
+	arm64MacosSubpLoad(code, dest: 0, disp: 0x28)
+	arm64MacosSubpLoadField(code, dest: 0, baseReg: 0, disp: 0)  // dst = mm.buffer
+	arm64MacosSubpLoad(code, dest: 1, disp: 0x30)  // src = buf
+	arm64MacosSubpLoad(code, dest: 2, disp: 0x18)  // lineLen
+	emitArm64SubpInlineMemcpy(code)
+	// mm[8] = lineLen
+	arm64MacosSubpLoad(code, dest: 0, disp: 0x28)
+	arm64MacosSubpLoad(code, dest: 1, disp: 0x18)
+	arm64MacosSubpStoreField(code, baseReg: 0, disp: 8, src: 1)
+	// shift buf[consume..len) → buf[0..); remaining = len - consume.
+	arm64MacosSubpLoad(code, dest: 12, disp: 0x20)  // consume
+	arm64MacosSubpLoad(code, dest: 13, disp: 0x38)  // len
+	arm64MacosSubpAlu(code, opcode: SUBP_ALU_SUB, rd: 13, rn: 13, rm: 12)  // remaining
+	arm64MacosSubpLoad(code, dest: 10, disp: 0x30)  // buf
+	arm64EmitMovImm(code, rd: 14, value: 0)  // i
+	arm64MacosSubpMarkBlock(state, code: code, blockId: shiftLoop)
+	arm64EmitCmp(code, rn: 14, rm: 13)
+	arm64MacosSubpCondBranch(code, state: state, cond: SUBP_COND_GE, targetBlock: shiftDone)
+	arm64MacosSubpAlu(code, opcode: SUBP_ALU_ADD, rd: 15, rn: 10, rm: 12)  // buf+consume
+	arm64MacosSubpAlu(code, opcode: SUBP_ALU_ADD, rd: 15, rn: 15, rm: 14)  // +i
+	arm64EmitLdrb(code, rt: 16, rn: 15, offset: 0)
+	arm64MacosSubpAlu(code, opcode: SUBP_ALU_ADD, rd: 17, rn: 10, rm: 14)  // buf+i
+	arm64EmitStrb(code, rt: 16, rn: 17, offset: 0)
+	arm64EmitAddImm(code, rd: 14, rn: 14, imm12: 1)
+	arm64MacosSubpBranch(code, state: state, targetBlock: shiftLoop)
+	arm64MacosSubpMarkBlock(state, code: code, blockId: shiftDone)
+	// quad.len = remaining
+	arm64MacosSubpLoad(code, dest: 9, disp: 0x10)
+	arm64MacosSubpStoreField(code, baseReg: 9, disp: SUBP_QUAD_LEN, src: 13)
+	arm64MacosSubpLoad(code, dest: 0, disp: 0x28)  // return mm
+	arm64MacosSubpEpilogue(code, frameSize: frameSize)
+	arm64MacosSubpFinalize(code, state: state)
+end 'emitArm64SubpStreamEmitLine'
+
+// =============================================================================
+// __subp_stream_read_line(maxBytes, fd, quadBase) -> __ManagedMemory.
+// Cooperative buffered line reader. Returns the next line (LF stripped) from the
+// {buf,len,cap,eof} quad as a fresh MM, refilling via a NON-BLOCKING read() +
+// __gt_yield poll loop when no full line is buffered (the single-thread runtime
+// has no kqueue/__io_submit_read; the fd was set O_NONBLOCK at spawn). An empty
+// MM == EOF with nothing left. Lines longer than maxBytes are truncated, the
+// remainder delivered next call. Ports C# EmitSubpStreamReadLine (kqueue → poll).
+// Frame: 0x28 n/newCap, 0x30 newBuf, 0x38 dst, 0x40 space.
+// =============================================================================
+function emitArm64SubpStreamReadLine(code ByteArray, relocations RelocationArray, callFixups Arm64CallFixupArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
+	arm64RecordLabel(labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "__subp_stream_read_line", offset: code.count())
+	let frameSize = 0x70
+	var state = Arm64MacosSubpState.create(11)
+	arm64MacosSubpPrologue(code, frameSize: frameSize, argCount: 3)
+
+	let loop = 0
+	let scanLoop = 1
+	let scanDone = 2
+	let noNl = 3
+	let checkEof = 4
+	let needMore = 5
+	let doRead = 6
+	let readRetry = 7
+	let gotData = 8
+	let gotEof = 9
+	let doYield = 10
+	// arg homes: maxBytes@0x10, fd@0x18, quadBase@0x20.
+
+	arm64MacosSubpMarkBlock(state, code: code, blockId: loop)
+	arm64MacosSubpLoad(code, dest: 9, disp: 0x20)  // quadBase
+	arm64MacosSubpLoadField(code, dest: 10, baseReg: 9, disp: SUBP_QUAD_BUF)  // buf
+	arm64MacosSubpLoadField(code, dest: 11, baseReg: 9, disp: SUBP_QUAD_LEN)  // len
+	// scan buf[0..len) for LF → x3 = idx, or len if none.
+	arm64EmitMovImm(code, rd: 3, value: 0)
+	arm64MacosSubpMarkBlock(state, code: code, blockId: scanLoop)
+	arm64EmitCmp(code, rn: 3, rm: 11)
+	arm64MacosSubpCondBranch(code, state: state, cond: SUBP_COND_GE, targetBlock: scanDone)
+	arm64MacosSubpAlu(code, opcode: SUBP_ALU_ADD, rd: 4, rn: 10, rm: 3)
+	arm64EmitLdrb(code, rt: 5, rn: 4, offset: 0)
+	arm64MacosSubpCmpImm(code, rn: 5, imm12: 0x0A)
+	arm64MacosSubpCondBranch(code, state: state, cond: SUBP_COND_EQ, targetBlock: scanDone)
+	arm64EmitAddImm(code, rd: 3, rn: 3, imm12: 1)
+	arm64MacosSubpBranch(code, state: state, targetBlock: scanLoop)
+	arm64MacosSubpMarkBlock(state, code: code, blockId: scanDone)
+	arm64EmitCmp(code, rn: 3, rm: 11)
+	arm64MacosSubpCondBranch(code, state: state, cond: SUBP_COND_GE, targetBlock: noNl)  // no LF
+	// LF at idx x3: emit it only if idx < maxBytes (else truncate path).
+	arm64MacosSubpLoad(code, dest: 1, disp: 0x10)  // maxBytes
+	arm64EmitCmp(code, rn: 3, rm: 1)
+	arm64MacosSubpCondBranch(code, state: state, cond: SUBP_COND_GE, targetBlock: noNl)
+	arm64MacosSubpStore(code, disp: 0x28, src: 3)  // idx
+	arm64MacosSubpLoad(code, dest: 0, disp: 0x20)  // quadBase
+	arm64MacosSubpLoad(code, dest: 1, disp: 0x28)  // lineLen = idx
+	arm64MacosSubpLoad(code, dest: 2, disp: 0x28)
+	arm64EmitAddImm(code, rd: 2, rn: 2, imm12: 1)  // consume = idx+1
+	arm64MacosSubpBranchLink(code, callFixups: callFixups, name: "__subp_stream_emit_line")
+	arm64MacosSubpEpilogue(code, frameSize: frameSize)
+
+	arm64MacosSubpMarkBlock(state, code: code, blockId: noNl)
+	// truncate: if len >= maxBytes return the first maxBytes bytes.
+	arm64MacosSubpLoad(code, dest: 9, disp: 0x20)
+	arm64MacosSubpLoadField(code, dest: 0, baseReg: 9, disp: SUBP_QUAD_LEN)
+	arm64MacosSubpLoad(code, dest: 1, disp: 0x10)  // maxBytes
+	arm64EmitCmp(code, rn: 0, rm: 1)
+	arm64MacosSubpCondBranch(code, state: state, cond: SUBP_COND_LT, targetBlock: checkEof)
+	arm64MacosSubpLoad(code, dest: 0, disp: 0x20)
+	arm64MacosSubpLoad(code, dest: 1, disp: 0x10)
+	arm64EmitMovRegReg(code, rd: 2, rn: 1)  // consume = maxBytes
+	arm64MacosSubpBranchLink(code, callFixups: callFixups, name: "__subp_stream_emit_line")
+	arm64MacosSubpEpilogue(code, frameSize: frameSize)
+
+	arm64MacosSubpMarkBlock(state, code: code, blockId: checkEof)
+	arm64MacosSubpLoad(code, dest: 9, disp: 0x20)
+	arm64MacosSubpLoadField(code, dest: 0, baseReg: 9, disp: SUBP_QUAD_EOF)
+	arm64MacosSubpCbz(code, state: state, rn: 0, targetBlock: needMore)
+	// EOF: emit whatever remains (possibly an empty MM).
+	arm64MacosSubpLoadField(code, dest: 1, baseReg: 9, disp: SUBP_QUAD_LEN)
+	arm64EmitMovRegReg(code, rd: 2, rn: 1)  // consume = len
+	arm64EmitMovRegReg(code, rd: 0, rn: 9)
+	arm64MacosSubpBranchLink(code, callFixups: callFixups, name: "__subp_stream_emit_line")
+	arm64MacosSubpEpilogue(code, frameSize: frameSize)
+
+	arm64MacosSubpMarkBlock(state, code: code, blockId: needMore)
+	arm64MacosSubpLoad(code, dest: 9, disp: 0x20)
+	arm64MacosSubpLoadField(code, dest: 10, baseReg: 9, disp: SUBP_QUAD_CAP)  // cap
+	arm64MacosSubpLoadField(code, dest: 11, baseReg: 9, disp: SUBP_QUAD_LEN)  // len
+	arm64MacosSubpAlu(code, opcode: SUBP_ALU_SUB, rd: 12, rn: 10, rm: 11)  // space
+	arm64MacosSubpCmpImm(code, rn: 12, imm12: SUBP_STREAM_LINE_GROW_FLOOR)
+	arm64MacosSubpCondBranch(code, state: state, cond: SUBP_COND_GE, targetBlock: doRead)
+	// grow: newCap = cap*2; newBuf = __slab_alloc(newCap); copy; free old; swap.
+	arm64MacosSubpLslImm(code, rd: 0, rn: 10, shift: 1)
+	arm64MacosSubpStore(code, disp: 0x28, src: 0)  // newCap
+	arm64MacosSubpBranchLink(code, callFixups: callFixups, name: "__slab_alloc")
+	arm64MacosSubpStore(code, disp: 0x30, src: 0)  // newBuf
+	arm64MacosSubpLoad(code, dest: 9, disp: 0x20)
+	arm64MacosSubpLoadField(code, dest: 1, baseReg: 9, disp: SUBP_QUAD_BUF)  // oldBuf
+	arm64MacosSubpLoadField(code, dest: 2, baseReg: 9, disp: SUBP_QUAD_LEN)  // len
+	arm64MacosSubpLoad(code, dest: 0, disp: 0x30)  // newBuf = dst
+	emitArm64SubpInlineMemcpy(code)
+	arm64MacosSubpLoad(code, dest: 9, disp: 0x20)
+	arm64MacosSubpLoadField(code, dest: 0, baseReg: 9, disp: SUBP_QUAD_BUF)
+	arm64MacosSubpBranchLink(code, callFixups: callFixups, name: "__slab_free")
+	arm64MacosSubpLoad(code, dest: 9, disp: 0x20)
+	arm64MacosSubpLoad(code, dest: 0, disp: 0x30)
+	arm64MacosSubpStoreField(code, baseReg: 9, disp: SUBP_QUAD_BUF, src: 0)
+	arm64MacosSubpLoad(code, dest: 0, disp: 0x28)
+	arm64MacosSubpStoreField(code, baseReg: 9, disp: SUBP_QUAD_CAP, src: 0)
+
+	arm64MacosSubpMarkBlock(state, code: code, blockId: doRead)
+	// dst = buf+len, space = cap-len (stable across retries — only this GT touches the quad).
+	arm64MacosSubpLoad(code, dest: 9, disp: 0x20)
+	arm64MacosSubpLoadField(code, dest: 10, baseReg: 9, disp: SUBP_QUAD_BUF)
+	arm64MacosSubpLoadField(code, dest: 11, baseReg: 9, disp: SUBP_QUAD_LEN)
+	arm64MacosSubpLoadField(code, dest: 12, baseReg: 9, disp: SUBP_QUAD_CAP)
+	arm64MacosSubpAlu(code, opcode: SUBP_ALU_ADD, rd: 1, rn: 10, rm: 11)  // dst
+	arm64MacosSubpStore(code, disp: 0x38, src: 1)
+	arm64MacosSubpAlu(code, opcode: SUBP_ALU_SUB, rd: 2, rn: 12, rm: 11)  // space
+	arm64MacosSubpStore(code, disp: 0x40, src: 2)
+	arm64MacosSubpMarkBlock(state, code: code, blockId: readRetry)
+	arm64MacosSubpLoad(code, dest: 0, disp: 0x18)  // fd
+	arm64MacosSubpLoad(code, dest: 1, disp: 0x38)  // dst
+	arm64MacosSubpLoad(code, dest: 2, disp: 0x40)  // space
+	arm64MacosSubpCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_READ)
+	arm64MacosSubpStore(code, disp: 0x28, src: 0)  // n
+	arm64MacosSubpCmpImm(code, rn: 0, imm12: 0)
+	arm64MacosSubpCondBranch(code, state: state, cond: SUBP_COND_GT, targetBlock: gotData)  // n > 0
+	arm64MacosSubpCondBranch(code, state: state, cond: SUBP_COND_EQ, targetBlock: gotEof)  // n == 0 → EOF
+	// n < 0: only EAGAIN/EWOULDBLOCK(35) (no data yet on the O_NONBLOCK fd) and EINTR(4)
+	// mean "retry"; any other errno is a hard error (EBADF/EIO/…) that must terminate
+	// like the C# read<=0 path rather than spin forever. errno via ___error() -> &errno.
+	arm64MacosSubpCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_ERROR)
+	arm64EmitInsn(code, insn: 0xB9400001)  // LDR W1, [x0] — errno (4-byte int, zero-extended)
+	arm64MacosSubpCmpImm(code, rn: 1, imm12: 35)  // EAGAIN / EWOULDBLOCK
+	arm64MacosSubpCondBranch(code, state: state, cond: SUBP_COND_EQ, targetBlock: doYield)
+	arm64MacosSubpCmpImm(code, rn: 1, imm12: 4)  // EINTR
+	arm64MacosSubpCondBranch(code, state: state, cond: SUBP_COND_EQ, targetBlock: doYield)
+	arm64MacosSubpBranch(code, state: state, targetBlock: gotEof)  // hard error → terminate
+	// doYield: cooperatively yield to sibling drains; if we are the only runnable GT,
+	// sleep briefly so we don't busy-spin.
+	arm64MacosSubpMarkBlock(state, code: code, blockId: doYield)
+	arm64MacosSubpBranchLink(code, callFixups: callFixups, name: "__gt_yield")
+	arm64MacosSubpCmpImm(code, rn: 0, imm12: 0)
+	arm64MacosSubpCondBranch(code, state: state, cond: SUBP_COND_NE, targetBlock: readRetry)
+	arm64EmitMovImm(code, rd: 0, value: 1000)
+	arm64MacosSubpCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_USLEEP)
+	arm64MacosSubpBranch(code, state: state, targetBlock: readRetry)
+
+	arm64MacosSubpMarkBlock(state, code: code, blockId: gotData)
+	arm64MacosSubpLoad(code, dest: 9, disp: 0x20)
+	arm64MacosSubpLoad(code, dest: 0, disp: 0x28)  // n
+	arm64MacosSubpLoadField(code, dest: 1, baseReg: 9, disp: SUBP_QUAD_LEN)
+	arm64MacosSubpAlu(code, opcode: SUBP_ALU_ADD, rd: 1, rn: 1, rm: 0)
+	arm64MacosSubpStoreField(code, baseReg: 9, disp: SUBP_QUAD_LEN, src: 1)
+	arm64MacosSubpBranch(code, state: state, targetBlock: loop)
+
+	arm64MacosSubpMarkBlock(state, code: code, blockId: gotEof)
+	arm64MacosSubpLoad(code, dest: 9, disp: 0x20)
+	arm64EmitMovImm(code, rd: 0, value: 1)
+	arm64MacosSubpStoreField(code, baseReg: 9, disp: SUBP_QUAD_EOF, src: 0)
+	arm64MacosSubpBranch(code, state: state, targetBlock: loop)
+
+	arm64MacosSubpFinalize(code, state: state)
+end 'emitArm64SubpStreamReadLine'
+
+// =============================================================================
+// read_stdout_line / read_stderr_line wrapper: select the fd field + line-buffer
+// quad for the stream, then delegate to __subp_stream_read_line. Returns an empty
+// MM for a null handle. Ports C# EmitSubpStreamReadLineWrapper.
+// Frame: 0x18 (maxBytes home).
+// =============================================================================
+function emitArm64SubprocessReadLineWrapper(code ByteArray, callFixups Arm64CallFixupArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap, name String, fdOff MachineWord, bufOff MachineWord)
+	arm64RecordLabel(labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: name, offset: code.count())
+	let frameSize = 0x40
+	var state = Arm64MacosSubpState.create(1)
+	arm64MacosSubpPrologue(code, frameSize: frameSize, argCount: 2)
+
+	let emptyRet = 0
+
+	arm64MacosSubpReloadArg(code, argIndex: 0)  // handle
+	arm64MacosSubpCbz(code, state: state, rn: 0, targetBlock: emptyRet)
+	arm64EmitMovRegReg(code, rd: 9, rn: 0)  // handle
+	arm64MacosSubpLoad(code, dest: 0, disp: 0x18)  // maxBytes (homed arg1)
+	arm64MacosSubpLoadField(code, dest: 1, baseReg: 9, disp: fdOff)  // fd
+	arm64EmitAddImm(code, rd: 2, rn: 9, imm12: bufOff)  // quadBase = handle + bufOff
+	arm64MacosSubpBranchLink(code, callFixups: callFixups, name: "__subp_stream_read_line")
+	arm64MacosSubpEpilogue(code, frameSize: frameSize)
+	arm64MacosSubpMarkBlock(state, code: code, blockId: emptyRet)
+	arm64EmitMovImm(code, rd: 0, value: 1)
+	arm64EmitMovImm(code, rd: 1, value: 1)
+	arm64MacosSubpBranchLink(code, callFixups: callFixups, name: "__managed_mem_create")
+	arm64MacosSubpEpilogue(code, frameSize: frameSize)
+	arm64MacosSubpFinalize(code, state: state)
+end 'emitArm64SubprocessReadLineWrapper'
+
+// =============================================================================
+// maxon_subprocess_wait_exit(handle, timeoutMs) -> exitCode | 128+sig | -1.
+// Cooperative waitpid: poll WNOHANG + __gt_yield (timeoutMs is treated as "wait
+// forever" — the streaming pool's shutdown use waits on children that exit
+// promptly once their stdin closes). Ports C# EmitMaxonSubprocessWaitExitPosix,
+// with the sync wait_collect's poll+yield instead of a blocking waitpid so other
+// drain GTs keep running.
+// Frame: 0x20 handle, 0x28 status(4), 0x30 pid.
+// =============================================================================
+function emitArm64SubprocessWaitExit(code ByteArray, relocations RelocationArray, callFixups Arm64CallFixupArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
+	arm64RecordLabel(labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "maxon_subprocess_wait_exit", offset: code.count())
+	let frameSize = 0x40
+	var state = Arm64MacosSubpState.create(4)
+	arm64MacosSubpPrologue(code, frameSize: frameSize, argCount: 2)
+
+	let bad = 0
+	let pollLoop = 1
+	let reaped = 2
+	let signaled = 3
+
+	arm64MacosSubpReloadArg(code, argIndex: 0)
+	arm64MacosSubpCbz(code, state: state, rn: 0, targetBlock: bad)
+	arm64MacosSubpStore(code, disp: 0x20, src: 0)
+	arm64MacosSubpLoadField(code, dest: 0, baseReg: 0, disp: SUBP_OFF_PID)
+	arm64MacosSubpStore(code, disp: 0x30, src: 0)  // pid
+
+	arm64MacosSubpMarkBlock(state, code: code, blockId: pollLoop)
+	arm64MacosSubpLoad(code, dest: 0, disp: 0x30)  // pid
+	arm64MacosSubpLeaFrame(code, rd: 1, disp: 0x28)  // &status
+	arm64EmitMovImm(code, rd: 2, value: 1)  // WNOHANG
+	arm64MacosSubpCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_WAITPID)
+	arm64MacosSubpCmpImm(code, rn: 0, imm12: 0)
+	arm64MacosSubpCondBranch(code, state: state, cond: SUBP_COND_GT, targetBlock: reaped)  // child exited
+	arm64MacosSubpCondBranch(code, state: state, cond: SUBP_COND_LT, targetBlock: bad)  // wait error
+	// still running (x0 == 0): yield; if we are the only GT, sleep briefly.
+	arm64MacosSubpBranchLink(code, callFixups: callFixups, name: "__gt_yield")
+	arm64MacosSubpCmpImm(code, rn: 0, imm12: 0)
+	arm64MacosSubpCondBranch(code, state: state, cond: SUBP_COND_NE, targetBlock: pollLoop)
+	arm64EmitMovImm(code, rd: 0, value: 1000)
+	arm64MacosSubpCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_USLEEP)
+	arm64MacosSubpBranch(code, state: state, targetBlock: pollLoop)
+
+	arm64MacosSubpMarkBlock(state, code: code, blockId: reaped)
+	// decode POSIX wait status: W status (low 4 bytes of 0x28) → x9.
+	let statusInsn = 0xB9400000 or (((0x28 / 4) and 0xFFF) shl 10) or (SUBP_REG_X29 shl 5) or 9
+	arm64EmitInsn(code, insn: statusInsn)
+	arm64EmitMovImm(code, rd: 10, value: 0x7F)
+	arm64MacosSubpAlu(code, opcode: SUBP_ALU_AND, rd: 11, rn: 9, rm: 10)  // lowsig
+	arm64MacosSubpCmpImm(code, rn: 11, imm12: 0)
+	arm64MacosSubpCondBranch(code, state: state, cond: SUBP_COND_NE, targetBlock: signaled)
+	arm64MacosSubpLsrImm(code, rd: 12, rn: 9, shift: 8)
+	arm64EmitMovImm(code, rd: 13, value: 0xFF)
+	arm64MacosSubpAlu(code, opcode: SUBP_ALU_AND, rd: 0, rn: 12, rm: 13)  // (status>>8)&0xff
+	arm64MacosSubpEpilogue(code, frameSize: frameSize)
+	arm64MacosSubpMarkBlock(state, code: code, blockId: signaled)
+	arm64EmitMovImm(code, rd: 0, value: 128)
+	arm64MacosSubpAlu(code, opcode: SUBP_ALU_ADD, rd: 0, rn: 0, rm: 11)  // 128 + sig
+	arm64MacosSubpEpilogue(code, frameSize: frameSize)
+	arm64MacosSubpMarkBlock(state, code: code, blockId: bad)
+	arm64EmitMovImm(code, rd: 0, value: -1)
+	arm64MacosSubpEpilogue(code, frameSize: frameSize)
+	arm64MacosSubpFinalize(code, state: state)
+end 'emitArm64SubprocessWaitExit'
+
+// =============================================================================
+// maxon_subprocess_kill(handle, signal) -> kill() result | -1. Sends `signal` to
+// the child pid. The parallel runner's watchdog uses this to evict a worker that
+// has blown its time budget (closing its pipes so the drain GT sees EOF). Ports
+// C# EmitMaxonSubprocessKillPosix.
+// =============================================================================
+function emitArm64SubprocessKill(code ByteArray, relocations RelocationArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
+	arm64RecordLabel(labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "maxon_subprocess_kill", offset: code.count())
+	let frameSize = 0x30
+	var state = Arm64MacosSubpState.create(1)
+	arm64MacosSubpPrologue(code, frameSize: frameSize, argCount: 2)
+
+	let bad = 0
+
+	arm64MacosSubpReloadArg(code, argIndex: 0)  // handle
+	arm64MacosSubpCbz(code, state: state, rn: 0, targetBlock: bad)
+	arm64MacosSubpLoadField(code, dest: 9, baseReg: 0, disp: SUBP_OFF_PID)  // pid → x9
+	arm64MacosSubpLoad(code, dest: 1, disp: 0x18)  // signal (homed arg1) → x1
+	arm64EmitMovRegReg(code, rd: 0, rn: 9)  // pid → x0
+	arm64MacosSubpCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_KILL)
+	arm64MacosSubpEpilogue(code, frameSize: frameSize)
+	arm64MacosSubpMarkBlock(state, code: code, blockId: bad)
+	arm64EmitMovImm(code, rd: 0, value: -1)
+	arm64MacosSubpEpilogue(code, frameSize: frameSize)
+	arm64MacosSubpFinalize(code, state: state)
+end 'emitArm64SubprocessKill'
+
+// Free the packed argv blob (argv[0], a __slab_alloc'd repack that the self-hosted
+// __subp_build_argv owns — unlike the C# reference where argv[0] is a caller-owned
+// pointer) then the argv[] pointer array, given the argv pointer at frame slot
+// `argvSlot`. Both null-guarded; control lands at `doneBlock`. Shared by the sync
+// and streaming spawn-failure paths so they cannot diverge on this cleanup.
+function emitArm64SubpFreeArgvChain(code ByteArray, state Arm64MacosSubpState, callFixups Arm64CallFixupArray, argvSlot MachineWord, noPackedBlock BlockId, doneBlock BlockId)
+	arm64MacosSubpLoad(code, dest: 0, disp: argvSlot)
+	arm64MacosSubpCbz(code, state: state, rn: 0, targetBlock: doneBlock)  // argv null → nothing to free
+	arm64MacosSubpLoadField(code, dest: 0, baseReg: 0, disp: 0)  // argv[0] = packed blob
+	arm64MacosSubpCbz(code, state: state, rn: 0, targetBlock: noPackedBlock)
+	arm64MacosSubpBranchLink(code, callFixups: callFixups, name: "__slab_free")
+	arm64MacosSubpMarkBlock(state, code: code, blockId: noPackedBlock)
+	arm64MacosSubpLoad(code, dest: 0, disp: argvSlot)
+	arm64MacosSubpBranchLink(code, callFixups: callFixups, name: "__slab_free")
+	arm64MacosSubpMarkBlock(state, code: code, blockId: doneBlock)
+end 'emitArm64SubpFreeArgvChain'
+
+// fcntl(fd@frame-slot, F_SETFL, O_NONBLOCK) — set a streaming pipe read end
+// non-blocking. Matches the addDup2/addClose helper convention in this file.
+function emitArm64SubpStreamSetNonBlocking(code ByteArray, relocations RelocationArray, fdSlot MachineWord)
+	arm64MacosSubpLoadSw(code, dest: 0, disp: fdSlot)
+	arm64EmitMovImm(code, rd: 1, value: SUBP_F_SETFL)
+	arm64EmitMovImm(code, rd: 2, value: SUBP_O_NONBLOCK)
+	arm64MacosSubpCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_FCNTL)
+end 'emitArm64SubpStreamSetNonBlocking'
+
+// close(fd@frame-slot) — raw close of a 4-byte frame-slot fd. Used for the three
+// unconditional parent-end closes on the streaming spawn success path.
+function emitArm64SubpCloseFdSlot(code ByteArray, relocations RelocationArray, fdSlot MachineWord)
+	arm64MacosSubpLoadSw(code, dest: 0, disp: fdSlot)
+	arm64MacosSubpCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_CLOSE)
+end 'emitArm64SubpCloseFdSlot'

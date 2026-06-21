@@ -87,6 +87,7 @@ export let MACHO_IMPORT_SLOT_TIME = 19
 export let MACHO_IMPORT_SLOT_GETDIRENTRIES64 = 20
 export let MACHO_IMPORT_SLOT_ERROR = 21
 export let MACHO_IMPORT_SLOT_STRLEN = 22
+
 // Subprocess runtime (arm64-macos): posix_spawn + pipes + waitpid. The
 // hand-emitted maxon_subprocess_* helpers (Arm64MacosSubprocess.maxon) call
 // these via iatCall, mirroring the C# bootstrap's arm64 subprocess.
@@ -100,12 +101,20 @@ export let MACHO_IMPORT_SLOT_SPAWN_FA_ADDCHDIR = 29
 export let MACHO_IMPORT_SLOT_SPAWN_FA_DESTROY = 30
 export let MACHO_IMPORT_SLOT_WAITPID = 31
 export let MACHO_IMPORT_SLOT_NSGETENVIRON = 32
+
 // kill(pid, sig): used by maxon_subprocess_wait_collect's timeout path (SIGKILL
 // the child once the deadline elapses) and by maxon_subprocess_kill.
 export let MACHO_IMPORT_SLOT_KILL = 33
+
+// fcntl(fd, cmd, arg): used by maxon_subprocess_spawn_streaming to set the
+// parent's stdout/stderr pipe read ends O_NONBLOCK, so the streaming line reader
+// can poll-read + __gt_yield cooperatively (the single-thread green-thread runtime
+// has no kqueue / __io_submit_read to park on, unlike the C# GMP scheduler).
+export let MACHO_IMPORT_SLOT_FCNTL = 34
+
 // usleep(microseconds) is already imported at slot 18 (MACHO_IMPORT_SLOT_USLEEP);
 // the wait-collect timeout poll loop reuses it for its inter-poll sleep.
-let MACHO_IMPORT_COUNT = 34
+let MACHO_IMPORT_COUNT = 35
 
 // libSystem symbols imported via dyld chained-fixup binds, in slot order (see
 // MACHO_IMPORT_SLOT_* above). buildChainedFixups iterates this to emit both the
@@ -174,6 +183,8 @@ function machoImportNames() returns StringArray
 	names.push("_waitpid")
 	names.push("__NSGetEnviron")
 	names.push("_kill")
+	// slot 34: fcntl, for setting the streaming pipe read ends O_NONBLOCK.
+	names.push("_fcntl")
 	return names
 end 'machoImportNames'
 
