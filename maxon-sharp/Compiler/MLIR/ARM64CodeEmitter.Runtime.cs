@@ -2546,6 +2546,10 @@ public partial class ARM64CodeEmitter {
     // Save pattern pointer
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 24, 8);
 
+    // [x29+40] tracks a freshly-allocated stripped-path copy to free after open()
+    // (0 = the pattern was used as-is and aliases the caller's buffer; never free that).
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.Xzr, ARM64Register.X29, 40, 8);
+
     // Strip trailing "/*" or "\*" from pattern
     // Find length of pattern first
     EmitBranchLink("maxon_strlen"); // X0 = len
@@ -2580,8 +2584,10 @@ public partial class ARM64CodeEmitter {
     EmitAddSubImm(ARM64Register.X3, ARM64Register.X2, 2, isAdd: false); // X3 = len-2
     EmitAddSubImm(ARM64Register.X0, ARM64Register.X3, 1, isAdd: true); // alloc len-2+1
     EmitCallMmRawAlloc();
-    // Save new buffer at [x29+24] (replaces original pattern pointer)
+    // Save new buffer at [x29+24] (replaces original pattern pointer) and record it
+    // at [x29+40] so it is freed once open() has consumed it.
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 24, 8);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 40, 8);
     // Copy original path bytes: memcpy(new_buf, original, len-2)
     EmitReloadArg(0); // X0 = original pattern
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X2, ARM64Register.X29, 32, 8); // len
@@ -2611,6 +2617,21 @@ public partial class ARM64CodeEmitter {
     EmitVariadicCleanup();
     // Sign-extend W0→X0: open() returns int (32-bit), need sign extension for error check
     EmitWord(0x93407C00); // SXTW X0, W0
+
+    // Free the stripped-path copy now that open() has consumed it. Done before the
+    // error branch so it frees on both the success and failure paths. The open()
+    // result is stashed across the free (mm_raw_free clobbers X0); [x29+40] is 0
+    // when no copy was made (pattern aliases the caller's buffer — must not free).
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 32, 8); // stash open result
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 40, 8); // X0 = stripped copy (or 0)
+    var noFreeLabel = $"__dir_nofree_{_uniqueLabelCounter}";
+    _uniqueLabelCounter++;
+    EmitWord(0xF100001F | (Reg(ARM64Register.X0) << 5)); // CMP X0, #0
+    _condBranchFixups.Add((_code.Count, noFreeLabel));
+    EmitWord(0x54000000 | CondCode(ARM64ConditionCode.Eq)); // B.EQ nofree
+    EmitBranchLink("mm_raw_free", zeroSecondArg: Compiler.MmTrace);
+    DefineLabel(noFreeLabel);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 32, 8); // restore open result
 
     // Check if open failed
     var openFailLabel = $"__dir_openfail_{_uniqueLabelCounter}";
