@@ -232,8 +232,13 @@ function findWasmOptPath() returns FilePath
 	var candidates = StringArrayArray.create()
 	let exe = ["vendor", "wasm-opt", "wasm-opt.exe"]
 	let noExt = ["vendor", "wasm-opt", "wasm-opt"]
-	candidates.push(exe)
+	// Prefer the extensionless native binary first: on macOS/Linux the vendored
+	// host tool is `wasm-opt` (a Windows `wasm-opt.exe` can't exec here, and
+	// running it via Subprocess hangs rather than failing cleanly). On Windows
+	// the extensionless name doesn't exist, so the lookup falls through to the
+	// `.exe` — identical behaviour there.
 	candidates.push(noExt)
+	candidates.push(exe)
 	return findFileUpward(candidates)
 end 'findWasmOptPath'
 
@@ -282,8 +287,10 @@ function findWasmToolsPath() returns FilePath
 	var candidates = StringArrayArray.create()
 	let exe = ["vendor", "wasm-tools", "wasm-tools.exe"]
 	let noExt = ["vendor", "wasm-tools", "wasm-tools"]
-	candidates.push(exe)
+	// Prefer the extensionless native binary first (see findWasmOptPath): the
+	// macOS/Linux host tool is `wasm-tools`; Windows falls through to the `.exe`.
 	candidates.push(noExt)
+	candidates.push(exe)
 	return findFileUpward(candidates)
 end 'findWasmToolsPath'
 

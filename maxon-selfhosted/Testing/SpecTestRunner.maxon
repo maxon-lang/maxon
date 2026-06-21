@@ -555,15 +555,18 @@ end 'isHostTarget'
 function findWasmtimePath() returns String
 	var dir = Directory.currentPath()
 	for _ in 0 upto 10 'search'
-		let candidate = dir.join("vendor").join("wasmtime").join("wasmtime.exe")
-		if File.exists(candidate) 'found'
-			return candidate.toString()
-		end 'found'
-		// Also check for non-Windows binary name
+		// Prefer the extensionless native binary first: on macOS/Linux the
+		// vendored host wasmtime is `wasmtime` (a Windows `wasmtime.exe` can't
+		// run here). On Windows the extensionless name is absent, so the lookup
+		// falls through to the `.exe`.
 		let candidate2 = dir.join("vendor").join("wasmtime").join("wasmtime")
 		if File.exists(candidate2) 'found2'
 			return candidate2.toString()
 		end 'found2'
+		let candidate = dir.join("vendor").join("wasmtime").join("wasmtime.exe")
+		if File.exists(candidate) 'found'
+			return candidate.toString()
+		end 'found'
 		let parentDir = try dir.parent() otherwise return ""
 		dir = parentDir
 	end 'search'
