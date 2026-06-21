@@ -2148,6 +2148,7 @@ public partial class ARM64CodeEmitter {
     EmitMovRegImm(ARM64Register.X0, 8);
     EmitAdrpAddFixup(ARM64Register.X1, _funcAddrAdrpFixups, "__destruct___ManagedFile");
     EmitMovRegImm(ARM64Register.X2, 0);
+    if (Compiler.MmTrace) EmitMovRegImm(ARM64Register.X3, 0); // null trace scope (mm_alloc is arity-4 in trace mode; leaving X3 garbage faults the scope print)
     EmitBranchLink("mm_alloc");
 
     // Store fd at [file_ptr + 0]
@@ -2186,6 +2187,7 @@ public partial class ARM64CodeEmitter {
     EmitMovRegImm(ARM64Register.X0, 8);
     EmitAdrpAddFixup(ARM64Register.X1, _funcAddrAdrpFixups, "__destruct___ManagedFile");
     EmitMovRegImm(ARM64Register.X2, 0);
+    if (Compiler.MmTrace) EmitMovRegImm(ARM64Register.X3, 0); // null trace scope (mm_alloc is arity-4 in trace mode; leaving X3 garbage faults the scope print)
     EmitBranchLink("mm_alloc");
 
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, 24, 8); // fd
@@ -2223,6 +2225,7 @@ public partial class ARM64CodeEmitter {
     EmitMovRegImm(ARM64Register.X0, 8);
     EmitAdrpAddFixup(ARM64Register.X1, _funcAddrAdrpFixups, "__destruct___ManagedFile");
     EmitMovRegImm(ARM64Register.X2, 0);
+    if (Compiler.MmTrace) EmitMovRegImm(ARM64Register.X3, 0); // null trace scope (mm_alloc is arity-4 in trace mode; leaving X3 garbage faults the scope print)
     EmitBranchLink("mm_alloc");
 
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, 24, 8); // fd
@@ -2622,6 +2625,7 @@ public partial class ARM64CodeEmitter {
     EmitMovRegImm(ARM64Register.X0, DirBlockSize);
     EmitMovRegImm(ARM64Register.X1, 0); // no destructor
     EmitMovRegImm(ARM64Register.X2, 0); // no tag
+    if (Compiler.MmTrace) EmitMovRegImm(ARM64Register.X3, 0); // null trace scope
     EmitBranchLink("mm_alloc");
 
     // Save block ptr
@@ -2641,6 +2645,7 @@ public partial class ARM64CodeEmitter {
     EmitMovRegImm(ARM64Register.X0, 8);
     EmitAdrpAddFixup(ARM64Register.X1, _funcAddrAdrpFixups, "__destruct___ManagedDirectory");
     EmitMovRegImm(ARM64Register.X2, 0); // no tag
+    if (Compiler.MmTrace) EmitMovRegImm(ARM64Register.X3, 0); // null trace scope
     EmitBranchLink("mm_alloc");
 
     // Store block_ptr at [dir_ptr + 0]
@@ -5090,6 +5095,7 @@ public partial class ARM64CodeEmitter {
     EmitMovRegImm(ARM64Register.X0, 8);
     EmitAdrpAddFixup(ARM64Register.X1, _funcAddrAdrpFixups, "__destruct___ManagedSocket");
     EmitMovRegImm(ARM64Register.X2, 0);
+    if (Compiler.MmTrace) EmitMovRegImm(ARM64Register.X3, 0); // null trace scope
     EmitBranchLink("mm_alloc");
 
     // Store socket handle at [managed_ptr+0]
