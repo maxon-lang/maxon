@@ -1635,7 +1635,9 @@ public partial class RuntimeEmitter {
     // mcentral_get_span.
     _b.LoadCurrentP(VReg.Scratch1);
     _b.LoadIndirect(VReg.Scratch1, VReg.Scratch1, POffId);
-    _b.StoreIndirect(VReg.Scratch0, MspanOffOwningP, VReg.Scratch1);
+    // Store-release pairs with the load-acquire of owning_p in __slab_free so a
+    // cross-P free on ARM64 (weak memory) observes a coherent owner, not a stale one.
+    _b.StoreRelease(VReg.Scratch0, MspanOffOwningP, VReg.Scratch1);
 
     // --- Build intrusive free list ---
     // free_list = page_base
@@ -1763,7 +1765,9 @@ public partial class RuntimeEmitter {
     _b.LoadCurrentP(VReg.Scratch3);
     _b.LoadIndirect(VReg.Scratch3, VReg.Scratch3, POffId);
     _b.LoadLocal(VReg.Scratch0, 2); // span
-    _b.StoreIndirect(VReg.Scratch0, MspanOffOwningP, VReg.Scratch3);
+    // Store-release (see __slab_free's load-acquire): publishes the new owner to
+    // lockless cross-P readers, not just to threads that take the mcentral lock.
+    _b.StoreRelease(VReg.Scratch0, MspanOffOwningP, VReg.Scratch3);
 
     _b.LockRelease(MspanPoolLockLabel);
 
@@ -1794,7 +1798,9 @@ public partial class RuntimeEmitter {
     // violation crash loudly rather than corrupt freed memory.
     _b.LoadLocal(VReg.Scratch0, 0); // span_ptr
     _b.MovRegImm(VReg.Scratch3, (long)(uint)MspanOwningPSentinel);
-    _b.StoreIndirect(VReg.Scratch0, MspanOffOwningP, VReg.Scratch3);
+    // Store-release (see __slab_free's load-acquire): a lockless cross-P free must
+    // observe the sentinel (and skip-into-panic) rather than a stale prior owner.
+    _b.StoreRelease(VReg.Scratch0, MspanOffOwningP, VReg.Scratch3);
 
     // Get class_index from span; compute class_offset = class_index * 8
     _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, MspanOffClassIndex);
@@ -2475,7 +2481,12 @@ public partial class RuntimeEmitter {
     // we force them down the remote path: they are by construction not the
     // owning P of any span, so a CAS-push onto the owner's queue is correct.
     _b.LoadLocal(VReg.Scratch0, 1); // span_ptr
-    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, MspanOffOwningP);
+    // Load-acquire: on ARM64 a plain load could read a stale owning_p (the previous
+    // owner, or a value from before the span was sentinel-stamped), misrouting the
+    // free onto the wrong P's queue and corrupting that span's free_count. Pairs with
+    // the StoreRelease publishers in mspan_alloc / mcentral_get_span / return_span.
+    // No-op vs LoadIndirect on x86 (TSO already orders every load as acquire).
+    _b.LoadAcquire(VReg.Scratch1, VReg.Scratch0, MspanOffOwningP);
     _b.StoreLocal(4, VReg.Scratch1); // owning_p (saved for the remote-path target lookup)
     _b.LoadCurrentP(VReg.Scratch2);
     var localPath = UniqueLabel("slab_free_local");

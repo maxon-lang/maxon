@@ -286,6 +286,11 @@ public partial class X86CodeEmitter {
 
     public void FullBarrier() => _e.EmitMfence();
 
+    // x86-64 is TSO: every load already has acquire and every store release
+    // semantics, so acquire/release are plain indirect load/store.
+    public void LoadAcquire(VReg dest, VReg baseReg, int offset) => LoadIndirect(dest, baseReg, offset);
+    public void StoreRelease(VReg baseReg, int offset, VReg src) => StoreIndirect(baseReg, offset, src);
+
     // ---- Labels & data ----
 
     public void DefineLabel(string label) => _e.DefineLabel(label);

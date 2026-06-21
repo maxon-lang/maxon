@@ -408,6 +408,26 @@ public partial class ARM64CodeEmitter {
 
     public void FullBarrier() => _e.EmitDmbIsh();
 
+    // LDAR/STLR take a bare [Xn] address (no offset form), so fold a non-zero
+    // offset into X16 (a scratch not used by the VReg map: X0-X5 / X9-X12).
+    public void LoadAcquire(VReg dest, VReg baseReg, int offset) {
+      var addr = R(baseReg);
+      if (offset != 0) {
+        _e.EmitAddSubImm(ARM64Register.X16, R(baseReg), offset, isAdd: true);
+        addr = ARM64Register.X16;
+      }
+      _e.EmitWord(0xC8DFFC00u | (Reg(addr) << 5) | Reg(R(dest))); // LDAR Xt, [Xn]
+    }
+
+    public void StoreRelease(VReg baseReg, int offset, VReg src) {
+      var addr = R(baseReg);
+      if (offset != 0) {
+        _e.EmitAddSubImm(ARM64Register.X16, R(baseReg), offset, isAdd: true);
+        addr = ARM64Register.X16;
+      }
+      _e.EmitWord(0xC89FFC00u | (Reg(addr) << 5) | Reg(R(src))); // STLR Xt, [Xn]
+    }
+
     // ---- Labels & data ----
 
     public void DefineLabel(string label) => _e.DefineLabel(label);
