@@ -1979,6 +1979,7 @@ public partial class RuntimeEmitter {
 
   /// <summary>Emit: indent + "sl_alloc [TypeName #N] size=S class=C\n"</summary>
   private void EmitInlineTraceSlabAlloc(string uniquePrefix, int sizeSlot, int classSlot) {
+    if (Compiler.MmTraceRawOnly) return; // raw-only: suppress slab traces
     _b.Call("mm_trace_print_indent");
     _b.LeaSymdata(VReg.Arg0, "__slab_tag_alloc");
     _b.Call("mm_trace_print_tag");
@@ -1997,6 +1998,7 @@ public partial class RuntimeEmitter {
 
   /// <summary>Emit: indent + "os_alloc [TypeName #N] size=N\n"</summary>
   private void EmitInlineTraceOsAlloc(string uniquePrefix, VReg sizeReg) {
+    if (Compiler.MmTraceRawOnly) return; // raw-only: suppress os-alloc traces
     _b.MovRegReg(VReg.Arg0, sizeReg);
     _b.StoreLocal(OsTraceScratchSlot, VReg.Arg0);
     _b.Call("mm_trace_print_indent");
@@ -2013,6 +2015,7 @@ public partial class RuntimeEmitter {
 
   /// <summary>Emit: indent + "os_free [TypeName #N] size=N\n"</summary>
   private void EmitInlineTraceOsFree(string uniquePrefix, VReg sizeReg) {
+    if (Compiler.MmTraceRawOnly) return; // raw-only: suppress os-free traces
     _b.MovRegReg(VReg.Arg0, sizeReg);
     _b.StoreLocal(OsTraceScratchSlot, VReg.Arg0);
     _b.Call("mm_trace_print_indent");
@@ -2029,6 +2032,7 @@ public partial class RuntimeEmitter {
 
   /// <summary>Emit: indent + "sl_free [TypeName #N] size=N class=C\n"</summary>
   private void EmitInlineTraceSlabFree(string uniquePrefix, int sizeSlot, int classSlot) {
+    if (Compiler.MmTraceRawOnly) return; // raw-only: suppress slab traces
     _b.Call("mm_trace_print_indent");
     _b.LeaSymdata(VReg.Arg0, "__slab_tag_free");
     _b.Call("mm_trace_print_tag");

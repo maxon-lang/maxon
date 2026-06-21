@@ -72,6 +72,13 @@ public class Compiler {
   [ThreadStatic] private static bool _mmTrace;
   public static bool MmTrace { get => _mmTrace; set => _mmTrace = value; }
 
+  // Raw-only trace: when set (with MmTrace), suppress the managed alloc/incref/
+  // decref/free/realloc trace lines and emit ONLY mm_raw_alloc/mm_raw_free, so a
+  // leak hunt for untagged raw buffers produces a tiny, fast trace instead of the
+  // full refcount firehose.
+  [ThreadStatic] private static bool _mmTraceRawOnly;
+  public static bool MmTraceRawOnly { get => _mmTraceRawOnly; set => _mmTraceRawOnly = value; }
+
   [ThreadStatic] private static bool _mmDebug;
   public static bool MmDebug { get => _mmDebug; set => _mmDebug = value; }
 
