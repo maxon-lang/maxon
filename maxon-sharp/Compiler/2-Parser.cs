@@ -9443,6 +9443,12 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     ["sleep"] = RuntimeCallIntrinsic(
       "Suspends the current green thread for the given milliseconds.\n\n`__Builtins.sleep(ms)`",
       "maxon_sleep", ["i64"], false),
+    // === Scheduler control ===
+    ["gtSetSingleThreaded"] = RuntimeCallIntrinsic(
+      "Pins the green-thread scheduler to a single OS thread (caps worker threads to 1) "
+      + "so async work never spawns extra Ms. For I/O-multiplexing dispatchers whose "
+      + "parallelism is process-level.\n\n`__Builtins.gtSetSingleThreaded()`",
+      "maxon_gt_set_single_threaded", [], false),
     // === Non-blocking promise readiness check ===
     ["gtIsComplete"] = RuntimeCallIntrinsic(
       "Returns 1 if the green thread (raw promise inner pointer) has reached completed status, 0 otherwise. Non-blocking peek used by dispatchers that need to find the first-ready promise out of N concurrent ones without head-of-line blocking. Pass `promise.inner` from a `Promise with X`.\n\n`__Builtins.gtIsComplete(gt_ptr) returns int`",

@@ -4359,6 +4359,25 @@ func __gt_is_complete 1 i64
     std ret v1
 end
 
+// maxon_gt_set_single_threaded() -> void. Pins the green-thread scheduler to a
+// single M by setting both __sched_max_procs and __sched_num_procs to 1. The
+// parallel spec dispatcher calls this (it is an I/O multiplexer — parallelism is
+// the worker subprocesses, not in-process Ms). Portable .std body so it links on
+// every host: harmless on the arm64-macos runtime (already single-M by
+// construction — __gt_init hardwires num_procs=1, nothing reads max_procs), and
+// it forces single-M on the multi-M x64 runtime. Mirrors the C# bootstrap's
+// maxon_gt_set_single_threaded (ARM64CodeEmitter.Runtime.cs / X86CodeEmitter.Runtime.cs).
+func maxon_gt_set_single_threaded 0 void
+  block entry:
+    v0 = std constI64 1
+    v1 = std globalAddr __sched_max_procs
+    std storeIndirect v1 0 v0
+    v2 = std globalAddr __sched_num_procs
+    std storeIndirect v2 0 v0
+    v3 = std constI64 0
+    std ret v3
+end
+
 // __gt_init() -> void. Signature-only stub: the real body is the hand-emitted
 // machine code in X64Backend.maxon (emitX64GtInit), whose `recordLabel` overrides
 // this label. The stub exists so the backend can look up the (arity, return-type)

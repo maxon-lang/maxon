@@ -87,6 +87,7 @@ public partial class X86CodeEmitter {
     EmitFileStat();
     EmitFileStatField();
     EmitSleep();
+    EmitGtSetSingleThreaded();
     EmitManagedFileWrite();
     EmitFileDestructor();
     EmitManagedDirOpenSearch();
@@ -3464,6 +3465,22 @@ public partial class X86CodeEmitter {
     EmitShlRegImm(X86Register.Rcx, 3);
     // MOV RAX, [RAX + RCX]
     EmitBytes(0x48, 0x8B, 0x04, 0x08);
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// maxon_gt_set_single_threaded(): Cap BOTH __sched_max_procs AND __sched_num_procs
+  /// to 1 so the scheduler never spawns additional worker OS threads — see the ARM64
+  /// emitter's copy for the rationale (the parallel spec runner is an I/O multiplexer;
+  /// its parallelism is the worker subprocesses, so its drain GTs only need cooperative
+  /// single-thread multiplexing via the IOCP/kqueue poller). max_procs alone gates new-M
+  /// spawns, but num_procs bounds the idle-worker wake scan + work-steal victim range
+  /// (RuntimeEmitter.Scheduler.cs), so both must be 1 to fully pin to P[0] — matching the
+  /// ARM64 emitter and the portable runtime.std body.
+  private void EmitGtSetSingleThreaded() {
+    EmitRuntimeFunctionStart("maxon_gt_set_single_threaded", 0, 0x30);
+    EmitMovRegImm(X86Register.Rax, 1);
+    EmitGlobalStoreReg(X86Register.Rax, "__sched_max_procs");
+    EmitGlobalStoreReg(X86Register.Rax, "__sched_num_procs");
     EmitRuntimeFunctionEnd();
   }
 

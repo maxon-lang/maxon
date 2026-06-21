@@ -3287,6 +3287,14 @@ end 'VarHolder'
 // first and the OS-level parallelism gates wall time on the heaviest individual
 // compile rather than on a static round-robin chunk.
 export function runAllSpecTestsParallel(filter String, target Target, workerCount WorkerCount, updateRequired bool = false, verbose bool = false) returns ExitCode
+	// This dispatcher is an I/O multiplexer: the parallelism is the N persistent
+	// worker SUBPROCESSES, and the per-worker drain green threads only need to be
+	// cooperatively multiplexed on one OS thread (via the kqueue/IOCP poller).
+	// Pin the green-thread scheduler to a single M so async drains never spawn
+	// extra worker OS threads — the multi-M scheduler paths are unnecessary here
+	// and (on arm64-macos) not yet hardened for genuine multi-OS-thread use.
+	__Builtins.gtSetSingleThreaded()
+
 	let root = try findSpecsRoot() otherwise 'noRoot'
 		logError(LogCategory.testing, message: function() gives "Could not find project root (no specs/ directory found)")
 		return 1

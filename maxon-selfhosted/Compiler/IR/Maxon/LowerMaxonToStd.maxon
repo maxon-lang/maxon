@@ -1061,6 +1061,11 @@ export function registerBuiltinsIntrinsicSignatures(project Project)
 	// inner pointer) is in status=completed, 0 otherwise. Mirrors the
 	// bootstrap entry in 2-Parser.cs (RuntimeCallIntrinsic "__gt_is_complete").
 	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Builtins.gtIsComplete", paramNames: mmParamNames1("gt"), paramTypes: mmParamTypes1(MaxonType.integer), returnType: intReturn)
+	// Pins the green-thread scheduler to a single M (lowers to
+	// `maxon_gt_set_single_threaded`). Zero-arg, void return. The parallel spec
+	// dispatcher calls this. Mirrors the bootstrap entry in 2-Parser.cs
+	// (RuntimeCallIntrinsic "maxon_gt_set_single_threaded", arity 0).
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Builtins.gtSetSingleThreaded", paramNames: StringArray.create(), paramTypes: MaxonTypeArray.create(), returnType: MaxonReturnType.void)
 end 'registerBuiltinsIntrinsicSignatures'
 
 // 14-arg spawn/detach contract: argv (MM), argc (int), cwd (MM), envBlock (MM),
@@ -6747,6 +6752,9 @@ type MaxonToStdLowering
 		if methodName == "gtIsComplete" 'isGtIsComplete'
 			return self.lowerBuiltinsGtIsComplete(result, args: args, dstBlock: dstBlock)
 		end 'isGtIsComplete'
+		if methodName == "gtSetSingleThreaded" 'isGtSetSingleThreaded'
+			return self.lowerBuiltinsGtSetSingleThreaded(result, args: args, dstBlock: dstBlock)
+		end 'isGtSetSingleThreaded'
 		// Phase 3.4: subprocess builtins each route to a fixed `maxon_subprocess_*`
 		// runtime symbol. `lookupSubprocessBuiltin` keeps the (methodName ->
 		// callee, arity, return-shape) mapping in one place; the actual emit is
@@ -7449,24 +7457,36 @@ type MaxonToStdLowering
 		return true
 	end 'lowerBuiltinsSleep'
 
-	// `__Builtins.forceSegfault()`: dereference address 0 to trigger a CPU
-	// access-violation fault, exercising the VEH fault-recovery path. Lowers to the
-	// runtime helper `maxon_force_segfault` (never returns — the load always faults).
-	// Void-returning, so it follows the same throwaway-result + 0-const binding as
-	// `lowerBuiltinsSleep`. Mirrors the C# bootstrap's `maxon_force_segfault`.
-	function lowerBuiltinsForceSegfault(result ByteArray, args ByteArrayArray, dstBlock IrBlock) returns bool
+	// Shared lowering for a void-returning, zero-arg `__Builtins.X()` that maps to a
+	// no-arg runtime call: arity-check, emit the call with a throwaway result, then
+	// bind the Maxon-level result to a 0 const (the void value). `builtinName` is the
+	// `__Builtins.X` spelling for the diagnostic; `callee` is the runtime symbol.
+	function lowerVoidZeroArgBuiltin(result ByteArray, args ByteArrayArray, dstBlock IrBlock, builtinName String, callee String) returns bool
 		if args.count() != 0 'badArity'
-			self.reportLowerError(ErrorCode.semanticWrongArgCount, message: "__Builtins.forceSegfault: expected 0 args, got {args.count()}")
+			self.reportLowerError(ErrorCode.semanticWrongArgCount, message: "{builtinName}: expected 0 args, got {args.count()}")
 			return true
 		end 'badArity'
 		let throwawayId = allocValueId(self.funcIdRef)
 		self.setValueType(throwawayId, t: MaxonType.integer)
-		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(throwawayId, callee: "maxon_force_segfault", argIds: ValueIdArray.create())))
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(throwawayId, callee: callee, argIds: ValueIdArray.create())))
 		let resultId = self.defineName(result)
 		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: resultId, value: 0))))
 		self.setValueType(resultId, t: MaxonType.integer)
 		return true
+	end 'lowerVoidZeroArgBuiltin'
+
+	// `__Builtins.forceSegfault()`: dereference address 0 to trigger a CPU
+	// access-violation fault, exercising the VEH fault-recovery path. Lowers to the
+	// runtime helper `maxon_force_segfault` (never returns — the load always faults).
+	function lowerBuiltinsForceSegfault(result ByteArray, args ByteArrayArray, dstBlock IrBlock) returns bool
+		return self.lowerVoidZeroArgBuiltin(result, args: args, dstBlock: dstBlock, builtinName: "__Builtins.forceSegfault", callee: "maxon_force_segfault")
 	end 'lowerBuiltinsForceSegfault'
+
+	// `__Builtins.gtSetSingleThreaded()`: pins the green-thread scheduler to a single M
+	// (lowers to `maxon_gt_set_single_threaded`).
+	function lowerBuiltinsGtSetSingleThreaded(result ByteArray, args ByteArrayArray, dstBlock IrBlock) returns bool
+		return self.lowerVoidZeroArgBuiltin(result, args: args, dstBlock: dstBlock, builtinName: "__Builtins.gtSetSingleThreaded", callee: "maxon_gt_set_single_threaded")
+	end 'lowerBuiltinsGtSetSingleThreaded'
 
 	function lowerBuiltinsGtIsComplete(result ByteArray, args ByteArrayArray, dstBlock IrBlock) returns bool
 		if args.count() != 1 'badArity'
