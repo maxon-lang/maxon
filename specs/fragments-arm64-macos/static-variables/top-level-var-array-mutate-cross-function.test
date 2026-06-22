@@ -30,174 +30,195 @@ ExitCode: 6
 ---
 // CompiledIR
 module {
-  func @increment(index: i64) {
+  func @increment(x0: i64) {
   entry:
-    arm64.prologue stack_size=112
-    arm64.str x0, [x29, #-8]
-    arm64.global_load x1, [counters]
-    arm64.str x1, [x29, #-16]
-    arm64.ldr x1, [x29, #-16]
-    arm64.ldr x0, [x29, #-16]
-    arm64.ldr x1, [x29, #-8]
-    arm64.bl __Array_i64.get
+    arm64.prologue stack_size=32
+    arm64.mov x19, x0
+    arm64.adrp_add_rdata x0, __data_counters
+    arm64.ldr x0, [x29, #16]
+    arm64.ldr x1, [x0, #0] (8b)
+  inlined_Array.get_0_0:
+    arm64.ldr x0, [x1, #0] (8b)
+    arm64.mov x1, x19
+    arm64.bl stdlib.__managed_mem_get
     arm64.mov x2, #0
-    arm64.str x2, [x29, #-24]
-    arm64.str x0, [x29, #-32]
+    arm64.cmp x1, x2
+    arm64.cset x1, ne
+    arm64.b.eq inlined_Array.get_3_0
+  inlined_Array.get_1_0:
+    arm64.mov x1, #1
     arm64.mov x0, #0
-    arm64.cmp x1, x0
-    arm64.cset x2, ne
-    arm64.cmp x2, #0
-    arm64.b.ne increment.otherwise_default_error_0
-    arm64.b increment.otherwise_default_continue_0
-  otherwise_default_error_0:
-    arm64.ldr x0, [x29, #-24]
-    arm64.str x0, [x29, #-32]
-    arm64.b increment.otherwise_default_continue_0
-  otherwise_default_continue_0:
-    arm64.ldr x0, [x29, #-32]
-    arm64.global_load x1, [counters]
-    arm64.str x1, [x29, #-40]
-    arm64.ldr x2, [x29, #-40]
-    arm64.ldr x0, [x29, #-40]
-    arm64.bl mm_incref
-    arm64.ldr x3, [x29, #-8]
-    arm64.mov x4, #1
-    arm64.ldr x5, [x29, #-32]
-    arm64.add x6, x5, x4
-    arm64.ldr x7, [x29, #-40]
-    arm64.ldr x0, [x29, #-40]
-    arm64.ldr x1, [x29, #-8]
-    arm64.mov x2, x6
-    arm64.bl __Array_i64.set
-    arm64.mov x8, #0
-    arm64.cmp x1, x8
-    arm64.cset x9, ne
-    arm64.cmp x9, #0
-    arm64.b.ne increment.otherwise_panic_0
-    arm64.b increment.otherwise_continue_0
-  otherwise_panic_0:
-    arm64.adrp_add_symdata x0, __panic_msg_13
+    arm64.b inline_cont_increment_0
+  inlined_Array.get_3_0:
+    arm64.mov x1, #0
+  inline_cont_increment_0:
+    arm64.mov x20, #0
+    arm64.cmp x1, x20
+    arm64.cset x1, ne
+    arm64.b.eq try_0.ok
+    arm64.mov x1, x20
+    arm64.b try_0.merge
+  try_0.ok:
     arm64.mov x1, x0
+  try_0.merge:
+    arm64.adrp_add_rdata x0, __data_counters
+    arm64.ldr x0, [x29, #16]
+    arm64.ldr x2, [x0, #0] (8b)
+    arm64.mov x0, #1
+    arm64.add x3, x1, x0
+  inlined_Array.set_0_0:
+    arm64.ldr x0, [x2, #0] (8b)
+    arm64.mov x1, x19
+    arm64.mov x2, x3
+    arm64.bl stdlib.__managed_mem_set
     arm64.mov x0, x1
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x0, ne
+    arm64.b.eq inlined_Array.set_3_0
+  inlined_Array.set_1_0:
+    arm64.mov x1, #1
+    arm64.mov x0, #0
+    arm64.b inline_cont_increment_1
+  inlined_Array.set_3_0:
+    arm64.mov x1, #0
+    arm64.mov x0, #0
+  inline_cont_increment_1:
+    arm64.cmp x1, x20
+    arm64.cset x0, ne
+    arm64.b.eq try_1.merge
+  try_1.otherwise:
+    arm64.adrp_add_rdata x0, __panic_msg_a7b723c3cdbef113
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
     arm64.bl mrt_panic
-  otherwise_continue_0:
-    arm64.ldr x0, [x29, #-40]
-    arm64.cmp x0, #0
-    arm64.b.eq increment.__skip_guarded_32
-    arm64.bl mm_decref
-    arm64.label increment.__skip_guarded_32
-    arm64.epilogue stack_size=112
+    arm64.epilogue
+    arm64.ret
+  try_1.merge:
+    arm64.epilogue
     arm64.ret
   }
   func @total() -> i64 {
   entry:
-    arm64.prologue stack_size=208
-    arm64.global_load x0, [counters]
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x1, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.mov x1, #0
-    arm64.bl __Array_i64.get
+    arm64.prologue stack_size=48
+    arm64.adrp_add_rdata x0, __data_counters
+    arm64.ldr x0, [x29, #16]
+    arm64.ldr x1, [x0, #0] (8b)
+    arm64.mov x19, #0
+  inlined_Array.get_0_0:
+    arm64.ldr x0, [x1, #0] (8b)
+    arm64.mov x1, x19
+    arm64.bl stdlib.__managed_mem_get
     arm64.mov x2, #0
-    arm64.str x2, [x29, #-16]
-    arm64.str x0, [x29, #-24]
-    arm64.mov x3, #0
-    arm64.cmp x1, x3
-    arm64.cset x4, ne
-    arm64.cmp x4, #0
-    arm64.b.ne total.otherwise_default_error_0
-    arm64.b total.otherwise_default_continue_0
-  otherwise_default_error_0:
-    arm64.ldr x0, [x29, #-16]
-    arm64.str x0, [x29, #-24]
-    arm64.b total.otherwise_default_continue_0
-  otherwise_default_continue_0:
-    arm64.ldr x0, [x29, #-24]
-    arm64.str x0, [x29, #-32]
-    arm64.global_load x1, [counters]
-    arm64.str x1, [x29, #-40]
-    arm64.ldr x2, [x29, #-40]
-    arm64.ldr x0, [x29, #-40]
+    arm64.cmp x1, x2
+    arm64.cset x1, ne
+    arm64.b.eq inlined_Array.get_3_0
+  inlined_Array.get_1_0:
     arm64.mov x1, #1
-    arm64.bl __Array_i64.get
-    arm64.mov x3, #0
-    arm64.str x3, [x29, #-48]
-    arm64.str x0, [x29, #-56]
-    arm64.mov x4, #0
-    arm64.cmp x1, x4
-    arm64.cset x5, ne
-    arm64.cmp x5, #0
-    arm64.b.ne total.otherwise_default_error_1
-    arm64.b total.otherwise_default_continue_1
-  otherwise_default_error_1:
-    arm64.ldr x0, [x29, #-48]
-    arm64.str x0, [x29, #-56]
-    arm64.b total.otherwise_default_continue_1
-  otherwise_default_continue_1:
-    arm64.ldr x0, [x29, #-56]
-    arm64.str x0, [x29, #-64]
-    arm64.global_load x1, [counters]
-    arm64.str x1, [x29, #-72]
-    arm64.ldr x2, [x29, #-72]
-    arm64.ldr x0, [x29, #-72]
-    arm64.mov x1, #2
-    arm64.bl __Array_i64.get
-    arm64.mov x3, #0
-    arm64.str x3, [x29, #-80]
-    arm64.str x0, [x29, #-88]
-    arm64.mov x4, #0
-    arm64.cmp x1, x4
-    arm64.cset x5, ne
-    arm64.cmp x5, #0
-    arm64.b.ne total.otherwise_default_error_2
-    arm64.b total.otherwise_default_continue_2
-  otherwise_default_error_2:
-    arm64.ldr x0, [x29, #-80]
-    arm64.str x0, [x29, #-88]
-    arm64.b total.otherwise_default_continue_2
-  otherwise_default_continue_2:
-    arm64.ldr x0, [x29, #-88]
-    arm64.ldr x1, [x29, #-32]
-    arm64.ldr x2, [x29, #-64]
-    arm64.add x3, x1, x2
-    arm64.add x4, x3, x0
-    arm64.mov x0, x4
-    arm64.epilogue stack_size=208
+    arm64.mov x0, #0
+    arm64.b inline_cont_total_0
+  inlined_Array.get_3_0:
+    arm64.mov x1, #0
+  inline_cont_total_0:
+    arm64.cmp x1, x19
+    arm64.cset x1, ne
+    arm64.b.eq try_0.ok
+    arm64.mov x20, x19
+    arm64.b try_0.merge
+  try_0.ok:
+    arm64.mov x20, x0
+  try_0.merge:
+    arm64.adrp_add_rdata x0, __data_counters
+    arm64.ldr x0, [x29, #16]
+    arm64.ldr x1, [x0, #0] (8b)
+    arm64.mov x2, #1
+  inlined_Array.get_0_1:
+    arm64.ldr x0, [x1, #0] (8b)
+    arm64.mov x1, x2
+    arm64.bl stdlib.__managed_mem_get
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x1, ne
+    arm64.b.eq inlined_Array.get_3_1
+  inlined_Array.get_1_1:
+    arm64.mov x1, #1
+    arm64.mov x0, #0
+    arm64.b inline_cont_total_1
+  inlined_Array.get_3_1:
+    arm64.mov x1, #0
+  inline_cont_total_1:
+    arm64.cmp x1, x19
+    arm64.cset x1, ne
+    arm64.b.eq try_1.ok
+    arm64.mov x21, x19
+    arm64.b try_1.merge
+  try_1.ok:
+    arm64.mov x21, x0
+  try_1.merge:
+    arm64.adrp_add_rdata x0, __data_counters
+    arm64.ldr x0, [x29, #16]
+    arm64.ldr x1, [x0, #0] (8b)
+    arm64.mov x2, #2
+  inlined_Array.get_0_2:
+    arm64.ldr x0, [x1, #0] (8b)
+    arm64.mov x1, x2
+    arm64.bl stdlib.__managed_mem_get
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x1, ne
+    arm64.b.eq inlined_Array.get_3_2
+  inlined_Array.get_1_2:
+    arm64.mov x1, #1
+    arm64.mov x0, #0
+    arm64.b inline_cont_total_2
+  inlined_Array.get_3_2:
+    arm64.mov x1, #0
+  inline_cont_total_2:
+    arm64.cmp x1, x19
+    arm64.cset x1, ne
+    arm64.b.eq try_2.ok
+    arm64.b try_2.merge
+  try_2.ok:
+    arm64.mov x19, x0
+  try_2.merge:
+    arm64.add x1, x20, x21
+    arm64.add x0, x1, x19
+    arm64.epilogue
     arm64.ret
   }
   func @main() -> u8 {
   entry:
-    arm64.prologue stack_size=16
-    arm64.mov x0, #0
+    arm64.prologue stack_size=32
+    arm64.mov x19, #0
+    arm64.mov x0, x19
     arm64.bl increment
-    arm64.mov x0, #0
+    arm64.mov x19, #0
+    arm64.mov x0, x19
     arm64.bl increment
-    arm64.mov x0, #1
+    arm64.mov x19, #1
+    arm64.mov x0, x19
     arm64.bl increment
-    arm64.mov x0, #2
+    arm64.mov x19, #2
+    arm64.mov x0, x19
     arm64.bl increment
-    arm64.mov x0, #2
+    arm64.mov x19, #2
+    arm64.mov x0, x19
     arm64.bl increment
-    arm64.mov x0, #2
+    arm64.mov x19, #2
+    arm64.mov x0, x19
     arm64.bl increment
     arm64.bl total
-    arm64.mov x1, #0
-    arm64.cmp x0, x1
-    arm64.cset x2, lt
     arm64.mov x1, #255
     arm64.cmp x0, x1
-    arm64.cset x3, gt
-    arm64.orr x1, x2, x3
-    arm64.cmp x1, #0
-    arm64.b.ne main.__range_panic_0
-    arm64.b main.__range_ok_0
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
   __range_panic_0:
-    arm64.adrp_add_symdata x0, __panic_msg_14
-    arm64.mov x1, x0
-    arm64.mov x0, x1
+    arm64.adrp_add_rdata x0, __panic_msg_92846191c1c79b53
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
     arm64.bl mrt_panic
   __range_ok_0:
-    arm64.epilogue stack_size=16
+    arm64.epilogue
     arm64.ret
   }
 }

@@ -14,158 +14,37 @@ ExitCode: 42
 module {
   func @main() -> u8 {
   entry:
-    arm64.prologue stack_size=176
-    arm64.bl maxon_get_current_directory
-    arm64.mov x1, #0
-    arm64.cmp x0, x1
-    arm64.cset x2, eq
-    arm64.str x0, [x29, #-64]
-    arm64.str x2, [x29, #-72]
-    arm64.bl __io_get_last_error
-    arm64.mov x1, #8
-    arm64.mov x2, #2
-    arm64.cmp x0, x2
-    arm64.cset x3, eq
-    arm64.mov x2, #1
-    arm64.cmp x3, #0
-    arm64.csel x4, x2, x1, ne
-    arm64.mov x1, #13
-    arm64.cmp x0, x1
-    arm64.cset x2, eq
-    arm64.mov x0, #2
-    arm64.cmp x2, #0
-    arm64.csel x1, x0, x4, ne
-    arm64.mov x2, #0
-    arm64.ldr x3, [x29, #-72]
-    arm64.cmp x3, #0
-    arm64.csel x4, x1, x2, ne
-    arm64.str x4, [x29, #-80]
-    arm64.ldr x0, [x29, #-64]
-    arm64.bl maxon_strlen
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x5, [x29, #-64]
-    arm64.str x5, [x29, #-16]
-    arm64.adrp_add_func x6, __destruct___ManagedMemory
-    arm64.mov x7, x6
-    arm64.mov x1, x7
-    arm64.mov x0, #40
-    arm64.mov x2, #3
-    arm64.bl mm_alloc
-    arm64.str x0, [x29, #-24]
-    arm64.ldr x8, [x29, #-8]
-    arm64.mov x9, #1
-    arm64.add x10, x8, x9
-    arm64.mov x0, x10
-    arm64.bl mm_raw_alloc
-    arm64.str x0, [x29, #-32]
-    arm64.ldr x11, [x29, #-32]
-    arm64.ldr x12, [x29, #-16]
-    arm64.ldr x13, [x29, #-8]
-    arm64.mov x14, #1
-    arm64.add x15, x13, x14
-    arm64.ldr x0, [x29, #-32]
-    arm64.ldr x1, [x29, #-16]
-    arm64.mov x2, x15
-    arm64.bl maxon_memcpy
-    arm64.ldr x1, [x29, #-32]
-    arm64.ldr x2, [x29, #-8]
-    arm64.mov x3, #1
-    arm64.add x4, x2, x3
-    arm64.mov x3, #1
-    arm64.mov x5, #0
-    arm64.ldr x6, [x29, #-24]
-    arm64.str x1, [x6, #0]
-    arm64.ldr x1, [x29, #-24]
-    arm64.str x2, [x1, #8]
-    arm64.ldr x1, [x29, #-24]
-    arm64.str x4, [x1, #16]
-    arm64.ldr x1, [x29, #-24]
-    arm64.str x3, [x1, #24]
-    arm64.ldr x1, [x29, #-24]
-    arm64.str x5, [x1, #32]
-    arm64.str x0, [x29, #-88]
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl mm_raw_free
-    arm64.ldr x0, [x29, #-24]
-    arm64.str x0, [x29, #-40]
-    arm64.ldr x0, [x29, #-40]
-    arm64.bl mm_incref
-    arm64.mov x0, #0
-    arm64.ldr x1, [x29, #-80]
-    arm64.cmp x1, x0
-    arm64.cset x2, ne
-    arm64.cmp x2, #0
-    arm64.b.ne main.otherwise_stmt_0
-    arm64.b main.otherwise_continue_0
-  otherwise_stmt_0:
-    arm64.ldr x0, [x29, #-40]
-    arm64.cmp x0, #0
-    arm64.b.eq main.__skip_guarded_58
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_58
+    arm64.prologue stack_size=32
+    arm64.bl mrt_directory_current_path
+    arm64.mov x2, x1
+    arm64.mov x1, x0
+    arm64.mov x19, #0
+    arm64.cmp x2, x19
+    arm64.cset x0, ne
+    arm64.b.eq try_0.merge
+  try_0.otherwise:
     arm64.mov x0, #1
-    arm64.epilogue stack_size=176
+    arm64.epilogue
     arm64.ret
-  otherwise_continue_0:
-    arm64.ldr x0, [x29, #-40]
-    arm64.str x0, [x29, #-48]
-    arm64.ldr x1, [x29, #-48]
-    arm64.ldr x0, [x29, #-48]
-    arm64.bl mm_incref
-    arm64.ldr x2, [x29, #-48]
-    arm64.ldr x0, [x29, #-48]
-    arm64.bl stdlib.String.init
-    arm64.str x0, [x29, #-56]
-    arm64.ldr x3, [x29, #-56]
-    arm64.ldr x0, [x29, #-56]
-    arm64.bl stdlib.String.count
-    arm64.mov x4, #0
-    arm64.cmp x0, x4
-    arm64.cset x5, gt
-    arm64.cmp x5, #0
-    arm64.b.ne main.hasPath_0
-    arm64.b main.hasPath_0.after
+  try_0.merge:
+    arm64.mov x0, x1
+    arm64.bl String.init
+    arm64.mov x20, x0
+    arm64.mov x0, x20
+    arm64.bl String.count
+    arm64.mov x21, x0
+    arm64.mov x0, x20
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.cmp x21, x19
+    arm64.cset x0, gt
+    arm64.b.le hasPath_0.after
   hasPath_0:
-    arm64.ldr x0, [x29, #-40]
-    arm64.cmp x0, #0
-    arm64.b.eq main.__skip_guarded_74
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_74
-    arm64.ldr x1, [x29, #-56]
-    arm64.cmp x1, #0
-    arm64.b.eq main.__skip_guarded_76
-    arm64.ldr x0, [x29, #-56]
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_76
-    arm64.ldr x2, [x29, #-48]
-    arm64.cmp x2, #0
-    arm64.b.eq main.__skip_guarded_78
-    arm64.ldr x0, [x29, #-48]
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_78
     arm64.mov x0, #42
-    arm64.epilogue stack_size=176
+    arm64.epilogue
     arm64.ret
   hasPath_0.after:
-    arm64.ldr x0, [x29, #-40]
-    arm64.cmp x0, #0
-    arm64.b.eq main.__skip_guarded_82
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_82
-    arm64.ldr x1, [x29, #-56]
-    arm64.cmp x1, #0
-    arm64.b.eq main.__skip_guarded_84
-    arm64.ldr x0, [x29, #-56]
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_84
-    arm64.ldr x2, [x29, #-48]
-    arm64.cmp x2, #0
-    arm64.b.eq main.__skip_guarded_86
-    arm64.ldr x0, [x29, #-48]
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_86
-    arm64.mov x0, #0
-    arm64.epilogue stack_size=176
+    arm64.mov x0, x19
+    arm64.epilogue
     arm64.ret
   }
 }

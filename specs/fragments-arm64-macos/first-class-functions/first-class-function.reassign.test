@@ -22,60 +22,31 @@ ExitCode: 50
 ---
 // CompiledIR
 module {
-  func @double(x: i64) -> i64 {
-  entry:
-    arm64.mov x1, #2
-    arm64.mul x2, x0, x1
-    arm64.mov x0, x2
-    arm64.ret
-  }
-  func @triple(x: i64) -> i64 {
-  entry:
-    arm64.mov x1, #3
-    arm64.mul x2, x0, x1
-    arm64.mov x0, x2
-    arm64.ret
-  }
   func @main() -> u8 {
   entry:
-    arm64.prologue stack_size=48
-    arm64.adrp_add_func x0, double
-    arm64.mov x1, #10
-    arm64.mov x2, #0
-    arm64.str x0, [x29, #-8]
-    arm64.mov x9, x0
-    arm64.mov x0, x1
-    arm64.mov x1, x2
-    arm64.blr x9
-    arm64.adrp_add_func x3, triple
-    arm64.mov x4, #10
-    arm64.mov x5, #0
-    arm64.str x0, [x29, #-16]
-    arm64.str x3, [x29, #-24]
-    arm64.mov x9, x3
-    arm64.mov x0, x4
-    arm64.mov x1, x5
-    arm64.blr x9
-    arm64.ldr x6, [x29, #-16]
-    arm64.add x7, x6, x0
-    arm64.mov x8, #0
-    arm64.cmp x7, x8
-    arm64.cset x9, lt
-    arm64.mov x10, #255
-    arm64.cmp x7, x10
-    arm64.cset x11, gt
-    arm64.orr x12, x9, x11
-    arm64.cmp x12, #0
-    arm64.b.ne main.__range_panic_0
-    arm64.b main.__range_ok_0
-  __range_panic_0:
-    arm64.adrp_add_symdata x0, __panic_msg_5
+    arm64.prologue stack_size=32
+    arm64.mov x1, #0
+    arm64.mov x0, #10
+    arm64.adrp+add x19, __fnref_double
+    arm64.blr x19
+    arm64.mov x19, x0
+    arm64.mov x1, #0
+    arm64.mov x0, #10
+    arm64.adrp+add x20, __fnref_triple
+    arm64.blr x20
     arm64.mov x1, x0
-    arm64.mov x0, x1
+    arm64.mov x2, #255
+    arm64.add x0, x19, x1
+    arm64.cmp x0, x2
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_ed0d8d79502daf45
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
     arm64.bl mrt_panic
   __range_ok_0:
-    arm64.mov x0, x7
-    arm64.epilogue stack_size=48
+    arm64.epilogue
     arm64.ret
   }
 }

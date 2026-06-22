@@ -22,182 +22,179 @@ ExitCode: 42
 ---
 // CompiledIR
 module {
-  func @makeVec(a: i64, b: i64) -> i64 {
+  func @makeVec(x0: i64, x1: i64) -> i64 {
   entry:
     arm64.prologue stack_size=64
-    arm64.str x1, [x29, #-8]
-    arm64.str x0, [x29, #-24]
-    arm64.bl Vec2.create
-    arm64.str x0, [x29, #-16]
-    arm64.ldr x0, [x29, #-16]
-    arm64.ldr x2, [x29, #-24]
-    arm64.mov x1, #0
-    arm64.bl Vec2.set
+    arm64.mov x19, x0
+    arm64.mov x20, x1
+    arm64.adrp_add_rdata x0, __layout_Vector_N2_Integer
+    arm64.ldr x1, [x29, #16]
+    arm64.mov x0, x1
+    arm64.bl Vector.create
+    arm64.mov x21, x0
+    arm64.ldr x22, [x21, #0] (8b)
+    arm64.mov x1, #2
+    arm64.str x1, [x22, #16] (8b)
+    arm64.mov x1, #8
+    arm64.str x1, [x22, #24] (8b)
+    arm64.mov x1, #16
+    arm64.mov x0, x1
+    arm64.bl mrt_alloc
+    arm64.str x0, [x22, #0] (8b)
+    arm64.mov x0, #2
+    arm64.str x0, [x22, #8] (8b)
+    arm64.mov x22, #0
+  inlined_Vector.set_0_0:
+    arm64.ldr x23, [x21, #0] (8b)
+    arm64.mov x0, x23
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, x23
+    arm64.mov x1, x22
+    arm64.mov x2, x19
+    arm64.bl stdlib.__managed_mem_set
+    arm64.mov x19, x1
+    arm64.mov x0, x23
+    arm64.bl __mm_decref_maybenull_helper
     arm64.mov x0, #0
-    arm64.cmp x1, x0
-    arm64.cset x2, ne
-    arm64.cmp x2, #0
-    arm64.b.ne makeVec.otherwise_panic_0
-    arm64.b makeVec.otherwise_continue_0
-  otherwise_panic_0:
-    arm64.adrp_add_symdata x0, __panic_msg_28
-    arm64.mov x1, x0
-    arm64.mov x0, x1
-    arm64.bl mrt_panic
-  otherwise_continue_0:
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x29, #-16]
-    arm64.ldr x0, [x29, #-16]
-    arm64.ldr x2, [x29, #-8]
+    arm64.cmp x19, x0
+    arm64.cset x0, ne
+    arm64.b.eq inlined_Vector.set_3_0
+  inlined_Vector.set_1_0:
     arm64.mov x1, #1
-    arm64.bl Vec2.set
-    arm64.mov x2, #0
-    arm64.cmp x1, x2
-    arm64.cset x3, ne
-    arm64.cmp x3, #0
-    arm64.b.ne makeVec.otherwise_panic_1
-    arm64.b makeVec.otherwise_continue_1
-  otherwise_panic_1:
-    arm64.adrp_add_symdata x0, __panic_msg_29
-    arm64.mov x1, x0
-    arm64.mov x0, x1
+    arm64.mov x0, #0
+    arm64.b inline_cont_makeVec_0
+  inlined_Vector.set_3_0:
+    arm64.mov x1, #0
+    arm64.mov x0, #0
+  inline_cont_makeVec_0:
+    arm64.cmp x1, x22
+    arm64.cset x0, ne
+    arm64.b.eq try_0.merge
+  try_0.otherwise:
+    arm64.mov x0, x21
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.adrp_add_rdata x0, __panic_msg_e08427b0314596bd
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
     arm64.bl mrt_panic
-  otherwise_continue_1:
-    arm64.ldr x0, [x29, #-16]
-    arm64.epilogue stack_size=64
+    arm64.mov x0, x22
+    arm64.epilogue
+    arm64.ret
+  try_0.merge:
+    arm64.mov x19, #1
+  inlined_Vector.set_0_1:
+    arm64.ldr x23, [x21, #0] (8b)
+    arm64.mov x0, x23
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, x23
+    arm64.mov x1, x19
+    arm64.mov x2, x20
+    arm64.bl stdlib.__managed_mem_set
+    arm64.mov x19, x1
+    arm64.mov x0, x23
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, #0
+    arm64.cmp x19, x0
+    arm64.cset x0, ne
+    arm64.b.eq inlined_Vector.set_3_1
+  inlined_Vector.set_1_1:
+    arm64.mov x1, #1
+    arm64.mov x0, #0
+    arm64.b inline_cont_makeVec_1
+  inlined_Vector.set_3_1:
+    arm64.mov x1, #0
+    arm64.mov x0, #0
+  inline_cont_makeVec_1:
+    arm64.cmp x1, x22
+    arm64.cset x0, ne
+    arm64.b.eq try_1.merge
+  try_1.otherwise:
+    arm64.mov x0, x21
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.adrp_add_rdata x0, __panic_msg_afd3c3bf09f7c7f8
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+    arm64.mov x0, x22
+    arm64.epilogue
+    arm64.ret
+  try_1.merge:
+    arm64.mov x0, x21
+    arm64.epilogue
     arm64.ret
   }
   func @main() -> u8 {
   entry:
-    arm64.prologue stack_size=128
-    arm64.mov x0, #30
+    arm64.prologue stack_size=48
     arm64.mov x1, #12
+    arm64.mov x0, #30
     arm64.bl makeVec
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.mov x1, #0
-    arm64.bl Vec2.get
+    arm64.mov x19, x0
+    arm64.mov x20, #0
+  inlined_Vector.get_0_0:
+    arm64.ldr x0, [x19, #0] (8b)
+    arm64.mov x1, x20
+    arm64.bl stdlib.__managed_mem_get
     arm64.mov x2, #0
-    arm64.str x2, [x29, #-16]
-    arm64.str x0, [x29, #-24]
-    arm64.mov x0, #0
-    arm64.cmp x1, x0
-    arm64.cset x2, ne
-    arm64.cmp x2, #0
-    arm64.b.ne main.otherwise_default_error_0
-    arm64.b main.otherwise_default_continue_0
-  otherwise_default_error_0:
-    arm64.ldr x0, [x29, #-16]
-    arm64.str x0, [x29, #-24]
-    arm64.b main.otherwise_default_continue_0
-  otherwise_default_continue_0:
-    arm64.ldr x0, [x29, #-24]
-    arm64.str x0, [x29, #-32]
-    arm64.ldr x1, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
+    arm64.cmp x1, x2
+    arm64.cset x1, ne
+    arm64.b.eq inlined_Vector.get_3_0
+  inlined_Vector.get_1_0:
     arm64.mov x1, #1
-    arm64.bl Vec2.get
-    arm64.mov x2, #0
-    arm64.str x2, [x29, #-40]
-    arm64.str x0, [x29, #-48]
-    arm64.mov x3, #0
-    arm64.cmp x1, x3
-    arm64.cset x4, ne
-    arm64.cmp x4, #0
-    arm64.b.ne main.otherwise_default_error_1
-    arm64.b main.otherwise_default_continue_1
-  otherwise_default_error_1:
-    arm64.ldr x0, [x29, #-40]
-    arm64.str x0, [x29, #-48]
-    arm64.b main.otherwise_default_continue_1
-  otherwise_default_continue_1:
-    arm64.ldr x0, [x29, #-48]
-    arm64.ldr x1, [x29, #-32]
-    arm64.add x2, x1, x0
-    arm64.mov x3, #0
-    arm64.cmp x2, x3
-    arm64.cset x4, lt
-    arm64.mov x5, #255
-    arm64.cmp x2, x5
-    arm64.cset x6, gt
-    arm64.orr x7, x4, x6
-    arm64.cmp x7, #0
-    arm64.b.ne main.__range_panic_0
-    arm64.b main.__range_ok_0
-  __range_panic_0:
-    arm64.adrp_add_symdata x0, __panic_msg_30
-    arm64.mov x1, x0
+    arm64.mov x0, #0
+    arm64.b inline_cont_main_0
+  inlined_Vector.get_3_0:
+    arm64.mov x1, #0
+  inline_cont_main_0:
+    arm64.cmp x1, x20
+    arm64.cset x1, ne
+    arm64.b.eq try_0.ok
+    arm64.mov x21, x20
+    arm64.b try_0.merge
+  try_0.ok:
+    arm64.mov x21, x0
+  try_0.merge:
+    arm64.mov x1, #1
+  inlined_Vector.get_0_1:
+    arm64.ldr x0, [x19, #0] (8b)
+    arm64.bl stdlib.__managed_mem_get
+    arm64.mov x22, x0
     arm64.mov x0, x1
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x0, ne
+    arm64.b.eq inlined_Vector.get_3_1
+  inlined_Vector.get_1_1:
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x1, #1
+    arm64.mov x0, #0
+    arm64.b inline_cont_main_1
+  inlined_Vector.get_3_1:
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x1, #0
+    arm64.mov x0, x22
+  inline_cont_main_1:
+    arm64.cmp x1, x20
+    arm64.cset x1, ne
+    arm64.b.eq try_1.ok
+    arm64.b try_1.merge
+  try_1.ok:
+    arm64.mov x20, x0
+  try_1.merge:
+    arm64.mov x1, #255
+    arm64.add x0, x21, x20
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_55293c74ba95818e
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
     arm64.bl mrt_panic
   __range_ok_0:
-    arm64.ldr x0, [x29, #-8]
-    arm64.str x2, [x29, #-56]
-    arm64.cmp x0, #0
-    arm64.b.eq main.__skip_guarded_43
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_43
-    arm64.ldr x0, [x29, #-56]
-    arm64.epilogue stack_size=128
-    arm64.ret
-  }
-  func @__destruct___ManagedMemory_Integer(ptr: i64) {
-  entry:
-    arm64.prologue stack_size=48
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x0, #16]
-    arm64.mov x2, #-1
-    arm64.cmp x1, x2
-    arm64.cset x3, eq
-    arm64.cmp x3, #0
-    arm64.b.ne __destruct___ManagedMemory_Integer.slice_cleanup_0
-    arm64.b __destruct___ManagedMemory_Integer.check_owned_0
-  slice_cleanup_0:
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x0, #32]
-    arm64.str x1, [x29, #-16]
-    arm64.cmp x1, #0
-    arm64.b.eq __destruct___ManagedMemory_Integer.__skip_guarded_9
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl mm_decref
-    arm64.label __destruct___ManagedMemory_Integer.__skip_guarded_9
-    arm64.b __destruct___ManagedMemory_Integer.skip_buf_0
-  check_owned_0:
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x0, #16]
-    arm64.mov x2, #-2
-    arm64.cmp x1, x2
-    arm64.cset x3, ne
-    arm64.cmp x3, #0
-    arm64.b.ne __destruct___ManagedMemory_Integer.free_buf_0
-    arm64.b __destruct___ManagedMemory_Integer.skip_buf_0
-  free_buf_0:
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x0, #0]
-    arm64.mov x0, x1
-    arm64.bl mm_raw_free
-    arm64.b __destruct___ManagedMemory_Integer.skip_buf_0
-  skip_buf_0:
-    arm64.b __destruct___ManagedMemory_Integer.done
-  done:
-    arm64.epilogue stack_size=48
-    arm64.ret
-  }
-  func @__destruct_Vec2(ptr: i64) {
-  entry:
-    arm64.prologue stack_size=48
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x0, #0]
-    arm64.str x1, [x29, #-16]
-    arm64.cmp x1, #0
-    arm64.b.eq __destruct_Vec2.__skip_guarded_4
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl mm_decref
-    arm64.label __destruct_Vec2.__skip_guarded_4
-    arm64.b __destruct_Vec2.done
-  done:
-    arm64.epilogue stack_size=48
+    arm64.epilogue
     arm64.ret
   }
 }

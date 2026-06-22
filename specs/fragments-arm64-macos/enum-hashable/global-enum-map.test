@@ -48,349 +48,140 @@ ExitCode: 1
 ---
 // CompiledIR
 module {
-  func @LogCategory.hash(self: i64) -> i64 {
+  func @setCategoryLevel(x0: u8, x1: u8) {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.mov x2, x0
+    arm64.mov x3, x1
+    arm64.adrp_add_rdata x0, __data_categoryLevels
+    arm64.ldr x0, [x29, #16]
+    arm64.ldr x19, [x0, #0] (8b)
+    arm64.adrp_add_rdata x0, __witness_int_Equatable
+    arm64.ldr x5, [x29, #16]
+    arm64.adrp_add_rdata x0, __witness_int_Hashable
+    arm64.ldr x4, [x29, #16]
+    arm64.adrp_add_rdata x0, __layout_Map_LogCategory_LogLevel
+    arm64.ldr x6, [x29, #16]
+    arm64.mov x0, x19
+    arm64.mov x1, x2
+    arm64.mov x2, x3
+    arm64.mov x3, x6
+    arm64.bl Map.insert
+    arm64.mov x0, x1
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x0, ne
+    arm64.b.eq __rc_edge_0_0
+  try_0.otherwise:
+    arm64.mov x0, #0
+  try_0.merge:
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.epilogue
+    arm64.ret
+  __rc_edge_0_0:
+    arm64.mov x0, x19
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, x19
+    arm64.b try_0.merge
+  }
+  func @getCategoryLevel(x0: u8) -> u8 {
   entry:
     arm64.prologue stack_size=16
-    arm64.bl stdlib.int.hash
     arm64.mov x1, x0
-    arm64.mov x0, x1
-    arm64.epilogue stack_size=16
-    arm64.ret
-  }
-  func @setCategoryLevel(category: i64, level: i64) {
-  entry:
-    arm64.prologue stack_size=80
-    arm64.str x0, [x29, #-8]
-    arm64.str x1, [x29, #-16]
-    arm64.global_load x0, [categoryLevels]
-    arm64.str x0, [x29, #-24]
-    arm64.ldr x1, [x29, #-24]
-    arm64.ldr x0, [x29, #-24]
-    arm64.bl mm_incref
-    arm64.ldr x2, [x29, #-8]
-    arm64.ldr x3, [x29, #-16]
-    arm64.ldr x4, [x29, #-24]
-    arm64.ldr x0, [x29, #-24]
-    arm64.ldr x1, [x29, #-8]
-    arm64.ldr x2, [x29, #-16]
-    arm64.bl CategoryLevelMap.insert
-    arm64.ldr x5, [x29, #-24]
-    arm64.str x1, [x29, #-32]
-    arm64.cmp x5, #0
-    arm64.b.eq setCategoryLevel.__skip_guarded_13
-    arm64.ldr x0, [x29, #-24]
-    arm64.bl mm_decref
-    arm64.label setCategoryLevel.__skip_guarded_13
-    arm64.epilogue stack_size=80
-    arm64.ret
-  }
-  func @getCategoryLevel(category: i64) -> i64 {
-  entry:
-    arm64.prologue stack_size=80
-    arm64.str x0, [x29, #-8]
-    arm64.global_load x0, [categoryLevels]
-    arm64.str x0, [x29, #-16]
-    arm64.ldr x1, [x29, #-8]
-    arm64.ldr x2, [x29, #-16]
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl CategoryLevelMap.get
-    arm64.mov x3, #0
-    arm64.str x3, [x29, #-24]
-    arm64.str x0, [x29, #-32]
-    arm64.mov x4, #0
-    arm64.cmp x1, x4
-    arm64.cset x5, ne
-    arm64.cmp x5, #0
-    arm64.b.ne getCategoryLevel.otherwise_default_error_0
-    arm64.b getCategoryLevel.otherwise_default_continue_0
-  otherwise_default_error_0:
-    arm64.ldr x0, [x29, #-24]
-    arm64.str x0, [x29, #-32]
-    arm64.b getCategoryLevel.otherwise_default_continue_0
-  otherwise_default_continue_0:
-    arm64.ldr x0, [x29, #-32]
-    arm64.epilogue stack_size=80
+    arm64.adrp_add_rdata x0, __data_categoryLevels
+    arm64.ldr x2, [x29, #16]
+    arm64.ldr x3, [x2, #0] (8b)
+    arm64.adrp_add_rdata x0, __witness_int_Equatable
+    arm64.ldr x4, [x29, #16]
+    arm64.adrp_add_rdata x0, __witness_int_Hashable
+    arm64.ldr x5, [x29, #16]
+    arm64.adrp_add_rdata x0, __layout_Map_LogCategory_LogLevel
+    arm64.ldr x2, [x29, #16]
+    arm64.mov x0, x3
+    arm64.mov x3, x5
+    arm64.bl Map.get
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x1, ne
+    arm64.b.eq try_0.merge
+  try_0.otherwise:
+    arm64.mov x0, #0
+  try_0.merge:
+    arm64.mov x1, #2
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_3d500312f6111870
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
     arm64.ret
   }
   func @main() -> u8 {
   entry:
-    arm64.prologue stack_size=176
-    arm64.mov x0, #0
+    arm64.prologue stack_size=32
     arm64.mov x1, #2
+    arm64.mov x19, #0
+    arm64.mov x0, x19
     arm64.bl setCategoryLevel
-    arm64.mov x0, #1
-    arm64.mov x1, #1
+    arm64.mov x20, #1
+    arm64.mov x0, x20
+    arm64.mov x1, x20
     arm64.bl setCategoryLevel
-    arm64.mov x0, #0
+    arm64.mov x0, x19
     arm64.bl getCategoryLevel
-    arm64.str x0, [x29, #-8]
-    arm64.mov x0, #1
+    arm64.mov x21, x0
+    arm64.mov x0, x20
     arm64.bl getCategoryLevel
-    arm64.str x0, [x29, #-16]
-    arm64.ldr x0, [x29, #-8]
-    arm64.mov x1, #0
-    arm64.str x1, [x29, #-24]
-    arm64.str x0, [x29, #-32]
-    arm64.b main.c_0.cmp0
-  c_0.cmp0:
-    arm64.ldr x0, [x29, #-32]
     arm64.mov x1, #2
-    arm64.cmp x0, x1
-    arm64.cset x2, eq
-    arm64.cmp x2, #0
-    arm64.b.ne main.c_0.case0
-    arm64.b main.c_0.cmp1
-  c_0.case0:
-    arm64.mov x0, #1
-    arm64.str x0, [x29, #-24]
-    arm64.b main.c_0.merge
-  c_0.cmp1:
-    arm64.ldr x0, [x29, #-32]
-    arm64.mov x1, #0
-    arm64.cmp x0, x1
-    arm64.cset x2, eq
-    arm64.cmp x2, #0
-    arm64.b.ne main.c_0.case1
-    arm64.b main.c_0.cmp2
-  c_0.case1:
-    arm64.mov x0, #0
-    arm64.str x0, [x29, #-24]
-    arm64.b main.c_0.merge
-  c_0.cmp2:
-    arm64.ldr x0, [x29, #-32]
-    arm64.mov x1, #1
-    arm64.cmp x0, x1
-    arm64.cset x2, eq
-    arm64.cmp x2, #0
-    arm64.b.ne main.c_0.case2
-    arm64.b main.c_0.merge
-  c_0.case2:
-    arm64.mov x0, #0
-    arm64.str x0, [x29, #-24]
-    arm64.b main.c_0.merge
+    arm64.cmp x21, x1
+    arm64.cset x1, eq
+    arm64.b.ne c_0.next0
+    arm64.mov x1, x20
+    arm64.b c_0.merge
   c_0.merge:
-    arm64.ldr x0, [x29, #-24]
-    arm64.str x0, [x29, #-40]
-    arm64.ldr x1, [x29, #-16]
-    arm64.mov x2, #0
-    arm64.str x2, [x29, #-48]
-    arm64.str x1, [x29, #-56]
-    arm64.b main.l_0.cmp0
-  l_0.cmp0:
-    arm64.ldr x0, [x29, #-56]
-    arm64.mov x1, #1
-    arm64.cmp x0, x1
+    arm64.cmp x0, x20
     arm64.cset x2, eq
-    arm64.cmp x2, #0
-    arm64.b.ne main.l_0.case0
-    arm64.b main.l_0.cmp1
-  l_0.case0:
-    arm64.mov x0, #1
-    arm64.str x0, [x29, #-48]
-    arm64.b main.l_0.merge
-  l_0.cmp1:
-    arm64.ldr x0, [x29, #-56]
-    arm64.mov x1, #0
-    arm64.cmp x0, x1
-    arm64.cset x2, eq
-    arm64.cmp x2, #0
-    arm64.b.ne main.l_0.case1
-    arm64.b main.l_0.cmp2
-  l_0.case1:
-    arm64.mov x0, #0
-    arm64.str x0, [x29, #-48]
-    arm64.b main.l_0.merge
-  l_0.cmp2:
-    arm64.ldr x0, [x29, #-56]
-    arm64.mov x1, #2
-    arm64.cmp x0, x1
-    arm64.cset x2, eq
-    arm64.cmp x2, #0
-    arm64.b.ne main.l_0.case2
-    arm64.b main.l_0.merge
-  l_0.case2:
-    arm64.mov x0, #0
-    arm64.str x0, [x29, #-48]
-    arm64.b main.l_0.merge
+    arm64.b.ne l_0.next0
+    arm64.mov x0, x20
+    arm64.b l_0.merge
+  c_0.next0:
+    arm64.cmp x21, x19
+    arm64.cset x1, eq
+    arm64.mov x1, x19
+    arm64.b c_0.merge
   l_0.merge:
-    arm64.ldr x0, [x29, #-48]
-    arm64.str x0, [x29, #-64]
-    arm64.ldr x1, [x29, #-40]
-    arm64.mov x2, #0
-    arm64.str x2, [x29, #-72]
     arm64.cmp x1, #0
-    arm64.b.ne main.shortAnd_0.rhs
-    arm64.b main.shortAnd_0.merge
-  shortAnd_0.rhs:
-    arm64.ldr x0, [x29, #-64]
-    arm64.str x0, [x29, #-72]
-    arm64.b main.shortAnd_0.merge
-  shortAnd_0.merge:
-    arm64.ldr x0, [x29, #-72]
+    arm64.b.eq __phi_trampoline_8_0
+    arm64.b shortAnd.rhs
+  l_0.next0:
+    arm64.cmp x0, x19
+    arm64.cset x0, eq
+    arm64.b.ne l_0.next1
+    arm64.mov x0, x19
+    arm64.b l_0.merge
+  l_0.next1:
+    arm64.mov x0, #2
+    arm64.mov x0, x19
+    arm64.b l_0.merge
+  shortAnd.rhs:
+  shortAnd.merge:
     arm64.cmp x0, #0
-    arm64.b.ne main.both_0
-    arm64.b main.both_0.after
+    arm64.b.eq both_0.after
   both_0:
-    arm64.mov x0, #1
-    arm64.epilogue stack_size=176
+    arm64.mov x0, x20
+    arm64.epilogue
     arm64.ret
   both_0.after:
-    arm64.mov x0, #0
-    arm64.epilogue stack_size=176
+    arm64.mov x0, x19
+    arm64.epilogue
     arm64.ret
-  }
-  func @__destruct___ManagedMemory_LogCategory(ptr: i64) {
-  entry:
-    arm64.prologue stack_size=48
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x0, #16]
-    arm64.mov x2, #-1
-    arm64.cmp x1, x2
-    arm64.cset x3, eq
-    arm64.cmp x3, #0
-    arm64.b.ne __destruct___ManagedMemory_LogCategory.slice_cleanup_0
-    arm64.b __destruct___ManagedMemory_LogCategory.check_owned_0
-  slice_cleanup_0:
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x0, #32]
-    arm64.str x1, [x29, #-16]
-    arm64.cmp x1, #0
-    arm64.b.eq __destruct___ManagedMemory_LogCategory.__skip_guarded_9
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl mm_decref
-    arm64.label __destruct___ManagedMemory_LogCategory.__skip_guarded_9
-    arm64.b __destruct___ManagedMemory_LogCategory.skip_buf_0
-  check_owned_0:
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x0, #16]
-    arm64.mov x2, #-2
-    arm64.cmp x1, x2
-    arm64.cset x3, ne
-    arm64.cmp x3, #0
-    arm64.b.ne __destruct___ManagedMemory_LogCategory.free_buf_0
-    arm64.b __destruct___ManagedMemory_LogCategory.skip_buf_0
-  free_buf_0:
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x0, #0]
-    arm64.mov x0, x1
-    arm64.bl mm_raw_free
-    arm64.b __destruct___ManagedMemory_LogCategory.skip_buf_0
-  skip_buf_0:
-    arm64.b __destruct___ManagedMemory_LogCategory.done
-  done:
-    arm64.epilogue stack_size=48
-    arm64.ret
-  }
-  func @__destruct_Array_LogCategory(ptr: i64) {
-  entry:
-    arm64.prologue stack_size=48
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x0, #0]
-    arm64.str x1, [x29, #-16]
-    arm64.cmp x1, #0
-    arm64.b.eq __destruct_Array_LogCategory.__skip_guarded_4
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl mm_decref
-    arm64.label __destruct_Array_LogCategory.__skip_guarded_4
-    arm64.b __destruct_Array_LogCategory.done
-  done:
-    arm64.epilogue stack_size=48
-    arm64.ret
-  }
-  func @__destruct___ManagedMemory_LogLevel(ptr: i64) {
-  entry:
-    arm64.prologue stack_size=48
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x0, #16]
-    arm64.mov x2, #-1
-    arm64.cmp x1, x2
-    arm64.cset x3, eq
-    arm64.cmp x3, #0
-    arm64.b.ne __destruct___ManagedMemory_LogLevel.slice_cleanup_0
-    arm64.b __destruct___ManagedMemory_LogLevel.check_owned_0
-  slice_cleanup_0:
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x0, #32]
-    arm64.str x1, [x29, #-16]
-    arm64.cmp x1, #0
-    arm64.b.eq __destruct___ManagedMemory_LogLevel.__skip_guarded_9
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl mm_decref
-    arm64.label __destruct___ManagedMemory_LogLevel.__skip_guarded_9
-    arm64.b __destruct___ManagedMemory_LogLevel.skip_buf_0
-  check_owned_0:
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x0, #16]
-    arm64.mov x2, #-2
-    arm64.cmp x1, x2
-    arm64.cset x3, ne
-    arm64.cmp x3, #0
-    arm64.b.ne __destruct___ManagedMemory_LogLevel.free_buf_0
-    arm64.b __destruct___ManagedMemory_LogLevel.skip_buf_0
-  free_buf_0:
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x0, #0]
-    arm64.mov x0, x1
-    arm64.bl mm_raw_free
-    arm64.b __destruct___ManagedMemory_LogLevel.skip_buf_0
-  skip_buf_0:
-    arm64.b __destruct___ManagedMemory_LogLevel.done
-  done:
-    arm64.epilogue stack_size=48
-    arm64.ret
-  }
-  func @__destruct_Array_LogLevel(ptr: i64) {
-  entry:
-    arm64.prologue stack_size=48
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x0, #0]
-    arm64.str x1, [x29, #-16]
-    arm64.cmp x1, #0
-    arm64.b.eq __destruct_Array_LogLevel.__skip_guarded_4
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl mm_decref
-    arm64.label __destruct_Array_LogLevel.__skip_guarded_4
-    arm64.b __destruct_Array_LogLevel.done
-  done:
-    arm64.epilogue stack_size=48
-    arm64.ret
-  }
-  func @__destruct_CategoryLevelMap(ptr: i64) {
-  entry:
-    arm64.prologue stack_size=64
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x0, #0]
-    arm64.str x1, [x29, #-16]
-    arm64.cmp x1, #0
-    arm64.b.eq __destruct_CategoryLevelMap.__skip_guarded_4
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl mm_decref
-    arm64.label __destruct_CategoryLevelMap.__skip_guarded_4
-    arm64.ldr x2, [x29, #-8]
-    arm64.ldr x3, [x2, #8]
-    arm64.str x3, [x29, #-24]
-    arm64.cmp x3, #0
-    arm64.b.eq __destruct_CategoryLevelMap.__skip_guarded_7
-    arm64.ldr x0, [x29, #-24]
-    arm64.bl mm_decref
-    arm64.label __destruct_CategoryLevelMap.__skip_guarded_7
-    arm64.ldr x4, [x29, #-8]
-    arm64.ldr x5, [x4, #16]
-    arm64.str x5, [x29, #-32]
-    arm64.cmp x5, #0
-    arm64.b.eq __destruct_CategoryLevelMap.__skip_guarded_10
-    arm64.ldr x0, [x29, #-32]
-    arm64.bl mm_decref
-    arm64.label __destruct_CategoryLevelMap.__skip_guarded_10
-    arm64.b __destruct_CategoryLevelMap.done
-  done:
-    arm64.epilogue stack_size=64
-    arm64.ret
+  __phi_trampoline_8_0:
+    arm64.mov x0, x19
+    arm64.b shortAnd.merge
   }
 }
 ---

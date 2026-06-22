@@ -34,72 +34,60 @@ ExitCode: 7
 ---
 // CompiledIR
 module {
-  func @maybeFail(flag: i1) -> i64 {
-  entry:
-    arm64.cmp x0, #0
-    arm64.b.ne maybeFail.check_0
-    arm64.b maybeFail.check_0.after
-  check_0:
-    arm64.mov x0, #0
-    arm64.mov x1, #1
-    arm64.add x2, x0, x1
-    arm64.mov x1, x2
-    arm64.mov x0, #0
-    arm64.ret
-  check_0.after:
-    arm64.mov x0, #42
-    arm64.mov x1, #0
-    arm64.ret
-  }
-  func @runIt(flag: i1) -> i64 {
-  entry:
-    arm64.prologue stack_size=48
-    arm64.bl maybeFail
-    arm64.str x0, [x29, #-8]
-    arm64.mov x0, #0
-    arm64.cmp x1, x0
-    arm64.cset x2, ne
-    arm64.cmp x2, #0
-    arm64.b.ne runIt.otherwise_stmt_0
-    arm64.b runIt.otherwise_continue_0
-  otherwise_stmt_0:
-    arm64.mov x0, #-1
-    arm64.epilogue stack_size=48
-    arm64.ret
-  otherwise_continue_0:
-    arm64.ldr x0, [x29, #-8]
-    arm64.epilogue stack_size=48
-    arm64.ret
-  }
   func @main() -> u8 {
   entry:
-    arm64.prologue stack_size=16
     arm64.mov x0, #0
-    arm64.bl runIt
+  inlined_runIt_4_0:
+    arm64.cmp x0, #0
+    arm64.b.eq inlined_runIt_6_0
+  inlined_runIt_5_0:
+    arm64.mov x1, #1
+    arm64.mov x0, #0
+    arm64.b inlined_runIt_7_0
+  inlined_runIt_6_0:
+    arm64.mov x1, #0
+    arm64.mov x0, #42
+  inlined_runIt_7_0:
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x1, ne
+    arm64.b.eq inline_cont_main_0
+  inlined_runIt_1_0:
+    arm64.mov x0, #-1
+  inline_cont_main_0:
     arm64.mov x1, #42
     arm64.cmp x0, x1
-    arm64.cset x2, eq
-    arm64.cmp x2, #0
-    arm64.b.ne main.checkGood_0
-    arm64.b main.checkGood_0.merge
+    arm64.cset x0, eq
+    arm64.b.ne checkGood_0.after
   checkGood_0:
     arm64.mov x0, #1
-    arm64.bl runIt
+  inlined_runIt_4_1:
+    arm64.cmp x0, #0
+    arm64.b.eq inlined_runIt_6_1
+  inlined_runIt_5_1:
+    arm64.mov x1, #1
+    arm64.mov x0, #0
+    arm64.b inlined_runIt_7_1
+  inlined_runIt_6_1:
+    arm64.mov x1, #0
+    arm64.mov x0, #42
+  inlined_runIt_7_1:
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x1, ne
+    arm64.b.eq inline_cont_main_1
+  inlined_runIt_1_1:
+    arm64.mov x0, #-1
+  inline_cont_main_1:
     arm64.mov x1, #-1
     arm64.cmp x0, x1
-    arm64.cset x2, eq
-    arm64.cmp x2, #0
-    arm64.b.ne main.checkBad_0
-    arm64.b main.checkBad_0.after
+    arm64.cset x0, eq
+    arm64.b.ne checkGood_0.after
   checkBad_0:
     arm64.mov x0, #7
-    arm64.epilogue stack_size=16
     arm64.ret
-  checkBad_0.after:
-    arm64.b main.checkGood_0.merge
-  checkGood_0.merge:
+  checkGood_0.after:
     arm64.mov x0, #0
-    arm64.epilogue stack_size=16
     arm64.ret
   }
 }

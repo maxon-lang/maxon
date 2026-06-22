@@ -64,355 +64,130 @@ ExitCode: 0
 ---
 // CompiledIR
 module {
-  func @Item.create(value: i64) -> i64 {
+  func @GenericModule.opCount(x0: i64, x1: i64) -> u64 {
   entry:
-    arm64.prologue stack_size=48
-    arm64.str x0, [x29, #-16]
-    arm64.mov x0, #8
-    arm64.mov x1, #0
-    arm64.mov x2, #1
-    arm64.bl mm_alloc
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x29, #-16]
-    arm64.str x1, [x0, #0]
-    arm64.ldr x2, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.bl mm_incref
-    arm64.ldr x3, [x29, #-8]
+    arm64.prologue stack_size=16
+    arm64.mov x2, x0
+    arm64.ldr x3, [x2, #0] (8b)
     arm64.mov x0, x3
-    arm64.epilogue stack_size=48
+    arm64.bl Array.count
+    arm64.mov x1, #-1
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_fb8f0d634692f86e
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+  func @GenericModule.itemCount(x0: i64, x1: i64) -> u64 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x1, x0
+    arm64.ldr x2, [x1, #8] (8b)
+    arm64.adrp_add_rdata x0, __layout_Array_Item
+    arm64.ldr x1, [x29, #16]
+    arm64.mov x0, x2
+    arm64.bl Array.count
+    arm64.mov x1, #-1
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_eb02c81f714fa762
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
     arm64.ret
   }
   func @main() -> u8 {
   entry:
-    arm64.prologue stack_size=96
-    arm64.bl IntModule.create
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.mov x1, #10
-    arm64.bl IntModule.pushOp
-    arm64.ldr x1, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.mov x1, #20
-    arm64.bl IntModule.pushOp
-    arm64.mov x0, #99
-    arm64.bl Item.create
-    arm64.str x0, [x29, #-16]
-    arm64.ldr x2, [x29, #-8]
-    arm64.ldr x3, [x29, #-16]
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x29, #-16]
-    arm64.bl IntModule.pushItem
-    arm64.ldr x4, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.bl IntModule.opCount
-    arm64.ldr x5, [x29, #-8]
-    arm64.str x0, [x29, #-40]
-    arm64.ldr x0, [x29, #-8]
-    arm64.bl IntModule.itemCount
-    arm64.str x0, [x29, #-24]
-    arm64.mov x6, #2
-    arm64.ldr x7, [x29, #-40]
-    arm64.cmp x7, x6
-    arm64.cset x8, eq
-    arm64.mov x9, #0
-    arm64.str x9, [x29, #-32]
-    arm64.cmp x8, #0
-    arm64.b.ne main.shortAnd_0.rhs
-    arm64.b main.shortAnd_0.merge
-  shortAnd_0.rhs:
-    arm64.mov x0, #1
-    arm64.ldr x1, [x29, #-24]
-    arm64.cmp x1, x0
-    arm64.cset x2, eq
-    arm64.str x2, [x29, #-32]
-    arm64.b main.shortAnd_0.merge
-  shortAnd_0.merge:
-    arm64.ldr x0, [x29, #-32]
-    arm64.cmp x0, #0
-    arm64.b.ne main.check_0
-    arm64.b main.check_0.after
-  check_0:
-    arm64.ldr x0, [x29, #-16]
-    arm64.cmp x0, #0
-    arm64.b.eq main.__skip_guarded_33
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_33
-    arm64.ldr x1, [x29, #-8]
-    arm64.cmp x1, #0
-    arm64.b.eq main.__skip_guarded_35
-    arm64.ldr x0, [x29, #-8]
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_35
+    arm64.prologue stack_size=48
+    arm64.adrp+add x1, __destruct_GenericModule
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
     arm64.mov x0, #0
-    arm64.epilogue stack_size=96
+    arm64.str x0, [x19, #0] (8b)
+    arm64.mov x0, #0
+    arm64.str x0, [x19, #8] (8b)
+    arm64.adrp_add_rdata x0, __layout_GenericModule_Integer
+    arm64.ldr x0, [x29, #16]
+    arm64.bl Array.create
+    arm64.str x0, [x19, #0] (8b)
+    arm64.adrp_add_rdata x0, __layout_Array_Item
+    arm64.ldr x0, [x29, #16]
+    arm64.bl Array.create
+    arm64.str x0, [x19, #8] (8b)
+    arm64.ldr x20, [x19, #0] (8b)
+    arm64.adrp_add_rdata x0, __layout_GenericModule_Integer
+    arm64.ldr x2, [x29, #16]
+    arm64.mov x1, #10
+    arm64.mov x0, x20
+    arm64.bl Array.push
+    arm64.ldr x20, [x19, #0] (8b)
+    arm64.adrp_add_rdata x0, __layout_GenericModule_Integer
+    arm64.ldr x2, [x29, #16]
+    arm64.mov x1, #20
+    arm64.mov x0, x20
+    arm64.bl Array.push
+    arm64.mov x1, #0
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x20, x0
+    arm64.mov x0, x20
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, #99
+    arm64.str x0, [x20, #0] (8b)
+    arm64.ldr x21, [x19, #8] (8b)
+    arm64.adrp_add_rdata x0, __layout_Array_Item
+    arm64.ldr x2, [x29, #16]
+    arm64.mov x0, x21
+    arm64.mov x1, x20
+    arm64.bl Array.push
+    arm64.adrp_add_rdata x0, __layout_GenericModule_Integer
+    arm64.ldr x1, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl GenericModule.opCount
+    arm64.mov x20, x0
+    arm64.adrp_add_rdata x0, __layout_GenericModule_Integer
+    arm64.ldr x1, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl GenericModule.itemCount
+    arm64.mov x21, x0
+    arm64.mov x0, #2
+    arm64.mov x22, #0
+    arm64.cmp x20, x0
+    arm64.cset x0, eq
+    arm64.b.ne __rc_edge_0_0
+  shortAnd.rhs:
+    arm64.mov x0, x19
+    arm64.bl mm_drop
+    arm64.mov x0, #1
+    arm64.cmp x21, x0
+    arm64.cset x0, eq
+  shortAnd.merge:
+    arm64.cmp x0, #0
+    arm64.b.eq check_0.after
+  check_0:
+    arm64.mov x0, #0
+    arm64.epilogue
     arm64.ret
   check_0.after:
-    arm64.ldr x0, [x29, #-16]
-    arm64.cmp x0, #0
-    arm64.b.eq main.__skip_guarded_39
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_39
-    arm64.ldr x1, [x29, #-8]
-    arm64.cmp x1, #0
-    arm64.b.eq main.__skip_guarded_41
-    arm64.ldr x0, [x29, #-8]
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_41
     arm64.mov x0, #1
-    arm64.epilogue stack_size=96
+    arm64.epilogue
     arm64.ret
-  }
-  func @IntModule.create() -> i64 {
-  entry:
-    arm64.prologue stack_size=80
-    arm64.bl Array_Integer.create
-    arm64.str x0, [x29, #-8]
-    arm64.bl ItemArray.create
-    arm64.str x0, [x29, #-16]
-    arm64.adrp_add_func x0, __destruct_IntModule
-    arm64.mov x1, x0
-    arm64.mov x0, #16
-    arm64.mov x2, #4
-    arm64.bl mm_alloc
-    arm64.str x0, [x29, #-24]
-    arm64.ldr x2, [x29, #-8]
-    arm64.ldr x3, [x29, #-24]
-    arm64.str x2, [x3, #0]
-    arm64.ldr x0, [x29, #-8]
-    arm64.bl mm_incref
-    arm64.ldr x4, [x29, #-16]
-    arm64.ldr x5, [x29, #-24]
-    arm64.str x4, [x5, #8]
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl mm_incref
-    arm64.ldr x6, [x29, #-16]
-    arm64.cmp x6, #0
-    arm64.b.eq IntModule.create.__skip_guarded_19
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl mm_decref
-    arm64.label IntModule.create.__skip_guarded_19
-    arm64.ldr x7, [x29, #-8]
-    arm64.cmp x7, #0
-    arm64.b.eq IntModule.create.__skip_guarded_21
-    arm64.ldr x0, [x29, #-8]
-    arm64.bl mm_decref
-    arm64.label IntModule.create.__skip_guarded_21
-    arm64.ldr x8, [x29, #-24]
-    arm64.ldr x0, [x29, #-24]
-    arm64.bl mm_incref
-    arm64.ldr x9, [x29, #-24]
-    arm64.mov x0, x9
-    arm64.epilogue stack_size=80
-    arm64.ret
-  }
-  func @IntModule.pushOp(__self_ptr: i64, op: i64) {
-  entry:
-    arm64.prologue stack_size=48
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x2, [x0, #0]
-    arm64.str x2, [x29, #-16]
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl Array_Integer.push
-    arm64.epilogue stack_size=48
-    arm64.ret
-  }
-  func @IntModule.pushItem(__self_ptr: i64, item: i64) {
-  entry:
-    arm64.prologue stack_size=80
-    arm64.str x0, [x29, #-8]
-    arm64.str x1, [x29, #-16]
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x0, #8]
-    arm64.str x1, [x29, #-24]
-    arm64.ldr x2, [x29, #-24]
-    arm64.ldr x3, [x29, #-16]
-    arm64.ldr x0, [x29, #-24]
-    arm64.ldr x1, [x29, #-16]
-    arm64.bl ItemArray.push
-    arm64.epilogue stack_size=80
-    arm64.ret
-  }
-  func @IntModule.opCount(__self_ptr: i64) -> u64 {
-  entry:
-    arm64.prologue stack_size=48
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x0, #0]
-    arm64.str x1, [x29, #-16]
-    arm64.ldr x2, [x29, #-16]
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl Array_Integer.count
-    arm64.epilogue stack_size=48
-    arm64.ret
-  }
-  func @IntModule.itemCount(__self_ptr: i64) -> u64 {
-  entry:
-    arm64.prologue stack_size=48
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x0, #8]
-    arm64.str x1, [x29, #-16]
-    arm64.ldr x2, [x29, #-16]
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl ItemArray.count
-    arm64.epilogue stack_size=48
-    arm64.ret
-  }
-  func @__destruct_Item(ptr: i64) {
-  entry:
-    arm64.b __destruct_Item.done
-  done:
-    arm64.ret
-  }
-  func @__destruct___ManagedMemory_Item(ptr: i64) {
-  entry:
-    arm64.prologue stack_size=48
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x0, #16]
-    arm64.mov x2, #-1
-    arm64.cmp x1, x2
-    arm64.cset x3, eq
-    arm64.cmp x3, #0
-    arm64.b.ne __destruct___ManagedMemory_Item.slice_cleanup_0
-    arm64.b __destruct___ManagedMemory_Item.check_owned_0
-  slice_cleanup_0:
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x0, #32]
-    arm64.str x1, [x29, #-16]
-    arm64.cmp x1, #0
-    arm64.b.eq __destruct___ManagedMemory_Item.__skip_guarded_9
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl mm_decref
-    arm64.label __destruct___ManagedMemory_Item.__skip_guarded_9
-    arm64.b __destruct___ManagedMemory_Item.skip_buf_0
-  check_owned_0:
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x0, #16]
-    arm64.mov x2, #-2
-    arm64.cmp x1, x2
-    arm64.cset x3, ne
-    arm64.cmp x3, #0
-    arm64.b.ne __destruct___ManagedMemory_Item.free_buf_0
-    arm64.b __destruct___ManagedMemory_Item.skip_buf_0
-  free_buf_0:
-    arm64.ldr x0, [x29, #-8]
-    arm64.bl mm_decref_managed_elements
-    arm64.ldr x1, [x29, #-8]
-    arm64.ldr x2, [x1, #0]
-    arm64.mov x0, x2
-    arm64.bl mm_raw_free
-    arm64.b __destruct___ManagedMemory_Item.skip_buf_0
-  skip_buf_0:
-    arm64.b __destruct___ManagedMemory_Item.done
-  done:
-    arm64.epilogue stack_size=48
-    arm64.ret
-  }
-  func @__destruct_ItemArray(ptr: i64) {
-  entry:
-    arm64.prologue stack_size=48
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x0, #0]
-    arm64.str x1, [x29, #-16]
-    arm64.cmp x1, #0
-    arm64.b.eq __destruct_ItemArray.__skip_guarded_4
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl mm_decref
-    arm64.label __destruct_ItemArray.__skip_guarded_4
-    arm64.b __destruct_ItemArray.done
-  done:
-    arm64.epilogue stack_size=48
-    arm64.ret
-  }
-  func @__destruct_IntModule(ptr: i64) {
-  entry:
-    arm64.prologue stack_size=64
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x0, #0]
-    arm64.str x1, [x29, #-16]
-    arm64.cmp x1, #0
-    arm64.b.eq __destruct_IntModule.__skip_guarded_4
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl mm_decref
-    arm64.label __destruct_IntModule.__skip_guarded_4
-    arm64.ldr x2, [x29, #-8]
-    arm64.ldr x3, [x2, #8]
-    arm64.str x3, [x29, #-24]
-    arm64.cmp x3, #0
-    arm64.b.eq __destruct_IntModule.__skip_guarded_7
-    arm64.ldr x0, [x29, #-24]
-    arm64.bl mm_decref
-    arm64.label __destruct_IntModule.__skip_guarded_7
-    arm64.b __destruct_IntModule.done
-  done:
-    arm64.epilogue stack_size=64
-    arm64.ret
-  }
-  func @__destruct___ManagedMemory_Integer(ptr: i64) {
-  entry:
-    arm64.prologue stack_size=48
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x0, #16]
-    arm64.mov x2, #-1
-    arm64.cmp x1, x2
-    arm64.cset x3, eq
-    arm64.cmp x3, #0
-    arm64.b.ne __destruct___ManagedMemory_Integer.slice_cleanup_0
-    arm64.b __destruct___ManagedMemory_Integer.check_owned_0
-  slice_cleanup_0:
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x0, #32]
-    arm64.str x1, [x29, #-16]
-    arm64.cmp x1, #0
-    arm64.b.eq __destruct___ManagedMemory_Integer.__skip_guarded_9
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl mm_decref
-    arm64.label __destruct___ManagedMemory_Integer.__skip_guarded_9
-    arm64.b __destruct___ManagedMemory_Integer.skip_buf_0
-  check_owned_0:
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x0, #16]
-    arm64.mov x2, #-2
-    arm64.cmp x1, x2
-    arm64.cset x3, ne
-    arm64.cmp x3, #0
-    arm64.b.ne __destruct___ManagedMemory_Integer.free_buf_0
-    arm64.b __destruct___ManagedMemory_Integer.skip_buf_0
-  free_buf_0:
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x0, #0]
-    arm64.mov x0, x1
-    arm64.bl mm_raw_free
-    arm64.b __destruct___ManagedMemory_Integer.skip_buf_0
-  skip_buf_0:
-    arm64.b __destruct___ManagedMemory_Integer.done
-  done:
-    arm64.epilogue stack_size=48
-    arm64.ret
-  }
-  func @__destruct_Array_Integer(ptr: i64) {
-  entry:
-    arm64.prologue stack_size=48
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x0, #0]
-    arm64.str x1, [x29, #-16]
-    arm64.cmp x1, #0
-    arm64.b.eq __destruct_Array_Integer.__skip_guarded_4
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl mm_decref
-    arm64.label __destruct_Array_Integer.__skip_guarded_4
-    arm64.b __destruct_Array_Integer.done
-  done:
-    arm64.epilogue stack_size=48
-    arm64.ret
+  __rc_edge_0_0:
+    arm64.mov x0, x19
+    arm64.bl mm_drop
+    arm64.mov x0, x22
+    arm64.b shortAnd.merge
   }
 }
 ---

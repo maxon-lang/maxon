@@ -42,125 +42,56 @@ ExitCode: 16
 ---
 // CompiledIR
 module {
-  func @Registry.make(seed: i64) -> i64 {
-  entry:
-    arm64.prologue stack_size=48
-    arm64.str x0, [x29, #-16]
-    arm64.mov x0, #8
-    arm64.mov x1, #0
-    arm64.mov x2, #6
-    arm64.bl mm_alloc
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x29, #-16]
-    arm64.str x1, [x0, #0]
-    arm64.ldr x2, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.bl mm_incref
-    arm64.ldr x3, [x29, #-8]
-    arm64.mov x0, x3
-    arm64.epilogue stack_size=48
-    arm64.ret
-  }
-  func @lookup$index(reg: i64, index: i64) -> i64 {
-  entry:
-    arm64.prologue stack_size=48
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x2, [x0, #0]
-    arm64.add x0, x2, x1
-    arm64.epilogue stack_size=48
-    arm64.ret
-  }
-  func @lookup$present(reg: i64, present: i1) -> i1 {
-  entry:
-    arm64.prologue stack_size=48
-    arm64.str x0, [x29, #-8]
-    arm64.cmp x1, #0
-    arm64.b.ne lookup$present.yes_0
-    arm64.b lookup$present.yes_0.after
-  yes_0:
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x0, #0]
-    arm64.mov x2, #0
-    arm64.cmp x1, x2
-    arm64.cset x3, gt
-    arm64.mov x0, x3
-    arm64.epilogue stack_size=48
-    arm64.ret
-  yes_0.after:
-    arm64.mov x0, #0
-    arm64.epilogue stack_size=48
-    arm64.ret
-  }
-  func @useInt(value: i64) -> i64 {
-  entry:
-    arm64.ret
-  }
-  func @useBool(flag: i1) -> i64 {
-  entry:
-    arm64.cmp x0, #0
-    arm64.b.ne useBool.on_0
-    arm64.b useBool.on_0.after
-  on_0:
-    arm64.mov x0, #1
-    arm64.ret
-  on_0.after:
-    arm64.mov x0, #0
-    arm64.ret
-  }
   func @main() -> u8 {
   entry:
-    arm64.prologue stack_size=80
+    arm64.prologue stack_size=48
+    arm64.mov x1, #0
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
     arm64.mov x0, #10
-    arm64.bl Registry.make
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
+    arm64.str x0, [x19, #0] (8b)
+    arm64.ldr x0, [x19, #0] (8b)
     arm64.mov x1, #5
-    arm64.bl lookup$index
-    arm64.ldr x1, [x29, #-8]
-    arm64.str x0, [x29, #-16]
-    arm64.ldr x0, [x29, #-8]
-    arm64.mov x1, #1
-    arm64.bl lookup$present
-    arm64.str x0, [x29, #-24]
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl useInt
-    arm64.str x0, [x29, #-32]
-    arm64.ldr x0, [x29, #-24]
-    arm64.bl useBool
-    arm64.ldr x2, [x29, #-32]
-    arm64.add x3, x2, x0
-    arm64.mov x4, #0
-    arm64.cmp x3, x4
-    arm64.cset x5, lt
-    arm64.mov x6, #255
-    arm64.cmp x3, x6
-    arm64.cset x7, gt
-    arm64.orr x8, x5, x7
-    arm64.cmp x8, #0
-    arm64.b.ne main.__range_panic_0
-    arm64.b main.__range_ok_0
+    arm64.mov x2, #1
+    arm64.add x20, x0, x1
+  inlined_lookup$Registry$bool_0_1:
+    arm64.cmp x2, #0
+    arm64.b.eq inlined_lookup$Registry$bool_2_3
+  inlined_lookup$Registry$bool_1_2:
+    arm64.ldr x0, [x19, #0] (8b)
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x0, gt
+    arm64.b inline_cont_main_0
+  inlined_lookup$Registry$bool_2_3:
+    arm64.mov x0, #0
+  inline_cont_main_0:
+  inlined_useBool_0_0:
+    arm64.cmp x0, #0
+    arm64.b.eq inlined_useBool_2_0
+  inlined_useBool_1_0:
+    arm64.mov x0, #1
+    arm64.mov x21, x0
+    arm64.b inline_cont_main_1
+  inlined_useBool_2_0:
+    arm64.mov x0, #0
+    arm64.mov x21, x0
+  inline_cont_main_1:
+    arm64.mov x0, x19
+    arm64.bl mm_drop
+    arm64.mov x1, #255
+    arm64.add x0, x20, x21
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
   __range_panic_0:
-    arm64.adrp_add_symdata x0, __panic_msg_7
-    arm64.mov x1, x0
-    arm64.mov x0, x1
+    arm64.adrp_add_rdata x0, __panic_msg_97939554e5f10bfb
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
     arm64.bl mrt_panic
   __range_ok_0:
-    arm64.ldr x0, [x29, #-8]
-    arm64.str x3, [x29, #-40]
-    arm64.cmp x0, #0
-    arm64.b.eq main.__skip_guarded_22
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_22
-    arm64.ldr x0, [x29, #-40]
-    arm64.epilogue stack_size=80
-    arm64.ret
-  }
-  func @__destruct_Registry(ptr: i64) {
-  entry:
-    arm64.b __destruct_Registry.done
-  done:
+    arm64.epilogue
     arm64.ret
   }
 }

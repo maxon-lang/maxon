@@ -35,145 +35,59 @@ ExitCode: 0
 ---
 // CompiledIR
 module {
-  func @Id.equals(__self_ptr: i64, other: i64) -> i1 {
-  entry:
-    arm64.prologue stack_size=48
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x2, [x0, #0]
-    arm64.str x1, [x29, #-16]
-    arm64.ldr x1, [x29, #-16]
-    arm64.ldr x0, [x1, #0]
-    arm64.cmp x2, x0
-    arm64.cset x1, eq
-    arm64.mov x0, x1
-    arm64.epilogue stack_size=48
-    arm64.ret
-  }
-  func @Id.create(n: i64) -> i64 {
-  entry:
-    arm64.prologue stack_size=48
-    arm64.str x0, [x29, #-16]
-    arm64.mov x0, #8
-    arm64.mov x1, #0
-    arm64.mov x2, #6
-    arm64.bl mm_alloc
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x29, #-16]
-    arm64.str x1, [x0, #0]
-    arm64.ldr x2, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.bl mm_incref
-    arm64.ldr x3, [x29, #-8]
-    arm64.mov x0, x3
-    arm64.epilogue stack_size=48
-    arm64.ret
-  }
-  func @areEqual(a: i64, b: i64) -> i1 {
-  entry:
-    arm64.prologue stack_size=48
-    arm64.str x0, [x29, #-8]
-    arm64.str x1, [x29, #-16]
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x29, #-16]
-    arm64.bl Id.equals
-    arm64.epilogue stack_size=48
-    arm64.ret
-  }
   func @main() -> u8 {
   entry:
-    arm64.prologue stack_size=80
+    arm64.prologue stack_size=48
+    arm64.mov x1, #0
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
     arm64.mov x0, #5
-    arm64.bl Id.create
-    arm64.str x0, [x29, #-8]
+    arm64.str x0, [x19, #0] (8b)
+    arm64.mov x1, #0
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x20, x0
     arm64.mov x0, #5
-    arm64.bl Id.create
-    arm64.str x0, [x29, #-16]
+    arm64.str x0, [x20, #0] (8b)
+    arm64.mov x1, #0
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x21, x0
     arm64.mov x0, #6
-    arm64.bl Id.create
-    arm64.str x0, [x29, #-24]
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x29, #-16]
-    arm64.bl areEqual
-    arm64.cmp x0, #0
-    arm64.b.ne main.eq_0
-    arm64.b main.eq_0.after
+    arm64.str x0, [x21, #0] (8b)
+    arm64.ldr x22, [x20, #0] (8b)
+    arm64.ldr x23, [x19, #0] (8b)
+    arm64.mov x0, x20
+    arm64.bl mm_drop
+    arm64.cmp x23, x22
+    arm64.cset x0, eq
+    arm64.b.ne eq_0.after
   eq_0:
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x29, #-24]
-    arm64.bl areEqual
-    arm64.cmp x0, #0
-    arm64.b.ne main.neq_0
-    arm64.b main.neq_0.after
+    arm64.ldr x20, [x21, #0] (8b)
+    arm64.ldr x22, [x19, #0] (8b)
+    arm64.mov x0, x21
+    arm64.bl mm_drop
+    arm64.mov x0, x19
+    arm64.bl mm_drop
+    arm64.cmp x22, x20
+    arm64.cset x0, eq
+    arm64.b.ne neq_0.after
   neq_0:
-    arm64.ldr x0, [x29, #-24]
-    arm64.cmp x0, #0
-    arm64.b.eq main.__skip_guarded_19
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_19
-    arm64.ldr x1, [x29, #-16]
-    arm64.cmp x1, #0
-    arm64.b.eq main.__skip_guarded_21
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_21
-    arm64.ldr x2, [x29, #-8]
-    arm64.cmp x2, #0
-    arm64.b.eq main.__skip_guarded_23
-    arm64.ldr x0, [x29, #-8]
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_23
     arm64.mov x0, #1
-    arm64.epilogue stack_size=80
+    arm64.epilogue
     arm64.ret
   neq_0.after:
-    arm64.ldr x0, [x29, #-24]
-    arm64.cmp x0, #0
-    arm64.b.eq main.__skip_guarded_27
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_27
-    arm64.ldr x1, [x29, #-16]
-    arm64.cmp x1, #0
-    arm64.b.eq main.__skip_guarded_29
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_29
-    arm64.ldr x2, [x29, #-8]
-    arm64.cmp x2, #0
-    arm64.b.eq main.__skip_guarded_31
-    arm64.ldr x0, [x29, #-8]
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_31
     arm64.mov x0, #0
-    arm64.epilogue stack_size=80
+    arm64.epilogue
     arm64.ret
   eq_0.after:
-    arm64.ldr x0, [x29, #-24]
-    arm64.cmp x0, #0
-    arm64.b.eq main.__skip_guarded_35
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_35
-    arm64.ldr x1, [x29, #-16]
-    arm64.cmp x1, #0
-    arm64.b.eq main.__skip_guarded_37
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_37
-    arm64.ldr x2, [x29, #-8]
-    arm64.cmp x2, #0
-    arm64.b.eq main.__skip_guarded_39
-    arm64.ldr x0, [x29, #-8]
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_39
+    arm64.mov x0, x21
+    arm64.bl mm_drop
+    arm64.mov x0, x19
+    arm64.bl mm_drop
     arm64.mov x0, #1
-    arm64.epilogue stack_size=80
-    arm64.ret
-  }
-  func @__destruct_Id(ptr: i64) {
-  entry:
-    arm64.b __destruct_Id.done
-  done:
+    arm64.epilogue
     arm64.ret
   }
 }

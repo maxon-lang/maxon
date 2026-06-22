@@ -28,72 +28,23 @@ ExitCode: 42
 ---
 // CompiledIR
 module {
-  func @tryA() -> i64 {
-  entry:
-    arm64.mov x0, #0
-    arm64.mov x1, #1
-    arm64.add x2, x0, x1
-    arm64.mov x1, x2
-    arm64.mov x0, #0
-    arm64.ret
-  }
-  func @tryB() -> i64 {
-  entry:
-    arm64.mov x0, #42
-    arm64.mov x1, #0
-    arm64.ret
-  }
   func @main() -> u8 {
   entry:
-    arm64.prologue stack_size=80
-    arm64.mov x0, #0
-    arm64.str x0, [x29, #-8]
-    arm64.bl tryA
-    arm64.str x0, [x29, #-16]
-    arm64.mov x0, #0
-    arm64.cmp x1, x0
-    arm64.cset x2, eq
-    arm64.cmp x2, #0
-    arm64.b.ne main.a_0
-    arm64.b main.a_0.elseif
-  a_0:
-    arm64.ldr x0, [x29, #-16]
-    arm64.str x0, [x29, #-8]
-    arm64.b main.a_0.merge
-  a_0.elseif:
-    arm64.bl tryB
-    arm64.str x0, [x29, #-24]
-    arm64.mov x0, #0
-    arm64.cmp x1, x0
-    arm64.cset x2, eq
-    arm64.cmp x2, #0
-    arm64.b.ne main.b_0
-    arm64.b main.b_0.merge
-  b_0:
-    arm64.ldr x0, [x29, #-24]
-    arm64.str x0, [x29, #-8]
-    arm64.b main.b_0.merge
-  b_0.merge:
-    arm64.b main.a_0.merge
+    arm64.prologue stack_size=16
+    arm64.mov x0, #42
+  b_0.after:
   a_0.merge:
-    arm64.ldr x0, [x29, #-8]
-    arm64.mov x1, #0
+    arm64.mov x1, #255
     arm64.cmp x0, x1
-    arm64.cset x2, lt
-    arm64.mov x3, #255
-    arm64.cmp x0, x3
-    arm64.cset x4, gt
-    arm64.orr x5, x2, x4
-    arm64.cmp x5, #0
-    arm64.b.ne main.__range_panic_0
-    arm64.b main.__range_ok_0
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
   __range_panic_0:
-    arm64.adrp_add_symdata x0, __panic_msg_17
-    arm64.mov x1, x0
-    arm64.mov x0, x1
+    arm64.adrp_add_rdata x0, __panic_msg_d7040260b1eab9de
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
     arm64.bl mrt_panic
   __range_ok_0:
-    arm64.epilogue stack_size=80
+    arm64.epilogue
     arm64.ret
   }
 }

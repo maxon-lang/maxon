@@ -14,72 +14,62 @@ ExitCode: 0
 module {
   func @main() -> u8 {
   entry:
-    arm64.prologue stack_size=80
-    arm64.bl stdlib.Process.executablePath
-    arm64.str x0, [x29, #-8]
-    arm64.mov x0, #0
-    arm64.cmp x1, x0
+    arm64.prologue stack_size=32
+    arm64.mov x19, #0
+  inlined_Process.executablePath_0_0:
+    arm64.bl mrt_executable_path
+    arm64.bl String.init
+    arm64.mov x20, #0
+  inlined_FilePath.from_0_0:
+    arm64.bl FilePath.create
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
     arm64.cset x2, ne
-    arm64.cmp x2, #0
-    arm64.b.ne main.otherwise_stmt_0
-    arm64.b main.otherwise_continue_0
-  otherwise_stmt_0:
-    arm64.ldr x0, [x29, #-8]
-    arm64.cmp x0, #0
-    arm64.b.eq main.__skip_guarded_7
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_7
-    arm64.mov x0, #2
-    arm64.epilogue stack_size=80
-    arm64.ret
-  otherwise_continue_0:
-    arm64.ldr x0, [x29, #-8]
-    arm64.str x0, [x29, #-16]
-    arm64.ldr x1, [x29, #-16]
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl mm_incref
-    arm64.ldr x2, [x29, #-16]
-    arm64.ldr x3, [x2, #0]
-    arm64.str x3, [x29, #-24]
-    arm64.ldr x4, [x29, #-24]
-    arm64.ldr x0, [x29, #-24]
-    arm64.bl stdlib.String.byteLength
-    arm64.mov x5, #0
-    arm64.cmp x0, x5
-    arm64.cset x6, gt
-    arm64.cmp x6, #0
-    arm64.b.ne main.check_0
-    arm64.b main.check_0.after
-  check_0:
-    arm64.ldr x0, [x29, #-8]
-    arm64.cmp x0, #0
-    arm64.b.eq main.__skip_guarded_23
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_23
-    arm64.ldr x1, [x29, #-16]
-    arm64.cmp x1, #0
-    arm64.b.eq main.__skip_guarded_25
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_25
+    arm64.b.eq inlined_FilePath.from_2_0
+  inlined_FilePath.from_1_0:
     arm64.mov x0, #0
-    arm64.epilogue stack_size=80
+    arm64.b inline_cont_main_0
+  inlined_FilePath.from_2_0:
+    arm64.mov x1, #0
+  inline_cont_main_0:
+    arm64.cmp x1, x20
+    arm64.cset x1, ne
+    arm64.b.eq __phi_trampoline_13_0
+  inlined_Process.executablePath_1_0:
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, #1
+  inline_cont_main_1:
+    arm64.cmp x0, x19
+    arm64.cset x0, ne
+    arm64.b.eq try_0.merge
+  try_0.otherwise:
+    arm64.mov x0, x20
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, #2
+    arm64.epilogue
+    arm64.ret
+  try_0.merge:
+    arm64.ldr x0, [x20, #0] (8b)
+    arm64.bl String.byteLength
+    arm64.mov x21, x0
+    arm64.mov x0, x20
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.cmp x21, x19
+    arm64.cset x0, gt
+    arm64.b.le check_0.after
+  check_0:
+    arm64.mov x0, x19
+    arm64.epilogue
     arm64.ret
   check_0.after:
-    arm64.ldr x0, [x29, #-8]
-    arm64.cmp x0, #0
-    arm64.b.eq main.__skip_guarded_29
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_29
-    arm64.ldr x1, [x29, #-16]
-    arm64.cmp x1, #0
-    arm64.b.eq main.__skip_guarded_31
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_31
     arm64.mov x0, #1
-    arm64.epilogue stack_size=80
+    arm64.epilogue
     arm64.ret
+  __phi_trampoline_13_0:
+    arm64.mov x16, x0
+    arm64.mov x0, x20
+    arm64.mov x20, x16
+    arm64.b inline_cont_main_1
   }
 }
 ---

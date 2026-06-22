@@ -30,39 +30,10 @@ ExitCode: 6
 ---
 // CompiledIR
 module {
-  func @Flags.make(a: i1, b: i1, c: i1) -> i64 {
-  entry:
-    arm64.prologue stack_size=64
-    arm64.str x0, [x29, #-16]
-    arm64.str x1, [x29, #-24]
-    arm64.str x2, [x29, #-32]
-    arm64.mov x0, #24
-    arm64.mov x1, #0
-    arm64.mov x2, #4
-    arm64.bl mm_alloc
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x29, #-16]
-    arm64.strb x1, [x0, #0]
-    arm64.ldr x2, [x29, #-8]
-    arm64.ldr x3, [x29, #-24]
-    arm64.strb x3, [x2, #8]
-    arm64.ldr x4, [x29, #-8]
-    arm64.ldr x5, [x29, #-32]
-    arm64.strb x5, [x4, #16]
-    arm64.ldr x6, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.bl mm_incref
-    arm64.ldr x7, [x29, #-8]
-    arm64.mov x0, x7
-    arm64.epilogue stack_size=64
-    arm64.ret
-  }
-  func @consume(flag: i1) -> u8 {
+  func @consume(x0: i1) -> u8 {
   entry:
     arm64.cmp x0, #0
-    arm64.b.ne consume.isTrue_0
-    arm64.b consume.isTrue_0.after
+    arm64.b.eq isTrue_0.after
   isTrue_0:
     arm64.mov x0, #1
     arm64.ret
@@ -72,105 +43,53 @@ module {
   }
   func @main() -> u8 {
   entry:
-    arm64.prologue stack_size=128
-    arm64.mov x0, #1
+    arm64.prologue stack_size=64
     arm64.mov x1, #0
-    arm64.mov x2, #1
-    arm64.bl Flags.make
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldrb x1, [x0, #0]
-    arm64.mov x2, #1
-    arm64.str x2, [x29, #-16]
-    arm64.mov x3, #1
-    arm64.eor x4, x1, x3
-    arm64.cmp x4, #0
-    arm64.b.ne main.shortOr_0.rhs
-    arm64.b main.shortOr_0.merge
-  shortOr_0.rhs:
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldrb x1, [x0, #8]
-    arm64.str x1, [x29, #-16]
-    arm64.b main.shortOr_0.merge
-  shortOr_0.merge:
-    arm64.ldr x0, [x29, #-16]
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
+    arm64.mov x0, #1
+    arm64.str x0, [x19, #0] (1b)
+    arm64.mov x0, #0
+    arm64.str x0, [x19, #1] (1b)
+    arm64.mov x0, #1
+    arm64.str x0, [x19, #2] (1b)
+    arm64.ldrsb x0, [x19, #1] (1b)
+    arm64.ldrsb x1, [x19, #0] (1b)
+    arm64.orr x2, x1, x0
+    arm64.mov x0, x2
     arm64.bl consume
-    arm64.str x0, [x29, #-24]
-    arm64.ldr x1, [x29, #-8]
-    arm64.ldrb x2, [x1, #0]
-    arm64.mov x3, #0
-    arm64.str x3, [x29, #-32]
-    arm64.cmp x2, #0
-    arm64.b.ne main.shortAnd_0.rhs
-    arm64.b main.shortAnd_0.merge
-  shortAnd_0.rhs:
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldrb x1, [x0, #16]
-    arm64.str x1, [x29, #-32]
-    arm64.b main.shortAnd_0.merge
-  shortAnd_0.merge:
-    arm64.ldr x0, [x29, #-32]
+    arm64.mov x20, x0
+    arm64.ldrsb x0, [x19, #2] (1b)
+    arm64.ldrsb x1, [x19, #0] (1b)
+    arm64.and x2, x1, x0
+    arm64.mov x0, x2
     arm64.bl consume
-    arm64.str x0, [x29, #-40]
-    arm64.ldr x1, [x29, #-8]
-    arm64.ldrb x2, [x1, #8]
-    arm64.mov x3, #1
-    arm64.str x3, [x29, #-48]
-    arm64.mov x4, #1
-    arm64.eor x5, x2, x4
-    arm64.cmp x5, #0
-    arm64.b.ne main.shortOr_1.rhs
-    arm64.b main.shortOr_1.merge
-  shortOr_1.rhs:
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldrb x1, [x0, #8]
-    arm64.str x1, [x29, #-48]
-    arm64.b main.shortOr_1.merge
-  shortOr_1.merge:
-    arm64.ldr x0, [x29, #-48]
+    arm64.mov x21, x0
+    arm64.ldrsb x22, [x19, #1] (1b)
+    arm64.ldrsb x23, [x19, #1] (1b)
+    arm64.mov x0, x19
+    arm64.bl mm_drop
+    arm64.orr x0, x23, x22
     arm64.bl consume
-    arm64.mov x1, #4
-    arm64.ldr x2, [x29, #-24]
-    arm64.mul x3, x2, x1
-    arm64.mov x4, #2
-    arm64.ldr x5, [x29, #-40]
-    arm64.mul x6, x5, x4
-    arm64.add x7, x3, x6
-    arm64.mov x8, x7
-    arm64.mov x9, x0
-    arm64.add x10, x8, x9
-    arm64.mov x11, #0
-    arm64.mov x12, x10
-    arm64.cmp x12, x11
-    arm64.cset x13, lt
-    arm64.mov x14, #255
-    arm64.mov x15, x10
-    arm64.cmp x15, x14
-    arm64.cset x0, gt
-    arm64.orr x1, x13, x0
-    arm64.cmp x1, #0
-    arm64.b.ne main.__range_panic_0
-    arm64.b main.__range_ok_0
-  __range_panic_0:
-    arm64.adrp_add_symdata x0, __panic_msg_16
     arm64.mov x1, x0
-    arm64.mov x0, x1
+    arm64.mov x0, #2
+    arm64.mov x2, #4
+    arm64.mul x3, x21, x0
+    arm64.mul x0, x20, x2
+    arm64.add x2, x0, x3
+    arm64.mov x3, #255
+    arm64.add x0, x2, x1
+    arm64.cmp x0, x3
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_862706fb44f96402
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
     arm64.bl mrt_panic
   __range_ok_0:
-    arm64.ldr x0, [x29, #-8]
-    arm64.str x10, [x29, #-56]
-    arm64.cmp x0, #0
-    arm64.b.eq main.__skip_guarded_66
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_66
-    arm64.ldr x0, [x29, #-56]
-    arm64.epilogue stack_size=128
-    arm64.ret
-  }
-  func @__destruct_Flags(ptr: i64) {
-  entry:
-    arm64.b __destruct_Flags.done
-  done:
+    arm64.epilogue
     arm64.ret
   }
 }

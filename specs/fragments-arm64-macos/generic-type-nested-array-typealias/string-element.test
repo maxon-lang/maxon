@@ -39,227 +39,118 @@ ExitCode: 0
 ---
 // CompiledIR
 module {
+  func @Container.count(x0: i64, x1: i64) -> u64 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x2, x0
+    arm64.ldr x3, [x2, #0] (8b)
+    arm64.mov x0, x3
+    arm64.bl Array.count
+    arm64.mov x1, #-1
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_4781b21b46eca1f4
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
   func @main() -> u8 {
   entry:
-    arm64.prologue stack_size=128
-    arm64.bl StringContainer.create
-    arm64.str x0, [x29, #-8]
-    arm64.adrp_add_rdata x0, __str_1
-    arm64.mov x1, x0
-    arm64.mov x2, #5
-    arm64.adrp_add_func x3, __destruct_String
-    arm64.mov x4, x3
-    arm64.str x1, [x29, #-48]
-    arm64.mov x1, x4
-    arm64.mov x0, #16
-    arm64.mov x2, #1
-    arm64.bl mm_alloc
-    arm64.str x0, [x29, #-16]
-    arm64.adrp_add_func x5, __destruct___ManagedMemory
-    arm64.mov x6, x5
-    arm64.mov x1, x6
-    arm64.mov x0, #40
-    arm64.mov x2, #2
-    arm64.bl mm_alloc
-    arm64.str x0, [x29, #-24]
-    arm64.mov x7, #-2
-    arm64.mov x8, #1
-    arm64.mov x9, #0
-    arm64.ldr x10, [x29, #-24]
-    arm64.ldr x11, [x29, #-48]
-    arm64.str x11, [x10, #0]
-    arm64.ldr x12, [x29, #-24]
-    arm64.mov x13, #5
-    arm64.str x13, [x12, #8]
-    arm64.ldr x14, [x29, #-24]
-    arm64.str x7, [x14, #16]
-    arm64.ldr x15, [x29, #-24]
-    arm64.str x8, [x15, #24]
-    arm64.ldr x0, [x29, #-24]
-    arm64.str x9, [x0, #32]
-    arm64.ldr x0, [x29, #-24]
-    arm64.ldr x1, [x29, #-16]
-    arm64.str x0, [x1, #0]
-    arm64.ldr x0, [x29, #-24]
-    arm64.bl mm_incref
-    arm64.mov x0, #1
-    arm64.ldr x1, [x29, #-16]
-    arm64.str x0, [x1, #8]
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl mm_incref
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x29, #-16]
-    arm64.bl StringContainer.push
-    arm64.adrp_add_rdata x0, __str_2
-    arm64.mov x1, x0
-    arm64.mov x0, #5
-    arm64.adrp_add_func x2, __destruct_String
-    arm64.mov x3, x2
-    arm64.str x1, [x29, #-56]
-    arm64.mov x1, x3
-    arm64.mov x0, #16
-    arm64.mov x2, #1
-    arm64.bl mm_alloc
-    arm64.str x0, [x29, #-32]
-    arm64.adrp_add_func x0, __destruct___ManagedMemory
-    arm64.mov x1, x0
-    arm64.mov x0, #40
-    arm64.mov x2, #2
-    arm64.bl mm_alloc
-    arm64.str x0, [x29, #-40]
-    arm64.mov x0, #-2
-    arm64.mov x1, #1
-    arm64.mov x2, #0
-    arm64.ldr x3, [x29, #-40]
-    arm64.ldr x4, [x29, #-56]
-    arm64.str x4, [x3, #0]
-    arm64.ldr x3, [x29, #-40]
-    arm64.mov x4, #5
-    arm64.str x4, [x3, #8]
-    arm64.ldr x3, [x29, #-40]
-    arm64.str x0, [x3, #16]
-    arm64.ldr x0, [x29, #-40]
-    arm64.str x1, [x0, #24]
-    arm64.ldr x0, [x29, #-40]
-    arm64.str x2, [x0, #32]
-    arm64.ldr x0, [x29, #-40]
-    arm64.ldr x1, [x29, #-32]
-    arm64.str x0, [x1, #0]
-    arm64.ldr x0, [x29, #-40]
-    arm64.bl mm_incref
-    arm64.mov x0, #1
-    arm64.ldr x1, [x29, #-32]
-    arm64.str x0, [x1, #8]
-    arm64.ldr x0, [x29, #-32]
-    arm64.bl mm_incref
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x29, #-32]
-    arm64.bl StringContainer.push
-    arm64.ldr x0, [x29, #-8]
-    arm64.bl StringContainer.count
-    arm64.mov x1, #2
-    arm64.cmp x0, x1
-    arm64.cset x2, eq
-    arm64.cmp x2, #0
-    arm64.b.ne main.check_0
-    arm64.b main.check_0.after
-  check_0:
-    arm64.ldr x0, [x29, #-32]
-    arm64.cmp x0, #0
-    arm64.b.eq main.__skip_guarded_91
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_91
-    arm64.ldr x1, [x29, #-16]
-    arm64.cmp x1, #0
-    arm64.b.eq main.__skip_guarded_93
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_93
-    arm64.ldr x2, [x29, #-8]
-    arm64.cmp x2, #0
-    arm64.b.eq main.__skip_guarded_95
-    arm64.ldr x0, [x29, #-8]
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_95
+    arm64.prologue stack_size=48
+    arm64.adrp+add x1, __destruct_Container
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
     arm64.mov x0, #0
-    arm64.epilogue stack_size=128
+    arm64.str x0, [x19, #0] (8b)
+    arm64.adrp_add_rdata x0, __layout_Container_String
+    arm64.ldr x0, [x29, #16]
+    arm64.bl Array.create
+    arm64.str x0, [x19, #0] (8b)
+    arm64.adrp+add x1, stdlib.__destruct___ManagedMemory
+    arm64.mov x0, #48
+    arm64.bl mrt_alloc_with_dtor
+    arm64.mov x20, x0
+    arm64.mov x21, #0
+    arm64.str x21, [x20, #40] (8b)
+    arm64.adrp_add_rdata x0, __istr_478
+    arm64.ldr x0, [x29, #16]
+    arm64.str x0, [x20, #0] (8b)
+    arm64.mov x0, #5
+    arm64.str x0, [x20, #8] (8b)
+    arm64.mov x0, #-2
+    arm64.str x0, [x20, #16] (8b)
+    arm64.mov x0, #1
+    arm64.str x0, [x20, #24] (8b)
+    arm64.str x21, [x20, #32] (8b)
+    arm64.adrp+add x1, __destruct_String
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x22, x0
+    arm64.mov x0, x22
+    arm64.bl stdlib.__mm_incref
+    arm64.str x20, [x22, #0] (8b)
+    arm64.mov x0, #1
+    arm64.str x0, [x22, #8] (8b)
+    arm64.ldr x20, [x19, #0] (8b)
+    arm64.adrp_add_rdata x0, __layout_Container_String
+    arm64.ldr x2, [x29, #16]
+    arm64.mov x0, x20
+    arm64.mov x1, x22
+    arm64.bl Array.push
+    arm64.adrp+add x1, stdlib.__destruct___ManagedMemory
+    arm64.mov x0, #48
+    arm64.bl mrt_alloc_with_dtor
+    arm64.mov x20, x0
+    arm64.str x21, [x20, #40] (8b)
+    arm64.adrp_add_rdata x0, __istr_479
+    arm64.ldr x0, [x29, #16]
+    arm64.str x0, [x20, #0] (8b)
+    arm64.mov x0, #5
+    arm64.str x0, [x20, #8] (8b)
+    arm64.mov x0, #-2
+    arm64.str x0, [x20, #16] (8b)
+    arm64.mov x0, #1
+    arm64.str x0, [x20, #24] (8b)
+    arm64.str x21, [x20, #32] (8b)
+    arm64.adrp+add x1, __destruct_String
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x22, x0
+    arm64.mov x0, x22
+    arm64.bl stdlib.__mm_incref
+    arm64.str x20, [x22, #0] (8b)
+    arm64.mov x0, #1
+    arm64.str x0, [x22, #8] (8b)
+    arm64.ldr x20, [x19, #0] (8b)
+    arm64.adrp_add_rdata x0, __layout_Container_String
+    arm64.ldr x2, [x29, #16]
+    arm64.mov x0, x20
+    arm64.mov x1, x22
+    arm64.bl Array.push
+    arm64.adrp_add_rdata x0, __layout_Container_String
+    arm64.ldr x1, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl Container.count
+    arm64.mov x20, x0
+    arm64.mov x0, x19
+    arm64.bl mm_drop
+    arm64.mov x0, #2
+    arm64.cmp x20, x0
+    arm64.cset x0, eq
+    arm64.b.ne check_0.after
+  check_0:
+    arm64.mov x0, x21
+    arm64.epilogue
     arm64.ret
   check_0.after:
-    arm64.ldr x0, [x29, #-32]
-    arm64.cmp x0, #0
-    arm64.b.eq main.__skip_guarded_99
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_99
-    arm64.ldr x1, [x29, #-16]
-    arm64.cmp x1, #0
-    arm64.b.eq main.__skip_guarded_101
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_101
-    arm64.ldr x2, [x29, #-8]
-    arm64.cmp x2, #0
-    arm64.b.eq main.__skip_guarded_103
-    arm64.ldr x0, [x29, #-8]
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_103
     arm64.mov x0, #1
-    arm64.epilogue stack_size=128
-    arm64.ret
-  }
-  func @StringContainer.create() -> i64 {
-  entry:
-    arm64.prologue stack_size=48
-    arm64.bl StringArray.create
-    arm64.str x0, [x29, #-8]
-    arm64.adrp_add_func x0, __destruct_StringContainer
-    arm64.mov x1, x0
-    arm64.mov x0, #8
-    arm64.mov x2, #6
-    arm64.bl mm_alloc
-    arm64.str x0, [x29, #-16]
-    arm64.ldr x2, [x29, #-8]
-    arm64.ldr x3, [x29, #-16]
-    arm64.str x2, [x3, #0]
-    arm64.ldr x0, [x29, #-8]
-    arm64.bl mm_incref
-    arm64.ldr x4, [x29, #-8]
-    arm64.cmp x4, #0
-    arm64.b.eq StringContainer.create.__skip_guarded_13
-    arm64.ldr x0, [x29, #-8]
-    arm64.bl mm_decref
-    arm64.label StringContainer.create.__skip_guarded_13
-    arm64.ldr x5, [x29, #-16]
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl mm_incref
-    arm64.ldr x6, [x29, #-16]
-    arm64.mov x0, x6
-    arm64.epilogue stack_size=48
-    arm64.ret
-  }
-  func @StringContainer.count(__self_ptr: i64) -> u64 {
-  entry:
-    arm64.prologue stack_size=48
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x0, #0]
-    arm64.str x1, [x29, #-16]
-    arm64.ldr x2, [x29, #-16]
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl StringArray.count
-    arm64.epilogue stack_size=48
-    arm64.ret
-  }
-  func @StringContainer.push(__self_ptr: i64, item: i64) {
-  entry:
-    arm64.prologue stack_size=80
-    arm64.str x0, [x29, #-8]
-    arm64.str x1, [x29, #-16]
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x0, #0]
-    arm64.str x1, [x29, #-24]
-    arm64.ldr x2, [x29, #-24]
-    arm64.ldr x3, [x29, #-16]
-    arm64.ldr x0, [x29, #-24]
-    arm64.ldr x1, [x29, #-16]
-    arm64.bl StringArray.push
-    arm64.epilogue stack_size=80
-    arm64.ret
-  }
-  func @__destruct_StringContainer(ptr: i64) {
-  entry:
-    arm64.prologue stack_size=48
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x0, #0]
-    arm64.str x1, [x29, #-16]
-    arm64.cmp x1, #0
-    arm64.b.eq __destruct_StringContainer.__skip_guarded_4
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl mm_decref
-    arm64.label __destruct_StringContainer.__skip_guarded_4
-    arm64.b __destruct_StringContainer.done
-  done:
-    arm64.epilogue stack_size=48
+    arm64.epilogue
     arm64.ret
   }
 }

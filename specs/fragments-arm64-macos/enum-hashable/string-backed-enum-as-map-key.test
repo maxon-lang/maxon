@@ -21,230 +21,135 @@ ExitCode: 2
 ---
 // CompiledIR
 module {
-  func @Planet.hash(self: i64) -> i64 {
-  entry:
-    arm64.prologue stack_size=16
-    arm64.bl stdlib.int.hash
-    arm64.mov x1, x0
-    arm64.mov x0, x1
-    arm64.epilogue stack_size=16
-    arm64.ret
-  }
   func @main() -> u8 {
   entry:
-    arm64.prologue stack_size=96
-    arm64.bl PlanetMap.create
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.mov x1, #0
-    arm64.mov x2, #1
-    arm64.bl PlanetMap.insert
-    arm64.ldr x0, [x29, #-8]
-    arm64.str x1, [x29, #-32]
-    arm64.mov x1, #1
-    arm64.mov x2, #2
-    arm64.bl PlanetMap.insert
-    arm64.ldr x0, [x29, #-8]
-    arm64.str x1, [x29, #-40]
-    arm64.mov x1, #2
-    arm64.mov x2, #3
-    arm64.bl PlanetMap.insert
-    arm64.ldr x0, [x29, #-8]
-    arm64.str x1, [x29, #-48]
-    arm64.mov x1, #1
-    arm64.bl PlanetMap.get
-    arm64.mov x2, #0
-    arm64.str x2, [x29, #-16]
-    arm64.str x0, [x29, #-24]
+    arm64.prologue stack_size=48
+    arm64.adrp+add x1, __destruct_Map
+    arm64.mov x0, #40
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
+    arm64.mov x0, #8
+    arm64.sub x1, x19, x0
+    arm64.atomic_inc [x1]
     arm64.mov x0, #0
-    arm64.cmp x1, x0
-    arm64.cset x2, ne
-    arm64.cmp x2, #0
-    arm64.b.ne main.otherwise_default_error_0
-    arm64.b main.otherwise_default_continue_0
-  otherwise_default_error_0:
-    arm64.ldr x0, [x29, #-16]
-    arm64.str x0, [x29, #-24]
-    arm64.b main.otherwise_default_continue_0
-  otherwise_default_continue_0:
-    arm64.ldr x0, [x29, #-24]
-    arm64.mov x1, #0
-    arm64.cmp x0, x1
-    arm64.cset x2, lt
-    arm64.mov x3, #255
-    arm64.cmp x0, x3
-    arm64.cset x4, gt
-    arm64.orr x5, x2, x4
-    arm64.cmp x5, #0
-    arm64.b.ne main.__range_panic_0
-    arm64.b main.__range_ok_0
-  __range_panic_0:
-    arm64.adrp_add_symdata x0, __panic_msg_1
-    arm64.mov x1, x0
+    arm64.str x0, [x19, #0] (8b)
+    arm64.mov x0, #0
+    arm64.str x0, [x19, #8] (8b)
+    arm64.mov x0, #0
+    arm64.str x0, [x19, #16] (8b)
+    arm64.adrp_add_rdata x0, __witness_int_Equatable
+    arm64.ldr x5, [x29, #16]
+    arm64.adrp_add_rdata x0, __witness_int_Hashable
+    arm64.ldr x4, [x29, #16]
+    arm64.adrp_add_rdata x0, __layout_Map_Planet_Int
+    arm64.ldr x3, [x29, #16]
+    arm64.mov x2, #1
+    arm64.mov x20, #0
+    arm64.mov x0, x19
+    arm64.mov x1, x20
+    arm64.bl Map.insert
     arm64.mov x0, x1
+    arm64.cmp x0, x20
+    arm64.cset x0, ne
+    arm64.b.eq try_0.ok
+    arm64.mov x0, x20
+    arm64.b try_0.merge
+  try_0.ok:
+    arm64.b __rc_edge_2_0
+  try_0.merge:
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.adrp_add_rdata x0, __witness_int_Equatable
+    arm64.ldr x5, [x29, #16]
+    arm64.adrp_add_rdata x0, __witness_int_Hashable
+    arm64.ldr x4, [x29, #16]
+    arm64.adrp_add_rdata x0, __layout_Map_Planet_Int
+    arm64.ldr x3, [x29, #16]
+    arm64.mov x2, #2
+    arm64.mov x1, #1
+    arm64.mov x0, x19
+    arm64.bl Map.insert
+    arm64.mov x0, x1
+    arm64.cmp x0, x20
+    arm64.cset x0, ne
+    arm64.b.eq try_1.ok
+    arm64.mov x0, x20
+    arm64.b try_1.merge
+  try_1.ok:
+    arm64.b __rc_edge_5_0
+  try_1.merge:
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.adrp_add_rdata x0, __witness_int_Equatable
+    arm64.ldr x5, [x29, #16]
+    arm64.adrp_add_rdata x0, __witness_int_Hashable
+    arm64.ldr x4, [x29, #16]
+    arm64.adrp_add_rdata x0, __layout_Map_Planet_Int
+    arm64.ldr x3, [x29, #16]
+    arm64.mov x2, #3
+    arm64.mov x1, #2
+    arm64.mov x0, x19
+    arm64.bl Map.insert
+    arm64.mov x0, x1
+    arm64.cmp x0, x20
+    arm64.cset x0, ne
+    arm64.b.eq try_2.ok
+    arm64.mov x0, x20
+    arm64.b try_2.merge
+  try_2.ok:
+    arm64.b __rc_edge_8_0
+  try_2.merge:
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.adrp_add_rdata x0, __witness_int_Equatable
+    arm64.ldr x4, [x29, #16]
+    arm64.adrp_add_rdata x0, __witness_int_Hashable
+    arm64.ldr x3, [x29, #16]
+    arm64.adrp_add_rdata x0, __layout_Map_Planet_Int
+    arm64.ldr x2, [x29, #16]
+    arm64.mov x1, #1
+    arm64.mov x0, x19
+    arm64.bl Map.get
+    arm64.mov x21, x0
+    arm64.mov x0, x1
+    arm64.cmp x0, x20
+    arm64.cset x0, ne
+    arm64.b.eq try_3.ok
+    arm64.b __rc_edge_9_0
+  try_3.ok:
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, x21
+  try_3.merge:
+    arm64.mov x1, #255
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+    arm64.b __range_panic_0
+  __rc_edge_9_0:
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, x20
+    arm64.b try_3.merge
+  __rc_edge_2_0:
+    arm64.mov x0, x19
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, x19
+    arm64.b try_0.merge
+  __rc_edge_5_0:
+    arm64.mov x0, x19
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, x19
+    arm64.b try_1.merge
+  __rc_edge_8_0:
+    arm64.mov x0, x19
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, x19
+    arm64.b try_2.merge
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_139d319cdc0379c0
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
     arm64.bl mrt_panic
   __range_ok_0:
-    arm64.ldr x1, [x29, #-8]
-    arm64.cmp x1, #0
-    arm64.b.eq main.__skip_guarded_37
-    arm64.ldr x0, [x29, #-8]
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_37
-    arm64.ldr x0, [x29, #-24]
-    arm64.epilogue stack_size=96
-    arm64.ret
-  }
-  func @__destruct___ManagedMemory_Planet(ptr: i64) {
-  entry:
-    arm64.prologue stack_size=48
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x0, #16]
-    arm64.mov x2, #-1
-    arm64.cmp x1, x2
-    arm64.cset x3, eq
-    arm64.cmp x3, #0
-    arm64.b.ne __destruct___ManagedMemory_Planet.slice_cleanup_0
-    arm64.b __destruct___ManagedMemory_Planet.check_owned_0
-  slice_cleanup_0:
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x0, #32]
-    arm64.str x1, [x29, #-16]
-    arm64.cmp x1, #0
-    arm64.b.eq __destruct___ManagedMemory_Planet.__skip_guarded_9
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl mm_decref
-    arm64.label __destruct___ManagedMemory_Planet.__skip_guarded_9
-    arm64.b __destruct___ManagedMemory_Planet.skip_buf_0
-  check_owned_0:
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x0, #16]
-    arm64.mov x2, #-2
-    arm64.cmp x1, x2
-    arm64.cset x3, ne
-    arm64.cmp x3, #0
-    arm64.b.ne __destruct___ManagedMemory_Planet.free_buf_0
-    arm64.b __destruct___ManagedMemory_Planet.skip_buf_0
-  free_buf_0:
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x0, #0]
-    arm64.mov x0, x1
-    arm64.bl mm_raw_free
-    arm64.b __destruct___ManagedMemory_Planet.skip_buf_0
-  skip_buf_0:
-    arm64.b __destruct___ManagedMemory_Planet.done
-  done:
-    arm64.epilogue stack_size=48
-    arm64.ret
-  }
-  func @__destruct_Array_Planet(ptr: i64) {
-  entry:
-    arm64.prologue stack_size=48
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x0, #0]
-    arm64.str x1, [x29, #-16]
-    arm64.cmp x1, #0
-    arm64.b.eq __destruct_Array_Planet.__skip_guarded_4
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl mm_decref
-    arm64.label __destruct_Array_Planet.__skip_guarded_4
-    arm64.b __destruct_Array_Planet.done
-  done:
-    arm64.epilogue stack_size=48
-    arm64.ret
-  }
-  func @__destruct___ManagedMemory_Int(ptr: i64) {
-  entry:
-    arm64.prologue stack_size=48
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x0, #16]
-    arm64.mov x2, #-1
-    arm64.cmp x1, x2
-    arm64.cset x3, eq
-    arm64.cmp x3, #0
-    arm64.b.ne __destruct___ManagedMemory_Int.slice_cleanup_0
-    arm64.b __destruct___ManagedMemory_Int.check_owned_0
-  slice_cleanup_0:
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x0, #32]
-    arm64.str x1, [x29, #-16]
-    arm64.cmp x1, #0
-    arm64.b.eq __destruct___ManagedMemory_Int.__skip_guarded_9
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl mm_decref
-    arm64.label __destruct___ManagedMemory_Int.__skip_guarded_9
-    arm64.b __destruct___ManagedMemory_Int.skip_buf_0
-  check_owned_0:
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x0, #16]
-    arm64.mov x2, #-2
-    arm64.cmp x1, x2
-    arm64.cset x3, ne
-    arm64.cmp x3, #0
-    arm64.b.ne __destruct___ManagedMemory_Int.free_buf_0
-    arm64.b __destruct___ManagedMemory_Int.skip_buf_0
-  free_buf_0:
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x0, #0]
-    arm64.mov x0, x1
-    arm64.bl mm_raw_free
-    arm64.b __destruct___ManagedMemory_Int.skip_buf_0
-  skip_buf_0:
-    arm64.b __destruct___ManagedMemory_Int.done
-  done:
-    arm64.epilogue stack_size=48
-    arm64.ret
-  }
-  func @__destruct_Array_Int(ptr: i64) {
-  entry:
-    arm64.prologue stack_size=48
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x0, #0]
-    arm64.str x1, [x29, #-16]
-    arm64.cmp x1, #0
-    arm64.b.eq __destruct_Array_Int.__skip_guarded_4
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl mm_decref
-    arm64.label __destruct_Array_Int.__skip_guarded_4
-    arm64.b __destruct_Array_Int.done
-  done:
-    arm64.epilogue stack_size=48
-    arm64.ret
-  }
-  func @__destruct_PlanetMap(ptr: i64) {
-  entry:
-    arm64.prologue stack_size=64
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x0, #0]
-    arm64.str x1, [x29, #-16]
-    arm64.cmp x1, #0
-    arm64.b.eq __destruct_PlanetMap.__skip_guarded_4
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl mm_decref
-    arm64.label __destruct_PlanetMap.__skip_guarded_4
-    arm64.ldr x2, [x29, #-8]
-    arm64.ldr x3, [x2, #8]
-    arm64.str x3, [x29, #-24]
-    arm64.cmp x3, #0
-    arm64.b.eq __destruct_PlanetMap.__skip_guarded_7
-    arm64.ldr x0, [x29, #-24]
-    arm64.bl mm_decref
-    arm64.label __destruct_PlanetMap.__skip_guarded_7
-    arm64.ldr x4, [x29, #-8]
-    arm64.ldr x5, [x4, #16]
-    arm64.str x5, [x29, #-32]
-    arm64.cmp x5, #0
-    arm64.b.eq __destruct_PlanetMap.__skip_guarded_10
-    arm64.ldr x0, [x29, #-32]
-    arm64.bl mm_decref
-    arm64.label __destruct_PlanetMap.__skip_guarded_10
-    arm64.b __destruct_PlanetMap.done
-  done:
-    arm64.epilogue stack_size=64
+    arm64.epilogue
     arm64.ret
   }
 }

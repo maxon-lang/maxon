@@ -17,43 +17,32 @@ ExitCode: 1
 ---
 // CompiledIR
 module {
-  func @test(x: i64) -> i64 {
-  entry:
-    arm64.mov x1, #0
-    arm64.cmp x0, x1
-    arm64.cset x2, gt
-    arm64.cmp x2, #0
-    arm64.b.ne test.check_0
-    arm64.b test.check_0.after
-  check_0:
-    arm64.mov x0, #1
-    arm64.ret
-  check_0.after:
-    arm64.mov x0, #0
-    arm64.ret
-  }
   func @main() -> u8 {
   entry:
     arm64.prologue stack_size=16
     arm64.mov x0, #5
-    arm64.bl test
+  inlined_test_0_0:
     arm64.mov x1, #0
     arm64.cmp x0, x1
-    arm64.cset x2, lt
+    arm64.cset x0, gt
+    arm64.b.le inlined_test_2_0
+  inlined_test_1_0:
+    arm64.mov x0, #1
+    arm64.b inline_cont_main_0
+  inlined_test_2_0:
+    arm64.mov x0, #0
+  inline_cont_main_0:
     arm64.mov x1, #255
     arm64.cmp x0, x1
-    arm64.cset x3, gt
-    arm64.orr x1, x2, x3
-    arm64.cmp x1, #0
-    arm64.b.ne main.__range_panic_0
-    arm64.b main.__range_ok_0
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
   __range_panic_0:
-    arm64.adrp_add_symdata x0, __panic_msg_0
-    arm64.mov x1, x0
-    arm64.mov x0, x1
+    arm64.adrp_add_rdata x0, __panic_msg_8dc044b30382ea57
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
     arm64.bl mrt_panic
   __range_ok_0:
-    arm64.epilogue stack_size=16
+    arm64.epilogue
     arm64.ret
   }
 }

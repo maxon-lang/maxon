@@ -13,54 +13,49 @@ ExitCode: 42
 ---
 // CompiledIR
 module {
-  func @double(x: f64) -> f64 {
+  func @double(d0: f64) -> f64 {
   entry:
     arm64.prologue stack_size=16
-    arm64.fldr d1, [__float_2]
+    arm64.ldr d1, [rdata+__float_4611686018427387904]
     arm64.fmul d2, d0, d1
-    arm64.fldr d0, [__float_-3.4028234663852886E+38]
+    arm64.ldr d0, [rdata+__float_5727507168572555263]
     arm64.fcmp d2, d0
-    arm64.cset x0, lt
-    arm64.fldr d1, [__float_3.4028234663852886E+38]
-    arm64.fcmp d2, d1
-    arm64.cset x1, gt
-    arm64.orr x2, x0, x1
-    arm64.cmp x2, #0
-    arm64.b.ne double.__range_panic_0
-    arm64.b double.__range_ok_0
+    arm64.cset x0, ls
+    arm64.b.hi __range_panic_0
+    arm64.b __range_check_lo_0
   __range_panic_0:
-    arm64.adrp_add_symdata x0, __panic_msg_16
-    arm64.mov x1, x0
-    arm64.mov x0, x1
+    arm64.adrp_add_rdata x0, __panic_msg_30819e24834750c5
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
     arm64.bl mrt_panic
   __range_ok_0:
     arm64.fmov d0, d2
-    arm64.epilogue stack_size=16
+    arm64.epilogue
     arm64.ret
+  __range_check_lo_0:
+    arm64.ldr d0, [rdata+__float_-1011110350135427073]
+    arm64.fcmp d2, d0
+    arm64.cset x0, mi
+    arm64.b.pl __range_ok_0
+    arm64.b __range_panic_0
   }
   func @main() -> u8 {
   entry:
     arm64.prologue stack_size=16
-    arm64.fldr d0, [__float_21]
+    arm64.ldr d0, [rdata+__float_4626604192193052672]
     arm64.bl double
+    arm64.mov x1, #255
     arm64.fcvtzs x0, d0
-    arm64.mov x1, #0
     arm64.cmp x0, x1
-    arm64.cset x2, lt
-    arm64.mov x3, #255
-    arm64.cmp x0, x3
-    arm64.cset x4, gt
-    arm64.orr x5, x2, x4
-    arm64.cmp x5, #0
-    arm64.b.ne main.__range_panic_0
-    arm64.b main.__range_ok_0
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
   __range_panic_0:
-    arm64.adrp_add_symdata x0, __panic_msg_17
-    arm64.mov x1, x0
-    arm64.mov x0, x1
+    arm64.adrp_add_rdata x0, __panic_msg_6003adadf84fe82b
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
     arm64.bl mrt_panic
   __range_ok_0:
-    arm64.epilogue stack_size=16
+    arm64.epilogue
     arm64.ret
   }
 }

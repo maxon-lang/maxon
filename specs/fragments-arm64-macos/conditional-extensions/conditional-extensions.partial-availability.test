@@ -70,480 +70,213 @@ ExitCode: 2
 ---
 // CompiledIR
 module {
-  func @NotEqSeq.countItems(__self_ptr: i64) -> i64 {
+  func @NotEqSeq.current(x0: i64) -> i64 {
   entry:
-    arm64.prologue stack_size=80
-    arm64.mov x1, #0
-    arm64.str x1, [x29, #-8]
-    arm64.str x0, [x29, #-16]
-    arm64.b NotEqSeq.countItems.loop_0.preamble
-  loop_0.preamble:
-    arm64.b NotEqSeq.countItems.loop_0
-  loop_0.header:
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl NotEqSeq.advance
-    arm64.mov x0, #0
-    arm64.cmp x1, x0
-    arm64.cset x2, eq
-    arm64.cmp x2, #0
-    arm64.b.ne NotEqSeq.countItems.loop_0
-    arm64.b NotEqSeq.countItems.loop_0.exit
-  loop_0:
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl NotEqSeq.current
-    arm64.str x0, [x29, #-24]
-    arm64.mov x1, #1
-    arm64.ldr x2, [x29, #-8]
-    arm64.add x3, x2, x1
-    arm64.str x3, [x29, #-8]
-    arm64.ldr x4, [x29, #-24]
-    arm64.cmp x4, #0
-    arm64.b.eq NotEqSeq.countItems.__skip_guarded_19
-    arm64.ldr x0, [x29, #-24]
-    arm64.bl mm_decref
-    arm64.label NotEqSeq.countItems.__skip_guarded_19
-    arm64.b NotEqSeq.countItems.loop_0.header
-  loop_0.exit:
-    arm64.ldr x0, [x29, #-8]
-    arm64.epilogue stack_size=80
-    arm64.ret
-  }
-  func @NotEq.create(n: i64) -> i64 {
-  entry:
-    arm64.prologue stack_size=48
-    arm64.str x0, [x29, #-16]
-    arm64.mov x0, #8
-    arm64.mov x1, #0
-    arm64.mov x2, #1
-    arm64.bl mm_alloc
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x29, #-16]
-    arm64.str x1, [x0, #0]
-    arm64.ldr x2, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.bl mm_incref
-    arm64.ldr x3, [x29, #-8]
-    arm64.mov x0, x3
-    arm64.epilogue stack_size=48
-    arm64.ret
-  }
-  func @NotEqSeq.current(__self_ptr: i64) -> i64 {
-  entry:
-    arm64.prologue stack_size=80
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x0, #8]
-    arm64.ldr x2, [x29, #-8]
-    arm64.ldr x3, [x2, #0]
-    arm64.str x3, [x29, #-16]
-    arm64.ldr x4, [x29, #-16]
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl NotEqArray.get
-    arm64.str x0, [x29, #-24]
-    arm64.mov x5, #0
-    arm64.cmp x1, x5
-    arm64.cset x6, ne
-    arm64.cmp x6, #0
-    arm64.b.ne NotEqSeq.current.otherwise_panic_0
-    arm64.b NotEqSeq.current.otherwise_continue_0
-  otherwise_panic_0:
-    arm64.adrp_add_symdata x0, __panic_msg_0
-    arm64.mov x1, x0
+    arm64.prologue stack_size=32
+    arm64.ldr x1, [x0, #8] (8b)
+    arm64.ldr x2, [x0, #0] (8b)
+  inlined_Array.get_0_0:
+    arm64.ldr x0, [x2, #0] (8b)
+    arm64.bl stdlib.__managed_mem_get
+    arm64.mov x19, x0
     arm64.mov x0, x1
-    arm64.bl mrt_panic
-  otherwise_continue_0:
-    arm64.ldr x0, [x29, #-24]
-    arm64.epilogue stack_size=80
-    arm64.ret
-  }
-  func @NotEqSeq.advance(__self_ptr: i64) {
-  entry:
-    arm64.prologue stack_size=64
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x0, #8]
-    arm64.mov x2, #1
-    arm64.add x3, x1, x2
-    arm64.ldr x4, [x29, #-8]
-    arm64.ldr x5, [x4, #0]
-    arm64.str x5, [x29, #-16]
-    arm64.ldr x6, [x29, #-16]
-    arm64.str x3, [x29, #-24]
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl NotEqArray.count
-    arm64.ldr x7, [x29, #-24]
-    arm64.cmp x7, x0
-    arm64.cset x8, ge
-    arm64.cmp x8, #0
-    arm64.b.ne NotEqSeq.advance.done_0
-    arm64.b NotEqSeq.advance.done_0.after
-  done_0:
-    arm64.mov x0, #0
-    arm64.mov x1, #1
-    arm64.add x2, x0, x1
-    arm64.mov x1, x2
-    arm64.mov x0, #0
-    arm64.epilogue stack_size=64
-    arm64.ret
-  done_0.after:
-    arm64.mov x0, #1
-    arm64.ldr x1, [x29, #-8]
-    arm64.ldr x2, [x1, #8]
-    arm64.add x3, x2, x0
-    arm64.ldr x4, [x29, #-8]
-    arm64.str x3, [x4, #8]
-    arm64.mov x1, #0
-    arm64.epilogue stack_size=64
-    arm64.ret
-  }
-  func @NotEqSeq.create(items: i64) -> i64 {
-  entry:
-    arm64.prologue stack_size=48
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.bl NotEqArray.count
     arm64.mov x1, #0
     arm64.cmp x0, x1
-    arm64.cset x2, eq
-    arm64.cmp x2, #0
-    arm64.b.ne NotEqSeq.create.empty_0
-    arm64.b NotEqSeq.create.empty_0.after
-  empty_0:
-    arm64.mov x0, #0
+    arm64.cset x0, ne
+    arm64.b.eq inlined_Array.get_3_0
+  inlined_Array.get_1_0:
     arm64.mov x1, #1
-    arm64.add x2, x0, x1
-    arm64.mov x1, x2
     arm64.mov x0, #0
-    arm64.epilogue stack_size=48
+    arm64.b inline_cont_NotEqSeq.current_0
+  inlined_Array.get_3_0:
+    arm64.mov x20, #0
+    arm64.b __rc_edge_6_0
+  inline_cont_NotEqSeq.current_0:
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x1, ne
+    arm64.b.eq try_0.merge
+  try_0.otherwise:
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.adrp_add_rdata x0, __panic_msg_af0ff008deb7b4e0
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+    arm64.mov x0, #0
+    arm64.epilogue
+    arm64.ret
+  try_0.merge:
+    arm64.epilogue
+    arm64.ret
+  __rc_edge_6_0:
+    arm64.mov x0, x19
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, x19
+    arm64.mov x1, x20
+    arm64.b inline_cont_NotEqSeq.current_0
+  }
+  func @NotEqSeq.create(x0: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.mov x19, x0
+    arm64.adrp_add_rdata x0, __layout_Array_NotEq
+    arm64.ldr x1, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl Array.count
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x0, eq
+    arm64.b.ne empty_0.after
+  empty_0:
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x1, #1
+    arm64.mov x0, #0
+    arm64.epilogue
     arm64.ret
   empty_0.after:
-    arm64.mov x0, #0
-    arm64.adrp_add_func x1, __destruct_NotEqSeq
-    arm64.mov x2, x1
-    arm64.mov x1, x2
+    arm64.adrp+add x1, __destruct_NotEqSeq
     arm64.mov x0, #16
-    arm64.mov x2, #2
-    arm64.bl mm_alloc
-    arm64.str x0, [x29, #-16]
-    arm64.ldr x3, [x29, #-8]
-    arm64.ldr x4, [x29, #-16]
-    arm64.str x3, [x4, #0]
-    arm64.ldr x0, [x29, #-8]
-    arm64.bl mm_incref
-    arm64.ldr x5, [x29, #-16]
-    arm64.mov x6, #0
-    arm64.str x6, [x5, #8]
-    arm64.ldr x7, [x29, #-16]
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl mm_incref
-    arm64.ldr x8, [x29, #-16]
-    arm64.mov x0, x8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x20, x0
+    arm64.mov x0, x20
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, #0
+    arm64.str x0, [x20, #0] (8b)
+    arm64.str x19, [x20, #0] (8b)
+    arm64.mov x0, #0
+    arm64.str x0, [x20, #8] (8b)
     arm64.mov x1, #0
-    arm64.epilogue stack_size=48
+    arm64.mov x0, x20
+    arm64.epilogue
     arm64.ret
   }
   func @main() -> u8 {
   entry:
-    arm64.prologue stack_size=176
-    arm64.mov x0, #1
-    arm64.bl NotEq.create
-    arm64.str x0, [x29, #-8]
-    arm64.mov x0, #2
-    arm64.bl NotEq.create
-    arm64.str x0, [x29, #-16]
-    arm64.str x0, [x29, #-24]
-    arm64.ldr x0, [x29, #-24]
-    arm64.bl mm_incref
-    arm64.ldr x1, [x29, #-8]
-    arm64.str x1, [x29, #-32]
-    arm64.ldr x2, [x29, #-32]
-    arm64.ldr x0, [x29, #-32]
-    arm64.bl mm_incref
-    arm64.mov x3, #0
-    arm64.mov x4, #2
-    arm64.mov x5, #0
-    arm64.mov x6, #8
-    arm64.mov x7, #0
-    arm64.adrp_add_func x8, __destruct___ManagedMemory_NotEq
-    arm64.mov x9, x8
-    arm64.mov x1, x9
-    arm64.mov x0, #40
-    arm64.mov x2, #3
-    arm64.bl mm_alloc
-    arm64.str x0, [x29, #-40]
-    arm64.ldr x10, [x29, #-40]
-    arm64.mov x11, #0
-    arm64.str x11, [x10, #0]
-    arm64.ldr x12, [x29, #-40]
-    arm64.mov x13, #2
-    arm64.str x13, [x12, #8]
-    arm64.ldr x14, [x29, #-40]
-    arm64.mov x15, #0
-    arm64.str x15, [x14, #16]
-    arm64.ldr x0, [x29, #-40]
-    arm64.mov x1, #8
-    arm64.str x1, [x0, #24]
-    arm64.ldr x0, [x29, #-40]
+    arm64.prologue stack_size=48
     arm64.mov x1, #0
-    arm64.str x1, [x0, #32]
-    arm64.ldr x0, [x29, #-40]
-    arm64.ldr x1, [x0, #24]
-    arm64.adrp_add_symdata x0, __mm_panic_element_size_zero
-    arm64.mov x2, x0
-    arm64.mov x0, #0
-    arm64.bl maxon_bounds_check
-    arm64.adrp_add_func x0, __destruct___Array_NotEq
-    arm64.mov x1, x0
     arm64.mov x0, #8
-    arm64.mov x2, #4
-    arm64.bl mm_alloc
-    arm64.str x0, [x29, #-48]
-    arm64.ldr x1, [x29, #-40]
-    arm64.ldr x2, [x29, #-48]
-    arm64.str x1, [x2, #0]
-    arm64.ldr x0, [x29, #-40]
-    arm64.bl mm_incref
-    arm64.add x0, x29, #-32
-    arm64.mov x1, x0
-    arm64.ldr x0, [x29, #-48]
-    arm64.ldr x2, [x0, #0]
-    arm64.ldr x0, [x2, #24]
-    arm64.mov x2, #2
-    arm64.mul x3, x2, x0
-    arm64.str x1, [x29, #-72]
-    arm64.str x3, [x29, #-80]
-    arm64.ldr x0, [x29, #-80]
-    arm64.bl mm_raw_alloc
-    arm64.str x0, [x29, #-88]
-    arm64.ldr x1, [x29, #-72]
-    arm64.ldr x2, [x29, #-80]
-    arm64.bl maxon_memcpy
-    arm64.ldr x1, [x29, #-32]
-    arm64.str x0, [x29, #-96]
-    arm64.ldr x0, [x29, #-32]
-    arm64.bl mm_incref
-    arm64.ldr x0, [x29, #-24]
-    arm64.bl mm_incref
-    arm64.ldr x0, [x29, #-48]
-    arm64.ldr x1, [x0, #0]
-    arm64.ldr x0, [x29, #-88]
-    arm64.str x0, [x1, #0]
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
+    arm64.mov x0, x19
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, #1
+    arm64.str x0, [x19, #0] (8b)
+    arm64.mov x1, #0
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x20, x0
+    arm64.mov x0, x20
+    arm64.bl stdlib.__mm_incref
     arm64.mov x0, #2
-    arm64.str x0, [x1, #16]
-    arm64.ldr x0, [x29, #-48]
-    arm64.bl mm_incref
-    arm64.ldr x0, [x29, #-48]
-    arm64.bl NotEqSeq.create
-    arm64.str x0, [x29, #-56]
-    arm64.mov x0, #0
-    arm64.cmp x1, x0
-    arm64.cset x2, ne
-    arm64.cmp x2, #0
-    arm64.b.ne main.otherwise_stmt_0
-    arm64.b main.otherwise_continue_0
-  otherwise_stmt_0:
-    arm64.ldr x0, [x29, #-56]
-    arm64.cmp x0, #0
-    arm64.b.eq main.__skip_guarded_76
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_76
-    arm64.ldr x1, [x29, #-32]
-    arm64.cmp x1, #0
-    arm64.b.eq main.__skip_guarded_78
-    arm64.ldr x0, [x29, #-32]
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_78
+    arm64.str x0, [x20, #0] (8b)
     arm64.mov x2, #0
-    arm64.str x2, [x29, #-32]
-    arm64.ldr x3, [x29, #-24]
-    arm64.cmp x3, #0
-    arm64.b.eq main.__skip_guarded_82
-    arm64.ldr x0, [x29, #-24]
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_82
-    arm64.mov x4, #0
-    arm64.str x4, [x29, #-24]
-    arm64.ldr x5, [x29, #-16]
-    arm64.cmp x5, #0
-    arm64.b.eq main.__skip_guarded_86
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_86
-    arm64.ldr x6, [x29, #-8]
-    arm64.cmp x6, #0
-    arm64.b.eq main.__skip_guarded_88
-    arm64.ldr x0, [x29, #-8]
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_88
-    arm64.ldr x7, [x29, #-48]
-    arm64.cmp x7, #0
-    arm64.b.eq main.__skip_guarded_90
-    arm64.ldr x0, [x29, #-48]
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_90
-    arm64.mov x0, #9
-    arm64.epilogue stack_size=176
-    arm64.ret
-  otherwise_continue_0:
-    arm64.ldr x0, [x29, #-56]
-    arm64.str x0, [x29, #-64]
-    arm64.ldr x1, [x29, #-64]
-    arm64.ldr x0, [x29, #-64]
-    arm64.bl mm_incref
-    arm64.ldr x2, [x29, #-64]
-    arm64.ldr x0, [x29, #-64]
-    arm64.bl NotEqSeq.countItems
-    arm64.mov x3, #0
-    arm64.cmp x0, x3
-    arm64.cset x4, lt
-    arm64.mov x5, #255
-    arm64.cmp x0, x5
-    arm64.cset x6, gt
-    arm64.orr x7, x4, x6
-    arm64.cmp x7, #0
-    arm64.b.ne main.__range_panic_0
-    arm64.b main.__range_ok_0
-  __range_panic_0:
-    arm64.adrp_add_symdata x0, __panic_msg_1
-    arm64.mov x1, x0
+    arm64.mov x1, #8
+    arm64.mov x0, #2
+    arm64.bl stdlib.__managed_mem_create_managed
+    arm64.mov x21, x0
+    arm64.mov x22, #0
+    arm64.mov x0, x21
+    arm64.mov x1, x22
+    arm64.mov x2, x19
+    arm64.bl stdlib.__managed_mem_set
     arm64.mov x0, x1
+    arm64.mov x1, #1
+    arm64.mov x0, x21
+    arm64.mov x2, x20
+    arm64.bl stdlib.__managed_mem_set
+    arm64.mov x0, x1
+    arm64.mov x1, #2
+    arm64.mov x0, x21
+    arm64.bl stdlib.__managed_mem_set_length
+    arm64.mov x0, x1
+    arm64.adrp+add x0, stdlib.__mm_decref
+    arm64.str x0, [x21, #40] (8b)
+    arm64.adrp_add_rdata x0, __layout_Array_NotEq
+    arm64.ldr x1, [x29, #16]
+    arm64.mov x0, x21
+    arm64.bl Array.init
+    arm64.bl NotEqSeq.create
+    arm64.mov x19, x0
+    arm64.mov x0, x1
+    arm64.cmp x0, x22
+    arm64.cset x0, ne
+    arm64.b.eq try_0.merge
+  try_0.otherwise:
+    arm64.mov x0, #9
+    arm64.epilogue
+    arm64.ret
+  try_0.merge:
+    arm64.mov x0, x19
+    arm64.bl NotEqSeq.countItems
+    arm64.mov x20, x0
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, #255
+    arm64.cmp x20, x0
+    arm64.cset x0, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_7323b7e74c17cbda
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
     arm64.bl mrt_panic
   __range_ok_0:
-    arm64.ldr x1, [x29, #-56]
-    arm64.str x0, [x29, #-72]
-    arm64.cmp x1, #0
-    arm64.b.eq main.__skip_guarded_108
-    arm64.ldr x0, [x29, #-56]
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_108
-    arm64.ldr x0, [x29, #-32]
-    arm64.cmp x0, #0
-    arm64.b.eq main.__skip_guarded_110
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_110
+    arm64.mov x0, x20
+    arm64.epilogue
+    arm64.ret
+  }
+  func @NotEqSeq.countItems(x0: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x19, x0
+    arm64.mov x0, #0
+    arm64.mov x20, x0
+    arm64.b loop_0
+  inlined_NotEqSeq.advance_0_0:
+    arm64.ldr x1, [x19, #0] (8b)
+    arm64.ldr x20, [x19, #8] (8b)
+    arm64.adrp_add_rdata x0, __layout_Array_NotEq
+    arm64.ldr x2, [x29, #16]
+    arm64.mov x0, x1
+    arm64.mov x1, x2
+    arm64.bl Array.count
+    arm64.mov x1, #1
+    arm64.add x2, x20, x1
+    arm64.cmp x2, x0
+    arm64.cset x0, ge
+    arm64.b.lt inlined_NotEqSeq.advance_2_0
+  inlined_NotEqSeq.advance_1_0:
+    arm64.mov x1, #1
+    arm64.mov x0, #0
+    arm64.b inline_cont_NotEqSeq.countItems_0
+  inlined_NotEqSeq.advance_2_0:
+    arm64.ldr x0, [x19, #8] (8b)
+    arm64.mov x1, #1
+    arm64.add x2, x0, x1
+    arm64.str x2, [x19, #8] (8b)
     arm64.mov x1, #0
-    arm64.str x1, [x29, #-32]
-    arm64.ldr x2, [x29, #-24]
-    arm64.cmp x2, #0
-    arm64.b.eq main.__skip_guarded_114
-    arm64.ldr x0, [x29, #-24]
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_114
-    arm64.mov x3, #0
-    arm64.str x3, [x29, #-24]
-    arm64.ldr x4, [x29, #-16]
-    arm64.cmp x4, #0
-    arm64.b.eq main.__skip_guarded_118
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_118
-    arm64.ldr x5, [x29, #-8]
-    arm64.cmp x5, #0
-    arm64.b.eq main.__skip_guarded_120
-    arm64.ldr x0, [x29, #-8]
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_120
-    arm64.ldr x6, [x29, #-64]
-    arm64.cmp x6, #0
-    arm64.b.eq main.__skip_guarded_122
-    arm64.ldr x0, [x29, #-64]
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_122
-    arm64.ldr x7, [x29, #-48]
-    arm64.cmp x7, #0
-    arm64.b.eq main.__skip_guarded_124
-    arm64.ldr x0, [x29, #-48]
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_124
-    arm64.ldr x0, [x29, #-72]
-    arm64.epilogue stack_size=176
+    arm64.mov x0, #0
+  inline_cont_NotEqSeq.countItems_0:
+    arm64.mov x0, #0
+    arm64.cmp x1, x0
+    arm64.cset x0, ne
+    arm64.b.eq __phi_trampoline_8_0
+    arm64.mov x0, x21
+    arm64.b loop_0.exit
+  loop_0:
+    arm64.mov x0, x19
+    arm64.bl NotEqSeq.current
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, #1
+    arm64.add x21, x20, x0
+    arm64.b inlined_NotEqSeq.advance_0_0
+  loop_0.exit:
+    arm64.epilogue
     arm64.ret
-  }
-  func @__destruct_NotEq(ptr: i64) {
-  entry:
-    arm64.b __destruct_NotEq.done
-  done:
-    arm64.ret
-  }
-  func @__destruct_NotEqSeq(ptr: i64) {
-  entry:
-    arm64.prologue stack_size=48
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x0, #0]
-    arm64.str x1, [x29, #-16]
-    arm64.cmp x1, #0
-    arm64.b.eq __destruct_NotEqSeq.__skip_guarded_4
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl mm_decref
-    arm64.label __destruct_NotEqSeq.__skip_guarded_4
-    arm64.b __destruct_NotEqSeq.done
-  done:
-    arm64.epilogue stack_size=48
-    arm64.ret
-  }
-  func @__destruct___ManagedMemory_NotEq(ptr: i64) {
-  entry:
-    arm64.prologue stack_size=48
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x0, #16]
-    arm64.mov x2, #-1
-    arm64.cmp x1, x2
-    arm64.cset x3, eq
-    arm64.cmp x3, #0
-    arm64.b.ne __destruct___ManagedMemory_NotEq.slice_cleanup_0
-    arm64.b __destruct___ManagedMemory_NotEq.check_owned_0
-  slice_cleanup_0:
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x0, #32]
-    arm64.str x1, [x29, #-16]
-    arm64.cmp x1, #0
-    arm64.b.eq __destruct___ManagedMemory_NotEq.__skip_guarded_9
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl mm_decref
-    arm64.label __destruct___ManagedMemory_NotEq.__skip_guarded_9
-    arm64.b __destruct___ManagedMemory_NotEq.skip_buf_0
-  check_owned_0:
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x0, #16]
-    arm64.mov x2, #-2
-    arm64.cmp x1, x2
-    arm64.cset x3, ne
-    arm64.cmp x3, #0
-    arm64.b.ne __destruct___ManagedMemory_NotEq.free_buf_0
-    arm64.b __destruct___ManagedMemory_NotEq.skip_buf_0
-  free_buf_0:
-    arm64.ldr x0, [x29, #-8]
-    arm64.bl mm_decref_managed_elements
-    arm64.ldr x1, [x29, #-8]
-    arm64.ldr x2, [x1, #0]
-    arm64.mov x0, x2
-    arm64.bl mm_raw_free
-    arm64.b __destruct___ManagedMemory_NotEq.skip_buf_0
-  skip_buf_0:
-    arm64.b __destruct___ManagedMemory_NotEq.done
-  done:
-    arm64.epilogue stack_size=48
-    arm64.ret
-  }
-  func @__destruct___Array_NotEq(ptr: i64) {
-  entry:
-    arm64.prologue stack_size=48
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x0, #0]
-    arm64.str x1, [x29, #-16]
-    arm64.cmp x1, #0
-    arm64.b.eq __destruct___Array_NotEq.__skip_guarded_4
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl mm_decref
-    arm64.label __destruct___Array_NotEq.__skip_guarded_4
-    arm64.b __destruct___Array_NotEq.done
-  done:
-    arm64.epilogue stack_size=48
-    arm64.ret
+  __phi_trampoline_8_0:
+    arm64.mov x20, x21
+    arm64.b loop_0
   }
 }
 ---

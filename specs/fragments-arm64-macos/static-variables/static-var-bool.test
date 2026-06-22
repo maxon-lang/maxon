@@ -20,36 +20,35 @@ ExitCode: 42
 ---
 // CompiledIR
 module {
-  func @init() {
-  entry:
-    arm64.mov x0, #1
-    arm64.global_store [initialized], x0
-    arm64.ret
-  }
   func @main() -> u8 {
   entry:
     arm64.prologue stack_size=16
-    arm64.global_load x0, [initialized]
-    arm64.cmp x0, #0
-    arm64.b.ne main.check1_0
-    arm64.b main.check1_0.after
+    arm64.adrp_add_rdata x0, __data_initialized
+    arm64.ldr x0, [x29, #16]
+    arm64.ldr x1, [x0, #0] (8b)
+    arm64.cmp x1, #0
+    arm64.b.eq check1_0.after
   check1_0:
     arm64.mov x0, #1
-    arm64.epilogue stack_size=16
+    arm64.epilogue
     arm64.ret
   check1_0.after:
-    arm64.bl init
-    arm64.global_load x0, [initialized]
-    arm64.cmp x0, #0
-    arm64.b.ne main.check2_0
-    arm64.b main.check2_0.after
+    arm64.adrp_add_rdata x0, __data_initialized
+    arm64.ldr x0, [x29, #16]
+    arm64.mov x1, #1
+    arm64.str x1, [x0, #0] (8b)
+    arm64.adrp_add_rdata x0, __data_initialized
+    arm64.ldr x0, [x29, #16]
+    arm64.ldr x1, [x0, #0] (8b)
+    arm64.cmp x1, #0
+    arm64.b.eq check2_0.after
   check2_0:
     arm64.mov x0, #42
-    arm64.epilogue stack_size=16
+    arm64.epilogue
     arm64.ret
   check2_0.after:
     arm64.mov x0, #0
-    arm64.epilogue stack_size=16
+    arm64.epilogue
     arm64.ret
   }
 }

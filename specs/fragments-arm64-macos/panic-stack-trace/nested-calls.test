@@ -31,88 +31,74 @@ Stack trace:
 ---
 // CompiledIR
 module {
-  func @validate(n: i64) -> u8 {
+  func @validate(x0: i64) -> u8 {
   entry:
     arm64.prologue stack_size=16
-    arm64.mov x1, #0
-    arm64.cmp x0, x1
-    arm64.cset x2, lt
     arm64.mov x1, #100
     arm64.cmp x0, x1
-    arm64.cset x3, gt
-    arm64.orr x1, x2, x3
-    arm64.cmp x1, #0
-    arm64.b.ne validate.__range_panic_0
-    arm64.b validate.__range_ok_0
+    arm64.cset x1, gt
+    arm64.b.le __cast_check_lo_0
+    arm64.b __cast_panic_0
+  __cast_check_lo_0:
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x1, lt
+    arm64.b.ge __cast_ok_0
+  __cast_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_da88907bc4f0513c
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __cast_ok_0:
+    arm64.mov x1, #100
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
   __range_panic_0:
-    arm64.adrp_add_symdata x0, __panic_msg_0
-    arm64.mov x1, x0
-    arm64.mov x0, x1
+    arm64.adrp_add_rdata x0, __panic_msg_da88907bc4f0513c
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
     arm64.bl mrt_panic
   __range_ok_0:
-    arm64.mov x1, #0
-    arm64.cmp x0, x1
-    arm64.cset x2, lt
-    arm64.mov x1, #100
-    arm64.cmp x0, x1
-    arm64.cset x3, gt
-    arm64.orr x1, x2, x3
-    arm64.cmp x1, #0
-    arm64.b.ne validate.__range_panic_1
-    arm64.b validate.__range_ok_1
-  __range_panic_1:
-    arm64.adrp_add_symdata x0, __panic_msg_0
-    arm64.mov x1, x0
-    arm64.mov x0, x1
-    arm64.bl mrt_panic
-  __range_ok_1:
-    arm64.epilogue stack_size=16
+    arm64.epilogue
     arm64.ret
   }
-  func @process(n: i64) -> u8 {
+  func @process(x0: i64) -> u8 {
   entry:
     arm64.prologue stack_size=16
+    arm64.mov x1, x0
+    arm64.mov x0, x1
     arm64.bl validate
-    arm64.mov x1, #0
-    arm64.cmp x0, x1
-    arm64.cset x2, lt
     arm64.mov x1, #100
     arm64.cmp x0, x1
-    arm64.cset x3, gt
-    arm64.orr x1, x2, x3
-    arm64.cmp x1, #0
-    arm64.b.ne process.__range_panic_0
-    arm64.b process.__range_ok_0
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
   __range_panic_0:
-    arm64.adrp_add_symdata x0, __panic_msg_1
-    arm64.mov x1, x0
-    arm64.mov x0, x1
+    arm64.adrp_add_rdata x0, __panic_msg_7a25710bef444732
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
     arm64.bl mrt_panic
   __range_ok_0:
-    arm64.epilogue stack_size=16
+    arm64.epilogue
     arm64.ret
   }
-  func @caller(n: i64) -> u8 {
+  func @caller(x0: i64) -> u8 {
   entry:
     arm64.prologue stack_size=16
-    arm64.bl process
-    arm64.mov x1, #0
-    arm64.cmp x0, x1
-    arm64.cset x2, lt
-    arm64.mov x1, #100
-    arm64.cmp x0, x1
-    arm64.cset x3, gt
-    arm64.orr x1, x2, x3
-    arm64.cmp x1, #0
-    arm64.b.ne caller.__range_panic_0
-    arm64.b caller.__range_ok_0
-  __range_panic_0:
-    arm64.adrp_add_symdata x0, __panic_msg_2
     arm64.mov x1, x0
     arm64.mov x0, x1
+    arm64.bl process
+    arm64.mov x1, #100
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_6a7dbe7872a50ace
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
     arm64.bl mrt_panic
   __range_ok_0:
-    arm64.epilogue stack_size=16
+    arm64.epilogue
     arm64.ret
   }
   func @main() -> u8 {
@@ -120,23 +106,17 @@ module {
     arm64.prologue stack_size=16
     arm64.mov x0, #999
     arm64.bl caller
-    arm64.mov x1, #0
-    arm64.cmp x0, x1
-    arm64.cset x2, lt
     arm64.mov x1, #255
     arm64.cmp x0, x1
-    arm64.cset x3, gt
-    arm64.orr x1, x2, x3
-    arm64.cmp x1, #0
-    arm64.b.ne main.__range_panic_0
-    arm64.b main.__range_ok_0
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
   __range_panic_0:
-    arm64.adrp_add_symdata x0, __panic_msg_3
-    arm64.mov x1, x0
-    arm64.mov x0, x1
+    arm64.adrp_add_rdata x0, __panic_msg_b8514b11bed3c3bb
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
     arm64.bl mrt_panic
   __range_ok_0:
-    arm64.epilogue stack_size=16
+    arm64.epilogue
     arm64.ret
   }
 }

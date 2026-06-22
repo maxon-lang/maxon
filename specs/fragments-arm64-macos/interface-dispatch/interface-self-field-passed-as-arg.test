@@ -1,0 +1,132 @@
+// Test: interface-self-field-passed-as-arg
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Tagged
+	function tag() returns Integer
+end 'Tagged'
+
+type Marker implements Tagged
+	let n as Integer
+
+	function tag() returns Integer
+		return n
+	end 'tag'
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Marker'
+
+function callTag(t Tagged) returns Integer
+	return t.tag()
+end 'callTag'
+
+// Holder reads its OWN interface-typed field via a bare `tagged` reference
+// inside a method (a selfFieldLoad) and passes it to a function expecting the
+// interface. selfFieldLoad must pair the field's witness half (offset+8) the
+// same way an explicit `h.field` load does — else passing it as an interface
+// arg panics in `witnessForInterfaceArg` with "no witness paired".
+type Holder
+	let tagged as Tagged
+
+	function dispatch() returns Integer
+		return callTag(tagged)
+	end 'dispatch'
+
+	static function create(tagged Tagged) returns Self
+		return Self{tagged: tagged}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create(Marker.create(9))
+	return h.dispatch()
+end 'main'
+---
+ExitCode: 9
+---
+// CompiledIR
+module {
+  func @Marker.tag(x0: i64) -> i64 {
+  entry:
+    arm64.mov x1, x0
+    arm64.ldr x2, [x1, #0] (8b)
+    arm64.mov x0, x2
+    arm64.ret
+  }
+  func @callTag(x0: i64, x1: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x2, x0
+    arm64.str x2, [x29, #16]
+    arm64.str x1, [x29, #24]
+    arm64.ldr x1, [x29, #24]
+    arm64.ldr x2, [x29, #16]
+    arm64.mov x0, x2
+    arm64.ldr x16, [x1, #24] (8b)
+    arm64.blr x16
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.epilogue
+    arm64.ret
+  }
+  func @Holder.create(x0: i64, x1: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.mov x2, x0
+    arm64.str x2, [x29, #16]
+    arm64.str x1, [x29, #24]
+    arm64.mov x1, #0
+    arm64.mov x2, #16
+    arm64.mov x0, x2
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
+    arm64.mov x0, x19
+    arm64.bl stdlib.__mm_incref
+    arm64.ldr x1, [x29, #24]
+    arm64.ldr x2, [x29, #16]
+    arm64.str x2, [x19, #0] (8b)
+    arm64.str x1, [x19, #8] (8b)
+    arm64.mov x0, x19
+    arm64.epilogue
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.mov x1, #0
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
+    arm64.mov x0, #9
+    arm64.str x0, [x19, #0] (8b)
+    arm64.adrp_add_rdata x0, __witness_Marker_Tagged
+    arm64.ldr x1, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl Holder.create
+    arm64.mov x20, x0
+    arm64.mov x0, x19
+    arm64.bl mm_drop
+    arm64.ldr x1, [x20, #8] (8b)
+    arm64.ldr x0, [x20, #0] (8b)
+    arm64.bl callTag
+    arm64.mov x19, x0
+    arm64.mov x0, x20
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, #255
+    arm64.cmp x19, x0
+    arm64.cset x0, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_875eeda17181a65d
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x0, x19
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

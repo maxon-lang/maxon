@@ -45,214 +45,132 @@ ExitCode: 12
 ---
 // CompiledIR
 module {
-  func @Pair.pickSmaller(__self_ptr: i64) -> u16 {
+  func @Pair.lo(x0: i64) -> u16 {
   entry:
-    arm64.prologue stack_size=80
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.bl Pair.lo
-    arm64.ldr x1, [x29, #-8]
-    arm64.str x0, [x29, #-24]
-    arm64.ldr x0, [x29, #-8]
-    arm64.bl Pair.lo
-    arm64.ldr x2, [x29, #-8]
-    arm64.str x0, [x29, #-32]
-    arm64.ldr x0, [x29, #-8]
-    arm64.bl Pair.hi
-    arm64.ldr x3, [x29, #-32]
-    arm64.cmp x3, x0
-    arm64.cset x4, lt
-    arm64.ldr x5, [x29, #-8]
-    arm64.str x4, [x29, #-40]
-    arm64.ldr x0, [x29, #-8]
-    arm64.bl Pair.hi
-    arm64.ldr x6, [x29, #-40]
-    arm64.cmp x6, #0
-    arm64.str x0, [x29, #-48]
-    arm64.b.ne Pair.pickSmaller.ternary_0.true
-    arm64.b Pair.pickSmaller.ternary_0.false
-  ternary_0.true:
-    arm64.ldr x0, [x29, #-24]
-    arm64.str x0, [x29, #-16]
-    arm64.b Pair.pickSmaller.ternary_0.merge
-  ternary_0.false:
-    arm64.ldr x0, [x29, #-48]
-    arm64.str x0, [x29, #-16]
-    arm64.b Pair.pickSmaller.ternary_0.merge
-  ternary_0.merge:
-    arm64.ldr x0, [x29, #-16]
-    arm64.mov x1, #0
+    arm64.prologue stack_size=16
+    arm64.mov x1, x0
+    arm64.ldrh x0, [x1, #0] (2b)
+    arm64.mov x1, #1000
     arm64.cmp x0, x1
-    arm64.cset x2, lt
-    arm64.mov x3, #1000
-    arm64.cmp x0, x3
-    arm64.cset x4, gt
-    arm64.orr x5, x2, x4
-    arm64.cmp x5, #0
-    arm64.b.ne Pair.pickSmaller.__range_panic_0
-    arm64.b Pair.pickSmaller.__range_ok_0
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
   __range_panic_0:
-    arm64.adrp_add_symdata x0, __panic_msg_9
-    arm64.mov x1, x0
-    arm64.mov x0, x1
+    arm64.adrp_add_rdata x0, __panic_msg_706bf2dc3fa70e46
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
     arm64.bl mrt_panic
   __range_ok_0:
-    arm64.epilogue stack_size=80
+    arm64.epilogue
     arm64.ret
   }
-  func @Pair.describe(__self_ptr: i64) -> u16 {
+  func @Pair.hi(x0: i64) -> u16 {
   entry:
-    arm64.prologue stack_size=48
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.bl Pair.hi
-    arm64.ldr x1, [x29, #-8]
-    arm64.str x0, [x29, #-16]
-    arm64.ldr x0, [x29, #-8]
-    arm64.bl Pair.lo
-    arm64.ldr x2, [x29, #-16]
-    arm64.sub x3, x2, x0
-    arm64.mov x4, #0
-    arm64.cmp x3, x4
-    arm64.cset x5, lt
-    arm64.mov x6, #1000
-    arm64.cmp x3, x6
-    arm64.cset x7, gt
-    arm64.orr x8, x5, x7
-    arm64.cmp x8, #0
-    arm64.b.ne Pair.describe.__range_panic_0
-    arm64.b Pair.describe.__range_ok_0
-  __range_panic_0:
-    arm64.adrp_add_symdata x0, __panic_msg_10
+    arm64.prologue stack_size=16
     arm64.mov x1, x0
-    arm64.mov x0, x1
+    arm64.ldrh x0, [x1, #2] (2b)
+    arm64.mov x1, #1000
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_4e2988832c41fcd2
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
     arm64.bl mrt_panic
   __range_ok_0:
-    arm64.mov x0, x3
-    arm64.epilogue stack_size=48
-    arm64.ret
-  }
-  func @Pair.lo(__self_ptr: i64) -> u16 {
-  entry:
-    arm64.prologue stack_size=48
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x0, #0]
-    arm64.mov x2, #0
-    arm64.cmp x1, x2
-    arm64.cset x3, lt
-    arm64.mov x4, #1000
-    arm64.cmp x1, x4
-    arm64.cset x5, gt
-    arm64.orr x6, x3, x5
-    arm64.cmp x6, #0
-    arm64.b.ne Pair.lo.__range_panic_0
-    arm64.b Pair.lo.__range_ok_0
-  __range_panic_0:
-    arm64.adrp_add_symdata x0, __panic_msg_11
-    arm64.mov x1, x0
-    arm64.mov x0, x1
-    arm64.bl mrt_panic
-  __range_ok_0:
-    arm64.mov x0, x1
-    arm64.epilogue stack_size=48
-    arm64.ret
-  }
-  func @Pair.hi(__self_ptr: i64) -> u16 {
-  entry:
-    arm64.prologue stack_size=48
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x0, #8]
-    arm64.mov x2, #0
-    arm64.cmp x1, x2
-    arm64.cset x3, lt
-    arm64.mov x4, #1000
-    arm64.cmp x1, x4
-    arm64.cset x5, gt
-    arm64.orr x6, x3, x5
-    arm64.cmp x6, #0
-    arm64.b.ne Pair.hi.__range_panic_0
-    arm64.b Pair.hi.__range_ok_0
-  __range_panic_0:
-    arm64.adrp_add_symdata x0, __panic_msg_12
-    arm64.mov x1, x0
-    arm64.mov x0, x1
-    arm64.bl mrt_panic
-  __range_ok_0:
-    arm64.mov x0, x1
-    arm64.epilogue stack_size=48
-    arm64.ret
-  }
-  func @Pair.create(l: i64, h: i64) -> i64 {
-  entry:
-    arm64.prologue stack_size=64
-    arm64.str x0, [x29, #-16]
-    arm64.str x1, [x29, #-24]
-    arm64.mov x0, #16
-    arm64.mov x1, #0
-    arm64.mov x2, #3
-    arm64.bl mm_alloc
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x29, #-16]
-    arm64.str x1, [x0, #0]
-    arm64.ldr x2, [x29, #-8]
-    arm64.ldr x3, [x29, #-24]
-    arm64.str x3, [x2, #8]
-    arm64.ldr x4, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.bl mm_incref
-    arm64.ldr x5, [x29, #-8]
-    arm64.mov x0, x5
-    arm64.epilogue stack_size=64
+    arm64.epilogue
     arm64.ret
   }
   func @main() -> u8 {
   entry:
-    arm64.prologue stack_size=64
+    arm64.prologue stack_size=48
+    arm64.mov x1, #0
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
     arm64.mov x0, #7
-    arm64.mov x1, #12
-    arm64.bl Pair.create
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
+    arm64.str x0, [x19, #0] (2b)
+    arm64.mov x0, #12
+    arm64.str x0, [x19, #2] (2b)
+    arm64.mov x0, x19
     arm64.bl Pair.pickSmaller
-    arm64.ldr x1, [x29, #-8]
-    arm64.str x0, [x29, #-16]
-    arm64.ldr x0, [x29, #-8]
+    arm64.mov x20, x0
+    arm64.mov x0, x19
     arm64.bl Pair.describe
-    arm64.ldr x2, [x29, #-16]
-    arm64.add x3, x2, x0
-    arm64.mov x4, #0
-    arm64.cmp x3, x4
-    arm64.cset x5, lt
-    arm64.mov x6, #255
-    arm64.cmp x3, x6
-    arm64.cset x7, gt
-    arm64.orr x8, x5, x7
-    arm64.cmp x8, #0
-    arm64.b.ne main.__range_panic_0
-    arm64.b main.__range_ok_0
+    arm64.mov x21, x0
+    arm64.mov x0, x19
+    arm64.bl mm_drop
+    arm64.mov x1, #255
+    arm64.add x0, x20, x21
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
   __range_panic_0:
-    arm64.adrp_add_symdata x0, __panic_msg_13
-    arm64.mov x1, x0
-    arm64.mov x0, x1
+    arm64.adrp_add_rdata x0, __panic_msg_7e4c3ab4a100998f
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
     arm64.bl mrt_panic
   __range_ok_0:
-    arm64.ldr x0, [x29, #-8]
-    arm64.str x3, [x29, #-24]
-    arm64.cmp x0, #0
-    arm64.b.eq main.__skip_guarded_19
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_19
-    arm64.ldr x0, [x29, #-24]
-    arm64.epilogue stack_size=64
+    arm64.epilogue
     arm64.ret
   }
-  func @__destruct_Pair(ptr: i64) {
+  func @Pair.pickSmaller(x0: i64) -> u16 {
   entry:
-    arm64.b __destruct_Pair.done
-  done:
+    arm64.prologue stack_size=48
+    arm64.mov x19, x0
+    arm64.mov x0, x19
+    arm64.bl Pair.lo
+    arm64.mov x20, x0
+    arm64.mov x0, x19
+    arm64.bl Pair.lo
+    arm64.mov x21, x0
+    arm64.mov x0, x19
+    arm64.bl Pair.hi
+    arm64.mov x22, x0
+    arm64.mov x0, x19
+    arm64.bl Pair.hi
+    arm64.cmp x21, x22
+    arm64.cset x1, lt
+    arm64.b.ge ternary.else
+    arm64.mov x0, x20
+    arm64.b ternary.merge
+  ternary.else:
+  ternary.merge:
+    arm64.mov x1, #1000
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_3ab39185d318a2dc
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+  func @Pair.describe(x0: i64) -> u16 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.mov x19, x0
+    arm64.mov x0, x19
+    arm64.bl Pair.hi
+    arm64.mov x20, x0
+    arm64.mov x0, x19
+    arm64.bl Pair.lo
+    arm64.mov x1, x0
+    arm64.mov x2, #1000
+    arm64.sub x0, x20, x1
+    arm64.cmp x0, x2
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_a90b3b22d2b56fc8
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
     arm64.ret
   }
 }

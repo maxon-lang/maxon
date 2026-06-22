@@ -71,612 +71,234 @@ ExitCode: 1
 ---
 // CompiledIR
 module {
-  func @HashBucket.lookup(__self_ptr: i64, target: i64) -> i1 {
+  func @HashBucket.current(x0: i64) -> i64 {
   entry:
-    arm64.prologue stack_size=80
-    arm64.str x1, [x29, #-8]
-    arm64.str x0, [x29, #-16]
-    arm64.b HashBucket.lookup.loop_0.preamble
-  loop_0.preamble:
-    arm64.b HashBucket.lookup.loop_0
-  loop_0.header:
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl HashBucket.advance
-    arm64.mov x0, #0
-    arm64.cmp x1, x0
-    arm64.cset x2, eq
-    arm64.cmp x2, #0
-    arm64.b.ne HashBucket.lookup.loop_0
-    arm64.b HashBucket.lookup.loop_0.exit
-  loop_0:
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl HashBucket.current
-    arm64.str x0, [x29, #-24]
-    arm64.str x0, [x29, #-32]
-    arm64.ldr x1, [x29, #-32]
-    arm64.ldr x2, [x29, #-8]
-    arm64.ldr x0, [x29, #-32]
-    arm64.ldr x1, [x29, #-8]
-    arm64.bl HashItem.equals
-    arm64.cmp x0, #0
-    arm64.b.ne HashBucket.lookup.found_0
-    arm64.b HashBucket.lookup.found_0.after
-  found_0:
-    arm64.ldr x0, [x29, #-24]
-    arm64.cmp x0, #0
-    arm64.b.eq HashBucket.lookup.__skip_guarded_21
-    arm64.bl mm_decref
-    arm64.label HashBucket.lookup.__skip_guarded_21
-    arm64.mov x0, #1
-    arm64.epilogue stack_size=80
-    arm64.ret
-  found_0.after:
-    arm64.ldr x0, [x29, #-24]
-    arm64.cmp x0, #0
-    arm64.b.eq HashBucket.lookup.__skip_guarded_24
-    arm64.bl mm_decref
-    arm64.label HashBucket.lookup.__skip_guarded_24
-    arm64.b HashBucket.lookup.loop_0.header
-  loop_0.exit:
-    arm64.mov x0, #0
-    arm64.epilogue stack_size=80
-    arm64.ret
-  }
-  func @HashItem.equals(__self_ptr: i64, other: i64) -> i1 {
-  entry:
-    arm64.prologue stack_size=48
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x2, [x0, #0]
-    arm64.str x1, [x29, #-16]
-    arm64.ldr x1, [x29, #-16]
-    arm64.ldr x0, [x1, #0]
-    arm64.cmp x2, x0
-    arm64.cset x1, eq
+    arm64.prologue stack_size=32
+    arm64.ldr x1, [x0, #8] (8b)
+    arm64.ldr x2, [x0, #0] (8b)
+  inlined_Array.get_0_0:
+    arm64.ldr x0, [x2, #0] (8b)
+    arm64.bl stdlib.__managed_mem_get
+    arm64.mov x19, x0
     arm64.mov x0, x1
-    arm64.epilogue stack_size=48
-    arm64.ret
-  }
-  func @HashItem.create(v: i64) -> i64 {
-  entry:
-    arm64.prologue stack_size=48
-    arm64.str x0, [x29, #-16]
-    arm64.mov x0, #8
-    arm64.mov x1, #0
-    arm64.mov x2, #1
-    arm64.bl mm_alloc
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x29, #-16]
-    arm64.str x1, [x0, #0]
-    arm64.ldr x2, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.bl mm_incref
-    arm64.ldr x3, [x29, #-8]
-    arm64.mov x0, x3
-    arm64.epilogue stack_size=48
-    arm64.ret
-  }
-  func @HashBucket.current(__self_ptr: i64) -> i64 {
-  entry:
-    arm64.prologue stack_size=80
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x0, #8]
-    arm64.ldr x2, [x29, #-8]
-    arm64.ldr x3, [x2, #0]
-    arm64.str x3, [x29, #-16]
-    arm64.ldr x4, [x29, #-16]
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl HashItemArray.get
-    arm64.str x0, [x29, #-24]
-    arm64.mov x5, #0
-    arm64.cmp x1, x5
-    arm64.cset x6, ne
-    arm64.cmp x6, #0
-    arm64.b.ne HashBucket.current.otherwise_panic_0
-    arm64.b HashBucket.current.otherwise_continue_0
-  otherwise_panic_0:
-    arm64.adrp_add_symdata x0, __panic_msg_1
-    arm64.mov x1, x0
-    arm64.mov x0, x1
-    arm64.bl mrt_panic
-  otherwise_continue_0:
-    arm64.ldr x0, [x29, #-24]
-    arm64.epilogue stack_size=80
-    arm64.ret
-  }
-  func @HashBucket.advance(__self_ptr: i64) {
-  entry:
-    arm64.prologue stack_size=64
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x0, #8]
-    arm64.mov x2, #1
-    arm64.add x3, x1, x2
-    arm64.ldr x4, [x29, #-8]
-    arm64.ldr x5, [x4, #0]
-    arm64.str x5, [x29, #-16]
-    arm64.ldr x6, [x29, #-16]
-    arm64.str x3, [x29, #-24]
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl HashItemArray.count
-    arm64.ldr x7, [x29, #-24]
-    arm64.cmp x7, x0
-    arm64.cset x8, ge
-    arm64.cmp x8, #0
-    arm64.b.ne HashBucket.advance.done_0
-    arm64.b HashBucket.advance.done_0.after
-  done_0:
-    arm64.mov x0, #0
-    arm64.mov x1, #1
-    arm64.add x2, x0, x1
-    arm64.mov x1, x2
-    arm64.mov x0, #0
-    arm64.epilogue stack_size=64
-    arm64.ret
-  done_0.after:
-    arm64.mov x0, #1
-    arm64.ldr x1, [x29, #-8]
-    arm64.ldr x2, [x1, #8]
-    arm64.add x3, x2, x0
-    arm64.ldr x4, [x29, #-8]
-    arm64.str x3, [x4, #8]
-    arm64.mov x1, #0
-    arm64.epilogue stack_size=64
-    arm64.ret
-  }
-  func @HashBucket.create(items: i64) -> i64 {
-  entry:
-    arm64.prologue stack_size=48
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.bl HashItemArray.count
     arm64.mov x1, #0
     arm64.cmp x0, x1
-    arm64.cset x2, eq
-    arm64.cmp x2, #0
-    arm64.b.ne HashBucket.create.empty_0
-    arm64.b HashBucket.create.empty_0.after
-  empty_0:
-    arm64.mov x0, #0
+    arm64.cset x0, ne
+    arm64.b.eq inlined_Array.get_3_0
+  inlined_Array.get_1_0:
     arm64.mov x1, #1
-    arm64.add x2, x0, x1
-    arm64.mov x1, x2
     arm64.mov x0, #0
-    arm64.epilogue stack_size=48
+    arm64.b inline_cont_HashBucket.current_0
+  inlined_Array.get_3_0:
+    arm64.mov x20, #0
+    arm64.b __rc_edge_6_0
+  inline_cont_HashBucket.current_0:
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x1, ne
+    arm64.b.eq try_0.merge
+  try_0.otherwise:
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.adrp_add_rdata x0, __panic_msg_852c9eae288f4b42
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+    arm64.mov x0, #0
+    arm64.epilogue
+    arm64.ret
+  try_0.merge:
+    arm64.epilogue
+    arm64.ret
+  __rc_edge_6_0:
+    arm64.mov x0, x19
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, x19
+    arm64.mov x1, x20
+    arm64.b inline_cont_HashBucket.current_0
+  }
+  func @HashBucket.create(x0: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.mov x19, x0
+    arm64.adrp_add_rdata x0, __layout_Array_HashItem
+    arm64.ldr x1, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl Array.count
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x0, eq
+    arm64.b.ne empty_0.after
+  empty_0:
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x1, #1
+    arm64.mov x0, #0
+    arm64.epilogue
     arm64.ret
   empty_0.after:
-    arm64.mov x0, #0
-    arm64.adrp_add_func x1, __destruct_HashBucket
-    arm64.mov x2, x1
-    arm64.mov x1, x2
+    arm64.adrp+add x1, __destruct_HashBucket
     arm64.mov x0, #16
-    arm64.mov x2, #2
-    arm64.bl mm_alloc
-    arm64.str x0, [x29, #-16]
-    arm64.ldr x3, [x29, #-8]
-    arm64.ldr x4, [x29, #-16]
-    arm64.str x3, [x4, #0]
-    arm64.ldr x0, [x29, #-8]
-    arm64.bl mm_incref
-    arm64.ldr x5, [x29, #-16]
-    arm64.mov x6, #0
-    arm64.str x6, [x5, #8]
-    arm64.ldr x7, [x29, #-16]
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl mm_incref
-    arm64.ldr x8, [x29, #-16]
-    arm64.mov x0, x8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x20, x0
+    arm64.mov x0, x20
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, #0
+    arm64.str x0, [x20, #0] (8b)
+    arm64.str x19, [x20, #0] (8b)
+    arm64.mov x0, #0
+    arm64.str x0, [x20, #8] (8b)
     arm64.mov x1, #0
-    arm64.epilogue stack_size=48
+    arm64.mov x0, x20
+    arm64.epilogue
     arm64.ret
   }
   func @main() -> u8 {
   entry:
-    arm64.prologue stack_size=240
-    arm64.mov x0, #1
-    arm64.bl HashItem.create
-    arm64.str x0, [x29, #-8]
-    arm64.mov x0, #2
-    arm64.bl HashItem.create
-    arm64.str x0, [x29, #-16]
-    arm64.mov x0, #3
-    arm64.bl HashItem.create
-    arm64.str x0, [x29, #-24]
-    arm64.str x0, [x29, #-32]
-    arm64.ldr x0, [x29, #-32]
-    arm64.bl mm_incref
-    arm64.ldr x1, [x29, #-16]
-    arm64.str x1, [x29, #-40]
-    arm64.ldr x2, [x29, #-40]
-    arm64.ldr x0, [x29, #-40]
-    arm64.bl mm_incref
-    arm64.ldr x3, [x29, #-8]
-    arm64.str x3, [x29, #-48]
-    arm64.ldr x4, [x29, #-48]
-    arm64.ldr x0, [x29, #-48]
-    arm64.bl mm_incref
-    arm64.mov x5, #0
-    arm64.mov x6, #3
-    arm64.mov x7, #0
-    arm64.mov x8, #8
-    arm64.mov x9, #0
-    arm64.adrp_add_func x10, __destruct___ManagedMemory_HashItem
-    arm64.mov x11, x10
-    arm64.mov x1, x11
-    arm64.mov x0, #40
-    arm64.mov x2, #3
-    arm64.bl mm_alloc
-    arm64.str x0, [x29, #-56]
-    arm64.ldr x12, [x29, #-56]
-    arm64.mov x13, #0
-    arm64.str x13, [x12, #0]
-    arm64.ldr x14, [x29, #-56]
-    arm64.mov x15, #3
-    arm64.str x15, [x14, #8]
-    arm64.ldr x0, [x29, #-56]
+    arm64.prologue stack_size=64
     arm64.mov x1, #0
-    arm64.str x1, [x0, #16]
-    arm64.ldr x0, [x29, #-56]
-    arm64.mov x1, #8
-    arm64.str x1, [x0, #24]
-    arm64.ldr x0, [x29, #-56]
-    arm64.mov x1, #0
-    arm64.str x1, [x0, #32]
-    arm64.ldr x0, [x29, #-56]
-    arm64.ldr x1, [x0, #24]
-    arm64.adrp_add_symdata x0, __mm_panic_element_size_zero
-    arm64.mov x2, x0
-    arm64.mov x0, #0
-    arm64.bl maxon_bounds_check
-    arm64.adrp_add_func x0, __destruct___Array_HashItem
-    arm64.mov x1, x0
     arm64.mov x0, #8
-    arm64.mov x2, #4
-    arm64.bl mm_alloc
-    arm64.str x0, [x29, #-64]
-    arm64.ldr x1, [x29, #-56]
-    arm64.ldr x2, [x29, #-64]
-    arm64.str x1, [x2, #0]
-    arm64.ldr x0, [x29, #-56]
-    arm64.bl mm_incref
-    arm64.add x0, x29, #-48
-    arm64.mov x1, x0
-    arm64.ldr x0, [x29, #-64]
-    arm64.ldr x2, [x0, #0]
-    arm64.ldr x0, [x2, #24]
-    arm64.mov x2, #3
-    arm64.mul x3, x2, x0
-    arm64.str x1, [x29, #-96]
-    arm64.str x3, [x29, #-104]
-    arm64.ldr x0, [x29, #-104]
-    arm64.bl mm_raw_alloc
-    arm64.str x0, [x29, #-112]
-    arm64.ldr x1, [x29, #-96]
-    arm64.ldr x2, [x29, #-104]
-    arm64.bl maxon_memcpy
-    arm64.ldr x1, [x29, #-48]
-    arm64.str x0, [x29, #-120]
-    arm64.ldr x0, [x29, #-48]
-    arm64.bl mm_incref
-    arm64.ldr x0, [x29, #-40]
-    arm64.bl mm_incref
-    arm64.ldr x0, [x29, #-32]
-    arm64.bl mm_incref
-    arm64.ldr x0, [x29, #-64]
-    arm64.ldr x1, [x0, #0]
-    arm64.ldr x0, [x29, #-112]
-    arm64.str x0, [x1, #0]
-    arm64.mov x0, #3
-    arm64.str x0, [x1, #16]
-    arm64.ldr x0, [x29, #-64]
-    arm64.bl mm_incref
-    arm64.ldr x0, [x29, #-64]
-    arm64.bl HashBucket.create
-    arm64.str x0, [x29, #-72]
-    arm64.mov x0, #0
-    arm64.cmp x1, x0
-    arm64.cset x2, ne
-    arm64.cmp x2, #0
-    arm64.b.ne main.otherwise_stmt_0
-    arm64.b main.otherwise_continue_0
-  otherwise_stmt_0:
-    arm64.ldr x0, [x29, #-72]
-    arm64.cmp x0, #0
-    arm64.b.eq main.__skip_guarded_84
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_84
-    arm64.ldr x1, [x29, #-48]
-    arm64.cmp x1, #0
-    arm64.b.eq main.__skip_guarded_86
-    arm64.ldr x0, [x29, #-48]
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_86
-    arm64.mov x2, #0
-    arm64.str x2, [x29, #-48]
-    arm64.ldr x3, [x29, #-40]
-    arm64.cmp x3, #0
-    arm64.b.eq main.__skip_guarded_90
-    arm64.ldr x0, [x29, #-40]
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_90
-    arm64.mov x4, #0
-    arm64.str x4, [x29, #-40]
-    arm64.ldr x5, [x29, #-32]
-    arm64.cmp x5, #0
-    arm64.b.eq main.__skip_guarded_94
-    arm64.ldr x0, [x29, #-32]
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_94
-    arm64.mov x6, #0
-    arm64.str x6, [x29, #-32]
-    arm64.ldr x7, [x29, #-24]
-    arm64.cmp x7, #0
-    arm64.b.eq main.__skip_guarded_98
-    arm64.ldr x0, [x29, #-24]
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_98
-    arm64.ldr x8, [x29, #-16]
-    arm64.cmp x8, #0
-    arm64.b.eq main.__skip_guarded_100
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_100
-    arm64.ldr x9, [x29, #-8]
-    arm64.cmp x9, #0
-    arm64.b.eq main.__skip_guarded_102
-    arm64.ldr x0, [x29, #-8]
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_102
-    arm64.ldr x10, [x29, #-64]
-    arm64.cmp x10, #0
-    arm64.b.eq main.__skip_guarded_104
-    arm64.ldr x0, [x29, #-64]
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_104
-    arm64.mov x0, #2
-    arm64.epilogue stack_size=240
-    arm64.ret
-  otherwise_continue_0:
-    arm64.ldr x0, [x29, #-72]
-    arm64.str x0, [x29, #-80]
-    arm64.ldr x1, [x29, #-80]
-    arm64.ldr x0, [x29, #-80]
-    arm64.bl mm_incref
-    arm64.mov x0, #2
-    arm64.bl HashItem.create
-    arm64.str x0, [x29, #-88]
-    arm64.ldr x2, [x29, #-80]
-    arm64.ldr x3, [x29, #-88]
-    arm64.ldr x0, [x29, #-80]
-    arm64.ldr x1, [x29, #-88]
-    arm64.bl HashBucket.lookup
-    arm64.cmp x0, #0
-    arm64.b.ne main.found_0
-    arm64.b main.found_0.after
-  found_0:
-    arm64.ldr x0, [x29, #-88]
-    arm64.cmp x0, #0
-    arm64.b.eq main.__skip_guarded_119
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_119
-    arm64.ldr x1, [x29, #-72]
-    arm64.cmp x1, #0
-    arm64.b.eq main.__skip_guarded_121
-    arm64.ldr x0, [x29, #-72]
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_121
-    arm64.ldr x2, [x29, #-48]
-    arm64.cmp x2, #0
-    arm64.b.eq main.__skip_guarded_123
-    arm64.ldr x0, [x29, #-48]
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_123
-    arm64.mov x3, #0
-    arm64.str x3, [x29, #-48]
-    arm64.ldr x4, [x29, #-40]
-    arm64.cmp x4, #0
-    arm64.b.eq main.__skip_guarded_127
-    arm64.ldr x0, [x29, #-40]
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_127
-    arm64.mov x5, #0
-    arm64.str x5, [x29, #-40]
-    arm64.ldr x6, [x29, #-32]
-    arm64.cmp x6, #0
-    arm64.b.eq main.__skip_guarded_131
-    arm64.ldr x0, [x29, #-32]
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_131
-    arm64.mov x7, #0
-    arm64.str x7, [x29, #-32]
-    arm64.ldr x8, [x29, #-24]
-    arm64.cmp x8, #0
-    arm64.b.eq main.__skip_guarded_135
-    arm64.ldr x0, [x29, #-24]
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_135
-    arm64.ldr x9, [x29, #-16]
-    arm64.cmp x9, #0
-    arm64.b.eq main.__skip_guarded_137
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_137
-    arm64.ldr x10, [x29, #-8]
-    arm64.cmp x10, #0
-    arm64.b.eq main.__skip_guarded_139
-    arm64.ldr x0, [x29, #-8]
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_139
-    arm64.ldr x11, [x29, #-80]
-    arm64.cmp x11, #0
-    arm64.b.eq main.__skip_guarded_141
-    arm64.ldr x0, [x29, #-80]
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_141
-    arm64.ldr x12, [x29, #-64]
-    arm64.cmp x12, #0
-    arm64.b.eq main.__skip_guarded_143
-    arm64.ldr x0, [x29, #-64]
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_143
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
+    arm64.mov x0, x19
+    arm64.bl stdlib.__mm_incref
     arm64.mov x0, #1
-    arm64.epilogue stack_size=240
+    arm64.str x0, [x19, #0] (8b)
+    arm64.mov x1, #0
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x20, x0
+    arm64.mov x0, x20
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, #2
+    arm64.str x0, [x20, #0] (8b)
+    arm64.mov x1, #0
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x21, x0
+    arm64.mov x0, x21
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, #3
+    arm64.str x0, [x21, #0] (8b)
+    arm64.mov x2, #0
+    arm64.mov x1, #8
+    arm64.mov x0, #3
+    arm64.bl stdlib.__managed_mem_create_managed
+    arm64.mov x22, x0
+    arm64.mov x23, #0
+    arm64.mov x0, x22
+    arm64.mov x1, x23
+    arm64.mov x2, x19
+    arm64.bl stdlib.__managed_mem_set
+    arm64.mov x0, x1
+    arm64.mov x1, #1
+    arm64.mov x0, x22
+    arm64.mov x2, x20
+    arm64.bl stdlib.__managed_mem_set
+    arm64.mov x0, x1
+    arm64.mov x1, #2
+    arm64.mov x0, x22
+    arm64.mov x2, x21
+    arm64.bl stdlib.__managed_mem_set
+    arm64.mov x0, x1
+    arm64.mov x1, #3
+    arm64.mov x0, x22
+    arm64.bl stdlib.__managed_mem_set_length
+    arm64.mov x0, x1
+    arm64.adrp+add x0, stdlib.__mm_decref
+    arm64.str x0, [x22, #40] (8b)
+    arm64.adrp_add_rdata x0, __layout_Array_HashItem
+    arm64.ldr x1, [x29, #16]
+    arm64.mov x0, x22
+    arm64.bl Array.init
+    arm64.bl HashBucket.create
+    arm64.mov x19, x0
+    arm64.mov x0, x1
+    arm64.cmp x0, x23
+    arm64.cset x0, ne
+    arm64.b.eq try_0.merge
+  try_0.otherwise:
+    arm64.mov x0, #2
+    arm64.epilogue
+    arm64.ret
+  try_0.merge:
+    arm64.mov x1, #0
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x20, x0
+    arm64.mov x0, #2
+    arm64.str x0, [x20, #0] (8b)
+    arm64.mov x0, x19
+    arm64.mov x1, x20
+    arm64.bl HashBucket.lookup
+    arm64.mov x21, x0
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, x20
+    arm64.bl mm_drop
+    arm64.cmp x21, #0
+    arm64.b.eq found_0.after
+  found_0:
+    arm64.mov x0, #1
+    arm64.epilogue
     arm64.ret
   found_0.after:
-    arm64.ldr x0, [x29, #-88]
-    arm64.cmp x0, #0
-    arm64.b.eq main.__skip_guarded_147
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_147
-    arm64.ldr x1, [x29, #-72]
-    arm64.cmp x1, #0
-    arm64.b.eq main.__skip_guarded_149
-    arm64.ldr x0, [x29, #-72]
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_149
-    arm64.ldr x2, [x29, #-48]
-    arm64.cmp x2, #0
-    arm64.b.eq main.__skip_guarded_151
-    arm64.ldr x0, [x29, #-48]
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_151
-    arm64.mov x3, #0
-    arm64.str x3, [x29, #-48]
-    arm64.ldr x4, [x29, #-40]
-    arm64.cmp x4, #0
-    arm64.b.eq main.__skip_guarded_155
-    arm64.ldr x0, [x29, #-40]
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_155
-    arm64.mov x5, #0
-    arm64.str x5, [x29, #-40]
-    arm64.ldr x6, [x29, #-32]
-    arm64.cmp x6, #0
-    arm64.b.eq main.__skip_guarded_159
-    arm64.ldr x0, [x29, #-32]
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_159
-    arm64.mov x7, #0
-    arm64.str x7, [x29, #-32]
-    arm64.ldr x8, [x29, #-24]
-    arm64.cmp x8, #0
-    arm64.b.eq main.__skip_guarded_163
-    arm64.ldr x0, [x29, #-24]
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_163
-    arm64.ldr x9, [x29, #-16]
-    arm64.cmp x9, #0
-    arm64.b.eq main.__skip_guarded_165
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_165
-    arm64.ldr x10, [x29, #-8]
-    arm64.cmp x10, #0
-    arm64.b.eq main.__skip_guarded_167
-    arm64.ldr x0, [x29, #-8]
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_167
-    arm64.ldr x11, [x29, #-80]
-    arm64.cmp x11, #0
-    arm64.b.eq main.__skip_guarded_169
-    arm64.ldr x0, [x29, #-80]
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_169
-    arm64.ldr x12, [x29, #-64]
-    arm64.cmp x12, #0
-    arm64.b.eq main.__skip_guarded_171
-    arm64.ldr x0, [x29, #-64]
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_171
+    arm64.mov x0, x23
+    arm64.epilogue
+    arm64.ret
+  }
+  func @HashBucket.lookup(x0: i64, x1: i64) -> i1 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x19, x0
+    arm64.mov x20, x1
+    arm64.b loop_0
+  inlined_HashBucket.advance_0_0:
+    arm64.ldr x1, [x19, #0] (8b)
+    arm64.ldr x21, [x19, #8] (8b)
+    arm64.adrp_add_rdata x0, __layout_Array_HashItem
+    arm64.ldr x2, [x29, #16]
+    arm64.mov x0, x1
+    arm64.mov x1, x2
+    arm64.bl Array.count
+    arm64.mov x1, #1
+    arm64.add x2, x21, x1
+    arm64.cmp x2, x0
+    arm64.cset x0, ge
+    arm64.b.lt inlined_HashBucket.advance_2_0
+  inlined_HashBucket.advance_1_0:
+    arm64.mov x1, #1
     arm64.mov x0, #0
-    arm64.epilogue stack_size=240
+    arm64.b inline_cont_HashBucket.lookup_0
+  inlined_HashBucket.advance_2_0:
+    arm64.ldr x0, [x19, #8] (8b)
+    arm64.mov x1, #1
+    arm64.add x2, x0, x1
+    arm64.str x2, [x19, #8] (8b)
+    arm64.mov x1, #0
+    arm64.mov x0, #0
+  inline_cont_HashBucket.lookup_0:
+    arm64.mov x0, #0
+    arm64.cmp x1, x0
+    arm64.cset x0, ne
+    arm64.b.eq loop_0
+    arm64.b loop_0.exit
+  loop_0:
+    arm64.mov x0, x19
+    arm64.bl HashBucket.current
+    arm64.ldr x21, [x20, #0] (8b)
+    arm64.ldr x22, [x0, #0] (8b)
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.cmp x22, x21
+    arm64.cset x0, eq
+    arm64.b.ne inlined_HashBucket.advance_0_0
+    arm64.b found_0
+  loop_0.exit:
+    arm64.mov x0, #0
+    arm64.epilogue
     arm64.ret
-  }
-  func @__destruct_HashItem(ptr: i64) {
-  entry:
-    arm64.b __destruct_HashItem.done
-  done:
-    arm64.ret
-  }
-  func @__destruct_HashBucket(ptr: i64) {
-  entry:
-    arm64.prologue stack_size=48
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x0, #0]
-    arm64.str x1, [x29, #-16]
-    arm64.cmp x1, #0
-    arm64.b.eq __destruct_HashBucket.__skip_guarded_4
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl mm_decref
-    arm64.label __destruct_HashBucket.__skip_guarded_4
-    arm64.b __destruct_HashBucket.done
-  done:
-    arm64.epilogue stack_size=48
-    arm64.ret
-  }
-  func @__destruct___ManagedMemory_HashItem(ptr: i64) {
-  entry:
-    arm64.prologue stack_size=48
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x0, #16]
-    arm64.mov x2, #-1
-    arm64.cmp x1, x2
-    arm64.cset x3, eq
-    arm64.cmp x3, #0
-    arm64.b.ne __destruct___ManagedMemory_HashItem.slice_cleanup_0
-    arm64.b __destruct___ManagedMemory_HashItem.check_owned_0
-  slice_cleanup_0:
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x0, #32]
-    arm64.str x1, [x29, #-16]
-    arm64.cmp x1, #0
-    arm64.b.eq __destruct___ManagedMemory_HashItem.__skip_guarded_9
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl mm_decref
-    arm64.label __destruct___ManagedMemory_HashItem.__skip_guarded_9
-    arm64.b __destruct___ManagedMemory_HashItem.skip_buf_0
-  check_owned_0:
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x0, #16]
-    arm64.mov x2, #-2
-    arm64.cmp x1, x2
-    arm64.cset x3, ne
-    arm64.cmp x3, #0
-    arm64.b.ne __destruct___ManagedMemory_HashItem.free_buf_0
-    arm64.b __destruct___ManagedMemory_HashItem.skip_buf_0
-  free_buf_0:
-    arm64.ldr x0, [x29, #-8]
-    arm64.bl mm_decref_managed_elements
-    arm64.ldr x1, [x29, #-8]
-    arm64.ldr x2, [x1, #0]
-    arm64.mov x0, x2
-    arm64.bl mm_raw_free
-    arm64.b __destruct___ManagedMemory_HashItem.skip_buf_0
-  skip_buf_0:
-    arm64.b __destruct___ManagedMemory_HashItem.done
-  done:
-    arm64.epilogue stack_size=48
-    arm64.ret
-  }
-  func @__destruct___Array_HashItem(ptr: i64) {
-  entry:
-    arm64.prologue stack_size=48
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x0, #0]
-    arm64.str x1, [x29, #-16]
-    arm64.cmp x1, #0
-    arm64.b.eq __destruct___Array_HashItem.__skip_guarded_4
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl mm_decref
-    arm64.label __destruct___Array_HashItem.__skip_guarded_4
-    arm64.b __destruct___Array_HashItem.done
-  done:
-    arm64.epilogue stack_size=48
+  found_0:
+    arm64.mov x0, #1
+    arm64.epilogue
     arm64.ret
   }
 }

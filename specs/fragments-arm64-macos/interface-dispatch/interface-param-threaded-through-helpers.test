@@ -40,173 +40,130 @@ ExitCode: 10
 ---
 // CompiledIR
 module {
-  func @Fixed.create(n: i64) -> i64 {
+  func @Fixed.value(x0: i64) -> u8 {
   entry:
-    arm64.prologue stack_size=48
-    arm64.str x0, [x29, #-16]
-    arm64.mov x0, #8
-    arm64.mov x1, #0
-    arm64.mov x2, #20
-    arm64.bl mm_alloc
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x29, #-16]
-    arm64.str x1, [x0, #0]
-    arm64.ldr x2, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.bl mm_incref
-    arm64.ldr x3, [x29, #-8]
-    arm64.mov x0, x3
-    arm64.epilogue stack_size=48
-    arm64.ret
-  }
-  func @Fixed.value(__self_ptr: i64) -> u8 {
-  entry:
-    arm64.prologue stack_size=48
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x0, #0]
-    arm64.mov x2, #0
-    arm64.cmp x1, x2
-    arm64.cset x3, lt
-    arm64.mov x4, #100
-    arm64.cmp x1, x4
-    arm64.cset x5, gt
-    arm64.orr x6, x3, x5
-    arm64.cmp x6, #0
-    arm64.b.ne Fixed.value.__range_panic_0
-    arm64.b Fixed.value.__range_ok_0
-  __range_panic_0:
-    arm64.adrp_add_symdata x0, __panic_msg_10
+    arm64.prologue stack_size=16
     arm64.mov x1, x0
-    arm64.mov x0, x1
+    arm64.ldrb x0, [x1, #0] (1b)
+    arm64.mov x1, #100
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_2ce2a299cc8df8c9
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
     arm64.bl mrt_panic
   __range_ok_0:
-    arm64.mov x0, x1
-    arm64.epilogue stack_size=48
+    arm64.epilogue
+    arm64.ret
+  }
+  func @deepest(x0: i64, x1: i64) -> u8 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.mov x2, x0
+    arm64.str x2, [x29, #16]
+    arm64.str x1, [x29, #24]
+    arm64.ldr x1, [x29, #24]
+    arm64.ldr x2, [x29, #16]
+    arm64.mov x0, x2
+    arm64.ldr x16, [x1, #24] (8b)
+    arm64.blr x16
+    arm64.mov x19, x0
+    arm64.ldr x1, [x29, #24]
+    arm64.ldr x2, [x29, #16]
+    arm64.mov x0, x2
+    arm64.ldr x16, [x1, #24] (8b)
+    arm64.blr x16
+    arm64.mov x1, x0
+    arm64.mov x2, #100
+    arm64.add x0, x19, x1
+    arm64.cmp x0, x2
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_9e9298e262ff9b81
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+  func @middle(x0: i64, x1: i64) -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x2, x0
+    arm64.str x2, [x29, #16]
+    arm64.str x1, [x29, #24]
+    arm64.ldr x1, [x29, #24]
+    arm64.ldr x2, [x29, #16]
+    arm64.mov x0, x2
+    arm64.bl deepest
+    arm64.mov x1, #100
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_ff46f71737ddb675
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+  func @outer(x0: i64, x1: i64) -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x2, x0
+    arm64.str x2, [x29, #16]
+    arm64.str x1, [x29, #24]
+    arm64.ldr x1, [x29, #24]
+    arm64.ldr x2, [x29, #16]
+    arm64.mov x0, x2
+    arm64.bl middle
+    arm64.mov x1, #100
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_6ec55eea10b838e0
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
     arm64.ret
   }
   func @main() -> u8 {
   entry:
-    arm64.prologue stack_size=48
+    arm64.prologue stack_size=32
+    arm64.mov x1, #0
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
     arm64.mov x0, #5
-    arm64.bl Fixed.create
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.bl outer$Fixed
-    arm64.mov x1, #0
-    arm64.cmp x0, x1
-    arm64.cset x2, lt
-    arm64.mov x3, #255
-    arm64.cmp x0, x3
-    arm64.cset x4, gt
-    arm64.orr x5, x2, x4
-    arm64.cmp x5, #0
-    arm64.b.ne main.__range_panic_0
-    arm64.b main.__range_ok_0
+    arm64.str x0, [x19, #0] (1b)
+    arm64.adrp_add_rdata x0, __witness_Fixed_Counter
+    arm64.ldr x1, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl outer
+    arm64.mov x20, x0
+    arm64.mov x0, x19
+    arm64.bl mm_drop
+    arm64.mov x0, #255
+    arm64.cmp x20, x0
+    arm64.cset x0, hi
+    arm64.b.ls __range_ok_0
   __range_panic_0:
-    arm64.adrp_add_symdata x0, __panic_msg_14
-    arm64.mov x1, x0
-    arm64.mov x0, x1
+    arm64.adrp_add_rdata x0, __panic_msg_7a1d8a2ce0687fbb
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
     arm64.bl mrt_panic
   __range_ok_0:
-    arm64.ldr x1, [x29, #-8]
-    arm64.str x0, [x29, #-16]
-    arm64.cmp x1, #0
-    arm64.b.eq main.__skip_guarded_15
-    arm64.ldr x0, [x29, #-8]
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_15
-    arm64.ldr x0, [x29, #-16]
-    arm64.epilogue stack_size=48
-    arm64.ret
-  }
-  func @outer$Fixed(c: i64) -> u8 {
-  entry:
-    arm64.prologue stack_size=48
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.bl middle$Fixed
-    arm64.mov x1, #0
-    arm64.cmp x0, x1
-    arm64.cset x2, lt
-    arm64.mov x3, #100
-    arm64.cmp x0, x3
-    arm64.cset x4, gt
-    arm64.orr x5, x2, x4
-    arm64.cmp x5, #0
-    arm64.b.ne outer$Fixed.__range_panic_0
-    arm64.b outer$Fixed.__range_ok_0
-  __range_panic_0:
-    arm64.adrp_add_symdata x0, __panic_msg_13
-    arm64.mov x1, x0
-    arm64.mov x0, x1
-    arm64.bl mrt_panic
-  __range_ok_0:
-    arm64.epilogue stack_size=48
-    arm64.ret
-  }
-  func @middle$Fixed(c: i64) -> u8 {
-  entry:
-    arm64.prologue stack_size=48
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.bl deepest$Fixed
-    arm64.mov x1, #0
-    arm64.cmp x0, x1
-    arm64.cset x2, lt
-    arm64.mov x3, #100
-    arm64.cmp x0, x3
-    arm64.cset x4, gt
-    arm64.orr x5, x2, x4
-    arm64.cmp x5, #0
-    arm64.b.ne middle$Fixed.__range_panic_0
-    arm64.b middle$Fixed.__range_ok_0
-  __range_panic_0:
-    arm64.adrp_add_symdata x0, __panic_msg_12
-    arm64.mov x1, x0
-    arm64.mov x0, x1
-    arm64.bl mrt_panic
-  __range_ok_0:
-    arm64.epilogue stack_size=48
-    arm64.ret
-  }
-  func @deepest$Fixed(c: i64) -> u8 {
-  entry:
-    arm64.prologue stack_size=48
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.bl Fixed.value
-    arm64.ldr x1, [x29, #-8]
-    arm64.str x0, [x29, #-16]
-    arm64.ldr x0, [x29, #-8]
-    arm64.bl Fixed.value
-    arm64.ldr x2, [x29, #-16]
-    arm64.add x3, x2, x0
-    arm64.mov x4, #0
-    arm64.cmp x3, x4
-    arm64.cset x5, lt
-    arm64.mov x6, #100
-    arm64.cmp x3, x6
-    arm64.cset x7, gt
-    arm64.orr x8, x5, x7
-    arm64.cmp x8, #0
-    arm64.b.ne deepest$Fixed.__range_panic_0
-    arm64.b deepest$Fixed.__range_ok_0
-  __range_panic_0:
-    arm64.adrp_add_symdata x0, __panic_msg_11
-    arm64.mov x1, x0
-    arm64.mov x0, x1
-    arm64.bl mrt_panic
-  __range_ok_0:
-    arm64.mov x0, x3
-    arm64.epilogue stack_size=48
-    arm64.ret
-  }
-  func @__destruct_Fixed(ptr: i64) {
-  entry:
-    arm64.b __destruct_Fixed.done
-  done:
+    arm64.mov x0, x20
+    arm64.epilogue
     arm64.ret
   }
 }

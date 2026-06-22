@@ -16,30 +16,25 @@ ExitCode: 1
 module {
   func @main() -> u8 {
   entry:
-    arm64.prologue stack_size=32
-    arm64.fldr d0, [__float_0]
-    arm64.fldr d1, [__float_0]
-    arm64.fstr d1, [x29, #-8]
-    arm64.bl stdlib.float.hash
-    arm64.mov x1, x0
-    arm64.str x1, [x29, #-16]
-    arm64.fldr d1, [x29, #-8]
-    arm64.fmov d0, d1
-    arm64.bl stdlib.float.hash
-    arm64.mov x1, x0
-    arm64.ldr x0, [x29, #-16]
-    arm64.cmp x0, x1
-    arm64.cset x2, eq
-    arm64.cmp x2, #0
-    arm64.b.ne main.eq_0
-    arm64.b main.eq_0.after
+    arm64.prologue stack_size=16
+    arm64.ldr d0, [rdata+__float_0]
+    arm64.bl float.hash
+    arm64.mov x19, x0
+    arm64.ldr d0, [rdata+__float_0]
+    arm64.ldr d1, [rdata+__float_0]
+    arm64.fsub d2, d1, d0
+    arm64.fmov d0, d2
+    arm64.bl float.hash
+    arm64.cmp x19, x0
+    arm64.cset x0, eq
+    arm64.b.ne eq_0.after
   eq_0:
     arm64.mov x0, #1
-    arm64.epilogue stack_size=32
+    arm64.epilogue
     arm64.ret
   eq_0.after:
     arm64.mov x0, #0
-    arm64.epilogue stack_size=32
+    arm64.epilogue
     arm64.ret
   }
 }

@@ -1,0 +1,243 @@
+// Test: slice
+function main() returns ExitCode
+	let mm = try __ManagedMemory.create(5, elementSize: 8) otherwise return 1
+	try mm.setLength(5) otherwise return 2
+	try mm.set(0, value: 10) otherwise return 3
+	try mm.set(1, value: 20) otherwise return 3
+	try mm.set(2, value: 30) otherwise return 3
+	try mm.set(3, value: 40) otherwise return 3
+	try mm.set(4, value: 50) otherwise return 3
+	let s = try mm.slice(1, endIndex: 4) otherwise return 4
+	if s.length() != 3 'badLen'
+		return 5
+	end 'badLen'
+	let v0 = try s.get(0) otherwise return 6
+	let v1 = try s.get(1) otherwise return 6
+	let v2 = try s.get(2) otherwise return 6
+	if v0 != 20 'badV0'
+		return 7
+	end 'badV0'
+	if v1 != 30 'badV1'
+		return 8
+	end 'badV1'
+	if v2 != 40 'badV2'
+		return 9
+	end 'badV2'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x2, #0
+    arm64.mov x1, #8
+    arm64.mov x0, #5
+    arm64.bl stdlib.__managed_mem_create_managed
+    arm64.mov x19, x0
+    arm64.mov x20, #0
+    arm64.mov x21, #3
+  try_0.merge:
+    arm64.mov x1, #5
+    arm64.mov x0, x19
+    arm64.bl stdlib.__managed_mem_set_length
+    arm64.mov x0, x1
+    arm64.cmp x0, x20
+    arm64.cset x0, ne
+    arm64.b.eq try_1.merge
+  try_1.otherwise:
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, #2
+    arm64.epilogue
+    arm64.ret
+  try_1.merge:
+    arm64.mov x2, #10
+    arm64.mov x0, x19
+    arm64.mov x1, x20
+    arm64.bl stdlib.__managed_mem_set
+    arm64.mov x0, x1
+    arm64.cmp x0, x20
+    arm64.cset x0, ne
+    arm64.b.eq try_2.merge
+  try_2.otherwise:
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, x21
+    arm64.epilogue
+    arm64.ret
+  try_2.merge:
+    arm64.mov x2, #20
+    arm64.mov x1, #1
+    arm64.mov x0, x19
+    arm64.bl stdlib.__managed_mem_set
+    arm64.mov x0, x1
+    arm64.cmp x0, x20
+    arm64.cset x0, ne
+    arm64.b.eq try_3.merge
+  try_3.otherwise:
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, x21
+    arm64.epilogue
+    arm64.ret
+  try_3.merge:
+    arm64.mov x2, #30
+    arm64.mov x1, #2
+    arm64.mov x0, x19
+    arm64.bl stdlib.__managed_mem_set
+    arm64.mov x0, x1
+    arm64.cmp x0, x20
+    arm64.cset x0, ne
+    arm64.b.eq try_4.merge
+  try_4.otherwise:
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, x21
+    arm64.epilogue
+    arm64.ret
+  try_4.merge:
+    arm64.mov x2, #40
+    arm64.mov x0, x19
+    arm64.mov x1, x21
+    arm64.bl stdlib.__managed_mem_set
+    arm64.mov x0, x1
+    arm64.cmp x0, x20
+    arm64.cset x0, ne
+    arm64.b.eq try_5.merge
+  try_5.otherwise:
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, x21
+    arm64.epilogue
+    arm64.ret
+  try_5.merge:
+    arm64.mov x2, #50
+    arm64.mov x1, #4
+    arm64.mov x0, x19
+    arm64.bl stdlib.__managed_mem_set
+    arm64.mov x0, x1
+    arm64.cmp x0, x20
+    arm64.cset x0, ne
+    arm64.b.eq try_6.merge
+  try_6.otherwise:
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, x21
+    arm64.epilogue
+    arm64.ret
+  try_6.merge:
+    arm64.mov x2, #4
+    arm64.mov x1, #1
+    arm64.mov x0, x19
+    arm64.bl stdlib.__managed_mem_slice
+    arm64.mov x22, x0
+    arm64.mov x23, x1
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.cmp x23, x20
+    arm64.cset x0, ne
+    arm64.b.eq try_7.merge
+  try_7.otherwise:
+    arm64.mov x0, #4
+    arm64.epilogue
+    arm64.ret
+  try_7.merge:
+    arm64.ldr x0, [x22, #8] (8b)
+    arm64.cmp x0, x21
+    arm64.cset x0, ne
+    arm64.b.eq badLen_0.after
+  badLen_0:
+    arm64.mov x0, x22
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, #5
+    arm64.epilogue
+    arm64.ret
+  badLen_0.after:
+    arm64.mov x0, x22
+    arm64.mov x1, x20
+    arm64.bl stdlib.__managed_mem_get
+    arm64.mov x19, x0
+    arm64.mov x0, x1
+    arm64.cmp x0, x20
+    arm64.cset x0, ne
+    arm64.b.eq try_8.merge
+  try_8.otherwise:
+    arm64.mov x0, x22
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, #6
+    arm64.epilogue
+    arm64.ret
+  try_8.merge:
+    arm64.mov x1, #1
+    arm64.mov x0, x22
+    arm64.bl stdlib.__managed_mem_get
+    arm64.mov x21, x0
+    arm64.mov x0, x1
+    arm64.cmp x0, x20
+    arm64.cset x0, ne
+    arm64.b.eq try_9.merge
+  try_9.otherwise:
+    arm64.mov x0, x22
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, #6
+    arm64.epilogue
+    arm64.ret
+  try_9.merge:
+    arm64.mov x1, #2
+    arm64.mov x0, x22
+    arm64.bl stdlib.__managed_mem_get
+    arm64.mov x23, x0
+    arm64.mov x0, x1
+    arm64.cmp x0, x20
+    arm64.cset x0, ne
+    arm64.b.eq try_10.merge
+  try_10.otherwise:
+    arm64.mov x0, x22
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, #6
+    arm64.epilogue
+    arm64.ret
+  try_10.merge:
+    arm64.mov x0, #20
+    arm64.cmp x19, x0
+    arm64.cset x0, ne
+    arm64.b.eq badV0_0.after
+  badV0_0:
+    arm64.mov x0, x22
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, #7
+    arm64.epilogue
+    arm64.ret
+  badV0_0.after:
+    arm64.mov x0, #30
+    arm64.cmp x21, x0
+    arm64.cset x0, ne
+    arm64.b.eq badV1_0.after
+  badV1_0:
+    arm64.mov x0, x22
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, #8
+    arm64.epilogue
+    arm64.ret
+  badV1_0.after:
+    arm64.mov x0, x22
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, #40
+    arm64.cmp x23, x0
+    arm64.cset x0, ne
+    arm64.b.eq badV2_0.after
+  badV2_0:
+    arm64.mov x0, #9
+    arm64.epilogue
+    arm64.ret
+  badV2_0.after:
+    arm64.mov x0, x20
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

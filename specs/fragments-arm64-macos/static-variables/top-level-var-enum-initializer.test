@@ -33,111 +33,70 @@ ExitCode: 42
 module {
   func @main() -> u8 {
   entry:
-    arm64.prologue stack_size=80
-    arm64.global_load x0, [current]
-    arm64.mov x1, #0
-    arm64.str x1, [x29, #-8]
-    arm64.str x0, [x29, #-16]
-    arm64.b main.check_0.cmp0
-  check_0.cmp0:
-    arm64.ldr x0, [x29, #-16]
-    arm64.mov x1, #1
-    arm64.cmp x0, x1
-    arm64.cset x2, eq
-    arm64.cmp x2, #0
-    arm64.b.ne main.check_0.case0
-    arm64.b main.check_0.cmp1
+    arm64.prologue stack_size=16
+    arm64.adrp_add_rdata x0, __data_current
+    arm64.ldr x0, [x29, #16]
+    arm64.ldr x1, [x0, #0] (8b)
+    arm64.mov x2, #1
+    arm64.mov x3, #0
+    arm64.cmp x1, x2
+    arm64.cset x0, eq
+    arm64.b.ne check_0.next0
+    arm64.b check_0.case0
+  check_0.merge:
+    arm64.cmp x0, #0
+    arm64.b.eq check_1.after
+    arm64.b check_1
   check_0.case0:
     arm64.mov x0, #1
-    arm64.str x0, [x29, #-8]
-    arm64.b main.check_0.merge
-  check_0.cmp1:
-    arm64.ldr x0, [x29, #-16]
-    arm64.mov x1, #0
-    arm64.cmp x0, x1
-    arm64.cset x2, eq
-    arm64.cmp x2, #0
-    arm64.b.ne main.check_0.case1
-    arm64.b main.check_0.cmp2
-  check_0.case1:
-    arm64.mov x0, #0
-    arm64.str x0, [x29, #-8]
-    arm64.b main.check_0.merge
-  check_0.cmp2:
-    arm64.ldr x0, [x29, #-16]
-    arm64.mov x1, #2
-    arm64.cmp x0, x1
-    arm64.cset x2, eq
-    arm64.cmp x2, #0
-    arm64.b.ne main.check_0.case2
-    arm64.b main.check_0.merge
-  check_0.case2:
-    arm64.mov x0, #0
-    arm64.str x0, [x29, #-8]
-    arm64.b main.check_0.merge
-  check_0.merge:
-    arm64.ldr x0, [x29, #-8]
-    arm64.cmp x0, #0
-    arm64.b.ne main.check_1
-    arm64.b main.check_1.merge
-  check_1:
+    arm64.b check_0.merge
+  check_0.next0:
+    arm64.cmp x1, x3
+    arm64.cset x0, eq
+    arm64.b.ne check_0.next1
+    arm64.mov x0, x3
+    arm64.b check_0.merge
+  check_0.next1:
     arm64.mov x0, #2
-    arm64.global_store [current], x0
-    arm64.global_load x1, [current]
-    arm64.mov x2, #0
-    arm64.str x2, [x29, #-24]
-    arm64.str x1, [x29, #-32]
-    arm64.b main.check2_0.cmp0
-  check2_0.cmp0:
-    arm64.ldr x0, [x29, #-32]
+    arm64.mov x0, x3
+    arm64.b check_0.merge
+  check_1:
+    arm64.adrp_add_rdata x0, __data_current
+    arm64.ldr x0, [x29, #16]
     arm64.mov x1, #2
-    arm64.cmp x0, x1
-    arm64.cset x2, eq
-    arm64.cmp x2, #0
-    arm64.b.ne main.check2_0.case0
-    arm64.b main.check2_0.cmp1
+    arm64.str x1, [x0, #0] (8b)
+    arm64.adrp_add_rdata x0, __data_current
+    arm64.ldr x0, [x29, #16]
+    arm64.ldr x1, [x0, #0] (8b)
+    arm64.mov x0, #2
+    arm64.cmp x1, x0
+    arm64.cset x0, eq
+    arm64.b.ne check2_0.next0
+    arm64.b check2_0.case0
+  check2_0.merge:
+    arm64.cmp x0, #0
+    arm64.b.eq check_1.after
+    arm64.b check2_1
   check2_0.case0:
     arm64.mov x0, #1
-    arm64.str x0, [x29, #-24]
-    arm64.b main.check2_0.merge
-  check2_0.cmp1:
-    arm64.ldr x0, [x29, #-32]
-    arm64.mov x1, #0
-    arm64.cmp x0, x1
-    arm64.cset x2, eq
-    arm64.cmp x2, #0
-    arm64.b.ne main.check2_0.case1
-    arm64.b main.check2_0.cmp2
-  check2_0.case1:
-    arm64.mov x0, #0
-    arm64.str x0, [x29, #-24]
-    arm64.b main.check2_0.merge
-  check2_0.cmp2:
-    arm64.ldr x0, [x29, #-32]
-    arm64.mov x1, #1
-    arm64.cmp x0, x1
-    arm64.cset x2, eq
-    arm64.cmp x2, #0
-    arm64.b.ne main.check2_0.case2
-    arm64.b main.check2_0.merge
-  check2_0.case2:
-    arm64.mov x0, #0
-    arm64.str x0, [x29, #-24]
-    arm64.b main.check2_0.merge
-  check2_0.merge:
-    arm64.ldr x0, [x29, #-24]
-    arm64.cmp x0, #0
-    arm64.b.ne main.check2_1
-    arm64.b main.check2_1.after
+    arm64.b check2_0.merge
+  check2_0.next0:
+    arm64.cmp x1, x3
+    arm64.cset x0, eq
+    arm64.b.ne check2_0.next1
+    arm64.mov x0, x3
+    arm64.b check2_0.merge
+  check2_0.next1:
+    arm64.mov x0, #1
+    arm64.mov x0, x3
+    arm64.b check2_0.merge
   check2_1:
     arm64.mov x0, #42
-    arm64.epilogue stack_size=80
+    arm64.epilogue
     arm64.ret
-  check2_1.after:
-    arm64.b main.check_1.merge
-  check_1.merge:
-    arm64.mov x0, #0
-    arm64.epilogue stack_size=80
+  check_1.after:
+    arm64.mov x0, x3
+    arm64.epilogue
     arm64.ret
   }
 }

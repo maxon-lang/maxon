@@ -1,0 +1,111 @@
+// Test: error-throw-in-match
+
+typealias Integer = int(i64.min to i64.max)
+
+enum MyError implements Error
+	invalidInput
+	notFound
+end 'MyError'
+
+function lookup(key Integer) returns Integer throws MyError
+	match key 'dispatch'
+		1 then return 100
+		2 then return 200
+		default then throw MyError.notFound
+	end 'dispatch'
+end 'lookup'
+
+function main() returns ExitCode
+	let a = try lookup(2) otherwise 0
+	let b = try lookup(99) otherwise 42
+	return (a + b) and 125
+end 'main'
+---
+ExitCode: 112
+RequiredIRSelfhosted: ```
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x0, #2
+  inlined_lookup_0_0:
+    arm64.mov x1, #1
+    arm64.cmp x0, x1
+    arm64.cset x1, eq
+    arm64.b.ne inlined_lookup_3_0
+  inlined_lookup_2_0:
+    arm64.mov x1, #0
+    arm64.mov x0, #100
+    arm64.b inline_cont_main_0
+  inlined_lookup_3_0:
+    arm64.mov x1, #2
+    arm64.cmp x0, x1
+    arm64.cset x0, eq
+    arm64.b.ne inlined_lookup_6_0
+  inlined_lookup_4_0:
+    arm64.mov x1, #0
+    arm64.mov x0, #200
+    arm64.b inline_cont_main_0
+  inlined_lookup_6_0:
+    arm64.mov x1, #2
+    arm64.mov x0, #0
+  inline_cont_main_0:
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x1, ne
+    arm64.b.eq try_0.merge
+  try_0.otherwise:
+    arm64.mov x0, #0
+  try_0.merge:
+    arm64.mov x1, #99
+  inlined_lookup_0_1:
+    arm64.mov x2, #1
+    arm64.cmp x1, x2
+    arm64.cset x2, eq
+    arm64.b.ne inlined_lookup_3_1
+  inlined_lookup_2_1:
+    arm64.mov x1, #0
+    arm64.mov x2, #100
+    arm64.b inline_cont_main_1
+  inlined_lookup_3_1:
+    arm64.mov x2, #2
+    arm64.cmp x1, x2
+    arm64.cset x1, eq
+    arm64.b.ne inlined_lookup_6_1
+  inlined_lookup_4_1:
+    arm64.mov x1, #0
+    arm64.mov x2, #200
+    arm64.b inline_cont_main_1
+  inlined_lookup_6_1:
+    arm64.mov x1, #2
+    arm64.mov x2, #0
+  inline_cont_main_1:
+    arm64.mov x3, #0
+    arm64.cmp x1, x3
+    arm64.cset x1, ne
+    arm64.b.eq try_1.merge
+  try_1.otherwise:
+    arm64.mov x1, #42
+    arm64.mov x2, x1
+  try_1.merge:
+    arm64.mov x1, #125
+    arm64.add x3, x0, x2
+    arm64.mov x2, #255
+    arm64.and x0, x3, x1
+    arm64.cmp x0, x2
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_f84624c80ce4f2a5
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+}
+
+```
+---
+---
