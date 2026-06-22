@@ -73,6 +73,16 @@ let GtGtOffCancelFlag = 0x78  // 0=live, 1=cancel-requested
 let GtGtOffAllNext = 0x88  // next ptr in the global all-threads list (__gt_all_head)
 let GtGtOffTraceId = 0xA0  // async trace id (AsyncTrace only)
 let GtGtOffIoYielded = 0xA8  // 0=not yet yielded, 1=context switch complete
+// CPU-fault diagnostic fields (multi-M fault handler, Phase 4). Byte-identical to the
+// C# GtLayout / self-hosted x64 GtOffFault* so GtGtStructSize stays 0xD8 across compilers.
+// The hand-emitted sigaction thunk stashes the faulting state in the __gt_fault_* .data
+// globals (process-global, simpler than per-GT since a fault can hit a raw OS thread),
+// so these document the layout; they sit above IoYielded(0xA8), below StructSize(0xD8).
+let GtGtOffFaultRip = 0xB0  // PC of the faulting instruction
+let GtGtOffFaultMsg = 0xB8  // ptr to a static NUL-terminated panic message
+let GtGtOffFaultRedirectRip = 0xC0  // resume PC (handler writes this into mcontext->pc)
+let GtGtOffFaultRedirectRsp = 0xC8  // resume SP (mcontext->sp)
+let GtGtOffFaultRedirectFp = 0xD0  // resume FP (mcontext->fp / x29)
 let GtGtStructSize = 0xD8
 
 // --- GT status values ---
@@ -81,14 +91,30 @@ let GtStatusRunning = 1
 let GtStatusCompleted = 2
 let GtStatusWaiting = 3
 
-// --- ProcContext (P) struct offsets (authoritative GtLayout). Only the fields the
-//     single-thread scheduler touches are named; POffMainThread is the inline GT. ---
+// --- ProcContext (P) struct offsets (authoritative: maxon-sharp GtLayout.cs, byte-
+//     identical to the self-hosted X64Backend POff* block). The single-M build only
+//     touched CurrentGt/PendingWaiter/FreeList*/MainThread; the rest are the multi-M
+//     GMP fields (local run queue, worker id/rng/idle/wake/thread/status, runnext, the
+//     remote-free MPSC head the slab indexes via __sched_procs[id]+RemoteFreeHead). ---
+let GtPOffLocalQueueHead = 0x00  // per-P local run queue head (multi-M work-steal)
+let GtPOffLocalQueueTail = 0x08
+let GtPOffLocalQueueLen = 0x10
 let GtPOffCurrentGt = 0x18  // currently-running GT on this processor
+let GtPOffId = 0x20  // processor id (worker #N; shard index for the slab mcache)
+let GtPOffRng = 0x28  // xorshift64 seed (work-steal fairness)
+let GtPOffIdleFlag = 0x30  // 1 = worker parked on its wake semaphore
+let GtPOffWakeSemaphore = 0x38  // dispatch_semaphore_t for park/wake (macOS; x64 uses an Event here)
+let GtPOffOsThreadHandle = 0x40  // pthread_t of this P's worker (8-byte opaque ptr)
+let GtPOffStatus = 0x48  // 0 = stopped, 1 = active
 let GtPOffPendingWaiter = 0x50  // GT to wake after a context switch (deferred)
+let GtPOffRunnext = 0x58  // single-slot LIFO priority slot
 let GtPOffFreeListHead = 0x60  // per-P GT-struct free list
 let GtPOffFreeListLen = 0x68
+let GtPOffSystemStackSP = 0x70  // top of the per-P scheduler/system stack (parity; arm64 runs the M loop on the pthread stack)
+let GtPOffRemoteFreeHead = 0x78  // per-P remote-free MPSC head (Treiber stack; slab cross-P frees)
 let GtPOffMainThread = 0x80  // inline GT struct (the OS thread's own GT)
 let GtPStructSize = 0x158  // 0x80 + 0xD8
+let GtPSystemStackSize = 0x10000  // 64 KB per-P system stack (parity with x64)
 let GtMaxFreeListLen = 64  // per-P GT-struct free-list cap; beyond this __gt_await __slab_frees
 
 // Green-thread stack: a fixed 1 MiB mmap'd region. The arm64 self-hosted backend
