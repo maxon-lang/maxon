@@ -73,6 +73,7 @@ let GtGtOffCancelFlag = 0x78  // 0=live, 1=cancel-requested
 let GtGtOffAllNext = 0x88  // next ptr in the global all-threads list (__gt_all_head)
 let GtGtOffTraceId = 0xA0  // async trace id (AsyncTrace only)
 let GtGtOffIoYielded = 0xA8  // 0=not yet yielded, 1=context switch complete
+
 // CPU-fault diagnostic fields (multi-M fault handler, Phase 4). Byte-identical to the
 // C# GtLayout / self-hosted x64 GtOffFault* so GtGtStructSize stays 0xD8 across compilers.
 // The hand-emitted sigaction thunk stashes the faulting state in the __gt_fault_* .data
@@ -353,6 +354,115 @@ function arm64GtLoadCurrentP(code ByteArray, rdataRelocs RdataRelocationArray, d
 end 'arm64GtLoadCurrentP'
 
 // =============================================================================
+// Recursive spinlock helpers (__slab_lock_acquire / __slab_lock_release).
+//
+// Layout in the 40-byte lock global: [lock@0 (0=free / 1=held), owner@8 (masked
+// thread pointer), count@16 (recursion depth)]. osLockInit stays a no-op because
+// a zero-initialised .data lock IS an unlocked lock.
+//
+// OWNER TOKEN = the masked thread pointer TPIDRRO_EL0 & ~7 — a per-OS-thread-stable,
+// non-zero, unique value (each M is pinned to one OS thread). This is the C#'s
+// X28=P owner semantics without dedicating a register, and needs no pthread key,
+// no TSD deref, and no NULL-owner edge case; it works pre-scheduler and multi-M
+// uniformly. Read with MRS x16,TPIDRRO_EL0 ; LSR x16,#3 ; LSL x16,#3.
+//
+// Both helpers take the lock address in x0 and clobber only x16/x17 (reserved
+// scratch, outside the regalloc pool) — leaf functions, no stack frame, no calls.
+// The MIR osLockAcquire/osLockRelease ops are isCall:true, so the surrounding
+// compiled code already spills caller-saved registers across the BL to these.
+//
+// Raw encodings (assembler-verified): MRS x16,TPIDRRO_EL0 = 0xD53BD070;
+// LDAXR Xt,[Xn] = 0xC85FFC00|(rn<<5)|rt; STLXR Ws,Xt,[Xn] = 0xC800FC00|(rs<<16)|
+// (rn<<5)|rt; STLR Xt,[Xn] = 0xC89FFC00|(rn<<5)|rt; CMP Xn,Xm = 0xEB00001F|
+// (rm<<16)|(rn<<5). The STLXR rs==rt form is tolerated on Apple Silicon (C# ships
+// it). LSR/LSL via arm64GtLsrImm/arm64GtLslImm.
+// =============================================================================
+
+let GtLockOffOwner = 8  // owner@8: masked thread pointer of the holding M (0 = free)
+let GtLockOffCount = 16  // count@16: recursion depth (number of nested acquires)
+let GtTpidrro = 0xD53BD060  // MRS Xt,TPIDRRO_EL0 base; or Rt for the dest register
+
+// Materialise the owner token (masked thread pointer) into reg via
+// MRS reg,TPIDRRO_EL0 ; LSR reg,reg,#3 ; LSL reg,reg,#3.
+function arm64GtOwnerToken(code ByteArray, reg MachineWord)
+	arm64EmitInsn(code, insn: GtTpidrro or reg)
+	arm64GtLsrImm(code, rd: reg, rn: reg, shift: 3)
+	arm64GtLslImm(code, rd: reg, rn: reg, shift: 3)
+end 'arm64GtOwnerToken'
+
+// __slab_lock_acquire(addr=x0): acquire the recursive spinlock at [x0].
+// Re-entrant fast path bumps count when the current M already owns it; otherwise
+// spins on an LDAXR/STLXR CAS of lock@0 from 0->1, then records owner+count=1.
+function emitArm64SlabLockAcquire(code ByteArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
+	arm64RecordLabel(labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "__slab_lock_acquire", offset: code.count())
+	var state = Arm64MacosGtState.create(3)
+
+	let spinBlock = 0
+	let ownedBlock = 1
+	let doneBlock = 2
+
+	// x16 = owner token (masked thread pointer).
+	arm64GtOwnerToken(code, reg: 16)
+
+	// If owner@8 already == this token, we hold it → recursive increment.
+	arm64GtLoadField(code, dest: 17, baseReg: 0, disp: GtLockOffOwner)
+	arm64EmitInsn(code, insn: 0xEB00001F or (16 shl 16) or (17 shl 5))  // CMP x17, x16
+	arm64GtCondBranch(code, state: state, cond: GtCondEq, targetBlock: ownedBlock)
+
+	// SPIN: LDAXR x17,[x0] ; if held (x17 != 0) retry ; else STLXR w17,#1,[x0] ;
+	// if the store-exclusive failed (status != 0) retry.
+	arm64GtMarkBlock(state, code: code, blockId: spinBlock)
+	arm64EmitInsn(code, insn: 0xC85FFC00 or (0 shl 5) or 17)  // LDAXR x17, [x0]
+	arm64GtCbnz(code, state: state, rn: 17, targetBlock: spinBlock)
+	arm64EmitMovImm(code, rd: 17, value: 1)
+	arm64EmitInsn(code, insn: 0xC800FC00 or (17 shl 16) or (0 shl 5) or 17)  // STLXR w17, x17, [x0]
+	arm64GtCbnz(code, state: state, rn: 17, targetBlock: spinBlock)
+
+	// Acquired: owner@8 = token ; count@16 = 1.
+	arm64GtStoreField(code, baseReg: 0, disp: GtLockOffOwner, src: 16)
+	arm64EmitMovImm(code, rd: 17, value: 1)
+	arm64GtStoreField(code, baseReg: 0, disp: GtLockOffCount, src: 17)
+	arm64GtBranch(code, state: state, targetBlock: doneBlock)
+
+	// OWNED: count@16 += 1 (re-entrant, no atomic — only the owning M reaches here).
+	arm64GtMarkBlock(state, code: code, blockId: ownedBlock)
+	arm64GtLoadField(code, dest: 17, baseReg: 0, disp: GtLockOffCount)
+	arm64EmitAddImm(code, rd: 17, rn: 17, imm12: 1)
+	arm64GtStoreField(code, baseReg: 0, disp: GtLockOffCount, src: 17)
+
+	arm64GtMarkBlock(state, code: code, blockId: doneBlock)
+	arm64EmitRet(code)
+	arm64GtFinalize(code, state: state)
+end 'emitArm64SlabLockAcquire'
+
+// __slab_lock_release(addr=x0): release one level of the recursive spinlock at
+// [x0]. Decrements count@16; on the outermost release (count hits 0) clears
+// owner@8 and stores 0 to lock@0 with release ordering (STLR) so the unlock is
+// visible before any subsequent acquire by another M.
+function emitArm64SlabLockRelease(code ByteArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
+	arm64RecordLabel(labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "__slab_lock_release", offset: code.count())
+	var state = Arm64MacosGtState.create(1)
+
+	let doneBlock = 0
+
+	// count@16 -= 1 ; store it back.
+	arm64GtLoadField(code, dest: 17, baseReg: 0, disp: GtLockOffCount)
+	arm64EmitSubImm(code, rd: 17, rn: 17, imm12: 1)
+	arm64GtStoreField(code, baseReg: 0, disp: GtLockOffCount, src: 17)
+
+	// Still held by an outer acquire (count != 0) → done.
+	arm64GtCbnz(code, state: state, rn: 17, targetBlock: doneBlock)
+
+	// Outermost release: owner@8 = 0 ; STLR xzr,[x0] (release ordering, REQUIRED).
+	arm64GtStoreField(code, baseReg: 0, disp: GtLockOffOwner, src: GtRegXzr)
+	arm64EmitInsn(code, insn: 0xC89FFC00 or (0 shl 5) or GtRegXzr)  // STLR xzr, [x0]
+
+	arm64GtMarkBlock(state, code: code, blockId: doneBlock)
+	arm64EmitRet(code)
+	arm64GtFinalize(code, state: state)
+end 'emitArm64SlabLockRelease'
+
+// =============================================================================
 // Top-level driver — emit every hand-rolled green-thread / sleep runtime
 // function. Called from concatArm64FunctionChunks under `if isMacosOs`, after the
 // stdlib link pass, so these labels override the runtime.std stubs.
@@ -362,6 +472,8 @@ end 'arm64GtLoadCurrentP'
 // =============================================================================
 export function emitArm64MacosGreenThread(code ByteArray, relocations RelocationArray, callFixups Arm64CallFixupArray, rdataRelocs RdataRelocationArray, adrFixups Arm64AdrFixupArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
 	emitArm64GtContextSwitch(code, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+	emitArm64SlabLockAcquire(code, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+	emitArm64SlabLockRelease(code, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
 	emitArm64GtEnqueue(code, rdataRelocs: rdataRelocs, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
 	emitArm64GtDequeue(code, rdataRelocs: rdataRelocs, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
 	emitArm64GtInit(code, relocations: relocations, rdataRelocs: rdataRelocs, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)

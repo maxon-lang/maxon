@@ -961,6 +961,28 @@ export type Arm64Backend implements TargetBackend
 		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movRegReg(Arm64VReg.virtual(resultId), src: arm64PhysReg(Arm64Register.x0)))
 	end 'emitArm64DirectCallHandRolled'
 
+	// Direct BL into a hand-rolled void runtime helper: move args into the AAPCS64
+	// call-conv GPRs and emit the BL, with NO return-value capture. Mirrors
+	// emitArm64DirectCallHandRolled minus the x0 result move. Used by the
+	// osLockAcquire/osLockRelease lowering (the helpers return void).
+	function emitArm64VoidCallHandRolled(callee String, argIds ValueIdArray, dstBlock IrBlock)
+		var argIdx = 0
+		while argIdx < argIds.count() 'moveArgs'
+			let argId = try argIds.get(argIdx) otherwise 'skipArg'
+				argIdx = argIdx + 1
+				continue
+			end 'skipArg'
+			if argIdx >= 8 'tooMany'
+				panic("emitArm64VoidCallHandRolled: callee '{callee}' has too many args ({argIds.count()}); GPR ABI supports 8")
+			end 'tooMany'
+			let ccReg = getArm64CallConvGpr(argIdx)
+			appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movRegReg(arm64PhysReg(ccReg), src: Arm64VReg.virtual(argId)))
+			argIdx = argIdx + 1
+		end 'moveArgs'
+
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.branchLink(callee))
+	end 'emitArm64VoidCallHandRolled'
+
 	// Mutating-method self-assignment (`arr = arr.push(...)`): Arm64 emit
 	// step for the shared decision in voidResultAliasReceiverId — mirrors
 	// the X64 path. Without this, the SSA backend would fail to color the
@@ -1113,10 +1135,12 @@ export type Arm64Backend implements TargetBackend
 			atomicDec(addrId) then result = lowerAtomicDecArm64(addrId, dstBlock: dstBlock, nextTempSlot: nextTempSlot)
 			atomicXadd(resultId, addrId, valId) then result = lowerAtomicXaddArm64(resultId, addrId: addrId, valId: valId, dstBlock: dstBlock, nextTempSlot: nextTempSlot)
 			atomicCas(resultId, addrId, oldId, newId) then result = lowerAtomicCasArm64(resultId, addrId: addrId, oldId: oldId, newId: newId, dstBlock: dstBlock, nextTempSlot: nextTempSlot)
-			// Linux locks land in step 6a.12 with the runtime.std spinlock helpers.
+			// osLockInit stays a no-op: a zero-initialised .data lock IS unlocked, so
+			// no init code is needed on any target. (Linux locks land in step 6a.12
+			// with the runtime.std spinlock helpers.)
 			osLockInit then result = nextTempSlot
-			osLockAcquire then result = nextTempSlot
-			osLockRelease then result = nextTempSlot
+			osLockAcquire(addrId) then result = lowerOsLockAcquireArm64(addrId, dstBlock: dstBlock, nextTempSlot: nextTempSlot, osDesc: osDesc)
+			osLockRelease(addrId) then result = lowerOsLockReleaseArm64(addrId, dstBlock: dstBlock, nextTempSlot: nextTempSlot, osDesc: osDesc)
 			movImm to storeSlot then break 'lower'
 			tryCall to errorReturn then break 'lower'
 		end 'lower'
@@ -1147,6 +1171,42 @@ export type Arm64Backend implements TargetBackend
 		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.atomicCasMem(Arm64VReg.virtual(resultId), addrReg: Arm64VReg.virtual(addrId), oldReg: Arm64VReg.virtual(oldId), newReg: Arm64VReg.virtual(newId)))
 		return nextTempSlot
 	end 'lowerAtomicCasArm64'
+
+	// osLockAcquire(addr): on macos, BL into the hand-emitted recursive spinlock
+	// helper __slab_lock_acquire(addr in x0) (emitArm64SlabLockAcquire). The MIR op
+	// is isCall:true so caller-saved registers are already spilled across it. On
+	// other targets the lock stays a no-op (Linux uses the runtime.std spinlock).
+	function lowerOsLockAcquireArm64(addrId ValueId, dstBlock IrBlock, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
+		if arm64OsUsesSpinlockHelper(osDesc) 'emitLock'
+			var argIds = ValueIdArray.create()
+			argIds.push(addrId)
+			emitArm64VoidCallHandRolled("__slab_lock_acquire", argIds: argIds, dstBlock: dstBlock)
+		end 'emitLock'
+		return nextTempSlot
+	end 'lowerOsLockAcquireArm64'
+
+	// osLockRelease(addr): macos BL into __slab_lock_release(addr in x0). See
+	// lowerOsLockAcquireArm64.
+	function lowerOsLockReleaseArm64(addrId ValueId, dstBlock IrBlock, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
+		if arm64OsUsesSpinlockHelper(osDesc) 'emitUnlock'
+			var argIds = ValueIdArray.create()
+			argIds.push(addrId)
+			emitArm64VoidCallHandRolled("__slab_lock_release", argIds: argIds, dstBlock: dstBlock)
+		end 'emitUnlock'
+		return nextTempSlot
+	end 'lowerOsLockReleaseArm64'
+
+	// True on the targets whose osLockAcquire/Release lower to the hand-emitted
+	// recursive spinlock helpers (currently arm64-macos). Other targets keep the
+	// no-op (Linux uses the runtime.std spinlock; windows/wasi unused here).
+	function arm64OsUsesSpinlockHelper(osDesc OsDescriptor) returns bool
+		return match osDesc.os 'os'
+			macos gives true
+			linux gives false
+			windows gives false
+			wasi gives false
+		end 'os'
+	end 'arm64OsUsesSpinlockHelper'
 
 	// Ensure a value is stored to a VarSlot. For SysOps that need slot-based addressing,
 	// we store the virtual register value into a temp slot.
