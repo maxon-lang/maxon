@@ -2167,6 +2167,19 @@ function emitRepStosqOp(code ByteArray)
 	code.push(0xAB)
 end 'emitRepStosqOp'
 
+// --- MFENCE: full StoreLoad memory barrier ---
+// Encoding: 0F AE F0. The green-thread await/trampoline waiter/status handshake is
+// Dekker-style (store one location, then load the other on each side). x64 TSO still
+// permits StoreLoad reordering, so without this fence the completer could load
+// gt.waiter before its `status = completed` store is globally visible while the
+// awaiter loads status before its `waiter = self` store is visible — the lost-wakeup
+// double-miss. Mirrors the arm64 DMB ISH (arm64GtDmbIsh). Clobbers nothing.
+function emitMfenceOp(code ByteArray)
+	code.push(0x0F)
+	code.push(0xAE)
+	code.push(0xF0)
+end 'emitMfenceOp'
+
 // --- LOCK INC qword ptr [addr] ---
 // Encoding: F0 REX.W FF /0 ModRM
 // REX.B is set when addr is in r8..r15. We delegate ModRM/SIB/disp encoding to
@@ -6740,6 +6753,11 @@ function emitX64GtTrampoline(code ByteArray, relocations RelocationArray, callFi
 
 	helperMovRegImm(code, dest: X64Register.rax, value: GtStatusCompleted)
 	helperStoreIndirect(code, base: X64Register.r12, disp: GtOffStatus, src: X64Register.rax)
+	// Dekker StoreLoad barrier: order `gt.status = completed` before the waiter LOAD
+	// below. Pairs with the awaiter's MFENCE — if it has published its waiter we are
+	// guaranteed to observe it; otherwise it observes our status on its recheck.
+	// Closes the lost-wakeup race. See emitMfenceOp.
+	emitMfenceOp(code)
 	// Stash gt.waiter into P.pendingWaiter — we must NOT context-switch directly to
 	// the waiter (it may be suspended on another OS thread; cross-thread RSP/RBP swap
 	// corrupts both stacks). The scheduler's __gt_process_pending_waiter re-enqueues
@@ -7030,6 +7048,10 @@ function emitX64GtAwait(code ByteArray, relocations RelocationArray, callFixups 
 	helperStoreIndirect(code, base: X64Register.r11, disp: GtOffStatus, src: X64Register.rax)
 	helperLoadSlot(code, slotIndex: 0, dest: X64Register.r10)
 	helperStoreIndirect(code, base: X64Register.r10, disp: GtOffWaiter, src: X64Register.r11)
+	// Dekker StoreLoad barrier: force `promise.waiter = self` to global visibility
+	// before the loop's recheck LOAD of promise.status. Pairs with the trampoline's
+	// MFENCE so the lost-wakeup double-miss is impossible. See emitMfenceOp.
+	emitMfenceOp(code)
 
 	// block 1 (loop): re-enqueue any deferred waiter, then g = dequeue(); if null →
 	// recheck; else run g. process_pending_waiter handles a GT that completed on this

@@ -1909,6 +1909,11 @@ function emitArm64GtTrampoline(code ByteArray, callFixups Arm64CallFixupArray, r
 	arm64GtLoad(code, dest: 9, disp: 0x10)
 	arm64EmitMovImm(code, rd: 0, value: GtStatusCompleted)
 	arm64GtStoreField(code, baseReg: 9, disp: GtGtOffStatus, src: 0)
+	// Dekker StoreLoad barrier: order `gt.status = completed` before the waiter LOAD
+	// below. Pairs with the awaiter's barrier — if the awaiter has published its
+	// waiter, we are guaranteed to observe it here; otherwise it observes our
+	// status=completed on its recheck. Closes the lost-wakeup race. See arm64GtDmbIsh.
+	arm64GtDmbIsh(code)
 
 	// Defer the waiter into P.pendingWaiter (do NOT switch directly to it — the
 	// scheduler re-enqueues it after we've left this GT's stack). x0 = gt.waiter.
@@ -2067,6 +2072,11 @@ function emitArm64GtAwait(code ByteArray, relocations RelocationArray, callFixup
 	arm64GtStoreField(code, baseReg: 11, disp: GtGtOffStatus, src: 0)
 	arm64GtReloadArg(code, dest: 9, argIndex: 0)
 	arm64GtStoreField(code, baseReg: 9, disp: GtGtOffWaiter, src: 11)
+	// Dekker StoreLoad barrier: force `promise.waiter = self` to global visibility
+	// before the loop's recheck LOAD of promise.status. Pairs with the trampoline's
+	// barrier so the completer cannot read waiter==0 while we read status!=completed
+	// (the lost-wakeup double-miss). See arm64GtDmbIsh.
+	arm64GtDmbIsh(code)
 
 	// loop: process_pending_waiter ; io_check_completions ; timer_check ; g = dequeue.
 	arm64GtMarkBlock(state, code: code, blockId: loopBlock)
