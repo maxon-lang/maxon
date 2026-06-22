@@ -707,7 +707,11 @@ function registerSlabAndMmGlobalsForDataSection(globalData GlobalDataTable, asyn
 	// running-worker count; `__sched_shutdown_flag` signals worker exit;
 	// `__sched_global_queue_cs` is the CRITICAL_SECTION guarding the global run queue;
 	// `__sched_tls_index` / `__sched_tls_teb_offset` hold the TlsAlloc slot and its
-	// precomputed gs:[] offset for reading the current OS thread's ProcContext*.
+	// precomputed gs:[] offset for reading the current OS thread's ProcContext*
+	// (x64-Windows). `__sched_tls_key` is the macOS arm64 equivalent: it holds the
+	// `pthread_key_t` returned by pthread_key_create, used to read the current OS
+	// thread's ProcContext* via pthread_getspecific (the masked-TPIDRRO owner token
+	// already covers the lock, but per-thread P needs a real TSD slot once >1 M runs).
 	addDataSectionEntry(globalData, name: "__sched_procs", initialBytes: zeroBytesOfSize(8))
 	addDataSectionEntry(globalData, name: "__sched_num_procs", initialBytes: zeroBytesOfSize(8))
 	addDataSectionEntry(globalData, name: "__sched_max_procs", initialBytes: zeroBytesOfSize(8))
@@ -715,6 +719,7 @@ function registerSlabAndMmGlobalsForDataSection(globalData GlobalDataTable, asyn
 	addDataSectionEntry(globalData, name: "__sched_shutdown_flag", initialBytes: zeroBytesOfSize(8))
 	addDataSectionEntry(globalData, name: "__sched_tls_index", initialBytes: zeroBytesOfSize(8))
 	addDataSectionEntry(globalData, name: "__sched_tls_teb_offset", initialBytes: zeroBytesOfSize(8))
+	addDataSectionEntry(globalData, name: "__sched_tls_key", initialBytes: zeroBytesOfSize(8))
 	addDataSectionEntry(globalData, name: "__sched_global_queue_cs", initialBytes: zeroBytesOfSize(40))
 
 	// Tier 4 all-threads list + live-thread count (Go-style GMP completion path).

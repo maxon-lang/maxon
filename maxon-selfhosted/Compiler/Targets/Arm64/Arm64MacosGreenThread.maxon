@@ -356,10 +356,31 @@ function arm64GtPatchImm19(code ByteArray, instrOffset Arm64Offset, targetOffset
 	patchDword(code, offset: instrOffset, value: patched)
 end 'arm64GtPatchImm19'
 
-// dest = __gt_current_p (the one ProcContext*; single-OS-thread model). Replaces
-// the x64 TLS read. Returns NULL when the scheduler is uninitialized.
+// dest = the current OS thread's ProcContext* (per-thread P), read inline from the
+// pthread thread-specific-data (TSD) array WITHOUT a pthread_getspecific call — the
+// macOS TSD layout is `tsd[key] == (TPIDRRO_EL0 & ~7) + key*8`, empirically probe-
+// confirmed. This replaces the single-M __gt_current_p global load so every P read
+// (spawn/trampoline/await/yield/sleep/cleanup/timer/enqueue/dequeue) is correct on
+// every M once >1 worker runs. The masked TPIDRRO_EL0 is the per-OS-thread TSD base.
+//
+// PRE-INIT GATE: before __gt_init runs, __sched_tls_key == 0; a plain LDR would read
+// tsd[0] (a real pthread-internal slot holding garbage), NOT NULL — violating the
+// P==NULL contract the __gt_dequeue guard + sync-Subprocess rely on. So gate with
+// CMP key,#0 ; CSEL dest,dest,xzr,NE: dest = (key != 0) ? tsd[key] : 0 — branchless,
+// returns NULL pre-init, and post-init yields 0 for un-adopted/raw OS threads (TSD
+// slot 0) and P[i] for adopted Ms. The tsd[0] read when key==0 is a harmless
+// discarded load. Clobbers ONLY dest + x16 + x17 (reserved scratch), so no call site
+// needs changes.
 function arm64GtLoadCurrentP(code ByteArray, rdataRelocs RdataRelocationArray, dest MachineWord)
-	arm64GtLoadGlobal(code, rdataRelocs: rdataRelocs, dest: dest, name: "__gt_current_p")
+	// x17 = pthread_key_t (__sched_tls_key value).
+	arm64GtLoadGlobal(code, rdataRelocs: rdataRelocs, dest: 17, name: "__sched_tls_key")
+	// x16 = masked thread pointer (TPIDRRO_EL0 & ~7) = TSD base.
+	arm64GtOwnerToken(code, reg: 16)
+	// dest = tsd[key] = *(x16 + key*8) via LDR dest,[x16, x17, LSL #3].
+	arm64EmitInsn(code, insn: 0xF8607800 or (17 shl 16) or (16 shl 5) or dest)
+	// dest = (key != 0) ? tsd[key] : 0.
+	arm64EmitCmpRegZero(code, rn: 17)  // CMP x17, #0
+	arm64EmitCsel(code, rd: dest, rn: dest, rm: GtRegXzr, cond: GtCondNe)
 end 'arm64GtLoadCurrentP'
 
 // =============================================================================
@@ -943,6 +964,21 @@ function emitArm64GtInit(code ByteArray, relocations RelocationArray, rdataReloc
 	arm64GtStoreGlobal(code, rdataRelocs: rdataRelocs, src: 2, name: "__sched_procs", scratch: 9)
 	arm64EmitMovImm(code, rd: 9, value: 1)
 	arm64GtStoreGlobal(code, rdataRelocs: rdataRelocs, src: 9, name: "__sched_num_procs", scratch: 10)
+
+	// Per-OS-thread P pointer via pthread TSD (multi-M groundwork): the single
+	// __gt_current_p global cannot hold per-thread P once >1 worker M runs, so each
+	// M reads P via pthread_getspecific(__sched_tls_key) (see arm64GtLoadCurrentP).
+	// pthread_key_create(&__sched_tls_key, NULL): x0 = address of the writable .data
+	// key slot (it IS the pthread_key_t* arg — no stack temp needed), x1 = NULL.
+	arm64GtGlobalAddr(code, rdataRelocs: rdataRelocs, dest: 0, name: "__sched_tls_key")
+	arm64EmitMovImm(code, rd: 1, value: 0)
+	arm64GtCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_PTHREAD_KEY_CREATE)
+
+	// pthread_setspecific(__sched_tls_key, P): adopt P[0] for the main M. The import
+	// clobbered x0-x18, so reload the key value and P from their frame slots first.
+	arm64GtLoadGlobal(code, rdataRelocs: rdataRelocs, dest: 0, name: "__sched_tls_key")
+	arm64GtLoad(code, dest: 1, disp: 0x10)  // P
+	arm64GtCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_PTHREAD_SETSPECIFIC)
 
 	// P.mainThread.status = running ; P.currentGt = &P.mainThread.
 	arm64GtLoad(code, dest: 1, disp: 0x10)  // P
