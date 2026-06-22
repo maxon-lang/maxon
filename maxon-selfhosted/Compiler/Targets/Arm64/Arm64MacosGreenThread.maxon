@@ -1937,15 +1937,30 @@ end 'emitArm64GtTrampoline'
 // __gt_process_pending_waiter(): re-ready a waiter a just-completed GT deferred
 // into P.pendingWaiter. A regular GT waiter is marked ready and re-enqueued; a
 // parked main-thread waiter (stackBase==0) is left for its own loop's recheck.
-// Ports the self-hosted x64 emitX64GtProcessPendingWaiter. Void. Frame: none.
+// Ports the self-hosted x64 emitX64GtProcessPendingWaiter. Void.
+//
+// ioYielded GATE (multi-M): before re-enqueueing a regular GT waiter, spin until
+// w.ioYielded == 1. The awaiter cleared its own ioYielded=0 in __gt_await right
+// before publishing promise.waiter=self, and __gt_context_switch sets it back to 1
+// only AFTER it has saved the awaiter's SP/callee-saved block to w.sp. Enqueueing w
+// while ioYielded==0 (its registers still in-flight on its original M's stack) lets
+// another M dequeue+context_switch-to w and restore a garbage register block — the
+// SIGBUS race. This is the await/trampoline analogue of the C# __io_complete_gt
+// __io_complete_gt_spin gate (ARM64CodeEmitter.Runtime.cs:6059). The await idle path
+// guarantees the awaiter always reaches a context_switch (it switches back to its
+// M's scheduler when it has nothing to run), so this spin always terminates.
+// Frame: w@0x10.
 // =============================================================================
 function emitArm64GtProcessPendingWaiter(code ByteArray, callFixups Arm64CallFixupArray, rdataRelocs RdataRelocationArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
 	arm64RecordLabel(labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "__gt_process_pending_waiter", offset: code.count())
 	let frameSize = 0x20
-	var state = Arm64MacosGtState.create(1)
+	var state = Arm64MacosGtState.create(2)
 	arm64GtPrologue(code, frameSize: frameSize, argCount: 0)
 
 	let doneBlock = 0
+	let spinBlock = 1
+
+	let slotW = 0x10
 
 	// w = P.pendingWaiter ; if null → done.
 	arm64GtLoadCurrentP(code, rdataRelocs: rdataRelocs, dest: 11)
@@ -1956,7 +1971,19 @@ function emitArm64GtProcessPendingWaiter(code ByteArray, callFixups Arm64CallFix
 	// if w.stackBase == 0 (parked main thread) → done (it rechecks itself).
 	arm64GtLoadField(code, dest: 0, baseReg: 10, disp: GtGtOffStackBase)
 	arm64GtCbz(code, state: state, rn: 0, targetBlock: doneBlock)
+	arm64GtStore(code, disp: slotW, src: 10)  // home w across the spin / enqueue BL
+
+	// spin: wait until w.ioYielded == 1 (awaiter has saved its context), so the
+	// __gt_enqueue below can never publish a still-running GT. A DMB ISH per iteration
+	// pairs with __gt_context_switch's ioYielded=1 store on the awaiter's M.
+	arm64GtMarkBlock(state, code: code, blockId: spinBlock)
+	arm64GtLoad(code, dest: 10, disp: slotW)
+	arm64GtLoadField(code, dest: 0, baseReg: 10, disp: GtGtOffIoYielded)
+	arm64GtCbz(code, state: state, rn: 0, targetBlock: spinBlock)
+	arm64GtDmbIsh(code)
+
 	// regular GT: w.status = ready ; __gt_enqueue(w).
+	arm64GtLoad(code, dest: 10, disp: slotW)
 	arm64EmitMovImm(code, rd: 0, value: GtStatusReady)
 	arm64GtStoreField(code, baseReg: 10, disp: GtGtOffStatus, src: 0)
 	arm64EmitMovRegReg(code, rd: 0, rn: 10)
@@ -2039,7 +2066,7 @@ end 'emitArm64GtYield'
 function emitArm64GtAwait(code ByteArray, relocations RelocationArray, callFixups Arm64CallFixupArray, rdataRelocs RdataRelocationArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
 	arm64RecordLabel(labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "__gt_await", offset: code.count())
 	let frameSize = 0x50
-	var state = Arm64MacosGtState.create(10)
+	var state = Arm64MacosGtState.create(11)
 	arm64GtPrologue(code, frameSize: frameSize, argCount: 1)
 
 	let loopBlock = 0
@@ -2051,6 +2078,8 @@ function emitArm64GtAwait(code ByteArray, relocations RelocationArray, callFixup
 	let skipFreeStack = 6
 	let freeFull = 7
 	let freeDone = 8
+	let idleBlock = 9
+	let mainParkBlock = 10
 
 	// yielded = 0 (immediate unless we have to wait).
 	arm64EmitMovImm(code, rd: 0, value: 0)
@@ -2066,8 +2095,19 @@ function emitArm64GtAwait(code ByteArray, relocations RelocationArray, callFixup
 	arm64EmitMovImm(code, rd: 0, value: 1)
 	arm64GtStore(code, disp: 0x20, src: 0)
 	// self = P.currentGt ; self.status = waiting ; promise.waiter = self.
+	// ioYielded=0 (cleared BEFORE publishing promise.waiter=self) is the re-enqueue
+	// gate that stops the completer from resuming us on a second M while our register
+	// context is still on this stack and unsaved. The completing GT's
+	// __gt_process_pending_waiter spin-waits until self.ioYielded==1 (which
+	// __gt_context_switch sets only AFTER saving our SP/callee-saved block to self.sp)
+	// before it __gt_enqueue's us. Without this gate a sibling leaf that completes on
+	// another M between this store and the loop's first context_switch could
+	// re-enqueue+resume `self` mid-flight, restoring a garbage callee-saved/SP block
+	// (the SIGBUS race). Mirrors the C# __io_submit_sync / __io_complete_gt ioYielded
+	// handshake (ARM64CodeEmitter.Runtime.cs:4824 + 6059).
 	arm64GtLoadCurrentP(code, rdataRelocs: rdataRelocs, dest: 11)
 	arm64GtLoadField(code, dest: 11, baseReg: 11, disp: GtPOffCurrentGt)
+	arm64GtStoreField(code, baseReg: 11, disp: GtGtOffIoYielded, src: GtRegXzr)
 	arm64EmitMovImm(code, rd: 0, value: GtStatusWaiting)
 	arm64GtStoreField(code, baseReg: 11, disp: GtGtOffStatus, src: 0)
 	arm64GtReloadArg(code, dest: 9, argIndex: 0)
@@ -2084,7 +2124,7 @@ function emitArm64GtAwait(code ByteArray, relocations RelocationArray, callFixup
 	arm64GtBranchLink(code, callFixups: callFixups, name: "__io_check_completions")
 	arm64GtBranchLink(code, callFixups: callFixups, name: "__gt_timer_check")
 	arm64GtBranchLink(code, callFixups: callFixups, name: "__gt_dequeue")  // x0 = g or 0
-	arm64GtCbz(code, state: state, rn: 0, targetBlock: recheckBlock)
+	arm64GtCbz(code, state: state, rn: 0, targetBlock: idleBlock)
 	// Run g: save it ; g.status = running ; context_switch(from=P.currentGt, to=g, P).
 	arm64GtStore(code, disp: 0x28, src: 0)  // next
 	arm64EmitMovImm(code, rd: 1, value: GtStatusRunning)
@@ -2098,6 +2138,51 @@ function emitArm64GtAwait(code ByteArray, relocations RelocationArray, callFixup
 	arm64GtLoad(code, dest: 0, disp: 0x28)
 	arm64EmitMovImm(code, rd: 1, value: 1)
 	arm64GtStoreField(code, baseReg: 0, disp: GtGtOffIoYielded, src: 1)
+	// Productive dispatch — recheck immediately (the idle usleep is only for the
+	// dequeue==0 path, so we don't add latency after every dispatched GT).
+	arm64GtBranch(code, state: state, targetBlock: recheckBlock)
+
+	// idle: __gt_dequeue found no runnable GT on this M. Two cases, split on whether
+	// the awaiter is a worker-dispatched GT or the main OS thread (stackBase==0):
+	//
+	//   * WORKER GT (stackBase!=0): switch back to this M's scheduler (P.mainThread)
+	//     instead of spinning on our own stack. This is the textbook GMP "a blocked GT
+	//     yields its M" move and it fixes BOTH multi-M failure modes:
+	//       - LIVENESS: spinning here pins the M to one awaiter, so a sibling GT that
+	//         becomes runnable only on THIS P's local/runnext (unstealable by the >=2
+	//         steal guard) is stranded — no M ever reaches it and every worker parks.
+	//         Returning to the scheduler loop lets this M run that sibling, park, or be
+	//         woken to re-dispatch us once our awaited child completes.
+	//       - SAFETY: __gt_context_switch saves our SP/callee-saved block to self.sp and
+	//         sets self.ioYielded=1, which releases the __gt_process_pending_waiter gate
+	//         so the completer can safely re-enqueue us. Without ever switching, our
+	//         ioYielded would stay 0 forever and that gate would deadlock.
+	//     We resume here (after the scheduler re-dispatches us) and fall into recheck.
+	//   * MAIN THREAD (stackBase==0): there is no scheduler GT to switch to (we ARE the
+	//     scheduler), so usleep(200us) and recheck — parked (state S, SIGTERM-killable),
+	//     not a busy core-burning UE.
+	arm64GtMarkBlock(state, code: code, blockId: idleBlock)
+	arm64GtLoadCurrentP(code, rdataRelocs: rdataRelocs, dest: 11)
+	arm64GtLoadField(code, dest: 9, baseReg: 11, disp: GtPOffCurrentGt)  // self
+	arm64GtLoadField(code, dest: 0, baseReg: 9, disp: GtGtOffStackBase)
+	arm64GtCbz(code, state: state, rn: 0, targetBlock: mainParkBlock)  // stackBase==0 → main thread
+
+	// Worker GT: context_switch(from=self, to=&P.mainThread, p=P) back to the scheduler.
+	arm64EmitMovRegReg(code, rd: 0, rn: 9)  // from = self
+	arm64EmitMovRegReg(code, rd: 2, rn: 11)  // p = P
+	arm64EmitAddImm(code, rd: 1, rn: 11, imm12: GtPOffMainThread)  // to = &P.mainThread
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__gt_context_switch")
+	// Resumed by a worker re-dispatching us once our awaited child completed. P may be a
+	// different M now — reload it (recheck reloads promise from the homed arg).
+	arm64GtBranch(code, state: state, targetBlock: recheckBlock)
+
+	// main_park: the main OS thread has no scheduler GT; sleep briefly and recheck.
+	// usleep clobbers no live state here (P/promise are reloaded fresh below), but
+	// reload P after the import so a P-held register can never go stale across the sleep.
+	arm64GtMarkBlock(state, code: code, blockId: mainParkBlock)
+	arm64EmitMovImm(code, rd: 0, value: 200)  // usleep(200) = 200 us
+	arm64GtCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_USLEEP)
+	arm64GtLoadCurrentP(code, rdataRelocs: rdataRelocs, dest: 11)
 
 	// recheck: if promise.status != completed → loop.
 	arm64GtMarkBlock(state, code: code, blockId: recheckBlock)
