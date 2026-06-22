@@ -492,14 +492,17 @@ export function augmentWithRuntime(module StdModule, project Project) returns St
 	if project.target.cpu == CpuArch.wasm32 'wasmBootstrap'
 		patchMrtStartWasmBootstrap(augmented)
 	end 'wasmBootstrap'
-	// On x64-Windows, install the CPU-fault handler (the vectored exception handler
-	// registered at the tail of __gt_init) for EVERY program — not just async ones —
-	// so a hardware fault in straight-line code prints a clean diagnostic and exits 1
-	// instead of a silent 0xC0000005. Mirrors the C# bootstrap, which calls __gt_init
-	// unconditionally from _start. The call is idempotent (guarded by __gt_init_done),
-	// so an async program that later spawns just observes the flag and skips re-init.
-	if project.target.cpu == CpuArch.x64 and project.target.os == Os.windows 'x64WinFaultHandler'
+	// Install the CPU-fault handler (registered at the tail of __gt_init: a vectored
+	// exception handler on x64-Windows, a sigaction handler on arm64-macOS) for EVERY
+	// program — not just async ones — so a hardware fault in straight-line code prints
+	// a clean panic diagnostic and exits 1 instead of a silent crash. Mirrors the C#
+	// bootstrap, which calls __gt_init unconditionally from _start. The call is
+	// idempotent (guarded by __gt_init_done), so an async program that later spawns
+	// just observes the flag and skips re-init.
+	if nativeGtRuntime 'nativeGtFaultHandler'
 		patchMrtStartCallGtInit(augmented)
+	end 'nativeGtFaultHandler'
+	if project.target.cpu == CpuArch.x64 and project.target.os == Os.windows 'x64WinFaultHandler'
 		// Bring up the IOCP async-I/O subsystem (completion thread + sync worker)
 		// right after the scheduler, and tear it down before osExit — mirroring the
 		// C# bootstrap, which calls __io_init / __io_shutdown unconditionally from
@@ -963,6 +966,12 @@ function filterRuntimeByReachability(runtime StdModule, userModule StdModule, ta
 		seedRuntimeReachName("__gt_cancel", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
 		seedRuntimeReachName("__diag_print_tag", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
 		seedRuntimeReachName("__diag_print_i64", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
+		// The hand-rolled CPU-fault diagnostic (`emitArm64GtFaultDiagnostic`) BLs these
+		// two `.std` helpers to render its panic line, and no other call edge reaches
+		// them in a non-fault, non-trace program — seed them or the fixups resolve to
+		// .text+0 ("Unresolved label"). Mirrors the x64-Windows leg above (919-920).
+		seedRuntimeReachName("mrt_write_cstr_stderr", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
+		seedRuntimeReachName("__diag_print_hex", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
 	end 'arm64MacosGt'
 
 	// Seed the argv-cache teardown helper for whichever backend builds a cache.

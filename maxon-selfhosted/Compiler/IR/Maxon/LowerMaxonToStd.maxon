@@ -749,16 +749,18 @@ function registerSlabAndMmGlobalsForDataSection(globalData GlobalDataTable, asyn
 	addDataSectionEntry(globalData, name: "__gt_timer_count", initialBytes: zeroBytesOfSize(8))
 	addDataSectionEntry(globalData, name: "__gt_timer_cs", initialBytes: zeroBytesOfSize(40))
 
-	// Tier 4 CPU-fault diagnostics (x64-Windows `emitX64GtFaultThunk` /
-	// `emitX64GtFaultDiagnostic`). The vectored exception handler stashes the
-	// faulting RIP, the bad VA, and a pointer to the chosen panic-message string in
-	// these mutable slots before redirecting the faulting thread's CONTEXT to the
-	// diagnostic printer. The `__gt_panic_msg_*` strings are the fixed messages the
-	// thunk LEAs (one per converted exception code) plus the tag fragments the
-	// diagnostic prints around the hex addresses. Reserved unconditionally so the
-	// .data layout is uniform across targets — wasm/arm64 emit no VEH and never
-	// touch these (dead bytes, like the GT timer heap). The diagnostic deliberately
-	// omits a trailing newline on each message; it appends " at rip=" + hex below.
+	// Tier 4 CPU-fault diagnostics. Two native backends consume these: x64-Windows
+	// (`emitX64GtFaultThunk` / `emitX64GtFaultDiagnostic`, a vectored exception
+	// handler) and arm64-macOS (`emitArm64GtFaultThunk` / `emitArm64GtFaultDiagnostic`,
+	// a sigaction handler). The handler stashes the faulting PC, the bad VA, and a
+	// pointer to the chosen panic-message string in these mutable slots before
+	// redirecting the faulting thread's CONTEXT/mcontext to the diagnostic printer.
+	// The `__gt_panic_msg_*` strings are the fixed messages the handler points at (one
+	// per converted fault code) plus the tag fragments the diagnostic prints around
+	// the hex addresses. Reserved unconditionally so the .data layout is uniform across
+	// targets — wasm emits no fault handler and never touches these (dead bytes, like
+	// the GT timer heap). The diagnostic deliberately omits a trailing newline on each
+	// message; it appends " at rip=" + hex below.
 	addDataSectionEntry(globalData, name: "__gt_fault_rip", initialBytes: zeroBytesOfSize(8))
 	addDataSectionEntry(globalData, name: "__gt_fault_last_addr", initialBytes: zeroBytesOfSize(8))
 	addDataSectionEntry(globalData, name: "__gt_fault_msg", initialBytes: zeroBytesOfSize(8))

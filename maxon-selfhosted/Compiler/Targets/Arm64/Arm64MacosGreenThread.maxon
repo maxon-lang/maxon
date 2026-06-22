@@ -153,6 +153,51 @@ let GtCondLe = 13
 // ADD/SUB/AND register-register opcodes (64-bit).
 let GtAluAdd = 0x8B000000
 let GtAluSub = 0xCB000000
+let GtAluAnd = 0x8A000000  // AND Xd, Xn, Xm (used to 16-align the redirect SP)
+
+// =============================================================================
+// CPU-fault handler (multi-M sigaction handler). Byte-identical to the C# GtLayout
+// / self-hosted x64 fault-code mapping (FaultCode* in X64Backend.maxon). macOS only
+// delivers SIGSEGV/SIGBUS/SIGFPE, so the SEGV/BUS->NilDeref and FPE->{DivZero by
+// si_code, else IntOverflow} subset is all that has a delivery path; StackOverflow
+// is declared for layout/message parity but is not separately classified (a true
+// stack overflow arrives as SIGSEGV and is handled on the sigaltstack as nil-deref).
+let FaultCodeNilDeref = 1
+let FaultCodeDivZero = 2
+let FaultCodeIntOverflow = 3
+let FaultCodeStackOverflow = 4
+let FaultFpeIntDiv = 7  // SIGFPE si_code for integer divide-by-zero (FPE_INTDIV)
+
+// Signal numbers (macOS).
+let FaultSigBus = 10
+let FaultSigSegv = 11
+let FaultSigFpe = 8
+
+// sigaction / sigaltstack flags + struct field offsets (Darwin arm64).
+let FaultSaSigInfo = 0x40
+let FaultSaOnStack = 0x01
+let FaultSaRestart = 0x02
+let FaultSaFlags = FaultSaSigInfo or FaultSaOnStack or FaultSaRestart  // 0x43
+let FaultSigactionOffHandler = 0x00  // sa_handler / sa_sigaction
+let FaultSigactionOffTramp = 0x08  // sa_tramp (leave NULL: kernel substitutes __sigtramp)
+let FaultSigactionOffMask = 0x10  // sa_mask
+let FaultSigactionOffFlags = 0x14  // sa_flags (32-bit)
+let FaultSigaltOffSp = 0x00  // ss_sp
+let FaultSigaltOffSize = 0x08  // ss_size
+let FaultSigaltOffFlags = 0x10  // ss_flags (32-bit)
+let FaultAltStackSize = 0x8000  // 32 KB altstack (matches the proven C# reference)
+
+// siginfo_t field offsets.
+let FaultSiginfoOffCode = 0x08  // si_code (32-bit)
+let FaultSiginfoOffAddr = 0x18  // si_addr (64-bit, the bad VA)
+
+// ucontext_t -> mcontext64 -> __darwin_arm_thread_state64 field offsets. These are
+// the OFF-BY-8-CORRECTED values: SsFp=0xF8, SsSp=0x108, SsPc=0x110 (NOT the stale
+// 0x100/0x110/0x118 inline-comment values in the C# reference).
+let FaultUcontextOffMcontext = 0x30
+let FaultMcontextOffSsFp = 0xF8
+let FaultMcontextOffSsSp = 0x108
+let FaultMcontextOffSsPc = 0x110
 
 // Named registers.
 let GtRegX29 = 29
@@ -543,6 +588,232 @@ function emitArm64SlabCurrentPId(code ByteArray, rdataRelocs RdataRelocationArra
 end 'emitArm64SlabCurrentPId'
 
 // =============================================================================
+// __gt_fault_diagnostic(): the redirect landing pad. The sigaction thunk rewrites
+// the faulting thread's mcontext so that, on kernel sigreturn, the thread resumes
+// HERE with a fresh 16-aligned SP and FP(x29)=0. Because FP is zeroed there is NO
+// valid frame chain — this MUST NOT call mrt_panic (which walks frames). Instead it
+// prints the chosen panic message + faulting PC + bad VA via the leaf cstr/hex
+// printers and _exit(1)s. Ports the self-hosted x64 emitX64GtFaultDiagnostic (the
+// body is ABI-agnostic; only the print/exit calls use arm64 conventions).
+//
+// Output line: "<msg> at rip=<hexpc> addr=<hexaddr>\n".
+// =============================================================================
+function emitArm64GtFaultDiagnostic(code ByteArray, relocations RelocationArray, callFixups Arm64CallFixupArray, rdataRelocs RdataRelocationArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
+	arm64RecordLabel(labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "__gt_fault_diagnostic", offset: code.count())
+	// Stand up a fresh frame (x29 was redirected to 0). 0x20 keeps SP 16-aligned for
+	// the leaf BL calls and the _exit import.
+	arm64GtPrologue(code, frameSize: 0x20, argCount: 0)
+
+	// <msg> — the chosen panic message (an 8-byte global holding the cstr ptr).
+	arm64GtLoadGlobal(code, rdataRelocs: rdataRelocs, dest: 0, name: "__gt_fault_msg")
+	arm64GtBranchLink(code, callFixups: callFixups, name: "mrt_write_cstr_stderr")
+
+	// " at rip=" <hex faulting PC>.
+	arm64GtGlobalAddr(code, rdataRelocs: rdataRelocs, dest: 0, name: "__gt_panic_msg_at_rip")
+	arm64GtBranchLink(code, callFixups: callFixups, name: "mrt_write_cstr_stderr")
+	arm64GtLoadGlobal(code, rdataRelocs: rdataRelocs, dest: 0, name: "__gt_fault_rip")
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__diag_print_hex")
+
+	// " addr=" <hex bad VA> (meaningful for SEGV/BUS; 0 otherwise).
+	arm64GtGlobalAddr(code, rdataRelocs: rdataRelocs, dest: 0, name: "__gt_panic_msg_addr")
+	arm64GtBranchLink(code, callFixups: callFixups, name: "mrt_write_cstr_stderr")
+	arm64GtLoadGlobal(code, rdataRelocs: rdataRelocs, dest: 0, name: "__gt_fault_last_addr")
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__diag_print_hex")
+
+	// Trailing newline.
+	arm64GtGlobalAddr(code, rdataRelocs: rdataRelocs, dest: 0, name: "__gt_panic_msg_nl")
+	arm64GtBranchLink(code, callFixups: callFixups, name: "mrt_write_cstr_stderr")
+
+	// _exit(1) — never returns.
+	arm64EmitMovImm(code, rd: 0, value: 1)
+	arm64GtCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_EXIT)
+
+	// Unreached (well-formedness only).
+	arm64GtEpilogue(code, frameSize: 0x20)
+end 'emitArm64GtFaultDiagnostic'
+
+// =============================================================================
+// __gt_fault_thunk(int sig=x0, siginfo_t* info=x1, void* uctx=x2): the sigaction
+// handler the kernel invokes on a hardware fault (SA_SIGINFO + SA_ONSTACK, so it
+// runs on the per-thread sigaltstack). Maps the signal to a fault code + panic
+// message, stashes the diagnostic info in the process-global __gt_fault_* slots,
+// then rewrites the faulting mcontext (pc/sp/fp) to resume at __gt_fault_diagnostic
+// and RETURNs — the kernel restores the (now-rewritten) mcontext on sigreturn,
+// landing the thread at the diagnostic. Merges the C# EmitFaultHandlerProlog +
+// shared chooser + EmitFaultHandlerEpilog (this runtime has no separate module),
+// mirroring how the self-hosted x64 merges them into emitX64GtFaultThunk.
+//
+// The thunk runs on the kernel signal frame: use ONLY x9-x15 as scratch (x16/x17
+// are reserved IP0/IP1 and are clobbered internally by arm64GtGlobalAddr /
+// arm64GtLoadGlobal / arm64GtStoreGlobal / arm64GtFuncAddr / arm64GtCallImport).
+// =============================================================================
+function emitArm64GtFaultThunk(code ByteArray, relocations RelocationArray, rdataRelocs RdataRelocationArray, adrFixups Arm64AdrFixupArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
+	arm64RecordLabel(labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "__gt_fault_thunk", offset: code.count())
+	let frameSize = 0x40
+	var state = Arm64MacosGtState.create(6)
+	// Homes sig@[x29+16], info@[x29+24], uctx@[x29+32].
+	arm64GtPrologue(code, frameSize: frameSize, argCount: 3)
+
+	let segvBlock = 0
+	let fpeBlock = 1
+	let chosenBlock = 2
+	let bailBlock = 3
+	let fpeDivBlock = 4
+	let redirectBlock = 5
+
+	// (A) Re-entrancy guard: a nested/teardown fault during the diagnostic's _exit
+	// rundown must not recurse into a second diagnostic + double print. If the guard
+	// is already set, bail (_exit(1)); otherwise claim it.
+	arm64GtLoadGlobal(code, rdataRelocs: rdataRelocs, dest: 9, name: "__gt_fault_in_progress")
+	arm64GtCbnz(code, state: state, rn: 9, targetBlock: bailBlock)
+	arm64EmitMovImm(code, rd: 9, value: 1)
+	arm64GtStoreGlobal(code, rdataRelocs: rdataRelocs, src: 9, name: "__gt_fault_in_progress", scratch: 10)
+
+	// (B) Classify sig -> faultCode (x10) + message global (chosen via a B to the
+	// per-signal block). SEGV(11)/BUS(10) -> NilDeref; FPE(8) -> div/overflow split
+	// on si_code; any other signal -> bail (we never install for those).
+	arm64GtReloadArg(code, dest: 9, argIndex: 0)  // sig
+	arm64GtCmpImm(code, rn: 9, imm12: FaultSigSegv)
+	arm64GtCondBranch(code, state: state, cond: GtCondEq, targetBlock: segvBlock)
+	arm64GtCmpImm(code, rn: 9, imm12: FaultSigBus)
+	arm64GtCondBranch(code, state: state, cond: GtCondEq, targetBlock: segvBlock)
+	arm64GtCmpImm(code, rn: 9, imm12: FaultSigFpe)
+	arm64GtCondBranch(code, state: state, cond: GtCondEq, targetBlock: fpeBlock)
+	arm64GtBranch(code, state: state, targetBlock: bailBlock)
+
+	// SEGV/BUS -> nil-deref. x9 = &msg, x10 = faultCode (homed for the chosen block).
+	arm64GtMarkBlock(state, code: code, blockId: segvBlock)
+	arm64GtGlobalAddr(code, rdataRelocs: rdataRelocs, dest: 9, name: "__gt_panic_msg_nil_deref")
+	arm64EmitMovImm(code, rd: 10, value: FaultCodeNilDeref)
+	arm64GtBranch(code, state: state, targetBlock: chosenBlock)
+
+	// FPE -> si_code==FPE_INTDIV(7) ? div-zero : int-overflow.
+	arm64GtMarkBlock(state, code: code, blockId: fpeBlock)
+	arm64GtReloadArg(code, dest: 11, argIndex: 1)  // info
+	arm64EmitLoadWordWidth(code, rt: 11, rn: 11, offset: FaultSiginfoOffCode, signed: false)  // si_code (32-bit)
+	arm64GtCmpImm(code, rn: 11, imm12: FaultFpeIntDiv)
+	arm64GtCondBranch(code, state: state, cond: GtCondEq, targetBlock: fpeDivBlock)
+	arm64GtGlobalAddr(code, rdataRelocs: rdataRelocs, dest: 9, name: "__gt_panic_msg_int_overflow")
+	arm64EmitMovImm(code, rd: 10, value: FaultCodeIntOverflow)
+	arm64GtBranch(code, state: state, targetBlock: chosenBlock)
+
+	arm64GtMarkBlock(state, code: code, blockId: fpeDivBlock)
+	arm64GtGlobalAddr(code, rdataRelocs: rdataRelocs, dest: 9, name: "__gt_panic_msg_div_zero")
+	arm64EmitMovImm(code, rd: 10, value: FaultCodeDivZero)
+	// Fall through to chosen.
+
+	// (C) chosen: stash the chosen message ptr (x9) into __gt_fault_msg.
+	arm64GtMarkBlock(state, code: code, blockId: chosenBlock)
+	arm64GtStoreGlobal(code, rdataRelocs: rdataRelocs, src: 9, name: "__gt_fault_msg", scratch: 12)
+
+	// (D) Stash bad VA = info->si_addr (+0x18).
+	arm64GtReloadArg(code, dest: 11, argIndex: 1)  // info
+	arm64GtLoadField(code, dest: 11, baseReg: 11, disp: FaultSiginfoOffAddr)
+	arm64GtStoreGlobal(code, rdataRelocs: rdataRelocs, src: 11, name: "__gt_fault_last_addr", scratch: 12)
+
+	// Stash faulting PC = mcontext->__ss.__pc. mctx = *(uctx + 0x30).
+	arm64GtReloadArg(code, dest: 13, argIndex: 2)  // uctx
+	arm64GtLoadField(code, dest: 13, baseReg: 13, disp: FaultUcontextOffMcontext)  // mctx*
+	arm64GtLoadField(code, dest: 11, baseReg: 13, disp: FaultMcontextOffSsPc)  // pc
+	arm64GtStoreGlobal(code, rdataRelocs: rdataRelocs, src: 11, name: "__gt_fault_rip", scratch: 12)
+
+	// (E) Redirect. Recompute mctx* (StoreGlobal clobbered x16/x17 only, but reload
+	// conservatively) and write pc/sp/fp.
+	arm64GtMarkBlock(state, code: code, blockId: redirectBlock)
+	arm64GtReloadArg(code, dest: 13, argIndex: 2)  // uctx
+	arm64GtLoadField(code, dest: 13, baseReg: 13, disp: FaultUcontextOffMcontext)  // mctx*
+	// safeSP = faultSP & ~0xF (16-aligned down). NO -8 bias (that is the x64 post-call
+	// parity fixup; arm64 enters the diagnostic via kernel sigreturn, not a BL).
+	arm64GtLoadField(code, dest: 10, baseReg: 13, disp: FaultMcontextOffSsSp)  // faulting sp
+	arm64EmitMovImm(code, rd: 11, value: -16)  // ~0xF
+	arm64GtAlu(code, opcode: GtAluAnd, rd: 10, rn: 10, rm: 11)
+	arm64GtStoreField(code, baseReg: 13, disp: FaultMcontextOffSsSp, src: 10)
+	// pc = &__gt_fault_diagnostic.
+	arm64GtFuncAddr(code, adrFixups: adrFixups, dest: 9, name: "__gt_fault_diagnostic")
+	arm64GtStoreField(code, baseReg: 13, disp: FaultMcontextOffSsPc, src: 9)
+	// fp = 0.
+	arm64GtStoreField(code, baseReg: 13, disp: FaultMcontextOffSsFp, src: GtRegXzr)
+
+	// Return: kernel sigreturn restores the rewritten mcontext, landing at the
+	// diagnostic.
+	arm64GtEpilogue(code, frameSize: frameSize)
+
+	// bail: unrecognised signal or a nested fault — _exit(1). The POSIX analogue of
+	// the x64 EXCEPTION_CONTINUE_SEARCH (the process is already dying; no _signal /
+	// _raise import exists on arm64-macOS).
+	arm64GtMarkBlock(state, code: code, blockId: bailBlock)
+	arm64EmitMovImm(code, rd: 0, value: 1)
+	arm64GtCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_EXIT)
+	arm64GtEpilogue(code, frameSize: frameSize)  // unreached
+
+	arm64GtFinalize(code, state: state)
+end 'emitArm64GtFaultThunk'
+
+// =============================================================================
+// __gt_install_fault_handler(): arm the sigaction handler + the main thread's
+// sigaltstack. Called once from __gt_init's tail on the main M (single-threaded,
+// race-free). sigaction is process-global; the sigaltstack here covers only the
+// main M — each worker M installs its OWN altstack at __sched_worker_loop entry.
+// Mirrors the C# EmitInstallFaultHandler, but additionally fixes the C# reference's
+// latent multi-M bug (no per-worker altstack) via the worker-loop install.
+//
+// Frame: sigaction struct @ [x29+0x10..], sigaltstack struct @ [x29+0x30..].
+// =============================================================================
+function emitArm64GtInstallFaultHandler(code ByteArray, relocations RelocationArray, adrFixups Arm64AdrFixupArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
+	arm64RecordLabel(labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "__gt_install_fault_handler", offset: code.count())
+	let frameSize = 0x60
+	arm64GtPrologue(code, frameSize: frameSize, argCount: 0)
+
+	let actBase = 0x10  // sigaction struct local
+	let ssBase = 0x30  // sigaltstack struct local
+
+	// (A) Zero the sigaction struct (handler/tramp/mask).
+	arm64GtStore(code, disp: actBase + FaultSigactionOffHandler, src: GtRegXzr)
+	arm64GtStore(code, disp: actBase + FaultSigactionOffTramp, src: GtRegXzr)
+	arm64GtStore(code, disp: actBase + FaultSigactionOffMask, src: GtRegXzr)
+
+	// (B) sa_handler = &__gt_fault_thunk.
+	arm64GtFuncAddr(code, adrFixups: adrFixups, dest: 9, name: "__gt_fault_thunk")
+	arm64GtStore(code, disp: actBase + FaultSigactionOffHandler, src: 9)
+
+	// (C) sa_flags = SA_SIGINFO|SA_ONSTACK|SA_RESTART (0x43, a 32-bit field).
+	arm64EmitMovImm(code, rd: 9, value: FaultSaFlags)
+	arm64EmitStrWord(code, rt: 9, rn: GtRegX29, offset: actBase + FaultSigactionOffFlags)
+
+	// (D) Build the main-thread sigaltstack BEFORE arming SA_ONSTACK handlers (the
+	// altstack must exist before the handlers reference it). mmap a 0x8000 region.
+	arm64GtMmapAnon(code, relocations: relocations, length: FaultAltStackSize)
+	arm64GtStore(code, disp: ssBase + FaultSigaltOffSp, src: 0)  // ss_sp
+	arm64EmitMovImm(code, rd: 9, value: FaultAltStackSize)
+	arm64GtStore(code, disp: ssBase + FaultSigaltOffSize, src: 9)  // ss_size
+	arm64EmitStrWord(code, rt: GtRegXzr, rn: GtRegX29, offset: ssBase + FaultSigaltOffFlags)  // ss_flags = 0
+
+	// (E) sigaltstack(&ss, NULL).
+	arm64GtLeaFrame(code, rd: 0, disp: ssBase)
+	arm64EmitMovImm(code, rd: 1, value: 0)
+	arm64GtCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_SIGALTSTACK)
+
+	// (F) sigaction(sig, &act, NULL) for sig in {SEGV, BUS, FPE}. The struct lives on
+	// the x29 frame, so it survives the import's x0-x18 clobber.
+	arm64EmitMovImm(code, rd: 0, value: FaultSigSegv)
+	arm64GtLeaFrame(code, rd: 1, disp: actBase)
+	arm64EmitMovImm(code, rd: 2, value: 0)
+	arm64GtCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_SIGACTION)
+
+	arm64EmitMovImm(code, rd: 0, value: FaultSigBus)
+	arm64GtLeaFrame(code, rd: 1, disp: actBase)
+	arm64EmitMovImm(code, rd: 2, value: 0)
+	arm64GtCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_SIGACTION)
+
+	arm64EmitMovImm(code, rd: 0, value: FaultSigFpe)
+	arm64GtLeaFrame(code, rd: 1, disp: actBase)
+	arm64EmitMovImm(code, rd: 2, value: 0)
+	arm64GtCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_SIGACTION)
+
+	arm64GtEpilogue(code, frameSize: frameSize)
+end 'emitArm64GtInstallFaultHandler'
+
+// =============================================================================
 // Top-level driver — emit every hand-rolled green-thread / sleep runtime
 // function. Called from concatArm64FunctionChunks under `if isMacosOs`, after the
 // stdlib link pass, so these labels override the runtime.std stubs.
@@ -563,7 +834,14 @@ export function emitArm64MacosGreenThread(code ByteArray, relocations Relocation
 	emitArm64GtStealWork(code, callFixups: callFixups, rdataRelocs: rdataRelocs, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
 	emitArm64GtEnqueue(code, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs, adrFixups: adrFixups, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
 	emitArm64GtDequeue(code, callFixups: callFixups, rdataRelocs: rdataRelocs, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
-	emitArm64GtInit(code, relocations: relocations, rdataRelocs: rdataRelocs, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+	// CPU-fault handler: diagnostic FIRST (its label must exist), then the thunk
+	// (which ADRs the diagnostic), then __gt_init's tail ADRs the thunk (sa_handler)
+	// + emits the install. Fixups resolve in a later pass regardless of emit order,
+	// but keep diagnostic->thunk->install for parity with the x64 ordering.
+	emitArm64GtFaultDiagnostic(code, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+	emitArm64GtFaultThunk(code, relocations: relocations, rdataRelocs: rdataRelocs, adrFixups: adrFixups, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+	emitArm64GtInstallFaultHandler(code, relocations: relocations, adrFixups: adrFixups, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+	emitArm64GtInit(code, relocations: relocations, rdataRelocs: rdataRelocs, callFixups: callFixups, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
 	emitArm64GtSpawn(code, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs, adrFixups: adrFixups, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
 	emitArm64GtTrampoline(code, callFixups: callFixups, rdataRelocs: rdataRelocs, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
 	emitArm64GtProcessPendingWaiter(code, callFixups: callFixups, rdataRelocs: rdataRelocs, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
@@ -603,6 +881,10 @@ export function arm64MacosGreenThreadRuntimeNames() returns StringArray
 	names.push("mm_decref")
 	names.push("__diag_print_tag")
 	names.push("__diag_print_i64")
+	// The CPU-fault diagnostic (emitArm64GtFaultDiagnostic) BLs these two to render
+	// its panic line; no other call edge reaches them in a non-fault program.
+	names.push("mrt_write_cstr_stderr")
+	names.push("__diag_print_hex")
 	names.push("__gt_init")
 	names.push("__slab_current_p_id")
 	names.push("__gt_trace_emit")
@@ -755,12 +1037,29 @@ function emitArm64SchedWorkerLoop(code ByteArray, relocations RelocationArray, c
 	let exitBlock = 4
 
 	let slotG = 0x18
+	let slotSs = 0x20  // per-thread sigaltstack stack_t local (24 bytes, fits 0x20..0x38)
 
 	// ADOPT: pthread_setspecific(__sched_tls_key, P) — so arm64GtLoadCurrentP reads
 	// THIS thread's P. x0 = key value, x1 = P.
 	arm64GtLoadGlobal(code, rdataRelocs: rdataRelocs, dest: 0, name: "__sched_tls_key")
 	arm64GtReloadArg(code, dest: 1, argIndex: 0)  // P
 	arm64GtCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_PTHREAD_SETSPECIFIC)
+
+	// PER-THREAD sigaltstack: sigaction is process-global (installed once in __gt_init),
+	// but sigaltstack is PER-THREAD on POSIX — a SA_ONSTACK handler with no altstack
+	// registered for THIS pthread runs on the (possibly exhausted) thread stack and
+	// double-faults on a stack overflow. The C# arm64 reference omits this (a latent
+	// multi-M bug); install a fresh 0x8000 altstack here so a fault on any worker M is
+	// delivered on its own altstack. mmap leaks for the M's lifetime (correct: it must
+	// outlive every fault). The imports clobber x0-x18, but P is homed at [x29+16].
+	arm64GtMmapAnon(code, relocations: relocations, length: FaultAltStackSize)
+	arm64GtStore(code, disp: slotSs + FaultSigaltOffSp, src: 0)  // ss_sp
+	arm64EmitMovImm(code, rd: 9, value: FaultAltStackSize)
+	arm64GtStore(code, disp: slotSs + FaultSigaltOffSize, src: 9)  // ss_size
+	arm64EmitStrWord(code, rt: GtRegXzr, rn: GtRegX29, offset: slotSs + FaultSigaltOffFlags)  // ss_flags = 0
+	arm64GtLeaFrame(code, rd: 0, disp: slotSs)
+	arm64EmitMovImm(code, rd: 1, value: 0)
+	arm64GtCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_SIGALTSTACK)
 
 	// P.mainThread.status = running ; P.currentGt = &P.mainThread ; P.status = 1.
 	arm64GtReloadArg(code, dest: 9, argIndex: 0)  // P
@@ -1448,7 +1747,7 @@ end 'emitArm64GtDequeue'
 // Frame slots: P[0]@0x10, procsArray@0x18, max_procs(=ncpu)@0x20, loop_i@0x28, P[i]@0x30.
 // arm64GtCallImport clobbers x0-x18, so EVERY loop local is homed in a frame slot and
 // reloaded after each import (sysconf, dispatch_semaphore_create, pthread_*).
-function emitArm64GtInit(code ByteArray, relocations RelocationArray, rdataRelocs RdataRelocationArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
+function emitArm64GtInit(code ByteArray, relocations RelocationArray, rdataRelocs RdataRelocationArray, callFixups Arm64CallFixupArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
 	arm64RecordLabel(labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "__gt_init", offset: code.count())
 	let frameSize = 0x40
 	var state = Arm64MacosGtState.create(4)
@@ -1583,6 +1882,11 @@ function emitArm64GtInit(code ByteArray, relocations RelocationArray, rdataReloc
 	// __gt_current_p = P[0]: a transitional bridge for any remaining single-global
 	// reader; the per-thread P read goes through TSD (arm64GtLoadCurrentP) on every M.
 	arm64GtStoreGlobal(code, rdataRelocs: rdataRelocs, src: 1, name: "__gt_current_p", scratch: 9)
+
+	// Arm the CPU-fault handler (sigaction + main-thread sigaltstack). Runs once here
+	// on the main M before any worker spawns, mirroring the x64 install at the tail of
+	// emitX64GtInit. Worker Ms install their own sigaltstack at __sched_worker_loop entry.
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__gt_install_fault_handler")
 
 	arm64GtMarkBlock(state, code: code, blockId: doneBlock)
 	arm64GtEpilogue(code, frameSize: frameSize)
