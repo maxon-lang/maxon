@@ -3477,10 +3477,47 @@ public partial class X86CodeEmitter {
   /// (RuntimeEmitter.Scheduler.cs), so both must be 1 to fully pin to P[0] — matching the
   /// ARM64 emitter and the portable runtime.std body.
   private void EmitGtSetSingleThreaded() {
+    // [rbp-0x08] = loop index i
     EmitRuntimeFunctionStart("maxon_gt_set_single_threaded", 0, 0x30);
     EmitMovRegImm(X86Register.Rax, 1);
     EmitGlobalStoreReg(X86Register.Rax, "__sched_max_procs");
     EmitGlobalStoreReg(X86Register.Rax, "__sched_num_procs");
+
+    // Retire any worker M already spawned during startup async I/O. Lowering num_procs
+    // alone would orphan such an M (the enqueue wake-scan iterates [1, num_procs=1) and
+    // never re-finds it). Wake every spawned M (P[1..alloc_procs)) so it reaches the
+    // worker-loop retire check (P->id >= num_procs) and exits. Mirrors the ARM64 emitter.
+    EmitMfence(); // order the num_procs store before the idle worker reads it
+    EmitMovRegImm(X86Register.Rax, 1);
+    EmitMovMemReg(-0x08, X86Register.Rax, 8); // i = 1
+    DefineLabel("__set_single_retire_loop");
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // i
+    EmitGlobalLoadReg(X86Register.Rcx, "__sched_alloc_procs");
+    EmitCmpRegReg(X86Register.Rax, X86Register.Rcx);
+    EmitJcc("ae", "__set_single_retire_done");
+
+    // P[i] = __sched_procs[i]
+    EmitGlobalLoadReg(X86Register.Rcx, "__sched_procs");
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // i
+    // RCX = [RCX + RAX*8]  (P[i])
+    EmitBytes(0x48, 0x8B, 0x0C, 0xC1); // MOV RCX, [RCX + RAX*8]
+
+    // Skip slots never activated (status == 0).
+    EmitMovRegIndirectMem(X86Register.Rax, X86Register.Rcx, POffStatus);
+    EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
+    EmitJcc("z", "__set_single_retire_next");
+
+    // SetEvent(P[i]->wakeEvent) so the parked M wakes and retires.
+    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rcx, POffWakeEvent);
+    EmitCallImportOnSystemStack("kernel32.dll", "SetEvent");
+
+    DefineLabel("__set_single_retire_next");
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);
+    EmitBytes(0x48, 0xFF, 0xC0); // INC RAX
+    EmitMovMemReg(-0x08, X86Register.Rax, 8);
+    EmitJmp("__set_single_retire_loop");
+
+    DefineLabel("__set_single_retire_done");
     EmitRuntimeFunctionEnd();
   }
 
@@ -3913,6 +3950,7 @@ public partial class X86CodeEmitter {
     DefineGlobal("__sched_all_cs", 40, 0);           // CRITICAL_SECTION protecting all-threads list
     DefineGlobal("__sched_active_workers", 8, 0);   // atomic count of running workers
     DefineGlobal("__sched_max_procs", 8, 0);        // CPU count (from GetSystemInfo)
+    DefineGlobal("__sched_alloc_procs", 8, 0);      // immutable count of allocated P slots (ncpu); NEVER capped — used as the wake-scan bound so a worker M spawned before maxon_gt_set_single_threaded() caps num_procs is still reachable for wakeups
     DefineGlobal("__sched_shutdown_flag", 8, 0);     // 1 = shutdown requested
     DefineGlobal("__gt_live_count", 8, 0); // count of non-completed green threads (excludes main thread)
     DefineGlobal("__gt_all_head", 8, 0);   // head of all-live-threads singly-linked list
@@ -4025,6 +4063,10 @@ public partial class X86CodeEmitter {
     EmitMovMemReg(-0x18, X86Register.Rax, 8); // [rbp-24] = max_procs
     EmitGlobalStoreReg(X86Register.Rax, "__sched_max_procs");
     EmitGlobalStoreReg(X86Register.Rax, "__sched_num_procs");
+    // Immutable allocation count — the wake-scan bound. Unlike num_procs/max_procs,
+    // this is never lowered by maxon_gt_set_single_threaded(), so any worker M that
+    // was already spawned (before the cap) stays reachable for cross-M wakeups.
+    EmitGlobalStoreReg(X86Register.Rax, "__sched_alloc_procs");
 
     // Step 3: Allocate P* array: VirtualAlloc(NULL, max_procs * 8, MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE)
     EmitXorRegReg(X86Register.Rcx, X86Register.Rcx);      // lpAddress = NULL
@@ -5214,6 +5256,17 @@ public partial class X86CodeEmitter {
     EmitGlobalLoadReg(X86Register.Rax, "__sched_shutdown_flag");
     EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
     EmitJcc("nz", "__sched_wloop_exit");
+
+    // Retire if this M is now surplus (P->id >= num_procs). maxon_gt_set_single_threaded()
+    // lowers num_procs AFTER startup async I/O may already have spawned this worker M; a
+    // surplus M must EXIT (idle, holding no GT) rather than park forever, else it is
+    // orphaned (the wake-scan iterates only [1, num_procs)) yet holds an active_workers
+    // slot. Mirrors the ARM64 emitter's retire check. (Compile-only on this host.)
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // P*
+    EmitMovRegIndirectMem(X86Register.Rax, X86Register.Rax, POffId); // RAX = P->id
+    EmitGlobalLoadReg(X86Register.Rcx, "__sched_num_procs");
+    EmitCmpRegReg(X86Register.Rax, X86Register.Rcx);
+    EmitJcc("ae", "__sched_wloop_exit"); // id >= num_procs → retire
 
     // WaitForSingleObject(P->wakeEvent, 100ms) — use timeout to avoid missed-wakeup hangs
     EmitMovRegMem(X86Register.Rax, -0x08, 8); // P*
