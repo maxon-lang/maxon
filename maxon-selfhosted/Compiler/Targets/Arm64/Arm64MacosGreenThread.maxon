@@ -572,7 +572,7 @@ export function emitArm64MacosGreenThread(code ByteArray, relocations Relocation
 	emitArm64GtIsComplete(code, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
 	emitArm64GtCancel(code, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
 	emitArm64GtCleanup(code, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
-	emitArm64GtTimerAdd(code, rdataRelocs: rdataRelocs, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+	emitArm64GtTimerAdd(code, callFixups: callFixups, rdataRelocs: rdataRelocs, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
 	emitArm64GtTimerCheck(code, callFixups: callFixups, rdataRelocs: rdataRelocs, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
 	emitArm64GtNowMs(code, relocations: relocations, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
 	emitArm64MaxonSleep(code, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
@@ -1431,82 +1431,184 @@ end 'emitArm64GtDequeue'
 // indexing reads P[0] correctly. Called lazily at the first `async`/`sleep`.
 // Frame: P@0x10 procsArray@0x18.
 // =============================================================================
+// THE MULTI-M FLIP. Builds the full GMP processor pool: sysconf(_SC_NPROCESSORS_ONLN)
+// CPU count → ncpu (clamped to [1, 256] — the slab mcache has 256 shards); a register-
+// length mmap'd P*[ncpu] array; a per-P loop that mmaps each ProcContext, wires its
+// id/rng/wakeSemaphore; then adopts P[0] for the main OS thread (TSD + currentGt +
+// mainThread.status) and FLIPS __sched_num_procs/__sched_max_procs to ncpu with
+// __sched_active_workers=1. The full scheduler machinery (worker loop, enqueue wake/
+// spawn, dequeue steal, park/wake) becomes LIVE the moment num_procs > 1. Worker Ms are
+// NOT spawned here — __gt_enqueue's spawn-scan lazily pthread_create's them, claiming a
+// stopped P (status 0→1) via LDAXR/STLXR CAS. Mirrors C# EmitGtInit (Runtime.cs:3081)
+// and self-hosted x64 emitX64GtInit, swapping VirtualAlloc→mmap, GetSystemInfo→sysconf,
+// CreateThread/Event/TLS→pthread_create/dispatch_semaphore/pthread-key. The per-P
+// scheduler stack of the C#/x64 reference is omitted: each worker M runs the scheduler
+// loop on its own pthread stack, only GTs use the mmap'd GT stacks.
+//
+// Frame slots: P[0]@0x10, procsArray@0x18, max_procs(=ncpu)@0x20, loop_i@0x28, P[i]@0x30.
+// arm64GtCallImport clobbers x0-x18, so EVERY loop local is homed in a frame slot and
+// reloaded after each import (sysconf, dispatch_semaphore_create, pthread_*).
 function emitArm64GtInit(code ByteArray, relocations RelocationArray, rdataRelocs RdataRelocationArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
 	arm64RecordLabel(labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "__gt_init", offset: code.count())
-	let frameSize = 0x30
-	var state = Arm64MacosGtState.create(1)
+	let frameSize = 0x40
+	var state = Arm64MacosGtState.create(4)
 	arm64GtPrologue(code, frameSize: frameSize, argCount: 0)
 
 	let doneBlock = 0
+	let ploopBlock = 1
+	let ploopDoneBlock = 2
+	let clampSkipBlock = 3
 
-	// if __gt_init_done != 0 → return (idempotent).
+	let slotP0 = 0x10
+	let slotProcs = 0x18
+	let slotMaxProcs = 0x20
+	let slotI = 0x28
+	let slotPi = 0x30
+
+	// if __gt_init_done != 0 → return (idempotent). Set =1 EARLY: this lazy init runs
+	// single-threaded on the main M before any worker exists, so no init race is
+	// possible and an early store keeps the guard trivially correct.
 	arm64GtLoadGlobal(code, rdataRelocs: rdataRelocs, dest: 0, name: "__gt_init_done")
 	arm64GtCbnz(code, state: state, rn: 0, targetBlock: doneBlock)
-	// __gt_init_done = 1
 	arm64EmitMovImm(code, rd: 0, value: 1)
 	arm64GtStoreGlobal(code, rdataRelocs: rdataRelocs, src: 0, name: "__gt_init_done", scratch: 9)
 
-	// P = mmap(NULL, PStructSize, RW, ANON|PRIVATE, -1, 0). OS-backed (zero-filled).
-	arm64GtMmapAnon(code, relocations: relocations, length: GtPStructSize)
-	arm64GtStore(code, disp: 0x10, src: 0)  // P
-
-	// procsArray = mmap(NULL, 8, ...): a one-slot P*[] array base. (mmap rounds up to a
-	// page; fine for num_procs=1.) procsArray[0] = P. __sched_procs = procsArray.
-	arm64GtMmapAnon(code, relocations: relocations, length: 8)
-	arm64GtStore(code, disp: 0x18, src: 0)  // procsArray
-	arm64GtLoad(code, dest: 1, disp: 0x10)  // P
-	arm64GtLoad(code, dest: 2, disp: 0x18)  // procsArray
-	arm64GtStoreField(code, baseReg: 2, disp: 0, src: 1)  // procsArray[0] = P
-
-	// __gt_current_p = P ; __sched_procs = procsArray ; __sched_num_procs = 1.
-	arm64GtStoreGlobal(code, rdataRelocs: rdataRelocs, src: 1, name: "__gt_current_p", scratch: 9)
-	arm64GtStoreGlobal(code, rdataRelocs: rdataRelocs, src: 2, name: "__sched_procs", scratch: 9)
-	arm64EmitMovImm(code, rd: 9, value: 1)
-	arm64GtStoreGlobal(code, rdataRelocs: rdataRelocs, src: 9, name: "__sched_num_procs", scratch: 10)
-
-	// Per-OS-thread P pointer via pthread TSD (multi-M groundwork): the single
-	// __gt_current_p global cannot hold per-thread P once >1 worker M runs, so each
-	// M reads P via pthread_getspecific(__sched_tls_key) (see arm64GtLoadCurrentP).
-	// pthread_key_create(&__sched_tls_key, NULL): x0 = address of the writable .data
-	// key slot (it IS the pthread_key_t* arg — no stack temp needed), x1 = NULL.
+	// STEP 1 — pthread_key_create(&__sched_tls_key, NULL): the per-OS-thread P key.
+	// One-time (guarded by __gt_init_done above) BEFORE the first setspecific.
 	arm64GtGlobalAddr(code, rdataRelocs: rdataRelocs, dest: 0, name: "__sched_tls_key")
 	arm64EmitMovImm(code, rd: 1, value: 0)
 	arm64GtCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_PTHREAD_KEY_CREATE)
 
-	// pthread_setspecific(__sched_tls_key, P): adopt P[0] for the main M. The import
-	// clobbered x0-x18, so reload the key value and P from their frame slots first.
+	// STEP 2 — ncpu = sysconf(_SC_NPROCESSORS_ONLN = 58). Clamp to [1, 256]: a count of
+	// 0 (or a sysconf error of -1) would mmap a zero/negative-length array, and >256
+	// would index past the slab's 256-shard mcache. Store ncpu → max_procs slot and
+	// the __sched_max_procs / __sched_num_procs globals (THE FLIP from the old MOV #1).
+	arm64EmitMovImm(code, rd: 0, value: 58)
+	arm64GtCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_SYSCONF)
+	// if x0 < 1 → x0 = 1.
+	arm64GtCmpImm(code, rn: 0, imm12: 1)
+	arm64GtCondBranch(code, state: state, cond: GtCondGe, targetBlock: clampSkipBlock)
+	arm64EmitMovImm(code, rd: 0, value: 1)
+	arm64GtMarkBlock(state, code: code, blockId: clampSkipBlock)
+	// if x0 > 256 → x0 = 256.
+	arm64GtCmpImm(code, rn: 0, imm12: 256)
+	arm64EmitMovImm(code, rd: 9, value: 256)
+	arm64EmitCsel(code, rd: 0, rn: 9, rm: 0, cond: GtCondGt)  // x0 = (x0 > 256) ? 256 : x0
+	arm64GtStore(code, disp: slotMaxProcs, src: 0)  // max_procs (= ncpu)
+	arm64GtStoreGlobal(code, rdataRelocs: rdataRelocs, src: 0, name: "__sched_max_procs", scratch: 9)
+	arm64GtStoreGlobal(code, rdataRelocs: rdataRelocs, src: 0, name: "__sched_num_procs", scratch: 9)
+
+	// STEP 3 — procsArray = mmap(NULL, ncpu*8, RW, ANON|PRIVATE, -1, 0): the P*[ncpu]
+	// pointer array (register-length mmap — ncpu is a runtime value). __sched_procs =
+	// procsArray.
+	arm64GtLoad(code, dest: 0, disp: slotMaxProcs)  // ncpu
+	arm64GtLslImm(code, rd: 1, rn: 0, shift: 3)  // x1 = ncpu * 8 (mmap byte count)
+	arm64GtMmapAnonReg(code, relocations: relocations)
+	arm64GtStore(code, disp: slotProcs, src: 0)
+	arm64GtStoreGlobal(code, rdataRelocs: rdataRelocs, src: 0, name: "__sched_procs", scratch: 9)
+
+	// STEP 4 — per-P alloc loop i = 0 .. ncpu-1: mmap a ProcContext, publish it to
+	// procs[i], and wire id/rng/wakeSemaphore. status stays 0 (=stopped) from the mmap
+	// zero-fill — only P[0] is adopted (Step 5); workers claim P[1..] via the spawn-scan
+	// CAS. No system stack: each M runs the scheduler loop on its own pthread stack.
+	arm64EmitMovImm(code, rd: 0, value: 0)
+	arm64GtStore(code, disp: slotI, src: 0)  // i = 0
+
+	arm64GtMarkBlock(state, code: code, blockId: ploopBlock)
+	arm64GtLoad(code, dest: 0, disp: slotI)
+	arm64GtLoad(code, dest: 1, disp: slotMaxProcs)
+	arm64EmitCmp(code, rn: 0, rm: 1)
+	arm64GtCondBranch(code, state: state, cond: GtCondHs, targetBlock: ploopDoneBlock)
+
+	// P[i] = mmap(NULL, PStructSize, ...) ; home it.
+	arm64GtMmapAnon(code, relocations: relocations, length: GtPStructSize)
+	arm64GtStore(code, disp: slotPi, src: 0)  // P[i]
+
+	// procs[i] = P[i]: addr = procs + i*8.
+	arm64GtLoad(code, dest: 1, disp: slotProcs)  // procs
+	arm64GtLoad(code, dest: 2, disp: slotI)  // i
+	arm64GtLslImm(code, rd: 2, rn: 2, shift: 3)  // i * 8
+	arm64GtAlu(code, opcode: GtAluAdd, rd: 1, rn: 1, rm: 2)  // procs + i*8
+	arm64GtLoad(code, dest: 0, disp: slotPi)  // P[i]
+	arm64GtStoreField(code, baseReg: 1, disp: 0, src: 0)  // procs[i] = P[i]
+
+	// P[i].id = i ; P[i].rng = i + 1 (xorshift64 seed MUST be non-zero, so i+1 not i).
+	arm64GtLoad(code, dest: 9, disp: slotPi)  // P[i]
+	arm64GtLoad(code, dest: 0, disp: slotI)  // i
+	arm64GtStoreField(code, baseReg: 9, disp: GtPOffId, src: 0)
+	arm64EmitAddImm(code, rd: 0, rn: 0, imm12: 1)  // i + 1
+	arm64GtStoreField(code, baseReg: 9, disp: GtPOffRng, src: 0)
+
+	// P[i].wakeSemaphore = dispatch_semaphore_create(0): a worker starts parked, so the
+	// initial count is 0. The import clobbers x0-x18 → reload P[i] from its frame slot.
+	arm64EmitMovImm(code, rd: 0, value: 0)
+	arm64GtCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_DISPATCH_SEMAPHORE_CREATE)
+	arm64GtLoad(code, dest: 9, disp: slotPi)  // P[i] (clobbered by the import)
+	arm64GtStoreField(code, baseReg: 9, disp: GtPOffWakeSemaphore, src: 0)
+
+	// i++ ; loop.
+	arm64GtLoad(code, dest: 0, disp: slotI)
+	arm64EmitAddImm(code, rd: 0, rn: 0, imm12: 1)
+	arm64GtStore(code, disp: slotI, src: 0)
+	arm64GtBranch(code, state: state, targetBlock: ploopBlock)
+
+	arm64GtMarkBlock(state, code: code, blockId: ploopDoneBlock)
+
+	// STEP 5 — adopt P[0] for the main OS thread. P0 = procs[0].
+	arm64GtLoad(code, dest: 0, disp: slotProcs)  // procs
+	arm64GtLoadField(code, dest: 0, baseReg: 0, disp: 0)  // procs[0] = P[0]
+	arm64GtStore(code, disp: slotP0, src: 0)  // P[0]
+
+	// P[0].status = 1 (active — only P[0] is adopted at init).
+	arm64EmitMovImm(code, rd: 9, value: 1)
+	arm64GtStoreField(code, baseReg: 0, disp: GtPOffStatus, src: 9)
+
+	// pthread_setspecific(__sched_tls_key, P[0]): make arm64GtLoadCurrentP read P[0] on
+	// this (main) M. Reload key + P[0] across the import.
 	arm64GtLoadGlobal(code, rdataRelocs: rdataRelocs, dest: 0, name: "__sched_tls_key")
-	arm64GtLoad(code, dest: 1, disp: 0x10)  // P
+	arm64GtLoad(code, dest: 1, disp: slotP0)  // P[0]
 	arm64GtCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_PTHREAD_SETSPECIFIC)
 
-	// P.mainThread.status = running ; P.currentGt = &P.mainThread.
-	arm64GtLoad(code, dest: 1, disp: 0x10)  // P
+	// __sched_active_workers = 1 (the main M counts as the first active worker).
+	arm64EmitMovImm(code, rd: 0, value: 1)
+	arm64GtStoreGlobal(code, rdataRelocs: rdataRelocs, src: 0, name: "__sched_active_workers", scratch: 9)
+
+	// P[0].mainThread.status = running ; P[0].currentGt = &P[0].mainThread.
+	arm64GtLoad(code, dest: 1, disp: slotP0)  // P[0]
 	arm64EmitMovImm(code, rd: 9, value: GtStatusRunning)
 	arm64GtStoreField(code, baseReg: 1, disp: GtPOffMainThread + GtGtOffStatus, src: 9)
-	arm64EmitAddImm(code, rd: 9, rn: 1, imm12: GtPOffMainThread)  // &P.mainThread
+	arm64EmitAddImm(code, rd: 9, rn: 1, imm12: GtPOffMainThread)  // &P[0].mainThread
 	arm64GtStoreField(code, baseReg: 1, disp: GtPOffCurrentGt, src: 9)
 
-	// P.rng = 1: the xorshift64 dequeue-fairness seed MUST be non-zero (xorshift64
-	// is fixed at 0 — seed 0 keeps producing 0, so rng%FairnessInterval would be a
-	// constant 0 and the local queue would be starved behind the global queue).
-	arm64EmitMovImm(code, rd: 9, value: 1)
-	arm64GtStoreField(code, baseReg: 1, disp: GtPOffRng, src: 9)
+	// __gt_current_p = P[0]: a transitional bridge for any remaining single-global
+	// reader; the per-thread P read goes through TSD (arm64GtLoadCurrentP) on every M.
+	arm64GtStoreGlobal(code, rdataRelocs: rdataRelocs, src: 1, name: "__gt_current_p", scratch: 9)
 
 	arm64GtMarkBlock(state, code: code, blockId: doneBlock)
 	arm64GtEpilogue(code, frameSize: frameSize)
 	arm64GtFinalize(code, state: state)
 end 'emitArm64GtInit'
 
-// mmap(NULL, length, PROT_READ|PROT_WRITE, MAP_ANON|MAP_PRIVATE, -1, 0) → x0.
-// Mirrors arm64MacosSubpMmapAnon but takes the length as a compile-time constant.
-function arm64GtMmapAnon(code ByteArray, relocations RelocationArray, length MachineWord)
+// mmap(NULL, <x1>, PROT_READ|PROT_WRITE, MAP_ANON|MAP_PRIVATE, -1, 0) → x0, with the
+// byte length supplied by the CALLER in x1 (a runtime value). Sets every other mmap
+// arg (x0/x2/x3/x4/x5) but deliberately leaves x1 untouched. Mirrors C# EmitMmapAnon
+// (Runtime.cs:137-144) and Arm64MacosSubprocess's arm64MacosSubpMmapAnon. The const-
+// length arm64GtMmapAnon delegates here after materialising x1.
+function arm64GtMmapAnonReg(code ByteArray, relocations RelocationArray)
 	arm64EmitMovImm(code, rd: 0, value: 0)  // addr = NULL
-	arm64EmitMovImm(code, rd: 1, value: length)
 	arm64EmitMovImm(code, rd: 2, value: 3)  // PROT_READ|PROT_WRITE
 	arm64EmitMovImm(code, rd: 3, value: 0x1002)  // MAP_ANON|MAP_PRIVATE
 	arm64EmitMovImm(code, rd: 4, value: -1)  // fd = -1
 	arm64EmitMovImm(code, rd: 5, value: 0)  // offset = 0
 	arm64GtCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_MMAP)
+end 'arm64GtMmapAnonReg'
+
+// mmap(NULL, length, PROT_READ|PROT_WRITE, MAP_ANON|MAP_PRIVATE, -1, 0) → x0.
+// Mirrors arm64MacosSubpMmapAnon but takes the length as a compile-time constant;
+// materialises x1 then delegates to the register-length form.
+function arm64GtMmapAnon(code ByteArray, relocations RelocationArray, length MachineWord)
+	arm64EmitMovImm(code, rd: 1, value: length)
+	arm64GtMmapAnonReg(code, relocations: relocations)
 end 'arm64GtMmapAnon'
 
 // =============================================================================
@@ -1608,7 +1710,21 @@ function emitArm64GtSpawn(code ByteArray, relocations RelocationArray, callFixup
 	arm64GtStoreField(code, baseReg: 9, disp: GtGtOffSp, src: 11)
 	arm64GtStoreField(code, baseReg: 9, disp: GtGtOffFp, src: GtRegXzr)
 
-	// Link onto the all-threads list: gt.all_next = __gt_all_head ; __gt_all_head = gt.
+	// Link onto the all-threads list + bump the live/trace counters UNDER __sched_all_cs.
+	// These three globals (__gt_all_head, __gt_live_count, __gt_trace_counter) are shared
+	// across every worker M: a completing GT's trampoline concurrently unlinks itself +
+	// decrements live_count, and sibling spawns race here. Without the lock the list push
+	// (read-head / store-all_next / store-head) and the read-add-store counters tear,
+	// corrupting the all-list — which recycles a still-queued GT struct and surfaces as
+	// the __gt_trampoline BRK (P.currentGt read back as &P.mainThread). Mirrors the x64
+	// reference's EnterCriticalSection(&__sched_all_cs) + LOCK INC/XADD. The recursive
+	// spinlock takes the lock address in x0 and clobbers volatiles, so gt is reloaded
+	// from its frame slot after the acquire.
+	arm64GtGlobalAddr(code, rdataRelocs: rdataRelocs, dest: 0, name: "__sched_all_cs")
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__slab_lock_acquire")
+	arm64GtLoad(code, dest: 9, disp: 0x28)  // reload gt (lock BL clobbered x9)
+
+	// gt.all_next = __gt_all_head ; __gt_all_head = gt.
 	arm64GtLoadGlobal(code, rdataRelocs: rdataRelocs, dest: 0, name: "__gt_all_head")
 	arm64GtStoreField(code, baseReg: 9, disp: GtGtOffAllNext, src: 0)
 	arm64GtStoreGlobal(code, rdataRelocs: rdataRelocs, src: 9, name: "__gt_all_head", scratch: 0)
@@ -1617,12 +1733,19 @@ function emitArm64GtSpawn(code ByteArray, relocations RelocationArray, callFixup
 	arm64EmitAddImm(code, rd: 0, rn: 0, imm12: 1)
 	arm64GtStoreGlobal(code, rdataRelocs: rdataRelocs, src: 0, name: "__gt_live_count", scratch: 9)
 
-	// Assign trace id: __gt_trace_counter += 1 ; gt.traceId = new ; emit `spawn #id`.
+	// Assign trace id: __gt_trace_counter += 1 ; gt.traceId = new.
 	arm64GtLoadGlobal(code, rdataRelocs: rdataRelocs, dest: 0, name: "__gt_trace_counter")
 	arm64EmitAddImm(code, rd: 0, rn: 0, imm12: 1)
 	arm64GtStoreGlobal(code, rdataRelocs: rdataRelocs, src: 0, name: "__gt_trace_counter", scratch: 9)
 	arm64GtLoad(code, dest: 9, disp: 0x28)
 	arm64GtStoreField(code, baseReg: 9, disp: GtGtOffTraceId, src: 0)
+
+	// Release __sched_all_cs before the trace/enqueue calls (they take their own locks;
+	// keeping the all-lock narrow avoids any lock-order coupling).
+	arm64GtGlobalAddr(code, rdataRelocs: rdataRelocs, dest: 0, name: "__sched_all_cs")
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__slab_lock_release")
+
+	// emit `spawn #id`.
 	// __gt_trace_emit(tag=&"spawn #", value=gt.traceId, suffix=0).
 	arm64GtGlobalAddr(code, rdataRelocs: rdataRelocs, dest: 0, name: "__at_tag_spawn")
 	arm64GtLoad(code, dest: 9, disp: 0x28)
@@ -1738,6 +1861,15 @@ function emitArm64GtTrampoline(code ByteArray, callFixups Arm64CallFixupArray, r
 	arm64GtLoadField(code, dest: 0, baseReg: 9, disp: GtGtOffArgBuf)
 	arm64GtBranchLink(code, callFixups: callFixups, name: "__slab_free")
 
+	// Decrement live_count + unlink from the all-threads list UNDER __sched_all_cs — the
+	// mirror of the spawn-side critical section. Both globals are shared across worker
+	// Ms; an unsynchronized read-add-store of live_count or a concurrent list walk/splice
+	// races with sibling spawns/completions. Mirrors the x64 LOCK DEC + EnterCriticalSection
+	// (&__sched_all_cs) unlink. The lock BL clobbers volatiles, so gt is reloaded from its
+	// frame slot inside the locked region.
+	arm64GtGlobalAddr(code, rdataRelocs: rdataRelocs, dest: 0, name: "__sched_all_cs")
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__slab_lock_acquire")
+
 	// __gt_live_count -= 1.
 	arm64GtLoadGlobal(code, rdataRelocs: rdataRelocs, dest: 0, name: "__gt_live_count")
 	arm64EmitSubImm(code, rd: 0, rn: 0, imm12: 1)
@@ -1768,6 +1900,10 @@ function emitArm64GtTrampoline(code ByteArray, callFixups Arm64CallFixupArray, r
 	arm64GtMarkBlock(state, code: code, blockId: allPrev)
 	arm64GtStoreField(code, baseReg: 2, disp: GtGtOffAllNext, src: 0)
 	arm64GtMarkBlock(state, code: code, blockId: allDone)
+
+	// Release __sched_all_cs (live_count-- + unlink complete).
+	arm64GtGlobalAddr(code, rdataRelocs: rdataRelocs, dest: 0, name: "__sched_all_cs")
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__slab_lock_release")
 
 	// gt.status = completed.
 	arm64GtLoad(code, dest: 9, disp: 0x10)
@@ -2218,11 +2354,14 @@ end 'arm64GtTimerEntryAddr'
 
 // =============================================================================
 // __gt_timer_add(gt=x0, deadline=x1): insert (deadline, gt) into the sleep-timer
-// min-heap (keyed by absolute deadline ms), sift up. No lock (single thread).
-// Ports the self-hosted x64 emitX64GtTimerAdd. Void. Frame: gt@0x10 deadline@0x18
-// i@0x20 parent@0x28.
+// min-heap (keyed by absolute deadline ms), sift up under `__gt_timer_cs` (the
+// recursive spinlock that serializes all timer-heap mutation against concurrent
+// __gt_timer_check pops on every M). The lock BL clobbers volatiles, so the homed
+// args (gt, deadline) are reloaded from the frame after the acquire. Ports the
+// self-hosted x64 emitX64GtTimerAdd. Void. Frame: gt@0x10 deadline@0x18 i@0x20
+// parent@0x28.
 // =============================================================================
-function emitArm64GtTimerAdd(code ByteArray, rdataRelocs RdataRelocationArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
+function emitArm64GtTimerAdd(code ByteArray, callFixups Arm64CallFixupArray, rdataRelocs RdataRelocationArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
 	arm64RecordLabel(labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "__gt_timer_add", offset: code.count())
 	let frameSize = 0x40
 	var state = Arm64MacosGtState.create(2)
@@ -2230,6 +2369,10 @@ function emitArm64GtTimerAdd(code ByteArray, rdataRelocs RdataRelocationArray, l
 
 	let siftLoop = 0
 	let doneBlock = 1
+
+	// Lock the timer heap (serializes append/sift-up against concurrent pops).
+	arm64GtGlobalAddr(code, rdataRelocs: rdataRelocs, dest: 0, name: "__gt_timer_cs")
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__slab_lock_acquire")
 
 	// i = count ; count++ ; heap[i] = {deadline, gt}.
 	arm64GtLoadGlobal(code, rdataRelocs: rdataRelocs, dest: 0, name: "__gt_timer_count")
@@ -2274,6 +2417,9 @@ function emitArm64GtTimerAdd(code ByteArray, rdataRelocs RdataRelocationArray, l
 	arm64GtBranch(code, state: state, targetBlock: siftLoop)
 
 	arm64GtMarkBlock(state, code: code, blockId: doneBlock)
+	// Release the timer heap before returning.
+	arm64GtGlobalAddr(code, rdataRelocs: rdataRelocs, dest: 0, name: "__gt_timer_cs")
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__slab_lock_release")
 	arm64GtEpilogue(code, frameSize: frameSize)
 	arm64GtFinalize(code, state: state)
 end 'emitArm64GtTimerAdd'
@@ -2281,9 +2427,15 @@ end 'emitArm64GtTimerAdd'
 // =============================================================================
 // __gt_timer_check(): pop every timer whose deadline has passed (now = __gt_now_ms)
 // and re-ready its GT (status=ready; enqueue unless it's the main thread). Sift
-// down after each pop. No lock (single thread). Ports the self-hosted x64
-// emitX64GtTimerCheck. Void. Frame: now@0x10 gt@0x18 i@0x20 smallest@0x28 left@0x30
-// right@0x38.
+// down after each pop. Runs under `__gt_timer_cs` (the recursive spinlock that
+// serializes timer-heap mutation across every M) — the lock is held across the
+// entire pop / sift-down / fire, INCLUDING the __gt_enqueue that re-readies a
+// fired GT (mirroring x64: the nesting __gt_timer_cs -> __sched_global_queue_cs is
+// deadlock-free because no path takes them in the reverse order). A lock-free
+// count==0 fast path keeps the common no-timer case cheap. Each lock BL clobbers
+// volatiles, so live values are reloaded from frame slots after it. Ports the
+// self-hosted x64 emitX64GtTimerCheck. Void. Frame: now@0x10 gt@0x18 i@0x20
+// smallest@0x28 left@0x30 right@0x38.
 // =============================================================================
 function emitArm64GtTimerCheck(code ByteArray, callFixups Arm64CallFixupArray, rdataRelocs RdataRelocationArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
 	arm64RecordLabel(labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "__gt_timer_check", offset: code.count())
@@ -2299,9 +2451,14 @@ function emitArm64GtTimerCheck(code ByteArray, callFixups Arm64CallFixupArray, r
 	let doneBlock = 5
 	let retBlock = 6
 
-	// fast path: count == 0 → return.
+	// lock-free fast path: count == 0 → return (the common no-timer case).
 	arm64GtLoadGlobal(code, rdataRelocs: rdataRelocs, dest: 0, name: "__gt_timer_count")
 	arm64GtCbz(code, state: state, rn: 0, targetBlock: retBlock)
+	// Lock the timer heap, then RE-CHECK count under the lock (it may have changed).
+	arm64GtGlobalAddr(code, rdataRelocs: rdataRelocs, dest: 0, name: "__gt_timer_cs")
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__slab_lock_acquire")
+	arm64GtLoadGlobal(code, rdataRelocs: rdataRelocs, dest: 0, name: "__gt_timer_count")
+	arm64GtCbz(code, state: state, rn: 0, targetBlock: doneBlock)  // emptied → unlock + ret
 	// now = __gt_now_ms().
 	arm64GtBranchLink(code, callFixups: callFixups, name: "__gt_now_ms")
 	arm64GtStore(code, disp: 0x10, src: 0)  // now
@@ -2397,7 +2554,12 @@ function emitArm64GtTimerCheck(code ByteArray, callFixups Arm64CallFixupArray, r
 	arm64GtMarkBlock(state, code: code, blockId: skipEnqueue)
 	arm64GtBranch(code, state: state, targetBlock: popLoop)  // drain the next expired timer
 
+	// done: release the timer heap, then fall through to ret. The lock-free fast
+	// path (count==0 at entry) jumps straight to retBlock and skips this release.
 	arm64GtMarkBlock(state, code: code, blockId: doneBlock)
+	arm64GtGlobalAddr(code, rdataRelocs: rdataRelocs, dest: 0, name: "__gt_timer_cs")
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__slab_lock_release")
+
 	arm64GtMarkBlock(state, code: code, blockId: retBlock)
 	arm64GtEpilogue(code, frameSize: frameSize)
 	arm64GtFinalize(code, state: state)
