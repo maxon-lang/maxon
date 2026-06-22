@@ -628,6 +628,17 @@ function __slab_alloc_class(classIdx MachineWord) returns MachineWord
 		if __Internals.loadIndirect(cachedSpan + 0x18) == 0 'depleted'
 			miss = true
 		end 'depleted'
+		// Ownership gate (mirrors the C# RuntimeEmitter.Allocator slab fast-path
+		// gate). A span returned to mcentral (owning_p = MSPAN_OWNING_P_PARKED) or
+		// handed to another P keeps free_count != 0, so the depletion check above
+		// cannot detect a RECYCLED span; popping it would corrupt a span another P
+		// owns. owning_p (+0x40) is stamped == rawId for the owning P, so treat
+		// not-owned-by-this-P as a miss. No-op on the single-M arm64/wasm runtimes;
+		// closes the multi-M recycle race on the x64 worker-pool runtime (x64 TSO
+		// makes the plain load acquire-ordered, so no explicit barrier is needed).
+		if __Internals.loadIndirect(cachedSpan + 0x40) != rawId 'notOwned'
+			miss = true
+		end 'notOwned'
 	end 'haveSpan'
 
 	if miss 'handleMiss'
@@ -645,6 +656,12 @@ function __slab_alloc_class(classIdx MachineWord) returns MachineWord
 			if __Internals.loadIndirect(probedSpan + 0x18) == 0 'depleted2'
 				stillMiss = true
 			end 'depleted2'
+			// Same ownership gate as the initial check: refill via mcentral for a
+			// non-owned cached span rather than popping it (prevents the analogous
+			// fast-reject -> drain -> re-probe loop and the recycle corruption).
+			if __Internals.loadIndirect(probedSpan + 0x40) != rawId 'notOwned2'
+				stillMiss = true
+			end 'notOwned2'
 		end 'haveSpan2'
 
 		if stillMiss 'doRefill'
