@@ -570,12 +570,14 @@ end 'emitArm64GtDequeue'
 // pthread/semaphore worker (the C# arm64 EmitGtInit's GMP setup is all dropped).
 // Allocates ONE ProcContext P (mmap, PStructSize), makes its inline mainThread the
 // current GT (status=running, P.currentGt = &P.mainThread), and publishes P into
-// __gt_current_p + __sched_procs[0]. Called lazily at the first `async`/`sleep`.
-// Frame: P@0x10.
+// __gt_current_p + __sched_procs[0]. __sched_procs is a real P*[] array base (mmap'd,
+// one 8-byte slot) so the slab's procs = loadIndirect(__sched_procs); procs[id*8]
+// indexing reads P[0] correctly. Called lazily at the first `async`/`sleep`.
+// Frame: P@0x10 procsArray@0x18.
 // =============================================================================
 function emitArm64GtInit(code ByteArray, relocations RelocationArray, rdataRelocs RdataRelocationArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
 	arm64RecordLabel(labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "__gt_init", offset: code.count())
-	let frameSize = 0x20
+	let frameSize = 0x30
 	var state = Arm64MacosGtState.create(1)
 	arm64GtPrologue(code, frameSize: frameSize, argCount: 0)
 
@@ -591,9 +593,18 @@ function emitArm64GtInit(code ByteArray, relocations RelocationArray, rdataReloc
 	// P = mmap(NULL, PStructSize, RW, ANON|PRIVATE, -1, 0). OS-backed (zero-filled).
 	arm64GtMmapAnon(code, relocations: relocations, length: GtPStructSize)
 	arm64GtStore(code, disp: 0x10, src: 0)  // P
-	// __gt_current_p = P ; __sched_procs = P ; __sched_num_procs = 1.
-	arm64GtStoreGlobal(code, rdataRelocs: rdataRelocs, src: 0, name: "__gt_current_p", scratch: 9)
-	arm64GtStoreGlobal(code, rdataRelocs: rdataRelocs, src: 0, name: "__sched_procs", scratch: 9)
+
+	// procsArray = mmap(NULL, 8, ...): a one-slot P*[] array base. (mmap rounds up to a
+	// page; fine for num_procs=1.) procsArray[0] = P. __sched_procs = procsArray.
+	arm64GtMmapAnon(code, relocations: relocations, length: 8)
+	arm64GtStore(code, disp: 0x18, src: 0)  // procsArray
+	arm64GtLoad(code, dest: 1, disp: 0x10)  // P
+	arm64GtLoad(code, dest: 2, disp: 0x18)  // procsArray
+	arm64GtStoreField(code, baseReg: 2, disp: 0, src: 1)  // procsArray[0] = P
+
+	// __gt_current_p = P ; __sched_procs = procsArray ; __sched_num_procs = 1.
+	arm64GtStoreGlobal(code, rdataRelocs: rdataRelocs, src: 1, name: "__gt_current_p", scratch: 9)
+	arm64GtStoreGlobal(code, rdataRelocs: rdataRelocs, src: 2, name: "__sched_procs", scratch: 9)
 	arm64EmitMovImm(code, rd: 9, value: 1)
 	arm64GtStoreGlobal(code, rdataRelocs: rdataRelocs, src: 9, name: "__sched_num_procs", scratch: 10)
 
