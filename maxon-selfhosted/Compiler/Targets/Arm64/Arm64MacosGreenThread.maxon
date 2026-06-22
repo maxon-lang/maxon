@@ -24,21 +24,40 @@
 //     GtOff*/POff* block (copied verbatim there) — we re-declare the subset used
 //     here with the same values.
 //
-// SINGLE-OS-THREAD COOPERATIVE MODEL. Unlike the C# arm64 reference (a full Go-style
-// GMP scheduler: pthread worker pool + dispatch semaphores + kqueue) and the
-// self-hosted x64 runtime (CreateThread worker pool + IOCP), this port spawns NO
-// worker OS threads. All green threads run on the one OS thread; the scheduler is
-// driven cooperatively by the `__gt_await` / `__gt_try_await` / `maxon_sleep` /
-// `__gt_cleanup` loops, which dequeue a ready GT and `__gt_context_switch` to it,
-// resuming when it yields (await) or completes (trampoline switches back to the
-// main thread). This is exactly the model the `__gt_current_p` global documents
-// ("the one ProcContext*; replaces TLS"). It is sufficient and correct for the
-// spec tests (pure-compute coroutines + cooperative sleep); the async-trace
-// goldens normalize away the worker-lifecycle lines (SpecTestRunner
-// normalizeAsyncTraceStderr), so the deterministic `spawn / io_yield / io_resume
-// / await` subset is all that must match — which the single-thread dequeue+switch
-// loop produces. The single P is held in `__gt_current_p` (one global, no TLS, no
-// gs:/dispatch); `gtLoadCurrentP` reads it.
+// MULTI-M GMP MODEL. This is a Go-style GMP scheduler matching the C# arm64
+// reference and the self-hosted x64 runtime. __gt_init creates ncpu ProcContexts
+// (Ps, one per logical CPU) in __sched_procs[] and adopts P[0] for the main OS
+// thread. Worker OS threads are spawned LAZILY: when an enqueue finds more runnable
+// work than active workers, __gt_enqueue atomically claims a stopped P (CAS
+// P->status 0→1) and pthread_creates a worker running __sched_worker_loop on it,
+// bumping __sched_active_workers. Idle workers park on a per-P dispatch semaphore
+// (P.wakeSemaphore) and are woken by the next enqueue; a worker with no local work
+// tries the global queue, then work-steals half of a random active peer's local
+// queue before parking.
+//
+// Each M's current P is its per-OS-thread identity, read inline from pthread TSD
+// (arm64GtLoadCurrentP: tsd[__sched_tls_key] off the masked TPIDRRO_EL0 thread
+// pointer, with a pre-init/un-adopted NULL gate) — there is no single
+// __gt_current_p global. Per-P state (local run queue head/tail/len, runnext,
+// GT-struct free list, remote-free MPSC head) is reached through that P pointer.
+//
+// QUEUES + LOCKS. The global run queue and the per-P local queues are guarded by
+// recursive spinlocks (emitArm64SlabLock{Acquire,Release}; owner = masked thread
+// pointer, recursion count): __sched_global_queue_cs (global queue + victim-queue
+// walk), __sched_all_cs (the __gt_all_head all-threads list), __gt_timer_cs (the
+// sleep timer min-heap). Acquire/release go through arm64GtLock{Acquire,Release}.
+//
+// HANDSHAKES. The await/trampoline waiter handoff uses a Dekker-style StoreLoad
+// barrier pair on GtGtOffIoYielded so a waiter that has begun context-switching out
+// is reliably observed (and re-enqueued) by the completing GT — see the io_yielded
+// flag uses in __gt_await and the trampoline. P.pendingWaiter defers the wake of a
+// just-unblocked waiter until after the switching GT has fully suspended.
+//
+// FAULT HANDLER. __gt_install_fault_handler registers a sigaction thunk for
+// SEGV/BUS that, since a fault can hit any raw M, stashes the faulting PC/addr/msg
+// in process-global __gt_fault_* .data slots and rewrites the trapping thread's
+// mcontext to resume at __gt_fault_diagnostic on a fresh frame (FP=0) that prints
+// the diagnostic and _exit(1)s without walking the (now-invalid) frame chain.
 //
 // Calling convention: AAPCS64 (args x0..x7, return x0). The self-hosted arm64
 // backend uses standard AAPCS64 for runtime calls (unlike the x64 self-hosted
@@ -49,11 +68,14 @@
 //
 // Direct BL <name> (the slab allocator, the trace printers, helper-local `__gt_*`
 // calls) are recorded as `Arm64CallFixup`s patched by `arm64ResolveCallFixups`.
-// Global addresses use `ADR Xd, <global>` recorded as a `dataSectionArm64Adr`
-// rdata relocation (the __sched_/__gt_/__at_ prefixes classify to the writable
-// heap data section — see arm64RelocKindForLabel). `__gt_trampoline`'s address
-// uses `ADR Xd, <func>` recorded as an `Arm64AdrFixup`. IAT (GOT) imports
-// (mmap/munmap/gettimeofday/usleep) use `ADRP x16,GOT ; LDR x16,[x16] ; BLR x16`.
+// Global addresses use an `ADRP Xd, page(global) ; ADD Xd, Xd, #pageoff` pair
+// (±4 GiB reach) recorded as `dataSectionArm64Adrp` + `dataSectionArm64PageOff`
+// rdata relocations; loads/stores fold the page offset into the LDR/STR. The
+// __sched_/__gt_/__at_ prefixes classify to the writable heap data section (see
+// arm64RelocKindForLabel; arm64GtAssertDataSection enforces it for these
+// accessors). `__gt_trampoline`'s address uses `ADR Xd, <func>` recorded as an
+// `Arm64AdrFixup`. IAT (GOT) imports (mmap/munmap/gettimeofday/usleep) use the
+// same shape: `ADRP x16,GOT ; LDR x16,[x16] ; BLR x16`.
 // =============================================================================
 
 // --- GreenThread (gt) struct offsets (216 bytes = 0xD8). Authoritative GtLayout
@@ -303,24 +325,53 @@ function arm64GtLeaFrame(code ByteArray, rd MachineWord, disp MachineWord)
 	arm64EmitAddImm(code, rd: rd, rn: GtRegX29, imm12: disp)
 end 'arm64GtLeaFrame'
 
-// dest = address of a writable .data/.rdata global: `ADR dest, #0` recorded as an
-// rdata relocation (section class via arm64RelocKindForLabel — the __sched_/__gt_/
-// __at_ prefixes route to the heap data section). Single ADR has ±1 MiB range,
-// which the late-emitted runtime + the program's small data section stays within.
+// dest = address of a writable .data/.rdata global via an ADRP+ADD pair with ±4 GiB
+// reach: `ADRP dest, page(global)` (a dataSectionArm64Adrp reloc) ; `ADD dest, dest,
+// #pageoff(global)` (a dataSectionArm64PageOff reloc). The single-ADR form this
+// replaced reached only ±1 MiB; the multi-M runtime multiplied both the number of
+// these accesses and the code-to-data distance, so a large program's runtime globals
+// could silently resolve to the wrong address. The import GOT path (arm64GtCallImport)
+// uses the identical ADRP shape. The section class (heap .data vs .rdata) is chosen by
+// arm64RelocKindForLabel for the bare-ADR users; the ADRP/pageoff pair here is always a
+// writable-data target (every green-thread global lives in the heap data section).
+// The ADRP/pageoff pair always targets the heap data section (MachOWriter patches it
+// against heapSectionVMAddr). Every green-thread global is a writable runtime global,
+// so it must classify as dataSection; assert it loudly rather than silently address a
+// read-only .rdata label against the wrong section.
+function arm64GtAssertDataSection(name String)
+	match classifyGlobalLabel(name) 'cls'
+		dataSection then break 'cls'
+		covData then panic("arm64GtGlobalAddr: '{name}' classifies as covData — green-thread accessors only target the heap data section")
+		rdata then panic("arm64GtGlobalAddr: '{name}' classifies as read-only .rdata — green-thread accessors only target the heap data section")
+	end 'cls'
+end 'arm64GtAssertDataSection'
+
 function arm64GtGlobalAddr(code ByteArray, rdataRelocs RdataRelocationArray, dest MachineWord, name String)
-	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: name, kind: arm64RelocKindForLabel(name)))
-	arm64EmitAdr(code, rd: dest, offset: 0)
+	arm64GtAssertDataSection(name)
+	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: name, kind: RdataRelocKind.dataSectionArm64Adrp))
+	arm64EmitAdrp(code, rd: dest)
+	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: name, kind: RdataRelocKind.dataSectionArm64PageOff))
+	arm64EmitAddImm(code, rd: dest, rn: dest, imm12: 0)
 end 'arm64GtGlobalAddr'
 
-// dest = value of an 8-byte global: ADR dest,<global> ; LDR dest,[dest].
+// dest = value of an 8-byte global via an ADRP+LDR pair: `ADRP dest, page(global)` ;
+// `LDR dest, [dest, #pageoff(global)]`. The LDR folds the within-page offset directly
+// (dataSectionArm64PageOff scales the imm12 by 8 for an LDR Xn), saving the ADD.
 function arm64GtLoadGlobal(code ByteArray, rdataRelocs RdataRelocationArray, dest MachineWord, name String)
-	arm64GtGlobalAddr(code, rdataRelocs: rdataRelocs, dest: dest, name: name)
+	arm64GtAssertDataSection(name)
+	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: name, kind: RdataRelocKind.dataSectionArm64Adrp))
+	arm64EmitAdrp(code, rd: dest)
+	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: name, kind: RdataRelocKind.dataSectionArm64PageOff))
 	arm64EmitLdrRegOffset(code, rt: dest, baseReg: dest, offset: 0)
 end 'arm64GtLoadGlobal'
 
-// Store src into an 8-byte global: ADR scratch,<global> ; STR src,[scratch].
+// Store src into an 8-byte global via an ADRP+STR pair: `ADRP scratch, page(global)` ;
+// `STR src, [scratch, #pageoff(global)]`.
 function arm64GtStoreGlobal(code ByteArray, rdataRelocs RdataRelocationArray, src MachineWord, name String, scratch MachineWord)
-	arm64GtGlobalAddr(code, rdataRelocs: rdataRelocs, dest: scratch, name: name)
+	arm64GtAssertDataSection(name)
+	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: name, kind: RdataRelocKind.dataSectionArm64Adrp))
+	arm64EmitAdrp(code, rd: scratch)
+	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: name, kind: RdataRelocKind.dataSectionArm64PageOff))
 	arm64EmitStrRegOffset(code, rt: src, baseReg: scratch, offset: 0)
 end 'arm64GtStoreGlobal'
 
@@ -344,6 +395,21 @@ function arm64GtBranchLink(code ByteArray, callFixups Arm64CallFixupArray, name 
 	callFixups.push(Arm64CallFixup.create(code.count(), targetName: name))
 	arm64EmitBranchLink(code)
 end 'arm64GtBranchLink'
+
+// Acquire the recursive spinlock named `name`: x0 = &<name> ; BL __slab_lock_acquire.
+// __slab_lock_acquire clobbers only x16/x17 (reserved scratch), so the only register
+// disturbed is x0 (the lock address argument).
+function arm64GtLockAcquire(code ByteArray, rdataRelocs RdataRelocationArray, callFixups Arm64CallFixupArray, name String)
+	arm64GtGlobalAddr(code, rdataRelocs: rdataRelocs, dest: 0, name: name)
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__slab_lock_acquire")
+end 'arm64GtLockAcquire'
+
+// Release one level of the recursive spinlock named `name`: x0 = &<name> ;
+// BL __slab_lock_release. Symmetric with arm64GtLockAcquire.
+function arm64GtLockRelease(code ByteArray, rdataRelocs RdataRelocationArray, callFixups Arm64CallFixupArray, name String)
+	arm64GtGlobalAddr(code, rdataRelocs: rdataRelocs, dest: 0, name: name)
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__slab_lock_release")
+end 'arm64GtLockRelease'
 
 // Direct B <name> (TAIL call): an unconditional branch to a runtime label, recorded
 // as an Arm64CallFixup (arm64PatchBranch preserves the B vs BL opcode bit). Used to
@@ -457,11 +523,11 @@ end 'arm64GtLoadCurrentP'
 // The MIR osLockAcquire/osLockRelease ops are isCall:true, so the surrounding
 // compiled code already spills caller-saved registers across the BL to these.
 //
-// Raw encodings (assembler-verified): MRS x16,TPIDRRO_EL0 = 0xD53BD070;
-// LDAXR Xt,[Xn] = 0xC85FFC00|(rn<<5)|rt; STLXR Ws,Xt,[Xn] = 0xC800FC00|(rs<<16)|
-// (rn<<5)|rt; STLR Xt,[Xn] = 0xC89FFC00|(rn<<5)|rt; CMP Xn,Xm = 0xEB00001F|
-// (rm<<16)|(rn<<5). The STLXR rs==rt form is tolerated on Apple Silicon (C# ships
-// it). LSR/LSL via arm64GtLsrImm/arm64GtLslImm.
+// MRS x16,TPIDRRO_EL0 = 0xD53BD070. The exclusive/release primitives go through the
+// shared Arm64CodeEmitter helpers: arm64EmitLdaxr (LDAXR Xt,[Xn]), arm64EmitStlxr
+// (STLXR Ws,Xt,[Xn]) and arm64EmitStlr (STLR Xt,[Xn]); CMP via arm64EmitCmp. The
+// STLXR rs==rt form is tolerated on Apple Silicon (C# ships it). LSR/LSL via
+// arm64GtLsrImm/arm64GtLslImm.
 // =============================================================================
 
 let GtLockOffOwner = 8  // owner@8: masked thread pointer of the holding M (0 = free)
@@ -492,16 +558,16 @@ function emitArm64SlabLockAcquire(code ByteArray, labelNames StringArray, labelO
 
 	// If owner@8 already == this token, we hold it → recursive increment.
 	arm64GtLoadField(code, dest: 17, baseReg: 0, disp: GtLockOffOwner)
-	arm64EmitInsn(code, insn: 0xEB00001F or (16 shl 16) or (17 shl 5))  // CMP x17, x16
+	arm64EmitCmp(code, rn: 17, rm: 16)  // CMP x17, x16
 	arm64GtCondBranch(code, state: state, cond: GtCondEq, targetBlock: ownedBlock)
 
 	// SPIN: LDAXR x17,[x0] ; if held (x17 != 0) retry ; else STLXR w17,#1,[x0] ;
 	// if the store-exclusive failed (status != 0) retry.
 	arm64GtMarkBlock(state, code: code, blockId: spinBlock)
-	arm64EmitInsn(code, insn: 0xC85FFC00 or (0 shl 5) or 17)  // LDAXR x17, [x0]
+	arm64EmitLdaxr(code, rt: 17, rn: 0)  // LDAXR x17, [x0]
 	arm64GtCbnz(code, state: state, rn: 17, targetBlock: spinBlock)
 	arm64EmitMovImm(code, rd: 17, value: 1)
-	arm64EmitInsn(code, insn: 0xC800FC00 or (17 shl 16) or (0 shl 5) or 17)  // STLXR w17, x17, [x0]
+	arm64EmitStlxr(code, rs: 17, rt: 17, rn: 0)  // STLXR w17, x17, [x0]
 	arm64GtCbnz(code, state: state, rn: 17, targetBlock: spinBlock)
 
 	// Acquired: owner@8 = token ; count@16 = 1.
@@ -541,7 +607,7 @@ function emitArm64SlabLockRelease(code ByteArray, labelNames StringArray, labelO
 
 	// Outermost release: owner@8 = 0 ; STLR xzr,[x0] (release ordering, REQUIRED).
 	arm64GtStoreField(code, baseReg: 0, disp: GtLockOffOwner, src: GtRegXzr)
-	arm64EmitInsn(code, insn: 0xC89FFC00 or (0 shl 5) or GtRegXzr)  // STLR xzr, [x0]
+	arm64EmitStlr(code, rt: GtRegXzr, rn: 0)  // STLR xzr, [x0]
 
 	arm64GtMarkBlock(state, code: code, blockId: doneBlock)
 	arm64EmitRet(code)
@@ -1027,7 +1093,7 @@ end 'arm64GtDmbIsh'
 function emitArm64SchedWorkerLoop(code ByteArray, relocations RelocationArray, callFixups Arm64CallFixupArray, rdataRelocs RdataRelocationArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
 	arm64RecordLabel(labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "__sched_worker_loop", offset: code.count())
 	let frameSize = 0x40
-	var state = Arm64MacosGtState.create(5)
+	var state = Arm64MacosGtState.create(6)
 	arm64GtPrologue(code, frameSize: frameSize, argCount: 1)  // P homed at [x29+16]
 
 	let loopTop = 0
@@ -1035,6 +1101,7 @@ function emitArm64SchedWorkerLoop(code ByteArray, relocations RelocationArray, c
 	let park = 2
 	let reallyPark = 3
 	let exitBlock = 4
+	let decActive = 5  // in-place active-worker decrement retry loop (exit teardown)
 
 	let slotG = 0x18
 	let slotSs = 0x20  // per-thread sigaltstack stack_t local (24 bytes, fits 0x20..0x38)
@@ -1142,8 +1209,30 @@ function emitArm64SchedWorkerLoop(code ByteArray, relocations RelocationArray, c
 	arm64GtStoreField(code, baseReg: 9, disp: GtPOffIdleFlag, src: GtRegXzr)
 	arm64GtBranch(code, state: state, targetBlock: loopTop)
 
-	// exit: return NULL.
+	// exit: balance the spawn-phase active-worker bookkeeping, then return NULL.
+	// __gt_enqueue's spawn scan atomically INCREMENTS __sched_active_workers when it
+	// claims a stopped P and pthread_creates a worker on it; a worker that returns
+	// here without the matching DECREMENT would permanently inflate the count, so the
+	// `active_workers >= max_procs` capacity gate would wrongly believe the pool is
+	// full and stop spawning — starving later async work. Mirror the x64 worker-exit
+	// teardown (emitX64SchedWorkerLoop): drop active_workers, then clear this P's
+	// status (0 = stopped, so the next enqueue can re-claim it) and idleFlag (a worker
+	// that exits via the shutdown re-check in really_park still has idleFlag=1 set from
+	// the park block). The decrement is an IN-PLACE LDAXR/STLXR retry loop, the exact
+	// shape of the enqueue increment but with SUB — another enqueuer may be claiming a
+	// different P concurrently. x13 = &active_workers, x12 = LDAXR value, x11 = STLXR
+	// status; x9 holds P.
 	arm64GtMarkBlock(state, code: code, blockId: exitBlock)
+	arm64GtGlobalAddr(code, rdataRelocs: rdataRelocs, dest: 13, name: "__sched_active_workers")
+	arm64GtMarkBlock(state, code: code, blockId: decActive)
+	arm64EmitLdaxr(code, rt: 12, rn: 13)  // LDAXR x12, [x13]
+	arm64EmitSubImm(code, rd: 12, rn: 12, imm12: 1)
+	arm64EmitStlxr(code, rs: 11, rt: 12, rn: 13)  // STLXR w11, x12, [x13]
+	arm64GtCbnz(code, state: state, rn: 11, targetBlock: decActive)  // store-exclusive lost → retry the dec in place
+	// P->status = 0 ; P->idleFlag = 0.
+	arm64GtLoadCurrentP(code, rdataRelocs: rdataRelocs, dest: 9)
+	arm64GtStoreField(code, baseReg: 9, disp: GtPOffStatus, src: GtRegXzr)
+	arm64GtStoreField(code, baseReg: 9, disp: GtPOffIdleFlag, src: GtRegXzr)
 	arm64EmitMovImm(code, rd: 0, value: 0)
 	arm64GtEpilogue(code, frameSize: frameSize)
 	arm64GtFinalize(code, state: state)
@@ -1230,8 +1319,7 @@ function emitArm64GtStealWork(code ByteArray, callFixups Arm64CallFixupArray, rd
 	arm64GtCondBranch(code, state: state, cond: GtCondNe, targetBlock: stealLoop)
 
 	// Lock the global queue CS (serializes the victim-queue walk against its owner).
-	arm64GtGlobalAddr(code, rdataRelocs: rdataRelocs, dest: 0, name: "__sched_global_queue_cs")
-	arm64GtBranchLink(code, callFixups: callFixups, name: "__slab_lock_acquire")
+	arm64GtLockAcquire(code, rdataRelocs: rdataRelocs, callFixups: callFixups, name: "__sched_global_queue_cs")
 	// Need ≥2 in the victim's local queue, else release + try another victim.
 	arm64GtLoad(code, dest: 10, disp: slotVictimP)
 	arm64GtLoadField(code, dest: 9, baseReg: 10, disp: GtPOffLocalQueueLen)
@@ -1307,16 +1395,14 @@ function emitArm64GtStealWork(code ByteArray, callFixups Arm64CallFixupArray, rd
 
 	// got_one: release the lock and return `first` with its next cleared.
 	arm64GtMarkBlock(state, code: code, blockId: gotOne)
-	arm64GtGlobalAddr(code, rdataRelocs: rdataRelocs, dest: 0, name: "__sched_global_queue_cs")
-	arm64GtBranchLink(code, callFixups: callFixups, name: "__slab_lock_release")
+	arm64GtLockRelease(code, rdataRelocs: rdataRelocs, callFixups: callFixups, name: "__sched_global_queue_cs")
 	arm64GtLoad(code, dest: 0, disp: slotFirst)
 	arm64GtStoreField(code, baseReg: 0, disp: GtGtOffNext, src: GtRegXzr)
 	arm64GtEpilogue(code, frameSize: frameSize)
 
 	// unlock_skip: victim too small → release the lock and try another victim.
 	arm64GtMarkBlock(state, code: code, blockId: unlockSkip)
-	arm64GtGlobalAddr(code, rdataRelocs: rdataRelocs, dest: 0, name: "__sched_global_queue_cs")
-	arm64GtBranchLink(code, callFixups: callFixups, name: "__slab_lock_release")
+	arm64GtLockRelease(code, rdataRelocs: rdataRelocs, callFixups: callFixups, name: "__sched_global_queue_cs")
 	arm64GtBranch(code, state: state, targetBlock: stealLoop)
 
 	// steal_fail: no stealable victim after all attempts → return 0.
@@ -1409,8 +1495,7 @@ function emitArm64GtEnqueue(code ByteArray, relocations RelocationArray, callFix
 
 	// local queue (under the lock). Lock serializes the local-queue append against a
 	// future work-stealer walking this P's queue; with num_procs=1 it is uncontended.
-	arm64GtGlobalAddr(code, rdataRelocs: rdataRelocs, dest: 0, name: "__sched_global_queue_cs")
-	arm64GtBranchLink(code, callFixups: callFixups, name: "__slab_lock_acquire")
+	arm64GtLockAcquire(code, rdataRelocs: rdataRelocs, callFixups: callFixups, name: "__sched_global_queue_cs")
 	arm64GtLoad(code, dest: 9, disp: slotP)  // reload P
 	arm64GtLoadField(code, dest: 11, baseReg: 9, disp: GtPOffLocalQueueLen)
 	arm64GtCmpImm(code, rn: 11, imm12: GtMaxLocalQueueLen)
@@ -1432,19 +1517,16 @@ function emitArm64GtEnqueue(code ByteArray, relocations RelocationArray, callFix
 	arm64GtLoadField(code, dest: 11, baseReg: 9, disp: GtPOffLocalQueueLen)
 	arm64EmitAddImm(code, rd: 11, rn: 11, imm12: 1)
 	arm64GtStoreField(code, baseReg: 9, disp: GtPOffLocalQueueLen, src: 11)
-	arm64GtGlobalAddr(code, rdataRelocs: rdataRelocs, dest: 0, name: "__sched_global_queue_cs")
-	arm64GtBranchLink(code, callFixups: callFixups, name: "__slab_lock_release")
+	arm64GtLockRelease(code, rdataRelocs: rdataRelocs, callFixups: callFixups, name: "__sched_global_queue_cs")
 	arm64GtBranch(code, state: state, targetBlock: wakeScan)
 
 	// local_full_unlock: release the lock, then overflow to the global queue.
 	arm64GtMarkBlock(state, code: code, blockId: localFullUnlock)
-	arm64GtGlobalAddr(code, rdataRelocs: rdataRelocs, dest: 0, name: "__sched_global_queue_cs")
-	arm64GtBranchLink(code, callFixups: callFixups, name: "__slab_lock_release")
+	arm64GtLockRelease(code, rdataRelocs: rdataRelocs, callFixups: callFixups, name: "__sched_global_queue_cs")
 
 	// enqueue_global: append g (frame 0x10) to the global run queue under the lock.
 	arm64GtMarkBlock(state, code: code, blockId: enqueueGlobal)
-	arm64GtGlobalAddr(code, rdataRelocs: rdataRelocs, dest: 0, name: "__sched_global_queue_cs")
-	arm64GtBranchLink(code, callFixups: callFixups, name: "__slab_lock_acquire")
+	arm64GtLockAcquire(code, rdataRelocs: rdataRelocs, callFixups: callFixups, name: "__sched_global_queue_cs")
 	arm64GtReloadArg(code, dest: 0, argIndex: 0)  // g (reloaded after the lock BL)
 	arm64GtLoadGlobal(code, rdataRelocs: rdataRelocs, dest: 1, name: "__gt_run_queue_tail")
 	arm64GtCbnz(code, state: state, rn: 1, targetBlock: globalAppend)
@@ -1458,8 +1540,7 @@ function emitArm64GtEnqueue(code ByteArray, relocations RelocationArray, callFix
 	arm64GtStoreGlobal(code, rdataRelocs: rdataRelocs, src: 0, name: "__gt_run_queue_tail", scratch: 9)
 	// global_unlock: release the lock.
 	arm64GtMarkBlock(state, code: code, blockId: globalUnlock)
-	arm64GtGlobalAddr(code, rdataRelocs: rdataRelocs, dest: 0, name: "__sched_global_queue_cs")
-	arm64GtBranchLink(code, callFixups: callFixups, name: "__slab_lock_release")
+	arm64GtLockRelease(code, rdataRelocs: rdataRelocs, callFixups: callFixups, name: "__sched_global_queue_cs")
 
 	// === Wake phase: cross-P wake/spawn (mirrors C# EmitGtEnqueue's wake scan). ===
 	// DORMANT at num_procs=1: the wake loop (i starts at 1, 1 < 1 is false) and the
@@ -1539,10 +1620,10 @@ function emitArm64GtEnqueue(code ByteArray, relocations RelocationArray, callFix
 	// worker on it, two Ms sharing one P's mcache shard → heap corruption. x14 holds
 	// &P_i->status; x9 is the LDAXR result / STLXR status scratch.
 	arm64EmitAddImm(code, rd: 14, rn: 10, imm12: GtPOffStatus)  // &P_i->status
-	arm64EmitInsn(code, insn: 0xC85FFC00 or (14 shl 5) or 9)  // LDAXR x9, [x14]
+	arm64EmitLdaxr(code, rt: 9, rn: 14)  // LDAXR x9, [x14]
 	arm64GtCbnz(code, state: state, rn: 9, targetBlock: spawnNext)  // already active → next P
 	arm64EmitMovImm(code, rd: 9, value: 1)
-	arm64EmitInsn(code, insn: 0xC800FC00 or (9 shl 16) or (14 shl 5) or 9)  // STLXR w9, x9, [x14]
+	arm64EmitStlxr(code, rs: 9, rt: 9, rn: 14)  // STLXR w9, x9, [x14]
 	arm64GtCbnz(code, state: state, rn: 9, targetBlock: spawnScan)  // store-exclusive lost → retry this P
 
 	// Claimed P_i (status 0→1, x10). Atomically bump __sched_active_workers in an
@@ -1554,9 +1635,9 @@ function emitArm64GtEnqueue(code ByteArray, relocations RelocationArray, callFix
 	// pthread_create below).
 	arm64GtGlobalAddr(code, rdataRelocs: rdataRelocs, dest: 13, name: "__sched_active_workers")
 	arm64GtMarkBlock(state, code: code, blockId: incActive)
-	arm64EmitInsn(code, insn: 0xC85FFC00 or (13 shl 5) or 12)  // LDAXR x12, [x13]
+	arm64EmitLdaxr(code, rt: 12, rn: 13)  // LDAXR x12, [x13]
 	arm64EmitAddImm(code, rd: 12, rn: 12, imm12: 1)
-	arm64EmitInsn(code, insn: 0xC800FC00 or (11 shl 16) or (13 shl 5) or 12)  // STLXR w11, x12, [x13]
+	arm64EmitStlxr(code, rs: 11, rt: 12, rn: 13)  // STLXR w11, x12, [x13]
 	arm64GtCbnz(code, state: state, rn: 11, targetBlock: incActive)  // store-exclusive lost → retry the inc in place
 	// SpawnWorker(P_i) = pthread_create(&P_i->osThreadHandle, NULL,
 	// __sched_worker_loop, P_i). x0 = &P_i->osThreadHandle, x1 = 0,
@@ -1643,8 +1724,7 @@ function emitArm64GtDequeue(code ByteArray, callFixups Arm64CallFixupArray, rdat
 
 	// try_local (under the lock): pop the local-queue head.
 	arm64GtMarkBlock(state, code: code, blockId: tryLocal)
-	arm64GtGlobalAddr(code, rdataRelocs: rdataRelocs, dest: 0, name: "__sched_global_queue_cs")
-	arm64GtBranchLink(code, callFixups: callFixups, name: "__slab_lock_acquire")
+	arm64GtLockAcquire(code, rdataRelocs: rdataRelocs, callFixups: callFixups, name: "__sched_global_queue_cs")
 	arm64GtLoad(code, dest: 9, disp: slotP)  // reload P
 	arm64GtLoadField(code, dest: 11, baseReg: 9, disp: GtPOffLocalQueueLen)
 	arm64GtCbz(code, state: state, rn: 11, targetBlock: localEmptyUnlock)
@@ -1660,13 +1740,11 @@ function emitArm64GtDequeue(code ByteArray, callFixups Arm64CallFixupArray, rdat
 
 	// local_empty_unlock: nothing in the local queue → release and try global.
 	arm64GtMarkBlock(state, code: code, blockId: localEmptyUnlock)
-	arm64GtGlobalAddr(code, rdataRelocs: rdataRelocs, dest: 0, name: "__sched_global_queue_cs")
-	arm64GtBranchLink(code, callFixups: callFixups, name: "__slab_lock_release")
+	arm64GtLockRelease(code, rdataRelocs: rdataRelocs, callFixups: callFixups, name: "__sched_global_queue_cs")
 
 	// try_global (under the lock): pop the global-queue head.
 	arm64GtMarkBlock(state, code: code, blockId: tryGlobal)
-	arm64GtGlobalAddr(code, rdataRelocs: rdataRelocs, dest: 0, name: "__sched_global_queue_cs")
-	arm64GtBranchLink(code, callFixups: callFixups, name: "__slab_lock_acquire")
+	arm64GtLockAcquire(code, rdataRelocs: rdataRelocs, callFixups: callFixups, name: "__sched_global_queue_cs")
 	arm64GtLoadGlobal(code, rdataRelocs: rdataRelocs, dest: 10, name: "__gt_run_queue_head")  // g
 	arm64GtCbz(code, state: state, rn: 10, targetBlock: globalUnlock)  // empty → unlock + steal/0
 	arm64GtLoadField(code, dest: 12, baseReg: 10, disp: GtGtOffNext)  // next
@@ -1676,16 +1754,14 @@ function emitArm64GtDequeue(code ByteArray, callFixups Arm64CallFixupArray, rdat
 	// global_return: spill g, release the lock, clear g.next, return it.
 	arm64GtMarkBlock(state, code: code, blockId: globalReturn)
 	arm64GtStore(code, disp: slotResult, src: 10)  // spill g before the release BL clobbers volatiles
-	arm64GtGlobalAddr(code, rdataRelocs: rdataRelocs, dest: 0, name: "__sched_global_queue_cs")
-	arm64GtBranchLink(code, callFixups: callFixups, name: "__slab_lock_release")
+	arm64GtLockRelease(code, rdataRelocs: rdataRelocs, callFixups: callFixups, name: "__sched_global_queue_cs")
 	arm64GtLoad(code, dest: 0, disp: slotResult)  // g
 	arm64GtStoreField(code, baseReg: 0, disp: GtGtOffNext, src: GtRegXzr)  // g.next = 0
 	arm64GtEpilogue(code, frameSize: frameSize)
 
 	// global_unlock: global queue empty → release and fall through to steal/return-0.
 	arm64GtMarkBlock(state, code: code, blockId: globalUnlock)
-	arm64GtGlobalAddr(code, rdataRelocs: rdataRelocs, dest: 0, name: "__sched_global_queue_cs")
-	arm64GtBranchLink(code, callFixups: callFixups, name: "__slab_lock_release")
+	arm64GtLockRelease(code, rdataRelocs: rdataRelocs, callFixups: callFixups, name: "__sched_global_queue_cs")
 
 	// steal_fallback: both queues empty → tail-call __gt_steal_work, which steals half
 	// of a random victim P's local queue and returns the first stolen GT in x0 (or 0).
@@ -1703,8 +1779,7 @@ function emitArm64GtDequeue(code ByteArray, callFixups Arm64CallFixupArray, rdat
 	// g.next, return g.
 	arm64GtMarkBlock(state, code: code, blockId: returnResult)
 	arm64GtStore(code, disp: slotResult, src: 10)  // spill g before the release BL
-	arm64GtGlobalAddr(code, rdataRelocs: rdataRelocs, dest: 0, name: "__sched_global_queue_cs")
-	arm64GtBranchLink(code, callFixups: callFixups, name: "__slab_lock_release")
+	arm64GtLockRelease(code, rdataRelocs: rdataRelocs, callFixups: callFixups, name: "__sched_global_queue_cs")
 	arm64GtLoad(code, dest: 0, disp: slotResult)
 	arm64GtStoreField(code, baseReg: 0, disp: GtGtOffNext, src: GtRegXzr)  // g.next = 0
 	arm64GtEpilogue(code, frameSize: frameSize)
@@ -2024,8 +2099,7 @@ function emitArm64GtSpawn(code ByteArray, relocations RelocationArray, callFixup
 	// reference's EnterCriticalSection(&__sched_all_cs) + LOCK INC/XADD. The recursive
 	// spinlock takes the lock address in x0 and clobbers volatiles, so gt is reloaded
 	// from its frame slot after the acquire.
-	arm64GtGlobalAddr(code, rdataRelocs: rdataRelocs, dest: 0, name: "__sched_all_cs")
-	arm64GtBranchLink(code, callFixups: callFixups, name: "__slab_lock_acquire")
+	arm64GtLockAcquire(code, rdataRelocs: rdataRelocs, callFixups: callFixups, name: "__sched_all_cs")
 	arm64GtLoad(code, dest: 9, disp: 0x28)  // reload gt (lock BL clobbered x9)
 
 	// gt.all_next = __gt_all_head ; __gt_all_head = gt.
@@ -2046,8 +2120,7 @@ function emitArm64GtSpawn(code ByteArray, relocations RelocationArray, callFixup
 
 	// Release __sched_all_cs before the trace/enqueue calls (they take their own locks;
 	// keeping the all-lock narrow avoids any lock-order coupling).
-	arm64GtGlobalAddr(code, rdataRelocs: rdataRelocs, dest: 0, name: "__sched_all_cs")
-	arm64GtBranchLink(code, callFixups: callFixups, name: "__slab_lock_release")
+	arm64GtLockRelease(code, rdataRelocs: rdataRelocs, callFixups: callFixups, name: "__sched_all_cs")
 
 	// emit `spawn #id`.
 	// __gt_trace_emit(tag=&"spawn #", value=gt.traceId, suffix=0).
@@ -2078,7 +2151,8 @@ end 'emitArm64GtSpawn'
 // GTs don't resume). Ports the self-hosted x64 emitX64GtTrampoline (the managed
 // decref-by-mask loop + arg-buffer free are the self-hosted ABI specifics the C#
 // arm64 reference left as a TODO). Frame: gt@0x10 func@0x18 buf@0x28 count@0x30
-// mask@0x38 result@0x40 threw@0x48 ; arg spill area @0x50..0x88 (8 slots).
+// mask@0x38 result@0x40 threw@0x48 (highest slot used); 0x50..0x98 is unused
+// headroom within the 0xA0 frame.
 // =============================================================================
 function emitArm64GtTrampoline(code ByteArray, callFixups Arm64CallFixupArray, rdataRelocs RdataRelocationArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
 	arm64RecordLabel(labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "__gt_trampoline", offset: code.count())
@@ -2149,7 +2223,7 @@ function emitArm64GtTrampoline(code ByteArray, callFixups Arm64CallFixupArray, r
 		// (mask & (1<<d)) == 0 → arg not managed.
 		arm64GtLoad(code, dest: 11, disp: 0x38)
 		arm64EmitMovImm(code, rd: 12, value: 1 shl d)
-		arm64GtAlu(code, opcode: 0x8A000000, rd: 11, rn: 11, rm: 12)  // AND x11, x11, x12
+		arm64GtAlu(code, opcode: GtAluAnd, rd: 11, rn: 11, rm: 12)  // AND x11, x11, x12
 		arm64GtCbz(code, state: state, rn: 11, targetBlock: contBlock)
 		// arg = [buf + 16 + d*8]; if null → skip; else mm_decref(arg).
 		arm64GtLoad(code, dest: 10, disp: 0x28)
@@ -2171,8 +2245,7 @@ function emitArm64GtTrampoline(code ByteArray, callFixups Arm64CallFixupArray, r
 	// races with sibling spawns/completions. Mirrors the x64 LOCK DEC + EnterCriticalSection
 	// (&__sched_all_cs) unlink. The lock BL clobbers volatiles, so gt is reloaded from its
 	// frame slot inside the locked region.
-	arm64GtGlobalAddr(code, rdataRelocs: rdataRelocs, dest: 0, name: "__sched_all_cs")
-	arm64GtBranchLink(code, callFixups: callFixups, name: "__slab_lock_acquire")
+	arm64GtLockAcquire(code, rdataRelocs: rdataRelocs, callFixups: callFixups, name: "__sched_all_cs")
 
 	// __gt_live_count -= 1.
 	arm64GtLoadGlobal(code, rdataRelocs: rdataRelocs, dest: 0, name: "__gt_live_count")
@@ -2206,8 +2279,7 @@ function emitArm64GtTrampoline(code ByteArray, callFixups Arm64CallFixupArray, r
 	arm64GtMarkBlock(state, code: code, blockId: allDone)
 
 	// Release __sched_all_cs (live_count-- + unlink complete).
-	arm64GtGlobalAddr(code, rdataRelocs: rdataRelocs, dest: 0, name: "__sched_all_cs")
-	arm64GtBranchLink(code, callFixups: callFixups, name: "__slab_lock_release")
+	arm64GtLockRelease(code, rdataRelocs: rdataRelocs, callFixups: callFixups, name: "__sched_all_cs")
 
 	// gt.status = completed.
 	arm64GtLoad(code, dest: 9, disp: 0x10)
@@ -2770,8 +2842,7 @@ function emitArm64GtTimerAdd(code ByteArray, callFixups Arm64CallFixupArray, rda
 	let doneBlock = 1
 
 	// Lock the timer heap (serializes append/sift-up against concurrent pops).
-	arm64GtGlobalAddr(code, rdataRelocs: rdataRelocs, dest: 0, name: "__gt_timer_cs")
-	arm64GtBranchLink(code, callFixups: callFixups, name: "__slab_lock_acquire")
+	arm64GtLockAcquire(code, rdataRelocs: rdataRelocs, callFixups: callFixups, name: "__gt_timer_cs")
 
 	// i = count ; count++ ; heap[i] = {deadline, gt}.
 	arm64GtLoadGlobal(code, rdataRelocs: rdataRelocs, dest: 0, name: "__gt_timer_count")
@@ -2817,8 +2888,7 @@ function emitArm64GtTimerAdd(code ByteArray, callFixups Arm64CallFixupArray, rda
 
 	arm64GtMarkBlock(state, code: code, blockId: doneBlock)
 	// Release the timer heap before returning.
-	arm64GtGlobalAddr(code, rdataRelocs: rdataRelocs, dest: 0, name: "__gt_timer_cs")
-	arm64GtBranchLink(code, callFixups: callFixups, name: "__slab_lock_release")
+	arm64GtLockRelease(code, rdataRelocs: rdataRelocs, callFixups: callFixups, name: "__gt_timer_cs")
 	arm64GtEpilogue(code, frameSize: frameSize)
 	arm64GtFinalize(code, state: state)
 end 'emitArm64GtTimerAdd'
@@ -2854,8 +2924,7 @@ function emitArm64GtTimerCheck(code ByteArray, callFixups Arm64CallFixupArray, r
 	arm64GtLoadGlobal(code, rdataRelocs: rdataRelocs, dest: 0, name: "__gt_timer_count")
 	arm64GtCbz(code, state: state, rn: 0, targetBlock: retBlock)
 	// Lock the timer heap, then RE-CHECK count under the lock (it may have changed).
-	arm64GtGlobalAddr(code, rdataRelocs: rdataRelocs, dest: 0, name: "__gt_timer_cs")
-	arm64GtBranchLink(code, callFixups: callFixups, name: "__slab_lock_acquire")
+	arm64GtLockAcquire(code, rdataRelocs: rdataRelocs, callFixups: callFixups, name: "__gt_timer_cs")
 	arm64GtLoadGlobal(code, rdataRelocs: rdataRelocs, dest: 0, name: "__gt_timer_count")
 	arm64GtCbz(code, state: state, rn: 0, targetBlock: doneBlock)  // emptied → unlock + ret
 	// now = __gt_now_ms().
@@ -2956,8 +3025,7 @@ function emitArm64GtTimerCheck(code ByteArray, callFixups Arm64CallFixupArray, r
 	// done: release the timer heap, then fall through to ret. The lock-free fast
 	// path (count==0 at entry) jumps straight to retBlock and skips this release.
 	arm64GtMarkBlock(state, code: code, blockId: doneBlock)
-	arm64GtGlobalAddr(code, rdataRelocs: rdataRelocs, dest: 0, name: "__gt_timer_cs")
-	arm64GtBranchLink(code, callFixups: callFixups, name: "__slab_lock_release")
+	arm64GtLockRelease(code, rdataRelocs: rdataRelocs, callFixups: callFixups, name: "__gt_timer_cs")
 
 	arm64GtMarkBlock(state, code: code, blockId: retBlock)
 	arm64GtEpilogue(code, frameSize: frameSize)

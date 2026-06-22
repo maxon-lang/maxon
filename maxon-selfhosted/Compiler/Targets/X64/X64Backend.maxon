@@ -8572,6 +8572,11 @@ function emitX64SchedWorkerLoop(code ByteArray, relocations RelocationArray, cal
 	helperLoadSlot(code, slotIndex: 0, dest: X64Register.rax)
 	code.append(b"\x48\x31\xc9")  // xor rcx, rcx
 	helperStoreIndirect(code, base: X64Register.rax, disp: POffStatus, src: X64Register.rcx)
+	// Clear idleFlag too: a worker that exits via the shutdown re-check in the park
+	// path still has idleFlag=1 published, which would mislead a later enqueue's
+	// idle-worker scan into signalling a dead P's wakeEvent. Matches the arm64
+	// worker-exit teardown.
+	helperStoreIndirect(code, base: X64Register.rax, disp: POffIdleFlag, src: X64Register.rcx)
 	code.append(b"\x48\x31\xc0")  // xor rax, rax (thread exit code 0)
 	helperFinalize(state, code: code)
 	helperEpilogue(code)

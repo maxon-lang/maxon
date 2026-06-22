@@ -90,6 +90,22 @@ export union RdataRelocKind
 	symdataArm64Adr
 	dataSectionArm64Adr
 	covdataArm64Adr
+	// ADRP+ADD/LDR/STR pairs for ±4 GiB-reach global access (arm64). The single-ADR
+	// `*Arm64Adr` variants above reach only ±1 MiB; the multi-M green-thread runtime
+	// multiplied both the number of global accesses and the code-to-data distance, so
+	// a large program could silently truncate a global's address. The `*Arm64Adrp`
+	// kind patches the ADRP's 4 KiB-page immediate; the paired `*Arm64PageOff` kind
+	// (emitted on the immediately-following instruction) patches the within-page byte
+	// offset into the ADD/LDR/STR's imm12 — the writer reads that instruction's own
+	// opcode to pick the imm12 scale (1 for ADD, 8 for LDR/STR Xn). One pair per
+	// output section, mirroring the single-ADR set: `arm64Adrp`→read-only .rdata,
+	// `dataSectionArm64Adrp`→writable heap .data, `covdataArm64Adrp`→.covdata.
+	arm64Adrp
+	arm64PageOff
+	dataSectionArm64Adrp
+	dataSectionArm64PageOff
+	covdataArm64Adrp
+	covdataArm64PageOff
 	funcAbs64InRdata(funcName String, rdataLabel String, offsetInLabel ByteOffset)
 end 'RdataRelocKind'
 
@@ -144,7 +160,7 @@ end 'isRuntimeMutableGlobalLabel'
 export function writeRdataRelocKind(buf ByteArray, kind RdataRelocKind)
 	match kind 'k'
 		funcAbs64InRdata then panic("writeRdataRelocKind: funcAbs64InRdata is rdata-internal and must not enter the per-function cache stream")
-		ripRelDisp32 to covdataArm64Adr then writeDword(buf, value: kind.ordinal)
+		ripRelDisp32 to covdataArm64PageOff then writeDword(buf, value: kind.ordinal)
 	end 'k'
 end 'writeRdataRelocKind'
 
@@ -162,6 +178,12 @@ export function readRdataRelocKind(buf ByteArray, offset ByteOffset) returns (Rd
 		symdataArm64Adr then return (RdataRelocKind.symdataArm64Adr, pos)
 		dataSectionArm64Adr then return (RdataRelocKind.dataSectionArm64Adr, pos)
 		covdataArm64Adr then return (RdataRelocKind.covdataArm64Adr, pos)
+		arm64Adrp then return (RdataRelocKind.arm64Adrp, pos)
+		arm64PageOff then return (RdataRelocKind.arm64PageOff, pos)
+		dataSectionArm64Adrp then return (RdataRelocKind.dataSectionArm64Adrp, pos)
+		dataSectionArm64PageOff then return (RdataRelocKind.dataSectionArm64PageOff, pos)
+		covdataArm64Adrp then return (RdataRelocKind.covdataArm64Adrp, pos)
+		covdataArm64PageOff then return (RdataRelocKind.covdataArm64PageOff, pos)
 		// funcAbs64InRdata is rdata-internal and never serialized into the
 		// per-function cache stream; seeing its tag means the bytes are corrupt.
 		funcAbs64InRdata then throw CacheCorruption.invalidEncoding
@@ -201,14 +223,14 @@ end 'FuncAbs64Slot'
 export typealias FuncAbs64SlotArray = Array with FuncAbs64Slot
 
 // Walk an RdataRelocationArray and collect every funcAbs64InRdata reloc. The
-// `ripRelDisp32 to covdataArm64Adr` arm covers all the non-funcAbs64 kinds, so
-// the match stays exhaustive over RdataRelocKind while isolating the one case
-// the seed/patch/rebase passes care about.
+// `ripRelDisp32 to covdataArm64PageOff` arm covers all the non-funcAbs64
+// kinds, so the match stays exhaustive over RdataRelocKind while isolating the
+// one case the seed/patch/rebase passes care about.
 export function collectFuncAbs64Slots(relocs RdataRelocationArray) returns FuncAbs64SlotArray
 	var slots = FuncAbs64SlotArray.create()
 	for reloc in relocs 'each'
 		match reloc.kind 'k'
-			ripRelDisp32 to covdataArm64Adr then break 'k'
+			ripRelDisp32 to covdataArm64PageOff then break 'k'
 			funcAbs64InRdata(funcName, _, offsetInLabel) then slots.push(FuncAbs64Slot.create(funcName, rdataOffset: reloc.rdataOffset, offsetInLabel: offsetInLabel))
 		end 'k'
 	end 'each'

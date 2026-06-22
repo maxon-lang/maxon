@@ -1139,8 +1139,8 @@ export type Arm64Backend implements TargetBackend
 			// no init code is needed on any target. (Linux locks land in step 6a.12
 			// with the runtime.std spinlock helpers.)
 			osLockInit then result = nextTempSlot
-			osLockAcquire(addrId) then result = lowerOsLockAcquireArm64(addrId, dstBlock: dstBlock, nextTempSlot: nextTempSlot, osDesc: osDesc)
-			osLockRelease(addrId) then result = lowerOsLockReleaseArm64(addrId, dstBlock: dstBlock, nextTempSlot: nextTempSlot, osDesc: osDesc)
+			osLockAcquire(addrId) then result = lowerOsLockOpArm64(addrId, helperName: "__slab_lock_acquire", dstBlock: dstBlock, nextTempSlot: nextTempSlot, osDesc: osDesc)
+			osLockRelease(addrId) then result = lowerOsLockOpArm64(addrId, helperName: "__slab_lock_release", dstBlock: dstBlock, nextTempSlot: nextTempSlot, osDesc: osDesc)
 			movImm to storeSlot then break 'lower'
 			tryCall to errorReturn then break 'lower'
 		end 'lower'
@@ -1172,29 +1172,19 @@ export type Arm64Backend implements TargetBackend
 		return nextTempSlot
 	end 'lowerAtomicCasArm64'
 
-	// osLockAcquire(addr): on macos, BL into the hand-emitted recursive spinlock
-	// helper __slab_lock_acquire(addr in x0) (emitArm64SlabLockAcquire). The MIR op
-	// is isCall:true so caller-saved registers are already spilled across it. On
-	// other targets the lock stays a no-op (Linux uses the runtime.std spinlock).
-	function lowerOsLockAcquireArm64(addrId ValueId, dstBlock IrBlock, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
-		if arm64OsUsesSpinlockHelper(osDesc) 'emitLock'
+	// osLockAcquire/osLockRelease(addr): on macos, BL into the hand-emitted recursive
+	// spinlock helper named `helperName` (__slab_lock_acquire / __slab_lock_release,
+	// addr in x0; emitArm64SlabLock{Acquire,Release}). The MIR op is isCall:true so
+	// caller-saved registers are already spilled across it. On other targets the lock
+	// stays a no-op (Linux uses the runtime.std spinlock).
+	function lowerOsLockOpArm64(addrId ValueId, helperName String, dstBlock IrBlock, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
+		if arm64OsUsesSpinlockHelper(osDesc) 'emitLockOp'
 			var argIds = ValueIdArray.create()
 			argIds.push(addrId)
-			emitArm64VoidCallHandRolled("__slab_lock_acquire", argIds: argIds, dstBlock: dstBlock)
-		end 'emitLock'
+			emitArm64VoidCallHandRolled(helperName, argIds: argIds, dstBlock: dstBlock)
+		end 'emitLockOp'
 		return nextTempSlot
-	end 'lowerOsLockAcquireArm64'
-
-	// osLockRelease(addr): macos BL into __slab_lock_release(addr in x0). See
-	// lowerOsLockAcquireArm64.
-	function lowerOsLockReleaseArm64(addrId ValueId, dstBlock IrBlock, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
-		if arm64OsUsesSpinlockHelper(osDesc) 'emitUnlock'
-			var argIds = ValueIdArray.create()
-			argIds.push(addrId)
-			emitArm64VoidCallHandRolled("__slab_lock_release", argIds: argIds, dstBlock: dstBlock)
-		end 'emitUnlock'
-		return nextTempSlot
-	end 'lowerOsLockReleaseArm64'
+	end 'lowerOsLockOpArm64'
 
 	// True on the targets whose osLockAcquire/Release lower to the hand-emitted
 	// recursive spinlock helpers (currently arm64-macos). Other targets keep the

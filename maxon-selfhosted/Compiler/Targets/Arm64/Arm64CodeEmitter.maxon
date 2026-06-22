@@ -622,17 +622,24 @@ function arm64EmitCbnzW(code ByteArray, rn MachineWord, imm19 MachineWord)
 end 'arm64EmitCbnzW'
 
 // LDAXR Xt, [Xn] — load-acquire exclusive register, 64-bit.
-function arm64EmitLdaxr(code ByteArray, rt MachineWord, rn MachineWord)
+export function arm64EmitLdaxr(code ByteArray, rt MachineWord, rn MachineWord)
 	let insn = 0xC85FFC00 or (rn shl 5) or rt
 	arm64EmitInsn(code, insn: insn)
 end 'arm64EmitLdaxr'
 
 // STLXR Ws, Xt, [Xn] — store-release exclusive register, 64-bit. Ws receives
 // the success status (0 = success, 1 = failure).
-function arm64EmitStlxr(code ByteArray, rs MachineWord, rt MachineWord, rn MachineWord)
+export function arm64EmitStlxr(code ByteArray, rs MachineWord, rt MachineWord, rn MachineWord)
 	let insn = 0xC800FC00 or (rs shl 16) or (rn shl 5) or rt
 	arm64EmitInsn(code, insn: insn)
 end 'arm64EmitStlxr'
+
+// STLR Xt, [Xn] — store-release register, 64-bit. Publishes Xt with release
+// ordering (no exclusive monitor, no status register).
+export function arm64EmitStlr(code ByteArray, rt MachineWord, rn MachineWord)
+	let insn = 0xC89FFC00 or (rn shl 5) or rt
+	arm64EmitInsn(code, insn: insn)
+end 'arm64EmitStlr'
 
 // ADD Xd, Xn, #imm12 helper writes the immediate-form ADD using the standard
 // sf=1 encoding. (arm64EmitAddImm above already does this — alias kept for clarity.)
@@ -1635,17 +1642,22 @@ function arm64EmitIatCallOp(code ByteArray, relocations RelocationArray, resultS
 	arm64EmitStrSlot(code, rt: 0, slotIndex: resultSlot)
 end 'arm64EmitIatCallOp'
 
-// sys.globalAddr: ADR X0, rdata/data label — patched by binary writer after layout.
-// The label's output section (writable .data heap arena vs read-only .rdata vs
-// .covdata) is decided by the shared classifyGlobalLabel (via
-// arm64RelocKindForLabel) so the data-section global set matches the x64 backend
+// sys.globalAddr: ADRP X0, page(label) ; ADD X0, X0, #pageoff(label) — patched by
+// the binary writer after layout. The ADRP+ADD pair has ±4 GiB reach; the single
+// ADR it replaced reached only ±1 MiB and silently truncated a global's address once
+// a program's code-to-data distance exceeded that window (the same hazard the
+// green-thread runtime accessors hit at multi-M scale). The label's output section
+// (writable .data heap arena vs read-only .rdata vs .covdata) is decided by the
+// shared classifyGlobalLabel so the data-section global set matches the x64 backend
 // and never silently drops a mutable-global prefix into read-only .rdata.
 function arm64EmitGlobalAddrOp(code ByteArray, rdataRelocs RdataRelocationArray, resultSlot VarSlot, name String)
-	// Record relocation at this instruction offset
-	let relocKind = arm64RelocKindForLabel(name)
-	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: name, kind: relocKind))
-	// Emit placeholder ADR X0, #0
-	arm64EmitAdr(code, rd: 0, offset: 0)
+	let (adrpKind, pageOffKind) = arm64AdrpPageOffKindsForLabel(name)
+	// ADRP X0, page(label) — page reloc on this instruction.
+	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: name, kind: adrpKind))
+	arm64EmitAdrp(code, rd: 0)
+	// ADD X0, X0, #pageoff(label) — within-page reloc on the following instruction.
+	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: name, kind: pageOffKind))
+	arm64EmitAddImm(code, rd: 0, rn: 0, imm12: 0)
 
 	// Store to resultSlot
 	arm64EmitStrSlot(code, rt: 0, slotIndex: resultSlot)
@@ -2144,30 +2156,35 @@ function arm64EmitLeaFromStackOp(code ByteArray, dest Arm64VReg, stackOffset Mac
 	arm64EmitAddImmWide(code, rd: rd, rn: 29, imm: stackOffset)
 end 'arm64EmitLeaFromStackOp'
 
-// leaRdata: ADRP+ADD materialization of an rdata label address.
-// Uses placeholder ADRP + ADD (imm12=0); the binary writer patches both fields
-// via the rdata relocation.
+// leaRdata: ADRP+ADD materialization of an rdata label address with ±4 GiB reach.
+// The single-ADR form reached only ±1 MiB. ADRP page reloc on the ADRP, within-page
+// reloc on the ADD; the writer patches both fields.
 function arm64EmitLeaRdataOp(code ByteArray, dest Arm64VReg, rdataLabel String, rdataRelocs RdataRelocationArray)
 	let rd = resolveArm64Gpr(dest).rawValue
-	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: rdataLabel, kind: RdataRelocKind.arm64Adr))
-	arm64EmitAdr(code, rd: rd, offset: 0)
+	let (adrpKind, pageOffKind) = arm64AdrpPageOffKindsForLabel(rdataLabel)
+	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: rdataLabel, kind: adrpKind))
+	arm64EmitAdrp(code, rd: rd)
+	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: rdataLabel, kind: pageOffKind))
+	arm64EmitAddImm(code, rd: rd, rn: rd, imm12: 0)
 end 'arm64EmitLeaRdataOp'
 
 // globalLoad / globalStore for GPR values. Phase D1 wires these up so the
 // Linux `osGetArgc` / `osGetArgv` lowerings can read `__mrt_argc` / `__mrt_argv`
-// inline. Both emit an ADR + LDR/STR pair: the ADR materialises the global's
-// runtime address into the dest/src register (the linker patches the ADR
-// imm21 via the rdata relocation), and the second instruction does the
-// actual load or store with a zero offset. ADR's ±1MB PC-relative range is
-// sufficient for compile-verify on Linux/macOS targets where this is wired in.
+// inline. Both emit an ADRP + LDR/STR pair: the ADRP+within-page-offset materialises
+// the global's runtime address with ±4 GiB reach (the single-ADR form this replaced
+// reached only ±1 MiB and could truncate at scale). The LDR/STR folds the within-page
+// offset directly into its imm12 via the dataSectionArm64PageOff reloc (scaled by 8
+// for an LDR/STR Xn), so no separate ADD is needed.
 function arm64EmitGlobalLoadOp(code ByteArray, dest Arm64VReg, name String, size MachineWord, rdataRelocs RdataRelocationArray)
 	if size != 8 'sizeOk'
 		panic("arm64EmitGlobalLoadOp: only 8-byte global loads supported (name={name}, size={size})")
 	end 'sizeOk'
 	let rd = resolveArm64Gpr(dest).rawValue
-	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: name, kind: arm64RelocKindForLabel(name)))
-	arm64EmitAdr(code, rd: rd, offset: 0)
-	arm64EmitLdrImm(code, rt: rd, rn: rd, imm12: 0)
+	let (adrpKind, pageOffKind) = arm64AdrpPageOffKindsForLabel(name)
+	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: name, kind: adrpKind))
+	arm64EmitAdrp(code, rd: rd)
+	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: name, kind: pageOffKind))
+	arm64EmitLdrRegOffset(code, rt: rd, baseReg: rd, offset: 0)
 end 'arm64EmitGlobalLoadOp'
 
 function arm64EmitGlobalStoreOp(code ByteArray, name String, src Arm64VReg, size MachineWord, rdataRelocs RdataRelocationArray)
@@ -2177,8 +2194,10 @@ function arm64EmitGlobalStoreOp(code ByteArray, name String, src Arm64VReg, size
 	let rs = resolveArm64Gpr(src).rawValue
 	// Use x16 (scratch IP0) as the address holder so the source register
 	// stays intact for the store.
-	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: name, kind: arm64RelocKindForLabel(name)))
-	arm64EmitAdr(code, rd: 16, offset: 0)
+	let (adrpKind, pageOffKind) = arm64AdrpPageOffKindsForLabel(name)
+	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: name, kind: adrpKind))
+	arm64EmitAdrp(code, rd: 16)
+	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: name, kind: pageOffKind))
 	arm64EmitStrRegOffset(code, rt: rs, baseReg: 16, offset: 0)
 end 'arm64EmitGlobalStoreOp'
 
@@ -2196,6 +2215,18 @@ export function arm64RelocKindForLabel(label String) returns RdataRelocKind
 		rdata gives RdataRelocKind.arm64Adr
 	end 'cls'
 end 'arm64RelocKindForLabel'
+
+// The (ADRP-page, within-page) reloc-kind pair for a global label's output section.
+// Twin of arm64RelocKindForLabel for the ±4 GiB ADRP+ADD/LDR/STR sequence: the page
+// reloc patches the ADRP, the page-off reloc patches the following ADD/LDR/STR. Shares
+// classifyGlobalLabel so the section choice stays identical to the single-ADR path.
+export function arm64AdrpPageOffKindsForLabel(label String) returns (RdataRelocKind, RdataRelocKind)
+	return match classifyGlobalLabel(label) 'cls'
+		covData gives (RdataRelocKind.covdataArm64Adrp, RdataRelocKind.covdataArm64PageOff)
+		dataSection gives (RdataRelocKind.dataSectionArm64Adrp, RdataRelocKind.dataSectionArm64PageOff)
+		rdata gives (RdataRelocKind.arm64Adrp, RdataRelocKind.arm64PageOff)
+	end 'cls'
+end 'arm64AdrpPageOffKindsForLabel'
 
 function arm64EmitGlobalLoadFloatOp(code ByteArray, dest Arm64FpVReg, name String, precision FloatPrecision)
 	let precisionName = match precision 'p'
@@ -2219,12 +2250,20 @@ end 'arm64EmitGlobalStoreFloatOp'
 // IP0) to hold the global address — x0/x1 are preserved so subsequent ABI
 // code still sees them if a future revision needs to.
 function arm64EmitStashEntryArgvOp(code ByteArray, rdataRelocs RdataRelocationArray)
-	// str x0, [adrp+__mrt_argc]
-	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: "__mrt_argc", kind: arm64RelocKindForLabel("__mrt_argc")))
-	arm64EmitAdr(code, rd: 16, offset: 0)
-	arm64EmitStrRegOffset(code, rt: 0, baseReg: 16, offset: 0)
-	// str x1, [adrp+__mrt_argv]
-	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: "__mrt_argv", kind: arm64RelocKindForLabel("__mrt_argv")))
-	arm64EmitAdr(code, rd: 16, offset: 0)
-	arm64EmitStrRegOffset(code, rt: 1, baseReg: 16, offset: 0)
+	// STR x0, [ADRP+ADD __mrt_argc] — ±4 GiB-reach store address (the single-ADR
+	// form reached only ±1 MiB and could truncate at scale, like sys.globalAddr).
+	arm64EmitStashOneEntryGlobal(code, rdataRelocs: rdataRelocs, name: "__mrt_argc", src: 0)
+	// STR x1, [ADRP+ADD __mrt_argv].
+	arm64EmitStashOneEntryGlobal(code, rdataRelocs: rdataRelocs, name: "__mrt_argv", src: 1)
 end 'arm64EmitStashEntryArgvOp'
+
+// ADRP x16, page(name) ; ADD x16, x16, #pageoff(name) ; STR Xsrc, [x16] — store `src`
+// into an 8-byte global through an x16-based ±4 GiB-reach address.
+function arm64EmitStashOneEntryGlobal(code ByteArray, rdataRelocs RdataRelocationArray, name String, src MachineWord)
+	let (adrpKind, pageOffKind) = arm64AdrpPageOffKindsForLabel(name)
+	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: name, kind: adrpKind))
+	arm64EmitAdrp(code, rd: 16)
+	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: name, kind: pageOffKind))
+	arm64EmitAddImm(code, rd: 16, rn: 16, imm12: 0)
+	arm64EmitStrRegOffset(code, rt: src, baseReg: 16, offset: 0)
+end 'arm64EmitStashOneEntryGlobal'
