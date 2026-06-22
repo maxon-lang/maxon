@@ -493,6 +493,45 @@ function emitArm64SlabLockRelease(code ByteArray, labelNames StringArray, labelO
 end 'emitArm64SlabLockRelease'
 
 // =============================================================================
+// __slab_current_p_id() -> x0: the per-P mcache shard id of the calling OS thread,
+// or -1 when no GMP scheduler owns this thread. Overrides the runtime.std stub
+// (which returns -1 unconditionally — the correct answer before __gt_init
+// publishes P[0] to TSD, or on a raw un-adopted OS thread). The sharded slab
+// allocator in runtime.std calls this to index its per-P mcache and to route
+// cross-P frees onto the owning P's remote-free queue; a -1 result maps to the
+// single raw shard there, so the allocator degrades to locked single-shard
+// behavior. Ports the self-hosted x64 emitX64SlabCurrentPId — but on arm64 the
+// AAPCS64 return register is x0 (the x64 version uses its r8 internal ABI).
+//
+// arm64GtLoadCurrentP already returns NULL for BOTH the pre-init (key==0) and
+// un-adopted (tsd[key]==0) cases via its CSEL gate, so a single P==NULL test
+// covers both runtime.std-stub sentinels. Leaf: no frame, clobbers only x0 plus
+// the x16/x17 TSD scratch (all caller-saved).
+//   P == NULL  → -1
+//   else       → P->id  (GtPOffId)
+// =============================================================================
+function emitArm64SlabCurrentPId(code ByteArray, rdataRelocs RdataRelocationArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
+	arm64RecordLabel(labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "__slab_current_p_id", offset: code.count())
+	var state = Arm64MacosGtState.create(1)
+
+	let negBlock = 0
+
+	// x0 = P (or NULL).
+	arm64GtLoadCurrentP(code, rdataRelocs: rdataRelocs, dest: 0)
+	arm64GtCbz(code, state: state, rn: 0, targetBlock: negBlock)
+	// x0 = P->id.
+	arm64GtLoadField(code, dest: 0, baseReg: 0, disp: GtPOffId)
+	arm64EmitRet(code)
+
+	// no_p: return -1.
+	arm64GtMarkBlock(state, code: code, blockId: negBlock)
+	arm64EmitMovImm(code, rd: 0, value: -1)
+	arm64EmitRet(code)
+
+	arm64GtFinalize(code, state: state)
+end 'emitArm64SlabCurrentPId'
+
+// =============================================================================
 // Top-level driver — emit every hand-rolled green-thread / sleep runtime
 // function. Called from concatArm64FunctionChunks under `if isMacosOs`, after the
 // stdlib link pass, so these labels override the runtime.std stubs.
@@ -504,6 +543,7 @@ export function emitArm64MacosGreenThread(code ByteArray, relocations Relocation
 	emitArm64GtContextSwitch(code, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
 	emitArm64SlabLockAcquire(code, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
 	emitArm64SlabLockRelease(code, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+	emitArm64SlabCurrentPId(code, rdataRelocs: rdataRelocs, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
 	emitArm64GtEnqueue(code, callFixups: callFixups, rdataRelocs: rdataRelocs, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
 	emitArm64GtDequeue(code, callFixups: callFixups, rdataRelocs: rdataRelocs, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
 	emitArm64GtInit(code, relocations: relocations, rdataRelocs: rdataRelocs, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
@@ -532,8 +572,9 @@ end 'emitArm64MacosGreenThread'
 // / __gt_now_ms / __io_check_completions) have NO runtime.std stub: they are emitted
 // unconditionally by this backend, so their labels always exist and their BL fixups
 // resolve regardless of reachability (seeding a non-stub name is a no-op in
-// seedRuntimeReachName / lazyNeededClosure anyway). `__gt_init` / `__gt_trace_emit`
-// / `__gt_current_trace_id` ARE stubs (overridden here) and must be kept; the slab
+// seedRuntimeReachName / lazyNeededClosure anyway). `__gt_init` / `__slab_current_p_id`
+// / `__gt_trace_emit` / `__gt_current_trace_id` ARE stubs (overridden here) and must
+// be kept (the override label wins only if the stub survived DCE); the slab
 // allocator / mm_decref / diag printers are real runtime bodies the trampoline +
 // trace path call. Seeded by BackendDispatch's reachability + lazy closures off a
 // reachable green-thread root (`__gt_spawn` / `__gt_await` / `maxon_sleep` /
@@ -546,6 +587,7 @@ export function arm64MacosGreenThreadRuntimeNames() returns StringArray
 	names.push("__diag_print_tag")
 	names.push("__diag_print_i64")
 	names.push("__gt_init")
+	names.push("__slab_current_p_id")
 	names.push("__gt_trace_emit")
 	names.push("__gt_current_trace_id")
 	return names
