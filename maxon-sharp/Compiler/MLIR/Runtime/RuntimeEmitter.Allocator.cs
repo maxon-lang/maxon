@@ -1844,13 +1844,16 @@ public partial class RuntimeEmitter {
     _b.LoadLocal(VReg.Scratch1, 1); // class_offset
     _b.AddRegReg(VReg.Scratch0, VReg.Scratch1); // mcache_slot_addr
 
-    // If *mcache_slot == span_ptr, clear it
-    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, 0);
+    // If *mcache_slot == span_ptr, clear it. Acquire/release so the victim P's
+    // load-acquire of its slot observes this clear. The ownership gate in
+    // __slab_alloc is the actual safety net for the compare-then-clear window:
+    // even if a stale span survives here, the gate rejects it (owning_p != self).
+    _b.LoadAcquire(VReg.Scratch1, VReg.Scratch0, 0);
     _b.LoadLocal(VReg.Scratch2, 0); // span_ptr
     _b.CmpRegReg(VReg.Scratch1, VReg.Scratch2);
     _b.JumpIf(Condition.NotEqual, evictNext);
     _b.ZeroReg(VReg.Scratch1);
-    _b.StoreIndirect(VReg.Scratch0, 0, VReg.Scratch1);
+    _b.StoreRelease(VReg.Scratch0, 0, VReg.Scratch1);
 
     _b.DefineLabel(evictNext);
     _b.LoadLocal(VReg.Scratch0, 2);
@@ -2154,13 +2157,35 @@ public partial class RuntimeEmitter {
     // MspanPoolLock that serialised alloc against cross-P free is no longer
     // needed on the fast path.
     _b.LoadLocal(VReg.Scratch0, 3);
-    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, 0); // span = *mcache_slot
+    // Acquire: pairs with the StoreRelease publishers of *mcache_slot (slow-path
+    // refill, eviction clear) so observing a span pointer also observes that
+    // span's field stores.
+    _b.LoadAcquire(VReg.Scratch1, VReg.Scratch0, 0); // span = *mcache_slot
     var slowPath = UniqueLabel("slab_alloc_slow_path");
     _b.JumpIfZero(VReg.Scratch1, slowPath);
 
     // Check if span has free slots
     _b.LoadIndirect(VReg.Scratch2, VReg.Scratch1, MspanOffFreeCount);
     _b.JumpIfZero(VReg.Scratch2, slowPath);
+
+    // Ownership gate (the core multi-M fix): only pop from a span THIS P still
+    // owns. A span returned to mcentral (owning_p = sentinel) or handed to
+    // another P keeps free_count != 0, so the emptiness check above does NOT
+    // catch a recycled span; a lock-free pop from it would corrupt a span
+    // another P owns. owning_p is load-acquire (pairs with its StoreRelease
+    // writers). On x86 TSO this whole gate is plain loads + a compare.
+    //
+    // owning_p == self is STABLE across the non-atomic pop below: every writer
+    // of this span's free_list/free_count — this fast-path pop, the remote-free
+    // drain push, the local-free push, and return_span's sentinel-stamp — runs
+    // on the OWNING P, and a P is bound to exactly one M (OS thread) at a time.
+    // So once the gate observes self-ownership, no other thread can mutate this
+    // span before the pop completes; the single-writer invariant holds.
+    _b.LoadAcquire(VReg.Scratch2, VReg.Scratch1, MspanOffOwningP);
+    _b.LoadCurrentP(VReg.Scratch3);
+    _b.LoadIndirect(VReg.Scratch3, VReg.Scratch3, POffId);
+    _b.CmpRegReg(VReg.Scratch2, VReg.Scratch3);
+    _b.JumpIf(Condition.NotEqual, slowPath);
 
     // Fast path: pop from free list.
     _b.StoreLocal(4, VReg.Scratch1); // save span_ptr
@@ -2212,26 +2237,36 @@ public partial class RuntimeEmitter {
     // Re-probe the cached span — drain may have refilled it (or evicted it via
     // __slab_mcentral_return_span if it reached full).
     _b.LoadLocal(VReg.Scratch0, 3);
-    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, 0); // span = *mcache_slot
+    _b.LoadAcquire(VReg.Scratch1, VReg.Scratch0, 0); // span = *mcache_slot (acquire)
     var stillEmpty = UniqueLabel("slab_alloc_still_empty");
     _b.JumpIfZero(VReg.Scratch1, stillEmpty);
     _b.LoadIndirect(VReg.Scratch2, VReg.Scratch1, MspanOffFreeCount);
     _b.JumpIfZero(VReg.Scratch2, stillEmpty);
-    // Cached span has slots again — jump back to the fast path.
+    // The re-probe must apply the SAME ownership gate as the fast path, else a
+    // non-owned-but-non-empty cached span would bounce fast-path(gate-reject) ->
+    // slow-path -> re-probe(retry) forever. Not owned -> refill via mcentral.
+    _b.LoadAcquire(VReg.Scratch2, VReg.Scratch1, MspanOffOwningP);
+    _b.LoadCurrentP(VReg.Scratch3);
+    _b.LoadIndirect(VReg.Scratch3, VReg.Scratch3, POffId);
+    _b.CmpRegReg(VReg.Scratch2, VReg.Scratch3);
+    _b.JumpIf(Condition.NotEqual, stillEmpty);
+    // Cached span has slots again and we still own it — jump back to fast path.
     _b.Jump(retryLabel);
 
     _b.DefineLabel(stillEmpty);
     // No slots in cache. Clear the mcache slot (idempotent — may already be NULL).
     _b.LoadLocal(VReg.Scratch0, 3);
     _b.ZeroReg(VReg.Scratch1);
-    _b.StoreIndirect(VReg.Scratch0, 0, VReg.Scratch1);
+    _b.StoreRelease(VReg.Scratch0, 0, VReg.Scratch1);
 
     _b.LoadLocal(VReg.Arg0, 1); // class_index
     _b.Call("__slab_mcentral_get_span");
     _b.StoreLocal(4, VReg.Scratch0);
 
     _b.LoadLocal(VReg.Scratch1, 3);
-    _b.StoreIndirect(VReg.Scratch1, 0, VReg.Scratch0); // *mcache_slot = new_span
+    // Release: publish the span pointer after its lock-initialised fields, so a
+    // cross-P LoadAcquire of this slot (or the eviction's read) sees both.
+    _b.StoreRelease(VReg.Scratch1, 0, VReg.Scratch0); // *mcache_slot = new_span
 
     _b.Jump(retryLabel);
   }
