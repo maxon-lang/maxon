@@ -2081,26 +2081,6 @@ function maxonReturnTypeLowersToFloat(project Project, ref MaxonReturnType) retu
 	end 'pick'
 end 'maxonReturnTypeLowersToFloat'
 
-// Phase 9 Stage 3: lookup result for a match-arm scrutinee's union type.
-// Carries both a "hit" flag and the resolved EnumType so callers don't
-// have to issue two project lookups. Misses correspond to bare-enum and
-// non-enum scrutinees, which take the existing direct-cmp lowering path.
-type UnionTypeLookup
-	export var hasType as bool
-	export var value as EnumType
-
-	export static function miss() returns UnionTypeLookup
-		// `value` is unread on miss; supply a zeroed EnumType so the
-		// struct stays well-formed. Calling `value` on a miss is a caller
-		// bug — the only consumer guards on `hasType` first.
-		return Self{hasType: false, value: EnumType.create("", cases: EnumCaseArray.create(), isFloatBacked: false, visibility: Visibility.file, sourceFilePath: FilePath from "", nameLine: 0, nameColumn: 0, expectedMethods: InterfaceMethodSigArray.create(), isUnion: false)}
-	end 'miss'
-
-	export static function hit(t EnumType) returns UnionTypeLookup
-		return Self{hasType: true, value: t}
-	end 'hit'
-end 'UnionTypeLookup'
-
 // Phase 9 Stage 3: max payload arity across all cases of a union. Drives
 // the per-allocation size (`8 + maxArity*8`). All cases of the same union
 // share an allocation size so the destructor (Stage 4) can iterate slots
@@ -10636,7 +10616,6 @@ type MaxonToStdLowering
 		// dedicated `enumPayloadRead` ops the parser now emits at the head
 		// of the arm body — see `emitUnionArmBindings`. The field is kept
 		// for forward compatibility (Stage 4 write-back may consult it).
-		let unionType = self.unionTypeForScrutinee(scrutineeType)
 		var caseLiteralType = MaxonType.integer
 		var constOpcode = StdArithConstOpcode.constI64
 		if isFloat 'asFloat'
@@ -10646,10 +10625,7 @@ type MaxonToStdLowering
 		// For union scrutinees, the comparison subject is the heap-boxed
 		// value's tag (loaded via loadIndirect at offset 0). Float-backed
 		// unions don't exist — payload-bearing unions are int-tagged.
-		var leftId = self.resolveName(scrutineeName)
-		if unionType.hasType 'loadTag'
-			leftId = self.emitLoadFieldI64(leftId, offset: 0, dstBlock: dstBlock)
-		end 'loadTag'
+		var leftId = self.matchDispatchSubject(self.resolveName(scrutineeName), scrutineeType: scrutineeType, dstBlock: dstBlock)
 		let caseLitId = allocValueId(self.funcIdRef)
 		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(constOpcode, resultId: caseLitId, value: rawValue))))
 		self.setIsFloat(caseLitId, isFloat: isFloat)
@@ -10665,25 +10641,36 @@ type MaxonToStdLowering
 		self.stdModule.setTerminator(dstBlock, op: StdOp.control(StdControlOp.condBr(cmpId, thenTarget: thenTarget, thenArgIds: ValueIdArray.create(), elseTarget: elseTarget, elseArgIds: ValueIdArray.create())))
 	end 'lowerEnumMatchArm'
 
-	// Phase 9 Stage 3: detect union scrutinee. Returns the resolved
-	// `EnumType` so the binding-emission path can index its payloadFields.
-	// Plain enums (int/float-backed, no payloads on any case) and non-enum
-	// scrutinees return a no-hit so the bare-cmp lowering path stays
-	// unchanged.
-	function unionTypeForScrutinee(scrutineeType MaxonType) returns UnionTypeLookup
+	// Phase 9 Stage 3: true when a match-arm scrutinee is a HEAP-BOXED union
+	// (some case carries a payload), so its i64 tag must be loaded from offset
+	// 0 of the box before the dispatch cmp. Plain enums (int/float-backed, no
+	// payloads on any case) and non-enum scrutinees are bare i64 values that
+	// compare directly, so they return false and take the no-tag-load path.
+	function scrutineeIsBoxedUnion(scrutineeType MaxonType) returns bool
 		let nameStr = scrutineeType.nameOrEmpty(self.project)
 		if nameStr.isEmpty() 'notNamed'
-			return UnionTypeLookup.miss()
+			return false
 		end 'notNamed'
-		let resolved = try self.project.enumTypes.get(nameStr) otherwise return UnionTypeLookup.miss()
-		// Only a HEAP-BOXED union (some case carries a payload) loads its tag from
-		// offset 0 of the box. A pure-scalar union is a bare i64 like an enum, so
-		// it takes the plain bare-cmp path (no tag load) — miss here.
-		if not enumTypeIsBoxedUnion(resolved) 'notBoxed'
-			return UnionTypeLookup.miss()
-		end 'notBoxed'
-		return UnionTypeLookup.hit(resolved)
-	end 'unionTypeForScrutinee'
+		let resolved = try self.project.enumTypes.get(nameStr) otherwise return false
+		return enumTypeIsBoxedUnion(resolved)
+	end 'scrutineeIsBoxedUnion'
+
+	// Match-arm dispatch subject normalizer: when `scrutineeType` is a
+	// heap-boxed union (any case carries a payload), the SSA value is a heap
+	// pointer whose i64 tag sits at offset 0 of the box, so return the
+	// tag-load result for the i64 cmp. Plain enums and non-enum scrutinees
+	// compare the value directly, so return `scrutineeId` unchanged. Shared by
+	// the bare-case (`lowerEnumMatchArm`) and range (`lowerRangeMatchArm`)
+	// dispatch paths so the boxed-union tag load is decided in exactly one
+	// place — keyed off the scrutinee's resolved TYPE, never an op-carried
+	// owner name (which `parseEnumRangePattern` can route to a union's
+	// payload-free `<Union>.unionCases` companion).
+	function matchDispatchSubject(scrutineeId ValueId, scrutineeType MaxonType, dstBlock IrBlock) returns ValueId
+		if not self.scrutineeIsBoxedUnion(scrutineeType) 'notBoxedUnion'
+			return scrutineeId
+		end 'notBoxedUnion'
+		return self.emitLoadFieldI64(scrutineeId, offset: 0, dstBlock: dstBlock)
+	end 'matchDispatchSubject'
 
 	// Lower `MaxonOp.enumConstruct(result, EnumName, caseName, payloadValues)`
 	// to the heap-boxed layout the bootstrap uses: `__mm_alloc(size, destructor)`
@@ -10898,18 +10885,20 @@ type MaxonToStdLowering
 					self.lowerFloatBackedEnumRangeArm(scrutineeId, enumType: enumType, loOrdinal: loValue, hiOrdinal: hiValue, isUpto: isUpto, hasMinSentinel: hasMinSentinel, hasMaxSentinel: hasMaxSentinel, thenTarget: thenTarget, elseTarget: elseTarget, dstBlock: dstBlock)
 					return
 				end 'isFloatBacked'
-				// Union scrutinee: the SSA value is a heap pointer; the tag
-				// sits at offset 0 in the boxed layout. Load the tag before
-				// the i64 ge/le compares — without this, the range checks
-				// the pointer address against the case-ordinal bounds and
-				// every match either always-fires or never-fires depending
-				// on the heap address. Mirrors `lowerEnumMatchArm`'s
-				// `unionTypeForScrutinee` tag-load.
-				if enumTypeIsBoxedUnion(enumType) 'isBoxedUnion'
-					scrutineeId = self.emitLoadFieldI64(scrutineeId, offset: 0, dstBlock: dstBlock)
-				end 'isBoxedUnion'
 			end 'isResolvedEnum'
 		end 'isEnumRange'
+		// Union scrutinee: the SSA value is a heap pointer; the tag sits at
+		// offset 0 in the boxed layout. Load the tag before the i64 ge/le
+		// compares — without this, the range checks the pointer address
+		// against the case-ordinal bounds and every match either always-fires
+		// or never-fires depending on the heap address. The boxed-union
+		// decision is keyed off the SCRUTINEE'S resolved type rather than
+		// `enumOwnerName`: when a range arm covers a union whose cases all
+		// carry payloads, `parseEnumRangePattern` can resolve `enumOwnerName`
+		// to the synthesized `<Union>.unionCases` companion (a payload-free
+		// bare enum that shares the case names) instead of the union itself,
+		// which would skip the tag load.
+		scrutineeId = self.matchDispatchSubject(scrutineeId, scrutineeType: self.getValueType(scrutineeId), dstBlock: dstBlock)
 		var combinedId = 0 as ValueId
 		var hasCombined = false
 		if not hasMinSentinel 'emitLow'

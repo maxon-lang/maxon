@@ -1,0 +1,82 @@
+// Test: enum-match-range.multiple-ranges
+typealias Integer = int(i64.min to i64.max)
+
+union Op
+	add
+	sub
+	mul
+	div
+	exec(code Integer)
+end 'Op'
+
+function main() returns ExitCode
+	let op = Op.div
+	let result = match op 'check'
+		add to sub gives 1
+		mul to div gives 2
+		exec(code) gives code
+	end 'check'
+	return result
+end 'main'
+---
+ExitCode: 2
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %26 = mir.mov_imm 16 : i64
+    %27 = mir.mov_imm 0 : i64
+    %28 = mir.mov_imm 3 : i64
+    %29 = mir.call @stdlib.__mm_alloc(%26, %27)
+    mir.store %28, %29, 0 width: qword
+    %30 = mir.mov_imm 0 : i64
+    mir.store %30, %29, 8 width: qword
+    %3 = mir.mov_imm 0 : i64
+    %4 = mir.load %29, 0 width: qword
+    %5 = mir.mov_imm 0 : i64
+    %6 = mir.cmp ge, %4, %5
+    %7 = mir.mov_imm 1 : i64
+    %8 = mir.cmp le, %4, %7
+    %9 = mir.and.i64 %6, %8
+    mir.cond_br %9 [then: check_0.case0(), else: check_0.next0()]
+  check_0.merge(%25: i64):
+    %35 = mir.mov_imm 125 : i64
+    %36 = mir.cmp ugt, %25, %35
+    mir.cond_br %36 [then: __range_panic_0(), else: __range_ok_0()]
+  check_0.case0:
+    %32 = mir.call @mm_drop(%29)
+    %12 = mir.mov_imm 1 : i64
+    mir.br check_0.merge(%12)
+  check_0.next0:
+    %13 = mir.load %29, 0 width: qword
+    %14 = mir.mov_imm 2 : i64
+    %15 = mir.cmp ge, %13, %14
+    %16 = mir.mov_imm 3 : i64
+    %17 = mir.cmp le, %13, %16
+    %18 = mir.and.i64 %15, %17
+    mir.cond_br %18 [then: check_0.case1(), else: check_0.next1()]
+  check_0.case1:
+    %33 = mir.call @mm_drop(%29)
+    %19 = mir.mov_imm 2 : i64
+    mir.br check_0.merge(%19)
+  check_0.next1:
+    %20 = mir.load %29, 0 width: qword
+    %21 = mir.mov_imm 4 : i64
+    %22 = mir.cmp eq, %20, %21
+    mir.cond_br %22 [then: check_0.case2(), else: __rc_edge_5_0()]
+  check_0.case2:
+    %23 = mir.load %29, 8 width: qword
+    %31 = mir.call @mm_drop(%29)
+    mir.br check_0.merge(%23)
+  __rc_edge_5_0:
+    %34 = mir.call @mm_drop(%29)
+    mir.br check_0.merge(%3)
+  __range_panic_0:
+    %37 = mir.global_addr @__panic_msg_3f33ff4ad75a4109
+    %38 = mir.call @mrt_panic(%37)
+  __range_ok_0:
+    mir.ret %25
+  }
+}
+---

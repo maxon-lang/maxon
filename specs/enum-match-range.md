@@ -1,6 +1,6 @@
 ---
 feature: enum-match-range
-status: experimental
+status: selfhosted
 keywords: [enum, match, range, to, upto, bare case, exhaustive]
 category: control-flow
 ---
