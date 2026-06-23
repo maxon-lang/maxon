@@ -38,14 +38,15 @@
 // any fd >= 0, frees any non-null line buffer, then frees argv[] + the handle struct.
 //
 // Streaming API (maxon_subprocess_spawn_streaming + write_stdin_all / close_stdin /
-// read_stdout_line / read_stderr_line / wait_exit): the C# bootstrap parks the
-// per-worker drain GTs on kqueue (__io_submit_read) so they multiplex without an OS
-// thread blocking in read(). The self-hosted arm64-macos green-thread runtime is
-// single-OS-thread cooperative with NO kqueue, so the streaming line reader instead
-// sets the pipe read ends O_NONBLOCK (fcntl at spawn) and refills via a
-// non-blocking read() + __gt_yield poll loop (the same poll+yield shape the sync
-// wait_collect uses for waitpid). read_*_line returns a fresh __ManagedMemory
-// (returnsManaged), built exactly like maxon_subprocess_result_stdout.
+// read_stdout_line / read_stderr_line / wait_exit): the streaming line reader refills
+// via __io_submit_read (Arm64MacosGreenThread.maxon), which PARKS the calling drain GT
+// on kqueue EVFILT_READ and yields its M until the kernel signals the pipe fd readable,
+// then does the actual read() — so the dispatcher's N per-worker drain GTs multiplex
+// without an OS thread blocking in a synchronous read (which would deadlock the
+// cooperative scheduler). The pipe read ends are still set O_NONBLOCK at spawn (fcntl)
+// so the post-readiness read() never blocks on a spurious wake. read_*_line returns a
+// fresh __ManagedMemory (returnsManaged), built exactly like
+// maxon_subprocess_result_stdout.
 //
 // Calling convention (AAPCS64): args x0..x7, return x0. Scratch: x9..x15 and
 // x16/x17 (IP0/IP1). The frame layout (slot displacements) mirrors the C#
@@ -355,7 +356,7 @@ export function emitArm64MacosSubprocess(code ByteArray, relocations RelocationA
 	emitArm64SubprocessWriteStdinAll(code, relocations: relocations, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
 	emitArm64SubprocessCloseStdin(code, relocations: relocations, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
 	emitArm64SubpStreamEmitLine(code, callFixups: callFixups, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
-	emitArm64SubpStreamReadLine(code, relocations: relocations, callFixups: callFixups, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+	emitArm64SubpStreamReadLine(code, callFixups: callFixups, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
 	emitArm64SubprocessReadLineWrapper(code, callFixups: callFixups, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "maxon_subprocess_read_stdout_line", fdOff: SUBP_OFF_OUT_READ_FD, bufOff: SUBP_OFF_OUT_BUF)
 	emitArm64SubprocessReadLineWrapper(code, callFixups: callFixups, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "maxon_subprocess_read_stderr_line", fdOff: SUBP_OFF_ERR_READ_FD, bufOff: SUBP_OFF_ERR_BUF)
 	emitArm64SubprocessWaitExit(code, relocations: relocations, callFixups: callFixups, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
@@ -1358,8 +1359,9 @@ end 'emitArm64SubpStreamInitLineBuf'
 // maxon_subprocess_spawn_streaming(argvBlobMM, argc, cwd, flags) -> handle | -1.
 // posix_spawn the child with three pipes (parent writes stdin, reads stdout +
 // stderr). `flags` is ignored (streaming never detaches, always inherits env).
-// The parent's read ends are set O_NONBLOCK so the cooperative line reader can
-// poll-read + __gt_yield. Ports C# EmitMaxonSubprocessSpawnStreamingPosix.
+// The parent's read ends are set O_NONBLOCK so the cooperative line reader's read()
+// — done after kqueue (__io_submit_read) signals the fd readable — never blocks on a
+// spurious wake. Ports C# EmitMaxonSubprocessSpawnStreamingPosix.
 // Frame: inPipe(rd@0x40,wr@0x44) outPipe(rd@0x48,wr@0x4C) errPipe(rd@0x50,wr@0x54)
 //   fa@0x60 pid@0x68 handle@0x70 argv@0x78 path@0x90 envp@0xA0.
 // =============================================================================
@@ -1648,17 +1650,18 @@ end 'emitArm64SubpStreamEmitLine'
 // =============================================================================
 // __subp_stream_read_line(maxBytes, fd, quadBase) -> __ManagedMemory.
 // Cooperative buffered line reader. Returns the next line (LF stripped) from the
-// {buf,len,cap,eof} quad as a fresh MM, refilling via a NON-BLOCKING read() +
-// __gt_yield poll loop when no full line is buffered (the single-thread runtime
-// has no kqueue/__io_submit_read; the fd was set O_NONBLOCK at spawn). An empty
-// MM == EOF with nothing left. Lines longer than maxBytes are truncated, the
-// remainder delivered next call. Ports C# EmitSubpStreamReadLine (kqueue → poll).
-// Frame: 0x28 n/newCap, 0x30 newBuf, 0x38 dst, 0x40 space.
+// {buf,len,cap,eof} quad as a fresh MM, refilling via __io_submit_read when no full
+// line is buffered: that PARKS this drain GT on kqueue EVFILT_READ and yields its M
+// until the kernel signals the pipe fd readable, then does the actual read(). So N
+// per-worker drain GTs multiplex without an OS thread blocking in a synchronous read
+// (which would deadlock the cooperative scheduler). An empty MM == EOF with nothing
+// left. Lines longer than maxBytes are truncated, the remainder delivered next call.
+// Ports C# EmitSubpStreamReadLine. Frame: 0x28 n/newCap, 0x30 newBuf.
 // =============================================================================
-function emitArm64SubpStreamReadLine(code ByteArray, relocations RelocationArray, callFixups Arm64CallFixupArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
+function emitArm64SubpStreamReadLine(code ByteArray, callFixups Arm64CallFixupArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
 	arm64RecordLabel(labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "__subp_stream_read_line", offset: code.count())
 	let frameSize = 0x70
-	var state = Arm64MacosSubpState.create(11)
+	var state = Arm64MacosSubpState.create(8)
 	arm64MacosSubpPrologue(code, frameSize: frameSize, argCount: 3)
 
 	let loop = 0
@@ -1668,10 +1671,7 @@ function emitArm64SubpStreamReadLine(code ByteArray, relocations RelocationArray
 	let checkEof = 4
 	let needMore = 5
 	let doRead = 6
-	let readRetry = 7
-	let gotData = 8
-	let gotEof = 9
-	let doYield = 10
+	let gotEof = 7
 	// arg homes: maxBytes@0x10, fd@0x18, quadBase@0x20.
 
 	arm64MacosSubpMarkBlock(state, code: code, blockId: loop)
@@ -1755,45 +1755,24 @@ function emitArm64SubpStreamReadLine(code ByteArray, relocations RelocationArray
 	arm64MacosSubpStoreField(code, baseReg: 9, disp: SUBP_QUAD_CAP, src: 0)
 
 	arm64MacosSubpMarkBlock(state, code: code, blockId: doRead)
-	// dst = buf+len, space = cap-len (stable across retries — only this GT touches the quad).
+	// n = __io_submit_read(fd, buf+len, cap-len). COOPERATIVE: parks this drain GT on
+	// kqueue EVFILT_READ and yields its M (instead of busy-polling a non-blocking read +
+	// __gt_yield), so the dispatcher's N per-worker drain GTs multiplex without an OS
+	// thread blocking in read() — which would deadlock the cooperative scheduler (no
+	// sysmon retakes a P from a blocked M). On resume __io_submit_read does the actual
+	// read() and returns the byte count. Mirrors C# EmitSubpStreamReadLine's doRead.
 	arm64MacosSubpLoad(code, dest: 9, disp: 0x20)
 	arm64MacosSubpLoadField(code, dest: 10, baseReg: 9, disp: SUBP_QUAD_BUF)
 	arm64MacosSubpLoadField(code, dest: 11, baseReg: 9, disp: SUBP_QUAD_LEN)
 	arm64MacosSubpLoadField(code, dest: 12, baseReg: 9, disp: SUBP_QUAD_CAP)
-	arm64MacosSubpAlu(code, opcode: SUBP_ALU_ADD, rd: 1, rn: 10, rm: 11)  // dst
-	arm64MacosSubpStore(code, disp: 0x38, src: 1)
-	arm64MacosSubpAlu(code, opcode: SUBP_ALU_SUB, rd: 2, rn: 12, rm: 11)  // space
-	arm64MacosSubpStore(code, disp: 0x40, src: 2)
-	arm64MacosSubpMarkBlock(state, code: code, blockId: readRetry)
+	arm64MacosSubpAlu(code, opcode: SUBP_ALU_ADD, rd: 1, rn: 10, rm: 11)  // dst = buf+len
+	arm64MacosSubpAlu(code, opcode: SUBP_ALU_SUB, rd: 2, rn: 12, rm: 11)  // space = cap-len
 	arm64MacosSubpLoad(code, dest: 0, disp: 0x18)  // fd
-	arm64MacosSubpLoad(code, dest: 1, disp: 0x38)  // dst
-	arm64MacosSubpLoad(code, dest: 2, disp: 0x40)  // space
-	arm64MacosSubpCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_READ)
+	arm64MacosSubpBranchLink(code, callFixups: callFixups, name: "__io_submit_read")
 	arm64MacosSubpStore(code, disp: 0x28, src: 0)  // n
 	arm64MacosSubpCmpImm(code, rn: 0, imm12: 0)
-	arm64MacosSubpCondBranch(code, state: state, cond: SUBP_COND_GT, targetBlock: gotData)  // n > 0
-	arm64MacosSubpCondBranch(code, state: state, cond: SUBP_COND_EQ, targetBlock: gotEof)  // n == 0 → EOF
-	// n < 0: only EAGAIN/EWOULDBLOCK(35) (no data yet on the O_NONBLOCK fd) and EINTR(4)
-	// mean "retry"; any other errno is a hard error (EBADF/EIO/…) that must terminate
-	// like the C# read<=0 path rather than spin forever. errno via ___error() -> &errno.
-	arm64MacosSubpCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_ERROR)
-	arm64EmitInsn(code, insn: 0xB9400001)  // LDR W1, [x0] — errno (4-byte int, zero-extended)
-	arm64MacosSubpCmpImm(code, rn: 1, imm12: 35)  // EAGAIN / EWOULDBLOCK
-	arm64MacosSubpCondBranch(code, state: state, cond: SUBP_COND_EQ, targetBlock: doYield)
-	arm64MacosSubpCmpImm(code, rn: 1, imm12: 4)  // EINTR
-	arm64MacosSubpCondBranch(code, state: state, cond: SUBP_COND_EQ, targetBlock: doYield)
-	arm64MacosSubpBranch(code, state: state, targetBlock: gotEof)  // hard error → terminate
-	// doYield: cooperatively yield to sibling drains; if we are the only runnable GT,
-	// sleep briefly so we don't busy-spin.
-	arm64MacosSubpMarkBlock(state, code: code, blockId: doYield)
-	arm64MacosSubpBranchLink(code, callFixups: callFixups, name: "__gt_yield")
-	arm64MacosSubpCmpImm(code, rn: 0, imm12: 0)
-	arm64MacosSubpCondBranch(code, state: state, cond: SUBP_COND_NE, targetBlock: readRetry)
-	arm64EmitMovImm(code, rd: 0, value: 1000)
-	arm64MacosSubpCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_USLEEP)
-	arm64MacosSubpBranch(code, state: state, targetBlock: readRetry)
-
-	arm64MacosSubpMarkBlock(state, code: code, blockId: gotData)
+	arm64MacosSubpCondBranch(code, state: state, cond: SUBP_COND_LE, targetBlock: gotEof)  // n <= 0 → EOF/error
+	// n > 0: quad.len += n ; loop to re-scan for a full line.
 	arm64MacosSubpLoad(code, dest: 9, disp: 0x20)
 	arm64MacosSubpLoad(code, dest: 0, disp: 0x28)  // n
 	arm64MacosSubpLoadField(code, dest: 1, baseReg: 9, disp: SUBP_QUAD_LEN)

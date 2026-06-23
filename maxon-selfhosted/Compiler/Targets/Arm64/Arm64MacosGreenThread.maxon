@@ -177,6 +177,37 @@ let GtAluAdd = 0x8B000000
 let GtAluSub = 0xCB000000
 let GtAluAnd = 0x8A000000  // AND Xd, Xn, Xm (used to 16-align the redirect SP)
 
+// --- kqueue async-I/O context (KqCtx) + macOS kqueue constants. Byte-identical to
+//     the C# arm64 reference (ARM64CodeEmitter.Runtime.cs KqCtx*/EVFILT_*). The
+//     KqCtx records the parked GT's read request: {fd, buf, len, waiter_gt, filter}.
+//     __io_submit_read allocates one via __slab_alloc, hangs it off the kevent's
+//     udata, and frees it in __io_poll_kqueue when the event fires. This runtime only
+//     parks on EVFILT_READ (subprocess pipe line reads) — there is no async write or
+//     connect path — so only the READ filter is used, but the filter field is kept for
+//     layout parity with the C# reference. ---
+let GtKqCtxSize = 0x28  // 40 bytes
+let GtKqCtxOffFd = 0x00
+let GtKqCtxOffBuf = 0x08
+let GtKqCtxOffLen = 0x10
+let GtKqCtxOffWaiter = 0x18
+let GtKqCtxOffFilter = 0x20
+
+// macOS kqueue constants.
+let GtEvfiltRead = -1
+let GtEvAdd = 0x0001
+let GtEvOneshot = 0x0010
+// struct kevent total = 32 bytes: ident@0 (8), filter@8 (i16) + flags@10 (u16) packed
+// as a 32-bit word, fflags@12 (u32), data@16 (8), udata@24 (8).
+let GtKeventSize = 0x20
+let GtKeventOffIdent = 0x00
+let GtKeventOffFilterFlags = 0x08  // packed: filter | (flags << 16)
+let GtKeventOffUdata = 0x18
+// Per-P eventlist buffer: 32 events * 32 bytes = 1 KiB; the buffers' base is mmap'd
+// (max_procs * 1 KiB) and indexed by P->id (shift left 10 = *1024).
+let GtKeventBufStride = 1024
+let GtKeventBufStrideShift = 10
+let GtKeventPollBatch = 32  // nevents passed to the draining kevent() call
+
 // =============================================================================
 // CPU-fault handler (multi-M sigaction handler). Byte-identical to the C# GtLayout
 // / self-hosted x64 fault-code mapping (FaultCode* in X64Backend.maxon). macOS only
@@ -920,7 +951,9 @@ export function emitArm64MacosGreenThread(code ByteArray, relocations Relocation
 	emitArm64GtTimerCheck(code, callFixups: callFixups, rdataRelocs: rdataRelocs, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
 	emitArm64GtNowMs(code, relocations: relocations, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
 	emitArm64MaxonSleep(code, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
-	emitArm64IoCheckCompletions(code, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+	emitArm64IoSubmitRead(code, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+	emitArm64IoPollKqueue(code, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+	emitArm64IoCheckCompletions(code, callFixups: callFixups, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
 	emitArm64GtTraceEmit(code, callFixups: callFixups, rdataRelocs: rdataRelocs, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
 	emitArm64GtCurrentTraceId(code, rdataRelocs: rdataRelocs, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
 end 'emitArm64MacosGreenThread'
@@ -1957,6 +1990,23 @@ function emitArm64GtInit(code ByteArray, relocations RelocationArray, rdataReloc
 	// __gt_current_p = P[0]: a transitional bridge for any remaining single-global
 	// reader; the per-thread P read goes through TSD (arm64GtLoadCurrentP) on every M.
 	arm64GtStoreGlobal(code, rdataRelocs: rdataRelocs, src: 1, name: "__gt_current_p", scratch: 9)
+
+	// STEP 6 — kqueue async-I/O init (mirrors C# EmitGtInit Step 6). __io_kqueue_fd =
+	// kqueue(): one process-wide kqueue the subprocess streaming line reads park on via
+	// __io_submit_read (EVFILT_READ). kqueue is thread-safe on macOS, so a single fd
+	// serves every worker M. The import clobbers x0-x18 — nothing live is held here.
+	arm64GtCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_KQUEUE)
+	arm64GtStoreGlobal(code, rdataRelocs: rdataRelocs, src: 0, name: "__io_kqueue_fd", scratch: 9)
+
+	// __io_kevent_bufs_base = mmap(max_procs * 1 KiB): the PER-P kevent eventlist
+	// buffers. Each worker's __io_poll_kqueue reads into its own P->id slice so
+	// concurrent polls on different Ms never share an eventlist (EV_ONESHOT delivers
+	// each event to exactly one kevent() call, so disjoint per-P buffers guarantee no
+	// two Ms process — and double-free — the same KqCtx).
+	arm64GtLoad(code, dest: 0, disp: slotMaxProcs)  // max_procs (= ncpu)
+	arm64GtLslImm(code, rd: 1, rn: 0, shift: GtKeventBufStrideShift)  // x1 = max_procs * 1024
+	arm64GtMmapAnonReg(code, relocations: relocations)
+	arm64GtStoreGlobal(code, rdataRelocs: rdataRelocs, src: 0, name: "__io_kevent_bufs_base", scratch: 9)
 
 	// Arm the CPU-fault handler (sigaction + main-thread sigaltstack). Runs once here
 	// on the main M before any worker spawns, mirroring the x64 install at the tail of
@@ -3125,26 +3175,309 @@ function emitArm64MaxonSleep(code ByteArray, relocations RelocationArray, callFi
 end 'emitArm64MaxonSleep'
 
 // =============================================================================
-// __io_check_completions(): a no-op in THIS runtime because the self-hosted
-// arm64-macos runtime has no kqueue completion loop — NOT because kqueue is
-// "only for sockets". The C# bootstrap reference drives non-blocking I/O
-// completion through kqueue (__io_submit_read/write register EVFILT_READ/WRITE
-// + __io_poll_kqueue drains them) for BOTH socket I/O AND subprocess PIPE
-// streaming — its read_stdout_line/read_stderr_line park GTs on EVFILT_READ.
-// The self-hosted side instead does its only async I/O — the same streaming-
-// subprocess line reads — by setting the pipe ends O_NONBLOCK (fcntl) and
-// refilling via a non-blocking read() + __gt_yield poll loop (see
-// Arm64MacosSubprocess.maxon). So nothing here parks on kqueue and the
-// completion queue is always empty -> this returns immediately. The await/
-// yield/sleep loops still call it for parity with the x64 runtime. A kqueue
-// port (parking on EVFILT_READ instead of busy-polling the subprocess pipes)
-// would be an EFFICIENCY improvement, not dead code — deferred, not impossible.
-// Void.
+// __io_submit_read(fd=x0, buf=x1, len=x2) -> x0 (bytes read, 0=EOF, -1=error).
+// Register EVFILT_READ on `fd` with the process kqueue (EV_ADD|EV_ONESHOT), park
+// the calling GT (status=waiting), and drive the cooperative scheduler until
+// __io_poll_kqueue observes the fd ready and re-readies us. On resume, perform the
+// actual read(fd, buf, len) and return the byte count. Ports the C# reference's
+// EmitIoSubmitReadWrite (read filter) — the subprocess streaming line reader BLs
+// this instead of busy-polling a non-blocking read + __gt_yield, so N per-worker
+// drain GTs multiplex without an OS thread blocking in a synchronous read().
+//
+// Multi-M handshake: identical to __gt_await. We clear self.ioYielded=0 before
+// publishing self as waiting, so __gt_context_switch's ioYielded=1 store (after it
+// has saved our SP/callee-saved block) gates any other M from re-dispatching us
+// with in-flight registers (the SIGBUS race). The idle path mirrors await: a worker
+// GT switches back to its M's scheduler (P.mainThread) rather than spinning; the
+// main thread (stackBase==0) usleeps and rechecks. __io_poll_kqueue sets
+// self.status=ready (and enqueues a worker GT) when the event fires.
+// Frame: fd@0x10 buf@0x18 len@0x20 (homed) ; ctx@0x28 next@0x30 kevent@0x38..0x57.
 // =============================================================================
-function emitArm64IoCheckCompletions(code ByteArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
+function emitArm64IoSubmitRead(code ByteArray, relocations RelocationArray, callFixups Arm64CallFixupArray, rdataRelocs RdataRelocationArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
+	arm64RecordLabel(labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "__io_submit_read", offset: code.count())
+	let frameSize = 0x60
+	var state = Arm64MacosGtState.create(8)
+	arm64GtPrologue(code, frameSize: frameSize, argCount: 3)
+
+	let cancelledBlock = 0
+	let loopBlock = 1
+	let runGtBlock = 2
+	let idleBlock = 3
+	let mainParkBlock = 4
+	let recheckBlock = 5
+	let resumedBlock = 6
+	let workerSwitchBlock = 7
+
+	// Incoming args homed by the prologue at fd@0x10 buf@0x18 len@0x20 (via arm64GtReloadArg).
+	let slotCtx = 0x28
+	let slotNext = 0x30
+	let slotKevent = 0x38  // struct kevent (32 bytes): 0x38..0x57
+
+	// Cancellation: a cancelled GT must not park on kqueue (it would never be woken).
+	// Mirror the C# cancelled path — set io_error_code-style cancel signal via the
+	// cancel flag check and return 0 (EOF) so the streaming reader emits its tail.
+	arm64GtLoadCurrentP(code, rdataRelocs: rdataRelocs, dest: 9)
+	arm64GtLoadField(code, dest: 9, baseReg: 9, disp: GtPOffCurrentGt)
+	arm64GtLoadField(code, dest: 0, baseReg: 9, disp: GtGtOffCancelFlag)
+	arm64GtCbnz(code, state: state, rn: 0, targetBlock: cancelledBlock)
+
+	// ctx = __slab_alloc(KqCtxSize) ; fill {fd, buf, len, waiter=self, filter=READ}.
+	arm64EmitMovImm(code, rd: 0, value: GtKqCtxSize)
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__slab_alloc")
+	arm64GtStore(code, disp: slotCtx, src: 0)  // ctx
+	arm64EmitMovRegReg(code, rd: 9, rn: 0)  // x9 = ctx
+	arm64GtReloadArg(code, dest: 0, argIndex: 0)  // fd
+	arm64GtStoreField(code, baseReg: 9, disp: GtKqCtxOffFd, src: 0)
+	arm64GtReloadArg(code, dest: 0, argIndex: 1)  // buf
+	arm64GtStoreField(code, baseReg: 9, disp: GtKqCtxOffBuf, src: 0)
+	arm64GtReloadArg(code, dest: 0, argIndex: 2)  // len
+	arm64GtStoreField(code, baseReg: 9, disp: GtKqCtxOffLen, src: 0)
+	arm64GtLoadCurrentP(code, rdataRelocs: rdataRelocs, dest: 0)  // self = P.currentGt
+	arm64GtLoadField(code, dest: 0, baseReg: 0, disp: GtPOffCurrentGt)
+	arm64GtLoad(code, dest: 9, disp: slotCtx)  // ctx (clobbered by LoadCurrentP scratch)
+	arm64GtStoreField(code, baseReg: 9, disp: GtKqCtxOffWaiter, src: 0)
+	arm64EmitMovImm(code, rd: 0, value: GtEvfiltRead)
+	arm64GtStoreField(code, baseReg: 9, disp: GtKqCtxOffFilter, src: 0)
+
+	// Build struct kevent on the stack: zero it, then ident=fd, filter+flags packed,
+	// udata=ctx. (fflags/data stay zero from the zeroing below.)
+	arm64GtStore(code, disp: slotKevent + 0x00, src: GtRegXzr)
+	arm64GtStore(code, disp: slotKevent + 0x08, src: GtRegXzr)
+	arm64GtStore(code, disp: slotKevent + 0x10, src: GtRegXzr)
+	arm64GtStore(code, disp: slotKevent + 0x18, src: GtRegXzr)
+	// ident = fd.
+	arm64GtReloadArg(code, dest: 0, argIndex: 0)
+	arm64GtStore(code, disp: slotKevent + GtKeventOffIdent, src: 0)
+	// filter | (flags << 16), stored as a 32-bit word at kevent+8.
+	let filterFlags = (GtEvfiltRead and 0xFFFF) or ((GtEvAdd or GtEvOneshot) shl 16)
+	arm64EmitMovImm(code, rd: 0, value: filterFlags)
+	arm64EmitStrWord(code, rt: 0, rn: GtRegX29, offset: slotKevent + GtKeventOffFilterFlags)
+	// udata = ctx.
+	arm64GtLoad(code, dest: 0, disp: slotCtx)
+	arm64GtStore(code, disp: slotKevent + GtKeventOffUdata, src: 0)
+
+	// kevent(kq, changelist=&kevent, nchanges=1, eventlist=NULL, nevents=0, timeout=NULL).
+	arm64GtLoadGlobal(code, rdataRelocs: rdataRelocs, dest: 0, name: "__io_kqueue_fd")
+	arm64GtLeaFrame(code, rd: 1, disp: slotKevent)
+	arm64EmitMovImm(code, rd: 2, value: 1)
+	arm64EmitMovImm(code, rd: 3, value: 0)
+	arm64EmitMovImm(code, rd: 4, value: 0)
+	arm64EmitMovImm(code, rd: 5, value: 0)
+	arm64GtCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_KEVENT)
+
+	// Park: self.ioYielded = 0 (Dekker handshake gate) ; self.status = waiting.
+	arm64GtLoadCurrentP(code, rdataRelocs: rdataRelocs, dest: 11)
+	arm64GtLoadField(code, dest: 11, baseReg: 11, disp: GtPOffCurrentGt)
+	arm64GtStoreField(code, baseReg: 11, disp: GtGtOffIoYielded, src: GtRegXzr)
+	arm64EmitMovImm(code, rd: 0, value: GtStatusWaiting)
+	arm64GtStoreField(code, baseReg: 11, disp: GtGtOffStatus, src: 0)
+	// StoreLoad barrier: publish status=waiting before the loop's first poll/recheck.
+	arm64GtDmbIsh(code)
+
+	// loop: process_pending_waiter ; io_check_completions (drives __io_poll_kqueue) ;
+	// timer_check ; g = dequeue. Identical scheduling sequence to __gt_await's loop.
+	arm64GtMarkBlock(state, code: code, blockId: loopBlock)
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__gt_process_pending_waiter")
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__io_check_completions")
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__gt_timer_check")
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__gt_dequeue")  // x0 = g or 0
+	arm64GtCbz(code, state: state, rn: 0, targetBlock: idleBlock)
+	// Run g: save it ; g.status = running ; context_switch(from=P.currentGt, to=g, P).
+	arm64GtStore(code, disp: slotNext, src: 0)
+	arm64EmitMovImm(code, rd: 1, value: GtStatusRunning)
+	arm64GtStoreField(code, baseReg: 0, disp: GtGtOffStatus, src: 1)
+	arm64GtLoadCurrentP(code, rdataRelocs: rdataRelocs, dest: 2)  // P
+	arm64GtLoadField(code, dest: 0, baseReg: 2, disp: GtPOffCurrentGt)  // from
+	arm64GtLoad(code, dest: 1, disp: slotNext)  // to = g
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__gt_context_switch")
+	// Resumed: dispatched GT (slot next) ioYielded=1.
+	arm64GtMarkBlock(state, code: code, blockId: runGtBlock)
+	arm64GtLoad(code, dest: 0, disp: slotNext)
+	arm64EmitMovImm(code, rd: 1, value: 1)
+	arm64GtStoreField(code, baseReg: 0, disp: GtGtOffIoYielded, src: 1)
+	arm64GtBranch(code, state: state, targetBlock: recheckBlock)
+
+	// idle: no runnable GT on this M. Worker GT switches back to its scheduler;
+	// the main thread usleeps and rechecks. Mirrors __gt_await's idle path exactly.
+	arm64GtMarkBlock(state, code: code, blockId: idleBlock)
+	arm64GtLoadCurrentP(code, rdataRelocs: rdataRelocs, dest: 11)
+	arm64GtLoadField(code, dest: 9, baseReg: 11, disp: GtPOffCurrentGt)  // self
+	arm64GtLoadField(code, dest: 0, baseReg: 9, disp: GtGtOffStackBase)
+	arm64GtCbz(code, state: state, rn: 0, targetBlock: mainParkBlock)  // stackBase==0 → main
+	arm64GtBranch(code, state: state, targetBlock: workerSwitchBlock)
+
+	// worker GT: context_switch(from=self, to=&P.mainThread, p=P) back to the scheduler.
+	arm64GtMarkBlock(state, code: code, blockId: workerSwitchBlock)
+	arm64EmitMovRegReg(code, rd: 0, rn: 9)  // from = self
+	arm64EmitMovRegReg(code, rd: 2, rn: 11)  // p = P
+	arm64EmitAddImm(code, rd: 1, rn: 11, imm12: GtPOffMainThread)  // to = &P.mainThread
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__gt_context_switch")
+	arm64GtBranch(code, state: state, targetBlock: recheckBlock)
+
+	// main_park: usleep(200us) and recheck (parked S, SIGTERM-killable).
+	arm64GtMarkBlock(state, code: code, blockId: mainParkBlock)
+	arm64EmitMovImm(code, rd: 0, value: 200)
+	arm64GtCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_USLEEP)
+
+	// recheck: if self.status == waiting → loop; else resume.
+	arm64GtMarkBlock(state, code: code, blockId: recheckBlock)
+	arm64GtLoadCurrentP(code, rdataRelocs: rdataRelocs, dest: 9)
+	arm64GtLoadField(code, dest: 9, baseReg: 9, disp: GtPOffCurrentGt)
+	arm64GtLoadField(code, dest: 0, baseReg: 9, disp: GtGtOffStatus)
+	arm64GtCmpImm(code, rn: 0, imm12: GtStatusWaiting)
+	arm64GtCondBranch(code, state: state, cond: GtCondEq, targetBlock: loopBlock)
+
+	// resumed: kqueue told us the fd is ready — do the actual read(fd, buf, len).
+	arm64GtMarkBlock(state, code: code, blockId: resumedBlock)
+	arm64GtReloadArg(code, dest: 0, argIndex: 0)  // fd
+	arm64GtReloadArg(code, dest: 1, argIndex: 1)  // buf
+	arm64GtReloadArg(code, dest: 2, argIndex: 2)  // len
+	arm64GtCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_READ)
+	arm64GtEpilogue(code, frameSize: frameSize)
+
+	// cancelled: return 0 (EOF) so the streaming reader terminates cleanly. No kevent
+	// was registered, so there is no KqCtx to free.
+	arm64GtMarkBlock(state, code: code, blockId: cancelledBlock)
+	arm64EmitMovImm(code, rd: 0, value: 0)
+	arm64GtEpilogue(code, frameSize: frameSize)
+
+	arm64GtFinalize(code, state: state)
+end 'emitArm64IoSubmitRead'
+
+// =============================================================================
+// __io_poll_kqueue(): non-blocking drain of the process kqueue. For each ready
+// EVFILT_READ event, wake the parked GT (stored in the event's udata KqCtx): set
+// io_result_val=0 (the actual read() is done by the resumed GT in __io_submit_read),
+// status=ready, enqueue it (unless it is a parked main thread or the currently-
+// running GT), and free the KqCtx. Ports the C# EmitIoPollKqueue (READ-only subset —
+// this runtime has no EVFILT_WRITE / connect path).
+//
+// Per-P eventlist: reads into THIS P's 1 KiB slice of __io_kevent_bufs_base (indexed
+// by P->id) so concurrent polls on different worker Ms never share a buffer — with
+// EV_ONESHOT delivery, disjoint buffers guarantee no two Ms process (and double-free)
+// the same KqCtx. Void.
+// Frame: nready@0x10 idx@0x18 kbuf@0x20 ctx@0x28 waiter@0x30 timeout@0x38..0x47.
+// =============================================================================
+function emitArm64IoPollKqueue(code ByteArray, relocations RelocationArray, callFixups Arm64CallFixupArray, rdataRelocs RdataRelocationArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
+	arm64RecordLabel(labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "__io_poll_kqueue", offset: code.count())
+	let frameSize = 0x50
+	var state = Arm64MacosGtState.create(5)
+	arm64GtPrologue(code, frameSize: frameSize, argCount: 0)
+
+	let retBlock = 0
+	let loopBlock = 1
+	let nextBlock = 2
+	let skipEnqueueBlock = 3
+	let freeCtxBlock = 4
+
+	let slotNready = 0x10
+	let slotIdx = 0x18
+	let slotKbuf = 0x20
+	let slotCtx = 0x28
+	let slotWaiter = 0x30
+	let slotTimeout = 0x38  // struct timespec {tv_sec@0, tv_nsec@8}
+
+	// if __io_kqueue_fd <= 0 → return (uninitialised — no async I/O in this program).
+	arm64GtLoadGlobal(code, rdataRelocs: rdataRelocs, dest: 0, name: "__io_kqueue_fd")
+	arm64GtCmpImm(code, rn: 0, imm12: 0)
+	arm64GtCondBranch(code, state: state, cond: GtCondLe, targetBlock: retBlock)
+
+	// kbuf = __io_kevent_bufs_base + P->id * 1024.
+	arm64GtLoadCurrentP(code, rdataRelocs: rdataRelocs, dest: 9)
+	arm64GtLoadField(code, dest: 10, baseReg: 9, disp: GtPOffId)
+	arm64GtLslImm(code, rd: 10, rn: 10, shift: GtKeventBufStrideShift)
+	arm64GtLoadGlobal(code, rdataRelocs: rdataRelocs, dest: 11, name: "__io_kevent_bufs_base")
+	arm64GtAlu(code, opcode: GtAluAdd, rd: 10, rn: 11, rm: 10)
+	arm64GtStore(code, disp: slotKbuf, src: 10)
+
+	// zero timeout {0, 0} for a non-blocking poll.
+	arm64GtStore(code, disp: slotTimeout + 0, src: GtRegXzr)
+	arm64GtStore(code, disp: slotTimeout + 8, src: GtRegXzr)
+
+	// nready = kevent(kq, NULL, 0, kbuf, 32, &timeout).
+	arm64GtLoadGlobal(code, rdataRelocs: rdataRelocs, dest: 0, name: "__io_kqueue_fd")
+	arm64EmitMovImm(code, rd: 1, value: 0)  // changelist = NULL
+	arm64EmitMovImm(code, rd: 2, value: 0)  // nchanges = 0
+	arm64GtLoad(code, dest: 3, disp: slotKbuf)  // eventlist = per-P buffer
+	arm64EmitMovImm(code, rd: 4, value: GtKeventPollBatch)  // nevents = 32
+	arm64GtLeaFrame(code, rd: 5, disp: slotTimeout)
+	arm64GtCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_KEVENT)
+
+	// if nready <= 0 → return.
+	arm64GtCmpImm(code, rn: 0, imm12: 0)
+	arm64GtCondBranch(code, state: state, cond: GtCondLe, targetBlock: retBlock)
+	arm64GtStore(code, disp: slotNready, src: 0)  // nready
+	arm64EmitMovImm(code, rd: 0, value: 0)
+	arm64GtStore(code, disp: slotIdx, src: 0)  // idx = 0
+
+	// loop: if idx >= nready → return.
+	arm64GtMarkBlock(state, code: code, blockId: loopBlock)
+	arm64GtLoad(code, dest: 0, disp: slotIdx)
+	arm64GtLoad(code, dest: 1, disp: slotNready)
+	arm64EmitCmp(code, rn: 0, rm: 1)
+	arm64GtCondBranch(code, state: state, cond: GtCondHs, targetBlock: retBlock)
+
+	// kevent_ptr = kbuf + idx * 32 ; ctx = udata (at kevent+24).
+	arm64GtLoad(code, dest: 1, disp: slotKbuf)
+	arm64GtLslImm(code, rd: 2, rn: 0, shift: 5)  // idx * 32
+	arm64GtAlu(code, opcode: GtAluAdd, rd: 1, rn: 1, rm: 2)  // &kevent[idx]
+	arm64GtLoadField(code, dest: 9, baseReg: 1, disp: GtKeventOffUdata)  // ctx
+	arm64GtCbz(code, state: state, rn: 9, targetBlock: nextBlock)  // skip null udata
+	arm64GtStore(code, disp: slotCtx, src: 9)  // ctx
+	arm64GtLoadField(code, dest: 10, baseReg: 9, disp: GtKqCtxOffWaiter)  // waiter GT
+	arm64GtStore(code, disp: slotWaiter, src: 10)
+
+	// Wake the waiter: io_result_val = 0 (notification-only; the resumed GT does the
+	// read), status = ready.
+	arm64GtStoreField(code, baseReg: 10, disp: GtGtOffStatus, src: GtRegXzr)  // ready (0)
+
+	// Enqueue the waiter unless it is a parked main thread (stackBase==0) or it is the
+	// currently-running GT on this M (avoids a double-enqueue when a GT draining the
+	// scheduler sees its own event fire).
+	arm64GtLoadField(code, dest: 0, baseReg: 10, disp: GtGtOffStackBase)
+	arm64GtCbz(code, state: state, rn: 0, targetBlock: freeCtxBlock)
+	arm64GtLoadCurrentP(code, rdataRelocs: rdataRelocs, dest: 0)
+	arm64GtLoadField(code, dest: 0, baseReg: 0, disp: GtPOffCurrentGt)
+	arm64GtLoad(code, dest: 10, disp: slotWaiter)
+	arm64EmitCmp(code, rn: 0, rm: 10)
+	arm64GtCondBranch(code, state: state, cond: GtCondEq, targetBlock: skipEnqueueBlock)
+	arm64EmitMovRegReg(code, rd: 0, rn: 10)
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__gt_enqueue")
+	arm64GtBranch(code, state: state, targetBlock: freeCtxBlock)
+
+	arm64GtMarkBlock(state, code: code, blockId: skipEnqueueBlock)
+
+	// free the KqCtx.
+	arm64GtMarkBlock(state, code: code, blockId: freeCtxBlock)
+	arm64GtLoad(code, dest: 0, disp: slotCtx)
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__slab_free")
+
+	// idx++ ; loop.
+	arm64GtMarkBlock(state, code: code, blockId: nextBlock)
+	arm64GtLoad(code, dest: 0, disp: slotIdx)
+	arm64EmitAddImm(code, rd: 0, rn: 0, imm12: 1)
+	arm64GtStore(code, disp: slotIdx, src: 0)
+	arm64GtBranch(code, state: state, targetBlock: loopBlock)
+
+	arm64GtMarkBlock(state, code: code, blockId: retBlock)
+	arm64GtEpilogue(code, frameSize: frameSize)
+	arm64GtFinalize(code, state: state)
+end 'emitArm64IoPollKqueue'
+
+// =============================================================================
+// __io_check_completions(): drain the kqueue by BL __io_poll_kqueue. This runtime's
+// only async I/O is the streaming-subprocess pipe line reads, which park on
+// EVFILT_READ via __io_submit_read; __io_poll_kqueue re-readies them when the kernel
+// signals the fd ready. The await/yield/sleep loops already BL this, so folding the
+// poll in here gives every scheduler driver a kqueue drain without a second call site.
+// Mirrors the C# reference, which calls __io_check_completions + __io_poll_kqueue back
+// to back at each driver — here the poll is the body. Void.
+// =============================================================================
+function emitArm64IoCheckCompletions(code ByteArray, callFixups Arm64CallFixupArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
 	arm64RecordLabel(labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "__io_check_completions", offset: code.count())
 	let frameSize = 0x10
 	arm64GtPrologue(code, frameSize: frameSize, argCount: 0)
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__io_poll_kqueue")
 	arm64GtEpilogue(code, frameSize: frameSize)
 end 'emitArm64IoCheckCompletions'
 

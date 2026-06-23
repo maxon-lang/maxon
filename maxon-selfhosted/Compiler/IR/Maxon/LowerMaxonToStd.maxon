@@ -722,6 +722,19 @@ function registerSlabAndMmGlobalsForDataSection(globalData GlobalDataTable, asyn
 	addDataSectionEntry(globalData, name: "__sched_tls_key", initialBytes: zeroBytesOfSize(8))
 	addDataSectionEntry(globalData, name: "__sched_global_queue_cs", initialBytes: zeroBytesOfSize(40))
 
+	// Tier 4 multi-M async-I/O via kqueue (arm64-macOS green-thread runtime). `__gt_init`
+	// opens one process-wide kqueue and stores its fd here; `__io_submit_read` registers
+	// EVFILT_READ on a pipe/socket fd and parks the calling GT, and `__io_poll_kqueue`
+	// (driven from `__io_check_completions`) drains ready events and re-readies the parked
+	// GTs — so a streaming-subprocess line read PARKS on kqueue instead of busy-polling a
+	// non-blocking read. `__io_kevent_bufs_base` is the base of the PER-P kevent eventlist
+	// buffers (max_procs * 1 KiB, mmap'd in `__gt_init`); each worker M polls into its own
+	// P->id slice so concurrent polls on different Ms never share an eventlist (EV_ONESHOT
+	// delivers each event to exactly one kevent() call). Reserved unconditionally so the
+	// .data layout is uniform across targets (only the arm64-macOS runtime touches them).
+	addDataSectionEntry(globalData, name: "__io_kqueue_fd", initialBytes: zeroBytesOfSize(8))
+	addDataSectionEntry(globalData, name: "__io_kevent_bufs_base", initialBytes: zeroBytesOfSize(8))
+
 	// Tier 4 all-threads list + live-thread count (Go-style GMP completion path).
 	// `__gt_all_head` is the head of a singly-linked list of every live (non-completed)
 	// green thread, linked via the GT struct's `all_next` field (GtOffAllNext, 0x88).
