@@ -313,16 +313,20 @@ public partial class X86CodeEmitter {
     // ---- TLS ----
 
     public void LoadCurrentP(VReg dest) {
-      // Load P* from TEB via precomputed GS-segment offset.
-      // Load the offset into R11, then dereference GS:[R11] to get P*.
-      // Uses R11 as scratch regardless of dest so the GS dereference is always
-      // encoded as MOV R11, GS:[R11] (REX.W+REX.R+REX.B = 0x4F, 0x8B, 0x1B).
-      _e.EmitGlobalLoadReg(X86Register.R11, "__sched_tls_teb_offset");
-      _e.EmitByte(0x65); // GS segment override prefix
-      _e.EmitMovRegIndirectMemRaw(X86Register.R11, X86Register.R11, 0); // R11 = P*
+      // Load P* from TEB via precomputed GS-segment offset, using ONLY `dest` as
+      // scratch — this primitive must clobber nothing but its destination, the
+      // same contract every other backend op honors (and the one arm64's X28-move
+      // LoadCurrentP already meets). The previous version used R11 unconditionally,
+      // which is VReg.Scratch2: any caller holding a live value in Scratch2 across
+      // LoadCurrentP (e.g. the slab alloc ownership gate, which loads span->owning_p
+      // into Scratch2 then calls LoadCurrentP) had that value silently destroyed,
+      // making the gate compare P* against P.id and reject every span — an infinite
+      // refill spin that exhausted memory on x86-windows. EmitMovRegIndirectMemRaw
+      // encodes the GS dereference for any register, so `dest` works directly.
       var reg = R(dest);
-      if (reg != X86Register.R11)
-        _e.EmitMovRegReg(reg, X86Register.R11);
+      _e.EmitGlobalLoadReg(reg, "__sched_tls_teb_offset"); // dest = teb_offset
+      _e.EmitByte(0x65); // GS segment override prefix
+      _e.EmitMovRegIndirectMemRaw(reg, reg, 0); // dest = GS:[dest] = P*
     }
 
     // ---- OS memory allocation ----

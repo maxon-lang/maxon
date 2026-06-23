@@ -11652,7 +11652,7 @@ function emitX64Win32Open(code ByteArray, relocations RelocationArray, callFixup
 
 	// CreateFileW = 7 args → 32 + 24 = 56, aligned 64. Outgoing = 64.
 	let frameSize = 2208
-	var state = Win32HelperState.create(12, outgoingBytes: 64, localBytes: 2144)
+	var state = Win32HelperState.create(13, outgoingBytes: 64, localBytes: 2144)
 
 	helperPrologue(code, frameSize: frameSize)
 
@@ -11772,6 +11772,32 @@ function emitX64Win32Open(code ByteArray, relocations RelocationArray, callFixup
 	emitMovRegRegOp(code, dest: X64Register.rax, src: X64Register.r8)
 	helperStoreSlot(code, slotIndex: 2, src: X64Register.rax)
 
+	// Restore the FindFirstFileW glob on a bare directory path. The shared
+	// `mrt_directory_open_search` (runtime.std) strips a trailing "/*" because the
+	// POSIX `open(O_DIRECTORY)` path needs the bare directory — but on Windows the
+	// FindFirstFileW path needs the glob to ENUMERATE the directory's contents
+	// (a bare path matches only the directory entry itself, so `filename()` would
+	// return the directory name and `next()` would immediately report end). The
+	// stdlib `Directory.list` already passes a platform-separator pattern ("dir\*",
+	// left intact by the "/*"-only strip), so only append when the wide string does
+	// NOT already end in '*'. `wide[267]` is the converted UTF-16 path and slot 5
+	// holds its MultiByteToWideChar length (including the NUL terminator).
+	helperLeaStackSlot(code, slotIndex: 267, dest: X64Register.r10)  // r10 = &wide[0]
+	helperLoadSlot(code, slotIndex: 5, dest: X64Register.rax)  // rax = wideLen (incl NUL)
+	emitAddRegImmParam(code, dest: X64Register.rax, value: -1)  // index of NUL terminator
+	emitMovRegRegOp(code, dest: X64Register.rcx, src: X64Register.rax)
+	emitAddRegRegParam(code, dest: X64Register.rax, src: X64Register.rcx)  // *2 → NUL byte offset
+	emitAddRegRegParam(code, dest: X64Register.r10, src: X64Register.rax)  // r10 = &wide[NUL]
+	helperLoadWord(code, dest: X64Register.rcx, base: X64Register.r10, disp: -2)  // last real wchar
+	helperCmpRegImm(code, reg: X64Register.rcx, value: 42)  // '*'
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 12)  // ends in '*' → skip
+	// Overwrite the NUL with "\*" and re-terminate: wide becomes "dir\*\0".
+	helperStoreWordImm(code, base: X64Register.r10, disp: 0, value: 92)  // '\'
+	helperStoreWordImm(code, base: X64Register.r10, disp: 2, value: 42)  // '*'
+	helperStoreWordImm(code, base: X64Register.r10, disp: 4, value: 0)  // NUL
+	helperEmitJmp(code, state: state, targetBlock: 12)
+
+	helperMarkBlock(state, code: code, blockId: 12)
 	// FindFirstFileW(pattern=&wide[267], &wrapper[24]).
 	helperLeaStackSlot(code, slotIndex: 267, dest: X64Register.rcx)
 	helperLoadSlot(code, slotIndex: 2, dest: X64Register.rdx)

@@ -537,22 +537,26 @@ function isHostTarget(target Target) returns bool
 	return targetStr == hostStr
 end 'isHostTarget'
 
-// Find the vendored wasmtime binary relative to the project root.
+// Find the vendored wasmtime binary relative to the project root, preferring
+// the binary that matches the HOST os. The vendor tree ships BOTH a Windows
+// `wasmtime.exe` AND an extensionless macOS binary `wasmtime` side-by-side, so
+// the extensionless name is NOT absent on Windows (it's the macOS Mach-O) —
+// running it through the Win32 subprocess path faults. Gate on
+// `detectHostTarget()` so each host probes its own runnable binary first.
 function findWasmtimePath() returns String
+	let hostIsWindows = detectHostTarget().os == Os.windows
+	let preferred = "wasmtime.exe" if hostIsWindows else "wasmtime"
+	let fallback = "wasmtime" if hostIsWindows else "wasmtime.exe"
 	var dir = Directory.currentPath()
 	for _ in 0 upto 10 'search'
-		// Prefer the extensionless native binary first: on macOS/Linux the
-		// vendored host wasmtime is `wasmtime` (a Windows `wasmtime.exe` can't
-		// run here). On Windows the extensionless name is absent, so the lookup
-		// falls through to the `.exe`.
-		let candidate2 = dir.join("vendor").join("wasmtime").join("wasmtime")
-		if File.exists(candidate2) 'found2'
-			return candidate2.toString()
-		end 'found2'
-		let candidate = dir.join("vendor").join("wasmtime").join("wasmtime.exe")
-		if File.exists(candidate) 'found'
-			return candidate.toString()
-		end 'found'
+		let preferredPath = dir.join("vendor").join("wasmtime").join(preferred)
+		if File.exists(preferredPath) 'foundPreferred'
+			return preferredPath.toString()
+		end 'foundPreferred'
+		let fallbackPath = dir.join("vendor").join("wasmtime").join(fallback)
+		if File.exists(fallbackPath) 'foundFallback'
+			return fallbackPath.toString()
+		end 'foundFallback'
 		let parentDir = try dir.parent() otherwise return ""
 		dir = parentDir
 	end 'search'

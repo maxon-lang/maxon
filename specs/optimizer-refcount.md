@@ -1082,17 +1082,19 @@ module {
     x64.lea r8, [rip+__destruct_Person]
     x64.mov [rbp+-824], r8
     x64.mov r8d, 16
+    x64.xor r8d, r8d
+    x64.mov [rbp+-832], r8
     x64.mov r8d, 30
     x64.lea r8, [rip+stdlib.__destruct___ManagedMemory]
-    x64.mov [rbp+-832], r8
-    x64.lea r8, [rip+__istr_3]
     x64.mov [rbp+-840], r8
-    x64.lea r8, [rip+__destruct_String]
+    x64.lea r8, [rip+__istr_3]
     x64.mov [rbp+-848], r8
+    x64.lea r8, [rip+__destruct_String]
+    x64.mov [rbp+-856], r8
     x64.mov rcx, 48
     x64.call mrt_alloc_with_dtor
-    x64.mov [rbp+-856], r8
-    x64.mov r8, [rbp+-856]
+    x64.mov [rbp+-864], r8
+    x64.mov r8, [rbp+-864]
     x64.mov r9, [rbp+-912]
     x64.mov [r8+40], r9 (8b)
     x64.mov rsi, [rbp+-744]
@@ -1110,7 +1112,7 @@ module {
     x64.mov rcx, [rbp+-744]
     x64.call stdlib.__mm_incref
     x64.mov r8, [rbp+-744]
-    x64.mov r8, [rbp+-856]
+    x64.mov r8, [rbp+-864]
     x64.mov r9, [rbp+-744]
     x64.mov [r9+0], r8 (8b)
     x64.mov [r9+8], r13 (8b)
@@ -1118,19 +1120,21 @@ module {
     x64.mov rdx, [rbp+-824]
     x64.call stdlib.__mm_alloc
     x64.mov [rbp+-816], r8
-    x64.mov r8, [rbp+-744]
-    x64.mov r9, [rbp+-816]
-    x64.mov [r9+0], r8 (8b)
-    x64.mov r8, 30
-    x64.mov [r9+8], r8 (8b)
+    x64.mov r8, [rbp+-816]
+    x64.mov r9, [rbp+-832]
+    x64.mov [r8+0], r9 (8b)
+    x64.mov r9, [rbp+-744]
+    x64.mov [r8+0], r9 (8b)
+    x64.mov r9, 30
+    x64.mov [r8+8], r9 (8b)
     x64.mov rcx, 48
-    x64.mov rdx, [rbp+-832]
+    x64.mov rdx, [rbp+-840]
     x64.call mrt_alloc_with_dtor
     x64.mov [rbp+-744], r8
     x64.mov r8, [rbp+-744]
     x64.mov r9, [rbp+-912]
     x64.mov [r8+40], r9 (8b)
-    x64.mov rsi, [rbp+-840]
+    x64.mov rsi, [rbp+-848]
     x64.mov [r8+0], rsi (8b)
     x64.mov rsi, 3
     x64.mov [r8+8], rsi (8b)
@@ -1139,7 +1143,7 @@ module {
     x64.mov [r8+24], r13 (8b)
     x64.mov [r8+32], r9 (8b)
     x64.mov rcx, 16
-    x64.mov rdx, [rbp+-848]
+    x64.mov rdx, [rbp+-856]
     x64.call stdlib.__mm_alloc
     x64.mov [rbp+-824], r8
     x64.mov rcx, [rbp+-824]

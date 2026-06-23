@@ -226,20 +226,34 @@ export function findRuntimePath() returns FilePath
 	return findFileUpward(candidates)
 end 'findRuntimePath'
 
-// Find the vendored Binaryen `wasm-opt` (used to asyncify wasm async/await),
-// preferring the `.exe` form on Windows. Returns an empty FilePath if not found.
-function findWasmOptPath() returns FilePath
+// Order the `.exe` and extensionless candidate paths for a vendored host tool
+// by the HOST os: the binary that can actually exec here must come first. The
+// vendor tree now ships BOTH a Windows `<tool>.exe` AND an extensionless macOS
+// binary `<tool>` side-by-side, so a fixed order is wrong on one host — on
+// Windows the extensionless name resolves to the macOS Mach-O (not absent, as a
+// prior version assumed), and exec'ing it through the Win32 subprocess runtime
+// faults. Gate on `detectHostTarget()` (resolved per host at the compiler's own
+// build) so each host runs its own binary. `tool` is the vendor subdir, which
+// equals the tool's basename (e.g. "wasm-opt" → `vendor/wasm-opt/wasm-opt`).
+function hostWasmToolCandidates(tool String) returns StringArrayArray
 	var candidates = StringArrayArray.create()
-	let exe = ["vendor", "wasm-opt", "wasm-opt.exe"]
-	let noExt = ["vendor", "wasm-opt", "wasm-opt"]
-	// Prefer the extensionless native binary first: on macOS/Linux the vendored
-	// host tool is `wasm-opt` (a Windows `wasm-opt.exe` can't exec here, and
-	// running it via Subprocess hangs rather than failing cleanly). On Windows
-	// the extensionless name doesn't exist, so the lookup falls through to the
-	// `.exe` — identical behaviour there.
-	candidates.push(noExt)
-	candidates.push(exe)
-	return findFileUpward(candidates)
+	let exe = ["vendor", tool, "{tool}.exe"]
+	let noExt = ["vendor", tool, tool]
+	if detectHostTarget().os == Os.windows 'winHost'
+		candidates.push(exe)
+		candidates.push(noExt)
+	end 'winHost' else 'nativeHost'
+		candidates.push(noExt)
+		candidates.push(exe)
+	end 'nativeHost'
+	return candidates
+end 'hostWasmToolCandidates'
+
+// Find the vendored Binaryen `wasm-opt` (used to asyncify wasm async/await),
+// preferring the binary that matches the host OS. Returns an empty FilePath if
+// not found.
+function findWasmOptPath() returns FilePath
+	return findFileUpward(hostWasmToolCandidates("wasm-opt"))
 end 'findWasmOptPath'
 
 // Run the vendored `wasm-opt --asyncify` over the just-emitted wasm in place.
@@ -281,17 +295,10 @@ function asyncifyPostProcess(outputPath FilePath)
 end 'asyncifyPostProcess'
 
 // Find the vendored `wasm-tools` (used to wrap the emitted core module into a
-// WASI Preview2 component), preferring the `.exe` form on Windows. Returns an
-// empty FilePath if not found.
+// WASI Preview2 component), preferring the binary that matches the host OS.
+// Returns an empty FilePath if not found.
 function findWasmToolsPath() returns FilePath
-	var candidates = StringArrayArray.create()
-	let exe = ["vendor", "wasm-tools", "wasm-tools.exe"]
-	let noExt = ["vendor", "wasm-tools", "wasm-tools"]
-	// Prefer the extensionless native binary first (see findWasmOptPath): the
-	// macOS/Linux host tool is `wasm-tools`; Windows falls through to the `.exe`.
-	candidates.push(noExt)
-	candidates.push(exe)
-	return findFileUpward(candidates)
+	return findFileUpward(hostWasmToolCandidates("wasm-tools"))
 end 'findWasmToolsPath'
 
 // Locate the vendored WASI WIT package directory (`vendor/wasi-wit`). We search
