@@ -1381,6 +1381,20 @@ export function linkArm64StdlibFunctions(project Project, code ByteArray, labelN
 	appendFuncAbs64Seeds(seeds, relocs: rdataRelocs)
 	appendFuncAbs64Seeds(seeds, relocs: globalData.pendingRdataRelocs)
 
+	// arm64-macOS hand-emitted-runtime floor seeds. The green-thread + subprocess
+	// runtimes (emitArm64MacosGreenThread / emitArm64MacosSubprocess) are emitted
+	// UNCONDITIONALLY for every macOS program AFTER this link pass, and their
+	// hand-rolled bodies `BL` directly into runtime.std helpers (the async-trace
+	// printers `__diag_print_tag`/`__diag_print_i64` via `__gt_trace_emit`, the
+	// slab allocator, etc.). Those call fixups don't exist yet when this link
+	// computes `needed`, and `computeNeededStdlibFunctions` doesn't consult
+	// `backendSynthesizedRuntimeEdges`, so without an explicit seed the cached
+	// bodies are never spliced into `.text` and the post-link fixups resolve to a
+	// missing label ("Unresolved label '__diag_print_tag'"). Mirrors the
+	// unconditional x64-Windows `appendX64Win32RuntimeSeeds` floor — both back the
+	// post-link hand-emitted runtime that no IR call edge reaches.
+	appendArm64MacosRuntimeSeeds(seeds, target: project.target)
+
 	// v80 lazy codegen: compile (regalloc + emit) every function reachable from
 	// `seeds` that the metadata-only cold cache hasn't emitted yet, into the
 	// registry's stdlib `cacheData.functions` (index 0), before the closure reads
@@ -1432,6 +1446,29 @@ export function linkArm64StdlibFunctions(project Project, code ByteArray, labelN
 	mergeStdlibGlobalData(globalData, rdataRelocs: rdataRelocs, stdlibCache: linkedCache)
 	logInfo(LogCategory.compiler, message: function() gives "Linked {needed.count()} stdlib functions ({linkedCache.functions.count()} available)")
 end 'linkArm64StdlibFunctions'
+
+// Append the arm64-macOS hand-emitted-runtime floor: the runtime.std function
+// names whose bodies are `BL`'d by the green-thread + subprocess runtimes that
+// `concatArm64FunctionChunks` emits unconditionally AFTER the stdlib link pass.
+// Because those call fixups are added post-link and `computeNeededStdlibFunctions`
+// only walks real cache call/adr edges (not `backendSynthesizedRuntimeEdges`),
+// these names must be seeded into the link-root set explicitly or the cached
+// bodies are pruned and the post-link fixups resolve to a missing label. No-op
+// off arm64-macOS (no hand-emitted runtime there). Shares the SAME name lists the
+// reachability / lazy-codegen closures use (`arm64MacosGreenThreadRuntimeNames` /
+// `arm64MacosSubprocessRuntimeNames`) so the link floor can't drift from the set
+// those closures compiled into the cache.
+function appendArm64MacosRuntimeSeeds(seeds StringArray, target Target)
+	if not (target.cpu == CpuArch.arm64 and target.os == Os.macos) 'notArm64Macos'
+		return
+	end 'notArm64Macos'
+	for name in arm64MacosGreenThreadRuntimeNames() 'gtSeed'
+		seeds.push(name)
+	end 'gtSeed'
+	for name in arm64MacosSubprocessRuntimeNames() 'subpSeed'
+		seeds.push(name)
+	end 'subpSeed'
+end 'appendArm64MacosRuntimeSeeds'
 
 // Emit a single target op by index.
 export function emitArm64PackedOp(module TargetModule, packed OpIndex, code ByteArray, jumpFixups BlockIdFixupArray, callFixups Arm64CallFixupArray, adrFixups Arm64AdrFixupArray, stackTracker Arm64StackTracker, relocations RelocationArray, rdataRelocs RdataRelocationArray)
