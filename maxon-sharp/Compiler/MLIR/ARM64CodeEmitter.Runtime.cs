@@ -3297,6 +3297,12 @@ public partial class ARM64CodeEmitter {
     EmitReloadArg(0);
     EmitMovRegReg(ARM64Register.X28, ARM64Register.X0);
 
+    // Install a fresh altstack for THIS worker OS thread. The main-thread install
+    // in EmitInstallFaultHandler only covers the main thread; without a per-worker
+    // altstack a fault on this M runs the SA_ONSTACK handler on a possibly-exhausted
+    // stack and escalates to a fatal SIGILL. Does not clobber X28 (=P*).
+    EmitInstallWorkerSigaltstack();
+
     // Atomically increment active_workers (mirrors x86's LOCK INC on worker entry).
     // Balances the decrement at __sched_worker_loop_exit so the count stays accurate
     // across spawn/retire cycles (e.g. when maxon_gt_set_single_threaded retires a
@@ -6673,6 +6679,39 @@ public partial class ARM64CodeEmitter {
     EmitAddSubImm(ARM64Register.Sp, ARM64Register.Sp, 0x40, isAdd: true);
   }
 
+  /// Install a fresh per-thread sigaltstack for the calling OS thread.
+  ///
+  /// sigaction (installed once on the main thread in EmitInstallFaultHandler) is
+  /// process-global, but sigaltstack is PER-THREAD on POSIX. A SA_ONSTACK fault
+  /// handler with no altstack registered for THIS pthread runs on the (possibly
+  /// exhausted) thread stack and double-faults on a stack-overflow SIGSEGV. Worker
+  /// Ms (__sched_worker_loop) therefore need their own altstack — without it a
+  /// transient SEGV/BUS/FPE on a worker thread is mis-handled and escalates to a
+  /// fatal SIGILL (process-wide) instead of a clean panic + exit. mmap leaks for
+  /// the thread's lifetime (correct: it must outlive every fault). Mirrors the
+  /// self-hosted emitArm64SchedWorkerLoop per-thread altstack (Arm64MacosGreenThread.maxon).
+  ///
+  /// Clobbers X0, X1 and the call-clobbered set; callers must not have live values
+  /// in those across this call. X28 (=P*) is NOT touched.
+  private void EmitInstallWorkerSigaltstack() {
+    // Carve 0x20 bytes of scratch under SP for the sigaltstack struct (stack_t).
+    EmitAddSubImm(ARM64Register.Sp, ARM64Register.Sp, 0x20, isAdd: false);
+
+    EmitMovRegImm(ARM64Register.X1, SigaltstackSize);
+    EmitMmapAnon();
+    EmitStoreToSp(SigstackOffSp, ARM64Register.X0);
+    EmitMovRegImm(ARM64Register.X1, SigaltstackSize);
+    EmitStoreToSp(SigstackOffSize, ARM64Register.X1);
+    EmitMovRegImm(ARM64Register.X1, 0);
+    EmitStoreIndirect(ARM64Register.Sp, SigstackOffFlags, ARM64Register.X1, 4);
+
+    EmitMovRegReg(ARM64Register.X0, ARM64Register.Sp); // &ss
+    EmitMovRegImm(ARM64Register.X1, 0);                // oss = NULL
+    EmitCallImport("sigaltstack");
+
+    EmitAddSubImm(ARM64Register.Sp, ARM64Register.Sp, 0x20, isAdd: true);
+  }
+
   internal void EmitFaultHandlerProlog(string thunkLabel, string sharedHandlerLabel) {
     // void thunk(int sig, siginfo_t* info, void* ucontext);  AAPCS64: X0/X1/X2.
     // EmitRuntimeFunctionStart spills X0..X2 at [fp+16], [fp+24], [fp+32].
@@ -6723,8 +6762,16 @@ public partial class ARM64CodeEmitter {
     // X0 = sentinel from the shared handler. Anything nonzero means "don't recover".
     EmitCbnz(ARM64Register.X0, "__gt_fte_dont_recover");
 
+    // Guard the raw-X28 deref: the io-sync worker pthread runs with X28=0 (it has no
+    // P*), and a fault delivered before a worker M finishes setting X28 would also see
+    // a zero/garbage P. Dereferencing P->currentGt through a null/garbage P here would
+    // recurse inside the handler and escalate to a fatal SIGILL. If X28==0 (or
+    // P->currentGt==0) there is no recoverable redirect — take the SIG_DFL path.
+    EmitCbz(ARM64Register.X28, "__gt_fte_dont_recover");
+
     // Recover: copy gt.fault_redirect_* into mcontext->__ss.{pc,sp,fp}.
     EmitLoadIndirect(ARM64Register.X9, ARM64Register.X28, POffCurrentGt, 8);
+    EmitCbz(ARM64Register.X9, "__gt_fte_dont_recover");
     EmitLoadIndirect(ARM64Register.X10, ARM64Register.X9, GtOffFaultRedirectRip, 8);
     EmitLoadIndirect(ARM64Register.X11, ARM64Register.X9, GtOffFaultRedirectRsp, 8);
     EmitLoadIndirect(ARM64Register.X12, ARM64Register.X9, GtOffFaultRedirectFp, 8);
