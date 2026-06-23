@@ -92,6 +92,22 @@ module {
     mir.store %6, %37, 8 width: qword
     mir.ret %37
   }
+  func @Name.create(local0: i64, local1: i64) -> i64 {
+  entry:
+    %9 = mir.param local0 : i64
+    %10 = mir.param local1 : i64
+    %2 = mir.mov_imm 16 : i64
+    %4 = mir.func_addr @__destruct_Name
+    %3 = mir.call @stdlib.__mm_alloc(%2, %4)
+    %11 = mir.call @stdlib.__mm_incref(%3)
+    %5 = mir.mov_imm 0 : i64
+    mir.store %5, %3, 0 width: qword
+    %6 = mir.mov_imm 0 : i64
+    mir.store %6, %3, 8 width: qword
+    mir.store %9, %3, 0 width: qword
+    mir.store %10, %3, 8 width: qword
+    mir.ret %3
+  }
   func @Age.toString(local0: i64) -> i64 {
   entry:
     %31 = mir.param local0 : i64
@@ -155,7 +171,7 @@ module {
     %12 = mir.mov_imm 16 : i64
     %13 = mir.func_addr @__destruct_String
     %11 = mir.call @stdlib.__mm_alloc(%12, %13)
-    %84 = mir.call @stdlib.__mm_incref(%11)
+    %81 = mir.call @stdlib.__mm_incref(%11)
     mir.store %5, %11, 0 width: qword
     mir.store %9, %11, 8 width: qword
     %15 = mir.global_addr @__istr_4
@@ -173,31 +189,27 @@ module {
     %25 = mir.mov_imm 16 : i64
     %26 = mir.func_addr @__destruct_String
     %24 = mir.call @stdlib.__mm_alloc(%25, %26)
-    %85 = mir.call @stdlib.__mm_incref(%24)
+    %82 = mir.call @stdlib.__mm_incref(%24)
     mir.store %18, %24, 0 width: qword
     mir.store %9, %24, 8 width: qword
-    %74 = mir.mov_imm 16 : i64
-    %75 = mir.func_addr @__destruct_Name
-    %76 = mir.call @stdlib.__mm_alloc(%74, %75)
-    mir.store %11, %76, 0 width: qword
-    mir.store %24, %76, 8 width: qword
+    %28 = mir.call @Name.create(%11, %24)
     %29 = mir.mov_imm 30 : i64
-    %77 = mir.mov_imm 8 : i64
-    %78 = mir.mov_imm 0 : i64
-    %79 = mir.call @stdlib.__mm_alloc(%77, %78)
-    mir.store %29, %79, 0 width: qword
+    %74 = mir.mov_imm 8 : i64
+    %75 = mir.mov_imm 0 : i64
+    %76 = mir.call @stdlib.__mm_alloc(%74, %75)
+    mir.store %29, %76, 0 width: qword
     %33 = mir.global_addr @__istr_0
     %35 = mir.global_addr @__witness_Name_Stringable
-    %36 = mir.witness_call %35, [0](%76)
-    %87 = mir.call @mm_drop(%76)
+    %36 = mir.witness_call %35, [0](%28)
+    %84 = mir.call @__mm_decref_maybenull_helper(%28)
     %37 = mir.load %36, 0 width: qword
     %38 = mir.load %37, 0 width: qword
     %39 = mir.load %37, 8 width: qword
     %40 = mir.global_addr @__istr_5
     %41 = mir.mov_imm 2 : i64
     %42 = mir.global_addr @__witness_Age_Stringable
-    %43 = mir.witness_call %42, [0](%79)
-    %88 = mir.call @mm_drop(%79)
+    %43 = mir.witness_call %42, [0](%76)
+    %85 = mir.call @mm_drop(%76)
     %44 = mir.load %43, 0 width: qword
     %45 = mir.load %44, 0 width: qword
     %46 = mir.load %44, 8 width: qword
@@ -212,12 +224,12 @@ module {
     %58 = mir.add.i64 %57, %0
     mir.memcpy %58, %38, %39
     %59 = mir.add.i64 %58, %39
-    %89 = mir.call @__mm_decref_maybenull_helper(%36)
+    %86 = mir.call @__mm_decref_maybenull_helper(%36)
     mir.memcpy %59, %40, %41
     %60 = mir.add.i64 %59, %41
     mir.memcpy %60, %45, %46
     %61 = mir.add.i64 %60, %46
-    %90 = mir.call @__mm_decref_maybenull_helper(%43)
+    %87 = mir.call @__mm_decref_maybenull_helper(%43)
     mir.memcpy %61, %47, %9
     %63 = mir.mov_imm 48 : i64
     %64 = mir.func_addr @stdlib.__destruct___ManagedMemory
@@ -234,13 +246,13 @@ module {
     %69 = mir.call @stdlib.__mm_alloc(%70, %71)
     mir.store %65, %69, 0 width: qword
     mir.store %0, %69, 8 width: qword
-    %80 = mir.load %69, 0 width: qword
-    %86 = mir.call @stdlib.__mm_incref(%80)
-    %81 = mir.load %80, 0 width: qword
-    %82 = mir.load %80, 8 width: qword
-    %83 = mir.call @mrt_write_stdout(%81, %82)
-    %92 = mir.call @mm_drop(%69)
-    %91 = mir.call @__mm_decref_maybenull_helper(%80)
+    %77 = mir.load %69, 0 width: qword
+    %83 = mir.call @stdlib.__mm_incref(%77)
+    %78 = mir.load %77, 0 width: qword
+    %79 = mir.load %77, 8 width: qword
+    %80 = mir.call @mrt_write_stdout(%78, %79)
+    %89 = mir.call @mm_drop(%69)
+    %88 = mir.call @__mm_decref_maybenull_helper(%77)
     mir.ret %0
   }
 }

@@ -47,6 +47,29 @@ ExitCode: 10
 ---
 // CompiledIR
 module {
+  func @Block.create(rcx: i64, rdx: i64, rax: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov r12, rcx
+    x64.mov r13, rdx
+    x64.mov r14, rax
+    x64.lea rdx, [rip+__destruct_Block]
+    x64.mov ecx, 24
+    x64.call stdlib.__mm_alloc
+    x64.mov r15, r8
+    x64.mov rcx, r15
+    x64.call stdlib.__mm_incref
+    x64.xor r8d, r8d
+    x64.mov [r15+8], r8 (8b)
+    x64.xor r8d, r8d
+    x64.mov [r15+16], r8 (8b)
+    x64.mov [r15+0], r12 (8b)
+    x64.mov [r15+8], r13 (8b)
+    x64.mov [r15+16], r14 (8b)
+    x64.mov r8, r15
+    x64.epilogue
+    x64.ret
+  }
   func @makeBlock() -> i64 {
   entry:
     x64.prologue stack_size=64
@@ -60,11 +83,9 @@ module {
     x64.mov r8d, 16
     x64.xor r8d, r8d
     x64.mov [rbp+-16], r8
-    x64.lea r8, [rip+__destruct_Block]
-    x64.mov [rbp+-24], r8
-    x64.mov r8d, 24
+    x64.mov r8d, 1
     x64.call Array.create
-    x64.mov [rbp+-32], r8
+    x64.mov [rbp+-24], r8
     x64.mov rcx, r13
     x64.mov rdx, r12
     x64.call stdlib.__mm_alloc
@@ -82,17 +103,11 @@ module {
     x64.mov r8, [rbp+-16]
     x64.mov [r13+0], r8 (8b)
     x64.mov [r13+8], r12 (8b)
-    x64.mov rcx, 24
+    x64.mov rcx, 1
+    x64.mov rax, r13
     x64.mov rdx, [rbp+-24]
-    x64.call stdlib.__mm_alloc
+    x64.call Block.create
     x64.mov r12, r8
-    x64.mov rcx, r12
-    x64.call stdlib.__mm_incref
-    x64.mov r8d, 1
-    x64.mov [r12+0], r8 (8b)
-    x64.mov r8, [rbp+-32]
-    x64.mov [r12+8], r8 (8b)
-    x64.mov [r12+16], r13 (8b)
     x64.mov r13, [r12+8] (8b)
     x64.lea r14, [rip+__destruct_IrOp]
     x64.mov r15d, 16

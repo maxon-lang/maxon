@@ -53,6 +53,27 @@ ExitCode: 2
 ---
 // CompiledIR
 module {
+  func @Dependency.create(rcx: i64, rdx: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov r12, rcx
+    x64.mov r13, rdx
+    x64.lea rdx, [rip+__destruct_Dependency]
+    x64.mov ecx, 16
+    x64.call stdlib.__mm_alloc
+    x64.mov r14, r8
+    x64.mov rcx, r14
+    x64.call stdlib.__mm_incref
+    x64.xor r8d, r8d
+    x64.mov [r14+0], r8 (8b)
+    x64.xor r8d, r8d
+    x64.mov [r14+8], r8 (8b)
+    x64.mov [r14+0], r12 (8b)
+    x64.mov [r14+8], r13 (8b)
+    x64.mov r8, r14
+    x64.epilogue
+    x64.ret
+  }
   func @clearDepsFor(rcx: i64) {
   entry:
     x64.prologue stack_size=80
@@ -261,97 +282,30 @@ module {
   }
   func @main() -> u32 {
   entry:
-    x64.prologue stack_size=272
+    x64.prologue stack_size=96
     x64.lea rcx, [rip+__layout_Array_Dependency]
     x64.lea r12, [rip+__destruct_QueryKey]
     x64.mov r13d, 16
     x64.mov r14d, 2
     x64.xor r15d, r15d
     x64.lea r8, [rip+stdlib.__destruct___ManagedMemory]
-    x64.mov r9d, 48
+    x64.mov [rbp+-8], r8
+    x64.mov r8d, 48
+    x64.xor r8d, r8d
+    x64.lea r9, [rip+__istr_0]
+    x64.mov esi, 10
+    x64.mov rsi, -2
+    x64.mov esi, 1
+    x64.lea rsi, [rip+__destruct_String]
+    x64.mov [rbp+-16], rsi
+    x64.mov esi, 16
+    x64.lea rsi, [rip+__destruct_QueryKey]
+    x64.mov [rbp+-24], rsi
+    x64.mov esi, 16
     x64.xor esi, esi
-    x64.lea rdi, [rip+__istr_0]
-    x64.mov eax, 10
-    x64.mov rax, -2
-    x64.mov eax, 1
-    x64.lea rax, [rip+__destruct_String]
-    x64.mov [rbp+-8], rax
-    x64.mov eax, 16
-    x64.lea rax, [rip+__destruct_QueryKey]
-    x64.mov [rbp+-16], rax
-    x64.mov eax, 16
-    x64.xor eax, eax
-    x64.mov [rbp+-24], rax
-    x64.lea rax, [rip+__destruct_Dependency]
-    x64.mov [rbp+-32], rax
-    x64.mov eax, 16
-    x64.lea rax, [rip+__layout_Array_Dependency]
-    x64.mov [rbp+-40], rax
-    x64.lea rax, [rip+__destruct_QueryKey]
-    x64.mov [rbp+-48], rax
-    x64.mov eax, 16
-    x64.mov eax, 3
-    x64.xor eax, eax
-    x64.mov [rbp+-56], rax
-    x64.lea rax, [rip+stdlib.__destruct___ManagedMemory]
-    x64.mov [rbp+-64], rax
-    x64.mov eax, 48
-    x64.lea rax, [rip+__istr_0]
-    x64.mov [rbp+-72], rax
-    x64.mov eax, 10
-    x64.mov rax, -2
-    x64.lea rax, [rip+__destruct_String]
-    x64.mov [rbp+-80], rax
-    x64.mov eax, 16
-    x64.lea rax, [rip+__destruct_QueryKey]
-    x64.mov [rbp+-88], rax
-    x64.mov eax, 16
-    x64.mov eax, 1
-    x64.lea rax, [rip+__destruct_Dependency]
-    x64.mov [rbp+-96], rax
-    x64.mov eax, 16
-    x64.lea rax, [rip+__layout_Array_Dependency]
-    x64.mov [rbp+-104], rax
-    x64.lea rax, [rip+__destruct_QueryKey]
-    x64.mov [rbp+-112], rax
-    x64.mov eax, 16
-    x64.mov eax, 2
-    x64.xor eax, eax
-    x64.mov [rbp+-120], rax
-    x64.lea rax, [rip+stdlib.__destruct___ManagedMemory]
-    x64.mov [rbp+-128], rax
-    x64.mov eax, 48
-    x64.lea rax, [rip+__istr_1]
-    x64.mov [rbp+-136], rax
-    x64.mov eax, 11
-    x64.mov rax, -2
-    x64.lea rax, [rip+__destruct_String]
-    x64.mov [rbp+-144], rax
-    x64.mov eax, 16
-    x64.lea rax, [rip+__destruct_QueryKey]
-    x64.mov [rbp+-152], rax
-    x64.mov eax, 16
-    x64.xor eax, eax
-    x64.mov [rbp+-160], rax
-    x64.lea rax, [rip+__destruct_Dependency]
-    x64.mov [rbp+-168], rax
-    x64.mov eax, 16
-    x64.lea rax, [rip+__layout_Array_Dependency]
-    x64.mov [rbp+-176], rax
-    x64.lea rax, [rip+stdlib.__destruct___ManagedMemory]
-    x64.mov [rbp+-184], rax
-    x64.mov eax, 48
-    x64.lea rax, [rip+__istr_2]
-    x64.mov [rbp+-192], rax
-    x64.mov eax, 7
-    x64.mov rax, -2
-    x64.lea rax, [rip+__destruct_String]
-    x64.mov [rbp+-200], rax
-    x64.mov eax, 16
-    x64.mov [rbp+-208], rsi
-    x64.mov [rbp+-216], rdi
-    x64.mov [rbp+-224], r9
-    x64.mov [rbp+-232], r8
+    x64.mov [rbp+-32], rsi
+    x64.mov [rbp+-40], r8
+    x64.mov [rbp+-48], r9
     x64.call Array.create
     x64.mov rcx, r13
     x64.mov rdx, r12
@@ -362,13 +316,13 @@ module {
     x64.call stdlib.__mm_incref
     x64.mov [r13+0], r14 (8b)
     x64.mov [r13+8], r15 (8b)
-    x64.mov rcx, [rbp+-224]
-    x64.mov rdx, [rbp+-232]
+    x64.mov rcx, 48
+    x64.mov rdx, [rbp+-8]
     x64.call mrt_alloc_with_dtor
     x64.mov r14, r8
-    x64.mov r8, [rbp+-208]
+    x64.mov r8, [rbp+-40]
     x64.mov [r14+40], r8 (8b)
-    x64.mov r9, [rbp+-216]
+    x64.mov r9, [rbp+-48]
     x64.mov [r14+0], r9 (8b)
     x64.mov r9, 10
     x64.mov [r14+8], r9 (8b)
@@ -378,7 +332,7 @@ module {
     x64.mov [r14+24], r9 (8b)
     x64.mov [r14+32], r8 (8b)
     x64.mov rcx, 16
-    x64.mov rdx, [rbp+-8]
+    x64.mov rdx, [rbp+-16]
     x64.call stdlib.__mm_alloc
     x64.mov r15, r8
     x64.mov rcx, r15
@@ -387,62 +341,75 @@ module {
     x64.mov r8, 1
     x64.mov [r15+8], r8 (8b)
     x64.mov rcx, 16
-    x64.mov rdx, [rbp+-16]
+    x64.mov rdx, [rbp+-24]
     x64.call stdlib.__mm_alloc
     x64.mov r14, r8
     x64.mov rcx, r14
     x64.call stdlib.__mm_incref
-    x64.mov r8, [rbp+-24]
+    x64.mov r8, [rbp+-32]
     x64.mov [r14+0], r8 (8b)
     x64.mov [r14+8], r15 (8b)
+    x64.mov rcx, r13
+    x64.mov rdx, r14
+    x64.call Dependency.create
+    x64.lea rax, [rip+__layout_Array_Dependency]
+    x64.lea r13, [rip+__destruct_QueryKey]
+    x64.mov r14d, 16
+    x64.mov r15d, 3
+    x64.xor r9d, r9d
+    x64.mov [rbp+-8], r9
+    x64.lea r9, [rip+stdlib.__destruct___ManagedMemory]
+    x64.mov [rbp+-16], r9
+    x64.mov r9d, 48
+    x64.lea r9, [rip+__istr_0]
+    x64.mov [rbp+-24], r9
+    x64.mov r9d, 10
+    x64.mov r9, -2
+    x64.lea r9, [rip+__destruct_String]
+    x64.mov [rbp+-32], r9
+    x64.mov r9d, 16
+    x64.lea r9, [rip+__destruct_QueryKey]
+    x64.mov [rbp+-48], r9
+    x64.mov r9d, 16
+    x64.mov r9d, 1
+    x64.mov rcx, r12
+    x64.mov rdx, r8
+    x64.call Array.push
+    x64.mov rcx, r14
+    x64.mov rdx, r13
+    x64.call stdlib.__mm_alloc
+    x64.mov r13, r8
+    x64.mov rcx, r13
+    x64.call stdlib.__mm_incref
+    x64.mov [r13+0], r15 (8b)
+    x64.mov r8, [rbp+-8]
+    x64.mov [r13+8], r8 (8b)
+    x64.mov rcx, 48
+    x64.mov rdx, [rbp+-16]
+    x64.call mrt_alloc_with_dtor
+    x64.mov r14, r8
+    x64.mov r8, [rbp+-40]
+    x64.mov [r14+40], r8 (8b)
+    x64.mov r9, [rbp+-24]
+    x64.mov [r14+0], r9 (8b)
+    x64.mov r9, 10
+    x64.mov [r14+8], r9 (8b)
+    x64.mov r9, -2
+    x64.mov [r14+16], r9 (8b)
+    x64.mov r9, 1
+    x64.mov [r14+24], r9 (8b)
+    x64.mov [r14+32], r8 (8b)
     x64.mov rcx, 16
     x64.mov rdx, [rbp+-32]
     x64.call stdlib.__mm_alloc
     x64.mov r15, r8
     x64.mov rcx, r15
     x64.call stdlib.__mm_incref
-    x64.mov [r15+0], r13 (8b)
-    x64.mov [r15+8], r14 (8b)
-    x64.mov rcx, r12
-    x64.mov rdx, r15
-    x64.mov rax, [rbp+-40]
-    x64.call Array.push
-    x64.mov rcx, 16
-    x64.mov rdx, [rbp+-48]
-    x64.call stdlib.__mm_alloc
-    x64.mov r13, r8
-    x64.mov rcx, r13
-    x64.call stdlib.__mm_incref
-    x64.mov r8, 3
-    x64.mov [r13+0], r8 (8b)
-    x64.mov r8, [rbp+-56]
-    x64.mov [r13+8], r8 (8b)
-    x64.mov rcx, 48
-    x64.mov rdx, [rbp+-64]
-    x64.call mrt_alloc_with_dtor
-    x64.mov r14, r8
-    x64.mov r8, [rbp+-208]
-    x64.mov [r14+40], r8 (8b)
-    x64.mov r9, [rbp+-72]
-    x64.mov [r14+0], r9 (8b)
-    x64.mov r9, 10
-    x64.mov [r14+8], r9 (8b)
-    x64.mov r9, -2
-    x64.mov [r14+16], r9 (8b)
-    x64.mov r9, 1
-    x64.mov [r14+24], r9 (8b)
-    x64.mov [r14+32], r8 (8b)
-    x64.mov rcx, 16
-    x64.mov rdx, [rbp+-80]
-    x64.call stdlib.__mm_alloc
-    x64.mov r15, r8
-    x64.mov rcx, r15
-    x64.call stdlib.__mm_incref
     x64.mov [r15+0], r14 (8b)
     x64.mov r8, 1
     x64.mov [r15+8], r8 (8b)
     x64.mov rcx, 16
-    x64.mov rdx, [rbp+-88]
+    x64.mov rdx, [rbp+-48]
     x64.call stdlib.__mm_alloc
     x64.mov r14, r8
     x64.mov rcx, r14
@@ -450,35 +417,49 @@ module {
     x64.mov r8, 1
     x64.mov [r14+0], r8 (8b)
     x64.mov [r14+8], r15 (8b)
-    x64.mov rcx, 16
-    x64.mov rdx, [rbp+-96]
-    x64.call stdlib.__mm_alloc
-    x64.mov r15, r8
-    x64.mov rcx, r15
-    x64.call stdlib.__mm_incref
-    x64.mov [r15+0], r13 (8b)
-    x64.mov [r15+8], r14 (8b)
+    x64.mov rcx, r13
+    x64.mov rdx, r14
+    x64.call Dependency.create
+    x64.lea rax, [rip+__layout_Array_Dependency]
+    x64.lea r13, [rip+__destruct_QueryKey]
+    x64.mov r14d, 16
+    x64.mov r15d, 2
+    x64.xor r9d, r9d
+    x64.mov [rbp+-8], r9
+    x64.lea r9, [rip+stdlib.__destruct___ManagedMemory]
+    x64.mov [rbp+-16], r9
+    x64.mov r9d, 48
+    x64.lea r9, [rip+__istr_1]
+    x64.mov [rbp+-24], r9
+    x64.mov r9d, 11
+    x64.mov r9, -2
+    x64.lea r9, [rip+__destruct_String]
+    x64.mov [rbp+-32], r9
+    x64.mov r9d, 16
+    x64.lea r9, [rip+__destruct_QueryKey]
+    x64.mov [rbp+-48], r9
+    x64.mov r9d, 16
+    x64.xor r9d, r9d
+    x64.mov [rbp+-56], r9
     x64.mov rcx, r12
-    x64.mov rdx, r15
-    x64.mov rax, [rbp+-104]
+    x64.mov rdx, r8
     x64.call Array.push
-    x64.mov rcx, 16
-    x64.mov rdx, [rbp+-112]
+    x64.mov rcx, r14
+    x64.mov rdx, r13
     x64.call stdlib.__mm_alloc
     x64.mov r13, r8
     x64.mov rcx, r13
     x64.call stdlib.__mm_incref
-    x64.mov r8, 2
-    x64.mov [r13+0], r8 (8b)
-    x64.mov r8, [rbp+-120]
+    x64.mov [r13+0], r15 (8b)
+    x64.mov r8, [rbp+-8]
     x64.mov [r13+8], r8 (8b)
     x64.mov rcx, 48
-    x64.mov rdx, [rbp+-128]
+    x64.mov rdx, [rbp+-16]
     x64.call mrt_alloc_with_dtor
     x64.mov r14, r8
-    x64.mov r8, [rbp+-208]
+    x64.mov r8, [rbp+-40]
     x64.mov [r14+40], r8 (8b)
-    x64.mov r9, [rbp+-136]
+    x64.mov r9, [rbp+-24]
     x64.mov [r14+0], r9 (8b)
     x64.mov r9, 11
     x64.mov [r14+8], r9 (8b)
@@ -488,7 +469,7 @@ module {
     x64.mov [r14+24], r9 (8b)
     x64.mov [r14+32], r8 (8b)
     x64.mov rcx, 16
-    x64.mov rdx, [rbp+-144]
+    x64.mov rdx, [rbp+-32]
     x64.call stdlib.__mm_alloc
     x64.mov r15, r8
     x64.mov rcx, r15
@@ -497,43 +478,38 @@ module {
     x64.mov r8, 1
     x64.mov [r15+8], r8 (8b)
     x64.mov rcx, 16
-    x64.mov rdx, [rbp+-152]
+    x64.mov rdx, [rbp+-48]
     x64.call stdlib.__mm_alloc
     x64.mov r14, r8
     x64.mov rcx, r14
     x64.call stdlib.__mm_incref
-    x64.mov r8, [rbp+-160]
+    x64.mov r8, [rbp+-56]
     x64.mov [r14+0], r8 (8b)
     x64.mov [r14+8], r15 (8b)
-    x64.mov rcx, 16
-    x64.mov rdx, [rbp+-168]
-    x64.call stdlib.__mm_alloc
-    x64.mov r15, r8
-    x64.mov rcx, r15
-    x64.call stdlib.__mm_incref
-    x64.mov [r15+0], r13 (8b)
-    x64.mov [r15+8], r14 (8b)
+    x64.mov rcx, r13
+    x64.mov rdx, r14
+    x64.call Dependency.create
+    x64.lea rax, [rip+__layout_Array_Dependency]
     x64.mov rcx, r12
-    x64.mov rdx, r15
-    x64.mov rax, [rbp+-176]
+    x64.mov rdx, r8
     x64.call Array.push
-    x64.mov rcx, 48
-    x64.mov rdx, [rbp+-184]
+    x64.lea rdx, [rip+stdlib.__destruct___ManagedMemory]
+    x64.mov ecx, 48
     x64.call mrt_alloc_with_dtor
     x64.mov r13, r8
-    x64.mov r8, [rbp+-208]
+    x64.mov r8, [rbp+-40]
     x64.mov [r13+40], r8 (8b)
-    x64.mov r9, [rbp+-192]
+    x64.lea r9, [rip+__istr_2]
     x64.mov [r13+0], r9 (8b)
-    x64.mov r9, 7
+    x64.mov r9d, 7
     x64.mov [r13+8], r9 (8b)
     x64.mov r9, -2
     x64.mov [r13+16], r9 (8b)
     x64.mov r9, 1
     x64.mov [r13+24], r9 (8b)
     x64.mov [r13+32], r8 (8b)
-    x64.mov rcx, 16
-    x64.mov rdx, [rbp+-200]
+    x64.lea rdx, [rip+__destruct_String]
+    x64.mov ecx, 16
     x64.call stdlib.__mm_alloc
     x64.mov r14, r8
     x64.mov rcx, r14
@@ -554,7 +530,7 @@ module {
     x64.mov ecx, 48
     x64.call mrt_alloc_with_dtor
     x64.mov r14, r8
-    x64.mov r8, [rbp+-208]
+    x64.mov r8, [rbp+-40]
     x64.mov [r14+40], r8 (8b)
     x64.lea r9, [rip+__istr_2]
     x64.mov [r14+0], r9 (8b)
@@ -583,22 +559,19 @@ module {
     x64.mov r8d, 1
     x64.mov [r14+0], r8 (8b)
     x64.mov [r14+8], r15 (8b)
-    x64.lea rdx, [rip+__destruct_Dependency]
-    x64.mov ecx, 16
-    x64.call stdlib.__mm_alloc
-    x64.mov r15, r8
-    x64.mov rcx, r15
-    x64.call stdlib.__mm_incref
-    x64.mov [r15+0], r13 (8b)
-    x64.mov [r15+8], r14 (8b)
+    x64.mov rcx, r13
+    x64.mov rdx, r14
+    x64.call Dependency.create
     x64.lea rax, [rip+__layout_Array_Dependency]
     x64.mov rcx, r12
-    x64.mov rdx, r15
+    x64.mov rdx, r8
     x64.call Array.push
     x64.lea rdx, [rip+__destruct_Database]
     x64.mov ecx, 8
     x64.call stdlib.__mm_alloc
     x64.mov r13, r8
+    x64.xor r8d, r8d
+    x64.mov [r13+0], r8 (8b)
     x64.mov [r13+0], r12 (8b)
     x64.mov rcx, r13
     x64.call clearDepsFor

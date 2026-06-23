@@ -52,6 +52,22 @@ ExitCode: 0
 ---
 // CompiledIR
 module {
+  func @Func.create(local0: i64, local1: i64) -> i64 {
+  entry:
+    %9 = mir.param local0 : i64
+    %10 = mir.param local1 : i64
+    %2 = mir.mov_imm 16 : i64
+    %4 = mir.func_addr @__destruct_Func
+    %3 = mir.call @stdlib.__mm_alloc(%2, %4)
+    %11 = mir.call @stdlib.__mm_incref(%3)
+    %5 = mir.mov_imm 0 : i64
+    mir.store %5, %3, 0 width: qword
+    %6 = mir.mov_imm 0 : i64
+    mir.store %6, %3, 8 width: qword
+    mir.store %9, %3, 0 width: qword
+    mir.store %10, %3, 8 width: qword
+    mir.ret %3
+  }
   func @parseAndMerge(local0: i64, local1: i64) {
   entry:
     %19 = mir.param local0 : i64
@@ -61,23 +77,20 @@ module {
     %23 = mir.mov_imm 8 : i64
     %24 = mir.func_addr @__destruct_Module
     %25 = mir.call @stdlib.__mm_alloc(%23, %24)
+    %26 = mir.mov_imm 0 : i64
+    mir.store %26, %25, 0 width: qword
     mir.store %22, %25, 0 width: qword
     %5 = mir.load %25, 0 width: qword
     %7 = mir.global_addr @__layout_Array_Integer
     %8 = mir.call @Array.create(%7)
-    %26 = mir.mov_imm 16 : i64
-    %27 = mir.func_addr @__destruct_Func
-    %28 = mir.call @stdlib.__mm_alloc(%26, %27)
-    %29 = mir.call @stdlib.__mm_incref(%28)
-    mir.store %20, %28, 0 width: qword
-    mir.store %8, %28, 8 width: qword
+    %9 = mir.call @Func.create(%20, %8)
     %10 = mir.global_addr @__layout_Array_Func
-    %11 = mir.call @Array.push(%5, %28, %10)
+    %11 = mir.call @Array.push(%5, %9, %10)
     %13 = mir.load %19, 0 width: qword
     %15 = mir.load %25, 0 width: qword
     %16 = mir.global_addr @__layout_Array_Func
     %17 = mir.call @Array.append(%13, %15, %16)
-    %30 = mir.call @mm_drop(%25)
+    %27 = mir.call @mm_drop(%25)
     mir.ret %18
   }
   func @main() -> u8 {
@@ -88,6 +101,8 @@ module {
     %88 = mir.mov_imm 8 : i64
     %89 = mir.func_addr @__destruct_Module
     %90 = mir.call @stdlib.__mm_alloc(%88, %89)
+    %91 = mir.mov_imm 0 : i64
+    mir.store %91, %90, 0 width: qword
     mir.store %87, %90, 0 width: qword
     %5 = mir.global_addr @__istr_0
     %6 = mir.mov_imm 48 : i64
@@ -105,7 +120,7 @@ module {
     %15 = mir.mov_imm 16 : i64
     %16 = mir.func_addr @__destruct_String
     %14 = mir.call @stdlib.__mm_alloc(%15, %16)
-    %104 = mir.call @stdlib.__mm_incref(%14)
+    %102 = mir.call @stdlib.__mm_incref(%14)
     mir.store %8, %14, 0 width: qword
     mir.store %12, %14, 8 width: qword
     %18 = mir.call @parseAndMerge(%90, %14)
@@ -124,7 +139,7 @@ module {
     %30 = mir.mov_imm 16 : i64
     %31 = mir.func_addr @__destruct_String
     %29 = mir.call @stdlib.__mm_alloc(%30, %31)
-    %105 = mir.call @stdlib.__mm_incref(%29)
+    %103 = mir.call @stdlib.__mm_incref(%29)
     mir.store %23, %29, 0 width: qword
     mir.store %12, %29, 8 width: qword
     %33 = mir.call @parseAndMerge(%90, %29)
@@ -135,31 +150,31 @@ module {
     %39 = mir.cmp ne, %37, %38
     mir.cond_br %39 [then: badCount_0(), else: badCount_0.after()]
   badCount_0:
-    %110 = mir.call @mm_drop(%90)
+    %107 = mir.call @mm_drop(%90)
     %40 = mir.mov_imm 99 : i64
     mir.ret %40
   badCount_0.after:
     %42 = mir.load %90, 0 width: qword
     mir.br inlined_Array.get_0_0()
   inlined_Array.get_0_0:
-    %91 = mir.load %42, 0 width: qword
-    %92, %93 = mir.try_call @stdlib.__managed_mem_get(%91, %0)
-    %94 = mir.mov_imm 0 : i64
-    %95 = mir.cmp ne, %93, %94
-    mir.cond_br %95 [then: inlined_Array.get_1_0(), else: inlined_Array.get_3_0()]
+    %92 = mir.load %42, 0 width: qword
+    %93, %94 = mir.try_call @stdlib.__managed_mem_get(%92, %0)
+    %95 = mir.mov_imm 0 : i64
+    %96 = mir.cmp ne, %94, %95
+    mir.cond_br %96 [then: inlined_Array.get_1_0(), else: inlined_Array.get_3_0()]
   inlined_Array.get_1_0:
-    %111 = mir.call @mm_drop(%90)
-    %96 = mir.mov_imm 0 : i64
-    %97 = mir.mov_imm 1 : i64
-    mir.br inline_cont_main_2(%96, %97)
+    %108 = mir.call @mm_drop(%90)
+    %97 = mir.mov_imm 0 : i64
+    %98 = mir.mov_imm 1 : i64
+    mir.br inline_cont_main_2(%97, %98)
   inlined_Array.get_3_0:
-    %98 = mir.mov_imm 0 : i64
+    %99 = mir.mov_imm 0 : i64
     mir.br __rc_edge_10_0()
-  inline_cont_main_2(%99: i64, %100: i64):
-    %48 = mir.cmp ne, %100, %0
-    mir.cond_br %48 [then: try_0.otherwise(), else: try_0.merge(%99)]
+  inline_cont_main_2(%100: i64, %101: i64):
+    %48 = mir.cmp ne, %101, %0
+    mir.cond_br %48 [then: try_0.otherwise(), else: try_0.merge(%100)]
   try_0.otherwise:
-    %112 = mir.call @__mm_decref_maybenull_helper(%99)
+    %109 = mir.call @__mm_decref_maybenull_helper(%100)
     %50 = mir.global_addr @__istr_2
     %51 = mir.mov_imm 48 : i64
     %52 = mir.func_addr @stdlib.__destruct___ManagedMemory
@@ -174,18 +189,13 @@ module {
     %60 = mir.mov_imm 16 : i64
     %61 = mir.func_addr @__destruct_String
     %59 = mir.call @stdlib.__mm_alloc(%60, %61)
-    %106 = mir.call @stdlib.__mm_incref(%59)
+    %104 = mir.call @stdlib.__mm_incref(%59)
     mir.store %53, %59, 0 width: qword
     mir.store %12, %59, 8 width: qword
     %63 = mir.global_addr @__layout_Array_Integer
     %64 = mir.call @Array.create(%63)
-    %101 = mir.mov_imm 16 : i64
-    %102 = mir.func_addr @__destruct_Func
-    %103 = mir.call @stdlib.__mm_alloc(%101, %102)
-    %107 = mir.call @stdlib.__mm_incref(%103)
-    mir.store %59, %103, 0 width: qword
-    mir.store %64, %103, 8 width: qword
-    mir.br try_0.merge(%103)
+    %65 = mir.call @Func.create(%59, %64)
+    mir.br try_0.merge(%65)
   try_0.merge(%85: i64):
     %68 = mir.load %85, 0 width: qword
     %69 = mir.global_addr @__istr_0
@@ -206,17 +216,17 @@ module {
     mir.store %72, %78, 0 width: qword
     mir.store %12, %78, 8 width: qword
     %82 = mir.call @String.equals(%68, %78)
-    %109 = mir.call @__mm_decref_maybenull_helper(%85)
-    %108 = mir.call @mm_drop(%78)
+    %106 = mir.call @__mm_decref_maybenull_helper(%85)
+    %105 = mir.call @mm_drop(%78)
     mir.cond_br %82 [then: correct_0(), else: correct_0.after()]
   correct_0:
     mir.ret %0
   correct_0.after:
     mir.ret %12
   __rc_edge_10_0:
-    %113 = mir.call @stdlib.__mm_incref(%92)
-    %114 = mir.call @mm_drop(%90)
-    mir.br inline_cont_main_2(%92, %98)
+    %110 = mir.call @stdlib.__mm_incref(%93)
+    %111 = mir.call @mm_drop(%90)
+    mir.br inline_cont_main_2(%93, %99)
   }
 }
 ---

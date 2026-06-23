@@ -1,9 +1,13 @@
 // Test: subprocess-stdin-bytes
 function main() returns ExitCode
-	// `findstr .` echoes any line containing at least one character — i.e.
-	// every non-empty line of stdin. We feed it two lines and expect both
-	// back on stdout.
+	// `findstr .` (Windows) / `grep .` (POSIX) echoes any line containing at
+	// least one character — i.e. every non-empty line of stdin. We feed it two
+	// lines and expect both back on stdout.
+	#if os(Windows)
 	var c = Configuration.create(Executable.name("findstr"))
+	#else
+	var c = Configuration.create(Executable.path(try FilePath.from("/usr/bin/grep") otherwise return 2))
+	#endif
 	var argv = StringArray.create()
 	argv.push(".")
 	c.arguments = argv

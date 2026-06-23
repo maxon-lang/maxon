@@ -31,9 +31,30 @@ ExitCode: 33
 ---
 // CompiledIR
 module {
+  func @Line.create(rcx: i64, rdx: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov r12, rcx
+    x64.mov r13, rdx
+    x64.lea rdx, [rip+__destruct_Line]
+    x64.mov ecx, 16
+    x64.call stdlib.__mm_alloc
+    x64.mov r14, r8
+    x64.mov rcx, r14
+    x64.call stdlib.__mm_incref
+    x64.xor r8d, r8d
+    x64.mov [r14+0], r8 (8b)
+    x64.xor r8d, r8d
+    x64.mov [r14+8], r8 (8b)
+    x64.mov [r14+0], r12 (8b)
+    x64.mov [r14+8], r13 (8b)
+    x64.mov r8, r14
+    x64.epilogue
+    x64.ret
+  }
   func @main() -> u32 {
   entry:
-    x64.prologue stack_size=48
+    x64.prologue stack_size=32
     x64.xor edx, edx
     x64.mov ecx, 16
     x64.call stdlib.__mm_alloc
@@ -54,27 +75,23 @@ module {
     x64.mov [r13+0], r8 (8b)
     x64.mov r8d, 20
     x64.mov [r13+8], r8 (8b)
-    x64.lea rdx, [rip+__destruct_Line]
-    x64.mov ecx, 16
-    x64.call stdlib.__mm_alloc
-    x64.mov r14, r8
-    x64.mov [r14+0], r12 (8b)
-    x64.mov [r14+8], r13 (8b)
-    x64.mov r8, [r14+8] (8b)
-    x64.mov r9, [r14+8] (8b)
-    x64.mov rsi, [r14+0] (8b)
-    x64.mov rdi, [r14+0] (8b)
-    x64.mov r12, [r8+8] (8b)
-    x64.mov r13, [r9+0] (8b)
-    x64.mov r15, [rsi+8] (8b)
-    x64.mov r8, [rdi+0] (8b)
-    x64.mov [rbp+-8], r8
-    x64.mov rcx, r14
-    x64.call mm_drop
-    x64.mov r8, [rbp+-8]
-    x64.add r8, r15
-    x64.add r8, r13
+    x64.mov rcx, r12
+    x64.mov rdx, r13
+    x64.call Line.create
+    x64.mov r9, [r8+8] (8b)
+    x64.mov rsi, [r8+8] (8b)
+    x64.mov rdi, [r8+0] (8b)
+    x64.mov rax, [r8+0] (8b)
+    x64.mov r12, [r9+8] (8b)
+    x64.mov r13, [rsi+0] (8b)
+    x64.mov r14, [rdi+8] (8b)
+    x64.mov r15, [rax+0] (8b)
+    x64.mov rcx, r8
+    x64.call __mm_decref_maybenull_helper
+    x64.add r15, r14
+    x64.add r15, r13
     x64.mov r9d, 4294967295
+    x64.mov r8, r15
     x64.add r8, r12
     x64.cmp r8, r9
     x64.jbe __range_ok_0

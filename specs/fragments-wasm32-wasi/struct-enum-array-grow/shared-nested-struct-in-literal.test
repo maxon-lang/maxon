@@ -38,6 +38,26 @@ ExitCode: 3
 ---
 // CompiledIR
 module {
+  func @Outer.create(local0: i64, local1: i64, local2: i64) -> i64 {
+  entry:
+    %12 = mir.param local0 : i64
+    %13 = mir.param local1 : i64
+    %14 = mir.param local2 : i64
+    %3 = mir.mov_imm 24 : i64
+    %5 = mir.func_addr @__destruct_Outer
+    %4 = mir.call @stdlib.__mm_alloc(%3, %5)
+    %15 = mir.call @stdlib.__mm_incref(%4)
+    %6 = mir.mov_imm 0 : i64
+    mir.store %6, %4, 0 width: qword
+    %7 = mir.mov_imm 0 : i64
+    mir.store %7, %4, 8 width: qword
+    %8 = mir.mov_imm 0 : i64
+    mir.store %8, %4, 16 width: qword
+    mir.store %12, %4, 0 width: qword
+    mir.store %13, %4, 8 width: qword
+    mir.store %14, %4, 16 width: qword
+    mir.ret %4
+  }
   func @makeOuter() -> i64 {
   entry:
     %1 = mir.global_addr @__layout_Array_Integer
@@ -46,20 +66,16 @@ module {
     %10 = mir.mov_imm 16 : i64
     %11 = mir.func_addr @__destruct_Inner
     %12 = mir.call @stdlib.__mm_alloc(%10, %11)
-    %16 = mir.call @stdlib.__mm_incref(%12)
+    %14 = mir.call @stdlib.__mm_incref(%12)
+    %13 = mir.mov_imm 0 : i64
+    mir.store %13, %12, 0 width: qword
     mir.store %2, %12, 0 width: qword
     mir.store %3, %12, 8 width: qword
     %7 = mir.global_addr @__layout_Array_Integer
     %8 = mir.call @Array.create(%7)
-    %13 = mir.mov_imm 24 : i64
-    %14 = mir.func_addr @__destruct_Outer
-    %15 = mir.call @stdlib.__mm_alloc(%13, %14)
-    %18 = mir.call @stdlib.__mm_incref(%12)
-    %17 = mir.call @stdlib.__mm_incref(%15)
-    mir.store %12, %15, 0 width: qword
-    mir.store %12, %15, 8 width: qword
-    mir.store %8, %15, 16 width: qword
-    mir.ret %15
+    %15 = mir.call @stdlib.__mm_incref(%12)
+    %9 = mir.call @Outer.create(%12, %12, %8)
+    mir.ret %9
   }
   func @main() -> u8 {
   entry:

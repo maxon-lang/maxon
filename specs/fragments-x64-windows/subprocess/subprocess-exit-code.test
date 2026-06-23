@@ -1,9 +1,16 @@
 // Test: subprocess-exit-code
 function main() returns ExitCode
+	#if os(Windows)
 	let exe = Executable.name("cmd")
 	var argv = StringArray.create()
 	argv.push("/c")
 	argv.push("exit 42")
+	#else
+	let exe = Executable.path(try FilePath.from("/bin/sh") otherwise return 2)
+	var argv = StringArray.create()
+	argv.push("-c")
+	argv.push("exit 42")
+	#endif
 	let result = try Subprocess.run(exe, arguments: argv) otherwise return 2
 	if result.exitCode() != 42 'check-exit'
 		return 3

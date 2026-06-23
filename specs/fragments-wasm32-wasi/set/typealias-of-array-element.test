@@ -23,15 +23,19 @@ module {
     %32 = mir.mov_imm 32 : i64
     %33 = mir.func_addr @__destruct_Set
     %34 = mir.call @stdlib.__mm_alloc(%32, %33)
-    %36 = mir.mov_imm 8 : i64
-    %37 = mir.sub.i64 %34, %36
-    mir.atomic_inc %37
+    %38 = mir.mov_imm 8 : i64
+    %39 = mir.sub.i64 %34, %38
+    mir.atomic_inc %39
+    %36 = mir.mov_imm 0 : i64
+    mir.store %36, %34, 0 width: qword
+    %37 = mir.mov_imm 0 : i64
+    mir.store %37, %34, 8 width: qword
     %6 = mir.global_addr @__layout_Array_Byte
     %7 = mir.call @Array.create(%6)
     %10 = mir.global_addr @__layout_Set_ByteArray
     %11 = mir.global_addr @__witness_Array_with_Byte_Hashable
     %12 = mir.global_addr @__witness_Array_with_Byte_Equatable
-    %38 = mir.call @stdlib.__mm_incref(%7)
+    %40 = mir.call @stdlib.__mm_incref(%7)
     %13 = mir.call @Set.insert(%34, %7, %10, %11, %12)
     %15 = mir.global_addr @__layout_Set_ByteArray
     %16 = mir.global_addr @__witness_Array_with_Byte_Hashable
@@ -41,8 +45,8 @@ module {
     %20 = mir.cmp ne, %18, %19
     mir.cond_br %20 [then: count_0(), else: count_0.after()]
   count_0:
-    %41 = mir.call @__mm_decref_maybenull_helper(%7)
-    %40 = mir.call @__mm_decref_maybenull_helper(%34)
+    %43 = mir.call @__mm_decref_maybenull_helper(%7)
+    %42 = mir.call @__mm_decref_maybenull_helper(%34)
     %21 = mir.mov_imm 1 : i64
     mir.ret %21
   count_0.after:
@@ -52,7 +56,7 @@ module {
     %27 = mir.call @Set.contains(%34, %7, %24, %25, %26)
     %28 = mir.mov_imm 1 : i64
     %29 = mir.xor.i64 %27, %28
-    %39 = mir.call @__mm_decref_maybenull_helper(%34)
+    %41 = mir.call @__mm_decref_maybenull_helper(%34)
     mir.cond_br %29 [then: present_0(), else: present_0.after()]
   present_0:
     %30 = mir.mov_imm 2 : i64

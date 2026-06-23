@@ -55,9 +55,30 @@ new
 ---
 // CompiledIR
 module {
-  func @api.__module_init_2() {
+  func @Database.create(rcx: i64, rdx: i64) -> i64 {
   entry:
     x64.prologue stack_size=32
+    x64.mov r12, rcx
+    x64.mov r13, rdx
+    x64.lea rdx, [rip+__destruct_Database]
+    x64.mov ecx, 16
+    x64.call stdlib.__mm_alloc
+    x64.mov r14, r8
+    x64.mov rcx, r14
+    x64.call stdlib.__mm_incref
+    x64.xor r8d, r8d
+    x64.mov [r14+0], r8 (8b)
+    x64.xor r8d, r8d
+    x64.mov [r14+8], r8 (8b)
+    x64.mov [r14+0], r12 (8b)
+    x64.mov [r14+8], r13 (8b)
+    x64.mov r8, r14
+    x64.epilogue
+    x64.ret
+  }
+  func @api.__module_init_2() {
+  entry:
+    x64.prologue stack_size=16
     x64.lea rdx, [rip+__destruct_Map]
     x64.mov ecx, 40
     x64.call stdlib.__mm_alloc
@@ -65,20 +86,20 @@ module {
     x64.mov r8, r12
     x64.sub r8, 8
     x64.lock inc qword ptr [r8]
+    x64.xor r8d, r8d
+    x64.mov [r12+0], r8 (8b)
+    x64.xor r8d, r8d
+    x64.mov [r12+8], r8 (8b)
+    x64.xor r8d, r8d
+    x64.mov [r12+16], r8 (8b)
     x64.lea rcx, [rip+__layout_Array_String]
     x64.call Array.create
-    x64.mov r13, r8
-    x64.lea rdx, [rip+__destruct_Database]
-    x64.mov ecx, 16
-    x64.call stdlib.__mm_alloc
-    x64.mov r14, r8
-    x64.mov rcx, r14
-    x64.call stdlib.__mm_incref
-    x64.mov [r14+0], r12 (8b)
-    x64.mov [r14+8], r13 (8b)
-    x64.lea r8, [rip+__data_db]
-    x64.mov rcx, [r8+0] (8b)
-    x64.mov [r8+0], r14 (8b)
+    x64.mov rcx, r12
+    x64.mov rdx, r8
+    x64.call Database.create
+    x64.lea r9, [rip+__data_db]
+    x64.mov rcx, [r9+0] (8b)
+    x64.mov [r9+0], r8 (8b)
     x64.call __mm_decref_maybenull_helper
     x64.epilogue
     x64.ret

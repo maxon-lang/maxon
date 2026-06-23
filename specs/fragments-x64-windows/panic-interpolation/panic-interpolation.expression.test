@@ -2,13 +2,15 @@
 function main() returns ExitCode
 		let a = 3
 		let b = 4
-		panic("result: {a + b}")
+		if a < b 'check'
+				panic("result: {a + b}")
+		end 'check'
 		return 0
 end 'main'
 ---
 ExitCode: 1
 Stderr: ```
-panic at panic-interpolation.expression.test:5: result: 7
+panic at panic-interpolation.expression.test:6: result: 7
 Stack trace:
   in main
   in mrt_start
@@ -19,15 +21,18 @@ module {
   func @main() -> u32 {
   entry:
     x64.prologue stack_size=48
+    x64.mov r12d, 3
+  check_0:
     x64.mov ecx, 21
     x64.call mrt_alloc
-    x64.mov r12, r8
-    x64.mov ecx, 7
-    x64.mov rdx, r12
-    x64.call mrt_i64_to_string
     x64.mov r13, r8
+    x64.mov rcx, r12
+    x64.add rcx, 4
+    x64.mov rdx, r13
+    x64.call mrt_i64_to_string
+    x64.mov r12, r8
     x64.xor r14d, r14d
-    x64.mov r8, r13
+    x64.mov r8, r12
     x64.add r8, 56
     x64.mov r15d, 1
     x64.add r8, 0
@@ -49,11 +54,11 @@ module {
     x64.mov r8, [rbp+-40]
     x64.add r8, 56
     x64.mov [rbp-8], r8
-    x64.mov [rbp-16], r12
-    x64.mov [rbp-24], r13
+    x64.mov [rbp-16], r13
+    x64.mov [rbp-24], r12
     x64.rep_movsb
     x64.lea r9, [rip+__istr_1]
-    x64.add r8, r13
+    x64.add r8, r12
     x64.mov [rbp-8], r8
     x64.mov [rbp-16], r9
     x64.mov [rbp-24], r14
@@ -64,7 +69,7 @@ module {
     x64.mov [rbp-16], r9
     x64.mov [rbp-24], r15
     x64.rep_movsb
-    x64.mov rcx, r12
+    x64.mov rcx, r13
     x64.call stdlib.__mm_decref
     x64.lea rdx, [rip+stdlib.__destruct___ManagedMemory]
     x64.mov ecx, 48
@@ -94,6 +99,7 @@ module {
     x64.call mrt_panic
     x64.mov rcx, r13
     x64.call mm_drop
+  check_0.after:
     x64.xor r8d, r8d
     x64.epilogue
     x64.ret

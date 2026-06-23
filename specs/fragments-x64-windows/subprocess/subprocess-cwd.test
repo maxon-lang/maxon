@@ -1,15 +1,21 @@
 // Test: subprocess-cwd
 function main() returns ExitCode
 	let cwd = Directory.currentPath()
+	#if os(Windows)
 	let exe = Executable.name("cmd")
 	var argv = StringArray.create()
 	argv.push("/c")
 	argv.push("cd")
+	#else
+	let exe = Executable.path(try FilePath.from("/bin/pwd") otherwise return 2)
+	var argv = StringArray.create()
+	#endif
 	let result = try Subprocess.run(exe, arguments: argv, workingDirectory: cwd) otherwise return 2
 	if not result.succeeded() 'check-success'
 		return 3
 	end 'check-success'
-	// `cmd /c cd` prints the working directory it inherited from us.
+	// `cmd /c cd` (Windows) / `pwd` (POSIX) prints the working directory it
+	// inherited from us.
 	if not result.stdout.contains(cwd.path) 'check-cwd'
 		return 4
 	end 'check-cwd'

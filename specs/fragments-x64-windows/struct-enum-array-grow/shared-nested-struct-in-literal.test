@@ -38,9 +38,34 @@ ExitCode: 3
 ---
 // CompiledIR
 module {
-  func @makeOuter() -> i64 {
+  func @Outer.create(rcx: i64, rdx: i64, rax: i64) -> i64 {
   entry:
     x64.prologue stack_size=32
+    x64.mov r12, rcx
+    x64.mov r13, rdx
+    x64.mov r14, rax
+    x64.lea rdx, [rip+__destruct_Outer]
+    x64.mov ecx, 24
+    x64.call stdlib.__mm_alloc
+    x64.mov r15, r8
+    x64.mov rcx, r15
+    x64.call stdlib.__mm_incref
+    x64.xor r8d, r8d
+    x64.mov [r15+0], r8 (8b)
+    x64.xor r8d, r8d
+    x64.mov [r15+8], r8 (8b)
+    x64.xor r8d, r8d
+    x64.mov [r15+16], r8 (8b)
+    x64.mov [r15+0], r12 (8b)
+    x64.mov [r15+8], r13 (8b)
+    x64.mov [r15+16], r14 (8b)
+    x64.mov r8, r15
+    x64.epilogue
+    x64.ret
+  }
+  func @makeOuter() -> i64 {
+  entry:
+    x64.prologue stack_size=16
     x64.lea rcx, [rip+__layout_Array_Integer]
     x64.call Array.create
     x64.mov r12, r8
@@ -50,24 +75,20 @@ module {
     x64.mov r13, r8
     x64.mov rcx, r13
     x64.call stdlib.__mm_incref
+    x64.xor r8d, r8d
+    x64.mov [r13+0], r8 (8b)
     x64.mov [r13+0], r12 (8b)
     x64.mov r8d, 42
     x64.mov [r13+8], r8 (8b)
     x64.lea rcx, [rip+__layout_Array_Integer]
     x64.call Array.create
     x64.mov r12, r8
-    x64.lea rdx, [rip+__destruct_Outer]
-    x64.mov ecx, 24
-    x64.call stdlib.__mm_alloc
-    x64.mov r14, r8
     x64.mov rcx, r13
     x64.call stdlib.__mm_incref
-    x64.mov rcx, r14
-    x64.call stdlib.__mm_incref
-    x64.mov [r14+0], r13 (8b)
-    x64.mov [r14+8], r13 (8b)
-    x64.mov [r14+16], r12 (8b)
-    x64.mov r8, r14
+    x64.mov rcx, r13
+    x64.mov rdx, r13
+    x64.mov rax, r12
+    x64.call Outer.create
     x64.epilogue
     x64.ret
   }

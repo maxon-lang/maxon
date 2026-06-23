@@ -1,10 +1,16 @@
 // Test: subprocess-run-path
 function main() returns ExitCode
+	#if os(Windows)
 	let exe = Executable.path(try FilePath.from("C:/Windows/System32/cmd.exe") otherwise return 2)
 	var argv = StringArray.create()
 	argv.push("/c")
 	argv.push("echo")
 	argv.push("via-path")
+	#else
+	let exe = Executable.path(try FilePath.from("/bin/echo") otherwise return 2)
+	var argv = StringArray.create()
+	argv.push("via-path")
+	#endif
 	let result = try Subprocess.run(exe, arguments: argv) otherwise return 3
 	if not result.succeeded() 'check-success'
 		return 4
