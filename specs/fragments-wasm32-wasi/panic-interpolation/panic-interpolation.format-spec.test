@@ -1,13 +1,15 @@
 // Test: panic-interpolation.format-spec
 function main() returns ExitCode
 		let x = 42
-		panic("hex: {x:x}")
+		if x > 0 'check'
+				panic("hex: {x:x}")
+		end 'check'
 		return 0
 end 'main'
 ---
 ExitCode: 1
 Stderr: ```
-panic at panic-interpolation.format-spec.test:4: hex: 2a
+panic at panic-interpolation.format-spec.test:5: hex: 2a
 Stack trace:
   in main
   in mrt_start
@@ -18,56 +20,57 @@ module {
   func @main() -> u8 {
   entry:
     %0 = mir.mov_imm 42 : i64
-    %2 = mir.global_addr @__istr_0
-    %3 = mir.mov_imm 54 : i64
-    %4 = mir.mov_imm 72 : i64
-    %5 = mir.call @mrt_alloc(%4)
-    %6 = mir.global_addr @__istr_1
-    %7 = mir.mov_imm 1 : i64
-    %8 = mir.call @mrt_i64_to_string_fmt(%0, %5, %6, %7)
-    %9 = mir.global_addr @__istr_2
-    %10 = mir.mov_imm 0 : i64
-    %11 = mir.global_addr @__istr_3
-    %12 = mir.mov_imm 1 : i64
-    %14 = mir.mov_imm 54 : i64
-    %15 = mir.add.i64 %14, %8
-    %16 = mir.add.i64 %15, %10
-    %17 = mir.add.i64 %16, %12
-    %18 = mir.mov_imm 1 : i64
-    %19 = mir.add.i64 %17, %18
-    %20 = mir.call @mrt_alloc(%19)
-    mir.memcpy %20, %2, %3
-    %21 = mir.add.i64 %20, %3
-    mir.memcpy %21, %5, %8
-    %22 = mir.add.i64 %21, %8
-    mir.memcpy %22, %9, %10
-    %23 = mir.add.i64 %22, %10
-    mir.memcpy %23, %11, %12
-    %25 = mir.call @stdlib.__mm_decref(%5)
-    %26 = mir.mov_imm 48 : i64
-    %27 = mir.func_addr @stdlib.__destruct___ManagedMemory
-    %28 = mir.call @mrt_alloc_with_dtor(%26, %27)
-    %29 = mir.mov_imm 0 : i64
-    mir.store %29, %28, 40 width: qword
-    mir.store %20, %28, 0 width: qword
-    mir.store %17, %28, 8 width: qword
-    mir.store %17, %28, 16 width: qword
-    %30 = mir.mov_imm 1 : i64
-    mir.store %30, %28, 24 width: qword
-    %31 = mir.mov_imm -1 : i64
-    mir.store %31, %28, 32 width: qword
-    %33 = mir.mov_imm 16 : i64
-    %34 = mir.func_addr @__destruct_String
-    %32 = mir.call @stdlib.__mm_alloc(%33, %34)
-    mir.store %28, %32, 0 width: qword
-    %35 = mir.mov_imm 0 : i64
-    mir.store %35, %32, 8 width: qword
-    %36 = mir.load %32, 0 width: qword
-    %37 = mir.load %36, 0 width: qword
-    %38 = mir.call @mrt_panic(%37)
-    %40 = mir.call @mm_drop(%32)
-    %39 = mir.mov_imm 0 : i64
-    mir.ret %39
+    %2 = mir.mov_imm 0 : i64
+    mir.br check_0()
+  check_0:
+    %5 = mir.global_addr @__istr_0
+    %6 = mir.mov_imm 54 : i64
+    %7 = mir.mov_imm 72 : i64
+    %8 = mir.call @mrt_alloc(%7)
+    %9 = mir.global_addr @__istr_1
+    %10 = mir.mov_imm 1 : i64
+    %11 = mir.call @mrt_i64_to_string_fmt(%0, %8, %9, %10)
+    %12 = mir.global_addr @__istr_2
+    %14 = mir.global_addr @__istr_3
+    %15 = mir.mov_imm 1 : i64
+    %17 = mir.mov_imm 54 : i64
+    %18 = mir.add.i64 %17, %11
+    %19 = mir.add.i64 %18, %2
+    %20 = mir.add.i64 %19, %15
+    %21 = mir.mov_imm 1 : i64
+    %22 = mir.add.i64 %20, %21
+    %23 = mir.call @mrt_alloc(%22)
+    mir.memcpy %23, %5, %6
+    %24 = mir.add.i64 %23, %6
+    mir.memcpy %24, %8, %11
+    %25 = mir.add.i64 %24, %11
+    mir.memcpy %25, %12, %2
+    %26 = mir.add.i64 %25, %2
+    mir.memcpy %26, %14, %15
+    %28 = mir.call @stdlib.__mm_decref(%8)
+    %29 = mir.mov_imm 48 : i64
+    %30 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %31 = mir.call @mrt_alloc_with_dtor(%29, %30)
+    mir.store %2, %31, 40 width: qword
+    mir.store %23, %31, 0 width: qword
+    mir.store %20, %31, 8 width: qword
+    mir.store %20, %31, 16 width: qword
+    %33 = mir.mov_imm 1 : i64
+    mir.store %33, %31, 24 width: qword
+    %34 = mir.mov_imm -1 : i64
+    mir.store %34, %31, 32 width: qword
+    %36 = mir.mov_imm 16 : i64
+    %37 = mir.func_addr @__destruct_String
+    %35 = mir.call @stdlib.__mm_alloc(%36, %37)
+    mir.store %31, %35, 0 width: qword
+    mir.store %2, %35, 8 width: qword
+    %39 = mir.load %35, 0 width: qword
+    %40 = mir.load %39, 0 width: qword
+    %41 = mir.call @mrt_panic(%40)
+    %42 = mir.call @mm_drop(%35)
+    mir.br check_0.after()
+  check_0.after:
+    mir.ret %2
   }
 }
 ---

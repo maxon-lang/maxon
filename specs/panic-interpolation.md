@@ -47,7 +47,9 @@ Stack trace:
 ```maxon
 function main() returns ExitCode
 		let x = 42
-		panic("value is {x}")
+		if x > 0 'check'
+				panic("value is {x}")
+		end 'check'
 		return 0
 end 'main'
 ```
@@ -55,7 +57,7 @@ end 'main'
 1
 ```
 ```stderr
-panic at panic-interpolation.basic-int.test:4: value is 42
+panic at panic-interpolation.basic-int.test:5: value is 42
 Stack trace:
   in main
   in mrt_start
@@ -66,7 +68,9 @@ Stack trace:
 function main() returns ExitCode
 		let a = 10
 		let b = 20
-		panic("{a} != {b}")
+		if a < b 'check'
+				panic("{a} != {b}")
+		end 'check'
 		return 0
 end 'main'
 ```
@@ -74,7 +78,7 @@ end 'main'
 1
 ```
 ```stderr
-panic at panic-interpolation.multiple-values.test:5: 10 != 20
+panic at panic-interpolation.multiple-values.test:6: 10 != 20
 Stack trace:
   in main
   in mrt_start
@@ -85,7 +89,9 @@ Stack trace:
 function main() returns ExitCode
 		let a = 3
 		let b = 4
-		panic("result: {a + b}")
+		if a < b 'check'
+				panic("result: {a + b}")
+		end 'check'
 		return 0
 end 'main'
 ```
@@ -93,7 +99,7 @@ end 'main'
 1
 ```
 ```stderr
-panic at panic-interpolation.expression.test:5: result: 7
+panic at panic-interpolation.expression.test:6: result: 7
 Stack trace:
   in main
   in mrt_start
@@ -103,7 +109,9 @@ Stack trace:
 ```maxon
 function main() returns ExitCode
 		let x = 42
-		panic("hex: {x:x}")
+		if x > 0 'check'
+				panic("hex: {x:x}")
+		end 'check'
 		return 0
 end 'main'
 ```
@@ -111,7 +119,7 @@ end 'main'
 1
 ```
 ```stderr
-panic at panic-interpolation.format-spec.test:4: hex: 2a
+panic at panic-interpolation.format-spec.test:5: hex: 2a
 Stack trace:
   in main
   in mrt_start
@@ -146,7 +154,9 @@ Stack trace:
 <!-- test: panic-interpolation.plain-string-unchanged -->
 ```maxon
 function main() returns ExitCode
-		panic("simple message")
+		if true 'check'
+				panic("simple message")
+		end 'check'
 		return 0
 end 'main'
 ```
@@ -154,7 +164,7 @@ end 'main'
 1
 ```
 ```stderr
-panic at panic-interpolation.plain-string-unchanged.test:3: simple message
+panic at panic-interpolation.plain-string-unchanged.test:4: simple message
 Stack trace:
   in main
   in mrt_start

@@ -1,12 +1,14 @@
 // Test: panic.basic
 function main() returns ExitCode
-		panic("something went wrong")
+		if true 'check'
+				panic("something went wrong")
+		end 'check'
 		return 0
 end 'main'
 ---
 ExitCode: 1
 Stderr: ```
-panic at panic.basic.test:3: something went wrong
+panic at panic.basic.test:4: something went wrong
 Stack trace:
   in main
   in mrt_start
@@ -17,10 +19,11 @@ module {
   func @main() -> u8 {
   entry:
     arm64.prologue stack_size=16
-    arm64.adrp_add_rdata x0, __panic_msg_7f99ff82334282a1
+    arm64.adrp_add_rdata x0, __panic_msg_a297ffed1062f502
     arm64.ldr x19, [x29, #16]
     arm64.mov x0, x19
     arm64.bl mrt_panic
+  check_0.after:
     arm64.mov x0, #0
     arm64.epilogue
     arm64.ret
