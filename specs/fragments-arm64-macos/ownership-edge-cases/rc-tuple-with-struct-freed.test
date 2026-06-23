@@ -19,111 +19,43 @@ ExitCode: 1
 ---
 // CompiledIR
 module {
-  func @Point.create(x: i64, y: i64) -> i64 {
-  entry:
-    arm64.prologue stack_size=64
-    arm64.str x0, [x29, #-16]
-    arm64.str x1, [x29, #-24]
-    arm64.mov x0, #16
-    arm64.mov x1, #0
-    arm64.mov x2, #65
-    arm64.bl mm_alloc
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x29, #-16]
-    arm64.str x1, [x0, #0]
-    arm64.ldr x2, [x29, #-8]
-    arm64.ldr x3, [x29, #-24]
-    arm64.str x3, [x2, #8]
-    arm64.ldr x4, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.bl mm_incref
-    arm64.ldr x5, [x29, #-8]
-    arm64.mov x0, x5
-    arm64.epilogue stack_size=64
-    arm64.ret
-  }
   func @main() -> u8 {
   entry:
-    arm64.prologue stack_size=64
-    arm64.mov x0, #1
-    arm64.mov x0, #10
-    arm64.mov x1, #20
-    arm64.bl Point.create
-    arm64.str x0, [x29, #-8]
-    arm64.adrp_add_func x1, __destruct___Tuple_i64_Point
-    arm64.mov x2, x1
-    arm64.mov x1, x2
+    arm64.prologue stack_size=32
+    arm64.mov x1, #0
     arm64.mov x0, #16
-    arm64.mov x2, #66
-    arm64.bl mm_alloc
-    arm64.str x0, [x29, #-16]
-    arm64.ldr x3, [x29, #-16]
-    arm64.mov x4, #1
-    arm64.str x4, [x3, #0]
-    arm64.ldr x5, [x29, #-8]
-    arm64.ldr x6, [x29, #-16]
-    arm64.str x5, [x6, #8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.bl mm_incref
-    arm64.ldr x7, [x29, #-16]
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl mm_incref
-    arm64.ldr x8, [x29, #-16]
-    arm64.ldr x9, [x8, #0]
-    arm64.mov x10, #0
-    arm64.cmp x9, x10
-    arm64.cset x11, lt
-    arm64.mov x12, #255
-    arm64.cmp x9, x12
-    arm64.cset x13, gt
-    arm64.orr x14, x11, x13
-    arm64.cmp x14, #0
-    arm64.b.ne main.__range_panic_0
-    arm64.b main.__range_ok_0
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
+    arm64.mov x0, x19
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, #10
+    arm64.str x0, [x19, #0] (8b)
+    arm64.mov x0, #20
+    arm64.str x0, [x19, #8] (8b)
+    arm64.adrp_add_rdata x0, __layout___Tuple2_Int_Point
+    arm64.ldr x0, [x29, #16]
+    arm64.ldr x1, [x0, #40] (8b)
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x20, x0
+    arm64.mov x0, #1
+    arm64.str x0, [x20, #0] (8b)
+    arm64.str x19, [x20, #8] (8b)
+    arm64.ldr x19, [x20, #0] (8b)
+    arm64.mov x0, x20
+    arm64.bl mm_drop
+    arm64.mov x0, #255
+    arm64.cmp x19, x0
+    arm64.cset x0, hi
+    arm64.b.ls __range_ok_0
   __range_panic_0:
-    arm64.adrp_add_symdata x0, __panic_msg_53
-    arm64.mov x1, x0
-    arm64.mov x0, x1
+    arm64.adrp_add_rdata x0, __panic_msg_e72349da67c2c921
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
     arm64.bl mrt_panic
   __range_ok_0:
-    arm64.ldr x0, [x29, #-8]
-    arm64.str x9, [x29, #-24]
-    arm64.cmp x0, #0
-    arm64.b.eq main.__skip_guarded_31
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_31
-    arm64.ldr x1, [x29, #-16]
-    arm64.cmp x1, #0
-    arm64.b.eq main.__skip_guarded_33
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_33
-    arm64.ldr x0, [x29, #-24]
-    arm64.epilogue stack_size=64
-    arm64.ret
-  }
-  func @__destruct_Point(ptr: i64) {
-  entry:
-    arm64.b __destruct_Point.done
-  done:
-    arm64.ret
-  }
-  func @__destruct___Tuple_i64_Point(ptr: i64) {
-  entry:
-    arm64.prologue stack_size=48
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x0, #8]
-    arm64.str x1, [x29, #-16]
-    arm64.cmp x1, #0
-    arm64.b.eq __destruct___Tuple_i64_Point.__skip_guarded_4
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl mm_decref
-    arm64.label __destruct___Tuple_i64_Point.__skip_guarded_4
-    arm64.b __destruct___Tuple_i64_Point.done
-  done:
-    arm64.epilogue stack_size=48
+    arm64.mov x0, x19
+    arm64.epilogue
     arm64.ret
   }
 }
