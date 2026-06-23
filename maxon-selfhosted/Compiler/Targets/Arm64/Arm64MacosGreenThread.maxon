@@ -3125,17 +3125,21 @@ function emitArm64MaxonSleep(code ByteArray, relocations RelocationArray, callFi
 end 'emitArm64MaxonSleep'
 
 // =============================================================================
-// __io_check_completions(): INTENTIONALLY a no-op on arm64-macos — not a missing
-// port. kqueue exists only to drive non-blocking SOCKET I/O (the C# reference's
-// __io_submit_read/write + __io_poll_kqueue path), but this runtime has no real
-// sockets: mrt_managed_socket_* (runtime.std) are sentinel throw-stubs, so nothing
-// ever reaches __io_submit_read/write and the completion queue is always empty.
-// kqueue is deliberately out of scope on every non-windows target (see
-// X64Backend.maxon: the green-thread/IOCP runtime exists only on x64-windows).
-// Subprocess streaming uses non-blocking read() + __gt_yield, not kqueue. The
-// await/yield/sleep loops call this for parity with the x64 runtime; it returns
-// immediately. When/if a real socket runtime lands, this becomes the kqueue
-// completion drainer ported from C# __io_poll_kqueue. Void.
+// __io_check_completions(): a no-op in THIS runtime because the self-hosted
+// arm64-macos runtime has no kqueue completion loop — NOT because kqueue is
+// "only for sockets". The C# bootstrap reference drives non-blocking I/O
+// completion through kqueue (__io_submit_read/write register EVFILT_READ/WRITE
+// + __io_poll_kqueue drains them) for BOTH socket I/O AND subprocess PIPE
+// streaming — its read_stdout_line/read_stderr_line park GTs on EVFILT_READ.
+// The self-hosted side instead does its only async I/O — the same streaming-
+// subprocess line reads — by setting the pipe ends O_NONBLOCK (fcntl) and
+// refilling via a non-blocking read() + __gt_yield poll loop (see
+// Arm64MacosSubprocess.maxon). So nothing here parks on kqueue and the
+// completion queue is always empty -> this returns immediately. The await/
+// yield/sleep loops still call it for parity with the x64 runtime. A kqueue
+// port (parking on EVFILT_READ instead of busy-polling the subprocess pipes)
+// would be an EFFICIENCY improvement, not dead code — deferred, not impossible.
+// Void.
 // =============================================================================
 function emitArm64IoCheckCompletions(code ByteArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
 	arm64RecordLabel(labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "__io_check_completions", offset: code.count())
