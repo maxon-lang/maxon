@@ -4696,7 +4696,14 @@ end 'tryAnyStructInnerAlias'
 function resolveOverloadFromArgs(project Project, bareName String, args ByteArrayArray, argTypes MaxonTypeArray, producerTypes ProducerTypeMap, hasSelf bool) returns String
 	let variants = try project.overloadedNames.get(bareName) otherwise return bareName
 	let resolvedArgTypes = resolveArgTypesFromProducers(args, argTypes: argTypes, producerTypes: producerTypes)
-	let resolved = resolveOverloadedCallee(project, bareQualifiedName: bareName, argTypes: resolvedArgTypes, hasSelf: hasSelf)
+	// On a self-dispatch the first resolved arg IS the receiver — hand it to the
+	// resolver so its generic-overload tie-break can substitute the receiver's
+	// element binding (see the receiver-substitution scan in resolveOverloadedCallee).
+	var receiverType = MaxonType.unresolved
+	if hasSelf and resolvedArgTypes.count() > 0 'haveReceiver'
+		receiverType = try resolvedArgTypes.get(0) otherwise MaxonType.unresolved
+	end 'haveReceiver'
+	let resolved = resolveOverloadedCallee(project, bareQualifiedName: bareName, argTypes: resolvedArgTypes, hasSelf: hasSelf, receiverType: receiverType)
 	if resolved == bareName 'noVariantMatch'
 		return firstOverloadVariant(variants, fallback: bareName)
 	end 'noVariantMatch'
@@ -10153,7 +10160,7 @@ function resolveCallSite(project Project, opIdx OpIndex, callee ByteArray, callC
 	// call against a same-name static/instance pair: qualifyCalleeForContext
 	// probes `Type.method~static` first for qualified contexts, so the static
 	// body is bound here without a second preference pass.
-	var resolved = resolveOverloadedCallee(project, bareQualifiedName: chased, argTypes: argTypes, hasSelf: false, argLabels: argLabels)
+	var resolved = resolveOverloadedCallee(project, bareQualifiedName: chased, argTypes: argTypes, hasSelf: false, argLabels: argLabels, receiverType: receiverType)
 	// Char-byte disambiguation: when the integer-fast-path char literal `'e'`
 	// flows into an overload set that has both String and Character variants,
 	// the raw `MaxonType.integer` arg makes neither variant uniquely match.
@@ -10163,7 +10170,7 @@ function resolveCallSite(project Project, opIdx OpIndex, callee ByteArray, callC
 	if resolved == chased and project.overloadedNames.contains(chased) 'tryCharByteRetry'
 		let retryArgTypes = retypeCharByteArgsToCharacter(project, args: args, argTypes: argTypes, hasSelf: false, funcName: funcName)
 		if retryArgTypes.didSubstitute 'didRetype'
-			resolved = resolveOverloadedCallee(project, bareQualifiedName: chased, argTypes: retryArgTypes.types, hasSelf: false, argLabels: argLabels)
+			resolved = resolveOverloadedCallee(project, bareQualifiedName: chased, argTypes: retryArgTypes.types, hasSelf: false, argLabels: argLabels, receiverType: receiverType)
 		end 'didRetype'
 	end 'tryCharByteRetry'
 	// Ambiguous-overload detection: the resolver returned the bare overload
@@ -10427,14 +10434,14 @@ function resolveMethodCallSite(project Project, module MaxonModule, opIdx OpInde
 	end 'tryPrimitive'
 	let bareMethodName = String.from(methodName)
 	let baseQualified = "{receiverStructName}.{bareMethodName}"
-	var resolved = resolveOverloadedCallee(project, bareQualifiedName: baseQualified, argTypes: argTypes, hasSelf: false, argLabels: argLabels)
+	var resolved = resolveOverloadedCallee(project, bareQualifiedName: baseQualified, argTypes: argTypes, hasSelf: false, argLabels: argLabels, receiverType: receiverType)
 	// Char-byte disambiguation: same retry pattern as resolveCallSite. The
 	// methodCall arg list has no receiver-pseudo-arg (instance dispatch
 	// supplies the receiver out-of-band), so `hasSelf` stays false here.
 	if resolved == baseQualified and project.overloadedNames.contains(baseQualified) 'tryCharByteRetry'
 		let retryArgTypes = retypeCharByteArgsToCharacter(project, args: args, argTypes: argTypes, hasSelf: false, funcName: funcName)
 		if retryArgTypes.didSubstitute 'didRetype'
-			resolved = resolveOverloadedCallee(project, bareQualifiedName: baseQualified, argTypes: retryArgTypes.types, hasSelf: false, argLabels: argLabels)
+			resolved = resolveOverloadedCallee(project, bareQualifiedName: baseQualified, argTypes: retryArgTypes.types, hasSelf: false, argLabels: argLabels, receiverType: receiverType)
 		end 'didRetype'
 	end 'tryCharByteRetry'
 	// Ambiguous-overload detection for instance method calls (E3007).

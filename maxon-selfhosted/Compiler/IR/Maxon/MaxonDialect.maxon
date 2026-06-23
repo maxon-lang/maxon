@@ -2913,7 +2913,7 @@ end 'staticVariantName'
 //
 // Returns the bare name when multiple variants match (currently unreachable —
 // the parser rejects same-suffix overloads as E2001 — but kept defensive).
-export function resolveOverloadedCallee(project Project, bareQualifiedName String, argTypes MaxonTypeArray, hasSelf bool, argLabels StringArray = StringArray.create()) returns String
+export function resolveOverloadedCallee(project Project, bareQualifiedName String, argTypes MaxonTypeArray, hasSelf bool, argLabels StringArray = StringArray.create(), receiverType MaxonType = MaxonType.unresolved) returns String
 	let variants = try project.overloadedNames.get(bareQualifiedName) otherwise return bareQualifiedName
 	var startIdx = 0
 	if hasSelf 'skipSelf'
@@ -2978,7 +2978,15 @@ export function resolveOverloadedCallee(project Project, bareQualifiedName Strin
 	// prefix of `bareQualifiedName` before the last `.`.
 	let enclosingForChase = enclosingTypeNameFromBareQualified(bareQualifiedName)
 	let argShape = paramTypeShape(firstArgType)
+	// Receiver substitution for the generic-overload tie-break (see below). Empty
+	// when the receiver isn't a concrete generic instance (no element binding to
+	// apply) — in that case the scan trusts the coarse shape heuristic alone.
+	let receiverSubst = buildSubstitutionForInstance(project, t: receiverType)
 	var firstParamMatch = ""
+	var shapePick = ""
+	var shapePickTrusted = false
+	var receiverCompatPick = ""
+	var receiverCompatCount = 0
 	for v in variants 'scanGeneric'
 		let sig = try project.funcSignatures.get(v) otherwise continue
 		let userParamIdx = signatureFirstUserParamIndex(sig)
@@ -3002,13 +3010,57 @@ export function resolveOverloadedCallee(project Project, bareQualifiedName Strin
 		if not (isGenericMatch or isFunctionMatch) 'concreteOnly'
 			continue
 		end 'concreteOnly'
-		if variantShape == argShape 'shapeMatch'
+		let isShapeMatch = variantShape == argShape
+		// Fast path (the resolver's original behavior): a shape match is decisive
+		// and returned immediately when it is a function match or when there is no
+		// concrete receiver to refine the choice. The receiver-substituted tie-break
+		// below runs only for the residual case — a generic-shaped match under a
+		// concrete generic receiver — where the element type can hide an
+		// element-vs-sequence ambiguity, so the common path pays nothing extra.
+		if isShapeMatch and (isFunctionMatch or receiverSubst.isEmpty()) 'trustedShapeMatch'
 			return v
-		end 'shapeMatch'
+		end 'trustedShapeMatch'
+		// Receiver-substituted compatibility: substitute the receiver's element
+		// binding into this variant's first user-param and test it against the
+		// argument with the same predicate SemanticCheck's arg-type check uses.
+		// This is the only signal that distinguishes `contains(element Element)`
+		// from `contains(sequence Array with Element)` when the element type is
+		// itself an array (both are genericInstance-shaped).
+		var isReceiverCompatible = false
+		if isGenericMatch and not receiverSubst.isEmpty() 'haveReceiverSubst'
+			let substituted = substituteType(project, t: paramType, subst: receiverSubst)
+			if argTypesCompatible(project, argType: firstArgType, paramType: substituted) 'compatible'
+				isReceiverCompatible = true
+				receiverCompatCount = receiverCompatCount + 1
+				if receiverCompatPick.isEmpty() 'recordReceiver'
+					receiverCompatPick = v
+				end 'recordReceiver'
+			end 'compatible'
+		end 'haveReceiverSubst'
+		if isShapeMatch and shapePick.isEmpty() 'recordShape'
+			shapePick = v
+			// Only a receiver-compatible generic shape match is trusted here;
+			// function / no-receiver matches already returned via the fast path,
+			// and an incompatible generic match falls to the override logic.
+			shapePickTrusted = isReceiverCompatible
+		end 'recordShape'
 		if firstParamMatch.isEmpty() 'recordFirst'
 			firstParamMatch = v
 		end 'recordFirst'
 	end 'scanGeneric'
+	// Prefer the coarse shape pick, overriding it ONLY when a concrete receiver
+	// proves it incompatible with the argument AND exactly one other generic
+	// variant is compatible (the nested-array element/sequence mis-route). Every
+	// previously-correct shape decision — the hot path — is preserved unchanged.
+	if not shapePick.isEmpty() 'haveShape'
+		if shapePickTrusted 'trustShape'
+			return shapePick
+		end 'trustShape'
+		if receiverCompatCount == 1 'overrideWithReceiver'
+			return receiverCompatPick
+		end 'overrideWithReceiver'
+		return shapePick
+	end 'haveShape'
 	if not firstParamMatch.isEmpty() 'haveFirst'
 		return firstParamMatch
 	end 'haveFirst'
