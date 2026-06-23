@@ -1,0 +1,71 @@
+// Test: rc-enum-name-no-leak
+enum Color
+	Red
+	Green
+	Blue
+end 'Color'
+
+function main() returns ExitCode
+	let c = Color.Green
+	// Printing `.name` still allocates + frees the name String (the leak check);
+	// the value can't be compared directly (E3097).
+	print("{c.name}\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+Green
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 1 : i64
+    %2 = mir.call @__enum_Color_name(%0)
+    %3 = mir.global_addr @__istr_0
+    %4 = mir.mov_imm 0 : i64
+    %5 = mir.load %2, 0 width: qword
+    %6 = mir.load %5, 0 width: qword
+    %7 = mir.load %5, 8 width: qword
+    %8 = mir.global_addr @__istr_1
+    %9 = mir.mov_imm 1 : i64
+    %12 = mir.add.i64 %4, %7
+    %13 = mir.add.i64 %12, %9
+    %14 = mir.mov_imm 1 : i64
+    %15 = mir.add.i64 %13, %14
+    %16 = mir.call @mrt_alloc(%15)
+    mir.memcpy %16, %3, %4
+    %17 = mir.add.i64 %16, %4
+    mir.memcpy %17, %6, %7
+    %18 = mir.add.i64 %17, %7
+    %36 = mir.call @__mm_decref_maybenull_helper(%2)
+    mir.memcpy %18, %8, %9
+    %20 = mir.mov_imm 48 : i64
+    %21 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %22 = mir.call @mrt_alloc_with_dtor(%20, %21)
+    mir.store %4, %22, 40 width: qword
+    mir.store %16, %22, 0 width: qword
+    mir.store %13, %22, 8 width: qword
+    mir.store %13, %22, 16 width: qword
+    %24 = mir.mov_imm 1 : i64
+    mir.store %24, %22, 24 width: qword
+    %25 = mir.mov_imm -1 : i64
+    mir.store %25, %22, 32 width: qword
+    %27 = mir.mov_imm 16 : i64
+    %28 = mir.func_addr @__destruct_String
+    %26 = mir.call @stdlib.__mm_alloc(%27, %28)
+    mir.store %22, %26, 0 width: qword
+    mir.store %4, %26, 8 width: qword
+    %31 = mir.load %26, 0 width: qword
+    %35 = mir.call @stdlib.__mm_incref(%31)
+    %32 = mir.load %31, 0 width: qword
+    %33 = mir.load %31, 8 width: qword
+    %34 = mir.call @mrt_write_stdout(%32, %33)
+    %38 = mir.call @mm_drop(%26)
+    %37 = mir.call @__mm_decref_maybenull_helper(%31)
+    mir.ret %4
+  }
+}
+---

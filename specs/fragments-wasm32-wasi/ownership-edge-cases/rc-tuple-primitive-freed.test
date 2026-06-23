@@ -1,0 +1,32 @@
+// Test: rc-tuple-primitive-freed
+function main() returns ExitCode
+	@heap let t = (10, 32)
+	return t.0
+end 'main'
+---
+ExitCode: 10
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %1 = mir.mov_imm 10 : i64
+    %2 = mir.mov_imm 32 : i64
+    %3 = mir.mov_imm 16 : i64
+    %5 = mir.mov_imm 0 : i64
+    %4 = mir.call @stdlib.__mm_alloc(%3, %5)
+    mir.store %1, %4, 0 width: qword
+    mir.store %2, %4, 8 width: qword
+    %7 = mir.load %4, 0 width: qword
+    %8 = mir.call @mm_drop(%4)
+    %9 = mir.mov_imm 125 : i64
+    %10 = mir.cmp ugt, %7, %9
+    mir.cond_br %10 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %11 = mir.global_addr @__panic_msg_3ce5049b1590e2eb
+    %12 = mir.call @mrt_panic(%11)
+  __range_ok_0:
+    mir.ret %7
+  }
+}
+---

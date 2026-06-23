@@ -1,0 +1,50 @@
+// Test: rc-alias-survives-reassign
+typealias Integer = int(i64.min to i64.max)
+
+type Num
+	export var v as Integer
+
+	static function create(v Integer) returns Self
+		return Self{v: v}
+	end 'create'
+end 'Num'
+
+function main() returns ExitCode
+	var a = Num.create(10)
+	let b = a
+	a = Num.create(20)
+	return b.v + a.v
+end 'main'
+---
+ExitCode: 30
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %2 = mir.mov_imm 10 : i64
+    %12 = mir.mov_imm 8 : i64
+    %13 = mir.mov_imm 0 : i64
+    %14 = mir.call @stdlib.__mm_alloc(%12, %13)
+    mir.store %2, %14, 0 width: qword
+    %5 = mir.mov_imm 20 : i64
+    %15 = mir.mov_imm 8 : i64
+    %16 = mir.mov_imm 0 : i64
+    %17 = mir.call @stdlib.__mm_alloc(%15, %16)
+    mir.store %5, %17, 0 width: qword
+    %8 = mir.load %14, 0 width: qword
+    %10 = mir.load %17, 0 width: qword
+    %11 = mir.add.i64 %8, %10
+    %19 = mir.call @mm_drop(%14)
+    %18 = mir.call @mm_drop(%17)
+    %20 = mir.mov_imm 125 : i64
+    %21 = mir.cmp ugt, %11, %20
+    mir.cond_br %21 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %22 = mir.global_addr @__panic_msg_12a6d4d5982412e9
+    %23 = mir.call @mrt_panic(%22)
+  __range_ok_0:
+    mir.ret %11
+  }
+}
+---

@@ -1,0 +1,101 @@
+// Test: rc-custom-hashable-map-key-no-leak
+typealias Integer = int(i64.min to i64.max)
+
+type MyKey implements Hashable, Equatable
+		var value as Integer
+
+		function hash() returns HashValue
+				return self.value * 31
+		end 'hash'
+
+		function equals(other MyKey) returns bool
+				return self.value == other.value
+		end 'equals'
+
+		static function create(value Integer) returns Self
+			return Self{value: value}
+		end 'create'
+end 'MyKey'
+
+typealias MyKeyMap = Map with (MyKey, Integer)
+
+function main() returns ExitCode
+		var m = MyKeyMap.create()
+		try m.insert(MyKey.create(1), value: 42) otherwise ignore
+		return m.count()
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @MyKey.hash(local0: i64) -> u32 {
+  entry:
+    %5 = mir.param local0 : i64
+    %2 = mir.load %5, 0 width: qword
+    %3 = mir.mov_imm 31 : i64
+    %4 = mir.mul.i64 %2, %3
+    %6 = mir.mov_imm 4294967295 : i64
+    %7 = mir.cmp ugt, %4, %6
+    mir.cond_br %7 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %8 = mir.global_addr @__panic_msg_9ea744eb7b4db732
+    %9 = mir.call @mrt_panic(%8)
+  __range_ok_0:
+    mir.ret %4
+  }
+  func @MyKey.equals(local0: i64, local1: i64) -> i1 {
+  entry:
+    %7 = mir.param local0 : i64
+    %8 = mir.param local1 : i64
+    %3 = mir.load %7, 0 width: qword
+    %5 = mir.load %8, 0 width: qword
+    %6 = mir.cmp eq, %3, %5
+    mir.ret %6
+  }
+  func @main() -> u8 {
+  entry:
+    %25 = mir.mov_imm 40 : i64
+    %26 = mir.func_addr @__destruct_Map
+    %27 = mir.call @stdlib.__mm_alloc(%25, %26)
+    %32 = mir.mov_imm 8 : i64
+    %33 = mir.sub.i64 %27, %32
+    mir.atomic_inc %33
+    %6 = mir.mov_imm 1 : i64
+    %29 = mir.mov_imm 8 : i64
+    %30 = mir.mov_imm 0 : i64
+    %31 = mir.call @stdlib.__mm_alloc(%29, %30)
+    %34 = mir.call @stdlib.__mm_incref(%31)
+    mir.store %6, %31, 0 width: qword
+    %8 = mir.mov_imm 42 : i64
+    %9 = mir.global_addr @__layout_Map_MyKey_Integer
+    %10 = mir.global_addr @__witness_MyKey_Hashable
+    %11 = mir.global_addr @__witness_MyKey_Equatable
+    %12, %13 = mir.try_call @Map.insert(%27, %31, %8, %9, %10, %11)
+    %14 = mir.mov_imm 0 : i64
+    %15 = mir.cmp ne, %13, %14
+    mir.cond_br %15 [then: try_0.otherwise(), else: __rc_edge_0_0()]
+  try_0.otherwise:
+    %17 = mir.mov_imm 0 : i64
+    mir.br try_0.merge(%17)
+  try_0.merge(%24: i64):
+    %36 = mir.call @__mm_decref_maybenull_helper(%24)
+    %20 = mir.global_addr @__layout_Map_MyKey_Integer
+    %21 = mir.global_addr @__witness_MyKey_Hashable
+    %22 = mir.global_addr @__witness_MyKey_Equatable
+    %23 = mir.call @Map.count(%27, %20, %21, %22)
+    %35 = mir.call @__mm_decref_maybenull_helper(%27)
+    %38 = mir.mov_imm 125 : i64
+    %39 = mir.cmp ugt, %23, %38
+    mir.cond_br %39 [then: __range_panic_0(), else: __range_ok_0()]
+  __rc_edge_0_0:
+    %37 = mir.call @stdlib.__mm_incref(%27)
+    mir.br try_0.merge(%27)
+  __range_panic_0:
+    %40 = mir.global_addr @__panic_msg_04611fe847060907
+    %41 = mir.call @mrt_panic(%40)
+  __range_ok_0:
+    mir.ret %23
+  }
+}
+---

@@ -464,14 +464,14 @@ typealias ItemArray = Array with Item
 
 function main() returns ExitCode
 	var arr = ItemArray.create()
-	arr.push(Item.create(100))
-	try arr.set(0, value: Item.create(200)) otherwise panic("test invariant: set OOB")
+	arr.push(Item.create(50))
+	try arr.set(0, value: Item.create(99)) otherwise panic("test invariant: set OOB")
 	let got = try arr.get(0) otherwise Item.create(-1)
 	return got.value
 end 'main'
 ```
 ```exitcode
-200
+99
 ```
 
 <!-- test: rc-container-clear-decrefs-all -->

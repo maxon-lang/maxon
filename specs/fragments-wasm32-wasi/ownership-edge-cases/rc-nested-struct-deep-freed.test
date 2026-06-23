@@ -1,0 +1,68 @@
+// Test: rc-nested-struct-deep-freed
+typealias Integer = int(i64.min to i64.max)
+
+type A
+	export var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'A'
+
+type B
+	export var a as A
+
+	static function create(a A) returns Self
+		return Self{a: a}
+	end 'create'
+end 'B'
+
+type C
+	export var b as B
+
+	static function create(b B) returns Self
+		return Self{b: b}
+	end 'create'
+end 'C'
+
+function main() returns ExitCode
+	let c = C.create(B.create(A.create(7)))
+	return c.b.a.n
+end 'main'
+---
+ExitCode: 7
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %1 = mir.mov_imm 7 : i64
+    %9 = mir.mov_imm 8 : i64
+    %10 = mir.mov_imm 0 : i64
+    %11 = mir.call @stdlib.__mm_alloc(%9, %10)
+    %18 = mir.call @stdlib.__mm_incref(%11)
+    mir.store %1, %11, 0 width: qword
+    %12 = mir.mov_imm 8 : i64
+    %13 = mir.func_addr @__destruct_B
+    %14 = mir.call @stdlib.__mm_alloc(%12, %13)
+    %19 = mir.call @stdlib.__mm_incref(%14)
+    mir.store %11, %14, 0 width: qword
+    %15 = mir.mov_imm 8 : i64
+    %16 = mir.func_addr @__destruct_C
+    %17 = mir.call @stdlib.__mm_alloc(%15, %16)
+    mir.store %14, %17, 0 width: qword
+    %6 = mir.load %17, 0 width: qword
+    %7 = mir.load %6, 0 width: qword
+    %8 = mir.load %7, 0 width: qword
+    %20 = mir.call @mm_drop(%17)
+    %21 = mir.mov_imm 125 : i64
+    %22 = mir.cmp ugt, %8, %21
+    mir.cond_br %22 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %23 = mir.global_addr @__panic_msg_c5cb8821ce8c59de
+    %24 = mir.call @mrt_panic(%23)
+  __range_ok_0:
+    mir.ret %8
+  }
+}
+---

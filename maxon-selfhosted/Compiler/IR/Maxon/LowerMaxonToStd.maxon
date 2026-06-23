@@ -11681,7 +11681,18 @@ type MaxonToStdLowering
 	// returning functions capture the secondary register via the parallel
 	// `tryCall`/`witnessCall` path in `emitCallWithArgs`.
 	function emitRetOrErrorReturn(retVal ByteArray, dstBlock IrBlock, asTerminator bool)
-		let retValId = self.resolveName(retVal)
+		var retValId = self.resolveName(retVal)
+		// Char-byte → char: a single-byte char literal (`'Z'`) lowers to an int
+		// on the byte channel (tracked in `project.charByteLiterals`), but a
+		// function declared `returns Character` must hand back the real heap-backed
+		// Character struct — its ABI is "return a Character pointer", and the caller
+		// (or an inliner that splices the body) will dispatch `Character` methods on
+		// it. Materialize the byte into a Character here, mirroring the same wrap the
+		// arg-coercion (`coerceArgToParam`) and param-default (`emitParamDefaultConstI64`)
+		// paths apply for a char-byte flowing into a Character-typed slot.
+		if self.returnTypeIsNamedCharacter() and self.project.charByteLiterals.contains(charByteLiteralKey(self.currentFuncName, valueName: retVal)) 'charByteReturn'
+			retValId = self.materializeCharacterFromByte(retValId, dstBlock: dstBlock)
+		end 'charByteReturn'
 		// Refcount-insertion: lowering no longer emits the return-transfer incref or
 		// the scope-exit drops. The late insert-refcounts pass covers every
 		// function-exit edge from per-value liveness (return/throw/break/continue),
@@ -11733,6 +11744,16 @@ type MaxonToStdLowering
 		end 'forwardFat'
 		return self.materializeInterfaceWitness(retValueType, interfaceName: interfaceName, dstBlock: dstBlock)
 	end 'materializeReturnWitness'
+
+	// True iff the current function's declared return type is the discovered
+	// char-literal struct (`Character`). Used by `emitRetOrErrorReturn` to decide
+	// whether a returned char-byte literal must be materialized into a real
+	// Character before exit. A void return unwraps to `unresolved`, which
+	// `paramTypeIsNamedCharacter` rejects, so void is never the char struct.
+	function returnTypeIsNamedCharacter() returns bool
+		let inner = maxonReturnTypeValueOrUnresolved(self.currentReturnType)
+		return paramTypeIsNamedCharacter(self.project, t: inner)
+	end 'returnTypeIsNamedCharacter'
 
 	// Phase 4: lower MaxonOp.throw(enumName, variantName) to a single
 	// multi-value-return op:

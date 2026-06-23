@@ -1,0 +1,69 @@
+// Test: rc-closure-captures-struct
+typealias Integer = int(i64.min to i64.max)
+typealias FnTypeAlias1 = function(Integer) returns Integer
+
+type Config
+	export var level as Integer
+
+	static function create(level Integer) returns Self
+		return Self{level: level}
+	end 'create'
+end 'Config'
+
+function apply(f FnTypeAlias1, x Integer) returns Integer
+	return f(x)
+end 'apply'
+
+function main() returns ExitCode
+	let cfg = Config.create(3)
+	let result = apply(function(_ Integer) gives cfg.level, x: 0)
+	return result
+end 'main'
+---
+ExitCode: 3
+---
+// CompiledIR
+module {
+  func @main$closure_0(local0: i64, local1: i64) -> i64 {
+  entry:
+    %7 = mir.param local1 : i64
+    %3 = mir.load %7, 0 width: qword
+    %4 = mir.load %3, 0 width: qword
+    %5 = mir.load %4, 0 width: qword
+    mir.ret %5
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    mir.store_slot slot_0, %0
+    %1 = mir.mov_imm 3 : i64
+    %11 = mir.mov_imm 8 : i64
+    %12 = mir.mov_imm 0 : i64
+    %13 = mir.call @stdlib.__mm_alloc(%11, %12)
+    %15 = mir.call @stdlib.__mm_incref(%13)
+    mir.store %1, %13, 0 width: qword
+    %18 = mir.call @__mm_decref_maybenull_helper(%17)
+    %17 = mir.load_slot slot_0
+    mir.store_slot slot_0, %13
+    %3 = mir.func_addr @main$closure_0
+    %4 = mir.stack_slot_addr slot_0
+    %5 = mir.mov_imm 8 : i64
+    %6 = mir.mov_imm 0 : i64
+    %7 = mir.call @stdlib.__mm_alloc(%5, %6)
+    mir.store %4, %7, 0 width: qword
+    %8 = mir.mov_imm 0 : i64
+    %14 = mir.indirect_call %3(%8, %7)
+    %19 = mir.load_slot slot_0
+    %20 = mir.call @__mm_decref_maybenull_helper(%19)
+    %16 = mir.call @mm_drop(%7)
+    %21 = mir.mov_imm 125 : i64
+    %22 = mir.cmp ugt, %14, %21
+    mir.cond_br %22 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %23 = mir.global_addr @__panic_msg_a5772743e685b3f2
+    %24 = mir.call @mrt_panic(%23)
+  __range_ok_0:
+    mir.ret %14
+  }
+}
+---

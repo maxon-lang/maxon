@@ -1,0 +1,69 @@
+// Test: rc-return-from-inner-block-cleanup
+typealias Integer = int(i64.min to i64.max)
+
+type Step
+	export var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Step'
+
+function compute(flag bool) returns Integer
+	@heap let outer = Step.create(1)
+	if flag 'inner'
+		@heap let inner = Step.create(2)
+		return outer.n + inner.n
+	end 'inner'
+	return outer.n
+end 'compute'
+
+function main() returns ExitCode
+	return compute(true)
+end 'main'
+---
+ExitCode: 3
+---
+// CompiledIR
+module {
+  func @compute(local0: i1) -> i64 {
+  entry:
+    %15 = mir.param local0 : i1
+    %3 = mir.mov_imm 1 : i64
+    %16 = mir.mov_imm 8 : i64
+    %17 = mir.mov_imm 0 : i64
+    %18 = mir.call @stdlib.__mm_alloc(%16, %17)
+    mir.store %3, %18, 0 width: qword
+    mir.cond_br %15 [then: inner_0(), else: inner_0.after()]
+  inner_0:
+    %6 = mir.mov_imm 2 : i64
+    %19 = mir.mov_imm 8 : i64
+    %20 = mir.mov_imm 0 : i64
+    %21 = mir.call @stdlib.__mm_alloc(%19, %20)
+    mir.store %6, %21, 0 width: qword
+    %9 = mir.load %18, 0 width: qword
+    %11 = mir.load %21, 0 width: qword
+    %12 = mir.add.i64 %9, %11
+    %23 = mir.call @mm_drop(%18)
+    %22 = mir.call @mm_drop(%21)
+    mir.ret %12
+  inner_0.after:
+    %14 = mir.load %18, 0 width: qword
+    %24 = mir.call @mm_drop(%18)
+    mir.ret %14
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 1 : i64
+    %1 = mir.call @compute(%0)
+    %2 = mir.mov_imm 125 : i64
+    %3 = mir.cmp ugt, %1, %2
+    mir.cond_br %3 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %4 = mir.global_addr @__panic_msg_e5c0a2e6d8bc05e6
+    %5 = mir.call @mrt_panic(%4)
+  __range_ok_0:
+    mir.ret %1
+  }
+}
+---

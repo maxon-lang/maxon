@@ -1,0 +1,47 @@
+// Test: rc-char-single-alloc-freed
+function main() returns ExitCode
+	let c = 'A'
+	return c.byteLength()
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 65 : i64
+    %2 = mir.mov_imm 1 : i64
+    %3 = mir.call @mrt_alloc(%2)
+    mir.store %0, %3, 0 width: byte
+    %4 = mir.mov_imm 48 : i64
+    %5 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %6 = mir.call @mrt_alloc_with_dtor(%4, %5)
+    %7 = mir.mov_imm 0 : i64
+    mir.store %7, %6, 40 width: qword
+    mir.store %3, %6, 0 width: qword
+    %8 = mir.mov_imm 1 : i64
+    mir.store %8, %6, 8 width: qword
+    %9 = mir.mov_imm 1 : i64
+    mir.store %9, %6, 16 width: qword
+    %10 = mir.mov_imm 1 : i64
+    mir.store %10, %6, 24 width: qword
+    %11 = mir.mov_imm -1 : i64
+    mir.store %11, %6, 32 width: qword
+    %13 = mir.mov_imm 8 : i64
+    %14 = mir.func_addr @__destruct_Character
+    %12 = mir.call @stdlib.__mm_alloc(%13, %14)
+    mir.store %6, %12, 0 width: qword
+    %15 = mir.call @Character.byteLength(%12)
+    %16 = mir.call @mm_drop(%12)
+    %17 = mir.mov_imm 125 : i64
+    %18 = mir.cmp ugt, %15, %17
+    mir.cond_br %18 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %19 = mir.global_addr @__panic_msg_8301ad5460492d70
+    %20 = mir.call @mrt_panic(%19)
+  __range_ok_0:
+    mir.ret %15
+  }
+}
+---

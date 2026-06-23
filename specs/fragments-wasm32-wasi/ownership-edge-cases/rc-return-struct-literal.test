@@ -1,0 +1,49 @@
+// Test: rc-return-struct-literal
+typealias Integer = int(i64.min to i64.max)
+
+type Pair
+	export var a as Integer
+	export var b as Integer
+
+	static function create(a Integer, b Integer) returns Self
+		return Self{a: a, b: b}
+	end 'create'
+end 'Pair'
+
+function makePair(x Integer, y Integer) returns Pair
+	return Pair.create(x, b: y)
+end 'makePair'
+
+function main() returns ExitCode
+	let p = makePair(3, y: 7)
+	return p.a + p.b
+end 'main'
+---
+ExitCode: 10
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %1 = mir.mov_imm 3 : i64
+    %2 = mir.mov_imm 7 : i64
+    %9 = mir.mov_imm 16 : i64
+    %10 = mir.mov_imm 0 : i64
+    %11 = mir.call @stdlib.__mm_alloc(%9, %10)
+    mir.store %1, %11, 0 width: qword
+    mir.store %2, %11, 8 width: qword
+    %5 = mir.load %11, 0 width: qword
+    %7 = mir.load %11, 8 width: qword
+    %8 = mir.add.i64 %5, %7
+    %12 = mir.call @mm_drop(%11)
+    %13 = mir.mov_imm 125 : i64
+    %14 = mir.cmp ugt, %8, %13
+    mir.cond_br %14 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %15 = mir.global_addr @__panic_msg_b07de00f38fd684f
+    %16 = mir.call @mrt_panic(%15)
+  __range_ok_0:
+    mir.ret %8
+  }
+}
+---

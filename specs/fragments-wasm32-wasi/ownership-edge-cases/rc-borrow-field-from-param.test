@@ -1,0 +1,60 @@
+// Test: rc-borrow-field-from-param
+typealias Integer = int(i64.min to i64.max)
+
+type Data
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Data'
+
+type Wrapper
+	export var data as Data
+
+	static function create(data Data) returns Self
+		return Self{data: data}
+	end 'create'
+end 'Wrapper'
+
+function extractData(w Wrapper) returns Data
+	return w.data
+end 'extractData'
+
+function main() returns ExitCode
+	let d = Data.create(42)
+	let w = Wrapper.create(d)
+	let result = extractData(w)
+	return result.value
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %3 = mir.mov_imm 42 : i64
+    %11 = mir.mov_imm 8 : i64
+    %12 = mir.mov_imm 0 : i64
+    %13 = mir.call @stdlib.__mm_alloc(%11, %12)
+    %18 = mir.call @stdlib.__mm_incref(%13)
+    mir.store %3, %13, 0 width: qword
+    %14 = mir.mov_imm 8 : i64
+    %15 = mir.func_addr @__destruct_Wrapper
+    %16 = mir.call @stdlib.__mm_alloc(%14, %15)
+    mir.store %13, %16, 0 width: qword
+    %17 = mir.load %16, 0 width: qword
+    %10 = mir.load %17, 0 width: qword
+    %19 = mir.call @mm_drop(%16)
+    %20 = mir.mov_imm 125 : i64
+    %21 = mir.cmp ugt, %10, %20
+    mir.cond_br %21 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %22 = mir.global_addr @__panic_msg_34172b28ec7ba5e2
+    %23 = mir.call @mrt_panic(%22)
+  __range_ok_0:
+    mir.ret %10
+  }
+}
+---

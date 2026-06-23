@@ -1,0 +1,50 @@
+// Test: rc-discarded-self-return
+typealias Count = int(i64.min to i64.max)
+
+type Counter
+	export var value as Count
+
+	function increment() returns Counter
+		value = value + 1
+		return self
+	end 'increment'
+
+	static function create(value Count) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Counter'
+
+function main() returns ExitCode
+	var c = Counter.create(0)
+	c.increment()
+	return c.value
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %1 = mir.mov_imm 0 : i64
+    %7 = mir.mov_imm 8 : i64
+    %8 = mir.mov_imm 0 : i64
+    %9 = mir.call @stdlib.__mm_alloc(%7, %8)
+    mir.store %1, %9, 0 width: qword
+    %10 = mir.load %9, 0 width: qword
+    %11 = mir.mov_imm 1 : i64
+    %12 = mir.add.i64 %10, %11
+    mir.store %12, %9, 0 width: qword
+    %6 = mir.load %9, 0 width: qword
+    %13 = mir.call @mm_drop(%9)
+    %14 = mir.mov_imm 125 : i64
+    %15 = mir.cmp ugt, %6, %14
+    mir.cond_br %15 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %16 = mir.global_addr @__panic_msg_8bfd0fab78334baa
+    %17 = mir.call @mrt_panic(%16)
+  __range_ok_0:
+    mir.ret %6
+  }
+}
+---

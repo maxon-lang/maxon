@@ -31,120 +31,35 @@ ExitCode: 5
 ---
 // CompiledIR
 module {
-  func @Inner.create(value: i64) -> i64 {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-16], rcx
-    x64.mov rcx, 8
-    x64.xor edx, edx
-    x64.mov r8, 59
-    x64.call mm_alloc
-    x64.mov [rbp-8], rax
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rbp-16]
-    x64.mov [rax+0], rcx
-    x64.mov rdx, [rbp-8]
-    x64.mov rcx, [rbp-8]
-    x64.call mm_incref
-    x64.mov rax, [rbp-8]
-    x64.epilogue
-    x64.ret
-  }
-  func @Wrapper.create(inner: i64) -> i64 {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.lea_func rax, [__destruct_Wrapper]
-    x64.mov rdx, rax
-    x64.mov rcx, 8
-    x64.mov r8, 60
-    x64.call mm_alloc
-    x64.mov [rbp-16], rax
-    x64.mov rcx, [rbp-8]
-    x64.mov rdx, [rbp-16]
-    x64.mov [rdx+0], rcx
-    x64.call mm_incref
-    x64.mov rbx, [rbp-16]
-    x64.mov rcx, [rbp-16]
-    x64.call mm_incref
-    x64.mov rax, [rbp-16]
-    x64.epilogue
-    x64.ret
-  }
-  func @wrap(i: i64) -> i64 {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rbp-8]
-    x64.call Wrapper.create
-    x64.mov [rbp-16], rax
-    x64.mov rax, [rbp-16]
-    x64.epilogue
-    x64.ret
-  }
   func @main() -> u32 {
   entry:
-    x64.prologue stack_size=32
-    x64.mov rcx, 5
-    x64.call Inner.create
-    x64.mov [rbp-8], rax
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rbp-8]
-    x64.call wrap
-    x64.mov [rbp-16], rax
-    x64.mov rcx, [rbp-16]
-    x64.mov rdx, [rcx+0]
-    x64.mov [rbp-24], rdx
-    x64.mov rbx, [rbp-24]
-    x64.mov rsi, [rbx+0]
-    x64.xor edi, edi
-    x64.mov r8, 4294967295
-    x64.cmp rsi, r8
-    x64.jg main.__range_panic_0
-    x64.cmp rsi, rdi
-    x64.jl main.__range_panic_0
-    x64.jmp main.__range_ok_0
+    x64.prologue stack_size=16
+    x64.xor edx, edx
+    x64.mov ecx, 8
+    x64.call stdlib.__mm_alloc
+    x64.mov r12, r8
+    x64.mov rcx, r12
+    x64.call stdlib.__mm_incref
+    x64.mov r8d, 5
+    x64.mov [r12+0], r8 (8b)
+    x64.lea rdx, [rip+__destruct_Wrapper]
+    x64.mov ecx, 8
+    x64.call stdlib.__mm_alloc
+    x64.mov r13, r8
+    x64.mov [r13+0], r12 (8b)
+    x64.mov r9, [r13+0] (8b)
+    x64.mov r12, [r9+0] (8b)
+    x64.mov rcx, r13
+    x64.call mm_drop
+    x64.mov r8d, 4294967295
+    x64.cmp r12, r8
+    x64.jbe __range_ok_0
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_0]
-    x64.mov rcx, rax
+    x64.lea r12, [rip+__panic_msg_3baa5123447da2b5]
+    x64.mov rcx, r12
     x64.call mrt_panic
   __range_ok_0:
-    x64.mov rax, [rbp-16]
-    x64.mov [rbp-32], rsi
-    x64.test rax, rax
-    x64.jz __nonnull_skip_0
-    x64.mov rcx, [rbp-16]
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.mov rcx, [rbp-8]
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_1
-    x64.call mm_decref
-    x64.label __nonnull_skip_1
-    x64.mov rax, [rbp-32]
-    x64.epilogue
-    x64.ret
-  }
-  func @__destruct_Inner(ptr: i64) {
-  entry:
-    x64.jmp __destruct_Inner.done
-  done:
-    x64.ret
-  }
-  func @__destruct_Wrapper(ptr: i64) {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+0]
-    x64.mov [rbp-16], rcx
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_0
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.jmp __destruct_Wrapper.done
-  done:
+    x64.mov r8, r12
     x64.epilogue
     x64.ret
   }

@@ -1,0 +1,58 @@
+// Test: rc-managed-list-node-set-value-decrefs-old
+typealias Integer = int(i64.min to i64.max)
+
+type Token
+	export var id as Integer
+
+	static function create(id Integer) returns Self
+		return Self{id: id}
+	end 'create'
+end 'Token'
+
+typealias TokenManagedList = __ManagedList with Token
+
+function main() returns ExitCode
+	var managedList = TokenManagedList.create()
+	var node = managedList.insertFirst(Token.create(1))
+	node.setValue(Token.create(99))
+	return node.value().id
+end 'main'
+---
+ExitCode: 99
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %2 = mir.mov_imm 1 : i64
+    %3 = mir.call @mrt_managed_list_create(%2)
+    %5 = mir.mov_imm 1 : i64
+    %17 = mir.mov_imm 8 : i64
+    %18 = mir.mov_imm 0 : i64
+    %19 = mir.call @stdlib.__mm_alloc(%17, %18)
+    %23 = mir.call @stdlib.__mm_incref(%19)
+    mir.store %5, %19, 0 width: qword
+    %7 = mir.call @mrt_managed_list_insert_first_value(%3, %19)
+    %9 = mir.mov_imm 99 : i64
+    %20 = mir.mov_imm 8 : i64
+    %21 = mir.mov_imm 0 : i64
+    %22 = mir.call @stdlib.__mm_alloc(%20, %21)
+    %24 = mir.call @stdlib.__mm_incref(%22)
+    mir.store %9, %22, 0 width: qword
+    %11 = mir.load %7, 24 width: qword
+    %12 = mir.call @__mm_decref_maybenull_helper(%11)
+    %13 = mir.call @mrt_managed_list_node_set_value(%7, %22)
+    %15 = mir.call @mrt_managed_list_node_value(%7)
+    %16 = mir.load %15, 0 width: qword
+    %25 = mir.call @__mm_decref_maybenull_helper(%3)
+    %26 = mir.mov_imm 125 : i64
+    %27 = mir.cmp ugt, %16, %26
+    mir.cond_br %27 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %28 = mir.global_addr @__panic_msg_c2ae123abcbd6b45
+    %29 = mir.call @mrt_panic(%28)
+  __range_ok_0:
+    mir.ret %16
+  }
+}
+---

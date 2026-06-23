@@ -1,0 +1,43 @@
+// Test: rc-tuple-reassign-decrefs-old
+function main() returns ExitCode
+	var t = (1, 2)
+	t = (3, 4)
+	return t.0 + t.1
+end 'main'
+---
+ExitCode: 7
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %1 = mir.mov_imm 1 : i64
+    %2 = mir.mov_imm 2 : i64
+    %3 = mir.mov_imm 16 : i64
+    %5 = mir.mov_imm 0 : i64
+    %4 = mir.call @stdlib.__mm_alloc(%3, %5)
+    mir.store %1, %4, 0 width: qword
+    mir.store %2, %4, 8 width: qword
+    %16 = mir.call @mm_drop(%4)
+    %6 = mir.mov_imm 3 : i64
+    %7 = mir.mov_imm 4 : i64
+    %8 = mir.mov_imm 16 : i64
+    %10 = mir.mov_imm 0 : i64
+    %9 = mir.call @stdlib.__mm_alloc(%8, %10)
+    mir.store %6, %9, 0 width: qword
+    mir.store %7, %9, 8 width: qword
+    %12 = mir.load %9, 0 width: qword
+    %14 = mir.load %9, 8 width: qword
+    %15 = mir.add.i64 %12, %14
+    %17 = mir.call @mm_drop(%9)
+    %18 = mir.mov_imm 125 : i64
+    %19 = mir.cmp ugt, %15, %18
+    mir.cond_br %19 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %20 = mir.global_addr @__panic_msg_fd89cb7ecf22fa68
+    %21 = mir.call @mrt_panic(%20)
+  __range_ok_0:
+    mir.ret %15
+  }
+}
+---

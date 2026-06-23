@@ -1,0 +1,77 @@
+// Test: rc-container-scope-exit-decrefs-elements
+typealias Integer = int(i64.min to i64.max)
+
+type Item
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Item'
+
+typealias ItemArray = Array with Item
+
+function fill() returns Integer
+	var arr = ItemArray.create()
+	arr.push(Item.create(10))
+	arr.push(Item.create(20))
+	arr.push(Item.create(30))
+	return arr.count()
+end 'fill'
+
+function main() returns ExitCode
+	let n = fill()
+	return n
+end 'main'
+---
+ExitCode: 3
+---
+// CompiledIR
+module {
+  func @fill() -> i64 {
+  entry:
+    %1 = mir.global_addr @__layout_Array_Item
+    %2 = mir.call @Array.create(%1)
+    %4 = mir.mov_imm 10 : i64
+    %21 = mir.mov_imm 8 : i64
+    %22 = mir.mov_imm 0 : i64
+    %23 = mir.call @stdlib.__mm_alloc(%21, %22)
+    %30 = mir.call @stdlib.__mm_incref(%23)
+    mir.store %4, %23, 0 width: qword
+    %6 = mir.global_addr @__layout_Array_Item
+    %7 = mir.call @Array.push(%2, %23, %6)
+    %9 = mir.mov_imm 20 : i64
+    %24 = mir.mov_imm 8 : i64
+    %25 = mir.mov_imm 0 : i64
+    %26 = mir.call @stdlib.__mm_alloc(%24, %25)
+    %31 = mir.call @stdlib.__mm_incref(%26)
+    mir.store %9, %26, 0 width: qword
+    %11 = mir.global_addr @__layout_Array_Item
+    %12 = mir.call @Array.push(%2, %26, %11)
+    %14 = mir.mov_imm 30 : i64
+    %27 = mir.mov_imm 8 : i64
+    %28 = mir.mov_imm 0 : i64
+    %29 = mir.call @stdlib.__mm_alloc(%27, %28)
+    %32 = mir.call @stdlib.__mm_incref(%29)
+    mir.store %14, %29, 0 width: qword
+    %16 = mir.global_addr @__layout_Array_Item
+    %17 = mir.call @Array.push(%2, %29, %16)
+    %19 = mir.global_addr @__layout_Array_Item
+    %20 = mir.call @Array.count(%2, %19)
+    %33 = mir.call @__mm_decref_maybenull_helper(%2)
+    mir.ret %20
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.call @fill()
+    %1 = mir.mov_imm 125 : i64
+    %2 = mir.cmp ugt, %0, %1
+    mir.cond_br %2 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %3 = mir.global_addr @__panic_msg_fdb286d62f8b1d65
+    %4 = mir.call @mrt_panic(%3)
+  __range_ok_0:
+    mir.ret %0
+  }
+}
+---

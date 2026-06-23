@@ -1,0 +1,82 @@
+// Test: rc-struct-with-array-field-freed
+typealias Integer = int(i64.min to i64.max)
+
+type Entry
+	export var val as Integer
+
+	static function create(val Integer) returns Self
+		return Self{val: val}
+	end 'create'
+end 'Entry'
+
+typealias EntryArray = Array with Entry
+
+type Bucket
+	export var items as EntryArray
+
+	static function create(items EntryArray) returns Self
+		return Self{items: items}
+	end 'create'
+end 'Bucket'
+
+function fill() returns Integer
+	var b = Bucket.create(EntryArray.create())
+	b.items.push(Entry.create(10))
+	b.items.push(Entry.create(20))
+	return b.items.count()
+end 'fill'
+
+function main() returns ExitCode
+	return fill()
+end 'main'
+---
+ExitCode: 2
+---
+// CompiledIR
+module {
+  func @fill() -> i64 {
+  entry:
+    %1 = mir.global_addr @__layout_Array_Entry
+    %2 = mir.call @Array.create(%1)
+    %20 = mir.mov_imm 8 : i64
+    %21 = mir.func_addr @__destruct_Bucket
+    %22 = mir.call @stdlib.__mm_alloc(%20, %21)
+    mir.store %2, %22, 0 width: qword
+    %5 = mir.load %22, 0 width: qword
+    %6 = mir.mov_imm 10 : i64
+    %23 = mir.mov_imm 8 : i64
+    %24 = mir.mov_imm 0 : i64
+    %25 = mir.call @stdlib.__mm_alloc(%23, %24)
+    %29 = mir.call @stdlib.__mm_incref(%25)
+    mir.store %6, %25, 0 width: qword
+    %8 = mir.global_addr @__layout_Array_Entry
+    %9 = mir.call @Array.push(%5, %25, %8)
+    %11 = mir.load %22, 0 width: qword
+    %12 = mir.mov_imm 20 : i64
+    %26 = mir.mov_imm 8 : i64
+    %27 = mir.mov_imm 0 : i64
+    %28 = mir.call @stdlib.__mm_alloc(%26, %27)
+    %30 = mir.call @stdlib.__mm_incref(%28)
+    mir.store %12, %28, 0 width: qword
+    %14 = mir.global_addr @__layout_Array_Entry
+    %15 = mir.call @Array.push(%11, %28, %14)
+    %17 = mir.load %22, 0 width: qword
+    %18 = mir.global_addr @__layout_Array_Entry
+    %19 = mir.call @Array.count(%17, %18)
+    %31 = mir.call @mm_drop(%22)
+    mir.ret %19
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.call @fill()
+    %1 = mir.mov_imm 125 : i64
+    %2 = mir.cmp ugt, %0, %1
+    mir.cond_br %2 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %3 = mir.global_addr @__panic_msg_3692d8e9b5109fe4
+    %4 = mir.call @mrt_panic(%3)
+  __range_ok_0:
+    mir.ret %0
+  }
+}
+---

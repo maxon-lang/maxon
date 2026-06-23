@@ -1,0 +1,76 @@
+// Test: rc-nested-struct-clone-no-leak
+typealias Integer = int(i64.min to i64.max)
+
+type Inner
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export var a as Inner
+	export var b as Integer
+
+	static function create(a Inner, b Integer) returns Self
+		return Self{a: a, b: b}
+	end 'create'
+end 'Outer'
+
+function main() returns ExitCode
+	let x = Outer.create(Inner.create(42), b: 10)
+	var y = x.clone()
+	y.a.value = 99
+	return x.a.value
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %2 = mir.mov_imm 42 : i64
+    %14 = mir.mov_imm 8 : i64
+    %15 = mir.mov_imm 0 : i64
+    %16 = mir.call @stdlib.__mm_alloc(%14, %15)
+    %30 = mir.call @stdlib.__mm_incref(%16)
+    mir.store %2, %16, 0 width: qword
+    %4 = mir.mov_imm 10 : i64
+    %17 = mir.mov_imm 16 : i64
+    %18 = mir.func_addr @__destruct_Outer
+    %19 = mir.call @stdlib.__mm_alloc(%17, %18)
+    mir.store %16, %19, 0 width: qword
+    mir.store %4, %19, 8 width: qword
+    %20 = mir.mov_imm 16 : i64
+    %21 = mir.func_addr @__destruct_Outer
+    %22 = mir.call @stdlib.__mm_alloc(%20, %21)
+    %23 = mir.load %19, 0 width: qword
+    %26 = mir.mov_imm 8 : i64
+    %27 = mir.mov_imm 0 : i64
+    %28 = mir.call @stdlib.__mm_alloc(%26, %27)
+    %31 = mir.call @stdlib.__mm_incref(%28)
+    %29 = mir.load %23, 0 width: qword
+    mir.store %29, %28, 0 width: qword
+    mir.store %28, %22, 0 width: qword
+    %25 = mir.load %19, 8 width: qword
+    mir.store %25, %22, 8 width: qword
+    %9 = mir.load %22, 0 width: qword
+    %10 = mir.mov_imm 99 : i64
+    mir.store %10, %9, 0 width: qword
+    %32 = mir.call @mm_drop(%22)
+    %12 = mir.load %19, 0 width: qword
+    %13 = mir.load %12, 0 width: qword
+    %33 = mir.call @mm_drop(%19)
+    %34 = mir.mov_imm 125 : i64
+    %35 = mir.cmp ugt, %13, %34
+    mir.cond_br %35 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %36 = mir.global_addr @__panic_msg_f10e1e2bab9d3897
+    %37 = mir.call @mrt_panic(%36)
+  __range_ok_0:
+    mir.ret %13
+  }
+}
+---

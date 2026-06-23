@@ -1,0 +1,52 @@
+// Test: rc-managed-list-remove-decrefs
+typealias Integer = int(i64.min to i64.max)
+
+type Token
+	export var id as Integer
+
+	static function create(id Integer) returns Self
+		return Self{id: id}
+	end 'create'
+end 'Token'
+
+typealias TokenManagedList = __ManagedList with Token
+
+function main() returns ExitCode
+	var managedList = TokenManagedList.create()
+	let node = managedList.insertFirst(Token.create(9))
+	let removed = managedList.remove(node)
+	return removed.id + managedList.count()
+end 'main'
+---
+ExitCode: 9
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %3 = mir.mov_imm 1 : i64
+    %4 = mir.call @mrt_managed_list_create(%3)
+    %6 = mir.mov_imm 9 : i64
+    %17 = mir.mov_imm 8 : i64
+    %18 = mir.mov_imm 0 : i64
+    %19 = mir.call @stdlib.__mm_alloc(%17, %18)
+    %20 = mir.call @stdlib.__mm_incref(%19)
+    mir.store %6, %19, 0 width: qword
+    %8 = mir.call @mrt_managed_list_insert_first_value(%4, %19)
+    %11 = mir.call @mrt_managed_list_remove(%4, %8)
+    %13 = mir.load %11, 0 width: qword
+    %15 = mir.call @mrt_managed_list_count(%4)
+    %21 = mir.call @__mm_decref_maybenull_helper(%4)
+    %16 = mir.add.i64 %13, %15
+    %22 = mir.call @__mm_decref_maybenull_helper(%11)
+    %23 = mir.mov_imm 125 : i64
+    %24 = mir.cmp ugt, %16, %23
+    mir.cond_br %24 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %25 = mir.global_addr @__panic_msg_cf227bee1a7bc176
+    %26 = mir.call @mrt_panic(%25)
+  __range_ok_0:
+    mir.ret %16
+  }
+}
+---

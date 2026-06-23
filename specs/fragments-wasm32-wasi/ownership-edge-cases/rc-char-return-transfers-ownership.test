@@ -1,0 +1,57 @@
+// Test: rc-char-return-transfers-ownership
+function makeChar() returns Character
+	return 'Z'
+end 'makeChar'
+
+function main() returns ExitCode
+	let c = makeChar()
+	return c.byteLength()
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @makeChar() -> i64 {
+  entry:
+    %0 = mir.mov_imm 90 : i64
+    %1 = mir.mov_imm 1 : i64
+    %2 = mir.call @mrt_alloc(%1)
+    mir.store %0, %2, 0 width: byte
+    %3 = mir.mov_imm 48 : i64
+    %4 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %5 = mir.call @mrt_alloc_with_dtor(%3, %4)
+    %6 = mir.mov_imm 0 : i64
+    mir.store %6, %5, 40 width: qword
+    mir.store %2, %5, 0 width: qword
+    %7 = mir.mov_imm 1 : i64
+    mir.store %7, %5, 8 width: qword
+    %8 = mir.mov_imm 1 : i64
+    mir.store %8, %5, 16 width: qword
+    %9 = mir.mov_imm 1 : i64
+    mir.store %9, %5, 24 width: qword
+    %10 = mir.mov_imm -1 : i64
+    mir.store %10, %5, 32 width: qword
+    %12 = mir.mov_imm 8 : i64
+    %13 = mir.func_addr @__destruct_Character
+    %11 = mir.call @stdlib.__mm_alloc(%12, %13)
+    %14 = mir.call @stdlib.__mm_incref(%11)
+    mir.store %5, %11, 0 width: qword
+    mir.ret %11
+  }
+  func @main() -> u8 {
+  entry:
+    %1 = mir.call @makeChar()
+    %3 = mir.call @Character.byteLength(%1)
+    %4 = mir.call @__mm_decref_maybenull_helper(%1)
+    %5 = mir.mov_imm 125 : i64
+    %6 = mir.cmp ugt, %3, %5
+    mir.cond_br %6 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %7 = mir.global_addr @__panic_msg_34ac0cda7253d124
+    %8 = mir.call @mrt_panic(%7)
+  __range_ok_0:
+    mir.ret %3
+  }
+}
+---

@@ -1,0 +1,75 @@
+// Test: rc-closure-capture-string-no-crash
+typealias Integer = int(i64.min to i64.max)
+
+typealias FnTypeAlias1 = function(Integer) returns String
+function apply(f FnTypeAlias1, x Integer) returns String
+	return f(x)
+end 'apply'
+
+function main() returns ExitCode
+	let prefix = "hello"
+	let result = apply(function(_ Integer) gives prefix, x: 0)
+	print(result)
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+hello
+```
+---
+// CompiledIR
+module {
+  func @main$closure_0(local0: i64, local1: i64) -> i64 {
+  entry:
+    %6 = mir.param local1 : i64
+    %3 = mir.load %6, 0 width: qword
+    %4 = mir.load %3, 0 width: qword
+    %7 = mir.call @stdlib.__mm_incref(%4)
+    mir.ret %4
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    mir.store_slot slot_0, %0
+    %2 = mir.global_addr @__istr_0
+    %3 = mir.mov_imm 48 : i64
+    %4 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %5 = mir.call @mrt_alloc_with_dtor(%3, %4)
+    mir.store %0, %5, 40 width: qword
+    mir.store %2, %5, 0 width: qword
+    %7 = mir.mov_imm 5 : i64
+    mir.store %7, %5, 8 width: qword
+    %8 = mir.mov_imm -2 : i64
+    mir.store %8, %5, 16 width: qword
+    %9 = mir.mov_imm 1 : i64
+    mir.store %9, %5, 24 width: qword
+    mir.store %0, %5, 32 width: qword
+    %12 = mir.mov_imm 16 : i64
+    %13 = mir.func_addr @__destruct_String
+    %11 = mir.call @stdlib.__mm_alloc(%12, %13)
+    %30 = mir.call @stdlib.__mm_incref(%11)
+    mir.store %5, %11, 0 width: qword
+    %14 = mir.mov_imm 1 : i64
+    mir.store %14, %11, 8 width: qword
+    %34 = mir.call @__mm_decref_maybenull_helper(%33)
+    %33 = mir.load_slot slot_0
+    mir.store_slot slot_0, %11
+    %15 = mir.func_addr @main$closure_0
+    %16 = mir.stack_slot_addr slot_0
+    %17 = mir.mov_imm 8 : i64
+    %19 = mir.call @stdlib.__mm_alloc(%17, %0)
+    mir.store %16, %19, 0 width: qword
+    %25 = mir.indirect_call %15(%0, %19)
+    %31 = mir.call @mm_drop(%19)
+    %26 = mir.load %25, 0 width: qword
+    %27 = mir.load %26, 0 width: qword
+    %28 = mir.load %26, 8 width: qword
+    %29 = mir.call @mrt_write_stdout(%27, %28)
+    %35 = mir.load_slot slot_0
+    %36 = mir.call @__mm_decref_maybenull_helper(%35)
+    %32 = mir.call @__mm_decref_maybenull_helper(%25)
+    mir.ret %0
+  }
+}
+---

@@ -1,0 +1,73 @@
+// Test: rc-error-path-cleanup
+typealias Integer = int(i64.min to i64.max)
+
+type Item
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Item'
+
+typealias ItemArray = Array with Item
+
+function main() returns ExitCode
+	var arr = ItemArray.create()
+	let got = try arr.get(0) otherwise Item.create(99)
+	return got.value
+end 'main'
+---
+ExitCode: 99
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %3 = mir.global_addr @__layout_Array_Item
+    %4 = mir.call @Array.create(%3)
+    mir.br inlined_Array.get_0_0()
+  inlined_Array.get_0_0:
+    %19 = mir.load %4, 0 width: qword
+    %20, %21 = mir.try_call @stdlib.__managed_mem_get(%19, %0)
+    %22 = mir.mov_imm 0 : i64
+    %23 = mir.cmp ne, %21, %22
+    mir.cond_br %23 [then: inlined_Array.get_1_0(), else: inlined_Array.get_3_0()]
+  inlined_Array.get_1_0:
+    %34 = mir.call @__mm_decref_maybenull_helper(%4)
+    %24 = mir.mov_imm 0 : i64
+    %25 = mir.mov_imm 1 : i64
+    mir.br inline_cont_main_0(%24, %25)
+  inlined_Array.get_3_0:
+    %26 = mir.mov_imm 0 : i64
+    mir.br __rc_edge_6_0()
+  inline_cont_main_0(%27: i64, %28: i64):
+    %11 = mir.cmp ne, %28, %0
+    mir.cond_br %11 [then: try_0.otherwise(), else: try_0.merge(%27)]
+  try_0.otherwise:
+    %35 = mir.call @__mm_decref_maybenull_helper(%27)
+    %13 = mir.mov_imm 99 : i64
+    %29 = mir.mov_imm 8 : i64
+    %30 = mir.mov_imm 0 : i64
+    %31 = mir.call @stdlib.__mm_alloc(%29, %30)
+    %32 = mir.call @stdlib.__mm_incref(%31)
+    mir.store %13, %31, 0 width: qword
+    mir.br try_0.merge(%31)
+  try_0.merge(%18: i64):
+    %17 = mir.load %18, 0 width: qword
+    %33 = mir.call @__mm_decref_maybenull_helper(%18)
+    %38 = mir.mov_imm 125 : i64
+    %39 = mir.cmp ugt, %17, %38
+    mir.cond_br %39 [then: __range_panic_0(), else: __range_ok_0()]
+  __rc_edge_6_0:
+    %36 = mir.call @stdlib.__mm_incref(%20)
+    %37 = mir.call @__mm_decref_maybenull_helper(%4)
+    mir.br inline_cont_main_0(%20, %26)
+  __range_panic_0:
+    %40 = mir.global_addr @__panic_msg_0924950e319afddd
+    %41 = mir.call @mrt_panic(%40)
+  __range_ok_0:
+    mir.ret %17
+  }
+}
+---

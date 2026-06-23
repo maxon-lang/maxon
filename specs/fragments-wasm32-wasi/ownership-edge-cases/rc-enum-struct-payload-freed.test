@@ -1,0 +1,84 @@
+// Test: rc-enum-struct-payload-freed
+typealias Integer = int(i64.min to i64.max)
+
+type Body
+	export var mass as Integer
+
+	static function create(mass Integer) returns Self
+		return Self{mass: mass}
+	end 'create'
+end 'Body'
+
+union Shape
+	empty
+	solid(body Body)
+end 'Shape'
+
+function massOf(s Shape) returns Integer
+	match s 'check'
+		empty then return 0
+		solid(b) then return b.mass
+	end 'check'
+end 'massOf'
+
+function main() returns ExitCode
+	let s = Shape.solid(Body.create(5))
+	return massOf(s)
+end 'main'
+---
+ExitCode: 5
+---
+// CompiledIR
+module {
+  func @massOf(local0: i64) -> i64 {
+  entry:
+    %16 = mir.param local0 : i64
+    %3 = mir.load %16, 0 width: qword
+    %4 = mir.mov_imm 0 : i64
+    %5 = mir.cmp eq, %3, %4
+    mir.cond_br %5 [then: check_0.case0(), else: check_0.next0()]
+  check_0.case0:
+    %6 = mir.mov_imm 0 : i64
+    mir.ret %6
+  check_0.next0:
+    %7 = mir.load %16, 0 width: qword
+    %8 = mir.mov_imm 1 : i64
+    %9 = mir.cmp eq, %7, %8
+    mir.cond_br %9 [then: check_0.case1(), else: check_0.next1()]
+  check_0.case1:
+    %10 = mir.load %16, 8 width: qword
+    %12 = mir.load %10, 0 width: qword
+    mir.ret %12
+  check_0.next1:
+    %13 = mir.global_addr @__panic_msg_96c7daeb3f9a871f
+    %14 = mir.call @mrt_panic(%13)
+    %15 = mir.mov_imm 0 : i64
+    mir.ret %15
+  }
+  func @main() -> u8 {
+  entry:
+    %1 = mir.mov_imm 5 : i64
+    %6 = mir.mov_imm 8 : i64
+    %7 = mir.mov_imm 0 : i64
+    %8 = mir.call @stdlib.__mm_alloc(%6, %7)
+    %13 = mir.call @stdlib.__mm_incref(%8)
+    mir.store %1, %8, 0 width: qword
+    %9 = mir.mov_imm 16 : i64
+    %10 = mir.func_addr @__destruct_Shape
+    %11 = mir.mov_imm 1 : i64
+    %12 = mir.call @stdlib.__mm_alloc(%9, %10)
+    mir.store %11, %12, 0 width: qword
+    mir.store %8, %12, 8 width: qword
+    %5 = mir.call @massOf(%12)
+    %14 = mir.call @mm_drop(%12)
+    %15 = mir.mov_imm 125 : i64
+    %16 = mir.cmp ugt, %5, %15
+    mir.cond_br %16 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %17 = mir.global_addr @__panic_msg_8ada20737d680130
+    %18 = mir.call @mrt_panic(%17)
+  __range_ok_0:
+    mir.ret %5
+  }
+}
+---

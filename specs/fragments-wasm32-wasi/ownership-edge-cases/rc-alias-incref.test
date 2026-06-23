@@ -1,0 +1,41 @@
+// Test: rc-alias-incref
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Box'
+
+function main() returns ExitCode
+	@heap let a = Box.create(42)
+	let b = a
+	return b.value
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %2 = mir.mov_imm 42 : i64
+    %7 = mir.mov_imm 8 : i64
+    %8 = mir.mov_imm 0 : i64
+    %9 = mir.call @stdlib.__mm_alloc(%7, %8)
+    mir.store %2, %9, 0 width: qword
+    %6 = mir.load %9, 0 width: qword
+    %10 = mir.call @mm_drop(%9)
+    %11 = mir.mov_imm 125 : i64
+    %12 = mir.cmp ugt, %6, %11
+    mir.cond_br %12 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %13 = mir.global_addr @__panic_msg_66bb751b7fa79bf6
+    %14 = mir.call @mrt_panic(%13)
+  __range_ok_0:
+    mir.ret %6
+  }
+}
+---

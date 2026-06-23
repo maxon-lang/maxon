@@ -5847,7 +5847,7 @@ typealias TuplePartialArgsMap = Map with (ByteArray, MaxonTypeArray)
 // receiver's producer-type is upgraded from `MaxonType.named("__TupleN")` to
 // `MaxonType.genericInstance(__TupleN, [T0..TN])` and the side-table entry is
 // dropped.
-function refineTupleStructAlloc(project Project, producerTypes ProducerTypeMap, tuplePartialArgs TuplePartialArgsMap, currentNamespace String, receiver ByteArray, fieldName ByteArray, value ByteArray)
+function refineTupleStructAlloc(project Project, producerTypes ProducerTypeMap, tuplePartialArgs TuplePartialArgsMap, currentNamespace String, funcName String, readerFilePath FilePath, receiver ByteArray, fieldName ByteArray, value ByteArray)
 	// Phase 15e: only refine inside the user pipeline. Stdlib functions go
 	// through this same TypeResolution pass during cache build, and any new
 	// genericInstance entry interned here gets serialised to disk. On cache
@@ -5893,6 +5893,16 @@ function refineTupleStructAlloc(project Project, producerTypes ProducerTypeMap, 
 	let baseId = project.typeNames.intern(receiverName)
 	let newGid = project.genericInstances.intern(baseId, args: args)
 	recordResultType(producerTypes, name: receiver, t: MaxonType.genericInstance(newGid))
+	// Pin the resolved gid under the allocation's `(funcName, ptrName)` key so
+	// `lowerStructAlloc`'s `pinnedTupleAllocGid` recovers it — the parse-time pin
+	// (`parseParenExpr`) only fires for tuples whose element types were all
+	// concrete at parse, so a tuple with a method-call element (`(1, Point.create
+	// (...))`) reaches lowering with NO pinned gid. Without this, lowering can't
+	// see the tuple's managed element, hands `__mm_alloc` a NULL destructor, and the
+	// element's +1 (moved in by the field-store transfer) is never released → leak.
+	let tupleKey = tupleAllocGidKey(funcName, ptrName: receiver)
+	project.tupleAllocGids.upsert(tupleKey, value: newGid)
+	recordTupleAllocGidUpsert(project, filePath: readerFilePath, key: tupleKey)
 end 'refineTupleStructAlloc'
 
 function seedTupleArgs(arity TupleArity) returns MaxonTypeArray
@@ -6007,7 +6017,7 @@ function recordOpResult(project Project, producerTypes ProducerTypeMap, slotType
 		panicDynamic then return
 		structAlloc(result, structName, _) then recordResultType(producerTypes, name: result, t: MaxonType.named(project.typeNames.intern(String.from(structName))))
 		fieldLoad(result, receiver, fieldName, _) then recordResultType(producerTypes, name: result, t: fieldLoadResultType(project, receiverType: normalizeReceiverInContext(project, t: lookupProducerType(producerTypes, name: receiver), enclosingType: enclosingType), fieldName: fieldName))
-		fieldStore(receiver, fieldName, value, _, _) then refineTupleStructAlloc(project, producerTypes: producerTypes, tuplePartialArgs: tuplePartialArgs, currentNamespace: currentNamespace, receiver: receiver, fieldName: fieldName, value: value)
+		fieldStore(receiver, fieldName, value, _, _) then refineTupleStructAlloc(project, producerTypes: producerTypes, tuplePartialArgs: tuplePartialArgs, currentNamespace: currentNamespace, funcName: funcName, readerFilePath: readerFilePath, receiver: receiver, fieldName: fieldName, value: value)
 		selfFieldLoad(result, fieldName, _) then recordResultType(producerTypes, name: result, t: selfFieldLoadResultType(project, enclosingType: enclosingType, fieldName: fieldName))
 		selfFieldStore then return
 		unresolvedRead then return

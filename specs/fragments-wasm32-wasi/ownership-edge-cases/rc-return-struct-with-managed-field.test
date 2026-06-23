@@ -1,0 +1,59 @@
+// Test: rc-return-struct-with-managed-field
+typealias Integer = int(i64.min to i64.max)
+
+type Inner
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Inner'
+
+type Wrapper
+	export var inner as Inner
+
+	static function create(inner Inner) returns Self
+		return Self{inner: inner}
+	end 'create'
+end 'Wrapper'
+
+function wrap(i Inner) returns Wrapper
+	return Wrapper.create(i)
+end 'wrap'
+
+function main() returns ExitCode
+	let i = Inner.create(5)
+	let w = wrap(i)
+	return w.inner.value
+end 'main'
+---
+ExitCode: 5
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %2 = mir.mov_imm 5 : i64
+    %9 = mir.mov_imm 8 : i64
+    %10 = mir.mov_imm 0 : i64
+    %11 = mir.call @stdlib.__mm_alloc(%9, %10)
+    %15 = mir.call @stdlib.__mm_incref(%11)
+    mir.store %2, %11, 0 width: qword
+    %12 = mir.mov_imm 8 : i64
+    %13 = mir.func_addr @__destruct_Wrapper
+    %14 = mir.call @stdlib.__mm_alloc(%12, %13)
+    mir.store %11, %14, 0 width: qword
+    %7 = mir.load %14, 0 width: qword
+    %8 = mir.load %7, 0 width: qword
+    %16 = mir.call @mm_drop(%14)
+    %17 = mir.mov_imm 125 : i64
+    %18 = mir.cmp ugt, %8, %17
+    mir.cond_br %18 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %19 = mir.global_addr @__panic_msg_3baa5123447da2b5
+    %20 = mir.call @mrt_panic(%19)
+  __range_ok_0:
+    mir.ret %8
+  }
+}
+---
