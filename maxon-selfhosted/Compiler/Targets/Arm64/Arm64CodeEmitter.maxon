@@ -2242,7 +2242,7 @@ end 'arm64EmitGlobalStoreOp'
 // x64 `relocKindForLabel` logic — `__data_cov_` covdata first, then `__data_`,
 // then the allocator/runtime mutable-global prefixes (`__slab_`, `__mm_`,
 // `__mrt_`), with everything else falling through to read-only .rdata.
-export function arm64RelocKindForLabel(label String) returns RdataRelocKind
+function arm64RelocKindForLabel(label String) returns RdataRelocKind
 	// Section class is shared with the x64 backend via classifyGlobalLabel so the
 	// writable-.data global set (incl. __sched_/__gt_/__at_/__subp_/__io_, which an
 	// earlier hand-maintained list here omitted) stays consistent across targets.
@@ -2257,7 +2257,7 @@ end 'arm64RelocKindForLabel'
 // Twin of arm64RelocKindForLabel for the ±4 GiB ADRP+ADD/LDR/STR sequence: the page
 // reloc patches the ADRP, the page-off reloc patches the following ADD/LDR/STR. Shares
 // classifyGlobalLabel so the section choice stays identical to the single-ADR path.
-export function arm64AdrpPageOffKindsForLabel(label String) returns (RdataRelocKind, RdataRelocKind)
+function arm64AdrpPageOffKindsForLabel(label String) returns (RdataRelocKind, RdataRelocKind)
 	return match classifyGlobalLabel(label) 'cls'
 		covData gives (RdataRelocKind.covdataArm64Adrp, RdataRelocKind.covdataArm64PageOff)
 		dataSection gives (RdataRelocKind.dataSectionArm64Adrp, RdataRelocKind.dataSectionArm64PageOff)

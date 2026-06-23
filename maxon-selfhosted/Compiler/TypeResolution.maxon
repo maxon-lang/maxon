@@ -645,7 +645,7 @@ function drainResolvableTypealiases(project Project) returns ParsedInt
 		let sidecarName = bareNameFromKey(name, filePath: entry.filePath, rootPath: project.rootPath)
 		appendTypealiasVisibility(project, name: sidecarName, info: TypealiasVisibilityInfo.create(entry.visibility, sourceFilePath: entry.filePath))
 		if result.hasRange 'recordRange'
-			try project.typealiasRanges.insert(name, value: result.range) otherwise ignore
+			recordTypealiasRange(project, name: name, range: result.range)
 		end 'recordRange'
 		// Pin the user-declared cast category for ranged-primitive aliases so
 		// narrow storage (e.g. u8 for `int(0 to 255)`) doesn't reclassify the
@@ -682,7 +682,7 @@ function drainResolvableTypealiases(project Project) returns ParsedInt
 			if sidecarName != name 'differsFromBare'
 				try project.typealiases.insert(sidecarName, value: result.stdType) otherwise ignore
 				if result.hasRange 'recordRangeBare'
-					try project.typealiasRanges.insert(sidecarName, value: result.range) otherwise ignore
+					recordTypealiasRange(project, name: sidecarName, range: result.range)
 				end 'recordRangeBare'
 				if declared.present 'recordCategoryBare'
 					try project.typealiasCastCategories.insert(sidecarName, value: declared.category) otherwise ignore
@@ -4806,14 +4806,30 @@ function perInstanceFactoryResult(project Project, callee ByteArray, resultRaw M
 	return internMaxonType(project, name: aliasName)
 end 'perInstanceFactoryResult'
 
-// True when any per-instance member alias `{aliasName}.X` was registered for
-// the generic instance alias `aliasName` (e.g. `WrapperA.Idx`).
+// True when `aliasName` is itself a per-instance generic INSTANCE alias that
+// declares a per-instance member — i.e. `perInstanceAliasNames` holds a
+// `{aliasName}.{member}` entry whose member is a single segment (no further
+// dot). The single-segment requirement is load-bearing: a namespace-qualified
+// instance alias registers its member as `{namespace}.{InstanceAlias}.{member}`
+// (e.g. `stdlib.JsonNodeIdArray.NodePower`), so a bare prefix test would let
+// the namespace head (`stdlib`) masquerade as an instance alias. That false
+// positive turns `perInstanceFactoryResult` into interning the *namespace* as a
+// type for any `{namespace}.fn()` qualified call (e.g. `stdlib.__int_fromString`
+// → `named("stdlib")`), poisoning the result type.
 function aliasHasPerInstanceMember(project Project, aliasName String) returns bool
 	let prefix = "{aliasName}."
+	let prefixBytes = prefix.byteLength()
 	for memberName in project.perInstanceAliasNames 'eachMember'
-		if memberName.startsWith(prefix) 'hasPrefix'
+		if not memberName.startsWith(prefix) 'noPrefix'
+			continue
+		end 'noPrefix'
+		// The separator dot sits at `prefixBytes - 1`; a single-segment member
+		// has no later dot, so the rightmost dot is exactly the separator. A
+		// further dot means `{member}` is itself qualified (the namespace
+		// masquerade) — not a direct member.
+		if lastIndexOfDotByte(memberName.toByteArray()) < prefixBytes 'directMember'
 			return true
-		end 'hasPrefix'
+		end 'directMember'
 	end 'eachMember'
 	return false
 end 'aliasHasPerInstanceMember'

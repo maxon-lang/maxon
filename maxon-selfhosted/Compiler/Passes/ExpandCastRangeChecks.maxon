@@ -81,6 +81,15 @@ function checkConvertForUnneededCast(project Project, fromType MaxonType, toType
 	if sourceAlias.isEmpty() or targetAlias.isEmpty() 'notAliased'
 		return
 	end 'notAliased'
+	// A bare alias name that resolves to more than one distinct range (a
+	// project/stdlib same-name collision — see `recordTypealiasRange`) can't be
+	// trusted through the flat `typealiasRanges` lookup, so we can't prove the
+	// cast lossless. Skip rather than risk a false-positive E3010 on a cast that
+	// is genuinely needed (the C# bootstrap carries the range on the resolved
+	// type and never hits this).
+	if project.rangeAmbiguousAliasNames.contains(sourceAlias) or project.rangeAmbiguousAliasNames.contains(targetAlias) 'ambiguous'
+		return
+	end 'ambiguous'
 	let sourceRange = try project.typealiasRanges.get(sourceAlias) otherwise return
 	let targetRange = try project.typealiasRanges.get(targetAlias) otherwise return
 	let sourceIsFloat = aliasIsFloatType(project, name: sourceAlias)

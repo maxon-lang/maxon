@@ -232,6 +232,17 @@ export type Project
 	// Populated by the TypeResolution pass alongside `typealiases`.
 	export var typealiasRanges as TypealiasRangeMap
 
+	// Bare alias names that resolve to MORE THAN ONE distinct range across the
+	// program — e.g. a project-file-private `MachineWord = int(0 to u64.max)` and
+	// a stdlib-file-private `MachineWord = int(i64.min to i64.max)`. The flat
+	// `typealiasRanges` map keeps only the first-registered range per bare name,
+	// so a use-site lookup can return the wrong definition's bounds. The E3010
+	// unneeded-cast lint consults this set and skips any cast whose source/target
+	// alias is ambiguous, since it cannot prove the cast lossless without the
+	// in-scope range (the C# bootstrap carries the range on the resolved type and
+	// so never collides). Populated during typealias-range registration.
+	export var rangeAmbiguousAliasNames as RangeAmbiguousAliasNameSet
+
 	// Typealias cast category: maps alias names to the user-declared cast
 	// family (int / byte / float). Populated by the TypeResolution pass for
 	// ranged-primitive aliases so storage narrowing (e.g. `int(0 to 255)` →
@@ -937,6 +948,7 @@ export type Project
 			typealiases: TypealiasMap.create(),
 			typealiasVisibilities: TypealiasVisibilityMap.create(),
 			typealiasRanges: TypealiasRangeMap.create(),
+			rangeAmbiguousAliasNames: RangeAmbiguousAliasNameSet.create(),
 			typealiasCastCategories: TypealiasCastCategoryMap.create(),
 			unresolvedTypealiases: UnresolvedTypealiasMap.create(),
 			funcReturnTypes: FuncReturnTypeMap.create(),
@@ -3428,6 +3440,23 @@ export type TypealiasRange
 	end 'create'
 end 'TypealiasRange'
 
+// Register `range` for bare alias `name` in `typealiasRanges`, keeping the
+// first-registered value (matches the historical `insert ... otherwise ignore`
+// contract every call site relied on). When a LATER registration carries a
+// DIFFERENT range for an already-claimed name — the project/stdlib same-name
+// collision (e.g. two file-private `MachineWord` aliases with `0..u64.max` vs
+// `i64.min..i64.max`) — the bare-name lookup can no longer be trusted, so the
+// name is flagged in `rangeAmbiguousAliasNames` for the E3010 lint to skip.
+export function recordTypealiasRange(project Project, name String, range TypealiasRange)
+	if let existing = try project.typealiasRanges.get(name) 'present'
+		if existing.lower != range.lower or existing.upper != range.upper 'differs'
+			project.rangeAmbiguousAliasNames.insert(name)
+		end 'differs'
+		return
+	end 'present'
+	try project.typealiasRanges.insert(name, value: range) otherwise ignore
+end 'recordTypealiasRange'
+
 export function createProject(rootPath FilePath, target Target) returns Project
 	let emptyMaxonMemo = MaxonModuleMemo.create(MaxonModule.create(), computedAt: 0, verifiedAt: 0)
 	let emptyStdMemo = StdModuleMemo.create(StdModule.create(), computedAt: 0, verifiedAt: 0)
@@ -3693,6 +3722,7 @@ export typealias StructTypeArray = Array with StructType
 // field comment on `Project` for the population contract.
 export typealias InnerAliasNameSet = Set with String
 export typealias PerInstanceAliasNameSet = Set with String
+export typealias RangeAmbiguousAliasNameSet = Set with String
 
 // Name set for `Project.prescannedInterfaceNames` — the pre-parse interface
 // name scan's output. See the field comment on `Project`.
