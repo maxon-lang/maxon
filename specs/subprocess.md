@@ -154,6 +154,73 @@ end 'main'
 0
 ```
 
+<!-- test: subprocess-streaming-roundtrip -->
+`StreamingSubprocess` keeps the child's pipes open and drives stdio
+by hand, line by line. We spawn a line-echo child (`findstr "^"` on
+Windows / `/bin/cat` on POSIX — both copy every stdin line straight
+to stdout), write three lines, then read each one back. The reader
+(`readStdoutLine`) PARKS on the OS until a line is available — on
+arm64-macOS via a kqueue `EVFILT_READ` registration, on Windows via
+the bootstrap's overlapped-I/O path — rather than busy-polling, so
+this test runs fast. We `closeStdin()` after the last write so the
+child sees EOF and exits, drain the three echoed lines, then
+`release()` the handle (the API's `close()`-equivalent) to free the
+OS process slot.
+```maxon
+function main() returns ExitCode
+	#if os(Windows)
+	let exe = Executable.path(try FilePath.from("C:/Windows/System32/cmd.exe") otherwise return 2)
+	var argv = StringArray.create()
+	argv.push("/c")
+	argv.push("findstr")
+	argv.push("^")
+	#else
+	let exe = Executable.path(try FilePath.from("/bin/cat") otherwise return 2)
+	var argv = StringArray.create()
+	#endif
+
+	var child = try StreamingSubprocess.spawn(exe, arguments: argv) otherwise return 3
+
+	try child.writeStdinLine("alpha") otherwise return 4
+	try child.writeStdinLine("beta") otherwise return 4
+	try child.writeStdinLine("gamma") otherwise return 4
+	// Signal EOF so the child drains its input and exits.
+	child.closeStdin()
+
+	let lineA = try child.readStdoutLine() otherwise return 5
+	let lineB = try child.readStdoutLine() otherwise return 5
+	let lineC = try child.readStdoutLine() otherwise return 5
+
+	if lineA != "alpha" 'check-a'
+		child.release()
+		return 6
+	end 'check-a'
+	if lineB != "beta" 'check-b'
+		child.release()
+		return 7
+	end 'check-b'
+	if lineC != "gamma" 'check-c'
+		child.release()
+		return 8
+	end 'check-c'
+
+	print("{lineA}\n")
+	print("{lineB}\n")
+	print("{lineC}\n")
+
+	child.release()
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+alpha
+beta
+gamma
+```
+
 <!-- test: subprocess-timeout-kill -->
 ```maxon
 function main() returns ExitCode
