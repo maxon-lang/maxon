@@ -216,15 +216,16 @@ let whitelist = ["basics",
 	//   eliminated. The other 8 (incl. multi-range, upto, statement-form) pass.
 	"enum-allcases",
 	"collection-contains",
-	// "array-contains" (0/1) — `ByteArrayArray.push(b"hello")` rejected E3005:
-	//   a `b"..."` byte-string literal is typed `Array with int` (a DELIBERATE
-	//   design: byte-string element type is the single integer arm, byte-ness
-	//   conveyed at StdDialect level — see byteStringLiteralResultType's comment),
-	//   so it doesn't match a `ByteArray` (`Array with Byte`) element param. C#
-	//   accepts it. Fix belongs in arg coercion (treat `Array with int` byte-
-	//   string literal as compatible with `Array with Byte`), not in retyping the
-	//   literal — needs care not to regress byte-string-literal or int/byte
-	//   coercion elsewhere. Deferred.
+	// "array-contains" (1/1 fails) — OVERLOAD-RESOLUTION ambiguity, not a coercion
+	//   gap (push(b"...") already works). `ByteArrayArray.contains(b"hello")` has
+	//   two overloads: `contains(element Element)` (param shape = typeParameter)
+	//   and `contains(sequence ElementArray=Array with Element)` (shape =
+	//   genericInstance). A `b"..."` literal is typed `Array with int`
+	//   (genericInstance), so resolveOverloadedCallee's paramTypeShape heuristic
+	//   matches the `sequence` overload over `element`, then E3005s. Correct pick
+	//   needs receiver-element context (arg element `int` ≈ ByteArray's `Byte` →
+	//   it's a single element) which the shape-only resolver lacks. Risky to fix
+	//   in the hot overload path for one experimental test.
 	"array-of-bytearray",
 	"array-slots",
 	// "with-iterator" — HANGS the runner (worker never returns).
